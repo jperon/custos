@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # Client: makes DNS requests through the filter
   client:
