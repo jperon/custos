@@ -1,0 +1,5 @@
+<network>
+  <name>lan</name>
+  <forward mode="bridge"/>
+  <bridge name="virbr-lan"/>
+</network>

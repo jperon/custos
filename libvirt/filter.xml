@@ -1,0 +1,48 @@
+<!-- CustosVirginum DNS Filter — now runs as Docker container
+     This file is kept for reference only.
+     The filter is now deployed via docker-compose.yml -->
+<domain type='kvm'>
+  <name>custos-filter</name>
+  <metadata>
+    <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
+      <libosinfo:os id="http://libosinfo.org/debian12"/>
+    </libosinfo:libosinfo>
+  </metadata>
+  <memory unit='MiB'>1024</memory>
+  <vcpu>2</vcpu>
+  <os>
+    <type arch='x86_64'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+  </features>
+  <pm>
+    <suspend-to-mem enabled='no'/>
+    <suspend-to-disk enabled='no'/>
+  </pm>
+  <devices>
+    <disk type='file' device='disk'>
+      <source file='/var/lib/libvirt/images/custos-filter.qcow2'/>
+      <driver name='qemu' type='qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <!-- Bridge interfaces for inline filtering -->
+    <interface type='bridge'>
+      <source bridge='br-filter'/>
+      <model type='virtio'/>
+      <target dev='veth0'/>
+    </interface>
+    <interface type='network'>
+      <source network='lan'/>
+      <model type='virtio'/>
+      <target dev='veth1'/>
+    </interface>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+    <channel type='unix'>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+    </channel>
+  </devices>
+</domain>

@@ -1,0 +1,26 @@
+<domain type='kvm'>
+  <name>custos-router</name>
+  <memory unit='MiB'>256</memory>
+  <vcpu>1</vcpu>
+  <os>
+    <type arch='x86_64'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <devices>
+    <disk type='file' device='disk'>
+      <source file='/var/lib/libvirt/images/custos-router.qcow2'/>
+      <driver name='qemu' type='raw'/>
+    </disk>
+    <!-- LAN: connected to filter bridge -->
+    <interface type='bridge'>
+      <source bridge='br-filter'/>
+      <model type='virtio'/>
+    </interface>
+    <!-- WAN: connects to host default network -->
+    <interface type='network'>
+      <source network='default'/>
+      <model type='virtio'/>
+    </interface>
+    <console type='pty'/>
+  </devices>
+</domain>

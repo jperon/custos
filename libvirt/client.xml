@@ -1,0 +1,20 @@
+<domain type='kvm'>
+  <name>custos-client</name>
+  <memory unit='MiB'>512</memory>
+  <vcpu>1</vcpu>
+  <os>
+    <type arch='x86_64'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <devices>
+    <disk type='file' device='disk'>
+      <source file='/var/lib/libvirt/images/custos-client.qcow2'/>
+      <driver name='qemu' type='qcow2'/>
+    </disk>
+    <interface type='network'>
+      <source network='lan'/>
+      <model type='virtio'/>
+    </interface>
+    <console type='pty'/>
+  </devices>
+</domain>

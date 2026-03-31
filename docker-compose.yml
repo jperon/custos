@@ -1,0 +1,86 @@
+version: "3.8"
+
+services:
+  # Client: makes DNS requests through the filter
+  client:
+    image: alpine:latest
+    container_name: custos-client
+    command: sleep infinity
+    networks:
+      - lan
+    depends_on:
+      - filter
+    # To test DNS filtering:
+    # docker exec custos-client nslookup github.com
+
+  # Filter: CustosVirginum DNS filter in bridge mode
+  # Requires host networking and privileged mode to access NFQUEUE
+  filter:
+    image: custos:latest
+    container_name: custos-filter
+    network_mode: host
+    privileged: true
+    volumes:
+      - ./nft-rules:/nft-rules:ro
+      - /lib/modules:/lib/modules:ro
+    environment:
+      - LAN_NET4=172.20.0.0/24
+      - NFT_TABLE=dns-filter
+    depends_on:
+      - router
+    # Run nftables rules before starting custos
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "nft -f /nft-rules/dns-filter.nft && exec /app/main.lua"
+    # Or run via Makefile:
+    # command: ["make", "run"]
+
+  # Router: DHCP server + SLAAC (Router Advertisement)
+  router:
+    image: alpine:latest
+    container_name: custos-router
+    hostname: router
+    networks:
+      lan:
+        ipv4_address: 172.20.0.1
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./router/dnsmasq.conf:/etc/dnsmasq.conf:ro
+      - ./router/radvd.conf:/etc/radvd.conf:ro
+    command: >
+      sh -c "
+        # Enable IPv6 forwarding and routing
+        sysctl -w net.ipv6.conf.all.forwarding=1 &&
+        sysctl -w net.ipv6.conf.all.accept_ra=2 &&
+        # Start DHCPv4 server
+        dnsmasq -k -C /etc/dnsmasq.conf &
+        # Start SLAAC router advertisement
+        radvd -n -C /etc/radvd.conf &
+        # Keep container running
+        sleep infinity
+      "
+
+  # WAN: Simulated upstream DNS resolver (optional)
+  wan-dns:
+    image: coredns/coredns:1.11.1
+    container_name: custos-wan-dns
+    command: -dns.port=53
+    networks:
+      - wan
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+
+networks:
+  lan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1
+  wan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
