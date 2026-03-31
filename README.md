@@ -118,6 +118,12 @@ custos/
 ├── tests/
 │   ├── run_tests.lua        Unit tests (no root required)
 │   └── test_ndpi.lua        nDPI wrapper tests (requires libndpi)
+├── libvirt/
+│   ├── *.xml                Libvirt VM configs (client/router)
+│   └── custos-libvirt.sh    VM management script
+├── Dockerfile               Multi-stage Docker build
+├── docker-compose.yml       Complete test environment
+├── LICENSE                  MIT license
 ├── Makefile
 ├── setup.sh
 └── README.md
@@ -159,6 +165,15 @@ RUN apt-get update && apt-get install -y \
     lua5.1 luarocks build-essential \
     && luarocks install moonscript \
     && rm -rf /var/lib/apt/lists/*
+```
+
+**Docker (runtime):**
+```bash
+# Docker and Docker Compose
+apt install docker.io docker-compose-plugin
+
+# Add user to docker group (logout/login required)
+usermod -aG docker $USER
 ```
 
 ---
@@ -355,15 +370,61 @@ available for reference or fallback.
 
 ---
 
+## Docker Deployment (Recommended)
+
+The filter runs in a privileged Docker container with host networking
+to access NFQUEUE. The `docker-compose.yml` provides a complete test
+environment:
+
+```bash
+# Build the Docker image
+docker build -t custos:latest .
+
+# Start the test environment
+docker-compose up -d
+
+# Test DNS filtering from client container
+docker exec -it custos-client nslookup github.com
+docker exec -it custos-client nslookup facebook.com  # should fail
+
+# View logs
+docker logs -f custos-filter
+
+# Stop everything
+docker-compose down
+```
+
+### Architecture
+
+```
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│   client     │      │   filter     │      │    router    │
+│ (container)  ├──────┤ (Docker,     ├──────┤ (container)  │
+│              │      │  host net)   │      │              │
+└──────────────┘      └──────────────┘      └──────────────┘
+       │                     │                     │
+       └─────────────────────┼─────────────────────┘
+                             │
+                    ┌──────────────┐
+                    │  wan-dns     │
+                    │ (CoreDNS)    │
+                    └──────────────┘
+```
+
+---
+
 ## Testing with Libvirt VMs
+
+**Note**: The filter is now deployed via Docker (see above). The libvirt
+environment only manages client and router VMs for testing.
 
 The `libvirt/` directory contains XML configs and a script to create
 a test environment with 2 VMs:
 
 ```
 ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
-│   client     │      │    filter    │      │    router    │
-│   (Debian)   ├──────┤   br-filter  ├──────┤  (OpenWrt)   │
+│   client     │      │   filter     │      │    router    │
+│   (Debian)   ├──────┤ (Docker)     ├──────┤  (OpenWrt)   │
 └──────────────┘      └──────────────┘      └──────────────┘
 ```
 
