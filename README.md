@@ -374,25 +374,42 @@ available for reference or fallback.
 
 The filter runs in a privileged Docker container with host networking
 to access NFQUEUE. The `docker-compose.yml` provides a complete test
-environment:
+environment with support for multiple nDPI versions:
 
+### nDPI 4.x (Debian - Default)
 ```bash
-# Build the Docker image
-docker build -t custos:latest .
+# Build and start with nDPI 4.x
+docker-compose --profile ndpi4 up -d
 
-# Start the test environment
-docker-compose up -d
+# Or using Makefile
+make test-docker
+```
 
+### nDPI 5.0 (Arch Linux from AUR)
+```bash
+# Build and start with nDPI 5.0
+docker-compose --profile ndpi5 up -d
+
+# Or using Makefile
+make test-docker-ndpi5
+```
+
+### Testing
+```bash
 # Test DNS filtering from client container
 docker exec -it custos-client nslookup github.com
 docker exec -it custos-client nslookup facebook.com  # should fail
 
 # View logs
-docker logs -f custos-filter
+docker logs -f custos-filter        # nDPI 4.x
+docker logs -f custos-filter-ndpi5  # nDPI 5.0
 
 # Stop everything
 docker-compose down
 ```
+
+The Docker setup mirrors the FFI wrapper architecture with separate
+Dockerfiles for each nDPI version, ensuring compatibility testing.
 
 ### Architecture
 
