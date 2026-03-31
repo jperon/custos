@@ -14,7 +14,10 @@ bit = require "bit"
 O_WRONLY = 1
 O_CREAT  = 64
 O_APPEND = 1024
-S_IRUSR  = 256; S_IWUSR = 128; S_IRGRP = 32; S_IROTH = 4
+S_IRUSR  = (256)
+S_IWUSR = (128)
+S_IRGRP = (32)
+S_IROTH = (4)
 
 log_fd = libc.open(
   LOG_PATH,

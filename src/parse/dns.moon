@@ -223,7 +223,7 @@ patch_ttl = (buf_ptr, answers, dns_offset, new_ttl) ->
     buf_ptr[abs_off]   = bit.rshift(bit.band(new_ttl, 0xFF000000), 24)
     buf_ptr[abs_off+1] = bit.rshift(bit.band(new_ttl, 0x00FF0000), 16)
     buf_ptr[abs_off+2] = bit.rshift(bit.band(new_ttl, 0x0000FF00),  8)
-    buf_ptr[abs_off+3] = bit.band  (new_ttl, 0x000000FF)
+    buf_ptr[abs_off+3] = bit.band(new_ttl, 0x000000FF)
 
 { :parse_dns, :parse_header, :parse_questions, :parse_answers
   :decode_name, :patch_ttl

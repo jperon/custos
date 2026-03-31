@@ -59,7 +59,8 @@ patch_packet = (raw, ip_hdr, udp_hdr, dns) ->
 
   -- ── 3. Recalcul checksum IP ──────────────────────────────────
   -- On met le champ checksum IP à zéro avant recalcul
-  buf[10] = 0; buf[11] = 0   -- 0-based : octets 10-11 (checksum IP)
+  buf[10] = 0
+  buf[11] = 0   -- 0-based : octets 10-11 (checksum IP)
   ip_header_str = ffi.string buf, ip_hdr.ihl
   { :checksum_ip } = require "parse/ip"
   new_ip_cksum  = checksum_ip ip_header_str
