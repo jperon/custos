@@ -6,14 +6,13 @@ services:
     command: sleep infinity
     networks:
       - lan
-    depends_on:
-      - filter
     # To test DNS filtering:
     # docker exec custos-client nslookup github.com
 
-  # Filter: CustosVirginum DNS filter in bridge mode
+  # Filter: CustosVirginum DNS filter in bridge mode (nDPI 4.x)
   # Requires host networking and privileged mode to access NFQUEUE
   filter:
+    build: .
     image: custos:latest
     container_name: custos-filter
     network_mode: host
@@ -26,12 +25,37 @@ services:
       - NFT_TABLE=dns-filter
     depends_on:
       - router
+    profiles:
+      - ndpi4
     # Run nftables rules before starting custos
     entrypoint: ["/bin/sh", "-c"]
     command:
       - "nft -f /nft-rules/dns-filter.nft && exec /app/main.lua"
     # Or run via Makefile:
     # command: ["make", "run"]
+
+  # Filter with nDPI 5.0 from AUR
+  filter-ndpi5:
+    build:
+      context: .
+      dockerfile: Dockerfile.ndpi5
+    image: custos:ndpi5
+    container_name: custos-filter-ndpi5
+    network_mode: host
+    privileged: true
+    volumes:
+      - ./nft-rules:/nft-rules:ro
+      - /lib/modules:/lib/modules:ro
+    environment:
+      - LAN_NET4=172.20.0.0/24
+      - NFT_TABLE=dns-filter
+    depends_on:
+      - router
+    profiles:
+      - ndpi5
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "nft -f /nft-rules/dns-filter.nft && exec /app/main.lua"
 
   # Router: DHCP server + SLAAC (Router Advertisement)
   router:

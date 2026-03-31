@@ -30,7 +30,7 @@ MOONS := \
 
 LUAS := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(MOONS))
 
-.PHONY: all clean check test test-ndpi test-docker run reload logs help
+.PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 run reload logs help
 
 all: $(LUA)/parse $(LUAS)
 	@echo "Compilation terminée → $(LUA)/"
@@ -62,9 +62,16 @@ test-ndpi: all
 
 ## Tests Docker end-to-end (requires Docker)
 test-docker: all
-	@echo "Tests Docker end-to-end..."
+	@echo "Tests Docker end-to-end (nDPI 4.x)..."
 	$(MOONC) tests/test_docker.moon
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) tests/test_docker.lua
+
+## Tests Docker end-to-end avec nDPI 5.0 (requires Docker)
+test-docker-ndpi5: all
+	@echo "Tests Docker end-to-end (nDPI 5.0)..."
+	$(MOONC) tests/test_docker.moon
+	NDPI_VERSION=5.0 LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_docker.lua
 
 ## Lance le superviseur (nécessite root + règles nft en place)
@@ -87,13 +94,14 @@ logs:
 ## Affiche l'aide
 help:
 	@echo "Cibles disponibles:"
-	@echo "  all        - Compile tous les fichiers .moon"
-	@echo "  check      - Vérification syntaxique des fichiers Lua"
-	@echo "  test       - Tests unitaires (pas root requis)"
-	@echo "  test-ndpi  - Tests nDPI wrapper (libndpi requis)"
-	@echo "  test-docker- Tests Docker end-to-end (Docker requis)"
-	@echo "  run        - Lance le superviseur (root requis)"
-	@echo "  clean      - Nettoie les fichiers compilés"
-	@echo "  reload     - Recharge la configuration (SIGHUP)"
-	@echo "  logs       - Affiche les logs en temps réel"
-	@echo "  help       - Affiche cette aide"
+	@echo "  all          - Compile tous les fichiers .moon"
+	@echo "  check        - Vérification syntaxique des fichiers Lua"
+	@echo "  test         - Tests unitaires (pas root requis)"
+	@echo "  test-ndpi    - Tests nDPI wrapper (libndpi requis)"
+	@echo "  test-docker  - Tests Docker end-to-end (nDPI 4.x, Docker requis)"
+	@echo "  test-docker-ndpi5 - Tests Docker end-to-end (nDPI 5.0, Docker requis)"
+	@echo "  run          - Lance le superviseur (root requis)"
+	@echo "  clean        - Nettoie les fichiers compilés"
+	@echo "  reload       - Recharge la configuration (SIGHUP)"
+	@echo "  logs         - Affiche les logs en temps réel"
+	@echo "  help         - Affiche cette aide"
