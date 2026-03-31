@@ -1,0 +1,389 @@
+--- High-level packet parser using pure LuaJIT FFI + libndpi.
+-- Replaces parse/ip + parse/udp + parse/dns with FFI pointer
+-- arithmetic for L3/L4/L7 and nDPI for protocol detection.
+-- Version-tolerant: dispatches to parse.ndpi_v4 (4.2–4.8) or
+-- parse.ndpi_v5 (5.0+) for nDPI-specific calls.
+-- @module parse.ndpi
+
+{ :ffi, :ndpi_lib, :major } = require "ffi_ndpi"
+{ :AF_INET, :AF_INET6 } = require "config"
+bit = require "bit"
+
+-- ── Version-specific backend ─────────────────────────────────
+
+backend = if major >= 5
+  require "parse.ndpi_v5"
+else
+  require "parse.ndpi_v4"
+
+-- ── Constants ──────────────────────────────────────────────────
+
+PROTO_UDP = 17
+
+--- Qtype numeric-to-name mapping.
+QTYPE = {
+  A: 1, NS: 2, CNAME: 5, SOA: 6, MX: 15
+  TXT: 16, AAAA: 28, SRV: 33, ANY: 255
+}
+QTYPE_NAME = {}
+for k, v in pairs QTYPE
+  QTYPE_NAME[v] = k
+
+--- RCODE constants.
+RCODE = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3 }
+
+--- nDPI protocol ID for DNS.
+NDPI_PROTOCOL_DNS = 5
+
+-- ── Pre-allocated buffers ──────────────────────────────────────
+
+ipv6_str = ffi.new "char[46]"
+
+-- ── Byte-level helpers (0-based FFI pointer, big-endian) ───────
+
+--- Read big-endian uint16 from FFI pointer at 0-based offset.
+-- @tparam cdata p uint8_t pointer.
+-- @tparam number o 0-based byte offset.
+-- @treturn number uint16 value.
+r16 = (p, o) ->
+  bit.bor bit.lshift(p[o], 8), p[o + 1]
+
+--- Read big-endian uint32 from FFI pointer at 0-based offset.
+-- @tparam cdata p uint8_t pointer.
+-- @tparam number o 0-based byte offset.
+-- @treturn number uint32 value.
+r32 = (p, o) ->
+  tonumber ffi.cast "uint32_t",
+    bit.bor(
+      bit.lshift(p[o],   24),
+      bit.lshift(p[o+1], 16),
+      bit.lshift(p[o+2],  8),
+      p[o+3])
+
+--- Write big-endian uint32 into FFI pointer at 0-based offset.
+-- @tparam cdata p Mutable uint8_t pointer.
+-- @tparam number o 0-based byte offset.
+-- @tparam number v uint32 value to write.
+w32 = (p, o, v) ->
+  p[o]   = bit.band bit.rshift(v, 24), 0xFF
+  p[o+1] = bit.band bit.rshift(v, 16), 0xFF
+  p[o+2] = bit.band bit.rshift(v,  8), 0xFF
+  p[o+3] = bit.band v, 0xFF
+
+--- Write big-endian uint16 into FFI pointer at 0-based offset.
+-- @tparam cdata p Mutable uint8_t pointer.
+-- @tparam number o 0-based byte offset.
+-- @tparam number v uint16 value to write.
+w16 = (p, o, v) ->
+  p[o]   = bit.band bit.rshift(v, 8), 0xFF
+  p[o+1] = bit.band v, 0xFF
+
+-- ── IP address formatting ──────────────────────────────────────
+
+--- Format 4 bytes starting at ptr+off as dotted-quad IPv4.
+-- @tparam cdata p uint8_t pointer.
+-- @tparam number o 0-based offset.
+-- @treturn string "a.b.c.d".
+fmt_ipv4 = (p, o) ->
+  string.format "%d.%d.%d.%d", p[o], p[o+1], p[o+2], p[o+3]
+
+--- Format 16 bytes starting at ptr+off as IPv6 string.
+-- @tparam cdata p uint8_t pointer.
+-- @tparam number o 0-based offset.
+-- @treturn string IPv6 address.
+fmt_ipv6 = (p, o) ->
+  ffi.C.inet_ntop AF_INET6, p + o, ipv6_str, 46
+  ffi.string ipv6_str
+
+-- ── DNS name decompression (RFC 1035 §4.1.4) ──────────────────
+
+--- Decode a DNS name with compression-pointer support.
+-- @tparam cdata dns uint8_t* to the start of the DNS message.
+-- @tparam number len Total DNS message length.
+-- @tparam number off 0-based offset of the name.
+-- @treturn string|nil Decoded dotted name, or nil on error.
+-- @treturn number Bytes consumed in the main (non-jumped) stream.
+decode_name = (dns, len, off) ->
+  labels   = {}
+  pos      = off
+  consumed = 0
+  jumped   = false
+  safety   = 0
+
+  while pos < len
+    safety += 1
+    return nil, 0 if safety > 128
+
+    label_len = dns[pos]
+
+    if label_len == 0
+      consumed += 1 unless jumped
+      break
+
+    elseif bit.band(label_len, 0xC0) == 0xC0
+      return nil, 0 if pos + 1 >= len
+      ptr = bit.bor bit.lshift(bit.band(label_len, 0x3F), 8), dns[pos + 1]
+      consumed += 2 unless jumped
+      jumped = true
+      pos = ptr
+
+    else
+      return nil, 0 if pos + 1 + label_len > len
+      labels[#labels + 1] = ffi.string dns + pos + 1, label_len
+      pos += 1 + label_len
+      consumed += 1 + label_len unless jumped
+
+  table.concat(labels, "."), consumed
+
+-- ── L3 parsing ─────────────────────────────────────────────────
+
+--- Parse IPv4 header from an FFI pointer.
+-- @tparam cdata p uint8_t* raw packet.
+-- @tparam number len Packet length.
+-- @treturn table|nil Parsed IP fields.
+parse_l3_v4 = (p, len) ->
+  return nil if len < 20
+  ver = bit.rshift p[0], 4
+  return nil if ver != 4
+  ihl = bit.band(p[0], 0x0F) * 4
+  return nil if len < ihl
+  {
+    version: 4, :ihl
+    total_len: r16(p, 2)
+    protocol:  p[9]
+    src_ip:     fmt_ipv4 p, 12
+    dst_ip:     fmt_ipv4 p, 16
+    src_ip_raw: ffi.string p + 12, 4
+    dst_ip_raw: ffi.string p + 16, 4
+    af: AF_INET
+  }
+
+--- Parse IPv6 header from an FFI pointer.
+-- @tparam cdata p uint8_t* raw packet.
+-- @tparam number len Packet length.
+-- @treturn table|nil Parsed IP fields.
+parse_l3_v6 = (p, len) ->
+  return nil if len < 40
+  ver = bit.rshift p[0], 4
+  return nil if ver != 6
+  {
+    version: 6, ihl: 40
+    total_len: 40 + r16(p, 4)
+    protocol:  p[6]
+    src_ip:     fmt_ipv6 p, 8
+    dst_ip:     fmt_ipv6 p, 24
+    src_ip_raw: ffi.string p + 8,  16
+    dst_ip_raw: ffi.string p + 24, 16
+    af: AF_INET6
+  }
+
+-- ── Checksum helpers ───────────────────────────────────────────
+
+--- Recalculate IPv4 header checksum in-place.
+-- @tparam cdata buf Mutable uint8_t* packet.
+-- @tparam number ihl IP header length in bytes.
+fix_ip4_cksum = (buf, ihl) ->
+  buf[10] = 0
+  buf[11] = 0
+  sum = 0
+  for i = 0, ihl - 1, 2
+    sum += bit.bor bit.lshift(buf[i], 8), buf[i + 1]
+  while bit.rshift(sum, 16) != 0
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  cksum = bit.band bit.bnot(sum), 0xFFFF
+  w16 buf, 10, cksum
+
+--- Recalculate UDP checksum in-place (IPv4 pseudo-header).
+-- @tparam cdata buf Mutable uint8_t* packet.
+-- @tparam number pkt_len Total packet length.
+-- @tparam number ihl IP header length in bytes.
+fix_udp4_cksum = (buf, pkt_len, ihl) ->
+  udp_off = ihl
+  return if pkt_len < udp_off + 8
+  udp_len = r16 buf, udp_off + 4
+  buf[udp_off + 6] = 0
+  buf[udp_off + 7] = 0
+  sum = 0
+  -- IPv4 pseudo-header: src(4) + dst(4).
+  for i = 12, 18, 2
+    sum += r16 buf, i
+  sum += PROTO_UDP
+  sum += udp_len
+  -- UDP segment.
+  udp_end = udp_off + udp_len
+  udp_end = pkt_len if udp_end > pkt_len
+  cksum_off = udp_off + 6
+  i = udp_off
+  while i < udp_end
+    word = if i == cksum_off
+      0
+    elseif i + 1 < udp_end
+      r16 buf, i
+    else
+      bit.lshift buf[i], 8
+    sum += word
+    i += 2
+  while bit.rshift(sum, 16) != 0
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  cksum = bit.band bit.bnot(sum), 0xFFFF
+  cksum = 0xFFFF if cksum == 0
+  w16 buf, udp_off + 6, cksum
+
+-- ── Public API ─────────────────────────────────────────────────
+
+--- Parse a raw IP packet (L3 + L4 + L7) in a single call.
+-- @tparam string raw Raw IP packet (Lua string from nfq_get_payload).
+-- @treturn table|nil Parsed packet info, or nil on error.
+parse_packet = (raw) ->
+  len = #raw
+  return nil if len < 20
+  p = ffi.cast "const uint8_t*", raw
+
+  -- L3
+  ver = bit.rshift p[0], 4
+  ip = if ver == 4
+    parse_l3_v4 p, len
+  elseif ver == 6
+    parse_l3_v6 p, len
+  return nil unless ip
+  return nil if ip.protocol != PROTO_UDP
+
+  -- L4
+  udp_off = ip.ihl
+  return nil if len < udp_off + 8
+  udp = {
+    src_port:    r16 p, udp_off
+    dst_port:    r16 p, udp_off + 2
+    udp_len:     r16 p, udp_off + 4
+    :udp_off
+    payload_off: udp_off + 8
+    payload_len: len - udp_off - 8
+  }
+
+  -- L7 — DNS header (12 bytes).
+  dns_off = udp.payload_off
+  dns_len = udp.payload_len
+  return nil if dns_len < 12
+  dns_p   = p + dns_off
+  flags_hi = dns_p[2]
+  flags_lo = dns_p[3]
+  dns = {
+    txid:        r16 dns_p, 0
+    is_response: bit.band(flags_hi, 0x80) != 0
+    opcode:      bit.band(bit.rshift(flags_hi, 3), 0x0F)
+    aa:          bit.band(flags_hi, 0x04) != 0
+    tc:          bit.band(flags_hi, 0x02) != 0
+    rd:          bit.band(flags_hi, 0x01) != 0
+    ra:          bit.band(flags_lo, 0x80) != 0
+    rcode:       bit.band(flags_lo, 0x0F)
+    qdcount:     r16 dns_p, 4
+    ancount:     r16 dns_p, 6
+    nscount:     r16 dns_p, 8
+    arcount:     r16 dns_p, 10
+  }
+
+  -- DNS questions.
+  questions = {}
+  qpos = 12
+  for _ = 1, dns.qdcount
+    break if qpos >= dns_len
+    qname, consumed = decode_name dns_p, dns_len, qpos
+    break unless qname
+    qpos += consumed
+    break if qpos + 4 > dns_len
+    qtype  = r16 dns_p, qpos
+    qclass = r16 dns_p, qpos + 2
+    qpos += 4
+    questions[#questions + 1] = {
+      :qname, :qtype, :qclass
+      qtype_name: QTYPE_NAME[qtype] or "TYPE#{qtype}"
+    }
+  answers_off = qpos
+
+  -- nDPI protocol detection (version-specific backend).
+  ndpi_master, ndpi_app = backend.detect p, len
+
+  { :ip, :udp, :dns, :questions, :answers_off
+    :ndpi_master, :ndpi_app }
+
+--- Parse DNS answer RRs from a raw IP packet.
+-- @tparam string raw Raw IP packet.
+-- @tparam table pkt Result from parse_packet.
+-- @treturn table Array of parsed answer records.
+parse_answers = (raw, pkt) ->
+  return {} unless pkt.dns.is_response and pkt.dns.ancount > 0
+  p       = ffi.cast "const uint8_t*", raw
+  dns_p   = p + pkt.udp.payload_off
+  dns_len = pkt.udp.payload_len
+  pos     = pkt.answers_off
+  answers = {}
+
+  for _ = 1, pkt.dns.ancount
+    break if pos >= dns_len
+    name, consumed = decode_name dns_p, dns_len, pos
+    break unless name
+    pos += consumed
+    break if pos + 10 > dns_len
+
+    rtype    = r16 dns_p, pos
+    rclass   = r16 dns_p, pos + 2
+    ttl      = r32 dns_p, pos + 4
+    ttl_off  = pos + 4
+    rdlength = r16 dns_p, pos + 8
+    pos += 10
+    break if pos + rdlength > dns_len
+
+    rdata_str = if rtype == QTYPE.A and rdlength == 4
+      fmt_ipv4 dns_p, pos
+    elseif rtype == QTYPE.AAAA and rdlength == 16
+      fmt_ipv6 dns_p, pos
+    elseif rtype == QTYPE.CNAME
+      cname, _ = decode_name dns_p, dns_len, pos
+      cname or "?"
+    else
+      "(rdata #{rdlength}B)"
+
+    rdata_raw_len = if rtype == QTYPE.A then 4
+    elseif rtype == QTYPE.AAAA then 16
+    else 0
+    rdata_raw = if rdata_raw_len > 0
+      ffi.string dns_p + pos, rdata_raw_len
+    else
+      ""
+
+    answers[#answers + 1] = {
+      :name, :rtype, :rclass, :ttl, :rdlength, :rdata_str, :rdata_raw
+      rtype_name: QTYPE_NAME[rtype] or "TYPE#{rtype}"
+      ttl_offset: ttl_off
+    }
+    pos += rdlength
+
+  answers
+
+--- Patch DNS response TTLs and fix checksums, return the modified packet.
+-- @tparam string raw Raw IP packet (Lua string).
+-- @tparam table pkt Result from parse_packet.
+-- @tparam table answers Result from parse_answers.
+-- @tparam number new_ttl TTL value to write.
+-- @treturn string Modified packet as a Lua string.
+patch_and_checksum = (raw, pkt, answers, new_ttl) ->
+  pkt_len = #raw
+  buf = ffi.new "uint8_t[?]", pkt_len
+  ffi.copy buf, raw, pkt_len
+
+  dns_off = pkt.udp.payload_off
+  for ans in *answers
+    w32 buf, dns_off + ans.ttl_offset, new_ttl
+
+  if pkt.ip.version == 4
+    fix_udp4_cksum buf, pkt_len, pkt.ip.ihl
+    fix_ip4_cksum  buf, pkt.ip.ihl
+
+  ffi.string buf, pkt_len
+
+--- Release the nDPI detection module.
+cleanup = ->
+  backend.cleanup!
+
+{ :parse_packet, :parse_answers, :patch_and_checksum, :cleanup
+  :QTYPE, :QTYPE_NAME, :RCODE }

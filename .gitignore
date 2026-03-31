@@ -1,0 +1,32 @@
+# MoonScript → Lua compilation
+lua/
+
+# Logs
+*.log
+/tmp/dns-filter.log
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# Editor files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.so
+*.a
+
+# Test artifacts
+.coverage
+*.prof
+
+# Local config overrides
+config.local.moon

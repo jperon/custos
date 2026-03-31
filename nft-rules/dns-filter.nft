@@ -1,0 +1,174 @@
+#!/usr/sbin/nft -f
+# dns-filter.nft
+# Ruleset nftables pour le filtre DNS sur bridge Linux.
+#
+# Politique générale : TOUT est bloqué sauf
+#   1. Le trafic DNS (UDP/53) → délégué à NFQUEUE (LuaJIT)
+#   2. Le trafic dont l'IP destination est dans ip4_allowed / ip6_allowed
+#      (peuplé dynamiquement par LuaJIT après résolution DNS autorisée)
+#
+# Côté LAN : les paquets bloqués reçoivent un REJECT (ICMP port-unreachable)
+#            pour que les clients ne restent pas en attente.
+# Côté WAN : DROP silencieux.
+#
+# Prérequis :
+#   - br_netfilter chargé (sysctl net.bridge.bridge-nf-call-iptables=1)
+#   - Variables : LAN_IF = interface bridge (ex: br-lan)
+#                 LAN_NET4 = réseau IPv4 LAN (ex: 192.168.1.0/24)
+#                 LAN_NET6 = réseau IPv6 LAN (ex: fd00::/64, optionnel)
+
+flush ruleset
+
+# ════════════════════════════════════════════════════════════════
+# Table principale IPv4
+# ════════════════════════════════════════════════════════════════
+table ip dns-filter {
+
+  # ── Sets d'IPs autorisées (peuplés par LuaJIT) ─────────────────
+  # type ipv4_addr : lookup O(log n) dans le kernel
+  # flags timeout  : les entrées expirent automatiquement après 2 minutes
+  set ip4_allowed {
+    type    ipv4_addr
+    flags   timeout, interval
+    timeout 2m
+    # Entrées initiales statiques (toujours autorisées, sans timeout)
+    # Exemples : serveur DNS upstream, gateway
+    # elements = { 8.8.8.8, 1.1.1.1 }
+  }
+
+  # ── Set des IPs DNS upstream (toujours autorisées pour la résolution) ──
+  set dns_servers {
+    type    ipv4_addr
+    flags   constant
+    elements = {
+      8.8.8.8,        # Google DNS
+      8.8.4.4,        # Google DNS secondaire
+      1.1.1.1,        # Cloudflare
+      1.0.0.1,        # Cloudflare secondaire
+      9.9.9.9,        # Quad9
+    }
+  }
+
+  # ── Chaîne FORWARD (trafic traversant le bridge) ────────────────
+  chain forward {
+    type   filter hook forward priority 0
+    policy drop
+
+    # ── Connexions établies / reliées : accepter (table de tracking) ──
+    ct state established,related accept
+
+    # ── Trafic DNS upstream → NFQUEUE 0 (questions sortantes) ─────
+    # Paquets UDP/53 allant DU LAN VERS le resolver
+    ip protocol udp udp dport 53 \
+      ip saddr 192.168.1.0/24 \
+      queue num 0 bypass
+
+    # ── Trafic DNS retour → NFQUEUE 1 (réponses entrantes) ────────
+    # Paquets UDP/53 venant du resolver allant VERS le LAN
+    ip protocol udp udp sport 53 \
+      ip daddr 192.168.1.0/24 \
+      queue num 1 bypass
+
+    # ── IPs autorisées par LuaJIT après résolution DNS ────────────
+    ip daddr @ip4_allowed accept
+    ip saddr @ip4_allowed accept   # retour (réponse HTTP, etc.)
+
+    # ── Serveurs DNS upstream : toujours autorisés ────────────────
+    ip daddr @dns_servers accept
+    ip saddr @dns_servers accept
+
+    # ── Trafic LAN interne (inter-hosts sur le même bridge) ───────
+    ip saddr 192.168.1.0/24 ip daddr 192.168.1.0/24 accept
+
+    # ── REJECT avec message ICMP pour le trafic LAN bloqué ────────
+    # (les clients reçoivent une erreur immédiate au lieu d'un timeout)
+    ip saddr 192.168.1.0/24 reject with icmp type port-unreachable
+
+    # Tout le reste (WAN→LAN non sollicité) : DROP implicite (policy)
+  }
+
+  # ── Chaîne OUTPUT (trafic généré par la machine bridge elle-même) ─
+  chain output {
+    type   filter hook output priority 0
+    policy accept   # La machine bridge elle-même n'est pas filtrée
+
+    # Capture DNS de la machine elle-même pour les tests
+    ip protocol udp udp dport 53 queue num 0 bypass
+    ip protocol udp udp sport 53 queue num 1 bypass
+  }
+
+  # ── Chaîne INPUT (trafic destiné à la machine bridge) ────────────
+  chain input {
+    type   filter hook input priority 0
+    policy drop
+
+    # SSH et services locaux
+    ct state established,related accept
+    ip protocol tcp tcp dport 22 accept   # SSH d'administration
+    ip saddr 192.168.1.0/24 accept        # Accès depuis le LAN
+    ip protocol icmp accept               # Ping
+  }
+}
+
+# ════════════════════════════════════════════════════════════════
+# Table principale IPv6
+# ════════════════════════════════════════════════════════════════
+table ip6 dns-filter {
+
+  set ip6_allowed {
+    type    ipv6_addr
+    flags   timeout, interval
+    timeout 2m
+  }
+
+  set dns6_servers {
+    type    ipv6_addr
+    flags   constant
+    elements = {
+      2001:4860:4860::8888,   # Google DNS v6
+      2606:4700:4700::1111,   # Cloudflare v6
+    }
+  }
+
+  chain forward {
+    type   filter hook forward priority 0
+    policy drop
+
+    ct state established,related accept
+
+    # DNS v6
+    ip6 nexthdr udp udp dport 53 queue num 0 bypass
+    ip6 nexthdr udp udp sport 53 queue num 1 bypass
+
+    # IPs autorisées
+    ip6 daddr @ip6_allowed accept
+    ip6 saddr @ip6_allowed accept
+
+    ip6 daddr @dns6_servers accept
+    ip6 saddr @dns6_servers accept
+
+    # Trafic LAN v6 interne
+    ip6 saddr fd00::/64 ip6 daddr fd00::/64 accept
+
+    # ICMPv6 indispensable (NDP, etc.)
+    ip6 nexthdr icmpv6 accept
+
+    # REJECT LAN
+    ip6 saddr fd00::/64 reject with icmpv6 type port-unreachable
+  }
+
+  chain output {
+    type   filter hook output priority 0
+    policy accept
+    ip6 nexthdr udp udp dport 53 queue num 0 bypass
+    ip6 nexthdr udp udp sport 53 queue num 1 bypass
+  }
+
+  chain input {
+    type   filter hook input priority 0
+    policy drop
+    ct state established,related accept
+    ip6 nexthdr icmpv6 accept
+    ip6 saddr fd00::/64 accept
+  }
+}

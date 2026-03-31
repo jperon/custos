@@ -1,0 +1,408 @@
+# CustosVirginum
+
+Inline DNS filter on Linux bridge, written in **MoonScript** and executed by
+**LuaJIT**. Blocks all DNS traffic except explicitly allowed domains,
+logs L2/L3/L4/L7 information, and dynamically builds nftables allowlists
+as DNS resolutions occur.
+
+Packet parsing uses **pure LuaJIT FFI pointer arithmetic** for L3/L4/L7
+decoding, combined with **libndpi** for deep packet inspection and protocol
+detection — all without any C compilation step.
+
+---
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  Linux bridge machine                                          │
+│                                                                │
+│  nftables (kernel)                                             │
+│  ├── policy DROP + REJECT LAN                                  │
+│  ├── set ip4_allowed  { timeout 2m }  ◄── populated by LuaJIT  │
+│  ├── set ip6_allowed  { timeout 2m }  ◄── populated by LuaJIT  │
+│  ├── UDP/53 src=LAN → NFQUEUE 0  (questions)                   │
+│  └── UDP/53 dst=LAN → NFQUEUE 1  (responses)                   │
+│                                                                │
+│  LuaJIT (userspace)                                            │
+│  ├── main.lua        supervisor + fork                         │
+│  ├── worker Q0  ─────────────────── pipe IPC ──► worker Q1    │
+│  │   parse L2/L3/L4/L7 (FFI)                    drain pipe     │
+│  │   nDPI protocol detection                    verify txid    │
+│  │   lookup allowlist                           patch TTL→60s  │
+│  │   log + ACCEPT/REJECT                        nft set add    │
+│  │   write(pipe, txid+ip+port)                  ACCEPT+payload │
+│  └── /tmp/dns-filter.log                                       │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Allowed packet flow
+
+```
+DNS Client (LAN)
+   │  question UDP/53 → www.github.com ?
+   ▼
+nft FORWARD → NFQUEUE 0
+   ▼
+worker Q0 : parse L2+L3+L4+DNS → qname="www.github.com"
+   │  is_allowed("www.github.com") → true (suffix "github.com")
+   │  log: ALLOW mac_src=aa:bb:.. src_ip=192.168.1.42 qname=www.github.com
+   │  write(pipe, txid=0x1234, ip=192.168.1.42, port=54321)
+   └► NF_ACCEPT → question forwarded to resolver
+   ▼
+DNS Resolver (8.8.8.8) responds
+   ▼
+nft FORWARD → NFQUEUE 1
+   ▼
+worker Q1 : drain pipe → pending[0x1234:192.168.1.42:54321] found
+   │  parse response → A 140.82.121.4
+   │  patch TTL → 60s + recalc checksums UDP+IP
+   │  nft add element ip dns-filter ip4_allowed { 140.82.121.4 timeout 2m }
+   │  log: ALLOW action=response_patched answers=1 ttl_set=60
+   └► NF_ACCEPT + modified payload
+   ▼
+Client receives response (TTL=60s)
+   ▼
+Client opens TCP connection → 140.82.121.4
+   ▼
+nft FORWARD : ip daddr @ip4_allowed accept → allowed through
+```
+
+### Blocked packet flow
+
+```
+DNS Client (LAN)
+   │  question UDP/53 → www.facebook.com ?
+   ▼
+nft FORWARD → NFQUEUE 0
+   ▼
+worker Q0 : qname="www.facebook.com"
+   │  is_allowed("www.facebook.com") → false
+   │  log: BLOCK reason=not_in_allowlist
+   └► NF_DROP
+   ▼
+nft REJECT with icmp port-unreachable → client receives immediate error
+```
+
+---
+
+## Project Structure
+
+```
+custos/
+├── src/
+│   ├── config.moon          Configuration: allowlist, constants
+│   ├── ffi_defs.moon        Centralized FFI declarations
+│   ├── log.moon             Structured key=value logging
+│   ├── allowlist.moon       qname lookup + SIGHUP reload
+│   ├── ipc.moon             pipe Q0→Q1 protocol
+│   ├── nft.moon             nftables set injection via libnftables
+│   ├── nfq_loop.moon        Generic NFQUEUE loop
+│   ├── worker_q0.moon       DNS questions worker
+│   ├── worker_q1.moon       DNS responses worker
+│   ├── main.moon            Supervisor + fork
+│   ├── ffi_ndpi.moon         Version-detecting facade (loads v4 or v5)
+│   ├── ffi_ndpi_v4.moon      FFI cdef for nDPI 4.2–4.8
+│   ├── ffi_ndpi_v5.moon      FFI cdef for nDPI 5.0+
+│   └── parse/
+│       ├── ethernet.moon    L2: MAC src via nfq_get_packet_hw
+│       ├── ip.moon          L3: IPv4 + IPv6 + checksums
+│       ├── udp.moon         L4: UDP + checksum recalculation
+│       ├── dns.moon         L7: RFC 1035 complete + TTL patch
+│       ├── ndpi.moon        L3-L7 unified parser (facade)
+│       ├── ndpi_v4.moon     nDPI 4.2–4.8 detection backend
+│       └── ndpi_v5.moon     nDPI 5.0+ detection backend
+├── lua/                     Lua generated by moonc (do not edit)
+├── nft-rules/
+│   └── dns-filter.nft       Complete nftables ruleset
+├── tests/
+│   ├── run_tests.lua        Unit tests (no root required)
+│   └── test_ndpi.lua        nDPI wrapper tests (requires libndpi)
+├── Makefile
+├── setup.sh
+└── README.md
+```
+
+---
+
+## Prerequisites
+
+### System Packages
+
+| Package                  | Role                                    |
+|--------------------------|-----------------------------------------|
+| `luajit`                 | Compiled Lua execution                  |
+| `moonscript`             | `.moon` → `.lua` compilation            |
+| `libnetfilter-queue1`    | NFQUEUE C library                       |
+| `libnftables1`           | nftables library (set injection)        |
+| `libndpi-dev`            | nDPI deep packet inspection (FFI)       |
+| `nftables`               | `nft` tool                              |
+| `kmod: br_netfilter`     | Bridge packets visible to netfilter     |
+
+**Debian/Ubuntu:**
+```bash
+apt install luajit libnetfilter-queue1 libnftables1 libndpi-dev nftables
+luarocks install moonscript
+```
+
+**OpenWrt:**
+```bash
+opkg install luajit libnetfilter-queue libnftables nftables kmod-br-netfilter
+# moonscript via luarocks or build from source
+```
+
+**Docker (build image):**
+```dockerfile
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y \
+    luajit libnetfilter-queue1 libnftables1 nftables \
+    lua5.1 luarocks build-essential \
+    && luarocks install moonscript \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+---
+
+## Installation
+
+```bash
+git clone <repo> custos
+cd custos
+
+# Compile MoonScript → Lua
+make
+
+# Run unit tests (no root required)
+make test
+
+# Run nDPI wrapper tests (requires libndpi)
+make test-ndpi
+
+# Configure nftables rules (adjust LAN_NET4 if needed)
+LAN_NET4=192.168.1.0/24 sudo ./setup.sh up
+```
+
+---
+
+## Configuration
+
+All configuration is in `src/config.moon`:
+
+```moonscript
+-- Allowed domains (suffix matching)
+ALLOWED_DOMAINS = {
+  "github.com"
+  "debian.org"
+  -- add more here...
+}
+
+-- IP timeout in nft sets after resolution
+NFT_IP_TIMEOUT = "2m"
+
+-- Forced TTL on passing DNS responses
+-- (in src/worker_q1.moon : FORCED_TTL = 60)
+```
+
+After modification:
+```bash
+make          # recompile
+make reload   # send SIGHUP to workers (hot reload)
+```
+
+---
+
+## Running
+
+```bash
+# Verify nft rules are in place
+sudo ./setup.sh status
+
+# Start the filter (stays in foreground)
+sudo make run
+
+# In another terminal, watch logs
+make logs
+```
+
+Example log:
+```
+[1718100000] [1234] INFO  action=dns-filter_start version=1.0.0
+[1718100001] [1235] INFO  action=queue_listening queue=0
+[1718100001] [1236] INFO  action=queue_listening queue=1
+[1718100010] [1235] ALLOW mac_src=aa:bb:cc:dd:ee:ff in_if=3 src_ip=192.168.1.42
+                          dst_ip=8.8.8.8 src_port=54321 dst_port=53
+                          txid=0x1234 qname=www.github.com qtype=A
+[1718100010] [1236] ALLOW action=response_patched src_ip=8.8.8.8
+                          dst_ip=192.168.1.42 txid=0x1234
+                          qnames=www.github.com answers=2 ttl_set=60
+[1718100015] [1235] BLOCK mac_src=aa:bb:cc:dd:ee:ff src_ip=192.168.1.42
+                          qname=www.facebook.com qtype=A reason=not_in_allowlist
+```
+
+---
+
+## IPC Protocol Q0 → Q1
+
+The Unix pipe (created before `fork()`) carries 16-byte messages.
+Atomicity is guaranteed by POSIX for messages ≤ PIPE_BUF (4096 bytes).
+
+```
+Byte  0     : type  — 0x41 ('A') = IPv4, 0x36 ('6') = IPv6
+Bytes 1-2   : DNS txid (big-endian uint16)
+Bytes 3-18  : source IP address (4 bytes IPv4 or 16 bytes IPv6, zero-padded)
+Bytes 14-15 : source port (big-endian uint16)
+```
+
+Q1 maintains a table `pending[txid:ip:port] = expire_time` (TTL 5s).
+Purge is **lazy**: an expired entry is removed at lookup time,
+without a separate timer.
+
+---
+
+## TTL Patch
+
+Each allowed DNS response is modified in-place before being returned
+to the client:
+
+1. All Resource Record TTLs are rewritten to 60 seconds
+2. UDP checksum is recalculated (IPv4 pseudo-header + UDP segment)
+3. IP checksum is recalculated (IP header only)
+4. `NF_ACCEPT` verdict is set with modified payload via
+   `nfq_set_verdict(qh, pkt_id, NF_ACCEPT, len, patched_ptr)`
+
+The goal is to force clients to re-validate resolution every 60 seconds,
+ensuring IPs authorized in nft sets (2-minute timeout) remain valid
+as long as the client actively resolves the name.
+
+---
+
+## nDPI Integration
+
+The `parse/ndpi` module replaces the separate `parse/ip` + `parse/udp` +
+`parse/dns` pipeline with a single unified parser. It uses:
+
+- **Pure FFI pointer arithmetic** (`uint8_t*` + `bit` library) for
+  L3/L4/L7 header decoding — no `string.byte()`, no C bridge, no
+  compilation step.
+- **libndpi** (loaded at runtime via `ffi.load "ndpi"`) for protocol
+  detection. nDPI provides two levels of classification:
+  - `ndpi_master` — transport protocol (e.g. `5` = DNS)
+  - `ndpi_app` — application behind the query (e.g. `203` = Github)
+- **Pre-allocated buffers** (`flow_buf`, `ipv6_str`) reused across calls
+  to avoid GC pressure in the hot path.
+- **DNS name decompression** (RFC 1035 §4.1.4) implemented in MoonScript
+  with FFI pointers — JIT-compilable by LuaJIT.
+
+### Version Tolerance
+
+The wrapper auto-detects the installed libndpi version via
+`ndpi_revision()` at load time, then dispatches to the appropriate
+backend:
+
+| Versions | Backend | Key differences |
+|----------|---------|----------------|
+| 4.2–4.4  | `v4`    | 5-arg `ndpi_detection_process_packet` |
+| 4.6–4.8  | `v4`    | 6-arg (added `input_info`), `bitmask2` returns `int` |
+| 5.0+     | `v5`    | No `NDPI_PROTOCOL_BITMASK`, different `ndpi_init_detection_module` signature, opaque `ndpi_protocol` struct (read via accessors) |
+
+```
+ffi_ndpi.moon       → ndpi_revision() → major >= 5?
+                       ├── yes → ffi_ndpi_v5 cdef + parse.ndpi_v5
+                       └── no  → ffi_ndpi_v4 cdef + parse.ndpi_v4
+                                  └── minor >= 6? → 5-arg or 6-arg
+```
+
+### API
+
+```moonscript
+ndpi = require "parse.ndpi"
+
+-- Single-call L3+L4+L7 parse + nDPI detection
+pkt = ndpi.parse_packet raw
+-- pkt.ip    (version, ihl, src_ip, dst_ip, src_ip_raw, ...)
+-- pkt.udp   (src_port, dst_port, udp_len, payload_off, ...)
+-- pkt.dns   (txid, is_response, qdcount, ancount, rcode, ...)
+-- pkt.questions  [{qname, qtype, qclass, qtype_name}, ...]
+-- pkt.ndpi_master, pkt.ndpi_app
+
+-- Parse DNS answer RRs
+answers = ndpi.parse_answers raw, pkt
+-- [{name, rtype, ttl, ttl_offset, rdata_str, rdata_raw}, ...]
+
+-- Patch TTLs + fix checksums, return modified packet
+patched = ndpi.patch_and_checksum raw, pkt, answers, 60
+
+-- Cleanup
+ndpi.cleanup!
+```
+
+The old per-layer modules (`parse/ip`, `parse/udp`, `parse/dns`) remain
+available for reference or fallback.
+
+---
+
+## Known Limitations
+
+- **IPv6 in worker Q1**: TTL patch and checksum recalculation only
+  cover IPv4 in this POC. IPv6 requires a different pseudo-header
+  for UDP checksum.
+- **DNS over TCP** (port 53 TCP, responses > 512 bytes): not covered.
+- **DoH / DoT**: not covered (ports 443/853).
+- **Single-threaded per worker**: one worker per queue. For very
+  high throughput, use `--queue-balance N-M` with N workers per range.
+- **IPv6 extension headers**: not parsed (next_header must be UDP
+  directly, without extension header).
+
+---
+
+## Testing with Libvirt VMs
+
+The `libvirt/` directory contains XML configs and a script to create
+a test environment with 2 VMs:
+
+```
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│   client     │      │    filter    │      │    router    │
+│   (Debian)   ├──────┤   br-filter  ├──────┤  (OpenWrt)   │
+└──────────────┘      └──────────────┘      └──────────────┘
+```
+
+### Setup
+
+```bash
+# 1. Download base images (Debian + OpenWrt) and create VMs
+sudo ./libvirt/custos-libvirt.sh create
+
+# 2. Start VMs
+sudo ./libvirt/custos-libvirt.sh start
+```
+
+### Usage
+
+```bash
+# Connect to client VM (Debian)
+virsh console custos-client
+
+# Inside client: test DNS resolution
+nslookup github.com
+nslookup facebook.com  # should fail (blocked)
+
+# Connect to router VM (OpenWrt)
+virsh console custos-router
+
+# OpenWrt has dnsmasq for DHCPv4 and odhcpd for DHCPv6/SLAAC
+```
+
+### Cleanup
+
+```bash
+sudo ./libvirt/custos-libvirt.sh delete
+```
+
+### Notes
+
+- The filter VM uses a bridge (`br-filter`) for inline filtering
+- The router runs OpenWrt 25.12 with dnsmasq (DHCPv4) and odhcpd (SLAAC)
+- The client runs Debian 13 (Trixie)
+- The router WAN connects to the host's default network
+- CustosVirginum runs inside the filter VM (compile first: `make`)
