@@ -30,7 +30,7 @@ MOONS := \
 
 LUAS := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(MOONS))
 
-.PHONY: all clean check test test-ndpi run
+.PHONY: all clean check test test-ndpi test-docker run reload logs help
 
 all: $(LUA)/parse $(LUAS)
 	@echo "Compilation terminée → $(LUA)/"
@@ -60,6 +60,13 @@ test-ndpi: all
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_ndpi.lua
 
+## Tests Docker end-to-end (requires Docker)
+test-docker: all
+	@echo "Tests Docker end-to-end..."
+	$(MOONC) tests/test_docker.moon
+	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) tests/test_docker.lua
+
 ## Lance le superviseur (nécessite root + règles nft en place)
 run: all
 	@[ "$$(id -u)" = "0" ] || (echo "ERREUR : root requis"; exit 1)
@@ -75,4 +82,18 @@ reload:
 
 ## Affiche les logs en temps réel avec horodatage lisible
 logs:
-	@tail -f /tmp/dns-filter.log | awk '{ts=$$1+0; gsub(/\[/,""); cmd="date -d @"ts" +%H:%M:%S"; cmd | getline t; close(cmd); sub($$1, "["t"]"); print}'
+	@tail -f /tmp/dns-filter.log | awk '{ts=$$1+0; gsub(/\[/,""); cmd="date -d @"ts" +%H:%M:%S"; cmd | getline t; close(cmd); sub($$1, "["t]"); print}'
+
+## Affiche l'aide
+help:
+	@echo "Cibles disponibles:"
+	@echo "  all        - Compile tous les fichiers .moon"
+	@echo "  check      - Vérification syntaxique des fichiers Lua"
+	@echo "  test       - Tests unitaires (pas root requis)"
+	@echo "  test-ndpi  - Tests nDPI wrapper (libndpi requis)"
+	@echo "  test-docker- Tests Docker end-to-end (Docker requis)"
+	@echo "  run        - Lance le superviseur (root requis)"
+	@echo "  clean      - Nettoie les fichiers compilés"
+	@echo "  reload     - Recharge la configuration (SIGHUP)"
+	@echo "  logs       - Affiche les logs en temps réel"
+	@echo "  help       - Affiche cette aide"
