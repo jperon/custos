@@ -21,6 +21,19 @@ for _index_0 = 1, #arg do
     os.exit(0)
   end
 end
+local ndpi_version = os.getenv("NDPI_VERSION")
+local profile
+if ndpi_version and ndpi_version:match("^5") then
+  profile = "ndpi5"
+else
+  profile = "ndpi4"
+end
+local filter_name
+if profile == "ndpi5" then
+  filter_name = "custos-filter-ndpi5"
+else
+  filter_name = "custos-filter"
+end
 local TEST_DOMAINS = {
   allowed = "github.com",
   blocked = "facebook.com",
@@ -83,16 +96,53 @@ build_image = function()
   end
   return true
 end
+local wait_for_filter_ready
+wait_for_filter_ready = function(name, timeout)
+  if timeout == nil then
+    timeout = 30
+  end
+  log("Waiting for " .. tostring(name) .. " filter to be fully ready...")
+  for i = 1, timeout do
+    local success, output = execute("docker exec " .. tostring(name) .. " cat /tmp/dns-filter.log 2>/dev/null", true)
+    if success and output and output:match("queue_listening") then
+      log(tostring(name) .. " filter is fully ready")
+      return true
+    end
+    os.execute("sleep 1")
+  end
+  log("Timeout waiting for " .. tostring(name) .. " filter readiness", "ERROR")
+  local _, logs = execute("docker logs " .. tostring(name) .. " 2>&1", true)
+  log("Filter logs: " .. tostring(logs), "ERROR")
+  return false
+end
 local compose_up
 compose_up = function()
-  log("Starting docker-compose environment...")
-  execute("docker-compose down 2>/dev/null || true")
-  local success = execute("docker-compose up -d")
+  log("Starting docker compose environment (profile=" .. tostring(profile) .. ")...")
+  execute("docker compose --profile ndpi4 --profile ndpi5 down 2>/dev/null || true")
+  execute("rm -f /tmp/dns-filter.log 2>/dev/null || true")
+  local success = execute("docker compose --profile " .. tostring(profile) .. " up -d")
   if not (success) then
-    log("Failed to start docker-compose", "ERROR")
+    log("Failed to start docker compose", "ERROR")
     return false
   end
-  return wait_for_container("custos-filter") and wait_for_container("custos-client") and wait_for_container("custos-router") and wait_for_container("custos-wan-dns")
+  if not (wait_for_container(filter_name) and wait_for_container("custos-client") and wait_for_container("custos-wan-dns")) then
+    return false
+  end
+  if not (wait_for_filter_ready(filter_name)) then
+    return false
+  end
+  os.execute("sleep 3")
+  log("Warming up DNS...")
+  execute("docker exec custos-client nslookup localhost 127.0.0.1 >/dev/null 2>&1 || true")
+  os.execute("sleep 1")
+  return true
+end
+local cleanup_host
+cleanup_host = function()
+  log("Cleaning up filter nftables rules...")
+  local cmd = "docker exec " .. tostring(filter_name) .. " sh -c 'nft delete table ip dns-filter 2>/dev/null; nft delete table ip6 dns-filter 2>/dev/null; true'"
+  execute(cmd, true)
+  return execute("rm -f /tmp/dns-filter.log 2>/dev/null || true")
 end
 local compose_down
 compose_down = function()
@@ -100,13 +150,15 @@ compose_down = function()
     log("Keeping containers running (--keep)")
     return true
   end
-  log("Stopping docker-compose environment...")
-  return execute("docker-compose down")
+  log("Stopping docker compose environment...")
+  execute("docker compose --profile " .. tostring(profile) .. " down")
+  cleanup_host()
+  return true
 end
 local query_dns
 query_dns = function(domain)
   log("Querying DNS for " .. tostring(domain) .. "...")
-  local cmd = "docker exec custos-client nslookup " .. tostring(domain) .. " 2>&1"
+  local cmd = "docker exec custos-client nslookup " .. tostring(domain) .. " 127.0.0.1 2>&1"
   local success, output = execute(cmd, true)
   if not success then
     log("DNS query failed for " .. tostring(domain), "ERROR")
@@ -120,7 +172,7 @@ end
 local check_nftables_set
 check_nftables_set = function(set_name)
   log("Checking nftables set " .. tostring(set_name) .. "...")
-  local cmd = "docker exec custos-filter nft list set inet dns-filter " .. tostring(set_name) .. " 2>/dev/null"
+  local cmd = "docker exec " .. tostring(filter_name) .. " nft list set ip dns-filter " .. tostring(set_name) .. " 2>/dev/null"
   local success, output = execute(cmd, true)
   if not success then
     log("Failed to check nftables set " .. tostring(set_name), "ERROR")
@@ -135,7 +187,7 @@ end
 local check_logs
 check_logs = function()
   log("Checking filter logs...")
-  local cmd = "docker logs custos-filter 2>&1 | tail -20"
+  local cmd = "docker exec " .. tostring(filter_name) .. " cat /tmp/dns-filter.log 2>/dev/null"
   local success, output = execute(cmd, true)
   if not success then
     log("Failed to get logs", "ERROR")
@@ -145,7 +197,7 @@ check_logs = function()
     print(output)
   end
   local has_protocol = output:match("ndpi_master=%d+" or output:match("ndpi_app=%d+"))
-  local has_dns = output:match("DNS" or output:match("txid="))
+  local has_dns = output:match("DNS" or output:match("dns" or output:match("txid=")))
   return has_protocol and has_dns, output
 end
 local test_ttl_patching
@@ -206,13 +258,13 @@ run_test("TTL patching works", function()
   return test_ttl_patching()
 end)
 compose_down()
-log("\nTest Summary:")
-log("Passed: " .. tostring(tests_passed))
-log("Failed: " .. tostring(tests_failed))
+print("\nTest Summary:")
+print("Passed: " .. tostring(tests_passed))
+print("Failed: " .. tostring(tests_failed))
 if tests_failed > 0 then
-  log("Some tests failed!", "ERROR")
+  print("Some tests FAILED!")
   return os.exit(1)
 else
-  log("All tests passed!", "PASS")
+  print("All tests passed!")
   return os.exit(0)
 end

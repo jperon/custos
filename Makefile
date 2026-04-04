@@ -67,8 +67,20 @@ test-docker: all
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_docker.lua
 
+test-docker-internal: all
+	@echo "Tests Docker end-to-end (nDPI 4.x)..."
+	$(MOONC) tests/test_docker.moon
+	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) tests/test_docker.lua
+
 ## Tests Docker end-to-end avec nDPI 5.0 (requires Docker)
 test-docker-ndpi5: all
+	@echo "Tests Docker end-to-end (nDPI 5.0)..."
+	$(MOONC) tests/test_docker.moon
+	NDPI_VERSION=5.0 LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) tests/test_docker.lua
+
+test-docker-ndpi5-internal: all
 	@echo "Tests Docker end-to-end (nDPI 5.0)..."
 	$(MOONC) tests/test_docker.moon
 	NDPI_VERSION=5.0 LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
