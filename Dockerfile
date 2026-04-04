@@ -40,7 +40,13 @@ RUN apt-get update && apt-get install -y \
     libmnl0 \
     nftables \
     iproute2 \
-    && rm -rf /var/lib/apt/lists/*
+    dnsmasq \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/lib/x86_64-linux-gnu/libnetfilter_queue.so.1 /usr/lib/x86_64-linux-gnu/libnetfilter_queue.so \
+    && ln -s /usr/lib/x86_64-linux-gnu/libnftnl.so.11 /usr/lib/x86_64-linux-gnu/libnftnl.so \
+    && ln -s /usr/lib/x86_64-linux-gnu/libmnl.so.0 /usr/lib/x86_64-linux-gnu/libmnl.so \
+    && ln -s /usr/lib/x86_64-linux-gnu/libnftables.so.1 /usr/lib/x86_64-linux-gnu/libnftables.so \
+    && ln -s /usr/lib/x86_64-linux-gnu/libndpi.so.4.2 /usr/lib/x86_64-linux-gnu/libndpi.so
 
 # Create app user
 RUN useradd -m -s /bin/bash custos
@@ -53,9 +59,9 @@ COPY --from=builder /app/nft-rules ./nft-rules
 COPY --from=builder /app/setup.sh ./
 
 # Set permissions
-RUN chown -R custos:custos /app
+RUN chown -R custos:custos /app && chmod +x /app/setup.sh
 
-USER custos
+# USER custos
 
 # Expose that we need privileged mode for NFQUEUE
 LABEL description="CustosVirginum DNS Filter with nDPI 4.x"

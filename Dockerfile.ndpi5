@@ -72,7 +72,7 @@ COPY --from=0 /app/setup.sh ./
 # Set permissions
 RUN chown -R custos:custos /app
 
-USER custos
+# USER custos
 
 # Expose that we need privileged mode for NFQUEUE
 LABEL description="CustosVirginum DNS Filter with nDPI 5.0"
