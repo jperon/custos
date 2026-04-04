@@ -26,6 +26,7 @@ ffi.cdef [[
   int     fcntl(int fd, int cmd, ...);
 
   /* ── Processus ── */
+  pid_t getpid(void);
   pid_t fork(void);
   pid_t waitpid(pid_t pid, int *status, int options);
   void  _exit(int status);

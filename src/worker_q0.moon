@@ -78,7 +78,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   for _, q in ipairs dns.questions
     if is_allowed q.qname
       log_allow {
-        table.unpack {k, v for k, v in pairs q_fields}   -- merge
+        unpack {k, v for k, v in pairs q_fields}   -- merge
         qname: q.qname
         qtype: q.qtype_name
       }
@@ -86,7 +86,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       write_msg pipe_wfd, dns.hdr.txid, ip_hdr.src_ip_raw, udp_hdr.src_port
     else
       log_block {
-        table.unpack {k, v for k, v in pairs q_fields}
+        unpack {k, v for k, v in pairs q_fields}
         qname: q.qname
         qtype: q.qtype_name
         reason: "not_in_allowlist"
