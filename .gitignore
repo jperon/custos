@@ -38,11 +38,3 @@ meta-data
 user-data
 network-config
 test-vm.qcow2
-
-# VM disk images and cloud-init artifacts
-*.qcow2
-cidata.iso
-meta-data
-user-data
-network-config
-test-vm.qcow2
