@@ -494,6 +494,43 @@ test("make_key — unicité", function()
   assert(k1 ~= k3, "txid différents → clés différentes")
 end)
 
+test("drain_pipe — lit IPC_MSG_SIZE=21 octets sans overflow", function()
+  -- Déclare les appels POSIX nécessaires (pcall évite l'erreur si déjà déclarés)
+  pcall(ffi.cdef, [[
+    int pipe2(int pipefd[2], int flags);
+    int fcntl(int fd, int cmd, ...);
+    int close(int fd);
+    ssize_t read(int fd, void *buf, size_t count);
+    ssize_t write(int fd, const void *buf, size_t count);
+  ]])
+  local O_NONBLOCK = 2048
+  local F_SETFL    = 4
+  local pipefd = ffi.new("int[2]")
+  local rc = ffi.C.pipe2(pipefd, 0)
+  assert(rc == 0, "pipe2 failed: " .. tostring(rc))
+  local rfd, wfd = pipefd[0], pipefd[1]
+  -- Met le fd de lecture en mode non-bloquant
+  ffi.C.fcntl(rfd, F_SETFL, O_NONBLOCK)
+
+  -- Charge drain_pipe et is_pending depuis le module ipc (instance fraîche)
+  package.loaded["ipc"] = nil
+  local m2 = dofile("lua/ipc.lua")
+
+  -- Écrit un message IPv4 via write_msg
+  local ip_raw = "\xC0\xA8\x02\x01"  -- 192.168.2.1
+  local txid, port = 0xBEEF, 12345
+  local ok = m2.write_msg(wfd, txid, ip_raw, port)
+  assert(ok, "write_msg failed")
+  ffi.C.close(wfd)
+
+  -- drain_pipe doit lire les 21 octets sans segfault ni corruption
+  m2.drain_pipe(rfd, os.time)
+  ffi.C.close(rfd)
+
+  -- Le message doit être présent dans pending après drain
+  assert(m2.is_pending(txid, "192.168.2.1", port, os.time), "message absent de pending après drain_pipe")
+end)
+
 -- ════════════════════════════════════════════════════════════════
 -- Résumé
 -- ════════════════════════════════════════════════════════════════

@@ -217,7 +217,6 @@ parse_dns = (buf) ->
 --              (pour convertir ttl_offset 1-based Lua en index 0-based ffi)
 -- new_ttl    : valeur TTL à écrire (uint32)
 patch_ttl = (buf_ptr, answers, dns_offset, new_ttl) ->
-  bit = require "bit"
   for ans in *answers
     -- ttl_offset est 1-based depuis le début du payload DNS
     -- dns_offset est 0-based depuis le début du paquet IP

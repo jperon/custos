@@ -89,7 +89,7 @@ make_key = (txid, ip_str, src_port) ->
 -- pipe_rfd : fd de lecture du pipe (doit être en mode O_NONBLOCK)
 -- now_fn   : fonction retournant l'epoch courant (injectée pour testabilité)
 drain_pipe = (pipe_rfd, now_fn) ->
-  buf = ffi.new "uint8_t[16]"
+  buf = ffi.new "uint8_t[?]", IPC_MSG_SIZE
   absorbed = 0
 
   while true

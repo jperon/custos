@@ -15,7 +15,7 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_RESPONSES, :DOCKER_MODE }     = require "config"
-{ :parse_ip }            = require "parse/ip"
+{ :parse_ip, :checksum_ip } = require "parse/ip"
 { :parse_udp, :checksum_udp } = require "parse/udp"
 { :parse_dns, :patch_ttl, :QTYPE, :RCODE } = require "parse/dns"
 { :drain_pipe, :is_pending, :consume } = require "ipc"
@@ -64,7 +64,6 @@ patch_packet = (raw, ip_hdr, udp_hdr, dns) ->
     buf[10] = 0
     buf[11] = 0   -- 0-based : octets 10-11 (checksum IP)
     ip_header_str = ffi.string buf, ip_hdr.ihl
-    { :checksum_ip } = require "parse/ip"
     new_ip_cksum  = checksum_ip ip_header_str
     buf[10] = bit.rshift bit.band(new_ip_cksum, 0xFF00), 8
     buf[11] = bit.band new_ip_cksum, 0xFF

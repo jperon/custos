@@ -4,6 +4,7 @@
 
 { :read_u16 } = require "parse/ip"
 { :DNS_PORT } = require "config"
+bit = require "bit"
 
 -- Header UDP : 8 octets
 --   0-1 : src_port
@@ -87,8 +88,6 @@ pseudo_header_sum_v6 = (src_ip_raw, dst_ip_raw, udp_len) ->
 -- @tparam table  udp_hdr résultat de parse_udp
 -- @treturn number checksum (uint16) à écrire aux octets udp_off+6 / udp_off+7
 checksum_udp = (raw, ip_hdr, udp_hdr) ->
-  { :read_u16 } = require "parse/ip"
-  bit = require "bit"
 
   sum = if ip_hdr.version == 6
     pseudo_header_sum_v6(
