@@ -29,7 +29,10 @@ for k, v in pairs QTYPE
   QTYPE_NAME[v] = k
 
 -- RCODE (octet 4, 4 bits bas)
-RCODE = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3 }
+RCODE = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3, REFUSED: 5 }
+
+-- Code EDE « Filtered » (RFC 8914 §5.16)
+EDE_FILTERED = 15
 
 -- ── Header DNS (12 octets) ───────────────────────────────────────
 --   0-1  : txid
@@ -226,6 +229,43 @@ patch_ttl = (buf_ptr, answers, dns_offset, new_ttl) ->
     buf_ptr[abs_off+2] = bit.rshift(bit.band(new_ttl, 0x0000FF00),  8)
     buf_ptr[abs_off+3] = bit.band(new_ttl, 0x000000FF)
 
+--- Construit une réponse DNS REFUSED (RCODE 5) avec extension EDNS EDE=15 (Filtered).
+-- Copie la section question de la requête originale.
+-- @tparam table  dns       Résultat de parse_dns sur la question originale
+-- @tparam string orig_buf  Payload DNS brut de la question (UDP payload)
+-- @treturn string|nil      Payload UDP DNS de la réponse, nil si construction impossible
+build_refused = (dns, orig_buf) ->
+  return nil unless dns and orig_buf
+
+  txid    = dns.hdr.txid
+  qdcount = dns.hdr.qdcount
+
+  -- ── Header DNS (12 octets) ────────────────────────────────────
+  -- flags : QR=1 OPCODE=0 AA=0 TC=0 RD=1 RA=0 RCODE=5 (REFUSED)
+  -- ARCOUNT=1 pour l'OPT RR EDNS
+  txid_hi = bit.rshift bit.band(txid, 0xFF00), 8
+  txid_lo = bit.band txid, 0xFF
+  qd_hi   = bit.rshift bit.band(qdcount, 0xFF00), 8
+  qd_lo   = bit.band qdcount, 0xFF
+  hdr = string.char txid_hi, txid_lo, 0x81, 0x05, qd_hi, qd_lo, 0, 0, 0, 0, 0, 1
+
+  -- ── Section question : copie verbatim de l'original ─────────
+  -- parse_questions retourne (questions, next_offset) ; next_offset est
+  -- la position 1-based du premier octet APRÈS la section questions.
+  _, ans_offset = parse_questions orig_buf, qdcount
+  qs_raw = if ans_offset and ans_offset > 13
+    orig_buf\sub 13, ans_offset - 1
+  else
+    ""
+
+  -- ── EDNS OPT RR (RFC 6891) avec option EDE=15 (RFC 8914) ─────
+  -- NAME=0x00 (root), TYPE=0x0029 OPT, CLASS=0x0500 (1280 octets),
+  -- TTL=0x00000000, RDLENGTH=6,
+  -- RDATA : OPTION-CODE=0x000F EDE, OPTION-LEN=2, INFO-CODE=0x000F Filtered
+  opt_rr = string.char 0x00, 0x00, 0x29, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x0F, 0x00, 0x02, 0x00, 0x0F
+
+  hdr .. qs_raw .. opt_rr
+
 { :parse_dns, :parse_header, :parse_questions, :parse_answers
-  :decode_name, :patch_ttl
-  :QTYPE, :QTYPE_NAME, :RCODE }
+  :decode_name, :patch_ttl, :build_refused
+  :QTYPE, :QTYPE_NAME, :RCODE, :EDE_FILTERED }

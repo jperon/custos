@@ -281,15 +281,11 @@ run_test "DNS query — allowed domain resolves",
     return ok, obtained
 
 run_test "DNS query — blocked domain is rejected",
-  "nslookup #{TEST_DOMAINS.blocked} → SERVFAIL, timeout or connection refused",
+  "nslookup #{TEST_DOMAINS.blocked} → REFUSED (RCODE 5 + EDE Filtered)",
   ->
     success, output = query_dns TEST_DOMAINS.blocked
-    ok = not success or
-         output\match("SERVFAIL") != nil or
-         output\match("timeout") != nil or
-         output\match("connection refused") != nil
-    obtained = (output\match "(%S*SERVFAIL%S*)") or
-               (output\match "([Tt]imeout[^\n]*)") or
+    ok = (output != nil) and output\match("REFUSED") != nil
+    obtained = (output\match "([^\n]*REFUSED[^\n]*)") or
                (output\match "([^\n]+)") or
                "(no output)"
     return ok, obtained

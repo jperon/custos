@@ -20,6 +20,8 @@
 { :write_msg }           = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn } = require "log"
+{ :build_refused }       = require "parse/dns"
+refuse                   = require "refuse"
 
 -- fd d'écriture du pipe IPC, injecté par main.moon avant fork()
 pipe_wfd = nil
@@ -93,12 +95,22 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       }
       verdict = NF_DROP
 
+  -- Réponse REFUSED au client (un seul envoi par paquet DNS)
+  -- La question originale est copiée dans le payload REFUSED avec
+  -- l'extension EDE code 15 (Filtered, RFC 8914).
+  if verdict == NF_DROP
+    refused_payload = build_refused dns, udp_hdr.dns_payload
+    if refused_payload
+      refuse.send_refused ip_hdr.src_ip_raw, udp_hdr.src_port,
+                          refused_payload, ip_hdr.af
+
   verdict
 
 -- ── Point d'entrée ───────────────────────────────────────────────
 -- Appelé par main.moon après fork(), avec le fd d'écriture du pipe.
 run = (wfd) ->
   pipe_wfd = wfd
+  refuse.init!
   run_queue QUEUE_QUESTIONS, handle_question
 
 { :run }

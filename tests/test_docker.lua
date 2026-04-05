@@ -279,10 +279,10 @@ run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_D
   end
   return ok, obtained
 end)
-run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TEST_DOMAINS.blocked) .. " → SERVFAIL, timeout or connection refused", function()
+run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TEST_DOMAINS.blocked) .. " → REFUSED (RCODE 5 + EDE Filtered)", function()
   local success, output = query_dns(TEST_DOMAINS.blocked)
-  local ok = not success or output:match("SERVFAIL") ~= nil or output:match("timeout") ~= nil or output:match("connection refused") ~= nil
-  local obtained = (output:match("(%S*SERVFAIL%S*)")) or (output:match("([Tt]imeout[^\n]*)")) or (output:match("([^\n]+)")) or "(no output)"
+  local ok = (output ~= nil) and output:match("REFUSED") ~= nil
+  local obtained = (output:match("([^\n]*REFUSED[^\n]*)")) or (output:match("([^\n]+)")) or "(no output)"
   return ok, obtained
 end)
 run_test("DNS query — nonexistent domain returns NXDOMAIN", "nslookup " .. tostring(TEST_DOMAINS.nonexistent) .. " → NXDOMAIN or can't find", function()

@@ -24,6 +24,7 @@ MOONS := \
   $(SRC)/allowlist.moon \
   $(SRC)/nft.moon \
   $(SRC)/nfq_loop.moon \
+  $(SRC)/refuse.moon \
   $(SRC)/worker_q0.moon \
   $(SRC)/worker_q1.moon \
   $(SRC)/main.moon

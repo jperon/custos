@@ -17,7 +17,7 @@
 { :QUEUE_RESPONSES, :DOCKER_MODE }     = require "config"
 { :parse_ip }            = require "parse/ip"
 { :parse_udp, :checksum_udp } = require "parse/udp"
-{ :parse_dns, :patch_ttl, :QTYPE } = require "parse/dns"
+{ :parse_dns, :patch_ttl, :QTYPE, :RCODE } = require "parse/dns"
 { :drain_pipe, :is_pending, :consume } = require "ipc"
 { :add_ip }              = require "nft"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
@@ -100,6 +100,14 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   unless dns
     return NF_ACCEPT
   unless dns.hdr.is_response
+    return NF_ACCEPT
+
+  -- Réponse REFUSED (RCODE 5) : laisse passer sans modification ni vérification
+  -- IPC. Couvre deux cas :
+  --   1. Notre propre réponse REFUSED injectée par worker_q0 (domaine bloqué)
+  --   2. Refus explicite de l'upstream pour un domaine autorisé
+  -- Dans les deux cas le client doit recevoir la réponse telle quelle.
+  if dns.hdr.rcode == RCODE.REFUSED
     return NF_ACCEPT
 
   -- La question originale avait src_ip=ip_hdr.dst_ip, src_port=udp_hdr.dst_port

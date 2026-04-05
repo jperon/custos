@@ -47,6 +47,36 @@ ffi.cdef [[
   uint16_t ntohs(uint16_t n);
   uint32_t htonl(uint32_t h);
   uint16_t htons(uint16_t h);
+
+  /* ── Sockets UDP (pour send_refused) ── */
+  typedef unsigned int socklen_t;
+
+  struct sockaddr {
+    uint16_t sa_family;
+    char     sa_data[14];
+  };
+
+  struct sockaddr_in {
+    uint16_t sin_family;
+    uint16_t sin_port;
+    uint8_t  sin_addr[4];
+    uint8_t  sin_zero[8];
+  };
+
+  struct sockaddr_in6 {
+    uint16_t sin6_family;
+    uint16_t sin6_port;
+    uint32_t sin6_flowinfo;
+    uint8_t  sin6_addr[16];
+    uint32_t sin6_scope_id;
+  };
+
+  int     socket(int domain, int type, int protocol);
+  int     bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+  int     setsockopt(int sockfd, int level, int optname,
+                     const void *optval, socklen_t optlen);
+  ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
+                 const struct sockaddr *dest_addr, socklen_t addrlen);
 ]]
 
 -- ═══════════════════════════════════════════════════════════════

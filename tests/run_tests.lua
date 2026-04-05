@@ -193,15 +193,17 @@ end)
 -- ════════════════════════════════════════════════════════════════
 io.write("\n── parse/dns ──\n")
 
-local decode_name, parse_dns, QTYPE, patch_ttl
+local decode_name, parse_dns, QTYPE, RCODE, patch_ttl, build_refused
 do
   -- parse/ip doit être dans package.loaded pour que parse/dns puisse le trouver via require
   package.loaded["parse/ip"] = dofile("lua/parse/ip.lua")
   local m = dofile("lua/parse/dns.lua")
-  decode_name = m.decode_name
-  parse_dns   = m.parse_dns
-  QTYPE       = m.QTYPE
-  patch_ttl   = m.patch_ttl
+  decode_name  = m.decode_name
+  parse_dns    = m.parse_dns
+  QTYPE        = m.QTYPE
+  RCODE        = m.RCODE
+  patch_ttl    = m.patch_ttl
+  build_refused = m.build_refused
 end
 
 test("decode_name — labels simples", function()
@@ -278,6 +280,48 @@ test("parse_dns — réponse avec RR A", function()
   assert_eq(parsed.answers[1].rdata_str, "1.2.3.4", "rdata_str")
   assert_eq(parsed.answers[1].rtype,     QTYPE.A,   "rtype A")
   assert_eq(parsed.answers[1].ttl,       300,        "ttl original")
+end)
+
+test("build_refused -- header REFUSED + EDE OPT", function()
+  local qname   = "\8facebook\3com\0"   -- 13 octets
+  local dns_buf = make_dns(qname, QTYPE.A, false, 0xBEEF)
+  local dns_obj = parse_dns(dns_buf)
+  assert(dns_obj, "parse_dns nil")
+  local refused = build_refused(dns_obj, dns_buf)
+  assert(refused, "build_refused nil")
+  local resp = parse_dns(refused)
+  assert(resp, "parse_dns sur la reponse REFUSED nil")
+  assert_eq(resp.hdr.txid,        0xBEEF, "txid copié")
+  assert_eq(resp.hdr.is_response, true,   "QR=1")
+  assert_eq(resp.hdr.rcode,       RCODE.REFUSED, "RCODE=5 REFUSED")
+  assert_eq(resp.hdr.qdcount,     1,      "qdcount copié")
+  assert_eq(resp.hdr.ancount,     0,      "ancount=0")
+  assert_eq(resp.hdr.arcount,     1,      "arcount=1 EDNS OPT")
+  assert_eq(#resp.questions,      1,      "1 question copiée")
+  assert_eq(resp.questions[1].qname, "facebook.com", "qname copié")
+end)
+
+test("build_refused -- OPT RR EDE bytes", function()
+  local qname   = "\3foo\3com\0"         -- 9 octets
+  local dns_buf = make_dns(qname, QTYPE.A, false, 0x1234)
+  local dns_obj = parse_dns(dns_buf)
+  local refused = build_refused(dns_obj, dns_buf)
+  assert(refused, "build_refused nil")
+  -- Question section = qname (9B) + type(2) + class(2) = 13B
+  -- OPT RR starts at offset 12 (header) + 13 (question) + 1 = 26 (1-based)
+  local q_len     = #qname + 4   -- qname + qtype(2) + qclass(2)
+  local opt_start = 12 + q_len + 1   -- 1-based
+  assert_eq(refused:byte(opt_start),    0x00, "OPT NAME = root")
+  assert_eq(refused:byte(opt_start+1),  0x00, "OPT TYPE hi")
+  assert_eq(refused:byte(opt_start+2),  0x29, "OPT TYPE lo = 41")
+  assert_eq(refused:byte(opt_start+9),  0x00, "RDLEN hi")
+  assert_eq(refused:byte(opt_start+10), 0x06, "RDLEN lo = 6")
+  assert_eq(refused:byte(opt_start+11), 0x00, "EDE opt-code hi")
+  assert_eq(refused:byte(opt_start+12), 0x0F, "EDE opt-code lo = 15")
+  assert_eq(refused:byte(opt_start+13), 0x00, "EDE opt-len hi")
+  assert_eq(refused:byte(opt_start+14), 0x02, "EDE opt-len lo = 2")
+  assert_eq(refused:byte(opt_start+15), 0x00, "EDE info-code hi")
+  assert_eq(refused:byte(opt_start+16), 0x0F, "EDE info-code lo = 15 Filtered")
 end)
 
 
