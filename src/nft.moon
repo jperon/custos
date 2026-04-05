@@ -28,26 +28,31 @@ run_cmd = (cmd) ->
 
 -- ── API publique ─────────────────────────────────────────────────
 
--- Ajoute une adresse IPv4 dans le set ip4_allowed avec timeout.
--- ip_str : "1.2.3.4"
+--- Ajoute une adresse IPv4 dans le set ip4_allowed avec timeout.
+-- @tparam string ip_str Adresse IPv4 (ex: "1.2.3.4")
+-- @treturn boolean true si succès
 add_ip4 = (ip_str) ->
   cmd = "add element ip #{NFT_TABLE} #{NFT_SET_IP4} { #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
   run_cmd cmd
 
--- Ajoute une adresse IPv6 dans le set ip6_allowed avec timeout.
--- ip_str : "2001:db8::1"
+--- Ajoute une adresse IPv6 dans le set ip6_allowed avec timeout.
+-- @tparam string ip_str Adresse IPv6 (ex: "2001:db8::1")
+-- @treturn boolean true si succès
 add_ip6 = (ip_str) ->
   cmd = "add element ip6 #{NFT_TABLE} #{NFT_SET_IP6} { #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
   run_cmd cmd
 
--- Ajoute une IP (v4 ou v6 détecté par la présence de ':')
+--- Ajoute une IP (v4 ou v6 détecté par la présence de ':').
+-- @tparam string ip_str Adresse IP sous forme de chaîne
+-- @treturn boolean true si succès
 add_ip = (ip_str) ->
   if ip_str\find ":"
     add_ip6 ip_str
   else
     add_ip4 ip_str
 
--- Supprime le contexte (appelé à l'arrêt du processus)
+--- Libère le contexte nftables (appelé à l'arrêt du processus).
+-- @treturn nil
 cleanup = ->
   libnft.nft_ctx_free ctx if ctx != nil
 

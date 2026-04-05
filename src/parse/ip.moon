@@ -10,11 +10,24 @@ bit = require "bit"
 
 -- ── Helpers ──────────────────────────────────────────────────────
 
--- Lecture big-endian depuis une string Lua (offset 1-based)
+--- Lit un octet à l'offset i (1-based) d'une string.
+-- @tparam string s  Chaîne source
+-- @tparam number i  Offset 1-based
+-- @treturn number valeur de l'octet (0–255)
 read_u8  = (s, i)    -> s\byte i
+
+--- Lit un mot de 16 bits big-endian à l'offset i (1-based).
+-- @tparam string s  Chaîne source
+-- @tparam number i  Offset 1-based
+-- @treturn number valeur uint16
 read_u16 = (s, i)    -> bit.bor bit.lshift(s\byte(i), 8), s\byte(i+1)
 -- bit.lshift travaille sur des int32 signés : un octet haut >= 0x80 déborde.
 -- On force l'arithmétique non signée via ffi uint32_t avant tonumber().
+
+--- Lit un mot de 32 bits big-endian à l'offset i (1-based).
+-- @tparam string s  Chaîne source
+-- @tparam number i  Offset 1-based
+-- @treturn number valeur uint32
 read_u32 = (s, i)    ->
   tonumber ffi.new "uint32_t",
     bit.bor(
@@ -24,12 +37,18 @@ read_u32 = (s, i)    ->
       s\byte(i+3)
     )
 
--- Formate 4 octets (offset 1-based dans la string) en "a.b.c.d"
+--- Formate 4 octets à l'offset i en chaîne "a.b.c.d".
+-- @tparam string s  Chaîne source
+-- @tparam number i  Offset 1-based du premier octet
+-- @treturn string adresse IPv4 texte
 format_ipv4 = (s, i) ->
   "#{s\byte i}.#{s\byte i+1}.#{s\byte i+2}.#{s\byte i+3}"
 
--- Formate 16 octets (offset 1-based) en notation IPv6 compressée simple
--- (pas de compression ::, suffisant pour les logs)
+--- Formate 16 octets à l'offset i en notation IPv6 (groupes séparés par ':').
+-- Note : pas de compression ::.
+-- @tparam string s  Chaîne source
+-- @tparam number i  Offset 1-based du premier octet
+-- @treturn string adresse IPv6 texte
 format_ipv6 = (s, i) ->
   groups = for g = 0, 7
     string.format "%x", read_u16 s, i + g*2
@@ -37,9 +56,10 @@ format_ipv6 = (s, i) ->
 
 -- ── IPv4 ─────────────────────────────────────────────────────────
 
--- Parse le header IPv4. Retourne nil si le paquet est trop court ou non-UDP.
--- Résultat : { src_ip, dst_ip, src_ip_raw (4 bytes string), protocol,
---              ihl (bytes), total_len, version=4 }
+--- Parse le header IPv4 d'un paquet brut.
+-- @tparam  string     raw Paquet IP brut (début du header IP)
+-- @treturn table|nil  {version, ihl, total_len, protocol, src_ip, dst_ip,
+--                      src_ip_raw, dst_ip_raw, af} ou nil si invalide
 parse_ipv4 = (raw) ->
   return nil if #raw < 20
 
@@ -65,9 +85,10 @@ parse_ipv4 = (raw) ->
     af: AF_INET
   }
 
--- Recalcul du checksum IP (en-tête seulement).
--- Utilisé après modification du payload pour patcher le champ checksum.
--- raw_header : string Lua des IHL premiers octets (avec checksum à 0)
+--- Recalcule le checksum du header IPv4 (RFC 791).
+-- Le champ checksum du header doit être mis à zéro avant l'appel.
+-- @tparam  string raw_header Les IHL premiers octets du paquet (checksum=0)
+-- @treturn number Checksum uint16
 checksum_ip = (raw_header) ->
   sum = 0
   i   = 1
@@ -81,8 +102,11 @@ checksum_ip = (raw_header) ->
 
 -- ── IPv6 ─────────────────────────────────────────────────────────
 
--- Parse le header IPv6 fixe (40 octets).
--- Retourne nil si non-UDP ou paquet trop court.
+--- Parse le header IPv6 fixe (40 octets) d'un paquet brut.
+-- Ne gère pas les extension headers.
+-- @tparam  string     raw Paquet IP brut (début du header IPv6)
+-- @treturn table|nil  {version=6, ihl=40, protocol, src_ip, dst_ip,
+--                      src_ip_raw, dst_ip_raw, af} ou nil si invalide/non-UDP
 parse_ipv6 = (raw) ->
   return nil if #raw < 40
 
@@ -108,7 +132,9 @@ parse_ipv6 = (raw) ->
     af: AF_INET6
   }
 
--- Détecte la version IP et dispatche sur parse_ipv4 / parse_ipv6
+--- Détecte la version IP (4 ou 6) et dispatche sur parse_ipv4 / parse_ipv6.
+-- @tparam  string     raw Paquet IP brut
+-- @treturn table|nil  Résultat du parser correspondant ou nil si inconnu
 parse_ip = (raw) ->
   return nil if #raw < 1
   version = bit.rshift bit.band(read_u8(raw, 1), 0xF0), 4

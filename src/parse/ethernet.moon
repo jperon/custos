@@ -10,15 +10,19 @@
 
 { :ffi, :libnfq } = require "ffi_defs"
 
--- Formate 6 octets MAC en chaîne "aa:bb:cc:dd:ee:ff"
+--- Formate 6 octets MAC en chaîne "aa:bb:cc:dd:ee:ff".
+-- @tparam cdata hw_ptr Pointeur vers nfqnl_msg_packet_hw
+-- @treturn string Adresse MAC formatée
 format_mac = (hw_ptr) ->
   string.format "%02x:%02x:%02x:%02x:%02x:%02x",
     hw_ptr.hw_addr[0], hw_ptr.hw_addr[1], hw_ptr.hw_addr[2],
     hw_ptr.hw_addr[3], hw_ptr.hw_addr[4], hw_ptr.hw_addr[5]
 
--- Extrait les informations L2 depuis les métadonnées nfq_data.
--- Retourne une table { mac_src, in_ifindex } ou nil si non disponible
--- (les paquets OUTPUT locaux n'ont pas de hw_addr).
+--- Extrait les informations L2 depuis les métadonnées nfq_data.
+-- Retourne une table avec la MAC source et l'index d'interface d'entrée.
+-- Les paquets OUTPUT locaux n'ont pas de hw_addr : mac_src vaut "unknown".
+-- @tparam cdata nfad Pointeur nfq_data* (paramètre du callback NFQUEUE)
+-- @treturn table {mac_src: string, in_ifindex: number}
 get_l2 = (nfad) ->
   hw = libnfq.nfq_get_packet_hw nfad
   mac_src = if hw != nil and hw.hw_addrlen > 0

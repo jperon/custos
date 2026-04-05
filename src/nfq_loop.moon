@@ -4,7 +4,7 @@
 -- Le caller fournit le numéro de queue et la fonction de callback Lua.
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :AF_INET } = require "config"
+{ :AF_INET, :AF_INET6 } = require "config"
 { :log_info, :log_error } = require "log"
 
 -- Constantes NFQUEUE
@@ -13,27 +13,31 @@ NF_DROP    = 0
 NF_ACCEPT  = 1
 NF_REPEAT  = 3           -- rejoue la règle (non utilisé ici)
 
+EINTR = 4                -- code errno Linux : appel interrompu par signal
+
 -- Taille du buffer de lecture netlink (doit être > MTU + overhead netlink)
 READ_BUF_SIZE = 65536
 
 -- Sentinel : le callback a déjà posé son propre verdict (ex: Q1 avec payload patché)
 VERDICT_DONE = -1
 
--- Lance la boucle sur une queue.
--- queue_num  : numéro de queue NFQUEUE (uint16)
--- callback   : function(qh_ptr, nfad, pkt_id) → NF_ACCEPT | NF_DROP
---              qh_ptr est le nfq_q_handle pour appeler nfq_set_verdict
--- Bloque jusqu'à erreur ou SIGINT.
+--- Lance la boucle de traitement d'une queue NFQUEUE.
+-- Ouvre la queue, installe le callback C, et tourne jusqu'à erreur ou SIGINT.
+-- Bloque jusqu'à la fermeture du fd netlink.
+-- @tparam number   queue_num Numéro de queue NFQUEUE (uint16)
+-- @tparam function callback  function(qh_ptr, nfad, pkt_id) → NF_ACCEPT | NF_DROP | VERDICT_DONE
+-- @treturn nil
 run_queue = (queue_num, callback) ->
   log_info { action: "queue_open", queue: queue_num }
 
   h = libnfq.nfq_open!
   error "nfq_open() échoué" if h == nil
 
-  -- bind_pf : attache le handle à la famille AF_INET
+  -- bind_pf : attache le handle aux familles AF_INET et AF_INET6
   -- Peut renvoyer une erreur si déjà bindé par un autre handle dans le process ;
   -- on ignore l'erreur (comportement historique de libnetfilter_queue).
   libnfq.nfq_bind_pf h, AF_INET
+  libnfq.nfq_bind_pf h, AF_INET6
 
   -- Pointeur partagé entre la closure C et la closure Lua du callback
   qh_box = ffi.new "nfq_q_handle*[1]"
@@ -79,9 +83,10 @@ run_queue = (queue_num, callback) ->
     elseif rv == 0
       break   -- EOF inattendu
     else
-      -- rv < 0 : EINTR (signal) → on continue, autre erreur → on sort
-      -- errno 4 = EINTR
-      break
+      -- rv < 0 : EINTR (signal reçu) → on reprend la boucle
+      if libc.__errno_location()[0] == EINTR
+        continue
+      break   -- autre erreur (ENOBUFS, etc.) → on sort
 
   log_info { action: "queue_closed", queue: queue_num }
   libnfq.nfq_destroy_queue qh

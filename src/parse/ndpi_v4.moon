@@ -13,7 +13,8 @@ flow_buf  = nil
 has_input_info = minor >= 6
 
 --- Initialise the nDPI 4.x detection module (once).
--- @treturn cdata ndpi_detection_module_struct*.
+-- The context is stored as module-level state; subsequent calls are no-ops.
+-- @treturn nil
 init_ndpi = ->
   unless ndpi_ctx
     ndpi_ctx = ndpi_lib.ndpi_init_detection_module 0

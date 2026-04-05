@@ -36,6 +36,10 @@ local function eq(a, b)
     for k, v in pairs(b) do
       if a[k] ~= v then return false end
     end
+    -- check bidirectionnel : a ne doit pas avoir de clés supplémentaires
+    for k in pairs(a) do
+      if b[k] == nil then return false end
+    end
     return true
   end
   return a == b
@@ -188,6 +192,20 @@ test("parse_ipv4 — paquet trop court → nil", function()
   assert_eq(parse_ipv4("\x45\x00\x00"), nil, "trop court")
 end)
 
+test("parse_ipv6 — paquet UDP minimal", function()
+  local dns  = make_dns("\x06github\x03com\x00", 1, false)
+  local src6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x42"
+  local dst6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+  local raw  = make_ipv6_udp_dns(src6, dst6, 54321, 53, dns)
+  local ip_hdr = parse_ipv6(raw)
+  assert(ip_hdr, "parse_ipv6 retourne nil")
+  assert_eq(ip_hdr.version,  6,  "version=6")
+  assert_eq(ip_hdr.protocol, 17, "proto UDP")
+  assert_eq(ip_hdr.src_ip,   "2001:db8:0:0:0:0:0:42", "src_ip")
+  assert_eq(ip_hdr.dst_ip,   "2001:db8:0:0:0:0:0:1",  "dst_ip")
+  assert(ip_hdr.src_ip_raw and #ip_hdr.src_ip_raw == 16, "src_ip_raw 16 octets")
+end)
+
 -- ════════════════════════════════════════════════════════════════
 -- Tests parse/dns
 -- ════════════════════════════════════════════════════════════════
@@ -322,6 +340,40 @@ test("build_refused -- OPT RR EDE bytes", function()
   assert_eq(refused:byte(opt_start+14), 0x02, "EDE opt-len lo = 2")
   assert_eq(refused:byte(opt_start+15), 0x00, "EDE info-code hi")
   assert_eq(refused:byte(opt_start+16), 0x0F, "EDE info-code lo = 15 Filtered")
+end)
+
+test("patch_ttl — réécrit 4 octets TTL dans le buffer", function()
+  -- Réponse DNS avec 1 RR A, TTL = 300 (0x0000012C)
+  local qname_enc  = "\x06github\x03com\x00"   -- 11 octets
+  local txid       = 0x5678
+  local hdr = string.char(0x56, 0x78, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+  local question   = qname_enc .. string.char(0, 1, 0, 1)  -- A IN
+  local rr = "\xC0\x0C"                            -- pointeur vers offset 12
+    .. string.char(0, 1, 0, 1)                     -- type A, class IN
+    .. string.char(0, 0, 1, 0x2C)                  -- TTL = 300
+    .. string.char(0, 4)                            -- rdlength = 4
+    .. string.char(1, 2, 3, 4)                      -- 1.2.3.4
+
+  local dns_payload = hdr .. question .. rr
+  local parsed      = parse_dns(dns_payload)
+  assert(parsed, "parse_dns nil")
+  assert_eq(#parsed.answers, 1, "must have 1 answer")
+  assert_eq(parsed.answers[1].ttl, 300, "ttl original = 300")
+
+  -- Tampon mutable ffi
+  local pkt_len = #dns_payload
+  local buf = ffi.new("uint8_t[?]", pkt_len)
+  ffi.copy(buf, dns_payload, pkt_len)
+
+  -- patch_ttl avec dns_offset=0 (payload DNS = paquet entier ici)
+  patch_ttl(buf, parsed.answers, 0, 60)
+
+  -- TTL doit être 60 = 0x0000003C aux 4 octets de ttl_offset
+  local ttl_off0 = parsed.answers[1].ttl_offset - 1   -- 0-based
+  assert_eq(buf[ttl_off0],   0x00, "TTL byte 0")
+  assert_eq(buf[ttl_off0+1], 0x00, "TTL byte 1")
+  assert_eq(buf[ttl_off0+2], 0x00, "TTL byte 2")
+  assert_eq(buf[ttl_off0+3], 60,   "TTL byte 3 = 60")
 end)
 
 
@@ -529,6 +581,36 @@ test("drain_pipe — lit IPC_MSG_SIZE=21 octets sans overflow", function()
 
   -- Le message doit être présent dans pending après drain
   assert(m2.is_pending(txid, "192.168.2.1", port, os.time), "message absent de pending après drain_pipe")
+end)
+
+test("ipc — token expiré est rejeté (purge paresseuse)", function()
+  -- Charge une instance fraîche du module ipc
+  package.loaded["ipc"] = nil
+  local m3 = dofile("lua/ipc.lua")
+
+  -- Insère un token dont l'expiry = 0 + IPC_PENDING_TTL = 5
+  -- en drainant un pipe write à now_fn=0
+  local pipefd = ffi.new("int[2]")
+  assert(ffi.C.pipe2(pipefd, 0) == 0, "pipe2 failed")
+  local rfd2, wfd2 = pipefd[0], pipefd[1]
+  ffi.C.fcntl(rfd2, 4, 2048)  -- F_SETFL=4, O_NONBLOCK=2048
+
+  local ip_raw2 = "\x0A\x00\x00\x01"  -- 10.0.0.1
+  local txid2, port2 = 0x1111, 9999
+  m3.write_msg(wfd2, txid2, ip_raw2, port2)
+  ffi.C.close(wfd2)
+
+  -- Drain à t=0 → expiry = 0 + 5 = 5
+  m3.drain_pipe(rfd2, function() return 0 end)
+  ffi.C.close(rfd2)
+
+  -- À t=4 le token est encore valide
+  assert(m3.is_pending(txid2, "10.0.0.1", port2, function() return 4 end),
+    "token devrait être valide à t=4")
+
+  -- À t=6 le token est expiré
+  assert(not m3.is_pending(txid2, "10.0.0.1", port2, function() return 6 end),
+    "token expiré doit être rejeté à t=6")
 end)
 
 -- ════════════════════════════════════════════════════════════════

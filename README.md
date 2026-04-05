@@ -28,10 +28,10 @@ detection — all without any C compilation step.
 │  ├── main.lua        supervisor + fork                         │
 │  ├── worker Q0  ─────────────────── pipe IPC ──► worker Q1    │
 │  │   parse L2/L3/L4/L7 (FFI)                    drain pipe     │
-│  │   nDPI protocol detection                    verify txid    │
-│  │   lookup allowlist                           patch TTL→60s  │
-│  │   log + ACCEPT/REJECT                        nft set add    │
-│  │   write(pipe, txid+ip+port)                  ACCEPT+payload │
+│  │   lookup allowlist                           verify txid    │
+│  │   log + ACCEPT/REJECT                        patch TTL→60s  │
+│  │   write(pipe, txid+ip+port)                  nft set add    │
+│  │   or send REFUSED (socket UDP/53)            ACCEPT+payload │
 │  └── ./tmp/dns-filter.log                                      │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -79,9 +79,9 @@ nft FORWARD → NFQUEUE 0
 worker Q0 : qname="www.facebook.com"
    │  is_allowed("www.facebook.com") → false
    │  log: BLOCK reason=not_in_allowlist
-   └► NF_DROP
-   ▼
-nft REJECT with icmp port-unreachable → client receives immediate error
+   │  build_refused() + send_refused() via UDP socket (port 53 source)
+   │  Client receives REFUSED (RCODE 5 + EDE code 15 Filtered)
+   └► NF_DROP → paquet bloqué, pas de question vers l'upstream
 ```
 
 ---
@@ -216,8 +216,8 @@ ALLOWED_DOMAINS = {
 -- IP timeout in nft sets after resolution
 NFT_IP_TIMEOUT = "2m"
 
--- Forced TTL on passing DNS responses
--- (in src/worker_q1.moon : FORCED_TTL = 60)
+-- Forced TTL injected on all passing DNS responses (seconds)
+FORCED_TTL = 60   -- in src/config.moon (imported by worker_q1)
 ```
 
 After modification:

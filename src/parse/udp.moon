@@ -17,6 +17,11 @@ UDP_HEADER_LEN = 8
 -- Parse le header UDP à partir de l'offset ihl dans le payload brut.
 -- Retourne nil si le paquet est trop court ou si ce n'est pas du DNS (port 53).
 -- ip_hdr : résultat de parse_ip (pour ihl et version)
+--- Parse le header UDP d'un paquet brut.
+-- Retourne nil si le paquet est trop court ou si ni le port src ni dst n'est 53.
+-- @tparam  string     raw    Paquet IP brut (depuis le début du header IP)
+-- @tparam  table      ip_hdr Résultat de parse_ip (pour ihl)
+-- @treturn table|nil  {src_port, dst_port, udp_len, dns_payload, udp_off}
 parse_udp = (raw, ip_hdr) ->
   udp_off = ip_hdr.ihl + 1   -- offset 1-based dans raw
 
@@ -41,9 +46,11 @@ parse_udp = (raw, ip_hdr) ->
     udp_off: udp_off
   }
 
--- Calcul du pseudo-header UDP IPv4 pour le checksum.
--- Nécessaire car le checksum UDP couvre src_ip + dst_ip + proto + udp_len.
--- Retourne la somme partielle (uint32) à intégrer dans checksum_udp.
+--- Calcule la somme partielle du pseudo-header UDP pour IPv4 (RFC 768).
+-- @tparam string src_ip_raw 4 octets bruts de l'adresse source
+-- @tparam string dst_ip_raw 4 octets bruts de l'adresse destination
+-- @tparam number udp_len    Longueur du segment UDP (header + data)
+-- @treturn number Somme partielle à intégrer dans checksum_udp
 pseudo_header_sum_v4 = (src_ip_raw, dst_ip_raw, udp_len) ->
   sum = 0
   -- src_ip : 4 octets → 2 mots de 16 bits

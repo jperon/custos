@@ -58,6 +58,10 @@ IPC_MSG_SIZE = 21   -- 1B type + 2B txid + 16B ip (IPv4 zero-padé) + 2B port
 -- Durée de vie d'une transaction en attente de réponse (secondes)
 IPC_PENDING_TTL = 5
 
+-- ── TTL forcé ────────────────────────────────────
+-- TTL injecté sur tous les RR des réponses autorisées (secondes).
+FORCED_TTL = 60
+
 -- ── Constantes réseau ───────────────────────────────────────────
 DNS_PORT   = 53
 AF_INET    = 2
@@ -68,9 +72,10 @@ PROTO_UDP  = 17
 {
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES
   :DOCKER_MODE
-  :LOG_PATH, :LOG_FLUSH
+  :LOG_PATH
   :ALLOWED_DOMAINS
   :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_IP_TIMEOUT
   :IPC_MSG_SIZE, :IPC_PENDING_TTL
+  :FORCED_TTL
   :DNS_PORT, :AF_INET, :AF_INET6, :PROTO_UDP
 }

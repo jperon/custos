@@ -24,9 +24,11 @@ MSG_IPV4 = 0x41   -- 'A'
 MSG_IPV6 = 0x36   -- '6'
 
 -- ── Encodage (côté Q0) ───────────────────────────────────────────
--- Encode une transaction acceptée dans un buffer ffi de IPC_MSG_SIZE octets.
--- ip_raw : string Lua (4 octets IPv4 ou 16 octets IPv6)
--- Retourne la string binaire à écrire dans le pipe.
+--- Encode une transaction acceptée en binaire IPC_MSG_SIZE octets.
+-- @tparam number txid      Identifiant de transaction DNS (uint16)
+-- @tparam string ip_raw    4 octets (IPv4) ou 16 octets (IPv6) bruts
+-- @tparam number src_port  Port source de la question DNS (uint16)
+-- @treturn string message binaire de IPC_MSG_SIZE octets
 encode_msg = (txid, ip_raw, src_port) ->
   buf = ffi.new "uint8_t[21]"
 
@@ -49,15 +51,21 @@ encode_msg = (txid, ip_raw, src_port) ->
 
   ffi.string buf, IPC_MSG_SIZE
 
--- Écrit un message dans le pipe (côté Q0).
--- pipe_wfd : fd d'écriture du pipe
+--- Écrit un message IPC dans le pipe (côté Q0).
+-- @tparam number pipe_wfd fd d'écriture du pipe
+-- @tparam number txid     Identifiant de transaction DNS
+-- @tparam string ip_raw   4 ou 16 octets bruts de l'IP source
+-- @tparam number src_port Port source
+-- @treturn boolean true si l'écriture est complète
 write_msg = (pipe_wfd, txid, ip_raw, src_port) ->
   msg = encode_msg txid, ip_raw, src_port
   n = libc.write pipe_wfd, msg, IPC_MSG_SIZE
   n == IPC_MSG_SIZE
 
 -- ── Décodage (côté Q1) ───────────────────────────────────────────
--- Décode un message brut (string 16 octets) en table.
+--- Décode un message binaire IPC en table.
+-- @tparam  string    raw Message de IPC_MSG_SIZE octets
+-- @treturn table|nil Table {txid, ip_str, src_port, msg_type} ou nil si invalide
 decode_msg = (raw) ->
   return nil if #raw < IPC_MSG_SIZE
 
@@ -85,9 +93,10 @@ pending = {}
 make_key = (txid, ip_str, src_port) ->
   string.format "%04x:%s:%d", txid, ip_str, src_port
 
--- Draine le pipe (lecture non-bloquante) et remplit la table pending.
--- pipe_rfd : fd de lecture du pipe (doit être en mode O_NONBLOCK)
--- now_fn   : fonction retournant l'epoch courant (injectée pour testabilité)
+--- Draine le pipe (lecture non-bloquante) et remplit la table pending.
+-- @tparam number   pipe_rfd fd de lecture du pipe (mode O_NONBLOCK requis)
+-- @tparam function now_fn   Fonction retournant l'epoch courant (seconde)
+-- @treturn number nombre de messages absorbés
 drain_pipe = (pipe_rfd, now_fn) ->
   buf = ffi.new "uint8_t[?]", IPC_MSG_SIZE
   absorbed = 0
@@ -106,8 +115,13 @@ drain_pipe = (pipe_rfd, now_fn) ->
 
   absorbed
 
--- Vérifie si une transaction est dans la table (et non expirée).
--- Purge l'entrée si expirée (purge paresseuse).
+--- Vérifie si une transaction est en attente (et non expirée).
+-- Purge l'entrée si elle est expirée (purge paresseuse).
+-- @tparam number   txid     Identifiant de transaction DNS
+-- @tparam string   ip_str   Adresse IP source (texte)
+-- @tparam number   src_port Port source
+-- @tparam function now_fn   Fonction retournant l'epoch courant
+-- @treturn boolean true si la transaction est présente et valide
 is_pending = (txid, ip_str, src_port, now_fn) ->
   key = make_key txid, ip_str, src_port
   expire = pending[key]
@@ -119,7 +133,11 @@ is_pending = (txid, ip_str, src_port, now_fn) ->
 
   true
 
--- Retire une transaction (une fois la réponse traitée)
+--- Retire une transaction de la table pending (une réponse par question).
+-- @tparam number txid     Identifiant de transaction DNS
+-- @tparam string ip_str   Adresse IP source (texte)
+-- @tparam number src_port Port source
+-- @treturn nil
 consume = (txid, ip_str, src_port) ->
   key = make_key txid, ip_str, src_port
   pending[key] = nil

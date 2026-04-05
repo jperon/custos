@@ -53,10 +53,7 @@ declare = ->
       ndpi_detection_module_struct *ndpi_struct,
       ndpi_flow_struct             *flow);
 
-    /* ── Protocol name getter ────────────────────────────────── */
-    char *ndpi_get_proto_name(
-      ndpi_detection_module_struct *ndpi_mod,
-      uint16_t proto_id);
+
   ]]
 
 { :declare }

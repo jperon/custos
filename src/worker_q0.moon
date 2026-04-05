@@ -84,8 +84,6 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
         qname: q.qname
         qtype: q.qtype_name
       }
-      -- Enregistre la transaction dans le pipe pour Q1
-      write_msg pipe_wfd, dns.hdr.txid, ip_hdr.src_ip_raw, udp_hdr.src_port
     else
       log_block {
         unpack {k, v for k, v in pairs q_fields}
@@ -94,6 +92,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
         reason: "not_in_allowlist"
       }
       verdict = NF_DROP
+
+  -- Enregistre la transaction IPC pour Q1 : seulement si toutes les questions
+  -- ont été autorisées (garantit qu'aucune fausse entrée n'entre dans pending).
+  if verdict == NF_ACCEPT
+    write_msg pipe_wfd, dns.hdr.txid, ip_hdr.src_ip_raw, udp_hdr.src_port
 
   -- Réponse REFUSED au client (un seul envoi par paquet DNS)
   -- La question originale est copiée dans le payload REFUSED avec

@@ -36,10 +36,7 @@ declare = (minor) ->
     /* ── Flow struct size (for opaque allocation) ────────────── */
     uint32_t ndpi_detection_get_sizeof_ndpi_flow_struct(void);
 
-    /* ── Protocol name getter ────────────────────────────────── */
-    char *ndpi_get_proto_name(
-      ndpi_detection_module_struct *ndpi_mod,
-      uint16_t proto_id);
+
   ]]
 
   -- nDPI 4.6+ added a 6th parameter (ndpi_flow_input_info*) to

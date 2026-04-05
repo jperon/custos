@@ -11,7 +11,8 @@ flow_size = 0
 flow_buf  = nil
 
 --- Initialise the nDPI 5.x detection module (once).
--- @treturn cdata ndpi_detection_module_struct*.
+-- The context is stored as module-level state; subsequent calls are no-ops.
+-- @treturn nil
 init_ndpi = ->
   unless ndpi_ctx
     ndpi_ctx = ndpi_lib.ndpi_init_detection_module nil

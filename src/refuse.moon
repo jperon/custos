@@ -89,15 +89,17 @@ send_refused = (dst_ip_raw, dst_port, dns_payload, af) ->
     addr.sin_family = AF_INET
     addr.sin_port   = libc.htons dst_port
     ffi.copy addr.sin_addr, dst_ip_raw, 4
-    libc.sendto sock4, dns_payload, #dns_payload, 0,
+    rc = libc.sendto sock4, dns_payload, #dns_payload, 0,
       ffi.cast("struct sockaddr*", addr), ffi.sizeof "struct sockaddr_in"
+    log_warn { action: "sendto_failed", af: "ipv4" } if rc < 0
   else
     return if sock6 < 0
     addr = ffi.new "struct sockaddr_in6"
     addr.sin6_family = AF_INET6
     addr.sin6_port   = libc.htons dst_port
     ffi.copy addr.sin6_addr, dst_ip_raw, 16
-    libc.sendto sock6, dns_payload, #dns_payload, 0,
+    rc = libc.sendto sock6, dns_payload, #dns_payload, 0,
       ffi.cast("struct sockaddr*", addr), ffi.sizeof "struct sockaddr_in6"
+    log_warn { action: "sendto_failed", af: "ipv6" } if rc < 0
 
 { :init, :send_refused }

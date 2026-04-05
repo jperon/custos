@@ -91,10 +91,11 @@ table ip dns-filter {
   chain output {
     type   filter hook output priority 0
     policy accept   # La machine bridge elle-même n'est pas filtrée
-
-    # Capture DNS de la machine elle-même pour les tests
+    # Note : pas de règle Q1 ici. Les paquets générés localement (ex: réponses
+    # REFUSED injectées par refuse.moon) ne passent PAS par Q1 afin d'éviter
+    # un double-traitement. En production-bridge, tout le trafic DNS transite
+    # par la chaîne FORWARD.
     ip protocol udp udp dport 53 queue num 0 bypass
-    ip protocol udp udp sport 53 queue num 1 bypass
   }
 
   # ── Chaîne INPUT (trafic destiné à la machine bridge) ────────────

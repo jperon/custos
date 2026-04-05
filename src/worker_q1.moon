@@ -14,7 +14,7 @@
 --   5. Si non autorisée (réponse forgée ou question bloquée) : NF_DROP
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_RESPONSES, :DOCKER_MODE }     = require "config"
+{ :QUEUE_RESPONSES, :DOCKER_MODE, :FORCED_TTL } = require "config"
 { :parse_ip, :checksum_ip } = require "parse/ip"
 { :parse_udp, :checksum_udp } = require "parse/udp"
 { :parse_dns, :patch_ttl, :QTYPE, :RCODE } = require "parse/dns"
@@ -24,9 +24,6 @@
 { :log_allow, :log_block, :log_info, :now } = require "log"
 
 bit = require "bit"
-
--- TTL forcé sur toutes les réponses passantes (secondes)
-FORCED_TTL = 60
 
 -- fd de lecture du pipe IPC, injecté par main.moon avant fork()
 pipe_rfd = nil
@@ -99,14 +96,6 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   unless dns
     return NF_ACCEPT
   unless dns.hdr.is_response
-    return NF_ACCEPT
-
-  -- Réponse REFUSED (RCODE 5) : laisse passer sans modification ni vérification
-  -- IPC. Couvre deux cas :
-  --   1. Notre propre réponse REFUSED injectée par worker_q0 (domaine bloqué)
-  --   2. Refus explicite de l'upstream pour un domaine autorisé
-  -- Dans les deux cas le client doit recevoir la réponse telle quelle.
-  if dns.hdr.rcode == RCODE.REFUSED
     return NF_ACCEPT
 
   -- La question originale avait src_ip=ip_hdr.dst_ip, src_port=udp_hdr.dst_port

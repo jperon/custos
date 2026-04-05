@@ -15,6 +15,9 @@
 
 allowed_set = {}
 
+--- Construit une table indexée par domaine (lowercase) pour lookup O(1).
+-- @tparam table domains Liste de chaînes de domaines autorisés
+-- @treturn table table indexée {domaine = true}
 build_index = (domains) ->
   t = {}
   for _, d in ipairs domains
@@ -29,6 +32,9 @@ allowed_set = build_index ALLOWED_DOMAINS
 --   is_allowed("www.github.com")  → true  (suffixe "github.com" autorisé)
 --   is_allowed("github.com")      → true  (exact match)
 --   is_allowed("evil.com")        → false
+--- Vérifie si un qname est autorisé (correspondance exacte ou suffixe).
+-- @tparam string qname Nom de domaine à vérifier (case-insensitive)
+-- @treturn boolean true si le domaine ou l'un de ses ancêtres est autorisé
 is_allowed = (qname) ->
   name = qname\lower!
 
@@ -60,7 +66,9 @@ sighup_handler = ffi.cast "sighandler_t", (sig) ->
 
 libc.signal 1, sighup_handler   -- SIGHUP = 1
 
--- Appelé depuis la boucle principale avant chaque paquet
+--- Appliquer un rechargement de l'allowlist si un SIGHUP a été reçu.
+-- Doit être appelée en début de callback, avant tout traitement de paquet.
+-- @treturn nil
 check_reload = ->
   if reload_requested
     reload_requested = false

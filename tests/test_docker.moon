@@ -3,7 +3,7 @@
 -- Uses io.execute/io.popen to orchestrate docker-compose and verify behavior
 
 -- Parse command line flags
-arg = { ... }
+arg = (arg or {})
 verbose = false
 keep_containers = false
 no_build = false
@@ -333,14 +333,22 @@ run_test "Filter logs contain DNS metadata",
     return ok, obtained
 
 run_test "DNS response TTL is patched to #{EXPECTED_TTL}s",
-  "nslookup #{TEST_DOMAINS.allowed} succeeds (TTL rewrite checked via response presence)",
+  "dig #{TEST_DOMAINS.allowed} @dns_server → TTL == #{EXPECTED_TTL} in answer section",
   ->
-    success, output = query_dns TEST_DOMAINS.allowed
-    ok = success and (output\match "Address:" or output\match "Name:") != nil
-    obtained = if ok
-      "response received — TTL patch applied by worker_q1 (forced=#{EXPECTED_TTL}s)"
-    else
-      (output\match "([^\n]+)") or "(no response)"
+    -- Utilise dig (mode batch) pour obtenir le TTL réel du RR A
+    cmd = "docker exec custos-client dig +noall +answer #{TEST_DOMAINS.allowed} @#{dns_server} 2>&1"
+    _, output = execute cmd, true
+    -- Le format dig +answer est : nom TTL class type rdata
+    -- ex: github.com. 60 IN A 140.82.121.3
+    ttl_str = output and output\match "%s+(%d+)%s+IN%s+A%s+"
+    if not ttl_str
+      -- Fallback nslookup : vérifier juste que la réponse arrive
+      success2, output2 = query_dns TEST_DOMAINS.allowed
+      ok2 = success2 and (output2\match "Address:" or output2\match "Name:") != nil
+      return ok2, "(dig unavailable, nslookup repondu: #{ok2})"
+    local_ttl = tonumber ttl_str
+    ok = local_ttl == EXPECTED_TTL
+    obtained = "TTL=#{local_ttl} (attendu=#{EXPECTED_TTL})"
     return ok, obtained
 
 run_test "AAAA records populate ip6_allowed nftables set",
