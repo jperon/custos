@@ -125,5 +125,5 @@ consume = (txid, ip_str, src_port) ->
   key = make_key txid, ip_str, src_port
   pending[key] = nil
 
-{ :encode_msg, :write_msg, :drain_pipe, :is_pending, :consume
+{ :encode_msg, :decode_msg, :write_msg, :drain_pipe, :is_pending, :consume
   :MSG_IPV4, :MSG_IPV6, :make_key }

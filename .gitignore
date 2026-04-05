@@ -3,7 +3,10 @@ lua/
 
 # Logs
 *.log
-/tmp/dns-filter.log
+
+# Runtime output directory
+tmp/*
+!tmp/.gitkeep
 
 # Temporary files
 *.tmp

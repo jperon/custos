@@ -4,6 +4,29 @@
 -- Charge les modules de parsing directement (pas de require("ffi_defs")).
 
 local bit = require("bit")
+local ffi = require("ffi")
+
+-- ── Stubs globaux injectés avant tout dofile ─────────────────────
+-- Empêche ffi_defs de tenter de charger libnetfilter_queue.so /
+-- libnftables.so, absents de l'environnement de test unitaire.
+-- Les modules de parsing n'utilisent que ffi.new/ffi.cast (builtins JIT),
+-- pas libnfq ni libnft.
+package.loaded["ffi_defs"] = {
+  ffi    = ffi,
+  libc   = ffi.C,
+  libnfq = {},
+  libnft = {},
+}
+package.loaded["config"] = {
+  PROTO_UDP       = 17,
+  AF_INET         = 2,
+  AF_INET6        = 10,
+  DNS_PORT        = 53,
+  DOCKER_MODE     = false,
+  ALLOWED_DOMAINS = {},
+  IPC_MSG_SIZE    = 16,
+  IPC_PENDING_TTL = 5,
+}
 
 -- ── Mini framework de test ───────────────────────────────────────
 local passed, failed = 0, 0
@@ -149,16 +172,8 @@ io.write("\n── parse/dns ──\n")
 
 local decode_name, parse_dns, QTYPE, patch_ttl
 do
-  -- parse/dns dépend de parse/ip : on doit simuler l'environnement require
-  -- On injecte parse/ip dans package.loaded avant de charger parse/dns
+  -- parse/ip doit être dans package.loaded pour que parse/dns puisse le trouver via require
   package.loaded["parse/ip"] = dofile("lua/parse/ip.lua")
-  -- config doit contenir tous les champs utilisés par les modules chargés
-  -- ultérieurement dans ce test (ipc.lua a besoin de IPC_MSG_SIZE)
-  package.loaded["config"]   = {
-    PROTO_UDP = 17, AF_INET = 2, AF_INET6 = 10,
-    DNS_PORT = 53, ALLOWED_DOMAINS = {},
-    IPC_MSG_SIZE = 16, IPC_PENDING_TTL = 5,
-  }
   local m = dofile("lua/parse/dns.lua")
   decode_name = m.decode_name
   parse_dns   = m.parse_dns
@@ -298,15 +313,8 @@ io.write("\n── ipc ──\n")
 
 local encode_msg, decode_msg, make_key
 do
-  -- Invalider les caches pour forcer le rechargement propre du module
-  -- (évite les collisions entre objets ffi de contextes différents)
-  package.loaded["ipc"]      = nil
-  package.loaded["ffi_defs"] = {
-    ffi   = require("ffi"),
-    libc  = require("ffi").C,
-    libnfq = {},
-    libnft = {},
-  }
+  -- Invalider le cache pour forcer le rechargement propre du module
+  package.loaded["ipc"] = nil
   package.loaded["log"] = {
     log_warn = function() end, log_error = function() end,
     log_info = function() end, now = function() return os.time() end,

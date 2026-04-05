@@ -218,7 +218,8 @@ patch_ttl = (buf_ptr, answers, dns_offset, new_ttl) ->
   for ans in *answers
     -- ttl_offset est 1-based depuis le début du payload DNS
     -- dns_offset est 0-based depuis le début du paquet IP
-    abs_off = dns_offset + ans.ttl_offset - 2   -- -1 (1-based→0-based) -1 (ajustement)
+    -- 0-based dans buf_ptr = dns_offset + (ttl_offset - 1)
+    abs_off = dns_offset + ans.ttl_offset - 1
     -- Écriture big-endian du TTL sur 4 octets
     buf_ptr[abs_off]   = bit.rshift(bit.band(new_ttl, 0xFF000000), 24)
     buf_ptr[abs_off+1] = bit.rshift(bit.band(new_ttl, 0x00FF0000), 16)

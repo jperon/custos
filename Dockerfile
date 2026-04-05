@@ -41,12 +41,7 @@ RUN apt-get update && apt-get install -y \
     nftables \
     iproute2 \
     dnsmasq \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -s /usr/lib/x86_64-linux-gnu/libnetfilter_queue.so.1 /usr/lib/x86_64-linux-gnu/libnetfilter_queue.so \
-    && ln -s /usr/lib/x86_64-linux-gnu/libnftnl.so.11 /usr/lib/x86_64-linux-gnu/libnftnl.so \
-    && ln -s /usr/lib/x86_64-linux-gnu/libmnl.so.0 /usr/lib/x86_64-linux-gnu/libmnl.so \
-    && ln -s /usr/lib/x86_64-linux-gnu/libnftables.so.1 /usr/lib/x86_64-linux-gnu/libnftables.so \
-    && ln -s /usr/lib/x86_64-linux-gnu/libndpi.so.4.2 /usr/lib/x86_64-linux-gnu/libndpi.so
+    && rm -rf /var/lib/apt/lists/*
 
 # Create app user
 RUN useradd -m -s /bin/bash custos

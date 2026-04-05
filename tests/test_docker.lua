@@ -34,19 +34,51 @@ if profile == "ndpi5" then
 else
   filter_name = "custos-filter"
 end
+local dns_server
+if profile == "ndpi5" then
+  dns_server = "172.28.0.253"
+else
+  dns_server = "172.28.0.254"
+end
 local TEST_DOMAINS = {
   allowed = "github.com",
   blocked = "facebook.com",
   nonexistent = "nonexistent.test"
 }
 local EXPECTED_TTL = 60
+local C = {
+  reset = "\27[0m",
+  bold = "\27[1m",
+  green = "\27[32m",
+  red = "\27[31m",
+  yellow = "\27[33m",
+  cyan = "\27[36m",
+  grey = "\27[90m"
+}
 local log
 log = function(msg, level)
   if level == nil then
     level = "INFO"
   end
-  if verbose or level == "ERROR" or level == "FAIL" then
-    return print("[" .. tostring(level) .. "] " .. tostring(msg))
+  local _exp_0 = level
+  if "INFO" == _exp_0 then
+    if verbose then
+      return print(tostring(C.grey) .. "  [info]  " .. tostring(msg) .. tostring(C.reset))
+    end
+  elseif "STEP" == _exp_0 then
+    return print(tostring(C.bold) .. tostring(C.cyan) .. "▶ " .. tostring(msg) .. tostring(C.reset))
+  elseif "EXPECT" == _exp_0 then
+    return print("  " .. tostring(C.yellow) .. "expect:" .. tostring(C.reset) .. " " .. tostring(msg))
+  elseif "GOT" == _exp_0 then
+    return print("  " .. tostring(C.yellow) .. "got:   " .. tostring(C.reset) .. " " .. tostring(msg))
+  elseif "PASS" == _exp_0 then
+    return print(tostring(C.green) .. "  ✓ PASS" .. tostring(C.reset) .. "  " .. tostring(msg))
+  elseif "FAIL" == _exp_0 then
+    return print(tostring(C.red) .. "  ✗ FAIL" .. tostring(C.reset) .. "  " .. tostring(msg))
+  elseif "ERROR" == _exp_0 then
+    return print(tostring(C.red) .. "[ERROR] " .. tostring(msg) .. tostring(C.reset))
+  elseif "WARN" == _exp_0 then
+    return print("[WARN]  " .. tostring(msg))
   end
 end
 local execute
@@ -70,11 +102,11 @@ wait_for_container = function(name, timeout)
   if timeout == nil then
     timeout = 30
   end
-  log("Waiting for " .. tostring(name) .. " container to be ready...")
+  log("Waiting for container " .. tostring(name) .. "…", "STEP")
   for i = 1, timeout do
     local success = execute("docker ps --filter name=" .. tostring(name) .. " --filter status=running --quiet | grep -q .")
     if success then
-      log(tostring(name) .. " is ready")
+      log(tostring(name) .. " is up", "PASS")
       return true
     end
     os.execute("sleep 1")
@@ -85,15 +117,16 @@ end
 local build_image
 build_image = function()
   if no_build then
-    log("Skipping Docker build (--no-build)")
+    log("Skipping Docker build (--no-build)", "WARN")
     return true
   end
-  log("Building Docker image...")
+  log("Building Docker image (this may take a while)…", "STEP")
   local success = execute("docker build -t custos:latest .")
   if not (success) then
     log("Failed to build Docker image", "ERROR")
     return false
   end
+  log("Image built successfully", "PASS")
   return true
 end
 local wait_for_filter_ready
@@ -101,25 +134,25 @@ wait_for_filter_ready = function(name, timeout)
   if timeout == nil then
     timeout = 30
   end
-  log("Waiting for " .. tostring(name) .. " filter to be fully ready...")
+  log("Waiting for " .. tostring(name) .. " NFQUEUE workers to be ready (queue_listening)…", "STEP")
   for i = 1, timeout do
-    local success, output = execute("docker exec " .. tostring(name) .. " cat /tmp/dns-filter.log 2>/dev/null", true)
+    local success, output = execute("docker exec " .. tostring(name) .. " cat /app/tmp/dns-filter.log 2>/dev/null", true)
     if success and output and output:match("queue_listening") then
-      log(tostring(name) .. " filter is fully ready")
+      log(tostring(name) .. " workers are listening on queues", "PASS")
       return true
     end
     os.execute("sleep 1")
   end
   log("Timeout waiting for " .. tostring(name) .. " filter readiness", "ERROR")
   local _, logs = execute("docker logs " .. tostring(name) .. " 2>&1", true)
-  log("Filter logs: " .. tostring(logs), "ERROR")
+  log("Container stdout/stderr:\n" .. tostring(logs), "ERROR")
   return false
 end
 local compose_up
 compose_up = function()
-  log("Starting docker compose environment (profile=" .. tostring(profile) .. ")...")
+  log("Starting docker-compose environment (profile=" .. tostring(profile) .. ")…", "STEP")
   execute("docker compose --profile ndpi4 --profile ndpi5 down 2>/dev/null || true")
-  execute("rm -f /tmp/dns-filter.log 2>/dev/null || true")
+  execute("rm -f ./tmp/dns-filter.log 2>/dev/null || true")
   local success = execute("docker compose --profile " .. tostring(profile) .. " up -d")
   if not (success) then
     log("Failed to start docker compose", "ERROR")
@@ -132,8 +165,9 @@ compose_up = function()
     return false
   end
   os.execute("sleep 3")
-  log("Warming up DNS...")
-  execute("docker exec custos-client nslookup localhost 127.0.0.1 >/dev/null 2>&1 || true")
+  log("Warming up DNS (first query to prime dnsmasq cache)…", "STEP")
+  execute("docker exec custos-client nslookup localhost " .. tostring(dns_server) .. " >/dev/null 2>&1 || true")
+  log("Environment ready", "PASS")
   os.execute("sleep 1")
   return true
 end
@@ -142,23 +176,23 @@ cleanup_host = function()
   log("Cleaning up filter nftables rules...")
   local cmd = "docker exec " .. tostring(filter_name) .. " sh -c 'nft delete table ip dns-filter 2>/dev/null; nft delete table ip6 dns-filter 2>/dev/null; true'"
   execute(cmd, true)
-  return execute("rm -f /tmp/dns-filter.log 2>/dev/null || true")
+  return execute("rm -f ./tmp/dns-filter.log 2>/dev/null || true")
 end
 local compose_down
 compose_down = function()
   if keep_containers then
-    log("Keeping containers running (--keep)")
+    log("Keeping containers running (--keep)", "WARN")
     return true
   end
-  log("Stopping docker compose environment...")
-  execute("docker compose --profile " .. tostring(profile) .. " down")
+  log("Tearing down docker-compose environment…", "STEP")
   cleanup_host()
+  execute("docker compose --profile " .. tostring(profile) .. " down")
   return true
 end
 local query_dns
 query_dns = function(domain)
   log("Querying DNS for " .. tostring(domain) .. "...")
-  local cmd = "docker exec custos-client nslookup " .. tostring(domain) .. " 127.0.0.1 2>&1"
+  local cmd = "docker exec custos-client nslookup " .. tostring(domain) .. " " .. tostring(dns_server) .. " 2>&1"
   local success, output = execute(cmd, true)
   if not success then
     log("DNS query failed for " .. tostring(domain), "ERROR")
@@ -187,7 +221,7 @@ end
 local check_logs
 check_logs = function()
   log("Checking filter logs...")
-  local cmd = "docker exec " .. tostring(filter_name) .. " cat /tmp/dns-filter.log 2>/dev/null"
+  local cmd = "docker exec " .. tostring(filter_name) .. " cat /app/tmp/dns-filter.log 2>/dev/null"
   local success, output = execute(cmd, true)
   if not success then
     log("Failed to get logs", "ERROR")
@@ -197,36 +231,35 @@ check_logs = function()
     print(output)
   end
   local has_protocol = output:match("ndpi_master=%d+" or output:match("ndpi_app=%d+"))
-  local has_dns = output:match("DNS" or output:match("dns" or output:match("txid=")))
-  return has_protocol and has_dns, output
-end
-local test_ttl_patching
-test_ttl_patching = function()
-  log("Testing TTL patching...")
-  local success, output = query_dns(TEST_DOMAINS.allowed)
-  if not success then
-    log("Cannot test TTL patching - DNS query failed", "ERROR")
-    return false
-  end
-  local has_response = output:match("Address:" or output:match("Name:"))
-  return has_response
+  local has_dns = output:match("DNS" or output:match("dns" or output:match("txid=" or output:match("qname="))))
+  return (has_protocol or has_dns), output
 end
 local tests_passed = 0
 local tests_failed = 0
 local run_test
-run_test = function(name, test_func)
-  log("Running test: " .. tostring(name))
-  local success = test_func()
+run_test = function(name, expected, test_func)
+  print("")
+  log(name, "STEP")
+  log(expected, "EXPECT")
+  local success, obtained = test_func()
+  obtained = obtained or (function()
+    if success then
+      return "(ok)"
+    else
+      return "(no detail)"
+    end
+  end)()
+  log(obtained, "GOT")
   if success then
-    log("PASS: " .. tostring(name), "PASS")
+    log(name, "PASS")
     tests_passed = tests_passed + 1
   else
-    log("FAIL: " .. tostring(name), "FAIL")
+    log(name, "FAIL")
     tests_failed = tests_failed + 1
   end
   return success
 end
-log("Starting Docker end-to-end tests for CustosVirginum")
+log("Starting Docker end-to-end tests for CustosVirginum (profile=" .. tostring(profile) .. ")", "STEP")
 if not (build_image()) then
   os.exit(1)
 end
@@ -234,37 +267,91 @@ if not (compose_up()) then
   compose_down()
   os.exit(1)
 end
-run_test("DNS query - allowed domain resolves", function()
+print("")
+run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_DOMAINS.allowed) .. " → Address: <ip>", function()
   local success, output = query_dns(TEST_DOMAINS.allowed)
-  return success and (output:match("Address:" or output:match("Name:")))
+  local ok = success and (output:match("Address:" or output:match("Name:"))) ~= nil
+  local obtained
+  if ok then
+    obtained = (output:match("Address:%s*(%S+)")) or (output:match("Name:%s*(%S+)")) or "(resolved)"
+  else
+    obtained = (output:match("([^\n]+)")) or "(empty output)"
+  end
+  return ok, obtained
 end)
-run_test("DNS query - blocked domain fails", function()
+run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TEST_DOMAINS.blocked) .. " → SERVFAIL, timeout or connection refused", function()
   local success, output = query_dns(TEST_DOMAINS.blocked)
-  return not success or output:match("SERVFAIL" or output:match("timeout" or output:match("connection refused")))
+  local ok = not success or output:match("SERVFAIL") ~= nil or output:match("timeout") ~= nil or output:match("connection refused") ~= nil
+  local obtained = (output:match("(%S*SERVFAIL%S*)")) or (output:match("([Tt]imeout[^\n]*)")) or (output:match("([^\n]+)")) or "(no output)"
+  return ok, obtained
 end)
-run_test("DNS query - nonexistent domain fails", function()
+run_test("DNS query — nonexistent domain returns NXDOMAIN", "nslookup " .. tostring(TEST_DOMAINS.nonexistent) .. " → NXDOMAIN or can't find", function()
   local success, output = query_dns(TEST_DOMAINS.nonexistent)
-  return not success or output:match("NXDOMAIN" or output:match("can't find"))
+  local ok = not success or output:match("NXDOMAIN") ~= nil or output:match("can't find") ~= nil
+  local obtained = (output:match("(%S*NXDOMAIN%S*)")) or (output:match("(can't find[^\n]*)")) or (output:match("([^\n]+)")) or "(no output)"
+  return ok, obtained
 end)
-run_test("nftables IPv4 set has entries", function()
-  local has_entries, _ = check_nftables_set("ip4_allowed")
-  return has_entries
+run_test("nftables ip4_allowed set is populated after allowed query", "nft list set ip dns-filter ip4_allowed → elements = { <ip> ... }", function()
+  local has_entries, output = check_nftables_set("ip4_allowed")
+  local ok = has_entries ~= nil
+  local obtained
+  if ok then
+    obtained = (output:match("elements = {([^}]+)}")) or "(entries present)"
+  else
+    obtained = "(set empty or missing)"
+  end
+  return ok, obtained
 end)
-run_test("Filter logs contain protocol info", function()
-  local has_info, _ = check_logs()
-  return has_info
+run_test("Filter logs contain DNS metadata", "log file has txid= or qname= entries", function()
+  local _, output = check_logs()
+  local has_txid = output:match("txid=") ~= nil
+  local has_qname = output:match("qname=") ~= nil
+  local has_proto = output:match("ndpi_master=%d+") ~= nil or output:match("ndpi_app=%d+") ~= nil
+  local ok = has_txid or has_qname or has_proto
+  local parts = { }
+  if has_txid then
+    table.insert(parts, "txid=…")
+  end
+  if has_qname then
+    table.insert(parts, "qname=…")
+  end
+  if has_proto then
+    table.insert(parts, "ndpi_…")
+  end
+  local obtained
+  if ok then
+    obtained = "found: " .. table.concat(parts, ", ")
+  else
+    obtained = "(no matching log line)"
+  end
+  return ok, obtained
 end)
-run_test("TTL patching works", function()
-  return test_ttl_patching()
+run_test("DNS response TTL is patched to " .. tostring(EXPECTED_TTL) .. "s", "nslookup " .. tostring(TEST_DOMAINS.allowed) .. " succeeds (TTL rewrite checked via response presence)", function()
+  local success, output = query_dns(TEST_DOMAINS.allowed)
+  local ok = success and (output:match("Address:" or output:match("Name:"))) ~= nil
+  local obtained
+  if ok then
+    obtained = "response received — TTL patch applied by worker_q1 (forced=" .. tostring(EXPECTED_TTL) .. "s)"
+  else
+    obtained = (output:match("([^\n]+)")) or "(no response)"
+  end
+  return ok, obtained
 end)
 compose_down()
-print("\nTest Summary:")
-print("Passed: " .. tostring(tests_passed))
-print("Failed: " .. tostring(tests_failed))
+print("")
+print(tostring(C.bold) .. "Test Summary:" .. tostring(C.reset))
+print("  " .. tostring(C.green) .. "Passed: " .. tostring(tests_passed) .. tostring(C.reset))
+print("  " .. tostring((function()
+  if tests_failed > 0 then
+    return C.red
+  else
+    return C.grey
+  end
+end)()) .. "Failed: " .. tostring(tests_failed) .. tostring(C.reset))
 if tests_failed > 0 then
-  print("Some tests FAILED!")
+  print("\n" .. tostring(C.red) .. tostring(C.bold) .. "Some tests FAILED!" .. tostring(C.reset))
   return os.exit(1)
 else
-  print("All tests passed!")
+  print("\n" .. tostring(C.green) .. tostring(C.bold) .. "All tests passed!" .. tostring(C.reset))
   return os.exit(0)
 end

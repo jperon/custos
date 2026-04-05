@@ -3,8 +3,8 @@ services:
     image: alpine:latest
     container_name: custos-wan-dns
     networks:
-      lan:
-        ipv4_address: 172.28.0.20
+      wan:
+        ipv4_address: 172.30.0.20
     command: >
       sh -c "apk add --no-cache dnsmasq bind-tools &&
              dnsmasq -k --port=53 --log-queries --server=8.8.8.8 --server=1.1.1.1"
@@ -16,22 +16,31 @@ services:
     privileged: true
     cap_add:
       - NET_ADMIN
+    environment:
+      - DOCKER_MODE=1
     volumes:
       - ./lua:/app/lua
       - ./nft-rules:/app/nft-rules
+      - ./tmp:/app/tmp
     profiles:
       - ndpi4
     networks:
       lan:
         ipv4_address: 172.28.0.254
+      wan:
+        ipv4_address: 172.30.0.254
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        mkdir -p /app/tmp &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        echo 1 > /proc/sys/net/ipv4/conf/all/forwarding &&
+        echo 1 > /proc/sys/net/ipv4/conf/default/forwarding &&
         nft -f /app/nft-rules/dns-filter-docker.nft &&
         export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;' &&
         luajit /app/lua/main.lua &
         sleep 2 &&
-        exec dnsmasq -k --interface=eth0 --listen-address=172.28.0.254 --port=53 --server=172.28.0.20 --no-resolv --log-queries
+        exec dnsmasq -k --interface=eth0 --listen-address=172.28.0.254 --port=53 --server=172.30.0.20 --no-resolv --log-queries
     depends_on:
       - wan-dns
 
@@ -44,33 +53,44 @@ services:
     privileged: true
     cap_add:
       - NET_ADMIN
+    environment:
+      - DOCKER_MODE=1
     volumes:
       - ./lua:/app/lua
       - ./nft-rules:/app/nft-rules
+      - ./tmp:/app/tmp
     profiles:
       - ndpi5
     networks:
       lan:
-        ipv4_address: 172.28.0.254
+        ipv4_address: 172.28.0.253
+      wan:
+        ipv4_address: 172.30.0.253
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        mkdir -p /app/tmp &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        echo 1 > /proc/sys/net/ipv4/conf/all/forwarding &&
+        echo 1 > /proc/sys/net/ipv4/conf/default/forwarding &&
         nft -f /app/nft-rules/dns-filter-docker.nft &&
         export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;' &&
         luajit /app/lua/main.lua &
         sleep 2 &&
-        exec dnsmasq -k --interface=eth0 --listen-address=172.28.0.254 --port=53 --server=172.28.0.20 --no-resolv --log-queries
+        exec dnsmasq -k --interface=eth0 --listen-address=172.28.0.253 --port=53 --server=172.30.0.20 --no-resolv --log-queries
     depends_on:
       - wan-dns
 
   client:
     image: alpine:latest
     container_name: custos-client
+    cap_add:
+      - NET_ADMIN
     networks:
       lan:
         ipv4_address: 172.28.0.10
-    command: >
-      sh -c "apk add --no-cache bind-tools && sleep infinity"
+    command:
+      sh -c "apk add --no-cache bind-tools iproute2 && ip route del default 2>/dev/null; ip route add default via 172.28.0.254 2>/dev/null; sleep infinity"
     depends_on:
       - filter
 
@@ -80,3 +100,8 @@ networks:
     ipam:
       config:
         - subnet: 172.28.0.0/24
+  wan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

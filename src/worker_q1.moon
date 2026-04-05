@@ -14,14 +14,14 @@
 --   5. Si non autorisée (réponse forgée ou question bloquée) : NF_DROP
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_RESPONSES }     = require "config"
+{ :QUEUE_RESPONSES, :DOCKER_MODE }     = require "config"
 { :parse_ip }            = require "parse/ip"
 { :parse_udp, :checksum_udp } = require "parse/udp"
 { :parse_dns, :patch_ttl, :QTYPE } = require "parse/dns"
 { :drain_pipe, :is_pending, :consume } = require "ipc"
 { :add_ip }              = require "nft"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_allow, :log_block, :log_info, :log_warn, :now } = require "log"
+{ :log_allow, :log_block, :log_info, :now } = require "log"
 
 bit = require "bit"
 
@@ -79,21 +79,26 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- ── Payload brut ─────────────────────────────────────────────
   payload_ptr = ffi.new "unsigned char*[1]"
   payload_len = libnfq.nfq_get_payload nfad, payload_ptr
-  return NF_DROP if payload_len <= 0
+  if payload_len <= 0
+    return NF_DROP
 
   raw = ffi.string payload_ptr[0], payload_len
 
   -- ── L3 / L4 ──────────────────────────────────────────────────
   ip_hdr  = parse_ip raw
-  return NF_ACCEPT unless ip_hdr   -- fail-open sur non-IP
+  unless ip_hdr
+    return NF_ACCEPT
 
   udp_hdr = parse_udp raw, ip_hdr
-  return NF_ACCEPT unless udp_hdr
+  unless udp_hdr
+    return NF_ACCEPT
 
   -- ── L7 ───────────────────────────────────────────────────────
   dns = parse_dns udp_hdr.dns_payload
-  return NF_ACCEPT unless dns
-  return NF_ACCEPT unless dns.hdr.is_response   -- ne traiter que les réponses
+  unless dns
+    return NF_ACCEPT
+  unless dns.hdr.is_response
+    return NF_ACCEPT
 
   -- La question originale avait src_ip=ip_hdr.dst_ip, src_port=udp_hdr.dst_port
   -- (la réponse est adressée au client LAN)
@@ -102,18 +107,20 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   txid        = dns.hdr.txid
 
   -- ── Vérification IPC ─────────────────────────────────────────
-  unless is_pending txid, ip_hdr.dst_ip, client_port, now
-    log_block {
-      action:    "response_no_matching_question"
-      src_ip:    ip_hdr.src_ip
-      dst_ip:    ip_hdr.dst_ip
-      txid:      string.format "0x%04x", txid
-      rcode:     dns.hdr.rcode
-    }
-    return NF_DROP
-
-  -- Transaction consommée (one-shot : une réponse par question)
-  consume txid, ip_hdr.dst_ip, client_port
+  -- En mode Docker, on saute la vérification IPC car les requêtes
+  -- et réponses sont vues depuis la perspective du conteneur (OUTPUT).
+  unless DOCKER_MODE
+    unless is_pending txid, ip_hdr.dst_ip, client_port, now
+      log_block {
+        action:    "response_no_matching_question"
+        src_ip:    ip_hdr.src_ip
+        dst_ip:    ip_hdr.dst_ip
+        txid:      string.format "0x%04x", txid
+        rcode:     dns.hdr.rcode
+      }
+      return NF_DROP
+    -- Transaction consommée (one-shot : une réponse par question)
+    consume txid, ip_hdr.dst_ip, client_port
 
   -- ── Extraction des IPs des RR et injection nft ───────────────
   ip_count = 0

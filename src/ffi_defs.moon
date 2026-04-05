@@ -37,6 +37,10 @@ ffi.cdef [[
 
   /* ── Pipe ── */
   int pipe(int pipefd[2]);
+  int pipe2(int pipefd[2], int flags);  /* Linux >= 2.6.27 */
+
+  /* fcntl avec arg entier (non-variadique pour compatibilité LuaJIT) */
+  int fcntl(int fd, int cmd, long arg);
 
   /* ── Réseau ── */
   uint32_t ntohl(uint32_t n);
@@ -54,6 +58,13 @@ ffi.cdef [[
   typedef struct nfq_q_handle nfq_q_handle;
   typedef struct nfgenmsg     nfgenmsg;
   typedef struct nfq_data     nfq_data;
+
+  /* ── Métadonnées du paquet nfqueue (L3+) ── */
+  typedef struct {
+    uint32_t packet_id;    /* id unique dans la queue (big-endian) */
+    uint16_t hw_protocol;  /* protocole hw (big-endian) */
+    uint8_t  hook;         /* hook netfilter déclencheur */
+  } nfqnl_msg_packet_hdr;
 
   /* ── Métadonnées hardware (L2) ── */
   typedef struct {
@@ -84,7 +95,7 @@ ffi.cdef [[
   int nfq_handle_packet(nfq_handle *h, char *buf, int len);
 
   /* ── Extraction des métadonnées du paquet ── */
-  uint32_t             nfq_get_msg_packet_hdr(nfq_data *nfad);
+  nfqnl_msg_packet_hdr* nfq_get_msg_packet_hdr(nfq_data *nfad);
   int                  nfq_get_payload(nfq_data *nfad, unsigned char **data);
   nfqnl_msg_packet_hw* nfq_get_packet_hw(nfq_data *nfad);
   int                  nfq_get_indev(nfq_data *nfad);  /* index interface entrée */
@@ -117,9 +128,22 @@ ffi.cdef [[
 -- ═══════════════════════════════════════════════════════════════
 -- Chargement des bibliothèques
 -- ═══════════════════════════════════════════════════════════════
+
+--- Tente de charger une bibliothèque parmi plusieurs noms candidats.
+-- Utile pour gérer les noms sans version (``netfilter_queue``) et les
+-- noms versionnés Debian (``libnetfilter_queue.so.1``).
+-- @tparam table names  Liste ordonnée de noms à essayer
+-- @treturn cdata       Bibliothèque FFI chargée
+-- @raise  string       Si aucun nom ne peut être chargé
+try_load = (names) ->
+  for name in *names
+    ok, lib = pcall ffi.load, name
+    return lib if ok
+  error "ffi_defs: cannot load any of: #{table.concat names, ', '}"
+
 libc    = ffi.C
-libnfq  = ffi.load "netfilter_queue"
-libnft  = ffi.load "nftables"
+libnfq  = try_load { "netfilter_queue", "libnetfilter_queue.so.1" }
+libnft  = try_load { "nftables", "libnftables.so.1" }
 
 -- ── Export ──────────────────────────────────────────────────────
 { :ffi, :libc, :libnfq, :libnft }

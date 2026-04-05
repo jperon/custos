@@ -25,12 +25,10 @@ WNOHANG  = 1   -- waitpid non-bloquant
 -- ── Création du pipe IPC ─────────────────────────────────────────
 create_pipe = ->
   fds = ffi.new "int[2]"
-  rc  = libc.pipe fds
-  error "pipe() échoué" if rc != 0
-
-  -- Passe le fd de lecture en mode non-bloquant (O_NONBLOCK = 2048)
-  -- pour que drain_pipe() dans Q1 ne bloque pas sur read()
-  libc.fcntl fds[0], 4, 2048   -- F_SETFL = 4, O_NONBLOCK = 2048
+  -- pipe2 avec O_NONBLOCK (2048) sur le fd de lecture pour que drain_pipe()
+  -- dans Q1 soit non-bloquant. Plus fiable que pipe+fcntl avec LuaJIT FFI.
+  rc  = libc.pipe2 fds, 2048
+  error "pipe2() échoué" if rc != 0
 
   { rfd: fds[0], wfd: fds[1] }
 

@@ -13,10 +13,18 @@ ffi.cdef [[
                         char *dst, unsigned int size);
 ]]
 
---- Load libndpi from the system library path.
-ok, ndpi_lib = pcall ffi.load, "ndpi"
-unless ok
-  error "libndpi not found. Install libndpi-dev (4.2+) or libndpi (5.0+)"
+--- Tente de charger libndpi parmi plusieurs noms candidats.
+-- Gère les noms non-versionnés (dev packages, Arch) et les
+-- sonames versionnés Debian (à partir du paquet runtime).
+ndpi_names = { "ndpi", "libndpi.so.5", "libndpi.so.4.2", "libndpi.so.4" }
+ndpi_lib = nil
+for name in *ndpi_names
+  ok, lib = pcall ffi.load, name
+  if ok
+    ndpi_lib = lib
+    break
+unless ndpi_lib
+  error "libndpi not found (tried: #{table.concat ndpi_names, ', '})"
 
 --- Parse version string from ndpi_revision().
 rev   = ffi.string ndpi_lib.ndpi_revision!

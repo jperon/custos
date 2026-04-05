@@ -41,8 +41,10 @@ run_queue = (queue_num, callback) ->
   -- Wrapper C minimal : extrait pkt_id et délègue au callback Lua
   c_callback = ffi.cast "nfq_callback", (qh, nfmsg, nfad, data) ->
     -- Extraction de l'id du paquet depuis le header nfq
+    -- nfq_get_msg_packet_hdr retourne un pointeur vers nfqnl_msg_packet_hdr
+    -- dont le premier champ packet_id est en big-endian.
     raw_hdr = libnfq.nfq_get_msg_packet_hdr nfad
-    pkt_id  = libc.ntohl raw_hdr
+    pkt_id  = libc.ntohl raw_hdr.packet_id
 
     ok, verdict = pcall callback, qh_box[0], nfad, pkt_id
     unless ok
