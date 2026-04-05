@@ -32,7 +32,7 @@ detection — all without any C compilation step.
 │  │   lookup allowlist                           patch TTL→60s  │
 │  │   log + ACCEPT/REJECT                        nft set add    │
 │  │   write(pipe, txid+ip+port)                  ACCEPT+payload │
-│  └── /tmp/dns-filter.log                                       │
+│  └── ./tmp/dns-filter.log                                      │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -117,7 +117,9 @@ custos/
 │   └── dns-filter.nft       Complete nftables ruleset
 ├── tests/
 │   ├── run_tests.lua        Unit tests (no root required)
-│   └── test_ndpi.lua        nDPI wrapper tests (requires libndpi)
+│   ├── test_ndpi.lua        nDPI wrapper tests (requires libndpi)
+│   ├── test_docker.moon     Docker E2E tests (source)
+│   └── test_docker.lua      Docker E2E tests (compiled)
 ├── libvirt/
 │   ├── *.xml                Libvirt VM configs (client/router)
 │   └── custos-libvirt.sh    VM management script
@@ -262,10 +264,11 @@ The Unix pipe (created before `fork()`) carries 16-byte messages.
 Atomicity is guaranteed by POSIX for messages ≤ PIPE_BUF (4096 bytes).
 
 ```
-Byte  0     : type  — 0x41 ('A') = IPv4, 0x36 ('6') = IPv6
-Bytes 1-2   : DNS txid (big-endian uint16)
-Bytes 3-18  : source IP address (4 bytes IPv4 or 16 bytes IPv6, zero-padded)
-Bytes 14-15 : source port (big-endian uint16)
+Byte  0      : type  — 0x41 ('A') = IPv4, 0x36 ('6') = IPv6
+Bytes 1-2    : DNS txid (big-endian uint16)
+Bytes 3-6    : source IPv4 address (4 bytes) or first 4 bytes of IPv6
+Bytes 7-14   : IPv6 continuation (bytes 5-12), 0x00 if IPv4
+Bytes 15-16  : source port (big-endian uint16)
 ```
 
 Q1 maintains a table `pending[txid:ip:port] = expire_time` (TTL 5s).
@@ -379,7 +382,7 @@ environment with support for multiple nDPI versions:
 ### nDPI 4.x (Debian - Default)
 ```bash
 # Build and start with nDPI 4.x
-docker-compose --profile ndpi4 up -d
+docker compose --profile ndpi4 up -d
 
 # Or using Makefile
 make test-docker
@@ -388,7 +391,7 @@ make test-docker
 ### nDPI 5.0 (Arch Linux from AUR)
 ```bash
 # Build and start with nDPI 5.0
-docker-compose --profile ndpi5 up -d
+docker compose --profile ndpi5 up -d
 
 # Or using Makefile
 make test-docker-ndpi5
@@ -405,7 +408,7 @@ docker logs -f custos-filter        # nDPI 4.x
 docker logs -f custos-filter-ndpi5  # nDPI 5.0
 
 # Stop everything
-docker-compose down
+docker compose down
 ```
 
 The Docker setup mirrors the FFI wrapper architecture with separate
