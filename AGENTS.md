@@ -11,6 +11,15 @@ See [README.md](README.md) for the full architecture.
 
 ---
 
+## Agent Rules
+
+- **Ne jamais écrire en dehors du dossier du projet.** Toutes les sorties
+  temporaires (fichiers de debug, redirections, captures de commandes) doivent
+  être placées dans `./tmp/`. Ne jamais utiliser `/tmp/`, `~/.cache/` ou tout
+  autre chemin extérieur au projet.
+
+---
+
 ## MoonScript Syntax Guidelines
 
 This project **avoids the `class` keyword** of MoonScript. The compiled code must be independent of the MoonScript library (no `require "moon"`).
