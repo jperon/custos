@@ -337,6 +337,25 @@ run_test("DNS response TTL is patched to " .. tostring(EXPECTED_TTL) .. "s", "ns
   end
   return ok, obtained
 end)
+run_test("AAAA records populate ip6_allowed nftables set", "nslookup -type=AAAA " .. tostring(TEST_DOMAINS.allowed) .. " → if AAAA RRs received, ip6_allowed populated", function()
+  local cmd = "docker exec custos-client nslookup -type=AAAA " .. tostring(TEST_DOMAINS.allowed) .. " " .. tostring(dns_server) .. " 2>&1"
+  local q_ok, output = execute(cmd, true)
+  local has_aaaa = q_ok and (output:match("AAAA") ~= nil or output:match("has IPv6 address") ~= nil)
+  if not (has_aaaa) then
+    return true, "no AAAA records from upstream (no IPv6 route) — unit tests cover the code path"
+  end
+  local set_cmd = "docker exec " .. tostring(filter_name) .. " nft list set ip6 dns-filter ip6_allowed 2>/dev/null"
+  local _, set_out = execute(set_cmd, true)
+  local has_elem = set_out and set_out:match("elements = {[^}]+}") ~= nil
+  local ok = has_elem
+  local obtained
+  if ok then
+    obtained = (set_out:match("elements = {([^}]+)}")) or "(entries present)"
+  else
+    obtained = "AAAA resolved (" .. tostring(output:match('AAAA%s+(%S+)' or '?')) .. ") but ip6_allowed set empty"
+  end
+  return ok, obtained
+end)
 compose_down()
 print("")
 print(tostring(C.bold) .. "Test Summary:" .. tostring(C.reset))

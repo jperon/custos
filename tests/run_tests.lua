@@ -116,6 +116,29 @@ local function make_ipv4_udp_dns(src_ip, dst_ip, src_port, dst_port, dns_payload
   return ip .. udp .. dns_payload
 end
 
+-- Construit un paquet IPv6/UDP/DNS minimal (40B IPv6 + 8B UDP + payload)
+local function make_ipv6_udp_dns(src_ip6, dst_ip6, src_port, dst_port, dns_payload)
+  -- src_ip6 / dst_ip6 : strings de 16 octets bruts
+  local udp_len   = 8 + #dns_payload
+  local pay_len   = udp_len   -- IPv6 payload length = udp_len (pas d'ext header)
+  local ip6 = string.char(
+    0x60, 0, 0, 0,    -- version=6, traffic class=0, flow label=0
+    bit.rshift(bit.band(pay_len, 0xFF00), 8), bit.band(pay_len, 0xFF),
+    17,               -- next header = UDP
+    64                -- hop limit
+  ) .. src_ip6 .. dst_ip6
+
+  -- UDP header (8 octets)
+  local udp = string.char(
+    bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF),
+    bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF),
+    bit.rshift(bit.band(udp_len,  0xFF00), 8), bit.band(udp_len,  0xFF),
+    0, 0    -- checksum (sera rempli par le test)
+  )
+
+  return ip6 .. udp .. dns_payload
+end
+
 -- ════════════════════════════════════════════════════════════════
 -- Tests parse/ip
 -- ════════════════════════════════════════════════════════════════
@@ -257,9 +280,75 @@ test("parse_dns — réponse avec RR A", function()
   assert_eq(parsed.answers[1].ttl,       300,        "ttl original")
 end)
 
+
 -- ════════════════════════════════════════════════════════════════
--- Tests allowlist
+-- Tests parse/udp  (pseudo-header IPv4 et IPv6, checksum)
 -- ════════════════════════════════════════════════════════════════
+io.write("\n-- parse/udp --\n")
+
+local parse_udp, checksum_udp, pseudo_header_sum_v4, pseudo_header_sum_v6
+do
+  package.loaded["parse/ip"] = dofile("lua/parse/ip.lua")
+  local m = dofile("lua/parse/udp.lua")
+  parse_udp            = m.parse_udp
+  checksum_udp         = m.checksum_udp
+  pseudo_header_sum_v4 = m.pseudo_header_sum_v4
+  pseudo_header_sum_v6 = m.pseudo_header_sum_v6
+end
+
+test("pseudo_header_sum_v4 — somme connue", function()
+  local src = "\xC0\xA8\x01\x2A"  -- 192.168.1.42
+  local dst = "\x08\x08\x08\x08"  -- 8.8.8.8
+  local s   = pseudo_header_sum_v4(src, dst, 100)
+  -- 0xC0A8 + 0x012A + 0x0808 + 0x0808 + 17 + 100
+  local expected = 0xC0A8 + 0x012A + 0x0808 + 0x0808 + 17 + 100
+  assert_eq(s, expected, "somme pseudo-header v4")
+end)
+
+test("pseudo_header_sum_v6 -- 16 octets non tronques", function()
+  -- 2001:db8::1 -> src, 2001:db8::2 -> dst
+  local src = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+  local dst = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"
+  local s   = pseudo_header_sum_v6(src, dst, 60)
+  -- src words : 0x2001 + 0x0db8 + 0*6 + 0x0001 = 0x2DBA
+  -- dst words : 0x2001 + 0x0db8 + 0*6 + 0x0002 = 0x2DBB
+  -- + udp_len=60 + next_header=17
+  local expected = 0x2DBA + 0x2DBB + 60 + 17
+  assert_eq(s, expected, "somme pseudo-header v6")
+end)
+
+test("checksum_udp IPv4 -- not zero", function()
+  local dns     = make_dns("\x03www\x06github\x03com\x00", 1, false)
+  local raw     = make_ipv4_udp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns)
+  local ip_m    = dofile("lua/parse/ip.lua")
+  local udp_m   = dofile("lua/parse/udp.lua")
+  local ip_hdr  = ip_m.parse_ipv4(raw)
+  local udp_hdr = udp_m.parse_udp(raw, ip_hdr)
+  local cksum   = checksum_udp(raw, ip_hdr, udp_hdr)
+  assert(cksum ~= 0, "checksum IPv4 non nul")
+  assert(cksum <= 0xFFFF, "checksum <= 0xFFFF")
+end)
+
+test("checksum_udp IPv6 -- non nul et different du checksum IPv4 meme payload", function()
+  local dns = make_dns("\x06github\x03com\x00", 1, false)
+  local src6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x42"
+  local dst6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+  local raw6  = make_ipv6_udp_dns(src6, dst6, 54321, 53, dns)
+  local raw4  = make_ipv4_udp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns)
+  local ip_m  = dofile("lua/parse/ip.lua")
+  local udp_m = dofile("lua/parse/udp.lua")
+  local ip6_hdr  = ip_m.parse_ipv6(raw6)
+  local udp6_hdr = udp_m.parse_udp(raw6, ip6_hdr)
+  local ip4_hdr  = ip_m.parse_ipv4(raw4)
+  local udp4_hdr = udp_m.parse_udp(raw4, ip4_hdr)
+  local ck6 = checksum_udp(raw6, ip6_hdr, udp6_hdr)
+  local ck4 = checksum_udp(raw4, ip4_hdr, udp4_hdr)
+  assert(ck6 ~= 0, "checksum IPv6 non nul")
+  assert(ck6 <= 0xFFFF, "checksum IPv6 <= 0xFFFF")
+  assert(ck6 ~= ck4, "checksum IPv6 != checksum IPv4 (pseudo-headers differents)")
+end)
+
+
 io.write("\n── allowlist ──\n")
 
 -- Test de la logique de correspondance par suffixe (sans les signaux POSIX)

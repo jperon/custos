@@ -57,18 +57,47 @@ pseudo_header_sum_v4 = (src_ip_raw, dst_ip_raw, udp_len) ->
   sum += udp_len
   sum
 
--- Recalcul complet du checksum UDP sur le payload brut modifié.
--- raw     : string Lua du paquet IP complet (modifié)
--- ip_hdr  : résultat de parse_ip
--- udp_hdr : résultat de parse_udp
--- Retourne le checksum (uint16) à écrire aux octets udp_off+6 / udp_off+7.
+--- Calcul du pseudo-header UDP IPv6 pour le checksum (RFC 2460 §8.1).
+-- Le pseudo-header IPv6 contient :
+--   src_addr (16 octets) + dst_addr (16 octets)
+--   + upper-layer length (32 bits) + zero (24 bits) + next_header (8 bits)
+-- @tparam string src_ip_raw 16 octets bruts de l'adresse source
+-- @tparam string dst_ip_raw 16 octets bruts de l'adresse destination
+-- @tparam number udp_len    longueur du segment UDP (header + data)
+-- @treturn number somme partielle (accumulation uint32) du pseudo-header
+pseudo_header_sum_v6 = (src_ip_raw, dst_ip_raw, udp_len) ->
+  sum = 0
+  -- src_ip : 16 octets → 8 mots de 16 bits
+  for i = 1, 15, 2
+    sum += read_u16 src_ip_raw, i
+  -- dst_ip : idem
+  for i = 1, 15, 2
+    sum += read_u16 dst_ip_raw, i
+  -- upper-layer packet length (32 bits big-endian)
+  -- Pour udp_len < 65536 : high word = 0, low word = udp_len
+  sum += udp_len
+  -- zero (24 bits) + next header (8 bits) = 0x0000 et 0x0011 (UDP = 17)
+  sum += 17
+  sum
+
+--- Recalcul complet du checksum UDP sur le payload brut modifié.
+-- Dispatche sur IPv4 ou IPv6 selon ip_hdr.version.
+-- @tparam string raw     paquet IP complet (modifié)
+-- @tparam table  ip_hdr  résultat de parse_ip
+-- @tparam table  udp_hdr résultat de parse_udp
+-- @treturn number checksum (uint16) à écrire aux octets udp_off+6 / udp_off+7
 checksum_udp = (raw, ip_hdr, udp_hdr) ->
   { :read_u16 } = require "parse/ip"
   bit = require "bit"
 
-  sum = pseudo_header_sum_v4(
-    ip_hdr.src_ip_raw, ip_hdr.dst_ip_raw, udp_hdr.udp_len
-  )
+  sum = if ip_hdr.version == 6
+    pseudo_header_sum_v6(
+      ip_hdr.src_ip_raw, ip_hdr.dst_ip_raw, udp_hdr.udp_len
+    )
+  else
+    pseudo_header_sum_v4(
+      ip_hdr.src_ip_raw, ip_hdr.dst_ip_raw, udp_hdr.udp_len
+    )
 
   -- Somme de tous les mots 16 bits du segment UDP (header + data),
   -- en mettant le champ checksum à zéro
@@ -95,4 +124,4 @@ checksum_udp = (raw, ip_hdr, udp_hdr) ->
 
   bit.band bit.bnot(sum), 0xFFFF
 
-{ :parse_udp, :checksum_udp, :pseudo_header_sum_v4, :UDP_HEADER_LEN }
+{ :parse_udp, :checksum_udp, :pseudo_header_sum_v4, :pseudo_header_sum_v6, :UDP_HEADER_LEN }

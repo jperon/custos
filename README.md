@@ -362,9 +362,6 @@ available for reference or fallback.
 
 ## Known Limitations
 
-- **IPv6 TTL patch**: TTL rewriting and checksum recalculation in
-  worker Q1 only cover IPv4 responses. IPv6 requires a different
-  UDP pseudo-header (RFC 2460 §8.1) — not yet implemented.
 - **DNS over TCP** (port 53 TCP, responses > 512 bytes): not covered.
 - **DoH / DoT**: not covered (ports 443/853).
 - **Single-threaded per worker**: one worker per queue. For very

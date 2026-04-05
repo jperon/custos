@@ -57,15 +57,17 @@ patch_packet = (raw, ip_hdr, udp_hdr, dns) ->
   buf[cksum_off]   = bit.rshift bit.band(new_udp_cksum, 0xFF00), 8
   buf[cksum_off+1] = bit.band new_udp_cksum, 0xFF
 
-  -- ── 3. Recalcul checksum IP ──────────────────────────────────
-  -- On met le champ checksum IP à zéro avant recalcul
-  buf[10] = 0
-  buf[11] = 0   -- 0-based : octets 10-11 (checksum IP)
-  ip_header_str = ffi.string buf, ip_hdr.ihl
-  { :checksum_ip } = require "parse/ip"
-  new_ip_cksum  = checksum_ip ip_header_str
-  buf[10] = bit.rshift bit.band(new_ip_cksum, 0xFF00), 8
-  buf[11] = bit.band new_ip_cksum, 0xFF
+  -- ── 3. Recalcul checksum IP (IPv4 uniquement) ───────────────
+  -- IPv6 n'a pas de checksum dans le header IP : on saute cette étape.
+  if ip_hdr.version == 4
+    -- On met le champ checksum IP à zéro avant recalcul
+    buf[10] = 0
+    buf[11] = 0   -- 0-based : octets 10-11 (checksum IP)
+    ip_header_str = ffi.string buf, ip_hdr.ihl
+    { :checksum_ip } = require "parse/ip"
+    new_ip_cksum  = checksum_ip ip_header_str
+    buf[10] = bit.rshift bit.band(new_ip_cksum, 0xFF00), 8
+    buf[11] = bit.band new_ip_cksum, 0xFF
 
   -- Retourne la string finale (copiée depuis ffi buf)
   ffi.string buf, pkt_len
