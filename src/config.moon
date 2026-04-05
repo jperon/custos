@@ -53,7 +53,7 @@ NFT_IP_TIMEOUT = "2m"           -- durée de vie des IPs dans les sets
 
 -- ── Pipe IPC Q0 → Q1 ────────────────────────────────────────────
 -- Taille du message binaire (voir ipc.moon)
-IPC_MSG_SIZE = 16   -- 1B type + 2B txid + 4 ou 16B ip + 2B port + 1B pad
+IPC_MSG_SIZE = 21   -- 1B type + 2B txid + 16B ip (IPv4 zero-padé) + 2B port
 
 -- Durée de vie d'une transaction en attente de réponse (secondes)
 IPC_PENDING_TTL = 5

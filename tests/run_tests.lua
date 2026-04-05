@@ -24,7 +24,7 @@ package.loaded["config"] = {
   DNS_PORT        = 53,
   DOCKER_MODE     = false,
   ALLOWED_DOMAINS = {},
-  IPC_MSG_SIZE    = 16,
+  IPC_MSG_SIZE    = 21,
   IPC_PENDING_TTL = 5,
 }
 
@@ -330,13 +330,27 @@ test("encode/decode IPv4 round-trip", function()
   local txid    = 0x1234
   local port    = 54321
   local msg     = encode_msg(txid, ip_raw, port)
-  assert_eq(#msg, 16, "taille message = 16")
+  assert_eq(#msg, 21, "taille message = 21")
   local decoded = decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.txid,     txid,          "txid")
   assert_eq(decoded.src_port, port,          "port")
   assert_eq(decoded.ip_str,   "192.168.1.42","ip_str")
   assert_eq(decoded.msg_type, 0x41,          "type IPv4")
+end)
+
+test("encode/decode IPv6 round-trip", function()
+  local ip_raw = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01" -- 2001:db8::1
+  local txid   = 0xABCD
+  local port   = 5353
+  local msg    = encode_msg(txid, ip_raw, port)
+  assert_eq(#msg, 21, "taille message = 21")
+  local decoded = decode_msg(msg)
+  assert(decoded, "decode_msg nil")
+  assert_eq(decoded.txid,     txid,                  "txid")
+  assert_eq(decoded.src_port, port,                  "port")
+  assert_eq(decoded.ip_str,   "2001:db8:0:0:0:0:0:1","ip_str")
+  assert_eq(decoded.msg_type, 0x36,                  "type IPv6")
 end)
 
 test("make_key — unicité", function()

@@ -260,15 +260,16 @@ Example log:
 
 ## IPC Protocol Q0 → Q1
 
-The Unix pipe (created before `fork()`) carries 16-byte messages.
+The Unix pipe (created before `fork()`) carries 21-byte messages.
 Atomicity is guaranteed by POSIX for messages ≤ PIPE_BUF (4096 bytes).
 
 ```
 Byte  0      : type  — 0x41 ('A') = IPv4, 0x36 ('6') = IPv6
 Bytes 1-2    : DNS txid (big-endian uint16)
-Bytes 3-6    : source IPv4 address (4 bytes) or first 4 bytes of IPv6
-Bytes 7-14   : IPv6 continuation (bytes 5-12), 0x00 if IPv4
-Bytes 15-16  : source port (big-endian uint16)
+Bytes 3-18   : source IP — 16 bytes
+                 IPv4 : 4 bytes address + 12 zero bytes (padding)
+                 IPv6 : 16 bytes address (complete, no truncation)
+Bytes 19-20  : source port (big-endian uint16)
 ```
 
 Q1 maintains a table `pending[txid:ip:port] = expire_time` (TTL 5s).
@@ -361,9 +362,9 @@ available for reference or fallback.
 
 ## Known Limitations
 
-- **IPv6 in worker Q1**: TTL patch and checksum recalculation only
-  cover IPv4 in this POC. IPv6 requires a different pseudo-header
-  for UDP checksum.
+- **IPv6 TTL patch**: TTL rewriting and checksum recalculation in
+  worker Q1 only cover IPv4 responses. IPv6 requires a different
+  UDP pseudo-header (RFC 2460 §8.1) — not yet implemented.
 - **DNS over TCP** (port 53 TCP, responses > 512 bytes): not covered.
 - **DoH / DoT**: not covered (ports 443/853).
 - **Single-threaded per worker**: one worker per queue. For very

@@ -4,16 +4,15 @@
 -- Les messages sont des enregistrements binaires de taille fixe IPC_MSG_SIZE.
 -- L'atomicité est garantie par POSIX pour les écritures <= PIPE_BUF (4096).
 --
--- Format du message (16 octets) :
+-- Format du message (21 octets) :
 --
---   Octet 0     : version/type
---                   0x41 ('A') = transaction IPv4 acceptée
---                   0x36 ('6') = transaction IPv6 acceptée
---   Octets 1-2  : txid DNS (big-endian uint16)
---   Octets 3-6  : src_ip (IPv4, 4 octets) ou premiers 4 octets IPv6
---   Octets 7-14 : suite src_ip IPv6 (octets 5-12), ou 0x00 si IPv4
---   Octets 15-16: src_port (big-endian uint16, dans les 2 derniers octets)
---   → Total : 16 octets, sous PIPE_BUF → écriture atomique garantie
+--   Octet 0      : version/type
+--                    0x41 ('A') = transaction IPv4 acceptée
+--                    0x36 ('6') = transaction IPv6 acceptée
+--   Octets 1-2   : txid DNS (big-endian uint16)
+--   Octets 3-18  : src_ip — 16 octets (IPv4 4 octets + 12 octets 0x00 ; IPv6 16 octets complets)
+--   Octets 19-20 : src_port (big-endian uint16)
+--   → Total : 21 octets, largement sous PIPE_BUF → écriture atomique garantie
 
 { :ffi, :libc } = require "ffi_defs"
 { :IPC_MSG_SIZE, :IPC_PENDING_TTL } = require "config"
@@ -29,7 +28,7 @@ MSG_IPV6 = 0x36   -- '6'
 -- ip_raw : string Lua (4 octets IPv4 ou 16 octets IPv6)
 -- Retourne la string binaire à écrire dans le pipe.
 encode_msg = (txid, ip_raw, src_port) ->
-  buf = ffi.new "uint8_t[16]"
+  buf = ffi.new "uint8_t[21]"
 
   -- Type
   buf[0] = #ip_raw == 4 and MSG_IPV4 or MSG_IPV6
@@ -38,16 +37,16 @@ encode_msg = (txid, ip_raw, src_port) ->
   buf[1] = bit.rshift bit.band(txid, 0xFF00), 8
   buf[2] = bit.band txid, 0xFF
 
-  -- IP source (4 ou 16 octets, zéro-padé)
+  -- IP source dans buf[3..18] (16 octets)
+  -- IPv4 : 4 octets écrits, les 12 suivants restent à 0x00 (ffi.new initialise à zéro)
+  -- IPv6 : 16 octets écrits exactement
   for i = 1, #ip_raw
     buf[2 + i] = ip_raw\byte i
 
-  -- Port source big-endian dans les 2 derniers octets
-  buf[14] = bit.rshift bit.band(src_port, 0xFF00), 8
-  buf[15] = bit.band src_port, 0xFF
+  -- Port source big-endian dans buf[19..20]
+  buf[19] = bit.rshift bit.band(src_port, 0xFF00), 8
+  buf[20] = bit.band src_port, 0xFF
 
-  -- On retourne exactement IPC_MSG_SIZE octets (le reste du buffer est à zéro,
-  -- ce qui est correct pour le padding IPv4 dans les 12 octets réservés à l'IP).
   ffi.string buf, IPC_MSG_SIZE
 
 -- Écrit un message dans le pipe (côté Q0).
@@ -64,12 +63,12 @@ decode_msg = (raw) ->
 
   msg_type = raw\byte 1
   txid     = bit.bor bit.lshift(raw\byte(2), 8), raw\byte(3)
-  src_port = bit.bor bit.lshift(raw\byte(15), 8), raw\byte(16)
+  src_port = bit.bor bit.lshift(raw\byte(20), 8), raw\byte(21)
 
   ip_str = if msg_type == MSG_IPV4
     "#{raw\byte 4}.#{raw\byte 5}.#{raw\byte 6}.#{raw\byte 7}"
   else
-    -- IPv6 : 16 octets à partir de l'octet 4
+    -- IPv6 : 16 octets complets dans raw\byte(4..19)
     groups = for g = 0, 7
       string.format "%x", bit.bor(bit.lshift(raw\byte(4 + g*2), 8), raw\byte(5 + g*2))
     table.concat groups, ":"

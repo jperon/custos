@@ -80,7 +80,7 @@ io.write("\n── Loading parse/ndpi module ──\n")
 package.loaded["config"] = {
   PROTO_UDP = 17, AF_INET = 2, AF_INET6 = 10,
   DNS_PORT = 53, ALLOWED_DOMAINS = {},
-  IPC_MSG_SIZE = 16, IPC_PENDING_TTL = 5,
+  IPC_MSG_SIZE = 21, IPC_PENDING_TTL = 5,
 }
 
 -- ffi_ndpi facade detects version and loads v4/v5 cdef.
