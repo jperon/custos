@@ -383,13 +383,17 @@ run_test "AAAA records populate ip6_allowed nftables set",
     -- If the environment has no IPv6 upstream, the test is skipped (pass with note).
     cmd = "docker exec custos-client nslookup -type=AAAA #{TEST_DOMAINS.allowed} #{dns_server} 2>&1"
     q_ok, output = execute cmd, true
-    has_aaaa = q_ok and (output\match("AAAA") != nil or output\match("has IPv6 address") != nil)
+    -- Alpine nslookup prints "Address: 2606:4700::..." (no "AAAA" keyword).
+    -- Match an IPv6 address: at least two colon-separated hex groups in an Address line.
+    has_aaaa = q_ok and (
+      output\match("AAAA") != nil or
+      output\match("has IPv6 address") != nil or
+      output\match("Address: [%x:]+:[%x:]+") != nil
+    )
 
     unless has_aaaa
-      -- No IPv6 upstream reachable in this environment: the code path is covered
-      -- by unit tests (pseudo_header_sum_v6, checksum_udp IPv6).
-      -- Let the test pass with an informational message.
-      return true, "no AAAA records from upstream (no IPv6 route) — unit tests cover the code path"
+      -- No AAAA records returned by upstream in this environment.
+      return true, "no AAAA records from upstream — unit tests cover the code path"
 
     -- AAAA records were received: verify ip6_allowed was populated
     set_cmd = "docker exec #{filter_name} nft list set ip6 dns-filter ip6_allowed 2>/dev/null"
