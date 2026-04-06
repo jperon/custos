@@ -40,8 +40,11 @@ table ip dns-filter {
 
   chain forward {
     type   filter hook forward priority 0
-    policy accept
-    # dnsmasq is local: DNS traffic does not pass through FORWARD
+    policy drop
+    # Paquets de retour (réponses WAN → LAN)
+    ct state established,related accept
+    # Destinations explicitement autorisées après résolution DNS
+    ip daddr @ip4_allowed accept
   }
 
   chain output {
@@ -78,7 +81,9 @@ table ip6 dns-filter {
 
   chain forward {
     type   filter hook forward priority 0
-    policy accept
+    policy drop
+    ct state established,related accept
+    ip6 daddr @ip6_allowed accept
   }
 
   chain output {

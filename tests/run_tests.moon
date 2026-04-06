@@ -291,17 +291,24 @@ test "build_refused -- OPT RR EDE bytes", ->
   -- OPT RR starts at offset 12 (header) + 13 (question) + 1 = 26 (1-based)
   q_len     = #qname + 4   -- qname + qtype(2) + qclass(2)
   opt_start = 12 + q_len + 1   -- 1-based
+  -- EDE_EXTRA_TEXT = "Ne intretis." → N=12 ; RDLENGTH=18 (0x12) ; OPTION-LEN=14 (0x0E)
+  ede_n   = #m_dns.EDE_EXTRA_TEXT   -- 12
+  rdlen   = 6 + ede_n              -- 18
+  opt_len = 2 + ede_n              -- 14
   assert_eq refused\byte(opt_start),    0x00, "OPT NAME = root"
   assert_eq refused\byte(opt_start+1),  0x00, "OPT TYPE hi"
   assert_eq refused\byte(opt_start+2),  0x29, "OPT TYPE lo = 41"
   assert_eq refused\byte(opt_start+9),  0x00, "RDLEN hi"
-  assert_eq refused\byte(opt_start+10), 0x06, "RDLEN lo = 6"
+  assert_eq refused\byte(opt_start+10), rdlen,    "RDLEN lo = #{rdlen}"
   assert_eq refused\byte(opt_start+11), 0x00, "EDE opt-code hi"
   assert_eq refused\byte(opt_start+12), 0x0F, "EDE opt-code lo = 15"
   assert_eq refused\byte(opt_start+13), 0x00, "EDE opt-len hi"
-  assert_eq refused\byte(opt_start+14), 0x02, "EDE opt-len lo = 2"
+  assert_eq refused\byte(opt_start+14), opt_len,  "EDE opt-len lo = #{opt_len}"
   assert_eq refused\byte(opt_start+15), 0x00, "EDE info-code hi"
   assert_eq refused\byte(opt_start+16), 0x0F, "EDE info-code lo = 15 Filtered"
+  -- Extra-text commence au byte opt_start+17 (0-based: opt_start+16)
+  extra = refused\sub opt_start + 17, opt_start + 16 + ede_n
+  assert_eq extra, m_dns.EDE_EXTRA_TEXT, "EDE extra-text = '#{m_dns.EDE_EXTRA_TEXT}'"
 
 test "patch_ttl — réécrit 4 octets TTL dans le buffer", ->
   -- Réponse DNS avec 1 RR A, TTL = 300 (0x0000012C)

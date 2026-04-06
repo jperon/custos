@@ -34,6 +34,9 @@ RCODE = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3, REFUSED: 5 }
 -- Code EDE « Filtered » (RFC 8914 §5.16)
 EDE_FILTERED = 15
 
+-- Message additionnel EDE (RFC 8914 §4, champ extra-text UTF-8 après l'info-code)
+EDE_EXTRA_TEXT = "Ne intretis."
+
 -- ── Header DNS (12 octets) ───────────────────────────────────────
 --   0-1  : txid
 --   2    : flags high (QR + OPCODE + AA + TC + RD)
@@ -259,12 +262,27 @@ build_refused = (dns, orig_buf) ->
 
   -- ── EDNS OPT RR (RFC 6891) avec option EDE=15 (RFC 8914) ─────
   -- NAME=0x00 (root), TYPE=0x0029 OPT, CLASS=0x0500 (1280 octets),
-  -- TTL=0x00000000, RDLENGTH=6,
-  -- RDATA : OPTION-CODE=0x000F EDE, OPTION-LEN=2, INFO-CODE=0x000F Filtered
-  opt_rr = string.char 0x00, 0x00, 0x29, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x0F, 0x00, 0x02, 0x00, 0x0F
+  -- TTL=0x00000000,
+  -- RDATA : OPTION-CODE=0x000F EDE, OPTION-LEN=2+N, INFO-CODE=0x000F Filtered,
+  --         EXTRA-TEXT = EDE_EXTRA_TEXT (N octets UTF-8, RFC 8914 §4)
+  -- RDLENGTH = 6 + N
+  ede_n   = #EDE_EXTRA_TEXT
+  rdlen   = 6 + ede_n
+  opt_len = 2 + ede_n
+  -- En-tête OPT RR : NAME(1) + TYPE(2) + CLASS(2) + TTL(4) + RDLENGTH(2)
+  opt_hdr = string.char(0x00, 0x00, 0x29, 0x05, 0x00,
+                        0x00, 0x00, 0x00, 0x00,
+                        bit.rshift(bit.band(rdlen, 0xFF00), 8),
+                        bit.band(rdlen, 0xFF))
+  -- RDATA EDE : OPTION-CODE(2) + OPTION-LEN(2) + INFO-CODE(2)
+  opt_ede = string.char(0x00, 0x0F,
+                        bit.rshift(bit.band(opt_len, 0xFF00), 8),
+                        bit.band(opt_len, 0xFF),
+                        0x00, 0x0F)
+  opt_rr = opt_hdr .. opt_ede .. EDE_EXTRA_TEXT
 
   hdr .. qs_raw .. opt_rr
 
 { :parse_dns, :parse_header, :parse_questions, :parse_answers
   :decode_name, :patch_ttl, :build_refused
-  :QTYPE, :QTYPE_NAME, :RCODE, :EDE_FILTERED }
+  :QTYPE, :QTYPE_NAME, :RCODE, :EDE_FILTERED, :EDE_EXTRA_TEXT }

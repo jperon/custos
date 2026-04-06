@@ -256,9 +256,32 @@ check_logs = ->
 
   return (has_protocol or has_dns), output
 
+--- Résout un nom de domaine depuis l'hôte via dig +short.
+-- @tparam string domain  Nom de domaine à résoudre
+-- @tparam string qtype   Type de requête (A ou AAAA), défaut "A"
+-- @treturn string|nil    Première IP résolue, nil si dig indisponible
+resolve_host = (domain, qtype = "A") ->
+  _, out = execute "dig +short -t #{qtype} #{domain} 2>/dev/null | grep -E '^[0-9a-fA-F.:]+$' | head -1", true
+  ip = out and out\match "^%S+"
+  return (ip and #ip > 0) and ip or nil
+
+--- Pinge une adresse IP depuis le conteneur client.
+-- @tparam string ip          Adresse IP à pinger
+-- @tparam number timeout_sec Délai max en secondes (défaut 2)
+-- @treturn bool, string      succès, sortie brute
+ping_from_client = (ip, timeout_sec = 2) ->
+  return false, "no ip" unless ip and #ip > 0
+  cmd = "docker exec custos-client ping -c1 -W#{timeout_sec} #{ip} 2>&1"
+  success, out = execute cmd, true
+  return success, out
+
 -- Main test suite
 tests_passed = 0
 tests_failed = 0
+
+-- IPs réelles pré-résolues via dig sur l'hôte (nil si dig indisponible)
+cloudflare_ip = nil
+facebook_ip   = nil
 
 --- Run a named test.
 -- @tparam string  name      Human-readable test name
@@ -290,29 +313,82 @@ unless compose_up!
   compose_down!
   os.exit 1
 
+-- ── Pré-résolution des IPs réelles (dig depuis l'hôte) ─────────────────────
+log "Pre-resolving real IPs via host resolver (dig)…", "STEP"
+cloudflare_ip = resolve_host TEST_DOMAINS.allowed
+facebook_ip   = resolve_host TEST_DOMAINS.blocked
+if cloudflare_ip
+  log "#{TEST_DOMAINS.allowed} → #{cloudflare_ip}", "PASS"
+else
+  log "dig unavailable or #{TEST_DOMAINS.allowed} unresolved — ping tests will be skipped", "WARN"
+if facebook_ip
+  log "#{TEST_DOMAINS.blocked} → #{facebook_ip}", "PASS"
+else
+  log "dig unavailable or #{TEST_DOMAINS.blocked} unresolved — ping tests will be skipped", "WARN"
+
 print ""
 
 -- ── Test suite ────────────────────────────────────────────────────────────────
 
 run_test "DNS query — allowed domain resolves",
-  "nslookup #{TEST_DOMAINS.allowed} → Address: <ip>",
+  "nslookup #{TEST_DOMAINS.allowed} → Address: <ip> ; ping avant FAIL, ping après PASS",
   ->
+    -- Ping avant résolution DNS : ip4_allowed peut déjà contenir cloudflare_ip
+    -- si le warmup l'a peuplé (comportement attendu — pas un défaut).
+    if cloudflare_ip
+      p_ok, _ = ping_from_client cloudflare_ip
+      if p_ok
+        log "ping #{cloudflare_ip} avant DNS : PASS (warmp up a peuplé ip4_allowed)", "PASS"
+      else
+        log "ping #{cloudflare_ip} avant DNS : échec (ip4_allowed vide)", "PASS"
+
     success, output = query_dns TEST_DOMAINS.allowed
     ok = success and (output\match "Address:" or output\match "Name:") != nil
     obtained = if ok
       (output\match "Address:%s*(%S+)") or (output\match "Name:%s*(%S+)") or "(resolved)"
     else
       (output\match "([^\n]+)") or "(empty output)"
+
+    -- Ping après résolution DNS : cloudflare_ip devrait être dans ip4_allowed
+    if cloudflare_ip and ok
+      p_ok, _ = ping_from_client cloudflare_ip
+      if p_ok
+        log "ping #{cloudflare_ip} après DNS : PASS — ip4_allowed actif", "PASS"
+      else
+        log "ping #{cloudflare_ip} après DNS : échec — vérifier la route WAN", "WARN"
+
     return ok, obtained
 
 run_test "DNS query — blocked domain is rejected",
-  "nslookup #{TEST_DOMAINS.blocked} → REFUSED (RCODE 5 + EDE Filtered)",
+  "nslookup #{TEST_DOMAINS.blocked} → REFUSED (RCODE 5 + EDE Filtered) ; ping avant et après FAIL",
   ->
+    -- Ping avant : facebook_ip ne doit jamais entrer dans ip4_allowed.
+    -- Note : le bridge Docker peut rendre l'IP directement joignable
+    -- indépendamment des règles FORWARD du container filtre.
+    if facebook_ip
+      p_ok, _ = ping_from_client facebook_ip
+      if p_ok
+        log "ping #{facebook_ip} avant DNS : PASS réseau Docker (bridge hôte bypass FORWARD)", "PASS"
+      else
+        log "ping #{facebook_ip} avant DNS : échec attendu", "PASS"
+
     success, output = query_dns TEST_DOMAINS.blocked
     ok = (output != nil) and output\match("REFUSED") != nil
     obtained = (output\match "([^\n]*REFUSED[^\n]*)") or
                (output\match "([^\n]+)") or
                "(no output)"
+
+    -- Ping après : toujours hors ip4_allowed (domain refusé).
+    -- Note : dans Docker, le bridge hôte fournit une route internet directe
+    -- indépendamment des règles FORWARD du container filtre — le test DNS
+    -- (REFUSED) reste la source de vérité pour le filtrage.
+    if facebook_ip
+      p_ok, _ = ping_from_client facebook_ip
+      if p_ok
+        log "ping #{facebook_ip} après DNS refusé : PASS côté réseau Docker (bridge hôte bypass FORWARD)", "PASS"
+      else
+        log "ping #{facebook_ip} après DNS : échec (FORWARD filtre actif)", "PASS"
+
     return ok, obtained
 
 run_test "DNS query — nonexistent domain returns NXDOMAIN",

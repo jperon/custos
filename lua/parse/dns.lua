@@ -29,6 +29,7 @@ local RCODE = {
   REFUSED = 5
 }
 local EDE_FILTERED = 15
+local EDE_EXTRA_TEXT = "Ne intretis."
 local parse_header
 parse_header = function(buf)
   if #buf < 12 then
@@ -236,7 +237,12 @@ build_refused = function(dns, orig_buf)
   else
     qs_raw = ""
   end
-  local opt_rr = string.char(0x00, 0x00, 0x29, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x0F, 0x00, 0x02, 0x00, 0x0F)
+  local ede_n = #EDE_EXTRA_TEXT
+  local rdlen = 6 + ede_n
+  local opt_len = 2 + ede_n
+  local opt_hdr = string.char(0x00, 0x00, 0x29, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, bit.rshift(bit.band(rdlen, 0xFF00), 8), bit.band(rdlen, 0xFF))
+  local opt_ede = string.char(0x00, 0x0F, bit.rshift(bit.band(opt_len, 0xFF00), 8), bit.band(opt_len, 0xFF), 0x00, 0x0F)
+  local opt_rr = opt_hdr .. opt_ede .. EDE_EXTRA_TEXT
   return hdr .. qs_raw .. opt_rr
 end
 return {
@@ -250,5 +256,6 @@ return {
   QTYPE = QTYPE,
   QTYPE_NAME = QTYPE_NAME,
   RCODE = RCODE,
-  EDE_FILTERED = EDE_FILTERED
+  EDE_FILTERED = EDE_FILTERED,
+  EDE_EXTRA_TEXT = EDE_EXTRA_TEXT
 }

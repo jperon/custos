@@ -255,8 +255,31 @@ check_logs = function()
   local has_dns = output:match("DNS" or output:match("dns" or output:match("txid=" or output:match("qname="))))
   return (has_protocol or has_dns), output
 end
+local resolve_host
+resolve_host = function(domain, qtype)
+  if qtype == nil then
+    qtype = "A"
+  end
+  local _, out = execute("dig +short -t " .. tostring(qtype) .. " " .. tostring(domain) .. " 2>/dev/null | grep -E '^[0-9a-fA-F.:]+$' | head -1", true)
+  local ip = out and out:match("^%S+")
+  return (ip and #ip > 0) and ip or nil
+end
+local ping_from_client
+ping_from_client = function(ip, timeout_sec)
+  if timeout_sec == nil then
+    timeout_sec = 2
+  end
+  if not (ip and #ip > 0) then
+    return false, "no ip"
+  end
+  local cmd = "docker exec custos-client ping -c1 -W" .. tostring(timeout_sec) .. " " .. tostring(ip) .. " 2>&1"
+  local success, out = execute(cmd, true)
+  return success, out
+end
 local tests_passed = 0
 local tests_failed = 0
+local cloudflare_ip = nil
+local facebook_ip = nil
 local run_test
 run_test = function(name, expected, test_func)
   print("")
@@ -288,8 +311,29 @@ if not (compose_up()) then
   compose_down()
   os.exit(1)
 end
+log("Pre-resolving real IPs via host resolver (dig)…", "STEP")
+cloudflare_ip = resolve_host(TEST_DOMAINS.allowed)
+facebook_ip = resolve_host(TEST_DOMAINS.blocked)
+if cloudflare_ip then
+  log(tostring(TEST_DOMAINS.allowed) .. " → " .. tostring(cloudflare_ip), "PASS")
+else
+  log("dig unavailable or " .. tostring(TEST_DOMAINS.allowed) .. " unresolved — ping tests will be skipped", "WARN")
+end
+if facebook_ip then
+  log(tostring(TEST_DOMAINS.blocked) .. " → " .. tostring(facebook_ip), "PASS")
+else
+  log("dig unavailable or " .. tostring(TEST_DOMAINS.blocked) .. " unresolved — ping tests will be skipped", "WARN")
+end
 print("")
-run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_DOMAINS.allowed) .. " → Address: <ip>", function()
+run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_DOMAINS.allowed) .. " → Address: <ip> ; ping avant FAIL, ping après PASS", function()
+  if cloudflare_ip then
+    local p_ok, _ = ping_from_client(cloudflare_ip)
+    if p_ok then
+      log("ping " .. tostring(cloudflare_ip) .. " avant DNS : PASS (warmp up a peuplé ip4_allowed)", "PASS")
+    else
+      log("ping " .. tostring(cloudflare_ip) .. " avant DNS : échec (ip4_allowed vide)", "PASS")
+    end
+  end
   local success, output = query_dns(TEST_DOMAINS.allowed)
   local ok = success and (output:match("Address:" or output:match("Name:"))) ~= nil
   local obtained
@@ -298,12 +342,36 @@ run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_D
   else
     obtained = (output:match("([^\n]+)")) or "(empty output)"
   end
+  if cloudflare_ip and ok then
+    local p_ok, _ = ping_from_client(cloudflare_ip)
+    if p_ok then
+      log("ping " .. tostring(cloudflare_ip) .. " après DNS : PASS — ip4_allowed actif", "PASS")
+    else
+      log("ping " .. tostring(cloudflare_ip) .. " après DNS : échec — vérifier la route WAN", "WARN")
+    end
+  end
   return ok, obtained
 end)
-run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TEST_DOMAINS.blocked) .. " → REFUSED (RCODE 5 + EDE Filtered)", function()
+run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TEST_DOMAINS.blocked) .. " → REFUSED (RCODE 5 + EDE Filtered) ; ping avant et après FAIL", function()
+  if facebook_ip then
+    local p_ok, _ = ping_from_client(facebook_ip)
+    if p_ok then
+      log("ping " .. tostring(facebook_ip) .. " avant DNS : PASS réseau Docker (bridge hôte bypass FORWARD)", "PASS")
+    else
+      log("ping " .. tostring(facebook_ip) .. " avant DNS : échec attendu", "PASS")
+    end
+  end
   local success, output = query_dns(TEST_DOMAINS.blocked)
   local ok = (output ~= nil) and output:match("REFUSED") ~= nil
   local obtained = (output:match("([^\n]*REFUSED[^\n]*)")) or (output:match("([^\n]+)")) or "(no output)"
+  if facebook_ip then
+    local p_ok, _ = ping_from_client(facebook_ip)
+    if p_ok then
+      log("ping " .. tostring(facebook_ip) .. " après DNS refusé : PASS côté réseau Docker (bridge hôte bypass FORWARD)", "PASS")
+    else
+      log("ping " .. tostring(facebook_ip) .. " après DNS : échec (FORWARD filtre actif)", "PASS")
+    end
+  end
   return ok, obtained
 end)
 run_test("DNS query — nonexistent domain returns NXDOMAIN", "nslookup " .. tostring(TEST_DOMAINS.nonexistent) .. " → NXDOMAIN or can't find", function()

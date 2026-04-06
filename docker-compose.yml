@@ -36,6 +36,9 @@ services:
         echo 1 > /proc/sys/net/ipv4/ip_forward &&
         echo 1 > /proc/sys/net/ipv4/conf/all/forwarding &&
         echo 1 > /proc/sys/net/ipv4/conf/default/forwarding &&
+        echo 1 > /proc/sys/net/ipv6/conf/all/forwarding &&
+        ip route del default 2>/dev/null || true &&
+        ip route add default via 172.30.0.1 &&
         nft -f /app/nft-rules/dns-filter-docker.nft &&
         export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;' &&
         luajit /app/lua/main.lua &
@@ -73,6 +76,9 @@ services:
         echo 1 > /proc/sys/net/ipv4/ip_forward &&
         echo 1 > /proc/sys/net/ipv4/conf/all/forwarding &&
         echo 1 > /proc/sys/net/ipv4/conf/default/forwarding &&
+        echo 1 > /proc/sys/net/ipv6/conf/all/forwarding &&
+        ip route del default 2>/dev/null || true &&
+        ip route add default via 172.30.0.1 &&
         nft -f /app/nft-rules/dns-filter-docker.nft &&
         export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;' &&
         luajit /app/lua/main.lua &

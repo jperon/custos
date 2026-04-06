@@ -214,17 +214,22 @@ test("build_refused -- OPT RR EDE bytes", function()
   assert(refused, "build_refused nil")
   local q_len = #qname + 4
   local opt_start = 12 + q_len + 1
+  local ede_n = #m_dns.EDE_EXTRA_TEXT
+  local rdlen = 6 + ede_n
+  local opt_len = 2 + ede_n
   assert_eq(refused:byte(opt_start), 0x00, "OPT NAME = root")
   assert_eq(refused:byte(opt_start + 1), 0x00, "OPT TYPE hi")
   assert_eq(refused:byte(opt_start + 2), 0x29, "OPT TYPE lo = 41")
   assert_eq(refused:byte(opt_start + 9), 0x00, "RDLEN hi")
-  assert_eq(refused:byte(opt_start + 10), 0x06, "RDLEN lo = 6")
+  assert_eq(refused:byte(opt_start + 10), rdlen, "RDLEN lo = " .. tostring(rdlen))
   assert_eq(refused:byte(opt_start + 11), 0x00, "EDE opt-code hi")
   assert_eq(refused:byte(opt_start + 12), 0x0F, "EDE opt-code lo = 15")
   assert_eq(refused:byte(opt_start + 13), 0x00, "EDE opt-len hi")
-  assert_eq(refused:byte(opt_start + 14), 0x02, "EDE opt-len lo = 2")
+  assert_eq(refused:byte(opt_start + 14), opt_len, "EDE opt-len lo = " .. tostring(opt_len))
   assert_eq(refused:byte(opt_start + 15), 0x00, "EDE info-code hi")
-  return assert_eq(refused:byte(opt_start + 16), 0x0F, "EDE info-code lo = 15 Filtered")
+  assert_eq(refused:byte(opt_start + 16), 0x0F, "EDE info-code lo = 15 Filtered")
+  local extra = refused:sub(opt_start + 17, opt_start + 16 + ede_n)
+  return assert_eq(extra, m_dns.EDE_EXTRA_TEXT, "EDE extra-text = '" .. tostring(m_dns.EDE_EXTRA_TEXT) .. "'")
 end)
 test("patch_ttl — réécrit 4 octets TTL dans le buffer", function()
   local qname_enc = "\x06github\x03com\x00"
