@@ -2,6 +2,7 @@ local arg = (arg or { })
 local verbose = false
 local keep_containers = false
 local no_build = false
+local force_build = false
 for _index_0 = 1, #arg do
   local a = arg[_index_0]
   local _exp_0 = a
@@ -11,11 +12,14 @@ for _index_0 = 1, #arg do
     keep_containers = true
   elseif "--no-build" == _exp_0 then
     no_build = true
+  elseif "--build" == _exp_0 then
+    force_build = true
   elseif "--help" == _exp_0 or "-h" == _exp_0 then
-    print("Usage: " .. tostring(arg[0]) .. " [--verbose] [--keep] [--no-build]")
+    print("Usage: " .. tostring(arg[0]) .. " [--verbose] [--keep] [--no-build] [--build]")
     print("  --verbose  Show all commands and output")
     print("  --keep     Leave containers running after tests")
-    print("  --no-build Skip Docker image build")
+    print("  --no-build Skip Docker image build (use existing image)")
+    print("  --build    Force Docker image rebuild even if image exists")
     os.exit(0)
   end
 end
@@ -117,6 +121,13 @@ build_image = function()
   if no_build then
     log("Skipping Docker build (--no-build)", "WARN")
     return true
+  end
+  if not (force_build) then
+    local ok = execute("docker image inspect custos:latest >/dev/null 2>&1")
+    if ok then
+      log("Image custos:latest already exists — skipping build (use --build to force)", "WARN")
+      return true
+    end
   end
   log("Building Docker image (this may take a while)…", "STEP")
   local success = execute("docker build -t custos:latest .")

@@ -7,6 +7,7 @@ arg = (arg or {})
 verbose = false
 keep_containers = false
 no_build = false
+force_build = false
 
 for a in *arg
   switch a
@@ -16,11 +17,14 @@ for a in *arg
       keep_containers = true
     when "--no-build"
       no_build = true
+    when "--build"
+      force_build = true
     when "--help", "-h"
-      print "Usage: #{arg[0]} [--verbose] [--keep] [--no-build]"
+      print "Usage: #{arg[0]} [--verbose] [--keep] [--no-build] [--build]"
       print "  --verbose  Show all commands and output"
       print "  --keep     Leave containers running after tests"
-      print "  --no-build Skip Docker image build"
+      print "  --no-build Skip Docker image build (use existing image)"
+      print "  --build    Force Docker image rebuild even if image exists"
       os.exit 0
 
 -- Detect profile from NDPI_VERSION environment variable
@@ -109,6 +113,13 @@ build_image = ->
   if no_build
     log "Skipping Docker build (--no-build)", "WARN"
     return true
+
+  -- Check if the image already exists (avoid unnecessary rebuild)
+  unless force_build
+    ok = execute "docker image inspect custos:latest >/dev/null 2>&1"
+    if ok
+      log "Image custos:latest already exists — skipping build (use --build to force)", "WARN"
+      return true
 
   log "Building Docker image (this may take a while)…", "STEP"
   success = execute "docker build -t custos:latest ."
