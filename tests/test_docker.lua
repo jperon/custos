@@ -1,6 +1,4 @@
-local arg = {
-  ...
-}
+local arg = (arg or { })
 local verbose = false
 local keep_containers = false
 local no_build = false
@@ -326,15 +324,18 @@ run_test("Filter logs contain DNS metadata", "log file has txid= or qname= entri
   end
   return ok, obtained
 end)
-run_test("DNS response TTL is patched to " .. tostring(EXPECTED_TTL) .. "s", "nslookup " .. tostring(TEST_DOMAINS.allowed) .. " succeeds (TTL rewrite checked via response presence)", function()
-  local success, output = query_dns(TEST_DOMAINS.allowed)
-  local ok = success and (output:match("Address:" or output:match("Name:"))) ~= nil
-  local obtained
-  if ok then
-    obtained = "response received — TTL patch applied by worker_q1 (forced=" .. tostring(EXPECTED_TTL) .. "s)"
-  else
-    obtained = (output:match("([^\n]+)")) or "(no response)"
+run_test("DNS response TTL is patched to " .. tostring(EXPECTED_TTL) .. "s", "dig " .. tostring(TEST_DOMAINS.allowed) .. " @dns_server → TTL == " .. tostring(EXPECTED_TTL) .. " in answer section", function()
+  local cmd = "docker exec custos-client dig +noall +answer " .. tostring(TEST_DOMAINS.allowed) .. " @" .. tostring(dns_server) .. " 2>&1"
+  local _, output = execute(cmd, true)
+  local ttl_str = output and output:match("%s+(%d+)%s+IN%s+A%s+")
+  if not ttl_str then
+    local success2, output2 = query_dns(TEST_DOMAINS.allowed)
+    local ok2 = success2 and (output2:match("Address:" or output2:match("Name:"))) ~= nil
+    return ok2, "(dig unavailable, nslookup repondu: " .. tostring(ok2) .. ")"
   end
+  local local_ttl = tonumber(ttl_str)
+  local ok = local_ttl == EXPECTED_TTL
+  local obtained = "TTL=" .. tostring(local_ttl) .. " (attendu=" .. tostring(EXPECTED_TTL) .. ")"
   return ok, obtained
 end)
 run_test("AAAA records populate ip6_allowed nftables set", "nslookup -type=AAAA " .. tostring(TEST_DOMAINS.allowed) .. " → if AAAA RRs received, ip6_allowed populated", function()
