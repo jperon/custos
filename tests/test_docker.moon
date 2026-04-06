@@ -43,7 +43,7 @@ else
 
 -- Test configuration
 TEST_DOMAINS = {
-  allowed: "github.com"
+  allowed: "cloudflare.com"
   blocked: "facebook.com"
   nonexistent: "nonexistent.test"
 }

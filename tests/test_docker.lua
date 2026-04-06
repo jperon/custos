@@ -39,7 +39,7 @@ else
   dns_server = "172.28.0.254"
 end
 local TEST_DOMAINS = {
-  allowed = "github.com",
+  allowed = "cloudflare.com",
   blocked = "facebook.com",
   nonexistent = "nonexistent.test"
 }
