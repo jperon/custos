@@ -214,13 +214,11 @@ Remplacer les parsers per-layer (`parse/ip` + `parse/udp` + `parse/dns`) par `pa
 
 **E3. worker_q0 — migration parse/ndpi** — [src/worker_q0.moon](src/worker_q0.moon)
 
-- [ ] Remplacer les imports `parse/ip`, `parse/udp`, `parse/dns` par `ndpi = require "parse/ndpi"`
-- [ ] Remplacer `parse_ip` + `parse_udp` + `parse_dns` par `ndpi.parse_packet(raw)` → `pkt.ip`, `pkt.udp`, `pkt.dns`, `pkt.questions`
-- [ ] Ajouter `ndpi_master` et `ndpi_app` dans `q_fields` pour les logs
-- [ ] Appeler `ndpi.cleanup()` dans `run()` on exit
-- [ ] `make test-docker` : vérifier les champs `ndpi_master`/`ndpi_app` dans les logs
-
-> Non démarré.
+- [x] Remplacer les imports `parse/ip`, `parse/udp`, `parse/dns` par `ndpi = require "parse/ndpi"`
+- [x] Remplacer `parse_ip` + `parse_udp` + `parse_dns` par `ndpi.parse_packet(raw)` → `pkt.ip`, `pkt.udp`, `pkt.dns`, `pkt.questions`
+- [x] Ajouter `ndpi_master` et `ndpi_app` dans `q_fields` pour les logs
+- [x] Appeler `ndpi.cleanup()` dans `run()` on exit
+- [x] `make test-docker` : vérifier les champs `ndpi_master`/`ndpi_app` dans les logs
 
 ---
 

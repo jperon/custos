@@ -7,12 +7,7 @@ local QUEUE_QUESTIONS
 QUEUE_QUESTIONS = require("config").QUEUE_QUESTIONS
 local get_l2
 get_l2 = require("parse/ethernet").get_l2
-local parse_ip
-parse_ip = require("parse/ip").parse_ip
-local parse_udp
-parse_udp = require("parse/udp").parse_udp
-local parse_dns
-parse_dns = require("parse/dns").parse_dns
+local ndpi = require("parse/ndpi")
 local is_allowed, check_reload
 do
   local _obj_0 = require("allowlist")
@@ -44,45 +39,31 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
-  local ip_hdr = parse_ip(raw)
-  if not (ip_hdr) then
+  local pkt = ndpi.parse_packet(raw)
+  if not (pkt) then
     log_warn({
-      action = "parse_ip_failed",
+      action = "parse_failed",
       mac_src = l2.mac_src
     })
     return NF_ACCEPT
   end
-  local udp_hdr = parse_udp(raw, ip_hdr)
-  if not (udp_hdr) then
-    log_warn({
-      action = "parse_udp_failed",
-      src = ip_hdr.src_ip
-    })
-    return NF_ACCEPT
-  end
-  local dns = parse_dns(udp_hdr.dns_payload)
-  if not (dns) then
-    log_warn({
-      action = "parse_dns_failed",
-      src = ip_hdr.src_ip
-    })
-    return NF_ACCEPT
-  end
-  if dns.hdr.is_response then
+  if pkt.dns.is_response then
     return NF_ACCEPT
   end
   local verdict = NF_ACCEPT
   local q_fields = {
     mac_src = l2.mac_src,
     in_if = tostring(l2.in_ifindex),
-    src_ip = ip_hdr.src_ip,
-    dst_ip = ip_hdr.dst_ip,
-    src_port = udp_hdr.src_port,
-    dst_port = udp_hdr.dst_port,
-    txid = string.format("0x%04x", dns.hdr.txid),
-    af = ip_hdr.version == 6 and "ipv6" or "ipv4"
+    src_ip = pkt.ip.src_ip,
+    dst_ip = pkt.ip.dst_ip,
+    src_port = pkt.udp.src_port,
+    dst_port = pkt.udp.dst_port,
+    txid = string.format("0x%04x", pkt.dns.txid),
+    af = pkt.ip.version == 6 and "ipv6" or "ipv4",
+    ndpi_master = pkt.ndpi_master,
+    ndpi_app = pkt.ndpi_app
   }
-  for _, q in ipairs(dns.questions) do
+  for _, q in ipairs(pkt.questions) do
     if is_allowed(q.qname) then
       log_allow({
         unpack((function()
@@ -112,12 +93,15 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end
   end
   if verdict == NF_ACCEPT then
-    write_msg(pipe_wfd, dns.hdr.txid, ip_hdr.src_ip_raw, udp_hdr.src_port)
+    write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.udp.src_port)
   end
   if verdict == NF_DROP then
-    local refused_payload = build_refused(dns, udp_hdr.dns_payload)
+    local dns_raw = raw:sub(pkt.udp.payload_off + 1, pkt.udp.payload_off + pkt.udp.payload_len)
+    local refused_payload = build_refused({
+      hdr = pkt.dns
+    }, dns_raw)
     if refused_payload then
-      refuse.send_refused(ip_hdr.src_ip_raw, udp_hdr.src_port, refused_payload, ip_hdr.af)
+      refuse.send_refused(pkt.ip.src_ip_raw, pkt.udp.src_port, refused_payload, pkt.ip.af)
     end
   end
   return verdict
@@ -126,7 +110,9 @@ local run
 run = function(wfd)
   pipe_wfd = wfd
   refuse.init()
-  return run_queue(QUEUE_QUESTIONS, handle_question)
+  ndpi.warmup()
+  run_queue(QUEUE_QUESTIONS, handle_question)
+  return ndpi.cleanup()
 end
 return {
   run = run
