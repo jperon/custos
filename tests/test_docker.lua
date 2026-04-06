@@ -174,10 +174,22 @@ compose_up = function()
     return false
   end
   os.execute("sleep 3")
-  log("Warming up DNS (first query to prime dnsmasq cache)…", "STEP")
-  execute("docker exec custos-client nslookup localhost " .. tostring(dns_server) .. " >/dev/null 2>&1 || true")
-  log("Environment ready", "PASS")
-  os.execute("sleep 1")
+  log("Warming up DNS — priming dnsmasq cache with " .. tostring(TEST_DOMAINS.allowed) .. "…", "STEP")
+  local warmed = false
+  for i = 1, 5 do
+    local ok, out = execute("docker exec custos-client nslookup " .. tostring(TEST_DOMAINS.allowed) .. " " .. tostring(dns_server) .. " 2>&1", true)
+    if ok and out and (out:match("Address:") or out:match("Name:")) then
+      warmed = true
+      break
+    end
+    log("DNS not ready yet (attempt " .. tostring(i) .. "/5), retrying in 2 s…", "INFO")
+    os.execute("sleep 2")
+  end
+  if warmed then
+    log("Environment ready (DNS chain up, cache primed)", "PASS")
+  else
+    log("DNS chain did not respond in time — tests may be flaky", "WARN")
+  end
   return true
 end
 local cleanup_host

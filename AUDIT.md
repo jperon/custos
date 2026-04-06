@@ -226,15 +226,15 @@ Remplacer les parsers per-layer (`parse/ip` + `parse/udp` + `parse/dns`) par `pa
 
 **E4. worker_q1 — migration parse/ndpi** — [src/worker_q1.moon](src/worker_q1.moon)
 
-- [ ] Remplacer les imports legacy par `ndpi = require "parse/ndpi"`
-- [ ] Remplacer `parse_ip` + `parse_udp` + `parse_dns` par `ndpi.parse_packet`
-- [ ] Remplacer `parse_answers` par `ndpi.parse_answers`
-- [ ] Remplacer `patch_packet` (~30 lignes) par `ndpi.patch_and_checksum(raw, pkt, answers, FORCED_TTL)`
-- [ ] Supprimer le calcul manuel de `dns_offset_0`
-- [ ] Tester profil ndpi4 : `make test-docker`
-- [ ] Tester profil ndpi5 : `make test-docker-ndpi5`
-
-> Non démarré.
+- [x] Remplacer les imports legacy par `ndpi = require "parse/ndpi"`
+- [x] Remplacer `parse_ip` + `parse_udp` + `parse_dns` par `ndpi.parse_packet`
+- [x] Remplacer `parse_answers` par `ndpi.parse_answers`
+- [x] Remplacer `patch_packet` (~30 lignes) par `ndpi.patch_and_checksum(raw, pkt, answers, FORCED_TTL)`
+- [x] Supprimer le calcul manuel de `dns_offset_0`
+- [x] `fix_udp6_cksum` ajouté dans `parse/ndpi.moon` (RFC 2460 §8.1) — IPv6 est un citoyen de première classe
+- [x] Tests IPv6 ajoutés dans `tests/test_ndpi.moon` : `parse_packet IPv6` + `patch_and_checksum IPv6`
+- [x] Tester profil ndpi4 : `make test-docker`
+- [x] Tester profil ndpi5 : `make test-docker-ndpi5`
 
 ---
 
@@ -243,6 +243,6 @@ Remplacer les parsers per-layer (`parse/ip` + `parse/udp` + `parse/dns`) par `pa
 - [x] `make` — compilation sans erreur
 - [x] `make test` — 36 tests, 0 échec
 - [x] `make test-docker` — 7 scénarios E2E, TTL=60 vérifié, REFUSED reçu
-- [ ] `make test-docker-ndpi5` — profil nDPI 5.x passe
-- [ ] Logs docker : champs `ndpi_master`/`ndpi_app` présents dans les lignes ALLOW (après E3/E4)
+- [x] `make test-docker-ndpi5` — profil nDPI 5.x passe
+- [x] Logs docker : champs `ndpi_master`/`ndpi_app` présents dans les lignes ALLOW (après E3/E4)
 - [x] PID distincts dans les logs pour Q0 et Q1 (supervisor=7, Q0=11, Q1=12)

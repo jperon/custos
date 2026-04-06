@@ -30,7 +30,7 @@ for k, v in pairs QTYPE
   QTYPE_NAME[v] = k
 
 --- RCODE constants.
-RCODE = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3 }
+RCODE = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3, REFUSED: 5 }
 
 --- nDPI protocol ID for DNS.
 NDPI_PROTOCOL_DNS = 5
@@ -193,7 +193,7 @@ fix_ip4_cksum = (buf, ihl) ->
   cksum = bit.band bit.bnot(sum), 0xFFFF
   w16 buf, 10, cksum
 
---- Recalculate UDP checksum in-place (IPv4 pseudo-header).
+--- Recalculate UDP checksum in-place (IPv4 pseudo-header, RFC 768).
 -- @tparam cdata buf Mutable uint8_t* packet.
 -- @tparam number pkt_len Total packet length.
 -- @tparam number ihl IP header length in bytes.
@@ -209,6 +209,47 @@ fix_udp4_cksum = (buf, pkt_len, ihl) ->
     sum += r16 buf, i
   sum += PROTO_UDP
   sum += udp_len
+  -- UDP segment.
+  udp_end = udp_off + udp_len
+  udp_end = pkt_len if udp_end > pkt_len
+  cksum_off = udp_off + 6
+  i = udp_off
+  while i < udp_end
+    word = if i == cksum_off
+      0
+    elseif i + 1 < udp_end
+      r16 buf, i
+    else
+      bit.lshift buf[i], 8
+    sum += word
+    i += 2
+  while bit.rshift(sum, 16) != 0
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  cksum = bit.band bit.bnot(sum), 0xFFFF
+  cksum = 0xFFFF if cksum == 0
+  w16 buf, udp_off + 6, cksum
+
+--- Recalculate UDP checksum in-place (IPv6 pseudo-header, RFC 2460 §8.1).
+-- IPv6 has no IP-level checksum; UDP checksum is mandatory.
+-- Pseudo-header: src(16B) + dst(16B) + upper-layer length(32b) + next-header(8b).
+-- For IPv6 fixed header: src at offset 8, dst at offset 24 (0-based).
+-- @tparam cdata buf Mutable uint8_t* packet (IPv6, ihl=40).
+-- @tparam number pkt_len Total packet length.
+fix_udp6_cksum = (buf, pkt_len) ->
+  udp_off = 40
+  return if pkt_len < udp_off + 8
+  udp_len = r16 buf, udp_off + 4
+  buf[udp_off + 6] = 0
+  buf[udp_off + 7] = 0
+  sum = 0
+  -- IPv6 pseudo-header: src(16B) at offsets 8–23, dst(16B) at offsets 24–39.
+  -- Loop covers both in one pass (16 words = 32 bytes).
+  for i = 8, 38, 2
+    sum += r16 buf, i
+  -- Upper-layer packet length (32-bit): high word = 0, low word = udp_len.
+  sum += udp_len
+  -- Next header = UDP (17).
+  sum += PROTO_UDP
   -- UDP segment.
   udp_end = udp_off + udp_len
   udp_end = pkt_len if udp_end > pkt_len
@@ -378,6 +419,9 @@ patch_and_checksum = (raw, pkt, answers, new_ttl) ->
   if pkt.ip.version == 4
     fix_udp4_cksum buf, pkt_len, pkt.ip.ihl
     fix_ip4_cksum  buf, pkt.ip.ihl
+  elseif pkt.ip.version == 6
+    -- IPv6 has no IP-level checksum; only UDP checksum needs updating.
+    fix_udp6_cksum buf, pkt_len
 
   ffi.string buf, pkt_len
 
@@ -385,5 +429,18 @@ patch_and_checksum = (raw, pkt, answers, new_ttl) ->
 cleanup = ->
   backend.cleanup!
 
-{ :parse_packet, :parse_answers, :patch_and_checksum, :cleanup
+--- Pre-initialize the nDPI detection module to avoid first-packet latency.
+-- Call once at worker startup, before entering the NFQUEUE packet loop.
+-- Without this call, the first real packet would block in the kernel queue
+-- for the full duration of ndpi_init_detection_module (~1–2 s).
+warmup = ->
+  -- Minimal zero-filled IPv4/UDP dummy packet: 20B IP + 8B UDP.
+  dummy = ffi.new "uint8_t[28]"
+  ffi.fill dummy, 28, 0
+  dummy[0] = 0x45  -- IPv4, IHL=20
+  dummy[9] = 17    -- proto=UDP
+  backend.detect dummy, 28
+  nil
+
+{ :parse_packet, :parse_answers, :patch_and_checksum, :cleanup, :warmup
   :QTYPE, :QTYPE_NAME, :RCODE }

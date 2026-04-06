@@ -66,6 +66,26 @@ make_ipv4_udp_dns = (src_ip, dst_ip, src_port, dst_port, dns_payload) ->
   )
   ip .. udp .. dns_payload
 
+-- Construit un paquet IPv6/UDP/DNS synthétique.
+-- src_ip6_bytes et dst_ip6_bytes : 16 octets bruts (Lua string).
+make_ipv6_udp_dns = (src_ip6_bytes, dst_ip6_bytes, src_port, dst_port, dns_payload) ->
+  udp_len = 8 + #dns_payload
+  -- IPv6 fixed header (40 bytes) : version=6, TC=0, flow=0,
+  -- payload_len (2B), next_header=17 (UDP), hop_limit=64, src (16B), dst (16B).
+  ip6_hdr = string.char(
+    0x60, 0x00, 0x00, 0x00,
+    bit.rshift(bit.band(udp_len, 0xFF00), 8), bit.band(udp_len, 0xFF),
+    17, 64
+  )
+  ip6 = ip6_hdr .. src_ip6_bytes .. dst_ip6_bytes
+  udp = string.char(
+    bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF),
+    bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF),
+    bit.rshift(bit.band(udp_len,  0xFF00), 8), bit.band(udp_len,  0xFF),
+    0, 0
+  )
+  ip6 .. udp .. dns_payload
+
 -- ── Chargement du module nDPI ────────────────────────────────────
 io.write "\n── Loading parse/ndpi module ──\n"
 
@@ -79,6 +99,10 @@ package.loaded["config"] = {
   IPC_MSG_SIZE:    21
   IPC_PENDING_TTL: 5
 }
+
+-- inet_ntop est nécessaire pour formater les adresses IPv6.
+-- pcall : idempotent si déjà déclaré par ffi_defs (même signature).
+pcall ffi.cdef, [[ char* inet_ntop(int af, const void *src, char *dst, unsigned int size); ]]
 
 -- La façade ffi_ndpi détecte la version et charge les cdef v4/v5.
 package.loaded["ffi_ndpi_v4"] = dofile "lua/ffi_ndpi_v4.lua"
@@ -154,6 +178,25 @@ test "parse_packet — AAAA question", ->
   assert p, "parse_packet returned nil"
   assert_eq p.questions[1].qtype,      28,     "qtype AAAA"
   assert_eq p.questions[1].qtype_name, "AAAA", "qtype_name"
+
+test "parse_packet — IPv6 UDP DNS question", ->
+  ip6_src = string.char(0x20,0x01, 0x0d,0xb8, 0,0, 0,0, 0,0, 0,0, 0,0, 0,1)
+  ip6_dst = string.char(0x20,0x01, 0x0d,0xb8, 0,0, 0,0, 0,0, 0,0, 0,0, 0,2)
+  qname = "\3www\6github\3com\0"
+  dns   = make_dns qname, 1, false, 0x9ABC
+  raw   = make_ipv6_udp_dns ip6_src, ip6_dst, 54321, 53, dns
+  p     = ndpi.parse_packet raw
+  assert p, "parse_packet IPv6 returned nil"
+  assert_eq p.ip.version,  6,   "ip version == 6"
+  assert_eq p.ip.ihl,      40,  "ihl == 40"
+  assert_eq p.ip.protocol, 17,  "protocol UDP"
+  assert_eq p.ip.src_ip, "2001:db8::1", "src_ip"
+  assert_eq p.ip.dst_ip, "2001:db8::2", "dst_ip"
+  assert_eq p.udp.src_port, 54321, "src_port"
+  assert_eq p.udp.dst_port, 53,    "dst_port"
+  assert_eq p.dns.txid, 0x9ABC, "txid"
+  assert_eq #p.questions, 1, "1 question"
+  assert_eq p.questions[1].qname, "www.github.com", "qname"
 
 -- ════════════════════════════════════════════════════════════════
 -- Tests: parse_answers
@@ -242,6 +285,44 @@ test "patch_and_checksum — TTL rewritten to 60", ->
   assert p2, "re-parse nil"
   a2 = ndpi.parse_answers patched, p2
   assert_eq a2[1].ttl, 60, "patched TTL"
+
+test "patch_and_checksum — IPv6 TTL réécrit à 60 et checksum UDP valide", ->
+  -- 2001:db8::1 → 2001:db8::42:1
+  ip6_src = string.char(0x20,0x01, 0x0d,0xb8, 0,0, 0,0, 0,0, 0,0, 0,0, 0,1)
+  ip6_dst = string.char(0x20,0x01, 0x0d,0xb8, 0,0, 0,0, 0,0, 0,0, 0,0x42, 0,1)
+  qname_enc = "\6github\3com\0"
+  -- hdr: txid=0xCCDD, QR=1 RD=1 RA=1, qdcount=1, ancount=1
+  hdr = string.char(0xCC, 0xDD, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+  question = qname_enc .. string.char(0, 1, 0, 1)
+  -- RR: ptr→offset12, type A, class IN, TTL=300, rdlen=4, 5.6.7.8
+  rr = "\xC0\x0C" ..
+    string.char(0, 1, 0, 1) ..
+    string.char(0, 0, 1, 0x2C) ..  -- TTL = 300
+    string.char(0, 4) ..
+    string.char(5, 6, 7, 8)
+  dns_payload = hdr .. question .. rr
+  raw     = make_ipv6_udp_dns ip6_src, ip6_dst, 53, 12345, dns_payload
+  p       = ndpi.parse_packet raw
+  assert p, "parse_packet nil"
+  assert_eq p.ip.version, 6, "IPv6"
+  answers = ndpi.parse_answers raw, p
+  assert_eq #answers,        1,   "1 answer"
+  assert_eq answers[1].ttl, 300, "original TTL = 300"
+  patched = ndpi.patch_and_checksum raw, p, answers, 60
+  assert patched, "patch returned nil"
+  assert_eq #patched, #raw, "même longueur"
+  -- Vérifier que le TTL a été changé.
+  p2 = ndpi.parse_packet patched
+  assert p2, "re-parse nil"
+  a2 = ndpi.parse_answers patched, p2
+  assert_eq a2[1].ttl, 60, "patched TTL"
+  -- Vérifier que le checksum UDP est non nul (RFC 2460 impose checksum UDP).
+  -- IPv6 header = 40 bytes (0-based); UDP checksum = octets 47-48 (1-based).
+  cksum_val = bit.bor(
+    bit.lshift(string.byte(patched, 47), 8),
+    string.byte(patched, 48)
+  )
+  assert cksum_val ~= 0, "UDP checksum IPv6 non nul (got " .. cksum_val .. ")"
 
 -- ════════════════════════════════════════════════════════════════
 -- Nettoyage

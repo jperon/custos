@@ -35,7 +35,8 @@ local RCODE = {
   NOERROR = 0,
   FORMERR = 1,
   SERVFAIL = 2,
-  NXDOMAIN = 3
+  NXDOMAIN = 3,
+  REFUSED = 5
 }
 local NDPI_PROTOCOL_DNS = 5
 local ipv6_str = ffi.new("char[46]")
@@ -184,6 +185,48 @@ fix_udp4_cksum = function(buf, pkt_len, ihl)
   end
   sum = sum + PROTO_UDP
   sum = sum + udp_len
+  local udp_end = udp_off + udp_len
+  if udp_end > pkt_len then
+    udp_end = pkt_len
+  end
+  local cksum_off = udp_off + 6
+  local i = udp_off
+  while i < udp_end do
+    local word
+    if i == cksum_off then
+      word = 0
+    elseif i + 1 < udp_end then
+      word = r16(buf, i)
+    else
+      word = bit.lshift(buf[i], 8)
+    end
+    sum = sum + word
+    i = i + 2
+  end
+  while bit.rshift(sum, 16) ~= 0 do
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  end
+  local cksum = bit.band(bit.bnot(sum), 0xFFFF)
+  if cksum == 0 then
+    cksum = 0xFFFF
+  end
+  return w16(buf, udp_off + 6, cksum)
+end
+local fix_udp6_cksum
+fix_udp6_cksum = function(buf, pkt_len)
+  local udp_off = 40
+  if pkt_len < udp_off + 8 then
+    return 
+  end
+  local udp_len = r16(buf, udp_off + 4)
+  buf[udp_off + 6] = 0
+  buf[udp_off + 7] = 0
+  local sum = 0
+  for i = 8, 38, 2 do
+    sum = sum + r16(buf, i)
+  end
+  sum = sum + udp_len
+  sum = sum + PROTO_UDP
   local udp_end = udp_off + udp_len
   if udp_end > pkt_len then
     udp_end = pkt_len
@@ -386,6 +429,8 @@ patch_and_checksum = function(raw, pkt, answers, new_ttl)
   if pkt.ip.version == 4 then
     fix_udp4_cksum(buf, pkt_len, pkt.ip.ihl)
     fix_ip4_cksum(buf, pkt.ip.ihl)
+  elseif pkt.ip.version == 6 then
+    fix_udp6_cksum(buf, pkt_len)
   end
   return ffi.string(buf, pkt_len)
 end
@@ -393,11 +438,21 @@ local cleanup
 cleanup = function()
   return backend.cleanup()
 end
+local warmup
+warmup = function()
+  local dummy = ffi.new("uint8_t[28]")
+  ffi.fill(dummy, 28, 0)
+  dummy[0] = 0x45
+  dummy[9] = 17
+  backend.detect(dummy, 28)
+  return nil
+end
 return {
   parse_packet = parse_packet,
   parse_answers = parse_answers,
   patch_and_checksum = patch_and_checksum,
   cleanup = cleanup,
+  warmup = warmup,
   QTYPE = QTYPE,
   QTYPE_NAME = QTYPE_NAME,
   RCODE = RCODE

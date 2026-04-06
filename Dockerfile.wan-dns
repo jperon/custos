@@ -1,0 +1,5 @@
+# Lightweight WAN DNS forwarder for Docker end-to-end tests.
+# Pre-installs dnsmasq so the container starts immediately.
+FROM alpine:latest
+RUN apk add --no-cache dnsmasq bind-tools
+CMD ["dnsmasq", "-k", "--port=53", "--log-queries", "--server=8.8.8.8", "--server=1.1.1.1"]

@@ -3,72 +3,37 @@
 --
 -- Pour chaque paquet :
 --   1. Draine le pipe IPC (absorbe les tokens Q0 → table pending)
---   2. Parse L3/L4/L7
+--   2. Parse L3/L4/L7 via parse/ndpi (IPv4 et IPv6)
 --   3. Vérifie que la transaction (txid, dst_ip, dst_port) est dans pending
 --      (dst_ip/dst_port de la réponse = src_ip/src_port de la question)
 --   4. Si autorisée :
---        a. Patch TTL de tous les RR → 60 secondes
---        b. Recalcule checksum UDP et IP
---        c. Ajoute les IPs A/AAAA dans les sets nft (timeout 2m)
---        d. Envoie le paquet modifié avec NF_ACCEPT + payload
+--        a. Parse les RR DNS de la réponse
+--        b. Patch TTL de tous les RR → FORCED_TTL secondes
+--        c. Recalcule checksums UDP (pseudo-header IPv4 ou IPv6) et IP (IPv4)
+--        d. Ajoute les IPs A/AAAA dans les sets nft (timeout 2m)
+--        e. Envoie le paquet modifié avec NF_ACCEPT + payload
 --   5. Si non autorisée (réponse forgée ou question bloquée) : NF_DROP
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_RESPONSES, :DOCKER_MODE, :FORCED_TTL } = require "config"
-{ :parse_ip, :checksum_ip } = require "parse/ip"
-{ :parse_udp, :checksum_udp } = require "parse/udp"
-{ :parse_dns, :patch_ttl, :QTYPE, :RCODE } = require "parse/dns"
+ndpi = require "parse/ndpi"
+{ :QTYPE } = ndpi
 { :drain_pipe, :is_pending, :consume } = require "ipc"
 { :add_ip }              = require "nft"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_info, :now } = require "log"
 
-bit = require "bit"
-
 -- fd de lecture du pipe IPC, injecté par main.moon avant fork()
 pipe_rfd = nil
 
--- ── Patch in-place du paquet ─────────────────────────────────────
--- Modifie le buffer ffi mutable : TTL DNS + checksums UDP/IP.
--- Retourne la string Lua du paquet modifié (pour nfq_set_verdict).
-patch_packet = (raw, ip_hdr, udp_hdr, dns) ->
-  -- Copie mutable du paquet dans un buffer ffi
-  pkt_len = #raw
-  buf     = ffi.new "uint8_t[?]", pkt_len
-  ffi.copy buf, raw, pkt_len
-
-  -- ── 1. Patch TTL dans les RR DNS ─────────────────────────────
-  -- dns_offset : offset 0-based du début DNS dans le paquet IP brut
-  -- = ihl (octets) + 8 (UDP header) — les deux en 0-based
-  dns_offset_0 = ip_hdr.ihl + 8   -- 0-based
-  patch_ttl buf, dns.answers, dns_offset_0, FORCED_TTL
-
-  -- ── 2. Recalcul checksum UDP ─────────────────────────────────
-  -- On reconstruit une string Lua depuis le buffer modifié pour
-  -- les fonctions de checksum (qui travaillent sur strings).
-  patched_raw = ffi.string buf, pkt_len
-  new_udp_cksum = checksum_udp patched_raw, ip_hdr, udp_hdr
-
-  -- Écriture du nouveau checksum UDP (big-endian, offset udp_off+6, 1-based)
-  cksum_off   = udp_hdr.udp_off + 6 - 1   -- 0-based
-  buf[cksum_off]   = bit.rshift bit.band(new_udp_cksum, 0xFF00), 8
-  buf[cksum_off+1] = bit.band new_udp_cksum, 0xFF
-
-  -- ── 3. Recalcul checksum IP (IPv4 uniquement) ───────────────
-  -- IPv6 n'a pas de checksum dans le header IP : on saute cette étape.
-  if ip_hdr.version == 4
-    -- On met le champ checksum IP à zéro avant recalcul
-    buf[10] = 0
-    buf[11] = 0   -- 0-based : octets 10-11 (checksum IP)
-    ip_header_str = ffi.string buf, ip_hdr.ihl
-    new_ip_cksum  = checksum_ip ip_header_str
-    buf[10] = bit.rshift bit.band(new_ip_cksum, 0xFF00), 8
-    buf[11] = bit.band new_ip_cksum, 0xFF
-
-  -- Retourne la string finale (copiée depuis ffi buf)
-  ffi.string buf, pkt_len
-
 -- ── Callback principal ───────────────────────────────────────────
+--- Process a DNS response packet from NFQUEUE.
+-- Drains IPC, validates the transaction, patches TTL+checksums,
+-- injects resolved IPs into nftables, and sets the verdict.
+-- @tparam cdata  qh_ptr  nfq_q_handle pointer (for nfq_set_verdict)
+-- @tparam cdata  nfad    nfq_data pointer
+-- @tparam number pkt_id  NFQUEUE packet id
+-- @treturn number NF_ACCEPT, NF_DROP, or -1 (verdict already set)
 handle_response = (qh_ptr, nfad, pkt_id) ->
   -- ── Drain pipe IPC ───────────────────────────────────────────
   -- Absorbe tous les tokens disponibles de Q0 avant de traiter ce paquet.
@@ -82,87 +47,84 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   raw = ffi.string payload_ptr[0], payload_len
 
-  -- ── L3 / L4 ──────────────────────────────────────────────────
-  ip_hdr  = parse_ip raw
-  unless ip_hdr
+  -- ── L3 / L4 / L7 ─────────────────────────────────────────────
+  -- parse_packet gère IPv4 et IPv6, UDP, et le header DNS en un seul appel.
+  pkt = ndpi.parse_packet raw
+  unless pkt
     return NF_ACCEPT
 
-  udp_hdr = parse_udp raw, ip_hdr
-  unless udp_hdr
+  unless pkt.dns.is_response
     return NF_ACCEPT
 
-  -- ── L7 ───────────────────────────────────────────────────────
-  dns = parse_dns udp_hdr.dns_payload
-  unless dns
-    return NF_ACCEPT
-  unless dns.hdr.is_response
-    return NF_ACCEPT
-
-  -- La question originale avait src_ip=ip_hdr.dst_ip, src_port=udp_hdr.dst_port
-  -- (la réponse est adressée au client LAN)
-  client_ip   = ip_hdr.dst_ip_raw
-  client_port = udp_hdr.dst_port
-  txid        = dns.hdr.txid
+  -- La question originale avait src_ip=pkt.ip.dst_ip, src_port=pkt.udp.dst_port
+  -- (la réponse est adressée au client LAN).
+  client_port = pkt.udp.dst_port
+  txid        = pkt.dns.txid
 
   -- ── Vérification IPC ─────────────────────────────────────────
   -- En mode Docker, on saute la vérification IPC car les requêtes
   -- et réponses sont vues depuis la perspective du conteneur (OUTPUT).
   unless DOCKER_MODE
-    unless is_pending txid, ip_hdr.dst_ip, client_port, now
+    unless is_pending txid, pkt.ip.dst_ip, client_port, now
       log_block {
         action:    "response_no_matching_question"
-        src_ip:    ip_hdr.src_ip
-        dst_ip:    ip_hdr.dst_ip
+        src_ip:    pkt.ip.src_ip
+        dst_ip:    pkt.ip.dst_ip
         txid:      string.format "0x%04x", txid
-        rcode:     dns.hdr.rcode
+        rcode:     pkt.dns.rcode
       }
       return NF_DROP
     -- Transaction consommée (one-shot : une réponse par question)
-    consume txid, ip_hdr.dst_ip, client_port
+    consume txid, pkt.ip.dst_ip, client_port
 
-  -- ── Extraction des IPs des RR et injection nft ───────────────
+  -- ── Parse RR DNS + injection nft ─────────────────────────────
+  answers  = ndpi.parse_answers raw, pkt
   ip_count = 0
-  for ans in *dns.answers
+  for ans in *answers
     if ans.rtype == QTYPE.A or ans.rtype == QTYPE.AAAA
       add_ip ans.rdata_str
       ip_count += 1
 
-  -- ── Patch TTL + checksums ─────────────────────────────────────
-  patched = patch_packet raw, ip_hdr, udp_hdr, dns
+  -- ── Patch TTL + checksums (IPv4 et IPv6) ─────────────────────
+  -- patch_and_checksum réécrit les TTL DNS, recalcule le checksum UDP
+  -- (pseudo-header IPv4 ou IPv6 selon pkt.ip.version), et le checksum
+  -- IP header pour IPv4 (IPv6 n'en a pas).
+  patched = ndpi.patch_and_checksum raw, pkt, answers, FORCED_TTL
 
   -- Log de la réponse
-  qnames = table.concat [q.qname for q in *dns.questions], ","
+  qnames = table.concat [q.qname for q in *pkt.questions], ","
   log_allow {
-    action:   "response_patched"
-    src_ip:   ip_hdr.src_ip
-    dst_ip:   ip_hdr.dst_ip
-    txid:     string.format "0x%04x", txid
-    qnames:   qnames
-    answers:  ip_count
-    ttl_set:  FORCED_TTL
-    rcode:    dns.hdr.rcode
+    action:      "response_patched"
+    src_ip:      pkt.ip.src_ip
+    dst_ip:      pkt.ip.dst_ip
+    txid:        string.format "0x%04x", txid
+    qnames:      qnames
+    answers:     ip_count
+    ttl_set:     FORCED_TTL
+    rcode:       pkt.dns.rcode
+    ndpi_master: pkt.ndpi_master
+    ndpi_app:    pkt.ndpi_app
   }
 
   -- ── Verdict avec payload modifié ─────────────────────────────
-  -- nfq_set_verdict est appelé par nfq_loop.moon APRÈS le retour du callback
-  -- avec le verdict simple NF_ACCEPT (sans payload).
-  -- Pour envoyer le payload modifié, on appelle nfq_set_verdict directement ici
-  -- puis on retourne un sentinel indiquant que le verdict est déjà posé.
-  -- → On utilise NF_ACCEPT : nfq_loop appellera set_verdict(NF_ACCEPT, 0, nil)
-  --   ce qui est idempotent si le paquet a déjà été répondu... mais NON :
-  --   un double verdict corrompt la queue.
-  --
-  -- Solution : on retourne le paquet modifié en utilisant nfq_set_verdict
-  -- avec datalen > 0 directement ici, puis on retourne le sentinel -1
-  -- pour que nfq_loop.moon sache qu'il ne doit PAS rappeler set_verdict.
+  -- On appelle nfq_set_verdict directement ici avec le payload modifié,
+  -- puis on retourne le sentinel -1 pour que nfq_loop ne repose pas
+  -- un second verdict (ce qui corromprait la queue).
   patched_ptr = ffi.cast "const unsigned char*", patched
   libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr
 
   -1   -- sentinel : verdict déjà posé, nfq_loop ne doit pas reposer de verdict
 
 -- ── Point d'entrée ───────────────────────────────────────────────
+--- Start the Q1 response worker.
+-- Blocks in the NFQUEUE loop until the process exits.
+-- @tparam number rfd Read end of the IPC pipe from Q0.
 run = (rfd) ->
   pipe_rfd = rfd
+  -- Pré-initialise le module nDPI avant le démarrage de la boucle pour éviter
+  -- une latence de 1–2 s sur le premier paquet (ndpi_init_detection_module).
+  ndpi.warmup!
   run_queue QUEUE_RESPONSES, handle_response
+  ndpi.cleanup!
 
 { :run }

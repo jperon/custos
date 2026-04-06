@@ -42,6 +42,14 @@ make_ipv4_udp_dns = function(src_ip, dst_ip, src_port, dst_port, dns_payload)
   local udp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), bit.rshift(bit.band(udp_len, 0xFF00), 8), bit.band(udp_len, 0xFF), 0, 0)
   return ip .. udp .. dns_payload
 end
+local make_ipv6_udp_dns
+make_ipv6_udp_dns = function(src_ip6_bytes, dst_ip6_bytes, src_port, dst_port, dns_payload)
+  local udp_len = 8 + #dns_payload
+  local ip6_hdr = string.char(0x60, 0x00, 0x00, 0x00, bit.rshift(bit.band(udp_len, 0xFF00), 8), bit.band(udp_len, 0xFF), 17, 64)
+  local ip6 = ip6_hdr .. src_ip6_bytes .. dst_ip6_bytes
+  local udp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), bit.rshift(bit.band(udp_len, 0xFF00), 8), bit.band(udp_len, 0xFF), 0, 0)
+  return ip6 .. udp .. dns_payload
+end
 io.write("\n── Loading parse/ndpi module ──\n")
 package.loaded["config"] = {
   PROTO_UDP = 17,
@@ -52,6 +60,7 @@ package.loaded["config"] = {
   IPC_MSG_SIZE = 21,
   IPC_PENDING_TTL = 5
 }
+pcall(ffi.cdef, [[ char* inet_ntop(int af, const void *src, char *dst, unsigned int size); ]])
 package.loaded["ffi_ndpi_v4"] = dofile("lua/ffi_ndpi_v4.lua")
 package.loaded["ffi_ndpi_v5"] = dofile("lua/ffi_ndpi_v5.lua")
 package.loaded["ffi_ndpi"] = dofile("lua/ffi_ndpi.lua")
@@ -106,6 +115,25 @@ test("parse_packet — AAAA question", function()
   assert(p, "parse_packet returned nil")
   assert_eq(p.questions[1].qtype, 28, "qtype AAAA")
   return assert_eq(p.questions[1].qtype_name, "AAAA", "qtype_name")
+end)
+test("parse_packet — IPv6 UDP DNS question", function()
+  local ip6_src = string.char(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
+  local ip6_dst = string.char(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2)
+  local qname = "\3www\6github\3com\0"
+  local dns = make_dns(qname, 1, false, 0x9ABC)
+  local raw = make_ipv6_udp_dns(ip6_src, ip6_dst, 54321, 53, dns)
+  local p = ndpi.parse_packet(raw)
+  assert(p, "parse_packet IPv6 returned nil")
+  assert_eq(p.ip.version, 6, "ip version == 6")
+  assert_eq(p.ip.ihl, 40, "ihl == 40")
+  assert_eq(p.ip.protocol, 17, "protocol UDP")
+  assert_eq(p.ip.src_ip, "2001:db8::1", "src_ip")
+  assert_eq(p.ip.dst_ip, "2001:db8::2", "dst_ip")
+  assert_eq(p.udp.src_port, 54321, "src_port")
+  assert_eq(p.udp.dst_port, 53, "dst_port")
+  assert_eq(p.dns.txid, 0x9ABC, "txid")
+  assert_eq(#p.questions, 1, "1 question")
+  return assert_eq(p.questions[1].qname, "www.github.com", "qname")
 end)
 io.write("\n── parse_answers ──\n")
 test("parse_answers — A record 1.2.3.4", function()
@@ -167,6 +195,31 @@ test("patch_and_checksum — TTL rewritten to 60", function()
   assert(p2, "re-parse nil")
   local a2 = ndpi.parse_answers(patched, p2)
   return assert_eq(a2[1].ttl, 60, "patched TTL")
+end)
+test("patch_and_checksum — IPv6 TTL réécrit à 60 et checksum UDP valide", function()
+  local ip6_src = string.char(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
+  local ip6_dst = string.char(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x42, 0, 1)
+  local qname_enc = "\6github\3com\0"
+  local hdr = string.char(0xCC, 0xDD, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+  local question = qname_enc .. string.char(0, 1, 0, 1)
+  local rr = "\xC0\x0C" .. string.char(0, 1, 0, 1) .. string.char(0, 0, 1, 0x2C) .. string.char(0, 4) .. string.char(5, 6, 7, 8)
+  local dns_payload = hdr .. question .. rr
+  local raw = make_ipv6_udp_dns(ip6_src, ip6_dst, 53, 12345, dns_payload)
+  local p = ndpi.parse_packet(raw)
+  assert(p, "parse_packet nil")
+  assert_eq(p.ip.version, 6, "IPv6")
+  local answers = ndpi.parse_answers(raw, p)
+  assert_eq(#answers, 1, "1 answer")
+  assert_eq(answers[1].ttl, 300, "original TTL = 300")
+  local patched = ndpi.patch_and_checksum(raw, p, answers, 60)
+  assert(patched, "patch returned nil")
+  assert_eq(#patched, #raw, "même longueur")
+  local p2 = ndpi.parse_packet(patched)
+  assert(p2, "re-parse nil")
+  local a2 = ndpi.parse_answers(patched, p2)
+  assert_eq(a2[1].ttl, 60, "patched TTL")
+  local cksum_val = bit.bor(bit.lshift(string.byte(patched, 47), 8), string.byte(patched, 48))
+  return assert(cksum_val ~= 0, "UDP checksum IPv6 non nul (got " .. cksum_val .. ")")
 end)
 ndpi.cleanup()
 io.write(string.format("\n%d test(s) passed, %d failure(s)\n", passed, failed))

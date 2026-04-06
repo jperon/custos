@@ -166,12 +166,26 @@ compose_up = ->
   unless wait_for_filter_ready filter_name
     return false
 
-  -- Give dnsmasq and nc proxy time to start, then warm up with a test query
+  -- Give dnsmasq (in the filter) time to start (sleep 2 + exec in container).
   os.execute "sleep 3"
-  log "Warming up DNS (first query to prime dnsmasq cache)…", "STEP"
-  execute "docker exec custos-client nslookup localhost #{dns_server} >/dev/null 2>&1 || true"
-  log "Environment ready", "PASS"
-  os.execute "sleep 1"
+
+  -- Warm up: prime the dnsmasq cache with the test allowed-domain and confirm
+  -- the whole DNS chain (client→filter→wan-dns→upstream) is working.
+  -- wan-dns now uses a pre-built image so it starts immediately, but a short
+  -- retry loop guards against any transient startup delay.
+  log "Warming up DNS — priming dnsmasq cache with #{TEST_DOMAINS.allowed}…", "STEP"
+  warmed = false
+  for i = 1, 5
+    ok, out = execute "docker exec custos-client nslookup #{TEST_DOMAINS.allowed} #{dns_server} 2>&1", true
+    if ok and out and (out\match("Address:") or out\match("Name:"))
+      warmed = true
+      break
+    log "DNS not ready yet (attempt #{i}/5), retrying in 2 s…", "INFO"
+    os.execute "sleep 2"
+  if warmed
+    log "Environment ready (DNS chain up, cache primed)", "PASS"
+  else
+    log "DNS chain did not respond in time — tests may be flaky", "WARN"
   return true
 
 --- Clean up nftables tables in filter container (isolated namespace).

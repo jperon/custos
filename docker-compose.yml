@@ -1,13 +1,13 @@
 services:
   wan-dns:
-    image: alpine:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.wan-dns
+    image: custos-wan-dns:latest
     container_name: custos-wan-dns
     networks:
       wan:
         ipv4_address: 172.30.0.20
-    command: >
-      sh -c "apk add --no-cache dnsmasq bind-tools &&
-             dnsmasq -k --port=53 --log-queries --server=8.8.8.8 --server=1.1.1.1"
 
   filter:
     build: .
@@ -86,13 +86,16 @@ services:
     container_name: custos-client
     cap_add:
       - NET_ADMIN
+    profiles:
+      - ndpi4
+      - ndpi5
     networks:
       lan:
         ipv4_address: 172.28.0.10
     command:
       sh -c "apk add --no-cache bind-tools iproute2 && ip route del default 2>/dev/null; ip route add default via 172.28.0.254 2>/dev/null; sleep infinity"
     depends_on:
-      - filter
+      - wan-dns
 
 networks:
   lan:
