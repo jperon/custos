@@ -3,10 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_RESPONSES, DOCKER_MODE
+local QUEUE_RESPONSES, DOCKER_MODE, FORCED_TTL
 do
   local _obj_0 = require("config")
-  QUEUE_RESPONSES, DOCKER_MODE = _obj_0.QUEUE_RESPONSES, _obj_0.DOCKER_MODE
+  QUEUE_RESPONSES, DOCKER_MODE, FORCED_TTL = _obj_0.QUEUE_RESPONSES, _obj_0.DOCKER_MODE, _obj_0.FORCED_TTL
 end
 local parse_ip, checksum_ip
 do
@@ -41,7 +41,6 @@ do
   log_allow, log_block, log_info, now = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_info, _obj_0.now
 end
 local bit = require("bit")
-local FORCED_TTL = 60
 local pipe_rfd = nil
 local patch_packet
 patch_packet = function(raw, ip_hdr, udp_hdr, dns)
@@ -87,9 +86,6 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     return NF_ACCEPT
   end
   if not (dns.hdr.is_response) then
-    return NF_ACCEPT
-  end
-  if dns.hdr.rcode == RCODE.REFUSED then
     return NF_ACCEPT
   end
   local client_ip = ip_hdr.dst_ip_raw

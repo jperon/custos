@@ -3,11 +3,8 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
-local LOG_PATH, LOG_FLUSH
-do
-  local _obj_0 = require("config")
-  LOG_PATH, LOG_FLUSH = _obj_0.LOG_PATH, _obj_0.LOG_FLUSH
-end
+local LOG_PATH
+LOG_PATH = require("config").LOG_PATH
 local bit = require("bit")
 local O_WRONLY = 1
 local O_CREAT = 64
@@ -21,7 +18,6 @@ if log_fd < 0 then
   error("Impossible d'ouvrir " .. tostring(LOG_PATH))
 end
 local ts = ffi.new("timespec_t")
-local pid = tonumber(ffi.C.getpid and ffi.C.getpid() or 0)
 local now
 now = function()
   libc.clock_gettime(0, ts)
@@ -30,6 +26,7 @@ end
 local write_log
 write_log = function(level, fields)
   local epoch = now()
+  local pid = tonumber(ffi.C.getpid())
   local parts = {
     "[" .. tostring(epoch) .. "]",
     "[" .. tostring(pid) .. "]",

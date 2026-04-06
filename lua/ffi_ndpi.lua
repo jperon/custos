@@ -1,7 +1,5 @@
 local ffi = require("ffi")
 ffi.cdef([[  const char *ndpi_revision(void);
-  const char *inet_ntop(int af, const void *src,
-                        char *dst, unsigned int size);
 ]])
 local ndpi_names = {
   "ndpi",

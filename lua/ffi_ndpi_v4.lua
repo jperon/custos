@@ -28,10 +28,7 @@ declare = function(minor)
     /* ── Flow struct size (for opaque allocation) ────────────── */
     uint32_t ndpi_detection_get_sizeof_ndpi_flow_struct(void);
 
-    /* ── Protocol name getter ────────────────────────────────── */
-    char *ndpi_get_proto_name(
-      ndpi_detection_module_struct *ndpi_mod,
-      uint16_t proto_id);
+
   ]])
   if minor >= 6 then
     return ffi.cdef([[      typedef struct ndpi_flow_input_info ndpi_flow_input_info;

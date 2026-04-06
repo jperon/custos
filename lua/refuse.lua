@@ -87,7 +87,13 @@ send_refused = function(dst_ip_raw, dst_port, dns_payload, af)
     addr.sin_family = AF_INET
     addr.sin_port = libc.htons(dst_port)
     ffi.copy(addr.sin_addr, dst_ip_raw, 4)
-    return libc.sendto(sock4, dns_payload, #dns_payload, 0, ffi.cast("struct sockaddr*", addr), ffi.sizeof("struct sockaddr_in"))
+    local rc = libc.sendto(sock4, dns_payload, #dns_payload, 0, ffi.cast("struct sockaddr*", addr), ffi.sizeof("struct sockaddr_in"))
+    if rc < 0 then
+      return log_warn({
+        action = "sendto_failed",
+        af = "ipv4"
+      })
+    end
   else
     if sock6 < 0 then
       return 
@@ -96,7 +102,13 @@ send_refused = function(dst_ip_raw, dst_port, dns_payload, af)
     addr.sin6_family = AF_INET6
     addr.sin6_port = libc.htons(dst_port)
     ffi.copy(addr.sin6_addr, dst_ip_raw, 16)
-    return libc.sendto(sock6, dns_payload, #dns_payload, 0, ffi.cast("struct sockaddr*", addr), ffi.sizeof("struct sockaddr_in6"))
+    local rc = libc.sendto(sock6, dns_payload, #dns_payload, 0, ffi.cast("struct sockaddr*", addr), ffi.sizeof("struct sockaddr_in6"))
+    if rc < 0 then
+      return log_warn({
+        action = "sendto_failed",
+        af = "ipv6"
+      })
+    end
   end
 end
 return {

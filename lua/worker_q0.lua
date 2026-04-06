@@ -95,7 +95,6 @@ handle_question = function(qh_ptr, nfad, pkt_id)
         qname = q.qname,
         qtype = q.qtype_name
       })
-      write_msg(pipe_wfd, dns.hdr.txid, ip_hdr.src_ip_raw, udp_hdr.src_port)
     else
       log_block({
         unpack((function()
@@ -111,6 +110,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       })
       verdict = NF_DROP
     end
+  end
+  if verdict == NF_ACCEPT then
+    write_msg(pipe_wfd, dns.hdr.txid, ip_hdr.src_ip_raw, udp_hdr.src_port)
   end
   if verdict == NF_DROP then
     local refused_payload = build_refused(dns, udp_hdr.dns_payload)
