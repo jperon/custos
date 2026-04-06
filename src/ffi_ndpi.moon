@@ -7,10 +7,9 @@
 ffi = require "ffi"
 
 -- Minimal cdef to detect the library version.
+-- Note: inet_ntop est déclaré dans ffi_defs.moon (ffi.C global), pas ici.
 ffi.cdef [[
   const char *ndpi_revision(void);
-  const char *inet_ntop(int af, const void *src,
-                        char *dst, unsigned int size);
 ]]
 
 --- Tente de charger libndpi parmi plusieurs noms candidats.

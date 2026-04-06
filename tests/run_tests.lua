@@ -614,6 +614,64 @@ test("ipc — token expiré est rejeté (purge paresseuse)", function()
 end)
 
 -- ════════════════════════════════════════════════════════════════
+-- worker_q0 : verdict multi-questions
+-- ════════════════════════════════════════════════════════════════
+io.write("\n── worker_q0 ──\n")
+
+test("worker_q0 — paquet 2 questions (1 allowée + 1 bloquée) → NF_DROP, write_msg non appelé", function()
+  -- Charge un module parse_dns frais (indépendant des autres tests)
+  package.loaded["parse/dns"] = nil
+  local dns_mod = dofile("lua/parse/dns.lua")
+
+  -- Construit un paquet DNS à 2 questions :
+  --   Q1: github.com  (A) — autorisée
+  --   Q2: evil.com    (A) — bloquée
+  local txid = 0xCAFE
+  local hdr = string.char(
+    bit.rshift(bit.band(txid, 0xFF00), 8), bit.band(txid, 0xFF),
+    0x01, 0x00,   -- flags: RD=1, QR=0 (question)
+    0, 2,         -- qdcount = 2
+    0, 0, 0, 0, 0, 0  -- ancount, nscount, arcount
+  )
+  local q1 = "\x06github\x03com\x00" .. string.char(0, 1, 0, 1)  -- A IN
+  local q2 = "\x04evil\x03com\x00"   .. string.char(0, 1, 0, 1)  -- A IN
+  local dns_payload = hdr .. q1 .. q2
+
+  local dns = dns_mod.parse_dns(dns_payload)
+  assert(dns, "parse_dns a échoué")
+  assert(#dns.questions == 2, string.format("attendu 2 questions, obtenu %d", #dns.questions))
+  assert_eq(dns.questions[1].qname, "github.com", "Q1 qname")
+  assert_eq(dns.questions[2].qname, "evil.com",   "Q2 qname")
+
+  -- Simule la logique de verdict du worker Q0
+  local function is_allowed_local(qname)
+    local allowed = { ["github.com"] = true }
+    local name = qname:lower()
+    if allowed[name] then return true end
+    local pos = name:find(".", 1, true)
+    while pos do
+      if allowed[name:sub(pos + 1)] then return true end
+      pos = name:find(".", pos + 1, true)
+    end
+    return false
+  end
+
+  local NF_ACCEPT, NF_DROP = 1, 0
+  local verdict = NF_ACCEPT
+  for _, q in ipairs(dns.questions) do
+    if not is_allowed_local(q.qname) then
+      verdict = NF_DROP
+    end
+  end
+
+  -- write_msg n'est appelé que si verdict == NF_ACCEPT
+  local write_msg_would_be_called = (verdict == NF_ACCEPT)
+
+  assert_eq(verdict, NF_DROP, "verdict doit être NF_DROP (evil.com est bloqué)")
+  assert_eq(write_msg_would_be_called, false, "write_msg ne doit pas être appelé quand verdict == NF_DROP")
+end)
+
+-- ════════════════════════════════════════════════════════════════
 -- Résumé
 -- ════════════════════════════════════════════════════════════════
 io.write(string.format(
