@@ -88,7 +88,10 @@ services:
       - wan-dns
 
   client:
-    image: alpine:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    image: custos-client:latest
     container_name: custos-client
     cap_add:
       - NET_ADMIN
@@ -99,13 +102,14 @@ services:
       lan:
         ipv4_address: 172.28.0.10
     command:
-      sh -c "apk add --no-cache bind-tools iproute2 && ip route del default 2>/dev/null; ip route add default via 172.28.0.254 2>/dev/null; sleep infinity"
+      sh -c "ip route del default 2>/dev/null; for i in 1 2 3; do for gw in 172.28.0.254 172.28.0.253; do ping -c1 -W2 $$gw >/dev/null 2>&1 && { ip route add default via $$gw 2>/dev/null; break 2; }; done; sleep 2; done; sleep infinity"
     depends_on:
       - wan-dns
 
 networks:
   lan:
     driver: bridge
+    internal: true   # LAN isolé : pas de masquerade Docker hôte, routing WAN via le filtre
     ipam:
       config:
         - subnet: 172.28.0.0/24

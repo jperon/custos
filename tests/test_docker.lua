@@ -126,16 +126,38 @@ build_image = function()
     local ok = execute("docker image inspect custos:latest >/dev/null 2>&1")
     if ok then
       log("Image custos:latest already exists — skipping build (use --build to force)", "WARN")
+    else
+      log("Building Docker image custos:latest (this may take a while)…", "STEP")
+      local success = execute("docker build -t custos:latest .")
+      if not (success) then
+        log("Failed to build custos:latest", "ERROR")
+        return false
+      end
+      log("custos:latest built successfully", "PASS")
+    end
+  else
+    log("Building Docker image custos:latest (this may take a while)…", "STEP")
+    local success = execute("docker build -t custos:latest .")
+    if not (success) then
+      log("Failed to build custos:latest", "ERROR")
+      return false
+    end
+    log("custos:latest built successfully", "PASS")
+  end
+  if not (force_build) then
+    local ok = execute("docker image inspect custos-client:latest >/dev/null 2>&1")
+    if ok then
+      log("Image custos-client:latest already exists — skipping build", "WARN")
       return true
     end
   end
-  log("Building Docker image (this may take a while)…", "STEP")
-  local success = execute("docker build -t custos:latest .")
+  log("Building Docker image custos-client:latest…", "STEP")
+  local success = execute("docker build -f Dockerfile.client -t custos-client:latest .")
   if not (success) then
-    log("Failed to build Docker image", "ERROR")
+    log("Failed to build custos-client:latest", "ERROR")
     return false
   end
-  log("Image built successfully", "PASS")
+  log("custos-client:latest built successfully", "PASS")
   return true
 end
 local wait_for_filter_ready
@@ -276,6 +298,11 @@ ping_from_client = function(ip, timeout_sec)
   local success, out = execute(cmd, true)
   return success, out
 end
+local flush_ip4_allowed
+flush_ip4_allowed = function()
+  execute("docker exec " .. tostring(filter_name) .. " nft flush set ip  dns-filter ip4_allowed 2>/dev/null", true)
+  return execute("docker exec " .. tostring(filter_name) .. " nft flush set ip6 dns-filter ip6_allowed 2>/dev/null", true)
+end
 local tests_passed = 0
 local tests_failed = 0
 local cloudflare_ip = nil
@@ -326,12 +353,13 @@ else
 end
 print("")
 run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_DOMAINS.allowed) .. " → Address: <ip> ; ping avant FAIL, ping après PASS", function()
+  flush_ip4_allowed()
   if cloudflare_ip then
-    local p_ok, _ = ping_from_client(cloudflare_ip)
-    if p_ok then
-      log("ping " .. tostring(cloudflare_ip) .. " avant DNS : PASS (warmp up a peuplé ip4_allowed)", "PASS")
+    local p_before_ok, _ = ping_from_client(cloudflare_ip)
+    if p_before_ok then
+      log("ping " .. tostring(cloudflare_ip) .. " avant DNS : PASS inattendu (LAN isolé + ip4_allowed vidé)", "WARN")
     else
-      log("ping " .. tostring(cloudflare_ip) .. " avant DNS : échec (ip4_allowed vide)", "PASS")
+      log("ping " .. tostring(cloudflare_ip) .. " avant DNS : échec attendu (LAN isolé, ip4_allowed vide)", "PASS")
     end
   end
   local success, output = query_dns(TEST_DOMAINS.allowed)
@@ -343,11 +371,12 @@ run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_D
     obtained = (output:match("([^\n]+)")) or "(empty output)"
   end
   if cloudflare_ip and ok then
-    local p_ok, _ = ping_from_client(cloudflare_ip)
-    if p_ok then
-      log("ping " .. tostring(cloudflare_ip) .. " après DNS : PASS — ip4_allowed actif", "PASS")
+    local p_after_ok, _ = ping_from_client(cloudflare_ip, 4)
+    if p_after_ok then
+      log("ping " .. tostring(cloudflare_ip) .. " après DNS : PASS — ip4_allowed actif + MASQUERADE WAN", "PASS")
     else
-      log("ping " .. tostring(cloudflare_ip) .. " après DNS : échec — vérifier la route WAN", "WARN")
+      log("ping " .. tostring(cloudflare_ip) .. " après DNS : échec — vérifier route WAN ou MASQUERADE nft", "WARN")
+      ok = false
     end
   end
   return ok, obtained
@@ -356,9 +385,9 @@ run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TES
   if facebook_ip then
     local p_ok, _ = ping_from_client(facebook_ip)
     if p_ok then
-      log("ping " .. tostring(facebook_ip) .. " avant DNS : PASS réseau Docker (bridge hôte bypass FORWARD)", "PASS")
+      log("ping " .. tostring(facebook_ip) .. " avant DNS : PASS inattendu (LAN isolé, facebook jamais dans ip4_allowed)", "WARN")
     else
-      log("ping " .. tostring(facebook_ip) .. " avant DNS : échec attendu", "PASS")
+      log("ping " .. tostring(facebook_ip) .. " avant DNS : échec attendu (LAN isolé)", "PASS")
     end
   end
   local success, output = query_dns(TEST_DOMAINS.blocked)
@@ -367,9 +396,10 @@ run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TES
   if facebook_ip then
     local p_ok, _ = ping_from_client(facebook_ip)
     if p_ok then
-      log("ping " .. tostring(facebook_ip) .. " après DNS refusé : PASS côté réseau Docker (bridge hôte bypass FORWARD)", "PASS")
+      log("ping " .. tostring(facebook_ip) .. " après DNS refusé : PASS inattendu (devrait être hors ip4_allowed)", "WARN")
+      ok = false
     else
-      log("ping " .. tostring(facebook_ip) .. " après DNS : échec (FORWARD filtre actif)", "PASS")
+      log("ping " .. tostring(facebook_ip) .. " après DNS refusé : échec attendu (LAN isolé, FORWARD DROP)", "PASS")
     end
   end
   return ok, obtained

@@ -114,19 +114,39 @@ build_image = ->
     log "Skipping Docker build (--no-build)", "WARN"
     return true
 
-  -- Check if the image already exists (avoid unnecessary rebuild)
+  -- Build main custos filter image
   unless force_build
     ok = execute "docker image inspect custos:latest >/dev/null 2>&1"
     if ok
       log "Image custos:latest already exists — skipping build (use --build to force)", "WARN"
+    else
+      log "Building Docker image custos:latest (this may take a while)…", "STEP"
+      success = execute "docker build -t custos:latest ."
+      unless success
+        log "Failed to build custos:latest", "ERROR"
+        return false
+      log "custos:latest built successfully", "PASS"
+  else
+    log "Building Docker image custos:latest (this may take a while)…", "STEP"
+    success = execute "docker build -t custos:latest ."
+    unless success
+      log "Failed to build custos:latest", "ERROR"
+      return false
+    log "custos:latest built successfully", "PASS"
+
+  -- Build client image (pre-installs tools, needed when LAN is internal)
+  unless force_build
+    ok = execute "docker image inspect custos-client:latest >/dev/null 2>&1"
+    if ok
+      log "Image custos-client:latest already exists — skipping build", "WARN"
       return true
 
-  log "Building Docker image (this may take a while)…", "STEP"
-  success = execute "docker build -t custos:latest ."
+  log "Building Docker image custos-client:latest…", "STEP"
+  success = execute "docker build -f Dockerfile.client -t custos-client:latest ."
   unless success
-    log "Failed to build Docker image", "ERROR"
+    log "Failed to build custos-client:latest", "ERROR"
     return false
-  log "Image built successfully", "PASS"
+  log "custos-client:latest built successfully", "PASS"
   return true
 
 --- Wait for the filter to be fully ready (queues listening).
@@ -275,6 +295,12 @@ ping_from_client = (ip, timeout_sec = 2) ->
   success, out = execute cmd, true
   return success, out
 
+--- Vide les sets ip4_allowed et ip6_allowed dans le filtre.
+-- Utilisé avant les tests de ping pour garantir un état propre.
+flush_ip4_allowed = ->
+  execute "docker exec #{filter_name} nft flush set ip  dns-filter ip4_allowed 2>/dev/null", true
+  execute "docker exec #{filter_name} nft flush set ip6 dns-filter ip6_allowed 2>/dev/null", true
+
 -- Main test suite
 tests_passed = 0
 tests_failed = 0
@@ -333,14 +359,16 @@ print ""
 run_test "DNS query — allowed domain resolves",
   "nslookup #{TEST_DOMAINS.allowed} → Address: <ip> ; ping avant FAIL, ping après PASS",
   ->
-    -- Ping avant résolution DNS : ip4_allowed peut déjà contenir cloudflare_ip
-    -- si le warmup l'a peuplé (comportement attendu — pas un défaut).
+    -- Vider ip4_allowed pour que le ping avant soit déterministe
+    flush_ip4_allowed!
+
+    -- Ping avant résolution DNS : LAN isolé + ip4_allowed vide → doit échouer
     if cloudflare_ip
-      p_ok, _ = ping_from_client cloudflare_ip
-      if p_ok
-        log "ping #{cloudflare_ip} avant DNS : PASS (warmp up a peuplé ip4_allowed)", "PASS"
+      p_before_ok, _ = ping_from_client cloudflare_ip
+      if p_before_ok
+        log "ping #{cloudflare_ip} avant DNS : PASS inattendu (LAN isolé + ip4_allowed vidé)", "WARN"
       else
-        log "ping #{cloudflare_ip} avant DNS : échec (ip4_allowed vide)", "PASS"
+        log "ping #{cloudflare_ip} avant DNS : échec attendu (LAN isolé, ip4_allowed vide)", "PASS"
 
     success, output = query_dns TEST_DOMAINS.allowed
     ok = success and (output\match "Address:" or output\match "Name:") != nil
@@ -349,28 +377,27 @@ run_test "DNS query — allowed domain resolves",
     else
       (output\match "([^\n]+)") or "(empty output)"
 
-    -- Ping après résolution DNS : cloudflare_ip devrait être dans ip4_allowed
+    -- Ping après résolution DNS : ip4_allowed peuplé + MASQUERADE WAN → doit réussir
     if cloudflare_ip and ok
-      p_ok, _ = ping_from_client cloudflare_ip
-      if p_ok
-        log "ping #{cloudflare_ip} après DNS : PASS — ip4_allowed actif", "PASS"
+      p_after_ok, _ = ping_from_client cloudflare_ip, 4
+      if p_after_ok
+        log "ping #{cloudflare_ip} après DNS : PASS — ip4_allowed actif + MASQUERADE WAN", "PASS"
       else
-        log "ping #{cloudflare_ip} après DNS : échec — vérifier la route WAN", "WARN"
+        log "ping #{cloudflare_ip} après DNS : échec — vérifier route WAN ou MASQUERADE nft", "WARN"
+        ok = false
 
     return ok, obtained
 
 run_test "DNS query — blocked domain is rejected",
   "nslookup #{TEST_DOMAINS.blocked} → REFUSED (RCODE 5 + EDE Filtered) ; ping avant et après FAIL",
   ->
-    -- Ping avant : facebook_ip ne doit jamais entrer dans ip4_allowed.
-    -- Note : le bridge Docker peut rendre l'IP directement joignable
-    -- indépendamment des règles FORWARD du container filtre.
+    -- Ping avant : LAN isolé + facebook hors ip4_allowed → doit échouer
     if facebook_ip
       p_ok, _ = ping_from_client facebook_ip
       if p_ok
-        log "ping #{facebook_ip} avant DNS : PASS réseau Docker (bridge hôte bypass FORWARD)", "PASS"
+        log "ping #{facebook_ip} avant DNS : PASS inattendu (LAN isolé, facebook jamais dans ip4_allowed)", "WARN"
       else
-        log "ping #{facebook_ip} avant DNS : échec attendu", "PASS"
+        log "ping #{facebook_ip} avant DNS : échec attendu (LAN isolé)", "PASS"
 
     success, output = query_dns TEST_DOMAINS.blocked
     ok = (output != nil) and output\match("REFUSED") != nil
@@ -378,16 +405,14 @@ run_test "DNS query — blocked domain is rejected",
                (output\match "([^\n]+)") or
                "(no output)"
 
-    -- Ping après : toujours hors ip4_allowed (domain refusé).
-    -- Note : dans Docker, le bridge hôte fournit une route internet directe
-    -- indépendamment des règles FORWARD du container filtre — le test DNS
-    -- (REFUSED) reste la source de vérité pour le filtrage.
+    -- Ping après : domaine refusé → jamais dans ip4_allowed → doit rester hors portée
     if facebook_ip
       p_ok, _ = ping_from_client facebook_ip
       if p_ok
-        log "ping #{facebook_ip} après DNS refusé : PASS côté réseau Docker (bridge hôte bypass FORWARD)", "PASS"
+        log "ping #{facebook_ip} après DNS refusé : PASS inattendu (devrait être hors ip4_allowed)", "WARN"
+        ok = false
       else
-        log "ping #{facebook_ip} après DNS : échec (FORWARD filtre actif)", "PASS"
+        log "ping #{facebook_ip} après DNS refusé : échec attendu (LAN isolé, FORWARD DROP)", "PASS"
 
     return ok, obtained
 
