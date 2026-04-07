@@ -38,3 +38,4 @@ meta-data
 user-data
 network-config
 test-vm.qcow2
+.kilo/
