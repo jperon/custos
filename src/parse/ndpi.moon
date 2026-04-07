@@ -502,12 +502,12 @@ parse_packet = (raw) ->
     -- return nil without "buffering" so workers pass them through unchanged.
     if buf_len < 2
       return nil, "buffering" if l4.payload_len > 0
-      return nil
+      return nil, "tcp_control"
     dns_msg_len = bit.bor bit.lshift(buf\byte(1), 8), buf\byte(2)
     -- Wait until the complete DNS message is in the buffer.
     if buf_len < 2 + dns_msg_len
       return nil, "buffering" if l4.payload_len > 0
-      return nil
+      return nil, "tcp_control"
     -- Complete message assembled; consume it from the buffer.
     dns_raw_ref = buf\sub 3, 2 + dns_msg_len
     if buf_len > 2 + dns_msg_len

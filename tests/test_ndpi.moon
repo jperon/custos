@@ -96,7 +96,7 @@ package.loaded["config"] = {
   AF_INET6:  10
   DNS_PORT:  53
   ALLOWED_DOMAINS: {}
-  IPC_MSG_SIZE:    21
+  IPC_MSG_SIZE:    27
   IPC_PENDING_TTL: 5
 }
 
@@ -146,8 +146,8 @@ test "parse_packet — DNS question A www.github.com", ->
   assert_eq p.ip.src_ip,   "192.168.1.42", "src_ip"
   assert_eq p.ip.dst_ip,   "8.8.8.8",      "dst_ip"
   -- L4
-  assert_eq p.udp.src_port, 54321, "src_port"
-  assert_eq p.udp.dst_port, 53,    "dst_port"
+  assert_eq p.l4.src_port, 54321, "src_port"
+  assert_eq p.l4.dst_port, 53,    "dst_port"
   -- L7
   assert_eq p.dns.txid,        0xABCD, "txid"
   assert_eq p.dns.is_response, false,   "is_response"
@@ -192,8 +192,8 @@ test "parse_packet — IPv6 UDP DNS question", ->
   assert_eq p.ip.protocol, 17,  "protocol UDP"
   assert_eq p.ip.src_ip, "2001:db8::1", "src_ip"
   assert_eq p.ip.dst_ip, "2001:db8::2", "dst_ip"
-  assert_eq p.udp.src_port, 54321, "src_port"
-  assert_eq p.udp.dst_port, 53,    "dst_port"
+  assert_eq p.l4.src_port, 54321, "src_port"
+  assert_eq p.l4.dst_port, 53,    "dst_port"
   assert_eq p.dns.txid, 0x9ABC, "txid"
   assert_eq #p.questions, 1, "1 question"
   assert_eq p.questions[1].qname, "www.github.com", "qname"

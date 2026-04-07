@@ -495,14 +495,14 @@ parse_packet = function(raw)
       if l4.payload_len > 0 then
         return nil, "buffering"
       end
-      return nil
+      return nil, "tcp_control"
     end
     local dns_msg_len = bit.bor(bit.lshift(buf:byte(1), 8), buf:byte(2))
     if buf_len < 2 + dns_msg_len then
       if l4.payload_len > 0 then
         return nil, "buffering"
       end
-      return nil
+      return nil, "tcp_control"
     end
     dns_raw_ref = buf:sub(3, 2 + dns_msg_len)
     if buf_len > 2 + dns_msg_len then

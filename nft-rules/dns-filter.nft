@@ -58,19 +58,19 @@ table ip dns-filter {
     # Paquets UDP/53 ou TCP/53 allant DU LAN VERS le resolver
     ip protocol udp udp dport 53 \
       ip saddr 192.168.1.0/24 \
-      queue num 0 bypass
+      queue num 0
     ip protocol tcp tcp dport 53 \
       ip saddr 192.168.1.0/24 \
-      queue num 0 bypass
+      queue num 0
 
     # ── Trafic DNS retour → NFQUEUE 1 (réponses entrantes) ────────
     # Paquets UDP/53 ou TCP/53 venant du resolver allant VERS le LAN
     ip protocol udp udp sport 53 \
       ip daddr 192.168.1.0/24 \
-      queue num 1 bypass
+      queue num 1
     ip protocol tcp tcp sport 53 \
       ip daddr 192.168.1.0/24 \
-      queue num 1 bypass
+      queue num 1
 
     # ── IPs autorisées par LuaJIT après résolution DNS (par client) ────────
     ip saddr . ip daddr @ip4_allowed accept
@@ -97,7 +97,7 @@ table ip dns-filter {
     # REFUSED injectées par refuse.moon) ne passent PAS par Q1 afin d'éviter
     # un double-traitement. En production-bridge, tout le trafic DNS transite
     # par la chaîne FORWARD.
-    ip protocol udp udp dport 53 queue num 0 bypass
+    ip protocol udp udp dport 53 queue num 0
   }
 
   # ── Chaîne INPUT (trafic destiné à la machine bridge) ────────────
@@ -140,10 +140,10 @@ table ip6 dns-filter {
     ct state established,related accept
 
     # DNS v6
-    ip6 nexthdr udp udp dport 53 queue num 0 bypass
-    ip6 nexthdr tcp tcp dport 53 queue num 0 bypass
-    ip6 nexthdr udp udp sport 53 queue num 1 bypass
-    ip6 nexthdr tcp tcp sport 53 queue num 1 bypass
+    ip6 nexthdr udp udp dport 53 queue num 0
+    ip6 nexthdr tcp tcp dport 53 queue num 0
+    ip6 nexthdr udp udp sport 53 queue num 1
+    ip6 nexthdr tcp tcp sport 53 queue num 1
 
     # IPs autorisées
     ip6 saddr . ip6 daddr @ip6_allowed accept
@@ -164,8 +164,8 @@ table ip6 dns-filter {
   chain output {
     type   filter hook output priority 0
     policy accept
-    ip6 nexthdr udp udp dport 53 queue num 0 bypass
-    ip6 nexthdr udp udp sport 53 queue num 1 bypass
+    ip6 nexthdr udp udp dport 53 queue num 0
+    ip6 nexthdr udp udp sport 53 queue num 1
   }
 
   chain input {

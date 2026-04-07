@@ -40,9 +40,10 @@ run_queue = function(queue_num, callback)
     if not (ok) then
       log_error({
         action = "callback_exception",
-        err = tostring(verdict)
+        err = tostring(verdict),
+        queue = queue_num
       })
-      verdict = NF_ACCEPT
+      verdict = NF_DROP
     end
     if verdict ~= VERDICT_DONE then
       libnfq.nfq_set_verdict(qh_box[0], pkt_id, verdict, 0, nil)

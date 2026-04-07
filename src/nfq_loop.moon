@@ -52,10 +52,10 @@ run_queue = (queue_num, callback) ->
 
     ok, verdict = pcall callback, qh_box[0], nfad, pkt_id
     unless ok
-      -- En cas d'exception Lua dans le callback, on accepte le paquet
-      -- (fail-open) pour ne pas bloquer le réseau, et on log.
-      log_error { action: "callback_exception", err: tostring verdict }
-      verdict = NF_ACCEPT
+      -- En cas d'exception Lua dans le callback, on bloque le paquet
+      -- (fail-closed) pour éviter tout contournement du filtrage DNS.
+      log_error { action: "callback_exception", err: tostring(verdict), queue: queue_num }
+      verdict = NF_DROP
 
     -- Si verdict == VERDICT_DONE, le callback a déjà appelé nfq_set_verdict
     -- (ex: Q1 qui envoie un payload modifié) → on ne repose pas de verdict.

@@ -19,8 +19,8 @@ detection — all without any C compilation step.
 │                                                                │
 │  nftables (kernel)                                             │
 │  ├── policy DROP + REJECT LAN                                  │
-│  ├── set ip4_allowed  { timeout 2m }  ◄── populated by LuaJIT  │
-│  ├── set ip6_allowed  { timeout 2m }  ◄── populated by LuaJIT  │
+│  ├── set ip4_allowed  { client_ip . dst_ip timeout 2m }        │
+│  ├── set ip6_allowed  { client_ip . dst_ip timeout 2m }        │
 │  ├── UDP/53 + TCP/53 src=LAN → NFQUEUE 0  (questions)          │
 │  └── UDP/53 + TCP/53 dst=LAN → NFQUEUE 1  (responses)          │
 │                                                                │
@@ -30,7 +30,7 @@ detection — all without any C compilation step.
 │  │   parse L2/L3/L4/L7 (FFI)                    drain pipe     │
 │  │   lookup allowlist                           verify txid    │
 │  │   log + ACCEPT/REJECT                        patch TTL→60s  │
-│  │   write(pipe, txid+ip+port)                  nft set add    │
+│  │   write(pipe, txid+ip+port+mac)              nft set add    │
 │  │   or send REFUSED (socket UDP/53)            ACCEPT+payload │
 │  └── ./tmp/dns-filter.log                                      │
 └────────────────────────────────────────────────────────────────┘
@@ -47,7 +47,7 @@ nft FORWARD → NFQUEUE 0
 worker Q0 : parse L2+L3+L4+DNS → qname="www.github.com"
    │  is_allowed("www.github.com") → true (suffix "github.com")
    │  log: ALLOW mac_src=aa:bb:.. src_ip=192.168.1.42 qname=www.github.com
-   │  write(pipe, txid=0x1234, ip=192.168.1.42, port=54321)
+   │  write(pipe, txid=0x1234, ip=192.168.1.42, port=54321, mac=aa:bb:cc:dd:ee:ff)
    └► NF_ACCEPT → question forwarded to resolver
    ▼
 DNS Resolver (8.8.8.8) responds
@@ -57,7 +57,7 @@ nft FORWARD → NFQUEUE 1
 worker Q1 : drain pipe → pending[0x1234:192.168.1.42:54321] found
    │  parse response → A 140.82.121.4
    │  patch TTL → 60s + recalc checksums UDP+IP
-   │  nft add element ip dns-filter ip4_allowed { 140.82.121.4 timeout 2m }
+   │  nft add element ip dns-filter ip4_allowed { 192.168.1.42 . 140.82.121.4 timeout 2m }
    │  log: ALLOW action=response_patched answers=1 ttl_set=60
    └► NF_ACCEPT + modified payload
    ▼
@@ -65,7 +65,7 @@ Client receives response (TTL=60s)
    ▼
 Client opens TCP connection → 140.82.121.4
    ▼
-nft FORWARD : ip daddr @ip4_allowed accept → allowed through
+nft FORWARD : ip saddr . ip daddr @ip4_allowed accept → allowed through
 ```
 
 ### Blocked packet flow
@@ -260,7 +260,7 @@ Example log:
 
 ## IPC Protocol Q0 → Q1
 
-The Unix pipe (created before `fork()`) carries 21-byte messages.
+The Unix pipe (created before `fork()`) carries 27-byte messages.
 Atomicity is guaranteed by POSIX for messages ≤ PIPE_BUF (4096 bytes).
 
 ```
@@ -270,6 +270,7 @@ Bytes 3-18   : source IP — 16 bytes
                  IPv4 : 4 bytes address + 12 zero bytes (padding)
                  IPv6 : 16 bytes address (complete, no truncation)
 Bytes 19-20  : source port (big-endian uint16)
+Bytes 21-26  : source MAC (6 bytes, zeroed if unavailable)
 ```
 
 Q1 maintains a table `pending[txid:ip:port] = expire_time` (TTL 5s).
@@ -338,7 +339,8 @@ ndpi = require "parse.ndpi"
 
 -- Single-call L3+L4+L7 parse + nDPI detection
 -- Returns (pkt, nil) on success, (nil, "buffering") while reassembling a
--- multi-segment TCP DNS stream, or (nil, nil) on unrecognised packets.
+-- multi-segment TCP DNS stream, (nil, "tcp_control") for TCP control packets
+-- without DNS payload (SYN/ACK/FIN), or (nil, nil) on unrecognised packets.
 pkt, status = ndpi.parse_packet raw
 -- pkt.ip    (version, ihl, src_ip, dst_ip, src_ip_raw, ...)
 -- pkt.l4    (proto, src_port, dst_port, len, off, payload_len)

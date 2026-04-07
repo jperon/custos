@@ -1,7 +1,7 @@
-local ffi, libc, libnfq
+local ffi, libnfq
 do
   local _obj_0 = require("ffi_defs")
-  ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
+  ffi, libnfq = _obj_0.ffi, _obj_0.libnfq
 end
 local QUEUE_QUESTIONS
 QUEUE_QUESTIONS = require("config").QUEUE_QUESTIONS
@@ -44,13 +44,16 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     if parse_status == "buffering" then
       return NF_ACCEPT
     end
+    if parse_status == "tcp_control" then
+      return NF_ACCEPT
+    end
     log_warn({
       action = "parse_failed",
       mac_src = l2.mac_src
     })
-    return NF_ACCEPT
+    return NF_DROP
   end
-  local flow = ndpi.get_flow(pkt)
+  ndpi.get_flow(pkt)
   if math.random(1000) == 1 then
     ndpi.purge_flows()
   end
@@ -71,31 +74,14 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     ndpi_app = pkt.ndpi_app
   }
   for _, q in ipairs(pkt.questions) do
+    q_fields.qname = q.qname
+    q_fields.qtype = q.qtype_name
     if is_allowed(q.qname) then
-      log_allow({
-        unpack((function()
-          local _tbl_0 = { }
-          for k, v in pairs(q_fields) do
-            _tbl_0[k] = v
-          end
-          return _tbl_0
-        end)()),
-        qname = q.qname,
-        qtype = q.qtype_name
-      })
+      q_fields.reason = nil
+      log_allow(q_fields)
     else
-      log_block({
-        unpack((function()
-          local _tbl_0 = { }
-          for k, v in pairs(q_fields) do
-            _tbl_0[k] = v
-          end
-          return _tbl_0
-        end)()),
-        qname = q.qname,
-        qtype = q.qtype_name,
-        reason = "not_in_allowlist"
-      })
+      q_fields.reason = "not_in_allowlist"
+      log_block(q_fields)
       verdict = NF_DROP
     end
   end

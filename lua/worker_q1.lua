@@ -1,7 +1,7 @@
-local ffi, libc, libnfq
+local ffi, libnfq
 do
   local _obj_0 = require("ffi_defs")
-  ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
+  ffi, libnfq = _obj_0.ffi, _obj_0.libnfq
 end
 local QUEUE_RESPONSES, DOCKER_MODE, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN
 do
@@ -17,10 +17,10 @@ do
   local _obj_0 = require("ipc")
   drain_pipe, is_pending, consume = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.consume
 end
-local add_ip, add_ip4, add_ip6
+local add_ip4, add_ip6
 do
   local _obj_0 = require("nft")
-  add_ip, add_ip4, add_ip6 = _obj_0.add_ip, _obj_0.add_ip4, _obj_0.add_ip6
+  add_ip4, add_ip6 = _obj_0.add_ip4, _obj_0.add_ip6
 end
 local run_queue, NF_ACCEPT, NF_DROP
 do
@@ -37,7 +37,12 @@ local mac_clients = { }
 local ip_to_mac = { }
 local pipe_rfd = nil
 local last_neigh_refresh = 0
-local update_mac_clients
+local update_mac_clients = nil
+local drain_ts = 0
+local drain_on_msg
+drain_on_msg = function(msg)
+  return update_mac_clients(msg, drain_ts)
+end
 update_mac_clients = function(msg, ts)
   local mac = msg.mac_str
   if mac == MAC_ZERO then
@@ -107,9 +112,8 @@ end
 local handle_response
 handle_response = function(qh_ptr, nfad, pkt_id)
   local ts = now()
-  drain_pipe(pipe_rfd, now, function(msg)
-    return update_mac_clients(msg, ts)
-  end)
+  drain_ts = ts
+  drain_pipe(pipe_rfd, now, drain_on_msg)
   local payload_ptr = ffi.new("unsigned char*[1]")
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
   if payload_len <= 0 then
@@ -148,18 +152,21 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local answers = ndpi.parse_answers(raw, pkt)
   local client_ip = pkt.ip.dst_ip
+  local client_v4 = nil
+  local client_v6 = nil
   local ip_count = 0
   for _index_0 = 1, #answers do
     local ans = answers[_index_0]
     if ans.rtype == QTYPE.A then
-      local c4
-      if pkt.ip.version == 4 then
-        c4 = client_ip
-      else
-        c4 = resolve_client_family(client_ip, "ipv4")
-      end
-      if c4 then
-        add_ip4(c4, ans.rdata_str)
+      client_v4 = client_v4 or (function()
+        if pkt.ip.version == 4 then
+          return client_ip
+        else
+          return resolve_client_family(client_ip, "ipv4")
+        end
+      end)()
+      if client_v4 then
+        add_ip4(client_v4, ans.rdata_str)
         ip_count = ip_count + 1
       else
         log_warn({
@@ -170,14 +177,15 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         })
       end
     elseif ans.rtype == QTYPE.AAAA then
-      local c6
-      if pkt.ip.version == 6 then
-        c6 = client_ip
-      else
-        c6 = resolve_client_family(client_ip, "ipv6")
-      end
-      if c6 then
-        add_ip6(c6, ans.rdata_str)
+      client_v6 = client_v6 or (function()
+        if pkt.ip.version == 6 then
+          return client_ip
+        else
+          return resolve_client_family(client_ip, "ipv6")
+        end
+      end)()
+      if client_v6 then
+        add_ip6(client_v6, ans.rdata_str)
         ip_count = ip_count + 1
       else
         log_warn({

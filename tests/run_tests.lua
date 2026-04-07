@@ -702,7 +702,7 @@ test("make_key — unicité", function()
   assert((k1 ~= k2), "ip différentes → clés différentes")
   return assert((k1 ~= k3), "txid différents → clés différentes")
 end)
-test("drain_pipe — lit IPC_MSG_SIZE=21 octets sans overflow", function()
+test("drain_pipe — lit IPC_MSG_SIZE=27 octets sans overflow", function()
   pcall(ffi.cdef, [[    int pipe2(int pipefd[2], int flags);
     int fcntl(int fd, int cmd, ...);
     int close(int fd);

@@ -9,7 +9,7 @@
 --   5. Si DROP : forge et envoie une réponse REFUSED (EDE=15) au client
 --   6. Log structuré avec champs nDPI (ndpi_master / ndpi_app)
 
-{ :ffi, :libc, :libnfq } = require "ffi_defs"
+{ :ffi, :libnfq } = require "ffi_defs"
 { :QUEUE_QUESTIONS }     = require "config"
 { :get_l2 }              = require "parse/ethernet"
 ndpi                     = require "parse/ndpi"
@@ -43,11 +43,13 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   unless pkt
     -- TCP segments arriving before a complete DNS message are buffered; let them through.
     return NF_ACCEPT if parse_status == "buffering"
+    -- TCP control segments (SYN/ACK/FIN without DNS payload) must pass.
+    return NF_ACCEPT if parse_status == "tcp_control"
     log_warn { action: "parse_failed", mac_src: l2.mac_src }
-    return NF_ACCEPT   -- fail-open sur paquet non-parsable
+    return NF_DROP
 
   -- ── nDPI State Tracking ──────────────────────────────────────
-  flow = ndpi.get_flow pkt
+  ndpi.get_flow pkt
   if math.random(1000) == 1
     ndpi.purge_flows!
 
@@ -72,19 +74,14 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   }
 
   for _, q in ipairs pkt.questions
+    q_fields.qname = q.qname
+    q_fields.qtype = q.qtype_name
     if is_allowed q.qname
-      log_allow {
-        unpack {k, v for k, v in pairs q_fields}   -- merge
-        qname: q.qname
-        qtype: q.qtype_name
-      }
+      q_fields.reason = nil
+      log_allow q_fields
     else
-      log_block {
-        unpack {k, v for k, v in pairs q_fields}
-        qname: q.qname
-        qtype: q.qtype_name
-        reason: "not_in_allowlist"
-      }
+      q_fields.reason = "not_in_allowlist"
+      log_block q_fields
       verdict = NF_DROP
 
   -- Enregistre la transaction IPC pour Q1 : seulement si toutes les questions

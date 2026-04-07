@@ -888,7 +888,7 @@ test "make_key — unicité", ->
   assert (k1 ~= k2), "ip différentes → clés différentes"
   assert (k1 ~= k3), "txid différents → clés différentes"
 
-test "drain_pipe — lit IPC_MSG_SIZE=21 octets sans overflow", ->
+test "drain_pipe — lit IPC_MSG_SIZE=27 octets sans overflow", ->
   -- Déclare les appels POSIX nécessaires (pcall évite l'erreur si déjà déclarés)
   pcall ffi.cdef, [[
     int pipe2(int pipefd[2], int flags);
@@ -916,7 +916,7 @@ test "drain_pipe — lit IPC_MSG_SIZE=21 octets sans overflow", ->
   ok = m2.write_msg wfd, txid2, ip_raw2, port2, mac_raw2
   assert ok, "write_msg failed"
   ffi.C.close wfd
-  -- drain_pipe doit lire les 21 octets sans segfault ni corruption
+  -- drain_pipe doit lire les 27 octets sans segfault ni corruption
   m2.drain_pipe rfd, os.time
   ffi.C.close rfd
   -- Le message doit être présent dans pending après drain

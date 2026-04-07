@@ -14,13 +14,13 @@
 --        e. Envoie le paquet modifié avec NF_ACCEPT + payload
 --   5. Si non autorisée (réponse forgée ou question bloquée) : NF_DROP
 
-{ :ffi, :libc, :libnfq } = require "ffi_defs"
+{ :ffi, :libnfq } = require "ffi_defs"
 { :QUEUE_RESPONSES, :DOCKER_MODE, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN } = require "config"
 neigh = require "neigh"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
 { :drain_pipe, :is_pending, :consume } = require "ipc"
-{ :add_ip, :add_ip4, :add_ip6 }      = require "nft"
+{ :add_ip4, :add_ip6 }      = require "nft"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_info, :log_warn, :now } = require "log"
 
@@ -39,6 +39,11 @@ pipe_rfd = nil
 
 -- Timestamp du dernier refresh de la table voisine (lazy-refresh sur miss)
 last_neigh_refresh = 0
+
+update_mac_clients = nil
+drain_ts = 0
+drain_on_msg = (msg) ->
+  update_mac_clients msg, drain_ts
 
 -- ── Suivi des clients par adresse MAC ───────────────────────────
 -- Mise à jour de mac_clients et ip_to_mac à chaque message IPC reçu.
@@ -116,8 +121,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- Absorbe tous les tokens disponibles de Q0 avant de traiter ce paquet.
   -- Le callback update_mac_clients enrichit la table mac_clients au passage.
   ts = now!
-  drain_pipe pipe_rfd, now, (msg) ->
-    update_mac_clients msg, ts
+  drain_ts = ts
+  drain_pipe pipe_rfd, now, drain_on_msg
 
   -- ── Payload brut ─────────────────────────────────────────────
   payload_ptr = ffi.new "unsigned char*[1]"
@@ -172,30 +177,32 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   answers  = ndpi.parse_answers raw, pkt
   -- IP du client LAN (destination de la réponse DNS = source de la question)
   client_ip = pkt.ip.dst_ip
+  client_v4 = nil
+  client_v6 = nil
   ip_count = 0
   for ans in *answers
     if ans.rtype == QTYPE.A
       -- Enregistrement A : le client doit avoir une adresse IPv4
-      c4 = if pkt.ip.version == 4
+      client_v4 or= if pkt.ip.version == 4
         client_ip
       else
         -- DNS transporté en IPv6 : résoudre l'IPv4 via mac_clients
         resolve_client_family client_ip, "ipv4"
-      if c4
-        add_ip4 c4, ans.rdata_str
+      if client_v4
+        add_ip4 client_v4, ans.rdata_str
         ip_count += 1
       else
         log_warn { action: "no_ipv4_for_client", client: client_ip,
                    record: ans.rdata_str, reason: "mac_not_known" }
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
-      c6 = if pkt.ip.version == 6
+      client_v6 or= if pkt.ip.version == 6
         client_ip
       else
         -- DNS transporté en IPv4 : résoudre l'IPv6 via mac_clients
         resolve_client_family client_ip, "ipv6"
-      if c6
-        add_ip6 c6, ans.rdata_str
+      if client_v6
+        add_ip6 client_v6, ans.rdata_str
         ip_count += 1
       else
         log_warn { action: "no_ipv6_for_client", client: client_ip,
