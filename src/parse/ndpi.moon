@@ -37,6 +37,10 @@ RCODE = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3, REFUSED: 5 }
 flow_cache = {}
 flow_expiry = {}
 
+-- TCP stream reassembly buffers: "src_ip|src_port|dst_ip|dst_port" → accumulated payload string.
+-- Keyed by 4-tuple; cleared on FIN/RST; consumed when a complete DNS message is assembled.
+tcp_buffers = {}
+
 --- Get or create an nDPI flow struct for a given packet.
 -- @tparam table pkt Parsed packet from parse_packet.
 -- @treturn cdata ndpi_flow_struct pointer.
@@ -304,6 +308,77 @@ fix_udp6_cksum = (buf, pkt_len) ->
   cksum = 0xFFFF if cksum == 0
   w16 buf, udp_off + 6, cksum
 
+--- Recalculate TCP checksum in-place (IPv4 pseudo-header, RFC 793).
+-- @tparam cdata buf Mutable uint8_t* packet.
+-- @tparam number pkt_len Total packet length.
+-- @tparam number ihl IP header length in bytes.
+fix_tcp4_cksum = (buf, pkt_len, ihl) ->
+  tcp_off = ihl
+  return if pkt_len < tcp_off + 20
+  tcp_len = pkt_len - tcp_off
+  buf[tcp_off + 16] = 0
+  buf[tcp_off + 17] = 0
+  sum = 0
+  -- IPv4 pseudo-header: src(4B) at buf[12..15], dst(4B) at buf[16..19].
+  for i = 12, 18, 2
+    sum += r16 buf, i
+  sum += PROTO_TCP
+  sum += tcp_len
+  -- TCP segment.
+  tcp_end = tcp_off + tcp_len
+  tcp_end = pkt_len if tcp_end > pkt_len
+  cksum_off = tcp_off + 16
+  i = tcp_off
+  while i < tcp_end
+    word = if i == cksum_off
+      0
+    elseif i + 1 < tcp_end
+      r16 buf, i
+    else
+      bit.lshift buf[i], 8
+    sum += word
+    i += 2
+  while bit.rshift(sum, 16) != 0
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  cksum = bit.band bit.bnot(sum), 0xFFFF
+  cksum = 0xFFFF if cksum == 0
+  w16 buf, tcp_off + 16, cksum
+
+--- Recalculate TCP checksum in-place (IPv6 pseudo-header, RFC 2460 §8.1).
+-- @tparam cdata buf Mutable uint8_t* packet (IPv6, ihl=40).
+-- @tparam number pkt_len Total packet length.
+fix_tcp6_cksum = (buf, pkt_len) ->
+  tcp_off = 40
+  return if pkt_len < tcp_off + 20
+  tcp_len = pkt_len - tcp_off
+  buf[tcp_off + 16] = 0
+  buf[tcp_off + 17] = 0
+  sum = 0
+  -- IPv6 pseudo-header: src(16B) at offsets 8–23, dst(16B) at offsets 24–39.
+  for i = 8, 38, 2
+    sum += r16 buf, i
+  sum += tcp_len
+  sum += PROTO_TCP
+  -- TCP segment.
+  tcp_end = tcp_off + tcp_len
+  tcp_end = pkt_len if tcp_end > pkt_len
+  cksum_off = tcp_off + 16
+  i = tcp_off
+  while i < tcp_end
+    word = if i == cksum_off
+      0
+    elseif i + 1 < tcp_end
+      r16 buf, i
+    else
+      bit.lshift buf[i], 8
+    sum += word
+    i += 2
+  while bit.rshift(sum, 16) != 0
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  cksum = bit.band bit.bnot(sum), 0xFFFF
+  cksum = 0xFFFF if cksum == 0
+  w16 buf, tcp_off + 16, cksum
+
 -- ── Public API ─────────────────────────────────────────────────
 
 --- Parse a raw IP packet (L3 + L4 + L7) in a single call.
@@ -341,27 +416,59 @@ parse_packet = (raw) ->
     return nil if len < tcp_off + 20
     data_off = tcp_off + (bit.rshift(p[tcp_off + 12], 4) * 4)
     return nil if len < data_off
+    tcp_payload_len = len - data_off
     l4 = {
       src_port:    r16 p, tcp_off
       dst_port:    r16 p, tcp_off + 2
-      len:          len - data_off
+      len:         tcp_payload_len
       off:         data_off
-      payload_len: len - data_off
+      payload_len: tcp_payload_len
       proto:       "tcp"
     }
+    -- Accumulate TCP payload for DNS stream reassembly.
+    -- Buffer key: "src_ip|src_port|dst_ip|dst_port".
+    bk_tcp = "#{ip.src_ip}|#{l4.src_port}|#{ip.dst_ip}|#{l4.dst_port}"
+    -- Clear buffer on FIN (0x01) or RST (0x04).
+    if bit.band(p[tcp_off + 13], 0x05) != 0
+      tcp_buffers[bk_tcp] = nil
+    -- Append this segment's payload data to the reassembly buffer.
+    if tcp_payload_len > 0
+      seg  = ffi.string p + data_off, tcp_payload_len
+      prev = tcp_buffers[bk_tcp]
+      tcp_buffers[bk_tcp] = if prev then prev .. seg else seg
   else
     return nil
 
-  -- L7 — DNS header (12 bytes).
-  dns_off = l4.off
-  dns_len = l4.payload_len
+  -- L7 — DNS header (12 bytes minimum).
+  -- For TCP: read from the reassembly buffer (handles multi-segment streams).
+  -- For UDP: read directly from the raw packet.
+  dns_p       = nil
+  dns_len     = 0
+  dns_raw_ref = nil  -- GC anchor for the TCP reassembly Lua string
+  dns_single  = true -- false when DNS assembled from multiple TCP segments
   if l4.proto == "tcp"
-    return nil if dns_len < 14
-    dns_off += 2
-    dns_len -= 2
+    bk = "#{ip.src_ip}|#{l4.src_port}|#{ip.dst_ip}|#{l4.dst_port}"
+    buf = tcp_buffers[bk] or ""
+    buf_len = #buf
+    -- Wait until we have the 2-byte TCP DNS length prefix.
+    return nil, "buffering" if buf_len < 2
+    dns_msg_len = bit.bor bit.lshift(buf\byte(1), 8), buf\byte(2)
+    -- Wait until the complete DNS message is in the buffer.
+    return nil, "buffering" if buf_len < 2 + dns_msg_len
+    -- Complete message assembled; consume it from the buffer.
+    dns_raw_ref = buf\sub 3, 2 + dns_msg_len
+    if buf_len > 2 + dns_msg_len
+      tcp_buffers[bk] = buf\sub 2 + dns_msg_len + 1
+    else
+      tcp_buffers[bk] = nil
+    dns_p      = ffi.cast "const uint8_t*", dns_raw_ref
+    dns_len    = dns_msg_len
+    dns_single = (l4.payload_len == 2 + dns_msg_len)
+  else
+    dns_p   = p + l4.off
+    dns_len = l4.payload_len
 
   return nil if dns_len < 12
-  dns_p   = p + dns_off
   flags_hi = dns_p[2]
   flags_lo = dns_p[3]
   dns = {
@@ -405,6 +512,8 @@ parse_packet = (raw) ->
     ip: ip, l4: l4, dns: dns, questions: questions
     answers_off: answers_off
     ndpi_master: ndpi_master, ndpi_app: ndpi_app
+    tcp_dns_raw:        dns_raw_ref  -- reassembled DNS payload (TCP only, nil for UDP)
+    tcp_single_segment: dns_single   -- true iff DNS arrived in a single TCP segment
   }
 
 
@@ -414,14 +523,19 @@ parse_packet = (raw) ->
 -- @treturn table Array of parsed answer records.
 parse_answers = (raw, pkt) ->
   return {} unless pkt.dns.is_response and pkt.dns.ancount > 0
-  p       = ffi.cast "const uint8_t*", raw
-  dns_off = pkt.l4.off
-  if pkt.l4.proto == "tcp"
-    dns_off += 2
-  dns_p   = p + dns_off
-  dns_len = pkt.l4.payload_len
-  if pkt.l4.proto == "tcp"
-    dns_len -= 2
+  -- Use the reassembled TCP DNS payload when available (handles multi-segment streams).
+  dns_p   = nil
+  dns_len = 0
+  if pkt.tcp_dns_raw
+    dns_p   = ffi.cast "const uint8_t*", pkt.tcp_dns_raw
+    dns_len = #pkt.tcp_dns_raw
+  else
+    p       = ffi.cast "const uint8_t*", raw
+    dns_off = pkt.l4.off
+    dns_off += 2 if pkt.l4.proto == "tcp"
+    dns_p   = p + dns_off
+    dns_len = pkt.l4.payload_len
+    dns_len -= 2 if pkt.l4.proto == "tcp"
   pos     = pkt.answers_off
   answers = {}
 
@@ -475,6 +589,11 @@ parse_answers = (raw, pkt) ->
 -- @tparam number new_ttl TTL value to write.
 -- @treturn string Modified packet as a Lua string.
 patch_and_checksum = (raw, pkt, answers, new_ttl) ->
+  -- Multi-segment TCP: DNS content straddles multiple IP packets; TTL offsets
+  -- in the final raw segment do not align with the reassembled DNS.  Skip patching.
+  if pkt.l4.proto == "tcp" and not pkt.tcp_single_segment
+    return raw
+
   pkt_len = #raw
   buf = ffi.new "uint8_t[?]", pkt_len
   ffi.copy buf, raw, pkt_len
@@ -489,10 +608,14 @@ patch_and_checksum = (raw, pkt, answers, new_ttl) ->
   if pkt.ip.version == 4
     if pkt.l4.proto == "udp"
       fix_udp4_cksum buf, pkt_len, pkt.ip.ihl
+    elseif pkt.l4.proto == "tcp"
+      fix_tcp4_cksum buf, pkt_len, pkt.ip.ihl
     fix_ip4_cksum  buf, pkt.ip.ihl
   elseif pkt.ip.version == 6
     if pkt.l4.proto == "udp"
       fix_udp6_cksum buf, pkt_len
+    elseif pkt.l4.proto == "tcp"
+      fix_tcp6_cksum buf, pkt_len
 
   ffi.string buf, pkt_len
 

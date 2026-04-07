@@ -49,8 +49,9 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- ── L3 / L4 / L7 ─────────────────────────────────────────────
   -- parse_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
-  pkt = ndpi.parse_packet raw
+  pkt, parse_status = ndpi.parse_packet raw
   unless pkt
+    -- TCP segments before a complete DNS message are buffered silently; let them through.
     return NF_ACCEPT
 
   -- Pass to nDPI for flow state tracking (TCP sequence, etc.)

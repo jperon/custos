@@ -240,6 +240,16 @@ query_dns = (domain) ->
     print output
   return success, output
 
+--- Send a DNS-over-TCP query using dig +tcp from the client container.
+-- @tparam string domain  Domain name to query.
+-- @treturn boolean, string  success, raw dig output.
+query_dns_tcp = (domain) ->
+  log "Querying DNS (TCP) for #{domain}..."
+  cmd = "docker exec custos-client dig +tcp +tries=1 +time=5 #{domain} @#{dns_server} 2>&1"
+  success, output = execute cmd, true
+  print output if verbose
+  return success, output
+
 check_nftables_set = (set_name) ->
   log "Checking nftables set #{set_name}..."
   -- Filter runs on host network, so use docker exec to run nft on host's tables
@@ -300,6 +310,53 @@ ping_from_client = (ip, timeout_sec = 2) ->
 flush_ip4_allowed = ->
   execute "docker exec #{filter_name} nft flush set ip  dns-filter ip4_allowed 2>/dev/null", true
   execute "docker exec #{filter_name} nft flush set ip6 dns-filter ip6_allowed 2>/dev/null", true
+
+--- Write a Python TCP-segmentation DNS test script to ./tmp/ and copy it to the container.
+-- The script opens a TCP connection to dns_server:53, sends the 2-byte DNS length
+-- prefix as the first TCP segment, waits 100 ms, then sends the rest of the query.
+-- @tparam string domain  Domain to query.
+-- @tparam string server  DNS server IP address.
+-- @treturn boolean  true on success.
+prepare_tcp_seg_script = (domain, server) ->
+  py = table.concat {
+    "import socket, struct, time"
+    "def make_query(domain):"
+    "    labels = domain.encode().split(b'.')"
+    "    qname = b''.join(bytes([len(l)]) + l for l in labels) + b'\\x00'"
+    "    dns = struct.pack('!HHHHHH', 0xABCD, 0x0100, 1, 0, 0, 0) + qname + struct.pack('!HH', 1, 1)"
+    "    return struct.pack('!H', len(dns)) + dns"
+    "pkt = make_query('#{domain}')"
+    "sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)"
+    "sock.settimeout(5)"
+    "try:"
+    "    sock.connect(('#{server}', 53))"
+    "    sock.send(pkt[:2])"
+    "    time.sleep(0.1)"
+    "    sock.send(pkt[2:])"
+    "    rl = struct.unpack('!H', sock.recv(2))[0]"
+    "    resp = sock.recv(rl)"
+    "    rcode = resp[3] & 0xF"
+    "    print('rcode=' + str(rcode) + ' len=' + str(rl))"
+    "    sock.close()"
+    "except Exception as e:"
+    "    print('error=' + str(e))"
+    "    try: sock.close()"
+    "    except: pass"
+  }, "\n"
+  f = io.open "./tmp/dns_tcp_seg.py", "w"
+  return false unless f
+  f\write py
+  f\close!
+  ok = execute "docker cp ./tmp/dns_tcp_seg.py custos-client:/tmp/dns_tcp_seg.py 2>&1"
+  return ok
+
+--- Run the DNS-over-TCP segmentation test: sends query in two TCP segments.
+-- @tparam string domain  Domain to query.
+-- @treturn boolean, string  success, raw output ("rcode=N len=M" or "error=...").
+query_dns_tcp_segmented = (domain) ->
+  unless prepare_tcp_seg_script domain, dns_server
+    return false, "failed to write/copy Python script"
+  execute "docker exec custos-client python3 /tmp/dns_tcp_seg.py 2>&1", true
 
 -- Main test suite
 tests_passed = 0
@@ -507,6 +564,39 @@ run_test "AAAA records populate ip6_allowed nftables set",
     else
       "AAAA resolved (#{output\match 'AAAA%s+(%S+)' or '?'}) but ip6_allowed set empty"
     return ok, obtained
+
+-- ── TCP DNS tests ─────────────────────────────────────────────────────────────
+
+run_test "DNS over TCP — allowed domain resolves",
+  "dig +tcp #{TEST_DOMAINS.allowed} → NOERROR with at least one A record",
+  ->
+    success, output = query_dns_tcp TEST_DOMAINS.allowed
+    ok = success and (output\match("ANSWER: [1-9]") != nil or output\match("IN%s+A%s+%d") != nil)
+    obtained = output\match("(%d+%.%d+%.%d+%.%d+)") or output\match("([^\n]+)") or "(no output)"
+    return ok, obtained
+
+run_test "DNS over TCP — blocked domain is dropped",
+  "dig +tcp #{TEST_DOMAINS.blocked} → timeout/no answer (Q0 DROPs the data segment)",
+  ->
+    cmd = "docker exec custos-client dig +tcp +tries=1 +time=3 #{TEST_DOMAINS.blocked} @#{dns_server} 2>&1"
+    q_ok, output = execute cmd, true
+    -- Pass if dig did NOT receive a successful NOERROR answer.
+    has_answer = q_ok and (output\match("ANSWER: [1-9]") != nil or output\match("status: NOERROR") != nil)
+    obtained = (output\match "([^\n]+)") or "(no output)"
+    return not has_answer, obtained
+
+run_test "DNS over TCP segmented — 2-segment reassembly works",
+  "Python: seg1=[2-byte len prefix], seg2=[DNS query] for #{TEST_DOMAINS.allowed} → rcode=0",
+  ->
+    ok, output = query_dns_tcp_segmented TEST_DOMAINS.allowed
+    rcode_str = output and output\match "rcode=(%d+)"
+    rcode = rcode_str and tonumber rcode_str
+    success = ok and rcode == 0
+    obtained = if rcode_str
+      "rcode=#{rcode_str} (expected 0)"
+    else
+      (output\match "([^\n]+)") or "(no output)"
+    return success, obtained
 
 -- ── Teardown ──────────────────────────────────────────────────────────────────
 compose_down!

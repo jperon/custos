@@ -199,7 +199,7 @@ test "parse_packet — TCP DNS minimal", ->
 
 test "parse_packet — TCP DNS too short (no length prefix)", ->
   -- Create a packet that is just the TCP header + 1 byte
-  raw = make_ipv4_tcp_dns "192.168.1.42", "8.8.8.8", 54321, 53, ""
+  raw = make_ipv4_tcp_dns "192.168.1.42", "8.8.8.8", 54322, 53, ""
   -- Since make_ipv4_tcp_dns adds 2 bytes for length prefix, it'll have 2 bytes.
   -- We manually truncate it to 1 byte of payload to test the 14B check (2+12).
   raw = raw\sub 1, #raw - 1
@@ -243,7 +243,7 @@ test "patch_and_checksum — TCP response", ->
   dns_len = #dns_payload
   tcp_payload = string.char(bit.rshift(bit.band(dns_len, 0xFF00), 8), bit.band(dns_len, 0xFF)) .. dns_payload
 
-  raw = make_ipv4_tcp_dns "192.168.1.42", "8.8.8.8", 54321, 53, dns_payload
+  raw = make_ipv4_tcp_dns "192.168.1.42", "8.8.8.8", 54323, 53, dns_payload
 
   pkt = parse_packet raw
   answers = m_ndpi.parse_answers raw, pkt

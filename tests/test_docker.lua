@@ -246,6 +246,16 @@ query_dns = function(domain)
   end
   return success, output
 end
+local query_dns_tcp
+query_dns_tcp = function(domain)
+  log("Querying DNS (TCP) for " .. tostring(domain) .. "...")
+  local cmd = "docker exec custos-client dig +tcp +tries=1 +time=5 " .. tostring(domain) .. " @" .. tostring(dns_server) .. " 2>&1"
+  local success, output = execute(cmd, true)
+  if verbose then
+    print(output)
+  end
+  return success, output
+end
 local check_nftables_set
 check_nftables_set = function(set_name)
   log("Checking nftables set " .. tostring(set_name) .. "...")
@@ -302,6 +312,49 @@ local flush_ip4_allowed
 flush_ip4_allowed = function()
   execute("docker exec " .. tostring(filter_name) .. " nft flush set ip  dns-filter ip4_allowed 2>/dev/null", true)
   return execute("docker exec " .. tostring(filter_name) .. " nft flush set ip6 dns-filter ip6_allowed 2>/dev/null", true)
+end
+local prepare_tcp_seg_script
+prepare_tcp_seg_script = function(domain, server)
+  local py = table.concat({
+    "import socket, struct, time",
+    "def make_query(domain):",
+    "    labels = domain.encode().split(b'.')",
+    "    qname = b''.join(bytes([len(l)]) + l for l in labels) + b'\\x00'",
+    "    dns = struct.pack('!HHHHHH', 0xABCD, 0x0100, 1, 0, 0, 0) + qname + struct.pack('!HH', 1, 1)",
+    "    return struct.pack('!H', len(dns)) + dns",
+    "pkt = make_query('" .. tostring(domain) .. "')",
+    "sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
+    "sock.settimeout(5)",
+    "try:",
+    "    sock.connect(('" .. tostring(server) .. "', 53))",
+    "    sock.send(pkt[:2])",
+    "    time.sleep(0.1)",
+    "    sock.send(pkt[2:])",
+    "    rl = struct.unpack('!H', sock.recv(2))[0]",
+    "    resp = sock.recv(rl)",
+    "    rcode = resp[3] & 0xF",
+    "    print('rcode=' + str(rcode) + ' len=' + str(rl))",
+    "    sock.close()",
+    "except Exception as e:",
+    "    print('error=' + str(e))",
+    "    try: sock.close()",
+    "    except: pass"
+  }, "\n")
+  local f = io.open("./tmp/dns_tcp_seg.py", "w")
+  if not (f) then
+    return false
+  end
+  f:write(py)
+  f:close()
+  local ok = execute("docker cp ./tmp/dns_tcp_seg.py custos-client:/tmp/dns_tcp_seg.py 2>&1")
+  return ok
+end
+local query_dns_tcp_segmented
+query_dns_tcp_segmented = function(domain)
+  if not (prepare_tcp_seg_script(domain, dns_server)) then
+    return false, "failed to write/copy Python script"
+  end
+  return execute("docker exec custos-client python3 /tmp/dns_tcp_seg.py 2>&1", true)
 end
 local tests_passed = 0
 local tests_failed = 0
@@ -477,6 +530,32 @@ run_test("AAAA records populate ip6_allowed nftables set", "nslookup -type=AAAA 
     obtained = "AAAA resolved (" .. tostring(output:match('AAAA%s+(%S+)' or '?')) .. ") but ip6_allowed set empty"
   end
   return ok, obtained
+end)
+run_test("DNS over TCP — allowed domain resolves", "dig +tcp " .. tostring(TEST_DOMAINS.allowed) .. " → NOERROR with at least one A record", function()
+  local success, output = query_dns_tcp(TEST_DOMAINS.allowed)
+  local ok = success and (output:match("ANSWER: [1-9]") ~= nil or output:match("IN%s+A%s+%d") ~= nil)
+  local obtained = output:match("(%d+%.%d+%.%d+%.%d+)") or output:match("([^\n]+)") or "(no output)"
+  return ok, obtained
+end)
+run_test("DNS over TCP — blocked domain is dropped", "dig +tcp " .. tostring(TEST_DOMAINS.blocked) .. " → timeout/no answer (Q0 DROPs the data segment)", function()
+  local cmd = "docker exec custos-client dig +tcp +tries=1 +time=3 " .. tostring(TEST_DOMAINS.blocked) .. " @" .. tostring(dns_server) .. " 2>&1"
+  local q_ok, output = execute(cmd, true)
+  local has_answer = q_ok and (output:match("ANSWER: [1-9]") ~= nil or output:match("status: NOERROR") ~= nil)
+  local obtained = (output:match("([^\n]+)")) or "(no output)"
+  return not has_answer, obtained
+end)
+run_test("DNS over TCP segmented — 2-segment reassembly works", "Python: seg1=[2-byte len prefix], seg2=[DNS query] for " .. tostring(TEST_DOMAINS.allowed) .. " → rcode=0", function()
+  local ok, output = query_dns_tcp_segmented(TEST_DOMAINS.allowed)
+  local rcode_str = output and output:match("rcode=(%d+)")
+  local rcode = rcode_str and tonumber(rcode_str)
+  local success = ok and rcode == 0
+  local obtained
+  if rcode_str then
+    obtained = "rcode=" .. tostring(rcode_str) .. " (expected 0)"
+  else
+    obtained = (output:match("([^\n]+)")) or "(no output)"
+  end
+  return success, obtained
 end)
 compose_down()
 print("")

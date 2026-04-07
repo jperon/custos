@@ -39,8 +39,10 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   raw = ffi.string payload_ptr[0], payload_len
 
   -- ── L3 / L4 / L7 ─────────────────────────────────────────────
-  pkt = ndpi.parse_packet raw
+  pkt, parse_status = ndpi.parse_packet raw
   unless pkt
+    -- TCP segments arriving before a complete DNS message are buffered; let them through.
+    return NF_ACCEPT if parse_status == "buffering"
     log_warn { action: "parse_failed", mac_src: l2.mac_src }
     return NF_ACCEPT   -- fail-open sur paquet non-parsable
 

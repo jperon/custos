@@ -134,7 +134,7 @@ test("parse_packet — TCP DNS minimal", function()
   return assert_eq(pkt.questions[1].qname, "www.github.com", "qname")
 end)
 test("parse_packet — TCP DNS too short (no length prefix)", function()
-  local raw = make_ipv4_tcp_dns("192.168.1.42", "8.8.8.8", 54321, 53, "")
+  local raw = make_ipv4_tcp_dns("192.168.1.42", "8.8.8.8", 54322, 53, "")
   raw = raw:sub(1, #raw - 1)
   local pkt = parse_packet(raw)
   return assert_eq(pkt, nil, "should be nil if payload < 14B")
@@ -154,7 +154,7 @@ test("patch_and_checksum — TCP response", function()
   local dns_payload = hdr .. question .. rr
   local dns_len = #dns_payload
   local tcp_payload = string.char(bit.rshift(bit.band(dns_len, 0xFF00), 8), bit.band(dns_len, 0xFF)) .. dns_payload
-  local raw = make_ipv4_tcp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns_payload)
+  local raw = make_ipv4_tcp_dns("192.168.1.42", "8.8.8.8", 54323, 53, dns_payload)
   local pkt = parse_packet(raw)
   local answers = m_ndpi.parse_answers(raw, pkt)
   local patched = m_ndpi.patch_and_checksum(raw, pkt, answers, 60)

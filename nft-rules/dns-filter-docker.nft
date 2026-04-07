@@ -61,15 +61,17 @@ table ip dns-filter {
   chain output {
     type   filter hook output priority 0
     policy accept
-    # Q1: DNS responses from dnsmasq to LAN clients
+    # Q1: DNS responses from dnsmasq to LAN clients (UDP + TCP)
     ip protocol udp udp sport 53 queue num 1 bypass
+    ip protocol tcp tcp sport 53 queue num 1 bypass
   }
 
   chain input {
     type   filter hook input priority 0
     policy accept
-    # Q0: DNS queries from LAN clients to dnsmasq
+    # Q0: DNS queries from LAN clients to dnsmasq (UDP + TCP)
     ip saddr 172.28.0.0/24 ip protocol udp udp dport 53 queue num 0 bypass
+    ip saddr 172.28.0.0/24 ip protocol tcp tcp dport 53 queue num 0 bypass
   }
 }
 

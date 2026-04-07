@@ -39,8 +39,11 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
-  local pkt = ndpi.parse_packet(raw)
+  local pkt, parse_status = ndpi.parse_packet(raw)
   if not (pkt) then
+    if parse_status == "buffering" then
+      return NF_ACCEPT
+    end
     log_warn({
       action = "parse_failed",
       mac_src = l2.mac_src
