@@ -155,7 +155,7 @@ luarocks install moonscript
 
 **OpenWrt:**
 ```bash
-opkg install luajit libnetfilter-queue libnftables nftables kmod-br-netfilter
+opkg install luajit libnetfilter-queue nftables kmod-br-netfilter
 # moonscript via luarocks or build from source
 ```
 

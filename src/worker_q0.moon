@@ -44,6 +44,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     log_warn { action: "parse_failed", mac_src: l2.mac_src }
     return NF_ACCEPT   -- fail-open sur paquet non-parsable
 
+  -- ── nDPI State Tracking ──────────────────────────────────────
+  flow = ndpi.get_flow pkt
+  if math.random(1000) == 1
+    ndpi.purge_flows!
+
   -- On ne traite que les questions (QR bit = 0)
   return NF_ACCEPT if pkt.dns.is_response
 
@@ -56,8 +61,8 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     in_if:       tostring l2.in_ifindex
     src_ip:      pkt.ip.src_ip
     dst_ip:      pkt.ip.dst_ip
-    src_port:    pkt.udp.src_port
-    dst_port:    pkt.udp.dst_port
+    src_port:    pkt.l4.src_port
+    dst_port:    pkt.l4.dst_port
     txid:        string.format "0x%04x", pkt.dns.txid
     af:          pkt.ip.version == 6 and "ipv6" or "ipv4"
     ndpi_master: pkt.ndpi_master
@@ -83,19 +88,23 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- Enregistre la transaction IPC pour Q1 : seulement si toutes les questions
   -- ont été autorisées (garantit qu'aucune fausse entrée n'entre dans pending).
   if verdict == NF_ACCEPT
-    write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.udp.src_port
+    write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port
 
   -- Réponse REFUSED au client (un seul envoi par paquet DNS)
   -- La question originale est copiée dans le payload REFUSED avec
   -- l'extension EDE code 15 (Filtered, RFC 8914).
   if verdict == NF_DROP
-    dns_raw = raw\sub pkt.udp.payload_off + 1, pkt.udp.payload_off + pkt.udp.payload_len
-    refused_payload = build_refused { hdr: pkt.dns }, dns_raw
-    if refused_payload
-      refuse.send_refused pkt.ip.src_ip_raw, pkt.udp.src_port,
-                          refused_payload, pkt.ip.af
+    -- For TCP, we simply DROP the packet to kill the connection/request
+    -- as forging a TCP REFUSED response requires a full TCP stack.
+    if pkt.l4.proto == "udp"
+      dns_raw = raw\sub pkt.l4.off + 1, pkt.l4.off + pkt.l4.payload_len
+      refused_payload = build_refused { hdr: pkt.dns }, dns_raw
+      if refused_payload
+        refuse.send_refused pkt.ip.src_ip_raw, pkt.l4.src_port,
+                            refused_payload, pkt.ip.af
 
   verdict
+
 
 -- ── Point d'entrée ───────────────────────────────────────────────
 -- Appelé par main.moon après fork(), avec le fd d'écriture du pipe.

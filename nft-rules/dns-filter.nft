@@ -58,14 +58,20 @@ table ip dns-filter {
     ct state established,related accept
 
     # ── Trafic DNS upstream → NFQUEUE 0 (questions sortantes) ─────
-    # Paquets UDP/53 allant DU LAN VERS le resolver
+    # Paquets UDP/53 ou TCP/53 allant DU LAN VERS le resolver
     ip protocol udp udp dport 53 \
+      ip saddr 192.168.1.0/24 \
+      queue num 0 bypass
+    ip protocol tcp tcp dport 53 \
       ip saddr 192.168.1.0/24 \
       queue num 0 bypass
 
     # ── Trafic DNS retour → NFQUEUE 1 (réponses entrantes) ────────
-    # Paquets UDP/53 venant du resolver allant VERS le LAN
+    # Paquets UDP/53 ou TCP/53 venant du resolver allant VERS le LAN
     ip protocol udp udp sport 53 \
+      ip daddr 192.168.1.0/24 \
+      queue num 1 bypass
+    ip protocol tcp tcp sport 53 \
       ip daddr 192.168.1.0/24 \
       queue num 1 bypass
 
@@ -139,7 +145,9 @@ table ip6 dns-filter {
 
     # DNS v6
     ip6 nexthdr udp udp dport 53 queue num 0 bypass
+    ip6 nexthdr tcp tcp dport 53 queue num 0 bypass
     ip6 nexthdr udp udp sport 53 queue num 1 bypass
+    ip6 nexthdr tcp tcp sport 53 queue num 1 bypass
 
     # IPs autorisées
     ip6 daddr @ip6_allowed accept

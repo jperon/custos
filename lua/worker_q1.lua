@@ -42,10 +42,14 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   if not (pkt) then
     return NF_ACCEPT
   end
+  ndpi.get_flow(pkt)
+  if math.random(1000) == 1 then
+    ndpi.purge_flows()
+  end
   if not (pkt.dns.is_response) then
     return NF_ACCEPT
   end
-  local client_port = pkt.udp.dst_port
+  local client_port = pkt.l4.dst_port
   local txid = pkt.dns.txid
   if not (DOCKER_MODE) then
     if not (is_pending(txid, pkt.ip.dst_ip, client_port, now)) then

@@ -48,17 +48,22 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   raw = ffi.string payload_ptr[0], payload_len
 
   -- ── L3 / L4 / L7 ─────────────────────────────────────────────
-  -- parse_packet gère IPv4 et IPv6, UDP, et le header DNS en un seul appel.
+  -- parse_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
   pkt = ndpi.parse_packet raw
   unless pkt
     return NF_ACCEPT
 
+  -- Pass to nDPI for flow state tracking (TCP sequence, etc.)
+  ndpi.get_flow pkt
+  if math.random(1000) == 1
+    ndpi.purge_flows!
+
   unless pkt.dns.is_response
     return NF_ACCEPT
 
-  -- La question originale avait src_ip=pkt.ip.dst_ip, src_port=pkt.udp.dst_port
+  -- La question originale avait src_ip=pkt.ip.dst_ip, src_port=pkt.l4.dst_port
   -- (la réponse est adressée au client LAN).
-  client_port = pkt.udp.dst_port
+  client_port = pkt.l4.dst_port
   txid        = pkt.dns.txid
 
   -- ── Vérification IPC ─────────────────────────────────────────
@@ -108,12 +113,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- ── Verdict avec payload modifié ─────────────────────────────
   -- On appelle nfq_set_verdict directement ici avec le payload modifié,
-  -- puis on retourne le sentinel -1 pour que nfq_loop ne repose pas
+  -- puis on retourne le sentinel -1 pour que nfq_loop ne repose
   -- un second verdict (ce qui corromprait la queue).
   patched_ptr = ffi.cast "const unsigned char*", patched
   libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr
 
   -1   -- sentinel : verdict déjà posé, nfq_loop ne doit pas reposer de verdict
+
 
 -- ── Point d'entrée ───────────────────────────────────────────────
 --- Start the Q1 response worker.

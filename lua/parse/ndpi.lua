@@ -16,6 +16,7 @@ else
   backend = require("parse.ndpi_v4")
 end
 local PROTO_UDP = 17
+local PROTO_TCP = 6
 local QTYPE = {
   A = 1,
   NS = 2,
@@ -38,7 +39,42 @@ local RCODE = {
   NXDOMAIN = 3,
   REFUSED = 5
 }
-local NDPI_PROTOCOL_DNS = 5
+local flow_cache = { }
+local flow_expiry = { }
+local get_flow
+get_flow = function(pkt)
+  local tup = {
+    pkt.ip.src_ip_raw,
+    pkt.l4.src_port,
+    pkt.ip.dst_ip_raw,
+    pkt.l4.dst_port,
+    pkt.ip.protocol
+  }
+  local key = table.concat(tup, "|")
+  if flow_cache[key] then
+    return flow_cache[key]
+  end
+  local size = ndpi_lib.ndpi_detection_get_sizeof_ndpi_flow_struct()
+  local buf = ffi.new("uint8_t[?]", size)
+  ffi.fill(buf, size, 0)
+  local flow = ffi.cast("ndpi_flow_struct*", buf)
+  flow_cache[key] = flow
+  flow_expiry[key] = os.time()
+  return flow
+end
+local purge_flows
+purge_flows = function(max_age)
+  if max_age == nil then
+    max_age = 300
+  end
+  local now = os.time()
+  for key, expiry in pairs(flow_expiry) do
+    if now - expiry > max_age then
+      flow_cache[key] = nil
+      flow_expiry[key] = nil
+    end
+  end
+end
 local ipv6_str = ffi.new("char[46]")
 local r16
 r16 = function(p, o)
@@ -271,23 +307,50 @@ parse_packet = function(raw)
   if not (ip) then
     return nil
   end
-  if ip.protocol ~= PROTO_UDP then
+  local proto = ip.protocol
+  local l4 = nil
+  if proto == PROTO_UDP then
+    local udp_off = ip.ihl
+    if len < udp_off + 8 then
+      return nil
+    end
+    l4 = {
+      src_port = r16(p, udp_off),
+      dst_port = r16(p, udp_off + 2),
+      len = r16(p, udp_off + 4),
+      off = udp_off + 8,
+      payload_len = len - udp_off - 8,
+      proto = "udp"
+    }
+  elseif proto == PROTO_TCP then
+    local tcp_off = ip.ihl
+    if len < tcp_off + 20 then
+      return nil
+    end
+    local data_off = tcp_off + (bit.rshift(p[tcp_off + 12], 4) * 4)
+    if len < data_off then
+      return nil
+    end
+    l4 = {
+      src_port = r16(p, tcp_off),
+      dst_port = r16(p, tcp_off + 2),
+      len = len - data_off,
+      off = data_off,
+      payload_len = len - data_off,
+      proto = "tcp"
+    }
+  else
     return nil
   end
-  local udp_off = ip.ihl
-  if len < udp_off + 8 then
-    return nil
+  local dns_off = l4.off
+  local dns_len = l4.payload_len
+  if l4.proto == "tcp" then
+    if dns_len < 14 then
+      return nil
+    end
+    dns_off = dns_off + 2
+    dns_len = dns_len - 2
   end
-  local udp = {
-    src_port = r16(p, udp_off),
-    dst_port = r16(p, udp_off + 2),
-    udp_len = r16(p, udp_off + 4),
-    udp_off = udp_off,
-    payload_off = udp_off + 8,
-    payload_len = len - udp_off - 8
-  }
-  local dns_off = udp.payload_off
-  local dns_len = udp.payload_len
   if dns_len < 12 then
     return nil
   end
@@ -336,7 +399,7 @@ parse_packet = function(raw)
   local ndpi_master, ndpi_app = backend.detect(p, len)
   return {
     ip = ip,
-    udp = udp,
+    l4 = l4,
     dns = dns,
     questions = questions,
     answers_off = answers_off,
@@ -350,8 +413,15 @@ parse_answers = function(raw, pkt)
     return { }
   end
   local p = ffi.cast("const uint8_t*", raw)
-  local dns_p = p + pkt.udp.payload_off
-  local dns_len = pkt.udp.payload_len
+  local dns_off = pkt.l4.off
+  if pkt.l4.proto == "tcp" then
+    dns_off = dns_off + 2
+  end
+  local dns_p = p + dns_off
+  local dns_len = pkt.l4.payload_len
+  if pkt.l4.proto == "tcp" then
+    dns_len = dns_len - 2
+  end
   local pos = pkt.answers_off
   local answers = { }
   for _ = 1, pkt.dns.ancount do
@@ -421,16 +491,23 @@ patch_and_checksum = function(raw, pkt, answers, new_ttl)
   local pkt_len = #raw
   local buf = ffi.new("uint8_t[?]", pkt_len)
   ffi.copy(buf, raw, pkt_len)
-  local dns_off = pkt.udp.payload_off
+  local dns_off = pkt.l4.off
+  if pkt.l4.proto == "tcp" then
+    dns_off = dns_off + 2
+  end
   for _index_0 = 1, #answers do
     local ans = answers[_index_0]
     w32(buf, dns_off + ans.ttl_offset, new_ttl)
   end
   if pkt.ip.version == 4 then
-    fix_udp4_cksum(buf, pkt_len, pkt.ip.ihl)
+    if pkt.l4.proto == "udp" then
+      fix_udp4_cksum(buf, pkt_len, pkt.ip.ihl)
+    end
     fix_ip4_cksum(buf, pkt.ip.ihl)
   elseif pkt.ip.version == 6 then
-    fix_udp6_cksum(buf, pkt_len)
+    if pkt.l4.proto == "udp" then
+      fix_udp6_cksum(buf, pkt_len)
+    end
   end
   return ffi.string(buf, pkt_len)
 end
@@ -453,6 +530,8 @@ return {
   patch_and_checksum = patch_and_checksum,
   cleanup = cleanup,
   warmup = warmup,
+  get_flow = get_flow,
+  purge_flows = purge_flows,
   QTYPE = QTYPE,
   QTYPE_NAME = QTYPE_NAME,
   RCODE = RCODE

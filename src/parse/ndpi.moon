@@ -17,8 +17,8 @@ else
   require "parse.ndpi_v4"
 
 -- ── Constants ──────────────────────────────────────────────────
-
 PROTO_UDP = 17
+PROTO_TCP = 6
 
 --- Qtype numeric-to-name mapping.
 QTYPE = {
@@ -32,8 +32,42 @@ for k, v in pairs QTYPE
 --- RCODE constants.
 RCODE = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3, REFUSED: 5 }
 
---- nDPI protocol ID for DNS.
-NDPI_PROTOCOL_DNS = 5
+-- ── Flow Cache for nDPI State Persistence ───────────────────────
+-- Maps 5-tuple (src_ip_raw, src_port, dst_ip_raw, dst_port, proto) -> ndpi_flow_struct*
+flow_cache = {}
+flow_expiry = {}
+
+--- Get or create an nDPI flow struct for a given packet.
+-- @tparam table pkt Parsed packet from parse_packet.
+-- @treturn cdata ndpi_flow_struct pointer.
+get_flow = (pkt) ->
+  tup = {
+    pkt.ip.src_ip_raw, pkt.l4.src_port
+    pkt.ip.dst_ip_raw, pkt.l4.dst_port
+    pkt.ip.protocol
+  }
+  key = table.concat tup, "|"
+
+  if flow_cache[key]
+    return flow_cache[key]
+
+  -- Allocate new flow struct
+  size = ndpi_lib.ndpi_detection_get_sizeof_ndpi_flow_struct!
+  buf = ffi.new "uint8_t[?]", size
+  ffi.fill buf, size, 0
+  flow = ffi.cast "ndpi_flow_struct*", buf
+
+  flow_cache[key] = flow
+  flow_expiry[key] = os.time()
+  flow
+
+--- Purge expired flows from the cache.
+purge_flows = (max_age = 300) ->
+  now = os.time()
+  for key, expiry in pairs flow_expiry
+    if now - expiry > max_age
+      flow_cache[key] = nil
+      flow_expiry[key] = nil
 
 -- ── Pre-allocated buffers ──────────────────────────────────────
 
@@ -287,23 +321,45 @@ parse_packet = (raw) ->
   elseif ver == 6
     parse_l3_v6 p, len
   return nil unless ip
-  return nil if ip.protocol != PROTO_UDP
 
   -- L4
-  udp_off = ip.ihl
-  return nil if len < udp_off + 8
-  udp = {
-    src_port:    r16 p, udp_off
-    dst_port:    r16 p, udp_off + 2
-    udp_len:     r16 p, udp_off + 4
-    :udp_off
-    payload_off: udp_off + 8
-    payload_len: len - udp_off - 8
-  }
+  proto = ip.protocol
+  l4 = nil
+  if proto == PROTO_UDP
+    udp_off = ip.ihl
+    return nil if len < udp_off + 8
+    l4 = {
+      src_port:    r16 p, udp_off
+      dst_port:    r16 p, udp_off + 2
+      len:          r16 p, udp_off + 4
+      off:         udp_off + 8
+      payload_len: len - udp_off - 8
+      proto:       "udp"
+    }
+  elseif proto == PROTO_TCP
+    tcp_off = ip.ihl
+    return nil if len < tcp_off + 20
+    data_off = tcp_off + (bit.rshift(p[tcp_off + 12], 4) * 4)
+    return nil if len < data_off
+    l4 = {
+      src_port:    r16 p, tcp_off
+      dst_port:    r16 p, tcp_off + 2
+      len:          len - data_off
+      off:         data_off
+      payload_len: len - data_off
+      proto:       "tcp"
+    }
+  else
+    return nil
 
   -- L7 — DNS header (12 bytes).
-  dns_off = udp.payload_off
-  dns_len = udp.payload_len
+  dns_off = l4.off
+  dns_len = l4.payload_len
+  if l4.proto == "tcp"
+    return nil if dns_len < 14
+    dns_off += 2
+    dns_len -= 2
+
   return nil if dns_len < 12
   dns_p   = p + dns_off
   flags_hi = dns_p[2]
@@ -339,13 +395,18 @@ parse_packet = (raw) ->
       :qname, :qtype, :qclass
       qtype_name: QTYPE_NAME[qtype] or "TYPE#{qtype}"
     }
+
   answers_off = qpos
 
-  -- nDPI protocol detection (version-specific backend).
+  -- nDPI protocol detection.
   ndpi_master, ndpi_app = backend.detect p, len
 
-  { :ip, :udp, :dns, :questions, :answers_off
-    :ndpi_master, :ndpi_app }
+  {
+    ip: ip, l4: l4, dns: dns, questions: questions
+    answers_off: answers_off
+    ndpi_master: ndpi_master, ndpi_app: ndpi_app
+  }
+
 
 --- Parse DNS answer RRs from a raw IP packet.
 -- @tparam string raw Raw IP packet.
@@ -354,8 +415,13 @@ parse_packet = (raw) ->
 parse_answers = (raw, pkt) ->
   return {} unless pkt.dns.is_response and pkt.dns.ancount > 0
   p       = ffi.cast "const uint8_t*", raw
-  dns_p   = p + pkt.udp.payload_off
-  dns_len = pkt.udp.payload_len
+  dns_off = pkt.l4.off
+  if pkt.l4.proto == "tcp"
+    dns_off += 2
+  dns_p   = p + dns_off
+  dns_len = pkt.l4.payload_len
+  if pkt.l4.proto == "tcp"
+    dns_len -= 2
   pos     = pkt.answers_off
   answers = {}
 
@@ -401,6 +467,7 @@ parse_answers = (raw, pkt) ->
 
   answers
 
+
 --- Patch DNS response TTLs and fix checksums, return the modified packet.
 -- @tparam string raw Raw IP packet (Lua string).
 -- @tparam table pkt Result from parse_packet.
@@ -412,16 +479,20 @@ patch_and_checksum = (raw, pkt, answers, new_ttl) ->
   buf = ffi.new "uint8_t[?]", pkt_len
   ffi.copy buf, raw, pkt_len
 
-  dns_off = pkt.udp.payload_off
+  dns_off = pkt.l4.off
+  if pkt.l4.proto == "tcp"
+    dns_off += 2
+
   for ans in *answers
     w32 buf, dns_off + ans.ttl_offset, new_ttl
 
   if pkt.ip.version == 4
-    fix_udp4_cksum buf, pkt_len, pkt.ip.ihl
+    if pkt.l4.proto == "udp"
+      fix_udp4_cksum buf, pkt_len, pkt.ip.ihl
     fix_ip4_cksum  buf, pkt.ip.ihl
   elseif pkt.ip.version == 6
-    -- IPv6 has no IP-level checksum; only UDP checksum needs updating.
-    fix_udp6_cksum buf, pkt_len
+    if pkt.l4.proto == "udp"
+      fix_udp6_cksum buf, pkt_len
 
   ffi.string buf, pkt_len
 
@@ -443,4 +514,4 @@ warmup = ->
   nil
 
 { :parse_packet, :parse_answers, :patch_and_checksum, :cleanup, :warmup
-  :QTYPE, :QTYPE_NAME, :RCODE }
+  :get_flow, :purge_flows, :QTYPE, :QTYPE_NAME, :RCODE }

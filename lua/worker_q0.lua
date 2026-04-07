@@ -47,6 +47,10 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     })
     return NF_ACCEPT
   end
+  local flow = ndpi.get_flow(pkt)
+  if math.random(1000) == 1 then
+    ndpi.purge_flows()
+  end
   if pkt.dns.is_response then
     return NF_ACCEPT
   end
@@ -56,8 +60,8 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     in_if = tostring(l2.in_ifindex),
     src_ip = pkt.ip.src_ip,
     dst_ip = pkt.ip.dst_ip,
-    src_port = pkt.udp.src_port,
-    dst_port = pkt.udp.dst_port,
+    src_port = pkt.l4.src_port,
+    dst_port = pkt.l4.dst_port,
     txid = string.format("0x%04x", pkt.dns.txid),
     af = pkt.ip.version == 6 and "ipv6" or "ipv4",
     ndpi_master = pkt.ndpi_master,
@@ -93,15 +97,17 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end
   end
   if verdict == NF_ACCEPT then
-    write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.udp.src_port)
+    write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port)
   end
   if verdict == NF_DROP then
-    local dns_raw = raw:sub(pkt.udp.payload_off + 1, pkt.udp.payload_off + pkt.udp.payload_len)
-    local refused_payload = build_refused({
-      hdr = pkt.dns
-    }, dns_raw)
-    if refused_payload then
-      refuse.send_refused(pkt.ip.src_ip_raw, pkt.udp.src_port, refused_payload, pkt.ip.af)
+    if pkt.l4.proto == "udp" then
+      local dns_raw = raw:sub(pkt.l4.off + 1, pkt.l4.off + pkt.l4.payload_len)
+      local refused_payload = build_refused({
+        hdr = pkt.dns
+      }, dns_raw)
+      if refused_payload then
+        refuse.send_refused(pkt.ip.src_ip_raw, pkt.l4.src_port, refused_payload, pkt.ip.af)
+      end
     end
   end
   return verdict

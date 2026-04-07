@@ -6,15 +6,25 @@ package.loaded["ffi_defs"] = {
   libnfq = { },
   libnft = { }
 }
+local PROTO_TCP = 6
+local PROTO_UDP = 17
+local AF_INET = 2
+local AF_INET6 = 10
+local DNS_PORT = 53
+local DOCKER_MODE = false
+local ALLOWED_DOMAINS = { }
+local IPC_MSG_SIZE = 21
+local IPC_PENDING_TTL = 5
 package.loaded["config"] = {
-  PROTO_UDP = 17,
-  AF_INET = 2,
-  AF_INET6 = 10,
-  DNS_PORT = 53,
-  DOCKER_MODE = false,
-  ALLOWED_DOMAINS = { },
-  IPC_MSG_SIZE = 21,
-  IPC_PENDING_TTL = 5
+  PROTO_TCP = PROTO_TCP,
+  PROTO_UDP = PROTO_UDP,
+  AF_INET = AF_INET,
+  AF_INET6 = AF_INET6,
+  DNS_PORT = DNS_PORT,
+  DOCKER_MODE = DOCKER_MODE,
+  ALLOWED_DOMAINS = ALLOWED_DOMAINS,
+  IPC_MSG_SIZE = IPC_MSG_SIZE,
+  IPC_PENDING_TTL = IPC_PENDING_TTL
 }
 local passed, failed = 0, 0
 local eq
@@ -65,7 +75,7 @@ local make_ipv4_udp_dns
 make_ipv4_udp_dns = function(src_ip, dst_ip, src_port, dst_port, dns_payload)
   local total_len = 20 + 8 + #dns_payload
   local ihl_ver = 0x45
-  local ip = string.char(ihl_ver, 0, bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF), 0, 1, 0, 0, 64, 17, 0, 0)
+  local ip = string.char(ihl_ver, 0, bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF), 0, 1, 0, 0, 64, PROTO_UDP, 0, 0)
   local ip4bytes
   ip4bytes = function(s)
     local a, b, c, d = s:match("(%d+)%.(%d+)%.(%d+)%.(%d+)")
@@ -76,6 +86,22 @@ make_ipv4_udp_dns = function(src_ip, dst_ip, src_port, dst_port, dns_payload)
   local udp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), bit.rshift(bit.band(udp_len, 0xFF00), 8), bit.band(udp_len, 0xFF), 0, 0)
   return ip .. udp .. dns_payload
 end
+local make_ipv4_tcp_dns
+make_ipv4_tcp_dns = function(src_ip, dst_ip, src_port, dst_port, dns_payload)
+  local dns_len = #dns_payload
+  local tcp_payload = string.char(bit.rshift(bit.band(dns_len, 0xFF00), 8), bit.band(dns_len, 0xFF)) .. dns_payload
+  local total_len = 20 + 20 + #tcp_payload
+  local ihl_ver = 0x45
+  local ip = string.char(ihl_ver, 0, bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF), 0, 1, 0, 0, 64, PROTO_TCP, 0, 0)
+  local ip4bytes
+  ip4bytes = function(s)
+    local a, b, c, d = s:match("(%d+)%.(%d+)%.(%d+)%.(%d+)")
+    return string.char(tonumber(a), tonumber(b), tonumber(c), tonumber(d))
+  end
+  ip = ip .. ip4bytes(src_ip) .. ip4bytes(dst_ip)
+  local tcp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), 0, 0, 0, 0, 0, 0, 0, 0, 0x50, 0x02, 0x72, 0x10, 0, 0, 0, 0)
+  return ip .. tcp .. tcp_payload
+end
 local make_ipv6_udp_dns
 make_ipv6_udp_dns = function(src_ip6, dst_ip6, src_port, dst_port, dns_payload)
   local udp_len = 8 + #dns_payload
@@ -84,7 +110,57 @@ make_ipv6_udp_dns = function(src_ip6, dst_ip6, src_port, dst_port, dns_payload)
   local udp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), bit.rshift(bit.band(udp_len, 0xFF00), 8), bit.band(udp_len, 0xFF), 0, 0)
   return ip6 .. udp .. dns_payload
 end
-io.write("\n── parse/ip ──\n")
+io.write("\n── parse/ndpi ──\n")
+local m_ndpi = dofile("lua/parse/ndpi.lua")
+local parse_packet = m_ndpi.parse_packet
+local get_flow = m_ndpi.get_flow
+local purge_flows = m_ndpi.purge_flows
+test("parse_packet — UDP DNS minimal", function()
+  local dns = make_dns("\3www\6github\3com\0", 1, false)
+  local raw = make_ipv4_udp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns)
+  local pkt = parse_packet(raw)
+  assert(pkt, "parse_packet nil")
+  assert_eq(pkt.l4.proto, "udp", "proto")
+  assert_eq(pkt.dns.txid, 0x1234, "txid")
+  return assert_eq(pkt.questions[1].qname, "www.github.com", "qname")
+end)
+test("parse_packet — TCP DNS minimal", function()
+  local dns = make_dns("\3www\6github\3com\0", 1, false)
+  local raw = make_ipv4_tcp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns)
+  local pkt = parse_packet(raw)
+  assert(pkt, "parse_packet nil")
+  assert_eq(pkt.l4.proto, "tcp", "proto")
+  assert_eq(pkt.dns.txid, 0x1234, "txid")
+  return assert_eq(pkt.questions[1].qname, "www.github.com", "qname")
+end)
+test("parse_packet — TCP DNS too short (no length prefix)", function()
+  local raw = make_ipv4_tcp_dns("192.168.1.42", "8.8.8.8", 54321, 53, "")
+  raw = raw:sub(1, #raw - 1)
+  local pkt = parse_packet(raw)
+  return assert_eq(pkt, nil, "should be nil if payload < 14B")
+end)
+test("get_flow — persistence", function()
+  local dns = make_dns("\3www\6github\3com\0", 1, false)
+  local raw = make_ipv4_udp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns)
+  local pkt = parse_packet(raw)
+  return true
+end)
+test("patch_and_checksum — TCP response", function()
+  local qname_enc = "\6github\3com\0"
+  local txid = 0x5678
+  local hdr = string.char(0x56, 0x78, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+  local question = qname_enc .. string.char(0, 1, 0, 1)
+  local rr = "\xC0\x0C" .. string.char(0, 1, 0, 1) .. string.char(0, 0, 1, 0x2C) .. string.char(0, 4) .. string.char(1, 2, 3, 4)
+  local dns_payload = hdr .. question .. rr
+  local dns_len = #dns_payload
+  local tcp_payload = string.char(bit.rshift(bit.band(dns_len, 0xFF00), 8), bit.band(dns_len, 0xFF)) .. dns_payload
+  local raw = make_ipv4_tcp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns_payload)
+  local pkt = parse_packet(raw)
+  local answers = m_ndpi.parse_answers(raw, pkt)
+  local patched = m_ndpi.patch_and_checksum(raw, pkt, answers, 60)
+  local ttl_offset = 20 + 20 + 2 + 12 + 16 + 6 + 3
+  return assert_eq(patched:byte(ttl_offset + 1), 60, "TTL patched to 60 in TCP packet")
+end)
 local m_ip = dofile("lua/parse/ip.lua")
 local read_u8 = m_ip.read_u8
 local read_u16 = m_ip.read_u16
