@@ -369,11 +369,6 @@ available for reference or fallback.
 
 ## Known Limitations
 
-- **DNS over TCP** is supported: TCP/53 is intercepted in NFQUEUE, streams
-  are reassembled per 4-tuple using a 2-byte length prefix (RFC 1035 §4.2.2).
-  Intermediate segments are DROPped; once the full DNS message is assembled the
-  filter rejects a single coalesced segment with TTLs patched to `FORCED_TTL`,
-  restoring the original TCP sequence number so the client stack accepts it.
 - **DoH / DoT**: not covered (ports 443/853).
 - **Single-threaded per worker**: one worker per queue. For very
   high throughput, use `--queue-balance N-M` with N workers per range.
