@@ -15,7 +15,8 @@
 --   5. Si non autorisée (réponse forgée ou question bloquée) : NF_DROP
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_RESPONSES, :DOCKER_MODE, :FORCED_TTL, :CLIENT_EXPIRY } = require "config"
+{ :QUEUE_RESPONSES, :DOCKER_MODE, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN } = require "config"
+neigh = require "neigh"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
 { :drain_pipe, :is_pending, :consume } = require "ipc"
@@ -35,6 +36,9 @@ ip_to_mac = {}
 
 -- fd de lecture du pipe IPC, injecté par main.moon avant fork()
 pipe_rfd = nil
+
+-- Timestamp du dernier refresh de la table voisine (lazy-refresh sur miss)
+last_neigh_refresh = 0
 
 -- ── Suivi des clients par adresse MAC ───────────────────────────
 -- Mise à jour de mac_clients et ip_to_mac à chaque message IPC reçu.
@@ -82,10 +86,23 @@ purge_mac_clients = (ts) ->
 -- @treturn string|nil Adresse IP dans la famille demandée, ou nil si inconnue
 resolve_client_family = (ip_str, want) ->
   mac = ip_to_mac[ip_str]
-  return nil unless mac
-  entry = mac_clients[mac]
-  return nil unless entry
-  entry[want]
+  if mac
+    entry = mac_clients[mac]
+    result = entry and entry[want]
+    return result if result
+
+  -- Miss : lazy-refresh si le cooldown est écoulé
+  ts = os.time!
+  if ts - last_neigh_refresh > NEIGH_REFRESH_COOLDOWN
+    last_neigh_refresh = ts
+    neigh.refresh mac_clients, ip_to_mac
+    -- Retry après refresh
+    mac2 = ip_to_mac[ip_str]
+    if mac2
+      entry2 = mac_clients[mac2]
+      return entry2 and entry2[want]
+
+  nil
 
 --- Process a DNS response packet from NFQUEUE.
 -- Drains IPC, validates the transaction, patches TTL+checksums,
@@ -221,6 +238,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 -- @tparam number rfd Read end of the IPC pipe from Q0.
 run = (rfd) ->
   pipe_rfd = rfd
+  -- Pré-remplit mac_clients / ip_to_mac depuis la table ARP/NDP courante,
+  -- avant même la première requête DNS. Indispensable pour le cross-family
+  -- (IPv6 client → RR A) quand aucun message IPC n'a encore été reçu.
+  do
+    data = neigh.load!
+    mac_clients = data.mac_clients
+    ip_to_mac   = data.ip_to_mac
   -- Pré-initialise le module nDPI avant le démarrage de la boucle pour éviter
   -- une latence de 1–2 s sur le premier paquet (ndpi_init_detection_module).
   ndpi.warmup!

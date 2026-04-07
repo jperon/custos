@@ -110,6 +110,24 @@ services:
     depends_on:
       - wan-dns
 
+  client2:
+    image: custos-client:latest
+    container_name: custos-client2
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    profiles:
+      - ndpi4
+      - ndpi5
+    networks:
+      lan:
+        ipv4_address: 172.28.0.11
+        ipv6_address: fd00:28::b
+    command:
+      sh -c "ip route del default 2>/dev/null; for i in 1 2 3; do for gw in 172.28.0.254 172.28.0.253; do ping -c1 -W2 $$gw >/dev/null 2>&1 && { ip route add default via $$gw 2>/dev/null; break 2; }; done; sleep 2; done; sleep infinity"
+    depends_on:
+      - wan-dns
+
 networks:
   lan:
     driver: bridge

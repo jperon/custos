@@ -21,6 +21,7 @@ MOONS := \
   $(SRC)/parse/ndpi_v4.moon \
   $(SRC)/parse/ndpi_v5.moon \
   $(SRC)/ipc.moon \
+  $(SRC)/neigh.moon \
   $(SRC)/allowlist.moon \
   $(SRC)/nft.moon \
   $(SRC)/nfq_loop.moon \

@@ -3,11 +3,12 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_RESPONSES, DOCKER_MODE, FORCED_TTL, CLIENT_EXPIRY
+local QUEUE_RESPONSES, DOCKER_MODE, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN
 do
   local _obj_0 = require("config")
-  QUEUE_RESPONSES, DOCKER_MODE, FORCED_TTL, CLIENT_EXPIRY = _obj_0.QUEUE_RESPONSES, _obj_0.DOCKER_MODE, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY
+  QUEUE_RESPONSES, DOCKER_MODE, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN = _obj_0.QUEUE_RESPONSES, _obj_0.DOCKER_MODE, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NEIGH_REFRESH_COOLDOWN
 end
+local neigh = require("neigh")
 local ndpi = require("parse/ndpi")
 local QTYPE
 QTYPE = ndpi.QTYPE
@@ -35,6 +36,7 @@ local MAC_ZERO = "00:00:00:00:00:00"
 local mac_clients = { }
 local ip_to_mac = { }
 local pipe_rfd = nil
+local last_neigh_refresh = 0
 local update_mac_clients
 update_mac_clients = function(msg, ts)
   local mac = msg.mac_str
@@ -83,14 +85,24 @@ end
 local resolve_client_family
 resolve_client_family = function(ip_str, want)
   local mac = ip_to_mac[ip_str]
-  if not (mac) then
-    return nil
+  if mac then
+    local entry = mac_clients[mac]
+    local result = entry and entry[want]
+    if result then
+      return result
+    end
   end
-  local entry = mac_clients[mac]
-  if not (entry) then
-    return nil
+  local ts = os.time()
+  if ts - last_neigh_refresh > NEIGH_REFRESH_COOLDOWN then
+    last_neigh_refresh = ts
+    neigh.refresh(mac_clients, ip_to_mac)
+    local mac2 = ip_to_mac[ip_str]
+    if mac2 then
+      local entry2 = mac_clients[mac2]
+      return entry2 and entry2[want]
+    end
   end
-  return entry[want]
+  return nil
 end
 local handle_response
 handle_response = function(qh_ptr, nfad, pkt_id)
@@ -208,6 +220,11 @@ end
 local run
 run = function(rfd)
   pipe_rfd = rfd
+  do
+    local data = neigh.load()
+    mac_clients = data.mac_clients
+    ip_to_mac = data.ip_to_mac
+  end
   ndpi.warmup()
   run_queue(QUEUE_RESPONSES, handle_response)
   return ndpi.cleanup()

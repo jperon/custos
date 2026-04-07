@@ -195,7 +195,7 @@ compose_up = function()
     log("Failed to start docker compose", "ERROR")
     return false
   end
-  if not (wait_for_container(filter_name) and wait_for_container("custos-client") and wait_for_container("custos-wan-dns")) then
+  if not (wait_for_container(filter_name) and wait_for_container("custos-client") and wait_for_container("custos-client2") and wait_for_container("custos-wan-dns")) then
     return false
   end
   if not (wait_for_filter_ready(filter_name)) then
@@ -311,6 +311,18 @@ ping_from_client = function(ip, timeout_sec)
     return false, "no ip"
   end
   local cmd = "docker exec custos-client ping -c1 -W" .. tostring(timeout_sec) .. " " .. tostring(ip) .. " 2>&1"
+  local success, out = execute(cmd, true)
+  return success, out
+end
+local ping_from_client2
+ping_from_client2 = function(ip, timeout_sec)
+  if timeout_sec == nil then
+    timeout_sec = 3
+  end
+  if not (ip and #ip > 0) then
+    return false, "no ip"
+  end
+  local cmd = "docker exec custos-client2 ping -c1 -W" .. tostring(timeout_sec) .. " " .. tostring(ip) .. " 2>&1"
   local success, out = execute(cmd, true)
   return success, out
 end
@@ -655,6 +667,40 @@ run_test("AAAA records populate ip6_allowed nftables set", "nslookup -type=AAAA 
   else
     obtained = "AAAA resolved (" .. tostring(output:match('AAAA%s+(%S+)' or '?')) .. ") but ip6_allowed set empty"
   end
+  return ok, obtained
+end)
+run_test("Per-client isolation — seul client1 accède à l'IP résolue", "client1 résout " .. tostring(TEST_DOMAINS.allowed) .. " → client1 ping=PASS, client2 ping=FAIL (entrée dans set = (172.28.0.10 . <ip>))", function()
+  if not (cloudflare_ip) then
+    return true, "dig indisponible sur l'hôte — test d'isolation ignoré"
+  end
+  flush_ip4_allowed()
+  local p1_before, _ = ping_from_client(cloudflare_ip, 2)
+  local p2_before
+  p2_before, _ = ping_from_client2(cloudflare_ip, 2)
+  if p1_before or p2_before then
+    log("ping avant DNS réussi (LAN isolé + set vide) — résidu de test précédent ?", "WARN")
+  end
+  local q_ok, q_out = query_dns(TEST_DOMAINS.allowed)
+  if not (q_ok and (q_out:match("Address:") or q_out:match("Name:"))) then
+    return false, "DNS query par client1 échouée : " .. tostring((q_out:match('([^\n]+)')) or '?')
+  end
+  os.execute("sleep 1")
+  local p1_ok, p1_out = ping_from_client(cloudflare_ip, 4)
+  if not (p1_ok) then
+    log("client1 ping " .. tostring(cloudflare_ip) .. " : FAIL — vérifier ip4_allowed et route WAN", "WARN")
+  end
+  local p2_ok, p2_out = ping_from_client2(cloudflare_ip, 3)
+  local set_out
+  _, set_out = execute("docker exec " .. tostring(filter_name) .. " nft list set ip dns-filter ip4_allowed 2>/dev/null", true)
+  local entry_c1 = set_out ~= nil and set_out:match("172.28.0.10") ~= nil
+  local entry_c2 = set_out ~= nil and set_out:match("172.28.0.11") ~= nil
+  local obtained = table.concat({
+    "client1_ping=" .. tostring(p1_ok),
+    "client2_ping=" .. tostring(p2_ok),
+    "set_has_client1=" .. tostring(entry_c1 ~= nil),
+    "set_has_client2=" .. tostring(entry_c2 ~= nil)
+  }, " ")
+  local ok = p1_ok and (not p2_ok)
   return ok, obtained
 end)
 run_test("DNS over TCP — allowed domain resolves", "dig +tcp " .. tostring(TEST_DOMAINS.allowed) .. " → NOERROR with at least one A record", function()

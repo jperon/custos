@@ -185,6 +185,7 @@ compose_up = ->
   -- Wait for all containers
   unless wait_for_container(filter_name) and
          wait_for_container("custos-client") and
+         wait_for_container("custos-client2") and
          wait_for_container("custos-wan-dns")
     return false
 
@@ -301,13 +302,25 @@ resolve_host = (domain, qtype = "A") ->
   ip = out and out\match "^%S+"
   return (ip and #ip > 0) and ip or nil
 
---- Pinge une adresse IP depuis le conteneur client.
+--- Pinge une adresse IP depuis le conteneur client (client1 — 172.28.0.10).
 -- @tparam string ip          Adresse IP à pinger
 -- @tparam number timeout_sec Délai max en secondes (défaut 2)
 -- @treturn bool, string      succès, sortie brute
 ping_from_client = (ip, timeout_sec = 2) ->
   return false, "no ip" unless ip and #ip > 0
   cmd = "docker exec custos-client ping -c1 -W#{timeout_sec} #{ip} 2>&1"
+  success, out = execute cmd, true
+  return success, out
+
+--- Pinge une adresse IP depuis le second conteneur client (client2 — 172.28.0.11).
+-- N'a jamais émis de requête DNS : ses paquets vers des IPs non résolues
+-- par lui doivent être FORWARD-DROPpés par le filtre.
+-- @tparam string ip          Adresse IP à pinger
+-- @tparam number timeout_sec Délai max en secondes (défaut 3)
+-- @treturn bool, string      succès, sortie brute
+ping_from_client2 = (ip, timeout_sec = 3) ->
+  return false, "no ip" unless ip and #ip > 0
+  cmd = "docker exec custos-client2 ping -c1 -W#{timeout_sec} #{ip} 2>&1"
   success, out = execute cmd, true
   return success, out
 
@@ -693,6 +706,55 @@ run_test "AAAA records populate ip6_allowed nftables set",
       (set_out\match "elements = {([^}]+)}") or "(entries present)"
     else
       "AAAA resolved (#{output\match 'AAAA%s+(%S+)' or '?'}) but ip6_allowed set empty"
+    return ok, obtained
+
+-- ── Per-client isolation test ───────────────────────────────────────────────
+
+run_test "Per-client isolation — seul client1 accède à l'IP résolue",
+  "client1 résout #{TEST_DOMAINS.allowed} → client1 ping=PASS, client2 ping=FAIL (entrée dans set = (172.28.0.10 . <ip>))",
+  ->
+    unless cloudflare_ip
+      return true, "dig indisponible sur l'hôte — test d'isolation ignoré"
+
+    -- État propre : vider les sets nftables
+    flush_ip4_allowed!
+
+    -- Avant toute résolution DNS, ni client1 ni client2 ne doivent pinguer
+    p1_before, _ = ping_from_client  cloudflare_ip, 2
+    p2_before, _ = ping_from_client2 cloudflare_ip, 2
+    if p1_before or p2_before
+      log "ping avant DNS réussi (LAN isolé + set vide) — résidu de test précédent ?", "WARN"
+
+    -- client1 résout le domaine → add_ip4("172.28.0.10", cloudflare_ip)
+    q_ok, q_out = query_dns TEST_DOMAINS.allowed
+    unless q_ok and (q_out\match("Address:") or q_out\match("Name:"))
+      return false, "DNS query par client1 échouée : #{(q_out\match '([^\n]+)') or '?'}"
+
+    -- Laisser le filtre traiter la réponse (Q1 async)
+    os.execute "sleep 1"
+
+    -- client1 → doit passer (son entrée (172.28.0.10 . cloudflare_ip) est dans le set)
+    p1_ok, p1_out = ping_from_client cloudflare_ip, 4
+    unless p1_ok
+      log "client1 ping #{cloudflare_ip} : FAIL — vérifier ip4_allowed et route WAN", "WARN"
+
+    -- client2 → doit rester bloqué ((172.28.0.11 . cloudflare_ip) absent du set)
+    p2_ok, p2_out = ping_from_client2 cloudflare_ip, 3
+
+    -- V\u00e9rification nft : s'assurer que l'entr\u00e9e pour client1 est bien pr\u00e9sente
+    -- (la paire est "172.28.0.10 . <cloudflare_ip>")
+    _, set_out = execute "docker exec #{filter_name} nft list set ip dns-filter ip4_allowed 2>/dev/null", true
+    entry_c1 = set_out != nil and set_out\match("172.28.0.10") != nil
+    entry_c2 = set_out != nil and set_out\match("172.28.0.11") != nil
+
+    obtained = table.concat {
+      "client1_ping=#{p1_ok}"
+      "client2_ping=#{p2_ok}"
+      "set_has_client1=#{entry_c1 != nil}"
+      "set_has_client2=#{entry_c2 != nil}"
+    }, " "
+
+    ok = p1_ok and (not p2_ok)
     return ok, obtained
 
 -- ── TCP DNS tests ─────────────────────────────────────────────────────────────
