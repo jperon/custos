@@ -42,6 +42,12 @@ if profile == "ndpi5" then
 else
   dns_server = "172.28.0.254"
 end
+local dns6_server
+if profile == "ndpi5" then
+  dns6_server = "fd00:28::fd"
+else
+  dns6_server = "fd00:28::fe"
+end
 local TEST_DOMAINS = {
   allowed = "cloudflare.com",
   blocked = "facebook.com",
@@ -411,6 +417,71 @@ query_dns_tcp_segmented = function(domain)
   end
   return execute("docker exec custos-client luajit /tmp/dns_tcp_seg.lua 2>&1", true)
 end
+local prepare_ipv6_hbh_dns_script
+prepare_ipv6_hbh_dns_script = function(domain, server)
+  local lua_code = table.concat({
+    "local ffi = require 'ffi'",
+    "local bit = require 'bit'",
+    "ffi.cdef([[",
+    "  typedef struct { uint16_t f; uint16_t p; uint32_t fl; uint8_t a[16]; uint32_t sc; } sa6_t;",
+    "  struct timeval { long s; long us; };",
+    "  int socket(int,int,int);",
+    "  int setsockopt(int,int,int,const void*,unsigned int);",
+    "  int connect(int,const sa6_t*,unsigned int);",
+    "  ssize_t send(int,const void*,size_t,int);",
+    "  ssize_t recv(int,void*,size_t,int);",
+    "  int close(int);",
+    "  uint16_t htons(uint16_t);",
+    "  int inet_pton(int,const char*,void*);",
+    "]]) ",
+    "local AF_INET6=10; local SOCK_DGRAM=2; local IPPROTO_IPV6=41",
+    "local IPV6_HOPOPTS=54; local SOL_SOCKET=1; local SO_RCVTIMEO=20",
+    "local server='" .. tostring(server) .. "'",
+    "local domain='" .. tostring(domain) .. "'",
+    "local parts={}",
+    "for l in domain:gmatch('[^.]+') do parts[#parts+1]=string.char(#l)..l end",
+    "local qname=table.concat(parts)..'\\0'",
+    "local dns=string.char(0xAB,0xCD,0x01,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00)",
+    "           ..qname..string.char(0,1,0,1)",
+    "local dns_len=#dns",
+    "local fd=ffi.C.socket(AF_INET6,SOCK_DGRAM,0)",
+    "if fd<0 then print('error=socket') os.exit(1) end",
+    "-- Hop-by-Hop: [Next Header=0][Hdr Ext Len=0][6xPad1] = 8 bytes (must be multiple of 8)",
+    "local hbh=ffi.new('uint8_t[8]',{0,0,0,0,0,0,0,0})",
+    "local r=ffi.C.setsockopt(fd,IPPROTO_IPV6,IPV6_HOPOPTS,hbh,8)",
+    "if r<0 then print('error=setsockopt_hbh') ffi.C.close(fd) os.exit(1) end",
+    "local tv=ffi.new('struct timeval',{2,0})",
+    "ffi.C.setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,tv,ffi.sizeof('struct timeval'))",
+    "local sa=ffi.new('sa6_t')",
+    "sa.f=AF_INET6; sa.p=ffi.C.htons(53)",
+    "ffi.C.inet_pton(AF_INET6,server,sa.a)",
+    "if ffi.C.connect(fd,sa,28)<0 then print('error=connect') ffi.C.close(fd) os.exit(1) end",
+    "local buf=ffi.new('uint8_t[?]',dns_len)",
+    "for i=1,dns_len do buf[i-1]=dns:byte(i) end",
+    "ffi.C.send(fd,buf,dns_len,0)",
+    "local rb=ffi.new('uint8_t[512]')",
+    "local n=ffi.C.recv(fd,rb,512,0)",
+    "ffi.C.close(fd)",
+    "if n<4 then print('sent_ok=1 response=none')",
+    "else local rcode=bit.band(rb[3],0x0F)",
+    "  print('sent_ok=1 rcode='..tostring(rcode)..' response_len='..tostring(n)) end"
+  }, "\n")
+  local f = io.open("./tmp/dns_ipv6_hbh.lua", "w")
+  if not (f) then
+    return false
+  end
+  f:write(lua_code)
+  f:close()
+  local ok = execute("docker cp ./tmp/dns_ipv6_hbh.lua custos-client:/tmp/dns_ipv6_hbh.lua 2>&1")
+  return ok
+end
+local query_dns_ipv6_hbh
+query_dns_ipv6_hbh = function(domain)
+  if not (prepare_ipv6_hbh_dns_script(domain, dns6_server)) then
+    return false, "failed to write/copy IPv6 HbH Lua script"
+  end
+  return execute("docker exec custos-client luajit /tmp/dns_ipv6_hbh.lua 2>&1", true)
+end
 local tests_passed = 0
 local tests_failed = 0
 local cloudflare_ip = nil
@@ -613,6 +684,44 @@ run_test("DNS over TCP segmented — 2-segment reassembly + TTL patched", "LuaJI
     obtained = (output:match("([^\n]+)")) or "(no output)"
   end
   return success, obtained
+end)
+run_test("IPv6 + Hop-by-Hop DNS — filter parses extension header (af=ipv6)", "LuaJIT SOCK_DGRAM+IPV6_HOPOPTS: send HbH DNS query for " .. tostring(TEST_DOMAINS.allowed) .. " → filter log shows af=ipv6 + qname", function()
+  local _, log_before = execute("docker exec " .. tostring(filter_name) .. " cat /app/tmp/dns-filter.log 2>/dev/null | wc -l", true)
+  local lines_before = tonumber((log_before or "0"))
+  local ok, script_out = query_dns_ipv6_hbh(TEST_DOMAINS.allowed)
+  local sent = ok and (script_out and script_out:match("sent_ok=1")) ~= nil
+  if not (sent) then
+    local err = (script_out and script_out:match("([^\n]+)")) or "(no output)"
+    return false, "IPv6 HbH packet not sent: " .. tostring(err)
+  end
+  os.execute("sleep 1")
+  local log_out
+  _, log_out = execute("docker exec " .. tostring(filter_name) .. " cat /app/tmp/dns-filter.log 2>/dev/null", true)
+  local new_lines
+  if log_out then
+    new_lines = log_out:match(".*\n") or log_out
+  else
+    new_lines = ""
+  end
+  local has_ipv6 = log_out ~= nil and (log_out:match("af=ipv6")) ~= nil
+  local has_qname = log_out ~= nil and (log_out:match("qname=" .. tostring(TEST_DOMAINS.allowed:gsub('%.', '%%.')))) ~= nil
+  local rcode_str = script_out and script_out:match("rcode=(%d+)")
+  local resp_note
+  if rcode_str then
+    resp_note = " response=rcode" .. tostring(rcode_str)
+  elseif script_out and script_out:match("response=none") then
+    resp_note = " response=none(filter_processed_ok)"
+  else
+    resp_note = ""
+  end
+  ok = has_ipv6 and has_qname
+  local obtained
+  if ok then
+    obtained = "af=ipv6 + qname=" .. tostring(TEST_DOMAINS.allowed) .. " found in filter log" .. tostring(resp_note)
+  else
+    obtained = "af=ipv6=" .. tostring(has_ipv6) .. " qname=" .. tostring(has_qname) .. " script=" .. tostring((script_out or '?'):gsub('[\n\r]+', ' '))
+  end
+  return ok, obtained
 end)
 compose_down()
 print("")

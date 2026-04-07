@@ -102,10 +102,17 @@ table ip6 dns-filter {
   chain output {
     type   filter hook output priority 0
     policy accept
+    # Q1: DNS responses from dnsmasq to LAN clients (UDP + TCP, including IPv6 ext headers).
+    # meta l4proto follows extension headers transparently.
+    meta l4proto udp udp sport 53 ip6 daddr fd00:28::/64 queue num 1 bypass
+    meta l4proto tcp tcp sport 53 ip6 daddr fd00:28::/64 queue num 1 bypass
   }
 
   chain input {
     type   filter hook input priority 0
     policy accept
+    # Q0: DNS queries from LAN clients to dnsmasq (UDP + TCP, including IPv6 ext headers).
+    ip6 saddr fd00:28::/64 meta l4proto udp udp dport 53 queue num 0 bypass
+    ip6 saddr fd00:28::/64 meta l4proto tcp tcp dport 53 queue num 0 bypass
   }
 }

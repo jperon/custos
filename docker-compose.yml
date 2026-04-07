@@ -27,6 +27,7 @@ services:
     networks:
       lan:
         ipv4_address: 172.28.0.254
+        ipv6_address: fd00:28::fe
       wan:
         ipv4_address: 172.30.0.254
     entrypoint: ["/bin/sh", "-c"]
@@ -43,7 +44,7 @@ services:
         export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;' &&
         luajit /app/lua/main.lua &
         sleep 2 &&
-        exec dnsmasq -k --interface=eth0 --listen-address=172.28.0.254 --port=53 --server=172.30.0.20 --no-resolv --log-queries
+        exec dnsmasq -k --interface=eth0 --listen-address=172.28.0.254 --listen-address=fd00:28::fe --port=53 --server=172.30.0.20 --no-resolv --log-queries
     depends_on:
       - wan-dns
 
@@ -67,6 +68,7 @@ services:
     networks:
       lan:
         ipv4_address: 172.28.0.253
+        ipv6_address: fd00:28::fd
       wan:
         ipv4_address: 172.30.0.253
     entrypoint: ["/bin/sh", "-c"]
@@ -83,7 +85,7 @@ services:
         export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;' &&
         luajit /app/lua/main.lua &
         sleep 2 &&
-        exec dnsmasq -k --interface=eth0 --listen-address=172.28.0.253 --port=53 --server=172.30.0.20 --no-resolv --log-queries
+        exec dnsmasq -k --interface=eth0 --listen-address=172.28.0.253 --listen-address=fd00:28::fd --port=53 --server=172.30.0.20 --no-resolv --log-queries
     depends_on:
       - wan-dns
 
@@ -95,12 +97,14 @@ services:
     container_name: custos-client
     cap_add:
       - NET_ADMIN
+      - NET_RAW
     profiles:
       - ndpi4
       - ndpi5
     networks:
       lan:
         ipv4_address: 172.28.0.10
+        ipv6_address: fd00:28::a
     command:
       sh -c "ip route del default 2>/dev/null; for i in 1 2 3; do for gw in 172.28.0.254 172.28.0.253; do ping -c1 -W2 $$gw >/dev/null 2>&1 && { ip route add default via $$gw 2>/dev/null; break 2; }; done; sleep 2; done; sleep infinity"
     depends_on:
@@ -110,9 +114,11 @@ networks:
   lan:
     driver: bridge
     internal: true   # LAN isolé : pas de masquerade Docker hôte, routing WAN via le filtre
+    enable_ipv6: true
     ipam:
       config:
         - subnet: 172.28.0.0/24
+        - subnet: fd00:28::/64
   wan:
     driver: bridge
     ipam:
