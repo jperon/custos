@@ -102,22 +102,51 @@ checksum_ip = (raw_header) ->
 
 -- ── IPv6 ─────────────────────────────────────────────────────────
 
---- Parse le header IPv6 fixe (40 octets) d'un paquet brut.
--- Ne gère pas les extension headers.
--- @tparam  string     raw Paquet IP brut (début du header IPv6)
--- @treturn table|nil  {version=6, ihl=40, protocol, src_ip, dst_ip,
---                      src_ip_raw, dst_ip_raw, af} ou nil si invalide/non-UDP
+-- Extension header types skippable in the legacy (string-based) parser.
+-- true  = standard formula: (Hdr Ext Len + 1) × 8 bytes
+-- false = AH (RFC 4302):    (Payload Len  + 2) × 4 bytes
+-- ESP (50) is absent: encrypted payload, L4 unreachable.
+IPV6_EXT_HDRS_LEGACY = {
+  [0]:   true   -- Hop-by-Hop Options
+  [43]:  true   -- Routing
+  [44]:  true   -- Fragment
+  [51]:  false  -- Authentication Header
+  [60]:  true   -- Destination Options
+  [135]: true   -- Mobility
+  [139]: true   -- HIP
+  [140]: true   -- Shim6
+}
+
+--- Parse le header IPv6 fixe (40 octets) d'un paquet brut en sautant
+-- les extension headers éventuels (RFC 2460, RFC 4302).
+-- @tparam  string    raw Paquet IP brut (début du header IPv6)
+-- @treturn table|nil {version=6, ihl=l4_off, protocol, src_ip, dst_ip,
+--                     src_ip_raw, dst_ip_raw, af} ou nil si invalide/non-UDP
 parse_ipv6 = (raw) ->
   return nil if #raw < 40
 
   version = bit.rshift bit.band(read_u8(raw, 1), 0xF0), 4
   return nil if version != 6
 
-  -- next_header est à l'octet 7 (offset 6, 0-based)
-  next_header = read_u8 raw, 7
-  -- On ne gère pas les extension headers dans ce POC
-  return nil if next_header != PROTO_UDP
+  -- Parcours des extension headers.
+  -- Les indices sont 1-based (chaînes Lua) ; l'en-tête fixe fait 40 octets.
+  nh  = read_u8 raw, 7   -- Next Header dans l'en-tête fixe (octet 7)
+  off = 41               -- offset 1-based du premier octet après l'en-tête fixe
 
+  while IPV6_EXT_HDRS_LEGACY[nh] != nil
+    return nil if off + 1 > #raw    -- besoin d'au moins 2 octets (NH + Len)
+    next_nh  = read_u8 raw, off
+    ext_size = if nh == 51
+      (read_u8(raw, off + 1) + 2) * 4    -- AH
+    else
+      (read_u8(raw, off + 1) + 1) * 8    -- formule standard
+    return nil if ext_size < 8 or off - 1 + ext_size > #raw
+    off += ext_size
+    nh   = next_nh
+
+  return nil if nh != PROTO_UDP
+
+  l4_off     = off - 1   -- offset 0-based du header L4
   src_ip     = format_ipv6 raw, 9
   dst_ip     = format_ipv6 raw, 25
   src_ip_raw = raw\sub 9, 24    -- 16 octets bruts
@@ -125,8 +154,8 @@ parse_ipv6 = (raw) ->
 
   {
     version: 6
-    ihl: 40
-    protocol: next_header
+    ihl: l4_off
+    protocol: nh
     :src_ip, :dst_ip
     :src_ip_raw, :dst_ip_raw
     af: AF_INET6

@@ -6,6 +6,10 @@ package.loaded["ffi_defs"] = {
   libnfq = { },
   libnft = { }
 }
+pcall(function()
+  return ffi.cdef([[    const char* inet_ntop(int af, const void *src, char *dst, unsigned int size);
+  ]])
+end)
 local PROTO_TCP = 6
 local PROTO_UDP = 17
 local AF_INET = 2
@@ -110,7 +114,14 @@ make_ipv6_udp_dns = function(src_ip6, dst_ip6, src_port, dst_port, dns_payload)
   local udp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), bit.rshift(bit.band(udp_len, 0xFF00), 8), bit.band(udp_len, 0xFF), 0, 0)
   return ip6 .. udp .. dns_payload
 end
-io.write("\n── parse/ndpi ──\n")
+local make_ipv6_ext_udp_dns
+make_ipv6_ext_udp_dns = function(src_ip6, dst_ip6, src_port, dst_port, dns_payload, first_nh, ext_raw)
+  local udp_len = 8 + #dns_payload
+  local pay_len = #ext_raw + udp_len
+  local ip6 = string.char(0x60, 0, 0, 0, bit.rshift(bit.band(pay_len, 0xFF00), 8), bit.band(pay_len, 0xFF), first_nh, 64) .. src_ip6 .. dst_ip6
+  local udp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), bit.rshift(bit.band(udp_len, 0xFF00), 8), bit.band(udp_len, 0xFF), 0, 0)
+  return ip6 .. ext_raw .. udp .. dns_payload
+end
 local m_ndpi = dofile("lua/parse/ndpi.lua")
 local parse_packet = m_ndpi.parse_packet
 local get_flow = m_ndpi.get_flow
@@ -139,10 +150,59 @@ test("parse_packet — TCP DNS too short (no length prefix)", function()
   local pkt = parse_packet(raw)
   return assert_eq(pkt, nil, "should be nil if payload < 14B")
 end)
-test("get_flow — persistence", function()
+test("parse_packet — IPv6 + Hop-by-Hop (type 0) + UDP DNS", function()
+  local hbh = string.char(17, 0, 0, 0, 0, 0, 0, 0)
   local dns = make_dns("\3www\6github\3com\0", 1, false)
-  local raw = make_ipv4_udp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns)
+  local src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  local dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  local raw = make_ipv6_ext_udp_dns(src6, dst6, 54321, 53, dns, 0, hbh)
   local pkt = parse_packet(raw)
+  assert(pkt, "parse_packet nil with Hop-by-Hop")
+  assert_eq(pkt.ip.version, 6, "version=6")
+  assert_eq(pkt.ip.ihl, 48, "ihl=48 (40 + 8 ext)")
+  assert_eq(pkt.l4.proto, "udp", "proto=udp")
+  assert_eq(pkt.dns.txid, 0x1234, "txid")
+  return assert_eq(pkt.questions[1].qname, "www.github.com", "qname")
+end)
+test("parse_packet — IPv6 + Routing (type 43) + UDP DNS", function()
+  local rh = string.char(17, 0, 0, 0, 0, 0, 0, 0)
+  local dns = make_dns("\3www\6github\3com\0", 1, false)
+  local src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  local dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  local raw = make_ipv6_ext_udp_dns(src6, dst6, 54321, 53, dns, 43, rh)
+  local pkt = parse_packet(raw)
+  assert(pkt, "parse_packet nil with Routing header")
+  assert_eq(pkt.ip.ihl, 48, "ihl=48")
+  assert_eq(pkt.l4.proto, "udp", "proto=udp")
+  return assert_eq(pkt.questions[1].qname, "www.github.com", "qname")
+end)
+test("parse_packet — IPv6 + Fragment (type 44) + UDP DNS", function()
+  local fh = string.char(17, 0, 0, 0, 0, 0, 0, 1)
+  local dns = make_dns("\3www\6github\3com\0", 1, false)
+  local src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  local dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  local raw = make_ipv6_ext_udp_dns(src6, dst6, 54321, 53, dns, 44, fh)
+  local pkt = parse_packet(raw)
+  assert(pkt, "parse_packet nil with Fragment header")
+  assert_eq(pkt.ip.ihl, 48, "ihl=48")
+  assert_eq(pkt.l4.proto, "udp", "proto=udp")
+  return assert_eq(pkt.questions[1].qname, "www.github.com", "qname")
+end)
+test("parse_packet — IPv6 + Hop-by-Hop + Routing (chained) + UDP DNS", function()
+  local hbh = string.char(43, 0, 0, 0, 0, 0, 0, 0)
+  local rh = string.char(17, 0, 0, 0, 0, 0, 0, 0)
+  local dns = make_dns("\3www\6github\3com\0", 1, false)
+  local src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  local dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  local raw = make_ipv6_ext_udp_dns(src6, dst6, 54321, 53, dns, 0, hbh .. rh)
+  local pkt = parse_packet(raw)
+  assert(pkt, "parse_packet nil with chained ext headers")
+  assert_eq(pkt.ip.ihl, 56, "ihl=56 (40 + 8 + 8)")
+  assert_eq(pkt.l4.proto, "udp", "proto=udp")
+  assert_eq(pkt.questions[1].qname, "www.github.com", "qname")
+  dns = make_dns("\3www\6github\3com\0", 1, false)
+  raw = make_ipv4_udp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns)
+  pkt = parse_packet(raw)
   return true
 end)
 test("patch_and_checksum — TCP response", function()
@@ -300,10 +360,24 @@ test("parse_ipv6 — paquet UDP minimal", function()
   local ip_hdr = parse_ipv6(raw)
   assert(ip_hdr, "parse_ipv6 retourne nil")
   assert_eq(ip_hdr.version, 6, "version=6")
+  assert_eq(ip_hdr.ihl, 40, "ihl=40 (pas d'ext headers)")
   assert_eq(ip_hdr.protocol, 17, "proto UDP")
   assert_eq(ip_hdr.src_ip, "2001:db8:0:0:0:0:0:42", "src_ip")
   assert_eq(ip_hdr.dst_ip, "2001:db8:0:0:0:0:0:1", "dst_ip")
   return assert((ip_hdr.src_ip_raw and #ip_hdr.src_ip_raw == 16), "src_ip_raw 16 octets")
+end)
+test("parse_ipv6 — Hop-by-Hop + UDP", function()
+  local hbh = string.char(17, 0, 0, 0, 0, 0, 0, 0)
+  local dns = make_dns("\x06github\x03com\x00", 1, false)
+  local src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  local dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  local raw = make_ipv6_ext_udp_dns(src6, dst6, 54321, 53, dns, 0, hbh)
+  local ip_hdr = parse_ipv6(raw)
+  assert(ip_hdr, "parse_ipv6 nil avec Hop-by-Hop")
+  assert_eq(ip_hdr.version, 6, "version=6")
+  assert_eq(ip_hdr.ihl, 48, "ihl=48 (40+8)")
+  assert_eq(ip_hdr.protocol, 17, "proto UDP")
+  return assert((#ip_hdr.src_ip_raw == 16), "src_ip_raw 16 octets")
 end)
 io.write("\n── parse/dns ──\n")
 package.loaded["parse/ip"] = dofile("lua/parse/ip.lua")

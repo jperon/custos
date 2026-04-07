@@ -196,18 +196,58 @@ parse_l3_v4 = (p, len) ->
     af: AF_INET
   }
 
---- Parse IPv6 header from an FFI pointer.
+-- IPv6 extension header type → skip formula:
+--   true  = standard: (len_field+1)*8 bytes
+--   false = AH (RFC 4302): (len_field+2)*4 bytes
+-- ESP (50) is intentionally absent: payload is encrypted, L4 unreachable.
+IPV6_EXT_HDRS = {
+  [0]:   true   -- Hop-by-Hop Options
+  [43]:  true   -- Routing
+  [44]:  true   -- Fragment
+  [51]:  false  -- Authentication Header
+  [60]:  true   -- Destination Options
+  [135]: true   -- Mobility
+  [139]: true   -- HIP
+  [140]: true   -- Shim6
+}
+
+--- Walk IPv6 extension headers and return the transport protocol + L4 offset.
+-- Skips all RFC-known extension headers (Hop-by-Hop, Routing, Fragment, AH,
+-- Destination Options, Mobility, HIP, Shim6).  ESP is not skippable (encrypted).
+-- @tparam cdata p uint8_t* pointer to start of IPv6 fixed header.
+-- @tparam number len Total packet length in bytes.
+-- @tparam number first_nh Next Header value from the IPv6 fixed header (p[6]).
+-- @treturn number|nil Transport protocol (17=UDP, 6=TCP, …) or nil on error.
+-- @treturn number|nil 0-based byte offset of the L4 header, or nil on error.
+skip_ipv6_ext_hdrs = (p, len, first_nh) ->
+  nh  = first_nh
+  off = 40  -- 0-based offset of the current extension header
+  while IPV6_EXT_HDRS[nh] != nil
+    return nil, nil if off + 2 > len   -- need at least NH + Len bytes
+    next_nh  = p[off]
+    ext_size = if nh == 51
+      (p[off + 1] + 2) * 4            -- AH: (Payload Len + 2) × 4
+    else
+      (p[off + 1] + 1) * 8            -- standard: (Hdr Ext Len + 1) × 8
+    return nil, nil if ext_size < 8 or off + ext_size > len
+    off += ext_size
+    nh   = next_nh
+  nh, off
+
+--- Parse IPv6 fixed header from an FFI pointer, skipping any extension headers.
 -- @tparam cdata p uint8_t* raw packet.
 -- @tparam number len Packet length.
--- @treturn table|nil Parsed IP fields.
+-- @treturn table|nil Parsed IP fields (ihl = actual L4 offset, including ext headers).
 parse_l3_v6 = (p, len) ->
   return nil if len < 40
   ver = bit.rshift p[0], 4
   return nil if ver != 6
+  proto, l4_off = skip_ipv6_ext_hdrs p, len, p[6]
+  return nil unless proto
   {
-    version: 6, ihl: 40
+    version: 6, ihl: l4_off
     total_len: 40 + r16(p, 4)
-    protocol:  p[6]
+    protocol:  proto
     src_ip:     fmt_ipv6 p, 8
     dst_ip:     fmt_ipv6 p, 24
     src_ip_raw: ffi.string p + 8,  16
@@ -271,10 +311,11 @@ fix_udp4_cksum = (buf, pkt_len, ihl) ->
 -- IPv6 has no IP-level checksum; UDP checksum is mandatory.
 -- Pseudo-header: src(16B) + dst(16B) + upper-layer length(32b) + next-header(8b).
 -- For IPv6 fixed header: src at offset 8, dst at offset 24 (0-based).
--- @tparam cdata buf Mutable uint8_t* packet (IPv6, ihl=40).
+-- @tparam cdata buf Mutable uint8_t* packet (IPv6).
 -- @tparam number pkt_len Total packet length.
-fix_udp6_cksum = (buf, pkt_len) ->
-  udp_off = 40
+-- @tparam number l4_off 0-based offset of the UDP header (= ihl, includes ext headers).
+fix_udp6_cksum = (buf, pkt_len, l4_off) ->
+  udp_off = l4_off
   return if pkt_len < udp_off + 8
   udp_len = r16 buf, udp_off + 4
   buf[udp_off + 6] = 0
@@ -345,10 +386,11 @@ fix_tcp4_cksum = (buf, pkt_len, ihl) ->
   w16 buf, tcp_off + 16, cksum
 
 --- Recalculate TCP checksum in-place (IPv6 pseudo-header, RFC 2460 §8.1).
--- @tparam cdata buf Mutable uint8_t* packet (IPv6, ihl=40).
+-- @tparam cdata buf Mutable uint8_t* packet (IPv6).
 -- @tparam number pkt_len Total packet length.
-fix_tcp6_cksum = (buf, pkt_len) ->
-  tcp_off = 40
+-- @tparam number l4_off 0-based offset of the TCP header (= ihl, includes ext headers).
+fix_tcp6_cksum = (buf, pkt_len, l4_off) ->
+  tcp_off = l4_off
   return if pkt_len < tcp_off + 20
   tcp_len = pkt_len - tcp_off
   buf[tcp_off + 16] = 0
@@ -634,8 +676,9 @@ patch_and_checksum = (raw, pkt, answers, new_ttl) ->
       fix_tcp4_cksum new_buf, new_pkt_len, ip_ihl
       fix_ip4_cksum  new_buf, ip_ihl
     elseif pkt.ip.version == 6
-      w16 new_buf, 4, tcp_hdr_len + 2 + dns_len
-      fix_tcp6_cksum new_buf, new_pkt_len
+      -- IPv6 payload length = ext_headers + TCP header + 2-byte prefix + DNS.
+      w16 new_buf, 4, (ip_ihl - 40) + tcp_hdr_len + 2 + dns_len
+      fix_tcp6_cksum new_buf, new_pkt_len, ip_ihl
     return ffi.string new_buf, new_pkt_len
 
   pkt_len = #raw
@@ -657,9 +700,9 @@ patch_and_checksum = (raw, pkt, answers, new_ttl) ->
     fix_ip4_cksum  buf, pkt.ip.ihl
   elseif pkt.ip.version == 6
     if pkt.l4.proto == "udp"
-      fix_udp6_cksum buf, pkt_len
+      fix_udp6_cksum buf, pkt_len, pkt.ip.ihl
     elseif pkt.l4.proto == "tcp"
-      fix_tcp6_cksum buf, pkt_len
+      fix_tcp6_cksum buf, pkt_len, pkt.ip.ihl
 
   ffi.string buf, pkt_len
 

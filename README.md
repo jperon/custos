@@ -372,8 +372,6 @@ available for reference or fallback.
 - **DoH / DoT**: not covered (ports 443/853).
 - **Single-threaded per worker**: one worker per queue. For very
   high throughput, use `--queue-balance N-M` with N workers per range.
-- **IPv6 extension headers**: not parsed (next_header must be UDP
-  directly, without extension header).
 
 ---
 

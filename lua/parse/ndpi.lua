@@ -172,6 +172,39 @@ parse_l3_v4 = function(p, len)
     af = AF_INET
   }
 end
+local IPV6_EXT_HDRS = {
+  [0] = true,
+  [43] = true,
+  [44] = true,
+  [51] = false,
+  [60] = true,
+  [135] = true,
+  [139] = true,
+  [140] = true
+}
+local skip_ipv6_ext_hdrs
+skip_ipv6_ext_hdrs = function(p, len, first_nh)
+  local nh = first_nh
+  local off = 40
+  while IPV6_EXT_HDRS[nh] ~= nil do
+    if off + 2 > len then
+      return nil, nil
+    end
+    local next_nh = p[off]
+    local ext_size
+    if nh == 51 then
+      ext_size = (p[off + 1] + 2) * 4
+    else
+      ext_size = (p[off + 1] + 1) * 8
+    end
+    if ext_size < 8 or off + ext_size > len then
+      return nil, nil
+    end
+    off = off + ext_size
+    nh = next_nh
+  end
+  return nh, off
+end
 local parse_l3_v6
 parse_l3_v6 = function(p, len)
   if len < 40 then
@@ -181,11 +214,15 @@ parse_l3_v6 = function(p, len)
   if ver ~= 6 then
     return nil
   end
+  local proto, l4_off = skip_ipv6_ext_hdrs(p, len, p[6])
+  if not (proto) then
+    return nil
+  end
   return {
     version = 6,
-    ihl = 40,
+    ihl = l4_off,
     total_len = 40 + r16(p, 4),
-    protocol = p[6],
+    protocol = proto,
     src_ip = fmt_ipv6(p, 8),
     dst_ip = fmt_ipv6(p, 24),
     src_ip_raw = ffi.string(p + 8, 16),
@@ -250,8 +287,8 @@ fix_udp4_cksum = function(buf, pkt_len, ihl)
   return w16(buf, udp_off + 6, cksum)
 end
 local fix_udp6_cksum
-fix_udp6_cksum = function(buf, pkt_len)
-  local udp_off = 40
+fix_udp6_cksum = function(buf, pkt_len, l4_off)
+  local udp_off = l4_off
   if pkt_len < udp_off + 8 then
     return 
   end
@@ -334,8 +371,8 @@ fix_tcp4_cksum = function(buf, pkt_len, ihl)
   return w16(buf, tcp_off + 16, cksum)
 end
 local fix_tcp6_cksum
-fix_tcp6_cksum = function(buf, pkt_len)
-  local tcp_off = 40
+fix_tcp6_cksum = function(buf, pkt_len, l4_off)
+  local tcp_off = l4_off
   if pkt_len < tcp_off + 20 then
     return 
   end
@@ -652,8 +689,8 @@ patch_and_checksum = function(raw, pkt, answers, new_ttl)
       fix_tcp4_cksum(new_buf, new_pkt_len, ip_ihl)
       fix_ip4_cksum(new_buf, ip_ihl)
     elseif pkt.ip.version == 6 then
-      w16(new_buf, 4, tcp_hdr_len + 2 + dns_len)
-      fix_tcp6_cksum(new_buf, new_pkt_len)
+      w16(new_buf, 4, (ip_ihl - 40) + tcp_hdr_len + 2 + dns_len)
+      fix_tcp6_cksum(new_buf, new_pkt_len, ip_ihl)
     end
     return ffi.string(new_buf, new_pkt_len)
   end
@@ -677,9 +714,9 @@ patch_and_checksum = function(raw, pkt, answers, new_ttl)
     fix_ip4_cksum(buf, pkt.ip.ihl)
   elseif pkt.ip.version == 6 then
     if pkt.l4.proto == "udp" then
-      fix_udp6_cksum(buf, pkt_len)
+      fix_udp6_cksum(buf, pkt_len, pkt.ip.ihl)
     elseif pkt.l4.proto == "tcp" then
-      fix_tcp6_cksum(buf, pkt_len)
+      fix_tcp6_cksum(buf, pkt_len, pkt.ip.ihl)
     end
   end
   return ffi.string(buf, pkt_len)

@@ -83,6 +83,16 @@ checksum_ip = function(raw_header)
   end
   return bit.band(bit.bnot(sum), 0xFFFF)
 end
+local IPV6_EXT_HDRS_LEGACY = {
+  [0] = true,
+  [43] = true,
+  [44] = true,
+  [51] = false,
+  [60] = true,
+  [135] = true,
+  [139] = true,
+  [140] = true
+}
 local parse_ipv6
 parse_ipv6 = function(raw)
   if #raw < 40 then
@@ -92,18 +102,37 @@ parse_ipv6 = function(raw)
   if version ~= 6 then
     return nil
   end
-  local next_header = read_u8(raw, 7)
-  if next_header ~= PROTO_UDP then
+  local nh = read_u8(raw, 7)
+  local off = 41
+  while IPV6_EXT_HDRS_LEGACY[nh] ~= nil do
+    if off + 1 > #raw then
+      return nil
+    end
+    local next_nh = read_u8(raw, off)
+    local ext_size
+    if nh == 51 then
+      ext_size = (read_u8(raw, off + 1) + 2) * 4
+    else
+      ext_size = (read_u8(raw, off + 1) + 1) * 8
+    end
+    if ext_size < 8 or off - 1 + ext_size > #raw then
+      return nil
+    end
+    off = off + ext_size
+    nh = next_nh
+  end
+  if nh ~= PROTO_UDP then
     return nil
   end
+  local l4_off = off - 1
   local src_ip = format_ipv6(raw, 9)
   local dst_ip = format_ipv6(raw, 25)
   local src_ip_raw = raw:sub(9, 24)
   local dst_ip_raw = raw:sub(25, 40)
   return {
     version = 6,
-    ihl = 40,
-    protocol = next_header,
+    ihl = l4_off,
+    protocol = nh,
     src_ip = src_ip,
     dst_ip = dst_ip,
     src_ip_raw = src_ip_raw,

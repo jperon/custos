@@ -16,6 +16,14 @@ package.loaded["ffi_defs"] = {
   libnft: {}
 }
 
+-- ffi_defs.moon est stubée → ses ffi.cdef() ne s'exécutent pas.
+-- On déclare ici les symboles nécessaires aux parsers sous test.
+-- pcall : si le symbole est déjà déclaré par un autre chemin, on ignore.
+pcall ->
+  ffi.cdef [[
+    const char* inet_ntop(int af, const void *src, char *dst, unsigned int size);
+  ]]
+
 PROTO_TCP = 6
 PROTO_UDP = 17
 AF_INET   = 2
@@ -171,8 +179,26 @@ make_ipv6_udp_dns = (src_ip6, dst_ip6, src_port, dst_port, dns_payload) ->
   )
   ip6 .. udp .. dns_payload
 
-
-io.write "\n── parse/ndpi ──\n"
+-- Builds an IPv6 packet with extension headers prepended before UDP/DNS.
+-- first_nh : Next Header value to put in the IPv6 fixed header (type of first ext hdr).
+-- ext_raw  : raw bytes of the chained extension headers; the NH field of the last
+--            extension header must already be set to 17 (UDP).
+make_ipv6_ext_udp_dns = (src_ip6, dst_ip6, src_port, dst_port, dns_payload, first_nh, ext_raw) ->
+  udp_len = 8 + #dns_payload
+  pay_len = #ext_raw + udp_len
+  ip6 = string.char(
+    0x60, 0, 0, 0,
+    bit.rshift(bit.band(pay_len, 0xFF00), 8), bit.band(pay_len, 0xFF),
+    first_nh,
+    64
+  ) .. src_ip6 .. dst_ip6
+  udp = string.char(
+    bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF),
+    bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF),
+    bit.rshift(bit.band(udp_len,  0xFF00), 8), bit.band(udp_len,  0xFF),
+    0, 0
+  )
+  ip6 .. ext_raw .. udp .. dns_payload
 
 m_ndpi = dofile "lua/parse/ndpi.lua"
 parse_packet = m_ndpi.parse_packet
@@ -206,7 +232,60 @@ test "parse_packet — TCP DNS too short (no length prefix)", ->
   pkt = parse_packet raw
   assert_eq pkt, nil, "should be nil if payload < 14B"
 
-test "get_flow — persistence", ->
+test "parse_packet — IPv6 + Hop-by-Hop (type 0) + UDP DNS", ->
+  -- 8-byte Hop-by-Hop header: NH=17(UDP), Hdr Ext Len=0, 6 pad bytes.
+  hbh = string.char 17, 0, 0, 0, 0, 0, 0, 0
+  dns = make_dns "\3www\6github\3com\0", 1, false
+  src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  raw  = make_ipv6_ext_udp_dns src6, dst6, 54321, 53, dns, 0, hbh
+  pkt  = parse_packet raw
+  assert pkt, "parse_packet nil with Hop-by-Hop"
+  assert_eq pkt.ip.version,  6,   "version=6"
+  assert_eq pkt.ip.ihl,      48,  "ihl=48 (40 + 8 ext)"
+  assert_eq pkt.l4.proto,    "udp", "proto=udp"
+  assert_eq pkt.dns.txid,    0x1234, "txid"
+  assert_eq pkt.questions[1].qname, "www.github.com", "qname"
+
+test "parse_packet — IPv6 + Routing (type 43) + UDP DNS", ->
+  -- 8-byte Routing header: NH=17(UDP), Hdr Ext Len=0, routing type=0, seg left=0, data.
+  rh  = string.char 17, 0, 0, 0, 0, 0, 0, 0
+  dns = make_dns "\3www\6github\3com\0", 1, false
+  src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  raw  = make_ipv6_ext_udp_dns src6, dst6, 54321, 53, dns, 43, rh
+  pkt  = parse_packet raw
+  assert pkt, "parse_packet nil with Routing header"
+  assert_eq pkt.ip.ihl, 48, "ihl=48"
+  assert_eq pkt.l4.proto, "udp", "proto=udp"
+  assert_eq pkt.questions[1].qname, "www.github.com", "qname"
+
+test "parse_packet — IPv6 + Fragment (type 44) + UDP DNS", ->
+  -- 8-byte Fragment header: NH=17(UDP), Reserved=0, Fragment Offset=0, M=0, ID.
+  fh  = string.char 17, 0, 0, 0, 0, 0, 0, 1
+  dns = make_dns "\3www\6github\3com\0", 1, false
+  src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  raw  = make_ipv6_ext_udp_dns src6, dst6, 54321, 53, dns, 44, fh
+  pkt  = parse_packet raw
+  assert pkt, "parse_packet nil with Fragment header"
+  assert_eq pkt.ip.ihl, 48, "ihl=48"
+  assert_eq pkt.l4.proto, "udp", "proto=udp"
+  assert_eq pkt.questions[1].qname, "www.github.com", "qname"
+
+test "parse_packet — IPv6 + Hop-by-Hop + Routing (chained) + UDP DNS", ->
+  -- Hop-by-Hop (NH=43) → Routing (NH=17) → UDP.
+  hbh = string.char 43, 0, 0, 0, 0, 0, 0, 0   -- NH=43 (Routing)
+  rh  = string.char 17, 0, 0, 0, 0, 0, 0, 0   -- NH=17 (UDP)
+  dns = make_dns "\3www\6github\3com\0", 1, false
+  src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  raw  = make_ipv6_ext_udp_dns src6, dst6, 54321, 53, dns, 0, hbh .. rh
+  pkt  = parse_packet raw
+  assert pkt, "parse_packet nil with chained ext headers"
+  assert_eq pkt.ip.ihl, 56, "ihl=56 (40 + 8 + 8)"
+  assert_eq pkt.l4.proto, "udp", "proto=udp"
+  assert_eq pkt.questions[1].qname, "www.github.com", "qname"
   -- We need a mock for ndpi_lib.ndpi_detection_get_sizeof_ndpi_flow_struct
   -- But m_ndpi is already loaded. Since it's a module, we can inject the mock.
   -- Actually, in run_tests.lua, we don't have a real libndpi.
@@ -460,10 +539,25 @@ test "parse_ipv6 — paquet UDP minimal", ->
   ip_hdr = parse_ipv6 raw
   assert ip_hdr, "parse_ipv6 retourne nil"
   assert_eq ip_hdr.version,  6,  "version=6"
+  assert_eq ip_hdr.ihl,      40, "ihl=40 (pas d'ext headers)"
   assert_eq ip_hdr.protocol, 17, "proto UDP"
   assert_eq ip_hdr.src_ip,   "2001:db8:0:0:0:0:0:42", "src_ip"
   assert_eq ip_hdr.dst_ip,   "2001:db8:0:0:0:0:0:1",  "dst_ip"
   assert (ip_hdr.src_ip_raw and #ip_hdr.src_ip_raw == 16), "src_ip_raw 16 octets"
+
+test "parse_ipv6 — Hop-by-Hop + UDP", ->
+  -- 8-byte Hop-by-Hop: NH=17, Len=0, pad×6.
+  hbh  = string.char 17, 0, 0, 0, 0, 0, 0, 0
+  dns  = make_dns "\x06github\x03com\x00", 1, false
+  src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  raw  = make_ipv6_ext_udp_dns src6, dst6, 54321, 53, dns, 0, hbh
+  ip_hdr = parse_ipv6 raw
+  assert ip_hdr, "parse_ipv6 nil avec Hop-by-Hop"
+  assert_eq ip_hdr.version,  6,  "version=6"
+  assert_eq ip_hdr.ihl,      48, "ihl=48 (40+8)"
+  assert_eq ip_hdr.protocol, 17, "proto UDP"
+  assert (#ip_hdr.src_ip_raw == 16), "src_ip_raw 16 octets"
 
 -- ════════════════════════════════════════════════════════════════
 -- Tests parse/dns
