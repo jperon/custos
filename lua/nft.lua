@@ -31,21 +31,21 @@ run_cmd = function(cmd)
   return true
 end
 local add_ip4
-add_ip4 = function(ip_str)
-  local cmd = "add element ip " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_IP4) .. " { " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+add_ip4 = function(client_ip, ip_str)
+  local cmd = "add element ip " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_IP4) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
   return run_cmd(cmd)
 end
 local add_ip6
-add_ip6 = function(ip_str)
-  local cmd = "add element ip6 " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_IP6) .. " { " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+add_ip6 = function(client_ip, ip_str)
+  local cmd = "add element ip6 " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_IP6) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
   return run_cmd(cmd)
 end
 local add_ip
-add_ip = function(ip_str)
+add_ip = function(client_ip, ip_str)
   if ip_str:find(":") then
-    return add_ip6(ip_str)
+    return add_ip6(client_ip, ip_str)
   else
-    return add_ip4(ip_str)
+    return add_ip4(client_ip, ip_str)
   end
 end
 local cleanup

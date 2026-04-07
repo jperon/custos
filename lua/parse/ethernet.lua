@@ -10,15 +10,16 @@ end
 local get_l2
 get_l2 = function(nfad)
   local hw = libnfq.nfq_get_packet_hw(nfad)
-  local mac_src
+  local mac_src = "unknown"
+  local mac_raw = "\0\0\0\0\0\0"
   if hw ~= nil and hw.hw_addrlen > 0 then
     mac_src = format_mac(hw)
-  else
-    mac_src = "unknown"
+    mac_raw = ffi.string(hw.hw_addr, 6)
   end
   local in_ifindex = tonumber(libnfq.nfq_get_indev(nfad))
   return {
     mac_src = mac_src,
+    mac_raw = mac_raw,
     in_ifindex = in_ifindex
   }
 end

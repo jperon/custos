@@ -12,8 +12,8 @@ local bit = require("bit")
 local MSG_IPV4 = 0x41
 local MSG_IPV6 = 0x36
 local encode_msg
-encode_msg = function(txid, ip_raw, src_port)
-  local buf = ffi.new("uint8_t[21]")
+encode_msg = function(txid, ip_raw, src_port, mac_raw)
+  local buf = ffi.new("uint8_t[27]")
   buf[0] = #ip_raw == 4 and MSG_IPV4 or MSG_IPV6
   buf[1] = bit.rshift(bit.band(txid, 0xFF00), 8)
   buf[2] = bit.band(txid, 0xFF)
@@ -22,11 +22,16 @@ encode_msg = function(txid, ip_raw, src_port)
   end
   buf[19] = bit.rshift(bit.band(src_port, 0xFF00), 8)
   buf[20] = bit.band(src_port, 0xFF)
+  if mac_raw and #mac_raw == 6 then
+    for i = 1, 6 do
+      buf[20 + i] = mac_raw:byte(i)
+    end
+  end
   return ffi.string(buf, IPC_MSG_SIZE)
 end
 local write_msg
-write_msg = function(pipe_wfd, txid, ip_raw, src_port)
-  local msg = encode_msg(txid, ip_raw, src_port)
+write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw)
   local n = libc.write(pipe_wfd, msg, IPC_MSG_SIZE)
   return n == IPC_MSG_SIZE
 end
@@ -54,11 +59,13 @@ decode_msg = function(raw)
     end
     ip_str = table.concat(groups, ":")
   end
+  local mac_str = string.format("%02x:%02x:%02x:%02x:%02x:%02x", raw:byte(22), raw:byte(23), raw:byte(24), raw:byte(25), raw:byte(26), raw:byte(27))
   return {
     txid = txid,
     ip_str = ip_str,
     src_port = src_port,
-    msg_type = msg_type
+    msg_type = msg_type,
+    mac_str = mac_str
   }
 end
 local pending = { }
@@ -67,7 +74,7 @@ make_key = function(txid, ip_str, src_port)
   return string.format("%04x:%s:%d", txid, ip_str, src_port)
 end
 local drain_pipe
-drain_pipe = function(pipe_rfd, now_fn)
+drain_pipe = function(pipe_rfd, now_fn, on_msg)
   local buf = ffi.new("uint8_t[?]", IPC_MSG_SIZE)
   local absorbed = 0
   while true do
@@ -82,6 +89,9 @@ drain_pipe = function(pipe_rfd, now_fn)
         local key = make_key(msg.txid, msg.ip_str, msg.src_port)
         pending[key] = now_fn() + IPC_PENDING_TTL
         absorbed = absorbed + 1
+        if on_msg then
+          on_msg(msg)
+        end
       end
     end
   end

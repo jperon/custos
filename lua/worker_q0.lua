@@ -100,7 +100,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end
   end
   if verdict == NF_ACCEPT then
-    write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port)
+    write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw)
   end
   if verdict == NF_DROP then
     if pkt.l4.proto == "udp" then

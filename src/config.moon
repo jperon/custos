@@ -53,10 +53,16 @@ NFT_IP_TIMEOUT = "2m"           -- durée de vie des IPs dans les sets
 
 -- ── Pipe IPC Q0 → Q1 ────────────────────────────────────────────
 -- Taille du message binaire (voir ipc.moon)
-IPC_MSG_SIZE = 21   -- 1B type + 2B txid + 16B ip (IPv4 zero-padé) + 2B port
+IPC_MSG_SIZE = 27   -- 1B type + 2B txid + 16B ip (IPv4 zero-padé) + 2B port + 6B MAC
 
 -- Durée de vie d'une transaction en attente de réponse (secondes)
 IPC_PENDING_TTL = 5
+
+-- ── Client tracking ─────────────────────────────────────────────
+-- Durée en secondes sans activité DNS avant qu'un client soit purgé
+-- du cache MAC (worker Q1). Le timeout nftables sur les sets gère
+-- l'expiration des paires (client, dest) indépendamment.
+CLIENT_EXPIRY = 300
 
 -- ── TTL forcé ────────────────────────────────────
 -- TTL injecté sur tous les RR des réponses autorisées (secondes).
@@ -75,7 +81,7 @@ PROTO_UDP  = 17
   :LOG_PATH
   :ALLOWED_DOMAINS
   :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_IP_TIMEOUT
-  :IPC_MSG_SIZE, :IPC_PENDING_TTL
+  :IPC_MSG_SIZE, :IPC_PENDING_TTL, :CLIENT_EXPIRY
   :FORCED_TTL
   :DNS_PORT, :AF_INET, :AF_INET6, :PROTO_UDP
 }

@@ -32,7 +32,7 @@ table ip nat {
 table ip dns-filter {
 
   set ip4_allowed {
-    type    ipv4_addr
+    type    ipv4_addr . ipv4_addr
     flags   timeout, interval
     timeout 2m
   }
@@ -54,8 +54,8 @@ table ip dns-filter {
     policy drop
     # Paquets de retour (réponses WAN → LAN)
     ct state established,related accept
-    # Destinations explicitement autorisées après résolution DNS
-    ip daddr @ip4_allowed accept
+    # Destinations explicitement autorisées après résolution DNS (par client)
+    ip saddr . ip daddr @ip4_allowed accept
   }
 
   chain output {
@@ -78,7 +78,7 @@ table ip dns-filter {
 table ip6 dns-filter {
 
   set ip6_allowed {
-    type    ipv6_addr
+    type    ipv6_addr . ipv6_addr
     flags   timeout, interval
     timeout 2m
   }
@@ -96,7 +96,7 @@ table ip6 dns-filter {
     type   filter hook forward priority 0
     policy drop
     ct state established,related accept
-    ip6 daddr @ip6_allowed accept
+    ip6 saddr . ip6 daddr @ip6_allowed accept
   }
 
   chain output {

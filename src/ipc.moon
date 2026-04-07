@@ -4,7 +4,7 @@
 -- Les messages sont des enregistrements binaires de taille fixe IPC_MSG_SIZE.
 -- L'atomicité est garantie par POSIX pour les écritures <= PIPE_BUF (4096).
 --
--- Format du message (21 octets) :
+-- Format du message (27 octets) :
 --
 --   Octet 0      : version/type
 --                    0x41 ('A') = transaction IPv4 acceptée
@@ -12,7 +12,8 @@
 --   Octets 1-2   : txid DNS (big-endian uint16)
 --   Octets 3-18  : src_ip — 16 octets (IPv4 4 octets + 12 octets 0x00 ; IPv6 16 octets complets)
 --   Octets 19-20 : src_port (big-endian uint16)
---   → Total : 21 octets, largement sous PIPE_BUF → écriture atomique garantie
+--   Octets 21-26 : adresse MAC source (6 octets, 0x00×6 si inconnue)
+--   → Total : 27 octets, largement sous PIPE_BUF → écriture atomique garantie
 
 { :ffi, :libc } = require "ffi_defs"
 { :IPC_MSG_SIZE, :IPC_PENDING_TTL } = require "config"
@@ -25,12 +26,13 @@ MSG_IPV6 = 0x36   -- '6'
 
 -- ── Encodage (côté Q0) ───────────────────────────────────────────
 --- Encode une transaction acceptée en binaire IPC_MSG_SIZE octets.
--- @tparam number txid      Identifiant de transaction DNS (uint16)
--- @tparam string ip_raw    4 octets (IPv4) ou 16 octets (IPv6) bruts
--- @tparam number src_port  Port source de la question DNS (uint16)
+-- @tparam number      txid      Identifiant de transaction DNS (uint16)
+-- @tparam string      ip_raw    4 octets (IPv4) ou 16 octets (IPv6) bruts
+-- @tparam number      src_port  Port source de la question DNS (uint16)
+-- @tparam string|nil  mac_raw   6 octets MAC bruts (nil ou zeros si inconnu)
 -- @treturn string message binaire de IPC_MSG_SIZE octets
-encode_msg = (txid, ip_raw, src_port) ->
-  buf = ffi.new "uint8_t[21]"
+encode_msg = (txid, ip_raw, src_port, mac_raw) ->
+  buf = ffi.new "uint8_t[27]"
 
   -- Type
   buf[0] = #ip_raw == 4 and MSG_IPV4 or MSG_IPV6
@@ -49,23 +51,30 @@ encode_msg = (txid, ip_raw, src_port) ->
   buf[19] = bit.rshift bit.band(src_port, 0xFF00), 8
   buf[20] = bit.band src_port, 0xFF
 
+  -- MAC source dans buf[21..26] (6 octets, 0x00 si inconnu)
+  if mac_raw and #mac_raw == 6
+    for i = 1, 6
+      buf[20 + i] = mac_raw\byte i
+  -- else : buf déjà zéroïsé par ffi.new
+
   ffi.string buf, IPC_MSG_SIZE
 
 --- Écrit un message IPC dans le pipe (côté Q0).
--- @tparam number pipe_wfd fd d'écriture du pipe
--- @tparam number txid     Identifiant de transaction DNS
--- @tparam string ip_raw   4 ou 16 octets bruts de l'IP source
--- @tparam number src_port Port source
+-- @tparam number     pipe_wfd fd d'écriture du pipe
+-- @tparam number     txid     Identifiant de transaction DNS
+-- @tparam string     ip_raw   4 ou 16 octets bruts de l'IP source
+-- @tparam number     src_port Port source
+-- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
 -- @treturn boolean true si l'écriture est complète
-write_msg = (pipe_wfd, txid, ip_raw, src_port) ->
-  msg = encode_msg txid, ip_raw, src_port
+write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw
   n = libc.write pipe_wfd, msg, IPC_MSG_SIZE
   n == IPC_MSG_SIZE
 
 -- ── Décodage (côté Q1) ───────────────────────────────────────────
 --- Décode un message binaire IPC en table.
 -- @tparam  string    raw Message de IPC_MSG_SIZE octets
--- @treturn table|nil Table {txid, ip_str, src_port, msg_type} ou nil si invalide
+-- @treturn table|nil Table {txid, ip_str, src_port, msg_type, mac_str} ou nil si invalide
 decode_msg = (raw) ->
   return nil if #raw < IPC_MSG_SIZE
 
@@ -81,7 +90,12 @@ decode_msg = (raw) ->
       string.format "%x", bit.bor(bit.lshift(raw\byte(4 + g*2), 8), raw\byte(5 + g*2))
     table.concat groups, ":"
 
-  { :txid, :ip_str, :src_port, :msg_type }
+  -- MAC : octets 21-26 (indices Lua 22-27)
+  mac_str = string.format "%02x:%02x:%02x:%02x:%02x:%02x",
+    raw\byte(22), raw\byte(23), raw\byte(24),
+    raw\byte(25), raw\byte(26), raw\byte(27)
+
+  { :txid, :ip_str, :src_port, :msg_type, :mac_str }
 
 -- ── Table des transactions en attente (côté Q1) ──────────────────
 -- pending[key] = expire_time
@@ -94,10 +108,12 @@ make_key = (txid, ip_str, src_port) ->
   string.format "%04x:%s:%d", txid, ip_str, src_port
 
 --- Draine le pipe (lecture non-bloquante) et remplit la table pending.
--- @tparam number   pipe_rfd fd de lecture du pipe (mode O_NONBLOCK requis)
--- @tparam function now_fn   Fonction retournant l'epoch courant (seconde)
+-- Pour chaque message décodé, appelle on_msg(msg) si fourni (optionnel).
+-- @tparam number        pipe_rfd fd de lecture du pipe (mode O_NONBLOCK requis)
+-- @tparam function      now_fn   Fonction retournant l'epoch courant (seconde)
+-- @tparam function|nil  on_msg   Callback appelé pour chaque message décodé
 -- @treturn number nombre de messages absorbés
-drain_pipe = (pipe_rfd, now_fn) ->
+drain_pipe = (pipe_rfd, now_fn, on_msg) ->
   buf = ffi.new "uint8_t[?]", IPC_MSG_SIZE
   absorbed = 0
 
@@ -112,6 +128,7 @@ drain_pipe = (pipe_rfd, now_fn) ->
         key = make_key msg.txid, msg.ip_str, msg.src_port
         pending[key] = now_fn! + IPC_PENDING_TTL
         absorbed += 1
+        on_msg msg if on_msg
 
   absorbed
 

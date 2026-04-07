@@ -31,8 +31,9 @@ AF_INET6  = 10
 DNS_PORT  = 53
 DOCKER_MODE = false
 ALLOWED_DOMAINS = {}
-IPC_MSG_SIZE = 21
+IPC_MSG_SIZE = 27
 IPC_PENDING_TTL = 5
+CLIENT_EXPIRY = 300
 
 package.loaded["config"] = {
   :PROTO_TCP,
@@ -43,7 +44,8 @@ package.loaded["config"] = {
   :DOCKER_MODE,
   :ALLOWED_DOMAINS,
   :IPC_MSG_SIZE,
-  :IPC_PENDING_TTL
+  :IPC_PENDING_TTL,
+  :CLIENT_EXPIRY
 }
 
 -- ── Mini framework de test ───────────────────────────────────────
@@ -843,29 +845,41 @@ make_key   = m_ipc.make_key
 
 test "encode/decode IPv4 round-trip", ->
   ip_raw  = "\xC0\xA8\x01\x2A"  -- 192.168.1.42
+  mac_raw = "\xAA\xBB\xCC\xDD\xEE\xFF"
   txid    = 0x1234
   port    = 54321
-  msg     = encode_msg txid, ip_raw, port
-  assert_eq #msg, 21, "taille message = 21"
+  msg     = encode_msg txid, ip_raw, port, mac_raw
+  assert_eq #msg, 27, "taille message = 27"
   decoded = decode_msg msg
   assert decoded, "decode_msg nil"
-  assert_eq decoded.txid,     txid,           "txid"
-  assert_eq decoded.src_port, port,           "port"
-  assert_eq decoded.ip_str,   "192.168.1.42", "ip_str"
-  assert_eq decoded.msg_type, 0x41,           "type IPv4"
+  assert_eq decoded.txid,     txid,               "txid"
+  assert_eq decoded.src_port, port,               "port"
+  assert_eq decoded.ip_str,   "192.168.1.42",     "ip_str"
+  assert_eq decoded.msg_type, 0x41,               "type IPv4"
+  assert_eq decoded.mac_str,  "aa:bb:cc:dd:ee:ff", "mac_str"
+
+test "encode/decode IPv4 round-trip sans MAC (nil)", ->
+  ip_raw = "\xC0\xA8\x01\x2A"
+  msg    = encode_msg 0x1234, ip_raw, 54321, nil
+  assert_eq #msg, 27, "taille message = 27 meme sans MAC"
+  decoded = decode_msg msg
+  assert decoded, "decode_msg nil"
+  assert_eq decoded.mac_str, "00:00:00:00:00:00", "mac zeros si nil"
 
 test "encode/decode IPv6 round-trip", ->
   ip_raw = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01" -- 2001:db8::1
+  mac_raw = "\x00\x11\x22\x33\x44\x55"
   txid   = 0xABCD
   port   = 5353
-  msg    = encode_msg txid, ip_raw, port
-  assert_eq #msg, 21, "taille message = 21"
+  msg    = encode_msg txid, ip_raw, port, mac_raw
+  assert_eq #msg, 27, "taille message = 27"
   decoded = decode_msg msg
   assert decoded, "decode_msg nil"
-  assert_eq decoded.txid,     txid,                   "txid"
-  assert_eq decoded.src_port, port,                   "port"
-  assert_eq decoded.ip_str,   "2001:db8:0:0:0:0:0:1", "ip_str"
-  assert_eq decoded.msg_type, 0x36,                   "type IPv6"
+  assert_eq decoded.txid,     txid,                    "txid"
+  assert_eq decoded.src_port, port,                    "port"
+  assert_eq decoded.ip_str,   "2001:db8:0:0:0:0:0:1",  "ip_str"
+  assert_eq decoded.msg_type, 0x36,                    "type IPv6"
+  assert_eq decoded.mac_str,  "00:11:22:33:44:55",     "mac_str"
 
 test "make_key — unicité", ->
   k1 = make_key 0x1234, "192.168.1.1", 53
@@ -897,8 +911,9 @@ test "drain_pipe — lit IPC_MSG_SIZE=21 octets sans overflow", ->
   m2 = dofile "lua/ipc.lua"
   -- Écrit un message IPv4 via write_msg
   ip_raw2 = "\xC0\xA8\x02\x01"  -- 192.168.2.1
+  mac_raw2 = "\xDE\xAD\xBE\xEF\x00\x01"
   txid2, port2 = 0xBEEF, 12345
-  ok = m2.write_msg wfd, txid2, ip_raw2, port2
+  ok = m2.write_msg wfd, txid2, ip_raw2, port2, mac_raw2
   assert ok, "write_msg failed"
   ffi.C.close wfd
   -- drain_pipe doit lire les 21 octets sans segfault ni corruption

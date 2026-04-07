@@ -28,28 +28,32 @@ run_cmd = (cmd) ->
 
 -- ── API publique ─────────────────────────────────────────────────
 
---- Ajoute une adresse IPv4 dans le set ip4_allowed avec timeout.
--- @tparam string ip_str Adresse IPv4 (ex: "1.2.3.4")
+--- Ajoute une paire (client IPv4, destination IPv4) dans le set ip4_allowed.
+-- @tparam string client_ip Adresse IPv4 du client LAN (ex: "192.168.1.50")
+-- @tparam string ip_str    Adresse IPv4 de destination (ex: "1.2.3.4")
 -- @treturn boolean true si succès
-add_ip4 = (ip_str) ->
-  cmd = "add element ip #{NFT_TABLE} #{NFT_SET_IP4} { #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
+add_ip4 = (client_ip, ip_str) ->
+  cmd = "add element ip #{NFT_TABLE} #{NFT_SET_IP4} { #{client_ip} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
   run_cmd cmd
 
---- Ajoute une adresse IPv6 dans le set ip6_allowed avec timeout.
--- @tparam string ip_str Adresse IPv6 (ex: "2001:db8::1")
+--- Ajoute une paire (client IPv6, destination IPv6) dans le set ip6_allowed.
+-- @tparam string client_ip Adresse IPv6 du client LAN (ex: "fd00:28::1")
+-- @tparam string ip_str    Adresse IPv6 de destination (ex: "2001:db8::1")
 -- @treturn boolean true si succès
-add_ip6 = (ip_str) ->
-  cmd = "add element ip6 #{NFT_TABLE} #{NFT_SET_IP6} { #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
+add_ip6 = (client_ip, ip_str) ->
+  cmd = "add element ip6 #{NFT_TABLE} #{NFT_SET_IP6} { #{client_ip} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
   run_cmd cmd
 
---- Ajoute une IP (v4 ou v6 détecté par la présence de ':').
--- @tparam string ip_str Adresse IP sous forme de chaîne
+--- Ajoute une paire (client, destination), famille détectée par ':' dans ip_str.
+-- client_ip et ip_str doivent être de la même famille (IPv4 ou IPv6).
+-- @tparam string client_ip Adresse IP du client LAN
+-- @tparam string ip_str    Adresse IP de destination
 -- @treturn boolean true si succès
-add_ip = (ip_str) ->
+add_ip = (client_ip, ip_str) ->
   if ip_str\find ":"
-    add_ip6 ip_str
+    add_ip6 client_ip, ip_str
   else
-    add_ip4 ip_str
+    add_ip4 client_ip, ip_str
 
 --- Libère le contexte nftables (appelé à l'arrêt du processus).
 -- @treturn nil

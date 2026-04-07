@@ -89,8 +89,9 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 
   -- Enregistre la transaction IPC pour Q1 : seulement si toutes les questions
   -- ont été autorisées (garantit qu'aucune fausse entrée n'entre dans pending).
+  -- Inclut la MAC source pour que Q1 puisse résoudre les adresses cross-family.
   if verdict == NF_ACCEPT
-    write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port
+    write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw
 
   -- Réponse REFUSED au client (un seul envoi par paquet DNS)
   -- La question originale est copiée dans le payload REFUSED avec
