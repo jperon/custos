@@ -334,6 +334,89 @@ test "patch_and_checksum — TCP 2-segment reassembly patches TTL", ->
   got_seq = bit.bor(bit.lshift(seq_b0, 24), bit.lshift(seq_b1, 16), bit.lshift(seq_b2, 8), seq_b3)
   assert_eq got_seq, init_seq, "TCP seq field restored to init_seq"
 
+test "patch_and_checksum — TCP 2-segment CNAME+A patches all TTLs", ->
+  -- DNS response with 2 RRs: CNAME (TTL=300) + A (TTL=300).
+  -- Verifies that patch_and_checksum rewrites every TTL, not just the first.
+  -- Port 54325 to avoid tcp_buffers state pollution.
+  qname_enc = "\6github\3com\0"   -- 12 bytes; appears at DNS offset 12 (0-based)
+  -- Header: txid=0xBBCC, QR=1 RD=1 RA=1, qdcount=1, ancount=2
+  hdr = string.char(0xBB, 0xCC, 0x81, 0x80, 0, 1, 0, 2, 0, 0, 0, 0)
+  question = qname_enc .. string.char(0, 1, 0, 1)   -- A IN (16 bytes total)
+  -- answers_off = 12 + 16 = 28
+  -- RR1 CNAME at DNS offset 28:
+  --   name=ptr(2)+type5(2)+classIN(2)+TTL300(4)+rdlen16(2)+cname_target(16) = 28 bytes
+  cname_target = "\3www\6github\3com\0"  -- 16 bytes
+  rr1 = "\xC0\x0C" ..                                   -- ptr to offset 12
+    string.char(0, 5, 0, 1) ..                          -- CNAME IN
+    string.char(0, 0, 1, 0x2C) ..                       -- TTL=300; ttl_offset=34
+    string.char(0, 16) ..                               -- rdlen=16
+    cname_target
+  -- RR2 A at DNS offset 56:
+  --   name=ptr(2)+typeA(2)+classIN(2)+TTL300(4)+rdlen4(2)+ip(4) = 16 bytes
+  rr2 = "\xC0\x0C" ..
+    string.char(0, 1, 0, 1) ..                          -- A IN
+    string.char(0, 0, 1, 0x2C) ..                       -- TTL=300; ttl_offset=62
+    string.char(0, 4) ..
+    string.char(1, 2, 3, 4)
+  dns_payload = hdr .. question .. rr1 .. rr2
+  dns_len = #dns_payload   -- 72 bytes
+  assert_eq dns_len, 72, "dns_payload size"
+
+  make_tcp_raw2 = (src_ip, dst_ip, src_port, dst_port, tcp_seq, tcp_payload) ->
+    total_len = 20 + 20 + #tcp_payload
+    ip4b = (s) ->
+      a, b, c, d = s\match "(%d+)%.(%d+)%.(%d+)%.(%d+)"
+      string.char tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+    ip = string.char(
+      0x45, 0,
+      bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF),
+      0, 1, 0, 0, 64, PROTO_TCP, 0, 0
+    ) .. ip4b(src_ip) .. ip4b(dst_ip)
+    tcp = string.char(
+      bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF),
+      bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF),
+      bit.rshift(bit.band(tcp_seq, 0xFF000000), 24),
+      bit.rshift(bit.band(tcp_seq, 0x00FF0000), 16),
+      bit.rshift(bit.band(tcp_seq, 0x0000FF00),  8),
+      bit.band(tcp_seq, 0xFF),
+      0, 0, 0, 0, 0x50, 0x18, 0x72, 0x10, 0, 0, 0, 0
+    )
+    ip .. tcp .. tcp_payload
+
+  src_ip, dst_ip, src_port, dst_port = "192.168.1.42", "8.8.8.8", 54325, 53
+  init_seq2 = 0x00112233
+
+  prefix = string.char(bit.rshift(bit.band(dns_len, 0xFF00), 8), bit.band(dns_len, 0xFF))
+  raw1 = make_tcp_raw2 src_ip, dst_ip, src_port, dst_port, init_seq2, prefix
+  p1, s1 = parse_packet raw1
+  assert_eq p1, nil,         "seg1 nil"
+  assert_eq s1, "buffering", "seg1 buffering"
+
+  raw2 = make_tcp_raw2 src_ip, dst_ip, src_port, dst_port, init_seq2 + 2, dns_payload
+  pkt3, _ = parse_packet raw2
+  assert pkt3, "seg2 completes DNS"
+  assert_eq pkt3.dns.txid,           0xBBCC, "txid"
+  assert_eq pkt3.tcp_single_segment, false,  "multi-segment"
+  ans3 = m_ndpi.parse_answers raw2, pkt3
+  assert_eq #ans3, 2, "2 answers (CNAME + A)"
+  -- Both TTLs must be 300 before patching.
+  assert_eq ans3[1].ttl, 300, "RR1 original TTL"
+  assert_eq ans3[2].ttl, 300, "RR2 original TTL"
+  patched3 = m_ndpi.patch_and_checksum raw2, pkt3, ans3, 42
+  -- In the coalesced packet: base = IP(20)+TCP(20)+prefix(2) = 42
+  -- RR1 ttl_offset=34 → TTL LSB at 42+34+3 = 79 (0-based) → .byte(80)
+  -- RR2 ttl_offset=62 → TTL LSB at 42+62+3 = 107 (0-based) → .byte(108)
+  base = 42
+  assert_eq patched3\byte(base + 34 + 3 + 1), 42, "RR1 (CNAME) TTL patched to 42"
+  assert_eq patched3\byte(base + 62 + 3 + 1), 42, "RR2 (A)     TTL patched to 42"
+  -- High bytes of both TTLs must be zero (42 < 256).
+  assert_eq patched3\byte(base + 34 + 0 + 1), 0, "RR1 TTL byte0 = 0"
+  assert_eq patched3\byte(base + 34 + 1 + 1), 0, "RR1 TTL byte1 = 0"
+  assert_eq patched3\byte(base + 34 + 2 + 1), 0, "RR1 TTL byte2 = 0"
+  assert_eq patched3\byte(base + 62 + 0 + 1), 0, "RR2 TTL byte0 = 0"
+  assert_eq patched3\byte(base + 62 + 1 + 1), 0, "RR2 TTL byte1 = 0"
+  assert_eq patched3\byte(base + 62 + 2 + 1), 0, "RR2 TTL byte2 = 0"
+
 m_ip = dofile "lua/parse/ip.lua"
 read_u8     = m_ip.read_u8
 read_u16    = m_ip.read_u16

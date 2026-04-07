@@ -209,6 +209,55 @@ test("patch_and_checksum — TCP 2-segment reassembly patches TTL", function()
   local got_seq = bit.bor(bit.lshift(seq_b0, 24), bit.lshift(seq_b1, 16), bit.lshift(seq_b2, 8), seq_b3)
   return assert_eq(got_seq, init_seq, "TCP seq field restored to init_seq")
 end)
+test("patch_and_checksum — TCP 2-segment CNAME+A patches all TTLs", function()
+  local qname_enc = "\6github\3com\0"
+  local hdr = string.char(0xBB, 0xCC, 0x81, 0x80, 0, 1, 0, 2, 0, 0, 0, 0)
+  local question = qname_enc .. string.char(0, 1, 0, 1)
+  local cname_target = "\3www\6github\3com\0"
+  local rr1 = "\xC0\x0C" .. string.char(0, 5, 0, 1) .. string.char(0, 0, 1, 0x2C) .. string.char(0, 16) .. cname_target
+  local rr2 = "\xC0\x0C" .. string.char(0, 1, 0, 1) .. string.char(0, 0, 1, 0x2C) .. string.char(0, 4) .. string.char(1, 2, 3, 4)
+  local dns_payload = hdr .. question .. rr1 .. rr2
+  local dns_len = #dns_payload
+  assert_eq(dns_len, 72, "dns_payload size")
+  local make_tcp_raw2
+  make_tcp_raw2 = function(src_ip, dst_ip, src_port, dst_port, tcp_seq, tcp_payload)
+    local total_len = 20 + 20 + #tcp_payload
+    local ip4b
+    ip4b = function(s)
+      local a, b, c, d = s:match("(%d+)%.(%d+)%.(%d+)%.(%d+)")
+      return string.char(tonumber(a), tonumber(b), tonumber(c), tonumber(d))
+    end
+    local ip = string.char(0x45, 0, bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF), 0, 1, 0, 0, 64, PROTO_TCP, 0, 0) .. ip4b(src_ip) .. ip4b(dst_ip)
+    local tcp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), bit.rshift(bit.band(tcp_seq, 0xFF000000), 24), bit.rshift(bit.band(tcp_seq, 0x00FF0000), 16), bit.rshift(bit.band(tcp_seq, 0x0000FF00), 8), bit.band(tcp_seq, 0xFF), 0, 0, 0, 0, 0x50, 0x18, 0x72, 0x10, 0, 0, 0, 0)
+    return ip .. tcp .. tcp_payload
+  end
+  local src_ip, dst_ip, src_port, dst_port = "192.168.1.42", "8.8.8.8", 54325, 53
+  local init_seq2 = 0x00112233
+  local prefix = string.char(bit.rshift(bit.band(dns_len, 0xFF00), 8), bit.band(dns_len, 0xFF))
+  local raw1 = make_tcp_raw2(src_ip, dst_ip, src_port, dst_port, init_seq2, prefix)
+  local p1, s1 = parse_packet(raw1)
+  assert_eq(p1, nil, "seg1 nil")
+  assert_eq(s1, "buffering", "seg1 buffering")
+  local raw2 = make_tcp_raw2(src_ip, dst_ip, src_port, dst_port, init_seq2 + 2, dns_payload)
+  local pkt3, _ = parse_packet(raw2)
+  assert(pkt3, "seg2 completes DNS")
+  assert_eq(pkt3.dns.txid, 0xBBCC, "txid")
+  assert_eq(pkt3.tcp_single_segment, false, "multi-segment")
+  local ans3 = m_ndpi.parse_answers(raw2, pkt3)
+  assert_eq(#ans3, 2, "2 answers (CNAME + A)")
+  assert_eq(ans3[1].ttl, 300, "RR1 original TTL")
+  assert_eq(ans3[2].ttl, 300, "RR2 original TTL")
+  local patched3 = m_ndpi.patch_and_checksum(raw2, pkt3, ans3, 42)
+  local base = 42
+  assert_eq(patched3:byte(base + 34 + 3 + 1), 42, "RR1 (CNAME) TTL patched to 42")
+  assert_eq(patched3:byte(base + 62 + 3 + 1), 42, "RR2 (A)     TTL patched to 42")
+  assert_eq(patched3:byte(base + 34 + 0 + 1), 0, "RR1 TTL byte0 = 0")
+  assert_eq(patched3:byte(base + 34 + 1 + 1), 0, "RR1 TTL byte1 = 0")
+  assert_eq(patched3:byte(base + 34 + 2 + 1), 0, "RR1 TTL byte2 = 0")
+  assert_eq(patched3:byte(base + 62 + 0 + 1), 0, "RR2 TTL byte0 = 0")
+  assert_eq(patched3:byte(base + 62 + 1 + 1), 0, "RR2 TTL byte1 = 0")
+  return assert_eq(patched3:byte(base + 62 + 2 + 1), 0, "RR2 TTL byte2 = 0")
+end)
 local m_ip = dofile("lua/parse/ip.lua")
 local read_u8 = m_ip.read_u8
 local read_u16 = m_ip.read_u16
