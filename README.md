@@ -281,14 +281,17 @@ without a separate timer.
 
 ## TTL Patch
 
-Each allowed DNS response is modified in-place before being returned
-to the client:
+Each allowed DNS response is modified before being returned to the client:
 
 1. All Resource Record TTLs are rewritten to 60 seconds
-2. UDP checksum is recalculated (IPv4 pseudo-header + UDP segment)
-3. IP checksum is recalculated (IP header only)
+2. L4 checksum is recalculated (`UDP` or `TCP`, IPv4/IPv6 pseudo-header)
+3. IPv4 header checksum is recalculated when applicable
 4. `NF_ACCEPT` verdict is set with modified payload via
    `nfq_set_verdict(qh, pkt_id, NF_ACCEPT, len, patched_ptr)`
+
+For multi-segment TCP DNS responses, Q1 buffers segments, patches the fully
+assembled DNS payload once complete, then reinjects a single coalesced
+`PSH|ACK` segment (with corrected checksums and initial sequence number).
 
 The goal is to force clients to re-validate resolution every 60 seconds,
 ensuring IPs authorized in nft sets (2-minute timeout) remain valid
@@ -406,6 +409,10 @@ make test-docker-ndpi5
 # Test DNS filtering from client container
 docker exec -it custos-client nslookup github.com
 docker exec -it custos-client nslookup facebook.com  # should fail
+
+# Run the full E2E suite (includes per-client isolation with client2)
+make test-docker
+make test-docker-ndpi5
 
 # View logs
 docker logs -f custos-filter        # nDPI 4.x

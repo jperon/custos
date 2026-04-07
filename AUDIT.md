@@ -238,9 +238,11 @@ Remplacer les parsers per-layer (`parse/ip` + `parse/udp` + `parse/dns`) par `pa
 
 ## Vérification finale
 
+Mise à jour au 8 avril 2026.
+
 - [x] `make` — compilation sans erreur
-- [x] `make test` — 36 tests, 0 échec
-- [x] `make test-docker` — 7 scénarios E2E, TTL=60 vérifié, REFUSED reçu
-- [x] `make test-docker-ndpi5` — profil nDPI 5.x passe
-- [x] Logs docker : champs `ndpi_master`/`ndpi_app` présents dans les lignes ALLOW (après E3/E4)
-- [x] PID distincts dans les logs pour Q0 et Q1 (supervisor=7, Q0=11, Q1=12)
+- [x] `make test` — 48 tests, 0 échec
+- [x] `make test-docker` — 12 scénarios E2E, 0 échec
+- [x] `make test-docker-ndpi5` — 12 scénarios E2E, 0 échec
+- [x] Couverture E2E inclut UDP/TCP, segmentation TCP, patch TTL, IPv6 ext headers et isolation per-client
+- [x] Arbre Git propre après clôture (`git status --porcelain=v1` vide)
