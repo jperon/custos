@@ -21,8 +21,8 @@ detection — all without any C compilation step.
 │  ├── policy DROP + REJECT LAN                                  │
 │  ├── set ip4_allowed  { timeout 2m }  ◄── populated by LuaJIT  │
 │  ├── set ip6_allowed  { timeout 2m }  ◄── populated by LuaJIT  │
-│  ├── UDP/53 src=LAN → NFQUEUE 0  (questions)                   │
-│  └── UDP/53 dst=LAN → NFQUEUE 1  (responses)                   │
+│  ├── UDP/53 + TCP/53 src=LAN → NFQUEUE 0  (questions)          │
+│  └── UDP/53 + TCP/53 dst=LAN → NFQUEUE 1  (responses)          │
 │                                                                │
 │  LuaJIT (userspace)                                            │
 │  ├── main.lua        supervisor + fork                         │
@@ -337,9 +337,14 @@ ffi_ndpi.moon       → ndpi_revision() → major >= 5?
 ndpi = require "parse.ndpi"
 
 -- Single-call L3+L4+L7 parse + nDPI detection
-pkt = ndpi.parse_packet raw
+-- Returns (pkt, nil) on success, (nil, "buffering") while reassembling a
+-- multi-segment TCP DNS stream, or (nil, nil) on unrecognised packets.
+pkt, status = ndpi.parse_packet raw
 -- pkt.ip    (version, ihl, src_ip, dst_ip, src_ip_raw, ...)
--- pkt.udp   (src_port, dst_port, udp_len, payload_off, ...)
+-- pkt.l4    (proto, src_port, dst_port, len, off, payload_len)
+--   proto = "udp" or "tcp"
+--   TCP extras: pkt.tcp_dns_raw      (assembled DNS payload, multi-segment)
+--               pkt.tcp_single_segment (bool — false when reassembled)
 -- pkt.dns   (txid, is_response, qdcount, ancount, rcode, ...)
 -- pkt.questions  [{qname, qtype, qclass, qtype_name}, ...]
 -- pkt.ndpi_master, pkt.ndpi_app
@@ -362,7 +367,9 @@ available for reference or fallback.
 
 ## Known Limitations
 
-- **DNS over TCP** (port 53 TCP, responses > 512 bytes): not covered.
+- **DNS over TCP** is supported: TCP/53 is intercepted in NFQUEUE, streams
+  are reassembled per 4-tuple using a 2-byte length prefix (RFC 1035 §4.2.2).
+  TTL patching is skipped for multi-segment responses (uncommon in practice).
 - **DoH / DoT**: not covered (ports 443/853).
 - **Single-threaded per worker**: one worker per queue. For very
   high throughput, use `--queue-balance N-M` with N workers per range.
