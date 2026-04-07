@@ -371,7 +371,28 @@ prepare_tcp_seg_script = function(domain, server)
     "  got = got+nn",
     "end",
     "if got<4 then print('error=short_body') ffi.C.close(fd) os.exit(1) end",
-    "print('rcode='..tostring(bit.band(rb[3],0x0F))..' len='..tostring(rlen))",
+    "local function skip_name(b, off)",
+    "  while off < rlen do",
+    "    local v = b[off]",
+    "    if v == 0 then return off+1",
+    "    elseif bit.band(v,0xC0)==0xC0 then return off+2",
+    "    else off = off+1+v end",
+    "  end",
+    "  return off",
+    "end",
+    "local ancount = bit.bor(bit.lshift(rb[6],8), rb[7])",
+    "local ttl = -1",
+    "if ancount > 0 then",
+    "  local q_off = skip_name(rb, 12) + 4",
+    "  if q_off + 10 <= rlen then",
+    "    local a_off = skip_name(rb, q_off) + 4",
+    "    if a_off + 4 <= rlen then",
+    "      ttl = bit.bor(bit.lshift(rb[a_off],24), bit.lshift(rb[a_off+1],16)",
+    "            , bit.lshift(rb[a_off+2],8), rb[a_off+3])",
+    "    end",
+    "  end",
+    "end",
+    "print('rcode='..tostring(bit.band(rb[3],0x0F))..' len='..tostring(rlen)..' ttl='..tostring(ttl))",
     "ffi.C.close(fd)"
   }, "\n")
   local f = io.open("./tmp/dns_tcp_seg.lua", "w")
@@ -578,14 +599,16 @@ run_test("DNS over TCP — blocked domain is dropped", "dig +tcp " .. tostring(T
   local obtained = (output:match("([^\n]+)")) or "(no output)"
   return not has_answer, obtained
 end)
-run_test("DNS over TCP segmented — 2-segment reassembly works", "LuaJIT FFI: seg1=[2-byte len prefix], seg2=[DNS query] for " .. tostring(TEST_DOMAINS.allowed) .. " → rcode=0", function()
+run_test("DNS over TCP segmented — 2-segment reassembly + TTL patched", "LuaJIT FFI: seg1=[2-byte len prefix], seg2=[DNS query] for " .. tostring(TEST_DOMAINS.allowed) .. " → rcode=0 ttl=60", function()
   local ok, output = query_dns_tcp_segmented(TEST_DOMAINS.allowed)
   local rcode_str = output and output:match("rcode=(%d+)")
+  local ttl_str = output and output:match("ttl=(%d+)")
   local rcode = rcode_str and tonumber(rcode_str)
-  local success = ok and rcode == 0
+  local ttl = ttl_str and tonumber(ttl_str)
+  local success = ok and rcode == 0 and ttl == 60
   local obtained
   if rcode_str then
-    obtained = "rcode=" .. tostring(rcode_str) .. " (expected 0)"
+    obtained = "rcode=" .. tostring(rcode_str) .. " ttl=" .. tostring(ttl_str or '?') .. " (expected rcode=0 ttl=60)"
   else
     obtained = (output:match("([^\n]+)")) or "(no output)"
   end

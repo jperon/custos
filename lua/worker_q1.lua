@@ -40,6 +40,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local raw = ffi.string(payload_ptr[0], payload_len)
   local pkt, parse_status = ndpi.parse_packet(raw)
   if not (pkt) then
+    if parse_status == "buffering" then
+      return NF_DROP
+    end
     return NF_ACCEPT
   end
   ndpi.get_flow(pkt)

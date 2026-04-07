@@ -431,11 +431,14 @@ parse_packet = function(raw)
     end
     if tcp_payload_len > 0 then
       local seg = ffi.string(p + data_off, tcp_payload_len)
-      local prev = tcp_buffers[bk_tcp]
-      if prev then
-        tcp_buffers[bk_tcp] = prev .. seg
+      local entry = tcp_buffers[bk_tcp]
+      if entry then
+        entry.data = entry.data .. seg
       else
-        tcp_buffers[bk_tcp] = seg
+        tcp_buffers[bk_tcp] = {
+          data = seg,
+          init_seq = r32(p, tcp_off + 4)
+        }
       end
     end
   else
@@ -445,26 +448,35 @@ parse_packet = function(raw)
   local dns_len = 0
   local dns_raw_ref = nil
   local dns_single = true
+  local tcp_init_seq = nil
   if l4.proto == "tcp" then
     local bk = tostring(ip.src_ip) .. "|" .. tostring(l4.src_port) .. "|" .. tostring(ip.dst_ip) .. "|" .. tostring(l4.dst_port)
-    local buf = tcp_buffers[bk] or ""
+    local entry = tcp_buffers[bk]
+    local buf = (entry and entry.data) or ""
     local buf_len = #buf
     if buf_len < 2 then
-      return nil, "buffering"
+      if l4.payload_len > 0 then
+        return nil, "buffering"
+      end
+      return nil
     end
     local dns_msg_len = bit.bor(bit.lshift(buf:byte(1), 8), buf:byte(2))
     if buf_len < 2 + dns_msg_len then
-      return nil, "buffering"
+      if l4.payload_len > 0 then
+        return nil, "buffering"
+      end
+      return nil
     end
     dns_raw_ref = buf:sub(3, 2 + dns_msg_len)
     if buf_len > 2 + dns_msg_len then
-      tcp_buffers[bk] = buf:sub(2 + dns_msg_len + 1)
+      entry.data = buf:sub(2 + dns_msg_len + 1)
     else
       tcp_buffers[bk] = nil
     end
     dns_p = ffi.cast("const uint8_t*", dns_raw_ref)
     dns_len = dns_msg_len
     dns_single = (l4.payload_len == 2 + dns_msg_len)
+    tcp_init_seq = entry and entry.init_seq or nil
   else
     dns_p = p + l4.off
     dns_len = l4.payload_len
@@ -523,7 +535,8 @@ parse_packet = function(raw)
     ndpi_master = ndpi_master,
     ndpi_app = ndpi_app,
     tcp_dns_raw = dns_raw_ref,
-    tcp_single_segment = dns_single
+    tcp_single_segment = dns_single,
+    tcp_init_seq = tcp_init_seq
   }
 end
 local parse_answers
@@ -615,7 +628,34 @@ end
 local patch_and_checksum
 patch_and_checksum = function(raw, pkt, answers, new_ttl)
   if pkt.l4.proto == "tcp" and not pkt.tcp_single_segment then
-    return raw
+    local dns_len = #pkt.tcp_dns_raw
+    local dns_buf = ffi.new("uint8_t[?]", dns_len)
+    local dns_ptr = ffi.cast("const uint8_t*", pkt.tcp_dns_raw)
+    ffi.copy(dns_buf, dns_ptr, dns_len)
+    for _index_0 = 1, #answers do
+      local ans = answers[_index_0]
+      w32(dns_buf, ans.ttl_offset, new_ttl)
+    end
+    local p_tmpl = ffi.cast("const uint8_t*", raw)
+    local ip_ihl = pkt.ip.ihl
+    local tcp_hdr_len = bit.rshift(p_tmpl[ip_ihl + 12], 4) * 4
+    local hdr_len = ip_ihl + tcp_hdr_len
+    local new_pkt_len = hdr_len + 2 + dns_len
+    local new_buf = ffi.new("uint8_t[?]", new_pkt_len)
+    ffi.copy(new_buf, p_tmpl, hdr_len)
+    w16(new_buf, hdr_len, dns_len)
+    ffi.copy(new_buf + hdr_len + 2, dns_buf, dns_len)
+    w32(new_buf, ip_ihl + 4, pkt.tcp_init_seq)
+    new_buf[ip_ihl + 13] = 0x18
+    if pkt.ip.version == 4 then
+      w16(new_buf, 2, new_pkt_len)
+      fix_tcp4_cksum(new_buf, new_pkt_len, ip_ihl)
+      fix_ip4_cksum(new_buf, ip_ihl)
+    elseif pkt.ip.version == 6 then
+      w16(new_buf, 4, tcp_hdr_len + 2 + dns_len)
+      fix_tcp6_cksum(new_buf, new_pkt_len)
+    end
+    return ffi.string(new_buf, new_pkt_len)
   end
   local pkt_len = #raw
   local buf = ffi.new("uint8_t[?]", pkt_len)

@@ -258,6 +258,82 @@ test "patch_and_checksum — TCP response", ->
   ttl_offset = 20 + 20 + 2 + 12 + 16 + 6 + 3  -- = 79 (0-based)
   assert_eq patched\byte(ttl_offset + 1), 60, "TTL patched to 60 in TCP packet"
 
+test "patch_and_checksum — TCP 2-segment reassembly patches TTL", ->
+  -- Build a DNS response with 1 A RR (TTL=300).  Use port 54324 (distinct from
+  -- 54321/54322/54323) to avoid tcp_buffers state pollution between tests.
+  qname_enc = "\6github\3com\0"
+  hdr = string.char(0x9A, 0xBC, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+  question = qname_enc .. string.char(0, 1, 0, 1)
+  rr = "\xC0\x0C" .. string.char(0, 1, 0, 1) .. string.char(0, 0, 1, 0x2C) ..
+    string.char(0, 4) .. string.char(5, 6, 7, 8)
+  dns_payload = hdr .. question .. rr
+  dns_len = #dns_payload
+
+  -- Helper: build a raw IPv4/TCP packet with the given TCP payload verbatim (no prefix added).
+  make_tcp_raw = (src_ip, dst_ip, src_port, dst_port, tcp_seq, tcp_payload) ->
+    total_len = 20 + 20 + #tcp_payload
+    ip4bytes = (s) ->
+      a, b, c, d = s\match "(%d+)%.(%d+)%.(%d+)%.(%d+)"
+      string.char tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+    ip = string.char(
+      0x45, 0,
+      bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF),
+      0, 1, 0, 0, 64, PROTO_TCP, 0, 0
+    ) .. ip4bytes(src_ip) .. ip4bytes(dst_ip)
+    tcp = string.char(
+      bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF),
+      bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF),
+      bit.rshift(bit.band(tcp_seq, 0xFF000000), 24),
+      bit.rshift(bit.band(tcp_seq, 0x00FF0000), 16),
+      bit.rshift(bit.band(tcp_seq, 0x0000FF00),  8),
+      bit.band(tcp_seq, 0xFF),
+      0, 0, 0, 0,
+      0x50, 0x18, 0x72, 0x10, 0, 0, 0, 0
+    )
+    ip .. tcp .. tcp_payload
+
+  src_ip, dst_ip, src_port, dst_port = "192.168.1.42", "8.8.8.8", 54324, 53
+  init_seq = 0x00ABCDEF  -- arbitrary init seq stored in first segment
+
+  -- Segment 1: only the 2-byte DNS length prefix.
+  prefix = string.char(bit.rshift(bit.band(dns_len, 0xFF00), 8), bit.band(dns_len, 0xFF))
+  raw1 = make_tcp_raw src_ip, dst_ip, src_port, dst_port, init_seq, prefix
+  pkt1, status1 = parse_packet raw1
+  assert_eq pkt1,    nil,          "seg1 should return nil (incomplete)"
+  assert_eq status1, "buffering",  "seg1 should signal buffering"
+
+  -- Segment 2: the DNS payload only (no prefix).
+  raw2 = make_tcp_raw src_ip, dst_ip, src_port, dst_port, init_seq + 2, dns_payload
+  pkt2, _ = parse_packet raw2
+  assert pkt2, "seg2 should complete the DNS message"
+  assert_eq pkt2.l4.proto,           "tcp",   "proto tcp"
+  assert_eq pkt2.dns.txid,           0x9ABC,  "txid"
+  assert_eq pkt2.tcp_single_segment, false,   "multi-segment: not single"
+  assert (pkt2.tcp_init_seq != nil), "tcp_init_seq should be set"
+  assert_eq pkt2.tcp_init_seq, init_seq, "tcp_init_seq == init_seq of seg1"
+
+  -- Parse answers and patch TTL.
+  answers2 = m_ndpi.parse_answers raw2, pkt2
+  assert_eq #answers2, 1, "1 answer expected"
+  patched2 = m_ndpi.patch_and_checksum raw2, pkt2, answers2, 60
+
+  -- Coalesced packet length = IP(20) + TCP(20) + prefix(2) + dns_len.
+  expected_len = 20 + 20 + 2 + dns_len
+  assert_eq #patched2, expected_len, "coalesced packet size"
+
+  -- Verify TTL byte = 60 at: IP(20)+TCP(20)+prefix(2)+DNS_hdr(12)+question(16)+RR_ptr+type+class(6)+TTL[3]
+  -- question = qname_enc(12)+type(2)+class(2) = 16B ; RR prefix = ptr(2)+type(2)+class(2) = 6B
+  ttl_off2 = 20 + 20 + 2 + 12 + 16 + 6 + 3  -- 0-based byte of TTL LSB
+  assert_eq patched2\byte(ttl_off2 + 1), 60, "TTL patched to 60 in coalesced TCP packet"
+
+  -- Verify seq field was restored to init_seq.
+  seq_b0 = patched2\byte(20 + 4 + 1)
+  seq_b1 = patched2\byte(20 + 4 + 2)
+  seq_b2 = patched2\byte(20 + 4 + 3)
+  seq_b3 = patched2\byte(20 + 4 + 4)
+  got_seq = bit.bor(bit.lshift(seq_b0, 24), bit.lshift(seq_b1, 16), bit.lshift(seq_b2, 8), seq_b3)
+  assert_eq got_seq, init_seq, "TCP seq field restored to init_seq"
+
 m_ip = dofile "lua/parse/ip.lua"
 read_u8     = m_ip.read_u8
 read_u16    = m_ip.read_u16

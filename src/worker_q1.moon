@@ -51,7 +51,11 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- parse_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
   pkt, parse_status = ndpi.parse_packet raw
   unless pkt
-    -- TCP segments before a complete DNS message are buffered silently; let them through.
+    -- Intermediate TCP data segments are DROPped so Q1 can reinject a single
+    -- coalesced+TTL-patched packet once the full DNS message is assembled.
+    -- TCP control packets (SYN-ACK, pure ACK with no payload, FIN) return nil
+    -- without "buffering" and must be passed through unchanged.
+    return NF_DROP if parse_status == "buffering"
     return NF_ACCEPT
 
   -- Pass to nDPI for flow state tracking (TCP sequence, etc.)

@@ -433,37 +433,49 @@ parse_packet = (raw) ->
       tcp_buffers[bk_tcp] = nil
     -- Append this segment's payload data to the reassembly buffer.
     if tcp_payload_len > 0
-      seg  = ffi.string p + data_off, tcp_payload_len
-      prev = tcp_buffers[bk_tcp]
-      tcp_buffers[bk_tcp] = if prev then prev .. seg else seg
+      seg   = ffi.string p + data_off, tcp_payload_len
+      entry = tcp_buffers[bk_tcp]
+      if entry
+        entry.data = entry.data .. seg
+      else
+        tcp_buffers[bk_tcp] = { data: seg, init_seq: r32(p, tcp_off + 4) }
   else
     return nil
 
   -- L7 — DNS header (12 bytes minimum).
   -- For TCP: read from the reassembly buffer (handles multi-segment streams).
   -- For UDP: read directly from the raw packet.
-  dns_p       = nil
-  dns_len     = 0
-  dns_raw_ref = nil  -- GC anchor for the TCP reassembly Lua string
-  dns_single  = true -- false when DNS assembled from multiple TCP segments
+  dns_p        = nil
+  dns_len      = 0
+  dns_raw_ref  = nil  -- GC anchor for the TCP reassembly Lua string
+  dns_single   = true -- false when DNS assembled from multiple TCP segments
+  tcp_init_seq = nil  -- seq of the first TCP segment in the DNS stream
   if l4.proto == "tcp"
-    bk = "#{ip.src_ip}|#{l4.src_port}|#{ip.dst_ip}|#{l4.dst_port}"
-    buf = tcp_buffers[bk] or ""
+    bk    = "#{ip.src_ip}|#{l4.src_port}|#{ip.dst_ip}|#{l4.dst_port}"
+    entry = tcp_buffers[bk]
+    buf     = (entry and entry.data) or ""
     buf_len = #buf
     -- Wait until we have the 2-byte TCP DNS length prefix.
-    return nil, "buffering" if buf_len < 2
+    -- For TCP control packets (SYN-ACK, pure ACK, FIN) with no payload,
+    -- return nil without "buffering" so workers pass them through unchanged.
+    if buf_len < 2
+      return nil, "buffering" if l4.payload_len > 0
+      return nil
     dns_msg_len = bit.bor bit.lshift(buf\byte(1), 8), buf\byte(2)
     -- Wait until the complete DNS message is in the buffer.
-    return nil, "buffering" if buf_len < 2 + dns_msg_len
+    if buf_len < 2 + dns_msg_len
+      return nil, "buffering" if l4.payload_len > 0
+      return nil
     -- Complete message assembled; consume it from the buffer.
     dns_raw_ref = buf\sub 3, 2 + dns_msg_len
     if buf_len > 2 + dns_msg_len
-      tcp_buffers[bk] = buf\sub 2 + dns_msg_len + 1
+      entry.data = buf\sub 2 + dns_msg_len + 1
     else
       tcp_buffers[bk] = nil
-    dns_p      = ffi.cast "const uint8_t*", dns_raw_ref
-    dns_len    = dns_msg_len
-    dns_single = (l4.payload_len == 2 + dns_msg_len)
+    dns_p        = ffi.cast "const uint8_t*", dns_raw_ref
+    dns_len      = dns_msg_len
+    dns_single   = (l4.payload_len == 2 + dns_msg_len)
+    tcp_init_seq = entry and entry.init_seq or nil
   else
     dns_p   = p + l4.off
     dns_len = l4.payload_len
@@ -514,6 +526,7 @@ parse_packet = (raw) ->
     ndpi_master: ndpi_master, ndpi_app: ndpi_app
     tcp_dns_raw:        dns_raw_ref  -- reassembled DNS payload (TCP only, nil for UDP)
     tcp_single_segment: dns_single   -- true iff DNS arrived in a single TCP segment
+    tcp_init_seq:       tcp_init_seq -- seq of first segment; used for coalesced reinject
   }
 
 
@@ -589,10 +602,41 @@ parse_answers = (raw, pkt) ->
 -- @tparam number new_ttl TTL value to write.
 -- @treturn string Modified packet as a Lua string.
 patch_and_checksum = (raw, pkt, answers, new_ttl) ->
-  -- Multi-segment TCP: DNS content straddles multiple IP packets; TTL offsets
-  -- in the final raw segment do not align with the reassembled DNS.  Skip patching.
+  -- Multi-segment TCP: reconstruct a coalesced segment with patched TTLs.
+  -- The intermediate segments were DROPped in Q1 so the client never ACKed them;
+  -- resetting seq to tcp_init_seq lets the client TCP stack accept the coalesced packet.
   if pkt.l4.proto == "tcp" and not pkt.tcp_single_segment
-    return raw
+    -- Patch TTLs in an FFI copy of the reassembled DNS buffer.
+    dns_len = #pkt.tcp_dns_raw
+    dns_buf = ffi.new "uint8_t[?]", dns_len
+    dns_ptr = ffi.cast "const uint8_t*", pkt.tcp_dns_raw
+    ffi.copy dns_buf, dns_ptr, dns_len
+    for ans in *answers
+      w32 dns_buf, ans.ttl_offset, new_ttl
+    -- Reconstruct packet: copy IP+TCP headers from the last segment, replace payload.
+    p_tmpl      = ffi.cast "const uint8_t*", raw
+    ip_ihl      = pkt.ip.ihl
+    tcp_hdr_len = bit.rshift(p_tmpl[ip_ihl + 12], 4) * 4
+    hdr_len     = ip_ihl + tcp_hdr_len
+    new_pkt_len = hdr_len + 2 + dns_len
+    new_buf = ffi.new "uint8_t[?]", new_pkt_len
+    ffi.copy new_buf, p_tmpl, hdr_len
+    -- Write 2-byte DNS length prefix, then patched DNS payload.
+    w16 new_buf, hdr_len, dns_len
+    ffi.copy new_buf + hdr_len + 2, dns_buf, dns_len
+    -- Restore seq to init_seq: client never ACKed the DROPped intermediate segments.
+    w32 new_buf, ip_ihl + 4, pkt.tcp_init_seq
+    -- Force PSH|ACK flags (0x18) on the coalesced segment.
+    new_buf[ip_ihl + 13] = 0x18
+    -- Fix length fields and checksums.
+    if pkt.ip.version == 4
+      w16 new_buf, 2, new_pkt_len
+      fix_tcp4_cksum new_buf, new_pkt_len, ip_ihl
+      fix_ip4_cksum  new_buf, ip_ihl
+    elseif pkt.ip.version == 6
+      w16 new_buf, 4, tcp_hdr_len + 2 + dns_len
+      fix_tcp6_cksum new_buf, new_pkt_len
+    return ffi.string new_buf, new_pkt_len
 
   pkt_len = #raw
   buf = ffi.new "uint8_t[?]", pkt_len

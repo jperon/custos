@@ -343,8 +343,10 @@ pkt, status = ndpi.parse_packet raw
 -- pkt.ip    (version, ihl, src_ip, dst_ip, src_ip_raw, ...)
 -- pkt.l4    (proto, src_port, dst_port, len, off, payload_len)
 --   proto = "udp" or "tcp"
---   TCP extras: pkt.tcp_dns_raw      (assembled DNS payload, multi-segment)
---               pkt.tcp_single_segment (bool — false when reassembled)
+--   TCP extras: pkt.tcp_dns_raw        (assembled DNS payload, multi-segment)
+--               pkt.tcp_single_segment  (bool — false when reassembled from N segments)
+--               pkt.tcp_init_seq        (uint32 — TCP seq of first segment; used to
+--                                        reinject a coalesced+TTL-patched reply)
 -- pkt.dns   (txid, is_response, qdcount, ancount, rcode, ...)
 -- pkt.questions  [{qname, qtype, qclass, qtype_name}, ...]
 -- pkt.ndpi_master, pkt.ndpi_app
@@ -369,7 +371,9 @@ available for reference or fallback.
 
 - **DNS over TCP** is supported: TCP/53 is intercepted in NFQUEUE, streams
   are reassembled per 4-tuple using a 2-byte length prefix (RFC 1035 §4.2.2).
-  TTL patching is skipped for multi-segment responses (uncommon in practice).
+  Intermediate segments are DROPped; once the full DNS message is assembled the
+  filter rejects a single coalesced segment with TTLs patched to `FORCED_TTL`,
+  restoring the original TCP sequence number so the client stack accepts it.
 - **DoH / DoT**: not covered (ports 443/853).
 - **Single-threaded per worker**: one worker per queue. For very
   high throughput, use `--queue-balance N-M` with N workers per range.
