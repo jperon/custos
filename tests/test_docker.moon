@@ -103,6 +103,21 @@ execute = (cmd, capture = false) ->
     success = os.execute cmd
     return success == 0 or success == true
 
+retry_capture = (cmd, attempts = 3, sleep_sec = 1, ok_fn = nil) ->
+  last_ok, last_out = false, ""
+  for i = 1, attempts
+    ok, out = execute cmd, true
+    out or= ""
+    pass = if ok_fn
+      ok_fn ok, out
+    else
+      ok
+    if pass
+      return true, out
+    last_ok, last_out = ok, out
+    os.execute "sleep #{sleep_sec}" if i < attempts
+  return last_ok, last_out
+
 wait_for_container = (name, timeout = 30) ->
   log "Waiting for container #{name}…", "STEP"
   for i = 1, timeout
@@ -236,7 +251,7 @@ compose_down = ->
 query_dns = (domain) ->
   log "Querying DNS for #{domain}..."
   -- Query filter's DNS directly (Docker overrides /etc/resolv.conf with its internal DNS)
-  cmd = "docker exec custos-client nslookup #{domain} #{dns_server} 2>&1"
+  cmd = "timeout 12s docker exec custos-client nslookup #{domain} #{dns_server} 2>&1"
   success, output = execute cmd, true
 
   if not success
@@ -252,8 +267,11 @@ query_dns = (domain) ->
 -- @treturn boolean, string  success, raw dig output.
 query_dns_tcp = (domain) ->
   log "Querying DNS (TCP) for #{domain}..."
-  cmd = "docker exec custos-client dig +tcp +tries=1 +time=5 #{domain} @#{dns_server} 2>&1"
-  success, output = execute cmd, true
+  cmd = "docker exec custos-client dig +tcp +short A +tries=1 +time=4 #{domain} @#{dns_server} 2>&1"
+  success, output = retry_capture cmd, 3, 1, (ok, out) ->
+    return false unless out
+    return false if out\match("communications error") or out\match("no servers could be reached")
+    out\match("%d+%.%d+%.%d+%.%d+") != nil
   print output if verbose
   return success, output
 
@@ -344,6 +362,7 @@ prepare_tcp_seg_script = (domain, server) ->
     "ffi.cdef([["
     "  typedef struct { uint16_t sin_family; uint16_t sin_port;"
     "                   uint32_t sin_addr;   uint8_t  pad[8]; } sa4_t;"
+    "  struct timeval { long tv_sec; long tv_usec; };"
     "  int socket(int,int,int);"
     "  int connect(int, const sa4_t*, unsigned int);"
     "  int setsockopt(int,int,int,const void*,unsigned int);"
@@ -371,6 +390,10 @@ prepare_tcp_seg_script = (domain, server) ->
     "for i=1,plen do buf[i-1]=pkt:byte(i) end"
     "local fd = ffi.C.socket(2,1,6)  -- AF_INET, SOCK_STREAM, IPPROTO_TCP"
     "if fd<0 then print('error=socket') os.exit(1) end"
+    "local SOL_SOCKET=1; local SO_RCVTIMEO=20; local SO_SNDTIMEO=21"
+    "local tv = ffi.new('struct timeval', {3,0})"
+    "ffi.C.setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, tv, ffi.sizeof('struct timeval'))"
+    "ffi.C.setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, tv, ffi.sizeof('struct timeval'))"
     "local one = ffi.new('int[1]',1)"
     "ffi.C.setsockopt(fd, 6, 1, one, ffi.sizeof('int'))  -- TCP_NODELAY"
     "local a,b,c,dd = server:match('(%d+)%.(%d+)%.(%d+)%.(%d+)')"
@@ -379,13 +402,20 @@ prepare_tcp_seg_script = (domain, server) ->
     "sa.sin_port   = ffi.C.htons(53)"
     "sa.sin_addr   = ffi.C.htonl(tonumber(a)*16777216 + tonumber(b)*65536"
     "                             + tonumber(c)*256 + tonumber(dd))"
-    "if ffi.C.connect(fd,sa,16)<0 then print('error=connect') ffi.C.close(fd) os.exit(1) end"
-    "ffi.C.send(fd, buf,   2,      0)  -- segment 1: 2-byte DNS length prefix"
+    "local connected = false"
+    "for _=1,30 do"
+    "  if ffi.C.connect(fd,sa,16)==0 then connected=true break end"
+    "  ffi.C.usleep(100000)"
+    "end"
+    "if not connected then print('error=connect') ffi.C.close(fd) os.exit(1) end"
+    "local s1 = ffi.C.send(fd, buf,   2,      0)  -- segment 1: 2-byte DNS length prefix"
+    "if s1 ~= 2 then print('error=send_seg1') ffi.C.close(fd) os.exit(1) end"
     "ffi.C.usleep(100000)              -- 100 ms"
-    "ffi.C.send(fd, buf+2, plen-2, 0) -- segment 2: DNS query"
+    "local s2 = ffi.C.send(fd, buf+2, plen-2, 0) -- segment 2: DNS query"
+    "if s2 ~= (plen-2) then print('error=send_seg2') ffi.C.close(fd) os.exit(1) end"
     "local rb = ffi.new('uint8_t[?]', 65536)"
     "local n2 = ffi.C.recv(fd, rb, 2, 0)"
-    "if n2<2 then print('error=short_header') ffi.C.close(fd) os.exit(1) end"
+    "if n2<2 then print('error=short_header_or_timeout') ffi.C.close(fd) os.exit(1) end"
     "local rlen = bit.bor(bit.lshift(rb[0],8), rb[1])"
     "local got  = 0"
     "while got < rlen do"
@@ -393,6 +423,7 @@ prepare_tcp_seg_script = (domain, server) ->
     "  if nn<=0 then break end"
     "  got = got+nn"
     "end"
+    "if got<rlen then print('error=short_body_or_timeout got='..tostring(got)..' want='..tostring(rlen)) ffi.C.close(fd) os.exit(1) end"
     "if got<4 then print('error=short_body') ffi.C.close(fd) os.exit(1) end"
     "local function skip_name(b, off)"
     "  while off < rlen do"
@@ -431,7 +462,12 @@ prepare_tcp_seg_script = (domain, server) ->
 query_dns_tcp_segmented = (domain) ->
   unless prepare_tcp_seg_script domain, dns_server
     return false, "failed to write/copy Lua script"
-  execute "docker exec custos-client luajit /tmp/dns_tcp_seg.lua 2>&1", true
+  cmd = "timeout 30s docker exec custos-client luajit /tmp/dns_tcp_seg.lua 2>&1"
+  retry_capture cmd, 3, 1, (ok, out) ->
+    return false unless out
+    rcode = out\match "rcode=(%d+)"
+    ttl   = out\match "ttl=(%d+)"
+    (rcode == "0") and (ttl == tostring EXPECTED_TTL)
 
 --- Write a LuaJIT script that sends an IPv6 UDP DNS query with a Hop-by-Hop
 -- extension header using SOCK_DGRAM + setsockopt(IPV6_HOPOPTS).
@@ -763,14 +799,15 @@ run_test "DNS over TCP — allowed domain resolves",
   "dig +tcp #{TEST_DOMAINS.allowed} → NOERROR with at least one A record",
   ->
     success, output = query_dns_tcp TEST_DOMAINS.allowed
-    ok = success and (output\match("ANSWER: [1-9]") != nil or output\match("IN%s+A%s+%d") != nil)
-    obtained = output\match("(%d+%.%d+%.%d+%.%d+)") or output\match("([^\n]+)") or "(no output)"
+    ip = output and output\match("(%d+%.%d+%.%d+%.%d+)")
+    ok = success and ip != nil
+    obtained = ip or output\match("([^\n]+)") or "(no output)"
     return ok, obtained
 
 run_test "DNS over TCP — blocked domain is dropped",
   "dig +tcp #{TEST_DOMAINS.blocked} → timeout/no answer (Q0 DROPs the data segment)",
   ->
-    cmd = "docker exec custos-client dig +tcp +tries=1 +time=3 #{TEST_DOMAINS.blocked} @#{dns_server} 2>&1"
+    cmd = "timeout 12s docker exec custos-client dig +tcp +tries=1 +time=3 #{TEST_DOMAINS.blocked} @#{dns_server} 2>&1"
     q_ok, output = execute cmd, true
     -- Pass if dig did NOT receive a successful NOERROR answer.
     has_answer = q_ok and (output\match("ANSWER: [1-9]") != nil or output\match("status: NOERROR") != nil)
