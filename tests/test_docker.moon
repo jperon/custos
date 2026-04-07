@@ -311,43 +311,78 @@ flush_ip4_allowed = ->
   execute "docker exec #{filter_name} nft flush set ip  dns-filter ip4_allowed 2>/dev/null", true
   execute "docker exec #{filter_name} nft flush set ip6 dns-filter ip6_allowed 2>/dev/null", true
 
---- Write a Python TCP-segmentation DNS test script to ./tmp/ and copy it to the container.
--- The script opens a TCP connection to dns_server:53, sends the 2-byte DNS length
--- prefix as the first TCP segment, waits 100 ms, then sends the rest of the query.
+--- Write a LuaJIT TCP-segmentation DNS test script to ./tmp/ and copy it to the container.
+-- The script opens a TCP connection to dns_server:53 via FFI POSIX sockets, sends the
+-- 2-byte DNS length prefix as the first TCP segment (TCP_NODELAY enabled), waits 100 ms,
+-- then sends the rest of the query.
 -- @tparam string domain  Domain to query.
 -- @tparam string server  DNS server IP address.
 -- @treturn boolean  true on success.
 prepare_tcp_seg_script = (domain, server) ->
-  py = table.concat {
-    "import socket, struct, time"
-    "def make_query(domain):"
-    "    labels = domain.encode().split(b'.')"
-    "    qname = b''.join(bytes([len(l)]) + l for l in labels) + b'\\x00'"
-    "    dns = struct.pack('!HHHHHH', 0xABCD, 0x0100, 1, 0, 0, 0) + qname + struct.pack('!HH', 1, 1)"
-    "    return struct.pack('!H', len(dns)) + dns"
-    "pkt = make_query('#{domain}')"
-    "sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)"
-    "sock.settimeout(5)"
-    "try:"
-    "    sock.connect(('#{server}', 53))"
-    "    sock.send(pkt[:2])"
-    "    time.sleep(0.1)"
-    "    sock.send(pkt[2:])"
-    "    rl = struct.unpack('!H', sock.recv(2))[0]"
-    "    resp = sock.recv(rl)"
-    "    rcode = resp[3] & 0xF"
-    "    print('rcode=' + str(rcode) + ' len=' + str(rl))"
-    "    sock.close()"
-    "except Exception as e:"
-    "    print('error=' + str(e))"
-    "    try: sock.close()"
-    "    except: pass"
+  lua_code = table.concat {
+    "local ffi = require 'ffi'"
+    "local bit = require 'bit'"
+    "ffi.cdef([["
+    "  typedef struct { uint16_t sin_family; uint16_t sin_port;"
+    "                   uint32_t sin_addr;   uint8_t  pad[8]; } sa4_t;"
+    "  int socket(int,int,int);"
+    "  int connect(int, const sa4_t*, unsigned int);"
+    "  int setsockopt(int,int,int,const void*,unsigned int);"
+    "  int send(int,const void*,size_t,int);"
+    "  int recv(int,void*,size_t,int);"
+    "  int close(int);"
+    "  uint32_t htonl(uint32_t);"
+    "  uint16_t htons(uint16_t);"
+    "  int usleep(unsigned int);"
+    "]])"
+    "local server = '#{server}'"
+    "local domain = '#{domain}'"
+    "local function build(d)"
+    "  local q = ''"
+    "  for l in d:gmatch('[^.]+') do q = q..string.char(#l)..l end"
+    "  q = q..string.char(0)"
+    "  local dns = string.char(0xAB,0xCD,0x01,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00)"
+    "              ..q..string.char(0,1,0,1)"
+    "  local n = #dns"
+    "  return string.char(bit.rshift(bit.band(n,0xFF00),8), bit.band(n,0xFF))..dns"
+    "end"
+    "local pkt  = build(domain)"
+    "local plen = #pkt"
+    "local buf  = ffi.new('uint8_t[?]', plen)"
+    "for i=1,plen do buf[i-1]=pkt:byte(i) end"
+    "local fd = ffi.C.socket(2,1,6)  -- AF_INET, SOCK_STREAM, IPPROTO_TCP"
+    "if fd<0 then print('error=socket') os.exit(1) end"
+    "local one = ffi.new('int[1]',1)"
+    "ffi.C.setsockopt(fd, 6, 1, one, ffi.sizeof('int'))  -- TCP_NODELAY"
+    "local a,b,c,dd = server:match('(%d+)%.(%d+)%.(%d+)%.(%d+)')"
+    "local sa = ffi.new('sa4_t')"
+    "sa.sin_family = 2"
+    "sa.sin_port   = ffi.C.htons(53)"
+    "sa.sin_addr   = ffi.C.htonl(tonumber(a)*16777216 + tonumber(b)*65536"
+    "                             + tonumber(c)*256 + tonumber(dd))"
+    "if ffi.C.connect(fd,sa,16)<0 then print('error=connect') ffi.C.close(fd) os.exit(1) end"
+    "ffi.C.send(fd, buf,   2,      0)  -- segment 1: 2-byte DNS length prefix"
+    "ffi.C.usleep(100000)              -- 100 ms"
+    "ffi.C.send(fd, buf+2, plen-2, 0) -- segment 2: DNS query"
+    "local rb = ffi.new('uint8_t[?]', 65536)"
+    "local n2 = ffi.C.recv(fd, rb, 2, 0)"
+    "if n2<2 then print('error=short_header') ffi.C.close(fd) os.exit(1) end"
+    "local rlen = bit.bor(bit.lshift(rb[0],8), rb[1])"
+    "local got  = 0"
+    "while got < rlen do"
+    "  local nn = ffi.C.recv(fd, rb+got, rlen-got, 0)"
+    "  if nn<=0 then break end"
+    "  got = got+nn"
+    "end"
+    "if got<4 then print('error=short_body') ffi.C.close(fd) os.exit(1) end"
+    "print('rcode='..tostring(bit.band(rb[3],0x0F))..' len='..tostring(rlen))"
+    "ffi.C.close(fd)"
   }, "\n"
-  f = io.open "./tmp/dns_tcp_seg.py", "w"
+  f = io.open "./tmp/dns_tcp_seg.lua", "w"
   return false unless f
-  f\write py
+  f\write lua_code
   f\close!
-  ok = execute "docker cp ./tmp/dns_tcp_seg.py custos-client:/tmp/dns_tcp_seg.py 2>&1"
+  ok = execute "docker cp ./tmp/dns_tcp_seg.lua custos-client:/tmp/dns_tcp_seg.lua 2>&1"
   return ok
 
 --- Run the DNS-over-TCP segmentation test: sends query in two TCP segments.
@@ -355,8 +390,8 @@ prepare_tcp_seg_script = (domain, server) ->
 -- @treturn boolean, string  success, raw output ("rcode=N len=M" or "error=...").
 query_dns_tcp_segmented = (domain) ->
   unless prepare_tcp_seg_script domain, dns_server
-    return false, "failed to write/copy Python script"
-  execute "docker exec custos-client python3 /tmp/dns_tcp_seg.py 2>&1", true
+    return false, "failed to write/copy Lua script"
+  execute "docker exec custos-client luajit /tmp/dns_tcp_seg.lua 2>&1", true
 
 -- Main test suite
 tests_passed = 0
@@ -586,7 +621,7 @@ run_test "DNS over TCP — blocked domain is dropped",
     return not has_answer, obtained
 
 run_test "DNS over TCP segmented — 2-segment reassembly works",
-  "Python: seg1=[2-byte len prefix], seg2=[DNS query] for #{TEST_DOMAINS.allowed} → rcode=0",
+  "LuaJIT FFI: seg1=[2-byte len prefix], seg2=[DNS query] for #{TEST_DOMAINS.allowed} → rcode=0",
   ->
     ok, output = query_dns_tcp_segmented TEST_DOMAINS.allowed
     rcode_str = output and output\match "rcode=(%d+)"

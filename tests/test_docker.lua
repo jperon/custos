@@ -315,46 +315,80 @@ flush_ip4_allowed = function()
 end
 local prepare_tcp_seg_script
 prepare_tcp_seg_script = function(domain, server)
-  local py = table.concat({
-    "import socket, struct, time",
-    "def make_query(domain):",
-    "    labels = domain.encode().split(b'.')",
-    "    qname = b''.join(bytes([len(l)]) + l for l in labels) + b'\\x00'",
-    "    dns = struct.pack('!HHHHHH', 0xABCD, 0x0100, 1, 0, 0, 0) + qname + struct.pack('!HH', 1, 1)",
-    "    return struct.pack('!H', len(dns)) + dns",
-    "pkt = make_query('" .. tostring(domain) .. "')",
-    "sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
-    "sock.settimeout(5)",
-    "try:",
-    "    sock.connect(('" .. tostring(server) .. "', 53))",
-    "    sock.send(pkt[:2])",
-    "    time.sleep(0.1)",
-    "    sock.send(pkt[2:])",
-    "    rl = struct.unpack('!H', sock.recv(2))[0]",
-    "    resp = sock.recv(rl)",
-    "    rcode = resp[3] & 0xF",
-    "    print('rcode=' + str(rcode) + ' len=' + str(rl))",
-    "    sock.close()",
-    "except Exception as e:",
-    "    print('error=' + str(e))",
-    "    try: sock.close()",
-    "    except: pass"
+  local lua_code = table.concat({
+    "local ffi = require 'ffi'",
+    "local bit = require 'bit'",
+    "ffi.cdef([[",
+    "  typedef struct { uint16_t sin_family; uint16_t sin_port;",
+    "                   uint32_t sin_addr;   uint8_t  pad[8]; } sa4_t;",
+    "  int socket(int,int,int);",
+    "  int connect(int, const sa4_t*, unsigned int);",
+    "  int setsockopt(int,int,int,const void*,unsigned int);",
+    "  int send(int,const void*,size_t,int);",
+    "  int recv(int,void*,size_t,int);",
+    "  int close(int);",
+    "  uint32_t htonl(uint32_t);",
+    "  uint16_t htons(uint16_t);",
+    "  int usleep(unsigned int);",
+    "]])",
+    "local server = '" .. tostring(server) .. "'",
+    "local domain = '" .. tostring(domain) .. "'",
+    "local function build(d)",
+    "  local q = ''",
+    "  for l in d:gmatch('[^.]+') do q = q..string.char(#l)..l end",
+    "  q = q..string.char(0)",
+    "  local dns = string.char(0xAB,0xCD,0x01,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00)",
+    "              ..q..string.char(0,1,0,1)",
+    "  local n = #dns",
+    "  return string.char(bit.rshift(bit.band(n,0xFF00),8), bit.band(n,0xFF))..dns",
+    "end",
+    "local pkt  = build(domain)",
+    "local plen = #pkt",
+    "local buf  = ffi.new('uint8_t[?]', plen)",
+    "for i=1,plen do buf[i-1]=pkt:byte(i) end",
+    "local fd = ffi.C.socket(2,1,6)  -- AF_INET, SOCK_STREAM, IPPROTO_TCP",
+    "if fd<0 then print('error=socket') os.exit(1) end",
+    "local one = ffi.new('int[1]',1)",
+    "ffi.C.setsockopt(fd, 6, 1, one, ffi.sizeof('int'))  -- TCP_NODELAY",
+    "local a,b,c,dd = server:match('(%d+)%.(%d+)%.(%d+)%.(%d+)')",
+    "local sa = ffi.new('sa4_t')",
+    "sa.sin_family = 2",
+    "sa.sin_port   = ffi.C.htons(53)",
+    "sa.sin_addr   = ffi.C.htonl(tonumber(a)*16777216 + tonumber(b)*65536",
+    "                             + tonumber(c)*256 + tonumber(dd))",
+    "if ffi.C.connect(fd,sa,16)<0 then print('error=connect') ffi.C.close(fd) os.exit(1) end",
+    "ffi.C.send(fd, buf,   2,      0)  -- segment 1: 2-byte DNS length prefix",
+    "ffi.C.usleep(100000)              -- 100 ms",
+    "ffi.C.send(fd, buf+2, plen-2, 0) -- segment 2: DNS query",
+    "local rb = ffi.new('uint8_t[?]', 65536)",
+    "local n2 = ffi.C.recv(fd, rb, 2, 0)",
+    "if n2<2 then print('error=short_header') ffi.C.close(fd) os.exit(1) end",
+    "local rlen = bit.bor(bit.lshift(rb[0],8), rb[1])",
+    "local got  = 0",
+    "while got < rlen do",
+    "  local nn = ffi.C.recv(fd, rb+got, rlen-got, 0)",
+    "  if nn<=0 then break end",
+    "  got = got+nn",
+    "end",
+    "if got<4 then print('error=short_body') ffi.C.close(fd) os.exit(1) end",
+    "print('rcode='..tostring(bit.band(rb[3],0x0F))..' len='..tostring(rlen))",
+    "ffi.C.close(fd)"
   }, "\n")
-  local f = io.open("./tmp/dns_tcp_seg.py", "w")
+  local f = io.open("./tmp/dns_tcp_seg.lua", "w")
   if not (f) then
     return false
   end
-  f:write(py)
+  f:write(lua_code)
   f:close()
-  local ok = execute("docker cp ./tmp/dns_tcp_seg.py custos-client:/tmp/dns_tcp_seg.py 2>&1")
+  local ok = execute("docker cp ./tmp/dns_tcp_seg.lua custos-client:/tmp/dns_tcp_seg.lua 2>&1")
   return ok
 end
 local query_dns_tcp_segmented
 query_dns_tcp_segmented = function(domain)
   if not (prepare_tcp_seg_script(domain, dns_server)) then
-    return false, "failed to write/copy Python script"
+    return false, "failed to write/copy Lua script"
   end
-  return execute("docker exec custos-client python3 /tmp/dns_tcp_seg.py 2>&1", true)
+  return execute("docker exec custos-client luajit /tmp/dns_tcp_seg.lua 2>&1", true)
 end
 local tests_passed = 0
 local tests_failed = 0
@@ -544,7 +578,7 @@ run_test("DNS over TCP — blocked domain is dropped", "dig +tcp " .. tostring(T
   local obtained = (output:match("([^\n]+)")) or "(no output)"
   return not has_answer, obtained
 end)
-run_test("DNS over TCP segmented — 2-segment reassembly works", "Python: seg1=[2-byte len prefix], seg2=[DNS query] for " .. tostring(TEST_DOMAINS.allowed) .. " → rcode=0", function()
+run_test("DNS over TCP segmented — 2-segment reassembly works", "LuaJIT FFI: seg1=[2-byte len prefix], seg2=[DNS query] for " .. tostring(TEST_DOMAINS.allowed) .. " → rcode=0", function()
   local ok, output = query_dns_tcp_segmented(TEST_DOMAINS.allowed)
   local rcode_str = output and output:match("rcode=(%d+)")
   local rcode = rcode_str and tonumber(rcode_str)
