@@ -26,9 +26,23 @@ ffi.cdef [[
 
   /* ── Processus ── */
   pid_t getpid(void);
+  pid_t getppid(void);
   pid_t fork(void);
   pid_t waitpid(pid_t pid, int *status, int options);
   void  _exit(int status);
+  int   prctl(int option, unsigned long a2, unsigned long a3,
+              unsigned long a4, unsigned long a5);
+  int   kill(pid_t pid, int sig);
+
+  /* ── signalfd (Linux) — signaux → fd lisible, sans handler async ── */
+  typedef struct { uint8_t _opaque[128]; } sigset_t_custos;
+  int sigprocmask(int how, const sigset_t_custos *set,
+                  sigset_t_custos *oldset);
+  int signalfd(int fd, const sigset_t_custos *mask, int flags);
+  typedef struct {
+    uint32_t ssi_signo;
+    uint8_t  _pad[124];
+  } signalfd_siginfo;
 
   /* ── Signaux ── */
   typedef void (*sighandler_t)(int);

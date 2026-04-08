@@ -12,6 +12,21 @@ ffi.cdef([[  unsigned int sleep(unsigned int seconds);
   int getpid(void);
 ]])
 local WNOHANG = 1
+local SIGTERM = 15
+local create_sigterm_fd
+create_sigterm_fd = function()
+  local SIG_BLOCK = 0
+  local mask = ffi.new("sigset_t_custos")
+  ffi.fill(mask, ffi.sizeof(mask), 0)
+  local word = ffi.cast("uint32_t*", mask)
+  word[0] = bit.bor(word[0], bit.lshift(1, SIGTERM - 1))
+  libc.sigprocmask(SIG_BLOCK, mask, nil)
+  local fd = libc.signalfd(-1, mask, 2048)
+  if fd < 0 then
+    error("signalfd() échoué")
+  end
+  return fd
+end
 local create_pipe
 create_pipe = function()
   local fds = ffi.new("int[2]")
@@ -26,11 +41,22 @@ create_pipe = function()
 end
 local fork_worker
 fork_worker = function(name, worker_fn, pipe_fd)
+  local parent_pid = tonumber(libc.getpid())
   local pid = libc.fork()
   if pid < 0 then
     error("fork() échoué pour " .. tostring(name))
   end
   if pid == 0 then
+    if libc.prctl(1, SIGTERM, 0, 0, 0) ~= 0 then
+      log_error({
+        action = "prctl_failed",
+        name = name
+      })
+      libc._exit(1)
+    end
+    if tonumber(libc.getppid()) ~= parent_pid then
+      libc._exit(0)
+    end
     worker_fn(pipe_fd)
     libc._exit(0)
   end
@@ -41,8 +67,27 @@ fork_worker = function(name, worker_fn, pipe_fd)
   })
   return pid
 end
+local shutdown_workers
+shutdown_workers = function(workers)
+  for _index_0 = 1, #workers do
+    local w = workers[_index_0]
+    if w.pid and w.pid > 0 then
+      log_info({
+        action = "worker_stopping",
+        name = w.name,
+        pid = w.pid
+      })
+      libc.kill(w.pid, SIGTERM)
+    end
+  end
+  local status = ffi.new("int[1]")
+  local dead = libc.waitpid(-1, status, 0)
+  while dead > 0 do
+    dead = libc.waitpid(-1, status, 0)
+  end
+end
 local supervise
-supervise = function(pipe)
+supervise = function(pipe, sfd)
   local workers = {
     {
       name = "Q0-questions",
@@ -68,11 +113,21 @@ supervise = function(pipe)
     w.pid = w.restart_fn()
   end
   local status = ffi.new("int[1]")
+  local siginfo = ffi.new("signalfd_siginfo")
+  local sig_sz = ffi.sizeof("signalfd_siginfo")
   log_info({
     action = "supervisor_running",
     pid = tonumber(libc.getpid())
   })
   while true do
+    local rv = libc.read(sfd, siginfo, sig_sz)
+    if rv == sig_sz then
+      log_info({
+        action = "supervisor_sigterm"
+      })
+      shutdown_workers(workers)
+      libc._exit(0)
+    end
     local dead_pid = tonumber(libc.waitpid(-1, status, WNOHANG))
     if dead_pid > 0 then
       for _index_0 = 1, #workers do
@@ -99,10 +154,11 @@ log_info({
   action = "dns-filter_start",
   version = "1.0.0"
 })
+local sfd = create_sigterm_fd()
 local pipe = create_pipe()
 log_info({
   action = "ipc_pipe_created",
   rfd = pipe.rfd,
   wfd = pipe.wfd
 })
-return supervise(pipe)
+return supervise(pipe, sfd)

@@ -83,9 +83,9 @@ run_queue = (queue_num, callback) ->
     elseif rv == 0
       break   -- EOF inattendu
     else
-      -- rv < 0 : EINTR (signal reçu) → on reprend la boucle
+      -- rv < 0 : EINTR (signal reçu) → on sort proprement
       if libc.__errno_location()[0] == EINTR
-        continue
+        break
       break   -- autre erreur (ENOBUFS, etc.) → on sort
 
   log_info { action: "queue_closed", queue: queue_num }

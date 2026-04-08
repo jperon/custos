@@ -64,23 +64,15 @@ run_queue = function(queue_num, callback)
     pid = tonumber(ffi.C.getpid and ffi.C.getpid() or 0)
   })
   while true do
-    local _continue_0 = false
-    repeat
-      local rv = libc.read(fd, buf, READ_BUF_SIZE)
-      if rv > 0 then
-        libnfq.nfq_handle_packet(h, buf, tonumber(rv))
-      elseif rv == 0 then
-        break
-      else
-        if libc.__errno_location()[0] == EINTR then
-          _continue_0 = true
-          break
-        end
+    local rv = libc.read(fd, buf, READ_BUF_SIZE)
+    if rv > 0 then
+      libnfq.nfq_handle_packet(h, buf, tonumber(rv))
+    elseif rv == 0 then
+      break
+    else
+      if libc.__errno_location()[0] == EINTR then
         break
       end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
       break
     end
   end
