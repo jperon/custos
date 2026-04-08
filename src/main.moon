@@ -70,6 +70,14 @@ fork_worker = (name, worker_fn, pipe_fd) ->
 
   if pid == 0
     -- ── Processus enfant ───────────────────────────────────────
+    -- Le superviseur a bloqué SIGTERM via sigprocmask (pour signalfd).
+    -- Ce masque est hérité par fork() : il faut le débloquer ici,
+    -- sinon prctl(PR_SET_PDEATHSIG) et kill(SIGTERM) resteraient sans effet.
+    unmask = ffi.new "sigset_t_custos"
+    ffi.fill unmask, ffi.sizeof(unmask), 0
+    uword = ffi.cast "uint32_t*", unmask
+    uword[0] = bit.lshift 1, SIGTERM - 1  -- bit 14 = SIGTERM
+    libc.sigprocmask 1, unmask, nil        -- SIG_UNBLOCK=1
     -- PR_SET_PDEATHSIG : filet de sécurité si le superviseur meurt
     -- brutalement (avant que shutdown_workers ait pu envoyer SIGTERM).
     if libc.prctl(1, SIGTERM, 0, 0, 0) != 0

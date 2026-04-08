@@ -47,6 +47,11 @@ fork_worker = function(name, worker_fn, pipe_fd)
     error("fork() échoué pour " .. tostring(name))
   end
   if pid == 0 then
+    local unmask = ffi.new("sigset_t_custos")
+    ffi.fill(unmask, ffi.sizeof(unmask), 0)
+    local uword = ffi.cast("uint32_t*", unmask)
+    uword[0] = bit.lshift(1, SIGTERM - 1)
+    libc.sigprocmask(1, unmask, nil)
     if libc.prctl(1, SIGTERM, 0, 0, 0) ~= 0 then
       log_error({
         action = "prctl_failed",
