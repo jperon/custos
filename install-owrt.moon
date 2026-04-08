@@ -50,7 +50,7 @@ Installer = (cfg) ->
         io.write "  #{CYAN}DRY#{NC} #{cmd}\n"
         return true
       code = os.execute cmd
-      code == 0
+      code == 0 or code == true
 
     capture = (cmd) =>
       fh = io.popen "#{cmd} 2>&1"
@@ -84,12 +84,12 @@ Installer = (cfg) ->
       else
         io.write "  #{CYAN}DRY#{NC} write #{tmplocal}\n"
 
-      ok_scp = @run "scp -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@cfg.ip}:/tmp/#{name}.sh"
+      ok_scp = @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@cfg.ip}:/tmp/#{name}.sh"
       return false unless ok_scp
       @ssh_run "sh /tmp/#{name}.sh && rm -f /tmp/#{name}.sh"
 
     scp_send = (src, dst) =>
-      @run "scp -P #{@cfg.port} -o StrictHostKeyChecking=no -r #{src} #{@cfg.user}@#{@cfg.ip}:#{dst}"
+      @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -r #{src} #{@cfg.user}@#{@cfg.ip}:#{dst}"
 
     -- ── Étapes d'installation ────────────────────────────────────────
 
@@ -221,7 +221,7 @@ Installer = (cfg) ->
         return false
 
       info "  Envoi de l'archive → /tmp/"
-      unless @run "scp -P #{@cfg.port} -o StrictHostKeyChecking=no #{archive} #{@cfg.user}@#{@cfg.ip}:/tmp/custos-lua.tar.gz"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{archive} #{@cfg.user}@#{@cfg.ip}:/tmp/custos-lua.tar.gz"
         fail "Échec du transfert de l'archive"
         return false
 
@@ -287,16 +287,23 @@ echo "br_netfilter ok"
 USE_PROCD=1
 START=95
 STOP=05
-PROG=/usr/bin/luajit
+PROG=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)
 CUSTOS_DIR=]] .. @cfg.dest .. [[
 
 start_service() {
+    [ "$(uci get custos.main.enabled 2>/dev/null)" = "0" ] && return 0
+    [ -z "$PROG" ] && { echo "custos: luajit introuvable"; return 1; }
+
     modprobe br_netfilter 2>/dev/null || true
     sysctl -qw net.bridge.bridge-nf-call-iptables=1  2>/dev/null || true
     sysctl -qw net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true
 
+    $PROG $CUSTOS_DIR/uci_config.lua || \
+        echo "custos: avertissement — génération config UCI échouée, utilise les défauts compilés"
+
     procd_open_instance
     procd_set_param command $PROG $CUSTOS_DIR/main.lua
+    procd_set_param env LUA_PATH="/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
     procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -304,7 +311,12 @@ start_service() {
 }
 
 reload_service() {
-    kill -HUP $(pgrep -f "$CUSTOS_DIR/main.lua") 2>/dev/null || true
+    stop
+    start
+}
+
+service_triggers() {
+    procd_add_reload_trigger "custos"
 }
 ]]
       tmplocal = "tmp/owrt-custos-initd"
@@ -314,7 +326,7 @@ reload_service() {
           fh\write service
           fh\close!
 
-      ok_scp = @run "scp -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@cfg.ip}:/etc/init.d/custos"
+      ok_scp = @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@cfg.ip}:/etc/init.d/custos"
       unless ok_scp
         fail "Échec de la copie du script init.d"
         return false
@@ -323,6 +335,41 @@ reload_service() {
         fail "Échec activation du service"
         return false
       ok "Service installé et activé au démarrage"
+      true
+
+    -- Installe /etc/config/custos si absent (préserve la config existante).
+    install_uci_config = =>
+      step "Configuration UCI (/etc/config/custos)"
+      exists = @ssh_capture "[ -f /etc/config/custos ] && echo yes || echo no"
+      if exists and exists\find "yes"
+        warn "/etc/config/custos existe déjà — configuration préservée"
+        return true
+
+      uci_cfg = [[
+config custos 'main'
+	option enabled           '1'
+	option log_path          '/var/log/custos.log'
+	option forced_ttl        '60'
+	option nft_ip_timeout    '2m'
+	option ipc_pending_ttl   '5'
+	option client_expiry     '300'
+	option neigh_refresh_cooldown '10'
+	list   allowed_domains   'local'
+	list   allowed_domains   'lan'
+	list   allowed_domains   'home.arpa'
+]]
+      tmplocal = "tmp/owrt-custos-uci"
+      unless @cfg.dry
+        fh = io.open tmplocal, "w"
+        if fh
+          fh\write uci_cfg
+          fh\close!
+
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@cfg.ip}:/etc/config/custos"
+        fail "Échec de la copie de /etc/config/custos"
+        return false
+
+      ok "/etc/config/custos installé"
       true
 
     start_service = =>
@@ -377,6 +424,11 @@ reload_service() {
       -- 4. Nettoyage nftables (on tente de supprimer la table si elle existe)
       info "  Nettoyage nftables..."
       @ssh_run "nft delete table inet custos_dns_filter 2>/dev/null || true"
+
+      -- 5. Suppression de la configuration UCI et des fichiers runtime
+      info "  Suppression de la configuration UCI..."
+      @ssh_run "rm -f /etc/config/custos"
+      @ssh_run "rm -rf /var/run/custos"
       
       ok "Désinstallation terminée"
       true
@@ -515,6 +567,7 @@ main = ->
     { name: "br_netfilter",      fn: -> inst.enable_br_netfilter! }
     { name: "règles nft",        fn: -> inst.apply_nft_rules!     }
     { name: "service init.d",    fn: -> inst.install_initd!       }
+    { name: "config UCI",        fn: -> inst.install_uci_config!  }
     { name: "démarrage service", fn: -> inst.start_service!       }
     { name: "santé",             fn: -> inst.health_check!        }
   }

@@ -41,7 +41,7 @@ run = function(cmd, dry)
     return true
   end
   local code = os.execute(cmd)
-  return code == 0
+  return code == 0 or code == true
 end
 local capture
 capture = function(cmd)
@@ -81,7 +81,7 @@ ssh_run_script = function(cfg, name, content)
   else
     io.write("  " .. tostring(CYAN) .. "DRY" .. tostring(NC) .. " write " .. tostring(tmplocal) .. "\n")
   end
-  local ok_scp = run("scp -P " .. tostring(cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(cfg.user) .. "@" .. tostring(cfg.ip) .. ":/tmp/" .. tostring(name) .. ".sh", cfg.dry)
+  local ok_scp = run("scp -O -P " .. tostring(cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(cfg.user) .. "@" .. tostring(cfg.ip) .. ":/tmp/" .. tostring(name) .. ".sh", cfg.dry)
   if not (ok_scp) then
     return false
   end
@@ -89,7 +89,7 @@ ssh_run_script = function(cfg, name, content)
 end
 local scp_send
 scp_send = function(cfg, src, dst)
-  return run("scp -P " .. tostring(cfg.port) .. " -o StrictHostKeyChecking=no -r " .. tostring(src) .. " " .. tostring(cfg.user) .. "@" .. tostring(cfg.ip) .. ":" .. tostring(dst), cfg.dry)
+  return run("scp -O -P " .. tostring(cfg.port) .. " -o StrictHostKeyChecking=no -r " .. tostring(src) .. " " .. tostring(cfg.user) .. "@" .. tostring(cfg.ip) .. ":" .. tostring(dst), cfg.dry)
 end
 local check_local_deps
 check_local_deps = function(cfg)
@@ -269,9 +269,20 @@ upload_files = function(cfg)
     fail("Impossible de créer " .. tostring(cfg.dest) .. "/parse")
     return false
   end
-  info("  Envoi de lua/ → " .. tostring(cfg.dest) .. "/")
-  if not (scp_send(cfg, "lua/.", cfg.dest)) then
-    fail("Échec du transfert de lua/")
+  info("  Compression de lua/ → tmp/custos-lua.tar.gz")
+  local archive = "tmp/custos-lua.tar.gz"
+  if not (run("tar -C lua -czf " .. tostring(archive) .. " .", cfg.dry)) then
+    fail("Impossible de créer l'archive")
+    return false
+  end
+  info("  Envoi de l'archive → /tmp/")
+  if not (scp_send(cfg, archive, "/tmp/custos-lua.tar.gz")) then
+    fail("Échec du transfert de l'archive")
+    return false
+  end
+  info("  Extraction sur le routeur → " .. tostring(cfg.dest) .. "/")
+  if not (ssh_run(cfg, "tar -xzf /tmp/custos-lua.tar.gz -C " .. tostring(cfg.dest) .. " && rm -f /tmp/custos-lua.tar.gz")) then
+    fail("Échec de l'extraction sur le routeur")
     return false
   end
   info("  Envoi de nft-rules/dns-filter.nft → " .. tostring(cfg.dest) .. "/")
@@ -332,24 +343,27 @@ local install_initd
 install_initd = function(cfg)
   step("Installation du service init.d/custos (procd)")
   local service = [[#!/bin/sh /etc/rc.common
-# CustosVirginum — inline DNS filter
-# /etc/init.d/custos
-
 USE_PROCD=1
 START=95
 STOP=05
 
-PROG=/usr/bin/luajit
+PROG=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)
 CUSTOS_DIR=]] .. cfg.dest .. [[
 
 start_service() {
-    # S'assurer que br_netfilter est chargé avant le démarrage
+    [ "$(uci get custos.main.enabled 2>/dev/null)" = "0" ] && return 0
+    [ -z "$PROG" ] && { echo "custos: luajit introuvable"; return 1; }
+
     modprobe br_netfilter 2>/dev/null || true
     sysctl -qw net.bridge.bridge-nf-call-iptables=1  2>/dev/null || true
     sysctl -qw net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true
 
+    $PROG $CUSTOS_DIR/uci_config.lua || \
+        echo "custos: avertissement — génération config UCI échouée, utilise les défauts compilés"
+
     procd_open_instance
     procd_set_param command $PROG $CUSTOS_DIR/main.lua
+    procd_set_param env LUA_PATH="/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
     procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -357,8 +371,12 @@ start_service() {
 }
 
 reload_service() {
-    # Envoie SIGHUP pour recharger la config (allowlist)
-    kill -HUP $(pgrep -f "$CUSTOS_DIR/main.lua") 2>/dev/null || true
+    stop
+    start
+}
+
+service_triggers() {
+    procd_add_reload_trigger "custos"
 }
 ]]
   local tmplocal = "tmp/owrt-custos-initd"
@@ -369,7 +387,7 @@ reload_service() {
       fh:close()
     end
   end
-  local ok_scp = run("scp -P " .. tostring(cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(cfg.user) .. "@" .. tostring(cfg.ip) .. ":/etc/init.d/custos", cfg.dry)
+  local ok_scp = run("scp -O -P " .. tostring(cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(cfg.user) .. "@" .. tostring(cfg.ip) .. ":/etc/init.d/custos", cfg.dry)
   if not (ok_scp) then
     fail("Échec de la copie du script init.d")
     return false
@@ -379,6 +397,41 @@ reload_service() {
     return false
   end
   ok("Service installé et activé au démarrage")
+  return true
+end
+local install_uci_config
+install_uci_config = function(cfg)
+  step("Configuration UCI (/etc/config/custos)")
+  local exists = ssh_capture(cfg, "[ -f /etc/config/custos ] && echo yes || echo no")
+  if exists and exists:find("yes") then
+    warn("/etc/config/custos existe déjà — configuration préservée")
+    return true
+  end
+  local uci_cfg = [[config custos 'main'
+	option enabled           '1'
+	option log_path          '/var/log/custos.log'
+	option forced_ttl        '60'
+	option nft_ip_timeout    '2m'
+	option ipc_pending_ttl   '5'
+	option client_expiry     '300'
+	option neigh_refresh_cooldown '10'
+	list   allowed_domains   'local'
+	list   allowed_domains   'lan'
+	list   allowed_domains   'home.arpa'
+]]
+  local tmplocal = "tmp/owrt-custos-uci"
+  if not (cfg.dry) then
+    local fh = io.open(tmplocal, "w")
+    if fh then
+      fh:write(uci_cfg)
+      fh:close()
+    end
+  end
+  if not (run("scp -O -P " .. tostring(cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(cfg.user) .. "@" .. tostring(cfg.ip) .. ":/etc/config/custos", cfg.dry)) then
+    fail("Échec de la copie de /etc/config/custos")
+    return false
+  end
+  ok("/etc/config/custos installé")
   return true
 end
 local start_service
@@ -545,6 +598,12 @@ main = function()
       name = "service init.d",
       fn = function()
         return install_initd(cfg)
+      end
+    },
+    {
+      name = "config UCI",
+      fn = function()
+        return install_uci_config(cfg)
       end
     },
     {
