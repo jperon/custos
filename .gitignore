@@ -39,3 +39,9 @@ user-data
 network-config
 test-vm.qcow2
 .kilo/
+
+# Downloaded base images
+images/
+
+# Backup files
+*.bak
