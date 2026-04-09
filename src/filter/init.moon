@@ -15,20 +15,27 @@
 
 { :ffi, :libc } = require "ffi_defs"
 { :compile_rules, decide: _decide } = require "filter.rule"
+{ :load_config } = require "filter.lib.load_config"
 { :log_info, :log_warn } = require "log"
 
 local rules
+config_path = "cfg/filter.yml"
+
+-- ── Chemin de configuration ───────────────────────────────────────
+--- Modifie le chemin vers le fichier de configuration YAML.
+-- Doit être appelé avant load().
+-- @tparam string path Chemin vers le fichier .yml
+set_config_path = (path) ->
+  config_path = path
 
 -- ── Chargement ────────────────────────────────────────────────────
 --- Charge la configuration du filtre et compile les règles.
 -- Peut être appelé à nouveau pour recharger (hot-reload).
 -- @treturn nil
 load = ->
-  -- Invalide le cache require pour obtenir la nouvelle configuration.
-  package.loaded["filter.config"] = nil
-  ok, cfg = pcall require, "filter.config"
-  unless ok
-    log_warn { action: "filter_load_failed", err: tostring cfg }
+  cfg, err = load_config config_path
+  unless cfg
+    log_warn { action: "filter_load_failed", err: err }
     return
   rules = compile_rules cfg
   n = #rules
@@ -63,4 +70,4 @@ reload = ->
     reload_requested = false
     load!
 
-{ :load, :decide, :reload }
+{ :load, :decide, :reload, :set_config_path }

@@ -1,0 +1,97 @@
+# cfg/filter.yml — configuration du filtre DNS custos
+#
+# Syntaxe YAML identique à shelterfilter-lua/cfg/shelterfilter.yml.sample.
+# Rechargeable à chaud via SIGHUP (filter.reload()).
+#
+# ── Sections ───────────────────────────────────────────────────────────────
+#
+# domains  : nom → chemin vers fichier .bin compilé par filter/convert.moon
+#            (ou .domains texte chargé à la volée)
+#            Utilisé dans les conditions to_domainlist / to_domainlists.
+#
+# nets     : nom → liste de CIDR IPv4/IPv6
+#            Utilisé dans les conditions from_net / from_netlists.
+#
+# times    : nom → [HH:MM, HH:MM] (début, fin)
+#            Utilisé dans les conditions in_time / in_times.
+#
+# sources  : nom → { urls: [...], format: simple|hosts|adblock, output: path }
+#            Utilisé par filter/updater.moon pour télécharger et compiler les listes.
+#
+# rules    : tableau ordonné de règles, premier verdict gagnant.
+#            Chaque règle : description, actions, conditions (optionnel), log (optionnel).
+#
+# ── Conditions disponibles ─────────────────────────────────────────────────
+#   to_domain        string        correspondance exacte ou suffixe
+#   to_domains       [string]      idem, plusieurs domaines
+#   to_domainlist    string        appartenance à une liste .bin (clé depuis domains)
+#   to_domainlists   [string]      idem, plusieurs listes
+#   from_mac         string        adresse MAC source
+#   from_net         string        IP source dans un CIDR
+#   from_netlist     string        IP source dans une netlist nommée (clé depuis nets)
+#   from_netlists    [string]      idem, plusieurs netlists
+#   in_time          string        dans une fenêtre horaire nommée (clé depuis times)
+#   in_times         [string]      idem, plusieurs fenêtres
+#   stolen_computer  [string]      MAC source dans une liste noire
+#   from_user        string        utilisateur authentifié (futur)
+#
+# ── Actions disponibles ────────────────────────────────────────────────────
+#   allow   autoriser
+#   deny    bloquer
+#   mail    notification e-mail (futur)
+
+# Listes de domaines précompilées (filter/convert.moon)
+domains: {}
+#  maj:    /etc/custos/lists/MaJ.bin
+#  ouvert: /etc/custos/lists/Ouvert.bin
+
+# Sous-réseaux CIDR nommés
+nets:
+  lan:
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+
+# Fenêtres horaires [HH:MM, HH:MM]
+times: {}
+#  business: ["8:00", "18:00"]
+
+# Sources pour filter/updater.moon (téléchargement automatique)
+# Exécuter : luajit lua/filter/updater.lua [--pid /run/custos.pid]
+sources: {}
+#  ads:
+#    urls:
+#    - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+#    format: hosts
+#    output: /etc/custos/lists/ads.bin
+#  tracking:
+#    urls:
+#    - https://oisd.nl/domains
+#    format: simple
+#    output: /etc/custos/lists/tracking.bin
+
+# Règles ordonnées : premier verdict gagnant.
+rules:
+- description: Infrastructure réseau toujours autorisée
+  actions: [allow]
+  conditions:
+    to_domains: [local, lan, home.arpa]
+
+- description: Outils de développement
+  actions: [allow]
+  conditions:
+    to_domains:
+    - github.com
+    - gitlab.com
+    - npmjs.org
+    - pypi.org
+    - debian.org
+    - ubuntu.com
+    - archlinux.org
+    - cloudflare.com
+    - fastly.com
+    - akamaiedge.net
+    - example.com
+
+- description: Refus par défaut
+  actions: [deny]

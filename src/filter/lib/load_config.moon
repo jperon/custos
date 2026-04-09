@@ -1,0 +1,37 @@
+-- src/filter/lib/load_config.moon
+-- Charge une configuration de filtre depuis un fichier YAML.
+--
+-- Dépendance : lyaml (paquet Debian : lua-yaml / apt install lua-yaml).
+-- Retourne une table compatible avec la structure attendue par filter/rule.moon
+-- et les modules de conditions/actions.
+
+ok, lyaml = pcall require, "lyaml"
+unless ok
+  error "lyaml introuvable — installer le paquet lua-yaml (apt install lua-yaml)"
+
+--- Charge un fichier YAML de configuration du filtre.
+-- Normalise la table résultante : les sections manquantes sont initialisées
+-- à des tables vides pour éviter les nil dans le code appelant.
+-- @tparam  string      path Chemin vers le fichier .yml
+-- @treturn table|nil        Table de configuration, ou nil en cas d'erreur
+-- @treturn nil|string       Message d'erreur
+load_config = (path) ->
+  fh, err = io.open path, "r"
+  return nil, "impossible d'ouvrir #{path} : #{err}" unless fh
+  content = fh\read "*a"
+  fh\close!
+
+  ok2, cfg = pcall lyaml.load, content
+  return nil, "erreur de syntaxe YAML dans #{path} : #{cfg}" unless ok2
+  return nil, "configuration vide ou invalide dans #{path}" unless type(cfg) == "table"
+
+  -- Sections facultatives → tables vides par défaut
+  cfg.domains = cfg.domains or {}
+  cfg.nets    = cfg.nets    or {}
+  cfg.times   = cfg.times   or {}
+  cfg.sources = cfg.sources or {}
+  cfg.rules   = cfg.rules   or {}
+
+  cfg, nil
+
+{ :load_config }

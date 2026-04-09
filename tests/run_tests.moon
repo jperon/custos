@@ -1642,6 +1642,100 @@ test "parse — format inconnu → parse_simple par défaut", ->
   result = parse "unknown_format", "example.com\n"
   assert_eq #result, 1, "fallback simple"
 
+-- ── load_config ────────────────────────────────────────────────────────────
+io.write "\n── load_config ──\n"
+{ :load_config } = require "filter.lib.load_config"
+
+do
+  TMP_YAML = "./tmp/test_filter_config.yml"
+  YAML_OK = [[
+domains:
+  testlist: /tmp/test.bin
+nets:
+  lan:
+  - 192.168.0.0/16
+times:
+  business: ["8:00", "18:00"]
+sources:
+  ads:
+    urls:
+    - https://example.com/list.txt
+    format: hosts
+    output: /tmp/ads.bin
+rules:
+- description: Règle test
+  actions: [allow]
+  conditions:
+    to_domain: example.com
+- description: Refus par défaut
+  actions: [deny]
+]]
+  fd = io.open TMP_YAML, "w"
+  fd\write YAML_OK
+  fd\close!
+
+  test "load_config — chargement fichier valide", ->
+    cfg, err = load_config TMP_YAML
+    assert cfg ~= nil, "cfg nil : #{err}"
+
+  test "load_config — section domains", ->
+    cfg, _ = load_config TMP_YAML
+    assert cfg, "cfg nil"
+    assert_eq cfg.domains.testlist, "/tmp/test.bin", "domains.testlist"
+
+  test "load_config — section nets (tableau)", ->
+    cfg, _ = load_config TMP_YAML
+    assert cfg, "cfg nil"
+    assert cfg.nets and cfg.nets.lan, "nets.lan absent"
+    assert_eq cfg.nets.lan[1], "192.168.0.0/16", "nets.lan[1]"
+
+  test "load_config — section times", ->
+    cfg, _ = load_config TMP_YAML
+    assert cfg, "cfg nil"
+    assert cfg.times and cfg.times.business, "times.business absent"
+    assert_eq cfg.times.business[1], "8:00", "times.business[1]"
+
+  test "load_config — section sources", ->
+    cfg, _ = load_config TMP_YAML
+    assert cfg, "cfg nil"
+    assert cfg.sources and cfg.sources.ads, "sources.ads absent"
+    assert_eq cfg.sources.ads.format, "hosts", "sources.ads.format"
+    assert_eq cfg.sources.ads.urls[1], "https://example.com/list.txt", "sources.ads.urls[1]"
+
+  test "load_config — section rules (tableau de tables)", ->
+    cfg, _ = load_config TMP_YAML
+    assert cfg, "cfg nil"
+    assert_eq #cfg.rules, 2, "2 règles"
+    assert_eq cfg.rules[1].description, "Règle test", "règle 1 description"
+    assert_eq cfg.rules[1].actions[1], "allow", "règle 1 action"
+    assert_eq cfg.rules[1].conditions.to_domain, "example.com", "règle 1 condition"
+
+  test "load_config — sections manquantes → tables vides", ->
+    fd2 = io.open TMP_YAML, "w"
+    fd2\write "rules: []\n"
+    fd2\close!
+    cfg, _ = load_config TMP_YAML
+    assert cfg, "cfg nil"
+    assert type(cfg.domains) == "table", "domains vide"
+    assert type(cfg.nets)    == "table", "nets vide"
+    assert type(cfg.times)   == "table", "times vide"
+    assert type(cfg.sources) == "table", "sources vide"
+
+  test "load_config — fichier inexistant → nil + erreur", ->
+    cfg, err = load_config "/chemin/inexistant.yml"
+    assert cfg == nil, "cfg devrait être nil"
+    assert type(err) == "string", "message d'erreur attendu"
+
+  test "load_config — YAML invalide → nil + erreur", ->
+    fd3 = io.open TMP_YAML, "w"
+    fd3\write "rules: [\nbad yaml unterminated\n"
+    fd3\close!
+    cfg, err = load_config TMP_YAML
+    assert cfg == nil, "cfg devrait être nil sur YAML invalide"
+    assert type(err) == "string", "message d'erreur attendu"
+
+  os.remove TMP_YAML
+
 
 
 io.write string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed)

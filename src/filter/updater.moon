@@ -27,6 +27,7 @@
 ffi          = require "ffi"
 xxhash       = require "ffi_xxhash"
 parse_domains = require "filter.lib.parse_domains"
+{ :load_config } = require "filter.lib.load_config"
 
 ffi.cdef [[
   int rename(const char *oldpath, const char *newpath);
@@ -118,10 +119,10 @@ write_bin = (domains, output_path, dry_run) ->
 
 opts = parse_args arg
 
-cfg_path = opts.config or "lua/filter/config.lua"
-ok, cfg = pcall dofile, cfg_path
-unless ok
-  io.stderr\write "Erreur de chargement de la config #{cfg_path} : #{cfg}\n"
+cfg_path = opts.config or "cfg/filter.yml"
+cfg, err = load_config cfg_path
+unless cfg
+  io.stderr\write "Erreur de chargement de la config #{cfg_path} : #{err}\n"
   os.exit 1
 
 sources = cfg.sources or {}

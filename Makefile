@@ -116,11 +116,12 @@ clean:
 reload:
 	@pkill -SIGHUP -f "luajit.*main" && echo "SIGHUP envoyé" || echo "Processus introuvable"
 
-## Télécharge et compile les listes de domaines (sources définies dans filter/config.moon)
-## Usage : make update-lists [PID=/run/custos.pid]
+## Télécharge et compile les listes de domaines (sources définies dans cfg/filter.yml)
+## Usage : make update-lists [PID=/run/custos.pid] [CONFIG=cfg/filter.yml]
 update-lists: all
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) $(LUA)/filter/updater.lua \
+	  --config $(or $(CONFIG),cfg/filter.yml) \
 	  $(if $(PID),--pid $(PID),)
 
 ## Affiche les logs en temps réel avec horodatage lisible
