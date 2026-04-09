@@ -37,9 +37,13 @@ FILTER_MOONS := $(shell find $(SRC)/filter -name '*.moon' 2>/dev/null) \
   $(SRC)/ffi_xxhash.moon
 FILTER_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(FILTER_MOONS))
 
-.PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 test-kvm test-kvm-up test-kvm-run test-kvm-down run reload update-lists logs help
+## Modules auth/ (découverte automatique)
+AUTH_MOONS := $(shell find $(SRC)/auth -name '*.moon' 2>/dev/null)
+AUTH_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(AUTH_MOONS))
 
-all: $(LUA)/parse $(LUAS) $(FILTER_LUAS)
+.PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 test-kvm test-kvm-up test-kvm-run test-kvm-down run reload update-lists make-secret logs help
+
+all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS)
 	@echo "Compilation terminée → $(LUA)/"
 
 $(LUA)/parse:
@@ -53,8 +57,8 @@ $(LUA)/%.lua: $(SRC)/%.moon
 ## Vérification syntaxique de tous les fichiers Lua générés
 check: all
 	@echo "Vérification syntaxique..."
-	@for f in $(LUAS) $(FILTER_LUAS); do \
-	  luajit -e "local ok,e=loadfile('$$f'); if not ok then print('FAIL '..e) else print('OK   '..$$f) end"; \
+	@for f in $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS); do \
+	  luajit -e "local ok,e=loadfile('$$f'); if not ok then print('FAIL '..e) else print('OK   $$f') end"; \
 	done
 
 ## Tests unitaires (parsing DNS, IPC, allowlist) — pas besoin de root
@@ -103,6 +107,14 @@ test-kvm-down:
 	@echo "Arrêt des VMs KVM..."
 	bash libvirt/custos-libvirt.sh stop
 
+## Génère un hash PBKDF2-SHA256 pour un utilisateur (écrire dans cfg/secrets)
+## Usage : make make-secret USER=alice PASS=motdepasse
+make-secret: all
+	@[ -n "$(USER)" ] || (echo "ERREUR : USER requis. Ex: make make-secret USER=alice PASS=..."; exit 1)
+	@[ -n "$(PASS)" ] || (echo "ERREUR : PASS requis. Ex: make make-secret USER=alice PASS=..."; exit 1)
+	@LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) -e "local c=require'auth.credentials'; print('$(USER):'..c.hash_password('$(PASS)'))"
+
 ## Lance le superviseur (nécessite root + règles nft en place)
 run: all
 	@[ "$$(id -u)" = "0" ] || (echo "ERREUR : root requis"; exit 1)
@@ -143,7 +155,7 @@ help:
 	@echo "  test-kvm-down - Arrête les VMs KVM"
 	@echo "  run          - Lance le superviseur (root requis)"
 	@echo "  clean        - Nettoie les fichiers compilés"
-	@echo "  reload       - Recharge la configuration (SIGHUP)"
+	@echo "  make-secret  - Génère un hash PBKDF2-SHA256 pour cfg/secrets (USER=, PASS=)"
 	@echo "  update-lists - Télécharge et compile les listes de domaines"
 	@echo "  logs         - Affiche les logs en temps réel"
 	@echo "  help         - Affiche cette aide"

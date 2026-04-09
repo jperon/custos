@@ -1,13 +1,33 @@
 -- src/filter/conditions/from_user.moon
--- Condition : squelette — authentification utilisateur non implémentée.
--- Retourne toujours false pour l'instant.
--- L'architecture (cfg)(user)(req) est compatible avec une implémentation
--- future (mécanisme à définir — pas nécessairement websocket).
+-- Condition : vérifie si l'IP source a une session authentifiée active
+-- pour l'utilisateur spécifié.
+--
+-- Le fichier de sessions est maintenu par le worker AUTH (auth/worker.moon)
+-- et lu ici via un cache TTL de 5 secondes (sessions.read_cached).
+-- Le chemin du fichier est issu de cfg.auth.sessions_file (ou la constante
+-- AUTH_SESSIONS_FILE par défaut).
 
---- @tparam table cfg Configuration du filtre
+{ :read_cached } = require "auth.sessions"
+{ :AUTH_SESSIONS_FILE } = require "config"
+
+--- @tparam table cfg Configuration du filtre (cfg.auth.sessions_file optionnel)
 -- @treturn function factory (user: string) → (req) → bool, reason
-(cfg) -> (user) ->
-  --- @tparam table req {src_ip: string, ...}
-  -- @treturn boolean, string
-  (req) ->
-    false, "from_user not implemented (user=#{user})"
+(cfg) ->
+  sessions_file = (cfg.auth and cfg.auth.sessions_file) or AUTH_SESSIONS_FILE
+
+  (user) ->
+    --- @tparam table req {src_ip: string, ...}
+    -- @treturn boolean, string
+    (req) ->
+      sessions = read_cached sessions_file
+      s = sessions[req.src_ip]
+      now = os.time!
+
+      if not s
+        return false, "from_user: aucune session pour #{req.src_ip}"
+      if now > s.expires
+        return false, "from_user: session expirée pour #{req.src_ip} (user=#{s.user})"
+      if s.user ~= user
+        return false, "from_user: #{req.src_ip} authentifié en tant que #{s.user}, attendu #{user}"
+
+      true, "from_user: #{req.src_ip} → #{s.user}"

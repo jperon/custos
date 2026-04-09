@@ -110,11 +110,21 @@ shutdown_workers = (workers) ->
     dead = libc.waitpid -1, status, 0
 
 -- ── Boucle de supervision ────────────────────────────────────────
---- Supervise les workers Q0 et Q1, les relance en cas de crash,
+--- Supervise les workers Q0, Q1 et AUTH, les relance en cas de crash,
 -- et arrête proprement l'ensemble sur SIGTERM.
 -- @tparam table pipe  { rfd, wfd } du pipe IPC
 -- @tparam number sfd  fd du signalfd écoutant SIGTERM
 supervise = (pipe, sfd) ->
+  -- Charge la configuration pour transmettre auth_cfg au worker AUTH.
+  -- On utilise load_config ici (dans le parent, avant fork) pour que
+  -- le worker auth dispose de la section auth dès le démarrage.
+  { :load_config } = require "filter.lib.load_config"
+  filter_cfg, cfg_err = load_config "cfg/filter.yml"
+  if not filter_cfg
+    log_warn { action: "auth_cfg_load_warning", err: cfg_err }
+    filter_cfg = { auth: {} }
+  auth_cfg = filter_cfg.auth or {}
+
   workers = {
     {
       name:       "Q0-questions"
@@ -125,6 +135,16 @@ supervise = (pipe, sfd) ->
       name:       "Q1-responses"
       pid:        nil
       restart_fn: -> fork_worker "Q1-responses", (-> require("worker_q1").run pipe.rfd), pipe.rfd
+    }
+    {
+      name:       "AUTH"
+      pid:        nil
+      -- Le worker AUTH n'utilise pas le pipe DNS ; on passe pipe.rfd comme
+      -- fd factice (valeur ignorée dans fork_worker, uniquement pour l'appel
+      -- à close() dans le parent — fd déjà ouvert, sans effet néfaste).
+      restart_fn: -> fork_worker "AUTH",
+        (-> require("auth.worker").run_auth_worker auth_cfg),
+        pipe.rfd
     }
   }
 

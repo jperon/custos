@@ -75,6 +75,21 @@ check_deps() {
     errors=$((errors+1))
   fi
 
+  # luasocket + luasec (serveur HTTPS d'authentification)
+  if luajit -e "require 'socket'" &>/dev/null; then
+    ok "luasocket disponible"
+  else
+    fail "luasocket introuvable — installer lua-socket (Debian) ou lua-socket (OpenWrt)"
+    errors=$((errors+1))
+  fi
+
+  if luajit -e "require 'ssl'" &>/dev/null; then
+    ok "luasec disponible"
+  else
+    fail "luasec introuvable — installer lua-luasec (Debian : apt install lua-luasec)"
+    errors=$((errors+1))
+  fi
+
   [ $errors -eq 0 ] || { fail "$errors dépendance(s) manquante(s)"; exit 1; }
 }
 

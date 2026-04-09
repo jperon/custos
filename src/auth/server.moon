@@ -1,0 +1,307 @@
+-- src/auth/server.moon
+-- Serveur HTTPS minimal pour l'authentification des utilisateurs.
+--
+-- Endpoints :
+--   GET  /        → page de connexion HTML
+--   POST /login   → vérification des credentials, création de session
+--   GET  /logout  → suppression de la session de l'IP source
+--
+-- Dépendances : luasocket, luasec.
+-- Le contexte TLS est fourni par auth/cert, les credentials par auth/credentials,
+-- les sessions par auth/sessions.
+
+socket = require "socket"
+ssl    = require "ssl"
+
+{ :verify_password, :load_secrets } = require "auth.credentials"
+{ :add_session, :purge_expired, :write_sessions } = require "auth.sessions"
+{ :log_info, :log_warn }            = require "log"
+
+-- ── Page HTML ────────────────────────────────────────────────────
+
+LOGIN_PAGE = [[
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CustosVirginum — Authentification</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f4f4f4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: white;
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.15);
+      width: 100%;
+      max-width: 380px;
+    }
+    h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
+    label { display: block; margin-bottom: 1rem; }
+    label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
+    input[type=text], input[type=password] {
+      width: 100%;
+      padding: .5rem .7rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    button {
+      width: 100%;
+      padding: .6rem;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: .5rem;
+    }
+    button:hover { background: #1d4ed8; }
+    .msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
+    .msg.ok  { background: #dcfce7; color: #166534; }
+    .msg.err { background: #fee2e2; color: #991b1b; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>CustosVirginum</h1>
+    <form method="post" action="/login">
+      <label>
+        <span>Nom d'utilisateur</span>
+        <input type="text" name="user" required autofocus>
+      </label>
+      <label>
+        <span>Mot de passe</span>
+        <input type="password" name="password" required>
+      </label>
+      <button type="submit">Se connecter</button>
+    </form>
+    %MSG%
+  </div>
+</body>
+</html>
+]]
+
+SUCCESS_PAGE = LOGIN_PAGE\gsub "%%MSG%%",
+  '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>'
+
+failure_page = (reason) ->
+  LOGIN_PAGE\gsub "%%MSG%%",
+    "<p class=\"msg err\">#{reason}</p>"
+
+-- Version sans message (accueil)
+home_page = LOGIN_PAGE\gsub "%%MSG%%", ""
+
+-- ── Parsing HTTP minimal ──────────────────────────────────────────
+
+--- Lit les headers HTTP depuis un socket TLS.
+-- Retourne la méthode, le path, et les headers sous forme de table.
+-- @tparam table  sock   Socket TLS (luasec wrappé)
+-- @treturn string, string, table  méthode, path, headers
+-- @treturn nil, string           en cas d'erreur
+read_request = (sock) ->
+  -- Ligne de requête
+  line, err = sock\receive "*l"
+  return nil, err unless line
+  method, path = line\match "^(%u+)%s+([^%s]+)"
+  return nil, "bad request line: #{line}" unless method
+
+  -- Headers
+  headers = {}
+  content_length = 0
+  while true
+    hline, herr = sock\receive "*l"
+    break if not hline or hline == ""
+    return nil, herr if not hline
+    name, val = hline\match "^([^:]+):%s*(.*)"
+    if name
+      headers[name\lower!] = val
+      if name\lower! == "content-length"
+        content_length = tonumber(val) or 0
+
+  -- Corps (pour POST)
+  body = ""
+  if content_length > 0
+    body = sock\receive content_length
+
+  method, path, headers, body
+
+--- Décode une chaîne encodée en application/x-www-form-urlencoded.
+-- @tparam string s Chaîne encodée
+-- @treturn table  Table clé→valeur
+decode_form = (s) ->
+  t = {}
+  for pair in (s or "")\gmatch "[^&]+"
+    k, v = pair\match "^([^=]+)=?(.*)$"
+    if k
+      decode = (x) -> x\gsub("+", " ")\gsub("%%(%x%x)", (h) -> string.char tonumber h, 16)
+      t[decode k] = decode v
+  t
+
+-- ── Réponses HTTP ─────────────────────────────────────────────────
+
+http_response = (sock, status, body, extra_headers) ->
+  extra_headers = extra_headers or ""
+  resp = table.concat {
+    "HTTP/1.1 #{status}\r\n"
+    "Content-Type: text/html; charset=UTF-8\r\n"
+    "Content-Length: #{#body}\r\n"
+    "Connection: close\r\n"
+    "X-Frame-Options: DENY\r\n"
+    "X-Content-Type-Options: nosniff\r\n"
+    extra_headers
+    "\r\n"
+    body
+  }
+  sock\send resp
+
+http_redirect = (sock, location) ->
+  resp = "HTTP/1.1 303 See Other\r\nLocation: #{location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+  sock\send resp
+
+-- ── Gestionnaire de connexion ─────────────────────────────────────
+
+--- Gère une connexion HTTPS entrante.
+-- @tparam table  raw_sock    Socket TCP brut (luasocket)
+-- @tparam table  tls_ctx     Contexte TLS luasec
+-- @tparam table  secrets     Table {user → hash}
+-- @tparam table  sessions    Table de sessions (modifiée en place)
+-- @tparam table  auth_cfg    Configuration auth (session_ttl, sessions_file)
+-- @tparam string peer_ip     Adresse IP du client
+handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip) ->
+  raw_sock\settimeout 10
+
+  -- Wrap TLS
+  tls_sock, err = ssl.wrap raw_sock, tls_ctx
+  unless tls_sock
+    log_warn { action: "auth_tls_wrap_failed", ip: peer_ip, err: err }
+    return
+
+  ok, err2 = tls_sock\dohandshake!
+  unless ok
+    log_warn { action: "auth_tls_handshake_failed", ip: peer_ip, err: err2 }
+    tls_sock\close!
+    return
+
+  method, path, headers, body = read_request tls_sock
+  unless method
+    tls_sock\close!
+    return
+
+  if method == "GET" and (path == "/" or path == "/login")
+    -- Vérifie si l'IP a déjà une session valide
+    s = sessions[peer_ip]
+    if s and os.time! <= s.expires
+      http_response tls_sock, "200 OK", SUCCESS_PAGE
+      log_info { action: "auth_already_logged", ip: peer_ip, user: s.user }
+    else
+      http_response tls_sock, "200 OK", home_page
+
+  elseif method == "GET" and path == "/logout"
+    sessions[peer_ip] = nil
+    ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
+    log_warn { action: "auth_write_failed", err: err3 } unless ok2
+    http_redirect tls_sock, "/"
+    log_info { action: "auth_logout", ip: peer_ip }
+
+  elseif method == "POST" and path == "/login"
+    form = decode_form body
+    user = form.user or ""
+    pass = form.password or ""
+    stored = secrets[user]
+
+    if stored and pass ~= "" and verify_password pass, stored
+      purge_expired sessions
+      add_session sessions, peer_ip, user, auth_cfg.session_ttl
+      ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
+      log_warn { action: "auth_write_failed", err: err3 } unless ok2
+      http_response tls_sock, "200 OK", SUCCESS_PAGE
+      log_info { action: "auth_login_ok", ip: peer_ip, user: user }
+    else
+      http_response tls_sock, "401 Unauthorized",
+        failure_page "Nom d'utilisateur ou mot de passe incorrect."
+      log_warn { action: "auth_login_failed", ip: peer_ip, user: user }
+
+  else
+    http_response tls_sock, "404 Not Found", "<h1>404</h1>"
+
+  tls_sock\close!
+
+-- ── Création des sockets serveur ─────────────────────────────────
+
+--- Crée un socket serveur TCP IPv4.
+-- @tparam string host Adresse d'écoute (ex. "0.0.0.0")
+-- @tparam number port Port d'écoute
+-- @treturn table|nil Socket serveur, ou nil + erreur
+make_server4 = (host, port) ->
+  srv = socket.tcp!
+  srv\setoption "reuseaddr", true
+  ok4, err = srv\bind host, port
+  unless ok4
+    srv\close!
+    return nil, err
+  srv\listen 8
+  srv\settimeout 1
+  srv
+
+--- Crée un socket serveur TCP IPv6.
+-- @tparam number port Port d'écoute
+-- @treturn table|nil Socket serveur, ou nil (IPv6 non disponible — pas fatal)
+make_server6 = (port) ->
+  ok6, srv6 = pcall socket.tcp6
+  return nil unless ok6 and srv6
+  srv6\setoption "reuseaddr", true
+  ok62, _err = srv6\bind "::", port
+  unless ok62
+    srv6\close!
+    return nil
+  srv6\listen 8
+  srv6\settimeout 1
+  srv6
+
+-- ── Boucle principale ────────────────────────────────────────────
+
+--- Démarre la boucle d'acceptation HTTPS.
+-- @tparam table tls_ctx  Contexte TLS luasec
+-- @tparam table secrets  Table {user → hash}
+-- @tparam table auth_cfg Configuration auth
+-- @tparam function|nil reload_fn Fonction appelée pour recharger les secrets (SIGHUP)
+run = (tls_ctx, secrets, auth_cfg, reload_fn) ->
+  port = auth_cfg.port
+  host = auth_cfg.host
+
+  -- Sockets d'écoute : on tente toujours IPv4 + IPv6
+  listen4, err4 = make_server4 "0.0.0.0", port
+  error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
+  listen6 = make_server6 port
+  if listen6
+    log_info { action: "auth_listening", ipv4: "0.0.0.0", ipv6: "::", port: port }
+  else
+    log_info { action: "auth_listening", ipv4: "0.0.0.0", port: port }
+
+  sessions = {}
+  servers  = listen6 and { listen4, listen6 } or { listen4 }
+
+  while true
+    -- reload_fn peut être une closure qui retourne une nouvelle table secrets
+    if reload_fn
+      new_secrets = reload_fn!
+      secrets = new_secrets if new_secrets
+
+    readable = socket.select servers, nil, 1
+    for srv in *(readable or {})
+      client, peer_ip = srv\accept!
+      if client
+        handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip
+
+{ :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE }

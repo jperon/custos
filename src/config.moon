@@ -78,6 +78,11 @@ AF_INET    = 2
 AF_INET6   = 10
 PROTO_UDP  = 17
 
+-- ── Authentification HTTPS ───────────────────────────────────────
+-- Chemin du fichier de sessions partagé entre le worker auth et les
+-- workers Q0/Q1 (via from_user). Surchargeable via cfg/filter.yml (auth.sessions_file).
+AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
+
 -- ── Export ──────────────────────────────────────────────────────
 {
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES
@@ -88,4 +93,5 @@ PROTO_UDP  = 17
   :IPC_MSG_SIZE, :IPC_PENDING_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN
   :FORCED_TTL
   :DNS_PORT, :AF_INET, :AF_INET6, :PROTO_UDP
+  :AUTH_SESSIONS_FILE
 }

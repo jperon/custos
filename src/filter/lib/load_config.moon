@@ -30,6 +30,16 @@ load_config = (path) ->
   cfg.times   = cfg.times   or {}
   cfg.sources = cfg.sources or {}
   cfg.rules   = cfg.rules   or {}
+  cfg.users   = cfg.users   or {}
+
+  -- Section auth : valeurs par défaut
+  cfg.auth = cfg.auth or {}
+  auth = cfg.auth
+  auth.host         = auth.host         or "::"
+  auth.port         = auth.port         or 8443
+  auth.session_ttl  = auth.session_ttl  or 86400
+  auth.sessions_file = auth.sessions_file or "./tmp/sessions.lua"
+  -- auth.cert, auth.key, auth.secrets : nil par défaut (optionnels)
 
   cfg, nil
 

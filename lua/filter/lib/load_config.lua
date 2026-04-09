@@ -21,6 +21,13 @@ load_config = function(path)
   cfg.times = cfg.times or { }
   cfg.sources = cfg.sources or { }
   cfg.rules = cfg.rules or { }
+  cfg.users = cfg.users or { }
+  cfg.auth = cfg.auth or { }
+  local auth = cfg.auth
+  auth.host = auth.host or "::"
+  auth.port = auth.port or 8443
+  auth.session_ttl = auth.session_ttl or 86400
+  auth.sessions_file = auth.sessions_file or "./tmp/sessions.lua"
   return cfg, nil
 end
 return {

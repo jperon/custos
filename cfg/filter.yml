@@ -36,16 +36,50 @@
 #   in_time          string        dans une fenêtre horaire nommée (clé depuis times)
 #   in_times         [string]      idem, plusieurs fenêtres
 #   stolen_computer  [string]      MAC source dans une liste noire
-#   from_user        string        utilisateur authentifié (futur)
+#   from_user        string        utilisateur authentifié (session active dans auth.sessions_file)
 #
 # ── Actions disponibles ────────────────────────────────────────────────────
 #   allow   autoriser
 #   deny    bloquer
 #   mail    notification e-mail (futur)
+#
+# ── Section auth ───────────────────────────────────────────────────────────
+#
+# Contrôle le serveur HTTPS d'authentification (worker AUTH, port 8443 par défaut).
+# L'utilisateur accède manuellement à https://<routeur>:8443/ pour se connecter.
+# La session est liée à l'adresse IP source et expirée après session_ttl secondes.
+#
+#   host         : adresse d'écoute ("::" = dual-stack IPv4+IPv6, défaut)
+#   port         : port HTTPS (défaut : 8443)
+#   cert         : chemin du certificat PEM (défaut : ./tmp/auth.crt, auto-généré)
+#   key          : chemin de la clé privée PEM (défaut : ./tmp/auth.key, auto-générée)
+#   secrets      : chemin du fichier de mots de passe (défaut : cfg/secrets)
+#                  Format : user:pbkdf2-sha256:<iter>:<salt_hex>:<hash_hex>
+#                  Générer : make make-secret USER=alice PASS=motdepasse >> cfg/secrets
+#   session_ttl  : durée de vie d'une session (secondes, défaut : 86400 = 24h)
+#   sessions_file: chemin du fichier de sessions partagé avec la condition from_user
+#                  (défaut : ./tmp/sessions.lua)
+#
+# users  : nom → adresse e-mail (pour l'action mail, futur)
 
 # Répertoire racine des listes de domaines précompilées.
 # Exécuter make update-lists pour construire les listes avant de démarrer.
 domainlists_dir: /etc/custos/lists
+
+# Serveur d'authentification HTTPS
+# Toutes les clés sont facultatives (valeurs par défaut ci-dessous).
+#auth:
+#  host: '::'                        # dual-stack IPv4+IPv6
+#  port: 8443
+#  cert: /etc/custos/auth.crt        # auto-généré si absent
+#  key:  /etc/custos/auth.key        # auto-généré si absent
+#  secrets: cfg/secrets              # fichier pbkdf2-sha256
+#  session_ttl: 86400                # 24 heures
+#  sessions_file: ./tmp/sessions.lua
+
+# Utilisateurs (nom → email, pour l'action mail)
+#users:
+#  alice: alice@example.com
 
 # Sous-réseaux CIDR nommés
 nets:

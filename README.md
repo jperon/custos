@@ -412,6 +412,90 @@ available for reference or fallback.
 
 ---
 
+## Authentication
+
+CustosVirginum includes an HTTPS authentication server that maps LAN client IPs to user
+accounts. The `from_user` filter condition allows rules such as
+"only user alice can reach github.com".
+
+### Process model
+
+A third worker (`AUTH`) is forked by the supervisor alongside Q0 and Q1:
+
+```
+main (supervisor)
+├── worker Q0 (DNS questions)
+├── worker Q1 (DNS answers)
+└── worker AUTH (HTTPS login server)
+```
+
+Sessions are shared via a Lua-evaluable file (`tmp/sessions.lua`). Q0/Q1 workers
+reload it every 5 seconds (TTL cache). No inter-process socket is needed.
+
+### TLS certificate
+
+On first start the AUTH worker generates a **self-signed certificate** via
+`openssl req` and stores it in `tmp/auth.crt` / `tmp/auth.key`.
+
+To use your own certificate, set `cert` and `key` in `cfg/filter.yml`:
+
+```yaml
+auth:
+  port: 8443
+  cert: /etc/custos/auth.crt
+  key:  /etc/custos/auth.key
+  secrets: cfg/secrets
+  session_ttl: 86400        # seconds (default: 24 h)
+```
+
+### Secrets file
+
+Each line holds one credential in the format:
+
+```
+user:pbkdf2-sha256:<iterations>:<salt_hex>:<hash_hex>
+```
+
+Generate an entry with:
+
+```bash
+make make-secret USER=alice PASS=hunter2
+# → append the printed line to cfg/secrets
+```
+
+See `cfg/secrets.sample` for a full example.
+
+### Logging in
+
+Navigate to `https://<router>:8443/` in a browser (accept the self-signed cert
+warning). After a successful login the client IP is recorded in the session
+store. Sessions expire after `session_ttl` seconds or on explicit logout.
+
+### Using `from_user` in rules
+
+```yaml
+rules:
+  - name: alice-only
+    conditions:
+      from_user: alice
+    action: allow
+    domains: [github.com, pypi.org]
+```
+
+Multiple users can be listed (logical OR):
+
+```yaml
+    conditions:
+      from_user: [alice, bob]
+```
+
+### Captive portal (future)
+
+Automatic redirect of HTTP traffic to the login page is **not yet implemented**.
+Users must navigate to the auth URL manually.
+
+---
+
 ## Known Limitations
 
 - **DoH / DoT**: not covered (ports 443/853).

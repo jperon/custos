@@ -93,6 +93,19 @@ shutdown_workers = function(workers)
 end
 local supervise
 supervise = function(pipe, sfd)
+  local load_config
+  load_config = require("filter.lib.load_config").load_config
+  local filter_cfg, cfg_err = load_config("cfg/filter.yml")
+  if not filter_cfg then
+    log_warn({
+      action = "auth_cfg_load_warning",
+      err = cfg_err
+    })
+    filter_cfg = {
+      auth = { }
+    }
+  end
+  local auth_cfg = filter_cfg.auth or { }
   local workers = {
     {
       name = "Q0-questions",
@@ -109,6 +122,15 @@ supervise = function(pipe, sfd)
       restart_fn = function()
         return fork_worker("Q1-responses", (function()
           return require("worker_q1").run(pipe.rfd)
+        end), pipe.rfd)
+      end
+    },
+    {
+      name = "AUTH",
+      pid = nil,
+      restart_fn = function()
+        return fork_worker("AUTH", (function()
+          return require("auth.worker").run_auth_worker(auth_cfg)
         end), pipe.rfd)
       end
     }
