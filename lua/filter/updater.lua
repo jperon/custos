@@ -52,43 +52,94 @@ end
 local fetch_toulouse
 fetch_toulouse = function(name, source, dry_run)
   local url = source.url
-  local cats = source.categories
+  local cats_filter = source.categories
   local output = source.output
+  local output_dir = source.output_dir
   if not (url) then
     return false, "pas d'URL définie"
   end
-  if not (output) then
-    return false, "pas de chemin output défini"
+  if not (output or output_dir) then
+    return false, "pas de chemin output ou output_dir défini"
   end
-  local tmp_tar = output .. ".tar.gz.tmp"
+  local tmp_base = output_dir and ((output_dir:gsub("/*$", "")) .. "/toulouse") or output
+  local tmp_tar = tmp_base .. ".tar.gz.tmp"
   io.stderr:write("[" .. tostring(name) .. "] GET " .. tostring(url) .. " ... ")
   if not (download_file(url, tmp_tar)) then
     os.remove(tmp_tar)
     return false, "curl échoué (HTTP error ou timeout)"
   end
   io.stderr:write("OK\n")
-  if not cats or #cats == 0 then
-    local fh = io.popen("tar -tzf " .. tostring(tmp_tar) .. " 2>/dev/null")
-    cats = { }
-    if fh then
-      for line in fh:lines() do
-        local cat = line:match("^blacklists/([^/]+)/domains$")
-        if cat then
-          cats[#cats + 1] = cat
+  local fh = io.popen("tar -tzf " .. tostring(tmp_tar) .. " 2>/dev/null")
+  local all_cats = { }
+  if fh then
+    for line in fh:lines() do
+      local cat = line:match("^blacklists/([^/]+)/domains$")
+      if cat then
+        all_cats[#all_cats + 1] = cat
+      end
+    end
+    fh:close()
+  end
+  local cats
+  if cats_filter and #cats_filter > 0 then
+    local wanted = { }
+    for _index_0 = 1, #cats_filter do
+      local c = cats_filter[_index_0]
+      wanted[c] = true
+    end
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for _index_0 = 1, #all_cats do
+        local c = all_cats[_index_0]
+        if wanted[c] then
+          _accum_0[_len_0] = c
+          _len_0 = _len_0 + 1
         end
       end
-      fh:close()
+      cats = _accum_0
     end
+  else
+    cats = all_cats
   end
   if #cats == 0 then
     os.remove(tmp_tar)
     return false, "aucune catégorie trouvée dans le tar"
   end
-  io.stderr:write("[" .. tostring(name) .. "] " .. tostring(#cats) .. " catégorie(s) : " .. tostring(table.concat(cats, ', ')) .. "\n")
+  io.stderr:write("[" .. tostring(name) .. "] " .. tostring(#cats) .. " catégorie(s)\n")
+  if output_dir then
+    local base = output_dir:gsub("/*$", "")
+    os.execute("mkdir -p " .. tostring(base))
+    local ok_count, err_count = 0, 0
+    for _index_0 = 1, #cats do
+      local cat = cats[_index_0]
+      fh = io.popen("tar -xzf " .. tostring(tmp_tar) .. " -O blacklists/" .. tostring(cat) .. "/domains 2>/dev/null")
+      local domains = { }
+      if fh then
+        local data = fh:read("*a")
+        fh:close()
+        domains = parse_domains.parse("simple", data)
+      end
+      local cat_path = base .. "/" .. cat .. ".bin"
+      local ok, msg = write_bin(domains, cat_path, dry_run)
+      if ok then
+        io.stderr:write("[" .. tostring(name) .. "/" .. tostring(cat) .. "] ✓ " .. tostring(msg) .. "\n")
+        ok_count = ok_count + 1
+      else
+        io.stderr:write("[" .. tostring(name) .. "/" .. tostring(cat) .. "] ✗ " .. tostring(msg) .. "\n")
+        err_count = err_count + 1
+      end
+    end
+    os.remove(tmp_tar)
+    if err_count == 0 then
+      return true, tostring(ok_count) .. " catégorie(s) → " .. tostring(base) .. "/"
+    end
+    return err_count < ok_count, tostring(ok_count) .. " ok, " .. tostring(err_count) .. " erreur(s)"
+  end
   local all_domains = { }
   for _index_0 = 1, #cats do
     local cat = cats[_index_0]
-    local fh = io.popen("tar -xzf " .. tostring(tmp_tar) .. " -O blacklists/" .. tostring(cat) .. "/domains 2>/dev/null")
+    fh = io.popen("tar -xzf " .. tostring(tmp_tar) .. " -O blacklists/" .. tostring(cat) .. "/domains 2>/dev/null")
     if fh then
       local data = fh:read("*a")
       fh:close()

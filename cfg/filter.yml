@@ -41,9 +41,28 @@
 #   mail    notification e-mail (futur)
 
 # Listes de domaines précompilées (filter/convert.moon ou filter/updater.moon)
-# Exécuter make update-lists pour construire toulouse.bin avant de démarrer.
+# Exécuter make update-lists pour construire les listes avant de démarrer.
+# Seules les catégories référencées ici sont utilisables dans les règles.
 domains:
-  toulouse: /etc/custos/lists/toulouse.bin
+  # Sécurité
+  toulouse_malware:         /etc/custos/lists/toulouse/malware.bin
+  toulouse_phishing:        /etc/custos/lists/toulouse/phishing.bin
+  toulouse_ddos:            /etc/custos/lists/toulouse/ddos.bin
+  toulouse_hacking:         /etc/custos/lists/toulouse/hacking.bin
+  toulouse_cryptojacking:   /etc/custos/lists/toulouse/cryptojacking.bin
+  toulouse_redirector:      /etc/custos/lists/toulouse/redirector.bin
+  toulouse_strong_redirector: /etc/custos/lists/toulouse/strong_redirector.bin
+  # Contenus illégaux / indésirables
+  toulouse_warez:           /etc/custos/lists/toulouse/warez.bin
+  toulouse_drugs:           /etc/custos/lists/toulouse/drugs.bin
+  toulouse_gambling:        /etc/custos/lists/toulouse/gambling.bin
+  # Adulte
+  toulouse_adult:           /etc/custos/lists/toulouse/adult.bin
+  toulouse_mixed_adult:     /etc/custos/lists/toulouse/mixed_adult.bin
+  toulouse_lingerie:        /etc/custos/lists/toulouse/lingerie.bin
+  # Publicité / tracking
+  toulouse_publicite:       /etc/custos/lists/toulouse/publicite.bin
+  toulouse_marketingware:   /etc/custos/lists/toulouse/marketingware.bin
 
 # Sous-réseaux CIDR nommés
 nets:
@@ -62,25 +81,9 @@ sources:
   toulouse:
     url: https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz
     format: toulouse
-    # Catégories manifestement indésirables extraites de la liste UT Capitole.
-    # Laisser categories absent pour tout extraire.
-    categories:
-    - adult          # pornographie
-    - mixed_adult    # contenu adulte mixte
-    - lingerie       # lingerie / softcore
-    - malware        # malwares
-    - phishing       # hameçonnage
-    - ddos           # outils DDoS
-    - hacking        # outils de hacking
-    - cryptojacking  # minage de cryptomonnaies
-    - warez          # piratage logiciel
-    - drugs          # drogues
-    - gambling       # jeux d'argent
-    - redirector     # redirecteurs suspects
-    - strong_redirector  # redirecteurs forts
-    - publicite      # publicité (UT Capitole)
-    - marketingware  # marketing agressif / trackers
-    output: /etc/custos/lists/toulouse.bin
+    # Toutes les catégories sont extraites (categories absent = tout).
+    # Chaque catégorie produit un fichier .bin distinct dans output_dir.
+    output_dir: /etc/custos/lists/toulouse
 #  ads:
 #    urls:
 #    - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
@@ -94,6 +97,30 @@ sources:
 
 # Règles ordonnées : premier verdict gagnant.
 rules:
+- description: Blocage des catégories indésirables (UT Capitole Toulouse)
+  actions: [deny]
+  conditions:
+    to_domainlists:
+    # Sécurité
+    - toulouse_malware
+    - toulouse_phishing
+    - toulouse_ddos
+    - toulouse_hacking
+    - toulouse_cryptojacking
+    - toulouse_redirector
+    - toulouse_strong_redirector
+    # Contenus illégaux / indésirables
+    - toulouse_warez
+    - toulouse_drugs
+    - toulouse_gambling
+    # Adulte
+    - toulouse_adult
+    - toulouse_mixed_adult
+    - toulouse_lingerie
+    # Publicité / tracking
+    - toulouse_publicite
+    - toulouse_marketingware
+
 - description: Infrastructure réseau toujours autorisée
   actions: [allow]
   conditions:
@@ -114,11 +141,6 @@ rules:
     - fastly.com
     - akamaiedge.net
     - example.com
-
-- description: Blocage des catégories indésirables (UT Capitole Toulouse)
-  actions: [deny]
-  conditions:
-    to_domainlist: toulouse
 
 - description: Refus par défaut
   actions: [deny]
