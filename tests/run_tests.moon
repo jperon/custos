@@ -1527,6 +1527,122 @@ do
 -- Nettoyage
 os.remove TMPLIST
 
+-- ── parse_domains ──────────────────────────────────────────────────────────
+io.write "\n── parse_domains ──\n"
+{ :parse, :parse_simple, :parse_hosts, :parse_adblock, :is_valid } = require "filter.lib.parse_domains"
+
+test "parse_domains.is_valid — domaine valide", ->
+  assert_eq (is_valid "example.com"), true, "example.com"
+
+test "parse_domains.is_valid — domaine avec sous-domaine", ->
+  assert_eq (is_valid "ads.example.com"), true, "ads.example.com"
+
+test "parse_domains.is_valid — chaîne vide → invalide", ->
+  assert_eq (is_valid ""), false, "vide"
+
+test "parse_domains.is_valid — IPv4 → invalide", ->
+  assert_eq (is_valid "1.2.3.4"), false, "IPv4"
+
+test "parse_domains.is_valid — IPv6 → invalide", ->
+  assert_eq (is_valid "::1"), false, "IPv6"
+
+test "parse_domains.is_valid — sans point → invalide", ->
+  assert_eq (is_valid "localhost"), false, "pas de point"
+
+test "parse_domains.is_valid — trop long → invalide", ->
+  assert_eq (is_valid (string.rep("a", 254))), false, "trop long"
+
+test "parse_domains.is_valid — caractères invalides → invalide", ->
+  assert_eq (is_valid "bad domain.com"), false, "espace"
+
+-- ── parse_simple ──
+do
+  text = [[
+# Commentaire
+example.com
+  ads.example.com
+DOUBLECLICK.NET
+# autre commentaire
+invalide
+]]
+  result = parse_simple text
+
+  test "parse_simple — nombre de domaines extraits", ->
+    assert_eq #result, 3, "3 domaines"
+
+  test "parse_simple — normalisation minuscules", ->
+    found = false
+    for d in *result
+      found = true if d == "doubleclick.net"
+    assert found, "doubleclick.net normalisé"
+
+  test "parse_simple — commentaires ignorés", ->
+    for d in *result
+      assert d\sub(1, 1) ~= "#", "commentaire présent : #{d}"
+
+-- ── parse_hosts ──
+do
+  text = [[
+# hosts file
+127.0.0.1 localhost
+0.0.0.0 ads.example.com
+0.0.0.0 0.0.0.0
+127.0.0.1 tracking.example.org
+::1 ip6-localhost
+0.0.0.0 DOUBLECLICK.NET
+]]
+  result = parse_hosts text
+
+  test "parse_hosts — nombre de domaines extraits (skip localhost/0.0.0.0/::1)", ->
+    assert_eq #result, 3, "3 domaines"
+
+  test "parse_hosts — localhost ignoré", ->
+    for d in *result
+      assert d ~= "localhost", "localhost présent"
+
+  test "parse_hosts — normalisation minuscules", ->
+    found = false
+    for d in *result
+      found = true if d == "doubleclick.net"
+    assert found, "doubleclick.net normalisé"
+
+-- ── parse_adblock ──
+do
+  text = [[
+! Commentaire adblock
+||ads.example.com^
+||tracker.example.org^$third-party
+@@||whitelist.example.com^
+||DOUBLECLICK.NET^
+||invalid
+##.css-rule
+]]
+  result = parse_adblock text
+
+  test "parse_adblock — nombre de domaines extraits", ->
+    assert_eq #result, 3, "3 domaines (pas d'exception @@, pas de CSS)"
+
+  test "parse_adblock — normalisation minuscules", ->
+    found = false
+    for d in *result
+      found = true if d == "doubleclick.net"
+    assert found, "doubleclick.net normalisé"
+
+  test "parse_adblock — exception @@ ignorée", ->
+    for d in *result
+      assert d ~= "whitelist.example.com", "exception présente"
+
+-- ── parse dispatch ──
+test "parse — format 'simple' dispatche vers parse_simple", ->
+  result = parse "simple", "example.com\n# commentaire\n"
+  assert_eq #result, 1, "1 domaine"
+  assert_eq result[1], "example.com", "domaine"
+
+test "parse — format inconnu → parse_simple par défaut", ->
+  result = parse "unknown_format", "example.com\n"
+  assert_eq #result, 1, "fallback simple"
+
+
 
 io.write string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed)
 os.exit failed == 0 and 0 or 1

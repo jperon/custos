@@ -47,6 +47,23 @@
     -- business: { "08:00", "18:00" }
   }
 
+  -- Sources pour filter/updater.moon : téléchargement et compilation automatique
+  -- des listes de blocage. Exécuter : luajit lua/filter/updater.lua [--pid /run/custos.pid]
+  --
+  -- formats : "simple" (1 domaine/ligne), "hosts" (0.0.0.0 domain), "adblock" (||domain^)
+  sources: {
+    -- ads: {
+    --   urls:   { "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts" }
+    --   format: "hosts"
+    --   output: "/etc/custos/lists/ads.bin"
+    -- }
+    -- tracking: {
+    --   urls:   { "https://oisd.nl/domains" }
+    --   format: "simple"
+    --   output: "/etc/custos/lists/tracking.bin"
+    -- }
+  }
+
   -- Règles ordonnées : premier verdict gagnant.
   -- Les règles remplacent intégralement ALLOWED_DOMAINS.
   rules: {

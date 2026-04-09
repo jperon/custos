@@ -37,7 +37,7 @@ FILTER_MOONS := $(shell find $(SRC)/filter -name '*.moon' 2>/dev/null) \
   $(SRC)/ffi_xxhash.moon
 FILTER_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(FILTER_MOONS))
 
-.PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 test-kvm test-kvm-up test-kvm-run test-kvm-down run reload logs help
+.PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 test-kvm test-kvm-up test-kvm-run test-kvm-down run reload update-lists logs help
 
 all: $(LUA)/parse $(LUAS) $(FILTER_LUAS)
 	@echo "Compilation terminée → $(LUA)/"
@@ -116,6 +116,13 @@ clean:
 reload:
 	@pkill -SIGHUP -f "luajit.*main" && echo "SIGHUP envoyé" || echo "Processus introuvable"
 
+## Télécharge et compile les listes de domaines (sources définies dans filter/config.moon)
+## Usage : make update-lists [PID=/run/custos.pid]
+update-lists: all
+	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) $(LUA)/filter/updater.lua \
+	  $(if $(PID),--pid $(PID),)
+
 ## Affiche les logs en temps réel avec horodatage lisible
 logs:
 	@tail -f /tmp/dns-filter.log | awk '{ts=$$1+0; gsub(/\[/,""); cmd="date -d @"ts" +%H:%M:%S"; cmd | getline t; close(cmd); sub($$1, "["t]"); print}'
@@ -136,5 +143,6 @@ help:
 	@echo "  run          - Lance le superviseur (root requis)"
 	@echo "  clean        - Nettoie les fichiers compilés"
 	@echo "  reload       - Recharge la configuration (SIGHUP)"
+	@echo "  update-lists - Télécharge et compile les listes de domaines"
 	@echo "  logs         - Affiche les logs en temps réel"
 	@echo "  help         - Affiche cette aide"
