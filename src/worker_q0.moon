@@ -101,7 +101,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       refused_payload = build_refused { hdr: pkt.dns }, dns_raw
       if refused_payload
         refuse.send_refused pkt.ip.src_ip_raw, pkt.l4.src_port,
-                            refused_payload, pkt.ip.af
+                            refused_payload, pkt.ip.af, pkt.ip.dst_ip_raw
 
   verdict
 

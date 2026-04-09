@@ -95,7 +95,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
         hdr = pkt.dns
       }, dns_raw)
       if refused_payload then
-        refuse.send_refused(pkt.ip.src_ip_raw, pkt.l4.src_port, refused_payload, pkt.ip.af)
+        refuse.send_refused(pkt.ip.src_ip_raw, pkt.l4.src_port, refused_payload, pkt.ip.af, pkt.ip.dst_ip_raw)
       end
     end
   end

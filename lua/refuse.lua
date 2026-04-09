@@ -17,99 +17,107 @@ local SOCK_DGRAM = 2
 local SOL_SOCKET = 1
 local SO_REUSEADDR = 2
 local SO_REUSEPORT = 15
-local sock4 = -1
-local sock6 = -1
-local open_udp53
-open_udp53 = function(af)
-  local fd = libc.socket(af, SOCK_DGRAM, 0)
-  if fd < 0 then
-    return -1, "socket() echec"
-  end
-  local one = ffi.new("int[1]", 1)
-  libc.setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, one, ffi.sizeof("int"))
-  libc.setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, one, ffi.sizeof("int"))
-  local rc
-  if af == AF_INET then
-    local addr = ffi.new("struct sockaddr_in")
-    addr.sin_family = AF_INET
-    addr.sin_port = libc.htons(53)
-    rc = libc.bind(fd, ffi.cast("struct sockaddr*", addr), ffi.sizeof("struct sockaddr_in"))
-  else
-    local addr = ffi.new("struct sockaddr_in6")
-    addr.sin6_family = AF_INET6
-    addr.sin6_port = libc.htons(53)
-    rc = libc.bind(fd, ffi.cast("struct sockaddr*", addr), ffi.sizeof("struct sockaddr_in6"))
-  end
-  if rc < 0 then
-    libc.close(fd)
-    return -1, "bind() echec (af=" .. tostring(af) .. ")"
-  end
-  return fd, nil
-end
+local IPPROTO_IP = 0
+local IPPROTO_IPV6 = 41
+local IP_TRANSPARENT = 19
+local IPV6_TRANSPARENT = 75
+local admin_available = false
 local init
 init = function()
-  local fd4, err4 = open_udp53(AF_INET)
-  if fd4 < 0 then
-    log_warn({
-      action = "refuse_init_fail",
-      af = "ipv4",
-      err = tostring(err4)
-    })
+  local fd = libc.socket(AF_INET, SOCK_DGRAM, 0)
+  if fd >= 0 then
+    local one = ffi.new("int[1]", 1)
+    local rc = libc.setsockopt(fd, IPPROTO_IP, IP_TRANSPARENT, one, ffi.sizeof("int"))
+    libc.close(fd)
+    if rc == 0 then
+      admin_available = true
+      return log_info({
+        action = "refuse_ready",
+        mode = "ip_transparent"
+      })
+    else
+      return log_warn({
+        action = "refuse_init_fail",
+        err = "IP_TRANSPARENT non disponible (CAP_NET_ADMIN requis)"
+      })
+    end
   else
-    sock4 = fd4
-    log_info({
-      action = "refuse_ready",
-      af = "ipv4"
-    })
-  end
-  local fd6, err6 = open_udp53(AF_INET6)
-  if fd6 < 0 then
     return log_warn({
       action = "refuse_init_fail",
-      af = "ipv6",
-      err = tostring(err6)
-    })
-  else
-    sock6 = fd6
-    return log_info({
-      action = "refuse_ready",
-      af = "ipv6"
+      err = "socket() echec"
     })
   end
 end
 local send_refused
-send_refused = function(dst_ip_raw, dst_port, dns_payload, af)
+send_refused = function(dst_ip_raw, dst_port, dns_payload, af, src_ip_raw)
+  if not (admin_available) then
+    return 
+  end
+  local fd = libc.socket(af, SOCK_DGRAM, 0)
+  if fd < 0 then
+    return 
+  end
+  local one = ffi.new("int[1]", 1)
+  libc.setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, one, ffi.sizeof("int"))
+  libc.setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, one, ffi.sizeof("int"))
   if af == AF_INET then
-    if sock4 < 0 then
+    libc.setsockopt(fd, IPPROTO_IP, IP_TRANSPARENT, one, ffi.sizeof("int"))
+    local src = ffi.new("struct sockaddr_in")
+    src.sin_family = AF_INET
+    src.sin_port = libc.htons(53)
+    ffi.copy(src.sin_addr, src_ip_raw, 4)
+    local rc = libc.bind(fd, ffi.cast("struct sockaddr*", src), ffi.sizeof("struct sockaddr_in"))
+    if rc < 0 then
+      libc.close(fd)
+      log_warn({
+        action = "refuse_bind_fail",
+        af = "ipv4",
+        err = ffi.errno()
+      })
       return 
     end
-    local addr = ffi.new("struct sockaddr_in")
-    addr.sin_family = AF_INET
-    addr.sin_port = libc.htons(dst_port)
-    ffi.copy(addr.sin_addr, dst_ip_raw, 4)
-    local rc = libc.sendto(sock4, dns_payload, #dns_payload, 0, ffi.cast("struct sockaddr*", addr), ffi.sizeof("struct sockaddr_in"))
+    local dst = ffi.new("struct sockaddr_in")
+    dst.sin_family = AF_INET
+    dst.sin_port = libc.htons(dst_port)
+    ffi.copy(dst.sin_addr, dst_ip_raw, 4)
+    rc = libc.sendto(fd, dns_payload, #dns_payload, 0, ffi.cast("struct sockaddr*", dst), ffi.sizeof("struct sockaddr_in"))
     if rc < 0 then
-      return log_warn({
+      log_warn({
         action = "sendto_failed",
-        af = "ipv4"
+        af = "ipv4",
+        err = ffi.errno()
       })
     end
   else
-    if sock6 < 0 then
+    libc.setsockopt(fd, IPPROTO_IPV6, IPV6_TRANSPARENT, one, ffi.sizeof("int"))
+    local src = ffi.new("struct sockaddr_in6")
+    src.sin6_family = AF_INET6
+    src.sin6_port = libc.htons(53)
+    ffi.copy(src.sin6_addr, src_ip_raw, 16)
+    local rc = libc.bind(fd, ffi.cast("struct sockaddr*", src), ffi.sizeof("struct sockaddr_in6"))
+    if rc < 0 then
+      libc.close(fd)
+      log_warn({
+        action = "refuse_bind_fail",
+        af = "ipv6",
+        err = ffi.errno()
+      })
       return 
     end
-    local addr = ffi.new("struct sockaddr_in6")
-    addr.sin6_family = AF_INET6
-    addr.sin6_port = libc.htons(dst_port)
-    ffi.copy(addr.sin6_addr, dst_ip_raw, 16)
-    local rc = libc.sendto(sock6, dns_payload, #dns_payload, 0, ffi.cast("struct sockaddr*", addr), ffi.sizeof("struct sockaddr_in6"))
+    local dst = ffi.new("struct sockaddr_in6")
+    dst.sin6_family = AF_INET6
+    dst.sin6_port = libc.htons(dst_port)
+    ffi.copy(dst.sin6_addr, dst_ip_raw, 16)
+    rc = libc.sendto(fd, dns_payload, #dns_payload, 0, ffi.cast("struct sockaddr*", dst), ffi.sizeof("struct sockaddr_in6"))
     if rc < 0 then
-      return log_warn({
+      log_warn({
         action = "sendto_failed",
-        af = "ipv6"
+        af = "ipv6",
+        err = ffi.errno()
       })
     end
   end
+  return libc.close(fd)
 end
 return {
   init = init,
