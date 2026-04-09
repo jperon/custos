@@ -11,9 +11,6 @@
 set -euo pipefail
 
 NFT_RULES="$(dirname "$0")/nft-rules/dns-filter.nft"
-BRIDGE_IFACE="${BRIDGE_IFACE:-br-lan}"
-LAN_NET4="${LAN_NET4:-192.168.1.0/24}"
-LAN_NET6="${LAN_NET6:-fd00::/64}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}[+]${NC} $*"; }
@@ -87,19 +84,9 @@ enable_br_netfilter() {
 }
 
 # ── Application des règles nft ────────────────────────────────────
-# Substitue les variables dans le fichier .nft avant application
 apply_nft_rules() {
-  local tmp
-  tmp=$(mktemp /tmp/dns-filter-XXXXXX.nft)
-  trap "rm -f $tmp" EXIT
-
-  sed \
-    -e "s|192\.168\.1\.0/24|${LAN_NET4}|g" \
-    -e "s|fd00::/64|${LAN_NET6}|g" \
-    "$NFT_RULES" > "$tmp"
-
-  nft -f "$tmp"
-  ok "Règles nft appliquées (LAN=${LAN_NET4}, LAN6=${LAN_NET6})"
+  nft -f "$NFT_RULES"
+  ok "Règles nft appliquées"
 }
 
 # ── up ────────────────────────────────────────────────────────────
