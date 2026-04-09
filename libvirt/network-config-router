@@ -1,0 +1,13 @@
+version: 2
+ethernets:
+  # LAN side: static gateway for clients bridged through filter VM
+  lanside:
+    match:
+      macaddress: "52:54:00:00:02:01"
+    dhcp4: false
+    addresses: [10.99.0.1/24]
+  # WAN side: DHCP from libvirt wan NAT network (192.168.200.x)
+  wanside:
+    match:
+      macaddress: "52:54:00:00:02:02"
+    dhcp4: true

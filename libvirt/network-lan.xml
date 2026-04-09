@@ -1,5 +1,5 @@
 <network>
   <name>lan</name>
-  <forward mode="bridge"/>
+  <!-- Isolated L2 segment — no routing, no DHCP. Client VM uses static IP. -->
   <bridge name="virbr-lan"/>
 </network>

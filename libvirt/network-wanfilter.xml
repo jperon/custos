@@ -1,0 +1,5 @@
+<network>
+  <name>wanfilter</name>
+  <!-- Isolated L2 segment between filter VM and router VM. No routing, no DHCP. -->
+  <bridge name="virbr-wf"/>
+</network>

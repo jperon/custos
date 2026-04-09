@@ -1,44 +1,51 @@
-<!-- CustosVirginum DNS Filter — now runs as Docker container
-     This file is kept for reference only.
-     The filter is now deployed via docker-compose.yml -->
+<!-- CustosVirginum DNS Filter — VM definition for KVM/libvirt tests -->
 <domain type='kvm'>
   <name>custos-filter</name>
-  <metadata>
-    <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
-      <libosinfo:os id="http://libosinfo.org/debian12"/>
-    </libosinfo:libosinfo>
-  </metadata>
   <memory unit='MiB'>1024</memory>
   <vcpu>2</vcpu>
+  <cpu mode='host-passthrough' check='none'/>
   <os>
     <type arch='x86_64'>hvm</type>
-    <boot dev='hd'/>
+    <kernel>/tmp/custos-vmlinuz</kernel>
+    <initrd>/tmp/custos-initrd.img</initrd>
+    <cmdline>root=/dev/vda1 ro console=ttyS0,115200 earlyprintk=ttyS0,115200 consoleblank=0</cmdline>
   </os>
   <features>
     <acpi/>
   </features>
-  <pm>
-    <suspend-to-mem enabled='no'/>
-    <suspend-to-disk enabled='no'/>
-  </pm>
   <devices>
     <disk type='file' device='disk'>
       <source file='/var/lib/libvirt/images/custos-filter.qcow2'/>
       <driver name='qemu' type='qcow2'/>
       <target dev='vda' bus='virtio'/>
     </disk>
-    <!-- Bridge interfaces for inline filtering -->
-    <interface type='bridge'>
-      <source bridge='br-filter'/>
+    <disk type='file' device='cdrom'>
+      <source file='/var/lib/libvirt/images/cidata-filter.iso'/>
+      <driver name='qemu' type='raw'/>
+      <target dev='sda' bus='sata'/>
+      <readonly/>
+    </disk>
+    <interface type='network'>
+      <mac address='52:54:00:00:01:01'/>
+      <source network='wanfilter'/>
       <model type='virtio'/>
-      <target dev='veth0'/>
     </interface>
     <interface type='network'>
+      <mac address='52:54:00:00:01:02'/>
       <source network='lan'/>
       <model type='virtio'/>
-      <target dev='veth1'/>
     </interface>
-    <console type='pty'>
+    <interface type='network'>
+      <mac address='52:54:00:00:01:03'/>
+      <source network='wan'/>
+      <model type='virtio'/>
+    </interface>
+    <serial type='file'>
+      <source path='/tmp/custos-filter-serial.log' append='on'/>
+      <target type='isa-serial' port='0'/>
+    </serial>
+    <console type='file'>
+      <source path='/tmp/custos-filter-serial.log' append='on'/>
       <target type='serial' port='0'/>
     </console>
     <channel type='unix'>

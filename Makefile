@@ -8,6 +8,7 @@ LUA     := lua
 ## Liste des modules à compiler (ordre de dépendance respecté pour les tests)
 MOONS := \
   $(SRC)/config.moon \
+  $(SRC)/uci_config.moon \
   $(SRC)/ffi_defs.moon \
   $(SRC)/log.moon \
   $(SRC)/parse/ethernet.moon \
@@ -32,7 +33,7 @@ MOONS := \
 
 LUAS := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(MOONS))
 
-.PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 run reload logs help
+.PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 test-kvm test-kvm-up test-kvm-run test-kvm-down run reload logs help
 
 all: $(LUA)/parse $(LUAS)
 	@echo "Compilation terminée → $(LUA)/"
@@ -71,12 +72,6 @@ test-docker: all
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_docker.lua
 
-test-docker-internal: all
-	@echo "Tests Docker end-to-end (nDPI 4.x)..."
-	$(MOONC) -o tests/test_docker.lua tests/test_docker.moon
-	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) tests/test_docker.lua
-
 ## Tests Docker end-to-end avec nDPI 5.0 (requires Docker)
 test-docker-ndpi5: all
 	@echo "Tests Docker end-to-end (nDPI 5.0)..."
@@ -84,11 +79,23 @@ test-docker-ndpi5: all
 	NDPI_VERSION=5.0 LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_docker.lua
 
-test-docker-ndpi5-internal: all
-	@echo "Tests Docker end-to-end (nDPI 5.0)..."
-	$(MOONC) -o tests/test_docker.lua tests/test_docker.moon
-	NDPI_VERSION=5.0 LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) tests/test_docker.lua
+## Tests KVM/libvirt end-to-end (requires KVM + libvirt)
+test-kvm: test-kvm-up test-kvm-run test-kvm-down
+
+test-kvm-up:
+	@echo "Démarrage des VMs KVM..."
+	@virsh dominfo custos-filter >/dev/null 2>&1 || sudo bash libvirt/custos-libvirt.sh create
+	bash libvirt/custos-libvirt.sh start
+
+test-kvm-run: all
+	@echo "Tests KVM end-to-end..."
+	$(MOONC) -o tests/test_kvm.lua tests/test_kvm.moon
+	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) tests/test_kvm.lua
+
+test-kvm-down:
+	@echo "Arrêt des VMs KVM..."
+	bash libvirt/custos-libvirt.sh stop
 
 ## Lance le superviseur (nécessite root + règles nft en place)
 run: all
@@ -116,6 +123,10 @@ help:
 	@echo "  test-ndpi    - Tests nDPI wrapper (libndpi requis)"
 	@echo "  test-docker  - Tests Docker end-to-end (nDPI 4.x, Docker requis)"
 	@echo "  test-docker-ndpi5 - Tests Docker end-to-end (nDPI 5.0, Docker requis)"
+	@echo "  test-kvm     - Tests KVM end-to-end complets (up+run+down, libvirt requis)"
+	@echo "  test-kvm-up  - Démarre les VMs KVM"
+	@echo "  test-kvm-run - Exécute les tests KVM (VMs déjà démarrées)"
+	@echo "  test-kvm-down - Arrête les VMs KVM"
 	@echo "  run          - Lance le superviseur (root requis)"
 	@echo "  clean        - Nettoie les fichiers compilés"
 	@echo "  reload       - Recharge la configuration (SIGHUP)"
