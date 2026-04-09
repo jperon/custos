@@ -20,6 +20,62 @@ See [README.md](README.md) for the full architecture.
 
 ---
 
+## Test Suites
+
+### Unit Tests (`make test`)
+
+Compile from `tests/run_tests.moon` → `tests/run_tests.lua`. No root required.
+Tests parsing modules (`dns`, `ip`, `udp`, `ipc`, `allowlist`).
+
+### nDPI Tests (`make test-ndpi`)
+
+Requires libndpi installed. Tests the `parse/ndpi` facade and version dispatch.
+
+### Docker E2E (`make test-docker` / `make test-docker-ndpi5`)
+
+Requires Docker. Spins up filter, client, router, wan-dns containers.
+Tests DNS ALLOW/REFUSED, set population, per-client isolation.
+
+### KVM E2E (`make test-kvm`)
+
+Requires KVM + libvirt. Runs 20 tests against three VMs:
+- `custos-filter` (Debian) — runs CustosVirginum natively
+- `custos-router` (OpenWrt) — DHCPv4 + SLAAC upstream
+- `custos-client` (Debian) — sends DNS queries, pings
+
+**First run**: `sudo bash libvirt/custos-libvirt.sh create` (downloads images).
+**Subsequent runs**: `make test-kvm` (up → run → down).
+
+#### KVM test pitfalls
+
+**`guest_exec` and single quotes**
+
+`guest_exec` (in `tests/test_kvm.moon`) wraps the virsh JSON payload in
+shell single-quotes. Commands containing single-quoted arguments (e.g.
+`awk '{print $2}'`) break the shell quoting. Fix: escape via
+`exec_payload\gsub("'", "'\"'\"'")`. Prevention: avoid single quotes in
+guest commands — use `sed -En "..."` double-quoted expressions instead.
+
+**Backslash escaping (4-backslash rule)**
+
+`safe_cmd` replaces each `\` with `\\\\`. For sed backreferences, write
+`\\1` in the MoonScript source string → `\\\\1` after `safe_cmd` →
+`\\1` in the JSON string → shell strips one `\` → sed sees `\1`. ✓
+
+**Client interface name**
+
+Debian cloud images use predictive names (`ens2`, not `eth0`). Always
+auto-detect: `ip route get <dst> | sed -En "s/.*dev ([^ ]+).*/\\1/p"`.
+
+**Log file ownership**
+
+If `/tmp/custos-kvm.log` is root-owned and `fs.protected_regular=2` is
+set, the `debian` user cannot truncate it. The nohup redirect silently
+fails → LuaJIT never starts. Fix: delete the stale file, or use a path
+under `/opt/custos/tmp/` (not sticky, no `protected_regular` restriction).
+
+---
+
 ## MoonScript Syntax Guidelines
 
 This project **avoids the `class` keyword** of MoonScript. The compiled code must be independent of the MoonScript library (no `require "moon"`).
