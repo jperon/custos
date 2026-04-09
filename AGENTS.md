@@ -322,6 +322,9 @@ nDPI returns two protocol IDs per packet:
 | `parse_packet(raw)` | L3+L4+L7 parse + nDPI detection → table or nil |
 | `parse_answers(raw, pkt)` | DNS answer RRs → array of records |
 | `patch_and_checksum(raw, pkt, answers, ttl)` | TTL rewrite + checksum fix → string |
+| `extract_dns_payload(raw, pkt)` | Extract DNS payload from UDP or TCP packet → string |
+| `patch_ttl_in_dns(dns_str, answers, new_ttl)` | Rewrite TTLs in a DNS string → string |
+| `replace_dns_payload(raw, pkt, new_dns)` | Rebuild IP packet with a new DNS payload (variable size) → string |
 | `cleanup()` | Release nDPI context |
 
 ---

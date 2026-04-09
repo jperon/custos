@@ -719,11 +719,9 @@ extract_dns_payload = (raw, pkt) ->
 
 --- Réécrit les TTL des réponses DNS dans une copie de la string DNS.
 -- Contrairement à patch_ttl (FFI in-place), opère sur une Lua string et retourne
--- une nouvelle string. ttl_offset est 1-based depuis le début du payload DNS.
+-- une nouvelle string. ttl_offset est 0-based depuis le début du payload DNS.
 -- @tparam string  dns_str  Payload DNS (Lua string)
--- @tparam table   answers  Résultat de parse_answers (champs ttl_offset 1-based)
--- @tparam number  dns_off  Offset 0-based du début DNS dans le paquet original
---                          (toujours 0 ici car dns_str commence au début du DNS)
+-- @tparam table   answers  Résultat de parse_answers (champs ttl_offset 0-based)
 -- @tparam number  new_ttl  Valeur TTL à écrire (uint32)
 -- @treturn string Nouveau payload DNS avec TTLs réécrits
 patch_ttl_in_dns = (dns_str, answers, new_ttl) ->
@@ -731,8 +729,7 @@ patch_ttl_in_dns = (dns_str, answers, new_ttl) ->
   buf = ffi.new "uint8_t[?]", dns_len
   ffi.copy buf, dns_str, dns_len
   for ans in *answers
-    -- ttl_offset est 1-based → offset 0-based = ttl_offset - 1
-    w32 buf, ans.ttl_offset - 1, new_ttl
+    w32 buf, ans.ttl_offset, new_ttl
   ffi.string buf, dns_len
 
 --- Reconstruit un paquet IP complet avec un nouveau payload DNS (taille différente).

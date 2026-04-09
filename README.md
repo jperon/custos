@@ -54,9 +54,9 @@ DNS Resolver (8.8.8.8) responds
    ▼
 nft FORWARD → NFQUEUE 1
    ▼
-worker Q1 : drain pipe → pending[0x1234:192.168.1.42:54321] found
+worker Q1 : drain pipe → pending[0x1234:192.168.1.42:54321] found (refused=false)
    │  parse response → A 140.82.121.4
-   │  patch TTL → 60s + recalc checksums UDP+IP
+   │  patch TTL → 60s + append EDE code 0 "Custos vigilat." + recalc checksums
    │  nft add element ip dns-filter ip4_allowed { 192.168.1.42 . 140.82.121.4 timeout 2m }
    │  log: ALLOW action=response_patched answers=1 ttl_set=60
    └► NF_ACCEPT + modified payload
@@ -79,9 +79,18 @@ nft FORWARD → NFQUEUE 0
 worker Q0 : qname="www.facebook.com"
    │  is_allowed("www.facebook.com") → false
    │  log: BLOCK reason=not_in_allowlist
-   │  build_refused() + send_refused() via UDP socket (port 53 source)
-   │  Client receives REFUSED (RCODE 5 + EDE code 15 Filtered)
-   └► NF_DROP → paquet bloqué, pas de question vers l'upstream
+   │  write_refused_msg(pipe, txid=0x1234|REFUSED, ip, port, mac)
+   └► NF_ACCEPT → question forwarded to resolver
+   ▼
+DNS Resolver (8.8.8.8) responds
+   ▼
+nft FORWARD → NFQUEUE 1
+   ▼
+worker Q1 : drain pipe → pending[0x1234:192.168.1.42:54321] found (refused=true)
+   │  transform response → RCODE=5 REFUSED + EDE code 15 "Filtered" + "Custos vigilat."
+   │  replace DNS payload, recalc checksums
+   │  log: BLOCK action=response_refused
+   └► NF_ACCEPT + REFUSED payload (client receives REFUSED + EDE)
 ```
 
 ---
@@ -100,7 +109,6 @@ custos/
 │   ├── neigh.moon           Kernel neighbor table reader (ip neigh show)
 │   ├── nft.moon             nftables set injection via libnftables
 │   ├── nfq_loop.moon        Generic NFQUEUE loop
-│   ├── refuse.moon          DNS REFUSED response builder + sender
 │   ├── worker_q0.moon       DNS questions worker
 │   ├── worker_q1.moon       DNS responses worker
 │   ├── main.moon            Supervisor + fork
@@ -271,7 +279,8 @@ The Unix pipe (created before `fork()`) carries 27-byte messages.
 Atomicity is guaranteed by POSIX for messages ≤ PIPE_BUF (4096 bytes).
 
 ```
-Byte  0      : type  — 0x41 ('A') = IPv4, 0x36 ('6') = IPv6
+Byte  0      : type  — 0x41 ('A') = IPv4 allowed,    0x36 ('6') = IPv6 allowed
+                       0x52 ('R') = IPv4 refused,     0x72 ('r') = IPv6 refused
 Bytes 1-2    : DNS txid (big-endian uint16)
 Bytes 3-18   : source IP — 16 bytes
                  IPv4 : 4 bytes address + 12 zero bytes (padding)
@@ -280,7 +289,9 @@ Bytes 19-20  : source port (big-endian uint16)
 Bytes 21-26  : source MAC (6 bytes, zeroed if unavailable)
 ```
 
-Q1 maintains a table `pending[txid:ip:port] = expire_time` (TTL 5s).
+Q1 maintains a table `pending[txid:ip:port] = {expire, refused}` (TTL 5s).
+`refused=true` means Q0 determined the query must be blocked; Q1 transforms
+the upstream response into a REFUSED reply instead of patching TTL.
 Purge is **lazy**: an expired entry is removed at lookup time,
 without a separate timer.
 
@@ -291,10 +302,17 @@ without a separate timer.
 Each allowed DNS response is modified before being returned to the client:
 
 1. All Resource Record TTLs are rewritten to 60 seconds
-2. L4 checksum is recalculated (`UDP` or `TCP`, IPv4/IPv6 pseudo-header)
-3. IPv4 header checksum is recalculated when applicable
-4. `NF_ACCEPT` verdict is set with modified payload via
+2. An EDNS OPT option EDE code 0 "Other" with extra-text `"Custos vigilat."`
+   is appended to the response's OPT RR, signalling that TTL was clamped
+3. L4 checksum is recalculated (`UDP` or `TCP`, IPv4/IPv6 pseudo-header)
+4. IPv4 header checksum is recalculated when applicable
+5. `NF_ACCEPT` verdict is set with modified payload via
    `nfq_set_verdict(qh, pkt_id, NF_ACCEPT, len, patched_ptr)`
+
+Each blocked DNS response (where Q0 sent `refused=true`) is replaced by
+a REFUSED reply with EDE code 15 "Filtered" and extra-text `"Custos vigilat."`,
+reconstructed from the upstream server's TCP/UDP framing (so no raw-socket
+spoofing is needed).
 
 For multi-segment TCP DNS responses, Q1 buffers segments, patches the fully
 assembled DNS payload once complete, then reinjects a single coalesced

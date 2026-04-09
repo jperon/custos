@@ -735,7 +735,7 @@ patch_ttl_in_dns = function(dns_str, answers, new_ttl)
   ffi.copy(buf, dns_str, dns_len)
   for _index_0 = 1, #answers do
     local ans = answers[_index_0]
-    w32(buf, ans.ttl_offset - 1, new_ttl)
+    w32(buf, ans.ttl_offset, new_ttl)
   end
   return ffi.string(buf, dns_len)
 end

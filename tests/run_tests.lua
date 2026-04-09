@@ -795,5 +795,330 @@ test("worker_q0 — paquet 2 questions (1 allowée + 1 bloquée) → NF_DROP, wr
   assert_eq(verdict, NF_DROP, "verdict doit être NF_DROP (evil.com est bloqué)")
   return assert_eq(write_msg_would_be_called, false, "write_msg ne doit pas être appelé quand verdict == NF_DROP")
 end)
+io.write("\n── parse/dns nouvelles fonctions ──\n")
+local skip_name_bytes = m_dns.skip_name_bytes
+local skip_rr = m_dns.skip_rr
+local build_opt_rdata = m_dns.build_opt_rdata
+local append_ede_to_dns = m_dns.append_ede_to_dns
+test("skip_name_bytes — labels simples", function()
+  local buf = "\x03www\x06github\x03com\x00"
+  return assert_eq(skip_name_bytes(buf, 1), #buf, "consomme tout le buffer")
+end)
+test("skip_name_bytes — pointeur de compression (0xC00C)", function()
+  local buf = "\xC0\x0C"
+  return assert_eq(skip_name_bytes(buf, 1), 2, "pointeur = 2 octets consommés")
+end)
+test("skip_name_bytes — type réservé (0x40) → 0", function()
+  local buf = "\x40foo"
+  return assert_eq(skip_name_bytes(buf, 1), 0, "type réservé → 0")
+end)
+test("skip_name_bytes — label tronqué (longueur dépasse buffer) → 0", function()
+  local buf = "\x0Aab"
+  return assert_eq(skip_name_bytes(buf, 1), 0, "label tronqué → 0")
+end)
+test("skip_name_bytes — pointeur tronqué (octet 2 manquant) → 0", function()
+  local buf = "\xC0"
+  return assert_eq(skip_name_bytes(buf, 1), 0, "pointeur tronqué → 0")
+end)
+test("skip_rr — RR complet (root + TYPE A + CLASS IN + TTL=300 + rdlen=4)", function()
+  local rr = "\x00" .. string.char(0, 1, 0, 1) .. string.char(0, 0, 1, 0x2C) .. string.char(0, 4) .. string.char(1, 2, 3, 4)
+  return assert_eq(skip_rr(rr, 1), 15, "1 (name) + 10 (fixe) + 4 (rdata) = 15")
+end)
+test("skip_rr — buffer tronqué → nil", function()
+  local buf = "\x00\x00\x01"
+  return assert_eq(skip_rr(buf, 1), nil, "buffer tronqué → nil")
+end)
+test("build_opt_rdata — option simple code=0x0F data='AB'", function()
+  local result = build_opt_rdata({
+    {
+      code = 0x0F,
+      data = "AB"
+    }
+  })
+  return assert_eq(result, "\x00\x0F\x00\x02AB", "OPTION-CODE(2) + OPTION-LEN(2) + DATA")
+end)
+test("build_opt_rdata — code=0 est ignoré (TBD IANA)", function()
+  local result = build_opt_rdata({
+    {
+      code = 0,
+      data = "test"
+    }
+  })
+  return assert_eq(result, "", "code=0 → ignoré")
+end)
+test("build_opt_rdata — code=0 filtré parmi plusieurs options", function()
+  local result = build_opt_rdata({
+    {
+      code = 1,
+      data = "X"
+    },
+    {
+      code = 0,
+      data = "ignored"
+    },
+    {
+      code = 2,
+      data = "Y"
+    }
+  })
+  local expected = "\x00\x01\x00\x01X" .. "\x00\x02\x00\x01Y"
+  return assert_eq(result, expected, "seuls code=1 et code=2 encodés")
+end)
+local build_dns_with_opt
+build_dns_with_opt = function(txid, qname_enc, opt_rdata)
+  local rdlen = #opt_rdata
+  local txid_hi = bit.rshift(bit.band(txid, 0xFF00), 8)
+  local txid_lo = bit.band(txid, 0xFF)
+  local rdlen_hi = bit.rshift(bit.band(rdlen, 0xFF00), 8)
+  local rdlen_lo = bit.band(rdlen, 0xFF)
+  local hdr = string.char(txid_hi, txid_lo, 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 1)
+  local q = qname_enc .. string.char(0, 1, 0, 1)
+  local opt = "\x00" .. string.char(0x00, 0x29) .. string.char(0x04, 0x00) .. string.char(0, 0, 0, 0) .. string.char(rdlen_hi, rdlen_lo) .. opt_rdata
+  return hdr .. q .. opt
+end
+test("append_ede_to_dns — OPT RR présent, RDLENGTH et longueur mis à jour", function()
+  local qname = "\x03foo\x03com\x00"
+  local dns = build_dns_with_opt(0x1234, qname, "")
+  local new_dns = append_ede_to_dns(dns, {
+    {
+      code = 0x0F,
+      data = "AB"
+    }
+  })
+  assert(new_dns, "append_ede_to_dns retourne nil")
+  local opt_start = 26
+  assert_eq(new_dns:byte(opt_start + 9), 0, "RDLEN hi = 0")
+  assert_eq(new_dns:byte(opt_start + 10), 6, "RDLEN lo = 6")
+  return assert_eq(#new_dns, #dns + 6, "longueur augmentée de 6 octets")
+end)
+test("append_ede_to_dns — OPT avec RDATA existant préservé, option ajoutée", function()
+  local qname = "\x03bar\x03com\x00"
+  local existing = "\x00\x08\x00\x00"
+  local dns = build_dns_with_opt(0x5678, qname, existing)
+  local new_dns = append_ede_to_dns(dns, {
+    {
+      code = 0x0F,
+      data = "AB"
+    }
+  })
+  assert(new_dns, "append_ede_to_dns retourne nil")
+  local opt_start = 26
+  assert_eq(new_dns:byte(opt_start + 9), 0, "RDLEN hi = 0")
+  assert_eq(new_dns:byte(opt_start + 10), 10, "RDLEN lo = 10")
+  assert_eq(new_dns:byte(opt_start + 11), 0x00, "RDATA existant: code hi")
+  assert_eq(new_dns:byte(opt_start + 12), 0x08, "RDATA existant: code lo = 8")
+  assert_eq(new_dns:byte(opt_start + 13), 0x00, "RDATA existant: len hi")
+  assert_eq(new_dns:byte(opt_start + 14), 0x00, "RDATA existant: len lo")
+  assert_eq(new_dns:byte(opt_start + 15), 0x00, "EDE opt-code hi")
+  assert_eq(new_dns:byte(opt_start + 16), 0x0F, "EDE opt-code lo = 15")
+  assert_eq(new_dns:byte(opt_start + 17), 0x00, "EDE opt-len hi")
+  return assert_eq(new_dns:byte(opt_start + 18), 0x02, "EDE opt-len lo = 2")
+end)
+test("append_ede_to_dns — sans OPT RR (arcount=0) → nil", function()
+  local dns = make_dns("\x03foo\x03com\x00", 1, false, 0x5678)
+  local result = append_ede_to_dns(dns, {
+    {
+      code = 0x0F,
+      data = "x"
+    }
+  })
+  return assert_eq(result, nil, "sans OPT RR → nil")
+end)
+test("append_ede_to_dns — payload tronqué (< 12 octets) → nil", function()
+  local result = append_ede_to_dns("\x12\x34\x81\x80", {
+    {
+      code = 0x0F,
+      data = "x"
+    }
+  })
+  return assert_eq(result, nil, "payload < 12B → nil")
+end)
+test("append_ede_to_dns — toutes options code=0 → payload inchangé", function()
+  local qname = "\x03baz\x03com\x00"
+  local dns = build_dns_with_opt(0x9999, qname, "")
+  local result = append_ede_to_dns(dns, {
+    {
+      code = 0,
+      data = "ignored"
+    }
+  })
+  return assert_eq(result, dns, "build_opt_rdata vide → retourne payload inchangé")
+end)
+io.write("\n── parse/ndpi helpers ──\n")
+package.loaded["ffi_ndpi"] = {
+  ffi = ffi,
+  ndpi_lib = { },
+  major = 4
+}
+package.loaded["parse.ndpi_v4"] = {
+  init = function()
+    return nil
+  end,
+  detect = function()
+    return 0, 0
+  end,
+  cleanup = function()
+    return nil
+  end
+}
+package.loaded["parse.ndpi_v5"] = {
+  init = function()
+    return nil
+  end,
+  detect = function()
+    return 0, 0
+  end,
+  cleanup = function()
+    return nil
+  end
+}
+local m_ndpi2 = dofile("lua/parse/ndpi.lua")
+local extract_dns_payload = m_ndpi2.extract_dns_payload
+local patch_ttl_in_dns = m_ndpi2.patch_ttl_in_dns
+local replace_dns_payload = m_ndpi2.replace_dns_payload
+test("extract_dns_payload — UDP : retourne la sous-chaîne DNS", function()
+  local dns = make_dns("\x06github\x03com\x00", 1, false, 0xABCD)
+  local raw = make_ipv4_udp_dns("192.168.1.2", "8.8.8.8", 54321, 53, dns)
+  local pkt = {
+    ip = {
+      version = 4,
+      ihl = 20
+    },
+    l4 = {
+      proto = "udp",
+      off = 28,
+      payload_len = #dns
+    }
+  }
+  return assert_eq(extract_dns_payload(raw, pkt), dns, "payload DNS extrait correctement")
+end)
+test("extract_dns_payload — TCP : retourne pkt.tcp_dns_raw", function()
+  local dns = make_dns("\x03foo\x03com\x00", 1, false, 0x4321)
+  local pkt = {
+    l4 = {
+      proto = "tcp"
+    },
+    tcp_dns_raw = dns
+  }
+  return assert_eq(extract_dns_payload("ignored", pkt), dns, "retourne pkt.tcp_dns_raw")
+end)
+test("patch_ttl_in_dns — réécrit TTL à l'offset 0-based correct, class intact", function()
+  local qname_enc = "\x06github\x03com\x00"
+  local hdr = string.char(0x56, 0x78, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+  local question = qname_enc .. string.char(0, 1, 0, 1)
+  local rr = "\xC0\x0C" .. string.char(0, 1, 0, 1) .. string.char(0, 0, 1, 0x2C) .. string.char(0, 4) .. string.char(1, 2, 3, 4)
+  local dns_str = hdr .. question .. rr
+  local ttl_off = 34
+  local result = patch_ttl_in_dns(dns_str, {
+    {
+      ttl_offset = ttl_off
+    }
+  }, 60)
+  assert(result, "patch_ttl_in_dns ne retourne pas nil")
+  assert_eq(#result, #dns_str, "longueur inchangée")
+  assert_eq(result:byte(33), 0x00, "CLASS hi non corrompu")
+  assert_eq(result:byte(34), 0x01, "CLASS lo = IN (1) non corrompu")
+  assert_eq(result:byte(35), 0x00, "TTL byte 0 = 0x00")
+  assert_eq(result:byte(36), 0x00, "TTL byte 1 = 0x00")
+  assert_eq(result:byte(37), 0x00, "TTL byte 2 = 0x00")
+  return assert_eq(result:byte(38), 60, "TTL byte 3 = 60")
+end)
+test("patch_ttl_in_dns — answers vide → payload inchangé", function()
+  local dns_str = make_dns("\x03foo\x03com\x00", 1, false, 0x1111)
+  local result = patch_ttl_in_dns(dns_str, { }, 60)
+  assert(result, "retourne non-nil même sans answers")
+  return assert_eq(result, dns_str, "payload inchangé si answers vide")
+end)
+test("replace_dns_payload — IPv4 UDP : longueurs IP et UDP mises à jour", function()
+  local dns_orig = make_dns("\x06github\x03com\x00", 1, false, 0xABCD)
+  local raw = make_ipv4_udp_dns("8.8.8.8", "192.168.1.42", 53, 54321, dns_orig)
+  local pkt = {
+    ip = {
+      version = 4,
+      ihl = 20
+    },
+    l4 = {
+      proto = "udp",
+      off = 28,
+      payload_len = #dns_orig
+    }
+  }
+  local new_dns = dns_orig .. "\x00\x00\x00\x00"
+  local result = replace_dns_payload(raw, pkt, new_dns)
+  assert(result, "replace_dns_payload nil")
+  local expected_total = 20 + 8 + #new_dns
+  assert_eq(#result, expected_total, "longueur totale du paquet")
+  local ip_len = bit.bor(bit.lshift(result:byte(3), 8), result:byte(4))
+  assert_eq(ip_len, expected_total, "IP total_len mis à jour")
+  local udp_len_field = bit.bor(bit.lshift(result:byte(25), 8), result:byte(26))
+  assert_eq(udp_len_field, 8 + #new_dns, "UDP length mis à jour")
+  return assert_eq(result:sub(29, 28 + #new_dns), new_dns, "payload DNS correct")
+end)
+test("replace_dns_payload — IPv4 TCP : longueur IP et DNS prefix mis à jour", function()
+  local dns_orig = make_dns("\x03foo\x03com\x00", 1, false, 0x2222)
+  local raw = make_ipv4_tcp_dns("8.8.8.8", "192.168.1.42", 53, 54321, dns_orig)
+  local pkt = {
+    ip = {
+      version = 4,
+      ihl = 20
+    },
+    l4 = {
+      proto = "tcp"
+    },
+    tcp_init_seq = 0
+  }
+  local new_dns = dns_orig .. "\xAB\xCD"
+  local result = replace_dns_payload(raw, pkt, new_dns)
+  assert(result, "replace_dns_payload TCP nil")
+  local expected_total = 20 + 20 + 2 + #new_dns
+  assert_eq(#result, expected_total, "longueur totale TCP")
+  local ip_len = bit.bor(bit.lshift(result:byte(3), 8), result:byte(4))
+  assert_eq(ip_len, expected_total, "IP total_len mis à jour")
+  local dns_prefix = bit.bor(bit.lshift(result:byte(41), 8), result:byte(42))
+  assert_eq(dns_prefix, #new_dns, "DNS length prefix (TCP) = longueur DNS")
+  return assert_eq(result:sub(43, 42 + #new_dns), new_dns, "payload DNS TCP correct")
+end)
+io.write("\n── ipc refused ──\n")
+test("encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", function()
+  local ip_raw = "\xC0\xA8\x01\x2A"
+  local msg = m_ipc.encode_msg(0x1234, ip_raw, 54321, nil, true)
+  assert_eq(#msg, 27, "taille = 27")
+  local decoded = m_ipc.decode_msg(msg)
+  assert(decoded, "decode_msg nil")
+  assert_eq(decoded.msg_type, m_ipc.MSG_IPV4_REFUSED, "msg_type = MSG_IPV4_REFUSED")
+  assert_eq(decoded.refused, true, "refused = true")
+  return assert_eq(decoded.ipv4, true, "ipv4 = true")
+end)
+test("decode_msg MSG_IPV6_REFUSED (0x72) → refused=true, ipv4=false", function()
+  local ip6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  local msg = m_ipc.encode_msg(0xABCD, ip6_raw, 5353, nil, true)
+  local decoded = m_ipc.decode_msg(msg)
+  assert(decoded, "decode_msg nil")
+  assert_eq(decoded.refused, true, "refused = true")
+  assert_eq(decoded.ipv4, false, "ipv4 = false")
+  return assert_eq(decoded.msg_type, 0x72, "msg_type = 0x72")
+end)
+test("write_refused_msg + drain_pipe + get_pending_entry → entry.refused = true", function()
+  package.loaded["ipc"] = nil
+  local m_rip = dofile("lua/ipc.lua")
+  local pfd = ffi.new("int[2]")
+  assert((ffi.C.pipe2(pfd, 0) == 0), "pipe2")
+  local rfd5, wfd5 = pfd[0], pfd[1]
+  ffi.C.fcntl(rfd5, 4, 2048)
+  local ip5 = "\x05\x05\x05\x05"
+  local ok = m_rip.write_refused_msg(wfd5, 0x9999, ip5, 5555)
+  assert(ok, "write_refused_msg failed")
+  ffi.C.close(wfd5)
+  m_rip.drain_pipe(rfd5, function()
+    return 0
+  end)
+  ffi.C.close(rfd5)
+  local entry = m_rip.get_pending_entry(0x9999, "5.5.5.5", 5555, function()
+    return 0
+  end)
+  assert(entry, "get_pending_entry retourne nil")
+  assert_eq(entry.refused, true, "entry.refused = true")
+  return assert((entry.expire > 0), "entry.expire > 0")
+end)
 io.write(string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed))
 return os.exit(failed == 0 and 0 or 1)
