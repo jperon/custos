@@ -22,6 +22,9 @@
 
 bit = require "bit"
 
+AF_INET6 = 10
+ipv6_ntop_buf = ffi.new "char[46]"
+
 -- ── Constantes de type ───────────────────────────────────────────
 MSG_IPV4         = 0x41   -- 'A' : transaction IPv4 autorisée
 MSG_IPV6         = 0x36   -- '6' : transaction IPv6 autorisée
@@ -109,10 +112,13 @@ decode_msg = (raw) ->
   ip_str = if ipv4
     "#{raw\byte 4}.#{raw\byte 5}.#{raw\byte 6}.#{raw\byte 7}"
   else
-    -- IPv6 : 16 octets complets dans raw\byte(4..19)
-    groups = for g = 0, 7
-      string.format "%x", bit.bor(bit.lshift(raw\byte(4 + g*2), 8), raw\byte(5 + g*2))
-    table.concat groups, ":"
+    -- IPv6 : utiliser inet_ntop pour obtenir la forme canonique compressée (fd00:28::a)
+    -- identique à fmt_ipv6 dans parse/ndpi pour garantir la cohérence des clés pending.
+    ip_bytes = ffi.new "uint8_t[16]"
+    for i = 0, 15
+      ip_bytes[i] = raw\byte 4 + i
+    libc.inet_ntop AF_INET6, ip_bytes, ipv6_ntop_buf, 46
+    ffi.string ipv6_ntop_buf
 
   -- MAC : octets 21-26 (indices Lua 22-27)
   mac_str = string.format "%02x:%02x:%02x:%02x:%02x:%02x",

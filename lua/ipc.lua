@@ -9,6 +9,8 @@ do
   IPC_MSG_SIZE, IPC_PENDING_TTL = _obj_0.IPC_MSG_SIZE, _obj_0.IPC_PENDING_TTL
 end
 local bit = require("bit")
+local AF_INET6 = 10
+local ipv6_ntop_buf = ffi.new("char[46]")
 local MSG_IPV4 = 0x41
 local MSG_IPV6 = 0x36
 local MSG_IPV4_REFUSED = 0x52
@@ -61,17 +63,12 @@ decode_msg = function(raw)
   if ipv4 then
     ip_str = tostring(raw:byte(4)) .. "." .. tostring(raw:byte(5)) .. "." .. tostring(raw:byte(6)) .. "." .. tostring(raw:byte(7))
   else
-    local groups
-    do
-      local _accum_0 = { }
-      local _len_0 = 1
-      for g = 0, 7 do
-        _accum_0[_len_0] = string.format("%x", bit.bor(bit.lshift(raw:byte(4 + g * 2), 8), raw:byte(5 + g * 2)))
-        _len_0 = _len_0 + 1
-      end
-      groups = _accum_0
+    local ip_bytes = ffi.new("uint8_t[16]")
+    for i = 0, 15 do
+      ip_bytes[i] = raw:byte(4 + i)
     end
-    ip_str = table.concat(groups, ":")
+    libc.inet_ntop(AF_INET6, ip_bytes, ipv6_ntop_buf, 46)
+    ip_str = ffi.string(ipv6_ntop_buf)
   end
   local mac_str = string.format("%02x:%02x:%02x:%02x:%02x:%02x", raw:byte(22), raw:byte(23), raw:byte(24), raw:byte(25), raw:byte(26), raw:byte(27))
   return {

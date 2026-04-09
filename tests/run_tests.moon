@@ -877,7 +877,7 @@ test "encode/decode IPv6 round-trip", ->
   assert decoded, "decode_msg nil"
   assert_eq decoded.txid,     txid,                    "txid"
   assert_eq decoded.src_port, port,                    "port"
-  assert_eq decoded.ip_str,   "2001:db8:0:0:0:0:0:1",  "ip_str"
+  assert_eq decoded.ip_str,   "2001:db8::1",  "ip_str"
   assert_eq decoded.msg_type, 0x36,                    "type IPv6"
   assert_eq decoded.mac_str,  "00:11:22:33:44:55",     "mac_str"
 
