@@ -721,6 +721,67 @@ patch_and_checksum = function(raw, pkt, answers, new_ttl)
   end
   return ffi.string(buf, pkt_len)
 end
+local extract_dns_payload
+extract_dns_payload = function(raw, pkt)
+  if pkt.l4.proto == "tcp" then
+    return pkt.tcp_dns_raw
+  end
+  return raw:sub(pkt.l4.off + 1, pkt.l4.off + pkt.l4.payload_len)
+end
+local patch_ttl_in_dns
+patch_ttl_in_dns = function(dns_str, answers, new_ttl)
+  local dns_len = #dns_str
+  local buf = ffi.new("uint8_t[?]", dns_len)
+  ffi.copy(buf, dns_str, dns_len)
+  for _index_0 = 1, #answers do
+    local ans = answers[_index_0]
+    w32(buf, ans.ttl_offset - 1, new_ttl)
+  end
+  return ffi.string(buf, dns_len)
+end
+local replace_dns_payload
+replace_dns_payload = function(raw, pkt, new_dns)
+  local p = ffi.cast("const uint8_t*", raw)
+  local ip_ihl = pkt.ip.ihl
+  local dns_len = #new_dns
+  if pkt.l4.proto == "udp" then
+    local udp_len = 8 + dns_len
+    local new_pkt_len = ip_ihl + udp_len
+    local new_buf = ffi.new("uint8_t[?]", new_pkt_len)
+    ffi.copy(new_buf, p, ip_ihl + 8)
+    w16(new_buf, ip_ihl + 4, udp_len)
+    ffi.copy(new_buf + ip_ihl + 8, new_dns, dns_len)
+    if pkt.ip.version == 4 then
+      w16(new_buf, 2, new_pkt_len)
+      fix_udp4_cksum(new_buf, new_pkt_len, ip_ihl)
+      fix_ip4_cksum(new_buf, ip_ihl)
+    elseif pkt.ip.version == 6 then
+      w16(new_buf, 4, (ip_ihl - 40) + udp_len)
+      fix_udp6_cksum(new_buf, new_pkt_len, ip_ihl)
+    end
+    return ffi.string(new_buf, new_pkt_len)
+  elseif pkt.l4.proto == "tcp" then
+    local tcp_hdr_len = bit.rshift(p[ip_ihl + 12], 4) * 4
+    local hdr_len = ip_ihl + tcp_hdr_len
+    local new_pkt_len = hdr_len + 2 + dns_len
+    local new_buf = ffi.new("uint8_t[?]", new_pkt_len)
+    ffi.copy(new_buf, p, hdr_len)
+    w16(new_buf, hdr_len, dns_len)
+    ffi.copy(new_buf + hdr_len + 2, new_dns, dns_len)
+    w32(new_buf, ip_ihl + 4, pkt.tcp_init_seq)
+    new_buf[ip_ihl + 13] = 0x18
+    if pkt.ip.version == 4 then
+      w16(new_buf, 2, new_pkt_len)
+      fix_tcp4_cksum(new_buf, new_pkt_len, ip_ihl)
+      fix_ip4_cksum(new_buf, ip_ihl)
+    elseif pkt.ip.version == 6 then
+      w16(new_buf, 4, (ip_ihl - 40) + tcp_hdr_len + 2 + dns_len)
+      fix_tcp6_cksum(new_buf, new_pkt_len, ip_ihl)
+    end
+    return ffi.string(new_buf, new_pkt_len)
+  end
+  return nil
+end
 local cleanup
 cleanup = function()
   return backend.cleanup()
@@ -740,6 +801,9 @@ return {
   patch_and_checksum = patch_and_checksum,
   cleanup = cleanup,
   warmup = warmup,
+  extract_dns_payload = extract_dns_payload,
+  patch_ttl_in_dns = patch_ttl_in_dns,
+  replace_dns_payload = replace_dns_payload,
   get_flow = get_flow,
   purge_flows = purge_flows,
   QTYPE = QTYPE,

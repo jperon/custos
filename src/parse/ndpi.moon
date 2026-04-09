@@ -706,6 +706,84 @@ patch_and_checksum = (raw, pkt, answers, new_ttl) ->
 
   ffi.string buf, pkt_len
 
+--- Extrait le payload DNS brut d'un paquet analysé, sous forme de Lua string.
+-- Pour TCP, utilise pkt.tcp_dns_raw (déjà réassemblé par le parseur).
+-- Pour UDP, découpe raw à l'offset L4 + longueur payload.
+-- @tparam string raw Paquet IP brut
+-- @tparam table  pkt Résultat de parse_packet
+-- @treturn string|nil Payload DNS (Lua string), nil si manquant
+extract_dns_payload = (raw, pkt) ->
+  if pkt.l4.proto == "tcp"
+    return pkt.tcp_dns_raw
+  raw\sub pkt.l4.off + 1, pkt.l4.off + pkt.l4.payload_len
+
+--- Réécrit les TTL des réponses DNS dans une copie de la string DNS.
+-- Contrairement à patch_ttl (FFI in-place), opère sur une Lua string et retourne
+-- une nouvelle string. ttl_offset est 1-based depuis le début du payload DNS.
+-- @tparam string  dns_str  Payload DNS (Lua string)
+-- @tparam table   answers  Résultat de parse_answers (champs ttl_offset 1-based)
+-- @tparam number  dns_off  Offset 0-based du début DNS dans le paquet original
+--                          (toujours 0 ici car dns_str commence au début du DNS)
+-- @tparam number  new_ttl  Valeur TTL à écrire (uint32)
+-- @treturn string Nouveau payload DNS avec TTLs réécrits
+patch_ttl_in_dns = (dns_str, answers, new_ttl) ->
+  dns_len = #dns_str
+  buf = ffi.new "uint8_t[?]", dns_len
+  ffi.copy buf, dns_str, dns_len
+  for ans in *answers
+    -- ttl_offset est 1-based → offset 0-based = ttl_offset - 1
+    w32 buf, ans.ttl_offset - 1, new_ttl
+  ffi.string buf, dns_len
+
+--- Reconstruit un paquet IP complet avec un nouveau payload DNS (taille différente).
+-- Réutilise les en-têtes IP/L4 du paquet original. Met à jour les champs de longueur
+-- et recalcule les checksums. Pour TCP, restaure tcp_init_seq et force PSH|ACK.
+-- @tparam string raw     Paquet IP brut original
+-- @tparam table  pkt     Résultat de parse_packet
+-- @tparam string new_dns Nouveau payload DNS (Lua string, sans préfixe TCP)
+-- @treturn string|nil    Nouveau paquet IP complet, nil si proto inconnu
+replace_dns_payload = (raw, pkt, new_dns) ->
+  p       = ffi.cast "const uint8_t*", raw
+  ip_ihl  = pkt.ip.ihl
+  dns_len = #new_dns
+
+  if pkt.l4.proto == "udp"
+    udp_len     = 8 + dns_len
+    new_pkt_len = ip_ihl + udp_len
+    new_buf = ffi.new "uint8_t[?]", new_pkt_len
+    ffi.copy new_buf, p, ip_ihl + 8     -- IP + UDP headers
+    w16 new_buf, ip_ihl + 4, udp_len   -- UDP length
+    ffi.copy new_buf + ip_ihl + 8, new_dns, dns_len
+    if pkt.ip.version == 4
+      w16 new_buf, 2, new_pkt_len
+      fix_udp4_cksum new_buf, new_pkt_len, ip_ihl
+      fix_ip4_cksum  new_buf, ip_ihl
+    elseif pkt.ip.version == 6
+      w16 new_buf, 4, (ip_ihl - 40) + udp_len   -- ext headers + UDP
+      fix_udp6_cksum new_buf, new_pkt_len, ip_ihl
+    return ffi.string new_buf, new_pkt_len
+
+  elseif pkt.l4.proto == "tcp"
+    tcp_hdr_len = bit.rshift(p[ip_ihl + 12], 4) * 4
+    hdr_len     = ip_ihl + tcp_hdr_len
+    new_pkt_len = hdr_len + 2 + dns_len
+    new_buf = ffi.new "uint8_t[?]", new_pkt_len
+    ffi.copy new_buf, p, hdr_len
+    w16 new_buf, hdr_len, dns_len          -- 2-byte DNS length prefix
+    ffi.copy new_buf + hdr_len + 2, new_dns, dns_len
+    w32 new_buf, ip_ihl + 4, pkt.tcp_init_seq   -- restaure seq initial
+    new_buf[ip_ihl + 13] = 0x18                  -- PSH|ACK
+    if pkt.ip.version == 4
+      w16 new_buf, 2, new_pkt_len
+      fix_tcp4_cksum new_buf, new_pkt_len, ip_ihl
+      fix_ip4_cksum  new_buf, ip_ihl
+    elseif pkt.ip.version == 6
+      w16 new_buf, 4, (ip_ihl - 40) + tcp_hdr_len + 2 + dns_len
+      fix_tcp6_cksum new_buf, new_pkt_len, ip_ihl
+    return ffi.string new_buf, new_pkt_len
+
+  nil   -- protocole inconnu
+
 --- Release the nDPI detection module.
 cleanup = ->
   backend.cleanup!
@@ -724,4 +802,5 @@ warmup = ->
   nil
 
 { :parse_packet, :parse_answers, :patch_and_checksum, :cleanup, :warmup
+  :extract_dns_payload, :patch_ttl_in_dns, :replace_dns_payload
   :get_flow, :purge_flows, :QTYPE, :QTYPE_NAME, :RCODE }

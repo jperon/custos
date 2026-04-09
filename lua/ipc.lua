@@ -11,10 +11,16 @@ end
 local bit = require("bit")
 local MSG_IPV4 = 0x41
 local MSG_IPV6 = 0x36
+local MSG_IPV4_REFUSED = 0x52
+local MSG_IPV6_REFUSED = 0x72
 local encode_msg
-encode_msg = function(txid, ip_raw, src_port, mac_raw)
+encode_msg = function(txid, ip_raw, src_port, mac_raw, refused)
   local buf = ffi.new("uint8_t[27]")
-  buf[0] = #ip_raw == 4 and MSG_IPV4 or MSG_IPV6
+  if #ip_raw == 4 then
+    buf[0] = refused and MSG_IPV4_REFUSED or MSG_IPV4
+  else
+    buf[0] = refused and MSG_IPV6_REFUSED or MSG_IPV6
+  end
   buf[1] = bit.rshift(bit.band(txid, 0xFF00), 8)
   buf[2] = bit.band(txid, 0xFF)
   for i = 1, #ip_raw do
@@ -31,7 +37,13 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw)
 end
 local write_msg
 write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, false)
+  local n = libc.write(pipe_wfd, msg, IPC_MSG_SIZE)
+  return n == IPC_MSG_SIZE
+end
+local write_refused_msg
+write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, true)
   local n = libc.write(pipe_wfd, msg, IPC_MSG_SIZE)
   return n == IPC_MSG_SIZE
 end
@@ -43,8 +55,10 @@ decode_msg = function(raw)
   local msg_type = raw:byte(1)
   local txid = bit.bor(bit.lshift(raw:byte(2), 8), raw:byte(3))
   local src_port = bit.bor(bit.lshift(raw:byte(20), 8), raw:byte(21))
+  local ipv4 = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED)
+  local refused = (msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV6_REFUSED)
   local ip_str
-  if msg_type == MSG_IPV4 then
+  if ipv4 then
     ip_str = tostring(raw:byte(4)) .. "." .. tostring(raw:byte(5)) .. "." .. tostring(raw:byte(6)) .. "." .. tostring(raw:byte(7))
   else
     local groups
@@ -65,7 +79,9 @@ decode_msg = function(raw)
     ip_str = ip_str,
     src_port = src_port,
     msg_type = msg_type,
-    mac_str = mac_str
+    mac_str = mac_str,
+    ipv4 = ipv4,
+    refused = refused
   }
 end
 local pending = { }
@@ -87,7 +103,10 @@ drain_pipe = function(pipe_rfd, now_fn, on_msg)
       local msg = decode_msg(raw)
       if msg then
         local key = make_key(msg.txid, msg.ip_str, msg.src_port)
-        pending[key] = now_fn() + IPC_PENDING_TTL
+        pending[key] = {
+          expire = now_fn() + IPC_PENDING_TTL,
+          refused = msg.refused
+        }
         absorbed = absorbed + 1
         if on_msg then
           on_msg(msg)
@@ -100,15 +119,28 @@ end
 local is_pending
 is_pending = function(txid, ip_str, src_port, now_fn)
   local key = make_key(txid, ip_str, src_port)
-  local expire = pending[key]
-  if not (expire) then
+  local entry = pending[key]
+  if not (entry) then
     return false
   end
-  if now_fn() > expire then
+  if now_fn() > entry.expire then
     pending[key] = nil
     return false
   end
   return true
+end
+local get_pending_entry
+get_pending_entry = function(txid, ip_str, src_port, now_fn)
+  local key = make_key(txid, ip_str, src_port)
+  local entry = pending[key]
+  if not (entry) then
+    return nil
+  end
+  if now_fn() > entry.expire then
+    pending[key] = nil
+    return nil
+  end
+  return entry
 end
 local consume
 consume = function(txid, ip_str, src_port)
@@ -119,10 +151,14 @@ return {
   encode_msg = encode_msg,
   decode_msg = decode_msg,
   write_msg = write_msg,
+  write_refused_msg = write_refused_msg,
   drain_pipe = drain_pipe,
   is_pending = is_pending,
+  get_pending_entry = get_pending_entry,
   consume = consume,
   MSG_IPV4 = MSG_IPV4,
   MSG_IPV6 = MSG_IPV6,
+  MSG_IPV4_REFUSED = MSG_IPV4_REFUSED,
+  MSG_IPV6_REFUSED = MSG_IPV6_REFUSED,
   make_key = make_key
 }

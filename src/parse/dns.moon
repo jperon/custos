@@ -31,11 +31,32 @@ for k, v in pairs QTYPE
 -- RCODE (octet 4, 4 bits bas)
 RCODE = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3, REFUSED: 5 }
 
--- Code EDE « Filtered » (RFC 8914 §5.16)
+-- EDNS type OPT (RFC 6891)
+QTYPE_OPT = 41
+
+-- Code EDE « Filtered » (RFC 8914 §5.16) — réponses bloquées
 EDE_FILTERED = 15
+
+-- Code EDE « Other » (RFC 8914 §5.1) — réponses acceptées avec TTL modifié
+EDE_OTHER = 0
 
 -- Message additionnel EDE (RFC 8914 §4, champ extra-text UTF-8 après l'info-code)
 EDE_EXTRA_TEXT = "Ne intretis."
+
+-- Message EDE pour les réponses dont le TTL est modifié par custos
+EDE_TTL_TEXT = "Custos vigilat."
+
+-- OPTION-CODEs EDNS (RFC 6891 §6.1.2 / RFC 8914 §4)
+EDNS_OPT_EDE  = 0x000F   -- EDE option (RFC 8914, valeur assignée par IANA)
+
+-- Options draft-muks-dns-filtering-02 : codes TBD (IANA non encore alloué).
+-- Valeur 0 → ignoré par build_opt_rdata (skip automatique).
+EDNS_OPT_LANG = 0   -- EDE-EXTRA-TEXT-LANGUAGE (draft-muks TBD)
+EDNS_OPT_FORG = 0   -- FILTERING-ORGANIZATION  (draft-muks TBD)
+
+-- Valeurs des options filtering (draft-muks-dns-filtering-02)
+FILTER_LANG = "la"       -- Latin (RFC 5646)
+FILTER_ORG  = "custos"
 
 -- ── Header DNS (12 octets) ───────────────────────────────────────
 --   0-1  : txid
@@ -231,6 +252,133 @@ patch_ttl = (buf_ptr, answers, dns_offset, new_ttl) ->
     buf_ptr[abs_off+2] = bit.rshift(bit.band(new_ttl, 0x0000FF00),  8)
     buf_ptr[abs_off+3] = bit.band(new_ttl, 0x000000FF)
 
+--- Construit le RDATA d'un OPT RR à partir d'un tableau d'options EDNS.
+-- Les options dont le code vaut 0 (IANA TBD) sont silencieusement ignorées.
+-- @tparam  table options Tableau de tables {code: number, data: string}
+-- @treturn string        RDATA binaire
+build_opt_rdata = (options) ->
+  parts = {}
+  for opt in *options
+    continue if opt.code == 0   -- option TBD (non encore allouée par IANA)
+    data = opt.data
+    dlen = #data
+    parts[#parts + 1] = string.char(
+      bit.rshift(bit.band(opt.code, 0xFF00), 8),
+      bit.band(opt.code, 0xFF),
+      bit.rshift(bit.band(dlen, 0xFF00), 8),
+      bit.band(dlen, 0xFF)) .. data
+  table.concat parts
+
+--- Parcourt le nom DNS à la position pos (1-based) et retourne le nombre d'octets consommés.
+-- Gère les labels normaux (longueur + contenu) et les pointeurs de compression (2 octets).
+-- @tparam string buf DNS payload (Lua string, 1-based)
+-- @tparam number pos Position 1-based du début du nom
+-- @treturn number    Octets consommés (0 si erreur)
+skip_name_bytes = (buf, pos) ->
+  len      = #buf
+  consumed = 0
+  safety   = 0
+  while pos <= len
+    safety += 1
+    return 0 if safety > 128   -- garde contre les boucles de compression
+    b = buf\byte pos
+    if b == 0
+      consumed += 1
+      break
+    elseif bit.band(b, 0xC0) == 0xC0
+      return 0 if pos + 1 > len  -- pointeur tronqué
+      consumed += 2
+      break
+    elseif bit.band(b, 0xC0) != 0x00  -- 0x40 ou 0x80 : types réservés (RFC 1035)
+      return 0
+    else
+      return 0 if pos + b > len  -- label déborde du buffer
+      consumed += b + 1
+      pos      += b + 1
+  consumed
+
+--- Calcule la taille totale d'un RR DNS à la position pos (1-based).
+-- Couvre les sections Answer, Authority et Additional.
+-- @tparam string buf DNS payload (Lua string, 1-based)
+-- @tparam number pos Position 1-based du début du RR
+-- @treturn number|nil Octets totaux du RR (nil si paquet trop court)
+skip_rr = (buf, pos) ->
+  name_bytes = skip_name_bytes buf, pos
+  name_end   = pos + name_bytes
+  return nil if name_end + 9 > #buf
+  rdlength = bit.bor bit.lshift(buf\byte(name_end + 8), 8), buf\byte(name_end + 9)
+  name_bytes + 10 + rdlength
+
+--- Injecte une ou plusieurs options EDNS dans la réponse DNS (RFC 6891 §7).
+-- Cherche l'OPT RR existant dans la section Additional et y ajoute les options.
+-- Ne crée pas d'OPT RR si la réponse n'en a pas (client non-EDNS, RFC 6891).
+-- Retourne un nouveau payload DNS Lua-string (pas de mutation in-place).
+-- @tparam string dns_payload Payload DNS complet (12+ octets)
+-- @tparam table  options     Tableau de tables {code, data} passé à build_opt_rdata
+-- @treturn string|nil Nouveau payload DNS, nil si le paquet est invalide ou sans OPT
+append_ede_to_dns = (dns_payload, options) ->
+  len = #dns_payload
+  return nil if len < 12
+
+  qdcount = read_u16 dns_payload, 5
+  ancount = read_u16 dns_payload, 7
+  nscount = read_u16 dns_payload, 9
+  arcount = read_u16 dns_payload, 11
+
+  new_rdata = build_opt_rdata options
+  return dns_payload if #new_rdata == 0
+
+  -- Marcher les questions
+  pos = 13  -- 1-based, juste après le header de 12 octets
+  for _ = 1, qdcount
+    nb = skip_name_bytes dns_payload, pos
+    return nil if nb == 0
+    pos += nb + 4   -- name + QTYPE(2) + QCLASS(2)
+    return nil if pos > len + 1  -- dépasse le buffer
+
+  -- Sauter les réponses (Answer + Authority)
+  for _ = 1, ancount + nscount
+    nb = skip_rr dns_payload, pos
+    return nil unless nb
+    pos += nb
+
+  -- Chercher l'OPT RR dans la section Additional
+  opt_start = nil
+  tmp_pos   = pos
+  for _ = 1, arcount
+    nb = skip_rr dns_payload, tmp_pos
+    return nil unless nb
+    name_bytes = skip_name_bytes dns_payload, tmp_pos
+    return nil if name_bytes == 0 and (dns_payload\byte(tmp_pos) != 0)
+    type_pos   = tmp_pos + name_bytes
+    return nil if type_pos + 1 > len
+    rtype      = read_u16 dns_payload, type_pos
+    if rtype == QTYPE_OPT
+      opt_start = tmp_pos
+      break
+    tmp_pos += nb
+
+  -- Pas d'OPT RR : RFC 6891 interdit d'en ajouter un si le client n'en avait pas.
+  -- Retourner nil ; l'appelant garde le payload DNS inchangé.
+  return nil unless opt_start
+
+  -- OPT RR trouvé : ajouter les options à son RDATA existant
+  name_bytes    = skip_name_bytes dns_payload, opt_start
+  rdlen_pos     = opt_start + name_bytes + 8  -- après NAME(nb) + TYPE(2) + CLASS(2) + TTL(4)
+  return nil if rdlen_pos + 1 > len
+  old_rdlen     = read_u16 dns_payload, rdlen_pos
+  rdata_start   = rdlen_pos + 2
+  rdata_end     = rdata_start + old_rdlen - 1
+  return nil if rdata_end > len  -- RDATA déborde du buffer
+  new_rdlen     = old_rdlen + #new_rdata
+  rdlen_hi      = bit.rshift bit.band(new_rdlen, 0xFF00), 8
+  rdlen_lo      = bit.band new_rdlen, 0xFF
+  dns_payload\sub(1, rdlen_pos - 1) ..
+    string.char(rdlen_hi, rdlen_lo) ..
+    dns_payload\sub(rdata_start, rdata_end) ..
+    new_rdata ..
+    dns_payload\sub(rdata_end + 1)
+
 --- Construit une réponse DNS REFUSED (RCODE 5) avec extension EDNS EDE=15 (Filtered).
 -- Copie la section question de la requête originale.
 -- @tparam table  dns       Résultat de parse_dns sur la question originale
@@ -252,37 +400,34 @@ build_refused = (dns, orig_buf) ->
   hdr = string.char txid_hi, txid_lo, 0x81, 0x05, qd_hi, qd_lo, 0, 0, 0, 0, 0, 1
 
   -- ── Section question : copie verbatim de l'original ─────────
-  -- parse_questions retourne (questions, next_offset) ; next_offset est
-  -- la position 1-based du premier octet APRÈS la section questions.
   _, ans_offset = parse_questions orig_buf, qdcount
   qs_raw = if ans_offset and ans_offset > 13
     orig_buf\sub 13, ans_offset - 1
   else
     ""
 
-  -- ── EDNS OPT RR (RFC 6891) avec option EDE=15 (RFC 8914) ─────
-  -- NAME=0x00 (root), TYPE=0x0029 OPT, CLASS=0x0500 (1280 octets),
-  -- TTL=0x00000000,
-  -- RDATA : OPTION-CODE=0x000F EDE, OPTION-LEN=2+N, INFO-CODE=0x000F Filtered,
-  --         EXTRA-TEXT = EDE_EXTRA_TEXT (N octets UTF-8, RFC 8914 §4)
-  -- RDLENGTH = 6 + N
-  ede_n   = #EDE_EXTRA_TEXT
-  rdlen   = 6 + ede_n
-  opt_len = 2 + ede_n
-  -- En-tête OPT RR : NAME(1) + TYPE(2) + CLASS(2) + TTL(4) + RDLENGTH(2)
+  -- ── RDATA OPT : EDE Filtered + options draft-muks (TBD ignorées) ────
+  ede_data = string.char(0x00, EDE_FILTERED) .. EDE_EXTRA_TEXT
+  rdata = build_opt_rdata {
+    { code: EDNS_OPT_EDE,  data: ede_data }
+    { code: EDNS_OPT_LANG, data: FILTER_LANG }   -- TBD → ignoré
+    { code: EDNS_OPT_FORG, data: FILTER_ORG  }   -- TBD → ignoré
+  }
+  rdlen = #rdata
+
+  -- ── EDNS OPT RR (RFC 6891) ───────────────────────────────────
+  -- NAME=0x00 (root), TYPE=0x0029, CLASS=0x0500 (1280 oct.), TTL=0
   opt_hdr = string.char(0x00, 0x00, 0x29, 0x05, 0x00,
                         0x00, 0x00, 0x00, 0x00,
                         bit.rshift(bit.band(rdlen, 0xFF00), 8),
                         bit.band(rdlen, 0xFF))
-  -- RDATA EDE : OPTION-CODE(2) + OPTION-LEN(2) + INFO-CODE(2)
-  opt_ede = string.char(0x00, 0x0F,
-                        bit.rshift(bit.band(opt_len, 0xFF00), 8),
-                        bit.band(opt_len, 0xFF),
-                        0x00, 0x0F)
-  opt_rr = opt_hdr .. opt_ede .. EDE_EXTRA_TEXT
 
-  hdr .. qs_raw .. opt_rr
+  hdr .. qs_raw .. opt_hdr .. rdata
 
 { :parse_dns, :parse_header, :parse_questions, :parse_answers
   :decode_name, :patch_ttl, :build_refused
-  :QTYPE, :QTYPE_NAME, :RCODE, :EDE_FILTERED, :EDE_EXTRA_TEXT }
+  :build_opt_rdata, :skip_name_bytes, :skip_rr, :append_ede_to_dns
+  :QTYPE, :QTYPE_NAME, :QTYPE_OPT, :RCODE
+  :EDE_FILTERED, :EDE_EXTRA_TEXT, :EDE_OTHER, :EDE_TTL_TEXT
+  :EDNS_OPT_EDE, :EDNS_OPT_LANG, :EDNS_OPT_FORG
+  :FILTER_LANG, :FILTER_ORG }

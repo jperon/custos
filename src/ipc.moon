@@ -9,6 +9,8 @@
 --   Octet 0      : version/type
 --                    0x41 ('A') = transaction IPv4 acceptée
 --                    0x36 ('6') = transaction IPv6 acceptée
+--                    0x52 ('R') = transaction IPv4 refusée (Q1 forge REFUSED+EDE)
+--                    0x72 ('r') = transaction IPv6 refusée
 --   Octets 1-2   : txid DNS (big-endian uint16)
 --   Octets 3-18  : src_ip — 16 octets (IPv4 4 octets + 12 octets 0x00 ; IPv6 16 octets complets)
 --   Octets 19-20 : src_port (big-endian uint16)
@@ -21,21 +23,27 @@
 bit = require "bit"
 
 -- ── Constantes de type ───────────────────────────────────────────
-MSG_IPV4 = 0x41   -- 'A'
-MSG_IPV6 = 0x36   -- '6'
+MSG_IPV4         = 0x41   -- 'A' : transaction IPv4 autorisée
+MSG_IPV6         = 0x36   -- '6' : transaction IPv6 autorisée
+MSG_IPV4_REFUSED = 0x52   -- 'R' : transaction IPv4 refusée (Q1 doit transformer la réponse)
+MSG_IPV6_REFUSED = 0x72   -- 'r' : transaction IPv6 refusée
 
 -- ── Encodage (côté Q0) ───────────────────────────────────────────
---- Encode une transaction acceptée en binaire IPC_MSG_SIZE octets.
+--- Encode une transaction en binaire IPC_MSG_SIZE octets.
 -- @tparam number      txid      Identifiant de transaction DNS (uint16)
 -- @tparam string      ip_raw    4 octets (IPv4) ou 16 octets (IPv6) bruts
 -- @tparam number      src_port  Port source de la question DNS (uint16)
 -- @tparam string|nil  mac_raw   6 octets MAC bruts (nil ou zeros si inconnu)
+-- @tparam boolean     refused   true si la transaction est refusée (Q1 spoofing REFUSED+EDE)
 -- @treturn string message binaire de IPC_MSG_SIZE octets
-encode_msg = (txid, ip_raw, src_port, mac_raw) ->
+encode_msg = (txid, ip_raw, src_port, mac_raw, refused) ->
   buf = ffi.new "uint8_t[27]"
 
-  -- Type
-  buf[0] = #ip_raw == 4 and MSG_IPV4 or MSG_IPV6
+  -- Type : encode à la fois le refus et la famille d'adresse (IPv4/IPv6)
+  buf[0] = if #ip_raw == 4
+    refused and MSG_IPV4_REFUSED or MSG_IPV4
+  else
+    refused and MSG_IPV6_REFUSED or MSG_IPV6
 
   -- txid big-endian
   buf[1] = bit.rshift bit.band(txid, 0xFF00), 8
@@ -59,7 +67,7 @@ encode_msg = (txid, ip_raw, src_port, mac_raw) ->
 
   ffi.string buf, IPC_MSG_SIZE
 
---- Écrit un message IPC dans le pipe (côté Q0).
+--- Écrit un message IPC pour une transaction autorisée dans le pipe (côté Q0).
 -- @tparam number     pipe_wfd fd d'écriture du pipe
 -- @tparam number     txid     Identifiant de transaction DNS
 -- @tparam string     ip_raw   4 ou 16 octets bruts de l'IP source
@@ -67,14 +75,27 @@ encode_msg = (txid, ip_raw, src_port, mac_raw) ->
 -- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
 -- @treturn boolean true si l'écriture est complète
 write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, false
+  n = libc.write pipe_wfd, msg, IPC_MSG_SIZE
+  n == IPC_MSG_SIZE
+
+--- Écrit un message IPC pour une transaction refusée dans le pipe (côté Q0).
+-- Q1 intercèptera la réponse du serveur et la transformera en REFUSED+EDE.
+-- @tparam number     pipe_wfd fd d'écriture du pipe
+-- @tparam number     txid     Identifiant de transaction DNS
+-- @tparam string     ip_raw   4 ou 16 octets bruts de l'IP source
+-- @tparam number     src_port Port source
+-- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
+-- @treturn boolean true si l'écriture est complète
+write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, true
   n = libc.write pipe_wfd, msg, IPC_MSG_SIZE
   n == IPC_MSG_SIZE
 
 -- ── Décodage (côté Q1) ───────────────────────────────────────────
 --- Décode un message binaire IPC en table.
 -- @tparam  string    raw Message de IPC_MSG_SIZE octets
--- @treturn table|nil Table {txid, ip_str, src_port, msg_type, mac_str} ou nil si invalide
+-- @treturn table|nil Table {txid, ip_str, src_port, msg_type, mac_str, ipv4, refused} ou nil si invalide
 decode_msg = (raw) ->
   return nil if #raw < IPC_MSG_SIZE
 
@@ -82,7 +103,10 @@ decode_msg = (raw) ->
   txid     = bit.bor bit.lshift(raw\byte(2), 8), raw\byte(3)
   src_port = bit.bor bit.lshift(raw\byte(20), 8), raw\byte(21)
 
-  ip_str = if msg_type == MSG_IPV4
+  ipv4    = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED)
+  refused = (msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV6_REFUSED)
+
+  ip_str = if ipv4
     "#{raw\byte 4}.#{raw\byte 5}.#{raw\byte 6}.#{raw\byte 7}"
   else
     -- IPv6 : 16 octets complets dans raw\byte(4..19)
@@ -95,10 +119,10 @@ decode_msg = (raw) ->
     raw\byte(22), raw\byte(23), raw\byte(24),
     raw\byte(25), raw\byte(26), raw\byte(27)
 
-  { :txid, :ip_str, :src_port, :msg_type, :mac_str }
+  { :txid, :ip_str, :src_port, :msg_type, :mac_str, :ipv4, :refused }
 
 -- ── Table des transactions en attente (côté Q1) ──────────────────
--- pending[key] = expire_time
+-- pending[key] = {expire: expire_time, refused: bool}
 -- key = txid_hex .. ":" .. ip_str .. ":" .. port_str
 -- Accès O(1), purge paresseuse au moment du lookup.
 
@@ -126,7 +150,7 @@ drain_pipe = (pipe_rfd, now_fn, on_msg) ->
       msg = decode_msg raw
       if msg
         key = make_key msg.txid, msg.ip_str, msg.src_port
-        pending[key] = now_fn! + IPC_PENDING_TTL
+        pending[key] = { expire: now_fn! + IPC_PENDING_TTL, refused: msg.refused }
         absorbed += 1
         on_msg msg if on_msg
 
@@ -141,14 +165,32 @@ drain_pipe = (pipe_rfd, now_fn, on_msg) ->
 -- @treturn boolean true si la transaction est présente et valide
 is_pending = (txid, ip_str, src_port, now_fn) ->
   key = make_key txid, ip_str, src_port
-  expire = pending[key]
-  return false unless expire
+  entry = pending[key]
+  return false unless entry
 
-  if now_fn! > expire
+  if now_fn! > entry.expire
     pending[key] = nil   -- purge paresseuse
     return false
 
   true
+
+--- Retourne l'entrée pending d'une transaction, ou nil si absente/expirée.
+-- Purge l'entrée si elle est expirée (purge paresseuse).
+-- @tparam number   txid     Identifiant de transaction DNS
+-- @tparam string   ip_str   Adresse IP source (texte)
+-- @tparam number   src_port Port source
+-- @tparam function now_fn   Fonction retournant l'epoch courant
+-- @treturn table|nil Table {expire, refused} ou nil si absent/expiré
+get_pending_entry = (txid, ip_str, src_port, now_fn) ->
+  key = make_key txid, ip_str, src_port
+  entry = pending[key]
+  return nil unless entry
+
+  if now_fn! > entry.expire
+    pending[key] = nil
+    return nil
+
+  entry
 
 --- Retire une transaction de la table pending (une réponse par question).
 -- @tparam number txid     Identifiant de transaction DNS
@@ -159,5 +201,6 @@ consume = (txid, ip_str, src_port) ->
   key = make_key txid, ip_str, src_port
   pending[key] = nil
 
-{ :encode_msg, :decode_msg, :write_msg, :drain_pipe, :is_pending, :consume
-  :MSG_IPV4, :MSG_IPV6, :make_key }
+{ :encode_msg, :decode_msg, :write_msg, :write_refused_msg, :drain_pipe
+  :is_pending, :get_pending_entry, :consume
+  :MSG_IPV4, :MSG_IPV6, :MSG_IPV4_REFUSED, :MSG_IPV6_REFUSED, :make_key }

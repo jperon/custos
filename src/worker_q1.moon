@@ -5,21 +5,24 @@
 --   1. Draine le pipe IPC (absorbe les tokens Q0 → table pending)
 --   2. Parse L3/L4/L7 via parse/ndpi (IPv4 et IPv6)
 --   3. Vérifie que la transaction (txid, dst_ip, dst_port) est dans pending
---      (dst_ip/dst_port de la réponse = src_ip/src_port de la question)
---   4. Si autorisée :
+--   4. Si refusée (entry.refused = true) :
+--        a. Remplace le payload DNS par une réponse REFUSED+EDE (Filtered)
+--        b. Renvoie le paquet transformé au client
+--   5. Si autorisée (entry.refused = false) :
 --        a. Parse les RR DNS de la réponse
 --        b. Patch TTL de tous les RR → FORCED_TTL secondes
---        c. Recalcule checksums UDP (pseudo-header IPv4 ou IPv6) et IP (IPv4)
---        d. Ajoute les IPs A/AAAA dans les sets nft (timeout 2m)
---        e. Envoie le paquet modifié avec NF_ACCEPT + payload
---   5. Si non autorisée (réponse forgée ou question bloquée) : NF_DROP
+--        c. Ajoute EDE code 0 "Custos vigilat." pour transparence
+--        d. Recalcule checksums UDP/TCP et IP
+--        e. Ajoute les IPs A/AAAA dans les sets nft (timeout 2m)
+--        f. Envoie le paquet modifié avec NF_ACCEPT + payload
 
 { :ffi, :libnfq } = require "ffi_defs"
 { :QUEUE_RESPONSES, :DOCKER_MODE, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN } = require "config"
 neigh = require "neigh"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
-{ :drain_pipe, :is_pending, :consume } = require "ipc"
+{ :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
+{ :build_refused, :append_ede_to_dns, :EDE_OTHER, :EDE_TTL_TEXT, :EDNS_OPT_EDE } = require "parse/dns"
 { :add_ip4, :add_ip6 }      = require "nft"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_info, :log_warn, :now } = require "log"
@@ -59,7 +62,7 @@ update_mac_clients = (msg, ts) ->
   entry = mac_clients[mac] or {}
   entry.last_seen = ts
 
-  if msg.msg_type == 0x41   -- MSG_IPV4
+  if msg.ipv4   -- MSG_IPV4 ou MSG_IPV4_REFUSED
     unless entry.ipv4 == msg.ip_str
       ip_to_mac[entry.ipv4] = nil if entry.ipv4
       entry.ipv4 = msg.ip_str
@@ -160,8 +163,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- ── Vérification IPC ─────────────────────────────────────────
   -- En mode Docker, on saute la vérification IPC car les requêtes
   -- et réponses sont vues depuis la perspective du conteneur (OUTPUT).
+  entry = nil
   unless DOCKER_MODE
-    unless is_pending txid, pkt.ip.dst_ip, client_port, now
+    entry = get_pending_entry txid, pkt.ip.dst_ip, client_port, now
+    unless entry
       log_block {
         action:    "response_no_matching_question"
         src_ip:    pkt.ip.src_ip
@@ -173,7 +178,30 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     -- Transaction consommée (one-shot : une réponse par question)
     consume txid, pkt.ip.dst_ip, client_port
 
-  -- ── Parse RR DNS + injection nft ─────────────────────────────
+  refused = entry and entry.refused or false
+
+  -- ── Branche REFUSED : réponse du serveur transformée en REFUSED+EDE ──
+  if refused
+    dns_raw    = ndpi.extract_dns_payload raw, pkt
+    refused_dns = build_refused { hdr: pkt.dns }, dns_raw
+    unless refused_dns
+      return NF_DROP
+    patched = ndpi.replace_dns_payload raw, pkt, refused_dns
+    unless patched
+      return NF_DROP
+    qnames = table.concat [q.qname for q in *pkt.questions], ","
+    log_block {
+      action:   "response_refused"
+      src_ip:   pkt.ip.src_ip
+      dst_ip:   pkt.ip.dst_ip
+      txid:     string.format "0x%04x", txid
+      qnames:   qnames
+    }
+    patched_ptr = ffi.cast "const unsigned char*", patched
+    libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr
+    return -1
+
+  -- ── Branche ACCEPT : patch TTL + EDE + injection nft ─────────
   answers  = ndpi.parse_answers raw, pkt
   -- IP du client LAN (destination de la réponse DNS = source de la question)
   client_ip = pkt.ip.dst_ip
@@ -208,11 +236,16 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         log_warn { action: "no_ipv6_for_client", client: client_ip,
                    record: ans.rdata_str, reason: "mac_not_known" }
 
-  -- ── Patch TTL + checksums (IPv4 et IPv6) ─────────────────────
-  -- patch_and_checksum réécrit les TTL DNS, recalcule le checksum UDP
-  -- (pseudo-header IPv4 ou IPv6 selon pkt.ip.version), et le checksum
-  -- IP header pour IPv4 (IPv6 n'en a pas).
-  patched = ndpi.patch_and_checksum raw, pkt, answers, FORCED_TTL
+  -- ── Patch TTL + EDE + checksums (IPv4 et IPv6) ───────────────
+  -- 1. Extraire le payload DNS brut
+  -- 2. Réécrire les TTL DNS
+  -- 3. Injecter EDE code 0 "Custos vigilat." pour la transparence envers le client
+  -- 4. Reconstruire le paquet IP complet avec le nouveau payload
+  dns_raw = ndpi.extract_dns_payload raw, pkt
+  new_dns = ndpi.patch_ttl_in_dns dns_raw, answers, FORCED_TTL
+  ede_data = string.char(0x00, EDE_OTHER) .. EDE_TTL_TEXT
+  new_dns = append_ede_to_dns(new_dns, { { code: EDNS_OPT_EDE, data: ede_data } }) or new_dns
+  patched = ndpi.replace_dns_payload raw, pkt, new_dns
 
   -- Log de la réponse
   qnames = table.concat [q.qname for q in *pkt.questions], ","

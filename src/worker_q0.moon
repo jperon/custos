@@ -4,9 +4,10 @@
 -- Pour chaque paquet :
 --   1. Parse L2 (MAC src via nfq_get_packet_hw)
 --   2. Parse L3/L4/L7 via parse/ndpi (IPv4 et IPv6)
---   3. Vérifie allowlist → ACCEPT ou DROP
---   4. Si ACCEPT : envoie (txid, src_ip, src_port) dans le pipe IPC vers Q1
---   5. Si DROP : forge et envoie une réponse REFUSED (EDE=15) au client
+--   3. Vérifie allowlist → décide allow ou refuse
+--   4. Si autorisé : envoie write_msg (allowed) dans le pipe IPC vers Q1, NF_ACCEPT
+--   5. Si refusé   : envoie write_refused_msg dans le pipe IPC vers Q1, NF_ACCEPT
+--      Q1 intercepte la réponse du serveur et la transforme en REFUSED+EDE
 --   6. Log structuré avec champs nDPI (ndpi_master / ndpi_app)
 
 { :ffi, :libnfq } = require "ffi_defs"
@@ -14,11 +15,9 @@
 { :get_l2 }              = require "parse/ethernet"
 ndpi                     = require "parse/ndpi"
 { :is_allowed, :check_reload } = require "allowlist"
-{ :write_msg }           = require "ipc"
+{ :write_msg, :write_refused_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn } = require "log"
-{ :build_refused }       = require "parse/dns"
-refuse                   = require "refuse"
 
 -- fd d'écriture du pipe IPC, injecté par main.moon avant fork()
 pipe_wfd = nil
@@ -84,33 +83,21 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       log_block q_fields
       verdict = NF_DROP
 
-  -- Enregistre la transaction IPC pour Q1 : seulement si toutes les questions
-  -- ont été autorisées (garantit qu'aucune fausse entrée n'entre dans pending).
-  -- Inclut la MAC source pour que Q1 puisse résoudre les adresses cross-family.
+  -- Enregistre la transaction IPC pour Q1 (toujours NF_ACCEPT — Q1 gère tout).
+  -- Si autorisé : Q1 patche TTL + injecte EDE "Custos vigilat."
+  -- Si refusé   : Q1 transforme la réponse du serveur en REFUSED+EDE Filtered
   if verdict == NF_ACCEPT
     write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw
+  else
+    write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw
 
-  -- Réponse REFUSED au client (un seul envoi par paquet DNS)
-  -- La question originale est copiée dans le payload REFUSED avec
-  -- l'extension EDE code 15 (Filtered, RFC 8914).
-  if verdict == NF_DROP
-    -- For TCP, we simply DROP the packet to kill the connection/request
-    -- as forging a TCP REFUSED response requires a full TCP stack.
-    if pkt.l4.proto == "udp"
-      dns_raw = raw\sub pkt.l4.off + 1, pkt.l4.off + pkt.l4.payload_len
-      refused_payload = build_refused { hdr: pkt.dns }, dns_raw
-      if refused_payload
-        refuse.send_refused pkt.ip.src_ip_raw, pkt.l4.src_port,
-                            refused_payload, pkt.ip.af, pkt.ip.dst_ip_raw
-
-  verdict
+  NF_ACCEPT
 
 
 -- ── Point d'entrée ───────────────────────────────────────────────
 -- Appelé par main.moon après fork(), avec le fd d'écriture du pipe.
 run = (wfd) ->
   pipe_wfd = wfd
-  refuse.init!
   ndpi.warmup!
   run_queue QUEUE_QUESTIONS, handle_question
   ndpi.cleanup!

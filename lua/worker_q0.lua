@@ -13,8 +13,11 @@ do
   local _obj_0 = require("allowlist")
   is_allowed, check_reload = _obj_0.is_allowed, _obj_0.check_reload
 end
-local write_msg
-write_msg = require("ipc").write_msg
+local write_msg, write_refused_msg
+do
+  local _obj_0 = require("ipc")
+  write_msg, write_refused_msg = _obj_0.write_msg, _obj_0.write_refused_msg
+end
 local run_queue, NF_ACCEPT, NF_DROP
 do
   local _obj_0 = require("nfq_loop")
@@ -25,9 +28,6 @@ do
   local _obj_0 = require("log")
   log_allow, log_block, log_warn = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn
 end
-local build_refused
-build_refused = require("parse/dns").build_refused
-local refuse = require("refuse")
 local pipe_wfd = nil
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
@@ -87,24 +87,14 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   end
   if verdict == NF_ACCEPT then
     write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw)
+  else
+    write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw)
   end
-  if verdict == NF_DROP then
-    if pkt.l4.proto == "udp" then
-      local dns_raw = raw:sub(pkt.l4.off + 1, pkt.l4.off + pkt.l4.payload_len)
-      local refused_payload = build_refused({
-        hdr = pkt.dns
-      }, dns_raw)
-      if refused_payload then
-        refuse.send_refused(pkt.ip.src_ip_raw, pkt.l4.src_port, refused_payload, pkt.ip.af, pkt.ip.dst_ip_raw)
-      end
-    end
-  end
-  return verdict
+  return NF_ACCEPT
 end
 local run
 run = function(wfd)
   pipe_wfd = wfd
-  refuse.init()
   ndpi.warmup()
   run_queue(QUEUE_QUESTIONS, handle_question)
   return ndpi.cleanup()

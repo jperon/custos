@@ -28,8 +28,16 @@ local RCODE = {
   NXDOMAIN = 3,
   REFUSED = 5
 }
+local QTYPE_OPT = 41
 local EDE_FILTERED = 15
+local EDE_OTHER = 0
 local EDE_EXTRA_TEXT = "Ne intretis."
+local EDE_TTL_TEXT = "Custos vigilat."
+local EDNS_OPT_EDE = 0x000F
+local EDNS_OPT_LANG = 0
+local EDNS_OPT_FORG = 0
+local FILTER_LANG = "la"
+local FILTER_ORG = "custos"
 local parse_header
 parse_header = function(buf)
   if #buf < 12 then
@@ -218,6 +226,143 @@ patch_ttl = function(buf_ptr, answers, dns_offset, new_ttl)
     buf_ptr[abs_off + 3] = bit.band(new_ttl, 0x000000FF)
   end
 end
+local build_opt_rdata
+build_opt_rdata = function(options)
+  local parts = { }
+  for _index_0 = 1, #options do
+    local _continue_0 = false
+    repeat
+      local opt = options[_index_0]
+      if opt.code == 0 then
+        _continue_0 = true
+        break
+      end
+      local data = opt.data
+      local dlen = #data
+      parts[#parts + 1] = string.char(bit.rshift(bit.band(opt.code, 0xFF00), 8), bit.band(opt.code, 0xFF), bit.rshift(bit.band(dlen, 0xFF00), 8), bit.band(dlen, 0xFF)) .. data
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  return table.concat(parts)
+end
+local skip_name_bytes
+skip_name_bytes = function(buf, pos)
+  local len = #buf
+  local consumed = 0
+  local safety = 0
+  while pos <= len do
+    safety = safety + 1
+    if safety > 128 then
+      return 0
+    end
+    local b = buf:byte(pos)
+    if b == 0 then
+      consumed = consumed + 1
+      break
+    elseif bit.band(b, 0xC0) == 0xC0 then
+      if pos + 1 > len then
+        return 0
+      end
+      consumed = consumed + 2
+      break
+    elseif bit.band(b, 0xC0) ~= 0x00 then
+      return 0
+    else
+      if pos + b > len then
+        return 0
+      end
+      consumed = consumed + (b + 1)
+      pos = pos + (b + 1)
+    end
+  end
+  return consumed
+end
+local skip_rr
+skip_rr = function(buf, pos)
+  local name_bytes = skip_name_bytes(buf, pos)
+  local name_end = pos + name_bytes
+  if name_end + 9 > #buf then
+    return nil
+  end
+  local rdlength = bit.bor(bit.lshift(buf:byte(name_end + 8), 8), buf:byte(name_end + 9))
+  return name_bytes + 10 + rdlength
+end
+local append_ede_to_dns
+append_ede_to_dns = function(dns_payload, options)
+  local len = #dns_payload
+  if len < 12 then
+    return nil
+  end
+  local qdcount = read_u16(dns_payload, 5)
+  local ancount = read_u16(dns_payload, 7)
+  local nscount = read_u16(dns_payload, 9)
+  local arcount = read_u16(dns_payload, 11)
+  local new_rdata = build_opt_rdata(options)
+  if #new_rdata == 0 then
+    return dns_payload
+  end
+  local pos = 13
+  for _ = 1, qdcount do
+    local nb = skip_name_bytes(dns_payload, pos)
+    if nb == 0 then
+      return nil
+    end
+    pos = pos + (nb + 4)
+    if pos > len + 1 then
+      return nil
+    end
+  end
+  for _ = 1, ancount + nscount do
+    local nb = skip_rr(dns_payload, pos)
+    if not (nb) then
+      return nil
+    end
+    pos = pos + nb
+  end
+  local opt_start = nil
+  local tmp_pos = pos
+  for _ = 1, arcount do
+    local nb = skip_rr(dns_payload, tmp_pos)
+    if not (nb) then
+      return nil
+    end
+    local name_bytes = skip_name_bytes(dns_payload, tmp_pos)
+    if name_bytes == 0 and (dns_payload:byte(tmp_pos) ~= 0) then
+      return nil
+    end
+    local type_pos = tmp_pos + name_bytes
+    if type_pos + 1 > len then
+      return nil
+    end
+    local rtype = read_u16(dns_payload, type_pos)
+    if rtype == QTYPE_OPT then
+      opt_start = tmp_pos
+      break
+    end
+    tmp_pos = tmp_pos + nb
+  end
+  if not (opt_start) then
+    return nil
+  end
+  local name_bytes = skip_name_bytes(dns_payload, opt_start)
+  local rdlen_pos = opt_start + name_bytes + 8
+  if rdlen_pos + 1 > len then
+    return nil
+  end
+  local old_rdlen = read_u16(dns_payload, rdlen_pos)
+  local rdata_start = rdlen_pos + 2
+  local rdata_end = rdata_start + old_rdlen - 1
+  if rdata_end > len then
+    return nil
+  end
+  local new_rdlen = old_rdlen + #new_rdata
+  local rdlen_hi = bit.rshift(bit.band(new_rdlen, 0xFF00), 8)
+  local rdlen_lo = bit.band(new_rdlen, 0xFF)
+  return dns_payload:sub(1, rdlen_pos - 1) .. string.char(rdlen_hi, rdlen_lo) .. dns_payload:sub(rdata_start, rdata_end) .. new_rdata .. dns_payload:sub(rdata_end + 1)
+end
 local build_refused
 build_refused = function(dns, orig_buf)
   if not (dns and orig_buf) then
@@ -237,13 +382,24 @@ build_refused = function(dns, orig_buf)
   else
     qs_raw = ""
   end
-  local ede_n = #EDE_EXTRA_TEXT
-  local rdlen = 6 + ede_n
-  local opt_len = 2 + ede_n
+  local ede_data = string.char(0x00, EDE_FILTERED) .. EDE_EXTRA_TEXT
+  local rdata = build_opt_rdata({
+    {
+      code = EDNS_OPT_EDE,
+      data = ede_data
+    },
+    {
+      code = EDNS_OPT_LANG,
+      data = FILTER_LANG
+    },
+    {
+      code = EDNS_OPT_FORG,
+      data = FILTER_ORG
+    }
+  })
+  local rdlen = #rdata
   local opt_hdr = string.char(0x00, 0x00, 0x29, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, bit.rshift(bit.band(rdlen, 0xFF00), 8), bit.band(rdlen, 0xFF))
-  local opt_ede = string.char(0x00, 0x0F, bit.rshift(bit.band(opt_len, 0xFF00), 8), bit.band(opt_len, 0xFF), 0x00, 0x0F)
-  local opt_rr = opt_hdr .. opt_ede .. EDE_EXTRA_TEXT
-  return hdr .. qs_raw .. opt_rr
+  return hdr .. qs_raw .. opt_hdr .. rdata
 end
 return {
   parse_dns = parse_dns,
@@ -253,9 +409,21 @@ return {
   decode_name = decode_name,
   patch_ttl = patch_ttl,
   build_refused = build_refused,
+  build_opt_rdata = build_opt_rdata,
+  skip_name_bytes = skip_name_bytes,
+  skip_rr = skip_rr,
+  append_ede_to_dns = append_ede_to_dns,
   QTYPE = QTYPE,
   QTYPE_NAME = QTYPE_NAME,
+  QTYPE_OPT = QTYPE_OPT,
   RCODE = RCODE,
   EDE_FILTERED = EDE_FILTERED,
-  EDE_EXTRA_TEXT = EDE_EXTRA_TEXT
+  EDE_EXTRA_TEXT = EDE_EXTRA_TEXT,
+  EDE_OTHER = EDE_OTHER,
+  EDE_TTL_TEXT = EDE_TTL_TEXT,
+  EDNS_OPT_EDE = EDNS_OPT_EDE,
+  EDNS_OPT_LANG = EDNS_OPT_LANG,
+  EDNS_OPT_FORG = EDNS_OPT_FORG,
+  FILTER_LANG = FILTER_LANG,
+  FILTER_ORG = FILTER_ORG
 }

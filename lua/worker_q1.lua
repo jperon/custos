@@ -12,10 +12,15 @@ local neigh = require("neigh")
 local ndpi = require("parse/ndpi")
 local QTYPE
 QTYPE = ndpi.QTYPE
-local drain_pipe, is_pending, consume
+local drain_pipe, is_pending, get_pending_entry, consume
 do
   local _obj_0 = require("ipc")
-  drain_pipe, is_pending, consume = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.consume
+  drain_pipe, is_pending, get_pending_entry, consume = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.get_pending_entry, _obj_0.consume
+end
+local build_refused, append_ede_to_dns, EDE_OTHER, EDE_TTL_TEXT, EDNS_OPT_EDE
+do
+  local _obj_0 = require("parse/dns")
+  build_refused, append_ede_to_dns, EDE_OTHER, EDE_TTL_TEXT, EDNS_OPT_EDE = _obj_0.build_refused, _obj_0.append_ede_to_dns, _obj_0.EDE_OTHER, _obj_0.EDE_TTL_TEXT, _obj_0.EDNS_OPT_EDE
 end
 local add_ip4, add_ip6
 do
@@ -50,7 +55,7 @@ update_mac_clients = function(msg, ts)
   end
   local entry = mac_clients[mac] or { }
   entry.last_seen = ts
-  if msg.msg_type == 0x41 then
+  if msg.ipv4 then
     if not (entry.ipv4 == msg.ip_str) then
       if entry.ipv4 then
         ip_to_mac[entry.ipv4] = nil
@@ -137,8 +142,10 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local client_port = pkt.l4.dst_port
   local txid = pkt.dns.txid
+  local entry = nil
   if not (DOCKER_MODE) then
-    if not (is_pending(txid, pkt.ip.dst_ip, client_port, now)) then
+    entry = get_pending_entry(txid, pkt.ip.dst_ip, client_port, now)
+    if not (entry) then
       log_block({
         action = "response_no_matching_question",
         src_ip = pkt.ip.src_ip,
@@ -149,6 +156,41 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       return NF_DROP
     end
     consume(txid, pkt.ip.dst_ip, client_port)
+  end
+  local refused = entry and entry.refused or false
+  if refused then
+    local dns_raw = ndpi.extract_dns_payload(raw, pkt)
+    local refused_dns = build_refused({
+      hdr = pkt.dns
+    }, dns_raw)
+    if not (refused_dns) then
+      return NF_DROP
+    end
+    local patched = ndpi.replace_dns_payload(raw, pkt, refused_dns)
+    if not (patched) then
+      return NF_DROP
+    end
+    local qnames = table.concat((function()
+      local _accum_0 = { }
+      local _len_0 = 1
+      local _list_0 = pkt.questions
+      for _index_0 = 1, #_list_0 do
+        local q = _list_0[_index_0]
+        _accum_0[_len_0] = q.qname
+        _len_0 = _len_0 + 1
+      end
+      return _accum_0
+    end)(), ",")
+    log_block({
+      action = "response_refused",
+      src_ip = pkt.ip.src_ip,
+      dst_ip = pkt.ip.dst_ip,
+      txid = string.format("0x%04x", txid),
+      qnames = qnames
+    })
+    local patched_ptr = ffi.cast("const unsigned char*", patched)
+    libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
+    return -1
   end
   local answers = ndpi.parse_answers(raw, pkt)
   local client_ip = pkt.ip.dst_ip
@@ -197,7 +239,16 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       end
     end
   end
-  local patched = ndpi.patch_and_checksum(raw, pkt, answers, FORCED_TTL)
+  local dns_raw = ndpi.extract_dns_payload(raw, pkt)
+  local new_dns = ndpi.patch_ttl_in_dns(dns_raw, answers, FORCED_TTL)
+  local ede_data = string.char(0x00, EDE_OTHER) .. EDE_TTL_TEXT
+  new_dns = append_ede_to_dns(new_dns, {
+    {
+      code = EDNS_OPT_EDE,
+      data = ede_data
+    }
+  }) or new_dns
+  local patched = ndpi.replace_dns_payload(raw, pkt, new_dns)
   local qnames = table.concat((function()
     local _accum_0 = { }
     local _len_0 = 1
