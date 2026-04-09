@@ -26,7 +26,6 @@ load_config = (path) ->
   return nil, "configuration vide ou invalide dans #{path}" unless type(cfg) == "table"
 
   -- Sections facultatives → tables vides par défaut
-  cfg.domains = cfg.domains or {}
   cfg.nets    = cfg.nets    or {}
   cfg.times   = cfg.times   or {}
   cfg.sources = cfg.sources or {}

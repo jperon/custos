@@ -209,6 +209,7 @@ if not (cfg) then
   os.exit(1)
 end
 local sources = cfg.sources or { }
+local domainlists_dir = cfg.domainlists_dir
 if next(sources) == nil then
   io.stderr:write("Aucune source définie dans cfg.sources — rien à faire.\n")
   os.exit(0)
@@ -219,13 +220,23 @@ for name, source in pairs(sources) do
   local _continue_0 = false
   repeat
     local format = source.format or "simple"
-    local output = source.output
-    if not (output) then
-      io.stderr:write("[" .. tostring(name) .. "] SKIP : pas de chemin output défini\n")
-      errors = errors + 1
-      _continue_0 = true
-      break
+    if source.subdir and not source.output_dir then
+      if not (domainlists_dir) then
+        io.stderr:write("[" .. tostring(name) .. "] SKIP : subdir défini mais domainlists_dir absent\n")
+        errors = errors + 1
+        _continue_0 = true
+        break
+      end
+      do
+        local _tbl_0 = { }
+        for k, v in pairs(source) do
+          _tbl_0[k] = v
+        end
+        source = _tbl_0
+      end
+      source.output_dir = (domainlists_dir:gsub("/*$", "")) .. "/" .. source.subdir
     end
+    local output = source.output
     if format == "toulouse" then
       local ok, msg = fetch_toulouse(name, source, opts.dry_run)
       if ok then
@@ -235,6 +246,12 @@ for name, source in pairs(sources) do
         io.stderr:write("[" .. tostring(name) .. "] ✗ " .. tostring(msg) .. "\n")
         errors = errors + 1
       end
+      _continue_0 = true
+      break
+    end
+    if not (output) then
+      io.stderr:write("[" .. tostring(name) .. "] SKIP : pas de chemin output défini\n")
+      errors = errors + 1
       _continue_0 = true
       break
     end

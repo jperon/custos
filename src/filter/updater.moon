@@ -97,21 +97,30 @@ download_file = (url, dest, timeout) ->
 --- Télécharge et parse une source au format Toulouse (DSI UT Capitole).
 -- Le fichier tar.gz contient des sous-dossiers par catégorie :
 --   blacklists/<categorie>/domains  (une ligne = un domaine)
+--
+-- Deux modes de sortie (mutuellement exclusifs) :
+--   output     : fusionne toutes les catégories en un seul fichier .bin
+--   output_dir : crée un fichier <output_dir>/<categorie>.bin par catégorie
+--
 -- Si source.categories est absent ou vide, toutes les catégories sont extraites.
--- @tparam  string   name     Nom de la source (pour les logs)
--- @tparam  table    source   { url, categories, output }
+-- @tparam  string   name       Nom de la source (pour les logs)
+-- @tparam  table    source     { url, categories, output|output_dir }
 -- @tparam  boolean  dry_run
--- @treturn boolean           Succès
--- @treturn string            Message (nb domaines ou erreur)
+-- @treturn boolean             Succès
+-- @treturn string              Message (nb domaines ou erreur)
 fetch_toulouse = (name, source, dry_run) ->
-  url    = source.url
-  cats   = source.categories  -- table|nil
-  output = source.output
+  url         = source.url
+  cats_filter = source.categories  -- table|nil
+  output      = source.output      -- chemin unique (fusion)
+  output_dir  = source.output_dir  -- répertoire (un .bin par catégorie)
 
-  return false, "pas d'URL définie"    unless url
-  return false, "pas de chemin output défini" unless output
+  return false, "pas d'URL définie" unless url
+  unless output or output_dir
+    return false, "pas de chemin output ou output_dir défini"
 
-  tmp_tar = output .. ".tar.gz.tmp"
+  -- Fichier temporaire pour le tar.gz
+  tmp_base = output_dir and ((output_dir\gsub "/*$", "") .. "/toulouse") or output
+  tmp_tar  = tmp_base .. ".tar.gz.tmp"
 
   -- Téléchargement
   io.stderr\write "[#{name}] GET #{url} ... "
@@ -120,23 +129,55 @@ fetch_toulouse = (name, source, dry_run) ->
     return false, "curl échoué (HTTP error ou timeout)"
   io.stderr\write "OK\n"
 
-  -- Si aucune catégorie spécifiée, lister celles disponibles dans le tar
-  if not cats or #cats == 0
-    fh = io.popen "tar -tzf #{tmp_tar} 2>/dev/null"
-    cats = {}
-    if fh
-      for line in fh\lines!
-        cat = line\match "^blacklists/([^/]+)/domains$"
-        cats[#cats + 1] = cat if cat
-      fh\close!
+  -- Lister toutes les catégories disponibles dans le tar
+  fh = io.popen "tar -tzf #{tmp_tar} 2>/dev/null"
+  all_cats = {}
+  if fh
+    for line in fh\lines!
+      cat = line\match "^blacklists/([^/]+)/domains$"
+      all_cats[#all_cats + 1] = cat if cat
+    fh\close!
+
+  -- Filtrer si une sélection est demandée
+  cats = if cats_filter and #cats_filter > 0
+    wanted = {}
+    wanted[c] = true for c in *cats_filter
+    [c for c in *all_cats when wanted[c]]
+  else
+    all_cats
 
   if #cats == 0
     os.remove tmp_tar
     return false, "aucune catégorie trouvée dans le tar"
 
-  io.stderr\write "[#{name}] #{#cats} catégorie(s) : #{table.concat cats, ', '}\n"
+  io.stderr\write "[#{name}] #{#cats} catégorie(s)\n"
 
-  -- Extraction et fusion de toutes les catégories
+  -- Mode output_dir : un .bin par catégorie
+  if output_dir
+    base = output_dir\gsub "/*$", ""
+    os.execute "mkdir -p #{base}"
+    ok_count, err_count = 0, 0
+    for cat in *cats
+      fh = io.popen "tar -xzf #{tmp_tar} -O blacklists/#{cat}/domains 2>/dev/null"
+      domains = {}
+      if fh
+        data = fh\read "*a"
+        fh\close!
+        domains = parse_domains.parse "simple", data
+      cat_path = base .. "/" .. cat .. ".bin"
+      ok, msg = write_bin domains, cat_path, dry_run
+      if ok
+        io.stderr\write "[#{name}/#{cat}] ✓ #{msg}\n"
+        ok_count += 1
+      else
+        io.stderr\write "[#{name}/#{cat}] ✗ #{msg}\n"
+        err_count += 1
+    os.remove tmp_tar
+    if err_count == 0
+      return true, "#{ok_count} catégorie(s) → #{base}/"
+    return err_count < ok_count, "#{ok_count} ok, #{err_count} erreur(s)"
+
+  -- Mode output : fusion de toutes les catégories en un seul .bin
   all_domains = {}
   for cat in *cats
     fh = io.popen "tar -xzf #{tmp_tar} -O blacklists/#{cat}/domains 2>/dev/null"
@@ -203,7 +244,9 @@ unless cfg
   io.stderr\write "Erreur de chargement de la config #{cfg_path} : #{err}\n"
   os.exit 1
 
-sources = cfg.sources or {}
+sources         = cfg.sources or {}
+domainlists_dir = cfg.domainlists_dir
+
 if next(sources) == nil
   io.stderr\write "Aucune source définie dans cfg.sources — rien à faire.\n"
   os.exit 0
@@ -213,12 +256,20 @@ errors  = 0
 
 for name, source in pairs sources
   format = source.format or "simple"
-  output = source.output
 
-  unless output
-    io.stderr\write "[#{name}] SKIP : pas de chemin output défini\n"
-    errors += 1
-    continue
+  -- Résolution du chemin de sortie :
+  --   source.subdir → output_dir = <domainlists_dir>/<subdir>   (nouveau)
+  --   source.output_dir           → utilisé tel quel              (compat)
+  --   source.output               → chemin unique (fusion)        (compat)
+  if source.subdir and not source.output_dir
+    unless domainlists_dir
+      io.stderr\write "[#{name}] SKIP : subdir défini mais domainlists_dir absent\n"
+      errors += 1
+      continue
+    source = {k, v for k, v in pairs source}  -- shallow copy
+    source.output_dir = (domainlists_dir\gsub "/*$", "") .. "/" .. source.subdir
+
+  output = source.output
 
   -- Format Toulouse : traitement spécial (tar.gz multi-catégories)
   if format == "toulouse"
@@ -229,6 +280,12 @@ for name, source in pairs sources
     else
       io.stderr\write "[#{name}] ✗ #{msg}\n"
       errors += 1
+    continue
+
+  -- Formats classiques : simple / hosts / adblock
+  unless output
+    io.stderr\write "[#{name}] SKIP : pas de chemin output défini\n"
+    errors += 1
     continue
 
   -- Formats classiques : simple / hosts / adblock

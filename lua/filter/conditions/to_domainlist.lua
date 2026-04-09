@@ -62,12 +62,17 @@ lookup = function(arr, n, domain)
 end
 return function(cfg)
   return function(listname)
-    local path = cfg.domains and cfg.domains[listname]
-    if not (path) then
+    if not (cfg.domainlists_dir) then
       return function(req)
-        return false, "Domain list '" .. tostring(listname) .. "' not defined in cfg"
+        return false, "domainlists_dir non défini dans la configuration"
       end
     end
+    if listname:match("^/" or listname:match("%.%." or listname:match("%.bin$"))) then
+      return function(req)
+        return false, "Nom de liste invalide: '" .. tostring(listname) .. "'"
+      end
+    end
+    local path = (cfg.domainlists_dir:gsub("/*$", "")) .. "/" .. listname .. ".bin"
     local arr, n_or_err = load_list(path)
     if not (arr) then
       local msg = "Cannot load domain list '" .. tostring(listname) .. "': " .. tostring(n_or_err)

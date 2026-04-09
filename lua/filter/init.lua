@@ -8,20 +8,26 @@ do
   local _obj_0 = require("filter.rule")
   compile_rules, _decide = _obj_0.compile_rules, _obj_0.decide
 end
+local load_config
+load_config = require("filter.lib.load_config").load_config
 local log_info, log_warn
 do
   local _obj_0 = require("log")
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
 local rules
+local config_path = "cfg/filter.yml"
+local set_config_path
+set_config_path = function(path)
+  config_path = path
+end
 local load
 load = function()
-  package.loaded["filter.config"] = nil
-  local ok, cfg = pcall(require, "filter.config")
-  if not (ok) then
+  local cfg, err = load_config(config_path)
+  if not (cfg) then
     log_warn({
       action = "filter_load_failed",
-      err = tostring(cfg)
+      err = err
     })
     return 
   end
@@ -57,5 +63,6 @@ end
 return {
   load = load,
   decide = decide,
-  reload = reload
+  reload = reload,
+  set_config_path = set_config_path
 }

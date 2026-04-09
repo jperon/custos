@@ -5,9 +5,10 @@
 #
 # ── Sections ───────────────────────────────────────────────────────────────
 #
-# domains  : nom → chemin vers fichier .bin compilé par filter/convert.moon
-#            (ou .domains texte chargé à la volée)
-#            Utilisé dans les conditions to_domainlist / to_domainlists.
+# domainlists_dir : répertoire racine des listes de domaines précompilées.
+#            Les conditions to_domainlist / to_domainlists référencent des
+#            chemins relatifs à ce répertoire, sans extension :
+#            ex. "toulouse/malware" → <domainlists_dir>/toulouse/malware.bin
 #
 # nets     : nom → liste de CIDR IPv4/IPv6
 #            Utilisé dans les conditions from_net / from_netlists.
@@ -15,8 +16,10 @@
 # times    : nom → [HH:MM, HH:MM] (début, fin)
 #            Utilisé dans les conditions in_time / in_times.
 #
-# sources  : nom → { urls: [...], format: simple|hosts|adblock, output: path }
+# sources  : nom → { url(s), format, subdir|output }
 #            Utilisé par filter/updater.moon pour télécharger et compiler les listes.
+#            subdir : sous-dossier dans domainlists_dir (un .bin par catégorie)
+#            output : chemin absolu vers un fichier .bin unique (fusion)
 #
 # rules    : tableau ordonné de règles, premier verdict gagnant.
 #            Chaque règle : description, actions, conditions (optionnel), log (optionnel).
@@ -24,7 +27,7 @@
 # ── Conditions disponibles ─────────────────────────────────────────────────
 #   to_domain        string        correspondance exacte ou suffixe
 #   to_domains       [string]      idem, plusieurs domaines
-#   to_domainlist    string        appartenance à une liste .bin (clé depuis domains)
+#   to_domainlist    string        appartenance à une liste (chemin relatif à domainlists_dir)
 #   to_domainlists   [string]      idem, plusieurs listes
 #   from_mac         string        adresse MAC source
 #   from_net         string        IP source dans un CIDR
@@ -40,29 +43,9 @@
 #   deny    bloquer
 #   mail    notification e-mail (futur)
 
-# Listes de domaines précompilées (filter/convert.moon ou filter/updater.moon)
+# Répertoire racine des listes de domaines précompilées.
 # Exécuter make update-lists pour construire les listes avant de démarrer.
-# Seules les catégories référencées ici sont utilisables dans les règles.
-domains:
-  # Sécurité
-  toulouse_malware:         /etc/custos/lists/toulouse/malware.bin
-  toulouse_phishing:        /etc/custos/lists/toulouse/phishing.bin
-  toulouse_ddos:            /etc/custos/lists/toulouse/ddos.bin
-  toulouse_hacking:         /etc/custos/lists/toulouse/hacking.bin
-  toulouse_cryptojacking:   /etc/custos/lists/toulouse/cryptojacking.bin
-  toulouse_redirector:      /etc/custos/lists/toulouse/redirector.bin
-  toulouse_strong_redirector: /etc/custos/lists/toulouse/strong_redirector.bin
-  # Contenus illégaux / indésirables
-  toulouse_warez:           /etc/custos/lists/toulouse/warez.bin
-  toulouse_drugs:           /etc/custos/lists/toulouse/drugs.bin
-  toulouse_gambling:        /etc/custos/lists/toulouse/gambling.bin
-  # Adulte
-  toulouse_adult:           /etc/custos/lists/toulouse/adult.bin
-  toulouse_mixed_adult:     /etc/custos/lists/toulouse/mixed_adult.bin
-  toulouse_lingerie:        /etc/custos/lists/toulouse/lingerie.bin
-  # Publicité / tracking
-  toulouse_publicite:       /etc/custos/lists/toulouse/publicite.bin
-  toulouse_marketingware:   /etc/custos/lists/toulouse/marketingware.bin
+domainlists_dir: /etc/custos/lists
 
 # Sous-réseaux CIDR nommés
 nets:
@@ -82,8 +65,8 @@ sources:
     url: https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz
     format: toulouse
     # Toutes les catégories sont extraites (categories absent = tout).
-    # Chaque catégorie produit un fichier .bin distinct dans output_dir.
-    output_dir: /etc/custos/lists/toulouse
+    # Chaque catégorie produit un fichier .bin distinct dans domainlists_dir/subdir.
+    subdir: toulouse
 #  ads:
 #    urls:
 #    - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
@@ -102,24 +85,24 @@ rules:
   conditions:
     to_domainlists:
     # Sécurité
-    - toulouse_malware
-    - toulouse_phishing
-    - toulouse_ddos
-    - toulouse_hacking
-    - toulouse_cryptojacking
-    - toulouse_redirector
-    - toulouse_strong_redirector
+    - toulouse/malware
+    - toulouse/phishing
+    - toulouse/ddos
+    - toulouse/hacking
+    - toulouse/cryptojacking
+    - toulouse/redirector
+    - toulouse/strong_redirector
     # Contenus illégaux / indésirables
-    - toulouse_warez
-    - toulouse_drugs
-    - toulouse_gambling
+    - toulouse/warez
+    - toulouse/drugs
+    - toulouse/gambling
     # Adulte
-    - toulouse_adult
-    - toulouse_mixed_adult
-    - toulouse_lingerie
+    - toulouse/adult
+    - toulouse/mixed_adult
+    - toulouse/lingerie
     # Publicité / tracking
-    - toulouse_publicite
-    - toulouse_marketingware
+    - toulouse/publicite
+    - toulouse/marketingware
 
 - description: Infrastructure réseau toujours autorisée
   actions: [allow]

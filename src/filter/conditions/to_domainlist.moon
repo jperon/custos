@@ -73,12 +73,18 @@ lookup = (arr, n, domain) ->
 
   false
 
---- @tparam table cfg Configuration du filtre ({domains: {name: path, ...}, ...})
+--- @tparam table cfg Configuration du filtre ({domainlists_dir: string, ...})
 -- @treturn function factory (listname: string) → (req) → bool, reason
+-- listname est un chemin relatif à domainlists_dir, sans extension :
+--   ex. "toulouse/malware" → "<domainlists_dir>/toulouse/malware.bin"
+-- Valide : pas de chemin absolu, pas de "..", pas de suffixe ".bin".
 (cfg) -> (listname) ->
-  path = cfg.domains and cfg.domains[listname]
-  unless path
-    return (req) -> false, "Domain list '#{listname}' not defined in cfg"
+  unless cfg.domainlists_dir
+    return (req) -> false, "domainlists_dir non défini dans la configuration"
+  -- Validation du nom de liste
+  if listname\match "^/" or listname\match "%.%." or listname\match "%.bin$"
+    return (req) -> false, "Nom de liste invalide: '#{listname}'"
+  path = (cfg.domainlists_dir\gsub "/*$", "") .. "/" .. listname .. ".bin"
 
   arr, n_or_err = load_list path
   unless arr

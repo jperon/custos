@@ -1378,34 +1378,58 @@ test "to_domains — OR logique", ->
   assert_eq (f {domain: "packages.debian.org"}), true, "debian OK"
   assert_eq (f {domain: "evil.com"}), false, "evil non"
 
--- ── to_domainlist (.domains texte) ──
+-- ── to_domainlist ──
 to_domainlist = require "filter.conditions.to_domainlist"
-TMPLIST = "./tmp/test_filter_domainlist.domains"
+TMPDIR  = "./tmp"
+TMPBIN  = TMPDIR .. "/test_filter_domainlist.bin"
 
 do
-  fd = io.open TMPLIST, "w"
-  fd\write "github.com\ndebian.org\ncloudflare.com\n"
+  -- Création d'un fichier .bin de test avec xxhash + tri (même logique que updater)
+  xxhash = require "ffi_xxhash"
+  test_domains = {"github.com", "debian.org", "cloudflare.com"}
+  hashes = [xxhash.xxh64(d) for d in *test_domains]
+  table.sort hashes, (a, b) -> a < b
+  arr = ffi.new "uint64_t[?]", #hashes
+  for i, h in ipairs hashes
+    arr[i - 1] = h
+  fd = io.open TMPBIN, "wb"
+  fd\write ffi.string arr, #hashes * 8
   fd\close!
 
-test "to_domainlist — domaine présent (fichier texte)", ->
-  cfg = { domains: { testlist: TMPLIST } }
-  f   = (to_domainlist cfg) "testlist"
+test "to_domainlist — domaine présent (fichier .bin)", ->
+  cfg = { domainlists_dir: TMPDIR }
+  f   = (to_domainlist cfg) "test_filter_domainlist"
   assert_eq (f {domain: "github.com"}), true, "github.com dans liste"
 
 test "to_domainlist — sous-domaine présent", ->
-  cfg = { domains: { testlist: TMPLIST } }
-  f   = (to_domainlist cfg) "testlist"
+  cfg = { domainlists_dir: TMPDIR }
+  f   = (to_domainlist cfg) "test_filter_domainlist"
   assert_eq (f {domain: "api.github.com"}), true, "api.github.com sous-domaine"
 
 test "to_domainlist — domaine absent", ->
-  cfg = { domains: { testlist: TMPLIST } }
-  f   = (to_domainlist cfg) "testlist"
+  cfg = { domainlists_dir: TMPDIR }
+  f   = (to_domainlist cfg) "test_filter_domainlist"
   assert_eq (f {domain: "evil.com"}), false, "evil.com absent"
 
-test "to_domainlist — liste inconnue → faux", ->
-  cfg = { domains: {} }
+test "to_domainlist — domainlists_dir absent → faux", ->
+  cfg = {}
   f   = (to_domainlist cfg) "nonexistent"
-  assert_eq (f {domain: "github.com"}), false, "liste manquante → false"
+  assert_eq (f {domain: "github.com"}), false, "domainlists_dir manquant → false"
+
+test "to_domainlist — nom absolu → faux", ->
+  cfg = { domainlists_dir: TMPDIR }
+  f   = (to_domainlist cfg) "/etc/passwd"
+  assert_eq (f {domain: "github.com"}), false, "chemin absolu rejeté"
+
+test "to_domainlist — traversée répertoire → faux", ->
+  cfg = { domainlists_dir: TMPDIR }
+  f   = (to_domainlist cfg) "../secret"
+  assert_eq (f {domain: "github.com"}), false, ".. rejeté"
+
+test "to_domainlist — suffixe .bin → faux", ->
+  cfg = { domainlists_dir: TMPDIR }
+  f   = (to_domainlist cfg) "test_filter_domainlist.bin"
+  assert_eq (f {domain: "github.com"}), false, ".bin en suffixe rejeté"
 
 -- ── from_mac ──
 from_mac = require "filter.conditions.from_mac"
@@ -1525,7 +1549,7 @@ do
     assert_eq v, false, "aucune règle → deny par défaut"
 
 -- Nettoyage
-os.remove TMPLIST
+os.remove TMPBIN
 
 -- ── parse_domains ──────────────────────────────────────────────────────────
 io.write "\n── parse_domains ──\n"
@@ -1649,8 +1673,7 @@ io.write "\n── load_config ──\n"
 do
   TMP_YAML = "./tmp/test_filter_config.yml"
   YAML_OK = [[
-domains:
-  testlist: /tmp/test.bin
+domainlists_dir: /etc/custos/lists
 nets:
   lan:
   - 192.168.0.0/16
@@ -1661,7 +1684,7 @@ sources:
     urls:
     - https://example.com/list.txt
     format: hosts
-    output: /tmp/ads.bin
+    subdir: ads
 rules:
 - description: Règle test
   actions: [allow]
@@ -1678,10 +1701,10 @@ rules:
     cfg, err = load_config TMP_YAML
     assert cfg ~= nil, "cfg nil : #{err}"
 
-  test "load_config — section domains", ->
+  test "load_config — domainlists_dir", ->
     cfg, _ = load_config TMP_YAML
     assert cfg, "cfg nil"
-    assert_eq cfg.domains.testlist, "/tmp/test.bin", "domains.testlist"
+    assert_eq cfg.domainlists_dir, "/etc/custos/lists", "domainlists_dir"
 
   test "load_config — section nets (tableau)", ->
     cfg, _ = load_config TMP_YAML
@@ -1716,7 +1739,6 @@ rules:
     fd2\close!
     cfg, _ = load_config TMP_YAML
     assert cfg, "cfg nil"
-    assert type(cfg.domains) == "table", "domains vide"
     assert type(cfg.nets)    == "table", "nets vide"
     assert type(cfg.times)   == "table", "times vide"
     assert type(cfg.sources) == "table", "sources vide"

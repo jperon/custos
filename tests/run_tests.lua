@@ -1232,53 +1232,97 @@ test("to_domains — OR logique", function()
   })), false, "evil non")
 end)
 local to_domainlist = require("filter.conditions.to_domainlist")
-local TMPLIST = "./tmp/test_filter_domainlist.domains"
+local TMPDIR = "./tmp"
+local TMPBIN = TMPDIR .. "/test_filter_domainlist.bin"
 do
-  local fd = io.open(TMPLIST, "w")
-  fd:write("github.com\ndebian.org\ncloudflare.com\n")
+  local xxhash = require("ffi_xxhash")
+  local test_domains = {
+    "github.com",
+    "debian.org",
+    "cloudflare.com"
+  }
+  local hashes
+  do
+    local _accum_0 = { }
+    local _len_0 = 1
+    for _index_0 = 1, #test_domains do
+      local d = test_domains[_index_0]
+      _accum_0[_len_0] = xxhash.xxh64(d)
+      _len_0 = _len_0 + 1
+    end
+    hashes = _accum_0
+  end
+  table.sort(hashes, function(a, b)
+    return a < b
+  end)
+  local arr = ffi.new("uint64_t[?]", #hashes)
+  for i, h in ipairs(hashes) do
+    arr[i - 1] = h
+  end
+  local fd = io.open(TMPBIN, "wb")
+  fd:write(ffi.string(arr, #hashes * 8))
   fd:close()
 end
-test("to_domainlist — domaine présent (fichier texte)", function()
+test("to_domainlist — domaine présent (fichier .bin)", function()
   local cfg = {
-    domains = {
-      testlist = TMPLIST
-    }
+    domainlists_dir = TMPDIR
   }
-  local f = (to_domainlist(cfg))("testlist")
+  local f = (to_domainlist(cfg))("test_filter_domainlist")
   return assert_eq((f({
     domain = "github.com"
   })), true, "github.com dans liste")
 end)
 test("to_domainlist — sous-domaine présent", function()
   local cfg = {
-    domains = {
-      testlist = TMPLIST
-    }
+    domainlists_dir = TMPDIR
   }
-  local f = (to_domainlist(cfg))("testlist")
+  local f = (to_domainlist(cfg))("test_filter_domainlist")
   return assert_eq((f({
     domain = "api.github.com"
   })), true, "api.github.com sous-domaine")
 end)
 test("to_domainlist — domaine absent", function()
   local cfg = {
-    domains = {
-      testlist = TMPLIST
-    }
+    domainlists_dir = TMPDIR
   }
-  local f = (to_domainlist(cfg))("testlist")
+  local f = (to_domainlist(cfg))("test_filter_domainlist")
   return assert_eq((f({
     domain = "evil.com"
   })), false, "evil.com absent")
 end)
-test("to_domainlist — liste inconnue → faux", function()
-  local cfg = {
-    domains = { }
-  }
+test("to_domainlist — domainlists_dir absent → faux", function()
+  local cfg = { }
   local f = (to_domainlist(cfg))("nonexistent")
   return assert_eq((f({
     domain = "github.com"
-  })), false, "liste manquante → false")
+  })), false, "domainlists_dir manquant → false")
+end)
+test("to_domainlist — nom absolu → faux", function()
+  local cfg = {
+    domainlists_dir = TMPDIR
+  }
+  local f = (to_domainlist(cfg))("/etc/passwd")
+  return assert_eq((f({
+    domain = "github.com"
+  })), false, "chemin absolu rejeté")
+end)
+test("to_domainlist — traversée répertoire → faux", function()
+  local cfg = {
+    domainlists_dir = TMPDIR
+  }
+  local f = (to_domainlist(cfg))("../secret")
+  return assert_eq((f({
+    domain = "github.com"
+  })), false, ".. rejeté")
+end)
+test("to_domainlist — suffixe .bin → faux", function()
+  local cfg = {
+    domainlists_dir = TMPDIR
+  }
+  local f = (to_domainlist(cfg))("test_filter_domainlist.bin")
+  return assert_eq((f({
+    domain = "github.com"
+  })), false, ".bin en suffixe rejeté")
 end)
 local from_mac = require("filter.conditions.from_mac")
 test("from_mac — MAC correspondant", function()
@@ -1480,6 +1524,223 @@ do
     return assert_eq(v, false, "aucune règle → deny par défaut")
   end)
 end
-os.remove(TMPLIST)
+os.remove(TMPBIN)
+io.write("\n── parse_domains ──\n")
+local parse, parse_simple, parse_hosts, parse_adblock, is_valid
+do
+  local _obj_0 = require("filter.lib.parse_domains")
+  parse, parse_simple, parse_hosts, parse_adblock, is_valid = _obj_0.parse, _obj_0.parse_simple, _obj_0.parse_hosts, _obj_0.parse_adblock, _obj_0.is_valid
+end
+test("parse_domains.is_valid — domaine valide", function()
+  return assert_eq((is_valid("example.com")), true, "example.com")
+end)
+test("parse_domains.is_valid — domaine avec sous-domaine", function()
+  return assert_eq((is_valid("ads.example.com")), true, "ads.example.com")
+end)
+test("parse_domains.is_valid — chaîne vide → invalide", function()
+  return assert_eq((is_valid("")), false, "vide")
+end)
+test("parse_domains.is_valid — IPv4 → invalide", function()
+  return assert_eq((is_valid("1.2.3.4")), false, "IPv4")
+end)
+test("parse_domains.is_valid — IPv6 → invalide", function()
+  return assert_eq((is_valid("::1")), false, "IPv6")
+end)
+test("parse_domains.is_valid — sans point → invalide", function()
+  return assert_eq((is_valid("localhost")), false, "pas de point")
+end)
+test("parse_domains.is_valid — trop long → invalide", function()
+  return assert_eq((is_valid((string.rep("a", 254)))), false, "trop long")
+end)
+test("parse_domains.is_valid — caractères invalides → invalide", function()
+  return assert_eq((is_valid("bad domain.com")), false, "espace")
+end)
+do
+  local text = [[# Commentaire
+example.com
+  ads.example.com
+DOUBLECLICK.NET
+# autre commentaire
+invalide
+]]
+  local result = parse_simple(text)
+  test("parse_simple — nombre de domaines extraits", function()
+    return assert_eq(#result, 3, "3 domaines")
+  end)
+  test("parse_simple — normalisation minuscules", function()
+    local found = false
+    for _index_0 = 1, #result do
+      local d = result[_index_0]
+      if d == "doubleclick.net" then
+        found = true
+      end
+    end
+    return assert(found, "doubleclick.net normalisé")
+  end)
+  test("parse_simple — commentaires ignorés", function()
+    for _index_0 = 1, #result do
+      local d = result[_index_0]
+      assert(d:sub(1, 1) ~= "#", "commentaire présent : " .. tostring(d))
+    end
+  end)
+end
+do
+  local text = [[# hosts file
+127.0.0.1 localhost
+0.0.0.0 ads.example.com
+0.0.0.0 0.0.0.0
+127.0.0.1 tracking.example.org
+::1 ip6-localhost
+0.0.0.0 DOUBLECLICK.NET
+]]
+  local result = parse_hosts(text)
+  test("parse_hosts — nombre de domaines extraits (skip localhost/0.0.0.0/::1)", function()
+    return assert_eq(#result, 3, "3 domaines")
+  end)
+  test("parse_hosts — localhost ignoré", function()
+    for _index_0 = 1, #result do
+      local d = result[_index_0]
+      assert(d ~= "localhost", "localhost présent")
+    end
+  end)
+  test("parse_hosts — normalisation minuscules", function()
+    local found = false
+    for _index_0 = 1, #result do
+      local d = result[_index_0]
+      if d == "doubleclick.net" then
+        found = true
+      end
+    end
+    return assert(found, "doubleclick.net normalisé")
+  end)
+end
+do
+  local text = [[! Commentaire adblock
+||ads.example.com^
+||tracker.example.org^$third-party
+@@||whitelist.example.com^
+||DOUBLECLICK.NET^
+||invalid
+##.css-rule
+]]
+  local result = parse_adblock(text)
+  test("parse_adblock — nombre de domaines extraits", function()
+    return assert_eq(#result, 3, "3 domaines (pas d'exception @@, pas de CSS)")
+  end)
+  test("parse_adblock — normalisation minuscules", function()
+    local found = false
+    for _index_0 = 1, #result do
+      local d = result[_index_0]
+      if d == "doubleclick.net" then
+        found = true
+      end
+    end
+    return assert(found, "doubleclick.net normalisé")
+  end)
+  test("parse_adblock — exception @@ ignorée", function()
+    for _index_0 = 1, #result do
+      local d = result[_index_0]
+      assert(d ~= "whitelist.example.com", "exception présente")
+    end
+  end)
+end
+test("parse — format 'simple' dispatche vers parse_simple", function()
+  local result = parse("simple", "example.com\n# commentaire\n")
+  assert_eq(#result, 1, "1 domaine")
+  return assert_eq(result[1], "example.com", "domaine")
+end)
+test("parse — format inconnu → parse_simple par défaut", function()
+  local result = parse("unknown_format", "example.com\n")
+  return assert_eq(#result, 1, "fallback simple")
+end)
+io.write("\n── load_config ──\n")
+local load_config
+load_config = require("filter.lib.load_config").load_config
+do
+  local TMP_YAML = "./tmp/test_filter_config.yml"
+  local YAML_OK = [[domainlists_dir: /etc/custos/lists
+nets:
+  lan:
+  - 192.168.0.0/16
+times:
+  business: ["8:00", "18:00"]
+sources:
+  ads:
+    urls:
+    - https://example.com/list.txt
+    format: hosts
+    subdir: ads
+rules:
+- description: Règle test
+  actions: [allow]
+  conditions:
+    to_domain: example.com
+- description: Refus par défaut
+  actions: [deny]
+]]
+  local fd = io.open(TMP_YAML, "w")
+  fd:write(YAML_OK)
+  fd:close()
+  test("load_config — chargement fichier valide", function()
+    local cfg, err = load_config(TMP_YAML)
+    return assert(cfg ~= nil, "cfg nil : " .. tostring(err))
+  end)
+  test("load_config — domainlists_dir", function()
+    local cfg, _ = load_config(TMP_YAML)
+    assert(cfg, "cfg nil")
+    return assert_eq(cfg.domainlists_dir, "/etc/custos/lists", "domainlists_dir")
+  end)
+  test("load_config — section nets (tableau)", function()
+    local cfg, _ = load_config(TMP_YAML)
+    assert(cfg, "cfg nil")
+    assert(cfg.nets and cfg.nets.lan, "nets.lan absent")
+    return assert_eq(cfg.nets.lan[1], "192.168.0.0/16", "nets.lan[1]")
+  end)
+  test("load_config — section times", function()
+    local cfg, _ = load_config(TMP_YAML)
+    assert(cfg, "cfg nil")
+    assert(cfg.times and cfg.times.business, "times.business absent")
+    return assert_eq(cfg.times.business[1], "8:00", "times.business[1]")
+  end)
+  test("load_config — section sources", function()
+    local cfg, _ = load_config(TMP_YAML)
+    assert(cfg, "cfg nil")
+    assert(cfg.sources and cfg.sources.ads, "sources.ads absent")
+    assert_eq(cfg.sources.ads.format, "hosts", "sources.ads.format")
+    return assert_eq(cfg.sources.ads.urls[1], "https://example.com/list.txt", "sources.ads.urls[1]")
+  end)
+  test("load_config — section rules (tableau de tables)", function()
+    local cfg, _ = load_config(TMP_YAML)
+    assert(cfg, "cfg nil")
+    assert_eq(#cfg.rules, 2, "2 règles")
+    assert_eq(cfg.rules[1].description, "Règle test", "règle 1 description")
+    assert_eq(cfg.rules[1].actions[1], "allow", "règle 1 action")
+    return assert_eq(cfg.rules[1].conditions.to_domain, "example.com", "règle 1 condition")
+  end)
+  test("load_config — sections manquantes → tables vides", function()
+    local fd2 = io.open(TMP_YAML, "w")
+    fd2:write("rules: []\n")
+    fd2:close()
+    local cfg, _ = load_config(TMP_YAML)
+    assert(cfg, "cfg nil")
+    assert(type(cfg.nets) == "table", "nets vide")
+    assert(type(cfg.times) == "table", "times vide")
+    return assert(type(cfg.sources) == "table", "sources vide")
+  end)
+  test("load_config — fichier inexistant → nil + erreur", function()
+    local cfg, err = load_config("/chemin/inexistant.yml")
+    assert(cfg == nil, "cfg devrait être nil")
+    return assert(type(err) == "string", "message d'erreur attendu")
+  end)
+  test("load_config — YAML invalide → nil + erreur", function()
+    local fd3 = io.open(TMP_YAML, "w")
+    fd3:write("rules: [\nbad yaml unterminated\n")
+    fd3:close()
+    local cfg, err = load_config(TMP_YAML)
+    assert(cfg == nil, "cfg devrait être nil sur YAML invalide")
+    return assert(type(err) == "string", "message d'erreur attendu")
+  end)
+  os.remove(TMP_YAML)
+end
 io.write(string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed))
 return os.exit(failed == 0 and 0 or 1)

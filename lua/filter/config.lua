@@ -8,6 +8,7 @@ return {
     }
   },
   times = { },
+  sources = { },
   rules = {
     {
       description = "Infrastructure réseau toujours autorisée",
