@@ -40,10 +40,10 @@
 #   deny    bloquer
 #   mail    notification e-mail (futur)
 
-# Listes de domaines précompilées (filter/convert.moon)
-domains: {}
-#  maj:    /etc/custos/lists/MaJ.bin
-#  ouvert: /etc/custos/lists/Ouvert.bin
+# Listes de domaines précompilées (filter/convert.moon ou filter/updater.moon)
+# Exécuter make update-lists pour construire toulouse.bin avant de démarrer.
+domains:
+  toulouse: /etc/custos/lists/toulouse.bin
 
 # Sous-réseaux CIDR nommés
 nets:
@@ -62,9 +62,24 @@ sources:
   toulouse:
     url: https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz
     format: toulouse
-    # Laisser categories absent pour extraire toutes les catégories,
-    # ou en spécifier une sélection :
-    # categories: [ads, malware, phishing, redirector, publicite, ddos]
+    # Catégories manifestement indésirables extraites de la liste UT Capitole.
+    # Laisser categories absent pour tout extraire.
+    categories:
+    - adult          # pornographie
+    - mixed_adult    # contenu adulte mixte
+    - lingerie       # lingerie / softcore
+    - malware        # malwares
+    - phishing       # hameçonnage
+    - ddos           # outils DDoS
+    - hacking        # outils de hacking
+    - cryptojacking  # minage de cryptomonnaies
+    - warez          # piratage logiciel
+    - drugs          # drogues
+    - gambling       # jeux d'argent
+    - redirector     # redirecteurs suspects
+    - strong_redirector  # redirecteurs forts
+    - publicite      # publicité (UT Capitole)
+    - marketingware  # marketing agressif / trackers
     output: /etc/custos/lists/toulouse.bin
 #  ads:
 #    urls:
@@ -99,6 +114,11 @@ rules:
     - fastly.com
     - akamaiedge.net
     - example.com
+
+- description: Blocage des catégories indésirables (UT Capitole Toulouse)
+  actions: [deny]
+  conditions:
+    to_domainlist: toulouse
 
 - description: Refus par défaut
   actions: [deny]
