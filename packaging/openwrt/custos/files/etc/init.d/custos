@@ -6,6 +6,9 @@ STOP=05
 
 PROG=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)
 CUSTOS_DIR=/usr/share/custos
+FILTER_CONFIG=/etc/custos/filter.yml
+CRONTABS_ROOT=/etc/crontabs/root
+CUSTOS_CRON_MARKER="# custos-update-lists"
 
 start_service() {
     [ "$(uci get custos.main.enabled 2>/dev/null)" = "0" ] && return 0
@@ -27,6 +30,17 @@ start_service() {
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_close_instance
+
+    # Planifie la mise à jour automatique des listes si activée
+    if [ "$(uci get custos.main.update_lists_enabled 2>/dev/null)" != "0" ]; then
+        _cron_add
+    else
+        _cron_remove
+    fi
+}
+
+stop_service() {
+    _cron_remove
 }
 
 # Un rechargement applique tous les paramètres UCI : redémarrage complet nécessaire
@@ -39,4 +53,44 @@ reload_service() {
 # Rechargement automatique quand `uci commit custos` est exécuté.
 service_triggers() {
     procd_add_reload_trigger "custos"
+}
+
+# ── Mise à jour des listes de domaines ───────────────────────────
+
+update_lists() {
+    [ -z "$PROG" ] && { echo "custos: luajit introuvable"; return 1; }
+
+    local config pid_file
+    config=$(uci get custos.main.filter_config 2>/dev/null)
+    config="${config:-$FILTER_CONFIG}"
+    pid_file=/var/run/custos.pid
+
+    echo "custos: mise à jour des listes de domaines (config: $config)..."
+    "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
+        --config "$config" \
+        --pid "$pid_file"
+}
+
+# ── Gestion du cron ──────────────────────────────────────────────
+
+_cron_add() {
+    local schedule config
+    schedule=$(uci get custos.main.update_lists_schedule 2>/dev/null)
+    schedule="${schedule:-0 3 * * *}"
+    config=$(uci get custos.main.filter_config 2>/dev/null)
+    config="${config:-$FILTER_CONFIG}"
+
+    _cron_remove
+    mkdir -p "$(dirname "$CRONTABS_ROOT")"
+    touch "$CRONTABS_ROOT"
+    printf '%s %s %s/filter/updater.lua --config %s --pid /var/run/custos.pid %s\n' \
+        "$schedule" "$PROG" "$CUSTOS_DIR" "$config" "$CUSTOS_CRON_MARKER" \
+        >> "$CRONTABS_ROOT"
+    /etc/init.d/cron reload 2>/dev/null || true
+}
+
+_cron_remove() {
+    [ -f "$CRONTABS_ROOT" ] || return 0
+    sed -i "/$CUSTOS_CRON_MARKER/d" "$CRONTABS_ROOT"
+    /etc/init.d/cron reload 2>/dev/null || true
 }

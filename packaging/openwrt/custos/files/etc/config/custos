@@ -19,6 +19,14 @@ config custos 'main'
 	# Délai minimal (secondes) entre deux rafraîchissements de la table ARP/NDP
 	option neigh_refresh_cooldown '10'
 
+	# Mise à jour automatique des listes de domaines via cron
+	# Lancer manuellement : /etc/init.d/custos update_lists
+	option update_lists_enabled  '1'
+	option update_lists_schedule '0 3 * * *'
+
+	# Chemin vers le fichier de configuration du filtre YAML
+	option filter_config     '/etc/custos/filter.yml'
+
 	# Domaines autorisés (correspondance par suffixe : "example.com" couvre aussi
 	# "sub.example.com"). Modifier puis relancer : /etc/init.d/custos reload
 	list   allowed_domains   'local'

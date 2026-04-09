@@ -12,7 +12,7 @@ define Package/custos
   SECTION:=net
   CATEGORY:=Network
   TITLE:=CustosVirginum inline DNS filter
-  DEPENDS:=+luajit +nftables +kmod-br-netfilter +kmod-nfnetlink-queue +kmod-nft-queue
+  DEPENDS:=+luajit +lyaml +nftables +kmod-br-netfilter +kmod-nfnetlink-queue +kmod-nft-queue
   PKGARCH:=all
 endef
 
@@ -32,6 +32,7 @@ endef
 
 define Package/custos/conffiles
 /etc/config/custos
+/etc/custos/filter.yml
 endef
 
 define Package/custos/install
@@ -41,6 +42,8 @@ define Package/custos/install
 	$(INSTALL_BIN) $(CURDIR)/files/etc/init.d/custos $(1)/etc/init.d/custos
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) $(CURDIR)/files/etc/config/custos $(1)/etc/config/custos
+	$(INSTALL_DIR) $(1)/etc/custos/lists
+	$(INSTALL_CONF) $(CURDIR)/files/etc/custos/filter.yml $(1)/etc/custos/filter.yml
 endef
 
 $(eval $(call BuildPackage,custos))
