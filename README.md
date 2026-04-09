@@ -99,6 +99,8 @@ worker Q1 : drain pipe → pending[0x1234:192.168.1.42:54321] found (refused=tru
 
 ```
 custos/
+├── cfg/
+│   └── filter.yml           Filter authorization config (YAML)
 ├── src/
 │   ├── config.moon          Configuration: allowlist, constants
 │   ├── uci_config.moon      OpenWrt UCI config loader
@@ -115,6 +117,18 @@ custos/
 │   ├── ffi_ndpi.moon        Version-detecting facade (loads v4 or v5)
 │   ├── ffi_ndpi_v4.moon     FFI cdef for nDPI 4.2–4.8
 │   ├── ffi_ndpi_v5.moon     FFI cdef for nDPI 5.0+
+│   ├── filter/
+│   │   ├── init.moon        Filter engine entry point (load/decide/reload)
+│   │   ├── rule.moon        Rule evaluator (conditions + actions)
+│   │   ├── convert.moon     YAML → engine type converters
+│   │   ├── updater.moon     CLI: download + parse + atomic-write domain lists
+│   │   ├── actions/         Action modules (allow, deny, mail)
+│   │   ├── conditions/      Condition modules (from_net, to_domain, in_time, …)
+│   │   └── lib/
+│   │       ├── bsearch.moon     Binary search in sorted domain list files
+│   │       ├── ipcalc.moon      CIDR membership check
+│   │       ├── load_config.moon YAML config loader (lyaml wrapper)
+│   │       └── parse_domains.moon Multi-format domain list parser
 │   └── parse/
 │       ├── ethernet.moon    L2: MAC src via nfq_get_packet_hw
 │       ├── ip.moon          L3: IPv4 + IPv6 + checksums
@@ -156,6 +170,7 @@ custos/
 |--------------------------|-----------------------------------------|
 | `luajit`                 | Compiled Lua execution                  |
 | `moonscript`             | `.moon` → `.lua` compilation            |
+| `lua-yaml`               | YAML config loader (`lyaml`, LuaJIT)    |
 | `libnetfilter-queue1`    | NFQUEUE C library                       |
 | `libnftables1`           | nftables library (set injection)        |
 | `libndpi-dev`            | nDPI deep packet inspection (FFI)       |
@@ -164,13 +179,13 @@ custos/
 
 **Debian/Ubuntu:**
 ```bash
-apt install luajit libnetfilter-queue1 libnftables1 libndpi-dev nftables
+apt install luajit lua-yaml libnetfilter-queue1 libnftables1 libndpi-dev nftables
 luarocks install moonscript
 ```
 
 **OpenWrt:**
 ```bash
-opkg install luajit libnetfilter-queue nftables kmod-br-netfilter
+opkg install luajit lyaml libnetfilter-queue nftables kmod-br-netfilter
 # moonscript via luarocks or build from source
 ```
 
@@ -178,7 +193,7 @@ opkg install luajit libnetfilter-queue nftables kmod-br-netfilter
 ```dockerfile
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
-    luajit libnetfilter-queue1 libnftables1 nftables \
+    luajit lua-yaml libnetfilter-queue1 libnftables1 nftables \
     lua5.1 luarocks build-essential \
     && luarocks install moonscript \
     && rm -rf /var/lib/apt/lists/*

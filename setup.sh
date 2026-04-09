@@ -67,6 +67,14 @@ check_deps() {
     errors=$((errors+1))
   fi
 
+  # lyaml (lua-yaml sur Debian, lyaml sur OpenWrt)
+  if luajit -e "require 'lyaml'" &>/dev/null; then
+    ok "lyaml disponible"
+  else
+    fail "lyaml introuvable — installer lua-yaml (Debian) ou lyaml (OpenWrt)"
+    errors=$((errors+1))
+  fi
+
   [ $errors -eq 0 ] || { fail "$errors dépendance(s) manquante(s)"; exit 1; }
 }
 
