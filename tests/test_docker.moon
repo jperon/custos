@@ -1,6 +1,12 @@
 #!/usr/bin/env moon
--- Docker end-to-end test for CustosVirginum DNS filter
--- Uses io.execute/io.popen to orchestrate docker-compose and verify behavior
+-- Docker end-to-end test for CustosVirginum DNS filter (FORWARD mode).
+--
+-- Architecture : client → LAN → [filter: dns-filter.nft FORWARD] → WAN → wan-dns
+--
+-- Le filtre agit en routeur (ip_forward=1) + NAT masquerade LAN→WAN.
+-- Le client envoie ses DNS vers wan-dns (172.30.0.20 / fd00:30::20) ;
+-- les paquets DNS traversent le FORWARD chain et sont interceptés par Q0/Q1.
+-- Il n'y a PAS de dnsmasq sur le filtre.
 
 -- Parse command line flags
 arg = (arg or {})
@@ -39,17 +45,10 @@ filter_name = if profile == "ndpi5"
 else
   "custos-filter"
 
--- DNS address of the active filter container
-dns_server = if profile == "ndpi5"
-  "172.28.0.253"
-else
-  "172.28.0.254"
-
--- IPv6 address of the active filter container (fd00:28::/64 LAN)
-dns6_server = if profile == "ndpi5"
-  "fd00:28::fd"
-else
-  "fd00:28::fe"
+-- DNS server : wan-dns, commun aux deux profils.
+-- Le client envoie ses requêtes vers wan-dns ; elles transitent par FORWARD.
+dns_server  = "172.30.0.20"
+dns6_server = "fd00:30::20"
 
 -- Test configuration
 TEST_DOMAINS = {
@@ -57,9 +56,9 @@ TEST_DOMAINS = {
   blocked: "facebook.com"
   nonexistent: "nonexistent.test"
 }
-EXPECTED_TTL = 60  -- From docker-compose environment variable
+EXPECTED_TTL = 60
 
--- ── ANSI colours (always on — redirect to file to strip them) ───────────────
+-- ── ANSI colours ─────────────────────────────────────────────────────────────
 C = {
   reset:  "\27[0m"
   bold:   "\27[1m"
@@ -70,9 +69,7 @@ C = {
   grey:   "\27[90m"
 }
 
--- ── Logging ──────────────────────────────────────────────────────────────────
--- Levels always printed : STEP, EXPECT, GOT, PASS, FAIL, ERROR, WARN
--- Level printed only with --verbose : INFO
+-- ── Logging ───────────────────────────────────────────────────────────────────
 log = (msg, level = "INFO") ->
   switch level
     when "INFO"
@@ -135,7 +132,6 @@ build_image = ->
     log "Skipping Docker build (--no-build)", "WARN"
     return true
 
-  -- Build main custos filter image
   unless force_build
     ok = execute "docker image inspect custos:latest >/dev/null 2>&1"
     if ok
@@ -155,7 +151,6 @@ build_image = ->
       return false
     log "custos:latest built successfully", "PASS"
 
-  -- Build client image (pre-installs tools, needed when LAN is internal)
   unless force_build
     ok = execute "docker image inspect custos-client:latest >/dev/null 2>&1"
     if ok
@@ -171,7 +166,9 @@ build_image = ->
   return true
 
 --- Wait for the filter to be fully ready (queues listening).
--- The filter runs on the host network, but its log file is inside the container.
+-- @tparam string name     Container name
+-- @tparam number timeout  Max seconds to wait
+-- @treturn boolean
 wait_for_filter_ready = (name, timeout = 30) ->
   log "Waiting for #{name} NFQUEUE workers to be ready (queue_listening)…", "STEP"
   for i = 1, timeout
@@ -187,9 +184,7 @@ wait_for_filter_ready = (name, timeout = 30) ->
 
 compose_up = ->
   log "Starting docker-compose environment (profile=#{profile})…", "STEP"
-  -- Stop any existing containers first
   execute "docker compose --profile ndpi4 --profile ndpi5 down 2>/dev/null || true"
-  -- Remove stale filter log
   execute "rm -f ./tmp/dns-filter.log 2>/dev/null || true"
 
   success = execute "docker compose --profile #{profile} up -d"
@@ -197,25 +192,18 @@ compose_up = ->
     log "Failed to start docker compose", "ERROR"
     return false
 
-  -- Wait for all containers
   unless wait_for_container(filter_name) and
          wait_for_container("custos-client") and
          wait_for_container("custos-client2") and
          wait_for_container("custos-wan-dns")
     return false
 
-  -- Wait for filter to be fully ready (queues listening)
   unless wait_for_filter_ready filter_name
     return false
 
-  -- Give dnsmasq (in the filter) time to start (sleep 2 + exec in container).
-  os.execute "sleep 3"
-
-  -- Warm up: prime the dnsmasq cache with the test allowed-domain and confirm
-  -- the whole DNS chain (client→filter→wan-dns→upstream) is working.
-  -- wan-dns now uses a pre-built image so it starts immediately, but a short
-  -- retry loop guards against any transient startup delay.
-  log "Warming up DNS — priming dnsmasq cache with #{TEST_DOMAINS.allowed}…", "STEP"
+  -- Vérifier que le client a bien sa route par défaut vers le filtre
+  -- et que la chaîne DNS (client→FORWARD→wan-dns) est opérationnelle.
+  log "Warming up — priming DNS chain with #{TEST_DOMAINS.allowed}…", "STEP"
   warmed = false
   for i = 1, 5
     ok, out = execute "docker exec custos-client nslookup #{TEST_DOMAINS.allowed} #{dns_server} 2>&1", true
@@ -225,15 +213,13 @@ compose_up = ->
     log "DNS not ready yet (attempt #{i}/5), retrying in 2 s…", "INFO"
     os.execute "sleep 2"
   if warmed
-    log "Environment ready (DNS chain up, cache primed)", "PASS"
+    log "Environment ready (DNS chain up via FORWARD)", "PASS"
   else
     log "DNS chain did not respond in time — tests may be flaky", "WARN"
   return true
 
---- Clean up nftables tables in filter container (isolated namespace).
 cleanup_host = ->
   log "Cleaning up filter nftables rules..."
-  -- Remove nft dns-filter tables from filter container (isolated namespace)
   cmd = "docker exec #{filter_name} sh -c 'nft delete table ip dns-filter 2>/dev/null; nft delete table ip6 dns-filter 2>/dev/null; true'"
   execute cmd, true
   execute "rm -f ./tmp/dns-filter.log 2>/dev/null || true"
@@ -250,7 +236,6 @@ compose_down = ->
 
 query_dns = (domain) ->
   log "Querying DNS for #{domain}..."
-  -- Query filter's DNS directly (Docker overrides /etc/resolv.conf with its internal DNS)
   cmd = "timeout 12s docker exec custos-client nslookup #{domain} #{dns_server} 2>&1"
   success, output = execute cmd, true
 
@@ -258,8 +243,7 @@ query_dns = (domain) ->
     log "DNS query failed for #{domain}", "ERROR"
     return nil, output
 
-  if verbose
-    print output
+  print output if verbose
   return success, output
 
 --- Send a DNS-over-TCP query using dig +tcp from the client container.
@@ -277,7 +261,6 @@ query_dns_tcp = (domain) ->
 
 check_nftables_set = (set_name) ->
   log "Checking nftables set #{set_name}..."
-  -- Filter runs on host network, so use docker exec to run nft on host's tables
   cmd = "docker exec #{filter_name} nft list set ip dns-filter #{set_name} 2>/dev/null"
   success, output = execute cmd, true
 
@@ -285,16 +268,13 @@ check_nftables_set = (set_name) ->
     log "Failed to check nftables set #{set_name}", "ERROR"
     return false, output
 
-  if verbose
-    print output
+  print output if verbose
 
-  -- Check if set has entries
   has_entries = output\match "elements = {[^}]+}"
   return has_entries, output
 
 check_logs = ->
   log "Checking filter logs..."
-  -- Filter runs inside container, log is in the ./tmp volume mount
   cmd = "docker exec #{filter_name} cat /app/tmp/dns-filter.log 2>/dev/null"
   success, output = execute cmd, true
 
@@ -302,10 +282,8 @@ check_logs = ->
     log "Failed to get logs", "ERROR"
     return false, output
 
-  if verbose
-    print output
+  print output if verbose
 
-  -- Check for expected log patterns
   has_protocol = output\match "ndpi_master=%d+" or output\match "ndpi_app=%d+"
   has_dns = output\match "DNS" or output\match "dns" or output\match "txid=" or output\match "qname="
 
@@ -343,7 +321,6 @@ ping_from_client2 = (ip, timeout_sec = 3) ->
   return success, out
 
 --- Vide les sets ip4_allowed et ip6_allowed dans le filtre.
--- Utilisé avant les tests de ping pour garantir un état propre.
 flush_ip4_allowed = ->
   execute "docker exec #{filter_name} nft flush set ip  dns-filter ip4_allowed 2>/dev/null", true
   execute "docker exec #{filter_name} nft flush set ip6 dns-filter ip6_allowed 2>/dev/null", true
@@ -456,7 +433,7 @@ prepare_tcp_seg_script = (domain, server) ->
   ok = execute "docker cp ./tmp/dns_tcp_seg.lua custos-client:/tmp/dns_tcp_seg.lua 2>&1"
   return ok
 
---- Run the DNS-over-TCP segmentation test: sends query in two TCP segments.
+--- Run the DNS-over-TCP segmentation test.
 -- @tparam string domain  Domain to query.
 -- @treturn boolean, string  success, raw output ("rcode=N len=M" or "error=...").
 query_dns_tcp_segmented = (domain) ->
@@ -470,7 +447,9 @@ query_dns_tcp_segmented = (domain) ->
     (rcode == "0") and (ttl == tostring EXPECTED_TTL)
 
 --- Write a LuaJIT script that sends an IPv6 UDP DNS query with a Hop-by-Hop
--- extension header using SOCK_DGRAM + setsockopt(IPV6_HOPOPTS).
+-- extension header. The query is addressed to dns6_server (wan-dns IPv6) and
+-- transits via FORWARD on the filter — testing that dns-filter.nft FORWARD
+-- chain handles IPv6 extension headers.
 -- @tparam string domain  Domain to query.
 -- @tparam string server  IPv6 address of the DNS server.
 -- @treturn boolean  true on success.
@@ -541,7 +520,6 @@ query_dns_ipv6_hbh = (domain) ->
 tests_passed = 0
 tests_failed = 0
 
--- IPs réelles pré-résolues via dig sur l'hôte (nil si dig indisponible)
 cloudflare_ip = nil
 facebook_ip   = nil
 
@@ -565,9 +543,8 @@ run_test = (name, expected, test_func) ->
   return success
 
 -- Execute tests
-log "Starting Docker end-to-end tests for CustosVirginum (profile=#{profile})", "STEP"
+log "Starting Docker end-to-end tests for CustosVirginum (profile=#{profile}, FORWARD mode)", "STEP"
 
--- Build and start environment
 unless build_image!
   os.exit 1
 
@@ -593,12 +570,10 @@ print ""
 -- ── Test suite ────────────────────────────────────────────────────────────────
 
 run_test "DNS query — allowed domain resolves",
-  "nslookup #{TEST_DOMAINS.allowed} → Address: <ip> ; ping avant FAIL, ping après PASS",
+  "nslookup #{TEST_DOMAINS.allowed} @#{dns_server} → Address: <ip> ; ping avant FAIL, ping après PASS",
   ->
-    -- Vider ip4_allowed pour que le ping avant soit déterministe
     flush_ip4_allowed!
 
-    -- Ping avant résolution DNS : LAN isolé + ip4_allowed vide → doit échouer
     if cloudflare_ip
       p_before_ok, _ = ping_from_client cloudflare_ip
       if p_before_ok
@@ -613,7 +588,6 @@ run_test "DNS query — allowed domain resolves",
     else
       (output\match "([^\n]+)") or "(empty output)"
 
-    -- Ping après résolution DNS : ip4_allowed peuplé + MASQUERADE WAN → doit réussir
     if cloudflare_ip and ok
       p_after_ok, _ = ping_from_client cloudflare_ip, 4
       if p_after_ok
@@ -625,13 +599,12 @@ run_test "DNS query — allowed domain resolves",
     return ok, obtained
 
 run_test "DNS query — blocked domain is rejected",
-  "nslookup #{TEST_DOMAINS.blocked} → REFUSED (RCODE 5 + EDE Filtered) ; ping avant et après FAIL",
+  "nslookup #{TEST_DOMAINS.blocked} @#{dns_server} → REFUSED ; ping avant et après FAIL",
   ->
-    -- Ping avant : LAN isolé + facebook hors ip4_allowed → doit échouer
     if facebook_ip
       p_ok, _ = ping_from_client facebook_ip
       if p_ok
-        log "ping #{facebook_ip} avant DNS : PASS inattendu (LAN isolé, facebook jamais dans ip4_allowed)", "WARN"
+        log "ping #{facebook_ip} avant DNS : PASS inattendu (LAN isolé)", "WARN"
       else
         log "ping #{facebook_ip} avant DNS : échec attendu (LAN isolé)", "PASS"
 
@@ -641,7 +614,6 @@ run_test "DNS query — blocked domain is rejected",
                (output\match "([^\n]+)") or
                "(no output)"
 
-    -- Ping après : domaine refusé → jamais dans ip4_allowed → doit rester hors portée
     if facebook_ip
       p_ok, _ = ping_from_client facebook_ip
       if p_ok
@@ -653,7 +625,7 @@ run_test "DNS query — blocked domain is rejected",
     return ok, obtained
 
 run_test "DNS query — nonexistent domain returns NXDOMAIN",
-  "nslookup #{TEST_DOMAINS.nonexistent} → NXDOMAIN or can't find",
+  "nslookup #{TEST_DOMAINS.nonexistent} @#{dns_server} → NXDOMAIN or can't find",
   ->
     success, output = query_dns TEST_DOMAINS.nonexistent
     ok = not success or
@@ -695,19 +667,15 @@ run_test "Filter logs contain DNS metadata",
     return ok, obtained
 
 run_test "DNS response TTL is patched to #{EXPECTED_TTL}s",
-  "dig #{TEST_DOMAINS.allowed} @dns_server → TTL == #{EXPECTED_TTL} in answer section",
+  "dig #{TEST_DOMAINS.allowed} @#{dns_server} → TTL == #{EXPECTED_TTL} in answer section",
   ->
-    -- Utilise dig (mode batch) pour obtenir le TTL réel du RR A
     cmd = "docker exec custos-client dig +noall +answer #{TEST_DOMAINS.allowed} @#{dns_server} 2>&1"
     _, output = execute cmd, true
-    -- Le format dig +answer est : nom TTL class type rdata
-    -- ex: github.com. 60 IN A 140.82.121.3
     ttl_str = output and output\match "%s+(%d+)%s+IN%s+A%s+"
     if not ttl_str
-      -- Fallback nslookup : vérifier juste que la réponse arrive
       success2, output2 = query_dns TEST_DOMAINS.allowed
       ok2 = success2 and (output2\match "Address:" or output2\match "Name:") != nil
-      return ok2, "(dig unavailable, nslookup repondu: #{ok2})"
+      return ok2, "(dig unavailable, nslookup répondu: #{ok2})"
     local_ttl = tonumber ttl_str
     ok = local_ttl == EXPECTED_TTL
     obtained = "TTL=#{local_ttl} (attendu=#{EXPECTED_TTL})"
@@ -716,12 +684,8 @@ run_test "DNS response TTL is patched to #{EXPECTED_TTL}s",
 run_test "AAAA records populate ip6_allowed nftables set",
   "nslookup -type=AAAA #{TEST_DOMAINS.allowed} → if AAAA RRs received, ip6_allowed populated",
   ->
-    -- Query AAAA over IPv4 transport : the DNS response flows through worker_q1.
-    -- If the environment has no IPv6 upstream, the test is skipped (pass with note).
-    cmd = "docker exec custos-client nslookup -type=AAAA #{TEST_DOMAINS.allowed} #{dns_server} 2>&1"
+    cmd = "docker exec custos-client nslookup -type=AAAA #{TEST_DOMAINS.allowed} #{dns6_server} 2>&1"
     q_ok, output = execute cmd, true
-    -- Alpine nslookup prints "Address: 2606:4700::..." (no "AAAA" keyword).
-    -- Match an IPv6 address: at least two colon-separated hex groups in an Address line.
     has_aaaa = q_ok and (
       output\match("AAAA") != nil or
       output\match("has IPv6 address") != nil or
@@ -729,10 +693,8 @@ run_test "AAAA records populate ip6_allowed nftables set",
     )
 
     unless has_aaaa
-      -- No AAAA records returned by upstream in this environment.
       return true, "no AAAA records from upstream — unit tests cover the code path"
 
-    -- AAAA records were received: verify ip6_allowed was populated
     set_cmd = "docker exec #{filter_name} nft list set ip6 dns-filter ip6_allowed 2>/dev/null"
     _, set_out = execute set_cmd, true
     has_elem  = set_out and set_out\match("elements = {[^}]+}") != nil
@@ -752,33 +714,25 @@ run_test "Per-client isolation — seul client1 accède à l'IP résolue",
     unless cloudflare_ip
       return true, "dig indisponible sur l'hôte — test d'isolation ignoré"
 
-    -- État propre : vider les sets nftables
     flush_ip4_allowed!
 
-    -- Avant toute résolution DNS, ni client1 ni client2 ne doivent pinguer
     p1_before, _ = ping_from_client  cloudflare_ip, 2
     p2_before, _ = ping_from_client2 cloudflare_ip, 2
     if p1_before or p2_before
       log "ping avant DNS réussi (LAN isolé + set vide) — résidu de test précédent ?", "WARN"
 
-    -- client1 résout le domaine → add_ip4("172.28.0.10", cloudflare_ip)
     q_ok, q_out = query_dns TEST_DOMAINS.allowed
     unless q_ok and (q_out\match("Address:") or q_out\match("Name:"))
       return false, "DNS query par client1 échouée : #{(q_out\match '([^\n]+)') or '?'}"
 
-    -- Laisser le filtre traiter la réponse (Q1 async)
     os.execute "sleep 1"
 
-    -- client1 → doit passer (son entrée (172.28.0.10 . cloudflare_ip) est dans le set)
     p1_ok, p1_out = ping_from_client cloudflare_ip, 4
     unless p1_ok
       log "client1 ping #{cloudflare_ip} : FAIL — vérifier ip4_allowed et route WAN", "WARN"
 
-    -- client2 → doit rester bloqué ((172.28.0.11 . cloudflare_ip) absent du set)
     p2_ok, p2_out = ping_from_client2 cloudflare_ip, 3
 
-    -- V\u00e9rification nft : s'assurer que l'entr\u00e9e pour client1 est bien pr\u00e9sente
-    -- (la paire est "172.28.0.10 . <cloudflare_ip>")
     _, set_out = execute "docker exec #{filter_name} nft list set ip dns-filter ip4_allowed 2>/dev/null", true
     entry_c1 = set_out != nil and set_out\match("172.28.0.10") != nil
     entry_c2 = set_out != nil and set_out\match("172.28.0.11") != nil
@@ -796,7 +750,7 @@ run_test "Per-client isolation — seul client1 accède à l'IP résolue",
 -- ── TCP DNS tests ─────────────────────────────────────────────────────────────
 
 run_test "DNS over TCP — allowed domain resolves",
-  "dig +tcp #{TEST_DOMAINS.allowed} → NOERROR with at least one A record",
+  "dig +tcp #{TEST_DOMAINS.allowed} @#{dns_server} → NOERROR with at least one A record",
   ->
     success, output = query_dns_tcp TEST_DOMAINS.allowed
     ip = output and output\match("(%d+%.%d+%.%d+%.%d+)")
@@ -805,11 +759,10 @@ run_test "DNS over TCP — allowed domain resolves",
     return ok, obtained
 
 run_test "DNS over TCP — blocked domain is dropped",
-  "dig +tcp #{TEST_DOMAINS.blocked} → timeout/no answer (Q0 DROPs the data segment)",
+  "dig +tcp #{TEST_DOMAINS.blocked} @#{dns_server} → timeout/no answer (Q0 DROPs the data segment)",
   ->
     cmd = "timeout 12s docker exec custos-client dig +tcp +tries=1 +time=3 #{TEST_DOMAINS.blocked} @#{dns_server} 2>&1"
     q_ok, output = execute cmd, true
-    -- Pass if dig did NOT receive a successful NOERROR answer.
     has_answer = q_ok and (output\match("ANSWER: [1-9]") != nil or output\match("status: NOERROR") != nil)
     obtained = (output\match "([^\n]+)") or "(no output)"
     return not has_answer, obtained
@@ -831,10 +784,9 @@ run_test "DNS over TCP segmented — 2-segment reassembly + TTL patched",
 
 -- ── IPv6 extension header test ────────────────────────────────────────────────
 
-run_test "IPv6 + Hop-by-Hop DNS — filter parses extension header (af=ipv6)",
-  "LuaJIT SOCK_DGRAM+IPV6_HOPOPTS: send HbH DNS query for #{TEST_DOMAINS.allowed} → filter log shows af=ipv6 + qname",
+run_test "IPv6 + Hop-by-Hop DNS — filter parses extension header via FORWARD (af=ipv6)",
+  "LuaJIT SOCK_DGRAM+IPV6_HOPOPTS: send HbH DNS to #{dns6_server} via FORWARD → filter log shows af=ipv6 + qname",
   ->
-    -- Clear old log snapshot so we can detect new entries from this test.
     _, log_before = execute "docker exec #{filter_name} cat /app/tmp/dns-filter.log 2>/dev/null | wc -l", true
     lines_before = tonumber (log_before or "0")
 
@@ -844,16 +796,12 @@ run_test "IPv6 + Hop-by-Hop DNS — filter parses extension header (af=ipv6)",
       err = (script_out and script_out\match "([^\n]+)") or "(no output)"
       return false, "IPv6 HbH packet not sent: #{err}"
 
-    -- Give the filter time to process the packet.
     os.execute "sleep 1"
 
-    -- Check filter log for a new entry with af=ipv6 and the queried qname.
     _, log_out = execute "docker exec #{filter_name} cat /app/tmp/dns-filter.log 2>/dev/null", true
-    new_lines = if log_out then log_out\match(".*\n") or log_out else ""
     has_ipv6  = log_out != nil and (log_out\match "af=ipv6") != nil
     has_qname = log_out != nil and (log_out\match "qname=#{TEST_DOMAINS.allowed\gsub('%.', '%%.')}") != nil
 
-    -- Response detail (best-effort: dnsmasq may only listen on IPv4).
     rcode_str = script_out and script_out\match "rcode=(%d+)"
     resp_note = if rcode_str
       " response=rcode#{rcode_str}"

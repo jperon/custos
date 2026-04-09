@@ -36,18 +36,8 @@ if profile == "ndpi5" then
 else
   filter_name = "custos-filter"
 end
-local dns_server
-if profile == "ndpi5" then
-  dns_server = "172.28.0.253"
-else
-  dns_server = "172.28.0.254"
-end
-local dns6_server
-if profile == "ndpi5" then
-  dns6_server = "fd00:28::fd"
-else
-  dns6_server = "fd00:28::fe"
-end
+local dns_server = "172.30.0.20"
+local dns6_server = "fd00:30::20"
 local TEST_DOMAINS = {
   allowed = "cloudflare.com",
   blocked = "facebook.com",
@@ -232,8 +222,7 @@ compose_up = function()
   if not (wait_for_filter_ready(filter_name)) then
     return false
   end
-  os.execute("sleep 3")
-  log("Warming up DNS — priming dnsmasq cache with " .. tostring(TEST_DOMAINS.allowed) .. "…", "STEP")
+  log("Warming up — priming DNS chain with " .. tostring(TEST_DOMAINS.allowed) .. "…", "STEP")
   local warmed = false
   for i = 1, 5 do
     local ok, out = execute("docker exec custos-client nslookup " .. tostring(TEST_DOMAINS.allowed) .. " " .. tostring(dns_server) .. " 2>&1", true)
@@ -245,7 +234,7 @@ compose_up = function()
     os.execute("sleep 2")
   end
   if warmed then
-    log("Environment ready (DNS chain up, cache primed)", "PASS")
+    log("Environment ready (DNS chain up via FORWARD)", "PASS")
   else
     log("DNS chain did not respond in time — tests may be flaky", "WARN")
   end
@@ -581,7 +570,7 @@ run_test = function(name, expected, test_func)
   end
   return success
 end
-log("Starting Docker end-to-end tests for CustosVirginum (profile=" .. tostring(profile) .. ")", "STEP")
+log("Starting Docker end-to-end tests for CustosVirginum (profile=" .. tostring(profile) .. ", FORWARD mode)", "STEP")
 if not (build_image()) then
   os.exit(1)
 end
@@ -603,7 +592,7 @@ else
   log("dig unavailable or " .. tostring(TEST_DOMAINS.blocked) .. " unresolved — ping tests will be skipped", "WARN")
 end
 print("")
-run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_DOMAINS.allowed) .. " → Address: <ip> ; ping avant FAIL, ping après PASS", function()
+run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_DOMAINS.allowed) .. " @" .. tostring(dns_server) .. " → Address: <ip> ; ping avant FAIL, ping après PASS", function()
   flush_ip4_allowed()
   if cloudflare_ip then
     local p_before_ok, _ = ping_from_client(cloudflare_ip)
@@ -632,11 +621,11 @@ run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_D
   end
   return ok, obtained
 end)
-run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TEST_DOMAINS.blocked) .. " → REFUSED (RCODE 5 + EDE Filtered) ; ping avant et après FAIL", function()
+run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TEST_DOMAINS.blocked) .. " @" .. tostring(dns_server) .. " → REFUSED ; ping avant et après FAIL", function()
   if facebook_ip then
     local p_ok, _ = ping_from_client(facebook_ip)
     if p_ok then
-      log("ping " .. tostring(facebook_ip) .. " avant DNS : PASS inattendu (LAN isolé, facebook jamais dans ip4_allowed)", "WARN")
+      log("ping " .. tostring(facebook_ip) .. " avant DNS : PASS inattendu (LAN isolé)", "WARN")
     else
       log("ping " .. tostring(facebook_ip) .. " avant DNS : échec attendu (LAN isolé)", "PASS")
     end
@@ -655,7 +644,7 @@ run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TES
   end
   return ok, obtained
 end)
-run_test("DNS query — nonexistent domain returns NXDOMAIN", "nslookup " .. tostring(TEST_DOMAINS.nonexistent) .. " → NXDOMAIN or can't find", function()
+run_test("DNS query — nonexistent domain returns NXDOMAIN", "nslookup " .. tostring(TEST_DOMAINS.nonexistent) .. " @" .. tostring(dns_server) .. " → NXDOMAIN or can't find", function()
   local success, output = query_dns(TEST_DOMAINS.nonexistent)
   local ok = not success or output:match("NXDOMAIN") ~= nil or output:match("can't find") ~= nil
   local obtained = (output:match("(%S*NXDOMAIN%S*)")) or (output:match("(can't find[^\n]*)")) or (output:match("([^\n]+)")) or "(no output)"
@@ -696,14 +685,14 @@ run_test("Filter logs contain DNS metadata", "log file has txid= or qname= entri
   end
   return ok, obtained
 end)
-run_test("DNS response TTL is patched to " .. tostring(EXPECTED_TTL) .. "s", "dig " .. tostring(TEST_DOMAINS.allowed) .. " @dns_server → TTL == " .. tostring(EXPECTED_TTL) .. " in answer section", function()
+run_test("DNS response TTL is patched to " .. tostring(EXPECTED_TTL) .. "s", "dig " .. tostring(TEST_DOMAINS.allowed) .. " @" .. tostring(dns_server) .. " → TTL == " .. tostring(EXPECTED_TTL) .. " in answer section", function()
   local cmd = "docker exec custos-client dig +noall +answer " .. tostring(TEST_DOMAINS.allowed) .. " @" .. tostring(dns_server) .. " 2>&1"
   local _, output = execute(cmd, true)
   local ttl_str = output and output:match("%s+(%d+)%s+IN%s+A%s+")
   if not ttl_str then
     local success2, output2 = query_dns(TEST_DOMAINS.allowed)
     local ok2 = success2 and (output2:match("Address:" or output2:match("Name:"))) ~= nil
-    return ok2, "(dig unavailable, nslookup repondu: " .. tostring(ok2) .. ")"
+    return ok2, "(dig unavailable, nslookup répondu: " .. tostring(ok2) .. ")"
   end
   local local_ttl = tonumber(ttl_str)
   local ok = local_ttl == EXPECTED_TTL
@@ -711,7 +700,7 @@ run_test("DNS response TTL is patched to " .. tostring(EXPECTED_TTL) .. "s", "di
   return ok, obtained
 end)
 run_test("AAAA records populate ip6_allowed nftables set", "nslookup -type=AAAA " .. tostring(TEST_DOMAINS.allowed) .. " → if AAAA RRs received, ip6_allowed populated", function()
-  local cmd = "docker exec custos-client nslookup -type=AAAA " .. tostring(TEST_DOMAINS.allowed) .. " " .. tostring(dns_server) .. " 2>&1"
+  local cmd = "docker exec custos-client nslookup -type=AAAA " .. tostring(TEST_DOMAINS.allowed) .. " " .. tostring(dns6_server) .. " 2>&1"
   local q_ok, output = execute(cmd, true)
   local has_aaaa = q_ok and (output:match("AAAA") ~= nil or output:match("has IPv6 address") ~= nil or output:match("Address: [%x:]+:[%x:]+") ~= nil)
   if not (has_aaaa) then
@@ -763,14 +752,14 @@ run_test("Per-client isolation — seul client1 accède à l'IP résolue", "clie
   local ok = p1_ok and (not p2_ok)
   return ok, obtained
 end)
-run_test("DNS over TCP — allowed domain resolves", "dig +tcp " .. tostring(TEST_DOMAINS.allowed) .. " → NOERROR with at least one A record", function()
+run_test("DNS over TCP — allowed domain resolves", "dig +tcp " .. tostring(TEST_DOMAINS.allowed) .. " @" .. tostring(dns_server) .. " → NOERROR with at least one A record", function()
   local success, output = query_dns_tcp(TEST_DOMAINS.allowed)
   local ip = output and output:match("(%d+%.%d+%.%d+%.%d+)")
   local ok = success and ip ~= nil
   local obtained = ip or output:match("([^\n]+)") or "(no output)"
   return ok, obtained
 end)
-run_test("DNS over TCP — blocked domain is dropped", "dig +tcp " .. tostring(TEST_DOMAINS.blocked) .. " → timeout/no answer (Q0 DROPs the data segment)", function()
+run_test("DNS over TCP — blocked domain is dropped", "dig +tcp " .. tostring(TEST_DOMAINS.blocked) .. " @" .. tostring(dns_server) .. " → timeout/no answer (Q0 DROPs the data segment)", function()
   local cmd = "timeout 12s docker exec custos-client dig +tcp +tries=1 +time=3 " .. tostring(TEST_DOMAINS.blocked) .. " @" .. tostring(dns_server) .. " 2>&1"
   local q_ok, output = execute(cmd, true)
   local has_answer = q_ok and (output:match("ANSWER: [1-9]") ~= nil or output:match("status: NOERROR") ~= nil)
@@ -792,7 +781,7 @@ run_test("DNS over TCP segmented — 2-segment reassembly + TTL patched", "LuaJI
   end
   return success, obtained
 end)
-run_test("IPv6 + Hop-by-Hop DNS — filter parses extension header (af=ipv6)", "LuaJIT SOCK_DGRAM+IPV6_HOPOPTS: send HbH DNS query for " .. tostring(TEST_DOMAINS.allowed) .. " → filter log shows af=ipv6 + qname", function()
+run_test("IPv6 + Hop-by-Hop DNS — filter parses extension header via FORWARD (af=ipv6)", "LuaJIT SOCK_DGRAM+IPV6_HOPOPTS: send HbH DNS to " .. tostring(dns6_server) .. " via FORWARD → filter log shows af=ipv6 + qname", function()
   local _, log_before = execute("docker exec " .. tostring(filter_name) .. " cat /app/tmp/dns-filter.log 2>/dev/null | wc -l", true)
   local lines_before = tonumber((log_before or "0"))
   local ok, script_out = query_dns_ipv6_hbh(TEST_DOMAINS.allowed)
@@ -804,12 +793,6 @@ run_test("IPv6 + Hop-by-Hop DNS — filter parses extension header (af=ipv6)", "
   os.execute("sleep 1")
   local log_out
   _, log_out = execute("docker exec " .. tostring(filter_name) .. " cat /app/tmp/dns-filter.log 2>/dev/null", true)
-  local new_lines
-  if log_out then
-    new_lines = log_out:match(".*\n") or log_out
-  else
-    new_lines = ""
-  end
   local has_ipv6 = log_out ~= nil and (log_out:match("af=ipv6")) ~= nil
   local has_qname = log_out ~= nil and (log_out:match("qname=" .. tostring(TEST_DOMAINS.allowed:gsub('%.', '%%.')))) ~= nil
   local rcode_str = script_out and script_out:match("rcode=(%d+)")
