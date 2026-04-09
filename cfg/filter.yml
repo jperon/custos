@@ -58,7 +58,14 @@ times: {}
 
 # Sources pour filter/updater.moon (téléchargement automatique)
 # Exécuter : luajit lua/filter/updater.lua [--pid /run/custos.pid]
-sources: {}
+sources:
+  toulouse:
+    url: https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz
+    format: toulouse
+    # Laisser categories absent pour extraire toutes les catégories,
+    # ou en spécifier une sélection :
+    # categories: [ads, malware, phishing, redirector, publicite, ddos]
+    output: /etc/custos/lists/toulouse.bin
 #  ads:
 #    urls:
 #    - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts

@@ -11,10 +11,18 @@
 --       format: "simple"|"hosts"|"adblock"
 --       output: "/chemin/vers/liste.bin"
 --
+--   # Format Toulouse (tar.gz DSI UT Capitole) :
+--     nom_liste:
+--       url:        "https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz"
+--       format:     toulouse
+--       categories: [ads, malware, phishing, ...]   -- optionnel, toutes si absent
+--       output:     "/chemin/vers/liste.bin"
+--
 -- Formats supportés (voir filter/lib/parse_domains.moon) :
---   simple  : un domaine par ligne, # pour les commentaires
---   hosts   : 0.0.0.0 domain.com (format /etc/hosts)
---   adblock : ||domain.com^ (format uBlock/AdBlock)
+--   simple   : un domaine par ligne, # pour les commentaires
+--   hosts    : 0.0.0.0 domain.com (format /etc/hosts)
+--   adblock  : ||domain.com^ (format uBlock/AdBlock)
+--   toulouse : tar.gz DSI UT Capitole (blacklists/<cat>/domains)
 --
 -- Pour chaque source :
 --   1. Télécharge chaque URL via curl
@@ -72,6 +80,76 @@ download = (url) ->
   ok = fh\close!
   return nil, "curl failed (HTTP error ou timeout) : #{url}" unless ok and #data > 0
   data, nil
+
+--- Télécharge une URL vers un fichier local.
+-- @tparam  string   url      URL à télécharger
+-- @tparam  string   dest     Chemin de destination
+-- @tparam  number   timeout  Timeout en secondes
+-- @treturn boolean           Succès
+download_file = (url, dest, timeout) ->
+  timeout = timeout or 120
+  cmd = "curl --silent --location --max-time #{timeout} --fail -o #{dest} #{url}"
+  ret = os.execute cmd
+  ret == 0
+
+-- ── Format Toulouse ───────────────────────────────────────────────
+
+--- Télécharge et parse une source au format Toulouse (DSI UT Capitole).
+-- Le fichier tar.gz contient des sous-dossiers par catégorie :
+--   blacklists/<categorie>/domains  (une ligne = un domaine)
+-- Si source.categories est absent ou vide, toutes les catégories sont extraites.
+-- @tparam  string   name     Nom de la source (pour les logs)
+-- @tparam  table    source   { url, categories, output }
+-- @tparam  boolean  dry_run
+-- @treturn boolean           Succès
+-- @treturn string            Message (nb domaines ou erreur)
+fetch_toulouse = (name, source, dry_run) ->
+  url    = source.url
+  cats   = source.categories  -- table|nil
+  output = source.output
+
+  return false, "pas d'URL définie"    unless url
+  return false, "pas de chemin output défini" unless output
+
+  tmp_tar = output .. ".tar.gz.tmp"
+
+  -- Téléchargement
+  io.stderr\write "[#{name}] GET #{url} ... "
+  unless download_file url, tmp_tar
+    os.remove tmp_tar
+    return false, "curl échoué (HTTP error ou timeout)"
+  io.stderr\write "OK\n"
+
+  -- Si aucune catégorie spécifiée, lister celles disponibles dans le tar
+  if not cats or #cats == 0
+    fh = io.popen "tar -tzf #{tmp_tar} 2>/dev/null"
+    cats = {}
+    if fh
+      for line in fh\lines!
+        cat = line\match "^blacklists/([^/]+)/domains$"
+        cats[#cats + 1] = cat if cat
+      fh\close!
+
+  if #cats == 0
+    os.remove tmp_tar
+    return false, "aucune catégorie trouvée dans le tar"
+
+  io.stderr\write "[#{name}] #{#cats} catégorie(s) : #{table.concat cats, ', '}\n"
+
+  -- Extraction et fusion de toutes les catégories
+  all_domains = {}
+  for cat in *cats
+    fh = io.popen "tar -xzf #{tmp_tar} -O blacklists/#{cat}/domains 2>/dev/null"
+    if fh
+      data = fh\read "*a"
+      fh\close!
+      domains = parse_domains.parse "simple", data
+      for d in *domains
+        all_domains[#all_domains + 1] = d
+
+  os.remove tmp_tar
+  io.stderr\write "[#{name}] #{#all_domains} domaines total\n"
+  write_bin all_domains, output, dry_run
 
 -- ── Hash, tri et écriture atomique ────────────────────────────────
 
@@ -134,7 +212,6 @@ updated = 0
 errors  = 0
 
 for name, source in pairs sources
-  urls   = source.urls or {}
   format = source.format or "simple"
   output = source.output
 
@@ -142,6 +219,20 @@ for name, source in pairs sources
     io.stderr\write "[#{name}] SKIP : pas de chemin output défini\n"
     errors += 1
     continue
+
+  -- Format Toulouse : traitement spécial (tar.gz multi-catégories)
+  if format == "toulouse"
+    ok, msg = fetch_toulouse name, source, opts.dry_run
+    if ok
+      io.stderr\write "[#{name}] ✓ #{msg}\n"
+      updated += 1
+    else
+      io.stderr\write "[#{name}] ✗ #{msg}\n"
+      errors += 1
+    continue
+
+  -- Formats classiques : simple / hosts / adblock
+  urls = source.urls or {}
 
   if #urls == 0
     io.stderr\write "[#{name}] SKIP : aucune URL définie\n"
