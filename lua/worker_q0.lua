@@ -8,11 +8,7 @@ QUEUE_QUESTIONS = require("config").QUEUE_QUESTIONS
 local get_l2
 get_l2 = require("parse/ethernet").get_l2
 local ndpi = require("parse/ndpi")
-local is_allowed, check_reload
-do
-  local _obj_0 = require("allowlist")
-  is_allowed, check_reload = _obj_0.is_allowed, _obj_0.check_reload
-end
+local filter = require("filter")
 local write_msg, write_refused_msg
 do
   local _obj_0 = require("ipc")
@@ -31,7 +27,7 @@ end
 local pipe_wfd = nil
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
-  check_reload()
+  filter.reload()
   local l2 = get_l2(nfad)
   local payload_ptr = ffi.new("unsigned char*[1]")
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
@@ -76,11 +72,18 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   for _, q in ipairs(pkt.questions) do
     q_fields.qname = q.qname
     q_fields.qtype = q.qtype_name
-    if is_allowed(q.qname) then
+    local req = {
+      domain = q.qname,
+      src_ip = pkt.ip.src_ip,
+      mac = l2.mac_src,
+      ts = os.time()
+    }
+    local allowed, reason = filter.decide(req)
+    if allowed then
       q_fields.reason = nil
       log_allow(q_fields)
     else
-      q_fields.reason = "not_in_allowlist"
+      q_fields.reason = reason or "denied"
       log_block(q_fields)
       verdict = NF_DROP
     end
@@ -95,6 +98,7 @@ end
 local run
 run = function(wfd)
   pipe_wfd = wfd
+  filter.load()
   ndpi.warmup()
   run_queue(QUEUE_QUESTIONS, handle_question)
   return ndpi.cleanup()

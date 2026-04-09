@@ -32,21 +32,28 @@ MOONS := \
 
 LUAS := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(MOONS))
 
+## Modules filter/ (découverte automatique)
+FILTER_MOONS := $(shell find $(SRC)/filter -name '*.moon' 2>/dev/null) \
+  $(SRC)/ffi_xxhash.moon
+FILTER_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(FILTER_MOONS))
+
 .PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 test-kvm test-kvm-up test-kvm-run test-kvm-down run reload logs help
 
-all: $(LUA)/parse $(LUAS)
+all: $(LUA)/parse $(LUAS) $(FILTER_LUAS)
 	@echo "Compilation terminée → $(LUA)/"
 
 $(LUA)/parse:
 	mkdir -p $(LUA)/parse
 
+## Crée le répertoire parent avant de compiler (idempotent)
 $(LUA)/%.lua: $(SRC)/%.moon
+	mkdir -p $(@D)
 	$(MOONC) -o $@ $<
 
 ## Vérification syntaxique de tous les fichiers Lua générés
 check: all
 	@echo "Vérification syntaxique..."
-	@for f in $(LUAS); do \
+	@for f in $(LUAS) $(FILTER_LUAS); do \
 	  luajit -e "local ok,e=loadfile('$$f'); if not ok then print('FAIL '..e) else print('OK   '..$$f) end"; \
 	done
 

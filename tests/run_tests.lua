@@ -1120,5 +1120,366 @@ test("write_refused_msg + drain_pipe + get_pending_entry → entry.refused = tru
   assert_eq(entry.refused, true, "entry.refused = true")
   return assert((entry.expire > 0), "entry.expire > 0")
 end)
+io.write("\n── filter ──\n")
+local bsearch
+bsearch = require("filter.lib.bsearch").bsearch
+test("bsearch — trouvé en début", function()
+  local arr = ffi.new("uint64_t[3]", {
+    100ULL,
+    200ULL,
+    300ULL
+  })
+  return assert_eq((bsearch(arr, 3, 100ULL)), true, "bsearch(100)")
+end)
+test("bsearch — trouvé en milieu", function()
+  local arr = ffi.new("uint64_t[3]", {
+    100ULL,
+    200ULL,
+    300ULL
+  })
+  return assert_eq((bsearch(arr, 3, 200ULL)), true, "bsearch(200)")
+end)
+test("bsearch — trouvé en fin", function()
+  local arr = ffi.new("uint64_t[3]", {
+    100ULL,
+    200ULL,
+    300ULL
+  })
+  return assert_eq((bsearch(arr, 3, 300ULL)), true, "bsearch(300)")
+end)
+test("bsearch — absent", function()
+  local arr = ffi.new("uint64_t[3]", {
+    100ULL,
+    200ULL,
+    300ULL
+  })
+  return assert_eq((bsearch(arr, 3, 150ULL)), false, "bsearch(150)")
+end)
+test("bsearch — tableau vide", function()
+  local arr = ffi.new("uint64_t[0]")
+  return assert_eq((bsearch(arr, 0, 42ULL)), false, "bsearch vide")
+end)
+local ipcalc = require("filter.lib.ipcalc")
+test("ipcalc — IPv4 dans sous-réseau", function()
+  local n = ipcalc.Net("192.168.1.0/24")
+  assert(n, "Net() non nil")
+  return assert_eq((n:contains("192.168.1.42")), true, "192.168.1.42 dans /24")
+end)
+test("ipcalc — IPv4 hors sous-réseau", function()
+  local n = ipcalc.Net("192.168.1.0/24")
+  return assert_eq((n:contains("10.0.0.1")), false, "10.0.0.1 hors /24")
+end)
+test("ipcalc — masque /16", function()
+  local n = ipcalc.Net("10.0.0.0/8")
+  assert_eq((n:contains("10.255.255.1")), true, "10.x dans /8")
+  return assert_eq((n:contains("11.0.0.1")), false, "11.x hors /8")
+end)
+test("ipcalc — IPv6 dans sous-réseau", function()
+  local n = ipcalc.Net("2001:db8::/32")
+  return assert_eq((n:contains("2001:db8::1")), true, "2001:db8::1 dans /32")
+end)
+test("ipcalc — IPv6 hors sous-réseau", function()
+  local n = ipcalc.Net("2001:db8::/32")
+  return assert_eq((n:contains("2001:db9::1")), false, "2001:db9::1 hors /32")
+end)
+test("ipcalc — CIDR invalide → nil", function()
+  local n = ipcalc.Net("not_an_ip/24")
+  return assert((n == nil), "Net invalide → nil")
+end)
+local to_domain = require("filter.conditions.to_domain")
+test("to_domain — correspondance exacte", function()
+  local f = (to_domain({ }))("github.com")
+  local v, r = f({
+    domain = "github.com"
+  })
+  return assert_eq(v, true, "exact match")
+end)
+test("to_domain — sous-domaine autorisé", function()
+  local f = (to_domain({ }))("github.com")
+  local v = f({
+    domain = "api.github.com"
+  })
+  return assert_eq(v, true, "sous-domaine")
+end)
+test("to_domain — domaine différent bloqué", function()
+  local f = (to_domain({ }))("github.com")
+  local v = f({
+    domain = "notgithub.com"
+  })
+  return assert_eq(v, false, "pas de correspondance")
+end)
+test("to_domain — domaine vide → faux", function()
+  local f = (to_domain({ }))("github.com")
+  local v = f({
+    domain = nil
+  })
+  return assert_eq(v, false, "domaine nil")
+end)
+local to_domains = require("filter.conditions.to_domains")
+test("to_domains — OR logique", function()
+  local f = (to_domains({ }))({
+    "github.com",
+    "debian.org"
+  })
+  assert_eq((f({
+    domain = "github.com"
+  })), true, "github OK")
+  assert_eq((f({
+    domain = "packages.debian.org"
+  })), true, "debian OK")
+  return assert_eq((f({
+    domain = "evil.com"
+  })), false, "evil non")
+end)
+local to_domainlist = require("filter.conditions.to_domainlist")
+local TMPLIST = "./tmp/test_filter_domainlist.domains"
+do
+  local fd = io.open(TMPLIST, "w")
+  fd:write("github.com\ndebian.org\ncloudflare.com\n")
+  fd:close()
+end
+test("to_domainlist — domaine présent (fichier texte)", function()
+  local cfg = {
+    domains = {
+      testlist = TMPLIST
+    }
+  }
+  local f = (to_domainlist(cfg))("testlist")
+  return assert_eq((f({
+    domain = "github.com"
+  })), true, "github.com dans liste")
+end)
+test("to_domainlist — sous-domaine présent", function()
+  local cfg = {
+    domains = {
+      testlist = TMPLIST
+    }
+  }
+  local f = (to_domainlist(cfg))("testlist")
+  return assert_eq((f({
+    domain = "api.github.com"
+  })), true, "api.github.com sous-domaine")
+end)
+test("to_domainlist — domaine absent", function()
+  local cfg = {
+    domains = {
+      testlist = TMPLIST
+    }
+  }
+  local f = (to_domainlist(cfg))("testlist")
+  return assert_eq((f({
+    domain = "evil.com"
+  })), false, "evil.com absent")
+end)
+test("to_domainlist — liste inconnue → faux", function()
+  local cfg = {
+    domains = { }
+  }
+  local f = (to_domainlist(cfg))("nonexistent")
+  return assert_eq((f({
+    domain = "github.com"
+  })), false, "liste manquante → false")
+end)
+local from_mac = require("filter.conditions.from_mac")
+test("from_mac — MAC correspondant", function()
+  local f = (from_mac({ }))("aa:bb:cc:dd:ee:ff")
+  return assert_eq((f({
+    mac = "aa:bb:cc:dd:ee:ff"
+  })), true, "MAC match")
+end)
+test("from_mac — MAC différent", function()
+  local f = (from_mac({ }))("aa:bb:cc:dd:ee:ff")
+  return assert_eq((f({
+    mac = "00:00:00:00:00:00"
+  })), false, "MAC no match")
+end)
+test("from_mac — MAC absent dans req", function()
+  local f = (from_mac({ }))("aa:bb:cc:dd:ee:ff")
+  return assert_eq((f({
+    mac = nil
+  })), false, "MAC nil")
+end)
+local from_net = require("filter.conditions.from_net")
+test("from_net — IP dans réseau", function()
+  local f = (from_net({ }))("192.168.0.0/16")
+  return assert_eq((f({
+    src_ip = "192.168.1.42"
+  })), true, "IP dans LAN")
+end)
+test("from_net — IP hors réseau", function()
+  local f = (from_net({ }))("192.168.0.0/16")
+  return assert_eq((f({
+    src_ip = "10.0.0.1"
+  })), false, "IP hors LAN")
+end)
+test("from_net — IP absente dans req", function()
+  local f = (from_net({ }))("192.168.0.0/16")
+  local v = f({
+    src_ip = nil
+  })
+  return assert_eq(v, false, "src_ip nil")
+end)
+local stolen_computer = require("filter.conditions.stolen_computer")
+test("stolen_computer — MAC blacklisté", function()
+  local f = (stolen_computer({ }))({
+    "de:ad:be:ef:00:01"
+  })
+  return assert_eq((f({
+    mac = "de:ad:be:ef:00:01"
+  })), true, "volé")
+end)
+test("stolen_computer — MAC non blacklisté", function()
+  local f = (stolen_computer({ }))({
+    "de:ad:be:ef:00:01"
+  })
+  return assert_eq((f({
+    mac = "aa:bb:cc:dd:ee:ff"
+  })), false, "non volé")
+end)
+local in_time = require("filter.conditions.in_time")
+test("in_time — dans la fenêtre", function()
+  local cfg = {
+    times = {
+      allday = {
+        "00:00",
+        "23:59"
+      }
+    }
+  }
+  local f = (in_time(cfg))("allday")
+  local v, r = f({
+    ts = os.time()
+  })
+  return assert_eq(v, true, "dans allday")
+end)
+test("in_time — hors fenêtre", function()
+  local cfg = {
+    times = {
+      never = {
+        "25:00",
+        "25:01"
+      }
+    }
+  }
+  local f = (in_time(cfg))("never")
+  local v = f({
+    ts = os.time()
+  })
+  return assert_eq(v, false, "hors fenêtre absurde")
+end)
+test("in_time — fenêtre inconnue → faux", function()
+  local cfg = {
+    times = { }
+  }
+  local f = (in_time(cfg))("doesnotexist")
+  return assert_eq((f({
+    ts = os.time()
+  })), false, "fenêtre inconnue")
+end)
+local m_rule = require("filter.rule")
+local TEST_CFG = {
+  times = {
+    business = {
+      "00:00",
+      "23:59"
+    }
+  }
+}
+local TEST_RULES_CFG = {
+  {
+    description = "Infra locale toujours OK",
+    conditions = {
+      to_domains = {
+        "local",
+        "home.arpa"
+      }
+    },
+    actions = {
+      "allow"
+    }
+  },
+  {
+    description = "Machines volées bloquées",
+    conditions = {
+      stolen_computer = {
+        "de:ad:be:ef:00:01"
+      }
+    },
+    actions = {
+      "deny"
+    }
+  },
+  {
+    description = "LAN autorisé",
+    conditions = {
+      from_net = "192.168.0.0/16",
+      to_domain = "github.com"
+    },
+    actions = {
+      "allow"
+    }
+  },
+  {
+    description = "Refus par défaut",
+    conditions = { },
+    actions = {
+      "deny"
+    }
+  }
+}
+do
+  local cfg = {
+    rules = TEST_RULES_CFG,
+    times = TEST_CFG.times
+  }
+  local rules = m_rule.compile_rules(cfg)
+  test("rule.decide — domaine local → allow", function()
+    local v, m = m_rule.decide(rules, {
+      domain = "gateway.local",
+      mac = "aa:bb:cc:dd:ee:ff",
+      src_ip = "192.168.1.1",
+      ts = os.time()
+    })
+    return assert_eq(v, true, "local domain autorisé")
+  end)
+  test("rule.decide — machine volée → deny même sur domaine non-local", function()
+    local v, m = m_rule.decide(rules, {
+      domain = "github.com",
+      mac = "de:ad:be:ef:00:01",
+      src_ip = "192.168.1.2",
+      ts = os.time()
+    })
+    return assert_eq(v, false, "volée + github.com → deny")
+  end)
+  test("rule.decide — LAN + domain → allow", function()
+    local v, m = m_rule.decide(rules, {
+      domain = "github.com",
+      mac = "aa:bb:cc:dd:ee:ff",
+      src_ip = "192.168.1.3",
+      ts = os.time()
+    })
+    return assert_eq(v, true, "LAN + github.com autorisé")
+  end)
+  test("rule.decide — hors LAN + domain → default deny", function()
+    local v, m = m_rule.decide(rules, {
+      domain = "github.com",
+      mac = "aa:bb:cc:dd:ee:ff",
+      src_ip = "1.2.3.4",
+      ts = os.time()
+    })
+    return assert_eq(v, false, "WAN + github.com → deny")
+  end)
+  test("rule.decide — aucune règle ne correspond → false", function()
+    local rules_empty = m_rule.compile_rules({
+      rules = { }
+    })
+    local v, m = m_rule.decide(rules_empty, {
+      domain = "github.com",
+      ts = os.time()
+    })
+    return assert_eq(v, false, "aucune règle → deny par défaut")
+  end)
+end
+os.remove(TMPLIST)
 io.write(string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed))
 return os.exit(failed == 0 and 0 or 1)

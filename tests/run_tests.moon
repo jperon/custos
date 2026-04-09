@@ -1287,7 +1287,246 @@ test "write_refused_msg + drain_pipe + get_pending_entry → entry.refused = tru
   assert (entry.expire > 0), "entry.expire > 0"
 
 -- ════════════════════════════════════════════════════════════════
--- Résumé
+-- Tests filter — conditions, rule, intégration
 -- ════════════════════════════════════════════════════════════════
+io.write "\n── filter ──\n"
+
+-- Stubs supplémentaires pour les modules filter
+-- (inet_pton est déjà déclarée en tête de fichier)
+
+-- ── bsearch ──
+{ :bsearch } = require "filter.lib.bsearch"
+
+test "bsearch — trouvé en début", ->
+  arr = ffi.new "uint64_t[3]", {100ULL, 200ULL, 300ULL}
+  assert_eq (bsearch arr, 3, 100ULL), true, "bsearch(100)"
+
+test "bsearch — trouvé en milieu", ->
+  arr = ffi.new "uint64_t[3]", {100ULL, 200ULL, 300ULL}
+  assert_eq (bsearch arr, 3, 200ULL), true, "bsearch(200)"
+
+test "bsearch — trouvé en fin", ->
+  arr = ffi.new "uint64_t[3]", {100ULL, 200ULL, 300ULL}
+  assert_eq (bsearch arr, 3, 300ULL), true, "bsearch(300)"
+
+test "bsearch — absent", ->
+  arr = ffi.new "uint64_t[3]", {100ULL, 200ULL, 300ULL}
+  assert_eq (bsearch arr, 3, 150ULL), false, "bsearch(150)"
+
+test "bsearch — tableau vide", ->
+  arr = ffi.new "uint64_t[0]"
+  assert_eq (bsearch arr, 0, 42ULL), false, "bsearch vide"
+
+-- ── ipcalc ──
+ipcalc = require "filter.lib.ipcalc"
+
+test "ipcalc — IPv4 dans sous-réseau", ->
+  n = ipcalc.Net "192.168.1.0/24"
+  assert n, "Net() non nil"
+  assert_eq (n\contains "192.168.1.42"), true, "192.168.1.42 dans /24"
+
+test "ipcalc — IPv4 hors sous-réseau", ->
+  n = ipcalc.Net "192.168.1.0/24"
+  assert_eq (n\contains "10.0.0.1"), false, "10.0.0.1 hors /24"
+
+test "ipcalc — masque /16", ->
+  n = ipcalc.Net "10.0.0.0/8"
+  assert_eq (n\contains "10.255.255.1"), true, "10.x dans /8"
+  assert_eq (n\contains "11.0.0.1"), false, "11.x hors /8"
+
+test "ipcalc — IPv6 dans sous-réseau", ->
+  n = ipcalc.Net "2001:db8::/32"
+  assert_eq (n\contains "2001:db8::1"), true, "2001:db8::1 dans /32"
+
+test "ipcalc — IPv6 hors sous-réseau", ->
+  n = ipcalc.Net "2001:db8::/32"
+  assert_eq (n\contains "2001:db9::1"), false, "2001:db9::1 hors /32"
+
+test "ipcalc — CIDR invalide → nil", ->
+  n = ipcalc.Net "not_an_ip/24"
+  assert (n == nil), "Net invalide → nil"
+
+-- ── to_domain ──
+to_domain = require "filter.conditions.to_domain"
+
+test "to_domain — correspondance exacte", ->
+  f = (to_domain {}) "github.com"
+  v, r = f {domain: "github.com"}
+  assert_eq v, true, "exact match"
+
+test "to_domain — sous-domaine autorisé", ->
+  f = (to_domain {}) "github.com"
+  v = f {domain: "api.github.com"}
+  assert_eq v, true, "sous-domaine"
+
+test "to_domain — domaine différent bloqué", ->
+  f = (to_domain {}) "github.com"
+  v = f {domain: "notgithub.com"}
+  assert_eq v, false, "pas de correspondance"
+
+test "to_domain — domaine vide → faux", ->
+  f = (to_domain {}) "github.com"
+  v = f {domain: nil}
+  assert_eq v, false, "domaine nil"
+
+-- ── to_domains ──
+to_domains = require "filter.conditions.to_domains"
+
+test "to_domains — OR logique", ->
+  f = (to_domains {}) {"github.com", "debian.org"}
+  assert_eq (f {domain: "github.com"}), true, "github OK"
+  assert_eq (f {domain: "packages.debian.org"}), true, "debian OK"
+  assert_eq (f {domain: "evil.com"}), false, "evil non"
+
+-- ── to_domainlist (.domains texte) ──
+to_domainlist = require "filter.conditions.to_domainlist"
+TMPLIST = "./tmp/test_filter_domainlist.domains"
+
+do
+  fd = io.open TMPLIST, "w"
+  fd\write "github.com\ndebian.org\ncloudflare.com\n"
+  fd\close!
+
+test "to_domainlist — domaine présent (fichier texte)", ->
+  cfg = { domains: { testlist: TMPLIST } }
+  f   = (to_domainlist cfg) "testlist"
+  assert_eq (f {domain: "github.com"}), true, "github.com dans liste"
+
+test "to_domainlist — sous-domaine présent", ->
+  cfg = { domains: { testlist: TMPLIST } }
+  f   = (to_domainlist cfg) "testlist"
+  assert_eq (f {domain: "api.github.com"}), true, "api.github.com sous-domaine"
+
+test "to_domainlist — domaine absent", ->
+  cfg = { domains: { testlist: TMPLIST } }
+  f   = (to_domainlist cfg) "testlist"
+  assert_eq (f {domain: "evil.com"}), false, "evil.com absent"
+
+test "to_domainlist — liste inconnue → faux", ->
+  cfg = { domains: {} }
+  f   = (to_domainlist cfg) "nonexistent"
+  assert_eq (f {domain: "github.com"}), false, "liste manquante → false"
+
+-- ── from_mac ──
+from_mac = require "filter.conditions.from_mac"
+
+test "from_mac — MAC correspondant", ->
+  f = (from_mac {}) "aa:bb:cc:dd:ee:ff"
+  assert_eq (f {mac: "aa:bb:cc:dd:ee:ff"}), true, "MAC match"
+
+test "from_mac — MAC différent", ->
+  f = (from_mac {}) "aa:bb:cc:dd:ee:ff"
+  assert_eq (f {mac: "00:00:00:00:00:00"}), false, "MAC no match"
+
+test "from_mac — MAC absent dans req", ->
+  f = (from_mac {}) "aa:bb:cc:dd:ee:ff"
+  assert_eq (f {mac: nil}), false, "MAC nil"
+
+-- ── from_net ──
+from_net = require "filter.conditions.from_net"
+
+test "from_net — IP dans réseau", ->
+  f = (from_net {}) "192.168.0.0/16"
+  assert_eq (f {src_ip: "192.168.1.42"}), true, "IP dans LAN"
+
+test "from_net — IP hors réseau", ->
+  f = (from_net {}) "192.168.0.0/16"
+  assert_eq (f {src_ip: "10.0.0.1"}), false, "IP hors LAN"
+
+test "from_net — IP absente dans req", ->
+  f = (from_net {}) "192.168.0.0/16"
+  v = f {src_ip: nil}
+  assert_eq v, false, "src_ip nil"
+
+-- ── stolen_computer ──
+stolen_computer = require "filter.conditions.stolen_computer"
+
+test "stolen_computer — MAC blacklisté", ->
+  f = (stolen_computer {}) {"de:ad:be:ef:00:01"}
+  assert_eq (f {mac: "de:ad:be:ef:00:01"}), true, "volé"
+
+test "stolen_computer — MAC non blacklisté", ->
+  f = (stolen_computer {}) {"de:ad:be:ef:00:01"}
+  assert_eq (f {mac: "aa:bb:cc:dd:ee:ff"}), false, "non volé"
+
+-- ── in_time ──
+in_time = require "filter.conditions.in_time"
+
+test "in_time — dans la fenêtre", ->
+  cfg = {times: {allday: {"00:00", "23:59"}}}
+  f   = (in_time cfg) "allday"
+  v, r = f {ts: os.time!}
+  assert_eq v, true, "dans allday"
+
+test "in_time — hors fenêtre", ->
+  cfg = {times: {never: {"25:00", "25:01"}}}
+  f   = (in_time cfg) "never"
+  v = f {ts: os.time!}
+  assert_eq v, false, "hors fenêtre absurde"
+
+test "in_time — fenêtre inconnue → faux", ->
+  cfg = {times: {}}
+  f   = (in_time cfg) "doesnotexist"
+  assert_eq (f {ts: os.time!}), false, "fenêtre inconnue"
+
+-- ── rule.compile_rules + rule.decide ──
+m_rule = require "filter.rule"
+
+TEST_CFG = {
+  times: {business: {"00:00", "23:59"}}
+}
+
+TEST_RULES_CFG = {
+  {
+    description: "Infra locale toujours OK"
+    conditions:  {to_domains: {"local", "home.arpa"}}
+    actions:     {"allow"}
+  }
+  {
+    description: "Machines volées bloquées"
+    conditions:  {stolen_computer: {"de:ad:be:ef:00:01"}}
+    actions:     {"deny"}
+  }
+  {
+    description: "LAN autorisé"
+    conditions:  {from_net: "192.168.0.0/16", to_domain: "github.com"}
+    actions:     {"allow"}
+  }
+  {
+    description: "Refus par défaut"
+    conditions:  {}
+    actions:     {"deny"}
+  }
+}
+
+do
+  cfg = {rules: TEST_RULES_CFG, times: TEST_CFG.times}
+  rules = m_rule.compile_rules cfg
+
+  test "rule.decide — domaine local → allow", ->
+    v, m = m_rule.decide rules, {domain: "gateway.local", mac: "aa:bb:cc:dd:ee:ff", src_ip: "192.168.1.1", ts: os.time!}
+    assert_eq v, true, "local domain autorisé"
+
+  test "rule.decide — machine volée → deny même sur domaine non-local", ->
+    v, m = m_rule.decide rules, {domain: "github.com", mac: "de:ad:be:ef:00:01", src_ip: "192.168.1.2", ts: os.time!}
+    assert_eq v, false, "volée + github.com → deny"
+
+  test "rule.decide — LAN + domain → allow", ->
+    v, m = m_rule.decide rules, {domain: "github.com", mac: "aa:bb:cc:dd:ee:ff", src_ip: "192.168.1.3", ts: os.time!}
+    assert_eq v, true, "LAN + github.com autorisé"
+
+  test "rule.decide — hors LAN + domain → default deny", ->
+    v, m = m_rule.decide rules, {domain: "github.com", mac: "aa:bb:cc:dd:ee:ff", src_ip: "1.2.3.4", ts: os.time!}
+    assert_eq v, false, "WAN + github.com → deny"
+
+  test "rule.decide — aucune règle ne correspond → false", ->
+    rules_empty = m_rule.compile_rules {rules: {}}
+    v, m = m_rule.decide rules_empty, {domain: "github.com", ts: os.time!}
+    assert_eq v, false, "aucune règle → deny par défaut"
+
+-- Nettoyage
+os.remove TMPLIST
+
+
 io.write string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed)
 os.exit failed == 0 and 0 or 1

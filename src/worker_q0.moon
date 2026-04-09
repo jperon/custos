@@ -14,7 +14,7 @@
 { :QUEUE_QUESTIONS }     = require "config"
 { :get_l2 }              = require "parse/ethernet"
 ndpi                     = require "parse/ndpi"
-{ :is_allowed, :check_reload } = require "allowlist"
+filter                   = require "filter"
 { :write_msg, :write_refused_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn } = require "log"
@@ -24,8 +24,8 @@ pipe_wfd = nil
 
 -- ── Callback principal ───────────────────────────────────────────
 handle_question = (qh_ptr, nfad, pkt_id) ->
-  -- Rechargement allowlist si SIGHUP reçu
-  check_reload!
+  -- Rechargement filtre si SIGHUP reçu
+  filter.reload!
 
   -- ── L2 ───────────────────────────────────────────────────────
   l2 = get_l2 nfad
@@ -75,11 +75,18 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   for _, q in ipairs pkt.questions
     q_fields.qname = q.qname
     q_fields.qtype = q.qtype_name
-    if is_allowed q.qname
+    req = {
+      domain: q.qname
+      src_ip: pkt.ip.src_ip
+      mac:    l2.mac_src
+      ts:     os.time!
+    }
+    allowed, reason = filter.decide req
+    if allowed
       q_fields.reason = nil
       log_allow q_fields
     else
-      q_fields.reason = "not_in_allowlist"
+      q_fields.reason = reason or "denied"
       log_block q_fields
       verdict = NF_DROP
 
@@ -98,6 +105,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 -- Appelé par main.moon après fork(), avec le fd d'écriture du pipe.
 run = (wfd) ->
   pipe_wfd = wfd
+  filter.load!
   ndpi.warmup!
   run_queue QUEUE_QUESTIONS, handle_question
   ndpi.cleanup!
