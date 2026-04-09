@@ -41,6 +41,10 @@ RUN apt-get update && apt-get install -y \
     nftables \
     iproute2 \
     dnsmasq \
+    lua-yaml \
+    lua-socket \
+    lua-sec \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app user

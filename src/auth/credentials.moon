@@ -17,6 +17,10 @@ bit = require "bit"
 local crypto
 do
   ok, lib = pcall ffi.load, "crypto"
+  unless ok
+    ok, lib = pcall ffi.load, "libcrypto.so.3"
+  unless ok
+    ok, lib = pcall ffi.load, "libcrypto.so.1.1"
   error "libcrypto introuvable (paquet openssl requis)" unless ok
   crypto = lib
 

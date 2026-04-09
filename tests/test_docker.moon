@@ -165,6 +165,35 @@ build_image = ->
   log "custos-client:latest built successfully", "PASS"
   return true
 
+-- Auth server IP: same as the filter container on the LAN network
+auth_ip = if profile == "ndpi5" then "172.28.0.253" else "172.28.0.254"
+
+--- Wait for the auth server to be ready (auth_listening + auth_secrets_loaded in log).
+-- @tparam number timeout  Max seconds to wait
+-- @treturn boolean
+wait_for_auth_ready = (timeout = 30) ->
+  log "Waiting for auth worker to be ready (auth_listening)…", "STEP"
+  for i = 1, timeout
+    success, output = execute "docker exec #{filter_name} cat /app/tmp/dns-filter.log 2>/dev/null", true
+    if success and output and (output\match "auth_listening") and
+       (output\match "auth_secrets_loaded")
+      log "Auth server listening with secrets loaded", "PASS"
+      return true
+    os.execute "sleep 1"
+  log "Timeout waiting for auth server readiness", "ERROR"
+  return false
+
+--- Send a curl request from the client container.
+-- @tparam string method   HTTP method (GET or POST)
+-- @tparam string path     URL path (/login, /logout, /ping)
+-- @tparam string|nil data POST body (url-encoded form data)
+-- @treturn boolean, string  success, HTTP status code string
+auth_curl = (method, path, data = nil) ->
+  data_flag = if data then "-d '#{data}' " else ""
+  -- -k: skip cert verification (self-signed), -s: silent, -o /dev/null: discard body
+  cmd = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' -X #{method} #{data_flag}https://#{auth_ip}:8443#{path} 2>&1"
+  execute cmd, true
+
 --- Wait for the filter to be fully ready (queues listening).
 -- @tparam string name     Container name
 -- @tparam number timeout  Max seconds to wait
@@ -185,7 +214,7 @@ wait_for_filter_ready = (name, timeout = 30) ->
 compose_up = ->
   log "Starting docker-compose environment (profile=#{profile})…", "STEP"
   execute "docker compose --profile ndpi4 --profile ndpi5 down 2>/dev/null || true"
-  execute "rm -f ./tmp/dns-filter.log 2>/dev/null || true"
+  execute "rm -f ./tmp/dns-filter.log ./tmp/sessions.lua 2>/dev/null || true"
 
   success = execute "docker compose --profile #{profile} up -d"
   unless success
@@ -199,6 +228,9 @@ compose_up = ->
     return false
 
   unless wait_for_filter_ready filter_name
+    return false
+
+  unless wait_for_auth_ready!
     return false
 
   -- Vérifier que le client a bien sa route par défaut vers le filtre
@@ -817,8 +849,78 @@ run_test "IPv6 + Hop-by-Hop DNS — filter parses extension header via FORWARD (
       "af=ipv6=#{has_ipv6} qname=#{has_qname} script=#{(script_out or '?')\gsub('[\n\r]+', ' ')}"
     return ok, obtained
 
--- ── Teardown ──────────────────────────────────────────────────────────────────
-compose_down!
+
+-- ── Auth tests ────────────────────────────────────────────────────────────────
+
+print ""
+print "#{C.bold}▶ Authentification HTTPS#{C.reset}"
+
+-- Clear any stale session for the client IP
+execute "rm -f ./tmp/sessions.lua 2>/dev/null || true"
+
+run_test "Auth — login avec mauvais mot de passe → 401",
+  "POST /login user=testuser&password=WRONG → HTTP 401",
+  ->
+    ok, code = auth_curl "POST", "/login", "user=testuser&password=WRONG"
+    return (code == "401"), "HTTP #{code}"
+
+run_test "Auth — login avec identifiants valides → 200",
+  "POST /login user=testuser&password=testpass → HTTP 200",
+  ->
+    ok, code = auth_curl "POST", "/login", "user=testuser&password=testpass"
+    return (code == "200"), "HTTP #{code}"
+
+run_test "Auth — sessions.lua contient la session testuser",
+  "cat ./tmp/sessions.lua → contient testuser + IP 172.28.0.10",
+  ->
+    fh = io.open "./tmp/sessions.lua", "r"
+    unless fh
+      return false, "sessions.lua absent"
+    content = fh\read "*a"
+    fh\close!
+    ok = content\match("testuser") != nil and content\match("172.28.0.10") != nil
+    return ok, content\sub(1, 120)
+
+run_test "Auth — heartbeat GET /ping → 204",
+  "GET /ping (authentifié) → HTTP 204",
+  ->
+    ok, code = auth_curl "GET", "/ping"
+    return (code == "204"), "HTTP #{code}"
+
+-- Wait for session cache to flush before testing from_user DNS
+log "Waiting 6s for session cache to settle (CACHE_TTL=5s)…", "STEP"
+os.execute "sleep 6"
+
+run_test "Auth — from_user : domaine autorisé après login → NXDOMAIN",
+  "nslookup auth-required.test @#{dns_server} → NXDOMAIN (filtre laisse passer, upstream introuvable)",
+  ->
+    cmd = "timeout 8s docker exec custos-client nslookup auth-required.test #{dns_server} 2>&1"
+    _, output = execute cmd, true
+    ok = output != nil and (output\match("NXDOMAIN") != nil or output\match("can't find") != nil)
+    obtained = (output\match "([^\n]*NXDOMAIN[^\n]*)") or
+               (output\match "(can't find[^\n]*)") or
+               (output\match "([^\n]+)") or "(no output)"
+    return ok, obtained
+
+run_test "Auth — logout GET /logout → 303",
+  "GET /logout → HTTP 303 redirect",
+  ->
+    ok, code = auth_curl "GET", "/logout"
+    return (code == "303"), "HTTP #{code}"
+
+-- After logout, wait for cache TTL to expire
+log "Waiting 6s after logout for session cache to expire…", "STEP"
+os.execute "sleep 6"
+
+run_test "Auth — from_user : domaine refusé après logout → REFUSED",
+  "nslookup auth-required.test @#{dns_server} → REFUSED (session supprimée)",
+  ->
+    cmd = "timeout 8s docker exec custos-client nslookup auth-required.test #{dns_server} 2>&1"
+    _, output = execute cmd, true
+    ok = output != nil and output\match("REFUSED") != nil
+    obtained = (output\match "([^\n]*REFUSED[^\n]*)") or
+               (output\match "([^\n]+)") or "(no output)"
+    return ok, obtained
 
 -- ── Summary ───────────────────────────────────────────────────────────────────
 print ""

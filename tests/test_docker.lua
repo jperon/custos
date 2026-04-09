@@ -187,6 +187,43 @@ build_image = function()
   log("custos-client:latest built successfully", "PASS")
   return true
 end
+local auth_ip
+if profile == "ndpi5" then
+  auth_ip = "172.28.0.253"
+else
+  auth_ip = "172.28.0.254"
+end
+local wait_for_auth_ready
+wait_for_auth_ready = function(timeout)
+  if timeout == nil then
+    timeout = 30
+  end
+  log("Waiting for auth worker to be ready (auth_listening)…", "STEP")
+  for i = 1, timeout do
+    local success, output = execute("docker exec " .. tostring(filter_name) .. " cat /app/tmp/dns-filter.log 2>/dev/null", true)
+    if success and output and (output:match("auth_listening")) and (output:match("auth_secrets_loaded")) then
+      log("Auth server listening with secrets loaded", "PASS")
+      return true
+    end
+    os.execute("sleep 1")
+  end
+  log("Timeout waiting for auth server readiness", "ERROR")
+  return false
+end
+local auth_curl
+auth_curl = function(method, path, data)
+  if data == nil then
+    data = nil
+  end
+  local data_flag
+  if data then
+    data_flag = "-d '" .. tostring(data) .. "' "
+  else
+    data_flag = ""
+  end
+  local cmd = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' -X " .. tostring(method) .. " " .. tostring(data_flag) .. "https://" .. tostring(auth_ip) .. ":8443" .. tostring(path) .. " 2>&1"
+  return execute(cmd, true)
+end
 local wait_for_filter_ready
 wait_for_filter_ready = function(name, timeout)
   if timeout == nil then
@@ -210,7 +247,7 @@ local compose_up
 compose_up = function()
   log("Starting docker-compose environment (profile=" .. tostring(profile) .. ")…", "STEP")
   execute("docker compose --profile ndpi4 --profile ndpi5 down 2>/dev/null || true")
-  execute("rm -f ./tmp/dns-filter.log 2>/dev/null || true")
+  execute("rm -f ./tmp/dns-filter.log ./tmp/sessions.lua 2>/dev/null || true")
   local success = execute("docker compose --profile " .. tostring(profile) .. " up -d")
   if not (success) then
     log("Failed to start docker compose", "ERROR")
@@ -220,6 +257,9 @@ compose_up = function()
     return false
   end
   if not (wait_for_filter_ready(filter_name)) then
+    return false
+  end
+  if not (wait_for_auth_ready()) then
     return false
   end
   log("Warming up — priming DNS chain with " .. tostring(TEST_DOMAINS.allowed) .. "…", "STEP")
@@ -813,7 +853,53 @@ run_test("IPv6 + Hop-by-Hop DNS — filter parses extension header via FORWARD (
   end
   return ok, obtained
 end)
-compose_down()
+print("")
+print(tostring(C.bold) .. "▶ Authentification HTTPS" .. tostring(C.reset))
+execute("rm -f ./tmp/sessions.lua 2>/dev/null || true")
+run_test("Auth — login avec mauvais mot de passe → 401", "POST /login user=testuser&password=WRONG → HTTP 401", function()
+  local ok, code = auth_curl("POST", "/login", "user=testuser&password=WRONG")
+  return (code == "401"), "HTTP " .. tostring(code)
+end)
+run_test("Auth — login avec identifiants valides → 200", "POST /login user=testuser&password=testpass → HTTP 200", function()
+  local ok, code = auth_curl("POST", "/login", "user=testuser&password=testpass")
+  return (code == "200"), "HTTP " .. tostring(code)
+end)
+run_test("Auth — sessions.lua contient la session testuser", "cat ./tmp/sessions.lua → contient testuser + IP 172.28.0.10", function()
+  local fh = io.open("./tmp/sessions.lua", "r")
+  if not (fh) then
+    return false, "sessions.lua absent"
+  end
+  local content = fh:read("*a")
+  fh:close()
+  local ok = content:match("testuser") ~= nil and content:match("172.28.0.10") ~= nil
+  return ok, content:sub(1, 120)
+end)
+run_test("Auth — heartbeat GET /ping → 204", "GET /ping (authentifié) → HTTP 204", function()
+  local ok, code = auth_curl("GET", "/ping")
+  return (code == "204"), "HTTP " .. tostring(code)
+end)
+log("Waiting 6s for session cache to settle (CACHE_TTL=5s)…", "STEP")
+os.execute("sleep 6")
+run_test("Auth — from_user : domaine autorisé après login → NXDOMAIN", "nslookup auth-required.test @" .. tostring(dns_server) .. " → NXDOMAIN (filtre laisse passer, upstream introuvable)", function()
+  local cmd = "timeout 8s docker exec custos-client nslookup auth-required.test " .. tostring(dns_server) .. " 2>&1"
+  local _, output = execute(cmd, true)
+  local ok = output ~= nil and (output:match("NXDOMAIN") ~= nil or output:match("can't find") ~= nil)
+  local obtained = (output:match("([^\n]*NXDOMAIN[^\n]*)")) or (output:match("(can't find[^\n]*)")) or (output:match("([^\n]+)")) or "(no output)"
+  return ok, obtained
+end)
+run_test("Auth — logout GET /logout → 303", "GET /logout → HTTP 303 redirect", function()
+  local ok, code = auth_curl("GET", "/logout")
+  return (code == "303"), "HTTP " .. tostring(code)
+end)
+log("Waiting 6s after logout for session cache to expire…", "STEP")
+os.execute("sleep 6")
+run_test("Auth — from_user : domaine refusé après logout → REFUSED", "nslookup auth-required.test @" .. tostring(dns_server) .. " → REFUSED (session supprimée)", function()
+  local cmd = "timeout 8s docker exec custos-client nslookup auth-required.test " .. tostring(dns_server) .. " 2>&1"
+  local _, output = execute(cmd, true)
+  local ok = output ~= nil and output:match("REFUSED") ~= nil
+  local obtained = (output:match("([^\n]*REFUSED[^\n]*)")) or (output:match("([^\n]+)")) or "(no output)"
+  return ok, obtained
+end)
 print("")
 print(tostring(C.bold) .. "Test Summary:" .. tostring(C.reset))
 print("  " .. tostring(C.green) .. "Passed: " .. tostring(tests_passed) .. tostring(C.reset))

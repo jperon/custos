@@ -338,8 +338,10 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn) ->
 
     readable = socket.select servers, nil, 1
     for srv in *(readable or {})
-      client, peer_ip = srv\accept!
+      client, _err = srv\accept!
       if client
+        peer_ip = client\getpeername!
+        peer_ip = tostring peer_ip
         handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg
 
 { :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE }

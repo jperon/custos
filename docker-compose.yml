@@ -21,6 +21,7 @@ services:
       - ./lua:/app/lua
       - ./nft-rules:/app/nft-rules
       - ./tmp:/app/tmp
+      - ./cfg:/app/cfg
     profiles:
       - ndpi4
     networks:
@@ -69,6 +70,7 @@ services:
       - ./lua:/app/lua
       - ./nft-rules:/app/nft-rules
       - ./tmp:/app/tmp
+      - ./cfg:/app/cfg
     profiles:
       - ndpi5
     networks:

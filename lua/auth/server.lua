@@ -358,8 +358,10 @@ run = function(tls_ctx, secrets, auth_cfg, reload_fn)
     local _list_0 = (readable or { })
     for _index_0 = 1, #_list_0 do
       local srv = _list_0[_index_0]
-      local client, peer_ip = srv:accept()
+      local client, _err = srv:accept()
       if client then
+        local peer_ip = client:getpeername()
+        peer_ip = tostring(peer_ip)
         handle_connection(client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg)
       end
     end

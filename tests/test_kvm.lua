@@ -154,16 +154,19 @@ print("")
 print(tostring(C.bold) .. "[1/4] Locating filter VM..." .. tostring(C.reset))
 local FILTER_IP = filter_ip()
 print("  Filter management IP: " .. tostring(FILTER_IP))
-print(tostring(C.bold) .. "[2/4] Syncing lua/ + nft-rules/ to filter VM..." .. tostring(C.reset))
-ssh_check(FILTER_IP, "sudo mkdir -p /opt/custos/lua /opt/custos/nft-rules && sudo chown -R " .. tostring(FILTER_USER) .. ":" .. tostring(FILTER_USER) .. " /opt/custos")
+print(tostring(C.bold) .. "[2/4] Syncing lua/ + nft-rules/ + cfg/ to filter VM..." .. tostring(C.reset))
+ssh_check(FILTER_IP, "sudo mkdir -p /opt/custos/lua /opt/custos/nft-rules /opt/custos/cfg /opt/custos/tmp && sudo chown -R " .. tostring(FILTER_USER) .. ":" .. tostring(FILTER_USER) .. " /opt/custos")
 local ssh_opts_inline = SSH_OPTS:gsub("\n", " ")
 run_check("rsync -az --delete -e 'ssh " .. tostring(ssh_opts_inline) .. " -i " .. tostring(SSH_KEY) .. "' lua/ " .. tostring(FILTER_USER) .. "@" .. tostring(FILTER_IP) .. ":/opt/custos/lua/")
 run_check("rsync -az --delete -e 'ssh " .. tostring(ssh_opts_inline) .. " -i " .. tostring(SSH_KEY) .. "' nft-rules/ " .. tostring(FILTER_USER) .. "@" .. tostring(FILTER_IP) .. ":/opt/custos/nft-rules/")
+run_check("rsync -az --delete -e 'ssh " .. tostring(ssh_opts_inline) .. " -i " .. tostring(SSH_KEY) .. "' cfg/ " .. tostring(FILTER_USER) .. "@" .. tostring(FILTER_IP) .. ":/opt/custos/cfg/")
 print(tostring(C.bold) .. "[3/4] Loading nft rules and starting LuaJIT..." .. tostring(C.reset))
 ssh(FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; true")
 os.execute("sleep 2")
 ssh(FILTER_IP, "sudo nft flush ruleset 2>/dev/null; true")
-ssh(FILTER_IP, "> /tmp/custos-kvm.log; sudo mkdir -p /opt/custos/tmp && sudo truncate -s0 /opt/custos/tmp/dns-filter.log 2>/dev/null; true")
+print("  Installing lua-yaml, lua-socket, lua-sec, openssl on filter VM...")
+ssh(FILTER_IP, "sudo apt-get install -y -q lua-yaml lua-socket lua-sec openssl 2>&1 | tail -3; true")
+ssh(FILTER_IP, "> /tmp/custos-kvm.log; sudo mkdir -p /opt/custos/tmp && sudo truncate -s0 /opt/custos/tmp/dns-filter.log /opt/custos/tmp/sessions.lua 2>/dev/null; true")
 ssh_check(FILTER_IP, "sudo nft -f /opt/custos/nft-rules/dns-filter.nft")
 ssh_check(FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &")
 os.execute("sleep 5")
@@ -172,6 +175,18 @@ print("  LuaJIT: " .. tostring(ok_luajit and (C.green .. 'running' .. C.reset) o
 if not (ok_luajit) then
   error("LuaJIT failed to start — check /tmp/custos-kvm.log on filter VM")
 end
+print("  Waiting for auth server (auth_listening + auth_secrets_loaded)...")
+local auth_ready = false
+for _ = 1, 30 do
+  local log_content
+  _, log_content = ssh(FILTER_IP, "sudo cat /opt/custos/tmp/dns-filter.log 2>/dev/null")
+  if log_content and log_content:match("auth_listening") and log_content:match("auth_secrets_loaded") then
+    auth_ready = true
+    break
+  end
+  os.execute("sleep 1")
+end
+print("  Auth: " .. tostring(auth_ready and (C.green .. 'ready' .. C.reset) or (C.yellow .. 'not ready (auth tests may fail)' .. C.reset)))
 print("  Adding IPv6 " .. tostring(FILTER_IPV6) .. "/64 to filter br0...")
 ssh(FILTER_IP, "sudo ip addr add " .. tostring(FILTER_IPV6) .. "/64 dev br0 2>/dev/null; true")
 print("  Waiting for client guest agent...")
@@ -327,6 +342,47 @@ print(tostring(C.bold) .. "▶ LuaJIT filter log" .. tostring(C.reset))
 local ok_log, log_out = ssh(FILTER_IP, "sudo cat /opt/custos/tmp/dns-filter.log 2>/dev/null | tail -40")
 report("log has allowed entries", (ok_log and log_out:match("ALLOW")) ~= nil, "")
 report("log has blocked/refused entries", (ok_log and log_out:match("BLOCK")) ~= nil, "")
+local FILTER_LAN_IP = "10.99.0.254"
+local AUTH_URL = "https://" .. tostring(FILTER_LAN_IP) .. ":8443"
+print("")
+print(tostring(C.bold) .. "▶ Authentification HTTPS (" .. tostring(AUTH_URL) .. ")" .. tostring(C.reset))
+ssh(FILTER_IP, "sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true")
+local auth_curl_kvm
+auth_curl_kvm = function(method, path, data)
+  local data_flag
+  if data then
+    data_flag = "-d '" .. tostring(data) .. "' "
+  else
+    data_flag = ""
+  end
+  local cmd = "curl -k -s -o /dev/null -w '%{http_code}' -X " .. tostring(method) .. " " .. tostring(data_flag) .. tostring(AUTH_URL) .. tostring(path) .. " 2>&1"
+  return guest_exec(cmd, 10)
+end
+local ok_bad, bad_code = auth_curl_kvm("POST", "/login", "user=testuser&password=WRONG")
+bad_code = (bad_code or ""):gsub("%s+", "")
+report("Auth — mauvais mot de passe → 401", bad_code == "401", "HTTP " .. tostring(bad_code))
+local ok_ok, ok_code = auth_curl_kvm("POST", "/login", "user=testuser&password=testpass")
+ok_code = (ok_code or ""):gsub("%s+", "")
+report("Auth — identifiants valides → 200", ok_code == "200", "HTTP " .. tostring(ok_code))
+local sess_out
+_, sess_out = ssh(FILTER_IP, "sudo cat /opt/custos/tmp/sessions.lua 2>/dev/null")
+report("Auth — sessions.lua contient testuser + IP client", (sess_out and sess_out:match("testuser") and sess_out:match("10.99.0.10")) ~= nil, (sess_out or "(absent)"):sub(1, 120))
+local ok_ping, ping_code = auth_curl_kvm("GET", "/ping")
+ping_code = (ping_code or ""):gsub("%s+", "")
+report("Auth — heartbeat GET /ping → 204", ping_code == "204", "HTTP " .. tostring(ping_code))
+print("  Waiting 6s for session cache...")
+os.execute("sleep 6")
+local ok_nxd, nxd_out = guest_exec("dig +time=5 +tries=1 auth-required.test @" .. tostring(DNS_SERVER) .. " 2>&1", 12)
+local nxd_str = (nxd_out or ""):gsub("%s+$", "")
+report("Auth — from_user : auth-required.test → NXDOMAIN après login", (nxd_out and (nxd_out:lower():match("nxdomain") or nxd_out:match("can't find"))) ~= nil, "dig: " .. tostring(nxd_str))
+local ok_out, out_code = auth_curl_kvm("GET", "/logout")
+out_code = (out_code or ""):gsub("%s+", "")
+report("Auth — logout → 303", out_code == "303", "HTTP " .. tostring(out_code))
+print("  Waiting 6s after logout...")
+os.execute("sleep 6")
+local ok_ref, ref_out = guest_exec("dig +time=5 +tries=1 auth-required.test @" .. tostring(DNS_SERVER) .. " 2>&1", 12)
+local ref_str = (ref_out or ""):gsub("%s+$", "")
+report("Auth — from_user : auth-required.test → REFUSED après logout", (ref_out and ref_out:upper():match("REFUSED")) ~= nil, "dig: " .. tostring(ref_str))
 ssh(FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; sudo nft flush ruleset 2>/dev/null; true")
 print("")
 print((string.rep("─", 50)))

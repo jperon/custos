@@ -177,25 +177,43 @@ print "#{C.bold}[1/4] Locating filter VM...#{C.reset}"
 FILTER_IP = filter_ip!
 print "  Filter management IP: #{FILTER_IP}"
 
-print "#{C.bold}[2/4] Syncing lua/ + nft-rules/ to filter VM...#{C.reset}"
-ssh_check FILTER_IP, "sudo mkdir -p /opt/custos/lua /opt/custos/nft-rules && sudo chown -R #{FILTER_USER}:#{FILTER_USER} /opt/custos"
+print "#{C.bold}[2/4] Syncing lua/ + nft-rules/ + cfg/ to filter VM...#{C.reset}"
+ssh_check FILTER_IP, "sudo mkdir -p /opt/custos/lua /opt/custos/nft-rules /opt/custos/cfg /opt/custos/tmp && sudo chown -R #{FILTER_USER}:#{FILTER_USER} /opt/custos"
 ssh_opts_inline = SSH_OPTS\gsub("\n", " ")
 run_check "rsync -az --delete -e 'ssh #{ssh_opts_inline} -i #{SSH_KEY}' lua/ #{FILTER_USER}@#{FILTER_IP}:/opt/custos/lua/"
 run_check "rsync -az --delete -e 'ssh #{ssh_opts_inline} -i #{SSH_KEY}' nft-rules/ #{FILTER_USER}@#{FILTER_IP}:/opt/custos/nft-rules/"
+run_check "rsync -az --delete -e 'ssh #{ssh_opts_inline} -i #{SSH_KEY}' cfg/ #{FILTER_USER}@#{FILTER_IP}:/opt/custos/cfg/"
 
 print "#{C.bold}[3/4] Loading nft rules and starting LuaJIT...#{C.reset}"
 -- Kill any leftover LuaJIT from a previous run, then flush stale ruleset
+-- (flush BEFORE apt-get to avoid DNS blockage from previous run's nft output chain)
 ssh FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; true"
 os.execute "sleep 2"
 ssh FILTER_IP, "sudo nft flush ruleset 2>/dev/null; true"
+
+-- Ensure auth dependencies are installed on the filter VM
+-- (done after nft flush so the filter VM's own DNS is not blocked)
+print "  Installing lua-yaml, lua-socket, lua-sec, openssl on filter VM..."
+ssh FILTER_IP, "sudo apt-get install -y -q lua-yaml lua-socket lua-sec openssl 2>&1 | tail -3; true"
 -- Truncate logs so assertions only see output from this run
-ssh FILTER_IP, "> /tmp/custos-kvm.log; sudo mkdir -p /opt/custos/tmp && sudo truncate -s0 /opt/custos/tmp/dns-filter.log 2>/dev/null; true"
+ssh FILTER_IP, "> /tmp/custos-kvm.log; sudo mkdir -p /opt/custos/tmp && sudo truncate -s0 /opt/custos/tmp/dns-filter.log /opt/custos/tmp/sessions.lua 2>/dev/null; true"
 ssh_check FILTER_IP, "sudo nft -f /opt/custos/nft-rules/dns-filter.nft"
 ssh_check FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &"
 os.execute "sleep 5"
 ok_luajit, _ = ssh FILTER_IP, "pgrep -f 'luajit.*main' >/dev/null"
 print "  LuaJIT: #{ok_luajit and (C.green..'running'..C.reset) or (C.red..'NOT running'..C.reset)}"
 error "LuaJIT failed to start — check /tmp/custos-kvm.log on filter VM" unless ok_luajit
+
+-- Wait for auth worker to be ready
+print "  Waiting for auth server (auth_listening + auth_secrets_loaded)..."
+auth_ready = false
+for _ = 1, 30
+  _, log_content = ssh FILTER_IP, "sudo cat /opt/custos/tmp/dns-filter.log 2>/dev/null"
+  if log_content and log_content\match("auth_listening") and log_content\match("auth_secrets_loaded")
+    auth_ready = true
+    break
+  os.execute "sleep 1"
+print "  Auth: #{auth_ready and (C.green..'ready'..C.reset) or (C.yellow..'not ready (auth tests may fail)'..C.reset)}"
 
 -- Add IPv6 to the filter bridge and the client for AAAA/ip6_allowed tests
 print "  Adding IPv6 #{FILTER_IPV6}/64 to filter br0..."
@@ -414,6 +432,70 @@ report "log has allowed entries",
   (ok_log and log_out\match "ALLOW") != nil, ""
 report "log has blocked/refused entries",
   (ok_log and log_out\match "BLOCK") != nil, ""
+
+-- ── Authentification HTTPS ────────────────────────────────────────────────────
+FILTER_LAN_IP = "10.99.0.254"
+AUTH_URL       = "https://#{FILTER_LAN_IP}:8443"
+
+print ""
+print "#{C.bold}▶ Authentification HTTPS (#{AUTH_URL})#{C.reset}"
+
+-- Clear any stale session
+ssh FILTER_IP, "sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true"
+
+--- Run curl from the client VM against the auth server.
+-- @tparam string method   HTTP method (GET or POST)
+-- @tparam string path     URL path
+-- @tparam string|nil data POST form data
+-- @treturn boolean, string  ok, HTTP status code string
+auth_curl_kvm = (method, path, data) ->
+  data_flag = if data then "-d '#{data}' " else ""
+  cmd = "curl -k -s -o /dev/null -w '%{http_code}' -X #{method} #{data_flag}#{AUTH_URL}#{path} 2>&1"
+  guest_exec cmd, 10
+
+ok_bad, bad_code = auth_curl_kvm "POST", "/login", "user=testuser&password=WRONG"
+bad_code = (bad_code or "")\gsub "%s+", ""
+report "Auth — mauvais mot de passe → 401",
+  bad_code == "401", "HTTP #{bad_code}"
+
+ok_ok, ok_code = auth_curl_kvm "POST", "/login", "user=testuser&password=testpass"
+ok_code = (ok_code or "")\gsub "%s+", ""
+report "Auth — identifiants valides → 200",
+  ok_code == "200", "HTTP #{ok_code}"
+
+_, sess_out = ssh FILTER_IP, "sudo cat /opt/custos/tmp/sessions.lua 2>/dev/null"
+report "Auth — sessions.lua contient testuser + IP client",
+  (sess_out and sess_out\match("testuser") and sess_out\match("10.99.0.10")) != nil,
+  (sess_out or "(absent)")\sub(1, 120)
+
+ok_ping, ping_code = auth_curl_kvm "GET", "/ping"
+ping_code = (ping_code or "")\gsub "%s+", ""
+report "Auth — heartbeat GET /ping → 204",
+  ping_code == "204", "HTTP #{ping_code}"
+
+-- Wait for session cache to flush (CACHE_TTL=5s)
+print "  Waiting 6s for session cache..."
+os.execute "sleep 6"
+
+ok_nxd, nxd_out = guest_exec "dig +time=5 +tries=1 auth-required.test @#{DNS_SERVER} 2>&1", 12
+nxd_str = (nxd_out or "")\gsub "%s+$", ""
+report "Auth — from_user : auth-required.test → NXDOMAIN après login",
+  (nxd_out and (nxd_out\lower!\match("nxdomain") or nxd_out\match("can't find"))) != nil,
+  "dig: #{nxd_str}"
+
+ok_out, out_code = auth_curl_kvm "GET", "/logout"
+out_code = (out_code or "")\gsub "%s+", ""
+report "Auth — logout → 303",
+  out_code == "303", "HTTP #{out_code}"
+
+print "  Waiting 6s after logout..."
+os.execute "sleep 6"
+
+ok_ref, ref_out = guest_exec "dig +time=5 +tries=1 auth-required.test @#{DNS_SERVER} 2>&1", 12
+ref_str = (ref_out or "")\gsub "%s+$", ""
+report "Auth — from_user : auth-required.test → REFUSED après logout",
+  (ref_out and ref_out\upper!\match("REFUSED")) != nil,
+  "dig: #{ref_str}"
 
 -- ── Teardown ─────────────────────────────────────────────────────────────────
 ssh FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; sudo nft flush ruleset 2>/dev/null; true"

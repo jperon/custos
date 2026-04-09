@@ -4,6 +4,12 @@ local crypto
 do
   local ok, lib = pcall(ffi.load, "crypto")
   if not (ok) then
+    ok, lib = pcall(ffi.load, "libcrypto.so.3")
+  end
+  if not (ok) then
+    ok, lib = pcall(ffi.load, "libcrypto.so.1.1")
+  end
+  if not (ok) then
     error("libcrypto introuvable (paquet openssl requis)")
   end
   crypto = lib
