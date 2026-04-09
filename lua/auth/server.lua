@@ -87,6 +87,22 @@ local LOGIN_PAGE = [[<!DOCTYPE html>
 </html>
 ]]
 local SUCCESS_PAGE = LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>')
+local make_success_page
+make_success_page = function(interval)
+  local js = string.format([[<script>
+(function(){
+  var iv = %d * 1000;
+  function ping(){
+    fetch('/ping',{method:'GET',credentials:'omit'})
+      .then(function(r){ if(r.status===401) location.href='/'; })
+      .catch(function(){});
+  }
+  setInterval(ping, iv);
+  ping();
+})();
+</script>]], interval)
+  return LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion r\xc3\xa9ussie. Votre acc\xc3\xa8s r\xc3\xa9seau est actif tant que cette page reste ouverte.</p>' .. js)
+end
 local failure_page
 failure_page = function(reason)
   return LOGIN_PAGE:gsub("%%MSG%%", "<p class=\"msg err\">" .. tostring(reason) .. "</p>")
@@ -165,7 +181,7 @@ http_redirect = function(sock, location)
   return sock:send(resp)
 end
 local handle_connection
-handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip)
+handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg)
   raw_sock:settimeout(10)
   local tls_sock, err = ssl.wrap(raw_sock, tls_ctx)
   if not (tls_sock) then
@@ -193,8 +209,9 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
   end
   if method == "GET" and (path == "/" or path == "/login") then
     local s = sessions[peer_ip]
-    if s and os.time() <= s.expires then
-      http_response(tls_sock, "200 OK", SUCCESS_PAGE)
+    local now = os.time()
+    if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat) then
+      http_response(tls_sock, "200 OK", success_pg)
       log_info({
         action = "auth_already_logged",
         ip = peer_ip,
@@ -202,6 +219,24 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
       })
     else
       http_response(tls_sock, "200 OK", home_page)
+    end
+  elseif method == "GET" and path == "/ping" then
+    local s = sessions[peer_ip]
+    local now = os.time()
+    if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat) then
+      if auth_cfg.idle_timeout and auth_cfg.idle_timeout > 0 then
+        s.heartbeat = now + auth_cfg.idle_timeout
+        local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
+        if not (ok2) then
+          log_warn({
+            action = "auth_write_failed",
+            err = err3
+          })
+        end
+      end
+      http_response(tls_sock, "204 No Content", "")
+    else
+      http_response(tls_sock, "401 Unauthorized", "")
     end
   elseif method == "GET" and path == "/logout" then
     sessions[peer_ip] = nil
@@ -224,7 +259,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
     local stored = secrets[user]
     if stored and pass ~= "" and verify_password(pass, stored) then
       purge_expired(sessions)
-      add_session(sessions, peer_ip, user, auth_cfg.session_ttl)
+      add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
       local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
       if not (ok2) then
         log_warn({
@@ -232,7 +267,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
           err = err3
         })
       end
-      http_response(tls_sock, "200 OK", SUCCESS_PAGE)
+      http_response(tls_sock, "200 OK", success_pg)
       log_info({
         action = "auth_login_ok",
         ip = peer_ip,
@@ -284,6 +319,8 @@ local run
 run = function(tls_ctx, secrets, auth_cfg, reload_fn)
   local port = auth_cfg.port
   local host = auth_cfg.host
+  local hb_interval = auth_cfg.heartbeat_interval or 30
+  local success_pg = make_success_page(hb_interval)
   local listen4, err4 = make_server4("0.0.0.0", port)
   if not (listen4) then
     error("Impossible de démarrer le serveur IPv4 sur port " .. tostring(port) .. " : " .. tostring(err4))
@@ -323,7 +360,7 @@ run = function(tls_ctx, secrets, auth_cfg, reload_fn)
       local srv = _list_0[_index_0]
       local client, peer_ip = srv:accept()
       if client then
-        handle_connection(client, tls_ctx, secrets, sessions, auth_cfg, peer_ip)
+        handle_connection(client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg)
       end
     end
   end

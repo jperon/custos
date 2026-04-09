@@ -28,6 +28,8 @@ load_config = function(path)
   auth.port = auth.port or 8443
   auth.session_ttl = auth.session_ttl or 86400
   auth.sessions_file = auth.sessions_file or "./tmp/sessions.lua"
+  auth.heartbeat_interval = auth.heartbeat_interval or 30
+  auth.idle_timeout = auth.idle_timeout or 120
   return cfg, nil
 end
 return {

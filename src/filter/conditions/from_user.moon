@@ -27,6 +27,8 @@
         return false, "from_user: aucune session pour #{req.src_ip}"
       if now > s.expires
         return false, "from_user: session expirée pour #{req.src_ip} (user=#{s.user})"
+      if s.heartbeat and now > s.heartbeat
+        return false, "from_user: heartbeat expiré pour #{req.src_ip} (user=#{s.user})"
       if s.user ~= user
         return false, "from_user: #{req.src_ip} authentifié en tant que #{s.user}, attendu #{user}"
 

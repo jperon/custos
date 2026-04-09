@@ -15,6 +15,9 @@ return function(cfg)
       if now > s.expires then
         return false, "from_user: session expirée pour " .. tostring(req.src_ip) .. " (user=" .. tostring(s.user) .. ")"
       end
+      if s.heartbeat and now > s.heartbeat then
+        return false, "from_user: heartbeat expiré pour " .. tostring(req.src_ip) .. " (user=" .. tostring(s.user) .. ")"
+      end
       if s.user ~= user then
         return false, "from_user: " .. tostring(req.src_ip) .. " authentifié en tant que " .. tostring(s.user) .. ", attendu " .. tostring(user)
       end

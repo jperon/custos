@@ -56,9 +56,14 @@
 #   secrets      : chemin du fichier de mots de passe (défaut : cfg/secrets)
 #                  Format : user:pbkdf2-sha256:<iter>:<salt_hex>:<hash_hex>
 #                  Générer : make make-secret USER=alice PASS=motdepasse >> cfg/secrets
-#   session_ttl  : durée de vie d'une session (secondes, défaut : 86400 = 24h)
-#   sessions_file: chemin du fichier de sessions partagé avec la condition from_user
-#                  (défaut : ./tmp/sessions.lua)
+#   session_ttl       : durée de vie maximale d'une session (secondes, défaut : 86400 = 24h)
+#   sessions_file     : chemin du fichier de sessions partagé avec la condition from_user
+#                       (défaut : ./tmp/sessions.lua)
+#   heartbeat_interval: intervalle de ping JS en secondes (défaut : 30)
+#                       La page de succès envoie un GET /ping toutes les N secondes.
+#   idle_timeout      : délai d'inactivité avant expiration de session (secondes, défaut : 120)
+#                       La session est révoquée si aucun ping n'est reçu dans ce délai.
+#                       Mettre à 0 pour désactiver le heartbeat (expiration uniquement via session_ttl).
 #
 # users  : nom → adresse e-mail (pour l'action mail, futur)
 
@@ -74,8 +79,10 @@ domainlists_dir: /etc/custos/lists
 #  cert: /etc/custos/auth.crt        # auto-généré si absent
 #  key:  /etc/custos/auth.key        # auto-généré si absent
 #  secrets: cfg/secrets              # fichier pbkdf2-sha256
-#  session_ttl: 86400                # 24 heures
+#  session_ttl: 86400                # durée max (24 h)
 #  sessions_file: ./tmp/sessions.lua
+#  heartbeat_interval: 30            # ping JS toutes les 30 s
+#  idle_timeout: 120                 # expiration si inactif 2 min (0 = désactivé)
 
 # Utilisateurs (nom → email, pour l'action mail)
 #users:

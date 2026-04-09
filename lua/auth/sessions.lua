@@ -8,7 +8,8 @@ serialize = function(sessions)
   for ip, s in pairs(sessions) do
     local safe_ip = ip:gsub('"', '\\"')
     local safe_user = s.user:gsub('"', '\\"')
-    parts[#parts + 1] = string.format('  ["%s"] = { user = "%s", expires = %d },\n', safe_ip, safe_user, s.expires)
+    local hb = s.heartbeat and (", heartbeat = " .. tostring(s.heartbeat)) or ""
+    parts[#parts + 1] = string.format('  ["%s"] = { user = "%s", expires = %d%s },\n', safe_ip, safe_user, s.expires, hb)
   end
   parts[#parts + 1] = "}\n"
   return table.concat(parts)
@@ -41,17 +42,20 @@ load_sessions = function(path)
   return result
 end
 local add_session
-add_session = function(sessions, ip, user, session_ttl)
+add_session = function(sessions, ip, user, session_ttl, idle_timeout)
+  local now = os_time()
+  local hb = (idle_timeout and idle_timeout > 0) and (now + idle_timeout) or nil
   sessions[ip] = {
     user = user,
-    expires = os_time() + session_ttl
+    expires = now + session_ttl,
+    heartbeat = hb
   }
 end
 local purge_expired
 purge_expired = function(sessions)
   local now = os_time()
   for ip, s in pairs(sessions) do
-    if now > s.expires then
+    if now > s.expires or (s.heartbeat and now > s.heartbeat) then
       sessions[ip] = nil
     end
   end

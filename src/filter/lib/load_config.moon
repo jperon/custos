@@ -35,10 +35,12 @@ load_config = (path) ->
   -- Section auth : valeurs par défaut
   cfg.auth = cfg.auth or {}
   auth = cfg.auth
-  auth.host         = auth.host         or "::"
-  auth.port         = auth.port         or 8443
-  auth.session_ttl  = auth.session_ttl  or 86400
-  auth.sessions_file = auth.sessions_file or "./tmp/sessions.lua"
+  auth.host              = auth.host              or "::"
+  auth.port              = auth.port              or 8443
+  auth.session_ttl       = auth.session_ttl       or 86400
+  auth.sessions_file     = auth.sessions_file     or "./tmp/sessions.lua"
+  auth.heartbeat_interval = auth.heartbeat_interval or 30
+  auth.idle_timeout      = auth.idle_timeout      or 120
   -- auth.cert, auth.key, auth.secrets : nil par défaut (optionnels)
 
   cfg, nil

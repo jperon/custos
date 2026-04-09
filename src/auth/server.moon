@@ -95,6 +95,26 @@ LOGIN_PAGE = [[
 SUCCESS_PAGE = LOGIN_PAGE\gsub "%%MSG%%",
   '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>'
 
+--- Construit la page de succès avec le heartbeat JS intégré.
+-- @tparam number interval Intervalle de ping en secondes
+-- @treturn string Page HTML
+make_success_page = (interval) ->
+  js = string.format([[
+<script>
+(function(){
+  var iv = %d * 1000;
+  function ping(){
+    fetch('/ping',{method:'GET',credentials:'omit'})
+      .then(function(r){ if(r.status===401) location.href='/'; })
+      .catch(function(){});
+  }
+  setInterval(ping, iv);
+  ping();
+})();
+</script>]], interval)
+  LOGIN_PAGE\gsub "%%MSG%%",
+    '<p class="msg ok">Connexion r\xc3\xa9ussie. Votre acc\xc3\xa8s r\xc3\xa9seau est actif tant que cette page reste ouverte.</p>' .. js
+
 failure_page = (reason) ->
   LOGIN_PAGE\gsub "%%MSG%%",
     "<p class=\"msg err\">#{reason}</p>"
@@ -176,9 +196,10 @@ http_redirect = (sock, location) ->
 -- @tparam table  tls_ctx     Contexte TLS luasec
 -- @tparam table  secrets     Table {user → hash}
 -- @tparam table  sessions    Table de sessions (modifiée en place)
--- @tparam table  auth_cfg    Configuration auth (session_ttl, sessions_file)
+-- @tparam table  auth_cfg    Configuration auth (session_ttl, idle_timeout, sessions_file)
 -- @tparam string peer_ip     Adresse IP du client
-handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip) ->
+-- @tparam string success_pg  Page HTML de succès (avec JS heartbeat intégré)
+handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg) ->
   raw_sock\settimeout 10
 
   -- Wrap TLS
@@ -201,11 +222,24 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip) ->
   if method == "GET" and (path == "/" or path == "/login")
     -- Vérifie si l'IP a déjà une session valide
     s = sessions[peer_ip]
-    if s and os.time! <= s.expires
-      http_response tls_sock, "200 OK", SUCCESS_PAGE
+    now = os.time!
+    if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat)
+      http_response tls_sock, "200 OK", success_pg
       log_info { action: "auth_already_logged", ip: peer_ip, user: s.user }
     else
       http_response tls_sock, "200 OK", home_page
+
+  elseif method == "GET" and path == "/ping"
+    s = sessions[peer_ip]
+    now = os.time!
+    if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat)
+      if auth_cfg.idle_timeout and auth_cfg.idle_timeout > 0
+        s.heartbeat = now + auth_cfg.idle_timeout
+        ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
+        log_warn { action: "auth_write_failed", err: err3 } unless ok2
+      http_response tls_sock, "204 No Content", ""
+    else
+      http_response tls_sock, "401 Unauthorized", ""
 
   elseif method == "GET" and path == "/logout"
     sessions[peer_ip] = nil
@@ -222,10 +256,10 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip) ->
 
     if stored and pass ~= "" and verify_password pass, stored
       purge_expired sessions
-      add_session sessions, peer_ip, user, auth_cfg.session_ttl
+      add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
       ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
       log_warn { action: "auth_write_failed", err: err3 } unless ok2
-      http_response tls_sock, "200 OK", SUCCESS_PAGE
+      http_response tls_sock, "200 OK", success_pg
       log_info { action: "auth_login_ok", ip: peer_ip, user: user }
     else
       http_response tls_sock, "401 Unauthorized",
@@ -280,6 +314,10 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn) ->
   port = auth_cfg.port
   host = auth_cfg.host
 
+  -- Page de succès avec JS heartbeat intégré (construit une seule fois)
+  hb_interval = auth_cfg.heartbeat_interval or 30
+  success_pg  = make_success_page hb_interval
+
   -- Sockets d'écoute : on tente toujours IPv4 + IPv6
   listen4, err4 = make_server4 "0.0.0.0", port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
@@ -302,6 +340,6 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn) ->
     for srv in *(readable or {})
       client, peer_ip = srv\accept!
       if client
-        handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip
+        handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg
 
 { :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE }
