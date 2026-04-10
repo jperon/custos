@@ -981,6 +981,142 @@ run_test "Portail captif — IP retirée de authenticated_ips après logout",
       (output\match "([^\n]*172%.28%.0%.10[^\n]*)") or "(présente)"
     return removed, obtained
 
+-- ── Sondes Windows/Firefox ────────────────────────────────────────────────────
+print ""
+print "#{C.bold}▶ Sondes captives Windows/Firefox#{C.reset}"
+
+for probe_path in *{"/connecttest.txt", "/success.txt", "/ncsi.txt", "/canonical.html"}
+  run_test "Portail captif — sonde #{probe_path} → 302",
+    "curl http://#{auth_ip}:33080#{probe_path} → HTTP 302",
+    ->
+      ok, code = captive_curl probe_path
+      return (code == "302"), "HTTP #{code}"
+
+-- ── Portail captif IPv6 ───────────────────────────────────────────────────────
+print ""
+print "#{C.bold}▶ Portail captif IPv6#{C.reset}"
+
+auth_ip6 = if profile == "ndpi5" then "fd00:28::fd" else "fd00:28::fe"
+
+run_test "Portail captif IPv6 — requête HTTP → 302",
+  "curl -6 http://[#{auth_ip6}]:33080/ depuis client → HTTP 302",
+  ->
+    cmd = "docker exec custos-client curl -6 -s -o /dev/null -w '%{http_code}' --max-redirs 0 'http://[#{auth_ip6}]:33080/' 2>&1"
+    ok, code = execute cmd, true
+    code = (code or "")\gsub "%s+", ""
+    return (code == "302"), "HTTP #{code}"
+
+-- ── DNAT effectif (TCP port 80 → portail captif) ────────────────────────────
+print ""
+print "#{C.bold}▶ DNAT — TCP port 80 → portail captif#{C.reset}"
+
+-- Ensure client is NOT in authenticated_ips
+execute "docker exec #{filter_name} nft delete element ip dns-filter authenticated_ips { 172.28.0.10 } 2>/dev/null", true
+os.execute "sleep 1"
+
+run_test "DNAT — TCP port 80 non authentifié → 302",
+  "curl http://1.2.3.4/ depuis client (non auth) → DNAT→33080 → 302",
+  ->
+    cmd = "docker exec custos-client curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 5 http://1.2.3.4/ 2>&1"
+    ok, code = execute cmd, true
+    code = (code or "")\gsub "%s+", ""
+    return (code == "302"), "HTTP #{code}"
+
+-- ── DNS concurrent ────────────────────────────────────────────────────────────
+print ""
+print "#{C.bold}▶ DNS concurrent (deux requêtes simultanées)#{C.reset}"
+
+run_test "DNS concurrent — deux dig simultanés → les deux répondent",
+  "dig github.com et cloudflare.com en parallèle → chacun retourne une IP",
+  ->
+    execute "docker exec #{filter_name} nft flush set ip dns-filter ip4_allowed 2>/dev/null", true
+    -- Launch two dig queries in background (write to tmp/ per AGENTS.md)
+    conc1 = "./tmp/conc_dns1.txt"
+    conc2 = "./tmp/conc_dns2.txt"
+    os.execute "docker exec custos-client dig +short +time=5 +tries=1 github.com @172.30.0.20 > #{conc1} 2>&1 &"
+    os.execute "docker exec custos-client dig +short +time=5 +tries=1 cloudflare.com @172.30.0.20 > #{conc2} 2>&1 &"
+    os.execute "sleep 8"
+    fh1 = io.open conc1, "r"
+    out1 = if fh1 then fh1\read "*a" else ""
+    fh1\close! if fh1
+    fh2 = io.open conc2, "r"
+    out2 = if fh2 then fh2\read "*a" else ""
+    fh2\close! if fh2
+    os.remove conc1
+    os.remove conc2
+    has1 = (out1\match "%d+%.%d+%.%d+%.%d+") != nil
+    has2 = (out2\match "%d+%.%d+%.%d+%.%d+") != nil
+    detail = "github: #{out1\gsub('%s+',' ')}, cloudflare: #{out2\gsub('%s+',' ')}"
+    return (has1 and has2), detail
+
+-- ── SIGHUP — rechargement des secrets ────────────────────────────────────────
+print ""
+print "#{C.bold}▶ SIGHUP — rechargement des secrets#{C.reset}"
+
+run_test "SIGHUP — rechargement des secrets à chaud",
+  "modifier cfg/secrets + SIGHUP → ancien MdP rejeté, nouveau MdP accepté",
+  ->
+    -- Find auth worker PID via the startup log (logfmt: action=worker_started name=AUTH pid=N)
+    ok_pid, pid_out = execute "docker exec #{filter_name} sh -c \"grep 'action=worker_started' /app/tmp/dns-filter.log | grep 'name=AUTH' | grep -o 'pid=[0-9]*' | tail -1 | cut -d= -f2\"", true
+    auth_pid = (pid_out or "")\gsub "%s+", ""
+    unless auth_pid ~= "" and auth_pid\match "^%d+$"
+      return false, "impossible de trouver le PID du worker auth (log: '#{pid_out}')"
+    -- Generate new credentials hash (newpass123)
+    ok_hash, new_hash = execute "docker exec #{filter_name} luajit -e \"package.path='lua/?.lua;lua/?/init.lua;;'; local c=require('auth.credentials'); print(c.hash_password('newpass123'))\"", true
+    new_hash = (new_hash or "")\gsub "%s+$", ""
+    unless ok_hash and new_hash ~= "" and new_hash\match "pbkdf2"
+      return false, "impossible de générer le hash (#{new_hash})"
+    -- Save original secrets, write new secrets
+    secrets_path = "./cfg/secrets"
+    fh_orig = io.open secrets_path, "r"
+    orig_secrets = fh_orig and fh_orig\read "*a" or ""
+    fh_orig\close! if fh_orig
+    fh_new = io.open secrets_path, "w"
+    fh_new\write "testuser:#{new_hash}\n"
+    fh_new\close!
+    -- Send SIGHUP to auth worker
+    execute "docker exec #{filter_name} sh -c \"kill -HUP #{auth_pid}\" 2>/dev/null", true
+    os.execute "sleep 2"
+    -- Old password should be rejected
+    _, old_code = auth_curl "POST", "/login", "user=testuser&password=testpass"
+    old_code = (old_code or "")\gsub "%s+", ""
+    -- New password should work
+    _, new_code = auth_curl "POST", "/login", "user=testuser&password=newpass123"
+    new_code = (new_code or "")\gsub "%s+", ""
+    -- Restore original secrets and reload
+    fh_rest = io.open secrets_path, "w"
+    fh_rest\write orig_secrets
+    fh_rest\close!
+    execute "docker exec #{filter_name} sh -c \"kill -HUP #{auth_pid}\" 2>/dev/null", true
+    os.execute "sleep 2"
+    detail = "old → #{old_code} (attendu 401), new → #{new_code} (attendu 200)"
+    return (old_code == "401" and new_code == "200"), detail
+
+-- ── Heartbeat — expiration de session ────────────────────────────────────────
+print ""
+print "#{C.bold}▶ Heartbeat — expiration idle_timeout#{C.reset}"
+
+run_test "Heartbeat — idle_timeout expiré → /ping retourne 401",
+  "login, attente #{10 + 1}s sans ping (idle_timeout=10s) → /ping → 401",
+  ->
+    -- Login to establish a session (heartbeat = now + idle_timeout)
+    _, login_code = auth_curl "POST", "/login", "user=testuser&password=testpass"
+    login_code = (login_code or "")\gsub "%s+", ""
+    unless login_code == "200"
+      return false, "login préalable échoué (#{login_code})"
+    -- Verify /ping works immediately
+    _, ping_ok_code = auth_curl "GET", "/ping"
+    ping_ok_code = (ping_ok_code or "")\gsub "%s+", ""
+    unless ping_ok_code == "204"
+      return false, "/ping initial échoué (#{ping_ok_code})"
+    -- Wait for idle_timeout (10s) to expire — no pings sent
+    log "Attente expiration idle_timeout (11s, aucun ping)…", "STEP"
+    os.execute "sleep 11"
+    -- /ping should now return 401 (heartbeat expired)
+    _, ping_exp_code = auth_curl "GET", "/ping"
+    ping_exp_code = (ping_exp_code or "")\gsub "%s+", ""
+    return (ping_exp_code == "401"), "/ping après idle_timeout → #{ping_exp_code}"
+
 -- ── Summary ───────────────────────────────────────────────────────────────────
 print ""
 print "#{C.bold}Test Summary:#{C.reset}"
