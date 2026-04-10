@@ -180,6 +180,11 @@ rules:
     from_user: testuser
     to_domain: auth-required.test
 
+- description: Test — domaine auth-required.test refusé sans authentification
+  actions: [deny]
+  conditions:
+    to_domain: auth-required.test
+
 # Exemple de blocage explicite d'un domaine — utilisé aussi par les tests e2e
 # (make test-docker / make test-kvm) pour vérifier le comportement "REFUSED".
 - description: Exemple — blocage explicite de facebook.com
