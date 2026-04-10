@@ -191,7 +191,7 @@ wait_for_auth_ready = (timeout = 30) ->
 auth_curl = (method, path, data = nil) ->
   data_flag = if data then "-d '#{data}' " else ""
   -- -k: skip cert verification (self-signed), -s: silent, -o /dev/null: discard body
-  cmd = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' -X #{method} #{data_flag}https://#{auth_ip}:8443#{path} 2>&1"
+  cmd = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' -X #{method} #{data_flag}https://#{auth_ip}:33443#{path} 2>&1"
   execute cmd, true
 
 --- Wait for the filter to be fully ready (queues listening).
@@ -921,6 +921,65 @@ run_test "Auth — from_user : domaine refusé après logout → REFUSED",
     obtained = (output\match "([^\n]*REFUSED[^\n]*)") or
                (output\match "([^\n]+)") or "(no output)"
     return ok, obtained
+
+-- ── Portail captif ────────────────────────────────────────────────────────────
+
+print ""
+print "#{C.bold}▶ Portail captif (port 33080)#{C.reset}"
+
+-- Helper : curl HTTP depuis le client (sans TLS, port 80)
+-- On teste directement le port 33080 (le DNAT n'est pas joignable depuis l'hôte)
+captive_curl = (path = "/") ->
+  cmd = "docker exec custos-client curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 http://#{auth_ip}:33080#{path} 2>&1"
+  execute cmd, true
+
+run_test "Portail captif — requête HTTP → 302",
+  "curl http://#{auth_ip}:33080/ → HTTP 302 (redirect vers login HTTPS)",
+  ->
+    ok, code = captive_curl "/"
+    return (code == "302"), "HTTP #{code}"
+
+run_test "Portail captif — sonde Android /generate_204 → 302",
+  "curl http://#{auth_ip}:33080/generate_204 → HTTP 302 (portail détecté)",
+  ->
+    ok, code = captive_curl "/generate_204"
+    return (code == "302"), "HTTP #{code}"
+
+run_test "Portail captif — sonde Apple /hotspot-detect.html → 302",
+  "curl http://#{auth_ip}:33080/hotspot-detect.html → HTTP 302",
+  ->
+    ok, code = captive_curl "/hotspot-detect.html"
+    return (code == "302"), "HTTP #{code}"
+
+-- Login et vérification du set nft authenticated_ips
+log "Re-login pour tester le bypass du portail captif…", "STEP"
+auth_curl "POST", "/login", "user=testuser&password=testpass"
+
+run_test "Portail captif — IP dans authenticated_ips après login",
+  "nft list set ip dns-filter authenticated_ips → contient 172.28.0.10",
+  ->
+    cmd = "docker exec #{filter_name} nft list set ip dns-filter authenticated_ips 2>&1"
+    ok, output = execute cmd, true
+    ok2 = output != nil and output\match("172.28.0.10") != nil
+    obtained = (output\match "([^\n]*172%.28%.0%.10[^\n]*)") or
+               (output\match "([^\n]+)") or "(set vide)"
+    return ok2, obtained
+
+-- Logout et vérification que l'IP est retirée du set
+auth_curl "GET", "/logout"
+os.execute "sleep 1"
+
+run_test "Portail captif — IP retirée de authenticated_ips après logout",
+  "nft list set ip dns-filter authenticated_ips → 172.28.0.10 absent",
+  ->
+    cmd = "docker exec #{filter_name} nft list set ip dns-filter authenticated_ips 2>&1"
+    ok, output = execute cmd, true
+    removed = output == nil or output\match("172.28.0.10") == nil
+    obtained = if removed
+      "IP absente du set (correct)"
+    else
+      (output\match "([^\n]*172%.28%.0%.10[^\n]*)") or "(présente)"
+    return removed, obtained
 
 -- ── Summary ───────────────────────────────────────────────────────────────────
 print ""

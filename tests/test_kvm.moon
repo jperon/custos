@@ -436,7 +436,7 @@ report "log has blocked/refused entries",
 
 -- ── Authentification HTTPS ────────────────────────────────────────────────────
 FILTER_LAN_IP = "10.99.0.254"
-AUTH_URL       = "https://#{FILTER_LAN_IP}:8443"
+AUTH_URL       = "https://#{FILTER_LAN_IP}:33443"
 
 print ""
 print "#{C.bold}▶ Authentification HTTPS (#{AUTH_URL})#{C.reset}"
@@ -497,6 +497,45 @@ ref_str = (ref_out or "")\gsub "%s+$", ""
 report "Auth — from_user : auth-required.test → REFUSED après logout",
   (ref_out and ref_out\upper!\match("REFUSED")) != nil,
   "dig: #{ref_str}"
+
+-- ── Portail captif ────────────────────────────────────────────────────────────
+print ""
+print "#{C.bold}▶ Portail captif (port 33080)#{C.reset}"
+
+CAPTIVE_URL = "http://#{FILTER_LAN_IP}:33080"
+
+-- Helper : curl HTTP depuis la VM client vers le port 33080 du filtre
+captive_curl_kvm = (path = "/") ->
+  cmd = "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 #{CAPTIVE_URL}#{path} 2>&1"
+  guest_exec cmd, 10
+
+ok_cp, cp_code = captive_curl_kvm "/"
+cp_code = (cp_code or "")\gsub "%s+", ""
+report "Portail captif — requête HTTP → 302",
+  cp_code == "302", "HTTP #{cp_code}"
+
+ok_g204, g204_code = captive_curl_kvm "/generate_204"
+g204_code = (g204_code or "")\gsub "%s+", ""
+report "Portail captif — sonde Android /generate_204 → 302",
+  g204_code == "302", "HTTP #{g204_code}"
+
+-- Re-login pour vérifier authenticated_ips
+auth_curl_kvm "POST", "/login", "user=testuser&password=testpass"
+os.execute "sleep 1"
+
+_, auth_nft_out = ssh FILTER_IP, "sudo nft list set ip dns-filter authenticated_ips 2>/dev/null"
+report "Portail captif — IP dans authenticated_ips après login",
+  (auth_nft_out and auth_nft_out\match("10.99.0.10")) != nil,
+  (auth_nft_out or "(absent)")\sub(1, 120)
+
+-- Logout et vérification retrait IP
+auth_curl_kvm "GET", "/logout"
+os.execute "sleep 1"
+
+_, auth_nft_out2 = ssh FILTER_IP, "sudo nft list set ip dns-filter authenticated_ips 2>/dev/null"
+report "Portail captif — IP retirée de authenticated_ips après logout",
+  (auth_nft_out2 == nil or auth_nft_out2\match("10.99.0.10") == nil),
+  (auth_nft_out2 or "(set vide)")\sub(1, 120)
 
 -- ── Teardown ─────────────────────────────────────────────────────────────────
 ssh FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; sudo nft flush ruleset 2>/dev/null; true"

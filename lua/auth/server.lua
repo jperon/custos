@@ -15,6 +15,7 @@ do
   local _obj_0 = require("log")
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
+local captive = require("auth.captive")
 local LOGIN_PAGE = [[<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -181,7 +182,7 @@ http_redirect = function(sock, location)
   return sock:send(resp)
 end
 local handle_connection
-handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg)
+handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess)
   raw_sock:settimeout(10)
   local tls_sock, err = ssl.wrap(raw_sock, tls_ctx)
   if not (tls_sock) then
@@ -240,6 +241,9 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
     end
   elseif method == "GET" and path == "/logout" then
     sessions[peer_ip] = nil
+    if nft_sess then
+      nft_sess.del_authenticated(peer_ip)
+    end
     local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
     if not (ok2) then
       log_warn({
@@ -260,6 +264,9 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
     if stored and pass ~= "" and verify_password(pass, stored) then
       purge_expired(sessions)
       add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
+      if nft_sess then
+        nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
+      end
       local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
       if not (ok2) then
         log_warn({
@@ -316,7 +323,7 @@ make_server6 = function(port)
   return srv6
 end
 local run
-run = function(tls_ctx, secrets, auth_cfg, reload_fn)
+run = function(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs)
   local port = auth_cfg.port
   local host = auth_cfg.host
   local hb_interval = auth_cfg.heartbeat_interval or 30
@@ -341,12 +348,22 @@ run = function(tls_ctx, secrets, auth_cfg, reload_fn)
     })
   end
   local sessions = { }
-  local servers = listen6 and {
-    listen4,
-    listen6
-  } or {
+  captive_srvs = captive_srvs or { }
+  local https_set = { }
+  https_set[listen4] = true
+  if listen6 then
+    https_set[listen6] = true
+  end
+  local all_servers = {
     listen4
   }
+  if listen6 then
+    all_servers[#all_servers + 1] = listen6
+  end
+  for _index_0 = 1, #captive_srvs do
+    local s = captive_srvs[_index_0]
+    all_servers[#all_servers + 1] = s
+  end
   while true do
     if reload_fn then
       local new_secrets = reload_fn()
@@ -354,7 +371,7 @@ run = function(tls_ctx, secrets, auth_cfg, reload_fn)
         secrets = new_secrets
       end
     end
-    local readable = socket.select(servers, nil, 1)
+    local readable = socket.select(all_servers, nil, 1)
     local _list_0 = (readable or { })
     for _index_0 = 1, #_list_0 do
       local srv = _list_0[_index_0]
@@ -362,7 +379,11 @@ run = function(tls_ctx, secrets, auth_cfg, reload_fn)
       if client then
         local peer_ip = client:getpeername()
         peer_ip = tostring(peer_ip)
-        handle_connection(client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg)
+        if https_set[srv] then
+          handle_connection(client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess)
+        else
+          captive.handle_connection(client, auth_cfg.port)
+        end
       end
     end
   end

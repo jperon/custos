@@ -16,6 +16,7 @@ ssl    = require "ssl"
 { :verify_password, :load_secrets } = require "auth.credentials"
 { :add_session, :purge_expired, :write_sessions } = require "auth.sessions"
 { :log_info, :log_warn }            = require "log"
+captive                             = require "auth.captive"
 
 -- ── Page HTML ────────────────────────────────────────────────────
 
@@ -199,7 +200,8 @@ http_redirect = (sock, location) ->
 -- @tparam table  auth_cfg    Configuration auth (session_ttl, idle_timeout, sessions_file)
 -- @tparam string peer_ip     Adresse IP du client
 -- @tparam string success_pg  Page HTML de succès (avec JS heartbeat intégré)
-handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg) ->
+-- @tparam table|nil nft_sess Module auth.nft_sessions (ou nil si portail captif désactivé)
+handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess) ->
   raw_sock\settimeout 10
 
   -- Wrap TLS
@@ -243,6 +245,8 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
 
   elseif method == "GET" and path == "/logout"
     sessions[peer_ip] = nil
+    if nft_sess
+      nft_sess.del_authenticated peer_ip
     ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
     log_warn { action: "auth_write_failed", err: err3 } unless ok2
     http_redirect tls_sock, "/"
@@ -257,6 +261,8 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
     if stored and pass ~= "" and verify_password pass, stored
       purge_expired sessions
       add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
+      if nft_sess
+        nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
       ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
       log_warn { action: "auth_write_failed", err: err3 } unless ok2
       http_response tls_sock, "200 OK", success_pg
@@ -305,12 +311,14 @@ make_server6 = (port) ->
 
 -- ── Boucle principale ────────────────────────────────────────────
 
---- Démarre la boucle d'acceptation HTTPS.
--- @tparam table tls_ctx  Contexte TLS luasec
--- @tparam table secrets  Table {user → hash}
--- @tparam table auth_cfg Configuration auth
--- @tparam function|nil reload_fn Fonction appelée pour recharger les secrets (SIGHUP)
-run = (tls_ctx, secrets, auth_cfg, reload_fn) ->
+--- Démarre la boucle d'acceptation HTTPS (et portail captif HTTP si configuré).
+-- @tparam table tls_ctx       Contexte TLS luasec
+-- @tparam table secrets       Table {user → hash}
+-- @tparam table auth_cfg      Configuration auth
+-- @tparam function|nil reload_fn  Fonction appelée pour recharger les secrets (SIGHUP)
+-- @tparam table|nil nft_sess  Module auth.nft_sessions (nil si portail captif désactivé)
+-- @tparam table captive_srvs  Liste de sockets TCP plain du portail captif (peut être vide)
+run = (tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs) ->
   port = auth_cfg.port
   host = auth_cfg.host
 
@@ -318,7 +326,7 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn) ->
   hb_interval = auth_cfg.heartbeat_interval or 30
   success_pg  = make_success_page hb_interval
 
-  -- Sockets d'écoute : on tente toujours IPv4 + IPv6
+  -- Sockets d'écoute HTTPS : on tente toujours IPv4 + IPv6
   listen4, err4 = make_server4 "0.0.0.0", port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
   listen6 = make_server6 port
@@ -328,20 +336,36 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn) ->
     log_info { action: "auth_listening", ipv4: "0.0.0.0", port: port }
 
   sessions = {}
-  servers  = listen6 and { listen4, listen6 } or { listen4 }
+
+  -- Construire la liste de tous les sockets : HTTPS + captive HTTP
+  captive_srvs = captive_srvs or {}
+  https_set = {}
+  https_set[listen4] = true
+  https_set[listen6] = true if listen6
+
+  all_servers = { listen4 }
+  if listen6
+    all_servers[#all_servers + 1] = listen6
+  for s in *captive_srvs
+    all_servers[#all_servers + 1] = s
 
   while true
-    -- reload_fn peut être une closure qui retourne une nouvelle table secrets
+    -- Rechargement des secrets sur SIGHUP
     if reload_fn
       new_secrets = reload_fn!
       secrets = new_secrets if new_secrets
 
-    readable = socket.select servers, nil, 1
+    readable = socket.select all_servers, nil, 1
     for srv in *(readable or {})
       client, _err = srv\accept!
       if client
         peer_ip = client\getpeername!
         peer_ip = tostring peer_ip
-        handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg
+        if https_set[srv]
+          -- Connexion HTTPS : TLS + logique d'authentification
+          handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess
+        else
+          -- Connexion HTTP plain : portail captif → redirect 302 vers HTTPS login
+          captive.handle_connection client, auth_cfg.port
 
 { :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE }

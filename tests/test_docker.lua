@@ -221,7 +221,7 @@ auth_curl = function(method, path, data)
   else
     data_flag = ""
   end
-  local cmd = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' -X " .. tostring(method) .. " " .. tostring(data_flag) .. "https://" .. tostring(auth_ip) .. ":8443" .. tostring(path) .. " 2>&1"
+  local cmd = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' -X " .. tostring(method) .. " " .. tostring(data_flag) .. "https://" .. tostring(auth_ip) .. ":33443" .. tostring(path) .. " 2>&1"
   return execute(cmd, true)
 end
 local wait_for_filter_ready
@@ -899,6 +899,51 @@ run_test("Auth — from_user : domaine refusé après logout → REFUSED", "nslo
   local ok = output ~= nil and output:match("REFUSED") ~= nil
   local obtained = (output:match("([^\n]*REFUSED[^\n]*)")) or (output:match("([^\n]+)")) or "(no output)"
   return ok, obtained
+end)
+print("")
+print(tostring(C.bold) .. "▶ Portail captif (port 33080)" .. tostring(C.reset))
+local captive_curl
+captive_curl = function(path)
+  if path == nil then
+    path = "/"
+  end
+  local cmd = "docker exec custos-client curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 http://" .. tostring(auth_ip) .. ":33080" .. tostring(path) .. " 2>&1"
+  return execute(cmd, true)
+end
+run_test("Portail captif — requête HTTP → 302", "curl http://" .. tostring(auth_ip) .. ":33080/ → HTTP 302 (redirect vers login HTTPS)", function()
+  local ok, code = captive_curl("/")
+  return (code == "302"), "HTTP " .. tostring(code)
+end)
+run_test("Portail captif — sonde Android /generate_204 → 302", "curl http://" .. tostring(auth_ip) .. ":33080/generate_204 → HTTP 302 (portail détecté)", function()
+  local ok, code = captive_curl("/generate_204")
+  return (code == "302"), "HTTP " .. tostring(code)
+end)
+run_test("Portail captif — sonde Apple /hotspot-detect.html → 302", "curl http://" .. tostring(auth_ip) .. ":33080/hotspot-detect.html → HTTP 302", function()
+  local ok, code = captive_curl("/hotspot-detect.html")
+  return (code == "302"), "HTTP " .. tostring(code)
+end)
+log("Re-login pour tester le bypass du portail captif…", "STEP")
+auth_curl("POST", "/login", "user=testuser&password=testpass")
+run_test("Portail captif — IP dans authenticated_ips après login", "nft list set ip dns-filter authenticated_ips → contient 172.28.0.10", function()
+  local cmd = "docker exec " .. tostring(filter_name) .. " nft list set ip dns-filter authenticated_ips 2>&1"
+  local ok, output = execute(cmd, true)
+  local ok2 = output ~= nil and output:match("172.28.0.10") ~= nil
+  local obtained = (output:match("([^\n]*172%.28%.0%.10[^\n]*)")) or (output:match("([^\n]+)")) or "(set vide)"
+  return ok2, obtained
+end)
+auth_curl("GET", "/logout")
+os.execute("sleep 1")
+run_test("Portail captif — IP retirée de authenticated_ips après logout", "nft list set ip dns-filter authenticated_ips → 172.28.0.10 absent", function()
+  local cmd = "docker exec " .. tostring(filter_name) .. " nft list set ip dns-filter authenticated_ips 2>&1"
+  local ok, output = execute(cmd, true)
+  local removed = output == nil or output:match("172.28.0.10") == nil
+  local obtained
+  if removed then
+    obtained = "IP absente du set (correct)"
+  else
+    obtained = (output:match("([^\n]*172%.28%.0%.10[^\n]*)")) or "(présente)"
+  end
+  return removed, obtained
 end)
 print("")
 print(tostring(C.bold) .. "Test Summary:" .. tostring(C.reset))

@@ -43,14 +43,16 @@
 #   deny    bloquer
 #   mail    notification e-mail (futur)
 #
-# ── Section auth ───────────────────────────────────────────────────────────
+# ── Section auth ──────────────────────────────────────────────────────────────────
 #
-# Contrôle le serveur HTTPS d'authentification (worker AUTH, port 8443 par défaut).
-# L'utilisateur accède manuellement à https://<routeur>:8443/ pour se connecter.
-# La session est liée à l'adresse IP source et expirée après session_ttl secondes.
+# Contrôle le serveur HTTPS d'authentification (worker AUTH, port 33443 par défaut)
+# et le portail captif HTTP (port 33080 par défaut).
+# Dès que cette section est présente, le portail captif est activé :
+# nft DNAT redirige HTTP (80→33080) et HTTPS (443→33443) des clients non authentifiés.
 #
 #   host         : adresse d'écoute ("::" = dual-stack IPv4+IPv6, défaut)
-#   port         : port HTTPS (défaut : 8443)
+#   port         : port HTTPS du serveur d'authentification (défaut : 33443)
+#   captive_port : port HTTP du portail captif (défaut : 33080 ; 0 = désactivé)
 #   cert         : chemin du certificat PEM (défaut : ./tmp/auth.crt, auto-généré)
 #   key          : chemin de la clé privée PEM (défaut : ./tmp/auth.key, auto-générée)
 #   secrets      : chemin du fichier de mots de passe (défaut : cfg/secrets)
@@ -71,11 +73,12 @@
 # Exécuter make update-lists pour construire les listes avant de démarrer.
 domainlists_dir: /etc/custos/lists
 
-# Serveur d'authentification HTTPS
+# Serveur d'authentification HTTPS + portail captif
 # Toutes les clés sont facultatives (valeurs par défaut ci-dessous).
 #auth:
 #  host: '::'                        # dual-stack IPv4+IPv6
-#  port: 8443
+#  port: 33443                       # port HTTPS auth
+#  captive_port: 33080               # port HTTP portail captif (0 = désactivé)
 #  cert: /etc/custos/auth.crt        # auto-généré si absent
 #  key:  /etc/custos/auth.key        # auto-généré si absent
 #  secrets: cfg/secrets              # fichier pbkdf2-sha256

@@ -1,0 +1,86 @@
+-- src/auth/nft_sessions.moon
+-- Gestion des IPs authentifiées dans les sets nft du portail captif.
+--
+-- Utilisé exclusivement par le worker AUTH (processus séparé).
+-- Charge libnftables directement via FFI minimal, sans dépendance à ffi_defs.moon.
+-- Chaque ajout/retrait est appliqué immédiatement via nft_run_cmd_from_buffer.
+
+ffi = require "ffi"
+
+-- Déclarations FFI minimales pour libnftables (sans sighandler_t ni libnfq).
+ffi.cdef [[
+  typedef struct nft_ctx nft_ctx;
+  nft_ctx* nft_ctx_new(unsigned int flags);
+  void     nft_ctx_free(nft_ctx *ctx);
+  int      nft_run_cmd_from_buffer(nft_ctx *ctx, const char *buf);
+]]
+
+libnft = ffi.load "libnftables.so.1"
+
+ctx = libnft.nft_ctx_new 0
+error "nft_ctx_new() failed in auth worker" if ctx == nil
+
+NFT_TABLE = "dns-filter"
+NFT_SET4  = "authenticated_ips"
+NFT_SET6  = "authenticated_ips6"
+
+--- Exécute une commande nft via FFI.
+-- @tparam  string  cmd  Commande nft (ex. "add element ip … { … }")
+-- @treturn boolean      true si succès (rc == 0)
+run_nft = (cmd) ->
+  rc = libnft.nft_run_cmd_from_buffer ctx, cmd
+  rc == 0
+
+--- Ajoute une IPv4 authentifiée dans le set nft avec TTL.
+-- @tparam string ip  Adresse IPv4 du client
+-- @tparam number ttl Durée de vie en secondes
+-- @treturn boolean   true si succès
+add_authenticated4 = (ip, ttl) ->
+  run_nft "add element ip #{NFT_TABLE} #{NFT_SET4} { #{ip} timeout #{ttl}s }"
+
+--- Retire une IPv4 du set (logout explicite).
+-- @tparam string ip  Adresse IPv4 du client
+-- @treturn boolean   true si succès
+del_authenticated4 = (ip) ->
+  run_nft "delete element ip #{NFT_TABLE} #{NFT_SET4} { #{ip} }"
+
+--- Ajoute une IPv6 authentifiée dans le set nft avec TTL.
+-- @tparam string ip  Adresse IPv6 du client
+-- @tparam number ttl Durée de vie en secondes
+-- @treturn boolean   true si succès
+add_authenticated6 = (ip, ttl) ->
+  run_nft "add element ip6 #{NFT_TABLE} #{NFT_SET6} { #{ip} timeout #{ttl}s }"
+
+--- Retire une IPv6 du set (logout explicite).
+-- @tparam string ip  Adresse IPv6 du client
+-- @treturn boolean   true si succès
+del_authenticated6 = (ip) ->
+  run_nft "delete element ip6 #{NFT_TABLE} #{NFT_SET6} { #{ip} }"
+
+--- Dispatche add_authenticated vers IPv4 ou IPv6 selon la présence de ':' dans l'IP.
+-- @tparam string ip  Adresse IP du client (IPv4 ou IPv6)
+-- @tparam number ttl Durée de vie en secondes
+-- @treturn boolean   true si succès
+add_authenticated = (ip, ttl) ->
+  if ip\find ":"
+    add_authenticated6 ip, ttl
+  else
+    add_authenticated4 ip, ttl
+
+--- Dispatche del_authenticated vers IPv4 ou IPv6.
+-- @tparam string ip  Adresse IP du client
+-- @treturn boolean   true si succès
+del_authenticated = (ip) ->
+  if ip\find ":"
+    del_authenticated6 ip
+  else
+    del_authenticated4 ip
+
+--- Libère le contexte nft (appelé à l'arrêt du worker AUTH).
+cleanup = ->
+  libnft.nft_ctx_free ctx if ctx != nil
+
+{ :add_authenticated4, :del_authenticated4,
+  :add_authenticated6, :del_authenticated6,
+  :add_authenticated,  :del_authenticated,
+  :cleanup }

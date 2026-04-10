@@ -346,7 +346,7 @@ _, log_block = ssh(FILTER_IP, "sudo grep -c BLOCK /opt/custos/tmp/dns-filter.log
 report("log has allowed entries", (tonumber(log_allow or "0") or 0) > 0, "grep ALLOW count: " .. tostring(log_allow))
 report("log has blocked/refused entries", (tonumber(log_block or "0") or 0) > 0, "grep BLOCK count: " .. tostring(log_block))
 local FILTER_LAN_IP = "10.99.0.254"
-local AUTH_URL = "https://" .. tostring(FILTER_LAN_IP) .. ":8443"
+local AUTH_URL = "https://" .. tostring(FILTER_LAN_IP) .. ":33443"
 print("")
 print(tostring(C.bold) .. "▶ Authentification HTTPS (" .. tostring(AUTH_URL) .. ")" .. tostring(C.reset))
 ssh(FILTER_IP, "sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true")
@@ -386,6 +386,33 @@ os.execute("sleep 6")
 local ok_ref, ref_out = guest_exec("dig +time=5 +tries=1 auth-required.test @" .. tostring(DNS_SERVER) .. " 2>&1", 12)
 local ref_str = (ref_out or ""):gsub("%s+$", "")
 report("Auth — from_user : auth-required.test → REFUSED après logout", (ref_out and ref_out:upper():match("REFUSED")) ~= nil, "dig: " .. tostring(ref_str))
+print("")
+print(tostring(C.bold) .. "▶ Portail captif (port 33080)" .. tostring(C.reset))
+local CAPTIVE_URL = "http://" .. tostring(FILTER_LAN_IP) .. ":33080"
+local captive_curl_kvm
+captive_curl_kvm = function(path)
+  if path == nil then
+    path = "/"
+  end
+  local cmd = "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 " .. tostring(CAPTIVE_URL) .. tostring(path) .. " 2>&1"
+  return guest_exec(cmd, 10)
+end
+local ok_cp, cp_code = captive_curl_kvm("/")
+cp_code = (cp_code or ""):gsub("%s+", "")
+report("Portail captif — requête HTTP → 302", cp_code == "302", "HTTP " .. tostring(cp_code))
+local ok_g204, g204_code = captive_curl_kvm("/generate_204")
+g204_code = (g204_code or ""):gsub("%s+", "")
+report("Portail captif — sonde Android /generate_204 → 302", g204_code == "302", "HTTP " .. tostring(g204_code))
+auth_curl_kvm("POST", "/login", "user=testuser&password=testpass")
+os.execute("sleep 1")
+local auth_nft_out
+_, auth_nft_out = ssh(FILTER_IP, "sudo nft list set ip dns-filter authenticated_ips 2>/dev/null")
+report("Portail captif — IP dans authenticated_ips après login", (auth_nft_out and auth_nft_out:match("10.99.0.10")) ~= nil, (auth_nft_out or "(absent)"):sub(1, 120))
+auth_curl_kvm("GET", "/logout")
+os.execute("sleep 1")
+local auth_nft_out2
+_, auth_nft_out2 = ssh(FILTER_IP, "sudo nft list set ip dns-filter authenticated_ips 2>/dev/null")
+report("Portail captif — IP retirée de authenticated_ips après logout", (auth_nft_out2 == nil or auth_nft_out2:match("10.99.0.10") == nil), (auth_nft_out2 or "(set vide)"):sub(1, 120))
 ssh(FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; sudo nft flush ruleset 2>/dev/null; true")
 print("")
 print((string.rep("─", 50)))
