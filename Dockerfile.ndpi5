@@ -64,11 +64,13 @@ RUN pacman -Sy --noconfirm \
     nftables \
     iproute2 \
     dnsmasq \
+    libyaml \
+    xxhash \
     openssl
 
 # Copy Lua 5.1 packages from builder (lyaml, luasocket, luasec)
-COPY --from=0 /usr/local/lib/lua /usr/local/lib/lua
-COPY --from=0 /usr/local/share/lua /usr/local/share/lua
+COPY --from=0 /usr/lib/lua /usr/lib/lua
+COPY --from=0 /usr/share/lua /usr/share/lua
 
 # Create app user
 RUN useradd -m -s /bin/bash custos
