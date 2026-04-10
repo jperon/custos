@@ -1627,6 +1627,176 @@ do
     })), false, "liste vide → false")
   end)
 end
+local from_nets = require("filter.conditions.from_nets")
+test("from_nets — IP dans l'un des CIDRs (premier)", function()
+  local f = (from_nets({ }))({
+    "192.168.0.0/16",
+    "10.0.0.0/8"
+  })
+  return assert_eq((f({
+    src_ip = "192.168.1.1"
+  })), true, "192.168.1.1 dans premier CIDR")
+end)
+test("from_nets — IP dans l'un des CIDRs (deuxième)", function()
+  local f = (from_nets({ }))({
+    "192.168.0.0/16",
+    "10.0.0.0/8"
+  })
+  return assert_eq((f({
+    src_ip = "10.5.0.1"
+  })), true, "10.5.0.1 dans deuxième CIDR")
+end)
+test("from_nets — IP hors de tous les CIDRs", function()
+  local f = (from_nets({ }))({
+    "192.168.0.0/16",
+    "10.0.0.0/8"
+  })
+  return assert_eq((f({
+    src_ip = "8.8.8.8"
+  })), false, "8.8.8.8 hors de tout")
+end)
+test("from_nets — liste vide → faux", function()
+  local f = (from_nets({ }))({ })
+  return assert_eq((f({
+    src_ip = "192.168.1.1"
+  })), false, "liste vide → false")
+end)
+test("from_nets — src_ip nil → faux", function()
+  local f = (from_nets({ }))({
+    "192.168.0.0/16"
+  })
+  return assert_eq((f({
+    src_ip = nil
+  })), false, "src_ip nil → false")
+end)
+local from_macs = require("filter.conditions.from_macs")
+test("from_macs — MAC dans la liste (première)", function()
+  local f = (from_macs({ }))({
+    "aa:bb:cc:dd:ee:ff",
+    "11:22:33:44:55:66"
+  })
+  return assert_eq((f({
+    mac = "aa:bb:cc:dd:ee:ff"
+  })), true, "première MAC match")
+end)
+test("from_macs — MAC dans la liste (deuxième)", function()
+  local f = (from_macs({ }))({
+    "aa:bb:cc:dd:ee:ff",
+    "11:22:33:44:55:66"
+  })
+  return assert_eq((f({
+    mac = "11:22:33:44:55:66"
+  })), true, "deuxième MAC match")
+end)
+test("from_macs — MAC hors de la liste", function()
+  local f = (from_macs({ }))({
+    "aa:bb:cc:dd:ee:ff",
+    "11:22:33:44:55:66"
+  })
+  return assert_eq((f({
+    mac = "de:ad:be:ef:00:01"
+  })), false, "MAC absente")
+end)
+test("from_macs — liste vide → faux", function()
+  local f = (from_macs({ }))({ })
+  return assert_eq((f({
+    mac = "aa:bb:cc:dd:ee:ff"
+  })), false, "liste vide → false")
+end)
+test("from_macs — MAC nil → faux", function()
+  local f = (from_macs({ }))({
+    "aa:bb:cc:dd:ee:ff"
+  })
+  return assert_eq((f({
+    mac = nil
+  })), false, "mac nil → false")
+end)
+test("from_macs — insensible à la casse", function()
+  local f = (from_macs({ }))({
+    "AA:BB:CC:DD:EE:FF"
+  })
+  return assert_eq((f({
+    mac = "aa:bb:cc:dd:ee:ff"
+  })), true, "normalisation lowercase")
+end)
+local from_maclist = require("filter.conditions.from_maclist")
+local from_maclists = require("filter.conditions.from_maclists")
+do
+  local MACLIST_CFG = {
+    macs = {
+      trusted = {
+        "aa:bb:cc:dd:ee:ff",
+        "11:22:33:44:55:66"
+      },
+      printers = {
+        "de:ad:be:ef:00:01"
+      }
+    }
+  }
+  test("from_maclist — MAC dans le groupe", function()
+    local f = (from_maclist(MACLIST_CFG))("trusted")
+    return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })), true, "première MAC du groupe")
+  end)
+  test("from_maclist — deuxième MAC du groupe", function()
+    local f = (from_maclist(MACLIST_CFG))("trusted")
+    return assert_eq((f({
+      mac = "11:22:33:44:55:66"
+    })), true, "deuxième MAC du groupe")
+  end)
+  test("from_maclist — MAC hors du groupe", function()
+    local f = (from_maclist(MACLIST_CFG))("trusted")
+    return assert_eq((f({
+      mac = "de:ad:be:ef:00:01"
+    })), false, "MAC du groupe printers")
+  end)
+  test("from_maclist — groupe inconnu → faux", function()
+    local f = (from_maclist(MACLIST_CFG))("unknown")
+    return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })), false, "groupe inconnu → false")
+  end)
+  test("from_maclist — MAC nil → faux", function()
+    local f = (from_maclist(MACLIST_CFG))("trusted")
+    return assert_eq((f({
+      mac = nil
+    })), false, "mac nil → false")
+  end)
+  test("from_maclists — OR : premier groupe match", function()
+    local f = (from_maclists(MACLIST_CFG))({
+      "trusted",
+      "printers"
+    })
+    return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })), true, "dans trusted")
+  end)
+  test("from_maclists — OR : deuxième groupe match", function()
+    local f = (from_maclists(MACLIST_CFG))({
+      "trusted",
+      "printers"
+    })
+    return assert_eq((f({
+      mac = "de:ad:be:ef:00:01"
+    })), true, "dans printers")
+  end)
+  test("from_maclists — MAC hors de tous les groupes", function()
+    local f = (from_maclists(MACLIST_CFG))({
+      "trusted",
+      "printers"
+    })
+    return assert_eq((f({
+      mac = "00:00:00:00:00:00"
+    })), false, "MAC absente partout")
+  end)
+  test("from_maclists — liste vide → faux", function()
+    local f = (from_maclists(MACLIST_CFG))({ })
+    return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })), false, "liste vide → false")
+  end)
+end
 local stolen_computer = require("filter.conditions.stolen_computer")
 test("stolen_computer — MAC blacklisté", function()
   local f = (stolen_computer({ }))({
@@ -2303,5 +2473,98 @@ else
     return os.remove(CREDS_FILE)
   end)
 end
+io.write("\n── filter/convert ──\n")
+local read_bin
+read_bin = function(path)
+  local fh = io.open(path, "rb")
+  if not (fh) then
+    return nil
+  end
+  local data = fh:read("*a")
+  fh:close()
+  return data
+end
+local u64_le
+u64_le = function(s, i, j)
+  for b = 7, 0, -1 do
+    local ai = string.byte(s, i * 8 + b + 1)
+    local aj = string.byte(s, j * 8 + b + 1)
+    if ai < aj then
+      return true
+    end
+    if ai > aj then
+      return false
+    end
+  end
+  return true
+end
+local sorted_u64
+sorted_u64 = function(s)
+  local n = math.floor(#s / 8)
+  if n <= 1 then
+    return true
+  end
+  for i = 0, n - 2 do
+    if not (u64_le(s, i, i + 1)) then
+      return false
+    end
+  end
+  return true
+end
+local CONV_INPUT = "./tmp/test_convert.domains"
+local CONV_OUTPUT = "./tmp/test_convert.bin"
+local run_convert
+run_convert = function(args)
+  local ok = os.execute("LUA_PATH='lua/?.lua;lua/?/init.lua;;' luajit lua/filter/convert.lua " .. tostring(args) .. " 2>/dev/null")
+  return ok == true
+end
+test("filter/convert — pas d'arguments → exit non nul", function()
+  local ok = run_convert("")
+  return assert(not ok, "devrait échouer sans arguments")
+end)
+test("filter/convert — fichier d'entrée absent → exit non nul", function()
+  local ok = run_convert("./tmp/__nonexistent__.domains " .. tostring(CONV_OUTPUT))
+  return assert(not ok, "devrait échouer avec fichier absent")
+end)
+test("filter/convert — domaines valides → binaire trié", function()
+  local fh = io.open(CONV_INPUT, "w")
+  fh:write("github.com\nfacebook.com\ngoogle.com\n")
+  fh:close()
+  local ok = run_convert(tostring(CONV_INPUT) .. " " .. tostring(CONV_OUTPUT))
+  assert(ok, "exit 0 attendu")
+  local data = read_bin(CONV_OUTPUT)
+  assert(data ~= nil, "fichier de sortie absent")
+  assert(#data == 3 * 8, "taille attendue 24 octets (3 hashes × 8)")
+  assert(sorted_u64(data), "hashes non triés")
+  os.remove(CONV_INPUT)
+  return os.remove(CONV_OUTPUT)
+end)
+test("filter/convert — doublons dédupliqués → un seul hash", function()
+  local fh = io.open(CONV_INPUT, "w")
+  fh:write("github.com\ngithub.com\ngithub.com\n")
+  fh:close()
+  local ok = run_convert(tostring(CONV_INPUT) .. " " .. tostring(CONV_OUTPUT))
+  assert(ok, "exit 0 attendu")
+  local data = read_bin(CONV_OUTPUT)
+  assert(data ~= nil, "fichier de sortie absent")
+  assert(#data == 8, "un seul hash attendu après déduplication, got " .. tostring(#data) .. " octets")
+  os.remove(CONV_INPUT)
+  return os.remove(CONV_OUTPUT)
+end)
+test("filter/convert — commentaires et lignes vides ignorés", function()
+  local fh = io.open(CONV_INPUT, "w")
+  fh:write("# ce fichier a des commentaires\n")
+  fh:write("\n")
+  fh:write("github.com  # commentaire inline\n")
+  fh:write("   \n")
+  fh:close()
+  local ok = run_convert(tostring(CONV_INPUT) .. " " .. tostring(CONV_OUTPUT))
+  assert(ok, "exit 0 attendu")
+  local data = read_bin(CONV_OUTPUT)
+  assert(data ~= nil, "fichier de sortie absent")
+  assert(#data == 8, "un seul hash attendu (github.com uniquement), got " .. tostring(#data) .. " octets")
+  os.remove(CONV_INPUT)
+  return os.remove(CONV_OUTPUT)
+end)
 io.write(string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed))
 return os.exit(failed == 0 and 0 or 1)

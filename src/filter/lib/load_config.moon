@@ -27,6 +27,7 @@ load_config = (path) ->
 
   -- Sections facultatives → tables vides par défaut
   cfg.nets    = cfg.nets    or {}
+  cfg.macs    = cfg.macs    or {}
   cfg.times   = cfg.times   or {}
   cfg.sources = cfg.sources or {}
   cfg.rules   = cfg.rules   or {}

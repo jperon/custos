@@ -537,6 +537,36 @@ report "Portail captif — IP retirée de authenticated_ips après logout",
   (auth_nft_out2 == nil or auth_nft_out2\match("10.99.0.10") == nil),
   (auth_nft_out2 or "(set vide)")\sub(1, 120)
 
+-- ── DNS over TCP + TTL patching ───────────────────────────────────────────────
+print ""
+print "#{C.bold}▶ DNS over TCP + TTL patching#{C.reset}"
+
+ok_tcp, tcp_out = guest_exec "dig +tcp +time=5 +tries=1 #{DOMAIN_ALLOWED} @#{DNS_SERVER} 2>&1", 12
+tcp_has_ip  = tcp_out and tcp_out\match "%d+%.%d+%.%d+%.%d+"
+tcp_str = (tcp_out or "")\gsub "%s+$", ""
+report "DNS over TCP #{DOMAIN_ALLOWED} — répond avec des enregistrements A",
+  tcp_has_ip != nil, "dig +tcp: #{tcp_str\sub 1, 100}"
+
+-- Verify TTL is patched to 60
+tcp_ttl = nil
+if tcp_out
+  tcp_ttl = tcp_out\match "\t(%d+)\t[^\t]*IN\t[^\t]*A\t"
+  tcp_ttl = tcp_ttl or tcp_out\match "(%d+)\t+IN\t+A\t"
+report "DNS over TCP #{DOMAIN_ALLOWED} — TTL patché à 60",
+  tcp_ttl == "60", "TTL trouvé: #{tostring tcp_ttl}"
+
+-- ── DNAT effectif (TCP port 80 → portail captif) ────────────────────────────
+print ""
+print "#{C.bold}▶ DNAT — TCP port 80 non authentifié → portail captif#{C.reset}"
+
+-- Ensure client is NOT authenticated (we just logged out above)
+os.execute "sleep 1"
+
+ok_dnat, dnat_code = guest_exec "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 5 http://1.2.3.4/ 2>&1", 10
+dnat_code = (dnat_code or "")\gsub "%s+", ""
+report "DNAT — TCP port 80 non authentifié → 302",
+  dnat_code == "302", "HTTP #{dnat_code}"
+
 -- ── Teardown ─────────────────────────────────────────────────────────────────
 ssh FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; sudo nft flush ruleset 2>/dev/null; true"
 

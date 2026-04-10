@@ -795,6 +795,65 @@ test("worker_q0 — paquet 2 questions (1 allowée + 1 bloquée) → NF_DROP, wr
   assert_eq(verdict, NF_DROP, "verdict doit être NF_DROP (evil.com est bloqué)")
   return assert_eq(write_msg_would_be_called, false, "write_msg ne doit pas être appelé quand verdict == NF_DROP")
 end)
+do
+  local make_verdict
+  make_verdict = function(allowed_set, questions)
+    local NF_ACCEPT_V, NF_DROP_V = 1, 0
+    local v = NF_ACCEPT_V
+    for _, q in ipairs(questions) do
+      local name = q.qname:lower()
+      local matched = allowed_set[name]
+      if not matched then
+        local pos = name:find(".", 1, true)
+        while pos and not matched do
+          matched = allowed_set[name:sub(pos + 1)]
+          pos = name:find(".", pos + 1, true)
+        end
+      end
+      if not (matched) then
+        v = NF_DROP_V
+      end
+    end
+    return v
+  end
+  test("worker_q0 — question unique autorisée → NF_ACCEPT", function()
+    package.loaded["parse/dns"] = nil
+    local dns2 = dofile("lua/parse/dns.lua")
+    local txid2 = 0x0001
+    local hdr2 = string.char(bit.rshift(bit.band(txid2, 0xFF00), 8), bit.band(txid2, 0xFF), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0)
+    local q_ok = "\x06github\x03com\x00" .. string.char(0, 1, 0, 1)
+    local parsed2 = dns2.parse_dns(hdr2 .. q_ok)
+    assert(parsed2, "parse_dns nil")
+    local verdict2 = make_verdict({
+      ["github.com"] = true
+    }, parsed2.questions)
+    return assert_eq(verdict2, 1, "NF_ACCEPT pour github.com autorisé")
+  end)
+  test("worker_q0 — question unique bloquée → NF_DROP", function()
+    package.loaded["parse/dns"] = nil
+    local dns3 = dofile("lua/parse/dns.lua")
+    local txid3 = 0x0002
+    local hdr3 = string.char(bit.rshift(bit.band(txid3, 0xFF00), 8), bit.band(txid3, 0xFF), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0)
+    local q_bad = "\x04evil\x03com\x00" .. string.char(0, 1, 0, 1)
+    local parsed3 = dns3.parse_dns(hdr3 .. q_bad)
+    assert(parsed3, "parse_dns nil")
+    local verdict3 = make_verdict({ }, parsed3.questions)
+    return assert_eq(verdict3, 0, "NF_DROP pour evil.com bloqué")
+  end)
+  test("worker_q0 — sous-domaine autorisé via domaine parent", function()
+    package.loaded["parse/dns"] = nil
+    local dns4 = dofile("lua/parse/dns.lua")
+    local txid4 = 0x0003
+    local hdr4 = string.char(bit.rshift(bit.band(txid4, 0xFF00), 8), bit.band(txid4, 0xFF), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0)
+    local q_sub = "\x03api\x06github\x03com\x00" .. string.char(0, 1, 0, 1)
+    local parsed4 = dns4.parse_dns(hdr4 .. q_sub)
+    assert(parsed4, "parse_dns nil")
+    local verdict4 = make_verdict({
+      ["github.com"] = true
+    }, parsed4.questions)
+    return assert_eq(verdict4, 1, "NF_ACCEPT pour api.github.com (parent github.com autorisé)")
+  end)
+end
 io.write("\n── parse/dns nouvelles fonctions ──\n")
 local skip_name_bytes = m_dns.skip_name_bytes
 local skip_rr = m_dns.skip_rr
@@ -1231,6 +1290,133 @@ test("to_domains — OR logique", function()
     domain = "evil.com"
   })), false, "evil non")
 end)
+test("to_domains — liste vide → faux", function()
+  local f = (to_domains({ }))({ })
+  return assert_eq((f({
+    domain = "github.com"
+  })), false, "liste vide → false")
+end)
+test("to_domains — un seul domaine, match exact", function()
+  local f = (to_domains({ }))({
+    "example.com"
+  })
+  return assert_eq((f({
+    domain = "example.com"
+  })), true, "exact match")
+end)
+test("to_domains — un seul domaine, sous-domaine", function()
+  local f = (to_domains({ }))({
+    "example.com"
+  })
+  return assert_eq((f({
+    domain = "www.example.com"
+  })), true, "sous-domaine match")
+end)
+test("to_domains — un seul domaine, domaine différent", function()
+  local f = (to_domains({ }))({
+    "example.com"
+  })
+  return assert_eq((f({
+    domain = "other.com"
+  })), false, "pas de match")
+end)
+local to_domainlists = require("filter.conditions.to_domainlists")
+test("to_domainlists — OR sur plusieurs listes", function()
+  do
+    local xxhash2 = require("ffi_xxhash")
+    local TMPBIN2 = "./tmp/test_filter_domainlist2.bin"
+    local test_domains2 = {
+      "malware.bad",
+      "tracker.bad"
+    }
+    local hashes2
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for _index_0 = 1, #test_domains2 do
+        local d = test_domains2[_index_0]
+        _accum_0[_len_0] = xxhash2.xxh64(d)
+        _len_0 = _len_0 + 1
+      end
+      hashes2 = _accum_0
+    end
+    table.sort(hashes2, function(a, b)
+      return a < b
+    end)
+    local arr2 = ffi.new("uint64_t[?]", #hashes2)
+    for i, h in ipairs(hashes2) do
+      arr2[i - 1] = h
+    end
+    local fd2 = io.open(TMPBIN2, "wb")
+    fd2:write(ffi.string(arr2, #hashes2 * 8))
+    fd2:close()
+    local xxhash3 = require("ffi_xxhash")
+    local TMPBIN3 = "./tmp/test_filter_domainlist3.bin"
+    local test_domains3 = {
+      "github.com",
+      "debian.org"
+    }
+    local hashes3
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for _index_0 = 1, #test_domains3 do
+        local d = test_domains3[_index_0]
+        _accum_0[_len_0] = xxhash3.xxh64(d)
+        _len_0 = _len_0 + 1
+      end
+      hashes3 = _accum_0
+    end
+    table.sort(hashes3, function(a, b)
+      return a < b
+    end)
+    local arr3 = ffi.new("uint64_t[?]", #hashes3)
+    for i, h in ipairs(hashes3) do
+      arr3[i - 1] = h
+    end
+    local fd3 = io.open(TMPBIN3, "wb")
+    fd3:write(ffi.string(arr3, #hashes3 * 8))
+    fd3:close()
+    local cfg_dl = {
+      domainlists_dir = "./tmp"
+    }
+    test("to_domainlists — domaine dans première liste", function()
+      local f = (to_domainlists(cfg_dl))({
+        "test_filter_domainlist3",
+        "test_filter_domainlist2"
+      })
+      return assert_eq((f({
+        domain = "github.com"
+      })), true, "github.com dans liste 1")
+    end)
+    test("to_domainlists — domaine dans deuxième liste", function()
+      local f = (to_domainlists(cfg_dl))({
+        "test_filter_domainlist3",
+        "test_filter_domainlist2"
+      })
+      return assert_eq((f({
+        domain = "malware.bad"
+      })), true, "malware.bad dans liste 2")
+    end)
+    test("to_domainlists — domaine absent de toutes les listes", function()
+      local f = (to_domainlists(cfg_dl))({
+        "test_filter_domainlist3",
+        "test_filter_domainlist2"
+      })
+      return assert_eq((f({
+        domain = "safe.com"
+      })), false, "safe.com absent")
+    end)
+    test("to_domainlists — liste vide → faux", function()
+      local f = (to_domainlists(cfg_dl))({ })
+      return assert_eq((f({
+        domain = "github.com"
+      })), false, "liste vide → false")
+    end)
+    os.remove(TMPBIN2)
+    return os.remove(TMPBIN3)
+  end
+end)
 local to_domainlist = require("filter.conditions.to_domainlist")
 local TMPDIR = "./tmp"
 local TMPBIN = TMPDIR .. "/test_filter_domainlist.bin"
@@ -1363,6 +1549,254 @@ test("from_net — IP absente dans req", function()
   })
   return assert_eq(v, false, "src_ip nil")
 end)
+local from_netlist = require("filter.conditions.from_netlist")
+local from_netlists = require("filter.conditions.from_netlists")
+do
+  local NETLIST_CFG = {
+    nets = {
+      lan = {
+        "192.168.0.0/16",
+        "10.0.0.0/8"
+      },
+      dmz = {
+        "172.16.0.0/12"
+      }
+    }
+  }
+  test("from_netlist — IP dans la netlist (premier CIDR)", function()
+    local f = (from_netlist(NETLIST_CFG))("lan")
+    return assert_eq((f({
+      src_ip = "192.168.1.42"
+    })), true, "192.168.1.42 dans lan")
+  end)
+  test("from_netlist — IP dans la netlist (deuxième CIDR)", function()
+    local f = (from_netlist(NETLIST_CFG))("lan")
+    return assert_eq((f({
+      src_ip = "10.5.0.1"
+    })), true, "10.5.0.1 dans lan")
+  end)
+  test("from_netlist — IP hors de la netlist", function()
+    local f = (from_netlist(NETLIST_CFG))("lan")
+    return assert_eq((f({
+      src_ip = "8.8.8.8"
+    })), false, "8.8.8.8 hors lan")
+  end)
+  test("from_netlist — netlist inconnue → faux", function()
+    local f = (from_netlist(NETLIST_CFG))("unknown")
+    return assert_eq((f({
+      src_ip = "192.168.1.1"
+    })), false, "netlist inconnue → false")
+  end)
+  test("from_netlist — src_ip nil → faux", function()
+    local f = (from_netlist(NETLIST_CFG))("lan")
+    return assert_eq((f({
+      src_ip = nil
+    })), false, "src_ip nil → false")
+  end)
+  test("from_netlists — OR sur plusieurs netlists (première)", function()
+    local f = (from_netlists(NETLIST_CFG))({
+      "lan",
+      "dmz"
+    })
+    return assert_eq((f({
+      src_ip = "192.168.0.1"
+    })), true, "dans lan")
+  end)
+  test("from_netlists — OR sur plusieurs netlists (deuxième)", function()
+    local f = (from_netlists(NETLIST_CFG))({
+      "lan",
+      "dmz"
+    })
+    return assert_eq((f({
+      src_ip = "172.16.1.1"
+    })), true, "dans dmz")
+  end)
+  test("from_netlists — IP hors de toutes les netlists", function()
+    local f = (from_netlists(NETLIST_CFG))({
+      "lan",
+      "dmz"
+    })
+    return assert_eq((f({
+      src_ip = "1.2.3.4"
+    })), false, "1.2.3.4 hors de tout")
+  end)
+  test("from_netlists — liste vide → faux", function()
+    local f = (from_netlists(NETLIST_CFG))({ })
+    return assert_eq((f({
+      src_ip = "192.168.1.1"
+    })), false, "liste vide → false")
+  end)
+end
+local from_nets = require("filter.conditions.from_nets")
+test("from_nets — IP dans l'un des CIDRs (premier)", function()
+  local f = (from_nets({ }))({
+    "192.168.0.0/16",
+    "10.0.0.0/8"
+  })
+  return assert_eq((f({
+    src_ip = "192.168.1.1"
+  })), true, "192.168.1.1 dans premier CIDR")
+end)
+test("from_nets — IP dans l'un des CIDRs (deuxième)", function()
+  local f = (from_nets({ }))({
+    "192.168.0.0/16",
+    "10.0.0.0/8"
+  })
+  return assert_eq((f({
+    src_ip = "10.5.0.1"
+  })), true, "10.5.0.1 dans deuxième CIDR")
+end)
+test("from_nets — IP hors de tous les CIDRs", function()
+  local f = (from_nets({ }))({
+    "192.168.0.0/16",
+    "10.0.0.0/8"
+  })
+  return assert_eq((f({
+    src_ip = "8.8.8.8"
+  })), false, "8.8.8.8 hors de tout")
+end)
+test("from_nets — liste vide → faux", function()
+  local f = (from_nets({ }))({ })
+  return assert_eq((f({
+    src_ip = "192.168.1.1"
+  })), false, "liste vide → false")
+end)
+test("from_nets — src_ip nil → faux", function()
+  local f = (from_nets({ }))({
+    "192.168.0.0/16"
+  })
+  return assert_eq((f({
+    src_ip = nil
+  })), false, "src_ip nil → false")
+end)
+local from_macs = require("filter.conditions.from_macs")
+test("from_macs — MAC dans la liste (première)", function()
+  local f = (from_macs({ }))({
+    "aa:bb:cc:dd:ee:ff",
+    "11:22:33:44:55:66"
+  })
+  return assert_eq((f({
+    mac = "aa:bb:cc:dd:ee:ff"
+  })), true, "première MAC match")
+end)
+test("from_macs — MAC dans la liste (deuxième)", function()
+  local f = (from_macs({ }))({
+    "aa:bb:cc:dd:ee:ff",
+    "11:22:33:44:55:66"
+  })
+  return assert_eq((f({
+    mac = "11:22:33:44:55:66"
+  })), true, "deuxième MAC match")
+end)
+test("from_macs — MAC hors de la liste", function()
+  local f = (from_macs({ }))({
+    "aa:bb:cc:dd:ee:ff",
+    "11:22:33:44:55:66"
+  })
+  return assert_eq((f({
+    mac = "de:ad:be:ef:00:01"
+  })), false, "MAC absente")
+end)
+test("from_macs — liste vide → faux", function()
+  local f = (from_macs({ }))({ })
+  return assert_eq((f({
+    mac = "aa:bb:cc:dd:ee:ff"
+  })), false, "liste vide → false")
+end)
+test("from_macs — MAC nil → faux", function()
+  local f = (from_macs({ }))({
+    "aa:bb:cc:dd:ee:ff"
+  })
+  return assert_eq((f({
+    mac = nil
+  })), false, "mac nil → false")
+end)
+test("from_macs — insensible à la casse", function()
+  local f = (from_macs({ }))({
+    "AA:BB:CC:DD:EE:FF"
+  })
+  return assert_eq((f({
+    mac = "aa:bb:cc:dd:ee:ff"
+  })), true, "normalisation lowercase")
+end)
+local from_maclist = require("filter.conditions.from_maclist")
+local from_maclists = require("filter.conditions.from_maclists")
+do
+  local MACLIST_CFG = {
+    macs = {
+      trusted = {
+        "aa:bb:cc:dd:ee:ff",
+        "11:22:33:44:55:66"
+      },
+      printers = {
+        "de:ad:be:ef:00:01"
+      }
+    }
+  }
+  test("from_maclist — MAC dans le groupe", function()
+    local f = (from_maclist(MACLIST_CFG))("trusted")
+    return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })), true, "première MAC du groupe")
+  end)
+  test("from_maclist — deuxième MAC du groupe", function()
+    local f = (from_maclist(MACLIST_CFG))("trusted")
+    return assert_eq((f({
+      mac = "11:22:33:44:55:66"
+    })), true, "deuxième MAC du groupe")
+  end)
+  test("from_maclist — MAC hors du groupe", function()
+    local f = (from_maclist(MACLIST_CFG))("trusted")
+    return assert_eq((f({
+      mac = "de:ad:be:ef:00:01"
+    })), false, "MAC du groupe printers")
+  end)
+  test("from_maclist — groupe inconnu → faux", function()
+    local f = (from_maclist(MACLIST_CFG))("unknown")
+    return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })), false, "groupe inconnu → false")
+  end)
+  test("from_maclist — MAC nil → faux", function()
+    local f = (from_maclist(MACLIST_CFG))("trusted")
+    return assert_eq((f({
+      mac = nil
+    })), false, "mac nil → false")
+  end)
+  test("from_maclists — OR : premier groupe match", function()
+    local f = (from_maclists(MACLIST_CFG))({
+      "trusted",
+      "printers"
+    })
+    return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })), true, "dans trusted")
+  end)
+  test("from_maclists — OR : deuxième groupe match", function()
+    local f = (from_maclists(MACLIST_CFG))({
+      "trusted",
+      "printers"
+    })
+    return assert_eq((f({
+      mac = "de:ad:be:ef:00:01"
+    })), true, "dans printers")
+  end)
+  test("from_maclists — MAC hors de tous les groupes", function()
+    local f = (from_maclists(MACLIST_CFG))({
+      "trusted",
+      "printers"
+    })
+    return assert_eq((f({
+      mac = "00:00:00:00:00:00"
+    })), false, "MAC absente partout")
+  end)
+  test("from_maclists — liste vide → faux", function()
+    local f = (from_maclists(MACLIST_CFG))({ })
+    return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })), false, "liste vide → false")
+  end)
+end
 local stolen_computer = require("filter.conditions.stolen_computer")
 test("stolen_computer — MAC blacklisté", function()
   local f = (stolen_computer({ }))({
@@ -1379,6 +1813,20 @@ test("stolen_computer — MAC non blacklisté", function()
   return assert_eq((f({
     mac = "aa:bb:cc:dd:ee:ff"
   })), false, "non volé")
+end)
+test("stolen_computer — liste vide → faux", function()
+  local f = (stolen_computer({ }))({ })
+  return assert_eq((f({
+    mac = "de:ad:be:ef:00:01"
+  })), false, "liste vide → false")
+end)
+test("stolen_computer — MAC nil → faux", function()
+  local f = (stolen_computer({ }))({
+    "de:ad:be:ef:00:01"
+  })
+  return assert_eq((f({
+    mac = nil
+  })), false, "mac nil → false")
 end)
 local in_time = require("filter.conditions.in_time")
 test("in_time — dans la fenêtre", function()
@@ -1419,6 +1867,84 @@ test("in_time — fenêtre inconnue → faux", function()
   return assert_eq((f({
     ts = os.time()
   })), false, "fenêtre inconnue")
+end)
+local in_times = require("filter.conditions.in_times")
+test("in_times — OR : première fenêtre match", function()
+  local cfg = {
+    times = {
+      allday = {
+        "00:00",
+        "23:59"
+      },
+      never = {
+        "25:00",
+        "25:01"
+      }
+    }
+  }
+  local f = (in_times(cfg))({
+    "allday",
+    "never"
+  })
+  return assert_eq((f({
+    ts = os.time()
+  })), true, "allday OR never → true (allday match)")
+end)
+test("in_times — OR : deuxième fenêtre match (première ne match pas)", function()
+  local cfg = {
+    times = {
+      never = {
+        "25:00",
+        "25:01"
+      },
+      allday = {
+        "00:00",
+        "23:59"
+      }
+    }
+  }
+  local f = (in_times(cfg))({
+    "never",
+    "allday"
+  })
+  return assert_eq((f({
+    ts = os.time()
+  })), true, "never OR allday → true (allday match)")
+end)
+test("in_times — OR : aucune fenêtre ne match", function()
+  local cfg = {
+    times = {
+      never = {
+        "25:00",
+        "25:01"
+      },
+      also_never = {
+        "26:00",
+        "26:01"
+      }
+    }
+  }
+  local f = (in_times(cfg))({
+    "never",
+    "also_never"
+  })
+  return assert_eq((f({
+    ts = os.time()
+  })), false, "aucune fenêtre → false")
+end)
+test("in_times — liste vide → faux", function()
+  local cfg = {
+    times = {
+      allday = {
+        "00:00",
+        "23:59"
+      }
+    }
+  }
+  local f = (in_times(cfg))({ })
+  return assert_eq((f({
+    ts = os.time()
+  })), false, "liste vide → false")
 end)
 local m_rule = require("filter.rule")
 local TEST_CFG = {
@@ -1740,7 +2266,305 @@ rules:
     assert(cfg == nil, "cfg devrait être nil sur YAML invalide")
     return assert(type(err) == "string", "message d'erreur attendu")
   end)
+  test("load_config — section auth : valeurs par défaut", function()
+    local fd4 = io.open(TMP_YAML, "w")
+    fd4:write("rules: []\nauth:\n  secrets: /etc/custos/secrets\n")
+    fd4:close()
+    local cfg, err = load_config(TMP_YAML)
+    assert(cfg ~= nil, "cfg nil : " .. tostring(tostring(err)))
+    assert_eq(cfg.auth.port, 33443, "auth.port défaut")
+    assert_eq(cfg.auth.captive_port, 33080, "auth.captive_port défaut")
+    assert_eq(cfg.auth.session_ttl, 86400, "auth.session_ttl défaut")
+    assert_eq(cfg.auth.host, "::", "auth.host défaut")
+    assert_eq(cfg.auth.heartbeat_interval, 30, "heartbeat_interval défaut")
+    return assert_eq(cfg.auth.idle_timeout, 120, "idle_timeout défaut")
+  end)
+  test("load_config — section auth : valeurs personnalisées", function()
+    local fd5 = io.open(TMP_YAML, "w")
+    fd5:write("rules: []\nauth:\n  port: 8443\n  captive_port: 8080\n  session_ttl: 3600\n  idle_timeout: 60\n")
+    fd5:close()
+    local cfg, err = load_config(TMP_YAML)
+    assert(cfg ~= nil, "cfg nil : " .. tostring(tostring(err)))
+    assert_eq(cfg.auth.port, 8443, "auth.port personnalisé")
+    assert_eq(cfg.auth.captive_port, 8080, "auth.captive_port personnalisé")
+    assert_eq(cfg.auth.session_ttl, 3600, "auth.session_ttl personnalisé")
+    return assert_eq(cfg.auth.idle_timeout, 60, "auth.idle_timeout personnalisé")
+  end)
   os.remove(TMP_YAML)
 end
+io.write("\n── auth/sessions ──\n")
+local serialize, write_sessions, load_sessions, add_session, purge_expired, read_cached
+do
+  local _obj_0 = require("auth.sessions")
+  serialize, write_sessions, load_sessions, add_session, purge_expired, read_cached = _obj_0.serialize, _obj_0.write_sessions, _obj_0.load_sessions, _obj_0.add_session, _obj_0.purge_expired, _obj_0.read_cached
+end
+local SESS_FILE = "./tmp/test_sessions.lua"
+test("auth/sessions — serialize : table vide", function()
+  local result = serialize({ })
+  assert(result:find("return {", 1, true))
+  return assert(result:find("}", 1, true))
+end)
+test("auth/sessions — serialize : une session", function()
+  local sessions = {
+    ["10.0.0.1"] = {
+      user = "alice",
+      expires = 9999,
+      heartbeat = nil
+    }
+  }
+  local result = serialize(sessions)
+  assert(result:find('"10.0.0.1"', 1, true, "IP présente"))
+  assert(result:find('"alice"', 1, true, "user présent"))
+  return assert(result:find("expires = 9999", 1, true, "expires présent"))
+end)
+test("auth/sessions — serialize : session avec heartbeat", function()
+  local sessions = {
+    ["10.0.0.2"] = {
+      user = "bob",
+      expires = 8888,
+      heartbeat = 7777
+    }
+  }
+  local result = serialize(sessions)
+  return assert(result:find("heartbeat = 7777", 1, true, "heartbeat sérialisé"))
+end)
+test("auth/sessions — write_sessions + load_sessions round-trip", function()
+  local sessions = {
+    ["192.168.1.10"] = {
+      user = "alice",
+      expires = 9999999,
+      heartbeat = nil
+    },
+    ["192.168.1.20"] = {
+      user = "bob",
+      expires = 8888888,
+      heartbeat = 111
+    }
+  }
+  local ok, err = write_sessions(sessions, SESS_FILE)
+  assert(ok, "write_sessions a échoué : " .. tostring(tostring(err)))
+  local loaded = load_sessions(SESS_FILE)
+  assert(loaded["192.168.1.10"], "alice absent")
+  assert_eq(loaded["192.168.1.10"].user, "alice", "alice.user")
+  assert_eq(loaded["192.168.1.10"].expires, 9999999, "alice.expires")
+  assert(loaded["192.168.1.20"], "bob absent")
+  assert_eq(loaded["192.168.1.20"].heartbeat, 111, "bob.heartbeat")
+  return os.remove(SESS_FILE)
+end)
+test("auth/sessions — load_sessions : fichier absent → table vide", function()
+  local result = load_sessions("./tmp/absent_sessions.lua")
+  assert(type(result) == "table", "doit retourner une table")
+  local count = 0
+  for _ in pairs(result) do
+    count = count + 1
+  end
+  return assert_eq(count, 0, "table vide")
+end)
+test("auth/sessions — load_sessions : fichier corrompu → table vide", function()
+  local CORRUPT = "./tmp/corrupt_sessions.lua"
+  local fh = io.open(CORRUPT, "w")
+  fh:write("THIS IS NOT VALID LUA {\n")
+  fh:close()
+  local result = load_sessions(CORRUPT)
+  assert(type(result) == "table", "doit retourner une table")
+  local count2 = 0
+  for _ in pairs(result) do
+    count2 = count2 + 1
+  end
+  assert_eq(count2, 0, "table vide sur fichier corrompu")
+  return os.remove(CORRUPT)
+end)
+test("auth/sessions — add_session : crée la session", function()
+  local sessions = { }
+  add_session(sessions, "10.1.0.1", "charlie", 3600, 0)
+  assert(sessions["10.1.0.1"], "session créée")
+  assert_eq(sessions["10.1.0.1"].user, "charlie", "user")
+  assert(sessions["10.1.0.1"].expires > os.time(), "expires dans le futur")
+  return assert_eq(sessions["10.1.0.1"].heartbeat, nil, "heartbeat nil si idle_timeout=0")
+end)
+test("auth/sessions — add_session : heartbeat si idle_timeout > 0", function()
+  local sessions = { }
+  add_session(sessions, "10.1.0.2", "diana", 3600, 120)
+  assert(sessions["10.1.0.2"].heartbeat ~= nil, "heartbeat non nil")
+  return assert(sessions["10.1.0.2"].heartbeat > os.time(), "heartbeat dans le futur")
+end)
+test("auth/sessions — purge_expired : retire les sessions expirées", function()
+  local sessions = {
+    ["10.0.0.1"] = {
+      user = "old",
+      expires = 1
+    },
+    ["10.0.0.2"] = {
+      user = "valid",
+      expires = 9999999999
+    }
+  }
+  purge_expired(sessions)
+  assert(sessions["10.0.0.1"] == nil, "session expirée purgée")
+  return assert(sessions["10.0.0.2"] ~= nil, "session valide conservée")
+end)
+test("auth/sessions — purge_expired : retire si heartbeat expiré", function()
+  local sessions = {
+    ["10.0.0.3"] = {
+      user = "hb",
+      expires = 9999999999,
+      heartbeat = 1
+    }
+  }
+  purge_expired(sessions)
+  return assert(sessions["10.0.0.3"] == nil, "session avec heartbeat expiré purgée")
+end)
+io.write("\n── auth/credentials ──\n")
+local ok_creds, creds_mod = pcall(require, "auth.credentials")
+if not ok_creds then
+  io.write("  SKIP (libcrypto non disponible)\n")
+else
+  local verify_password, hash_password, load_secrets
+  verify_password, hash_password, load_secrets = creds_mod.verify_password, creds_mod.hash_password, creds_mod.load_secrets
+  local CREDS_FILE = "./tmp/test_secrets"
+  test("auth/credentials — verify_password : mot de passe correct", function()
+    local stored = hash_password("mysecretpassword")
+    assert(type(stored) == "string", "hash_password retourne une string")
+    return assert(verify_password("mysecretpassword", stored), "mot de passe correct")
+  end)
+  test("auth/credentials — verify_password : mauvais mot de passe", function()
+    local stored = hash_password("mysecretpassword")
+    return assert(not (verify_password("wrongpassword", stored)), "mauvais MdP rejeté")
+  end)
+  test("auth/credentials — verify_password : hash invalide → faux", function()
+    return assert(not (verify_password("anything", "notavalidhash")), "hash invalide → false")
+  end)
+  test("auth/credentials — verify_password : algo inconnu → faux", function()
+    return assert(not (verify_password("pass", "bcrypt:12:salt:hash")), "algo inconnu → false")
+  end)
+  test("auth/credentials — load_secrets : fichier valide", function()
+    local stored_alice = hash_password("alice123")
+    local fh = io.open(CREDS_FILE, "w")
+    fh:write("# commentaire\n")
+    fh:write("alice:" .. tostring(stored_alice) .. "\n")
+    fh:write("\n")
+    fh:write("bob:pbkdf2-sha256:100000:aabbcc:ddeeff\n")
+    fh:close()
+    local secrets, err = load_secrets(CREDS_FILE)
+    assert(secrets ~= nil, "load_secrets a retourné nil : " .. tostring(tostring(err)))
+    assert(secrets["alice"] ~= nil, "alice absent")
+    assert(secrets["bob"] ~= nil, "bob absent")
+    assert(verify_password("alice123", secrets["alice"]), "alice authentifiable")
+    return os.remove(CREDS_FILE)
+  end)
+  test("auth/credentials — load_secrets : fichier absent → nil + erreur", function()
+    local secrets, err = load_secrets("./tmp/absent_secrets")
+    assert(secrets == nil, "doit retourner nil")
+    return assert(type(err) == "string", "message d'erreur attendu")
+  end)
+  test("auth/credentials — load_secrets : lignes malformées ignorées", function()
+    local fh = io.open(CREDS_FILE, "w")
+    fh:write("malformed_line_no_colon\n")
+    fh:write("alice:pbkdf2-sha256:100000:aabbcc:ddeeff\n")
+    fh:close()
+    local secrets, err = load_secrets(CREDS_FILE)
+    assert(secrets ~= nil, "load_secrets nil : " .. tostring(tostring(err)))
+    assert(secrets["alice"] ~= nil, "alice présent malgré ligne malformée")
+    local count_s = 0
+    for _ in pairs(secrets) do
+      count_s = count_s + 1
+    end
+    assert_eq(count_s, 1, "une seule entrée valide")
+    return os.remove(CREDS_FILE)
+  end)
+end
+io.write("\n── filter/convert ──\n")
+local read_bin
+read_bin = function(path)
+  local fh = io.open(path, "rb")
+  if not (fh) then
+    return nil
+  end
+  local data = fh:read("*a")
+  fh:close()
+  return data
+end
+local u64_le
+u64_le = function(s, i, j)
+  for b = 7, 0, -1 do
+    local ai = string.byte(s, i * 8 + b + 1)
+    local aj = string.byte(s, j * 8 + b + 1)
+    if ai < aj then
+      return true
+    end
+    if ai > aj then
+      return false
+    end
+  end
+  return true
+end
+local sorted_u64
+sorted_u64 = function(s)
+  local n = math.floor(#s / 8)
+  if n <= 1 then
+    return true
+  end
+  for i = 0, n - 2 do
+    if not (u64_le(s, i, i + 1)) then
+      return false
+    end
+  end
+  return true
+end
+local CONV_INPUT = "./tmp/test_convert.domains"
+local CONV_OUTPUT = "./tmp/test_convert.bin"
+local run_convert
+run_convert = function(args)
+  local ok = os.execute("LUA_PATH='lua/?.lua;lua/?/init.lua;;' luajit lua/filter/convert.lua " .. tostring(args) .. " 2>/dev/null")
+  return ok == true
+end
+test("filter/convert — pas d'arguments → exit non nul", function()
+  local ok = run_convert("")
+  return assert(not ok, "devrait échouer sans arguments")
+end)
+test("filter/convert — fichier d'entrée absent → exit non nul", function()
+  local ok = run_convert("./tmp/__nonexistent__.domains " .. tostring(CONV_OUTPUT))
+  return assert(not ok, "devrait échouer avec fichier absent")
+end)
+test("filter/convert — domaines valides → binaire trié", function()
+  local fh = io.open(CONV_INPUT, "w")
+  fh:write("github.com\nfacebook.com\ngoogle.com\n")
+  fh:close()
+  local ok = run_convert(tostring(CONV_INPUT) .. " " .. tostring(CONV_OUTPUT))
+  assert(ok, "exit 0 attendu")
+  local data = read_bin(CONV_OUTPUT)
+  assert(data ~= nil, "fichier de sortie absent")
+  assert(#data == 3 * 8, "taille attendue 24 octets (3 hashes × 8)")
+  assert(sorted_u64(data), "hashes non triés")
+  os.remove(CONV_INPUT)
+  return os.remove(CONV_OUTPUT)
+end)
+test("filter/convert — doublons dédupliqués → un seul hash", function()
+  local fh = io.open(CONV_INPUT, "w")
+  fh:write("github.com\ngithub.com\ngithub.com\n")
+  fh:close()
+  local ok = run_convert(tostring(CONV_INPUT) .. " " .. tostring(CONV_OUTPUT))
+  assert(ok, "exit 0 attendu")
+  local data = read_bin(CONV_OUTPUT)
+  assert(data ~= nil, "fichier de sortie absent")
+  assert(#data == 8, "un seul hash attendu après déduplication, got " .. tostring(#data) .. " octets")
+  os.remove(CONV_INPUT)
+  return os.remove(CONV_OUTPUT)
+end)
+test("filter/convert — commentaires et lignes vides ignorés", function()
+  local fh = io.open(CONV_INPUT, "w")
+  fh:write("# ce fichier a des commentaires\n")
+  fh:write("\n")
+  fh:write("github.com  # commentaire inline\n")
+  fh:write("   \n")
+  fh:close()
+  local ok = run_convert(tostring(CONV_INPUT) .. " " .. tostring(CONV_OUTPUT))
+  assert(ok, "exit 0 attendu")
+  local data = read_bin(CONV_OUTPUT)
+  assert(data ~= nil, "fichier de sortie absent")
+  assert(#data == 8, "un seul hash attendu (github.com uniquement), got " .. tostring(#data) .. " octets")
+  os.remove(CONV_INPUT)
+  return os.remove(CONV_OUTPUT)
+end)
 io.write(string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed))
 return os.exit(failed == 0 and 0 or 1)

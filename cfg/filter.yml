@@ -11,7 +11,10 @@
 #            ex. "toulouse/malware" → <domainlists_dir>/toulouse/malware.bin
 #
 # nets     : nom → liste de CIDR IPv4/IPv6
-#            Utilisé dans les conditions from_net / from_netlists.
+#            Utilisé dans les conditions from_netlist / from_netlists.
+#
+# macs     : nom → liste d'adresses MAC
+#            Utilisé dans les conditions from_maclist / from_maclists.
 #
 # times    : nom → [HH:MM, HH:MM] (début, fin)
 #            Utilisé dans les conditions in_time / in_times.
@@ -26,15 +29,19 @@
 #
 # ── Conditions disponibles ─────────────────────────────────────────────────
 #   to_domain        string        correspondance exacte ou suffixe
-#   to_domains       [string]      idem, plusieurs domaines
+#   to_domains       [string]      idem, plusieurs domaines (OR)
 #   to_domainlist    string        appartenance à une liste (chemin relatif à domainlists_dir)
-#   to_domainlists   [string]      idem, plusieurs listes
+#   to_domainlists   [string]      idem, plusieurs listes (OR)
 #   from_mac         string        adresse MAC source
+#   from_macs        [string]      idem, plusieurs MACs inline (OR)
+#   from_maclist     string        MAC source dans un groupe nommé (clé depuis macs)
+#   from_maclists    [string]      idem, plusieurs groupes (OR)
 #   from_net         string        IP source dans un CIDR
+#   from_nets        [string]      idem, plusieurs CIDRs inline (OR)
 #   from_netlist     string        IP source dans une netlist nommée (clé depuis nets)
-#   from_netlists    [string]      idem, plusieurs netlists
+#   from_netlists    [string]      idem, plusieurs netlists (OR)
 #   in_time          string        dans une fenêtre horaire nommée (clé depuis times)
-#   in_times         [string]      idem, plusieurs fenêtres
+#   in_times         [string]      idem, plusieurs fenêtres (OR)
 #   stolen_computer  [string]      MAC source dans une liste noire
 #   from_user        string        utilisateur authentifié (session active dans auth.sessions_file)
 #
@@ -89,6 +96,12 @@ nets:
   - 10.0.0.0/8
   - 172.16.0.0/12
   - 192.168.0.0/16
+
+# Groupes d'adresses MAC nommés
+#macs:
+#  trusted:
+#  - aa:bb:cc:dd:ee:ff
+#  - 11:22:33:44:55:66
 
 # Fenêtres horaires [HH:MM, HH:MM]
 times: {}

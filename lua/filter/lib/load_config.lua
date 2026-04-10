@@ -18,6 +18,7 @@ load_config = function(path)
     return nil, "configuration vide ou invalide dans " .. tostring(path)
   end
   cfg.nets = cfg.nets or { }
+  cfg.macs = cfg.macs or { }
   cfg.times = cfg.times or { }
   cfg.sources = cfg.sources or { }
   cfg.rules = cfg.rules or { }
