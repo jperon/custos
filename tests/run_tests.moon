@@ -995,7 +995,70 @@ test "worker_q0 — paquet 2 questions (1 allowée + 1 bloquée) → NF_DROP, wr
   assert_eq verdict, NF_DROP, "verdict doit être NF_DROP (evil.com est bloqué)"
   assert_eq write_msg_would_be_called, false, "write_msg ne doit pas être appelé quand verdict == NF_DROP"
 
--- ════════════════════════════════════════════════════════════════
+do
+  -- Helper partagé : logique de verdict Q0 (simulée sans NFQ)
+  -- Retourne NF_ACCEPT(1) ou NF_DROP(0) selon les qnames et l'allowlist locale.
+  make_verdict = (allowed_set, questions) ->
+    NF_ACCEPT_V, NF_DROP_V = 1, 0
+    v = NF_ACCEPT_V
+    for _, q in ipairs questions
+      name = q.qname\lower!
+      matched = allowed_set[name]
+      if not matched
+        pos = name\find ".", 1, true
+        while pos and not matched
+          matched = allowed_set[name\sub pos + 1]
+          pos = name\find ".", pos + 1, true
+      v = NF_DROP_V unless matched
+    v
+
+  -- Question unique autorisée
+  test "worker_q0 — question unique autorisée → NF_ACCEPT", ->
+    package.loaded["parse/dns"] = nil
+    dns2 = dofile "lua/parse/dns.lua"
+    txid2 = 0x0001
+    hdr2 = string.char(
+      bit.rshift(bit.band(txid2, 0xFF00), 8), bit.band(txid2, 0xFF),
+      0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0
+    )
+    q_ok = "\x06github\x03com\x00" .. string.char(0, 1, 0, 1)
+    parsed2 = dns2.parse_dns hdr2 .. q_ok
+    assert parsed2, "parse_dns nil"
+    verdict2 = make_verdict { ["github.com"]: true }, parsed2.questions
+    assert_eq verdict2, 1, "NF_ACCEPT pour github.com autorisé"
+
+  -- Question unique bloquée
+  test "worker_q0 — question unique bloquée → NF_DROP", ->
+    package.loaded["parse/dns"] = nil
+    dns3 = dofile "lua/parse/dns.lua"
+    txid3 = 0x0002
+    hdr3 = string.char(
+      bit.rshift(bit.band(txid3, 0xFF00), 8), bit.band(txid3, 0xFF),
+      0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0
+    )
+    q_bad = "\x04evil\x03com\x00" .. string.char(0, 1, 0, 1)
+    parsed3 = dns3.parse_dns hdr3 .. q_bad
+    assert parsed3, "parse_dns nil"
+    verdict3 = make_verdict {}, parsed3.questions
+    assert_eq verdict3, 0, "NF_DROP pour evil.com bloqué"
+
+  -- Sous-domaine autorisé par le domaine parent dans l'allowlist
+  test "worker_q0 — sous-domaine autorisé via domaine parent", ->
+    package.loaded["parse/dns"] = nil
+    dns4 = dofile "lua/parse/dns.lua"
+    txid4 = 0x0003
+    hdr4 = string.char(
+      bit.rshift(bit.band(txid4, 0xFF00), 8), bit.band(txid4, 0xFF),
+      0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0
+    )
+    -- "api.github.com" doit être autorisé si "github.com" est dans l'allowlist
+    q_sub = "\x03api\x06github\x03com\x00" .. string.char(0, 1, 0, 1)
+    parsed4 = dns4.parse_dns hdr4 .. q_sub
+    assert parsed4, "parse_dns nil"
+    verdict4 = make_verdict { ["github.com"]: true }, parsed4.questions
+    assert_eq verdict4, 1, "NF_ACCEPT pour api.github.com (parent github.com autorisé)"
+
+
 -- Tests parse/dns — nouvelles fonctions (skip, build_opt, append_ede)
 -- ════════════════════════════════════════════════════════════════
 io.write "\n── parse/dns nouvelles fonctions ──\n"
@@ -1378,6 +1441,75 @@ test "to_domains — OR logique", ->
   assert_eq (f {domain: "packages.debian.org"}), true, "debian OK"
   assert_eq (f {domain: "evil.com"}), false, "evil non"
 
+test "to_domains — liste vide → faux", ->
+  f = (to_domains {}) {}
+  assert_eq (f {domain: "github.com"}), false, "liste vide → false"
+
+test "to_domains — un seul domaine, match exact", ->
+  f = (to_domains {}) {"example.com"}
+  assert_eq (f {domain: "example.com"}), true, "exact match"
+
+test "to_domains — un seul domaine, sous-domaine", ->
+  f = (to_domains {}) {"example.com"}
+  assert_eq (f {domain: "www.example.com"}), true, "sous-domaine match"
+
+test "to_domains — un seul domaine, domaine différent", ->
+  f = (to_domains {}) {"example.com"}
+  assert_eq (f {domain: "other.com"}), false, "pas de match"
+
+-- ── to_domainlists ──
+to_domainlists = require "filter.conditions.to_domainlists"
+
+test "to_domainlists — OR sur plusieurs listes", ->
+  -- On réutilise TMPBIN défini plus bas. Pour ce test on le déclare avant.
+  -- (TMPBIN sera défini dans le bloc to_domainlist ci-dessous)
+  -- Ce test est placé ici mais utilise un do-bloc pour garantir l'ordre.
+  do
+    xxhash2 = require "ffi_xxhash"
+    TMPBIN2 = "./tmp/test_filter_domainlist2.bin"
+    test_domains2 = {"malware.bad", "tracker.bad"}
+    hashes2 = [xxhash2.xxh64(d) for d in *test_domains2]
+    table.sort hashes2, (a, b) -> a < b
+    arr2 = ffi.new "uint64_t[?]", #hashes2
+    for i, h in ipairs hashes2
+      arr2[i - 1] = h
+    fd2 = io.open TMPBIN2, "wb"
+    fd2\write ffi.string arr2, #hashes2 * 8
+    fd2\close!
+    -- On a besoin de TMPBIN1 (github.com, debian.org, cloudflare.com)
+    xxhash3 = require "ffi_xxhash"
+    TMPBIN3 = "./tmp/test_filter_domainlist3.bin"
+    test_domains3 = {"github.com", "debian.org"}
+    hashes3 = [xxhash3.xxh64(d) for d in *test_domains3]
+    table.sort hashes3, (a, b) -> a < b
+    arr3 = ffi.new "uint64_t[?]", #hashes3
+    for i, h in ipairs hashes3
+      arr3[i - 1] = h
+    fd3 = io.open TMPBIN3, "wb"
+    fd3\write ffi.string arr3, #hashes3 * 8
+    fd3\close!
+
+    cfg_dl = { domainlists_dir: "./tmp" }
+
+    test "to_domainlists — domaine dans première liste", ->
+      f = (to_domainlists cfg_dl) {"test_filter_domainlist3", "test_filter_domainlist2"}
+      assert_eq (f {domain: "github.com"}), true, "github.com dans liste 1"
+
+    test "to_domainlists — domaine dans deuxième liste", ->
+      f = (to_domainlists cfg_dl) {"test_filter_domainlist3", "test_filter_domainlist2"}
+      assert_eq (f {domain: "malware.bad"}), true, "malware.bad dans liste 2"
+
+    test "to_domainlists — domaine absent de toutes les listes", ->
+      f = (to_domainlists cfg_dl) {"test_filter_domainlist3", "test_filter_domainlist2"}
+      assert_eq (f {domain: "safe.com"}), false, "safe.com absent"
+
+    test "to_domainlists — liste vide → faux", ->
+      f = (to_domainlists cfg_dl) {}
+      assert_eq (f {domain: "github.com"}), false, "liste vide → false"
+
+    os.remove TMPBIN2
+    os.remove TMPBIN3
+
 -- ── to_domainlist ──
 to_domainlist = require "filter.conditions.to_domainlist"
 TMPDIR  = "./tmp"
@@ -1462,6 +1594,54 @@ test "from_net — IP absente dans req", ->
   v = f {src_ip: nil}
   assert_eq v, false, "src_ip nil"
 
+-- ── from_netlist / from_netlists ──
+from_netlist  = require "filter.conditions.from_netlist"
+from_netlists = require "filter.conditions.from_netlists"
+
+do
+  NETLIST_CFG = {
+    nets: {
+      lan:     { "192.168.0.0/16", "10.0.0.0/8" }
+      dmz:     { "172.16.0.0/12" }
+    }
+  }
+
+  test "from_netlist — IP dans la netlist (premier CIDR)", ->
+    f = (from_netlist NETLIST_CFG) "lan"
+    assert_eq (f {src_ip: "192.168.1.42"}), true, "192.168.1.42 dans lan"
+
+  test "from_netlist — IP dans la netlist (deuxième CIDR)", ->
+    f = (from_netlist NETLIST_CFG) "lan"
+    assert_eq (f {src_ip: "10.5.0.1"}), true, "10.5.0.1 dans lan"
+
+  test "from_netlist — IP hors de la netlist", ->
+    f = (from_netlist NETLIST_CFG) "lan"
+    assert_eq (f {src_ip: "8.8.8.8"}), false, "8.8.8.8 hors lan"
+
+  test "from_netlist — netlist inconnue → faux", ->
+    f = (from_netlist NETLIST_CFG) "unknown"
+    assert_eq (f {src_ip: "192.168.1.1"}), false, "netlist inconnue → false"
+
+  test "from_netlist — src_ip nil → faux", ->
+    f = (from_netlist NETLIST_CFG) "lan"
+    assert_eq (f {src_ip: nil}), false, "src_ip nil → false"
+
+  test "from_netlists — OR sur plusieurs netlists (première)", ->
+    f = (from_netlists NETLIST_CFG) {"lan", "dmz"}
+    assert_eq (f {src_ip: "192.168.0.1"}), true, "dans lan"
+
+  test "from_netlists — OR sur plusieurs netlists (deuxième)", ->
+    f = (from_netlists NETLIST_CFG) {"lan", "dmz"}
+    assert_eq (f {src_ip: "172.16.1.1"}), true, "dans dmz"
+
+  test "from_netlists — IP hors de toutes les netlists", ->
+    f = (from_netlists NETLIST_CFG) {"lan", "dmz"}
+    assert_eq (f {src_ip: "1.2.3.4"}), false, "1.2.3.4 hors de tout"
+
+  test "from_netlists — liste vide → faux", ->
+    f = (from_netlists NETLIST_CFG) {}
+    assert_eq (f {src_ip: "192.168.1.1"}), false, "liste vide → false"
+
 -- ── stolen_computer ──
 stolen_computer = require "filter.conditions.stolen_computer"
 
@@ -1472,6 +1652,14 @@ test "stolen_computer — MAC blacklisté", ->
 test "stolen_computer — MAC non blacklisté", ->
   f = (stolen_computer {}) {"de:ad:be:ef:00:01"}
   assert_eq (f {mac: "aa:bb:cc:dd:ee:ff"}), false, "non volé"
+
+test "stolen_computer — liste vide → faux", ->
+  f = (stolen_computer {}) {}
+  assert_eq (f {mac: "de:ad:be:ef:00:01"}), false, "liste vide → false"
+
+test "stolen_computer — MAC nil → faux", ->
+  f = (stolen_computer {}) {"de:ad:be:ef:00:01"}
+  assert_eq (f {mac: nil}), false, "mac nil → false"
 
 -- ── in_time ──
 in_time = require "filter.conditions.in_time"
@@ -1492,6 +1680,29 @@ test "in_time — fenêtre inconnue → faux", ->
   cfg = {times: {}}
   f   = (in_time cfg) "doesnotexist"
   assert_eq (f {ts: os.time!}), false, "fenêtre inconnue"
+
+-- ── in_times ──
+in_times = require "filter.conditions.in_times"
+
+test "in_times — OR : première fenêtre match", ->
+  cfg = {times: {allday: {"00:00", "23:59"}, never: {"25:00", "25:01"}}}
+  f   = (in_times cfg) {"allday", "never"}
+  assert_eq (f {ts: os.time!}), true, "allday OR never → true (allday match)"
+
+test "in_times — OR : deuxième fenêtre match (première ne match pas)", ->
+  cfg = {times: {never: {"25:00", "25:01"}, allday: {"00:00", "23:59"}}}
+  f   = (in_times cfg) {"never", "allday"}
+  assert_eq (f {ts: os.time!}), true, "never OR allday → true (allday match)"
+
+test "in_times — OR : aucune fenêtre ne match", ->
+  cfg = {times: {never: {"25:00", "25:01"}, also_never: {"26:00", "26:01"}}}
+  f   = (in_times cfg) {"never", "also_never"}
+  assert_eq (f {ts: os.time!}), false, "aucune fenêtre → false"
+
+test "in_times — liste vide → faux", ->
+  cfg = {times: {allday: {"00:00", "23:59"}}}
+  f   = (in_times cfg) {}
+  assert_eq (f {ts: os.time!}), false, "liste vide → false"
 
 -- ── rule.compile_rules + rule.decide ──
 m_rule = require "filter.rule"
@@ -1756,8 +1967,181 @@ rules:
     assert cfg == nil, "cfg devrait être nil sur YAML invalide"
     assert type(err) == "string", "message d'erreur attendu"
 
+  test "load_config — section auth : valeurs par défaut", ->
+    fd4 = io.open TMP_YAML, "w"
+    fd4\write "rules: []\nauth:\n  secrets: /etc/custos/secrets\n"
+    fd4\close!
+    cfg, err = load_config TMP_YAML
+    assert cfg ~= nil, "cfg nil : #{tostring err}"
+    assert_eq cfg.auth.port,              33443,             "auth.port défaut"
+    assert_eq cfg.auth.captive_port,      33080,             "auth.captive_port défaut"
+    assert_eq cfg.auth.session_ttl,       86400,             "auth.session_ttl défaut"
+    assert_eq cfg.auth.host,              "::",              "auth.host défaut"
+    assert_eq cfg.auth.heartbeat_interval, 30,               "heartbeat_interval défaut"
+    assert_eq cfg.auth.idle_timeout,       120,              "idle_timeout défaut"
+
+  test "load_config — section auth : valeurs personnalisées", ->
+    fd5 = io.open TMP_YAML, "w"
+    fd5\write "rules: []\nauth:\n  port: 8443\n  captive_port: 8080\n  session_ttl: 3600\n  idle_timeout: 60\n"
+    fd5\close!
+    cfg, err = load_config TMP_YAML
+    assert cfg ~= nil, "cfg nil : #{tostring err}"
+    assert_eq cfg.auth.port,         8443,  "auth.port personnalisé"
+    assert_eq cfg.auth.captive_port, 8080,  "auth.captive_port personnalisé"
+    assert_eq cfg.auth.session_ttl,  3600,  "auth.session_ttl personnalisé"
+    assert_eq cfg.auth.idle_timeout, 60,    "auth.idle_timeout personnalisé"
+
   os.remove TMP_YAML
 
+-- ════════════════════════════════════════════════════════════════
+-- auth/sessions
+-- ════════════════════════════════════════════════════════════════
+io.write "\n── auth/sessions ──\n"
+{ :serialize, :write_sessions, :load_sessions,
+  :add_session, :purge_expired, :read_cached } = require "auth.sessions"
+
+SESS_FILE = "./tmp/test_sessions.lua"
+
+test "auth/sessions — serialize : table vide", ->
+  result = serialize {}
+  assert result\find "return {", 1, true
+  assert result\find "}", 1, true
+
+test "auth/sessions — serialize : une session", ->
+  sessions = { ["10.0.0.1"]: { user: "alice", expires: 9999, heartbeat: nil } }
+  result = serialize sessions
+  assert result\find '"10.0.0.1"',    1, true, "IP présente"
+  assert result\find '"alice"',       1, true, "user présent"
+  assert result\find "expires = 9999", 1, true, "expires présent"
+
+test "auth/sessions — serialize : session avec heartbeat", ->
+  sessions = { ["10.0.0.2"]: { user: "bob", expires: 8888, heartbeat: 7777 } }
+  result = serialize sessions
+  assert result\find "heartbeat = 7777", 1, true, "heartbeat sérialisé"
+
+test "auth/sessions — write_sessions + load_sessions round-trip", ->
+  sessions = {
+    ["192.168.1.10"]: { user: "alice", expires: 9999999, heartbeat: nil }
+    ["192.168.1.20"]: { user: "bob",   expires: 8888888, heartbeat: 111 }
+  }
+  ok, err = write_sessions sessions, SESS_FILE
+  assert ok, "write_sessions a échoué : #{tostring err}"
+  loaded = load_sessions SESS_FILE
+  assert loaded["192.168.1.10"], "alice absent"
+  assert_eq loaded["192.168.1.10"].user,    "alice",   "alice.user"
+  assert_eq loaded["192.168.1.10"].expires, 9999999,   "alice.expires"
+  assert loaded["192.168.1.20"], "bob absent"
+  assert_eq loaded["192.168.1.20"].heartbeat, 111,     "bob.heartbeat"
+  os.remove SESS_FILE
+
+test "auth/sessions — load_sessions : fichier absent → table vide", ->
+  result = load_sessions "./tmp/absent_sessions.lua"
+  assert type(result) == "table", "doit retourner une table"
+  count = 0
+  for _ in pairs result do count += 1
+  assert_eq count, 0, "table vide"
+
+test "auth/sessions — load_sessions : fichier corrompu → table vide", ->
+  CORRUPT = "./tmp/corrupt_sessions.lua"
+  fh = io.open CORRUPT, "w"
+  fh\write "THIS IS NOT VALID LUA {\n"
+  fh\close!
+  result = load_sessions CORRUPT
+  assert type(result) == "table", "doit retourner une table"
+  count2 = 0
+  for _ in pairs result do count2 += 1
+  assert_eq count2, 0, "table vide sur fichier corrompu"
+  os.remove CORRUPT
+
+test "auth/sessions — add_session : crée la session", ->
+  sessions = {}
+  add_session sessions, "10.1.0.1", "charlie", 3600, 0
+  assert sessions["10.1.0.1"], "session créée"
+  assert_eq sessions["10.1.0.1"].user, "charlie", "user"
+  assert sessions["10.1.0.1"].expires > os.time!, "expires dans le futur"
+  assert_eq sessions["10.1.0.1"].heartbeat, nil, "heartbeat nil si idle_timeout=0"
+
+test "auth/sessions — add_session : heartbeat si idle_timeout > 0", ->
+  sessions = {}
+  add_session sessions, "10.1.0.2", "diana", 3600, 120
+  assert sessions["10.1.0.2"].heartbeat ~= nil, "heartbeat non nil"
+  assert sessions["10.1.0.2"].heartbeat > os.time!, "heartbeat dans le futur"
+
+test "auth/sessions — purge_expired : retire les sessions expirées", ->
+  sessions = {
+    ["10.0.0.1"]: { user: "old",   expires: 1 }     -- expiré (epoch 1)
+    ["10.0.0.2"]: { user: "valid", expires: 9999999999 }  -- valide
+  }
+  purge_expired sessions
+  assert sessions["10.0.0.1"] == nil, "session expirée purgée"
+  assert sessions["10.0.0.2"] ~= nil, "session valide conservée"
+
+test "auth/sessions — purge_expired : retire si heartbeat expiré", ->
+  sessions = {
+    ["10.0.0.3"]: { user: "hb", expires: 9999999999, heartbeat: 1 }
+  }
+  purge_expired sessions
+  assert sessions["10.0.0.3"] == nil, "session avec heartbeat expiré purgée"
+
+-- ════════════════════════════════════════════════════════════════
+-- auth/credentials
+-- ════════════════════════════════════════════════════════════════
+io.write "\n── auth/credentials ──\n"
+ok_creds, creds_mod = pcall require, "auth.credentials"
+if not ok_creds
+  io.write "  SKIP (libcrypto non disponible)\n"
+else
+  { :verify_password, :hash_password, :load_secrets } = creds_mod
+
+  CREDS_FILE = "./tmp/test_secrets"
+
+  test "auth/credentials — verify_password : mot de passe correct", ->
+    stored = hash_password "mysecretpassword"
+    assert type(stored) == "string", "hash_password retourne une string"
+    assert verify_password("mysecretpassword", stored), "mot de passe correct"
+
+  test "auth/credentials — verify_password : mauvais mot de passe", ->
+    stored = hash_password "mysecretpassword"
+    assert not (verify_password "wrongpassword", stored), "mauvais MdP rejeté"
+
+  test "auth/credentials — verify_password : hash invalide → faux", ->
+    assert not (verify_password "anything", "notavalidhash"), "hash invalide → false"
+
+  test "auth/credentials — verify_password : algo inconnu → faux", ->
+    assert not (verify_password "pass", "bcrypt:12:salt:hash"), "algo inconnu → false"
+
+  test "auth/credentials — load_secrets : fichier valide", ->
+    stored_alice = hash_password "alice123"
+    fh = io.open CREDS_FILE, "w"
+    fh\write "# commentaire\n"
+    fh\write "alice:#{stored_alice}\n"
+    fh\write "\n"  -- ligne vide
+    fh\write "bob:pbkdf2-sha256:100000:aabbcc:ddeeff\n"
+    fh\close!
+    secrets, err = load_secrets CREDS_FILE
+    assert secrets ~= nil, "load_secrets a retourné nil : #{tostring err}"
+    assert secrets["alice"] ~= nil, "alice absent"
+    assert secrets["bob"]   ~= nil, "bob absent"
+    assert verify_password("alice123", secrets["alice"]), "alice authentifiable"
+    os.remove CREDS_FILE
+
+  test "auth/credentials — load_secrets : fichier absent → nil + erreur", ->
+    secrets, err = load_secrets "./tmp/absent_secrets"
+    assert secrets == nil, "doit retourner nil"
+    assert type(err) == "string", "message d'erreur attendu"
+
+  test "auth/credentials — load_secrets : lignes malformées ignorées", ->
+    fh = io.open CREDS_FILE, "w"
+    fh\write "malformed_line_no_colon\n"
+    fh\write "alice:pbkdf2-sha256:100000:aabbcc:ddeeff\n"
+    fh\close!
+    secrets, err = load_secrets CREDS_FILE
+    assert secrets ~= nil, "load_secrets nil : #{tostring err}"
+    assert secrets["alice"] ~= nil, "alice présent malgré ligne malformée"
+    count_s = 0
+    for _ in pairs secrets do count_s += 1
+    assert_eq count_s, 1, "une seule entrée valide"
+    os.remove CREDS_FILE
 
 
 io.write string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed)
