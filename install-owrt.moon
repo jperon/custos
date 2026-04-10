@@ -175,7 +175,11 @@ Installer = (cfg) ->
       unless @ssh_run update_cmd
         warn "#{update_cmd} a échoué — les listes peuvent être périmées, on continue"
 
-      pkgs_required = { "luajit", "libnetfilter-queue", "nftables", "kmod-br-netfilter", "kmod-nft-queue" }
+      pkgs_required = {
+        "luajit", "libnetfilter-queue", "nftables",
+        "kmod-br-netfilter", "kmod-nft-queue",
+        "lyaml", "luasec", "libxxhash", "openssl-util"
+      }
       pkgs_optional = { "libndpi" }
 
       install_cmd = if pm == "apk"

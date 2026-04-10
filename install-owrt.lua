@@ -211,7 +211,11 @@ install_pkg_deps = function(cfg)
     "libnetfilter-queue",
     "nftables",
     "kmod-br-netfilter",
-    "kmod-nft-queue"
+    "kmod-nft-queue",
+    "lyaml",
+    "luasec",
+    "libxxhash",
+    "openssl-util"
   }
   local pkgs_optional = {
     "libndpi"

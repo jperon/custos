@@ -43,6 +43,8 @@ table ip dns-filter {
     type nat hook prerouting priority dstnat; policy accept;
     # Ne pas intercepter le DNS
     meta l4proto { udp, tcp } th dport 53 return
+    # Ne pas rediriger le trafic émis par la machine filtre elle-même
+    fib saddr type local return
     # Clients authentifiés : pas de redirection
     ip saddr @authenticated_ips return
     # Portail captif : tout HTTP → portail plain, tout HTTPS → login TLS
@@ -54,6 +56,11 @@ table ip dns-filter {
   chain forward {
     type   filter hook forward priority 0
     policy drop
+
+    # Trafic émis par la machine filtre elle-même (br_netfilter provoque
+    # le passage du trafic local dans le hook FORWARD quand il sort via
+    # une interface bridge).
+    fib saddr type local accept
 
     # DNS AVANT ct state : si ct state est en premier, les réponses DNS
     # (sport 53, état ESTABLISHED dans conntrack) seraient acceptées sans
@@ -69,10 +76,13 @@ table ip dns-filter {
   }
 
   # ── Chaîne OUTPUT (DNS émis par la machine filtre elle-même) ──────
+  # queue bypass : si aucun worker n'écoute (service arrêté), les paquets
+  # DNS du routeur passent librement (fail-open) plutôt que d'être droppés
+  # avec EPERM (ce qui bloquerait apk, wget, etc.).
   chain output {
     type   filter hook output priority 0
     policy accept
-    meta l4proto { udp, tcp } th dport 53 queue num 0
+    meta l4proto { udp, tcp } th dport 53 queue num 0 bypass
   }
 
   # ── Chaîne INPUT (trafic destiné à la machine filtre) ─────────────
@@ -80,6 +90,8 @@ table ip dns-filter {
     type   filter hook input priority 0
     policy drop
 
+    # Loopback (DNS vers 127.0.0.1/::1, résolution locale, etc.)
+    iif lo accept
     ct state established,related accept
     tcp dport 22 accept
     tcp dport 33443 accept
@@ -109,6 +121,7 @@ table ip6 dns-filter {
   chain prerouting {
     type nat hook prerouting priority dstnat; policy accept;
     meta l4proto { udp, tcp } th dport 53 return
+    fib saddr type local return
     ip6 saddr @authenticated_ips6 return
     tcp dport 80  redirect to :33080
     tcp dport 443 redirect to :33443
@@ -118,6 +131,9 @@ table ip6 dns-filter {
   chain forward {
     type   filter hook forward priority 0
     policy drop
+
+    # Trafic émis par la machine filtre elle-même (br_netfilter).
+    fib saddr type local accept
 
     # DNS AVANT ct state (même raison qu'en IPv4 : éviter que les réponses
     # sport 53 ESTABLISHED soient acceptées avant Q1).
@@ -142,10 +158,11 @@ table ip6 dns-filter {
   # ── Chaîne OUTPUT ────────────────────────────────────────────────
   # policy accept : les Router Advertisements (SLAAC) et les REFUSED
   # injectés par LuaJIT sortent librement.
+  # queue bypass : fail-open si workers arrêtés (évite EPERM sur apk/wget).
   chain output {
     type   filter hook output priority 0
     policy accept
-    meta l4proto { udp, tcp } th dport 53 queue num 0
+    meta l4proto { udp, tcp } th dport 53 queue num 0 bypass
   }
 
   # ── Chaîne INPUT ─────────────────────────────────────────────────
@@ -153,8 +170,10 @@ table ip6 dns-filter {
     type   filter hook input priority 0
     policy drop
 
+    iif lo accept
     ct state established,related accept
     meta l4proto icmpv6 accept
+    tcp dport 22 accept
     tcp dport 33443 accept
     tcp dport 33080 accept
   }
