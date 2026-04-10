@@ -339,9 +339,12 @@ else
 end
 print("")
 print(tostring(C.bold) .. "▶ LuaJIT filter log" .. tostring(C.reset))
-local ok_log, log_out = ssh(FILTER_IP, "sudo cat /opt/custos/tmp/dns-filter.log 2>/dev/null | tail -40")
-report("log has allowed entries", (ok_log and log_out:match("ALLOW")) ~= nil, "")
-report("log has blocked/refused entries", (ok_log and log_out:match("BLOCK")) ~= nil, "")
+local log_allow
+_, log_allow = ssh(FILTER_IP, "sudo grep -c ALLOW /opt/custos/tmp/dns-filter.log 2>/dev/null")
+local log_block
+_, log_block = ssh(FILTER_IP, "sudo grep -c BLOCK /opt/custos/tmp/dns-filter.log 2>/dev/null")
+report("log has allowed entries", (tonumber(log_allow or "0") or 0) > 0, "grep ALLOW count: " .. tostring(log_allow))
+report("log has blocked/refused entries", (tonumber(log_block or "0") or 0) > 0, "grep BLOCK count: " .. tostring(log_block))
 local FILTER_LAN_IP = "10.99.0.254"
 local AUTH_URL = "https://" .. tostring(FILTER_LAN_IP) .. ":8443"
 print("")

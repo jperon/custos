@@ -427,11 +427,12 @@ else
 print ""
 print "#{C.bold}▶ LuaJIT filter log#{C.reset}"
 
-ok_log, log_out = ssh FILTER_IP, "sudo cat /opt/custos/tmp/dns-filter.log 2>/dev/null | tail -40"
+_, log_allow = ssh FILTER_IP, "sudo grep -c ALLOW /opt/custos/tmp/dns-filter.log 2>/dev/null"
+_, log_block = ssh FILTER_IP, "sudo grep -c BLOCK /opt/custos/tmp/dns-filter.log 2>/dev/null"
 report "log has allowed entries",
-  (ok_log and log_out\match "ALLOW") != nil, ""
+  (tonumber(log_allow or "0") or 0) > 0, "grep ALLOW count: #{log_allow}"
 report "log has blocked/refused entries",
-  (ok_log and log_out\match "BLOCK") != nil, ""
+  (tonumber(log_block or "0") or 0) > 0, "grep BLOCK count: #{log_block}"
 
 -- ── Authentification HTTPS ────────────────────────────────────────────────────
 FILTER_LAN_IP = "10.99.0.254"
