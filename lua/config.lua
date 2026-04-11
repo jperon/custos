@@ -1,8 +1,6 @@
 local QUEUE_QUESTIONS = 0
 local QUEUE_RESPONSES = 1
 local DOCKER_MODE = os.getenv("DOCKER_MODE") == "1"
-local LOG_PATH = "./tmp/dns-filter.log"
-local LOG_FLUSH = true
 local ALLOWED_DOMAINS = {
   "local",
   "lan",
@@ -37,7 +35,6 @@ return {
   QUEUE_QUESTIONS = QUEUE_QUESTIONS,
   QUEUE_RESPONSES = QUEUE_RESPONSES,
   DOCKER_MODE = DOCKER_MODE,
-  LOG_PATH = LOG_PATH,
   ALLOWED_DOMAINS = ALLOWED_DOMAINS,
   NFT_TABLE = NFT_TABLE,
   NFT_SET_IP4 = NFT_SET_IP4,

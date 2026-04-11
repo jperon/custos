@@ -16,7 +16,6 @@ OUTPUT_DIR = "/var/run/custos"
 -- ── Valeurs par défaut ────────────────────────────────────────────
 -- Reflètent les constantes de config.moon, adaptées à l'environnement OpenWrt.
 DEFAULTS = {
-  log_path:               "/var/log/custos.log"
   forced_ttl:             60
   nft_ip_timeout:         "2m"
   ipc_pending_ttl:        5
@@ -77,17 +76,6 @@ validate_nft_timeout = (raw, default) ->
   io.stderr\write "uci_config: nft_ip_timeout invalide '#{raw}', utilise '#{default}'\n"
   default
 
---- Valide un chemin de fichier (sans injection shell ni traversée de répertoire).
--- @tparam string|nil raw Valeur brute UCI
--- @tparam string default Valeur par défaut
--- @treturn string
-validate_path = (raw, default) ->
-  return default unless raw
-  if raw\match "[;`$|<>&!]" or raw\match "%.%."
-    io.stderr\write "uci_config: log_path suspect '#{raw}', utilise '#{default}'\n"
-    return default
-  raw
-
 --- Valide un nom de domaine (RFC 1035 : lettres, chiffres, tiret, point).
 -- @tparam string d Nom de domaine à valider
 -- @treturn string|nil Domaine valide ou nil si invalide
@@ -116,7 +104,6 @@ generate_config = (cfg) ->
     "local QUEUE_QUESTIONS        = 0"
     "local QUEUE_RESPONSES        = 1"
     'local DOCKER_MODE            = os.getenv("DOCKER_MODE") == "1"'
-    string.format 'local LOG_PATH               = "%s"', escape_lua_str cfg.log_path
     string.format "local FORCED_TTL             = %d",   cfg.forced_ttl
     string.format 'local NFT_IP_TIMEOUT         = "%s"', cfg.nft_ip_timeout
     string.format "local IPC_PENDING_TTL        = %d",   cfg.ipc_pending_ttl
@@ -139,7 +126,7 @@ generate_config = (cfg) ->
   table.insert lines, ""
   table.insert lines, "return {"
   for k in *{
-      "QUEUE_QUESTIONS", "QUEUE_RESPONSES", "DOCKER_MODE", "LOG_PATH",
+      "QUEUE_QUESTIONS", "QUEUE_RESPONSES", "DOCKER_MODE",
       "ALLOWED_DOMAINS", "NFT_TABLE", "NFT_SET_IP4", "NFT_SET_IP6",
       "NFT_IP_TIMEOUT", "IPC_MSG_SIZE", "IPC_PENDING_TTL", "CLIENT_EXPIRY",
       "NEIGH_REFRESH_COOLDOWN", "FORCED_TTL", "DNS_PORT", "AF_INET",
@@ -162,7 +149,6 @@ main = ->
   domains = DEFAULTS.allowed_domains if #domains == 0
 
   cfg = {
-    log_path:               validate_path(uci_get("log_path"),                       DEFAULTS.log_path)
     forced_ttl:             validate_posint(uci_get("forced_ttl"),                   DEFAULTS.forced_ttl)
     nft_ip_timeout:         validate_nft_timeout(uci_get("nft_ip_timeout"),          DEFAULTS.nft_ip_timeout)
     ipc_pending_ttl:        validate_posint(uci_get("ipc_pending_ttl"),              DEFAULTS.ipc_pending_ttl)

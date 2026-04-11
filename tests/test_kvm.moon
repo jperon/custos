@@ -136,6 +136,19 @@ resolve_host = (domain) ->
 ping_from = (src_ip, dest_ip, timeout_s = 3) ->
   guest_exec "ping -c1 -W#{timeout_s} -I #{src_ip} #{dest_ip} 2>&1", timeout_s + 4
 
+--- Curl HTTP ou HTTPS depuis la VM client via qemu-guest-agent.
+-- Pas de guillemets simples dans la commande (contrainte guest_exec).
+-- @tparam string url       URL cible (http:// ou https://)
+-- @tparam[opt] number timeout_s  Timeout curl en secondes (défaut 5)
+-- @treturn boolean ok    true si un code HTTP a été reçu (code ≠ "000")
+-- @treturn string  code  Code HTTP reçu ("000" = pas de connexion)
+curl_from = (url, timeout_s = 5) ->
+  cmd = "curl -k -s -o /dev/null --write-out %{http_code} --connect-timeout #{timeout_s} --max-time #{timeout_s + 5} #{url} 2>&1"
+  _, out = guest_exec cmd, timeout_s + 8
+  code = (out or "")\match "%d%d%d" or "000"
+  received = code ~= "000"
+  received, code
+
 --- DNS query from a specific source IP on the client VM.
 -- @tparam string src_ip   Source IP (-b)
 -- @tparam string domain   Domain to query
@@ -195,8 +208,8 @@ ssh FILTER_IP, "sudo nft flush ruleset 2>/dev/null; true"
 -- (done after nft flush so the filter VM's own DNS is not blocked)
 print "  Installing lua-yaml, lua-socket, lua-sec, openssl on filter VM..."
 ssh FILTER_IP, "sudo apt-get install -y -q lua-yaml lua-socket lua-sec openssl 2>&1 | tail -3; true"
--- Truncate logs so assertions only see output from this run
-ssh FILTER_IP, "> /tmp/custos-kvm.log; sudo mkdir -p /opt/custos/tmp && sudo truncate -s0 /opt/custos/tmp/dns-filter.log /opt/custos/tmp/sessions.lua 2>/dev/null; true"
+-- Clear log and sessions before starting the filter
+ssh FILTER_IP, "> /tmp/custos-kvm.log; sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true"
 ssh_check FILTER_IP, "sudo nft -f /opt/custos/nft-rules/dns-filter.nft"
 ssh_check FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &"
 os.execute "sleep 5"
@@ -208,7 +221,7 @@ error "LuaJIT failed to start — check /tmp/custos-kvm.log on filter VM" unless
 print "  Waiting for auth server (auth_listening + auth_secrets_loaded)..."
 auth_ready = false
 for _ = 1, 30
-  _, log_content = ssh FILTER_IP, "sudo cat /opt/custos/tmp/dns-filter.log 2>/dev/null"
+  _, log_content = ssh FILTER_IP, "cat /tmp/custos-kvm.log 2>/dev/null"
   if log_content and log_content\match("auth_listening") and log_content\match("auth_secrets_loaded")
     auth_ready = true
     break
@@ -278,6 +291,25 @@ ok_nft, nft_out = ssh FILTER_IP, "sudo nft list tables"
 report "dns-filter tables loaded",
   (ok_nft and nft_out\match "dns%-filter") != nil, nft_out or ""
 
+-- Vérification des règles DHCP / SLAAC
+ok_rs, rs_out = ssh FILTER_IP, "sudo nft list chain ip dns-filter forward 2>/dev/null"
+report "DHCPv4 forward — udp dport { 67, 68 } accept",
+  (ok_rs and rs_out\match "67") != nil, ""
+
+ok_ri, ri_out = ssh FILTER_IP, "sudo nft list chain ip dns-filter input 2>/dev/null"
+report "DHCPv4 input — udp dport 67 accept",
+  (ok_ri and ri_out\match "67") != nil, ""
+
+ok_6s, s6_out = ssh FILTER_IP, "sudo nft list chain ip6 dns-filter forward 2>/dev/null"
+report "DHCPv6 forward — udp dport { 546, 547 } accept",
+  (ok_6s and s6_out\match "546") != nil, ""
+report "SLAAC RA forward — nd-router-advert accept",
+  (ok_6s and s6_out\match "nd%-router%-advert") != nil, ""
+
+ok_6i, i6_out = ssh FILTER_IP, "sudo nft list chain ip6 dns-filter input 2>/dev/null"
+report "DHCPv6 input — udp dport 547 accept",
+  (ok_6i and i6_out\match "547") != nil, ""
+
 -- ── DNS allowed domain — ping avant/après ───────────────────────────────────
 print ""
 print "#{C.bold}▶ DNS autorisé + ping avant/après (#{DOMAIN_ALLOWED})#{C.reset}"
@@ -312,6 +344,15 @@ if allowed_ip
 else
   report "ping après résolution — ip4_allowed vide", false, ""
 
+-- curl HTTP + HTTPS après résolution → should PASS (IP dans ip4_allowed, MASQUERADE WAN)
+ok_curl_http, http_code = curl_from "http://#{DOMAIN_ALLOWED}/"
+report "curl http://#{DOMAIN_ALLOWED}/ après résolution : succès attendu",
+  ok_curl_http, "HTTP #{http_code}"
+
+ok_curl_https, https_code = curl_from "https://#{DOMAIN_ALLOWED}/"
+report "curl https://#{DOMAIN_ALLOWED}/ après résolution : succès attendu",
+  ok_curl_https, "HTTP #{https_code}"
+
 -- ── DNS blocked domain — ping avant/après ───────────────────────────────────
 print ""
 print "#{C.bold}▶ DNS refusé + ping avant/après (#{DOMAIN_BLOCKED})#{C.reset}"
@@ -342,15 +383,21 @@ if facebook_ip
   report "ping #{facebook_ip} après DNS refusé (#{CLIENT_IP}) : échec attendu",
     not ok_fb_after, ""
 
+-- curl HTTP après DNS refusé → FAIL (résolution impossible, code "000")
+ok_curl_blk, blk_curl_code = curl_from "http://#{DOMAIN_BLOCKED}/"
+report "curl http://#{DOMAIN_BLOCKED}/ après DNS refusé : échec attendu (000)",
+  blk_curl_code == "000", "HTTP #{blk_curl_code}"
+
 -- ── DNS unknown domain ───────────────────────────────────────────────────────
 print ""
-print "#{C.bold}▶ Domaine inconnu — REFUSED (#{DOMAIN_UNKNOWN})#{C.reset}"
+print "#{C.bold}▶ Domaine inconnu — NXDOMAIN (#{DOMAIN_UNKNOWN})#{C.reset}"
 
 _, unk_out = guest_exec "dig +time=5 +tries=1 #{DOMAIN_UNKNOWN} @#{DNS_SERVER} 2>&1", 15
 unk_str = (unk_out or "")\gsub "%s+$", ""
--- The filter REFUSEs all non-allowlisted domains (including nonexistent ones)
-report "dig #{DOMAIN_UNKNOWN} retourne REFUSED",
-  (unk_out and unk_out\upper!\match "REFUSED") != nil,
+-- La règle par défaut de filter.yml est allow : la requête atteint dnsmasq
+-- qui répond NXDOMAIN pour ce domaine inexistant.
+report "dig #{DOMAIN_UNKNOWN} retourne NXDOMAIN",
+  (unk_out and unk_out\upper!\match "NXDOMAIN") != nil,
   "dig: #{unk_str}"
 
 -- ── AAAA records → ip6_allowed ──────────────────────────────────────────────
@@ -427,8 +474,8 @@ else
 print ""
 print "#{C.bold}▶ LuaJIT filter log#{C.reset}"
 
-_, log_allow = ssh FILTER_IP, "sudo grep -c ALLOW /opt/custos/tmp/dns-filter.log 2>/dev/null"
-_, log_block = ssh FILTER_IP, "sudo grep -c BLOCK /opt/custos/tmp/dns-filter.log 2>/dev/null"
+_, log_allow = ssh FILTER_IP, "grep -c ALLOW /tmp/custos-kvm.log 2>/dev/null"
+_, log_block = ssh FILTER_IP, "grep -c BLOCK /tmp/custos-kvm.log 2>/dev/null"
 report "log has allowed entries",
   (tonumber(log_allow or "0") or 0) > 0, "grep ALLOW count: #{log_allow}"
 report "log has blocked/refused entries",

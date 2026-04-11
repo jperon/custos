@@ -153,7 +153,7 @@ show_status() {
 
   echo ""
   echo "=== Dernières lignes de log ==="
-  tail -20 /tmp/dns-filter.log 2>/dev/null || echo "(pas de log)"
+  journalctl -u dns-filter --no-pager -n 20 2>/dev/null || echo "(logs via stdout — utiliser journalctl -u dns-filter)"
 }
 
 case "${1:-up}" in

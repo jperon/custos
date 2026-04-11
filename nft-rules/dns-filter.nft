@@ -62,6 +62,10 @@ table ip dns-filter {
     # une interface bridge).
     fib saddr type local accept
 
+    # DHCPv4 : Discover/Request (src=0.0.0.0, broadcast) et Offer/Ack
+    # ne peuvent pas être suivis par conntrack → règle explicite requise.
+    udp dport { 67, 68 } accept
+
     # DNS AVANT ct state : si ct state est en premier, les réponses DNS
     # (sport 53, état ESTABLISHED dans conntrack) seraient acceptées sans
     # passer par Q1, empêchant LuaJIT de patcher le TTL et de peupler
@@ -97,6 +101,8 @@ table ip dns-filter {
     tcp dport 33443 accept
     tcp dport 33080 accept
     icmp type echo-request accept
+    # DHCPv4 server : reçoit les requêtes broadcast des clients
+    udp dport 67 accept
   }
 }
 
@@ -135,6 +141,9 @@ table ip6 dns-filter {
     # Trafic émis par la machine filtre elle-même (br_netfilter).
     fib saddr type local accept
 
+    # DHCPv6 : échange client↔serveur (link-local, conntrack insuffisant)
+    udp dport { 546, 547 } accept
+
     # DNS AVANT ct state (même raison qu'en IPv4 : éviter que les réponses
     # sport 53 ESTABLISHED soient acceptées avant Q1).
     meta l4proto { udp, tcp } th dport 53 queue num 0
@@ -142,12 +151,13 @@ table ip6 dns-filter {
 
     ct state established,related accept
 
-    # ICMPv6 NDP : br_netfilter intercepte les trames L2 de voisinage,
-    # ces types doivent donc passer en FORWARD.
+    # ICMPv6 NDP + SLAAC : br_netfilter intercepte les trames L2 de voisinage
+    # et les RA upstream ; ces types doivent donc passer en FORWARD.
     icmpv6 type {
       nd-neighbor-solicit,
       nd-neighbor-advert,
       nd-router-solicit,
+      nd-router-advert,     # RA depuis routeur upstream (SLAAC)
       echo-request,
       echo-reply
     } accept
@@ -156,8 +166,8 @@ table ip6 dns-filter {
   }
 
   # ── Chaîne OUTPUT ────────────────────────────────────────────────
-  # policy accept : les Router Advertisements (SLAAC) et les REFUSED
-  # injectés par LuaJIT sortent librement.
+  # policy accept : les Router Advertisements (SLAAC émis localement) et les
+  # REFUSED injectés par LuaJIT sortent librement.
   # queue bypass : fail-open si workers arrêtés (évite EPERM sur apk/wget).
   chain output {
     type   filter hook output priority 0
@@ -176,5 +186,7 @@ table ip6 dns-filter {
     tcp dport 22 accept
     tcp dport 33443 accept
     tcp dport 33080 accept
+    # DHCPv6 server : reçoit les sollicitations des clients
+    udp dport 547 accept
   }
 }

@@ -174,7 +174,7 @@ auth_ip = if profile == "ndpi5" then "172.28.0.253" else "172.28.0.254"
 wait_for_auth_ready = (timeout = 30) ->
   log "Waiting for auth worker to be ready (auth_listening)…", "STEP"
   for i = 1, timeout
-    success, output = execute "docker exec #{filter_name} cat /app/tmp/dns-filter.log 2>/dev/null", true
+    success, output = execute "docker logs #{filter_name} 2>&1", true
     if success and output and (output\match "auth_listening") and
        (output\match "auth_secrets_loaded")
       log "Auth server listening with secrets loaded", "PASS"
@@ -201,7 +201,7 @@ auth_curl = (method, path, data = nil) ->
 wait_for_filter_ready = (name, timeout = 30) ->
   log "Waiting for #{name} NFQUEUE workers to be ready (queue_listening)…", "STEP"
   for i = 1, timeout
-    success, output = execute "docker exec #{name} cat /app/tmp/dns-filter.log 2>/dev/null", true
+    success, output = execute "docker logs #{name} 2>&1", true
     if success and output and output\match "queue_listening"
       log "#{name} workers are listening on queues", "PASS"
       return true
@@ -214,7 +214,7 @@ wait_for_filter_ready = (name, timeout = 30) ->
 compose_up = ->
   log "Starting docker-compose environment (profile=#{profile})…", "STEP"
   execute "docker compose --profile ndpi4 --profile ndpi5 down 2>/dev/null || true"
-  execute "rm -f ./tmp/dns-filter.log ./tmp/sessions.lua 2>/dev/null || true"
+  execute "rm -f ./tmp/sessions.lua 2>/dev/null || true"
 
   success = execute "docker compose --profile #{profile} up -d"
   unless success
@@ -254,7 +254,7 @@ cleanup_host = ->
   log "Cleaning up filter nftables rules..."
   cmd = "docker exec #{filter_name} sh -c 'nft delete table ip dns-filter 2>/dev/null; nft delete table ip6 dns-filter 2>/dev/null; true'"
   execute cmd, true
-  execute "rm -f ./tmp/dns-filter.log 2>/dev/null || true"
+  execute "rm -f ./tmp/sessions.lua 2>/dev/null || true"
 
 compose_down = ->
   if keep_containers
@@ -307,7 +307,7 @@ check_nftables_set = (set_name) ->
 
 check_logs = ->
   log "Checking filter logs..."
-  cmd = "docker exec #{filter_name} cat /app/tmp/dns-filter.log 2>/dev/null"
+  cmd = "docker logs #{filter_name} 2>&1"
   success, output = execute cmd, true
 
   if not success
@@ -351,6 +351,20 @@ ping_from_client2 = (ip, timeout_sec = 3) ->
   cmd = "docker exec custos-client2 ping -c1 -W#{timeout_sec} #{ip} 2>&1"
   success, out = execute cmd, true
   return success, out
+
+--- Curl HTTP ou HTTPS depuis le conteneur client (client1 — 172.28.0.10).
+-- Utilise le resolv.conf du conteneur (172.30.0.20) ; la résolution DNS
+-- passe donc par le filtre comme en production.
+-- @tparam string url         URL cible (http:// ou https://)
+-- @tparam number timeout_sec Timeout curl en secondes (défaut 5)
+-- @treturn boolean ok    true si un code HTTP non vide a été reçu (≠ "000")
+-- @treturn string  code  Code HTTP reçu ("000" = pas de connexion)
+curl_from_client = (url, timeout_sec = 5) ->
+  cmd = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' --connect-timeout #{timeout_sec} --max-time #{timeout_sec + 5} '#{url}' 2>&1"
+  _, code = execute cmd, true
+  code = (code or "")\gsub "%s+", ""
+  ok = code ~= "" and code ~= "000"
+  ok, code
 
 --- Vide les sets ip4_allowed et ip6_allowed dans le filtre.
 flush_ip4_allowed = ->
@@ -630,6 +644,21 @@ run_test "DNS query — allowed domain resolves",
 
     return ok, obtained
 
+run_test "HTTP access — domaine autorisé joignable après résolution DNS",
+  "curl http://#{TEST_DOMAINS.allowed}/ → code HTTP reçu (≠ 000) via ip4_allowed",
+  ->
+    flush_ip4_allowed!
+    query_dns TEST_DOMAINS.allowed
+    os.execute "sleep 1"
+    ok, code = curl_from_client "http://#{TEST_DOMAINS.allowed}/"
+    return ok, "HTTP #{code}"
+
+run_test "HTTPS access — domaine autorisé joignable en TLS après résolution DNS",
+  "curl -k https://#{TEST_DOMAINS.allowed}/ → code HTTP reçu (≠ 000) via ip4_allowed",
+  ->
+    ok, code = curl_from_client "https://#{TEST_DOMAINS.allowed}/"
+    return ok, "HTTP #{code}"
+
 run_test "DNS query — blocked domain is rejected",
   "nslookup #{TEST_DOMAINS.blocked} @#{dns_server} → REFUSED ; ping avant et après FAIL",
   ->
@@ -655,6 +684,12 @@ run_test "DNS query — blocked domain is rejected",
         log "ping #{facebook_ip} après DNS refusé : échec attendu (LAN isolé, FORWARD DROP)", "PASS"
 
     return ok, obtained
+
+run_test "HTTP access — domaine bloqué inaccessible (DNS REFUSED → pas de résolution)",
+  "curl http://#{TEST_DOMAINS.blocked}/ → 000 (DNS refusé, résolution impossible)",
+  ->
+    _, code = curl_from_client "http://#{TEST_DOMAINS.blocked}/"
+    return code == "000", "HTTP #{code}"
 
 run_test "DNS query — nonexistent domain returns NXDOMAIN",
   "nslookup #{TEST_DOMAINS.nonexistent} @#{dns_server} → NXDOMAIN or can't find",
@@ -819,7 +854,7 @@ run_test "DNS over TCP segmented — 2-segment reassembly + TTL patched",
 run_test "IPv6 + Hop-by-Hop DNS — filter parses extension header via FORWARD (af=ipv6)",
   "LuaJIT SOCK_DGRAM+IPV6_HOPOPTS: send HbH DNS to #{dns6_server} via FORWARD → filter log shows af=ipv6 + qname",
   ->
-    _, log_before = execute "docker exec #{filter_name} cat /app/tmp/dns-filter.log 2>/dev/null | wc -l", true
+    _, log_before = execute "docker logs #{filter_name} 2>&1 | wc -l", true
     lines_before = tonumber (log_before or "0")
 
     ok, script_out = query_dns_ipv6_hbh TEST_DOMAINS.allowed
@@ -830,7 +865,7 @@ run_test "IPv6 + Hop-by-Hop DNS — filter parses extension header via FORWARD (
 
     os.execute "sleep 1"
 
-    _, log_out = execute "docker exec #{filter_name} cat /app/tmp/dns-filter.log 2>/dev/null", true
+    _, log_out = execute "docker logs #{filter_name} 2>&1", true
     has_ipv6  = log_out != nil and (log_out\match "af=ipv6") != nil
     has_qname = log_out != nil and (log_out\match "qname=#{TEST_DOMAINS.allowed\gsub('%.', '%%.')}") != nil
 
@@ -1057,7 +1092,7 @@ run_test "SIGHUP — rechargement des secrets à chaud",
   "modifier cfg/secrets + SIGHUP → ancien MdP rejeté, nouveau MdP accepté",
   ->
     -- Find auth worker PID via the startup log (logfmt: action=worker_started name=AUTH pid=N)
-    ok_pid, pid_out = execute "docker exec #{filter_name} sh -c \"grep 'action=worker_started' /app/tmp/dns-filter.log | grep 'name=AUTH' | grep -o 'pid=[0-9]*' | tail -1 | cut -d= -f2\"", true
+    ok_pid, pid_out = execute "docker logs #{filter_name} 2>&1 | grep 'action=worker_started' | grep 'name=AUTH' | grep -o 'pid=[0-9]*' | tail -1 | cut -d= -f2", true
     auth_pid = (pid_out or "")\gsub "%s+", ""
     unless auth_pid ~= "" and auth_pid\match "^%d+$"
       return false, "impossible de trouver le PID du worker auth (log: '#{pid_out}')"

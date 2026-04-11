@@ -15,8 +15,11 @@ QUEUE_RESPONSES = 1   -- UDP/53 dst LAN  (réponses entrantes)
 DOCKER_MODE = os.getenv("DOCKER_MODE") == "1"
 
 -- ── Logging ─────────────────────────────────────────────────────
-LOG_PATH   = "./tmp/dns-filter.log"
-LOG_FLUSH  = true    -- flush après chaque ligne (utile en debug, coût faible)
+-- Les messages sont écrits sur stdout (fd=1).
+-- Le superviseur de processus les capture vers le système de log natif :
+--   OpenWrt / procd  → logread   (procd_set_param stdout 1)
+--   systemd          → journalctl
+--   Docker           → docker logs
 
 -- ── Allowlist des qnames autorisés ──────────────────────────────
 -- Correspondance par suffixe : "example.com" autorise aussi "sub.example.com".
@@ -87,7 +90,6 @@ AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
 {
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES
   :DOCKER_MODE
-  :LOG_PATH
   :ALLOWED_DOMAINS
   :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_IP_TIMEOUT
   :IPC_MSG_SIZE, :IPC_PENDING_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN

@@ -121,6 +121,17 @@ ping_from = function(src_ip, dest_ip, timeout_s)
   end
   return guest_exec("ping -c1 -W" .. tostring(timeout_s) .. " -I " .. tostring(src_ip) .. " " .. tostring(dest_ip) .. " 2>&1", timeout_s + 4)
 end
+local curl_from
+curl_from = function(url, timeout_s)
+  if timeout_s == nil then
+    timeout_s = 5
+  end
+  local cmd = "curl -k -s -o /dev/null --write-out %{http_code} --connect-timeout " .. tostring(timeout_s) .. " --max-time " .. tostring(timeout_s + 5) .. " " .. tostring(url) .. " 2>&1"
+  local _, out = guest_exec(cmd, timeout_s + 8)
+  local code = (out or ""):match("%d%d%d" or "000")
+  local received = code ~= "000"
+  return received, code
+end
 local dig_from
 dig_from = function(src_ip, domain, qtype, timeout_s)
   if qtype == nil then
@@ -166,7 +177,7 @@ os.execute("sleep 2")
 ssh(FILTER_IP, "sudo nft flush ruleset 2>/dev/null; true")
 print("  Installing lua-yaml, lua-socket, lua-sec, openssl on filter VM...")
 ssh(FILTER_IP, "sudo apt-get install -y -q lua-yaml lua-socket lua-sec openssl 2>&1 | tail -3; true")
-ssh(FILTER_IP, "> /tmp/custos-kvm.log; sudo mkdir -p /opt/custos/tmp && sudo truncate -s0 /opt/custos/tmp/dns-filter.log /opt/custos/tmp/sessions.lua 2>/dev/null; true")
+ssh(FILTER_IP, "> /tmp/custos-kvm.log; sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true")
 ssh_check(FILTER_IP, "sudo nft -f /opt/custos/nft-rules/dns-filter.nft")
 ssh_check(FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &")
 os.execute("sleep 5")
@@ -179,7 +190,7 @@ print("  Waiting for auth server (auth_listening + auth_secrets_loaded)...")
 local auth_ready = false
 for _ = 1, 30 do
   local log_content
-  _, log_content = ssh(FILTER_IP, "sudo cat /opt/custos/tmp/dns-filter.log 2>/dev/null")
+  _, log_content = ssh(FILTER_IP, "cat /tmp/custos-kvm.log 2>/dev/null")
   if log_content and log_content:match("auth_listening") and log_content:match("auth_secrets_loaded") then
     auth_ready = true
     break
@@ -240,6 +251,15 @@ local ok_sc, sc_out = ssh(FILTER_IP, "cat /proc/sys/net/bridge/bridge-nf-call-ip
 report("bridge-nf-call-iptables = 1", (ok_sc and sc_out:match("1")) ~= nil, sc_out or "")
 local ok_nft, nft_out = ssh(FILTER_IP, "sudo nft list tables")
 report("dns-filter tables loaded", (ok_nft and nft_out:match("dns%-filter")) ~= nil, nft_out or "")
+local ok_rs, rs_out = ssh(FILTER_IP, "sudo nft list chain ip dns-filter forward 2>/dev/null")
+report("DHCPv4 forward — udp dport { 67, 68 } accept", (ok_rs and rs_out:match("67")) ~= nil, "")
+local ok_ri, ri_out = ssh(FILTER_IP, "sudo nft list chain ip dns-filter input 2>/dev/null")
+report("DHCPv4 input — udp dport 67 accept", (ok_ri and ri_out:match("67")) ~= nil, "")
+local ok_6s, s6_out = ssh(FILTER_IP, "sudo nft list chain ip6 dns-filter forward 2>/dev/null")
+report("DHCPv6 forward — udp dport { 546, 547 } accept", (ok_6s and s6_out:match("546")) ~= nil, "")
+report("SLAAC RA forward — nd-router-advert accept", (ok_6s and s6_out:match("nd%-router%-advert")) ~= nil, "")
+local ok_6i, i6_out = ssh(FILTER_IP, "sudo nft list chain ip6 dns-filter input 2>/dev/null")
+report("DHCPv6 input — udp dport 547 accept", (ok_6i and i6_out:match("547")) ~= nil, "")
 print("")
 print(tostring(C.bold) .. "▶ DNS autorisé + ping avant/après (" .. tostring(DOMAIN_ALLOWED) .. ")" .. tostring(C.reset))
 ssh(FILTER_IP, "sudo nft flush set ip  dns-filter ip4_allowed 2>/dev/null; true")
@@ -264,6 +284,10 @@ if allowed_ip then
 else
   report("ping après résolution — ip4_allowed vide", false, "")
 end
+local ok_curl_http, http_code = curl_from("http://" .. tostring(DOMAIN_ALLOWED) .. "/")
+report("curl http://" .. tostring(DOMAIN_ALLOWED) .. "/ après résolution : succès attendu", ok_curl_http, "HTTP " .. tostring(http_code))
+local ok_curl_https, https_code = curl_from("https://" .. tostring(DOMAIN_ALLOWED) .. "/")
+report("curl https://" .. tostring(DOMAIN_ALLOWED) .. "/ après résolution : succès attendu", ok_curl_https, "HTTP " .. tostring(https_code))
 print("")
 print(tostring(C.bold) .. "▶ DNS refusé + ping avant/après (" .. tostring(DOMAIN_BLOCKED) .. ")" .. tostring(C.reset))
 ssh(FILTER_IP, "sudo nft flush set ip dns-filter ip4_allowed 2>/dev/null; true")
@@ -285,12 +309,14 @@ if facebook_ip then
   ok_fb_after, _ = ping_from(CLIENT_IP, facebook_ip, 2)
   report("ping " .. tostring(facebook_ip) .. " après DNS refusé (" .. tostring(CLIENT_IP) .. ") : échec attendu", not ok_fb_after, "")
 end
+local ok_curl_blk, blk_curl_code = curl_from("http://" .. tostring(DOMAIN_BLOCKED) .. "/")
+report("curl http://" .. tostring(DOMAIN_BLOCKED) .. "/ après DNS refusé : échec attendu (000)", blk_curl_code == "000", "HTTP " .. tostring(blk_curl_code))
 print("")
-print(tostring(C.bold) .. "▶ Domaine inconnu — REFUSED (" .. tostring(DOMAIN_UNKNOWN) .. ")" .. tostring(C.reset))
+print(tostring(C.bold) .. "▶ Domaine inconnu — NXDOMAIN (" .. tostring(DOMAIN_UNKNOWN) .. ")" .. tostring(C.reset))
 local unk_out
 _, unk_out = guest_exec("dig +time=5 +tries=1 " .. tostring(DOMAIN_UNKNOWN) .. " @" .. tostring(DNS_SERVER) .. " 2>&1", 15)
 local unk_str = (unk_out or ""):gsub("%s+$", "")
-report("dig " .. tostring(DOMAIN_UNKNOWN) .. " retourne REFUSED", (unk_out and unk_out:upper():match("REFUSED")) ~= nil, "dig: " .. tostring(unk_str))
+report("dig " .. tostring(DOMAIN_UNKNOWN) .. " retourne NXDOMAIN", (unk_out and unk_out:upper():match("NXDOMAIN")) ~= nil, "dig: " .. tostring(unk_str))
 print("")
 print(tostring(C.bold) .. "▶ Enregistrements AAAA → ip6_allowed (" .. tostring(DOMAIN_AAAA) .. ")" .. tostring(C.reset))
 ssh(FILTER_IP, "sudo nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
@@ -340,9 +366,9 @@ end
 print("")
 print(tostring(C.bold) .. "▶ LuaJIT filter log" .. tostring(C.reset))
 local log_allow
-_, log_allow = ssh(FILTER_IP, "sudo grep -c ALLOW /opt/custos/tmp/dns-filter.log 2>/dev/null")
+_, log_allow = ssh(FILTER_IP, "grep -c ALLOW /tmp/custos-kvm.log 2>/dev/null")
 local log_block
-_, log_block = ssh(FILTER_IP, "sudo grep -c BLOCK /opt/custos/tmp/dns-filter.log 2>/dev/null")
+_, log_block = ssh(FILTER_IP, "grep -c BLOCK /tmp/custos-kvm.log 2>/dev/null")
 report("log has allowed entries", (tonumber(log_allow or "0") or 0) > 0, "grep ALLOW count: " .. tostring(log_allow))
 report("log has blocked/refused entries", (tonumber(log_block or "0") or 0) > 0, "grep BLOCK count: " .. tostring(log_block))
 local FILTER_LAN_IP = "10.99.0.254"

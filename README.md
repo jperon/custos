@@ -530,11 +530,28 @@ sudo nft -f nft-rules/dns-filter.nft
 sudo ./setup.sh up
 ```
 
+### DHCP / SLAAC
+
+The ruleset explicitly passes bootstrap traffic that cannot be tracked by
+conntrack and must therefore bypass the `policy drop`:
+
+| Traffic | Direction | Rule |
+|---------|-----------|------|
+| DHCPv4 (UDP 67/68) | FORWARD | `udp dport { 67, 68 } accept` |
+| DHCPv4 server on filter machine | INPUT | `udp dport 67 accept` |
+| DHCPv6 (UDP 546/547) | FORWARD | `udp dport { 546, 547 } accept` |
+| DHCPv6 server on filter machine | INPUT | `udp dport 547 accept` |
+| SLAAC Router Advertisement from upstream router | FORWARD | `icmpv6 type nd-router-advert accept` |
+
+Router Advertisements **emitted by the filter machine itself** (radvd,
+WireGuard relay…) exit via the OUTPUT chain whose `policy accept` already
+covers them.
+
 ### IPv6 / ICMPv6
 
 The IPv6 FORWARD chain explicitly passes NDP messages (neighbor-solicit,
-neighbor-advert, router-solicit) and ICMPv6 echo — required when
-`br_netfilter` intercepts L2 neighbor discovery frames.
+neighbor-advert, router-solicit, router-advert) and ICMPv6 echo — required
+when `br_netfilter` intercepts L2 neighbor discovery and SLAAC frames.
 
 ---
 

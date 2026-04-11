@@ -200,7 +200,7 @@ wait_for_auth_ready = function(timeout)
   end
   log("Waiting for auth worker to be ready (auth_listening)…", "STEP")
   for i = 1, timeout do
-    local success, output = execute("docker exec " .. tostring(filter_name) .. " cat /app/tmp/dns-filter.log 2>/dev/null", true)
+    local success, output = execute("docker logs " .. tostring(filter_name) .. " 2>&1", true)
     if success and output and (output:match("auth_listening")) and (output:match("auth_secrets_loaded")) then
       log("Auth server listening with secrets loaded", "PASS")
       return true
@@ -231,7 +231,7 @@ wait_for_filter_ready = function(name, timeout)
   end
   log("Waiting for " .. tostring(name) .. " NFQUEUE workers to be ready (queue_listening)…", "STEP")
   for i = 1, timeout do
-    local success, output = execute("docker exec " .. tostring(name) .. " cat /app/tmp/dns-filter.log 2>/dev/null", true)
+    local success, output = execute("docker logs " .. tostring(name) .. " 2>&1", true)
     if success and output and output:match("queue_listening") then
       log(tostring(name) .. " workers are listening on queues", "PASS")
       return true
@@ -247,7 +247,7 @@ local compose_up
 compose_up = function()
   log("Starting docker-compose environment (profile=" .. tostring(profile) .. ")…", "STEP")
   execute("docker compose --profile ndpi4 --profile ndpi5 down 2>/dev/null || true")
-  execute("rm -f ./tmp/dns-filter.log ./tmp/sessions.lua 2>/dev/null || true")
+  execute("rm -f ./tmp/sessions.lua 2>/dev/null || true")
   local success = execute("docker compose --profile " .. tostring(profile) .. " up -d")
   if not (success) then
     log("Failed to start docker compose", "ERROR")
@@ -285,7 +285,7 @@ cleanup_host = function()
   log("Cleaning up filter nftables rules...")
   local cmd = "docker exec " .. tostring(filter_name) .. " sh -c 'nft delete table ip dns-filter 2>/dev/null; nft delete table ip6 dns-filter 2>/dev/null; true'"
   execute(cmd, true)
-  return execute("rm -f ./tmp/dns-filter.log 2>/dev/null || true")
+  return execute("rm -f ./tmp/sessions.lua 2>/dev/null || true")
 end
 local compose_down
 compose_down = function()
@@ -348,7 +348,7 @@ end
 local check_logs
 check_logs = function()
   log("Checking filter logs...")
-  local cmd = "docker exec " .. tostring(filter_name) .. " cat /app/tmp/dns-filter.log 2>/dev/null"
+  local cmd = "docker logs " .. tostring(filter_name) .. " 2>&1"
   local success, output = execute(cmd, true)
   if not success then
     log("Failed to get logs", "ERROR")
@@ -393,6 +393,17 @@ ping_from_client2 = function(ip, timeout_sec)
   local cmd = "docker exec custos-client2 ping -c1 -W" .. tostring(timeout_sec) .. " " .. tostring(ip) .. " 2>&1"
   local success, out = execute(cmd, true)
   return success, out
+end
+local curl_from_client
+curl_from_client = function(url, timeout_sec)
+  if timeout_sec == nil then
+    timeout_sec = 5
+  end
+  local cmd = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' --connect-timeout " .. tostring(timeout_sec) .. " --max-time " .. tostring(timeout_sec + 5) .. " '" .. tostring(url) .. "' 2>&1"
+  local _, code = execute(cmd, true)
+  code = (code or ""):gsub("%s+", "")
+  local ok = code ~= "" and code ~= "000"
+  return ok, code
 end
 local flush_ip4_allowed
 flush_ip4_allowed = function()
@@ -661,6 +672,17 @@ run_test("DNS query — allowed domain resolves", "nslookup " .. tostring(TEST_D
   end
   return ok, obtained
 end)
+run_test("HTTP access — domaine autorisé joignable après résolution DNS", "curl http://" .. tostring(TEST_DOMAINS.allowed) .. "/ → code HTTP reçu (≠ 000) via ip4_allowed", function()
+  flush_ip4_allowed()
+  query_dns(TEST_DOMAINS.allowed)
+  os.execute("sleep 1")
+  local ok, code = curl_from_client("http://" .. tostring(TEST_DOMAINS.allowed) .. "/")
+  return ok, "HTTP " .. tostring(code)
+end)
+run_test("HTTPS access — domaine autorisé joignable en TLS après résolution DNS", "curl -k https://" .. tostring(TEST_DOMAINS.allowed) .. "/ → code HTTP reçu (≠ 000) via ip4_allowed", function()
+  local ok, code = curl_from_client("https://" .. tostring(TEST_DOMAINS.allowed) .. "/")
+  return ok, "HTTP " .. tostring(code)
+end)
 run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TEST_DOMAINS.blocked) .. " @" .. tostring(dns_server) .. " → REFUSED ; ping avant et après FAIL", function()
   if facebook_ip then
     local p_ok, _ = ping_from_client(facebook_ip)
@@ -683,6 +705,10 @@ run_test("DNS query — blocked domain is rejected", "nslookup " .. tostring(TES
     end
   end
   return ok, obtained
+end)
+run_test("HTTP access — domaine bloqué inaccessible (DNS REFUSED → pas de résolution)", "curl http://" .. tostring(TEST_DOMAINS.blocked) .. "/ → 000 (DNS refusé, résolution impossible)", function()
+  local _, code = curl_from_client("http://" .. tostring(TEST_DOMAINS.blocked) .. "/")
+  return code == "000", "HTTP " .. tostring(code)
 end)
 run_test("DNS query — nonexistent domain returns NXDOMAIN", "nslookup " .. tostring(TEST_DOMAINS.nonexistent) .. " @" .. tostring(dns_server) .. " → NXDOMAIN or can't find", function()
   local success, output = query_dns(TEST_DOMAINS.nonexistent)
@@ -822,7 +848,7 @@ run_test("DNS over TCP segmented — 2-segment reassembly + TTL patched", "LuaJI
   return success, obtained
 end)
 run_test("IPv6 + Hop-by-Hop DNS — filter parses extension header via FORWARD (af=ipv6)", "LuaJIT SOCK_DGRAM+IPV6_HOPOPTS: send HbH DNS to " .. tostring(dns6_server) .. " via FORWARD → filter log shows af=ipv6 + qname", function()
-  local _, log_before = execute("docker exec " .. tostring(filter_name) .. " cat /app/tmp/dns-filter.log 2>/dev/null | wc -l", true)
+  local _, log_before = execute("docker logs " .. tostring(filter_name) .. " 2>&1 | wc -l", true)
   local lines_before = tonumber((log_before or "0"))
   local ok, script_out = query_dns_ipv6_hbh(TEST_DOMAINS.allowed)
   local sent = ok and (script_out and script_out:match("sent_ok=1")) ~= nil
@@ -832,7 +858,7 @@ run_test("IPv6 + Hop-by-Hop DNS — filter parses extension header via FORWARD (
   end
   os.execute("sleep 1")
   local log_out
-  _, log_out = execute("docker exec " .. tostring(filter_name) .. " cat /app/tmp/dns-filter.log 2>/dev/null", true)
+  _, log_out = execute("docker logs " .. tostring(filter_name) .. " 2>&1", true)
   local has_ipv6 = log_out ~= nil and (log_out:match("af=ipv6")) ~= nil
   local has_qname = log_out ~= nil and (log_out:match("qname=" .. tostring(TEST_DOMAINS.allowed:gsub('%.', '%%.')))) ~= nil
   local rcode_str = script_out and script_out:match("rcode=(%d+)")
@@ -1023,7 +1049,7 @@ end)
 print("")
 print(tostring(C.bold) .. "▶ SIGHUP — rechargement des secrets" .. tostring(C.reset))
 run_test("SIGHUP — rechargement des secrets à chaud", "modifier cfg/secrets + SIGHUP → ancien MdP rejeté, nouveau MdP accepté", function()
-  local ok_pid, pid_out = execute("docker exec " .. tostring(filter_name) .. " sh -c \"grep 'action=worker_started' /app/tmp/dns-filter.log | grep 'name=AUTH' | grep -o 'pid=[0-9]*' | tail -1 | cut -d= -f2\"", true)
+  local ok_pid, pid_out = execute("docker logs " .. tostring(filter_name) .. " 2>&1 | grep 'action=worker_started' | grep 'name=AUTH' | grep -o 'pid=[0-9]*' | tail -1 | cut -d= -f2", true)
   local auth_pid = (pid_out or ""):gsub("%s+", "")
   if not (auth_pid ~= "" and auth_pid:match("^%d+$")) then
     return false, "impossible de trouver le PID du worker auth (log: '" .. tostring(pid_out) .. "')"

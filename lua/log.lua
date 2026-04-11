@@ -3,20 +3,8 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
-local LOG_PATH
-LOG_PATH = require("config").LOG_PATH
 local bit = require("bit")
-local O_WRONLY = 1
-local O_CREAT = 64
-local O_APPEND = 1024
-local S_IRUSR = 256
-local S_IWUSR = 128
-local S_IRGRP = 32
-local S_IROTH = 4
-local log_fd = libc.open(LOG_PATH, bit.bor(O_WRONLY, O_CREAT, O_APPEND), bit.bor(S_IRUSR, S_IWUSR, S_IRGRP, S_IROTH))
-if log_fd < 0 then
-  error("Impossible d'ouvrir " .. tostring(LOG_PATH))
-end
+local STDOUT_FILENO = 1
 local ts = ffi.new("timespec_t")
 local now
 now = function()
@@ -41,7 +29,7 @@ write_log = function(level, fields)
     end
   end
   local line = table.concat(parts, " ") .. "\n"
-  return libc.write(log_fd, line, #line)
+  return libc.write(STDOUT_FILENO, line, #line)
 end
 local log_allow
 log_allow = function(fields)

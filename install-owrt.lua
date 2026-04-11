@@ -155,7 +155,6 @@ build_local = function(cfg)
       "allowlist",
       "nft",
       "nfq_loop",
-      "refuse",
       "worker_q0",
       "worker_q1",
       "main"
@@ -367,7 +366,7 @@ start_service() {
 
     procd_open_instance
     procd_set_param command $PROG $CUSTOS_DIR/main.lua
-    procd_set_param env LUA_PATH="/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
+    procd_set_param env LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;;"
     procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
     procd_set_param stdout 1
     procd_set_param stderr 1

@@ -2,7 +2,6 @@ local UCI_PKG = "custos"
 local UCI_SEC = "main"
 local OUTPUT_DIR = "/var/run/custos"
 local DEFAULTS = {
-  log_path = "/var/log/custos.log",
   forced_ttl = 60,
   nft_ip_timeout = "2m",
   ipc_pending_ttl = 5,
@@ -62,17 +61,6 @@ validate_nft_timeout = function(raw, default)
   io.stderr:write("uci_config: nft_ip_timeout invalide '" .. tostring(raw) .. "', utilise '" .. tostring(default) .. "'\n")
   return default
 end
-local validate_path
-validate_path = function(raw, default)
-  if not (raw) then
-    return default
-  end
-  if raw:match("[;`$|<>&!]" or raw:match("%.%.")) then
-    io.stderr:write("uci_config: log_path suspect '" .. tostring(raw) .. "', utilise '" .. tostring(default) .. "'\n")
-    return default
-  end
-  return raw
-end
 local validate_domain
 validate_domain = function(d)
   if not (d and #d > 0 and #d <= 253) then
@@ -96,7 +84,6 @@ generate_config = function(cfg)
     "local QUEUE_QUESTIONS        = 0",
     "local QUEUE_RESPONSES        = 1",
     'local DOCKER_MODE            = os.getenv("DOCKER_MODE") == "1"',
-    string.format('local LOG_PATH               = "%s"', escape_lua_str(cfg.log_path)),
     string.format("local FORCED_TTL             = %d", cfg.forced_ttl),
     string.format('local NFT_IP_TIMEOUT         = "%s"', cfg.nft_ip_timeout),
     string.format("local IPC_PENDING_TTL        = %d", cfg.ipc_pending_ttl),
@@ -125,7 +112,6 @@ generate_config = function(cfg)
     "QUEUE_QUESTIONS",
     "QUEUE_RESPONSES",
     "DOCKER_MODE",
-    "LOG_PATH",
     "ALLOWED_DOMAINS",
     "NFT_TABLE",
     "NFT_SET_IP4",
@@ -163,7 +149,6 @@ main = function()
     domains = DEFAULTS.allowed_domains
   end
   local cfg = {
-    log_path = validate_path(uci_get("log_path"), DEFAULTS.log_path),
     forced_ttl = validate_posint(uci_get("forced_ttl"), DEFAULTS.forced_ttl),
     nft_ip_timeout = validate_nft_timeout(uci_get("nft_ip_timeout"), DEFAULTS.nft_ip_timeout),
     ipc_pending_ttl = validate_posint(uci_get("ipc_pending_ttl"), DEFAULTS.ipc_pending_ttl),
