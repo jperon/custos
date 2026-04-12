@@ -43,8 +43,11 @@ AUTH_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(AUTH_MOONS))
 
 .PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 test-kvm test-kvm-up test-kvm-run test-kvm-down run reload update-lists make-secret logs help
 
-all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS)
+all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
+
+install-owrt.lua: install-owrt.moon
+	$(MOONC) -o $@ $<
 
 $(LUA)/parse:
 	mkdir -p $(LUA)/parse

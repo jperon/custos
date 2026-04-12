@@ -360,7 +360,7 @@ CUSTOS_DIR=]] .. self.cfg.dest .. "\n" .. [[start_service() {
 
     procd_open_instance
     procd_set_param command $PROG $CUSTOS_DIR/main.lua
-    procd_set_param env LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;;"
+    procd_set_param env LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;;" CUSTOS_FILTER_CONFIG="/etc/custos/filter.yml"
     procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -414,6 +414,43 @@ service_triggers() {
         return false
       end
       ok("Service installé et activé au démarrage")
+      return true
+    end,
+    install_etc_custos = function(self)
+      step("Configuration /etc/custos/")
+      self:ssh_run("mkdir -p /etc/custos")
+      local _list_0 = {
+        {
+          src = "cfg/filter.yml",
+          dst = "/etc/custos/filter.yml"
+        },
+        {
+          src = "cfg/secrets",
+          dst = "/etc/custos/secrets"
+        }
+      }
+      for _index_0 = 1, #_list_0 do
+        local _continue_0 = false
+        repeat
+          local entry = _list_0[_index_0]
+          local exists = self:ssh_capture("[ -f " .. tostring(entry.dst) .. " ] && echo yes || echo no")
+          if exists and exists:find("yes") then
+            warn(tostring(entry.dst) .. " existe deja -- fichier preserve")
+            _continue_0 = true
+            break
+          end
+          if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(entry.src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":" .. tostring(entry.dst))) then
+            fail("Echec de la copie de " .. tostring(entry.dst))
+            return false
+          end
+          self:ssh_run("chmod 600 " .. tostring(entry.dst))
+          ok(tostring(entry.dst) .. " installe")
+          _continue_0 = true
+        until true
+        if not _continue_0 then
+          break
+        end
+      end
       return true
     end,
     install_uci_config = function(self)
@@ -685,6 +722,12 @@ main = function()
       name = "service init.d",
       fn = function()
         return inst:install_initd()
+      end
+    },
+    {
+      name = "/etc/custos/",
+      fn = function()
+        return inst:install_etc_custos()
       end
     },
     {
