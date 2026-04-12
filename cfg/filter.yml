@@ -1,127 +1,127 @@
-# cfg/filter.yml — configuration du filtre DNS custos
+# cfg/filter.yml - configuration du filtre DNS custos
 #
-# Syntaxe YAML identique à shelterfilter-lua/cfg/shelterfilter.yml.sample.
-# Rechargeable à chaud via SIGHUP (filter.reload()).
+# Syntaxe YAML identique a shelterfilter-lua/cfg/shelterfilter.yml.sample.
+# Rechargeable a chaud via SIGHUP (filter.reload()).
 #
-# ── Sections ───────────────────────────────────────────────────────────────
+# -- Sections ---------------------------------------------------------------
 #
-# domainlists_dir : répertoire racine des listes de domaines précompilées.
-#            Les conditions to_domainlist / to_domainlists référencent des
-#            chemins relatifs à ce répertoire, sans extension :
-#            ex. "toulouse/malware" → <domainlists_dir>/toulouse/malware.bin
+# domainlists_dir : repertoire racine des listes de domaines precompilees.
+#            Les conditions to_domainlist / to_domainlists referencent des
+#            chemins relatifs a ce repertoire, sans extension :
+#            ex. "toulouse/malware" -> <domainlists_dir>/toulouse/malware.bin
 #
-# nets     : nom → liste de CIDR IPv4/IPv6
-#            Utilisé dans les conditions from_netlist / from_netlists.
+# nets     : nom -> liste de CIDR IPv4/IPv6
+#            Utilise dans les conditions from_netlist / from_netlists.
 #
-# macs     : nom → liste d'adresses MAC
-#            Utilisé dans les conditions from_maclist / from_maclists.
+# macs     : nom -> liste d'adresses MAC
+#            Utilise dans les conditions from_maclist / from_maclists.
 #
-# times    : nom → [HH:MM, HH:MM] (début, fin)
-#            Utilisé dans les conditions in_time / in_times.
+# times    : nom -> [HH:MM, HH:MM] (debut, fin)
+#            Utilise dans les conditions in_time / in_times.
 #
-# sources  : nom → { url(s), format, subdir|output }
-#            Utilisé par filter/updater.moon pour télécharger et compiler les listes.
-#            subdir : sous-dossier dans domainlists_dir (un .bin par catégorie)
+# sources  : nom -> { url(s), format, subdir|output }
+#            Utilise par filter/updater.moon pour telecharger et compiler les listes.
+#            subdir : sous-dossier dans domainlists_dir (un .bin par categorie)
 #            output : chemin absolu vers un fichier .bin unique (fusion)
 #
-# rules    : tableau ordonné de règles, premier verdict gagnant.
-#            Chaque règle : description, actions, conditions (optionnel), log (optionnel).
+# rules    : tableau ordonne de regles, premier verdict gagnant.
+#            Chaque regle : description, actions, conditions (optionnel), log (optionnel).
 #
-# ── Conditions disponibles ─────────────────────────────────────────────────
+# -- Conditions disponibles -------------------------------------------------
 #   to_domain        string        correspondance exacte ou suffixe
 #   to_domains       [string]      idem, plusieurs domaines (OR)
-#   to_domainlist    string        appartenance à une liste (chemin relatif à domainlists_dir)
+#   to_domainlist    string        appartenance a une liste (chemin relatif a domainlists_dir)
 #   to_domainlists   [string]      idem, plusieurs listes (OR)
 #   from_mac         string        adresse MAC source
 #   from_macs        [string]      idem, plusieurs MACs inline (OR)
-#   from_maclist     string        MAC source dans un groupe nommé (clé depuis macs)
+#   from_maclist     string        MAC source dans un groupe nomme (cle depuis macs)
 #   from_maclists    [string]      idem, plusieurs groupes (OR)
 #   from_net         string        IP source dans un CIDR
 #   from_nets        [string]      idem, plusieurs CIDRs inline (OR)
-#   from_netlist     string        IP source dans une netlist nommée (clé depuis nets)
+#   from_netlist     string        IP source dans une netlist nommee (cle depuis nets)
 #   from_netlists    [string]      idem, plusieurs netlists (OR)
-#   in_time          string        dans une fenêtre horaire nommée (clé depuis times)
-#   in_times         [string]      idem, plusieurs fenêtres (OR)
+#   in_time          string        dans une fenetre horaire nommee (cle depuis times)
+#   in_times         [string]      idem, plusieurs fenetres (OR)
 #   stolen_computer  [string]      MAC source dans une liste noire
-#   from_user        string        utilisateur authentifié (session active dans auth.sessions_file)
+#   from_user        string        utilisateur authentifie (session active dans auth.sessions_file)
 #
-# ── Actions disponibles ────────────────────────────────────────────────────
+# -- Actions disponibles ----------------------------------------------------
 #   allow   autoriser
 #   deny    bloquer
 #   mail    notification e-mail (futur)
 #
-# ── Section auth ──────────────────────────────────────────────────────────────────
+# -- Section auth ------------------------------------------------------------------
 #
-# Contrôle le serveur HTTPS d'authentification (worker AUTH, port 33443 par défaut)
-# et le portail captif HTTP (port 33080 par défaut).
-# Dès que cette section est présente, le portail captif est activé :
-# nft DNAT redirige HTTP (80→33080) et HTTPS (443→33443) des clients non authentifiés.
+# Controle le serveur HTTPS d'authentification (worker AUTH, port 33443 par defaut)
+# et le portail captif HTTP (port 33080 par defaut).
+# Des que cette section est presente, le portail captif est active :
+# nft DNAT redirige HTTP (80->33080) et HTTPS (443->33443) des clients non authentifies.
 #
-#   host         : adresse d'écoute ("::" = dual-stack IPv4+IPv6, défaut)
-#   port         : port HTTPS du serveur d'authentification (défaut : 33443)
-#   captive_port : port HTTP du portail captif (défaut : 33080 ; 0 = désactivé)
-#   cert         : chemin du certificat PEM (défaut : ./tmp/auth.crt, auto-généré)
-#   key          : chemin de la clé privée PEM (défaut : ./tmp/auth.key, auto-générée)
-#   secrets      : chemin du fichier de mots de passe (défaut : cfg/secrets)
+#   host         : adresse d'ecoute ("::" = dual-stack IPv4+IPv6, defaut)
+#   port         : port HTTPS du serveur d'authentification (defaut : 33443)
+#   captive_port : port HTTP du portail captif (defaut : 33080 ; 0 = desactive)
+#   cert         : chemin du certificat PEM (defaut : ./tmp/auth.crt, auto-genere)
+#   key          : chemin de la cle privee PEM (defaut : ./tmp/auth.key, auto-generee)
+#   secrets      : chemin du fichier de mots de passe (defaut : cfg/secrets)
 #                  Format : user:pbkdf2-sha256:<iter>:<salt_hex>:<hash_hex>
-#                  Générer : make make-secret USER=alice PASS=motdepasse >> cfg/secrets
-#   session_ttl       : durée de vie maximale d'une session (secondes, défaut : 86400 = 24h)
-#   sessions_file     : chemin du fichier de sessions partagé avec la condition from_user
-#                       (défaut : ./tmp/sessions.lua)
-#   heartbeat_interval: intervalle de ping JS en secondes (défaut : 30)
-#                       La page de succès envoie un GET /ping toutes les N secondes.
-#   idle_timeout      : délai d'inactivité avant expiration de session (secondes, défaut : 120)
-#                       La session est révoquée si aucun ping n'est reçu dans ce délai.
-#                       Mettre à 0 pour désactiver le heartbeat (expiration uniquement via session_ttl).
+#                  Generer : make make-secret USER=alice PASS=motdepasse >> cfg/secrets
+#   session_ttl       : duree de vie maximale d'une session (secondes, defaut : 86400 = 24h)
+#   sessions_file     : chemin du fichier de sessions partage avec la condition from_user
+#                       (defaut : ./tmp/sessions.lua)
+#   heartbeat_interval: intervalle de ping JS en secondes (defaut : 30)
+#                       La page de succes envoie un GET /ping toutes les N secondes.
+#   idle_timeout      : delai d'inactivite avant expiration de session (secondes, defaut : 120)
+#                       La session est revoquee si aucun ping n'est recu dans ce delai.
+#                       Mettre a 0 pour desactiver le heartbeat (expiration uniquement via session_ttl).
 #
-# users  : nom → adresse e-mail (pour l'action mail, futur)
+# users  : nom -> adresse e-mail (pour l'action mail, futur)
 
-# Répertoire racine des listes de domaines précompilées.
-# Exécuter make update-lists pour construire les listes avant de démarrer.
+# Repertoire racine des listes de domaines precompilees.
+# Executer make update-lists pour construire les listes avant de demarrer.
 domainlists_dir: /etc/custos/lists
 
 # Serveur d'authentification HTTPS + portail captif
-# Toutes les clés sont facultatives (valeurs par défaut ci-dessous).
+# Toutes les cles sont facultatives (valeurs par defaut ci-dessous).
 auth:
   idle_timeout: 10                  # expiration si inactif 10 s (court pour les tests e2e)
   heartbeat_interval: 5             # ping JS toutes les 5 s
   register_rate_limit: 100          # pour les tests e2e
   register_rate_window: 60
-  # Le compte est persisté dans cfg/secrets. Les droits dépendent des règles
-  # filter.yml (from_user). Sans règle from_user, l'utilisateur n'a accès
+  # Le compte est persiste dans cfg/secrets. Les droits dependent des regles
+  # filter.yml (from_user). Sans regle from_user, l'utilisateur n'a acces
   # qu'au set authenticated_ips (bypass portail captif).
-  # Rate-limiting : register_rate_limit (tentatives par IP, défaut 3)
-  #               register_rate_window (fenêtre en secondes, défaut 300)
+  # Rate-limiting : register_rate_limit (tentatives par IP, defaut 3)
+  #               register_rate_window (fenetre en secondes, defaut 300)
 
-# Utilisateurs (nom → email, pour l'action mail)
+# Utilisateurs (nom -> email, pour l'action mail)
 #users:
 #  alice: alice@example.com
 
-# Sous-réseaux CIDR nommés
+# Sous-reseaux CIDR nommes
 nets:
   lan:
   - 10.0.0.0/8
   - 172.16.0.0/12
   - 192.168.0.0/16
 
-# Groupes d'adresses MAC nommés
+# Groupes d'adresses MAC nommes
 #macs:
 #  trusted:
 #  - aa:bb:cc:dd:ee:ff
 #  - 11:22:33:44:55:66
 
-# Fenêtres horaires [HH:MM, HH:MM]
+# Fenetres horaires [HH:MM, HH:MM]
 times: {}
 #  business: ["8:00", "18:00"]
 
-# Sources pour filter/updater.moon (téléchargement automatique)
-# Exécuter : luajit lua/filter/updater.lua [--pid /run/custos.pid]
+# Sources pour filter/updater.moon (telechargement automatique)
+# Executer : luajit lua/filter/updater.lua [--pid /run/custos.pid]
 sources:
   toulouse:
     url: https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz
     format: toulouse
-    # Toutes les catégories sont extraites (categories absent = tout).
-    # Chaque catégorie produit un fichier .bin distinct dans domainlists_dir/subdir.
+    # Toutes les categories sont extraites (categories absent = tout).
+    # Chaque categorie produit un fichier .bin distinct dans domainlists_dir/subdir.
     subdir: toulouse
 #  ads:
 #    urls:
@@ -134,13 +134,13 @@ sources:
 #    format: simple
 #    output: /etc/custos/lists/tracking.bin
 
-# Règles ordonnées : premier verdict gagnant.
+# Regles ordonnees : premier verdict gagnant.
 rules:
-- description: Blocage des catégories indésirables (UT Capitole Toulouse)
+- description: Blocage des categories indesirables (UT Capitole Toulouse)
   actions: [deny]
   conditions:
     to_domainlists:
-    # Sécurité
+    # Securite
     - toulouse/malware
     - toulouse/phishing
     - toulouse/ddos
@@ -148,7 +148,7 @@ rules:
     - toulouse/cryptojacking
     - toulouse/redirector
     - toulouse/strong_redirector
-    # Contenus illégaux / indésirables
+    # Contenus illegaux / indesirables
     - toulouse/warez
     - toulouse/drugs
     - toulouse/gambling
@@ -156,16 +156,16 @@ rules:
     - toulouse/adult
     - toulouse/mixed_adult
     - toulouse/lingerie
-    # Publicité / tracking
+    # Publicite / tracking
     - toulouse/publicite
     - toulouse/marketingware
 
-- description: Infrastructure réseau toujours autorisée
+- description: Infrastructure reseau toujours autorisee
   actions: [allow]
   conditions:
     to_domains: [local, lan, home.arpa]
 
-- description: Outils de développement
+- description: Outils de developpement
   actions: [allow]
   conditions:
     to_domains:
@@ -181,23 +181,23 @@ rules:
     - akamaiedge.net
     - example.com
 
-- description: Test — domaine restreint aux utilisateurs authentifiés
+- description: Test - domaine restreint aux utilisateurs authentifies
   actions: [allow]
   conditions:
     from_user: testuser
     to_domain: auth-required.test
 
-- description: Test — domaine auth-required.test refusé sans authentification
+- description: Test - domaine auth-required.test refuse sans authentification
   actions: [deny]
   conditions:
     to_domain: auth-required.test
 
-# Exemple de blocage explicite d'un domaine — utilisé aussi par les tests e2e
-# (make test-docker / make test-kvm) pour vérifier le comportement "REFUSED".
-- description: Exemple — blocage explicite de facebook.com
+# Exemple de blocage explicite d'un domaine - utilise aussi par les tests e2e
+# (make test-docker / make test-kvm) pour verifier le comportement "REFUSED".
+- description: Exemple - blocage explicite de facebook.com
   actions: [deny]
   conditions:
     to_domain: facebook.com
 
-- description: Autorisation par défaut
+- description: Autorisation par defaut
   actions: [allow]
