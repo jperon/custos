@@ -95,7 +95,7 @@ local supervise
 supervise = function(pipe, sfd)
   local load_config
   load_config = require("filter.lib.load_config").load_config
-  local filter_cfg, cfg_err = load_config("cfg/filter.yml")
+  local filter_cfg, cfg_err = load_config(os.getenv("CUSTOS_FILTER_CONFIG") or "cfg/filter.yml")
   if not filter_cfg then
     log_warn({
       action = "auth_cfg_load_warning",

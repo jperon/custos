@@ -16,7 +16,7 @@ do
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
 local rules
-local config_path = "cfg/filter.yml"
+local config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "cfg/filter.yml"
 local set_config_path
 set_config_path = function(path)
   config_path = path

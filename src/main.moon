@@ -119,7 +119,7 @@ supervise = (pipe, sfd) ->
   -- On utilise load_config ici (dans le parent, avant fork) pour que
   -- le worker auth dispose de la section auth dès le démarrage.
   { :load_config } = require "filter.lib.load_config"
-  filter_cfg, cfg_err = load_config "cfg/filter.yml"
+  filter_cfg, cfg_err = load_config os.getenv("CUSTOS_FILTER_CONFIG") or "cfg/filter.yml"
   if not filter_cfg
     log_warn { action: "auth_cfg_load_warning", err: cfg_err }
     filter_cfg = { auth: {} }

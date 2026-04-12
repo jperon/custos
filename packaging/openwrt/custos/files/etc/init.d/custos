@@ -10,6 +10,12 @@ FILTER_CONFIG=/etc/custos/filter.yml
 CRONTABS_ROOT=/etc/crontabs/root
 CUSTOS_CRON_MARKER="# custos-update-lists"
 
+# Configuration nftables
+NFT_RULES_FILE="$CUSTOS_DIR/dns-filter.nft"
+NFT_TEMP_FILE="/tmp/custos-dns-filter.nft"
+CUSTOS_LAN4=$(uci get custos.main.lan4 2>/dev/null || echo "192.168.1.0/24")
+CUSTOS_LAN6=$(uci get custos.main.lan6 2>/dev/null || echo "fd00::/64")
+
 start_service() {
     [ "$(uci get custos.main.enabled 2>/dev/null)" = "0" ] && return 0
     [ -z "$PROG" ] && { echo "custos: luajit introuvable"; return 1; }
@@ -23,9 +29,14 @@ start_service() {
     "$PROG" "$CUSTOS_DIR/uci_config.lua" || \
         echo "custos: avertissement — génération config UCI échouée, utilise les défauts compilés"
 
+    # Applique les règles nftables avant de démarrer le service principal
+    if ! _apply_nft_rules; then
+        echo "custos: avertissement — échec de l'application des règles nftables, démarrage en mode dégradé"
+    fi
+
     procd_open_instance
     procd_set_param command "$PROG" "$CUSTOS_DIR/main.lua"
-    procd_set_param env LUA_PATH="/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
+    procd_set_param env LUA_PATH="/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" CUSTOS_FILTER_CONFIG="$FILTER_CONFIG"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -40,6 +51,10 @@ start_service() {
 }
 
 stop_service() {
+    # Nettoyer les règles nftables avant d'arrêter le service
+    _cleanup_nft_rules
+    
+    # Supprimer le cron pour les mises à jour de listes
     _cron_remove
 }
 
@@ -93,4 +108,47 @@ _cron_remove() {
     [ -f "$CRONTABS_ROOT" ] || return 0
     sed -i "/$CUSTOS_CRON_MARKER/d" "$CRONTABS_ROOT"
     /etc/init.d/cron reload 2>/dev/null || true
+}
+
+# ── Gestion des règles nftables ───────────────────────────────────────
+
+# Applique les règles nftables de dns-filter.nft
+_apply_nft_rules() {
+    [ ! -f "$NFT_RULES_FILE" ] && {
+        echo "custos: fichier de règles nftables introuvable: $NFT_RULES_FILE"
+        return 1
+    }
+
+    echo "custos: application des règles nftables..."
+    
+    # Crée un fichier temporaire avec les substitutions appropriées
+    sed \
+        -e "s|192\.168\.1\.0/24|$CUSTOS_LAN4|g" \
+        -e "s|fd00::/64|$CUSTOS_LAN6|g" \
+        "$NFT_RULES_FILE" > "$NFT_TEMP_FILE"
+
+    # Applique les règles nftables
+    if nft -f "$NFT_TEMP_FILE"; then
+        echo "custos: règles nftables appliquées avec succès"
+        rm -f "$NFT_TEMP_FILE"
+        return 0
+    else
+        echo "custos: échec de l'application des règles nftables"
+        rm -f "$NFT_TEMP_FILE"
+        return 1
+    fi
+}
+
+# Nettoie les règles nftables appliquées par le service
+_cleanup_nft_rules() {
+    echo "custos: nettoyage des règles nftables..."
+    
+    # Supprime les tables IPv4 et IPv6 si elles existent
+    nft delete table ip dns-filter 2>/dev/null || true
+    nft delete table ip6 dns-filter 2>/dev/null || true
+    
+    # Supprime le fichier temporaire s'il existe
+    [ -f "$NFT_TEMP_FILE" ] && rm -f "$NFT_TEMP_FILE" || true
+    
+    echo "custos: règles nftables nettoyées"
 }

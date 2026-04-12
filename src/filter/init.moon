@@ -19,7 +19,7 @@
 { :log_info, :log_warn } = require "log"
 
 local rules
-config_path = "cfg/filter.yml"
+config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "cfg/filter.yml"
 
 -- ── Chemin de configuration ───────────────────────────────────────
 --- Modifie le chemin vers le fichier de configuration YAML.
