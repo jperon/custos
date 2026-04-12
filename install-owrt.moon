@@ -316,7 +316,7 @@ start_service() {
 
     procd_open_instance
     procd_set_param command $PROG $CUSTOS_DIR/main.lua
-    procd_set_param env LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;;"
+    procd_set_param env LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;;" CUSTOS_FILTER_CONFIG="/etc/custos/filter.yml"
     procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -368,6 +368,24 @@ service_triggers() {
         fail "Échec activation du service"
         return false
       ok "Service installé et activé au démarrage"
+      true
+
+    -- Installe /etc/custos/filter.yml et /etc/custos/secrets (preserve si existants).
+    install_etc_custos: =>
+      step "Configuration /etc/custos/"
+      @ssh_run "mkdir -p /etc/custos"
+
+      for entry in *{ { src: "cfg/filter.yml", dst: "/etc/custos/filter.yml" },
+                      { src: "cfg/secrets",    dst: "/etc/custos/secrets"    } }
+        exists = @ssh_capture "[ -f #{entry.dst} ] && echo yes || echo no"
+        if exists and exists\find "yes"
+          warn "#{entry.dst} existe deja -- fichier preserve"
+          continue
+        unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{entry.src} #{@cfg.user}@#{@ssh_host!}:#{entry.dst}"
+          fail "Echec de la copie de #{entry.dst}"
+          return false
+        @ssh_run "chmod 600 #{entry.dst}"
+        ok "#{entry.dst} installe"
       true
 
     -- Installe /etc/config/custos si absent (préserve la config existante).
@@ -604,6 +622,7 @@ main = ->
     { name: "br_netfilter",      fn: -> inst\enable_br_netfilter! }
     { name: "règles nft",        fn: -> inst\apply_nft_rules!     }
     { name: "service init.d",    fn: -> inst\install_initd!       }
+    { name: "/etc/custos/",      fn: -> inst\install_etc_custos!  }
     { name: "config UCI",        fn: -> inst\install_uci_config!  }
     { name: "démarrage service", fn: -> inst\start_service!       }
     { name: "santé",             fn: -> inst\health_check!        }

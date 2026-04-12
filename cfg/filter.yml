@@ -87,7 +87,8 @@ auth:
   heartbeat_interval: 5             # ping JS toutes les 5 s
   register_rate_limit: 100          # pour les tests e2e
   register_rate_window: 60
-  # Le compte est persiste dans cfg/secrets. Les droits dependent des regles
+  secrets: /etc/custos/secrets
+  # Le compte est persiste dans /etc/custos/secrets. Les droits dependent des regles
   # filter.yml (from_user). Sans regle from_user, l'utilisateur n'a acces
   # qu'au set authenticated_ips (bypass portail captif).
   # Rate-limiting : register_rate_limit (tentatives par IP, defaut 3)
