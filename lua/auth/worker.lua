@@ -97,7 +97,7 @@ run_auth_worker = function(auth_cfg)
       })
     end
   end
-  return run(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs)
+  return run(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path)
 end
 return {
   run_auth_worker = run_auth_worker

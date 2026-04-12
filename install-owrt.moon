@@ -38,40 +38,47 @@ Installer = (cfg) ->
     cfg: cfg
 
     -- Utilitaires locaux
-    have_cmd = (cmd) =>
+    have_cmd: (cmd) =>
       fh = io.popen "command -v #{cmd} 2>/dev/null"
       return false unless fh
       out = fh\read "*l"
       fh\close!
       out ~= nil and out ~= ""
 
-    run = (cmd) =>
+    run: (cmd) =>
       if @cfg.dry
         io.write "  #{CYAN}DRY#{NC} #{cmd}\n"
         return true
       code = os.execute cmd
       code == 0 or code == true
 
-    capture = (cmd) =>
+    capture: (cmd) =>
       fh = io.popen "#{cmd} 2>&1"
       return nil unless fh
       out = fh\read "*a"
       fh\close!
       out
 
+    -- Retourne le host entre crochets si IPv6 littéral (contient ':'), sinon tel quel.
+    ssh_host: =>
+      if @cfg.host\find ":"
+        "[#{@cfg.host}]"
+      else
+        @cfg.host
+
     -- Utilitaires SSH / SCP
-    ssh_prefix = =>
-      "ssh -p #{@cfg.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 #{@cfg.user}@#{@cfg.ip}"
+    ssh_prefix: =>
+      "ssh -p #{@cfg.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 #{@cfg.user}@#{@ssh_host!}"
 
-    ssh_run = (cmd) =>
+    ssh_run: (cmd) =>
       escaped = cmd\gsub("'", "'\"'\"'")
-      @run "#{ @ssh_prefix } '#{escaped}'"
+      @run "#{ @ssh_prefix! } '#{escaped}'"
 
-    ssh_capture = (cmd) =>
+    ssh_capture: (cmd) =>
       escaped = cmd\gsub("'", "'\"'\"'")
-      @capture "#{ @ssh_prefix } '#{escaped}'"
+      @capture "#{ @ssh_prefix! } '#{escaped}'"
 
-    ssh_run_script = (name, content) =>
+    ssh_run_script: (name, content) =>
       tmplocal = "tmp/owrt-#{name}.sh"
       unless @cfg.dry
         os.execute "mkdir -p tmp"
@@ -84,16 +91,16 @@ Installer = (cfg) ->
       else
         io.write "  #{CYAN}DRY#{NC} write #{tmplocal}\n"
 
-      ok_scp = @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@cfg.ip}:/tmp/#{name}.sh"
+      ok_scp = @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/tmp/#{name}.sh"
       return false unless ok_scp
       @ssh_run "sh /tmp/#{name}.sh && rm -f /tmp/#{name}.sh"
 
-    scp_send = (src, dst) =>
-      @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -r #{src} #{@cfg.user}@#{@cfg.ip}:#{dst}"
+    scp_send: (src, dst) =>
+      @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -r #{src} #{@cfg.user}@#{@ssh_host!}:#{dst}"
 
     -- ── Étapes d'installation ────────────────────────────────────────
 
-    check_local_deps = =>
+    check_local_deps: =>
       step "Vérification des dépendances locales"
       ok_all = true
       for cmd in *{"ssh", "scp", "tar"}
@@ -113,7 +120,7 @@ Installer = (cfg) ->
           ok_all = false
       ok_all
 
-    build_local = =>
+    build_local: =>
       step "Compilation MoonScript → Lua"
       if @cfg.no_build
         warn "--no-build : compilation ignorée (lua/ doit déjà être à jour)"
@@ -142,8 +149,8 @@ Installer = (cfg) ->
             ok_all = false
         ok_all
 
-    check_connectivity = =>
-      step "Vérification de la connectivité SSH (#{@cfg.user}@#{@cfg.ip}:#{@cfg.port})"
+    check_connectivity: =>
+      step "Vérification de la connectivité SSH (#{@cfg.user}@#{@cfg.host}:#{@cfg.port})"
       out = @ssh_capture "uname -a"
       if out and out\find "Linux"
         ok "Connecté : #{out\match '%S+%s+%S+%s+(%S+)'}"
@@ -151,7 +158,7 @@ Installer = (cfg) ->
       fail "Impossible de joindre le routeur — vérifier ip/port/clé SSH"
       false
 
-    detect_pkg_manager = =>
+    detect_pkg_manager: =>
       step "Détection du gestionnaire de paquets"
       out_apk  = @ssh_capture "command -v apk  2>/dev/null"
       out_opkg = @ssh_capture "command -v opkg 2>/dev/null"
@@ -167,7 +174,7 @@ Installer = (cfg) ->
         return false
       true
 
-    install_pkg_deps = =>
+    install_pkg_deps: =>
       pm = @cfg.pkg_mgr
       step "Installation des paquets (#{pm})"
       info "Mise à jour des listes #{pm}..."
@@ -212,7 +219,7 @@ Installer = (cfg) ->
           warn "  Sans libndpi, le filtre ne démarrera pas (dépendance ffi.load)"
       ok_all
 
-    upload_files = =>
+    upload_files: =>
       step "Copie des fichiers vers #{@cfg.dest}"
       info "  Compression de lua/..."
       archive = "tmp/custos-lua.tar.gz"
@@ -225,7 +232,7 @@ Installer = (cfg) ->
         return false
 
       info "  Envoi de l'archive → /tmp/"
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{archive} #{@cfg.user}@#{@cfg.ip}:/tmp/custos-lua.tar.gz"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{archive} #{@cfg.user}@#{@ssh_host!}:/tmp/custos-lua.tar.gz"
         fail "Échec du transfert de l'archive"
         return false
 
@@ -242,7 +249,7 @@ Installer = (cfg) ->
       ok "Fichiers copiés"
       true
 
-    apply_nft_rules = =>
+    apply_nft_rules: =>
       step "Application des règles nftables"
       script = [[
 #!/bin/sh
@@ -263,7 +270,7 @@ nft -f "$TMP" && echo "nft ok" && rm -f "$TMP"
       fail "Échec de l'application des règles nft"
       false
 
-    enable_br_netfilter = =>
+    enable_br_netfilter: =>
       step "Activation de br_netfilter"
       script = [[
 #!/bin/sh
@@ -284,7 +291,7 @@ echo "br_netfilter ok"
       warn "br_netfilter : vérifiez que kmod-br-netfilter est chargé"
       false
 
-    install_initd = =>
+    install_initd: =>
       step "Installation du service init.d/custos (procd)"
       service = [[
 #!/bin/sh /etc/rc.common
@@ -292,8 +299,7 @@ USE_PROCD=1
 START=95
 STOP=05
 PROG=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)
-CUSTOS_DIR=]] .. @cfg.dest .. [[
-
+CUSTOS_DIR=]] .. @cfg.dest .. "\n" .. [[
 start_service() {
     [ "$(uci get custos.main.enabled 2>/dev/null)" = "0" ] && return 0
     [ -z "$PROG" ] && { echo "custos: luajit introuvable"; return 1; }
@@ -305,6 +311,9 @@ start_service() {
     $PROG $CUSTOS_DIR/uci_config.lua || \
         echo "custos: avertissement — génération config UCI échouée, utilise les défauts compilés"
 
+    # Charge les règles nftables (substitution des plages LAN depuis UCI)
+    _nft_load || echo "custos: avertissement — règles nft non chargées, démarrage en mode dégradé"
+
     procd_open_instance
     procd_set_param command $PROG $CUSTOS_DIR/main.lua
     procd_set_param env LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;;"
@@ -312,6 +321,26 @@ start_service() {
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_close_instance
+}
+
+stop_service() {
+    nft delete table ip  dns-filter 2>/dev/null || true
+    nft delete table ip6 dns-filter 2>/dev/null || true
+}
+
+_nft_load() {
+    NFT_SRC="$CUSTOS_DIR/dns-filter.nft"
+    NFT_TMP="/tmp/custos-dns-filter.nft"
+    [ -f "$NFT_SRC" ] || { echo "custos: $NFT_SRC introuvable"; return 1; }
+    LAN4="$(uci get custos.main.lan4 2>/dev/null || echo '192.168.1.0/24')"
+    LAN6="$(uci get custos.main.lan6 2>/dev/null || echo 'fd00::/64')"
+    sed -e "s|192\\.168\\.1\\.0/24|$LAN4|g" \
+        -e "s|fd00::/64|$LAN6|g" \
+        "$NFT_SRC" > "$NFT_TMP" && \
+    nft -f "$NFT_TMP"
+    local rc=$?
+    rm -f "$NFT_TMP"
+    return $rc
 }
 
 reload_service() {
@@ -330,7 +359,7 @@ service_triggers() {
           fh\write service
           fh\close!
 
-      ok_scp = @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@cfg.ip}:/etc/init.d/custos"
+      ok_scp = @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/etc/init.d/custos"
       unless ok_scp
         fail "Échec de la copie du script init.d"
         return false
@@ -342,7 +371,7 @@ service_triggers() {
       true
 
     -- Installe /etc/config/custos si absent (préserve la config existante).
-    install_uci_config = =>
+    install_uci_config: =>
       step "Configuration UCI (/etc/config/custos)"
       exists = @ssh_capture "[ -f /etc/config/custos ] && echo yes || echo no"
       if exists and exists\find "yes"
@@ -369,14 +398,14 @@ config custos 'main'
           fh\write uci_cfg
           fh\close!
 
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@cfg.ip}:/etc/config/custos"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/etc/config/custos"
         fail "Échec de la copie de /etc/config/custos"
         return false
 
       ok "/etc/config/custos installé"
       true
 
-    start_service = =>
+    start_service: =>
       step "Démarrage du service custos"
       if @cfg.no_start
         warn "--no-start : démarrage ignoré"
@@ -394,7 +423,7 @@ config custos 'main'
         warn "Service démarré mais le processus n'est pas encore visible"
       true
 
-    health_check = =>
+    health_check: =>
       step "Vérification de la santé (logread)"
       out = @ssh_capture "logread | grep custos | tail -n 20"
       if out and out\find "error"
@@ -406,7 +435,7 @@ config custos 'main'
         warn "Aucun log trouvé pour 'custos' — vérifiez le démarrage"
       true
 
-    uninstall = =>
+    uninstall: =>
       step "Désinstallation de CustosVirginum"
       
       -- 1. Arrêt et désactivation du service
@@ -425,9 +454,10 @@ config custos 'main'
       @ssh_run "sysctl -w net.bridge.bridge-nf-call-iptables=0 2>/dev/null || true"
       @ssh_run "sysctl -w net.bridge.bridge-nf-call-ip6tables=0 2>/dev/null || true"
       
-      -- 4. Nettoyage nftables (on tente de supprimer la table si elle existe)
+      -- 4. Nettoyage nftables (on tente de supprimer les tables si elles existent)
       info "  Nettoyage nftables..."
-      @ssh_run "nft delete table inet custos_dns_filter 2>/dev/null || true"
+      @ssh_run "nft delete table ip  dns-filter 2>/dev/null || true"
+      @ssh_run "nft delete table ip6 dns-filter 2>/dev/null || true"
 
       -- 5. Suppression de la configuration UCI et des fichiers runtime
       info "  Suppression de la configuration UCI..."
@@ -445,7 +475,9 @@ config custos 'main'
 --- Affiche l'aide et quitte.
 print_usage = ->
   io.write [[
-Usage: luajit install-owrt.lua <ip-routeur> [options]
+Usage: luajit install-owrt.lua <hôte> [options]
+
+  <hôte> : hostname, adresse IPv4 ou adresse IPv6 littérale
 
 Options:
   --port PORT    Port SSH                       (défaut : 22)
@@ -460,8 +492,9 @@ Options:
   -h, --help     Afficher cette aide
 
 Exemple:
-  luajit install-owrt.lua 192.168.1.1
+  luajit install-owrt.lua router.local
   luajit install-owrt.lua 192.168.1.1 --port 2222 --lan 10.0.0.0/24
+  luajit install-owrt.lua 2001:db8::1 --lan6 fd57:985b:c9ab::/64
   luajit install-owrt.lua 192.168.1.1 --uninstall
 ]]
   os.exit 0
@@ -470,7 +503,7 @@ Exemple:
 -- @treturn table|nil cfg ou nil en cas d'erreur
 parse_args = ->
   cfg = {
-    ip:       nil
+    host:     nil
     port:     22
     user:     "root"
     lan4:     "192.168.1.0/24"
@@ -517,11 +550,11 @@ parse_args = ->
           fail "Option inconnue : #{a}"
           os.exit 1
         else
-          cfg.ip = a
+          cfg.host = a
     i += 1
 
-  if cfg.ip and not cfg.ip\match "^%d+%.%d+%.%d+%.%d+$"
-    fail "Adresse IP invalide : #{cfg.ip}"
+  if cfg.host and cfg.host\match "%s"
+    fail "Hôte invalide (contient des espaces) : #{cfg.host}"
     os.exit 1
   if not cfg.lan4\match "^%S+/%d+$"
     fail "CIDR LAN IPv4 invalide : #{cfg.lan4}"
@@ -535,8 +568,8 @@ parse_args = ->
 
 main = ->
   cfg = parse_args!
-  unless cfg.ip
-    fail "Adresse IP du routeur manquante."
+  unless cfg.host
+    fail "Adresse du routeur manquante (hostname, IPv4 ou IPv6)."
     print_usage!
     os.exit 1
 
@@ -547,33 +580,33 @@ main = ->
   inst = Installer cfg
   
   if cfg.uninstall
-    if inst.check_connectivity!
-      if inst.uninstall!
+    if inst\check_connectivity!
+      if inst\uninstall!
         io.write "\n#{GREEN}#{BOLD}✓ Désinstallation terminée.#{NC}\n"
     else
       fail "\nÉchec : Impossible de joindre le routeur pour désinstaller."
       os.exit 1
     return
 
-  info "Cible  : #{cfg.user}@#{cfg.ip}:#{cfg.port}"
+  info "Cible  : #{cfg.user}@#{cfg.host}:#{cfg.port}"
   info "LAN4   : #{cfg.lan4}    LAN6 : #{cfg.lan6}"
   info "Dest   : #{cfg.dest}"
   if cfg.dry
     warn "MODE DRY-RUN — aucune commande réelle exécutée\n"
 
   steps = {
-    { name: "deps locales",      fn: -> inst.check_local_deps!    }
-    { name: "compilation",       fn: -> inst.build_local!         }
-    { name: "connectivité SSH",  fn: -> inst.check_connectivity!  }
-    { name: "détection pkg mgr", fn: -> inst.detect_pkg_manager!  }
-    { name: "paquets",           fn: -> inst.install_pkg_deps!    }
-    { name: "upload fichiers",   fn: -> inst.upload_files!        }
-    { name: "br_netfilter",      fn: -> inst.enable_br_netfilter! }
-    { name: "règles nft",        fn: -> inst.apply_nft_rules!     }
-    { name: "service init.d",    fn: -> inst.install_initd!       }
-    { name: "config UCI",        fn: -> inst.install_uci_config!  }
-    { name: "démarrage service", fn: -> inst.start_service!       }
-    { name: "santé",             fn: -> inst.health_check!        }
+    { name: "deps locales",      fn: -> inst\check_local_deps!    }
+    { name: "compilation",       fn: -> inst\build_local!         }
+    { name: "connectivité SSH",  fn: -> inst\check_connectivity!  }
+    { name: "détection pkg mgr", fn: -> inst\detect_pkg_manager!  }
+    { name: "paquets",           fn: -> inst\install_pkg_deps!    }
+    { name: "upload fichiers",   fn: -> inst\upload_files!        }
+    { name: "br_netfilter",      fn: -> inst\enable_br_netfilter! }
+    { name: "règles nft",        fn: -> inst\apply_nft_rules!     }
+    { name: "service init.d",    fn: -> inst\install_initd!       }
+    { name: "config UCI",        fn: -> inst\install_uci_config!  }
+    { name: "démarrage service", fn: -> inst\start_service!       }
+    { name: "santé",             fn: -> inst\health_check!        }
   }
 
   for s in *steps
@@ -582,8 +615,8 @@ main = ->
       os.exit 1
 
   io.write "\n#{GREEN}#{BOLD}✓ Installation terminée.#{NC}\n"
-  info "Statut   : ssh #{cfg.user}@#{cfg.ip} '/etc/init.d/custos status'"
-  info "Logs     : ssh #{cfg.user}@#{cfg.ip} 'logread | grep custos'"
-  info "Reload   : ssh #{cfg.user}@#{cfg.ip} '/etc/init.d/custos reload'"
+  info "Statut   : ssh #{cfg.user}@#{cfg.host} '/etc/init.d/custos status'"
+  info "Logs     : ssh #{cfg.user}@#{cfg.host} 'logread | grep custos'"
+  info "Reload   : ssh #{cfg.user}@#{cfg.host} '/etc/init.d/custos reload'"
 
 main!

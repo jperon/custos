@@ -132,4 +132,63 @@ load_secrets = (path) ->
   fh\close!
   secrets
 
-{ :pbkdf2, :hash_password, :verify_password, :load_secrets }
+-- ── Inscription ───────────────────────────────────────────────────
+
+--- Valide un nom d'utilisateur pour l'inscription.
+-- Doit contenir 3 à 32 caractères alphanumériques, _, . ou -.
+-- @tparam string username Nom d'utilisateur proposé
+-- @treturn boolean true si valide
+valid_username = (username) ->
+  (username\match "^[a-zA-Z0-9_.%-]+$") != nil and #username >= 3 and #username <= 32
+
+--- Inscrit un nouvel utilisateur dans le fichier secrets.
+-- Vérifie l'absence de doublon, hash le mot de passe, et append
+-- la ligne de manière atomique (write temp + rename).
+-- Retourne la nouvelle table secrets en cas de succès.
+-- @tparam string username    Nom d'utilisateur (3-32 chars, [a-zA-Z0-9_.-])
+-- @tparam string password    Mot de passe en clair (≥ 8 caractères)
+-- @tparam string secrets_path Chemin du fichier secrets
+-- @tparam table  current_secrets Table actuelle {user → hash} (pour vérif doublon)
+-- @treturn table|nil  Nouvelle table secrets, ou nil en cas d'erreur
+-- @treturn string     Message d'erreur (si nil)
+register_user = (username, password, secrets_path, current_secrets) ->
+  unless valid_username username
+    return nil, "Nom d'utilisateur invalide (3-32 caractères alphanumériques, _, . ou -)."
+  if #password < 8
+    return nil, "Le mot de passe doit contenir au moins 8 caractères."
+  if current_secrets and current_secrets[username]
+    return nil, "Ce nom d'utilisateur est déjà pris."
+
+  hash_entry = hash_password password
+
+  tmp_path = secrets_path .. ".new"
+  fh, err = io.open tmp_path, "w"
+  unless fh
+    return nil, "Impossible de créer le fichier temporaire : #{err}"
+
+  existing, exist_err = io.open secrets_path, "r"
+  if existing
+    for line in existing\lines!
+      fh\write line .. "\n"
+    existing\close!
+  else
+    unless exist_err\match "No such file"
+      fh\close!
+      os.remove tmp_path
+      return nil, "Impossible de lire le fichier secrets : #{exist_err}"
+
+  fh\write "#{username}:#{hash_entry}\n"
+  fh\close!
+
+  ok, rename_err = os.rename tmp_path, secrets_path
+  unless ok
+    os.remove tmp_path
+    return nil, "Impossible de renommer le fichier secrets : #{rename_err}"
+
+  new_secrets, load_err = load_secrets secrets_path
+  unless new_secrets
+    return nil, "Impossible de recharger le fichier secrets : #{load_err}"
+
+  new_secrets
+
+{ :pbkdf2, :hash_password, :verify_password, :load_secrets, :valid_username, :register_user }

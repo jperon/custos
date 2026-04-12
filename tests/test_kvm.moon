@@ -584,6 +584,99 @@ report "Portail captif — IP retirée de authenticated_ips après logout",
   (auth_nft_out2 == nil or auth_nft_out2\match("10.99.0.10") == nil),
   (auth_nft_out2 or "(set vide)")\sub(1, 120)
 
+ -- ── Inscription d'utilisateurs ────────────────────────────────────
+
+print ""
+print "#{C.bold}▶ Inscription d'utilisateurs#{C.reset}"
+
+-- Clear any stale session
+ssh FILTER_IP, "sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true"
+
+report "Inscription — nom d'utilisateur trop court → erreur",
+  ->
+    cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' #{AUTH_URL}/register"
+    ok, output = guest_exec cmd, 10
+    code = (output and output\match("(%d+)$")) or ""
+    if code == "200" or code == "400"
+      if output\match("Nom d'utilisateur invalide")
+        return true, "HTTP #{code} (erreur attendue)"
+      else
+        return false, "HTTP #{code} mais pas de message d'erreur"
+    else
+      return false, "HTTP #{code} (attendu 200 ou 400)"
+
+report "Inscription — mot de passe trop court → erreur",
+  ->
+    cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' #{AUTH_URL}/register"
+    ok, output = guest_exec cmd, 10
+    code = (output and output\match("(%d+)$")) or ""
+    if code == "200" or code == "400"
+      if output\match("8 caractères")
+        return true, "HTTP #{code} (erreur attendue)"
+      else
+        return false, "HTTP #{code} mais pas de message d'erreur"
+    else
+      return false, "HTTP #{code} (attendu 200 ou 400)"
+
+report "Inscription — mots de passe différents → erreur",
+  ->
+    cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' #{AUTH_URL}/register"
+    ok, output = guest_exec cmd, 10
+    code = (output and output\match("(%d+)$")) or ""
+    if code == "200" or code == "400"
+      if output\match("ne correspondent pas")
+        return true, "HTTP #{code} (erreur attendue)"
+      else
+        return false, "HTTP #{code} mais pas de message d'erreur"
+    else
+      return false, "HTTP #{code} (attendu 200 ou 400)"
+
+report "Inscription — utilisateur déjà existant → erreur",
+  ->
+    cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' #{AUTH_URL}/register"
+    ok, output = guest_exec cmd, 10
+    code = (output and output\match("(%d+)$")) or ""
+    if code == "200" or code == "409"
+      if output\match("déjà pris") or output\match("Impossible de créer")
+        return true, "HTTP #{code} (erreur attendue)"
+      else
+        return false, "HTTP #{code} mais pas de message d'erreur"
+    else
+      return false, "HTTP #{code} (attendu 200 ou 409)"
+
+report "Inscription — nouvel utilisateur réussi → auto-login + session créée",
+  ->
+    cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' #{AUTH_URL}/register"
+    ok, output = guest_exec cmd, 10
+    code = (output and output\match("(%d+)$")) or ""
+    if code == "200"
+      -- Check if sessions.lua contains the new user
+      _, sess_out = ssh FILTER_IP, "sudo cat /opt/custos/tmp/sessions.lua 2>/dev/null"
+      if sess_out and sess_out\match("newuser") and sess_out\match(CLIENT_IP)
+        -- Test login with the new credentials
+        cmd_login = "curl -s -o /dev/null -w '%{http_code}' -X POST -k -d 'user=newuser&password=newpass123' #{AUTH_URL}/login"
+        ok_login, code_login = guest_exec cmd_login, 10
+        code_login = (code_login or "")\gsub "%s+", ""
+        return ok_login and code_login == "200", "HTTP #{code} (inscription ok), login: #{code_login}"
+      else
+        return false, "HTTP #{code} mais sessions.lua ne contient pas newuser"
+    else
+      return false, "HTTP #{code} (attendu 200)"
+
+-- Wait for session cache to flush after registration
+print "  Waiting 6s for session cache to settle after registration..."
+os.execute "sleep 6"
+
+report "Inscription — from_user : domaine autorisé après login → NXDOMAIN",
+  ->
+    cmd = "dig +time=12 +tries=1 auth-required.test @#{DNS_SERVER} 2>&1"
+    _, output = guest_exec cmd, 20
+    ok = output != nil and (output\upper!\match("NXDOMAIN") != nil or output\match("can't find") != nil)
+    obtained = (output\match "([^\n]*NXDOMAIN[^\n]*)") or
+               (output\match "(can't find[^\n]*)") or
+               (output\match "([^\n]+)") or "(no output)"
+    return ok, obtained
+
 -- ── DNS over TCP + TTL patching ───────────────────────────────────────────────
 print ""
 print "#{C.bold}▶ DNS over TCP + TTL patching#{C.reset}"

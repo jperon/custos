@@ -1,9 +1,9 @@
 local socket = require("socket")
 local ssl = require("ssl")
-local verify_password, load_secrets
+local verify_password, load_secrets, register_user
 do
   local _obj_0 = require("auth.credentials")
-  verify_password, load_secrets = _obj_0.verify_password, _obj_0.load_secrets
+  verify_password, load_secrets, register_user = _obj_0.verify_password, _obj_0.load_secrets, _obj_0.register_user
 end
 local add_session, purge_expired, write_sessions
 do
@@ -66,6 +66,9 @@ local LOGIN_PAGE = [[<!DOCTYPE html>
     .msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
     .msg.ok  { background: #dcfce7; color: #166534; }
     .msg.err { background: #fee2e2; color: #991b1b; }
+    .link { text-align: center; margin-top: 1rem; font-size: .9rem; }
+    .link a { color: #2563eb; text-decoration: none; }
+    .link a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -82,12 +85,93 @@ local LOGIN_PAGE = [[<!DOCTYPE html>
       </label>
       <button type="submit">Se connecter</button>
     </form>
+    <div class="link"><a href="/register">Créer un compte</a></div>
     %MSG%
   </div>
 </body>
 </html>
 ]]
-local SUCCESS_PAGE = LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>')
+local REGISTER_PAGE = [[<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CustosVirginum — Inscription</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f4f4f4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: white;
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.15);
+      width: 100%;
+      max-width: 380px;
+    }
+    h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
+    label { display: block; margin-bottom: 1rem; }
+    label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
+    input[type=text], input[type=password] {
+      width: 100%;
+      padding: .5rem .7rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    button {
+      width: 100%;
+      padding: .6rem;
+      background: #16a34a;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: .5rem;
+    }
+    button:hover { background: #15803d; }
+    .msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
+    .msg.ok  { background: #dcfce7; color: #166534; }
+    .msg.err { background: #fee2e2; color: #991b1b; }
+    .link { text-align: center; margin-top: 1rem; font-size: .9rem; }
+    .link a { color: #2563eb; text-decoration: none; }
+    .link a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Créer un compte</h1>
+    <form method="post" action="/register">
+      <label>
+        <span>Nom d'utilisateur</span>
+        <input type="text" name="user" required autofocus minlength="3" maxlength="32" pattern="[a-zA-Z0-9_.\-]+">
+      </label>
+      <label>
+        <span>Mot de passe (8 caractères minimum)</span>
+        <input type="password" name="password" required minlength="8">
+      </label>
+      <label>
+        <span>Confirmer le mot de passe</span>
+        <input type="password" name="password2" required minlength="8">
+      </label>
+      <button type="submit">Créer le compte</button>
+    </form>
+    <div class="link"><a href="/">Déjà un compte ? Se connecter</a></div>
+    %MSG%
+  </div>
+</body>
+</html>
+]]
+local SUCCESS_PAGE_RAW, _ = LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>')
+local SUCCESS_PAGE = SUCCESS_PAGE_RAW
 local make_success_page
 make_success_page = function(interval)
   local js = string.format([[<script>
@@ -102,13 +186,28 @@ make_success_page = function(interval)
   ping();
 })();
 </script>]], interval)
-  return LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion r\xc3\xa9ussie. Votre acc\xc3\xa8s r\xc3\xa9seau est actif tant que cette page reste ouverte.</p>' .. js)
+  local res
+  res, _ = LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion r\xc3\xa9ussie. Votre acc\xc3\xa8s r\xc3\xa9seau est actif tant que cette page reste ouverte.</p>' .. js)
+  return res
 end
 local failure_page
 failure_page = function(reason)
-  return LOGIN_PAGE:gsub("%%MSG%%", "<p class=\"msg err\">" .. tostring(reason) .. "</p>")
+  local res
+  res, _ = LOGIN_PAGE:gsub("%%MSG%%", "<p class=\"msg err\">" .. tostring(reason) .. "</p>")
+  return res
 end
-local home_page = LOGIN_PAGE:gsub("%%MSG%%", "")
+local register_failure_page
+register_failure_page = function(reason)
+  local res
+  res, _ = REGISTER_PAGE:gsub("%%MSG%%", "<p class=\"msg err\">" .. tostring(reason) .. "</p>")
+  return res
+end
+local home_page_raw
+home_page_raw, _ = LOGIN_PAGE:gsub("%%MSG%%", "")
+local home_page = home_page_raw
+local home_register_page_raw
+home_register_page_raw, _ = REGISTER_PAGE:gsub("%%MSG%%", "")
+local home_register_page = home_register_page_raw
 local read_request
 read_request = function(sock)
   local line, err = sock:receive("*l")
@@ -181,8 +280,32 @@ http_redirect = function(sock, location)
   local resp = "HTTP/1.1 303 See Other\r\nLocation: " .. tostring(location) .. "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   return sock:send(resp)
 end
+local register_rate_exceeded
+register_rate_exceeded = function(register_attempts, peer_ip, max_attempts, window_sec)
+  local now = os.time()
+  local entry = register_attempts[peer_ip]
+  if entry then
+    if now - entry.ts > window_sec then
+      register_attempts[peer_ip] = {
+        count = 1,
+        ts = now
+      }
+      return false
+    end
+    entry.count = entry.count + 1
+    if entry.count > max_attempts then
+      return true
+    end
+  else
+    register_attempts[peer_ip] = {
+      count = 1,
+      ts = now
+    }
+  end
+  return false
+end
 local handle_connection
-handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess)
+handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts)
   raw_sock:settimeout(10)
   local tls_sock, err = ssl.wrap(raw_sock, tls_ctx)
   if not (tls_sock) then
@@ -256,6 +379,8 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
       action = "auth_logout",
       ip = peer_ip
     })
+  elseif method == "GET" and path == "/register" then
+    http_response(tls_sock, "200 OK", home_register_page)
   elseif method == "POST" and path == "/login" then
     local form = decode_form(body)
     local user = form.user or ""
@@ -287,6 +412,66 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
         ip = peer_ip,
         user = user
       })
+    end
+  elseif method == "POST" and path == "/register" then
+    local max_attempts = auth_cfg.register_rate_limit or 3
+    local window_sec = auth_cfg.register_rate_window or 300
+    if register_rate_exceeded(register_attempts, peer_ip, max_attempts, window_sec) then
+      http_response(tls_sock, "429 Too Many Requests", register_failure_page("Trop de tentatives d'inscription. Réessayez plus tard."))
+      log_warn({
+        action = "auth_register_rate_limited",
+        ip = peer_ip
+      })
+    else
+      local form = decode_form(body)
+      local user = form.user or ""
+      local pass = form.password or ""
+      local pass2 = form.password2 or ""
+      if pass ~= pass2 then
+        http_response(tls_sock, "400 Bad Request", register_failure_page("Les mots de passe ne correspondent pas."))
+        log_warn({
+          action = "auth_register_password_mismatch",
+          ip = peer_ip,
+          user = user
+        })
+      else
+        local new_secrets, reg_err = register_user(user, pass, secrets_path, secrets)
+        if new_secrets then
+          purge_expired(sessions)
+          add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
+          if nft_sess then
+            nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
+          end
+          local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
+          if not (ok2) then
+            log_warn({
+              action = "auth_write_failed",
+              err = err3
+            })
+          end
+          secrets[user] = new_secrets[user]
+          http_response(tls_sock, "200 OK", success_pg)
+          log_info({
+            action = "auth_register_ok",
+            ip = peer_ip,
+            user = user
+          })
+        else
+          local user_msg = reg_err
+          local status = "400 Bad Request"
+          if reg_err:match("déjà pris") then
+            user_msg = "Impossible de créer ce compte. Veuillez choisir un autre nom."
+            status = "409 Conflict"
+          end
+          http_response(tls_sock, status, register_failure_page(user_msg))
+          log_warn({
+            action = "auth_register_failed",
+            ip = peer_ip,
+            user = user,
+            err = reg_err
+          })
+        end
+      end
     end
   else
     http_response(tls_sock, "404 Not Found", "<h1>404</h1>")
@@ -323,9 +508,10 @@ make_server6 = function(port)
   return srv6
 end
 local run
-run = function(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs)
-  local port = auth_cfg.port
-  local host = auth_cfg.host
+run = function(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path)
+  local port = auth_cfg.port or 33443
+  local host = auth_cfg.host or "::"
+  secrets_path = auth_cfg.secrets or "cfg/secrets"
   local hb_interval = auth_cfg.heartbeat_interval or 30
   local success_pg = make_success_page(hb_interval)
   local listen4, err4 = make_server4("0.0.0.0", port)
@@ -348,6 +534,7 @@ run = function(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs)
     })
   end
   local sessions = { }
+  local register_attempts = { }
   captive_srvs = captive_srvs or { }
   local https_set = { }
   https_set[listen4] = true
@@ -380,9 +567,9 @@ run = function(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs)
         local peer_ip = client:getpeername()
         peer_ip = tostring(peer_ip)
         if https_set[srv] then
-          handle_connection(client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess)
+          handle_connection(client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts)
         else
-          captive.handle_connection(client, auth_cfg.port)
+          captive.handle_connection(client, port)
         end
       end
     end

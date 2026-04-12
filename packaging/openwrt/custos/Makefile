@@ -24,6 +24,7 @@ define Build/Prepare
 	$(call Build/Prepare/Default)
 	mkdir -p $(PKG_BUILD_DIR)/lua
 	$(CP) /workspace/lua/* $(PKG_BUILD_DIR)/lua/
+	$(CP) /workspace/nft-rules/dns-filter.nft $(PKG_BUILD_DIR)/
 endef
 
 define Build/Compile
@@ -38,6 +39,7 @@ endef
 define Package/custos/install
 	$(INSTALL_DIR) $(1)/usr/share/custos
 	$(CP) $(PKG_BUILD_DIR)/lua/* $(1)/usr/share/custos/
+	$(INSTALL_CONF) $(PKG_BUILD_DIR)/dns-filter.nft $(1)/usr/share/custos/dns-filter.nft
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) $(CURDIR)/files/etc/init.d/custos $(1)/etc/init.d/custos
 	$(INSTALL_DIR) $(1)/etc/config

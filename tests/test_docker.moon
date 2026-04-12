@@ -33,6 +33,10 @@ for a in *arg
       print "  --build    Force Docker image rebuild even if image exists"
       os.exit 0
 
+-- Restore secrets before tests
+os.execute "git checkout cfg/secrets 2>/dev/null"
+os.execute "sudo chmod 666 ./cfg/secrets"
+
 -- Detect profile from NDPI_VERSION environment variable
 ndpi_version = os.getenv "NDPI_VERSION"
 profile = if ndpi_version and ndpi_version\match "^5"
@@ -255,6 +259,7 @@ cleanup_host = ->
   cmd = "docker exec #{filter_name} sh -c 'nft delete table ip dns-filter 2>/dev/null; nft delete table ip6 dns-filter 2>/dev/null; true'"
   execute cmd, true
   execute "rm -f ./tmp/sessions.lua 2>/dev/null || true"
+  execute "git checkout cfg/secrets 2>/dev/null || true"
 
 compose_down = ->
   if keep_containers
@@ -1057,6 +1062,105 @@ run_test "DNAT — TCP port 80 non authentifié → 302",
     code = (code or "")\gsub "%s+", ""
     return (code == "302"), "HTTP #{code}"
 
+ -- ── Inscription d'utilisateurs ────────────────────────────────────
+
+print ""
+print "#{C.bold}▶ Inscription d'utilisateurs#{C.reset}"
+
+-- Clear any stale session for the client IP
+execute "rm -f ./tmp/sessions.lua 2>/dev/null || true"
+
+run_test "Inscription — nom d'utilisateur trop court → erreur",
+  "POST /register user=a&password=pass123 → erreur dans la page",
+  ->
+    cmd = "docker exec custos-client curl -k -s -w '\n%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' https://#{auth_ip}:33443/register 2>&1"
+    ok, output = execute cmd, true
+    code = (output and output\match("(%d+)$")) or ""
+    if code == "200" or code == "400"
+      if output\match("Nom d'utilisateur invalide")
+        return true, "HTTP #{code} (erreur attendue)"
+      else
+        return false, "HTTP #{code} mais pas de message d'erreur"
+    else
+      return false, "HTTP #{code} (attendu 200 ou 400)"
+
+run_test "Inscription — mot de passe trop court → erreur",
+  "POST /register user=newuser&password=pass&password2=pass → erreur",
+  ->
+    cmd = "docker exec custos-client curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' https://#{auth_ip}:33443/register 2>&1"
+    ok, output = execute cmd, true
+    code = (output and output\match("(%d+)$")) or ""
+    if code == "200" or code == "400"
+      if output\match("8 caractères")
+        return true, "HTTP #{code} (erreur attendue)"
+      else
+        return false, "HTTP #{code} mais pas de message d'erreur"
+    else
+      return false, "HTTP #{code} (attendu 200 ou 400)"
+
+run_test "Inscription — mots de passe différents → erreur",
+  "POST /register user=newuser&password=pass123&password2=pass456 → erreur",
+  ->
+    cmd = "docker exec custos-client curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' https://#{auth_ip}:33443/register 2>&1"
+    ok, output = execute cmd, true
+    code = (output and output\match("(%d+)$")) or ""
+    if code == "200" or code == "400"
+      if output\match("ne correspondent pas")
+        return true, "HTTP #{code} (erreur attendue)"
+      else
+        return false, "HTTP #{code} mais pas de message d'erreur"
+    else
+      return false, "HTTP #{code} (attendu 200 ou 400)"
+
+run_test "Inscription — utilisateur déjà existant → erreur",
+  "POST /register user=testuser&password=newpass123&password2=newpass123 → 'déjà pris'",
+  ->
+    cmd = "docker exec custos-client curl -k -s -w '\n%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' https://#{auth_ip}:33443/register 2>&1"
+    ok, output = execute cmd, true
+    code = (output and output\match("(%d+)$")) or ""
+    if code == "200" or code == "409"
+      if output\match("déjà pris") or output\match("Impossible de créer")
+        return true, "HTTP #{code} (erreur attendue)"
+      else
+        return false, "HTTP #{code} mais pas de message d'erreur"
+    else
+      return false, "HTTP #{code} (attendu 200 ou 409)"
+
+run_test "Inscription — nouvel utilisateur réussi → auto-login + session créée",
+  "POST /register user=newuser&password=newpass123&password2=newpass123 → 200 + sessions.lua contient newuser",
+  ->
+    cmd = "docker exec custos-client curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' https://#{auth_ip}:33443/register 2>&1"
+    ok, output = execute cmd, true
+    code = (output and output\match("(%d+)$")) or ""
+    if code == "200"
+      -- Check if sessions.lua contains the new user
+      _, sess_out = execute "cat ./tmp/sessions.lua 2>/dev/null", true
+      if sess_out and sess_out\match("newuser") and sess_out\match("172.28.0.10")
+        -- Test login with the new credentials
+        cmd_login = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' -X POST -d 'user=newuser&password=newpass123' https://#{auth_ip}:33443/login 2>&1"
+        ok_login, code_login = execute cmd_login, true
+        code_login = (code_login or "")\gsub "%s+", ""
+        return ok_login and code_login == "200", "HTTP #{code} (inscription ok), login: #{code_login}"
+      else
+        return false, "HTTP #{code} mais sessions.lua ne contient pas newuser"
+    else
+      return false, "HTTP #{code} (attendu 200)"
+
+-- Wait for session cache to flush before testing from_user DNS
+log "Waiting 6s for session cache to settle after registration...", "STEP"
+os.execute "sleep 6"
+
+run_test "Inscription — from_user : domaine autorisé après login → NXDOMAIN",
+  "nslookup auth-required.test @#{dns_server} → NXDOMAIN (filtre laisse passer, upstream introuvable)",
+  ->
+    cmd = "timeout 8s docker exec custos-client nslookup auth-required.test #{dns_server} 2>&1"
+    _, output = execute cmd, true
+    ok = output != nil and (output\match("NXDOMAIN") != nil or output\match("can't find") != nil)
+    obtained = (output\match "([^\n]*NXDOMAIN[^\n]*)") or
+               (output\match "(can't find[^\n]*)") or
+               (output\match "([^\n]+)") or "(no output)"
+    return ok, obtained
+
 -- ── DNS concurrent ────────────────────────────────────────────────────────────
 print ""
 print "#{C.bold}▶ DNS concurrent (deux requêtes simultanées)#{C.reset}"
@@ -1103,6 +1207,7 @@ run_test "SIGHUP — rechargement des secrets à chaud",
       return false, "impossible de générer le hash (#{new_hash})"
     -- Save original secrets, write new secrets
     secrets_path = "./cfg/secrets"
+    execute "sudo chmod 666 #{secrets_path}"
     fh_orig = io.open secrets_path, "r"
     orig_secrets = fh_orig and fh_orig\read "*a" or ""
     fh_orig\close! if fh_orig

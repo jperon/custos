@@ -13,7 +13,7 @@
 socket = require "socket"
 ssl    = require "ssl"
 
-{ :verify_password, :load_secrets } = require "auth.credentials"
+{ :verify_password, :load_secrets, :register_user } = require "auth.credentials"
 { :add_session, :purge_expired, :write_sessions } = require "auth.sessions"
 { :log_info, :log_warn }            = require "log"
 captive                             = require "auth.captive"
@@ -71,6 +71,9 @@ LOGIN_PAGE = [[
     .msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
     .msg.ok  { background: #dcfce7; color: #166534; }
     .msg.err { background: #fee2e2; color: #991b1b; }
+    .link { text-align: center; margin-top: 1rem; font-size: .9rem; }
+    .link a { color: #2563eb; text-decoration: none; }
+    .link a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -87,14 +90,96 @@ LOGIN_PAGE = [[
       </label>
       <button type="submit">Se connecter</button>
     </form>
+    <div class="link"><a href="/register">Créer un compte</a></div>
     %MSG%
   </div>
 </body>
 </html>
 ]]
 
-SUCCESS_PAGE = LOGIN_PAGE\gsub "%%MSG%%",
-  '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>'
+REGISTER_PAGE = [[
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CustosVirginum — Inscription</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f4f4f4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: white;
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.15);
+      width: 100%;
+      max-width: 380px;
+    }
+    h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
+    label { display: block; margin-bottom: 1rem; }
+    label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
+    input[type=text], input[type=password] {
+      width: 100%;
+      padding: .5rem .7rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    button {
+      width: 100%;
+      padding: .6rem;
+      background: #16a34a;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: .5rem;
+    }
+    button:hover { background: #15803d; }
+    .msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
+    .msg.ok  { background: #dcfce7; color: #166534; }
+    .msg.err { background: #fee2e2; color: #991b1b; }
+    .link { text-align: center; margin-top: 1rem; font-size: .9rem; }
+    .link a { color: #2563eb; text-decoration: none; }
+    .link a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Créer un compte</h1>
+    <form method="post" action="/register">
+      <label>
+        <span>Nom d'utilisateur</span>
+        <input type="text" name="user" required autofocus minlength="3" maxlength="32" pattern="[a-zA-Z0-9_.\-]+">
+      </label>
+      <label>
+        <span>Mot de passe (8 caractères minimum)</span>
+        <input type="password" name="password" required minlength="8">
+      </label>
+      <label>
+        <span>Confirmer le mot de passe</span>
+        <input type="password" name="password2" required minlength="8">
+      </label>
+      <button type="submit">Créer le compte</button>
+    </form>
+    <div class="link"><a href="/">Déjà un compte ? Se connecter</a></div>
+    %MSG%
+  </div>
+</body>
+</html>
+]]
+
+SUCCESS_PAGE_RAW, _ = LOGIN_PAGE\gsub "%%MSG%%", '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>'
+SUCCESS_PAGE = SUCCESS_PAGE_RAW
 
 --- Construit la page de succès avec le heartbeat JS intégré.
 -- @tparam number interval Intervalle de ping en secondes
@@ -113,15 +198,23 @@ make_success_page = (interval) ->
   ping();
 })();
 </script>]], interval)
-  LOGIN_PAGE\gsub "%%MSG%%",
-    '<p class="msg ok">Connexion r\xc3\xa9ussie. Votre acc\xc3\xa8s r\xc3\xa9seau est actif tant que cette page reste ouverte.</p>' .. js
+  res, _ = LOGIN_PAGE\gsub "%%MSG%%", '<p class="msg ok">Connexion r\xc3\xa9ussie. Votre acc\xc3\xa8s r\xc3\xa9seau est actif tant que cette page reste ouverte.</p>' .. js
+  res
 
 failure_page = (reason) ->
-  LOGIN_PAGE\gsub "%%MSG%%",
-    "<p class=\"msg err\">#{reason}</p>"
+  res, _ = LOGIN_PAGE\gsub "%%MSG%%", "<p class=\"msg err\">#{reason}</p>"
+  res
+
+register_failure_page = (reason) ->
+  res, _ = REGISTER_PAGE\gsub "%%MSG%%", "<p class=\"msg err\">#{reason}</p>"
+  res
 
 -- Version sans message (accueil)
-home_page = LOGIN_PAGE\gsub "%%MSG%%", ""
+home_page_raw, _ = LOGIN_PAGE\gsub "%%MSG%%", ""
+home_page = home_page_raw
+
+home_register_page_raw, _ = REGISTER_PAGE\gsub "%%MSG%%", ""
+home_register_page = home_register_page_raw
 
 -- ── Parsing HTTP minimal ──────────────────────────────────────────
 
@@ -190,6 +283,28 @@ http_redirect = (sock, location) ->
   resp = "HTTP/1.1 303 See Other\r\nLocation: #{location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   sock\send resp
 
+-- ── Rate-limiting pour l'inscription ────────────────────────────────
+
+--- Vérifie si une IP a dépassé la limite de tentatives d'inscription.
+-- @tparam table  register_attempts Table {ip → {count, ts}}
+-- @tparam string peer_ip          Adresse IP du client
+-- @tparam number max_attempts     Nombre max de tentatives dans la fenêtre
+-- @tparam number window_sec       Durée de la fenêtre en secondes
+-- @treturn boolean true si l'IP est au-dessus de la limite
+register_rate_exceeded = (register_attempts, peer_ip, max_attempts, window_sec) ->
+  now = os.time!
+  entry = register_attempts[peer_ip]
+  if entry
+    if now - entry.ts > window_sec
+      register_attempts[peer_ip] = { count: 1, ts: now }
+      return false
+    entry.count += 1
+    if entry.count > max_attempts
+      return true
+  else
+    register_attempts[peer_ip] = { count: 1, ts: now }
+  false
+
 -- ── Gestionnaire de connexion ─────────────────────────────────────
 
 --- Gère une connexion HTTPS entrante.
@@ -201,7 +316,9 @@ http_redirect = (sock, location) ->
 -- @tparam string peer_ip     Adresse IP du client
 -- @tparam string success_pg  Page HTML de succès (avec JS heartbeat intégré)
 -- @tparam table|nil nft_sess Module auth.nft_sessions (ou nil si portail captif désactivé)
-handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess) ->
+-- @tparam string secrets_path Chemin du fichier secrets
+-- @tparam table register_attempts Table de rate-limiting pour l'inscription
+handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts) ->
   raw_sock\settimeout 10
 
   -- Wrap TLS
@@ -252,6 +369,9 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
     http_redirect tls_sock, "/"
     log_info { action: "auth_logout", ip: peer_ip }
 
+  elseif method == "GET" and path == "/register"
+    http_response tls_sock, "200 OK", home_register_page
+
   elseif method == "POST" and path == "/login"
     form = decode_form body
     user = form.user or ""
@@ -271,6 +391,45 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
       http_response tls_sock, "401 Unauthorized",
         failure_page "Nom d'utilisateur ou mot de passe incorrect."
       log_warn { action: "auth_login_failed", ip: peer_ip, user: user }
+
+  elseif method == "POST" and path == "/register"
+    max_attempts = auth_cfg.register_rate_limit or 3
+    window_sec = auth_cfg.register_rate_window or 300
+    if register_rate_exceeded register_attempts, peer_ip, max_attempts, window_sec
+      http_response tls_sock, "429 Too Many Requests",
+        register_failure_page "Trop de tentatives d'inscription. Réessayez plus tard."
+      log_warn { action: "auth_register_rate_limited", ip: peer_ip }
+    else
+      form = decode_form body
+      user = form.user or ""
+      pass = form.password or ""
+      pass2 = form.password2 or ""
+      if pass ~= pass2
+        http_response tls_sock, "400 Bad Request",
+          register_failure_page "Les mots de passe ne correspondent pas."
+        log_warn { action: "auth_register_password_mismatch", ip: peer_ip, user: user }
+      else
+        new_secrets, reg_err = register_user user, pass, secrets_path, secrets
+        if new_secrets
+          purge_expired sessions
+          add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
+          if nft_sess
+            nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
+          ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
+          log_warn { action: "auth_write_failed", err: err3 } unless ok2
+          -- Met à jour la table des secrets en place pour la rendre visible au parent
+          secrets[user] = new_secrets[user]
+          http_response tls_sock, "200 OK", success_pg
+          log_info { action: "auth_register_ok", ip: peer_ip, user: user }
+        else
+          user_msg = reg_err
+          status = "400 Bad Request"
+          if reg_err\match "déjà pris"
+            user_msg = "Impossible de créer ce compte. Veuillez choisir un autre nom."
+            status = "409 Conflict"
+          http_response tls_sock, status,
+            register_failure_page user_msg
+          log_warn { action: "auth_register_failed", ip: peer_ip, user: user, err: reg_err }
 
   else
     http_response tls_sock, "404 Not Found", "<h1>404</h1>"
@@ -318,9 +477,10 @@ make_server6 = (port) ->
 -- @tparam function|nil reload_fn  Fonction appelée pour recharger les secrets (SIGHUP)
 -- @tparam table|nil nft_sess  Module auth.nft_sessions (nil si portail captif désactivé)
 -- @tparam table captive_srvs  Liste de sockets TCP plain du portail captif (peut être vide)
-run = (tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs) ->
-  port = auth_cfg.port
-  host = auth_cfg.host
+run = (tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path) ->
+  port = auth_cfg.port or 33443
+  host = auth_cfg.host or "::"
+  secrets_path = auth_cfg.secrets or "cfg/secrets"
 
   -- Page de succès avec JS heartbeat intégré (construit une seule fois)
   hb_interval = auth_cfg.heartbeat_interval or 30
@@ -336,6 +496,8 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs) ->
     log_info { action: "auth_listening", ipv4: "0.0.0.0", port: port }
 
   sessions = {}
+
+  register_attempts = {}
 
   -- Construire la liste de tous les sockets : HTTPS + captive HTTP
   captive_srvs = captive_srvs or {}
@@ -363,9 +525,9 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs) ->
         peer_ip = tostring peer_ip
         if https_set[srv]
           -- Connexion HTTPS : TLS + logique d'authentification
-          handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess
+          handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts
         else
           -- Connexion HTTP plain : portail captif → redirect 302 vers HTTPS login
-          captive.handle_connection client, auth_cfg.port
+          captive.handle_connection client, port
 
 { :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE }

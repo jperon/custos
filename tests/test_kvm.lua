@@ -440,6 +440,93 @@ local auth_nft_out2
 _, auth_nft_out2 = ssh(FILTER_IP, "sudo nft list set ip dns-filter authenticated_ips 2>/dev/null")
 report("Portail captif — IP retirée de authenticated_ips après logout", (auth_nft_out2 == nil or auth_nft_out2:match("10.99.0.10") == nil), (auth_nft_out2 or "(set vide)"):sub(1, 120))
 print("")
+print(tostring(C.bold) .. "▶ Inscription d'utilisateurs" .. tostring(C.reset))
+ssh(FILTER_IP, "sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true")
+report("Inscription — nom d'utilisateur trop court → erreur", function()
+  local cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' " .. tostring(AUTH_URL) .. "/register"
+  local ok, output = guest_exec(cmd, 10)
+  local code = (output and output:match("(%d+)$")) or ""
+  if code == "200" or code == "400" then
+    if output:match("Nom d'utilisateur invalide") then
+      return true, "HTTP " .. tostring(code) .. " (erreur attendue)"
+    else
+      return false, "HTTP " .. tostring(code) .. " mais pas de message d'erreur"
+    end
+  else
+    return false, "HTTP " .. tostring(code) .. " (attendu 200 ou 400)"
+  end
+end)
+report("Inscription — mot de passe trop court → erreur", function()
+  local cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' " .. tostring(AUTH_URL) .. "/register"
+  local ok, output = guest_exec(cmd, 10)
+  local code = (output and output:match("(%d+)$")) or ""
+  if code == "200" or code == "400" then
+    if output:match("8 caractères") then
+      return true, "HTTP " .. tostring(code) .. " (erreur attendue)"
+    else
+      return false, "HTTP " .. tostring(code) .. " mais pas de message d'erreur"
+    end
+  else
+    return false, "HTTP " .. tostring(code) .. " (attendu 200 ou 400)"
+  end
+end)
+report("Inscription — mots de passe différents → erreur", function()
+  local cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' " .. tostring(AUTH_URL) .. "/register"
+  local ok, output = guest_exec(cmd, 10)
+  local code = (output and output:match("(%d+)$")) or ""
+  if code == "200" or code == "400" then
+    if output:match("ne correspondent pas") then
+      return true, "HTTP " .. tostring(code) .. " (erreur attendue)"
+    else
+      return false, "HTTP " .. tostring(code) .. " mais pas de message d'erreur"
+    end
+  else
+    return false, "HTTP " .. tostring(code) .. " (attendu 200 ou 400)"
+  end
+end)
+report("Inscription — utilisateur déjà existant → erreur", function()
+  local cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' " .. tostring(AUTH_URL) .. "/register"
+  local ok, output = guest_exec(cmd, 10)
+  local code = (output and output:match("(%d+)$")) or ""
+  if code == "200" or code == "409" then
+    if output:match("déjà pris") or output:match("Impossible de créer") then
+      return true, "HTTP " .. tostring(code) .. " (erreur attendue)"
+    else
+      return false, "HTTP " .. tostring(code) .. " mais pas de message d'erreur"
+    end
+  else
+    return false, "HTTP " .. tostring(code) .. " (attendu 200 ou 409)"
+  end
+end)
+report("Inscription — nouvel utilisateur réussi → auto-login + session créée", function()
+  local cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' " .. tostring(AUTH_URL) .. "/register"
+  local ok, output = guest_exec(cmd, 10)
+  local code = (output and output:match("(%d+)$")) or ""
+  if code == "200" then
+    _, sess_out = ssh(FILTER_IP, "sudo cat /opt/custos/tmp/sessions.lua 2>/dev/null")
+    if sess_out and sess_out:match("newuser") and sess_out:match(CLIENT_IP) then
+      local cmd_login = "curl -s -o /dev/null -w '%{http_code}' -X POST -k -d 'user=newuser&password=newpass123' " .. tostring(AUTH_URL) .. "/login"
+      local ok_login, code_login = guest_exec(cmd_login, 10)
+      code_login = (code_login or ""):gsub("%s+", "")
+      return ok_login and code_login == "200", "HTTP " .. tostring(code) .. " (inscription ok), login: " .. tostring(code_login)
+    else
+      return false, "HTTP " .. tostring(code) .. " mais sessions.lua ne contient pas newuser"
+    end
+  else
+    return false, "HTTP " .. tostring(code) .. " (attendu 200)"
+  end
+end)
+print("  Waiting 6s for session cache to settle after registration...")
+os.execute("sleep 6")
+report("Inscription — from_user : domaine autorisé après login → NXDOMAIN", function()
+  local cmd = "dig +time=12 +tries=1 auth-required.test @" .. tostring(DNS_SERVER) .. " 2>&1"
+  local output
+  _, output = guest_exec(cmd, 20)
+  local ok = output ~= nil and (output:upper():match("NXDOMAIN") ~= nil or output:match("can't find") ~= nil)
+  local obtained = (output:match("([^\n]*NXDOMAIN[^\n]*)")) or (output:match("(can't find[^\n]*)")) or (output:match("([^\n]+)")) or "(no output)"
+  return ok, obtained
+end)
+print("")
 print(tostring(C.bold) .. "▶ DNS over TCP + TTL patching" .. tostring(C.reset))
 local ok_tcp, tcp_out = guest_exec("dig +tcp +time=5 +tries=1 " .. tostring(DOMAIN_ALLOWED) .. " @" .. tostring(DNS_SERVER) .. " 2>&1", 12)
 local tcp_has_ip = tcp_out and tcp_out:match("%d+%.%d+%.%d+%.%d+")

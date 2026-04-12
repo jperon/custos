@@ -101,9 +101,58 @@ load_secrets = function(path)
   fh:close()
   return secrets
 end
+local valid_username
+valid_username = function(username)
+  return (username:match("^[a-zA-Z0-9_.%-]+$")) ~= nil and #username >= 3 and #username <= 32
+end
+local register_user
+register_user = function(username, password, secrets_path, current_secrets)
+  if not (valid_username(username)) then
+    return nil, "Nom d'utilisateur invalide (3-32 caractères alphanumériques, _, . ou -)."
+  end
+  if #password < 8 then
+    return nil, "Le mot de passe doit contenir au moins 8 caractères."
+  end
+  if current_secrets and current_secrets[username] then
+    return nil, "Ce nom d'utilisateur est déjà pris."
+  end
+  local hash_entry = hash_password(password)
+  local tmp_path = secrets_path .. ".new"
+  local fh, err = io.open(tmp_path, "w")
+  if not (fh) then
+    return nil, "Impossible de créer le fichier temporaire : " .. tostring(err)
+  end
+  local existing, exist_err = io.open(secrets_path, "r")
+  if existing then
+    for line in existing:lines() do
+      fh:write(line .. "\n")
+    end
+    existing:close()
+  else
+    if not (exist_err:match("No such file")) then
+      fh:close()
+      os.remove(tmp_path)
+      return nil, "Impossible de lire le fichier secrets : " .. tostring(exist_err)
+    end
+  end
+  fh:write(tostring(username) .. ":" .. tostring(hash_entry) .. "\n")
+  fh:close()
+  local ok, rename_err = os.rename(tmp_path, secrets_path)
+  if not (ok) then
+    os.remove(tmp_path)
+    return nil, "Impossible de renommer le fichier secrets : " .. tostring(rename_err)
+  end
+  local new_secrets, load_err = load_secrets(secrets_path)
+  if not (new_secrets) then
+    return nil, "Impossible de recharger le fichier secrets : " .. tostring(load_err)
+  end
+  return new_secrets
+end
 return {
   pbkdf2 = pbkdf2,
   hash_password = hash_password,
   verify_password = verify_password,
-  load_secrets = load_secrets
+  load_secrets = load_secrets,
+  valid_username = valid_username,
+  register_user = register_user
 }

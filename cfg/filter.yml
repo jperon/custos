@@ -85,6 +85,13 @@ domainlists_dir: /etc/custos/lists
 auth:
   idle_timeout: 10                  # expiration si inactif 10 s (court pour les tests e2e)
   heartbeat_interval: 5             # ping JS toutes les 5 s
+  register_rate_limit: 100          # pour les tests e2e
+  register_rate_window: 60
+  # Le compte est persisté dans cfg/secrets. Les droits dépendent des règles
+  # filter.yml (from_user). Sans règle from_user, l'utilisateur n'a accès
+  # qu'au set authenticated_ips (bypass portail captif).
+  # Rate-limiting : register_rate_limit (tentatives par IP, défaut 3)
+  #               register_rate_window (fenêtre en secondes, défaut 300)
 
 # Utilisateurs (nom → email, pour l'action mail)
 #users:

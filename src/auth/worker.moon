@@ -88,6 +88,6 @@ run_auth_worker = (auth_cfg) ->
     else
       log_info { action: "captive_portal_ipv6_skipped" }
 
-  run tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs
+  run tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path
 
 { :run_auth_worker }
