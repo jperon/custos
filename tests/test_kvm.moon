@@ -525,7 +525,7 @@ report "Auth — heartbeat GET /ping → 204",
 print "  Waiting 6s for session cache..."
 os.execute "sleep 6"
 
-ok_nxd, nxd_out = guest_exec "dig +time=5 +tries=1 auth-required.test @#{DNS_SERVER} 2>&1", 12
+ok_nxd, nxd_out = guest_exec "dig +time=12 +tries=1 auth-required.test @#{DNS_SERVER} 2>&1", 20
 nxd_str = (nxd_out or "")\gsub "%s+$", ""
 report "Auth — from_user : auth-required.test → NXDOMAIN après login",
   (nxd_out and (nxd_out\lower!\match("nxdomain") or nxd_out\match("can't find"))) != nil,

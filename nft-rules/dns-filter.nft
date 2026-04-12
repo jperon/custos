@@ -45,6 +45,9 @@ table ip dns-filter {
     meta l4proto { udp, tcp } th dport 53 return
     # Ne pas rediriger le trafic émis par la machine filtre elle-même
     fib saddr type local return
+    # Ne pas rediriger le trafic destiné à la machine filtre elle-même
+    # (permet l'accès direct à l'interface du filtre, ex. portail auth)
+    fib daddr type local return
     # Clients authentifiés : pas de redirection
     ip saddr @authenticated_ips return
     # Portail captif : tout HTTP → portail plain, tout HTTPS → login TLS
@@ -98,6 +101,9 @@ table ip dns-filter {
     iif lo accept
     ct state established,related accept
     tcp dport 22 accept
+    # Interface web du filtre (uhttpd/LuCI) : accessible grâce au bypass
+    # fib daddr type local return en prerouting qui évite la redirection.
+    tcp dport { 80, 443 } accept
     tcp dport 33443 accept
     tcp dport 33080 accept
     icmp type echo-request accept
@@ -128,6 +134,7 @@ table ip6 dns-filter {
     type nat hook prerouting priority dstnat; policy accept;
     meta l4proto { udp, tcp } th dport 53 return
     fib saddr type local return
+    fib daddr type local return
     ip6 saddr @authenticated_ips6 return
     tcp dport 80  redirect to :33080
     tcp dport 443 redirect to :33443
@@ -184,6 +191,9 @@ table ip6 dns-filter {
     ct state established,related accept
     meta l4proto icmpv6 accept
     tcp dport 22 accept
+    # Interface web du filtre (uhttpd/LuCI) : accessible grâce au bypass
+    # fib daddr type local return en prerouting qui évite la redirection.
+    tcp dport { 80, 443 } accept
     tcp dport 33443 accept
     tcp dport 33080 accept
     # DHCPv6 server : reçoit les sollicitations des clients
