@@ -79,18 +79,20 @@ LOGIN_PAGE = [[
 <body>
   <div class="card">
     <h1>CustosVirginum</h1>
-    <form method="post" action="/login">
-      <label>
-        <span>Nom d'utilisateur</span>
-        <input type="text" name="user" required autofocus>
-      </label>
-      <label>
-        <span>Mot de passe</span>
-        <input type="password" name="password" required>
-      </label>
-      <button type="submit">Se connecter</button>
-    </form>
-    <div class="link"><a href="/register">Créer un compte</a></div>
+    <div %AUTH_HIDDEN%>
+      <form method="post" action="/login">
+        <label>
+          <span>Nom d'utilisateur</span>
+          <input type="text" name="user" required autofocus>
+        </label>
+        <label>
+          <span>Mot de passe</span>
+          <input type="password" name="password" required>
+        </label>
+        <button type="submit">Se connecter</button>
+      </form>
+      <div class="link"><a href="/register">Créer un compte</a></div>
+    </div>
     %MSG%
   </div>
 </body>
@@ -178,7 +180,8 @@ REGISTER_PAGE = [[
 </html>
 ]]
 
-SUCCESS_PAGE_RAW, _ = LOGIN_PAGE\gsub "%%MSG%%", '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>'
+success_page_tmp, _ = LOGIN_PAGE\gsub "%%MSG%%", '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>'
+SUCCESS_PAGE_RAW, _ = success_page_tmp\gsub "%%AUTH_HIDDEN%%", 'style="display:none"'
 SUCCESS_PAGE = SUCCESS_PAGE_RAW
 
 --- Construit la page de succès avec le heartbeat JS intégré.
@@ -199,19 +202,22 @@ make_success_page = (interval) ->
 })();
 </script>]], interval)
   res, _ = LOGIN_PAGE\gsub "%%MSG%%", '<p class="msg ok">Connexion r\xc3\xa9ussie. Votre acc\xc3\xa8s r\xc3\xa9seau est actif tant que cette page reste ouverte.</p>' .. js
-  res
+  res2, _ = res\gsub "%%AUTH_HIDDEN%%", 'style="display:none"'
+  res2
 
 failure_page = (reason) ->
   res, _ = LOGIN_PAGE\gsub "%%MSG%%", "<p class=\"msg err\">#{reason}</p>"
-  res
+  res2, _ = res\gsub "%%AUTH_HIDDEN%%", ""
+  res2
 
 register_failure_page = (reason) ->
   res, _ = REGISTER_PAGE\gsub "%%MSG%%", "<p class=\"msg err\">#{reason}</p>"
   res
 
 -- Version sans message (accueil)
-home_page_raw, _ = LOGIN_PAGE\gsub "%%MSG%%", ""
-home_page = home_page_raw
+home_page_raw, _  = LOGIN_PAGE\gsub "%%MSG%%", ""
+home_page_raw2, _ = home_page_raw\gsub "%%AUTH_HIDDEN%%", ""
+home_page = home_page_raw2
 
 home_register_page_raw, _ = REGISTER_PAGE\gsub "%%MSG%%", ""
 home_register_page = home_register_page_raw

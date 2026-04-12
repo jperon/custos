@@ -74,18 +74,20 @@ local LOGIN_PAGE = [[<!DOCTYPE html>
 <body>
   <div class="card">
     <h1>CustosVirginum</h1>
-    <form method="post" action="/login">
-      <label>
-        <span>Nom d'utilisateur</span>
-        <input type="text" name="user" required autofocus>
-      </label>
-      <label>
-        <span>Mot de passe</span>
-        <input type="password" name="password" required>
-      </label>
-      <button type="submit">Se connecter</button>
-    </form>
-    <div class="link"><a href="/register">Créer un compte</a></div>
+    <div %AUTH_HIDDEN%>
+      <form method="post" action="/login">
+        <label>
+          <span>Nom d'utilisateur</span>
+          <input type="text" name="user" required autofocus>
+        </label>
+        <label>
+          <span>Mot de passe</span>
+          <input type="password" name="password" required>
+        </label>
+        <button type="submit">Se connecter</button>
+      </form>
+      <div class="link"><a href="/register">Créer un compte</a></div>
+    </div>
     %MSG%
   </div>
 </body>
@@ -170,7 +172,9 @@ local REGISTER_PAGE = [[<!DOCTYPE html>
 </body>
 </html>
 ]]
-local SUCCESS_PAGE_RAW, _ = LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>')
+local success_page_tmp, _ = LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>')
+local SUCCESS_PAGE_RAW
+SUCCESS_PAGE_RAW, _ = success_page_tmp:gsub("%%AUTH_HIDDEN%%", 'style="display:none"')
 local SUCCESS_PAGE = SUCCESS_PAGE_RAW
 local make_success_page
 make_success_page = function(interval)
@@ -188,13 +192,17 @@ make_success_page = function(interval)
 </script>]], interval)
   local res
   res, _ = LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion r\xc3\xa9ussie. Votre acc\xc3\xa8s r\xc3\xa9seau est actif tant que cette page reste ouverte.</p>' .. js)
-  return res
+  local res2
+  res2, _ = res:gsub("%%AUTH_HIDDEN%%", 'style="display:none"')
+  return res2
 end
 local failure_page
 failure_page = function(reason)
   local res
   res, _ = LOGIN_PAGE:gsub("%%MSG%%", "<p class=\"msg err\">" .. tostring(reason) .. "</p>")
-  return res
+  local res2
+  res2, _ = res:gsub("%%AUTH_HIDDEN%%", "")
+  return res2
 end
 local register_failure_page
 register_failure_page = function(reason)
@@ -204,7 +212,9 @@ register_failure_page = function(reason)
 end
 local home_page_raw
 home_page_raw, _ = LOGIN_PAGE:gsub("%%MSG%%", "")
-local home_page = home_page_raw
+local home_page_raw2
+home_page_raw2, _ = home_page_raw:gsub("%%AUTH_HIDDEN%%", "")
+local home_page = home_page_raw2
 local home_register_page_raw
 home_register_page_raw, _ = REGISTER_PAGE:gsub("%%MSG%%", "")
 local home_register_page = home_register_page_raw
