@@ -54,6 +54,14 @@ nets:
   - 172.16.0.0/12
   - 192.168.0.0/16
 
+# Serveur d'authentification HTTPS + portail captif
+auth:
+  secrets: /etc/custos/secrets
+  # session_ttl: 86400        # durée maximale de session (secondes, défaut 24h)
+  # idle_timeout: 120         # expiration si inactif (secondes, défaut 120)
+  # heartbeat_interval: 30    # ping JS toutes les N secondes (défaut 30)
+  # port: 33443               # port d'écoute (défaut 33443)
+
 # Fenêtres horaires [HH:MM, HH:MM]
 times: {}
 #  business: ["8:00", "18:00"]
