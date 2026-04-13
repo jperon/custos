@@ -194,8 +194,8 @@ wait_for_auth_ready = (timeout = 30) ->
 -- @treturn boolean, string  success, HTTP status code string
 auth_curl = (method, path, data = nil) ->
   data_flag = if data then "-d '#{data}' " else ""
-  -- -k: skip cert verification (self-signed), -s: silent, -o /dev/null: discard body
-  cmd = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' -X #{method} #{data_flag}https://#{auth_ip}:33443#{path} 2>&1"
+  -- -s: silent, -o /dev/null: discard body
+  cmd = "docker exec custos-client curl -s -o /dev/null -w '%{http_code}' -X #{method} #{data_flag}http://#{auth_ip}:33443#{path} 2>&1"
   execute cmd, true
 
 --- Wait for the filter to be fully ready (queues listening).
@@ -659,9 +659,17 @@ run_test "HTTP access — domaine autorisé joignable après résolution DNS",
     return ok, "HTTP #{code}"
 
 run_test "HTTPS access — domaine autorisé joignable en TLS après résolution DNS",
-  "curl -k https://#{TEST_DOMAINS.allowed}/ → code HTTP reçu (≠ 000) via ip4_allowed",
+  "login → curl -4 -k https://#{TEST_DOMAINS.allowed}/ → code HTTP reçu (≠ 000) via ip4_allowed",
   ->
-    ok, code = curl_from_client "https://#{TEST_DOMAINS.allowed}/"
+    -- Le client doit être authentifié pour que le DNAT port 443 soit sauté.
+    -- -4 : forcer IPv4 (Happy Eyeballs essaierait IPv6, non couvert par ip4_allowed).
+    auth_curl "POST", "/login", "user=testuser&password=testpass"
+    os.execute "sleep 1"
+    cmd = "docker exec custos-client curl -4 -k -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 'https://#{TEST_DOMAINS.allowed}/' 2>&1"
+    _, code = execute cmd, true
+    code = (code or "")\gsub "%s+", ""
+    ok = code ~= "" and code ~= "000"
+    auth_curl "GET", "/logout"
     return ok, "HTTP #{code}"
 
 run_test "DNS query — blocked domain is rejected",
@@ -974,7 +982,7 @@ captive_curl = (path = "/") ->
   execute cmd, true
 
 run_test "Portail captif — requête HTTP → 302",
-  "curl http://#{auth_ip}:33080/ → HTTP 302 (redirect vers login HTTPS)",
+  "curl http://#{auth_ip}:33080/ → HTTP 302 (redirect vers login)",
   ->
     ok, code = captive_curl "/"
     return (code == "302"), "HTTP #{code}"
@@ -1073,7 +1081,7 @@ execute "rm -f ./tmp/sessions.lua 2>/dev/null || true"
 run_test "Inscription — nom d'utilisateur trop court → erreur",
   "POST /register user=a&password=pass123 → erreur dans la page",
   ->
-    cmd = "docker exec custos-client curl -k -s -w '\n%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' https://#{auth_ip}:33443/register 2>&1"
+    cmd = "docker exec custos-client curl -s -w '\n%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' http://#{auth_ip}:33443/register 2>&1"
     ok, output = execute cmd, true
     code = (output and output\match("(%d+)$")) or ""
     if code == "200" or code == "400"
@@ -1087,7 +1095,7 @@ run_test "Inscription — nom d'utilisateur trop court → erreur",
 run_test "Inscription — mot de passe trop court → erreur",
   "POST /register user=newuser&password=pass&password2=pass → erreur",
   ->
-    cmd = "docker exec custos-client curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' https://#{auth_ip}:33443/register 2>&1"
+    cmd = "docker exec custos-client curl -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' http://#{auth_ip}:33443/register 2>&1"
     ok, output = execute cmd, true
     code = (output and output\match("(%d+)$")) or ""
     if code == "200" or code == "400"
@@ -1101,7 +1109,7 @@ run_test "Inscription — mot de passe trop court → erreur",
 run_test "Inscription — mots de passe différents → erreur",
   "POST /register user=newuser&password=pass123&password2=pass456 → erreur",
   ->
-    cmd = "docker exec custos-client curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' https://#{auth_ip}:33443/register 2>&1"
+    cmd = "docker exec custos-client curl -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' http://#{auth_ip}:33443/register 2>&1"
     ok, output = execute cmd, true
     code = (output and output\match("(%d+)$")) or ""
     if code == "200" or code == "400"
@@ -1115,7 +1123,7 @@ run_test "Inscription — mots de passe différents → erreur",
 run_test "Inscription — utilisateur déjà existant → erreur",
   "POST /register user=testuser&password=newpass123&password2=newpass123 → 'déjà pris'",
   ->
-    cmd = "docker exec custos-client curl -k -s -w '\n%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' https://#{auth_ip}:33443/register 2>&1"
+    cmd = "docker exec custos-client curl -s -w '\n%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' http://#{auth_ip}:33443/register 2>&1"
     ok, output = execute cmd, true
     code = (output and output\match("(%d+)$")) or ""
     if code == "200" or code == "409"
@@ -1129,7 +1137,7 @@ run_test "Inscription — utilisateur déjà existant → erreur",
 run_test "Inscription — nouvel utilisateur réussi → auto-login + session créée",
   "POST /register user=newuser&password=newpass123&password2=newpass123 → 200 + sessions.lua contient newuser",
   ->
-    cmd = "docker exec custos-client curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' https://#{auth_ip}:33443/register 2>&1"
+    cmd = "docker exec custos-client curl -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' http://#{auth_ip}:33443/register 2>&1"
     ok, output = execute cmd, true
     code = (output and output\match("(%d+)$")) or ""
     if code == "200"
@@ -1137,7 +1145,7 @@ run_test "Inscription — nouvel utilisateur réussi → auto-login + session cr
       _, sess_out = execute "cat ./tmp/sessions.lua 2>/dev/null", true
       if sess_out and sess_out\match("newuser") and sess_out\match("172.28.0.10")
         -- Test login with the new credentials
-        cmd_login = "docker exec custos-client curl -k -s -o /dev/null -w '%{http_code}' -X POST -d 'user=newuser&password=newpass123' https://#{auth_ip}:33443/login 2>&1"
+        cmd_login = "docker exec custos-client curl -s -o /dev/null -w '%{http_code}' -X POST -d 'user=newuser&password=newpass123' http://#{auth_ip}:33443/login 2>&1"
         ok_login, code_login = execute cmd_login, true
         code_login = (code_login or "")\gsub "%s+", ""
         return ok_login and code_login == "200", "HTTP #{code} (inscription ok), login: #{code_login}"
