@@ -137,6 +137,30 @@ sources:
 
 # Regles ordonnees : premier verdict gagnant.
 rules:
+- description: Detection de portail captif (systemes d'exploitation)
+  actions: [allow]
+  conditions:
+    to_domains:
+    # Android / Chrome / Google
+    - connectivitycheck.gstatic.com
+    - connectivitycheck.android.com
+    - connectivitycheck.google.com
+    - clients3.google.com
+    # Apple (macOS, iOS, iPadOS)
+    - captive.apple.com
+    - www.apple.com
+    # Windows
+    - www.msftconnecttest.com
+    - www.msftncsi.com
+    - ipv6.msftconnecttest.com
+    - dns.msftncsi.com
+    # Firefox
+    - detectportal.firefox.com
+    # Ubuntu
+    - connectivity-check.ubuntu.com
+    # KDE Plasma
+    - networkcheck.kde.org
+
 - description: Blocage des categories indesirables (UT Capitole Toulouse)
   actions: [deny]
   conditions:
