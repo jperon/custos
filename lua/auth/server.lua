@@ -350,7 +350,14 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
           })
         end
         if nft_sess then
-          nft_sess.add_authenticated(peer_ip, auth_cfg.idle_timeout)
+          local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.idle_timeout)
+          if not (ok_nft) then
+            log_warn({
+              action = "auth_nft_add_failed",
+              ip = peer_ip,
+              ttl = auth_cfg.idle_timeout
+            })
+          end
         end
       end
       http_response(raw_sock, "204 No Content", "")
@@ -386,7 +393,14 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
       purge_expired(sessions)
       add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
       if nft_sess then
-        nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
+        local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
+        if not (ok_nft) then
+          log_warn({
+            action = "auth_nft_add_failed",
+            ip = peer_ip,
+            ttl = auth_cfg.session_ttl
+          })
+        end
       end
       local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
       if not (ok2) then
@@ -440,7 +454,14 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
           purge_expired(sessions)
           add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
           if nft_sess then
-            nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
+            local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
+            if not (ok_nft) then
+              log_warn({
+                action = "auth_nft_add_failed",
+                ip = peer_ip,
+                ttl = auth_cfg.session_ttl
+              })
+            end
           end
           local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
           if not (ok2) then

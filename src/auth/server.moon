@@ -350,7 +350,8 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
         ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
         log_warn { action: "auth_write_failed", err: err3 } unless ok2
         if nft_sess
-          nft_sess.add_authenticated peer_ip, auth_cfg.idle_timeout
+          ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.idle_timeout
+          log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.idle_timeout } unless ok_nft
       http_response raw_sock, "204 No Content", ""
     else
       http_response raw_sock, "401 Unauthorized", ""
@@ -377,7 +378,8 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
       purge_expired sessions
       add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
       if nft_sess
-        nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
+        ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
+        log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl } unless ok_nft
       ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
       log_warn { action: "auth_write_failed", err: err3 } unless ok2
       http_response raw_sock, "200 OK", success_pg
@@ -409,7 +411,8 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
           purge_expired sessions
           add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
           if nft_sess
-            nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
+            ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
+            log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl } unless ok_nft
           ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
           log_warn { action: "auth_write_failed", err: err3 } unless ok2
           -- Met à jour la table des secrets en place pour la rendre visible au parent
