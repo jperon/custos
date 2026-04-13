@@ -1,5 +1,4 @@
 local socket = require("socket")
-local ssl = require("ssl")
 local verify_password, load_secrets, register_user
 do
   local _obj_0 = require("auth.credentials")
@@ -316,39 +315,18 @@ register_rate_exceeded = function(register_attempts, peer_ip, max_attempts, wind
   return false
 end
 local handle_connection
-handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
+handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
   raw_sock:settimeout(10)
-  local tls_sock, err = ssl.wrap(raw_sock, tls_ctx)
-  if not (tls_sock) then
-    log_warn({
-      action = "auth_tls_wrap_failed",
-      ip = peer_ip,
-      mac = peer_mac,
-      err = err
-    })
-    return 
-  end
-  local ok, err2 = tls_sock:dohandshake()
-  if not (ok) then
-    log_warn({
-      action = "auth_tls_handshake_failed",
-      ip = peer_ip,
-      mac = peer_mac,
-      err = err2
-    })
-    tls_sock:close()
-    return 
-  end
-  local method, path, headers, body = read_request(tls_sock)
+  local method, path, headers, body = read_request(raw_sock)
   if not (method) then
-    tls_sock:close()
+    raw_sock:close()
     return 
   end
   if method == "GET" and (path == "/" or path == "/login") then
     local s = sessions[peer_ip]
     local now = os.time()
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat) then
-      http_response(tls_sock, "200 OK", success_pg)
+      http_response(raw_sock, "200 OK", success_pg)
       log_info({
         action = "auth_already_logged",
         ip = peer_ip,
@@ -356,7 +334,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
         user = s.user
       })
     else
-      http_response(tls_sock, "200 OK", home_page)
+      http_response(raw_sock, "200 OK", home_page)
     end
   elseif method == "GET" and path == "/ping" then
     local s = sessions[peer_ip]
@@ -372,9 +350,9 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
           })
         end
       end
-      http_response(tls_sock, "204 No Content", "")
+      http_response(raw_sock, "204 No Content", "")
     else
-      http_response(tls_sock, "401 Unauthorized", "")
+      http_response(raw_sock, "401 Unauthorized", "")
     end
   elseif method == "GET" and path == "/logout" then
     sessions[peer_ip] = nil
@@ -388,14 +366,14 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
         err = err3
       })
     end
-    http_redirect(tls_sock, "/")
+    http_redirect(raw_sock, "/")
     log_info({
       action = "auth_logout",
       ip = peer_ip,
       mac = peer_mac
     })
   elseif method == "GET" and path == "/register" then
-    http_response(tls_sock, "200 OK", home_register_page)
+    http_response(raw_sock, "200 OK", home_register_page)
   elseif method == "POST" and path == "/login" then
     local form = decode_form(body)
     local user = form.user or ""
@@ -414,7 +392,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
           err = err3
         })
       end
-      http_response(tls_sock, "200 OK", success_pg)
+      http_response(raw_sock, "200 OK", success_pg)
       log_info({
         action = "auth_login_ok",
         ip = peer_ip,
@@ -422,7 +400,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
         user = user
       })
     else
-      http_response(tls_sock, "401 Unauthorized", failure_page("Nom d'utilisateur ou mot de passe incorrect."))
+      http_response(raw_sock, "401 Unauthorized", failure_page("Nom d'utilisateur ou mot de passe incorrect."))
       log_warn({
         action = "auth_login_failed",
         ip = peer_ip,
@@ -434,7 +412,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
     local max_attempts = auth_cfg.register_rate_limit or 3
     local window_sec = auth_cfg.register_rate_window or 300
     if register_rate_exceeded(register_attempts, peer_ip, max_attempts, window_sec) then
-      http_response(tls_sock, "429 Too Many Requests", register_failure_page("Trop de tentatives d'inscription. Réessayez plus tard."))
+      http_response(raw_sock, "429 Too Many Requests", register_failure_page("Trop de tentatives d'inscription. Réessayez plus tard."))
       log_warn({
         action = "auth_register_rate_limited",
         ip = peer_ip,
@@ -446,7 +424,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
       local pass = form.password or ""
       local pass2 = form.password2 or ""
       if pass ~= pass2 then
-        http_response(tls_sock, "400 Bad Request", register_failure_page("Les mots de passe ne correspondent pas."))
+        http_response(raw_sock, "400 Bad Request", register_failure_page("Les mots de passe ne correspondent pas."))
         log_warn({
           action = "auth_register_password_mismatch",
           ip = peer_ip,
@@ -469,7 +447,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
             })
           end
           secrets[user] = new_secrets[user]
-          http_response(tls_sock, "200 OK", success_pg)
+          http_response(raw_sock, "200 OK", success_pg)
           log_info({
             action = "auth_register_ok",
             ip = peer_ip,
@@ -483,7 +461,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
             user_msg = "Impossible de créer ce compte. Veuillez choisir un autre nom."
             status = "409 Conflict"
           end
-          http_response(tls_sock, status, register_failure_page(user_msg))
+          http_response(raw_sock, status, register_failure_page(user_msg))
           log_warn({
             action = "auth_register_failed",
             ip = peer_ip,
@@ -495,9 +473,9 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
       end
     end
   else
-    http_response(tls_sock, "404 Not Found", "<h1>404</h1>")
+    http_response(raw_sock, "404 Not Found", "<h1>404</h1>")
   end
-  return tls_sock:close()
+  return raw_sock:close()
 end
 local make_server4
 make_server4 = function(host, port)
@@ -529,8 +507,8 @@ make_server6 = function(port)
   return srv6
 end
 local run
-run = function(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path)
-  local port = auth_cfg.port or 33443
+run = function(secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path)
+  local port = auth_cfg.port or 33080
   local host = auth_cfg.host or "::"
   secrets_path = auth_cfg.secrets or "cfg/secrets"
   local hb_interval = auth_cfg.heartbeat_interval or 30
@@ -557,10 +535,10 @@ run = function(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, se
   local sessions = { }
   local register_attempts = { }
   captive_srvs = captive_srvs or { }
-  local https_set = { }
-  https_set[listen4] = true
+  local auth_set = { }
+  auth_set[listen4] = true
   if listen6 then
-    https_set[listen6] = true
+    auth_set[listen6] = true
   end
   local all_servers = {
     listen4
@@ -588,8 +566,8 @@ run = function(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, se
         local peer_ip = client:getpeername()
         peer_ip = tostring(peer_ip)
         local peer_mac = neigh.get_mac(peer_ip)
-        if https_set[srv] then
-          handle_connection(client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
+        if auth_set[srv] then
+          handle_connection(client, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
         else
           captive.handle_connection(client, port)
         end

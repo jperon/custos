@@ -1,17 +1,15 @@
 -- src/auth/server.moon
--- Serveur HTTPS minimal pour l'authentification des utilisateurs.
+-- Serveur HTTP minimal pour l'authentification des utilisateurs.
 --
 -- Endpoints :
 --   GET  /        → page de connexion HTML
 --   POST /login   → vérification des credentials, création de session
 --   GET  /logout  → suppression de la session de l'IP source
 --
--- Dépendances : luasocket, luasec.
--- Le contexte TLS est fourni par auth/cert, les credentials par auth/credentials,
--- les sessions par auth/sessions.
+-- Dépendances : luasocket.
+-- Les credentials sont fournis par auth/credentials, les sessions par auth/sessions.
 
 socket = require "socket"
-ssl    = require "ssl"
 
 { :verify_password, :load_secrets, :register_user } = require "auth.credentials"
 { :add_session, :purge_expired, :write_sessions } = require "auth.sessions"
@@ -314,9 +312,8 @@ register_rate_exceeded = (register_attempts, peer_ip, max_attempts, window_sec) 
 
 -- ── Gestionnaire de connexion ─────────────────────────────────────
 
---- Gère une connexion HTTPS entrante.
+--- Gère une connexion HTTP entrante.
 -- @tparam table  raw_sock    Socket TCP brut (luasocket)
--- @tparam table  tls_ctx     Contexte TLS luasec
 -- @tparam table  secrets     Table {user → hash}
 -- @tparam table  sessions    Table de sessions (modifiée en place)
 -- @tparam table  auth_cfg    Configuration auth (session_ttl, idle_timeout, sessions_file)
@@ -326,24 +323,12 @@ register_rate_exceeded = (register_attempts, peer_ip, max_attempts, window_sec) 
 -- @tparam string secrets_path Chemin du fichier secrets
 -- @tparam table register_attempts Table de rate-limiting pour l'inscription
 -- @tparam string peer_mac    Adresse MAC du client
-handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac) ->
+handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac) ->
   raw_sock\settimeout 10
 
-  -- Wrap TLS
-  tls_sock, err = ssl.wrap raw_sock, tls_ctx
-  unless tls_sock
-    log_warn { action: "auth_tls_wrap_failed", ip: peer_ip, mac: peer_mac, err: err }
-    return
-
-  ok, err2 = tls_sock\dohandshake!
-  unless ok
-    log_warn { action: "auth_tls_handshake_failed", ip: peer_ip, mac: peer_mac, err: err2 }
-    tls_sock\close!
-    return
-
-  method, path, headers, body = read_request tls_sock
+  method, path, headers, body = read_request raw_sock
   unless method
-    tls_sock\close!
+    raw_sock\close!
     return
 
   if method == "GET" and (path == "/" or path == "/login")
@@ -351,10 +336,10 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
     s = sessions[peer_ip]
     now = os.time!
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat)
-      http_response tls_sock, "200 OK", success_pg
+      http_response raw_sock, "200 OK", success_pg
       log_info { action: "auth_already_logged", ip: peer_ip, mac: peer_mac, user: s.user }
     else
-      http_response tls_sock, "200 OK", home_page
+      http_response raw_sock, "200 OK", home_page
 
   elseif method == "GET" and path == "/ping"
     s = sessions[peer_ip]
@@ -364,9 +349,9 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
         s.heartbeat = now + auth_cfg.idle_timeout
         ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
         log_warn { action: "auth_write_failed", err: err3 } unless ok2
-      http_response tls_sock, "204 No Content", ""
+      http_response raw_sock, "204 No Content", ""
     else
-      http_response tls_sock, "401 Unauthorized", ""
+      http_response raw_sock, "401 Unauthorized", ""
 
   elseif method == "GET" and path == "/logout"
     sessions[peer_ip] = nil
@@ -374,11 +359,11 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
       nft_sess.del_authenticated peer_ip
     ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
     log_warn { action: "auth_write_failed", err: err3 } unless ok2
-    http_redirect tls_sock, "/"
+    http_redirect raw_sock, "/"
     log_info { action: "auth_logout", ip: peer_ip, mac: peer_mac }
 
   elseif method == "GET" and path == "/register"
-    http_response tls_sock, "200 OK", home_register_page
+    http_response raw_sock, "200 OK", home_register_page
 
   elseif method == "POST" and path == "/login"
     form = decode_form body
@@ -393,10 +378,10 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
         nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
       ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
       log_warn { action: "auth_write_failed", err: err3 } unless ok2
-      http_response tls_sock, "200 OK", success_pg
+      http_response raw_sock, "200 OK", success_pg
       log_info { action: "auth_login_ok", ip: peer_ip, mac: peer_mac, user: user }
     else
-      http_response tls_sock, "401 Unauthorized",
+      http_response raw_sock, "401 Unauthorized",
         failure_page "Nom d'utilisateur ou mot de passe incorrect."
       log_warn { action: "auth_login_failed", ip: peer_ip, mac: peer_mac, user: user }
 
@@ -404,7 +389,7 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
     max_attempts = auth_cfg.register_rate_limit or 3
     window_sec = auth_cfg.register_rate_window or 300
     if register_rate_exceeded register_attempts, peer_ip, max_attempts, window_sec
-      http_response tls_sock, "429 Too Many Requests",
+      http_response raw_sock, "429 Too Many Requests",
         register_failure_page "Trop de tentatives d'inscription. Réessayez plus tard."
       log_warn { action: "auth_register_rate_limited", ip: peer_ip, mac: peer_mac }
     else
@@ -413,7 +398,7 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
       pass = form.password or ""
       pass2 = form.password2 or ""
       if pass ~= pass2
-        http_response tls_sock, "400 Bad Request",
+        http_response raw_sock, "400 Bad Request",
           register_failure_page "Les mots de passe ne correspondent pas."
         log_warn { action: "auth_register_password_mismatch", ip: peer_ip, mac: peer_mac, user: user }
       else
@@ -427,7 +412,7 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
           log_warn { action: "auth_write_failed", err: err3 } unless ok2
           -- Met à jour la table des secrets en place pour la rendre visible au parent
           secrets[user] = new_secrets[user]
-          http_response tls_sock, "200 OK", success_pg
+          http_response raw_sock, "200 OK", success_pg
           log_info { action: "auth_register_ok", ip: peer_ip, mac: peer_mac, user: user }
         else
           user_msg = reg_err
@@ -435,14 +420,14 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
           if reg_err\match "déjà pris"
             user_msg = "Impossible de créer ce compte. Veuillez choisir un autre nom."
             status = "409 Conflict"
-          http_response tls_sock, status,
+          http_response raw_sock, status,
             register_failure_page user_msg
           log_warn { action: "auth_register_failed", ip: peer_ip, mac: peer_mac, user: user, err: reg_err }
 
   else
-    http_response tls_sock, "404 Not Found", "<h1>404</h1>"
+    http_response raw_sock, "404 Not Found", "<h1>404</h1>"
 
-  tls_sock\close!
+  raw_sock\close!
 
 -- ── Création des sockets serveur ─────────────────────────────────
 
@@ -478,15 +463,14 @@ make_server6 = (port) ->
 
 -- ── Boucle principale ────────────────────────────────────────────
 
---- Démarre la boucle d'acceptation HTTPS (et portail captif HTTP si configuré).
--- @tparam table tls_ctx       Contexte TLS luasec
+--- Démarre la boucle d'acceptation HTTP (et portail captif si configuré).
 -- @tparam table secrets       Table {user → hash}
 -- @tparam table auth_cfg      Configuration auth
 -- @tparam function|nil reload_fn  Fonction appelée pour recharger les secrets (SIGHUP)
 -- @tparam table|nil nft_sess  Module auth.nft_sessions (nil si portail captif désactivé)
 -- @tparam table captive_srvs  Liste de sockets TCP plain du portail captif (peut être vide)
-run = (tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path) ->
-  port = auth_cfg.port or 33443
+run = (secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path) ->
+  port = auth_cfg.port or 33080
   host = auth_cfg.host or "::"
   secrets_path = auth_cfg.secrets or "cfg/secrets"
 
@@ -494,7 +478,7 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_pa
   hb_interval = auth_cfg.heartbeat_interval or 30
   success_pg  = make_success_page hb_interval
 
-  -- Sockets d'écoute HTTPS : on tente toujours IPv4 + IPv6
+  -- Sockets d'écoute HTTP : on tente toujours IPv4 + IPv6
   listen4, err4 = make_server4 "0.0.0.0", port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
   listen6 = make_server6 port
@@ -507,11 +491,11 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_pa
 
   register_attempts = {}
 
-  -- Construire la liste de tous les sockets : HTTPS + captive HTTP
+  -- Construire la liste de tous les sockets : HTTP + captive
   captive_srvs = captive_srvs or {}
-  https_set = {}
-  https_set[listen4] = true
-  https_set[listen6] = true if listen6
+  auth_set = {}
+  auth_set[listen4] = true
+  auth_set[listen6] = true if listen6
 
   all_servers = { listen4 }
   if listen6
@@ -532,11 +516,11 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_pa
         peer_ip = client\getpeername!
         peer_ip = tostring peer_ip
         peer_mac = neigh.get_mac peer_ip
-        if https_set[srv]
-          -- Connexion HTTPS : TLS + logique d'authentification
-          handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac
+        if auth_set[srv]
+          -- Connexion HTTP : logique d'authentification
+          handle_connection client, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac
         else
-          -- Connexion HTTP plain : portail captif → redirect 302 vers HTTPS login
+          -- Connexion HTTP plain : portail captif → redirect 302 vers login
           captive.handle_connection client, port
 
 { :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE }

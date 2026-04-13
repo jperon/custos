@@ -1,13 +1,12 @@
 -- src/auth/worker.moon
--- Point d'entrée du worker d'authentification HTTPS.
+-- Point d'entrée du worker d'authentification HTTP.
 --
 -- Chargé par main.moon dans un processus enfant forké.
--- Charge la configuration, génère ou charge le certificat TLS,
--- charge le fichier secrets, puis démarre la boucle du serveur HTTPS.
+-- Charge la configuration, charge le fichier secrets,
+-- puis démarre la boucle du serveur HTTP.
 --
 -- Rechargement des secrets sur SIGHUP (sans redémarrage du serveur).
 
-{ :load_or_generate }  = require "auth.cert"
 { :load_secrets }      = require "auth.credentials"
 { :run }               = require "auth.server"
 nft_sess               = require "auth.nft_sessions"
@@ -33,15 +32,7 @@ _reload_requested = false
 --- Démarre le worker d'authentification.
 -- @tparam table auth_cfg Configuration auth issue de cfg/filter.yml
 run_auth_worker = (auth_cfg) ->
-  -- Chemins du certificat et de la clé
-  cert_path = auth_cfg.cert or "./tmp/auth.crt"
-  key_path  = auth_cfg.key  or "./tmp/auth.key"
-
   log_info { action: "auth_worker_start", port: auth_cfg.port }
-
-  -- Charge ou génère le certificat TLS
-  tls_ctx = load_or_generate key_path, cert_path
-  log_info { action: "auth_cert_loaded", cert: cert_path }
 
   -- Charge le fichier secrets
   secrets_path = auth_cfg.secrets or "cfg/secrets"
@@ -88,6 +79,6 @@ run_auth_worker = (auth_cfg) ->
     else
       log_info { action: "captive_portal_ipv6_skipped" }
 
-  run tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path
+  run secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path
 
 { :run_auth_worker }

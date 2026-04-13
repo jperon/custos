@@ -1,5 +1,3 @@
-local load_or_generate
-load_or_generate = require("auth.cert").load_or_generate
 local load_secrets
 load_secrets = require("auth.credentials").load_secrets
 local run
@@ -19,16 +17,9 @@ local SIGHUP = 1
 local _reload_requested = false
 local run_auth_worker
 run_auth_worker = function(auth_cfg)
-  local cert_path = auth_cfg.cert or "./tmp/auth.crt"
-  local key_path = auth_cfg.key or "./tmp/auth.key"
   log_info({
     action = "auth_worker_start",
     port = auth_cfg.port
-  })
-  local tls_ctx = load_or_generate(key_path, cert_path)
-  log_info({
-    action = "auth_cert_loaded",
-    cert = cert_path
   })
   local secrets_path = auth_cfg.secrets or "cfg/secrets"
   local secrets, err = load_secrets(secrets_path)
@@ -97,7 +88,7 @@ run_auth_worker = function(auth_cfg)
       })
     end
   end
-  return run(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path)
+  return run(secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path)
 end
 return {
   run_auth_worker = run_auth_worker
