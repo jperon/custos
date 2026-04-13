@@ -36,7 +36,7 @@ start_service() {
 
     procd_open_instance
     procd_set_param command "$PROG" "$CUSTOS_DIR/main.lua"
-    procd_set_param env LUA_PATH="/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;;" CUSTOS_FILTER_CONFIG="$FILTER_CONFIG"
+    procd_set_param env LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;;" CUSTOS_FILTER_CONFIG="$FILTER_CONFIG"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1
