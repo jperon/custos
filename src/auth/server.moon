@@ -349,6 +349,8 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
         s.heartbeat = now + auth_cfg.idle_timeout
         ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
         log_warn { action: "auth_write_failed", err: err3 } unless ok2
+        if nft_sess
+          nft_sess.add_authenticated peer_ip, auth_cfg.idle_timeout
       http_response raw_sock, "204 No Content", ""
     else
       http_response raw_sock, "401 Unauthorized", ""

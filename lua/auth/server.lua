@@ -349,6 +349,9 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
             err = err3
           })
         end
+        if nft_sess then
+          nft_sess.add_authenticated(peer_ip, auth_cfg.idle_timeout)
+        end
       end
       http_response(raw_sock, "204 No Content", "")
     else
