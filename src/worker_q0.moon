@@ -61,6 +61,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   verdict  = NF_ACCEPT
   q_fields = {
     mac_src:     l2.mac_src
+    vlan:        l2.vlan
     in_if:       tostring l2.in_ifindex
     src_ip:      pkt.ip.src_ip
     dst_ip:      pkt.ip.dst_ip
@@ -79,6 +80,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       domain: q.qname
       src_ip: pkt.ip.src_ip
       mac:    l2.mac_src
+      vlan:   l2.vlan
       ts:     os.time!
     }
     allowed, reason = filter.decide req

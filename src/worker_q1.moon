@@ -21,6 +21,7 @@
 neigh = require "neigh"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
+{ :get_l2 } = require "parse/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
 { :build_refused, :append_ede_to_dns, :EDE_OTHER, :EDE_TTL_TEXT, :EDNS_OPT_EDE } = require "parse/dns"
 { :add_ip4, :add_ip6 }      = require "nft"
@@ -120,6 +121,8 @@ resolve_client_family = (ip_str, want) ->
 -- @tparam number pkt_id  NFQUEUE packet id
 -- @treturn number NF_ACCEPT, NF_DROP, or -1 (verdict already set)
 handle_response = (qh_ptr, nfad, pkt_id) ->
+  l2 = get_l2 nfad
+
   -- ── Drain pipe IPC ───────────────────────────────────────────
   -- Absorbe tous les tokens disponibles de Q0 avant de traiter ce paquet.
   -- Le callback update_mac_clients enrichit la table mac_clients au passage.
@@ -159,6 +162,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- (la réponse est adressée au client LAN).
   client_port = pkt.l4.dst_port
   txid        = pkt.dns.txid
+  client_ip   = pkt.ip.dst_ip
+  client_mac  = ip_to_mac[client_ip] or "unknown"
 
   -- ── Vérification IPC ─────────────────────────────────────────
   -- En mode Docker, on saute la vérification IPC car les requêtes
@@ -171,8 +176,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         action:    "response_no_matching_question"
         src_ip:    pkt.ip.src_ip
         dst_ip:    pkt.ip.dst_ip
+        vlan:      l2.vlan
         txid:      string.format "0x%04x", txid
         rcode:     pkt.dns.rcode
+        client_mac: client_mac
       }
       return NF_DROP
     -- Transaction consommée (one-shot : une réponse par question)
@@ -194,8 +201,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       action:   "response_refused"
       src_ip:   pkt.ip.src_ip
       dst_ip:   pkt.ip.dst_ip
+      vlan:     l2.vlan
       txid:     string.format "0x%04x", txid
       qnames:   qnames
+      client_mac: client_mac
     }
     patched_ptr = ffi.cast "const unsigned char*", patched
     libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr
@@ -253,6 +262,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     action:      "response_patched"
     src_ip:      pkt.ip.src_ip
     dst_ip:      pkt.ip.dst_ip
+    vlan:        l2.vlan
     txid:        string.format "0x%04x", txid
     qnames:      qnames
     answers:     ip_count
@@ -260,6 +270,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     rcode:       pkt.dns.rcode
     ndpi_master: pkt.ndpi_master
     ndpi_app:    pkt.ndpi_app
+    client_mac:  client_mac
   }
 
   -- ── Verdict avec payload modifié ─────────────────────────────

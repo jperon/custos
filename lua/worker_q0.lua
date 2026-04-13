@@ -59,6 +59,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   local verdict = NF_ACCEPT
   local q_fields = {
     mac_src = l2.mac_src,
+    vlan = l2.vlan,
     in_if = tostring(l2.in_ifindex),
     src_ip = pkt.ip.src_ip,
     dst_ip = pkt.ip.dst_ip,
@@ -76,6 +77,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       domain = q.qname,
       src_ip = pkt.ip.src_ip,
       mac = l2.mac_src,
+      vlan = l2.vlan,
       ts = os.time()
     }
     local allowed, reason = filter.decide(req)

@@ -17,10 +17,13 @@ get_l2 = function(nfad)
     mac_raw = ffi.string(hw.hw_addr, 6)
   end
   local in_ifindex = tonumber(libnfq.nfq_get_indev(nfad))
+  local mark = tonumber(libnfq.nfq_get_nfmark(nfad))
+  local vlan = mark > 0 and mark or nil
   return {
     mac_src = mac_src,
     mac_raw = mac_raw,
-    in_ifindex = in_ifindex
+    in_ifindex = in_ifindex,
+    vlan = vlan
   }
 end
 return {

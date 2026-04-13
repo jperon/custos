@@ -12,6 +12,8 @@ local neigh = require("neigh")
 local ndpi = require("parse/ndpi")
 local QTYPE
 QTYPE = ndpi.QTYPE
+local get_l2
+get_l2 = require("parse/ethernet").get_l2
 local drain_pipe, is_pending, get_pending_entry, consume
 do
   local _obj_0 = require("ipc")
@@ -116,6 +118,7 @@ resolve_client_family = function(ip_str, want)
 end
 local handle_response
 handle_response = function(qh_ptr, nfad, pkt_id)
+  local l2 = get_l2(nfad)
   local ts = now()
   drain_ts = ts
   drain_pipe(pipe_rfd, now, drain_on_msg)
@@ -142,6 +145,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local client_port = pkt.l4.dst_port
   local txid = pkt.dns.txid
+  local client_ip = pkt.ip.dst_ip
+  local client_mac = ip_to_mac[client_ip] or "unknown"
   local entry = nil
   if not (DOCKER_MODE) then
     entry = get_pending_entry(txid, pkt.ip.dst_ip, client_port, now)
@@ -150,8 +155,10 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         action = "response_no_matching_question",
         src_ip = pkt.ip.src_ip,
         dst_ip = pkt.ip.dst_ip,
+        vlan = l2.vlan,
         txid = string.format("0x%04x", txid),
-        rcode = pkt.dns.rcode
+        rcode = pkt.dns.rcode,
+        client_mac = client_mac
       })
       return NF_DROP
     end
@@ -185,15 +192,17 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       action = "response_refused",
       src_ip = pkt.ip.src_ip,
       dst_ip = pkt.ip.dst_ip,
+      vlan = l2.vlan,
       txid = string.format("0x%04x", txid),
-      qnames = qnames
+      qnames = qnames,
+      client_mac = client_mac
     })
     local patched_ptr = ffi.cast("const unsigned char*", patched)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
     return -1
   end
   local answers = ndpi.parse_answers(raw, pkt)
-  local client_ip = pkt.ip.dst_ip
+  client_ip = pkt.ip.dst_ip
   local client_v4 = nil
   local client_v6 = nil
   local ip_count = 0
@@ -264,13 +273,15 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     action = "response_patched",
     src_ip = pkt.ip.src_ip,
     dst_ip = pkt.ip.dst_ip,
+    vlan = l2.vlan,
     txid = string.format("0x%04x", txid),
     qnames = qnames,
     answers = ip_count,
     ttl_set = FORCED_TTL,
     rcode = pkt.dns.rcode,
     ndpi_master = pkt.ndpi_master,
-    ndpi_app = pkt.ndpi_app
+    ndpi_app = pkt.ndpi_app,
+    client_mac = client_mac
   })
   local patched_ptr = ffi.cast("const unsigned char*", patched)
   libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)

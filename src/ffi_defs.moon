@@ -146,6 +146,7 @@ ffi.cdef [[
   int                  nfq_get_payload(nfq_data *nfad, unsigned char **data);
   nfqnl_msg_packet_hw* nfq_get_packet_hw(nfq_data *nfad);
   int                  nfq_get_indev(nfq_data *nfad);  /* index interface entrée */
+  uint32_t             nfq_get_nfmark(nfq_data *nfad);
 
   /* ── Verdict ── */
   /* verdict simple (sans modification du paquet) */

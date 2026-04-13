@@ -34,7 +34,9 @@ get_l2 = (nfad) ->
 
   -- Index de l'interface d'entrée (non disponible pour OUTPUT)
   in_ifindex = tonumber libnfq.nfq_get_indev nfad
+  mark = tonumber libnfq.nfq_get_nfmark nfad
+  vlan = mark > 0 and mark or nil
 
-  { :mac_src, :mac_raw, :in_ifindex }
+  { :mac_src, :mac_raw, :in_ifindex, :vlan }
 
 { :get_l2, :format_mac }
