@@ -51,7 +51,8 @@ handle_connection = function(client, auth_port)
   local local_ip
   local_ip, _ = client:getsockname()
   local_ip = local_ip or "127.0.0.1"
-  local redirect_url = "http://" .. tostring(local_ip) .. ":" .. tostring(auth_port) .. "/"
+  local host_part = local_ip:find(":", 1, true) and "[" .. tostring(local_ip) .. "]" or local_ip
+  local redirect_url = "http://" .. tostring(host_part) .. ":" .. tostring(auth_port) .. "/"
   local resp = "HTTP/1.1 302 Found\r\nLocation: " .. tostring(redirect_url) .. "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   client:send(resp)
   local peer_ip

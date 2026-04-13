@@ -66,7 +66,9 @@ handle_connection = (client, auth_port) ->
   -- IP locale = interface LAN du filtre qui a reçu la connexion
   local_ip, _ = client\getsockname!
   local_ip = local_ip or "127.0.0.1"
-  redirect_url = "http://#{local_ip}:#{auth_port}/"
+  -- Entoure les adresses IPv6 de crochets pour former une URL valide
+  host_part = local_ip\find(":", 1, true) and "[#{local_ip}]" or local_ip
+  redirect_url = "http://#{host_part}:#{auth_port}/"
 
   resp = "HTTP/1.1 302 Found\r\nLocation: #{redirect_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   client\send resp
