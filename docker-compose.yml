@@ -22,6 +22,7 @@ services:
       - ./nft-rules:/app/nft-rules
       - ./tmp:/app/tmp
       - ./cfg:/app/cfg
+      - ./cfg:/etc/custos
     profiles:
       - ndpi4
     networks:
@@ -71,6 +72,7 @@ services:
       - ./nft-rules:/app/nft-rules
       - ./tmp:/app/tmp
       - ./cfg:/app/cfg
+      - ./cfg:/etc/custos
     profiles:
       - ndpi5
     networks:
