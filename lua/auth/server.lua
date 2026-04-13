@@ -16,6 +16,7 @@ do
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
 local captive = require("auth.captive")
+local neigh = require("neigh")
 local LOGIN_PAGE = [[<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -315,13 +316,14 @@ register_rate_exceeded = function(register_attempts, peer_ip, max_attempts, wind
   return false
 end
 local handle_connection
-handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts)
+handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
   raw_sock:settimeout(10)
   local tls_sock, err = ssl.wrap(raw_sock, tls_ctx)
   if not (tls_sock) then
     log_warn({
       action = "auth_tls_wrap_failed",
       ip = peer_ip,
+      mac = peer_mac,
       err = err
     })
     return 
@@ -331,6 +333,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
     log_warn({
       action = "auth_tls_handshake_failed",
       ip = peer_ip,
+      mac = peer_mac,
       err = err2
     })
     tls_sock:close()
@@ -349,6 +352,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
       log_info({
         action = "auth_already_logged",
         ip = peer_ip,
+        mac = peer_mac,
         user = s.user
       })
     else
@@ -387,7 +391,8 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
     http_redirect(tls_sock, "/")
     log_info({
       action = "auth_logout",
-      ip = peer_ip
+      ip = peer_ip,
+      mac = peer_mac
     })
   elseif method == "GET" and path == "/register" then
     http_response(tls_sock, "200 OK", home_register_page)
@@ -413,6 +418,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
       log_info({
         action = "auth_login_ok",
         ip = peer_ip,
+        mac = peer_mac,
         user = user
       })
     else
@@ -420,6 +426,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
       log_warn({
         action = "auth_login_failed",
         ip = peer_ip,
+        mac = peer_mac,
         user = user
       })
     end
@@ -430,7 +437,8 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
       http_response(tls_sock, "429 Too Many Requests", register_failure_page("Trop de tentatives d'inscription. Réessayez plus tard."))
       log_warn({
         action = "auth_register_rate_limited",
-        ip = peer_ip
+        ip = peer_ip,
+        mac = peer_mac
       })
     else
       local form = decode_form(body)
@@ -442,6 +450,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
         log_warn({
           action = "auth_register_password_mismatch",
           ip = peer_ip,
+          mac = peer_mac,
           user = user
         })
       else
@@ -464,6 +473,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
           log_info({
             action = "auth_register_ok",
             ip = peer_ip,
+            mac = peer_mac,
             user = user
           })
         else
@@ -477,6 +487,7 @@ handle_connection = function(raw_sock, tls_ctx, secrets, sessions, auth_cfg, pee
           log_warn({
             action = "auth_register_failed",
             ip = peer_ip,
+            mac = peer_mac,
             user = user,
             err = reg_err
           })
@@ -576,8 +587,9 @@ run = function(tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, se
       if client then
         local peer_ip = client:getpeername()
         peer_ip = tostring(peer_ip)
+        local peer_mac = neigh.get_mac(peer_ip)
         if https_set[srv] then
-          handle_connection(client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts)
+          handle_connection(client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
         else
           captive.handle_connection(client, port)
         end

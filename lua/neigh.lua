@@ -85,9 +85,32 @@ refresh = function(mac_clients, ip_to_mac)
   })
   return n
 end
+local _mac_clients = nil
+local _ip_to_mac = nil
+local _last_refresh = 0
+local get_mac
+get_mac = function(ip)
+  if not (_mac_clients) then
+    local res = load()
+    _mac_clients = res.mac_clients
+    _ip_to_mac = res.ip_to_mac
+    _last_refresh = os.time()
+  end
+  if _ip_to_mac[ip] then
+    return _ip_to_mac[ip]
+  end
+  local ts = os.time()
+  if ts - _last_refresh > 5 then
+    _last_refresh = ts
+    refresh(_mac_clients, _ip_to_mac)
+    return _ip_to_mac[ip] or "unknown"
+  end
+  return "unknown"
+end
 return {
   load = load,
   refresh = refresh,
+  get_mac = get_mac,
   parse_neigh_line = parse_neigh_line,
   fill_from_neigh = fill_from_neigh
 }

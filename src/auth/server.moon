@@ -17,6 +17,7 @@ ssl    = require "ssl"
 { :add_session, :purge_expired, :write_sessions } = require "auth.sessions"
 { :log_info, :log_warn }            = require "log"
 captive                             = require "auth.captive"
+neigh                               = require "neigh"
 
 -- ── Page HTML ────────────────────────────────────────────────────
 
@@ -324,18 +325,19 @@ register_rate_exceeded = (register_attempts, peer_ip, max_attempts, window_sec) 
 -- @tparam table|nil nft_sess Module auth.nft_sessions (ou nil si portail captif désactivé)
 -- @tparam string secrets_path Chemin du fichier secrets
 -- @tparam table register_attempts Table de rate-limiting pour l'inscription
-handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts) ->
+-- @tparam string peer_mac    Adresse MAC du client
+handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac) ->
   raw_sock\settimeout 10
 
   -- Wrap TLS
   tls_sock, err = ssl.wrap raw_sock, tls_ctx
   unless tls_sock
-    log_warn { action: "auth_tls_wrap_failed", ip: peer_ip, err: err }
+    log_warn { action: "auth_tls_wrap_failed", ip: peer_ip, mac: peer_mac, err: err }
     return
 
   ok, err2 = tls_sock\dohandshake!
   unless ok
-    log_warn { action: "auth_tls_handshake_failed", ip: peer_ip, err: err2 }
+    log_warn { action: "auth_tls_handshake_failed", ip: peer_ip, mac: peer_mac, err: err2 }
     tls_sock\close!
     return
 
@@ -350,7 +352,7 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
     now = os.time!
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat)
       http_response tls_sock, "200 OK", success_pg
-      log_info { action: "auth_already_logged", ip: peer_ip, user: s.user }
+      log_info { action: "auth_already_logged", ip: peer_ip, mac: peer_mac, user: s.user }
     else
       http_response tls_sock, "200 OK", home_page
 
@@ -373,7 +375,7 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
     ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
     log_warn { action: "auth_write_failed", err: err3 } unless ok2
     http_redirect tls_sock, "/"
-    log_info { action: "auth_logout", ip: peer_ip }
+    log_info { action: "auth_logout", ip: peer_ip, mac: peer_mac }
 
   elseif method == "GET" and path == "/register"
     http_response tls_sock, "200 OK", home_register_page
@@ -392,11 +394,11 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
       ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
       log_warn { action: "auth_write_failed", err: err3 } unless ok2
       http_response tls_sock, "200 OK", success_pg
-      log_info { action: "auth_login_ok", ip: peer_ip, user: user }
+      log_info { action: "auth_login_ok", ip: peer_ip, mac: peer_mac, user: user }
     else
       http_response tls_sock, "401 Unauthorized",
         failure_page "Nom d'utilisateur ou mot de passe incorrect."
-      log_warn { action: "auth_login_failed", ip: peer_ip, user: user }
+      log_warn { action: "auth_login_failed", ip: peer_ip, mac: peer_mac, user: user }
 
   elseif method == "POST" and path == "/register"
     max_attempts = auth_cfg.register_rate_limit or 3
@@ -404,7 +406,7 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
     if register_rate_exceeded register_attempts, peer_ip, max_attempts, window_sec
       http_response tls_sock, "429 Too Many Requests",
         register_failure_page "Trop de tentatives d'inscription. Réessayez plus tard."
-      log_warn { action: "auth_register_rate_limited", ip: peer_ip }
+      log_warn { action: "auth_register_rate_limited", ip: peer_ip, mac: peer_mac }
     else
       form = decode_form body
       user = form.user or ""
@@ -413,7 +415,7 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
       if pass ~= pass2
         http_response tls_sock, "400 Bad Request",
           register_failure_page "Les mots de passe ne correspondent pas."
-        log_warn { action: "auth_register_password_mismatch", ip: peer_ip, user: user }
+        log_warn { action: "auth_register_password_mismatch", ip: peer_ip, mac: peer_mac, user: user }
       else
         new_secrets, reg_err = register_user user, pass, secrets_path, secrets
         if new_secrets
@@ -426,7 +428,7 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
           -- Met à jour la table des secrets en place pour la rendre visible au parent
           secrets[user] = new_secrets[user]
           http_response tls_sock, "200 OK", success_pg
-          log_info { action: "auth_register_ok", ip: peer_ip, user: user }
+          log_info { action: "auth_register_ok", ip: peer_ip, mac: peer_mac, user: user }
         else
           user_msg = reg_err
           status = "400 Bad Request"
@@ -435,7 +437,7 @@ handle_connection = (raw_sock, tls_ctx, secrets, sessions, auth_cfg, peer_ip, su
             status = "409 Conflict"
           http_response tls_sock, status,
             register_failure_page user_msg
-          log_warn { action: "auth_register_failed", ip: peer_ip, user: user, err: reg_err }
+          log_warn { action: "auth_register_failed", ip: peer_ip, mac: peer_mac, user: user, err: reg_err }
 
   else
     http_response tls_sock, "404 Not Found", "<h1>404</h1>"
@@ -529,9 +531,10 @@ run = (tls_ctx, secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_pa
       if client
         peer_ip = client\getpeername!
         peer_ip = tostring peer_ip
+        peer_mac = neigh.get_mac peer_ip
         if https_set[srv]
           -- Connexion HTTPS : TLS + logique d'authentification
-          handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts
+          handle_connection client, tls_ctx, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac
         else
           -- Connexion HTTP plain : portail captif → redirect 302 vers HTTPS login
           captive.handle_connection client, port

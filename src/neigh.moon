@@ -103,4 +103,29 @@ refresh = (mac_clients, ip_to_mac) ->
   log_info { action: "neigh_refreshed", entries: n }
   n
 
-{ :load, :refresh, :parse_neigh_line, :fill_from_neigh }
+_mac_clients = nil
+_ip_to_mac = nil
+_last_refresh = 0
+
+--- Résout l'adresse MAC d'une IP (standalone, cache interne).
+-- Effectue un refresh paresseux (cooldown 5s) si l'IP n'est pas dans le cache.
+-- @tparam string ip L'adresse IP à résoudre
+-- @treturn string L'adresse MAC, ou "unknown" si introuvable
+get_mac = (ip) ->
+  unless _mac_clients
+    res = load!
+    _mac_clients = res.mac_clients
+    _ip_to_mac   = res.ip_to_mac
+    _last_refresh = os.time!
+  
+  return _ip_to_mac[ip] if _ip_to_mac[ip]
+  
+  ts = os.time!
+  if ts - _last_refresh > 5
+    _last_refresh = ts
+    refresh _mac_clients, _ip_to_mac
+    return _ip_to_mac[ip] or "unknown"
+  
+  "unknown"
+
+{ :load, :refresh, :get_mac, :parse_neigh_line, :fill_from_neigh }

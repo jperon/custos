@@ -1,4 +1,5 @@
 local socket = require("socket")
+local neigh = require("neigh")
 local log_info
 log_info = require("log").log_info
 local DETECTION_PATHS = {
@@ -53,15 +54,23 @@ handle_connection = function(client, auth_port)
   local redirect_url = "https://" .. tostring(local_ip) .. ":" .. tostring(auth_port) .. "/"
   local resp = "HTTP/1.1 302 Found\r\nLocation: " .. tostring(redirect_url) .. "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   client:send(resp)
+  local peer_ip
+  peer_ip, _ = client:getpeername()
+  peer_ip = tostring(peer_ip)
+  local peer_mac = neigh.get_mac(peer_ip)
   if is_detection_path(path) then
     log_info({
       action = "captive_probe",
-      path = path
+      path = path,
+      ip = peer_ip,
+      mac = peer_mac
     })
   else
     log_info({
       action = "captive_redirect",
-      path = path
+      path = path,
+      ip = peer_ip,
+      mac = peer_mac
     })
   end
   return client:close()

@@ -8,6 +8,7 @@
 -- Dépendances : luasocket, log.
 
 socket = require "socket"
+neigh  = require "neigh"
 { :log_info } = require "log"
 
 -- Chemins de détection des portails captifs des principaux OS.
@@ -73,11 +74,12 @@ handle_connection = (client, auth_port) ->
   -- IP du client
   peer_ip, _ = client\getpeername!
   peer_ip = tostring peer_ip
+  peer_mac = neigh.get_mac peer_ip
 
   if is_detection_path path
-    log_info { action: "captive_probe", path: path, ip: peer_ip }
+    log_info { action: "captive_probe", path: path, ip: peer_ip, mac: peer_mac }
   else
-    log_info { action: "captive_redirect", path: path, ip: peer_ip }
+    log_info { action: "captive_redirect", path: path, ip: peer_ip, mac: peer_mac }
 
   client\close!
 
