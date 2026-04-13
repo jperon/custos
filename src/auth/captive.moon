@@ -70,10 +70,14 @@ handle_connection = (client, auth_port) ->
   resp = "HTTP/1.1 302 Found\r\nLocation: #{redirect_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   client\send resp
 
+  -- IP du client
+  peer_ip, _ = client\getpeername!
+  peer_ip = tostring peer_ip
+
   if is_detection_path path
-    log_info { action: "captive_probe", path: path }
+    log_info { action: "captive_probe", path: path, ip: peer_ip }
   else
-    log_info { action: "captive_redirect", path: path }
+    log_info { action: "captive_redirect", path: path, ip: peer_ip }
 
   client\close!
 
