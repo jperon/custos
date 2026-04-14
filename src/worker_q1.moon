@@ -166,7 +166,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   client_port = pkt.l4.dst_port
   txid        = pkt.dns.txid
   client_ip   = pkt.ip.dst_ip
-  client_mac  = ip_to_mac[client_ip] or "unknown"
+  -- ip_to_mac est peuplé par drain_pipe (IPC de Q0). Si le MAC n'y est pas
+  -- (ex: nfq_get_packet_hw() indisponible pour les paquets IPv6), on tente
+  -- un lookup paresseux dans la table voisine (NDP/ARP).
+  client_mac  = ip_to_mac[client_ip] or neigh.get_mac(client_ip)
 
   -- ── Vérification IPC ─────────────────────────────────────────
   -- En mode Docker, on saute la vérification IPC car les requêtes
