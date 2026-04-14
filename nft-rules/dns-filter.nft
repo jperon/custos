@@ -112,6 +112,9 @@ table ip dns-filter {
     # Connexions HTTPS vers des destinations non autorisées : TCP RST immédiat.
     # Le client n'a pas de résolution DNS valide → pas d'entrée ip4_allowed.
     tcp dport 443 reject with tcp reset
+
+    # Tout autre trafic non autorisé : ICMP host-prohibited (évite les timeouts).
+    reject with icmp type host-prohibited
   }
 
   # ── Chaîne OUTPUT (DNS émis par la machine filtre elle-même) ──────
@@ -230,9 +233,10 @@ table ip6 dns-filter {
 
     # Connexions HTTPS vers des destinations non autorisées : TCP RST immédiat.
     tcp dport 443 reject with tcp reset
-  }
 
-  # ── Chaîne OUTPUT ────────────────────────────────────────────────
+    # Tout autre trafic non autorisé : ICMPv6 admin-prohibited (évite les timeouts).
+    reject with icmpv6 type admin-prohibited
+  }
   # policy accept : les Router Advertisements (SLAAC émis localement) et les
   # REFUSED injectés par LuaJIT sortent librement.
   # queue bypass : fail-open si workers arrêtés (évite EPERM sur apk/wget).
