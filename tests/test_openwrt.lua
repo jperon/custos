@@ -260,6 +260,40 @@ if has_aaaa then
 else
   report("AAAA " .. tostring(DOMAIN_AAAA) .. " — pas d'enregistrement upstream (ignoré)", true, (aa_out or ""):gsub("%s+$", ""))
 end
+if LOCAL_IPV6 then
+  print("")
+  print(tostring(C.bold) .. "▶ Cross-family: DNS sur IPv4 → AAAA → ip6_allowed" .. tostring(C.reset))
+  print("  (client IPv6 attendu : " .. tostring(LOCAL_IPV6) .. ")")
+  ssh("nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
+  local aa4_out
+  _, aa4_out = run("dig +time=8 +tries=1 AAAA " .. tostring(DOMAIN_AAAA) .. " @8.8.8.8 2>&1")
+  local has_aa4 = aa4_out and aa4_out:match("[0-9a-f]+:[0-9a-f:]+")
+  if has_aa4 then
+    os.execute("sleep 2")
+    local set6b
+    _, set6b = ssh("nft list set ip6 dns-filter ip6_allowed 2>/dev/null")
+    local found_v6 = set6b and set6b:find(LOCAL_IPV6, 1, true) ~= nil
+    report("ip6_allowed contient LOCAL_IPV6 (" .. tostring(LOCAL_IPV6) .. ") après AAAA sur IPv4", found_v6, set6b or "(vide)")
+  else
+    report("Cross-family AAAA sur IPv4 — pas d'enregistrement (ignoré)", true, "")
+  end
+  print("")
+  print(tostring(C.bold) .. "▶ Cross-family: DNS sur IPv6 → A → ip4_allowed" .. tostring(C.reset))
+  print("  (client IPv4 attendu : " .. tostring(LOCAL_IP) .. ")")
+  ssh("nft flush set ip4 dns-filter ip4_allowed 2>/dev/null; true")
+  local a6_out
+  _, a6_out = run("dig +time=8 +tries=1 A " .. tostring(DOMAIN_ALLOWED) .. " @2001:4860:4860::8888 2>&1")
+  local has_a6 = a6_out and a6_out:match("%d+%.%d+%.%d+%.%d+")
+  if has_a6 then
+    os.execute("sleep 2")
+    local set4b
+    _, set4b = ssh("nft list set ip4 dns-filter ip4_allowed 2>/dev/null")
+    local found_v4 = set4b and set4b:find(LOCAL_IP, 1, true) ~= nil
+    report("ip4_allowed contient LOCAL_IP (" .. tostring(LOCAL_IP) .. ") après A sur IPv6", found_v4, set4b or "(vide)")
+  else
+    report("Cross-family A sur IPv6 — pas d'enregistrement (ignoré)", true, "")
+  end
+end
 print("")
 print(tostring(C.bold) .. "▶ DNS over TCP + TTL (" .. tostring(DOMAIN_ALLOWED) .. ")" .. tostring(C.reset))
 local tcp_out

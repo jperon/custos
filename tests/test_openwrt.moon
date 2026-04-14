@@ -353,15 +353,27 @@ report "dig #{DOMAIN_UNKNOWN} → NXDOMAIN",
   (unk_out or "")\gsub("%s+$", "")\sub(1, 200)
 
 -- ── AAAA records → ip6_allowed ─────────────────────────────────────────────────
+--
+-- Deux scénarios sont testés quand LOCAL_IPV6 est disponible :
+--
+-- 1. DNS sur IPv6 → AAAA : Q1 obtient client_v6 = client_ip directement.
+--    Sert aussi de warmup : Q0 enregistre MAC → IPv6 dans mac_clients, ce qui
+--    permet à Q1 de résoudre l'IPv6 du client pour le scénario 2 ci-dessous.
+--
+-- 2. Cross-family (DNS sur IPv4 → AAAA) : Q1 doit résoudre l'IPv6 du client
+--    via la table mac_clients (peuplée par le warmup ci-dessus ou par un
+--    refresh NDP). ip6_allowed doit contenir LOCAL_IPV6 comme adresse client.
+--
+-- 3. Cross-family inverse (DNS sur IPv6 → A) : Q1 doit résoudre l'IPv4 du
+--    client (connue de tous les échanges IPv4 précédents). ip4_allowed doit
+--    contenir LOCAL_IP comme adresse client.
 
 print ""
 print "#{C.bold}▶ Enregistrements AAAA → ip6_allowed (#{DOMAIN_AAAA})#{C.reset}"
 
 ssh "nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true"
--- Pour tester ip6_allowed, la requête DNS doit voyager sur IPv6 : Q1 obtient
--- client_v6 directement (pkt.ip.version == 6), sans résolution MAC → IPv6.
--- Sans IPv6 local, on retombe sur @8.8.8.8 (IPv4) : le test peut échouer si
--- la table NDP du routeur ne connaît pas encore l'IPv6 du client.
+-- Scénario 1 : requête DNS sur IPv6 (warmup + test de base).
+-- Si LOCAL_IPV6 est absent, retombe sur IPv4 (MAC lookup peut échouer).
 dig_aaaa = if LOCAL_IPV6
   (domain) -> run "dig +time=8 +tries=1 AAAA #{domain} @2001:4860:4860::8888 2>&1"
 else
@@ -377,6 +389,52 @@ else
   -- No upstream AAAA or no IPv6 connectivity; unit tests cover the code path.
   report "AAAA #{DOMAIN_AAAA} — pas d'enregistrement upstream (ignoré)",
     true, (aa_out or "")\gsub "%s+$", ""
+
+-- ── Cross-family: DNS IPv4 → AAAA → ip6_allowed (client identifié par MAC) ────
+-- ── Cross-family: DNS IPv6 → A   → ip4_allowed (client identifié par MAC) ────
+--
+-- Ces tests vérifient le cas réel : un client interroge DNS dans une famille
+-- et reçoit des enregistrements de l'autre famille. Q1 doit retrouver l'IP
+-- de l'autre famille via la table mac_clients (peuplée par Q0 au warmup).
+-- Requis : LOCAL_IPV6 disponible (connectivité IPv6 routée via le bridge).
+
+if LOCAL_IPV6
+  print ""
+  print "#{C.bold}▶ Cross-family: DNS sur IPv4 → AAAA → ip6_allowed#{C.reset}"
+  print "  (client IPv6 attendu : #{LOCAL_IPV6})"
+
+  -- Le warmup (scénario 1 ci-dessus) a enregistré MAC → LOCAL_IPV6 dans Q0.
+  -- Q1 peut maintenant résoudre l'IPv6 du client pour une requête IPv4.
+  ssh "nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true"
+  _, aa4_out = run "dig +time=8 +tries=1 AAAA #{DOMAIN_AAAA} @8.8.8.8 2>&1"
+  has_aa4 = aa4_out and aa4_out\match "[0-9a-f]+:[0-9a-f:]+"
+  if has_aa4
+    os.execute "sleep 2"
+    _, set6b = ssh "nft list set ip6 dns-filter ip6_allowed 2>/dev/null"
+    -- Recherche littérale : LOCAL_IPV6 doit apparaître comme partie cliente.
+    found_v6 = set6b and set6b\find(LOCAL_IPV6, 1, true) != nil
+    report "ip6_allowed contient LOCAL_IPV6 (#{LOCAL_IPV6}) après AAAA sur IPv4",
+      found_v6, set6b or "(vide)"
+  else
+    report "Cross-family AAAA sur IPv4 — pas d'enregistrement (ignoré)", true, ""
+
+  print ""
+  print "#{C.bold}▶ Cross-family: DNS sur IPv6 → A → ip4_allowed#{C.reset}"
+  print "  (client IPv4 attendu : #{LOCAL_IP})"
+
+  -- Les requêtes DNS IPv4 précédentes ont enregistré MAC → LOCAL_IP dans Q0.
+  -- Q1 peut résoudre l'IPv4 du client pour une requête IPv6.
+  ssh "nft flush set ip4 dns-filter ip4_allowed 2>/dev/null; true"
+  _, a6_out = run "dig +time=8 +tries=1 A #{DOMAIN_ALLOWED} @2001:4860:4860::8888 2>&1"
+  has_a6 = a6_out and a6_out\match "%d+%.%d+%.%d+%.%d+"
+  if has_a6
+    os.execute "sleep 2"
+    _, set4b = ssh "nft list set ip4 dns-filter ip4_allowed 2>/dev/null"
+    found_v4 = set4b and set4b\find(LOCAL_IP, 1, true) != nil
+    report "ip4_allowed contient LOCAL_IP (#{LOCAL_IP}) après A sur IPv6",
+      found_v4, set4b or "(vide)"
+  else
+    report "Cross-family A sur IPv6 — pas d'enregistrement (ignoré)", true, ""
 
 -- ── DNS over TCP + TTL ─────────────────────────────────────────────────────────
 
