@@ -11,17 +11,18 @@ os_rename = os.rename
 -- ── Sérialisation ────────────────────────────────────────────────
 
 --- Sérialise une table de sessions en code Lua évaluable.
--- @tparam table sessions Table {ip → {user, expires, heartbeat?}}
+-- @tparam table sessions Table {ip → {user, expires, heartbeat?, mac?}}
 -- @treturn string Code Lua (return { ... })
 serialize = (sessions) ->
   parts = { "return {\n" }
   for ip, s in pairs sessions
     safe_ip   = ip\gsub('"', '\\"')
     safe_user = s.user\gsub('"', '\\"')
-    hb = s.heartbeat and (", heartbeat = " .. tostring(s.heartbeat)) or ""
+    hb  = s.heartbeat and (", heartbeat = " .. tostring(s.heartbeat)) or ""
+    mac = s.mac and (', mac = "' .. s.mac\gsub('"', '\\"') .. '"') or ""
     parts[#parts + 1] = string.format(
-      '  ["%s"] = { user = "%s", expires = %d%s },\n',
-      safe_ip, safe_user, s.expires, hb
+      '  ["%s"] = { user = "%s", expires = %d%s%s },\n',
+      safe_ip, safe_user, s.expires, hb, mac
     )
   parts[#parts + 1] = "}\n"
   table.concat parts
@@ -63,10 +64,11 @@ load_sessions = (path) ->
 -- @tparam string user         Nom d'utilisateur authentifié
 -- @tparam number session_ttl  Durée de vie maximale en secondes
 -- @tparam number idle_timeout Délai d'inactivité (heartbeat) en secondes, 0 = désactivé
-add_session = (sessions, ip, user, session_ttl, idle_timeout) ->
+-- @tparam string|nil mac      Adresse MAC du client (nil si inconnue)
+add_session = (sessions, ip, user, session_ttl, idle_timeout, mac) ->
   now = os_time!
   hb  = (idle_timeout and idle_timeout > 0) and (now + idle_timeout) or nil
-  sessions[ip] = { :user, expires: now + session_ttl, heartbeat: hb }
+  sessions[ip] = { :user, expires: now + session_ttl, heartbeat: hb, :mac }
 
 --- Supprime les sessions expirées (purge paresseuse).
 -- Tient compte du heartbeat si présent.

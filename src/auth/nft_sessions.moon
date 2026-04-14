@@ -23,6 +23,7 @@ error "nft_ctx_new() failed in auth worker" if ctx == nil
 NFT_TABLE = "dns-filter"
 NFT_SET4  = "authenticated_ips"
 NFT_SET6  = "authenticated_ips6"
+NFT_SET_MAC = "authenticated_macs"
 
 --- Exécute une commande nft via FFI.
 -- @tparam  string  cmd  Commande nft (ex. "add element ip … { … }")
@@ -76,6 +77,23 @@ del_authenticated = (ip) ->
   else
     del_authenticated4 ip
 
+--- Ajoute un MAC authentifié dans les sets ip et ip6 en une seule transaction nft.
+-- Les sets authenticated_macs existent dans table ip et table ip6 (br_netfilter
+-- expose le L2 dans les hooks L3 prerouting, évitant la dépendance au bridge mark).
+-- @tparam string mac Adresse MAC du client (format "aa:bb:cc:dd:ee:ff")
+-- @tparam number ttl Durée de vie en secondes
+-- @treturn boolean   true si les deux insertions réussissent
+add_authenticated_mac = (mac, ttl) ->
+  run_nft "add element ip  #{NFT_TABLE} #{NFT_SET_MAC} { #{mac} timeout #{ttl}s }\n" ..
+          "add element ip6 #{NFT_TABLE} #{NFT_SET_MAC} { #{mac} timeout #{ttl}s }"
+
+--- Retire un MAC des sets ip et ip6 (logout explicite ou expiration de session).
+-- @tparam string mac Adresse MAC du client (format "aa:bb:cc:dd:ee:ff")
+-- @treturn boolean   true si les deux suppressions réussissent
+del_authenticated_mac = (mac) ->
+  run_nft "delete element ip  #{NFT_TABLE} #{NFT_SET_MAC} { #{mac} }\n" ..
+          "delete element ip6 #{NFT_TABLE} #{NFT_SET_MAC} { #{mac} }"
+
 --- Libère le contexte nft (appelé à l'arrêt du worker AUTH).
 cleanup = ->
   libnft.nft_ctx_free ctx if ctx != nil
@@ -83,4 +101,5 @@ cleanup = ->
 { :add_authenticated4, :del_authenticated4,
   :add_authenticated6, :del_authenticated6,
   :add_authenticated,  :del_authenticated,
+  :add_authenticated_mac, :del_authenticated_mac,
   :cleanup }

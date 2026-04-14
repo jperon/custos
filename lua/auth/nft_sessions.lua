@@ -12,6 +12,7 @@ end
 local NFT_TABLE = "dns-filter"
 local NFT_SET4 = "authenticated_ips"
 local NFT_SET6 = "authenticated_ips6"
+local NFT_SET_MAC = "authenticated_macs"
 local run_nft
 run_nft = function(cmd)
   local rc = libnft.nft_run_cmd_from_buffer(ctx, cmd)
@@ -49,6 +50,14 @@ del_authenticated = function(ip)
     return del_authenticated4(ip)
   end
 end
+local add_authenticated_mac
+add_authenticated_mac = function(mac, ttl)
+  return run_nft("add element ip  " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC) .. " { " .. tostring(mac) .. " timeout " .. tostring(ttl) .. "s }\n" .. "add element ip6 " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC) .. " { " .. tostring(mac) .. " timeout " .. tostring(ttl) .. "s }")
+end
+local del_authenticated_mac
+del_authenticated_mac = function(mac)
+  return run_nft("delete element ip  " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC) .. " { " .. tostring(mac) .. " }\n" .. "delete element ip6 " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC) .. " { " .. tostring(mac) .. " }")
+end
 local cleanup
 cleanup = function()
   if ctx ~= nil then
@@ -62,5 +71,7 @@ return {
   del_authenticated6 = del_authenticated6,
   add_authenticated = add_authenticated,
   del_authenticated = del_authenticated,
+  add_authenticated_mac = add_authenticated_mac,
+  del_authenticated_mac = del_authenticated_mac,
   cleanup = cleanup
 }

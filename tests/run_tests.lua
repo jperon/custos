@@ -2328,6 +2328,28 @@ test("auth/sessions — serialize : session avec heartbeat", function()
   local result = serialize(sessions)
   return assert(result:find("heartbeat = 7777", 1, true, "heartbeat sérialisé"))
 end)
+test("auth/sessions — serialize : session avec MAC", function()
+  local sessions = {
+    ["10.0.0.3"] = {
+      user = "carol",
+      expires = 5555,
+      mac = "aa:bb:cc:dd:ee:ff"
+    }
+  }
+  local result = serialize(sessions)
+  assert(result:find('"aa:bb:cc:dd:ee:ff"', 1, true, "mac sérialisé"))
+  return assert(result:find('"carol"', 1, true, "user présent"))
+end)
+test("auth/sessions — serialize : session sans MAC → pas de champ mac", function()
+  local sessions = {
+    ["10.0.0.4"] = {
+      user = "dave",
+      expires = 4444
+    }
+  }
+  local result = serialize(sessions)
+  return assert(not result:find("mac =", 1, true), "pas de champ mac si nil")
+end)
 test("auth/sessions — write_sessions + load_sessions round-trip", function()
   local sessions = {
     ["192.168.1.10"] = {
@@ -2339,6 +2361,11 @@ test("auth/sessions — write_sessions + load_sessions round-trip", function()
       user = "bob",
       expires = 8888888,
       heartbeat = 111
+    },
+    ["192.168.1.30"] = {
+      user = "carol",
+      expires = 7777777,
+      mac = "aa:bb:cc:dd:ee:ff"
     }
   }
   local ok, err = write_sessions(sessions, SESS_FILE)
@@ -2349,6 +2376,8 @@ test("auth/sessions — write_sessions + load_sessions round-trip", function()
   assert_eq(loaded["192.168.1.10"].expires, 9999999, "alice.expires")
   assert(loaded["192.168.1.20"], "bob absent")
   assert_eq(loaded["192.168.1.20"].heartbeat, 111, "bob.heartbeat")
+  assert(loaded["192.168.1.30"], "carol absent")
+  assert_eq(loaded["192.168.1.30"].mac, "aa:bb:cc:dd:ee:ff", "carol.mac")
   return os.remove(SESS_FILE)
 end)
 test("auth/sessions — load_sessions : fichier absent → table vide", function()
@@ -2380,7 +2409,14 @@ test("auth/sessions — add_session : crée la session", function()
   assert(sessions["10.1.0.1"], "session créée")
   assert_eq(sessions["10.1.0.1"].user, "charlie", "user")
   assert(sessions["10.1.0.1"].expires > os.time(), "expires dans le futur")
-  return assert_eq(sessions["10.1.0.1"].heartbeat, nil, "heartbeat nil si idle_timeout=0")
+  assert_eq(sessions["10.1.0.1"].heartbeat, nil, "heartbeat nil si idle_timeout=0")
+  return assert_eq(sessions["10.1.0.1"].mac, nil, "mac nil si non fourni")
+end)
+test("auth/sessions — add_session : MAC stocké", function()
+  local sessions = { }
+  add_session(sessions, "10.1.0.5", "eve", 3600, 0, "11:22:33:44:55:66")
+  assert(sessions["10.1.0.5"], "session créée")
+  return assert_eq(sessions["10.1.0.5"].mac, "11:22:33:44:55:66", "mac stocké")
 end)
 test("auth/sessions — add_session : heartbeat si idle_timeout > 0", function()
   local sessions = { }

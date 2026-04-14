@@ -2117,10 +2117,22 @@ test "auth/sessions — serialize : session avec heartbeat", ->
   result = serialize sessions
   assert result\find "heartbeat = 7777", 1, true, "heartbeat sérialisé"
 
+test "auth/sessions — serialize : session avec MAC", ->
+  sessions = { ["10.0.0.3"]: { user: "carol", expires: 5555, mac: "aa:bb:cc:dd:ee:ff" } }
+  result = serialize sessions
+  assert result\find '"aa:bb:cc:dd:ee:ff"', 1, true, "mac sérialisé"
+  assert result\find '"carol"',             1, true, "user présent"
+
+test "auth/sessions — serialize : session sans MAC → pas de champ mac", ->
+  sessions = { ["10.0.0.4"]: { user: "dave", expires: 4444 } }
+  result = serialize sessions
+  assert not result\find("mac =", 1, true), "pas de champ mac si nil"
+
 test "auth/sessions — write_sessions + load_sessions round-trip", ->
   sessions = {
     ["192.168.1.10"]: { user: "alice", expires: 9999999, heartbeat: nil }
     ["192.168.1.20"]: { user: "bob",   expires: 8888888, heartbeat: 111 }
+    ["192.168.1.30"]: { user: "carol", expires: 7777777, mac: "aa:bb:cc:dd:ee:ff" }
   }
   ok, err = write_sessions sessions, SESS_FILE
   assert ok, "write_sessions a échoué : #{tostring err}"
@@ -2130,6 +2142,8 @@ test "auth/sessions — write_sessions + load_sessions round-trip", ->
   assert_eq loaded["192.168.1.10"].expires, 9999999,   "alice.expires"
   assert loaded["192.168.1.20"], "bob absent"
   assert_eq loaded["192.168.1.20"].heartbeat, 111,     "bob.heartbeat"
+  assert loaded["192.168.1.30"], "carol absent"
+  assert_eq loaded["192.168.1.30"].mac, "aa:bb:cc:dd:ee:ff", "carol.mac"
   os.remove SESS_FILE
 
 test "auth/sessions — load_sessions : fichier absent → table vide", ->
@@ -2158,6 +2172,13 @@ test "auth/sessions — add_session : crée la session", ->
   assert_eq sessions["10.1.0.1"].user, "charlie", "user"
   assert sessions["10.1.0.1"].expires > os.time!, "expires dans le futur"
   assert_eq sessions["10.1.0.1"].heartbeat, nil, "heartbeat nil si idle_timeout=0"
+  assert_eq sessions["10.1.0.1"].mac, nil, "mac nil si non fourni"
+
+test "auth/sessions — add_session : MAC stocké", ->
+  sessions = {}
+  add_session sessions, "10.1.0.5", "eve", 3600, 0, "11:22:33:44:55:66"
+  assert sessions["10.1.0.5"], "session créée"
+  assert_eq sessions["10.1.0.5"].mac, "11:22:33:44:55:66", "mac stocké"
 
 test "auth/sessions — add_session : heartbeat si idle_timeout > 0", ->
   sessions = {}

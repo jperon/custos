@@ -18,29 +18,6 @@
 flush ruleset
 
 # ════════════════════════════════════════════════════════════════
-# Table bridge — authentification par adresse MAC
-# ════════════════════════════════════════════════════════════════
-table bridge dns-filter {
-
-  # MACs clients authentifiés via le portail captif.
-  # Peuplé dynamiquement par le worker AUTH. Expiration via TTL session.
-  set authenticated_macs {
-    type  ether_addr
-    flags timeout
-  }
-
-  # ── Prerouting bridge : marque les paquets des MACs authentifiés ──
-  # Priorité -250 (avant le DNAT ip à dstnat=-100 et le forward bridge à -200).
-  # Le bit 0x80000000 est réservé : les chaînes ip/ip6 prerouting le lisent
-  # pour court-circuiter le DNAT du portail captif.
-  # La liste d'accès ip4_allowed reste appliquée normalement en forward.
-  chain prerouting {
-    type filter hook prerouting priority -250; policy accept;
-    ether saddr @authenticated_macs meta mark set meta mark or 0x80000000
-  }
-}
-
-# ════════════════════════════════════════════════════════════════
 # Table principale IPv4
 # ════════════════════════════════════════════════════════════════
 table ip dns-filter {
@@ -60,6 +37,14 @@ table ip dns-filter {
     flags timeout
   }
 
+  # MACs clients authentifiés via le portail captif.
+  # Même set géré également dans table ip6. Expiration via TTL session.
+  # Accessible depuis le hook prerouting grâce à br_netfilter (L2 visible en L3).
+  set authenticated_macs {
+    type  ether_addr
+    flags timeout
+  }
+
   # ── Chaîne PREROUTING (portail captif : DNAT HTTP/HTTPS) ──────────
   # Actif uniquement quand la section auth est présente dans filter.yml.
   chain prerouting {
@@ -73,8 +58,8 @@ table ip dns-filter {
     fib daddr type local return
     # Clients authentifiés par IP : pas de redirection
     ip saddr @authenticated_ips return
-    # Clients authentifiés par MAC (marque posée en bridge prerouting) :
-    meta mark and 0x80000000 != 0 return
+    # Clients authentifiés par MAC (br_netfilter expose le L2 dans le hook L3) :
+    ether saddr @authenticated_macs return
     # Destinations déjà autorisées par la liste blanche DNS : pas de redirection
     ip saddr . ip daddr @ip4_allowed return
     # Portail captif : tout HTTP → portail plain, tout HTTPS → login TLS
@@ -158,6 +143,14 @@ table ip6 dns-filter {
     flags timeout
   }
 
+  # MACs clients authentifiés via le portail captif.
+  # Même set géré également dans table ip. Expiration via TTL session.
+  # Accessible depuis le hook prerouting grâce à br_netfilter (L2 visible en L3).
+  set authenticated_macs {
+    type  ether_addr
+    flags timeout
+  }
+
   # ── Chaîne PREROUTING IPv6 (portail captif) ──────────────────────
   chain prerouting {
     type nat hook prerouting priority dstnat; policy accept;
@@ -165,8 +158,8 @@ table ip6 dns-filter {
     fib saddr type local return
     fib daddr type local return
     ip6 saddr @authenticated_ips6 return
-    # Clients authentifiés par MAC (marque posée en bridge prerouting) :
-    meta mark and 0x80000000 != 0 return
+    # Clients authentifiés par MAC (br_netfilter expose le L2 dans le hook L3) :
+    ether saddr @authenticated_macs return
     # Destinations déjà autorisées par la liste blanche DNS : pas de redirection
     ip6 saddr . ip6 daddr @ip6_allowed return
     tcp dport 80  redirect to :33080
