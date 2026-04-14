@@ -98,6 +98,16 @@ auth:
 #users:
 #  alice: alice@example.com
 
+# Destinations en liste blanche statique (IPs ou CIDRs, IPv4 ou IPv6).
+# Utile pour les serveurs sans nom de domaine (ex. : 10.35.1.1, 192.168.100.0/24).
+# Les clients peuvent atteindre ces destinations sans aucune resolution DNS prealable.
+# Rechargeable a chaud via SIGHUP (luajit recharge filter.yml et repeuple les sets nft).
+#ip_whitelist:
+#- 10.35.1.1
+#- 192.168.100.0/24
+#- fd00::1
+#- 2001:db8::/48
+
 # Sous-reseaux CIDR nommes
 nets:
   lan:

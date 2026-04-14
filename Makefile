@@ -24,6 +24,7 @@ MOONS := \
   $(SRC)/ipc.moon \
   $(SRC)/neigh.moon \
   $(SRC)/allowlist.moon \
+  $(SRC)/ip_whitelist.moon \
   $(SRC)/nft.moon \
   $(SRC)/nfq_loop.moon \
   $(SRC)/worker_q0.moon \
@@ -41,7 +42,7 @@ FILTER_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(FILTER_MOONS))
 AUTH_MOONS := $(shell find $(SRC)/auth -name '*.moon' 2>/dev/null)
 AUTH_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(AUTH_MOONS))
 
-.PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 test-kvm test-kvm-up test-kvm-run test-kvm-down run reload update-lists make-secret logs help
+.PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 test-kvm test-kvm-up test-kvm-run test-kvm-down test-openwrt run reload update-lists make-secret logs help
 
 all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
@@ -110,6 +111,15 @@ test-kvm-down:
 	@echo "Arrêt des VMs KVM..."
 	bash libvirt/custos-libvirt.sh stop
 
+## Tests OpenWrt end-to-end (accès SSH à un routeur déployé requis)
+## Usage : make test-openwrt HOST=root@esm.y [ARGS=--no-restart]
+test-openwrt: all
+	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis. Ex: make test-openwrt HOST=root@esm.y"; exit 1)
+	@echo "Tests OpenWrt end-to-end..."
+	$(MOONC) -o tests/test_openwrt.lua tests/test_openwrt.moon
+	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) tests/test_openwrt.lua $(HOST) $(ARGS)
+
 ## Génère un hash PBKDF2-SHA256 pour un utilisateur (écrire dans cfg/secrets)
 ## Usage : make make-secret USER=alice PASS=motdepasse
 make-secret: all
@@ -156,6 +166,7 @@ help:
 	@echo "  test-kvm-up  - Démarre les VMs KVM"
 	@echo "  test-kvm-run - Exécute les tests KVM (VMs déjà démarrées)"
 	@echo "  test-kvm-down - Arrête les VMs KVM"
+	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis)"
 	@echo "  run          - Lance le superviseur (root requis)"
 	@echo "  clean        - Nettoie les fichiers compilés"
 	@echo "  make-secret  - Génère un hash PBKDF2-SHA256 pour cfg/secrets (USER=, PASS=)"

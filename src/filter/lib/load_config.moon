@@ -26,12 +26,13 @@ load_config = (path) ->
   return nil, "configuration vide ou invalide dans #{path}" unless type(cfg) == "table"
 
   -- Sections facultatives → tables vides par défaut
-  cfg.nets    = cfg.nets    or {}
-  cfg.macs    = cfg.macs    or {}
-  cfg.times   = cfg.times   or {}
-  cfg.sources = cfg.sources or {}
-  cfg.rules   = cfg.rules   or {}
-  cfg.users   = cfg.users   or {}
+  cfg.nets           = cfg.nets           or {}
+  cfg.macs           = cfg.macs           or {}
+  cfg.times          = cfg.times          or {}
+  cfg.sources        = cfg.sources        or {}
+  cfg.rules          = cfg.rules          or {}
+  cfg.users          = cfg.users          or {}
+  cfg.ip_whitelist   = cfg.ip_whitelist   or {}
 
   -- Section auth : valeurs par défaut
   cfg.auth = cfg.auth or {}

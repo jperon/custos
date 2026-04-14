@@ -16,6 +16,11 @@
 --   • Sur réception : SIGTERM envoyé aux workers → waitpid() → exit(0)
 --   • Garantit que les queues NFQUEUE sont libérées avant que procd
 --     lance la nouvelle instance.
+--
+-- Rechargement à chaud sur SIGHUP :
+--   • SIGHUP est masqué et capturé via le même signalfd
+--   • Sur réception : SIGHUP propagé à Q0 (qui recharge la config filtre
+--     + la liste blanche IP via filter.reload())
 
 { :ffi, :libc } = require "ffi_defs"
 { :log_info, :log_warn, :log_error } = require "log"
@@ -28,18 +33,22 @@ ffi.cdef [[
 
 WNOHANG = 1
 SIGTERM = 15
+SIGHUP  = 1
 
--- ── signalfd pour SIGTERM ─────────────────────────────────────────
--- Masque SIGTERM et l'expose comme fd lisible ; évite tout callback
--- C async qui pourrait ré-entrer dans le VM LuaJIT.
+-- ── signalfd pour SIGTERM + SIGHUP ───────────────────────────────
+-- Masque SIGTERM et SIGHUP et les expose comme fd lisible ; évite
+-- tout callback C async qui pourrait ré-entrer dans le VM LuaJIT.
+-- SIGHUP est capturé ici pour être propagé aux workers (en
+-- particulier Q0 qui gère le rechargement de la config filtre).
 --
--- sigset_t sur Linux = 128 octets ; SIGTERM=15 → bit 14 du mot 0.
-create_sigterm_fd = ->
+-- sigset_t sur Linux = 128 octets ; SIGTERM=15 → bit 14, SIGHUP=1 → bit 0.
+create_signal_fd = ->
   SIG_BLOCK = 0
   mask = ffi.new "sigset_t_custos"
   ffi.fill mask, ffi.sizeof(mask), 0
   word = ffi.cast "uint32_t*", mask
   word[0] = bit.bor word[0], bit.lshift(1, SIGTERM - 1)
+  word[0] = bit.bor word[0], bit.lshift(1, SIGHUP  - 1)
   libc.sigprocmask SIG_BLOCK, mask, nil
   -- SFD_NONBLOCK=2048 pour que read() soit non-bloquant dans la boucle
   fd = libc.signalfd -1, mask, 2048
@@ -70,13 +79,14 @@ fork_worker = (name, worker_fn, pipe_fd) ->
 
   if pid == 0
     -- ── Processus enfant ───────────────────────────────────────
-    -- Le superviseur a bloqué SIGTERM via sigprocmask (pour signalfd).
-    -- Ce masque est hérité par fork() : il faut le débloquer ici,
-    -- sinon prctl(PR_SET_PDEATHSIG) et kill(SIGTERM) resteraient sans effet.
+    -- Le superviseur a bloqué SIGTERM et SIGHUP via sigprocmask (pour
+    -- signalfd). Ce masque est hérité par fork() : il faut les débloquer
+    -- ici, sinon prctl(PR_SET_PDEATHSIG) et kill(SIGTERM/SIGHUP) resteraient
+    -- sans effet.
     unmask = ffi.new "sigset_t_custos"
     ffi.fill unmask, ffi.sizeof(unmask), 0
     uword = ffi.cast "uint32_t*", unmask
-    uword[0] = bit.lshift 1, SIGTERM - 1  -- bit 14 = SIGTERM
+    uword[0] = bit.bor(bit.lshift(1, SIGTERM - 1), bit.lshift(1, SIGHUP - 1))
     libc.sigprocmask 1, unmask, nil        -- SIG_UNBLOCK=1
     -- PR_SET_PDEATHSIG : filet de sécurité si le superviseur meurt
     -- brutalement (avant que shutdown_workers ait pu envoyer SIGTERM).
@@ -158,12 +168,20 @@ supervise = (pipe, sfd) ->
   log_info { action: "supervisor_running", pid: tonumber libc.getpid! }
 
   while true
-    -- Vérifie SIGTERM via signalfd (non-bloquant — O_NONBLOCK sur le fd)
+    -- Vérifie SIGTERM/SIGHUP via signalfd (non-bloquant — O_NONBLOCK sur le fd)
     rv = libc.read sfd, siginfo, sig_sz
     if rv == sig_sz
-      log_info { action: "supervisor_sigterm" }
-      shutdown_workers workers
-      libc._exit 0
+      if siginfo.ssi_signo == SIGHUP
+        -- Propagation du rechargement à chaud vers Q0 (filtre + ip_whitelist)
+        q0 = workers[1]
+        if q0 and q0.pid and q0.pid > 0
+          log_info { action: "supervisor_sighup", forwarding_to: "Q0", pid: q0.pid }
+          libc.kill q0.pid, SIGHUP
+      else
+        -- SIGTERM : arrêt propre de tous les workers
+        log_info { action: "supervisor_sigterm" }
+        shutdown_workers workers
+        libc._exit 0
 
     -- waitpid(-1, ..., WNOHANG) : vérifie tous les enfants sans bloquer
     dead_pid = tonumber libc.waitpid -1, status, WNOHANG
@@ -188,7 +206,7 @@ supervise = (pipe, sfd) ->
 -- ── main ─────────────────────────────────────────────────────────
 log_info { action: "dns-filter_start", version: "1.0.0" }
 
-sfd  = create_sigterm_fd!
+sfd  = create_signal_fd!
 pipe = create_pipe!
 log_info { action: "ipc_pipe_created", rfd: pipe.rfd, wfd: pipe.wfd }
 

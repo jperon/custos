@@ -23,6 +23,7 @@ load_config = function(path)
   cfg.sources = cfg.sources or { }
   cfg.rules = cfg.rules or { }
   cfg.users = cfg.users or { }
+  cfg.ip_whitelist = cfg.ip_whitelist or { }
   cfg.auth = cfg.auth or { }
   local auth = cfg.auth
   auth.host = auth.host or "::"

@@ -45,6 +45,14 @@ table ip dns-filter {
     flags timeout
   }
 
+  # Destinations IPv4 en liste blanche statique (IPs ou CIDRs).
+  # Peuplé au démarrage et rechargé à chaud via SIGHUP depuis ip_whitelist.moon.
+  # Les clients atteignent ces destinations sans aucune résolution DNS préalable.
+  set ip4_dest_whitelist {
+    type  ipv4_addr
+    flags interval
+  }
+
   # ── Chaîne PREROUTING (portail captif : DNAT HTTP/HTTPS) ──────────
   # Actif uniquement quand la section auth est présente dans filter.yml.
   chain prerouting {
@@ -62,6 +70,8 @@ table ip dns-filter {
     ether saddr @authenticated_macs return
     # Destinations déjà autorisées par la liste blanche DNS : pas de redirection
     ip saddr . ip daddr @ip4_allowed return
+    # Destinations en liste blanche statique : pas de redirection non plus
+    ip daddr @ip4_dest_whitelist return
     # Portail captif : tout HTTP → portail plain
     # HTTPS n'est pas redirigé : les connexions non-autorisées sont bloquées
     # dans la chaîne FORWARD par un REJECT tcp reset.
@@ -95,6 +105,9 @@ table ip dns-filter {
     ct state established,related accept
 
     ip saddr . ip daddr @ip4_allowed accept
+
+    # Destinations en liste blanche statique (IPs/CIDRs sans DNS).
+    ip daddr @ip4_dest_whitelist accept
 
     # Connexions HTTPS vers des destinations non autorisées : TCP RST immédiat.
     # Le client n'a pas de résolution DNS valide → pas d'entrée ip4_allowed.
@@ -156,6 +169,13 @@ table ip6 dns-filter {
     flags timeout
   }
 
+  # Destinations IPv6 en liste blanche statique (IPs ou CIDRs).
+  # Peuplé au démarrage et rechargé à chaud via SIGHUP depuis ip_whitelist.moon.
+  set ip6_dest_whitelist {
+    type  ipv6_addr
+    flags interval
+  }
+
   # ── Chaîne PREROUTING IPv6 (portail captif) ──────────────────────
   chain prerouting {
     type nat hook prerouting priority dstnat; policy accept;
@@ -167,6 +187,8 @@ table ip6 dns-filter {
     ether saddr @authenticated_macs return
     # Destinations déjà autorisées par la liste blanche DNS : pas de redirection
     ip6 saddr . ip6 daddr @ip6_allowed return
+    # Destinations en liste blanche statique : pas de redirection non plus
+    ip6 daddr @ip6_dest_whitelist return
     tcp dport 80  redirect to :33080
   }
 
@@ -202,6 +224,9 @@ table ip6 dns-filter {
     } accept
 
     ip6 saddr . ip6 daddr @ip6_allowed accept
+
+    # Destinations en liste blanche statique (IPs/CIDRs sans DNS).
+    ip6 daddr @ip6_dest_whitelist accept
 
     # Connexions HTTPS vers des destinations non autorisées : TCP RST immédiat.
     tcp dport 443 reject with tcp reset

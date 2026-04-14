@@ -185,6 +185,13 @@ report("Pas de DNAT 443 dans ip prerouting", not (pr4b and pr4b:match("redirect 
 local fwd4
 _, fwd4 = ssh("nft list chain ip dns-filter forward 2>/dev/null")
 report("REJECT tcp 443 dans ip forward", (fwd4 and fwd4:match("tcp dport 443 reject")) ~= nil, fwd4 or "")
+local wl4
+_, wl4 = ssh("nft list set ip  dns-filter ip4_dest_whitelist 2>/dev/null")
+report("Set ip4_dest_whitelist dans ip  dns-filter", (wl4 and wl4:match("ip4_dest_whitelist")) ~= nil, wl4 or "")
+local wl6
+_, wl6 = ssh("nft list set ip6 dns-filter ip6_dest_whitelist 2>/dev/null")
+report("Set ip6_dest_whitelist dans ip6 dns-filter", (wl6 and wl6:match("ip6_dest_whitelist")) ~= nil, wl6 or "")
+report("ip daddr @ip4_dest_whitelist accept dans ip forward", (fwd4 and fwd4:match("ip4_dest_whitelist")) ~= nil, fwd4 or "")
 print("")
 print(tostring(C.bold) .. "[4/5] Filtrage DNS" .. tostring(C.reset))
 print("")
@@ -376,6 +383,28 @@ local cnt_block
 _, cnt_block = ssh("grep -c BLOCK " .. tostring(LOG_FILE) .. " 2>/dev/null")
 report("Log contient des entrées ALLOW", (tonumber(cnt_allow or "0") or 0) > 0, "count : " .. tostring(cnt_allow))
 report("Log contient des entrées BLOCK", (tonumber(cnt_block or "0") or 0) > 0, "count : " .. tostring(cnt_block))
+print("")
+print(tostring(C.bold) .. "▶ Liste blanche statique (ip_whitelist, rechargement SIGHUP)" .. tostring(C.reset))
+local TEST_WL_IP = "10.253.254.255"
+local TEST_WL_IP6 = "fd99::1"
+local FILTER_YML = tostring(CFG_DIR) .. "/filter.yml"
+ssh("printf '\\nip_whitelist:\\n- " .. tostring(TEST_WL_IP) .. "\\n- " .. tostring(TEST_WL_IP6) .. "\\n' >> " .. tostring(FILTER_YML))
+ssh("pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && kill -HUP $pid 2>/dev/null; true")
+os.execute("dig @" .. tostring(ROUTER_IP) .. " github.com A +time=2 +tries=1 >/dev/null 2>&1; true")
+os.execute("sleep 1")
+local wl4_set
+_, wl4_set = ssh("nft list set ip  dns-filter ip4_dest_whitelist 2>/dev/null")
+report("ip_whitelist — " .. tostring(TEST_WL_IP) .. " présent dans ip4_dest_whitelist après SIGHUP", (wl4_set and wl4_set:match(TEST_WL_IP)) ~= nil, wl4_set or "(vide)")
+local wl6_set
+_, wl6_set = ssh("nft list set ip6 dns-filter ip6_dest_whitelist 2>/dev/null")
+report("ip_whitelist — " .. tostring(TEST_WL_IP6) .. " présent dans ip6_dest_whitelist après SIGHUP", (wl6_set and wl6_set:match("fd99")) ~= nil, wl6_set or "(vide)")
+ssh("grep -v '^ip_whitelist:\\|^- " .. tostring(TEST_WL_IP) .. "\\|^- " .. tostring(TEST_WL_IP6) .. "' " .. tostring(FILTER_YML) .. " > /tmp/_filter.tmp && mv /tmp/_filter.tmp " .. tostring(FILTER_YML) .. "; true")
+ssh("pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && kill -HUP $pid 2>/dev/null; true")
+os.execute("dig @" .. tostring(ROUTER_IP) .. " github.com A +time=2 +tries=1 >/dev/null 2>&1; true")
+os.execute("sleep 1")
+local wl4_after
+_, wl4_after = ssh("nft list set ip dns-filter ip4_dest_whitelist 2>/dev/null")
+report("ip_whitelist — set vidé après suppression + SIGHUP", not (wl4_after and wl4_after:match(TEST_WL_IP)), wl4_after or "(vide)")
 print("")
 print(string.rep("─", 50))
 local fail_color = tests_failed > 0 and C.red or C.grey

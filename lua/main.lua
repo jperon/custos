@@ -13,13 +13,15 @@ ffi.cdef([[  unsigned int sleep(unsigned int seconds);
 ]])
 local WNOHANG = 1
 local SIGTERM = 15
-local create_sigterm_fd
-create_sigterm_fd = function()
+local SIGHUP = 1
+local create_signal_fd
+create_signal_fd = function()
   local SIG_BLOCK = 0
   local mask = ffi.new("sigset_t_custos")
   ffi.fill(mask, ffi.sizeof(mask), 0)
   local word = ffi.cast("uint32_t*", mask)
   word[0] = bit.bor(word[0], bit.lshift(1, SIGTERM - 1))
+  word[0] = bit.bor(word[0], bit.lshift(1, SIGHUP - 1))
   libc.sigprocmask(SIG_BLOCK, mask, nil)
   local fd = libc.signalfd(-1, mask, 2048)
   if fd < 0 then
@@ -50,7 +52,7 @@ fork_worker = function(name, worker_fn, pipe_fd)
     local unmask = ffi.new("sigset_t_custos")
     ffi.fill(unmask, ffi.sizeof(unmask), 0)
     local uword = ffi.cast("uint32_t*", unmask)
-    uword[0] = bit.lshift(1, SIGTERM - 1)
+    uword[0] = bit.bor(bit.lshift(1, SIGTERM - 1), bit.lshift(1, SIGHUP - 1))
     libc.sigprocmask(1, unmask, nil)
     if libc.prctl(1, SIGTERM, 0, 0, 0) ~= 0 then
       log_error({
@@ -149,11 +151,23 @@ supervise = function(pipe, sfd)
   while true do
     local rv = libc.read(sfd, siginfo, sig_sz)
     if rv == sig_sz then
-      log_info({
-        action = "supervisor_sigterm"
-      })
-      shutdown_workers(workers)
-      libc._exit(0)
+      if siginfo.ssi_signo == SIGHUP then
+        local q0 = workers[1]
+        if q0 and q0.pid and q0.pid > 0 then
+          log_info({
+            action = "supervisor_sighup",
+            forwarding_to = "Q0",
+            pid = q0.pid
+          })
+          libc.kill(q0.pid, SIGHUP)
+        end
+      else
+        log_info({
+          action = "supervisor_sigterm"
+        })
+        shutdown_workers(workers)
+        libc._exit(0)
+      end
     end
     local dead_pid = tonumber(libc.waitpid(-1, status, WNOHANG))
     if dead_pid > 0 then
@@ -181,7 +195,7 @@ log_info({
   action = "dns-filter_start",
   version = "1.0.0"
 })
-local sfd = create_sigterm_fd()
+local sfd = create_signal_fd()
 local pipe = create_pipe()
 log_info({
   action = "ipc_pipe_created",

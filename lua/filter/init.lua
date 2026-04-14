@@ -15,6 +15,7 @@ do
   local _obj_0 = require("log")
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
+local ip_whitelist = require("ip_whitelist")
 local rules
 local config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "cfg/filter.yml"
 local set_config_path
@@ -32,10 +33,12 @@ load = function()
     return 
   end
   rules = compile_rules(cfg)
+  ip_whitelist.init(cfg.ip_whitelist or { })
   local n = #rules
   return log_info({
     action = "filter_loaded",
-    rules = n
+    rules = n,
+    ip_whitelist = #(cfg.ip_whitelist or { })
   })
 end
 local decide

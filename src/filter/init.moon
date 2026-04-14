@@ -17,6 +17,7 @@
 { :compile_rules, decide: _decide } = require "filter.rule"
 { :load_config } = require "filter.lib.load_config"
 { :log_info, :log_warn } = require "log"
+ip_whitelist = require "ip_whitelist"
 
 local rules
 config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "cfg/filter.yml"
@@ -38,8 +39,9 @@ load = ->
     log_warn { action: "filter_load_failed", err: err }
     return
   rules = compile_rules cfg
+  ip_whitelist.init cfg.ip_whitelist or {}
   n = #rules
-  log_info { action: "filter_loaded", rules: n }
+  log_info { action: "filter_loaded", rules: n, ip_whitelist: #(cfg.ip_whitelist or {}) }
 
 -- ── Décision ─────────────────────────────────────────────────────
 --- Décide du verdict pour une requête DNS.
