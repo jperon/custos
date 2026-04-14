@@ -24,10 +24,10 @@ do
   local _obj_0 = require("parse/dns")
   build_refused, append_ede_to_dns, EDE_OTHER, EDE_TTL_TEXT, EDNS_OPT_EDE = _obj_0.build_refused, _obj_0.append_ede_to_dns, _obj_0.EDE_OTHER, _obj_0.EDE_TTL_TEXT, _obj_0.EDNS_OPT_EDE
 end
-local add_ip4, add_ip6
+local add_ip4, add_ip6, add_mac4, add_mac6
 do
   local _obj_0 = require("nft")
-  add_ip4, add_ip6 = _obj_0.add_ip4, _obj_0.add_ip6
+  add_ip4, add_ip6, add_mac4, add_mac6 = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6
 end
 local run_queue, NF_ACCEPT, NF_DROP
 do
@@ -40,6 +40,10 @@ do
   log_allow, log_block, log_info, log_warn, now = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_info, _obj_0.log_warn, _obj_0.now
 end
 local MAC_ZERO = "00:00:00:00:00:00"
+local mac_valid
+mac_valid = function(mac)
+  return mac ~= "unknown" and mac ~= MAC_ZERO
+end
 local mac_clients = { }
 local ip_to_mac = { }
 local pipe_rfd = nil
@@ -227,6 +231,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           reason = "mac_not_known"
         })
       end
+      if mac_valid(client_mac) then
+        add_mac4(client_mac, ans.rdata_str)
+      end
     elseif ans.rtype == QTYPE.AAAA then
       client_v6 = client_v6 or (function()
         if pkt.ip.version == 6 then
@@ -245,6 +252,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           record = ans.rdata_str,
           reason = "mac_not_known"
         })
+      end
+      if mac_valid(client_mac) then
+        add_mac6(client_mac, ans.rdata_str)
       end
     end
   end

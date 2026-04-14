@@ -24,12 +24,15 @@ ndpi = require "parse/ndpi"
 { :get_l2 } = require "parse/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
 { :build_refused, :append_ede_to_dns, :EDE_OTHER, :EDE_TTL_TEXT, :EDNS_OPT_EDE } = require "parse/dns"
-{ :add_ip4, :add_ip6 }      = require "nft"
+{ :add_ip4, :add_ip6, :add_mac4, :add_mac6 } = require "nft"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_info, :log_warn, :now } = require "log"
 
 -- MAC_ZERO : MAC à ignorer (interface sans L2 ou OUTPUT chain en Docker)
 MAC_ZERO = "00:00:00:00:00:00"
+
+-- mac_valid : vrai si mac est une adresse MAC connue et non nulle
+mac_valid = (mac) -> mac != "unknown" and mac != MAC_ZERO
 
 -- mac_clients[mac_str] = {ipv4, ipv6, last_seen}
 -- Permet de résoudre l'adresse cross-family d'un client (ex: IPv4 ↔ IPv6)
@@ -231,6 +234,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       else
         log_warn { action: "no_ipv4_for_client", client: client_ip,
                    record: ans.rdata_str, reason: "mac_not_known" }
+      add_mac4 client_mac, ans.rdata_str if mac_valid client_mac
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
       client_v6 or= if pkt.ip.version == 6
@@ -244,6 +248,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       else
         log_warn { action: "no_ipv6_for_client", client: client_ip,
                    record: ans.rdata_str, reason: "mac_not_known" }
+      add_mac6 client_mac, ans.rdata_str if mac_valid client_mac
 
   -- ── Patch TTL + EDE + checksums (IPv4 et IPv6) ───────────────
   -- 1. Extraire le payload DNS brut

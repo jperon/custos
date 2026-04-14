@@ -132,6 +132,15 @@ print "  IP locale : #{LOCAL_IP}"
 _, local_v6_raw = run "ip -6 route get 2001:4860:4860::8888 2>/dev/null | sed -En 's/.*src ([0-9a-f:]+).*/\\1/p' | head -1"
 LOCAL_IPV6 = local_v6_raw and local_v6_raw\match "[0-9a-f]+:[0-9a-f:]+"
 print "  IP locale IPv6 : #{LOCAL_IPV6 or '(aucune)'}"
+-- Detect LOCAL_MAC (MAC of the interface used to reach the router LAN — visible in nft ether saddr)
+_, local_iface_raw = run "ip route get #{LAN_IP} 2>/dev/null | sed -En 's/.*dev ([^ ]+).*/\\1/p' | head -1"
+LOCAL_IFACE = local_iface_raw and local_iface_raw\match "%S+"
+_, local_mac_raw = if LOCAL_IFACE
+  run "ip link show #{LOCAL_IFACE} 2>/dev/null | sed -En 's/.*ether ([0-9a-f:]+).*/\\1/p' | head -1"
+else
+  nil, nil
+LOCAL_MAC = local_mac_raw and local_mac_raw\match "[0-9a-f]+:[0-9a-f:]+"
+print "  MAC locale : #{LOCAL_MAC or '(inconnue)'}"
 
 AUTH_URL    = "https://#{LAN_IP}:33443"
 CAPTIVE_URL = "http://#{LAN_IP}:33080"
@@ -240,7 +249,25 @@ _, pr6 = ssh "nft list chain ip6 dns-filter prerouting 2>/dev/null"
 report "ether saddr @authenticated_macs dans ip6 prerouting",
   (pr6 and pr6\match "ether saddr @authenticated_macs") != nil, pr6 or ""
 
--- br_netfilter
+-- mac4_allowed / mac6_allowed sets (DNS cross-family)
+_, mac4s = ssh "nft list set ip  dns-filter mac4_allowed 2>/dev/null"
+report "mac4_allowed dans ip  dns-filter",
+  (mac4s and mac4s\match "ether_addr") != nil, mac4s or ""
+
+_, mac6s = ssh "nft list set ip6 dns-filter mac6_allowed 2>/dev/null"
+report "mac6_allowed dans ip6 dns-filter",
+  (mac6s and mac6s\match "ether_addr") != nil, mac6s or ""
+
+-- ether saddr . ip daddr @mac4_allowed rules in forward chains
+_, fwd4 = ssh "nft list chain ip  dns-filter forward 2>/dev/null"
+report "ether saddr . ip daddr @mac4_allowed dans ip  forward",
+  (fwd4 and fwd4\match "mac4_allowed") != nil, fwd4 or ""
+
+_, fwd6 = ssh "nft list chain ip6 dns-filter forward 2>/dev/null"
+report "ether saddr . ip6 daddr @mac6_allowed dans ip6 forward",
+  (fwd6 and fwd6\match "mac6_allowed") != nil, fwd6 or ""
+
+
 _, brnf = ssh "cat /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null"
 report "bridge-nf-call-iptables = 1",
   (brnf and brnf\match "1") != nil, brnf or ""
@@ -360,18 +387,19 @@ report "dig #{DOMAIN_UNKNOWN} → NXDOMAIN",
 --    Sert aussi de warmup : Q0 enregistre MAC → IPv6 dans mac_clients, ce qui
 --    permet à Q1 de résoudre l'IPv6 du client pour le scénario 2 ci-dessous.
 --
--- 2. Cross-family (DNS sur IPv4 → AAAA) : Q1 doit résoudre l'IPv6 du client
---    via la table mac_clients (peuplée par le warmup ci-dessus ou par un
---    refresh NDP). ip6_allowed doit contenir LOCAL_IPV6 comme adresse client.
+-- 2. Cross-family (DNS sur IPv4 → AAAA) : Q1 peuple mac6_allowed avec
+--    l'adresse MAC du client (toujours connue) + les IPs AAAA résolues.
+--    mac6_allowed doit contenir LOCAL_MAC . <ipv6_dest>.
 --
--- 3. Cross-family inverse (DNS sur IPv6 → A) : Q1 doit résoudre l'IPv4 du
---    client (connue de tous les échanges IPv4 précédents). ip4_allowed doit
---    contenir LOCAL_IP comme adresse client.
+-- 3. Cross-family inverse (DNS sur IPv6 → A) : Q1 peuple mac4_allowed avec
+--    l'adresse MAC du client + les IPs A résolues.
+--    mac4_allowed doit contenir LOCAL_MAC . <ipv4_dest>.
 
 print ""
-print "#{C.bold}▶ Enregistrements AAAA → ip6_allowed (#{DOMAIN_AAAA})#{C.reset}"
+print "#{C.bold}▶ Enregistrements AAAA → ip6_allowed + mac6_allowed (#{DOMAIN_AAAA})#{C.reset}"
 
 ssh "nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true"
+ssh "nft flush set ip6 dns-filter mac6_allowed 2>/dev/null; true"
 -- Scénario 1 : requête DNS sur IPv6 (warmup + test de base).
 -- Si LOCAL_IPV6 est absent, retombe sur IPv4 (MAC lookup peut échouer).
 dig_aaaa = if LOCAL_IPV6
@@ -385,54 +413,62 @@ if has_aaaa
   _, set6 = ssh "nft list set ip6 dns-filter ip6_allowed 2>/dev/null"
   report "ip6_allowed peuplé après #{DOMAIN_AAAA} AAAA",
     (set6 and set6\match "[0-9a-f]+:[0-9a-f:]+") != nil, set6 or "(vide)"
+  if LOCAL_MAC
+    _, mac6_set = ssh "nft list set ip6 dns-filter mac6_allowed 2>/dev/null"
+    found_mac6 = mac6_set and mac6_set\find(LOCAL_MAC, 1, true) != nil
+    report "mac6_allowed contient LOCAL_MAC (#{LOCAL_MAC}) après AAAA",
+      found_mac6, mac6_set or "(vide)"
+  else
+    report "mac6_allowed après AAAA — LOCAL_MAC inconnu (ignoré)", true, ""
 else
   -- No upstream AAAA or no IPv6 connectivity; unit tests cover the code path.
   report "AAAA #{DOMAIN_AAAA} — pas d'enregistrement upstream (ignoré)",
     true, (aa_out or "")\gsub "%s+$", ""
 
--- ── Cross-family: DNS IPv4 → AAAA → ip6_allowed (client identifié par MAC) ────
--- ── Cross-family: DNS IPv6 → A   → ip4_allowed (client identifié par MAC) ────
+-- ── Cross-family: DNS IPv4 → AAAA → mac6_allowed (client identifié par MAC) ────
+-- ── Cross-family: DNS IPv6 → A   → mac4_allowed (client identifié par MAC) ────
 --
 -- Ces tests vérifient le cas réel : un client interroge DNS dans une famille
--- et reçoit des enregistrements de l'autre famille. Q1 doit retrouver l'IP
--- de l'autre famille via la table mac_clients (peuplée par Q0 au warmup).
--- Requis : LOCAL_IPV6 disponible (connectivité IPv6 routée via le bridge).
+-- et reçoit des enregistrements de l'autre famille. Q1 peuple mac4_allowed /
+-- mac6_allowed directement à partir du MAC client (toujours connu via IPC).
+-- Pas besoin de warmup ni de résolution IP cross-family.
+-- Requis : LOCAL_MAC disponible (interface locale détectée).
 
-if LOCAL_IPV6
+if LOCAL_MAC
   print ""
-  print "#{C.bold}▶ Cross-family: DNS sur IPv4 → AAAA → ip6_allowed#{C.reset}"
-  print "  (client IPv6 attendu : #{LOCAL_IPV6})"
+  print "#{C.bold}▶ Cross-family: DNS sur IPv4 → AAAA → mac6_allowed#{C.reset}"
+  print "  (MAC client attendu : #{LOCAL_MAC})"
 
-  -- Le warmup (scénario 1 ci-dessus) a enregistré MAC → LOCAL_IPV6 dans Q0.
-  -- Q1 peut maintenant résoudre l'IPv6 du client pour une requête IPv4.
-  ssh "nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true"
+  -- Q1 reçoit le MAC du client via IPC (Q0) indépendamment du transport DNS.
+  -- mac6_allowed doit être peuplé avec LOCAL_MAC . <dest_ipv6>.
+  ssh "nft flush set ip6 dns-filter mac6_allowed 2>/dev/null; true"
   _, aa4_out = run "dig +time=8 +tries=1 AAAA #{DOMAIN_AAAA} @8.8.8.8 2>&1"
   has_aa4 = aa4_out and aa4_out\match "[0-9a-f]+:[0-9a-f:]+"
   if has_aa4
     os.execute "sleep 2"
-    _, set6b = ssh "nft list set ip6 dns-filter ip6_allowed 2>/dev/null"
-    -- Recherche littérale : LOCAL_IPV6 doit apparaître comme partie cliente.
-    found_v6 = set6b and set6b\find(LOCAL_IPV6, 1, true) != nil
-    report "ip6_allowed contient LOCAL_IPV6 (#{LOCAL_IPV6}) après AAAA sur IPv4",
-      found_v6, set6b or "(vide)"
+    _, mac6b = ssh "nft list set ip6 dns-filter mac6_allowed 2>/dev/null"
+    found_mac6b = mac6b and mac6b\find(LOCAL_MAC, 1, true) != nil
+    report "mac6_allowed contient LOCAL_MAC (#{LOCAL_MAC}) après AAAA sur IPv4",
+      found_mac6b, mac6b or "(vide)"
   else
     report "Cross-family AAAA sur IPv4 — pas d'enregistrement (ignoré)", true, ""
 
   print ""
-  print "#{C.bold}▶ Cross-family: DNS sur IPv6 → A → ip4_allowed#{C.reset}"
-  print "  (client IPv4 attendu : #{LOCAL_IP})"
+  print "#{C.bold}▶ Cross-family: DNS sur IPv6 → A → mac4_allowed#{C.reset}"
+  print "  (MAC client attendu : #{LOCAL_MAC})"
 
-  -- Les requêtes DNS IPv4 précédentes ont enregistré MAC → LOCAL_IP dans Q0.
-  -- Q1 peut résoudre l'IPv4 du client pour une requête IPv6.
-  ssh "nft flush set ip4 dns-filter ip4_allowed 2>/dev/null; true"
-  _, a6_out = run "dig +time=8 +tries=1 A #{DOMAIN_ALLOWED} @2001:4860:4860::8888 2>&1"
+  -- Q1 reçoit le MAC du client via IPC, indépendamment du transport DNS IPv6.
+  -- mac4_allowed doit être peuplé avec LOCAL_MAC . <dest_ipv4>.
+  ssh "nft flush set ip  dns-filter mac4_allowed 2>/dev/null; true"
+  a6_dns_target = if LOCAL_IPV6 then "2001:4860:4860::8888" else "8.8.8.8"
+  _, a6_out = run "dig +time=8 +tries=1 A #{DOMAIN_ALLOWED} @#{a6_dns_target} 2>&1"
   has_a6 = a6_out and a6_out\match "%d+%.%d+%.%d+%.%d+"
   if has_a6
     os.execute "sleep 2"
-    _, set4b = ssh "nft list set ip4 dns-filter ip4_allowed 2>/dev/null"
-    found_v4 = set4b and set4b\find(LOCAL_IP, 1, true) != nil
-    report "ip4_allowed contient LOCAL_IP (#{LOCAL_IP}) après A sur IPv6",
-      found_v4, set4b or "(vide)"
+    _, mac4b = ssh "nft list set ip  dns-filter mac4_allowed 2>/dev/null"
+    found_mac4b = mac4b and mac4b\find(LOCAL_MAC, 1, true) != nil
+    report "mac4_allowed contient LOCAL_MAC (#{LOCAL_MAC}) après A sur IPv6",
+      found_mac4b, mac4b or "(vide)"
   else
     report "Cross-family A sur IPv6 — pas d'enregistrement (ignoré)", true, ""
 

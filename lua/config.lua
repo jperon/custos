@@ -20,6 +20,8 @@ local ALLOWED_DOMAINS = {
 local NFT_TABLE = "dns-filter"
 local NFT_SET_IP4 = "ip4_allowed"
 local NFT_SET_IP6 = "ip6_allowed"
+local NFT_SET_MAC4 = "mac4_allowed"
+local NFT_SET_MAC6 = "mac6_allowed"
 local NFT_IP_TIMEOUT = "2m"
 local IPC_MSG_SIZE = 27
 local IPC_PENDING_TTL = 5
@@ -39,6 +41,8 @@ return {
   NFT_TABLE = NFT_TABLE,
   NFT_SET_IP4 = NFT_SET_IP4,
   NFT_SET_IP6 = NFT_SET_IP6,
+  NFT_SET_MAC4 = NFT_SET_MAC4,
+  NFT_SET_MAC6 = NFT_SET_MAC6,
   NFT_IP_TIMEOUT = NFT_IP_TIMEOUT,
   IPC_MSG_SIZE = IPC_MSG_SIZE,
   IPC_PENDING_TTL = IPC_PENDING_TTL,

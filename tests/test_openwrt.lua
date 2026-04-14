@@ -89,6 +89,17 @@ local local_v6_raw
 _, local_v6_raw = run("ip -6 route get 2001:4860:4860::8888 2>/dev/null | sed -En 's/.*src ([0-9a-f:]+).*/\\1/p' | head -1")
 local LOCAL_IPV6 = local_v6_raw and local_v6_raw:match("[0-9a-f]+:[0-9a-f:]+")
 print("  IP locale IPv6 : " .. tostring(LOCAL_IPV6 or '(aucune)'))
+local local_iface_raw
+_, local_iface_raw = run("ip route get " .. tostring(LAN_IP) .. " 2>/dev/null | sed -En 's/.*dev ([^ ]+).*/\\1/p' | head -1")
+local LOCAL_IFACE = local_iface_raw and local_iface_raw:match("%S+")
+local local_mac_raw
+if LOCAL_IFACE then
+  _, local_mac_raw = run("ip link show " .. tostring(LOCAL_IFACE) .. " 2>/dev/null | sed -En 's/.*ether ([0-9a-f:]+).*/\\1/p' | head -1")
+else
+  _, local_mac_raw = nil, nil
+end
+local LOCAL_MAC = local_mac_raw and local_mac_raw:match("[0-9a-f]+:[0-9a-f:]+")
+print("  MAC locale : " .. tostring(LOCAL_MAC or '(inconnue)'))
 local AUTH_URL = "https://" .. tostring(LAN_IP) .. ":33443"
 local CAPTIVE_URL = "http://" .. tostring(LAN_IP) .. ":33080"
 print("")
@@ -169,6 +180,18 @@ report("ether saddr @authenticated_macs dans ip  prerouting", (pr4 and pr4:match
 local pr6
 _, pr6 = ssh("nft list chain ip6 dns-filter prerouting 2>/dev/null")
 report("ether saddr @authenticated_macs dans ip6 prerouting", (pr6 and pr6:match("ether saddr @authenticated_macs")) ~= nil, pr6 or "")
+local mac4s
+_, mac4s = ssh("nft list set ip  dns-filter mac4_allowed 2>/dev/null")
+report("mac4_allowed dans ip  dns-filter", (mac4s and mac4s:match("ether_addr")) ~= nil, mac4s or "")
+local mac6s
+_, mac6s = ssh("nft list set ip6 dns-filter mac6_allowed 2>/dev/null")
+report("mac6_allowed dans ip6 dns-filter", (mac6s and mac6s:match("ether_addr")) ~= nil, mac6s or "")
+local fwd4
+_, fwd4 = ssh("nft list chain ip  dns-filter forward 2>/dev/null")
+report("ether saddr . ip daddr @mac4_allowed dans ip  forward", (fwd4 and fwd4:match("mac4_allowed")) ~= nil, fwd4 or "")
+local fwd6
+_, fwd6 = ssh("nft list chain ip6 dns-filter forward 2>/dev/null")
+report("ether saddr . ip6 daddr @mac6_allowed dans ip6 forward", (fwd6 and fwd6:match("mac6_allowed")) ~= nil, fwd6 or "")
 local brnf
 _, brnf = ssh("cat /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null")
 report("bridge-nf-call-iptables = 1", (brnf and brnf:match("1")) ~= nil, brnf or "")
@@ -186,7 +209,6 @@ local pr4b
 _, pr4b = ssh("nft list chain ip dns-filter prerouting 2>/dev/null")
 report("DNAT HTTP (80 → 33080) dans ip prerouting", (pr4b and pr4b:match("redirect to :33080")) ~= nil, pr4b or "")
 report("Pas de DNAT 443 dans ip prerouting", not (pr4b and pr4b:match("redirect to :33443")), pr4b or "")
-local fwd4
 _, fwd4 = ssh("nft list chain ip dns-filter forward 2>/dev/null")
 report("REJECT tcp 443 dans ip forward", (fwd4 and fwd4:match("tcp dport 443 reject")) ~= nil, fwd4 or "")
 local wl4
@@ -237,8 +259,9 @@ local unk_out
 _, unk_out = dig_lan(DOMAIN_UNKNOWN)
 report("dig " .. tostring(DOMAIN_UNKNOWN) .. " → NXDOMAIN", (unk_out and unk_out:upper():match("NXDOMAIN")) ~= nil, (unk_out or ""):gsub("%s+$", ""):sub(1, 200))
 print("")
-print(tostring(C.bold) .. "▶ Enregistrements AAAA → ip6_allowed (" .. tostring(DOMAIN_AAAA) .. ")" .. tostring(C.reset))
+print(tostring(C.bold) .. "▶ Enregistrements AAAA → ip6_allowed + mac6_allowed (" .. tostring(DOMAIN_AAAA) .. ")" .. tostring(C.reset))
 ssh("nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
+ssh("nft flush set ip6 dns-filter mac6_allowed 2>/dev/null; true")
 local dig_aaaa
 if LOCAL_IPV6 then
   dig_aaaa = function(domain)
@@ -257,39 +280,53 @@ if has_aaaa then
   local set6
   _, set6 = ssh("nft list set ip6 dns-filter ip6_allowed 2>/dev/null")
   report("ip6_allowed peuplé après " .. tostring(DOMAIN_AAAA) .. " AAAA", (set6 and set6:match("[0-9a-f]+:[0-9a-f:]+")) ~= nil, set6 or "(vide)")
+  if LOCAL_MAC then
+    local mac6_set
+    _, mac6_set = ssh("nft list set ip6 dns-filter mac6_allowed 2>/dev/null")
+    local found_mac6 = mac6_set and mac6_set:find(LOCAL_MAC, 1, true) ~= nil
+    report("mac6_allowed contient LOCAL_MAC (" .. tostring(LOCAL_MAC) .. ") après AAAA", found_mac6, mac6_set or "(vide)")
+  else
+    report("mac6_allowed après AAAA — LOCAL_MAC inconnu (ignoré)", true, "")
+  end
 else
   report("AAAA " .. tostring(DOMAIN_AAAA) .. " — pas d'enregistrement upstream (ignoré)", true, (aa_out or ""):gsub("%s+$", ""))
 end
-if LOCAL_IPV6 then
+if LOCAL_MAC then
   print("")
-  print(tostring(C.bold) .. "▶ Cross-family: DNS sur IPv4 → AAAA → ip6_allowed" .. tostring(C.reset))
-  print("  (client IPv6 attendu : " .. tostring(LOCAL_IPV6) .. ")")
-  ssh("nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
+  print(tostring(C.bold) .. "▶ Cross-family: DNS sur IPv4 → AAAA → mac6_allowed" .. tostring(C.reset))
+  print("  (MAC client attendu : " .. tostring(LOCAL_MAC) .. ")")
+  ssh("nft flush set ip6 dns-filter mac6_allowed 2>/dev/null; true")
   local aa4_out
   _, aa4_out = run("dig +time=8 +tries=1 AAAA " .. tostring(DOMAIN_AAAA) .. " @8.8.8.8 2>&1")
   local has_aa4 = aa4_out and aa4_out:match("[0-9a-f]+:[0-9a-f:]+")
   if has_aa4 then
     os.execute("sleep 2")
-    local set6b
-    _, set6b = ssh("nft list set ip6 dns-filter ip6_allowed 2>/dev/null")
-    local found_v6 = set6b and set6b:find(LOCAL_IPV6, 1, true) ~= nil
-    report("ip6_allowed contient LOCAL_IPV6 (" .. tostring(LOCAL_IPV6) .. ") après AAAA sur IPv4", found_v6, set6b or "(vide)")
+    local mac6b
+    _, mac6b = ssh("nft list set ip6 dns-filter mac6_allowed 2>/dev/null")
+    local found_mac6b = mac6b and mac6b:find(LOCAL_MAC, 1, true) ~= nil
+    report("mac6_allowed contient LOCAL_MAC (" .. tostring(LOCAL_MAC) .. ") après AAAA sur IPv4", found_mac6b, mac6b or "(vide)")
   else
     report("Cross-family AAAA sur IPv4 — pas d'enregistrement (ignoré)", true, "")
   end
   print("")
-  print(tostring(C.bold) .. "▶ Cross-family: DNS sur IPv6 → A → ip4_allowed" .. tostring(C.reset))
-  print("  (client IPv4 attendu : " .. tostring(LOCAL_IP) .. ")")
-  ssh("nft flush set ip4 dns-filter ip4_allowed 2>/dev/null; true")
+  print(tostring(C.bold) .. "▶ Cross-family: DNS sur IPv6 → A → mac4_allowed" .. tostring(C.reset))
+  print("  (MAC client attendu : " .. tostring(LOCAL_MAC) .. ")")
+  ssh("nft flush set ip  dns-filter mac4_allowed 2>/dev/null; true")
+  local a6_dns_target
+  if LOCAL_IPV6 then
+    a6_dns_target = "2001:4860:4860::8888"
+  else
+    a6_dns_target = "8.8.8.8"
+  end
   local a6_out
-  _, a6_out = run("dig +time=8 +tries=1 A " .. tostring(DOMAIN_ALLOWED) .. " @2001:4860:4860::8888 2>&1")
+  _, a6_out = run("dig +time=8 +tries=1 A " .. tostring(DOMAIN_ALLOWED) .. " @" .. tostring(a6_dns_target) .. " 2>&1")
   local has_a6 = a6_out and a6_out:match("%d+%.%d+%.%d+%.%d+")
   if has_a6 then
     os.execute("sleep 2")
-    local set4b
-    _, set4b = ssh("nft list set ip4 dns-filter ip4_allowed 2>/dev/null")
-    local found_v4 = set4b and set4b:find(LOCAL_IP, 1, true) ~= nil
-    report("ip4_allowed contient LOCAL_IP (" .. tostring(LOCAL_IP) .. ") après A sur IPv6", found_v4, set4b or "(vide)")
+    local mac4b
+    _, mac4b = ssh("nft list set ip  dns-filter mac4_allowed 2>/dev/null")
+    local found_mac4b = mac4b and mac4b:find(LOCAL_MAC, 1, true) ~= nil
+    report("mac4_allowed contient LOCAL_MAC (" .. tostring(LOCAL_MAC) .. ") après A sur IPv6", found_mac4b, mac4b or "(vide)")
   else
     report("Cross-family A sur IPv6 — pas d'enregistrement (ignoré)", true, "")
   end

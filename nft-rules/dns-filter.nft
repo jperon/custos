@@ -22,6 +22,16 @@ flush ruleset
 # ════════════════════════════════════════════════════════════════
 table ip dns-filter {
 
+  # Paires (MAC client, destination IPv4) autorisées après résolution DNS.
+  # Permet l'accès cross-family : un client IPv4 ayant reçu des AAAA peut
+  # accéder aux IPs IPv6 même si son adresse IPv6 n'est pas encore connue.
+  # Expiration automatique après 2 minutes.
+  set mac4_allowed {
+    type    ether_addr . ipv4_addr
+    flags   timeout
+    timeout 2m
+  }
+
   # Paires (client, destination) autorisées après résolution DNS.
   # Expiration automatique après 2 minutes.
   set ip4_allowed {
@@ -68,6 +78,8 @@ table ip dns-filter {
     ip saddr @authenticated_ips return
     # Clients authentifiés par MAC (br_netfilter expose le L2 dans le hook L3) :
     ether saddr @authenticated_macs return
+    # Clients autorisés par MAC+IP après résolution DNS : pas de redirection
+    ether saddr . ip daddr @mac4_allowed return
     # Destinations déjà autorisées par la liste blanche DNS : pas de redirection
     ip saddr . ip daddr @ip4_allowed return
     # Destinations en liste blanche statique : pas de redirection non plus
@@ -105,6 +117,9 @@ table ip dns-filter {
     ct state established,related accept
 
     ip saddr . ip daddr @ip4_allowed accept
+
+    # Accès autorisé par MAC client + destination IPv4 (DNS cross-family).
+    ether saddr . ip daddr @mac4_allowed accept
 
     # Destinations en liste blanche statique (IPs/CIDRs sans DNS).
     ip daddr @ip4_dest_whitelist accept
@@ -158,6 +173,16 @@ table ip6 dns-filter {
     timeout 2m
   }
 
+  # Paires (MAC client, destination IPv6) autorisées après résolution DNS.
+  # Permet l'accès cross-family : un client IPv6 ayant reçu des A peut
+  # accéder aux IPs IPv4 même si son adresse IPv4 n'est pas encore connue.
+  # Expiration automatique après 2 minutes.
+  set mac6_allowed {
+    type    ether_addr . ipv6_addr
+    flags   timeout
+    timeout 2m
+  }
+
   # IPs clientes IPv6 authentifiées via le portail captif.
   set authenticated_ips6 {
     type  ipv6_addr
@@ -188,6 +213,8 @@ table ip6 dns-filter {
     ip6 saddr @authenticated_ips6 return
     # Clients authentifiés par MAC (br_netfilter expose le L2 dans le hook L3) :
     ether saddr @authenticated_macs return
+    # Clients autorisés par MAC+IP après résolution DNS : pas de redirection
+    ether saddr . ip6 daddr @mac6_allowed return
     # Destinations déjà autorisées par la liste blanche DNS : pas de redirection
     ip6 saddr . ip6 daddr @ip6_allowed return
     # Destinations en liste blanche statique : pas de redirection non plus
@@ -227,6 +254,9 @@ table ip6 dns-filter {
     } accept
 
     ip6 saddr . ip6 daddr @ip6_allowed accept
+
+    # Accès autorisé par MAC client + destination IPv6 (DNS cross-family).
+    ether saddr . ip6 daddr @mac6_allowed accept
 
     # Destinations en liste blanche statique (IPs/CIDRs sans DNS).
     ip6 daddr @ip6_dest_whitelist accept

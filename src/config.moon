@@ -52,7 +52,9 @@ ALLOWED_DOMAINS = {
 NFT_TABLE      = "dns-filter"
 NFT_SET_IP4    = "ip4_allowed"
 NFT_SET_IP6    = "ip6_allowed"
-NFT_IP_TIMEOUT = "2m"           -- durée de vie des IPs dans les sets
+NFT_SET_MAC4   = "mac4_allowed"   -- ether_addr . ipv4_addr (client MAC + dest IPv4)
+NFT_SET_MAC6   = "mac6_allowed"   -- ether_addr . ipv6_addr (client MAC + dest IPv6)
+NFT_IP_TIMEOUT = "2m"             -- durée de vie des IPs dans les sets
 
 -- ── Pipe IPC Q0 → Q1 ────────────────────────────────────────────
 -- Taille du message binaire (voir ipc.moon)
@@ -91,7 +93,7 @@ AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES
   :DOCKER_MODE
   :ALLOWED_DOMAINS
-  :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_IP_TIMEOUT
+  :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
   :IPC_MSG_SIZE, :IPC_PENDING_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN
   :FORCED_TTL
   :DNS_PORT, :AF_INET, :AF_INET6, :PROTO_UDP
