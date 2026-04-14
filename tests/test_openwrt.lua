@@ -124,6 +124,16 @@ if not (no_restart) then
     print("  Création du compte testuser...")
     ssh("LUA_PATH='/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;" .. tostring(CUSTOS_DIR) .. "/?.lua;" .. tostring(CUSTOS_DIR) .. "/?/init.lua;;' luajit2 -e \"local c=require('auth.credentials'); c.register_user('testuser','testpass','" .. tostring(CFG_DIR) .. "/secrets',{}); print('ok')\"")
   end
+  local script_dir = (arg[0] or "tests/test_openwrt.lua"):gsub("[^/]+%.lua$", "")
+  local project_root = (script_dir:gsub("tests/?$", "")):gsub("/$", "")
+  project_root = project_root == "" and "." or project_root
+  print("  Déploiement des fichiers Lua + nft → " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "...")
+  run("scp " .. tostring(SSH_OPTS) .. " " .. tostring(project_root) .. "/nft-rules/dns-filter.nft " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/dns-filter.nft")
+  run("ssh " .. tostring(SSH_OPTS) .. " " .. tostring(SSH_TARGET) .. " 'mkdir -p " .. tostring(CUSTOS_DIR) .. "/parse " .. tostring(CUSTOS_DIR) .. "/auth " .. tostring(CUSTOS_DIR) .. "/filter'")
+  run("scp " .. tostring(SSH_OPTS) .. " " .. tostring(project_root) .. "/lua/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/")
+  run("scp " .. tostring(SSH_OPTS) .. " " .. tostring(project_root) .. "/lua/parse/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/parse/")
+  run("scp " .. tostring(SSH_OPTS) .. " " .. tostring(project_root) .. "/lua/auth/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/auth/")
+  run("scp " .. tostring(SSH_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/")
   print("  Chargement des règles nft...")
   local ok_nft, nft_err = ssh("nft -f " .. tostring(CUSTOS_DIR) .. "/dns-filter.nft 2>&1")
   if not (ok_nft) then

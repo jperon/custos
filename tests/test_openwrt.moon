@@ -175,6 +175,19 @@ unless no_restart
     print "  Création du compte testuser..."
     ssh "LUA_PATH='/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;#{CUSTOS_DIR}/?.lua;#{CUSTOS_DIR}/?/init.lua;;' luajit2 -e \"local c=require('auth.credentials'); c.register_user('testuser','testpass','#{CFG_DIR}/secrets',{}); print('ok')\""
 
+  -- Deploy Lua files and nft ruleset to the router before starting the service.
+  -- Ensures the tested code matches what was just compiled locally.
+  script_dir = (arg[0] or "tests/test_openwrt.lua")\gsub "[^/]+%.lua$", ""
+  project_root = (script_dir\gsub "tests/?$", "")\gsub "/$", ""
+  project_root = project_root == "" and "." or project_root
+  print "  Déploiement des fichiers Lua + nft → #{SSH_TARGET}:#{CUSTOS_DIR}..."
+  run "scp #{SSH_OPTS} #{project_root}/nft-rules/dns-filter.nft #{SSH_TARGET}:#{CUSTOS_DIR}/dns-filter.nft"
+  run "ssh #{SSH_OPTS} #{SSH_TARGET} 'mkdir -p #{CUSTOS_DIR}/parse #{CUSTOS_DIR}/auth #{CUSTOS_DIR}/filter'"
+  run "scp #{SSH_OPTS} #{project_root}/lua/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/"
+  run "scp #{SSH_OPTS} #{project_root}/lua/parse/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/parse/"
+  run "scp #{SSH_OPTS} #{project_root}/lua/auth/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/auth/"
+  run "scp #{SSH_OPTS} #{project_root}/lua/filter/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/filter/"
+
   -- Load nft rules
   print "  Chargement des règles nft..."
   ok_nft, nft_err = ssh "nft -f #{CUSTOS_DIR}/dns-filter.nft 2>&1"
