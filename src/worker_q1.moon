@@ -235,8 +235,11 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         add_ip4 client_v4, ans.rdata_str
         ip_count += 1
       else
-        log_warn { action: "no_ipv4_for_client", client: client_ip,
-                   record: ans.rdata_str, reason: "mac_not_known" }
+        -- IPv4 inconnue : trafic via mac4_allowed si MAC valide, sinon bloqué.
+        log = if mac_valid(client_mac) then log_info else log_warn
+        log { action: "no_ipv4_for_client", client: client_ip,
+              record: ans.rdata_str, reason: "client_ipv4_unknown",
+              mac_fallback: mac_valid(client_mac) }
       add_mac4 client_mac, ans.rdata_str if mac_valid client_mac
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
@@ -249,8 +252,11 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         add_ip6 client_v6, ans.rdata_str
         ip_count += 1
       else
-        log_warn { action: "no_ipv6_for_client", client: client_ip,
-                   record: ans.rdata_str, reason: "mac_not_known" }
+        -- IPv6 inconnue : trafic via mac6_allowed si MAC valide, sinon bloqué.
+        log = if mac_valid(client_mac) then log_info else log_warn
+        log { action: "no_ipv6_for_client", client: client_ip,
+              record: ans.rdata_str, reason: "client_ipv6_unknown",
+              mac_fallback: mac_valid(client_mac) }
       add_mac6 client_mac, ans.rdata_str if mac_valid client_mac
 
   -- ── Patch TTL + EDE + checksums (IPv4 et IPv6) ───────────────

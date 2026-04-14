@@ -224,11 +224,18 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         add_ip4(client_v4, ans.rdata_str)
         ip_count = ip_count + 1
       else
-        log_warn({
+        local log
+        if mac_valid(client_mac) then
+          log = log_info
+        else
+          log = log_warn
+        end
+        log({
           action = "no_ipv4_for_client",
           client = client_ip,
           record = ans.rdata_str,
-          reason = "mac_not_known"
+          reason = "client_ipv4_unknown",
+          mac_fallback = mac_valid(client_mac)
         })
       end
       if mac_valid(client_mac) then
@@ -246,11 +253,18 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         add_ip6(client_v6, ans.rdata_str)
         ip_count = ip_count + 1
       else
-        log_warn({
+        local log
+        if mac_valid(client_mac) then
+          log = log_info
+        else
+          log = log_warn
+        end
+        log({
           action = "no_ipv6_for_client",
           client = client_ip,
           record = ans.rdata_str,
-          reason = "mac_not_known"
+          reason = "client_ipv6_unknown",
+          mac_fallback = mac_valid(client_mac)
         })
       end
       if mac_valid(client_mac) then
