@@ -53,9 +53,13 @@ start_service() {
 stop_service() {
     # Nettoyer les règles nftables avant d'arrêter le service
     _cleanup_nft_rules
-    
+
     # Supprimer le cron pour les mises à jour de listes
     _cron_remove
+
+    # Tuer explicitement les processus main.lua (couvre le cas où ils ont été
+    # démarrés hors de procd, p.ex. par la suite de tests).
+    _kill_workers
 }
 
 # Un rechargement applique tous les paramètres UCI : redémarrage complet nécessaire
@@ -108,6 +112,31 @@ _cron_remove() {
     [ -f "$CRONTABS_ROOT" ] || return 0
     sed -i "/$CUSTOS_CRON_MARKER/d" "$CRONTABS_ROOT"
     /etc/init.d/cron reload 2>/dev/null || true
+}
+
+# ── Arrêt des workers ─────────────────────────────────────────────────────────
+
+# Envoie SIGTERM aux processus main.lua ; les workers enfants s'arrêtent par
+# propagation (shutdown_workers dans main.lua) ou par PR_SET_PDEATHSIG.
+# Attend jusqu'à 5 s puis SIGKILL en dernier recours.
+_kill_workers() {
+    local i pid pids
+    pids=$(ps 2>/dev/null | awk '/luajit.*main\.lua/ && !/awk/ { print $1 }')
+    [ -z "$pids" ] && return 0
+
+    echo "custos: arrêt des workers (SIGTERM)..."
+    for pid in $pids; do kill -TERM "$pid" 2>/dev/null || true; done
+
+    i=0
+    while [ $i -lt 5 ]; do
+        sleep 1
+        pids=$(ps 2>/dev/null | awk '/luajit.*main\.lua/ && !/awk/ { print $1 }')
+        [ -z "$pids" ] && return 0
+        i=$((i + 1))
+    done
+
+    echo "custos: SIGKILL forcé..."
+    for pid in $pids; do kill -KILL "$pid" 2>/dev/null || true; done
 }
 
 # ── Gestion des règles nftables ───────────────────────────────────────
