@@ -127,6 +127,11 @@ _, local_raw = run "ip route get #{LAN_IP} 2>/dev/null | sed -En 's/.*src ([0-9.
 LOCAL_IP = local_raw and local_raw\match "%d+%.%d+%.%d+%.%d+"
 LOCAL_IP = LOCAL_IP or "127.0.0.1"
 print "  IP locale : #{LOCAL_IP}"
+-- Detect LOCAL_IPV6 (IPv6 source address routed via the bridge, for AAAA tests)
+-- When a DNS query is sent over IPv6, Q1 directly knows client_v6 without MAC lookup.
+_, local_v6_raw = run "ip -6 route get 2001:4860:4860::8888 2>/dev/null | sed -En 's/.*src ([0-9a-f:]+).*/\\1/p' | head -1"
+LOCAL_IPV6 = local_v6_raw and local_v6_raw\match "[0-9a-f]+:[0-9a-f:]+"
+print "  IP locale IPv6 : #{LOCAL_IPV6 or '(aucune)'}"
 
 AUTH_URL    = "https://#{LAN_IP}:33443"
 CAPTIVE_URL = "http://#{LAN_IP}:33080"
@@ -353,7 +358,15 @@ print ""
 print "#{C.bold}▶ Enregistrements AAAA → ip6_allowed (#{DOMAIN_AAAA})#{C.reset}"
 
 ssh "nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true"
-_, aa_out = dig_lan DOMAIN_AAAA, "AAAA"
+-- Pour tester ip6_allowed, la requête DNS doit voyager sur IPv6 : Q1 obtient
+-- client_v6 directement (pkt.ip.version == 6), sans résolution MAC → IPv6.
+-- Sans IPv6 local, on retombe sur @8.8.8.8 (IPv4) : le test peut échouer si
+-- la table NDP du routeur ne connaît pas encore l'IPv6 du client.
+dig_aaaa = if LOCAL_IPV6
+  (domain) -> run "dig +time=8 +tries=1 AAAA #{domain} @2001:4860:4860::8888 2>&1"
+else
+  (domain) -> dig_lan domain, "AAAA"
+_, aa_out = dig_aaaa DOMAIN_AAAA
 has_aaaa = aa_out and aa_out\match "[0-9a-f]+:[0-9a-f:]+"
 if has_aaaa
   os.execute "sleep 2"
@@ -361,7 +374,7 @@ if has_aaaa
   report "ip6_allowed peuplé après #{DOMAIN_AAAA} AAAA",
     (set6 and set6\match "[0-9a-f]+:[0-9a-f:]+") != nil, set6 or "(vide)"
 else
-  -- No upstream AAAA; silently pass (unit tests cover the code path)
+  -- No upstream AAAA or no IPv6 connectivity; unit tests cover the code path.
   report "AAAA #{DOMAIN_AAAA} — pas d'enregistrement upstream (ignoré)",
     true, (aa_out or "")\gsub "%s+$", ""
 

@@ -85,6 +85,10 @@ _, local_raw = run("ip route get " .. tostring(LAN_IP) .. " 2>/dev/null | sed -E
 local LOCAL_IP = local_raw and local_raw:match("%d+%.%d+%.%d+%.%d+")
 LOCAL_IP = LOCAL_IP or "127.0.0.1"
 print("  IP locale : " .. tostring(LOCAL_IP))
+local local_v6_raw
+_, local_v6_raw = run("ip -6 route get 2001:4860:4860::8888 2>/dev/null | sed -En 's/.*src ([0-9a-f:]+).*/\\1/p' | head -1")
+local LOCAL_IPV6 = local_v6_raw and local_v6_raw:match("[0-9a-f]+:[0-9a-f:]+")
+print("  IP locale IPv6 : " .. tostring(LOCAL_IPV6 or '(aucune)'))
 local AUTH_URL = "https://" .. tostring(LAN_IP) .. ":33443"
 local CAPTIVE_URL = "http://" .. tostring(LAN_IP) .. ":33080"
 print("")
@@ -235,8 +239,18 @@ report("dig " .. tostring(DOMAIN_UNKNOWN) .. " → NXDOMAIN", (unk_out and unk_o
 print("")
 print(tostring(C.bold) .. "▶ Enregistrements AAAA → ip6_allowed (" .. tostring(DOMAIN_AAAA) .. ")" .. tostring(C.reset))
 ssh("nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
+local dig_aaaa
+if LOCAL_IPV6 then
+  dig_aaaa = function(domain)
+    return run("dig +time=8 +tries=1 AAAA " .. tostring(domain) .. " @2001:4860:4860::8888 2>&1")
+  end
+else
+  dig_aaaa = function(domain)
+    return dig_lan(domain, "AAAA")
+  end
+end
 local aa_out
-_, aa_out = dig_lan(DOMAIN_AAAA, "AAAA")
+_, aa_out = dig_aaaa(DOMAIN_AAAA)
 local has_aaaa = aa_out and aa_out:match("[0-9a-f]+:[0-9a-f:]+")
 if has_aaaa then
   os.execute("sleep 2")
