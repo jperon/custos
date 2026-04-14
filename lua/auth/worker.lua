@@ -64,7 +64,7 @@ run_auth_worker = function(auth_cfg)
     end
   end
   local captive_srvs = { }
-  local captive_port = auth_cfg.captive_port
+  local captive_port = auth_cfg.captive_port or 33080
   if captive_port and captive_port > 0 then
     log_info({
       action = "captive_portal_start",

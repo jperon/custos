@@ -65,7 +65,7 @@ run_auth_worker = (auth_cfg) ->
 
   -- Portail captif : sockets HTTP plain (si captive_port configuré)
   captive_srvs = {}
-  captive_port = auth_cfg.captive_port
+  captive_port = auth_cfg.captive_port or 33080
   if captive_port and captive_port > 0
     log_info { action: "captive_portal_start", port: captive_port }
     cap4, err_c4 = captive.make_captive4 captive_port

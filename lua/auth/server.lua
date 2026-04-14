@@ -570,7 +570,7 @@ make_server6 = function(port)
 end
 local run
 run = function(secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path)
-  local port = auth_cfg.port or 33080
+  local port = auth_cfg.port or 33443
   local host = auth_cfg.host or "::"
   secrets_path = auth_cfg.secrets or "cfg/secrets"
   local hb_interval = auth_cfg.heartbeat_interval or 30

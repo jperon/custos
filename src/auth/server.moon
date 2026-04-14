@@ -491,7 +491,7 @@ make_server6 = (port) ->
 -- @tparam table|nil nft_sess  Module auth.nft_sessions (nil si portail captif désactivé)
 -- @tparam table captive_srvs  Liste de sockets TCP plain du portail captif (peut être vide)
 run = (secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path) ->
-  port = auth_cfg.port or 33080
+  port = auth_cfg.port or 33443
   host = auth_cfg.host or "::"
   secrets_path = auth_cfg.secrets or "cfg/secrets"
 
