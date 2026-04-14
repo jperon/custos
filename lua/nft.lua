@@ -50,11 +50,17 @@ add_ip = function(client_ip, ip_str)
 end
 local add_mac4
 add_mac4 = function(mac, ip_str)
+  if not (NFT_SET_MAC4) then
+    return false
+  end
   local cmd = "add element ip " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC4) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
   return run_cmd(cmd)
 end
 local add_mac6
 add_mac6 = function(mac, ip_str)
+  if not (NFT_SET_MAC6) then
+    return false
+  end
   local cmd = "add element ip6 " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC6) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
   return run_cmd(cmd)
 end
