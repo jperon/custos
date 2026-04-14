@@ -474,6 +474,7 @@ make_server6 = (port) ->
   ok6, srv6 = pcall socket.tcp6
   return nil unless ok6 and srv6
   srv6\setoption "reuseaddr", true
+  srv6\setoption "ipv6-v6only", true
   ok62, _err = srv6\bind "::", port
   unless ok62
     srv6\close!

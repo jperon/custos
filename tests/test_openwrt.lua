@@ -91,8 +91,15 @@ print("")
 print(tostring(C.bold) .. "[2/5] Démarrage du service..." .. tostring(C.reset))
 ssh("mkdir -p " .. tostring(CUSTOS_DIR) .. "/tmp")
 if not (no_restart) then
-  ssh("for pid in $(pgrep -f 'luajit2.*main' 2>/dev/null); do kill -9 $pid 2>/dev/null; done; true")
-  os.execute("sleep 4")
+  for _ = 1, 30 do
+    local procs
+    _, procs = ssh("for pid in $(pgrep -f 'luajit2.*main' 2>/dev/null); do kill -9 $pid 2>/dev/null; done; pgrep -f 'luajit2.*main' 2>/dev/null | wc -l")
+    if (tonumber(procs or "1") or 1) == 0 then
+      break
+    end
+    os.execute("sleep 0.5")
+  end
+  os.execute("sleep 1")
   ssh("nft flush ruleset 2>/dev/null; true")
   ssh("> " .. tostring(LOG_FILE) .. "; > " .. tostring(SESSIONS_FILE) .. " 2>/dev/null; true")
   ssh("grep -v '^newuser:' " .. tostring(CFG_DIR) .. "/secrets > /tmp/_secrets.tmp 2>/dev/null && mv /tmp/_secrets.tmp " .. tostring(CFG_DIR) .. "/secrets 2>/dev/null; true")
@@ -174,7 +181,10 @@ report("Portail captif sur 33080", (nc080 and nc080:match("open")) ~= nil, "")
 local pr4b
 _, pr4b = ssh("nft list chain ip dns-filter prerouting 2>/dev/null")
 report("DNAT HTTP (80 → 33080) dans ip prerouting", (pr4b and pr4b:match("redirect to :33080")) ~= nil, pr4b or "")
-report("DNAT HTTPS (443 → 33443) dans ip prerouting", (pr4b and pr4b:match("redirect to :33443")) ~= nil, pr4b or "")
+report("Pas de DNAT 443 dans ip prerouting", not (pr4b and pr4b:match("redirect to :33443")), pr4b or "")
+local fwd4
+_, fwd4 = ssh("nft list chain ip dns-filter forward 2>/dev/null")
+report("REJECT tcp 443 dans ip forward", (fwd4 and fwd4:match("tcp dport 443 reject")) ~= nil, fwd4 or "")
 print("")
 print(tostring(C.bold) .. "[4/5] Filtrage DNS" .. tostring(C.reset))
 print("")
@@ -303,12 +313,16 @@ captive_get = function(path)
     path = "/"
   end
   local out
-  _, out = run("curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 " .. tostring(CAPTIVE_URL) .. tostring(path) .. " 2>&1")
-  return (out or ""):match("%d%d%d")
+  _, out = run("curl -s -D - -o /dev/null --max-redirs 0 " .. tostring(CAPTIVE_URL) .. tostring(path) .. " 2>&1")
+  local code = (out or ""):match("HTTP/%S+ (%d%d%d)")
+  local loc = (out or ""):match("[Ll]ocation: (%S+)")
+  return code, (loc or "")
 end
-local cp_code = captive_get("/")
+local cp_code, cp_loc = captive_get("/")
 report("Portail captif GET / → 302", cp_code == "302", "HTTP " .. tostring(cp_code))
-local g204_code = captive_get("/generate_204")
+report("Portail captif redirect → https://", (cp_loc:match("^https://")) ~= nil, "Location: " .. tostring(cp_loc))
+local g204_code
+g204_code, _ = captive_get("/generate_204")
 report("Portail captif /generate_204 → 302", g204_code == "302", "HTTP " .. tostring(g204_code))
 print("")
 print(tostring(C.bold) .. "▶ Bypass MAC (authenticated_macs ip + ip6)" .. tostring(C.reset))

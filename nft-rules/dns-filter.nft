@@ -62,9 +62,10 @@ table ip dns-filter {
     ether saddr @authenticated_macs return
     # Destinations déjà autorisées par la liste blanche DNS : pas de redirection
     ip saddr . ip daddr @ip4_allowed return
-    # Portail captif : tout HTTP → portail plain, tout HTTPS → login TLS
+    # Portail captif : tout HTTP → portail plain
+    # HTTPS n'est pas redirigé : les connexions non-autorisées sont bloquées
+    # dans la chaîne FORWARD par un REJECT tcp reset.
     tcp dport 80  redirect to :33080
-    tcp dport 443 redirect to :33443
   }
 
   # ── Chaîne FORWARD (trafic traversant : bridge, routeur, WireGuard) ─
@@ -94,6 +95,10 @@ table ip dns-filter {
     ct state established,related accept
 
     ip saddr . ip daddr @ip4_allowed accept
+
+    # Connexions HTTPS vers des destinations non autorisées : TCP RST immédiat.
+    # Le client n'a pas de résolution DNS valide → pas d'entrée ip4_allowed.
+    tcp dport 443 reject with tcp reset
   }
 
   # ── Chaîne OUTPUT (DNS émis par la machine filtre elle-même) ──────
@@ -163,7 +168,6 @@ table ip6 dns-filter {
     # Destinations déjà autorisées par la liste blanche DNS : pas de redirection
     ip6 saddr . ip6 daddr @ip6_allowed return
     tcp dport 80  redirect to :33080
-    tcp dport 443 redirect to :33443
   }
 
   # ── Chaîne FORWARD ───────────────────────────────────────────────
@@ -198,6 +202,9 @@ table ip6 dns-filter {
     } accept
 
     ip6 saddr . ip6 daddr @ip6_allowed accept
+
+    # Connexions HTTPS vers des destinations non autorisées : TCP RST immédiat.
+    tcp dport 443 reject with tcp reset
   }
 
   # ── Chaîne OUTPUT ────────────────────────────────────────────────

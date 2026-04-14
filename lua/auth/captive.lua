@@ -52,7 +52,7 @@ handle_connection = function(client, auth_port)
   local_ip, _ = client:getsockname()
   local_ip = local_ip or "127.0.0.1"
   local host_part = local_ip:find(":", 1, true) and "[" .. tostring(local_ip) .. "]" or local_ip
-  local redirect_url = "http://" .. tostring(host_part) .. ":" .. tostring(auth_port) .. "/"
+  local redirect_url = "https://" .. tostring(host_part) .. ":" .. tostring(auth_port) .. "/"
   local resp = "HTTP/1.1 302 Found\r\nLocation: " .. tostring(redirect_url) .. "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   client:send(resp)
   local peer_ip
@@ -96,6 +96,7 @@ make_captive6 = function(port)
     return nil
   end
   srv6:setoption("reuseaddr", true)
+  srv6:setoption("ipv6-v6only", true)
   local ok62, _ = srv6:bind("::", port)
   if not (ok62) then
     srv6:close()

@@ -559,6 +559,7 @@ make_server6 = function(port)
     return nil
   end
   srv6:setoption("reuseaddr", true)
+  srv6:setoption("ipv6-v6only", true)
   local ok62, _err = srv6:bind("::", port)
   if not (ok62) then
     srv6:close()

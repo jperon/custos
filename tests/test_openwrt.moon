@@ -139,10 +139,13 @@ print "#{C.bold}[2/5] Démarrage du service...#{C.reset}"
 ssh "mkdir -p #{CUSTOS_DIR}/tmp"
 
 unless no_restart
-  -- Kill any running workers, flush stale nft state
-  -- Use kill -9 to ensure processes die immediately and release ports (33080, 33443).
-  ssh "for pid in $(pgrep -f 'luajit2.*main' 2>/dev/null); do kill -9 $pid 2>/dev/null; done; true"
-  os.execute "sleep 4"
+  -- Kill any running workers. The supervisor has a restart loop, so new children
+  -- may appear between kill and poll. Repeat kill+check until the count reaches 0.
+  for _ = 1, 30
+    _, procs = ssh "for pid in $(pgrep -f 'luajit2.*main' 2>/dev/null); do kill -9 $pid 2>/dev/null; done; pgrep -f 'luajit2.*main' 2>/dev/null | wc -l"
+    break if (tonumber(procs or "1") or 1) == 0
+    os.execute "sleep 0.5"
+  os.execute "sleep 1"  -- extra margin for kernel to release NFQUEUE handles + ports
   ssh "nft flush ruleset 2>/dev/null; true"
 
   -- Clear log and sessions
@@ -257,8 +260,12 @@ report "Portail captif sur 33080",
 _, pr4b = ssh "nft list chain ip dns-filter prerouting 2>/dev/null"
 report "DNAT HTTP (80 → 33080) dans ip prerouting",
   (pr4b and pr4b\match "redirect to :33080") != nil, pr4b or ""
-report "DNAT HTTPS (443 → 33443) dans ip prerouting",
-  (pr4b and pr4b\match "redirect to :33443") != nil, pr4b or ""
+report "Pas de DNAT 443 dans ip prerouting",
+  not (pr4b and pr4b\match "redirect to :33443"), pr4b or ""
+
+_, fwd4 = ssh "nft list chain ip dns-filter forward 2>/dev/null"
+report "REJECT tcp 443 dans ip forward",
+  (fwd4 and fwd4\match "tcp dport 443 reject") != nil, fwd4 or ""
 
 -- ── [4/5] DNS filtering ────────────────────────────────────────────────────────
 
@@ -461,15 +468,20 @@ print "#{C.bold}▶ Portail captif (port 33080)#{C.reset}"
 --- GET a path on the captive portal from the local machine (port 33080, direct).
 -- @tparam[opt] string path  URL path (default "/")
 -- @treturn string  HTTP status code
+-- @treturn string  Location header value (or "")
 captive_get = (path = "/") ->
-  _, out = run "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 #{CAPTIVE_URL}#{path} 2>&1"
-  (out or "")\match "%d%d%d"
+  _, out = run "curl -s -D - -o /dev/null --max-redirs 0 #{CAPTIVE_URL}#{path} 2>&1"
+  code = (out or "")\match "HTTP/%S+ (%d%d%d)"
+  loc  = (out or "")\match "[Ll]ocation: (%S+)"
+  code, (loc or "")
 
-cp_code = captive_get "/"
+cp_code, cp_loc = captive_get "/"
 report "Portail captif GET / → 302",
   cp_code == "302", "HTTP #{cp_code}"
+report "Portail captif redirect → https://",
+  (cp_loc\match "^https://") != nil, "Location: #{cp_loc}"
 
-g204_code = captive_get "/generate_204"
+g204_code, _ = captive_get "/generate_204"
 report "Portail captif /generate_204 → 302",
   g204_code == "302", "HTTP #{g204_code}"
 

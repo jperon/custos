@@ -68,7 +68,7 @@ handle_connection = (client, auth_port) ->
   local_ip = local_ip or "127.0.0.1"
   -- Entoure les adresses IPv6 de crochets pour former une URL valide
   host_part = local_ip\find(":", 1, true) and "[#{local_ip}]" or local_ip
-  redirect_url = "http://#{host_part}:#{auth_port}/"
+  redirect_url = "https://#{host_part}:#{auth_port}/"
 
   resp = "HTTP/1.1 302 Found\r\nLocation: #{redirect_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   client\send resp
@@ -106,6 +106,7 @@ make_captive6 = (port) ->
   ok6, srv6 = pcall socket.tcp6
   return nil unless ok6 and srv6
   srv6\setoption "reuseaddr", true
+  srv6\setoption "ipv6-v6only", true
   ok62, _ = srv6\bind "::", port
   unless ok62
     srv6\close!
