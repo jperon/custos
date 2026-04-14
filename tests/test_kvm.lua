@@ -149,6 +149,9 @@ nft_dest_for = function(set_out, client_ip)
 end
 local report
 report = function(name, ok, msg)
+  if type(ok) == "function" then
+    ok, msg = ok()
+  end
   if ok then
     tests_passed = tests_passed + 1
     return print("  " .. tostring(C.green) .. "✓" .. tostring(C.reset) .. " " .. tostring(name))
@@ -178,6 +181,10 @@ ssh(FILTER_IP, "sudo nft flush ruleset 2>/dev/null; true")
 print("  Installing lua-yaml, lua-socket, lua-sec, openssl on filter VM...")
 ssh(FILTER_IP, "sudo apt-get install -y -q lua-yaml lua-socket lua-sec openssl 2>&1 | tail -3; true")
 ssh(FILTER_IP, "> /tmp/custos-kvm.log; sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true")
+print("  Creating test secrets (testuser)...")
+ssh(FILTER_IP, "sudo mkdir -p /etc/custos && sudo rm -f /etc/custos/secrets")
+run("printf 'local c = require(\"auth.credentials\")\\nc.register_user(\"testuser\",\"testpass\",\"/etc/custos/secrets\",{})\\n' | ssh " .. tostring(SSH_OPTS) .. " -i " .. tostring(SSH_KEY) .. " " .. tostring(FILTER_USER) .. "@" .. tostring(FILTER_IP) .. " 'cat > /tmp/mkuser.lua'")
+ssh(FILTER_IP, "sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit /tmp/mkuser.lua'")
 ssh_check(FILTER_IP, "sudo nft -f /opt/custos/nft-rules/dns-filter.nft")
 ssh_check(FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &")
 os.execute("sleep 5")
@@ -443,7 +450,7 @@ print("")
 print(tostring(C.bold) .. "▶ Inscription d'utilisateurs" .. tostring(C.reset))
 ssh(FILTER_IP, "sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true")
 report("Inscription — nom d'utilisateur trop court → erreur", function()
-  local cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' " .. tostring(AUTH_URL) .. "/register"
+  local cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' " .. tostring(AUTH_URL) .. "/register"
   local ok, output = guest_exec(cmd, 10)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" or code == "400" then
@@ -457,7 +464,7 @@ report("Inscription — nom d'utilisateur trop court → erreur", function()
   end
 end)
 report("Inscription — mot de passe trop court → erreur", function()
-  local cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' " .. tostring(AUTH_URL) .. "/register"
+  local cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' " .. tostring(AUTH_URL) .. "/register"
   local ok, output = guest_exec(cmd, 10)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" or code == "400" then
@@ -471,7 +478,7 @@ report("Inscription — mot de passe trop court → erreur", function()
   end
 end)
 report("Inscription — mots de passe différents → erreur", function()
-  local cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' " .. tostring(AUTH_URL) .. "/register"
+  local cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' " .. tostring(AUTH_URL) .. "/register"
   local ok, output = guest_exec(cmd, 10)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" or code == "400" then
@@ -485,7 +492,7 @@ report("Inscription — mots de passe différents → erreur", function()
   end
 end)
 report("Inscription — utilisateur déjà existant → erreur", function()
-  local cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' " .. tostring(AUTH_URL) .. "/register"
+  local cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' " .. tostring(AUTH_URL) .. "/register"
   local ok, output = guest_exec(cmd, 10)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" or code == "409" then
@@ -499,7 +506,7 @@ report("Inscription — utilisateur déjà existant → erreur", function()
   end
 end)
 report("Inscription — nouvel utilisateur réussi → auto-login + session créée", function()
-  local cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' " .. tostring(AUTH_URL) .. "/register"
+  local cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' " .. tostring(AUTH_URL) .. "/register"
   local ok, output = guest_exec(cmd, 10)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" then
@@ -540,7 +547,8 @@ end
 report("DNS over TCP " .. tostring(DOMAIN_ALLOWED) .. " — TTL patché à 60", tcp_ttl == "60", "TTL trouvé: " .. tostring(tostring(tcp_ttl)))
 print("")
 print(tostring(C.bold) .. "▶ DNAT — TCP port 80 non authentifié → portail captif" .. tostring(C.reset))
-os.execute("sleep 1")
+auth_curl_kvm("GET", "/logout")
+os.execute("sleep 2")
 local ok_dnat, dnat_code = guest_exec("curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 5 http://1.2.3.4/ 2>&1", 10)
 dnat_code = (dnat_code or ""):gsub("%s+", "")
 report("DNAT — TCP port 80 non authentifié → 302", dnat_code == "302", "HTTP " .. tostring(dnat_code))

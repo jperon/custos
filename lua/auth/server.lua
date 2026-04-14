@@ -1,4 +1,6 @@
 local socket = require("socket")
+local ssl = require("ssl")
+local cert = require("auth.cert")
 local verify_password, load_secrets, register_user
 do
   local _obj_0 = require("auth.credentials")
@@ -358,6 +360,16 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
               ttl = auth_cfg.idle_timeout
             })
           end
+          if s.mac then
+            local ok_mac = nft_sess.add_authenticated_mac(s.mac, auth_cfg.idle_timeout)
+            if not (ok_mac) then
+              log_warn({
+                action = "auth_nft_mac_add_failed",
+                mac = s.mac,
+                ttl = auth_cfg.idle_timeout
+              })
+            end
+          end
         end
       end
       http_response(raw_sock, "204 No Content", "")
@@ -365,9 +377,13 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
       http_response(raw_sock, "401 Unauthorized", "")
     end
   elseif method == "GET" and path == "/logout" then
+    local s = sessions[peer_ip]
     sessions[peer_ip] = nil
     if nft_sess then
       nft_sess.del_authenticated(peer_ip)
+      if s and s.mac then
+        nft_sess.del_authenticated_mac(s.mac)
+      end
     end
     local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
     if not (ok2) then
@@ -391,7 +407,8 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
     local stored = secrets[user]
     if stored and pass ~= "" and verify_password(pass, stored) then
       purge_expired(sessions)
-      add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
+      local mac = peer_mac ~= "unknown" and peer_mac or nil
+      add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout, mac)
       if nft_sess then
         local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
         if not (ok_nft) then
@@ -400,6 +417,16 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
             ip = peer_ip,
             ttl = auth_cfg.session_ttl
           })
+        end
+        if mac then
+          local ok_mac = nft_sess.add_authenticated_mac(mac, auth_cfg.session_ttl)
+          if not (ok_mac) then
+            log_warn({
+              action = "auth_nft_mac_add_failed",
+              mac = mac,
+              ttl = auth_cfg.session_ttl
+            })
+          end
         end
       end
       local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
@@ -452,7 +479,8 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
         local new_secrets, reg_err = register_user(user, pass, secrets_path, secrets)
         if new_secrets then
           purge_expired(sessions)
-          add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
+          local mac = peer_mac ~= "unknown" and peer_mac or nil
+          add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout, mac)
           if nft_sess then
             local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
             if not (ok_nft) then
@@ -461,6 +489,16 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
                 ip = peer_ip,
                 ttl = auth_cfg.session_ttl
               })
+            end
+            if mac then
+              local ok_mac = nft_sess.add_authenticated_mac(mac, auth_cfg.session_ttl)
+              if not (ok_mac) then
+                log_warn({
+                  action = "auth_nft_mac_add_failed",
+                  mac = mac,
+                  ttl = auth_cfg.session_ttl
+                })
+              end
             end
           end
           local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
@@ -537,6 +575,9 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_pat
   secrets_path = auth_cfg.secrets or "cfg/secrets"
   local hb_interval = auth_cfg.heartbeat_interval or 30
   local success_pg = make_success_page(hb_interval)
+  local key_path = auth_cfg.key or "tmp/auth.key"
+  local cert_path = auth_cfg.cert or "tmp/auth.crt"
+  local ssl_ctx = cert.load_or_generate(key_path, cert_path)
   local listen4, err4 = make_server4("0.0.0.0", port)
   if not (listen4) then
     error("Impossible de démarrer le serveur IPv4 sur port " .. tostring(port) .. " : " .. tostring(err4))
@@ -585,15 +626,25 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_pat
     local _list_0 = (readable or { })
     for _index_0 = 1, #_list_0 do
       local srv = _list_0[_index_0]
-      local client, _err = srv:accept()
-      if client then
-        local peer_ip = client:getpeername()
+      local raw_client, _err = srv:accept()
+      if raw_client then
+        local peer_ip = raw_client:getpeername()
         peer_ip = tostring(peer_ip)
         local peer_mac = neigh.get_mac(peer_ip)
         if auth_set[srv] then
-          handle_connection(client, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
+          local conn = ssl.wrap(raw_client, ssl_ctx)
+          if conn then
+            local ok_hs, _hs_err = conn:dohandshake()
+            if ok_hs then
+              handle_connection(conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
+            else
+              conn:close()
+            end
+          else
+            raw_client:close()
+          end
         else
-          captive.handle_connection(client, port)
+          captive.handle_connection(raw_client, port)
         end
       end
     end

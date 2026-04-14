@@ -10,6 +10,8 @@
 -- Les credentials sont fournis par auth/credentials, les sessions par auth/sessions.
 
 socket = require "socket"
+ssl    = require "ssl"
+cert   = require "auth.cert"
 
 { :verify_password, :load_secrets, :register_user } = require "auth.credentials"
 { :add_session, :purge_expired, :write_sessions } = require "auth.sessions"
@@ -352,14 +354,20 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
         if nft_sess
           ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.idle_timeout
           log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.idle_timeout } unless ok_nft
+          if s.mac
+            ok_mac = nft_sess.add_authenticated_mac s.mac, auth_cfg.idle_timeout
+            log_warn { action: "auth_nft_mac_add_failed", mac: s.mac, ttl: auth_cfg.idle_timeout } unless ok_mac
       http_response raw_sock, "204 No Content", ""
     else
       http_response raw_sock, "401 Unauthorized", ""
 
   elseif method == "GET" and path == "/logout"
+    s = sessions[peer_ip]
     sessions[peer_ip] = nil
     if nft_sess
       nft_sess.del_authenticated peer_ip
+      if s and s.mac
+        nft_sess.del_authenticated_mac s.mac
     ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
     log_warn { action: "auth_write_failed", err: err3 } unless ok2
     http_redirect raw_sock, "/"
@@ -376,10 +384,14 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
 
     if stored and pass ~= "" and verify_password pass, stored
       purge_expired sessions
-      add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
+      mac = peer_mac ~= "unknown" and peer_mac or nil
+      add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout, mac
       if nft_sess
         ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
         log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl } unless ok_nft
+        if mac
+          ok_mac = nft_sess.add_authenticated_mac mac, auth_cfg.session_ttl
+          log_warn { action: "auth_nft_mac_add_failed", mac: mac, ttl: auth_cfg.session_ttl } unless ok_mac
       ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
       log_warn { action: "auth_write_failed", err: err3 } unless ok2
       http_response raw_sock, "200 OK", success_pg
@@ -409,10 +421,14 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
         new_secrets, reg_err = register_user user, pass, secrets_path, secrets
         if new_secrets
           purge_expired sessions
-          add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
+          mac = peer_mac ~= "unknown" and peer_mac or nil
+          add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout, mac
           if nft_sess
             ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
             log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl } unless ok_nft
+            if mac
+              ok_mac = nft_sess.add_authenticated_mac mac, auth_cfg.session_ttl
+              log_warn { action: "auth_nft_mac_add_failed", mac: mac, ttl: auth_cfg.session_ttl } unless ok_mac
           ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
           log_warn { action: "auth_write_failed", err: err3 } unless ok2
           -- Met à jour la table des secrets en place pour la rendre visible au parent
@@ -483,7 +499,12 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path) ->
   hb_interval = auth_cfg.heartbeat_interval or 30
   success_pg  = make_success_page hb_interval
 
-  -- Sockets d'écoute HTTP : on tente toujours IPv4 + IPv6
+  -- Contexte TLS (créé une seule fois pour le serveur HTTPS)
+  key_path  = auth_cfg.key  or "tmp/auth.key"
+  cert_path = auth_cfg.cert or "tmp/auth.crt"
+  ssl_ctx = cert.load_or_generate key_path, cert_path
+
+  -- Sockets d'écoute HTTPS : on tente toujours IPv4 + IPv6
   listen4, err4 = make_server4 "0.0.0.0", port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
   listen6 = make_server6 port
@@ -516,16 +537,24 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path) ->
 
     readable = socket.select all_servers, nil, 1
     for srv in *(readable or {})
-      client, _err = srv\accept!
-      if client
-        peer_ip = client\getpeername!
-        peer_ip = tostring peer_ip
+      raw_client, _err = srv\accept!
+      if raw_client
+        peer_ip  = raw_client\getpeername!
+        peer_ip  = tostring peer_ip
         peer_mac = neigh.get_mac peer_ip
         if auth_set[srv]
-          -- Connexion HTTP : logique d'authentification
-          handle_connection client, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac
+          -- Connexion HTTPS : enveloppe TLS puis logique d'authentification
+          conn = ssl.wrap raw_client, ssl_ctx
+          if conn
+            ok_hs, _hs_err = conn\dohandshake!
+            if ok_hs
+              handle_connection conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac
+            else
+              conn\close!
+          else
+            raw_client\close!
         else
           -- Connexion HTTP plain : portail captif → redirect 302 vers login
-          captive.handle_connection client, port
+          captive.handle_connection raw_client, port
 
 { :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE }

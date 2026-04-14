@@ -172,6 +172,8 @@ nft_dest_for = (set_out, client_ip) ->
 -- @tparam boolean ok
 -- @tparam[opt] string msg Additional context shown on failure
 report = (name, ok, msg) ->
+  if type(ok) == "function"
+    ok, msg = ok!
   if ok
     tests_passed += 1
     print "  #{C.green}✓#{C.reset} #{name}"
@@ -210,6 +212,11 @@ print "  Installing lua-yaml, lua-socket, lua-sec, openssl on filter VM..."
 ssh FILTER_IP, "sudo apt-get install -y -q lua-yaml lua-socket lua-sec openssl 2>&1 | tail -3; true"
 -- Clear log and sessions before starting the filter
 ssh FILTER_IP, "> /tmp/custos-kvm.log; sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true"
+-- Create test secrets file with testuser credentials (required for auth E2E tests)
+print "  Creating test secrets (testuser)..."
+ssh FILTER_IP, "sudo mkdir -p /etc/custos && sudo rm -f /etc/custos/secrets"
+run "printf 'local c = require(\"auth.credentials\")\\nc.register_user(\"testuser\",\"testpass\",\"/etc/custos/secrets\",{})\\n' | ssh #{SSH_OPTS} -i #{SSH_KEY} #{FILTER_USER}@#{FILTER_IP} 'cat > /tmp/mkuser.lua'"
+ssh FILTER_IP, "sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit /tmp/mkuser.lua'"
 ssh_check FILTER_IP, "sudo nft -f /opt/custos/nft-rules/dns-filter.nft"
 ssh_check FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &"
 os.execute "sleep 5"
@@ -594,7 +601,7 @@ ssh FILTER_IP, "sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true
 
 report "Inscription — nom d'utilisateur trop court → erreur",
   ->
-    cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' #{AUTH_URL}/register"
+    cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' #{AUTH_URL}/register"
     ok, output = guest_exec cmd, 10
     code = (output and output\match("(%d+)$")) or ""
     if code == "200" or code == "400"
@@ -607,7 +614,7 @@ report "Inscription — nom d'utilisateur trop court → erreur",
 
 report "Inscription — mot de passe trop court → erreur",
   ->
-    cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' #{AUTH_URL}/register"
+    cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' #{AUTH_URL}/register"
     ok, output = guest_exec cmd, 10
     code = (output and output\match("(%d+)$")) or ""
     if code == "200" or code == "400"
@@ -620,7 +627,7 @@ report "Inscription — mot de passe trop court → erreur",
 
 report "Inscription — mots de passe différents → erreur",
   ->
-    cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' #{AUTH_URL}/register"
+    cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' #{AUTH_URL}/register"
     ok, output = guest_exec cmd, 10
     code = (output and output\match("(%d+)$")) or ""
     if code == "200" or code == "400"
@@ -633,7 +640,7 @@ report "Inscription — mots de passe différents → erreur",
 
 report "Inscription — utilisateur déjà existant → erreur",
   ->
-    cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' #{AUTH_URL}/register"
+    cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' #{AUTH_URL}/register"
     ok, output = guest_exec cmd, 10
     code = (output and output\match("(%d+)$")) or ""
     if code == "200" or code == "409"
@@ -646,7 +653,7 @@ report "Inscription — utilisateur déjà existant → erreur",
 
 report "Inscription — nouvel utilisateur réussi → auto-login + session créée",
   ->
-    cmd = "curl -k -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' #{AUTH_URL}/register"
+    cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' #{AUTH_URL}/register"
     ok, output = guest_exec cmd, 10
     code = (output and output\match("(%d+)$")) or ""
     if code == "200"
@@ -699,8 +706,9 @@ report "DNS over TCP #{DOMAIN_ALLOWED} — TTL patché à 60",
 print ""
 print "#{C.bold}▶ DNAT — TCP port 80 non authentifié → portail captif#{C.reset}"
 
--- Ensure client is NOT authenticated (we just logged out above)
-os.execute "sleep 1"
+-- Ensure client is NOT authenticated (logout any residual session from registration)
+auth_curl_kvm "GET", "/logout"
+os.execute "sleep 2"
 
 ok_dnat, dnat_code = guest_exec "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 5 http://1.2.3.4/ 2>&1", 10
 dnat_code = (dnat_code or "")\gsub "%s+", ""

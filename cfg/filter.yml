@@ -206,7 +206,13 @@ rules:
     - akamaiedge.net
     - example.com
 
-- description: Test - domaine restreint aux utilisateurs authentifies
+- description: Test - domaine restreint aux utilisateurs authentifies (newuser)
+  actions: [allow]
+  conditions:
+    from_user: newuser
+    to_domain: auth-required.test
+
+- description: Test - domaine restreint aux utilisateurs authentifies (testuser)
   actions: [allow]
   conditions:
     from_user: testuser
