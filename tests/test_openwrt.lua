@@ -132,11 +132,14 @@ if not (no_restart) then
   project_root = project_root == "" and "." or project_root
   print("  Déploiement des fichiers Lua + nft → " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "...")
   run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/nft-rules/dns-filter.nft " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/dns-filter.nft")
-  run("ssh " .. tostring(SSH_OPTS) .. " " .. tostring(SSH_TARGET) .. " 'mkdir -p " .. tostring(CUSTOS_DIR) .. "/parse " .. tostring(CUSTOS_DIR) .. "/auth " .. tostring(CUSTOS_DIR) .. "/filter'")
+  run("ssh " .. tostring(SSH_OPTS) .. " " .. tostring(SSH_TARGET) .. " 'mkdir -p " .. tostring(CUSTOS_DIR) .. "/parse " .. tostring(CUSTOS_DIR) .. "/auth " .. tostring(CUSTOS_DIR) .. "/filter/conditions " .. tostring(CUSTOS_DIR) .. "/filter/actions " .. tostring(CUSTOS_DIR) .. "/filter/lib'")
   run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/")
   run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/parse/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/parse/")
   run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/auth/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/auth/")
   run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/")
+  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/conditions/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/conditions/")
+  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/actions/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/actions/")
+  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/lib/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/lib/")
   print("  Chargement des règles nft...")
   local ok_nft, nft_err = ssh("nft -f " .. tostring(CUSTOS_DIR) .. "/dns-filter.nft 2>&1")
   if not (ok_nft) then

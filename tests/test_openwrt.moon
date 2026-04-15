@@ -187,11 +187,14 @@ unless no_restart
   project_root = project_root == "" and "." or project_root
   print "  Déploiement des fichiers Lua + nft → #{SSH_TARGET}:#{CUSTOS_DIR}..."
   run "scp #{SCP_OPTS} #{project_root}/nft-rules/dns-filter.nft #{SSH_TARGET}:#{CUSTOS_DIR}/dns-filter.nft"
-  run "ssh #{SSH_OPTS} #{SSH_TARGET} 'mkdir -p #{CUSTOS_DIR}/parse #{CUSTOS_DIR}/auth #{CUSTOS_DIR}/filter'"
+  run "ssh #{SSH_OPTS} #{SSH_TARGET} 'mkdir -p #{CUSTOS_DIR}/parse #{CUSTOS_DIR}/auth #{CUSTOS_DIR}/filter/conditions #{CUSTOS_DIR}/filter/actions #{CUSTOS_DIR}/filter/lib'"
   run "scp #{SCP_OPTS} #{project_root}/lua/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/"
   run "scp #{SCP_OPTS} #{project_root}/lua/parse/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/parse/"
   run "scp #{SCP_OPTS} #{project_root}/lua/auth/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/auth/"
   run "scp #{SCP_OPTS} #{project_root}/lua/filter/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/filter/"
+  run "scp #{SCP_OPTS} #{project_root}/lua/filter/conditions/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/filter/conditions/"
+  run "scp #{SCP_OPTS} #{project_root}/lua/filter/actions/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/filter/actions/"
+  run "scp #{SCP_OPTS} #{project_root}/lua/filter/lib/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/filter/lib/"
 
   -- Load nft rules
   print "  Chargement des règles nft..."

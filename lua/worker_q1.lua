@@ -176,6 +176,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     consume(txid, pkt.ip.dst_ip, client_port)
   end
   local refused = entry and entry.refused or false
+  local dnsonly = entry and entry.dnsonly or false
   if refused then
     local dns_raw = ndpi.extract_dns_payload(raw, pkt)
     local refused_dns = build_refused({
@@ -229,14 +230,16 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           return resolve_client_family(client_ip, "ipv4")
         end
       end)()
-      if client_v4 then
-        add_ip4(client_v4, ans.rdata_str)
-        ip_count = ip_count + 1
-      else
-        no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
-      end
-      if mac_valid(client_mac) then
-        add_mac4(client_mac, ans.rdata_str)
+      if not (dnsonly) then
+        if client_v4 then
+          add_ip4(client_v4, ans.rdata_str)
+          ip_count = ip_count + 1
+        else
+          no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
+        end
+        if mac_valid(client_mac) then
+          add_mac4(client_mac, ans.rdata_str)
+        end
       end
     elseif ans.rtype == QTYPE.AAAA then
       client_v6 = client_v6 or (function()
@@ -246,14 +249,16 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           return resolve_client_family(client_ip, "ipv6")
         end
       end)()
-      if client_v6 then
-        add_ip6(client_v6, ans.rdata_str)
-        ip_count = ip_count + 1
-      else
-        no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
-      end
-      if mac_valid(client_mac) then
-        add_mac6(client_mac, ans.rdata_str)
+      if not (dnsonly) then
+        if client_v6 then
+          add_ip6(client_v6, ans.rdata_str)
+          ip_count = ip_count + 1
+        else
+          no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
+        end
+        if mac_valid(client_mac) then
+          add_mac6(client_mac, ans.rdata_str)
+        end
       end
     end
   end
@@ -311,7 +316,13 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     return _accum_0
   end)(), ",")
   log_allow({
-    action = "response_patched",
+    action = (function()
+      if dnsonly then
+        return "response_dnsonly"
+      else
+        return "response_patched"
+      end
+    end)(),
     src_ip = pkt.ip.src_ip,
     dst_ip = pkt.ip.dst_ip,
     vlan = l2.vlan,

@@ -28,6 +28,7 @@ RL_CONFIG = {
   no_ipv6_for_client: { keys: {"client"},                    window: 120 }
   no_ipv4_for_client: { keys: {"client"},                    window: 120 }
   neigh_refreshed:    { keys: {},                            window: 30  }
+  response_dnsonly:   { keys: {"dst_ip", "qnames"},          window: 30  }
 }
 
 _rl = {}  -- { fingerprint → { ts, count } }

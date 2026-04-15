@@ -30,6 +30,8 @@ MSG_IPV4         = 0x41   -- 'A' : transaction IPv4 autorisée
 MSG_IPV6         = 0x36   -- '6' : transaction IPv6 autorisée
 MSG_IPV4_REFUSED = 0x52   -- 'R' : transaction IPv4 refusée (Q1 doit transformer la réponse)
 MSG_IPV6_REFUSED = 0x72   -- 'r' : transaction IPv6 refusée
+MSG_IPV4_DNSONLY = 0x44   -- 'D' : transaction IPv4 DNS-seulement (pas d'injection nft)
+MSG_IPV6_DNSONLY = 0x64   -- 'd' : transaction IPv6 DNS-seulement
 
 -- ── Encodage (côté Q0) ───────────────────────────────────────────
 --- Encode une transaction en binaire IPC_MSG_SIZE octets.
@@ -38,15 +40,20 @@ MSG_IPV6_REFUSED = 0x72   -- 'r' : transaction IPv6 refusée
 -- @tparam number      src_port  Port source de la question DNS (uint16)
 -- @tparam string|nil  mac_raw   6 octets MAC bruts (nil ou zeros si inconnu)
 -- @tparam boolean     refused   true si la transaction est refusée (Q1 spoofing REFUSED+EDE)
+-- @tparam boolean     dnsonly   true si DNS autorisé mais pas d'injection nft
 -- @treturn string message binaire de IPC_MSG_SIZE octets
-encode_msg = (txid, ip_raw, src_port, mac_raw, refused) ->
+encode_msg = (txid, ip_raw, src_port, mac_raw, refused, dnsonly) ->
   buf = ffi.new "uint8_t[27]"
 
-  -- Type : encode à la fois le refus et la famille d'adresse (IPv4/IPv6)
+  -- Type : encode à la fois le refus/dnsonly et la famille d'adresse (IPv4/IPv6)
   buf[0] = if #ip_raw == 4
-    refused and MSG_IPV4_REFUSED or MSG_IPV4
+    if dnsonly then MSG_IPV4_DNSONLY
+    elseif refused then MSG_IPV4_REFUSED
+    else MSG_IPV4
   else
-    refused and MSG_IPV6_REFUSED or MSG_IPV6
+    if dnsonly then MSG_IPV6_DNSONLY
+    elseif refused then MSG_IPV6_REFUSED
+    else MSG_IPV6
 
   -- txid big-endian
   buf[1] = bit.rshift bit.band(txid, 0xFF00), 8
@@ -78,7 +85,7 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, refused) ->
 -- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
 -- @treturn boolean true si l'écriture est complète
 write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, false
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, false, false
   n = libc.write pipe_wfd, msg, IPC_MSG_SIZE
   n == IPC_MSG_SIZE
 
@@ -91,7 +98,21 @@ write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw) ->
 -- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
 -- @treturn boolean true si l'écriture est complète
 write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, true
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, true, false
+  n = libc.write pipe_wfd, msg, IPC_MSG_SIZE
+  n == IPC_MSG_SIZE
+
+--- Écrit un message IPC pour une transaction DNS-seulement dans le pipe (côté Q0).
+-- Q1 laissera passer la réponse (avec patch TTL+EDE) mais n'injectera pas
+-- les IPs dans les sets nft — les redirections HTTP restent actives.
+-- @tparam number     pipe_wfd fd d'écriture du pipe
+-- @tparam number     txid     Identifiant de transaction DNS
+-- @tparam string     ip_raw   4 ou 16 octets bruts de l'IP source
+-- @tparam number     src_port Port source
+-- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
+-- @treturn boolean true si l'écriture est complète
+write_dnsonly_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, false, true
   n = libc.write pipe_wfd, msg, IPC_MSG_SIZE
   n == IPC_MSG_SIZE
 
@@ -106,8 +127,9 @@ decode_msg = (raw) ->
   txid     = bit.bor bit.lshift(raw\byte(2), 8), raw\byte(3)
   src_port = bit.bor bit.lshift(raw\byte(20), 8), raw\byte(21)
 
-  ipv4    = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED)
+  ipv4    = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV4_DNSONLY)
   refused = (msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV6_REFUSED)
+  dnsonly = (msg_type == MSG_IPV4_DNSONLY or msg_type == MSG_IPV6_DNSONLY)
 
   ip_str = if ipv4
     "#{raw\byte 4}.#{raw\byte 5}.#{raw\byte 6}.#{raw\byte 7}"
@@ -125,7 +147,7 @@ decode_msg = (raw) ->
     raw\byte(22), raw\byte(23), raw\byte(24),
     raw\byte(25), raw\byte(26), raw\byte(27)
 
-  { :txid, :ip_str, :src_port, :msg_type, :mac_str, :ipv4, :refused }
+  { :txid, :ip_str, :src_port, :msg_type, :mac_str, :ipv4, :refused, :dnsonly }
 
 -- ── Table des transactions en attente (côté Q1) ──────────────────
 -- pending[key] = {expire: expire_time, refused: bool}
@@ -156,7 +178,7 @@ drain_pipe = (pipe_rfd, now_fn, on_msg) ->
       msg = decode_msg raw
       if msg
         key = make_key msg.txid, msg.ip_str, msg.src_port
-        pending[key] = { expire: now_fn! + IPC_PENDING_TTL, refused: msg.refused }
+        pending[key] = { expire: now_fn! + IPC_PENDING_TTL, refused: msg.refused, dnsonly: msg.dnsonly }
         absorbed += 1
         on_msg msg if on_msg
 
@@ -207,6 +229,7 @@ consume = (txid, ip_str, src_port) ->
   key = make_key txid, ip_str, src_port
   pending[key] = nil
 
-{ :encode_msg, :decode_msg, :write_msg, :write_refused_msg, :drain_pipe
+{ :encode_msg, :decode_msg, :write_msg, :write_refused_msg, :write_dnsonly_msg, :drain_pipe
   :is_pending, :get_pending_entry, :consume
-  :MSG_IPV4, :MSG_IPV6, :MSG_IPV4_REFUSED, :MSG_IPV6_REFUSED, :make_key }
+  :MSG_IPV4, :MSG_IPV6, :MSG_IPV4_REFUSED, :MSG_IPV6_REFUSED
+  :MSG_IPV4_DNSONLY, :MSG_IPV6_DNSONLY, :make_key }

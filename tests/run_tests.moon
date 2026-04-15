@@ -1314,7 +1314,7 @@ io.write "\n── ipc refused ──\n"
 
 test "encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", ->
   ip_raw  = "\xC0\xA8\x01\x2A"
-  msg     = m_ipc.encode_msg 0x1234, ip_raw, 54321, nil, true
+  msg     = m_ipc.encode_msg 0x1234, ip_raw, 54321, nil, true, false
   assert_eq #msg, 27, "taille = 27"
   decoded = m_ipc.decode_msg msg
   assert decoded, "decode_msg nil"
@@ -1324,12 +1324,51 @@ test "encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", ->
 
 test "decode_msg MSG_IPV6_REFUSED (0x72) → refused=true, ipv4=false", ->
   ip6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
-  msg     = m_ipc.encode_msg 0xABCD, ip6_raw, 5353, nil, true
+  msg     = m_ipc.encode_msg 0xABCD, ip6_raw, 5353, nil, true, false
   decoded = m_ipc.decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.refused,  true,  "refused = true"
   assert_eq decoded.ipv4,     false, "ipv4 = false"
   assert_eq decoded.msg_type, 0x72,  "msg_type = 0x72"
+
+test "encode_msg dnsonly=true IPv4 → MSG_IPV4_DNSONLY (0x44)", ->
+  ip_raw  = "\xC0\xA8\x01\x2A"
+  msg     = m_ipc.encode_msg 0x1234, ip_raw, 54321, nil, false, true
+  assert_eq #msg, 27, "taille = 27"
+  decoded = m_ipc.decode_msg msg
+  assert decoded, "decode_msg nil"
+  assert_eq decoded.msg_type, m_ipc.MSG_IPV4_DNSONLY, "msg_type = MSG_IPV4_DNSONLY (0x44)"
+  assert_eq decoded.dnsonly,  true,  "dnsonly = true"
+  assert_eq decoded.refused,  false, "refused = false"
+  assert_eq decoded.ipv4,     true,  "ipv4 = true"
+
+test "encode_msg dnsonly=true IPv6 → MSG_IPV6_DNSONLY (0x64)", ->
+  ip6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  msg     = m_ipc.encode_msg 0xABCD, ip6_raw, 5353, nil, false, true
+  decoded = m_ipc.decode_msg msg
+  assert decoded, "decode_msg nil"
+  assert_eq decoded.msg_type, m_ipc.MSG_IPV6_DNSONLY, "msg_type = MSG_IPV6_DNSONLY (0x64)"
+  assert_eq decoded.dnsonly,  true,  "dnsonly = true"
+  assert_eq decoded.refused,  false, "refused = false"
+  assert_eq decoded.ipv4,     false, "ipv4 = false"
+
+test "write_dnsonly_msg + drain_pipe + get_pending_entry → entry.dnsonly = true", ->
+  package.loaded["ipc"] = nil
+  m_dn = dofile "lua/ipc.lua"
+  pfd  = ffi.new "int[2]"
+  assert (ffi.C.pipe2(pfd, 0) == 0), "pipe2"
+  rfd_dn, wfd_dn = pfd[0], pfd[1]
+  ffi.C.fcntl rfd_dn, 4, 2048   -- F_SETFL, O_NONBLOCK
+  ip_dn = "\x06\x06\x06\x06"   -- 6.6.6.6
+  ok    = m_dn.write_dnsonly_msg wfd_dn, 0xAAAA, ip_dn, 6666
+  assert ok, "write_dnsonly_msg failed"
+  ffi.C.close wfd_dn
+  m_dn.drain_pipe rfd_dn, -> 0
+  ffi.C.close rfd_dn
+  entry = m_dn.get_pending_entry 0xAAAA, "6.6.6.6", 6666, -> 0
+  assert entry, "get_pending_entry retourne nil"
+  assert_eq entry.dnsonly, true,  "entry.dnsonly = true"
+  assert_eq entry.refused, false, "entry.refused = false"
 
 test "write_refused_msg + drain_pipe + get_pending_entry → entry.refused = true", ->
   package.loaded["ipc"] = nil
@@ -1982,6 +2021,39 @@ do
     rules_empty = m_rule.compile_rules {rules: {}}
     v, m = m_rule.decide rules_empty, {domain: "github.com", ts: os.time!}
     assert_eq v, false, "aucune règle → deny par défaut"
+
+-- ── action dnsonly ──────────────────────────────────────────────────────────
+io.write "\n── filter/actions/dnsonly ──\n"
+dnsonly_action = require "filter.actions.dnsonly"
+
+test "dnsonly — retourne \"dnsonly\" (truthy, distinct de true)", ->
+  factory = dnsonly_action {}
+  rule_fn = factory {description: "test-dnsonly"}
+  v, m = rule_fn {domain: "example.com", src_ip: "1.2.3.4", mac: "aa:bb:cc:dd:ee:ff", ts: os.time!}
+  assert_eq v, "dnsonly", "verdict = \"dnsonly\""
+  assert (v != true),  "verdict != true"
+  assert (v != false), "verdict != false"
+  assert (type(v) == "string"), "verdict est une string"
+
+test "dnsonly — message contient la description de la règle", ->
+  factory = dnsonly_action {}
+  rule_fn = factory {description: "captive-portal-probe"}
+  v, m = rule_fn {}
+  assert m\find("captive-portal-probe", 1, true), "message contient la description"
+
+test "dnsonly — compile_rules avec action dnsonly → verdict \"dnsonly\"", ->
+  cfg_dn = {
+    rules: {
+      {
+        description: "portail-captif"
+        conditions:  {}
+        actions:     {"dnsonly"}
+      }
+    }
+  }
+  rules_dn = m_rule.compile_rules cfg_dn
+  v, m = m_rule.decide rules_dn, {domain: "anything.com", src_ip: "10.0.0.1", mac: "ff:ff:ff:ff:ff:ff", ts: os.time!}
+  assert_eq v, "dnsonly", "verdict = \"dnsonly\" via compile_rules"
 
 -- Nettoyage
 os.remove TMPBIN

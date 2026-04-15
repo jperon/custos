@@ -199,6 +199,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     consume txid, pkt.ip.dst_ip, client_port
 
   refused = entry and entry.refused or false
+  dnsonly = entry and entry.dnsonly or false
 
   -- ── Branche REFUSED : réponse du serveur transformée en REFUSED+EDE ──
   if refused
@@ -224,6 +225,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     return -1
 
   -- ── Branche ACCEPT : patch TTL + EDE + injection nft ─────────
+  -- En mode "dnsonly", on ne modifie pas les sets nft : les IPs résolues ne
+  -- sont pas autorisées dans les sets — la redirection HTTP/80 reste active.
   answers  = ndpi.parse_answers raw, pkt
   -- IP du client LAN (destination de la réponse DNS = source de la question)
   client_ip = pkt.ip.dst_ip
@@ -240,12 +243,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       else
         -- DNS transporté en IPv6 : résoudre l'IPv4 via mac_clients
         resolve_client_family client_ip, "ipv4"
-      if client_v4
-        add_ip4 client_v4, ans.rdata_str
-        ip_count += 1
-      else
-        no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
-      add_mac4 client_mac, ans.rdata_str if mac_valid client_mac
+      unless dnsonly
+        if client_v4
+          add_ip4 client_v4, ans.rdata_str
+          ip_count += 1
+        else
+          no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
+        add_mac4 client_mac, ans.rdata_str if mac_valid client_mac
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
       client_v6 or= if pkt.ip.version == 6
@@ -253,12 +257,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       else
         -- DNS transporté en IPv4 : résoudre l'IPv6 via mac_clients
         resolve_client_family client_ip, "ipv6"
-      if client_v6
-        add_ip6 client_v6, ans.rdata_str
-        ip_count += 1
-      else
-        no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
-      add_mac6 client_mac, ans.rdata_str if mac_valid client_mac
+      unless dnsonly
+        if client_v6
+          add_ip6 client_v6, ans.rdata_str
+          ip_count += 1
+        else
+          no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
+        add_mac6 client_mac, ans.rdata_str if mac_valid client_mac
 
   -- Logguer les cas cross-family sans IP connue (groupés par réponse)
   if #no_ipv4_records > 0
@@ -286,7 +291,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- Log de la réponse
   qnames = table.concat [q.qname for q in *pkt.questions], ","
   log_allow {
-    action:      "response_patched"
+    action:      if dnsonly then "response_dnsonly" else "response_patched"
     src_ip:      pkt.ip.src_ip
     dst_ip:      pkt.ip.dst_ip
     vlan:        l2.vlan

@@ -15,7 +15,7 @@
 { :get_l2 }              = require "parse/ethernet"
 ndpi                     = require "parse/ndpi"
 filter                   = require "filter"
-{ :write_msg, :write_refused_msg } = require "ipc"
+{ :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn } = require "log"
 
@@ -58,7 +58,9 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- ── Décision par question ────────────────────────────────────
   -- Un paquet DNS peut contenir plusieurs questions (rare en pratique,
   -- mais prévu par le RFC). On bloque si AU MOINS UNE question est refusée.
+  -- Si toutes sont autorisées mais au moins une est "dnsonly", on envoie dnsonly.
   verdict  = NF_ACCEPT
+  dnsonly  = false
   q_fields = {
     mac_src:     l2.mac_src
     vlan:        l2.vlan
@@ -84,7 +86,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       ts:     os.time!
     }
     allowed, reason = filter.decide req
-    if allowed
+    if allowed == "dnsonly"
+      q_fields.reason = "dnsonly"
+      log_allow q_fields
+      dnsonly = true
+    elseif allowed
       q_fields.reason = nil
       log_allow q_fields
     else
@@ -93,10 +99,14 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       verdict = NF_DROP
 
   -- Enregistre la transaction IPC pour Q1 (toujours NF_ACCEPT — Q1 gère tout).
-  -- Si autorisé : Q1 patche TTL + injecte EDE "Custos vigilat."
-  -- Si refusé   : Q1 transforme la réponse du serveur en REFUSED+EDE Filtered
+  -- Si autorisé   : Q1 patche TTL + injecte EDE "Custos vigilat."
+  -- Si dnsonly    : Q1 patche TTL + EDE mais n'injecte pas les IPs dans nft
+  -- Si refusé     : Q1 transforme la réponse du serveur en REFUSED+EDE Filtered
   if verdict == NF_ACCEPT
-    write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw
+    if dnsonly
+      write_dnsonly_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw
+    else
+      write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw
   else
     write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw
 

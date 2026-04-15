@@ -1140,7 +1140,7 @@ end)
 io.write("\n── ipc refused ──\n")
 test("encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", function()
   local ip_raw = "\xC0\xA8\x01\x2A"
-  local msg = m_ipc.encode_msg(0x1234, ip_raw, 54321, nil, true)
+  local msg = m_ipc.encode_msg(0x1234, ip_raw, 54321, nil, true, false)
   assert_eq(#msg, 27, "taille = 27")
   local decoded = m_ipc.decode_msg(msg)
   assert(decoded, "decode_msg nil")
@@ -1150,12 +1150,55 @@ test("encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", function()
 end)
 test("decode_msg MSG_IPV6_REFUSED (0x72) → refused=true, ipv4=false", function()
   local ip6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
-  local msg = m_ipc.encode_msg(0xABCD, ip6_raw, 5353, nil, true)
+  local msg = m_ipc.encode_msg(0xABCD, ip6_raw, 5353, nil, true, false)
   local decoded = m_ipc.decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.refused, true, "refused = true")
   assert_eq(decoded.ipv4, false, "ipv4 = false")
   return assert_eq(decoded.msg_type, 0x72, "msg_type = 0x72")
+end)
+test("encode_msg dnsonly=true IPv4 → MSG_IPV4_DNSONLY (0x44)", function()
+  local ip_raw = "\xC0\xA8\x01\x2A"
+  local msg = m_ipc.encode_msg(0x1234, ip_raw, 54321, nil, false, true)
+  assert_eq(#msg, 27, "taille = 27")
+  local decoded = m_ipc.decode_msg(msg)
+  assert(decoded, "decode_msg nil")
+  assert_eq(decoded.msg_type, m_ipc.MSG_IPV4_DNSONLY, "msg_type = MSG_IPV4_DNSONLY (0x44)")
+  assert_eq(decoded.dnsonly, true, "dnsonly = true")
+  assert_eq(decoded.refused, false, "refused = false")
+  return assert_eq(decoded.ipv4, true, "ipv4 = true")
+end)
+test("encode_msg dnsonly=true IPv6 → MSG_IPV6_DNSONLY (0x64)", function()
+  local ip6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  local msg = m_ipc.encode_msg(0xABCD, ip6_raw, 5353, nil, false, true)
+  local decoded = m_ipc.decode_msg(msg)
+  assert(decoded, "decode_msg nil")
+  assert_eq(decoded.msg_type, m_ipc.MSG_IPV6_DNSONLY, "msg_type = MSG_IPV6_DNSONLY (0x64)")
+  assert_eq(decoded.dnsonly, true, "dnsonly = true")
+  assert_eq(decoded.refused, false, "refused = false")
+  return assert_eq(decoded.ipv4, false, "ipv4 = false")
+end)
+test("write_dnsonly_msg + drain_pipe + get_pending_entry → entry.dnsonly = true", function()
+  package.loaded["ipc"] = nil
+  local m_dn = dofile("lua/ipc.lua")
+  local pfd = ffi.new("int[2]")
+  assert((ffi.C.pipe2(pfd, 0) == 0), "pipe2")
+  local rfd_dn, wfd_dn = pfd[0], pfd[1]
+  ffi.C.fcntl(rfd_dn, 4, 2048)
+  local ip_dn = "\x06\x06\x06\x06"
+  local ok = m_dn.write_dnsonly_msg(wfd_dn, 0xAAAA, ip_dn, 6666)
+  assert(ok, "write_dnsonly_msg failed")
+  ffi.C.close(wfd_dn)
+  m_dn.drain_pipe(rfd_dn, function()
+    return 0
+  end)
+  ffi.C.close(rfd_dn)
+  local entry = m_dn.get_pending_entry(0xAAAA, "6.6.6.6", 6666, function()
+    return 0
+  end)
+  assert(entry, "get_pending_entry retourne nil")
+  assert_eq(entry.dnsonly, true, "entry.dnsonly = true")
+  return assert_eq(entry.refused, false, "entry.refused = false")
 end)
 test("write_refused_msg + drain_pipe + get_pending_entry → entry.refused = true", function()
   package.loaded["ipc"] = nil
@@ -2326,6 +2369,53 @@ do
     return assert_eq(v, false, "aucune règle → deny par défaut")
   end)
 end
+io.write("\n── filter/actions/dnsonly ──\n")
+local dnsonly_action = require("filter.actions.dnsonly")
+test("dnsonly — retourne \"dnsonly\" (truthy, distinct de true)", function()
+  local factory = dnsonly_action({ })
+  local rule_fn = factory({
+    description = "test-dnsonly"
+  })
+  local v, m = rule_fn({
+    domain = "example.com",
+    src_ip = "1.2.3.4",
+    mac = "aa:bb:cc:dd:ee:ff",
+    ts = os.time()
+  })
+  assert_eq(v, "dnsonly", "verdict = \"dnsonly\"")
+  assert((v ~= true), "verdict != true")
+  assert((v ~= false), "verdict != false")
+  return assert((type(v) == "string"), "verdict est une string")
+end)
+test("dnsonly — message contient la description de la règle", function()
+  local factory = dnsonly_action({ })
+  local rule_fn = factory({
+    description = "captive-portal-probe"
+  })
+  local v, m = rule_fn({ })
+  return assert(m:find("captive-portal-probe", 1, true), "message contient la description")
+end)
+test("dnsonly — compile_rules avec action dnsonly → verdict \"dnsonly\"", function()
+  local cfg_dn = {
+    rules = {
+      {
+        description = "portail-captif",
+        conditions = { },
+        actions = {
+          "dnsonly"
+        }
+      }
+    }
+  }
+  local rules_dn = m_rule.compile_rules(cfg_dn)
+  local v, m = m_rule.decide(rules_dn, {
+    domain = "anything.com",
+    src_ip = "10.0.0.1",
+    mac = "ff:ff:ff:ff:ff:ff",
+    ts = os.time()
+  })
+  return assert_eq(v, "dnsonly", "verdict = \"dnsonly\" via compile_rules")
+end)
 os.remove(TMPBIN)
 io.write("\n── parse_domains ──\n")
 local parse, parse_simple, parse_hosts, parse_adblock, is_valid
