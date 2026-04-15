@@ -300,17 +300,10 @@ Installer = function(cfg)
       local script = [[#!/bin/sh
 set -e
 NFT=]] .. self.cfg.dest .. [[/dns-filter.nft
-TMP=/tmp/dns-filter-owrt.nft
-
-sed \
-  -e 's|192\.168\.1\.0/24|]] .. self.cfg.lan4 .. [[|g' \
-  -e 's|fd00::/64|]] .. self.cfg.lan6 .. [[|g' \
-  "$NFT" > "$TMP"
-
-nft -f "$TMP" && echo "nft ok" && rm -f "$TMP"
+nft -f "$NFT" && echo "nft ok"
 ]]
       if self:ssh_run_script("apply-nft", script) then
-        ok("Règles nft appliquées (LAN4=" .. tostring(self.cfg.lan4) .. "  LAN6=" .. tostring(self.cfg.lan6) .. ")")
+        ok("Règles nft appliquées")
         return true
       end
       fail("Échec de l'application des règles nft")
@@ -355,7 +348,7 @@ CUSTOS_DIR=]] .. self.cfg.dest .. "\n" .. [[start_service() {
     $PROG $CUSTOS_DIR/uci_config.lua || \
         echo "custos: avertissement — génération config UCI échouée, utilise les défauts compilés"
 
-    # Charge les règles nftables (substitution des plages LAN depuis UCI)
+    # Charge les règles nftables
     _nft_load || echo "custos: avertissement — règles nft non chargées, démarrage en mode dégradé"
 
     procd_open_instance
@@ -374,17 +367,8 @@ stop_service() {
 
 _nft_load() {
     NFT_SRC="$CUSTOS_DIR/dns-filter.nft"
-    NFT_TMP="/tmp/custos-dns-filter.nft"
     [ -f "$NFT_SRC" ] || { echo "custos: $NFT_SRC introuvable"; return 1; }
-    LAN4="$(uci get custos.main.lan4 2>/dev/null || echo '192.168.1.0/24')"
-    LAN6="$(uci get custos.main.lan6 2>/dev/null || echo 'fd00::/64')"
-    sed -e "s|192\\.168\\.1\\.0/24|$LAN4|g" \
-        -e "s|fd00::/64|$LAN6|g" \
-        "$NFT_SRC" > "$NFT_TMP" && \
-    nft -f "$NFT_TMP"
-    local rc=$?
-    rm -f "$NFT_TMP"
-    return $rc
+    nft -f "$NFT_SRC"
 }
 
 reload_service() {
@@ -604,8 +588,6 @@ print_usage = function()
 Options:
   --port PORT    Port SSH                       (défaut : 22)
   --user USER    Utilisateur SSH                (défaut : root)
-  --lan  CIDR    Réseau LAN IPv4                (défaut : 192.168.1.0/24)
-  --lan6 CIDR    Réseau LAN IPv6                (défaut : fd00::/64)
   --dest DIR     Dossier de destination         (défaut : /usr/share/custos)
   --no-build     Ne pas recompiler lua/
   --no-start     Installer sans démarrer le service
@@ -615,8 +597,7 @@ Options:
 
 Exemple:
   luajit install-owrt.lua router.local
-  luajit install-owrt.lua 192.168.1.1 --port 2222 --lan 10.0.0.0/24
-  luajit install-owrt.lua 2001:db8::1 --lan6 fd57:985b:c9ab::/64
+  luajit install-owrt.lua 192.168.1.1 --port 2222
   luajit install-owrt.lua 192.168.1.1 --uninstall
 ]])
   return os.exit(0)
@@ -627,8 +608,6 @@ parse_args = function()
     host = nil,
     port = 22,
     user = "root",
-    lan4 = "192.168.1.0/24",
-    lan6 = "fd00::/64",
     dest = "/usr/share/custos",
     no_build = false,
     no_start = false,
@@ -656,12 +635,6 @@ parse_args = function()
     elseif "--user" == _exp_0 then
       i = i + 1
       cfg.user = arg[i]
-    elseif "--lan" == _exp_0 then
-      i = i + 1
-      cfg.lan4 = arg[i]
-    elseif "--lan6" == _exp_0 then
-      i = i + 1
-      cfg.lan6 = arg[i]
     elseif "--dest" == _exp_0 then
       i = i + 1
       cfg.dest = arg[i]
@@ -677,14 +650,6 @@ parse_args = function()
   end
   if cfg.host and cfg.host:match("%s") then
     fail("Hôte invalide (contient des espaces) : " .. tostring(cfg.host))
-    os.exit(1)
-  end
-  if not cfg.lan4:match("^%S+/%d+$") then
-    fail("CIDR LAN IPv4 invalide : " .. tostring(cfg.lan4))
-    os.exit(1)
-  end
-  if not cfg.lan6:match("^%S+/%d+$") then
-    fail("CIDR LAN IPv6 invalide : " .. tostring(cfg.lan6))
     os.exit(1)
   end
   return cfg
@@ -713,7 +678,6 @@ main = function()
     return 
   end
   info("Cible  : " .. tostring(cfg.user) .. "@" .. tostring(cfg.host) .. ":" .. tostring(cfg.port))
-  info("LAN4   : " .. tostring(cfg.lan4) .. "    LAN6 : " .. tostring(cfg.lan6))
   info("Dest   : " .. tostring(cfg.dest))
   if cfg.dry then
     warn("MODE DRY-RUN — aucune commande réelle exécutée\n")

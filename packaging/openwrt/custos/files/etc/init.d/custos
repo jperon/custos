@@ -12,9 +12,6 @@ CUSTOS_CRON_MARKER="# custos-update-lists"
 
 # Configuration nftables
 NFT_RULES_FILE="$CUSTOS_DIR/dns-filter.nft"
-NFT_TEMP_FILE="/tmp/custos-dns-filter.nft"
-CUSTOS_LAN4=$(uci get custos.main.lan4 2>/dev/null || echo "192.168.1.0/24")
-CUSTOS_LAN6=$(uci get custos.main.lan6 2>/dev/null || echo "fd00::/64")
 
 start_service() {
     [ "$(uci get custos.main.enabled 2>/dev/null)" = "0" ] && return 0
@@ -150,20 +147,12 @@ _apply_nft_rules() {
 
     echo "custos: application des règles nftables..."
     
-    # Crée un fichier temporaire avec les substitutions appropriées
-    sed \
-        -e "s|192\.168\.1\.0/24|$CUSTOS_LAN4|g" \
-        -e "s|fd00::/64|$CUSTOS_LAN6|g" \
-        "$NFT_RULES_FILE" > "$NFT_TEMP_FILE"
-
     # Applique les règles nftables
-    if nft -f "$NFT_TEMP_FILE"; then
+    if nft -f "$NFT_RULES_FILE"; then
         echo "custos: règles nftables appliquées avec succès"
-        rm -f "$NFT_TEMP_FILE"
         return 0
     else
         echo "custos: échec de l'application des règles nftables"
-        rm -f "$NFT_TEMP_FILE"
         return 1
     fi
 }
@@ -175,9 +164,6 @@ _cleanup_nft_rules() {
     # Supprime les tables IPv4 et IPv6 si elles existent
     nft delete table ip dns-filter 2>/dev/null || true
     nft delete table ip6 dns-filter 2>/dev/null || true
-    
-    # Supprime le fichier temporaire s'il existe
-    [ -f "$NFT_TEMP_FILE" ] && rm -f "$NFT_TEMP_FILE" || true
     
     echo "custos: règles nftables nettoyées"
 }
