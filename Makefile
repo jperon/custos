@@ -26,9 +26,11 @@ MOONS := \
   $(SRC)/allowlist.moon \
   $(SRC)/ip_whitelist.moon \
   $(SRC)/nft.moon \
+  $(SRC)/parse/tcp.moon \
   $(SRC)/nfq_loop.moon \
   $(SRC)/worker_q0.moon \
   $(SRC)/worker_q1.moon \
+  $(SRC)/worker_q2.moon \
   $(SRC)/main.moon
 
 LUAS := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(MOONS))

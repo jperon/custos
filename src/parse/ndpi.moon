@@ -424,12 +424,19 @@ fix_tcp6_cksum = (buf, pkt_len, l4_off) ->
 -- ── Public API ─────────────────────────────────────────────────
 
 --- Parse a raw IP packet (L3 + L4 + L7) in a single call.
--- @tparam string raw Raw IP packet (Lua string from nfq_get_payload).
+-- In bridge mode (BRIDGE_MODE=1), nfq_get_payload delivers a full Ethernet
+-- frame; pass eth_offset=14 so parsing starts at the IP header.
+-- In router mode (default), pass eth_offset=0 (or omit it).
+-- @tparam string raw Raw packet (Lua string from nfq_get_payload).
+-- @tparam[opt] number eth_offset Byte offset to IP header (default 0).
 -- @treturn table|nil Parsed packet info, or nil on error.
-parse_packet = (raw) ->
+-- @treturn string|nil Parse status ("buffering", "tcp_control") on nil return.
+parse_packet = (raw, eth_offset = 0) ->
   len = #raw
-  return nil if len < 20
-  p = ffi.cast "const uint8_t*", raw
+  return nil if len < eth_offset + 20
+  p_base = ffi.cast "const uint8_t*", raw
+  p = p_base + eth_offset
+  len = len - eth_offset
 
   -- L3
   ver = bit.rshift p[0], 4

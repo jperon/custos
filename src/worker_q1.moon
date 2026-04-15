@@ -16,23 +16,29 @@
 --        e. Ajoute les IPs A/AAAA dans les sets nft (timeout 2m)
 --        f. Envoie le paquet modifié avec NF_ACCEPT + payload
 
-{ :ffi, :libnfq } = require "ffi_defs"
-{ :QUEUE_RESPONSES, :DOCKER_MODE, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN } = require "config"
+{ :ffi, :libc, :libnfq } = require "ffi_defs"
+{ :QUEUE_RESPONSES, :DOCKER_MODE, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS } = require "config"
 neigh = require "neigh"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
-{ :get_l2 } = require "parse/ethernet"
+{ :get_l2, :ETH_OFFSET } = require "parse/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
 { :build_refused, :append_ede_to_dns, :EDE_OTHER, :EDE_TTL_TEXT, :EDNS_OPT_EDE } = require "parse/dns"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6 } = require "nft"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_info, :log_warn, :now } = require "log"
 
+IPC_RETRY_ENABLED = if IPC_MATCH_RETRY_ENABLED == nil then true else IPC_MATCH_RETRY_ENABLED
+IPC_RETRY_COUNT = IPC_MATCH_RETRY_COUNT or 5
+IPC_RETRY_SLEEP_MS = IPC_MATCH_RETRY_SLEEP_MS or 20
+
 -- MAC_ZERO : MAC à ignorer (interface sans L2 ou OUTPUT chain en Docker)
 MAC_ZERO = "00:00:00:00:00:00"
 
 -- mac_valid : vrai si mac est une adresse MAC connue et non nulle
 mac_valid = (mac) -> mac != "unknown" and mac != MAC_ZERO
+
+{ :try_add_with_retries } = require "nft_add_helper"
 
 -- mac_clients[mac_str] = {ipv4, ipv6, last_seen}
 -- Permet de résoudre l'adresse cross-family d'un client (ex: IPv4 ↔ IPv6)
@@ -46,11 +52,36 @@ pipe_rfd = nil
 
 -- Timestamp du dernier refresh de la table voisine (lazy-refresh sur miss)
 last_neigh_refresh = 0
+sleep_req = ffi.new "timespec_t[1]"
 
 update_mac_clients = nil
 drain_ts = 0
 drain_on_msg = (msg) ->
   update_mac_clients msg, drain_ts
+
+sleep_ms = (ms) ->
+  return unless ms and ms > 0
+  sleep_req[0].tv_sec = math.floor ms / 1000
+  sleep_req[0].tv_nsec = (ms % 1000) * 1000000
+  libc.nanosleep sleep_req, nil
+
+retry_pending_match = (txid, client_ip, client_port, resolver_ip) ->
+  return nil, 0, 0 unless IPC_RETRY_ENABLED
+  tries = IPC_RETRY_COUNT or 0
+  wait_ms = IPC_RETRY_SLEEP_MS or 0
+  return nil, 0, 0 if tries <= 0
+
+  total_wait_ms = 0
+  for i = 1, tries
+    sleep_ms wait_ms
+    total_wait_ms += wait_ms
+    ts = now!
+    drain_ts = ts
+    drain_pipe pipe_rfd, now, drain_on_msg
+    entry = get_pending_entry txid, client_ip, client_port, resolver_ip, now
+    return entry, i, total_wait_ms if entry
+
+  nil, tries, total_wait_ms
 
 -- ── Suivi des clients par adresse MAC ───────────────────────────
 -- Mise à jour de mac_clients et ip_to_mac à chaque message IPC reçu.
@@ -124,8 +155,6 @@ resolve_client_family = (ip_str, want) ->
 -- @tparam number pkt_id  NFQUEUE packet id
 -- @treturn number NF_ACCEPT, NF_DROP, or -1 (verdict already set)
 handle_response = (qh_ptr, nfad, pkt_id) ->
-  l2 = get_l2 nfad
-
   -- ── Drain pipe IPC ───────────────────────────────────────────
   -- Absorbe tous les tokens disponibles de Q0 avant de traiter ce paquet.
   -- Le callback update_mac_clients enrichit la table mac_clients au passage.
@@ -141,9 +170,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   raw = ffi.string payload_ptr[0], payload_len
 
+  -- ── L2 ───────────────────────────────────────────────────────
+  -- En mode bridge, raw est passé à get_l2 pour extraire la MAC depuis la trame.
+  l2 = get_l2 nfad, raw
+
   -- ── L3 / L4 / L7 ─────────────────────────────────────────────
   -- parse_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
-  pkt, parse_status = ndpi.parse_packet raw
+  pkt, parse_status = ndpi.parse_packet raw, ETH_OFFSET
   unless pkt
     -- Intermediate TCP data segments are DROPped so Q1 can reinject a single
     -- coalesced+TTL-patched packet once the full DNS message is assembled.
@@ -166,6 +199,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   client_port = pkt.l4.dst_port
   txid        = pkt.dns.txid
   client_ip   = pkt.ip.dst_ip
+  resolver_ip = pkt.ip.src_ip
   -- ip_to_mac est peuplé par drain_pipe (IPC de Q0). Si le MAC n'y est pas
   -- (ex: nfq_get_packet_hw() indisponible pour les paquets IPv6, ou IPC pas
   -- encore arrivé), on tente un lookup dans la table voisine (NDP/ARP).
@@ -183,20 +217,35 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- et réponses sont vues depuis la perspective du conteneur (OUTPUT).
   entry = nil
   unless DOCKER_MODE
-    entry = get_pending_entry txid, pkt.ip.dst_ip, client_port, now
+    entry = get_pending_entry txid, pkt.ip.dst_ip, client_port, resolver_ip, now
     unless entry
-      log_block {
-        action:    "response_no_matching_question"
-        src_ip:    pkt.ip.src_ip
-        dst_ip:    pkt.ip.dst_ip
-        vlan:      l2.vlan
-        txid:      string.format "0x%04x", txid
-        rcode:     pkt.dns.rcode
-        client_mac: client_mac
-      }
-      return NF_DROP
+      retry_attempts = 0
+      retry_wait_ms = 0
+      entry, retry_attempts, retry_wait_ms = retry_pending_match txid, pkt.ip.dst_ip, client_port, resolver_ip
+      if entry
+        log_info {
+          action: "response_matched_after_retry"
+          src_ip: pkt.ip.src_ip
+          dst_ip: pkt.ip.dst_ip
+          txid: string.format "0x%04x", txid
+          retry_attempts: retry_attempts
+          retry_wait_ms: retry_wait_ms
+        }
+      else
+        log_block {
+          action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
+          src_ip:    pkt.ip.src_ip
+          dst_ip:    pkt.ip.dst_ip
+          vlan:      l2.vlan
+          txid:      string.format "0x%04x", txid
+          rcode:     pkt.dns.rcode
+          client_mac: client_mac
+          retry_attempts: retry_attempts
+          retry_wait_ms: retry_wait_ms
+        }
+        return NF_DROP
     -- Transaction consommée (one-shot : une réponse par question)
-    consume txid, pkt.ip.dst_ip, client_port
+    consume txid, pkt.ip.dst_ip, client_port, resolver_ip
 
   refused = entry and entry.refused or false
   dnsonly = entry and entry.dnsonly or false
@@ -233,6 +282,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   client_v4 = nil
   client_v6 = nil
   ip_count = 0
+  records_to_add = 0
+  success_any = false
   no_ipv4_records = {}
   no_ipv6_records = {}
   for ans in *answers
@@ -245,11 +296,15 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         resolve_client_family client_ip, "ipv4"
       unless dnsonly
         if client_v4
-          add_ip4 client_v4, ans.rdata_str
-          ip_count += 1
+          records_to_add += 1
+          ok = try_add_with_retries add_ip4, client_v4, ans.rdata_str
+          ip_count += 1 if ok
+          success_any or= ok
         else
           no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
-        add_mac4 client_mac, ans.rdata_str if mac_valid client_mac
+        if mac_valid client_mac
+          m_ok = try_add_with_retries add_mac4, client_mac, ans.rdata_str
+          success_any or= m_ok
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
       client_v6 or= if pkt.ip.version == 6
@@ -259,11 +314,15 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         resolve_client_family client_ip, "ipv6"
       unless dnsonly
         if client_v6
-          add_ip6 client_v6, ans.rdata_str
-          ip_count += 1
+          records_to_add += 1
+          ok = try_add_with_retries add_ip6, client_v6, ans.rdata_str
+          ip_count += 1 if ok
+          success_any or= ok
         else
           no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
-        add_mac6 client_mac, ans.rdata_str if mac_valid client_mac
+        if mac_valid client_mac
+          m_ok = try_add_with_retries add_mac6, client_mac, ans.rdata_str
+          success_any or= m_ok
 
   -- Logguer les cas cross-family sans IP connue (groupés par réponse)
   if #no_ipv4_records > 0
@@ -304,6 +363,14 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     ndpi_app:    pkt.ndpi_app
     client_mac:  client_mac
   }
+
+  -- If we had records to add but none succeeded, respect policy
+  if records_to_add > 0 and not success_any
+    if NFT_ADD_FAILURE_POLICY == "fail-closed"
+      log_block { action: "nft_add_failed_policy_fail_closed", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames }
+      return NF_DROP
+    else
+      log_warn { action: "nft_add_failed_fail_open", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames }
 
   -- ── Verdict avec payload modifié ─────────────────────────────
   -- On appelle nfq_set_verdict directement ici avec le payload modifié,

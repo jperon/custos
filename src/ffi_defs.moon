@@ -17,6 +17,7 @@ ffi.cdef [[
   /* ── Temps ── */
   typedef struct { long tv_sec; long tv_nsec; } timespec_t;
   int clock_gettime(int clk_id, timespec_t *tp);
+  int nanosleep(const timespec_t *req, timespec_t *rem);
 
   /* ── Fichiers ── */
   int     open(const char *path, int flags, ...);
@@ -94,6 +95,19 @@ ffi.cdef [[
                      const void *optval, socklen_t optlen);
   ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                  const struct sockaddr *dest_addr, socklen_t addrlen);
+
+  /* ── AF_PACKET raw socket (pour worker Q2 portail captif bridge) ── */
+  unsigned int if_nametoindex(const char *ifname);
+
+  struct sockaddr_ll {
+    unsigned short sll_family;
+    unsigned short sll_protocol;
+    int            sll_ifindex;
+    unsigned short sll_hatype;
+    unsigned char  sll_pkttype;
+    unsigned char  sll_halen;
+    unsigned char  sll_addr[8];
+  };
 ]]
 
 -- ═══════════════════════════════════════════════════════════════

@@ -45,3 +45,4 @@ images/
 
 # Backup files
 *.bak
+.aider*

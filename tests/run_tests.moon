@@ -30,10 +30,11 @@ AF_INET   = 2
 AF_INET6  = 10
 DNS_PORT  = 53
 DOCKER_MODE = false
+BRIDGE_MODE = false
 ALLOWED_DOMAINS = {}
-IPC_MSG_SIZE = 27
 IPC_PENDING_TTL = 5
 CLIENT_EXPIRY = 300
+QUEUE_CAPTIVE = 2
 
 package.loaded["config"] = {
   :PROTO_TCP,
@@ -42,10 +43,19 @@ package.loaded["config"] = {
   :AF_INET6,
   :DNS_PORT,
   :DOCKER_MODE,
+  :BRIDGE_MODE,
   :ALLOWED_DOMAINS,
-  :IPC_MSG_SIZE,
   :IPC_PENDING_TTL,
-  :CLIENT_EXPIRY
+  :CLIENT_EXPIRY,
+  :QUEUE_CAPTIVE
+}
+
+-- parse/ethernet stub : BRIDGE_MODE=false → ETH_OFFSET=0
+package.loaded["parse/ethernet"] = {
+  ETH_OFFSET: 0
+  get_l2: -> { mac_src: "00:00:00:00:00:00", mac_raw: "\0\0\0\0\0\0", in_ifindex: 0, vlan: nil }
+  format_mac: -> "00:00:00:00:00:00"
+  format_mac_ptr: -> "00:00:00:00:00:00"
 }
 
 -- ── Mini framework de test ───────────────────────────────────────
@@ -519,6 +529,33 @@ test "format_ipv4", ->
   s = "\xC0\xA8\x01\x01"  -- 192.168.1.1
   assert_eq format_ipv4(s, 1), "192.168.1.1", "format"
 
+-- Tests pour nft_add_helper retry
+test "nft_add_helper retries and succeeds", ->
+  cfg = package.loaded["config"]
+  cfg.NFT_ADD_RETRY_COUNT = 3
+  cfg.NFT_ADD_BACKOFF_MS = {1, 1, 1}
+  helper = dofile "lua/nft_add_helper.lua"
+  calls = 0
+  fn = ->
+    calls += 1
+    return calls >= 2
+  ok = helper.try_add_with_retries fn
+  assert_eq ok, true, "should succeed after retry"
+  assert_eq calls, 2, "should have been retried once"
+
+test "nft_add_helper returns false after retries", ->
+  cfg = package.loaded["config"]
+  cfg.NFT_ADD_RETRY_COUNT = 3
+  cfg.NFT_ADD_BACKOFF_MS = {1, 1, 1}
+  helper = dofile "lua/nft_add_helper.lua"
+  calls = 0
+  fn = ->
+    calls += 1
+    return false
+  ok = helper.try_add_with_retries fn
+  assert_eq ok, false, "should fail after all retries"
+  assert_eq calls, 3, "should have been called NFT_ADD_RETRY_COUNT times"
+
 test "parse_ipv4 — paquet UDP minimal", ->
   dns    = make_dns "\3www\6github\3com\0", 1, false
   raw    = make_ipv4_udp_dns "192.168.1.42", "8.8.8.8", 54321, 53, dns
@@ -845,50 +882,58 @@ make_key   = m_ipc.make_key
 
 test "encode/decode IPv4 round-trip", ->
   ip_raw  = "\xC0\xA8\x01\x2A"  -- 192.168.1.42
+  resolver_raw = "\x01\x01\x01\x03" -- 1.1.1.3
   mac_raw = "\xAA\xBB\xCC\xDD\xEE\xFF"
   txid    = 0x1234
   port    = 54321
-  msg     = encode_msg txid, ip_raw, port, mac_raw
-  assert_eq #msg, 27, "taille message = 27"
+  msg     = encode_msg txid, ip_raw, port, mac_raw, resolver_raw
+  assert_eq #msg, 43, "taille message = 43"
   decoded = decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.txid,     txid,               "txid"
   assert_eq decoded.src_port, port,               "port"
   assert_eq decoded.ip_str,   "192.168.1.42",     "ip_str"
+  assert_eq decoded.resolver_ip_str, "1.1.1.3",   "resolver_ip_str"
   assert_eq decoded.msg_type, 0x41,               "type IPv4"
   assert_eq decoded.mac_str,  "aa:bb:cc:dd:ee:ff", "mac_str"
 
 test "encode/decode IPv4 round-trip sans MAC (nil)", ->
   ip_raw = "\xC0\xA8\x01\x2A"
-  msg    = encode_msg 0x1234, ip_raw, 54321, nil
-  assert_eq #msg, 27, "taille message = 27 meme sans MAC"
+  resolver_raw = "\x01\x01\x01\x01"
+  msg    = encode_msg 0x1234, ip_raw, 54321, nil, resolver_raw
+  assert_eq #msg, 43, "taille message = 43 meme sans MAC"
   decoded = decode_msg msg
   assert decoded, "decode_msg nil"
+  assert_eq decoded.resolver_ip_str, "1.1.1.1", "resolver_ip_str"
   assert_eq decoded.mac_str, "00:00:00:00:00:00", "mac zeros si nil"
 
 test "encode/decode IPv6 round-trip", ->
   ip_raw = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01" -- 2001:db8::1
+  resolver_raw = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x53" -- 2001:db8::53
   mac_raw = "\x00\x11\x22\x33\x44\x55"
   txid   = 0xABCD
   port   = 5353
-  msg    = encode_msg txid, ip_raw, port, mac_raw
-  assert_eq #msg, 27, "taille message = 27"
+  msg    = encode_msg txid, ip_raw, port, mac_raw, resolver_raw
+  assert_eq #msg, 43, "taille message = 43"
   decoded = decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.txid,     txid,                    "txid"
   assert_eq decoded.src_port, port,                    "port"
   assert_eq decoded.ip_str,   "2001:db8::1",  "ip_str"
+  assert_eq decoded.resolver_ip_str, "2001:db8::53", "resolver_ip_str"
   assert_eq decoded.msg_type, 0x36,                    "type IPv6"
   assert_eq decoded.mac_str,  "00:11:22:33:44:55",     "mac_str"
 
 test "make_key — unicité", ->
-  k1 = make_key 0x1234, "192.168.1.1", 53
-  k2 = make_key 0x1234, "192.168.1.2", 53
-  k3 = make_key 0x5678, "192.168.1.1", 53
+  k1 = make_key 0x1234, "192.168.1.1", 53, "1.1.1.1"
+  k2 = make_key 0x1234, "192.168.1.2", 53, "1.1.1.1"
+  k3 = make_key 0x5678, "192.168.1.1", 53, "1.1.1.1"
+  k4 = make_key 0x1234, "192.168.1.1", 53, "1.1.1.3"
   assert (k1 ~= k2), "ip différentes → clés différentes"
   assert (k1 ~= k3), "txid différents → clés différentes"
+  assert (k1 ~= k4), "resolver différents → clés différentes"
 
-test "drain_pipe — lit IPC_MSG_SIZE=27 octets sans overflow", ->
+test "drain_pipe — lit IPC_MSG_SIZE=43 octets sans overflow", ->
   -- Déclare les appels POSIX nécessaires (pcall évite l'erreur si déjà déclarés)
   pcall ffi.cdef, [[
     int pipe2(int pipefd[2], int flags);
@@ -911,16 +956,17 @@ test "drain_pipe — lit IPC_MSG_SIZE=27 octets sans overflow", ->
   m2 = dofile "lua/ipc.lua"
   -- Écrit un message IPv4 via write_msg
   ip_raw2 = "\xC0\xA8\x02\x01"  -- 192.168.2.1
+  resolver_raw2 = "\x01\x01\x01\x03" -- 1.1.1.3
   mac_raw2 = "\xDE\xAD\xBE\xEF\x00\x01"
   txid2, port2 = 0xBEEF, 12345
-  ok = m2.write_msg wfd, txid2, ip_raw2, port2, mac_raw2
+  ok = m2.write_msg wfd, txid2, ip_raw2, port2, mac_raw2, resolver_raw2
   assert ok, "write_msg failed"
   ffi.C.close wfd
-  -- drain_pipe doit lire les 27 octets sans segfault ni corruption
+  -- drain_pipe doit lire les 43 octets sans segfault ni corruption
   m2.drain_pipe rfd, os.time
   ffi.C.close rfd
   -- Le message doit être présent dans pending après drain
-  assert (m2.is_pending txid2, "192.168.2.1", port2, os.time),
+  assert (m2.is_pending txid2, "192.168.2.1", port2, "1.1.1.3", os.time),
     "message absent de pending après drain_pipe"
 
 test "ipc — token expiré est rejeté (purge paresseuse)", ->
@@ -934,17 +980,18 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
   wfd3 = pipefd3[1]
   ffi.C.fcntl rfd3, 4, 2048  -- F_SETFL=4, O_NONBLOCK=2048
   ip_raw3 = "\x0A\x00\x00\x01"  -- 10.0.0.1
+  resolver_raw3 = "\x01\x01\x01\x01" -- 1.1.1.1
   txid3, port3 = 0x1111, 9999
-  m3.write_msg wfd3, txid3, ip_raw3, port3
+  m3.write_msg wfd3, txid3, ip_raw3, port3, nil, resolver_raw3
   ffi.C.close wfd3
   -- Drain à t=0 → expiry = 0 + 5 = 5
   m3.drain_pipe rfd3, -> 0
   ffi.C.close rfd3
   -- À t=4 le token est encore valide
-  assert (m3.is_pending txid3, "10.0.0.1", port3, -> 4),
+  assert (m3.is_pending txid3, "10.0.0.1", port3, "1.1.1.1", -> 4),
     "token devrait être valide à t=4"
   -- À t=6 le token est expiré
-  assert (not m3.is_pending txid3, "10.0.0.1", port3, -> 6),
+  assert (not m3.is_pending txid3, "10.0.0.1", port3, "1.1.1.1", -> 6),
     "token expiré doit être rejeté à t=6"
 
 -- ════════════════════════════════════════════════════════════════
@@ -1314,8 +1361,9 @@ io.write "\n── ipc refused ──\n"
 
 test "encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", ->
   ip_raw  = "\xC0\xA8\x01\x2A"
-  msg     = m_ipc.encode_msg 0x1234, ip_raw, 54321, nil, true, false
-  assert_eq #msg, 27, "taille = 27"
+  resolver_raw = "\x01\x01\x01\x03"
+  msg     = m_ipc.encode_msg 0x1234, ip_raw, 54321, nil, resolver_raw, true, false
+  assert_eq #msg, 43, "taille = 43"
   decoded = m_ipc.decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.msg_type, m_ipc.MSG_IPV4_REFUSED, "msg_type = MSG_IPV4_REFUSED"
@@ -1324,7 +1372,8 @@ test "encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", ->
 
 test "decode_msg MSG_IPV6_REFUSED (0x72) → refused=true, ipv4=false", ->
   ip6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
-  msg     = m_ipc.encode_msg 0xABCD, ip6_raw, 5353, nil, true, false
+  resolver6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x53"
+  msg     = m_ipc.encode_msg 0xABCD, ip6_raw, 5353, nil, resolver6_raw, true, false
   decoded = m_ipc.decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.refused,  true,  "refused = true"
@@ -1333,8 +1382,9 @@ test "decode_msg MSG_IPV6_REFUSED (0x72) → refused=true, ipv4=false", ->
 
 test "encode_msg dnsonly=true IPv4 → MSG_IPV4_DNSONLY (0x44)", ->
   ip_raw  = "\xC0\xA8\x01\x2A"
-  msg     = m_ipc.encode_msg 0x1234, ip_raw, 54321, nil, false, true
-  assert_eq #msg, 27, "taille = 27"
+  resolver_raw = "\x01\x01\x01\x03"
+  msg     = m_ipc.encode_msg 0x1234, ip_raw, 54321, nil, resolver_raw, false, true
+  assert_eq #msg, 43, "taille = 43"
   decoded = m_ipc.decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.msg_type, m_ipc.MSG_IPV4_DNSONLY, "msg_type = MSG_IPV4_DNSONLY (0x44)"
@@ -1344,7 +1394,8 @@ test "encode_msg dnsonly=true IPv4 → MSG_IPV4_DNSONLY (0x44)", ->
 
 test "encode_msg dnsonly=true IPv6 → MSG_IPV6_DNSONLY (0x64)", ->
   ip6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
-  msg     = m_ipc.encode_msg 0xABCD, ip6_raw, 5353, nil, false, true
+  resolver6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x53"
+  msg     = m_ipc.encode_msg 0xABCD, ip6_raw, 5353, nil, resolver6_raw, false, true
   decoded = m_ipc.decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.msg_type, m_ipc.MSG_IPV6_DNSONLY, "msg_type = MSG_IPV6_DNSONLY (0x64)"
@@ -1360,12 +1411,13 @@ test "write_dnsonly_msg + drain_pipe + get_pending_entry → entry.dnsonly = tru
   rfd_dn, wfd_dn = pfd[0], pfd[1]
   ffi.C.fcntl rfd_dn, 4, 2048   -- F_SETFL, O_NONBLOCK
   ip_dn = "\x06\x06\x06\x06"   -- 6.6.6.6
-  ok    = m_dn.write_dnsonly_msg wfd_dn, 0xAAAA, ip_dn, 6666
+  resolver_dn = "\x01\x01\x01\x03" -- 1.1.1.3
+  ok    = m_dn.write_dnsonly_msg wfd_dn, 0xAAAA, ip_dn, 6666, nil, resolver_dn
   assert ok, "write_dnsonly_msg failed"
   ffi.C.close wfd_dn
   m_dn.drain_pipe rfd_dn, -> 0
   ffi.C.close rfd_dn
-  entry = m_dn.get_pending_entry 0xAAAA, "6.6.6.6", 6666, -> 0
+  entry = m_dn.get_pending_entry 0xAAAA, "6.6.6.6", 6666, "1.1.1.3", -> 0
   assert entry, "get_pending_entry retourne nil"
   assert_eq entry.dnsonly, true,  "entry.dnsonly = true"
   assert_eq entry.refused, false, "entry.refused = false"
@@ -1378,12 +1430,13 @@ test "write_refused_msg + drain_pipe + get_pending_entry → entry.refused = tru
   rfd5, wfd5 = pfd[0], pfd[1]
   ffi.C.fcntl rfd5, 4, 2048   -- F_SETFL, O_NONBLOCK
   ip5 = "\x05\x05\x05\x05"   -- 5.5.5.5
-  ok  = m_rip.write_refused_msg wfd5, 0x9999, ip5, 5555
+  resolver5 = "\x01\x01\x01\x01" -- 1.1.1.1
+  ok  = m_rip.write_refused_msg wfd5, 0x9999, ip5, 5555, nil, resolver5
   assert ok, "write_refused_msg failed"
   ffi.C.close wfd5
   m_rip.drain_pipe rfd5, -> 0
   ffi.C.close rfd5
-  entry = m_rip.get_pending_entry 0x9999, "5.5.5.5", 5555, -> 0
+  entry = m_rip.get_pending_entry 0x9999, "5.5.5.5", 5555, "1.1.1.1", -> 0
   assert entry, "get_pending_entry retourne nil"
   assert_eq entry.refused, true, "entry.refused = true"
   assert (entry.expire > 0), "entry.expire > 0"
@@ -2546,6 +2599,172 @@ test "filter/convert — commentaires et lignes vides ignorés", ->
   assert #data == 8, "un seul hash attendu (github.com uniquement), got #{#data} octets"
   os.remove CONV_INPUT
   os.remove CONV_OUTPUT
+
+
+-- ── Tests parse/tcp ──────────────────────────────────────────────
+io.write "\n── parse/tcp ──\n"
+
+tcp_mod = require "parse/tcp"
+{ :parse_syn, :build_response_frames, :r16, :r32, :w16, :w32, :inet_sum, :fold_cksum } = tcp_mod
+
+-- Helper : construit une trame Ethernet + IPv4 + TCP SYN minimale
+make_eth_syn = (eth_src, eth_dst, src_ip, dst_ip, sport, dport, seq) ->
+  ip4bytes = (s) ->
+    a, b, c, d = s\match "(%d+)%.(%d+)%.(%d+)%.(%d+)"
+    string.char tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+  -- Ethernet header (14 bytes)
+  eth = eth_dst .. eth_src .. string.char(0x08, 0x00)
+  -- IPv4 header (20 bytes), proto=TCP(6), TTL=64
+  total_len = 20 + 20  -- IP + TCP, no payload
+  ip = string.char(
+    0x45, 0,
+    bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF),
+    0, 1, 0, 0, 64, PROTO_TCP, 0, 0
+  ) .. ip4bytes(src_ip) .. ip4bytes(dst_ip)
+  -- TCP header (20 bytes): flags=SYN(0x02)
+  tcp = string.char(
+    bit.rshift(bit.band(sport, 0xFF00), 8), bit.band(sport, 0xFF),
+    bit.rshift(bit.band(dport, 0xFF00), 8), bit.band(dport, 0xFF),
+    bit.rshift(bit.band(seq, 0xFF000000), 24), bit.rshift(bit.band(seq, 0xFF0000), 16),
+    bit.rshift(bit.band(seq, 0xFF00), 8), bit.band(seq, 0xFF),
+    0, 0, 0, 0,
+    0x50, 0x02,
+    0xFF, 0xFF,
+    0, 0, 0, 0
+  )
+  eth .. ip .. tcp
+
+test "parse/tcp — parse_syn extrait correctement les champs IPv4", ->
+  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  eth_dst = "\x11\x22\x33\x44\x55\x66"
+  frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x12345678
+  syn = parse_syn frame
+  assert syn != nil, "parse_syn retourne nil"
+  assert_eq syn.sport, 54321,       "sport"
+  assert_eq syn.dport, 80,          "dport"
+  assert_eq syn.seq,   0x12345678,  "seq"
+  assert_eq syn.ip_src, "192.168.1.10", "ip_src"
+  assert_eq syn.ip_dst, "10.0.0.1",    "ip_dst"
+  assert_eq syn.ip_ver, 4,           "ip_ver"
+  assert_eq syn.eth_src, eth_src,    "eth_src"
+  assert_eq syn.eth_dst, eth_dst,    "eth_dst"
+
+test "parse/tcp — parse_syn retourne nil sur trame trop courte", ->
+  result = parse_syn "trop court"
+  assert result == nil, "devrait retourner nil"
+
+test "parse/tcp — parse_syn retourne nil sur EtherType non IP", ->
+  -- Trame avec EtherType ARP (0x0806)
+  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  eth_dst = "\x11\x22\x33\x44\x55\x66"
+  bad = eth_dst .. eth_src .. string.char(0x08, 0x06) .. string.rep("\0", 46)
+  result = parse_syn bad
+  assert result == nil, "devrait retourner nil pour ARP"
+
+test "parse/tcp — inet_sum et fold_cksum sont cohérents", ->
+  -- Pseudo-paquet de 4 octets : 0x0102 0x0304
+  data = string.char(0x01, 0x02, 0x03, 0x04)
+  p = ffi.cast "const uint8_t*", data
+  s = inet_sum p, 0, 4
+  assert_eq s, 0x0102 + 0x0304, "somme brute"
+  ck = fold_cksum s
+  assert ck >= 0 and ck <= 0xFFFF, "checksum dans la plage uint16"
+
+test "parse/tcp — build_response_frames produit 3 trames non vides", ->
+  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  eth_dst = "\x11\x22\x33\x44\x55\x66"
+  frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
+  syn = parse_syn frame
+  assert syn != nil, "parse_syn prérequis"
+  f1, f2, f3 = build_response_frames syn, "https://10.0.0.1:33443/"
+  assert f1 and #f1 > 0, "SYN-ACK vide"
+  assert f2 and #f2 > 0, "DATA vide"
+  assert f3 and #f3 > 0, "FIN-ACK vide"
+
+test "parse/tcp — SYN-ACK a les flags SYN|ACK (0x12)", ->
+  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  eth_dst = "\x11\x22\x33\x44\x55\x66"
+  frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
+  syn = parse_syn frame
+  f1, _, _ = build_response_frames syn, "https://10.0.0.1:33443/"
+  p = ffi.cast "const uint8_t*", f1
+  -- Ethernet(14) + IPv4(20) = 34, TCP flags à offset 34+13 = 47
+  flags = p[47]
+  assert_eq flags, 0x12, "flags SYN-ACK"
+
+test "parse/tcp — DATA contient le corps HTTP 302", ->
+  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  eth_dst = "\x11\x22\x33\x44\x55\x66"
+  frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
+  syn = parse_syn frame
+  _, f2, _ = build_response_frames syn, "https://10.0.0.1:33443/"
+  -- Ethernet(14) + IPv4(20) + TCP(20) = 54
+  payload = f2\sub 55
+  assert payload\find("302 Found", 1, true), "302 Found absent du payload"
+  assert payload\find("Location:", 1, true), "Location absent du payload"
+
+test "parse/tcp — MACs inversées dans SYN-ACK", ->
+  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  eth_dst = "\x11\x22\x33\x44\x55\x66"
+  frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
+  syn = parse_syn frame
+  f1, _, _ = build_response_frames syn, "https://10.0.0.1:33443/"
+  -- Octets 0-5 = MAC dest (doit être eth_dst du SYN = eth_dst)
+  mac_d = f1\sub 1, 6
+  -- Octets 6-11 = MAC src (doit être eth_src du SYN = eth_src)
+  mac_s = f1\sub 7, 12
+  assert_eq mac_d, eth_dst, "MAC dst inversée"
+  assert_eq mac_s, eth_src, "MAC src inversée"
+
+-- ── Tests parse/ndpi avec eth_offset=14 (mode bridge) ────────────
+io.write "\n── parse/ndpi eth_offset=14 ──\n"
+
+ndpi_mod = require "parse/ndpi"
+
+-- Helper : ajoute un header Ethernet factice devant un paquet IP
+add_eth_header = (ip_pkt) ->
+  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  eth_dst = "\x11\x22\x33\x44\x55\x66"
+  ethertype = string.char(0x08, 0x00)
+  eth_src .. eth_dst .. ethertype .. ip_pkt
+
+test "parse/ndpi — parse_packet(raw, 0) OK sans en-tête Ethernet", ->
+  dns = make_dns "\x03www\x08facebook\x03com\0", 1, false
+  raw = make_ipv4_udp_dns "1.2.3.4", "8.8.8.8", 12345, 53, dns
+  pkt, status = ndpi_mod.parse_packet raw, 0
+  assert pkt != nil, "parse_packet retourne nil : #{tostring status}"
+  assert_eq pkt.ip.src_ip, "1.2.3.4", "src_ip"
+  assert_eq pkt.l4.dst_port, 53,       "dst_port DNS"
+
+test "parse/ndpi — parse_packet(raw, 14) OK avec en-tête Ethernet (mode bridge)", ->
+  dns = make_dns "\x03www\x08facebook\x03com\0", 1, false
+  ip_pkt = make_ipv4_udp_dns "1.2.3.4", "8.8.8.8", 12345, 53, dns
+  raw = add_eth_header ip_pkt
+  pkt, status = ndpi_mod.parse_packet raw, 14
+  assert pkt != nil, "parse_packet(eth_offset=14) retourne nil : #{tostring status}"
+  assert_eq pkt.ip.src_ip, "1.2.3.4", "src_ip avec eth_offset=14"
+  assert_eq pkt.l4.dst_port, 53,       "dst_port DNS avec eth_offset=14"
+
+test "parse/ndpi — parse_packet(raw, 14) retourne nil sans eth_offset sur trame bridge", ->
+  dns = make_dns "\x03www\x08facebook\x03com\0", 1, false
+  ip_pkt = make_ipv4_udp_dns "1.2.3.4", "8.8.8.8", 12345, 53, dns
+  raw = add_eth_header ip_pkt
+  -- Sans eth_offset, le parser voit l'en-tête Ethernet comme IP → doit échouer
+  pkt, _ = ndpi_mod.parse_packet raw, 0
+  assert pkt == nil, "devrait retourner nil sans eth_offset sur trame bridge"
+
+test "parse/ndpi — eth_offset=14 produit les mêmes champs IP que sans offset", ->
+  dns = make_dns "\x03www\x08facebook\x03com\0", 1, false
+  ip_pkt = make_ipv4_udp_dns "10.0.0.5", "1.1.1.1", 9999, 53, dns
+  raw_ip  = ip_pkt
+  raw_eth = add_eth_header ip_pkt
+  pkt1, _ = ndpi_mod.parse_packet raw_ip,  0
+  pkt2, _ = ndpi_mod.parse_packet raw_eth, 14
+  assert pkt1 != nil and pkt2 != nil, "les deux parsings doivent réussir"
+  assert_eq pkt1.ip.src_ip, pkt2.ip.src_ip, "src_ip"
+  assert_eq pkt1.ip.dst_ip, pkt2.ip.dst_ip, "dst_ip"
+  assert_eq pkt1.l4.src_port, pkt2.l4.src_port, "src_port"
+  assert_eq pkt1.dns.txid,    pkt2.dns.txid,    "dns txid"
 
 
 io.write string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed)

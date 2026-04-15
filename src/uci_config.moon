@@ -112,7 +112,6 @@ generate_config = (cfg) ->
     'local NFT_TABLE              = "dns-filter"'
     'local NFT_SET_IP4            = "ip4_allowed"'
     'local NFT_SET_IP6            = "ip6_allowed"'
-    "local IPC_MSG_SIZE           = 27"
     "local DNS_PORT               = 53"
     "local AF_INET                = 2"
     "local AF_INET6               = 10"
@@ -128,7 +127,7 @@ generate_config = (cfg) ->
   for k in *{
       "QUEUE_QUESTIONS", "QUEUE_RESPONSES", "DOCKER_MODE",
       "ALLOWED_DOMAINS", "NFT_TABLE", "NFT_SET_IP4", "NFT_SET_IP6",
-      "NFT_IP_TIMEOUT", "IPC_MSG_SIZE", "IPC_PENDING_TTL", "CLIENT_EXPIRY",
+      "NFT_IP_TIMEOUT", "IPC_PENDING_TTL", "CLIENT_EXPIRY",
       "NEIGH_REFRESH_COOLDOWN", "FORCED_TTL", "DNS_PORT", "AF_INET",
       "AF_INET6", "PROTO_UDP"
     }

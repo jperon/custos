@@ -16,10 +16,11 @@ local AF_INET = 2
 local AF_INET6 = 10
 local DNS_PORT = 53
 local DOCKER_MODE = false
+local BRIDGE_MODE = false
 local ALLOWED_DOMAINS = { }
-local IPC_MSG_SIZE = 27
 local IPC_PENDING_TTL = 5
 local CLIENT_EXPIRY = 300
+local QUEUE_CAPTIVE = 2
 package.loaded["config"] = {
   PROTO_TCP = PROTO_TCP,
   PROTO_UDP = PROTO_UDP,
@@ -27,10 +28,28 @@ package.loaded["config"] = {
   AF_INET6 = AF_INET6,
   DNS_PORT = DNS_PORT,
   DOCKER_MODE = DOCKER_MODE,
+  BRIDGE_MODE = BRIDGE_MODE,
   ALLOWED_DOMAINS = ALLOWED_DOMAINS,
-  IPC_MSG_SIZE = IPC_MSG_SIZE,
   IPC_PENDING_TTL = IPC_PENDING_TTL,
-  CLIENT_EXPIRY = CLIENT_EXPIRY
+  CLIENT_EXPIRY = CLIENT_EXPIRY,
+  QUEUE_CAPTIVE = QUEUE_CAPTIVE
+}
+package.loaded["parse/ethernet"] = {
+  ETH_OFFSET = 0,
+  get_l2 = function()
+    return {
+      mac_src = "00:00:00:00:00:00",
+      mac_raw = "\0\0\0\0\0\0",
+      in_ifindex = 0,
+      vlan = nil
+    }
+  end,
+  format_mac = function()
+    return "00:00:00:00:00:00"
+  end,
+  format_mac_ptr = function()
+    return "00:00:00:00:00:00"
+  end
 }
 local passed, failed = 0, 0
 local eq
@@ -339,6 +358,44 @@ end)
 test("format_ipv4", function()
   local s = "\xC0\xA8\x01\x01"
   return assert_eq(format_ipv4(s, 1), "192.168.1.1", "format")
+end)
+test("nft_add_helper retries and succeeds", function()
+  local cfg = package.loaded["config"]
+  cfg.NFT_ADD_RETRY_COUNT = 3
+  cfg.NFT_ADD_BACKOFF_MS = {
+    1,
+    1,
+    1
+  }
+  local helper = dofile("lua/nft_add_helper.lua")
+  local calls = 0
+  local fn
+  fn = function()
+    calls = calls + 1
+    return calls >= 2
+  end
+  local ok = helper.try_add_with_retries(fn)
+  assert_eq(ok, true, "should succeed after retry")
+  return assert_eq(calls, 2, "should have been retried once")
+end)
+test("nft_add_helper returns false after retries", function()
+  local cfg = package.loaded["config"]
+  cfg.NFT_ADD_RETRY_COUNT = 3
+  cfg.NFT_ADD_BACKOFF_MS = {
+    1,
+    1,
+    1
+  }
+  local helper = dofile("lua/nft_add_helper.lua")
+  local calls = 0
+  local fn
+  fn = function()
+    calls = calls + 1
+    return false
+  end
+  local ok = helper.try_add_with_retries(fn)
+  assert_eq(ok, false, "should fail after all retries")
+  return assert_eq(calls, 3, "should have been called NFT_ADD_RETRY_COUNT times")
 end)
 test("parse_ipv4 — paquet UDP minimal", function()
   local dns = make_dns("\3www\6github\3com\0", 1, false)
@@ -659,50 +716,58 @@ local decode_msg = m_ipc.decode_msg
 local make_key = m_ipc.make_key
 test("encode/decode IPv4 round-trip", function()
   local ip_raw = "\xC0\xA8\x01\x2A"
+  local resolver_raw = "\x01\x01\x01\x03"
   local mac_raw = "\xAA\xBB\xCC\xDD\xEE\xFF"
   local txid = 0x1234
   local port = 54321
-  local msg = encode_msg(txid, ip_raw, port, mac_raw)
-  assert_eq(#msg, 27, "taille message = 27")
+  local msg = encode_msg(txid, ip_raw, port, mac_raw, resolver_raw)
+  assert_eq(#msg, 43, "taille message = 43")
   local decoded = decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.txid, txid, "txid")
   assert_eq(decoded.src_port, port, "port")
   assert_eq(decoded.ip_str, "192.168.1.42", "ip_str")
+  assert_eq(decoded.resolver_ip_str, "1.1.1.3", "resolver_ip_str")
   assert_eq(decoded.msg_type, 0x41, "type IPv4")
   return assert_eq(decoded.mac_str, "aa:bb:cc:dd:ee:ff", "mac_str")
 end)
 test("encode/decode IPv4 round-trip sans MAC (nil)", function()
   local ip_raw = "\xC0\xA8\x01\x2A"
-  local msg = encode_msg(0x1234, ip_raw, 54321, nil)
-  assert_eq(#msg, 27, "taille message = 27 meme sans MAC")
+  local resolver_raw = "\x01\x01\x01\x01"
+  local msg = encode_msg(0x1234, ip_raw, 54321, nil, resolver_raw)
+  assert_eq(#msg, 43, "taille message = 43 meme sans MAC")
   local decoded = decode_msg(msg)
   assert(decoded, "decode_msg nil")
+  assert_eq(decoded.resolver_ip_str, "1.1.1.1", "resolver_ip_str")
   return assert_eq(decoded.mac_str, "00:00:00:00:00:00", "mac zeros si nil")
 end)
 test("encode/decode IPv6 round-trip", function()
   local ip_raw = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+  local resolver_raw = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x53"
   local mac_raw = "\x00\x11\x22\x33\x44\x55"
   local txid = 0xABCD
   local port = 5353
-  local msg = encode_msg(txid, ip_raw, port, mac_raw)
-  assert_eq(#msg, 27, "taille message = 27")
+  local msg = encode_msg(txid, ip_raw, port, mac_raw, resolver_raw)
+  assert_eq(#msg, 43, "taille message = 43")
   local decoded = decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.txid, txid, "txid")
   assert_eq(decoded.src_port, port, "port")
   assert_eq(decoded.ip_str, "2001:db8::1", "ip_str")
+  assert_eq(decoded.resolver_ip_str, "2001:db8::53", "resolver_ip_str")
   assert_eq(decoded.msg_type, 0x36, "type IPv6")
   return assert_eq(decoded.mac_str, "00:11:22:33:44:55", "mac_str")
 end)
 test("make_key — unicité", function()
-  local k1 = make_key(0x1234, "192.168.1.1", 53)
-  local k2 = make_key(0x1234, "192.168.1.2", 53)
-  local k3 = make_key(0x5678, "192.168.1.1", 53)
+  local k1 = make_key(0x1234, "192.168.1.1", 53, "1.1.1.1")
+  local k2 = make_key(0x1234, "192.168.1.2", 53, "1.1.1.1")
+  local k3 = make_key(0x5678, "192.168.1.1", 53, "1.1.1.1")
+  local k4 = make_key(0x1234, "192.168.1.1", 53, "1.1.1.3")
   assert((k1 ~= k2), "ip différentes → clés différentes")
-  return assert((k1 ~= k3), "txid différents → clés différentes")
+  assert((k1 ~= k3), "txid différents → clés différentes")
+  return assert((k1 ~= k4), "resolver différents → clés différentes")
 end)
-test("drain_pipe — lit IPC_MSG_SIZE=27 octets sans overflow", function()
+test("drain_pipe — lit IPC_MSG_SIZE=43 octets sans overflow", function()
   pcall(ffi.cdef, [[    int pipe2(int pipefd[2], int flags);
     int fcntl(int fd, int cmd, ...);
     int close(int fd);
@@ -720,14 +785,15 @@ test("drain_pipe — lit IPC_MSG_SIZE=27 octets sans overflow", function()
   package.loaded["ipc"] = nil
   local m2 = dofile("lua/ipc.lua")
   local ip_raw2 = "\xC0\xA8\x02\x01"
+  local resolver_raw2 = "\x01\x01\x01\x03"
   local mac_raw2 = "\xDE\xAD\xBE\xEF\x00\x01"
   local txid2, port2 = 0xBEEF, 12345
-  local ok = m2.write_msg(wfd, txid2, ip_raw2, port2, mac_raw2)
+  local ok = m2.write_msg(wfd, txid2, ip_raw2, port2, mac_raw2, resolver_raw2)
   assert(ok, "write_msg failed")
   ffi.C.close(wfd)
   m2.drain_pipe(rfd, os.time)
   ffi.C.close(rfd)
-  return assert((m2.is_pending(txid2, "192.168.2.1", port2, os.time)), "message absent de pending après drain_pipe")
+  return assert((m2.is_pending(txid2, "192.168.2.1", port2, "1.1.1.3", os.time)), "message absent de pending après drain_pipe")
 end)
 test("ipc — token expiré est rejeté (purge paresseuse)", function()
   package.loaded["ipc"] = nil
@@ -738,17 +804,18 @@ test("ipc — token expiré est rejeté (purge paresseuse)", function()
   local wfd3 = pipefd3[1]
   ffi.C.fcntl(rfd3, 4, 2048)
   local ip_raw3 = "\x0A\x00\x00\x01"
+  local resolver_raw3 = "\x01\x01\x01\x01"
   local txid3, port3 = 0x1111, 9999
-  m3.write_msg(wfd3, txid3, ip_raw3, port3)
+  m3.write_msg(wfd3, txid3, ip_raw3, port3, nil, resolver_raw3)
   ffi.C.close(wfd3)
   m3.drain_pipe(rfd3, function()
     return 0
   end)
   ffi.C.close(rfd3)
-  assert((m3.is_pending(txid3, "10.0.0.1", port3, function()
+  assert((m3.is_pending(txid3, "10.0.0.1", port3, "1.1.1.1", function()
     return 4
   end)), "token devrait être valide à t=4")
-  return assert((not m3.is_pending(txid3, "10.0.0.1", port3, function()
+  return assert((not m3.is_pending(txid3, "10.0.0.1", port3, "1.1.1.1", function()
     return 6
   end)), "token expiré doit être rejeté à t=6")
 end)
@@ -1140,8 +1207,9 @@ end)
 io.write("\n── ipc refused ──\n")
 test("encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", function()
   local ip_raw = "\xC0\xA8\x01\x2A"
-  local msg = m_ipc.encode_msg(0x1234, ip_raw, 54321, nil, true, false)
-  assert_eq(#msg, 27, "taille = 27")
+  local resolver_raw = "\x01\x01\x01\x03"
+  local msg = m_ipc.encode_msg(0x1234, ip_raw, 54321, nil, resolver_raw, true, false)
+  assert_eq(#msg, 43, "taille = 43")
   local decoded = m_ipc.decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.msg_type, m_ipc.MSG_IPV4_REFUSED, "msg_type = MSG_IPV4_REFUSED")
@@ -1150,7 +1218,8 @@ test("encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", function()
 end)
 test("decode_msg MSG_IPV6_REFUSED (0x72) → refused=true, ipv4=false", function()
   local ip6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
-  local msg = m_ipc.encode_msg(0xABCD, ip6_raw, 5353, nil, true, false)
+  local resolver6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x53"
+  local msg = m_ipc.encode_msg(0xABCD, ip6_raw, 5353, nil, resolver6_raw, true, false)
   local decoded = m_ipc.decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.refused, true, "refused = true")
@@ -1159,8 +1228,9 @@ test("decode_msg MSG_IPV6_REFUSED (0x72) → refused=true, ipv4=false", function
 end)
 test("encode_msg dnsonly=true IPv4 → MSG_IPV4_DNSONLY (0x44)", function()
   local ip_raw = "\xC0\xA8\x01\x2A"
-  local msg = m_ipc.encode_msg(0x1234, ip_raw, 54321, nil, false, true)
-  assert_eq(#msg, 27, "taille = 27")
+  local resolver_raw = "\x01\x01\x01\x03"
+  local msg = m_ipc.encode_msg(0x1234, ip_raw, 54321, nil, resolver_raw, false, true)
+  assert_eq(#msg, 43, "taille = 43")
   local decoded = m_ipc.decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.msg_type, m_ipc.MSG_IPV4_DNSONLY, "msg_type = MSG_IPV4_DNSONLY (0x44)")
@@ -1170,7 +1240,8 @@ test("encode_msg dnsonly=true IPv4 → MSG_IPV4_DNSONLY (0x44)", function()
 end)
 test("encode_msg dnsonly=true IPv6 → MSG_IPV6_DNSONLY (0x64)", function()
   local ip6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
-  local msg = m_ipc.encode_msg(0xABCD, ip6_raw, 5353, nil, false, true)
+  local resolver6_raw = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x53"
+  local msg = m_ipc.encode_msg(0xABCD, ip6_raw, 5353, nil, resolver6_raw, false, true)
   local decoded = m_ipc.decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.msg_type, m_ipc.MSG_IPV6_DNSONLY, "msg_type = MSG_IPV6_DNSONLY (0x64)")
@@ -1186,14 +1257,15 @@ test("write_dnsonly_msg + drain_pipe + get_pending_entry → entry.dnsonly = tru
   local rfd_dn, wfd_dn = pfd[0], pfd[1]
   ffi.C.fcntl(rfd_dn, 4, 2048)
   local ip_dn = "\x06\x06\x06\x06"
-  local ok = m_dn.write_dnsonly_msg(wfd_dn, 0xAAAA, ip_dn, 6666)
+  local resolver_dn = "\x01\x01\x01\x03"
+  local ok = m_dn.write_dnsonly_msg(wfd_dn, 0xAAAA, ip_dn, 6666, nil, resolver_dn)
   assert(ok, "write_dnsonly_msg failed")
   ffi.C.close(wfd_dn)
   m_dn.drain_pipe(rfd_dn, function()
     return 0
   end)
   ffi.C.close(rfd_dn)
-  local entry = m_dn.get_pending_entry(0xAAAA, "6.6.6.6", 6666, function()
+  local entry = m_dn.get_pending_entry(0xAAAA, "6.6.6.6", 6666, "1.1.1.3", function()
     return 0
   end)
   assert(entry, "get_pending_entry retourne nil")
@@ -1208,14 +1280,15 @@ test("write_refused_msg + drain_pipe + get_pending_entry → entry.refused = tru
   local rfd5, wfd5 = pfd[0], pfd[1]
   ffi.C.fcntl(rfd5, 4, 2048)
   local ip5 = "\x05\x05\x05\x05"
-  local ok = m_rip.write_refused_msg(wfd5, 0x9999, ip5, 5555)
+  local resolver5 = "\x01\x01\x01\x01"
+  local ok = m_rip.write_refused_msg(wfd5, 0x9999, ip5, 5555, nil, resolver5)
   assert(ok, "write_refused_msg failed")
   ffi.C.close(wfd5)
   m_rip.drain_pipe(rfd5, function()
     return 0
   end)
   ffi.C.close(rfd5)
-  local entry = m_rip.get_pending_entry(0x9999, "5.5.5.5", 5555, function()
+  local entry = m_rip.get_pending_entry(0x9999, "5.5.5.5", 5555, "1.1.1.1", function()
     return 0
   end)
   assert(entry, "get_pending_entry retourne nil")
@@ -2967,6 +3040,149 @@ test("filter/convert — commentaires et lignes vides ignorés", function()
   assert(#data == 8, "un seul hash attendu (github.com uniquement), got " .. tostring(#data) .. " octets")
   os.remove(CONV_INPUT)
   return os.remove(CONV_OUTPUT)
+end)
+io.write("\n── parse/tcp ──\n")
+local tcp_mod = require("parse/tcp")
+local parse_syn, build_response_frames, r16, r32, w16, w32, inet_sum, fold_cksum
+parse_syn, build_response_frames, r16, r32, w16, w32, inet_sum, fold_cksum = tcp_mod.parse_syn, tcp_mod.build_response_frames, tcp_mod.r16, tcp_mod.r32, tcp_mod.w16, tcp_mod.w32, tcp_mod.inet_sum, tcp_mod.fold_cksum
+local make_eth_syn
+make_eth_syn = function(eth_src, eth_dst, src_ip, dst_ip, sport, dport, seq)
+  local ip4bytes
+  ip4bytes = function(s)
+    local a, b, c, d = s:match("(%d+)%.(%d+)%.(%d+)%.(%d+)")
+    return string.char(tonumber(a), tonumber(b), tonumber(c), tonumber(d))
+  end
+  local eth = eth_dst .. eth_src .. string.char(0x08, 0x00)
+  local total_len = 20 + 20
+  local ip = string.char(0x45, 0, bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF), 0, 1, 0, 0, 64, PROTO_TCP, 0, 0) .. ip4bytes(src_ip) .. ip4bytes(dst_ip)
+  local tcp = string.char(bit.rshift(bit.band(sport, 0xFF00), 8), bit.band(sport, 0xFF), bit.rshift(bit.band(dport, 0xFF00), 8), bit.band(dport, 0xFF), bit.rshift(bit.band(seq, 0xFF000000), 24), bit.rshift(bit.band(seq, 0xFF0000), 16), bit.rshift(bit.band(seq, 0xFF00), 8), bit.band(seq, 0xFF), 0, 0, 0, 0, 0x50, 0x02, 0xFF, 0xFF, 0, 0, 0, 0)
+  return eth .. ip .. tcp
+end
+test("parse/tcp — parse_syn extrait correctement les champs IPv4", function()
+  local eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  local eth_dst = "\x11\x22\x33\x44\x55\x66"
+  local frame = make_eth_syn(eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x12345678)
+  local syn = parse_syn(frame)
+  assert(syn ~= nil, "parse_syn retourne nil")
+  assert_eq(syn.sport, 54321, "sport")
+  assert_eq(syn.dport, 80, "dport")
+  assert_eq(syn.seq, 0x12345678, "seq")
+  assert_eq(syn.ip_src, "192.168.1.10", "ip_src")
+  assert_eq(syn.ip_dst, "10.0.0.1", "ip_dst")
+  assert_eq(syn.ip_ver, 4, "ip_ver")
+  assert_eq(syn.eth_src, eth_src, "eth_src")
+  return assert_eq(syn.eth_dst, eth_dst, "eth_dst")
+end)
+test("parse/tcp — parse_syn retourne nil sur trame trop courte", function()
+  local result = parse_syn("trop court")
+  return assert(result == nil, "devrait retourner nil")
+end)
+test("parse/tcp — parse_syn retourne nil sur EtherType non IP", function()
+  local eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  local eth_dst = "\x11\x22\x33\x44\x55\x66"
+  local bad = eth_dst .. eth_src .. string.char(0x08, 0x06) .. string.rep("\0", 46)
+  local result = parse_syn(bad)
+  return assert(result == nil, "devrait retourner nil pour ARP")
+end)
+test("parse/tcp — inet_sum et fold_cksum sont cohérents", function()
+  local data = string.char(0x01, 0x02, 0x03, 0x04)
+  local p = ffi.cast("const uint8_t*", data)
+  local s = inet_sum(p, 0, 4)
+  assert_eq(s, 0x0102 + 0x0304, "somme brute")
+  local ck = fold_cksum(s)
+  return assert(ck >= 0 and ck <= 0xFFFF, "checksum dans la plage uint16")
+end)
+test("parse/tcp — build_response_frames produit 3 trames non vides", function()
+  local eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  local eth_dst = "\x11\x22\x33\x44\x55\x66"
+  local frame = make_eth_syn(eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000)
+  local syn = parse_syn(frame)
+  assert(syn ~= nil, "parse_syn prérequis")
+  local f1, f2, f3 = build_response_frames(syn, "https://10.0.0.1:33443/")
+  assert(f1 and #f1 > 0, "SYN-ACK vide")
+  assert(f2 and #f2 > 0, "DATA vide")
+  return assert(f3 and #f3 > 0, "FIN-ACK vide")
+end)
+test("parse/tcp — SYN-ACK a les flags SYN|ACK (0x12)", function()
+  local eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  local eth_dst = "\x11\x22\x33\x44\x55\x66"
+  local frame = make_eth_syn(eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000)
+  local syn = parse_syn(frame)
+  local f1, _
+  f1, _, _ = build_response_frames(syn, "https://10.0.0.1:33443/")
+  local p = ffi.cast("const uint8_t*", f1)
+  local flags = p[47]
+  return assert_eq(flags, 0x12, "flags SYN-ACK")
+end)
+test("parse/tcp — DATA contient le corps HTTP 302", function()
+  local eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  local eth_dst = "\x11\x22\x33\x44\x55\x66"
+  local frame = make_eth_syn(eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000)
+  local syn = parse_syn(frame)
+  local _, f2
+  _, f2, _ = build_response_frames(syn, "https://10.0.0.1:33443/")
+  local payload = f2:sub(55)
+  assert(payload:find("302 Found", 1, true), "302 Found absent du payload")
+  return assert(payload:find("Location:", 1, true), "Location absent du payload")
+end)
+test("parse/tcp — MACs inversées dans SYN-ACK", function()
+  local eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  local eth_dst = "\x11\x22\x33\x44\x55\x66"
+  local frame = make_eth_syn(eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000)
+  local syn = parse_syn(frame)
+  local f1, _
+  f1, _, _ = build_response_frames(syn, "https://10.0.0.1:33443/")
+  local mac_d = f1:sub(1, 6)
+  local mac_s = f1:sub(7, 12)
+  assert_eq(mac_d, eth_dst, "MAC dst inversée")
+  return assert_eq(mac_s, eth_src, "MAC src inversée")
+end)
+io.write("\n── parse/ndpi eth_offset=14 ──\n")
+local ndpi_mod = require("parse/ndpi")
+local add_eth_header
+add_eth_header = function(ip_pkt)
+  local eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+  local eth_dst = "\x11\x22\x33\x44\x55\x66"
+  local ethertype = string.char(0x08, 0x00)
+  return eth_src .. eth_dst .. ethertype .. ip_pkt
+end
+test("parse/ndpi — parse_packet(raw, 0) OK sans en-tête Ethernet", function()
+  local dns = make_dns("\x03www\x08facebook\x03com\0", 1, false)
+  local raw = make_ipv4_udp_dns("1.2.3.4", "8.8.8.8", 12345, 53, dns)
+  local pkt, status = ndpi_mod.parse_packet(raw, 0)
+  assert(pkt ~= nil, "parse_packet retourne nil : " .. tostring(tostring(status)))
+  assert_eq(pkt.ip.src_ip, "1.2.3.4", "src_ip")
+  return assert_eq(pkt.l4.dst_port, 53, "dst_port DNS")
+end)
+test("parse/ndpi — parse_packet(raw, 14) OK avec en-tête Ethernet (mode bridge)", function()
+  local dns = make_dns("\x03www\x08facebook\x03com\0", 1, false)
+  local ip_pkt = make_ipv4_udp_dns("1.2.3.4", "8.8.8.8", 12345, 53, dns)
+  local raw = add_eth_header(ip_pkt)
+  local pkt, status = ndpi_mod.parse_packet(raw, 14)
+  assert(pkt ~= nil, "parse_packet(eth_offset=14) retourne nil : " .. tostring(tostring(status)))
+  assert_eq(pkt.ip.src_ip, "1.2.3.4", "src_ip avec eth_offset=14")
+  return assert_eq(pkt.l4.dst_port, 53, "dst_port DNS avec eth_offset=14")
+end)
+test("parse/ndpi — parse_packet(raw, 14) retourne nil sans eth_offset sur trame bridge", function()
+  local dns = make_dns("\x03www\x08facebook\x03com\0", 1, false)
+  local ip_pkt = make_ipv4_udp_dns("1.2.3.4", "8.8.8.8", 12345, 53, dns)
+  local raw = add_eth_header(ip_pkt)
+  local pkt, _ = ndpi_mod.parse_packet(raw, 0)
+  return assert(pkt == nil, "devrait retourner nil sans eth_offset sur trame bridge")
+end)
+test("parse/ndpi — eth_offset=14 produit les mêmes champs IP que sans offset", function()
+  local dns = make_dns("\x03www\x08facebook\x03com\0", 1, false)
+  local ip_pkt = make_ipv4_udp_dns("10.0.0.5", "1.1.1.1", 9999, 53, dns)
+  local raw_ip = ip_pkt
+  local raw_eth = add_eth_header(ip_pkt)
+  local pkt1, _ = ndpi_mod.parse_packet(raw_ip, 0)
+  local pkt2
+  pkt2, _ = ndpi_mod.parse_packet(raw_eth, 14)
+  assert(pkt1 ~= nil and pkt2 ~= nil, "les deux parsings doivent réussir")
+  assert_eq(pkt1.ip.src_ip, pkt2.ip.src_ip, "src_ip")
+  assert_eq(pkt1.ip.dst_ip, pkt2.ip.dst_ip, "dst_ip")
+  assert_eq(pkt1.l4.src_port, pkt2.l4.src_port, "src_port")
+  return assert_eq(pkt1.dns.txid, pkt2.dns.txid, "dns txid")
 end)
 io.write(string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed))
 return os.exit(failed == 0 and 0 or 1)

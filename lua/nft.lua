@@ -21,10 +21,12 @@ local run_cmd
 run_cmd = function(cmd)
   local rc = libnft.nft_run_cmd_from_buffer(ctx, cmd)
   if rc ~= 0 then
+    local ts = os.time()
     log_warn({
       action = "nft_cmd_failed",
       cmd = cmd,
-      rc = rc
+      rc = rc,
+      ts = ts
     })
     return false
   end

@@ -74,6 +74,28 @@ Les explications détaillées et l'architecture restent dans `README.md`.
 - Update lists: `make update-lists`
 - Logs: `make logs`
 
+## Domainlists / Customlists
+
+- Config source:
+  - Fichier principal: `cfg/filter.yml` (ou `/etc/custos/filter.yml` sur OpenWrt)
+  - Champs utiles: `sources`, `domainlists_dir`, `custom_lists_dir`
+
+- Mettre à jour les listes (Debian/dev machine):
+  - `make update-lists`
+  - Equivalent direct:
+    - `LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/filter/updater.lua --config cfg/filter.yml`
+
+- Mettre à jour les listes (OpenWrt):
+  - `ssh root@<routeur> 'custos-update'`
+  - Le script utilise `/etc/custos/filter.yml` et recharge les listes compilées.
+
+- Custom lists (workflow):
+  1. Déposer des fichiers `.txt` dans `custom_lists_dir` (1 domaine par ligne, `#` pour commentaires).
+  2. Lancer la mise à jour (`make update-lists` ou `custos-update`).
+  3. Recharger le service si nécessaire:
+     - Debian: `make reload`
+     - OpenWrt: `ssh root@<routeur> '/etc/init.d/custos reload'`
+
 ## Tests (selection rapide)
 
 - Unitaires: `make test`

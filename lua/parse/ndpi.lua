@@ -413,12 +413,17 @@ fix_tcp6_cksum = function(buf, pkt_len, l4_off)
   return w16(buf, tcp_off + 16, cksum)
 end
 local parse_packet
-parse_packet = function(raw)
+parse_packet = function(raw, eth_offset)
+  if eth_offset == nil then
+    eth_offset = 0
+  end
   local len = #raw
-  if len < 20 then
+  if len < eth_offset + 20 then
     return nil
   end
-  local p = ffi.cast("const uint8_t*", raw)
+  local p_base = ffi.cast("const uint8_t*", raw)
+  local p = p_base + eth_offset
+  len = len - eth_offset
   local ver = bit.rshift(p[0], 4)
   local ip
   if ver == 4 then

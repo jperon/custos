@@ -505,7 +505,7 @@ service_triggers() {
     install_updater = function(self)
       step("Script de mise à jour des listes (custos-update)")
       local script = [[#!/bin/sh
-CUSTOS_DIR=]] .. self.cfg.dest .. [[
+CUSTOS_DIR=]] .. self.cfg.dest .. "\n" .. [[
 CONFIG=/etc/custos/filter.yml
 PID_FILE=/var/run/custos.pid
 

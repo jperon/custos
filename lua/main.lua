@@ -3,6 +3,8 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
+local BRIDGE_MODE
+BRIDGE_MODE = require("config").BRIDGE_MODE
 local log_info, log_warn, log_error
 do
   local _obj_0 = require("log")
@@ -137,6 +139,17 @@ supervise = function(pipe, sfd)
       end
     }
   }
+  if BRIDGE_MODE then
+    workers[#workers + 1] = {
+      name = "Q2-captive",
+      pid = nil,
+      restart_fn = function()
+        return fork_worker("Q2-captive", (function()
+          return require("worker_q2").run(auth_cfg)
+        end), pipe.rfd)
+      end
+    }
+  end
   for _index_0 = 1, #workers do
     local w = workers[_index_0]
     w.pid = w.restart_fn()

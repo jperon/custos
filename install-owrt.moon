@@ -440,7 +440,7 @@ config custos 'main'
 
       script = [[
 #!/bin/sh
-CUSTOS_DIR=]] .. @cfg.dest .. [[
+CUSTOS_DIR=]] .. @cfg.dest .. "\n" .. [[
 
 CONFIG=/etc/custos/filter.yml
 PID_FILE=/var/run/custos.pid

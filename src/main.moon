@@ -6,7 +6,8 @@
 --
 --   main (superviseur)
 --   ├── worker Q0 (questions)   — écrit dans pipe_wfd
---   └── worker Q1 (réponses)   — lit depuis pipe_rfd
+--   ├── worker Q1 (réponses)    — lit depuis pipe_rfd
+--   └── worker Q2 (captif)      — mode bridge uniquement (BRIDGE_MODE=1)
 --
 -- Le superviseur ne traite aucun paquet. Il boucle sur waitpid()
 -- et relance le worker mort après un délai de 1 seconde.
@@ -23,6 +24,7 @@
 --     + la liste blanche IP via filter.reload())
 
 { :ffi, :libc } = require "ffi_defs"
+{ :BRIDGE_MODE } = require "config"
 { :log_info, :log_warn, :log_error } = require "log"
 
 -- ── Helpers POSIX ────────────────────────────────────────────────
@@ -58,10 +60,11 @@ create_signal_fd = ->
 -- ── Création du pipe IPC ─────────────────────────────────────────
 create_pipe = ->
   fds = ffi.new "int[2]"
-  -- pipe2 avec O_NONBLOCK (2048) sur le fd de lecture pour que drain_pipe()
-  -- dans Q1 soit non-bloquant. Plus fiable que pipe+fcntl avec LuaJIT FFI.
+  -- Pipe non-bloquant : évite de bloquer Q0 dans la callback NFQUEUE en cas
+  -- de backpressure IPC. Les write IPC gèrent EAGAIN avec retry borné.
   rc = libc.pipe2 fds, 2048
   error "pipe2() échoué" if rc != 0
+
   { rfd: fds[0], wfd: fds[1] }
 
 -- ── Fork d'un worker ─────────────────────────────────────────────
@@ -157,6 +160,16 @@ supervise = (pipe, sfd) ->
         pipe.rfd
     }
   }
+
+  -- En mode bridge, ajouter le worker Q2 (portail captif par forge TCP).
+  if BRIDGE_MODE
+    workers[#workers + 1] = {
+      name:       "Q2-captive"
+      pid:        nil
+      restart_fn: -> fork_worker "Q2-captive",
+        (-> require("worker_q2").run auth_cfg),
+        pipe.rfd   -- fd factice
+    }
 
   for w in *workers
     w.pid = w.restart_fn!

@@ -5,6 +5,13 @@
 -- ── Queues NFQUEUE ──────────────────────────────────────────────
 QUEUE_QUESTIONS = 0   -- UDP/53 src LAN  (questions sortantes)
 QUEUE_RESPONSES = 1   -- UDP/53 dst LAN  (réponses entrantes)
+QUEUE_CAPTIVE   = 2   -- TCP SYN/80 non autorisés (mode bridge uniquement)
+
+-- ── Mode bridge ──────────────────────────────────────────────────
+-- When running in bridge mode (table bridge nft ruleset), NFQUEUE delivers
+-- full Ethernet frames to the workers (eth_offset = 14 bytes to IP header).
+-- In router mode (table ip/ip6), only the IP packet is delivered (eth_offset = 0).
+BRIDGE_MODE = os.getenv("BRIDGE_MODE") == "1"
 
 -- ── Docker mode ──────────────────────────────────────────────────
 -- When running inside Docker, dnsmasq runs on the filter container itself.
@@ -56,12 +63,20 @@ NFT_SET_MAC4   = "mac4_allowed"   -- ether_addr . ipv4_addr (client MAC + dest I
 NFT_SET_MAC6   = "mac6_allowed"   -- ether_addr . ipv6_addr (client MAC + dest IPv6)
 NFT_IP_TIMEOUT = "2m"             -- durée de vie des IPs dans les sets
 
--- ── Pipe IPC Q0 → Q1 ────────────────────────────────────────────
--- Taille du message binaire (voir ipc.moon)
-IPC_MSG_SIZE = 27   -- 1B type + 2B txid + 16B ip (IPv4 zero-padé) + 2B port + 6B MAC
+-- ── Politique et retry pour les insertions dynamiques dans nft
+NFT_ADD_RETRY_COUNT = 3
+NFT_ADD_BACKOFF_MS = {20, 50, 100}
+NFT_ADD_FAILURE_POLICY = "fail-closed"  -- options: "fail-open" or "fail-closed"
 
+-- ── Pipe IPC Q0 → Q1 ────────────────────────────────────────────
 -- Durée de vie d'une transaction en attente de réponse (secondes)
 IPC_PENDING_TTL = 5
+
+-- Retry borné de corrélation IPC côté Q1 (anti-course Q0→Q1)
+-- Chemin miss uniquement : pas de busy wait (nanosleep entre tentatives)
+IPC_MATCH_RETRY_ENABLED = true
+IPC_MATCH_RETRY_COUNT = 5
+IPC_MATCH_RETRY_SLEEP_MS = 20
 
 -- ── Client tracking ─────────────────────────────────────────────
 -- Durée en secondes sans activité DNS avant qu'un client soit purgé
@@ -90,11 +105,15 @@ AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
 
 -- ── Export ──────────────────────────────────────────────────────
 {
-  :QUEUE_QUESTIONS, :QUEUE_RESPONSES
+  :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE
+  :BRIDGE_MODE
   :DOCKER_MODE
   :ALLOWED_DOMAINS
   :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
-  :IPC_MSG_SIZE, :IPC_PENDING_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN
+  :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY
+  :IPC_PENDING_TTL
+  :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS
+  :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN
   :FORCED_TTL
   :DNS_PORT, :AF_INET, :AF_INET6, :PROTO_UDP
   :AUTH_SESSIONS_FILE

@@ -12,7 +12,7 @@
 
 { :ffi, :libnfq } = require "ffi_defs"
 { :QUEUE_QUESTIONS }     = require "config"
-{ :get_l2 }              = require "parse/ethernet"
+{ :get_l2, :ETH_OFFSET } = require "parse/ethernet"
 ndpi                     = require "parse/ndpi"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
@@ -27,9 +27,6 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- Rechargement filtre si SIGHUP reçu
   filter.reload!
 
-  -- ── L2 ───────────────────────────────────────────────────────
-  l2 = get_l2 nfad
-
   -- ── Payload brut ─────────────────────────────────────────────
   payload_ptr = ffi.new "unsigned char*[1]"
   payload_len = libnfq.nfq_get_payload nfad, payload_ptr
@@ -37,8 +34,12 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 
   raw = ffi.string payload_ptr[0], payload_len
 
+  -- ── L2 ───────────────────────────────────────────────────────
+  -- En mode bridge, raw est passé à get_l2 pour extraire la MAC depuis la trame.
+  l2 = get_l2 nfad, raw
+
   -- ── L3 / L4 / L7 ─────────────────────────────────────────────
-  pkt, parse_status = ndpi.parse_packet raw
+  pkt, parse_status = ndpi.parse_packet raw, ETH_OFFSET
   unless pkt
     -- TCP segments arriving before a complete DNS message are buffered; let them through.
     return NF_ACCEPT if parse_status == "buffering"
@@ -102,13 +103,24 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- Si autorisé   : Q1 patche TTL + injecte EDE "Custos vigilat."
   -- Si dnsonly    : Q1 patche TTL + EDE mais n'injecte pas les IPs dans nft
   -- Si refusé     : Q1 transforme la réponse du serveur en REFUSED+EDE Filtered
+  ipc_ok = false
   if verdict == NF_ACCEPT
     if dnsonly
-      write_dnsonly_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw
+      ipc_ok = write_dnsonly_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw
     else
-      write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw
+      ipc_ok = write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw
   else
-    write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw
+    ipc_ok = write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw
+
+  unless ipc_ok
+    log_warn {
+      action: "ipc_write_failed"
+      txid: string.format "0x%04x", pkt.dns.txid
+      src_ip: pkt.ip.src_ip
+      dst_ip: pkt.ip.dst_ip
+      src_port: pkt.l4.src_port
+    }
+    return NF_DROP
 
   NF_ACCEPT
 

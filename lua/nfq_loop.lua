@@ -3,16 +3,17 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local AF_INET, AF_INET6
+local AF_INET, AF_INET6, BRIDGE_MODE
 do
   local _obj_0 = require("config")
-  AF_INET, AF_INET6 = _obj_0.AF_INET, _obj_0.AF_INET6
+  AF_INET, AF_INET6, BRIDGE_MODE = _obj_0.AF_INET, _obj_0.AF_INET6, _obj_0.BRIDGE_MODE
 end
 local log_info, log_error
 do
   local _obj_0 = require("log")
   log_info, log_error = _obj_0.log_info, _obj_0.log_error
 end
+local AF_BRIDGE = 7
 local NFQNL_COPY_PACKET = 2
 local NF_DROP = 0
 local NF_ACCEPT = 1
@@ -32,6 +33,9 @@ run_queue = function(queue_num, callback)
   end
   libnfq.nfq_bind_pf(h, AF_INET)
   libnfq.nfq_bind_pf(h, AF_INET6)
+  if BRIDGE_MODE then
+    libnfq.nfq_bind_pf(h, AF_BRIDGE)
+  end
   local qh_box = ffi.new("nfq_q_handle*[1]")
   local c_callback = ffi.cast("nfq_callback", function(qh, nfmsg, nfad, data)
     local raw_hdr = libnfq.nfq_get_msg_packet_hdr(nfad)
