@@ -4,7 +4,7 @@ local SESSIONS_FILE = tostring(CUSTOS_DIR) .. "/tmp/sessions.lua"
 local LOG_MARKER = "CUSTOS-TEST-BEGIN"
 local log_since_start
 log_since_start = function(filter)
-  return "logread | sed -n '/" .. tostring(LOG_MARKER) .. "/,\$p' | " .. tostring(filter)
+  return "logread | sed -n '/" .. tostring(LOG_MARKER) .. "/,$p' | " .. tostring(filter)
 end
 local DOMAIN_ALLOWED = "github.com"
 local DOMAIN_AAAA = "cloudflare.com"

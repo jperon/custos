@@ -31,7 +31,7 @@ LOG_MARKER    = "CUSTOS-TEST-BEGIN"
 -- @tparam string filter  Commande à ajouter en pipe (ex. "grep queue_listening")
 -- @treturn string        Commande shell complète
 log_since_start = (filter) ->
-  "logread | sed -n '/#{LOG_MARKER}/,\$p' | #{filter}"
+  "logread | sed -n '/#{LOG_MARKER}/,$p' | #{filter}"
 
 DOMAIN_ALLOWED = "github.com"
 DOMAIN_AAAA    = "cloudflare.com"
