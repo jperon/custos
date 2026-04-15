@@ -150,7 +150,14 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local client_port = pkt.l4.dst_port
   local txid = pkt.dns.txid
   local client_ip = pkt.ip.dst_ip
-  local client_mac = ip_to_mac[client_ip] or neigh.get_mac(client_ip)
+  local client_mac = ip_to_mac[client_ip]
+  if not (client_mac) then
+    client_mac = neigh.get_mac(client_ip)
+    if mac_valid(client_mac) then
+      last_neigh_refresh = os.time()
+      neigh.refresh(mac_clients, ip_to_mac)
+    end
+  end
   local entry = nil
   if not (DOCKER_MODE) then
     entry = get_pending_entry(txid, pkt.ip.dst_ip, client_port, now)
@@ -210,6 +217,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local client_v4 = nil
   local client_v6 = nil
   local ip_count = 0
+  local no_ipv4_records = { }
+  local no_ipv6_records = { }
   for _index_0 = 1, #answers do
     local ans = answers[_index_0]
     if ans.rtype == QTYPE.A then
@@ -224,19 +233,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         add_ip4(client_v4, ans.rdata_str)
         ip_count = ip_count + 1
       else
-        local log
-        if mac_valid(client_mac) then
-          log = log_info
-        else
-          log = log_warn
-        end
-        log({
-          action = "no_ipv4_for_client",
-          client = client_ip,
-          record = ans.rdata_str,
-          reason = "client_ipv4_unknown",
-          mac_fallback = mac_valid(client_mac)
-        })
+        no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
       end
       if mac_valid(client_mac) then
         add_mac4(client_mac, ans.rdata_str)
@@ -253,24 +250,44 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         add_ip6(client_v6, ans.rdata_str)
         ip_count = ip_count + 1
       else
-        local log
-        if mac_valid(client_mac) then
-          log = log_info
-        else
-          log = log_warn
-        end
-        log({
-          action = "no_ipv6_for_client",
-          client = client_ip,
-          record = ans.rdata_str,
-          reason = "client_ipv6_unknown",
-          mac_fallback = mac_valid(client_mac)
-        })
+        no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
       end
       if mac_valid(client_mac) then
         add_mac6(client_mac, ans.rdata_str)
       end
     end
+  end
+  if #no_ipv4_records > 0 then
+    local log
+    if mac_valid(client_mac) then
+      log = log_info
+    else
+      log = log_warn
+    end
+    log({
+      action = "no_ipv4_for_client",
+      client = client_ip,
+      count = #no_ipv4_records,
+      records = table.concat(no_ipv4_records, " "),
+      reason = "client_ipv4_unknown",
+      mac_fallback = mac_valid(client_mac)
+    })
+  end
+  if #no_ipv6_records > 0 then
+    local log
+    if mac_valid(client_mac) then
+      log = log_info
+    else
+      log = log_warn
+    end
+    log({
+      action = "no_ipv6_for_client",
+      client = client_ip,
+      count = #no_ipv6_records,
+      records = table.concat(no_ipv6_records, " "),
+      reason = "client_ipv6_unknown",
+      mac_fallback = mac_valid(client_mac)
+    })
   end
   local dns_raw = ndpi.extract_dns_payload(raw, pkt)
   local new_dns = ndpi.patch_ttl_in_dns(dns_raw, answers, FORCED_TTL)

@@ -167,9 +167,16 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   txid        = pkt.dns.txid
   client_ip   = pkt.ip.dst_ip
   -- ip_to_mac est peuplé par drain_pipe (IPC de Q0). Si le MAC n'y est pas
-  -- (ex: nfq_get_packet_hw() indisponible pour les paquets IPv6), on tente
-  -- un lookup paresseux dans la table voisine (NDP/ARP).
-  client_mac  = ip_to_mac[client_ip] or neigh.get_mac(client_ip)
+  -- (ex: nfq_get_packet_hw() indisponible pour les paquets IPv6, ou IPC pas
+  -- encore arrivé), on tente un lookup dans la table voisine (NDP/ARP).
+  -- Si le MAC est trouvé via neigh, on rafraîchit les tables partagées
+  -- immédiatement pour que resolve_client_family puisse trouver l'IPv6/IPv4.
+  client_mac = ip_to_mac[client_ip]
+  unless client_mac
+    client_mac = neigh.get_mac(client_ip)
+    if mac_valid(client_mac)
+      last_neigh_refresh = os.time!
+      neigh.refresh mac_clients, ip_to_mac
 
   -- ── Vérification IPC ─────────────────────────────────────────
   -- En mode Docker, on saute la vérification IPC car les requêtes
@@ -223,6 +230,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   client_v4 = nil
   client_v6 = nil
   ip_count = 0
+  no_ipv4_records = {}
+  no_ipv6_records = {}
   for ans in *answers
     if ans.rtype == QTYPE.A
       -- Enregistrement A : le client doit avoir une adresse IPv4
@@ -235,11 +244,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         add_ip4 client_v4, ans.rdata_str
         ip_count += 1
       else
-        -- IPv4 inconnue : trafic via mac4_allowed si MAC valide, sinon bloqué.
-        log = if mac_valid(client_mac) then log_info else log_warn
-        log { action: "no_ipv4_for_client", client: client_ip,
-              record: ans.rdata_str, reason: "client_ipv4_unknown",
-              mac_fallback: mac_valid(client_mac) }
+        no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
       add_mac4 client_mac, ans.rdata_str if mac_valid client_mac
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
@@ -252,12 +257,20 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         add_ip6 client_v6, ans.rdata_str
         ip_count += 1
       else
-        -- IPv6 inconnue : trafic via mac6_allowed si MAC valide, sinon bloqué.
-        log = if mac_valid(client_mac) then log_info else log_warn
-        log { action: "no_ipv6_for_client", client: client_ip,
-              record: ans.rdata_str, reason: "client_ipv6_unknown",
-              mac_fallback: mac_valid(client_mac) }
+        no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
       add_mac6 client_mac, ans.rdata_str if mac_valid client_mac
+
+  -- Logguer les cas cross-family sans IP connue (groupés par réponse)
+  if #no_ipv4_records > 0
+    log = if mac_valid(client_mac) then log_info else log_warn
+    log { action: "no_ipv4_for_client", client: client_ip, count: #no_ipv4_records,
+          records: table.concat(no_ipv4_records, " "),
+          reason: "client_ipv4_unknown", mac_fallback: mac_valid(client_mac) }
+  if #no_ipv6_records > 0
+    log = if mac_valid(client_mac) then log_info else log_warn
+    log { action: "no_ipv6_for_client", client: client_ip, count: #no_ipv6_records,
+          records: table.concat(no_ipv6_records, " "),
+          reason: "client_ipv6_unknown", mac_fallback: mac_valid(client_mac) }
 
   -- ── Patch TTL + EDE + checksums (IPv4 et IPv6) ───────────────
   -- 1. Extraire le payload DNS brut
