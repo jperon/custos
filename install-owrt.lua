@@ -462,7 +462,6 @@ service_triggers() {
       end
       local uci_cfg = [[config custos 'main'
 	option enabled           '1'
-	option log_path          '/var/log/custos.log'
 	option forced_ttl        '60'
 	option nft_ip_timeout    '2m'
 	option ipc_pending_ttl   '5'
@@ -556,7 +555,7 @@ exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
         fail("Échec du chmod +x custos-update")
         return false
       end
-      local cron_entry = "0 4 * * 1 /usr/sbin/custos-update >> /var/log/custos-update.log 2>&1"
+      local cron_entry = "0 4 * * * /usr/sbin/custos-update 2>&1"
       self:ssh_run("mkdir -p /etc/crontabs")
       if not (self:ssh_run("grep -qF 'custos-update' /etc/crontabs/root 2>/dev/null || echo '" .. tostring(cron_entry) .. "' >> /etc/crontabs/root")) then
         warn("Impossible d'ajouter l'entrée cron — configurez manuellement")

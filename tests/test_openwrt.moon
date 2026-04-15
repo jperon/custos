@@ -21,8 +21,17 @@
 
 CUSTOS_DIR    = "/usr/share/custos"
 CFG_DIR       = "/etc/custos"
-LOG_FILE      = "#{CUSTOS_DIR}/tmp/custos.log"
 SESSIONS_FILE = "#{CUSTOS_DIR}/tmp/sessions.lua"
+
+-- Marqueur inséré dans syslog avant le démarrage du daemon.
+-- Permet de filtrer logread pour n'obtenir que les entrées de ce run de test.
+LOG_MARKER    = "CUSTOS-TEST-BEGIN"
+
+--- Retourne une commande shell qui lit logread depuis le marqueur de début de test.
+-- @tparam string filter  Commande à ajouter en pipe (ex. "grep queue_listening")
+-- @treturn string        Commande shell complète
+log_since_start = (filter) ->
+  "logread | sed -n '/#{LOG_MARKER}/,\$p' | #{filter}"
 
 DOMAIN_ALLOWED = "github.com"
 DOMAIN_AAAA    = "cloudflare.com"
@@ -167,8 +176,8 @@ unless no_restart
   os.execute "sleep 1"  -- extra margin for kernel to release NFQUEUE handles + ports
   ssh "nft flush ruleset 2>/dev/null; true"
 
-  -- Clear log and sessions
-  ssh "> #{LOG_FILE}; > #{SESSIONS_FILE} 2>/dev/null; true"
+  -- Clear sessions (log is now syslog, not a file)
+  ssh "> #{SESSIONS_FILE} 2>/dev/null; true"
 
   -- Remove newuser leftovers from a previous run BEFORE starting the server
   -- (server loads users into memory at startup; file-only removal won't help after that)
@@ -207,27 +216,29 @@ unless no_restart
   -- cd to CUSTOS_DIR so relative paths (tmp/auth.key, cfg/secrets, etc.) work.
   -- CUSTOS_FILTER_CONFIG must point to the deployed config file (absolute path).
   -- LUA_PATH must include /usr/lib/lua/ for LuaSocket/LuaSSL on OpenWrt.
+  -- stdout/stderr sont transmis via logger(1) vers syslog (logread sur OpenWrt).
   print "  Démarrage des workers LuaJIT..."
   lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;#{CUSTOS_DIR}/?.lua;#{CUSTOS_DIR}/?/init.lua;;"
-  ssh "(cd #{CUSTOS_DIR} && CUSTOS_FILTER_CONFIG=#{CFG_DIR}/filter.yml LUA_PATH=\"#{lua_path}\" luajit2 #{CUSTOS_DIR}/main.lua </dev/null >>#{LOG_FILE} 2>&1) &"
+  ssh "logger -t custos '#{LOG_MARKER}'"
+  ssh "(cd #{CUSTOS_DIR} && CUSTOS_FILTER_CONFIG=#{CFG_DIR}/filter.yml LUA_PATH=\"#{lua_path}\" luajit2 #{CUSTOS_DIR}/main.lua </dev/null 2>&1 | logger -t custos) &"
   os.execute "sleep 5"
 
 -- Wait for queue workers
 print "  Attente des workers (queue_listening)..."
 workers_ready = false
 for _ = 1, 20
-  _, log = ssh "cat #{LOG_FILE} 2>/dev/null"
+  _, log = ssh log_since_start "grep 'queue_listening'"
   if log and log\match "queue_listening"
     workers_ready = true
     break
   os.execute "sleep 1"
 print "  Workers : #{workers_ready and (C.green..'prêts'..C.reset) or (C.red..'NON prêts'..C.reset)}"
-error "Workers pas démarrés — vérifier #{LOG_FILE} sur le routeur" unless workers_ready
+error "Workers pas démarrés — vérifier logread sur le routeur" unless workers_ready
 
 -- Wait for auth server
 auth_ready = false
 for _ = 1, 20
-  _, log = ssh "cat #{LOG_FILE} 2>/dev/null"
+  _, log = ssh log_since_start "grep 'auth_listening'"
   if log and log\match "auth_listening"
     auth_ready = true
     break
@@ -386,7 +397,7 @@ report "dig #{DOMAIN_BLOCKED} → REFUSED",
 -- Checking the nft set is unreliable because background DNS traffic from the
 -- test machine (allowed domains) adds LOCAL_IP entries independently.
 os.execute "sleep 1"
-_, blk_log = ssh "grep BLOCK #{LOG_FILE} 2>/dev/null | grep '#{DOMAIN_BLOCKED}' | grep '#{LOCAL_IP}' | tail -1"
+_, blk_log = ssh log_since_start "grep BLOCK | grep '#{DOMAIN_BLOCKED}' | grep '#{LOCAL_IP}' | tail -1"
 report "Log BLOCK #{DOMAIN_BLOCKED} depuis #{LOCAL_IP}",
   (blk_log and #blk_log > 5) != nil, blk_log or "(absent)"
 
@@ -711,8 +722,8 @@ if code == "200"
 print ""
 print "#{C.bold}▶ Vérification du log#{C.reset}"
 
-_, cnt_allow = ssh "grep -c ALLOW #{LOG_FILE} 2>/dev/null"
-_, cnt_block = ssh "grep -c BLOCK #{LOG_FILE} 2>/dev/null"
+_, cnt_allow = ssh log_since_start "grep ALLOW | wc -l"
+_, cnt_block = ssh log_since_start "grep BLOCK | wc -l"
 report "Log contient des entrées ALLOW",
   (tonumber(cnt_allow or "0") or 0) > 0, "count : #{cnt_allow}"
 report "Log contient des entrées BLOCK",

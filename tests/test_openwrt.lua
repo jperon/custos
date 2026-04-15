@@ -1,7 +1,11 @@
 local CUSTOS_DIR = "/usr/share/custos"
 local CFG_DIR = "/etc/custos"
-local LOG_FILE = tostring(CUSTOS_DIR) .. "/tmp/custos.log"
 local SESSIONS_FILE = tostring(CUSTOS_DIR) .. "/tmp/sessions.lua"
+local LOG_MARKER = "CUSTOS-TEST-BEGIN"
+local log_since_start
+log_since_start = function(filter)
+  return "logread | sed -n '/" .. tostring(LOG_MARKER) .. "/,\$p' | " .. tostring(filter)
+end
 local DOMAIN_ALLOWED = "github.com"
 local DOMAIN_AAAA = "cloudflare.com"
 local DOMAIN_BLOCKED = "facebook.com"
@@ -119,7 +123,7 @@ if not (no_restart) then
   end
   os.execute("sleep 1")
   ssh("nft flush ruleset 2>/dev/null; true")
-  ssh("> " .. tostring(LOG_FILE) .. "; > " .. tostring(SESSIONS_FILE) .. " 2>/dev/null; true")
+  ssh("> " .. tostring(SESSIONS_FILE) .. " 2>/dev/null; true")
   ssh("grep -v '^newuser:' " .. tostring(CFG_DIR) .. "/secrets > /tmp/_secrets.tmp 2>/dev/null && mv /tmp/_secrets.tmp " .. tostring(CFG_DIR) .. "/secrets 2>/dev/null; true")
   local ok_tu
   ok_tu, _ = ssh("grep -q '^testuser:' " .. tostring(CFG_DIR) .. "/secrets 2>/dev/null")
@@ -148,14 +152,15 @@ if not (no_restart) then
   end
   print("  Démarrage des workers LuaJIT...")
   local lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;" .. tostring(CUSTOS_DIR) .. "/?.lua;" .. tostring(CUSTOS_DIR) .. "/?/init.lua;;"
-  ssh("(cd " .. tostring(CUSTOS_DIR) .. " && CUSTOS_FILTER_CONFIG=" .. tostring(CFG_DIR) .. "/filter.yml LUA_PATH=\"" .. tostring(lua_path) .. "\" luajit2 " .. tostring(CUSTOS_DIR) .. "/main.lua </dev/null >>" .. tostring(LOG_FILE) .. " 2>&1) &")
+  ssh("logger -t custos '" .. tostring(LOG_MARKER) .. "'")
+  ssh("(cd " .. tostring(CUSTOS_DIR) .. " && CUSTOS_FILTER_CONFIG=" .. tostring(CFG_DIR) .. "/filter.yml LUA_PATH=\"" .. tostring(lua_path) .. "\" luajit2 " .. tostring(CUSTOS_DIR) .. "/main.lua </dev/null 2>&1 | logger -t custos) &")
   os.execute("sleep 5")
 end
 print("  Attente des workers (queue_listening)...")
 local workers_ready = false
 for _ = 1, 20 do
   local log
-  _, log = ssh("cat " .. tostring(LOG_FILE) .. " 2>/dev/null")
+  _, log = ssh(log_since_start("grep 'queue_listening'"))
   if log and log:match("queue_listening") then
     workers_ready = true
     break
@@ -164,12 +169,12 @@ for _ = 1, 20 do
 end
 print("  Workers : " .. tostring(workers_ready and (C.green .. 'prêts' .. C.reset) or (C.red .. 'NON prêts' .. C.reset)))
 if not (workers_ready) then
-  error("Workers pas démarrés — vérifier " .. tostring(LOG_FILE) .. " sur le routeur")
+  error("Workers pas démarrés — vérifier logread sur le routeur")
 end
 local auth_ready = false
 for _ = 1, 20 do
   local log
-  _, log = ssh("cat " .. tostring(LOG_FILE) .. " 2>/dev/null")
+  _, log = ssh(log_since_start("grep 'auth_listening'"))
   if log and log:match("auth_listening") then
     auth_ready = true
     break
@@ -267,7 +272,7 @@ _, blk_out = dig_lan(DOMAIN_BLOCKED)
 report("dig " .. tostring(DOMAIN_BLOCKED) .. " → REFUSED", (blk_out and blk_out:upper():match("REFUSED")) ~= nil, (blk_out or ""):gsub("%s+$", ""):sub(1, 200))
 os.execute("sleep 1")
 local blk_log
-_, blk_log = ssh("grep BLOCK " .. tostring(LOG_FILE) .. " 2>/dev/null | grep '" .. tostring(DOMAIN_BLOCKED) .. "' | grep '" .. tostring(LOCAL_IP) .. "' | tail -1")
+_, blk_log = ssh(log_since_start("grep BLOCK | grep '" .. tostring(DOMAIN_BLOCKED) .. "' | grep '" .. tostring(LOCAL_IP) .. "' | tail -1"))
 report("Log BLOCK " .. tostring(DOMAIN_BLOCKED) .. " depuis " .. tostring(LOCAL_IP), (blk_log and #blk_log > 5) ~= nil, blk_log or "(absent)")
 print("")
 print(tostring(C.bold) .. "▶ Domaine inconnu (" .. tostring(DOMAIN_UNKNOWN) .. ")" .. tostring(C.reset))
@@ -479,9 +484,9 @@ end
 print("")
 print(tostring(C.bold) .. "▶ Vérification du log" .. tostring(C.reset))
 local cnt_allow
-_, cnt_allow = ssh("grep -c ALLOW " .. tostring(LOG_FILE) .. " 2>/dev/null")
+_, cnt_allow = ssh(log_since_start("grep ALLOW | wc -l"))
 local cnt_block
-_, cnt_block = ssh("grep -c BLOCK " .. tostring(LOG_FILE) .. " 2>/dev/null")
+_, cnt_block = ssh(log_since_start("grep BLOCK | wc -l"))
 report("Log contient des entrées ALLOW", (tonumber(cnt_allow or "0") or 0) > 0, "count : " .. tostring(cnt_allow))
 report("Log contient des entrées BLOCK", (tonumber(cnt_block or "0") or 0) > 0, "count : " .. tostring(cnt_block))
 print("")
