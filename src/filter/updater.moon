@@ -44,6 +44,32 @@ ffi.cdef [[
 
 SIGHUP = 1
 
+-- Forward declaration: utilisée par fetch_toulouse/fetch_local.
+local write_bin
+
+--- Quote une valeur pour un usage sûr dans une commande shell POSIX.
+-- @tparam string s Valeur à échapper
+-- @treturn string Valeur entourée de quotes simples avec échappement interne
+sh_quote = (s) ->
+  "'" .. tostring(s)\gsub("'", "'\"'\"'") .. "'"
+
+--- Crée un répertoire (et ses parents) si nécessaire.
+-- @tparam string dir Chemin du répertoire
+-- @treturn boolean true si OK
+ensure_dir = (dir) ->
+  return true unless dir and dir != ""
+  ret = os.execute "mkdir -p #{sh_quote(dir)}"
+  ret == 0 or ret == true
+
+--- Crée le répertoire parent d'un chemin fichier, si nécessaire.
+-- @tparam string path Chemin de fichier
+-- @treturn boolean true si OK (ou non nécessaire), false sinon
+ensure_parent_dir = (path) ->
+  parent = tostring(path)\match "^(.*)/[^/]+$"
+  return true unless parent and parent != ""
+  ret = os.execute "mkdir -p #{sh_quote(parent)}"
+  ret == 0 or ret == true
+
 -- ── Analyse des arguments ─────────────────────────────────────────
 
 --- Parse les arguments de la ligne de commande.
@@ -73,7 +99,7 @@ parse_args = (argv) ->
 -- @treturn string|nil  Contenu, ou nil en cas d'erreur
 -- @treturn nil|string  Message d'erreur
 download = (url) ->
-  cmd = "curl --silent --location --max-time 30 --fail " .. url
+  cmd = "curl --silent --location --max-time 30 --fail " .. sh_quote(url)
   fh = io.popen cmd
   return nil, "popen failed" unless fh
   data = fh\read "*a"
@@ -88,7 +114,7 @@ download = (url) ->
 -- @treturn boolean           Succès
 download_file = (url, dest, timeout) ->
   timeout = timeout or 120
-  cmd = "curl --silent --location --max-time #{timeout} --fail -o #{dest} #{url}"
+  cmd = "curl --silent --location --max-time #{timeout} --fail -o #{sh_quote(dest)} #{sh_quote(url)}"
   ret = os.execute cmd
   ret == 0
 
@@ -118,9 +144,13 @@ fetch_toulouse = (name, source, dry_run) ->
   unless output or output_dir
     return false, "pas de chemin output ou output_dir défini"
 
-  -- Fichier temporaire pour le tar.gz
-  tmp_base = output_dir and ((output_dir\gsub "/*$", "") .. "/toulouse") or output
-  tmp_tar  = tmp_base .. ".tar.gz.tmp"
+  -- Fichier temporaire pour le tar.gz :
+  -- utiliser TMPDIR (/tmp par défaut) pour éviter de remplir l'overlay OpenWrt.
+  tmp_root = (os.getenv("TMPDIR") or "/tmp")\gsub "/*$", ""
+  safe_name = tostring(name)\gsub("[^%w_.-]", "_")
+  tmp_tar  = "#{tmp_root}/custos-updater-#{safe_name}.tar.gz.tmp"
+  unless ensure_parent_dir tmp_tar
+    return false, "impossible de créer le répertoire parent de #{tmp_tar}"
 
   -- Téléchargement
   io.stderr\write "[#{name}] GET #{url} ... "
@@ -130,7 +160,7 @@ fetch_toulouse = (name, source, dry_run) ->
   io.stderr\write "OK\n"
 
   -- Lister toutes les catégories disponibles dans le tar
-  fh = io.popen "tar -tzf #{tmp_tar} 2>/dev/null"
+  fh = io.popen "tar -tzf #{sh_quote(tmp_tar)} 2>/dev/null"
   all_cats = {}
   if fh
     for line in fh\lines!
@@ -155,10 +185,13 @@ fetch_toulouse = (name, source, dry_run) ->
   -- Mode output_dir : un .bin par catégorie
   if output_dir
     base = output_dir\gsub "/*$", ""
-    os.execute "mkdir -p #{base}"
+    unless ensure_parent_dir base .. "/.keep"
+      os.remove tmp_tar
+      return false, "impossible de créer #{base}"
     ok_count, err_count = 0, 0
     for cat in *cats
-      fh = io.popen "tar -xzf #{tmp_tar} -O blacklists/#{cat}/domains 2>/dev/null"
+      member = "blacklists/#{cat}/domains"
+      fh = io.popen "tar -xzf #{sh_quote(tmp_tar)} -O #{sh_quote(member)} 2>/dev/null"
       domains = {}
       if fh
         data = fh\read "*a"
@@ -180,7 +213,8 @@ fetch_toulouse = (name, source, dry_run) ->
   -- Mode output : fusion de toutes les catégories en un seul .bin
   all_domains = {}
   for cat in *cats
-    fh = io.popen "tar -xzf #{tmp_tar} -O blacklists/#{cat}/domains 2>/dev/null"
+    member = "blacklists/#{cat}/domains"
+    fh = io.popen "tar -xzf #{sh_quote(tmp_tar)} -O #{sh_quote(member)} 2>/dev/null"
     if fh
       data = fh\read "*a"
       fh\close!
@@ -222,6 +256,8 @@ write_bin = (domains, output_path, dry_run) ->
     return true, "dry-run : #{n} domaines → #{output_path}"
 
   tmp = output_path .. ".tmp"
+  unless ensure_parent_dir tmp
+    return false, "impossible de créer le répertoire parent de #{tmp}"
   fh = io.open tmp, "wb"
   return false, "impossible d'écrire #{tmp}" unless fh
   fh\write ffi.string arr, n * 8
@@ -267,13 +303,17 @@ fetch_local = (name, source, dry_run) ->
 -- @treturn number            Nombre d'erreurs
 process_custom_dir = (dir, dry_run) ->
   local_updated, local_errors = 0, 0
-  fh = io.popen "ls -1 #{dir}/*.txt 2>/dev/null"
+  ensure_dir dir
+  quoted_dir = sh_quote dir
+  fh = io.popen "cd #{quoted_dir} 2>/dev/null && ls -1 *.txt 2>/dev/null"
   unless fh
     return 0, 0
-  for txt_path in fh\lines!
-    txt_path = txt_path\gsub "%s+$", ""
-    continue if txt_path == ""
-    name = txt_path\match "([^/]+)%.txt$" or txt_path
+  base = dir\gsub "/+$", ""
+  for txt_name in fh\lines!
+    txt_name = txt_name\gsub "%s+$", ""
+    continue if txt_name == ""
+    txt_path = base .. "/" .. txt_name
+    name = txt_name\match "([^/]+)%.txt$" or txt_name
     bin_path = txt_path\gsub "%.txt$", ".bin"
     ok_l, msg = fetch_local name, { file: txt_path, format: "simple", output: bin_path }, dry_run
     if ok_l
@@ -299,6 +339,16 @@ sources         = cfg.sources or {}
 domainlists_dir = cfg.domainlists_dir
 custom_lists_dir = cfg.custom_lists_dir
 
+-- Créer les répertoires de base avant tout téléchargement
+if domainlists_dir
+  unless ensure_dir domainlists_dir
+    io.stderr\write "Impossible de créer domainlists_dir : #{domainlists_dir}\n"
+    os.exit 1
+if custom_lists_dir
+  unless ensure_dir custom_lists_dir
+    io.stderr\write "Impossible de créer custom_lists_dir : #{custom_lists_dir}\n"
+    os.exit 1
+
 updated = 0
 errors  = 0
 
@@ -316,6 +366,13 @@ for name, source in pairs sources
       continue
     source = {k, v for k, v in pairs source}  -- shallow copy
     source.output_dir = (domainlists_dir\gsub "/*$", "") .. "/" .. source.subdir
+
+  -- Créer output_dir avant tout téléchargement
+  if source.output_dir
+    unless ensure_dir source.output_dir
+      io.stderr\write "[#{name}] SKIP : impossible de créer #{source.output_dir}\n"
+      errors += 1
+      continue
 
   output = source.output
 

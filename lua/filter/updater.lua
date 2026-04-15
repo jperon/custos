@@ -7,6 +7,28 @@ ffi.cdef([[  int rename(const char *oldpath, const char *newpath);
   int kill(int pid, int sig);
 ]])
 local SIGHUP = 1
+local write_bin
+local sh_quote
+sh_quote = function(s)
+  return "'" .. tostring(s):gsub("'", "'\"'\"'") .. "'"
+end
+local ensure_dir
+ensure_dir = function(dir)
+  if not (dir and dir ~= "") then
+    return true
+  end
+  local ret = os.execute("mkdir -p " .. tostring(sh_quote(dir)))
+  return ret == 0 or ret == true
+end
+local ensure_parent_dir
+ensure_parent_dir = function(path)
+  local parent = tostring(path):match("^(.*)/[^/]+$")
+  if not (parent and parent ~= "") then
+    return true
+  end
+  local ret = os.execute("mkdir -p " .. tostring(sh_quote(parent)))
+  return ret == 0 or ret == true
+end
 local parse_args
 parse_args = function(argv)
   local opts = {
@@ -30,7 +52,7 @@ parse_args = function(argv)
 end
 local download
 download = function(url)
-  local cmd = "curl --silent --location --max-time 30 --fail " .. url
+  local cmd = "curl --silent --location --max-time 30 --fail " .. sh_quote(url)
   local fh = io.popen(cmd)
   if not (fh) then
     return nil, "popen failed"
@@ -45,7 +67,7 @@ end
 local download_file
 download_file = function(url, dest, timeout)
   timeout = timeout or 120
-  local cmd = "curl --silent --location --max-time " .. tostring(timeout) .. " --fail -o " .. tostring(dest) .. " " .. tostring(url)
+  local cmd = "curl --silent --location --max-time " .. tostring(timeout) .. " --fail -o " .. tostring(sh_quote(dest)) .. " " .. tostring(sh_quote(url))
   local ret = os.execute(cmd)
   return ret == 0
 end
@@ -61,15 +83,19 @@ fetch_toulouse = function(name, source, dry_run)
   if not (output or output_dir) then
     return false, "pas de chemin output ou output_dir défini"
   end
-  local tmp_base = output_dir and ((output_dir:gsub("/*$", "")) .. "/toulouse") or output
-  local tmp_tar = tmp_base .. ".tar.gz.tmp"
+  local tmp_root = (os.getenv("TMPDIR") or "/tmp"):gsub("/*$", "")
+  local safe_name = tostring(name):gsub("[^%w_.-]", "_")
+  local tmp_tar = tostring(tmp_root) .. "/custos-updater-" .. tostring(safe_name) .. ".tar.gz.tmp"
+  if not (ensure_parent_dir(tmp_tar)) then
+    return false, "impossible de créer le répertoire parent de " .. tostring(tmp_tar)
+  end
   io.stderr:write("[" .. tostring(name) .. "] GET " .. tostring(url) .. " ... ")
   if not (download_file(url, tmp_tar)) then
     os.remove(tmp_tar)
     return false, "curl échoué (HTTP error ou timeout)"
   end
   io.stderr:write("OK\n")
-  local fh = io.popen("tar -tzf " .. tostring(tmp_tar) .. " 2>/dev/null")
+  local fh = io.popen("tar -tzf " .. tostring(sh_quote(tmp_tar)) .. " 2>/dev/null")
   local all_cats = { }
   if fh then
     for line in fh:lines() do
@@ -109,11 +135,15 @@ fetch_toulouse = function(name, source, dry_run)
   io.stderr:write("[" .. tostring(name) .. "] " .. tostring(#cats) .. " catégorie(s)\n")
   if output_dir then
     local base = output_dir:gsub("/*$", "")
-    os.execute("mkdir -p " .. tostring(base))
+    if not (ensure_parent_dir(base .. "/.keep")) then
+      os.remove(tmp_tar)
+      return false, "impossible de créer " .. tostring(base)
+    end
     local ok_count, err_count = 0, 0
     for _index_0 = 1, #cats do
       local cat = cats[_index_0]
-      fh = io.popen("tar -xzf " .. tostring(tmp_tar) .. " -O blacklists/" .. tostring(cat) .. "/domains 2>/dev/null")
+      local member = "blacklists/" .. tostring(cat) .. "/domains"
+      fh = io.popen("tar -xzf " .. tostring(sh_quote(tmp_tar)) .. " -O " .. tostring(sh_quote(member)) .. " 2>/dev/null")
       local domains = { }
       if fh then
         local data = fh:read("*a")
@@ -139,7 +169,8 @@ fetch_toulouse = function(name, source, dry_run)
   local all_domains = { }
   for _index_0 = 1, #cats do
     local cat = cats[_index_0]
-    fh = io.popen("tar -xzf " .. tostring(tmp_tar) .. " -O blacklists/" .. tostring(cat) .. "/domains 2>/dev/null")
+    local member = "blacklists/" .. tostring(cat) .. "/domains"
+    fh = io.popen("tar -xzf " .. tostring(sh_quote(tmp_tar)) .. " -O " .. tostring(sh_quote(member)) .. " 2>/dev/null")
     if fh then
       local data = fh:read("*a")
       fh:close()
@@ -154,7 +185,6 @@ fetch_toulouse = function(name, source, dry_run)
   io.stderr:write("[" .. tostring(name) .. "] " .. tostring(#all_domains) .. " domaines total\n")
   return write_bin(all_domains, output, dry_run)
 end
-local write_bin
 write_bin = function(domains, output_path, dry_run)
   local seen, hashes, n = { }, { }, 0
   for _index_0 = 1, #domains do
@@ -188,6 +218,9 @@ write_bin = function(domains, output_path, dry_run)
     return true, "dry-run : " .. tostring(n) .. " domaines → " .. tostring(output_path)
   end
   local tmp = output_path .. ".tmp"
+  if not (ensure_parent_dir(tmp)) then
+    return false, "impossible de créer le répertoire parent de " .. tostring(tmp)
+  end
   local fh = io.open(tmp, "wb")
   if not (fh) then
     return false, "impossible d'écrire " .. tostring(tmp)
@@ -219,19 +252,23 @@ end
 local process_custom_dir
 process_custom_dir = function(dir, dry_run)
   local local_updated, local_errors = 0, 0
-  local fh = io.popen("ls -1 " .. tostring(dir) .. "/*.txt 2>/dev/null")
+  ensure_dir(dir)
+  local quoted_dir = sh_quote(dir)
+  local fh = io.popen("cd " .. tostring(quoted_dir) .. " 2>/dev/null && ls -1 *.txt 2>/dev/null")
   if not (fh) then
     return 0, 0
   end
-  for txt_path in fh:lines() do
+  local base = dir:gsub("/+$", "")
+  for txt_name in fh:lines() do
     local _continue_0 = false
     repeat
-      txt_path = txt_path:gsub("%s+$", "")
-      if txt_path == "" then
+      txt_name = txt_name:gsub("%s+$", "")
+      if txt_name == "" then
         _continue_0 = true
         break
       end
-      local name = txt_path:match("([^/]+)%.txt$" or txt_path)
+      local txt_path = base .. "/" .. txt_name
+      local name = txt_name:match("([^/]+)%.txt$" or txt_name)
       local bin_path = txt_path:gsub("%.txt$", ".bin")
       local ok_l, msg = fetch_local(name, {
         file = txt_path,
@@ -264,6 +301,18 @@ end
 local sources = cfg.sources or { }
 local domainlists_dir = cfg.domainlists_dir
 local custom_lists_dir = cfg.custom_lists_dir
+if domainlists_dir then
+  if not (ensure_dir(domainlists_dir)) then
+    io.stderr:write("Impossible de créer domainlists_dir : " .. tostring(domainlists_dir) .. "\n")
+    os.exit(1)
+  end
+end
+if custom_lists_dir then
+  if not (ensure_dir(custom_lists_dir)) then
+    io.stderr:write("Impossible de créer custom_lists_dir : " .. tostring(custom_lists_dir) .. "\n")
+    os.exit(1)
+  end
+end
 local updated = 0
 local errors = 0
 for name, source in pairs(sources) do
@@ -285,6 +334,14 @@ for name, source in pairs(sources) do
         source = _tbl_0
       end
       source.output_dir = (domainlists_dir:gsub("/*$", "")) .. "/" .. source.subdir
+    end
+    if source.output_dir then
+      if not (ensure_dir(source.output_dir)) then
+        io.stderr:write("[" .. tostring(name) .. "] SKIP : impossible de créer " .. tostring(source.output_dir) .. "\n")
+        errors = errors + 1
+        _continue_0 = true
+        break
+      end
     end
     local output = source.output
     if format == "toulouse" then
