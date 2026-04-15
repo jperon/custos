@@ -234,6 +234,57 @@ write_bin = (domains, output_path, dry_run) ->
 
   true, "#{n} domaines → #{output_path} (#{n * 8} octets)"
 
+-- ── Listes personnalisées (fichier local) ────────────────────────
+
+--- Traite une source dont le contenu est un fichier texte local.
+-- Le fichier original est conservé ; un fichier .bin est écrit à côté ou
+-- à l'emplacement indiqué par source.output.
+-- @tparam  string   name       Nom de la source (pour les logs)
+-- @tparam  table    source     { file, format, output }
+-- @tparam  boolean  dry_run
+-- @treturn boolean             Succès
+-- @treturn string              Message
+fetch_local = (name, source, dry_run) ->
+  path   = source.file
+  format = source.format or "simple"
+  output = source.output or (path\gsub "%.%w+$", ".bin")
+
+  fh = io.open path, "r"
+  unless fh
+    return false, "impossible de lire #{path}"
+  data = fh\read "*a"
+  fh\close!
+
+  domains = parse_domains.parse format, data
+  io.stderr\write "[#{name}] #{#domains} domaines depuis #{path}\n"
+  write_bin domains, output, dry_run
+
+--- Parcourt un répertoire et compile tous les fichiers .txt en .bin.
+-- Les fichiers .txt originaux sont conservés.
+-- @tparam  string   dir      Répertoire à scanner
+-- @tparam  boolean  dry_run
+-- @treturn number            Nombre de listes mises à jour
+-- @treturn number            Nombre d'erreurs
+process_custom_dir = (dir, dry_run) ->
+  local_updated, local_errors = 0, 0
+  fh = io.popen "ls -1 #{dir}/*.txt 2>/dev/null"
+  unless fh
+    return 0, 0
+  for txt_path in fh\lines!
+    txt_path = txt_path\gsub "%s+$", ""
+    continue if txt_path == ""
+    name = txt_path\match "([^/]+)%.txt$" or txt_path
+    bin_path = txt_path\gsub "%.txt$", ".bin"
+    ok_l, msg = fetch_local name, { file: txt_path, format: "simple", output: bin_path }, dry_run
+    if ok_l
+      io.stderr\write "[custom/#{name}] ✓ #{msg}\n"
+      local_updated += 1
+    else
+      io.stderr\write "[custom/#{name}] ✗ #{msg}\n"
+      local_errors += 1
+  fh\close!
+  local_updated, local_errors
+
 -- ── Programme principal ───────────────────────────────────────────
 
 opts = parse_args arg
@@ -246,10 +297,7 @@ unless cfg
 
 sources         = cfg.sources or {}
 domainlists_dir = cfg.domainlists_dir
-
-if next(sources) == nil
-  io.stderr\write "Aucune source définie dans cfg.sources — rien à faire.\n"
-  os.exit 0
+custom_lists_dir = cfg.custom_lists_dir
 
 updated = 0
 errors  = 0
@@ -282,6 +330,17 @@ for name, source in pairs sources
       errors += 1
     continue
 
+  -- Source locale (file:) : lecture directe sans téléchargement
+  if source.file
+    ok, msg = fetch_local name, source, opts.dry_run
+    if ok
+      io.stderr\write "[#{name}] ✓ #{msg}\n"
+      updated += 1
+    else
+      io.stderr\write "[#{name}] ✗ #{msg}\n"
+      errors += 1
+    continue
+
   -- Formats classiques : simple / hosts / adblock
   unless output
     io.stderr\write "[#{name}] SKIP : pas de chemin output défini\n"
@@ -292,7 +351,7 @@ for name, source in pairs sources
   urls = source.urls or {}
 
   if #urls == 0
-    io.stderr\write "[#{name}] SKIP : aucune URL définie\n"
+    io.stderr\write "[#{name}] SKIP : aucune URL définie ni fichier local (file:)\n"
     errors += 1
     continue
 
@@ -325,6 +384,17 @@ for name, source in pairs sources
   else
     io.stderr\write "[#{name}] ✗ #{msg}\n"
     errors += 1
+
+-- Listes personnalisées (custom_lists_dir : scan automatique)
+if custom_lists_dir
+  io.stderr\write "\n[custom] Scan de #{custom_lists_dir}/*.txt\n"
+  n_ok, n_err = process_custom_dir custom_lists_dir, opts.dry_run
+  updated += n_ok
+  errors  += n_err
+  io.stderr\write "[custom] #{n_ok} liste(s) mise(s) à jour, #{n_err} erreur(s).\n"
+elseif next(sources) == nil
+  io.stderr\write "Aucune source définie dans cfg.sources — rien à faire.\n"
+  os.exit 0
 
 -- Envoi du SIGHUP si demandé et si au moins une liste a été mise à jour
 if opts.pid_file and updated > 0 and not opts.dry_run

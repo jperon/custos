@@ -519,6 +519,53 @@ service_triggers() {
       end
       return true
     end,
+    install_updater = function(self)
+      step("Script de mise à jour des listes (custos-update)")
+      local script = [[#!/bin/sh
+CUSTOS_DIR=]] .. self.cfg.dest .. [[
+CONFIG=/etc/custos/filter.yml
+PID_FILE=/var/run/custos.pid
+
+PROG=$(command -v luajit2 2>/dev/null || command -v luajit 2>/dev/null)
+[ -z "$PROG" ] && { echo "custos-update: luajit introuvable"; exit 1; }
+[ -f "$CONFIG" ] || { echo "custos-update: $CONFIG introuvable"; exit 1; }
+
+export LUA_PATH="$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
+
+PID_ARG=""
+[ -f "$PID_FILE" ] && PID_ARG="--pid $PID_FILE"
+
+exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
+    --config "$CONFIG" \
+    $PID_ARG \
+    "$@"
+]]
+      local tmplocal = "tmp/owrt-custos-update"
+      if not (self.cfg.dry) then
+        local fh = io.open(tmplocal, "w")
+        if fh then
+          fh:write(script)
+          fh:close()
+        end
+      end
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/usr/sbin/custos-update")) then
+        fail("Échec de la copie de custos-update")
+        return false
+      end
+      if not (self:ssh_run("chmod +x /usr/sbin/custos-update")) then
+        fail("Échec du chmod +x custos-update")
+        return false
+      end
+      local cron_entry = "0 4 * * 1 /usr/sbin/custos-update >> /var/log/custos-update.log 2>&1"
+      self:ssh_run("mkdir -p /etc/crontabs")
+      if not (self:ssh_run("grep -qF 'custos-update' /etc/crontabs/root 2>/dev/null || echo '" .. tostring(cron_entry) .. "' >> /etc/crontabs/root")) then
+        warn("Impossible d'ajouter l'entrée cron — configurez manuellement")
+      end
+      self:ssh_run("/etc/init.d/cron enable 2>/dev/null || true")
+      self:ssh_run("/etc/init.d/cron restart 2>/dev/null || true")
+      ok("custos-update installé (/usr/sbin/custos-update) + cron lundi 4h")
+      return true
+    end,
     uninstall = function(self)
       step("Désinstallation de CustosVirginum")
       info("  Arrêt du service...")
@@ -527,6 +574,9 @@ service_triggers() {
       info("  Suppression des fichiers...")
       self:ssh_run("rm -rf " .. tostring(self.cfg.dest))
       self:ssh_run("rm -f /etc/init.d/custos")
+      self:ssh_run("rm -f /usr/sbin/custos-update")
+      self:ssh_run("sed -i '/custos-update/d' /etc/crontabs/root 2>/dev/null || true")
+      self:ssh_run("/etc/init.d/cron restart 2>/dev/null || true")
       info("  Nettoyage de sysctl...")
       self:ssh_run("rm -f /etc/sysctl.d/10-custos.conf")
       self:ssh_run("sysctl -w net.bridge.bridge-nf-call-iptables=0 2>/dev/null || true")
@@ -734,6 +784,12 @@ main = function()
       name = "config UCI",
       fn = function()
         return inst:install_uci_config()
+      end
+    },
+    {
+      name = "script update",
+      fn = function()
+        return inst:install_updater()
       end
     },
     {

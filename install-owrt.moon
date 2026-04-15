@@ -453,6 +453,57 @@ config custos 'main'
         warn "Aucun log trouvé pour 'custos' — vérifiez le démarrage"
       true
 
+    -- Installe custos-update et configure le cron hebdomadaire.
+    install_updater: =>
+      step "Script de mise à jour des listes (custos-update)"
+
+      script = [[
+#!/bin/sh
+CUSTOS_DIR=]] .. @cfg.dest .. [[
+
+CONFIG=/etc/custos/filter.yml
+PID_FILE=/var/run/custos.pid
+
+PROG=$(command -v luajit2 2>/dev/null || command -v luajit 2>/dev/null)
+[ -z "$PROG" ] && { echo "custos-update: luajit introuvable"; exit 1; }
+[ -f "$CONFIG" ] || { echo "custos-update: $CONFIG introuvable"; exit 1; }
+
+export LUA_PATH="$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
+
+PID_ARG=""
+[ -f "$PID_FILE" ] && PID_ARG="--pid $PID_FILE"
+
+exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
+    --config "$CONFIG" \
+    $PID_ARG \
+    "$@"
+]]
+      tmplocal = "tmp/owrt-custos-update"
+      unless @cfg.dry
+        fh = io.open tmplocal, "w"
+        if fh
+          fh\write script
+          fh\close!
+
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/usr/sbin/custos-update"
+        fail "Échec de la copie de custos-update"
+        return false
+      unless @ssh_run "chmod +x /usr/sbin/custos-update"
+        fail "Échec du chmod +x custos-update"
+        return false
+
+      -- Cron hebdomadaire (lundi à 4h)
+      cron_entry = "0 4 * * 1 /usr/sbin/custos-update >> /var/log/custos-update.log 2>&1"
+      @ssh_run "mkdir -p /etc/crontabs"
+      -- Ajouter l'entrée si elle n'existe pas déjà
+      unless @ssh_run "grep -qF 'custos-update' /etc/crontabs/root 2>/dev/null || echo '#{cron_entry}' >> /etc/crontabs/root"
+        warn "Impossible d'ajouter l'entrée cron — configurez manuellement"
+      @ssh_run "/etc/init.d/cron enable 2>/dev/null || true"
+      @ssh_run "/etc/init.d/cron restart 2>/dev/null || true"
+
+      ok "custos-update installé (/usr/sbin/custos-update) + cron lundi 4h"
+      true
+
     uninstall: =>
       step "Désinstallation de CustosVirginum"
       
@@ -465,6 +516,10 @@ config custos 'main'
       info "  Suppression des fichiers..."
       @ssh_run "rm -rf #{@cfg.dest}"
       @ssh_run "rm -f /etc/init.d/custos"
+      @ssh_run "rm -f /usr/sbin/custos-update"
+      -- Supprimer l'entrée cron
+      @ssh_run "sed -i '/custos-update/d' /etc/crontabs/root 2>/dev/null || true"
+      @ssh_run "/etc/init.d/cron restart 2>/dev/null || true"
       
       -- 3. Nettoyage sysctl
       info "  Nettoyage de sysctl..."
@@ -624,6 +679,7 @@ main = ->
     { name: "service init.d",    fn: -> inst\install_initd!       }
     { name: "/etc/custos/",      fn: -> inst\install_etc_custos!  }
     { name: "config UCI",        fn: -> inst\install_uci_config!  }
+    { name: "script update",     fn: -> inst\install_updater!     }
     { name: "démarrage service", fn: -> inst\start_service!       }
     { name: "santé",             fn: -> inst\health_check!        }
   }

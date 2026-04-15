@@ -201,6 +201,59 @@ write_bin = function(domains, output_path, dry_run)
   end
   return true, tostring(n) .. " domaines → " .. tostring(output_path) .. " (" .. tostring(n * 8) .. " octets)"
 end
+local fetch_local
+fetch_local = function(name, source, dry_run)
+  local path = source.file
+  local format = source.format or "simple"
+  local output = source.output or (path:gsub("%.%w+$", ".bin"))
+  local fh = io.open(path, "r")
+  if not (fh) then
+    return false, "impossible de lire " .. tostring(path)
+  end
+  local data = fh:read("*a")
+  fh:close()
+  local domains = parse_domains.parse(format, data)
+  io.stderr:write("[" .. tostring(name) .. "] " .. tostring(#domains) .. " domaines depuis " .. tostring(path) .. "\n")
+  return write_bin(domains, output, dry_run)
+end
+local process_custom_dir
+process_custom_dir = function(dir, dry_run)
+  local local_updated, local_errors = 0, 0
+  local fh = io.popen("ls -1 " .. tostring(dir) .. "/*.txt 2>/dev/null")
+  if not (fh) then
+    return 0, 0
+  end
+  for txt_path in fh:lines() do
+    local _continue_0 = false
+    repeat
+      txt_path = txt_path:gsub("%s+$", "")
+      if txt_path == "" then
+        _continue_0 = true
+        break
+      end
+      local name = txt_path:match("([^/]+)%.txt$" or txt_path)
+      local bin_path = txt_path:gsub("%.txt$", ".bin")
+      local ok_l, msg = fetch_local(name, {
+        file = txt_path,
+        format = "simple",
+        output = bin_path
+      }, dry_run)
+      if ok_l then
+        io.stderr:write("[custom/" .. tostring(name) .. "] ✓ " .. tostring(msg) .. "\n")
+        local_updated = local_updated + 1
+      else
+        io.stderr:write("[custom/" .. tostring(name) .. "] ✗ " .. tostring(msg) .. "\n")
+        local_errors = local_errors + 1
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  fh:close()
+  return local_updated, local_errors
+end
 local opts = parse_args(arg)
 local cfg_path = opts.config or "cfg/filter.yml"
 local cfg, err = load_config(cfg_path)
@@ -210,10 +263,7 @@ if not (cfg) then
 end
 local sources = cfg.sources or { }
 local domainlists_dir = cfg.domainlists_dir
-if next(sources) == nil then
-  io.stderr:write("Aucune source définie dans cfg.sources — rien à faire.\n")
-  os.exit(0)
-end
+local custom_lists_dir = cfg.custom_lists_dir
 local updated = 0
 local errors = 0
 for name, source in pairs(sources) do
@@ -249,6 +299,18 @@ for name, source in pairs(sources) do
       _continue_0 = true
       break
     end
+    if source.file then
+      local ok, msg = fetch_local(name, source, opts.dry_run)
+      if ok then
+        io.stderr:write("[" .. tostring(name) .. "] ✓ " .. tostring(msg) .. "\n")
+        updated = updated + 1
+      else
+        io.stderr:write("[" .. tostring(name) .. "] ✗ " .. tostring(msg) .. "\n")
+        errors = errors + 1
+      end
+      _continue_0 = true
+      break
+    end
     if not (output) then
       io.stderr:write("[" .. tostring(name) .. "] SKIP : pas de chemin output défini\n")
       errors = errors + 1
@@ -257,7 +319,7 @@ for name, source in pairs(sources) do
     end
     local urls = source.urls or { }
     if #urls == 0 then
-      io.stderr:write("[" .. tostring(name) .. "] SKIP : aucune URL définie\n")
+      io.stderr:write("[" .. tostring(name) .. "] SKIP : aucune URL définie ni fichier local (file:)\n")
       errors = errors + 1
       _continue_0 = true
       break
@@ -301,6 +363,16 @@ for name, source in pairs(sources) do
   if not _continue_0 then
     break
   end
+end
+if custom_lists_dir then
+  io.stderr:write("\n[custom] Scan de " .. tostring(custom_lists_dir) .. "/*.txt\n")
+  local n_ok, n_err = process_custom_dir(custom_lists_dir, opts.dry_run)
+  updated = updated + n_ok
+  errors = errors + n_err
+  io.stderr:write("[custom] " .. tostring(n_ok) .. " liste(s) mise(s) à jour, " .. tostring(n_err) .. " erreur(s).\n")
+elseif next(sources) == nil then
+  io.stderr:write("Aucune source définie dans cfg.sources — rien à faire.\n")
+  os.exit(0)
 end
 if opts.pid_file and updated > 0 and not opts.dry_run then
   local fh = io.open(opts.pid_file, "r")

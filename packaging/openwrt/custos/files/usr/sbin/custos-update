@@ -1,0 +1,29 @@
+#!/bin/sh
+# custos-update — Met à jour les listes de domaines CustosVirginum.
+#
+# Usage : custos-update [--dry-run]
+#
+# Télécharge et compile les listes définies dans sources: de filter.yml,
+# et convertit les listes personnalisées dans custom_lists_dir:.
+# Envoie SIGHUP au daemon si au moins une liste est mise à jour.
+#
+# Ce script est installé par install-owrt.lua.
+# CUSTOS_DIR est substitué à l'installation.
+
+CUSTOS_DIR=@DEST@
+CONFIG=/etc/custos/filter.yml
+PID_FILE=/var/run/custos.pid
+
+PROG=$(command -v luajit2 2>/dev/null || command -v luajit 2>/dev/null)
+[ -z "$PROG" ] && { echo "custos-update: luajit introuvable"; exit 1; }
+[ -f "$CONFIG" ] || { echo "custos-update: $CONFIG introuvable"; exit 1; }
+
+export LUA_PATH="$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
+
+PID_ARG=""
+[ -f "$PID_FILE" ] && PID_ARG="--pid $PID_FILE"
+
+exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
+    --config "$CONFIG" \
+    $PID_ARG \
+    "$@"

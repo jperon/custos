@@ -10,6 +10,15 @@
 #            chemins relatifs a ce repertoire, sans extension :
 #            ex. "toulouse/malware" -> <domainlists_dir>/toulouse/malware.bin
 #
+# custom_lists_dir : repertoire de listes personnalisees (optionnel).
+#            Contient des fichiers .txt (un domaine par ligne, # pour les
+#            commentaires). custos-update convertit chaque .txt en .bin dans
+#            le meme repertoire ; les originaux sont conserves.
+#            Les listes sont accessibles dans les regles comme :
+#              to_domainlist: custom/<nom_sans_extension>
+#            Pour que ce chemin fonctionne, custom_lists_dir doit etre un
+#            sous-dossier de domainlists_dir (ex. /etc/custos/lists/custom/).
+#
 # nets     : nom -> liste de CIDR IPv4/IPv6
 #            Utilise dans les conditions from_netlist / from_netlists.
 #
@@ -19,10 +28,11 @@
 # times    : nom -> [HH:MM, HH:MM] (debut, fin)
 #            Utilise dans les conditions in_time / in_times.
 #
-# sources  : nom -> { url(s), format, subdir|output }
+# sources  : nom -> { url(s)|file, format, subdir|output }
 #            Utilise par filter/updater.moon pour telecharger et compiler les listes.
 #            subdir : sous-dossier dans domainlists_dir (un .bin par categorie)
 #            output : chemin absolu vers un fichier .bin unique (fusion)
+#            file   : chemin vers un fichier texte local (pas de telechargement)
 #
 # rules    : tableau ordonne de regles, premier verdict gagnant.
 #            Chaque regle : description, actions, conditions (optionnel), log (optionnel).
@@ -79,6 +89,12 @@
 # Repertoire racine des listes de domaines precompilees.
 # Executer make update-lists pour construire les listes avant de demarrer.
 domainlists_dir: /etc/custos/lists
+
+# Repertoire de listes personnalisees (optionnel).
+# Placer des fichiers .txt (un domaine par ligne) dans ce dossier ;
+# custos-update les convertit en .bin et preserves les originaux.
+# Accessible dans les regles via : to_domainlist: custom/<nom_sans_ext>
+#custom_lists_dir: /etc/custos/lists/custom
 
 # Serveur d'authentification HTTPS + portail captif
 # Toutes les cles sont facultatives (valeurs par defaut ci-dessous).
@@ -144,6 +160,10 @@ sources:
 #    - https://oisd.nl/domains
 #    format: simple
 #    output: /etc/custos/lists/tracking.bin
+#  ma-liste:
+#    file: /etc/custos/lists/custom/ma-liste.txt
+#    format: simple
+#    output: /etc/custos/lists/custom/ma-liste.bin
 
 # Regles ordonnees : premier verdict gagnant.
 rules:
