@@ -147,6 +147,93 @@ services:
     depends_on:
       - wan-dns
 
+  # ── Mode bridge : filter-bridge + clients bridge ──────────────────────────
+  # Le filtre agit comme un pont L2 entre br-lan2 (LAN clients) et br-wan2 (WAN).
+  # BRIDGE_MODE=1 : NFQUEUE reçoit des trames Ethernet complètes, worker Q2 actif.
+  # dns-filter-bridge.nft remplace dns-filter.nft (table bridge au lieu de table ip).
+  filter-bridge:
+    build: .
+    image: custos:latest
+    container_name: custos-filter-bridge
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_MODULE
+    volumes:
+      - ./lua:/app/lua
+      - ./nft-rules:/app/nft-rules
+      - ./tmp:/app/tmp
+      - ./cfg:/app/cfg
+      - ./cfg:/etc/custos
+    profiles:
+      - bridge
+    networks:
+      lan2:
+        ipv4_address: 172.29.0.254
+        ipv6_address: fd00:29::fe
+      wan2:
+        ipv4_address: 172.31.0.254
+        ipv6_address: fd00:31::fe
+    environment:
+      BRIDGE_MODE: "1"
+      BRIDGE_IFNAME: "br-lan2"
+      CAPTIVE_IP: "172.29.0.254"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /app/tmp &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        echo 1 > /proc/sys/net/ipv4/conf/all/forwarding &&
+        echo 1 > /proc/sys/net/ipv6/conf/all/forwarding &&
+        echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter &&
+        ip route del default 2>/dev/null || true &&
+        ip route add default via 172.31.0.1 &&
+        nft -f /app/nft-rules/dns-filter-bridge.nft &&
+        nft add table ip nat &&
+        nft add chain ip nat postrouting '{ type nat hook postrouting priority srcnat ; }' &&
+        nft add rule ip nat postrouting th sport 53 return &&
+        nft add rule ip nat postrouting masquerade &&
+        export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;' &&
+        export BRIDGE_MODE=1 BRIDGE_IFNAME=br-lan2 CAPTIVE_IP=172.29.0.254 &&
+        exec luajit /app/lua/main.lua
+    depends_on:
+      - wan-dns
+
+  client-bridge:
+    image: custos-client:latest
+    container_name: custos-client-bridge
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    profiles:
+      - bridge
+    networks:
+      lan2:
+        ipv4_address: 172.29.0.10
+        ipv6_address: fd00:29::a
+    command:
+      sh -c "echo nameserver 172.30.0.20 > /etc/resolv.conf; ip route del default 2>/dev/null; for i in 1 2 3; do ping -c1 -W2 172.29.0.254 >/dev/null 2>&1 && { ip route add default via 172.29.0.254 2>/dev/null; ip -6 route replace default via fd00:29::fe 2>/dev/null || true; break; }; sleep 2; done; sleep infinity"
+    depends_on:
+      - wan-dns
+
+  client-bridge2:
+    image: custos-client:latest
+    container_name: custos-client-bridge2
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    profiles:
+      - bridge
+    networks:
+      lan2:
+        ipv4_address: 172.29.0.11
+        ipv6_address: fd00:29::b
+    command:
+      sh -c "echo nameserver 172.30.0.20 > /etc/resolv.conf; ip route del default 2>/dev/null; for i in 1 2 3; do ping -c1 -W2 172.29.0.254 >/dev/null 2>&1 && { ip route add default via 172.29.0.254 2>/dev/null; ip -6 route replace default via fd00:29::fe 2>/dev/null || true; break; }; sleep 2; done; sleep infinity"
+    depends_on:
+      - wan-dns
+
 networks:
   lan:
     driver: bridge
@@ -163,3 +250,18 @@ networks:
       config:
         - subnet: 172.30.0.0/24
         - subnet: fd00:30::/64
+  lan2:
+    driver: bridge
+    internal: true
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
+        - subnet: fd00:29::/64
+  wan2:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+        - subnet: fd00:31::/64

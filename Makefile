@@ -95,6 +95,13 @@ test-docker-ndpi5: all
 	NDPI_VERSION=5.0 LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_docker.lua
 
+## Tests Docker end-to-end en mode bridge (requires Docker)
+test-docker-bridge: all
+	@echo "Tests Docker end-to-end (mode bridge nftables)..."
+	$(MOONC) -o tests/test_docker_bridge.lua tests/test_docker_bridge.moon
+	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) tests/test_docker_bridge.lua
+
 ## Tests KVM/libvirt end-to-end (requires KVM + libvirt)
 test-kvm: test-kvm-up test-kvm-run test-kvm-down
 
@@ -115,6 +122,7 @@ test-kvm-down:
 
 ## Tests OpenWrt end-to-end (accès SSH à un routeur déployé requis)
 ## Usage : make test-openwrt HOST=root@esm.y [ARGS=--no-restart]
+## Usage bridge : make test-openwrt HOST=root@esm.y ARGS=--bridge
 test-openwrt: all
 	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis. Ex: make test-openwrt HOST=root@esm.y"; exit 1)
 	@echo "Tests OpenWrt end-to-end..."
@@ -164,6 +172,7 @@ help:
 	@echo "  test-ndpi    - Tests nDPI wrapper (libndpi requis)"
 	@echo "  test-docker  - Tests Docker end-to-end (nDPI 4.x, Docker requis)"
 	@echo "  test-docker-ndpi5 - Tests Docker end-to-end (nDPI 5.0, Docker requis)"
+	@echo "  test-docker-bridge - Tests Docker end-to-end (mode bridge nftables, Docker requis)"
 	@echo "  test-kvm     - Tests KVM end-to-end complets (up+run+down, libvirt requis)"
 	@echo "  test-kvm-up  - Démarre les VMs KVM"
 	@echo "  test-kvm-run - Exécute les tests KVM (VMs déjà démarrées)"

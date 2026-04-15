@@ -3,19 +3,26 @@
 -- OpenWrt end-to-end test for CustosVirginum DNS filter (live deployment).
 -- Connects to a running OpenWrt router via SSH and tests all functionality.
 --
--- Architecture tested:
---   [router FORWARD chain] -- queue 0/1 --> worker Q0/Q1
---   LuaJIT workers + auth server (33443) + captive portal (33080)
+-- Architecture tested (router mode, default):
+--   [router FORWARD chain, table ip/ip6] -- queue 0/1 --> worker Q0/Q1
 --
--- DNS queries are sent from the local machine to an EXTERNAL resolver (8.8.8.8).
--- Those packets transit the router's FORWARD chain, where NFQUEUE intercepts
--- them (Q0 decides allow/deny, Q1 patches the response).
+-- Architecture tested (bridge mode, --bridge flag):
+--   [router bridge table] -- queue 0/1/2 --> worker Q0/Q1/Q2
+--   BRIDGE_MODE=1 : NFQUEUE reçoit des trames Ethernet complètes.
+--   dns-filter-bridge.nft est déployé au lieu de dns-filter.nft.
+--   Worker Q2 (portail captif TCP forge) est actif.
+--
+-- DNS queries are sent from the local machine to an EXTERNAL resolver (1.1.1.3).
+-- Those packets transit the router's FORWARD/bridge chain, where NFQUEUE
+-- intercepts them (Q0 decides allow/deny, Q1 patches the response).
 -- Auth curl source IP = LOCAL_IP = DNS query source IP → from_user matches.
 --
 -- Usage:
 --   luajit tests/test_openwrt.lua root@esm.y
 --   luajit tests/test_openwrt.lua root@esm.y --no-restart
+--   luajit tests/test_openwrt.lua root@esm.y --bridge
 --   make test-openwrt HOST=root@esm.y
+--   make test-openwrt HOST=root@esm.y ARGS=--bridge
 
 -- ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -52,12 +59,15 @@ tests_failed = 0
 
 -- ── Argument parsing ───────────────────────────────────────────────────────────
 
-SSH_TARGET = nil
-no_restart = false
+SSH_TARGET   = nil
+no_restart   = false
+bridge_mode  = false
 
 for _, a in ipairs arg or {}
   if a\match "^%-%-no%-restart"
     no_restart = true
+  elseif a\match "^%-%-bridge"
+    bridge_mode = true
   elseif (not a\match "^%-%-") and not SSH_TARGET
     SSH_TARGET = a
 
@@ -117,6 +127,7 @@ report = (name, ok, msg) ->
 
 print "#{C.bold}CustosVirginum — OpenWrt end-to-end tests#{C.reset}"
 print "  Cible SSH : #{SSH_TARGET}"
+print "  Mode      : #{bridge_mode and 'bridge (BRIDGE_MODE=1)' or 'routeur (table ip/ip6)'}"
 print ""
 
 -- ── [1/5] Connectivity check ───────────────────────────────────────────────────
@@ -195,7 +206,12 @@ unless no_restart
   project_root = (script_dir\gsub "tests/?$", "")\gsub "/$", ""
   project_root = project_root == "" and "." or project_root
   print "  Déploiement des fichiers Lua + nft → #{SSH_TARGET}:#{CUSTOS_DIR}..."
-  run "scp #{SCP_OPTS} #{project_root}/nft-rules/dns-filter.nft #{SSH_TARGET}:#{CUSTOS_DIR}/dns-filter.nft"
+  nft_src = if bridge_mode
+    "#{project_root}/nft-rules/dns-filter-bridge.nft"
+  else
+    "#{project_root}/nft-rules/dns-filter.nft"
+  nft_dst = "#{CUSTOS_DIR}/dns-filter.nft"
+  run "scp #{SCP_OPTS} #{nft_src} #{SSH_TARGET}:#{nft_dst}"
   run "ssh #{SSH_OPTS} #{SSH_TARGET} 'mkdir -p #{CUSTOS_DIR}/parse #{CUSTOS_DIR}/auth #{CUSTOS_DIR}/filter/conditions #{CUSTOS_DIR}/filter/actions #{CUSTOS_DIR}/filter/lib'"
   run "scp #{SCP_OPTS} #{project_root}/lua/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/"
   run "scp #{SCP_OPTS} #{project_root}/lua/parse/*.lua #{SSH_TARGET}:#{CUSTOS_DIR}/parse/"
@@ -219,8 +235,9 @@ unless no_restart
   -- stdout/stderr sont transmis via logger(1) vers syslog (logread sur OpenWrt).
   print "  Démarrage des workers LuaJIT..."
   lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;#{CUSTOS_DIR}/?.lua;#{CUSTOS_DIR}/?/init.lua;;"
+  bridge_env = if bridge_mode then "BRIDGE_MODE=1 " else ""
   ssh "logger -t custos '#{LOG_MARKER}'"
-  ssh "(cd #{CUSTOS_DIR} && CUSTOS_FILTER_CONFIG=#{CFG_DIR}/filter.yml LUA_PATH=\"#{lua_path}\" luajit2 #{CUSTOS_DIR}/main.lua </dev/null 2>&1 | logger -t custos) &"
+  ssh "(cd #{CUSTOS_DIR} && CUSTOS_FILTER_CONFIG=#{CFG_DIR}/filter.yml #{bridge_env}LUA_PATH=\"#{lua_path}\" luajit2 #{CUSTOS_DIR}/main.lua </dev/null 2>&1 | logger -t custos) &"
   os.execute "sleep 5"
 
 -- Wait for queue workers
@@ -260,8 +277,12 @@ print ""
 
 -- nft tables
 _, nft_t = ssh "nft list tables 2>/dev/null"
-report "Tables nft dns-filter chargées",
-  (nft_t and nft_t\match "dns%-filter") != nil, nft_t or ""
+if bridge_mode
+  report "Table bridge dns-filter-bridge chargée",
+    (nft_t and nft_t\match "bridge.*dns%-filter%-bridge") != nil, nft_t or ""
+else
+  report "Tables nft dns-filter chargées",
+    (nft_t and nft_t\match "dns%-filter") != nil, nft_t or ""
 
 -- authenticated_macs sets (ip + ip6)
 _, macs4 = ssh "nft list set ip  dns-filter authenticated_macs 2>/dev/null"
@@ -301,8 +322,12 @@ report "ether saddr . ip6 daddr @mac6_allowed dans ip6 forward",
 
 
 _, brnf = ssh "cat /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null"
-report "bridge-nf-call-iptables = 1",
-  (brnf and brnf\match "1") != nil, brnf or ""
+if bridge_mode
+  report "bridge-nf-call-iptables (mode bridge, sans br_netfilter)",
+    true, "non requis en mode bridge nftables natif"
+else
+  report "bridge-nf-call-iptables = 1",
+    (brnf and brnf\match "1") != nil, brnf or ""
 
 -- NFQUEUE workers
 _, qraw = ssh "cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null"
@@ -310,6 +335,9 @@ report "NFQUEUE 0 connecté (worker Q0)",
   (qraw and qraw\match "^%s*0%s") != nil, qraw or ""
 report "NFQUEUE 1 connecté (worker Q1)",
   (qraw and qraw\match "\n?%s*1%s") != nil, qraw or ""
+if bridge_mode
+  report "NFQUEUE 2 connecté (worker Q2-captive)",
+    (qraw and qraw\match "\n?%s*2%s") != nil, qraw or ""
 
 -- Auth + captive portal ports (test from local machine via nc)
 _, nc443 = run "nc -z -w3 #{LAN_IP} 33443 2>/dev/null && echo open || echo closed"
@@ -320,16 +348,28 @@ _, nc080 = run "nc -z -w3 #{LAN_IP} 33080 2>/dev/null && echo open || echo close
 report "Portail captif sur 33080",
   (nc080 and nc080\match "open") != nil, ""
 
--- DNAT structural check (actual redirect requires a LAN client)
-_, pr4b = ssh "nft list chain ip dns-filter prerouting 2>/dev/null"
-report "DNAT HTTP (80 → 33080) dans ip prerouting",
-  (pr4b and pr4b\match "redirect to :33080") != nil, pr4b or ""
-report "Pas de DNAT 443 dans ip prerouting",
-  not (pr4b and pr4b\match "redirect to :33443"), pr4b or ""
+if bridge_mode
+  -- bridge table : chaîne forward bridge
+  _, br_fwd = ssh "nft list chain bridge dns-filter-bridge forward 2>/dev/null"
+  report "Queue 0 DNS dans bridge forward",
+    (br_fwd and br_fwd\match "queue num 0") != nil, br_fwd or ""
+  report "Queue 1 DNS dans bridge forward",
+    (br_fwd and br_fwd\match "queue num 1") != nil, br_fwd or ""
+  report "Queue 2 captif dans bridge forward",
+    (br_fwd and br_fwd\match "queue num 2") != nil, br_fwd or ""
+  report "REJECT tcp (RST) dans bridge forward",
+    (br_fwd and br_fwd\match "reject with tcp reset") != nil, br_fwd or ""
+else
+  -- router mode : table ip prerouting + forward
+  _, pr4b = ssh "nft list chain ip dns-filter prerouting 2>/dev/null"
+  report "DNAT HTTP (80 → 33080) dans ip prerouting",
+    (pr4b and pr4b\match "redirect to :33080") != nil, pr4b or ""
+  report "Pas de DNAT 443 dans ip prerouting",
+    not (pr4b and pr4b\match "redirect to :33443"), pr4b or ""
 
-_, fwd4 = ssh "nft list chain ip dns-filter forward 2>/dev/null"
-report "REJECT tcp 443 dans ip forward",
-  (fwd4 and fwd4\match "tcp dport 443 reject") != nil, fwd4 or ""
+  _, fwd4 = ssh "nft list chain ip dns-filter forward 2>/dev/null"
+  report "REJECT tcp 443 dans ip forward",
+    (fwd4 and fwd4\match "tcp dport 443 reject") != nil, fwd4 or ""
 
 -- ip_dest_whitelist sets structural check
 _, wl4 = ssh "nft list set ip  dns-filter ip4_dest_whitelist 2>/dev/null"
@@ -356,8 +396,11 @@ print ""
 -- @tparam[opt] string extra  Additional dig flags (e.g. "+tcp")
 -- @treturn boolean ok
 -- @treturn string  output
+-- DNS resolver fixé à 1.1.1.3 (résolveur tiers stable, évite les variations locales)
+DNS_RESOLVER = "1.1.1.3"
+
 dig_lan = (domain, qtype = "A", extra = "") ->
-  run "dig +time=8 +tries=1 #{qtype} #{domain} @8.8.8.8 #{extra} 2>&1"
+  run "dig +time=8 +tries=1 #{qtype} #{domain} @#{DNS_RESOLVER} #{extra} 2>&1"
 
 -- Flush allowed sets before DNS tests
 ssh "nft flush set ip  dns-filter ip4_allowed 2>/dev/null; true"
@@ -435,7 +478,7 @@ ssh "nft flush set ip6 dns-filter mac6_allowed 2>/dev/null; true"
 -- Scénario 1 : requête DNS sur IPv6 (warmup + test de base).
 -- Si LOCAL_IPV6 est absent, retombe sur IPv4 (MAC lookup peut échouer).
 dig_aaaa = if LOCAL_IPV6
-  (domain) -> run "dig +time=8 +tries=1 AAAA #{domain} @2001:4860:4860::8888 2>&1"
+  (domain) -> run "dig +time=8 +tries=1 AAAA #{domain} @2606:4700:4700::1003 2>&1"
 else
   (domain) -> dig_lan domain, "AAAA"
 _, aa_out = dig_aaaa DOMAIN_AAAA
@@ -492,7 +535,7 @@ if LOCAL_MAC
   -- Q1 reçoit le MAC du client via IPC, indépendamment du transport DNS IPv6.
   -- mac4_allowed doit être peuplé avec LOCAL_MAC . <dest_ipv4>.
   ssh "nft flush set ip  dns-filter mac4_allowed 2>/dev/null; true"
-  a6_dns_target = if LOCAL_IPV6 then "2001:4860:4860::8888" else "8.8.8.8"
+  a6_dns_target = if LOCAL_IPV6 then "2606:4700:4700::1003" else DNS_RESOLVER
   _, a6_out = run "dig +time=8 +tries=1 A #{DOMAIN_ALLOWED} @#{a6_dns_target} 2>&1"
   has_a6 = a6_out and a6_out\match "%d+%.%d+%.%d+%.%d+"
   if has_a6
@@ -745,7 +788,7 @@ ssh "printf '\\nip_whitelist:\\n- #{TEST_WL_IP}\\n- #{TEST_WL_IP6}\\n' >> #{FILT
 -- filter.reload() is called on the next DNS packet, so trigger one.
 ssh "pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && kill -HUP $pid 2>/dev/null; true"
 -- Trigger a DNS packet so Q0 worker picks up reload_requested
-os.execute "dig @#{ROUTER_IP} github.com A +time=2 +tries=1 >/dev/null 2>&1; true"
+os.execute "dig @#{DNS_RESOLVER} github.com A +time=2 +tries=1 >/dev/null 2>&1; true"
 os.execute "sleep 1"
 
 _, wl4_set = ssh "nft list set ip  dns-filter ip4_dest_whitelist 2>/dev/null"
@@ -759,7 +802,7 @@ report "ip_whitelist — #{TEST_WL_IP6} présent dans ip6_dest_whitelist après 
 -- Remove test IPs from filter.yml and reload again
 ssh "grep -v '^ip_whitelist:\\|^- #{TEST_WL_IP}\\|^- #{TEST_WL_IP6}' #{FILTER_YML} > /tmp/_filter.tmp && mv /tmp/_filter.tmp #{FILTER_YML}; true"
 ssh "pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && kill -HUP $pid 2>/dev/null; true"
-os.execute "dig @#{ROUTER_IP} github.com A +time=2 +tries=1 >/dev/null 2>&1; true"
+os.execute "dig @#{DNS_RESOLVER} github.com A +time=2 +tries=1 >/dev/null 2>&1; true"
 os.execute "sleep 1"
 
 _, wl4_after = ssh "nft list set ip dns-filter ip4_dest_whitelist 2>/dev/null"
