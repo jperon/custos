@@ -74,11 +74,17 @@ read_cached = function(path)
   end
   return _cache
 end
+local reset_cache
+reset_cache = function()
+  _cache = nil
+  _cache_time = 0
+end
 return {
   serialize = serialize,
   write_sessions = write_sessions,
   load_sessions = load_sessions,
   add_session = add_session,
   purge_expired = purge_expired,
-  read_cached = read_cached
+  read_cached = read_cached,
+  reset_cache = reset_cache
 }

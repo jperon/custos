@@ -1797,6 +1797,282 @@ do
     })), false, "liste vide → false")
   end)
 end
+local from_user = require("filter.conditions.from_user")
+local from_users = require("filter.conditions.from_users")
+local from_userlist = require("filter.conditions.from_userlist")
+local from_userlists = require("filter.conditions.from_userlists")
+do
+  local SESSION_FILE = "./tmp/test_from_user.lua"
+  local USER_CFG = {
+    auth = {
+      sessions_file = SESSION_FILE
+    },
+    users = {
+      admins = {
+        "alice",
+        "bob"
+      },
+      guests = {
+        "charlie"
+      }
+    }
+  }
+  local FAR_FUTURE = os.time() + 86400 * 365
+  local sessions_mod = require("auth.sessions")
+  local write_session_file
+  write_session_file = function(entries)
+    local fh = io.open(SESSION_FILE, "w")
+    fh:write("return {\n")
+    for _index_0 = 1, #entries do
+      local entry = entries[_index_0]
+      fh:write(string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3]))
+    end
+    fh:write("}\n")
+    return fh:close()
+  end
+  test("from_user — session active, bon utilisateur", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "alice",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_user(USER_CFG))("alice")
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), true, "alice OK")
+  end)
+  test("from_user — session active, mauvais utilisateur", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "alice",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_user(USER_CFG))("bob")
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), false, "alice ≠ bob")
+  end)
+  test("from_user — aucune session pour cette IP", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "alice",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_user(USER_CFG))("alice")
+    return assert_eq((f({
+      src_ip = "9.9.9.9"
+    })), false, "IP inconnue")
+  end)
+  test("from_user — session expirée", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "alice",
+        1
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_user(USER_CFG))("alice")
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), false, "session expirée")
+  end)
+  test("from_users — premier utilisateur match", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "alice",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_users(USER_CFG))({
+      "alice",
+      "bob"
+    })
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), true, "alice est premier")
+  end)
+  test("from_users — deuxième utilisateur match", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "bob",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_users(USER_CFG))({
+      "alice",
+      "bob"
+    })
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), true, "bob est deuxième")
+  end)
+  test("from_users — aucun match", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "charlie",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_users(USER_CFG))({
+      "alice",
+      "bob"
+    })
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), false, "charlie hors liste")
+  end)
+  test("from_users — liste vide → faux", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "alice",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_users(USER_CFG))({ })
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), false, "liste vide → false")
+  end)
+  test("from_userlist — utilisateur dans le groupe (premier)", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "alice",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_userlist(USER_CFG))("admins")
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), true, "alice admin")
+  end)
+  test("from_userlist — utilisateur dans le groupe (deuxième)", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "bob",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_userlist(USER_CFG))("admins")
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), true, "bob admin")
+  end)
+  test("from_userlist — utilisateur hors du groupe", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "charlie",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_userlist(USER_CFG))("admins")
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), false, "charlie hors admins")
+  end)
+  test("from_userlist — groupe inconnu → faux", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "alice",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_userlist(USER_CFG))("unknown")
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), false, "groupe inconnu")
+  end)
+  test("from_userlists — premier groupe match", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "alice",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_userlists(USER_CFG))({
+      "admins",
+      "guests"
+    })
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), true, "alice dans admins")
+  end)
+  test("from_userlists — deuxième groupe match", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "charlie",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_userlists(USER_CFG))({
+      "admins",
+      "guests"
+    })
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), true, "charlie dans guests")
+  end)
+  test("from_userlists — hors de tous les groupes", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "eve",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_userlists(USER_CFG))({
+      "admins",
+      "guests"
+    })
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), false, "eve hors de tout")
+  end)
+  test("from_userlists — liste vide → faux", function()
+    write_session_file({
+      {
+        "10.0.0.1",
+        "alice",
+        FAR_FUTURE
+      }
+    })
+    sessions_mod.reset_cache()
+    local f = (from_userlists(USER_CFG))({ })
+    return assert_eq((f({
+      src_ip = "10.0.0.1"
+    })), false, "liste vide → false")
+  end)
+end
 local stolen_computer = require("filter.conditions.stolen_computer")
 test("stolen_computer — MAC blacklisté", function()
   local f = (stolen_computer({ }))({

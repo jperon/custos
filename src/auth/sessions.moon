@@ -97,5 +97,11 @@ read_cached = (path) ->
     _cache_time = now
   _cache
 
+--- Réinitialise le cache de lecture (pour les tests unitaires).
+-- @treturn nil
+reset_cache = ->
+  _cache      = nil
+  _cache_time = 0
+
 { :serialize, :write_sessions, :load_sessions, :add_session
-  :purge_expired, :read_cached }
+  :purge_expired, :read_cached, :reset_cache }
