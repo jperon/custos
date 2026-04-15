@@ -5,6 +5,10 @@
 -- sur un pipe : compatible procd (logread), systemd-journald et docker logs.
 -- Les champs sont en key=value pour faciliter l'ingestion par des outils
 -- comme lnav, grok ou un simple awk.
+--
+-- Rate-limiting intégré : les messages répétitifs (même action + champs
+-- discriminants) sont supprimés pendant une fenêtre configurable. Le premier
+-- message après la fenêtre inclut le champ `suppressed=N`.
 
 { :ffi, :libc } = require "ffi_defs"
 
@@ -14,7 +18,52 @@ STDOUT_FILENO = 1
 
 ts  = ffi.new "timespec_t"
 
--- ── API publique ─────────────────────────────────────────────────
+-- ── Rate-limiting ─────────────────────────────────────────────────
+-- Clés discriminantes et fenêtre (secondes) par action ou niveau de log.
+-- La clé de RL est fields.action ou, à défaut, le niveau (ALLOW/BLOCK).
+RL_CONFIG = {
+  captive_probe:      { keys: {"ip", "path"},                window: 60  }
+  captive_redirect:   { keys: {"ip", "path"},                window: 60  }
+  ALLOW:              { keys: {"mac_src", "qname", "qtype"}, window: 30  }
+  no_ipv6_for_client: { keys: {"client"},                    window: 120 }
+  no_ipv4_for_client: { keys: {"client"},                    window: 120 }
+  neigh_refreshed:    { keys: {},                            window: 30  }
+}
+
+_rl = {}  -- { fingerprint → { ts, count } }
+
+--- Vérifie si un message doit être supprimé (rate-limiting).
+-- @tparam string level  Niveau de log
+-- @tparam table  fields Champs du message
+-- @treturn number  -1 = supprimer ; 0 = première occurrence ; N>0 = N supprimés depuis dernier log
+check_rl = (level, fields) ->
+  action_key = fields.action or level
+  cfg = RL_CONFIG[action_key]
+  return 0 unless cfg
+
+  -- Construire le fingerprint à partir des champs discriminants
+  parts = { action_key }
+  for k in *cfg.keys
+    parts[#parts + 1] = tostring fields[k] or ""
+  fp = table.concat parts, "|"
+
+  epoch = tonumber ts.tv_sec   -- réutilise le timespec déjà rempli dans write_log
+  entry = _rl[fp]
+  if entry
+    if epoch - entry.ts < cfg.window
+      entry.count += 1
+      return -1   -- supprimer
+    else
+      -- Fenêtre expirée : retourner le compteur puis réinitialiser
+      old_count  = entry.count
+      entry.ts   = epoch
+      entry.count = 0
+      return old_count
+  else
+    _rl[fp] = { ts: epoch, count: 0 }
+    return 0   -- première occurrence
+
+-- ── Formatage ─────────────────────────────────────────────────────
 
 --- Retourne le timestamp Unix courant (secondes).
 -- @treturn number epoch courant
@@ -28,8 +77,12 @@ now = ->
 -- @tparam table  fields Table de champs clé=valeur à inclure dans la ligne
 -- @treturn nil
 write_log = (level, fields) ->
-  epoch = now!
+  libc.clock_gettime 0, ts   -- remplit ts utilisé par check_rl
+  epoch = tonumber ts.tv_sec
   pid   = tonumber ffi.C.getpid()
+
+  suppressed = check_rl level, fields
+  return if suppressed == -1
 
   parts = { "[#{epoch}]", "[#{pid}]", level }
   for k, v in pairs fields
@@ -39,6 +92,7 @@ write_log = (level, fields) ->
       table.insert parts, "#{k}=\"#{sv}\""
     else
       table.insert parts, "#{k}=#{sv}"
+  table.insert parts, "suppressed=#{suppressed}" if suppressed > 0
 
   line = table.concat(parts, " ") .. "\n"
   libc.write STDOUT_FILENO, line, #line

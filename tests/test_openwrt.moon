@@ -155,8 +155,11 @@ print "#{C.bold}[2/5] Démarrage du service...#{C.reset}"
 ssh "mkdir -p #{CUSTOS_DIR}/tmp"
 
 unless no_restart
-  -- Kill any running workers. The supervisor has a restart loop, so new children
-  -- may appear between kill and poll. Repeat kill+check until the count reaches 0.
+  -- Stop the procd-managed service first so procd stops restarting main.lua
+  -- while we're trying to kill processes.
+  ssh "service custos stop 2>/dev/null; true"
+  os.execute "sleep 1"
+  -- Kill any remaining workers (supervisor restart loop may still be live).
   for _ = 1, 30
     _, procs = ssh "for pid in $(pgrep -f 'luajit2.*main' 2>/dev/null); do kill -9 $pid 2>/dev/null; done; pgrep -f 'luajit2.*main' 2>/dev/null | wc -l"
     break if (tonumber(procs or "1") or 1) == 0

@@ -107,6 +107,8 @@ print("")
 print(tostring(C.bold) .. "[2/5] Démarrage du service..." .. tostring(C.reset))
 ssh("mkdir -p " .. tostring(CUSTOS_DIR) .. "/tmp")
 if not (no_restart) then
+  ssh("service custos stop 2>/dev/null; true")
+  os.execute("sleep 1")
   for _ = 1, 30 do
     local procs
     _, procs = ssh("for pid in $(pgrep -f 'luajit2.*main' 2>/dev/null); do kill -9 $pid 2>/dev/null; done; pgrep -f 'luajit2.*main' 2>/dev/null | wc -l")
