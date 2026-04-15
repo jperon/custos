@@ -36,7 +36,51 @@ Requires libndpi installed. Tests the `parse/ndpi` facade and version dispatch.
 Requires Docker. Spins up filter, client, router, wan-dns containers.
 Tests DNS ALLOW/REFUSED, set population, per-client isolation.
 
-### KVM E2E (`make test-kvm`)
+### OpenWrt E2E (`make test-openwrt HOST=root@<host>`)
+
+Requires SSH access to an OpenWrt router with CustosVirginum installed
+(or at least LuaJIT + nftables). Deploys the latest Lua files + nft rules
+via `scp`, starts workers via `logger -t custos`, then runs DNS/auth checks
+from the local machine.
+
+```bash
+make test-openwrt HOST=root@esm.y
+```
+
+#### OpenWrt test pitfalls
+
+**`$` in MoonScript strings**
+
+In MoonScript, `\$` in a double-quoted string compiles to `\$` in Lua, which
+is an invalid escape sequence. Lua strings do not treat `$` as special — write
+`$` directly:
+
+```moonscript
+-- WRONG: \$p is an invalid Lua escape
+"sed -n '/#{MARKER}/,\$p'"
+-- CORRECT:
+"sed -n '/#{MARKER}/,$p'"
+```
+
+**Logging on OpenWrt**
+
+Workers are launched with `2>&1 | logger -t custos` (no log file). Log checks
+use `logread` (circular syslog buffer). To filter entries from the current test
+run, insert a marker into syslog before starting the daemon:
+
+```moonscript
+ssh "logger -t custos '#{LOG_MARKER}'"
+ssh "(cd #{CUSTOS_DIR} && luajit2 main.lua </dev/null 2>&1 | logger -t custos) &"
+-- then query:
+ssh "logread | sed -n '/#{LOG_MARKER}/,$p' | grep queue_listening"
+```
+
+**`grep -c` vs `wc -l`**
+
+`grep -c` exits with code 1 when count is 0, causing the SSH call to return
+`ok=false`. Use `grep PATTERN | wc -l` (always exits 0) for count checks.
+
+---
 
 Requires KVM + libvirt. Runs 20 tests against three VMs:
 - `custos-filter` (Debian) — runs CustosVirginum natively
@@ -340,5 +384,7 @@ nDPI returns two protocol IDs per packet:
 | FFI external lib | `ffi.load` + `ffi.cdef` (no C bridge) |
 | Opaque C struct | `ffi.new("uint8_t[?]", size)` + `ffi.cast` |
 | Packet parsing | `ffi.cast("const uint8_t*", raw)` + `bit` library |
+| Log rate-limiting | `log.moon` counts identical (action, key) pairs; emits one entry per burst window |
+| Shell `$` in strings | Write `$` directly — `\$` is an invalid Lua escape |
 
 **Do not use**: `class`, `extends`, `new` (MoonScript class-based syntax), `require "moon"`.

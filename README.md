@@ -19,20 +19,24 @@ detection — all without any C compilation step.
 │                                                                │
 │  nftables (kernel)                                             │
 │  ├── policy DROP + REJECT LAN                                  │
-│  ├── set ip4_allowed  { client_ip . dst_ip timeout 2m }        │
-│  ├── set ip6_allowed  { client_ip . dst_ip timeout 2m }        │
+│  ├── set mac4_allowed     { mac . dst_ipv4  timeout 2m }       │
+│  ├── set mac6_allowed     { mac . dst_ipv6  timeout 2m }       │
+│  ├── set authenticated_macs { mac timeout <session_ttl> }      │
+│  ├── HTTP :80 LAN → DNAT :33080 (portail captif, non-auth)     │
 │  ├── UDP/53 + TCP/53 src=LAN → NFQUEUE 0  (questions)          │
-│  └── UDP/53 + TCP/53 dst=LAN → NFQUEUE 1  (responses)          │
+│  └── UDP/53 + TCP/53 dst=LAN → NFQUEUE 1  (réponses)           │
 │                                                                │
 │  LuaJIT (userspace)                                            │
 │  ├── main.lua        supervisor + fork                         │
 │  ├── worker Q0  ─────────────────── pipe IPC ──► worker Q1    │
 │  │   parse L2/L3/L4/L7 (FFI)                    drain pipe     │
-│  │   lookup allowlist                           verify txid    │
-│  │   log + ACCEPT/REJECT                        patch TTL→60s  │
-│  │   write(pipe, txid+ip+port+mac)              nft set add    │
+│  │   rules (conditions + actions)               verify txid    │
+│  │   log + ACCEPT/REFUSED/DNSONLY               patch TTL→60s  │
+│  │   write(pipe, txid+ip+port+mac+type)         nft set add    │
 │  │   or send REFUSED (socket UDP/53)            ACCEPT+payload │
-│  └── ./tmp/dns-filter.log                                      │
+│  ├── worker AUTH — HTTPS login (port 33443)                    │
+│  │              — portail captif HTTP (port 33080)             │
+│  └── logs → syslog (journald / logread)                        │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -100,61 +104,79 @@ worker Q1 : drain pipe → pending[0x1234:192.168.1.42:54321] found (refused=tru
 ```
 custos/
 ├── cfg/
-│   └── filter.yml           Filter authorization config (YAML)
+│   ├── filter.yml           Config du filtre (YAML) — règles, listes, auth
+│   └── secrets.sample       Exemple de fichier de mots de passe
 ├── src/
-│   ├── config.moon          Configuration: allowlist, constants
-│   ├── uci_config.moon      OpenWrt UCI config loader
-│   ├── ffi_defs.moon        Centralized FFI declarations
-│   ├── log.moon             Structured key=value logging
-│   ├── allowlist.moon       qname lookup + SIGHUP reload
-│   ├── ipc.moon             pipe Q0→Q1 protocol
-│   ├── neigh.moon           Kernel neighbor table reader (ip neigh show)
-│   ├── nft.moon             nftables set injection via libnftables
-│   ├── nfq_loop.moon        Generic NFQUEUE loop
-│   ├── worker_q0.moon       DNS questions worker
-│   ├── worker_q1.moon       DNS responses worker
-│   ├── main.moon            Supervisor + fork
-│   ├── ffi_ndpi.moon        Version-detecting facade (loads v4 or v5)
-│   ├── ffi_ndpi_v4.moon     FFI cdef for nDPI 4.2–4.8
-│   ├── ffi_ndpi_v5.moon     FFI cdef for nDPI 5.0+
+│   ├── config.moon          Configuration : constantes, chemins
+│   ├── uci_config.moon      Chargeur config UCI (OpenWrt)
+│   ├── ffi_defs.moon        Déclarations FFI centralisées
+│   ├── log.moon             Logging structuré key=value + rate-limiting
+│   ├── allowlist.moon       Lookup qname + rechargement SIGHUP
+│   ├── ipc.moon             Protocole pipe Q0→Q1 (msg 27 octets)
+│   ├── neigh.moon           Lecture table voisins kernel (ip neigh show)
+│   ├── nft.moon             Injection sets nftables via libnftables
+│   ├── nfq_loop.moon        Boucle générique NFQUEUE
+│   ├── worker_q0.moon       Worker questions DNS
+│   ├── worker_q1.moon       Worker réponses DNS
+│   ├── main.moon            Superviseur + fork (Q0, Q1, AUTH)
+│   ├── ffi_ndpi.moon        Façade détection version (charge v4 ou v5)
+│   ├── ffi_ndpi_v4.moon     FFI cdef pour nDPI 4.2–4.8
+│   ├── ffi_ndpi_v5.moon     FFI cdef pour nDPI 5.0+
 │   ├── filter/
-│   │   ├── init.moon        Filter engine entry point (load/decide/reload)
-│   │   ├── rule.moon        Rule evaluator (conditions + actions)
-│   │   ├── convert.moon     YAML → engine type converters
-│   │   ├── updater.moon     CLI: download + parse + atomic-write domain lists
-│   │   ├── actions/         Action modules (allow, deny, mail)
-│   │   ├── conditions/      Condition modules (from_net, to_domain, in_time, …)
+│   │   ├── init.moon        Moteur de filtrage (load/decide/reload)
+│   │   ├── rule.moon        Évaluateur de règles (conditions + actions)
+│   │   ├── convert.moon     Convertisseurs YAML → types moteur
+│   │   ├── updater.moon     CLI : téléchargement + compilation listes de domaines
+│   │   ├── actions/
+│   │   │   ├── allow.moon   Action allow — injecte IPs dans mac4/mac6_allowed
+│   │   │   ├── deny.moon    Action deny — répond REFUSED + EDE
+│   │   │   ├── dnsonly.moon Action dnsonly — DNS autorisé sans injection nft
+│   │   │   └── mail.moon    Action mail (future)
+│   │   ├── conditions/
+│   │   │   ├── from_net.moon / from_nets.moon / from_netlist.moon / from_netlists.moon
+│   │   │   ├── from_mac.moon / from_macs.moon / from_maclist.moon / from_maclists.moon
+│   │   │   ├── from_user.moon / from_users.moon / from_userlist.moon / from_userlists.moon
+│   │   │   ├── to_domain.moon / to_domains.moon / to_domainlist.moon / to_domainlists.moon
+│   │   │   ├── in_time.moon / in_times.moon
+│   │   │   └── stolen_computer.moon
 │   │   └── lib/
-│   │       ├── bsearch.moon     Binary search in sorted domain list files
-│   │       ├── ipcalc.moon      CIDR membership check
-│   │       ├── load_config.moon YAML config loader (lyaml wrapper)
-│   │       └── parse_domains.moon Multi-format domain list parser
+│   │       ├── bsearch.moon         Recherche binaire dans fichiers de listes
+│   │       ├── ipcalc.moon          Test d'appartenance CIDR
+│   │       ├── load_config.moon     Chargeur YAML (lyaml)
+│   │       └── parse_domains.moon   Parser multi-format de listes de domaines
 │   └── parse/
-│       ├── ethernet.moon    L2: MAC src via nfq_get_packet_hw
-│       ├── ip.moon          L3: IPv4 + IPv6 + checksums
-│       ├── udp.moon         L4: UDP + checksum recalculation
-│       ├── dns.moon         L7: RFC 1035 complete + TTL patch
-│       ├── ndpi.moon        L3-L7 unified parser (facade)
-│       ├── ndpi_v4.moon     nDPI 4.2–4.8 detection backend
-│       └── ndpi_v5.moon     nDPI 5.0+ detection backend
-├── lua/                     Lua generated by moonc (do not edit)
+│       ├── ethernet.moon    L2 : MAC src via nfq_get_packet_hw
+│       ├── ip.moon          L3 : IPv4 + IPv6 + checksums
+│       ├── udp.moon         L4 : UDP + recalcul checksum
+│       ├── dns.moon         L7 : RFC 1035 complet + patch TTL
+│       ├── ndpi.moon        L3-L7 parseur unifié (façade)
+│       ├── ndpi_v4.moon     Backend nDPI 4.2–4.8
+│       └── ndpi_v5.moon     Backend nDPI 5.0+
+├── lua/                     Lua généré par moonc (ne pas éditer)
 ├── nft-rules/
-│   └── dns-filter.nft       Universal nftables ruleset (bridge + router)
+│   └── dns-filter.nft       Ruleset nftables universel (bridge + routeur)
+├── packaging/
+│   └── openwrt/custos/
+│       └── files/usr/sbin/custos-update   Script de mise à jour des listes
 ├── tests/
-│   ├── run_tests.moon       Unit tests source (no root required)
-│   ├── run_tests.lua        Unit tests compiled
-│   ├── test_ndpi.moon       nDPI wrapper tests source
-│   ├── test_ndpi.lua        nDPI wrapper tests compiled
-│   ├── test_docker.moon     Docker E2E tests source
-│   ├── test_docker.lua      Docker E2E tests compiled
-│   ├── test_kvm.moon        KVM/libvirt E2E tests source (20 tests)
-│   └── test_kvm.lua         KVM/libvirt E2E tests compiled
+│   ├── run_tests.moon       Tests unitaires source (sans root)
+│   ├── run_tests.lua        Tests unitaires compilés
+│   ├── test_ndpi.moon       Tests du wrapper nDPI
+│   ├── test_ndpi.lua        Tests nDPI compilés
+│   ├── test_docker.moon     Tests E2E Docker source
+│   ├── test_docker.lua      Tests E2E Docker compilés
+│   ├── test_kvm.moon        Tests E2E KVM/libvirt (20 tests) source
+│   ├── test_kvm.lua         Tests E2E KVM compilés
+│   ├── test_openwrt.moon    Tests E2E OpenWrt via SSH source
+│   └── test_openwrt.lua     Tests E2E OpenWrt compilés
+├── install-owrt.moon        Installeur OpenWrt (déploiement SSH)
+├── install-owrt.lua         Installeur compilé
 ├── libvirt/
-│   ├── *.xml                Libvirt VM configs (filter/client/router)
-│   └── custos-libvirt.sh    VM management script
-├── Dockerfile               Multi-stage Docker build
-├── docker-compose.yml       Complete test environment
-├── LICENSE                  MIT license
+│   ├── *.xml                Configs libvirt (filter/client/router)
+│   └── custos-libvirt.sh    Script gestion VMs
+├── Dockerfile               Build multi-stage Docker
+├── docker-compose.yml       Environnement de test complet
+├── LICENSE                  Licence MIT
 ├── Makefile
 ├── setup.sh
 └── README.md
@@ -233,28 +255,74 @@ sudo ./setup.sh up
 
 ## Configuration
 
-All configuration is in `src/config.moon`:
+La configuration principale est dans `cfg/filter.yml`. Elle couvre :
+- les règles de filtrage (conditions + actions)
+- les listes de domaines (`domainlists_dir`, `custom_lists_dir`)
+- le serveur d'authentification (`auth:`)
+- les dictionnaires de réseaux, MACs, utilisateurs, plages horaires
 
-```moonscript
--- Allowed domains (suffix matching)
-ALLOWED_DOMAINS = {
-  "github.com"
-  "debian.org"
-  -- add more here...
-}
-
--- IP timeout in nft sets after resolution
-NFT_IP_TIMEOUT = "2m"
-
--- Forced TTL injected on all passing DNS responses (seconds)
-FORCED_TTL = 60   -- in src/config.moon (imported by worker_q1)
-```
-
-After modification:
 ```bash
-make          # recompile
-make reload   # send SIGHUP to workers (hot reload)
+make          # recompile après modification des sources
+make reload   # envoie SIGHUP aux workers (rechargement à chaud)
 ```
+
+---
+
+## Domain List Updater
+
+`src/filter/updater.moon` est un outil CLI qui télécharge, parse et compile
+des listes de domaines au format binaire optimisé pour la recherche binaire.
+
+```bash
+# Télécharger et compiler toutes les listes définies dans filter.yml
+LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/filter/updater.lua cfg/filter.yml
+
+# Sur OpenWrt (après installation) :
+custos-update
+```
+
+### Sources
+
+Chaque entrée `sources:` dans `filter.yml` peut être :
+
+```yaml
+sources:
+  toulouse:
+    url:    https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz
+    format: toulouse          # archive tar.gz multi-catégories
+    subdir: toulouse          # sous-dossier de domainlists_dir
+
+  ma-liste:
+    file:   /etc/custos/lists/custom/ma-liste.txt
+    format: simple            # un domaine par ligne
+    output: /etc/custos/lists/custom/ma-liste.bin
+```
+
+### Listes personnalisées
+
+Positionner `custom_lists_dir` dans `filter.yml` pour activer le scan
+automatique de fichiers `.txt` :
+
+```yaml
+domainlists_dir: /etc/custos/lists
+custom_lists_dir: /etc/custos/lists/custom
+```
+
+Chaque fichier `custom/*.txt` (un domaine par ligne, `#` pour les commentaires)
+est converti en `custom/*.bin`. Les originaux sont conservés.
+
+Les listes sont référençables dans les règles :
+
+```yaml
+conditions:
+  to_domainlist: custom/ma-liste
+```
+
+### `custos-update` (OpenWrt)
+
+L'installeur (`install-owrt.moon`) déploie `/usr/sbin/custos-update` et
+configure une tâche cron quotidienne (`0 4 * * *`) pour la mise à jour
+automatique des listes.
 
 ---
 
@@ -296,6 +364,7 @@ Atomicity is guaranteed by POSIX for messages ≤ PIPE_BUF (4096 bytes).
 ```
 Byte  0      : type  — 0x41 ('A') = IPv4 allowed,    0x36 ('6') = IPv6 allowed
                        0x52 ('R') = IPv4 refused,     0x72 ('r') = IPv6 refused
+                       0x44 ('D') = IPv4 dns-only,    0x64 ('d') = IPv6 dns-only
 Bytes 1-2    : DNS txid (big-endian uint16)
 Bytes 3-18   : source IP — 16 bytes
                  IPv4 : 4 bytes address + 12 zero bytes (padding)
@@ -304,9 +373,11 @@ Bytes 19-20  : source port (big-endian uint16)
 Bytes 21-26  : source MAC (6 bytes, zeroed if unavailable)
 ```
 
-Q1 maintains a table `pending[txid:ip:port] = {expire, refused}` (TTL 5s).
+Q1 maintains a table `pending[txid:ip:port] = {expire, refused, dnsonly}` (TTL 5s).
 `refused=true` means Q0 determined the query must be blocked; Q1 transforms
 the upstream response into a REFUSED reply instead of patching TTL.
+`dnsonly=true` means Q0 allowed the query but without nft IP injection (e.g.
+captive portal probes): Q1 patches TTL + EDE but does not call `nft add element`.
 Purge is **lazy**: an expired entry is removed at lookup time,
 without a separate timer.
 
@@ -489,10 +560,48 @@ Multiple users can be listed (logical OR):
       from_user: [alice, bob]
 ```
 
-### Captive portal (future)
+### Captive portal
 
-Automatic redirect of HTTP traffic to the login page is **not yet implemented**.
-Users must navigate to the auth URL manually.
+Le worker AUTH sert également un **portail captif HTTP** sur le port 33080.
+Les règles nft redirigent (DNAT) le trafic HTTP :80 des clients non authentifiés
+vers ce port. Une fois authentifié, le client est retiré de la règle DNAT
+(via `authenticated_macs`) et accède directement au port 80.
+
+La condition `dnsonly` permet de détecter les sondes de portail captif
+(connectivitycheck, generate_204, etc.) et de les laisser passer au niveau
+DNS **sans injecter les IPs dans les sets nft** — le client peut ainsi résoudre
+les noms de domaine sans accéder aux serveurs cibles avant d'être authentifié :
+
+```yaml
+- description: Sondes portail captif
+  actions: [dnsonly]
+  conditions:
+    to_domains:
+      - connectivitycheck.gstatic.com
+      - captive.apple.com
+      - www.msftconnecttest.com
+```
+
+### Conditions utilisateur
+
+`from_user`, `from_users`, `from_userlist`, `from_userlists` permettent
+d'associer des règles à des comptes authentifiés :
+
+```yaml
+- name: alice-only
+  conditions:
+    from_user: alice
+  actions: [allow]
+  conditions:
+    to_domainlist: toulouse/adult
+```
+
+Plusieurs utilisateurs (OR logique) :
+
+```yaml
+  conditions:
+    from_users: [alice, bob]
+```
 
 ---
 
@@ -501,6 +610,9 @@ Users must navigate to the auth URL manually.
 - **DoH / DoT**: not covered (ports 443/853).
 - **Single-threaded per worker**: one worker per queue. For very
   high throughput, use `--queue-balance N-M` with N workers per range.
+- **MAC spoofing**: `mac4_allowed`/`mac6_allowed` rely on the MAC address
+  reported by `nfq_get_packet_hw`. On a bridge, this is the L2 source MAC
+  and can be spoofed by a LAN client.
 
 ## nft Ruleset
 
@@ -513,8 +625,19 @@ interface names or IP address ranges**.
 
 - DNS (UDP/TCP port 53) from LAN → **NFQUEUE 0** (questions, worker Q0)
 - DNS responses (sport 53) to LAN → **NFQUEUE 1** (responses, worker Q1)
-- LuaJIT decides ACCEPT or REFUSED; sets `ip4_allowed`/`ip6_allowed` on success
-- All other forwarded traffic matching a set entry → ACCEPT; rest → DROP
+- LuaJIT decides ACCEPT, REFUSED, or DNSONLY; populates `mac4_allowed`/`mac6_allowed` on success
+- Clients in `authenticated_macs` bypass the DNAT redirect (HTTP :80)
+- All forwarded traffic matching a set entry → ACCEPT; rest → DROP/REJECT
+
+### Sets nftables
+
+| Set | Type | Rôle |
+|-----|------|------|
+| `mac4_allowed` | `ether_addr . ipv4_addr` | Paire (MAC client, IPv4 dest) autorisée après résolution DNS |
+| `mac6_allowed` | `ether_addr . ipv6_addr` | Paire (MAC client, IPv6 dest) autorisée après résolution DNS |
+| `authenticated_macs` | `ether_addr` | Clients authentifiés (bypass DNAT portail captif) |
+| `ip4_dest_whitelist` | `ipv4_addr` | Destinations IPv4 toujours autorisées (rechargement SIGHUP) |
+| `ip6_dest_whitelist` | `ipv6_addr` | Destinations IPv6 toujours autorisées (rechargement SIGHUP) |
 
 ### Prerequisites
 
@@ -616,12 +739,12 @@ make test-kvm-down     # stop VMs
 
 | Category | Examples |
 |----------|---------|
-| DNS ALLOW | `github.com` → `ip4_allowed` populated; ping works after |
+| DNS ALLOW | `github.com` → `mac4_allowed` populated; ping works after |
 | DNS REFUSED | `facebook.com` → RCODE 5 + EDE 15; ping stays blocked |
-| IPv6 AAAA | `cloudflare.com` AAAA → `ip6_allowed` populated; ping6 works |
+| IPv6 AAAA | `cloudflare.com` AAAA → `mac6_allowed` populated; ping6 works |
 | TTL patch | Response TTL forced to 60s |
 | Per-client isolation | client2 (10.99.0.11) blocked until it resolves independently |
-| Log validation | `action=ALLOW`, `action=REFUSED` present in log file |
+| Log validation | `action=ALLOW`, `action=REFUSED` present in log |
 
 ### One-time VM setup
 
@@ -637,3 +760,53 @@ Downloads Debian cloud image and OpenWrt 25.12, creates three domains
 ```bash
 sudo bash libvirt/custos-libvirt.sh delete
 ```
+
+---
+
+## OpenWrt
+
+CustosVirginum peut être déployé directement sur un routeur OpenWrt
+(LuaJIT + lyaml + libnetfilter-queue + nftables).
+
+### Installation
+
+```bash
+# Déploiement complet sur un routeur via SSH (première installation)
+luajit install-owrt.lua root@<routeur>
+
+# Déploiement (mise à jour code uniquement, sans réinstallation des paquets)
+make test-openwrt HOST=root@<routeur>
+```
+
+L'installeur (`install-owrt.moon`) :
+1. Installe les paquets opkg requis
+2. Copie les fichiers Lua + nft dans `/usr/share/custos/`
+3. Copie la config dans `/etc/custos/`
+4. Génère `/usr/sbin/custos-update` (mise à jour des listes)
+5. Configure un procd initscript pour le démarrage automatique
+6. Active une tâche cron quotidienne (`0 4 * * *`) pour `custos-update`
+
+### Tests E2E OpenWrt (`make test-openwrt`)
+
+```bash
+make test-openwrt HOST=root@<routeur>
+```
+
+Le test (`tests/test_openwrt.moon`) se connecte via SSH, déploie les
+fichiers Lua + nft, démarre les workers, puis exécute les requêtes DNS
+depuis la machine locale et vérifie les résultats via `logread`.
+
+Les logs sont acheminés vers le syslog du routeur via
+`luajit main.lua 2>&1 | logger -t custos`. `logread` filtre les entrées
+depuis un marqueur inséré avant le démarrage des workers.
+
+| Catégorie | Vérifications |
+|-----------|--------------|
+| Infrastructure | Tables nft, sets, NFQUEUE, ports 33443/33080 |
+| DNS ALLOW | `mac4_allowed` peuplé, TTL patché |
+| DNS REFUSED | RCODE 5 attendu |
+| IPv6 AAAA | `mac6_allowed` + cross-family |
+| Authentification | Login/logout, heartbeat, sessions.lua |
+| Portail captif | DNAT, redirect, `/generate_204` |
+| Bypass MAC | `authenticated_macs` ip + ip6 |
+| Whitelist statique | `ip4_dest_whitelist`, rechargement SIGHUP |
