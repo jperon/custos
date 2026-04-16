@@ -1,0 +1,44 @@
+<!-- CustosVirginum DNS Client2 — second client VM for isolation tests -->
+<domain type='kvm'>
+  <name>custos-client2</name>
+  <memory unit='MiB'>512</memory>
+  <vcpu>1</vcpu>
+  <cpu mode='host-passthrough' check='none'/>
+  <os>
+    <type arch='x86_64'>hvm</type>
+    <kernel>/tmp/custos-vmlinuz</kernel>
+    <initrd>/tmp/custos-initrd.img</initrd>
+    <cmdline>root=/dev/vda1 ro console=ttyS0,115200 earlyprintk=ttyS0,115200 consoleblank=0</cmdline>
+  </os>
+  <features>
+    <acpi/>
+  </features>
+  <devices>
+    <disk type='file' device='disk'>
+      <source file='/var/lib/libvirt/images/custos-client2.qcow2'/>
+      <driver name='qemu' type='qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <source file='/var/lib/libvirt/images/cidata-client2.iso'/>
+      <driver name='qemu' type='raw'/>
+      <target dev='sda' bus='sata'/>
+      <readonly/>
+    </disk>
+    <!-- LAN side: static 10.99.0.11/24 via virbr-lan — distinct MAC for bridge isolation tests -->
+    <interface type='network'>
+      <mac address='52:54:00:00:03:02'/>
+      <source network='lan'/>
+      <model type='virtio'/>
+    </interface>
+    <serial type='pty'>
+      <target type='isa-serial' port='0'/>
+    </serial>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+    <channel type='unix'>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+    </channel>
+  </devices>
+</domain>

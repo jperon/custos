@@ -14,6 +14,7 @@
 
 LIBVIRT_SCRIPT = "libvirt/custos-libvirt.sh"
 CLIENT_VM      = "custos-client"
+CLIENT_VM2     = "custos-client2"
 FILTER_USER    = "debian"
 SSH_KEY        = (os.getenv "HOME") .. "/.ssh/id_rsa"
 SSH_OPTS       = "-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes"
@@ -27,7 +28,8 @@ DOMAIN_UNKNOWN = "nonexistent.invalid"
 CLIENT_IP   = "10.99.0.10"
 CLIENT2_IP  = "10.99.0.11"
 FILTER_IPV6 = "fd99::254"
-CLIENT_IPV6 = "fd99::10"
+CLIENT_IPV6    = "fd99::10"
+CLIENT_IPV6_C2 = "fd99::11"
 
 C =
   red:    "\27[31m"
@@ -85,20 +87,20 @@ ssh_check = (ip, cmd) ->
   error "SSH command failed: #{cmd}\n#{out}" unless ok
   out
 
---- Run a command on the client VM via qemu-guest-agent, polling for completion.
--- @tparam string cmd Shell command to run on client
--- @tparam[opt] number timeout_s Maximum seconds to wait (default 10)
+--- Run a command on any client VM via qemu-guest-agent.
+-- @tparam string vm_name  libvirt domain name (CLIENT_VM or CLIENT_VM2)
+-- @tparam string cmd      Shell command
+-- @tparam[opt] number timeout_s (default 10)
 -- @treturn boolean ok
--- @treturn string  stdout output (decoded from base64)
-guest_exec = (cmd, timeout_s) ->
+-- @treturn string  stdout output
+guest_exec_on = (vm_name, cmd, timeout_s) ->
   timeout_s or= 10
   safe_cmd = cmd\gsub('\\', '\\\\\\\\')\gsub('"', '\\"')
   exec_payload = string.format(
     '{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c","%s"],"capture-output":true}}',
     safe_cmd)
-  -- Escape single quotes so the JSON payload can be safely wrapped in ''
   shell_payload = exec_payload\gsub("'", "'\"'\"'")
-  ok, out = run "LIBVIRT_DEFAULT_URI=qemu:///system virsh qemu-agent-command #{CLIENT_VM} '#{shell_payload}'"
+  ok, out = run "LIBVIRT_DEFAULT_URI=qemu:///system virsh qemu-agent-command #{vm_name} '#{shell_payload}'"
   return false, "guest-exec failed: #{out}" unless ok
   pid = out\match '"pid"%s*:%s*(%d+)'
   return false, "no pid in response: #{out}" unless pid
@@ -108,7 +110,7 @@ guest_exec = (cmd, timeout_s) ->
     os.execute "sleep 1"
     status_payload = string.format(
       '{"execute":"guest-exec-status","arguments":{"pid":%s}}', pid)
-    ok2, out2 = run "LIBVIRT_DEFAULT_URI=qemu:///system virsh qemu-agent-command #{CLIENT_VM} '#{status_payload}'"
+    ok2, out2 = run "LIBVIRT_DEFAULT_URI=qemu:///system virsh qemu-agent-command #{vm_name} '#{status_payload}'"
     continue unless ok2
     continue unless out2\match '"exited"%s*:%s*true'
     b64 = out2\match '"out%-data"%s*:%s*"([^"]+)"'
@@ -119,6 +121,9 @@ guest_exec = (cmd, timeout_s) ->
     return (exit_ok != nil), decoded
 
   false, "guest-exec timed out after #{timeout_s}s"
+
+guest_exec  = (cmd, timeout_s) -> guest_exec_on CLIENT_VM,  cmd, timeout_s
+guest_exec2 = (cmd, timeout_s) -> guest_exec_on CLIENT_VM2, cmd, timeout_s
 
 --- Resolve a domain on the test host (bypasses the filter).
 -- @tparam string domain
@@ -133,8 +138,9 @@ resolve_host = (domain) ->
 -- @tparam[opt] number timeout_s Ping timeout (default 3)
 -- @treturn boolean ok
 -- @treturn string  output
-ping_from = (src_ip, dest_ip, timeout_s = 3) ->
-  guest_exec "ping -c1 -W#{timeout_s} -I #{src_ip} #{dest_ip} 2>&1", timeout_s + 4
+--- @tparam[opt] function exec_fn  guest_exec or guest_exec2 (default guest_exec)
+ping_from = (src_ip, dest_ip, timeout_s = 3, exec_fn = guest_exec) ->
+  exec_fn "ping -c1 -W#{timeout_s} -I #{src_ip} #{dest_ip} 2>&1", timeout_s + 4
 
 --- Curl HTTP ou HTTPS depuis la VM client via qemu-guest-agent.
 -- Pas de guillemets simples dans la commande (contrainte guest_exec).
@@ -142,8 +148,13 @@ ping_from = (src_ip, dest_ip, timeout_s = 3) ->
 -- @tparam[opt] number timeout_s  Timeout curl en secondes (défaut 5)
 -- @treturn boolean ok    true si un code HTTP a été reçu (code ≠ "000")
 -- @treturn string  code  Code HTTP reçu ("000" = pas de connexion)
-curl_from = (url, timeout_s = 5) ->
-  cmd = "curl -k -s -o /dev/null --write-out %{http_code} --connect-timeout #{timeout_s} --max-time #{timeout_s + 5} #{url} 2>&1"
+--- @tparam[opt] string resolve_ip  Force cette IP pour le hostname (--resolve host:*:ip)
+curl_from = (url, timeout_s = 5, resolve_ip = nil) ->
+  resolve_opt = ""
+  if resolve_ip
+    host = url\match "https?://([^/]+)"
+    resolve_opt = "--resolve #{host}:80:#{resolve_ip} --resolve #{host}:443:#{resolve_ip}"
+  cmd = "curl -k -s -o /dev/null --write-out %{http_code} --connect-timeout #{timeout_s} --max-time #{timeout_s + 5} #{resolve_opt} #{url} 2>&1"
   _, out = guest_exec cmd, timeout_s + 8
   code = (out or "")\match "%d%d%d" or "000"
   received = code ~= "000"
@@ -156,8 +167,9 @@ curl_from = (url, timeout_s = 5) ->
 -- @tparam[opt] number timeout_s Total timeout (default 15)
 -- @treturn boolean ok
 -- @treturn string  output
-dig_from = (src_ip, domain, qtype = "A", timeout_s = 15) ->
-  guest_exec "dig +short +time=5 +tries=1 #{qtype} #{domain} @#{DNS_SERVER} -b #{src_ip}", timeout_s
+--- @tparam[opt] function exec_fn  guest_exec or guest_exec2 (default guest_exec)
+dig_from = (src_ip, domain, qtype = "A", timeout_s = 15, exec_fn = guest_exec) ->
+  exec_fn "dig +short +time=5 +tries=1 #{qtype} #{domain} @#{DNS_SERVER} -b #{src_ip}", timeout_s
 
 --- Parse ip4_allowed nft set output to find the dest IP for a given client IP.
 -- @tparam string set_out  Raw output of `nft list set ip dns-filter ip4_allowed`
@@ -218,7 +230,7 @@ ssh FILTER_IP, "sudo mkdir -p /etc/custos && sudo rm -f /etc/custos/secrets"
 run "printf 'local c = require(\"auth.credentials\")\\nc.register_user(\"testuser\",\"testpass\",\"/etc/custos/secrets\",{})\\n' | ssh #{SSH_OPTS} -i #{SSH_KEY} #{FILTER_USER}@#{FILTER_IP} 'cat > /tmp/mkuser.lua'"
 ssh FILTER_IP, "sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit /tmp/mkuser.lua'"
 ssh_check FILTER_IP, "sudo nft -f /opt/custos/nft-rules/dns-filter.nft"
-ssh_check FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &"
+ssh_check FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" BRIDGE_MODE=1 BRIDGE_IFNAME=br0 luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &"
 os.execute "sleep 5"
 ok_luajit, _ = ssh FILTER_IP, "pgrep -f 'luajit.*main' >/dev/null"
 print "  LuaJIT: #{ok_luajit and (C.green..'running'..C.reset) or (C.red..'NOT running'..C.reset)}"
@@ -247,15 +259,17 @@ CLIENT_IFACE = #CLIENT_IFACE > 0 and CLIENT_IFACE or "eth0"
 print "  Client interface: #{CLIENT_IFACE}"
 print "  Adding IPv6 #{CLIENT_IPV6}/64 to client #{CLIENT_IFACE}..."
 guest_exec "sudo ip addr add #{CLIENT_IPV6}/64 dev #{CLIENT_IFACE} 2>/dev/null; true", 5
-print "  Adding client2 alias #{CLIENT2_IP}/24 to client #{CLIENT_IFACE}..."
-guest_exec "sudo ip addr add #{CLIENT2_IP}/24 dev #{CLIENT_IFACE} 2>/dev/null; true", 5
--- Verify addresses are actually configured on the client
+-- Verify IPv6 address on client1
 os.execute "sleep 1"
 _, c_addr_out = guest_exec "ip addr show dev #{CLIENT_IFACE}", 5
 if not (c_addr_out and c_addr_out\match CLIENT_IPV6)
   print "  #{C.yellow}WARNING: #{CLIENT_IPV6} not found on client #{CLIENT_IFACE} — AAAA test may skip#{C.reset}"
-if not (c_addr_out and c_addr_out\match CLIENT2_IP\gsub("%.", "%."))
-  print "  #{C.yellow}WARNING: #{CLIENT2_IP} not found on client #{CLIENT_IFACE} — isolation test may fail#{C.reset}"
+-- wait-agents attend maintenant client1 ET client2 (voir custos-libvirt.sh)
+_, iface2_raw = guest_exec2 "ip route get #{DNS_SERVER} | sed -En \"s/.*dev ([^ ]+).*/\\1/p\"", 5
+CLIENT2_IFACE = (iface2_raw or "")\gsub "%s+", ""
+CLIENT2_IFACE = #CLIENT2_IFACE > 0 and CLIENT2_IFACE or "eth0"
+print "  Client2 interface: #{CLIENT2_IFACE}"
+guest_exec2 "sudo ip addr add #{CLIENT_IPV6_C2}/64 dev #{CLIENT2_IFACE} 2>/dev/null; true", 5
 -- Trigger NDP so the filter learns the client's IPv6 MAC mapping
 print "  Triggering NDP (ping6 filter from client)..."
 guest_exec "ping6 -c3 -W1 #{FILTER_IPV6} 2>/dev/null; true", 8
@@ -352,11 +366,12 @@ else
   report "ping après résolution — ip4_allowed vide", false, ""
 
 -- curl HTTP + HTTPS après résolution → should PASS (IP dans ip4_allowed, MASQUERADE WAN)
-ok_curl_http, http_code = curl_from "http://#{DOMAIN_ALLOWED}/"
+-- On force l'IP déjà dans ip4_allowed via --resolve pour éviter un 2e dig anycast.
+ok_curl_http, http_code = curl_from "http://#{DOMAIN_ALLOWED}/", 5, allowed_ip
 report "curl http://#{DOMAIN_ALLOWED}/ après résolution : succès attendu",
   ok_curl_http, "HTTP #{http_code}"
 
-ok_curl_https, https_code = curl_from "https://#{DOMAIN_ALLOWED}/"
+ok_curl_https, https_code = curl_from "https://#{DOMAIN_ALLOWED}/", 5, allowed_ip
 report "curl https://#{DOMAIN_ALLOWED}/ après résolution : succès attendu",
   ok_curl_https, "HTTP #{https_code}"
 
@@ -451,13 +466,19 @@ if c1_dest
   report "client1 ping #{c1_dest} après résolution : succès attendu",
     ok_c1ping, (c1ping_out or "")\gsub "%s+$", ""
 
-  -- Client2 (alias) cannot reach the same IP (not in set for client2)
-  ok_c2ping_before, _ = ping_from CLIENT2_IP, c1_dest, 2
+  -- Client2 est une VM distincte avec son propre MAC (52:54:00:00:03:02).
+  -- ip4_allowed ne contient que client1 → client2 doit être bloqué.
+  ssh FILTER_IP, "sudo nft flush set ip dns-filter ip4_allowed 2>/dev/null; true"
+  dig_from CLIENT_IP, DOMAIN_ALLOWED
+  os.execute "sleep 1"
+  _, cs_c1_out = ssh FILTER_IP, "sudo nft list set ip dns-filter ip4_allowed"
+  c1_dest = nft_dest_for(cs_c1_out, CLIENT_IP) or c1_dest
+  ok_c2ping_before, _ = ping_from CLIENT2_IP, c1_dest, 2, guest_exec2
   report "client2 (#{CLIENT2_IP}) ping #{c1_dest} avant résolution : échec attendu",
     not ok_c2ping_before, ""
 
   -- Client2 resolves the same domain → gets its own set entry
-  ok_c2, c2_out = dig_from CLIENT2_IP, DOMAIN_ALLOWED
+  ok_c2, c2_out = dig_from CLIENT2_IP, DOMAIN_ALLOWED, "A", 15, guest_exec2
   c2_has_ip = c2_out and c2_out\match "%d+%.%d+%.%d+%.%d+"
   report "client2 (#{CLIENT2_IP}) résout #{DOMAIN_ALLOWED}",
     c2_has_ip != nil, (c2_out or "")\gsub "%s+", " "
@@ -467,7 +488,7 @@ if c1_dest
   c2_dest = nft_dest_for cs2_out, CLIENT2_IP
 
   if c2_dest
-    ok_c2ping_after, c2ping2_out = ping_from CLIENT2_IP, c2_dest, 4
+    ok_c2ping_after, c2ping2_out = ping_from CLIENT2_IP, c2_dest, 4, guest_exec2
     report "client2 ping #{c2_dest} après résolution : succès attendu",
       ok_c2ping_after, (c2ping2_out or "")\gsub "%s+$", ""
   else
@@ -552,26 +573,31 @@ report "Auth — from_user : auth-required.test → REFUSED après logout",
   (ref_out and ref_out\upper!\match("REFUSED")) != nil,
   "dig: #{ref_str}"
 
--- ── Portail captif ────────────────────────────────────────────────────────────
+-- ── Portail captif Q2 ───────────────────────────────────────────────────────
 print ""
-print "#{C.bold}▶ Portail captif (port 33080)#{C.reset}"
+print "#{C.bold}▶ Portail captif Q2 (TCP/80 → captive_redirect_q2)#{C.reset}"
 
-CAPTIVE_URL = "http://#{FILTER_LAN_IP}:33080"
+-- Flush authenticated_ips pour forcer le passage par Q2
+ssh FILTER_IP, "sudo nft flush set ip dns-filter authenticated_ips 2>/dev/null; true"
+ssh FILTER_IP, "sudo nft flush set ip6 dns-filter authenticated_ips6 2>/dev/null; true"
 
--- Helper : curl HTTP depuis la VM client vers le port 33080 du filtre
-captive_curl_kvm = (path = "/") ->
-  cmd = "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 #{CAPTIVE_URL}#{path} 2>&1"
-  guest_exec cmd, 10
+-- Capture le nombre de lignes de log avant le test Q2
+_, log_q2_pre = ssh FILTER_IP, "wc -l /tmp/custos-kvm.log 2>/dev/null"
+log_q2_n = tonumber((log_q2_pre or "0")\match "%d+") or 0
 
-ok_cp, cp_code = captive_curl_kvm "/"
-cp_code = (cp_code or "")\gsub "%s+", ""
-report "Portail captif — requête HTTP → 302",
-  cp_code == "302", "HTTP #{cp_code}"
+-- Envoyer un SYN TCP/80 vers une IP non autorisée pour déclencher Q2
+guest_exec "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 3 http://1.2.3.4/ 2>&1", 8
+os.execute "sleep 2"
 
-ok_g204, g204_code = captive_curl_kvm "/generate_204"
-g204_code = (g204_code or "")\gsub "%s+", ""
-report "Portail captif — sonde Android /generate_204 → 302",
-  g204_code == "302", "HTTP #{g204_code}"
+-- Vérifier que Q2 a loggé captive_redirect_q2
+_, log_q2_out = ssh FILTER_IP, "tail -n +#{log_q2_n + 1} /tmp/custos-kvm.log 2>/dev/null | grep captive_redirect_q2"
+has_q2_log = log_q2_out != nil and log_q2_out\match("captive_redirect_q2") != nil
+has_q2_ip  = log_q2_out != nil and log_q2_out\find("ip=#{CLIENT_IP} ", 1, true) != nil
+
+report "Portail captif Q2 — log captive_redirect_q2 présent",
+  has_q2_log, (log_q2_out or "(aucun log Q2)")
+report "Portail captif Q2 — IP client présent dans le log",
+  has_q2_ip, (log_q2_out or "(aucun log Q2)")
 
 -- Re-login pour vérifier authenticated_ips
 auth_curl_kvm "POST", "/login", "user=testuser&password=testpass"
@@ -651,28 +677,32 @@ report "Inscription — utilisateur déjà existant → erreur",
     else
       return false, "HTTP #{code} (attendu 200 ou 409)"
 
+-- Nom unique pour éviter HTTP 409 entre runs consécutifs.
+NEW_USER_KVM = "testnk#{os.time! % 100000}"
+
 report "Inscription — nouvel utilisateur réussi → auto-login + session créée",
   ->
-    cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' #{AUTH_URL}/register"
+    cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=#{NEW_USER_KVM}&password=newpass123&password2=newpass123' #{AUTH_URL}/register"
     ok, output = guest_exec cmd, 10
     code = (output and output\match("(%d+)$")) or ""
     if code == "200"
-      -- Check if sessions.lua contains the new user
       _, sess_out = ssh FILTER_IP, "sudo cat /opt/custos/tmp/sessions.lua 2>/dev/null"
-      if sess_out and sess_out\match("newuser") and sess_out\match(CLIENT_IP)
-        -- Test login with the new credentials
-        cmd_login = "curl -s -o /dev/null -w '%{http_code}' -X POST -k -d 'user=newuser&password=newpass123' #{AUTH_URL}/login"
+      if sess_out and sess_out\match(NEW_USER_KVM) and sess_out\match(CLIENT_IP)
+        cmd_login = "curl -s -o /dev/null -w '%{http_code}' -X POST -k -d 'user=#{NEW_USER_KVM}&password=newpass123' #{AUTH_URL}/login"
         ok_login, code_login = guest_exec cmd_login, 10
         code_login = (code_login or "")\gsub "%s+", ""
         return ok_login and code_login == "200", "HTTP #{code} (inscription ok), login: #{code_login}"
       else
-        return false, "HTTP #{code} mais sessions.lua ne contient pas newuser"
+        return false, "HTTP #{code} mais sessions.lua ne contient pas #{NEW_USER_KVM}"
     else
       return false, "HTTP #{code} (attendu 200)"
 
 -- Wait for session cache to flush after registration
 print "  Waiting 6s for session cache to settle after registration..."
 os.execute "sleep 6"
+-- Re-login testuser (qui a une règle from_user dans filter.yml) pour le test DNS
+auth_curl_kvm "POST", "/login", "user=testuser&password=testpass"
+os.execute "sleep 1"
 
 report "Inscription — from_user : domaine autorisé après login → NXDOMAIN",
   ->
@@ -702,18 +732,7 @@ if tcp_out
 report "DNS over TCP #{DOMAIN_ALLOWED} — TTL patché à 60",
   tcp_ttl == "60", "TTL trouvé: #{tostring tcp_ttl}"
 
--- ── DNAT effectif (TCP port 80 → portail captif) ────────────────────────────
-print ""
-print "#{C.bold}▶ DNAT — TCP port 80 non authentifié → portail captif#{C.reset}"
-
--- Ensure client is NOT authenticated (logout any residual session from registration)
-auth_curl_kvm "GET", "/logout"
-os.execute "sleep 2"
-
-ok_dnat, dnat_code = guest_exec "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 5 http://1.2.3.4/ 2>&1", 10
-dnat_code = (dnat_code or "")\gsub "%s+", ""
-report "DNAT — TCP port 80 non authentifié → 302",
-  dnat_code == "302", "HTTP #{dnat_code}"
+-- (Le test DNAT TCP/80 est maintenant intégré dans le bloc portail captif Q2 ci-dessus.)
 
 -- ── Teardown ─────────────────────────────────────────────────────────────────
 ssh FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; sudo nft flush ruleset 2>/dev/null; true"

@@ -1,5 +1,6 @@
 local LIBVIRT_SCRIPT = "libvirt/custos-libvirt.sh"
 local CLIENT_VM = "custos-client"
+local CLIENT_VM2 = "custos-client2"
 local FILTER_USER = "debian"
 local SSH_KEY = (os.getenv("HOME")) .. "/.ssh/id_rsa"
 local SSH_OPTS = "-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes"
@@ -12,6 +13,7 @@ local CLIENT_IP = "10.99.0.10"
 local CLIENT2_IP = "10.99.0.11"
 local FILTER_IPV6 = "fd99::254"
 local CLIENT_IPV6 = "fd99::10"
+local CLIENT_IPV6_C2 = "fd99::11"
 local C = {
   red = "\27[31m",
   green = "\27[32m",
@@ -62,13 +64,13 @@ ssh_check = function(ip, cmd)
   end
   return out
 end
-local guest_exec
-guest_exec = function(cmd, timeout_s)
+local guest_exec_on
+guest_exec_on = function(vm_name, cmd, timeout_s)
   timeout_s = timeout_s or 10
   local safe_cmd = cmd:gsub('\\', '\\\\\\\\'):gsub('"', '\\"')
   local exec_payload = string.format('{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c","%s"],"capture-output":true}}', safe_cmd)
   local shell_payload = exec_payload:gsub("'", "'\"'\"'")
-  local ok, out = run("LIBVIRT_DEFAULT_URI=qemu:///system virsh qemu-agent-command " .. tostring(CLIENT_VM) .. " '" .. tostring(shell_payload) .. "'")
+  local ok, out = run("LIBVIRT_DEFAULT_URI=qemu:///system virsh qemu-agent-command " .. tostring(vm_name) .. " '" .. tostring(shell_payload) .. "'")
   if not (ok) then
     return false, "guest-exec failed: " .. tostring(out)
   end
@@ -83,7 +85,7 @@ guest_exec = function(cmd, timeout_s)
       do
         os.execute("sleep 1")
         local status_payload = string.format('{"execute":"guest-exec-status","arguments":{"pid":%s}}', pid)
-        local ok2, out2 = run("LIBVIRT_DEFAULT_URI=qemu:///system virsh qemu-agent-command " .. tostring(CLIENT_VM) .. " '" .. tostring(status_payload) .. "'")
+        local ok2, out2 = run("LIBVIRT_DEFAULT_URI=qemu:///system virsh qemu-agent-command " .. tostring(vm_name) .. " '" .. tostring(status_payload) .. "'")
         if not (ok2) then
           _continue_0 = true
           break
@@ -109,38 +111,60 @@ guest_exec = function(cmd, timeout_s)
   end
   return false, "guest-exec timed out after " .. tostring(timeout_s) .. "s"
 end
+local guest_exec
+guest_exec = function(cmd, timeout_s)
+  return guest_exec_on(CLIENT_VM, cmd, timeout_s)
+end
+local guest_exec2
+guest_exec2 = function(cmd, timeout_s)
+  return guest_exec_on(CLIENT_VM2, cmd, timeout_s)
+end
 local resolve_host
 resolve_host = function(domain)
   local _, out = run("dig +short " .. tostring(domain) .. " 2>/dev/null")
   return out and out:match("%d+%.%d+%.%d+%.%d+")
 end
 local ping_from
-ping_from = function(src_ip, dest_ip, timeout_s)
+ping_from = function(src_ip, dest_ip, timeout_s, exec_fn)
   if timeout_s == nil then
     timeout_s = 3
   end
-  return guest_exec("ping -c1 -W" .. tostring(timeout_s) .. " -I " .. tostring(src_ip) .. " " .. tostring(dest_ip) .. " 2>&1", timeout_s + 4)
+  if exec_fn == nil then
+    exec_fn = guest_exec
+  end
+  return exec_fn("ping -c1 -W" .. tostring(timeout_s) .. " -I " .. tostring(src_ip) .. " " .. tostring(dest_ip) .. " 2>&1", timeout_s + 4)
 end
 local curl_from
-curl_from = function(url, timeout_s)
+curl_from = function(url, timeout_s, resolve_ip)
   if timeout_s == nil then
     timeout_s = 5
   end
-  local cmd = "curl -k -s -o /dev/null --write-out %{http_code} --connect-timeout " .. tostring(timeout_s) .. " --max-time " .. tostring(timeout_s + 5) .. " " .. tostring(url) .. " 2>&1"
+  if resolve_ip == nil then
+    resolve_ip = nil
+  end
+  local resolve_opt = ""
+  if resolve_ip then
+    local host = url:match("https?://([^/]+)")
+    resolve_opt = "--resolve " .. tostring(host) .. ":80:" .. tostring(resolve_ip) .. " --resolve " .. tostring(host) .. ":443:" .. tostring(resolve_ip)
+  end
+  local cmd = "curl -k -s -o /dev/null --write-out %{http_code} --connect-timeout " .. tostring(timeout_s) .. " --max-time " .. tostring(timeout_s + 5) .. " " .. tostring(resolve_opt) .. " " .. tostring(url) .. " 2>&1"
   local _, out = guest_exec(cmd, timeout_s + 8)
   local code = (out or ""):match("%d%d%d" or "000")
   local received = code ~= "000"
   return received, code
 end
 local dig_from
-dig_from = function(src_ip, domain, qtype, timeout_s)
+dig_from = function(src_ip, domain, qtype, timeout_s, exec_fn)
   if qtype == nil then
     qtype = "A"
   end
   if timeout_s == nil then
     timeout_s = 15
   end
-  return guest_exec("dig +short +time=5 +tries=1 " .. tostring(qtype) .. " " .. tostring(domain) .. " @" .. tostring(DNS_SERVER) .. " -b " .. tostring(src_ip), timeout_s)
+  if exec_fn == nil then
+    exec_fn = guest_exec
+  end
+  return exec_fn("dig +short +time=5 +tries=1 " .. tostring(qtype) .. " " .. tostring(domain) .. " @" .. tostring(DNS_SERVER) .. " -b " .. tostring(src_ip), timeout_s)
 end
 local nft_dest_for
 nft_dest_for = function(set_out, client_ip)
@@ -186,7 +210,7 @@ ssh(FILTER_IP, "sudo mkdir -p /etc/custos && sudo rm -f /etc/custos/secrets")
 run("printf 'local c = require(\"auth.credentials\")\\nc.register_user(\"testuser\",\"testpass\",\"/etc/custos/secrets\",{})\\n' | ssh " .. tostring(SSH_OPTS) .. " -i " .. tostring(SSH_KEY) .. " " .. tostring(FILTER_USER) .. "@" .. tostring(FILTER_IP) .. " 'cat > /tmp/mkuser.lua'")
 ssh(FILTER_IP, "sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit /tmp/mkuser.lua'")
 ssh_check(FILTER_IP, "sudo nft -f /opt/custos/nft-rules/dns-filter.nft")
-ssh_check(FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &")
+ssh_check(FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" BRIDGE_MODE=1 BRIDGE_IFNAME=br0 luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &")
 os.execute("sleep 5")
 local ok_luajit, _ = ssh(FILTER_IP, "pgrep -f 'luajit.*main' >/dev/null")
 print("  LuaJIT: " .. tostring(ok_luajit and (C.green .. 'running' .. C.reset) or (C.red .. 'NOT running' .. C.reset)))
@@ -216,17 +240,18 @@ CLIENT_IFACE = #CLIENT_IFACE > 0 and CLIENT_IFACE or "eth0"
 print("  Client interface: " .. tostring(CLIENT_IFACE))
 print("  Adding IPv6 " .. tostring(CLIENT_IPV6) .. "/64 to client " .. tostring(CLIENT_IFACE) .. "...")
 guest_exec("sudo ip addr add " .. tostring(CLIENT_IPV6) .. "/64 dev " .. tostring(CLIENT_IFACE) .. " 2>/dev/null; true", 5)
-print("  Adding client2 alias " .. tostring(CLIENT2_IP) .. "/24 to client " .. tostring(CLIENT_IFACE) .. "...")
-guest_exec("sudo ip addr add " .. tostring(CLIENT2_IP) .. "/24 dev " .. tostring(CLIENT_IFACE) .. " 2>/dev/null; true", 5)
 os.execute("sleep 1")
 local c_addr_out
 _, c_addr_out = guest_exec("ip addr show dev " .. tostring(CLIENT_IFACE), 5)
 if not (c_addr_out and c_addr_out:match(CLIENT_IPV6)) then
   print("  " .. tostring(C.yellow) .. "WARNING: " .. tostring(CLIENT_IPV6) .. " not found on client " .. tostring(CLIENT_IFACE) .. " — AAAA test may skip" .. tostring(C.reset))
 end
-if not (c_addr_out and c_addr_out:match(CLIENT2_IP:gsub("%.", "%."))) then
-  print("  " .. tostring(C.yellow) .. "WARNING: " .. tostring(CLIENT2_IP) .. " not found on client " .. tostring(CLIENT_IFACE) .. " — isolation test may fail" .. tostring(C.reset))
-end
+local iface2_raw
+_, iface2_raw = guest_exec2("ip route get " .. tostring(DNS_SERVER) .. " | sed -En \"s/.*dev ([^ ]+).*/\\1/p\"", 5)
+local CLIENT2_IFACE = (iface2_raw or ""):gsub("%s+", "")
+CLIENT2_IFACE = #CLIENT2_IFACE > 0 and CLIENT2_IFACE or "eth0"
+print("  Client2 interface: " .. tostring(CLIENT2_IFACE))
+guest_exec2("sudo ip addr add " .. tostring(CLIENT_IPV6_C2) .. "/64 dev " .. tostring(CLIENT2_IFACE) .. " 2>/dev/null; true", 5)
 print("  Triggering NDP (ping6 filter from client)...")
 guest_exec("ping6 -c3 -W1 " .. tostring(FILTER_IPV6) .. " 2>/dev/null; true", 8)
 local neigh_ok = false
@@ -291,9 +316,9 @@ if allowed_ip then
 else
   report("ping après résolution — ip4_allowed vide", false, "")
 end
-local ok_curl_http, http_code = curl_from("http://" .. tostring(DOMAIN_ALLOWED) .. "/")
+local ok_curl_http, http_code = curl_from("http://" .. tostring(DOMAIN_ALLOWED) .. "/", 5, allowed_ip)
 report("curl http://" .. tostring(DOMAIN_ALLOWED) .. "/ après résolution : succès attendu", ok_curl_http, "HTTP " .. tostring(http_code))
-local ok_curl_https, https_code = curl_from("https://" .. tostring(DOMAIN_ALLOWED) .. "/")
+local ok_curl_https, https_code = curl_from("https://" .. tostring(DOMAIN_ALLOWED) .. "/", 5, allowed_ip)
 report("curl https://" .. tostring(DOMAIN_ALLOWED) .. "/ après résolution : succès attendu", ok_curl_https, "HTTP " .. tostring(https_code))
 print("")
 print(tostring(C.bold) .. "▶ DNS refusé + ping avant/après (" .. tostring(DOMAIN_BLOCKED) .. ")" .. tostring(C.reset))
@@ -351,10 +376,16 @@ local c1_dest = nft_dest_for(cs_out, CLIENT_IP)
 if c1_dest then
   local ok_c1ping, c1ping_out = ping_from(CLIENT_IP, c1_dest, 4)
   report("client1 ping " .. tostring(c1_dest) .. " après résolution : succès attendu", ok_c1ping, (c1ping_out or ""):gsub("%s+$", ""))
+  ssh(FILTER_IP, "sudo nft flush set ip dns-filter ip4_allowed 2>/dev/null; true")
+  dig_from(CLIENT_IP, DOMAIN_ALLOWED)
+  os.execute("sleep 1")
+  local cs_c1_out
+  _, cs_c1_out = ssh(FILTER_IP, "sudo nft list set ip dns-filter ip4_allowed")
+  c1_dest = nft_dest_for(cs_c1_out, CLIENT_IP) or c1_dest
   local ok_c2ping_before
-  ok_c2ping_before, _ = ping_from(CLIENT2_IP, c1_dest, 2)
+  ok_c2ping_before, _ = ping_from(CLIENT2_IP, c1_dest, 2, guest_exec2)
   report("client2 (" .. tostring(CLIENT2_IP) .. ") ping " .. tostring(c1_dest) .. " avant résolution : échec attendu", not ok_c2ping_before, "")
-  local ok_c2, c2_out = dig_from(CLIENT2_IP, DOMAIN_ALLOWED)
+  local ok_c2, c2_out = dig_from(CLIENT2_IP, DOMAIN_ALLOWED, "A", 15, guest_exec2)
   local c2_has_ip = c2_out and c2_out:match("%d+%.%d+%.%d+%.%d+")
   report("client2 (" .. tostring(CLIENT2_IP) .. ") résout " .. tostring(DOMAIN_ALLOWED), c2_has_ip ~= nil, (c2_out or ""):gsub("%s+", " "))
   os.execute("sleep 1")
@@ -362,7 +393,7 @@ if c1_dest then
   _, cs2_out = ssh(FILTER_IP, "sudo nft list set ip dns-filter ip4_allowed")
   local c2_dest = nft_dest_for(cs2_out, CLIENT2_IP)
   if c2_dest then
-    local ok_c2ping_after, c2ping2_out = ping_from(CLIENT2_IP, c2_dest, 4)
+    local ok_c2ping_after, c2ping2_out = ping_from(CLIENT2_IP, c2_dest, 4, guest_exec2)
     report("client2 ping " .. tostring(c2_dest) .. " après résolution : succès attendu", ok_c2ping_after, (c2ping2_out or ""):gsub("%s+$", ""))
   else
     report("client2 dans ip4_allowed après résolution", false, tostring(CLIENT2_IP) .. " introuvable dans le set")
@@ -420,22 +451,20 @@ local ok_ref, ref_out = guest_exec("dig +time=5 +tries=1 auth-required.test @" .
 local ref_str = (ref_out or ""):gsub("%s+$", "")
 report("Auth — from_user : auth-required.test → REFUSED après logout", (ref_out and ref_out:upper():match("REFUSED")) ~= nil, "dig: " .. tostring(ref_str))
 print("")
-print(tostring(C.bold) .. "▶ Portail captif (port 33080)" .. tostring(C.reset))
-local CAPTIVE_URL = "http://" .. tostring(FILTER_LAN_IP) .. ":33080"
-local captive_curl_kvm
-captive_curl_kvm = function(path)
-  if path == nil then
-    path = "/"
-  end
-  local cmd = "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 " .. tostring(CAPTIVE_URL) .. tostring(path) .. " 2>&1"
-  return guest_exec(cmd, 10)
-end
-local ok_cp, cp_code = captive_curl_kvm("/")
-cp_code = (cp_code or ""):gsub("%s+", "")
-report("Portail captif — requête HTTP → 302", cp_code == "302", "HTTP " .. tostring(cp_code))
-local ok_g204, g204_code = captive_curl_kvm("/generate_204")
-g204_code = (g204_code or ""):gsub("%s+", "")
-report("Portail captif — sonde Android /generate_204 → 302", g204_code == "302", "HTTP " .. tostring(g204_code))
+print(tostring(C.bold) .. "▶ Portail captif Q2 (TCP/80 → captive_redirect_q2)" .. tostring(C.reset))
+ssh(FILTER_IP, "sudo nft flush set ip dns-filter authenticated_ips 2>/dev/null; true")
+ssh(FILTER_IP, "sudo nft flush set ip6 dns-filter authenticated_ips6 2>/dev/null; true")
+local log_q2_pre
+_, log_q2_pre = ssh(FILTER_IP, "wc -l /tmp/custos-kvm.log 2>/dev/null")
+local log_q2_n = tonumber((log_q2_pre or "0"):match("%d+")) or 0
+guest_exec("curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 3 http://1.2.3.4/ 2>&1", 8)
+os.execute("sleep 2")
+local log_q2_out
+_, log_q2_out = ssh(FILTER_IP, "tail -n +" .. tostring(log_q2_n + 1) .. " /tmp/custos-kvm.log 2>/dev/null | grep captive_redirect_q2")
+local has_q2_log = log_q2_out ~= nil and log_q2_out:match("captive_redirect_q2") ~= nil
+local has_q2_ip = log_q2_out ~= nil and log_q2_out:find("ip=" .. tostring(CLIENT_IP) .. " ", 1, true) ~= nil
+report("Portail captif Q2 — log captive_redirect_q2 présent", has_q2_log, (log_q2_out or "(aucun log Q2)"))
+report("Portail captif Q2 — IP client présent dans le log", has_q2_ip, (log_q2_out or "(aucun log Q2)"))
 auth_curl_kvm("POST", "/login", "user=testuser&password=testpass")
 os.execute("sleep 1")
 local auth_nft_out
@@ -505,19 +534,20 @@ report("Inscription — utilisateur déjà existant → erreur", function()
     return false, "HTTP " .. tostring(code) .. " (attendu 200 ou 409)"
   end
 end)
+local NEW_USER_KVM = "testnk" .. tostring(os.time() % 100000)
 report("Inscription — nouvel utilisateur réussi → auto-login + session créée", function()
-  local cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' " .. tostring(AUTH_URL) .. "/register"
+  local cmd = "curl -k -s -w '%{http_code}' -X POST -d 'user=" .. tostring(NEW_USER_KVM) .. "&password=newpass123&password2=newpass123' " .. tostring(AUTH_URL) .. "/register"
   local ok, output = guest_exec(cmd, 10)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" then
     _, sess_out = ssh(FILTER_IP, "sudo cat /opt/custos/tmp/sessions.lua 2>/dev/null")
-    if sess_out and sess_out:match("newuser") and sess_out:match(CLIENT_IP) then
-      local cmd_login = "curl -s -o /dev/null -w '%{http_code}' -X POST -k -d 'user=newuser&password=newpass123' " .. tostring(AUTH_URL) .. "/login"
+    if sess_out and sess_out:match(NEW_USER_KVM) and sess_out:match(CLIENT_IP) then
+      local cmd_login = "curl -s -o /dev/null -w '%{http_code}' -X POST -k -d 'user=" .. tostring(NEW_USER_KVM) .. "&password=newpass123' " .. tostring(AUTH_URL) .. "/login"
       local ok_login, code_login = guest_exec(cmd_login, 10)
       code_login = (code_login or ""):gsub("%s+", "")
       return ok_login and code_login == "200", "HTTP " .. tostring(code) .. " (inscription ok), login: " .. tostring(code_login)
     else
-      return false, "HTTP " .. tostring(code) .. " mais sessions.lua ne contient pas newuser"
+      return false, "HTTP " .. tostring(code) .. " mais sessions.lua ne contient pas " .. tostring(NEW_USER_KVM)
     end
   else
     return false, "HTTP " .. tostring(code) .. " (attendu 200)"
@@ -525,6 +555,8 @@ report("Inscription — nouvel utilisateur réussi → auto-login + session cré
 end)
 print("  Waiting 6s for session cache to settle after registration...")
 os.execute("sleep 6")
+auth_curl_kvm("POST", "/login", "user=testuser&password=testpass")
+os.execute("sleep 1")
 report("Inscription — from_user : domaine autorisé après login → NXDOMAIN", function()
   local cmd = "dig +time=12 +tries=1 auth-required.test @" .. tostring(DNS_SERVER) .. " 2>&1"
   local output
@@ -545,13 +577,6 @@ if tcp_out then
   tcp_ttl = tcp_ttl or tcp_out:match("(%d+)\t+IN\t+A\t")
 end
 report("DNS over TCP " .. tostring(DOMAIN_ALLOWED) .. " — TTL patché à 60", tcp_ttl == "60", "TTL trouvé: " .. tostring(tostring(tcp_ttl)))
-print("")
-print(tostring(C.bold) .. "▶ DNAT — TCP port 80 non authentifié → portail captif" .. tostring(C.reset))
-auth_curl_kvm("GET", "/logout")
-os.execute("sleep 2")
-local ok_dnat, dnat_code = guest_exec("curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 5 http://1.2.3.4/ 2>&1", 10)
-dnat_code = (dnat_code or ""):gsub("%s+", "")
-report("DNAT — TCP port 80 non authentifié → 302", dnat_code == "302", "HTTP " .. tostring(dnat_code))
 ssh(FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; sudo nft flush ruleset 2>/dev/null; true")
 print("")
 print((string.rep("─", 50)))

@@ -150,12 +150,25 @@ create_base_images() {
 
     # Per-VM copy-on-write images
     for vm in custos-filter custos-router custos-client; do
-        size=4G
         if [ ! -f "$VM_DIR/${vm}.qcow2" ]; then
             qemu-img create -f qcow2 -b "$IMG_DIR/debian.qcow2" \
-                -F qcow2 "$VM_DIR/${vm}.qcow2" "$size"
+                -F qcow2 "$VM_DIR/${vm}.qcow2" 4G
         fi
     done
+
+    # custos-client2 uses a pre-built base image with packages already installed.
+    # debian-client-base.qcow2 is created once from custos-client.qcow2 (flattened)
+    # after its first cloud-init boot, so apt packages are baked in.
+    if [ ! -f "$IMG_DIR/debian-client-base.qcow2" ]; then
+        echo "ERROR: $IMG_DIR/debian-client-base.qcow2 not found."
+        echo "Run: sudo qemu-img convert -f qcow2 -O qcow2 $VM_DIR/custos-client.qcow2 $IMG_DIR/debian-client-base.qcow2"
+        echo "(requires custos-client to be stopped first)"
+        exit 1
+    fi
+    if [ ! -f "$VM_DIR/custos-client2.qcow2" ]; then
+        qemu-img create -f qcow2 -b "$IMG_DIR/debian-client-base.qcow2" \
+            -F qcow2 "$VM_DIR/custos-client2.qcow2" 4G
+    fi
 
     # Cloud-init ISO for filter VM
     if [ ! -f "$VM_DIR/cidata-filter.iso" ]; then
@@ -181,15 +194,24 @@ create_base_images() {
             "$SCRIPT_DIR/network-config-client"
     fi
 
+    # Cloud-init ISO for client2 VM (packages from backing, distinct hostname/IP/MAC)
+    if [ ! -f "$VM_DIR/cidata-client2.iso" ]; then
+        echo "Building cidata-client2.iso..."
+        make_cidata "$VM_DIR/cidata-client2.iso" \
+            "$SCRIPT_DIR/user-data-client2" "$SCRIPT_DIR/meta-data-client2" \
+            "$SCRIPT_DIR/network-config-client2"
+    fi
+
     # Define libvirt networks
     ensure_network lan     "$SCRIPT_DIR/network-lan.xml"
     ensure_network wanfilter "$SCRIPT_DIR/network-wanfilter.xml"
     ensure_network wan     "$SCRIPT_DIR/network-wan.xml"
 
     # Define VMs
-    virsh dominfo custos-router 2>/dev/null || virsh define "$SCRIPT_DIR/router.xml"
-    virsh dominfo custos-client 2>/dev/null || virsh define "$SCRIPT_DIR/client.xml"
-    virsh dominfo custos-filter 2>/dev/null || virsh define "$SCRIPT_DIR/filter.xml"
+    virsh dominfo custos-router  2>/dev/null || virsh define "$SCRIPT_DIR/router.xml"
+    virsh dominfo custos-client  2>/dev/null || virsh define "$SCRIPT_DIR/client.xml"
+    virsh dominfo custos-client2 2>/dev/null || virsh define "$SCRIPT_DIR/client2.xml"
+    virsh dominfo custos-filter  2>/dev/null || virsh define "$SCRIPT_DIR/filter.xml"
 }
 
 # --- Lifecycle ---------------------------------------------------------------
@@ -199,7 +221,7 @@ case "$1" in
         create_base_images
         ;;
     start)
-        for vm in custos-router custos-filter custos-client; do
+        for vm in custos-router custos-filter custos-client custos-client2; do
             virsh start "$vm" 2>/dev/null || true
         done
         wait_for_ssh
@@ -207,12 +229,13 @@ case "$1" in
         ;;
     wait-agents)
         wait_for_agent custos-client
+        wait_for_agent custos-client2
         ;;
     stop)
-        for vm in custos-client custos-filter custos-router; do
+        for vm in custos-client2 custos-client custos-filter custos-router; do
             virsh shutdown "$vm" 2>/dev/null || true
         done
-        for vm in custos-client custos-filter custos-router; do
+        for vm in custos-client2 custos-client custos-filter custos-router; do
             for _ in $(seq 1 6); do
                 virsh domstate "$vm" 2>/dev/null | grep -q "shut off" && break
                 sleep 5
@@ -221,7 +244,7 @@ case "$1" in
         done
         ;;
     delete)
-        for vm in custos-client custos-filter custos-router; do
+        for vm in custos-client2 custos-client custos-filter custos-router; do
             virsh destroy  "$vm" 2>/dev/null || true
             virsh undefine "$vm" 2>/dev/null || true
         done
