@@ -46,7 +46,7 @@ Les explications détaillées et l'architecture restent dans `README.md`.
 - Authentification / portail captif:
   - Worker auth: `src/auth/worker.moon`
   - Serveur auth: `src/auth/server.moon`
-  - Portail captif: `src/auth/captive.moon`
+  - Worker Q2 (TCP/80 intercept): `src/worker_q2.moon`
   - Sessions: `src/auth/sessions.moon`
   - Intégration nft auth: `src/auth/nft_sessions.moon`
   - Secrets/hash: `src/auth/credentials.moon`
@@ -62,9 +62,11 @@ Les explications détaillées et l'architecture restent dans `README.md`.
 - Condition compilée: `(req) -> ok, reason`
 - Action compilée: `(req) -> verdict|nil, message`
 - Clé pending Q1: `txid:ip:port`
+- Workers: Q0 (questions), Q1 (réponses), AUTH (HTTPS), Q2 (TCP/80 captif, si `BRIDGE_MODE=1`)
 - SIGHUP:
   - `main` le propage a Q0
   - Q0 fait `filter.reload()`
+- Sets nft actifs: `ip4_allowed`, `ip6_allowed`, `authenticated_ips`
 
 ## Build, run, debug
 
@@ -101,7 +103,7 @@ Les explications détaillées et l'architecture restent dans `README.md`.
 - Unitaires: `make test`
 - nDPI: `make test-ndpi`
 - Docker E2E: `make test-docker`
-- KVM E2E: `make test-kvm`
+- KVM E2E (47 tests): `make test-kvm`
 - OpenWrt E2E: `make test-openwrt HOST=root@<routeur>`
 
 ## Playbooks rapides

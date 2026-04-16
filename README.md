@@ -19,14 +19,14 @@ detection — all without any C compilation step.
 │                                                                │
 │  nftables (kernel)                                             │
 │  ├── policy DROP + REJECT LAN                                  │
-│  ├── set mac4_allowed     { mac . dst_ipv4  timeout 2m }       │
-│  ├── set mac6_allowed     { mac . dst_ipv6  timeout 2m }       │
-│  ├── set authenticated_macs { mac timeout <session_ttl> }      │
-│  ├── HTTP :80 LAN → DNAT :33080 (portail captif, non-auth)     │
+│  ├── set ip4_allowed   { ipv4_src . ipv4_dst  timeout 2m }     │
+│  ├── set ip6_allowed   { ipv6_src . ipv6_dst  timeout 2m }     │
+│  ├── set authenticated_ips { ipv4_addr timeout <session_ttl> } │
+│  ├── TCP :80 LAN SYN → NFQUEUE 2  (portail captif, non-auth)  │
 │  ├── UDP/53 + TCP/53 src=LAN → NFQUEUE 0  (questions)          │
 │  └── UDP/53 + TCP/53 dst=LAN → NFQUEUE 1  (réponses)           │
 │                                                                │
-│  LuaJIT (userspace)                                            │
+│  LuaJIT (userspace)  BRIDGE_MODE=1  BRIDGE_IFNAME=<br>         │
 │  ├── main.lua        supervisor + fork                         │
 │  ├── worker Q0  ─────────────────── pipe IPC ──► worker Q1    │
 │  │   parse L2/L3/L4/L7 (FFI)                    drain pipe     │
@@ -35,7 +35,8 @@ detection — all without any C compilation step.
 │  │   write(pipe, txid+ip+port+mac+type)         nft set add    │
 │  │   or send REFUSED (socket UDP/53)            ACCEPT+payload │
 │  ├── worker AUTH — HTTPS login (port 33443)                    │
-│  │              — portail captif HTTP (port 33080)             │
+│  ├── worker Q2   — TCP/80 SYN intercept → 302 → portail        │
+│  │               (activé si BRIDGE_MODE=1)                     │
 │  └── logs → syslog (journald / logread)                        │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -165,15 +166,19 @@ custos/
 │   ├── test_ndpi.lua        Tests nDPI compilés
 │   ├── test_docker.moon     Tests E2E Docker source
 │   ├── test_docker.lua      Tests E2E Docker compilés
-│   ├── test_kvm.moon        Tests E2E KVM/libvirt (20 tests) source
+│   ├── test_kvm.moon        Tests E2E KVM/libvirt (47 tests) source
 │   ├── test_kvm.lua         Tests E2E KVM compilés
 │   ├── test_openwrt.moon    Tests E2E OpenWrt via SSH source
 │   └── test_openwrt.lua     Tests E2E OpenWrt compilés
 ├── install-owrt.moon        Installeur OpenWrt (déploiement SSH)
 ├── install-owrt.lua         Installeur compilé
 ├── libvirt/
-│   ├── *.xml                Configs libvirt (filter/client/router)
-│   └── custos-libvirt.sh    Script gestion VMs
+│   ├── filter.xml           VM filtre (Debian, 2 interfaces)
+│   ├── client.xml           VM client1 (10.99.0.10, LAN)
+│   ├── client2.xml          VM client2 (10.99.0.11, LAN — isolation tests)
+│   ├── router.xml           VM routeur (OpenWrt)
+│   ├── {user-data,meta-data,network-config}-client{,2}  cloud-init
+│   └── custos-libvirt.sh    Script gestion VMs (create/start/stop/delete)
 ├── Dockerfile               Build multi-stage Docker
 ├── docker-compose.yml       Environnement de test complet
 ├── LICENSE                  Licence MIT
@@ -562,10 +567,11 @@ Multiple users can be listed (logical OR):
 
 ### Captive portal
 
-Le worker AUTH sert également un **portail captif HTTP** sur le port 33080.
-Les règles nft redirigent (DNAT) le trafic HTTP :80 des clients non authentifiés
-vers ce port. Une fois authentifié, le client est retiré de la règle DNAT
-(via `authenticated_macs`) et accède directement au port 80.
+Un **worker Q2** dédié intercepte les SYN TCP/80 des clients non authentifiés
+via NFQUEUE 2 et répond directement avec une réponse HTTP 302 vers le portail
+HTTPS (port 33443), sans passer par le proxy kernel. Une fois authentifié,
+l'IP cliente est ajoutée à `authenticated_ips` et les SYN TCP/80 ne sont plus
+interceptés.
 
 La condition `dnsonly` permet de détecter les sondes de portail captif
 (connectivitycheck, generate_204, etc.) et de les laisser passer au niveau
@@ -625,17 +631,18 @@ interface names or IP address ranges**.
 
 - DNS (UDP/TCP port 53) from LAN → **NFQUEUE 0** (questions, worker Q0)
 - DNS responses (sport 53) to LAN → **NFQUEUE 1** (responses, worker Q1)
-- LuaJIT decides ACCEPT, REFUSED, or DNSONLY; populates `mac4_allowed`/`mac6_allowed` on success
-- Clients in `authenticated_macs` bypass the DNAT redirect (HTTP :80)
+- TCP/80 SYN from LAN → **NFQUEUE 2** (captive portal, worker Q2, if `BRIDGE_MODE=1`)
+- LuaJIT decides ACCEPT, REFUSED, or DNSONLY; populates `ip4_allowed`/`ip6_allowed` on success
+- Clients in `authenticated_ips` bypass TCP/80 interception (Q2 sees their SYN and passes)
 - All forwarded traffic matching a set entry → ACCEPT; rest → DROP/REJECT
 
 ### Sets nftables
 
 | Set | Type | Rôle |
 |-----|------|------|
-| `mac4_allowed` | `ether_addr . ipv4_addr` | Paire (MAC client, IPv4 dest) autorisée après résolution DNS |
-| `mac6_allowed` | `ether_addr . ipv6_addr` | Paire (MAC client, IPv6 dest) autorisée après résolution DNS |
-| `authenticated_macs` | `ether_addr` | Clients authentifiés (bypass DNAT portail captif) |
+| `ip4_allowed` | `ipv4_addr . ipv4_addr` | Paire (src IP client, IPv4 dest) autorisée après résolution DNS |
+| `ip6_allowed` | `ipv6_addr . ipv6_addr` | Paire (src IPv6 client, IPv6 dest) autorisée après résolution DNS |
+| `authenticated_ips` | `ipv4_addr` | IPs clientes authentifiées (bypass intercept TCP/80 Q2) |
 | `ip4_dest_whitelist` | `ipv4_addr` | Destinations IPv4 toujours autorisées (rechargement SIGHUP) |
 | `ip6_dest_whitelist` | `ipv6_addr` | Destinations IPv6 toujours autorisées (rechargement SIGHUP) |
 
@@ -714,37 +721,48 @@ docker compose down
 
 ## KVM/Libvirt End-to-End Tests
 
-A full test suite (20 tests) runs against three KVM virtual machines.
+A full test suite (47 tests) runs against four KVM virtual machines.
 The filter VM runs CustosVirginum natively (no container).
 
 ```
 ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
 │   client     │      │   filter     │      │    router    │
 │   (Debian)   ├──────┤ (Debian,     ├──────┤  (OpenWrt)   │
-│  10.99.0.10  │      │  native nft) │      │              │
-│  fd99::10    │      │              │      │              │
+│  10.99.0.10  │ LAN  │  native nft) │wanflt│              │
+│  fd99::10    │      │  br0 bridge  │      │              │
 └──────────────┘      └──────────────┘      └──────────────┘
+┌──────────────┐
+│   client2    │
+│   (Debian)   ├── LAN (distinct MAC 52:54:00:00:03:02)
+│  10.99.0.11  │   isolation tests
+│  fd99::11    │
+└──────────────┘
 ```
 
 ### Running
 
 ```bash
-make test-kvm          # full cycle: up + 20 tests + down
+make test-kvm          # full cycle: up + 47 tests + down
 make test-kvm-up       # start VMs (creates them on first run)
 make test-kvm-run      # run tests only (VMs already up)
 make test-kvm-down     # stop VMs
 ```
 
-### What the 20 tests cover
+### What the 47 tests cover
 
 | Category | Examples |
 |----------|---------|
-| DNS ALLOW | `github.com` → `mac4_allowed` populated; ping works after |
+| Infrastructure | `br0` up, `bridge-nf-call-iptables`, nft tables, DHCP/SLAAC rules |
+| DNS ALLOW | `github.com` → `ip4_allowed` populated; ping + curl works after |
 | DNS REFUSED | `facebook.com` → RCODE 5 + EDE 15; ping stays blocked |
-| IPv6 AAAA | `cloudflare.com` AAAA → `mac6_allowed` populated; ping6 works |
-| TTL patch | Response TTL forced to 60s |
-| Per-client isolation | client2 (10.99.0.11) blocked until it resolves independently |
+| NXDOMAIN | `nonexistent.invalid` → NXDOMAIN forwarded |
+| IPv6 AAAA | `cloudflare.com` AAAA → `ip6_allowed` populated |
+| Per-client isolation | client2 (10.99.0.11, distinct MAC) blocked until it resolves independently |
 | Log validation | `action=ALLOW`, `action=REFUSED` present in log |
+| Auth HTTPS | Login/logout, heartbeat, sessions.lua, `from_user` DNS |
+| Captive portal Q2 | TCP/80 SYN → `captive_redirect_q2` log, `authenticated_ips` |
+| Registration | Form validation, new user, auto-login, `from_user` DNS post-inscription |
+| DNS over TCP | github.com A over TCP; TTL patched to 60s |
 
 ### One-time VM setup
 
@@ -752,8 +770,38 @@ make test-kvm-down     # stop VMs
 sudo bash libvirt/custos-libvirt.sh create
 ```
 
-Downloads Debian cloud image and OpenWrt 25.12, creates three domains
-(`custos-filter`, `custos-router`, `custos-client`) with cloud-init.
+Downloads Debian cloud image and OpenWrt 25.12, creates four domains
+(`custos-filter`, `custos-router`, `custos-client`, `custos-client2`) with cloud-init.
+
+#### Prérequis : `debian-client-base.qcow2`
+
+`custos-client2` uses a pre-built backing image with packages already installed
+(avoids cloud-init apt delays at test time). Create it once from `custos-client`
+after its first successful boot:
+
+```bash
+# Stop client VM first
+virsh -c qemu:///system shutdown custos-client
+# Flatten the image (packages baked in)
+sudo qemu-img convert -f qcow2 -O qcow2 \
+  /var/lib/libvirt/images/custos-client.qcow2 \
+  images/debian-client-base.qcow2
+# Restart client VM
+virsh -c qemu:///system start custos-client
+```
+
+`custos-libvirt.sh create` will refuse with an error message if this file is missing.
+
+#### Variables d'environnement LuaJIT (KVM)
+
+In KVM mode, LuaJIT is started with:
+
+```
+BRIDGE_MODE=1       # activates worker Q2 (captive portal TCP/80)
+BRIDGE_IFNAME=br0   # bridge interface name for raw socket in worker_q2
+```
+
+These are passed by `test_kvm.moon` when launching the filter process.
 
 ### Cleanup
 

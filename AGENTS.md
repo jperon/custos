@@ -82,29 +82,89 @@ ssh "logread | sed -n '/#{LOG_MARKER}/,$p' | grep queue_listening"
 
 ---
 
-Requires KVM + libvirt. Runs 20 tests against three VMs:
+Requires KVM + libvirt. Runs 47 tests against four VMs:
 - `custos-filter` (Debian) — runs CustosVirginum natively
 - `custos-router` (OpenWrt) — DHCPv4 + SLAAC upstream
-- `custos-client` (Debian) — sends DNS queries, pings
+- `custos-client` (Debian, `10.99.0.10`) — sends DNS queries, pings
+- `custos-client2` (Debian, `10.99.0.11`) — second client for MAC-based isolation tests
 
 **First run**: `sudo bash libvirt/custos-libvirt.sh create` (downloads images).
 **Subsequent runs**: `make test-kvm` (up → run → down).
 
+#### Prérequis : `images/debian-client-base.qcow2`
+
+`custos-client2` uses a flattened copy of `custos-client.qcow2` as its backing
+image so packages (`qemu-guest-agent`, `dnsutils`, etc.) are already installed
+— no apt install at boot, agent ready in ~10s. Create it once:
+
+```bash
+virsh -c qemu:///system shutdown custos-client
+sudo qemu-img convert -f qcow2 -O qcow2 \
+  /var/lib/libvirt/images/custos-client.qcow2 \
+  images/debian-client-base.qcow2
+virsh -c qemu:///system start custos-client
+```
+
+`custos-libvirt.sh create` errors out with instructions if this file is missing.
+
+#### Variables d'environnement LuaJIT en KVM
+
+LuaJIT is launched in `test_kvm.moon` with:
+
+```
+BRIDGE_MODE=1       # activates worker Q2 (captive portal TCP/80 intercept)
+BRIDGE_IFNAME=br0   # interface name for raw socket in worker_q2
+```
+
+**Do NOT set `NFQ_BRIDGE_MODE=1`** — NFQUEUE is hooked in the `ip forward`
+chain (not `bridge forward`), so packet payloads have no Ethernet header.
+`NFQ_BRIDGE_MODE` would cause Q0/Q1 to mis-parse every packet.
+
 #### KVM test pitfalls
 
-**`guest_exec` and single quotes**
+**`guest_exec_on` and single quotes**
 
-`guest_exec` (in `tests/test_kvm.moon`) wraps the virsh JSON payload in
-shell single-quotes. Commands containing single-quoted arguments (e.g.
-`awk '{print $2}'`) break the shell quoting. Fix: escape via
+`guest_exec_on(vm, cmd, timeout)` (in `tests/test_kvm.moon`) wraps the virsh
+JSON payload in shell single-quotes. Commands containing single-quoted arguments
+(e.g. `awk '{print $2}'`) break the shell quoting. Fix: escape via
 `exec_payload\gsub("'", "'\"'\"'")`. Prevention: avoid single quotes in
 guest commands — use `sed -En "..."` double-quoted expressions instead.
+
+`guest_exec` and `guest_exec2` are thin wrappers around `guest_exec_on` for
+`custos-client` and `custos-client2` respectively. Pass `exec_fn` to `ping_from`
+/ `dig_from` to choose the VM.
 
 **Backslash escaping (4-backslash rule)**
 
 `safe_cmd` replaces each `\` with `\\\\`. For sed backreferences, write
 `\\1` in the MoonScript source string → `\\\\1` after `safe_cmd` →
 `\\1` in the JSON string → shell strips one `\` → sed sees `\1`. ✓
+
+**IP matching in log output**
+
+Use `string.find(str, ip_literal, 1, true)` (plain match) instead of
+`str\match(ip\gsub("%.", "\\."))` — the gsub pattern can fail silently
+when the Lua string escaping chain is complex. Example:
+
+```moonscript
+-- WRONG (fragile gsub escaping):
+has_ip = log_out\match(CLIENT_IP\gsub("%.", "\\.")) != nil
+-- CORRECT (plain string search):
+has_ip = log_out\find("ip=#{CLIENT_IP} ", 1, true) != nil
+```
+
+**curl anycast re-resolution**
+
+`curl_from(url)` performs its own DNS resolution inside the guest. For
+domains with anycast IPs (e.g. github.com), the IP curl resolves may differ
+from the one already in `ip4_allowed`, causing a TCP block. Pass `resolve_ip`
+to force curl to use the known IP:
+
+```moonscript
+-- Force the IP already in ip4_allowed:
+curl_from "http://github.com/", 5, allowed_ip
+-- Internally adds: --resolve github.com:80:<ip> --resolve github.com:443:<ip>
+```
 
 **Client interface name**
 
@@ -117,6 +177,13 @@ If `/tmp/custos-kvm.log` is root-owned and `fs.protected_regular=2` is
 set, the `debian` user cannot truncate it. The nohup redirect silently
 fails → LuaJIT never starts. Fix: delete the stale file, or use a path
 under `/opt/custos/tmp/` (not sticky, no `protected_regular` restriction).
+
+**`from_user` post-inscription DNS test**
+
+The `filter.yml` `from_user` rules only cover named accounts (`testuser`,
+`newuser`). After registering a new ephemeral user (`NEW_USER_KVM`), re-login
+as `testuser` before testing `auth-required.test` DNS resolution — `testuser`
+has a matching rule, the ephemeral account does not.
 
 ---
 
