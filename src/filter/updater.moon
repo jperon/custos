@@ -329,7 +329,7 @@ process_custom_dir = (dir, dry_run) ->
 
 opts = parse_args arg
 
-cfg_path = opts.config or "cfg/filter.yml"
+cfg_path = opts.config or "/etc/custos/filter.yml"
 cfg, err = load_config cfg_path
 unless cfg
   io.stderr\write "Erreur de chargement de la config #{cfg_path} : #{err}\n"

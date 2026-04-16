@@ -1,6 +1,7 @@
 -- src/config.moon
--- Configuration centrale : constantes, allowlist qnames, paramètres runtime.
--- C'est le seul fichier à modifier pour adapter le filtre.
+-- Configuration centrale : constantes, paramètres runtime, chemins.
+-- NOTE : La configuration du filtre (règles, listes de domaines, auth) se trouve
+-- dans filter.yml. Ce fichier ne contient que des constantes compile-time.
 
 -- ── Queues NFQUEUE ──────────────────────────────────────────────
 QUEUE_QUESTIONS = 0   -- UDP/53 src LAN  (questions sortantes)
@@ -31,33 +32,6 @@ DOCKER_MODE = os.getenv("DOCKER_MODE") == "1"
 --   OpenWrt / procd  → logread   (procd_set_param stdout 1)
 --   systemd          → journalctl
 --   Docker           → docker logs
-
--- ── Allowlist des qnames autorisés ──────────────────────────────
--- Correspondance par suffixe : "example.com" autorise aussi "sub.example.com".
--- Recharge à chaud via SIGHUP sur chaque worker.
-ALLOWED_DOMAINS = {
-  -- Résolution locale et infrastructure
-  "local"
-  "lan"
-  "home.arpa"
-
-  -- Outils de développement
-  "github.com"
-  "gitlab.com"
-  "npmjs.org"
-  "pypi.org"
-  "debian.org"
-  "ubuntu.com"
-  "archlinux.org"
-
-  -- CDN et infra commune
-  "cloudflare.com"
-  "fastly.com"
-  "akamaiedge.net"
-
-  -- Exemple de domaine autorisé
-  "example.com"
-}
 
 -- ── Noms de sets nftables ────────────────────────────────────────
 NFT_FAMILY     = if NFQ_BRIDGE_MODE then "bridge" else "ip"
@@ -114,7 +88,6 @@ AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE
   :BRIDGE_MODE, :NFQ_BRIDGE_MODE
   :DOCKER_MODE
-  :ALLOWED_DOMAINS
   :NFT_FAMILY, :NFT_FAMILY6, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
   :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY
   :IPC_PENDING_TTL

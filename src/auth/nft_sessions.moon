@@ -5,17 +5,7 @@
 -- Charge libnftables directement via FFI minimal, sans dépendance à ffi_defs.moon.
 -- Chaque ajout/retrait est appliqué immédiatement via nft_run_cmd_from_buffer.
 
-ffi = require "ffi"
-
--- Déclarations FFI minimales pour libnftables (sans sighandler_t ni libnfq).
-ffi.cdef [[
-  typedef struct nft_ctx nft_ctx;
-  nft_ctx* nft_ctx_new(unsigned int flags);
-  void     nft_ctx_free(nft_ctx *ctx);
-  int      nft_run_cmd_from_buffer(nft_ctx *ctx, const char *buf);
-]]
-
-libnft = ffi.load "libnftables.so.1"
+{ :ffi, :libnft } = require "ffi_defs"
 
 ctx = libnft.nft_ctx_new 0
 error "nft_ctx_new() failed in auth worker" if ctx == nil

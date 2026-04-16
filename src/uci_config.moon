@@ -21,6 +21,12 @@ DEFAULTS = {
   ipc_pending_ttl:        5
   client_expiry:          300
   neigh_refresh_cooldown: 10
+  nft_add_retry_count:    3
+  nft_add_backoff_ms:     "20, 50, 100"
+  nft_add_failure_policy: "fail-closed"
+  ipc_match_retry_enabled: true
+  ipc_match_retry_count:  5
+  ipc_match_retry_sleep_ms: 20
   allowed_domains: {
     "local", "lan", "home.arpa"
   }
@@ -84,6 +90,16 @@ validate_domain = (d) ->
   return nil if d\match "[^%a%d%.%-]"
   d
 
+--- Valide un booléen UCI (0/1/true/false).
+-- @tparam string|nil raw Valeur brute UCI
+-- @tparam boolean default Valeur par défaut
+-- @treturn boolean
+validate_bool = (raw, default) ->
+  return default unless raw
+  return true if raw == "1" or raw == "true"
+  return false if raw == "0" or raw == "false"
+  default
+
 -- ── Génération Lua ────────────────────────────────────────────────
 
 --- Échappe une chaîne pour inclusion dans un littéral Lua entre guillemets doubles.
@@ -109,6 +125,12 @@ generate_config = (cfg) ->
     string.format "local IPC_PENDING_TTL        = %d",   cfg.ipc_pending_ttl
     string.format "local CLIENT_EXPIRY          = %d",   cfg.client_expiry
     string.format "local NEIGH_REFRESH_COOLDOWN = %d",   cfg.neigh_refresh_cooldown
+    string.format "local NFT_ADD_RETRY_COUNT    = %d",   cfg.nft_add_retry_count
+    string.format "local NFT_ADD_BACKOFF_MS     = { %s }", cfg.nft_add_backoff_ms
+    string.format 'local NFT_ADD_FAILURE_POLICY = "%s"', cfg.nft_add_failure_policy
+    string.format "local IPC_MATCH_RETRY_ENABLED = %s", if cfg.ipc_match_retry_enabled then "true" else "false"
+    string.format "local IPC_MATCH_RETRY_COUNT  = %d",   cfg.ipc_match_retry_count
+    string.format "local IPC_MATCH_RETRY_SLEEP_MS = %d", cfg.ipc_match_retry_sleep_ms
     'local NFT_TABLE              = "dns-filter"'
     'local NFT_SET_IP4            = "ip4_allowed"'
     'local NFT_SET_IP6            = "ip6_allowed"'
@@ -129,7 +151,9 @@ generate_config = (cfg) ->
       "ALLOWED_DOMAINS", "NFT_TABLE", "NFT_SET_IP4", "NFT_SET_IP6",
       "NFT_IP_TIMEOUT", "IPC_PENDING_TTL", "CLIENT_EXPIRY",
       "NEIGH_REFRESH_COOLDOWN", "FORCED_TTL", "DNS_PORT", "AF_INET",
-      "AF_INET6", "PROTO_UDP"
+      "AF_INET6", "PROTO_UDP", "NFT_ADD_RETRY_COUNT", "NFT_ADD_BACKOFF_MS",
+      "NFT_ADD_FAILURE_POLICY", "IPC_MATCH_RETRY_ENABLED", "IPC_MATCH_RETRY_COUNT",
+      "IPC_MATCH_RETRY_SLEEP_MS"
     }
     table.insert lines, string.format("  %-24s = %s,", k, k)
   table.insert lines, "}"
@@ -153,6 +177,12 @@ main = ->
     ipc_pending_ttl:        validate_posint(uci_get("ipc_pending_ttl"),              DEFAULTS.ipc_pending_ttl)
     client_expiry:          validate_posint(uci_get("client_expiry"),                DEFAULTS.client_expiry)
     neigh_refresh_cooldown: validate_posint(uci_get("neigh_refresh_cooldown"),       DEFAULTS.neigh_refresh_cooldown)
+    nft_add_retry_count:    validate_posint(uci_get("nft_add_retry_count"),          DEFAULTS.nft_add_retry_count)
+    nft_add_backoff_ms:     uci_get("nft_add_backoff_ms")                       or DEFAULTS.nft_add_backoff_ms
+    nft_add_failure_policy: uci_get("nft_add_failure_policy")                  or DEFAULTS.nft_add_failure_policy
+    ipc_match_retry_enabled: validate_bool(uci_get("ipc_match_retry_enabled"),      DEFAULTS.ipc_match_retry_enabled)
+    ipc_match_retry_count:  validate_posint(uci_get("ipc_match_retry_count"),       DEFAULTS.ipc_match_retry_count)
+    ipc_match_retry_sleep_ms: validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms)
     allowed_domains:        domains
   }
 

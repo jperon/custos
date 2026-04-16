@@ -17,7 +17,7 @@ do
 end
 local ip_whitelist = require("ip_whitelist")
 local rules
-local config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "cfg/filter.yml"
+local config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
 local set_config_path
 set_config_path = function(path)
   config_path = path

@@ -248,6 +248,9 @@ read_request = (sock) ->
       headers[name\lower!] = val
       if name\lower! == "content-length"
         content_length = tonumber(val) or 0
+        -- Cap at 8 KB to prevent memory exhaustion
+        if content_length > 8192
+          content_length = 8192
 
   -- Corps (pour POST)
   body = ""
@@ -493,7 +496,7 @@ make_server6 = (port) ->
 run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   port = auth_cfg.port or 33443
   host = auth_cfg.host or "::"
-  secrets_path = auth_cfg.secrets or "cfg/secrets"
+  -- secrets_path is passed from worker.moon (resolved from auth_cfg.secrets with default)
 
   -- Page de succès avec JS heartbeat intégré (construit une seule fois)
   hb_interval = auth_cfg.heartbeat_interval or 30

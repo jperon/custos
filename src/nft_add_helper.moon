@@ -14,19 +14,11 @@ try_add_with_retries = (fn, ...) ->
     return true if ok
     if i < attempts
       ms = backoffs[i] or backoffs[#backoffs]
-      -- Prefer nanosleep when available (ffi.C.nanosleep). Fallback to os.execute.
-      has_nanosleep = false
-      pcall ->
-        if ffi and ffi.C then local _ = ffi.C.nanosleep end
-        has_nanosleep = true
-      if has_nanosleep
-        req = ffi.new "timespec_t[1]"
-        req[0].tv_sec = math.floor(ms / 1000)
-        req[0].tv_nsec = (ms % 1000) * 1000000
-        pcall ffi.C.nanosleep, req, nil
-      else
-        -- fallback: coarse sleep
-        os.execute "sleep #{ms / 1000}"
+      -- Use nanosleep for precise backoff (always available from ffi_defs)
+      req = ffi.new "timespec_t[1]"
+      req[0].tv_sec = math.floor(ms / 1000)
+      req[0].tv_nsec = (ms % 1000) * 1000000
+      pcall ffi.C.nanosleep, req, nil
   false
 
 { :try_add_with_retries }

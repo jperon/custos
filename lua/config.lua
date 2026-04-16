@@ -4,22 +4,6 @@ local QUEUE_CAPTIVE = 2
 local BRIDGE_MODE = os.getenv("BRIDGE_MODE") == "1"
 local NFQ_BRIDGE_MODE = os.getenv("NFQ_BRIDGE_MODE") == "1"
 local DOCKER_MODE = os.getenv("DOCKER_MODE") == "1"
-local ALLOWED_DOMAINS = {
-  "local",
-  "lan",
-  "home.arpa",
-  "github.com",
-  "gitlab.com",
-  "npmjs.org",
-  "pypi.org",
-  "debian.org",
-  "ubuntu.com",
-  "archlinux.org",
-  "cloudflare.com",
-  "fastly.com",
-  "akamaiedge.net",
-  "example.com"
-}
 local NFT_FAMILY
 if NFQ_BRIDGE_MODE then
   NFT_FAMILY = "bridge"
@@ -69,7 +53,6 @@ return {
   BRIDGE_MODE = BRIDGE_MODE,
   NFQ_BRIDGE_MODE = NFQ_BRIDGE_MODE,
   DOCKER_MODE = DOCKER_MODE,
-  ALLOWED_DOMAINS = ALLOWED_DOMAINS,
   NFT_FAMILY = NFT_FAMILY,
   NFT_FAMILY6 = NFT_FAMILY6,
   NFT_TABLE = NFT_TABLE,

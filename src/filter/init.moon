@@ -20,7 +20,7 @@
 ip_whitelist = require "ip_whitelist"
 
 local rules
-config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "cfg/filter.yml"
+config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
 
 -- ── Chemin de configuration ───────────────────────────────────────
 --- Modifie le chemin vers le fichier de configuration YAML.

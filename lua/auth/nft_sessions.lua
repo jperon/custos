@@ -1,10 +1,8 @@
-local ffi = require("ffi")
-ffi.cdef([[  typedef struct nft_ctx nft_ctx;
-  nft_ctx* nft_ctx_new(unsigned int flags);
-  void     nft_ctx_free(nft_ctx *ctx);
-  int      nft_run_cmd_from_buffer(nft_ctx *ctx, const char *buf);
-]])
-local libnft = ffi.load("libnftables.so.1")
+local ffi, libnft
+do
+  local _obj_0 = require("ffi_defs")
+  ffi, libnft = _obj_0.ffi, _obj_0.libnft
+end
 local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
   error("nft_ctx_new() failed in auth worker")

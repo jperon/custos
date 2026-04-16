@@ -5,17 +5,8 @@
 -- par n'importe quel client, sans résolution DNS préalable.
 -- Rechargeable à chaud via filter.reload() (déclenché par SIGHUP sur Q0).
 
-ffi = require "ffi"
+{ :ffi, :libnft } = require "ffi_defs"
 { :NFT_FAMILY, :NFT_TABLE } = require "config"
-
-ffi.cdef [[
-  typedef struct nft_ctx nft_ctx;
-  nft_ctx* nft_ctx_new(unsigned int flags);
-  void     nft_ctx_free(nft_ctx *ctx);
-  int      nft_run_cmd_from_buffer(nft_ctx *ctx, const char *buf);
-]]
-
-libnft = ffi.load "libnftables.so.1"
 
 ctx = libnft.nft_ctx_new 0
 error "nft_ctx_new() échoué dans ip_whitelist" if ctx == nil

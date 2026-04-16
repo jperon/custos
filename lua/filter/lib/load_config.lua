@@ -33,6 +33,7 @@ load_config = function(path)
   auth.sessions_file = auth.sessions_file or "./tmp/sessions.lua"
   auth.heartbeat_interval = auth.heartbeat_interval or 30
   auth.idle_timeout = auth.idle_timeout or 120
+  auth.secrets = auth.secrets or "/etc/custos/secrets"
   return cfg, nil
 end
 return {

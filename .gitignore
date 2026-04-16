@@ -31,6 +31,9 @@ Thumbs.db
 # Local config overrides
 config.local.moon
 
+# Secrets file (production credentials)
+cfg/secrets
+
 # VM disk images and cloud-init artifacts
 *.qcow2
 cidata.iso

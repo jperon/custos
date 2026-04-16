@@ -180,6 +180,9 @@ register_user = (username, password, secrets_path, current_secrets) ->
   fh\write "#{username}:#{hash_entry}\n"
   fh\close!
 
+  -- Set restrictive permissions (600) before rename
+  os.execute "chmod 600 #{tmp_path}"
+
   ok, rename_err = os.rename tmp_path, secrets_path
   unless ok
     os.remove tmp_path

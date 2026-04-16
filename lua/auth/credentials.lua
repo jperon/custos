@@ -137,6 +137,7 @@ register_user = function(username, password, secrets_path, current_secrets)
   end
   fh:write(tostring(username) .. ":" .. tostring(hash_entry) .. "\n")
   fh:close()
+  os.execute("chmod 600 " .. tostring(tmp_path))
   local ok, rename_err = os.rename(tmp_path, secrets_path)
   if not (ok) then
     os.remove(tmp_path)

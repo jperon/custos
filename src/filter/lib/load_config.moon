@@ -45,6 +45,7 @@ load_config = (path) ->
   auth.sessions_file     = auth.sessions_file     or "./tmp/sessions.lua"
   auth.heartbeat_interval = auth.heartbeat_interval or 30
   auth.idle_timeout      = auth.idle_timeout      or 120
+  auth.secrets           = auth.secrets           or "/etc/custos/secrets"
   -- auth.cert, auth.key, auth.secrets : nil par défaut (optionnels)
 
   cfg, nil

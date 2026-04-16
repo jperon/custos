@@ -23,7 +23,6 @@ MOONS := \
   $(SRC)/parse/ndpi_v5.moon \
   $(SRC)/ipc.moon \
   $(SRC)/neigh.moon \
-  $(SRC)/allowlist.moon \
   $(SRC)/ip_whitelist.moon \
   $(SRC)/nft.moon \
   $(SRC)/parse/tcp.moon \
@@ -136,7 +135,7 @@ make-secret: all
 	@[ -n "$(USER)" ] || (echo "ERREUR : USER requis. Ex: make make-secret USER=alice PASS=..."; exit 1)
 	@[ -n "$(PASS)" ] || (echo "ERREUR : PASS requis. Ex: make make-secret USER=alice PASS=..."; exit 1)
 	@LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) -e "local c=require'auth.credentials'; print('$(USER):'..c.hash_password('$(PASS)'))"
+	  $(LUAJIT) -e "local c=require'auth.credentials'; local u=os.getenv'USER'; local p=os.getenv'PASS'; print(u..':'..c.hash_password(p))"
 
 ## Lance le superviseur (nécessite root + règles nft en place)
 run: all

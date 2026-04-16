@@ -34,7 +34,7 @@ run_auth_worker = (auth_cfg) ->
   log_info { action: "auth_worker_start", port: auth_cfg.port }
 
   -- Charge le fichier secrets
-  secrets_path = auth_cfg.secrets or "cfg/secrets"
+  secrets_path = auth_cfg.secrets or "/etc/custos/secrets"
   secrets, err = load_secrets secrets_path
   unless secrets
     log_error { action: "auth_secrets_load_failed", err: err }

@@ -1,72 +1,72 @@
 # CustosVirginum - CHEATSHEET
 
-Référence rapide pour mainteneurs/contributeurs.
-Les explications détaillées et l'architecture restent dans `README.md`.
+Quick reference for maintainers/contributors.
+Detailed explanations and architecture remain in `README.md`.
 
-## Entrée rapide
+## Quick entry
 
 - Supervision: `src/main.moon`
-- Workers DNS: `src/worker_q0.moon` (questions), `src/worker_q1.moon` (réponses)
+- DNS workers: `src/worker_q0.moon` (questions), `src/worker_q1.moon` (responses)
 - IPC Q0 -> Q1: `src/ipc.moon`
-- Ruleset nftables: `nft-rules/dns-filter.nft`
-- Règles de filtrage: `cfg/filter.yml`
+- nftables ruleset: `nft-rules/dns-filter.nft`
+- Filtering rules: `cfg/filter.yml`
 
-## Où modifier quoi
+## Where to modify what
 
-- Règles métier:
+- Business rules:
   - `cfg/filter.yml`
   - `src/filter/init.moon`
   - `src/filter/rule.moon`
   - `src/filter/convert.moon`
 
-- Ajouter une condition:
-  - Ajouter `src/filter/conditions/<nom>.moon`
-  - Chargée via `require("filter.conditions.<nom>")` dans `src/filter/rule.moon`
+- Add a condition:
+  - Add `src/filter/conditions/<name>.moon`
+  - Loaded via `require("filter.conditions.<name>")` in `src/filter/rule.moon`
 
-- Ajouter une action:
-  - Ajouter `src/filter/actions/<nom>.moon`
-  - Chargée via `require("filter.actions.<nom>")` dans `src/filter/rule.moon`
+- Add an action:
+  - Add `src/filter/actions/<name>.moon`
+  - Loaded via `require("filter.actions.<name>")` in `src/filter/rule.moon`
 
-- Logique DNS (décision, corrélation, réinjection):
+- DNS logic (decision, correlation, reinjection):
   - Q0: `src/worker_q0.moon`
   - IPC: `src/ipc.moon`
   - Q1: `src/worker_q1.moon`
-  - Boucle NFQUEUE: `src/nfq_loop.moon`
+  - NFQUEUE loop: `src/nfq_loop.moon`
 
 - REFUSED, EDE, TTL:
-  - Helpers DNS: `src/parse/dns.moon`
-  - Patch/rebuild paquet: `src/parse/ndpi.moon`
-  - TTL forcé: `FORCED_TTL` dans `src/config.moon`
+  - DNS helpers: `src/parse/dns.moon`
+  - Patch/rebuild packet: `src/parse/ndpi.moon`
+  - Forced TTL: `FORCED_TTL` in `src/config.moon`
 
-- Injection nft (sets):
-  - Commandes nft: `src/nft.moon`
-  - Conditions d'injection A/AAAA/dnsonly: `src/worker_q1.moon`
-  - Noms de sets/timeouts: `src/config.moon`
+- nft injection (sets):
+  - nft commands: `src/nft.moon`
+  - A/AAAA/dnsonly injection conditions: `src/worker_q1.moon`
+  - Set names/timeouts: `src/config.moon`
 
-- Authentification / portail captif:
-  - Worker auth: `src/auth/worker.moon`
-  - Serveur auth: `src/auth/server.moon`
+- Authentication / captive portal:
+  - Auth worker: `src/auth/worker.moon`
+  - Auth server: `src/auth/server.moon`
   - Worker Q2 (TCP/80 intercept): `src/worker_q2.moon`
   - Sessions: `src/auth/sessions.moon`
-  - Intégration nft auth: `src/auth/nft_sessions.moon`
+  - Auth nft integration: `src/auth/nft_sessions.moon`
   - Secrets/hash: `src/auth/credentials.moon`
 
 - Parsing + nDPI:
-  - Façade: `src/parse/ndpi.moon`
+  - Facade: `src/parse/ndpi.moon`
   - nDPI 4.x: `src/parse/ndpi_v4.moon`, `src/ffi_ndpi_v4.moon`
   - nDPI 5.x: `src/parse/ndpi_v5.moon`, `src/ffi_ndpi_v5.moon`
-  - Dispatch de version: `src/ffi_ndpi.moon`
+  - Version dispatch: `src/ffi_ndpi.moon`
 
-## Contrats utiles
+## Useful contracts
 
-- Condition compilée: `(req) -> ok, reason`
-- Action compilée: `(req) -> verdict|nil, message`
-- Clé pending Q1: `txid:ip:port`
-- Workers: Q0 (questions), Q1 (réponses), AUTH (HTTPS), Q2 (TCP/80 captif, si `BRIDGE_MODE=1`)
+- Compiled condition: `(req) -> ok, reason`
+- Compiled action: `(req) -> verdict|nil, message`
+- Q1 pending key: `txid:ip:port`
+- Workers: Q0 (questions), Q1 (responses), AUTH (HTTPS), Q2 (TCP/80 captive, if `BRIDGE_MODE=1`)
 - SIGHUP:
-  - `main` le propage a Q0
-  - Q0 fait `filter.reload()`
-- Sets nft actifs: `ip4_allowed`, `ip6_allowed`, `authenticated_ips`
+  - `main` propagates it to Q0
+  - Q0 does `filter.reload()`
+- Active nft sets: `ip4_allowed`, `ip6_allowed`, `authenticated_ips`
 
 ## Build, run, debug
 
@@ -79,104 +79,104 @@ Les explications détaillées et l'architecture restent dans `README.md`.
 ## Domainlists / Customlists
 
 - Config source:
-  - Fichier principal: `cfg/filter.yml` (ou `/etc/custos/filter.yml` sur OpenWrt)
-  - Champs utiles: `sources`, `domainlists_dir`, `custom_lists_dir`
+  - Main file: `cfg/filter.yml` (or `/etc/custos/filter.yml` on OpenWrt)
+  - Useful fields: `sources`, `domainlists_dir`, `custom_lists_dir`
 
-- Mettre à jour les listes (Debian/dev machine):
+- Update lists (Debian/dev machine):
   - `make update-lists`
-  - Equivalent direct:
+  - Direct equivalent:
     - `LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/filter/updater.lua --config cfg/filter.yml`
 
-- Mettre à jour les listes (OpenWrt):
-  - `ssh root@<routeur> 'custos-update'`
-  - Le script utilise `/etc/custos/filter.yml` et recharge les listes compilées.
+- Update lists (OpenWrt):
+  - `ssh root@<router> 'custos-update'`
+  - The script uses `/etc/custos/filter.yml` and reloads compiled lists.
 
 - Custom lists (workflow):
-  1. Déposer des fichiers `.txt` dans `custom_lists_dir` (1 domaine par ligne, `#` pour commentaires).
-  2. Lancer la mise à jour (`make update-lists` ou `custos-update`).
-  3. Recharger le service si nécessaire:
+  1. Drop `.txt` files in `custom_lists_dir` (1 domain per line, `#` for comments).
+  2. Run update (`make update-lists` or `custos-update`).
+  3. Reload service if needed:
      - Debian: `make reload`
-     - OpenWrt: `ssh root@<routeur> '/etc/init.d/custos reload'`
+     - OpenWrt: `ssh root@<router> '/etc/init.d/custos reload'`
 
-## Tests (selection rapide)
+## Tests (quick selection)
 
-- Unitaires: `make test`
+- Unit: `make test`
 - nDPI: `make test-ndpi`
 - Docker E2E: `make test-docker`
 - KVM E2E (47 tests): `make test-kvm`
-- OpenWrt E2E: `make test-openwrt HOST=root@<routeur>`
+- OpenWrt E2E: `make test-openwrt HOST=root@<router>`
 
-## Playbooks rapides
+## Quick playbooks
 
-- Ajouter une condition:
-  1. Créer `src/filter/conditions/<nom>.moon` (factory -> prédicat `(req) -> ok, reason`).
-  2. Référencer la condition dans `cfg/filter.yml`.
+- Add a condition:
+  1. Create `src/filter/conditions/<name>.moon` (factory -> predicate `(req) -> ok, reason`).
+  2. Reference the condition in `cfg/filter.yml`.
   3. `make && make test`.
 
-- Ajouter une action:
-  1. Créer `src/filter/actions/<nom>.moon` (`(req) -> verdict|nil, message`).
-  2. L'appeler via `actions:` dans `cfg/filter.yml`.
-  3. Vérifier l'ordre des actions (premier verdict non-nil gagne).
+- Add an action:
+  1. Create `src/filter/actions/<name>.moon` (`(req) -> verdict|nil, message`).
+  2. Call it via `actions:` in `cfg/filter.yml`.
+  3. Verify action order (first non-nil verdict wins).
 
-- Modifier le comportement REFUSED/EDE:
-  1. Ajuster `src/parse/dns.moon` (construction REFUSED, options EDNS/EDE).
-  2. Vérifier l'appel dans `src/worker_q1.moon` (branche `refused`).
-  3. Tester au minimum `make test` puis un E2E (`test-docker` ou `test-openwrt`).
+- Modify REFUSED/EDE behavior:
+  1. Adjust `src/parse/dns.moon` (REFUSED construction, EDNS/EDE options).
+  2. Verify call in `src/worker_q1.moon` (`refused` branch).
+  3. Test at minimum `make test` then an E2E (`test-docker` or `test-openwrt`).
 
-- Modifier l'injection nft:
-  1. Ajuster `src/nft.moon` (commande `add element`).
-  2. Ajuster la logique A/AAAA/dnsonly dans `src/worker_q1.moon`.
-  3. Vérifier les sets via `nft list set ...`.
+- Modify nft injection:
+  1. Adjust `src/nft.moon` (`add element` command).
+  2. Adjust A/AAAA/dnsonly logic in `src/worker_q1.moon`.
+  3. Verify sets via `nft list set ...`.
 
-- Debug correlation IPC Q0/Q1:
-  1. Vérifier format/clé dans `src/ipc.moon` (clé `txid:ip:port`).
-  2. Regarder logs `response_no_matching_question` (Q1).
-  3. Confirmer que Q0 envoie bien `write_msg`/`write_refused_msg`/`write_dnsonly_msg`.
+- Debug IPC Q0/Q1 correlation:
+  1. Verify format/key in `src/ipc.moon` (key `txid:ip:port`).
+  2. Watch logs `response_no_matching_question` (Q1).
+  3. Confirm Q0 sends `write_msg`/`write_refused_msg`/`write_dnsonly_msg`.
 
 ## Ops Debian/OpenWrt
 
-### Interfaces réseau (bridge/LAN/WAN)
+### Network interfaces (bridge/LAN/WAN)
 
-- Le ruleset `nft-rules/dns-filter.nft` est générique:
-  - pas de noms d'interface imposés (`eth0`, `br-lan`, etc. non hardcodés),
-  - filtrage basé sur familles/protocoles/sets, pas sur noms d'interfaces.
-- La machine filtre doit être sur le chemin LAN <-> WAN (souvent en bridge transparent).
-- `br_netfilter` doit être actif pour voir le trafic bridge dans netfilter/NFQUEUE.
+- The ruleset `nft-rules/dns-filter.nft` is generic:
+  - no interface names imposed (`eth0`, `br-lan`, etc. not hardcoded),
+  - filtering based on families/protocols/sets, not interface names.
+- The filter machine must be on the LAN <-> WAN path (often as transparent bridge).
+- `br_netfilter` must be active to see bridge traffic in netfilter/NFQUEUE.
 
-### Debian: installation, mise à jour, désinstallation
+### Debian: installation, update, uninstall
 
 - Installation:
-  1. Installer les dépendances (cf. `README.md`), puis `make`.
-  2. Appliquer environnement + règles: `sudo ./setup.sh up`.
-  3. Lancer le service en foreground: `sudo make run`.
+  1. Install dependencies (see `README.md`), then `make`.
+  2. Apply environment + rules: `sudo ./setup.sh up`.
+  3. Run service in foreground: `sudo make run`.
 
-- Mise à jour:
+- Update:
   1. `git pull`
   2. `make`
-  3. `make reload` (SIGHUP) si processus actif, sinon relancer `sudo make run`.
-  4. Si le ruleset a changé: `sudo ./setup.sh up`.
+  3. `make reload` (SIGHUP) if process active, otherwise restart `sudo make run`.
+  4. If ruleset changed: `sudo ./setup.sh up`.
 
-- Désinstallation:
-  1. Stopper le processus (`pkill -f "luajit.*main"` ou service manager local).
-  2. Supprimer les tables nft: `sudo ./setup.sh down`.
-  3. Optionnel: `make clean`.
+- Uninstall:
+  1. Stop process (`pkill -f "luajit.*main"` or local service manager).
+  2. Delete nft tables: `sudo ./setup.sh down`.
+  3. Optional: `make clean`.
 
-### OpenWrt: installation, mise à jour, désinstallation
+### OpenWrt: installation, update, uninstall
 
-- Installation initiale (depuis la machine de dev):
-  1. Compiler local: `make`.
-  2. Déployer: `luajit install-owrt.lua root@<routeur>`.
-  3. L'installeur:
-     - installe les paquets,
-     - copie Lua + ruleset vers `/usr/share/custos`,
-     - installe la config `/etc/custos`,
-     - installe service `/etc/init.d/custos`,
-     - installe `custos-update` + cron.
+- Initial installation (from dev machine):
+  1. Compile locally: `make`.
+  2. Deploy: `luajit install-owrt.lua root@<router>`.
+  3. The installer:
+     - installs packages,
+     - copies Lua + ruleset to `/usr/share/custos`,
+     - installs config `/etc/custos`,
+     - installs service `/etc/init.d/custos`,
+     - installs `custos-update` + cron.
 
-- Mise à jour:
-  - Option simple: `make test-openwrt HOST=root@<routeur>` (redéploie + valide).
-  - Option complète: relancer `luajit install-owrt.lua root@<routeur>` (sans `--uninstall`).
+- Update:
+  - Simple option: `make test-openwrt HOST=root@<router>` (redeploys + validates).
+  - Full option: rerun `luajit install-owrt.lua root@<router>` (without `--uninstall`).
 
-- Désinstallation:
-  - `luajit install-owrt.lua root@<routeur> --uninstall`
-  - Cette action stoppe/désactive le service, supprime les fichiers et nettoie nft/sysctl/UCI.
+- Uninstall:
+  - `luajit install-owrt.lua root@<router> --uninstall`
+  - This action stops/disables the service, deletes files and cleans nft/sysctl/UCI.

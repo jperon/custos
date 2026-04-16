@@ -112,14 +112,15 @@ custos/
 │   ├── uci_config.moon      Chargeur config UCI (OpenWrt)
 │   ├── ffi_defs.moon        Déclarations FFI centralisées
 │   ├── log.moon             Logging structuré key=value + rate-limiting
-│   ├── allowlist.moon       Lookup qname + rechargement SIGHUP
-│   ├── ipc.moon             Protocole pipe Q0→Q1 (msg 27 octets)
+│   ├── ipc.moon             Protocole pipe Q0→Q1 (msg 43 octets)
 │   ├── neigh.moon           Lecture table voisins kernel (ip neigh show)
 │   ├── nft.moon             Injection sets nftables via libnftables
+│   ├── nft_add_helper.moon  Helper retry/backoff pour insertions nft
 │   ├── nfq_loop.moon        Boucle générique NFQUEUE
 │   ├── worker_q0.moon       Worker questions DNS
 │   ├── worker_q1.moon       Worker réponses DNS
-│   ├── main.moon            Superviseur + fork (Q0, Q1, AUTH)
+│   ├── worker_q2.moon       Worker portail captif TCP SYN
+│   ├── main.moon            Superviseur + fork (Q0, Q1, AUTH, Q2)
 │   ├── ffi_ndpi.moon        Façade détection version (charge v4 ou v5)
 │   ├── ffi_ndpi_v4.moon     FFI cdef pour nDPI 4.2–4.8
 │   ├── ffi_ndpi_v5.moon     FFI cdef pour nDPI 5.0+
@@ -363,7 +364,7 @@ Example log:
 
 ## IPC Protocol Q0 → Q1
 
-The Unix pipe (created before `fork()`) carries 27-byte messages.
+The Unix pipe (created before `fork()`) carries 43-byte messages.
 Atomicity is guaranteed by POSIX for messages ≤ PIPE_BUF (4096 bytes).
 
 ```
@@ -376,9 +377,12 @@ Bytes 3-18   : source IP — 16 bytes
                  IPv6 : 16 bytes address (complete, no truncation)
 Bytes 19-20  : source port (big-endian uint16)
 Bytes 21-26  : source MAC (6 bytes, zeroed if unavailable)
+Bytes 27-42  : resolver IP — 16 bytes
+                 IPv4 : 4 bytes address + 12 zero bytes (padding)
+                 IPv6 : 16 bytes address (complete, no truncation)
 ```
 
-Q1 maintains a table `pending[txid:ip:port] = {expire, refused, dnsonly}` (TTL 5s).
+Q1 maintains a table `pending[txid:ip:port:resolver_ip] = {expire, refused, dnsonly}` (TTL 5s).
 `refused=true` means Q0 determined the query must be blocked; Q1 transforms
 the upstream response into a REFUSED reply instead of patching TTL.
 `dnsonly=true` means Q0 allowed the query but without nft IP injection (e.g.

@@ -99,7 +99,7 @@ local supervise
 supervise = function(pipe, sfd)
   local load_config
   load_config = require("filter.lib.load_config").load_config
-  local filter_cfg, cfg_err = load_config(os.getenv("CUSTOS_FILTER_CONFIG") or "cfg/filter.yml")
+  local filter_cfg, cfg_err = load_config(os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml")
   if not filter_cfg then
     log_warn({
       action = "auth_cfg_load_warning",
@@ -109,7 +109,11 @@ supervise = function(pipe, sfd)
       auth = { }
     }
   end
-  local auth_cfg = filter_cfg.auth or { }
+  local auth = filter_cfg.auth or { }
+  auth.idle_timeout = auth.idle_timeout or 120
+  auth.heartbeat_interval = auth.heartbeat_interval or 30
+  auth.secrets = auth.secrets or "/etc/custos/secrets"
+  local auth_cfg = auth
   local workers = {
     {
       name = "Q0-questions",
@@ -173,6 +177,15 @@ supervise = function(pipe, sfd)
             pid = q0.pid
           })
           libc.kill(q0.pid, SIGHUP)
+        end
+        auth = workers[3]
+        if auth and auth.pid and auth.pid > 0 then
+          log_info({
+            action = "supervisor_sighup",
+            forwarding_to = "AUTH",
+            pid = auth.pid
+          })
+          libc.kill(auth.pid, SIGHUP)
         end
       else
         log_info({

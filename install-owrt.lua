@@ -287,9 +287,15 @@ Installer = function(cfg)
         fail("Échec de l'extraction sur le routeur")
         return false
       end
-      info("  Envoi de nft-rules/dns-filter.nft → " .. tostring(self.cfg.dest) .. "/")
-      if not (self:scp_send("nft-rules/dns-filter.nft", self.cfg.dest)) then
-        fail("Échec du transfert de dns-filter.nft")
+      local nft_file
+      if self.cfg.bridge_mode then
+        nft_file = "nft-rules/dns-filter-bridge.nft"
+      else
+        nft_file = "nft-rules/dns-filter.nft"
+      end
+      info("  Envoi de " .. tostring(nft_file) .. " → " .. tostring(self.cfg.dest) .. "/")
+      if not (self:scp_send(nft_file, self.cfg.dest)) then
+        fail("Échec du transfert de " .. tostring(nft_file))
         return false
       end
       ok("Fichiers copiés")
@@ -297,11 +303,13 @@ Installer = function(cfg)
     end,
     apply_nft_rules = function(self)
       step("Application des règles nftables")
-      local script = [[#!/bin/sh
-set -e
-NFT=]] .. self.cfg.dest .. [[/dns-filter.nft
-nft -f "$NFT" && echo "nft ok"
-]]
+      local nft_filename
+      if self.cfg.bridge_mode then
+        nft_filename = "dns-filter-bridge.nft"
+      else
+        nft_filename = "dns-filter.nft"
+      end
+      local script = "#!/bin/sh\nset -e\nNFT=" .. tostring(self.cfg.dest) .. "/" .. tostring(nft_filename) .. "\nnft -f \"$NFT\" && echo \"nft ok\"\n"
       if self:ssh_run_script("apply-nft", script) then
         ok("Règles nft appliquées")
         return true
@@ -310,6 +318,11 @@ nft -f "$NFT" && echo "nft ok"
       return false
     end,
     enable_br_netfilter = function(self)
+      if self.cfg.bridge_mode then
+        step("Activation de br_netfilter (skipped in bridge mode)")
+        ok("br_netfilter non requis en mode bridge pur")
+        return true
+      end
       step("Activation de br_netfilter")
       local script = [[#!/bin/sh
 modprobe br_netfilter 2>/dev/null || true
@@ -332,54 +345,25 @@ echo "br_netfilter ok"
     end,
     install_initd = function(self)
       step("Installation du service init.d/custos (procd)")
-      local service = [[#!/bin/sh /etc/rc.common
-USE_PROCD=1
-START=95
-STOP=05
-PROG=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)
-CUSTOS_DIR=]] .. self.cfg.dest .. "\n" .. [[start_service() {
-    [ "$(uci get custos.main.enabled 2>/dev/null)" = "0" ] && return 0
-    [ -z "$PROG" ] && { echo "custos: luajit introuvable"; return 1; }
-
-    modprobe br_netfilter 2>/dev/null || true
-    sysctl -qw net.bridge.bridge-nf-call-iptables=1  2>/dev/null || true
-    sysctl -qw net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true
-
-    $PROG $CUSTOS_DIR/uci_config.lua || \
-        echo "custos: avertissement — génération config UCI échouée, utilise les défauts compilés"
-
-    # Charge les règles nftables
-    _nft_load || echo "custos: avertissement — règles nft non chargées, démarrage en mode dégradé"
-
-    procd_open_instance
-    procd_set_param command $PROG $CUSTOS_DIR/main.lua
-    procd_set_param env LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;;" CUSTOS_FILTER_CONFIG="/etc/custos/filter.yml"
-    procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_close_instance
-}
-
-stop_service() {
-    nft delete table ip  dns-filter 2>/dev/null || true
-    nft delete table ip6 dns-filter 2>/dev/null || true
-}
-
-_nft_load() {
-    NFT_SRC="$CUSTOS_DIR/dns-filter.nft"
-    [ -f "$NFT_SRC" ] || { echo "custos: $NFT_SRC introuvable"; return 1; }
-    nft -f "$NFT_SRC"
-}
-
-reload_service() {
-    stop
-    start
-}
-
-service_triggers() {
-    procd_add_reload_trigger "custos"
-}
-]]
+      local bridge_env
+      if self.cfg.bridge_mode then
+        bridge_env = "\n    procd_set_param env BRIDGE_MODE=1 NFQ_BRIDGE_MODE=1"
+      else
+        bridge_env = ""
+      end
+      local stop_table
+      if self.cfg.bridge_mode then
+        stop_table = "nft delete table bridge dns-filter-bridge 2>/dev/null || true"
+      else
+        stop_table = "nft delete table ip  dns-filter 2>/dev/null || true\n    nft delete table ip6 dns-filter 2>/dev/null || true"
+      end
+      local nft_src
+      if self.cfg.bridge_mode then
+        nft_src = '$CUSTOS_DIR/dns-filter-bridge.nft'
+      else
+        nft_src = '$CUSTOS_DIR/dns-filter.nft'
+      end
+      local service = "#!/bin/sh /etc/rc.common\nUSE_PROCD=1\nSTART=95\nSTOP=05\nPROG=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)\nCUSTOS_DIR=" .. tostring(self.cfg.dest) .. "\nstart_service() {\n    [ \"$(uci get custos.main.enabled 2>/dev/null)\" = \"0\" ] && return 0\n    [ -z \"$PROG\" ] && { echo \"custos: luajit introuvable\"; return 1; }\n\n    modprobe br_netfilter 2>/dev/null || true\n    sysctl -qw net.bridge.bridge-nf-call-iptables=1  2>/dev/null || true\n    sysctl -qw net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true\n\n    $PROG $CUSTOS_DIR/uci_config.lua || \\\n        echo \"custos: avertissement — génération config UCI échouée, utilise les défauts compilés\"\n\n    # Charge les règles nftables\n    _nft_load || echo \"custos: avertissement — règles nft non chargées, démarrage en mode dégradé\"\n\n    procd_open_instance\n    procd_set_param command $PROG $CUSTOS_DIR/main.lua" .. tostring(bridge_env) .. "\n    procd_set_param env LUA_PATH=\"/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;\" LUA_CPATH=\"/usr/lib/lua/?.so;;\" CUSTOS_FILTER_CONFIG=\"/etc/custos/filter.yml\"\n    procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}\n    procd_set_param stdout 1\n    procd_set_param stderr 1\n    procd_close_instance\n}\n\nstop_service() {\n    " .. tostring(stop_table) .. "\n}\n\n_nft_load() {\n    NFT_SRC=\"" .. tostring(nft_src) .. "\"\n    [ -f \"$NFT_SRC\" ] || { echo \"custos: $NFT_SRC introuvable\"; return 1; }\n    nft -f \"$NFT_SRC\"\n}\n\nreload_service() {\n    stop\n    start\n}\n\nservice_triggers() {\n    procd_add_reload_trigger \"custos\"\n}\n"
       local tmplocal = "tmp/owrt-custos-initd"
       if not (self.cfg.dry) then
         local fh = io.open(tmplocal, "w")
@@ -565,8 +549,12 @@ exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
       self:ssh_run("sysctl -w net.bridge.bridge-nf-call-iptables=0 2>/dev/null || true")
       self:ssh_run("sysctl -w net.bridge.bridge-nf-call-ip6tables=0 2>/dev/null || true")
       info("  Nettoyage nftables...")
-      self:ssh_run("nft delete table ip  dns-filter 2>/dev/null || true")
-      self:ssh_run("nft delete table ip6 dns-filter 2>/dev/null || true")
+      if self.cfg.bridge_mode then
+        self:ssh_run("nft delete table bridge dns-filter-bridge 2>/dev/null || true")
+      else
+        self:ssh_run("nft delete table ip  dns-filter 2>/dev/null || true")
+        self:ssh_run("nft delete table ip6 dns-filter 2>/dev/null || true")
+      end
       info("  Suppression de la configuration UCI...")
       self:ssh_run("rm -f /etc/config/custos")
       self:ssh_run("rm -rf /var/run/custos")
@@ -593,6 +581,7 @@ Options:
   --no-start     Installer sans démarrer le service
   --dry-run      Afficher les commandes sans exécuter
   --uninstall    Supprimer CustosVirginum du routeur
+  --bridge       Mode bridge pur (dns-filter-bridge.nft, sans br_netfilter)
   -h, --help     Afficher cette aide
 
 Exemple:
@@ -613,6 +602,7 @@ parse_args = function()
     no_start = false,
     dry = false,
     uninstall = false,
+    bridge_mode = false,
     pkg_mgr = nil
   }
   local i = 1
@@ -629,6 +619,8 @@ parse_args = function()
       cfg.dry = true
     elseif "--uninstall" == _exp_0 then
       cfg.uninstall = true
+    elseif "--bridge" == _exp_0 then
+      cfg.bridge_mode = true
     elseif "--port" == _exp_0 then
       i = i + 1
       cfg.port = tonumber(arg[i]) or (fail("--port attend un entier") and os.exit(1))

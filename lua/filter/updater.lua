@@ -292,7 +292,7 @@ process_custom_dir = function(dir, dry_run)
   return local_updated, local_errors
 end
 local opts = parse_args(arg)
-local cfg_path = opts.config or "cfg/filter.yml"
+local cfg_path = opts.config or "/etc/custos/filter.yml"
 local cfg, err = load_config(cfg_path)
 if not (cfg) then
   io.stderr:write("Erreur de chargement de la config " .. tostring(cfg_path) .. " : " .. tostring(err) .. "\n")

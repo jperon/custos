@@ -20,7 +20,7 @@ run_auth_worker = function(auth_cfg)
     action = "auth_worker_start",
     port = auth_cfg.port
   })
-  local secrets_path = auth_cfg.secrets or "cfg/secrets"
+  local secrets_path = auth_cfg.secrets or "/etc/custos/secrets"
   local secrets, err = load_secrets(secrets_path)
   if not (secrets) then
     log_error({

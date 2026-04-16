@@ -132,11 +132,17 @@ supervise = (pipe, sfd) ->
   -- On utilise load_config ici (dans le parent, avant fork) pour que
   -- le worker auth dispose de la section auth dès le démarrage.
   { :load_config } = require "filter.lib.load_config"
-  filter_cfg, cfg_err = load_config os.getenv("CUSTOS_FILTER_CONFIG") or "cfg/filter.yml"
+  filter_cfg, cfg_err = load_config os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
   if not filter_cfg
     log_warn { action: "auth_cfg_load_warning", err: cfg_err }
     filter_cfg = { auth: {} }
-  auth_cfg = filter_cfg.auth or {}
+  -- Apply load_config defaults to auth section (secrets path, timeouts, etc.)
+  -- even when filter.yml is missing, so auth worker uses /etc/custos/secrets.
+  auth = filter_cfg.auth or {}
+  auth.idle_timeout       = auth.idle_timeout       or 120
+  auth.heartbeat_interval = auth.heartbeat_interval  or 30
+  auth.secrets            = auth.secrets             or "/etc/custos/secrets"
+  auth_cfg = auth
 
   workers = {
     {
@@ -190,6 +196,11 @@ supervise = (pipe, sfd) ->
         if q0 and q0.pid and q0.pid > 0
           log_info { action: "supervisor_sighup", forwarding_to: "Q0", pid: q0.pid }
           libc.kill q0.pid, SIGHUP
+        -- Propagation vers AUTH pour recharger secrets
+        auth = workers[3]
+        if auth and auth.pid and auth.pid > 0
+          log_info { action: "supervisor_sighup", forwarding_to: "AUTH", pid: auth.pid }
+          libc.kill auth.pid, SIGHUP
       else
         -- SIGTERM : arrêt propre de tous les workers
         log_info { action: "supervisor_sigterm" }
