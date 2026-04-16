@@ -28,7 +28,7 @@ flush ruleset
 # ════════════════════════════════════════════════════════════════
 # Table bridge principale
 # ════════════════════════════════════════════════════════════════
-table bridge dns-filter {
+table bridge dns-filter-bridge {
 
   # Paires (MAC client, destination IPv6) autorisées après résolution DNS.
   # Expiration automatique après 2 minutes.
@@ -135,29 +135,20 @@ table bridge dns-filter {
     ip6 saddr . ip6 daddr @ip6_allowed accept
     ip  saddr . ip  daddr @ip4_allowed accept
 
-    # Trafic TCP non autorisé — early exit par type de client.
-    # Ordre : ether avant ip6 avant ip, pour éliminer le plus tôt possible.
-    #
-    # Client authentifié (destination non dans les sets) → RST immédiat.
-    # Pas de redirection portail : il est déjà authentifié.
-    meta l4proto tcp ether saddr @authenticated_macs reject with tcp reset
-    meta l4proto tcp ip6  saddr @authenticated_ips6  reject with tcp reset
-    meta l4proto tcp ip   saddr @authenticated_ips   reject with tcp reset
+    # Client authentifié (destination non dans les sets) → drop.
+    # Note : reject avec tcp reset non supporté en table bridge.
+    ether saddr @authenticated_macs drop
+    ip6  saddr @authenticated_ips6  drop
+    ip   saddr @authenticated_ips   drop
 
     # Client non authentifié, TCP SYN port 80 → Q2 (forge TCP 302).
-    meta l4proto tcp tcp dport 80 tcp flags syn queue num 2
+    tcp dport 80 tcp flags & (fin|syn|rst|ack) == syn queue num 2
 
-    # Tout autre TCP non autorisé → RST.
-    meta l4proto tcp reject with tcp reset
-
-    # Tout autre trafic non autorisé (UDP, ICMP hors NDP…) → ICMP unreachable.
-    reject with icmpx type host-unreachable
+    # Tout autre trafic non autorisé → drop.
+    drop
   }
 
-  # ── Chaîne OUTPUT (DNS émis par la machine filtre elle-même) ───
-  # queue bypass : fail-open si workers arrêtés.
-  chain output {
-    type filter hook output priority filter; policy accept;
-    meta l4proto { udp, tcp } th dport 53 queue flags bypass to 0
-  }
 }
+# Note : la chaîne output bridge n'est pas utilisée ici.
+# Le DNS émis par le filtre lui-même transite par la table ip locale,
+# pas par la table bridge (le bridge ne traite que le trafic bridgé).

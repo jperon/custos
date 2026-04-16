@@ -7,11 +7,15 @@ QUEUE_QUESTIONS = 0   -- UDP/53 src LAN  (questions sortantes)
 QUEUE_RESPONSES = 1   -- UDP/53 dst LAN  (réponses entrantes)
 QUEUE_CAPTIVE   = 2   -- TCP SYN/80 non autorisés (mode bridge uniquement)
 
--- ── Mode bridge ──────────────────────────────────────────────────
--- When running in bridge mode (table bridge nft ruleset), NFQUEUE delivers
--- full Ethernet frames to the workers (eth_offset = 14 bytes to IP header).
--- In router mode (table ip/ip6), only the IP packet is delivered (eth_offset = 0).
-BRIDGE_MODE = os.getenv("BRIDGE_MODE") == "1"
+-- ── Mode bridge ────────────────────────────────────
+-- BRIDGE_MODE=1 : active le worker Q2 (portail captif TCP SYN).
+-- NFQ_BRIDGE_MODE=1 : NFQUEUE est sur la table bridge nftables.
+--   Les workers Q0/Q1 reçoivent des trames Ethernet complètes (eth_offset=14).
+--   En mode routeur (table ip/ip6), seul le paquet IP est livré (eth_offset=0).
+-- Dans Docker (DOCKER_MODE=1), NFQUEUE est sur table ip (INPUT/OUTPUT) :
+--   BRIDGE_MODE peut être 1 (active Q2) mais NFQ_BRIDGE_MODE reste 0.
+BRIDGE_MODE     = os.getenv("BRIDGE_MODE") == "1"
+NFQ_BRIDGE_MODE = os.getenv("NFQ_BRIDGE_MODE") == "1"
 
 -- ── Docker mode ──────────────────────────────────────────────────
 -- When running inside Docker, dnsmasq runs on the filter container itself.
@@ -56,7 +60,8 @@ ALLOWED_DOMAINS = {
 }
 
 -- ── Noms de sets nftables ────────────────────────────────────────
-NFT_TABLE      = "dns-filter"
+NFT_FAMILY     = if NFQ_BRIDGE_MODE then "bridge" else "ip"
+NFT_TABLE      = if NFQ_BRIDGE_MODE then "dns-filter-bridge" else "dns-filter"
 NFT_SET_IP4    = "ip4_allowed"
 NFT_SET_IP6    = "ip6_allowed"
 NFT_SET_MAC4   = "mac4_allowed"   -- ether_addr . ipv4_addr (client MAC + dest IPv4)
@@ -106,10 +111,10 @@ AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
 -- ── Export ──────────────────────────────────────────────────────
 {
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE
-  :BRIDGE_MODE
+  :BRIDGE_MODE, :NFQ_BRIDGE_MODE
   :DOCKER_MODE
   :ALLOWED_DOMAINS
-  :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
+  :NFT_FAMILY, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
   :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY
   :IPC_PENDING_TTL
   :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS

@@ -3,10 +3,13 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libnfq = _obj_0.ffi, _obj_0.libnfq
 end
-local BRIDGE_MODE
-BRIDGE_MODE = require("config").BRIDGE_MODE
+local BRIDGE_MODE, NFQ_BRIDGE_MODE
+do
+  local _obj_0 = require("config")
+  BRIDGE_MODE, NFQ_BRIDGE_MODE = _obj_0.BRIDGE_MODE, _obj_0.NFQ_BRIDGE_MODE
+end
 local bit = require("bit")
-local ETH_OFFSET = BRIDGE_MODE and 14 or 0
+local ETH_OFFSET = NFQ_BRIDGE_MODE and 14 or 0
 local format_mac_ptr
 format_mac_ptr = function(p, o)
   return string.format("%02x:%02x:%02x:%02x:%02x:%02x", p[o], p[o + 1], p[o + 2], p[o + 3], p[o + 4], p[o + 5])
@@ -19,7 +22,7 @@ local get_l2
 get_l2 = function(nfad, raw)
   local mac_src = "unknown"
   local mac_raw = "\0\0\0\0\0\0"
-  if BRIDGE_MODE and raw and #raw >= 12 then
+  if NFQ_BRIDGE_MODE and raw and #raw >= 12 then
     local p = ffi.cast("const uint8_t*", raw)
     mac_src = format_mac_ptr(p, 6)
     mac_raw = ffi.string(p + 6, 6)

@@ -2,6 +2,7 @@ local QUEUE_QUESTIONS = 0
 local QUEUE_RESPONSES = 1
 local QUEUE_CAPTIVE = 2
 local BRIDGE_MODE = os.getenv("BRIDGE_MODE") == "1"
+local NFQ_BRIDGE_MODE = os.getenv("NFQ_BRIDGE_MODE") == "1"
 local DOCKER_MODE = os.getenv("DOCKER_MODE") == "1"
 local ALLOWED_DOMAINS = {
   "local",
@@ -19,7 +20,18 @@ local ALLOWED_DOMAINS = {
   "akamaiedge.net",
   "example.com"
 }
-local NFT_TABLE = "dns-filter"
+local NFT_FAMILY
+if NFQ_BRIDGE_MODE then
+  NFT_FAMILY = "bridge"
+else
+  NFT_FAMILY = "ip"
+end
+local NFT_TABLE
+if NFQ_BRIDGE_MODE then
+  NFT_TABLE = "dns-filter-bridge"
+else
+  NFT_TABLE = "dns-filter"
+end
 local NFT_SET_IP4 = "ip4_allowed"
 local NFT_SET_IP6 = "ip6_allowed"
 local NFT_SET_MAC4 = "mac4_allowed"
@@ -49,8 +61,10 @@ return {
   QUEUE_RESPONSES = QUEUE_RESPONSES,
   QUEUE_CAPTIVE = QUEUE_CAPTIVE,
   BRIDGE_MODE = BRIDGE_MODE,
+  NFQ_BRIDGE_MODE = NFQ_BRIDGE_MODE,
   DOCKER_MODE = DOCKER_MODE,
   ALLOWED_DOMAINS = ALLOWED_DOMAINS,
+  NFT_FAMILY = NFT_FAMILY,
   NFT_TABLE = NFT_TABLE,
   NFT_SET_IP4 = NFT_SET_IP4,
   NFT_SET_IP6 = NFT_SET_IP6,

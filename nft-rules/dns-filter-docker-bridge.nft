@@ -1,0 +1,129 @@
+#!/usr/sbin/nft -f
+# dns-filter-docker-bridge.nft
+# Docker-specific nftables ruleset for bridge mode end-to-end testing.
+#
+# The filter container acts as an IP router between lan2 (172.29.0.0/24)
+# and wan2 (172.31.0.0/24). NFQUEUE is on FORWARD/INPUT/OUTPUT chains
+# (table ip), NOT on a bridge table. BRIDGE_MODE=1 activates Q2.
+#
+# NFQUEUE assignments:
+#   Q0 (forward): DNS queries from LAN clients (dport 53)
+#   Q1 (forward): DNS responses to LAN clients (sport 53)
+#   Q2 (forward): TCP SYN port 80 from unauthenticated clients → captive portal
+
+table ip nat
+delete table ip nat
+table ip dns-filter
+delete table ip dns-filter
+table ip6 dns-filter
+delete table ip6 dns-filter
+
+# NAT : masquerade LAN → WAN
+table ip nat {
+  chain postrouting {
+    type nat hook postrouting priority 100; policy accept
+    ip saddr 172.29.0.0/24 ip daddr != 172.29.0.0/24 masquerade
+  }
+}
+
+table ip dns-filter {
+
+  set ip4_allowed {
+    type    ipv4_addr . ipv4_addr
+    flags   timeout, interval
+    timeout 2m
+  }
+
+  set authenticated_ips {
+    type  ipv4_addr
+    flags timeout
+  }
+
+  set authenticated_macs {
+    type  ether_addr
+    flags timeout
+  }
+
+  set ip4_dest_whitelist {
+    type  ipv4_addr
+    flags interval
+  }
+
+  chain forward {
+    type filter hook forward priority 0
+    policy drop
+
+    # Retour établi
+    ct state established,related accept
+
+    # Whitelist statique
+    ip daddr @ip4_dest_whitelist accept
+
+    # Client authentifié → accept
+    ip saddr @authenticated_ips accept
+
+    # Destinations autorisées après résolution DNS
+    ip saddr . ip daddr @ip4_allowed accept
+
+    # TCP/80 SYN non autorisé → Q2 (portail captif forge TCP 302)
+    ip saddr 172.29.0.0/24 tcp dport 80 tcp flags & (fin|syn|rst|ack) == syn queue num 2
+
+    # Tout autre TCP → reset
+    ip saddr 172.29.0.0/24 tcp flags & (fin|syn|rst|ack) == syn reject with tcp reset
+
+    drop
+  }
+
+  chain output {
+    type filter hook output priority 0
+    policy accept
+    # Q1: DNS responses from dnsmasq to LAN clients
+    ip protocol udp udp sport 53 queue num 1
+    ip protocol tcp tcp sport 53 queue num 1
+  }
+
+  chain input {
+    type filter hook input priority 0
+    policy accept
+    # Q0: DNS queries from LAN clients to dnsmasq
+    ip saddr 172.29.0.0/24 ip protocol udp udp dport 53 queue num 0
+    ip saddr 172.29.0.0/24 ip protocol tcp tcp dport 53 queue num 0
+  }
+}
+
+table ip6 dns-filter {
+
+  set ip6_allowed {
+    type    ipv6_addr . ipv6_addr
+    flags   timeout, interval
+    timeout 2m
+  }
+
+  set ip6_dest_whitelist {
+    type  ipv6_addr
+    flags interval
+  }
+
+  chain forward {
+    type filter hook forward priority 0
+    policy drop
+    ct state established,related accept
+    ip6 daddr @ip6_dest_whitelist accept
+    meta l4proto udp udp dport 53 queue num 0
+    meta l4proto tcp tcp dport 53 queue num 0
+    meta l4proto udp udp sport 53 queue num 1
+    meta l4proto tcp tcp sport 53 queue num 1
+    ip6 saddr . ip6 daddr @ip6_allowed accept
+    drop
+  }
+
+  chain input {
+    type filter hook input priority 0
+    policy accept
+  }
+
+  chain output {
+    type filter hook output priority 0
+    policy accept
+  }
+}

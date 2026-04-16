@@ -10,10 +10,10 @@
 -- NFQUEUE ; nfq_get_packet_hw() fournit la MAC source.
 
 { :ffi, :libnfq } = require "ffi_defs"
-{ :BRIDGE_MODE } = require "config"
+{ :BRIDGE_MODE, :NFQ_BRIDGE_MODE } = require "config"
 bit = require "bit"
 
-ETH_OFFSET = BRIDGE_MODE and 14 or 0
+ETH_OFFSET = NFQ_BRIDGE_MODE and 14 or 0
 
 --- Formate 6 octets d'un pointeur FFI en chaîne "aa:bb:cc:dd:ee:ff".
 -- @tparam cdata p   uint8_t pointer.
@@ -43,7 +43,7 @@ get_l2 = (nfad, raw) ->
   mac_src = "unknown"
   mac_raw = "\0\0\0\0\0\0"
 
-  if BRIDGE_MODE and raw and #raw >= 12
+  if NFQ_BRIDGE_MODE and raw and #raw >= 12
     -- Mode bridge : MAC source aux octets 6–11 de la trame Ethernet.
     p = ffi.cast "const uint8_t*", raw
     mac_src = format_mac_ptr p, 6

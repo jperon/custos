@@ -9,6 +9,9 @@ services:
       wan:
         ipv4_address: 172.30.0.20
         ipv6_address: fd00:30::20
+      wan2:
+        ipv4_address: 172.31.0.20
+        ipv6_address: fd00:31::14
 
   filter:
     build: .
@@ -177,25 +180,25 @@ services:
         ipv6_address: fd00:31::fe
     environment:
       BRIDGE_MODE: "1"
-      BRIDGE_IFNAME: "br-lan2"
+      BRIDGE_IFNAME: "eth0"
       CAPTIVE_IP: "172.29.0.254"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        mkdir -p /app/tmp &&
-        echo 1 > /proc/sys/net/ipv4/ip_forward &&
-        echo 1 > /proc/sys/net/ipv4/conf/all/forwarding &&
-        echo 1 > /proc/sys/net/ipv6/conf/all/forwarding &&
-        echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter &&
-        ip route del default 2>/dev/null || true &&
-        ip route add default via 172.31.0.1 &&
-        nft -f /app/nft-rules/dns-filter-bridge.nft &&
-        nft add table ip nat &&
-        nft add chain ip nat postrouting '{ type nat hook postrouting priority srcnat ; }' &&
-        nft add rule ip nat postrouting th sport 53 return &&
-        nft add rule ip nat postrouting masquerade &&
-        export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;' &&
-        export BRIDGE_MODE=1 BRIDGE_IFNAME=br-lan2 CAPTIVE_IP=172.29.0.254 &&
+        set -e
+        mkdir -p /app/tmp
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+        echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+        ip route del default 2>/dev/null || true
+        ip route add default via 172.31.0.1 dev eth1 2>/dev/null || true
+        nft -f /app/nft-rules/dns-filter-docker-bridge.nft
+        dnsmasq --no-daemon --conf-file=/dev/null \
+          --server=172.31.0.20 \
+          --listen-address=172.29.0.254 --listen-address=127.0.0.1 \
+          --bind-interfaces --no-hosts --no-resolv \
+          --log-queries=extra --log-facility=- &
+        export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;'
+        export BRIDGE_MODE=1 BRIDGE_IFNAME=eth0 CAPTIVE_IP=172.29.0.254
         exec luajit /app/lua/main.lua
     depends_on:
       - wan-dns
@@ -213,7 +216,7 @@ services:
         ipv4_address: 172.29.0.10
         ipv6_address: fd00:29::a
     command:
-      sh -c "echo nameserver 172.30.0.20 > /etc/resolv.conf; ip route del default 2>/dev/null; for i in 1 2 3; do ping -c1 -W2 172.29.0.254 >/dev/null 2>&1 && { ip route add default via 172.29.0.254 2>/dev/null; ip -6 route replace default via fd00:29::fe 2>/dev/null || true; break; }; sleep 2; done; sleep infinity"
+      sh -c "echo nameserver 172.29.0.254 > /etc/resolv.conf; ip route del default 2>/dev/null; for i in 1 2 3; do ping -c1 -W2 172.29.0.254 >/dev/null 2>&1 && { ip route add default via 172.29.0.254 2>/dev/null; ip -6 route replace default via fd00:29::fe 2>/dev/null || true; break; }; sleep 2; done; sleep infinity"
     depends_on:
       - wan-dns
 
@@ -230,7 +233,7 @@ services:
         ipv4_address: 172.29.0.11
         ipv6_address: fd00:29::b
     command:
-      sh -c "echo nameserver 172.30.0.20 > /etc/resolv.conf; ip route del default 2>/dev/null; for i in 1 2 3; do ping -c1 -W2 172.29.0.254 >/dev/null 2>&1 && { ip route add default via 172.29.0.254 2>/dev/null; ip -6 route replace default via fd00:29::fe 2>/dev/null || true; break; }; sleep 2; done; sleep infinity"
+      sh -c "echo nameserver 172.29.0.254 > /etc/resolv.conf; ip route del default 2>/dev/null; for i in 1 2 3; do ping -c1 -W2 172.29.0.254 >/dev/null 2>&1 && { ip route add default via 172.29.0.254 2>/dev/null; ip -6 route replace default via fd00:29::fe 2>/dev/null || true; break; }; sleep 2; done; sleep infinity"
     depends_on:
       - wan-dns
 

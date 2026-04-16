@@ -35,8 +35,8 @@ os.execute "sudo chmod 666 ./cfg/secrets"
 filter_name  = "custos-filter-bridge"
 client_name  = "custos-client-bridge"
 client2_name = "custos-client-bridge2"
-dns_server   = "172.30.0.20"
-dns6_server  = "fd00:30::20"
+dns_server   = "172.29.0.254"  -- dnsmasq sur le filtre (DOCKER_MODE)
+dns6_server  = "fd00:29::fe"
 filter_ip    = "172.29.0.254"
 filter_ip6   = "fd00:29::fe"
 
@@ -137,7 +137,7 @@ wait_for_auth_ready = (timeout = 30) ->
 
 auth_curl = (method, path, data = nil) ->
   data_flag = if data then "-d '#{data}' " else ""
-  cmd = "docker exec #{client_name} curl -s -o /dev/null -w '%{http_code}' -X #{method} #{data_flag}http://#{filter_ip}:33443#{path} 2>&1"
+  cmd = "docker exec #{client_name} curl -k -s -o /dev/null -w '%{http_code}' -X #{method} #{data_flag}https://#{filter_ip}:33443#{path} 2>&1"
   execute cmd, true
 
 build_image = ->
@@ -212,15 +212,15 @@ compose_up = ->
   return true
 
 flush_ip4_allowed = ->
-  execute "docker exec #{filter_name} nft flush set bridge dns-filter-bridge ip4_allowed 2>/dev/null", true
-  execute "docker exec #{filter_name} nft flush set bridge dns-filter-bridge ip6_allowed 2>/dev/null", true
+  execute "docker exec #{filter_name} nft flush set ip dns-filter ip4_allowed 2>/dev/null", true
+  execute "docker exec #{filter_name} nft flush set ip6 dns-filter ip6_allowed 2>/dev/null", true
 
 compose_down = ->
   if keep_containers
     log "Keeping containers running (--keep)", "WARN"
     return true
   log "Tearing down docker-compose bridge environment…", "STEP"
-  execute "docker exec #{filter_name} nft delete table bridge dns-filter-bridge 2>/dev/null; true", true
+  execute "docker exec #{filter_name} nft delete table ip dns-filter 2>/dev/null; true", true
   execute "rm -f ./tmp/sessions.lua 2>/dev/null || true"
   execute "git checkout cfg/secrets 2>/dev/null || true"
   execute "docker compose --profile bridge down"
@@ -347,11 +347,11 @@ run_test "Bridge DNS — TTL patché à #{EXPECTED_TTL}s",
     return ok, "TTL=#{local_ttl} (attendu=#{EXPECTED_TTL})"
 
 run_test "Bridge nft ip4_allowed peuplé après résolution",
-  "nft list set bridge dns-filter-bridge ip4_allowed → elements = { <ip> ... }",
+  "nft list set ip dns-filter ip4_allowed → elements = { <ip> ... }",
   ->
     query_dns TEST_DOMAINS.allowed
     os.execute "sleep 1"
-    cmd = "docker exec #{filter_name} nft list set bridge dns-filter-bridge ip4_allowed 2>/dev/null"
+    cmd = "docker exec #{filter_name} nft list set ip dns-filter ip4_allowed 2>/dev/null"
     success, output = execute cmd, true
     has_entries = output and output\match "elements = {[^}]+}"
     ok = has_entries != nil
