@@ -10,7 +10,6 @@
 { :load_secrets }      = require "auth.credentials"
 { :run }               = require "auth.server"
 nft_sess               = require "auth.nft_sessions"
-captive                = require "auth.captive"
 { :log_info, :log_warn, :log_error } = require "log"
 
 ffi = require "ffi"
@@ -63,22 +62,6 @@ run_auth_worker = (auth_cfg) ->
       log_warn { action: "auth_secrets_reload_failed", err: err2 }
       nil
 
-  -- Portail captif : sockets HTTP plain (si captive_port configuré)
-  captive_srvs = {}
-  captive_port = auth_cfg.captive_port or 33080
-  if captive_port and captive_port > 0
-    log_info { action: "captive_portal_start", port: captive_port }
-    cap4, err_c4 = captive.make_captive4 captive_port
-    if cap4
-      captive_srvs[#captive_srvs + 1] = cap4
-    else
-      log_warn { action: "captive_portal_ipv4_failed", err: err_c4 }
-    cap6 = captive.make_captive6 captive_port
-    if cap6
-      captive_srvs[#captive_srvs + 1] = cap6
-    else
-      log_info { action: "captive_portal_ipv6_skipped" }
-
-  run secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path
+  run secrets, auth_cfg, reload_fn, nft_sess, secrets_path
 
 { :run_auth_worker }

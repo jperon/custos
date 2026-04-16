@@ -223,7 +223,7 @@ auth_curl = function(method, path, data)
   else
     data_flag = ""
   end
-  local cmd = "docker exec custos-client curl -s -o /dev/null -w '%{http_code}' -X " .. tostring(method) .. " " .. tostring(data_flag) .. "http://" .. tostring(auth_ip) .. ":33443" .. tostring(path) .. " 2>&1"
+  local cmd = "docker exec custos-client curl -sk -o /dev/null -w '%{http_code}' -X " .. tostring(method) .. " " .. tostring(data_flag) .. "https://" .. tostring(auth_ip) .. ":33443" .. tostring(path) .. " 2>&1"
   return execute(cmd, true)
 end
 local wait_for_filter_ready
@@ -936,28 +936,34 @@ run_test("Auth — from_user : domaine refusé après logout → REFUSED", "nslo
   return ok, obtained
 end)
 print("")
-print(tostring(C.bold) .. "▶ Portail captif (port 33080)" .. tostring(C.reset))
-local captive_curl
-captive_curl = function(path)
-  if path == nil then
-    path = "/"
-  end
-  local cmd = "docker exec custos-client curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 http://" .. tostring(auth_ip) .. ":33080" .. tostring(path) .. " 2>&1"
-  return execute(cmd, true)
-end
-run_test("Portail captif — requête HTTP → 302", "curl http://" .. tostring(auth_ip) .. ":33080/ → HTTP 302 (redirect vers login)", function()
-  local ok, code = captive_curl("/")
-  return (code == "302"), "HTTP " .. tostring(code)
+print(tostring(C.bold) .. "▶ Portail captif Q2 (TCP/80 → 302 forgé)" .. tostring(C.reset))
+run_test("Portail captif Q2 — log captive_redirect_q2 présent", "curl http://1.2.3.4/ (client non auth) → Q2 logue captive_redirect_q2", function()
+  execute("docker exec " .. tostring(filter_name) .. " nft flush set ip dns-filter authenticated_ips 2>/dev/null", true)
+  os.execute("sleep 0.5")
+  os.execute("docker exec custos-client curl -s -o /dev/null -m 3 http://1.2.3.4/ 2>/dev/null || true")
+  os.execute("sleep 1")
+  local _, output = execute("docker logs " .. tostring(filter_name) .. " 2>&1", true)
+  local ok = output ~= nil and output:match("captive_redirect_q2") ~= nil
+  return ok, (function()
+    if ok then
+      return "captive_redirect_q2 trouvé"
+    else
+      return "(absent — Q2 non déclenché)"
+    end
+  end)()
 end)
-run_test("Portail captif — sonde Android /generate_204 → 302", "curl http://" .. tostring(auth_ip) .. ":33080/generate_204 → HTTP 302 (portail détecté)", function()
-  local ok, code = captive_curl("/generate_204")
-  return (code == "302"), "HTTP " .. tostring(code)
+run_test("Portail captif Q2 — ip client présent dans le log", "docker logs → ip=172.28.0.10 dans captive_redirect_q2", function()
+  local _, output = execute("docker logs " .. tostring(filter_name) .. " 2>&1", true)
+  local ok = output ~= nil and output:match("captive_redirect_q2") ~= nil and output:match("ip=172%.28%.0%.10") ~= nil
+  return ok, (function()
+    if ok then
+      return "ip=172.28.0.10 trouvé"
+    else
+      return "(ip client absent)"
+    end
+  end)()
 end)
-run_test("Portail captif — sonde Apple /hotspot-detect.html → 302", "curl http://" .. tostring(auth_ip) .. ":33080/hotspot-detect.html → HTTP 302", function()
-  local ok, code = captive_curl("/hotspot-detect.html")
-  return (code == "302"), "HTTP " .. tostring(code)
-end)
-log("Re-login pour tester le bypass du portail captif…", "STEP")
+log("Login pour tester authenticated_ips…", "STEP")
 auth_curl("POST", "/login", "user=testuser&password=testpass")
 run_test("Portail captif — IP dans authenticated_ips après login", "nft list set ip dns-filter authenticated_ips → contient 172.28.0.10", function()
   local cmd = "docker exec " .. tostring(filter_name) .. " nft list set ip dns-filter authenticated_ips 2>&1"
@@ -981,49 +987,17 @@ run_test("Portail captif — IP retirée de authenticated_ips après logout", "n
   return removed, obtained
 end)
 print("")
-print(tostring(C.bold) .. "▶ Sondes captives Windows/Firefox" .. tostring(C.reset))
-local _list_0 = {
-  "/connecttest.txt",
-  "/success.txt",
-  "/ncsi.txt",
-  "/canonical.html"
-}
-for _index_0 = 1, #_list_0 do
-  local probe_path = _list_0[_index_0]
-  run_test("Portail captif — sonde " .. tostring(probe_path) .. " → 302", "curl http://" .. tostring(auth_ip) .. ":33080" .. tostring(probe_path) .. " → HTTP 302", function()
-    local ok, code = captive_curl(probe_path)
-    return (code == "302"), "HTTP " .. tostring(code)
-  end)
-end
-print("")
-print(tostring(C.bold) .. "▶ Portail captif IPv6" .. tostring(C.reset))
-local auth_ip6
-if profile == "ndpi5" then
-  auth_ip6 = "fd00:28::fd"
-else
-  auth_ip6 = "fd00:28::fe"
-end
-run_test("Portail captif IPv6 — requête HTTP → 302", "curl -6 http://[" .. tostring(auth_ip6) .. "]:33080/ depuis client → HTTP 302", function()
-  local cmd = "docker exec custos-client curl -6 -s -o /dev/null -w '%{http_code}' --max-redirs 0 'http://[" .. tostring(auth_ip6) .. "]:33080/' 2>&1"
-  local ok, code = execute(cmd, true)
-  code = (code or ""):gsub("%s+", "")
-  return (code == "302"), "HTTP " .. tostring(code)
-end)
-print("")
-print(tostring(C.bold) .. "▶ DNAT — TCP port 80 → portail captif" .. tostring(C.reset))
-execute("docker exec " .. tostring(filter_name) .. " nft delete element ip dns-filter authenticated_ips { 172.28.0.10 } 2>/dev/null", true)
-os.execute("sleep 1")
-run_test("DNAT — TCP port 80 non authentifié → 302", "curl http://1.2.3.4/ depuis client (non auth) → DNAT→33080 → 302", function()
-  local cmd = "docker exec custos-client curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 5 http://1.2.3.4/ 2>&1"
-  local ok, code = execute(cmd, true)
-  code = (code or ""):gsub("%s+", "")
-  return (code == "302"), "HTTP " .. tostring(code)
+print(tostring(C.bold) .. "▶ Worker Q2 — NFQUEUE 2" .. tostring(C.reset))
+run_test("Q2 — worker démarré (NFQUEUE 2 connectée)", "/proc/net/netfilter/nfnetlink_queue → ligne queue 2", function()
+  local _, qraw = execute("docker exec " .. tostring(filter_name) .. " cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null", true)
+  local ok = qraw and qraw:match("%s*2%s") ~= nil
+  return ok, qraw or "(absent)"
 end)
 print("")
 print(tostring(C.bold) .. "▶ Inscription d'utilisateurs" .. tostring(C.reset))
 execute("rm -f ./tmp/sessions.lua 2>/dev/null || true")
 run_test("Inscription — nom d'utilisateur trop court → erreur", "POST /register user=a&password=pass123 → erreur dans la page", function()
-  local cmd = "docker exec custos-client curl -s -w '\n%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' http://" .. tostring(auth_ip) .. ":33443/register 2>&1"
+  local cmd = "docker exec custos-client curl -sk -w '\n%{http_code}' -X POST -d 'user=a&password=pass123&password2=pass123' https://" .. tostring(auth_ip) .. ":33443/register 2>&1"
   local ok, output = execute(cmd, true)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" or code == "400" then
@@ -1037,7 +1011,7 @@ run_test("Inscription — nom d'utilisateur trop court → erreur", "POST /regis
   end
 end)
 run_test("Inscription — mot de passe trop court → erreur", "POST /register user=newuser&password=pass&password2=pass → erreur", function()
-  local cmd = "docker exec custos-client curl -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' http://" .. tostring(auth_ip) .. ":33443/register 2>&1"
+  local cmd = "docker exec custos-client curl -sk -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass&password2=pass' https://" .. tostring(auth_ip) .. ":33443/register 2>&1"
   local ok, output = execute(cmd, true)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" or code == "400" then
@@ -1051,7 +1025,7 @@ run_test("Inscription — mot de passe trop court → erreur", "POST /register u
   end
 end)
 run_test("Inscription — mots de passe différents → erreur", "POST /register user=newuser&password=pass123&password2=pass456 → erreur", function()
-  local cmd = "docker exec custos-client curl -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' http://" .. tostring(auth_ip) .. ":33443/register 2>&1"
+  local cmd = "docker exec custos-client curl -sk -w '\n%{http_code}' -X POST -d 'user=newuser&password=pass123&password2=pass456' https://" .. tostring(auth_ip) .. ":33443/register 2>&1"
   local ok, output = execute(cmd, true)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" or code == "400" then
@@ -1065,7 +1039,7 @@ run_test("Inscription — mots de passe différents → erreur", "POST /register
   end
 end)
 run_test("Inscription — utilisateur déjà existant → erreur", "POST /register user=testuser&password=newpass123&password2=newpass123 → 'déjà pris'", function()
-  local cmd = "docker exec custos-client curl -s -w '\n%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' http://" .. tostring(auth_ip) .. ":33443/register 2>&1"
+  local cmd = "docker exec custos-client curl -sk -w '\n%{http_code}' -X POST -d 'user=testuser&password=newpass123&password2=newpass123' https://" .. tostring(auth_ip) .. ":33443/register 2>&1"
   local ok, output = execute(cmd, true)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" or code == "409" then
@@ -1079,13 +1053,13 @@ run_test("Inscription — utilisateur déjà existant → erreur", "POST /regist
   end
 end)
 run_test("Inscription — nouvel utilisateur réussi → auto-login + session créée", "POST /register user=newuser&password=newpass123&password2=newpass123 → 200 + sessions.lua contient newuser", function()
-  local cmd = "docker exec custos-client curl -s -w '\n%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' http://" .. tostring(auth_ip) .. ":33443/register 2>&1"
+  local cmd = "docker exec custos-client curl -sk -w '\n%{http_code}' -X POST -d 'user=newuser&password=newpass123&password2=newpass123' https://" .. tostring(auth_ip) .. ":33443/register 2>&1"
   local ok, output = execute(cmd, true)
   local code = (output and output:match("(%d+)$")) or ""
   if code == "200" then
     local _, sess_out = execute("cat ./tmp/sessions.lua 2>/dev/null", true)
     if sess_out and sess_out:match("newuser") and sess_out:match("172.28.0.10") then
-      local cmd_login = "docker exec custos-client curl -s -o /dev/null -w '%{http_code}' -X POST -d 'user=newuser&password=newpass123' http://" .. tostring(auth_ip) .. ":33443/login 2>&1"
+      local cmd_login = "docker exec custos-client curl -sk -o /dev/null -w '%{http_code}' -X POST -d 'user=newuser&password=newpass123' https://" .. tostring(auth_ip) .. ":33443/login 2>&1"
       local ok_login, code_login = execute(cmd_login, true)
       code_login = (code_login or ""):gsub("%s+", "")
       return ok_login and code_login == "200", "HTTP " .. tostring(code) .. " (inscription ok), login: " .. tostring(code_login)

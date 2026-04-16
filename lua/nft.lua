@@ -3,10 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libnft = _obj_0.ffi, _obj_0.libnft
 end
-local NFT_FAMILY, NFT_TABLE, NFT_SET_IP4, NFT_SET_IP6, NFT_SET_MAC4, NFT_SET_MAC6, NFT_IP_TIMEOUT
+local NFT_FAMILY, NFT_FAMILY6, NFT_TABLE, NFT_SET_IP4, NFT_SET_IP6, NFT_SET_MAC4, NFT_SET_MAC6, NFT_IP_TIMEOUT
 do
   local _obj_0 = require("config")
-  NFT_FAMILY, NFT_TABLE, NFT_SET_IP4, NFT_SET_IP6, NFT_SET_MAC4, NFT_SET_MAC6, NFT_IP_TIMEOUT = _obj_0.NFT_FAMILY, _obj_0.NFT_TABLE, _obj_0.NFT_SET_IP4, _obj_0.NFT_SET_IP6, _obj_0.NFT_SET_MAC4, _obj_0.NFT_SET_MAC6, _obj_0.NFT_IP_TIMEOUT
+  NFT_FAMILY, NFT_FAMILY6, NFT_TABLE, NFT_SET_IP4, NFT_SET_IP6, NFT_SET_MAC4, NFT_SET_MAC6, NFT_IP_TIMEOUT = _obj_0.NFT_FAMILY, _obj_0.NFT_FAMILY6, _obj_0.NFT_TABLE, _obj_0.NFT_SET_IP4, _obj_0.NFT_SET_IP6, _obj_0.NFT_SET_MAC4, _obj_0.NFT_SET_MAC6, _obj_0.NFT_IP_TIMEOUT
 end
 local log_warn, log_error
 do
@@ -39,7 +39,10 @@ add_ip4 = function(client_ip, ip_str)
 end
 local add_ip6
 add_ip6 = function(client_ip, ip_str)
-  local cmd = "add element " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_IP6) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+  if not (client_ip:find(":")) then
+    return false
+  end
+  local cmd = "add element " .. tostring(NFT_FAMILY6) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_IP6) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
   return run_cmd(cmd)
 end
 local add_ip
@@ -63,7 +66,7 @@ add_mac6 = function(mac, ip_str)
   if not (NFT_SET_MAC6) then
     return false
   end
-  local cmd = "add element " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC6) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+  local cmd = "add element " .. tostring(NFT_FAMILY6) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC6) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
   return run_cmd(cmd)
 end
 local cleanup

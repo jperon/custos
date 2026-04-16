@@ -496,22 +496,38 @@ run_test("Bridge auth — logout GET /logout → 303", "GET /logout → HTTP 303
   return (code == "303"), "HTTP " .. tostring(code)
 end)
 print("")
-print(tostring(C.bold) .. "▶ Portail captif (port 33080, mode bridge)" .. tostring(C.reset))
-local captive_curl
-captive_curl = function(path)
+print(tostring(C.bold) .. "▶ Portail captif Q2 (TCP/80 → 302 forgé)" .. tostring(C.reset))
+local q2_curl
+q2_curl = function(path)
   if path == nil then
     path = "/"
   end
-  local cmd = "docker exec " .. tostring(client_name) .. " curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 http://" .. tostring(filter_ip) .. ":33080" .. tostring(path) .. " 2>&1"
+  local cmd = "docker exec " .. tostring(client_name) .. " curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 -m 5 http://" .. tostring(filter_ip) .. tostring(path) .. " 2>&1"
   return execute(cmd, true)
 end
-run_test("Bridge portail captif — GET / → 302", "curl http://" .. tostring(filter_ip) .. ":33080/ → HTTP 302", function()
-  local ok, code = captive_curl("/")
-  return (code == "302"), "HTTP " .. tostring(code)
+run_test("Bridge portail captif Q2 — log captive_redirect_q2 présent", "docker logs " .. tostring(filter_name) .. " → captive_redirect_q2 dans les logs", function()
+  os.execute("docker exec " .. tostring(client_name) .. " curl -s -o /dev/null -m 3 http://1.1.1.1/ 2>/dev/null || true")
+  os.execute("sleep 1")
+  local _, output = execute("docker logs " .. tostring(filter_name) .. " 2>&1", true)
+  local ok = output ~= nil and output:match("captive_redirect_q2") ~= nil
+  return ok, (function()
+    if ok then
+      return "captive_redirect_q2 trouvé"
+    else
+      return "(absent — Q2 non déclenché)"
+    end
+  end)()
 end)
-run_test("Bridge portail captif — /generate_204 → 302", "curl http://" .. tostring(filter_ip) .. ":33080/generate_204 → HTTP 302", function()
-  local ok, code = captive_curl("/generate_204")
-  return (code == "302"), "HTTP " .. tostring(code)
+run_test("Bridge portail captif Q2 — log ip/sport client présent", "docker logs → ip=172.29.0.10 dans captive_redirect_q2", function()
+  local _, output = execute("docker logs " .. tostring(filter_name) .. " 2>&1", true)
+  local ok = output ~= nil and output:match("captive_redirect_q2") ~= nil and output:match("ip=172%.29%.0%.10") ~= nil
+  return ok, (function()
+    if ok then
+      return "ip=172.29.0.10 trouvé"
+    else
+      return "(ip client absent)"
+    end
+  end)()
 end)
 run_test("Bridge — worker Q2-captive démarré", "docker logs → q2_worker_start présent", function()
   local _, output = execute("docker logs " .. tostring(filter_name) .. " 2>&1", true)

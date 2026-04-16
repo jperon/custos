@@ -57,6 +57,8 @@ services:
         nft add rule ip6 nat postrouting th sport 53 return &&
         nft add rule ip6 nat postrouting masquerade &&
         export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;' &&
+        LAN_IF=$$(ip -o addr | awk '/172\.28\.0\.254/{print $$2}' | head -1) &&
+        export BRIDGE_MODE=1 CAPTIVE_IP=172.28.0.254 BRIDGE_IFNAME="$${LAN_IF:-eth0}" &&
         exec luajit /app/lua/main.lua
     depends_on:
       - wan-dns
@@ -107,6 +109,8 @@ services:
         nft add rule ip6 nat postrouting th sport 53 return &&
         nft add rule ip6 nat postrouting masquerade &&
         export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;' &&
+        LAN_IF=$$(ip -o addr | awk '/172\.28\.0\.253/{print $$2}' | head -1) &&
+        export BRIDGE_MODE=1 CAPTIVE_IP=172.28.0.253 BRIDGE_IFNAME="$${LAN_IF:-eth0}" &&
         exec luajit /app/lua/main.lua
     depends_on:
       - wan-dns
@@ -189,8 +193,12 @@ services:
         mkdir -p /app/tmp
         echo 1 > /proc/sys/net/ipv4/ip_forward
         echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+        n=0; while true; do ip addr | grep -q '172.29.0.254' && break; sleep 0.3; n=$$((n+1)); [ "$$n" -gt 20 ] && break; done
+        LAN_IF=$$(ip -o addr | awk '/172.29.0.254/{print $$2}')
+        WAN_IF=$$(ip -o addr | awk '/172.31.0.254/{print $$2}')
+        echo "LAN=$$LAN_IF WAN=$$WAN_IF"
         ip route del default 2>/dev/null || true
-        ip route add default via 172.31.0.1 dev eth1 2>/dev/null || true
+        ip route add default via 172.31.0.1 dev "$$WAN_IF" 2>/dev/null || true
         nft -f /app/nft-rules/dns-filter-docker-bridge.nft
         dnsmasq --no-daemon --conf-file=/dev/null \
           --server=172.31.0.20 \
@@ -198,7 +206,7 @@ services:
           --bind-interfaces --no-hosts --no-resolv \
           --log-queries=extra --log-facility=- &
         export LUA_PATH='/app/lua/?.lua;/app/lua/?/init.lua;;'
-        export BRIDGE_MODE=1 BRIDGE_IFNAME=eth0 CAPTIVE_IP=172.29.0.254
+        export BRIDGE_MODE=1 BRIDGE_IFNAME="$${LAN_IF:-eth0}" CAPTIVE_IP=172.29.0.254
         exec luajit /app/lua/main.lua
     depends_on:
       - wan-dns

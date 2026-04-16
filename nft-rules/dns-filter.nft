@@ -63,33 +63,6 @@ table ip dns-filter {
     flags interval
   }
 
-  # ── Chaîne PREROUTING (portail captif : DNAT HTTP/HTTPS) ──────────
-  # Actif uniquement quand la section auth est présente dans filter.yml.
-  chain prerouting {
-    type nat hook prerouting priority dstnat; policy accept;
-    # Ne pas intercepter le DNS
-    meta l4proto { udp, tcp } th dport 53 return
-    # Ne pas rediriger le trafic émis par la machine filtre elle-même
-    fib saddr type local return
-    # Ne pas rediriger le trafic destiné à la machine filtre elle-même
-    # (permet l'accès direct à l'interface du filtre, ex. portail auth)
-    fib daddr type local return
-    # Clients authentifiés par IP : pas de redirection
-    ip saddr @authenticated_ips return
-    # Clients authentifiés par MAC (br_netfilter expose le L2 dans le hook L3) :
-    ether saddr @authenticated_macs return
-    # Clients autorisés par MAC+IP après résolution DNS : pas de redirection
-    ether saddr . ip daddr @mac4_allowed return
-    # Destinations déjà autorisées par la liste blanche DNS : pas de redirection
-    ip saddr . ip daddr @ip4_allowed return
-    # Destinations en liste blanche statique : pas de redirection non plus
-    ip daddr @ip4_dest_whitelist return
-    # Portail captif : tout HTTP → portail plain
-    # HTTPS n'est pas redirigé : les connexions non-autorisées sont bloquées
-    # dans la chaîne FORWARD par un REJECT tcp reset.
-    tcp dport 80  redirect to :33080
-  }
-
   # ── Chaîne FORWARD (trafic traversant : bridge, routeur, WireGuard) ─
   chain forward {
     type   filter hook forward priority 0
@@ -124,8 +97,10 @@ table ip dns-filter {
     # Destinations en liste blanche statique (IPs/CIDRs sans DNS).
     ip daddr @ip4_dest_whitelist accept
 
+    # TCP/80 SYN non autorisé → Q2 (forge TCP 302 redirect vers portail captif).
+    tcp dport 80 tcp flags & (fin|syn|rst|ack) == syn queue num 2
+
     # Connexions HTTPS vers des destinations non autorisées : TCP RST immédiat.
-    # Le client n'a pas de résolution DNS valide → pas d'entrée ip4_allowed.
     tcp dport 443 reject with tcp reset
 
     # Tout autre trafic non autorisé : ICMP host-prohibited (évite les timeouts).
@@ -155,7 +130,6 @@ table ip dns-filter {
     # fib daddr type local return en prerouting qui évite la redirection.
     tcp dport { 80, 443 } accept
     tcp dport 33443 accept
-    tcp dport 33080 accept
     icmp type echo-request accept
     # DHCPv4 server : reçoit les requêtes broadcast des clients
     udp dport 67 accept
@@ -204,24 +178,6 @@ table ip6 dns-filter {
     flags interval
   }
 
-  # ── Chaîne PREROUTING IPv6 (portail captif) ──────────────────────
-  chain prerouting {
-    type nat hook prerouting priority dstnat; policy accept;
-    meta l4proto { udp, tcp } th dport 53 return
-    fib saddr type local return
-    fib daddr type local return
-    ip6 saddr @authenticated_ips6 return
-    # Clients authentifiés par MAC (br_netfilter expose le L2 dans le hook L3) :
-    ether saddr @authenticated_macs return
-    # Clients autorisés par MAC+IP après résolution DNS : pas de redirection
-    ether saddr . ip6 daddr @mac6_allowed return
-    # Destinations déjà autorisées par la liste blanche DNS : pas de redirection
-    ip6 saddr . ip6 daddr @ip6_allowed return
-    # Destinations en liste blanche statique : pas de redirection non plus
-    ip6 daddr @ip6_dest_whitelist return
-    tcp dport 80  redirect to :33080
-  }
-
   # ── Chaîne FORWARD ───────────────────────────────────────────────
   chain forward {
     type   filter hook forward priority 0
@@ -261,6 +217,9 @@ table ip6 dns-filter {
     # Destinations en liste blanche statique (IPs/CIDRs sans DNS).
     ip6 daddr @ip6_dest_whitelist accept
 
+    # TCP/80 SYN non autorisé → Q2 (portail captif).
+    tcp dport 80 tcp flags & (fin|syn|rst|ack) == syn queue num 2
+
     # Connexions HTTPS vers des destinations non autorisées : TCP RST immédiat.
     tcp dport 443 reject with tcp reset
 
@@ -289,7 +248,6 @@ table ip6 dns-filter {
     # fib daddr type local return en prerouting qui évite la redirection.
     tcp dport { 80, 443 } accept
     tcp dport 33443 accept
-    tcp dport 33080 accept
     # DHCPv6 server : reçoit les sollicitations des clients
     udp dport 547 accept
   }

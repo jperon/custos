@@ -4,7 +4,7 @@
 -- sans fork() ni popen() — le contexte nft_ctx est réutilisé.
 
 { :ffi, :libnft } = require "ffi_defs"
-{ :NFT_FAMILY, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT } = require "config"
+{ :NFT_FAMILY, :NFT_FAMILY6, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT } = require "config"
 { :log_warn, :log_error } = require "log"
 
 -- ── Initialisation du contexte ───────────────────────────────────
@@ -42,7 +42,8 @@ add_ip4 = (client_ip, ip_str) ->
 -- @tparam string ip_str    Adresse IPv6 de destination (ex: "2001:db8::1")
 -- @treturn boolean true si succès
 add_ip6 = (client_ip, ip_str) ->
-  cmd = "add element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET_IP6} { #{client_ip} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
+  return false unless client_ip\find ":"
+  cmd = "add element #{NFT_FAMILY6} #{NFT_TABLE} #{NFT_SET_IP6} { #{client_ip} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
   run_cmd cmd
 
 --- Ajoute une paire (client, destination), famille détectée par ':' dans ip_str.
@@ -71,7 +72,7 @@ add_mac4 = (mac, ip_str) ->
 -- @treturn boolean true si succès
 add_mac6 = (mac, ip_str) ->
   return false unless NFT_SET_MAC6
-  cmd = "add element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET_MAC6} { #{mac} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
+  cmd = "add element #{NFT_FAMILY6} #{NFT_TABLE} #{NFT_SET_MAC6} { #{mac} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
   run_cmd cmd
 
 --- Libère le contexte nftables (appelé à l'arrêt du processus).

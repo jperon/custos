@@ -26,6 +26,12 @@ if NFQ_BRIDGE_MODE then
 else
   NFT_FAMILY = "ip"
 end
+local NFT_FAMILY6
+if NFQ_BRIDGE_MODE then
+  NFT_FAMILY6 = "bridge"
+else
+  NFT_FAMILY6 = "ip6"
+end
 local NFT_TABLE
 if NFQ_BRIDGE_MODE then
   NFT_TABLE = "dns-filter-bridge"
@@ -65,6 +71,7 @@ return {
   DOCKER_MODE = DOCKER_MODE,
   ALLOWED_DOMAINS = ALLOWED_DOMAINS,
   NFT_FAMILY = NFT_FAMILY,
+  NFT_FAMILY6 = NFT_FAMILY6,
   NFT_TABLE = NFT_TABLE,
   NFT_SET_IP4 = NFT_SET_IP4,
   NFT_SET_IP6 = NFT_SET_IP6,

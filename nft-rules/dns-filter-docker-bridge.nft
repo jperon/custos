@@ -44,6 +44,24 @@ table ip dns-filter {
     flags timeout
   }
 
+  set mac4_allowed {
+    type    ether_addr . ipv4_addr
+    flags   timeout
+    timeout 2m
+  }
+
+  set mac6_allowed {
+    type    ether_addr . ipv6_addr
+    flags   timeout
+    timeout 2m
+  }
+
+  set ip6_allowed {
+    type    ipv6_addr . ipv6_addr
+    flags   timeout, interval
+    timeout 2m
+  }
+
   set ip4_dest_whitelist {
     type  ipv4_addr
     flags interval
@@ -64,6 +82,7 @@ table ip dns-filter {
 
     # Destinations autorisées après résolution DNS
     ip saddr . ip daddr @ip4_allowed accept
+    ether saddr . ip daddr @mac4_allowed accept
 
     # TCP/80 SYN non autorisé → Q2 (portail captif forge TCP 302)
     ip saddr 172.29.0.0/24 tcp dport 80 tcp flags & (fin|syn|rst|ack) == syn queue num 2
@@ -99,6 +118,22 @@ table ip6 dns-filter {
     timeout 2m
   }
 
+  set mac6_allowed {
+    type    ether_addr . ipv6_addr
+    flags   timeout
+    timeout 2m
+  }
+
+  set authenticated_ips6 {
+    type  ipv6_addr
+    flags timeout
+  }
+
+  set authenticated_macs {
+    type  ether_addr
+    flags timeout
+  }
+
   set ip6_dest_whitelist {
     type  ipv6_addr
     flags interval
@@ -108,22 +143,26 @@ table ip6 dns-filter {
     type filter hook forward priority 0
     policy drop
     ct state established,related accept
-    ip6 daddr @ip6_dest_whitelist accept
-    meta l4proto udp udp dport 53 queue num 0
-    meta l4proto tcp tcp dport 53 queue num 0
-    meta l4proto udp udp sport 53 queue num 1
-    meta l4proto tcp tcp sport 53 queue num 1
+    fib saddr type local accept
     ip6 saddr . ip6 daddr @ip6_allowed accept
-    drop
+    ether saddr . ip6 daddr @mac6_allowed accept
+    ip6 daddr @ip6_dest_whitelist accept
+    tcp dport 80 tcp flags & (fin|syn|rst|ack) == syn queue num 2
+    tcp dport 443 reject with tcp reset
+    reject with icmpv6 type admin-prohibited
   }
 
   chain input {
     type filter hook input priority 0
     policy accept
+    ip6 saddr fd00:29::/64 meta l4proto udp udp dport 53 queue num 0
+    ip6 saddr fd00:29::/64 meta l4proto tcp tcp dport 53 queue num 0
   }
 
   chain output {
     type filter hook output priority 0
     policy accept
+    meta l4proto udp udp sport 53 queue num 1
+    meta l4proto tcp tcp sport 53 queue num 1
   }
 }

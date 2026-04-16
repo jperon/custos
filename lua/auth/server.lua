@@ -16,7 +16,6 @@ do
   local _obj_0 = require("log")
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
-local captive = require("auth.captive")
 local neigh = require("neigh")
 local LOGIN_PAGE = [[<!DOCTYPE html>
 <html lang="fr">
@@ -570,7 +569,7 @@ make_server6 = function(port)
   return srv6
 end
 local run
-run = function(secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path)
+run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
   local port = auth_cfg.port or 33443
   local host = auth_cfg.host or "::"
   secrets_path = auth_cfg.secrets or "cfg/secrets"
@@ -600,21 +599,11 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_pat
   end
   local sessions = { }
   local register_attempts = { }
-  captive_srvs = captive_srvs or { }
-  local auth_set = { }
-  auth_set[listen4] = true
-  if listen6 then
-    auth_set[listen6] = true
-  end
   local all_servers = {
     listen4
   }
   if listen6 then
     all_servers[#all_servers + 1] = listen6
-  end
-  for _index_0 = 1, #captive_srvs do
-    local s = captive_srvs[_index_0]
-    all_servers[#all_servers + 1] = s
   end
   while true do
     if reload_fn then
@@ -632,20 +621,16 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_pat
         local peer_ip = raw_client:getpeername()
         peer_ip = tostring(peer_ip)
         local peer_mac = neigh.get_mac(peer_ip)
-        if auth_set[srv] then
-          local conn = ssl.wrap(raw_client, ssl_ctx)
-          if conn then
-            local ok_hs, _hs_err = conn:dohandshake()
-            if ok_hs then
-              handle_connection(conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
-            else
-              conn:close()
-            end
+        local conn = ssl.wrap(raw_client, ssl_ctx)
+        if conn then
+          local ok_hs, _hs_err = conn:dohandshake()
+          if ok_hs then
+            handle_connection(conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
           else
-            raw_client:close()
+            conn:close()
           end
         else
-          captive.handle_connection(raw_client, port)
+          raw_client:close()
         end
       end
     end

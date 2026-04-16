@@ -8,6 +8,7 @@ bit = require "bit"
 
 AF_PACKET   = 17
 SOCK_RAW    = 3
+SOCK_DGRAM  = 2
 ETH_P_ALL   = 0x0300  -- htons(0x0003)
 ETH_P_IP    = 0x0008  -- htons(0x0800)
 ETH_P_IPV6  = 0xDD86  -- htons(0x86DD)
@@ -56,13 +57,9 @@ w32 = (p, o, v) ->
 
 -- ── TCP header parsing ───────────────────────────────────────────
 
---- Parse a TCP SYN from a raw Ethernet frame (as received via NFQUEUE in bridge mode).
--- The frame starts at the Ethernet header (14-byte offset to IP).
--- Only IPv4 is handled; returns nil for IPv6 or malformed frames.
--- @tparam string raw Raw Ethernet frame (Lua string from nfq_get_payload in bridge mode).
--- @treturn table|nil Parsed fields: {eth_src, eth_dst, ip_src_raw, ip_dst_raw,
---                    ip_src, ip_dst, sport, dport, seq, ip_off, tcp_off, ip_ver},
---                    or nil on error.
+--- Parse a TCP SYN from a raw Ethernet frame (NFQUEUE bridge mode, eth_offset=14).
+-- @tparam string raw Raw Ethernet frame.
+-- @treturn table|nil Parsed SYN fields, or nil on error.
 parse_syn = (raw) ->
   len = #raw
   return nil if len < 14 + 20 + 20  -- Ethernet + IPv4 min + TCP min
@@ -200,15 +197,38 @@ ip4_cksum = (buf, ip_off, ihl) ->
 
 -- ── Frame forge ──────────────────────────────────────────────────
 
---- Build a complete Ethernet frame containing:
---   SYN-ACK  →  ACK + HTTP/1.1 302 Found  →  FIN-ACK
--- All three TCP segments are packed into a single call; they will be sent
--- sequentially via AF_PACKET by the caller.
--- Returns three Lua strings (one per segment).
--- @tparam table syn  Parsed SYN from parse_syn.
+--- Parse a TCP SYN from a raw IP packet (NFQUEUE router mode, no Ethernet header).
+-- @tparam string raw Raw IP packet (Lua string from nfq_get_payload in router mode).
+-- @treturn table|nil Parsed SYN fields (no eth_src/eth_dst), or nil on error.
+parse_syn_ip = (raw) ->
+  len = #raw
+  return nil if len < 20 + 20  -- IPv4 min + TCP min
+  p = ffi.cast "const uint8_t*", raw
+  ip_off = 0
+  ver = bit.rshift p[0], 4
+  return nil if ver != 4  -- IPv6 not handled here
+  return nil if p[9] != PROTO_TCP
+  ihl = bit.band(p[0], 0x0F) * 4
+  tcp_off = ip_off + ihl
+  return nil if len < tcp_off + 20
+  ip_src_raw = ffi.string p + 12, 4
+  ip_dst_raw = ffi.string p + 16, 4
+  ip_src = string.format "%d.%d.%d.%d", p[12], p[13], p[14], p[15]
+  ip_dst = string.format "%d.%d.%d.%d", p[16], p[17], p[18], p[19]
+  sport  = r16 p, tcp_off
+  dport  = r16 p, tcp_off + 2
+  seq    = r32 p, tcp_off + 4
+  flags  = p[tcp_off + 13]
+  { :ip_src_raw, :ip_dst_raw, :ip_src, :ip_dst
+    :sport, :dport, :seq, :flags
+    :ip_off, :tcp_off, :ihl, ip_ver: 4 }
+
+--- Build Ethernet frames (bridge mode) or IP packets (router mode) for the TCP redirect.
+-- @tparam table syn   Parsed SYN (from parse_syn or parse_syn_ip).
 -- @tparam string redirect_url  Full HTTPS redirect URL.
--- @treturn string, string, string  SYN-ACK frame, DATA frame, FIN-ACK frame.
-build_response_frames = (syn, redirect_url) ->
+-- @tparam boolean eth  true = include Ethernet header (bridge), false = IP only (router).
+-- @treturn string, string, string  SYN-ACK, DATA, FIN-ACK.
+build_response_frames = (syn, redirect_url, eth = true) ->
   -- Random ISN for our side (server).
   isn = math.random 0, 0x7FFFFFFF
 
@@ -221,20 +241,20 @@ build_response_frames = (syn, redirect_url) ->
 
   build_frame = (tcp_flags, payload_str, our_seq, their_ack) ->
     payload_len = payload_str and #payload_str or 0
-    eth_off  = 0
-    ip_off   = 14
+    ip_off   = if eth then 14 else 0
     tcp_off  = if syn.ip_ver == 4 then ip_off + 20 else ip_off + 40
     pkt_len  = tcp_off + 20 + payload_len
     buf = ffi.new "uint8_t[?]", pkt_len
     ffi.fill buf, pkt_len, 0
 
-    -- Ethernet header: swap src/dst
-    ffi.copy buf,     syn.eth_dst, 6   -- our MAC → client
-    ffi.copy buf + 6, syn.eth_src, 6   -- from our MAC
-    if syn.ip_ver == 4
-      w16 buf, 12, 0x0800
-    else
-      w16 buf, 12, 0x86DD
+    -- Ethernet header: swap src/dst (bridge mode only)
+    if eth
+      ffi.copy buf,     syn.eth_dst, 6
+      ffi.copy buf + 6, syn.eth_src, 6
+      if syn.ip_ver == 4
+        w16 buf, 12, 0x0800
+      else
+        w16 buf, 12, 0x86DD
 
     if syn.ip_ver == 4
       -- IPv4 header
@@ -293,13 +313,37 @@ build_response_frames = (syn, redirect_url) ->
 
 -- ── AF_PACKET sender ─────────────────────────────────────────────
 
---- Open an AF_PACKET raw socket bound to a bridge interface.
--- @tparam string ifname  Network interface name (e.g. "br").
+--- Open an AF_PACKET SOCK_RAW socket (bridge mode: caller builds Ethernet frame).
+-- @tparam string ifname  Network interface name.
 -- @treturn number|nil    Socket fd, or nil + error message.
 open_raw_socket = (ifname) ->
   fd = libc.socket AF_PACKET, SOCK_RAW, ETH_P_ALL
   return nil, "socket() failed: #{ffi.errno!}" if fd < 0
   fd
+
+--- Open an AF_PACKET SOCK_DGRAM socket (router mode: kernel handles Ethernet).
+-- @tparam string ifname  Network interface name.
+-- @treturn number|nil    Socket fd, or nil + error message.
+open_dgram_socket = (ifname) ->
+  fd = libc.socket AF_PACKET, SOCK_DGRAM, ETH_P_IP
+  return nil, "socket() failed: #{ffi.errno!}" if fd < 0
+  fd
+
+--- Send a raw IP packet via AF_PACKET SOCK_DGRAM (router mode).
+-- The kernel resolves the destination MAC automatically.
+-- @tparam number fd       AF_PACKET SOCK_DGRAM socket fd.
+-- @tparam string pkt      IP packet as a Lua string.
+-- @tparam number ifindex  Interface index.
+-- @treturn boolean  true on success.
+send_packet = (fd, pkt, ifindex) ->
+  sll = ffi.new "struct sockaddr_ll"
+  ffi.fill sll, ffi.sizeof(sll), 0
+  sll.sll_family   = AF_PACKET
+  sll.sll_protocol = ETH_P_IP
+  sll.sll_ifindex  = ifindex
+  n = libc.sendto fd, pkt, #pkt, 0,
+    ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll)
+  n == #pkt
 
 --- Send a raw Ethernet frame via AF_PACKET on the given interface index.
 -- @tparam number fd       AF_PACKET socket fd.
@@ -316,5 +360,7 @@ send_frame = (fd, frame, ifindex) ->
     ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll)
   n == #frame
 
-{ :parse_syn, :build_response_frames, :open_raw_socket, :send_frame
+{ :parse_syn, :parse_syn_ip, :build_response_frames
+  :open_raw_socket, :send_frame
+  :open_dgram_socket, :send_packet
   :r16, :r32, :w16, :w32, :inet_sum, :fold_cksum }

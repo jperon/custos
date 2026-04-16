@@ -16,7 +16,6 @@ cert   = require "auth.cert"
 { :verify_password, :load_secrets, :register_user } = require "auth.credentials"
 { :add_session, :purge_expired, :write_sessions } = require "auth.sessions"
 { :log_info, :log_warn }            = require "log"
-captive                             = require "auth.captive"
 neigh                               = require "neigh"
 
 -- ── Page HTML ────────────────────────────────────────────────────
@@ -485,13 +484,13 @@ make_server6 = (port) ->
 
 -- ── Boucle principale ────────────────────────────────────────────
 
---- Démarre la boucle d'acceptation HTTP (et portail captif si configuré).
+--- Démarre la boucle d'acceptation HTTPS.
 -- @tparam table secrets       Table {user → hash}
 -- @tparam table auth_cfg      Configuration auth
 -- @tparam function|nil reload_fn  Fonction appelée pour recharger les secrets (SIGHUP)
--- @tparam table|nil nft_sess  Module auth.nft_sessions (nil si portail captif désactivé)
--- @tparam table captive_srvs  Liste de sockets TCP plain du portail captif (peut être vide)
-run = (secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path) ->
+-- @tparam table|nil nft_sess  Module auth.nft_sessions
+-- @tparam string|nil secrets_path  Chemin vers le fichier secrets
+run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   port = auth_cfg.port or 33443
   host = auth_cfg.host or "::"
   secrets_path = auth_cfg.secrets or "cfg/secrets"
@@ -518,17 +517,9 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path) ->
 
   register_attempts = {}
 
-  -- Construire la liste de tous les sockets : HTTP + captive
-  captive_srvs = captive_srvs or {}
-  auth_set = {}
-  auth_set[listen4] = true
-  auth_set[listen6] = true if listen6
-
   all_servers = { listen4 }
   if listen6
     all_servers[#all_servers + 1] = listen6
-  for s in *captive_srvs
-    all_servers[#all_servers + 1] = s
 
   while true
     -- Rechargement des secrets sur SIGHUP
@@ -543,19 +534,15 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, captive_srvs, secrets_path) ->
         peer_ip  = raw_client\getpeername!
         peer_ip  = tostring peer_ip
         peer_mac = neigh.get_mac peer_ip
-        if auth_set[srv]
-          -- Connexion HTTPS : enveloppe TLS puis logique d'authentification
-          conn = ssl.wrap raw_client, ssl_ctx
-          if conn
-            ok_hs, _hs_err = conn\dohandshake!
-            if ok_hs
-              handle_connection conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac
-            else
-              conn\close!
+        -- Connexion HTTPS : enveloppe TLS puis logique d'authentification
+        conn = ssl.wrap raw_client, ssl_ctx
+        if conn
+          ok_hs, _hs_err = conn\dohandshake!
+          if ok_hs
+            handle_connection conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac
           else
-            raw_client\close!
+            conn\close!
         else
-          -- Connexion HTTP plain : portail captif → redirect 302 vers login
-          captive.handle_connection raw_client, port
+          raw_client\close!
 
 { :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE }

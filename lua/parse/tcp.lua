@@ -6,6 +6,7 @@ end
 local bit = require("bit")
 local AF_PACKET = 17
 local SOCK_RAW = 3
+local SOCK_DGRAM = 2
 local ETH_P_ALL = 0x0300
 local ETH_P_IP = 0x0008
 local ETH_P_IPV6 = 0xDD86
@@ -175,16 +176,66 @@ ip4_cksum = function(buf, ip_off, ihl)
   local cksum = fold_cksum(inet_sum(buf, ip_off, ihl))
   return w16(buf, ip_off + 10, cksum)
 end
+local parse_syn_ip
+parse_syn_ip = function(raw)
+  local len = #raw
+  if len < 20 + 20 then
+    return nil
+  end
+  local p = ffi.cast("const uint8_t*", raw)
+  local ip_off = 0
+  local ver = bit.rshift(p[0], 4)
+  if ver ~= 4 then
+    return nil
+  end
+  if p[9] ~= PROTO_TCP then
+    return nil
+  end
+  local ihl = bit.band(p[0], 0x0F) * 4
+  local tcp_off = ip_off + ihl
+  if len < tcp_off + 20 then
+    return nil
+  end
+  local ip_src_raw = ffi.string(p + 12, 4)
+  local ip_dst_raw = ffi.string(p + 16, 4)
+  local ip_src = string.format("%d.%d.%d.%d", p[12], p[13], p[14], p[15])
+  local ip_dst = string.format("%d.%d.%d.%d", p[16], p[17], p[18], p[19])
+  local sport = r16(p, tcp_off)
+  local dport = r16(p, tcp_off + 2)
+  local seq = r32(p, tcp_off + 4)
+  local flags = p[tcp_off + 13]
+  return {
+    ip_src_raw = ip_src_raw,
+    ip_dst_raw = ip_dst_raw,
+    ip_src = ip_src,
+    ip_dst = ip_dst,
+    sport = sport,
+    dport = dport,
+    seq = seq,
+    flags = flags,
+    ip_off = ip_off,
+    tcp_off = tcp_off,
+    ihl = ihl,
+    ip_ver = 4
+  }
+end
 local build_response_frames
-build_response_frames = function(syn, redirect_url)
+build_response_frames = function(syn, redirect_url, eth)
+  if eth == nil then
+    eth = true
+  end
   local isn = math.random(0, 0x7FFFFFFF)
   local http_body = "HTTP/1.1 302 Found\r\nLocation: " .. tostring(redirect_url) .. "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   local http_len = #http_body
   local build_frame
   build_frame = function(tcp_flags, payload_str, our_seq, their_ack)
     local payload_len = payload_str and #payload_str or 0
-    local eth_off = 0
-    local ip_off = 14
+    local ip_off
+    if eth then
+      ip_off = 14
+    else
+      ip_off = 0
+    end
     local tcp_off
     if syn.ip_ver == 4 then
       tcp_off = ip_off + 20
@@ -194,12 +245,14 @@ build_response_frames = function(syn, redirect_url)
     local pkt_len = tcp_off + 20 + payload_len
     local buf = ffi.new("uint8_t[?]", pkt_len)
     ffi.fill(buf, pkt_len, 0)
-    ffi.copy(buf, syn.eth_dst, 6)
-    ffi.copy(buf + 6, syn.eth_src, 6)
-    if syn.ip_ver == 4 then
-      w16(buf, 12, 0x0800)
-    else
-      w16(buf, 12, 0x86DD)
+    if eth then
+      ffi.copy(buf, syn.eth_dst, 6)
+      ffi.copy(buf + 6, syn.eth_src, 6)
+      if syn.ip_ver == 4 then
+        w16(buf, 12, 0x0800)
+      else
+        w16(buf, 12, 0x86DD)
+      end
     end
     if syn.ip_ver == 4 then
       buf[ip_off] = 0x45
@@ -250,6 +303,24 @@ open_raw_socket = function(ifname)
   end
   return fd
 end
+local open_dgram_socket
+open_dgram_socket = function(ifname)
+  local fd = libc.socket(AF_PACKET, SOCK_DGRAM, ETH_P_IP)
+  if fd < 0 then
+    return nil, "socket() failed: " .. tostring(ffi.errno())
+  end
+  return fd
+end
+local send_packet
+send_packet = function(fd, pkt, ifindex)
+  local sll = ffi.new("struct sockaddr_ll")
+  ffi.fill(sll, ffi.sizeof(sll), 0)
+  sll.sll_family = AF_PACKET
+  sll.sll_protocol = ETH_P_IP
+  sll.sll_ifindex = ifindex
+  local n = libc.sendto(fd, pkt, #pkt, 0, ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll))
+  return n == #pkt
+end
 local send_frame
 send_frame = function(fd, frame, ifindex)
   local sll = ffi.new("struct sockaddr_ll")
@@ -262,9 +333,12 @@ send_frame = function(fd, frame, ifindex)
 end
 return {
   parse_syn = parse_syn,
+  parse_syn_ip = parse_syn_ip,
   build_response_frames = build_response_frames,
   open_raw_socket = open_raw_socket,
   send_frame = send_frame,
+  open_dgram_socket = open_dgram_socket,
+  send_packet = send_packet,
   r16 = r16,
   r32 = r32,
   w16 = w16,

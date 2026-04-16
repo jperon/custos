@@ -3,12 +3,15 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_CAPTIVE
-QUEUE_CAPTIVE = require("config").QUEUE_CAPTIVE
-local parse_syn, build_response_frames, open_raw_socket, send_frame
+local QUEUE_CAPTIVE, NFQ_BRIDGE_MODE
+do
+  local _obj_0 = require("config")
+  QUEUE_CAPTIVE, NFQ_BRIDGE_MODE = _obj_0.QUEUE_CAPTIVE, _obj_0.NFQ_BRIDGE_MODE
+end
+local parse_syn, parse_syn_ip, build_response_frames, open_raw_socket, send_frame, open_dgram_socket, send_packet
 do
   local _obj_0 = require("parse/tcp")
-  parse_syn, build_response_frames, open_raw_socket, send_frame = _obj_0.parse_syn, _obj_0.build_response_frames, _obj_0.open_raw_socket, _obj_0.send_frame
+  parse_syn, parse_syn_ip, build_response_frames, open_raw_socket, send_frame, open_dgram_socket, send_packet = _obj_0.parse_syn, _obj_0.parse_syn_ip, _obj_0.build_response_frames, _obj_0.open_raw_socket, _obj_0.send_frame, _obj_0.open_dgram_socket, _obj_0.send_packet
 end
 local run_queue, NF_ACCEPT, NF_DROP
 do
@@ -31,7 +34,12 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
-  local syn = parse_syn(raw)
+  local syn
+  if NFQ_BRIDGE_MODE then
+    syn = parse_syn(raw)
+  else
+    syn = parse_syn_ip(raw)
+  end
   if not (syn) then
     log_warn({
       action = "q2_parse_failed",
@@ -39,21 +47,34 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     })
     return NF_DROP
   end
+  local send
+  if NFQ_BRIDGE_MODE then
+    send = function(f)
+      return send_frame(raw_fd, f, ifindex)
+    end
+  else
+    send = function(f)
+      return send_packet(raw_fd, f, ifindex)
+    end
+  end
   local ok, err = pcall(function()
-    local f1, f2, f3 = build_response_frames(syn, redirect_url)
-    send_frame(raw_fd, f1, ifindex)
-    send_frame(raw_fd, f2, ifindex)
-    return send_frame(raw_fd, f3, ifindex)
+    local f1, f2, f3 = build_response_frames(syn, redirect_url, NFQ_BRIDGE_MODE)
+    send(f1)
+    send(f2)
+    return send(f3)
   end)
   if ok then
-    log_info({
+    local fields = {
       action = "captive_redirect_q2",
       ip = syn.ip_src,
       sport = syn.sport,
-      mac = string.format("%02x:%02x:%02x:%02x:%02x:%02x", syn.eth_src:byte(1), syn.eth_src:byte(2), syn.eth_src:byte(3), syn.eth_src:byte(4), syn.eth_src:byte(5), syn.eth_src:byte(6)),
       vlan = tonumber(libnfq.nfq_get_nfmark(nfad)) or nil,
       url = redirect_url
-    })
+    }
+    if syn.eth_src then
+      fields.mac = string.format("%02x:%02x:%02x:%02x:%02x:%02x", syn.eth_src:byte(1), syn.eth_src:byte(2), syn.eth_src:byte(3), syn.eth_src:byte(4), syn.eth_src:byte(5), syn.eth_src:byte(6))
+    end
+    log_info(fields)
   else
     log_warn({
       action = "q2_send_failed",
@@ -86,7 +107,13 @@ run = function(auth_cfg)
   end
   local host_part = local_ip:find(":", 1, true) and "[" .. tostring(local_ip) .. "]" or local_ip
   redirect_url = "https://" .. tostring(host_part) .. ":" .. tostring(https_port) .. "/"
-  local fd, err = open_raw_socket(ifname)
+  local open_fn
+  if NFQ_BRIDGE_MODE then
+    open_fn = open_raw_socket
+  else
+    open_fn = open_dgram_socket
+  end
+  local fd, err = open_fn(ifname)
   if not (fd) then
     log_error({
       action = "q2_socket_failed",

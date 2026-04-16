@@ -61,6 +61,7 @@ ALLOWED_DOMAINS = {
 
 -- ── Noms de sets nftables ────────────────────────────────────────
 NFT_FAMILY     = if NFQ_BRIDGE_MODE then "bridge" else "ip"
+NFT_FAMILY6    = if NFQ_BRIDGE_MODE then "bridge" else "ip6"
 NFT_TABLE      = if NFQ_BRIDGE_MODE then "dns-filter-bridge" else "dns-filter"
 NFT_SET_IP4    = "ip4_allowed"
 NFT_SET_IP6    = "ip6_allowed"
@@ -114,7 +115,7 @@ AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
   :BRIDGE_MODE, :NFQ_BRIDGE_MODE
   :DOCKER_MODE
   :ALLOWED_DOMAINS
-  :NFT_FAMILY, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
+  :NFT_FAMILY, :NFT_FAMILY6, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
   :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY
   :IPC_PENDING_TTL
   :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS

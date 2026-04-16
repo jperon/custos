@@ -1,9 +1,9 @@
 -- src/worker_q2.moon
--- Worker Q2 : portail captif en mode bridge.
+-- Worker Q2 : portail captif (bridge et routeur).
 --
 -- Reçoit les TCP SYN vers le port 80 non autorisés (NFQUEUE 2).
 -- Pour chaque SYN :
---   1. Parse la trame Ethernet complète (mode bridge : payload = trame L2 entière)
+--   1. Parse le payload (trame Ethernet complète en mode bridge, paquet IP en mode routeur)
 --   2. Forge et envoie via AF_PACKET :
 --        a. SYN-ACK
 --        b. ACK + HTTP/1.1 302 Found → https://<filtre>:33443/
@@ -11,12 +11,14 @@
 --   3. Verdict NF_DROP sur le SYN original
 --   4. Log structuré
 --
--- Ce worker n'est lancé qu'en mode bridge (BRIDGE_MODE=1).
--- En mode routeur, le portail captif utilise le DNAT nftables existant.
+-- Mode bridge (NFQ_BRIDGE_MODE=1) : AF_PACKET SOCK_RAW, construit la trame Ethernet.
+-- Mode routeur (NFQ_BRIDGE_MODE=0) : AF_PACKET SOCK_DGRAM, le kernel gère le L2.
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_CAPTIVE } = require "config"
-{ :parse_syn, :build_response_frames, :open_raw_socket, :send_frame } = require "parse/tcp"
+{ :QUEUE_CAPTIVE, :NFQ_BRIDGE_MODE } = require "config"
+{ :parse_syn, :parse_syn_ip, :build_response_frames
+  :open_raw_socket, :send_frame
+  :open_dgram_socket, :send_packet } = require "parse/tcp"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_error } = require "log"
 
@@ -42,28 +44,35 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
   raw = ffi.string payload_ptr[0], payload_len
 
-  syn = parse_syn raw
+  syn = if NFQ_BRIDGE_MODE then parse_syn(raw) else parse_syn_ip(raw)
   unless syn
     log_warn { action: "q2_parse_failed", len: payload_len }
     return NF_DROP
 
+  send = if NFQ_BRIDGE_MODE
+    (f) -> send_frame raw_fd, f, ifindex
+  else
+    (f) -> send_packet raw_fd, f, ifindex
+
   ok, err = pcall ->
-    f1, f2, f3 = build_response_frames syn, redirect_url
-    send_frame raw_fd, f1, ifindex
-    send_frame raw_fd, f2, ifindex
-    send_frame raw_fd, f3, ifindex
+    f1, f2, f3 = build_response_frames syn, redirect_url, NFQ_BRIDGE_MODE
+    send f1
+    send f2
+    send f3
 
   if ok
-    log_info {
+    fields = {
       action:  "captive_redirect_q2"
       ip:      syn.ip_src
       sport:   syn.sport
-      mac:     string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-                 syn.eth_src\byte(1), syn.eth_src\byte(2), syn.eth_src\byte(3),
-                 syn.eth_src\byte(4), syn.eth_src\byte(5), syn.eth_src\byte(6)
       vlan:    tonumber(libnfq.nfq_get_nfmark nfad) or nil
       url:     redirect_url
     }
+    if syn.eth_src
+      fields.mac = string.format "%02x:%02x:%02x:%02x:%02x:%02x",
+        syn.eth_src\byte(1), syn.eth_src\byte(2), syn.eth_src\byte(3),
+        syn.eth_src\byte(4), syn.eth_src\byte(5), syn.eth_src\byte(6)
+    log_info fields
   else
     log_warn { action: "q2_send_failed", err: tostring err, ip: syn.ip_src }
 
@@ -71,21 +80,19 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
 
 -- ── Point d'entrée ───────────────────────────────────────────────
---- Start the Q2 captive portal worker (bridge mode only).
--- Opens the AF_PACKET socket and starts the NFQUEUE loop.
+--- Start the Q2 captive portal worker.
+-- Opens the AF_PACKET socket (SOCK_RAW in bridge mode, SOCK_DGRAM in router mode)
+-- and starts the NFQUEUE loop.
 -- @tparam table auth_cfg  Auth configuration from cfg/filter.yml.
 -- @treturn nil
 run = (auth_cfg) ->
   auth_cfg = auth_cfg or {}
 
-  -- Resolve the bridge interface name (default: "br").
+  -- Interface LAN (bridge mode: br0 or br; router mode: eth0/br-lan etc.)
   ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
 
-  -- Resolve the HTTPS port for the captive portal redirect.
   https_port = auth_cfg.port or 33443
 
-  -- Detect the filter's IP on the bridge to build the redirect URL.
-  -- Use luasocket if available, otherwise fall back to a configurable address.
   local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP") or "127.0.0.1"
   ok_sock, socket = pcall require, "socket"
   if ok_sock
@@ -100,8 +107,9 @@ run = (auth_cfg) ->
   host_part = local_ip\find(":", 1, true) and "[#{local_ip}]" or local_ip
   redirect_url = "https://#{host_part}:#{https_port}/"
 
-  -- Open the AF_PACKET raw socket.
-  fd, err = open_raw_socket ifname
+  -- Open socket : SOCK_RAW en mode bridge, SOCK_DGRAM en mode routeur.
+  open_fn = if NFQ_BRIDGE_MODE then open_raw_socket else open_dgram_socket
+  fd, err = open_fn ifname
   unless fd
     log_error { action: "q2_socket_failed", err: err, ifname: ifname }
     return
