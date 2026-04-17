@@ -424,8 +424,89 @@ build_refused = (dns, orig_buf) ->
 
   hdr .. qs_raw .. opt_hdr .. rdata
 
+--- Construit une réponse DNS NXDOMAIN (RCODE 3) avec réponse synthétique (0.0.0.0 ou ::) + EDE.
+-- Copie la section question de la requête originale et ajoute une réponse A/AAAA synthétique.
+-- @tparam table  dns       Résultat de parse_dns sur la question originale
+-- @tparam string orig_buf  Payload DNS brut de la question (UDP payload)
+-- @treturn string|nil      Payload UDP DNS de la réponse, nil si construction impossible
+build_nxdomain = (dns, orig_buf) ->
+  return nil unless dns and orig_buf
+
+  txid    = dns.hdr.txid
+  qdcount = dns.hdr.qdcount
+
+  -- Déterminer le qtype de la première question
+  qtype = if dns.questions and #dns.questions > 0
+    dns.questions[1].qtype
+  else
+    QTYPE.A  -- par défaut
+
+  -- ── Header DNS (12 octets) ────────────────────────────────────
+  -- flags : QR=1 OPCODE=0 AA=0 TC=0 RD=1 RA=0 RCODE=3 (NXDOMAIN)
+  -- ANCOUNT=1 pour la réponse synthétique, ARCOUNT=1 pour l'OPT RR EDNS
+  txid_hi = bit.rshift bit.band(txid, 0xFF00), 8
+  txid_lo = bit.band txid, 0xFF
+  qd_hi   = bit.rshift bit.band(qdcount, 0xFF00), 8
+  qd_lo   = bit.band qdcount, 0xFF
+  hdr = string.char txid_hi, txid_lo, 0x81, 0x03, qd_hi, qd_lo, 0, 1, 0, 0, 0, 1
+
+  -- ── Section question : copie verbatim de l'original ─────────
+  _, ans_offset = parse_questions orig_buf, qdcount
+  qs_raw = if ans_offset and ans_offset > 13
+    orig_buf\sub 13, ans_offset - 1
+  else
+    ""
+
+  -- ── Section réponse : RR synthétique (0.0.0.0 pour A, :: pour AAAA) ──
+  -- Utilise un pointeur de compression (0xC0 0x0C) vers le qname de la question
+  -- Le qname de la question commence à l'offset 12 (après le header DNS)
+  ans_name_ptr = string.char(0xC0, 0x0C)  -- Pointe vers offset 12 (0x0C)
+
+  -- RDATA : 4 octets pour A (0.0.0.0), 16 octets pour AAAA (::)
+  rdata = nil
+  if qtype == QTYPE.A
+    rdata = string.char(0, 0, 0, 0)  -- 0.0.0.0
+  elseif qtype == QTYPE.AAAA
+    rdata = string.char(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)  -- ::
+  else
+    rdata = string.char(0, 0, 0, 0)  -- par défaut 0.0.0.0
+
+  rdlen = #rdata
+
+  -- RR answer : NAME=pointer, TYPE=qtype, CLASS=IN (1), TTL=60, RDLEN=rdlen, RDATA
+  qtype_hi = bit.rshift bit.band(qtype, 0xFF00), 8
+  qtype_lo = bit.band qtype, 0xFF
+  ttl_bytes = string.char(
+    bit.rshift(bit.band(60, 0xFF000000), 24),
+    bit.rshift(bit.band(60, 0x00FF0000), 16),
+    bit.rshift(bit.band(60, 0x0000FF00), 8),
+    bit.band(60, 0x000000FF)
+  )
+  rdlen_hi = bit.rshift bit.band(rdlen, 0xFF00), 8
+  rdlen_lo = bit.band rdlen, 0xFF
+
+  ans_rr = ans_name_ptr .. string.char(qtype_hi, qtype_lo, 0, 1) .. ttl_bytes .. string.char(rdlen_hi, rdlen_lo) .. rdata
+
+  -- ── RDATA OPT : EDE Filtered + options draft-muks (TBD ignorées) ────
+  ede_data = string.char(0x00, EDE_FILTERED) .. EDE_EXTRA_TEXT
+  opt_rdata = build_opt_rdata {
+    { code: EDNS_OPT_EDE,  data: ede_data }
+    { code: EDNS_OPT_LANG, data: FILTER_LANG }   -- TBD → ignoré
+    { code: EDNS_OPT_FORG, data: FILTER_ORG  }   -- TBD → ignoré
+  }
+  opt_rdlen = #opt_rdata
+
+  -- ── EDNS OPT RR (RFC 6891) ───────────────────────────────────
+  -- NAME=0x00 (root), TYPE=0x0029, CLASS=0x0500 (1280 oct.), TTL=0
+  opt_hdr = string.char(0x00, 0x00, 0x29, 0x05, 0x00,
+                        0x00, 0x00, 0x00, 0x00,
+                        bit.rshift(bit.band(opt_rdlen, 0xFF00), 8),
+                        bit.band(opt_rdlen, 0xFF))
+
+  hdr .. qs_raw .. ans_rr .. opt_hdr .. opt_rdata
+
 { :parse_dns, :parse_header, :parse_questions, :parse_answers
-  :decode_name, :patch_ttl, :build_refused
+  :decode_name, :patch_ttl, :build_refused, :build_nxdomain
   :build_opt_rdata, :skip_name_bytes, :skip_rr, :append_ede_to_dns
   :QTYPE, :QTYPE_NAME, :QTYPE_OPT, :RCODE
   :EDE_FILTERED, :EDE_EXTRA_TEXT, :EDE_OTHER, :EDE_TTL_TEXT

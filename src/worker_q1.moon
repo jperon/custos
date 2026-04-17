@@ -23,7 +23,7 @@ ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
 { :get_l2, :ETH_OFFSET } = require "parse/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
-{ :build_refused, :append_ede_to_dns, :EDE_OTHER, :EDE_TTL_TEXT, :EDNS_OPT_EDE } = require "parse/dns"
+{ :build_refused, :build_nxdomain, :append_ede_to_dns, :EDE_OTHER, :EDE_TTL_TEXT, :EDNS_OPT_EDE } = require "parse/dns"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6 } = require "nft"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_info, :log_warn, :now } = require "log"
@@ -253,7 +253,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- ── Branche REFUSED : réponse du serveur transformée en REFUSED+EDE ──
   if refused
     dns_raw    = ndpi.extract_dns_payload raw, pkt
-    refused_dns = build_refused { hdr: pkt.dns }, dns_raw
+    refused_dns = build_nxdomain { hdr: pkt.dns }, dns_raw
     unless refused_dns
       return NF_DROP
     patched = ndpi.replace_dns_payload raw, pkt, refused_dns

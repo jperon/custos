@@ -401,6 +401,66 @@ build_refused = function(dns, orig_buf)
   local opt_hdr = string.char(0x00, 0x00, 0x29, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, bit.rshift(bit.band(rdlen, 0xFF00), 8), bit.band(rdlen, 0xFF))
   return hdr .. qs_raw .. opt_hdr .. rdata
 end
+local build_nxdomain
+build_nxdomain = function(dns, orig_buf)
+  if not (dns and orig_buf) then
+    return nil
+  end
+  local txid = dns.hdr.txid
+  local qdcount = dns.hdr.qdcount
+  local qtype
+  if dns.questions and #dns.questions > 0 then
+    qtype = dns.questions[1].qtype
+  else
+    qtype = QTYPE.A
+  end
+  local txid_hi = bit.rshift(bit.band(txid, 0xFF00), 8)
+  local txid_lo = bit.band(txid, 0xFF)
+  local qd_hi = bit.rshift(bit.band(qdcount, 0xFF00), 8)
+  local qd_lo = bit.band(qdcount, 0xFF)
+  local hdr = string.char(txid_hi, txid_lo, 0x81, 0x03, qd_hi, qd_lo, 0, 1, 0, 0, 0, 1)
+  local _, ans_offset = parse_questions(orig_buf, qdcount)
+  local qs_raw
+  if ans_offset and ans_offset > 13 then
+    qs_raw = orig_buf:sub(13, ans_offset - 1)
+  else
+    qs_raw = ""
+  end
+  local ans_name_ptr = string.char(0xC0, 0x0C)
+  local rdata = nil
+  if qtype == QTYPE.A then
+    rdata = string.char(0, 0, 0, 0)
+  elseif qtype == QTYPE.AAAA then
+    rdata = string.char(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+  else
+    rdata = string.char(0, 0, 0, 0)
+  end
+  local rdlen = #rdata
+  local qtype_hi = bit.rshift(bit.band(qtype, 0xFF00), 8)
+  local qtype_lo = bit.band(qtype, 0xFF)
+  local ttl_bytes = string.char(bit.rshift(bit.band(60, 0xFF000000), 24), bit.rshift(bit.band(60, 0x00FF0000), 16), bit.rshift(bit.band(60, 0x0000FF00), 8), bit.band(60, 0x000000FF))
+  local rdlen_hi = bit.rshift(bit.band(rdlen, 0xFF00), 8)
+  local rdlen_lo = bit.band(rdlen, 0xFF)
+  local ans_rr = ans_name_ptr .. string.char(qtype_hi, qtype_lo, 0, 1) .. ttl_bytes .. string.char(rdlen_hi, rdlen_lo) .. rdata
+  local ede_data = string.char(0x00, EDE_FILTERED) .. EDE_EXTRA_TEXT
+  local opt_rdata = build_opt_rdata({
+    {
+      code = EDNS_OPT_EDE,
+      data = ede_data
+    },
+    {
+      code = EDNS_OPT_LANG,
+      data = FILTER_LANG
+    },
+    {
+      code = EDNS_OPT_FORG,
+      data = FILTER_ORG
+    }
+  })
+  local opt_rdlen = #opt_rdata
+  local opt_hdr = string.char(0x00, 0x00, 0x29, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, bit.rshift(bit.band(opt_rdlen, 0xFF00), 8), bit.band(opt_rdlen, 0xFF))
+  return hdr .. qs_raw .. ans_rr .. opt_hdr .. opt_rdata
+end
 return {
   parse_dns = parse_dns,
   parse_header = parse_header,
@@ -409,6 +469,7 @@ return {
   decode_name = decode_name,
   patch_ttl = patch_ttl,
   build_refused = build_refused,
+  build_nxdomain = build_nxdomain,
   build_opt_rdata = build_opt_rdata,
   skip_name_bytes = skip_name_bytes,
   skip_rr = skip_rr,

@@ -611,6 +611,7 @@ QTYPE         = m_dns.QTYPE
 RCODE         = m_dns.RCODE
 patch_ttl     = m_dns.patch_ttl
 build_refused = m_dns.build_refused
+build_nxdomain = m_dns.build_nxdomain
 
 test "decode_name — labels simples", ->
   buf = "\3www\8facebook\3com\0"
@@ -680,6 +681,42 @@ test "parse_dns — réponse avec RR A", ->
   assert_eq parsed.answers[1].rdata_str,   "1.2.3.4","rdata_str"
   assert_eq parsed.answers[1].rtype,       QTYPE.A,  "rtype A"
   assert_eq parsed.answers[1].ttl,         300,       "ttl original"
+
+test "build_nxdomain -- header NXDOMAIN + synthetic A + EDE OPT", ->
+  qname   = "\8facebook\3com\0"   -- 13 octets
+  dns_buf = make_dns qname, QTYPE.A, false, 0xBEEF
+  dns_obj = parse_dns dns_buf
+  assert dns_obj, "parse_dns nil"
+  nxdomain = build_nxdomain dns_obj, dns_buf
+  assert nxdomain, "build_nxdomain nil"
+  resp = parse_dns nxdomain
+  assert resp, "parse_dns sur la reponse NXDOMAIN nil"
+  assert_eq resp.hdr.txid,        0xBEEF,        "txid copié"
+  assert_eq resp.hdr.is_response, true,           "QR=1"
+  assert_eq resp.hdr.rcode,       RCODE.NXDOMAIN, "RCODE=3 NXDOMAIN"
+  assert_eq resp.hdr.qdcount,     1,              "qdcount copié"
+  assert_eq resp.hdr.ancount,     1,              "ancount=1 (synthetic answer)"
+  assert_eq resp.hdr.arcount,     1,              "arcount=1 EDNS OPT"
+  assert_eq #resp.questions,      1,              "1 question copiée"
+  assert_eq resp.questions[1].qname, "facebook.com", "qname copié"
+  assert_eq #resp.answers,       1,              "1 synthetic answer"
+  assert_eq resp.answers[1].rdata_str, "0.0.0.0", "synthetic A = 0.0.0.0"
+
+test "build_nxdomain -- header NXDOMAIN + synthetic AAAA + EDE OPT", ->
+  qname   = "\8facebook\3com\0"   -- 13 octets
+  dns_buf = make_dns qname, QTYPE.AAAA, false, 0xDEAD
+  dns_obj = parse_dns dns_buf
+  assert dns_obj, "parse_dns nil"
+  nxdomain = build_nxdomain dns_obj, dns_buf
+  assert nxdomain, "build_nxdomain nil"
+  resp = parse_dns nxdomain
+  assert resp, "parse_dns sur la reponse NXDOMAIN nil"
+  assert_eq resp.hdr.txid,        0xDEAD,        "txid copié"
+  assert_eq resp.hdr.is_response, true,           "QR=1"
+  assert_eq resp.hdr.rcode,       RCODE.NXDOMAIN, "RCODE=3 NXDOMAIN"
+  assert_eq resp.hdr.ancount,     1,              "ancount=1 (synthetic answer)"
+  assert_eq #resp.answers,       1,              "1 synthetic answer"
+  assert_eq resp.answers[1].rdata_str, "0:0:0:0:0:0:0:0", "synthetic AAAA = :: (expanded)"
 
 test "build_refused -- header REFUSED + EDE OPT", ->
   qname   = "\8facebook\3com\0"   -- 13 octets

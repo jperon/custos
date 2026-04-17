@@ -22,10 +22,10 @@ do
   local _obj_0 = require("ipc")
   drain_pipe, is_pending, get_pending_entry, consume = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.get_pending_entry, _obj_0.consume
 end
-local build_refused, append_ede_to_dns, EDE_OTHER, EDE_TTL_TEXT, EDNS_OPT_EDE
+local build_refused, build_nxdomain, append_ede_to_dns, EDE_OTHER, EDE_TTL_TEXT, EDNS_OPT_EDE
 do
   local _obj_0 = require("parse/dns")
-  build_refused, append_ede_to_dns, EDE_OTHER, EDE_TTL_TEXT, EDNS_OPT_EDE = _obj_0.build_refused, _obj_0.append_ede_to_dns, _obj_0.EDE_OTHER, _obj_0.EDE_TTL_TEXT, _obj_0.EDNS_OPT_EDE
+  build_refused, build_nxdomain, append_ede_to_dns, EDE_OTHER, EDE_TTL_TEXT, EDNS_OPT_EDE = _obj_0.build_refused, _obj_0.build_nxdomain, _obj_0.append_ede_to_dns, _obj_0.EDE_OTHER, _obj_0.EDE_TTL_TEXT, _obj_0.EDNS_OPT_EDE
 end
 local add_ip4, add_ip6, add_mac4, add_mac6
 do
@@ -249,7 +249,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local dnsonly = entry and entry.dnsonly or false
   if refused then
     local dns_raw = ndpi.extract_dns_payload(raw, pkt)
-    local refused_dns = build_refused({
+    local refused_dns = build_nxdomain({
       hdr = pkt.dns
     }, dns_raw)
     if not (refused_dns) then
