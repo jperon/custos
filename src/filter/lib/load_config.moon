@@ -32,7 +32,7 @@ load_config = (path) ->
   cfg.sources          = cfg.sources          or {}
   cfg.rules            = cfg.rules            or {}
   cfg.users            = cfg.users            or {}
-  cfg.ip_whitelist     = cfg.ip_whitelist     or {}
+  cfg.dest_whitelist     = cfg.dest_whitelist     or {}
   -- cfg.custom_lists_dir : nil par défaut (chemin facultatif)
 
   -- Section auth : valeurs par défaut

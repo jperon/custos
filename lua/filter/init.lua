@@ -39,7 +39,7 @@ load = function()
   if DEST_WHITELIST and #DEST_WHITELIST > 0 then
     whitelist = DEST_WHITELIST
   else
-    whitelist = cfg.ip_whitelist or { }
+    whitelist = cfg.dest_whitelist or { }
   end
   ip_whitelist.init(whitelist)
   local n = #rules

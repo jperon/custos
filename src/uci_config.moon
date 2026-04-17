@@ -150,7 +150,6 @@ generate_config = (cfg) ->
     ""
     "local QUEUE_QUESTIONS        = 0"
     "local QUEUE_RESPONSES        = 1"
-    'local DOCKER_MODE            = os.getenv("DOCKER_MODE") == "1"'
     string.format "local FORCED_TTL             = %d",   cfg.forced_ttl
     string.format 'local NFT_IP_TIMEOUT         = "%s"', cfg.nft_ip_timeout
     string.format "local IPC_PENDING_TTL        = %d",   cfg.ipc_pending_ttl
@@ -188,7 +187,7 @@ generate_config = (cfg) ->
   table.insert lines, ""
   table.insert lines, "return {"
   for k in *{
-      "QUEUE_QUESTIONS", "QUEUE_RESPONSES", "DOCKER_MODE",
+      "QUEUE_QUESTIONS", "QUEUE_RESPONSES",
       "ALLOWED_DOMAINS", "DEST_WHITELIST", "NFT_TABLE", "NFT_FAMILY", "NFT_FAMILY6",
       "NFT_SET_IP4", "NFT_SET_IP6", "NFT_SET_MAC4", "NFT_SET_MAC6",
       "NFT_IP_TIMEOUT", "IPC_PENDING_TTL", "CLIENT_EXPIRY",

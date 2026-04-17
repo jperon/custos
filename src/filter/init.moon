@@ -40,11 +40,11 @@ load = ->
     log_warn { action: "filter_load_failed", err: err }
     return
   rules = compile_rules cfg
-  -- Priorité : config.DEST_WHITELIST (UCI) > cfg.ip_whitelist (filter.yml)
+  -- Priorité : config.DEST_WHITELIST (UCI) > cfg.dest_whitelist (filter.yml)
   whitelist = if DEST_WHITELIST and #DEST_WHITELIST > 0
     DEST_WHITELIST
   else
-    cfg.ip_whitelist or {}
+    cfg.dest_whitelist or {}
   ip_whitelist.init whitelist
   n = #rules
   log_info { action: "filter_loaded", rules: n, dest_whitelist: #whitelist }

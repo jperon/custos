@@ -33,31 +33,23 @@ make test-ndpi
 LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit tests/test_ndpi.lua
 ```
 
-## Docker End-to-End Tests
+## OpenWrt End-to-End Tests
 
-### `test_docker.moon`
-Automated end-to-end testing using Docker:
-- Builds Docker image
-- Starts docker-compose environment
+### `test_openwrt.moon`
+Automated end-to-end testing on OpenWrt routers via SSH:
+- Deploys Lua files and nft rules
 - Tests DNS filtering (allowed/blocked domains)
 - Verifies nftables allowlist sets
 - Checks filter logs for protocol information
-- Tests TTL patching
+- Tests authentication and captive portal
 
 Usage:
 ```bash
-# Full test suite
-moonc tests/test_docker.moon && luajit tests/test_docker.lua
-
-# With options
-luajit tests/test_docker.lua --verbose    # Show all commands
-luajit tests/test_docker.lua --keep       # Leave containers running
-luajit tests/test_docker.lua --no-build   # Skip image rebuild
-luajit tests/test_docker.lua --help       # Show help
+make test-openwrt HOST=root@<router>
+# or
+LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit tests/test_openwrt.lua HOST=root@<router>
 ```
 
 Prerequisites:
-- Docker and Docker Compose installed
-- User in docker group (or run with sudo)
-
-The script uses only standard Lua I/O (`io.execute`, `io.popen`) to orchestrate Docker commands as requested.
+- SSH access to OpenWrt router with LuaJIT and nftables installed
+- Router must be reachable from the test machine

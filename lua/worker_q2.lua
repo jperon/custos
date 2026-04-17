@@ -8,10 +8,10 @@ do
   local _obj_0 = require("config")
   QUEUE_CAPTIVE, NFQ_BRIDGE_MODE = _obj_0.QUEUE_CAPTIVE, _obj_0.NFQ_BRIDGE_MODE
 end
-local parse_syn, parse_syn_ip, build_response_frames, open_raw_socket, send_frame, open_dgram_socket, send_packet
+local parse_syn, build_response_frames, open_raw_socket, send_frame
 do
   local _obj_0 = require("parse/tcp")
-  parse_syn, parse_syn_ip, build_response_frames, open_raw_socket, send_frame, open_dgram_socket, send_packet = _obj_0.parse_syn, _obj_0.parse_syn_ip, _obj_0.build_response_frames, _obj_0.open_raw_socket, _obj_0.send_frame, _obj_0.open_dgram_socket, _obj_0.send_packet
+  parse_syn, build_response_frames, open_raw_socket, send_frame = _obj_0.parse_syn, _obj_0.build_response_frames, _obj_0.open_raw_socket, _obj_0.send_frame
 end
 local run_queue, NF_ACCEPT, NF_DROP
 do
@@ -34,12 +34,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
-  local syn
-  if NFQ_BRIDGE_MODE then
-    syn = parse_syn(raw)
-  else
-    syn = parse_syn_ip(raw)
-  end
+  local syn = parse_syn(raw)
   if not (syn) then
     log_warn({
       action = "q2_parse_failed",
@@ -48,17 +43,11 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     return NF_DROP
   end
   local send
-  if NFQ_BRIDGE_MODE then
-    send = function(f)
-      return send_frame(raw_fd, f, ifindex)
-    end
-  else
-    send = function(f)
-      return send_packet(raw_fd, f, ifindex)
-    end
+  send = function(f)
+    return send_frame(raw_fd, f, ifindex)
   end
   local ok, err = pcall(function()
-    local f1, f2, f3 = build_response_frames(syn, redirect_url, NFQ_BRIDGE_MODE)
+    local f1, f2, f3 = build_response_frames(syn, redirect_url)
     send(f1)
     send(f2)
     return send(f3)
@@ -107,12 +96,7 @@ run = function(auth_cfg)
   end
   local host_part = local_ip:find(":", 1, true) and "[" .. tostring(local_ip) .. "]" or local_ip
   redirect_url = "https://" .. tostring(host_part) .. ":" .. tostring(https_port) .. "/"
-  local open_fn
-  if NFQ_BRIDGE_MODE then
-    open_fn = open_raw_socket
-  else
-    open_fn = open_dgram_socket
-  end
+  local open_fn = open_raw_socket
   local fd, err = open_fn(ifname)
   if not (fd) then
     log_error({

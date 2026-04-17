@@ -16,9 +16,8 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_CAPTIVE, :NFQ_BRIDGE_MODE } = require "config"
-{ :parse_syn, :parse_syn_ip, :build_response_frames
-  :open_raw_socket, :send_frame
-  :open_dgram_socket, :send_packet } = require "parse/tcp"
+{ :parse_syn, :build_response_frames
+  :open_raw_socket, :send_frame } = require "parse/tcp"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_error } = require "log"
 
@@ -44,18 +43,15 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
   raw = ffi.string payload_ptr[0], payload_len
 
-  syn = if NFQ_BRIDGE_MODE then parse_syn(raw) else parse_syn_ip(raw)
+  syn = parse_syn(raw)
   unless syn
     log_warn { action: "q2_parse_failed", len: payload_len }
     return NF_DROP
 
-  send = if NFQ_BRIDGE_MODE
-    (f) -> send_frame raw_fd, f, ifindex
-  else
-    (f) -> send_packet raw_fd, f, ifindex
+  send = (f) -> send_frame raw_fd, f, ifindex
 
   ok, err = pcall ->
-    f1, f2, f3 = build_response_frames syn, redirect_url, NFQ_BRIDGE_MODE
+    f1, f2, f3 = build_response_frames syn, redirect_url
     send f1
     send f2
     send f3
@@ -81,14 +77,13 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
 -- ── Point d'entrée ───────────────────────────────────────────────
 --- Start the Q2 captive portal worker.
--- Opens the AF_PACKET socket (SOCK_RAW in bridge mode, SOCK_DGRAM in router mode)
--- and starts the NFQUEUE loop.
+-- Opens the AF_PACKET socket (SOCK_RAW) and starts the NFQUEUE loop.
 -- @tparam table auth_cfg  Auth configuration from cfg/filter.yml.
 -- @treturn nil
 run = (auth_cfg) ->
   auth_cfg = auth_cfg or {}
 
-  -- Interface LAN (bridge mode: br0 or br; router mode: eth0/br-lan etc.)
+  -- Interface LAN (br0 or br)
   ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
 
   https_port = auth_cfg.port or 33443
@@ -107,8 +102,8 @@ run = (auth_cfg) ->
   host_part = local_ip\find(":", 1, true) and "[#{local_ip}]" or local_ip
   redirect_url = "https://#{host_part}:#{https_port}/"
 
-  -- Open socket : SOCK_RAW en mode bridge, SOCK_DGRAM en mode routeur.
-  open_fn = if NFQ_BRIDGE_MODE then open_raw_socket else open_dgram_socket
+  -- Open socket : SOCK_RAW
+  open_fn = open_raw_socket
   fd, err = open_fn ifname
   unless fd
     log_error { action: "q2_socket_failed", err: err, ifname: ifname }

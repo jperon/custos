@@ -220,22 +220,14 @@ parse_syn_ip = function(raw)
   }
 end
 local build_response_frames
-build_response_frames = function(syn, redirect_url, eth)
-  if eth == nil then
-    eth = true
-  end
+build_response_frames = function(syn, redirect_url)
   local isn = math.random(0, 0x7FFFFFFF)
   local http_body = "HTTP/1.1 302 Found\r\nLocation: " .. tostring(redirect_url) .. "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   local http_len = #http_body
   local build_frame
   build_frame = function(tcp_flags, payload_str, our_seq, their_ack)
     local payload_len = payload_str and #payload_str or 0
-    local ip_off
-    if eth then
-      ip_off = 14
-    else
-      ip_off = 0
-    end
+    local ip_off = 14
     local tcp_off
     if syn.ip_ver == 4 then
       tcp_off = ip_off + 20
@@ -245,14 +237,12 @@ build_response_frames = function(syn, redirect_url, eth)
     local pkt_len = tcp_off + 20 + payload_len
     local buf = ffi.new("uint8_t[?]", pkt_len)
     ffi.fill(buf, pkt_len, 0)
-    if eth then
-      ffi.copy(buf, syn.eth_dst, 6)
-      ffi.copy(buf + 6, syn.eth_src, 6)
-      if syn.ip_ver == 4 then
-        w16(buf, 12, 0x0800)
-      else
-        w16(buf, 12, 0x86DD)
-      end
+    ffi.copy(buf, syn.eth_dst, 6)
+    ffi.copy(buf + 6, syn.eth_src, 6)
+    if syn.ip_ver == 4 then
+      w16(buf, 12, 0x0800)
+    else
+      w16(buf, 12, 0x86DD)
     end
     if syn.ip_ver == 4 then
       buf[ip_off] = 0x45
@@ -303,24 +293,6 @@ open_raw_socket = function(ifname)
   end
   return fd
 end
-local open_dgram_socket
-open_dgram_socket = function(ifname)
-  local fd = libc.socket(AF_PACKET, SOCK_DGRAM, ETH_P_IP)
-  if fd < 0 then
-    return nil, "socket() failed: " .. tostring(ffi.errno())
-  end
-  return fd
-end
-local send_packet
-send_packet = function(fd, pkt, ifindex)
-  local sll = ffi.new("struct sockaddr_ll")
-  ffi.fill(sll, ffi.sizeof(sll), 0)
-  sll.sll_family = AF_PACKET
-  sll.sll_protocol = ETH_P_IP
-  sll.sll_ifindex = ifindex
-  local n = libc.sendto(fd, pkt, #pkt, 0, ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll))
-  return n == #pkt
-end
 local send_frame
 send_frame = function(fd, frame, ifindex)
   local sll = ffi.new("struct sockaddr_ll")
@@ -337,8 +309,6 @@ return {
   build_response_frames = build_response_frames,
   open_raw_socket = open_raw_socket,
   send_frame = send_frame,
-  open_dgram_socket = open_dgram_socket,
-  send_packet = send_packet,
   r16 = r16,
   r32 = r32,
   w16 = w16,

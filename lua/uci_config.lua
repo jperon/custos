@@ -151,7 +151,6 @@ generate_config = function(cfg)
     "",
     "local QUEUE_QUESTIONS        = 0",
     "local QUEUE_RESPONSES        = 1",
-    'local DOCKER_MODE            = os.getenv("DOCKER_MODE") == "1"',
     string.format("local FORCED_TTL             = %d", cfg.forced_ttl),
     string.format('local NFT_IP_TIMEOUT         = "%s"', cfg.nft_ip_timeout),
     string.format("local IPC_PENDING_TTL        = %d", cfg.ipc_pending_ttl),
@@ -203,7 +202,6 @@ generate_config = function(cfg)
   local _list_2 = {
     "QUEUE_QUESTIONS",
     "QUEUE_RESPONSES",
-    "DOCKER_MODE",
     "ALLOWED_DOMAINS",
     "DEST_WHITELIST",
     "NFT_TABLE",

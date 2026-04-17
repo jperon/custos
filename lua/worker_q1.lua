@@ -3,10 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_RESPONSES, DOCKER_MODE, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS
+local QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS
 do
   local _obj_0 = require("config")
-  QUEUE_RESPONSES, DOCKER_MODE, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS = _obj_0.QUEUE_RESPONSES, _obj_0.DOCKER_MODE, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NEIGH_REFRESH_COOLDOWN, _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS, _obj_0.NFT_ADD_FAILURE_POLICY, _obj_0.IPC_MATCH_RETRY_ENABLED, _obj_0.IPC_MATCH_RETRY_COUNT, _obj_0.IPC_MATCH_RETRY_SLEEP_MS
+  QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS = _obj_0.QUEUE_RESPONSES, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NEIGH_REFRESH_COOLDOWN, _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS, _obj_0.NFT_ADD_FAILURE_POLICY, _obj_0.IPC_MATCH_RETRY_ENABLED, _obj_0.IPC_MATCH_RETRY_COUNT, _obj_0.IPC_MATCH_RETRY_SLEEP_MS
 end
 local neigh = require("neigh")
 local ndpi = require("parse/ndpi")
@@ -206,45 +206,42 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       neigh.refresh(mac_clients, ip_to_mac)
     end
   end
-  local entry = nil
-  if not (DOCKER_MODE) then
-    entry = get_pending_entry(txid, pkt.ip.dst_ip, client_port, resolver_ip, now)
-    if not (entry) then
-      local retry_attempts = 0
-      local retry_wait_ms = 0
-      entry, retry_attempts, retry_wait_ms = retry_pending_match(txid, pkt.ip.dst_ip, client_port, resolver_ip)
-      if entry then
-        log_info({
-          action = "response_matched_after_retry",
-          src_ip = pkt.ip.src_ip,
-          dst_ip = pkt.ip.dst_ip,
-          txid = string.format("0x%04x", txid),
-          retry_attempts = retry_attempts,
-          retry_wait_ms = retry_wait_ms
-        })
-      else
-        log_block({
-          action = (function()
-            if retry_attempts > 0 then
-              return "response_no_matching_question_after_retry"
-            else
-              return "response_no_matching_question"
-            end
-          end)(),
-          src_ip = pkt.ip.src_ip,
-          dst_ip = pkt.ip.dst_ip,
-          vlan = l2.vlan,
-          txid = string.format("0x%04x", txid),
-          rcode = pkt.dns.rcode,
-          client_mac = client_mac,
-          retry_attempts = retry_attempts,
-          retry_wait_ms = retry_wait_ms
-        })
-        return NF_DROP
-      end
+  local entry = get_pending_entry(txid, pkt.ip.dst_ip, client_port, resolver_ip, now)
+  if not (entry) then
+    local retry_attempts = 0
+    local retry_wait_ms = 0
+    entry, retry_attempts, retry_wait_ms = retry_pending_match(txid, pkt.ip.dst_ip, client_port, resolver_ip)
+    if entry then
+      log_info({
+        action = "response_matched_after_retry",
+        src_ip = pkt.ip.src_ip,
+        dst_ip = pkt.ip.dst_ip,
+        txid = string.format("0x%04x", txid),
+        retry_attempts = retry_attempts,
+        retry_wait_ms = retry_wait_ms
+      })
+    else
+      log_block({
+        action = (function()
+          if retry_attempts > 0 then
+            return "response_no_matching_question_after_retry"
+          else
+            return "response_no_matching_question"
+          end
+        end)(),
+        src_ip = pkt.ip.src_ip,
+        dst_ip = pkt.ip.dst_ip,
+        vlan = l2.vlan,
+        txid = string.format("0x%04x", txid),
+        rcode = pkt.dns.rcode,
+        client_mac = client_mac,
+        retry_attempts = retry_attempts,
+        retry_wait_ms = retry_wait_ms
+      })
+      return NF_DROP
     end
-    consume(txid, pkt.ip.dst_ip, client_port, resolver_ip)
   end
+  consume(txid, pkt.ip.dst_ip, client_port, resolver_ip)
   local refused = entry and entry.refused or false
   local dnsonly = entry and entry.dnsonly or false
   if refused then

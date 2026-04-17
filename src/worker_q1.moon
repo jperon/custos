@@ -17,7 +17,7 @@
 --        f. Envoie le paquet modifié avec NF_ACCEPT + payload
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_RESPONSES, :DOCKER_MODE, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS } = require "config"
+{ :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS } = require "config"
 neigh = require "neigh"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
@@ -32,7 +32,7 @@ IPC_RETRY_ENABLED = if IPC_MATCH_RETRY_ENABLED == nil then true else IPC_MATCH_R
 IPC_RETRY_COUNT = IPC_MATCH_RETRY_COUNT or 5
 IPC_RETRY_SLEEP_MS = IPC_MATCH_RETRY_SLEEP_MS or 20
 
--- MAC_ZERO : MAC à ignorer (interface sans L2 ou OUTPUT chain en Docker)
+-- MAC_ZERO : MAC à ignorer (interface sans L2)
 MAC_ZERO = "00:00:00:00:00:00"
 
 -- mac_valid : vrai si mac est une adresse MAC connue et non nulle
@@ -92,7 +92,7 @@ retry_pending_match = (txid, client_ip, client_port, resolver_ip) ->
 -- @treturn nil
 update_mac_clients = (msg, ts) ->
   mac = msg.mac_str
-  return if mac == MAC_ZERO   -- MAC inconnue (OUTPUT en Docker) : on ignore
+  return if mac == MAC_ZERO   -- MAC inconnue : on ignore
 
   entry = mac_clients[mac] or {}
   entry.last_seen = ts
@@ -213,39 +213,35 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       neigh.refresh mac_clients, ip_to_mac
 
   -- ── Vérification IPC ─────────────────────────────────────────
-  -- En mode Docker, on saute la vérification IPC car les requêtes
-  -- et réponses sont vues depuis la perspective du conteneur (OUTPUT).
-  entry = nil
-  unless DOCKER_MODE
-    entry = get_pending_entry txid, pkt.ip.dst_ip, client_port, resolver_ip, now
-    unless entry
-      retry_attempts = 0
-      retry_wait_ms = 0
-      entry, retry_attempts, retry_wait_ms = retry_pending_match txid, pkt.ip.dst_ip, client_port, resolver_ip
-      if entry
-        log_info {
-          action: "response_matched_after_retry"
-          src_ip: pkt.ip.src_ip
-          dst_ip: pkt.ip.dst_ip
-          txid: string.format "0x%04x", txid
-          retry_attempts: retry_attempts
-          retry_wait_ms: retry_wait_ms
-        }
-      else
-        log_block {
-          action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
-          src_ip:    pkt.ip.src_ip
-          dst_ip:    pkt.ip.dst_ip
-          vlan:      l2.vlan
-          txid:      string.format "0x%04x", txid
-          rcode:     pkt.dns.rcode
-          client_mac: client_mac
-          retry_attempts: retry_attempts
-          retry_wait_ms: retry_wait_ms
-        }
-        return NF_DROP
-    -- Transaction consommée (one-shot : une réponse par question)
-    consume txid, pkt.ip.dst_ip, client_port, resolver_ip
+  entry = get_pending_entry txid, pkt.ip.dst_ip, client_port, resolver_ip, now
+  unless entry
+    retry_attempts = 0
+    retry_wait_ms = 0
+    entry, retry_attempts, retry_wait_ms = retry_pending_match txid, pkt.ip.dst_ip, client_port, resolver_ip
+    if entry
+      log_info {
+        action: "response_matched_after_retry"
+        src_ip: pkt.ip.src_ip
+        dst_ip: pkt.ip.dst_ip
+        txid: string.format "0x%04x", txid
+        retry_attempts: retry_attempts
+        retry_wait_ms: retry_wait_ms
+      }
+    else
+      log_block {
+        action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
+        src_ip:    pkt.ip.src_ip
+        dst_ip:    pkt.ip.dst_ip
+        vlan:      l2.vlan
+        txid:      string.format "0x%04x", txid
+        rcode:     pkt.dns.rcode
+        client_mac: client_mac
+        retry_attempts: retry_attempts
+        retry_wait_ms: retry_wait_ms
+      }
+      return NF_DROP
+  -- Transaction consommée (one-shot : une réponse par question)
+  consume txid, pkt.ip.dst_ip, client_port, resolver_ip
 
   refused = entry and entry.refused or false
   dnsonly = entry and entry.dnsonly or false

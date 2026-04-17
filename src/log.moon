@@ -2,7 +2,7 @@
 -- Logging structuré vers stdout.
 -- Format : [epoch] [pid] LEVEL key=value key=value ...
 -- Chaque write() est atomique pour les messages <= PIPE_BUF (4096 octets)
--- sur un pipe : compatible procd (logread), systemd-journald et docker logs.
+-- sur un pipe : compatible procd (logread) et systemd-journald.
 -- Les champs sont en key=value pour faciliter l'ingestion par des outils
 -- comme lnav, grok ou un simple awk.
 --

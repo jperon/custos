@@ -776,14 +776,14 @@ report "Log contient des entrées BLOCK",
 -- ── ip_dest_whitelist functional test (SIGHUP reload) ───────────────────────
 
 print ""
-print "#{C.bold}▶ Liste blanche statique (ip_whitelist, rechargement SIGHUP)#{C.reset}"
+print "#{C.bold}▶ Liste blanche statique (dest_whitelist, rechargement SIGHUP)#{C.reset}"
 
 TEST_WL_IP = "10.253.254.255"
 TEST_WL_IP6 = "fd99::1"
 FILTER_YML = "#{CFG_DIR}/filter.yml"
 
 -- Inject test IPs into filter.yml
-ssh "printf '\\nip_whitelist:\\n- #{TEST_WL_IP}\\n- #{TEST_WL_IP6}\\n' >> #{FILTER_YML}"
+ssh "printf '\\ndest_whitelist:\\n- #{TEST_WL_IP}\\n- #{TEST_WL_IP6}\\n' >> #{FILTER_YML}"
 
 -- Send SIGHUP to the main process (propagated to workers via pipe)
 -- filter.reload() is called on the next DNS packet, so trigger one.
@@ -793,21 +793,21 @@ os.execute "dig @#{DNS_RESOLVER} github.com A +time=2 +tries=1 >/dev/null 2>&1; 
 os.execute "sleep 1"
 
 _, wl4_set = ssh "nft list set ip  dns-filter ip4_dest_whitelist 2>/dev/null"
-report "ip_whitelist — #{TEST_WL_IP} présent dans ip4_dest_whitelist après SIGHUP",
+report "dest_whitelist — #{TEST_WL_IP} présent dans ip4_dest_whitelist après SIGHUP",
   (wl4_set and wl4_set\match TEST_WL_IP) != nil, wl4_set or "(vide)"
 
 _, wl6_set = ssh "nft list set ip6 dns-filter ip6_dest_whitelist 2>/dev/null"
-report "ip_whitelist — #{TEST_WL_IP6} présent dans ip6_dest_whitelist après SIGHUP",
+report "dest_whitelist — #{TEST_WL_IP6} présent dans ip6_dest_whitelist après SIGHUP",
   (wl6_set and wl6_set\match "fd99") != nil, wl6_set or "(vide)"
 
 -- Remove test IPs from filter.yml and reload again
-ssh "grep -v '^ip_whitelist:\\|^- #{TEST_WL_IP}\\|^- #{TEST_WL_IP6}' #{FILTER_YML} > /tmp/_filter.tmp && mv /tmp/_filter.tmp #{FILTER_YML}; true"
+ssh "grep -v '^dest_whitelist:\\|^- #{TEST_WL_IP}\\|^- #{TEST_WL_IP6}' #{FILTER_YML} > /tmp/_filter.tmp && mv /tmp/_filter.tmp #{FILTER_YML}; true"
 ssh "pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && kill -HUP $pid 2>/dev/null; true"
 os.execute "dig @#{DNS_RESOLVER} github.com A +time=2 +tries=1 >/dev/null 2>&1; true"
 os.execute "sleep 1"
 
 _, wl4_after = ssh "nft list set ip dns-filter ip4_dest_whitelist 2>/dev/null"
-report "ip_whitelist — set vidé après suppression + SIGHUP",
+report "dest_whitelist — set vidé après suppression + SIGHUP",
   not (wl4_after and wl4_after\match TEST_WL_IP), wl4_after or "(vide)"
 
 -- ── Summary ───────────────────────────────────────────────────────────────────

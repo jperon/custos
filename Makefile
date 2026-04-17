@@ -43,7 +43,7 @@ FILTER_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(FILTER_MOONS))
 AUTH_MOONS := $(shell find $(SRC)/auth -name '*.moon' 2>/dev/null)
 AUTH_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(AUTH_MOONS))
 
-.PHONY: all clean check test test-ndpi test-docker test-docker-ndpi5 test-kvm test-kvm-up test-kvm-run test-kvm-down test-openwrt run reload update-lists make-secret logs help
+.PHONY: all clean check test test-ndpi test-openwrt run reload update-lists make-secret logs help
 
 all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
@@ -80,44 +80,6 @@ test-ndpi: all
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_ndpi.lua
 
-## Tests Docker end-to-end (requires Docker)
-test-docker: all
-	@echo "Tests Docker end-to-end (nDPI 4.x)..."
-	$(MOONC) -o tests/test_docker.lua tests/test_docker.moon
-	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) tests/test_docker.lua
-
-## Tests Docker end-to-end avec nDPI 5.0 (requires Docker)
-test-docker-ndpi5: all
-	@echo "Tests Docker end-to-end (nDPI 5.0)..."
-	$(MOONC) -o tests/test_docker.lua tests/test_docker.moon
-	NDPI_VERSION=5.0 LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) tests/test_docker.lua
-
-## Tests Docker end-to-end en mode bridge (requires Docker)
-test-docker-bridge: all
-	@echo "Tests Docker end-to-end (mode bridge nftables)..."
-	$(MOONC) -o tests/test_docker_bridge.lua tests/test_docker_bridge.moon
-	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) tests/test_docker_bridge.lua
-
-## Tests KVM/libvirt end-to-end (requires KVM + libvirt)
-test-kvm: test-kvm-up test-kvm-run test-kvm-down
-
-test-kvm-up:
-	@echo "Démarrage des VMs KVM..."
-	@virsh dominfo custos-filter >/dev/null 2>&1 || sudo bash libvirt/custos-libvirt.sh create
-	bash libvirt/custos-libvirt.sh start
-
-test-kvm-run: all
-	@echo "Tests KVM end-to-end..."
-	$(MOONC) -o tests/test_kvm.lua tests/test_kvm.moon
-	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) tests/test_kvm.lua
-
-test-kvm-down:
-	@echo "Arrêt des VMs KVM..."
-	bash libvirt/custos-libvirt.sh stop
 
 ## Tests OpenWrt end-to-end (accès SSH à un routeur déployé requis)
 ## Usage : make test-openwrt HOST=root@esm.y [ARGS=--no-restart]
@@ -169,13 +131,6 @@ help:
 	@echo "  check        - Vérification syntaxique des fichiers Lua"
 	@echo "  test         - Tests unitaires (pas root requis)"
 	@echo "  test-ndpi    - Tests nDPI wrapper (libndpi requis)"
-	@echo "  test-docker  - Tests Docker end-to-end (nDPI 4.x, Docker requis)"
-	@echo "  test-docker-ndpi5 - Tests Docker end-to-end (nDPI 5.0, Docker requis)"
-	@echo "  test-docker-bridge - Tests Docker end-to-end (mode bridge nftables, Docker requis)"
-	@echo "  test-kvm     - Tests KVM end-to-end complets (up+run+down, libvirt requis)"
-	@echo "  test-kvm-up  - Démarre les VMs KVM"
-	@echo "  test-kvm-run - Exécute les tests KVM (VMs déjà démarrées)"
-	@echo "  test-kvm-down - Arrête les VMs KVM"
 	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis)"
 	@echo "  run          - Lance le superviseur (root requis)"
 	@echo "  clean        - Nettoie les fichiers compilés"

@@ -169,15 +169,6 @@ custos/
 │   └── test_openwrt.lua     Tests E2E OpenWrt compilés
 ├── install-owrt.moon        Installeur OpenWrt (déploiement SSH)
 ├── install-owrt.lua         Installeur compilé
-├── libvirt/
-│   ├── filter.xml           VM filtre (Debian, 2 interfaces)
-│   ├── client.xml           VM client1 (10.99.0.10, LAN)
-│   ├── client2.xml          VM client2 (10.99.0.11, LAN — isolation tests)
-│   ├── router.xml           VM routeur (OpenWrt)
-│   ├── {user-data,meta-data,network-config}-client{,2}  cloud-init
-│   └── custos-libvirt.sh    Script gestion VMs (create/start/stop/delete)
-├── Dockerfile               Build multi-stage Docker
-├── docker-compose.yml       Environnement de test complet
 ├── LICENSE                  Licence MIT
 ├── Makefile
 ├── setup.sh
@@ -199,7 +190,6 @@ custos/
 | `libnftables1`           | nftables library (set injection)        |
 | `libndpi-dev`            | nDPI deep packet inspection (FFI)       |
 | `nftables`               | `nft` tool                              |
-| `kmod: br_netfilter`     | Bridge packets visible to netfilter     |
 
 **Debian/Ubuntu:**
 ```bash
@@ -209,27 +199,8 @@ luarocks install moonscript
 
 **OpenWrt:**
 ```bash
-opkg install luajit lyaml libnetfilter-queue nftables kmod-br-netfilter
+opkg install luajit lyaml libnetfilter-queue nftables
 # moonscript via luarocks or build from source
-```
-
-**Docker (build image):**
-```dockerfile
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y \
-    luajit lua-yaml libnetfilter-queue1 libnftables1 nftables \
-    lua5.1 luarocks build-essential \
-    && luarocks install moonscript \
-    && rm -rf /var/lib/apt/lists/*
-```
-
-**Docker (runtime):**
-```bash
-# Docker and Docker Compose
-apt install docker.io docker-compose-plugin
-
-# Add user to docker group (logout/login required)
-usermod -aG docker $USER
 ```
 
 ---
@@ -249,7 +220,7 @@ make test
 # Run nDPI wrapper tests (requires libndpi)
 make test-ndpi
 
-# Load br_netfilter, check deps, apply nft rules
+# Check deps, apply nft rules
 sudo ./setup.sh up
 ```
 
@@ -640,17 +611,12 @@ The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode
 | `ip4_allowed` | `ipv4_addr . ipv4_addr` | Paire (src IP client, IPv4 dest) autorisée après résolution DNS |
 | `ip6_allowed` | `ipv6_addr . ipv6_addr` | Paire (src IPv6 client, IPv6 dest) autorisée après résolution DNS |
 | `authenticated_ips` | `ipv4_addr` | IPs clientes authentifiées (bypass intercept TCP/80 Q2) |
-| `ip4_dest_whitelist` | `ipv4_addr` | Destinations IPv4 toujours autorisées (rechargement SIGHUP) |
-| `ip6_dest_whitelist` | `ipv6_addr` | Destinations IPv6 toujours autorisées (rechargement SIGHUP) |
+| `ip4_dest_whitelist` | `ipv4_addr` | Destinations IPv4 toujours autorisées (bypass DNS, rechargement SIGHUP) |
+| `ip6_dest_whitelist` | `ipv6_addr` | Destinations IPv6 toujours autorisées (bypass DNS, rechargement SIGHUP) |
 
 ### Prerequisites
 
 ```bash
-# Load br_netfilter so bridge packets reach netfilter hooks
-modprobe br_netfilter
-sysctl -w net.bridge.bridge-nf-call-iptables=1
-sysctl -w net.bridge.bridge-nf-call-ip6tables=1
-
 # Apply (no parameters needed)
 sudo nft -f nft-rules/dns-filter-bridge.nft
 # or
@@ -678,12 +644,33 @@ covers them.
 
 The IPv6 FORWARD chain explicitly passes NDP messages (neighbor-solicit,
 neighbor-advert, router-solicit, router-advert) and ICMPv6 echo — required
-when `br_netfilter` intercepts L2 neighbor discovery and SLAAC frames.
+for IPv6 connectivity.
 
 ---
 
-## OpenWrt
+## Destination Whitelist (Bypass DNS Analysis)
 
+For networks that should bypass DNS analysis entirely (e.g., servers accessible from outside), configure a destination whitelist via UCI:
+
+```bash
+# On OpenWrt router
+uci add_list custos.main.dest_whitelist '10.0.0.0/24'
+uci add_list custos.main.dest_whitelist '2001:db8::/32'
+uci commit custos
+/etc/init.d/custos reload
+```
+
+Traffic to these CIDRs is allowed without DNS resolution. The `ip4_dest_whitelist` and `ip6_dest_whitelist` nftables sets are checked before DNS NFQUEUE, enabling direct access.
+
+The whitelist can also be configured in `cfg/filter.yml` (fallback if UCI is empty):
+
+```yaml
+ip_whitelist:
+  - 10.0.0.0/24
+  - 2001:db8::/32
+```
+
+---
 
 ## OpenWrt
 

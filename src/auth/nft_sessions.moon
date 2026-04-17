@@ -68,8 +68,6 @@ del_authenticated = (ip) ->
     del_authenticated4 ip
 
 --- Ajoute un MAC authentifié dans les sets ip et ip6 en une seule transaction nft.
--- Les sets authenticated_macs existent dans table ip et table ip6 (br_netfilter
--- expose le L2 dans les hooks L3 prerouting, évitant la dépendance au bridge mark).
 -- @tparam string mac Adresse MAC du client (format "aa:bb:cc:dd:ee:ff")
 -- @tparam number ttl Durée de vie en secondes
 -- @treturn boolean   true si les deux insertions réussissent

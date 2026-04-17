@@ -8,7 +8,7 @@ Detailed explanations and architecture remain in `README.md`.
 - Supervision: `src/main.moon`
 - DNS workers: `src/worker_q0.moon` (questions), `src/worker_q1.moon` (responses)
 - IPC Q0 -> Q1: `src/ipc.moon`
-- nftables ruleset: `nft-rules/dns-filter.nft`
+- nftables ruleset: `nft-rules/dns-filter-bridge.nft`
 - Filtering rules: `cfg/filter.yml`
 
 ## Where to modify what
@@ -102,8 +102,6 @@ Detailed explanations and architecture remain in `README.md`.
 
 - Unit: `make test`
 - nDPI: `make test-ndpi`
-- Docker E2E: `make test-docker`
-- KVM E2E (47 tests): `make test-kvm`
 - OpenWrt E2E: `make test-openwrt HOST=root@<router>`
 
 ## Quick playbooks
@@ -121,7 +119,7 @@ Detailed explanations and architecture remain in `README.md`.
 - Modify REFUSED/EDE behavior:
   1. Adjust `src/parse/dns.moon` (REFUSED construction, EDNS/EDE options).
   2. Verify call in `src/worker_q1.moon` (`refused` branch).
-  3. Test at minimum `make test` then an E2E (`test-docker` or `test-openwrt`).
+  3. Test at minimum `make test` then an E2E (`test-openwrt`).
 
 - Modify nft injection:
   1. Adjust `src/nft.moon` (`add element` command).
@@ -137,7 +135,7 @@ Detailed explanations and architecture remain in `README.md`.
 
 ### Network interfaces (bridge/LAN/WAN)
 
-- The ruleset `nft-rules/dns-filter.nft` is generic:
+- The ruleset `nft-rules/dns-filter-bridge.nft` is generic:
   - no interface names imposed (`eth0`, `br-lan`, etc. not hardcoded),
   - filtering based on families/protocols/sets, not interface names.
 - The filter machine must be on the LAN <-> WAN path, as transparent bridge.

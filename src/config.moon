@@ -12,24 +12,13 @@ QUEUE_CAPTIVE   = 2   -- TCP SYN/80 non autorisés (mode bridge uniquement)
 -- BRIDGE_MODE=1 : active le worker Q2 (portail captif TCP SYN).
 -- NFQ_BRIDGE_MODE=1 : NFQUEUE est sur la table bridge nftables.
 --   Les workers Q0/Q1 reçoivent des trames Ethernet complètes (eth_offset=14).
---   En mode routeur (table ip/ip6), seul le paquet IP est livré (eth_offset=0).
--- Dans Docker (DOCKER_MODE=1), NFQUEUE est sur table ip (INPUT/OUTPUT) :
---   BRIDGE_MODE peut être 1 (active Q2) mais NFQ_BRIDGE_MODE reste 0.
 BRIDGE_MODE     = true
 NFQ_BRIDGE_MODE = true
-
--- ── Docker mode ──────────────────────────────────────────────────
--- When running inside Docker, dnsmasq runs on the filter container itself.
--- NFQUEUE is on INPUT (client queries → Q0) and OUTPUT (dnsmasq responses → Q1).
--- Q0 blocks disallowed queries before dnsmasq sees them, so there will never
--- be a Q1 response for a blocked domain. The IPC correlation check in Q1
--- is therefore redundant and is skipped for simplicity.
 -- ── Logging ─────────────────────────────────────────────────────
 -- Les messages sont écrits sur stdout (fd=1).
 -- Le superviseur de processus les capture vers le système de log natif :
 --   OpenWrt / procd  → logread   (procd_set_param stdout 1)
 --   systemd          → journalctl
---   Docker           → docker logs
 
 -- ── Noms de sets nftables ────────────────────────────────────────
 NFT_FAMILY     = "bridge"
