@@ -103,6 +103,9 @@ table bridge dns-filter-bridge {
     udp dport { 67, 68 } accept
     udp dport { 546, 547 } accept
 
+    # ARP : requis pour la résolution d'adresses MAC IPv4.
+    ether type arp accept
+
     # ICMPv6 NDP/SLAAC : avant la VLAN mark (jamais loggé par les workers).
     icmpv6 type {
       nd-neighbor-solicit,
