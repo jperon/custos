@@ -48,6 +48,9 @@ run_queue = (queue_num, callback) ->
 
   -- Wrapper C minimal : extrait pkt_id et délègue au callback Lua
   c_callback = ffi.cast "nfq_callback", (qh, nfmsg, nfad, data) ->
+    -- Debug: Packet hit the C wrapper
+    log_info { action: "nfq_c_callback", queue: queue_num, pkt_id: "pending" }
+
     -- Extraction de l'id du paquet depuis le header nfq
     -- nfq_get_msg_packet_hdr retourne un pointeur vers nfqnl_msg_packet_hdr
     -- dont le premier champ packet_id est en big-endian.
@@ -66,6 +69,7 @@ run_queue = (queue_num, callback) ->
     if verdict != VERDICT_DONE
       libnfq.nfq_set_verdict qh_box[0], pkt_id, verdict, 0, nil
     0   -- retour C : 0 = succès
+
 
   qh = libnfq.nfq_create_queue h, queue_num, c_callback, nil
   error "nfq_create_queue(#{queue_num}) échoué" if qh == nil
