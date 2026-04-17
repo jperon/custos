@@ -61,13 +61,10 @@ tests_failed = 0
 
 SSH_TARGET   = nil
 no_restart   = false
-bridge_mode  = false
 
 for _, a in ipairs arg or {}
   if a\match "^%-%-no%-restart"
     no_restart = true
-  elseif a\match "^%-%-bridge"
-    bridge_mode = true
   elseif (not a\match "^%-%-") and not SSH_TARGET
     SSH_TARGET = a
 
@@ -127,7 +124,7 @@ report = (name, ok, msg) ->
 
 print "#{C.bold}CustosVirginum — OpenWrt end-to-end tests#{C.reset}"
 print "  Cible SSH : #{SSH_TARGET}"
-print "  Mode      : #{bridge_mode and 'bridge (BRIDGE_MODE=1)' or 'routeur (table ip/ip6)'}"
+print "  Mode      : bridge (BRIDGE_MODE=1)"
 print ""
 
 -- ── [1/5] Connectivity check ───────────────────────────────────────────────────
@@ -206,10 +203,7 @@ unless no_restart
   project_root = (script_dir\gsub "tests/?$", "")\gsub "/$", ""
   project_root = project_root == "" and "." or project_root
   print "  Déploiement des fichiers Lua + nft → #{SSH_TARGET}:#{CUSTOS_DIR}..."
-  nft_src = if bridge_mode
-    "#{project_root}/nft-rules/dns-filter-bridge.nft"
-  else
-    "#{project_root}/nft-rules/dns-filter.nft"
+  nft_src = "#{project_root}/nft-rules/dns-filter-bridge.nft"
   nft_dst = "#{CUSTOS_DIR}/dns-filter.nft"
   run "scp #{SCP_OPTS} #{nft_src} #{SSH_TARGET}:#{nft_dst}"
   run "ssh #{SSH_OPTS} #{SSH_TARGET} 'mkdir -p #{CUSTOS_DIR}/parse #{CUSTOS_DIR}/auth #{CUSTOS_DIR}/filter/conditions #{CUSTOS_DIR}/filter/actions #{CUSTOS_DIR}/filter/lib'"
@@ -235,7 +229,7 @@ unless no_restart
   -- stdout/stderr sont transmis via logger(1) vers syslog (logread sur OpenWrt).
   print "  Démarrage des workers LuaJIT..."
   lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;#{CUSTOS_DIR}/?.lua;#{CUSTOS_DIR}/?/init.lua;;"
-  bridge_env = if bridge_mode then "BRIDGE_MODE=1 " else ""
+  bridge_env = "BRIDGE_MODE=1 "
   ssh "logger -t custos '#{LOG_MARKER}'"
   ssh "(cd #{CUSTOS_DIR} && CUSTOS_FILTER_CONFIG=#{CFG_DIR}/filter.yml #{bridge_env}LUA_PATH=\"#{lua_path}\" luajit2 #{CUSTOS_DIR}/main.lua </dev/null 2>&1 | logger -t custos) &"
   os.execute "sleep 5"
@@ -277,12 +271,8 @@ print ""
 
 -- nft tables
 _, nft_t = ssh "nft list tables 2>/dev/null"
-if bridge_mode
-  report "Table bridge dns-filter-bridge chargée",
-    (nft_t and nft_t\match "bridge.*dns%-filter%-bridge") != nil, nft_t or ""
-else
-  report "Tables nft dns-filter chargées",
-    (nft_t and nft_t\match "dns%-filter") != nil, nft_t or ""
+report "Table bridge dns-filter-bridge chargée",
+  (nft_t and nft_t\match "bridge.*dns%-filter%-bridge") != nil, nft_t or ""
 
 -- authenticated_macs sets (ip + ip6)
 _, macs4 = ssh "nft list set ip  dns-filter authenticated_macs 2>/dev/null"
@@ -322,12 +312,8 @@ report "ether saddr . ip6 daddr @mac6_allowed dans ip6 forward",
 
 
 _, brnf = ssh "cat /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null"
-if bridge_mode
-  report "bridge-nf-call-iptables (mode bridge, sans br_netfilter)",
-    true, "non requis en mode bridge nftables natif"
-else
-  report "bridge-nf-call-iptables = 1",
-    (brnf and brnf\match "1") != nil, brnf or ""
+report "bridge-nf-call-iptables (mode bridge, sans br_netfilter)",
+  true, "non requis en mode bridge nftables natif"
 
 -- NFQUEUE workers
 _, qraw = ssh "cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null"
@@ -335,9 +321,8 @@ report "NFQUEUE 0 connecté (worker Q0)",
   (qraw and qraw\match "^%s*0%s") != nil, qraw or ""
 report "NFQUEUE 1 connecté (worker Q1)",
   (qraw and qraw\match "\n?%s*1%s") != nil, qraw or ""
-if bridge_mode
-  report "NFQUEUE 2 connecté (worker Q2-captive)",
-    (qraw and qraw\match "\n?%s*2%s") != nil, qraw or ""
+report "NFQUEUE 2 connecté (worker Q2-captive)",
+  (qraw and qraw\match "\n?%s*2%s") != nil, qraw or ""
 
 -- Auth + captive portal ports (test from local machine via nc)
 _, nc443 = run "nc -z -w3 #{LAN_IP} 33443 2>/dev/null && echo open || echo closed"
@@ -348,38 +333,27 @@ _, nc080 = run "nc -z -w3 #{LAN_IP} 33080 2>/dev/null && echo open || echo close
 report "Portail captif sur 33080",
   (nc080 and nc080\match "open") != nil, ""
 
-if bridge_mode
-  -- bridge table : chaîne forward bridge
-  _, br_fwd = ssh "nft list chain bridge dns-filter-bridge forward 2>/dev/null"
-  report "Queue 0 DNS dans bridge forward",
-    (br_fwd and br_fwd\match "queue num 0") != nil, br_fwd or ""
-  report "Queue 1 DNS dans bridge forward",
-    (br_fwd and br_fwd\match "queue num 1") != nil, br_fwd or ""
-  report "Queue 2 captif dans bridge forward",
-    (br_fwd and br_fwd\match "queue num 2") != nil, br_fwd or ""
-  report "REJECT tcp (RST) dans bridge forward",
-    (br_fwd and br_fwd\match "reject with tcp reset") != nil, br_fwd or ""
-else
-  -- router mode : table ip prerouting + forward
-  _, pr4b = ssh "nft list chain ip dns-filter prerouting 2>/dev/null"
-  report "DNAT HTTP (80 → 33080) dans ip prerouting",
-    (pr4b and pr4b\match "redirect to :33080") != nil, pr4b or ""
-  report "Pas de DNAT 443 dans ip prerouting",
-    not (pr4b and pr4b\match "redirect to :33443"), pr4b or ""
+-- bridge table : chaîne forward bridge
+_, br_fwd = ssh "nft list chain bridge dns-filter-bridge forward 2>/dev/null"
+report "Queue 0 DNS dans bridge forward",
+  (br_fwd and br_fwd\match "queue num 0") != nil, br_fwd or ""
+report "Queue 1 DNS dans bridge forward",
+  (br_fwd and br_fwd\match "queue num 1") != nil, br_fwd or ""
+report "Queue 2 captif dans bridge forward",
+  (br_fwd and br_fwd\match "queue num 2") != nil, br_fwd or ""
+report "REJECT tcp (RST) dans bridge forward",
+  (br_fwd and br_fwd\match "reject with tcp reset") != nil, br_fwd or ""
 
-  _, fwd4 = ssh "nft list chain ip dns-filter forward 2>/dev/null"
-  report "REJECT tcp 443 dans ip forward",
-    (fwd4 and fwd4\match "tcp dport 443 reject") != nil, fwd4 or ""
 
 -- ip_dest_whitelist sets structural check
-_, wl4 = ssh "nft list set ip  dns-filter ip4_dest_whitelist 2>/dev/null"
-report "Set ip4_dest_whitelist dans ip  dns-filter",
+_, wl4 = ssh "nft list set ip  dns-filter-bridge ip4_dest_whitelist 2>/dev/null"
+report "Set ip4_dest_whitelist dans ip  dns-filter-bridge",
   (wl4 and wl4\match "ip4_dest_whitelist") != nil, wl4 or ""
-_, wl6 = ssh "nft list set ip6 dns-filter ip6_dest_whitelist 2>/dev/null"
-report "Set ip6_dest_whitelist dans ip6 dns-filter",
+_, wl6 = ssh "nft list set ip6 dns-filter-bridge ip6_dest_whitelist 2>/dev/null"
+report "Set ip6_dest_whitelist dans ip6 dns-filter-bridge",
   (wl6 and wl6\match "ip6_dest_whitelist") != nil, wl6 or ""
-report "ip daddr @ip4_dest_whitelist accept dans ip forward",
-  (fwd4 and fwd4\match "ip4_dest_whitelist") != nil, fwd4 or ""
+report "ip daddr @ip4_dest_whitelist accept dans bridge forward",
+  (br_fwd and br_fwd\match "ip4_dest_whitelist") != nil, br_fwd or ""
 
 -- ── [4/5] DNS filtering ────────────────────────────────────────────────────────
 
@@ -651,6 +625,33 @@ _, auth_set2 = ssh "nft list set ip dns-filter authenticated_ips 2>/dev/null"
 report "IP retirée de authenticated_ips après logout",
   not (auth_set2 and auth_set2\match local_ip_pat),
   (auth_set2 or "(vide)")\sub(1, 120)
+
+-- ── Portail captif Q2 (interception TCP/80) ──────────────────────────────────────
+print ""
+print "#{C.bold}▶ Portail captif Q2 (interception TCP/80)#{C.reset}"
+
+ssh "nft flush set ip  dns-filter-bridge authenticated_ips 2>/dev/null; true"
+ssh "nft flush set ip6 dns-filter-bridge authenticated_ips6 2>/dev/null; true"
+
+-- Envoyer un SYN TCP/80 vers une IP arbitraire pour déclencher Q2
+run "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 3 http://1.2.3.4/ 2>&1"
+os.execute "sleep 2"
+
+-- Vérifier que Q2 a loggé captive_redirect_q2 avec l'IP locale
+_, log_q2_out = ssh log_since_start "grep captive_redirect_q2 | grep '#{LOCAL_IP}' | tail -1"
+report "Portail captif Q2 — log captive_redirect_q2 présent",
+  (log_q2_out and #log_q2_out > 5) != nil, log_q2_out or "(aucun log Q2)"
+
+-- Re-login pour vérifier authenticated_ips
+_, ok_code_q2 = run "curl -k -s -o /dev/null -w '%{http_code}' -X POST -d 'user=testuser&password=testpass' #{AUTH_URL}/login 2>&1"
+ok_code_q2 = (ok_code_q2 or "")\gsub "%s+", ""
+os.execute "sleep 1"
+
+_, auth_set_q2 = ssh "nft list set ip dns-filter-bridge authenticated_ips 2>/dev/null"
+local_ip_pat = LOCAL_IP\gsub "%.", "%%."
+report "Portail captif — IP (#{LOCAL_IP}) dans authenticated_ips après login",
+  (auth_set_q2 and auth_set_q2\match local_ip_pat) != nil,
+  (auth_set_q2 or "(vide)")\sub(1, 120)
 
 -- ── Portail captif (direct access, port 33080) ────────────────────────────────
 
