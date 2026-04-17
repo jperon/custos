@@ -181,41 +181,23 @@ Installer = (cfg) ->
         warn "#{update_cmd} a échoué — les listes peuvent être périmées, on continue"
 
       pkgs_required = {
-        "luajit", "libnetfilter-queue", "nftables",
-        "kmod-br-netfilter", "kmod-nft-queue",
-        "lyaml", "luasec", "libxxhash", "openssl-util"
+        "luajit", "libnetfilter-queue", "nftables", "kmod-nft-queue",
+        "lyaml", "luasec", "libxxhash", "openssl-util", "libndpi"
       }
-      pkgs_optional = { "libndpi" }
 
+      pkg_list = table.concat pkgs_required, " "
       install_cmd = if pm == "apk"
-        (pkg) -> "apk add #{pkg}"
+        "apk add #{pkg_list}"
       else
-        (pkg) -> "opkg install #{pkg}"
+        "opkg install #{pkg_list}"
 
-      check_cmd = if pm == "apk"
-        (pkg) -> "apk info -e #{pkg} 2>/dev/null && echo installed"
+      info "  #{install_cmd}"
+      if @ssh_run install_cmd
+        ok "Tous les paquets installés"
+        return true
       else
-        (pkg) -> "opkg list-installed #{pkg} 2>/dev/null"
-
-      ok_all = true
-      for pkg in *pkgs_required
-        info "  #{install_cmd pkg}"
-        unless @ssh_run install_cmd pkg
-          installed = @ssh_capture check_cmd pkg
-          if installed and installed\find pkg
-            ok "  #{pkg} déjà installé"
-          else
-            fail "  Impossible d'installer #{pkg}"
-            ok_all = false
-
-      for pkg in *pkgs_optional
-        info "  #{install_cmd pkg} (optionnel)"
-        if @ssh_run install_cmd pkg
-          ok "  #{pkg} installé"
-        else
-          warn "  #{pkg} introuvable dans #{pm} — ajoutez le feed packages OpenWrt"
-          warn "  Sans libndpi, le filtre ne démarrera pas (dépendance ffi.load)"
-      ok_all
+        fail "Impossible d'installer les paquets"
+        return false
 
     upload_files: =>
       step "Copie des fichiers vers #{@cfg.dest}"
