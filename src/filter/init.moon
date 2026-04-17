@@ -18,7 +18,7 @@
 { :load_config } = require "filter.lib.load_config"
 { :log_info, :log_warn } = require "log"
 ip_whitelist = require "ip_whitelist"
-{ :IP_WHITELIST } = require "config"
+{ :DEST_WHITELIST } = require "config"
 
 local rules
 config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
@@ -40,14 +40,14 @@ load = ->
     log_warn { action: "filter_load_failed", err: err }
     return
   rules = compile_rules cfg
-  -- Priorité : config.IP_WHITELIST (UCI) > cfg.ip_whitelist (filter.yml)
-  whitelist = if IP_WHITELIST and #IP_WHITELIST > 0
-    IP_WHITELIST
+  -- Priorité : config.DEST_WHITELIST (UCI) > cfg.ip_whitelist (filter.yml)
+  whitelist = if DEST_WHITELIST and #DEST_WHITELIST > 0
+    DEST_WHITELIST
   else
     cfg.ip_whitelist or {}
   ip_whitelist.init whitelist
   n = #rules
-  log_info { action: "filter_loaded", rules: n, ip_whitelist: #whitelist }
+  log_info { action: "filter_loaded", rules: n, dest_whitelist: #whitelist }
 
 -- ── Décision ─────────────────────────────────────────────────────
 --- Décide du verdict pour une requête DNS.

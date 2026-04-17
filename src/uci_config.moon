@@ -30,7 +30,7 @@ DEFAULTS = {
   allowed_domains: {
     "local", "lan", "home.arpa"
   }
-  ip_whitelist:          {}  -- Empty by default, configured via UCI
+  dest_whitelist:         {}  -- Empty by default, configured via UCI
 }
 
 -- ── Lecture UCI ───────────────────────────────────────────────────
@@ -181,15 +181,15 @@ generate_config = (cfg) ->
     table.insert lines, string.format('  "%s",', escape_lua_str d)
   table.insert lines, "}"
   table.insert lines, ""
-  table.insert lines, "local IP_WHITELIST = {"
-  for ip in *cfg.ip_whitelist
+  table.insert lines, "local DEST_WHITELIST = {"
+  for ip in *cfg.dest_whitelist
     table.insert lines, string.format('  "%s",', escape_lua_str ip)
   table.insert lines, "}"
   table.insert lines, ""
   table.insert lines, "return {"
   for k in *{
       "QUEUE_QUESTIONS", "QUEUE_RESPONSES", "DOCKER_MODE",
-      "ALLOWED_DOMAINS", "IP_WHITELIST", "NFT_TABLE", "NFT_FAMILY", "NFT_FAMILY6",
+      "ALLOWED_DOMAINS", "DEST_WHITELIST", "NFT_TABLE", "NFT_FAMILY", "NFT_FAMILY6",
       "NFT_SET_IP4", "NFT_SET_IP6", "NFT_SET_MAC4", "NFT_SET_MAC6",
       "NFT_IP_TIMEOUT", "IPC_PENDING_TTL", "CLIENT_EXPIRY",
       "NEIGH_REFRESH_COOLDOWN", "FORCED_TTL", "DNS_PORT", "AF_INET",
@@ -213,12 +213,12 @@ main = ->
     table.insert domains, valid if valid
   domains = DEFAULTS.allowed_domains if #domains == 0
 
-  raw_whitelist = uci_get_list "ip_whitelist"
+  raw_whitelist = uci_get_list "dest_whitelist"
   whitelist    = {}
   for ip in *raw_whitelist
     valid = validate_ip_cidr ip
     table.insert whitelist, valid if valid
-  whitelist = DEFAULTS.ip_whitelist if #whitelist == 0
+  whitelist = DEFAULTS.dest_whitelist if #whitelist == 0
 
   cfg = {
     forced_ttl:             validate_posint(uci_get("forced_ttl"),                   DEFAULTS.forced_ttl)
@@ -233,7 +233,7 @@ main = ->
     ipc_match_retry_count:  validate_posint(uci_get("ipc_match_retry_count"),       DEFAULTS.ipc_match_retry_count)
     ipc_match_retry_sleep_ms: validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms)
     allowed_domains:        domains
-    ip_whitelist:          whitelist
+    dest_whitelist:         whitelist
   }
 
   -- Création du répertoire de sortie (tmpfs sur OpenWrt, recréé après chaque reboot)

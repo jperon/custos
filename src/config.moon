@@ -81,10 +81,12 @@ PROTO_UDP  = 17
 -- workers Q0/Q1 (via from_user). Surchargeable via cfg/filter.yml (auth.sessions_file).
 AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
 
--- ── IP whitelist (CIDR networks bypassing DNS analysis) ─────────────
--- Configuré via UCI (custos.main.ip_whitelist) ou filter.yml (ip_whitelist).
+-- ── Destination whitelist (CIDR networks bypassing DNS analysis) ─────
+-- Configuré via UCI (custos.main.dest_whitelist) ou filter.yml (ip_whitelist).
 -- Trafic vers ces réseaux autorisé sans résolution DNS préalable.
-IP_WHITELIST = {}
+-- Note : la source peut être filtrée via les règles filter (from_net, from_netlist, etc.),
+-- mais la destination ne peut l'être que via cette whitelist (contournement DNS).
+DEST_WHITELIST = {}
 
 -- ── Export ──────────────────────────────────────────────────────
 {
@@ -98,5 +100,5 @@ IP_WHITELIST = {}
   :FORCED_TTL
   :DNS_PORT, :AF_INET, :AF_INET6, :PROTO_UDP
   :AUTH_SESSIONS_FILE
-  :IP_WHITELIST
+  :DEST_WHITELIST
 }

@@ -18,7 +18,7 @@ local DEFAULTS = {
     "lan",
     "home.arpa"
   },
-  ip_whitelist = { }
+  dest_whitelist = { }
 }
 local uci_get
 uci_get = function(option)
@@ -191,8 +191,8 @@ generate_config = function(cfg)
   end
   table.insert(lines, "}")
   table.insert(lines, "")
-  table.insert(lines, "local IP_WHITELIST = {")
-  local _list_1 = cfg.ip_whitelist
+  table.insert(lines, "local DEST_WHITELIST = {")
+  local _list_1 = cfg.dest_whitelist
   for _index_0 = 1, #_list_1 do
     local ip = _list_1[_index_0]
     table.insert(lines, string.format('  "%s",', escape_lua_str(ip)))
@@ -205,7 +205,7 @@ generate_config = function(cfg)
     "QUEUE_RESPONSES",
     "DOCKER_MODE",
     "ALLOWED_DOMAINS",
-    "IP_WHITELIST",
+    "DEST_WHITELIST",
     "NFT_TABLE",
     "NFT_FAMILY",
     "NFT_FAMILY6",
@@ -250,7 +250,7 @@ main = function()
   if #domains == 0 then
     domains = DEFAULTS.allowed_domains
   end
-  local raw_whitelist = uci_get_list("ip_whitelist")
+  local raw_whitelist = uci_get_list("dest_whitelist")
   local whitelist = { }
   for _index_0 = 1, #raw_whitelist do
     local ip = raw_whitelist[_index_0]
@@ -260,7 +260,7 @@ main = function()
     end
   end
   if #whitelist == 0 then
-    whitelist = DEFAULTS.ip_whitelist
+    whitelist = DEFAULTS.dest_whitelist
   end
   local cfg = {
     forced_ttl = validate_posint(uci_get("forced_ttl"), DEFAULTS.forced_ttl),
@@ -275,7 +275,7 @@ main = function()
     ipc_match_retry_count = validate_posint(uci_get("ipc_match_retry_count"), DEFAULTS.ipc_match_retry_count),
     ipc_match_retry_sleep_ms = validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms),
     allowed_domains = domains,
-    ip_whitelist = whitelist
+    dest_whitelist = whitelist
   }
   if os.execute("mkdir -p " .. tostring(OUTPUT_DIR)) ~= 0 then
     io.stderr:write("uci_config: impossible de créer " .. tostring(OUTPUT_DIR) .. "\n")
