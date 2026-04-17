@@ -17,7 +17,8 @@ local DEFAULTS = {
     "local",
     "lan",
     "home.arpa"
-  }
+  },
+  ip_whitelist = { }
 }
 local uci_get
 uci_get = function(option)
@@ -90,6 +91,54 @@ validate_bool = function(raw, default)
   end
   return default
 end
+local validate_ip_cidr
+validate_ip_cidr = function(s)
+  if not (s and #s > 0) then
+    return nil
+  end
+  s = s:gsub("%s+", "")
+  if #s == 0 then
+    return nil
+  end
+  if s:find(":") then
+    if s:match("[^%x:%.]") then
+      return nil
+    end
+    if s:match(":::") then
+      return nil
+    end
+  else
+    if s:match("[^%d%.]") then
+      return nil
+    end
+    local parts = s:split("/")
+    if #parts > 2 then
+      return nil
+    end
+    local ip = parts[1]
+    if not (ip) then
+      return nil
+    end
+    local octets = ip:split("%.")
+    if not (#octets == 4) then
+      return nil
+    end
+    for _index_0 = 1, #octets do
+      local octet = octets[_index_0]
+      local n = tonumber(octet)
+      if not (n and n >= 0 and n <= 255) then
+        return nil
+      end
+    end
+    if #parts == 2 then
+      local mask = tonumber(parts[2])
+      if not (mask and mask >= 0 and mask <= 32) then
+        return nil
+      end
+    end
+  end
+  return s
+end
 local escape_lua_str
 escape_lua_str = function(s)
   return s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n")
@@ -120,9 +169,14 @@ generate_config = function(cfg)
     end)()),
     string.format("local IPC_MATCH_RETRY_COUNT  = %d", cfg.ipc_match_retry_count),
     string.format("local IPC_MATCH_RETRY_SLEEP_MS = %d", cfg.ipc_match_retry_sleep_ms),
-    'local NFT_TABLE              = "dns-filter"',
+    "local NFT_TABLE              = \"dns-filter-bridge\"",
+    "local NFT_FAMILY              = \"bridge\"",
+    "local NFT_FAMILY6             = \"bridge\"",
     'local NFT_SET_IP4            = "ip4_allowed"',
     'local NFT_SET_IP6            = "ip6_allowed"',
+    'local NFT_SET_MAC4           = "mac4_allowed"',
+    'local NFT_SET_MAC6           = "mac6_allowed"',
+    string.format('local NFT_IP_TIMEOUT         = "%s"', cfg.nft_ip_timeout),
     "local DNS_PORT               = 53",
     "local AF_INET                = 2",
     "local AF_INET6               = 10",
@@ -137,15 +191,28 @@ generate_config = function(cfg)
   end
   table.insert(lines, "}")
   table.insert(lines, "")
+  table.insert(lines, "local IP_WHITELIST = {")
+  local _list_1 = cfg.ip_whitelist
+  for _index_0 = 1, #_list_1 do
+    local ip = _list_1[_index_0]
+    table.insert(lines, string.format('  "%s",', escape_lua_str(ip)))
+  end
+  table.insert(lines, "}")
+  table.insert(lines, "")
   table.insert(lines, "return {")
-  local _list_1 = {
+  local _list_2 = {
     "QUEUE_QUESTIONS",
     "QUEUE_RESPONSES",
     "DOCKER_MODE",
     "ALLOWED_DOMAINS",
+    "IP_WHITELIST",
     "NFT_TABLE",
+    "NFT_FAMILY",
+    "NFT_FAMILY6",
     "NFT_SET_IP4",
     "NFT_SET_IP6",
+    "NFT_SET_MAC4",
+    "NFT_SET_MAC6",
     "NFT_IP_TIMEOUT",
     "IPC_PENDING_TTL",
     "CLIENT_EXPIRY",
@@ -162,8 +229,8 @@ generate_config = function(cfg)
     "IPC_MATCH_RETRY_COUNT",
     "IPC_MATCH_RETRY_SLEEP_MS"
   }
-  for _index_0 = 1, #_list_1 do
-    local k = _list_1[_index_0]
+  for _index_0 = 1, #_list_2 do
+    local k = _list_2[_index_0]
     table.insert(lines, string.format("  %-24s = %s,", k, k))
   end
   table.insert(lines, "}")
@@ -183,6 +250,18 @@ main = function()
   if #domains == 0 then
     domains = DEFAULTS.allowed_domains
   end
+  local raw_whitelist = uci_get_list("ip_whitelist")
+  local whitelist = { }
+  for _index_0 = 1, #raw_whitelist do
+    local ip = raw_whitelist[_index_0]
+    local valid = validate_ip_cidr(ip)
+    if valid then
+      table.insert(whitelist, valid)
+    end
+  end
+  if #whitelist == 0 then
+    whitelist = DEFAULTS.ip_whitelist
+  end
   local cfg = {
     forced_ttl = validate_posint(uci_get("forced_ttl"), DEFAULTS.forced_ttl),
     nft_ip_timeout = validate_nft_timeout(uci_get("nft_ip_timeout"), DEFAULTS.nft_ip_timeout),
@@ -195,7 +274,8 @@ main = function()
     ipc_match_retry_enabled = validate_bool(uci_get("ipc_match_retry_enabled"), DEFAULTS.ipc_match_retry_enabled),
     ipc_match_retry_count = validate_posint(uci_get("ipc_match_retry_count"), DEFAULTS.ipc_match_retry_count),
     ipc_match_retry_sleep_ms = validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms),
-    allowed_domains = domains
+    allowed_domains = domains,
+    ip_whitelist = whitelist
   }
   if os.execute("mkdir -p " .. tostring(OUTPUT_DIR)) ~= 0 then
     io.stderr:write("uci_config: impossible de créer " .. tostring(OUTPUT_DIR) .. "\n")

@@ -30,6 +30,7 @@ DEFAULTS = {
   allowed_domains: {
     "local", "lan", "home.arpa"
   }
+  ip_whitelist:          {}  -- Empty by default, configured via UCI
 }
 
 -- ── Lecture UCI ───────────────────────────────────────────────────
@@ -100,6 +101,36 @@ validate_bool = (raw, default) ->
   return false if raw == "0" or raw == "false"
   default
 
+--- Valide une adresse IP ou CIDR (IPv4 ou IPv6).
+-- @tparam string s Adresse IP ou CIDR à valider
+-- @treturn string|nil Adresse valide ou nil si invalide
+validate_ip_cidr = (s) ->
+  return nil unless s and #s > 0
+  s = s\gsub "%s+", ""
+  return nil if #s == 0
+  -- Validation basique : contient ':' pour IPv6, sinon IPv4
+  -- Format CIDR : / suivi d'un nombre
+  if s\find ":"
+    -- IPv6 : hhhhh:hhhh:hhhh:hhhh:hhhh:hhhh:hhhh:hhhh ou avec CIDR
+    return nil if s\match "[^%x:%.]"  -- caractères invalides
+    return nil if s\match ":::"  -- triple double-point invalide
+  else
+    -- IPv4 : a.b.c.d ou a.b.c.d/n
+    return nil if s\match "[^%d%.]"  -- caractères invalides
+    parts = s\split "/"
+    return nil if #parts > 2
+    ip = parts[1]
+    return nil unless ip
+    octets = ip\split "%."
+    return nil unless #octets == 4
+    for octet in *octets
+      n = tonumber octet
+      return nil unless n and n >= 0 and n <= 255
+    if #parts == 2
+      mask = tonumber parts[2]
+      return nil unless mask and mask >= 0 and mask <= 32
+  s
+
 -- ── Génération Lua ────────────────────────────────────────────────
 
 --- Échappe une chaîne pour inclusion dans un littéral Lua entre guillemets doubles.
@@ -131,9 +162,14 @@ generate_config = (cfg) ->
     string.format "local IPC_MATCH_RETRY_ENABLED = %s", if cfg.ipc_match_retry_enabled then "true" else "false"
     string.format "local IPC_MATCH_RETRY_COUNT  = %d",   cfg.ipc_match_retry_count
     string.format "local IPC_MATCH_RETRY_SLEEP_MS = %d", cfg.ipc_match_retry_sleep_ms
-    'local NFT_TABLE              = "dns-filter"'
+    "local NFT_TABLE              = \"dns-filter-bridge\""
+    "local NFT_FAMILY              = \"bridge\""
+    "local NFT_FAMILY6             = \"bridge\""
     'local NFT_SET_IP4            = "ip4_allowed"'
     'local NFT_SET_IP6            = "ip6_allowed"'
+    'local NFT_SET_MAC4           = "mac4_allowed"'
+    'local NFT_SET_MAC6           = "mac6_allowed"'
+    string.format 'local NFT_IP_TIMEOUT         = "%s"', cfg.nft_ip_timeout
     "local DNS_PORT               = 53"
     "local AF_INET                = 2"
     "local AF_INET6               = 10"
@@ -145,10 +181,16 @@ generate_config = (cfg) ->
     table.insert lines, string.format('  "%s",', escape_lua_str d)
   table.insert lines, "}"
   table.insert lines, ""
+  table.insert lines, "local IP_WHITELIST = {"
+  for ip in *cfg.ip_whitelist
+    table.insert lines, string.format('  "%s",', escape_lua_str ip)
+  table.insert lines, "}"
+  table.insert lines, ""
   table.insert lines, "return {"
   for k in *{
       "QUEUE_QUESTIONS", "QUEUE_RESPONSES", "DOCKER_MODE",
-      "ALLOWED_DOMAINS", "NFT_TABLE", "NFT_SET_IP4", "NFT_SET_IP6",
+      "ALLOWED_DOMAINS", "IP_WHITELIST", "NFT_TABLE", "NFT_FAMILY", "NFT_FAMILY6",
+      "NFT_SET_IP4", "NFT_SET_IP6", "NFT_SET_MAC4", "NFT_SET_MAC6",
       "NFT_IP_TIMEOUT", "IPC_PENDING_TTL", "CLIENT_EXPIRY",
       "NEIGH_REFRESH_COOLDOWN", "FORCED_TTL", "DNS_PORT", "AF_INET",
       "AF_INET6", "PROTO_UDP", "NFT_ADD_RETRY_COUNT", "NFT_ADD_BACKOFF_MS",
@@ -171,6 +213,13 @@ main = ->
     table.insert domains, valid if valid
   domains = DEFAULTS.allowed_domains if #domains == 0
 
+  raw_whitelist = uci_get_list "ip_whitelist"
+  whitelist    = {}
+  for ip in *raw_whitelist
+    valid = validate_ip_cidr ip
+    table.insert whitelist, valid if valid
+  whitelist = DEFAULTS.ip_whitelist if #whitelist == 0
+
   cfg = {
     forced_ttl:             validate_posint(uci_get("forced_ttl"),                   DEFAULTS.forced_ttl)
     nft_ip_timeout:         validate_nft_timeout(uci_get("nft_ip_timeout"),          DEFAULTS.nft_ip_timeout)
@@ -184,6 +233,7 @@ main = ->
     ipc_match_retry_count:  validate_posint(uci_get("ipc_match_retry_count"),       DEFAULTS.ipc_match_retry_count)
     ipc_match_retry_sleep_ms: validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms)
     allowed_domains:        domains
+    ip_whitelist:          whitelist
   }
 
   -- Création du répertoire de sortie (tmpfs sur OpenWrt, recréé après chaque reboot)

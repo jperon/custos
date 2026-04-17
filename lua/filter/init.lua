@@ -16,6 +16,8 @@ do
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
 local ip_whitelist = require("ip_whitelist")
+local IP_WHITELIST
+IP_WHITELIST = require("config").IP_WHITELIST
 local rules
 local config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
 local set_config_path
@@ -33,12 +35,18 @@ load = function()
     return 
   end
   rules = compile_rules(cfg)
-  ip_whitelist.init(cfg.ip_whitelist or { })
+  local whitelist
+  if IP_WHITELIST and #IP_WHITELIST > 0 then
+    whitelist = IP_WHITELIST
+  else
+    whitelist = cfg.ip_whitelist or { }
+  end
+  ip_whitelist.init(whitelist)
   local n = #rules
   return log_info({
     action = "filter_loaded",
     rules = n,
-    ip_whitelist = #(cfg.ip_whitelist or { })
+    ip_whitelist = #whitelist
   })
 end
 local decide

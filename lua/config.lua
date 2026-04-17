@@ -1,27 +1,11 @@
 local QUEUE_QUESTIONS = 0
 local QUEUE_RESPONSES = 1
 local QUEUE_CAPTIVE = 2
-local BRIDGE_MODE = os.getenv("BRIDGE_MODE") == "1"
-local NFQ_BRIDGE_MODE = os.getenv("NFQ_BRIDGE_MODE") == "1"
-local DOCKER_MODE = os.getenv("DOCKER_MODE") == "1"
-local NFT_FAMILY
-if NFQ_BRIDGE_MODE then
-  NFT_FAMILY = "bridge"
-else
-  NFT_FAMILY = "ip"
-end
-local NFT_FAMILY6
-if NFQ_BRIDGE_MODE then
-  NFT_FAMILY6 = "bridge"
-else
-  NFT_FAMILY6 = "ip6"
-end
-local NFT_TABLE
-if NFQ_BRIDGE_MODE then
-  NFT_TABLE = "dns-filter-bridge"
-else
-  NFT_TABLE = "dns-filter"
-end
+local BRIDGE_MODE = true
+local NFQ_BRIDGE_MODE = true
+local NFT_FAMILY = "bridge"
+local NFT_FAMILY6 = "bridge"
+local NFT_TABLE = "dns-filter-bridge"
 local NFT_SET_IP4 = "ip4_allowed"
 local NFT_SET_IP6 = "ip6_allowed"
 local NFT_SET_MAC4 = "mac4_allowed"
@@ -46,13 +30,13 @@ local AF_INET = 2
 local AF_INET6 = 10
 local PROTO_UDP = 17
 local AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
+local IP_WHITELIST = { }
 return {
   QUEUE_QUESTIONS = QUEUE_QUESTIONS,
   QUEUE_RESPONSES = QUEUE_RESPONSES,
   QUEUE_CAPTIVE = QUEUE_CAPTIVE,
   BRIDGE_MODE = BRIDGE_MODE,
   NFQ_BRIDGE_MODE = NFQ_BRIDGE_MODE,
-  DOCKER_MODE = DOCKER_MODE,
   NFT_FAMILY = NFT_FAMILY,
   NFT_FAMILY6 = NFT_FAMILY6,
   NFT_TABLE = NFT_TABLE,
@@ -75,5 +59,6 @@ return {
   AF_INET = AF_INET,
   AF_INET6 = AF_INET6,
   PROTO_UDP = PROTO_UDP,
-  AUTH_SESSIONS_FILE = AUTH_SESSIONS_FILE
+  AUTH_SESSIONS_FILE = AUTH_SESSIONS_FILE,
+  IP_WHITELIST = IP_WHITELIST
 }

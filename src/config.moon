@@ -15,8 +15,8 @@ QUEUE_CAPTIVE   = 2   -- TCP SYN/80 non autorisés (mode bridge uniquement)
 --   En mode routeur (table ip/ip6), seul le paquet IP est livré (eth_offset=0).
 -- Dans Docker (DOCKER_MODE=1), NFQUEUE est sur table ip (INPUT/OUTPUT) :
 --   BRIDGE_MODE peut être 1 (active Q2) mais NFQ_BRIDGE_MODE reste 0.
-BRIDGE_MODE     = os.getenv("BRIDGE_MODE") == "1"
-NFQ_BRIDGE_MODE = os.getenv("NFQ_BRIDGE_MODE") == "1"
+BRIDGE_MODE     = true
+NFQ_BRIDGE_MODE = true
 
 -- ── Docker mode ──────────────────────────────────────────────────
 -- When running inside Docker, dnsmasq runs on the filter container itself.
@@ -24,8 +24,6 @@ NFQ_BRIDGE_MODE = os.getenv("NFQ_BRIDGE_MODE") == "1"
 -- Q0 blocks disallowed queries before dnsmasq sees them, so there will never
 -- be a Q1 response for a blocked domain. The IPC correlation check in Q1
 -- is therefore redundant and is skipped for simplicity.
-DOCKER_MODE = os.getenv("DOCKER_MODE") == "1"
-
 -- ── Logging ─────────────────────────────────────────────────────
 -- Les messages sont écrits sur stdout (fd=1).
 -- Le superviseur de processus les capture vers le système de log natif :
@@ -34,9 +32,9 @@ DOCKER_MODE = os.getenv("DOCKER_MODE") == "1"
 --   Docker           → docker logs
 
 -- ── Noms de sets nftables ────────────────────────────────────────
-NFT_FAMILY     = if NFQ_BRIDGE_MODE then "bridge" else "ip"
-NFT_FAMILY6    = if NFQ_BRIDGE_MODE then "bridge" else "ip6"
-NFT_TABLE      = if NFQ_BRIDGE_MODE then "dns-filter-bridge" else "dns-filter"
+NFT_FAMILY     = "bridge"
+NFT_FAMILY6    = "bridge"
+NFT_TABLE      = "dns-filter-bridge"
 NFT_SET_IP4    = "ip4_allowed"
 NFT_SET_IP6    = "ip6_allowed"
 NFT_SET_MAC4   = "mac4_allowed"   -- ether_addr . ipv4_addr (client MAC + dest IPv4)
@@ -83,11 +81,15 @@ PROTO_UDP  = 17
 -- workers Q0/Q1 (via from_user). Surchargeable via cfg/filter.yml (auth.sessions_file).
 AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
 
+-- ── IP whitelist (CIDR networks bypassing DNS analysis) ─────────────
+-- Configuré via UCI (custos.main.ip_whitelist) ou filter.yml (ip_whitelist).
+-- Trafic vers ces réseaux autorisé sans résolution DNS préalable.
+IP_WHITELIST = {}
+
 -- ── Export ──────────────────────────────────────────────────────
 {
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE
   :BRIDGE_MODE, :NFQ_BRIDGE_MODE
-  :DOCKER_MODE
   :NFT_FAMILY, :NFT_FAMILY6, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
   :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY
   :IPC_PENDING_TTL
@@ -96,4 +98,5 @@ AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
   :FORCED_TTL
   :DNS_PORT, :AF_INET, :AF_INET6, :PROTO_UDP
   :AUTH_SESSIONS_FILE
+  :IP_WHITELIST
 }
