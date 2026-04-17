@@ -140,8 +140,7 @@ Detailed explanations and architecture remain in `README.md`.
 - The ruleset `nft-rules/dns-filter.nft` is generic:
   - no interface names imposed (`eth0`, `br-lan`, etc. not hardcoded),
   - filtering based on families/protocols/sets, not interface names.
-- The filter machine must be on the LAN <-> WAN path (often as transparent bridge).
-- `br_netfilter` must be active to see bridge traffic in netfilter/NFQUEUE.
+- The filter machine must be on the LAN <-> WAN path, as transparent bridge.
 
 ### Debian: installation, update, uninstall
 

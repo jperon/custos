@@ -26,7 +26,7 @@ detection — all without any C compilation step.
 │  ├── UDP/53 + TCP/53 src=LAN → NFQUEUE 0  (questions)          │
 │  └── UDP/53 + TCP/53 dst=LAN → NFQUEUE 1  (réponses)           │
 │                                                                │
-│  LuaJIT (userspace)  BRIDGE_MODE=1  BRIDGE_IFNAME=<br>         │
+│  LuaJIT (userspace)  BRIDGE_IFNAME=<br>         │
 │  ├── main.lua        supervisor + fork                         │
 │  ├── worker Q0  ─────────────────── pipe IPC ──► worker Q1    │
 │  │   parse L2/L3/L4/L7 (FFI)                    drain pipe     │
@@ -36,7 +36,7 @@ detection — all without any C compilation step.
 │  │   or send REFUSED (socket UDP/53)            ACCEPT+payload │
 │  ├── worker AUTH — HTTPS login (port 33443)                    │
 │  ├── worker Q2   — TCP/80 SYN intercept → 302 → portail        │
-│  │               (activé si BRIDGE_MODE=1)                     │
+│  │                                                              │
 │  └── logs → syslog (journald / logread)                        │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -156,7 +156,7 @@ custos/
 │       └── ndpi_v5.moon     Backend nDPI 5.0+
 ├── lua/                     Lua généré par moonc (ne pas éditer)
 ├── nft-rules/
-│   └── dns-filter.nft       Ruleset nftables universel (bridge + routeur)
+│   └── dns-filter-bridge.nft       Ruleset nftables (bridge mode)
 ├── packaging/
 │   └── openwrt/custos/
 │       └── files/usr/sbin/custos-update   Script de mise à jour des listes
@@ -165,10 +165,6 @@ custos/
 │   ├── run_tests.lua        Tests unitaires compilés
 │   ├── test_ndpi.moon       Tests du wrapper nDPI
 │   ├── test_ndpi.lua        Tests nDPI compilés
-│   ├── test_docker.moon     Tests E2E Docker source
-│   ├── test_docker.lua      Tests E2E Docker compilés
-│   ├── test_kvm.moon        Tests E2E KVM/libvirt (47 tests) source
-│   ├── test_kvm.lua         Tests E2E KVM compilés
 │   ├── test_openwrt.moon    Tests E2E OpenWrt via SSH source
 │   └── test_openwrt.lua     Tests E2E OpenWrt compilés
 ├── install-owrt.moon        Installeur OpenWrt (déploiement SSH)
@@ -626,16 +622,13 @@ Plusieurs utilisateurs (OR logique) :
 
 ## nft Ruleset
 
-The single file `nft-rules/dns-filter.nft` is a **universal ruleset** that
-works in bridge mode, router mode, or any combination (including IPv4 bridge +
-IPv6 WireGuard tunnel for SLAAC distribution). It has **no dependency on
-interface names or IP address ranges**.
+The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode**.
 
 ### How it works
 
 - DNS (UDP/TCP port 53) from LAN → **NFQUEUE 0** (questions, worker Q0)
 - DNS responses (sport 53) to LAN → **NFQUEUE 1** (responses, worker Q1)
-- TCP/80 SYN from LAN → **NFQUEUE 2** (captive portal, worker Q2, if `BRIDGE_MODE=1`)
+- TCP/80 SYN from LAN → **NFQUEUE 2** (captive portal, worker Q2)
 - LuaJIT decides ACCEPT, REFUSED, or DNSONLY; populates `ip4_allowed`/`ip6_allowed` on success
 - Clients in `authenticated_ips` bypass TCP/80 interception (Q2 sees their SYN and passes)
 - All forwarded traffic matching a set entry → ACCEPT; rest → DROP/REJECT
@@ -659,7 +652,7 @@ sysctl -w net.bridge.bridge-nf-call-iptables=1
 sysctl -w net.bridge.bridge-nf-call-ip6tables=1
 
 # Apply (no parameters needed)
-sudo nft -f nft-rules/dns-filter.nft
+sudo nft -f nft-rules/dns-filter-bridge.nft
 # or
 sudo ./setup.sh up
 ```
@@ -689,131 +682,8 @@ when `br_netfilter` intercepts L2 neighbor discovery and SLAAC frames.
 
 ---
 
-## Docker Tests
+## OpenWrt
 
-The filter runs in a privileged Docker container with host networking.
-The `docker-compose.yml` includes `client`, `filter`, `router`, and
-`wan-dns` (CoreDNS) containers.
-
-```bash
-make test-docker          # nDPI 4.x (Debian image)
-make test-docker-ndpi5    # nDPI 5.0 (Arch AUR image)
-```
-
-Manual inspection:
-```bash
-docker exec -it custos-client nslookup github.com
-docker exec -it custos-client nslookup facebook.com  # → REFUSED
-docker logs -f custos-filter
-docker compose down
-```
-
-```
-┌──────────────┐      ┌──────────────┐      ┌──────────────┐
-│   client     │      │   filter     │      │    router    │
-│ (container)  ├──────┤ (Docker,     ├──────┤ (container)  │
-│              │      │  host net)   │      │              │
-└──────────────┘      └──────────────┘      └──────────────┘
-                              │
-                     ┌──────────────┐
-                     │  wan-dns     │
-                     │ (CoreDNS)    │
-                     └──────────────┘
-```
-
----
-
-## KVM/Libvirt End-to-End Tests
-
-A full test suite (47 tests) runs against four KVM virtual machines.
-The filter VM runs CustosVirginum natively (no container).
-
-```
-┌──────────────┐      ┌──────────────┐      ┌──────────────┐
-│   client     │      │   filter     │      │    router    │
-│   (Debian)   ├──────┤ (Debian,     ├──────┤  (OpenWrt)   │
-│  10.99.0.10  │ LAN  │  native nft) │wanflt│              │
-│  fd99::10    │      │  br0 bridge  │      │              │
-└──────────────┘      └──────────────┘      └──────────────┘
-┌──────────────┐
-│   client2    │
-│   (Debian)   ├── LAN (distinct MAC 52:54:00:00:03:02)
-│  10.99.0.11  │   isolation tests
-│  fd99::11    │
-└──────────────┘
-```
-
-### Running
-
-```bash
-make test-kvm          # full cycle: up + 47 tests + down
-make test-kvm-up       # start VMs (creates them on first run)
-make test-kvm-run      # run tests only (VMs already up)
-make test-kvm-down     # stop VMs
-```
-
-### What the 47 tests cover
-
-| Category | Examples |
-|----------|---------|
-| Infrastructure | `br0` up, `bridge-nf-call-iptables`, nft tables, DHCP/SLAAC rules |
-| DNS ALLOW | `github.com` → `ip4_allowed` populated; ping + curl works after |
-| DNS REFUSED | `facebook.com` → RCODE 5 + EDE 15; ping stays blocked |
-| NXDOMAIN | `nonexistent.invalid` → NXDOMAIN forwarded |
-| IPv6 AAAA | `cloudflare.com` AAAA → `ip6_allowed` populated |
-| Per-client isolation | client2 (10.99.0.11, distinct MAC) blocked until it resolves independently |
-| Log validation | `action=ALLOW`, `action=REFUSED` present in log |
-| Auth HTTPS | Login/logout, heartbeat, sessions.lua, `from_user` DNS |
-| Captive portal Q2 | TCP/80 SYN → `captive_redirect_q2` log, `authenticated_ips` |
-| Registration | Form validation, new user, auto-login, `from_user` DNS post-inscription |
-| DNS over TCP | github.com A over TCP; TTL patched to 60s |
-
-### One-time VM setup
-
-```bash
-sudo bash libvirt/custos-libvirt.sh create
-```
-
-Downloads Debian cloud image and OpenWrt 25.12, creates four domains
-(`custos-filter`, `custos-router`, `custos-client`, `custos-client2`) with cloud-init.
-
-#### Prérequis : `debian-client-base.qcow2`
-
-`custos-client2` uses a pre-built backing image with packages already installed
-(avoids cloud-init apt delays at test time). Create it once from `custos-client`
-after its first successful boot:
-
-```bash
-# Stop client VM first
-virsh -c qemu:///system shutdown custos-client
-# Flatten the image (packages baked in)
-sudo qemu-img convert -f qcow2 -O qcow2 \
-  /var/lib/libvirt/images/custos-client.qcow2 \
-  images/debian-client-base.qcow2
-# Restart client VM
-virsh -c qemu:///system start custos-client
-```
-
-`custos-libvirt.sh create` will refuse with an error message if this file is missing.
-
-#### Variables d'environnement LuaJIT (KVM)
-
-In KVM mode, LuaJIT is started with:
-
-```
-BRIDGE_MODE=1       # activates worker Q2 (captive portal TCP/80)
-BRIDGE_IFNAME=br0   # bridge interface name for raw socket in worker_q2
-```
-
-These are passed by `test_kvm.moon` when launching the filter process.
-
-### Cleanup
-
-```bash
-sudo bash libvirt/custos-libvirt.sh delete
-```
-
----
 
 ## OpenWrt
 
