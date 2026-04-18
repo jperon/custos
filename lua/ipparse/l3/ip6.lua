@@ -3,11 +3,12 @@ do
   local _obj_0 = require("ipparse.lib.pack_compat")
   format, sp, su = _obj_0.format, _obj_0.pack, _obj_0.unpack
 end
-local insert, remove, unpack
+local insert, remove
 do
   local _obj_0 = table
-  insert, remove, unpack = _obj_0.insert, _obj_0.remove, _obj_0.unpack
+  insert, remove = _obj_0.insert, _obj_0.remove
 end
+local unpack = unpack or table.unpack
 local toarray
 toarray = require("ipparse.fun").toarray
 local checksum

@@ -7,9 +7,14 @@ local bidirectional
 bidirectional = require("ipparse.fun").bidirectional
 local parse_extension
 parse_extension = require("ipparse.l7.tls.handshake.extension").parse
+local band, rshift
+do
+  local _obj_0 = require("ipparse.lib.bit_compat")
+  band, rshift = _obj_0.band, _obj_0.rshift
+end
 local pack
 pack = function(self)
-  return sp(">B BH", self.type, (self.len >> 16), (self.len & 0xffff))
+  return sp(">B BH", self.type, rshift(self.len, 16), band(self.len, 0xffff))
 end
 local _mt = {
   __tostring = pack
@@ -20,7 +25,7 @@ parse = function(self, off)
     off = 1
   end
   local _type, _len, len, _off = su(">B BH", self, off)
-  len = len + (_len << 16)
+  len = len + lshift(_len, 16)
   return setmetatable({
     type = _type,
     len = len

@@ -30,6 +30,8 @@
 --
 -- @module pcap
 
+{:lshift} = require"ipparse.lib.bit_compat"
+
 unpack: su = require "ipparse.lib.pack_compat"
 :bin2hex, :hex2bin = require "ipparse.init"
 
@@ -112,7 +114,7 @@ parse_epb = (data, offset, endian) ->
   packet_data = data\sub packet_start, packet_start + captured_len - 1
 
   -- Calculate timestamp (microseconds since epoch, split into high/low 32-bit words)
-  timestamp = (timestamp_high << 32) + timestamp_low
+  timestamp = lshift(timestamp_high, 32) + timestamp_low
 
   epb = {
     :block_type, :block_len, :interface_id, :timestamp_high, :timestamp_low, :timestamp

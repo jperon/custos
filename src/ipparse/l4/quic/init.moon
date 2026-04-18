@@ -33,6 +33,7 @@
 
 pack: sp, unpack: su, :byte = require "ipparse.lib.pack_compat"
 :bidirectional = require"ipparse.fun"
+{:band} = require"ipparse.lib.bit_compat"
 
 versions = {v.version, v for v in *[require"ipparse.l4.quic.#{v}" for v in *{"version_negotiation", "v1"}]}
 
@@ -110,7 +111,7 @@ parse_short_header = (off, byte1, dst_id=nil, src_connection_id=nil, version=nil
 -- @treturn number The next offset after parsing.
 parse = (off=1, ...) =>
   byte1 = byte @, off
-  if byte1 & HEADER_FORM == 0
+  if band(byte1, HEADER_FORM) == 0
     parse_short_header @, off+1, byte1, ...
   else
     parse_long_header @, off+1, byte1

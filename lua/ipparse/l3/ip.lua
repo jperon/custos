@@ -20,9 +20,14 @@ do
   local _obj_0 = require("ipparse.lib.pack_compat")
   sub, su = _obj_0.sub, _obj_0.unpack
 end
+local band, lshift, rshift
+do
+  local _obj_0 = require("ipparse.lib.bit_compat")
+  band, lshift, rshift = _obj_0.band, _obj_0.lshift, _obj_0.rshift
+end
 local get_version
 get_version = function(self, off)
-  return su("B", self, off) >> 4
+  return rshift(su("B", self, off), 4)
 end
 local pack
 pack = function(self)
@@ -33,9 +38,9 @@ parse = function(self, off, eth_proto)
   local res, _off
   local v = eth_proto or get_version(self, off)
   local _exp_0 = v
-  if IP6 == _exp_0 then
+  if 6 == _exp_0 then
     res, _off = ip6(self, off)
-  elseif IP4 == _exp_0 then
+  elseif 4 == _exp_0 then
     res, _off = ip4(self, off)
   else
     return nil, "Unknown IP version " .. tostring(v) .. " at offset " .. tostring(off)
@@ -77,14 +82,14 @@ contains_ip = function(self, i, nmask)
       return false
     end
     nmask = su("B", self)
-    if nmask == (#i << 3) then
+    if nmask == lshift(#i, 3) then
       return sub(self, 2) == i
     end
   end
-  local fmt, shft = "c" .. tostring(nmask >> 3) .. "B", 8 - (nmask & 0x7)
+  local fmt, shft = "c" .. tostring(rshift(nmask, 3)) .. "B", 8 - band(nmask, 0x7)
   local nbytes, nbits = su(fmt, self, 2)
   local sbytes, sbits = su(fmt, i)
-  if nbytes == sbytes and (nbits >> shft) == (sbits >> shft) then
+  if nbytes == sbytes and rshift(nbits, shft) == rshift(sbits, shft) then
     return true
   end
   return false

@@ -29,7 +29,8 @@
 -- @module ip6
 
 :format, pack: sp, unpack: su = require "ipparse.lib.pack_compat"
-:insert, :remove, :unpack = table
+:insert, :remove = table
+unpack or= table.unpack
 :toarray = require"ipparse.fun"
 checksum: checksum = require"ipparse.l3.lib"
 {:band, :bor, :bnot, :lshift, :rshift} = require"ipparse.lib.bit_compat"

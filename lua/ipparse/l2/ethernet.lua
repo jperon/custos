@@ -5,8 +5,7 @@ do
   local _obj_0 = require("ipparse.lib.pack_compat")
   format, sp, su = _obj_0.format, _obj_0.pack, _obj_0.unpack
 end
-local unpack
-unpack = table.unpack
+local unpack = unpack or table.unpack
 local pack
 pack = function(self)
   return sp("c6 c6 >H", self.dst, self.src, self.protocol) .. tostring(self.data or '')

@@ -5,6 +5,8 @@ do
 end
 local bidirectional
 bidirectional = require("ipparse.fun").bidirectional
+local band
+band = require("ipparse.lib.bit_compat").band
 local versions
 do
   local _tbl_0 = { }
@@ -116,7 +118,7 @@ parse = function(self, off, ...)
     off = 1
   end
   local byte1 = byte(self, off)
-  if byte1 & HEADER_FORM == 0 then
+  if band(byte1, HEADER_FORM) == 0 then
     return parse_short_header(self, off + 1, byte1, ...)
   else
     return parse_long_header(self, off + 1, byte1)

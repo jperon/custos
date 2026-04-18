@@ -1,3 +1,5 @@
+local lshift
+lshift = require("ipparse.lib.bit_compat").lshift
 local su
 su = require("ipparse.lib.pack_compat").unpack
 local bin2hex, hex2bin
@@ -61,7 +63,7 @@ parse_epb = function(data, offset, endian)
   local block_type, block_len, interface_id, timestamp_high, timestamp_low, captured_len, original_len = su(tostring(endian) .. "I4I4I4I4I4I4I4", data, offset)
   local packet_start = offset + 28
   local packet_data = data:sub(packet_start, packet_start + captured_len - 1)
-  local timestamp = (timestamp_high << 32) + timestamp_low
+  local timestamp = lshift(timestamp_high, 32) + timestamp_low
   local epb = {
     block_type = block_type,
     block_len = block_len,

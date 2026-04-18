@@ -27,7 +27,7 @@
 
 :bidirectional = require"ipparse.fun"
 :format, pack: sp, unpack: su = require "ipparse.lib.pack_compat"
-:unpack = table
+unpack or= table.unpack
 
 --- Packs the Ethernet frame fields into a binary string.
 -- Constructs the binary representation of the Ethernet frame, including destination MAC, source MAC, EtherType, and optional payload data.

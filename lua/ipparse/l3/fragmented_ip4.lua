@@ -3,6 +3,8 @@ local data_new
 data_new = require("data").new
 local sort
 sort = table.sort
+local lshift
+lshift = require("ipparse.lib.bit_compat").lshift
 local fragmented = { }
 return {
   collect = function(self)
@@ -10,7 +12,7 @@ return {
     local fragments = fragmented[id] or { }
     fragmented[id] = fragments
     local _skb, off, data_off, data_len, mf = self.skb, self.off, self.data_off, self.data_len, self.mf
-    local frag_off = self.fragmentation_off << 3
+    local frag_off = lshift(self.fragmentation_off, 3)
     local total_len = off + frag_off + data_off + data_len
     local max_len = total_len > 10240 and 65535 or 10240
     if max_len > 65535 then

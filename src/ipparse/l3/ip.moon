@@ -25,13 +25,14 @@
 parse: ip6, new: ip6_new, pack: ip6_pack, :ip62s, :s2ip6, :net62s, :s2net6 = require"ipparse.l3.ip6"
 parse: ip4, new: ip4_new, pack: ip4_pack, :ip42s, :s2ip4, :net42s, :s2net4 = require"ipparse.l3.ip4"
 :sub, unpack: su = require "ipparse.lib.pack_compat"
+{:band, :lshift, :rshift} = require"ipparse.lib.bit_compat"
 
 --- Determines the IP version from a binary string.
 -- @tparam string self The binary string containing the IP header.
 -- @tparam number off The offset to start reading from.
 -- @treturn number The IP version (4 or 6).
 get_version = (off) =>
-  su("B", @, off) >> 4
+  rshift(su("B", @, off), 4)
 
 --- Packs the IP data into a binary string.
 -- Delegates to the appropriate IPv4 or IPv6 pack function based on the version.
@@ -50,9 +51,9 @@ parse = (off, eth_proto) =>
   local res, _off
   v = eth_proto or get_version @, off
   switch v
-    when IP6
+    when 6
       res, _off = ip6 @, off
-    when IP4
+    when 4
       res, _off = ip4 @, off
     else return nil, "Unknown IP version #{v} at offset #{off}"
   return nil, "Failed to parse IP header" if not res -- Should not happen if version is known
@@ -103,11 +104,11 @@ contains_ip = (i, nmask) =>
   if not nmask
     return false if #@ ~= #i+1
     nmask = su "B", @
-    return sub(@, 2) == i if nmask == (#i << 3)
-  fmt, shft = "c#{nmask >> 3}B", 8 - (nmask & 0x7)
+    return sub(@, 2) == i if nmask == lshift(#i, 3)
+  fmt, shft = "c#{rshift(nmask, 3)}B", 8 - band(nmask, 0x7)
   nbytes, nbits = su fmt, @, 2
   sbytes, sbits = su fmt, i
-  return true if nbytes == sbytes and (nbits >> shft) == (sbits >> shft)
+  return true if nbytes == sbytes and rshift(nbits, shft) == rshift(sbits, shft)
   false
 
 --- Checks whether a network contains a specific subnet.
