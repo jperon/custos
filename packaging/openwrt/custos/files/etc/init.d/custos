@@ -11,15 +11,11 @@ CRONTABS_ROOT=/etc/crontabs/root
 CUSTOS_CRON_MARKER="# custos-update-lists"
 
 # Configuration nftables
-NFT_RULES_FILE="$CUSTOS_DIR/dns-filter.nft"
+NFT_RULES_FILE="$CUSTOS_DIR/dns-filter-bridge.nft"
 
 start_service() {
     [ "$(uci get custos.main.enabled 2>/dev/null)" = "0" ] && return 0
     [ -z "$PROG" ] && { echo "custos: luajit introuvable"; return 1; }
-
-    modprobe br_netfilter 2>/dev/null || true
-    sysctl -qw net.bridge.bridge-nf-call-iptables=1 2>/dev/null || true
-    sysctl -qw net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true
 
     # Génère /var/run/custos/config.lua depuis /etc/config/custos.
     # En cas d'échec, custos utilise le config.lua compilé dans CUSTOS_DIR.
@@ -138,7 +134,7 @@ _kill_workers() {
 
 # ── Gestion des règles nftables ───────────────────────────────────────
 
-# Applique les règles nftables de dns-filter.nft
+# Applique les règles nftables de dns-filter-bridge.nft
 _apply_nft_rules() {
     [ ! -f "$NFT_RULES_FILE" ] && {
         echo "custos: fichier de règles nftables introuvable: $NFT_RULES_FILE"
@@ -146,7 +142,7 @@ _apply_nft_rules() {
     }
 
     echo "custos: application des règles nftables..."
-    
+
     # Applique les règles nftables
     if nft -f "$NFT_RULES_FILE"; then
         echo "custos: règles nftables appliquées avec succès"
@@ -160,10 +156,9 @@ _apply_nft_rules() {
 # Nettoie les règles nftables appliquées par le service
 _cleanup_nft_rules() {
     echo "custos: nettoyage des règles nftables..."
-    
-    # Supprime les tables IPv4 et IPv6 si elles existent
-    nft delete table ip dns-filter 2>/dev/null || true
-    nft delete table ip6 dns-filter 2>/dev/null || true
-    
+
+    # Supprime la table bridge si elle existe
+    nft delete table bridge dns-filter-bridge 2>/dev/null || true
+
     echo "custos: règles nftables nettoyées"
 }

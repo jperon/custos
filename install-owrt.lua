@@ -281,20 +281,29 @@ Installer = function(cfg)
     end,
     install_initd = function(self)
       step("Installation du service init.d/custos (procd)")
-      local bridge_env = "\n    procd_set_param env BRIDGE_MODE=1 NFQ_BRIDGE_MODE=1"
-      local stop_table = "nft delete table bridge dns-filter-bridge 2>/dev/null || true"
-      local nft_src = '$CUSTOS_DIR/dns-filter-bridge.nft'
-      local service = "#!/bin/sh /etc/rc.common\nUSE_PROCD=1\nSTART=95\nSTOP=05\nPROG=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)\nCUSTOS_DIR=" .. tostring(self.cfg.dest) .. "\nstart_service() {\n    [ \"$(uci get custos.main.enabled 2>/dev/null)\" = \"0\" ] && return 0\n    [ -z \"$PROG\" ] && { echo \"custos: luajit introuvable\"; return 1; }\n\n    modprobe br_netfilter 2>/dev/null || true\n    sysctl -qw net.bridge.bridge-nf-call-iptables=1  2>/dev/null || true\n    sysctl -qw net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true\n\n    $PROG $CUSTOS_DIR/uci_config.lua || \\\n        echo \"custos: avertissement — génération config UCI échouée, utilise les défauts compilés\"\n\n    # Charge les règles nftables\n    _nft_load || echo \"custos: avertissement — règles nft non chargées, démarrage en mode dégradé\"\n\n    procd_open_instance\n    procd_set_param command $PROG $CUSTOS_DIR/main.lua" .. tostring(bridge_env) .. "\n    procd_set_param env LUA_PATH=\"/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;\" LUA_CPATH=\"/usr/lib/lua/?.so;;\" CUSTOS_FILTER_CONFIG=\"/etc/custos/filter.yml\"\n    procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}\n    procd_set_param stdout 1\n    procd_set_param stderr 1\n    procd_close_instance\n}\n\nstop_service() {\n    " .. tostring(stop_table) .. "\n}\n\n_nft_load() {\n    NFT_SRC=\"" .. tostring(nft_src) .. "\"\n    [ -f \"$NFT_SRC\" ] || { echo \"custos: $NFT_SRC introuvable\"; return 1; }\n    nft -f \"$NFT_SRC\"\n}\n\nreload_service() {\n    stop\n    start\n}\n\nservice_triggers() {\n    procd_add_reload_trigger \"custos\"\n}\n"
+      local init_src = "packaging/openwrt/custos/files/etc/init.d/custos"
       local tmplocal = "tmp/owrt-custos-initd"
       if not (self.cfg.dry) then
-        local fh = io.open(tmplocal, "w")
-        if fh then
-          fh:write(service)
-          fh:close()
+        local fh = io.open(init_src, "r")
+        if not (fh) then
+          fail("Impossible de lire " .. tostring(init_src))
+          return false
         end
+        local content = fh:read("*a")
+        fh:close()
+        content = content:gsub("/usr/share/custos", self.cfg.dest)
+        os.execute("mkdir -p tmp")
+        fh = io.open(tmplocal, "w")
+        if not (fh) then
+          fail("Impossible d'écrire " .. tostring(tmplocal))
+          return false
+        end
+        fh:write(content)
+        fh:close()
+      else
+        io.write("  " .. tostring(CYAN) .. "DRY" .. tostring(NC) .. " adapt " .. tostring(init_src) .. " → " .. tostring(tmplocal) .. "\n")
       end
-      local ok_scp = self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/etc/init.d/custos")
-      if not (ok_scp) then
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/etc/init.d/custos")) then
         fail("Échec de la copie du script init.d")
         return false
       end
