@@ -102,9 +102,6 @@ build_blocked_response = function(dns_orig, dns_raw)
     }
     dns.header.ancount = 1
   end
-  log_warn({
-    line = 105
-  })
   add_ede(dns, EDE_BLOCKED, EDE_BLOCKED_TEXT)
   return tostring(dns)
 end
@@ -114,9 +111,6 @@ add_ede_ttl = function(dns_payload)
   if not (dns) then
     return dns_payload
   end
-  log_warn({
-    line = 118
-  })
   add_ede(dns, EDE_TTL_MODIFIED, EDE_TTL_TEXT)
   return tostring(dns)
 end
