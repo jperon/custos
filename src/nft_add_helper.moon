@@ -9,7 +9,7 @@ try_add_with_retries = (fn, ...) ->
   attempts = NFT_ADD_RETRY_COUNT or 3
   backoffs = NFT_ADD_BACKOFF_MS or {20, 50, 100}
 
-  for i in [1..attempts]
+  for i = 1, attempts
     ok = fn ...
     return true if ok
     if i < attempts

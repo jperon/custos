@@ -508,26 +508,43 @@ test "patch_and_checksum — TCP 2-segment CNAME+A patches all TTLs", ->
   assert_eq patched3\byte(base + 62 + 1 + 1), 0, "RR2 TTL byte1 = 0"
   assert_eq patched3\byte(base + 62 + 2 + 1), 0, "RR2 TTL byte2 = 0"
 
-m_ip = dofile "lua/parse/ip.lua"
-read_u8     = m_ip.read_u8
-read_u16    = m_ip.read_u16
-read_u32    = m_ip.read_u32
-format_ipv4 = m_ip.format_ipv4
-parse_ipv4  = m_ip.parse_ipv4
-parse_ipv6  = m_ip.parse_ipv6
+-- parse/ip.moon deleted - migrated to ipparse
+-- m_ip = dofile "lua/parse/ip.lua"
+-- read_u8     = m_ip.read_u8
+-- read_u16    = m_ip.read_u16
+-- read_u32    = m_ip.read_u32
+-- format_ipv4 = m_ip.format_ipv4
+-- parse_ipv4  = m_ip.parse_ipv4
+-- parse_ipv6  = m_ip.parse_ipv6
 
-test "read_u16 big-endian", ->
-  s = "\x12\x34\x56\x78"
-  assert_eq read_u16(s, 1), 0x1234, "offset 1"
-  assert_eq read_u16(s, 3), 0x5678, "offset 3"
+-- Tests for parse/ip removed - module deleted
+-- test "read_u16 big-endian", ->
+--   s = "\x12\x34\x56\x78"
+--   assert_eq read_u16(s, 1), 0x1234, "offset 1"
+--   assert_eq read_u16(s, 3), 0x5678, "offset 3"
 
-test "read_u32 big-endian", ->
-  s = "\xDE\xAD\xBE\xEF"
-  assert_eq read_u32(s, 1), 0xDEADBEEF, "u32"
+-- test "read_u32 big-endian", ->
+--   s = "\xDE\xAD\xBE\xEF"
+--   assert_eq read_u32(s, 1), 0xDEADBEEF, "u32"
 
-test "format_ipv4", ->
-  s = "\xC0\xA8\x01\x01"  -- 192.168.1.1
-  assert_eq format_ipv4(s, 1), "192.168.1.1", "format"
+-- test "format_ipv4", ->
+--   s = "\xC0\xA8\x01\x01"  -- 192.168.1.1
+--   assert_eq format_ipv4(s, 1), "192.168.1.1", "format"
+
+-- Remaining parse/ip tests commented out
+-- test "parse_ipv4 — header minimal", ->
+-- test "parse_ipv4 — header minimal", ->
+-- test "parse_ipv6 — header minimal", ->
+-- test "parse_ipv6 — Hop-by-Hop", ->
+-- test "parse_ipv6 — Hop-by-Hop + Routing", ->
+-- test "parse_ipv4 — paquet UDP minimal", ->
+-- test "parse_ipv4 — paquet trop court → nil", ->
+-- test "parse_ipv6 — paquet UDP minimal", ->
+-- test "parse_ipv6 — Hop-by-Hop + UDP", ->
+-- test "build_nxdomain -- header NXDOMAIN + synthetic AAAA + EDE OPT", ->
+-- test "build_refused -- header REFUSED + EDE OPT", ->
+-- test "build_refused -- OPT RR EDE bytes", ->
+-- test "patch_ttl — réécrit 4 octets TTL dans le buffer", ->
 
 -- Tests pour nft_add_helper retry
 test "nft_add_helper retries and succeeds", ->
@@ -556,304 +573,178 @@ test "nft_add_helper returns false after retries", ->
   assert_eq ok, false, "should fail after all retries"
   assert_eq calls, 3, "should have been called NFT_ADD_RETRY_COUNT times"
 
-test "parse_ipv4 — paquet UDP minimal", ->
-  dns    = make_dns "\3www\6github\3com\0", 1, false
-  raw    = make_ipv4_udp_dns "192.168.1.42", "8.8.8.8", 54321, 53, dns
-  ip_hdr = parse_ipv4 raw
-  assert ip_hdr, "parse_ipv4 retourne nil"
-  assert_eq ip_hdr.version,  4,              "version"
-  assert_eq ip_hdr.ihl,      20,             "ihl"
-  assert_eq ip_hdr.protocol, 17,             "proto UDP"
-  assert_eq ip_hdr.src_ip,   "192.168.1.42", "src_ip"
-  assert_eq ip_hdr.dst_ip,   "8.8.8.8",      "dst_ip"
+-- test "parse_ipv4 — paquet UDP minimal", ->
+--   dns    = make_dns "\3www\6github\3com\0", 1, false
+--   raw    = make_ipv4_udp_dns "192.168.1.42", "8.8.8.8", 54321, 53, dns
+--   ip_hdr = parse_ipv4 raw
+--   assert ip_hdr, "parse_ipv4 retourne nil"
+--   assert_eq ip_hdr.version,  4,              "version"
+--   assert_eq ip_hdr.ihl,      20,             "ihl"
+--   assert_eq ip_hdr.protocol, 17,             "proto UDP"
+--   assert_eq ip_hdr.src_ip,   "192.168.1.42", "src_ip"
+--   assert_eq ip_hdr.dst_ip,   "8.8.8.8",      "dst_ip"
 
-test "parse_ipv4 — paquet trop court → nil", ->
-  assert_eq parse_ipv4("\x45\x00\x00"), nil, "trop court"
+-- test "parse_ipv4 — paquet trop court → nil", ->
+--   assert_eq parse_ipv4("\x45\x00\x00"), nil, "trop court"
 
-test "parse_ipv6 — paquet UDP minimal", ->
-  dns  = make_dns "\x06github\x03com\x00", 1, false
-  src6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x42"
-  dst6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
-  raw  = make_ipv6_udp_dns src6, dst6, 54321, 53, dns
-  ip_hdr = parse_ipv6 raw
-  assert ip_hdr, "parse_ipv6 retourne nil"
-  assert_eq ip_hdr.version,  6,  "version=6"
-  assert_eq ip_hdr.ihl,      40, "ihl=40 (pas d'ext headers)"
-  assert_eq ip_hdr.protocol, 17, "proto UDP"
-  assert_eq ip_hdr.src_ip,   "2001:db8:0:0:0:0:0:42", "src_ip"
-  assert_eq ip_hdr.dst_ip,   "2001:db8:0:0:0:0:0:1",  "dst_ip"
-  assert (ip_hdr.src_ip_raw and #ip_hdr.src_ip_raw == 16), "src_ip_raw 16 octets"
+-- test "parse_ipv6 — paquet UDP minimal", ->
+--   dns  = make_dns "\x06github\x03com\x00", 1, false
+--   src6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x42"
+--   dst6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+--   raw  = make_ipv6_udp_dns src6, dst6, 54321, 53, dns
+--   ip_hdr = parse_ipv6 raw
+--   assert ip_hdr, "parse_ipv6 retourne nil"
+--   assert_eq ip_hdr.version,  6,  "version=6"
+--   assert_eq ip_hdr.ihl,      40, "ihl=40 (pas d'ext headers)"
+--   assert_eq ip_hdr.protocol, 17, "proto UDP"
+--   assert_eq ip_hdr.src_ip,   "2001:db8:0:0:0:0:0:42", "src_ip"
+--   assert_eq ip_hdr.dst_ip,   "2001:db8:0:0:0:0:0:1",  "dst_ip"
+--   assert (ip_hdr.src_ip_raw and #ip_hdr.src_ip_raw == 16), "src_ip_raw 16 octets"
 
-test "parse_ipv6 — Hop-by-Hop + UDP", ->
-  -- 8-byte Hop-by-Hop: NH=17, Len=0, pad×6.
-  hbh  = string.char 17, 0, 0, 0, 0, 0, 0, 0
-  dns  = make_dns "\x06github\x03com\x00", 1, false
-  src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
-  dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
-  raw  = make_ipv6_ext_udp_dns src6, dst6, 54321, 53, dns, 0, hbh
-  ip_hdr = parse_ipv6 raw
-  assert ip_hdr, "parse_ipv6 nil avec Hop-by-Hop"
-  assert_eq ip_hdr.version,  6,  "version=6"
-  assert_eq ip_hdr.ihl,      48, "ihl=48 (40+8)"
-  assert_eq ip_hdr.protocol, 17, "proto UDP"
-  assert (#ip_hdr.src_ip_raw == 16), "src_ip_raw 16 octets"
+-- test "parse_ipv6 — Hop-by-Hop + UDP", ->
+--   -- 8-byte Hop-by-Hop: NH=17, Len=0, pad×6.
+--   hbh  = string.char 17, 0, 0, 0, 0, 0, 0, 0
+--   dns  = make_dns "\x06github\x03com\x00", 1, false
+--   src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+--   dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+--   raw  = make_ipv6_ext_udp_dns src6, dst6, 54321, 53, dns, 0, hbh
+--   ip_hdr = parse_ipv6 raw
+--   assert ip_hdr, "parse_ipv6 nil avec Hop-by-Hop"
+--   assert_eq ip_hdr.version,  6,  "version=6"
+--   assert_eq ip_hdr.ihl,      48, "ihl=48 (40+8)"
+--   assert_eq ip_hdr.protocol, 17, "proto UDP"
+--   assert (#ip_hdr.src_ip_raw == 16), "src_ip_raw 16 octets"
+--  assert ip_hdr, "parse_ipv6 nil avec Hop-by-Hop"
+--  assert_eq ip_hdr.version,  6,  "version=6"
+--  assert_eq ip_hdr.ihl,      48, "ihl=48 (40+8)"
+--  assert_eq ip_hdr.protocol, 17, "proto UDP"
+--  assert (#ip_hdr.src_ip_raw == 16), "src_ip_raw 16 octets"
 
 -- ════════════════════════════════════════════════════════════════
 -- Tests parse/dns
 -- ════════════════════════════════════════════════════════════════
-io.write "\n── parse/dns ──\n"
+-- parse/dns.moon deleted - migrated to ipparse.l7.dns in worker_q1.moon
+-- io.write "\n── parse/dns ──\n"
 
-package.loaded["parse/ip"] = dofile "lua/parse/ip.lua"
-m_dns         = dofile "lua/parse/dns.lua"
-decode_name   = m_dns.decode_name
-parse_dns     = m_dns.parse_dns
-QTYPE         = m_dns.QTYPE
-RCODE         = m_dns.RCODE
-patch_ttl     = m_dns.patch_ttl
-build_refused = m_dns.build_refused
-build_nxdomain = m_dns.build_nxdomain
+-- package.loaded["parse/ip"] = dofile "lua/parse/ip.lua"
+-- m_dns         = dofile "lua/parse/dns.lua"
+-- decode_name   = m_dns.decode_name
+-- parse_dns     = m_dns.parse_dns
+-- QTYPE         = m_dns.QTYPE
+-- RCODE         = m_dns.RCODE
+-- patch_ttl     = m_dns.patch_ttl
+-- build_refused = m_dns.build_refused
+-- build_nxdomain = m_dns.build_nxdomain
 
-test "decode_name — labels simples", ->
-  buf = "\3www\8facebook\3com\0"
-  name, consumed = decode_name buf, 1
-  assert_eq name,     "www.facebook.com", "name"
-  assert_eq consumed, #buf,               "consumed"
+-- Tests for parse/dns removed - module deleted
+-- test "decode_name — labels simples", ->
+-- test "decode_name — pointeur de compression", ->
+-- test "decode_name — protection boucle infinie", ->
+-- test "parse_dns — question A www.github.com", ->
+-- test "parse_dns — réponse avec RR A", ->
+-- test "build_nxdomain -- header NXDOMAIN + synthetic A + EDE OPT", ->
+-- test "build_nxdomain -- header NXDOMAIN + synthetic AAAA + EDE OPT", ->
+-- test "build_refused -- header REFUSED + EDE OPT", ->
+-- test "build_refused -- OPT RR EDE bytes", ->
+-- test "patch_ttl — réécrit 4 octets TTL dans le buffer", ->
 
-test "decode_name — pointeur de compression", ->
-  -- Un message DNS réaliste : header 12B + question "foo.bar" + RR avec pointeur.
-  -- On construit un buffer où :
-  --   offset 0-based 0  = '\x03foo\x03bar\x00' (9 octets)
-  --   offset 0-based 9  = pointeur 0xC0 0x00 → renvoie à l'offset 0 = "foo.bar"
-  -- En 1-based Lua : base commence à pos 1, pointeur à pos 10.
-  base = "\x03foo\x03bar\x00"   -- 9 octets (offset 0-based : 0..8)
-  ptr  = "\xC0\x00"             -- 0xC0 0x00 : pointe sur offset 0-based 0
-  buf  = base .. ptr            -- 11 octets
-  -- On demande le nom à partir du pointeur (pos 1-based = 10)
-  name, consumed = decode_name buf, 10
-  assert_eq name,     "foo.bar", "compressed name"
-  assert_eq consumed, 2,         "consumed = 2 (juste le pointeur)"
-
-test "decode_name — protection boucle infinie", ->
-  -- Pointeurs circulaires : offset 0 → offset 2 → offset 0 → ...
-  buf = "\xC0\x02\xC0\x00"
-  name, consumed = decode_name buf, 1
-  assert_eq name, nil, "boucle circulaire detectee → nil"
-
-test "parse_dns — question A www.github.com", ->
-  qname       = "\3www\6github\3com\0"
-  dns_payload = make_dns qname, QTYPE.A, false, 0xABCD
-  parsed      = parse_dns dns_payload
-  assert parsed, "parse_dns nil"
-  assert_eq parsed.hdr.txid,        0xABCD,         "txid"
-  assert_eq parsed.hdr.is_response, false,           "is_response"
-  assert_eq parsed.hdr.qdcount,     1,               "qdcount"
-  assert_eq #parsed.questions,      1,               "1 question"
-  assert_eq parsed.questions[1].qname, "www.github.com", "qname"
-  assert_eq parsed.questions[1].qtype, QTYPE.A,          "qtype A"
-
-test "parse_dns — réponse avec RR A", ->
-  -- Construit une réponse avec 1 RR de type A (1.2.3.4)
-  qname_enc = "\6github\3com\0"
-  txid  = 0x5678
-  -- Header : réponse, 1 question, 1 answer
-  -- txid=0x5678, QR=1 RD=1 RA=1, qdcount=1, ancount=1
-  hdr = string.char(
-    0x56, 0x78,
-    0x81, 0x80,
-    0, 1,
-    0, 1,
-    0, 0, 0, 0
-  )
-  question = qname_enc .. string.char(0, 1, 0, 1)  -- A IN
-  -- RR : pointeur vers qname (offset 12, 0-based → 0xC00C), A, IN, TTL=300, RDATA=1.2.3.4
-  -- ptr(2) + type A + class IN(4) + TTL=300(4) + rdlen=4(2) + 1.2.3.4(4)
-  rr = "\xC0\x0C" ..
-    string.char(0, 1, 0, 1) ..
-    string.char(0, 0, 1, 0x2C) ..
-    string.char(0, 4) ..
-    string.char(1, 2, 3, 4)
-  dns_payload = hdr .. question .. rr
-  parsed = parse_dns dns_payload
-  assert parsed, "parse_dns nil"
-  assert_eq parsed.hdr.is_response,        true,     "is_response"
-  assert_eq parsed.hdr.ancount,            1,        "ancount"
-  assert_eq #parsed.answers,               1,        "1 answer"
-  assert_eq parsed.answers[1].rdata_str,   "1.2.3.4","rdata_str"
-  assert_eq parsed.answers[1].rtype,       QTYPE.A,  "rtype A"
-  assert_eq parsed.answers[1].ttl,         300,       "ttl original"
-
-test "build_nxdomain -- header NXDOMAIN + synthetic A + EDE OPT", ->
-  qname   = "\8facebook\3com\0"   -- 13 octets
-  dns_buf = make_dns qname, QTYPE.A, false, 0xBEEF
-  dns_obj = parse_dns dns_buf
-  assert dns_obj, "parse_dns nil"
-  nxdomain = build_nxdomain dns_obj, dns_buf
-  assert nxdomain, "build_nxdomain nil"
-  resp = parse_dns nxdomain
-  assert resp, "parse_dns sur la reponse NXDOMAIN nil"
-  assert_eq resp.hdr.txid,        0xBEEF,        "txid copié"
-  assert_eq resp.hdr.is_response, true,           "QR=1"
-  assert_eq resp.hdr.rcode,       RCODE.NXDOMAIN, "RCODE=3 NXDOMAIN"
-  assert_eq resp.hdr.qdcount,     1,              "qdcount copié"
-  assert_eq resp.hdr.ancount,     1,              "ancount=1 (synthetic answer)"
-  assert_eq resp.hdr.arcount,     1,              "arcount=1 EDNS OPT"
-  assert_eq #resp.questions,      1,              "1 question copiée"
-  assert_eq resp.questions[1].qname, "facebook.com", "qname copié"
-  assert_eq #resp.answers,       1,              "1 synthetic answer"
-  assert_eq resp.answers[1].rdata_str, "0.0.0.0", "synthetic A = 0.0.0.0"
-
-test "build_nxdomain -- header NXDOMAIN + synthetic AAAA + EDE OPT", ->
-  qname   = "\8facebook\3com\0"   -- 13 octets
-  dns_buf = make_dns qname, QTYPE.AAAA, false, 0xDEAD
-  dns_obj = parse_dns dns_buf
-  assert dns_obj, "parse_dns nil"
-  nxdomain = build_nxdomain dns_obj, dns_buf
-  assert nxdomain, "build_nxdomain nil"
-  resp = parse_dns nxdomain
-  assert resp, "parse_dns sur la reponse NXDOMAIN nil"
-  assert_eq resp.hdr.txid,        0xDEAD,        "txid copié"
-  assert_eq resp.hdr.is_response, true,           "QR=1"
-  assert_eq resp.hdr.rcode,       RCODE.NXDOMAIN, "RCODE=3 NXDOMAIN"
-  assert_eq resp.hdr.ancount,     1,              "ancount=1 (synthetic answer)"
-  assert_eq #resp.answers,       1,              "1 synthetic answer"
-  assert_eq resp.answers[1].rdata_str, "0:0:0:0:0:0:0:0", "synthetic AAAA = :: (expanded)"
-
-test "build_refused -- header REFUSED + EDE OPT", ->
-  qname   = "\8facebook\3com\0"   -- 13 octets
-  dns_buf = make_dns qname, QTYPE.A, false, 0xBEEF
-  dns_obj = parse_dns dns_buf
-  assert dns_obj, "parse_dns nil"
-  refused = build_refused dns_obj, dns_buf
-  assert refused, "build_refused nil"
-  resp = parse_dns refused
-  assert resp, "parse_dns sur la reponse REFUSED nil"
-  assert_eq resp.hdr.txid,        0xBEEF,        "txid copié"
-  assert_eq resp.hdr.is_response, true,           "QR=1"
-  assert_eq resp.hdr.rcode,       RCODE.REFUSED,  "RCODE=5 REFUSED"
-  assert_eq resp.hdr.qdcount,     1,              "qdcount copié"
-  assert_eq resp.hdr.ancount,     0,              "ancount=0"
-  assert_eq resp.hdr.arcount,     1,              "arcount=1 EDNS OPT"
-  assert_eq #resp.questions,      1,              "1 question copiée"
-  assert_eq resp.questions[1].qname, "facebook.com", "qname copié"
-
-test "build_refused -- OPT RR EDE bytes", ->
-  qname   = "\3foo\3com\0"         -- 9 octets
-  dns_buf = make_dns qname, QTYPE.A, false, 0x1234
-  dns_obj = parse_dns dns_buf
-  refused = build_refused dns_obj, dns_buf
-  assert refused, "build_refused nil"
-  -- Question section = qname (9B) + type(2) + class(2) = 13B
-  -- OPT RR starts at offset 12 (header) + 13 (question) + 1 = 26 (1-based)
-  q_len     = #qname + 4   -- qname + qtype(2) + qclass(2)
-  opt_start = 12 + q_len + 1   -- 1-based
-  -- EDE_EXTRA_TEXT = "Ne intretis." → N=12 ; RDLENGTH=18 (0x12) ; OPTION-LEN=14 (0x0E)
-  ede_n   = #m_dns.EDE_EXTRA_TEXT   -- 12
-  rdlen   = 6 + ede_n              -- 18
-  opt_len = 2 + ede_n              -- 14
-  assert_eq refused\byte(opt_start),    0x00, "OPT NAME = root"
-  assert_eq refused\byte(opt_start+1),  0x00, "OPT TYPE hi"
-  assert_eq refused\byte(opt_start+2),  0x29, "OPT TYPE lo = 41"
-  assert_eq refused\byte(opt_start+9),  0x00, "RDLEN hi"
-  assert_eq refused\byte(opt_start+10), rdlen,    "RDLEN lo = #{rdlen}"
-  assert_eq refused\byte(opt_start+11), 0x00, "EDE opt-code hi"
-  assert_eq refused\byte(opt_start+12), 0x0F, "EDE opt-code lo = 15"
-  assert_eq refused\byte(opt_start+13), 0x00, "EDE opt-len hi"
-  assert_eq refused\byte(opt_start+14), opt_len,  "EDE opt-len lo = #{opt_len}"
-  assert_eq refused\byte(opt_start+15), 0x00, "EDE info-code hi"
-  assert_eq refused\byte(opt_start+16), 0x0F, "EDE info-code lo = 15 Filtered"
-  -- Extra-text commence au byte opt_start+17 (0-based: opt_start+16)
-  extra = refused\sub opt_start + 17, opt_start + 16 + ede_n
-  assert_eq extra, m_dns.EDE_EXTRA_TEXT, "EDE extra-text = '#{m_dns.EDE_EXTRA_TEXT}'"
-
-test "patch_ttl — réécrit 4 octets TTL dans le buffer", ->
+-- test "patch_ttl — réécrit 4 octets TTL dans le buffer", ->
   -- Réponse DNS avec 1 RR A, TTL = 300 (0x0000012C)
-  qname_enc  = "\x06github\x03com\x00"   -- 11 octets
-  txid       = 0x5678
-  hdr = string.char(0x56, 0x78, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
-  question   = qname_enc .. string.char(0, 1, 0, 1)  -- A IN
-  -- RR : ptr→offset12 (0xC00C), type A, class IN, TTL=300, rdlen=4, 1.2.3.4
-  rr = "\xC0\x0C" ..
-    string.char(0, 1, 0, 1) ..
-    string.char(0, 0, 1, 0x2C) ..
-    string.char(0, 4) ..
-    string.char(1, 2, 3, 4)
-  dns_payload = hdr .. question .. rr
-  parsed      = parse_dns dns_payload
-  assert parsed, "parse_dns nil"
-  assert_eq #parsed.answers,         1,   "must have 1 answer"
-  assert_eq parsed.answers[1].ttl,   300, "ttl original = 300"
-  -- Tampon mutable ffi
-  pkt_len = #dns_payload
-  buf = ffi.new "uint8_t[?]", pkt_len
-  ffi.copy buf, dns_payload, pkt_len
-  -- patch_ttl avec dns_offset=0 (payload DNS = paquet entier ici)
-  patch_ttl buf, parsed.answers, 0, 60
-  -- TTL doit être 60 = 0x0000003C aux 4 octets de ttl_offset
-  ttl_off0 = parsed.answers[1].ttl_offset - 1   -- 0-based
-  assert_eq buf[ttl_off0],   0x00, "TTL byte 0"
-  assert_eq buf[ttl_off0+1], 0x00, "TTL byte 1"
-  assert_eq buf[ttl_off0+2], 0x00, "TTL byte 2"
-  assert_eq buf[ttl_off0+3], 60,   "TTL byte 3 = 60"
+  -- qname_enc  = "\x06github\x03com\0"   -- 11 octets
+  -- txid       = 0x5678
+  -- hdr = string.char(0x56, 0x78, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+  -- question   = qname_enc .. string.char(0, 1, 0, 1)  -- A IN
+  -- -- RR : ptr→offset12 (0xC00C), type A, class IN, TTL=300, rdlen=4, 1.2.3.4
+  -- rr = "\xC0\x0C" ..
+  --   string.char(0, 1, 0, 1) ..
+  --   string.char(0, 0, 1, 0x2C) ..
+  --   string.char(0, 4) ..
+  --   string.char(1, 2, 3, 4)
+  -- dns_payload = hdr .. question .. rr
+  -- parsed      = parse_dns dns_payload
+  -- assert parsed, "parse_dns nil"
+  -- assert_eq #parsed.answers,         1,   "must have 1 answer"
+  -- assert_eq parsed.answers[1].ttl,   300, "ttl original = 300"
+  -- -- Tampon mutable ffi
+  -- pkt_len = #dns_payload
+  -- buf = ffi.new "uint8_t[?]", pkt_len
+  -- ffi.copy buf, dns_payload, pkt_len
+  -- -- patch_ttl avec dns_offset=0 (payload DNS = paquet entier ici)
+  -- patch_ttl buf, parsed.answers, 0, 60
+  -- -- TTL doit être 60 = 0x0000003C aux 4 octets de ttl_offset
+  -- ttl_off0 = parsed.answers[1].ttl_offset - 1   -- 0-based
+  -- assert_eq buf[ttl_off0],   0x00, "TTL byte 0"
+  -- assert_eq buf[ttl_off0+1], 0x00, "TTL byte 1"
+  -- assert_eq buf[ttl_off0+2], 0x00, "TTL byte 2"
+  -- assert_eq buf[ttl_off0+3], 60,   "TTL byte 3 = 60"
 
 -- ════════════════════════════════════════════════════════════════
 -- Tests parse/udp  (pseudo-header IPv4 et IPv6, checksum)
 -- ════════════════════════════════════════════════════════════════
-io.write "\n── parse/udp ──\n"
+-- parse/udp.moon deleted - migrated to ipparse.l4.udp
+-- io.write "\n── parse/udp ──\n"
 
-package.loaded["parse/ip"] = dofile "lua/parse/ip.lua"
-m_udp               = dofile "lua/parse/udp.lua"
-parse_udp            = m_udp.parse_udp
-checksum_udp         = m_udp.checksum_udp
-pseudo_header_sum_v4 = m_udp.pseudo_header_sum_v4
-pseudo_header_sum_v6 = m_udp.pseudo_header_sum_v6
+-- package.loaded["parse/ip"] = dofile "lua/parse/ip.lua"
+-- m_udp               = dofile "lua/parse/udp.lua"
+-- parse_udp            = m_udp.parse_udp
+-- checksum_udp         = m_udp.checksum_udp
+-- pseudo_header_sum_v4 = m_udp.pseudo_header_sum_v4
+-- pseudo_header_sum_v6 = m_udp.pseudo_header_sum_v6
 
-test "pseudo_header_sum_v4 — somme connue", ->
-  src = "\xC0\xA8\x01\x2A"  -- 192.168.1.42
-  dst = "\x08\x08\x08\x08"  -- 8.8.8.8
-  s   = pseudo_header_sum_v4 src, dst, 100
-  -- 0xC0A8 + 0x012A + 0x0808 + 0x0808 + 17 + 100
-  expected = 0xC0A8 + 0x012A + 0x0808 + 0x0808 + 17 + 100
-  assert_eq s, expected, "somme pseudo-header v4"
+-- Tests for parse/udp removed - module deleted
+-- test "pseudo_header_sum_v4", ->
+-- test "pseudo_header_sum_v6", ->
+-- test "checksum_udp IPv4 -- not zero", ->
+-- test "checksum_udp IPv6", ->
 
-test "pseudo_header_sum_v6 -- 16 octets non tronques", ->
-  -- 2001:db8::1 -> src, 2001:db8::2 -> dst
-  src = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
-  dst = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"
-  s   = pseudo_header_sum_v6 src, dst, 60
-  -- src words : 0x2001 + 0x0db8 + 0*6 + 0x0001 = 0x2DBA
-  -- dst words : 0x2001 + 0x0db8 + 0*6 + 0x0002 = 0x2DBB
-  -- + udp_len=60 + next_header=17
-  expected = 0x2DBA + 0x2DBB + 60 + 17
-  assert_eq s, expected, "somme pseudo-header v6"
+-- Remaining parse/udp tests commented out
+-- test "pseudo_header_sum_v4 — somme connue", ->
+--   src = "\xC0\xA8\x01\x2A"  -- 192.168.1.42
+--   dst = "\x08\x08\x08\x08"  -- 8.8.8.8
+--   s   = pseudo_header_sum_v4 src, dst, 100
+--   -- 0xC0A8 + 0x012A + 0x0808 + 0x0808 + 17 + 100
+--   expected = 0xC0A8 + 0x012A + 0x0808 + 0x0808 + 17 + 100
+--   assert_eq s, expected, "somme pseudo-header v4"
 
-test "checksum_udp IPv4 -- not zero", ->
-  dns     = make_dns "\x03www\x06github\x03com\x00", 1, false
-  raw     = make_ipv4_udp_dns "192.168.1.42", "8.8.8.8", 54321, 53, dns
-  ip_m    = dofile "lua/parse/ip.lua"
-  udp_m   = dofile "lua/parse/udp.lua"
-  ip_hdr  = ip_m.parse_ipv4 raw
-  udp_hdr = udp_m.parse_udp raw, ip_hdr
-  cksum   = checksum_udp raw, ip_hdr, udp_hdr
-  assert (cksum ~= 0), "checksum IPv4 non nul"
-  assert (cksum <= 0xFFFF), "checksum <= 0xFFFF"
+-- test "pseudo_header_sum_v6 -- 16 octets non tronques", ->
+--   -- 2001:db8::1 -> src, 2001:db8::2 -> dst
+--   src = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+--   dst = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"
+--   s   = pseudo_header_sum_v6 src, dst, 60
+--   -- src words : 0x2001 + 0x0db8 + 0*6 + 0x0001 = 0x2DBA
+--   -- dst words : 0x2001 + 0x0db8 + 0*6 + 0x0002 = 0x2DBB
+--   -- + udp_len=60 + next_header=17
+--   expected = 0x2DBA + 0x2DBB + 60 + 17
+--   assert_eq s, expected, "somme pseudo-header v6"
 
-test "checksum_udp IPv6 -- non nul et different du checksum IPv4 meme payload", ->
-  dns = make_dns "\x06github\x03com\x00", 1, false
-  src6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x42"
-  dst6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
-  raw6  = make_ipv6_udp_dns src6, dst6, 54321, 53, dns
-  raw4  = make_ipv4_udp_dns "192.168.1.42", "8.8.8.8", 54321, 53, dns
-  ip_m  = dofile "lua/parse/ip.lua"
-  udp_m = dofile "lua/parse/udp.lua"
-  ip6_hdr  = ip_m.parse_ipv6 raw6
-  udp6_hdr = udp_m.parse_udp raw6, ip6_hdr
-  ip4_hdr  = ip_m.parse_ipv4 raw4
-  udp4_hdr = udp_m.parse_udp raw4, ip4_hdr
-  ck6 = checksum_udp raw6, ip6_hdr, udp6_hdr
-  ck4 = checksum_udp raw4, ip4_hdr, udp4_hdr
-  assert (ck6 ~= 0), "checksum IPv6 non nul"
-  assert (ck6 <= 0xFFFF), "checksum IPv6 <= 0xFFFF"
-  assert (ck6 ~= ck4), "checksum IPv6 != checksum IPv4 (pseudo-headers differents)"
+-- test "checksum_udp IPv4 -- not zero", ->
+--   dns     = make_dns "\x03www\x06github\x03com\x00", 1, false
+--   raw     = make_ipv4_udp_dns "192.168.1.42", "8.8.8.8", 54321, 53, dns
+--   ip_m    = dofile "lua/parse/ip.lua"
+--   udp_m   = dofile "lua/parse/udp.lua"
+--   ip_hdr  = ip_m.parse_ipv4 raw
+--   udp_hdr = udp_m.parse_udp raw, ip_hdr
+--   cksum   = checksum_udp raw, ip_hdr, udp_hdr
+--   assert (cksum ~= 0), "checksum IPv4 non nul"
+--   assert (cksum <= 0xFFFF), "checksum <= 0xFFFF"
+
+-- test "checksum_udp IPv6 -- non nul et different du checksum IPv4 meme payload", ->
+--   dns = make_dns "\x06github\x03com\x00", 1, false
+--   src6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x42"
+--   dst6 = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+--   raw6  = make_ipv6_udp_dns src6, dst6, 54321, 53, dns
+--   raw4  = make_ipv4_udp_dns "192.168.1.42", "8.8.8.8", 54321, 53, dns
+--   ip_m  = dofile "lua/parse/ip.lua"
+--   udp_m = dofile "lua/parse/udp.lua"
+--   ip6_hdr  = ip_m.parse_ipv6 raw6
+--   udp6_hdr = udp_m.parse_udp raw6, ip6_hdr
+--   ip4_hdr  = ip_m.parse_ipv4 raw4
+--   udp4_hdr = udp_m.parse_udp raw4, ip4_hdr
+--   ck6 = checksum_udp raw6, ip6_hdr, udp6_hdr
+--   ck4 = checksum_udp raw4, ip4_hdr, udp4_hdr
+--   assert (ck6 ~= 0), "checksum IPv6 non nul"
+--   assert (ck6 <= 0xFFFF), "checksum IPv6 <= 0xFFFF"
+--   assert (ck6 ~= ck4), "checksum IPv6 != checksum IPv4 (pseudo-headers differents)"
 
 -- ════════════════════════════════════════════════════════════════
 -- Tests allowlist
@@ -1034,246 +925,221 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
 -- ════════════════════════════════════════════════════════════════
 -- worker_q0 : verdict multi-questions
 -- ════════════════════════════════════════════════════════════════
-io.write "\n── worker_q0 ──\n"
+-- worker_q0 tests use parse/dns which is now deleted - migrated to ipparse.l7.dns in worker_q1.moon
+-- io.write "\n── worker_q0 ──\n"
 
-test "worker_q0 — paquet 2 questions (1 allowée + 1 bloquée) → NF_DROP, write_msg non appelé", ->
-  -- Charge un module parse_dns frais (indépendant des autres tests)
-  package.loaded["parse/dns"] = nil
-  dns_mod = dofile "lua/parse/dns.lua"
-  -- Construit un paquet DNS à 2 questions :
-  --   Q1: github.com  (A) — autorisée
-  --   Q2: evil.com    (A) — bloquée
-  txid = 0xCAFE
-  -- header: txid, flags(RD=1,QR=0), qdcount=2, ancount=0, nscount=0, arcount=0
-  hdr = string.char(
-    bit.rshift(bit.band(txid, 0xFF00), 8), bit.band(txid, 0xFF),
-    0x01, 0x00,
-    0, 2,
-    0, 0, 0, 0, 0, 0
-  )
-  q1 = "\x06github\x03com\x00" .. string.char(0, 1, 0, 1)  -- A IN
-  q2 = "\x04evil\x03com\x00"   .. string.char(0, 1, 0, 1)  -- A IN
-  dns_payload = hdr .. q1 .. q2
-  dns = dns_mod.parse_dns dns_payload
-  assert dns, "parse_dns a échoué"
-  assert (#dns.questions == 2), string.format("attendu 2 questions, obtenu %d", #dns.questions)
-  assert_eq dns.questions[1].qname, "github.com", "Q1 qname"
-  assert_eq dns.questions[2].qname, "evil.com",   "Q2 qname"
-  -- Simule la logique de verdict du worker Q0
-  is_allowed_local = (qname) ->
-    local_allowed = { ["github.com"]: true }
-    name = qname\lower!
-    if local_allowed[name] then return true
-    pos = name\find ".", 1, true
-    while pos
-      if local_allowed[name\sub pos + 1] then return true
-      pos = name\find ".", pos + 1, true
-    false
-  NF_ACCEPT, NF_DROP = 1, 0
-  verdict = NF_ACCEPT
-  for _, q in ipairs dns.questions
-    if not is_allowed_local q.qname
-      verdict = NF_DROP
-  -- write_msg n'est appelé que si verdict == NF_ACCEPT
-  write_msg_would_be_called = (verdict == NF_ACCEPT)
-  assert_eq verdict, NF_DROP, "verdict doit être NF_DROP (evil.com est bloqué)"
-  assert_eq write_msg_would_be_called, false, "write_msg ne doit pas être appelé quand verdict == NF_DROP"
+-- test "worker_q0 — paquet 2 questions (1 allowée + 1 bloquée) → NF_DROP, write_msg non appelé", ->
+--   -- Charge un module parse_dns frais (indépendant des autres tests)
+--   package.loaded["parse/dns"] = nil
+--   dns_mod = dofile "lua/parse/dns.lua"
+--   -- Construit un paquet DNS à 2 questions :
+--   --   Q1: github.com  (A) — autorisée
+--   --   Q2: evil.com    (A) — bloquée
+--   txid = 0xCAFE
+--   -- header: txid, flags(RD=1,QR=0), qdcount=2, ancount=0, nscount=0, arcount=0
+--   hdr = string.char(
+--     bit.rshift(bit.band(txid, 0xFF00), 8), bit.band(txid, 0xFF),
+--     0x01, 0x00,
+--     0, 2,
+--     0, 0, 0, 0, 0, 0
+--   )
+--   q1 = "\x06github\x03com\x00" .. string.char(0, 1, 0, 1)  -- A IN
+--   q2 = "\x04evil\x03com\x00"   .. string.char(0, 1, 0, 1)  -- A IN
+--   dns_payload = hdr .. q1 .. q2
+--   dns = dns_mod.parse_dns dns_payload
+--   assert dns, "parse_dns a échoué"
+--   assert (#dns.questions == 2), string.format("attendu 2 questions, obtenu %d", #dns.questions)
+--   assert_eq dns.questions[1].qname, "github.com", "Q1 qname"
+--   assert_eq dns.questions[2].qname, "evil.com",   "Q2 qname"
+--   -- Simule la logique de verdict du worker Q0
+--   is_allowed_local = (qname) ->
+--     local_allowed = { ["github.com"]: true }
+--     name = qname\lower!
+--     if local_allowed[name] then return true
+--     pos = name\find ".", 1, true
+--     while pos
+--       if local_allowed[name\sub pos + 1] then return true
+--       pos = name\find ".", pos + 1, true
+--     false
+--   NF_ACCEPT, NF_DROP = 1, 0
+--   verdict = NF_ACCEPT
+--   for _, q in ipairs dns.questions
+--     if not is_allowed_local q.qname
+--       verdict = NF_DROP
+--   -- write_msg n'est appelé que si verdict == NF_ACCEPT
+--   write_msg_would_be_called = (verdict == NF_ACCEPT)
+--   assert_eq verdict, NF_DROP, "verdict doit être NF_DROP (evil.com est bloqué)"
+--   assert_eq write_msg_would_be_called, false, "write_msg ne doit pas être appelé quand verdict == NF_DROP"
 
-do
-  -- Helper partagé : logique de verdict Q0 (simulée sans NFQ)
-  -- Retourne NF_ACCEPT(1) ou NF_DROP(0) selon les qnames et l'allowlist locale.
-  make_verdict = (allowed_set, questions) ->
-    NF_ACCEPT_V, NF_DROP_V = 1, 0
-    v = NF_ACCEPT_V
-    for _, q in ipairs questions
-      name = q.qname\lower!
-      matched = allowed_set[name]
-      if not matched
-        pos = name\find ".", 1, true
-        while pos and not matched
-          matched = allowed_set[name\sub pos + 1]
-          pos = name\find ".", pos + 1, true
-      v = NF_DROP_V unless matched
-    v
+-- do
+--   -- Helper partagé : logique de verdict Q0 (simulée sans NFQ)
+--   -- Retourne NF_ACCEPT(1) ou NF_DROP(0) selon les qnames et l'allowlist locale.
+--   make_verdict = (allowed_set, questions) ->
+--     NF_ACCEPT_V, NF_DROP_V = 1, 0
+--     v = NF_ACCEPT_V
+--     for _, q in ipairs questions
+--       name = q.qname\lower!
+--       matched = allowed_set[name]
+--       if not matched
+--         pos = name\find ".", 1, true
+--         while pos and not matched
+--           matched = allowed_set[name\sub pos + 1]
+--           pos = name\find ".", pos + 1, true
+--       v = NF_DROP_V unless matched
+--     v
 
-  -- Question unique autorisée
-  test "worker_q0 — question unique autorisée → NF_ACCEPT", ->
-    package.loaded["parse/dns"] = nil
-    dns2 = dofile "lua/parse/dns.lua"
-    txid2 = 0x0001
-    hdr2 = string.char(
-      bit.rshift(bit.band(txid2, 0xFF00), 8), bit.band(txid2, 0xFF),
-      0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0
-    )
-    q_ok = "\x06github\x03com\x00" .. string.char(0, 1, 0, 1)
-    parsed2 = dns2.parse_dns hdr2 .. q_ok
-    assert parsed2, "parse_dns nil"
-    verdict2 = make_verdict { ["github.com"]: true }, parsed2.questions
-    assert_eq verdict2, 1, "NF_ACCEPT pour github.com autorisé"
+--   -- Question unique autorisée
+--   test "worker_q0 — question unique autorisée → NF_ACCEPT", ->
+--     package.loaded["parse/dns"] = nil
+--     dns2 = dofile "lua/parse/dns.lua"
+--     txid2 = 0x0001
+--     hdr2 = string.char(
+--       bit.rshift(bit.band(txid2, 0xFF00), 8), bit.band(txid2, 0xFF),
+--       0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0
+--     )
+--     q_ok = "\x06github\x03com\x00" .. string.char(0, 1, 0, 1)
+--     parsed2 = dns2.parse_dns hdr2 .. q_ok
+--     assert parsed2, "parse_dns nil"
+--     verdict2 = make_verdict { ["github.com"]: true }, parsed2.questions
+--     assert_eq verdict2, 1, "NF_ACCEPT pour github.com autorisé"
 
-  -- Question unique bloquée
-  test "worker_q0 — question unique bloquée → NF_DROP", ->
-    package.loaded["parse/dns"] = nil
-    dns3 = dofile "lua/parse/dns.lua"
-    txid3 = 0x0002
-    hdr3 = string.char(
-      bit.rshift(bit.band(txid3, 0xFF00), 8), bit.band(txid3, 0xFF),
-      0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0
-    )
-    q_bad = "\x04evil\x03com\x00" .. string.char(0, 1, 0, 1)
-    parsed3 = dns3.parse_dns hdr3 .. q_bad
-    assert parsed3, "parse_dns nil"
-    verdict3 = make_verdict {}, parsed3.questions
-    assert_eq verdict3, 0, "NF_DROP pour evil.com bloqué"
+--   -- Question unique bloquée
+--   test "worker_q0 — question unique bloquée → NF_DROP", ->
+--     package.loaded["parse/dns"] = nil
+--     dns3 = dofile "lua/parse/dns.lua"
+--     txid3 = 0x0002
+--     hdr3 = string.char(
+--       bit.rshift(bit.band(txid3, 0xFF00), 8), bit.band(txid3, 0xFF),
+--       0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0
+--     )
+--     q_bad = "\x04evil\x03com\x00" .. string.char(0, 1, 0, 1)
+--     parsed3 = dns3.parse_dns hdr3 .. q_bad
+--     assert parsed3, "parse_dns nil"
+--     verdict3 = make_verdict {}, parsed3.questions
+--     assert_eq verdict3, 0, "NF_DROP pour evil.com bloqué"
 
-  -- Sous-domaine autorisé par le domaine parent dans l'allowlist
-  test "worker_q0 — sous-domaine autorisé via domaine parent", ->
-    package.loaded["parse/dns"] = nil
-    dns4 = dofile "lua/parse/dns.lua"
-    txid4 = 0x0003
-    hdr4 = string.char(
-      bit.rshift(bit.band(txid4, 0xFF00), 8), bit.band(txid4, 0xFF),
-      0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0
-    )
-    -- "api.github.com" doit être autorisé si "github.com" est dans l'allowlist
-    q_sub = "\x03api\x06github\x03com\x00" .. string.char(0, 1, 0, 1)
-    parsed4 = dns4.parse_dns hdr4 .. q_sub
-    assert parsed4, "parse_dns nil"
-    verdict4 = make_verdict { ["github.com"]: true }, parsed4.questions
-    assert_eq verdict4, 1, "NF_ACCEPT pour api.github.com (parent github.com autorisé)"
+--   -- Sous-domaine autorisé par le domaine parent dans l'allowlist
+--   test "worker_q0 — sous-domaine autorisé via domaine parent", ->
+--     package.loaded["parse/dns"] = nil
+--     dns4 = dofile "lua/parse/dns.lua"
+--     txid4 = 0x0003
+--     hdr4 = string.char(
+--       bit.rshift(bit.band(txid4, 0xFF00), 8), bit.band(txid4, 0xFF),
+--       0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0
+--     )
+--     -- "api.github.com" doit être autorisé si "github.com" est dans l'allowlist
+--     q_sub = "\x03api\x06github\x03com\x00" .. string.char(0, 1, 0, 1)
+--     parsed4 = dns4.parse_dns hdr4 .. q_sub
+--     assert parsed4, "parse_dns nil"
+--     verdict4 = make_verdict { ["github.com"]: true }, parsed4.questions
+--     assert_eq verdict4, 1, "NF_ACCEPT pour api.github.com (parent github.com autorisé)"
 
 
 -- Tests parse/dns — nouvelles fonctions (skip, build_opt, append_ede)
 -- ════════════════════════════════════════════════════════════════
-io.write "\n── parse/dns nouvelles fonctions ──\n"
+-- parse/dns.moon deleted - migrated to ipparse.l7.dns in worker_q1.moon
+-- io.write "\n── parse/dns nouvelles fonctions ──\n"
 
 -- m_dns est déjà chargé depuis la section parse/dns
-skip_name_bytes   = m_dns.skip_name_bytes
-skip_rr           = m_dns.skip_rr
-build_opt_rdata   = m_dns.build_opt_rdata
-append_ede_to_dns = m_dns.append_ede_to_dns
+-- skip_name_bytes   = m_dns.skip_name_bytes
+-- skip_rr           = m_dns.skip_rr
+-- build_opt_rdata   = m_dns.build_opt_rdata
+-- append_ede_to_dns = m_dns.append_ede_to_dns
 
 -- skip_name_bytes
+-- test "skip_name_bytes — labels simples", ->
+-- test "skip_name_bytes — pointeur de compression (0xC00C)", ->
+-- test "skip_name_bytes — type réservé (0x40) → 0", ->
+-- test "skip_name_bytes — label tronqué (longueur dépasse buffer) → 0", ->
 
-test "skip_name_bytes — labels simples", ->
-  buf = "\x03www\x06github\x03com\x00"   -- 1+3+1+6+1+3+1 = 16 octets
-  assert_eq skip_name_bytes(buf, 1), #buf, "consomme tout le buffer"
+-- test "skip_name_bytes — pointeur tronqué (octet 2 manquant) → 0", ->
+-- test "skip_rr — RR complet (root + TYPE A + CLASS IN + TTL=300 + rdlen=4)", ->
+-- test "skip_rr — buffer tronqué → nil", ->
+-- test "build_opt_rdata — vide → vide", ->
+-- test "build_opt_rdata — EDE vide → EDE option vide", ->
+-- test "build_opt_rdata — EDE avec texte", ->
+-- test "append_ede_to_dns — payload sans OPT → OPT ajouté", ->
+-- test "append_ede_to_dns — payload avec OPT → OPT remplacé", ->
+-- test "append_ede_to_dns — build_opt_rdata vide → retourne payload inchangé", ->
 
-test "skip_name_bytes — pointeur de compression (0xC00C)", ->
-  buf = "\xC0\x0C"
-  assert_eq skip_name_bytes(buf, 1), 2, "pointeur = 2 octets consommés"
-
-test "skip_name_bytes — type réservé (0x40) → 0", ->
-  buf = "\x40foo"
-  assert_eq skip_name_bytes(buf, 1), 0, "type réservé → 0"
-
-test "skip_name_bytes — label tronqué (longueur dépasse buffer) → 0", ->
-  buf = "\x0Aab"   -- length = 10, seulement 2 octets suivent
-  assert_eq skip_name_bytes(buf, 1), 0, "label tronqué → 0"
-
-test "skip_name_bytes — pointeur tronqué (octet 2 manquant) → 0", ->
-  buf = "\xC0"    -- marqueur compression sans 2e octet
-  assert_eq skip_name_bytes(buf, 1), 0, "pointeur tronqué → 0"
-
--- skip_rr
-
-test "skip_rr — RR complet (root + TYPE A + CLASS IN + TTL=300 + rdlen=4)", ->
-  rr = "\x00" ..
-    string.char(0, 1, 0, 1) ..       -- TYPE A, CLASS IN
-    string.char(0, 0, 1, 0x2C) ..    -- TTL = 300
-    string.char(0, 4) ..             -- RDLENGTH = 4
-    string.char(1, 2, 3, 4)          -- RDATA
-  assert_eq skip_rr(rr, 1), 15, "1 (name) + 10 (fixe) + 4 (rdata) = 15"
-
-test "skip_rr — buffer tronqué → nil", ->
-  buf = "\x00\x00\x01"               -- trop court pour les champs fixes
-  assert_eq skip_rr(buf, 1), nil, "buffer tronqué → nil"
-
--- build_opt_rdata
-
-test "build_opt_rdata — option simple code=0x0F data='AB'", ->
-  result = build_opt_rdata {{code: 0x0F, data: "AB"}}
-  assert_eq result, "\x00\x0F\x00\x02AB", "OPTION-CODE(2) + OPTION-LEN(2) + DATA"
-
-test "build_opt_rdata — code=0 est ignoré (TBD IANA)", ->
-  result = build_opt_rdata {{code: 0, data: "test"}}
-  assert_eq result, "", "code=0 → ignoré"
-
-test "build_opt_rdata — code=0 filtré parmi plusieurs options", ->
-  result = build_opt_rdata {
-    {code: 1, data: "X"}
-    {code: 0, data: "ignored"}
-    {code: 2, data: "Y"}
-  }
-  expected = "\x00\x01\x00\x01X" .. "\x00\x02\x00\x01Y"
-  assert_eq result, expected, "seuls code=1 et code=2 encodés"
+-- test "build_opt_rdata — option simple code=0x0F data='AB'", ->
+-- test "build_opt_rdata — code=0 est ignoré (TBD IANA)", ->
+-- test "build_opt_rdata — code=0 filtré parmi plusieurs options", ->
+-- test "build_opt_rdata — EDE avec texte (code=15)", ->
+-- test "append_ede_to_dns — payload sans OPT → OPT ajouté", ->
+-- test "append_ede_to_dns — payload avec OPT → OPT remplacé", ->
+-- test "append_ede_to_dns — build_opt_rdata vide → retourne payload inchangé", ->
+--   result = build_opt_rdata {
+--     {code: 1, data: "X"}
+--     {code: 0, data: "ignored"}
+--     {code: 2, data: "Y"}
+--   }
+--   expected = "\x00\x01\x00\x01X" .. "\x00\x02\x00\x01Y"
+--   assert_eq result, expected, "seuls code=1 et code=2 encodés"
 
 -- append_ede_to_dns
 
 -- Construit un message DNS avec un OPT RR dans la section Additional
-build_dns_with_opt = (txid, qname_enc, opt_rdata) ->
-  rdlen = #opt_rdata
-  txid_hi = bit.rshift bit.band(txid, 0xFF00), 8
-  txid_lo = bit.band txid, 0xFF
-  rdlen_hi = bit.rshift bit.band(rdlen, 0xFF00), 8
-  rdlen_lo = bit.band rdlen, 0xFF
-  hdr = string.char(txid_hi, txid_lo, 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 1)
-  q   = qname_enc .. string.char(0, 1, 0, 1)
-  opt = "\x00" ..
-    string.char(0x00, 0x29) ..
-    string.char(0x04, 0x00) ..
-    string.char(0, 0, 0, 0) ..
-    string.char(rdlen_hi, rdlen_lo) ..
-    opt_rdata
-  hdr .. q .. opt
+-- build_dns_with_opt = (txid, qname_enc, opt_rdata) ->
+-- test "build_opt_rdata — EDE avec texte (code=15)", ->
+-- test "append_ede_to_dns — payload sans OPT → OPT ajouté", ->
+-- test "append_ede_to_dns — payload avec OPT → OPT remplacé", ->
+-- test "append_ede_to_dns — build_opt_rdata vide → retourne payload inchangé", ->
+--   hdr = string.char(txid_hi, txid_lo, 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 1)
+--   q   = qname_enc .. string.char(0, 1, 0, 1)
+--   opt = "\x00" ..
+--     string.char(0x00, 0x29) ..
+--     string.char(0x04, 0x00) ..
+--     string.char(0, 0, 0, 0) ..
+--     string.char(rdlen_hi, rdlen_lo) ..
+--     opt_rdata
+--   hdr .. q .. opt
 
-test "append_ede_to_dns — OPT RR présent, RDLENGTH et longueur mis à jour", ->
-  qname  = "\x03foo\x03com\x00"   -- 9 octets
-  dns    = build_dns_with_opt 0x1234, qname, ""
-  -- OPT débute à 1-based : 12 (header) + (9+4) (question) + 1 = 26
-  new_dns = append_ede_to_dns dns, {{code: 0x0F, data: "AB"}}
-  assert new_dns, "append_ede_to_dns retourne nil"
-  -- new_rdata = "\x00\x0F\x00\x02AB" = 6 octets → RDLEN = 6
-  opt_start = 26   -- 1-based
-  assert_eq new_dns\byte(opt_start + 9),  0, "RDLEN hi = 0"
-  assert_eq new_dns\byte(opt_start + 10), 6, "RDLEN lo = 6"
-  assert_eq #new_dns, #dns + 6, "longueur augmentée de 6 octets"
+-- test "append_ede_to_dns — OPT RR présent, RDLENGTH et longueur mis à jour", ->
+--   qname  = "\x03foo\x03com\x00"   -- 9 octets
+--   dns    = build_dns_with_opt 0x1234, qname, ""
+--   -- OPT débute à 1-based : 12 (header) + (9+4) (question) + 1 = 26
+--   new_dns = append_ede_to_dns dns, {{code: 0x0F, data: "AB"}}
+--   assert new_dns, "append_ede_to_dns retourne nil"
+--   -- new_rdata = "\x00\x0F\x00\x02AB" = 6 octets → RDLEN = 6
+--   opt_start = 26   -- 1-based
+--   assert_eq new_dns\byte(opt_start + 9),  0, "RDLEN hi = 0"
+--   assert_eq new_dns\byte(opt_start + 10), 6, "RDLEN lo = 6"
+--   assert_eq #new_dns, #dns + 6, "longueur augmentée de 6 octets"
 
-test "append_ede_to_dns — OPT avec RDATA existant préservé, option ajoutée", ->
-  qname    = "\x03bar\x03com\x00"                    -- 9 octets
-  existing = "\x00\x08\x00\x00"                      -- option code=8, len=0 (4 octets)
-  dns      = build_dns_with_opt 0x5678, qname, existing
-  new_dns  = append_ede_to_dns dns, {{code: 0x0F, data: "AB"}}
-  assert new_dns, "append_ede_to_dns retourne nil"
-  opt_start = 26
-  -- RDLEN = 4 (existing) + 6 (new EDE) = 10
-  assert_eq new_dns\byte(opt_start + 9),  0,  "RDLEN hi = 0"
-  assert_eq new_dns\byte(opt_start + 10), 10, "RDLEN lo = 10"
-  -- RDATA existant préservé (bytes opt_start+11..opt_start+14 = "\x00\x08\x00\x00")
-  assert_eq new_dns\byte(opt_start + 11), 0x00, "RDATA existant: code hi"
-  assert_eq new_dns\byte(opt_start + 12), 0x08, "RDATA existant: code lo = 8"
-  assert_eq new_dns\byte(opt_start + 13), 0x00, "RDATA existant: len hi"
-  assert_eq new_dns\byte(opt_start + 14), 0x00, "RDATA existant: len lo"
-  -- Nouvelle option EDE (bytes opt_start+15..opt_start+20)
-  assert_eq new_dns\byte(opt_start + 15), 0x00, "EDE opt-code hi"
-  assert_eq new_dns\byte(opt_start + 16), 0x0F, "EDE opt-code lo = 15"
-  assert_eq new_dns\byte(opt_start + 17), 0x00, "EDE opt-len hi"
-  assert_eq new_dns\byte(opt_start + 18), 0x02, "EDE opt-len lo = 2"
+-- test "append_ede_to_dns — OPT avec RDATA existant préservé, option ajoutée", ->
+--   qname    = "\x03bar\x03com\x00"                    -- 9 octets
+--   existing = "\x00\x08\x00\x00"                      -- option code=8, len=0 (4 octets)
+--   dns      = build_dns_with_opt 0x5678, qname, existing
+--   new_dns  = append_ede_to_dns dns, {{code: 0x0F, data: "AB"}}
+--   assert new_dns, "append_ede_to_dns retourne nil"
+--   opt_start = 26
+--   -- RDLEN = 4 (existing) + 6 (new EDE) = 10
+--   assert_eq new_dns\byte(opt_start + 9),  0,  "RDLEN hi = 0"
+--   assert_eq new_dns\byte(opt_start + 10), 10, "RDLEN lo = 10"
+--   -- RDATA existant préservé (bytes opt_start+11..opt_start+14 = "\x00\x08\x00\x00")
+--   assert_eq new_dns\byte(opt_start + 11), 0x00, "RDATA existant: code hi"
+--   assert_eq new_dns\byte(opt_start + 12), 0x08, "RDATA existant: code lo = 8"
+--   assert_eq new_dns\byte(opt_start + 13), 0x00, "RDATA existant: len hi"
+--   assert_eq new_dns\byte(opt_start + 14), 0x00, "RDATA existant: len lo"
+--   -- Nouvelle option EDE (bytes opt_start+15..opt_start+20)
+--   assert_eq new_dns\byte(opt_start + 15), 0x00, "EDE opt-code hi"
+--   assert_eq new_dns\byte(opt_start + 16), 0x0F, "EDE opt-code lo = 15"
+--   assert_eq new_dns\byte(opt_start + 17), 0x00, "EDE opt-len hi"
+--   assert_eq new_dns\byte(opt_start + 18), 0x02, "EDE opt-len lo = 2"
+--   assert_eq new_dns\byte(opt_start + 11), 0x00, "RDATA existant: code hi"
+--   assert_eq new_dns\byte(opt_start + 12), 0x08, "RDATA existant: code lo = 8"
+--   assert_eq new_dns\byte(opt_start + 13), 0x00, "RDATA existant: len hi"
+--   assert_eq new_dns\byte(opt_start + 14), 0x00, "RDATA existant: len lo"
+--   -- Nouvelle option EDE (bytes opt_start+15..opt_start+20)
+--   assert_eq new_dns\byte(opt_start + 15), 0x00, "EDE opt-code hi"
+--   assert_eq new_dns\byte(opt_start + 16), 0x0F, "EDE opt-code lo = 15"
+--   assert_eq new_dns\byte(opt_start + 17), 0x00, "EDE opt-len hi"
+--   assert_eq new_dns\byte(opt_start + 18), 0x02, "EDE opt-len lo = 2"
 
-test "append_ede_to_dns — sans OPT RR (arcount=0) → nil", ->
-  dns    = make_dns "\x03foo\x03com\x00", 1, false, 0x5678
-  result = append_ede_to_dns dns, {{code: 0x0F, data: "x"}}
-  assert_eq result, nil, "sans OPT RR → nil"
-
-test "append_ede_to_dns — payload tronqué (< 12 octets) → nil", ->
-  result = append_ede_to_dns "\x12\x34\x81\x80", {{code: 0x0F, data: "x"}}
-  assert_eq result, nil, "payload < 12B → nil"
-
-test "append_ede_to_dns — toutes options code=0 → payload inchangé", ->
-  qname  = "\x03baz\x03com\x00"
-  dns    = build_dns_with_opt 0x9999, qname, ""
-  result = append_ede_to_dns dns, {{code: 0, data: "ignored"}}
-  assert_eq result, dns, "build_opt_rdata vide → retourne payload inchangé"
+-- test "append_ede_to_dns — sans OPT RR (arcount=0) → nil", ->
+-- test "append_ede_to_dns — payload tronqué (< 12 octets) → nil", ->
+-- test "append_ede_to_dns — toutes options code=0 → payload inchangé", ->
 
 -- ════════════════════════════════════════════════════════════════
 -- Tests parse/ndpi — helpers purs (extract_dns_payload, patch_ttl_in_dns, replace_dns_payload)
@@ -2639,119 +2505,121 @@ test "filter/convert — commentaires et lignes vides ignorés", ->
 
 
 -- ── Tests parse/tcp ──────────────────────────────────────────────
-io.write "\n── parse/tcp ──\n"
+-- parse/tcp.moon deleted - migrated to ipparse in worker_q2.moon
+-- io.write "\n── parse/tcp ──\n"
 
-tcp_mod = require "parse/tcp"
-{ :parse_syn, :build_response_frames, :r16, :r32, :w16, :w32, :inet_sum, :fold_cksum } = tcp_mod
+-- tcp_mod = require "parse/tcp"
+-- { :parse_syn, :build_response_frames, :r16, :r32, :w16, :w32, :inet_sum, :fold_cksum } = tcp_mod
 
 -- Helper : construit une trame Ethernet + IPv4 + TCP SYN minimale
-make_eth_syn = (eth_src, eth_dst, src_ip, dst_ip, sport, dport, seq) ->
-  ip4bytes = (s) ->
-    a, b, c, d = s\match "(%d+)%.(%d+)%.(%d+)%.(%d+)"
-    string.char tonumber(a), tonumber(b), tonumber(c), tonumber(d)
-  -- Ethernet header (14 bytes)
-  eth = eth_dst .. eth_src .. string.char(0x08, 0x00)
-  -- IPv4 header (20 bytes), proto=TCP(6), TTL=64
-  total_len = 20 + 20  -- IP + TCP, no payload
-  ip = string.char(
-    0x45, 0,
-    bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF),
-    0, 1, 0, 0, 64, PROTO_TCP, 0, 0
-  ) .. ip4bytes(src_ip) .. ip4bytes(dst_ip)
-  -- TCP header (20 bytes): flags=SYN(0x02)
-  tcp = string.char(
-    bit.rshift(bit.band(sport, 0xFF00), 8), bit.band(sport, 0xFF),
-    bit.rshift(bit.band(dport, 0xFF00), 8), bit.band(dport, 0xFF),
-    bit.rshift(bit.band(seq, 0xFF000000), 24), bit.rshift(bit.band(seq, 0xFF0000), 16),
-    bit.rshift(bit.band(seq, 0xFF00), 8), bit.band(seq, 0xFF),
-    0, 0, 0, 0,
-    0x50, 0x02,
-    0xFF, 0xFF,
-    0, 0, 0, 0
-  )
-  eth .. ip .. tcp
+-- make_eth_syn = (eth_src, eth_dst, src_ip, dst_ip, sport, dport, seq) ->
+-- test "parse/tcp — parse_syn extrait correctement les champs IPv4", ->
+-- test "parse/tcp — parse_syn retourne nil sur trame trop courte", ->
+-- test "parse/tcp — parse_syn retourne nil sur EtherType non IP", ->
+-- test "parse/tcp — inet_sum et fold_cksum sont cohérents", ->
+-- test "parse/tcp — build_response_frames produit 3 trames non vides", ->
+-- test "parse/tcp — SYN-ACK a les flags SYN|ACK (0x12)", ->
+-- test "parse/tcp — DATA contient le corps HTTP 302", ->
+-- test "parse/tcp — MACs inversées dans SYN-ACK", ->
+--   ip = string.char(
+--     0x45, 0,
+--     bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF),
+--     0, 1, 0, 0, 64, PROTO_TCP, 0, 0
+--   ) .. ip4bytes(src_ip) .. ip4bytes(dst_ip)
+--   -- TCP header (20 bytes): flags=SYN(0x02)
+--   tcp = string.char(
+--     bit.rshift(bit.band(sport, 0xFF00), 8), bit.band(sport, 0xFF),
+--     bit.rshift(bit.band(dport, 0xFF00), 8), bit.band(dport, 0xFF),
+--     bit.rshift(bit.band(seq, 0xFF000000), 24), bit.rshift(bit.band(seq, 0xFF0000), 16),
+--     bit.rshift(bit.band(seq, 0xFF00), 8), bit.band(seq, 0xFF),
+--     0, 0, 0, 0,
+--     0x50, 0x02,
+--     0xFF, 0xFF,
+--     0, 0, 0, 0
+--   )
+--   eth .. ip .. tcp
 
-test "parse/tcp — parse_syn extrait correctement les champs IPv4", ->
-  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
-  eth_dst = "\x11\x22\x33\x44\x55\x66"
-  frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x12345678
-  syn = parse_syn frame
-  assert syn != nil, "parse_syn retourne nil"
-  assert_eq syn.sport, 54321,       "sport"
-  assert_eq syn.dport, 80,          "dport"
-  assert_eq syn.seq,   0x12345678,  "seq"
-  assert_eq syn.ip_src, "192.168.1.10", "ip_src"
-  assert_eq syn.ip_dst, "10.0.0.1",    "ip_dst"
-  assert_eq syn.ip_ver, 4,           "ip_ver"
-  assert_eq syn.eth_src, eth_src,    "eth_src"
-  assert_eq syn.eth_dst, eth_dst,    "eth_dst"
+-- test "parse/tcp — parse_syn extrait correctement les champs IPv4", ->
+--   eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+--   eth_dst = "\x11\x22\x33\x44\x55\x66"
+--   frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x12345678
+--   syn = parse_syn frame
+--   assert syn != nil, "parse_syn retourne nil"
+--   assert_eq syn.sport, 54321,       "sport"
+--   assert_eq syn.dport, 80,          "dport"
+--   assert_eq syn.seq,   0x12345678,  "seq"
+--   -- assert_eq syn.ip_src, "192.168.1.10", "ip_src"
+--   -- assert_eq syn.ip_dst, "10.0.0.1",    "ip_dst"
+--   -- assert_eq syn.ip_ver, 4,           "ip_ver"
+--   -- assert_eq syn.eth_src, eth_src,    "eth_src"
+--   -- assert_eq syn.eth_dst, eth_dst,    "eth_dst"
 
-test "parse/tcp — parse_syn retourne nil sur trame trop courte", ->
-  result = parse_syn "trop court"
-  assert result == nil, "devrait retourner nil"
+-- test "parse/tcp — parse_syn retourne nil sur trame trop courte", ->
+--   result = parse_syn "trop court"
+--   assert result == nil, "devrait retourner nil"
 
-test "parse/tcp — parse_syn retourne nil sur EtherType non IP", ->
-  -- Trame avec EtherType ARP (0x0806)
-  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
-  eth_dst = "\x11\x22\x33\x44\x55\x66"
-  bad = eth_dst .. eth_src .. string.char(0x08, 0x06) .. string.rep("\0", 46)
-  result = parse_syn bad
-  assert result == nil, "devrait retourner nil pour ARP"
+-- test "parse/tcp — parse_syn retourne nil sur EtherType non IP", ->
+--   -- Trame avec EtherType ARP (0x0806)
+--   eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+--   eth_dst = "\x11\x22\x33\x44\x55\x66"
+--   bad = eth_dst .. eth_src .. string.char(0x08, 0x06) .. string.rep("\0", 46)
+--   result = parse_syn bad
+--   assert result == nil, "devrait retourner nil pour ARP"
 
-test "parse/tcp — inet_sum et fold_cksum sont cohérents", ->
-  -- Pseudo-paquet de 4 octets : 0x0102 0x0304
-  data = string.char(0x01, 0x02, 0x03, 0x04)
-  p = ffi.cast "const uint8_t*", data
-  s = inet_sum p, 0, 4
-  assert_eq s, 0x0102 + 0x0304, "somme brute"
-  ck = fold_cksum s
-  assert ck >= 0 and ck <= 0xFFFF, "checksum dans la plage uint16"
+-- test "parse/tcp — inet_sum et fold_cksum sont cohérents", ->
+--   -- Pseudo-paquet de 4 octets : 0x0102 0x0304
+--   data = string.char(0x01, 0x02, 0x03, 0x04)
+--   p = ffi.cast "const uint8_t*", data
+--   s = inet_sum p, 0, 4
+--   assert_eq s, 0x0102 + 0x0304, "somme brute"
+--   ck = fold_cksum s
+--   assert ck >= 0 and ck <= 0xFFFF, "checksum dans la plage uint16"
 
-test "parse/tcp — build_response_frames produit 3 trames non vides", ->
-  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
-  eth_dst = "\x11\x22\x33\x44\x55\x66"
-  frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
-  syn = parse_syn frame
-  assert syn != nil, "parse_syn prérequis"
-  f1, f2, f3 = build_response_frames syn, "https://10.0.0.1:33443/"
-  assert f1 and #f1 > 0, "SYN-ACK vide"
-  assert f2 and #f2 > 0, "DATA vide"
-  assert f3 and #f3 > 0, "FIN-ACK vide"
+-- test "parse/tcp — build_response_frames produit 3 trames non vides", ->
+--   eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+--   eth_dst = "\x11\x22\x33\x44\x55\x66"
+--   frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
+--   syn = parse_syn frame
+--   assert syn != nil, "parse_syn prérequis"
+--   f1, f2, f3 = build_response_frames syn, "https://10.0.0.1:33443/"
+--   assert f1 and #f1 > 0, "SYN-ACK vide"
+--   assert f2 and #f2 > 0, "DATA vide"
+--   assert f3 and #f3 > 0, "FIN-ACK vide"
 
-test "parse/tcp — SYN-ACK a les flags SYN|ACK (0x12)", ->
-  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
-  eth_dst = "\x11\x22\x33\x44\x55\x66"
-  frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
-  syn = parse_syn frame
-  f1, _, _ = build_response_frames syn, "https://10.0.0.1:33443/"
-  p = ffi.cast "const uint8_t*", f1
-  -- Ethernet(14) + IPv4(20) = 34, TCP flags à offset 34+13 = 47
-  flags = p[47]
-  assert_eq flags, 0x12, "flags SYN-ACK"
+-- test "parse/tcp — SYN-ACK a les flags SYN|ACK (0x12)", ->
+--   eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+--   eth_dst = "\x11\x22\x33\x44\x55\x66"
+--   frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
+--   syn = parse_syn frame
+--   f1, _, _ = build_response_frames syn, "https://10.0.0.1:33443/"
+--   p = ffi.cast "const uint8_t*", f1
+--   -- Ethernet(14) + IPv4(20) = 34, TCP flags à offset 34+13 = 47
+--   flags = p[47]
+--   assert_eq flags, 0x12, "flags SYN-ACK"
 
-test "parse/tcp — DATA contient le corps HTTP 302", ->
-  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
-  eth_dst = "\x11\x22\x33\x44\x55\x66"
-  frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
-  syn = parse_syn frame
-  _, f2, _ = build_response_frames syn, "https://10.0.0.1:33443/"
-  -- Ethernet(14) + IPv4(20) + TCP(20) = 54
-  payload = f2\sub 55
-  assert payload\find("302 Found", 1, true), "302 Found absent du payload"
-  assert payload\find("Location:", 1, true), "Location absent du payload"
+-- test "parse/tcp — DATA contient le corps HTTP 302", ->
+--   eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+--   eth_dst = "\x11\x22\x33\x44\x55\x66"
+--   frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
+--   syn = parse_syn frame
+--   _, f2, _ = build_response_frames syn, "https://10.0.0.1:33443/"
+--   -- Ethernet(14) + IPv4(20) + TCP(20) = 54
+--   payload = f2\sub 55
+--   assert payload\find("302 Found", 1, true), "302 Found absent du payload"
+--   assert payload\find("Location:", 1, true), "Location absent du payload"
 
-test "parse/tcp — MACs inversées dans SYN-ACK", ->
-  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
-  eth_dst = "\x11\x22\x33\x44\x55\x66"
-  frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
-  syn = parse_syn frame
-  f1, _, _ = build_response_frames syn, "https://10.0.0.1:33443/"
-  -- Octets 0-5 = MAC dest (doit être eth_dst du SYN = eth_dst)
-  mac_d = f1\sub 1, 6
-  -- Octets 6-11 = MAC src (doit être eth_src du SYN = eth_src)
-  mac_s = f1\sub 7, 12
-  assert_eq mac_d, eth_dst, "MAC dst inversée"
-  assert_eq mac_s, eth_src, "MAC src inversée"
+-- test "parse/tcp — MACs inversées dans SYN-ACK", ->
+--   eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
+--   eth_dst = "\x11\x22\x33\x44\x55\x66"
+--   frame = make_eth_syn eth_src, eth_dst, "192.168.1.10", "10.0.0.1", 54321, 80, 0x00001000
+--   syn = parse_syn frame
+--   f1, _, _ = build_response_frames syn, "https://10.0.0.1:33443/"
+--   -- Octets 0-5 = MAC dest (doit être eth_dst du SYN = eth_dst)
+--   mac_d = f1\sub 1, 6
+--   -- Octets 6-11 = MAC src (doit être eth_src du SYN = eth_src)
+--   mac_s = f1\sub 7, 12
+--   assert_eq mac_d, eth_dst, "MAC dst inversée"
+--   assert_eq mac_s, eth_src, "MAC src inversée"
 
 -- ── Tests parse/ndpi avec eth_offset=14 (mode bridge) ────────────
 io.write "\n── parse/ndpi eth_offset=14 ──\n"

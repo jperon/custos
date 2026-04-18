@@ -12,8 +12,11 @@
 { :ffi, :libnfq } = require "ffi_defs"
 { :BRIDGE_MODE, :NFQ_BRIDGE_MODE } = require "config"
 bit = require "bit"
+{ :proto } = require "ipparse.l2.ethernet"
 
 ETH_OFFSET = NFQ_BRIDGE_MODE and 14 or 0
+ETH_IPV4 = proto.IP4
+ETH_IPV6 = proto.IP6
 
 --- Formate 6 octets d'un pointeur FFI en chaîne "aa:bb:cc:dd:ee:ff".
 -- @tparam cdata p   uint8_t pointer.
@@ -61,4 +64,4 @@ get_l2 = (nfad, raw) ->
 
   { :mac_src, :mac_raw, :in_ifindex, :vlan }
 
-{ :get_l2, :format_mac, :format_mac_ptr, :ETH_OFFSET }
+{ :get_l2, :format_mac, :format_mac_ptr, :ETH_OFFSET, :ETH_IPV4, :ETH_IPV6 }

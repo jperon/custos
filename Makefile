@@ -11,10 +11,20 @@ MOONS := \
   $(SRC)/uci_config.moon \
   $(SRC)/ffi_defs.moon \
   $(SRC)/log.moon \
+  $(SRC)/ipparse/lib/bit_compat.moon \
+  $(SRC)/ipparse/lib/pack_compat.moon \
+  $(SRC)/ipparse/lib/sha.lua \
+  $(SRC)/ipparse/lib/sha2.lua \
+  $(SRC)/ipparse/fun.moon \
+  $(SRC)/ipparse/init.moon \
+  $(SRC)/ipparse/l3/lib.moon \
+  $(SRC)/ipparse/l3/ip4.moon \
+  $(SRC)/ipparse/l3/ip6.moon \
+  $(SRC)/ipparse/l3/ip.moon \
+  $(SRC)/ipparse/l2/ethernet.moon \
+  $(SRC)/ipparse/l4/tcp.moon \
+	$(SRC)/ipparse/l7/dns.moon \
   $(SRC)/parse/ethernet.moon \
-  $(SRC)/parse/ip.moon \
-  $(SRC)/parse/udp.moon \
-  $(SRC)/parse/dns.moon \
   $(SRC)/ffi_ndpi.moon \
   $(SRC)/ffi_ndpi_v4.moon \
   $(SRC)/ffi_ndpi_v5.moon \
@@ -25,7 +35,6 @@ MOONS := \
   $(SRC)/neigh.moon \
   $(SRC)/ip_whitelist.moon \
   $(SRC)/nft.moon \
-  $(SRC)/parse/tcp.moon \
   $(SRC)/nfq_loop.moon \
   $(SRC)/worker_q0.moon \
   $(SRC)/worker_q1.moon \
@@ -43,9 +52,13 @@ FILTER_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(FILTER_MOONS))
 AUTH_MOONS := $(shell find $(SRC)/auth -name '*.moon' 2>/dev/null)
 AUTH_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(AUTH_MOONS))
 
+## Modules ipparse/ (découverte automatique, exclude examples)
+IPPARSE_MOONS := $(shell find $(SRC)/ipparse -name '*.moon' 2>/dev/null | grep -v examples)
+IPPARSE_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(IPPARSE_MOONS))
+
 .PHONY: all clean check test test-ndpi test-openwrt run reload update-lists make-secret logs help
 
-all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) install-owrt.lua
+all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
 
 install-owrt.lua: install-owrt.moon

@@ -209,61 +209,28 @@ Installer = function(cfg)
         "luajit",
         "libnetfilter-queue",
         "nftables",
-        "kmod-br-netfilter",
         "kmod-nft-queue",
         "lyaml",
         "luasec",
         "libxxhash",
-        "openssl-util"
-      }
-      local pkgs_optional = {
+        "openssl-util",
         "libndpi"
       }
+      local pkg_list = table.concat(pkgs_required, " ")
       local install_cmd
       if pm == "apk" then
-        install_cmd = function(pkg)
-          return "apk add " .. tostring(pkg)
-        end
+        install_cmd = "apk add " .. tostring(pkg_list)
       else
-        install_cmd = function(pkg)
-          return "opkg install " .. tostring(pkg)
-        end
+        install_cmd = "opkg install " .. tostring(pkg_list)
       end
-      local check_cmd
-      if pm == "apk" then
-        check_cmd = function(pkg)
-          return "apk info -e " .. tostring(pkg) .. " 2>/dev/null && echo installed"
-        end
+      info("  " .. tostring(install_cmd))
+      if self:ssh_run(install_cmd) then
+        ok("Tous les paquets installés")
+        return true
       else
-        check_cmd = function(pkg)
-          return "opkg list-installed " .. tostring(pkg) .. " 2>/dev/null"
-        end
+        fail("Impossible d'installer les paquets")
+        return false
       end
-      local ok_all = true
-      for _index_0 = 1, #pkgs_required do
-        local pkg = pkgs_required[_index_0]
-        info("  " .. tostring(install_cmd(pkg)))
-        if not (self:ssh_run(install_cmd(pkg))) then
-          local installed = self:ssh_capture(check_cmd(pkg))
-          if installed and installed:find(pkg) then
-            ok("  " .. tostring(pkg) .. " déjà installé")
-          else
-            fail("  Impossible d'installer " .. tostring(pkg))
-            ok_all = false
-          end
-        end
-      end
-      for _index_0 = 1, #pkgs_optional do
-        local pkg = pkgs_optional[_index_0]
-        info("  " .. tostring(install_cmd(pkg)) .. " (optionnel)")
-        if self:ssh_run(install_cmd(pkg)) then
-          ok("  " .. tostring(pkg) .. " installé")
-        else
-          warn("  " .. tostring(pkg) .. " introuvable dans " .. tostring(pm) .. " — ajoutez le feed packages OpenWrt")
-          warn("  Sans libndpi, le filtre ne démarrera pas (dépendance ffi.load)")
-        end
-      end
-      return ok_all
     end,
     upload_files = function(self)
       step("Copie des fichiers vers " .. tostring(self.cfg.dest))
@@ -716,6 +683,6 @@ main = function()
   io.write("\n" .. tostring(GREEN) .. tostring(BOLD) .. "✓ Installation terminée." .. tostring(NC) .. "\n")
   info("Statut   : ssh " .. tostring(cfg.user) .. "@" .. tostring(cfg.host) .. " '/etc/init.d/custos status'")
   info("Logs     : ssh " .. tostring(cfg.user) .. "@" .. tostring(cfg.host) .. " 'logread | grep custos'")
-  return info("Reload   : ssh " .. tostring(cfg.user) .. "@" .. tostring(cfg.host) .. " '/etc/init.d/custos reload'")
+  return info("Restart   : ssh " .. tostring(cfg.user) .. "@" .. tostring(cfg.host) .. " '/etc/init.d/custos restart'")
 end
 return main()

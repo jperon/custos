@@ -572,6 +572,6 @@ main = ->
   io.write "\n#{GREEN}#{BOLD}✓ Installation terminée.#{NC}\n"
   info "Statut   : ssh #{cfg.user}@#{cfg.host} '/etc/init.d/custos status'"
   info "Logs     : ssh #{cfg.user}@#{cfg.host} 'logread | grep custos'"
-  info "Reload   : ssh #{cfg.user}@#{cfg.host} '/etc/init.d/custos reload'"
+  info "Restart   : ssh #{cfg.user}@#{cfg.host} '/etc/init.d/custos restart'"
 
 main!

@@ -7,7 +7,7 @@
 --   main (superviseur)
 --   ├── worker Q0 (questions)   — écrit dans pipe_wfd
 --   ├── worker Q1 (réponses)    — lit depuis pipe_rfd
---   └── worker Q2 (captif)      — mode bridge uniquement (BRIDGE_MODE=1)
+--   └── worker Q2 (captif)      — mode bridge
 --
 -- Le superviseur ne traite aucun paquet. Il boucle sur waitpid()
 -- et relance le worker mort après un délai de 1 seconde.
@@ -24,7 +24,6 @@
 --     + la liste blanche IP via filter.reload())
 
 { :ffi, :libc } = require "ffi_defs"
-{ :BRIDGE_MODE } = require "config"
 { :log_info, :log_warn, :log_error } = require "log"
 
 -- ── Helpers POSIX ────────────────────────────────────────────────
@@ -165,17 +164,14 @@ supervise = (pipe, sfd) ->
         (-> require("auth.worker").run_auth_worker auth_cfg),
         pipe.rfd
     }
-  }
-
-  -- En mode bridge, ajouter le worker Q2 (portail captif par forge TCP).
-  if BRIDGE_MODE
-    workers[#workers + 1] = {
+    {
       name:       "Q2-captive"
       pid:        nil
       restart_fn: -> fork_worker "Q2-captive",
         (-> require("worker_q2").run auth_cfg),
         pipe.rfd   -- fd factice
     }
+  }
 
   for w in *workers
     w.pid = w.restart_fn!

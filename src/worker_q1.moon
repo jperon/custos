@@ -23,10 +23,101 @@ ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
 { :get_l2, :ETH_OFFSET } = require "parse/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
-{ :build_refused, :build_nxdomain, :append_ede_to_dns, :EDE_OTHER, :EDE_TTL_TEXT, :EDNS_OPT_EDE } = require "parse/dns"
+{
+  :parse, :pack
+  :parse_header, :pack_header
+  :parse_question, :pack_question, :parse_questions
+  :parse_rr, :pack_rr, :parse_rrs
+  rcodes: {:NXDOMAIN}
+  types: {:A, :AAAA}
+  :ede_codes
+} = require "ipparse.l7.dns"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6 } = require "nft"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_info, :log_warn, :now } = require "log"
+bit = require "bit"
+pack: sp = require"ipparse.lib.pack_compat"
+:concat, :insert, :remove = table
+
+-- ── DNS helper functions (ipparse.l7.dns pattern) ───────────────────────
+
+-- EDE codes from RFC 8914 (bidirectional in ipparse)
+EDE_BLOCKED = ede_codes.Stale_NXDOMAIN_Answer  -- 17
+EDE_TTL_MODIFIED = ede_codes.DNSSEC_Bogus       -- 6
+
+-- Message texts
+EDE_BLOCKED_TEXT = "Ne intretis."
+EDE_TTL_TEXT = "Custos vigilat."
+
+-- Add or replace EDNS EDE option in DNS message
+-- Following shelterwall pattern: remove existing OPT RR, add new one with EDE
+add_ede = (ede_code, text) =>
+  -- Remove existing OPT RR (rtype 0x29)
+  for i = #(@additionals or {}), 1, -1
+    if @additionals[i].rtype == 0x29
+      remove @additionals, i
+
+  -- Add new OPT RR with EDE option (RFC 6891, RFC 8914)
+  @additionals or= {}
+  insert @additionals, 1, {
+    rname: "\0"          -- root name
+    rtype: 0x29         -- OPT
+    rclass: 0           -- UDP payload size (ignored in response)
+    ttl: 0              -- extended RCODE and flags
+    rdata: sp ">Hs2", 0x000F, (sp(">H", ede_code)..text)  -- EDE option
+  }
+  @header.arcount = #(@additionals or {})
+  @
+
+-- Build blocked DNS response: NXDOMAIN + synthetic 0.0.0.0/:: + EDE 17
+build_blocked_response = (dns_orig, dns_raw) ->
+  return nil unless dns_orig and dns_raw
+
+  -- Parse original DNS message (dns_raw is already extracted DNS payload)
+  dns = parse dns_raw, 1, false
+  return nil unless dns
+
+  -- Set RCODE to NXDOMAIN
+  dns.header.rcode = NXDOMAIN
+
+  -- Clear answers, add synthetic 0.0.0.0 or :: based on QTYPE
+  dns.answers = {}
+  if dns.question and dns.question.qtype
+    qtype = dns.question.qtype
+    rdata = if qtype == A
+      string.char(0, 0, 0, 0)  -- 0.0.0.0
+    elseif qtype == AAAA
+      string.char(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)  -- ::
+    else
+      string.char(0, 0, 0, 0)  -- default 0.0.0.0
+
+    -- Add synthetic answer with compression pointer (0xC0 0x0C points to question name)
+    dns.answers[1] = {
+      rname: string.char(0xC0, 0x0C)  -- pointer to offset 12
+      rtype: qtype
+      rclass: 1  -- IN
+      ttl: 60
+      rdata: rdata
+    }
+    dns.header.ancount = 1
+
+  -- Add EDE 17 (Stale_NXDOMAIN_Answer) with "Ne intretis."
+  add_ede dns, EDE_BLOCKED, EDE_BLOCKED_TEXT
+
+  -- Pack DNS message
+  tostring dns
+
+-- Add EDE 4 (DNSSEC_Bogus) to DNS message for TTL-modified responses
+add_ede_ttl = (dns_payload) ->
+  -- Parse DNS message
+  dns = parse dns_payload, 1, false
+  return dns_payload unless dns
+
+  -- Add EDE 4 with "Custos vigilat."
+  add_ede dns, EDE_TTL_MODIFIED, EDE_TTL_TEXT
+
+  -- Pack DNS message
+  tostring dns
 
 IPC_RETRY_ENABLED = if IPC_MATCH_RETRY_ENABLED == nil then true else IPC_MATCH_RETRY_ENABLED
 IPC_RETRY_COUNT = IPC_MATCH_RETRY_COUNT or 5
@@ -246,10 +337,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   refused = entry and entry.refused or false
   dnsonly = entry and entry.dnsonly or false
 
-  -- ── Branche REFUSED : réponse du serveur transformée en REFUSED+EDE ──
+  -- ── Branche REFUSED : réponse du serveur transformée en NXDOMAIN+EDE ──
   if refused
     dns_raw    = ndpi.extract_dns_payload raw, pkt
-    refused_dns = build_nxdomain { hdr: pkt.dns }, dns_raw
+    refused_dns = build_blocked_response pkt.dns, dns_raw
     unless refused_dns
       return NF_DROP
     patched = ndpi.replace_dns_payload raw, pkt, refused_dns
@@ -339,8 +430,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- 4. Reconstruire le paquet IP complet avec le nouveau payload
   dns_raw = ndpi.extract_dns_payload raw, pkt
   new_dns = ndpi.patch_ttl_in_dns dns_raw, answers, FORCED_TTL
-  ede_data = string.char(0x00, EDE_OTHER) .. EDE_TTL_TEXT
-  new_dns = append_ede_to_dns(new_dns, { { code: EDNS_OPT_EDE, data: ede_data } }) or new_dns
+  new_dns = add_ede_ttl(new_dns) or new_dns
   patched = ndpi.replace_dns_payload raw, pkt, new_dns
 
   -- Log de la réponse

@@ -22,10 +22,10 @@ do
   local _obj_0 = require("ipc")
   drain_pipe, is_pending, get_pending_entry, consume = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.get_pending_entry, _obj_0.consume
 end
-local build_refused, build_nxdomain, append_ede_to_dns, EDE_OTHER, EDE_TTL_TEXT, EDNS_OPT_EDE
+local parse, pack, parse_header, pack_header, parse_question, pack_question, parse_questions, parse_rr, pack_rr, parse_rrs, NXDOMAIN, A, AAAA, ede_codes
 do
-  local _obj_0 = require("parse/dns")
-  build_refused, build_nxdomain, append_ede_to_dns, EDE_OTHER, EDE_TTL_TEXT, EDNS_OPT_EDE = _obj_0.build_refused, _obj_0.build_nxdomain, _obj_0.append_ede_to_dns, _obj_0.EDE_OTHER, _obj_0.EDE_TTL_TEXT, _obj_0.EDNS_OPT_EDE
+  local _obj_0 = require("ipparse.l7.dns")
+  parse, pack, parse_header, pack_header, parse_question, pack_question, parse_questions, parse_rr, pack_rr, parse_rrs, NXDOMAIN, A, AAAA, ede_codes = _obj_0.parse, _obj_0.pack, _obj_0.parse_header, _obj_0.pack_header, _obj_0.parse_question, _obj_0.pack_question, _obj_0.parse_questions, _obj_0.parse_rr, _obj_0.pack_rr, _obj_0.parse_rrs, _obj_0.rcodes.NXDOMAIN, _obj_0.types.A, _obj_0.types.AAAA, _obj_0.ede_codes
 end
 local add_ip4, add_ip6, add_mac4, add_mac6
 do
@@ -41,6 +41,84 @@ local log_allow, log_block, log_info, log_warn, now
 do
   local _obj_0 = require("log")
   log_allow, log_block, log_info, log_warn, now = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_info, _obj_0.log_warn, _obj_0.now
+end
+local bit = require("bit")
+local sp
+sp = require("ipparse.lib.pack_compat").pack
+local concat, insert, remove
+do
+  local _obj_0 = table
+  concat, insert, remove = _obj_0.concat, _obj_0.insert, _obj_0.remove
+end
+local EDE_BLOCKED = ede_codes.Stale_NXDOMAIN_Answer
+local EDE_TTL_MODIFIED = ede_codes.DNSSEC_Bogus
+local EDE_BLOCKED_TEXT = "Ne intretis."
+local EDE_TTL_TEXT = "Custos vigilat."
+local add_ede
+add_ede = function(self, ede_code, text)
+  for i = #(self.additionals or { }), 1, -1 do
+    if self.additionals[i].rtype == 0x29 then
+      remove(self.additionals, i)
+    end
+  end
+  self.additionals = self.additionals or { }
+  insert(self.additionals, 1, {
+    rname = "\0",
+    rtype = 0x29,
+    rclass = 0,
+    ttl = 0,
+    rdata = sp(">Hs2", 0x000F, (sp(">H", ede_code) .. text))
+  })
+  self.header.arcount = #(self.additionals or { })
+  return self
+end
+local build_blocked_response
+build_blocked_response = function(dns_orig, dns_raw)
+  if not (dns_orig and dns_raw) then
+    return nil
+  end
+  local dns = parse(dns_raw, 1, false)
+  if not (dns) then
+    return nil
+  end
+  dns.header.rcode = NXDOMAIN
+  dns.answers = { }
+  if dns.question and dns.question.qtype then
+    local qtype = dns.question.qtype
+    local rdata
+    if qtype == A then
+      rdata = string.char(0, 0, 0, 0)
+    elseif qtype == AAAA then
+      rdata = string.char(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    else
+      rdata = string.char(0, 0, 0, 0)
+    end
+    dns.answers[1] = {
+      rname = string.char(0xC0, 0x0C),
+      rtype = qtype,
+      rclass = 1,
+      ttl = 60,
+      rdata = rdata
+    }
+    dns.header.ancount = 1
+  end
+  log_warn({
+    line = 105
+  })
+  add_ede(dns, EDE_BLOCKED, EDE_BLOCKED_TEXT)
+  return tostring(dns)
+end
+local add_ede_ttl
+add_ede_ttl = function(dns_payload)
+  local dns = parse(dns_payload, 1, false)
+  if not (dns) then
+    return dns_payload
+  end
+  log_warn({
+    line = 118
+  })
+  add_ede(dns, EDE_TTL_MODIFIED, EDE_TTL_TEXT)
+  return tostring(dns)
 end
 local IPC_RETRY_ENABLED
 if IPC_MATCH_RETRY_ENABLED == nil then
@@ -246,9 +324,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local dnsonly = entry and entry.dnsonly or false
   if refused then
     local dns_raw = ndpi.extract_dns_payload(raw, pkt)
-    local refused_dns = build_nxdomain({
-      hdr = pkt.dns
-    }, dns_raw)
+    local refused_dns = build_blocked_response(pkt.dns, dns_raw)
     if not (refused_dns) then
       return NF_DROP
     end
@@ -375,13 +451,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local dns_raw = ndpi.extract_dns_payload(raw, pkt)
   local new_dns = ndpi.patch_ttl_in_dns(dns_raw, answers, FORCED_TTL)
-  local ede_data = string.char(0x00, EDE_OTHER) .. EDE_TTL_TEXT
-  new_dns = append_ede_to_dns(new_dns, {
-    {
-      code = EDNS_OPT_EDE,
-      data = ede_data
-    }
-  }) or new_dns
+  new_dns = add_ede_ttl(new_dns) or new_dns
   local patched = ndpi.replace_dns_payload(raw, pkt, new_dns)
   local qnames = table.concat((function()
     local _accum_0 = { }

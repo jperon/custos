@@ -5,8 +5,11 @@ do
 end
 local QUEUE_QUESTIONS
 QUEUE_QUESTIONS = require("config").QUEUE_QUESTIONS
-local get_l2
-get_l2 = require("parse/ethernet").get_l2
+local get_l2, ETH_OFFSET
+do
+  local _obj_0 = require("parse/ethernet")
+  get_l2, ETH_OFFSET = _obj_0.get_l2, _obj_0.ETH_OFFSET
+end
 local ndpi = require("parse/ndpi")
 local filter = require("filter")
 local write_msg, write_refused_msg, write_dnsonly_msg
@@ -28,14 +31,14 @@ local pipe_wfd = nil
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
   filter.reload()
-  local l2 = get_l2(nfad)
   local payload_ptr = ffi.new("unsigned char*[1]")
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
   if payload_len <= 0 then
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
-  local pkt, parse_status = ndpi.parse_packet(raw)
+  local l2 = get_l2(nfad, raw)
+  local pkt, parse_status = ndpi.parse_packet(raw, ETH_OFFSET)
   if not (pkt) then
     if parse_status == "buffering" then
       return NF_ACCEPT
@@ -95,14 +98,25 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       verdict = NF_DROP
     end
   end
+  local ipc_ok = false
   if verdict == NF_ACCEPT then
     if dnsonly then
-      write_dnsonly_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw)
+      ipc_ok = write_dnsonly_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw)
     else
-      write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw)
+      ipc_ok = write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw)
     end
   else
-    write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw)
+    ipc_ok = write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw)
+  end
+  if not (ipc_ok) then
+    log_warn({
+      action = "ipc_write_failed",
+      txid = string.format("0x%04x", pkt.dns.txid),
+      src_ip = pkt.ip.src_ip,
+      dst_ip = pkt.ip.dst_ip,
+      src_port = pkt.l4.src_port
+    })
+    return NF_DROP
   end
   return NF_ACCEPT
 end
