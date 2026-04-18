@@ -13,175 +13,81 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_CAPTIVE } = require "config"
-parse: parse_eth = require "ipparse.l2.ethernet"
-parse: parse_ip, proto: l3_proto = require "ipparse.l3.ip"
+parse: parse_eth, :new, :mac2s, :s2mac, proto: {:IP6, :IP4} = require "ipparse.l2.ethernet"
+parse: parse_ip, proto: l3_proto, :ip2s = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
+{ :get_l2, :ETH_OFFSET } = require "parse/ethernet"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_error } = require "log"
-bit = require "bit"
-pack: sp = require "ipparse.lib.pack_compat"
+{ :flags } = require "ipparse.l4.tcp"
+{ :SYN, :ACK, :FIN, :PSH } = flags
+{ :get_mac } = require "neigh"
 
--- ── TCP helper functions (ipparse for parsing, custom for frame forge) ──
+-- ── TCP helper functions (ipparse for parsing and serialization) ──
 
 AF_PACKET   = 17
 SOCK_RAW    = 3
 ETH_P_ALL   = 0x0300  -- htons(0x0003)
 PROTO_TCP   = 6
 
--- Byte-level helpers (0-based FFI pointer, big-endian)
-r16 = (p, o) -> bit.bor bit.lshift(p[o], 8), p[o + 1]
-r32 = (p, o) ->
-  tonumber ffi.cast "uint32_t",
-    bit.bor(bit.lshift(p[o], 24), bit.lshift(p[o+1], 16),
-           bit.lshift(p[o+2], 8), p[o+3])
-
-w16 = (p, o, v) ->
-  p[o]   = bit.band bit.rshift(v, 8), 0xFF
-  p[o+1] = bit.band v, 0xFF
-
-w32 = (p, o, v) ->
-  p[o]   = bit.band bit.rshift(v, 24), 0xFF
-  p[o+1] = bit.band bit.rshift(v, 16), 0xFF
-  p[o+2] = bit.band bit.rshift(v,  8), 0xFF
-  p[o+3] = bit.band v, 0xFF
-
--- Parse TCP SYN from Ethernet frame using ipparse
+-- Parse TCP SYN from NFQUEUE payload (bridge mode).
+-- Q2 receives IP-only packets (no Ethernet header).
+-- Returns the parsed IP and TCP objects (no Ethernet header).
 parse_syn = (raw) ->
-  eth, eth_off = parse_eth raw
-  return nil unless eth
-
-  ip, ip_off = parse_ip raw, eth_off, eth.protocol
+  -- Parse IP at offset 1 (Lua 1-based string indexing)
+  ip, ip_off = parse_ip raw, 1
   return nil unless ip
 
+  -- Parse TCP at the offset after IP header
   tcp, tcp_off = parse_tcp raw, ip.data_off
   return nil unless tcp
 
-  -- Extract fields needed for frame forging
-  {
-    eth_src: eth.src
-    eth_dst: eth.dst
-    ip_ver: ip.version
-    ip_src_raw: if ip.version == 4 then ip.src else ffi.string(ffi.cast("const uint8_t*", ip.src), 16)
-    ip_dst_raw: if ip.version == 4 then ip.dst else ffi.string(ffi.cast("const uint8_t*", ip.dst), 16)
-    ip_src: if ip.version == 4 then string.format("%d.%d.%d.%d", ip.src\byte(1), ip.src\byte(2), ip.src\byte(3), ip.src\byte(4)) else ip.ip2s(ip.src)
-    ip_dst: if ip.version == 4 then string.format("%d.%d.%d.%d", ip.dst\byte(1), ip.dst\byte(2), ip.dst\byte(3), ip.dst\byte(4)) else ip.ip2s(ip.dst)
-    sport: tcp.spt
-    dport: tcp.dpt
-    seq: tcp.seq_n
-    flags: tcp.flags
-    ip_off: ip_off
-    tcp_off: ip.data_off
-    ihl: if ip.version == 4 then (ip.data_off - ip_off) else 40
-  }
+  ip, ip_off, tcp, tcp_off
 
--- Checksum helpers (keep from original parse/tcp.moon)
-inet_sum = (p, off, len) ->
-  sum = 0
-  i = off
-  while i + 1 < off + len
-    sum += r16 p, i
-    i += 2
-  if (len % 2) == 1
-    sum += bit.lshift p[off + len - 1], 8
-  sum
-
-fold_cksum = (sum) ->
-  while bit.rshift(sum, 16) != 0
-    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
-  bit.band bit.bnot(sum), 0xFFFF
-
-tcp4_cksum = (buf, ip_off, tcp_off, pkt_len) ->
-  buf[tcp_off + 16] = 0
-  buf[tcp_off + 17] = 0
-  tcp_len = pkt_len - tcp_off
-  sum = inet_sum buf, ip_off + 12, 8
-  sum += PROTO_TCP
-  sum += tcp_len
-  sum += inet_sum buf, tcp_off, tcp_len
-  fold_cksum sum
-
-tcp6_cksum = (buf, ip_off, tcp_off, pkt_len) ->
-  buf[tcp_off + 16] = 0
-  buf[tcp_off + 17] = 0
-  tcp_len = pkt_len - tcp_off
-  sum = inet_sum buf, ip_off + 8, 32
-  sum += tcp_len
-  sum += PROTO_TCP
-  sum += inet_sum buf, tcp_off, tcp_len
-  fold_cksum sum
-
-ip4_cksum = (buf, ip_off, ihl) ->
-  buf[ip_off + 10] = 0
-  buf[ip_off + 11] = 0
-  cksum = fold_cksum inet_sum(buf, ip_off, ihl)
-  w16 buf, ip_off + 10, cksum
-
--- Build Ethernet frames for TCP redirect (keep original logic)
-build_response_frames = (syn, redirect_url) ->
+-- Build Ethernet frames for TCP redirect using ipparse
+-- Modifies parsed objects in-place (no cloning, no constructor overhead)
+build_response_frames = (eth, ip, tcp, redirect_url) ->
   isn = math.random 0, 0x7FFFFFFF
   http_body = "HTTP/1.1 302 Found\r\nLocation: #{redirect_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
   http_len  = #http_body
 
+  their_seq_plus1 = (tcp.seq_n + 1) % 0x100000000
+
+  -- Swap src/dst once (before frame building loop)
+  tcp.spt, tcp.dpt = tcp.dpt, tcp.spt
+  ip.src, ip.dst = ip.dst, ip.src
+  eth.dst, eth.src = eth.src, eth.dst
+
   build_frame = (tcp_flags, payload_str, our_seq, their_ack) ->
-    payload_len = payload_str and #payload_str or 0
-    ip_off = 14
-    tcp_off = if syn.ip_ver == 4 then ip_off + 20 else ip_off + 40
-    pkt_len = tcp_off + 20 + payload_len
+    -- Modify TCP in-place
+    tcp.seq_n = our_seq
+    tcp.ack_n = their_ack
+    tcp.flags = tcp_flags
+    tcp.window = 65535
+    tcp.urg_ptr = 0
+    tcp.data = payload_str or ""
 
-    buf = ffi.new "uint8_t[?]", pkt_len
-    ffi.fill buf, pkt_len, 0
-
-    -- Ethernet header: swap src/dst
-    ffi.copy buf,     syn.eth_dst, 6
-    ffi.copy buf + 6, syn.eth_src, 6
-    if syn.ip_ver == 4
-      w16 buf, 12, 0x0800
+    -- Modify IP in-place
+    ip.ttl or= 64
+    if ip.version == 4
+      ip.protocol = PROTO_TCP
     else
-      w16 buf, 12, 0x86DD
+      ip.next_header = PROTO_TCP
+    ip.data = tcp
 
-    if syn.ip_ver == 4
-      -- IPv4 header
-      buf[ip_off]     = 0x45
-      buf[ip_off + 8] = 64
-      buf[ip_off + 9] = PROTO_TCP
-      w16 buf, ip_off + 2, pkt_len - ip_off
-      ffi.copy buf + ip_off + 12, syn.ip_dst_raw, 4
-      ffi.copy buf + ip_off + 16, syn.ip_src_raw, 4
+    -- Modify Ethernet in-place
+    if ip.version == 4
+      eth.protocol = 0x0800
     else
-      -- IPv6 header
-      buf[ip_off] = 0x60
-      w16 buf, ip_off + 4, 20 + payload_len
-      buf[ip_off + 6]  = PROTO_TCP
-      buf[ip_off + 7]  = 64
-      ffi.copy buf + ip_off + 8,  syn.ip_dst_raw, 16
-      ffi.copy buf + ip_off + 24, syn.ip_src_raw, 16
+      eth.protocol = 0x86DD
+    eth.data = ip
 
-    -- TCP header
-    w16 buf, tcp_off,     syn.dport
-    w16 buf, tcp_off + 2, syn.sport
-    w32 buf, tcp_off + 4, our_seq
-    w32 buf, tcp_off + 8, their_ack
-    buf[tcp_off + 12] = 0x50
-    buf[tcp_off + 13] = tcp_flags
-    w16 buf, tcp_off + 14, 65535
+    -- Serialize (checksums calculated automatically by ipparse pack methods)
+    "#{eth}"
 
-    if payload_str and payload_len > 0
-      ffi.copy buf + tcp_off + 20, payload_str, payload_len
-
-    if syn.ip_ver == 4
-      cksum = tcp4_cksum buf, ip_off, tcp_off, pkt_len
-      w16 buf, tcp_off + 16, cksum
-      ip4_cksum buf, ip_off, 20
-    else
-      cksum = tcp6_cksum buf, ip_off, tcp_off, pkt_len
-      w16 buf, tcp_off + 16, cksum
-
-    ffi.string buf, pkt_len
-
-  their_seq_plus1 = (syn.seq + 1) % 0x100000000
-  syn_ack = build_frame 0x12, nil, isn, their_seq_plus1
-  data    = build_frame 0x18, http_body, (isn + 1) % 0x100000000, their_seq_plus1
-  fin_ack = build_frame 0x11, nil, (isn + 1 + http_len) % 0x100000000, their_seq_plus1
+  syn_ack = build_frame (SYN + ACK), nil, isn, their_seq_plus1
+  data    = build_frame (PSH + ACK), http_body, (isn + 1) % 0x100000000, their_seq_plus1
+  fin_ack = build_frame (FIN + ACK), nil, (isn + 1 + http_len) % 0x100000000, their_seq_plus1
 
   syn_ack, data, fin_ack
 
@@ -211,7 +117,7 @@ redirect_url = nil
 
 -- ── Callback principal ───────────────────────────────────────────
 --- Handle a TCP SYN/80 packet from NFQUEUE 2.
--- Parses the Ethernet frame, forges a TCP 302 redirect response, and drops the SYN.
+-- Parses the packet, forges a TCP 302 redirect response, and drops the SYN.
 -- @tparam cdata  qh_ptr  nfq_q_handle pointer
 -- @tparam cdata  nfad    nfq_data pointer
 -- @tparam number pkt_id  NFQUEUE packet id
@@ -223,20 +129,51 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
   raw = ffi.string payload_ptr[0], payload_len
 
-  syn = parse_syn(raw)
-  unless syn
+  -- Extract L2 info from NFQUEUE metadata (MAC addresses)
+  l2 = get_l2 nfad, raw
+
+  ip, ip_off, tcp, tcp_off = parse_syn(raw)
+  unless ip
     log_warn { action: "q2_parse_failed", queue: 2, len: payload_len }
     return NF_DROP
+
+  -- Use client MAC from NFQUEUE metadata (l2.mac_raw contains the source MAC from the packet)
+  -- In bridge mode with IP-only packets, get_l2 uses nfq_get_packet_hw() which has the client MAC
+  client_mac = l2.mac_raw if l2.mac_raw and l2.mac_raw != "\0\0\0\0\0\0"
+
+  -- Get bridge interface MAC address
+  bridge_mac = nil
+  bridge_mac_str = nil
+  -- Use "br" as the bridge interface (hardcoded to avoid initialization issues)
+  bridge_ifname = "br"
+  fh = io.open "/sys/class/net/#{bridge_ifname}/address", "r"
+  if fh
+    bridge_mac_str = fh\read "*a"\gsub "\n", ""
+    fh\close!
+    -- Use ipparse's s2mac to parse MAC string to binary
+    if bridge_mac_str and #bridge_mac_str > 0
+      bridge_mac = s2mac bridge_mac_str
+
+  -- Create Ethernet header using ipparse's new function
+  -- Note: build_response_frames swaps src/dst, so we set them in reverse:
+  -- - eth.src = client MAC (becomes dst after swap)
+  -- - eth.dst = bridge MAC (becomes src after swap)
+  eth = new {
+    src: client_mac or "\xFF\xFF\xFF\xFF\xFF\xFF"
+    dst: bridge_mac or "\0\0\0\0\0\0"
+    protocol: ip.version == 4 and IP4 or IP6
+  }
+  eth_off = 1
 
   send = (f) ->
     res = send_frame raw_fd, f, ifindex
     unless res
-      log_warn { action: "q2_frame_send_error", queue: 2, ip: syn and syn.ip_src or "unknown" }
+      log_warn { action: "q2_frame_send_error", queue: 2, ip: ip2s ip.src }
     res
 
   ok, err = pcall ->
-    f1, f2, f3 = build_response_frames syn, redirect_url
-    log_info { action: "q2_sending_frames", queue: 2, ip: syn.ip_src, frames: 3 }
+    f1, f2, f3 = build_response_frames eth, ip, tcp, redirect_url
+    log_info { action: "q2_sending_frames", queue: 2, ip: ip2s ip.src, frames: 3 }
     send f1
     send f2
     send f3
@@ -245,18 +182,16 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
     fields = {
       action:  "captive_redirect_q2"
       queue:   2
-      ip:      syn.ip_src
-      sport:   syn.sport
-      vlan:    tonumber(libnfq.nfq_get_nfmark nfad) or nil
+      ip:      ip2s ip.src
+      sport:   tcp.spt
+      mac:     mac2s l2.mac_raw
       url:     redirect_url
     }
-    if syn.eth_src
-      fields.mac = string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-        syn.eth_src\byte(1), syn.eth_src\byte(2), syn.eth_src\byte(3),
-        syn.eth_src\byte(4), syn.eth_src\byte(5), syn.eth_src\byte(6)
+    if l2.mac_src and l2.mac_src != "unknown"
+      fields.mac = l2.mac_src
     log_info fields
   else
-    log_warn { action: "q2_send_failed", queue: 2, err: tostring err, ip: syn.ip_src }
+    log_warn { action: "q2_send_failed", queue: 2, err: "#{err}", ip: ip2s ip.src }
 
   NF_DROP
 
@@ -280,8 +215,8 @@ run = (auth_cfg) ->
   if ok_sock
     pcall ->
       u = socket.udp!
-      pcall -> u\connect "8.8.8.8", 80
-      ip, _ = u\getsockname!
+      pcall -> u\connect "1.1.1.1", 80
+      ip = u\getsockname!
       u\close!
       if ip and ip != "" and ip != "0.0.0.0"
         local_ip = ip
@@ -302,10 +237,10 @@ run = (auth_cfg) ->
     return
 
   log_info {
-    action:       "q2_worker_start"
-    ifname:       ifname
-    ifindex:      ifindex
-    redirect_url: redirect_url
+    action: "q2_worker_start"
+    :ifname
+    :ifindex
+    :redirect_url
   }
 
   run_queue QUEUE_CAPTIVE, handle_syn
