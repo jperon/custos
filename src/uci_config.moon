@@ -112,16 +112,22 @@ validate_ip_cidr = (s) ->
   -- Format CIDR : / suivi d'un nombre
   if s\find ":"
     -- IPv6 : hhhhh:hhhh:hhhh:hhhh:hhhh:hhhh:hhhh:hhhh ou avec CIDR
-    return nil if s\match "[^%x:%.]"  -- caractères invalides
+    return nil if s\match "[^%x:%./]"  -- caractères invalides (autorise / pour CIDR)
     return nil if s\match ":::"  -- triple double-point invalide
   else
     -- IPv4 : a.b.c.d ou a.b.c.d/n
-    return nil if s\match "[^%d%.]"  -- caractères invalides
-    parts = s\split "/"
+    return nil if s\match "[^%d%./]"  -- caractères invalides (autorise / pour CIDR)
+    -- Split manuel pour /
+    parts = {}
+    for part in s\gmatch "[^/]+"
+      table.insert parts, part
     return nil if #parts > 2
     ip = parts[1]
     return nil unless ip
-    octets = ip\split "%."
+    -- Split manuel pour .
+    octets = {}
+    for octet in ip\gmatch "[^.]+"
+      table.insert octets, octet
     return nil unless #octets == 4
     for octet in *octets
       n = tonumber octet

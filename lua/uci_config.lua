@@ -101,17 +101,20 @@ validate_ip_cidr = function(s)
     return nil
   end
   if s:find(":") then
-    if s:match("[^%x:%.]") then
+    if s:match("[^%x:%./]") then
       return nil
     end
     if s:match(":::") then
       return nil
     end
   else
-    if s:match("[^%d%.]") then
+    if s:match("[^%d%./]") then
       return nil
     end
-    local parts = s:split("/")
+    local parts = { }
+    for part in s:gmatch("[^/]+") do
+      table.insert(parts, part)
+    end
     if #parts > 2 then
       return nil
     end
@@ -119,7 +122,10 @@ validate_ip_cidr = function(s)
     if not (ip) then
       return nil
     end
-    local octets = ip:split("%.")
+    local octets = { }
+    for octet in ip:gmatch("[^.]+") do
+      table.insert(octets, octet)
+    end
     if not (#octets == 4) then
       return nil
     end
