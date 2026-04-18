@@ -9,6 +9,7 @@ l7_quic = require "ipparse.l7.quic"
 :bin2hex, :hex2bin = require "ipparse.init"
 
 pack: sp, unpack: su = string
+{:band, :rshift} = require"ipparse.lib.bit_compat"
 
 print "🎯 ===== WORKING QUIC SNI EXTRACTION DEMO ====="
 print ""
@@ -48,7 +49,7 @@ create_proper_client_hello = (hostname) ->
   handshake ..= string.char(0x01)  -- ClientHello type
   -- Length is 24-bit big-endian
   len = #ch_payload
-  handshake ..= string.char((len >> 16) & 0xFF, (len >> 8) & 0xFF, len & 0xFF)
+  handshake ..= string.char(rshift(len, 16) & 0xFF, rshift(len, 8) & 0xFF, band(len, 0xFF))
   handshake ..= ch_payload
 
   -- Build TLS record

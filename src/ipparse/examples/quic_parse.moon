@@ -63,7 +63,7 @@ tls_ch_hex = "0100003E" .. -- TLS Handshake: Type=ClientHello, Len=62
 -- Type (0x06), Offset (0), Length (of tls_ch_hex)
 crypto_frame_data_len = #tls_ch_hex / 2
 -- For simplicity, assume crypto_frame_data_len fits in 2 bytes for varint encoding (0x4000 | len)
-crypto_frame_len_hex = string.format "%04x", (0x4000 | crypto_frame_data_len)
+crypto_frame_len_hex = string.format "%04x", bor(0x4000, crypto_frame_data_len)
 quic_crypto_frame_hex = "060000" .. crypto_frame_len_hex .. tls_ch_hex
 
 -- QUIC Packet Number (unprotected, 1 byte for this example, value 0)
@@ -130,9 +130,9 @@ quic_len_hex_varint = ""
 if quic_len_val < 64
   quic_len_hex_varint = string.format "%02x", quic_len_val
 elseif quic_len_val < 16384
-  quic_len_hex_varint = string.format "%04x", (0x4000 | quic_len_val)
+  quic_len_hex_varint = string.format "%04x", bor(0x4000, quic_len_val)
 else -- Simplified: use 4 bytes if larger, though QUIC supports 8
-  quic_len_hex_varint = string.format "%08x", (0x80000000 | quic_len_val)
+  quic_len_hex_varint = string.format "%08x", bor(0x80000000, quic_len_val)
 
 quic_header_prefix_hex = first_byte_protected_hex .. "00000001" .. -- Protected Flags/Type/PNLen, Version
                   "08" .. dcid_hex .. -- DCID Len, DCID

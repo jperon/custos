@@ -5,6 +5,7 @@
 
 l7_quic = require "ipparse.l7.quic"
 :bin2hex, :hex2bin = require "ipparse.init"
+{:band, :rshift} = require"ipparse.lib.bit_compat"
 
 print "=== Testing QUIC Layer 7 Module ==="
 print ""
@@ -41,15 +42,15 @@ mock_client_hello ..= extensions
 -- Fix the lengths in the mock data
 -- Update TLS record length
 record_len = #mock_client_hello - 5
-mock_client_hello = mock_client_hello\sub(1, 3) .. string.char(record_len >> 8, record_len & 0xFF) .. mock_client_hello\sub(6)
+mock_client_hello = mock_client_hello\sub(1, 3) .. string.char(rshift(record_len, 8), band(record_len, 0xFF)) .. mock_client_hello\sub(6)
 
 -- Update handshake message length
 hs_len = #mock_client_hello - 9
-mock_client_hello = mock_client_hello\sub(1, 6) .. string.char(hs_len >> 16, (hs_len >> 8) & 0xFF, hs_len & 0xFF) .. mock_client_hello\sub(10)
+mock_client_hello = mock_client_hello\sub(1, 6) .. string.char(rshift(hs_len, 16), rshift(hs_len, 8) & 0xFF, band(hs_len, 0xFF)) .. mock_client_hello\sub(10)
 
 -- Update extensions length
 ext_len = #extensions
-ext_len_bytes = string.char(ext_len >> 8, ext_len & 0xFF)
+ext_len_bytes = string.char(rshift(ext_len, 8), band(ext_len, 0xFF))
 ext_start = #mock_client_hello - #extensions - 2
 mock_client_hello = mock_client_hello\sub(1, ext_start) .. ext_len_bytes .. mock_client_hello\sub(ext_start + 3)
 

@@ -6,6 +6,7 @@
 l7_quic = require "ipparse.l7.quic"
 :bin2hex, :hex2bin = require "ipparse.init"
 pack: sp, unpack: su = string
+{:band, :rshift} = require"ipparse.lib.bit_compat"
 
 print "🧪 Testing QUIC L7 SNI Extraction"
 print ""
@@ -31,7 +32,7 @@ create_client_hello_with_sni = (hostname) ->
   -- Handshake message
   handshake_length = #client_hello
   handshake_msg = string.char(0x01)  -- ClientHello type
-  handshake_msg ..= string.char(0x00, (handshake_length >> 8) & 0xFF, handshake_length & 0xFF)  -- 24-bit length
+  handshake_msg ..= string.char(0x00, rshift(handshake_length, 8) & 0xFF, band(handshake_length, 0xFF))  -- 24-bit length
   handshake_msg ..= client_hello
 
   handshake_msg

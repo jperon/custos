@@ -5,6 +5,7 @@
 
 :bin2hex = require "ipparse.init"
 unpack: su = string
+{:lshift} = require"ipparse.lib.bit_compat"
 
 print "=== Working PCAP Test ==="
 
@@ -52,7 +53,7 @@ while offset <= #data
     packet_num: #packets + 1
     :interface_id, :ts_high, :ts_low, :captured_len, :original_len
     :packet_data
-    timestamp: (ts_high << 32) + ts_low
+    timestamp: lshift(ts_high, 32) + ts_low
   }
 
   packets[#packets + 1] = packet

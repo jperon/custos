@@ -13,6 +13,7 @@ l7_quic = require "ipparse.l7.quic"
 :bin2hex, :hex2bin = require "ipparse.init"
 
 unpack: su = string
+{:band, :rshift} = require"ipparse.lib.bit_compat"
 
 print "🎯 ===== COMPLETE QUIC SNI EXTRACTION PIPELINE DEMO ====="
 print ""
@@ -212,16 +213,16 @@ demonstrate_sni_extraction = (quic_packets) ->
     -- Name length
     sni_ext_data = string.char(
       0x00, 0x00,
-      (ext_len >> 8) & 0xFF, ext_len & 0xFF,
-      (list_len >> 8) & 0xFF, list_len & 0xFF,
+      rshift(ext_len, 8) & 0xFF, band(ext_len, 0xFF),
+      rshift(list_len, 8) & 0xFF, band(list_len, 0xFF),
       0x00,
-      (name_len >> 8) & 0xFF, name_len & 0xFF
+      rshift(name_len, 8) & 0xFF, band(name_len, 0xFF)
     ) .. mock_sni
 
     -- Extensions header
     -- Extensions length
     extensions_data = string.char(
-      (ext_len + 4) >> 8 & 0xFF, (ext_len + 4) & 0xFF
+      rshift(ext_len + 4, 8) & 0xFF, band(ext_len + 4, 0xFF)
     ) .. sni_ext_data
 
     client_hello_data ..= extensions_data
@@ -229,16 +230,16 @@ demonstrate_sni_extraction = (quic_packets) ->
     -- Fix handshake length
     hs_len = #client_hello_data - 9
     client_hello_data = client_hello_data\sub(1, 6) .. string.char(
-      (hs_len >> 16) & 0xFF,
-      (hs_len >> 8) & 0xFF,
-      hs_len & 0xFF
+      rshift(hs_len, 16) & 0xFF,
+      rshift(hs_len, 8) & 0xFF,
+      band(hs_len, 0xFF)
     ) .. client_hello_data\sub(10)
 
     -- Fix TLS record length
     record_len = #client_hello_data - 5
     client_hello_data = client_hello_data\sub(1, 3) .. string.char(
-      (record_len >> 8) & 0xFF,
-      record_len & 0xFF
+      rshift(record_len, 8) & 0xFF,
+      band(record_len, 0xFF)
     ) .. client_hello_data\sub(6)
 
     -- Test L7 parser with mock data
