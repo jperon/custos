@@ -50,8 +50,8 @@ do
   local _obj_0 = table
   concat, insert, remove = _obj_0.concat, _obj_0.insert, _obj_0.remove
 end
-local EDE_BLOCKED = ede_codes.Stale_NXDOMAIN_Answer
-local EDE_TTL_MODIFIED = ede_codes.DNSSEC_Bogus
+local EDE_BLOCKED = ede_codes.Filtered
+local EDE_TTL_MODIFIED = ede_codes.Forged_Answer
 local EDE_BLOCKED_TEXT = "Ne intretis."
 local EDE_TTL_TEXT = "Custos vigilat."
 local add_ede

@@ -42,8 +42,8 @@ pack: sp = require"ipparse.lib.pack_compat"
 -- ── DNS helper functions (ipparse.l7.dns pattern) ───────────────────────
 
 -- EDE codes from RFC 8914 (bidirectional in ipparse)
-EDE_BLOCKED = ede_codes.Stale_NXDOMAIN_Answer  -- 17
-EDE_TTL_MODIFIED = ede_codes.DNSSEC_Bogus       -- 6
+EDE_BLOCKED = ede_codes.Filtered  -- 17
+EDE_TTL_MODIFIED = ede_codes.Forged_Answer       -- 4
 
 -- Message texts
 EDE_BLOCKED_TEXT = "Ne intretis."

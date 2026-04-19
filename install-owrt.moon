@@ -338,7 +338,7 @@ config custos 'main'
         warn "--no-start : démarrage ignoré"
         return true
 
-      unless @ssh_run "/etc/init.d/custos start"
+      unless @ssh_run "/etc/init.d/custos restart"
         fail "Échec du démarrage"
         return false
 

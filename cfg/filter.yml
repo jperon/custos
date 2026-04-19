@@ -52,7 +52,6 @@
 #   from_netlists    [string]      idem, plusieurs netlists (OR)
 #   in_time          string        dans une fenetre horaire nommee (cle depuis times)
 #   in_times         [string]      idem, plusieurs fenetres (OR)
-#   stolen_computer  [string]      MAC source dans une liste noire
 #   from_user        string        utilisateur authentifie (session active dans auth.sessions_file)
 #
 # -- Actions disponibles ----------------------------------------------------

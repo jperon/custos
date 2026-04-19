@@ -1,6 +1,6 @@
 -- src/filter/conditions/from_userlists.moon
 -- Condition : l'IP source a une session active pour un utilisateur
--- appartenant à au moins un des groupes nommés (cfg.users).
+-- appartenant à au moins un des groupes nommés (cfg.userlists).
 -- Analogue de from_netlists / from_maclists pour les utilisateurs.
 
 --- @tparam table cfg Configuration du filtre

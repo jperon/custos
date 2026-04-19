@@ -111,9 +111,10 @@ send_frame = (fd, frame, ifindex) ->
 raw_fd   = nil
 ifindex  = nil
 
--- URL de redirection vers le portail captif HTTPS.
--- Construite depuis auth_cfg à l'initialisation.
-redirect_url = nil
+-- URLs de redirection vers le portail captif HTTPS.
+-- Construites depuis auth_cfg à l'initialisation (IPv4 et IPv6).
+redirect_url4 = nil
+redirect_url6 = nil
 
 -- ── Callback principal ───────────────────────────────────────────
 --- Handle a TCP SYN/80 packet from NFQUEUE 2.
@@ -172,8 +173,17 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
     res
 
   ok, err = pcall ->
-    f1, f2, f3 = build_response_frames eth, ip, tcp, redirect_url
-    log_info { action: "q2_sending_frames", queue: 2, ip: ip2s ip.src, frames: 3 }
+    url = if ip.version == 6
+      redirect_url6 or redirect_url4
+    else
+      redirect_url4 or redirect_url6
+
+    unless url
+      log_warn { action: "q2_no_redirect_url", queue: 2, ip: ip2s ip.src, version: ip.version }
+      return
+
+    f1, f2, f3 = build_response_frames eth, ip, tcp, url
+    log_info { action: "q2_sending_frames", queue: 2, ip: ip2s ip.src, frames: 3, url: url }
     send f1
     send f2
     send f3
@@ -210,19 +220,69 @@ run = (auth_cfg) ->
 
   https_port = auth_cfg.port or 33443
 
-  local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP") or "127.0.0.1"
+  -- IPv4 captive IP (from config, env var, or auto-detect)
+  local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4")
+  local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
+
+  -- Fallback to single captive_ip for backwards compatibility
+  if not local_ip4 and not local_ip6
+    local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP") or "127.0.0.1"
+    if local_ip\find(":", 1, true)
+      local_ip6 = local_ip
+    else
+      local_ip4 = local_ip
+
+  -- Auto-detect local IPs if not specified
   ok_sock, socket = pcall require, "socket"
   if ok_sock
     pcall ->
       u = socket.udp!
-      pcall -> u\connect "1.1.1.1", 80
-      ip = u\getsockname!
+      -- Try to connect to IPv4 to get local IPv4
+      if not local_ip4
+        pcall -> u\connect "1.1.1.1", 80
+        ip = u\getsockname!
+        if ip and ip != "" and ip != "0.0.0.0"
+          local_ip4 = ip
+      -- Try to connect to IPv6 to get local IPv6
+      if not local_ip6
+        ok, ip = pcall -> u\connect "2606:4700:4700::1111", 80
+        if ok
+          ip = u\getsockname!
+          if ip and ip != "" and ip != "::"
+            local_ip6 = ip
+        else
+          log_warn { action: "q2_ipv6_connect_failed", err: ip or "unknown" }
       u\close!
-      if ip and ip != "" and ip != "0.0.0.0"
-        local_ip = ip
 
-  host_part = local_ip\find(":", 1, true) and "[#{local_ip}]" or local_ip
-  redirect_url = "https://#{host_part}:#{https_port}/"
+  -- Fallback: read IPv6 from bridge interface if auto-detection failed
+  if not local_ip6
+    bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+    fh = io.open "/sys/class/net/#{bridge_ifname}/address", "r"
+    if fh
+      fh\close!
+      -- Try to get IPv6 address from ip command
+      ok, ip = pcall ->
+        f = io.popen "ip -6 addr show dev #{bridge_ifname} scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1"
+        if f
+          addr = f\read "*a"
+          f\close!
+          -- Strip all whitespace (newlines, carriage returns, spaces)
+          addr\gsub "%s+", ""
+      if ok and ip and ip != "" and ip != "::"
+        local_ip6 = ip
+        log_info { action: "q2_ipv6_from_interface", ip: local_ip6, ifname: bridge_ifname }
+
+  -- Build IPv4 redirect URL
+  if local_ip4
+    redirect_url4 = "https://#{local_ip4}:#{https_port}/"
+  else
+    log_warn { action: "q2_no_ipv4", msg: "No IPv4 captive IP configured" }
+
+  -- Build IPv6 redirect URL (wrap in brackets for URL)
+  if local_ip6
+    redirect_url6 = "https://[#{local_ip6}]:#{https_port}/"
+  else
+    log_warn { action: "q2_no_ipv6", msg: "No IPv6 captive IP configured" }
 
   -- Open AF_PACKET socket (bridge mode)
   fd, err = open_raw_socket ifname
@@ -240,7 +300,8 @@ run = (auth_cfg) ->
     action: "q2_worker_start"
     :ifname
     :ifindex
-    :redirect_url
+    redirect_url4: redirect_url4 or "not configured"
+    redirect_url6: redirect_url6 or "not configured"
   }
 
   run_queue QUEUE_CAPTIVE, handle_syn

@@ -1,9 +1,9 @@
 return function(cfg)
   return function(name)
     local _from_user = (require("filter.conditions.from_user"))(cfg)
-    local users_cfg = cfg.users or { }
+    local userlists_cfg = cfg.userlists or { }
     return function(req)
-      local userlist = users_cfg[name]
+      local userlist = userlists_cfg[name]
       if not (userlist) then
         return false, "User list '" .. tostring(name) .. "' not defined"
       end

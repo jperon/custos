@@ -17,6 +17,7 @@
 { :compile_rules, decide: _decide } = require "filter.rule"
 { :load_config } = require "filter.lib.load_config"
 { :log_info, :log_warn } = require "log"
+{ :inject_localnets } = require "filter.localnets"
 ip_whitelist = require "ip_whitelist"
 { :DEST_WHITELIST } = require "config"
 
@@ -45,6 +46,10 @@ load = ->
     DEST_WHITELIST
   else
     cfg.dest_whitelist or {}
+  
+  -- Injection dynamique des réseaux locaux (Basé sur l'option allow_localnets)
+  inject_localnets cfg, whitelist
+  
   ip_whitelist.init whitelist
   n = #rules
   log_info { action: "filter_loaded", rules: n, dest_whitelist: #whitelist }

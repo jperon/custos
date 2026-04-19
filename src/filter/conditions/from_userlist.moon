@@ -1,18 +1,18 @@
 -- src/filter/conditions/from_userlist.moon
 -- Condition : l'IP source a une session active pour un utilisateur
--- appartenant au groupe nommé (cfg.users[name]).
+-- appartenant au groupe nommé (cfg.userlists[name]).
 -- Analogue de from_netlist / from_maclist pour les utilisateurs.
 
---- @tparam table cfg Configuration du filtre (cfg.users: table de listes d'utilisateurs)
+--- @tparam table cfg Configuration du filtre (cfg.userlists: table de listes d'utilisateurs)
 -- @treturn function factory (name: string) → (req) → bool, reason
 (cfg) -> (name) ->
   _from_user = (require "filter.conditions.from_user") cfg
-  users_cfg  = cfg.users or {}
+  userlists_cfg  = cfg.userlists or {}
 
   --- @tparam table req {src_ip: string, ...}
   -- @treturn boolean, string
   (req) ->
-    userlist = users_cfg[name]
+    userlist = userlists_cfg[name]
     return false, "User list '#{name}' not defined" unless userlist
     for user in *userlist
       ok = (_from_user user)(req)

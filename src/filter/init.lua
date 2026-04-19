@@ -15,6 +15,8 @@ do
   local _obj_0 = require("log")
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
+local inject_localnets
+inject_localnets = require("filter.localnets").inject_localnets
 local ip_whitelist = require("ip_whitelist")
 local DEST_WHITELIST
 DEST_WHITELIST = require("config").DEST_WHITELIST
@@ -41,6 +43,7 @@ load = function()
   else
     whitelist = cfg.dest_whitelist or { }
   end
+  inject_localnets(cfg, whitelist)
   ip_whitelist.init(whitelist)
   local n = #rules
   return log_info({

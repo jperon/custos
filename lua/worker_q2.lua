@@ -111,7 +111,8 @@ send_frame = function(fd, frame, ifindex)
 end
 local raw_fd = nil
 local ifindex = nil
-local redirect_url = nil
+local redirect_url4 = nil
+local redirect_url6 = nil
 local handle_syn
 handle_syn = function(qh_ptr, nfad, pkt_id)
   local payload_ptr = ffi.new("unsigned char*[1]")
@@ -164,12 +165,29 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     return res
   end
   local ok, err = pcall(function()
-    local f1, f2, f3 = build_response_frames(eth, ip, tcp, redirect_url)
+    local url
+    if ip.version == 6 then
+      url = redirect_url6 or redirect_url4
+    else
+      url = redirect_url4 or redirect_url6
+    end
+    if not (url) then
+      log_warn({
+        action = "q2_no_redirect_url",
+        queue = 2,
+        ip = ip2s(ip.src, {
+          version = ip.version
+        })
+      })
+      return 
+    end
+    local f1, f2, f3 = build_response_frames(eth, ip, tcp, url)
     log_info({
       action = "q2_sending_frames",
       queue = 2,
       ip = ip2s(ip.src, {
-        frames = 3
+        frames = 3,
+        url = url
       })
     })
     send(f1)
@@ -204,23 +222,87 @@ run = function(auth_cfg)
   auth_cfg = auth_cfg or { }
   local ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
   local https_port = auth_cfg.port or 33443
-  local local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP") or "127.0.0.1"
+  local local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4")
+  local local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
+  if not local_ip4 and not local_ip6 then
+    local local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP") or "127.0.0.1"
+    if local_ip:find(":", 1, true) then
+      local_ip6 = local_ip
+    else
+      local_ip4 = local_ip
+    end
+  end
   local ok_sock, socket = pcall(require, "socket")
   if ok_sock then
     pcall(function()
       local u = socket.udp()
-      pcall(function()
-        return u:connect("1.1.1.1", 80)
-      end)
-      local ip = u:getsockname()
-      u:close()
-      if ip and ip ~= "" and ip ~= "0.0.0.0" then
-        local_ip = ip
+      if not local_ip4 then
+        pcall(function()
+          return u:connect("1.1.1.1", 80)
+        end)
+        local ip = u:getsockname()
+        if ip and ip ~= "" and ip ~= "0.0.0.0" then
+          local_ip4 = ip
+        end
       end
+      if not local_ip6 then
+        local ok, ip = pcall(function()
+          return u:connect("2606:4700:4700::1111", 80)
+        end)
+        if ok then
+          ip = u:getsockname()
+          if ip and ip ~= "" and ip ~= "::" then
+            local_ip6 = ip
+          end
+        else
+          log_warn({
+            action = "q2_ipv6_connect_failed",
+            err = ip or "unknown"
+          })
+        end
+      end
+      return u:close()
     end)
   end
-  local host_part = local_ip:find(":", 1, true) and "[" .. tostring(local_ip) .. "]" or local_ip
-  redirect_url = "https://" .. tostring(host_part) .. ":" .. tostring(https_port) .. "/"
+  if not local_ip6 then
+    local bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+    local fh = io.open("/sys/class/net/" .. tostring(bridge_ifname) .. "/address", "r")
+    if fh then
+      fh:close()
+      local ok, ip = pcall(function()
+        local f = io.popen("ip -6 addr show dev " .. tostring(bridge_ifname) .. " scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1")
+        if f then
+          local addr = f:read("*a")
+          f:close()
+          return addr:gsub("%s+", "")
+        end
+      end)
+      if ok and ip and ip ~= "" and ip ~= "::" then
+        local_ip6 = ip
+        log_info({
+          action = "q2_ipv6_from_interface",
+          ip = local_ip6,
+          ifname = bridge_ifname
+        })
+      end
+    end
+  end
+  if local_ip4 then
+    redirect_url4 = "https://" .. tostring(local_ip4) .. ":" .. tostring(https_port) .. "/"
+  else
+    log_warn({
+      action = "q2_no_ipv4",
+      msg = "No IPv4 captive IP configured"
+    })
+  end
+  if local_ip6 then
+    redirect_url6 = "https://[" .. tostring(local_ip6) .. "]:" .. tostring(https_port) .. "/"
+  else
+    log_warn({
+      action = "q2_no_ipv6",
+      msg = "No IPv6 captive IP configured"
+    })
+  end
   local fd, err = open_raw_socket(ifname)
   if not (fd) then
     log_error({
@@ -243,7 +325,8 @@ run = function(auth_cfg)
     action = "q2_worker_start",
     ifname = ifname,
     ifindex = ifindex,
-    redirect_url = redirect_url
+    redirect_url4 = redirect_url4 or "not configured",
+    redirect_url6 = redirect_url6 or "not configured"
   })
   return run_queue(QUEUE_CAPTIVE, handle_syn)
 end

@@ -78,8 +78,9 @@ local LOGIN_PAGE = [[<!DOCTYPE html>
     <div %AUTH_HIDDEN%>
       <form method="post" action="/login">
         <label>
-          <span>Nom d'utilisateur</span>
-          <input type="text" name="user" required autofocus>
+<span>Courriel</span>
+            <input type="text" name="user" required autofocus>
+
         </label>
         <label>
           <span>Mot de passe</span>
@@ -154,8 +155,9 @@ local REGISTER_PAGE = [[<!DOCTYPE html>
     <h1>Créer un compte</h1>
     <form method="post" action="/register">
       <label>
-        <span>Nom d'utilisateur</span>
-        <input type="text" name="user" required autofocus minlength="3" maxlength="32" pattern="[a-zA-Z0-9_.\-]+">
+<span>Courriel</span>
+            <input type="text" name="user" required autofocus minlength="3" maxlength="32" pattern="[a-zA-Z0-9_.\-]+">
+
       </label>
       <label>
         <span>Mot de passe (8 caractères minimum)</span>

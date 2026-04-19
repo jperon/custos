@@ -98,31 +98,17 @@ table bridge dns-filter-bridge {
   chain forward {
     type filter hook forward priority filter; policy drop;
 
-    # DHCP : Discover/Request/Offer/Ack ne peuvent pas être suivis par
-    # conntrack → règle explicite requise.
+    # L2 Core & Infrastructure
     udp dport { 67, 68 } accept
     udp dport { 546, 547 } accept
-
-    # ARP : requis pour la résolution d'adresses MAC IPv4.
     ether type arp accept
 
-    # ICMPv6 NDP/SLAAC : avant la VLAN mark (jamais loggé par les workers).
-    icmpv6 type {
-      nd-neighbor-solicit,
-      nd-neighbor-advert,
-      nd-router-solicit,
-      nd-router-advert,
-      echo-request,
-      echo-reply
-    } accept
-
     # VLAN mark : posée ici, avant DNS et allowlist.
-    # Les workers Q0/Q1/Q2 lisent la mark via nfq_get_nfmark.
     vlan id != 0 meta mark set vlan id
 
     # DNS → NFQUEUE.
     # La table bridge voit TOUT le trafic bridgé, y compris le transit
-    # inter-VLAN (client → résolveur tiers) invisible sans br_netfilter.
+    # inter-VLAN (client → résolveur tiers).
     meta l4proto { udp, tcp } th dport 53 queue num 0
     meta l4proto { udp, tcp } th sport 53 queue num 1
 
@@ -137,6 +123,12 @@ table bridge dns-filter-bridge {
     ip6 saddr . ip6 daddr @ip6_allowed accept
     ip  saddr . ip  daddr @ip4_allowed accept
 
+    # Trafic local
+    ether daddr & 01:00:00:00:00:00 == 01:00:00:00:00:00 accept
+
+    ip  daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} meta l4proto != {tcp, udp} accept
+    ip6 daddr {fc00::/7, fe80::/10} meta l4proto != {tcp, udp} accept
+
     # Client authentifié (destination non dans les sets) → drop.
     # Note : reject avec tcp reset non supporté en table bridge.
     ether saddr @authenticated_macs drop
@@ -147,7 +139,7 @@ table bridge dns-filter-bridge {
     meta l4proto tcp th dport 80 tcp flags & (fin | syn | rst | ack) == syn queue num 2
 
     # Tout autre trafic non autorisé → drop.
-    drop
+    limit rate 20/second log prefix "nft-bridge-drop: " level warn drop
   }
 
 }

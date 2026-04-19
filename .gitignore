@@ -33,6 +33,7 @@ config.local.moon
 
 # Secrets file (production credentials)
 cfg/secrets
+cfg/esm
 
 # VM disk images and cloud-init artifacts
 *.qcow2
