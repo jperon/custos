@@ -192,12 +192,17 @@ generate_config = (cfg) ->
     table.insert lines, string.format('  "%s",', escape_lua_str ip)
   table.insert lines, "}"
   table.insert lines, ""
+  table.insert lines, "local NFT_EXTRA_RULES = {"
+  for r in *cfg.nft_extra_rules
+    table.insert lines, string.format('  "%s",', escape_lua_str r)
+  table.insert lines, "}"
+  table.insert lines, ""
   table.insert lines, "return {"
   for k in *{
       "QUEUE_QUESTIONS", "QUEUE_RESPONSES", "QUEUE_CAPTIVE",
       "ALLOWED_DOMAINS", "DEST_WHITELIST", "NFT_TABLE", "NFT_FAMILY", "NFT_FAMILY6",
       "NFT_SET_IP4", "NFT_SET_IP6", "NFT_SET_MAC4", "NFT_SET_MAC6",
-      "NFT_IP_TIMEOUT", "IPC_PENDING_TTL", "CLIENT_EXPIRY",
+      "NFT_IP_TIMEOUT", "NFT_EXTRA_RULES", "IPC_PENDING_TTL", "CLIENT_EXPIRY",
       "NEIGH_REFRESH_COOLDOWN", "FORCED_TTL", "DNS_PORT", "AF_INET",
       "AF_INET6", "PROTO_UDP", "NFT_ADD_RETRY_COUNT", "NFT_ADD_BACKOFF_MS",
       "NFT_ADD_FAILURE_POLICY", "IPC_MATCH_RETRY_ENABLED", "IPC_MATCH_RETRY_COUNT",
@@ -239,8 +244,9 @@ main = ->
     ipc_match_retry_count:  validate_posint(uci_get("ipc_match_retry_count"),       DEFAULTS.ipc_match_retry_count)
     ipc_match_retry_sleep_ms: validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms)
     allowed_domains:        domains
-    dest_whitelist:         whitelist
-  }
+  dest_whitelist:         whitelist
+  nft_extra_rules:         uci_get_list "nft_extra_rules"
+}
 
   -- Création du répertoire de sortie (tmpfs sur OpenWrt, recréé après chaque reboot)
   if os.execute("mkdir -p #{OUTPUT_DIR}") ~= 0

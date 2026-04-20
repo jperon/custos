@@ -205,8 +205,16 @@ generate_config = function(cfg)
   end
   table.insert(lines, "}")
   table.insert(lines, "")
+  table.insert(lines, "local NFT_EXTRA_RULES = {")
+  local _list_2 = cfg.nft_extra_rules
+  for _index_0 = 1, #_list_2 do
+    local r = _list_2[_index_0]
+    table.insert(lines, string.format('  "%s",', escape_lua_str(r)))
+  end
+  table.insert(lines, "}")
+  table.insert(lines, "")
   table.insert(lines, "return {")
-  local _list_2 = {
+  local _list_3 = {
     "QUEUE_QUESTIONS",
     "QUEUE_RESPONSES",
     "QUEUE_CAPTIVE",
@@ -220,6 +228,7 @@ generate_config = function(cfg)
     "NFT_SET_MAC4",
     "NFT_SET_MAC6",
     "NFT_IP_TIMEOUT",
+    "NFT_EXTRA_RULES",
     "IPC_PENDING_TTL",
     "CLIENT_EXPIRY",
     "NEIGH_REFRESH_COOLDOWN",
@@ -235,8 +244,8 @@ generate_config = function(cfg)
     "IPC_MATCH_RETRY_COUNT",
     "IPC_MATCH_RETRY_SLEEP_MS"
   }
-  for _index_0 = 1, #_list_2 do
-    local k = _list_2[_index_0]
+  for _index_0 = 1, #_list_3 do
+    local k = _list_3[_index_0]
     table.insert(lines, string.format("  %-24s = %s,", k, k))
   end
   table.insert(lines, "}")
@@ -281,7 +290,8 @@ main = function()
     ipc_match_retry_count = validate_posint(uci_get("ipc_match_retry_count"), DEFAULTS.ipc_match_retry_count),
     ipc_match_retry_sleep_ms = validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms),
     allowed_domains = domains,
-    dest_whitelist = whitelist
+    dest_whitelist = whitelist,
+    nft_extra_rules = uci_get_list("nft_extra_rules")
   }
   if os.execute("mkdir -p " .. tostring(OUTPUT_DIR)) ~= 0 then
     io.stderr:write("uci_config: impossible de créer " .. tostring(OUTPUT_DIR) .. "\n")

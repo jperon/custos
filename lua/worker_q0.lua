@@ -125,7 +125,10 @@ run = function(wfd)
   pipe_wfd = wfd
   filter.load()
   ndpi.warmup()
+  local nft_extra = require("nft_extra_rules")
+  nft_extra.apply_from_config()
   run_queue(QUEUE_QUESTIONS, handle_question)
+  nft_extra.cleanup()
   return ndpi.cleanup()
 end
 return {

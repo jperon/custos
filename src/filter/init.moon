@@ -46,11 +46,13 @@ load = ->
     DEST_WHITELIST
   else
     cfg.dest_whitelist or {}
-  
+
   -- Injection dynamique des réseaux locaux (Basé sur l'option allow_localnets)
   inject_localnets cfg, whitelist
-  
+
   ip_whitelist.init whitelist
+  -- NFT extra rules are applied once at process startup by worker_q0
+  -- (moved out of filter.load to avoid re-inserting rules on hot-reload)
   n = #rules
   log_info { action: "filter_loaded", rules: n, dest_whitelist: #whitelist }
 

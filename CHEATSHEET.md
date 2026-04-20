@@ -9,6 +9,8 @@ Detailed explanations and architecture remain in `README.md`.
 - DNS workers: `src/worker_q0.moon` (questions), `src/worker_q1.moon` (responses)
 - IPC Q0 -> Q1: `src/ipc.moon`
 - nftables ruleset: `nft-rules/dns-filter-bridge.nft`
+- NFT extra rules (via UCI): `custos.main.nft_extra_rules` can hold one fragment per entry. Each fragment is a nft expression (without the `insert rule <table> <chain> ...` prefix) and will be inserted at the head of the `forward` chain at service startup and removed at shutdown. Example UCI fragment:
+  - `nft_extra_rules='ip saddr 10.0.0.0/8 counter log prefix "extra: " accept'`
 - Filtering rules: `cfg/filter.yml`
 
 ## Where to modify what

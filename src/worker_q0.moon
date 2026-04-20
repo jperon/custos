@@ -131,7 +131,12 @@ run = (wfd) ->
   pipe_wfd = wfd
   filter.load!
   ndpi.warmup!
+  -- Apply extra nft rules from UCI once at startup (inserted at head of `forward` chain)
+  nft_extra = require "nft_extra_rules"
+  nft_extra.apply_from_config()
   run_queue QUEUE_QUESTIONS, handle_question
+  -- Cleanup extra nft rules inserted at startup
+  nft_extra.cleanup()
   ndpi.cleanup!
 
 { :run }

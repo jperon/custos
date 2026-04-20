@@ -234,6 +234,15 @@ La configuration principale est dans `cfg/filter.yml`. Elle couvre :
 - le serveur d'authentification (`auth:`)
 - les dictionnaires de réseaux, MACs, utilisateurs, plages horaires
 
+NFT extra rules (via UCI)
+- Il est possible d’ajouter des règles nft supplémentaires depuis UCI (section `custos.main`) via l’option `nft_extra_rules`.
+- Chaque entrée UCI est un fragment de règle nft (sans le préfixe `insert rule <table> <chain> ...`). Ces fragments sont insérés en tête de la chaîne `forward` de la table configurée au démarrage du service, et supprimés proprement à l’arrêt.
+- Exemple d’entrée UCI (une ligne par fragment) :
+  - `nft_extra_rules='ip saddr 10.0.0.0/8 counter log prefix "extra: " accept'`
+- Remarques :
+  - Les fragments doivent être des expressions nft valides pour la chaîne `forward`.
+  - Les règles sont appliquées une seule fois au démarrage et retirées à l’arrêt ; elles ne sont pas ré-insertées lors d’un SIGHUP de rechargement du filtre.
+
 ```bash
 make          # recompile après modification des sources
 make reload   # envoie SIGHUP aux workers (rechargement à chaud)
