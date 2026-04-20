@@ -225,33 +225,51 @@ run = (auth_cfg) ->
   local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
 
   -- Fallback to single captive_ip for backwards compatibility
+  -- NOTE: do not default to 127.0.0.1 here — that prevents auto-detection.
   if not local_ip4 and not local_ip6
-    local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP") or "127.0.0.1"
-    if local_ip\find(":", 1, true)
-      local_ip6 = local_ip
-    else
-      local_ip4 = local_ip
+    local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP")
+    if local_ip
+      if local_ip\find(":", 1, true)
+        local_ip6 = local_ip
+      else
+        local_ip4 = local_ip
 
   -- Auto-detect local IPs if not specified
   ok_sock, socket = pcall require, "socket"
   if ok_sock
     pcall ->
-      u = socket.udp!
-      -- Try to connect to IPv4 to get local IPv4
+      -- Prefer the IPv4 address configured on the bridge interface before
+      -- falling back to the socket.connect heuristic (more deterministic).
       if not local_ip4
-        pcall -> u\connect "1.1.1.1", 80
-        ip = u\getsockname!
-        if ip and ip != "" and ip != "0.0.0.0"
-          local_ip4 = ip
-      -- Try to connect to IPv6 to get local IPv6
+        ok, out = pcall ->
+          fh = io.popen "ip -4 addr show dev #{ifname} scope global 2>/dev/null | awk '/inet/{print $2}' | head -1 | cut -d'/' -f1"
+          return nil unless fh
+          s = fh\read "*a"
+          fh\close!
+          s = s\gsub "%s+", ""
+          s
+        if ok and out and out != "" and out != "0.0.0.0"
+          local_ip4 = out
+
+      -- Fallback to socket method for IPv4 if interface read failed or returned nothing
+      if not local_ip4
+        u = socket.udp!
+        -- Only call getsockname if connect succeeded. Capture pcall result.
+        ok_conn, _ = pcall -> u\connect "1.1.1.1", 80
+        if ok_conn
+          ok_get, ip = pcall -> u\getsockname!
+          if ok_get and ip and ip != "" and ip != "0.0.0.0"
+            local_ip4 = ip
+
+      -- Try IPv6 via socket connect (keeps original behaviour)
       if not local_ip6
-        ok, ip = pcall -> u\connect "2606:4700:4700::1111", 80
-        if ok
-          ip = u\getsockname!
-          if ip and ip != "" and ip != "::"
+        ok_conn6, _ = pcall -> u\connect "2606:4700:4700::1111", 80
+        if ok_conn6
+          ok_get6, ip = pcall -> u\getsockname!
+          if ok_get6 and ip and ip != "" and ip != "::"
             local_ip6 = ip
         else
-          log_warn { action: "q2_ipv6_connect_failed", err: ip or "unknown" }
+          log_warn { action: "q2_ipv6_connect_failed", err: _ or "unknown" }
       u\close!
 
   -- Fallback: read IPv6 from bridge interface if auto-detection failed

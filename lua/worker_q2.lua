@@ -225,39 +225,62 @@ run = function(auth_cfg)
   local local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4")
   local local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
   if not local_ip4 and not local_ip6 then
-    local local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP") or "127.0.0.1"
-    if local_ip:find(":", 1, true) then
-      local_ip6 = local_ip
-    else
-      local_ip4 = local_ip
+    local local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP")
+    if local_ip then
+      if local_ip:find(":", 1, true) then
+        local_ip6 = local_ip
+      else
+        local_ip4 = local_ip
+      end
     end
   end
   local ok_sock, socket = pcall(require, "socket")
   if ok_sock then
     pcall(function()
-      local u = socket.udp()
       if not local_ip4 then
-        pcall(function()
+        local ok, out = pcall(function()
+          local fh = io.popen("ip -4 addr show dev " .. tostring(ifname) .. " scope global 2>/dev/null | awk '/inet/{print $2}' | head -1 | cut -d'/' -f1")
+          if not (fh) then
+            return nil
+          end
+          local s = fh:read("*a")
+          fh:close()
+          s = s:gsub("%s+", "")
+          return s
+        end)
+        if ok and out and out ~= "" and out ~= "0.0.0.0" then
+          local_ip4 = out
+        end
+      end
+      if not local_ip4 then
+        local u = socket.udp()
+        local ok_conn, _ = pcall(function()
           return u:connect("1.1.1.1", 80)
         end)
-        local ip = u:getsockname()
-        if ip and ip ~= "" and ip ~= "0.0.0.0" then
-          local_ip4 = ip
+        if ok_conn then
+          local ok_get, ip = pcall(function()
+            return u:getsockname()
+          end)
+          if ok_get and ip and ip ~= "" and ip ~= "0.0.0.0" then
+            local_ip4 = ip
+          end
         end
       end
       if not local_ip6 then
-        local ok, ip = pcall(function()
+        local ok_conn6, _ = pcall(function()
           return u:connect("2606:4700:4700::1111", 80)
         end)
-        if ok then
-          ip = u:getsockname()
-          if ip and ip ~= "" and ip ~= "::" then
+        if ok_conn6 then
+          local ok_get6, ip = pcall(function()
+            return u:getsockname()
+          end)
+          if ok_get6 and ip and ip ~= "" and ip ~= "::" then
             local_ip6 = ip
           end
         else
           log_warn({
             action = "q2_ipv6_connect_failed",
-            err = ip or "unknown"
+            err = _ or "unknown"
           })
         end
       end
