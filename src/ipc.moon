@@ -20,6 +20,7 @@
 
 { :ffi, :libc } = require "ffi_defs"
 { :IPC_PENDING_TTL } = require "config"
+{ :log_warn } = require "log"
 
 IPC_MSG_SIZE = 43
 IPC_WRITE_RETRY_COUNT = 5
@@ -41,14 +42,30 @@ MSG_IPV4_DNSONLY = 0x44   -- 'D' : transaction IPv4 DNS-seulement (pas d'injecti
 MSG_IPV6_DNSONLY = 0x64   -- 'd' : transaction IPv6 DNS-seulement
 
 write_with_retry = (pipe_wfd, msg) ->
+  -- timespec buffer for nanosleep between retries (20 ms)
+  sleep_req = ffi.new "timespec_t[1]"
+
   for i = 1, IPC_WRITE_RETRY_COUNT
     n = libc.write pipe_wfd, msg, IPC_MSG_SIZE
     return true if n == IPC_MSG_SIZE
 
     errno_p = libc.__errno_location!
     errno = if errno_p then errno_p[0] else 0
-    return false if errno != EAGAIN and errno != EWOULDBLOCK
 
+    -- If it's an unrecoverable error, log errno and abort immediately.
+    if errno != EAGAIN and errno != EWOULDBLOCK
+      log_warn { action: "ipc_write_syscall_failed", fd: pipe_wfd, errno: errno, attempt: i }
+      return false
+
+    -- Otherwise it's transient (EAGAIN/EWOULDBLOCK) — sleep a bit before retrying.
+    sleep_req[0].tv_sec = 0
+    sleep_req[0].tv_nsec = 20000000    -- 20 ms
+    libc.nanosleep sleep_req, nil
+
+  -- Exhausted retries — log final errno for debugging and return false.
+  errno_p = libc.__errno_location!
+  errno = if errno_p then errno_p[0] else 0
+  log_warn { action: "ipc_write_failed_exhausted", fd: pipe_wfd, errno: errno, attempts: IPC_WRITE_RETRY_COUNT }
   false
 
 -- ── Encodage (côté Q0) ───────────────────────────────────────────

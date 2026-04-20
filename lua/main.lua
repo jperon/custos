@@ -36,6 +36,22 @@ create_pipe = function()
   if rc ~= 0 then
     error("pipe2() échoué")
   end
+  local F_SETPIPE_SZ = 1031
+  local desired = 65536
+  local sz = libc.fcntl(fds[1], F_SETPIPE_SZ, desired)
+  if sz and sz > 0 then
+    log_info({
+      action = "pipe_resize",
+      fd = fds[1],
+      new_size = sz
+    })
+  else
+    log_warn({
+      action = "pipe_resize_failed",
+      fd = fds[1],
+      rc = sz
+    })
+  end
   return {
     rfd = fds[0],
     wfd = fds[1]

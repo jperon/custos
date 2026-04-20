@@ -64,6 +64,18 @@ create_pipe = ->
   rc = libc.pipe2 fds, 2048
   error "pipe2() échoué" if rc != 0
 
+  -- Essaye d'augmenter la taille du pipe pour réduire les EAGAIN sous forte charge.
+  -- F_SETPIPE_SZ (fcntl) : valeur commune 1031 sur Linux x86_64. L'appel est
+  -- best-effort et non-fatal : on logge le résultat et on continue si l'opération
+  -- échoue (certaines plateformes noyau/utilisateurspace peuvent ne pas autoriser).
+  F_SETPIPE_SZ = 1031
+  desired = 65536
+  sz = libc.fcntl fds[1], F_SETPIPE_SZ, desired
+  if sz and sz > 0
+    log_info { action: "pipe_resize", fd: fds[1], new_size: sz }
+  else
+    log_warn { action: "pipe_resize_failed", fd: fds[1], rc: sz }
+
   { rfd: fds[0], wfd: fds[1] }
 
 -- ── Fork d'un worker ─────────────────────────────────────────────

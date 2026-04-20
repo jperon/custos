@@ -4,10 +4,9 @@ do
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
 local IPC_PENDING_TTL
-do
-  local _obj_0 = require("config")
-  IPC_PENDING_TTL = _obj_0.IPC_PENDING_TTL
-end
+IPC_PENDING_TTL = require("config").IPC_PENDING_TTL
+local log_warn
+log_warn = require("log").log_warn
 local IPC_MSG_SIZE = 43
 local IPC_WRITE_RETRY_COUNT = 5
 local EAGAIN = 11
@@ -23,17 +22,45 @@ local MSG_IPV4_DNSONLY = 0x44
 local MSG_IPV6_DNSONLY = 0x64
 local write_with_retry
 write_with_retry = function(pipe_wfd, msg)
+  local sleep_req = ffi.new("timespec_t[1]")
   for i = 1, IPC_WRITE_RETRY_COUNT do
     local n = libc.write(pipe_wfd, msg, IPC_MSG_SIZE)
     if n == IPC_MSG_SIZE then
       return true
     end
     local errno_p = libc.__errno_location()
-    local errno = errno_p and errno_p[0] or 0
+    local errno
+    if errno_p then
+      errno = errno_p[0]
+    else
+      errno = 0
+    end
     if errno ~= EAGAIN and errno ~= EWOULDBLOCK then
+      log_warn({
+        action = "ipc_write_syscall_failed",
+        fd = pipe_wfd,
+        errno = errno,
+        attempt = i
+      })
       return false
     end
+    sleep_req[0].tv_sec = 0
+    sleep_req[0].tv_nsec = 20000000
+    libc.nanosleep(sleep_req, nil)
   end
+  local errno_p = libc.__errno_location()
+  local errno
+  if errno_p then
+    errno = errno_p[0]
+  else
+    errno = 0
+  end
+  log_warn({
+    action = "ipc_write_failed_exhausted",
+    fd = pipe_wfd,
+    errno = errno,
+    attempts = IPC_WRITE_RETRY_COUNT
+  })
   return false
 end
 local encode_msg
