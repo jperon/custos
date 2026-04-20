@@ -263,22 +263,6 @@ Installer = function(cfg)
       ok("Fichiers copiés")
       return true
     end,
-    apply_nft_rules = function(self)
-      step("Application des règles nftables")
-      local nft_filename = "dns-filter-bridge.nft"
-      local script = "#!/bin/sh\nset -e\nNFT=" .. tostring(self.cfg.dest) .. "/" .. tostring(nft_filename) .. "\nnft -f \"$NFT\" && echo \"nft ok\"\n"
-      if self:ssh_run_script("apply-nft", script) then
-        ok("Règles nft appliquées")
-        return true
-      end
-      fail("Échec de l'application des règles nft")
-      return false
-    end,
-    enable_br_netfilter = function(self)
-      step("Activation de br_netfilter (skipped in bridge mode)")
-      ok("br_netfilter non requis en mode bridge pur")
-      return true
-    end,
     install_initd = function(self)
       step("Installation du service init.d/custos (procd)")
       local init_src = "packaging/openwrt/custos/files/etc/init.d/custos"
@@ -631,18 +615,6 @@ main = function()
       name = "upload fichiers",
       fn = function()
         return inst:upload_files()
-      end
-    },
-    {
-      name = "br_netfilter",
-      fn = function()
-        return inst:enable_br_netfilter()
-      end
-    },
-    {
-      name = "règles nft",
-      fn = function()
-        return inst:apply_nft_rules()
       end
     },
     {

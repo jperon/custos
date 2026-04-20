@@ -112,6 +112,8 @@ table bridge dns-filter-bridge {
     meta l4proto { udp, tcp } th dport 53 queue num 0
     meta l4proto { udp, tcp } th sport 53 queue num 1
 
+    ct state established,related accept
+
     # Whitelist statique
     ip6 daddr @ip6_dest_whitelist accept
     ip  daddr @ip4_dest_whitelist accept
@@ -139,7 +141,7 @@ table bridge dns-filter-bridge {
     meta l4proto tcp th dport 80 tcp flags & (fin | syn | rst | ack) == syn queue num 2
 
     # Tout autre trafic non autorisé → drop.
-    limit rate 20/second log prefix "nft-bridge-drop: " level warn drop
+    limit rate 1/second log prefix "custos-drop: " level warn drop
   }
 
 }

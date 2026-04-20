@@ -230,21 +230,6 @@ Installer = (cfg) ->
       ok "Fichiers copiés"
       true
 
-    apply_nft_rules: =>
-      step "Application des règles nftables"
-      nft_filename = "dns-filter-bridge.nft"
-      script = "#!/bin/sh\nset -e\nNFT=#{@cfg.dest}/#{nft_filename}\nnft -f \"$NFT\" && echo \"nft ok\"\n"
-      if @ssh_run_script "apply-nft", script
-        ok "Règles nft appliquées"
-        return true
-      fail "Échec de l'application des règles nft"
-      false
-
-    enable_br_netfilter: =>
-      step "Activation de br_netfilter (skipped in bridge mode)"
-      ok "br_netfilter non requis en mode bridge pur"
-      return true
-
     install_initd: =>
       step "Installation du service init.d/custos (procd)"
       init_src = "packaging/openwrt/custos/files/etc/init.d/custos"
@@ -565,8 +550,6 @@ main = ->
     { name: "détection pkg mgr", fn: -> inst\detect_pkg_manager!  }
     { name: "paquets",           fn: -> inst\install_pkg_deps!    }
     { name: "upload fichiers",   fn: -> inst\upload_files!        }
-    { name: "br_netfilter",      fn: -> inst\enable_br_netfilter! }
-    { name: "règles nft",        fn: -> inst\apply_nft_rules!     }
     { name: "service init.d",    fn: -> inst\install_initd!       }
     { name: "/etc/custos/",      fn: -> inst\install_etc_custos!  }
     { name: "config UCI",        fn: -> inst\install_uci_config!  }
