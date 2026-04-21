@@ -40,6 +40,7 @@ MOONS := \
   $(SRC)/worker_q0.moon \
   $(SRC)/worker_q1.moon \
   $(SRC)/worker_q2.moon \
+  $(SRC)/worker_q3.moon \
   $(SRC)/main.moon
 
 LUAS := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(MOONS))

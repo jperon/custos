@@ -38,11 +38,6 @@ run_queue = function(queue_num, callback)
   end
   local qh_box = ffi.new("nfq_q_handle*[1]")
   local c_callback = ffi.cast("nfq_callback", function(qh, nfmsg, nfad, data)
-    log_info({
-      action = "nfq_c_callback",
-      queue = queue_num,
-      pkt_id = "pending"
-    })
     local raw_hdr = libnfq.nfq_get_msg_packet_hdr(nfad)
     local pkt_id = libc.ntohl(raw_hdr.packet_id)
     local ok, verdict = pcall(callback, qh_box[0], nfad, pkt_id)

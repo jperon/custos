@@ -344,4 +344,12 @@ nDPI returns two protocol IDs per packet:
 | Log rate-limiting | `log.moon` counts identical (action, key) pairs; emits one entry per burst window |
 | Shell `$` in strings | Write `$` directly — `\$` is an invalid Lua escape |
 
+### MAC-primary Sessions
+
+User sessions are indexed by **MAC address** rather than IP. This ensures seamless tracking of clients across IPv4 and IPv6 (cross-family) and handles privacy extensions gracefully.
+- Use `session_for_mac(mac, ip, path, sessions_table)` instead of IP-based lookups.
+- Workers extract the client MAC from L2 headers (`get_l2(nfad, raw)`).
+- If the MAC cannot be extracted from the packet (e.g. `l2.mac_dst` is missing), workers MUST fallback to `neigh.get_mac(ip)`.
+- If `neigh.get_mac(ip)` also fails, `session_for_mac` performs a fallback by searching the active sessions for the provided IP.
+
 **Do not use**: `class`, `extends`, `new` (MoonScript class-based syntax), `require "moon"`.

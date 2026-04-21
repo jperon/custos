@@ -183,6 +183,13 @@ supervise = (pipe, sfd) ->
         (-> require("worker_q2").run auth_cfg),
         pipe.rfd   -- fd factice
     }
+    {
+      name:       "Q3-reject"
+      pid:        nil
+      restart_fn: -> fork_worker "Q3-reject",
+        (-> require("worker_q3").run auth_cfg),
+        pipe.rfd   -- fd factice
+    }
   }
 
   for w in *workers

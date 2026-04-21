@@ -49,7 +49,7 @@ Detailed explanations and architecture remain in `README.md`.
   - Auth worker: `src/auth/worker.moon`
   - Auth server: `src/auth/server.moon`
   - Worker Q2 (TCP/80 intercept): `src/worker_q2.moon`
-  - Sessions: `src/auth/sessions.moon`
+  - Sessions (MAC-primary): `src/auth/sessions.moon`
   - Auth nft integration: `src/auth/nft_sessions.moon`
   - Secrets/hash: `src/auth/credentials.moon`
 
@@ -68,7 +68,7 @@ Detailed explanations and architecture remain in `README.md`.
 - SIGHUP:
   - `main` propagates it to Q0
   - Q0 does `filter.reload()`
-- Active nft sets: `ip4_allowed`, `ip6_allowed`, `authenticated_ips`
+- Active nft sets: `ip4_allowed`, `ip6_allowed`, `authenticated_macs`, `authenticated_ips`, `authenticated_ips6`
 
 ## Build, run, debug
 

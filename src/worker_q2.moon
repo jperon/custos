@@ -171,7 +171,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
   client_mac_str = l2.mac_src
   if not client_mac_str or client_mac_str == "unknown"
     client_mac_str = get_mac client_ip_str
-  
+
   user          = user_for_ip client_ip_str, AUTH_SESSIONS_FILE, client_mac_str
 
   send = (f) ->
@@ -261,25 +261,31 @@ run = (auth_cfg) ->
           local_ip4 = out
 
       -- Fallback to socket method for IPv4 if interface read failed or returned nothing
+      u = nil
       if not local_ip4
-        u = socket.udp!
-        -- Only call getsockname if connect succeeded. Capture pcall result.
-        ok_conn, _ = pcall -> u\connect "1.1.1.1", 80
-        if ok_conn
-          ok_get, ip = pcall -> u\getsockname!
-          if ok_get and ip and ip != "" and ip != "0.0.0.0"
-            local_ip4 = ip
+        ok_udp, u_or_err = pcall -> socket.udp!
+        u = u_or_err if ok_udp and u_or_err
+        if u
+          ok_conn, _ = pcall -> u\connect "1.1.1.1", 80
+          if ok_conn
+            ok_get, ip = pcall -> u\getsockname!
+            if ok_get and ip and ip != "" and ip != "0.0.0.0"
+              local_ip4 = ip
 
       -- Try IPv6 via socket connect (keeps original behaviour)
       if not local_ip6
-        ok_conn6, _ = pcall -> u\connect "2606:4700:4700::1111", 80
-        if ok_conn6
-          ok_get6, ip = pcall -> u\getsockname!
-          if ok_get6 and ip and ip != "" and ip != "::"
-            local_ip6 = ip
-        else
-          log_warn { action: "q2_ipv6_connect_failed", err: _ or "unknown" }
-      u\close!
+        unless u
+          ok_udp, u_or_err = pcall -> socket.udp!
+          u = u_or_err if ok_udp and u_or_err
+        if u
+          ok_conn6, _ = pcall -> u\connect "2606:4700:4700::1111", 80
+          if ok_conn6
+            ok_get6, ip = pcall -> u\getsockname!
+            if ok_get6 and ip and ip != "" and ip != "::"
+              local_ip6 = ip
+          else
+            log_warn { action: "q2_ipv6_connect_failed", err: _ or "unknown" }
+      u\close! if u
 
   -- Fallback: read IPv6 from bridge interface if auto-detection failed
   if not local_ip6

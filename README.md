@@ -21,7 +21,9 @@ detection — all without any C compilation step.
 │  ├── policy DROP + REJECT LAN                                  │
 │  ├── set ip4_allowed   { ipv4_src . ipv4_dst  timeout 2m }     │
 │  ├── set ip6_allowed   { ipv6_src . ipv6_dst  timeout 2m }     │
+│  ├── set authenticated_macs{ ether_addr timeout <session_ttl> }│
 │  ├── set authenticated_ips { ipv4_addr timeout <session_ttl> } │
+│  ├── set authenticated_ips6{ ipv6_addr timeout <session_ttl> } │
 │  ├── TCP :80 LAN SYN → NFQUEUE 2  (portail captif, non-auth)  │
 │  ├── UDP/53 + TCP/53 src=LAN → NFQUEUE 0  (questions)          │
 │  └── UDP/53 + TCP/53 dst=LAN → NFQUEUE 1  (réponses)           │
@@ -524,8 +526,10 @@ See `cfg/secrets.sample` for a full example.
 ### Logging in
 
 Navigate to `https://<router>:8443/` in a browser (accept the self-signed cert
-warning). After a successful login the client IP is recorded in the session
-store. Sessions expire after `session_ttl` seconds or on explicit logout.
+warning). After a successful login the client **MAC address** is recorded in the session
+store as the primary identifier. This MAC-primary architecture allows seamless
+cross-family tracking (IPv4/IPv6) and handles IP changes gracefully.
+Sessions expire after `session_ttl` seconds or on explicit logout.
 
 ### Using `from_user` in rules
 
@@ -619,7 +623,9 @@ The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode
 |-----|------|------|
 | `ip4_allowed` | `ipv4_addr . ipv4_addr` | Paire (src IP client, IPv4 dest) autorisée après résolution DNS |
 | `ip6_allowed` | `ipv6_addr . ipv6_addr` | Paire (src IPv6 client, IPv6 dest) autorisée après résolution DNS |
-| `authenticated_ips` | `ipv4_addr` | IPs clientes authentifiées (bypass intercept TCP/80 Q2) |
+| `authenticated_macs` | `ether_addr` | MACs clientes authentifiées (bypass intercept TCP/80 Q2) |
+| `authenticated_ips` | `ipv4_addr` | IPs clientes IPv4 authentifiées (bypass intercept TCP/80 Q2) |
+| `authenticated_ips6` | `ipv6_addr` | IPs clientes IPv6 authentifiées (bypass intercept TCP/80 Q2) |
 | `ip4_dest_whitelist` | `ipv4_addr` | Destinations IPv4 toujours autorisées (bypass DNS, rechargement SIGHUP) |
 | `ip6_dest_whitelist` | `ipv6_addr` | Destinations IPv6 toujours autorisées (bypass DNS, rechargement SIGHUP) |
 

@@ -10,14 +10,14 @@
 #   Q0 : DNS questions  (th dport 53)
 #   Q1 : DNS responses  (th sport 53)
 #   Q2 : TCP SYN/80 non autorisés → portail captif (forge TCP 302)
+#   Q3 : Tout trafic non autorisé → forge RST ou ICMP admin-prohibited
 #
 # Politique générale :
 #   - DNS → Q0/Q1 (LuaJIT décide allow/refused, peuple les sets)
 #   - Trafic autorisé (sets DNS + whitelist) → ACCEPT
-#   - Client authentifié, destination non autorisée → RST (pas de portail)
 #   - Client non authentifié, TCP/80 SYN → Q2 (forge 302)
-#   - Tout autre TCP non autorisé → RST
-#   - Reste non autorisé → ICMP host-unreachable
+#   - Tout trafic non autorisé (rate-limited) → Q3 (forge RST/ICMP)
+#   - Surplus au-delà du rate-limit → drop silencieux
 #
 # Prérequis :
 #   - br_netfilter NON requis
@@ -158,17 +158,19 @@ table bridge dns-filter-bridge {
     # meta pkttype host couvre toutes les IPs assignées au routeur (v4 et v6).
     meta pkttype host accept
 
-    # Client authentifié (destination non dans les sets) → drop.
-    # Note : reject avec tcp reset non supporté en table bridge.
-    ether saddr @authenticated_macs drop
-    ip6  saddr @authenticated_ips6  drop
-    ip   saddr @authenticated_ips   drop
+    # Authenticated client, destination not in sets → Q3 (forge RST or ICMP admin-prohibited).
+    # Must come before Q2 so authenticated clients never see the captive portal again.
+    ether saddr @authenticated_macs limit rate 10/second queue num 3
+    ip6  saddr @authenticated_ips6  limit rate 10/second queue num 3
+    ip   saddr @authenticated_ips   limit rate 10/second queue num 3
 
-    # Client non authentifié, TCP SYN port 80 → Q2 (forge TCP 302).
+    # Unauthenticated client, TCP SYN port 80 → Q2 (forge TCP 302).
     meta l4proto tcp th dport 80 tcp flags & (fin | syn | rst | ack) == syn queue num 2
 
-    # Tout autre trafic non autorisé → drop.
-    limit rate 1/second log prefix "custos-drop: " level warn drop
+    # All remaining unauthorised traffic → Q3 (forge RST or ICMP admin-prohibited).
+    # Rate-limited to protect Q3 against floods; surplus is dropped silently.
+    limit rate 10/second queue num 3
+    drop
   }
 
 }

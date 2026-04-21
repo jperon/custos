@@ -266,39 +266,59 @@ run = function(auth_cfg)
           local_ip4 = out
         end
       end
+      local u = nil
       if not local_ip4 then
-        local u = socket.udp()
-        local ok_conn, _ = pcall(function()
-          return u:connect("1.1.1.1", 80)
+        local ok_udp, u_or_err = pcall(function()
+          return socket.udp()
         end)
-        if ok_conn then
-          local ok_get, ip = pcall(function()
-            return u:getsockname()
+        if ok_udp and u_or_err then
+          u = u_or_err
+        end
+        if u then
+          local ok_conn, _ = pcall(function()
+            return u:connect("1.1.1.1", 80)
           end)
-          if ok_get and ip and ip ~= "" and ip ~= "0.0.0.0" then
-            local_ip4 = ip
+          if ok_conn then
+            local ok_get, ip = pcall(function()
+              return u:getsockname()
+            end)
+            if ok_get and ip and ip ~= "" and ip ~= "0.0.0.0" then
+              local_ip4 = ip
+            end
           end
         end
       end
       if not local_ip6 then
-        local ok_conn6, _ = pcall(function()
-          return u:connect("2606:4700:4700::1111", 80)
-        end)
-        if ok_conn6 then
-          local ok_get6, ip = pcall(function()
-            return u:getsockname()
+        if not (u) then
+          local ok_udp, u_or_err = pcall(function()
+            return socket.udp()
           end)
-          if ok_get6 and ip and ip ~= "" and ip ~= "::" then
-            local_ip6 = ip
+          if ok_udp and u_or_err then
+            u = u_or_err
           end
-        else
-          log_warn({
-            action = "q2_ipv6_connect_failed",
-            err = _ or "unknown"
-          })
+        end
+        if u then
+          local ok_conn6, _ = pcall(function()
+            return u:connect("2606:4700:4700::1111", 80)
+          end)
+          if ok_conn6 then
+            local ok_get6, ip = pcall(function()
+              return u:getsockname()
+            end)
+            if ok_get6 and ip and ip ~= "" and ip ~= "::" then
+              local_ip6 = ip
+            end
+          else
+            log_warn({
+              action = "q2_ipv6_connect_failed",
+              err = _ or "unknown"
+            })
+          end
         end
       end
-      return u:close()
+      if u then
+        return u:close()
+      end
     end)
   end
   if not local_ip6 then

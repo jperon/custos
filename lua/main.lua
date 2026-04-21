@@ -164,6 +164,15 @@ supervise = function(pipe, sfd)
           return require("worker_q2").run(auth_cfg)
         end), pipe.rfd)
       end
+    },
+    {
+      name = "Q3-reject",
+      pid = nil,
+      restart_fn = function()
+        return fork_worker("Q3-reject", (function()
+          return require("worker_q3").run(auth_cfg)
+        end), pipe.rfd)
+      end
     }
   }
   for _index_0 = 1, #workers do
