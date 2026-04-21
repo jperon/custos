@@ -20,11 +20,8 @@ do
 end
 local parse_tcp
 parse_tcp = require("ipparse.l4.tcp").parse
-local get_l2, ETH_OFFSET
-do
-  local _obj_0 = require("parse/ethernet")
-  get_l2, ETH_OFFSET = _obj_0.get_l2, _obj_0.ETH_OFFSET
-end
+local get_l2
+get_l2 = require("parse/ethernet").get_l2
 local run_queue, NF_ACCEPT, NF_DROP
 do
   local _obj_0 = require("nfq_loop")
@@ -126,7 +123,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
-  local l2 = get_l2(nfad, raw)
+  local l2 = get_l2(nfad)
   local ip, ip_off, tcp, tcp_off = parse_syn(raw)
   if not (ip) then
     log_warn({

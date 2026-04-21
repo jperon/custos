@@ -6,15 +6,9 @@
 -- ── Queues NFQUEUE ──────────────────────────────────────────────
 QUEUE_QUESTIONS = 0   -- UDP/53 src LAN  (questions sortantes)
 QUEUE_RESPONSES = 1   -- UDP/53 dst LAN  (réponses entrantes)
-QUEUE_CAPTIVE   = 2   -- TCP SYN/80 non autorisés (mode bridge uniquement)
-QUEUE_REJECT    = 3   -- Forge RST/ICMP admin-prohibited (mode bridge uniquement)
+QUEUE_CAPTIVE   = 2   -- TCP SYN/80 non autorisés (portail captif)
+QUEUE_REJECT    = 3   -- Forge RST/ICMP admin-prohibited pour le trafic dropé
 
--- ── Mode bridge ────────────────────────────────────
--- BRIDGE_MODE=1 : active le worker Q2 (portail captif TCP SYN).
--- NFQ_BRIDGE_MODE=1 : NFQUEUE est sur la table bridge nftables.
---   Les workers Q0/Q1 reçoivent des trames Ethernet complètes (eth_offset=14).
-BRIDGE_MODE     = true
-NFQ_BRIDGE_MODE = true
 -- ── Logging ─────────────────────────────────────────────────────
 -- Les messages sont écrits sur stdout (fd=1).
 -- Le superviseur de processus les capture vers le système de log natif :
@@ -81,7 +75,6 @@ DEST_WHITELIST = {}
 -- ── Export ──────────────────────────────────────────────────────
 {
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE, :QUEUE_REJECT
-  :BRIDGE_MODE, :NFQ_BRIDGE_MODE
   :NFT_FAMILY, :NFT_FAMILY6, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
   :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY
   :IPC_PENDING_TTL

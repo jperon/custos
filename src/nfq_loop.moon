@@ -4,7 +4,7 @@
 -- Le caller fournit le numéro de queue et la fonction de callback Lua.
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :AF_INET, :AF_INET6, :BRIDGE_MODE } = require "config"
+{ :AF_INET, :AF_INET6 } = require "config"
 { :log_info, :log_error } = require "log"
 
 AF_BRIDGE = 7   -- Linux AF_BRIDGE : famille d'adresses pour les hooks bridge nftables
@@ -40,8 +40,7 @@ run_queue = (queue_num, callback) ->
   -- on ignore l'erreur (comportement historique de libnetfilter_queue).
   libnfq.nfq_bind_pf h, AF_INET
   libnfq.nfq_bind_pf h, AF_INET6
-  if BRIDGE_MODE
-    libnfq.nfq_bind_pf h, AF_BRIDGE
+  libnfq.nfq_bind_pf h, AF_BRIDGE
 
   -- Pointeur partagé entre la closure C et la closure Lua du callback
   qh_box = ffi.new "nfq_q_handle*[1]"

@@ -231,7 +231,7 @@ run "printf 'local c = require(\"auth.credentials\")\\nc.register_user(\"testuse
 ssh FILTER_IP, "sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit /tmp/mkuser.lua'"
 ssh_check FILTER_IP, "sudo nft -f /opt/custos/nft-rules/dns-filter.nft"
 ssh FILTER_IP, "sudo cp /opt/custos/cfg/filter.yml /etc/custos/filter.yml 2>/dev/null; true"
-ssh_check FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" CUSTOS_FILTER_CONFIG=/opt/custos/cfg/filter.yml BRIDGE_MODE=1 BRIDGE_IFNAME=br0 luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &"
+ssh_check FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" CUSTOS_FILTER_CONFIG=/opt/custos/cfg/filter.yml BRIDGE_IFNAME=br0 luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &"
 os.execute "sleep 5"
 ok_luajit, _ = ssh FILTER_IP, "pgrep -f 'luajit.*main' >/dev/null"
 print "  LuaJIT: #{ok_luajit and (C.green..'running'..C.reset) or (C.red..'NOT running'..C.reset)}"

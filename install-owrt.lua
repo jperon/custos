@@ -510,7 +510,6 @@ parse_args = function()
     no_start = false,
     dry = false,
     uninstall = false,
-    bridge_mode = true,
     pkg_mgr = nil
   }
   local i = 1

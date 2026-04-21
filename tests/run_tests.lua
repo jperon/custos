@@ -17,7 +17,6 @@ local AF_INET = 2
 local AF_INET6 = 10
 local DNS_PORT = 53
 local DOCKER_MODE = false
-local BRIDGE_MODE = false
 local ALLOWED_DOMAINS = { }
 local IPC_PENDING_TTL = 5
 local CLIENT_EXPIRY = 300
@@ -29,17 +28,16 @@ package.loaded["config"] = {
   AF_INET6 = AF_INET6,
   DNS_PORT = DNS_PORT,
   DOCKER_MODE = DOCKER_MODE,
-  BRIDGE_MODE = BRIDGE_MODE,
   ALLOWED_DOMAINS = ALLOWED_DOMAINS,
   IPC_PENDING_TTL = IPC_PENDING_TTL,
   CLIENT_EXPIRY = CLIENT_EXPIRY,
   QUEUE_CAPTIVE = QUEUE_CAPTIVE
 }
 package.loaded["parse/ethernet"] = {
-  ETH_OFFSET = 0,
   get_l2 = function()
     return {
       mac_src = "00:00:00:00:00:00",
+      mac_dst = "unknown",
       mac_raw = "\0\0\0\0\0\0",
       in_ifindex = 0,
       vlan = nil
@@ -2776,52 +2774,15 @@ test("filter/convert — commentaires et lignes vides ignorés", function()
   os.remove(CONV_INPUT)
   return os.remove(CONV_OUTPUT)
 end)
-io.write("\n── parse/ndpi eth_offset=14 ──\n")
+io.write("\n── parse/ndpi ──\n")
 local ndpi_mod = require("parse/ndpi")
-local add_eth_header
-add_eth_header = function(ip_pkt)
-  local eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
-  local eth_dst = "\x11\x22\x33\x44\x55\x66"
-  local ethertype = string.char(0x08, 0x00)
-  return eth_src .. eth_dst .. ethertype .. ip_pkt
-end
-test("parse/ndpi — parse_packet(raw, 0) OK sans en-tête Ethernet", function()
+test("parse/ndpi — parse_packet(raw) OK sur paquet IP brut", function()
   local dns = make_dns("\x03www\x08facebook\x03com\0", 1, false)
   local raw = make_ipv4_udp_dns("1.2.3.4", "8.8.8.8", 12345, 53, dns)
-  local pkt, status = ndpi_mod.parse_packet(raw, 0)
+  local pkt, status = ndpi_mod.parse_packet(raw)
   assert(pkt ~= nil, "parse_packet retourne nil : " .. tostring(tostring(status)))
   assert_eq(pkt.ip.src_ip, "1.2.3.4", "src_ip")
   return assert_eq(pkt.l4.dst_port, 53, "dst_port DNS")
-end)
-test("parse/ndpi — parse_packet(raw, 14) OK avec en-tête Ethernet (mode bridge)", function()
-  local dns = make_dns("\x03www\x08facebook\x03com\0", 1, false)
-  local ip_pkt = make_ipv4_udp_dns("1.2.3.4", "8.8.8.8", 12345, 53, dns)
-  local raw = add_eth_header(ip_pkt)
-  local pkt, status = ndpi_mod.parse_packet(raw, 14)
-  assert(pkt ~= nil, "parse_packet(eth_offset=14) retourne nil : " .. tostring(tostring(status)))
-  assert_eq(pkt.ip.src_ip, "1.2.3.4", "src_ip avec eth_offset=14")
-  return assert_eq(pkt.l4.dst_port, 53, "dst_port DNS avec eth_offset=14")
-end)
-test("parse/ndpi — parse_packet(raw, 14) retourne nil sans eth_offset sur trame bridge", function()
-  local dns = make_dns("\x03www\x08facebook\x03com\0", 1, false)
-  local ip_pkt = make_ipv4_udp_dns("1.2.3.4", "8.8.8.8", 12345, 53, dns)
-  local raw = add_eth_header(ip_pkt)
-  local pkt, _ = ndpi_mod.parse_packet(raw, 0)
-  return assert(pkt == nil, "devrait retourner nil sans eth_offset sur trame bridge")
-end)
-test("parse/ndpi — eth_offset=14 produit les mêmes champs IP que sans offset", function()
-  local dns = make_dns("\x03www\x08facebook\x03com\0", 1, false)
-  local ip_pkt = make_ipv4_udp_dns("10.0.0.5", "1.1.1.1", 9999, 53, dns)
-  local raw_ip = ip_pkt
-  local raw_eth = add_eth_header(ip_pkt)
-  local pkt1, _ = ndpi_mod.parse_packet(raw_ip, 0)
-  local pkt2
-  pkt2, _ = ndpi_mod.parse_packet(raw_eth, 14)
-  assert(pkt1 ~= nil and pkt2 ~= nil, "les deux parsings doivent réussir")
-  assert_eq(pkt1.ip.src_ip, pkt2.ip.src_ip, "src_ip")
-  assert_eq(pkt1.ip.dst_ip, pkt2.ip.dst_ip, "dst_ip")
-  assert_eq(pkt1.l4.src_port, pkt2.l4.src_port, "src_port")
-  return assert_eq(pkt1.dns.txid, pkt2.dns.txid, "dns txid")
 end)
 io.write("\n── neigh.parse_neigh_line ──\n")
 local parse_neigh_line

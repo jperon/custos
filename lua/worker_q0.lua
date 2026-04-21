@@ -8,11 +8,8 @@ do
   local _obj_0 = require("config")
   QUEUE_QUESTIONS, AUTH_SESSIONS_FILE = _obj_0.QUEUE_QUESTIONS, _obj_0.AUTH_SESSIONS_FILE
 end
-local get_l2, ETH_OFFSET
-do
-  local _obj_0 = require("parse/ethernet")
-  get_l2, ETH_OFFSET = _obj_0.get_l2, _obj_0.ETH_OFFSET
-end
+local get_l2
+get_l2 = require("parse/ethernet").get_l2
 local ndpi = require("parse/ndpi")
 local filter = require("filter")
 local write_msg, write_refused_msg, write_dnsonly_msg
@@ -43,8 +40,8 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
-  local l2 = get_l2(nfad, raw)
-  local pkt, parse_status = ndpi.parse_packet(raw, ETH_OFFSET)
+  local l2 = get_l2(nfad)
+  local pkt, parse_status = ndpi.parse_packet(raw)
   if not (pkt) then
     if parse_status == "buffering" then
       return NF_ACCEPT

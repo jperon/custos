@@ -22,7 +22,7 @@
 neigh = require "neigh"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
-{ :get_l2, :ETH_OFFSET } = require "parse/ethernet"
+{ :get_l2 } = require "parse/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
 {
   :parse, :pack
@@ -262,13 +262,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   raw = ffi.string payload_ptr[0], payload_len
 
-  -- ── L2 ───────────────────────────────────────────────────────
-  -- En mode bridge, raw est passé à get_l2 pour extraire la MAC depuis la trame.
-  l2 = get_l2 nfad, raw
+  -- ── L2 ────────────────────────────────────────────────────
+  -- MAC source via nfq_get_packet_hw() ; MAC destination non exposée par libnfq.
+  l2 = get_l2 nfad
 
-  -- ── L3 / L4 / L7 ─────────────────────────────────────────────
+  -- ── L3 / L4 / L7 ───────────────────────────────────────────────
   -- parse_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
-  pkt, parse_status = ndpi.parse_packet raw, ETH_OFFSET
+  pkt, parse_status = ndpi.parse_packet raw
   unless pkt
     -- Intermediate TCP data segments are DROPped so Q1 can reinject a single
     -- coalesced+TTL-patched packet once the full DNS message is assembled.

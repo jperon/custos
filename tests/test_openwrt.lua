@@ -74,7 +74,7 @@ report = function(name, ok, msg)
 end
 print(tostring(C.bold) .. "CustosVirginum — OpenWrt end-to-end tests" .. tostring(C.reset))
 print("  Cible SSH : " .. tostring(SSH_TARGET))
-print("  Mode      : bridge (BRIDGE_MODE=1)")
+print("  Mode      : bridge")
 print("")
 print(tostring(C.bold) .. "[1/5] Vérification de la connexion SSH..." .. tostring(C.reset))
 local ok_ssh, kernel = ssh("uname -r")
@@ -155,9 +155,8 @@ if not (no_restart) then
   end
   print("  Démarrage des workers LuaJIT...")
   local lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;" .. tostring(CUSTOS_DIR) .. "/?.lua;" .. tostring(CUSTOS_DIR) .. "/?/init.lua;;"
-  local bridge_env = "BRIDGE_MODE=1 "
   ssh("logger -t custos '" .. tostring(LOG_MARKER) .. "'")
-  ssh("(cd " .. tostring(CUSTOS_DIR) .. " && CUSTOS_FILTER_CONFIG=" .. tostring(CFG_DIR) .. "/filter.yml " .. tostring(bridge_env) .. "LUA_PATH=\"" .. tostring(lua_path) .. "\" luajit2 " .. tostring(CUSTOS_DIR) .. "/main.lua </dev/null 2>&1 | logger -t custos) &")
+  ssh("(cd " .. tostring(CUSTOS_DIR) .. " && CUSTOS_FILTER_CONFIG=" .. tostring(CFG_DIR) .. "/filter.yml LUA_PATH=\"" .. tostring(lua_path) .. "\" luajit2 " .. tostring(CUSTOS_DIR) .. "/main.lua </dev/null 2>&1 | logger -t custos) &")
   os.execute("sleep 5")
 end
 print("  Attente des workers (queue_listening)...")

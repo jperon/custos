@@ -21,7 +21,6 @@
 #
 # Prérequis :
 #   - br_netfilter NON requis
-#   - BRIDGE_MODE=1 dans l'environnement du processus LuaJIT
 
 flush ruleset
 

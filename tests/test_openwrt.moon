@@ -3,14 +3,10 @@
 -- OpenWrt end-to-end test for CustosVirginum DNS filter (live deployment).
 -- Connects to a running OpenWrt router via SSH and tests all functionality.
 --
--- Architecture tested (router mode, default):
---   [router FORWARD chain, table ip/ip6] -- queue 0/1 --> worker Q0/Q1
---
--- Architecture tested (bridge mode, --bridge flag):
---   [router bridge table] -- queue 0/1/2 --> worker Q0/Q1/Q2
---   BRIDGE_MODE=1 : NFQUEUE reçoit des trames Ethernet complètes.
---   dns-filter-bridge.nft est déployé au lieu de dns-filter.nft.
---   Worker Q2 (portail captif TCP forge) est actif.
+-- Architecture tested (bridge mode, seul mode supporté) :
+--   [router bridge table] -- queue 0/1/2/3 --> worker Q0/Q1/Q2/Q3
+--   dns-filter-bridge.nft est déployé.
+--   Worker Q2 (portail captif TCP forge) et Q3 (reject) sont actifs.
 --
 -- DNS queries are sent from the local machine to an EXTERNAL resolver (1.1.1.3).
 -- Those packets transit the router's FORWARD/bridge chain, where NFQUEUE
@@ -124,7 +120,7 @@ report = (name, ok, msg) ->
 
 print "#{C.bold}CustosVirginum — OpenWrt end-to-end tests#{C.reset}"
 print "  Cible SSH : #{SSH_TARGET}"
-print "  Mode      : bridge (BRIDGE_MODE=1)"
+print "  Mode      : bridge"
 print ""
 
 -- ── [1/5] Connectivity check ───────────────────────────────────────────────────
@@ -229,9 +225,8 @@ unless no_restart
   -- stdout/stderr sont transmis via logger(1) vers syslog (logread sur OpenWrt).
   print "  Démarrage des workers LuaJIT..."
   lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;#{CUSTOS_DIR}/?.lua;#{CUSTOS_DIR}/?/init.lua;;"
-  bridge_env = "BRIDGE_MODE=1 "
   ssh "logger -t custos '#{LOG_MARKER}'"
-  ssh "(cd #{CUSTOS_DIR} && CUSTOS_FILTER_CONFIG=#{CFG_DIR}/filter.yml #{bridge_env}LUA_PATH=\"#{lua_path}\" luajit2 #{CUSTOS_DIR}/main.lua </dev/null 2>&1 | logger -t custos) &"
+  ssh "(cd #{CUSTOS_DIR} && CUSTOS_FILTER_CONFIG=#{CFG_DIR}/filter.yml LUA_PATH=\"#{lua_path}\" luajit2 #{CUSTOS_DIR}/main.lua </dev/null 2>&1 | logger -t custos) &"
   os.execute "sleep 5"
 
 -- Wait for queue workers

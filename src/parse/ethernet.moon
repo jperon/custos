@@ -1,22 +1,13 @@
 -- src/parse/ethernet.moon
 -- Décodage L2 : extraction des adresses MAC depuis les métadonnées NFQUEUE.
 --
--- En mode bridge (BRIDGE_MODE=1), nfq_get_payload() retourne la trame
--- Ethernet complète. La MAC source est extraite directement depuis le
--- payload (octets 6–11), ce qui est plus fiable que nfq_get_packet_hw()
--- qui peut être absent sur certains hooks bridge.
---
--- En mode routeur (BRIDGE_MODE=0), seul le paquet IP est livré par
--- NFQUEUE ; nfq_get_packet_hw() fournit la MAC source.
+-- Dans la table bridge nftables, nfq_get_payload() retourne le paquet
+-- à partir de l'en-tête IP (aucun en-tête Ethernet dans le payload).
+-- La MAC source est donc lue via nfq_get_packet_hw() ; la MAC destination
+-- n'est pas exposée par libnetfilter_queue et reste "unknown" (les workers
+-- qui en ont besoin utilisent neigh.get_mac(ip) en fallback).
 
 { :ffi, :libnfq } = require "ffi_defs"
-{ :BRIDGE_MODE, :NFQ_BRIDGE_MODE } = require "config"
-bit = require "bit"
-{ :proto } = require "ipparse.l2.ethernet"
-
-ETH_OFFSET = NFQ_BRIDGE_MODE and 14 or 0
-ETH_IPV4 = proto.IP4
-ETH_IPV6 = proto.IP6
 
 --- Formate 6 octets d'un pointeur FFI en chaîne "aa:bb:cc:dd:ee:ff".
 -- @tparam cdata p   uint8_t pointer.
@@ -35,30 +26,20 @@ format_mac = (hw_ptr) ->
     hw_ptr.hw_addr[3], hw_ptr.hw_addr[4], hw_ptr.hw_addr[5]
 
 --- Extrait les informations L2 depuis les métadonnées nfq_data.
--- En mode bridge : lit la MAC source depuis les octets 6–11 du payload Ethernet.
--- En mode routeur : utilise nfq_get_packet_hw() (seule la MAC source est exposée).
--- Les paquets OUTPUT locaux n'ont pas de hw_addr : mac_src vaut "unknown",
--- mac_raw vaut 6 octets nuls.
--- @tparam cdata nfad     Pointeur nfq_data* (paramètre du callback NFQUEUE).
--- @tparam string|nil raw Payload brut (requis en mode bridge, nil accepté sinon).
--- @treturn table {mac_src: string, mac_raw: string, in_ifindex: number, vlan: number|nil}
-get_l2 = (nfad, raw) ->
+-- Utilise nfq_get_packet_hw() pour obtenir la MAC source (la seule exposée
+-- par libnetfilter_queue). Les paquets OUTPUT locaux n'ont pas de hw_addr :
+-- mac_src vaut "unknown" et mac_raw vaut 6 octets nuls.
+-- @tparam cdata nfad Pointeur nfq_data* (paramètre du callback NFQUEUE).
+-- @treturn table {mac_src: string, mac_dst: string, mac_raw: string, in_ifindex: number, vlan: number|nil}
+get_l2 = (nfad) ->
   mac_src = "unknown"
   mac_dst = "unknown"
   mac_raw = "\0\0\0\0\0\0"
 
-  if NFQ_BRIDGE_MODE and raw and #raw >= 12
-    -- Mode bridge : MAC destination aux octets 0-5, source aux octets 6–11.
-    p = ffi.cast "const uint8_t*", raw
-    mac_dst = format_mac_ptr p, 0
-    mac_src = format_mac_ptr p, 6
-    mac_raw = ffi.string p + 6, 6
-  else
-    -- Mode routeur : nfq_get_packet_hw() retourne la MAC source.
-    hw = libnfq.nfq_get_packet_hw nfad
-    if hw != nil and hw.hw_addrlen > 0
-      mac_src = format_mac hw
-      mac_raw = ffi.string hw.hw_addr, 6
+  hw = libnfq.nfq_get_packet_hw nfad
+  if hw != nil and hw.hw_addrlen > 0
+    mac_src = format_mac hw
+    mac_raw = ffi.string hw.hw_addr, 6
 
   in_ifindex = tonumber libnfq.nfq_get_indev nfad
   mark = tonumber libnfq.nfq_get_nfmark nfad
@@ -66,4 +47,4 @@ get_l2 = (nfad, raw) ->
 
   { :mac_src, :mac_dst, :mac_raw, :in_ifindex, :vlan }
 
-{ :get_l2, :format_mac, :format_mac_ptr, :ETH_OFFSET, :ETH_IPV4, :ETH_IPV6 }
+{ :get_l2, :format_mac, :format_mac_ptr }

@@ -12,7 +12,7 @@
 
 { :ffi, :libnfq } = require "ffi_defs"
 { :QUEUE_QUESTIONS, :AUTH_SESSIONS_FILE } = require "config"
-{ :get_l2, :ETH_OFFSET } = require "parse/ethernet"
+{ :get_l2 } = require "parse/ethernet"
 ndpi                     = require "parse/ndpi"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
@@ -36,12 +36,12 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 
   raw = ffi.string payload_ptr[0], payload_len
 
-  -- ── L2 ───────────────────────────────────────────────────────
-  -- En mode bridge, raw est passé à get_l2 pour extraire la MAC depuis la trame.
-  l2 = get_l2 nfad, raw
+  -- ── L2 ────────────────────────────────────────────────────
+  -- MAC source via nfq_get_packet_hw() ; MAC destination non exposée par libnfq.
+  l2 = get_l2 nfad
 
-  -- ── L3 / L4 / L7 ─────────────────────────────────────────────
-  pkt, parse_status = ndpi.parse_packet raw, ETH_OFFSET
+  -- ── L3 / L4 / L7 ───────────────────────────────────────────────
+  pkt, parse_status = ndpi.parse_packet raw
   unless pkt
     -- TCP segments arriving before a complete DNS message are buffered; let them through.
     return NF_ACCEPT if parse_status == "buffering"

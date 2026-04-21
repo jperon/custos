@@ -2,11 +2,12 @@
 -- Worker Q3: forge reject (bridge mode).
 --
 -- Receives all silently-dropped packets from NFQUEUE 3.
--- For each packet:
---   1. Parse Ethernet + IP (L3 only, no nDPI needed).
---   2. TCP  → forge TCP RST/ACK back to sender.
+-- The payload starts at the IP header (nftables bridge NFQUEUE delivers
+-- no Ethernet header). For each packet:
+--   1. Parse IP (+ TCP for RST).
+--   2. TCP  → forge TCP RST/ACK back to sender (IP payload, src/dst swapped).
 --   3. UDP/other → forge ICMP admin-prohibited (v4 type 3/13, v6 type 1/1).
---   4. Set verdict NF_ACCEPT with forged packet as replacement payload.
+--   4. Set verdict NF_ACCEPT with the forged IP packet as replacement payload.
 --   5. Structured log.
 
 { :ffi, :libnfq } = require "ffi_defs"

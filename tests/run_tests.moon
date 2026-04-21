@@ -31,7 +31,6 @@ AF_INET   = 2
 AF_INET6  = 10
 DNS_PORT  = 53
 DOCKER_MODE = false
-BRIDGE_MODE = false
 ALLOWED_DOMAINS = {}
 IPC_PENDING_TTL = 5
 CLIENT_EXPIRY = 300
@@ -44,17 +43,15 @@ package.loaded["config"] = {
   :AF_INET6,
   :DNS_PORT,
   :DOCKER_MODE,
-  :BRIDGE_MODE,
   :ALLOWED_DOMAINS,
   :IPC_PENDING_TTL,
   :CLIENT_EXPIRY,
   :QUEUE_CAPTIVE
 }
 
--- parse/ethernet stub : BRIDGE_MODE=false → ETH_OFFSET=0
+-- parse/ethernet stub
 package.loaded["parse/ethernet"] = {
-  ETH_OFFSET: 0
-  get_l2: -> { mac_src: "00:00:00:00:00:00", mac_raw: "\0\0\0\0\0\0", in_ifindex: 0, vlan: nil }
+  get_l2: -> { mac_src: "00:00:00:00:00:00", mac_dst: "unknown", mac_raw: "\0\0\0\0\0\0", in_ifindex: 0, vlan: nil }
   format_mac: -> "00:00:00:00:00:00"
   format_mac_ptr: -> "00:00:00:00:00:00"
 }
@@ -2753,55 +2750,20 @@ test "filter/convert — commentaires et lignes vides ignorés", ->
 --   assert_eq mac_d, eth_dst, "MAC dst inversée"
 --   assert_eq mac_s, eth_src, "MAC src inversée"
 
--- ── Tests parse/ndpi avec eth_offset=14 (mode bridge) ────────────
-io.write "\n── parse/ndpi eth_offset=14 ──\n"
+-- ── Tests parse/ndpi ────────────────────────────────────────────
+-- Le payload NFQUEUE (table bridge) commence à l'en-tête IP :
+-- parse_packet doit accepter un paquet IP brut sans offset.
+io.write "\n── parse/ndpi ──\n"
 
 ndpi_mod = require "parse/ndpi"
 
--- Helper : ajoute un header Ethernet factice devant un paquet IP
-add_eth_header = (ip_pkt) ->
-  eth_src = "\xAA\xBB\xCC\xDD\xEE\xFF"
-  eth_dst = "\x11\x22\x33\x44\x55\x66"
-  ethertype = string.char(0x08, 0x00)
-  eth_src .. eth_dst .. ethertype .. ip_pkt
-
-test "parse/ndpi — parse_packet(raw, 0) OK sans en-tête Ethernet", ->
+test "parse/ndpi — parse_packet(raw) OK sur paquet IP brut", ->
   dns = make_dns "\x03www\x08facebook\x03com\0", 1, false
   raw = make_ipv4_udp_dns "1.2.3.4", "8.8.8.8", 12345, 53, dns
-  pkt, status = ndpi_mod.parse_packet raw, 0
+  pkt, status = ndpi_mod.parse_packet raw
   assert pkt != nil, "parse_packet retourne nil : #{tostring status}"
   assert_eq pkt.ip.src_ip, "1.2.3.4", "src_ip"
   assert_eq pkt.l4.dst_port, 53,       "dst_port DNS"
-
-test "parse/ndpi — parse_packet(raw, 14) OK avec en-tête Ethernet (mode bridge)", ->
-  dns = make_dns "\x03www\x08facebook\x03com\0", 1, false
-  ip_pkt = make_ipv4_udp_dns "1.2.3.4", "8.8.8.8", 12345, 53, dns
-  raw = add_eth_header ip_pkt
-  pkt, status = ndpi_mod.parse_packet raw, 14
-  assert pkt != nil, "parse_packet(eth_offset=14) retourne nil : #{tostring status}"
-  assert_eq pkt.ip.src_ip, "1.2.3.4", "src_ip avec eth_offset=14"
-  assert_eq pkt.l4.dst_port, 53,       "dst_port DNS avec eth_offset=14"
-
-test "parse/ndpi — parse_packet(raw, 14) retourne nil sans eth_offset sur trame bridge", ->
-  dns = make_dns "\x03www\x08facebook\x03com\0", 1, false
-  ip_pkt = make_ipv4_udp_dns "1.2.3.4", "8.8.8.8", 12345, 53, dns
-  raw = add_eth_header ip_pkt
-  -- Sans eth_offset, le parser voit l'en-tête Ethernet comme IP → doit échouer
-  pkt, _ = ndpi_mod.parse_packet raw, 0
-  assert pkt == nil, "devrait retourner nil sans eth_offset sur trame bridge"
-
-test "parse/ndpi — eth_offset=14 produit les mêmes champs IP que sans offset", ->
-  dns = make_dns "\x03www\x08facebook\x03com\0", 1, false
-  ip_pkt = make_ipv4_udp_dns "10.0.0.5", "1.1.1.1", 9999, 53, dns
-  raw_ip  = ip_pkt
-  raw_eth = add_eth_header ip_pkt
-  pkt1, _ = ndpi_mod.parse_packet raw_ip,  0
-  pkt2, _ = ndpi_mod.parse_packet raw_eth, 14
-  assert pkt1 != nil and pkt2 != nil, "les deux parsings doivent réussir"
-  assert_eq pkt1.ip.src_ip, pkt2.ip.src_ip, "src_ip"
-  assert_eq pkt1.ip.dst_ip, pkt2.ip.dst_ip, "dst_ip"
-  assert_eq pkt1.l4.src_port, pkt2.l4.src_port, "src_port"
-  assert_eq pkt1.dns.txid,    pkt2.dns.txid,    "dns txid"
 
 
 -- ── neigh.parse_neigh_line ────────────────────────────────────────

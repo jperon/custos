@@ -2,9 +2,12 @@
 -- Worker Q2 : portail captif (bridge mode).
 --
 -- Reçoit les TCP SYN vers le port 80 non autorisés (NFQUEUE 2).
+-- Le payload NFQUEUE commence à l'en-tête IP (pas d'Ethernet).
 -- Pour chaque SYN :
---   1. Parse le payload (trame Ethernet complète)
---   2. Forge et envoie via AF_PACKET :
+--   1. Parse IP + TCP
+--   2. Forge et envoie via AF_PACKET/SOCK_RAW sur `br` (nécessaire :
+--      NFQUEUE ne peut injecter qu'un seul paquet en remplacement, et
+--      ne peut pas inverser la direction d'un paquet) :
 --        a. SYN-ACK
 --        b. ACK + HTTP/1.1 302 Found → https://<filtre>:33443/
 --        c. FIN-ACK
@@ -16,7 +19,7 @@
 parse: parse_eth, :new, :mac2s, :s2mac, proto: {:IP6, :IP4} = require "ipparse.l2.ethernet"
 parse: parse_ip, proto: l3_proto, :ip2s = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
-{ :get_l2, :ETH_OFFSET } = require "parse/ethernet"
+{ :get_l2 } = require "parse/ethernet"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_error } = require "log"
 { :flags } = require "ipparse.l4.tcp"
@@ -131,8 +134,8 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
   raw = ffi.string payload_ptr[0], payload_len
 
-  -- Extract L2 info from NFQUEUE metadata (MAC addresses)
-  l2 = get_l2 nfad, raw
+  -- Extract L2 info from NFQUEUE metadata (MAC source via nfq_get_packet_hw)
+  l2 = get_l2 nfad
 
   ip, ip_off, tcp, tcp_off = parse_syn(raw)
   unless ip
