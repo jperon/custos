@@ -64,7 +64,7 @@ Detailed explanations and architecture remain in `README.md`.
 - Compiled condition: `(req) -> ok, reason`
 - Compiled action: `(req) -> verdict|nil, message`
 - Q1 pending key: `txid:ip:port`
-- Workers: Q0 (questions), Q1 (responses), AUTH (HTTPS), Q2 (TCP/80 captive, if `BRIDGE_MODE=1`)
+- Workers: Q0 (questions), Q1 (responses), AUTH (HTTPS), Q2 (TCP/80 captive portal), Q3 (forge RST/ICMP reject)
 - SIGHUP:
   - `main` propagates it to Q0
   - Q0 does `filter.reload()`

@@ -348,8 +348,110 @@ nDPI returns two protocol IDs per packet:
 
 User sessions are indexed by **MAC address** rather than IP. This ensures seamless tracking of clients across IPv4 and IPv6 (cross-family) and handles privacy extensions gracefully.
 - Use `session_for_mac(mac, ip, path, sessions_table)` instead of IP-based lookups.
-- Workers extract the client MAC from L2 headers (`get_l2(nfad, raw)`).
-- If the MAC cannot be extracted from the packet (e.g. `l2.mac_dst` is missing), workers MUST fallback to `neigh.get_mac(ip)`.
+- Workers extract the client MAC from NFQUEUE metadata (`get_l2(nfad)` → `nfq_get_packet_hw()`).
+- If the MAC cannot be extracted from the packet (e.g. `l2.mac_dst` is missing — it always is), workers MUST fallback to `neigh.get_mac(ip)`.
 - If `neigh.get_mac(ip)` also fails, `session_for_mac` performs a fallback by searching the active sessions for the provided IP.
+
+---
+
+## Worker I/O Reference
+
+Authoritative spec for what each worker receives, how it responds, and which channels it uses. Custos runs exclusively on nftables **table `bridge`**; there is no router mode.
+
+### NFQUEUE payload format (all queues)
+
+- `nfq_get_payload()` returns a buffer starting at the **IP header**. There is **no Ethernet header** in the payload, even for bridge hooks (contrary to the ebtables convention).
+- Parse at offset 0 (or 1 in Lua 1-based slicing).
+- `nfq_set_verdict(qh, id, NF_ACCEPT, len, buf)` replacement payload must also start at the IP header. NFQUEUE cannot reverse the direction of a packet: the skb keeps its original L2 header and the bridge forwards according to the original dst MAC.
+
+### NFQUEUE metadata (libnfq accessors)
+
+| Accessor | Returns | Notes |
+|----------|---------|-------|
+| `nfq_get_msg_packet_hdr` | `nfqnl_msg_packet_hdr*` | Big-endian `packet_id`. |
+| `nfq_get_payload(nfad, &ptr)` | `int` length + pointer | IP header onwards. |
+| `nfq_get_packet_hw(nfad)` | `nfqnl_msg_packet_hw*` | Source MAC (6 bytes). Destination MAC is **not** exposed. |
+| `nfq_get_indev(nfad)` | `u32` | Ingress ifindex. |
+| `nfq_get_outdev(nfad)` | `u32` | Egress ifindex (0 on pre-routing). |
+| `nfq_get_nfmark(nfad)` | `u32` | Mark set by nftables. Here it carries the VLAN ID (`meta mark set @ll,112,16 & 0xfff`). |
+
+### Queue map
+
+| Queue | Worker | nft rule (table `bridge`) | Payload | Verdict strategy | Response injection |
+|-------|--------|---------------------------|---------|------------------|--------------------|
+| 0 | `worker_q0` | `th dport 53 queue to 0` | IP + UDP/TCP + DNS question | `NF_ACCEPT` (always, except fail-closed on parse error) | None on the wire; drops a 43-byte transaction in the Q0→Q1 pipe. |
+| 1 | `worker_q1` | `th sport 53 queue to 1` | IP + UDP/TCP + DNS response | `NF_ACCEPT`, optionally `nfq_set_verdict(NF_ACCEPT, payload)` | Replacement payload: TTL-patched DNS + EDE `Custos vigilat`, or forged NXDOMAIN + EDE `Filtered` + synthetic `0.0.0.0`/`::`. |
+| 2 | `worker_q2` | `tcp dport 80 tcp flags & (fin\|syn\|rst\|ack) == syn queue to 2` | IP + TCP SYN | `NF_DROP` | Three Ethernet frames (SYN-ACK, HTTP 302, FIN-ACK) built with `ipparse` and sent on `br` via `AF_PACKET`/`SOCK_RAW`. AF_PACKET is mandatory because NFQUEUE cannot invert direction and cannot inject three packets. |
+| 3 | `worker_q3` | `limit rate 10/second burst 5 packets queue to 3` (and similar on auth-drop paths) | IP + any L4 | `nfq_set_verdict(NF_ACCEPT, payload)` (via `VERDICT_DONE`) | Replacement payload: forged TCP RST/ACK (swap src/dst, flags=RST+ACK, correct seq/ack) for TCP; ICMPv4 type 3/code 13 or ICMPv6 type 1/code 1 (admin-prohibited) quoting the original IP header + 8 bytes, for all other L4. |
+
+### Per-worker I/O
+
+- **Q0 (`worker_q0.moon`)**
+  - In: NFQUEUE 0, pipe write-end from `main.moon` (IPC to Q1), `filter.yml` (hot-reloadable on SIGHUP).
+  - Out: `NF_ACCEPT`/`NF_DROP`, IPC message via `ipc.write_msg` / `write_refused_msg` / `write_dnsonly_msg`.
+  - Side effects: calls `ndpi.get_flow` for flow tracking; logs via `log_allow`/`log_block`.
+
+- **Q1 (`worker_q1.moon`)**
+  - In: NFQUEUE 1, pipe read-end (drained via `drain_pipe`), `sessions.lua` (mtime-cached), `filter` (for TTL config).
+  - Out: `NF_ACCEPT` or `nfq_set_verdict(NF_ACCEPT, patched_payload)` (TTL + EDE) or built NXDOMAIN+EDE payload for refused transactions.
+  - Side effects: adds DNS-resolved IPs to nft sets `ip4_allowed`, `ip6_allowed`, `mac4_allowed`, `mac6_allowed` with `timeout 2m`. Refreshes neighbour table (`ip neigh show`) at most every `NEIGH_REFRESH_COOLDOWN` seconds.
+
+- **Q2 (`worker_q2.moon`)**
+  - In: NFQUEUE 2 (TCP SYN/80 not authenticated), `AF_PACKET`/`SOCK_RAW` socket bound to ifindex `br` (opened once at startup), `sessions.lua`.
+  - Out: `NF_DROP` on the SYN; 3 Ethernet frames injected via `sendto()` on the raw socket. Bridge MAC read from `/sys/class/net/br/address`.
+  - Config: `auth_cfg.captive_ip4` / `captive_ip6` / `port` (default 33443) build the redirect URL.
+
+- **Q3 (`worker_q3.moon`)**
+  - In: NFQUEUE 3 (residual drop traffic, rate-limited by nft to avoid flood).
+  - Out: `nfq_set_verdict(NF_ACCEPT, forged_ip_pkt)` for TCP (RST/ACK) or any other L4 (ICMP admin-prohibited).
+  - The forged packet has src/dst IPs swapped relative to the original. Empirically the client receives the RST/ICMP (e.g. `curl https://1.1.1.1` returns "Connexion refusée" in <5 ms). The exact delivery path — bridge FDB lookup on the forged dst IP, kernel re-hook, or something else — has not been reverse-engineered; do not assume a particular mechanism when touching this worker.
+
+- **AUTH (`auth/worker.moon`)**
+  - In: `AF_INET` + `AF_INET6` `SOCK_STREAM` listen socket on `auth_cfg.port` (HTTPS, TLS via `luasec`), `/etc/custos/secrets`, `sessions.lua`.
+  - Out: writes sessions into `sessions.lua` (atomic rename), applies nft entries to `authenticated_macs`, `authenticated_ips`, `authenticated_ips6`.
+  - Signals: `SIGHUP` reloads secrets (flag set in handler, processed at next request).
+
+### Q0 → Q1 IPC wire format
+
+Binary fixed 43 bytes, written with `libc.write` on a `pipe2(O_NONBLOCK)` pipe. Atomicity guaranteed (< `PIPE_BUF = 4096`).
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 1 | Type — `'A'` (0x41) IPv4 accept · `'6'` (0x36) IPv6 accept · `'R'` (0x52) IPv4 refused · `'r'` (0x72) IPv6 refused · `'D'` (0x44) IPv4 dnsonly · `'d'` (0x64) IPv6 dnsonly |
+| 1–2 | 2 | DNS `txid` (big-endian) |
+| 3–18 | 16 | Client IP — IPv4 left-padded with `0x00`×12, or full IPv6 |
+| 19–20 | 2 | Client UDP/TCP source port (big-endian) |
+| 21–26 | 6 | Client MAC (zeros if unknown) |
+| 27–42 | 16 | Resolver IP — same padding convention |
+
+### Sockets, pipes, files
+
+| Component | Endpoint | Purpose |
+|-----------|----------|---------|
+| Q2 | `socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))` on ifindex `br` | Injects 3 Ethernet frames per captive redirect |
+| AUTH | `socket(AF_INET/AF_INET6, SOCK_STREAM)` on `auth_cfg.port` | HTTPS captive portal |
+| nftables | `libnftables` FFI (`nft_ctx_new`, `nft_run_cmd_from_buffer`) | Manages allowlist sets |
+| Q0→Q1 pipe | `pipe2(O_NONBLOCK)` created in `main.moon` before fork | Binary IPC |
+| `/var/run/custos/config.lua` | Read at startup | Generated by `uci_config.lua` from `/etc/config/custos` |
+| `/etc/custos/secrets` | Read by AUTH | User credentials |
+| `tmp/sessions.lua` (UCI-configurable) | Written by AUTH, read by Q0/Q1/Q2 (mtime cache) | MAC-indexed auth sessions |
+
+### nft sets
+
+| Set | Writer | Reader (nft rule) |
+|-----|--------|-------------------|
+| `ip4_allowed`, `ip6_allowed` | Q1 | `ip saddr . ip daddr @ip4_allowed accept` |
+| `mac4_allowed`, `mac6_allowed` | Q1 | `ether saddr . ip daddr @mac4_allowed accept` |
+| `authenticated_macs`, `authenticated_ips`, `authenticated_ips6` | AUTH (`nft_sessions`) | Bypasses captive queue (Q2) for authenticated clients |
+| `ip4_dest_whitelist`, `ip6_dest_whitelist` | Static (`.nft`) | `ip daddr @ip4_dest_whitelist accept` |
+
+### Supervisor & signals (`main.moon`)
+
+- Forks each worker (Q0, Q1, AUTH, Q2, Q3) and watches via `waitpid(-1, …, WNOHANG)`; restarts on crash after a 1-second backoff.
+- `signalfd`-based loop for `SIGHUP` / `SIGTERM`.
+- `SIGHUP` → propagated to Q0 (reloads `filter`) and AUTH (reloads secrets).
+- `SIGTERM` → shuts down all workers, removes extra nft rules installed at startup.
+
+---
 
 **Do not use**: `class`, `extends`, `new` (MoonScript class-based syntax), `require "moon"`.
