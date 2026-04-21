@@ -168,8 +168,10 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
   eth_off = 1
 
   client_ip_str = ip2s ip.src
-  -- client_mac est extraite du paquet (l2.mac_raw, cf. get_l2 ci-dessus)
-  client_mac_str = l2.mac_src if l2.mac_src and l2.mac_src != "unknown"
+  client_mac_str = l2.mac_src
+  if not client_mac_str or client_mac_str == "unknown"
+    client_mac_str = get_mac client_ip_str
+  
   user          = user_for_ip client_ip_str, AUTH_SESSIONS_FILE, client_mac_str
 
   send = (f) ->

@@ -7,7 +7,8 @@ package.loaded["ffi_defs"] = {
   libnft = { }
 }
 pcall(function()
-  return ffi.cdef([[    const char* inet_ntop(int af, const void *src, char *dst, unsigned int size);
+  return ffi.cdef([[    typedef struct { long tv_sec; long tv_nsec; } timespec_t;
+    const char* inet_ntop(int af, const void *src, char *dst, unsigned int size);
   ]])
 end)
 local PROTO_TCP = 6
@@ -1459,7 +1460,11 @@ do
     fh:write("return {\n")
     for _index_0 = 1, #entries do
       local entry = entries[_index_0]
-      fh:write(string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3]))
+      local ips_str = ""
+      if entry[4] or entry[5] then
+        ips_str = ", ips = { " .. (entry[4] and ("ipv4 = \"" .. entry[4] .. "\"") or "") .. (entry[5] and (", ipv6 = \"" .. entry[5] .. "\"") or "") .. " }"
+      end
+      fh:write(string.format('  ["%s"] = { user = "%s", expires = %d%s },\n', entry[1], entry[2], entry[3], ips_str))
     end
     fh:write("}\n")
     return fh:close()
@@ -1467,7 +1472,7 @@ do
   test("from_user — session active, bon utilisateur", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "alice",
         FAR_FUTURE
       }
@@ -1475,13 +1480,14 @@ do
     sessions_mod.reset_cache()
     local f = (from_user(USER_CFG))("alice")
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), true, "alice OK")
   end)
   test("from_user — session active, mauvais utilisateur", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "alice",
         FAR_FUTURE
       }
@@ -1489,13 +1495,14 @@ do
     sessions_mod.reset_cache()
     local f = (from_user(USER_CFG))("bob")
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), false, "alice ≠ bob")
   end)
-  test("from_user — aucune session pour cette IP", function()
+  test("from_user — aucune session pour cette MAC", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "alice",
         FAR_FUTURE
       }
@@ -1503,13 +1510,14 @@ do
     sessions_mod.reset_cache()
     local f = (from_user(USER_CFG))("alice")
     return assert_eq((f({
+      mac = "00:00:00:00:00:00",
       src_ip = "9.9.9.9"
-    })), false, "IP inconnue")
+    })), false, "MAC inconnue")
   end)
   test("from_user — session expirée", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "alice",
         1
       }
@@ -1517,13 +1525,14 @@ do
     sessions_mod.reset_cache()
     local f = (from_user(USER_CFG))("alice")
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), false, "session expirée")
   end)
   test("from_users — premier utilisateur match", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "alice",
         FAR_FUTURE
       }
@@ -1534,13 +1543,14 @@ do
       "bob"
     })
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), true, "alice est premier")
   end)
   test("from_users — deuxième utilisateur match", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "bob",
         FAR_FUTURE
       }
@@ -1551,13 +1561,14 @@ do
       "bob"
     })
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), true, "bob est deuxième")
   end)
   test("from_users — aucun match", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "charlie",
         FAR_FUTURE
       }
@@ -1568,6 +1579,7 @@ do
       "bob"
     })
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), false, "charlie hors liste")
   end)
@@ -1588,7 +1600,7 @@ do
   test("from_userlist — utilisateur dans le groupe (premier)", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "alice",
         FAR_FUTURE
       }
@@ -1596,13 +1608,14 @@ do
     sessions_mod.reset_cache()
     local f = (from_userlist(USER_CFG))("admins")
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), true, "alice admin")
   end)
   test("from_userlist — utilisateur dans le groupe (deuxième)", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "bob",
         FAR_FUTURE
       }
@@ -1610,13 +1623,14 @@ do
     sessions_mod.reset_cache()
     local f = (from_userlist(USER_CFG))("admins")
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), true, "bob admin")
   end)
   test("from_userlist — utilisateur hors du groupe", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "charlie",
         FAR_FUTURE
       }
@@ -1624,6 +1638,7 @@ do
     sessions_mod.reset_cache()
     local f = (from_userlist(USER_CFG))("admins")
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), false, "charlie hors admins")
   end)
@@ -1644,7 +1659,7 @@ do
   test("from_userlists — premier groupe match", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "alice",
         FAR_FUTURE
       }
@@ -1655,13 +1670,14 @@ do
       "guests"
     })
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), true, "alice dans admins")
   end)
   test("from_userlists — deuxième groupe match", function()
     write_session_file({
       {
-        "10.0.0.1",
+        "aa:bb:cc:dd:ee:ff",
         "charlie",
         FAR_FUTURE
       }
@@ -1672,6 +1688,7 @@ do
       "guests"
     })
     return assert_eq((f({
+      mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })), true, "charlie dans guests")
   end)
@@ -2017,10 +2034,12 @@ test("dnsonly — client authentifié → verdict allow (true)", function()
   end
   local FAR = 9999999999
   write_sessions({
-    ["10.0.0.1"] = {
+    ["aa:bb:cc:dd:ee:ff"] = {
       user = "alice",
       expires = FAR,
-      mac = "aa:bb:cc:dd:ee:ff"
+      ips = {
+        ipv4 = "10.0.0.1"
+      }
     }
   }, SESS_DN)
   reset_cache()
@@ -2308,20 +2327,24 @@ test("auth/sessions — serialize : table vide", function()
 end)
 test("auth/sessions — serialize : une session", function()
   local sessions = {
-    ["10.0.0.1"] = {
+    ["aa:bb:cc:dd:ee:ff"] = {
       user = "alice",
       expires = 9999,
-      heartbeat = nil
+      heartbeat = nil,
+      ips = {
+        ipv4 = "10.0.0.1"
+      }
     }
   }
   local result = serialize(sessions)
-  assert(result:find('"10.0.0.1"', 1, true, "IP présente"))
+  assert(result:find('"aa:bb:cc:dd:ee:ff"', 1, true, "MAC présente"))
   assert(result:find('"alice"', 1, true, "user présent"))
-  return assert(result:find("expires = 9999", 1, true, "expires présent"))
+  assert(result:find("expires = 9999", 1, true, "expires présent"))
+  return assert(result:find('ipv4 = "10.0.0.1"', 1, true, "IP présente dans ips"))
 end)
 test("auth/sessions — serialize : session avec heartbeat", function()
   local sessions = {
-    ["10.0.0.2"] = {
+    ["11:22:33:44:55:66"] = {
       user = "bob",
       expires = 8888,
       heartbeat = 7777
@@ -2330,56 +2353,61 @@ test("auth/sessions — serialize : session avec heartbeat", function()
   local result = serialize(sessions)
   return assert(result:find("heartbeat = 7777", 1, true, "heartbeat sérialisé"))
 end)
-test("auth/sessions — serialize : session avec MAC", function()
+test("auth/sessions — serialize : session avec ips multi-famille", function()
   local sessions = {
-    ["10.0.0.3"] = {
+    ["aa:bb:cc:dd:ee:ff"] = {
       user = "carol",
       expires = 5555,
-      mac = "aa:bb:cc:dd:ee:ff"
+      ips = {
+        ipv4 = "1.2.3.4",
+        ipv6 = "::1"
+      }
     }
   }
   local result = serialize(sessions)
-  assert(result:find('"aa:bb:cc:dd:ee:ff"', 1, true, "mac sérialisé"))
-  return assert(result:find('"carol"', 1, true, "user présent"))
+  assert(result:find('ipv4 = "1.2.3.4"', 1, true, "ipv4 présente"))
+  return assert(result:find('ipv6 = "::1"', 1, true, "ipv6 présente"))
 end)
-test("auth/sessions — serialize : session sans MAC → pas de champ mac", function()
+test("auth/sessions — serialize : session sans ips → pas de champ ips", function()
   local sessions = {
-    ["10.0.0.4"] = {
+    ["00:11:22:33:44:55"] = {
       user = "dave",
       expires = 4444
     }
   }
   local result = serialize(sessions)
-  return assert(not result:find("mac =", 1, true), "pas de champ mac si nil")
+  return assert(not result:find("ips =", 1, true), "pas de champ ips si nil")
 end)
 test("auth/sessions — write_sessions + load_sessions round-trip", function()
   local sessions = {
-    ["192.168.1.10"] = {
+    ["aa:bb:cc:dd:ee:ff"] = {
       user = "alice",
       expires = 9999999,
       heartbeat = nil
     },
-    ["192.168.1.20"] = {
+    ["11:22:33:44:55:66"] = {
       user = "bob",
       expires = 8888888,
       heartbeat = 111
     },
-    ["192.168.1.30"] = {
+    ["22:33:44:55:66:77"] = {
       user = "carol",
       expires = 7777777,
-      mac = "aa:bb:cc:dd:ee:ff"
+      ips = {
+        ipv4 = "192.168.1.30"
+      }
     }
   }
   local ok, err = write_sessions(sessions, SESS_FILE)
   assert(ok, "write_sessions a échoué : " .. tostring(tostring(err)))
   local loaded = load_sessions(SESS_FILE)
-  assert(loaded["192.168.1.10"], "alice absent")
-  assert_eq(loaded["192.168.1.10"].user, "alice", "alice.user")
-  assert_eq(loaded["192.168.1.10"].expires, 9999999, "alice.expires")
-  assert(loaded["192.168.1.20"], "bob absent")
-  assert_eq(loaded["192.168.1.20"].heartbeat, 111, "bob.heartbeat")
-  assert(loaded["192.168.1.30"], "carol absent")
-  assert_eq(loaded["192.168.1.30"].mac, "aa:bb:cc:dd:ee:ff", "carol.mac")
+  assert(loaded["aa:bb:cc:dd:ee:ff"], "alice absent")
+  assert_eq(loaded["aa:bb:cc:dd:ee:ff"].user, "alice", "alice.user")
+  assert_eq(loaded["aa:bb:cc:dd:ee:ff"].expires, 9999999, "alice.expires")
+  assert(loaded["11:22:33:44:55:66"], "bob absent")
+  assert_eq(loaded["11:22:33:44:55:66"].heartbeat, 111, "bob.heartbeat")
+  assert(loaded["22:33:44:55:66:77"], "carol absent")
+  assert_eq(loaded["22:33:44:55:66:77"].ips.ipv4, "192.168.1.30", "carol.ips.ipv4")
   return os.remove(SESS_FILE)
 end)
 test("auth/sessions — load_sessions : fichier absent → table vide", function()
@@ -2407,50 +2435,50 @@ test("auth/sessions — load_sessions : fichier corrompu → table vide", functi
 end)
 test("auth/sessions — add_session : crée la session", function()
   local sessions = { }
-  add_session(sessions, "10.1.0.1", "charlie", 3600, 0)
-  assert(sessions["10.1.0.1"], "session créée")
-  assert_eq(sessions["10.1.0.1"].user, "charlie", "user")
-  assert(sessions["10.1.0.1"].expires > os.time(), "expires dans le futur")
-  assert_eq(sessions["10.1.0.1"].heartbeat, nil, "heartbeat nil si idle_timeout=0")
-  return assert_eq(sessions["10.1.0.1"].mac, nil, "mac nil si non fourni")
+  add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.1", "charlie", 3600, 0)
+  assert(sessions["aa:bb:cc:dd:ee:ff"], "session créée")
+  assert_eq(sessions["aa:bb:cc:dd:ee:ff"].user, "charlie", "user")
+  assert(sessions["aa:bb:cc:dd:ee:ff"].expires > os.time(), "expires dans le futur")
+  assert_eq(sessions["aa:bb:cc:dd:ee:ff"].heartbeat, nil, "heartbeat nil si idle_timeout=0")
+  return assert_eq(sessions["aa:bb:cc:dd:ee:ff"].ips.ipv4, "10.1.0.1", "IP stockée dans ips")
 end)
-test("auth/sessions — add_session : MAC stocké", function()
+test("auth/sessions — add_session : normalisation MAC", function()
   local sessions = { }
-  add_session(sessions, "10.1.0.5", "eve", 3600, 0, "11:22:33:44:55:66")
-  assert(sessions["10.1.0.5"], "session créée")
-  return assert_eq(sessions["10.1.0.5"].mac, "11:22:33:44:55:66", "mac stocké")
+  add_session(sessions, "AA:BB:CC:DD:EE:FF", "10.1.0.5", "eve", 3600, 0)
+  assert(sessions["aa:bb:cc:dd:ee:ff"], "session créée (lowercase)")
+  return assert_eq(sessions["aa:bb:cc:dd:ee:ff"].user, "eve", "user correct")
 end)
 test("auth/sessions — add_session : heartbeat si idle_timeout > 0", function()
   local sessions = { }
-  add_session(sessions, "10.1.0.2", "diana", 3600, 120)
-  assert(sessions["10.1.0.2"].heartbeat ~= nil, "heartbeat non nil")
-  return assert(sessions["10.1.0.2"].heartbeat > os.time(), "heartbeat dans le futur")
+  add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.2", "diana", 3600, 120)
+  assert(sessions["aa:bb:cc:dd:ee:ff"].heartbeat ~= nil, "heartbeat non nil")
+  return assert(sessions["aa:bb:cc:dd:ee:ff"].heartbeat > os.time(), "heartbeat dans le futur")
 end)
 test("auth/sessions — purge_expired : retire les sessions expirées", function()
   local sessions = {
-    ["10.0.0.1"] = {
+    ["aa:bb:cc:dd:ee:01"] = {
       user = "old",
       expires = 1
     },
-    ["10.0.0.2"] = {
+    ["aa:bb:cc:dd:ee:02"] = {
       user = "valid",
       expires = 9999999999
     }
   }
   purge_expired(sessions)
-  assert(sessions["10.0.0.1"] == nil, "session expirée purgée")
-  return assert(sessions["10.0.0.2"] ~= nil, "session valide conservée")
+  assert(sessions["aa:bb:cc:dd:ee:01"] == nil, "session expirée purgée")
+  return assert(sessions["aa:bb:cc:dd:ee:02"] ~= nil, "session valide conservée")
 end)
 test("auth/sessions — purge_expired : retire si heartbeat expiré", function()
   local sessions = {
-    ["10.0.0.3"] = {
+    ["aa:bb:cc:dd:ee:03"] = {
       user = "hb",
       expires = 9999999999,
       heartbeat = 1
     }
   }
   purge_expired(sessions)
-  return assert(sessions["10.0.0.3"] == nil, "session avec heartbeat expiré purgée")
+  return assert(sessions["aa:bb:cc:dd:ee:03"] == nil, "session avec heartbeat expiré purgée")
 end)
 do
   local SF_FILE = "./tmp/test_sf_sessions.lua"
@@ -2475,26 +2503,41 @@ do
   end
   local MAC = "aa:bb:cc:dd:ee:ff"
   local FUTURE = 9999999999
-  test("session_for_ip — session directe par IP", function()
+  test("session_for_ip — session directe par MAC", function()
     stub_neigh({ })
     write_sf_sessions({
-      ["10.0.0.1"] = {
+      [MAC] = {
+        user = "alice",
+        expires = FUTURE
+      }
+    })
+    local s = session_for_ip(nil, SF_FILE, MAC)
+    return assert(s and s.user == "alice", "session trouvée par MAC")
+  end)
+  test("session_for_ip — session directe par IP (via fallback neigh)", function()
+    stub_neigh({
+      ["10.0.0.1"] = MAC
+    })
+    write_sf_sessions({
+      [MAC] = {
         user = "alice",
         expires = FUTURE
       }
     })
     local s = session_for_ip("10.0.0.1", SF_FILE)
-    return assert(s and s.user == "alice", "session trouvée par IP")
+    return assert(s and s.user == "alice", "session trouvée par IP via neigh")
   end)
   test("session_for_ip — fallback MAC cross-family (IPv6 → IPv4)", function()
     stub_neigh({
       ["10.35.1.53"] = MAC
     })
     write_sf_sessions({
-      ["2a11:6c7:1700:7801::bede"] = {
+      [MAC] = {
         user = "j@prn.ovh",
         expires = FUTURE,
-        mac = MAC
+        ips = {
+          ipv6 = "2a11:6c7:1700:7801::bede"
+        }
       }
     })
     local s = session_for_ip("10.35.1.53", SF_FILE)
@@ -2506,10 +2549,9 @@ do
       ["10.0.0.2"] = "ff:ff:ff:ff:ff:ff"
     })
     write_sf_sessions({
-      ["10.0.0.1"] = {
+      [MAC] = {
         user = "alice",
-        expires = FUTURE,
-        mac = MAC
+        expires = FUTURE
       }
     })
     local s = session_for_ip("10.0.0.2", SF_FILE)
@@ -2518,10 +2560,9 @@ do
   test("session_for_ip — fallback MAC : ip inconnue de neigh → nil", function()
     stub_neigh({ })
     write_sf_sessions({
-      ["10.0.0.1"] = {
+      [MAC] = {
         user = "alice",
-        expires = FUTURE,
-        mac = MAC
+        expires = FUTURE
       }
     })
     local s = session_for_ip("9.9.9.9", SF_FILE)
@@ -2532,10 +2573,9 @@ do
       ["10.0.0.9"] = MAC
     })
     write_sf_sessions({
-      ["10.0.0.1"] = {
+      [MAC] = {
         user = "alice",
-        expires = 1,
-        mac = MAC
+        expires = 1
       }
     })
     local s = session_for_ip("10.0.0.9", SF_FILE)
@@ -2546,10 +2586,9 @@ do
       ["10.35.1.53"] = MAC
     })
     write_sf_sessions({
-      ["2a11:6c7:1700:7801::bede"] = {
+      [MAC] = {
         user = "j@prn.ovh",
-        expires = FUTURE,
-        mac = MAC
+        expires = FUTURE
       }
     })
     return assert_eq((user_for_ip("10.35.1.53", SF_FILE)), "j@prn.ovh", "user retrouvé cross-family")
@@ -2560,10 +2599,9 @@ do
   test("session_for_ip — MAC passée explicitement prime sur neigh", function()
     stub_neigh({ })
     write_sf_sessions({
-      ["2a11:6c7:1700:7801::bede"] = {
+      [MAC] = {
         user = "j@prn.ovh",
-        expires = FUTURE,
-        mac = MAC
+        expires = FUTURE
       }
     })
     local s = session_for_ip("10.35.1.53", SF_FILE, MAC)
@@ -2575,10 +2613,9 @@ do
       ["10.0.0.99"] = MAC
     })
     write_sf_sessions({
-      ["10.0.0.1"] = {
+      [MAC] = {
         user = "alice",
-        expires = FUTURE,
-        mac = MAC
+        expires = FUTURE
       }
     })
     local s = session_for_ip("10.0.0.99", SF_FILE, "unknown")

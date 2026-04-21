@@ -8,8 +8,8 @@ do
   local _obj_0 = require("config")
   QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE = _obj_0.QUEUE_RESPONSES, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NEIGH_REFRESH_COOLDOWN, _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS, _obj_0.NFT_ADD_FAILURE_POLICY, _obj_0.IPC_MATCH_RETRY_ENABLED, _obj_0.IPC_MATCH_RETRY_COUNT, _obj_0.IPC_MATCH_RETRY_SLEEP_MS, _obj_0.AUTH_SESSIONS_FILE
 end
-local user_for_ip
-user_for_ip = require("auth.sessions").user_for_ip
+local user_for_mac
+user_for_mac = require("auth.sessions").user_for_mac
 local neigh = require("neigh")
 local ndpi = require("parse/ndpi")
 local QTYPE
@@ -272,15 +272,11 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local txid = pkt.dns.txid
   local client_ip = pkt.ip.dst_ip
   local resolver_ip = pkt.ip.src_ip
-  local client_mac = ip_to_mac[client_ip]
-  if not (client_mac) then
+  local client_mac = l2.mac_dst
+  if client_mac == "unknown" or not client_mac then
     client_mac = neigh.get_mac(client_ip)
-    if mac_valid(client_mac) then
-      last_neigh_refresh = os.time()
-      neigh.refresh(mac_clients, ip_to_mac)
-    end
   end
-  local user = user_for_ip(client_ip, AUTH_SESSIONS_FILE, client_mac)
+  local user = user_for_mac(client_mac, client_ip, AUTH_SESSIONS_FILE)
   local entry = get_pending_entry(txid, pkt.ip.dst_ip, client_port, resolver_ip, now)
   if not (entry) then
     local retry_attempts = 0

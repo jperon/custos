@@ -158,9 +158,9 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   })
   local eth_off = 1
   local client_ip_str = ip2s(ip.src)
-  local client_mac_str
-  if l2.mac_src and l2.mac_src ~= "unknown" then
-    client_mac_str = l2.mac_src
+  local client_mac_str = l2.mac_src
+  if not client_mac_str or client_mac_str == "unknown" then
+    client_mac_str = get_mac(client_ip_str)
   end
   local user = user_for_ip(client_ip_str, AUTH_SESSIONS_FILE, client_mac_str)
   local send

@@ -1,6 +1,5 @@
 local os_time = os.time
 local os_rename = os.rename
-local neigh = require("neigh")
 local log_info
 log_info = require("log").log_info
 local serialize
@@ -8,12 +7,18 @@ serialize = function(sessions)
   local parts = {
     "return {\n"
   }
-  for ip, s in pairs(sessions) do
-    local safe_ip = ip:gsub('"', '\\"')
+  for mac, s in pairs(sessions) do
+    local safe_mac = mac:gsub('"', '\\"')
     local safe_user = s.user:gsub('"', '\\"')
     local hb = s.heartbeat and (", heartbeat = " .. tostring(s.heartbeat)) or ""
-    local mac = s.mac and (', mac = "' .. s.mac:gsub('"', '\\"') .. '"') or ""
-    parts[#parts + 1] = string.format('  ["%s"] = { user = "%s", expires = %d%s%s },\n', safe_ip, safe_user, s.expires, hb, mac)
+    local ips_parts = { }
+    if s.ips then
+      for family, ip in pairs(s.ips) do
+        ips_parts[#ips_parts + 1] = string.format('%s = "%s"', family, ip:gsub('"', '\\"'))
+      end
+    end
+    local ips_str = #ips_parts > 0 and (", ips = { " .. table.concat(ips_parts, ", ") .. " }") or ""
+    parts[#parts + 1] = string.format('  ["%s"] = { user = "%s", expires = %d%s%s },\n', safe_mac, safe_user, s.expires, hb, ips_str)
   end
   parts[#parts + 1] = "}\n"
   return table.concat(parts)
@@ -49,22 +54,36 @@ load_sessions = function(path)
   return result
 end
 local add_session
-add_session = function(sessions, ip, user, session_ttl, idle_timeout, mac)
+add_session = function(sessions, mac, ip, user, session_ttl, idle_timeout)
+  if not (mac and mac ~= "unknown") then
+    return 
+  end
+  mac = mac:lower()
   local now = os_time()
   local hb = (idle_timeout and idle_timeout > 0) and (now + idle_timeout) or nil
-  sessions[ip] = {
-    user = user,
-    expires = now + session_ttl,
-    heartbeat = hb,
-    mac = mac
+  local s = sessions[mac] or {
+    ips = { }
   }
+  s.user = user
+  s.expires = now + session_ttl
+  s.heartbeat = hb
+  if ip then
+    local family
+    if ip:find(":", 1, true) then
+      family = "ipv6"
+    else
+      family = "ipv4"
+    end
+    s.ips[family] = ip
+  end
+  sessions[mac] = s
 end
 local purge_expired
 purge_expired = function(sessions)
   local now = os_time()
-  for ip, s in pairs(sessions) do
+  for mac, s in pairs(sessions) do
     if now > s.expires or (s.heartbeat and now > s.heartbeat) then
-      sessions[ip] = nil
+      sessions[mac] = nil
     end
   end
 end
@@ -85,40 +104,42 @@ reset_cache = function()
   _cache = nil
   _cache_time = 0
 end
-local session_for_ip
-session_for_ip = function(ip, path, mac)
-  if not (ip) then
+local session_for_mac
+session_for_mac = function(mac, ip, path, sessions_arg)
+  local sessions_table = sessions_arg or read_cached(path)
+  if not (sessions_table) then
     return nil
   end
-  local sessions = read_cached(path)
-  local s = sessions[ip]
-  if not (s) then
-    local lookup_mac = mac
-    if not (lookup_mac and lookup_mac ~= "unknown") then
-      lookup_mac = neigh.get_mac(ip)
+  local lookup_mac = mac
+  if not lookup_mac or lookup_mac == "unknown" then
+    if ip then
+      lookup_mac = (require("neigh")).get_mac(ip)
     end
-    if lookup_mac and lookup_mac ~= "unknown" then
-      lookup_mac = lookup_mac:lower()
-      for sess_ip, s2 in pairs(sessions) do
-        if s2.mac and s2.mac ~= "unknown" then
-          if s2.mac:lower() == lookup_mac then
-            s = s2
-            break
-          end
-        elseif not s2.mac or s2.mac == "unknown" then
-          local sess_mac = neigh.get_mac(sess_ip)
-          if sess_mac and sess_mac ~= "unknown" then
-            if sess_mac:lower() == lookup_mac then
-              s = s2
-              break
-            end
-          end
+  end
+  lookup_mac = (lookup_mac and lookup_mac ~= "unknown") and lookup_mac:lower() or "unknown"
+  local s = sessions_table[lookup_mac]
+  if not s and ip then
+    for m, sess in pairs(sessions_table) do
+      if sess.ips then
+        if sess.ips.ipv4 == ip or sess.ips.ipv6 == ip then
+          s = sess
+          break
         end
       end
     end
   end
   if not (s) then
     return nil
+  end
+  if ip then
+    local family
+    if ip:find(":", 1, true) then
+      family = "ipv6"
+    else
+      family = "ipv4"
+    end
+    s.ips = s.ips or { }
+    s.ips[family] = ip
   end
   local now = os_time()
   if now > s.expires then
@@ -129,9 +150,9 @@ session_for_ip = function(ip, path, mac)
   end
   return s
 end
-local user_for_ip
-user_for_ip = function(ip, path, mac)
-  local s = session_for_ip(ip, path, mac)
+local user_for_mac
+user_for_mac = function(mac, ip, path)
+  local s = session_for_mac(mac, ip, path)
   return s and s.user
 end
 return {
@@ -142,6 +163,14 @@ return {
   purge_expired = purge_expired,
   read_cached = read_cached,
   reset_cache = reset_cache,
-  session_for_ip = session_for_ip,
-  user_for_ip = user_for_ip
+  session_for_mac = session_for_mac,
+  user_for_mac = user_for_mac,
+  session_for_mac = session_for_mac,
+  user_for_mac = user_for_mac,
+  session_for_ip = function(ip, path, mac)
+    return session_for_mac(mac, ip, path)
+  end,
+  user_for_ip = function(ip, path, mac)
+    return user_for_mac(mac, ip, path)
+  end
 }

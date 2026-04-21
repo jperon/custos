@@ -44,11 +44,13 @@ format_mac = (hw_ptr) ->
 -- @treturn table {mac_src: string, mac_raw: string, in_ifindex: number, vlan: number|nil}
 get_l2 = (nfad, raw) ->
   mac_src = "unknown"
+  mac_dst = "unknown"
   mac_raw = "\0\0\0\0\0\0"
 
   if NFQ_BRIDGE_MODE and raw and #raw >= 12
-    -- Mode bridge : MAC source aux octets 6–11 de la trame Ethernet.
+    -- Mode bridge : MAC destination aux octets 0-5, source aux octets 6–11.
     p = ffi.cast "const uint8_t*", raw
+    mac_dst = format_mac_ptr p, 0
     mac_src = format_mac_ptr p, 6
     mac_raw = ffi.string p + 6, 6
   else
@@ -62,6 +64,6 @@ get_l2 = (nfad, raw) ->
   mark = tonumber libnfq.nfq_get_nfmark nfad
   vlan = mark > 0 and mark or nil
 
-  { :mac_src, :mac_raw, :in_ifindex, :vlan }
+  { :mac_src, :mac_dst, :mac_raw, :in_ifindex, :vlan }
 
 { :get_l2, :format_mac, :format_mac_ptr, :ETH_OFFSET, :ETH_IPV4, :ETH_IPV6 }

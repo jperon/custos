@@ -7,10 +7,10 @@ do
   local _obj_0 = require("auth.credentials")
   verify_password, load_secrets, register_user = _obj_0.verify_password, _obj_0.load_secrets, _obj_0.register_user
 end
-local add_session, purge_expired, write_sessions
+local add_session, purge_expired, write_sessions, session_for_mac, load_sessions
 do
   local _obj_0 = require("auth.sessions")
-  add_session, purge_expired, write_sessions = _obj_0.add_session, _obj_0.purge_expired, _obj_0.write_sessions
+  add_session, purge_expired, write_sessions, session_for_mac, load_sessions = _obj_0.add_session, _obj_0.purge_expired, _obj_0.write_sessions, _obj_0.session_for_mac, _obj_0.load_sessions
 end
 local log_info, log_warn
 do
@@ -315,7 +315,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
     return 
   end
   if method == "GET" and (path == "/" or path == "/login") then
-    local s = sessions[peer_ip]
+    local s = session_for_mac(peer_mac, peer_ip, nil, sessions)
     local now = os.time()
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat) then
       http_response(sock, "200 OK", success_pg)
@@ -329,7 +329,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
       http_response(sock, "200 OK", home_page)
     end
   elseif method == "GET" and path == "/ping" then
-    local s = sessions[peer_ip]
+    local s = session_for_mac(peer_mac, peer_ip, nil, sessions)
     local now = os.time()
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat) then
       if auth_cfg.idle_timeout and auth_cfg.idle_timeout > 0 then
@@ -370,12 +370,12 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
       http_response(sock, "401 Unauthorized", "")
     end
   elseif method == "GET" and path == "/logout" then
-    local s = sessions[peer_ip]
+    local s = session_for_mac(peer_mac, peer_ip, nil, sessions)
     local prev_user = s and s.user
-    sessions[peer_ip] = nil
-    if nft_sess then
-      nft_sess.del_authenticated(peer_ip)
-      if s and s.mac then
+    if s then
+      sessions[s.mac] = nil
+      if nft_sess then
+        nft_sess.del_authenticated(peer_ip)
         nft_sess.del_authenticated_mac(s.mac)
       end
     end
@@ -404,7 +404,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
     if stored and pass ~= "" and verify_password(pass, stored) then
       purge_expired(sessions)
       local mac = peer_mac ~= "unknown" and peer_mac or nil
-      add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout, mac)
+      add_session(sessions, mac, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
       if nft_sess then
         local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
         if not (ok_nft) then
@@ -479,7 +479,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
         if new_secrets then
           purge_expired(sessions)
           local mac = peer_mac ~= "unknown" and peer_mac or nil
-          add_session(sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout, mac)
+          add_session(sessions, mac, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
           if nft_sess then
             local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
             if not (ok_nft) then
@@ -599,7 +599,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
       port = port
     })
   end
-  local sessions = { }
+  local sessions = load_sessions(auth_cfg.sessions_file) or { }
   local register_attempts = { }
   local all_servers = {
     listen4

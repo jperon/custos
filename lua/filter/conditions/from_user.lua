@@ -1,12 +1,12 @@
-local session_for_ip
-session_for_ip = require("auth.sessions").session_for_ip
+local session_for_mac
+session_for_mac = require("auth.sessions").session_for_mac
 local AUTH_SESSIONS_FILE
 AUTH_SESSIONS_FILE = require("config").AUTH_SESSIONS_FILE
 return function(cfg)
   local sessions_file = (cfg.auth and cfg.auth.sessions_file) or AUTH_SESSIONS_FILE
   return function(user)
     return function(req)
-      local s = session_for_ip(req.src_ip, sessions_file, req.mac)
+      local s = session_for_mac(req.mac, req.src_ip, sessions_file)
       if not (s) then
         return false, "from_user: aucune session valide pour " .. tostring(req.src_ip)
       end

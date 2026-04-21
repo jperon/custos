@@ -25,9 +25,11 @@ end
 local get_l2
 get_l2 = function(nfad, raw)
   local mac_src = "unknown"
+  local mac_dst = "unknown"
   local mac_raw = "\0\0\0\0\0\0"
   if NFQ_BRIDGE_MODE and raw and #raw >= 12 then
     local p = ffi.cast("const uint8_t*", raw)
+    mac_dst = format_mac_ptr(p, 0)
     mac_src = format_mac_ptr(p, 6)
     mac_raw = ffi.string(p + 6, 6)
   else
@@ -42,6 +44,7 @@ get_l2 = function(nfad, raw)
   local vlan = mark > 0 and mark or nil
   return {
     mac_src = mac_src,
+    mac_dst = mac_dst,
     mac_raw = mac_raw,
     in_ifindex = in_ifindex,
     vlan = vlan

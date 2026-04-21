@@ -18,7 +18,7 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS, :AUTH_SESSIONS_FILE } = require "config"
-{ :user_for_ip } = require "auth.sessions"
+{ :user_for_mac } = require "auth.sessions"
 neigh = require "neigh"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
@@ -292,21 +292,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   txid        = pkt.dns.txid
   client_ip   = pkt.ip.dst_ip
   resolver_ip = pkt.ip.src_ip
-  -- ip_to_mac est peuplé par drain_pipe (IPC de Q0). Si le MAC n'y est pas
-  -- (ex: nfq_get_packet_hw() indisponible pour les paquets IPv6, ou IPC pas
-  -- encore arrivé), on tente un lookup dans la table voisine (NDP/ARP).
-  -- Si le MAC est trouvé via neigh, on rafraîchit les tables partagées
-  -- immédiatement pour que resolve_client_family puisse trouver l'IPv6/IPv4.
-  client_mac = ip_to_mac[client_ip]
-  unless client_mac
-    client_mac = neigh.get_mac(client_ip)
-    if mac_valid(client_mac)
-      last_neigh_refresh = os.time!
-      neigh.refresh mac_clients, ip_to_mac
+  client_mac = l2.mac_dst
+  if client_mac == "unknown" or not client_mac
+    client_mac = neigh.get_mac client_ip
   -- Utilisateur authentifié (nil si l'IP n'a pas de session valide)
-  -- Le fallback cross-family par MAC permet de reconnaître un client
-  -- authentifié en IPv6 quand ses paquets IPv4 arrivent (et vice-versa).
-  user        = user_for_ip client_ip, AUTH_SESSIONS_FILE, client_mac
+  -- L'indexation par MAC permet de reconnaître un client authentifié
+  -- en IPv6 quand ses paquets IPv4 arrivent (et vice-versa) de manière O(1).
+  user        = user_for_mac client_mac, client_ip, AUTH_SESSIONS_FILE
 
   -- ── Vérification IPC ─────────────────────────────────────────
   entry = get_pending_entry txid, pkt.ip.dst_ip, client_port, resolver_ip, now

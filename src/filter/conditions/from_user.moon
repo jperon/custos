@@ -7,7 +7,7 @@
 -- Le chemin du fichier est issu de cfg.auth.sessions_file (ou la constante
 -- AUTH_SESSIONS_FILE par défaut).
 
-{ :session_for_ip } = require "auth.sessions"
+{ :session_for_mac } = require "auth.sessions"
 { :AUTH_SESSIONS_FILE } = require "config"
 
 --- @tparam table cfg Configuration du filtre (cfg.auth.sessions_file optionnel)
@@ -19,11 +19,9 @@
     --- @tparam table req {src_ip: string, ...}
     -- @treturn boolean, string
     (req) ->
-      -- session_for_ip gère le fallback cross-family par MAC (un client
-      -- authentifié en IPv6 est reconnu sur ses paquets IPv4 et vice-versa)
-      -- et vérifie expiration + heartbeat. req.mac provient directement du
-      -- paquet (L2), plus fiable que la table neigh locale en mode bridge.
-      s = session_for_ip req.src_ip, sessions_file, req.mac
+      -- session_for_mac indexée par MAC évite le coût du fallback par neigh
+      -- dans la majorité des cas en mode bridge.
+      s = session_for_mac req.mac, req.src_ip, sessions_file
 
       unless s
         return false, "from_user: aucune session valide pour #{req.src_ip}"

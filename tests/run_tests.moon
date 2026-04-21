@@ -21,6 +21,7 @@ package.loaded["ffi_defs"] = {
 -- pcall : si le symbole est déjà déclaré par un autre chemin, on ignore.
 pcall ->
   ffi.cdef [[
+    typedef struct { long tv_sec; long tv_nsec; } timespec_t;
     const char* inet_ntop(int af, const void *src, char *dst, unsigned int size);
   ]]
 
@@ -1758,53 +1759,57 @@ do
     fh = io.open SESSION_FILE, "w"
     fh\write "return {\n"
     for entry in *entries
-      fh\write string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3])
+      -- entry: {mac, user, expires, [ipv4, ipv6]}
+      ips_str = ""
+      if entry[4] or entry[5]
+        ips_str = ", ips = { " .. (entry[4] and ("ipv4 = \""..entry[4].."\"") or "") .. (entry[5] and (", ipv6 = \""..entry[5].."\"") or "") .. " }"
+      fh\write string.format('  ["%s"] = { user = "%s", expires = %d%s },\n', entry[1], entry[2], entry[3], ips_str)
     fh\write "}\n"
     fh\close!
 
   -- from_user ──────────────────────────────────────────────────────
   test "from_user — session active, bon utilisateur", ->
-    write_session_file { {"10.0.0.1", "alice", FAR_FUTURE} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_user USER_CFG) "alice"
-    assert_eq (f {src_ip: "10.0.0.1"}), true, "alice OK"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), true, "alice OK"
 
   test "from_user — session active, mauvais utilisateur", ->
-    write_session_file { {"10.0.0.1", "alice", FAR_FUTURE} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_user USER_CFG) "bob"
-    assert_eq (f {src_ip: "10.0.0.1"}), false, "alice ≠ bob"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), false, "alice ≠ bob"
 
-  test "from_user — aucune session pour cette IP", ->
-    write_session_file { {"10.0.0.1", "alice", FAR_FUTURE} }
+  test "from_user — aucune session pour cette MAC", ->
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_user USER_CFG) "alice"
-    assert_eq (f {src_ip: "9.9.9.9"}), false, "IP inconnue"
+    assert_eq (f {mac: "00:00:00:00:00:00", src_ip: "9.9.9.9"}), false, "MAC inconnue"
 
   test "from_user — session expirée", ->
-    write_session_file { {"10.0.0.1", "alice", 1} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", 1} }
     sessions_mod.reset_cache!
     f = (from_user USER_CFG) "alice"
-    assert_eq (f {src_ip: "10.0.0.1"}), false, "session expirée"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), false, "session expirée"
 
   -- from_users ─────────────────────────────────────────────────────
   test "from_users — premier utilisateur match", ->
-    write_session_file { {"10.0.0.1", "alice", FAR_FUTURE} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_users USER_CFG) {"alice", "bob"}
-    assert_eq (f {src_ip: "10.0.0.1"}), true, "alice est premier"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), true, "alice est premier"
 
   test "from_users — deuxième utilisateur match", ->
-    write_session_file { {"10.0.0.1", "bob", FAR_FUTURE} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "bob", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_users USER_CFG) {"alice", "bob"}
-    assert_eq (f {src_ip: "10.0.0.1"}), true, "bob est deuxième"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), true, "bob est deuxième"
 
   test "from_users — aucun match", ->
-    write_session_file { {"10.0.0.1", "charlie", FAR_FUTURE} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "charlie", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_users USER_CFG) {"alice", "bob"}
-    assert_eq (f {src_ip: "10.0.0.1"}), false, "charlie hors liste"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), false, "charlie hors liste"
 
   test "from_users — liste vide → faux", ->
     write_session_file { {"10.0.0.1", "alice", FAR_FUTURE} }
@@ -1814,22 +1819,22 @@ do
 
   -- from_userlist ──────────────────────────────────────────────────
   test "from_userlist — utilisateur dans le groupe (premier)", ->
-    write_session_file { {"10.0.0.1", "alice", FAR_FUTURE} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_userlist USER_CFG) "admins"
-    assert_eq (f {src_ip: "10.0.0.1"}), true, "alice admin"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), true, "alice admin"
 
   test "from_userlist — utilisateur dans le groupe (deuxième)", ->
-    write_session_file { {"10.0.0.1", "bob", FAR_FUTURE} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "bob", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_userlist USER_CFG) "admins"
-    assert_eq (f {src_ip: "10.0.0.1"}), true, "bob admin"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), true, "bob admin"
 
   test "from_userlist — utilisateur hors du groupe", ->
-    write_session_file { {"10.0.0.1", "charlie", FAR_FUTURE} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "charlie", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_userlist USER_CFG) "admins"
-    assert_eq (f {src_ip: "10.0.0.1"}), false, "charlie hors admins"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), false, "charlie hors admins"
 
   test "from_userlist — groupe inconnu → faux", ->
     write_session_file { {"10.0.0.1", "alice", FAR_FUTURE} }
@@ -1839,16 +1844,16 @@ do
 
   -- from_userlists ─────────────────────────────────────────────────
   test "from_userlists — premier groupe match", ->
-    write_session_file { {"10.0.0.1", "alice", FAR_FUTURE} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_userlists USER_CFG) {"admins", "guests"}
-    assert_eq (f {src_ip: "10.0.0.1"}), true, "alice dans admins"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), true, "alice dans admins"
 
   test "from_userlists — deuxième groupe match", ->
-    write_session_file { {"10.0.0.1", "charlie", FAR_FUTURE} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "charlie", FAR_FUTURE} }
     sessions_mod.reset_cache!
     f = (from_userlists USER_CFG) {"admins", "guests"}
-    assert_eq (f {src_ip: "10.0.0.1"}), true, "charlie dans guests"
+    assert_eq (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}), true, "charlie dans guests"
 
   test "from_userlists — hors de tous les groupes", ->
     write_session_file { {"10.0.0.1", "eve", FAR_FUTURE} }
@@ -2019,7 +2024,7 @@ test "dnsonly — client authentifié → verdict allow (true)", ->
   { :write_sessions, :reset_cache } = require "auth.sessions"
   FAR = 9999999999
   write_sessions {
-    ["10.0.0.1"]: { user: "alice", expires: FAR, mac: "aa:bb:cc:dd:ee:ff" }
+    ["aa:bb:cc:dd:ee:ff"]: { user: "alice", expires: FAR, ips: { ipv4: "10.0.0.1" } }
   }, SESS_DN
   reset_cache!
   -- Recharge dnsonly avec le nouveau chemin de sessions
@@ -2287,44 +2292,45 @@ test "auth/sessions — serialize : table vide", ->
   assert result\find "}", 1, true
 
 test "auth/sessions — serialize : une session", ->
-  sessions = { ["10.0.0.1"]: { user: "alice", expires: 9999, heartbeat: nil } }
+  sessions = { ["aa:bb:cc:dd:ee:ff"]: { user: "alice", expires: 9999, heartbeat: nil, ips: { ipv4: "10.0.0.1" } } }
   result = serialize sessions
-  assert result\find '"10.0.0.1"',    1, true, "IP présente"
+  assert result\find '"aa:bb:cc:dd:ee:ff"', 1, true, "MAC présente"
   assert result\find '"alice"',       1, true, "user présent"
   assert result\find "expires = 9999", 1, true, "expires présent"
+  assert result\find 'ipv4 = "10.0.0.1"', 1, true, "IP présente dans ips"
 
 test "auth/sessions — serialize : session avec heartbeat", ->
-  sessions = { ["10.0.0.2"]: { user: "bob", expires: 8888, heartbeat: 7777 } }
+  sessions = { ["11:22:33:44:55:66"]: { user: "bob", expires: 8888, heartbeat: 7777 } }
   result = serialize sessions
   assert result\find "heartbeat = 7777", 1, true, "heartbeat sérialisé"
 
-test "auth/sessions — serialize : session avec MAC", ->
-  sessions = { ["10.0.0.3"]: { user: "carol", expires: 5555, mac: "aa:bb:cc:dd:ee:ff" } }
+test "auth/sessions — serialize : session avec ips multi-famille", ->
+  sessions = { ["aa:bb:cc:dd:ee:ff"]: { user: "carol", expires: 5555, ips: { ipv4: "1.2.3.4", ipv6: "::1" } } }
   result = serialize sessions
-  assert result\find '"aa:bb:cc:dd:ee:ff"', 1, true, "mac sérialisé"
-  assert result\find '"carol"',             1, true, "user présent"
+  assert result\find 'ipv4 = "1.2.3.4"', 1, true, "ipv4 présente"
+  assert result\find 'ipv6 = "::1"', 1, true, "ipv6 présente"
 
-test "auth/sessions — serialize : session sans MAC → pas de champ mac", ->
-  sessions = { ["10.0.0.4"]: { user: "dave", expires: 4444 } }
+test "auth/sessions — serialize : session sans ips → pas de champ ips", ->
+  sessions = { ["00:11:22:33:44:55"]: { user: "dave", expires: 4444 } }
   result = serialize sessions
-  assert not result\find("mac =", 1, true), "pas de champ mac si nil"
+  assert not result\find("ips =", 1, true), "pas de champ ips si nil"
 
 test "auth/sessions — write_sessions + load_sessions round-trip", ->
   sessions = {
-    ["192.168.1.10"]: { user: "alice", expires: 9999999, heartbeat: nil }
-    ["192.168.1.20"]: { user: "bob",   expires: 8888888, heartbeat: 111 }
-    ["192.168.1.30"]: { user: "carol", expires: 7777777, mac: "aa:bb:cc:dd:ee:ff" }
+    ["aa:bb:cc:dd:ee:ff"]: { user: "alice", expires: 9999999, heartbeat: nil }
+    ["11:22:33:44:55:66"]: { user: "bob",   expires: 8888888, heartbeat: 111 }
+    ["22:33:44:55:66:77"]: { user: "carol", expires: 7777777, ips: { ipv4: "192.168.1.30" } }
   }
   ok, err = write_sessions sessions, SESS_FILE
   assert ok, "write_sessions a échoué : #{tostring err}"
   loaded = load_sessions SESS_FILE
-  assert loaded["192.168.1.10"], "alice absent"
-  assert_eq loaded["192.168.1.10"].user,    "alice",   "alice.user"
-  assert_eq loaded["192.168.1.10"].expires, 9999999,   "alice.expires"
-  assert loaded["192.168.1.20"], "bob absent"
-  assert_eq loaded["192.168.1.20"].heartbeat, 111,     "bob.heartbeat"
-  assert loaded["192.168.1.30"], "carol absent"
-  assert_eq loaded["192.168.1.30"].mac, "aa:bb:cc:dd:ee:ff", "carol.mac"
+  assert loaded["aa:bb:cc:dd:ee:ff"], "alice absent"
+  assert_eq loaded["aa:bb:cc:dd:ee:ff"].user,    "alice",   "alice.user"
+  assert_eq loaded["aa:bb:cc:dd:ee:ff"].expires, 9999999,   "alice.expires"
+  assert loaded["11:22:33:44:55:66"], "bob absent"
+  assert_eq loaded["11:22:33:44:55:66"].heartbeat, 111,     "bob.heartbeat"
+  assert loaded["22:33:44:55:66:77"], "carol absent"
+  assert_eq loaded["22:33:44:55:66:77"].ips.ipv4, "192.168.1.30", "carol.ips.ipv4"
   os.remove SESS_FILE
 
 test "auth/sessions — load_sessions : fichier absent → table vide", ->
@@ -2348,40 +2354,40 @@ test "auth/sessions — load_sessions : fichier corrompu → table vide", ->
 
 test "auth/sessions — add_session : crée la session", ->
   sessions = {}
-  add_session sessions, "10.1.0.1", "charlie", 3600, 0
-  assert sessions["10.1.0.1"], "session créée"
-  assert_eq sessions["10.1.0.1"].user, "charlie", "user"
-  assert sessions["10.1.0.1"].expires > os.time!, "expires dans le futur"
-  assert_eq sessions["10.1.0.1"].heartbeat, nil, "heartbeat nil si idle_timeout=0"
-  assert_eq sessions["10.1.0.1"].mac, nil, "mac nil si non fourni"
+  add_session sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.1", "charlie", 3600, 0
+  assert sessions["aa:bb:cc:dd:ee:ff"], "session créée"
+  assert_eq sessions["aa:bb:cc:dd:ee:ff"].user, "charlie", "user"
+  assert sessions["aa:bb:cc:dd:ee:ff"].expires > os.time!, "expires dans le futur"
+  assert_eq sessions["aa:bb:cc:dd:ee:ff"].heartbeat, nil, "heartbeat nil si idle_timeout=0"
+  assert_eq sessions["aa:bb:cc:dd:ee:ff"].ips.ipv4, "10.1.0.1", "IP stockée dans ips"
 
-test "auth/sessions — add_session : MAC stocké", ->
+test "auth/sessions — add_session : normalisation MAC", ->
   sessions = {}
-  add_session sessions, "10.1.0.5", "eve", 3600, 0, "11:22:33:44:55:66"
-  assert sessions["10.1.0.5"], "session créée"
-  assert_eq sessions["10.1.0.5"].mac, "11:22:33:44:55:66", "mac stocké"
+  add_session sessions, "AA:BB:CC:DD:EE:FF", "10.1.0.5", "eve", 3600, 0
+  assert sessions["aa:bb:cc:dd:ee:ff"], "session créée (lowercase)"
+  assert_eq sessions["aa:bb:cc:dd:ee:ff"].user, "eve", "user correct"
 
 test "auth/sessions — add_session : heartbeat si idle_timeout > 0", ->
   sessions = {}
-  add_session sessions, "10.1.0.2", "diana", 3600, 120
-  assert sessions["10.1.0.2"].heartbeat ~= nil, "heartbeat non nil"
-  assert sessions["10.1.0.2"].heartbeat > os.time!, "heartbeat dans le futur"
+  add_session sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.2", "diana", 3600, 120
+  assert sessions["aa:bb:cc:dd:ee:ff"].heartbeat ~= nil, "heartbeat non nil"
+  assert sessions["aa:bb:cc:dd:ee:ff"].heartbeat > os.time!, "heartbeat dans le futur"
 
 test "auth/sessions — purge_expired : retire les sessions expirées", ->
   sessions = {
-    ["10.0.0.1"]: { user: "old",   expires: 1 }     -- expiré (epoch 1)
-    ["10.0.0.2"]: { user: "valid", expires: 9999999999 }  -- valide
+    ["aa:bb:cc:dd:ee:01"]: { user: "old",   expires: 1 }     -- expiré (epoch 1)
+    ["aa:bb:cc:dd:ee:02"]: { user: "valid", expires: 9999999999 }  -- valide
   }
   purge_expired sessions
-  assert sessions["10.0.0.1"] == nil, "session expirée purgée"
-  assert sessions["10.0.0.2"] ~= nil, "session valide conservée"
+  assert sessions["aa:bb:cc:dd:ee:01"] == nil, "session expirée purgée"
+  assert sessions["aa:bb:cc:dd:ee:02"] ~= nil, "session valide conservée"
 
 test "auth/sessions — purge_expired : retire si heartbeat expiré", ->
   sessions = {
-    ["10.0.0.3"]: { user: "hb", expires: 9999999999, heartbeat: 1 }
+    ["aa:bb:cc:dd:ee:03"]: { user: "hb", expires: 9999999999, heartbeat: 1 }
   }
   purge_expired sessions
-  assert sessions["10.0.0.3"] == nil, "session avec heartbeat expiré purgée"
+  assert sessions["aa:bb:cc:dd:ee:03"] == nil, "session avec heartbeat expiré purgée"
 
 -- ── session_for_ip / user_for_ip ─────────────────────────────────
 -- Stub `neigh` pour contrôler le fallback MAC sans dépendre de `ip neigh`.
@@ -2402,18 +2408,24 @@ do
   MAC = "aa:bb:cc:dd:ee:ff"
   FUTURE = 9999999999
 
-  test "session_for_ip — session directe par IP", ->
+  test "session_for_ip — session directe par MAC", ->
     stub_neigh {}
-    write_sf_sessions { ["10.0.0.1"]: { user: "alice", expires: FUTURE } }
+    write_sf_sessions { [MAC]: { user: "alice", expires: FUTURE } }
+    s = session_for_ip nil, SF_FILE, MAC
+    assert s and s.user == "alice", "session trouvée par MAC"
+
+  test "session_for_ip — session directe par IP (via fallback neigh)", ->
+    stub_neigh { ["10.0.0.1"]: MAC }
+    write_sf_sessions { [MAC]: { user: "alice", expires: FUTURE } }
     s = session_for_ip "10.0.0.1", SF_FILE
-    assert s and s.user == "alice", "session trouvée par IP"
+    assert s and s.user == "alice", "session trouvée par IP via neigh"
 
   test "session_for_ip — fallback MAC cross-family (IPv6 → IPv4)", ->
     -- Client authentifié en IPv6, requête DNS en IPv4 : la session est
     -- retrouvée via la MAC partagée.
     stub_neigh { ["10.35.1.53"]: MAC }
     write_sf_sessions {
-      ["2a11:6c7:1700:7801::bede"]: { user: "j@prn.ovh", expires: FUTURE, mac: MAC }
+      [MAC]: { user: "j@prn.ovh", expires: FUTURE, ips: { ipv6: "2a11:6c7:1700:7801::bede" } }
     }
     s = session_for_ip "10.35.1.53", SF_FILE
     assert s, "session trouvée via MAC"
@@ -2422,7 +2434,7 @@ do
   test "session_for_ip — fallback MAC : pas de session avec cette MAC", ->
     stub_neigh { ["10.0.0.2"]: "ff:ff:ff:ff:ff:ff" }
     write_sf_sessions {
-      ["10.0.0.1"]: { user: "alice", expires: FUTURE, mac: MAC }
+      [MAC]: { user: "alice", expires: FUTURE }
     }
     s = session_for_ip "10.0.0.2", SF_FILE
     assert not s, "aucune session avec la MAC différente"
@@ -2430,7 +2442,7 @@ do
   test "session_for_ip — fallback MAC : ip inconnue de neigh → nil", ->
     stub_neigh {}
     write_sf_sessions {
-      ["10.0.0.1"]: { user: "alice", expires: FUTURE, mac: MAC }
+      [MAC]: { user: "alice", expires: FUTURE }
     }
     s = session_for_ip "9.9.9.9", SF_FILE
     assert not s, "neigh=unknown → nil"
@@ -2438,7 +2450,7 @@ do
   test "session_for_ip — session expirée → nil", ->
     stub_neigh { ["10.0.0.9"]: MAC }
     write_sf_sessions {
-      ["10.0.0.1"]: { user: "alice", expires: 1, mac: MAC }  -- expirée
+      [MAC]: { user: "alice", expires: 1 }  -- expirée
     }
     s = session_for_ip "10.0.0.9", SF_FILE
     assert not s, "session expirée trouvée par MAC mais rejetée"
@@ -2446,7 +2458,7 @@ do
   test "user_for_ip — retourne user via fallback MAC", ->
     stub_neigh { ["10.35.1.53"]: MAC }
     write_sf_sessions {
-      ["2a11:6c7:1700:7801::bede"]: { user: "j@prn.ovh", expires: FUTURE, mac: MAC }
+      [MAC]: { user: "j@prn.ovh", expires: FUTURE }
     }
     assert_eq (user_for_ip "10.35.1.53", SF_FILE), "j@prn.ovh", "user retrouvé cross-family"
 
@@ -2459,7 +2471,7 @@ do
     -- utiliser la MAC fournie.
     stub_neigh {}
     write_sf_sessions {
-      ["2a11:6c7:1700:7801::bede"]: { user: "j@prn.ovh", expires: FUTURE, mac: MAC }
+      [MAC]: { user: "j@prn.ovh", expires: FUTURE }
     }
     s = session_for_ip "10.35.1.53", SF_FILE, MAC
     assert s, "session trouvée via MAC du paquet"
@@ -2468,7 +2480,7 @@ do
   test "session_for_ip — MAC 'unknown' ignorée → bascule sur neigh", ->
     stub_neigh { ["10.0.0.99"]: MAC }
     write_sf_sessions {
-      ["10.0.0.1"]: { user: "alice", expires: FUTURE, mac: MAC }
+      [MAC]: { user: "alice", expires: FUTURE }
     }
     s = session_for_ip "10.0.0.99", SF_FILE, "unknown"
     assert s and s.user == "alice", "neigh sert de fallback quand mac='unknown'"

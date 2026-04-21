@@ -15,7 +15,7 @@ cert   = require "auth.cert"
 h      = require "auth.html"
 
 { :verify_password, :load_secrets, :register_user } = require "auth.credentials"
-{ :add_session, :purge_expired, :write_sessions } = require "auth.sessions"
+{ :add_session, :purge_expired, :write_sessions, :session_for_mac, :load_sessions } = require "auth.sessions"
 { :log_info, :log_warn }            = require "log"
 neigh                               = require "neigh"
 
@@ -318,8 +318,8 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
     return
 
   if method == "GET" and (path == "/" or path == "/login")
-    -- Vérifie si l'IP a déjà une session valide
-    s = sessions[peer_ip]
+    -- Vérifie si le client a déjà une session valide (via MAC ou IP fallback)
+    s = session_for_mac peer_mac, peer_ip, nil, sessions
     now = os.time!
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat)
       http_response sock, "200 OK", success_pg
@@ -328,7 +328,7 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
       http_response sock, "200 OK", home_page
 
   elseif method == "GET" and path == "/ping"
-    s = sessions[peer_ip]
+    s = session_for_mac peer_mac, peer_ip, nil, sessions
     now = os.time!
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat)
       if auth_cfg.idle_timeout and auth_cfg.idle_timeout > 0
@@ -346,12 +346,13 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
       http_response sock, "401 Unauthorized", ""
 
   elseif method == "GET" and path == "/logout"
-    s = sessions[peer_ip]
+    s = session_for_mac peer_mac, peer_ip, nil, sessions
     prev_user = s and s.user
-    sessions[peer_ip] = nil
-    if nft_sess
-      nft_sess.del_authenticated peer_ip
-      if s and s.mac
+    if s
+      -- Supprime la session de la table (indexée par MAC)
+      sessions[s.mac] = nil
+      if nft_sess
+        nft_sess.del_authenticated peer_ip
         nft_sess.del_authenticated_mac s.mac
     ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
     log_warn { action: "auth_write_failed", err: err3, user: prev_user } unless ok2
@@ -370,7 +371,7 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
     if stored and pass ~= "" and verify_password pass, stored
       purge_expired sessions
       mac = peer_mac ~= "unknown" and peer_mac or nil
-      add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout, mac
+      add_session sessions, mac, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
       if nft_sess
         ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
         log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl, user: user } unless ok_nft
@@ -406,7 +407,7 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
         if new_secrets
           purge_expired sessions
           mac = peer_mac ~= "unknown" and peer_mac or nil
-          add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout, mac
+          add_session sessions, mac, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
           if nft_sess
             ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
             log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl, user: user } unless ok_nft
@@ -498,7 +499,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   else
     log_info { action: "auth_listening", ipv4: "0.0.0.0", port: port }
 
-  sessions = {}
+  sessions = load_sessions(auth_cfg.sessions_file) or {}
 
   register_attempts = {}
 

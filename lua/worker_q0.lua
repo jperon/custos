@@ -30,8 +30,9 @@ do
   local _obj_0 = require("log")
   log_allow, log_block, log_warn = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn
 end
-local user_for_ip
-user_for_ip = require("auth.sessions").user_for_ip
+local user_for_mac
+user_for_mac = require("auth.sessions").user_for_mac
+local neigh = require("neigh")
 local pipe_wfd = nil
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
@@ -57,6 +58,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     })
     return NF_DROP
   end
+  if l2.mac_src == "unknown" or not l2.mac_src then
+    l2.mac_src = neigh.get_mac(pkt.ip.src_ip)
+  end
   ndpi.get_flow(pkt)
   if math.random(1000) == 1 then
     ndpi.purge_flows()
@@ -78,7 +82,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     af = pkt.ip.version == 6 and "ipv6" or "ipv4",
     ndpi_master = pkt.ndpi_master,
     ndpi_app = pkt.ndpi_app,
-    user = user_for_ip(pkt.ip.src_ip, AUTH_SESSIONS_FILE, l2.mac_src)
+    user = user_for_mac(l2.mac_src, pkt.ip.src_ip, AUTH_SESSIONS_FILE)
   }
   for _, q in ipairs(pkt.questions) do
     q_fields.qname = q.qname

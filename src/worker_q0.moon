@@ -18,7 +18,8 @@ filter                   = require "filter"
 { :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn } = require "log"
-{ :user_for_ip } = require "auth.sessions"
+{ :user_for_mac } = require "auth.sessions"
+neigh                    = require "neigh"
 
 -- fd d'écriture du pipe IPC, injecté par main.moon avant fork()
 pipe_wfd = nil
@@ -49,6 +50,10 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     log_warn { action: "parse_failed", mac_src: l2.mac_src }
     return NF_DROP
 
+  -- Fallback MAC resolution if L2 parse failed
+  if l2.mac_src == "unknown" or not l2.mac_src
+    l2.mac_src = neigh.get_mac pkt.ip.src_ip
+
   -- ── nDPI State Tracking ──────────────────────────────────────
   ndpi.get_flow pkt
   if math.random(1000) == 1
@@ -75,7 +80,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     af:          pkt.ip.version == 6 and "ipv6" or "ipv4"
     ndpi_master: pkt.ndpi_master
     ndpi_app:    pkt.ndpi_app
-    user:        user_for_ip pkt.ip.src_ip, AUTH_SESSIONS_FILE, l2.mac_src
+    user:        user_for_mac l2.mac_src, pkt.ip.src_ip, AUTH_SESSIONS_FILE
   }
 
   for _, q in ipairs pkt.questions
