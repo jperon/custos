@@ -7,7 +7,7 @@
 -- Le chemin du fichier est issu de cfg.auth.sessions_file (ou la constante
 -- AUTH_SESSIONS_FILE par défaut).
 
-{ :read_cached } = require "auth.sessions"
+{ :session_for_ip } = require "auth.sessions"
 { :AUTH_SESSIONS_FILE } = require "config"
 
 --- @tparam table cfg Configuration du filtre (cfg.auth.sessions_file optionnel)
@@ -19,16 +19,14 @@
     --- @tparam table req {src_ip: string, ...}
     -- @treturn boolean, string
     (req) ->
-      sessions = read_cached sessions_file
-      s = sessions[req.src_ip]
-      now = os.time!
+      -- session_for_ip gère le fallback cross-family par MAC (un client
+      -- authentifié en IPv6 est reconnu sur ses paquets IPv4 et vice-versa)
+      -- et vérifie expiration + heartbeat. req.mac provient directement du
+      -- paquet (L2), plus fiable que la table neigh locale en mode bridge.
+      s = session_for_ip req.src_ip, sessions_file, req.mac
 
-      if not s
-        return false, "from_user: aucune session pour #{req.src_ip}"
-      if now > s.expires
-        return false, "from_user: session expirée pour #{req.src_ip} (user=#{s.user})"
-      if s.heartbeat and now > s.heartbeat
-        return false, "from_user: heartbeat expiré pour #{req.src_ip} (user=#{s.user})"
+      unless s
+        return false, "from_user: aucune session valide pour #{req.src_ip}"
       if s.user ~= user
         return false, "from_user: #{req.src_ip} authentifié en tant que #{s.user}, attendu #{user}"
 

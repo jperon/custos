@@ -11,13 +11,14 @@
 --   6. Log structuré avec champs nDPI (ndpi_master / ndpi_app)
 
 { :ffi, :libnfq } = require "ffi_defs"
-{ :QUEUE_QUESTIONS }     = require "config"
+{ :QUEUE_QUESTIONS, :AUTH_SESSIONS_FILE } = require "config"
 { :get_l2, :ETH_OFFSET } = require "parse/ethernet"
 ndpi                     = require "parse/ndpi"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn } = require "log"
+{ :user_for_ip } = require "auth.sessions"
 
 -- fd d'écriture du pipe IPC, injecté par main.moon avant fork()
 pipe_wfd = nil
@@ -74,6 +75,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     af:          pkt.ip.version == 6 and "ipv6" or "ipv4"
     ndpi_master: pkt.ndpi_master
     ndpi_app:    pkt.ndpi_app
+    user:        user_for_ip pkt.ip.src_ip, AUTH_SESSIONS_FILE, l2.mac_src
   }
 
   for _, q in ipairs pkt.questions
@@ -119,6 +121,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       src_ip: pkt.ip.src_ip
       dst_ip: pkt.ip.dst_ip
       src_port: pkt.l4.src_port
+      user: q_fields.user
     }
     return NF_DROP
 

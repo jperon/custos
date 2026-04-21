@@ -103,12 +103,18 @@ load_secrets = function(path)
 end
 local valid_username
 valid_username = function(username)
-  return (username:match("^[a-zA-Z0-9_.%-]+$")) ~= nil and #username >= 3 and #username <= 32
+  if not (#username >= 3 and #username <= 64) then
+    return false
+  end
+  if not (username:match("^[a-zA-Z0-9_.%-+]+@[a-zA-Z0-9_.%-]+%.[a-zA-Z]+$")) then
+    return false
+  end
+  return true
 end
 local register_user
 register_user = function(username, password, secrets_path, current_secrets)
   if not (valid_username(username)) then
-    return nil, "Nom d'utilisateur invalide (3-32 caractères alphanumériques, _, . ou -)."
+    return nil, "Adresse de courriel invalide."
   end
   if #password < 8 then
     return nil, "Le mot de passe doit contenir au moins 8 caractères."

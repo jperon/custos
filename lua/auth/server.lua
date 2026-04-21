@@ -1,6 +1,7 @@
 local socket = require("socket")
 local ssl = require("ssl")
 local cert = require("auth.cert")
+local h = require("auth.html")
 local verify_password, load_secrets, register_user
 do
   local _obj_0 = require("auth.credentials")
@@ -17,172 +18,159 @@ do
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
 local neigh = require("neigh")
-local LOGIN_PAGE = [[<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CustosVirginum — Authentification</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body {
-      font-family: system-ui, sans-serif;
-      background: #f4f4f4;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      margin: 0;
-    }
-    .card {
-      background: white;
-      padding: 2rem;
-      border-radius: 8px;
-      box-shadow: 0 2px 12px rgba(0,0,0,.15);
-      width: 100%;
-      max-width: 380px;
-    }
-    h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
-    label { display: block; margin-bottom: 1rem; }
-    label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
-    input[type=text], input[type=password] {
-      width: 100%;
-      padding: .5rem .7rem;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 1rem;
-    }
-    button {
-      width: 100%;
-      padding: .6rem;
-      background: #2563eb;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      font-size: 1rem;
-      cursor: pointer;
-      margin-top: .5rem;
-    }
-    button:hover { background: #1d4ed8; }
-    .msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
-    .msg.ok  { background: #dcfce7; color: #166534; }
-    .msg.err { background: #fee2e2; color: #991b1b; }
-    .link { text-align: center; margin-top: 1rem; font-size: .9rem; }
-    .link a { color: #2563eb; text-decoration: none; }
-    .link a:hover { text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>CustosVirginum</h1>
-    <div %AUTH_HIDDEN%>
-      <form method="post" action="/login">
-        <label>
-<span>Courriel</span>
-            <input type="text" name="user" required autofocus>
-
-        </label>
-        <label>
-          <span>Mot de passe</span>
-          <input type="password" name="password" required>
-        </label>
-        <button type="submit">Se connecter</button>
-      </form>
-      <div class="link"><a href="/register">Créer un compte</a></div>
-    </div>
-    %MSG%
-  </div>
-</body>
-</html>
+local build_css
+build_css = function(btn_bg, btn_hov)
+  return [[*, *::before, *::after { box-sizing: border-box; }
+body {
+  font-family: system-ui, sans-serif;
+  background: #f4f4f4;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  margin: 0;
+}
+.card {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0,0,0,.15);
+  width: 100%;
+  max-width: 380px;
+}
+h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
+label { display: block; margin-bottom: 1rem; }
+label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
+input[type=text], input[type=email], input[type=password] {
+  width: 100%;
+  padding: .5rem .7rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 1rem;
+}
+button {
+  width: 100%;
+  padding: .6rem;
+  background: ]] .. btn_bg .. [[;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 1rem;
+  cursor: pointer;
+  margin-top: .5rem;
+}
+button:hover { background: ]] .. btn_hov .. [[; }
+.msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
+.msg.ok  { background: #dcfce7; color: #166534; }
+.msg.err { background: #fee2e2; color: #991b1b; }
+.link { text-align: center; margin-top: 1rem; font-size: .9rem; }
+.link a { color: #2563eb; text-decoration: none; }
+.link a:hover { text-decoration: underline; }
 ]]
-local REGISTER_PAGE = [[<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CustosVirginum — Inscription</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body {
-      font-family: system-ui, sans-serif;
-      background: #f4f4f4;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      margin: 0;
+end
+local LOGIN_CSS = build_css("#2563eb", "#1d4ed8")
+local REGISTER_CSS = build_css("#16a34a", "#15803d")
+local page_skeleton
+page_skeleton = function(title, css, inner)
+  return "<!DOCTYPE html>" .. h.html({
+    lang = "fr"
+  }, h.head(h.meta({
+    charset = "UTF-8"
+  }), h.meta({
+    name = "viewport",
+    content = "width=device-width, initial-scale=1"
+  }), h.title(title), h.style(css)), h.body(h.div({
+    class = "card"
+  }, inner)))
+end
+local login_form
+login_form = function(hidden)
+  local attrs
+  if hidden then
+    attrs = {
+      style = "display:none"
     }
-    .card {
-      background: white;
-      padding: 2rem;
-      border-radius: 8px;
-      box-shadow: 0 2px 12px rgba(0,0,0,.15);
-      width: 100%;
-      max-width: 380px;
-    }
-    h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
-    label { display: block; margin-bottom: 1rem; }
-    label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
-    input[type=text], input[type=password] {
-      width: 100%;
-      padding: .5rem .7rem;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 1rem;
-    }
-    button {
-      width: 100%;
-      padding: .6rem;
-      background: #16a34a;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      font-size: 1rem;
-      cursor: pointer;
-      margin-top: .5rem;
-    }
-    button:hover { background: #15803d; }
-    .msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
-    .msg.ok  { background: #dcfce7; color: #166534; }
-    .msg.err { background: #fee2e2; color: #991b1b; }
-    .link { text-align: center; margin-top: 1rem; font-size: .9rem; }
-    .link a { color: #2563eb; text-decoration: none; }
-    .link a:hover { text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Créer un compte</h1>
-    <form method="post" action="/register">
-      <label>
-<span>Courriel</span>
-            <input type="text" name="user" required autofocus minlength="3" maxlength="32" pattern="[a-zA-Z0-9_.\-]+">
-
-      </label>
-      <label>
-        <span>Mot de passe (8 caractères minimum)</span>
-        <input type="password" name="password" required minlength="8">
-      </label>
-      <label>
-        <span>Confirmer le mot de passe</span>
-        <input type="password" name="password2" required minlength="8">
-      </label>
-      <button type="submit">Créer le compte</button>
-    </form>
-    <div class="link"><a href="/">Déjà un compte ? Se connecter</a></div>
-    %MSG%
-  </div>
-</body>
-</html>
-]]
-local success_page_tmp, _ = LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>')
-local SUCCESS_PAGE_RAW
-SUCCESS_PAGE_RAW, _ = success_page_tmp:gsub("%%AUTH_HIDDEN%%", 'style="display:none"')
-local SUCCESS_PAGE = SUCCESS_PAGE_RAW
+  else
+    attrs = { }
+  end
+  return h.div(attrs, h.form({
+    method = "post",
+    action = "/login"
+  }, h.label(h.span("Courriel"), h.input({
+    type = "email",
+    name = "user",
+    required = "",
+    autofocus = ""
+  })), h.label(h.span("Mot de passe"), h.input({
+    type = "password",
+    name = "password",
+    required = ""
+  })), h.button({
+    type = "submit"
+  }, "Se connecter")), h.div({
+    class = "link"
+  }, h.a({
+    href = "/register"
+  }, "Créer un compte")))
+end
+local login_page
+login_page = function(msg, hide_form)
+  local inner = h.h1("CustosVirginum") .. login_form(hide_form) .. (msg or "")
+  return page_skeleton("CustosVirginum — Authentification", LOGIN_CSS, inner)
+end
+local register_form
+register_form = function()
+  return h.form({
+    method = "post",
+    action = "/register"
+  }, h.label(h.span("Courriel"), h.input({
+    type = "email",
+    name = "user"
+  }, {
+    required = "",
+    autofocus = "",
+    minlength = "3",
+    maxlength = "64"
+  })), h.label(h.span("Mot de passe (8 caractères minimum)"), h.input({
+    type = "password",
+    name = "password",
+    required = "",
+    minlength = "8"
+  })), h.label(h.span("Confirmer le mot de passe"), h.input({
+    type = "password",
+    name = "password2",
+    required = "",
+    minlength = "8"
+  })), h.button({
+    type = "submit"
+  }, "Créer le compte"))
+end
+local register_page
+register_page = function(msg)
+  local inner = h.h1("Créer un compte") .. register_form() .. h.div({
+    class = "link"
+  }, h.a({
+    href = "/"
+  }, "Déjà un compte ? Se connecter")) .. (msg or "")
+  return page_skeleton("CustosVirginum — Inscription", REGISTER_CSS, inner)
+end
+local msg_ok
+msg_ok = function(html_content)
+  return h.p({
+    class = "msg ok"
+  }, html_content)
+end
+local msg_err
+msg_err = function(text)
+  return h.p({
+    class = "msg err"
+  }, text)
+end
+local home_page = login_page(nil, false)
+local home_register_page = register_page(nil)
 local make_success_page
 make_success_page = function(interval)
-  local js = string.format([[<script>
-(function(){
+  local js = string.format([[(function(){
   var iv = %d * 1000;
   function ping(){
     fetch('/ping',{method:'GET',credentials:'omit'})
@@ -192,43 +180,35 @@ make_success_page = function(interval)
   setInterval(ping, iv);
   ping();
 })();
-</script>]], interval)
-  local res
-  res, _ = LOGIN_PAGE:gsub("%%MSG%%", '<p class="msg ok">Connexion r\xc3\xa9ussie. Votre acc\xc3\xa8s r\xc3\xa9seau est actif tant que cette page reste ouverte.</p>' .. js)
-  local res2
-  res2, _ = res:gsub("%%AUTH_HIDDEN%%", 'style="display:none"')
-  return res2
+]], interval)
+  local msg = msg_ok("Connexion réussie. Votre accès réseau est actif tant que cette page reste ouverte.")
+  return login_page(msg .. h.script(js), true)
 end
 local failure_page
 failure_page = function(reason)
-  local res
-  res, _ = LOGIN_PAGE:gsub("%%MSG%%", "<p class=\"msg err\">" .. tostring(reason) .. "</p>")
-  local res2
-  res2, _ = res:gsub("%%AUTH_HIDDEN%%", "")
-  return res2
+  return login_page(msg_err(reason), false)
 end
 local register_failure_page
 register_failure_page = function(reason)
-  local res
-  res, _ = REGISTER_PAGE:gsub("%%MSG%%", "<p class=\"msg err\">" .. tostring(reason) .. "</p>")
-  return res
+  return register_page(msg_err(reason))
 end
-local home_page_raw
-home_page_raw, _ = LOGIN_PAGE:gsub("%%MSG%%", "")
-local home_page_raw2
-home_page_raw2, _ = home_page_raw:gsub("%%AUTH_HIDDEN%%", "")
-local home_page = home_page_raw2
-local home_register_page_raw
-home_register_page_raw, _ = REGISTER_PAGE:gsub("%%MSG%%", "")
-local home_register_page = home_register_page_raw
+local SUCCESS_PAGE = login_page(msg_ok("Connexion réussie. Votre accès réseau est actif."), true)
 local read_request
 read_request = function(sock)
   local line, err = sock:receive("*l")
   if not (line) then
+    log_warn({
+      action = "http_read_failed",
+      err = err
+    })
     return nil, err
   end
   local method, path = line:match("^(%u+)%s+([^%s]+)")
   if not (method) then
+    log_warn({
+      action = "http_bad_request",
+      line = line
+    })
     return nil, "bad request line: " .. tostring(line)
   end
   local headers = { }
@@ -322,17 +302,23 @@ register_rate_exceeded = function(register_attempts, peer_ip, max_attempts, wind
 end
 local handle_connection
 handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
-  raw_sock:settimeout(10)
-  local method, path, headers, body = read_request(raw_sock)
+  local sock = raw_sock
+  sock:settimeout(10)
+  local method, path, headers, body = nil, nil, nil, nil
+  pcall(function()
+    local m, p, b
+    m, p, h, b = read_request(sock)
+    method, path, headers, body = m, p, h, b
+  end)
   if not (method) then
-    raw_sock:close()
+    sock:close()
     return 
   end
   if method == "GET" and (path == "/" or path == "/login") then
     local s = sessions[peer_ip]
     local now = os.time()
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat) then
-      http_response(raw_sock, "200 OK", success_pg)
+      http_response(sock, "200 OK", success_pg)
       log_info({
         action = "auth_already_logged",
         ip = peer_ip,
@@ -340,7 +326,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
         user = s.user
       })
     else
-      http_response(raw_sock, "200 OK", home_page)
+      http_response(sock, "200 OK", home_page)
     end
   elseif method == "GET" and path == "/ping" then
     local s = sessions[peer_ip]
@@ -352,7 +338,8 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
         if not (ok2) then
           log_warn({
             action = "auth_write_failed",
-            err = err3
+            err = err3,
+            user = s.user
           })
         end
         if nft_sess then
@@ -361,7 +348,8 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
             log_warn({
               action = "auth_nft_add_failed",
               ip = peer_ip,
-              ttl = auth_cfg.idle_timeout
+              ttl = auth_cfg.idle_timeout,
+              user = s.user
             })
           end
           if s.mac then
@@ -370,18 +358,20 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
               log_warn({
                 action = "auth_nft_mac_add_failed",
                 mac = s.mac,
-                ttl = auth_cfg.idle_timeout
+                ttl = auth_cfg.idle_timeout,
+                user = s.user
               })
             end
           end
         end
       end
-      http_response(raw_sock, "204 No Content", "")
+      http_response(sock, "204 No Content", "")
     else
-      http_response(raw_sock, "401 Unauthorized", "")
+      http_response(sock, "401 Unauthorized", "")
     end
   elseif method == "GET" and path == "/logout" then
     local s = sessions[peer_ip]
+    local prev_user = s and s.user
     sessions[peer_ip] = nil
     if nft_sess then
       nft_sess.del_authenticated(peer_ip)
@@ -393,17 +383,19 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
     if not (ok2) then
       log_warn({
         action = "auth_write_failed",
-        err = err3
+        err = err3,
+        user = prev_user
       })
     end
-    http_redirect(raw_sock, "/")
+    http_redirect(sock, "/")
     log_info({
       action = "auth_logout",
       ip = peer_ip,
-      mac = peer_mac
+      mac = peer_mac,
+      user = prev_user
     })
   elseif method == "GET" and path == "/register" then
-    http_response(raw_sock, "200 OK", home_register_page)
+    http_response(sock, "200 OK", home_register_page)
   elseif method == "POST" and path == "/login" then
     local form = decode_form(body)
     local user = form.user or ""
@@ -419,7 +411,8 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
           log_warn({
             action = "auth_nft_add_failed",
             ip = peer_ip,
-            ttl = auth_cfg.session_ttl
+            ttl = auth_cfg.session_ttl,
+            user = user
           })
         end
         if mac then
@@ -428,7 +421,8 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
             log_warn({
               action = "auth_nft_mac_add_failed",
               mac = mac,
-              ttl = auth_cfg.session_ttl
+              ttl = auth_cfg.session_ttl,
+              user = user
             })
           end
         end
@@ -437,10 +431,11 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
       if not (ok2) then
         log_warn({
           action = "auth_write_failed",
-          err = err3
+          err = err3,
+          user = user
         })
       end
-      http_response(raw_sock, "200 OK", success_pg)
+      http_response(sock, "200 OK", success_pg)
       log_info({
         action = "auth_login_ok",
         ip = peer_ip,
@@ -448,7 +443,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
         user = user
       })
     else
-      http_response(raw_sock, "401 Unauthorized", failure_page("Nom d'utilisateur ou mot de passe incorrect."))
+      http_response(sock, "401 Unauthorized", failure_page("Nom d'utilisateur ou mot de passe incorrect."))
       log_warn({
         action = "auth_login_failed",
         ip = peer_ip,
@@ -491,7 +486,8 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
               log_warn({
                 action = "auth_nft_add_failed",
                 ip = peer_ip,
-                ttl = auth_cfg.session_ttl
+                ttl = auth_cfg.session_ttl,
+                user = user
               })
             end
             if mac then
@@ -500,7 +496,8 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
                 log_warn({
                   action = "auth_nft_mac_add_failed",
                   mac = mac,
-                  ttl = auth_cfg.session_ttl
+                  ttl = auth_cfg.session_ttl,
+                  user = user
                 })
               end
             end
@@ -509,7 +506,8 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
           if not (ok2) then
             log_warn({
               action = "auth_write_failed",
-              err = err3
+              err = err3,
+              user = user
             })
           end
           secrets[user] = new_secrets[user]
@@ -539,9 +537,9 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
       end
     end
   else
-    http_response(raw_sock, "404 Not Found", "<h1>404</h1>")
+    http_response(sock, "404 Not Found", "<h1>404</h1>")
   end
-  return raw_sock:close()
+  return sock:close()
 end
 local make_server4
 make_server4 = function(host, port)
@@ -624,7 +622,20 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
       if raw_client then
         local peer_ip = raw_client:getpeername()
         peer_ip = tostring(peer_ip)
+        peer_ip = peer_ip:gsub("%%.+$", "")
         local peer_mac = neigh.get_mac(peer_ip)
+        if peer_mac == "unknown" then
+          local fresh = neigh.load()
+          peer_mac = fresh.ip_to_mac[peer_ip] or "unknown"
+          if peer_mac == "unknown" then
+            for ip, mac in pairs(fresh.ip_to_mac) do
+              if ip:lower() == peer_ip:lower() then
+                peer_mac = mac
+                break
+              end
+            end
+          end
+        end
         local conn = ssl.wrap(raw_client, ssl_ctx)
         if conn then
           local ok_hs, _hs_err = conn:dohandshake()
@@ -646,5 +657,7 @@ return {
   decode_form = decode_form,
   failure_page = failure_page,
   home_page = home_page,
-  SUCCESS_PAGE = SUCCESS_PAGE
+  SUCCESS_PAGE = SUCCESS_PAGE,
+  login_page = login_page,
+  register_page = register_page
 }

@@ -14,6 +14,7 @@ local EWOULDBLOCK = 11
 local bit = require("bit")
 local AF_INET6 = 10
 local ipv6_ntop_buf = ffi.new("char[46]")
+local timespec_ptr_t = ffi.typeof("timespec_t[1]")
 local MSG_IPV4 = 0x41
 local MSG_IPV6 = 0x36
 local MSG_IPV4_REFUSED = 0x52
@@ -22,7 +23,7 @@ local MSG_IPV4_DNSONLY = 0x44
 local MSG_IPV6_DNSONLY = 0x64
 local write_with_retry
 write_with_retry = function(pipe_wfd, msg)
-  local sleep_req = ffi.new("timespec_t[1]")
+  local sleep_req = timespec_ptr_t()
   for i = 1, IPC_WRITE_RETRY_COUNT do
     local n = libc.write(pipe_wfd, msg, IPC_MSG_SIZE)
     if n == IPC_MSG_SIZE then

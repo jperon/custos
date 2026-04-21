@@ -27,6 +27,10 @@ DEFAULTS = {
   ipc_match_retry_enabled: true
   ipc_match_retry_count:  5
   ipc_match_retry_sleep_ms: 20
+  -- Chemin du fichier de sessions, partagé entre le worker auth et les
+  -- workers Q0/Q1/Q2. Doit correspondre à auth.sessions_file de filter.yml
+  -- (défaut dans filter/lib/load_config.moon).
+  auth_sessions_file:     "./tmp/sessions.lua"
   allowed_domains: {
     "local", "lan", "home.arpa"
   }
@@ -180,6 +184,7 @@ generate_config = (cfg) ->
     "local AF_INET                = 2"
     "local AF_INET6               = 10"
     "local PROTO_UDP              = 17"
+    string.format 'local AUTH_SESSIONS_FILE     = "%s"', escape_lua_str cfg.auth_sessions_file
     ""
     "local ALLOWED_DOMAINS = {"
   }
@@ -204,7 +209,8 @@ generate_config = (cfg) ->
       "NFT_SET_IP4", "NFT_SET_IP6", "NFT_SET_MAC4", "NFT_SET_MAC6",
       "NFT_IP_TIMEOUT", "NFT_EXTRA_RULES", "IPC_PENDING_TTL", "CLIENT_EXPIRY",
       "NEIGH_REFRESH_COOLDOWN", "FORCED_TTL", "DNS_PORT", "AF_INET",
-      "AF_INET6", "PROTO_UDP", "NFT_ADD_RETRY_COUNT", "NFT_ADD_BACKOFF_MS",
+      "AF_INET6", "PROTO_UDP", "AUTH_SESSIONS_FILE",
+      "NFT_ADD_RETRY_COUNT", "NFT_ADD_BACKOFF_MS",
       "NFT_ADD_FAILURE_POLICY", "IPC_MATCH_RETRY_ENABLED", "IPC_MATCH_RETRY_COUNT",
       "IPC_MATCH_RETRY_SLEEP_MS"
     }
@@ -243,6 +249,7 @@ main = ->
     ipc_match_retry_enabled: validate_bool(uci_get("ipc_match_retry_enabled"),      DEFAULTS.ipc_match_retry_enabled)
     ipc_match_retry_count:  validate_posint(uci_get("ipc_match_retry_count"),       DEFAULTS.ipc_match_retry_count)
     ipc_match_retry_sleep_ms: validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms)
+    auth_sessions_file:     uci_get("auth_sessions_file")              or DEFAULTS.auth_sessions_file
     allowed_domains:        domains
   dest_whitelist:         whitelist
   nft_extra_rules:         uci_get_list "nft_extra_rules"

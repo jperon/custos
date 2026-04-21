@@ -33,6 +33,8 @@ bit = require "bit"
 AF_INET6 = 10
 ipv6_ntop_buf = ffi.new "char[46]"
 
+timespec_ptr_t = ffi.typeof "timespec_t[1]"
+
 -- ── Constantes de type ───────────────────────────────────────────
 MSG_IPV4         = 0x41   -- 'A' : transaction IPv4 autorisée
 MSG_IPV6         = 0x36   -- '6' : transaction IPv6 autorisée
@@ -43,7 +45,7 @@ MSG_IPV6_DNSONLY = 0x64   -- 'd' : transaction IPv6 DNS-seulement
 
 write_with_retry = (pipe_wfd, msg) ->
   -- timespec buffer for nanosleep between retries (20 ms)
-  sleep_req = ffi.new "timespec_t[1]"
+  sleep_req = timespec_ptr_t!
 
   for i = 1, IPC_WRITE_RETRY_COUNT
     n = libc.write pipe_wfd, msg, IPC_MSG_SIZE

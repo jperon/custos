@@ -13,6 +13,7 @@ local DEFAULTS = {
   ipc_match_retry_enabled = true,
   ipc_match_retry_count = 5,
   ipc_match_retry_sleep_ms = 20,
+  auth_sessions_file = "./tmp/sessions.lua",
   allowed_domains = {
     "local",
     "lan",
@@ -187,6 +188,7 @@ generate_config = function(cfg)
     "local AF_INET                = 2",
     "local AF_INET6               = 10",
     "local PROTO_UDP              = 17",
+    string.format('local AUTH_SESSIONS_FILE     = "%s"', escape_lua_str(cfg.auth_sessions_file)),
     "",
     "local ALLOWED_DOMAINS = {"
   }
@@ -237,6 +239,7 @@ generate_config = function(cfg)
     "AF_INET",
     "AF_INET6",
     "PROTO_UDP",
+    "AUTH_SESSIONS_FILE",
     "NFT_ADD_RETRY_COUNT",
     "NFT_ADD_BACKOFF_MS",
     "NFT_ADD_FAILURE_POLICY",
@@ -289,6 +292,7 @@ main = function()
     ipc_match_retry_enabled = validate_bool(uci_get("ipc_match_retry_enabled"), DEFAULTS.ipc_match_retry_enabled),
     ipc_match_retry_count = validate_posint(uci_get("ipc_match_retry_count"), DEFAULTS.ipc_match_retry_count),
     ipc_match_retry_sleep_ms = validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms),
+    auth_sessions_file = uci_get("auth_sessions_file") or DEFAULTS.auth_sessions_file,
     allowed_domains = domains,
     dest_whitelist = whitelist,
     nft_extra_rules = uci_get_list("nft_extra_rules")

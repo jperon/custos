@@ -3,8 +3,11 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libnfq = _obj_0.ffi, _obj_0.libnfq
 end
-local QUEUE_QUESTIONS
-QUEUE_QUESTIONS = require("config").QUEUE_QUESTIONS
+local QUEUE_QUESTIONS, AUTH_SESSIONS_FILE
+do
+  local _obj_0 = require("config")
+  QUEUE_QUESTIONS, AUTH_SESSIONS_FILE = _obj_0.QUEUE_QUESTIONS, _obj_0.AUTH_SESSIONS_FILE
+end
 local get_l2, ETH_OFFSET
 do
   local _obj_0 = require("parse/ethernet")
@@ -27,6 +30,8 @@ do
   local _obj_0 = require("log")
   log_allow, log_block, log_warn = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn
 end
+local user_for_ip
+user_for_ip = require("auth.sessions").user_for_ip
 local pipe_wfd = nil
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
@@ -72,7 +77,8 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     txid = string.format("0x%04x", pkt.dns.txid),
     af = pkt.ip.version == 6 and "ipv6" or "ipv4",
     ndpi_master = pkt.ndpi_master,
-    ndpi_app = pkt.ndpi_app
+    ndpi_app = pkt.ndpi_app,
+    user = user_for_ip(pkt.ip.src_ip, AUTH_SESSIONS_FILE, l2.mac_src)
   }
   for _, q in ipairs(pkt.questions) do
     q_fields.qname = q.qname
@@ -114,7 +120,8 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       txid = string.format("0x%04x", pkt.dns.txid),
       src_ip = pkt.ip.src_ip,
       dst_ip = pkt.ip.dst_ip,
-      src_port = pkt.l4.src_port
+      src_port = pkt.l4.src_port,
+      user = q_fields.user
     })
     return NF_DROP
   end

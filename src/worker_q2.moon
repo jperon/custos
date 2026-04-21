@@ -12,7 +12,7 @@
 --   4. Log structuré
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_CAPTIVE } = require "config"
+{ :QUEUE_CAPTIVE, :AUTH_SESSIONS_FILE } = require "config"
 parse: parse_eth, :new, :mac2s, :s2mac, proto: {:IP6, :IP4} = require "ipparse.l2.ethernet"
 parse: parse_ip, proto: l3_proto, :ip2s = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
@@ -22,6 +22,7 @@ parse: parse_tcp = require "ipparse.l4.tcp"
 { :flags } = require "ipparse.l4.tcp"
 { :SYN, :ACK, :FIN, :PSH } = flags
 { :get_mac } = require "neigh"
+{ :user_for_ip } = require "auth.sessions"
 
 -- ── TCP helper functions (ipparse for parsing and serialization) ──
 
@@ -166,10 +167,15 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
   }
   eth_off = 1
 
+  client_ip_str = ip2s ip.src
+  -- client_mac est extraite du paquet (l2.mac_raw, cf. get_l2 ci-dessus)
+  client_mac_str = l2.mac_src if l2.mac_src and l2.mac_src != "unknown"
+  user          = user_for_ip client_ip_str, AUTH_SESSIONS_FILE, client_mac_str
+
   send = (f) ->
     res = send_frame raw_fd, f, ifindex
     unless res
-      log_warn { action: "q2_frame_send_error", queue: 2, ip: ip2s ip.src }
+      log_warn { action: "q2_frame_send_error", queue: 2, ip: client_ip_str, user: user }
     res
 
   ok, err = pcall ->
@@ -179,11 +185,11 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
       redirect_url4 or redirect_url6
 
     unless url
-      log_warn { action: "q2_no_redirect_url", queue: 2, ip: ip2s ip.src, version: ip.version }
+      log_warn { action: "q2_no_redirect_url", queue: 2, ip: client_ip_str, version: ip.version, user: user }
       return
 
     f1, f2, f3 = build_response_frames eth, ip, tcp, url
-    log_info { action: "q2_sending_frames", queue: 2, ip: ip2s ip.src, frames: 3, url: url }
+    log_info { action: "q2_sending_frames", queue: 2, ip: client_ip_str, frames: 3, url: url, user: user }
     send f1
     send f2
     send f3
@@ -192,16 +198,17 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
     fields = {
       action:  "captive_redirect_q2"
       queue:   2
-      ip:      ip2s ip.src
+      ip:      client_ip_str
       sport:   tcp.spt
       mac:     mac2s l2.mac_raw
       url:     redirect_url
+      user:    user
     }
     if l2.mac_src and l2.mac_src != "unknown"
       fields.mac = l2.mac_src
     log_info fields
   else
-    log_warn { action: "q2_send_failed", queue: 2, err: "#{err}", ip: ip2s ip.src }
+    log_warn { action: "q2_send_failed", queue: 2, err: "#{err}", ip: client_ip_str, user: user }
 
   NF_DROP
 

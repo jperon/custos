@@ -13,11 +13,12 @@ local VALID_STATES = {
 }
 local parse_neigh_line
 parse_neigh_line = function(line)
-  local ip, mac, state = line:match("^(%S+)%s+dev%s+%S+%s+lladdr%s+(%S+)%s+(%S+)")
-  if not (ip and mac and state) then
+  local ip, mac, tail = line:match("^(%S+)%s+dev%s+%S+%s+lladdr%s+(%S+)%s+(.+)$")
+  if not (ip and mac and tail) then
     return nil
   end
-  if not (VALID_STATES[state]) then
+  local state = tail:match("(%S+)%s*$")
+  if not (state and VALID_STATES[state]) then
     return nil
   end
   return {
@@ -35,25 +36,22 @@ fill_from_neigh = function(mac_clients, ip_to_mac, ts)
   for line in fh:lines() do
     local entry = parse_neigh_line(line)
     if entry then
-      local mac = entry.mac
+      local mac = entry.mac:lower()
       local ip = entry.ip
+      local e = mac_clients[mac] or {
+        ips = { }
+      }
+      e.last_seen = ts
+      e.ips[ip] = true
       local family
       if ip:find(":", 1, true) then
         family = "ipv6"
       else
         family = "ipv4"
       end
-      local e = mac_clients[mac] or { }
-      e.last_seen = ts
-      local old_ip = e[family]
-      if old_ip ~= ip then
-        if old_ip then
-          ip_to_mac[old_ip] = nil
-        end
-        e[family] = ip
-        ip_to_mac[ip] = mac
-      end
+      e[family] = ip
       mac_clients[mac] = e
+      ip_to_mac[ip] = mac
       count = count + 1
     end
   end

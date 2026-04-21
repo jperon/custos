@@ -1693,7 +1693,7 @@ from_maclists = require "filter.conditions.from_maclists"
 
 do
   MACLIST_CFG = {
-    macs: {
+    maclists: {
       trusted: { "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66" }
       printers: { "de:ad:be:ef:00:01" }
     }
@@ -1746,7 +1746,7 @@ do
   SESSION_FILE = "./tmp/test_from_user.lua"
   USER_CFG = {
     auth:  { sessions_file: SESSION_FILE }
-    users: {
+    userlists: {
       admins: { "alice", "bob" }
       guests: { "charlie" }
     }
@@ -2010,6 +2010,33 @@ test "dnsonly — compile_rules avec action dnsonly → verdict \"dnsonly\"", ->
   rules_dn = m_rule.compile_rules cfg_dn
   v, m = m_rule.decide rules_dn, {domain: "anything.com", src_ip: "10.0.0.1", mac: "ff:ff:ff:ff:ff:ff", ts: os.time!}
   assert_eq v, "dnsonly", "verdict = \"dnsonly\" via compile_rules"
+
+test "dnsonly — client authentifié → verdict allow (true)", ->
+  -- Le bandeau « portail captif » ne doit plus s'afficher après login :
+  -- dnsonly doit devenir allow pour les clients authentifiés.
+  package.loaded["auth.sessions"] = nil
+  SESS_DN = "./tmp/test_dnsonly_sess.lua"
+  { :write_sessions, :reset_cache } = require "auth.sessions"
+  FAR = 9999999999
+  write_sessions {
+    ["10.0.0.1"]: { user: "alice", expires: FAR, mac: "aa:bb:cc:dd:ee:ff" }
+  }, SESS_DN
+  reset_cache!
+  -- Recharge dnsonly avec le nouveau chemin de sessions
+  package.loaded["filter.actions.dnsonly"] = nil
+  dnsonly_mod = require "filter.actions.dnsonly"
+  factory = dnsonly_mod { auth: { sessions_file: SESS_DN } }
+  rule_fn = factory {description: "portail-captif"}
+  v, m = rule_fn {domain: "detectportal.firefox.com", src_ip: "10.0.0.1",
+                  mac: "aa:bb:cc:dd:ee:ff", ts: os.time!}
+  assert_eq v, true, "authentifié → allow (true)"
+  assert m\find("auth=alice", 1, true), "message mentionne l'utilisateur"
+  -- Client non authentifié : toujours dnsonly
+  v2, m2 = rule_fn {domain: "detectportal.firefox.com", src_ip: "9.9.9.9",
+                    mac: "ff:ff:ff:ff:ff:ff", ts: os.time!}
+  assert_eq v2, "dnsonly", "non authentifié → dnsonly"
+  os.remove SESS_DN
+  package.loaded["filter.actions.dnsonly"] = nil
 
 -- Nettoyage
 os.remove TMPBIN
@@ -2356,6 +2383,99 @@ test "auth/sessions — purge_expired : retire si heartbeat expiré", ->
   purge_expired sessions
   assert sessions["10.0.0.3"] == nil, "session avec heartbeat expiré purgée"
 
+-- ── session_for_ip / user_for_ip ─────────────────────────────────
+-- Stub `neigh` pour contrôler le fallback MAC sans dépendre de `ip neigh`.
+do
+  SF_FILE = "./tmp/test_sf_sessions.lua"
+  { :session_for_ip, :user_for_ip, :reset_cache } = require "auth.sessions"
+
+  write_sf_sessions = (sessions) ->
+    { :write_sessions } = require "auth.sessions"
+    write_sessions sessions, SF_FILE
+    reset_cache!
+
+  stub_neigh = (mac_table) ->
+    package.loaded["neigh"] = {
+      get_mac: (ip) -> mac_table[ip] or "unknown"
+    }
+
+  MAC = "aa:bb:cc:dd:ee:ff"
+  FUTURE = 9999999999
+
+  test "session_for_ip — session directe par IP", ->
+    stub_neigh {}
+    write_sf_sessions { ["10.0.0.1"]: { user: "alice", expires: FUTURE } }
+    s = session_for_ip "10.0.0.1", SF_FILE
+    assert s and s.user == "alice", "session trouvée par IP"
+
+  test "session_for_ip — fallback MAC cross-family (IPv6 → IPv4)", ->
+    -- Client authentifié en IPv6, requête DNS en IPv4 : la session est
+    -- retrouvée via la MAC partagée.
+    stub_neigh { ["10.35.1.53"]: MAC }
+    write_sf_sessions {
+      ["2a11:6c7:1700:7801::bede"]: { user: "j@prn.ovh", expires: FUTURE, mac: MAC }
+    }
+    s = session_for_ip "10.35.1.53", SF_FILE
+    assert s, "session trouvée via MAC"
+    assert_eq s.user, "j@prn.ovh", "user correct"
+
+  test "session_for_ip — fallback MAC : pas de session avec cette MAC", ->
+    stub_neigh { ["10.0.0.2"]: "ff:ff:ff:ff:ff:ff" }
+    write_sf_sessions {
+      ["10.0.0.1"]: { user: "alice", expires: FUTURE, mac: MAC }
+    }
+    s = session_for_ip "10.0.0.2", SF_FILE
+    assert not s, "aucune session avec la MAC différente"
+
+  test "session_for_ip — fallback MAC : ip inconnue de neigh → nil", ->
+    stub_neigh {}
+    write_sf_sessions {
+      ["10.0.0.1"]: { user: "alice", expires: FUTURE, mac: MAC }
+    }
+    s = session_for_ip "9.9.9.9", SF_FILE
+    assert not s, "neigh=unknown → nil"
+
+  test "session_for_ip — session expirée → nil", ->
+    stub_neigh { ["10.0.0.9"]: MAC }
+    write_sf_sessions {
+      ["10.0.0.1"]: { user: "alice", expires: 1, mac: MAC }  -- expirée
+    }
+    s = session_for_ip "10.0.0.9", SF_FILE
+    assert not s, "session expirée trouvée par MAC mais rejetée"
+
+  test "user_for_ip — retourne user via fallback MAC", ->
+    stub_neigh { ["10.35.1.53"]: MAC }
+    write_sf_sessions {
+      ["2a11:6c7:1700:7801::bede"]: { user: "j@prn.ovh", expires: FUTURE, mac: MAC }
+    }
+    assert_eq (user_for_ip "10.35.1.53", SF_FILE), "j@prn.ovh", "user retrouvé cross-family"
+
+  test "user_for_ip — ip nil → nil", ->
+    assert not (user_for_ip nil, SF_FILE), "ip nil retourne nil"
+
+  test "session_for_ip — MAC passée explicitement prime sur neigh", ->
+    -- Simule un paquet dont la MAC est déjà connue de L2. On passe
+    -- délibérément un stub neigh qui renvoie "unknown" : le fallback doit
+    -- utiliser la MAC fournie.
+    stub_neigh {}
+    write_sf_sessions {
+      ["2a11:6c7:1700:7801::bede"]: { user: "j@prn.ovh", expires: FUTURE, mac: MAC }
+    }
+    s = session_for_ip "10.35.1.53", SF_FILE, MAC
+    assert s, "session trouvée via MAC du paquet"
+    assert_eq s.user, "j@prn.ovh", "user correct"
+
+  test "session_for_ip — MAC 'unknown' ignorée → bascule sur neigh", ->
+    stub_neigh { ["10.0.0.99"]: MAC }
+    write_sf_sessions {
+      ["10.0.0.1"]: { user: "alice", expires: FUTURE, mac: MAC }
+    }
+    s = session_for_ip "10.0.0.99", SF_FILE, "unknown"
+    assert s and s.user == "alice", "neigh sert de fallback quand mac='unknown'"
+
+  os.remove SF_FILE
+  package.loaded["neigh"] = nil  -- restore pour les autres tests
+
 -- ════════════════════════════════════════════════════════════════
 -- auth/credentials
 -- ════════════════════════════════════════════════════════════════
@@ -2670,6 +2790,38 @@ test "parse/ndpi — eth_offset=14 produit les mêmes champs IP que sans offset"
   assert_eq pkt1.ip.dst_ip, pkt2.ip.dst_ip, "dst_ip"
   assert_eq pkt1.l4.src_port, pkt2.l4.src_port, "src_port"
   assert_eq pkt1.dns.txid,    pkt2.dns.txid,    "dns txid"
+
+
+-- ── neigh.parse_neigh_line ────────────────────────────────────────
+io.write "\n── neigh.parse_neigh_line ──\n"
+{ :parse_neigh_line } = require "neigh"
+
+test "parse_neigh_line — IPv4 REACHABLE", ->
+  r = parse_neigh_line "192.168.1.5 dev br-lan lladdr aa:bb:cc:dd:ee:ff REACHABLE"
+  assert r, "doit reconnaître REACHABLE"
+  assert_eq r.ip,  "192.168.1.5", "ip"
+  assert_eq r.mac, "aa:bb:cc:dd:ee:ff", "mac"
+
+test "parse_neigh_line — IPv6 STALE", ->
+  r = parse_neigh_line "fd00::5 dev br0 lladdr 00:11:22:33:44:55 STALE"
+  assert r and r.mac == "00:11:22:33:44:55", "STALE accepté"
+
+test "parse_neigh_line — flag 'router' avant le state", ->
+  -- L'indicateur `router` précède le NUD state pour les voisins IPv6 router.
+  -- Sans la correction, l'ancien regex prenait "router" comme state et
+  -- renvoyait nil (state inconnu).
+  r = parse_neigh_line "2a11:6c7:1700:7801::bede dev br lladdr d8:d3:85:63:6b:27 router REACHABLE"
+  assert r, "doit accepter la ligne avec flag 'router'"
+  assert_eq r.ip,  "2a11:6c7:1700:7801::bede", "ip"
+  assert_eq r.mac, "d8:d3:85:63:6b:27", "mac"
+
+test "parse_neigh_line — FAILED sans lladdr → nil", ->
+  r = parse_neigh_line "10.0.0.42 dev eth0 FAILED"
+  assert not r, "FAILED sans lladdr doit retourner nil"
+
+test "parse_neigh_line — state inconnu → nil", ->
+  r = parse_neigh_line "10.0.0.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff FOOBAR"
+  assert not r, "state inconnu doit retourner nil"
 
 
 io.write string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed)

@@ -3,8 +3,11 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_CAPTIVE
-QUEUE_CAPTIVE = require("config").QUEUE_CAPTIVE
+local QUEUE_CAPTIVE, AUTH_SESSIONS_FILE
+do
+  local _obj_0 = require("config")
+  QUEUE_CAPTIVE, AUTH_SESSIONS_FILE = _obj_0.QUEUE_CAPTIVE, _obj_0.AUTH_SESSIONS_FILE
+end
 local parse_eth, new, mac2s, s2mac, IP6, IP4
 do
   local _obj_0 = require("ipparse.l2.ethernet")
@@ -38,6 +41,8 @@ local SYN, ACK, FIN, PSH
 SYN, ACK, FIN, PSH = flags.SYN, flags.ACK, flags.FIN, flags.PSH
 local get_mac
 get_mac = require("neigh").get_mac
+local user_for_ip
+user_for_ip = require("auth.sessions").user_for_ip
 local AF_PACKET = 17
 local SOCK_RAW = 3
 local ETH_P_ALL = 0x0300
@@ -152,6 +157,12 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     protocol = ip.version == 4 and IP4 or IP6
   })
   local eth_off = 1
+  local client_ip_str = ip2s(ip.src)
+  local client_mac_str
+  if l2.mac_src and l2.mac_src ~= "unknown" then
+    client_mac_str = l2.mac_src
+  end
+  local user = user_for_ip(client_ip_str, AUTH_SESSIONS_FILE, client_mac_str)
   local send
   send = function(f)
     local res = send_frame(raw_fd, f, ifindex)
@@ -159,7 +170,8 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
       log_warn({
         action = "q2_frame_send_error",
         queue = 2,
-        ip = ip2s(ip.src)
+        ip = client_ip_str,
+        user = user
       })
     end
     return res
@@ -175,9 +187,9 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
       log_warn({
         action = "q2_no_redirect_url",
         queue = 2,
-        ip = ip2s(ip.src, {
-          version = ip.version
-        })
+        ip = client_ip_str,
+        version = ip.version,
+        user = user
       })
       return 
     end
@@ -185,10 +197,10 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     log_info({
       action = "q2_sending_frames",
       queue = 2,
-      ip = ip2s(ip.src, {
-        frames = 3,
-        url = url
-      })
+      ip = client_ip_str,
+      frames = 3,
+      url = url,
+      user = user
     })
     send(f1)
     send(f2)
@@ -198,10 +210,11 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     local fields = {
       action = "captive_redirect_q2",
       queue = 2,
-      ip = ip2s(ip.src),
+      ip = client_ip_str,
       sport = tcp.spt,
       mac = mac2s(l2.mac_raw),
-      url = redirect_url
+      url = redirect_url,
+      user = user
     }
     if l2.mac_src and l2.mac_src ~= "unknown" then
       fields.mac = l2.mac_src
@@ -212,7 +225,8 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
       action = "q2_send_failed",
       queue = 2,
       err = tostring(err),
-      ip = ip2s(ip.src)
+      ip = client_ip_str,
+      user = user
     })
   end
   return NF_DROP

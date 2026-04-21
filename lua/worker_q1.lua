@@ -3,11 +3,13 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS
+local QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE
 do
   local _obj_0 = require("config")
-  QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS = _obj_0.QUEUE_RESPONSES, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NEIGH_REFRESH_COOLDOWN, _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS, _obj_0.NFT_ADD_FAILURE_POLICY, _obj_0.IPC_MATCH_RETRY_ENABLED, _obj_0.IPC_MATCH_RETRY_COUNT, _obj_0.IPC_MATCH_RETRY_SLEEP_MS
+  QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE = _obj_0.QUEUE_RESPONSES, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NEIGH_REFRESH_COOLDOWN, _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS, _obj_0.NFT_ADD_FAILURE_POLICY, _obj_0.IPC_MATCH_RETRY_ENABLED, _obj_0.IPC_MATCH_RETRY_COUNT, _obj_0.IPC_MATCH_RETRY_SLEEP_MS, _obj_0.AUTH_SESSIONS_FILE
 end
+local user_for_ip
+user_for_ip = require("auth.sessions").user_for_ip
 local neigh = require("neigh")
 local ndpi = require("parse/ndpi")
 local QTYPE
@@ -278,6 +280,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       neigh.refresh(mac_clients, ip_to_mac)
     end
   end
+  local user = user_for_ip(client_ip, AUTH_SESSIONS_FILE, client_mac)
   local entry = get_pending_entry(txid, pkt.ip.dst_ip, client_port, resolver_ip, now)
   if not (entry) then
     local retry_attempts = 0
@@ -290,7 +293,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         dst_ip = pkt.ip.dst_ip,
         txid = string.format("0x%04x", txid),
         retry_attempts = retry_attempts,
-        retry_wait_ms = retry_wait_ms
+        retry_wait_ms = retry_wait_ms,
+        user = user
       })
     else
       log_block({
@@ -308,7 +312,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         rcode = pkt.dns.rcode,
         client_mac = client_mac,
         retry_attempts = retry_attempts,
-        retry_wait_ms = retry_wait_ms
+        retry_wait_ms = retry_wait_ms,
+        user = user
       })
       return NF_DROP
     end
@@ -344,7 +349,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       vlan = l2.vlan,
       txid = string.format("0x%04x", txid),
       qnames = qnames,
-      client_mac = client_mac
+      client_mac = client_mac,
+      user = user
     })
     local patched_ptr = ffi.cast("const unsigned char*", patched)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
@@ -424,7 +430,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       count = #no_ipv4_records,
       records = table.concat(no_ipv4_records, " "),
       reason = "client_ipv4_unknown",
-      mac_fallback = mac_valid(client_mac)
+      mac_fallback = mac_valid(client_mac),
+      user = user
     })
   end
   if #no_ipv6_records > 0 then
@@ -440,7 +447,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       count = #no_ipv6_records,
       records = table.concat(no_ipv6_records, " "),
       reason = "client_ipv6_unknown",
-      mac_fallback = mac_valid(client_mac)
+      mac_fallback = mac_valid(client_mac),
+      user = user
     })
   end
   local dns_raw = ndpi.extract_dns_payload(raw, pkt)
@@ -476,7 +484,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     rcode = pkt.dns.rcode,
     ndpi_master = pkt.ndpi_master,
     ndpi_app = pkt.ndpi_app,
-    client_mac = client_mac
+    client_mac = client_mac,
+    user = user
   })
   if records_to_add > 0 and not success_any then
     if NFT_ADD_FAILURE_POLICY == "fail-closed" then
@@ -484,7 +493,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         action = "nft_add_failed_policy_fail_closed",
         txid = string.format("0x%04x", txid),
         client_ip = client_ip,
-        qnames = qnames
+        qnames = qnames,
+        user = user
       })
       return NF_DROP
     else
@@ -492,7 +502,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         action = "nft_add_failed_fail_open",
         txid = string.format("0x%04x", txid),
         client_ip = client_ip,
-        qnames = qnames
+        qnames = qnames,
+        user = user
       })
     end
   end

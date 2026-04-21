@@ -134,12 +134,15 @@ load_secrets = (path) ->
 
 -- ── Inscription ───────────────────────────────────────────────────
 
---- Valide un nom d'utilisateur pour l'inscription.
--- Doit contenir 3 à 32 caractères alphanumériques, _, . ou -.
--- @tparam string username Nom d'utilisateur proposé
+--- Valide un identifiant (courriel) pour l'inscription.
+-- Doit être une adresse de type local@domaine, 3 à 64 caractères.
+-- Caractères autorisés : alphanumériques, _ . - +, exactement un @.
+-- @tparam string username Identifiant proposé
 -- @treturn boolean true si valide
 valid_username = (username) ->
-  (username\match "^[a-zA-Z0-9_.%-]+$") != nil and #username >= 3 and #username <= 32
+  return false unless #username >= 3 and #username <= 64
+  return false unless username\match "^[a-zA-Z0-9_.%-+]+@[a-zA-Z0-9_.%-]+%.[a-zA-Z]+$"
+  true
 
 --- Inscrit un nouvel utilisateur dans le fichier secrets.
 -- Vérifie l'absence de doublon, hash le mot de passe, et append
@@ -153,7 +156,7 @@ valid_username = (username) ->
 -- @treturn string     Message d'erreur (si nil)
 register_user = (username, password, secrets_path, current_secrets) ->
   unless valid_username username
-    return nil, "Nom d'utilisateur invalide (3-32 caractères alphanumériques, _, . ou -)."
+    return nil, "Adresse de courriel invalide."
   if #password < 8
     return nil, "Le mot de passe doit contenir au moins 8 caractères."
   if current_secrets and current_secrets[username]

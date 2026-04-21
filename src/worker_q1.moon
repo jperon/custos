@@ -17,7 +17,8 @@
 --        f. Envoie le paquet modifié avec NF_ACCEPT + payload
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS } = require "config"
+{ :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS, :AUTH_SESSIONS_FILE } = require "config"
+{ :user_for_ip } = require "auth.sessions"
 neigh = require "neigh"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
@@ -302,6 +303,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     if mac_valid(client_mac)
       last_neigh_refresh = os.time!
       neigh.refresh mac_clients, ip_to_mac
+  -- Utilisateur authentifié (nil si l'IP n'a pas de session valide)
+  -- Le fallback cross-family par MAC permet de reconnaître un client
+  -- authentifié en IPv6 quand ses paquets IPv4 arrivent (et vice-versa).
+  user        = user_for_ip client_ip, AUTH_SESSIONS_FILE, client_mac
 
   -- ── Vérification IPC ─────────────────────────────────────────
   entry = get_pending_entry txid, pkt.ip.dst_ip, client_port, resolver_ip, now
@@ -317,6 +322,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         txid: string.format "0x%04x", txid
         retry_attempts: retry_attempts
         retry_wait_ms: retry_wait_ms
+        user: user
       }
     else
       log_block {
@@ -329,6 +335,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         client_mac: client_mac
         retry_attempts: retry_attempts
         retry_wait_ms: retry_wait_ms
+        user: user
       }
       return NF_DROP
   -- Transaction consommée (one-shot : une réponse par question)
@@ -355,6 +362,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       txid:     string.format "0x%04x", txid
       qnames:   qnames
       client_mac: client_mac
+      user:     user
     }
     patched_ptr = ffi.cast "const unsigned char*", patched
     libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr
@@ -416,12 +424,12 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     log = if mac_valid(client_mac) then log_info else log_warn
     log { action: "no_ipv4_for_client", client: client_ip, count: #no_ipv4_records,
           records: table.concat(no_ipv4_records, " "),
-          reason: "client_ipv4_unknown", mac_fallback: mac_valid(client_mac) }
+          reason: "client_ipv4_unknown", mac_fallback: mac_valid(client_mac), user: user }
   if #no_ipv6_records > 0
     log = if mac_valid(client_mac) then log_info else log_warn
     log { action: "no_ipv6_for_client", client: client_ip, count: #no_ipv6_records,
           records: table.concat(no_ipv6_records, " "),
-          reason: "client_ipv6_unknown", mac_fallback: mac_valid(client_mac) }
+          reason: "client_ipv6_unknown", mac_fallback: mac_valid(client_mac), user: user }
 
   -- ── Patch TTL + EDE + checksums (IPv4 et IPv6) ───────────────
   -- 1. Extraire le payload DNS brut
@@ -448,15 +456,16 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     ndpi_master: pkt.ndpi_master
     ndpi_app:    pkt.ndpi_app
     client_mac:  client_mac
+    user:        user
   }
 
   -- If we had records to add but none succeeded, respect policy
   if records_to_add > 0 and not success_any
     if NFT_ADD_FAILURE_POLICY == "fail-closed"
-      log_block { action: "nft_add_failed_policy_fail_closed", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames }
+      log_block { action: "nft_add_failed_policy_fail_closed", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
       return NF_DROP
     else
-      log_warn { action: "nft_add_failed_fail_open", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames }
+      log_warn { action: "nft_add_failed_fail_open", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
 
   -- ── Verdict avec payload modifié ─────────────────────────────
   -- On appelle nfq_set_verdict directement ici avec le payload modifié,

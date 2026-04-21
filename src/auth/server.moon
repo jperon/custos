@@ -12,186 +12,164 @@
 socket = require "socket"
 ssl    = require "ssl"
 cert   = require "auth.cert"
+h      = require "auth.html"
 
 { :verify_password, :load_secrets, :register_user } = require "auth.credentials"
 { :add_session, :purge_expired, :write_sessions } = require "auth.sessions"
 { :log_info, :log_warn }            = require "log"
 neigh                               = require "neigh"
 
--- ── Page HTML ────────────────────────────────────────────────────
+-- ── Pages HTML (construites via le DSL auth.html) ────────────────
 
-LOGIN_PAGE = [[
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CustosVirginum — Authentification</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body {
-      font-family: system-ui, sans-serif;
-      background: #f4f4f4;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      margin: 0;
-    }
-    .card {
-      background: white;
-      padding: 2rem;
-      border-radius: 8px;
-      box-shadow: 0 2px 12px rgba(0,0,0,.15);
-      width: 100%;
-      max-width: 380px;
-    }
-    h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
-    label { display: block; margin-bottom: 1rem; }
-    label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
-    input[type=text], input[type=password] {
-      width: 100%;
-      padding: .5rem .7rem;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 1rem;
-    }
-    button {
-      width: 100%;
-      padding: .6rem;
-      background: #2563eb;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      font-size: 1rem;
-      cursor: pointer;
-      margin-top: .5rem;
-    }
-    button:hover { background: #1d4ed8; }
-    .msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
-    .msg.ok  { background: #dcfce7; color: #166534; }
-    .msg.err { background: #fee2e2; color: #991b1b; }
-    .link { text-align: center; margin-top: 1rem; font-size: .9rem; }
-    .link a { color: #2563eb; text-decoration: none; }
-    .link a:hover { text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>CustosVirginum</h1>
-    <div %AUTH_HIDDEN%>
-      <form method="post" action="/login">
-        <label>
-<span>Courriel</span>
-            <input type="text" name="user" required autofocus>
-
-        </label>
-        <label>
-          <span>Mot de passe</span>
-          <input type="password" name="password" required>
-        </label>
-        <button type="submit">Se connecter</button>
-      </form>
-      <div class="link"><a href="/register">Créer un compte</a></div>
-    </div>
-    %MSG%
-  </div>
-</body>
-</html>
+--- CSS commun à toutes les pages. Le bouton primaire varie.
+-- @tparam string btn_bg  Couleur de fond du bouton
+-- @tparam string btn_hov Couleur de fond au survol
+-- @treturn string CSS
+build_css = (btn_bg, btn_hov) -> [[
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  font-family: system-ui, sans-serif;
+  background: #f4f4f4;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  margin: 0;
+}
+.card {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0,0,0,.15);
+  width: 100%;
+  max-width: 380px;
+}
+h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
+label { display: block; margin-bottom: 1rem; }
+label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
+input[type=text], input[type=email], input[type=password] {
+  width: 100%;
+  padding: .5rem .7rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 1rem;
+}
+button {
+  width: 100%;
+  padding: .6rem;
+  background: ]] .. btn_bg .. [[;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 1rem;
+  cursor: pointer;
+  margin-top: .5rem;
+}
+button:hover { background: ]] .. btn_hov .. [[; }
+.msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
+.msg.ok  { background: #dcfce7; color: #166534; }
+.msg.err { background: #fee2e2; color: #991b1b; }
+.link { text-align: center; margin-top: 1rem; font-size: .9rem; }
+.link a { color: #2563eb; text-decoration: none; }
+.link a:hover { text-decoration: underline; }
 ]]
 
-REGISTER_PAGE = [[
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CustosVirginum — Inscription</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body {
-      font-family: system-ui, sans-serif;
-      background: #f4f4f4;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      margin: 0;
-    }
-    .card {
-      background: white;
-      padding: 2rem;
-      border-radius: 8px;
-      box-shadow: 0 2px 12px rgba(0,0,0,.15);
-      width: 100%;
-      max-width: 380px;
-    }
-    h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
-    label { display: block; margin-bottom: 1rem; }
-    label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
-    input[type=text], input[type=password] {
-      width: 100%;
-      padding: .5rem .7rem;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 1rem;
-    }
-    button {
-      width: 100%;
-      padding: .6rem;
-      background: #16a34a;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      font-size: 1rem;
-      cursor: pointer;
-      margin-top: .5rem;
-    }
-    button:hover { background: #15803d; }
-    .msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
-    .msg.ok  { background: #dcfce7; color: #166534; }
-    .msg.err { background: #fee2e2; color: #991b1b; }
-    .link { text-align: center; margin-top: 1rem; font-size: .9rem; }
-    .link a { color: #2563eb; text-decoration: none; }
-    .link a:hover { text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Créer un compte</h1>
-    <form method="post" action="/register">
-      <label>
-<span>Courriel</span>
-            <input type="text" name="user" required autofocus minlength="3" maxlength="32" pattern="[a-zA-Z0-9_.\-]+">
+LOGIN_CSS    = build_css "#2563eb", "#1d4ed8"
+REGISTER_CSS = build_css "#16a34a", "#15803d"
 
-      </label>
-      <label>
-        <span>Mot de passe (8 caractères minimum)</span>
-        <input type="password" name="password" required minlength="8">
-      </label>
-      <label>
-        <span>Confirmer le mot de passe</span>
-        <input type="password" name="password2" required minlength="8">
-      </label>
-      <button type="submit">Créer le compte</button>
-    </form>
-    <div class="link"><a href="/">Déjà un compte ? Se connecter</a></div>
-    %MSG%
-  </div>
-</body>
-</html>
-]]
+--- Enveloppe une page HTML complète.
+-- @tparam string title Titre de la page
+-- @tparam string css   Feuille de style inline
+-- @tparam string inner Contenu HTML de la carte
+-- @treturn string Document HTML
+page_skeleton = (title, css, inner) ->
+  "<!DOCTYPE html>" .. h.html(lang: "fr",
+    h.head(
+      h.meta(charset: "UTF-8"),
+      h.meta(name: "viewport", content: "width=device-width, initial-scale=1"),
+      h.title(title),
+      h.style(css)
+    ),
+    h.body(
+      h.div(class: "card", inner)
+    )
+  )
 
-success_page_tmp, _ = LOGIN_PAGE\gsub "%%MSG%%", '<p class="msg ok">Connexion réussie. Votre accès réseau est actif.</p>'
-SUCCESS_PAGE_RAW, _ = success_page_tmp\gsub "%%AUTH_HIDDEN%%", 'style="display:none"'
-SUCCESS_PAGE = SUCCESS_PAGE_RAW
+--- Construit le bloc formulaire + lien inscription.
+-- @tparam boolean hidden Si vrai, le bloc est rendu avec style="display:none"
+-- @treturn string HTML
+login_form = (hidden) ->
+  attrs = if hidden then { style: "display:none" } else {}
+  h.div(attrs,
+    h.form(method: "post", action: "/login",
+      h.label(
+        h.span("Courriel"),
+        h.input(type: "email", name: "user", required: "", autofocus: "")
+      ),
+      h.label(
+        h.span("Mot de passe"),
+        h.input(type: "password", name: "password", required: "")
+      ),
+      h.button(type: "submit", "Se connecter")
+    ),
+    h.div(class: "link",
+      h.a(href: "/register", "Créer un compte")
+    )
+  )
 
---- Construit la page de succès avec le heartbeat JS intégré.
+--- Construit la page de connexion.
+-- @tparam string|nil msg       HTML inline d'un message (OK ou erreur), ou nil
+-- @tparam boolean    hide_form Cache le formulaire (après connexion réussie)
+-- @treturn string Document HTML
+login_page = (msg, hide_form) ->
+  inner = h.h1("CustosVirginum") .. login_form(hide_form) .. (msg or "")
+  page_skeleton "CustosVirginum — Authentification", LOGIN_CSS, inner
+
+--- Construit le formulaire d'inscription.
+register_form = ->
+  h.form(method: "post", action: "/register",
+    h.label(
+      h.span("Courriel"),
+      h.input(type: "email", name: "user",
+        required: "", autofocus: "", minlength: "3", maxlength: "64")
+    ),
+    h.label(
+      h.span("Mot de passe (8 caractères minimum)"),
+      h.input(type: "password", name: "password", required: "", minlength: "8")
+    ),
+    h.label(
+      h.span("Confirmer le mot de passe"),
+      h.input(type: "password", name: "password2", required: "", minlength: "8")
+    ),
+    h.button(type: "submit", "Créer le compte")
+  )
+
+--- Construit la page d'inscription.
+-- @tparam string|nil msg HTML inline d'un message (OK ou erreur)
+-- @treturn string Document HTML
+register_page = (msg) ->
+  inner = h.h1("Créer un compte") ..
+          register_form! ..
+          h.div(class: "link", h.a(href: "/", "Déjà un compte ? Se connecter")) ..
+          (msg or "")
+  page_skeleton "CustosVirginum — Inscription", REGISTER_CSS, inner
+
+--- Message OK (div.msg.ok) contenant du HTML interne.
+msg_ok  = (html_content) -> h.p(class: "msg ok",  html_content)
+--- Message d'erreur (div.msg.err).
+msg_err = (text)         -> h.p(class: "msg err", text)
+
+--- Page d'accueil (formulaire sans message).
+home_page = login_page nil, false
+
+--- Page d'inscription (formulaire sans message).
+home_register_page = register_page nil
+
+--- Page de succès post-login avec heartbeat JS intégré.
 -- @tparam number interval Intervalle de ping en secondes
 -- @treturn string Page HTML
 make_success_page = (interval) ->
-  js = string.format([[
-<script>
+  js = string.format [[
 (function(){
   var iv = %d * 1000;
   function ping(){
@@ -202,27 +180,18 @@ make_success_page = (interval) ->
   setInterval(ping, iv);
   ping();
 })();
-</script>]], interval)
-  res, _ = LOGIN_PAGE\gsub "%%MSG%%", '<p class="msg ok">Connexion r\xc3\xa9ussie. Votre acc\xc3\xa8s r\xc3\xa9seau est actif tant que cette page reste ouverte.</p>' .. js
-  res2, _ = res\gsub "%%AUTH_HIDDEN%%", 'style="display:none"'
-  res2
+]], interval
+  msg = msg_ok "Connexion réussie. Votre accès réseau est actif tant que cette page reste ouverte."
+  login_page msg .. h.script(js), true
 
-failure_page = (reason) ->
-  res, _ = LOGIN_PAGE\gsub "%%MSG%%", "<p class=\"msg err\">#{reason}</p>"
-  res2, _ = res\gsub "%%AUTH_HIDDEN%%", ""
-  res2
+--- Page d'échec de connexion.
+failure_page = (reason) -> login_page msg_err(reason), false
 
-register_failure_page = (reason) ->
-  res, _ = REGISTER_PAGE\gsub "%%MSG%%", "<p class=\"msg err\">#{reason}</p>"
-  res
+--- Page d'échec d'inscription.
+register_failure_page = (reason) -> register_page msg_err(reason)
 
--- Version sans message (accueil)
-home_page_raw, _  = LOGIN_PAGE\gsub "%%MSG%%", ""
-home_page_raw2, _ = home_page_raw\gsub "%%AUTH_HIDDEN%%", ""
-home_page = home_page_raw2
-
-home_register_page_raw, _ = REGISTER_PAGE\gsub "%%MSG%%", ""
-home_register_page = home_register_page_raw
+--- Page de succès statique (compat, sans heartbeat JS).
+SUCCESS_PAGE = login_page msg_ok("Connexion réussie. Votre accès réseau est actif."), true
 
 -- ── Parsing HTTP minimal ──────────────────────────────────────────
 
@@ -234,9 +203,13 @@ home_register_page = home_register_page_raw
 read_request = (sock) ->
   -- Ligne de requête
   line, err = sock\receive "*l"
-  return nil, err unless line
+  unless line
+    log_warn { action: "http_read_failed", err: err }
+    return nil, err
   method, path = line\match "^(%u+)%s+([^%s]+)"
-  return nil, "bad request line: #{line}" unless method
+  unless method
+    log_warn { action: "http_bad_request", line: line }
+    return nil, "bad request line: #{line}"
 
   -- Headers
   headers = {}
@@ -330,11 +303,18 @@ register_rate_exceeded = (register_attempts, peer_ip, max_attempts, window_sec) 
 -- @tparam table register_attempts Table de rate-limiting pour l'inscription
 -- @tparam string peer_mac    Adresse MAC du client
 handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac) ->
-  raw_sock\settimeout 10
+  -- raw_sock is already a TLS-handshaken socket (see `run`); use it directly.
+  sock = raw_sock
+  sock\settimeout 10
+  method, path, headers, body = nil, nil, nil, nil
 
-  method, path, headers, body = read_request raw_sock
+  -- Wrap request read in pcall to avoid worker crash on protocol errors
+  pcall ->
+    m, p, h, b = read_request sock
+    method, path, headers, body = m, p, h, b
+
   unless method
-    raw_sock\close!
+    sock\close!
     return
 
   if method == "GET" and (path == "/" or path == "/login")
@@ -342,10 +322,10 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
     s = sessions[peer_ip]
     now = os.time!
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat)
-      http_response raw_sock, "200 OK", success_pg
+      http_response sock, "200 OK", success_pg
       log_info { action: "auth_already_logged", ip: peer_ip, mac: peer_mac, user: s.user }
     else
-      http_response raw_sock, "200 OK", home_page
+      http_response sock, "200 OK", home_page
 
   elseif method == "GET" and path == "/ping"
     s = sessions[peer_ip]
@@ -354,31 +334,32 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
       if auth_cfg.idle_timeout and auth_cfg.idle_timeout > 0
         s.heartbeat = now + auth_cfg.idle_timeout
         ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
-        log_warn { action: "auth_write_failed", err: err3 } unless ok2
+        log_warn { action: "auth_write_failed", err: err3, user: s.user } unless ok2
         if nft_sess
           ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.idle_timeout
-          log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.idle_timeout } unless ok_nft
+          log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.idle_timeout, user: s.user } unless ok_nft
           if s.mac
             ok_mac = nft_sess.add_authenticated_mac s.mac, auth_cfg.idle_timeout
-            log_warn { action: "auth_nft_mac_add_failed", mac: s.mac, ttl: auth_cfg.idle_timeout } unless ok_mac
-      http_response raw_sock, "204 No Content", ""
+            log_warn { action: "auth_nft_mac_add_failed", mac: s.mac, ttl: auth_cfg.idle_timeout, user: s.user } unless ok_mac
+      http_response sock, "204 No Content", ""
     else
-      http_response raw_sock, "401 Unauthorized", ""
+      http_response sock, "401 Unauthorized", ""
 
   elseif method == "GET" and path == "/logout"
     s = sessions[peer_ip]
+    prev_user = s and s.user
     sessions[peer_ip] = nil
     if nft_sess
       nft_sess.del_authenticated peer_ip
       if s and s.mac
         nft_sess.del_authenticated_mac s.mac
     ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
-    log_warn { action: "auth_write_failed", err: err3 } unless ok2
-    http_redirect raw_sock, "/"
-    log_info { action: "auth_logout", ip: peer_ip, mac: peer_mac }
+    log_warn { action: "auth_write_failed", err: err3, user: prev_user } unless ok2
+    http_redirect sock, "/"
+    log_info { action: "auth_logout", ip: peer_ip, mac: peer_mac, user: prev_user }
 
   elseif method == "GET" and path == "/register"
-    http_response raw_sock, "200 OK", home_register_page
+    http_response sock, "200 OK", home_register_page
 
   elseif method == "POST" and path == "/login"
     form = decode_form body
@@ -392,17 +373,16 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
       add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout, mac
       if nft_sess
         ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
-        log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl } unless ok_nft
+        log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl, user: user } unless ok_nft
         if mac
           ok_mac = nft_sess.add_authenticated_mac mac, auth_cfg.session_ttl
-          log_warn { action: "auth_nft_mac_add_failed", mac: mac, ttl: auth_cfg.session_ttl } unless ok_mac
+          log_warn { action: "auth_nft_mac_add_failed", mac: mac, ttl: auth_cfg.session_ttl, user: user } unless ok_mac
       ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
-      log_warn { action: "auth_write_failed", err: err3 } unless ok2
-      http_response raw_sock, "200 OK", success_pg
+      log_warn { action: "auth_write_failed", err: err3, user: user } unless ok2
+      http_response sock, "200 OK", success_pg
       log_info { action: "auth_login_ok", ip: peer_ip, mac: peer_mac, user: user }
     else
-      http_response raw_sock, "401 Unauthorized",
-        failure_page "Nom d'utilisateur ou mot de passe incorrect."
+      http_response sock, "401 Unauthorized", failure_page "Nom d'utilisateur ou mot de passe incorrect."
       log_warn { action: "auth_login_failed", ip: peer_ip, mac: peer_mac, user: user }
 
   elseif method == "POST" and path == "/register"
@@ -429,12 +409,12 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
           add_session sessions, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout, mac
           if nft_sess
             ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
-            log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl } unless ok_nft
+            log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl, user: user } unless ok_nft
             if mac
               ok_mac = nft_sess.add_authenticated_mac mac, auth_cfg.session_ttl
-              log_warn { action: "auth_nft_mac_add_failed", mac: mac, ttl: auth_cfg.session_ttl } unless ok_mac
+              log_warn { action: "auth_nft_mac_add_failed", mac: mac, ttl: auth_cfg.session_ttl, user: user } unless ok_mac
           ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
-          log_warn { action: "auth_write_failed", err: err3 } unless ok2
+          log_warn { action: "auth_write_failed", err: err3, user: user } unless ok2
           -- Met à jour la table des secrets en place pour la rendre visible au parent
           secrets[user] = new_secrets[user]
           http_response raw_sock, "200 OK", success_pg
@@ -450,9 +430,9 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
           log_warn { action: "auth_register_failed", ip: peer_ip, mac: peer_mac, user: user, err: reg_err }
 
   else
-    http_response raw_sock, "404 Not Found", "<h1>404</h1>"
+    http_response sock, "404 Not Found", "<h1>404</h1>"
 
-  raw_sock\close!
+  sock\close!
 
 -- ── Création des sockets serveur ─────────────────────────────────
 
@@ -538,7 +518,20 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
       if raw_client
         peer_ip  = raw_client\getpeername!
         peer_ip  = tostring peer_ip
+        -- Strip zone index (%iface) for IPv6
+        peer_ip  = peer_ip\gsub "%%.+$", ""
+
+        -- Tente d'abord un lookup rapide
         peer_mac = neigh.get_mac peer_ip
+        if peer_mac == "unknown"
+          fresh = neigh.load!
+          peer_mac = fresh.ip_to_mac[peer_ip] or "unknown"
+          if peer_mac == "unknown"
+            -- Fallback insensible à la casse
+            for ip, mac in pairs fresh.ip_to_mac
+              if ip\lower! == peer_ip\lower!
+                peer_mac = mac
+                break
         -- Connexion HTTPS : enveloppe TLS puis logique d'authentification
         conn = ssl.wrap raw_client, ssl_ctx
         if conn
@@ -550,4 +543,4 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
         else
           raw_client\close!
 
-{ :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE }
+{ :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE, :login_page, :register_page }

@@ -1,5 +1,8 @@
 local os_time = os.time
 local os_rename = os.rename
+local neigh = require("neigh")
+local log_info
+log_info = require("log").log_info
 local serialize
 serialize = function(sessions)
   local parts = {
@@ -32,6 +35,9 @@ write_sessions = function(sessions, path)
 end
 local load_sessions
 load_sessions = function(path)
+  if not (path) then
+    return { }
+  end
   local fn, _err = loadfile(path)
   if not (fn) then
     return { }
@@ -79,6 +85,55 @@ reset_cache = function()
   _cache = nil
   _cache_time = 0
 end
+local session_for_ip
+session_for_ip = function(ip, path, mac)
+  if not (ip) then
+    return nil
+  end
+  local sessions = read_cached(path)
+  local s = sessions[ip]
+  if not (s) then
+    local lookup_mac = mac
+    if not (lookup_mac and lookup_mac ~= "unknown") then
+      lookup_mac = neigh.get_mac(ip)
+    end
+    if lookup_mac and lookup_mac ~= "unknown" then
+      lookup_mac = lookup_mac:lower()
+      for sess_ip, s2 in pairs(sessions) do
+        if s2.mac and s2.mac ~= "unknown" then
+          if s2.mac:lower() == lookup_mac then
+            s = s2
+            break
+          end
+        elseif not s2.mac or s2.mac == "unknown" then
+          local sess_mac = neigh.get_mac(sess_ip)
+          if sess_mac and sess_mac ~= "unknown" then
+            if sess_mac:lower() == lookup_mac then
+              s = s2
+              break
+            end
+          end
+        end
+      end
+    end
+  end
+  if not (s) then
+    return nil
+  end
+  local now = os_time()
+  if now > s.expires then
+    return nil
+  end
+  if s.heartbeat and now > s.heartbeat then
+    return nil
+  end
+  return s
+end
+local user_for_ip
+user_for_ip = function(ip, path, mac)
+  local s = session_for_ip(ip, path, mac)
+  return s and s.user
+end
 return {
   serialize = serialize,
   write_sessions = write_sessions,
@@ -86,5 +141,7 @@ return {
   add_session = add_session,
   purge_expired = purge_expired,
   read_cached = read_cached,
-  reset_cache = reset_cache
+  reset_cache = reset_cache,
+  session_for_ip = session_for_ip,
+  user_for_ip = user_for_ip
 }

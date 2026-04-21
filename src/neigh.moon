@@ -33,11 +33,14 @@ VALID_STATES = {
 -- @tparam string line Ligne brute de `ip neigh show`
 -- @treturn table|nil {ip: string, mac: string} ou nil
 parse_neigh_line = (line) ->
-  -- Format : "<IP> dev <IFACE> lladdr <MAC> <STATE>"
+  -- Format : "<IP> dev <IFACE> lladdr <MAC> [router|proxy|extern_learn ...] <STATE>"
   -- La partie "lladdr <MAC>" est absente pour INCOMPLETE/FAILED.
-  ip, mac, state = line\match "^(%S+)%s+dev%s+%S+%s+lladdr%s+(%S+)%s+(%S+)"
-  return nil unless ip and mac and state
-  return nil unless VALID_STATES[state]
+  -- Le NUD state est toujours le DERNIER mot de la ligne ; des drapeaux
+  -- optionnels (`router`, `proxy`, ...) peuvent le précéder.
+  ip, mac, tail = line\match "^(%S+)%s+dev%s+%S+%s+lladdr%s+(%S+)%s+(.+)$"
+  return nil unless ip and mac and tail
+  state = tail\match "(%S+)%s*$"
+  return nil unless state and VALID_STATES[state]
   { :ip, :mac }
 
 -- ── Remplissage en place ─────────────────────────────────────────
@@ -55,24 +58,19 @@ fill_from_neigh = (mac_clients, ip_to_mac, ts) ->
   for line in fh\lines!
     entry = parse_neigh_line line
     if entry
-      mac = entry.mac
+      mac = entry.mac\lower!
       ip  = entry.ip
 
-      -- Famille détectée par la présence de ':' dans l'adresse
-      family = if ip\find ":", 1, true then "ipv6" else "ipv4"
-
-      e           = mac_clients[mac] or {}
+      e           = mac_clients[mac] or { ips: {} }
       e.last_seen = ts
+      e.ips[ip]   = true
 
-      -- Met à jour l'IP de cette famille si elle a changé,
-      -- en maintenant le reverse-lookup ip_to_mac cohérent.
-      old_ip = e[family]
-      if old_ip ~= ip
-        ip_to_mac[old_ip] = nil if old_ip
-        e[family]         = ip
-        ip_to_mac[ip]     = mac
+      -- On garde une référence à la dernière IP vue par famille pour la structure e
+      family = if ip\find ":", 1, true then "ipv6" else "ipv4"
+      e[family] = ip
 
       mac_clients[mac] = e
+      ip_to_mac[ip]    = mac
       count += 1
 
   fh\close!
@@ -117,15 +115,15 @@ get_mac = (ip) ->
     _mac_clients = res.mac_clients
     _ip_to_mac   = res.ip_to_mac
     _last_refresh = os.time!
-  
+
   return _ip_to_mac[ip] if _ip_to_mac[ip]
-  
+
   ts = os.time!
   if ts - _last_refresh > 5
     _last_refresh = ts
     refresh _mac_clients, _ip_to_mac
     return _ip_to_mac[ip] or "unknown"
-  
+
   "unknown"
 
 { :load, :refresh, :get_mac, :parse_neigh_line, :fill_from_neigh }

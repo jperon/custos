@@ -8,6 +8,9 @@
 os_time   = os.time
 os_rename = os.rename
 
+neigh = require "neigh"
+{ :log_info } = require "log"
+
 -- ── Sérialisation ────────────────────────────────────────────────
 
 --- Sérialise une table de sessions en code Lua évaluable.
@@ -50,6 +53,7 @@ write_sessions = (sessions, path) ->
 -- @tparam string path Chemin du fichier de sessions
 -- @treturn table Table {ip → {user, expires}}
 load_sessions = (path) ->
+  return {} unless path  -- garde contre loadfile(nil) qui lit stdin en LuaJIT
   fn, _err = loadfile path
   return {} unless fn
   ok, result = pcall fn
@@ -103,5 +107,60 @@ reset_cache = ->
   _cache      = nil
   _cache_time = 0
 
-{ :serialize, :write_sessions, :load_sessions, :add_session
-  :purge_expired, :read_cached, :reset_cache }
+--- Retourne la session valide pour une IP, ou nil.
+-- Consulte d'abord `sessions[ip]`. Si absent, tente un fallback par MAC
+-- (cross-family) : permet qu'un client authentifié en IPv6 soit reconnu
+-- quand ses paquets IPv4 arrivent (et réciproquement).
+--
+-- Le paramètre optionnel `mac` (extraite du paquet par le worker appelant)
+-- est privilégié. À défaut, on interroge la table voisine locale via
+-- `neigh.get_mac` — utile hors mode bridge, mais inefficace dans le cas
+-- où le filtre ne tient pas la table ARP/NDP du LAN.
+--
+-- Vérifie expiration et heartbeat.
+-- @tparam string|nil ip   Adresse IP du client
+-- @tparam string     path Chemin du fichier de sessions
+-- @tparam string|nil mac  MAC déjà connue du paquet (optionnel)
+-- @treturn table|nil Session { user, expires, heartbeat?, mac? } ou nil
+session_for_ip = (ip, path, mac) ->
+  return nil unless ip
+  sessions = read_cached path
+  s = sessions[ip]
+  unless s
+    -- Fallback cross-family par MAC : pref. MAC du paquet, sinon `ip neigh`
+    lookup_mac = mac
+    unless lookup_mac and lookup_mac != "unknown"
+      lookup_mac = neigh.get_mac ip
+    if lookup_mac and lookup_mac != "unknown"
+      lookup_mac = lookup_mac\lower!
+      for sess_ip, s2 in pairs sessions
+        -- Cas 1 : la session a une MAC stockée → comparaison directe
+        if s2.mac and s2.mac != "unknown"
+          if s2.mac\lower! == lookup_mac
+            s = s2
+            break
+        -- Cas 2 : la session n'a pas de MAC (NDP non résolu au login) →
+        -- résoudre l'IP de la session via NDP et comparer avec le MAC du paquet.
+        elseif not s2.mac or s2.mac == "unknown"
+          sess_mac = neigh.get_mac sess_ip
+          if sess_mac and sess_mac != "unknown"
+            if sess_mac\lower! == lookup_mac
+              s = s2
+              break
+  return nil unless s
+  now = os_time!
+  return nil if now > s.expires
+  return nil if s.heartbeat and now > s.heartbeat
+  s
+
+--- Retourne l'utilisateur authentifié pour une IP, ou nil.
+-- Destiné aux workers (Q0/Q1/Q2) pour enrichir leurs logs.
+-- @tparam string|nil ip   Adresse IP du client
+-- @tparam string     path Chemin du fichier de sessions
+-- @tparam string|nil mac  MAC déjà connue du paquet (optionnel)
+-- @treturn string|nil Nom d'utilisateur authentifié, ou nil
+user_for_ip = (ip, path, mac) ->
+  s = session_for_ip ip, path, mac
+  s and s.user
+
+{ :serialize, :write_sessions, :load_sessions, :add_session, :purge_expired, :read_cached, :reset_cache, :session_for_ip, :user_for_ip }
