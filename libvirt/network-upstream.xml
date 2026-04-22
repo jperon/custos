@@ -1,0 +1,5 @@
+<network>
+  <name>custos-up</name>
+  <!-- Isolated L2 segment between filter and DNS server (no routing, no DHCP). -->
+  <bridge name="custos-up"/>
+</network>

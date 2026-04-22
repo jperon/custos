@@ -58,7 +58,7 @@ AUTH_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(AUTH_MOONS))
 IPPARSE_MOONS := $(shell find $(SRC)/ipparse -name '*.moon' 2>/dev/null | grep -v examples)
 IPPARSE_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(IPPARSE_MOONS))
 
-.PHONY: all clean check test test-ndpi test-openwrt run reload update-lists make-secret logs help
+.PHONY: all clean check test test-ndpi test-openwrt test-env test-env-down test-env-nuke test-e2e run reload update-lists make-secret logs help
 
 all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
@@ -106,6 +106,34 @@ test-openwrt: all
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_openwrt.lua $(HOST) $(ARGS)
 
+## Environnement libvirt 3 VMs (client → filtre OpenWrt → DNS).
+## Premier run : télécharge Debian + OpenWrt (~500 Mo), injecte la clé
+## SSH dans l'image OpenWrt (sudo requis pour losetup/mount), démarre les
+## VMs et attend la connectivité SSH du filtre. ~5 min le premier coup,
+## ~30 s les suivants.
+test-env:
+	bash libvirt/custos-libvirt.sh ensure
+	bash libvirt/custos-libvirt.sh start
+	@echo ""
+	@bash libvirt/custos-libvirt.sh show
+
+## Arrête les VMs sans les supprimer (les conserve pour relance rapide).
+test-env-down:
+	bash libvirt/custos-libvirt.sh stop
+
+## Supprime VMs, réseaux, cloud-init ISOs et images de base. Scratch complet.
+test-env-nuke:
+	bash libvirt/custos-libvirt.sh nuke
+
+## Suite E2E complète : déploie custos sur le filtre et exécute la matrice
+## de tests depuis le client. Prérequis : make test-env.
+test-e2e: all
+	@bash libvirt/custos-libvirt.sh filter-ip >/dev/null 2>&1 \
+	  || (echo "ERREUR : environnement non démarré. Exécute d'abord: make test-env"; exit 1)
+	$(MOONC) -o tests/test_e2e.lua tests/test_e2e.moon
+	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) tests/test_e2e.lua
+
 ## Génère un hash PBKDF2-SHA256 pour un utilisateur (écrire dans cfg/secrets)
 ## Usage : make make-secret USER=alice PASS=motdepasse
 make-secret: all
@@ -147,6 +175,10 @@ help:
 	@echo "  test         - Tests unitaires (pas root requis)"
 	@echo "  test-ndpi    - Tests nDPI wrapper (libndpi requis)"
 	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis)"
+	@echo "  test-env     - Crée/démarre l'environnement libvirt 3 VMs pour E2E"
+	@echo "  test-env-down- Arrête les VMs (conserve les disques)"
+	@echo "  test-env-nuke- Supprime VMs, réseaux, images (scratch)"
+	@echo "  test-e2e     - Suite E2E complète (requiert test-env déjà démarré)"
 	@echo "  run          - Lance le superviseur (root requis)"
 	@echo "  clean        - Nettoie les fichiers compilés"
 	@echo "  make-secret  - Génère un hash PBKDF2-SHA256 pour cfg/secrets (USER=, PASS=)"

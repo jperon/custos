@@ -1,6 +1,6 @@
-<!-- CustosVirginum DNS Client2 — second client VM for isolation tests -->
+<!-- CustosVirginum DNS + HTTP target server — Debian VM for E2E tests -->
 <domain type='kvm'>
-  <name>custos-client2</name>
+  <name>custos-dns</name>
   <memory unit='MiB'>512</memory>
   <vcpu>1</vcpu>
   <cpu mode='host-passthrough' check='none'/>
@@ -15,20 +15,20 @@
   </features>
   <devices>
     <disk type='file' device='disk'>
-      <source file='/var/lib/libvirt/images/custos-client2.qcow2'/>
+      <source file='/var/lib/libvirt/images/custos-dns.qcow2'/>
       <driver name='qemu' type='qcow2'/>
       <target dev='vda' bus='virtio'/>
     </disk>
     <disk type='file' device='cdrom'>
-      <source file='/var/lib/libvirt/images/cidata-client2.iso'/>
+      <source file='/var/lib/libvirt/images/cidata-dns.iso'/>
       <driver name='qemu' type='raw'/>
       <target dev='sda' bus='sata'/>
       <readonly/>
     </disk>
-    <!-- LAN side: static 10.99.0.11/24 via virbr-lan — distinct MAC for bridge isolation tests -->
+    <!-- Upstream side: static 10.99.0.1/24 + aliases 10.99.0.50/60/70 -->
     <interface type='network'>
-      <mac address='52:54:00:00:03:02'/>
-      <source network='lan'/>
+      <mac address='52:54:00:00:04:01'/>
+      <source network='custos-up'/>
       <model type='virtio'/>
     </interface>
     <serial type='pty'>

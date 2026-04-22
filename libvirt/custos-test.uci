@@ -1,0 +1,7 @@
+# libvirt/custos-test.uci — config UCI déployée sur /etc/config/custos
+# par `make test-e2e`. Le service custos est (ré)activé après déploiement.
+config main 'main'
+	option enabled '1'
+	option forced_ttl '60'
+	option nft_ip_timeout '2m'
+	list nft_extra_rules ''

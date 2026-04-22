@@ -1,4 +1,9 @@
-<!-- CustosVirginum DNS Filter — VM definition for KVM/libvirt tests -->
+<!-- CustosVirginum filter — OpenWrt VM for E2E tests -->
+<!-- NICs (order matters, matches /etc/config/network):
+       eth0 = custos-lan    (bridged into br-lan, client side)
+       eth1 = custos-up     (bridged into br-lan, dns-server side)
+       eth2 = custos-mgmt   (DHCP, SSH access from host)
+-->
 <domain type='kvm'>
   <name>custos-filter</name>
   <memory unit='MiB'>1024</memory>
@@ -6,9 +11,7 @@
   <cpu mode='host-passthrough' check='none'/>
   <os>
     <type arch='x86_64'>hvm</type>
-    <kernel>/tmp/custos-vmlinuz</kernel>
-    <initrd>/tmp/custos-initrd.img</initrd>
-    <cmdline>root=/dev/vda1 ro console=ttyS0,115200 earlyprintk=ttyS0,115200 consoleblank=0</cmdline>
+    <boot dev='hd'/>
   </os>
   <features>
     <acpi/>
@@ -19,25 +22,19 @@
       <driver name='qemu' type='qcow2'/>
       <target dev='vda' bus='virtio'/>
     </disk>
-    <disk type='file' device='cdrom'>
-      <source file='/var/lib/libvirt/images/cidata-filter.iso'/>
-      <driver name='qemu' type='raw'/>
-      <target dev='sda' bus='sata'/>
-      <readonly/>
-    </disk>
     <interface type='network'>
       <mac address='52:54:00:00:01:01'/>
-      <source network='wanfilter'/>
+      <source network='custos-lan'/>
       <model type='virtio'/>
     </interface>
     <interface type='network'>
       <mac address='52:54:00:00:01:02'/>
-      <source network='lan'/>
+      <source network='custos-up'/>
       <model type='virtio'/>
     </interface>
     <interface type='network'>
       <mac address='52:54:00:00:01:03'/>
-      <source network='wan'/>
+      <source network='custos-mgmt'/>
       <model type='virtio'/>
     </interface>
     <serial type='file'>
@@ -48,8 +45,5 @@
       <source path='/tmp/custos-filter-serial.log' append='on'/>
       <target type='serial' port='0'/>
     </console>
-    <channel type='unix'>
-      <target type='virtio' name='org.qemu.guest_agent.0'/>
-    </channel>
   </devices>
 </domain>

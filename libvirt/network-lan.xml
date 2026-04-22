@@ -1,5 +1,5 @@
 <network>
-  <name>lan</name>
-  <!-- Isolated L2 segment — no routing, no DHCP. Client VM uses static IP. -->
-  <bridge name="virbr-lan"/>
+  <name>custos-lan</name>
+  <!-- Isolated L2 segment between client and filter (no routing, no DHCP). -->
+  <bridge name="custos-lan"/>
 </network>
