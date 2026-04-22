@@ -1,11 +1,18 @@
 -- src/filter/conditions/to_domain.moon
 -- Condition : le domaine demandé (ou un de ses ancêtres) correspond
 -- exactement à la valeur configurée.
+-- Supporte les valeurs spéciales `_any` (n'importe quel domaine)
+-- et `_none` (aucun domaine).
 -- Port direct de shelterfilter conditions/to_domain.moon.
 
 --- @tparam table cfg Configuration du filtre (non utilisée ici)
 -- @treturn function factory (domain) → (req) → bool, reason
 (cfg) -> (domain) ->
+  if domain == "_any"
+    return (req) -> req.domain ~= nil, "domain available"
+  if domain == "_none"
+    return (req) -> req.domain == nil, "domain not available"
+
   --- @tparam table req {domain: string, ...}
   -- @treturn boolean, string
   (req) ->
@@ -14,7 +21,6 @@
     return true, "Exact match" if _domain == domain
 
     -- Teste chaque suffixe (labels de droite à gauche)
-    -- Ex. "www.github.com" → teste "github.com" puis "com"
     pos = _domain\find ".", 1, true
     while pos
       suffix = _domain\sub pos + 1

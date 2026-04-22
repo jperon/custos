@@ -117,7 +117,7 @@ unless ok_c
   os.exit 1
 print "  #{C.green}✓ client joignable#{C.reset}"
 
-ok_dns, _ = ssh_client FILTER_IP, "dig +short +time=2 +tries=1 @#{DNS_IP} allowed.test A"
+ok_dns, _ = ssh_client FILTER_IP, "host -W 2 -t A allowed.test #{DNS_IP}"
 print if ok_dns
   "  #{C.green}✓ client → DNS (via filtre) fonctionne#{C.reset}"
 else
@@ -176,24 +176,24 @@ else
 print "\n#{C.bold}[4/5] Tests fonctionnels (depuis le client)#{C.reset}"
 
 -- 1. DNS allow
-test "dig allowed.test → 10.99.0.50", ->
+test "host allowed.test → 10.99.0.50", ->
   _, out = ssh_client FILTER_IP,
-    "dig @#{DNS_IP} +short +time=2 +tries=1 allowed.test A"
+    "host -W 2 -t A allowed.test #{DNS_IP}"
   assert_contains out, "10.99.0.50"
 
 -- 2. DNS block (refuse par règle explicite)
-test "dig blocked.test → NXDOMAIN + EDE Filtered", ->
+test "host blocked.test → NXDOMAIN", ->
   _, out = ssh_client FILTER_IP,
-    "dig @#{DNS_IP} +time=2 +tries=1 blocked.test A"
+    "host -W 2 -t A blocked.test #{DNS_IP}"
   assert_contains out, "NXDOMAIN"
   -- EDE: code de non-erreur apparaît dans la section additionnelle
   -- (dig ≥ 9.18 l'affiche en "; EDE: 15 (Filtered)" ou équivalent).
   -- On reste tolérant : au moins NXDOMAIN doit être là.
 
 -- 3. DNS inconnu (refusé par la règle par défaut)
-test "dig nonexistent.invalid → NXDOMAIN", ->
+test "host nonexistent.invalid → NXDOMAIN", ->
   _, out = ssh_client FILTER_IP,
-    "dig @#{DNS_IP} +time=2 +tries=1 nonexistent.invalid A"
+    "host -W 2 -t A nonexistent.invalid #{DNS_IP}"
   assert_contains out, "NXDOMAIN"
 
 -- 4. HTTP allowed

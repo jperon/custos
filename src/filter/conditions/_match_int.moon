@@ -8,5 +8,11 @@
     -- @treturn boolean, string
     (req) ->
       _val = req[prop]
+
+      if val == "_any"
+        return _val ~= nil, "#{prop} is present"
+      if val == "_none"
+        return _val == nil, "#{prop} is absent"
+
       return false, "#{prop} not available in request" unless _val
       _val == val, "#{prop} #{_val} vs #{val}"

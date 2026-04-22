@@ -1,5 +1,15 @@
 return function(cfg)
   return function(domain)
+    if domain == "_any" then
+      return function(req)
+        return req.domain ~= nil, "domain available"
+      end
+    end
+    if domain == "_none" then
+      return function(req)
+        return req.domain == nil, "domain not available"
+      end
+    end
     return function(req)
       local _domain = req.domain
       if not (_domain) then

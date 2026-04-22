@@ -2,6 +2,10 @@
 -- Condition : vérifie si l'IP source a une session authentifiée active
 -- pour l'utilisateur spécifié.
 --
+-- Supporte les valeurs spéciales :
+--   - "_any" : match si n'importe quel utilisateur est authentifié.
+--   - "_none" : match si aucun utilisateur n'est authentifié.
+--
 -- Le fichier de sessions est maintenu par le worker AUTH (auth/worker.moon)
 -- et lu ici via un cache TTL de 5 secondes (sessions.read_cached).
 -- Le chemin du fichier est issu de cfg.auth.sessions_file (ou la constante
@@ -10,18 +14,23 @@
 { :session_for_mac } = require "auth.sessions"
 { :AUTH_SESSIONS_FILE } = require "config"
 
---- @tparam table cfg Configuration du filtre (cfg.auth.sessions_file optionnel)
+--- @tparam table cfg Configuration du filtre
 -- @treturn function factory (user: string) → (req) → bool, reason
 (cfg) ->
   sessions_file = (cfg.auth and cfg.auth.sessions_file) or AUTH_SESSIONS_FILE
 
   (user) ->
-    --- @tparam table req {src_ip: string, ...}
+    --- @tparam table req {src_ip: string, mac: string, ...}
     -- @treturn boolean, string
     (req) ->
       -- session_for_mac indexée par MAC évite le coût du fallback par neigh
       -- dans la majorité des cas en mode bridge.
       s = session_for_mac req.mac, req.src_ip, sessions_file
+
+      if user == "_any"
+        return s ~= nil, "from_user: session active (#{s and s.user or 'unknown'})"
+      if user == "_none"
+        return s == nil, "from_user: aucune session active"
 
       unless s
         return false, "from_user: aucune session valide pour #{req.src_ip}"

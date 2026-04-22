@@ -7,6 +7,12 @@ return function(cfg)
   return function(user)
     return function(req)
       local s = session_for_mac(req.mac, req.src_ip, sessions_file)
+      if user == "_any" then
+        return s ~= nil, "from_user: session active (" .. tostring(s and s.user or 'unknown') .. ")"
+      end
+      if user == "_none" then
+        return s == nil, "from_user: aucune session active"
+      end
       if not (s) then
         return false, "from_user: aucune session valide pour " .. tostring(req.src_ip)
       end

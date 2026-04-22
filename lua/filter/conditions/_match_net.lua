@@ -1,6 +1,18 @@
 return function(prop)
   return function(cfg)
     return function(net_cidr)
+      if net_cidr == "_any" then
+        return function(req)
+          local ip = req[prop]
+          return ip ~= nil, tostring(prop) .. " present"
+        end
+      end
+      if net_cidr == "_none" then
+        return function(req)
+          local ip = req[prop]
+          return ip == nil, tostring(prop) .. " absent"
+        end
+      end
       local Net
       Net = require("filter.lib.ipcalc").Net
       local _net = Net(net_cidr)

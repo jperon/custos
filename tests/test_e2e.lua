@@ -101,7 +101,7 @@ if not (ok_c) then
 end
 print("  " .. tostring(C.green) .. "✓ client joignable" .. tostring(C.reset))
 local ok_dns
-ok_dns, _ = ssh_client(FILTER_IP, "dig +short +time=2 +tries=1 @" .. tostring(DNS_IP) .. " allowed.test A")
+ok_dns, _ = ssh_client(FILTER_IP, "host -W 2 -t A allowed.test " .. tostring(DNS_IP))
 print((function()
   if ok_dns then
     return "  " .. tostring(C.green) .. "✓ client → DNS (via filtre) fonctionne" .. tostring(C.reset)
@@ -147,19 +147,19 @@ else
   os.exit(1)
 end
 print("\n" .. tostring(C.bold) .. "[4/5] Tests fonctionnels (depuis le client)" .. tostring(C.reset))
-test("dig allowed.test → 10.99.0.50", function()
+test("host allowed.test → 10.99.0.50", function()
   local out
-  _, out = ssh_client(FILTER_IP, "dig @" .. tostring(DNS_IP) .. " +short +time=2 +tries=1 allowed.test A")
+  _, out = ssh_client(FILTER_IP, "host -W 2 -t A allowed.test " .. tostring(DNS_IP))
   return assert_contains(out, "10.99.0.50")
 end)
-test("dig blocked.test → NXDOMAIN + EDE Filtered", function()
+test("host blocked.test → NXDOMAIN", function()
   local out
-  _, out = ssh_client(FILTER_IP, "dig @" .. tostring(DNS_IP) .. " +time=2 +tries=1 blocked.test A")
+  _, out = ssh_client(FILTER_IP, "host -W 2 -t A blocked.test " .. tostring(DNS_IP))
   return assert_contains(out, "NXDOMAIN")
 end)
-test("dig nonexistent.invalid → NXDOMAIN", function()
+test("host nonexistent.invalid → NXDOMAIN", function()
   local out
-  _, out = ssh_client(FILTER_IP, "dig @" .. tostring(DNS_IP) .. " +time=2 +tries=1 nonexistent.invalid A")
+  _, out = ssh_client(FILTER_IP, "host -W 2 -t A nonexistent.invalid " .. tostring(DNS_IP))
   return assert_contains(out, "NXDOMAIN")
 end)
 test("curl http://allowed.test → 200 allowed", function()
