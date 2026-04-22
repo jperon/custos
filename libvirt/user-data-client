@@ -8,7 +8,7 @@ users:
     shell: /bin/bash
 packages:
   - qemu-guest-agent
-  - dnsutils
+  - bind9-dnsutils
   - iputils-ping
   - curl
   - netcat-openbsd

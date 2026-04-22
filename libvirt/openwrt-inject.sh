@@ -15,6 +15,11 @@
 
 set -e
 
+# /sbin et /usr/sbin peuvent ne pas être dans le PATH utilisateur (selon
+# distribution / shell). Les outils dont on dépend (sgdisk, parted,
+# losetup, resize2fs) y vivent.
+export PATH="/usr/sbin:/sbin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMG_DIR="$(dirname "$SCRIPT_DIR")/images"
 
@@ -46,7 +51,11 @@ if [ ! -f "$BASE_IMG.gz" ] && [ ! -f "$BASE_IMG" ]; then
 fi
 if [ ! -f "$BASE_IMG" ]; then
     log "Décompression..."
-    gunzip -k "$BASE_IMG.gz"
+    # OpenWrt .img.gz files sometimes have trailing garbage (padding after
+    # the gzip stream). gzip exits with code 2 (warning) — decompression is
+    # complete and correct, so we accept it.
+    gunzip -k "$BASE_IMG.gz" || [ $? = 2 ]
+    [ -f "$BASE_IMG" ] || err "Décompression échouée : $BASE_IMG absent"
 fi
 
 # ── 2. Extension ──────────────────────────────────────────────────
@@ -55,13 +64,19 @@ TARGET_BYTES=$((TARGET_SIZE_MB * 1024 * 1024))
 if [ "$CUR_SIZE" -lt "$TARGET_BYTES" ]; then
     log "Extension de l'image à ${TARGET_SIZE_MB} Mo..."
     truncate -s "${TARGET_SIZE_MB}M" "$BASE_IMG"
-    log "Mise à jour de la table de partitions..."
-    # Supprime la partition 2 et la recrée couvrant tout l'espace restant.
-    START=$(sudo parted -s "$BASE_IMG" unit s print \
-        | awk '/^ 2 / {gsub("s","",$2); print $2}')
-    [ -n "$START" ] || err "Impossible de détecter le début de la partition 2"
-    sudo parted -s "$BASE_IMG" rm 2
-    sudo parted -s "$BASE_IMG" mkpart primary ext4 "${START}s" 100%
+
+    # Après truncate, la table GPT de sauvegarde (stockée à la fin de
+    # l'image) n'est plus à la bonne place. sgdisk -e la déplace vers la
+    # nouvelle fin. Ensuite parted peut resize la partition 2 sans
+    # se plaindre d'un GPT corrompu.
+    if ! command -v sgdisk >/dev/null 2>&1; then
+        err "sgdisk introuvable. Installe gdisk : sudo apt install gdisk"
+    fi
+    log "Correction de la table GPT (sgdisk -e)..."
+    sgdisk -e "$BASE_IMG" >/dev/null
+
+    log "Redimensionnement de la partition 2..."
+    sudo parted -s "$BASE_IMG" resizepart 2 100%
 fi
 
 # ── 3. Mount + inject ─────────────────────────────────────────────

@@ -16,6 +16,8 @@ write_files:
   - path: /etc/dnsmasq.d/custos-test.conf
     content: |
       port=53
+      listen-address=10.99.0.1
+      listen-address=127.0.0.1
       no-resolv
       domain-needed
       bogus-priv

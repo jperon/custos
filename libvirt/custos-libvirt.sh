@@ -121,19 +121,25 @@ ensure_debian_base() {
 
 ensure_debian_vm_disk() {
     local vm="$1"
-    if [ ! -f "$VM_DIR/${vm}.qcow2" ]; then
-        log "Création du disque $vm..."
-        sudo qemu-img create -f qcow2 -b "$IMG_DIR/debian.qcow2" \
-            -F qcow2 "$VM_DIR/${vm}.qcow2" 4G >/dev/null
+    if sudo test -f "$VM_DIR/${vm}.qcow2"; then
+        return
     fi
+    log "Création du disque $vm..."
+    sudo qemu-img create -f qcow2 -b "$IMG_DIR/debian.qcow2" \
+        -F qcow2 "$VM_DIR/${vm}.qcow2" 4G >/dev/null
 }
 
 ensure_cidata() {
     local iso="$1" userdata="$2" metadata="$3" netconfig="$4"
-    if [ ! -f "$VM_DIR/$iso" ]; then
-        log "Génération $iso..."
-        make_cidata "$VM_DIR/$iso" "$userdata" "$metadata" "$netconfig"
+    if sudo test -f "$VM_DIR/$iso"; then
+        return
     fi
+    log "Génération $iso..."
+    local tmpiso
+    tmpiso=$(mktemp --suffix=.iso)
+    make_cidata "$tmpiso" "$userdata" "$metadata" "$netconfig"
+    sudo install -m 0644 "$tmpiso" "$VM_DIR/$iso"
+    rm -f "$tmpiso"
 }
 
 ensure_filter_disk() {
@@ -142,13 +148,18 @@ ensure_filter_disk() {
 
     # Copie l'image préparée dans le répertoire libvirt (évite les soucis
     # AppArmor/path resolution avec un backing file hors /var/lib/libvirt).
-    if [ ! -f "$VM_DIR/openwrt-base.img" ] \
-       || [ "$IMG_DIR/openwrt-base.img" -nt "$VM_DIR/openwrt-base.img" ]; then
+    need_copy=1
+    if sudo test -f "$VM_DIR/openwrt-base.img"; then
+        if ! sudo test "$IMG_DIR/openwrt-base.img" -nt "$VM_DIR/openwrt-base.img"; then
+            need_copy=0
+        fi
+    fi
+    if [ "$need_copy" = 1 ]; then
         log "Copie openwrt-base.img → $VM_DIR..."
         sudo cp "$IMG_DIR/openwrt-base.img" "$VM_DIR/openwrt-base.img"
     fi
 
-    if [ ! -f "$VM_DIR/custos-filter.qcow2" ]; then
+    if ! sudo test -f "$VM_DIR/custos-filter.qcow2"; then
         log "Création du disque filter (qcow2 sur openwrt-base.img)..."
         sudo qemu-img create -f qcow2 -b "$VM_DIR/openwrt-base.img" \
             -F raw "$VM_DIR/custos-filter.qcow2" 1G >/dev/null

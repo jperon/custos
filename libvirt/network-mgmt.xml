@@ -2,7 +2,7 @@
   <name>custos-mgmt</name>
   <!-- NAT + DHCP management network: host can SSH into the filter's mgmt NIC. -->
   <forward mode="nat"/>
-  <bridge name="custos-mgmt" stp="on" delay="0"/>
+  <bridge name="custos-mgmt-br" stp="on" delay="0"/>
   <ip address="192.168.200.1" netmask="255.255.255.0">
     <dhcp>
       <range start="192.168.200.10" end="192.168.200.200"/>
