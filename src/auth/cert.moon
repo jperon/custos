@@ -11,21 +11,76 @@ ssl = require "ssl"
 CERT_DAYS     = 3650    -- validité : ~10 ans
 CERT_KEY_BITS = 2048
 
+--- Génère un hash court pour une chaîne de caractères.
+-- @tparam string s La chaîne à hacher
+-- @treturn string Hash hexadécimal
+hash_string = (s) ->
+  h = 0
+  for i = 1, #s
+    h = (h * 31 + s\byte i) % 0x7FFFFFFF
+  string.format "%x", h
+
+--- Détecte les adresses IP globales (v4 et v6) du système.
+-- @treturn table Liste des SANs au format "IP:adresse"
+get_local_ips = () ->
+  ips = {}
+  -- IPv4
+  ok, out = pcall ->
+    f = io.popen "ip -4 addr show scope global | awk '/inet/{print $2}' | cut -d'/' -f1"
+    res = f\read "*a"
+    f\close!
+    res
+  if ok and out
+    for ip in out\gmatch "%S+"
+      table.insert ips, "IP:#{ip}"
+
+  -- IPv6
+  ok, out = pcall ->
+    f = io.popen "ip -6 addr show scope global | awk '/inet6/{print $2}' | cut -d'/' -f1"
+    res = f\read "*a"
+    f\close!
+    res
+  if ok and out
+    for ip in out\gmatch "%S+"
+      table.insert ips, "IP:#{ip}"
+  ips
+
 --- Génère un certificat RSA auto-signé via l'outil `openssl`.
 -- @tparam string key_path  Chemin de destination pour la clé privée
 -- @tparam string cert_path Chemin de destination pour le certificat
+-- @tparam table sans Liste des Subject Alternative Names (ex: {"DNS:custos", "IP:1.2.3.4"})
 -- @treturn boolean true si la génération a réussi
 -- @treturn string  Sortie de la commande (stderr inclus), ou message d'erreur
-generate_self_signed = (key_path, cert_path) ->
+generate_self_signed = (key_path, cert_path, sans) ->
+  cnf_path = "tmp/auth.cnf"
+  san_str = table.concat sans, ","
+  config = " [ req ]\n" ..
+           " distinguished_name = req_distinguished_name\n" ..
+           " x509_extensions = v3_req\n" ..
+           " prompt = no\n\n" ..
+           " [ req_distinguished_name ]\n" ..
+           " CN = custos\n\n" ..
+           " [ v3_req ]\n" ..
+           " basicConstraints = CA:FALSE\n" ..
+           " keyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" ..
+           " subjectAltName = #{san_str}\n"
+  ok_w, err_w = pcall ->
+    fh = io.open cnf_path, "w"
+    fh\write config
+    fh\close!
+  unless ok_w
+    return false, "Échec écriture config SAN : #{err_w}"
+
   cmd = string.format(
-    "openssl req -x509 -newkey rsa:%d -keyout '%s' -out '%s'" ..
-    " -days %d -nodes -subj '/CN=custos' 2>&1",
-    CERT_KEY_BITS, key_path, cert_path, CERT_DAYS
+    "openssl req -x509 -newkey rsa:%d -keyout '%s' -out '%s' " ..
+    "-days %d -nodes -config '%s' 2>&1",
+    CERT_KEY_BITS, key_path, cert_path, CERT_DAYS, cnf_path
   )
   fh = io.popen cmd
   out = fh\read "*a"
-  ok = fh\close!
-  ok, out
+  exit_code = fh\close!
+  pcall io.remove, cnf_path
+  (exit_code == 0), out
 
 --- Crée un contexte TLS luasec en mode serveur.
 -- @tparam string key_path  Chemin de la clé privée PEM
@@ -62,8 +117,23 @@ file_exists = (path) ->
 -- @treturn table  Contexte luasec (ssl.newcontext)
 -- @raise   string Message d'erreur si échec
 load_or_generate = (key_path, cert_path) ->
+  -- Si on utilise les chemins par défaut, on bascule sur le nommage par hash
+  if (key_path == "tmp/auth.key" or key_path == nil) and (cert_path == "tmp/auth.crt" or cert_path == nil)
+    ips = get_local_ips()
+    sans = { "DNS:custos" }
+    for ip_san in *ips
+      table.insert sans, ip_san
+    san_str = table.concat sans, ","
+    h = hash_string san_str
+    key_path = "tmp/auth_#{h}.key"
+    cert_path = "tmp/auth_#{h}.crt"
+
   unless file_exists(key_path) and file_exists(cert_path)
-    ok, out = generate_self_signed key_path, cert_path
+    ips = get_local_ips()
+    sans = { "DNS:custos" }
+    for ip_san in *ips
+      table.insert sans, ip_san
+    ok, out = generate_self_signed key_path, cert_path, sans
     error "Impossible de générer le certificat TLS :\n#{out}" unless ok
   make_context key_path, cert_path
 

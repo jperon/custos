@@ -266,47 +266,31 @@ run = (auth_cfg) ->
       -- Fallback to socket method for IPv4 if interface read failed or returned nothing
       u = nil
       if not local_ip4
-        ok_udp, u_or_err = pcall -> socket.udp!
+        ok_udp, u_or_err = pcall socket.udp
         u = u_or_err if ok_udp and u_or_err
         if u
-          ok_conn, _ = pcall -> u\connect "1.1.1.1", 80
+          ok_conn, _ = pcall u.connect, u, "1.1.1.1", 80
           if ok_conn
-            ok_get, ip = pcall -> u\getsockname!
+            ok_get, ip = pcall u.getsockname, u
             if ok_get and ip and ip != "" and ip != "0.0.0.0"
               local_ip4 = ip
 
-      -- Try IPv6 via socket connect (keeps original behaviour)
-      if not local_ip6
-        unless u
-          ok_udp, u_or_err = pcall -> socket.udp!
-          u = u_or_err if ok_udp and u_or_err
-        if u
-          ok_conn6, _ = pcall -> u\connect "2606:4700:4700::1111", 80
-          if ok_conn6
-            ok_get6, ip = pcall -> u\getsockname!
-            if ok_get6 and ip and ip != "" and ip != "::"
-              local_ip6 = ip
-          else
-            log_warn { action: "q2_ipv6_connect_failed", err: _ or "unknown" }
       u\close! if u
 
   -- Fallback: read IPv6 from bridge interface if auto-detection failed
   if not local_ip6
     bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
-    fh = io.open "/sys/class/net/#{bridge_ifname}/address", "r"
-    if fh
-      fh\close!
-      -- Try to get IPv6 address from ip command
-      ok, ip = pcall ->
-        f = io.popen "ip -6 addr show dev #{bridge_ifname} scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1"
-        if f
-          addr = f\read "*a"
-          f\close!
-          -- Strip all whitespace (newlines, carriage returns, spaces)
-          addr\gsub "%s+", ""
-      if ok and ip and ip != "" and ip != "::"
-        local_ip6 = ip
-        log_info { action: "q2_ipv6_from_interface", ip: local_ip6, ifname: bridge_ifname }
+    -- Try to get IPv6 address from ip command
+    ok, ip = pcall ->
+      f = io.popen "ip -6 addr show dev #{bridge_ifname} scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1"
+      if f
+        addr = f\read "*a"
+        f\close!
+        -- Strip all whitespace (newlines, carriage returns, spaces)
+        addr\gsub "%s+", ""
+    if ok and ip and ip != "" and ip != "::"
+      local_ip6 = ip
+      log_info { action: "q2_ipv6_from_interface", ip: local_ip6, ifname: bridge_ifname }
 
   -- Build IPv4 redirect URL
   if local_ip4

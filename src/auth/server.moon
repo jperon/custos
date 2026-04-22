@@ -460,7 +460,7 @@ make_server6 = (port) ->
   return nil unless ok6 and srv6
   srv6\setoption "reuseaddr", true
   srv6\setoption "ipv6-v6only", true
-  ok62, _err = srv6\bind "::", port
+  ok62, _err = pcall srv6.bind, srv6, "::", port
   unless ok62
     srv6\close!
     return nil
@@ -534,14 +534,17 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
                 peer_mac = mac
                 break
         -- Connexion HTTPS : enveloppe TLS puis logique d'authentification
+        -- Connexion HTTPS : enveloppe TLS puis logique d'authentification
         conn = ssl.wrap raw_client, ssl_ctx
         if conn
           ok_hs, _hs_err = conn\dohandshake!
           if ok_hs
             handle_connection conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac
           else
+            log_warn { action: "auth_handshake_failed", ip: peer_ip, err: _hs_err }
             conn\close!
         else
+          log_warn { action: "auth_ssl_wrap_failed", ip: peer_ip }
           raw_client\close!
 
 { :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE, :login_page, :register_page }

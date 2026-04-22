@@ -562,7 +562,7 @@ make_server6 = function(port)
   end
   srv6:setoption("reuseaddr", true)
   srv6:setoption("ipv6-v6only", true)
-  local ok62, _err = srv6:bind("::", port)
+  local ok62, _err = pcall(srv6.bind, srv6, "::", port)
   if not (ok62) then
     srv6:close()
     return nil
@@ -642,9 +642,18 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
           if ok_hs then
             handle_connection(conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
           else
+            log_warn({
+              action = "auth_handshake_failed",
+              ip = peer_ip,
+              err = _hs_err
+            })
             conn:close()
           end
         else
+          log_warn({
+            action = "auth_ssl_wrap_failed",
+            ip = peer_ip
+          })
           raw_client:close()
         end
       end

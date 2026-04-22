@@ -169,7 +169,6 @@ table bridge dns-filter-bridge {
     # All remaining unauthorised traffic → Q3 (forge RST or ICMP admin-prohibited).
     # Rate-limited to protect Q3 against floods; surplus is dropped silently.
     limit rate 10/second queue num 3
-    drop
   }
 
 }

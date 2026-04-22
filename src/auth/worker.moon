@@ -46,9 +46,7 @@ run_auth_worker = (auth_cfg) ->
   log_info { action: "auth_secrets_loaded", path: secrets_path, users: n_users }
 
   -- Handler SIGHUP : déclenche le rechargement des secrets
-  ffi.C.signal SIGHUP, ffi.cast("sighandler_t", ->
-    _reload_requested = true
-  )
+  ffi.C.signal SIGHUP, ffi.cast "sighandler_t", -> _reload_requested = true
 
   -- Closure de rechargement passée au serveur
   reload_fn = ->

@@ -265,51 +265,17 @@ run = function(auth_cfg)
       end
       local u = nil
       if not local_ip4 then
-        local ok_udp, u_or_err = pcall(function()
-          return socket.udp()
-        end)
+        local ok_udp, u_or_err = pcall(socket.udp)
         if ok_udp and u_or_err then
           u = u_or_err
         end
         if u then
-          local ok_conn, _ = pcall(function()
-            return u:connect("1.1.1.1", 80)
-          end)
+          local ok_conn, _ = pcall(u.connect, u, "1.1.1.1", 80)
           if ok_conn then
-            local ok_get, ip = pcall(function()
-              return u:getsockname()
-            end)
+            local ok_get, ip = pcall(u.getsockname, u)
             if ok_get and ip and ip ~= "" and ip ~= "0.0.0.0" then
               local_ip4 = ip
             end
-          end
-        end
-      end
-      if not local_ip6 then
-        if not (u) then
-          local ok_udp, u_or_err = pcall(function()
-            return socket.udp()
-          end)
-          if ok_udp and u_or_err then
-            u = u_or_err
-          end
-        end
-        if u then
-          local ok_conn6, _ = pcall(function()
-            return u:connect("2606:4700:4700::1111", 80)
-          end)
-          if ok_conn6 then
-            local ok_get6, ip = pcall(function()
-              return u:getsockname()
-            end)
-            if ok_get6 and ip and ip ~= "" and ip ~= "::" then
-              local_ip6 = ip
-            end
-          else
-            log_warn({
-              action = "q2_ipv6_connect_failed",
-              err = _ or "unknown"
-            })
           end
         end
       end
@@ -320,25 +286,21 @@ run = function(auth_cfg)
   end
   if not local_ip6 then
     local bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
-    local fh = io.open("/sys/class/net/" .. tostring(bridge_ifname) .. "/address", "r")
-    if fh then
-      fh:close()
-      local ok, ip = pcall(function()
-        local f = io.popen("ip -6 addr show dev " .. tostring(bridge_ifname) .. " scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1")
-        if f then
-          local addr = f:read("*a")
-          f:close()
-          return addr:gsub("%s+", "")
-        end
-      end)
-      if ok and ip and ip ~= "" and ip ~= "::" then
-        local_ip6 = ip
-        log_info({
-          action = "q2_ipv6_from_interface",
-          ip = local_ip6,
-          ifname = bridge_ifname
-        })
+    local ok, ip = pcall(function()
+      local f = io.popen("ip -6 addr show dev " .. tostring(bridge_ifname) .. " scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1")
+      if f then
+        local addr = f:read("*a")
+        f:close()
+        return addr:gsub("%s+", "")
       end
+    end)
+    if ok and ip and ip ~= "" and ip ~= "::" then
+      local_ip6 = ip
+      log_info({
+        action = "q2_ipv6_from_interface",
+        ip = local_ip6,
+        ifname = bridge_ifname
+      })
     end
   end
   if local_ip4 then

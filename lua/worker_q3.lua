@@ -22,6 +22,8 @@ do
 end
 local parse_tcp
 parse_tcp = require("ipparse.l4.tcp").parse
+local parse_udp
+parse_udp = require("ipparse.l4.udp").parse
 local flags
 flags = require("ipparse.l4.tcp").flags
 local RST, ACK
@@ -33,6 +35,7 @@ sp = require("ipparse.lib.pack_compat").pack
 local checksum
 checksum = require("ipparse.l3.lib").checksum
 local PROTO_TCP = ip_proto.TCP
+local PROTO_UDP = ip_proto.UDP
 local PROTO_ICMP = ip_proto.ICMP
 local PROTO_ICMPv6 = ip_proto.ICMPv6
 local ICMP4_TYPE = 3
@@ -132,6 +135,18 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
   local proto = ip.protocol or ip.next_header
   local src_ip = ip2s(ip.src)
   local dst_ip = ip2s(ip.dst)
+  local sport, dport = nil, nil
+  if proto == PROTO_TCP then
+    local tcp = parse_tcp(raw, l4_off)
+    if tcp then
+      sport, dport = tcp.spt, tcp.dpt
+    end
+  elseif proto == PROTO_UDP then
+    local udp = parse_udp(raw, l4_off)
+    if udp then
+      sport, dport = udp.spt, udp.dpt
+    end
+  end
   local forged, response_type
   local ok, err_or_frame = pcall(function()
     if proto == PROTO_TCP then
@@ -169,6 +184,8 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
     queue = 3,
     src = src_ip,
     dst = dst_ip,
+    sport = sport,
+    dport = dport,
     proto = proto,
     response = response_type
   })

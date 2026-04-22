@@ -16,6 +16,7 @@
 { :log_info, :log_warn } = require "log"
 parse: parse_ip, new: new_ip, proto: ip_proto = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
+parse: parse_udp = require "ipparse.l4.udp"
 { :flags } = require "ipparse.l4.tcp"
 { :RST, :ACK } = flags
 { :ip2s } = require "ipparse.l3.ip"
@@ -23,6 +24,7 @@ pack: sp = require "ipparse.lib.pack_compat"
 :checksum = require "ipparse.l3.lib"
 
 PROTO_TCP   = ip_proto.TCP    -- 6
+PROTO_UDP   = ip_proto.UDP    -- 17
 PROTO_ICMP  = ip_proto.ICMP   -- 1
 PROTO_ICMPv6 = ip_proto.ICMPv6 -- 58 (0x3A)
 
@@ -166,6 +168,16 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
   proto = ip.protocol or ip.next_header
   src_ip = ip2s ip.src
   dst_ip = ip2s ip.dst
+  sport, dport = nil, nil
+
+  if proto == PROTO_TCP
+    tcp = parse_tcp raw, l4_off
+    if tcp
+      sport, dport = tcp.spt, tcp.dpt
+  elseif proto == PROTO_UDP
+    udp = parse_udp raw, l4_off
+    if udp
+      sport, dport = udp.spt, udp.dpt
 
   local forged, response_type
   ok, err_or_frame = pcall ->
@@ -202,6 +214,8 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
     queue:    3
     src:      src_ip
     dst:      dst_ip
+    sport:    sport
+    dport:    dport
     proto:    proto
     response: response_type
   }
