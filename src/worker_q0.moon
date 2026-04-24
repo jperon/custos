@@ -93,16 +93,15 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       vlan:   l2.vlan
       ts:     os.time!
     }
-    allowed, reason = filter.decide req
+    allowed, reason, rule = filter.decide req
+    q_fields.reason = reason or (allowed == "dnsonly" and "dnsonly") or (allowed and "allowed") or "denied"
+    q_fields.rule = rule or ""
     if allowed == "dnsonly"
-      q_fields.reason = "dnsonly"
       log_allow q_fields
       dnsonly = true
     elseif allowed
-      q_fields.reason = nil
       log_allow q_fields
     else
-      q_fields.reason = reason or "denied"
       log_block q_fields
       verdict = NF_DROP
 

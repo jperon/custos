@@ -58,7 +58,7 @@ decide = function(req)
     log_warn({
       action = "filter_not_loaded"
     })
-    return false, "filter not loaded"
+    return false, "filter not loaded", nil
   end
   return _decide(rules, req)
 end

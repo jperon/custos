@@ -201,7 +201,7 @@ luarocks install moonscript
 
 **OpenWrt:**
 ```bash
-opkg install luajit lyaml libnetfilter-queue nftables
+apk install luajit lyaml libndpi libnetfilter-queue nftables
 # moonscript via luarocks or build from source
 ```
 

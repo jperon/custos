@@ -40,7 +40,7 @@ local generate_self_signed
 generate_self_signed = function(key_path, cert_path, sans)
   local cnf_path = "tmp/auth.cnf"
   local san_str = table.concat(sans, ",")
-  local config = " [ req ]\n" .. " distinguished_name = req_distinguished_name\n" .. " x509_extensions = v3_req\n" .. " prompt = no\n\n" .. " [ req_distinguished_name ]\n" .. " CN = custos\n\n" .. " [ v3_req ]\n" .. " basicConstraints = CA:FALSE\n" .. " keyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" .. " subjectAltName = " .. tostring(san_str) .. "\n"
+  local config = " [ req ]\n" .. " distinguished_name = req_distinguished_name\n" .. " x509_extensions = v3_req\n" .. " prompt = no\n\n" .. " [ req_distinguished_name ]\n" .. " CN = custos\n\n" .. " [ v3_req ]\n" .. " basicConstraints = CA:FALSE\n" .. " keyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" .. " extendedKeyUsage = serverAuth\n" .. " subjectKeyIdentifier = hash\n" .. " authorityKeyIdentifier = keyid:always,issuer:always\n" .. " subjectAltName = " .. tostring(san_str) .. "\n"
   local ok_w, err_w = pcall(function()
     local fh = io.open(cnf_path, "w")
     fh:write(config)
@@ -64,7 +64,6 @@ make_context = function(key_path, cert_path)
     key = key_path,
     certificate = cert_path,
     options = {
-      "all",
       "no_sslv2",
       "no_sslv3",
       "no_tlsv1",

@@ -1,7 +1,9 @@
-return function(cfg)
+local stolen_computer
+stolen_computer = function(cfg)
   return function(macs)
     local blacklist = { }
-    for _, mac in ipairs(macs) do
+    for _index_0 = 1, #macs do
+      local mac = macs[_index_0]
       blacklist[mac:lower()] = true
     end
     return function(req)
@@ -17,3 +19,4 @@ return function(cfg)
     end
   end
 end
+return stolen_computer

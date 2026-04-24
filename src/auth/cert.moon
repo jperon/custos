@@ -63,6 +63,9 @@ generate_self_signed = (key_path, cert_path, sans) ->
            " [ v3_req ]\n" ..
            " basicConstraints = CA:FALSE\n" ..
            " keyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" ..
+           " extendedKeyUsage = serverAuth\n" ..
+           " subjectKeyIdentifier = hash\n" ..
+           " authorityKeyIdentifier = keyid:always,issuer:always\n" ..
            " subjectAltName = #{san_str}\n"
   ok_w, err_w = pcall ->
     fh = io.open cnf_path, "w"
@@ -93,7 +96,7 @@ make_context = (key_path, cert_path) ->
     protocol:    "any"
     key:         key_path
     certificate: cert_path
-    options:     {"all", "no_sslv2", "no_sslv3", "no_tlsv1", "no_tlsv1_1"}
+    options:     {"no_sslv2", "no_sslv3", "no_tlsv1", "no_tlsv1_1"}
   }
   error "Échec création contexte TLS : #{err}" unless ctx
   ctx

@@ -11,12 +11,33 @@
 -- message après la fenêtre inclut le champ `suppressed=N`.
 
 { :ffi, :libc } = require "ffi_defs"
+{ :LOG_LEVEL } = require "config" -- Importer LOG_LEVEL de config.moon
 
 bit = require "bit"
 
 STDOUT_FILENO = 1
 
 ts  = ffi.new "timespec_t"
+
+-- Mappage des niveaux de log vers des valeurs numériques
+-- (Plus la valeur est élevée, plus le log est verbeux)
+LOG_LEVEL_MAP = {
+  ERROR: 5,
+  WARN:  4,
+  INFO:  3,
+  DEBUG: 2,
+  TRACE: 1,
+  ALLOW: 3, -- Par défaut, ALLOW est au niveau INFO
+  BLOCK: 3  -- Par défaut, BLOCK est au niveau INFO
+}
+
+-- Niveau de log configuré, converti en numérique
+CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[LOG_LEVEL] or LOG_LEVEL_MAP.INFO
+
+--- Retourne la valeur numérique d'un niveau de log.
+-- @tparam string level Niveau de log (ex: "INFO", "WARN")
+-- @treturn number Valeur numérique du niveau, ou 0 si inconnu
+get_log_level_num = (level) -> LOG_LEVEL_MAP[level] or 0
 
 -- ── Rate-limiting ─────────────────────────────────────────────────
 -- Clés discriminantes et fenêtre (secondes) par action ou niveau de log.
@@ -74,10 +95,14 @@ now = ->
 
 --- Écrit une ligne de log structurée.
 -- Format : [epoch] [pid] LEVEL k1=v1 k2=v2 ...
--- @tparam string level  Niveau de log : "INFO", "ALLOW", "BLOCK", "WARN", "ERROR"
+-- @tparam string level  Niveau de log : "ERROR", "WARN", "INFO", "DEBUG", "TRACE", "ALLOW", "BLOCK"
 -- @tparam table  fields Table de champs clé=valeur à inclure dans la ligne
 -- @treturn nil
 write_log = (level, fields) ->
+  -- Filtrer selon le niveau de log configuré
+  if get_log_level_num(level) < CURRENT_LOG_LEVEL_NUM
+    return
+
   libc.clock_gettime 0, ts   -- remplit ts utilisé par check_rl
   epoch = tonumber ts.tv_sec
   pid   = tonumber ffi.C.getpid()
@@ -98,7 +123,7 @@ write_log = (level, fields) ->
   line = table.concat(parts, " ") .. "\n"
   libc.write STDOUT_FILENO, line, #line
 
---- Raccourcis sémantiques vers write_log.
+--- Raccourcis sémantiques vers write_log avec niveaux prédéfinis.
 -- @tparam table fields Table de champs clé=valeur
 -- @treturn nil
 log_allow = (fields) -> write_log "ALLOW", fields
@@ -115,4 +140,12 @@ log_warn  = (fields) -> write_log "WARN",  fields
 -- @treturn nil
 log_error = (fields) -> write_log "ERROR", fields
 
-{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :now }
+--- @tparam table fields Table de champs clé=valeur
+-- @treturn nil
+log_debug = (fields) -> write_log "DEBUG", fields
+
+--- @tparam table fields Table de champs clé=valeur
+-- @treturn nil
+log_trace = (fields) -> write_log "TRACE", fields
+
+{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num }

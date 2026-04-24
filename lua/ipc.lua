@@ -21,6 +21,7 @@ local MSG_IPV4_REFUSED = 0x52
 local MSG_IPV6_REFUSED = 0x72
 local MSG_IPV4_DNSONLY = 0x44
 local MSG_IPV6_DNSONLY = 0x64
+local RESOLVER_IPV6_FLAG = 0x80
 local write_with_retry
 write_with_retry = function(pipe_wfd, msg)
   local sleep_req = timespec_ptr_t()
@@ -67,23 +68,28 @@ end
 local encode_msg
 encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly)
   local buf = ffi.new("uint8_t[43]")
+  local msg_type
   if #ip_raw == 4 then
     if dnsonly then
-      buf[0] = MSG_IPV4_DNSONLY
+      msg_type = MSG_IPV4_DNSONLY
     elseif refused then
-      buf[0] = MSG_IPV4_REFUSED
+      msg_type = MSG_IPV4_REFUSED
     else
-      buf[0] = MSG_IPV4
+      msg_type = MSG_IPV4
     end
   else
     if dnsonly then
-      buf[0] = MSG_IPV6_DNSONLY
+      msg_type = MSG_IPV6_DNSONLY
     elseif refused then
-      buf[0] = MSG_IPV6_REFUSED
+      msg_type = MSG_IPV6_REFUSED
     else
-      buf[0] = MSG_IPV6
+      msg_type = MSG_IPV6
     end
   end
+  if #resolver_ip_raw == 16 then
+    msg_type = bit.bor(msg_type, RESOLVER_IPV6_FLAG)
+  end
+  buf[0] = msg_type
   buf[1] = bit.rshift(bit.band(txid, 0xFF00), 8)
   buf[2] = bit.band(txid, 0xFF)
   for i = 1, #ip_raw do
@@ -121,7 +127,9 @@ decode_msg = function(raw)
   if #raw < IPC_MSG_SIZE then
     return nil
   end
-  local msg_type = raw:byte(1)
+  local msg_type_full = raw:byte(1)
+  local msg_type = bit.band(msg_type_full, 0x7F)
+  local resolver_ipv6 = (bit.band(msg_type_full, RESOLVER_IPV6_FLAG) ~= 0)
   local txid = bit.bor(bit.lshift(raw:byte(2), 8), raw:byte(3))
   local src_port = bit.bor(bit.lshift(raw:byte(20), 8), raw:byte(21))
   local ipv4 = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV4_DNSONLY)
@@ -139,15 +147,15 @@ decode_msg = function(raw)
     ip_str = ffi.string(ipv6_ntop_buf)
   end
   local resolver_ip_str
-  if raw:byte(32) == 0 and raw:byte(33) == 0 and raw:byte(34) == 0 and raw:byte(35) == 0 and raw:byte(36) == 0 and raw:byte(37) == 0 and raw:byte(38) == 0 and raw:byte(39) == 0 and raw:byte(40) == 0 and raw:byte(41) == 0 and raw:byte(42) == 0 and raw:byte(43) == 0 then
-    resolver_ip_str = tostring(raw:byte(28)) .. "." .. tostring(raw:byte(29)) .. "." .. tostring(raw:byte(30)) .. "." .. tostring(raw:byte(31))
-  else
+  if resolver_ipv6 then
     local resolver_ip_bytes = ffi.new("uint8_t[16]")
     for i = 0, 15 do
       resolver_ip_bytes[i] = raw:byte(28 + i)
     end
     libc.inet_ntop(AF_INET6, resolver_ip_bytes, ipv6_ntop_buf, 46)
     resolver_ip_str = ffi.string(ipv6_ntop_buf)
+  else
+    resolver_ip_str = tostring(raw:byte(28)) .. "." .. tostring(raw:byte(29)) .. "." .. tostring(raw:byte(30)) .. "." .. tostring(raw:byte(31))
   end
   local mac_str = string.format("%02x:%02x:%02x:%02x:%02x:%02x", raw:byte(22), raw:byte(23), raw:byte(24), raw:byte(25), raw:byte(26), raw:byte(27))
   return {

@@ -35,6 +35,7 @@ DEFAULTS = {
     "local", "lan", "home.arpa"
   }
   dest_whitelist:         {}  -- Empty by default, configured via UCI
+  log_level:              "INFO" -- Nouvelle valeur par défaut pour log_level
 }
 
 -- ── Lecture UCI ───────────────────────────────────────────────────
@@ -141,6 +142,18 @@ validate_ip_cidr = (s) ->
       return nil unless mask and mask >= 0 and mask <= 32
   s
 
+--- Valide un niveau de log (ERROR, WARN, INFO, DEBUG, TRACE).
+-- @tparam string|nil raw Valeur brute UCI
+-- @tparam string default Valeur par défaut
+-- @treturn string
+validate_log_level = (raw, default) ->
+  return default unless raw
+  raw = raw\upper!() -- Convertir en majuscules pour la comparaison
+  valid_levels = {"ERROR": true, "WARN": true, "INFO": true, "DEBUG": true, "TRACE": true}
+  return raw if valid_levels[raw]
+  io.stderr\write "uci_config: log_level invalide '#{raw}', utilise '#{default}'\n"
+  default
+
 -- ── Génération Lua ────────────────────────────────────────────────
 
 --- Échappe une chaîne pour inclusion dans un littéral Lua entre guillemets doubles.
@@ -186,6 +199,7 @@ generate_config = (cfg) ->
     "local AF_INET6               = 10"
     "local PROTO_UDP              = 17"
     string.format 'local AUTH_SESSIONS_FILE     = "%s"', escape_lua_str cfg.auth_sessions_file
+    string.format 'local LOG_LEVEL              = "%s"', cfg.log_level -- Nouvelle ligne pour LOG_LEVEL
     ""
     "local ALLOWED_DOMAINS = {"
   }
@@ -213,7 +227,8 @@ generate_config = (cfg) ->
       "AF_INET6", "PROTO_UDP", "AUTH_SESSIONS_FILE",
       "NFT_ADD_RETRY_COUNT", "NFT_ADD_BACKOFF_MS",
       "NFT_ADD_FAILURE_POLICY", "IPC_MATCH_RETRY_ENABLED", "IPC_MATCH_RETRY_COUNT",
-      "IPC_MATCH_RETRY_SLEEP_MS"
+      "IPC_MATCH_RETRY_SLEEP_MS",
+      "LOG_LEVEL" -- Nouvelle constante exportée
     }
     table.insert lines, string.format("  %-24s = %s,", k, k)
   table.insert lines, "}"
@@ -252,8 +267,9 @@ main = ->
     ipc_match_retry_sleep_ms: validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms)
     auth_sessions_file:     uci_get("auth_sessions_file")              or DEFAULTS.auth_sessions_file
     allowed_domains:        domains
-  dest_whitelist:         whitelist
-  nft_extra_rules:         uci_get_list "nft_extra_rules"
+    dest_whitelist:         whitelist
+    nft_extra_rules:         uci_get_list "nft_extra_rules"
+    log_level:              validate_log_level(uci_get("log_level"),                  DEFAULTS.log_level) -- Nouvelle ligne pour log_level
 }
 
   -- Création du répertoire de sortie (tmpfs sur OpenWrt, recréé après chaque reboot)

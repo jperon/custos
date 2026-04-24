@@ -1,9 +1,9 @@
 local LIBVIRT_SCRIPT = "libvirt/custos-libvirt.sh"
 local CLIENT_VM = "custos-client"
-local FILTER_USER = "debian"
-local SSH_KEY = (os.getenv("HOME")) .. "/.ssh/id_rsa"
+local FILTER_USER = "root"
+local SSH_KEY = (os.getenv("SSH_KEY")) or ((os.getenv("HOME")) .. "/.ssh/id_rsa")
 local SSH_OPTS = "-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes"
-local DNS_SERVER = "192.168.200.1"
+local DNS_SERVER = "10.99.0.1"
 local DOMAIN_ALLOWED = "github.com"
 local DOMAIN_AAAA = "cloudflare.com"
 local DOMAIN_BLOCKED = "facebook.com"
@@ -166,20 +166,55 @@ print(tostring(C.bold) .. "[1/4] Locating filter VM..." .. tostring(C.reset))
 local FILTER_IP = filter_ip()
 print("  Filter management IP: " .. tostring(FILTER_IP))
 print(tostring(C.bold) .. "[2/4] Syncing lua/ + nft-rules/ + cfg/ to filter VM..." .. tostring(C.reset))
-ssh_check(FILTER_IP, "sudo mkdir -p /opt/custos/lua /opt/custos/nft-rules /opt/custos/cfg /opt/custos/tmp && sudo chown -R " .. tostring(FILTER_USER) .. ":" .. tostring(FILTER_USER) .. " /opt/custos")
+ssh_check(FILTER_IP, "mkdir -p /opt/custos/lua /opt/custos/nft-rules /opt/custos/cfg /opt/custos/tmp && chown -R " .. FILTER_USER .. ":" .. FILTER_USER .. " /opt/custos")
 local ssh_opts_inline = SSH_OPTS:gsub("\n", " ")
 run_check("rsync -az --delete -e 'ssh " .. tostring(ssh_opts_inline) .. " -i " .. tostring(SSH_KEY) .. "' lua/ " .. tostring(FILTER_USER) .. "@" .. tostring(FILTER_IP) .. ":/opt/custos/lua/")
 run_check("rsync -az --delete -e 'ssh " .. tostring(ssh_opts_inline) .. " -i " .. tostring(SSH_KEY) .. "' nft-rules/ " .. tostring(FILTER_USER) .. "@" .. tostring(FILTER_IP) .. ":/opt/custos/nft-rules/")
-run_check("rsync -az --delete -e 'ssh " .. tostring(ssh_opts_inline) .. " -i " .. tostring(SSH_KEY) .. "' cfg/ " .. tostring(FILTER_USER) .. "@" .. tostring(FILTER_IP) .. ":/opt/custos/cfg/")
+-- Deploy filter configuration and secrets to /etc/custos
+ssh_check(FILTER_IP, "mkdir -p /etc/custos")
+run_check("scp -O " .. SSH_OPTS .. " -i " .. SSH_KEY .. " libvirt/filter.yml " .. FILTER_USER .. "@" .. FILTER_IP .. ":/etc/custos/filter.yml")
+run_check("scp -O " .. SSH_OPTS .. " -i " .. SSH_KEY .. " cfg/secrets " .. FILTER_USER .. "@" .. FILTER_IP .. ":/etc/custos/secrets")
+
+-- Install required system packages on the OpenWrt filter VM (luajit, libs, nftables)
+print("  Installing required packages on filter VM...")
+local pkg_mgr_cmd = "if command -v apk >/dev/null 2>&1; then echo apk; elif command -v opkg >/dev/null 2>&1; then echo opkg; else echo none; fi"
+local _, pkg_mgr_out = ssh(FILTER_IP, pkg_mgr_cmd)
+local pkg_mgr = (pkg_mgr_out or ""):gsub("%s+", "")
+if pkg_mgr == "none" then
+  error("No package manager (apk/opkg) found on filter VM")
+end
+if pkg_mgr == "apk" then
+  ssh(FILTER_IP, "apk update 2>/dev/null || true")
+else
+  ssh(FILTER_IP, "opkg update 2>/dev/null || true")
+end
+local pkgs = "luajit libnetfilter-queue nftables kmod-nft-queue lyaml luasec libxxhash openssl-util libndpi"
+local install_cmd = (pkg_mgr == "apk") and ("apk add " .. pkgs) or ("opkg install -y " .. pkgs)
+local ok_install, install_out = ssh(FILTER_IP, install_cmd .. " 2>&1")
+if not ok_install then
+  error("Package installation failed on filter VM:\n" .. (install_out or ""))
+end
+
+-- Ensure testuser exists for authentication tests
+print("  Ensuring testuser exists in /etc/custos/secrets...")
+ssh(FILTER_IP, "chmod 600 /etc/custos/secrets 2>/dev/null || true")
+local _, user_check = ssh(FILTER_IP, "grep -q '^testuser:' /etc/custos/secrets 2>/dev/null && echo exists || echo missing")
+if user_check and user_check:match("missing") then
+  local lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/opt/custos/lua/?.lua;/opt/custos/lua/?/init.lua;;"
+  local reg_cmd = "LUA_PATH=\"" .. lua_path .. "\" luajit -e \"local c=require'auth.credentials'; c.register_user('testuser','testpass','/etc/custos/secrets',{})\""
+  local ok_reg, reg_out = ssh(FILTER_IP, reg_cmd .. " 2>&1")
+  if not ok_reg then
+    error("Failed to create testuser: " .. (reg_out or ""))
+  end
+end
+
 print(tostring(C.bold) .. "[3/4] Loading nft rules and starting LuaJIT..." .. tostring(C.reset))
-ssh(FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; true")
+ssh(FILTER_IP, "for pid in $(pgrep -f luajit 2>/dev/null); do kill $pid 2>/dev/null; done; true")
 os.execute("sleep 2")
-ssh(FILTER_IP, "sudo nft flush ruleset 2>/dev/null; true")
-print("  Installing lua-yaml, lua-socket, lua-sec, openssl on filter VM...")
-ssh(FILTER_IP, "sudo apt-get install -y -q lua-yaml lua-socket lua-sec openssl 2>&1 | tail -3; true")
-ssh(FILTER_IP, "> /tmp/custos-kvm.log; sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true")
-ssh_check(FILTER_IP, "sudo nft -f /opt/custos/nft-rules/dns-filter.nft")
-ssh_check(FILTER_IP, "nohup sudo sh -c 'cd /opt/custos && LUA_PATH=\"lua/?.lua;lua/?/init.lua;;\" luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &")
+ssh(FILTER_IP, "nft flush ruleset 2>/dev/null; true")
+ssh(FILTER_IP, "> /tmp/custos-kvm.log; truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true")
+ssh_check(FILTER_IP, "nft -f /opt/custos/nft-rules/dns-filter-bridge.nft")
+ssh_check(FILTER_IP, "nohup sh -c 'cd /opt/custos && LUA_PATH=\"/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;lua/?.lua;lua/?/init.lua;;\" luajit lua/main.lua' </dev/null >>/tmp/custos-kvm.log 2>&1 &")
 os.execute("sleep 5")
 local ok_luajit, _ = ssh(FILTER_IP, "pgrep -f 'luajit.*main' >/dev/null")
 print("  LuaJIT: " .. tostring(ok_luajit and (C.green .. 'running' .. C.reset) or (C.red .. 'NOT running' .. C.reset)))
@@ -198,8 +233,8 @@ for _ = 1, 30 do
   os.execute("sleep 1")
 end
 print("  Auth: " .. tostring(auth_ready and (C.green .. 'ready' .. C.reset) or (C.yellow .. 'not ready (auth tests may fail)' .. C.reset)))
-print("  Adding IPv6 " .. tostring(FILTER_IPV6) .. "/64 to filter br0...")
-ssh(FILTER_IP, "sudo ip addr add " .. tostring(FILTER_IPV6) .. "/64 dev br0 2>/dev/null; true")
+print("  Adding IPv6 " .. tostring(FILTER_IPV6) .. "/64 to filter br-lan...")
+ssh(FILTER_IP, "ip addr add " .. tostring(FILTER_IPV6) .. "/64 dev br-lan 2>/dev/null; true")
 print("  Waiting for client guest agent...")
 run_check("bash " .. tostring(LIBVIRT_SCRIPT) .. " wait-agents")
 local iface_raw
@@ -208,9 +243,9 @@ local CLIENT_IFACE = (iface_raw or ""):gsub("%s+", "")
 CLIENT_IFACE = #CLIENT_IFACE > 0 and CLIENT_IFACE or "eth0"
 print("  Client interface: " .. tostring(CLIENT_IFACE))
 print("  Adding IPv6 " .. tostring(CLIENT_IPV6) .. "/64 to client " .. tostring(CLIENT_IFACE) .. "...")
-guest_exec("sudo ip addr add " .. tostring(CLIENT_IPV6) .. "/64 dev " .. tostring(CLIENT_IFACE) .. " 2>/dev/null; true", 5)
+guest_exec("ip addr add " .. tostring(CLIENT_IPV6) .. "/64 dev " .. tostring(CLIENT_IFACE) .. " 2>/dev/null; true", 5)
 print("  Adding client2 alias " .. tostring(CLIENT2_IP) .. "/24 to client " .. tostring(CLIENT_IFACE) .. "...")
-guest_exec("sudo ip addr add " .. tostring(CLIENT2_IP) .. "/24 dev " .. tostring(CLIENT_IFACE) .. " 2>/dev/null; true", 5)
+guest_exec("ip addr add " .. tostring(CLIENT2_IP) .. "/24 dev " .. tostring(CLIENT_IFACE) .. " 2>/dev/null; true", 5)
 os.execute("sleep 1")
 local c_addr_out
 _, c_addr_out = guest_exec("ip addr show dev " .. tostring(CLIENT_IFACE), 5)
@@ -225,7 +260,7 @@ guest_exec("ping6 -c3 -W1 " .. tostring(FILTER_IPV6) .. " 2>/dev/null; true", 8)
 local neigh_ok = false
 for _ = 1, 15 do
   local n_out
-  _, n_out = ssh(FILTER_IP, "ip -6 neigh show dev br0 2>/dev/null")
+  _, n_out = ssh(FILTER_IP, "ip -6 neigh show dev br-lan 2>/dev/null")
   if n_out and n_out:match(CLIENT_IPV6) then
     neigh_ok = true
     break
@@ -245,25 +280,25 @@ print("")
 print(tostring(C.bold) .. "[4/4] Running tests" .. tostring(C.reset))
 print("")
 print(tostring(C.bold) .. "▶ Bridge infrastructure" .. tostring(C.reset))
-local ok_br, br_out = ssh(FILTER_IP, "ip link show br0")
-report("br0 bridge exists and is UP", (ok_br and br_out:match("UP")) ~= nil, br_out or "")
+local ok_br, br_out = ssh(FILTER_IP, "ip link show br-lan")
+report("br-lan bridge exists and is UP", (ok_br and br_out:match("UP")) ~= nil, br_out or "")
 local ok_sc, sc_out = ssh(FILTER_IP, "cat /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null")
 report("bridge-nf-call-iptables = 1", (ok_sc and sc_out:match("1")) ~= nil, sc_out or "")
-local ok_nft, nft_out = ssh(FILTER_IP, "sudo nft list tables")
+local ok_nft, nft_out = ssh(FILTER_IP, "nft list tables")
 report("dns-filter tables loaded", (ok_nft and nft_out:match("dns%-filter")) ~= nil, nft_out or "")
-local ok_rs, rs_out = ssh(FILTER_IP, "sudo nft list chain ip dns-filter forward 2>/dev/null")
+local ok_rs, rs_out = ssh(FILTER_IP, "nft list chain bridge dns-filter-bridge forward 2>/dev/null")
 report("DHCPv4 forward — udp dport { 67, 68 } accept", (ok_rs and rs_out:match("67")) ~= nil, "")
-local ok_ri, ri_out = ssh(FILTER_IP, "sudo nft list chain ip dns-filter input 2>/dev/null")
+local ok_ri, ri_out = ssh(FILTER_IP, "nft list chain bridge dns-filter-bridge forward 2>/dev/null")
 report("DHCPv4 input — udp dport 67 accept", (ok_ri and ri_out:match("67")) ~= nil, "")
-local ok_6s, s6_out = ssh(FILTER_IP, "sudo nft list chain ip6 dns-filter forward 2>/dev/null")
+local ok_6s, s6_out = ssh(FILTER_IP, "nft list chain bridge dns-filter-bridge forward 2>/dev/null")
 report("DHCPv6 forward — udp dport { 546, 547 } accept", (ok_6s and s6_out:match("546")) ~= nil, "")
 report("SLAAC RA forward — nd-router-advert accept", (ok_6s and s6_out:match("nd%-router%-advert")) ~= nil, "")
-local ok_6i, i6_out = ssh(FILTER_IP, "sudo nft list chain ip6 dns-filter input 2>/dev/null")
+local ok_6i, i6_out = ssh(FILTER_IP, "nft list chain bridge dns-filter-bridge forward 2>/dev/null")
 report("DHCPv6 input — udp dport 547 accept", (ok_6i and i6_out:match("547")) ~= nil, "")
 print("")
 print(tostring(C.bold) .. "▶ DNS autorisé + ping avant/après (" .. tostring(DOMAIN_ALLOWED) .. ")" .. tostring(C.reset))
-ssh(FILTER_IP, "sudo nft flush set ip  dns-filter ip4_allowed 2>/dev/null; true")
-ssh(FILTER_IP, "sudo nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
+ssh(FILTER_IP, "nft flush set ip  dns-filter ip4_allowed 2>/dev/null; true")
+ssh(FILTER_IP, "nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
 if github_ip then
   local ok_before
   ok_before, _ = ping_from(CLIENT_IP, github_ip, 2)
@@ -274,7 +309,7 @@ local has_ip = dig_out and dig_out:match("%d+%.%d+%.%d+%.%d+")
 local dig_str = (dig_out or ""):gsub("%s+", " ")
 report("dig " .. tostring(DOMAIN_ALLOWED) .. " retourne un enregistrement A", has_ip ~= nil, "dig: " .. tostring(dig_str))
 os.execute("sleep 1")
-local ok_s, set_out = ssh(FILTER_IP, "sudo nft list set ip dns-filter ip4_allowed")
+local ok_s, set_out = ssh(FILTER_IP, "nft list set ip dns-filter ip4_allowed")
 local allowed_ip = nft_dest_for(set_out, CLIENT_IP)
 report("ip4_allowed peuplé après " .. tostring(DOMAIN_ALLOWED), (ok_s and allowed_ip) ~= nil, set_out or "nft error")
 if allowed_ip then
@@ -290,7 +325,7 @@ local ok_curl_https, https_code = curl_from("https://" .. tostring(DOMAIN_ALLOWE
 report("curl https://" .. tostring(DOMAIN_ALLOWED) .. "/ après résolution : succès attendu", ok_curl_https, "HTTP " .. tostring(https_code))
 print("")
 print(tostring(C.bold) .. "▶ DNS refusé + ping avant/après (" .. tostring(DOMAIN_BLOCKED) .. ")" .. tostring(C.reset))
-ssh(FILTER_IP, "sudo nft flush set ip dns-filter ip4_allowed 2>/dev/null; true")
+ssh(FILTER_IP, "nft flush set ip dns-filter ip4_allowed 2>/dev/null; true")
 if facebook_ip then
   local ok_fb_before
   ok_fb_before, _ = ping_from(CLIENT_IP, facebook_ip, 2)
@@ -302,7 +337,7 @@ local blk_str = (blk_out or ""):gsub("%s+$", "")
 report("dig " .. tostring(DOMAIN_BLOCKED) .. " retourne REFUSED", (blk_out and blk_out:lower():match("refused")) ~= nil, "dig: " .. tostring(blk_str))
 os.execute("sleep 1")
 local blk_set_out
-_, blk_set_out = ssh(FILTER_IP, "sudo nft list set ip dns-filter ip4_allowed")
+_, blk_set_out = ssh(FILTER_IP, "nft list set ip dns-filter ip4_allowed")
 report("ip4_allowed vide après DNS refusé (" .. tostring(DOMAIN_BLOCKED) .. ")", not (blk_set_out and blk_set_out:match("%d+%.%d+%.%d+%.%d+")), blk_set_out or "")
 if facebook_ip then
   local ok_fb_after
@@ -319,13 +354,13 @@ local unk_str = (unk_out or ""):gsub("%s+$", "")
 report("dig " .. tostring(DOMAIN_UNKNOWN) .. " retourne NXDOMAIN", (unk_out and unk_out:upper():match("NXDOMAIN")) ~= nil, "dig: " .. tostring(unk_str))
 print("")
 print(tostring(C.bold) .. "▶ Enregistrements AAAA → ip6_allowed (" .. tostring(DOMAIN_AAAA) .. ")" .. tostring(C.reset))
-ssh(FILTER_IP, "sudo nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
+ssh(FILTER_IP, "nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
 local ok_aaaa, aaaa_out = dig_from(CLIENT_IP, DOMAIN_AAAA, "AAAA", 15)
 local aaaa_str = (aaaa_out or ""):gsub("%s+", " ")
 local has_aaaa = aaaa_out and aaaa_out:match("[0-9a-f]+:[0-9a-f:]+")
 if has_aaaa then
   os.execute("sleep 1")
-  local ok_s6, set6_out = ssh(FILTER_IP, "sudo nft list set ip6 dns-filter ip6_allowed")
+  local ok_s6, set6_out = ssh(FILTER_IP, "nft list set ip6 dns-filter ip6_allowed")
   local s6_str = (set6_out or ""):gsub("%s+", " ")
   report("ip6_allowed peuplé après résolution AAAA " .. tostring(DOMAIN_AAAA), (ok_s6 and set6_out:match("[0-9a-f]+:[0-9a-f:]+")) ~= nil, s6_str)
 else
@@ -333,13 +368,13 @@ else
 end
 print("")
 print(tostring(C.bold) .. "▶ Isolation par client (client1=" .. tostring(CLIENT_IP) .. ", client2=" .. tostring(CLIENT2_IP) .. ")" .. tostring(C.reset))
-ssh(FILTER_IP, "sudo nft flush set ip dns-filter ip4_allowed 2>/dev/null; true")
+ssh(FILTER_IP, "nft flush set ip dns-filter ip4_allowed 2>/dev/null; true")
 local ok_c1, c1_out = dig_from(CLIENT_IP, DOMAIN_ALLOWED)
 local c1_has_ip = c1_out and c1_out:match("%d+%.%d+%.%d+%.%d+")
 report("client1 (" .. tostring(CLIENT_IP) .. ") résout " .. tostring(DOMAIN_ALLOWED), c1_has_ip ~= nil, (c1_out or ""):gsub("%s+", " "))
 os.execute("sleep 1")
 local cs_out
-_, cs_out = ssh(FILTER_IP, "sudo nft list set ip dns-filter ip4_allowed")
+_, cs_out = ssh(FILTER_IP, "nft list set ip dns-filter ip4_allowed")
 local c1_dest = nft_dest_for(cs_out, CLIENT_IP)
 if c1_dest then
   local ok_c1ping, c1ping_out = ping_from(CLIENT_IP, c1_dest, 4)
@@ -352,7 +387,7 @@ if c1_dest then
   report("client2 (" .. tostring(CLIENT2_IP) .. ") résout " .. tostring(DOMAIN_ALLOWED), c2_has_ip ~= nil, (c2_out or ""):gsub("%s+", " "))
   os.execute("sleep 1")
   local cs2_out
-  _, cs2_out = ssh(FILTER_IP, "sudo nft list set ip dns-filter ip4_allowed")
+  _, cs2_out = ssh(FILTER_IP, "nft list set ip dns-filter ip4_allowed")
   local c2_dest = nft_dest_for(cs2_out, CLIENT2_IP)
   if c2_dest then
     local ok_c2ping_after, c2ping2_out = ping_from(CLIENT2_IP, c2_dest, 4)
@@ -375,7 +410,7 @@ local FILTER_LAN_IP = "10.99.0.254"
 local AUTH_URL = "https://" .. tostring(FILTER_LAN_IP) .. ":33443"
 print("")
 print(tostring(C.bold) .. "▶ Authentification HTTPS (" .. tostring(AUTH_URL) .. ")" .. tostring(C.reset))
-ssh(FILTER_IP, "sudo truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true")
+ssh(FILTER_IP, "truncate -s0 /opt/custos/tmp/sessions.lua 2>/dev/null; true")
 local auth_curl_kvm
 auth_curl_kvm = function(method, path, data)
   local data_flag
@@ -394,7 +429,7 @@ local ok_ok, ok_code = auth_curl_kvm("POST", "/login", "user=testuser&password=t
 ok_code = (ok_code or ""):gsub("%s+", "")
 report("Auth — identifiants valides → 200", ok_code == "200", "HTTP " .. tostring(ok_code))
 local sess_out
-_, sess_out = ssh(FILTER_IP, "sudo cat /opt/custos/tmp/sessions.lua 2>/dev/null")
+_, sess_out = ssh(FILTER_IP, "cat /opt/custos/tmp/sessions.lua 2>/dev/null")
 report("Auth — sessions.lua contient testuser + IP client", (sess_out and sess_out:match("testuser") and sess_out:match("10.99.0.10")) ~= nil, (sess_out or "(absent)"):sub(1, 120))
 local ok_ping, ping_code = auth_curl_kvm("GET", "/ping")
 ping_code = (ping_code or ""):gsub("%s+", "")
@@ -432,12 +467,12 @@ report("Portail captif — sonde Android /generate_204 → 302", g204_code == "3
 auth_curl_kvm("POST", "/login", "user=testuser&password=testpass")
 os.execute("sleep 1")
 local auth_nft_out
-_, auth_nft_out = ssh(FILTER_IP, "sudo nft list set ip dns-filter authenticated_ips 2>/dev/null")
+_, auth_nft_out = ssh(FILTER_IP, "nft list set ip dns-filter authenticated_ips 2>/dev/null")
 report("Portail captif — IP dans authenticated_ips après login", (auth_nft_out and auth_nft_out:match("10.99.0.10")) ~= nil, (auth_nft_out or "(absent)"):sub(1, 120))
 auth_curl_kvm("GET", "/logout")
 os.execute("sleep 1")
 local auth_nft_out2
-_, auth_nft_out2 = ssh(FILTER_IP, "sudo nft list set ip dns-filter authenticated_ips 2>/dev/null")
+_, auth_nft_out2 = ssh(FILTER_IP, "nft list set ip dns-filter authenticated_ips 2>/dev/null")
 report("Portail captif — IP retirée de authenticated_ips après logout", (auth_nft_out2 == nil or auth_nft_out2:match("10.99.0.10") == nil), (auth_nft_out2 or "(set vide)"):sub(1, 120))
 print("")
 print(tostring(C.bold) .. "▶ DNS over TCP + TTL patching" .. tostring(C.reset))
@@ -457,7 +492,7 @@ os.execute("sleep 1")
 local ok_dnat, dnat_code = guest_exec("curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 5 http://1.2.3.4/ 2>&1", 10)
 dnat_code = (dnat_code or ""):gsub("%s+", "")
 report("DNAT — TCP port 80 non authentifié → 302", dnat_code == "302", "HTTP " .. tostring(dnat_code))
-ssh(FILTER_IP, "for pid in $(sudo pgrep -f luajit 2>/dev/null); do sudo kill $pid 2>/dev/null; done; sudo nft flush ruleset 2>/dev/null; true")
+ssh(FILTER_IP, "for pid in $(pgrep -f luajit 2>/dev/null); do kill $pid 2>/dev/null; done; nft flush ruleset 2>/dev/null; true")
 print("")
 print((string.rep("─", 50)))
 local fail_color = tests_failed > 0 and C.red or C.grey

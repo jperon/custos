@@ -21,10 +21,10 @@ do
   local _obj_0 = require("ipc")
   drain_pipe, is_pending, get_pending_entry, consume = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.get_pending_entry, _obj_0.consume
 end
-local parse, pack, parse_header, pack_header, parse_question, pack_question, parse_questions, parse_rr, pack_rr, parse_rrs, NXDOMAIN, A, AAAA, ede_codes
+local parse, pack, parse_header, pack_header, parse_question, pack_question, parse_questions, parse_rr, pack_rr, parse_rrs, REFUSED, A, AAAA, ede_codes
 do
   local _obj_0 = require("ipparse.l7.dns")
-  parse, pack, parse_header, pack_header, parse_question, pack_question, parse_questions, parse_rr, pack_rr, parse_rrs, NXDOMAIN, A, AAAA, ede_codes = _obj_0.parse, _obj_0.pack, _obj_0.parse_header, _obj_0.pack_header, _obj_0.parse_question, _obj_0.pack_question, _obj_0.parse_questions, _obj_0.parse_rr, _obj_0.pack_rr, _obj_0.parse_rrs, _obj_0.rcodes.NXDOMAIN, _obj_0.types.A, _obj_0.types.AAAA, _obj_0.ede_codes
+  parse, pack, parse_header, pack_header, parse_question, pack_question, parse_questions, parse_rr, pack_rr, parse_rrs, REFUSED, A, AAAA, ede_codes = _obj_0.parse, _obj_0.pack, _obj_0.parse_header, _obj_0.pack_header, _obj_0.parse_question, _obj_0.pack_question, _obj_0.parse_questions, _obj_0.parse_rr, _obj_0.pack_rr, _obj_0.parse_rrs, _obj_0.rcodes.REFUSED, _obj_0.types.A, _obj_0.types.AAAA, _obj_0.ede_codes
 end
 local add_ip4, add_ip6, add_mac4, add_mac6
 do
@@ -80,7 +80,7 @@ build_blocked_response = function(dns_orig, dns_raw)
   if not (dns) then
     return nil
   end
-  dns.header.rcode = NXDOMAIN
+  dns.header.rcode = REFUSED
   dns.answers = { }
   if dns.question and dns.question.qtype then
     local qtype = dns.question.qtype

@@ -1884,9 +1884,11 @@ local TEST_RULES_CFG = {
   {
     description = "Infra locale toujours OK",
     conditions = {
-      to_domains = {
-        "local",
-        "home.arpa"
+      {
+        to_domains = {
+          "local",
+          "home.arpa"
+        }
       }
     },
     actions = {
@@ -1896,8 +1898,10 @@ local TEST_RULES_CFG = {
   {
     description = "Machines volées bloquées",
     conditions = {
-      stolen_computer = {
-        "de:ad:be:ef:00:01"
+      {
+        stolen_computer = {
+          "de:ad:be:ef:00:01"
+        }
       }
     },
     actions = {
@@ -1907,8 +1911,12 @@ local TEST_RULES_CFG = {
   {
     description = "LAN autorisé",
     conditions = {
-      from_net = "192.168.0.0/16",
-      to_domain = "github.com"
+      {
+        from_net = "192.168.0.0/16"
+      },
+      {
+        to_domain = "github.com"
+      }
     },
     actions = {
       "allow"
@@ -2022,7 +2030,7 @@ test("dnsonly — compile_rules avec action dnsonly → verdict \"dnsonly\"", fu
   })
   return assert_eq(v, "dnsonly", "verdict = \"dnsonly\" via compile_rules")
 end)
-test("dnsonly — client authentifié → verdict allow (true)", function()
+test("dnsonly — client authentifié → verdict dnsonly", function()
   package.loaded["auth.sessions"] = nil
   local SESS_DN = "./tmp/test_dnsonly_sess.lua"
   local write_sessions, reset_cache
@@ -2057,8 +2065,8 @@ test("dnsonly — client authentifié → verdict allow (true)", function()
     mac = "aa:bb:cc:dd:ee:ff",
     ts = os.time()
   })
-  assert_eq(v, true, "authentifié → allow (true)")
-  assert(m:find("auth=alice", 1, true), "message mentionne l'utilisateur")
+  assert_eq(v, "dnsonly", "authentifié → dnsonly (inchangé)")
+  assert(m:find("DNS only", 1, true), "message mentionne DNS only")
   local v2, m2 = rule_fn({
     domain = "detectportal.firefox.com",
     src_ip = "9.9.9.9",
@@ -2219,7 +2227,7 @@ rules:
 - description: Règle test
   actions: [allow]
   conditions:
-    to_domain: example.com
+    - to_domain: example.com
 - description: Refus par défaut
   actions: [deny]
 ]]
@@ -2260,7 +2268,7 @@ rules:
     assert_eq(#cfg.rules, 2, "2 règles")
     assert_eq(cfg.rules[1].description, "Règle test", "règle 1 description")
     assert_eq(cfg.rules[1].actions[1], "allow", "règle 1 action")
-    return assert_eq(cfg.rules[1].conditions.to_domain, "example.com", "règle 1 condition")
+    return assert_eq(cfg.rules[1].conditions[1].to_domain, "example.com", "règle 1 condition")
   end)
   test("load_config — sections manquantes → tables vides", function()
     local fd2 = io.open(TMP_YAML, "w")

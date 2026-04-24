@@ -117,8 +117,10 @@ ifindex  = nil
 
 -- URLs de redirection vers le portail captif HTTPS.
 -- Construites depuis auth_cfg à l'initialisation (IPv4 et IPv6).
+-- Si auth_cfg.redirect_url est spécifié, il est utilisé pour les deux versions.
 redirect_url4 = nil
 redirect_url6 = nil
+custom_redirect_url = nil
 
 -- ── Callback principal ───────────────────────────────────────────
 --- Handle a TCP SYN/80 packet from NFQUEUE 2.
@@ -184,10 +186,11 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
     res
 
   ok, err = pcall ->
-    url = if ip.version == 6
+    -- Utiliser l'URL personnalisée si spécifiée, sinon auto-détection par version IP
+    url = custom_redirect_url or (if ip.version == 6
       redirect_url6 or redirect_url4
     else
-      redirect_url4 or redirect_url6
+      redirect_url4 or redirect_url6)
 
     unless url
       log_warn { action: "q2_no_redirect_url", queue: 2, ip: client_ip_str, version: ip.version, user: user }
@@ -232,9 +235,14 @@ run = (auth_cfg) ->
 
   https_port = auth_cfg.port or 33443
 
+  -- URL de redirection personnalisée (optionnelle)
+  -- Si spécifiée, elle est utilisée pour IPv4 et IPv6, ignorant captive_ip4/6
+  custom_redirect_url = auth_cfg.redirect_url
+
   -- IPv4 captive IP (from config, env var, or auto-detect)
-  local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4")
-  local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
+  -- Ignoré si redirect_url est spécifié
+  local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4") unless custom_redirect_url
+  local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6") unless custom_redirect_url
 
   -- Fallback to single captive_ip for backwards compatibility
   -- NOTE: do not default to 127.0.0.1 here — that prevents auto-detection.
@@ -320,6 +328,7 @@ run = (auth_cfg) ->
     action: "q2_worker_start"
     :ifname
     :ifindex
+    custom_url: custom_redirect_url or "auto"
     redirect_url4: redirect_url4 or "not configured"
     redirect_url6: redirect_url6 or "not configured"
   }

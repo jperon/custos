@@ -61,10 +61,11 @@ load = ->
 -- @tparam table req {domain, src_ip, mac, ts}
 -- @treturn boolean true = autoriser, false = bloquer
 -- @treturn string  Raison (pour le log)
+-- @treturn string  Description de la règle ayant matché (pour le log)
 decide = (req) ->
   unless rules
     log_warn { action: "filter_not_loaded" }
-    return false, "filter not loaded"
+    return false, "filter not loaded", nil
   _decide rules, req
 
 -- ── Rechargement SIGHUP ──────────────────────────────────────────

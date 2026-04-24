@@ -175,157 +175,122 @@ rules:
     # Les actions sont exécutées séquentiellement, mais seul le verdict de la première
     # action qui en retourne un est utilisé.
     actions: ["allow"]
-    # Conditions : une table où chaque clé est le nom d'une condition (module correspondant)
-    # et la valeur est la configuration spécifique de cette condition.
+    # Conditions : une liste où chaque élément est soit une chaîne, soit une hashtable à une seule clé.
     conditions:
-      # 'to_domains': vérifie si le domaine demandé correspond à l'une des chaînes spécifiées.
-      # Utilisation de 'OR' logique entre les domaines de la liste.
-      to_domains:
-        # Domaines de test de connectivité pour divers OS.
-        - "connectivitycheck.gstatic.com"
-        - "connectivitycheck.android.com"
-        - "captive.apple.com"
-        - "www.msftconnecttest.com"
-        - "detectportal.firefox.com"
-        - "networkcheck.kde.org"
+      - to_domains:
+          # Domaines de test de connectivité pour divers OS.
+          - "connectivitycheck.gstatic.com"
+          - "connectivitycheck.android.com"
+          - "captive.apple.com"
+          - "www.msftconnecttest.com"
+          - "detectportal.firefox.com"
+          - "networkcheck.kde.org"
 
   - description: "Blocage des catégories de menaces connues (ex: UT Capitole Toulouse)"
     actions: ["deny"]
     conditions:
-      # 'to_domainlists': vérifie si le domaine demandé est présent dans l'une des listes spécifiées.
-      # Les noms de liste sont relatifs à 'domainlists_dir' (sans extension).
-      # Utilisation de 'OR' logique entre les listes.
-      to_domainlists:
-        - "toulouse/malware"
-        - "toulouse/phishing"
-        - "toulouse/gambling"
-        - "toulouse/adult"
-        - "toulouse/publicite"
-      # 'from_netlists': vérifie si l'IP source appartient à l'un des réseaux nommés dans la section 'nets'.
-      # Utilisation de 'OR' logique entre les groupes de réseaux.
-      from_netlists: ["lan"]
+      - to_domainlists:
+          - "toulouse/malware"
+          - "toulouse/phishing"
+          - "toulouse/gambling"
+          - "toulouse/adult"
+          - "toulouse/publicite"
+      - from_netlists: ["lan"]
 
   - description: "Infrastructure réseau locale et privée toujours autorisée"
     actions: ["allow"]
     conditions:
-      # 'to_domains': autorise les domaines réservés pour le réseau local.
-      to_domains:
-        - "local"
-        - "lan"
-        - "home.arpa"
-      # 'from_netlist': autorise aussi si l'IP source est dans le réseau 'lan'. (Logique AND)
-      from_netlist: "lan"
+      - to_domains:
+          - "local"
+          - "lan"
+          - "home.arpa"
+      - from_netlist: "lan"
 
   - description: "Outils de développement et services essentiels"
     actions: ["allow"]
     conditions:
-      # 'to_domains': liste des domaines liés au développement et aux services courants.
-      to_domains:
-        - "github.com"
-        - "gitlab.com"
-        - "npmjs.org"
-        - "pypi.org"
-        - "debian.org"
-      # 'from_maclist': autorise aussi si l'adresse MAC source est dans le groupe 'trusted'. (Logique AND)
-      from_maclist: "trusted"
+      - to_domains:
+          - "github.com"
+          - "gitlab.com"
+          - "npmjs.org"
+          - "pypi.org"
+          - "debian.org"
+      - from_maclist: "trusted"
 
   - description: "Accès aux domaines de test réservés aux utilisateurs authentifiés"
     actions: ["allow"]
     conditions:
-      # 'from_user': vérifie si une session authentifiée existe pour l'utilisateur spécifié.
-      # Le nom d'utilisateur est une chaîne.
-      from_user: "newuser"
-      # 'to_domain': vérifie la correspondance exacte avec le domaine spécifié.
-      to_domain: "auth-required.test"
+      - from_user: "newuser"
+      - to_domain: "auth-required.test"
 
   - description: "Autre accès aux domaines de test réservés aux utilisateurs authentifiés"
     actions: ["allow"]
     conditions:
-      from_user: "testuser"
-      to_domain: "auth-required.test"
+      - from_user: "testuser"
+      - to_domain: "auth-required.test"
 
   - description: "Domaine de test 'auth-required.test' bloqué si non authentifié"
     actions: ["deny"]
     conditions:
-      # Ne requiert pas 'from_user', donc s'applique si l'utilisateur n'est pas authentifié
-      # ou authentifié comme quelqu'un d'autre.
-      to_domain: "auth-required.test"
+      - to_domain: "auth-required.test"
 
   - description: "Blocage explicite de facebook.com"
     actions: ["deny"]
     conditions:
-      to_domain: "facebook.com"
-      # Exemple de condition combinée : bloquer aussi si provenant d'un MAC non-fiable.
-      # Nécessiterait la définition de 'untrusted' dans la section `macs`.
-      # from_maclist: "untrusted"
+      - to_domain: "facebook.com"
+      # - from_maclist: "untrusted" # Commenté, si besoin de l'activer, décommenter
 
   - description: "Autorisation pour les serveurs DNS internes"
     actions: ["allow"]
     conditions:
-      # 'from_nets': utilise des CIDRs directement dans la règle (pas via 'nets').
-      from_nets:
-        - "10.0.5.1/32"     # Serveur DNS IPv4 interne
-        - "fd00::100/128"   # Serveur DNS IPv6 interne
+      - from_nets:
+          - "10.0.5.1/32"
+          - "fd00::100/128"
 
   - description: "Autorisation pour le trafic basé sur le temps et le réseau"
     actions: ["allow"]
     conditions:
-      # 'in_time': vérifie si le timestamp de la requête est dans une fenêtre horaire nommée.
-      in_time: "business_hours"
-      # 'from_netlist': combine avec la condition temporelle (Logique AND).
-      from_netlist: "lan"
+      - in_time: "business_hours"
+      - from_netlist: "lan"
 
   - description: "Blocage explicite pendant les heures non ouvrées pour les appareils IoT"
     actions: ["deny"]
     conditions:
-      in_time: "after_hours"
-      from_maclist: "iot_devices"
+      - in_time: "after_hours"
+      - from_maclist: "iot_devices"
 
   - description: "Autoriser la résolution DNS des sondes de connectivité pour les utilisateurs authentifiés."
     actions: ["allow"]
     conditions:
-      # 'to_domainlist': utilise la liste précompilée des domaines de détection.
-      to_domainlist: "custom/captive_detect"
-      # 'authenticated': vérifie si l'utilisateur est authentifié (session active).
-      authenticated: true
+      - to_domainlist: "custom/captive_detect"
+      - authenticated: true
 
   - description: "Autoriser la résolution DNS des sondes de connectivité sans ouvrir le pare-feu"
     actions: ["dnsonly"]
     conditions:
-      # 'to_domainlist': utilise la liste précompilée des domaines de détection.
-      to_domainlist: "custom/captive_detect"
-
-  # --- Exemples de filtrage par VLAN ---
-  # La condition 'from_vlan' attend un ID entier unique.
-  # La condition 'from_vlans' attend un tableau d'IDs entiers (OR).
-  # La condition 'from_vlanlist' attend un nom de groupe défini dans la section 'vlans' (OR).
+      - to_domainlist: "custom/captive_detect"
 
   - description: "Autorisation pour le trafic provenant du VLAN 100"
     actions: ["allow"]
     conditions:
-      from_vlan: 100
+      - from_vlan: 100
 
   - description: "Blocage du trafic provenant des VLANs de test"
     actions: ["deny"]
     conditions:
-      # 'from_vlans': liste d'IDs VLANs traités comme un 'OR'.
-      from_vlans: [300, 301, 302]
+      - from_vlans: [300, 301, 302]
 
   - description: "Accès restreint pour le groupe VLAN 'guests'"
     actions: ["allow"]
     conditions:
-      # 'from_vlanlist': référence un groupe nommé dans la section 'vlans'.
-      from_vlanlist: "guests"
-      to_domain: "portal.example.com"
+      - from_vlanlist: "guests"
+      - to_domain: "portal.example.com"
 
   - description: "Autorisation pour le VLAN de management vers les serveurs de monitoring"
     actions: ["allow"]
     conditions:
-      from_vlanlist: "management"
-      to_domainlist: "toulouse/monitoring"
-
-  # --- Fin de la section VLAN ---
+      - from_vlanlist: "management"
+      - to_domainlist: "toulouse/monitoring"
 
   - description: "Autorisation par défaut pour tout le trafic non spécifié"
-    # Si aucune des règles précédentes ne correspond, cette règle s'applique.
     actions: ["allow"]

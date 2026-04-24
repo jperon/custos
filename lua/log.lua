@@ -3,9 +3,25 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
+local LOG_LEVEL
+LOG_LEVEL = require("config").LOG_LEVEL
 local bit = require("bit")
 local STDOUT_FILENO = 1
 local ts = ffi.new("timespec_t")
+local LOG_LEVEL_MAP = {
+  ERROR = 5,
+  WARN = 4,
+  INFO = 3,
+  DEBUG = 2,
+  TRACE = 1,
+  ALLOW = 3,
+  BLOCK = 3
+}
+local CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[LOG_LEVEL] or LOG_LEVEL_MAP.INFO
+local get_log_level_num
+get_log_level_num = function(level)
+  return LOG_LEVEL_MAP[level] or 0
+end
 local RL_CONFIG = {
   captive_probe = {
     keys = {
@@ -97,6 +113,9 @@ now = function()
 end
 local write_log
 write_log = function(level, fields)
+  if get_log_level_num(level) < CURRENT_LOG_LEVEL_NUM then
+    return 
+  end
   libc.clock_gettime(0, ts)
   local epoch = tonumber(ts.tv_sec)
   local pid = tonumber(ffi.C.getpid())
@@ -143,6 +162,14 @@ local log_error
 log_error = function(fields)
   return write_log("ERROR", fields)
 end
+local log_debug
+log_debug = function(fields)
+  return write_log("DEBUG", fields)
+end
+local log_trace
+log_trace = function(fields)
+  return write_log("TRACE", fields)
+end
 return {
   write_log = write_log,
   log_allow = log_allow,
@@ -150,5 +177,8 @@ return {
   log_info = log_info,
   log_warn = log_warn,
   log_error = log_error,
-  now = now
+  log_debug = log_debug,
+  log_trace = log_trace,
+  now = now,
+  get_log_level_num = get_log_level_num
 }

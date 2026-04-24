@@ -53,3 +53,26 @@ LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit tests/test_openwrt.lua HOST=root@<r
 Prerequisites:
 - SSH access to OpenWrt router with LuaJIT and nftables installed
 - Router must be reachable from the test machine
+
+## Libvirt KVM End-to-End Tests
+
+### `test_kvm.lua` (exécuté via `make test-kvm`)
+Suite E2E complète sur un environnement 3 VMs KVM/libvirt :
+- Client Debian, serveur DNS Debian, filtre OpenWrt
+- Bridge transparent, NFQUEUE, nftables
+- Tests exhaustifs : DNS autorisé/bloqué, TTL patché, IPv6, authentification, portail captif, isolation par client, DNAT, TCP segmented, etc.
+
+Usage:
+```bash
+make test-env      # Crée/démarre l'environnement (premier run ~5min)
+make test-kvm      # Exécute la suite E2E KVM
+# ou directement :
+LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/test_kvm.lua
+```
+
+Prerequisites:
+- qemu-kvm, libvirt-daemon-system, virsh, genisoimage
+- ~2 Go d'espace disque
+- Accès root (sudo) pour la gestion des VMs
+
+Voir `libvirt/README.md` pour la documentation complète de l'environnement.

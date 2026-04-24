@@ -19,7 +19,8 @@ local DEFAULTS = {
     "lan",
     "home.arpa"
   },
-  dest_whitelist = { }
+  dest_whitelist = { },
+  log_level = "INFO"
 }
 local uci_get
 uci_get = function(option)
@@ -146,6 +147,25 @@ validate_ip_cidr = function(s)
   end
   return s
 end
+local validate_log_level
+validate_log_level = function(raw, default)
+  if not (raw) then
+    return default
+  end
+  raw = raw:upper()()
+  local valid_levels = {
+    ["ERROR"] = true,
+    ["WARN"] = true,
+    ["INFO"] = true,
+    ["DEBUG"] = true,
+    ["TRACE"] = true
+  }
+  if valid_levels[raw] then
+    return raw
+  end
+  io.stderr:write("uci_config: log_level invalide '" .. tostring(raw) .. "', utilise '" .. tostring(default) .. "'\n")
+  return default
+end
 local escape_lua_str
 escape_lua_str = function(s)
   return s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n")
@@ -190,6 +210,7 @@ generate_config = function(cfg)
     "local AF_INET6               = 10",
     "local PROTO_UDP              = 17",
     string.format('local AUTH_SESSIONS_FILE     = "%s"', escape_lua_str(cfg.auth_sessions_file)),
+    string.format('local LOG_LEVEL              = "%s"', cfg.log_level),
     "",
     "local ALLOWED_DOMAINS = {"
   }
@@ -247,7 +268,8 @@ generate_config = function(cfg)
     "NFT_ADD_FAILURE_POLICY",
     "IPC_MATCH_RETRY_ENABLED",
     "IPC_MATCH_RETRY_COUNT",
-    "IPC_MATCH_RETRY_SLEEP_MS"
+    "IPC_MATCH_RETRY_SLEEP_MS",
+    "LOG_LEVEL"
   }
   for _index_0 = 1, #_list_3 do
     local k = _list_3[_index_0]
@@ -297,7 +319,8 @@ main = function()
     auth_sessions_file = uci_get("auth_sessions_file") or DEFAULTS.auth_sessions_file,
     allowed_domains = domains,
     dest_whitelist = whitelist,
-    nft_extra_rules = uci_get_list("nft_extra_rules")
+    nft_extra_rules = uci_get_list("nft_extra_rules"),
+    log_level = validate_log_level(uci_get("log_level"), DEFAULTS.log_level)
   }
   if os.execute("mkdir -p " .. tostring(OUTPUT_DIR)) ~= 0 then
     io.stderr:write("uci_config: impossible de créer " .. tostring(OUTPUT_DIR) .. "\n")

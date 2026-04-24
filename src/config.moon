@@ -14,6 +14,8 @@ QUEUE_REJECT    = 3   -- Forge RST/ICMP admin-prohibited pour le trafic dropé
 -- Le superviseur de processus les capture vers le système de log natif :
 --   OpenWrt / procd  → logread   (procd_set_param stdout 1)
 --   systemd          → journalctl
+-- Niveau de log par défaut. Peut être surchargé par UCI (custos.main.log_level).
+LOG_LEVEL = "INFO" -- ERROR, WARN, INFO, DEBUG, TRACE
 
 -- ── Noms de sets nftables ────────────────────────────────────────
 NFT_FAMILY     = "bridge"
@@ -84,4 +86,5 @@ DEST_WHITELIST = {}
   :DNS_PORT, :AF_INET, :AF_INET6, :PROTO_UDP
   :AUTH_SESSIONS_FILE
   :DEST_WHITELIST
+  :LOG_LEVEL -- Nouvelle constante exportée
 }

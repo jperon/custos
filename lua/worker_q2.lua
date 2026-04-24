@@ -115,6 +115,7 @@ local raw_fd = nil
 local ifindex = nil
 local redirect_url4 = nil
 local redirect_url6 = nil
+local custom_redirect_url = nil
 local handle_syn
 handle_syn = function(qh_ptr, nfad, pkt_id)
   local payload_ptr = ffi.new("unsigned char*[1]")
@@ -174,12 +175,13 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     return res
   end
   local ok, err = pcall(function()
-    local url
-    if ip.version == 6 then
-      url = redirect_url6 or redirect_url4
-    else
-      url = redirect_url4 or redirect_url6
-    end
+    local url = custom_redirect_url or ((function()
+      if ip.version == 6 then
+        return redirect_url6 or redirect_url4
+      else
+        return redirect_url4 or redirect_url6
+      end
+    end)())
     if not (url) then
       log_warn({
         action = "q2_no_redirect_url",
@@ -233,8 +235,15 @@ run = function(auth_cfg)
   auth_cfg = auth_cfg or { }
   local ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
   local https_port = auth_cfg.port or 33443
-  local local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4")
-  local local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
+  custom_redirect_url = auth_cfg.redirect_url
+  local local_ip4
+  if not (custom_redirect_url) then
+    local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4")
+  end
+  local local_ip6
+  if not (custom_redirect_url) then
+    local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
+  end
   if not local_ip4 and not local_ip6 then
     local local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP")
     if local_ip then
@@ -341,6 +350,7 @@ run = function(auth_cfg)
     action = "q2_worker_start",
     ifname = ifname,
     ifindex = ifindex,
+    custom_url = custom_redirect_url or "auto",
     redirect_url4 = redirect_url4 or "not configured",
     redirect_url6 = redirect_url6 or "not configured"
   })

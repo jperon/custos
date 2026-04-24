@@ -6,11 +6,15 @@
 --
 -- Format du message (43 octets) :
 --
---   Octet 0      : version/type
---                    0x41 ('A') = transaction IPv4 acceptée
---                    0x36 ('6') = transaction IPv6 acceptée
---                    0x52 ('R') = transaction IPv4 refusée (Q1 forge REFUSED+EDE)
---                    0x72 ('r') = transaction IPv6 refusée
+--   Octet 0      : version/type (6 bits) + flags (2 bits)
+--                  bits 6-0: message type/family
+--                    0x41 ('A') & 0x7F = transaction IPv4 acceptée
+--                    0x36 ('6') & 0x7F = transaction IPv6 acceptée
+--                    0x52 ('R') & 0x7F = transaction IPv4 refusée (Q1 forge REFUSED+EDE)
+--                    0x72 ('r') & 0x7F = transaction IPv6 refusée
+--                    0x44 ('D') & 0x7F = transaction IPv4 DNS-seulement
+--                    0x64 ('d') & 0x7F = transaction IPv6 DNS-seulement
+--                  bit 7: RESOLVER_IPV6_FLAG — set if resolver is IPv6 (avoids false negatives)
 --   Octets 1-2   : txid DNS (big-endian uint16)
 --   Octets 3-18  : src_ip — 16 octets (IPv4 4 octets + 12 octets 0x00 ; IPv6 16 octets complets)
 --   Octets 19-20 : src_port (big-endian uint16)
@@ -42,6 +46,9 @@ MSG_IPV4_REFUSED = 0x52   -- 'R' : transaction IPv4 refusée (Q1 doit transforme
 MSG_IPV6_REFUSED = 0x72   -- 'r' : transaction IPv6 refusée
 MSG_IPV4_DNSONLY = 0x44   -- 'D' : transaction IPv4 DNS-seulement (pas d'injection nft)
 MSG_IPV6_DNSONLY = 0x64   -- 'd' : transaction IPv6 DNS-seulement
+
+-- Bit flag 0x80 : set when resolver is IPv6 (avoids false negatives for addrs like fd00::)
+RESOLVER_IPV6_FLAG = 0x80
 
 write_with_retry = (pipe_wfd, msg) ->
   -- timespec buffer for nanosleep between retries (20 ms)
@@ -84,7 +91,7 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly
   buf = ffi.new "uint8_t[43]"
 
   -- Type : encode à la fois le refus/dnsonly et la famille d'adresse (IPv4/IPv6)
-  buf[0] = if #ip_raw == 4
+  msg_type = if #ip_raw == 4
     if dnsonly then MSG_IPV4_DNSONLY
     elseif refused then MSG_IPV4_REFUSED
     else MSG_IPV4
@@ -92,6 +99,11 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly
     if dnsonly then MSG_IPV6_DNSONLY
     elseif refused then MSG_IPV6_REFUSED
     else MSG_IPV6
+  
+  -- Set RESOLVER_IPV6_FLAG bit if resolver is IPv6
+  msg_type = bit.bor msg_type, RESOLVER_IPV6_FLAG if #resolver_ip_raw == 16
+  
+  buf[0] = msg_type
 
   -- txid big-endian
   buf[1] = bit.rshift bit.band(txid, 0xFF00), 8
@@ -165,7 +177,10 @@ write_dnsonly_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw)
 decode_msg = (raw) ->
   return nil if #raw < IPC_MSG_SIZE
 
-  msg_type = raw\byte 1
+  msg_type_full = raw\byte 1
+  msg_type      = bit.band msg_type_full, 0x7F  -- mask out RESOLVER_IPV6_FLAG
+  resolver_ipv6 = (bit.band(msg_type_full, RESOLVER_IPV6_FLAG) != 0)
+  
   txid     = bit.bor bit.lshift(raw\byte(2), 8), raw\byte(3)
   src_port = bit.bor bit.lshift(raw\byte(20), 8), raw\byte(21)
 
@@ -184,14 +199,14 @@ decode_msg = (raw) ->
     libc.inet_ntop AF_INET6, ip_bytes, ipv6_ntop_buf, 46
     ffi.string ipv6_ntop_buf
 
-  resolver_ip_str = if raw\byte(32) == 0 and raw\byte(33) == 0 and raw\byte(34) == 0 and raw\byte(35) == 0 and raw\byte(36) == 0 and raw\byte(37) == 0 and raw\byte(38) == 0 and raw\byte(39) == 0 and raw\byte(40) == 0 and raw\byte(41) == 0 and raw\byte(42) == 0 and raw\byte(43) == 0
-    "#{raw\byte 28}.#{raw\byte 29}.#{raw\byte 30}.#{raw\byte 31}"
-  else
+  resolver_ip_str = if resolver_ipv6
     resolver_ip_bytes = ffi.new "uint8_t[16]"
     for i = 0, 15
       resolver_ip_bytes[i] = raw\byte 28 + i
     libc.inet_ntop AF_INET6, resolver_ip_bytes, ipv6_ntop_buf, 46
     ffi.string ipv6_ntop_buf
+  else
+    "#{raw\byte 28}.#{raw\byte 29}.#{raw\byte 30}.#{raw\byte 31}"
 
   -- MAC : octets 21-26 (indices Lua 22-27)
   mac_str = string.format "%02x:%02x:%02x:%02x:%02x:%02x",

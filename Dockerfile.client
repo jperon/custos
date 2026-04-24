@@ -1,5 +1,0 @@
-# Lightweight test client for Docker end-to-end tests.
-# Pre-installs DNS and routing tools so the container starts immediately
-# even when the LAN network is internal (no direct internet access).
-FROM alpine:latest
-RUN apk add --no-cache bind-tools iproute2 iputils luajit curl

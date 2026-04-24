@@ -29,7 +29,7 @@ ndpi = require "parse/ndpi"
   :parse_header, :pack_header
   :parse_question, :pack_question, :parse_questions
   :parse_rr, :pack_rr, :parse_rrs
-  rcodes: {:NXDOMAIN}
+  rcodes: {:REFUSED}
   types: {:A, :AAAA}
   :ede_codes
 } = require "ipparse.l7.dns"
@@ -70,7 +70,7 @@ add_ede = (ede_code, text) =>
   @header.arcount = #(@additionals or {})
   @
 
--- Build blocked DNS response: NXDOMAIN + synthetic 0.0.0.0/:: + EDE 17
+-- Build blocked DNS response: REFUSED + synthetic 0.0.0.0/:: + EDE 17
 build_blocked_response = (dns_orig, dns_raw) ->
   return nil unless dns_orig and dns_raw
 
@@ -78,8 +78,8 @@ build_blocked_response = (dns_orig, dns_raw) ->
   dns = parse dns_raw, 1, false
   return nil unless dns
 
-  -- Set RCODE to NXDOMAIN
-  dns.header.rcode = NXDOMAIN
+  -- Set RCODE to REFUSED
+  dns.header.rcode = REFUSED
 
   -- Clear answers, add synthetic 0.0.0.0 or :: based on QTYPE
   dns.answers = {}
@@ -102,7 +102,7 @@ build_blocked_response = (dns_orig, dns_raw) ->
     }
     dns.header.ancount = 1
 
-  -- Add EDE 17 (Stale_NXDOMAIN_Answer) with "Ne intretis."
+  -- Add EDE 17 (Blocked) with "Ne intretis."
   add_ede dns, EDE_BLOCKED, EDE_BLOCKED_TEXT
 
   -- Pack DNS message
@@ -336,7 +336,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   refused = entry and entry.refused or false
   dnsonly = entry and entry.dnsonly or false
 
-  -- ── Branche REFUSED : réponse du serveur transformée en NXDOMAIN+EDE ──
+  -- ── Branche REFUSED : réponse du serveur transformée en REFUSED+EDE ──
   if refused
     dns_raw    = ndpi.extract_dns_payload raw, pkt
     refused_dns = build_blocked_response pkt.dns, dns_raw

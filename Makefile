@@ -58,7 +58,7 @@ AUTH_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(AUTH_MOONS))
 IPPARSE_MOONS := $(shell find $(SRC)/ipparse -name '*.moon' 2>/dev/null | grep -v examples)
 IPPARSE_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(IPPARSE_MOONS))
 
-.PHONY: all clean check test test-ndpi test-openwrt test-env test-env-down test-env-nuke test-e2e run reload update-lists make-secret logs help
+.PHONY: all clean check test test-ndpi test-openwrt test-env test-env-down test-env-nuke test-e2e test-e2e-ci test-kvm run reload update-lists make-secret logs help debug-env
 
 all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
@@ -134,6 +134,27 @@ test-e2e: all
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_e2e.lua
 
+## Exécute test-e2e avec sortie log dans tmp/ (utile pour CI)
+test-e2e-ci: all
+	@mkdir -p tmp
+	@bash libvirt/custos-libvirt.sh filter-ip >/dev/null 2>&1 \
+	  || (echo "ERREUR : environnement non démarré"; exit 1)
+	$(MOONC) -o tests/test_e2e.lua tests/test_e2e.moon
+	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) tests/test_e2e.lua 2>&1 | tee tmp/test-e2e.log
+
+## Suite E2E KVM exhaustive (plus de tests que test-e2e)
+## Prérequis : make test-env (environnement libvirt démarré)
+test-kvm: all
+	@bash libvirt/custos-libvirt.sh filter-ip >/dev/null 2>&1 \
+	  || (echo "ERREUR : environnement non démarré. Exécute d'abord: make test-env"; exit 1)
+	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
+	  $(LUAJIT) lua/test_kvm.lua
+
+## Lance l'outil de diagnostic libvirt
+debug-env:
+	@bash libvirt/debug.sh $(ARGS)
+
 ## Génère un hash PBKDF2-SHA256 pour un utilisateur (écrire dans cfg/secrets)
 ## Usage : make make-secret USER=alice PASS=motdepasse
 make-secret: all
@@ -179,6 +200,9 @@ help:
 	@echo "  test-env-down- Arrête les VMs (conserve les disques)"
 	@echo "  test-env-nuke- Supprime VMs, réseaux, images (scratch)"
 	@echo "  test-e2e     - Suite E2E complète (requiert test-env déjà démarré)"
+	@echo "  test-e2e-ci  - Suite E2E avec logs dans tmp/test-e2e.log"
+	@echo "  test-kvm     - Suite E2E KVM exhaustive (requiert test-env)"
+	@echo "  debug-env    - Outil de diagnostic libvirt (Usage: make debug-env ARGS=logs)"
 	@echo "  run          - Lance le superviseur (root requis)"
 	@echo "  clean        - Nettoie les fichiers compilés"
 	@echo "  make-secret  - Génère un hash PBKDF2-SHA256 pour cfg/secrets (USER=, PASS=)"
