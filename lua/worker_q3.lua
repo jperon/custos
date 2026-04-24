@@ -3,11 +3,8 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libnfq = _obj_0.ffi, _obj_0.libnfq
 end
-local QUEUE_REJECT, PROTO_TCP, PROTO_UDP
-do
-  local _obj_0 = require("config")
-  QUEUE_REJECT, PROTO_TCP, PROTO_UDP = _obj_0.QUEUE_REJECT, _obj_0.PROTO_TCP, _obj_0.PROTO_UDP
-end
+local QUEUE_REJECT
+QUEUE_REJECT = require("config").QUEUE_REJECT
 local run_queue, NF_ACCEPT, NF_DROP, VERDICT_DONE
 do
   local _obj_0 = require("nfq_loop")
@@ -37,6 +34,8 @@ local sp
 sp = require("ipparse.lib.pack_compat").pack
 local checksum
 checksum = require("ipparse.l3.lib").checksum
+local PROTO_TCP = ip_proto.TCP
+local PROTO_UDP = ip_proto.UDP
 local PROTO_ICMP = ip_proto.ICMP
 local PROTO_ICMPv6 = ip_proto.ICMPv6
 local ICMP4_TYPE = 3

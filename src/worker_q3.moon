@@ -11,7 +11,7 @@
 --   5. Structured log.
 
 { :ffi, :libnfq } = require "ffi_defs"
-{ :QUEUE_REJECT, :PROTO_TCP, :PROTO_UDP } = require "config"
+{ :QUEUE_REJECT } = require "config"
 { :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE } = require "nfq_loop"
 { :log_info, :log_warn } = require "log"
 parse: parse_ip, new: new_ip, proto: ip_proto = require "ipparse.l3.ip"
@@ -23,6 +23,8 @@ parse: parse_udp = require "ipparse.l4.udp"
 pack: sp = require "ipparse.lib.pack_compat"
 :checksum = require "ipparse.l3.lib"
 
+PROTO_TCP   = ip_proto.TCP    -- 6
+PROTO_UDP   = ip_proto.UDP    -- 17
 PROTO_ICMP  = ip_proto.ICMP   -- 1
 PROTO_ICMPv6 = ip_proto.ICMPv6 -- 58 (0x3A)
 

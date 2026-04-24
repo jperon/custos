@@ -60,8 +60,6 @@ FORCED_TTL = 60
 DNS_PORT   = 53
 AF_INET    = 2
 AF_INET6   = 10
-PROTO_TCP  = 6
-PROTO_UDP  = 17
 
 -- ── Authentification HTTPS ───────────────────────────────────────
 -- Chemin du fichier de sessions partagé entre le worker auth et les
@@ -84,7 +82,7 @@ DEST_WHITELIST = {}
   :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS
   :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN
   :FORCED_TTL
-  :DNS_PORT, :AF_INET, :AF_INET6, :PROTO_TCP, :PROTO_UDP
+  :DNS_PORT, :AF_INET, :AF_INET6
   :AUTH_SESSIONS_FILE
   :DEST_WHITELIST
   :LOG_LEVEL -- Nouvelle constante exportée

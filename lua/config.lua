@@ -28,8 +28,6 @@ local FORCED_TTL = 60
 local DNS_PORT = 53
 local AF_INET = 2
 local AF_INET6 = 10
-local PROTO_TCP = 6
-local PROTO_UDP = 17
 local AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
 local DEST_WHITELIST = { }
 return {
@@ -58,8 +56,6 @@ return {
   DNS_PORT = DNS_PORT,
   AF_INET = AF_INET,
   AF_INET6 = AF_INET6,
-  PROTO_TCP = PROTO_TCP,
-  PROTO_UDP = PROTO_UDP,
   AUTH_SESSIONS_FILE = AUTH_SESSIONS_FILE,
   DEST_WHITELIST = DEST_WHITELIST,
   LOG_LEVEL = LOG_LEVEL
