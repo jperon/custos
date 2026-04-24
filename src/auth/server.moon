@@ -216,7 +216,10 @@ read_request = (sock) ->
   content_length = 0
   while true
     hline, herr = sock\receive "*l"
-    break if not hline or hline == ""
+    unless hline
+      return nil, herr if herr
+      break
+    break if hline == ""
     name, val = hline\match "^([^:]+):%s*(.*)"
     if name
       headers[name\lower!] = val

@@ -215,7 +215,13 @@ read_request = function(sock)
   local content_length = 0
   while true do
     local hline, herr = sock:receive("*l")
-    if not hline or hline == "" then
+    if not (hline) then
+      if herr then
+        return nil, herr
+      end
+      break
+    end
+    if hline == "" then
       break
     end
     local name, val = hline:match("^([^:]+):%s*(.*)")
