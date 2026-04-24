@@ -218,9 +218,6 @@ read_request = function(sock)
     if not hline or hline == "" then
       break
     end
-    if not hline then
-      return nil, herr
-    end
     local name, val = hline:match("^([^:]+):%s*(.*)")
     if name then
       headers[name:lower()] = val
@@ -375,7 +372,12 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
     if s then
       sessions[s.mac] = nil
       if nft_sess then
-        nft_sess.del_authenticated(peer_ip)
+        if s.ips and s.ips.ipv4 then
+          nft_sess.del_authenticated(s.ips.ipv4)
+        end
+        if s.ips and s.ips.ipv6 then
+          nft_sess.del_authenticated(s.ips.ipv6)
+        end
         nft_sess.del_authenticated_mac(s.mac)
       end
     end

@@ -217,7 +217,6 @@ read_request = (sock) ->
   while true
     hline, herr = sock\receive "*l"
     break if not hline or hline == ""
-    return nil, herr if not hline
     name, val = hline\match "^([^:]+):%s*(.*)"
     if name
       headers[name\lower!] = val
@@ -352,7 +351,9 @@ handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg,
       -- Supprime la session de la table (indexée par MAC)
       sessions[s.mac] = nil
       if nft_sess
-        nft_sess.del_authenticated peer_ip
+        -- Retire les deux familles IPv4 et IPv6 si elles existent dans la session
+        nft_sess.del_authenticated s.ips.ipv4 if s.ips and s.ips.ipv4
+        nft_sess.del_authenticated s.ips.ipv6 if s.ips and s.ips.ipv6
         nft_sess.del_authenticated_mac s.mac
     ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
     log_warn { action: "auth_write_failed", err: err3, user: prev_user } unless ok2
@@ -533,7 +534,6 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
               if ip\lower! == peer_ip\lower!
                 peer_mac = mac
                 break
-        -- Connexion HTTPS : enveloppe TLS puis logique d'authentification
         -- Connexion HTTPS : enveloppe TLS puis logique d'authentification
         conn = ssl.wrap raw_client, ssl_ctx
         if conn
