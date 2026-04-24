@@ -3,10 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_CAPTIVE, AUTH_SESSIONS_FILE
+local QUEUE_CAPTIVE, AUTH_SESSIONS_FILE, PROTO_TCP
 do
   local _obj_0 = require("config")
-  QUEUE_CAPTIVE, AUTH_SESSIONS_FILE = _obj_0.QUEUE_CAPTIVE, _obj_0.AUTH_SESSIONS_FILE
+  QUEUE_CAPTIVE, AUTH_SESSIONS_FILE, PROTO_TCP = _obj_0.QUEUE_CAPTIVE, _obj_0.AUTH_SESSIONS_FILE, _obj_0.PROTO_TCP
 end
 local parse_eth, new, mac2s, s2mac, IP6, IP4
 do
@@ -43,7 +43,6 @@ user_for_ip = require("auth.sessions").user_for_ip
 local AF_PACKET = 17
 local SOCK_RAW = 3
 local ETH_P_ALL = 0x0300
-local PROTO_TCP = 6
 local parse_syn
 parse_syn = function(raw)
   local ip, ip_off = parse_ip(raw, 1)

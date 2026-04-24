@@ -15,7 +15,7 @@
 --   4. Log structuré
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_CAPTIVE, :AUTH_SESSIONS_FILE } = require "config"
+{ :QUEUE_CAPTIVE, :AUTH_SESSIONS_FILE, :PROTO_TCP } = require "config"
 parse: parse_eth, :new, :mac2s, :s2mac, proto: {:IP6, :IP4} = require "ipparse.l2.ethernet"
 parse: parse_ip, proto: l3_proto, :ip2s = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
@@ -32,7 +32,6 @@ parse: parse_tcp = require "ipparse.l4.tcp"
 AF_PACKET   = 17
 SOCK_RAW    = 3
 ETH_P_ALL   = 0x0300  -- htons(0x0003)
-PROTO_TCP   = 6
 
 -- Parse TCP SYN from NFQUEUE payload (bridge mode).
 -- Q2 receives IP-only packets (no Ethernet header).
