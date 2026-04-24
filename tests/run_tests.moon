@@ -23,6 +23,7 @@ pcall ->
   ffi.cdef [[
     typedef struct { long tv_sec; long tv_nsec; } timespec_t;
     const char* inet_ntop(int af, const void *src, char *dst, unsigned int size);
+    int nanosleep(const timespec_t *req, timespec_t *rem);
   ]]
 
 PROTO_TCP = 6

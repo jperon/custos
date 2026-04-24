@@ -35,6 +35,7 @@ MOONS := \
   $(SRC)/neigh.moon \
   $(SRC)/ip_whitelist.moon \
   $(SRC)/nft.moon \
+  $(SRC)/nft_add_helper.moon \
   $(SRC)/nft_extra_rules.moon \
   $(SRC)/nfq_loop.moon \
   $(SRC)/worker_q0.moon \

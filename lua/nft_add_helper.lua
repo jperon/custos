@@ -1,35 +1,33 @@
--- lua/nft_add_helper.lua
-local ffi_defs = require "ffi_defs"
-local ffi = ffi_defs.ffi
-local cfg = require "config"
-
-local NFT_ADD_RETRY_COUNT = cfg.NFT_ADD_RETRY_COUNT or 3
-local NFT_ADD_BACKOFF_MS = cfg.NFT_ADD_BACKOFF_MS or {20,50,100}
-
-local function try_add_with_retries(fn, ...)
-  local attempts = NFT_ADD_RETRY_COUNT
-  local backoffs = NFT_ADD_BACKOFF_MS
+local ffi
+ffi = require("ffi_defs").ffi
+local NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS
+do
+  local _obj_0 = require("config")
+  NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS = _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS
+end
+local try_add_with_retries
+try_add_with_retries = function(fn, ...)
+  local attempts = NFT_ADD_RETRY_COUNT or 3
+  local backoffs = NFT_ADD_BACKOFF_MS or {
+    20,
+    50,
+    100
+  }
   for i = 1, attempts do
     local ok = fn(...)
-    if ok then return true end
+    if ok then
+      return true
+    end
     if i < attempts then
       local ms = backoffs[i] or backoffs[#backoffs]
-      local has_nanosleep = false
-      pcall(function()
-        if ffi and ffi.C then local _ = ffi.C.nanosleep end
-        has_nanosleep = true
-      end)
-      if has_nanosleep then
-        local req = ffi.new("timespec_t[1]")
-        req[0].tv_sec = math.floor(ms / 1000)
-        req[0].tv_nsec = (ms % 1000) * 1000000
-        pcall(ffi.C.nanosleep, req, nil)
-      else
-        os.execute("sleep " .. (ms / 1000))
-      end
+      local req = ffi.new("timespec_t[1]")
+      req[0].tv_sec = math.floor(ms / 1000)
+      req[0].tv_nsec = (ms % 1000) * 1000000
+      pcall(ffi.C.nanosleep, req, nil)
     end
   end
   return false
 end
-
-return { try_add_with_retries = try_add_with_retries }
+return {
+  try_add_with_retries = try_add_with_retries
+}
