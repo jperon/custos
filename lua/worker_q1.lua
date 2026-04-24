@@ -208,6 +208,7 @@ purge_mac_clients = function(ts)
       if entry.ipv6 then
         ip_to_mac[entry.ipv6] = nil
       end
+      entry.ips = nil
       mac_clients[mac] = nil
       log_info({
         action = "client_expired",
