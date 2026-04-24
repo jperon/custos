@@ -209,7 +209,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
       ip:      client_ip_str
       sport:   tcp.spt
       mac:     mac2s l2.mac_raw
-      url:     redirect_url
+      url:     url
       user:    user
     }
     if l2.mac_src and l2.mac_src != "unknown"
