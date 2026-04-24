@@ -61,6 +61,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   ndpi.get_flow(pkt)
   if math.random(1000) == 1 then
     ndpi.purge_flows()
+    ndpi.purge_tcp_buffers()
   end
   if pkt.dns.is_response then
     return NF_ACCEPT

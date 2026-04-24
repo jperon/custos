@@ -58,6 +58,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   ndpi.get_flow pkt
   if math.random(1000) == 1
     ndpi.purge_flows!
+    ndpi.purge_tcp_buffers!
 
   -- On ne traite que les questions (QR bit = 0)
   return NF_ACCEPT if pkt.dns.is_response

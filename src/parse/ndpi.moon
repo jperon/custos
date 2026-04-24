@@ -39,6 +39,7 @@ flow_expiry = {}
 
 -- TCP stream reassembly buffers: "src_ip|src_port|dst_ip|dst_port" → accumulated payload string.
 -- Keyed by 4-tuple; cleared on FIN/RST; consumed when a complete DNS message is assembled.
+-- Each entry tracks { data: payload, init_seq: uint32, timestamp: os.time() } for garbage collection.
 tcp_buffers = {}
 
 --- Get or create an nDPI flow struct for a given packet.
@@ -72,6 +73,15 @@ purge_flows = (max_age = 300) ->
     if now - expiry > max_age
       flow_cache[key] = nil
       flow_expiry[key] = nil
+
+--- Purge expired TCP reassembly buffers.
+-- Removes entries older than max_age seconds to prevent unbounded memory growth.
+-- @tparam number max_age Maximum age in seconds (default: 300).
+purge_tcp_buffers = (max_age = 300) ->
+  now = os.time()
+  for key, entry in pairs tcp_buffers
+    if now - entry.timestamp > max_age
+      tcp_buffers[key] = nil
 
 -- ── Pre-allocated buffers ──────────────────────────────────────
 
@@ -487,7 +497,7 @@ parse_packet = (raw, eth_offset = 0) ->
       if entry
         entry.data = entry.data .. seg
       else
-        tcp_buffers[bk_tcp] = { data: seg, init_seq: r32(p, tcp_off + 4) }
+        tcp_buffers[bk_tcp] = { data: seg, init_seq: r32(p, tcp_off + 4), timestamp: os.time() }
   else
     return nil
 
@@ -807,4 +817,4 @@ warmup = ->
 
 { :parse_packet, :parse_answers, :patch_and_checksum, :cleanup, :warmup
   :extract_dns_payload, :patch_ttl_in_dns, :replace_dns_payload
-  :get_flow, :purge_flows, :QTYPE, :QTYPE_NAME, :RCODE }
+  :get_flow, :purge_flows, :purge_tcp_buffers, :QTYPE, :QTYPE_NAME, :RCODE }

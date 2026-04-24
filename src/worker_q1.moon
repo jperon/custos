@@ -282,6 +282,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   ndpi.get_flow pkt
   if math.random(1000) == 1
     ndpi.purge_flows!
+    ndpi.purge_tcp_buffers!
     purge_mac_clients ts
 
   unless pkt.dns.is_response

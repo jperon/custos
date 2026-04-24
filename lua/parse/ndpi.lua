@@ -76,6 +76,18 @@ purge_flows = function(max_age)
     end
   end
 end
+local purge_tcp_buffers
+purge_tcp_buffers = function(max_age)
+  if max_age == nil then
+    max_age = 300
+  end
+  local now = os.time()
+  for key, entry in pairs(tcp_buffers) do
+    if now - entry.timestamp > max_age then
+      tcp_buffers[key] = nil
+    end
+  end
+end
 local ipv6_str = ffi.new("char[46]")
 local r16
 r16 = function(p, o)
@@ -479,7 +491,8 @@ parse_packet = function(raw, eth_offset)
       else
         tcp_buffers[bk_tcp] = {
           data = seg,
-          init_seq = r32(p, tcp_off + 4)
+          init_seq = r32(p, tcp_off + 4),
+          timestamp = os.time()
         }
       end
     end
@@ -811,6 +824,7 @@ return {
   replace_dns_payload = replace_dns_payload,
   get_flow = get_flow,
   purge_flows = purge_flows,
+  purge_tcp_buffers = purge_tcp_buffers,
   QTYPE = QTYPE,
   QTYPE_NAME = QTYPE_NAME,
   RCODE = RCODE
