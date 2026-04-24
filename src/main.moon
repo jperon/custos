@@ -7,7 +7,9 @@
 --   main (superviseur)
 --   ├── worker Q0 (questions)   — écrit dans pipe_wfd
 --   ├── worker Q1 (réponses)    — lit depuis pipe_rfd
---   └── worker Q2 (captif)      — mode bridge
+--   ├── worker Q2 (captif)      — mode bridge
+--   ├── worker Q3 (reject)      — mode bridge
+--   └── worker AUTH (portail)   — serveur HTTPS
 --
 -- Le superviseur ne traite aucun paquet. Il boucle sur waitpid()
 -- et relance le worker mort après un délai de 1 seconde.
