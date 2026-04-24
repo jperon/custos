@@ -30,7 +30,7 @@ local RL_CONFIG = {
     },
     window = 60
   },
-  captive_redirect = {
+  captive_redirect_q2 = {
     keys = {
       "ip",
       "path"
