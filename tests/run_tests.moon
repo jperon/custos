@@ -1935,17 +1935,17 @@ TEST_CFG = {
 TEST_RULES_CFG = {
   {
     description: "Infra locale toujours OK"
-    conditions:  {to_domains: {"local", "home.arpa"}}
+    conditions:  {{to_domains: {"local", "home.arpa"}}}
     actions:     {"allow"}
   }
   {
     description: "Machines volées bloquées"
-    conditions:  {stolen_computer: {"de:ad:be:ef:00:01"}}
+    conditions:  {{stolen_computer: {"de:ad:be:ef:00:01"}}}
     actions:     {"deny"}
   }
   {
     description: "LAN autorisé"
-    conditions:  {from_net: "192.168.0.0/16", to_domain: "github.com"}
+    conditions:  {{from_net: "192.168.0.0/16"}, {to_domain: "github.com"}}
     actions:     {"allow"}
   }
   {
@@ -2013,9 +2013,9 @@ test "dnsonly — compile_rules avec action dnsonly → verdict \"dnsonly\"", ->
   v, m = m_rule.decide rules_dn, {domain: "anything.com", src_ip: "10.0.0.1", mac: "ff:ff:ff:ff:ff:ff", ts: os.time!}
   assert_eq v, "dnsonly", "verdict = \"dnsonly\" via compile_rules"
 
-test "dnsonly — client authentifié → verdict allow (true)", ->
-  -- Le bandeau « portail captif » ne doit plus s'afficher après login :
-  -- dnsonly doit devenir allow pour les clients authentifiés.
+test "dnsonly — client authentifié → verdict dnsonly", ->
+  -- dnsonly retourne toujours "dnsonly" (la gestion des sessions authentifiées
+  -- se fait au niveau du worker Q2 pour la redirection HTTP, pas dans filter.actions)
   package.loaded["auth.sessions"] = nil
   SESS_DN = "./tmp/test_dnsonly_sess.lua"
   { :write_sessions, :reset_cache } = require "auth.sessions"
@@ -2031,8 +2031,8 @@ test "dnsonly — client authentifié → verdict allow (true)", ->
   rule_fn = factory {description: "portail-captif"}
   v, m = rule_fn {domain: "detectportal.firefox.com", src_ip: "10.0.0.1",
                   mac: "aa:bb:cc:dd:ee:ff", ts: os.time!}
-  assert_eq v, true, "authentifié → allow (true)"
-  assert m\find("auth=alice", 1, true), "message mentionne l'utilisateur"
+  assert_eq v, "dnsonly", "authentifié → dnsonly (inchangé)"
+  assert m\find("DNS only", 1, true), "message mentionne DNS only"
   -- Client non authentifié : toujours dnsonly
   v2, m2 = rule_fn {domain: "detectportal.firefox.com", src_ip: "9.9.9.9",
                     mac: "ff:ff:ff:ff:ff:ff", ts: os.time!}
@@ -2181,7 +2181,7 @@ rules:
 - description: Règle test
   actions: [allow]
   conditions:
-    to_domain: example.com
+    - to_domain: example.com
 - description: Refus par défaut
   actions: [deny]
 ]]
@@ -2223,7 +2223,7 @@ rules:
     assert_eq #cfg.rules, 2, "2 règles"
     assert_eq cfg.rules[1].description, "Règle test", "règle 1 description"
     assert_eq cfg.rules[1].actions[1], "allow", "règle 1 action"
-    assert_eq cfg.rules[1].conditions.to_domain, "example.com", "règle 1 condition"
+    assert_eq cfg.rules[1].conditions[1].to_domain, "example.com", "règle 1 condition"
 
   test "load_config — sections manquantes → tables vides", ->
     fd2 = io.open TMP_YAML, "w"

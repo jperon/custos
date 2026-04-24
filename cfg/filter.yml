@@ -169,95 +169,95 @@ rules:
 - description: Detection de portail captif (systemes d'exploitation)
   actions: [allow]
   conditions:
-    to_domains:
-    # Android / Chrome / Google
-    - connectivitycheck.gstatic.com
-    - connectivitycheck.android.com
-    - connectivitycheck.google.com
-    - clients3.google.com
-    # Apple (macOS, iOS, iPadOS)
-    - captive.apple.com
-    - www.apple.com
-    # Windows
-    - www.msftconnecttest.com
-    - www.msftncsi.com
-    - ipv6.msftconnecttest.com
-    - dns.msftncsi.com
-    # Firefox
-    - detectportal.firefox.com
-    # Ubuntu
-    - connectivity-check.ubuntu.com
-    # KDE Plasma
-    - networkcheck.kde.org
+    - to_domains:
+      # Android / Chrome / Google
+      - connectivitycheck.gstatic.com
+      - connectivitycheck.android.com
+      - connectivitycheck.google.com
+      - clients3.google.com
+      # Apple (macOS, iOS, iPadOS)
+      - captive.apple.com
+      - www.apple.com
+      # Windows
+      - www.msftconnecttest.com
+      - www.msftncsi.com
+      - ipv6.msftconnecttest.com
+      - dns.msftncsi.com
+      # Firefox
+      - detectportal.firefox.com
+      # Ubuntu
+      - connectivity-check.ubuntu.com
+      # KDE Plasma
+      - networkcheck.kde.org
 
 - description: Blocage des categories indesirables (UT Capitole Toulouse)
   actions: [deny]
   conditions:
-    to_domainlists:
-    # Securite
-    - toulouse/malware
-    - toulouse/phishing
-    - toulouse/ddos
-    - toulouse/hacking
-    - toulouse/cryptojacking
-    - toulouse/redirector
-    - toulouse/strong_redirector
-    # Contenus illegaux / indesirables
-    - toulouse/warez
-    - toulouse/drugs
-    - toulouse/gambling
-    # Adulte
-    - toulouse/adult
-    - toulouse/mixed_adult
-    - toulouse/lingerie
-    # Publicite / tracking
-    - toulouse/publicite
-    - toulouse/marketingware
+    - to_domainlists:
+      # Securite
+      - toulouse/malware
+      - toulouse/phishing
+      - toulouse/ddos
+      - toulouse/hacking
+      - toulouse/cryptojacking
+      - toulouse/redirector
+      - toulouse/strong_redirector
+      # Contenus illegaux / indesirables
+      - toulouse/warez
+      - toulouse/drugs
+      - toulouse/gambling
+      # Adulte
+      - toulouse/adult
+      - toulouse/mixed_adult
+      - toulouse/lingerie
+      # Publicite / tracking
+      - toulouse/publicite
+      - toulouse/marketingware
 
 - description: Infrastructure reseau toujours autorisee
   actions: [allow]
   conditions:
-    to_domains: [local, lan, home.arpa]
+    - to_domains: [local, lan, home.arpa]
 
 - description: Outils de developpement
   actions: [allow]
   conditions:
-    to_domains:
-    - github.com
-    - gitlab.com
-    - npmjs.org
-    - pypi.org
-    - debian.org
-    - ubuntu.com
-    - archlinux.org
-    - cloudflare.com
-    - fastly.com
-    - akamaiedge.net
-    - example.com
+    - to_domains:
+      - github.com
+      - gitlab.com
+      - npmjs.org
+      - pypi.org
+      - debian.org
+      - ubuntu.com
+      - archlinux.org
+      - cloudflare.com
+      - fastly.com
+      - akamaiedge.net
+      - example.com
 
 - description: Test - domaine restreint aux utilisateurs authentifies (newuser)
   actions: [allow]
   conditions:
-    from_user: newuser
-    to_domain: auth-required.test
+    - from_user: newuser
+    - to_domain: auth-required.test
 
 - description: Test - domaine restreint aux utilisateurs authentifies (testuser)
   actions: [allow]
   conditions:
-    from_user: testuser
-    to_domain: auth-required.test
+    - from_user: testuser
+    - to_domain: auth-required.test
 
 - description: Test - domaine auth-required.test refuse sans authentification
   actions: [deny]
   conditions:
-    to_domain: auth-required.test
+    - to_domain: auth-required.test
 
 # Exemple de blocage explicite d'un domaine - utilise aussi par les tests e2e
-# (make test-docker / make test-kvm) pour verifier le comportement "REFUSED".
+# (make test-kvm) pour verifier le comportement "REFUSED".
 - description: Exemple - blocage explicite de facebook.com
   actions: [deny]
   conditions:
-    to_domain: facebook.com
+    - to_domain: facebook.com
 
 - description: Autorisation par defaut
   actions: [allow]
