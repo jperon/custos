@@ -2388,7 +2388,10 @@ test "auth/sessions — purge_expired : retire si heartbeat expiré", ->
   assert sessions["aa:bb:cc:dd:ee:03"] == nil, "session avec heartbeat expiré purgée"
 
 -- ── session_for_ip / user_for_ip ─────────────────────────────────
--- Stub `neigh` pour contrôler le fallback MAC sans dépendre de `ip neigh`.
+-- Le fallback MAC via NDP (neigh) a été supprimé. La résolution se fait
+-- maintenant uniquement par :
+--   1. Lookup direct par MAC (si MAC connue)
+--   2. Scan de toutes les sessions à la recherche d'une IP dans ips.ipv4/ipv6
 do
   SF_FILE = "./tmp/test_sf_sessions.lua"
   { :session_for_ip, :user_for_ip, :reset_cache } = require "auth.sessions"
@@ -2398,76 +2401,70 @@ do
     write_sessions sessions, SF_FILE
     reset_cache!
 
-  stub_neigh = (mac_table) ->
-    package.loaded["neigh"] = {
-      get_mac: (ip) -> mac_table[ip] or "unknown"
-    }
-
   MAC = "aa:bb:cc:dd:ee:ff"
   FUTURE = 9999999999
 
   test "session_for_ip — session directe par MAC", ->
-    stub_neigh {}
     write_sf_sessions { [MAC]: { user: "alice", expires: FUTURE } }
     s = session_for_ip nil, SF_FILE, MAC
     assert s and s.user == "alice", "session trouvée par MAC"
 
-  test "session_for_ip — session directe par IP (via fallback neigh)", ->
-    stub_neigh { ["10.0.0.1"]: MAC }
-    write_sf_sessions { [MAC]: { user: "alice", expires: FUTURE } }
-    s = session_for_ip "10.0.0.1", SF_FILE
-    assert s and s.user == "alice", "session trouvée par IP via neigh"
-
-  test "session_for_ip — fallback MAC cross-family (IPv6 → IPv4)", ->
-    -- Client authentifié en IPv6, requête DNS en IPv4 : la session est
-    -- retrouvée via la MAC partagée.
-    stub_neigh { ["10.35.1.53"]: MAC }
+  test "session_for_ip — session retrouvée par scan des IPs (IPv4)", ->
+    -- Sans MAC connue, session_for_mac scanne toutes les sessions à la
+    -- recherche d'une IP correspondante dans le champ ips.
     write_sf_sessions {
-      [MAC]: { user: "j@prn.ovh", expires: FUTURE, ips: { ipv6: "2a11:6c7:1700:7801::bede" } }
+      [MAC]: { user: "alice", expires: FUTURE, ips: { ipv4: "10.0.0.1" } }
     }
-    s = session_for_ip "10.35.1.53", SF_FILE
-    assert s, "session trouvée via MAC"
-    assert_eq s.user, "j@prn.ovh", "user correct"
+    s = session_for_ip "10.0.0.1", SF_FILE
+    assert s and s.user == "alice", "session trouvée par scan IPv4"
 
-  test "session_for_ip — fallback MAC : pas de session avec cette MAC", ->
-    stub_neigh { ["10.0.0.2"]: "ff:ff:ff:ff:ff:ff" }
+  test "session_for_ip — session retrouvée par scan des IPs (IPv6)", ->
+    write_sf_sessions {
+      [MAC]: { user: "j@prn.ovh", expires: FUTURE, ips: { ipv6: "fd00::1" } }
+    }
+    s = session_for_ip "fd00::1", SF_FILE
+    assert s and s.user == "j@prn.ovh", "session trouvée par scan IPv6"
+
+  test "session_for_ip — MAC 'unknown' → scan ips", ->
+    -- MAC 'unknown' n'est pas cherchée dans la table ; le scan IP prend le relais.
+    write_sf_sessions {
+      [MAC]: { user: "alice", expires: FUTURE, ips: { ipv4: "10.0.0.99" } }
+    }
+    s = session_for_ip "10.0.0.99", SF_FILE, "unknown"
+    assert s and s.user == "alice", "MAC 'unknown' → scan ips trouve la session"
+
+  test "session_for_ip — aucune session avec cet IP", ->
     write_sf_sessions {
       [MAC]: { user: "alice", expires: FUTURE }
     }
     s = session_for_ip "10.0.0.2", SF_FILE
-    assert not s, "aucune session avec la MAC différente"
+    assert not s, "aucune session pour cet IP"
 
-  test "session_for_ip — fallback MAC : ip inconnue de neigh → nil", ->
-    stub_neigh {}
+  test "session_for_ip — ip inconnue → nil", ->
     write_sf_sessions {
       [MAC]: { user: "alice", expires: FUTURE }
     }
     s = session_for_ip "9.9.9.9", SF_FILE
-    assert not s, "neigh=unknown → nil"
+    assert not s, "IP inconnue → nil"
 
   test "session_for_ip — session expirée → nil", ->
-    stub_neigh { ["10.0.0.9"]: MAC }
     write_sf_sessions {
       [MAC]: { user: "alice", expires: 1 }  -- expirée
     }
-    s = session_for_ip "10.0.0.9", SF_FILE
-    assert not s, "session expirée trouvée par MAC mais rejetée"
+    s = session_for_ip "10.0.0.9", SF_FILE, MAC
+    assert not s, "session expirée rejetée"
 
-  test "user_for_ip — retourne user via fallback MAC", ->
-    stub_neigh { ["10.35.1.53"]: MAC }
+  test "user_for_ip — retourne user via scan ips", ->
     write_sf_sessions {
-      [MAC]: { user: "j@prn.ovh", expires: FUTURE }
+      [MAC]: { user: "j@prn.ovh", expires: FUTURE, ips: { ipv4: "10.35.1.53" } }
     }
-    assert_eq (user_for_ip "10.35.1.53", SF_FILE), "j@prn.ovh", "user retrouvé cross-family"
+    assert_eq (user_for_ip "10.35.1.53", SF_FILE), "j@prn.ovh", "user retrouvé via scan ips"
 
   test "user_for_ip — ip nil → nil", ->
     assert not (user_for_ip nil, SF_FILE), "ip nil retourne nil"
 
-  test "session_for_ip — MAC passée explicitement prime sur neigh", ->
-    -- Simule un paquet dont la MAC est déjà connue de L2. On passe
-    -- délibérément un stub neigh qui renvoie "unknown" : le fallback doit
-    -- utiliser la MAC fournie.
-    stub_neigh {}
+  test "session_for_ip — MAC passée explicitement prime sur scan", ->
+    -- La MAC fournie par L2 trouve directement la session sans scan IP.
     write_sf_sessions {
       [MAC]: { user: "j@prn.ovh", expires: FUTURE }
     }
@@ -2475,16 +2472,7 @@ do
     assert s, "session trouvée via MAC du paquet"
     assert_eq s.user, "j@prn.ovh", "user correct"
 
-  test "session_for_ip — MAC 'unknown' ignorée → bascule sur neigh", ->
-    stub_neigh { ["10.0.0.99"]: MAC }
-    write_sf_sessions {
-      [MAC]: { user: "alice", expires: FUTURE }
-    }
-    s = session_for_ip "10.0.0.99", SF_FILE, "unknown"
-    assert s and s.user == "alice", "neigh sert de fallback quand mac='unknown'"
-
   os.remove SF_FILE
-  package.loaded["neigh"] = nil  -- restore pour les autres tests
 
 -- ════════════════════════════════════════════════════════════════
 -- auth/credentials
@@ -2767,36 +2755,6 @@ test "parse/ndpi — parse_packet(raw) OK sur paquet IP brut", ->
   assert_eq pkt.l4.dst_port, 53,       "dst_port DNS"
 
 
--- ── neigh.parse_neigh_line ────────────────────────────────────────
-io.write "\n── neigh.parse_neigh_line ──\n"
-{ :parse_neigh_line } = require "neigh"
-
-test "parse_neigh_line — IPv4 REACHABLE", ->
-  r = parse_neigh_line "192.168.1.5 dev br-lan lladdr aa:bb:cc:dd:ee:ff REACHABLE"
-  assert r, "doit reconnaître REACHABLE"
-  assert_eq r.ip,  "192.168.1.5", "ip"
-  assert_eq r.mac, "aa:bb:cc:dd:ee:ff", "mac"
-
-test "parse_neigh_line — IPv6 STALE", ->
-  r = parse_neigh_line "fd00::5 dev br0 lladdr 00:11:22:33:44:55 STALE"
-  assert r and r.mac == "00:11:22:33:44:55", "STALE accepté"
-
-test "parse_neigh_line — flag 'router' avant le state", ->
-  -- L'indicateur `router` précède le NUD state pour les voisins IPv6 router.
-  -- Sans la correction, l'ancien regex prenait "router" comme state et
-  -- renvoyait nil (state inconnu).
-  r = parse_neigh_line "2a11:6c7:1700:7801::bede dev br lladdr d8:d3:85:63:6b:27 router REACHABLE"
-  assert r, "doit accepter la ligne avec flag 'router'"
-  assert_eq r.ip,  "2a11:6c7:1700:7801::bede", "ip"
-  assert_eq r.mac, "d8:d3:85:63:6b:27", "mac"
-
-test "parse_neigh_line — FAILED sans lladdr → nil", ->
-  r = parse_neigh_line "10.0.0.42 dev eth0 FAILED"
-  assert not r, "FAILED sans lladdr doit retourner nil"
-
-test "parse_neigh_line — state inconnu → nil", ->
-  r = parse_neigh_line "10.0.0.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff FOOBAR"
-  assert not r, "state inconnu doit retourner nil"
 
 
 io.write string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed)

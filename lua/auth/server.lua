@@ -17,7 +17,7 @@ do
   local _obj_0 = require("log")
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
-local neigh = require("neigh")
+local mac_learner_ipc = require("mac_learner_ipc")
 local build_css
 build_css = function(btn_bg, btn_hov)
   return [[*, *::before, *::after { box-sizing: border-box; }
@@ -184,6 +184,13 @@ make_success_page = function(interval)
   local msg = msg_ok("Connexion réussie. Votre accès réseau est actif tant que cette page reste ouverte.")
   return login_page(msg .. h.script(js), true)
 end
+local session_cookie
+session_cookie = function(mac)
+  if not (mac and mac ~= "unknown") then
+    return nil
+  end
+  return "custos_session=" .. tostring(mac) .. "; Path=/; HttpOnly; SameSite=Lax"
+end
 local failure_page
 failure_page = function(reason)
   return login_page(msg_err(reason), false)
@@ -272,7 +279,8 @@ http_response = function(sock, status, body, extra_headers)
     "\r\n",
     body
   })
-  return sock:send(resp)
+  local ok, err = sock:send(resp)
+  return ok, err
 end
 local http_redirect
 http_redirect = function(sock, location)
@@ -318,7 +326,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
     return 
   end
   if method == "GET" and (path == "/" or path == "/login") then
-    local s = session_for_mac(peer_mac, peer_ip, nil, sessions)
+    local s = session_for_mac(peer_mac, peer_ip, auth_cfg.sessions_file, sessions)
     local now = os.time()
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat) then
       http_response(sock, "200 OK", success_pg)
@@ -332,7 +340,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
       http_response(sock, "200 OK", home_page)
     end
   elseif method == "GET" and path == "/ping" then
-    local s = session_for_mac(peer_mac, peer_ip, nil, sessions)
+    local s = session_for_mac(peer_mac, peer_ip, auth_cfg.sessions_file, sessions)
     local now = os.time()
     if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat) then
       if auth_cfg.idle_timeout and auth_cfg.idle_timeout > 0 then
@@ -373,7 +381,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
       http_response(sock, "401 Unauthorized", "")
     end
   elseif method == "GET" and path == "/logout" then
-    local s = session_for_mac(peer_mac, peer_ip, nil, sessions)
+    local s = session_for_mac(peer_mac, peer_ip, auth_cfg.sessions_file, sessions)
     local prev_user = s and s.user
     if s then
       sessions[s.mac] = nil
@@ -413,6 +421,14 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
       purge_expired(sessions)
       local mac = peer_mac ~= "unknown" and peer_mac or nil
       add_session(sessions, mac, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
+      local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
+      if not (ok2) then
+        log_warn({
+          action = "auth_write_failed",
+          err = err3,
+          user = user
+        })
+      end
       if nft_sess then
         local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
         if not (ok_nft) then
@@ -435,15 +451,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
           end
         end
       end
-      local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
-      if not (ok2) then
-        log_warn({
-          action = "auth_write_failed",
-          err = err3,
-          user = user
-        })
-      end
-      http_response(sock, "200 OK", success_pg)
+      http_response(sock, "200 OK", success_pg, "Set-Cookie: " .. tostring(session_cookie(mac)) .. "\r\n")
       log_info({
         action = "auth_login_ok",
         ip = peer_ip,
@@ -463,7 +471,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
     local max_attempts = auth_cfg.register_rate_limit or 3
     local window_sec = auth_cfg.register_rate_window or 300
     if register_rate_exceeded(register_attempts, peer_ip, max_attempts, window_sec) then
-      http_response(raw_sock, "429 Too Many Requests", register_failure_page("Trop de tentatives d'inscription. Réessayez plus tard."))
+      http_response(sock, "429 Too Many Requests", register_failure_page("Trop de tentatives d'inscription. Réessayez plus tard."))
       log_warn({
         action = "auth_register_rate_limited",
         ip = peer_ip,
@@ -475,7 +483,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
       local pass = form.password or ""
       local pass2 = form.password2 or ""
       if pass ~= pass2 then
-        http_response(raw_sock, "400 Bad Request", register_failure_page("Les mots de passe ne correspondent pas."))
+        http_response(sock, "400 Bad Request", register_failure_page("Les mots de passe ne correspondent pas."))
         log_warn({
           action = "auth_register_password_mismatch",
           ip = peer_ip,
@@ -488,6 +496,14 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
           purge_expired(sessions)
           local mac = peer_mac ~= "unknown" and peer_mac or nil
           add_session(sessions, mac, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
+          local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
+          if not (ok2) then
+            log_warn({
+              action = "auth_write_failed",
+              err = err3,
+              user = user
+            })
+          end
           if nft_sess then
             local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
             if not (ok_nft) then
@@ -510,16 +526,8 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
               end
             end
           end
-          local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
-          if not (ok2) then
-            log_warn({
-              action = "auth_write_failed",
-              err = err3,
-              user = user
-            })
-          end
           secrets[user] = new_secrets[user]
-          http_response(raw_sock, "200 OK", success_pg)
+          http_response(sock, "200 OK", success_pg, "Set-Cookie: " .. tostring(session_cookie(mac)) .. "\r\n")
           log_info({
             action = "auth_register_ok",
             ip = peer_ip,
@@ -533,7 +541,7 @@ handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, suc
             user_msg = "Impossible de créer ce compte. Veuillez choisir un autre nom."
             status = "409 Conflict"
           end
-          http_response(raw_sock, status, register_failure_page(user_msg))
+          http_response(sock, status, register_failure_page(user_msg))
           log_warn({
             action = "auth_register_failed",
             ip = peer_ip,
@@ -593,28 +601,35 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     error("Impossible de démarrer le serveur IPv4 sur port " .. tostring(port) .. " : " .. tostring(err4))
   end
   local listen6 = make_server6(port)
-  if listen6 then
-    log_info({
-      action = "auth_listening",
-      ipv4 = "0.0.0.0",
-      ipv6 = "::",
-      port = port
-    })
-  else
-    log_info({
-      action = "auth_listening",
-      ipv4 = "0.0.0.0",
-      port = port
-    })
-  end
-  local sessions = load_sessions(auth_cfg.sessions_file) or { }
-  local register_attempts = { }
   local all_servers = {
     listen4
   }
   if listen6 then
     all_servers[#all_servers + 1] = listen6
   end
+  log_info({
+    action = "auth_worker_start",
+    port = port
+  })
+  log_info({
+    action = "auth_secrets_loaded",
+    path = secrets_path,
+    users = ((function()
+      local n = 0
+      for _ in pairs(secrets) do
+        n = n + 1
+      end
+      return n
+    end)())
+  })
+  log_info({
+    action = "auth_listening",
+    ipv4 = "0.0.0.0",
+    ipv6 = listen6 and "::" or nil,
+    port = port
+  })
+  local sessions = load_sessions((auth_cfg.sessions_file or ""))
+  local register_attempts = { }
   while true do
     if reload_fn then
       local new_secrets = reload_fn()
@@ -623,37 +638,52 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
       end
     end
     local readable = socket.select(all_servers, nil, 1)
-    local _list_0 = (readable or { })
-    for _index_0 = 1, #_list_0 do
-      local srv = _list_0[_index_0]
-      local raw_client, _err = srv:accept()
-      if raw_client then
-        local peer_ip = raw_client:getpeername()
-        peer_ip = tostring(peer_ip)
-        peer_ip = peer_ip:gsub("%%.+$", "")
-        local peer_mac = neigh.get_mac(peer_ip)
-        if peer_mac == "unknown" then
-          local fresh = neigh.load()
-          peer_mac = fresh.ip_to_mac[peer_ip] or "unknown"
-          if peer_mac == "unknown" then
-            for ip, mac in pairs(fresh.ip_to_mac) do
-              if ip:lower() == peer_ip:lower() then
-                peer_mac = mac
-                break
-              end
-            end
+    for _index_0 = 1, #readable do
+      local srv = readable[_index_0]
+      local client, err = srv:accept()
+      if client then
+        client:settimeout(10)
+        local peer_ip = nil
+        local peer_mac = nil
+        local ok_peer, peer_err = pcall(function()
+          local addr = client:getpeername()
+          if type(addr) == "table" then
+            peer_ip = addr.ip or addr[1]
+          elseif type(addr) == "string" then
+            peer_ip = addr
           end
+          if peer_ip and peer_ip ~= "unknown" then
+            peer_mac = mac_learner_ipc.get_mac(peer_ip)
+          end
+        end)
+        if not (ok_peer) then
+          log_warn({
+            action = "auth_peer_lookup_failed",
+            err = peer_err
+          })
         end
-        local conn = ssl.wrap(raw_client, ssl_ctx)
+        if not peer_ip or peer_ip == "" then
+          peer_ip = "unknown"
+        end
+        local conn = ssl.wrap(client, ssl_ctx)
         if conn then
-          local ok_hs, _hs_err = conn:dohandshake()
+          local ok_hs, hs_err = pcall(function()
+            return conn:dohandshake()
+          end)
           if ok_hs then
-            handle_connection(conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
+            local ok_conn, conn_err = pcall(handle_connection, conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
+            if not (ok_conn) then
+              log_warn({
+                action = "auth_connection_error",
+                ip = peer_ip,
+                err = conn_err
+              })
+            end
           else
             log_warn({
               action = "auth_handshake_failed",
               ip = peer_ip,
-              err = _hs_err
+              err = hs_err
             })
             conn:close()
           end
@@ -662,7 +692,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
             action = "auth_ssl_wrap_failed",
             ip = peer_ip
           })
-          raw_client:close()
+          client:close()
         end
       end
     end

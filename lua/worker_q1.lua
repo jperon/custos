@@ -3,14 +3,13 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE
+local QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE
 do
   local _obj_0 = require("config")
-  QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NEIGH_REFRESH_COOLDOWN, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE = _obj_0.QUEUE_RESPONSES, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NEIGH_REFRESH_COOLDOWN, _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS, _obj_0.NFT_ADD_FAILURE_POLICY, _obj_0.IPC_MATCH_RETRY_ENABLED, _obj_0.IPC_MATCH_RETRY_COUNT, _obj_0.IPC_MATCH_RETRY_SLEEP_MS, _obj_0.AUTH_SESSIONS_FILE
+  QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE = _obj_0.QUEUE_RESPONSES, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS, _obj_0.NFT_ADD_FAILURE_POLICY, _obj_0.IPC_MATCH_RETRY_ENABLED, _obj_0.IPC_MATCH_RETRY_COUNT, _obj_0.IPC_MATCH_RETRY_SLEEP_MS, _obj_0.AUTH_SESSIONS_FILE
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
-local neigh = require("neigh")
 local ndpi = require("parse/ndpi")
 local QTYPE
 QTYPE = ndpi.QTYPE
@@ -131,7 +130,6 @@ try_add_with_retries = require("nft_add_helper").try_add_with_retries
 local mac_clients = { }
 local ip_to_mac = { }
 local pipe_rfd = nil
-local last_neigh_refresh = 0
 local sleep_req = ffi.new("timespec_t[1]")
 local update_mac_clients = nil
 local drain_ts = 0
@@ -227,16 +225,6 @@ resolve_client_family = function(ip_str, want)
       return result
     end
   end
-  local ts = os.time()
-  if ts - last_neigh_refresh > NEIGH_REFRESH_COOLDOWN then
-    last_neigh_refresh = ts
-    neigh.refresh(mac_clients, ip_to_mac)
-    local mac2 = ip_to_mac[ip_str]
-    if mac2 then
-      local entry2 = mac_clients[mac2]
-      return entry2 and entry2[want]
-    end
-  end
   return nil
 end
 local handle_response
@@ -271,10 +259,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local txid = pkt.dns.txid
   local client_ip = pkt.ip.dst_ip
   local resolver_ip = pkt.ip.src_ip
-  local client_mac = l2.mac_dst
-  if client_mac == "unknown" or not client_mac then
-    client_mac = neigh.get_mac(client_ip)
-  end
+  local client_mac = ip_to_mac[client_ip] or "unknown"
   local user = user_for_mac(client_mac, client_ip, AUTH_SESSIONS_FILE)
   local entry = get_pending_entry(txid, pkt.ip.dst_ip, client_port, resolver_ip, now)
   if not (entry) then
@@ -509,11 +494,6 @@ end
 local run
 run = function(rfd)
   pipe_rfd = rfd
-  do
-    local data = neigh.load()
-    mac_clients = data.mac_clients
-    ip_to_mac = data.ip_to_mac
-  end
   ndpi.warmup()
   run_queue(QUEUE_RESPONSES, handle_response)
   return ndpi.cleanup()

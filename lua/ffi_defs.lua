@@ -85,6 +85,26 @@ ffi.cdef([[  /* ── Types de base ── */
                      const void *optval, socklen_t optlen);
   ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                  const struct sockaddr *dest_addr, socklen_t addrlen);
+  ssize_t send(int sockfd, const void *buf, size_t len, int flags);
+  ssize_t recv(int sockfd, void *buf, size_t len, int flags);
+  int     connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+  int     listen(int sockfd, int backlog);
+  int     accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+  int     unlink(const char *pathname);
+
+  /* ── AF_UNIX socket ── */
+  struct sockaddr_un {
+    uint16_t sun_family;
+    char     sun_path[108];
+  };
+
+  /* ── poll ── */
+  struct pollfd {
+    int   fd;
+    short events;
+    short revents;
+  };
+  int poll(struct pollfd *fds, unsigned long nfds, int timeout);
 
   /* ── AF_PACKET raw socket (pour worker Q2 portail captif bridge) ── */
   unsigned int if_nametoindex(const char *ifname);

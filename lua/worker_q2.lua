@@ -36,8 +36,7 @@ local flags
 flags = require("ipparse.l4.tcp").flags
 local SYN, ACK, FIN, PSH
 SYN, ACK, FIN, PSH = flags.SYN, flags.ACK, flags.FIN, flags.PSH
-local get_mac
-get_mac = require("neigh").get_mac
+local mac_learner_ipc = require("mac_learner_ipc")
 local user_for_ip
 user_for_ip = require("auth.sessions").user_for_ip
 local AF_PACKET = 17
@@ -159,7 +158,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   local client_ip_str = ip2s(ip.src)
   local client_mac_str = l2.mac_src
   if not client_mac_str or client_mac_str == "unknown" then
-    client_mac_str = get_mac(client_ip_str)
+    client_mac_str = mac_learner_ipc.get_mac(client_ip_str)
   end
   local user = user_for_ip(client_ip_str, AUTH_SESSIONS_FILE, client_mac_str)
   local send

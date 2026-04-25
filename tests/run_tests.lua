@@ -2500,18 +2500,9 @@ do
     write_sessions(sessions, SF_FILE)
     return reset_cache()
   end
-  local stub_neigh
-  stub_neigh = function(mac_table)
-    package.loaded["neigh"] = {
-      get_mac = function(ip)
-        return mac_table[ip] or "unknown"
-      end
-    }
-  end
   local MAC = "aa:bb:cc:dd:ee:ff"
   local FUTURE = 9999999999
   test("session_for_ip — session directe par MAC", function()
-    stub_neigh({ })
     write_sf_sessions({
       [MAC] = {
         user = "alice",
@@ -2521,40 +2512,46 @@ do
     local s = session_for_ip(nil, SF_FILE, MAC)
     return assert(s and s.user == "alice", "session trouvée par MAC")
   end)
-  test("session_for_ip — session directe par IP (via fallback neigh)", function()
-    stub_neigh({
-      ["10.0.0.1"] = MAC
-    })
+  test("session_for_ip — session retrouvée par scan des IPs (IPv4)", function()
     write_sf_sessions({
       [MAC] = {
         user = "alice",
-        expires = FUTURE
+        expires = FUTURE,
+        ips = {
+          ipv4 = "10.0.0.1"
+        }
       }
     })
     local s = session_for_ip("10.0.0.1", SF_FILE)
-    return assert(s and s.user == "alice", "session trouvée par IP via neigh")
+    return assert(s and s.user == "alice", "session trouvée par scan IPv4")
   end)
-  test("session_for_ip — fallback MAC cross-family (IPv6 → IPv4)", function()
-    stub_neigh({
-      ["10.35.1.53"] = MAC
-    })
+  test("session_for_ip — session retrouvée par scan des IPs (IPv6)", function()
     write_sf_sessions({
       [MAC] = {
         user = "j@prn.ovh",
         expires = FUTURE,
         ips = {
-          ipv6 = "2a11:6c7:1700:7801::bede"
+          ipv6 = "fd00::1"
         }
       }
     })
-    local s = session_for_ip("10.35.1.53", SF_FILE)
-    assert(s, "session trouvée via MAC")
-    return assert_eq(s.user, "j@prn.ovh", "user correct")
+    local s = session_for_ip("fd00::1", SF_FILE)
+    return assert(s and s.user == "j@prn.ovh", "session trouvée par scan IPv6")
   end)
-  test("session_for_ip — fallback MAC : pas de session avec cette MAC", function()
-    stub_neigh({
-      ["10.0.0.2"] = "ff:ff:ff:ff:ff:ff"
+  test("session_for_ip — MAC 'unknown' → scan ips", function()
+    write_sf_sessions({
+      [MAC] = {
+        user = "alice",
+        expires = FUTURE,
+        ips = {
+          ipv4 = "10.0.0.99"
+        }
+      }
     })
+    local s = session_for_ip("10.0.0.99", SF_FILE, "unknown")
+    return assert(s and s.user == "alice", "MAC 'unknown' → scan ips trouve la session")
+  end)
+  test("session_for_ip — aucune session avec cet IP", function()
     write_sf_sessions({
       [MAC] = {
         user = "alice",
@@ -2562,10 +2559,9 @@ do
       }
     })
     local s = session_for_ip("10.0.0.2", SF_FILE)
-    return assert(not s, "aucune session avec la MAC différente")
+    return assert(not s, "aucune session pour cet IP")
   end)
-  test("session_for_ip — fallback MAC : ip inconnue de neigh → nil", function()
-    stub_neigh({ })
+  test("session_for_ip — ip inconnue → nil", function()
     write_sf_sessions({
       [MAC] = {
         user = "alice",
@@ -2573,38 +2569,34 @@ do
       }
     })
     local s = session_for_ip("9.9.9.9", SF_FILE)
-    return assert(not s, "neigh=unknown → nil")
+    return assert(not s, "IP inconnue → nil")
   end)
   test("session_for_ip — session expirée → nil", function()
-    stub_neigh({
-      ["10.0.0.9"] = MAC
-    })
     write_sf_sessions({
       [MAC] = {
         user = "alice",
         expires = 1
       }
     })
-    local s = session_for_ip("10.0.0.9", SF_FILE)
-    return assert(not s, "session expirée trouvée par MAC mais rejetée")
+    local s = session_for_ip("10.0.0.9", SF_FILE, MAC)
+    return assert(not s, "session expirée rejetée")
   end)
-  test("user_for_ip — retourne user via fallback MAC", function()
-    stub_neigh({
-      ["10.35.1.53"] = MAC
-    })
+  test("user_for_ip — retourne user via scan ips", function()
     write_sf_sessions({
       [MAC] = {
         user = "j@prn.ovh",
-        expires = FUTURE
+        expires = FUTURE,
+        ips = {
+          ipv4 = "10.35.1.53"
+        }
       }
     })
-    return assert_eq((user_for_ip("10.35.1.53", SF_FILE)), "j@prn.ovh", "user retrouvé cross-family")
+    return assert_eq((user_for_ip("10.35.1.53", SF_FILE)), "j@prn.ovh", "user retrouvé via scan ips")
   end)
   test("user_for_ip — ip nil → nil", function()
     return assert(not (user_for_ip(nil, SF_FILE)), "ip nil retourne nil")
   end)
-  test("session_for_ip — MAC passée explicitement prime sur neigh", function()
-    stub_neigh({ })
+  test("session_for_ip — MAC passée explicitement prime sur scan", function()
     write_sf_sessions({
       [MAC] = {
         user = "j@prn.ovh",
@@ -2615,21 +2607,7 @@ do
     assert(s, "session trouvée via MAC du paquet")
     return assert_eq(s.user, "j@prn.ovh", "user correct")
   end)
-  test("session_for_ip — MAC 'unknown' ignorée → bascule sur neigh", function()
-    stub_neigh({
-      ["10.0.0.99"] = MAC
-    })
-    write_sf_sessions({
-      [MAC] = {
-        user = "alice",
-        expires = FUTURE
-      }
-    })
-    local s = session_for_ip("10.0.0.99", SF_FILE, "unknown")
-    return assert(s and s.user == "alice", "neigh sert de fallback quand mac='unknown'")
-  end)
   os.remove(SF_FILE)
-  package.loaded["neigh"] = nil
 end
 io.write("\n── auth/credentials ──\n")
 local ok_creds, creds_mod = pcall(require, "auth.credentials")
@@ -2792,33 +2770,6 @@ test("parse/ndpi — parse_packet(raw) OK sur paquet IP brut", function()
   assert(pkt ~= nil, "parse_packet retourne nil : " .. tostring(tostring(status)))
   assert_eq(pkt.ip.src_ip, "1.2.3.4", "src_ip")
   return assert_eq(pkt.l4.dst_port, 53, "dst_port DNS")
-end)
-io.write("\n── neigh.parse_neigh_line ──\n")
-local parse_neigh_line
-parse_neigh_line = require("neigh").parse_neigh_line
-test("parse_neigh_line — IPv4 REACHABLE", function()
-  local r = parse_neigh_line("192.168.1.5 dev br-lan lladdr aa:bb:cc:dd:ee:ff REACHABLE")
-  assert(r, "doit reconnaître REACHABLE")
-  assert_eq(r.ip, "192.168.1.5", "ip")
-  return assert_eq(r.mac, "aa:bb:cc:dd:ee:ff", "mac")
-end)
-test("parse_neigh_line — IPv6 STALE", function()
-  local r = parse_neigh_line("fd00::5 dev br0 lladdr 00:11:22:33:44:55 STALE")
-  return assert(r and r.mac == "00:11:22:33:44:55", "STALE accepté")
-end)
-test("parse_neigh_line — flag 'router' avant le state", function()
-  local r = parse_neigh_line("2a11:6c7:1700:7801::bede dev br lladdr d8:d3:85:63:6b:27 router REACHABLE")
-  assert(r, "doit accepter la ligne avec flag 'router'")
-  assert_eq(r.ip, "2a11:6c7:1700:7801::bede", "ip")
-  return assert_eq(r.mac, "d8:d3:85:63:6b:27", "mac")
-end)
-test("parse_neigh_line — FAILED sans lladdr → nil", function()
-  local r = parse_neigh_line("10.0.0.42 dev eth0 FAILED")
-  return assert(not r, "FAILED sans lladdr doit retourner nil")
-end)
-test("parse_neigh_line — state inconnu → nil", function()
-  local r = parse_neigh_line("10.0.0.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff FOOBAR")
-  return assert(not r, "state inconnu doit retourner nil")
 end)
 io.write(string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed))
 return os.exit(failed == 0 and 0 or 1)

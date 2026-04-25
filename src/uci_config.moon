@@ -1,49 +1,29 @@
 -- src/uci_config.moon
 -- Préprocesseur UCI → génère /var/run/custos/config.lua avant le démarrage.
 --
--- Lit /etc/config/custos via la commande `uci` et produit un fichier
--- config.lua complet dans OUTPUT_DIR. En cas d'absence de valeur UCI
--- ou d'erreur, les valeurs par défaut s'appliquent.
+-- Lit /etc/config/custos via `uci` et produit un fichier config.lua dans
+-- OUTPUT_DIR. config.moon est la source unique des valeurs par défaut.
+-- Pour chaque clé de config.moon, on tente une lecture UCI (clé en minuscules).
 -- L'écriture est atomique (rename(2) sur le même filesystem tmpfs).
 --
 -- Usage (appelé par /etc/init.d/custos) :
 --   luajit /usr/share/custos/uci_config.lua
 
+-- Ajout du répertoire du script à package.path pour l'exécution standalone
+-- (l'init script lance uci_config.lua sans LUA_PATH).
+script_dir = (arg and arg[0] or "")\match("^(.*)/") or "."
+package.path = "#{script_dir}/?.lua;#{package.path}"
+
+C = require "config"
 UCI_PKG    = "custos"
 UCI_SEC    = "main"
 OUTPUT_DIR = "/var/run/custos"
 
--- ── Valeurs par défaut ────────────────────────────────────────────
--- Reflètent les constantes de config.moon, adaptées à l'environnement OpenWrt.
-DEFAULTS = {
-  forced_ttl:             60
-  nft_ip_timeout:         "2m"
-  ipc_pending_ttl:        5
-  client_expiry:          300
-  neigh_refresh_cooldown: 10
-  nft_add_retry_count:    3
-  nft_add_backoff_ms:     "20, 50, 100"
-  nft_add_failure_policy: "fail-closed"
-  ipc_match_retry_enabled: true
-  ipc_match_retry_count:  5
-  ipc_match_retry_sleep_ms: 20
-  -- Chemin du fichier de sessions, partagé entre le worker auth et les
-  -- workers Q0/Q1/Q2. Doit correspondre à auth.sessions_file de filter.yml
-  -- (défaut dans filter/lib/load_config.moon).
-  auth_sessions_file:     "./tmp/sessions.lua"
-  allowed_domains: {
-    "local", "lan", "home.arpa"
-  }
-  dest_whitelist:         {}  -- Empty by default, configured via UCI
-  log_level:              "INFO" -- Nouvelle valeur par défaut pour log_level
-}
-
 -- ── Lecture UCI ───────────────────────────────────────────────────
 
---- Lit une option scalaire UCI via `uci get`.
--- Retourne nil si l'option est absente ou si `uci` n'est pas disponible.
--- @tparam string option Nom de l'option UCI
--- @treturn string|nil Valeur brute ou nil
+--- Lit une option scalaire UCI.
+-- @tparam string option Nom de l'option UCI (minuscules)
+-- @treturn string|nil Valeur brute ou nil si absente
 uci_get = (option) ->
   fh = io.popen "uci get #{UCI_PKG}.#{UCI_SEC}.#{option} 2>/dev/null"
   return nil unless fh
@@ -51,119 +31,67 @@ uci_get = (option) ->
   fh\close!
   val if val and val ~= ""
 
---- Lit une option liste UCI via `uci show`.
--- Format de sortie `uci show` : custos.main.option='valeur' (une ligne par entrée).
--- Retourne toujours une table (vide si l'option est absente), jamais nil.
--- @tparam string option Nom de l'option UCI
--- @treturn table Liste des valeurs brutes
+--- Lit une option liste UCI.
+-- @tparam string option Nom de l'option UCI (minuscules)
+-- @treturn table|nil Liste de chaînes, ou nil si l'option est absente
 uci_get_list = (option) ->
   fh = io.popen "uci show #{UCI_PKG}.#{UCI_SEC}.#{option} 2>/dev/null"
-  return {} unless fh
+  return nil unless fh
   content = fh\read "*a"
   fh\close!
+  return nil if not content or content\match "^%s*$"
   result = {}
   for val in content\gmatch "'([^']*)'"
     table.insert result, val
   result
 
--- ── Validation ───────────────────────────────────────────────────
+-- ── Résolution ───────────────────────────────────────────────────
 
---- Valide un entier strictement positif.
--- @tparam string|nil raw Valeur brute UCI
--- @tparam number default Valeur par défaut
--- @treturn number
-validate_posint = (raw, default) ->
-  return default unless raw
-  n = tonumber raw
-  return default unless n and math.floor(n) == n and n > 0
-  n
+--- Coerce une valeur UCI brute (string) vers le type de la valeur par défaut.
+-- @tparam string   raw     Valeur brute lue par uci_get
+-- @tparam any      default Valeur par défaut (détermine le type cible)
+-- @treturn any
+coerce = (raw, default) ->
+  switch type default
+    when "number"  then tonumber(raw) or default
+    when "boolean"
+      return true  if raw == "1" or raw == "true"
+      return false if raw == "0" or raw == "false"
+      default
+    else raw
 
---- Valide le format de timeout nftables (entier suivi d'une unité : ms/s/m/h/d/w).
--- @tparam string|nil raw Valeur brute UCI
--- @tparam string default Valeur par défaut
--- @treturn string
-validate_nft_timeout = (raw, default) ->
-  return default unless raw
-  return raw if raw\match "^%d+%a+$"
-  io.stderr\write "uci_config: nft_ip_timeout invalide '#{raw}', utilise '#{default}'\n"
-  default
-
---- Valide un nom de domaine (RFC 1035 : lettres, chiffres, tiret, point).
--- @tparam string d Nom de domaine à valider
--- @treturn string|nil Domaine valide ou nil si invalide
-validate_domain = (d) ->
-  return nil unless d and #d > 0 and #d <= 253
-  return nil if d\match "[^%a%d%.%-]"
-  d
-
---- Valide un booléen UCI (0/1/true/false).
--- @tparam string|nil raw Valeur brute UCI
--- @tparam boolean default Valeur par défaut
--- @treturn boolean
-validate_bool = (raw, default) ->
-  return default unless raw
-  return true if raw == "1" or raw == "true"
-  return false if raw == "0" or raw == "false"
-  default
-
---- Valide une adresse IP ou CIDR (IPv4 ou IPv6).
--- @tparam string s Adresse IP ou CIDR à valider
--- @treturn string|nil Adresse valide ou nil si invalide
-validate_ip_cidr = (s) ->
-  return nil unless s and #s > 0
-  s = s\gsub "%s+", ""
-  return nil if #s == 0
-  -- Validation basique : contient ':' pour IPv6, sinon IPv4
-  -- Format CIDR : / suivi d'un nombre
-  if s\find ":"
-    -- IPv6 : hhhhh:hhhh:hhhh:hhhh:hhhh:hhhh:hhhh:hhhh ou avec CIDR
-    return nil if s\match "[^%x:%./]"  -- caractères invalides (autorise / pour CIDR)
-    return nil if s\match ":::"  -- triple double-point invalide
-  else
-    -- IPv4 : a.b.c.d ou a.b.c.d/n
-    return nil if s\match "[^%d%./]"  -- caractères invalides (autorise / pour CIDR)
-    -- Split manuel pour /
-    parts = {}
-    for part in s\gmatch "[^/]+"
-      table.insert parts, part
-    return nil if #parts > 2
-    ip = parts[1]
-    return nil unless ip
-    -- Split manuel pour .
-    octets = {}
-    for octet in ip\gmatch "[^.]+"
-      table.insert octets, octet
-    return nil unless #octets == 4
-    for octet in *octets
-      n = tonumber octet
-      return nil unless n and n >= 0 and n <= 255
-    if #parts == 2
-      mask = tonumber parts[2]
-      return nil unless mask and mask >= 0 and mask <= 32
-  s
-
---- Valide un niveau de log (ERROR, WARN, INFO, DEBUG, TRACE).
--- @tparam string|nil raw Valeur brute UCI
--- @tparam string default Valeur par défaut
--- @treturn string
-validate_log_level = (raw, default) ->
-  return default unless raw
-  raw = raw\upper!() -- Convertir en majuscules pour la comparaison
-  valid_levels = {"ERROR": true, "WARN": true, "INFO": true, "DEBUG": true, "TRACE": true}
-  return raw if valid_levels[raw]
-  io.stderr\write "uci_config: log_level invalide '#{raw}', utilise '#{default}'\n"
-  default
+--- Résout la configuration complète : UCI en surcharge, config.moon en défaut.
+-- @treturn table Configuration résolue (mêmes clés que config.moon)
+resolve = ->
+  cfg = {}
+  for k, v in pairs C
+    option = k\lower!
+    if type(v) == "table"
+      cfg[k] = uci_get_list(option) or v
+    else
+      raw = uci_get option
+      cfg[k] = if raw then coerce(raw, v) else v
+  cfg
 
 -- ── Génération Lua ────────────────────────────────────────────────
 
---- Échappe une chaîne pour inclusion dans un littéral Lua entre guillemets doubles.
--- @tparam string s Chaîne à échapper
+--- Sérialise une valeur Lua en littéral de code.
+-- Supporte : number, boolean, string, table (array homogène).
+-- @tparam any v
 -- @treturn string
-escape_lua_str = (s) ->
-  s\gsub("\\", "\\\\")\gsub('"', '\\"')\gsub("\n", "\\n")
+serialize = (v) ->
+  switch type v
+    when "number"  then tostring v
+    when "boolean" then tostring v
+    when "string"  then string.format '"%s"', v\gsub("\\", "\\\\")\gsub('"', '\\"')
+    when "table"
+      items = [serialize item for item in *v]
+      #items == 0 and "{}" or "{ #{table.concat items, ', '} }"
+    else error "serialize: type non supporté : #{type v} (#{tostring v})"
 
---- Génère le contenu complet de config.lua depuis les valeurs résolues.
--- Reproduit exactement les clés exportées par config.moon, avec les valeurs UCI.
+--- Génère le contenu complet de config.lua depuis la config résolue.
+-- Toutes les clés de config.moon sont émises ; ordre alphabétique pour
+-- un diff stable.
 -- @tparam table cfg Configuration résolue
 -- @treturn string Contenu Lua valide
 generate_config = (cfg) ->
@@ -171,113 +99,27 @@ generate_config = (cfg) ->
     "-- config.lua — généré par uci_config.lua depuis /etc/config/custos"
     "-- Ne pas modifier : écrasé au démarrage/rechargement du service."
     ""
-    "local QUEUE_QUESTIONS        = 0"
-    "local QUEUE_RESPONSES        = 1"
-    "local QUEUE_CAPTIVE          = 2"
-    "local QUEUE_REJECT           = 3"
-    string.format "local FORCED_TTL             = %d",   cfg.forced_ttl
-    string.format 'local NFT_IP_TIMEOUT         = "%s"', cfg.nft_ip_timeout
-    string.format "local IPC_PENDING_TTL        = %d",   cfg.ipc_pending_ttl
-    string.format "local CLIENT_EXPIRY          = %d",   cfg.client_expiry
-    string.format "local NEIGH_REFRESH_COOLDOWN = %d",   cfg.neigh_refresh_cooldown
-    string.format "local NFT_ADD_RETRY_COUNT    = %d",   cfg.nft_add_retry_count
-    string.format "local NFT_ADD_BACKOFF_MS     = { %s }", cfg.nft_add_backoff_ms
-    string.format 'local NFT_ADD_FAILURE_POLICY = "%s"', cfg.nft_add_failure_policy
-    string.format "local IPC_MATCH_RETRY_ENABLED = %s", if cfg.ipc_match_retry_enabled then "true" else "false"
-    string.format "local IPC_MATCH_RETRY_COUNT  = %d",   cfg.ipc_match_retry_count
-    string.format "local IPC_MATCH_RETRY_SLEEP_MS = %d", cfg.ipc_match_retry_sleep_ms
-    "local NFT_TABLE              = \"dns-filter-bridge\""
-    "local NFT_FAMILY              = \"bridge\""
-    "local NFT_FAMILY6             = \"bridge\""
-    'local NFT_SET_IP4            = "ip4_allowed"'
-    'local NFT_SET_IP6            = "ip6_allowed"'
-    'local NFT_SET_MAC4           = "mac4_allowed"'
-    'local NFT_SET_MAC6           = "mac6_allowed"'
-    string.format 'local NFT_IP_TIMEOUT         = "%s"', cfg.nft_ip_timeout
-    "local DNS_PORT               = 53"
-    "local AF_INET                = 2"
-    "local AF_INET6               = 10"
-    "local PROTO_UDP              = 17"
-    string.format 'local AUTH_SESSIONS_FILE     = "%s"', escape_lua_str cfg.auth_sessions_file
-    string.format 'local LOG_LEVEL              = "%s"', cfg.log_level -- Nouvelle ligne pour LOG_LEVEL
-    ""
-    "local ALLOWED_DOMAINS = {"
   }
-  for d in *cfg.allowed_domains
-    table.insert lines, string.format('  "%s",', escape_lua_str d)
-  table.insert lines, "}"
-  table.insert lines, ""
-  table.insert lines, "local DEST_WHITELIST = {"
-  for ip in *cfg.dest_whitelist
-    table.insert lines, string.format('  "%s",', escape_lua_str ip)
-  table.insert lines, "}"
-  table.insert lines, ""
-  table.insert lines, "local NFT_EXTRA_RULES = {"
-  for r in *cfg.nft_extra_rules
-    table.insert lines, string.format('  "%s",', escape_lua_str r)
-  table.insert lines, "}"
+  keys = [k for k, _ in pairs cfg]
+  table.sort keys
+  for k in *keys
+    table.insert lines, string.format "local %-32s = %s", k, serialize cfg[k]
   table.insert lines, ""
   table.insert lines, "return {"
-  for k in *{
-      "QUEUE_QUESTIONS", "QUEUE_RESPONSES", "QUEUE_CAPTIVE", "QUEUE_REJECT",
-      "ALLOWED_DOMAINS", "DEST_WHITELIST", "NFT_TABLE", "NFT_FAMILY", "NFT_FAMILY6",
-      "NFT_SET_IP4", "NFT_SET_IP6", "NFT_SET_MAC4", "NFT_SET_MAC6",
-      "NFT_IP_TIMEOUT", "NFT_EXTRA_RULES", "IPC_PENDING_TTL", "CLIENT_EXPIRY",
-      "NEIGH_REFRESH_COOLDOWN", "FORCED_TTL", "DNS_PORT", "AF_INET",
-      "AF_INET6", "PROTO_UDP", "AUTH_SESSIONS_FILE",
-      "NFT_ADD_RETRY_COUNT", "NFT_ADD_BACKOFF_MS",
-      "NFT_ADD_FAILURE_POLICY", "IPC_MATCH_RETRY_ENABLED", "IPC_MATCH_RETRY_COUNT",
-      "IPC_MATCH_RETRY_SLEEP_MS",
-      "LOG_LEVEL" -- Nouvelle constante exportée
-    }
-    table.insert lines, string.format("  %-24s = %s,", k, k)
+  for k in *keys
+    table.insert lines, string.format "  %-32s = %s,", k, k
   table.insert lines, "}"
   table.concat lines, "\n"
 
 -- ── Point d'entrée ────────────────────────────────────────────────
 
---- Résout la configuration UCI et écrit OUTPUT_DIR/config.lua atomiquement.
--- Quitte avec code 1 si le répertoire de sortie ou l'écriture est impossible.
 main = ->
-  raw_domains = uci_get_list "allowed_domains"
-  domains     = {}
-  for d in *raw_domains
-    valid = validate_domain d
-    table.insert domains, valid if valid
-  domains = DEFAULTS.allowed_domains if #domains == 0
+  cfg = resolve!
 
-  raw_whitelist = uci_get_list "dest_whitelist"
-  whitelist    = {}
-  for ip in *raw_whitelist
-    valid = validate_ip_cidr ip
-    table.insert whitelist, valid if valid
-  whitelist = DEFAULTS.dest_whitelist if #whitelist == 0
-
-  cfg = {
-    forced_ttl:             validate_posint(uci_get("forced_ttl"),                   DEFAULTS.forced_ttl)
-    nft_ip_timeout:         validate_nft_timeout(uci_get("nft_ip_timeout"),          DEFAULTS.nft_ip_timeout)
-    ipc_pending_ttl:        validate_posint(uci_get("ipc_pending_ttl"),              DEFAULTS.ipc_pending_ttl)
-    client_expiry:          validate_posint(uci_get("client_expiry"),                DEFAULTS.client_expiry)
-    neigh_refresh_cooldown: validate_posint(uci_get("neigh_refresh_cooldown"),       DEFAULTS.neigh_refresh_cooldown)
-    nft_add_retry_count:    validate_posint(uci_get("nft_add_retry_count"),          DEFAULTS.nft_add_retry_count)
-    nft_add_backoff_ms:     uci_get("nft_add_backoff_ms")                       or DEFAULTS.nft_add_backoff_ms
-    nft_add_failure_policy: uci_get("nft_add_failure_policy")                  or DEFAULTS.nft_add_failure_policy
-    ipc_match_retry_enabled: validate_bool(uci_get("ipc_match_retry_enabled"),      DEFAULTS.ipc_match_retry_enabled)
-    ipc_match_retry_count:  validate_posint(uci_get("ipc_match_retry_count"),       DEFAULTS.ipc_match_retry_count)
-    ipc_match_retry_sleep_ms: validate_posint(uci_get("ipc_match_retry_sleep_ms"), DEFAULTS.ipc_match_retry_sleep_ms)
-    auth_sessions_file:     uci_get("auth_sessions_file")              or DEFAULTS.auth_sessions_file
-    allowed_domains:        domains
-    dest_whitelist:         whitelist
-    nft_extra_rules:         uci_get_list "nft_extra_rules"
-    log_level:              validate_log_level(uci_get("log_level"),                  DEFAULTS.log_level) -- Nouvelle ligne pour log_level
-}
-
-  -- Création du répertoire de sortie (tmpfs sur OpenWrt, recréé après chaque reboot)
   if os.execute("mkdir -p #{OUTPUT_DIR}") ~= 0
     io.stderr\write "uci_config: impossible de créer #{OUTPUT_DIR}\n"
     os.exit 1
 
-  -- Écriture atomique : fichier temporaire puis rename(2)
   tmp_path    = "#{OUTPUT_DIR}/config.lua.tmp"
   output_path = "#{OUTPUT_DIR}/config.lua"
 

@@ -19,10 +19,13 @@ filter                   = require "filter"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn } = require "log"
 { :user_for_mac } = require "auth.sessions"
-neigh                    = require "neigh"
+mac_learner_ipc          = require "mac_learner_ipc"
 
--- fd d'écriture du pipe IPC, injecté par main.moon avant fork()
+-- fd d'écriture du pipe IPC Q0→Q1, injecté par main.moon avant fork()
 pipe_wfd = nil
+
+-- fd d'écriture du pipe Q0→MAC learner, injecté par main.moon avant fork()
+mac_learn_wfd = nil
 
 -- ── Callback principal ───────────────────────────────────────────
 handle_question = (qh_ptr, nfad, pkt_id) ->
@@ -50,9 +53,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     log_warn { action: "parse_failed", mac_src: l2.mac_src }
     return NF_DROP
 
-  -- Fallback MAC resolution if L2 parse failed
-  if l2.mac_src == "unknown" or not l2.mac_src
-    l2.mac_src = neigh.get_mac pkt.ip.src_ip
+  -- Alimentation du MAC learner si la MAC source est connue.
+  -- Pas de fallback neigh : l'association IP→MAC vient exclusivement de
+  -- nfq_get_packet_hw(), qui voit les paquets L2 réels du bridge.
+  if l2.mac_src and l2.mac_src ~= "unknown" and mac_learn_wfd
+    mac_learner_ipc.learn mac_learn_wfd, pkt.ip.src_ip_raw, l2.mac_raw
 
   -- ── nDPI State Tracking ──────────────────────────────────────
   ndpi.get_flow pkt
@@ -134,9 +139,10 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 
 
 -- ── Point d'entrée ───────────────────────────────────────────────
--- Appelé par main.moon après fork(), avec le fd d'écriture du pipe.
-run = (wfd) ->
-  pipe_wfd = wfd
+-- Appelé par main.moon après fork(), avec les fd des deux pipes.
+run = (wfd, mac_wfd) ->
+  pipe_wfd     = wfd
+  mac_learn_wfd = mac_wfd
   filter.load!
   ndpi.warmup!
   -- Apply extra nft rules from UCI once at startup (inserted at head of `forward` chain)

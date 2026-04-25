@@ -32,7 +32,8 @@ MOONS := \
   $(SRC)/parse/ndpi_v4.moon \
   $(SRC)/parse/ndpi_v5.moon \
   $(SRC)/ipc.moon \
-  $(SRC)/neigh.moon \
+  $(SRC)/mac_learner_ipc.moon \
+  $(SRC)/mac_learner.moon \
   $(SRC)/ip_whitelist.moon \
   $(SRC)/nft.moon \
   $(SRC)/nft_add_helper.moon \
@@ -98,8 +99,9 @@ test-ndpi: all
 
 
 ## Tests OpenWrt end-to-end (accès SSH à un routeur déployé requis)
-## Usage : make test-openwrt HOST=root@esm.y [ARGS=--no-restart]
-## Usage bridge : make test-openwrt HOST=root@esm.y ARGS=--bridge
+## Usage : make test-openwrt HOST=root@esm.y [ARGS=--setup]
+## Par défaut, lance juste les tests (en supposant que le service est déjà en cours).
+## ARGS=--setup pour déployer et démarrer le service avant de tester.
 test-openwrt: all
 	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis. Ex: make test-openwrt HOST=root@esm.y"; exit 1)
 	@echo "Tests OpenWrt end-to-end..."
@@ -196,7 +198,7 @@ help:
 	@echo "  check        - Vérification syntaxique des fichiers Lua"
 	@echo "  test         - Tests unitaires (pas root requis)"
 	@echo "  test-ndpi    - Tests nDPI wrapper (libndpi requis)"
-	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis)"
+	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis, ARGS=--setup optionnel)"
 	@echo "  test-env     - Crée/démarre l'environnement libvirt 3 VMs pour E2E"
 	@echo "  test-env-down- Arrête les VMs (conserve les disques)"
 	@echo "  test-env-nuke- Supprime VMs, réseaux, images (scratch)"

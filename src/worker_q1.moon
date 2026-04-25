@@ -17,9 +17,8 @@
 --        f. Envoie le paquet modifié avec NF_ACCEPT + payload
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS, :AUTH_SESSIONS_FILE } = require "config"
+{ :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS, :AUTH_SESSIONS_FILE } = require "config"
 { :user_for_mac } = require "auth.sessions"
-neigh = require "neigh"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
 { :get_l2 } = require "parse/ethernet"
@@ -142,8 +141,6 @@ ip_to_mac = {}
 -- fd de lecture du pipe IPC, injecté par main.moon avant fork()
 pipe_rfd = nil
 
--- Timestamp du dernier refresh de la table voisine (lazy-refresh sur miss)
-last_neigh_refresh = 0
 sleep_req = ffi.new "timespec_t[1]"
 
 update_mac_clients = nil
@@ -227,17 +224,6 @@ resolve_client_family = (ip_str, want) ->
     result = entry and entry[want]
     return result if result
 
-  -- Miss : lazy-refresh si le cooldown est écoulé
-  ts = os.time!
-  if ts - last_neigh_refresh > NEIGH_REFRESH_COOLDOWN
-    last_neigh_refresh = ts
-    neigh.refresh mac_clients, ip_to_mac
-    -- Retry après refresh
-    mac2 = ip_to_mac[ip_str]
-    if mac2
-      entry2 = mac_clients[mac2]
-      return entry2 and entry2[want]
-
   nil
 
 --- Process a DNS response packet from NFQUEUE.
@@ -294,9 +280,9 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   txid        = pkt.dns.txid
   client_ip   = pkt.ip.dst_ip
   resolver_ip = pkt.ip.src_ip
-  client_mac = l2.mac_dst
-  if client_mac == "unknown" or not client_mac
-    client_mac = neigh.get_mac client_ip
+  -- MAC du client : resolution depuis la table ip_to_mac alimentée par Q0 via IPC.
+  -- mac_dst n'est jamais exposée par libnfq ; on utilise le reverse-lookup local.
+  client_mac = ip_to_mac[client_ip] or "unknown"
   -- Utilisateur authentifié (nil si l'IP n'a pas de session valide)
   -- L'indexation par MAC permet de reconnaître un client authentifié
   -- en IPv6 quand ses paquets IPv4 arrivent (et vice-versa) de manière O(1).
@@ -480,10 +466,8 @@ run = (rfd) ->
   -- Pré-remplit mac_clients / ip_to_mac depuis la table ARP/NDP courante,
   -- avant même la première requête DNS. Indispensable pour le cross-family
   -- (IPv6 client → RR A) quand aucun message IPC n'a encore été reçu.
-  do
-    data = neigh.load!
-    mac_clients = data.mac_clients
-    ip_to_mac   = data.ip_to_mac
+  -- mac_clients et ip_to_mac démarrent vides ; ils sont alimentés organiquement
+  -- par les messages IPC reçus de Q0 (update_mac_clients dans drain_on_msg).
   -- Pré-initialise le module nDPI avant le démarrage de la boucle pour éviter
   -- une latence de 1–2 s sur le premier paquet (ndpi_init_detection_module).
   ndpi.warmup!

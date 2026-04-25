@@ -348,7 +348,6 @@ Installer = function(cfg)
 	option nft_ip_timeout    '2m'
 	option ipc_pending_ttl   '5'
 	option client_expiry     '300'
-	option neigh_refresh_cooldown '10'
 	list   allowed_domains   'local'
 	list   allowed_domains   'lan'
 	list   allowed_domains   'home.arpa'

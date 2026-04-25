@@ -23,17 +23,22 @@ local tests_passed = 0
 local tests_failed = 0
 local SSH_TARGET = nil
 local no_restart = false
+local do_setup = false
 for _, a in ipairs(arg or { }) do
   if a:match("^%-%-no%-restart") then
     no_restart = true
+  elseif a:match("^%-%-setup") then
+    do_setup = true
   elseif (not a:match("^%-%-")) and not SSH_TARGET then
     SSH_TARGET = a
   end
 end
 if not (SSH_TARGET) then
-  io.stderr:write("Usage: " .. tostring(arg[0] or 'test_openwrt') .. " user@host [--no-restart]\n")
+  io.stderr:write("Usage: " .. tostring(arg[0] or 'test_openwrt') .. " user@host [--no-restart] [--setup]\n")
   os.exit(1)
 end
+local workers_ready = false
+local auth_ready = false
 local SSH_OPTS = "-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes"
 local SCP_OPTS = "-O " .. tostring(SSH_OPTS)
 local run
@@ -108,83 +113,98 @@ local LOCAL_MAC = local_mac_raw and local_mac_raw:match("[0-9a-f]+:[0-9a-f:]+")
 print("  MAC locale : " .. tostring(LOCAL_MAC or '(inconnue)'))
 local AUTH_URL = "https://" .. tostring(LAN_IP) .. ":33443"
 local CAPTIVE_URL = "http://" .. tostring(LAN_IP) .. ":33080"
-print("")
-print(tostring(C.bold) .. "[2/5] Démarrage du service..." .. tostring(C.reset))
-ssh("mkdir -p " .. tostring(CUSTOS_DIR) .. "/tmp")
-if not (no_restart) then
-  ssh("service custos stop 2>/dev/null; true")
-  os.execute("sleep 1")
-  for _ = 1, 30 do
-    local procs
-    _, procs = ssh("for pid in $(pgrep -f 'luajit2.*main' 2>/dev/null); do kill -9 $pid 2>/dev/null; done; pgrep -f 'luajit2.*main' 2>/dev/null | wc -l")
-    if (tonumber(procs or "1") or 1) == 0 then
+local check_service_status
+check_service_status = function()
+  print("  Vérification du statut du service...")
+  print("  Attente des workers (queue_listening)...")
+  for _ = 1, 20 do
+    local log
+    _, log = ssh(log_since_start("grep 'queue_listening'"))
+    if log and log:match("queue_listening") then
+      workers_ready = true
       break
     end
-    os.execute("sleep 0.5")
+    os.execute("sleep 1")
   end
-  os.execute("sleep 1")
-  ssh("nft flush ruleset 2>/dev/null; true")
-  ssh("> " .. tostring(SESSIONS_FILE) .. " 2>/dev/null; true")
-  ssh("grep -v '^newuser:' " .. tostring(CFG_DIR) .. "/secrets > /tmp/_secrets.tmp 2>/dev/null && mv /tmp/_secrets.tmp " .. tostring(CFG_DIR) .. "/secrets 2>/dev/null; true")
-  local ok_tu
-  ok_tu, _ = ssh("grep -q '^testuser:' " .. tostring(CFG_DIR) .. "/secrets 2>/dev/null")
-  if not (ok_tu) then
-    print("  Création du compte testuser...")
-    ssh("LUA_PATH='/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;" .. tostring(CUSTOS_DIR) .. "/?.lua;" .. tostring(CUSTOS_DIR) .. "/?/init.lua;;' luajit2 -e \"local c=require('auth.credentials'); c.register_user('testuser','testpass','" .. tostring(CFG_DIR) .. "/secrets',{}); print('ok')\"")
+  print("  Workers : " .. tostring(workers_ready and (C.green .. 'prêts' .. C.reset) or (C.red .. 'NON prêts' .. C.reset)))
+  if not (workers_ready) then
+    error("Workers pas démarrés — vérifier logread sur le routeur")
   end
-  local script_dir = (arg[0] or "tests/test_openwrt.lua"):gsub("[^/]+%.lua$", "")
-  local project_root = (script_dir:gsub("tests/?$", "")):gsub("/$", "")
-  project_root = project_root == "" and "." or project_root
-  print("  Déploiement des fichiers Lua + nft → " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "...")
-  local nft_src = tostring(project_root) .. "/nft-rules/dns-filter-bridge.nft"
-  local nft_dst = tostring(CUSTOS_DIR) .. "/dns-filter.nft"
-  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(nft_src) .. " " .. tostring(SSH_TARGET) .. ":" .. tostring(nft_dst))
-  run("ssh " .. tostring(SSH_OPTS) .. " " .. tostring(SSH_TARGET) .. " 'mkdir -p " .. tostring(CUSTOS_DIR) .. "/parse " .. tostring(CUSTOS_DIR) .. "/auth " .. tostring(CUSTOS_DIR) .. "/filter/conditions " .. tostring(CUSTOS_DIR) .. "/filter/actions " .. tostring(CUSTOS_DIR) .. "/filter/lib'")
-  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/")
-  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/parse/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/parse/")
-  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/auth/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/auth/")
-  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/")
-  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/conditions/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/conditions/")
-  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/actions/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/actions/")
-  run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/lib/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/lib/")
-  print("  Chargement des règles nft...")
-  local ok_nft, nft_err = ssh("nft -f " .. tostring(CUSTOS_DIR) .. "/dns-filter.nft 2>&1")
-  if not (ok_nft) then
-    print("  " .. tostring(C.red) .. "✗ Échec chargement nft : " .. tostring((nft_err or ''):gsub('%s+$', '')) .. tostring(C.reset))
-    os.exit(1)
+  for _ = 1, 20 do
+    local log
+    _, log = ssh(log_since_start("grep 'auth_listening'"))
+    if log and log:match("auth_listening") then
+      auth_ready = true
+      break
+    end
+    os.execute("sleep 1")
   end
-  print("  Démarrage des workers LuaJIT...")
-  local lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;" .. tostring(CUSTOS_DIR) .. "/?.lua;" .. tostring(CUSTOS_DIR) .. "/?/init.lua;;"
-  ssh("logger -t custos '" .. tostring(LOG_MARKER) .. "'")
-  ssh("(cd " .. tostring(CUSTOS_DIR) .. " && CUSTOS_FILTER_CONFIG=" .. tostring(CFG_DIR) .. "/filter.yml LUA_PATH=\"" .. tostring(lua_path) .. "\" luajit2 " .. tostring(CUSTOS_DIR) .. "/main.lua </dev/null 2>&1 | logger -t custos) &")
-  os.execute("sleep 5")
+  print("  Auth    : " .. tostring(auth_ready and (C.green .. 'prêt' .. C.reset) or (C.red .. 'NON prêt' .. C.reset)))
+  if not (auth_ready) then
+    error("Auth worker pas démarré — vérifier logread sur le routeur")
+  end
+  return true
 end
-print("  Attente des workers (queue_listening)...")
-local workers_ready = false
-for _ = 1, 20 do
-  local log
-  _, log = ssh(log_since_start("grep 'queue_listening'"))
-  if log and log:match("queue_listening") then
-    workers_ready = true
-    break
+local setup_service
+setup_service = function()
+  print("")
+  print(tostring(C.bold) .. "[2/5] Démarrage du service..." .. tostring(C.reset))
+  ssh("mkdir -p " .. tostring(CUSTOS_DIR) .. "/tmp")
+  if not (no_restart) then
+    ssh("service custos stop 2>/dev/null; true")
+    os.execute("sleep 1")
+    for _ = 1, 30 do
+      local procs
+      _, procs = ssh("for pid in $(pgrep -f 'luajit2.*main' 2>/dev/null); do kill -9 $pid 2>/dev/null; done; pgrep -f 'luajit2.*main' 2>/dev/null | wc -l")
+      if (tonumber(procs or "1") or 1) == 0 then
+        break
+      end
+      os.execute("sleep 0.5")
+    end
+    os.execute("sleep 1")
+    ssh("nft flush ruleset 2>/dev/null; true")
+    ssh("> " .. tostring(SESSIONS_FILE) .. " 2>/dev/null; true")
+    ssh("grep -v '^newuser:' " .. tostring(CFG_DIR) .. "/secrets > /tmp/_secrets.tmp 2>/dev/null && mv /tmp/_secrets.tmp " .. tostring(CFG_DIR) .. "/secrets 2>/dev/null; true")
+    local ok_tu
+    ok_tu, _ = ssh("grep -q '^testuser:' " .. tostring(CFG_DIR) .. "/secrets 2>/dev/null")
+    if not (ok_tu) then
+      print("  Création du compte testuser...")
+      ssh("LUA_PATH='/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;" .. tostring(CUSTOS_DIR) .. "/?.lua;" .. tostring(CUSTOS_DIR) .. "/?/init.lua;;' luajit2 -e \"local c=require('auth.credentials'); c.register_user('testuser','testpass','" .. tostring(CFG_DIR) .. "/secrets',{}); print('ok')\"")
+    end
+    local script_dir = (arg[0] or "tests/test_openwrt.lua"):gsub("[^/]+%.lua$", "")
+    local project_root = (script_dir:gsub("tests/?$", "")):gsub("/$", "")
+    project_root = project_root == "" and "." or project_root
+    print("  Déploiement des fichiers Lua + nft → " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "...")
+    local nft_src = tostring(project_root) .. "/nft-rules/dns-filter-bridge.nft"
+    local nft_dst = tostring(CUSTOS_DIR) .. "/dns-filter.nft"
+    run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(nft_src) .. " " .. tostring(SSH_TARGET) .. ":" .. tostring(nft_dst))
+    run("ssh " .. tostring(SSH_OPTS) .. " " .. tostring(SSH_TARGET) .. " 'mkdir -p " .. tostring(CUSTOS_DIR) .. "/parse " .. tostring(CUSTOS_DIR) .. "/auth " .. tostring(CUSTOS_DIR) .. "/filter/conditions " .. tostring(CUSTOS_DIR) .. "/filter/actions " .. tostring(CUSTOS_DIR) .. "/filter/lib'")
+    run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/")
+    run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/parse/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/parse/")
+    run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/auth/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/auth/")
+    run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/")
+    run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/conditions/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/conditions/")
+    run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/actions/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/actions/")
+    run("scp " .. tostring(SCP_OPTS) .. " " .. tostring(project_root) .. "/lua/filter/lib/*.lua " .. tostring(SSH_TARGET) .. ":" .. tostring(CUSTOS_DIR) .. "/filter/lib/")
+    print("  Chargement des règles nft...")
+    local ok_nft, nft_err = ssh("nft -f " .. tostring(CUSTOS_DIR) .. "/dns-filter.nft 2>&1")
+    if not (ok_nft) then
+      print("  " .. tostring(C.red) .. "✗ Échec chargement nft : " .. tostring((nft_err or ''):gsub('%s+$', '')) .. tostring(C.reset))
+      os.exit(1)
+    end
+    print("  Démarrage des workers LuaJIT...")
+    local lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;" .. tostring(CUSTOS_DIR) .. "/?.lua;" .. tostring(CUSTOS_DIR) .. "/?/init.lua;;"
+    ssh("logger -t custos '" .. tostring(LOG_MARKER) .. "'")
+    ssh("(cd " .. tostring(CUSTOS_DIR) .. " && CUSTOS_FILTER_CONFIG=" .. tostring(CFG_DIR) .. "/filter.yml LUA_PATH=\"" .. tostring(lua_path) .. "\" luajit2 " .. tostring(CUSTOS_DIR) .. "/main.lua </dev/null 2>&1 | logger -t custos) &")
+    os.execute("sleep 5")
   end
-  os.execute("sleep 1")
+  return check_service_status()
 end
-print("  Workers : " .. tostring(workers_ready and (C.green .. 'prêts' .. C.reset) or (C.red .. 'NON prêts' .. C.reset)))
-if not (workers_ready) then
-  error("Workers pas démarrés — vérifier logread sur le routeur")
+if do_setup then
+  setup_service()
+else
+  check_service_status()
 end
-local auth_ready = false
-for _ = 1, 20 do
-  local log
-  _, log = ssh(log_since_start("grep 'auth_listening'"))
-  if log and log:match("auth_listening") then
-    auth_ready = true
-    break
-  end
-  os.execute("sleep 1")
-end
-print("  Auth    : " .. tostring(auth_ready and (C.green .. 'prêt' .. C.reset) or (C.yellow .. 'pas prêt (tests auth possiblement en échec)' .. C.reset)))
 print("  DNS/auth depuis machine locale (" .. tostring(LOCAL_IP) .. " → " .. tostring(LAN_IP) .. ")")
 print("")
 print(tostring(C.bold) .. "[3/5] Infrastructure" .. tostring(C.reset))
@@ -192,32 +212,18 @@ print("")
 local nft_t
 _, nft_t = ssh("nft list tables 2>/dev/null")
 report("Table bridge dns-filter-bridge chargée", (nft_t and nft_t:match("bridge.*dns%-filter%-bridge")) ~= nil, nft_t or "")
-local macs4
-_, macs4 = ssh("nft list set ip  dns-filter authenticated_macs 2>/dev/null")
-report("authenticated_macs dans ip  dns-filter", (macs4 and macs4:match("ether_addr")) ~= nil, macs4 or "")
-local macs6
-_, macs6 = ssh("nft list set ip6 dns-filter authenticated_macs 2>/dev/null")
-report("authenticated_macs dans ip6 dns-filter", (macs6 and macs6:match("ether_addr")) ~= nil, macs6 or "")
-local pr4
-_, pr4 = ssh("nft list chain ip  dns-filter prerouting 2>/dev/null")
-report("ether saddr @authenticated_macs dans ip  prerouting", (pr4 and pr4:match("ether saddr @authenticated_macs")) ~= nil, pr4 or "")
-local pr6
-_, pr6 = ssh("nft list chain ip6 dns-filter prerouting 2>/dev/null")
-report("ether saddr @authenticated_macs dans ip6 prerouting", (pr6 and pr6:match("ether saddr @authenticated_macs")) ~= nil, pr6 or "")
-local mac4s
-_, mac4s = ssh("nft list set ip  dns-filter mac4_allowed 2>/dev/null")
-report("mac4_allowed dans ip  dns-filter", (mac4s and mac4s:match("ether_addr")) ~= nil, mac4s or "")
-local mac6s
-_, mac6s = ssh("nft list set ip6 dns-filter mac6_allowed 2>/dev/null")
-report("mac6_allowed dans ip6 dns-filter", (mac6s and mac6s:match("ether_addr")) ~= nil, mac6s or "")
-local fwd4
-_, fwd4 = ssh("nft list chain ip  dns-filter forward 2>/dev/null")
-report("ether saddr . ip daddr @mac4_allowed dans ip  forward", (fwd4 and fwd4:match("mac4_allowed")) ~= nil, fwd4 or "")
-local fwd6
-_, fwd6 = ssh("nft list chain ip6 dns-filter forward 2>/dev/null")
-report("ether saddr . ip6 daddr @mac6_allowed dans ip6 forward", (fwd6 and fwd6:match("mac6_allowed")) ~= nil, fwd6 or "")
-local brnf
-_, brnf = ssh("cat /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null")
+local macs
+_, macs = ssh("nft list set bridge dns-filter-bridge authenticated_macs 2>/dev/null")
+report("authenticated_macs dans bridge dns-filter-bridge", (macs and macs:match("ether_addr")) ~= nil, macs or "")
+local fwd
+_, fwd = ssh("nft list chain bridge dns-filter-bridge forward 2>/dev/null")
+report("ether saddr @authenticated_macs dans bridge forward", (fwd and fwd:match("ether saddr @authenticated_macs")) ~= nil, fwd or "")
+local mac_sets
+_, mac_sets = ssh("nft list table bridge dns-filter-bridge 2>/dev/null")
+report("mac4_allowed dans bridge dns-filter-bridge", (mac_sets and mac_sets:match("mac4_allowed")) ~= nil, mac_sets or "")
+report("mac6_allowed dans bridge dns-filter-bridge", (mac_sets and mac_sets:match("mac6_allowed")) ~= nil, mac_sets or "")
+report("ether saddr . ip daddr @mac4_allowed dans bridge forward", (fwd and fwd:match("mac4_allowed")) ~= nil, fwd or "")
+report("ether saddr . ip6 daddr @mac6_allowed dans bridge forward", (fwd and fwd:match("mac6_allowed")) ~= nil, fwd or "")
 report("bridge-nf-call-iptables (mode bridge, sans br_netfilter)", true, "non requis en mode bridge nftables natif")
 local qraw
 _, qraw = ssh("cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null")
@@ -232,16 +238,16 @@ _, nc080 = run("nc -z -w3 " .. tostring(LAN_IP) .. " 33080 2>/dev/null && echo o
 report("Portail captif sur 33080", (nc080 and nc080:match("open")) ~= nil, "")
 local br_fwd
 _, br_fwd = ssh("nft list chain bridge dns-filter-bridge forward 2>/dev/null")
-report("Queue 0 DNS dans bridge forward", (br_fwd and br_fwd:match("queue num 0")) ~= nil, br_fwd or "")
-report("Queue 1 DNS dans bridge forward", (br_fwd and br_fwd:match("queue num 1")) ~= nil, br_fwd or "")
-report("Queue 2 captif dans bridge forward", (br_fwd and br_fwd:match("queue num 2")) ~= nil, br_fwd or "")
-report("REJECT tcp (RST) dans bridge forward", (br_fwd and br_fwd:match("reject with tcp reset")) ~= nil, br_fwd or "")
+report("Queue 0 DNS dans bridge forward", (br_fwd and br_fwd:match("queue to 0")) ~= nil, br_fwd or "")
+report("Queue 1 DNS dans bridge forward", (br_fwd and br_fwd:match("queue to 1")) ~= nil, br_fwd or "")
+report("Queue 2 captif dans bridge forward", (br_fwd and br_fwd:match("queue to 2")) ~= nil, br_fwd or "")
+report("REJECT/RST (Q3) dans bridge forward", (br_fwd and br_fwd:match("queue to 3")) ~= nil, br_fwd or "")
 local wl4
-_, wl4 = ssh("nft list set ip  dns-filter-bridge ip4_dest_whitelist 2>/dev/null")
-report("Set ip4_dest_whitelist dans ip  dns-filter-bridge", (wl4 and wl4:match("ip4_dest_whitelist")) ~= nil, wl4 or "")
+_, wl4 = ssh("nft list set bridge dns-filter-bridge ip4_dest_whitelist 2>/dev/null")
+report("Set ip4_dest_whitelist dans bridge dns-filter-bridge", (wl4 and wl4:match("ip4_dest_whitelist")) ~= nil, wl4 or "")
 local wl6
-_, wl6 = ssh("nft list set ip6 dns-filter-bridge ip6_dest_whitelist 2>/dev/null")
-report("Set ip6_dest_whitelist dans ip6 dns-filter-bridge", (wl6 and wl6:match("ip6_dest_whitelist")) ~= nil, wl6 or "")
+_, wl6 = ssh("nft list set bridge dns-filter-bridge ip6_dest_whitelist 2>/dev/null")
+report("Set ip6_dest_whitelist dans bridge dns-filter-bridge", (wl6 and wl6:match("ip6_dest_whitelist")) ~= nil, wl6 or "")
 report("ip daddr @ip4_dest_whitelist accept dans bridge forward", (br_fwd and br_fwd:match("ip4_dest_whitelist")) ~= nil, br_fwd or "")
 print("")
 print(tostring(C.bold) .. "[4/5] Filtrage DNS" .. tostring(C.reset))
@@ -257,8 +263,8 @@ dig_lan = function(domain, qtype, extra)
   end
   return run("dig +time=8 +tries=1 " .. tostring(qtype) .. " " .. tostring(domain) .. " @" .. tostring(DNS_RESOLVER) .. " " .. tostring(extra) .. " 2>&1")
 end
-ssh("nft flush set ip  dns-filter ip4_allowed 2>/dev/null; true")
-ssh("nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
+ssh("nft flush set bridge dns-filter-bridge ip4_allowed 2>/dev/null; true")
+ssh("nft flush set bridge dns-filter-bridge ip6_allowed 2>/dev/null; true")
 print(tostring(C.bold) .. "▶ Domaine autorisé (" .. tostring(DOMAIN_ALLOWED) .. ")" .. tostring(C.reset))
 local allow_out
 _, allow_out = dig_lan(DOMAIN_ALLOWED)
@@ -266,7 +272,7 @@ local has_ip = allow_out and allow_out:match("%d+%.%d+%.%d+%.%d+")
 report("dig " .. tostring(DOMAIN_ALLOWED) .. " → enregistrement A", has_ip ~= nil, (allow_out or ""):gsub("%s+$", ""):sub(1, 200))
 os.execute("sleep 1")
 local set4
-_, set4 = ssh("nft list set ip dns-filter ip4_allowed 2>/dev/null")
+_, set4 = ssh("nft list set bridge dns-filter-bridge ip4_allowed 2>/dev/null")
 report("ip4_allowed peuplé après " .. tostring(DOMAIN_ALLOWED), (set4 and set4:match("%d+%.%d+%.%d+%.%d+")) ~= nil, set4 or "(vide)")
 local ttl_val = allow_out and (allow_out:match("\t(%d+)\t[^\t]*IN\t[^\t]*A\t") or allow_out:match("(%d+)%s+IN%s+A%s"))
 report("TTL patché à 60s (" .. tostring(DOMAIN_ALLOWED) .. ")", ttl_val == "60", "TTL trouvé : " .. tostring(tostring(ttl_val)))
@@ -286,8 +292,8 @@ _, unk_out = dig_lan(DOMAIN_UNKNOWN)
 report("dig " .. tostring(DOMAIN_UNKNOWN) .. " → NXDOMAIN", (unk_out and unk_out:upper():match("NXDOMAIN")) ~= nil, (unk_out or ""):gsub("%s+$", ""):sub(1, 200))
 print("")
 print(tostring(C.bold) .. "▶ Enregistrements AAAA → ip6_allowed + mac6_allowed (" .. tostring(DOMAIN_AAAA) .. ")" .. tostring(C.reset))
-ssh("nft flush set ip6 dns-filter ip6_allowed 2>/dev/null; true")
-ssh("nft flush set ip6 dns-filter mac6_allowed 2>/dev/null; true")
+ssh("nft flush set bridge dns-filter-bridge ip6_allowed 2>/dev/null; true")
+ssh("nft flush set bridge dns-filter-bridge mac6_allowed 2>/dev/null; true")
 local dig_aaaa
 if LOCAL_IPV6 then
   dig_aaaa = function(domain)
@@ -304,11 +310,11 @@ local has_aaaa = aa_out and aa_out:match("[0-9a-f]+:[0-9a-f:]+")
 if has_aaaa then
   os.execute("sleep 2")
   local set6
-  _, set6 = ssh("nft list set ip6 dns-filter ip6_allowed 2>/dev/null")
+  _, set6 = ssh("nft list set bridge dns-filter-bridge ip6_allowed 2>/dev/null")
   report("ip6_allowed peuplé après " .. tostring(DOMAIN_AAAA) .. " AAAA", (set6 and set6:match("[0-9a-f]+:[0-9a-f:]+")) ~= nil, set6 or "(vide)")
   if LOCAL_MAC then
     local mac6_set
-    _, mac6_set = ssh("nft list set ip6 dns-filter mac6_allowed 2>/dev/null")
+    _, mac6_set = ssh("nft list set bridge dns-filter-bridge mac6_allowed 2>/dev/null")
     local found_mac6 = mac6_set and mac6_set:find(LOCAL_MAC, 1, true) ~= nil
     report("mac6_allowed contient LOCAL_MAC (" .. tostring(LOCAL_MAC) .. ") après AAAA", found_mac6, mac6_set or "(vide)")
   else
@@ -321,14 +327,14 @@ if LOCAL_MAC then
   print("")
   print(tostring(C.bold) .. "▶ Cross-family: DNS sur IPv4 → AAAA → mac6_allowed" .. tostring(C.reset))
   print("  (MAC client attendu : " .. tostring(LOCAL_MAC) .. ")")
-  ssh("nft flush set ip6 dns-filter mac6_allowed 2>/dev/null; true")
+  ssh("nft flush set bridge dns-filter-bridge mac6_allowed 2>/dev/null; true")
   local aa4_out
   _, aa4_out = run("dig +time=8 +tries=1 AAAA " .. tostring(DOMAIN_AAAA) .. " @8.8.8.8 2>&1")
   local has_aa4 = aa4_out and aa4_out:match("[0-9a-f]+:[0-9a-f:]+")
   if has_aa4 then
     os.execute("sleep 2")
     local mac6b
-    _, mac6b = ssh("nft list set ip6 dns-filter mac6_allowed 2>/dev/null")
+    _, mac6b = ssh("nft list set bridge dns-filter-bridge mac6_allowed 2>/dev/null")
     local found_mac6b = mac6b and mac6b:find(LOCAL_MAC, 1, true) ~= nil
     report("mac6_allowed contient LOCAL_MAC (" .. tostring(LOCAL_MAC) .. ") après AAAA sur IPv4", found_mac6b, mac6b or "(vide)")
   else
@@ -337,7 +343,7 @@ if LOCAL_MAC then
   print("")
   print(tostring(C.bold) .. "▶ Cross-family: DNS sur IPv6 → A → mac4_allowed" .. tostring(C.reset))
   print("  (MAC client attendu : " .. tostring(LOCAL_MAC) .. ")")
-  ssh("nft flush set ip  dns-filter mac4_allowed 2>/dev/null; true")
+  ssh("nft flush set bridge dns-filter-bridge mac4_allowed 2>/dev/null; true")
   local a6_dns_target
   if LOCAL_IPV6 then
     a6_dns_target = "2606:4700:4700::1003"
@@ -350,7 +356,7 @@ if LOCAL_MAC then
   if has_a6 then
     os.execute("sleep 2")
     local mac4b
-    _, mac4b = ssh("nft list set ip  dns-filter mac4_allowed 2>/dev/null")
+    _, mac4b = ssh("nft list set bridge dns-filter-bridge mac4_allowed 2>/dev/null")
     local found_mac4b = mac4b and mac4b:find(LOCAL_MAC, 1, true) ~= nil
     report("mac4_allowed contient LOCAL_MAC (" .. tostring(LOCAL_MAC) .. ") après A sur IPv6", found_mac4b, mac4b or "(vide)")
   else
@@ -399,7 +405,7 @@ _, ping_code = auth_curl("GET", "/ping")
 ping_code = ping_code:gsub("%s+", "")
 report("Auth — heartbeat GET /ping → 204", ping_code == "204", "HTTP " .. tostring(ping_code))
 local auth_set
-_, auth_set = ssh("nft list set ip dns-filter authenticated_ips 2>/dev/null")
+_, auth_set = ssh("nft list set bridge dns-filter-bridge authenticated_ips 2>/dev/null")
 local local_ip_pat = LOCAL_IP:gsub("%.", "%%.")
 report("IP (" .. tostring(LOCAL_IP) .. ") dans authenticated_ips après login", (auth_set and auth_set:match(local_ip_pat)) ~= nil, (auth_set or "(vide)"):sub(1, 120))
 print("")
@@ -421,7 +427,7 @@ _, ref_out = dig_lan(DOMAIN_AUTH)
 local ref_str = (ref_out or ""):gsub("%s+$", "")
 report("from_user — " .. tostring(DOMAIN_AUTH) .. " → REFUSED après logout", (ref_out and ref_out:upper():match("REFUSED")) ~= nil, "dig: " .. tostring(ref_str:sub(1, 200)))
 local auth_set2
-_, auth_set2 = ssh("nft list set ip dns-filter authenticated_ips 2>/dev/null")
+_, auth_set2 = ssh("nft list set bridge dns-filter-bridge authenticated_ips 2>/dev/null")
 report("IP retirée de authenticated_ips après logout", not (auth_set2 and auth_set2:match(local_ip_pat)), (auth_set2 or "(vide)"):sub(1, 120))
 print("")
 print(tostring(C.bold) .. "▶ Portail captif Q2 (interception TCP/80)" .. tostring(C.reset))
@@ -462,19 +468,16 @@ report("Portail captif /generate_204 → 302", g204_code == "302", "HTTP " .. to
 print("")
 print(tostring(C.bold) .. "▶ Bypass MAC (authenticated_macs ip + ip6)" .. tostring(C.reset))
 local TEST_MAC = "aa:bb:cc:dd:ee:ff"
-local ok_add, add_out = ssh("nft add element ip  dns-filter authenticated_macs { " .. tostring(TEST_MAC) .. " timeout 10s } && nft add element ip6 dns-filter authenticated_macs { " .. tostring(TEST_MAC) .. " timeout 10s } 2>&1")
-report("Ajout MAC atomique (ip + ip6)", ok_add, add_out or "")
-local chk4
-_, chk4 = ssh("nft list set ip  dns-filter authenticated_macs 2>/dev/null")
-local chk6
-_, chk6 = ssh("nft list set ip6 dns-filter authenticated_macs 2>/dev/null")
-report("MAC " .. tostring(TEST_MAC) .. " présent dans ip  authenticated_macs", (chk4 and chk4:match("aa:bb:cc:dd:ee:ff")) ~= nil, chk4 or "")
-report("MAC " .. tostring(TEST_MAC) .. " présent dans ip6 authenticated_macs", (chk6 and chk6:match("aa:bb:cc:dd:ee:ff")) ~= nil, chk6 or "")
-local ok_del, del_out = ssh("nft delete element ip  dns-filter authenticated_macs { " .. tostring(TEST_MAC) .. " } && nft delete element ip6 dns-filter authenticated_macs { " .. tostring(TEST_MAC) .. " } 2>&1")
-report("Suppression MAC atomique (ip + ip6)", ok_del, del_out or "")
+local ok_add, add_out = ssh("nft add element bridge dns-filter-bridge authenticated_macs { " .. tostring(TEST_MAC) .. " timeout 10s } 2>&1")
+report("Ajout MAC (bridge)", ok_add, add_out or "")
+local chk
+_, chk = ssh("nft list set bridge dns-filter-bridge authenticated_macs 2>/dev/null")
+report("MAC " .. tostring(TEST_MAC) .. " présent dans bridge authenticated_macs", (chk and chk:match("aa:bb:cc:dd:ee:ff")) ~= nil, chk or "")
+local ok_del, del_out = ssh("nft delete element bridge dns-filter-bridge authenticated_macs { " .. tostring(TEST_MAC) .. " } 2>&1")
+report("Suppression MAC (bridge)", ok_del, del_out or "")
 local chk4b
-_, chk4b = ssh("nft list set ip  dns-filter authenticated_macs 2>/dev/null")
-report("MAC " .. tostring(TEST_MAC) .. " retiré de ip authenticated_macs", not (chk4b and chk4b:match("aa:bb:cc:dd:ee:ff")), chk4b or "(vide)")
+_, chk4b = ssh("nft list set bridge dns-filter-bridge authenticated_macs 2>/dev/null")
+report("MAC " .. tostring(TEST_MAC) .. " retiré de bridge authenticated_macs", not (chk4b and chk4b:match("aa:bb:cc:dd:ee:ff")), chk4b or "(vide)")
 print("")
 print(tostring(C.bold) .. "▶ Inscription d'utilisateurs" .. tostring(C.reset))
 ssh("> " .. tostring(SESSIONS_FILE) .. " 2>/dev/null; true")
@@ -521,17 +524,17 @@ ssh("pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && k
 os.execute("dig @" .. tostring(DNS_RESOLVER) .. " github.com A +time=2 +tries=1 >/dev/null 2>&1; true")
 os.execute("sleep 1")
 local wl4_set
-_, wl4_set = ssh("nft list set ip  dns-filter ip4_dest_whitelist 2>/dev/null")
+_, wl4_set = ssh("nft list set bridge dns-filter-bridge ip4_dest_whitelist 2>/dev/null")
 report("dest_whitelist — " .. tostring(TEST_WL_IP) .. " présent dans ip4_dest_whitelist après SIGHUP", (wl4_set and wl4_set:match(TEST_WL_IP)) ~= nil, wl4_set or "(vide)")
 local wl6_set
-_, wl6_set = ssh("nft list set ip6 dns-filter ip6_dest_whitelist 2>/dev/null")
+_, wl6_set = ssh("nft list set bridge dns-filter-bridge ip6_dest_whitelist 2>/dev/null")
 report("dest_whitelist — " .. tostring(TEST_WL_IP6) .. " présent dans ip6_dest_whitelist après SIGHUP", (wl6_set and wl6_set:match("fd99")) ~= nil, wl6_set or "(vide)")
 ssh("grep -v '^dest_whitelist:\\|^- " .. tostring(TEST_WL_IP) .. "\\|^- " .. tostring(TEST_WL_IP6) .. "' " .. tostring(FILTER_YML) .. " > /tmp/_filter.tmp && mv /tmp/_filter.tmp " .. tostring(FILTER_YML) .. "; true")
 ssh("pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && kill -HUP $pid 2>/dev/null; true")
 os.execute("dig @" .. tostring(DNS_RESOLVER) .. " github.com A +time=2 +tries=1 >/dev/null 2>&1; true")
 os.execute("sleep 1")
 local wl4_after
-_, wl4_after = ssh("nft list set ip dns-filter ip4_dest_whitelist 2>/dev/null")
+_, wl4_after = ssh("nft list set bridge dns-filter-bridge ip4_dest_whitelist 2>/dev/null")
 report("dest_whitelist — set vidé après suppression + SIGHUP", not (wl4_after and wl4_after:match(TEST_WL_IP)), wl4_after or "(vide)")
 print("")
 print(string.rep("─", 50))

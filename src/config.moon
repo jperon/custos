@@ -48,9 +48,7 @@ IPC_MATCH_RETRY_SLEEP_MS = 20
 -- l'expiration des paires (client, dest) indépendamment.
 CLIENT_EXPIRY = 300
 
--- Délai minimal (secondes) entre deux lectures de `ip neigh show`
--- lors d'un lazy-refresh sur miss cross-family.
-NEIGH_REFRESH_COOLDOWN = 10
+
 
 -- ── TTL forcé ────────────────────────────────────
 -- TTL injecté sur tous les RR des réponses autorisées (secondes).
@@ -60,6 +58,14 @@ FORCED_TTL = 60
 DNS_PORT   = 53
 AF_INET    = 2
 AF_INET6   = 10
+
+-- ── MAC Learner ─────────────────────────────────────────────────
+-- Socket Unix SOCK_STREAM pour les requêtes MAC (AUTH, Q2, …).
+MAC_LEARNER_QUERY_SOCK     = "/var/run/custos/mac_query.sock"
+-- Taille d'un message de learn binaire (ip16 + mac6).
+MAC_LEARNER_LEARN_MSG_SIZE = 22
+-- Durée de vie d'une entrée IP→MAC dans la table du learner (secondes).
+MAC_LEARNER_ENTRY_TTL      = 300
 
 -- ── Authentification HTTPS ───────────────────────────────────────
 -- Chemin du fichier de sessions partagé entre le worker auth et les
@@ -73,6 +79,15 @@ AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
 -- mais la destination ne peut l'être que via cette whitelist (contournement DNS).
 DEST_WHITELIST = {}
 
+-- ── Domaines DNS autorisés par défaut ───────────────────────────
+-- Surchargeables via UCI (custos.main.allowed_domains).
+ALLOWED_DOMAINS = { "local", "lan", "home.arpa" }
+
+-- ── Règles nftables supplémentaires ─────────────────────────────
+-- Injectées en tête de chaîne `forward` au démarrage.
+-- Surchargeables via UCI (custos.main.nft_extra_rules).
+NFT_EXTRA_RULES = {}
+
 -- ── Export ──────────────────────────────────────────────────────
 {
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE, :QUEUE_REJECT
@@ -80,10 +95,11 @@ DEST_WHITELIST = {}
   :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY
   :IPC_PENDING_TTL
   :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS
-  :CLIENT_EXPIRY, :NEIGH_REFRESH_COOLDOWN
+  :CLIENT_EXPIRY
+  :MAC_LEARNER_QUERY_SOCK, :MAC_LEARNER_LEARN_MSG_SIZE, :MAC_LEARNER_ENTRY_TTL
   :FORCED_TTL
   :DNS_PORT, :AF_INET, :AF_INET6
   :AUTH_SESSIONS_FILE
-  :DEST_WHITELIST
-  :LOG_LEVEL -- Nouvelle constante exportée
+  :DEST_WHITELIST, :ALLOWED_DOMAINS, :NFT_EXTRA_RULES
+  :LOG_LEVEL
 }

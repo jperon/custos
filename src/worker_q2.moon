@@ -24,7 +24,7 @@ parse: parse_tcp = require "ipparse.l4.tcp"
 { :log_info, :log_warn, :log_error } = require "log"
 { :flags } = require "ipparse.l4.tcp"
 { :SYN, :ACK, :FIN, :PSH } = flags
-{ :get_mac } = require "neigh"
+mac_learner_ipc = require "mac_learner_ipc"
 { :user_for_ip } = require "auth.sessions"
 
 -- ── TCP helper functions (ipparse for parsing and serialization) ──
@@ -176,7 +176,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
   client_ip_str = ip2s ip.src
   client_mac_str = l2.mac_src
   if not client_mac_str or client_mac_str == "unknown"
-    client_mac_str = get_mac client_ip_str
+    client_mac_str = mac_learner_ipc.get_mac client_ip_str
 
   user          = user_for_ip client_ip_str, AUTH_SESSIONS_FILE, client_mac_str
 

@@ -64,6 +64,7 @@ add_session = function(sessions, mac, ip, user, session_ttl, idle_timeout)
   local s = sessions[mac] or {
     ips = { }
   }
+  s.mac = mac
   s.user = user
   s.expires = now + session_ttl
   s.heartbeat = hb
@@ -111,11 +112,6 @@ session_for_mac = function(mac, ip, path, sessions_arg)
     return nil
   end
   local lookup_mac = mac
-  if not lookup_mac or lookup_mac == "unknown" then
-    if ip then
-      lookup_mac = (require("neigh")).get_mac(ip)
-    end
-  end
   lookup_mac = (lookup_mac and lookup_mac ~= "unknown") and lookup_mac:lower() or "unknown"
   local s = sessions_table[lookup_mac]
   if not s and ip then

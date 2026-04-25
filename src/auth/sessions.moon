@@ -22,7 +22,7 @@ serialize = (sessions) ->
     safe_mac  = mac\gsub('"', '\\"')
     safe_user = s.user\gsub('"', '\\"')
     hb  = s.heartbeat and (", heartbeat = " .. tostring(s.heartbeat)) or ""
-    
+
     ips_parts = {}
     if s.ips
       for family, ip in pairs s.ips
@@ -75,12 +75,13 @@ add_session = (sessions, mac, ip, user, session_ttl, idle_timeout) ->
   mac = mac\lower!
   now = os_time!
   hb  = (idle_timeout and idle_timeout > 0) and (now + idle_timeout) or nil
-  
+
   s = sessions[mac] or { ips: {} }
+  s.mac = mac
   s.user = user
   s.expires = now + session_ttl
   s.heartbeat = hb
-  
+
   if ip
     family = if ip\find ":", 1, true then "ipv6" else "ipv4"
     s.ips[family] = ip
@@ -121,16 +122,13 @@ reset_cache = ->
 session_for_mac = (mac, ip, path, sessions_arg) ->
   sessions_table = sessions_arg or read_cached path
   return nil unless sessions_table
-  
+
   lookup_mac = mac
-  if not lookup_mac or lookup_mac == "unknown"
-    if ip
-      lookup_mac = (require "neigh").get_mac ip
-  
+
   lookup_mac = (lookup_mac and lookup_mac != "unknown") and lookup_mac\lower! or "unknown"
-  
+
   s = sessions_table[lookup_mac]
-  
+
   -- Fallback : si la MAC est inconnue mais qu'une IP est fournie, on cherche
   -- dans toutes les sessions si une d'entre elles possède cette IP.
   if not s and ip
@@ -139,9 +137,9 @@ session_for_mac = (mac, ip, path, sessions_arg) ->
         if sess.ips.ipv4 == ip or sess.ips.ipv6 == ip
           s = sess
           break
-  
+
   return nil unless s
-  
+
   -- Si on a l'IP actuelle, on peut mettre à jour le cache ips (en mémoire seulement ici)
   if ip
     family = if ip\find ":", 1, true then "ipv6" else "ipv4"
