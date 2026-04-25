@@ -17,7 +17,7 @@ ndpi                     = require "parse/ndpi"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_allow, :log_block, :log_warn } = require "log"
+{ :log_allow, :log_block, :log_warn, :log_debug } = require "log"
 { :user_for_mac } = require "auth.sessions"
 mac_learner_ipc          = require "mac_learner_ipc"
 
@@ -52,6 +52,25 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     return NF_ACCEPT if parse_status == "tcp_control"
     log_warn { action: "parse_failed", mac_src: l2.mac_src }
     return NF_DROP
+
+  -- Log L2 metadata une fois le parse réussi (src_ip disponible pour corrélation).
+  -- WARN si mac inconnue (nfq_get_packet_hw n'a rien retourné) pour faciliter
+  -- le diagnostic sans avoir à passer en DEBUG.
+  if l2.mac_src == "unknown"
+    log_warn {
+      action:     "l2_mac_missing"
+      src_ip:     pkt.ip.src_ip
+      in_ifindex: l2.in_ifindex
+      vlan:       l2.vlan
+    }
+  else
+    log_debug {
+      action:     "l2_info"
+      mac_src:    l2.mac_src
+      src_ip:     pkt.ip.src_ip
+      in_ifindex: l2.in_ifindex
+      vlan:       l2.vlan
+    }
 
   -- Alimentation du MAC learner si la MAC source est connue.
   -- Pas de fallback neigh : l'association IP→MAC vient exclusivement de

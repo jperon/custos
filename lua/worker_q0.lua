@@ -22,10 +22,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_allow, log_block, log_warn
+local log_allow, log_block, log_warn, log_debug
 do
   local _obj_0 = require("log")
-  log_allow, log_block, log_warn = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn
+  log_allow, log_block, log_warn, log_debug = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
@@ -55,6 +55,22 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       mac_src = l2.mac_src
     })
     return NF_DROP
+  end
+  if l2.mac_src == "unknown" then
+    log_warn({
+      action = "l2_mac_missing",
+      src_ip = pkt.ip.src_ip,
+      in_ifindex = l2.in_ifindex,
+      vlan = l2.vlan
+    })
+  else
+    log_debug({
+      action = "l2_info",
+      mac_src = l2.mac_src,
+      src_ip = pkt.ip.src_ip,
+      in_ifindex = l2.in_ifindex,
+      vlan = l2.vlan
+    })
   end
   if l2.mac_src and l2.mac_src ~= "unknown" and mac_learn_wfd then
     mac_learner_ipc.learn(mac_learn_wfd, pkt.ip.src_ip_raw, l2.mac_raw)
