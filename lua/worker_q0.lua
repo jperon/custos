@@ -62,7 +62,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       vlan = l2.vlan
     })
   else
-    log_warn({
+    log_debug({
       action = "l2_info",
       mac_src = l2.mac_src,
       src_ip = pkt.ip.src_ip,

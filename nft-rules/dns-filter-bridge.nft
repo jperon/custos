@@ -93,9 +93,14 @@ table bridge dns-filter-bridge {
     flags interval
   }
 
+  chain mac_learn {
+    type filter hook forward priority -10; policy accept;
+    meta l4proto { tcp, udp } limit rate 100/second queue num 4 bypass
+  }
+
   # ── Chaîne FORWARD (tout le trafic traversant le bridge) ──────
   chain forward {
-    type filter hook forward priority filter; policy drop;
+    type filter hook forward priority 0; policy drop;
 
     # L2 Core & Infrastructure
     udp dport { 67, 68 } accept
@@ -138,9 +143,6 @@ table bridge dns-filter-bridge {
     ip6 daddr @ip6_dest_whitelist accept
     ip  daddr @ip4_dest_whitelist accept
 
-    # MAC learning
-    limit rate 100/second queue num 4 bypass
-
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
     ether saddr . ip6 daddr @mac6_allowed accept
@@ -159,18 +161,19 @@ table bridge dns-filter-bridge {
     # meta pkttype host couvre toutes les IPs assignées au routeur (v4 et v6).
     meta pkttype host accept
 
-    # Authenticated client, destination not in sets → Q3 (forge RST or ICMP admin-prohibited).
+    # Authenticated client, destination not in sets → Q3 (MAC learning + forge RST or ICMP admin-prohibited).
     # Must come before Q2 so authenticated clients never see the captive portal again.
-    ether saddr @authenticated_macs limit rate 10/second queue num 3
-    ip6  saddr @authenticated_ips6  limit rate 10/second queue num 3
-    ip   saddr @authenticated_ips   limit rate 10/second queue num 3
+    ether saddr @authenticated_macs queue num 3
+    ip6  saddr @authenticated_ips6  queue num 3
+    ip   saddr @authenticated_ips   queue num 3
 
     # Unauthenticated client, TCP SYN port 80 → Q2 (forge TCP 302).
     meta l4proto tcp th dport 80 tcp flags & (fin | syn | rst | ack) == syn queue num 2
 
-    # All remaining unauthorised traffic → Q3 (forge RST or ICMP admin-prohibited).
+    # All remaining unauthorised traffic → Q3 (MAC learning + forge RST or ICMP admin-prohibited).
     # Rate-limited to protect Q3 against floods; surplus is dropped silently.
-    limit rate 10/second queue num 3
+    limit rate 100/second queue num 3 bypass
+    drop
   }
 
 }

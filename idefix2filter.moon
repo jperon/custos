@@ -1,24 +1,26 @@
+#!/usr/bin/env moon
 --- Script de migration Idefix3 -> CustosVirginum
--- Convertit cfg/idefix3.json en cfg/esm/filter.yml et cfg/esm/listes/*.txt
+-- Convertit arg[1] en arg[2]/filter.yml et arg[2]/listes/*.txt
 
+{idefix, cfg} = assert arg
 json = require "json"
 
 -- Helper pour nettoyer les domaines
-clean = (domain) =>
+clean = (domain) ->
   return nil unless domain
-  domain = domain:gsub("^%s*(.*)%s*$", "%1")
+  domain = domain\gsub("^%s*(.*)%s*$", "%1")
   return nil if domain == ""
-  domain = domain:gsub("^%*. ", "")
-  domain:lower()
+  domain = domain\gsub("^%*. ", "")
+  domain\lower!
 
 -- Chargement du JSON
-f = io.open "cfg/idefix3.json", "r"
-content = f:read "*all"
-f:close()
+f = io.open idefix, "r"
+content = f\read "*all"
+f\close!
 data = json.decode content
 
 -- Répertoires
-lists_dir = "cfg/esm/listes"
+lists_dir = "#{cfg}/listes"
 os.execute "mkdir -p #{lists_dir}"
 
 -- 1. Extraction des listes de domaines
@@ -32,21 +34,22 @@ for group_name, group_data in pairs groups
   table.sort cleaned
   if #cleaned > 0
     lf = io.open "#{lists_dir}/#{group_name}.txt", "w"
-  for i = 1, #cleaned do
-    lf:write "#{cleaned[i]}\n"
-    lf:close()
+    for i = 1, #cleaned do
+      lf\write "#{cleaned[i]}\n"
+    lf\close!
 
 -- Cas spécifiques
-save_list = (name, domains) =>
+save_list = (name, domains) ->
   cleaned = {}
   for d in *domains
     c = clean d
-    table.insert cleaned, c if c
+    if c
+      table.insert cleaned, c
   table.sort cleaned
   lf = io.open "#{lists_dir}/#{name}.txt", "w"
   for i = 1, #cleaned do
-    lf:write "#{cleaned[i]}\n"
-  lf:close()
+    lf\write "#{cleaned[i]}\n"
+  lf\close!
 
 yahoo_rule = data.rules["block yahoo search"]
 save_list "block_yahoo", yahoo_rule.dest_domains if yahoo_rule
@@ -56,11 +59,11 @@ save_list "spotify", spotify_rule.dest_domains if spotify_rule
 
 -- 2. Mapping MACs et Maclists
 macs_map = {}
-maclists = {
-  profs: {}
-  abbes: {}
-  eleves_limites: {}
-  salon_profs: {}
+maclists = data.maclists or {
+  profs: {},
+  abbes: {},
+  eleves_limites: {},
+  salon_profs: {},
   defaut: {}
 }
 
@@ -83,9 +86,8 @@ for profile_name, profile_data in pairs data.users
             target = "salon_profs"
           elseif user_key == "Abbés"
             target = "abbes"
-          
+
           if target
-            -- MoonScript way to check if element is in list
             found = false
             for m in *maclists[target]
               found = true if m == dev_name
@@ -108,20 +110,22 @@ for group, members in pairs maclists
 
 yml ..= "\nrules:\n"
 rules = {}
-table.insert rules, { desc: "Blocages prioritaires", act: "deny", cond: "to_domainlist: custom/block_yahoo" }
-table.insert rules, { desc: "Accès total Profs", act: "allow", cond: "from_maclist: profs" }
-table.insert rules, { desc: "Infrastructure et local", act: "allow", cond: "to_domains: [local, lan, home.arpa]" }
-table.insert rules, { desc: "Profil Abbés", act: "allow", cond: "from_maclist: abbes, to_domainlists: [custom/addenda_religieux, custom/addenda_auth, custom/addenda_banque, custom/addenda_cloud, custom/addenda_communication, custom/addenda_courriel, custom/addenda_gps, custom/addenda_maj, custom/addenda_peripheriques, custom/default_fsspx, custom/limite_eleves_fsspx]" }
-table.insert rules, { desc: "Profil Élèves Limités", act: "allow", cond: "from_maclist: eleves_limites, to_domainlists: [custom/addenda_apple, custom/addenda_cloud, custom/addenda_courriel, custom/addenda_maj, custom/addenda_peripheriques, custom/addenda_stemarie, custom/default_fsspx, custom/limite_eleves_fsspx]" }
-table.insert rules, { desc: "Spotify Salon Profs", act: "allow", cond: "from_maclist: salon_profs, to_domainlist: custom/spotify" }
-table.insert rules, { desc: "Verdict Final", act: "deny" }
+table.insert rules, { desc: "Blocages prioritaires", act: "deny", cond: {"to_domainlist: custom/block_yahoo"} }
+table.insert rules, { desc: "Accès total Profs", act: "allow", cond: {"from_maclist: profs"} }
+table.insert rules, { desc: "Infrastructure et local", act: "allow", cond: {"to_domains: [local, lan, home.arpa]"} }
+table.insert rules, { desc: "Profil Abbés", act: "allow", cond: {"from_maclist: abbes, to_domainlists: [custom/addenda_religieux, custom/addenda_auth, custom/addenda_banque, custom/addenda_cloud, custom/addenda_communication, custom/addenda_courriel, custom/addenda_gps, custom/addenda_maj, custom/addenda_peripheriques, custom/default_fsspx, custom/limite_eleves_fsspx]"} }
+table.insert rules, { desc: "Profil Élèves Limités", act: "allow", cond: {"from_maclist: eleves_limites, to_domainlists: [custom/addenda_apple, custom/addenda_cloud, custom/addenda_courriel, custom/addenda_maj, custom/addenda_peripheriques, custom/addenda_stemarie, custom/default_fsspx, custom/limite_eleves_fsspx]"} }
+table.insert rules, { desc: "Spotify Salon Profs", act: "allow", cond: split_conditions("from_maclist: salon_profs, to_domainlist: custom/spotify") }
+table.insert rules, { desc: "Verdict Final", act: "deny", cond: {} }
 
 for _, r in ipairs rules
   yml ..= "- description: #{r.desc}\n  actions: [#{r.act}]\n"
-  if r.cond
-    yml ..= "  conditions:\n    #{r.cond}\n"
+  if #r.cond > 0
+    yml ..= "  conditions:\n"
+    for _, cond in ipairs r.cond
+      yml ..= "    - #{cond}\n"
   yml ..= "\n"
 
-f_out = io.open "cfg/esm/filter.yml", "w"
-f_out:write yml
-f_out:close()
+f_out = io.open "#{cfg}/filter.yml", "w"
+f_out\write yml
+f_out\close!
