@@ -111,12 +111,6 @@ shutdown_workers = function(workers)
 end
 local supervise
 supervise = function(pipe, sfd)
-  local mac_pipe = create_pipe()
-  log_info({
-    action = "mac_learn_pipe_created",
-    rfd = mac_pipe.rfd,
-    wfd = mac_pipe.wfd
-  })
   local load_config
   load_config = require("filter.lib.load_config").load_config
   local filter_cfg, cfg_err = load_config(os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml")
@@ -136,12 +130,12 @@ supervise = function(pipe, sfd)
   local auth_cfg = auth
   local workers = {
     {
-      name = "MAC-learner",
+      name = "Q4-mac-learn",
       pid = nil,
       restart_fn = function()
-        return fork_worker("MAC-learner", (function()
-          return require("mac_learner").run(mac_pipe.rfd)
-        end), mac_pipe.rfd)
+        return fork_worker("Q4-mac-learn", (function()
+          return require("worker_q4").run()
+        end), pipe.rfd)
       end
     },
     {
@@ -149,7 +143,7 @@ supervise = function(pipe, sfd)
       pid = nil,
       restart_fn = function()
         return fork_worker("Q0-questions", (function()
-          return require("worker_q0").run(pipe.wfd, mac_pipe.wfd)
+          return require("worker_q0").run(pipe.wfd)
         end), pipe.wfd)
       end
     },

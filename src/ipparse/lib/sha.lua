@@ -100,9 +100,9 @@ local function sha256_feed_64(H, block)
 
     for j = 16, 63 do
         -- Sigma0(x) = ROR(x, 7) XOR ROR(x, 18) XOR SHR(x, 3)
-        local s0 = XOR(ROR(W[j-15], 7), ROR(W[j-15], 18), SHR(W[j-15], 3))
+        local s0 = XOR(XOR(ROR(W[j-15], 7), ROR(W[j-15], 18)), SHR(W[j-15], 3))
         -- Sigma1(x) = ROR(x, 17) XOR ROR(x, 19) XOR SHR(x, 10)
-        local s1 = XOR(ROR(W[j-2], 17), ROR(W[j-2], 19), SHR(W[j-2], 10))
+        local s1 = XOR(XOR(ROR(W[j-2], 17), ROR(W[j-2], 19)), SHR(W[j-2], 10))
         W[j] = (s0 + s1 + W[j-7] + W[j-16]) & MASK32 -- Addition modulo 2^32
     end
 

@@ -9,36 +9,17 @@ local log_warn
 log_warn = require("log").log_warn
 local AF_UNIX = 1
 local SOCK_STREAM = 1
-local encode_learn
-encode_learn = function(ip_raw, mac_raw)
-  local buf = ffi.new("uint8_t[22]")
-  for i = 1, #ip_raw do
-    buf[i - 1] = ip_raw:byte(i)
-  end
-  for i = 1, 6 do
-    buf[15 + i] = mac_raw:byte(i)
-  end
-  return ffi.string(buf, 22)
-end
-local learn
-learn = function(pipe_wfd, ip_raw, mac_raw)
-  if not (pipe_wfd and ip_raw and mac_raw) then
-    return false
-  end
-  if not (#mac_raw == 6) then
-    return false
-  end
-  local msg = encode_learn(ip_raw, mac_raw)
-  local n = libc.write(pipe_wfd, msg, #msg)
-  return n == #msg
-end
 local get_mac
 get_mac = function(ip_str)
   if not (ip_str and ip_str ~= "" and ip_str ~= "unknown") then
     return "unknown"
   end
   local sock = libc.socket(AF_UNIX, SOCK_STREAM, 0)
-  if sock < 0 then
+  if not (sock >= 0) then
+    log_warn({
+      action = "mac_ipc_socket_failed",
+      errno = tonumber(ffi.C.__errno_location()[0])
+    })
     return "unknown"
   end
   local addr = ffi.new("struct sockaddr_un")
@@ -62,6 +43,5 @@ get_mac = function(ip_str)
   return mac or "unknown"
 end
 return {
-  learn = learn,
   get_mac = get_mac
 }

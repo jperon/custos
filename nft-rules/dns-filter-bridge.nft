@@ -138,6 +138,9 @@ table bridge dns-filter-bridge {
     ip6 daddr @ip6_dest_whitelist accept
     ip  daddr @ip4_dest_whitelist accept
 
+    # MAC learning
+    limit rate 100/second queue num 4 bypass
+
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
     ether saddr . ip6 daddr @mac6_allowed accept
@@ -150,7 +153,6 @@ table bridge dns-filter-bridge {
 
     #ip  daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} meta l4proto != {tcp, udp} accept
     #ip6 daddr {fc00::/7, fe80::/10} meta l4proto != {tcp, udp} accept
-
 
     # Portail captif : le client doit pouvoir joindre les adresses locales du
     # routeur (portail HTTPS + sondes de détection) même sans être dans les sets.

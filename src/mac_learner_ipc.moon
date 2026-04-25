@@ -1,17 +1,12 @@
 -- src/mac_learner_ipc.moon
--- Client IPC pour le worker MAC Learner.
+-- Client IPC pour le worker MAC Learner (query-only).
 --
--- Deux opérations :
---   learn  : envoi non-bloquant d'une association (IP → MAC) via pipe binaire
---   get_mac: requête synchrone via socket Unix SOCK_STREAM (protocole texte ligne)
+-- Fourni uniquement la fonction `get_mac(ip_str)` qui interroge le socket
+-- Unix du learner et retourne la MAC textuelle ou "unknown".
 --
--- Protocole learn (pipe, 22 octets atomiques) :
---   [0..15] : IP source (IPv4 : 4 octets + 12 zéros ; IPv6 : 16 octets)
---   [16..21]: MAC source (6 octets bruts)
---
--- Protocole query (Unix SOCK_STREAM, texte) :
---   → envoi   : "<ip_str>\n"
---   ← réponse : "<mac_str>\n"  ou  "unknown\n"
+-- Anciennement ce module fournissait aussi `learn()` (Q0 → learner via pipe).
+-- Avec worker_q4 (NFQUEUE) l'apprentissage se fait directement depuis la queue,
+-- donc `learn()` n'est plus nécessaire ici.
 
 { :ffi, :libc } = require "ffi_defs"
 { :MAC_LEARNER_QUERY_SOCK } = require "config"
@@ -19,38 +14,6 @@
 
 AF_UNIX     = 1
 SOCK_STREAM = 1
-
--- ── Learn (Q0 → MAC learner via pipe) ────────────────────────────
-
---- Encode une association IP→MAC en message binaire de 22 octets.
--- @tparam string ip_raw  4 octets (IPv4) ou 16 octets (IPv6) bruts
--- @tparam string mac_raw 6 octets bruts de la MAC source
--- @treturn string Message binaire de 22 octets
-encode_learn = (ip_raw, mac_raw) ->
-  buf = ffi.new "uint8_t[22]"
-  -- IP dans les 16 premiers octets (IPv4 : 4 octets, les 12 suivants restent à 0x00)
-  for i = 1, #ip_raw
-    buf[i - 1] = ip_raw\byte i
-  -- MAC dans les 6 octets suivants (offset 16)
-  for i = 1, 6
-    buf[15 + i] = mac_raw\byte i
-  ffi.string buf, 22
-
---- Envoie une association IP→MAC au MAC learner via le pipe de learn.
--- Écriture non-bloquante (O_NONBLOCK sur le pipe) : perte silencieuse si le
--- pipe est plein — acceptable, le learner sera alimenté au prochain paquet.
--- @tparam number pipe_wfd fd d'écriture du pipe
--- @tparam string ip_raw   4 ou 16 octets bruts de l'IP source
--- @tparam string mac_raw  6 octets bruts de la MAC source
--- @treturn boolean true si l'écriture a réussi
-learn = (pipe_wfd, ip_raw, mac_raw) ->
-  return false unless pipe_wfd and ip_raw and mac_raw
-  return false unless #mac_raw == 6
-  msg = encode_learn ip_raw, mac_raw
-  n = libc.write pipe_wfd, msg, #msg
-  n == #msg
-
--- ── Query (AUTH / Q2 → MAC learner via socket Unix) ───────────────
 
 --- Retourne la MAC associée à une IP via une requête au MAC learner.
 -- Connexion synchrone sur socket Unix SOCK_STREAM : approprié pour AUTH
@@ -61,7 +24,9 @@ get_mac = (ip_str) ->
   return "unknown" unless ip_str and ip_str ~= "" and ip_str ~= "unknown"
 
   sock = libc.socket AF_UNIX, SOCK_STREAM, 0
-  return "unknown" if sock < 0
+  unless sock >= 0
+    log_warn { action: "mac_ipc_socket_failed", errno: tonumber(ffi.C.__errno_location()[0]) }
+    return "unknown"
 
   addr = ffi.new "struct sockaddr_un"
   addr.sun_family = AF_UNIX
@@ -89,4 +54,4 @@ get_mac = (ip_str) ->
   mac = resp\match "^([0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f])"
   mac or "unknown"
 
-{ :learn, :get_mac }
+{ :get_mac }

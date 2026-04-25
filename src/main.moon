@@ -144,9 +144,6 @@ supervise = (pipe, sfd) ->
   -- Charge la configuration pour transmettre auth_cfg au worker AUTH.
   -- On utilise load_config ici (dans le parent, avant fork) pour que
   -- le worker auth dispose de la section auth dès le démarrage.
-  mac_pipe = create_pipe!
-  log_info { action: "mac_learn_pipe_created", rfd: mac_pipe.rfd, wfd: mac_pipe.wfd }
-
   { :load_config } = require "filter.lib.load_config"
   filter_cfg, cfg_err = load_config os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
   if not filter_cfg
@@ -162,17 +159,17 @@ supervise = (pipe, sfd) ->
 
   workers = {
     {
-      name:       "MAC-learner"
+      name:       "Q4-mac-learn"
       pid:        nil
-      restart_fn: -> fork_worker "MAC-learner",
-        (-> require("mac_learner").run mac_pipe.rfd),
-        mac_pipe.rfd
+      restart_fn: -> fork_worker "Q4-mac-learn",
+        (-> require("worker_q4").run!),
+        pipe.rfd   -- fd factice
     }
     {
       name:       "Q0-questions"
       pid:        nil
       restart_fn: -> fork_worker "Q0-questions",
-        (-> require("worker_q0").run pipe.wfd, mac_pipe.wfd),
+        (-> require("worker_q0").run pipe.wfd),
         pipe.wfd
     }
     {

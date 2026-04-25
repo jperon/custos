@@ -33,7 +33,7 @@ MOONS := \
   $(SRC)/parse/ndpi_v5.moon \
   $(SRC)/ipc.moon \
   $(SRC)/mac_learner_ipc.moon \
-  $(SRC)/mac_learner.moon \
+  $(SRC)/worker_q4.moon \
   $(SRC)/ip_whitelist.moon \
   $(SRC)/nft.moon \
   $(SRC)/nft_add_helper.moon \

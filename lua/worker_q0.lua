@@ -29,9 +29,7 @@ do
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
-local mac_learner_ipc = require("mac_learner_ipc")
 local pipe_wfd = nil
-local mac_learn_wfd = nil
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
   filter.reload()
@@ -64,16 +62,13 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       vlan = l2.vlan
     })
   else
-    log_debug({
+    log_warn({
       action = "l2_info",
       mac_src = l2.mac_src,
       src_ip = pkt.ip.src_ip,
       in_ifindex = l2.in_ifindex,
       vlan = l2.vlan
     })
-  end
-  if l2.mac_src and l2.mac_src ~= "unknown" and mac_learn_wfd then
-    mac_learner_ipc.learn(mac_learn_wfd, pkt.ip.src_ip_raw, l2.mac_raw)
   end
   ndpi.get_flow(pkt)
   if math.random(1000) == 1 then
@@ -146,9 +141,8 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   return NF_ACCEPT
 end
 local run
-run = function(wfd, mac_wfd)
+run = function(wfd)
   pipe_wfd = wfd
-  mac_learn_wfd = mac_wfd
   filter.load()
   ndpi.warmup()
   local nft_extra = require("nft_extra_rules")
