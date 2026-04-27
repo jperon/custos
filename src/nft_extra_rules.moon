@@ -101,9 +101,20 @@ init = (rules) ->
   all_ok
 
 --- Applique les règles définies dans la config exportée (config.NFT_EXTRA_RULES).
--- Lecture directe de `require 'config'`.
--- @treturn boolean true si au moins une insertion a été tentée (et toutes réussies)
+-- Si la chaîne `forward` est absente (ex : respawn procd sans appel de
+-- start_service), le fichier nft principal est ré-appliqué automatiquement
+-- pour recréer la table avant d'insérer les règles UCI.
+-- @treturn boolean true si toutes les insertions ont réussi
 apply_from_config = ->
+  -- Vérifier si la chaîne forward existe. Si non (cas typique : respawn procd
+  -- après un stop/start non coordonné), ré-appliquer le ruleset principal.
+  rc_check = os.execute "nft list chain #{NFT_FAMILY} #{NFT_TABLE} forward >/dev/null 2>&1"
+  if rc_check ~= 0
+    ok = require("nft_rules").apply!
+    unless ok
+      log_warn { action: "nft_extra_main_rules_reapply_failed" }
+      return false
+    log_info { action: "nft_extra_main_rules_reapplied" }
   cfg = require "config"
   rules = cfg.NFT_EXTRA_RULES or {}
   init rules

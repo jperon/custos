@@ -6,17 +6,22 @@
 # traversant le bridge, y compris le transit inter-VLAN (client → résolveur
 # tiers) invisible aux tables ip/ip6 sans br_netfilter.
 #
-# NFQUEUE assignments :
-#   Q0 : DNS questions  (th dport 53)
-#   Q1 : DNS responses  (th sport 53)
-#   Q2 : TCP SYN/80 non autorisés → portail captif (forge TCP 302)
-#   Q3 : Tout trafic non autorisé → forge RST ou ICMP admin-prohibited
+# Ce fichier est un template : les placeholders {QUEUE_*} et {NFT_IP_TIMEOUT}
+# sont substitués par les valeurs de config.moon avant application via libnft.
+#
+# Placeholders :
+#   {QUEUE_QUESTIONS}  — file(s) DNS questions  (th dport 53)
+#   {QUEUE_RESPONSES}  — file(s) DNS responses  (th sport 53)
+#   {QUEUE_CAPTIVE}    — file(s) TCP SYN/80 non autorisés → portail captif
+#   {QUEUE_REJECT}     — file(s) trafic non autorisé → forge RST/ICMP
+#   {NFT_IP_TIMEOUT}   — durée de vie des IPs dans les sets DNS
 #
 # Politique générale :
-#   - DNS → Q0/Q1 (LuaJIT décide allow/refused, peuple les sets)
+#   - DNS → {QUEUE_QUESTIONS}/{QUEUE_RESPONSES}
+#     (LuaJIT décide allow/refused, peuple les sets)
 #   - Trafic autorisé (sets DNS + whitelist) → ACCEPT
-#   - Client non authentifié, TCP/80 SYN → Q2 (forge 302)
-#   - Tout trafic non autorisé (rate-limited) → Q3 (forge RST/ICMP)
+#   - Client non authentifié, TCP/80 SYN → {QUEUE_CAPTIVE} (forge 302)
+#   - Tout trafic non autorisé (rate-limited) → {QUEUE_REJECT} (forge RST/ICMP)
 #   - Surplus au-delà du rate-limit → drop silencieux
 #
 # Prérequis :
@@ -34,31 +39,31 @@ table bridge dns-filter-bridge {
   set mac6_allowed {
     type    ether_addr . ipv6_addr
     flags   timeout
-    timeout 2m
+    timeout {NFT_IP_TIMEOUT}
   }
 
   # Paires (MAC client, destination IPv4) autorisées après résolution DNS.
-  # Expiration automatique après 2 minutes.
+  # Expiration automatique après {NFT_IP_TIMEOUT}.
   set mac4_allowed {
     type    ether_addr . ipv4_addr
     flags   timeout
-    timeout 2m
+    timeout {NFT_IP_TIMEOUT}
   }
 
   # Paires (client IPv6, destination IPv6) autorisées après résolution DNS.
-  # Expiration automatique après 2 minutes.
+  # Expiration automatique après {NFT_IP_TIMEOUT}.
   set ip6_allowed {
     type    ipv6_addr . ipv6_addr
     flags   timeout, interval
-    timeout 2m
+    timeout {NFT_IP_TIMEOUT}
   }
 
   # Paires (client IPv4, destination IPv4) autorisées après résolution DNS.
-  # Expiration automatique après 2 minutes.
+  # Expiration automatique après {NFT_IP_TIMEOUT}.
   set ip4_allowed {
     type    ipv4_addr . ipv4_addr
     flags   timeout, interval
-    timeout 2m
+    timeout {NFT_IP_TIMEOUT}
   }
 
   # IPs clientes IPv6 authentifiées via le portail captif.
@@ -93,14 +98,16 @@ table bridge dns-filter-bridge {
     flags interval
   }
 
-  chain mac_learn {
-    type filter hook forward priority -10; policy accept;
-    meta l4proto { tcp, udp } limit rate 100/second queue num 4 bypass
+  chain prerouting {
+    type filter hook prerouting priority 0; policy accept;
+    meta l4proto { tcp, udp } limit rate 100/second queue num {QUEUE_RESPONSES} bypass
   }
 
   # ── Chaîne FORWARD (tout le trafic traversant le bridge) ──────
   chain forward {
     type filter hook forward priority 0; policy drop;
+
+    ct state established,related accept
 
     # L2 Core & Infrastructure
     udp dport { 67, 68 } accept
@@ -118,7 +125,7 @@ table bridge dns-filter-bridge {
     # VLAN mark : posée ici, avant DNS et allowlist.
     vlan id != 0 meta mark set vlan id
 
-     # UniFi Core Services & Infrastructure (restricted to local IPs)
+    # UniFi Core Services & Infrastructure (restricted to local IPs)
     # NTP (time), mDNS for device discovery (local only)
     udp dport {123, 5353} ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} accept
     udp dport {123, 5353} ip6 daddr {fc00::/7, fe80::/10} accept
@@ -134,10 +141,8 @@ table bridge dns-filter-bridge {
     # DNS → NFQUEUE.
     # La table bridge voit TOUT le trafic bridgé, y compris le transit
     # inter-VLAN (client → résolveur tiers).
-    meta l4proto { udp, tcp } th dport 53 queue num 0
-    meta l4proto { udp, tcp } th sport 53 queue num 1
-
-    ct state established,related accept
+    meta l4proto { udp, tcp } th dport 53 queue num {QUEUE_QUESTIONS}
+    meta l4proto { udp, tcp } th sport 53 queue num {QUEUE_RESPONSES}
 
     # Whitelist statique
     ip6 daddr @ip6_dest_whitelist accept
@@ -161,19 +166,18 @@ table bridge dns-filter-bridge {
     # meta pkttype host couvre toutes les IPs assignées au routeur (v4 et v6).
     meta pkttype host accept
 
-    # Authenticated client, destination not in sets → Q3 (MAC learning + forge RST or ICMP admin-prohibited).
-    # Must come before Q2 so authenticated clients never see the captive portal again.
-    ether saddr @authenticated_macs queue num 3
-    ip6  saddr @authenticated_ips6  queue num 3
-    ip   saddr @authenticated_ips   queue num 3
+    # Authenticated client, destination not in sets → {QUEUE_REJECT} (MAC learning + forge RST or ICMP admin-prohibited).
+    # Must come before {QUEUE_CAPTIVE} so authenticated clients never see the captive portal again.
+    ether saddr @authenticated_macs queue num {QUEUE_REJECT}
+    ip6   saddr @authenticated_ips6 queue num {QUEUE_REJECT}
+    ip    saddr @authenticated_ips  queue num {QUEUE_REJECT}
 
-    # Unauthenticated client, TCP SYN port 80 → Q2 (forge TCP 302).
-    meta l4proto tcp th dport 80 tcp flags & (fin | syn | rst | ack) == syn queue num 2
+    # Unauthenticated client, TCP SYN port 80 → {QUEUE_CAPTIVE} (forge TCP 302).
+    meta l4proto tcp th dport 80 tcp flags & (fin | syn | rst | ack) == syn queue num {QUEUE_CAPTIVE}
 
-    # All remaining unauthorised traffic → Q3 (MAC learning + forge RST or ICMP admin-prohibited).
-    # Rate-limited to protect Q3 against floods; surplus is dropped silently.
-    limit rate 100/second queue num 3 bypass
-    drop
+    # All remaining unauthorised traffic → {QUEUE_REJECT} (MAC learning + forge RST or ICMP admin-prohibited).
+    # Rate-limited to protect {QUEUE_REJECT} against floods; surplus is dropped silently.
+    limit rate 400/second queue num {QUEUE_REJECT} bypass
   }
 
 }

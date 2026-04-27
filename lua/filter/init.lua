@@ -62,21 +62,8 @@ decide = function(req)
   end
   return _decide(rules, req)
 end
-local reload_requested = false
-local sighup_handler = ffi.cast("sighandler_t", function(sig)
-  reload_requested = true
-end)
-libc.signal(1, sighup_handler)
-local reload
-reload = function()
-  if reload_requested then
-    reload_requested = false
-    return load()
-  end
-end
 return {
   load = load,
   decide = decide,
-  reload = reload,
   set_config_path = set_config_path
 }

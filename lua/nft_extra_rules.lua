@@ -117,6 +117,19 @@ init = function(rules)
 end
 local apply_from_config
 apply_from_config = function()
+  local rc_check = os.execute("nft list chain " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " forward >/dev/null 2>&1")
+  if rc_check ~= 0 then
+    local ok = require("nft_rules").apply()
+    if not (ok) then
+      log_warn({
+        action = "nft_extra_main_rules_reapply_failed"
+      })
+      return false
+    end
+    log_info({
+      action = "nft_extra_main_rules_reapplied"
+    })
+  end
   local cfg = require("config")
   local rules = cfg.NFT_EXTRA_RULES or { }
   return init(rules)

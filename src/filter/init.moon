@@ -68,22 +68,4 @@ decide = (req) ->
     return false, "filter not loaded", nil
   _decide rules, req
 
--- ── Rechargement SIGHUP ──────────────────────────────────────────
--- Même pattern que allowlist.moon : flag C → testé dans la boucle Q0.
-
-reload_requested = false
-
-sighup_handler = ffi.cast "sighandler_t", (sig) ->
-  reload_requested = true
-
-libc.signal 1, sighup_handler   -- SIGHUP = 1
-
---- Applique un rechargement si un SIGHUP a été reçu.
--- Doit être appelé en début de callback, avant tout traitement de paquet.
--- @treturn nil
-reload = ->
-  if reload_requested
-    reload_requested = false
-    load!
-
-{ :load, :decide, :reload, :set_config_path }
+{ :load, :decide, :set_config_path }

@@ -1,0 +1,63 @@
+local ffi, libnft
+do
+  local _obj_0 = require("ffi_defs")
+  ffi, libnft = _obj_0.ffi, _obj_0.libnft
+end
+local log_info, log_warn
+do
+  local _obj_0 = require("log")
+  log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
+end
+local ctx = libnft.nft_ctx_new(0)
+if ctx == nil then
+  error("nft_rules: nft_ctx_new() failed")
+end
+local nft_file_path
+nft_file_path = function()
+  local src = debug.getinfo(1, "S").source
+  local dir = src:match("^@(.*/)") or "./"
+  return dir .. "dns-filter-bridge.nft"
+end
+local substitute
+substitute = function(content)
+  local cfg = require("config")
+  content = content:gsub("{QUEUE_QUESTIONS}", cfg.QUEUE_QUESTIONS)
+  content = content:gsub("{QUEUE_RESPONSES}", cfg.QUEUE_RESPONSES)
+  content = content:gsub("{QUEUE_CAPTIVE}", cfg.QUEUE_CAPTIVE)
+  content = content:gsub("{QUEUE_REJECT}", cfg.QUEUE_REJECT)
+  content = content:gsub("{NFT_IP_TIMEOUT}", cfg.NFT_IP_TIMEOUT)
+  return content
+end
+local apply
+apply = function()
+  local path = nft_file_path()
+  local fh, err = io.open(path, "r")
+  if not (fh) then
+    log_warn({
+      action = "nft_rules_file_missing",
+      path = path,
+      err = err
+    })
+    return false
+  end
+  local content = fh:read("*a")
+  fh:close()
+  content = substitute(content)
+  local rc = libnft.nft_run_cmd_from_buffer(ctx, content)
+  if rc ~= 0 then
+    log_warn({
+      action = "nft_rules_apply_failed",
+      path = path,
+      rc = rc
+    })
+    return false
+  end
+  log_info({
+    action = "nft_rules_applied",
+    path = path
+  })
+  return true
+end
+return {
+  apply = apply
+}

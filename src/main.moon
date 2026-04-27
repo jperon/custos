@@ -1,15 +1,16 @@
 -- src/main.moon
--- Superviseur principal : crée le pipe IPC, fork les deux workers,
+-- Superviseur principal : crée les pipes IPC, fork les workers,
 -- surveille les processus enfants et les relance en cas de crash.
 --
 -- Architecture des processus :
 --
 --   main (superviseur)
---   ├── worker Q0 (questions)   — écrit dans pipe_wfd
---   ├── worker Q1 (réponses)    — lit depuis pipe_rfd
---   ├── worker Q2 (captif)      — mode bridge
---   ├── worker Q3 (reject)      — mode bridge
---   └── worker AUTH (portail)   — serveur HTTPS
+--   ├── mac_learner          — lit pipe learn Q0→learner, répond socket Unix
+--   ├── worker Q0 questions  — écrit Q0→Q1 et Q0→mac_learner
+--   ├── worker Q1 réponses   — lit Q0→Q1
+--   ├── worker AUTH          — portail HTTPS
+--   ├── worker Q2 captif     — mode bridge
+--   └── worker Q3 reject     — mode bridge
 --
 -- Le superviseur ne traite aucun paquet. Il boucle sur waitpid()
 -- et relance le worker mort après un délai de 1 seconde.
@@ -22,242 +23,293 @@
 --
 -- Rechargement à chaud sur SIGHUP :
 --   • SIGHUP est masqué et capturé via le même signalfd
---   • Sur réception : SIGHUP propagé à Q0 (qui recharge la config filtre
---     + la liste blanche IP via filter.reload())
+--   • Sur réception : SIGHUP propagé à Q0 et AUTH.
 
 { :ffi, :libc } = require "ffi_defs"
-{ :log_info, :log_warn, :log_error } = require "log"
+{ :log_info, :log_warn } = require "log"
+{
+  :SIGTERM, :SIGHUP, :WNOHANG
+  :fork_worker
+  :shutdown_workers
+} = require "lib.process"
+
+bit = require "bit"
+config = require "config"
+filter = require "filter"
+nft_rules = require "nft_rules"
+nft_extra = require "nft_extra_rules"
 
 -- ── Helpers POSIX ────────────────────────────────────────────────
+
 ffi.cdef [[
   unsigned int sleep(unsigned int seconds);
-  int getpid(void);
 ]]
 
-WNOHANG = 1
-SIGTERM = 15
-SIGHUP  = 1
+SIG_BLOCK     = 0
+O_NONBLOCK    = 2048
+F_SETPIPE_SZ  = 1031
+PIPE_DESIRED_SIZE = 65536
 
 -- ── signalfd pour SIGTERM + SIGHUP ───────────────────────────────
--- Masque SIGTERM et SIGHUP et les expose comme fd lisible ; évite
--- tout callback C async qui pourrait ré-entrer dans le VM LuaJIT.
--- SIGHUP est capturé ici pour être propagé aux workers (en
--- particulier Q0 qui gère le rechargement de la config filtre).
---
--- sigset_t sur Linux = 128 octets ; SIGTERM=15 → bit 14, SIGHUP=1 → bit 0.
+
+--- Crée un signalfd non-bloquant pour SIGTERM et SIGHUP.
+-- @treturn number fd du signalfd
+-- @raise string si signalfd échoue
 create_signal_fd = ->
-  SIG_BLOCK = 0
   mask = ffi.new "sigset_t_custos"
   ffi.fill mask, ffi.sizeof(mask), 0
+
   word = ffi.cast "uint32_t*", mask
   word[0] = bit.bor word[0], bit.lshift(1, SIGTERM - 1)
   word[0] = bit.bor word[0], bit.lshift(1, SIGHUP  - 1)
+
   libc.sigprocmask SIG_BLOCK, mask, nil
-  -- SFD_NONBLOCK=2048 pour que read() soit non-bloquant dans la boucle
-  fd = libc.signalfd -1, mask, 2048
+
+  fd = libc.signalfd -1, mask, O_NONBLOCK
   error "signalfd() échoué" if fd < 0
   fd
 
--- ── Création du pipe IPC ─────────────────────────────────────────
-create_pipe = ->
-  fds = ffi.new "int[2]"
-  -- Pipe non-bloquant : évite de bloquer Q0 dans la callback NFQUEUE en cas
-  -- de backpressure IPC. Les write IPC gèrent EAGAIN avec retry borné.
-  rc = libc.pipe2 fds, 2048
-  error "pipe2() échoué" if rc != 0
+-- ── Création des pipes IPC ───────────────────────────────────────
 
-  -- Essaye d'augmenter la taille du pipe pour réduire les EAGAIN sous forte charge.
-  -- F_SETPIPE_SZ (fcntl) : valeur commune 1031 sur Linux x86_64. L'appel est
-  -- best-effort et non-fatal : on logge le résultat et on continue si l'opération
-  -- échoue (certaines plateformes noyau/utilisateurspace peuvent ne pas autoriser).
-  F_SETPIPE_SZ = 1031
-  desired = 65536
-  sz = libc.fcntl fds[1], F_SETPIPE_SZ, desired
-  if sz and sz > 0
-    log_info { action: "pipe_resize", fd: fds[1], new_size: sz }
+--- Crée un pipe non-bloquant et tente d'augmenter sa capacité.
+-- @tparam string name Nom logique du pipe pour les logs
+-- @treturn table {rfd, wfd}
+-- @raise string si pipe2 échoue
+create_pipe = (name) ->
+  fds = ffi.new "int[2]"
+
+  rc = libc.pipe2 fds, O_NONBLOCK
+  error "pipe2() échoué pour #{name}" if rc != 0
+
+  sz = libc.fcntl fds[1], F_SETPIPE_SZ, PIPE_DESIRED_SIZE
+  if sz and sz >= 0
+    log_info { action: "pipe_resize", name: name, fd: fds[1], new_size: sz }
   else
-    log_warn { action: "pipe_resize_failed", fd: fds[1], rc: sz }
+    log_warn { action: "pipe_resize_failed", name: name, fd: fds[1], rc: sz }
 
   { rfd: fds[0], wfd: fds[1] }
 
--- ── Fork d'un worker ─────────────────────────────────────────────
---- Fork et lance un worker dans le processus enfant.
--- @tparam string name  Nom du worker (pour les logs)
--- @tparam function worker_fn  Fonction à appeler dans l'enfant
--- @tparam number pipe_fd  fd du pipe IPC à passer au worker
--- @treturn number pid de l'enfant (dans le parent uniquement)
-fork_worker = (name, worker_fn, pipe_fd) ->
-  parent_pid = tonumber libc.getpid!
-  pid = libc.fork!
+--- Crée les deux pipes utilisés par Custos.
+-- q0q1 : transactions DNS Q0 → Q1.
+-- learn : apprentissage IP→MAC Q0 → mac_learner.
+-- @treturn table {q0q1, learn}
+create_pipes = ->
+  {
+    q0q1: create_pipe "q0q1"
+    learn: create_pipe "mac_learn"
+  }
 
-  if pid < 0
-    error "fork() échoué pour #{name}"
+-- ── Configuration AUTH ───────────────────────────────────────────
 
-  if pid == 0
-    -- ── Processus enfant ───────────────────────────────────────
-    -- Le superviseur a bloqué SIGTERM et SIGHUP via sigprocmask (pour
-    -- signalfd). Ce masque est hérité par fork() : il faut les débloquer
-    -- ici, sinon prctl(PR_SET_PDEATHSIG) et kill(SIGTERM/SIGHUP) resteraient
-    -- sans effet.
-    unmask = ffi.new "sigset_t_custos"
-    ffi.fill unmask, ffi.sizeof(unmask), 0
-    uword = ffi.cast "uint32_t*", unmask
-    uword[0] = bit.bor(bit.lshift(1, SIGTERM - 1), bit.lshift(1, SIGHUP - 1))
-    libc.sigprocmask 1, unmask, nil        -- SIG_UNBLOCK=1
-    -- PR_SET_PDEATHSIG : filet de sécurité si le superviseur meurt
-    -- brutalement (avant que shutdown_workers ait pu envoyer SIGTERM).
-    if libc.prctl(1, SIGTERM, 0, 0, 0) != 0
-      log_error { action: "prctl_failed", name: name }
-      libc._exit 1
-    -- Si le parent est déjà mort entre fork() et prctl(), exit immédiat
-    if tonumber(libc.getppid!) != parent_pid
-      libc._exit 0
-    worker_fn pipe_fd
-    libc._exit 0
-    -- _exit() ne retourne jamais
-
-  -- ── Processus parent ───────────────────────────────────────────
-  log_info { action: "worker_started", name: name, pid: tonumber pid }
-  pid
-
--- ── Shutdown explicite des workers ───────────────────────────────
---- Envoie SIGTERM à tous les workers et attend leur sortie complète.
--- Appelé sur réception de SIGTERM par le superviseur pour garantir
--- que les queues NFQUEUE sont libérées avant la fin du processus.
--- @tparam table workers  Table des workers { name, pid, ... }
-shutdown_workers = (workers) ->
-  for w in *workers
-    if w.pid and w.pid > 0
-      log_info { action: "worker_stopping", name: w.name, pid: w.pid }
-      libc.kill w.pid, SIGTERM
-  status = ffi.new "int[1]"
-  dead = libc.waitpid -1, status, 0
-  while dead > 0
-    dead = libc.waitpid -1, status, 0
-
--- ── Boucle de supervision ────────────────────────────────────────
---- Supervise les workers Q0, Q1 et AUTH, les relance en cas de crash,
--- et arrête proprement l'ensemble sur SIGTERM.
--- @tparam table pipe  { rfd, wfd } du pipe IPC
--- @tparam number sfd  fd du signalfd écoutant SIGTERM
-supervise = (pipe, sfd) ->
-  -- Charge la configuration pour transmettre auth_cfg au worker AUTH.
-  -- On utilise load_config ici (dans le parent, avant fork) pour que
-  -- le worker auth dispose de la section auth dès le démarrage.
+--- Charge la configuration auth avec les valeurs par défaut nécessaires.
+-- @treturn table Configuration auth
+load_auth_cfg = ->
   { :load_config } = require "filter.lib.load_config"
+
   filter_cfg, cfg_err = load_config os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
-  if not filter_cfg
+  unless filter_cfg
     log_warn { action: "auth_cfg_load_warning", err: cfg_err }
     filter_cfg = { auth: {} }
-  -- Apply load_config defaults to auth section (secrets path, timeouts, etc.)
-  -- even when filter.yml is missing, so auth worker uses /etc/custos/secrets.
+
   auth = filter_cfg.auth or {}
+  auth.port               = auth.port               or 33443
   auth.idle_timeout       = auth.idle_timeout       or 120
-  auth.heartbeat_interval = auth.heartbeat_interval  or 30
-  auth.secrets            = auth.secrets             or "/etc/custos/secrets"
-  auth_cfg = auth
+  auth.heartbeat_interval = auth.heartbeat_interval or 30
+  auth.session_ttl        = auth.session_ttl        or 3600
+  auth.secrets            = auth.secrets            or "/etc/custos/secrets"
+  auth.sessions_file      = auth.sessions_file      or "./tmp/sessions.lua"
+
+  auth
+
+-- ── Shutdown explicite des workers ───────────────────────────────
+
+--- Ferme les fd de pipes encore détenus par le superviseur.
+-- @tparam table pipes Table retournée par create_pipes()
+-- @treturn nil
+close_supervisor_fds = (pipes) ->
+  if pipes
+    if pipes.q0q1
+      libc.close pipes.q0q1.rfd if pipes.q0q1.rfd
+      libc.close pipes.q0q1.wfd if pipes.q0q1.wfd
+    if pipes.learn
+      libc.close pipes.learn.rfd if pipes.learn.rfd
+      libc.close pipes.learn.wfd if pipes.learn.wfd
+  nil
+
+-- ── Boucle de supervision ────────────────────────────────────────
+
+--- Supervise les workers, les relance en cas de crash,
+-- et arrête proprement l'ensemble sur SIGTERM.
+-- @tparam table pipes Pipes IPC
+-- @tparam number sfd fd du signalfd écoutant SIGTERM/SIGHUP
+-- @treturn nil
+supervise = (pipes, sfd) ->
+  auth_cfg = load_auth_cfg!
+
+  -- Parse queue lists from config, supporting single numbers and ranges (e.g. "0,2,5-7,10-12")
+  parse_queues = (str) ->
+    queues = {}
+    for part in str\gmatch "%d+%-?%d*"
+      if part\match "%-%d+" then
+        a, b = part\match "(%d+)%-(%d+)"
+        a, b = tonumber(a), tonumber(b)
+        if a and b then
+          if a <= b then
+            for n = a, b do table.insert queues, n
+          else
+            for n = b, a do table.insert queues, n
+        else
+          -- fallback: treat as single
+          n = tonumber(part)
+          if n then table.insert queues, n
+      else
+        n = tonumber(part)
+        if n then table.insert queues, n
+    queues
+
+  questions_queues = parse_queues config.QUEUE_QUESTIONS
+  responses_queues = parse_queues config.QUEUE_RESPONSES
+  captive_queues   = parse_queues config.QUEUE_CAPTIVE
+  reject_queues    = parse_queues config.QUEUE_REJECT
 
   workers = {
     {
-      name:       "Q4-mac-learn"
-      pid:        nil
-      restart_fn: -> fork_worker "Q4-mac-learn",
-        (-> require("worker_q4").run!),
-        pipe.rfd   -- fd factice
-    }
-    {
-      name:       "Q0-questions"
-      pid:        nil
-      restart_fn: -> fork_worker "Q0-questions",
-        (-> require("worker_q0").run pipe.wfd),
-        pipe.wfd
-    }
-    {
-      name:       "Q1-responses"
-      pid:        nil
-      restart_fn: -> fork_worker "Q1-responses", (-> require("worker_q1").run pipe.rfd), pipe.rfd
-    }
-    {
-      name:       "AUTH"
-      pid:        nil
-      -- Le worker AUTH n'utilise pas le pipe DNS ; on passe pipe.rfd comme
-      -- fd factice (valeur ignorée dans fork_worker, uniquement pour l'appel
-      -- à close() dans le parent — fd déjà ouvert, sans effet néfaste).
-      restart_fn: -> fork_worker "AUTH",
-        (-> require("auth.worker").run_auth_worker auth_cfg),
-        pipe.rfd
-    }
-    {
-      name:       "Q2-captive"
-      pid:        nil
-      restart_fn: -> fork_worker "Q2-captive",
-        (-> require("worker_q2").run auth_cfg),
-        pipe.rfd   -- fd factice
-    }
-    {
-      name:       "Q3-reject"
-      pid:        nil
-      restart_fn: -> fork_worker "Q3-reject",
-        (-> require("worker_q3").run auth_cfg),
-        pipe.rfd   -- fd factice
+      name: "MAC-learner"
+      pid: nil
+      restart_fn: -> fork_worker "MAC-learner",
+        (rfd) -> require("mac_learner").run rfd,
+        pipes.learn.rfd
     }
   }
+
+  -- Multiple workers for questions (parallel Q0)
+  for i, q_num in ipairs questions_queues
+    table.insert workers, {
+      name: "questions-q#{q_num}"
+      pid: nil
+      restart_fn: -> fork_worker "questions-q#{q_num}",
+        ((fds) -> require("worker_questions").run q_num, fds.q0q1_wfd, fds.learn_wfd),
+        { q0q1_wfd: pipes.q0q1.wfd, learn_wfd: pipes.learn.wfd }
+    }
+
+  -- Multiple workers for responses (parallel Q1)
+  for i, q_num in ipairs responses_queues
+    table.insert workers, {
+      name: "responses-q#{q_num}"
+      pid: nil
+      restart_fn: -> fork_worker "responses-q#{q_num}",
+        (rfd) -> require("worker_responses").run q_num, rfd,
+        pipes.q0q1.rfd
+    }
+
+  -- Multiple workers for captive (parallel Q2)
+  for i, q_num in ipairs captive_queues
+    table.insert workers, {
+      name: "captive-q#{q_num}"
+      pid: nil
+      restart_fn: -> fork_worker "captive-q#{q_num}",
+        (cfg) -> require("worker_captive").run q_num, cfg,
+        auth_cfg
+    }
+
+  -- Multiple workers for reject (parallel Q3)
+  for i, q_num in ipairs reject_queues
+    table.insert workers, {
+      name: "reject-q#{q_num}"
+      pid: nil
+      restart_fn: -> fork_worker "reject-q#{q_num}",
+        (cfg) -> require("worker_reject").run q_num, cfg,
+        auth_cfg
+    }
+
+  -- AUTH (single)
+  table.insert workers, {
+    name: "AUTH"
+    pid: nil
+    restart_fn: -> fork_worker "AUTH",
+      (cfg) -> require("auth.worker").run_auth_worker cfg,
+      auth_cfg
+  }
+
+  -- Apply main nftables ruleset (with queue numbers and timeouts from config).
+  nft_rules.apply!
+
+  -- Load filter rules before forking so workers inherit via COW.
+  filter.load!
+
+  -- Apply extra nft rules before forking workers, so the bypass is in place
+  -- before any queue starts intercepting traffic.
+  nft_extra.apply_from_config!
 
   for w in *workers
     w.pid = w.restart_fn!
 
-  status   = ffi.new "int[1]"
-  siginfo  = ffi.new "signalfd_siginfo"
-  sig_sz   = ffi.sizeof "signalfd_siginfo"
+  status  = ffi.new "int[1]"
+  siginfo = ffi.new "signalfd_siginfo"
+  sig_sz  = ffi.sizeof "signalfd_siginfo"
 
   log_info { action: "supervisor_running", pid: tonumber libc.getpid! }
 
   while true
-    -- Vérifie SIGTERM/SIGHUP via signalfd (non-bloquant — O_NONBLOCK sur le fd)
     rv = libc.read sfd, siginfo, sig_sz
     if rv == sig_sz
       if siginfo.ssi_signo == SIGHUP
-        -- Propagation du rechargement à chaud vers Q0 (filtre + ip_whitelist)
-        q0 = workers[1]
-        if q0 and q0.pid and q0.pid > 0
-          log_info { action: "supervisor_sighup", forwarding_to: "Q0", pid: q0.pid }
-          libc.kill q0.pid, SIGHUP
-        -- Propagation vers AUTH pour recharger secrets
-        auth = workers[3]
-        if auth and auth.pid and auth.pid > 0
-          log_info { action: "supervisor_sighup", forwarding_to: "AUTH", pid: auth.pid }
-          libc.kill auth.pid, SIGHUP
+        log_info { action: "supervisor_sighup_reload" }
+        filter.load!
+
+        -- Kill + refork all Q0/Q1/Q2/Q3 workers to refresh COW lists
+        for w in *workers
+          if (w.name\match("^questions%-q") or w.name\match("^responses%-q") or w.name\match("^captive%-q") or w.name\match("^reject%-q")) and w.pid and w.pid > 0
+            log_info { action: "supervisor_sighup_kill", name: w.name, pid: w.pid }
+            libc.kill w.pid, SIGTERM
+            status = ffi.new "int[1]"
+            while libc.waitpid(w.pid, status, 0) ~= w.pid do nil
+            ffi.C.sleep 1
+            w.pid = w.restart_fn!
+            log_info { action: "supervisor_sighup_refork", name: w.name, pid: w.pid }
+
+        -- Forward SIGHUP to AUTH only (secrets reload)
+        for w in *workers
+          if w.name == "AUTH" and w.pid and w.pid > 0
+            log_info { action: "supervisor_sighup_forward_auth", pid: w.pid }
+            libc.kill w.pid, SIGHUP
       else
-        -- SIGTERM : arrêt propre de tous les workers
         log_info { action: "supervisor_sigterm" }
+        nft_extra.cleanup!
         shutdown_workers workers
+        close_supervisor_fds pipes
         libc._exit 0
 
-    -- waitpid(-1, ..., WNOHANG) : vérifie tous les enfants sans bloquer
     dead_pid = tonumber libc.waitpid -1, status, WNOHANG
-
-    if dead_pid > 0
+    if dead_pid and dead_pid > 0
       for w in *workers
         if w.pid == dead_pid
           exit_code = bit.rshift bit.band(status[0], 0xFF00), 8
           log_warn {
-            action:    "worker_died"
-            name:      w.name
-            pid:       dead_pid
+            action: "worker_died"
+            name: w.name
+            pid: dead_pid
             exit_code: exit_code
           }
           ffi.C.sleep 1
           w.pid = w.restart_fn!
           break
-
     else
       ffi.C.sleep 1
 
 -- ── main ─────────────────────────────────────────────────────────
+
 log_info { action: "dns-filter_start", version: "1.0.0" }
 
-sfd  = create_signal_fd!
-pipe = create_pipe!
-log_info { action: "ipc_pipe_created", rfd: pipe.rfd, wfd: pipe.wfd }
+sfd   = create_signal_fd!
+pipes = create_pipes!
 
-supervise pipe, sfd
+log_info {
+  action: "ipc_pipes_created"
+  q0q1_rfd: pipes.q0q1.rfd
+  q0q1_wfd: pipes.q0q1.wfd
+  learn_rfd: pipes.learn.rfd
+  learn_wfd: pipes.learn.wfd
+}
+
+supervise pipes, sfd

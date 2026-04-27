@@ -10,9 +10,6 @@ FILTER_CONFIG=/etc/custos/filter.yml
 CRONTABS_ROOT=/etc/crontabs/root
 CUSTOS_CRON_MARKER="# custos-update-lists"
 
-# Configuration nftables
-NFT_RULES_FILE="$CUSTOS_DIR/dns-filter-bridge.nft"
-
 start_service() {
     [ "$(uci get custos.main.enabled 2>/dev/null)" = "0" ] && return 0
     [ -z "$PROG" ] && { echo "custos: luajit introuvable"; return 1; }
@@ -22,8 +19,9 @@ start_service() {
     "$PROG" "$CUSTOS_DIR/uci_config.lua" || \
         echo "custos: avertissement — génération config UCI échouée, utilise les défauts compilés"
 
-    # Applique les règles nftables avant de démarrer le service principal
-    if ! _apply_nft_rules; then
+    # Applique le ruleset nftables (règles principales + extra UCI) depuis Lua
+    # synchronement avant que procd ne démarre le worker.
+    if ! _apply_lua_nft_rules; then
         echo "custos: avertissement — échec de l'application des règles nftables, démarrage en mode dégradé"
     fi
 
@@ -107,8 +105,20 @@ _cron_remove() {
     /etc/init.d/cron reload 2>/dev/null || true
 }
 
-# ── Arrêt des workers ─────────────────────────────────────────────────────────
+# ── Règles nftables ───────────────────────────────────────────────────────────
 
+# Applique le ruleset nftables principal (via nft_rules.apply()) et les règles
+# nft extra UCI (via nft_extra_rules.apply_from_config()) en un seul appel Lua.
+# Appelé depuis start_service() avant que procd ne démarre le worker.
+_apply_lua_nft_rules() {
+    LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" \
+    LUA_CPATH="/usr/lib/lua/?.so;;" \
+    CUSTOS_FILTER_CONFIG="$FILTER_CONFIG" \
+        "$PROG" -e "if not require('nft_rules').apply() then os.exit(1) end; require('nft_extra_rules').apply_from_config()" \
+        2>/dev/null
+}
+
+# ── Arrêt des workers ─────────────────────────────────────────────────────────
 # Envoie SIGTERM aux processus main.lua ; les workers enfants s'arrêtent par
 # propagation (shutdown_workers dans main.lua) ou par PR_SET_PDEATHSIG.
 # Attend jusqu'à 5 s puis SIGKILL en dernier recours.
@@ -132,26 +142,7 @@ _kill_workers() {
     for pid in $pids; do kill -KILL "$pid" 2>/dev/null || true; done
 }
 
-# ── Gestion des règles nftables ───────────────────────────────────────
-
-# Applique les règles nftables de dns-filter-bridge.nft
-_apply_nft_rules() {
-    [ ! -f "$NFT_RULES_FILE" ] && {
-        echo "custos: fichier de règles nftables introuvable: $NFT_RULES_FILE"
-        return 1
-    }
-
-    echo "custos: application des règles nftables..."
-
-    # Applique les règles nftables
-    if nft -f "$NFT_RULES_FILE"; then
-        echo "custos: règles nftables appliquées avec succès"
-        return 0
-    else
-        echo "custos: échec de l'application des règles nftables"
-        return 1
-    fi
-}
+# ── Gestion des règles nftables ───────────────────────────────────────────────
 
 # Nettoie les règles nftables appliquées par le service
 _cleanup_nft_rules() {
