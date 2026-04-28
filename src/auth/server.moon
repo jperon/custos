@@ -1,475 +1,315 @@
 -- src/auth/server.moon
--- Serveur HTTP minimal pour l'authentification des utilisateurs.
+-- Serveur HTTPS du portail captif.
 --
--- Endpoints :
---   GET  /        → page de connexion HTML
---   POST /login   → vérification des credentials, création de session
---   GET  /ping    → heartbeat de session
---   GET  /logout  → suppression de la session
---   GET  /register → page d'inscription
---   POST /register → création de compte
---
--- Dépendances : luasocket + luasec.
--- Les credentials sont fournis par auth/credentials, les sessions par auth/sessions.
+-- Le worker AUTH est déjà forké par main.moon. Ce module écoute le port HTTPS
+-- et fork un enfant court par connexion entrante avec lib.process, sans utiliser
+-- socket.fork().
 
 socket = require "socket"
-ssl    = require "ssl"
-cert   = require "auth.cert"
-h      = require "auth.html"
+ssl = require "ssl"
 
-{ :verify_password, :load_secrets, :register_user } = require "auth.credentials"
-{ :add_session, :purge_expired, :write_sessions, :session_for_mac, :load_sessions } = require "auth.sessions"
-{ :log_info, :log_warn } = require "log"
-mac_learner_ipc = require "mac_learner_ipc"
+{ :fork_child, :reap_one } = require "lib.process"
+{ :get_mac } = require "mac_learner_ipc"
+{ :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
+{ :verify_password, :register_user } = require "auth.credentials"
+{ :load_or_generate } = require "auth.cert"
+{ :log_info, :log_warn, :log_error } = require "log"
+{ :AUTH_SESSIONS_FILE } = require "config"
 
--- ── Pages HTML (construites via le DSL auth.html) ────────────────
+H = require "auth.html"
 
---- CSS commun à toutes les pages. Le bouton primaire varie.
--- @tparam string btn_bg  Couleur de fond du bouton
--- @tparam string btn_hov Couleur de fond au survol
--- @treturn string CSS
-build_css = (btn_bg, btn_hov) -> [[
-*, *::before, *::after { box-sizing: border-box; }
-body {
-  font-family: system-ui, sans-serif;
-  background: #f4f4f4;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
-  margin: 0;
-}
-.card {
-  background: white;
-  padding: 2rem;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px rgba(0,0,0,.15);
-  width: 100%;
-  max-width: 380px;
-}
-h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
-label { display: block; margin-bottom: 1rem; }
-label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
-input[type=text], input[type=email], input[type=password] {
-  width: 100%;
-  padding: .5rem .7rem;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font-size: 1rem;
-}
-button {
-  width: 100%;
-  padding: .6rem;
-  background: ]] .. btn_bg .. [[;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  font-size: 1rem;
-  cursor: pointer;
-  margin-top: .5rem;
-}
-button:hover { background: ]] .. btn_hov .. [[; }
-.msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
-.msg.ok  { background: #dcfce7; color: #166534; }
-.msg.err { background: #fee2e2; color: #991b1b; }
-.link { text-align: center; margin-top: 1rem; font-size: .9rem; }
-.link a { color: #2563eb; text-decoration: none; }
-.link a:hover { text-decoration: underline; }
-]]
+url_decode = (s) ->
+  return "" unless s
+  s = s\gsub "+", " "
+  s\gsub "%%(%x%x)", (hex) -> string.char tonumber hex, 16
 
-LOGIN_CSS    = build_css "#2563eb", "#1d4ed8"
-REGISTER_CSS = build_css "#16a34a", "#15803d"
+parse_form = (body) ->
+  out = {}
+  return out unless body
+  for k, v in body\gmatch "([^&=]+)=([^&]*)"
+    out[url_decode k] = url_decode v
+  out
 
---- Enveloppe une page HTML complète.
--- @tparam string title Titre de la page
--- @tparam string css   Feuille de style inline
--- @tparam string inner Contenu HTML de la carte
--- @treturn string Document HTML
-page_skeleton = (title, css, inner) ->
-  "<!DOCTYPE html>" .. h.html(lang: "fr",
-    h.head(
-      h.meta(charset: "UTF-8"),
-      h.meta(name: "viewport", content: "width=device-width, initial-scale=1"),
-      h.title(title),
-      h.style(css)
-    ),
-    h.body(
-      h.div(class: "card", inner)
-    )
-  )
+read_request = (client) ->
+  request_line, err = client\receive "*l"
+  return nil, err unless request_line
 
---- Construit le bloc formulaire + lien inscription.
--- @tparam boolean hidden Si vrai, le bloc est rendu avec style="display:none"
--- @treturn string HTML
-login_form = (hidden) ->
-  attrs = if hidden then { style: "display:none" } else {}
-  h.div(attrs,
-    h.form(method: "post", action: "/login",
-      h.label(
-        h.span("Courriel"),
-        h.input(type: "email", name: "user", required: "", autofocus: "")
-      ),
-      h.label(
-        h.span("Mot de passe"),
-        h.input(type: "password", name: "password", required: "")
-      ),
-      h.button(type: "submit", "Se connecter")
-    ),
-    h.div(class: "link",
-      h.a(href: "/register", "Créer un compte")
-    )
-  )
-
---- Construit la page de connexion.
--- @tparam string|nil msg       HTML inline d'un message (OK ou erreur), ou nil
--- @tparam boolean    hide_form Cache le formulaire (après connexion réussie)
--- @treturn string Document HTML
-login_page = (msg, hide_form) ->
-  inner = h.h1("CustosVirginum") .. login_form(hide_form) .. (msg or "")
-  page_skeleton "CustosVirginum — Authentification", LOGIN_CSS, inner
-
---- Construit le formulaire d'inscription.
-register_form = ->
-  h.form(method: "post", action: "/register",
-    h.label(
-      h.span("Courriel"),
-      h.input(type: "email", name: "user",
-        required: "", autofocus: "", minlength: "3", maxlength: "64")
-    ),
-    h.label(
-      h.span("Mot de passe (8 caractères minimum)"),
-      h.input(type: "password", name: "password", required: "", minlength: "8")
-    ),
-    h.label(
-      h.span("Confirmer le mot de passe"),
-      h.input(type: "password", name: "password2", required: "", minlength: "8")
-    ),
-    h.button(type: "submit", "Créer le compte")
-  )
-
---- Construit la page d'inscription.
--- @tparam string|nil msg HTML inline d'un message (OK ou erreur)
--- @treturn string Document HTML
-register_page = (msg) ->
-  inner = h.h1("Créer un compte") ..
-          register_form! ..
-          h.div(class: "link", h.a(href: "/", "Déjà un compte ? Se connecter")) ..
-          (msg or "")
-  page_skeleton "CustosVirginum — Inscription", REGISTER_CSS, inner
-
---- Message OK (div.msg.ok) contenant du HTML interne.
-msg_ok  = (html_content) -> h.p(class: "msg ok",  html_content)
---- Message d'erreur (div.msg.err).
-msg_err = (text)         -> h.p(class: "msg err", text)
-
---- Page d'accueil (formulaire sans message).
-home_page = login_page nil, false
-
---- Page d'inscription (formulaire sans message).
-home_register_page = register_page nil
-
---- Page de succès post-login avec heartbeat JS intégré.
--- @tparam number interval Intervalle de ping en secondes
--- @treturn string Page HTML
-make_success_page = (interval) ->
-  js = string.format [[
-(function(){
-  var iv = %d * 1000;
-  function ping(){
-    fetch('/ping',{method:'GET',credentials:'omit'})
-      .then(function(r){ if(r.status===401) location.href='/'; })
-      .catch(function(){});
-  }
-  setInterval(ping, iv);
-  ping();
-})();
-]], interval
-  msg = msg_ok "Connexion réussie. Votre accès réseau est actif tant que cette page reste ouverte."
-  login_page msg .. h.script(js), true
-
---- Cookie de session HTTP simple basé sur la MAC.
--- @tparam string mac Adresse MAC du client
--- @treturn string|nil Nom/valeur du cookie ou nil si MAC inconnue
-session_cookie = (mac) ->
-  return nil unless mac and mac != "unknown"
-  "custos_session=#{mac}; Path=/; HttpOnly; SameSite=Lax"
-
---- Page d'échec de connexion.
-failure_page = (reason) -> login_page msg_err(reason), false
-
---- Page d'échec d'inscription.
-register_failure_page = (reason) -> register_page msg_err(reason)
-
---- Page de succès statique (compat, sans heartbeat JS).
-SUCCESS_PAGE = login_page msg_ok("Connexion réussie. Votre accès réseau est actif."), true
-
--- ── Parsing HTTP minimal ──────────────────────────────────────────
-
---- Lit les headers HTTP depuis un socket TLS.
--- Retourne la méthode, le path, et les headers sous forme de table.
--- @tparam table  sock   Socket TLS (luasec wrappé)
--- @treturn string, string, table  méthode, path, headers
--- @treturn nil, string           en cas d'erreur
-read_request = (sock) ->
-  line, err = sock\receive "*l"
-  unless line
-    log_warn { action: "http_read_failed", err: err }
-    return nil, err
-
-  method, path = line\match "^(%u+)%s+([^%s]+)"
-  unless method
-    log_warn { action: "http_bad_request", line: line }
-    return nil, "bad request line: #{line}"
+  method, path = request_line\match "^(%w+)%s+([^%s]+)%s+HTTP"
+  return nil, "bad_request_line" unless method and path
 
   headers = {}
   content_length = 0
+
   while true
-    hline, herr = sock\receive "*l"
-    unless hline
-      return nil, herr if herr
-      break
-    break if hline == ""
-    name, val = hline\match "^([^:]+):%s*(.*)"
+    line, line_err = client\receive "*l"
+    return nil, line_err unless line
+    break if line == ""
+
+    name, value = line\match "^([^:]+):%s*(.*)$"
     if name
-      headers[name\lower!] = val
-      if name\lower! == "content-length"
-        content_length = tonumber(val) or 0
-        if content_length > 8192
-          content_length = 8192
+      lname = name\lower!
+      headers[lname] = value
+      if lname == "content-length"
+        content_length = tonumber(value) or 0
 
   body = ""
   if content_length > 0
-    body = sock\receive content_length
+    body = client\receive content_length
+    body = body or ""
 
-  method, path, headers, body
-
---- Décode une chaîne encodée en application/x-www-form-urlencoded.
--- @tparam string s Chaîne encodée
--- @treturn table  Table clé→valeur
-decode_form = (s) ->
-  t = {}
-  for pair in (s or "")\gmatch "[^&]+"
-    k, v = pair\match "^([^=]+)=?(.*)$"
-    if k
-      decode = (x) -> x\gsub("+", " ")\gsub("%%(%x%x)", (h) -> string.char tonumber h, 16)
-      t[decode k] = decode v
-  t
-
--- ── Réponses HTTP ─────────────────────────────────────────────────
-
-http_response = (sock, status, body, extra_headers) ->
-  extra_headers = extra_headers or ""
-  resp = table.concat {
-    "HTTP/1.1 #{status}\r\n"
-    "Content-Type: text/html; charset=UTF-8\r\n"
-    "Content-Length: #{#body}\r\n"
-    "Connection: close\r\n"
-    "X-Frame-Options: DENY\r\n"
-    "X-Content-Type-Options: nosniff\r\n"
-    extra_headers
-    "\r\n"
-    body
+  {
+    method: method
+    path: path
+    headers: headers
+    body: body
   }
-  ok, err = sock\send resp
-  ok, err
 
-http_redirect = (sock, location) ->
-  resp = "HTTP/1.1 303 See Other\r\nLocation: #{location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-  sock\send resp
+send_response = (client, status, headers, body) ->
+  body or= ""
+  reason = switch status
+    when 200 then "OK"
+    when 204 then "No Content"
+    when 302 then "Found"
+    when 400 then "Bad Request"
+    when 401 then "Unauthorized"
+    when 404 then "Not Found"
+    when 409 then "Conflict"
+    else "Internal Server Error"
 
--- ── Rate-limiting pour l'inscription ────────────────────────────────
+  headers or= {}
+  headers["Content-Length"] = tostring #body unless headers["Content-Length"]
+  headers["Connection"] = "close" unless headers["Connection"]
 
---- Vérifie si une IP a dépassé la limite de tentatives d'inscription.
--- @tparam table  register_attempts Table {ip → {count, ts}}
--- @tparam string peer_ip          Adresse IP du client
--- @tparam number max_attempts     Nombre max de tentatives dans la fenêtre
--- @tparam number window_sec       Durée de la fenêtre en secondes
--- @treturn boolean true si l'IP est au-dessus de la limite
-register_rate_exceeded = (register_attempts, peer_ip, max_attempts, window_sec) ->
+  client\send "HTTP/1.1 #{status} #{reason}\r\n"
+  for name, value in pairs headers
+    client\send "#{name}: #{value}\r\n"
+  client\send "\r\n"
+  client\send body if #body > 0
+
+success_page = ->
+  head = H.head {
+    H.meta { charset: "UTF-8" },
+    H.title "CustosVirginum — Authentification",
+    H.script "
+      var iv = 5 * 1000;
+      function ping(){
+        fetch('/ping',{method:'GET',credentials:'omit'})
+          .then(function(r){ if(r.status===401) location.href='/'; })
+          .catch(function(){});
+      }
+      setInterval(ping, iv);
+      ping();
+    "
+  }
+  body = H.body {
+    H.p "Connexion réussie. Votre accès réseau est actif."
+  }
+  "<!DOCTYPE html>\n" .. H.html lang: "fr", head, body
+
+register_page = ->
+  head = H.head {
+    H.meta { charset: "UTF-8" },
+    H.title "CustosVirginum — Compte créé"
+  }
+  body = H.body {
+    H.p "Compte créé. Vous pouvez maintenant vous connecter.",
+    H.a { href: "/" }, "Se connecter"
+  }
+  "<!DOCTYPE html>\n" .. H.html lang: "fr", head, body
+
+login_page = ->
+  head = H.head {
+    H.meta { charset: "UTF-8" },
+    H.title "CustosVirginum — Authentification"
+  }
+  body = H.body {
+    H.form { method: "POST", action: "/login" },
+      H.label "Utilisateur ", H.input({ name: "user", type: "text" }), H.br!,
+      H.label "Mot de passe ", H.input({ name: "password", type: "password" }), H.br!,
+      H.button { type: "submit" }, "Connexion"
+  }
+  "<!DOCTYPE html>\n" .. H.html lang: "fr", head, body
+
+session_ip_matches = (s, ip) ->
+  return false unless s and s.ips and ip
+  s.ips.ipv4 == ip or s.ips.ipv6 == ip
+
+find_session_by_ip = (sessions, ip) ->
+  for mac, s in pairs sessions
+    return mac, s if session_ip_matches s, ip
+  nil, nil
+
+refresh_nft = (nft_sess, ip, mac, ttl) ->
+  return unless nft_sess
+  nft_sess.add_authenticated ip, ttl if ip and ip ~= "unknown"
+  nft_sess.add_authenticated_mac mac, ttl if mac and mac ~= "unknown"
+
+handle_login = (req, peer_ip, peer_mac, state) ->
+  form = parse_form req.body
+  user = form.user
+  pass = form.password
+
+  unless user and pass
+    return 400, {}, "Missing credentials"
+
+  stored = state.secrets and state.secrets[user]
+  unless stored and verify_password pass, stored
+    return 401, {}, "Invalid credentials"
+
+  sessions = load_sessions state.sessions_file
+  purge_expired sessions
+
+  mac = peer_mac
+  if not mac or mac == "unknown"
+    mac = get_mac peer_ip
+
+  unless mac and mac ~= "unknown"
+    return 401, {}, "Unable to identify client MAC"
+
+  log_info { action: "auth_login_success", user: user, mac: mac, ip: peer_ip }
+
+  add_session sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout
+  ok, err = write_sessions sessions, state.sessions_file
+  unless ok
+    log_warn { action: "auth_sessions_write_failed", err: err }
+    return 500, {}, "Session persistence failed"
+
+  refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout
+
+  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, success_page!
+
+handle_ping = (req, peer_ip, peer_mac, state) ->
+  sessions = load_sessions state.sessions_file
+  purge_expired sessions
+
+  mac, s = find_session_by_ip sessions, peer_ip
+  unless s
+    return 401, {}, ""
+
   now = os.time!
-  entry = register_attempts[peer_ip]
-  if entry
-    if now - entry.ts > window_sec
-      register_attempts[peer_ip] = { count: 1, ts: now }
-      return false
-    entry.count += 1
-    if entry.count > max_attempts
-      return true
+  if now > s.expires or (s.heartbeat and now > s.heartbeat)
+    sessions[mac] = nil
+    write_sessions sessions, state.sessions_file
+    return 401, {}, ""
+
+  if state.auth_cfg.idle_timeout and state.auth_cfg.idle_timeout > 0
+    s.heartbeat = now + state.auth_cfg.idle_timeout
+    write_sessions sessions, state.sessions_file
+
+  refresh_nft state.nft_sess, peer_ip, s.mac or mac, state.auth_cfg.idle_timeout
+
+  204, {}, ""
+
+handle_logout = (req, peer_ip, peer_mac, state) ->
+  sessions = load_sessions state.sessions_file
+  mac, s = find_session_by_ip sessions, peer_ip
+
+  unless s
+    return 404, {}, ""
+
+  if state.nft_sess
+    state.nft_sess.del_authenticated peer_ip
+    state.nft_sess.del_authenticated_mac s.mac if s.mac
+
+  sessions[mac] = nil
+  write_sessions sessions, state.sessions_file
+
+  302, { ["Location"]: "/" }, ""
+
+handle_register = (req, peer_ip, peer_mac, state) ->
+  form = parse_form req.body
+  user = form.user
+  pass = form.password
+
+  unless user and pass
+    return 400, {}, "Missing credentials"
+
+  new_secrets, err = register_user user, pass, state.secrets_path, state.secrets
+  unless new_secrets
+    if err and err\match "déjà"
+      return 409, {}, err
+    return 500, {}, err or "Registration failed"
+
+  state.secrets = new_secrets
+  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_page!
+
+handle_request = (req, peer_ip, peer_mac, state) ->
+  if req.path == "/" and req.method == "GET"
+    return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, login_page!
+  elseif req.path == "/login" and req.method == "POST"
+    return handle_login req, peer_ip, peer_mac, state
+  elseif req.path == "/ping" and req.method == "GET"
+    return handle_ping req, peer_ip, peer_mac, state
+  elseif req.path == "/logout"
+    return handle_logout req, peer_ip, peer_mac, state
+  elseif req.path == "/register" and req.method == "POST"
+    return handle_register req, peer_ip, peer_mac, state
   else
-    register_attempts[peer_ip] = { count: 1, ts: now }
-  false
+    return 404, {}, "<h1>404</h1>"
 
--- ── Gestionnaire de connexion ─────────────────────────────────────
+handle_client = (args) ->
+  client = args.client
+  state = args.state
+  peer_ip = args.peer_ip or "unknown"
 
---- Gère une connexion HTTP entrante.
--- @tparam table  raw_sock    Socket TCP brut (luasocket)
--- @tparam table  secrets     Table {user → hash}
--- @tparam table  sessions    Table de sessions (modifiée en place)
--- @tparam table  auth_cfg    Configuration auth (session_ttl, idle_timeout, sessions_file)
--- @tparam string peer_ip     Adresse IP du client
--- @tparam string success_pg  Page HTML de succès (avec JS heartbeat intégré)
--- @tparam table|nil nft_sess Module auth.nft_sessions (ou nil si portail captif désactivé)
--- @tparam string secrets_path Chemin du fichier secrets
--- @tparam table register_attempts Table de rate-limiting pour l'inscription
--- @tparam string peer_mac    Adresse MAC du client
-handle_connection = (raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac) ->
-  sock = raw_sock
-  sock\settimeout 10
-  method, path, headers, body = nil, nil, nil, nil
+  ok, err = pcall ->
+    client\settimeout 10
 
-  pcall ->
-    m, p, h, b = read_request sock
-    method, path, headers, body = m, p, h, b
+    tls_client, tls_err = ssl.wrap client, state.tls_ctx
+    unless tls_client
+      log_warn { action: "auth_tls_wrap_failed", err: tls_err }
+      client\close!
+      return
 
-  unless method
-    sock\close!
-    return
+    ok_hs, hs_err = tls_client\dohandshake!
+    unless ok_hs
+      log_warn { action: "auth_tls_handshake_failed", err: hs_err }
+      tls_client\close!
+      return
 
-  if method == "GET" and (path == "/" or path == "/login")
-    -- Vérifie si le client a déjà une session valide (via MAC ou IP fallback)
-    s = session_for_mac peer_mac, peer_ip, auth_cfg.sessions_file, sessions
-    now = os.time!
-    if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat)
-      http_response sock, "200 OK", success_pg
-      log_info { action: "auth_already_logged", ip: peer_ip, mac: peer_mac, user: s.user }
-    else
-      http_response sock, "200 OK", home_page
+    peer_mac = get_mac peer_ip
+    req, req_err = read_request tls_client
+    unless req
+      log_warn { action: "auth_request_read_failed", peer: peer_ip, err: req_err }
+      tls_client\close!
+      return
 
-  elseif method == "GET" and path == "/ping"
-    s = session_for_mac peer_mac, peer_ip, auth_cfg.sessions_file, sessions
-    now = os.time!
-    if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat)
-      if auth_cfg.idle_timeout and auth_cfg.idle_timeout > 0
-        s.heartbeat = now + auth_cfg.idle_timeout
-        ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
-        log_warn { action: "auth_write_failed", err: err3, user: s.user } unless ok2
-        if nft_sess
-          ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.idle_timeout
-          log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.idle_timeout, user: s.user } unless ok_nft
-          if s.mac
-            ok_mac = nft_sess.add_authenticated_mac s.mac, auth_cfg.idle_timeout
-            log_warn { action: "auth_nft_mac_add_failed", mac: s.mac, ttl: auth_cfg.idle_timeout, user: s.user } unless ok_mac
-      http_response sock, "204 No Content", ""
-    else
-      http_response sock, "401 Unauthorized", ""
+    status, headers, body = handle_request req, peer_ip, peer_mac, state
+    send_response tls_client, status, headers, body
+    tls_client\close!
 
-  elseif method == "GET" and path == "/logout"
-    s = session_for_mac peer_mac, peer_ip, auth_cfg.sessions_file, sessions
-    prev_user = s and s.user
-    if s
-      -- Supprime la session de la table (indexée par MAC)
-      sessions[s.mac] = nil
-      if nft_sess
-        -- Retire les deux familles IPv4 et IPv6 si elles existent dans la session
-        nft_sess.del_authenticated s.ips.ipv4 if s.ips and s.ips.ipv4
-        nft_sess.del_authenticated s.ips.ipv6 if s.ips and s.ips.ipv6
-        nft_sess.del_authenticated_mac s.mac
-    ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
-    log_warn { action: "auth_write_failed", err: err3, user: prev_user } unless ok2
-    http_redirect sock, "/"
-    log_info { action: "auth_logout", ip: peer_ip, mac: peer_mac, user: prev_user }
+  unless ok
+    log_error { action: "auth_client_failed", err: tostring err }
+    pcall -> client\close!
 
-  elseif method == "GET" and path == "/register"
-    http_response sock, "200 OK", home_register_page
-
-  elseif method == "POST" and path == "/login"
-    form = decode_form body
-    user = form.user or ""
-    pass = form.password or ""
-    stored = secrets[user]
-
-    if stored and pass ~= "" and verify_password(pass, stored)
-      purge_expired sessions
-      mac = peer_mac ~= "unknown" and peer_mac or nil
-      add_session sessions, mac, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
-      ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
-      log_warn { action: "auth_write_failed", err: err3, user: user } unless ok2
-      if nft_sess
-        ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
-        log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl, user: user } unless ok_nft
-        if mac
-          ok_mac = nft_sess.add_authenticated_mac mac, auth_cfg.session_ttl
-          log_warn { action: "auth_nft_mac_add_failed", mac: mac, ttl: auth_cfg.session_ttl, user: user } unless ok_mac
-      http_response sock, "200 OK", success_pg, "Set-Cookie: #{session_cookie(mac)}\r\n"
-      log_info { action: "auth_login_ok", ip: peer_ip, mac: peer_mac, user: user }
-    else
-      http_response sock, "401 Unauthorized", failure_page "Nom d'utilisateur ou mot de passe incorrect."
-      log_warn { action: "auth_login_failed", ip: peer_ip, mac: peer_mac, user: user }
-
-  elseif method == "POST" and path == "/register"
-    max_attempts = auth_cfg.register_rate_limit or 3
-    window_sec = auth_cfg.register_rate_window or 300
-    if register_rate_exceeded register_attempts, peer_ip, max_attempts, window_sec
-      http_response sock, "429 Too Many Requests",
-        register_failure_page "Trop de tentatives d'inscription. Réessayez plus tard."
-      log_warn { action: "auth_register_rate_limited", ip: peer_ip, mac: peer_mac }
-    else
-      form = decode_form body
-      user = form.user or ""
-      pass = form.password or ""
-      pass2 = form.password2 or ""
-      if pass ~= pass2
-        http_response sock, "400 Bad Request",
-          register_failure_page "Les mots de passe ne correspondent pas."
-        log_warn { action: "auth_register_password_mismatch", ip: peer_ip, mac: peer_mac, user: user }
-      else
-        new_secrets, reg_err = register_user user, pass, secrets_path, secrets
-        if new_secrets
-          purge_expired sessions
-          mac = peer_mac ~= "unknown" and peer_mac or nil
-          add_session sessions, mac, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout
-          ok2, err3 = write_sessions sessions, auth_cfg.sessions_file
-          log_warn { action: "auth_write_failed", err: err3, user: user } unless ok2
-          if nft_sess
-            ok_nft = nft_sess.add_authenticated peer_ip, auth_cfg.session_ttl
-            log_warn { action: "auth_nft_add_failed", ip: peer_ip, ttl: auth_cfg.session_ttl, user: user } unless ok_nft
-            if mac
-              ok_mac = nft_sess.add_authenticated_mac mac, auth_cfg.session_ttl
-              log_warn { action: "auth_nft_mac_add_failed", mac: mac, ttl: auth_cfg.session_ttl, user: user } unless ok_mac
-          secrets[user] = new_secrets[user]
-          http_response sock, "200 OK", success_pg, "Set-Cookie: #{session_cookie(mac)}\r\n"
-          log_info { action: "auth_register_ok", ip: peer_ip, mac: peer_mac, user: user }
-        else
-          user_msg = reg_err
-          status = "400 Bad Request"
-          if reg_err\match "déjà pris"
-            user_msg = "Impossible de créer ce compte. Veuillez choisir un autre nom."
-            status = "409 Conflict"
-          http_response sock, status,
-            register_failure_page user_msg
-          log_warn { action: "auth_register_failed", ip: peer_ip, mac: peer_mac, user: user, err: reg_err }
-
-  else
-    http_response sock, "404 Not Found", "<h1>404</h1>"
-
-  sock\close!
-
--- ── Création des sockets serveur ─────────────────────────────────
+reload_secrets_if_needed = (state) ->
+  return unless state.reload_fn
+  new_secrets = state.reload_fn!
+  state.secrets = new_secrets if new_secrets
 
 --- Crée un socket serveur TCP IPv4.
--- @tparam string host Adresse d'écoute (ex. "0.0.0.0")
 -- @tparam number port Port d'écoute
--- @treturn table|nil Socket serveur, ou nil + erreur
-make_server4 = (host, port) ->
+-- @treturn table|nil Socket serveur, ou nil + message d'erreur
+make_server4 = (port) ->
   srv = socket.tcp!
   srv\setoption "reuseaddr", true
-  ok4, err = srv\bind host, port
-  unless ok4
+  ok, err = srv\bind "0.0.0.0", port
+  unless ok
     srv\close!
     return nil, err
   srv\listen 8
   srv\settimeout 1
   srv
 
---- Crée un socket serveur TCP IPv6.
+--- Crée un socket serveur TCP IPv6 (non fatal si non disponible).
 -- @tparam number port Port d'écoute
--- @treturn table|nil Socket serveur, ou nil (IPv6 non disponible — pas fatal)
+-- @treturn table|nil Socket serveur, ou nil si IPv6 indisponible
 make_server6 = (port) ->
   ok6, srv6 = pcall socket.tcp6
   return nil unless ok6 and srv6
   srv6\setoption "reuseaddr", true
   srv6\setoption "ipv6-v6only", true
-  ok62, _err = pcall srv6.bind, srv6, "::", port
+  ok62, _ = pcall srv6.bind, srv6, "::", port
   unless ok62
     srv6\close!
     return nil
@@ -477,95 +317,65 @@ make_server6 = (port) ->
   srv6\settimeout 1
   srv6
 
--- ── Boucle principale ────────────────────────────────────────────
-
---- Démarre la boucle d'acceptation HTTPS.
--- @tparam table secrets       Table {user → hash}
--- @tparam table auth_cfg      Configuration auth
--- @tparam function|nil reload_fn  Fonction appelée pour recharger les secrets (SIGHUP)
--- @tparam table|nil nft_sess  Module auth.nft_sessions
--- @tparam string|nil secrets_path  Chemin vers le fichier secrets
+--- Démarre le serveur HTTPS d'authentification.
+-- @tparam table secrets Table des secrets déjà chargée
+-- @tparam table auth_cfg Configuration auth
+-- @tparam function reload_fn Fonction optionnelle de rechargement des secrets
+-- @tparam table nft_sess Module auth.nft_sessions
+-- @tparam string secrets_path Chemin du fichier secrets
+-- @treturn nil
 run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   port = auth_cfg.port or 33443
-  host = auth_cfg.host or "::"
-  hb_interval = auth_cfg.heartbeat_interval or 30
-  success_pg = make_success_page hb_interval
-
-  key_path = auth_cfg.key or "tmp/auth.key"
+  sessions_file = auth_cfg.sessions_file or AUTH_SESSIONS_FILE
   cert_path = auth_cfg.cert or "tmp/auth.crt"
-  ssl_ctx = cert.load_or_generate key_path, cert_path
+  key_path = auth_cfg.key or "tmp/auth.key"
 
-  listen4, err4 = make_server4 "0.0.0.0", port
+  tls_ctx = load_or_generate key_path, cert_path
+
+  listen4, err4 = make_server4 port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
   listen6 = make_server6 port
 
   all_servers = { listen4 }
-  if listen6
-    all_servers[#all_servers + 1] = listen6
+  all_servers[#all_servers + 1] = listen6 if listen6
 
-  log_info {
-    action: "auth_worker_start"
-    port: port
+  state = {
+    secrets: secrets or {}
+    auth_cfg: auth_cfg
+    reload_fn: reload_fn
+    nft_sess: nft_sess
+    secrets_path: secrets_path
+    sessions_file: sessions_file
+    tls_ctx: tls_ctx
   }
-  log_info {
-    action: "auth_secrets_loaded"
-    path: secrets_path
-    users: (do
-      n = 0
-      for _ in pairs secrets
-        n += 1
-      n)
-  }
+
   log_info {
     action: "auth_listening"
+    port: port
     ipv4: "0.0.0.0"
     ipv6: listen6 and "::" or nil
-    port: port
+    sessions_file: sessions_file
   }
 
-  sessions = load_sessions (auth_cfg.sessions_file or "")
-  register_attempts = {}
-
   while true
-    if reload_fn
-      new_secrets = reload_fn!
-      secrets = new_secrets if new_secrets
+    reload_secrets_if_needed state
 
-    readable = socket.select all_servers, nil, 1
-    for srv in *readable
-      client, err = srv\accept!
-      if client
-        client\settimeout 10
-        peer_ip = nil
-        peer_mac = nil
+    while true
+      dead_pid = reap_one!
+      break unless dead_pid and dead_pid > 0
 
-        ok_peer, peer_err = pcall ->
-          addr = client\getpeername!
-          if type(addr) == "table"
-            peer_ip = addr.ip or addr[1]
-          elseif type(addr) == "string"
-            peer_ip = addr
+    readable, _ = socket.select all_servers, nil, 0.1
+    if readable
+      for srv in *readable
+        client = srv\accept!
+        if client
+          peer_ip = client\getpeername! or "unknown"
+          pid = fork_child "AUTH-conn",
+            handle_client,
+            { client: client, peer_ip: peer_ip, state: state },
+            { log_start: false }
 
-          if peer_ip and peer_ip ~= "unknown"
-            peer_mac = mac_learner_ipc.get_mac peer_ip
-
-        unless ok_peer
-          log_warn { action: "auth_peer_lookup_failed", err: peer_err }
-
-        if not peer_ip or peer_ip == ""
-          peer_ip = "unknown"
-
-        conn = ssl.wrap client, ssl_ctx
-        if conn
-          ok_hs, hs_err = pcall -> conn\dohandshake!
-          if ok_hs
-            ok_conn, conn_err = pcall handle_connection, conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac
-            log_warn { action: "auth_connection_error", ip: peer_ip, err: conn_err } unless ok_conn
-          else
-            log_warn { action: "auth_handshake_failed", ip: peer_ip, err: hs_err }
-            conn\close!
-        else
-          log_warn { action: "auth_ssl_wrap_failed", ip: peer_ip }
+          log_info { action: "auth_conn_started", pid: pid, peer: peer_ip }
           client\close!
 
-{ :run, :handle_connection, :decode_form, :failure_page, :home_page, :SUCCESS_PAGE, :login_page, :register_page }
+{ :run }
