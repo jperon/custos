@@ -1,568 +1,405 @@
 local socket = require("socket")
 local ssl = require("ssl")
-local cert = require("auth.cert")
-local h = require("auth.html")
-local verify_password, load_secrets, register_user
+local fork_child, reap_one
 do
-  local _obj_0 = require("auth.credentials")
-  verify_password, load_secrets, register_user = _obj_0.verify_password, _obj_0.load_secrets, _obj_0.register_user
+  local _obj_0 = require("lib.process")
+  fork_child, reap_one = _obj_0.fork_child, _obj_0.reap_one
 end
-local add_session, purge_expired, write_sessions, session_for_mac, load_sessions
+local get_mac
+get_mac = require("mac_learner_ipc").get_mac
+local add_session, purge_expired, load_sessions, write_sessions
 do
   local _obj_0 = require("auth.sessions")
-  add_session, purge_expired, write_sessions, session_for_mac, load_sessions = _obj_0.add_session, _obj_0.purge_expired, _obj_0.write_sessions, _obj_0.session_for_mac, _obj_0.load_sessions
+  add_session, purge_expired, load_sessions, write_sessions = _obj_0.add_session, _obj_0.purge_expired, _obj_0.load_sessions, _obj_0.write_sessions
 end
-local log_info, log_warn
+local verify_password, register_user
+do
+  local _obj_0 = require("auth.credentials")
+  verify_password, register_user = _obj_0.verify_password, _obj_0.register_user
+end
+local load_or_generate
+load_or_generate = require("auth.cert").load_or_generate
+local log_info, log_warn, log_error
 do
   local _obj_0 = require("log")
-  log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
+  log_info, log_warn, log_error = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error
 end
-local mac_learner_ipc = require("mac_learner_ipc")
-local build_css
-build_css = function(btn_bg, btn_hov)
-  return [[*, *::before, *::after { box-sizing: border-box; }
-body {
-  font-family: system-ui, sans-serif;
-  background: #f4f4f4;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
-  margin: 0;
-}
-.card {
-  background: white;
-  padding: 2rem;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px rgba(0,0,0,.15);
-  width: 100%;
-  max-width: 380px;
-}
-h1 { font-size: 1.3rem; margin: 0 0 1.5rem; color: #222; }
-label { display: block; margin-bottom: 1rem; }
-label span { display: block; font-size: .85rem; color: #555; margin-bottom: .3rem; }
-input[type=text], input[type=email], input[type=password] {
-  width: 100%;
-  padding: .5rem .7rem;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font-size: 1rem;
-}
-button {
-  width: 100%;
-  padding: .6rem;
-  background: ]] .. btn_bg .. [[;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  font-size: 1rem;
-  cursor: pointer;
-  margin-top: .5rem;
-}
-button:hover { background: ]] .. btn_hov .. [[; }
-.msg { margin-top: 1rem; padding: .6rem; border-radius: 4px; font-size: .9rem; }
-.msg.ok  { background: #dcfce7; color: #166534; }
-.msg.err { background: #fee2e2; color: #991b1b; }
-.link { text-align: center; margin-top: 1rem; font-size: .9rem; }
-.link a { color: #2563eb; text-decoration: none; }
-.link a:hover { text-decoration: underline; }
-]]
-end
-local LOGIN_CSS = build_css("#2563eb", "#1d4ed8")
-local REGISTER_CSS = build_css("#16a34a", "#15803d")
-local page_skeleton
-page_skeleton = function(title, css, inner)
-  return "<!DOCTYPE html>" .. h.html({
-    lang = "fr"
-  }, h.head(h.meta({
-    charset = "UTF-8"
-  }), h.meta({
-    name = "viewport",
-    content = "width=device-width, initial-scale=1"
-  }), h.title(title), h.style(css)), h.body(h.div({
-    class = "card"
-  }, inner)))
-end
-local login_form
-login_form = function(hidden)
-  local attrs
-  if hidden then
-    attrs = {
-      style = "display:none"
-    }
-  else
-    attrs = { }
+local AUTH_SESSIONS_FILE
+AUTH_SESSIONS_FILE = require("config").AUTH_SESSIONS_FILE
+local H = require("auth.html")
+local url_decode
+url_decode = function(s)
+  if not (s) then
+    return ""
   end
-  return h.div(attrs, h.form({
-    method = "post",
-    action = "/login"
-  }, h.label(h.span("Courriel"), h.input({
-    type = "email",
-    name = "user",
-    required = "",
-    autofocus = ""
-  })), h.label(h.span("Mot de passe"), h.input({
-    type = "password",
-    name = "password",
-    required = ""
-  })), h.button({
-    type = "submit"
-  }, "Se connecter")), h.div({
-    class = "link"
-  }, h.a({
-    href = "/register"
-  }, "Créer un compte")))
+  s = s:gsub("+", " ")
+  return s:gsub("%%(%x%x)", function(hex)
+    return string.char(tonumber(hex, 16))
+  end)
 end
-local login_page
-login_page = function(msg, hide_form)
-  local inner = h.h1("CustosVirginum") .. login_form(hide_form) .. (msg or "")
-  return page_skeleton("CustosVirginum — Authentification", LOGIN_CSS, inner)
-end
-local register_form
-register_form = function()
-  return h.form({
-    method = "post",
-    action = "/register"
-  }, h.label(h.span("Courriel"), h.input({
-    type = "email",
-    name = "user"
-  }, {
-    required = "",
-    autofocus = "",
-    minlength = "3",
-    maxlength = "64"
-  })), h.label(h.span("Mot de passe (8 caractères minimum)"), h.input({
-    type = "password",
-    name = "password",
-    required = "",
-    minlength = "8"
-  })), h.label(h.span("Confirmer le mot de passe"), h.input({
-    type = "password",
-    name = "password2",
-    required = "",
-    minlength = "8"
-  })), h.button({
-    type = "submit"
-  }, "Créer le compte"))
-end
-local register_page
-register_page = function(msg)
-  local inner = h.h1("Créer un compte") .. register_form() .. h.div({
-    class = "link"
-  }, h.a({
-    href = "/"
-  }, "Déjà un compte ? Se connecter")) .. (msg or "")
-  return page_skeleton("CustosVirginum — Inscription", REGISTER_CSS, inner)
-end
-local msg_ok
-msg_ok = function(html_content)
-  return h.p({
-    class = "msg ok"
-  }, html_content)
-end
-local msg_err
-msg_err = function(text)
-  return h.p({
-    class = "msg err"
-  }, text)
-end
-local home_page = login_page(nil, false)
-local home_register_page = register_page(nil)
-local make_success_page
-make_success_page = function(interval)
-  local js = string.format([[(function(){
-  var iv = %d * 1000;
-  function ping(){
-    fetch('/ping',{method:'GET',credentials:'omit'})
-      .then(function(r){ if(r.status===401) location.href='/'; })
-      .catch(function(){});
-  }
-  setInterval(ping, iv);
-  ping();
-})();
-]], interval)
-  local msg = msg_ok("Connexion réussie. Votre accès réseau est actif tant que cette page reste ouverte.")
-  return login_page(msg .. h.script(js), true)
-end
-local session_cookie
-session_cookie = function(mac)
-  if not (mac and mac ~= "unknown") then
-    return nil
+local parse_form
+parse_form = function(body)
+  local out = { }
+  if not (body) then
+    return out
   end
-  return "custos_session=" .. tostring(mac) .. "; Path=/; HttpOnly; SameSite=Lax"
+  for k, v in body:gmatch("([^&=]+)=([^&]*)") do
+    out[url_decode(k)] = url_decode(v)
+  end
+  return out
 end
-local failure_page
-failure_page = function(reason)
-  return login_page(msg_err(reason), false)
-end
-local register_failure_page
-register_failure_page = function(reason)
-  return register_page(msg_err(reason))
-end
-local SUCCESS_PAGE = login_page(msg_ok("Connexion réussie. Votre accès réseau est actif."), true)
 local read_request
-read_request = function(sock)
-  local line, err = sock:receive("*l")
-  if not (line) then
-    log_warn({
-      action = "http_read_failed",
-      err = err
-    })
+read_request = function(client)
+  local request_line, err = client:receive("*l")
+  if not (request_line) then
     return nil, err
   end
-  local method, path = line:match("^(%u+)%s+([^%s]+)")
-  if not (method) then
-    log_warn({
-      action = "http_bad_request",
-      line = line
-    })
-    return nil, "bad request line: " .. tostring(line)
+  local method, path = request_line:match("^(%w+)%s+([^%s]+)%s+HTTP")
+  if not (method and path) then
+    return nil, "bad_request_line"
   end
   local headers = { }
   local content_length = 0
   while true do
-    local hline, herr = sock:receive("*l")
-    if not (hline) then
-      if herr then
-        return nil, herr
-      end
+    local line, line_err = client:receive("*l")
+    if not (line) then
+      return nil, line_err
+    end
+    if line == "" then
       break
     end
-    if hline == "" then
-      break
-    end
-    local name, val = hline:match("^([^:]+):%s*(.*)")
+    local name, value = line:match("^([^:]+):%s*(.*)$")
     if name then
-      headers[name:lower()] = val
-      if name:lower() == "content-length" then
-        content_length = tonumber(val) or 0
-        if content_length > 8192 then
-          content_length = 8192
-        end
+      local lname = name:lower()
+      headers[lname] = value
+      if lname == "content-length" then
+        content_length = tonumber(value) or 0
       end
     end
   end
   local body = ""
   if content_length > 0 then
-    body = sock:receive(content_length)
+    body = client:receive(content_length)
+    body = body or ""
   end
-  return method, path, headers, body
+  return {
+    method = method,
+    path = path,
+    headers = headers,
+    body = body
+  }
 end
-local decode_form
-decode_form = function(s)
-  local t = { }
-  for pair in (s or ""):gmatch("[^&]+") do
-    local k, v = pair:match("^([^=]+)=?(.*)$")
-    if k then
-      local decode
-      decode = function(x)
-        return x:gsub("+", " "):gsub("%%(%x%x)", function(h)
-          return string.char(tonumber(h, 16))
-        end)
-      end
-      t[decode(k)] = decode(v)
-    end
-  end
-  return t
-end
-local http_response
-http_response = function(sock, status, body, extra_headers)
-  extra_headers = extra_headers or ""
-  local resp = table.concat({
-    "HTTP/1.1 " .. tostring(status) .. "\r\n",
-    "Content-Type: text/html; charset=UTF-8\r\n",
-    "Content-Length: " .. tostring(#body) .. "\r\n",
-    "Connection: close\r\n",
-    "X-Frame-Options: DENY\r\n",
-    "X-Content-Type-Options: nosniff\r\n",
-    extra_headers,
-    "\r\n",
-    body
-  })
-  local ok, err = sock:send(resp)
-  return ok, err
-end
-local http_redirect
-http_redirect = function(sock, location)
-  local resp = "HTTP/1.1 303 See Other\r\nLocation: " .. tostring(location) .. "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-  return sock:send(resp)
-end
-local register_rate_exceeded
-register_rate_exceeded = function(register_attempts, peer_ip, max_attempts, window_sec)
-  local now = os.time()
-  local entry = register_attempts[peer_ip]
-  if entry then
-    if now - entry.ts > window_sec then
-      register_attempts[peer_ip] = {
-        count = 1,
-        ts = now
-      }
-      return false
-    end
-    entry.count = entry.count + 1
-    if entry.count > max_attempts then
-      return true
-    end
+local send_response
+send_response = function(client, status, headers, body)
+  body = body or ""
+  local reason
+  local _exp_0 = status
+  if 200 == _exp_0 then
+    reason = "OK"
+  elseif 204 == _exp_0 then
+    reason = "No Content"
+  elseif 302 == _exp_0 then
+    reason = "Found"
+  elseif 400 == _exp_0 then
+    reason = "Bad Request"
+  elseif 401 == _exp_0 then
+    reason = "Unauthorized"
+  elseif 404 == _exp_0 then
+    reason = "Not Found"
+  elseif 409 == _exp_0 then
+    reason = "Conflict"
   else
-    register_attempts[peer_ip] = {
-      count = 1,
-      ts = now
-    }
+    reason = "Internal Server Error"
   end
-  return false
+  headers = headers or { }
+  if not (headers["Content-Length"]) then
+    headers["Content-Length"] = tostring(#body)
+  end
+  if not (headers["Connection"]) then
+    headers["Connection"] = "close"
+  end
+  client:send("HTTP/1.1 " .. tostring(status) .. " " .. tostring(reason) .. "\r\n")
+  for name, value in pairs(headers) do
+    client:send(tostring(name) .. ": " .. tostring(value) .. "\r\n")
+  end
+  client:send("\r\n")
+  if #body > 0 then
+    return client:send(body)
+  end
 end
-local handle_connection
-handle_connection = function(raw_sock, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
-  local sock = raw_sock
-  sock:settimeout(10)
-  local method, path, headers, body = nil, nil, nil, nil
-  pcall(function()
-    local m, p, b
-    m, p, h, b = read_request(sock)
-    method, path, headers, body = m, p, h, b
-  end)
-  if not (method) then
-    sock:close()
+local success_page
+success_page = function()
+  local head = H.head({
+    H.meta({
+      charset = "UTF-8"
+    }),
+    H.title("CustosVirginum — Authentification"),
+    H.script("\n      var iv = 5 * 1000;\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'omit'})\n          .then(function(r){ if(r.status===401) location.href='/'; })\n          .catch(function(){});\n      }\n      setInterval(ping, iv);\n      ping();\n    ")
+  })
+  local body = H.body({
+    H.p("Connexion réussie. Votre accès réseau est actif.")
+  })
+  return "<!DOCTYPE html>\n" .. H.html({
+    lang = "fr"
+  }, head, body)
+end
+local register_page
+register_page = function()
+  local head = H.head({
+    H.meta({
+      charset = "UTF-8"
+    }),
+    H.title("CustosVirginum — Compte créé")
+  })
+  local body = H.body({
+    H.p("Compte créé. Vous pouvez maintenant vous connecter."),
+    H.a({
+      href = "/"
+    }, "Se connecter")
+  })
+  return "<!DOCTYPE html>\n" .. H.html({
+    lang = "fr"
+  }, head, body)
+end
+local login_page
+login_page = function()
+  local head = H.head({
+    H.meta({
+      charset = "UTF-8"
+    }),
+    H.title("CustosVirginum — Authentification")
+  })
+  local body = H.body({
+    H.form({
+      method = "POST",
+      action = "/login"
+    }, H.label("Utilisateur ", H.input({
+      name = "user",
+      type = "text"
+    }), H.br()), H.label("Mot de passe ", H.input({
+      name = "password",
+      type = "password"
+    }), H.br()), H.button({
+      type = "submit"
+    }, "Connexion"))
+  })
+  return "<!DOCTYPE html>\n" .. H.html({
+    lang = "fr"
+  }, head, body)
+end
+local session_ip_matches
+session_ip_matches = function(s, ip)
+  if not (s and s.ips and ip) then
+    return false
+  end
+  return s.ips.ipv4 == ip or s.ips.ipv6 == ip
+end
+local find_session_by_ip
+find_session_by_ip = function(sessions, ip)
+  for mac, s in pairs(sessions) do
+    if session_ip_matches(s, ip) then
+      return mac, s
+    end
+  end
+  return nil, nil
+end
+local refresh_nft
+refresh_nft = function(nft_sess, ip, mac, ttl)
+  if not (nft_sess) then
     return 
   end
-  if method == "GET" and (path == "/" or path == "/login") then
-    local s = session_for_mac(peer_mac, peer_ip, auth_cfg.sessions_file, sessions)
-    local now = os.time()
-    if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat) then
-      http_response(sock, "200 OK", success_pg)
-      log_info({
-        action = "auth_already_logged",
-        ip = peer_ip,
-        mac = peer_mac,
-        user = s.user
-      })
-    else
-      http_response(sock, "200 OK", home_page)
-    end
-  elseif method == "GET" and path == "/ping" then
-    local s = session_for_mac(peer_mac, peer_ip, auth_cfg.sessions_file, sessions)
-    local now = os.time()
-    if s and now <= s.expires and (not s.heartbeat or now <= s.heartbeat) then
-      if auth_cfg.idle_timeout and auth_cfg.idle_timeout > 0 then
-        s.heartbeat = now + auth_cfg.idle_timeout
-        local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
-        if not (ok2) then
-          log_warn({
-            action = "auth_write_failed",
-            err = err3,
-            user = s.user
-          })
-        end
-        if nft_sess then
-          local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.idle_timeout)
-          if not (ok_nft) then
-            log_warn({
-              action = "auth_nft_add_failed",
-              ip = peer_ip,
-              ttl = auth_cfg.idle_timeout,
-              user = s.user
-            })
-          end
-          if s.mac then
-            local ok_mac = nft_sess.add_authenticated_mac(s.mac, auth_cfg.idle_timeout)
-            if not (ok_mac) then
-              log_warn({
-                action = "auth_nft_mac_add_failed",
-                mac = s.mac,
-                ttl = auth_cfg.idle_timeout,
-                user = s.user
-              })
-            end
-          end
-        end
-      end
-      http_response(sock, "204 No Content", "")
-    else
-      http_response(sock, "401 Unauthorized", "")
-    end
-  elseif method == "GET" and path == "/logout" then
-    local s = session_for_mac(peer_mac, peer_ip, auth_cfg.sessions_file, sessions)
-    local prev_user = s and s.user
-    if s then
-      sessions[s.mac] = nil
-      if nft_sess then
-        if s.ips and s.ips.ipv4 then
-          nft_sess.del_authenticated(s.ips.ipv4)
-        end
-        if s.ips and s.ips.ipv6 then
-          nft_sess.del_authenticated(s.ips.ipv6)
-        end
-        nft_sess.del_authenticated_mac(s.mac)
-      end
-    end
-    local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
-    if not (ok2) then
-      log_warn({
-        action = "auth_write_failed",
-        err = err3,
-        user = prev_user
-      })
-    end
-    http_redirect(sock, "/")
-    log_info({
-      action = "auth_logout",
-      ip = peer_ip,
-      mac = peer_mac,
-      user = prev_user
-    })
-  elseif method == "GET" and path == "/register" then
-    http_response(sock, "200 OK", home_register_page)
-  elseif method == "POST" and path == "/login" then
-    local form = decode_form(body)
-    local user = form.user or ""
-    local pass = form.password or ""
-    local stored = secrets[user]
-    if stored and pass ~= "" and verify_password(pass, stored) then
-      purge_expired(sessions)
-      local mac = peer_mac ~= "unknown" and peer_mac or nil
-      add_session(sessions, mac, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
-      local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
-      if not (ok2) then
-        log_warn({
-          action = "auth_write_failed",
-          err = err3,
-          user = user
-        })
-      end
-      if nft_sess then
-        local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
-        if not (ok_nft) then
-          log_warn({
-            action = "auth_nft_add_failed",
-            ip = peer_ip,
-            ttl = auth_cfg.session_ttl,
-            user = user
-          })
-        end
-        if mac then
-          local ok_mac = nft_sess.add_authenticated_mac(mac, auth_cfg.session_ttl)
-          if not (ok_mac) then
-            log_warn({
-              action = "auth_nft_mac_add_failed",
-              mac = mac,
-              ttl = auth_cfg.session_ttl,
-              user = user
-            })
-          end
-        end
-      end
-      http_response(sock, "200 OK", success_pg, "Set-Cookie: " .. tostring(session_cookie(mac)) .. "\r\n")
-      log_info({
-        action = "auth_login_ok",
-        ip = peer_ip,
-        mac = peer_mac,
-        user = user
-      })
-    else
-      http_response(sock, "401 Unauthorized", failure_page("Nom d'utilisateur ou mot de passe incorrect."))
-      log_warn({
-        action = "auth_login_failed",
-        ip = peer_ip,
-        mac = peer_mac,
-        user = user
-      })
-    end
-  elseif method == "POST" and path == "/register" then
-    local max_attempts = auth_cfg.register_rate_limit or 3
-    local window_sec = auth_cfg.register_rate_window or 300
-    if register_rate_exceeded(register_attempts, peer_ip, max_attempts, window_sec) then
-      http_response(sock, "429 Too Many Requests", register_failure_page("Trop de tentatives d'inscription. Réessayez plus tard."))
-      log_warn({
-        action = "auth_register_rate_limited",
-        ip = peer_ip,
-        mac = peer_mac
-      })
-    else
-      local form = decode_form(body)
-      local user = form.user or ""
-      local pass = form.password or ""
-      local pass2 = form.password2 or ""
-      if pass ~= pass2 then
-        http_response(sock, "400 Bad Request", register_failure_page("Les mots de passe ne correspondent pas."))
-        log_warn({
-          action = "auth_register_password_mismatch",
-          ip = peer_ip,
-          mac = peer_mac,
-          user = user
-        })
-      else
-        local new_secrets, reg_err = register_user(user, pass, secrets_path, secrets)
-        if new_secrets then
-          purge_expired(sessions)
-          local mac = peer_mac ~= "unknown" and peer_mac or nil
-          add_session(sessions, mac, peer_ip, user, auth_cfg.session_ttl, auth_cfg.idle_timeout)
-          local ok2, err3 = write_sessions(sessions, auth_cfg.sessions_file)
-          if not (ok2) then
-            log_warn({
-              action = "auth_write_failed",
-              err = err3,
-              user = user
-            })
-          end
-          if nft_sess then
-            local ok_nft = nft_sess.add_authenticated(peer_ip, auth_cfg.session_ttl)
-            if not (ok_nft) then
-              log_warn({
-                action = "auth_nft_add_failed",
-                ip = peer_ip,
-                ttl = auth_cfg.session_ttl,
-                user = user
-              })
-            end
-            if mac then
-              local ok_mac = nft_sess.add_authenticated_mac(mac, auth_cfg.session_ttl)
-              if not (ok_mac) then
-                log_warn({
-                  action = "auth_nft_mac_add_failed",
-                  mac = mac,
-                  ttl = auth_cfg.session_ttl,
-                  user = user
-                })
-              end
-            end
-          end
-          secrets[user] = new_secrets[user]
-          http_response(sock, "200 OK", success_pg, "Set-Cookie: " .. tostring(session_cookie(mac)) .. "\r\n")
-          log_info({
-            action = "auth_register_ok",
-            ip = peer_ip,
-            mac = peer_mac,
-            user = user
-          })
-        else
-          local user_msg = reg_err
-          local status = "400 Bad Request"
-          if reg_err:match("déjà pris") then
-            user_msg = "Impossible de créer ce compte. Veuillez choisir un autre nom."
-            status = "409 Conflict"
-          end
-          http_response(sock, status, register_failure_page(user_msg))
-          log_warn({
-            action = "auth_register_failed",
-            ip = peer_ip,
-            mac = peer_mac,
-            user = user,
-            err = reg_err
-          })
-        end
-      end
-    end
-  else
-    http_response(sock, "404 Not Found", "<h1>404</h1>")
+  if ip and ip ~= "unknown" then
+    nft_sess.add_authenticated(ip, ttl)
   end
-  return sock:close()
+  if mac and mac ~= "unknown" then
+    return nft_sess.add_authenticated_mac(mac, ttl)
+  end
+end
+local handle_login
+handle_login = function(req, peer_ip, peer_mac, state)
+  local form = parse_form(req.body)
+  local user = form.user
+  local pass = form.password
+  if not (user and pass) then
+    return 400, { }, "Missing credentials"
+  end
+  local stored = state.secrets and state.secrets[user]
+  if not (stored and verify_password(pass, stored)) then
+    return 401, { }, "Invalid credentials"
+  end
+  local sessions = load_sessions(state.sessions_file)
+  purge_expired(sessions)
+  local mac = peer_mac
+  if not mac or mac == "unknown" then
+    mac = get_mac(peer_ip)
+  end
+  if not (mac and mac ~= "unknown") then
+    return 401, { }, "Unable to identify client MAC"
+  end
+  log_info({
+    action = "auth_login_success",
+    user = user,
+    mac = mac,
+    ip = peer_ip
+  })
+  add_session(sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout)
+  local ok, err = write_sessions(sessions, state.sessions_file)
+  if not (ok) then
+    log_warn({
+      action = "auth_sessions_write_failed",
+      err = err
+    })
+    return 500, { }, "Session persistence failed"
+  end
+  refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout)
+  return 200, {
+    ["Content-Type"] = "text/html; charset=UTF-8"
+  }, success_page()
+end
+local handle_ping
+handle_ping = function(req, peer_ip, peer_mac, state)
+  local sessions = load_sessions(state.sessions_file)
+  purge_expired(sessions)
+  local mac, s = find_session_by_ip(sessions, peer_ip)
+  if not (s) then
+    return 401, { }, ""
+  end
+  local now = os.time()
+  if now > s.expires or (s.heartbeat and now > s.heartbeat) then
+    sessions[mac] = nil
+    write_sessions(sessions, state.sessions_file)
+    return 401, { }, ""
+  end
+  if state.auth_cfg.idle_timeout and state.auth_cfg.idle_timeout > 0 then
+    s.heartbeat = now + state.auth_cfg.idle_timeout
+    write_sessions(sessions, state.sessions_file)
+  end
+  refresh_nft(state.nft_sess, peer_ip, s.mac or mac, state.auth_cfg.idle_timeout)
+  return 204, { }, ""
+end
+local handle_logout
+handle_logout = function(req, peer_ip, peer_mac, state)
+  local sessions = load_sessions(state.sessions_file)
+  local mac, s = find_session_by_ip(sessions, peer_ip)
+  if not (s) then
+    return 404, { }, ""
+  end
+  if state.nft_sess then
+    state.nft_sess.del_authenticated(peer_ip)
+    if s.mac then
+      state.nft_sess.del_authenticated_mac(s.mac)
+    end
+  end
+  sessions[mac] = nil
+  write_sessions(sessions, state.sessions_file)
+  return 302, {
+    ["Location"] = "/"
+  }, ""
+end
+local handle_register
+handle_register = function(req, peer_ip, peer_mac, state)
+  local form = parse_form(req.body)
+  local user = form.user
+  local pass = form.password
+  if not (user and pass) then
+    return 400, { }, "Missing credentials"
+  end
+  local new_secrets, err = register_user(user, pass, state.secrets_path, state.secrets)
+  if not (new_secrets) then
+    if err and err:match("déjà") then
+      return 409, { }, err
+    end
+    return 500, { }, err or "Registration failed"
+  end
+  state.secrets = new_secrets
+  return 200, {
+    ["Content-Type"] = "text/html; charset=UTF-8"
+  }, register_page()
+end
+local handle_request
+handle_request = function(req, peer_ip, peer_mac, state)
+  if req.path == "/" and req.method == "GET" then
+    return 200, {
+      ["Content-Type"] = "text/html; charset=UTF-8"
+    }, login_page()
+  elseif req.path == "/login" and req.method == "POST" then
+    return handle_login(req, peer_ip, peer_mac, state)
+  elseif req.path == "/ping" and req.method == "GET" then
+    return handle_ping(req, peer_ip, peer_mac, state)
+  elseif req.path == "/logout" then
+    return handle_logout(req, peer_ip, peer_mac, state)
+  elseif req.path == "/register" and req.method == "POST" then
+    return handle_register(req, peer_ip, peer_mac, state)
+  else
+    return 404, { }, "<h1>404</h1>"
+  end
+end
+local handle_client
+handle_client = function(args)
+  local client = args.client
+  local state = args.state
+  local peer_ip = args.peer_ip or "unknown"
+  local ok, err = pcall(function()
+    client:settimeout(10)
+    local tls_client, tls_err = ssl.wrap(client, state.tls_ctx)
+    if not (tls_client) then
+      log_warn({
+        action = "auth_tls_wrap_failed",
+        err = tls_err
+      })
+      client:close()
+      return 
+    end
+    local ok_hs, hs_err = tls_client:dohandshake()
+    if not (ok_hs) then
+      log_warn({
+        action = "auth_tls_handshake_failed",
+        err = hs_err
+      })
+      tls_client:close()
+      return 
+    end
+    local peer_mac = get_mac(peer_ip)
+    local req, req_err = read_request(tls_client)
+    if not (req) then
+      log_warn({
+        action = "auth_request_read_failed",
+        peer = peer_ip,
+        err = req_err
+      })
+      tls_client:close()
+      return 
+    end
+    local status, headers, body = handle_request(req, peer_ip, peer_mac, state)
+    send_response(tls_client, status, headers, body)
+    return tls_client:close()
+  end)
+  if not (ok) then
+    log_error({
+      action = "auth_client_failed",
+      err = tostring(err)
+    })
+    return pcall(function()
+      return client:close()
+    end)
+  end
+end
+local reload_secrets_if_needed
+reload_secrets_if_needed = function(state)
+  if not (state.reload_fn) then
+    return 
+  end
+  local new_secrets = state.reload_fn()
+  if new_secrets then
+    state.secrets = new_secrets
+  end
 end
 local make_server4
-make_server4 = function(host, port)
+make_server4 = function(port)
   local srv = socket.tcp()
   srv:setoption("reuseaddr", true)
-  local ok4, err = srv:bind(host, port)
-  if not (ok4) then
+  local ok, err = srv:bind("0.0.0.0", port)
+  if not (ok) then
     srv:close()
     return nil, err
   end
@@ -578,7 +415,7 @@ make_server6 = function(port)
   end
   srv6:setoption("reuseaddr", true)
   srv6:setoption("ipv6-v6only", true)
-  local ok62, _err = pcall(srv6.bind, srv6, "::", port)
+  local ok62, _ = pcall(srv6.bind, srv6, "::", port)
   if not (ok62) then
     srv6:close()
     return nil
@@ -590,13 +427,11 @@ end
 local run
 run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
   local port = auth_cfg.port or 33443
-  local host = auth_cfg.host or "::"
-  local hb_interval = auth_cfg.heartbeat_interval or 30
-  local success_pg = make_success_page(hb_interval)
-  local key_path = auth_cfg.key or "tmp/auth.key"
+  local sessions_file = auth_cfg.sessions_file or AUTH_SESSIONS_FILE
   local cert_path = auth_cfg.cert or "tmp/auth.crt"
-  local ssl_ctx = cert.load_or_generate(key_path, cert_path)
-  local listen4, err4 = make_server4("0.0.0.0", port)
+  local key_path = auth_cfg.key or "tmp/auth.key"
+  local tls_ctx = load_or_generate(key_path, cert_path)
+  local listen4, err4 = make_server4(port)
   if not (listen4) then
     error("Impossible de démarrer le serveur IPv4 sur port " .. tostring(port) .. " : " .. tostring(err4))
   end
@@ -607,90 +442,48 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
   if listen6 then
     all_servers[#all_servers + 1] = listen6
   end
-  log_info({
-    action = "auth_worker_start",
-    port = port
-  })
-  log_info({
-    action = "auth_secrets_loaded",
-    path = secrets_path,
-    users = ((function()
-      local n = 0
-      for _ in pairs(secrets) do
-        n = n + 1
-      end
-      return n
-    end)())
-  })
+  local state = {
+    secrets = secrets or { },
+    auth_cfg = auth_cfg,
+    reload_fn = reload_fn,
+    nft_sess = nft_sess,
+    secrets_path = secrets_path,
+    sessions_file = sessions_file,
+    tls_ctx = tls_ctx
+  }
   log_info({
     action = "auth_listening",
+    port = port,
     ipv4 = "0.0.0.0",
     ipv6 = listen6 and "::" or nil,
-    port = port
+    sessions_file = sessions_file
   })
-  local sessions = load_sessions((auth_cfg.sessions_file or ""))
-  local register_attempts = { }
   while true do
-    if reload_fn then
-      local new_secrets = reload_fn()
-      if new_secrets then
-        secrets = new_secrets
+    reload_secrets_if_needed(state)
+    while true do
+      local dead_pid = reap_one()
+      if not (dead_pid and dead_pid > 0) then
+        break
       end
     end
-    local readable = socket.select(all_servers, nil, 1)
-    for _index_0 = 1, #readable do
-      local srv = readable[_index_0]
-      local client, err = srv:accept()
-      if client then
-        client:settimeout(10)
-        local peer_ip = nil
-        local peer_mac = nil
-        local ok_peer, peer_err = pcall(function()
-          local addr = client:getpeername()
-          if type(addr) == "table" then
-            peer_ip = addr.ip or addr[1]
-          elseif type(addr) == "string" then
-            peer_ip = addr
-          end
-          if peer_ip and peer_ip ~= "unknown" then
-            peer_mac = mac_learner_ipc.get_mac(peer_ip)
-          end
-        end)
-        if not (ok_peer) then
-          log_warn({
-            action = "auth_peer_lookup_failed",
-            err = peer_err
+    local readable, _ = socket.select(all_servers, nil, 0.1)
+    if readable then
+      for _index_0 = 1, #readable do
+        local srv = readable[_index_0]
+        local client = srv:accept()
+        if client then
+          local peer_ip = client:getpeername() or "unknown"
+          local pid = fork_child("AUTH-conn", handle_client, {
+            client = client,
+            peer_ip = peer_ip,
+            state = state
+          }, {
+            log_start = false
           })
-        end
-        if not peer_ip or peer_ip == "" then
-          peer_ip = "unknown"
-        end
-        local conn = ssl.wrap(client, ssl_ctx)
-        if conn then
-          local ok_hs, hs_err = pcall(function()
-            return conn:dohandshake()
-          end)
-          if ok_hs then
-            local ok_conn, conn_err = pcall(handle_connection, conn, secrets, sessions, auth_cfg, peer_ip, success_pg, nft_sess, secrets_path, register_attempts, peer_mac)
-            if not (ok_conn) then
-              log_warn({
-                action = "auth_connection_error",
-                ip = peer_ip,
-                err = conn_err
-              })
-            end
-          else
-            log_warn({
-              action = "auth_handshake_failed",
-              ip = peer_ip,
-              err = hs_err
-            })
-            conn:close()
-          end
-        else
-          log_warn({
-            action = "auth_ssl_wrap_failed",
-            ip = peer_ip
+          log_info({
+            action = "auth_conn_started",
+            pid = pid,
+            peer = peer_ip
           })
           client:close()
         end
@@ -699,12 +492,5 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
   end
 end
 return {
-  run = run,
-  handle_connection = handle_connection,
-  decode_form = decode_form,
-  failure_page = failure_page,
-  home_page = home_page,
-  SUCCESS_PAGE = SUCCESS_PAGE,
-  login_page = login_page,
-  register_page = register_page
+  run = run
 }

@@ -5,7 +5,7 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :AF_INET, :AF_INET6 } = require "config"
-{ :log_info, :log_error } = require "log"
+{ :log_info, :log_warn, :log_error } = require "log"
 
 AF_BRIDGE = 7   -- Linux AF_BRIDGE : famille d'adresses pour les hooks bridge nftables
 
@@ -88,8 +88,10 @@ run_queue = (queue_num, callback) ->
       break   -- EOF inattendu
     else
       -- rv < 0 : EINTR (signal reçu) → on sort proprement
-      if libc.__errno_location()[0] == EINTR
+      en = libc.__errno_location()[0]
+      if en == EINTR
         break
+      log_warn { action: "queue_read_error", queue: queue_num, errno: en }
       break   -- autre erreur (ENOBUFS, etc.) → on sort
 
   log_info { action: "queue_closed", queue: queue_num }

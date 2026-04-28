@@ -9,13 +9,17 @@ local bit = require("bit")
 local STDOUT_FILENO = 1
 local ts = ffi.new("timespec_t")
 local LOG_LEVEL_MAP = {
+  EMERG = 8,
+  ALERT = 7,
+  CRIT = 6,
   ERROR = 5,
   WARN = 4,
-  INFO = 3,
-  DEBUG = 2,
-  TRACE = 1,
+  NOTICE = 3,
+  INFO = 2,
+  DEBUG = 1,
   ALLOW = 3,
-  BLOCK = 3
+  BLOCK = 4,
+  TRACE = 6
 }
 local CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[LOG_LEVEL] or LOG_LEVEL_MAP.INFO
 local get_log_level_num

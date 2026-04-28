@@ -237,7 +237,10 @@ drain_pipe = (pipe_rfd, now_fn, on_msg) ->
 
   while true
     n = libc.read pipe_rfd, buf, IPC_MSG_SIZE
-    break if n <= 0   -- EAGAIN ou erreur → pipe vide
+    if n == 0
+      log_warn { action: "ipc_pipe_eof", fd: pipe_rfd }   -- Q0 died
+      break
+    break if n < 0   -- EAGAIN / other transient error
 
     if n == IPC_MSG_SIZE
       raw = ffi.string buf, IPC_MSG_SIZE

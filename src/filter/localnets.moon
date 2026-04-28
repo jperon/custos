@@ -32,7 +32,7 @@ get_local_cidrs = (ifname) ->
   -- IPv4 routes
   res4 = io.popen "ip -4 route show dev #{ifname}"
   if res4
-    for line in *res4
+    for line in res4\lines!
       -- On cherche les réseaux (ex: 10.35.1.0/24)
       cidr = line\match "([0-9%.]+/[0-9]+)"
       if cidr
@@ -44,7 +44,7 @@ get_local_cidrs = (ifname) ->
   -- IPv6 routes
   res6 = io.popen "ip -6 route show dev #{ifname}"
   if res6
-    for line in *res6
+    for line in res6\lines!
       cidr = line\match "([%x%a%:]+/[0-9]+)"
       if cidr
         mask = cidr\match "/(%d+)$"

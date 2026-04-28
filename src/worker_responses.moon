@@ -461,7 +461,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 --- Start the Q1 response worker.
 -- Blocks in the NFQUEUE loop until the process exits.
 -- @tparam number rfd Read end of the IPC pipe from Q0.
-run = (rfd) ->
+run = (queue_num, rfd) ->
   pipe_rfd = rfd
   -- Pré-remplit mac_clients / ip_to_mac depuis la table ARP/NDP courante,
   -- avant même la première requête DNS. Indispensable pour le cross-family
@@ -471,7 +471,7 @@ run = (rfd) ->
   -- Pré-initialise le module nDPI avant le démarrage de la boucle pour éviter
   -- une latence de 1–2 s sur le premier paquet (ndpi_init_detection_module).
   ndpi.warmup!
-  run_queue QUEUE_RESPONSES, handle_response
+  run_queue tonumber(queue_num), handle_response
   ndpi.cleanup!
 
 { :run }

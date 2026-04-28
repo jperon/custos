@@ -11,9 +11,9 @@
 --   5. Structured log.
 
 { :ffi, :libnfq } = require "ffi_defs"
-{ :QUEUE_REJECT } = require "config"
+
 { :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE } = require "nfq_loop"
-{ :log_info, :log_warn } = require "log"
+{ :log_info, :log_warn, :log_debug } = require "log"
 parse: parse_ip, new: new_ip, proto: ip_proto = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
 parse: parse_udp = require "ipparse.l4.udp"
@@ -209,7 +209,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
   forged_ptr = ffi.cast "const unsigned char*", forged
   libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #forged, forged_ptr
 
-  log_info {
+  log_debug {
     action:   "q3_reject"
     queue:    3
     src:      src_ip
@@ -227,8 +227,8 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
 -- Opens NFQUEUE 3 and enters the packet processing loop.
 -- @tparam table _cfg  Ignored (reserved for future use).
 -- @treturn nil
-run = (_cfg) ->
-  log_info { action: "q3_worker_start", queue: QUEUE_REJECT }
-  run_queue QUEUE_REJECT, handle_reject
+run = (queue_num, cfg) ->
+  log_info { action: "q3_worker_start", queue: queue_num }
+  run_queue tonumber(queue_num), handle_reject
 
 { :run }

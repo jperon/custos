@@ -27,7 +27,8 @@ POLLIN      = 1
 AF_INET6    = 10
 
 -- ── Table en mémoire ─────────────────────────────────────────────
--- { ip_str → { mac: string, expires: number } }
+-- { ip_str → { mac, expires } }
+-- indice 1 = MAC textuelle ; indice 2 = expiration epoch
 mac_table = {}
 
 -- ── Utilitaires ──────────────────────────────────────────────────
@@ -76,7 +77,7 @@ process_learn = (msg) ->
     mac_raw\byte(1), mac_raw\byte(2), mac_raw\byte(3),
     mac_raw\byte(4), mac_raw\byte(5), mac_raw\byte(6)
 
-  mac_table[ip_str] = { mac: mac_str, expires: os.time! + MAC_LEARNER_ENTRY_TTL }
+  mac_table[ip_str] = { mac_str, os.time! + MAC_LEARNER_ENTRY_TTL }
 
 -- ── Gestion des requêtes ──────────────────────────────────────────
 
@@ -98,8 +99,8 @@ handle_query = (client_fd) ->
     now   = os.time!
     entry = mac_table[ip_str]
     if entry
-      if now <= entry.expires
-        resp = entry.mac .. "\n"
+      if now <= entry[2]
+        resp = entry[1] .. "\n"
       else
         mac_table[ip_str] = nil   -- purge paresseuse
 
@@ -181,6 +182,6 @@ run = (learn_rfd) ->
       purge_tick = 0
       now = os.time!
       for ip, entry in pairs mac_table
-        mac_table[ip] = nil if now > entry.expires
+        mac_table[ip] = nil if now > entry[2]
 
 { :run }

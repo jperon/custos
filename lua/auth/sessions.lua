@@ -161,8 +161,6 @@ return {
   reset_cache = reset_cache,
   session_for_mac = session_for_mac,
   user_for_mac = user_for_mac,
-  session_for_mac = session_for_mac,
-  user_for_mac = user_for_mac,
   session_for_ip = function(ip, path, mac)
     return session_for_mac(mac, ip, path)
   end,

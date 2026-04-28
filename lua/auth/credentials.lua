@@ -23,7 +23,9 @@ ffi.cdef([[  int PKCS5_PBKDF2_HMAC(
   );
   const void* EVP_sha256(void);
   int RAND_bytes(unsigned char *buf, int num);
+  int chmod(const char *path, unsigned int mode);
 ]])
+local ENOENT = 2
 local HASH_LEN = 32
 local DEFAULT_ITER = 100000
 local DEFAULT_SALT_LEN = 16
@@ -135,7 +137,7 @@ register_user = function(username, password, secrets_path, current_secrets)
     end
     existing:close()
   else
-    if not (exist_err:match("No such file")) then
+    if not (ffi.C.__errno_location()[0] == ENOENT) then
       fh:close()
       os.remove(tmp_path)
       return nil, "Impossible de lire le fichier secrets : " .. tostring(exist_err)
@@ -143,7 +145,7 @@ register_user = function(username, password, secrets_path, current_secrets)
   end
   fh:write(tostring(username) .. ":" .. tostring(hash_entry) .. "\n")
   fh:close()
-  os.execute("chmod 600 " .. tostring(tmp_path))
+  ffi.C.chmod(tmp_path, 0x180)
   local ok, rename_err = os.rename(tmp_path, secrets_path)
   if not (ok) then
     os.remove(tmp_path)

@@ -5,8 +5,8 @@
 -- Unix du learner et retourne la MAC textuelle ou "unknown".
 --
 -- Anciennement ce module fournissait aussi `learn()` (Q0 → learner via pipe).
--- Avec worker_q4 (NFQUEUE) l'apprentissage se fait directement depuis la queue,
--- donc `learn()` n'est plus nécessaire ici.
+-- Aujourd'hui l'apprentissage se fait via le worker mac_learner (socket Unix).
+-- `learn()` n'est plus nécessaire ici.
 
 { :ffi, :libc } = require "ffi_defs"
 { :MAC_LEARNER_QUERY_SOCK } = require "config"

@@ -10,8 +10,8 @@
 --   - Waiting for readiness
 --
 -- Usage:
---   luajit tests/install-openwrt.lua root@esm.y [--no-restart]
---   make install-openwrt HOST=root@esm.y
+--   luajit tests/install-openwrt.lua root@DEST [--no-restart]
+--   make install-openwrt HOST=root@DEST
 
 CUSTOS_DIR    = "/usr/share/custos"
 CFG_DIR       = "/etc/custos"

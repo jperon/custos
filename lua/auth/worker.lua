@@ -9,9 +9,6 @@ do
   log_info, log_warn, log_error = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error
 end
 local ffi = require("ffi")
-ffi.cdef([[  typedef void (*sighandler_t)(int);
-  sighandler_t signal(int signum, sighandler_t handler);
-]])
 local SIGHUP = 1
 local _reload_requested = false
 local run_auth_worker

@@ -98,21 +98,13 @@ table bridge dns-filter-bridge {
     flags interval
   }
 
-  chain prerouting {
-    type filter hook prerouting priority 0; policy accept;
-    meta l4proto { tcp, udp } limit rate 100/second queue num {QUEUE_RESPONSES} bypass
-  }
-
   # ── Chaîne FORWARD (tout le trafic traversant le bridge) ──────
   chain forward {
-    type filter hook forward priority 0; policy drop;
+    type filter hook forward priority 0; policy accept;
 
-    ct state established,related accept
-
-    # L2 Core & Infrastructure
+    # Core & Infrastructure
     udp dport { 67, 68 } accept
     udp dport { 546, 547 } accept
-    ether type arp accept
     # Allow all local ICMP (IPv4)
     meta l4proto icmp ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} accept
     # Allow all local ICMPv6
@@ -121,9 +113,6 @@ table bridge dns-filter-bridge {
     meta l4proto icmp icmp type { destination-unreachable, time-exceeded } accept
     # Essential ICMPv6 types for Neighbor Discovery, diagnostics, and connectivity (excluding echo for tunnel prevention)
     meta l4proto icmpv6 icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert, nd-redirect } accept
-
-    # VLAN mark : posée ici, avant DNS et allowlist.
-    vlan id != 0 meta mark set vlan id
 
     # UniFi Core Services & Infrastructure (restricted to local IPs)
     # NTP (time), mDNS for device discovery (local only)
@@ -138,11 +127,16 @@ table bridge dns-filter-bridge {
     tcp dport { 6789, 8080, 8443, 8880, 8843 } ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} accept
     tcp dport { 6789, 8080, 8443, 8880, 8843 } ip6 daddr {fc00::/7, fe80::/10} accept
 
+    # VLAN mark : posée ici, avant DNS et allowlist.
+    vlan id != 0 meta mark set vlan id
+
     # DNS → NFQUEUE.
     # La table bridge voit TOUT le trafic bridgé, y compris le transit
     # inter-VLAN (client → résolveur tiers).
-    meta l4proto { udp, tcp } th dport 53 queue num {QUEUE_QUESTIONS}
-    meta l4proto { udp, tcp } th sport 53 queue num {QUEUE_RESPONSES}
+    meta l4proto { udp, tcp } th dport 53 log level debug prefix "custos question: " counter queue num {QUEUE_QUESTIONS}
+    meta l4proto { udp, tcp } th sport 53 log level debug prefix "custos response: " counter queue num {QUEUE_RESPONSES}
+
+    ct state established,related accept
 
     # Whitelist statique
     ip6 daddr @ip6_dest_whitelist accept
@@ -150,16 +144,13 @@ table bridge dns-filter-bridge {
 
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
-    ether saddr . ip6 daddr @mac6_allowed accept
-    ether saddr . ip  daddr @mac4_allowed accept
-    ip6 saddr . ip6 daddr @ip6_allowed accept
-    ip  saddr . ip  daddr @ip4_allowed accept
+    ether saddr . ip6 daddr @mac6_allowed log level debug prefix "custos mac6_allowed: " counter accept
+    ether saddr . ip  daddr @mac4_allowed log level debug prefix "custos mac4_allowed: " counter accept
+    ip6   saddr . ip6 daddr @ip6_allowed  log level debug prefix "custos ip6_allowed: "  counter accept
+    ip    saddr . ip  daddr @ip4_allowed  log level debug prefix "custos ip4_allowed: "  counter accept
 
-    # Trafic local
-    ether daddr & 01:00:00:00:00:00 == 01:00:00:00:00:00 accept
-
-    #ip  daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} meta l4proto != {tcp, udp} accept
-    #ip6 daddr {fc00::/7, fe80::/10} meta l4proto != {tcp, udp} accept
+    ip  daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} meta l4proto != {tcp, udp} accept
+    ip6 daddr {fc00::/7, fe80::/10} meta l4proto != {tcp, udp} accept
 
     # Portail captif : le client doit pouvoir joindre les adresses locales du
     # routeur (portail HTTPS + sondes de détection) même sans être dans les sets.
@@ -168,16 +159,17 @@ table bridge dns-filter-bridge {
 
     # Authenticated client, destination not in sets → {QUEUE_REJECT} (MAC learning + forge RST or ICMP admin-prohibited).
     # Must come before {QUEUE_CAPTIVE} so authenticated clients never see the captive portal again.
-    ether saddr @authenticated_macs queue num {QUEUE_REJECT}
-    ip6   saddr @authenticated_ips6 queue num {QUEUE_REJECT}
-    ip    saddr @authenticated_ips  queue num {QUEUE_REJECT}
+    ether saddr @authenticated_macs limit rate 50/second log level debug prefix "custos auth ether: " counter queue num {QUEUE_REJECT}
+    ip6   saddr @authenticated_ips6 limit rate 50/second log level debug prefix "custos auth ip6: "   counter queue num {QUEUE_REJECT}
+    ip    saddr @authenticated_ips  limit rate 50/second log level debug prefix "custos auth ip: "    counter queue num {QUEUE_REJECT}
 
     # Unauthenticated client, TCP SYN port 80 → {QUEUE_CAPTIVE} (forge TCP 302).
     meta l4proto tcp th dport 80 tcp flags & (fin | syn | rst | ack) == syn queue num {QUEUE_CAPTIVE}
 
     # All remaining unauthorised traffic → {QUEUE_REJECT} (MAC learning + forge RST or ICMP admin-prohibited).
     # Rate-limited to protect {QUEUE_REJECT} against floods; surplus is dropped silently.
-    limit rate 400/second queue num {QUEUE_REJECT} bypass
+    ether type {ip, ip6} limit rate 100/second log level debug prefix "custos default: " counter queue num {QUEUE_REJECT} bypass
+    ether type {ip, ip6} drop
   }
 
 }

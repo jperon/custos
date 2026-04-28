@@ -4,6 +4,9 @@
 { :ffi } = require "ffi_defs"
 { :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS } = require "config"
 
+-- Pre-allocated timespec for backoff sleep (avoids allocation on each retry)
+_timespec = ffi.new "timespec_t[1]"
+
 -- Try calling fn(args...). Returns true if fn returned truthy within retries.
 try_add_with_retries = (fn, ...) ->
   attempts = NFT_ADD_RETRY_COUNT or 3
@@ -14,11 +17,9 @@ try_add_with_retries = (fn, ...) ->
     return true if ok
     if i < attempts
       ms = backoffs[i] or backoffs[#backoffs]
-      -- Use nanosleep for precise backoff (always available from ffi_defs)
-      req = ffi.new "timespec_t[1]"
-      req[0].tv_sec = math.floor(ms / 1000)
-      req[0].tv_nsec = (ms % 1000) * 1000000
-      pcall ffi.C.nanosleep, req, nil
+      _timespec[0].tv_sec = math.floor(ms / 1000)
+      _timespec[0].tv_nsec = (ms % 1000) * 1000000
+      pcall ffi.C.nanosleep, _timespec, nil
   false
 
 { :try_add_with_retries }

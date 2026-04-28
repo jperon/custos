@@ -4,11 +4,10 @@
 -- dans filter.yml. Ce fichier ne contient que des constantes compile-time.
 
 -- ── Queues NFQUEUE ──────────────────────────────────────────────
-QUEUE_QUESTIONS = 0   -- UDP/53 src LAN  (questions sortantes)
-QUEUE_RESPONSES = 1   -- UDP/53 dst LAN  (réponses entrantes)
-QUEUE_CAPTIVE   = 2   -- TCP SYN/80 non autorisés (portail captif)
-QUEUE_REJECT    = 3   -- Forge RST/ICMP admin-prohibited pour le trafic dropé
-QUEUE_MAC_LEARN = 4   -- Apprentissage MAC depuis le trafic bridgé (rate-limité)
+QUEUE_QUESTIONS = "0-1"    -- UDP/53 src LAN (questions)
+QUEUE_RESPONSES = "4"      -- UDP/53 dst LAN (réponses)
+QUEUE_CAPTIVE   = "20"     -- TCP SYN/80 (captif)
+QUEUE_REJECT    = "10-11"  -- Reject rate-limited
 
 -- ── Logging ─────────────────────────────────────────────────────
 -- Les messages sont écrits sur stdout (fd=1).
@@ -91,7 +90,7 @@ NFT_EXTRA_RULES = {}
 
 -- ── Export ──────────────────────────────────────────────────────
 {
-  :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE, :QUEUE_REJECT, :QUEUE_MAC_LEARN
+  :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE, :QUEUE_REJECT
   :NFT_FAMILY, :NFT_FAMILY6, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
   :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY
   :IPC_PENDING_TTL

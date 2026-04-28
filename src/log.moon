@@ -22,13 +22,17 @@ ts  = ffi.new "timespec_t"
 -- Mappage des niveaux de log vers des valeurs numériques
 -- (Plus la valeur est élevée, plus le log est verbeux)
 LOG_LEVEL_MAP = {
-  ERROR: 5,
-  WARN:  4,
-  INFO:  3,
-  DEBUG: 2,
-  TRACE: 1,
-  ALLOW: 3, -- Par défaut, ALLOW est au niveau INFO
-  BLOCK: 3  -- Par défaut, BLOCK est au niveau INFO
+  EMERG:  8
+  ALERT:  7
+  CRIT:   6
+  ERROR:  5
+  WARN:   4
+  NOTICE: 3
+  INFO:   2
+  DEBUG:  1
+  ALLOW:  3  -- Par défaut, ALLOW est au niveau NOTICE
+  BLOCK:  4  -- Par défaut, BLOCK est au niveau WARN
+  TRACE:  6
 }
 
 -- Niveau de log configuré, converti en numérique

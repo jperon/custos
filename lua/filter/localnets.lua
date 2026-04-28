@@ -36,8 +36,7 @@ get_local_cidrs = function(ifname)
   }
   local res4 = io.popen("ip -4 route show dev " .. tostring(ifname))
   if res4 then
-    for _index_0 = 1, #res4 do
-      local line = res4[_index_0]
+    for line in res4:lines() do
       local cidr = line:match("([0-9%.]+/[0-9]+)")
       if cidr then
         local mask = cidr:match("/(%d+)$")
@@ -50,8 +49,7 @@ get_local_cidrs = function(ifname)
   end
   local res6 = io.popen("ip -6 route show dev " .. tostring(ifname))
   if res6 then
-    for _index_0 = 1, #res6 do
-      local line = res6[_index_0]
+    for line in res6:lines() do
       local cidr = line:match("([%x%a%:]+/[0-9]+)")
       if cidr then
         local mask = cidr:match("/(%d+)$")

@@ -15,7 +15,7 @@
 --   4. Log structuré
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_CAPTIVE, :AUTH_SESSIONS_FILE } = require "config"
+{ :AUTH_SESSIONS_FILE } = require "config"
 parse: parse_eth, :new, :mac2s, :s2mac, proto: {:IP6, :IP4} = require "ipparse.l2.ethernet"
 parse: parse_ip, proto: l3_proto, :ip2s = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
@@ -116,6 +116,9 @@ send_frame = (fd, frame, ifindex) ->
 raw_fd   = nil
 ifindex  = nil
 
+-- MAC du bridge, lu une seule fois au démarrage (binaire, 6 octets)
+_bridge_mac = nil
+
 -- URLs de redirection vers le portail captif HTTPS.
 -- Construites depuis auth_cfg à l'initialisation (IPv4 et IPv6).
 -- Si auth_cfg.redirect_url est spécifié, il est utilisé pour les deux versions.
@@ -149,26 +152,13 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
   -- In bridge mode with IP-only packets, get_l2 uses nfq_get_packet_hw() which has the client MAC
   client_mac = l2.mac_raw if l2.mac_raw and l2.mac_raw != "\0\0\0\0\0\0"
 
-  -- Get bridge interface MAC address
-  bridge_mac = nil
-  bridge_mac_str = nil
-  -- Use "br" as the bridge interface (hardcoded to avoid initialization issues)
-  bridge_ifname = "br"
-  fh = io.open "/sys/class/net/#{bridge_ifname}/address", "r"
-  if fh
-    bridge_mac_str = fh\read "*a"\gsub "\n", ""
-    fh\close!
-    -- Use ipparse's s2mac to parse MAC string to binary
-    if bridge_mac_str and #bridge_mac_str > 0
-      bridge_mac = s2mac bridge_mac_str
-
   -- Create Ethernet header using ipparse's new function
   -- Note: build_response_frames swaps src/dst, so we set them in reverse:
   -- - eth.src = client MAC (becomes dst after swap)
   -- - eth.dst = bridge MAC (becomes src after swap)
   eth = new {
     src: client_mac or "\xFF\xFF\xFF\xFF\xFF\xFF"
-    dst: bridge_mac or "\0\0\0\0\0\0"
+    dst: _bridge_mac or "\0\0\0\0\0\0"
     protocol: ip.version == 4 and IP4 or IP6
   }
   eth_off = 1
@@ -186,17 +176,16 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
       log_warn { action: "q2_frame_send_error", queue: 2, ip: client_ip_str, user: user }
     res
 
+  url = custom_redirect_url or (if ip.version == 6
+    redirect_url6 or redirect_url4
+  else
+    redirect_url4 or redirect_url6)
+
+  unless url
+    log_warn { action: "q2_no_redirect_url", queue: 2, ip: client_ip_str, version: ip.version, user: user }
+    return NF_DROP
+
   ok, err = pcall ->
-    -- Utiliser l'URL personnalisée si spécifiée, sinon auto-détection par version IP
-    url = custom_redirect_url or (if ip.version == 6
-      redirect_url6 or redirect_url4
-    else
-      redirect_url4 or redirect_url6)
-
-    unless url
-      log_warn { action: "q2_no_redirect_url", queue: 2, ip: client_ip_str, version: ip.version, user: user }
-      return
-
     f1, f2, f3 = build_response_frames eth, ip, tcp, url
     log_info { action: "q2_sending_frames", queue: 2, ip: client_ip_str, frames: 3, url: url, user: user }
     send f1
@@ -228,7 +217,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 -- Opens the AF_PACKET socket (SOCK_RAW) and starts the NFQUEUE loop.
 -- @tparam table auth_cfg  Auth configuration from cfg/filter.yml.
 -- @treturn nil
-run = (auth_cfg) ->
+run = (queue_num, auth_cfg) ->
   auth_cfg or= {}
 
   -- Interface LAN (br0 or br)
@@ -325,6 +314,14 @@ run = (auth_cfg) ->
     log_error { action: "q2_ifindex_failed", ifname: ifname }
     return
 
+  -- Lire le MAC du bridge une seule fois (évite un open sysfs par SYN TCP)
+  do
+    fh = io.open "/sys/class/net/#{ifname}/address", "r"
+    if fh
+      mac_str = fh\read("*a")\gsub "\n", ""
+      fh\close!
+      _bridge_mac = s2mac mac_str if mac_str and #mac_str > 0
+
   log_info {
     action: "q2_worker_start"
     :ifname
@@ -334,6 +331,6 @@ run = (auth_cfg) ->
     redirect_url6: redirect_url6 or "not configured"
   }
 
-  run_queue QUEUE_CAPTIVE, handle_syn
+  run_queue tonumber(queue_num), handle_syn
 
 { :run }

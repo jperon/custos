@@ -160,7 +160,6 @@ user_for_mac = (mac, ip, path) ->
   :serialize, :write_sessions, :load_sessions, :add_session
   :purge_expired, :read_cached, :reset_cache
   :session_for_mac, :user_for_mac
-  session_for_mac: session_for_mac, user_for_mac: user_for_mac
   -- Compatibilité (alias avec réordonnancement des arguments)
   session_for_ip: (ip, path, mac) -> session_for_mac mac, ip, path
   user_for_ip: (ip, path, mac) -> user_for_mac mac, ip, path

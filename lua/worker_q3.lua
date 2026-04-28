@@ -10,10 +10,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP, VERDICT_DONE = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP, _obj_0.VERDICT_DONE
 end
-local log_info, log_warn
+local log_info, log_warn, log_debug
 do
   local _obj_0 = require("log")
-  log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
+  log_info, log_warn, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug
 end
 local parse_ip, new_ip, ip_proto
 do
@@ -179,7 +179,7 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
   end
   local forged_ptr = ffi.cast("const unsigned char*", forged)
   libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #forged, forged_ptr)
-  log_info({
+  log_debug({
     action = "q3_reject",
     queue = 3,
     src = src_ip,

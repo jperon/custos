@@ -181,7 +181,14 @@ drain_pipe = function(pipe_rfd, now_fn, on_msg)
   local absorbed = 0
   while true do
     local n = libc.read(pipe_rfd, buf, IPC_MSG_SIZE)
-    if n <= 0 then
+    if n == 0 then
+      log_warn({
+        action = "ipc_pipe_eof",
+        fd = pipe_rfd
+      })
+      break
+    end
+    if n < 0 then
       break
     end
     if n == IPC_MSG_SIZE then

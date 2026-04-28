@@ -14,11 +14,11 @@
 -- Auth curl source IP = LOCAL_IP = DNS query source IP → from_user matches.
 --
 -- Usage:
---   luajit tests/test_openwrt.lua root@esm.y
---   luajit tests/test_openwrt.lua root@esm.y --no-restart
---   luajit tests/test_openwrt.lua root@esm.y --bridge
---   make test-openwrt HOST=root@esm.y
---   make test-openwrt HOST=root@esm.y ARGS=--bridge
+--   luajit tests/test_openwrt.lua root@DEST
+--   luajit tests/test_openwrt.lua root@DEST --no-restart
+--   luajit tests/test_openwrt.lua root@DEST --bridge
+--   make test-openwrt HOST=root@DEST
+--   make test-openwrt HOST=root@DEST ARGS=--bridge
 
 -- ── Constants ──────────────────────────────────────────────────────────────────
 

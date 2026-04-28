@@ -10,7 +10,7 @@
 --      Q1 intercepte la réponse du serveur et la transforme en REFUSED+EDE
 --   6. Log structuré avec champs nDPI (ndpi_master / ndpi_app)
 
-{ :ffi, :libnfq } = require "ffi_defs"
+{ :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_QUESTIONS, :AUTH_SESSIONS_FILE } = require "config"
 { :get_l2 } = require "parse/ethernet"
 ndpi                     = require "parse/ndpi"
@@ -23,11 +23,39 @@ filter                   = require "filter"
 -- fd d'écriture du pipe IPC Q0→Q1, injecté par main.moon avant fork()
 pipe_wfd = nil
 
+-- fd d'écriture du pipe d'apprentissage Q0→mac_learner.
+mac_learn_wfd = nil
+
+-- ── Apprentissage MAC ────────────────────────────────────────────
+
+--- Écrit une association IP→MAC vers le mac_learner.
+-- Message binaire fixe : ip16 + mac6 = 22 octets.
+-- IPv4 : 4 octets significatifs suivis de 12 zéros.
+-- @tparam string ip_raw Adresse IP brute, 4 octets IPv4 ou 16 octets IPv6
+-- @tparam string mac_raw Adresse MAC brute, 6 octets
+-- @treturn boolean true si l'écriture complète a réussi
+write_learn_msg = (ip_raw, mac_raw) ->
+  return false unless mac_learn_wfd and mac_learn_wfd >= 0
+  return false unless ip_raw and (#ip_raw == 4 or #ip_raw == 16)
+  return false unless mac_raw and #mac_raw == 6
+
+  msg = ffi.new "uint8_t[22]"
+
+  if #ip_raw == 4
+    for i = 1, 4
+      msg[i - 1] = ip_raw\byte i
+  else
+    for i = 1, 16
+      msg[i - 1] = ip_raw\byte i
+
+  for i = 1, 6
+    msg[15 + i] = mac_raw\byte i
+
+  n = libc.write mac_learn_wfd, msg, 22
+  n == 22
+
 -- ── Callback principal ───────────────────────────────────────────
 handle_question = (qh_ptr, nfad, pkt_id) ->
-  -- Rechargement filtre si SIGHUP reçu
-  filter.reload!
-
   -- ── Payload brut ─────────────────────────────────────────────
   payload_ptr = ffi.new "unsigned char*[1]"
   payload_len = libnfq.nfq_get_payload nfad, payload_ptr
@@ -76,6 +104,10 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 
   -- On ne traite que les questions (QR bit = 0)
   return NF_ACCEPT if pkt.dns.is_response
+
+  -- Alimente le mac_learner avec les associations observées sur le trafic DNS.
+  -- Écriture best-effort : l'échec ne doit pas bloquer ni refuser la requête DNS.
+  write_learn_msg pkt.ip.src_ip_raw, l2.mac_raw
 
   -- ── Décision par question ────────────────────────────────────
   -- Un paquet DNS peut contenir plusieurs questions (rare en pratique,
@@ -148,17 +180,12 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 
 
 -- ── Point d'entrée ───────────────────────────────────────────────
--- Appelé par main.moon après fork(), avec le fd du pipe IPC.
-run = (wfd) ->
-  pipe_wfd     = wfd
-  filter.load!
+-- Appelé par main.moon après fork(), avec les fd des pipes IPC.
+run = (queue_num, wfd, learn_wfd) ->
+  pipe_wfd      = wfd
+  mac_learn_wfd = learn_wfd
   ndpi.warmup!
-  -- Apply extra nft rules from UCI once at startup (inserted at head of `forward` chain)
-  nft_extra = require "nft_extra_rules"
-  nft_extra.apply_from_config()
-  run_queue QUEUE_QUESTIONS, handle_question
-  -- Cleanup extra nft rules inserted at startup
-  nft_extra.cleanup()
+  run_queue tonumber(queue_num), handle_question
   ndpi.cleanup!
 
 { :run }

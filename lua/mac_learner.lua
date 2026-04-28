@@ -59,8 +59,8 @@ process_learn = function(msg)
   local ip_str = ip16_to_str(ip16)
   local mac_str = string.format("%02x:%02x:%02x:%02x:%02x:%02x", mac_raw:byte(1), mac_raw:byte(2), mac_raw:byte(3), mac_raw:byte(4), mac_raw:byte(5), mac_raw:byte(6))
   mac_table[ip_str] = {
-    mac = mac_str,
-    expires = os.time() + MAC_LEARNER_ENTRY_TTL
+    mac_str,
+    os.time() + MAC_LEARNER_ENTRY_TTL
   }
 end
 local handle_query
@@ -78,8 +78,8 @@ handle_query = function(client_fd)
     local now = os.time()
     local entry = mac_table[ip_str]
     if entry then
-      if now <= entry.expires then
-        resp = entry.mac .. "\n"
+      if now <= entry[2] then
+        resp = entry[1] .. "\n"
       else
         mac_table[ip_str] = nil
       end
@@ -154,7 +154,7 @@ run = function(learn_rfd)
       purge_tick = 0
       local now = os.time()
       for ip, entry in pairs(mac_table) do
-        if now > entry.expires then
+        if now > entry[2] then
           mac_table[ip] = nil
         end
       end

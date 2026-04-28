@@ -34,7 +34,10 @@ ffi.cdef [[
   );
   const void* EVP_sha256(void);
   int RAND_bytes(unsigned char *buf, int num);
+  int chmod(const char *path, unsigned int mode);
 ]]
+
+ENOENT = 2
 
 HASH_LEN         = 32     -- SHA-256 → 32 octets
 DEFAULT_ITER     = 100000
@@ -175,7 +178,7 @@ register_user = (username, password, secrets_path, current_secrets) ->
       fh\write line .. "\n"
     existing\close!
   else
-    unless exist_err\match "No such file"
+    unless ffi.C.__errno_location()[0] == ENOENT
       fh\close!
       os.remove tmp_path
       return nil, "Impossible de lire le fichier secrets : #{exist_err}"
@@ -184,7 +187,7 @@ register_user = (username, password, secrets_path, current_secrets) ->
   fh\close!
 
   -- Set restrictive permissions (600) before rename
-  os.execute "chmod 600 #{tmp_path}"
+  ffi.C.chmod tmp_path, 0x180  -- 0o600
 
   ok, rename_err = os.rename tmp_path, secrets_path
   unless ok

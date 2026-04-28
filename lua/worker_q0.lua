@@ -1,7 +1,7 @@
-local ffi, libnfq
+local ffi, libc, libnfq
 do
   local _obj_0 = require("ffi_defs")
-  ffi, libnfq = _obj_0.ffi, _obj_0.libnfq
+  ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
 local QUEUE_QUESTIONS, AUTH_SESSIONS_FILE
 do
@@ -30,6 +30,34 @@ end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
 local pipe_wfd = nil
+local mac_learn_wfd = nil
+local write_learn_msg
+write_learn_msg = function(ip_raw, mac_raw)
+  if not (mac_learn_wfd and mac_learn_wfd >= 0) then
+    return false
+  end
+  if not (ip_raw and (#ip_raw == 4 or #ip_raw == 16)) then
+    return false
+  end
+  if not (mac_raw and #mac_raw == 6) then
+    return false
+  end
+  local msg = ffi.new("uint8_t[22]")
+  if #ip_raw == 4 then
+    for i = 1, 4 do
+      msg[i - 1] = ip_raw:byte(i)
+    end
+  else
+    for i = 1, 16 do
+      msg[i - 1] = ip_raw:byte(i)
+    end
+  end
+  for i = 1, 6 do
+    msg[15 + i] = mac_raw:byte(i)
+  end
+  local n = libc.write(mac_learn_wfd, msg, 22)
+  return n == 22
+end
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
   filter.reload()
@@ -78,6 +106,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   if pkt.dns.is_response then
     return NF_ACCEPT
   end
+  write_learn_msg(pkt.ip.src_ip_raw, l2.mac_raw)
   local verdict = NF_ACCEPT
   local dnsonly = false
   local q_fields = {
@@ -141,8 +170,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   return NF_ACCEPT
 end
 local run
-run = function(wfd)
+run = function(wfd, learn_wfd)
   pipe_wfd = wfd
+  mac_learn_wfd = learn_wfd
   filter.load()
   ndpi.warmup()
   local nft_extra = require("nft_extra_rules")

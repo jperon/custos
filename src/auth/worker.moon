@@ -13,10 +13,6 @@ nft_sess               = require "auth.nft_sessions"
 { :log_info, :log_warn, :log_error } = require "log"
 
 ffi = require "ffi"
-ffi.cdef [[
-  typedef void (*sighandler_t)(int);
-  sighandler_t signal(int signum, sighandler_t handler);
-]]
 
 SIGHUP = 1
 

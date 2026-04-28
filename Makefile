@@ -80,7 +80,7 @@ test-ndpi: all
 
 # OpenWrt live tests via SSH
 test-openwrt: all
-	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis. Ex: make test-openwrt HOST=root@esm.y"; exit 1)
+	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis. Ex: make test-openwrt HOST=root@DEST"; exit 1)
 	@echo "Tests OpenWrt end-to-end..."
 	$(MOONC) -o tests/test_openwrt.lua tests/test_openwrt.moon
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \

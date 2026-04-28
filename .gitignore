@@ -42,6 +42,7 @@ meta-data
 user-data
 network-config
 test-vm.qcow2
+.vagrant/
 .kilo/
 
 # Downloaded base images

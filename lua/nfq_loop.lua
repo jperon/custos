@@ -8,10 +8,10 @@ do
   local _obj_0 = require("config")
   AF_INET, AF_INET6 = _obj_0.AF_INET, _obj_0.AF_INET6
 end
-local log_info, log_error
+local log_info, log_warn, log_error
 do
   local _obj_0 = require("log")
-  log_info, log_error = _obj_0.log_info, _obj_0.log_error
+  log_info, log_warn, log_error = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error
 end
 local AF_BRIDGE = 7
 local NFQNL_COPY_PACKET = 2
@@ -72,9 +72,15 @@ run_queue = function(queue_num, callback)
     elseif rv == 0 then
       break
     else
-      if libc.__errno_location()[0] == EINTR then
+      local en = libc.__errno_location()[0]
+      if en == EINTR then
         break
       end
+      log_warn({
+        action = "queue_read_error",
+        queue = queue_num,
+        errno = en
+      })
       break
     end
   end
