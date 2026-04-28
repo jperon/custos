@@ -39,7 +39,7 @@ via `scp`, starts workers via `logger -t custos`, then runs DNS/auth checks
 from the local machine.
 
 ```bash
-make test-openwrt HOST=root@esm.y
+make test-openwrt HOST=root@DEST
 ```
 
 #### OpenWrt test pitfalls
@@ -74,6 +74,97 @@ ssh "logread | sed -n '/#{LOG_MARKER}/,$p' | grep queue_listening"
 
 `grep -c` exits with code 1 when count is 0, causing the SSH call to return
 `ok=false`. Use `grep PATTERN | wc -l` (always exits 0) for count checks.
+
+---
+
+## Refactoring Pitfalls
+
+**Module functions vs methods: use `.` not `\`**
+
+Modules that export plain functions (like `auth.nft_sessions`) must be called
+with `.` (dot), not `\` (backslash/method call). The `\` operator compiles to
+Lua's colon syntax, which injects the table as the first argument:
+
+```moonscript
+-- WRONG: nft_sessions exports functions, not methods
+nft_sess\add_authenticated ip, ttl
+-- Compiles to: nft_sess.add_authenticated(nft_sess, ip, ttl)
+-- Result: ip is actually the module table → ip:find(":") crashes
+
+-- CORRECT: plain function call
+nft_sess.add_authenticated ip, ttl
+-- Compiles to: nft_sess.add_authenticated(ip, ttl)
+```
+
+Signs you have this bug: runtime error "attempt to call a nil value (field 'find')"
+or similar when a string method is called on what should be a string but is actually
+the module table.
+
+**Multi-line function calls: precompute complex arguments**
+
+When calling a function with multiple arguments where some are table literals
+or function calls, precompute them as local variables to avoid MoonScript's
+ambiguous parsing:
+
+```moonscript
+-- RISKY: body may be parsed as argument to H.head instead of H.html
+"<!DOCTYPE html>\n" .. H.html({ lang: "fr" },
+  H.head {
+    H.meta { charset: "UTF-8" },
+    H.title "Page"
+  },
+  body
+)
+
+-- SAFE: precompute head and body, use implicit-table form
+head = H.head {
+  H.meta { charset: "UTF-8" },
+  H.title "Page"
+}
+body = H.body {
+  H.p "Content"
+}
+"<!DOCTYPE html>\n" .. H.html lang: "fr", head, body
+```
+
+The implicit-table form (`f key: value, arg1, arg2`) is unambiguous in MoonScript.
+The explicit-table form with multi-line arguments can cause the compiler to group
+arguments incorrectly based on indentation.
+
+**IPv6 dual-stack: preserve `socket.select` pattern**
+
+Do not replace the dual-stack socket pattern with `socket.bind "*"`:
+
+```moonscript
+-- WRONG: binds IPv4 only, IPv6 clients get "connection refused"
+srv = socket.bind "*", port
+
+-- CORRECT: listen on both IPv4 and IPv6
+listen4 = make_server4 port  -- binds 0.0.0.0
+listen6 = make_server6 port  -- binds ::
+all_servers = { listen4 }
+all_servers[#all_servers + 1] = listen6 if listen6
+-- Use socket.select(all_servers, nil, timeout) to accept from either
+```
+
+`socket.bind "*"` creates an IPv4-only socket. IPv6 clients will fail at the
+TCP level (status 0 in HAR logs, all-zero timings).
+
+**Test matrix for auth worker changes**
+
+Always test all combinations after modifying the auth worker:
+
+| Test | Command | Expected |
+|------|---------|----------|
+| GET / IPv4 | `curl -v http://<ipv4>:33443/` | 200 OK + HTML form |
+| GET / IPv6 | `curl -v http://[<ipv6>]:33443/` | 200 OK + HTML form |
+| POST /login IPv4 | `curl -X POST -d "user=..." -d "password=..."` | 200 OK or 401 |
+| POST /login IPv6 | same over IPv6 | 200 OK or 401 |
+| TLS handshake | browser or `openssl s_client` | completes without error |
+
+A status 0 response in browser devtools/HAR indicates the connection was closed
+before any HTTP response was sent — usually a crash in the request handler caught
+by `pcall`.
 
 ---
 
@@ -349,8 +440,7 @@ nDPI returns two protocol IDs per packet:
 User sessions are indexed by **MAC address** rather than IP. This ensures seamless tracking of clients across IPv4 and IPv6 (cross-family) and handles privacy extensions gracefully.
 - Use `session_for_mac(mac, ip, path, sessions_table)` instead of IP-based lookups.
 - Workers extract the client MAC from NFQUEUE metadata (`get_l2(nfad)` → `nfq_get_packet_hw()`).
-- If the MAC cannot be extracted from the packet (e.g. `l2.mac_dst` is missing — it always is), workers MUST fallback to `neigh.get_mac(ip)`.
-- If `neigh.get_mac(ip)` also fails, `session_for_mac` performs a fallback by searching the active sessions for the provided IP.
+- If `get_l2(nfad)` also fails, `session_for_mac` performs a fallback by searching the active sessions for the provided IP.
 
 ---
 
