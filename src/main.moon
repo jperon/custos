@@ -8,7 +8,8 @@
 --   ├── mac_learner          — lit pipe learn Q0→learner, répond socket Unix
 --   ├── worker Q0 questions  — écrit Q0→Q1 et Q0→mac_learner
 --   ├── worker Q1 réponses   — lit Q0→Q1
---   ├── worker AUTH          — portail HTTPS
+--   ├── worker_auth_queue   — capture trafic 33443, extrait MAC/IP, écrit vers AUTH
+--   ├── worker AUTH          — portail HTTPS (lit pipe auth_ipc)
 --   ├── worker Q2 captif     — mode bridge
 --   └── worker Q3 reject     — mode bridge
 --
@@ -182,6 +183,17 @@ supervise = (pipes, sfd) ->
     }
   }
 
+  -- Worker NFQUEUE hybride pour l'authentification
+  -- Écrit dans le pipe 'learn' pour alimenter le mac_learner
+  auth_queue_num = tonumber(config.QUEUE_AUTH) or 5
+  table.insert workers, {
+    name: "auth_queue"
+    pid: nil
+    restart_fn: -> fork_worker "auth_queue",
+      (wfd) -> require("worker_auth_queue").run auth_queue_num, wfd,
+      pipes.learn.wfd
+  }
+
   -- Multiple workers for questions (parallel Q0)
   for i, q_num in ipairs questions_queues
     table.insert workers, {
@@ -222,7 +234,8 @@ supervise = (pipes, sfd) ->
         auth_cfg
     }
 
-  -- AUTH (single)
+  -- AUTH (single).
+  -- Utilise mac_learner_ipc (get_mac) pour obtenir la MAC de manière fiable.
   table.insert workers, {
     name: "AUTH"
     pid: nil

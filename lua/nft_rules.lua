@@ -25,6 +25,7 @@ substitute = function(content)
   content = content:gsub("{QUEUE_RESPONSES}", cfg.QUEUE_RESPONSES)
   content = content:gsub("{QUEUE_CAPTIVE}", cfg.QUEUE_CAPTIVE)
   content = content:gsub("{QUEUE_REJECT}", cfg.QUEUE_REJECT)
+  content = content:gsub("{QUEUE_AUTH}", cfg.QUEUE_AUTH)
   content = content:gsub("{NFT_IP_TIMEOUT}", cfg.NFT_IP_TIMEOUT)
   return content
 end

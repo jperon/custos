@@ -5,8 +5,6 @@ do
   local _obj_0 = require("lib.process")
   fork_child, reap_one = _obj_0.fork_child, _obj_0.reap_one
 end
-local get_mac
-get_mac = require("mac_learner_ipc").get_mac
 local add_session, purge_expired, load_sessions, write_sessions
 do
   local _obj_0 = require("auth.sessions")
@@ -26,6 +24,8 @@ do
 end
 local AUTH_SESSIONS_FILE
 AUTH_SESSIONS_FILE = require("config").AUTH_SESSIONS_FILE
+local get_mac
+get_mac = require("mac_learner_ipc").get_mac
 local H = require("auth.html")
 local url_decode
 url_decode = function(s)
@@ -134,10 +134,17 @@ success_page = function()
       charset = "UTF-8"
     }),
     H.title("CustosVirginum — Authentification"),
+    H.link({
+      rel = "stylesheet",
+      href = "/css"
+    }),
     H.script("\n      var iv = 5 * 1000;\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'omit'})\n          .then(function(r){ if(r.status===401) location.href='/'; })\n          .catch(function(){});\n      }\n      setInterval(ping, iv);\n      ping();\n    ")
   })
   local body = H.body({
-    H.p("Connexion réussie. Votre accès réseau est actif.")
+    H.p("Connexion réussie. Votre accès réseau est actif tant que cette fenêtre est ouverte."),
+    H.p(H.a({
+      href = "/logout"
+    }, "Déconnexion"))
   })
   return "<!DOCTYPE html>\n" .. H.html({
     lang = "fr"
@@ -149,7 +156,11 @@ register_page = function()
     H.meta({
       charset = "UTF-8"
     }),
-    H.title("CustosVirginum — Compte créé")
+    H.title("CustosVirginum — Compte créé"),
+    H.link({
+      rel = "stylesheet",
+      href = "/css"
+    })
   })
   local body = H.body({
     H.p("Compte créé. Vous pouvez maintenant vous connecter."),
@@ -167,7 +178,11 @@ login_page = function()
     H.meta({
       charset = "UTF-8"
     }),
-    H.title("CustosVirginum — Authentification")
+    H.title("CustosVirginum — Authentification"),
+    H.link({
+      rel = "stylesheet",
+      href = "/css"
+    })
   })
   local body = H.body({
     H.form({
@@ -230,10 +245,12 @@ handle_login = function(req, peer_ip, peer_mac, state)
   local sessions = load_sessions(state.sessions_file)
   purge_expired(sessions)
   local mac = peer_mac
-  if not mac or mac == "unknown" then
-    mac = get_mac(peer_ip)
-  end
   if not (mac and mac ~= "unknown") then
+    log_warn({
+      action = "auth_login_mac_missing",
+      ip = peer_ip,
+      mac = mac
+    })
     return 401, { }, "Unable to identify client MAC"
   end
   log_info({
@@ -242,8 +259,17 @@ handle_login = function(req, peer_ip, peer_mac, state)
     mac = mac,
     ip = peer_ip
   })
-  add_session(sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout)
-  local ok, err = write_sessions(sessions, state.sessions_file)
+  local ok, err = pcall(function()
+    return add_session(sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout)
+  end)
+  if not (ok) then
+    log_warn({
+      action = "auth_session_add_failed",
+      err = tostring(err)
+    })
+    return 500, { }, "Session creation failed"
+  end
+  ok, err = write_sessions(sessions, state.sessions_file)
   if not (ok) then
     log_warn({
       action = "auth_sessions_write_failed",
@@ -251,7 +277,21 @@ handle_login = function(req, peer_ip, peer_mac, state)
     })
     return 500, { }, "Session persistence failed"
   end
-  refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout)
+  if state.nft_sess then
+    ok, err = pcall(function()
+      return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout)
+    end)
+    if not (ok) then
+      log_warn({
+        action = "auth_nft_refresh_failed",
+        err = tostring(err)
+      })
+    end
+  else
+    log_warn({
+      action = "auth_nft_sess_missing"
+    })
+  end
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
   }, success_page()
@@ -316,12 +356,104 @@ handle_register = function(req, peer_ip, peer_mac, state)
     ["Content-Type"] = "text/html; charset=UTF-8"
   }, register_page()
 end
+local css_content = [[  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.5;
+    color: #333;
+    background-color: #f5f5f5;
+    padding: 1rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  form {
+    background: white;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin: 1rem 0;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+  }
+
+  input[type="text"],
+  input[type="password"] {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+
+  button:hover {
+    background-color: #0056b3;
+  }
+
+  p {
+    margin: 1rem 0;
+  }
+
+  a {
+    color: #007bff;
+    text-decoration: none;
+  }
+
+  a:hover {
+    text-decoration: underline;
+  }
+
+  @media (max-width: 768px) {
+    body {
+      padding: 0.5rem;
+    }
+
+    form {
+      padding: 1rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    body {
+      padding: 0.25rem;
+    }
+
+    form {
+      padding: 0.75rem;
+    }
+  }
+  ]]
 local handle_request
 handle_request = function(req, peer_ip, peer_mac, state)
   if req.path == "/" and req.method == "GET" then
     return 200, {
       ["Content-Type"] = "text/html; charset=UTF-8"
     }, login_page()
+  elseif req.path == "/css" and req.method == "GET" then
+    return 200, {
+      ["Content-Type"] = "text/css"
+    }, css_content
   elseif req.path == "/login" and req.method == "POST" then
     return handle_login(req, peer_ip, peer_mac, state)
   elseif req.path == "/ping" and req.method == "GET" then
@@ -331,7 +463,9 @@ handle_request = function(req, peer_ip, peer_mac, state)
   elseif req.path == "/register" and req.method == "POST" then
     return handle_register(req, peer_ip, peer_mac, state)
   else
-    return 404, { }, "<h1>404</h1>"
+    return 302, {
+      ["Location"] = "/"
+    }, ""
   end
 end
 local handle_client
@@ -458,6 +592,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     ipv6 = listen6 and "::" or nil,
     sessions_file = sessions_file
   })
+  local auth_ipc_rfd = state.auth_ipc_rfd
   while true do
     reload_secrets_if_needed(state)
     while true do

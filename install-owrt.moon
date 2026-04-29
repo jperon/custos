@@ -139,7 +139,7 @@ Installer = (cfg) ->
             "ffi_ndpi", "ffi_ndpi_v4", "ffi_ndpi_v5",
             "parse/ndpi", "parse/ndpi_v4", "parse/ndpi_v5",
             "ipc", "allowlist", "nft", "nfq_loop",
-            "worker_q0", "worker_q1", "main"
+            "worker_q0", "worker_q1", "worker_auth_queue", "main"
           }
           dst = "lua/#{src}.lua"
           if not @run "moonc -o #{dst} src/#{src}.moon"

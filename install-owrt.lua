@@ -160,6 +160,7 @@ Installer = function(cfg)
           "nfq_loop",
           "worker_q0",
           "worker_q1",
+          "worker_auth_queue",
           "main"
         }) do
           local dst = "lua/" .. tostring(src) .. ".lua"

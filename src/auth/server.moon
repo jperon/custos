@@ -9,12 +9,13 @@ socket = require "socket"
 ssl = require "ssl"
 
 { :fork_child, :reap_one } = require "lib.process"
-{ :get_mac } = require "mac_learner_ipc"
 { :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
 { :verify_password, :register_user } = require "auth.credentials"
 { :load_or_generate } = require "auth.cert"
 { :log_info, :log_warn, :log_error } = require "log"
 { :AUTH_SESSIONS_FILE } = require "config"
+
+{ :get_mac } = require "mac_learner_ipc"
 
 H = require "auth.html"
 
@@ -90,6 +91,7 @@ success_page = ->
   head = H.head {
     H.meta { charset: "UTF-8" },
     H.title "CustosVirginum — Authentification",
+    H.link { rel: "stylesheet", href: "/css" },
     H.script "
       var iv = 5 * 1000;
       function ping(){
@@ -102,14 +104,16 @@ success_page = ->
     "
   }
   body = H.body {
-    H.p "Connexion réussie. Votre accès réseau est actif."
+    H.p "Connexion réussie. Votre accès réseau est actif tant que cette fenêtre est ouverte."
+    H.p H.a { href: "/logout" }, "Déconnexion"
   }
   "<!DOCTYPE html>\n" .. H.html lang: "fr", head, body
 
 register_page = ->
   head = H.head {
     H.meta { charset: "UTF-8" },
-    H.title "CustosVirginum — Compte créé"
+    H.title "CustosVirginum — Compte créé",
+    H.link { rel: "stylesheet", href: "/css" }
   }
   body = H.body {
     H.p "Compte créé. Vous pouvez maintenant vous connecter.",
@@ -120,7 +124,8 @@ register_page = ->
 login_page = ->
   head = H.head {
     H.meta { charset: "UTF-8" },
-    H.title "CustosVirginum — Authentification"
+    H.title "CustosVirginum — Authentification",
+    H.link { rel: "stylesheet", href: "/css" }
   }
   body = H.body {
     H.form { method: "POST", action: "/login" },
@@ -159,22 +164,33 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   sessions = load_sessions state.sessions_file
   purge_expired sessions
 
+  -- Utiliser directement la MAC fournie par le worker NFQUEUE
   mac = peer_mac
-  if not mac or mac == "unknown"
-    mac = get_mac peer_ip
 
   unless mac and mac ~= "unknown"
+    log_warn { action: "auth_login_mac_missing", ip: peer_ip, mac: mac }
     return 401, {}, "Unable to identify client MAC"
 
   log_info { action: "auth_login_success", user: user, mac: mac, ip: peer_ip }
 
-  add_session sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout
+  ok, err = pcall(->
+    add_session sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout
+  )
+  unless ok
+    log_warn { action: "auth_session_add_failed", err: tostring(err) }
+    return 500, {}, "Session creation failed"
+
   ok, err = write_sessions sessions, state.sessions_file
   unless ok
     log_warn { action: "auth_sessions_write_failed", err: err }
     return 500, {}, "Session persistence failed"
 
-  refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout
+  if state.nft_sess
+    ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout
+    unless ok
+      log_warn { action: "auth_nft_refresh_failed", err: tostring(err) }
+  else
+    log_warn { action: "auth_nft_sess_missing" }
 
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, success_page!
 
@@ -233,9 +249,101 @@ handle_register = (req, peer_ip, peer_mac, state) ->
   state.secrets = new_secrets
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_page!
 
+css_content = [[
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.5;
+    color: #333;
+    background-color: #f5f5f5;
+    padding: 1rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  form {
+    background: white;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin: 1rem 0;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+  }
+
+  input[type="text"],
+  input[type="password"] {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+
+  button:hover {
+    background-color: #0056b3;
+  }
+
+  p {
+    margin: 1rem 0;
+  }
+
+  a {
+    color: #007bff;
+    text-decoration: none;
+  }
+
+  a:hover {
+    text-decoration: underline;
+  }
+
+  @media (max-width: 768px) {
+    body {
+      padding: 0.5rem;
+    }
+
+    form {
+      padding: 1rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    body {
+      padding: 0.25rem;
+    }
+
+    form {
+      padding: 0.75rem;
+    }
+  }
+  ]]
+
 handle_request = (req, peer_ip, peer_mac, state) ->
   if req.path == "/" and req.method == "GET"
     return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, login_page!
+  elseif req.path == "/css" and req.method == "GET"
+    return 200, { ["Content-Type"]: "text/css" }, css_content
   elseif req.path == "/login" and req.method == "POST"
     return handle_login req, peer_ip, peer_mac, state
   elseif req.path == "/ping" and req.method == "GET"
@@ -245,7 +353,7 @@ handle_request = (req, peer_ip, peer_mac, state) ->
   elseif req.path == "/register" and req.method == "POST"
     return handle_register req, peer_ip, peer_mac, state
   else
-    return 404, {}, "<h1>404</h1>"
+    return 302, { ["Location"]: "/" }, ""
 
 handle_client = (args) ->
   client = args.client
@@ -357,6 +465,10 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     sessions_file: sessions_file
   }
 
+  -- Pipe IPC pour recevoir les infos du worker_auth_queue (MAC/IP)
+  -- Créé par main.moon et passé dans state.auth_ipc_rfd
+  auth_ipc_rfd = state.auth_ipc_rfd
+
   while true
     reload_secrets_if_needed state
 
@@ -370,6 +482,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
         client = srv\accept!
         if client
           peer_ip = client\getpeername! or "unknown"
+
           pid = fork_child "AUTH-conn",
             handle_client,
             { client: client, peer_ip: peer_ip, state: state },

@@ -168,6 +168,16 @@ supervise = function(pipes, sfd)
       end
     }
   }
+  local auth_queue_num = tonumber(config.QUEUE_AUTH) or 5
+  table.insert(workers, {
+    name = "auth_queue",
+    pid = nil,
+    restart_fn = function()
+      return fork_worker("auth_queue", function(wfd)
+        return require("worker_auth_queue").run(auth_queue_num, wfd)
+      end, pipes.learn.wfd)
+    end
+  })
   for i, q_num in ipairs(questions_queues) do
     table.insert(workers, {
       name = "questions-q" .. tostring(q_num),

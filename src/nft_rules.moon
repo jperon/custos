@@ -1,15 +1,15 @@
 -- src/nft_rules.moon
--- Application du ruleset nftables principal depuis Lua.
+-- Application des rulesets nftables principaux depuis Lua.
 --
--- Lit le template dns-filter-bridge.nft, substitue les placeholders
--- {QUEUE_*} et {NFT_IP_TIMEOUT} depuis config.moon, et applique le
--- ruleset via libnft (pas de fork, pas de `nft -f`).
+-- Lit les templates (.nft), substitue les placeholders
+-- {QUEUE_*} et {NFT_IP_TIMEOUT} depuis config.moon, et applique
+-- le ruleset via libnft (pas de fork, pas de `nft -f`).
 --
 -- Les valeurs de substitution sont lues depuis config à l'appel de apply(),
 -- après le chargement éventuel de /var/run/custos/config.lua (UCI).
 --
 -- Interface :
---   nft_rules.apply()  — applique le ruleset complet substitué
+--   nft_rules.apply()       — applique le ruleset bridge principal
 
 { :ffi, :libnft } = require "ffi_defs"
 { :log_info, :log_warn } = require "log"
@@ -19,7 +19,7 @@
 ctx = libnft.nft_ctx_new 0
 error "nft_rules: nft_ctx_new() failed" if ctx == nil
 
--- ── Localisation du template ─────────────────────────────────────────────────
+-- ── Localisation des templates ─────────────────────────────────────────
 
 --- Retourne le chemin du template dns-filter-bridge.nft.
 -- Positionné dans le même répertoire que nft_rules.lua (via debug.getinfo).
@@ -29,23 +29,17 @@ nft_file_path = ->
   dir = src\match("^@(.*/)") or "./"
   dir .. "dns-filter-bridge.nft"
 
--- ── Substitution des placeholders ────────────────────────────────────────────
-
---- Substitue les placeholders {QUEUE_*} et {NFT_IP_TIMEOUT} par les valeurs
--- de config.moon dans le contenu du template .nft.
--- Config est chargé à la demande pour prendre en compte les overrides UCI.
--- @tparam string content Contenu brut du template
--- @treturn string Contenu avec les valeurs substituées
 substitute = (content) ->
   cfg = require "config"
   content = content\gsub "{QUEUE_QUESTIONS}", cfg.QUEUE_QUESTIONS
   content = content\gsub "{QUEUE_RESPONSES}", cfg.QUEUE_RESPONSES
   content = content\gsub "{QUEUE_CAPTIVE}",   cfg.QUEUE_CAPTIVE
   content = content\gsub "{QUEUE_REJECT}",    cfg.QUEUE_REJECT
+  content = content\gsub "{QUEUE_AUTH}",      cfg.QUEUE_AUTH
   content = content\gsub "{NFT_IP_TIMEOUT}",  cfg.NFT_IP_TIMEOUT
   content
 
--- ── Application ──────────────────────────────────────────────────────────────
+-- ── Application Bridge ─────────────────────────────────────────────────────
 
 --- Lit le template dns-filter-bridge.nft, substitue les placeholders
 -- depuis config.moon et applique le ruleset via libnft.

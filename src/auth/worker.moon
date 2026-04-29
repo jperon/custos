@@ -18,7 +18,7 @@ SIGHUP = 1
 
 -- ── Rechargement à chaud ─────────────────────────────────────────
 -- Le flag est positionné par le handler SIGHUP (signal POSIX simple
--- suffit ici : le worker auth n'est pas dans une boucle critique).
+-- suffit ici : le worker auth n'est pas dans une boucle critique.
 
 _reload_requested = false
 
