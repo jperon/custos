@@ -1,5 +1,5 @@
 -- src/auth/sessions.moon
--- Table de sessions en mémoire : MAC → { user, expires (epoch), ips: { ipv4, ipv6 } }
+-- Table de sessions en mémoire : MAC → { user, expires? (epoch), ips: { ipv4, ipv6 } }
 --
 -- Persistance via un fichier Lua évaluable (return { ... }) écrit de
 -- manière atomique (écriture dans .sessions.lua.new, puis rename).
@@ -14,13 +14,14 @@ os_rename = os.rename
 -- ── Sérialisation ────────────────────────────────────────────────
 
 --- Sérialise une table de sessions en code Lua évaluable.
--- @tparam table sessions Table {mac → {user, expires, heartbeat?, ips: {ipv4?, ipv6?}}}
+-- @tparam table sessions Table {mac → {user, expires?, heartbeat?, ips: {ipv4?, ipv6?}}}
 -- @treturn string Code Lua (return { ... })
 serialize = (sessions) ->
   parts = { "return {\n" }
   for mac, s in pairs sessions
     safe_mac  = mac\gsub('"', '\\"')
     safe_user = s.user\gsub('"', '\\"')
+    expires = s.expires and (", expires = " .. tostring(s.expires)) or ""
     hb  = s.heartbeat and (", heartbeat = " .. tostring(s.heartbeat)) or ""
 
     ips_parts = {}
@@ -30,8 +31,8 @@ serialize = (sessions) ->
     ips_str = #ips_parts > 0 and (", ips = { " .. table.concat(ips_parts, ", ") .. " }") or ""
 
     parts[#parts + 1] = string.format(
-      '  ["%s"] = { user = "%s", expires = %d%s%s },\n',
-      safe_mac, safe_user, s.expires, hb, ips_str
+      '  ["%s"] = { user = "%s"%s%s%s, mac = "%s" },\n',
+      safe_mac, safe_user, expires, hb, ips_str, safe_mac
     )
   parts[#parts + 1] = "}\n"
   table.concat parts
@@ -68,7 +69,7 @@ load_sessions = (path) ->
 -- @tparam string mac          Adresse MAC du client
 -- @tparam string ip           Adresse IP courante du client (pour mise à jour ips)
 -- @tparam string user         Nom d'utilisateur authentifié
--- @tparam number session_ttl  Durée de vie maximale en secondes
+-- @tparam number|nil session_ttl  Durée de vie maximale en secondes, nil/0 = pas d'expiration absolue
 -- @tparam number idle_timeout Délai d'inactivité (heartbeat) en secondes, 0 = désactivé
 add_session = (sessions, mac, ip, user, session_ttl, idle_timeout) ->
   return unless mac and mac != "unknown"
@@ -79,7 +80,10 @@ add_session = (sessions, mac, ip, user, session_ttl, idle_timeout) ->
   s = sessions[mac] or { ips: {} }
   s.mac = mac
   s.user = user
-  s.expires = now + session_ttl
+  if session_ttl and session_ttl > 0
+    s.expires = now + session_ttl
+  else
+    s.expires = nil
   s.heartbeat = hb
 
   if ip
@@ -92,7 +96,7 @@ add_session = (sessions, mac, ip, user, session_ttl, idle_timeout) ->
 purge_expired = (sessions) ->
   now = os_time!
   for mac, s in pairs sessions
-    if now > s.expires or (s.heartbeat and now > s.heartbeat)
+    if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat)
       sessions[mac] = nil
 
 -- ── Cache de lecture (côté workers Q0/Q1) ────────────────────────
@@ -136,6 +140,7 @@ session_for_mac = (mac, ip, path, sessions_arg) ->
       if sess.ips
         if sess.ips.ipv4 == ip or sess.ips.ipv6 == ip
           s = sess
+          s.mac = m
           break
 
   return nil unless s
@@ -147,7 +152,7 @@ session_for_mac = (mac, ip, path, sessions_arg) ->
     s.ips[family] = ip
 
   now = os_time!
-  return nil if now > s.expires
+  return nil if s.expires and now > s.expires
   return nil if s.heartbeat and now > s.heartbeat
   s
 

@@ -9,7 +9,7 @@ socket = require "socket"
 ssl = require "ssl"
 
 { :fork_child, :reap_one } = require "lib.process"
-{ :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
+{ :session_for_mac, :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
 { :verify_password, :register_user } = require "auth.credentials"
 { :load_or_generate } = require "auth.cert"
 { :log_info, :log_warn, :log_error } = require "log"
@@ -87,13 +87,15 @@ send_response = (client, status, headers, body) ->
   client\send "\r\n"
   client\send body if #body > 0
 
-success_page = ->
+success_page = (auth_cfg) ->
+  interval = tonumber(auth_cfg and auth_cfg.heartbeat_interval) or 30
+  interval = 30 if interval <= 0
   head = H.head {
     H.meta { charset: "UTF-8" },
     H.title "CustosVirginum — Authentification",
     H.link { rel: "stylesheet", href: "/css" },
     H.script "
-      var iv = 5 * 1000;
+      var iv = #{interval} * 1000;
       function ping(){
         fetch('/ping',{method:'GET',credentials:'omit'})
           .then(function(r){ if(r.status===401) location.href='/'; })
@@ -135,14 +137,6 @@ login_page = ->
   }
   "<!DOCTYPE html>\n" .. H.html lang: "fr", head, body
 
-session_ip_matches = (s, ip) ->
-  return false unless s and s.ips and ip
-  s.ips.ipv4 == ip or s.ips.ipv6 == ip
-
-find_session_by_ip = (sessions, ip) ->
-  for mac, s in pairs sessions
-    return mac, s if session_ip_matches s, ip
-  nil, nil
 
 refresh_nft = (nft_sess, ip, mac, ttl) ->
   return unless nft_sess
@@ -192,18 +186,20 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   else
     log_warn { action: "auth_nft_sess_missing" }
 
-  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, success_page!
+  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, success_page state.auth_cfg
 
 handle_ping = (req, peer_ip, peer_mac, state) ->
   sessions = load_sessions state.sessions_file
   purge_expired sessions
 
-  mac, s = find_session_by_ip sessions, peer_ip
+  s = session_for_mac peer_mac, peer_ip, state.sessions_file, sessions
+
   unless s
     return 401, {}, ""
 
+  mac = s.mac or peer_mac
   now = os.time!
-  if now > s.expires or (s.heartbeat and now > s.heartbeat)
+  if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat)
     sessions[mac] = nil
     write_sessions sessions, state.sessions_file
     return 401, {}, ""
@@ -212,17 +208,19 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
     s.heartbeat = now + state.auth_cfg.idle_timeout
     write_sessions sessions, state.sessions_file
 
-  refresh_nft state.nft_sess, peer_ip, s.mac or mac, state.auth_cfg.idle_timeout
+  refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout
 
   204, {}, ""
 
 handle_logout = (req, peer_ip, peer_mac, state) ->
   sessions = load_sessions state.sessions_file
-  mac, s = find_session_by_ip sessions, peer_ip
+  s = session_for_mac peer_mac, peer_ip, state.sessions_file, sessions
+
 
   unless s
     return 404, {}, ""
 
+  mac = s.mac or peer_mac
   if state.nft_sess
     state.nft_sess.del_authenticated peer_ip
     state.nft_sess.del_authenticated_mac s.mac if s.mac

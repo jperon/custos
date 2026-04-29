@@ -57,7 +57,7 @@ nets:
 # Serveur d'authentification HTTPS + portail captif
 auth:
   secrets: /etc/custos/secrets
-  # session_ttl: 86400        # durée maximale de session (secondes, défaut 24h)
+  # session_ttl: 0            # durée maximale de session (0 = pas d'expiration absolue)
   # idle_timeout: 120         # expiration si inactif (secondes, défaut 120)
   # heartbeat_interval: 30    # ping JS toutes les N secondes (défaut 30)
   # port: 33443               # port d'écoute (défaut 33443)

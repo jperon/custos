@@ -5,10 +5,10 @@ do
   local _obj_0 = require("lib.process")
   fork_child, reap_one = _obj_0.fork_child, _obj_0.reap_one
 end
-local add_session, purge_expired, load_sessions, write_sessions
+local session_for_mac, add_session, purge_expired, load_sessions, write_sessions
 do
   local _obj_0 = require("auth.sessions")
-  add_session, purge_expired, load_sessions, write_sessions = _obj_0.add_session, _obj_0.purge_expired, _obj_0.load_sessions, _obj_0.write_sessions
+  session_for_mac, add_session, purge_expired, load_sessions, write_sessions = _obj_0.session_for_mac, _obj_0.add_session, _obj_0.purge_expired, _obj_0.load_sessions, _obj_0.write_sessions
 end
 local verify_password, register_user
 do
@@ -128,7 +128,11 @@ send_response = function(client, status, headers, body)
   end
 end
 local success_page
-success_page = function()
+success_page = function(auth_cfg)
+  local interval = tonumber(auth_cfg and auth_cfg.heartbeat_interval) or 30
+  if interval <= 0 then
+    interval = 30
+  end
   local head = H.head({
     H.meta({
       charset = "UTF-8"
@@ -138,7 +142,7 @@ success_page = function()
       rel = "stylesheet",
       href = "/css"
     }),
-    H.script("\n      var iv = 5 * 1000;\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'omit'})\n          .then(function(r){ if(r.status===401) location.href='/'; })\n          .catch(function(){});\n      }\n      setInterval(ping, iv);\n      ping();\n    ")
+    H.script("\n      var iv = " .. tostring(interval) .. " * 1000;\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'omit'})\n          .then(function(r){ if(r.status===401) location.href='/'; })\n          .catch(function(){});\n      }\n      setInterval(ping, iv);\n      ping();\n    ")
   })
   local body = H.body({
     H.p("Connexion réussie. Votre accès réseau est actif tant que cette fenêtre est ouverte."),
@@ -201,22 +205,6 @@ login_page = function()
   return "<!DOCTYPE html>\n" .. H.html({
     lang = "fr"
   }, head, body)
-end
-local session_ip_matches
-session_ip_matches = function(s, ip)
-  if not (s and s.ips and ip) then
-    return false
-  end
-  return s.ips.ipv4 == ip or s.ips.ipv6 == ip
-end
-local find_session_by_ip
-find_session_by_ip = function(sessions, ip)
-  for mac, s in pairs(sessions) do
-    if session_ip_matches(s, ip) then
-      return mac, s
-    end
-  end
-  return nil, nil
 end
 local refresh_nft
 refresh_nft = function(nft_sess, ip, mac, ttl)
@@ -294,18 +282,19 @@ handle_login = function(req, peer_ip, peer_mac, state)
   end
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
-  }, success_page()
+  }, success_page(state.auth_cfg)
 end
 local handle_ping
 handle_ping = function(req, peer_ip, peer_mac, state)
   local sessions = load_sessions(state.sessions_file)
   purge_expired(sessions)
-  local mac, s = find_session_by_ip(sessions, peer_ip)
+  local s = session_for_mac(peer_mac, peer_ip, state.sessions_file, sessions)
   if not (s) then
     return 401, { }, ""
   end
+  local mac = s.mac or peer_mac
   local now = os.time()
-  if now > s.expires or (s.heartbeat and now > s.heartbeat) then
+  if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat) then
     sessions[mac] = nil
     write_sessions(sessions, state.sessions_file)
     return 401, { }, ""
@@ -314,16 +303,17 @@ handle_ping = function(req, peer_ip, peer_mac, state)
     s.heartbeat = now + state.auth_cfg.idle_timeout
     write_sessions(sessions, state.sessions_file)
   end
-  refresh_nft(state.nft_sess, peer_ip, s.mac or mac, state.auth_cfg.idle_timeout)
+  refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout)
   return 204, { }, ""
 end
 local handle_logout
 handle_logout = function(req, peer_ip, peer_mac, state)
   local sessions = load_sessions(state.sessions_file)
-  local mac, s = find_session_by_ip(sessions, peer_ip)
+  local s = session_for_mac(peer_mac, peer_ip, state.sessions_file, sessions)
   if not (s) then
     return 404, { }, ""
   end
+  local mac = s.mac or peer_mac
   if state.nft_sess then
     state.nft_sess.del_authenticated(peer_ip)
     if s.mac then

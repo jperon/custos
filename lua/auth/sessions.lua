@@ -10,6 +10,7 @@ serialize = function(sessions)
   for mac, s in pairs(sessions) do
     local safe_mac = mac:gsub('"', '\\"')
     local safe_user = s.user:gsub('"', '\\"')
+    local expires = s.expires and (", expires = " .. tostring(s.expires)) or ""
     local hb = s.heartbeat and (", heartbeat = " .. tostring(s.heartbeat)) or ""
     local ips_parts = { }
     if s.ips then
@@ -18,7 +19,7 @@ serialize = function(sessions)
       end
     end
     local ips_str = #ips_parts > 0 and (", ips = { " .. table.concat(ips_parts, ", ") .. " }") or ""
-    parts[#parts + 1] = string.format('  ["%s"] = { user = "%s", expires = %d%s%s },\n', safe_mac, safe_user, s.expires, hb, ips_str)
+    parts[#parts + 1] = string.format('  ["%s"] = { user = "%s"%s%s%s, mac = "%s" },\n', safe_mac, safe_user, expires, hb, ips_str, safe_mac)
   end
   parts[#parts + 1] = "}\n"
   return table.concat(parts)
@@ -66,7 +67,11 @@ add_session = function(sessions, mac, ip, user, session_ttl, idle_timeout)
   }
   s.mac = mac
   s.user = user
-  s.expires = now + session_ttl
+  if session_ttl and session_ttl > 0 then
+    s.expires = now + session_ttl
+  else
+    s.expires = nil
+  end
   s.heartbeat = hb
   if ip then
     local family
@@ -83,7 +88,7 @@ local purge_expired
 purge_expired = function(sessions)
   local now = os_time()
   for mac, s in pairs(sessions) do
-    if now > s.expires or (s.heartbeat and now > s.heartbeat) then
+    if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat) then
       sessions[mac] = nil
     end
   end
@@ -119,6 +124,7 @@ session_for_mac = function(mac, ip, path, sessions_arg)
       if sess.ips then
         if sess.ips.ipv4 == ip or sess.ips.ipv6 == ip then
           s = sess
+          s.mac = m
           break
         end
       end
@@ -138,7 +144,7 @@ session_for_mac = function(mac, ip, path, sessions_arg)
     s.ips[family] = ip
   end
   local now = os_time()
-  if now > s.expires then
+  if s.expires and now > s.expires then
     return nil
   end
   if s.heartbeat and now > s.heartbeat then

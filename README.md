@@ -21,9 +21,9 @@ detection — all without any C compilation step.
 │  ├── policy DROP + REJECT LAN                                  │
 │  ├── set ip4_allowed   { ipv4_src . ipv4_dst  timeout 2m }     │
 │  ├── set ip6_allowed   { ipv6_src . ipv6_dst  timeout 2m }     │
-│  ├── set authenticated_macs{ ether_addr timeout <session_ttl> }│
-│  ├── set authenticated_ips { ipv4_addr timeout <session_ttl> } │
-│  ├── set authenticated_ips6{ ipv6_addr timeout <session_ttl> } │
+│  ├── set authenticated_macs{ ether_addr timeout <idle_timeout> }│
+│  ├── set authenticated_ips { ipv4_addr timeout <idle_timeout> } │
+│  ├── set authenticated_ips6{ ipv6_addr timeout <idle_timeout> } │
 │  ├── TCP :80 LAN SYN → NFQUEUE 2  (portail captif, non-auth)  │
 │  ├── UDP/53 + TCP/53 src=LAN → NFQUEUE 0  (questions)          │
 │  └── UDP/53 + TCP/53 dst=LAN → NFQUEUE 1  (réponses)           │
@@ -503,7 +503,7 @@ auth:
   cert: /etc/custos/auth.crt
   key:  /etc/custos/auth.key
   secrets: cfg/secrets
-  session_ttl: 86400        # seconds (default: 24 h)
+  session_ttl: 0            # seconds (default: 0 = no absolute expiry)
 ```
 
 ### Secrets file
@@ -529,7 +529,7 @@ Navigate to `https://<router>:8443/` in a browser (accept the self-signed cert
 warning). After a successful login the client **MAC address** is recorded in the session
 store as the primary identifier. This MAC-primary architecture allows seamless
 cross-family tracking (IPv4/IPv6) and handles IP changes gracefully.
-Sessions expire after `session_ttl` seconds or on explicit logout.
+Sessions expire after `idle_timeout` seconds without heartbeat, or on explicit logout. `session_ttl` is optional; `0` disables absolute expiry.
 
 ### Using `from_user` in rules
 

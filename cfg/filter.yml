@@ -74,14 +74,14 @@
 #   secrets      : chemin du fichier de mots de passe (defaut : cfg/secrets)
 #                  Format : user:pbkdf2-sha256:<iter>:<salt_hex>:<hash_hex>
 #                  Generer : make make-secret USER=alice PASS=motdepasse >> cfg/secrets
-#   session_ttl       : duree de vie maximale d'une session (secondes, defaut : 86400 = 24h)
+#   session_ttl       : duree de vie maximale d'une session (secondes, defaut : 0 = pas d'expiration absolue)
 #   sessions_file     : chemin du fichier de sessions partage avec la condition from_user
 #                       (defaut : ./tmp/sessions.lua)
 #   heartbeat_interval: intervalle de ping JS en secondes (defaut : 30)
 #                       La page de succes envoie un GET /ping toutes les N secondes.
 #   idle_timeout      : delai d'inactivite avant expiration de session (secondes, defaut : 120)
 #                       La session est revoquee si aucun ping n'est recu dans ce delai.
-#                       Mettre a 0 pour desactiver le heartbeat (expiration uniquement via session_ttl).
+#                       Mettre a 0 pour desactiver le heartbeat.
 #
 # users  : nom -> adresse e-mail (pour l'action mail, futur)
 
@@ -98,6 +98,7 @@ domainlists_dir: /etc/custos/lists
 # Serveur d'authentification HTTPS + portail captif
 # Toutes les cles sont facultatives (valeurs par defaut ci-dessous).
 auth:
+  session_ttl: 0                   # pas d'expiration absolue
   idle_timeout: 10                  # expiration si inactif 10 s (court pour les tests e2e)
   heartbeat_interval: 5             # ping JS toutes les 5 s
   register_rate_limit: 100          # pour les tests e2e

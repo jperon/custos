@@ -120,8 +120,8 @@ auth:
   # Format: user:pbkdf2-sha256:<iter>:<salt_hex>:<hash_hex>
   # Génération: `make make-secret USER=alice PASS=motdepasse >> cfg/secrets`
   secrets: "/etc/custos/secrets"
-  # Durée de vie maximale d'une session utilisateur en secondes (défaut: 86400 = 24h).
-  session_ttl: 86400
+  # Durée de vie maximale d'une session utilisateur en secondes (défaut: 0 = pas d'expiration absolue).
+  session_ttl: 0
   # Chemin vers le fichier où les sessions actives sont stockées. Utilisé par la condition 'from_user'.
   # (défaut: "./tmp/sessions.lua").
   sessions_file: "/var/run/custos/sessions.lua"

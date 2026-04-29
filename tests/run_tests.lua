@@ -2302,7 +2302,7 @@ rules:
     assert(cfg ~= nil, "cfg nil : " .. tostring(tostring(err)))
     assert_eq(cfg.auth.port, 33443, "auth.port défaut")
     assert_eq(cfg.auth.captive_port, 33080, "auth.captive_port défaut")
-    assert_eq(cfg.auth.session_ttl, 86400, "auth.session_ttl défaut")
+    assert_eq(cfg.auth.session_ttl, 0, "auth.session_ttl défaut")
     assert_eq(cfg.auth.host, "::", "auth.host défaut")
     assert_eq(cfg.auth.heartbeat_interval, 30, "heartbeat_interval défaut")
     return assert_eq(cfg.auth.idle_timeout, 120, "idle_timeout défaut")
@@ -2359,6 +2359,17 @@ test("auth/sessions — serialize : session avec heartbeat", function()
   }
   local result = serialize(sessions)
   return assert(result:find("heartbeat = 7777", 1, true, "heartbeat sérialisé"))
+end)
+test("auth/sessions — serialize : session sans expiration absolue", function()
+  local sessions = {
+    ["11:22:33:44:55:66"] = {
+      user = "bob",
+      heartbeat = 7777
+    }
+  }
+  local result = serialize(sessions)
+  assert(not result:find("expires =", 1, true), "expires absent si nil")
+  return assert(result:find("heartbeat = 7777", 1, true, "heartbeat conservé"))
 end)
 test("auth/sessions — serialize : session avec ips multi-famille", function()
   local sessions = {
@@ -2461,6 +2472,13 @@ test("auth/sessions — add_session : heartbeat si idle_timeout > 0", function()
   assert(sessions["aa:bb:cc:dd:ee:ff"].heartbeat ~= nil, "heartbeat non nil")
   return assert(sessions["aa:bb:cc:dd:ee:ff"].heartbeat > os.time(), "heartbeat dans le futur")
 end)
+test("auth/sessions — add_session : session_ttl 0 désactive l'expiration absolue", function()
+  local sessions = { }
+  add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.3", "frank", 0, 120)
+  assert(sessions["aa:bb:cc:dd:ee:ff"], "session créée")
+  assert_eq(sessions["aa:bb:cc:dd:ee:ff"].expires, nil, "expires nil si session_ttl=0")
+  return assert(sessions["aa:bb:cc:dd:ee:ff"].heartbeat > os.time(), "heartbeat conserve l'expiration d'inactivité")
+end)
 test("auth/sessions — purge_expired : retire les sessions expirées", function()
   local sessions = {
     ["aa:bb:cc:dd:ee:01"] = {
@@ -2486,6 +2504,16 @@ test("auth/sessions — purge_expired : retire si heartbeat expiré", function()
   }
   purge_expired(sessions)
   return assert(sessions["aa:bb:cc:dd:ee:03"] == nil, "session avec heartbeat expiré purgée")
+end)
+test("auth/sessions — purge_expired : conserve une session sans expires", function()
+  local sessions = {
+    ["aa:bb:cc:dd:ee:04"] = {
+      user = "noabs",
+      heartbeat = 9999999999
+    }
+  }
+  purge_expired(sessions)
+  return assert(sessions["aa:bb:cc:dd:ee:04"] ~= nil, "session sans expiration absolue conservée")
 end)
 do
   local SF_FILE = "./tmp/test_sf_sessions.lua"

@@ -2257,7 +2257,7 @@ rules:
     assert cfg ~= nil, "cfg nil : #{tostring err}"
     assert_eq cfg.auth.port,              33443,             "auth.port défaut"
     assert_eq cfg.auth.captive_port,      33080,             "auth.captive_port défaut"
-    assert_eq cfg.auth.session_ttl,       86400,             "auth.session_ttl défaut"
+    assert_eq cfg.auth.session_ttl,       0,                 "auth.session_ttl défaut"
     assert_eq cfg.auth.host,              "::",              "auth.host défaut"
     assert_eq cfg.auth.heartbeat_interval, 30,               "heartbeat_interval défaut"
     assert_eq cfg.auth.idle_timeout,       120,              "idle_timeout défaut"
@@ -2301,6 +2301,12 @@ test "auth/sessions — serialize : session avec heartbeat", ->
   sessions = { ["11:22:33:44:55:66"]: { user: "bob", expires: 8888, heartbeat: 7777 } }
   result = serialize sessions
   assert result\find "heartbeat = 7777", 1, true, "heartbeat sérialisé"
+
+test "auth/sessions — serialize : session sans expiration absolue", ->
+  sessions = { ["11:22:33:44:55:66"]: { user: "bob", heartbeat: 7777 } }
+  result = serialize sessions
+  assert not result\find("expires =", 1, true), "expires absent si nil"
+  assert result\find "heartbeat = 7777", 1, true, "heartbeat conservé"
 
 test "auth/sessions — serialize : session avec ips multi-famille", ->
   sessions = { ["aa:bb:cc:dd:ee:ff"]: { user: "carol", expires: 5555, ips: { ipv4: "1.2.3.4", ipv6: "::1" } } }
@@ -2371,6 +2377,13 @@ test "auth/sessions — add_session : heartbeat si idle_timeout > 0", ->
   assert sessions["aa:bb:cc:dd:ee:ff"].heartbeat ~= nil, "heartbeat non nil"
   assert sessions["aa:bb:cc:dd:ee:ff"].heartbeat > os.time!, "heartbeat dans le futur"
 
+test "auth/sessions — add_session : session_ttl 0 désactive l'expiration absolue", ->
+  sessions = {}
+  add_session sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.3", "frank", 0, 120
+  assert sessions["aa:bb:cc:dd:ee:ff"], "session créée"
+  assert_eq sessions["aa:bb:cc:dd:ee:ff"].expires, nil, "expires nil si session_ttl=0"
+  assert sessions["aa:bb:cc:dd:ee:ff"].heartbeat > os.time!, "heartbeat conserve l'expiration d'inactivité"
+
 test "auth/sessions — purge_expired : retire les sessions expirées", ->
   sessions = {
     ["aa:bb:cc:dd:ee:01"]: { user: "old",   expires: 1 }     -- expiré (epoch 1)
@@ -2386,6 +2399,13 @@ test "auth/sessions — purge_expired : retire si heartbeat expiré", ->
   }
   purge_expired sessions
   assert sessions["aa:bb:cc:dd:ee:03"] == nil, "session avec heartbeat expiré purgée"
+
+test "auth/sessions — purge_expired : conserve une session sans expires", ->
+  sessions = {
+    ["aa:bb:cc:dd:ee:04"]: { user: "noabs", heartbeat: 9999999999 }
+  }
+  purge_expired sessions
+  assert sessions["aa:bb:cc:dd:ee:04"] ~= nil, "session sans expiration absolue conservée"
 
 -- ── session_for_ip / user_for_ip ─────────────────────────────────
 -- Le fallback MAC via NDP (neigh) a été supprimé. La résolution se fait

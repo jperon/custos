@@ -91,7 +91,7 @@ load_auth_cfg = function()
   auth.port = auth.port or 33443
   auth.idle_timeout = auth.idle_timeout or 120
   auth.heartbeat_interval = auth.heartbeat_interval or 30
-  auth.session_ttl = auth.session_ttl or 3600
+  auth.session_ttl = auth.session_ttl or 0
   auth.secrets = auth.secrets or "/etc/custos/secrets"
   auth.sessions_file = auth.sessions_file or "./tmp/sessions.lua"
   return auth
