@@ -12,7 +12,7 @@
 --   nft_rules.apply()       — applique le ruleset bridge principal
 
 { :ffi, :libnft } = require "ffi_defs"
-{ :log_info, :log_warn } = require "log"
+{ :log_info, :log_warn, :get_log_level_num } = require "log"
 
 -- ── Contexte nft (singleton) ─────────────────────────────────────────────────
 
@@ -37,6 +37,10 @@ substitute = (content) ->
   content = content\gsub "{QUEUE_REJECT}",    cfg.QUEUE_REJECT
   content = content\gsub "{QUEUE_AUTH}",      cfg.QUEUE_AUTH
   content = content\gsub "{NFT_IP_TIMEOUT}",  cfg.NFT_IP_TIMEOUT
+
+  if get_log_level_num"DEBUG" < get_log_level_num cfg.LOG_LEVEL
+    content = content\gsub "log%s+level%s+debug%s+prefix%s+\"[^\"]*\"", ""
+
   content
 
 -- ── Application Bridge ─────────────────────────────────────────────────────

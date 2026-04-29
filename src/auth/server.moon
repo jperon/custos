@@ -87,13 +87,23 @@ send_response = (client, status, headers, body) ->
   client\send "\r\n"
   client\send body if #body > 0
 
+page = =>
+  "<!DOCTYPE html>\n" .. H.html {lang: "fr",
+    H.head {
+      H.meta charset: "UTF-8",
+      H.title "CustosVirginum",
+      H.link rel: "stylesheet", href: "/css"
+      H.link rel: "icon", href: "data:image/svg+xml,data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>🚀</text></svg>"
+    }
+    H.body @
+  }
+
 success_page = (auth_cfg) ->
   interval = tonumber(auth_cfg and auth_cfg.heartbeat_interval) or 30
   interval = 30 if interval <= 0
-  head = H.head {
-    H.meta { charset: "UTF-8" },
-    H.title "CustosVirginum — Authentification",
-    H.link { rel: "stylesheet", href: "/css" },
+  page {
+    H.p "Connexion réussie. Votre accès réseau est actif tant que cette fenêtre est ouverte."
+    H.p H.a { href: "/logout" }, "Déconnexion"
     H.script "
       var iv = #{interval} * 1000;
       function ping(){
@@ -105,37 +115,30 @@ success_page = (auth_cfg) ->
       ping();
     "
   }
-  body = H.body {
-    H.p "Connexion réussie. Votre accès réseau est actif tant que cette fenêtre est ouverte."
-    H.p H.a { href: "/logout" }, "Déconnexion"
-  }
-  "<!DOCTYPE html>\n" .. H.html lang: "fr", head, body
 
-register_page = ->
-  head = H.head {
-    H.meta { charset: "UTF-8" },
-    H.title "CustosVirginum — Compte créé",
-    H.link { rel: "stylesheet", href: "/css" }
+register_form_page = (req) ->
+  page {
+    H.form { method: "POST", action: "/register" },
+      H.label "Utilisateur ", H.input({ name: "user", type: "text" }), H.br!,
+      H.label "Mot de passe ", H.input({ name: "password", type: "password" }), H.br!,
+      H.button { type: "submit" }, "S'inscrire"
+    H.a { href: "/" }, "Déjà un compte ? Se connecter"
   }
-  body = H.body {
+
+register_success_page = (req) ->
+  page {
     H.p "Compte créé. Vous pouvez maintenant vous connecter.",
     H.a { href: "/" }, "Se connecter"
   }
-  "<!DOCTYPE html>\n" .. H.html lang: "fr", head, body
 
 login_page = ->
-  head = H.head {
-    H.meta { charset: "UTF-8" },
-    H.title "CustosVirginum — Authentification",
-    H.link { rel: "stylesheet", href: "/css" }
-  }
-  body = H.body {
+  page {
     H.form { method: "POST", action: "/login" },
       H.label "Utilisateur ", H.input({ name: "user", type: "text" }), H.br!,
       H.label "Mot de passe ", H.input({ name: "password", type: "password" }), H.br!,
       H.button { type: "submit" }, "Connexion"
+    H.a { href: "/register" }, "Inscription"
   }
-  "<!DOCTYPE html>\n" .. H.html lang: "fr", head, body
 
 
 refresh_nft = (nft_sess, ip, mac, ttl) ->
@@ -245,7 +248,7 @@ handle_register = (req, peer_ip, peer_mac, state) ->
     return 500, {}, err or "Registration failed"
 
   state.secrets = new_secrets
-  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_page!
+  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_success_page req
 
 css_content = [[
   * {
@@ -348,6 +351,8 @@ handle_request = (req, peer_ip, peer_mac, state) ->
     return handle_ping req, peer_ip, peer_mac, state
   elseif req.path == "/logout"
     return handle_logout req, peer_ip, peer_mac, state
+  elseif req.path == "/register" and req.method == "GET"
+    return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_form_page req
   elseif req.path == "/register" and req.method == "POST"
     return handle_register req, peer_ip, peer_mac, state
   else

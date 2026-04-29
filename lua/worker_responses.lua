@@ -35,10 +35,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_allow, log_block, log_info, log_warn, now
+local log_info, log_warn, log_debug, now
 do
   local _obj_0 = require("log")
-  log_allow, log_block, log_info, log_warn, now = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_info, _obj_0.log_warn, _obj_0.now
+  log_info, log_warn, log_debug, now = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now
 end
 local bit = require("bit")
 local sp
@@ -277,7 +277,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         user = user
       })
     else
-      log_block({
+      log_debug({
         action = (function()
           if retry_attempts > 0 then
             return "response_no_matching_question_after_retry"
@@ -322,7 +322,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       end
       return _accum_0
     end)(), ",")
-    log_block({
+    log_debug({
       action = "response_refused",
       src_ip = pkt.ip.src_ip,
       dst_ip = pkt.ip.dst_ip,
@@ -446,7 +446,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end
     return _accum_0
   end)(), ",")
-  log_allow({
+  log_debug({
     action = (function()
       if dnsonly then
         return "response_dnsonly"
@@ -469,7 +469,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   })
   if records_to_add > 0 and not success_any then
     if NFT_ADD_FAILURE_POLICY == "fail-closed" then
-      log_block({
+      log_debug({
         action = "nft_add_failed_policy_fail_closed",
         txid = string.format("0x%04x", txid),
         client_ip = client_ip,

@@ -98,16 +98,6 @@ table bridge dns-filter-bridge {
     flags interval
   }
 
-  # Règles pour la chaîne prerouting : capture du trafic du portail captif
-  # vers le routeur lui-même pour apprentissage MAC via NFQUEUE.
-  chain prerouting {
-    type filter hook prerouting priority 0; policy accept;
-
-    # Portail captif HTTPS : apprentissage MAC/IP avant acceptation.
-    # Le worker auth_queue extrait la MAC et l'envoie au serveur HTTPS.
-    tcp dport 33443 log level debug prefix "custos auth_input_l2: " counter queue num {QUEUE_AUTH}
-  }
-
   # ── Chaîne FORWARD (tout le trafic traversant le bridge) ──────
   chain forward {
     type filter hook forward priority 0; policy accept;

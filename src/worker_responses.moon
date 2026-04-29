@@ -34,7 +34,7 @@ ndpi = require "parse/ndpi"
 } = require "ipparse.l7.dns"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6 } = require "nft"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_allow, :log_block, :log_info, :log_warn, :now } = require "log"
+{ :log_info, :log_warn, :log_debug, :now } = require "log"
 bit = require "bit"
 pack: sp = require"ipparse.lib.pack_compat"
 :concat, :insert, :remove = table
@@ -305,7 +305,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         user: user
       }
     else
-      log_block {
+      log_debug {
         action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
         src_ip:    pkt.ip.src_ip
         dst_ip:    pkt.ip.dst_ip
@@ -334,7 +334,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     unless patched
       return NF_DROP
     qnames = table.concat [q.qname for q in *pkt.questions], ","
-    log_block {
+    log_debug {
       action:   "response_refused"
       src_ip:   pkt.ip.src_ip
       dst_ip:   pkt.ip.dst_ip
@@ -423,7 +423,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- Log de la réponse
   qnames = table.concat [q.qname for q in *pkt.questions], ","
-  log_allow {
+  log_debug {
     action:      if dnsonly then "response_dnsonly" else "response_patched"
     src_ip:      pkt.ip.src_ip
     dst_ip:      pkt.ip.dst_ip
@@ -442,7 +442,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- If we had records to add but none succeeded, respect policy
   if records_to_add > 0 and not success_any
     if NFT_ADD_FAILURE_POLICY == "fail-closed"
-      log_block { action: "nft_add_failed_policy_fail_closed", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
+      log_debug { action: "nft_add_failed_policy_fail_closed", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
       return NF_DROP
     else
       log_warn { action: "nft_add_failed_fail_open", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }

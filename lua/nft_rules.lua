@@ -3,10 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libnft = _obj_0.ffi, _obj_0.libnft
 end
-local log_info, log_warn
+local log_info, log_warn, get_log_level_num
 do
   local _obj_0 = require("log")
-  log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
+  log_info, log_warn, get_log_level_num = _obj_0.log_info, _obj_0.log_warn, _obj_0.get_log_level_num
 end
 local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
@@ -27,6 +27,9 @@ substitute = function(content)
   content = content:gsub("{QUEUE_REJECT}", cfg.QUEUE_REJECT)
   content = content:gsub("{QUEUE_AUTH}", cfg.QUEUE_AUTH)
   content = content:gsub("{NFT_IP_TIMEOUT}", cfg.NFT_IP_TIMEOUT)
+  if get_log_level_num("DEBUG") < get_log_level_num(cfg.LOG_LEVEL) then
+    content = content:gsub("log%s+level%s+debug%s+prefix%s+\"[^\"]*\"", "")
+  end
   return content
 end
 local apply

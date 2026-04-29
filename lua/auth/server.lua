@@ -127,68 +127,73 @@ send_response = function(client, status, headers, body)
     return client:send(body)
   end
 end
+local page
+page = function(self)
+  return "<!DOCTYPE html>\n" .. H.html({
+    lang = "fr",
+    H.head({
+      H.meta({
+        charset = "UTF-8"
+      }),
+      H.title("CustosVirginum"),
+      H.link({
+        rel = "stylesheet",
+        href = "/css"
+      }),
+      H.link({
+        rel = "icon",
+        href = "data:image/svg+xml,data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>🚀</text></svg>"
+      })
+    }),
+    H.body(self)
+  })
+end
 local success_page
 success_page = function(auth_cfg)
   local interval = tonumber(auth_cfg and auth_cfg.heartbeat_interval) or 30
   if interval <= 0 then
     interval = 30
   end
-  local head = H.head({
-    H.meta({
-      charset = "UTF-8"
-    }),
-    H.title("CustosVirginum — Authentification"),
-    H.link({
-      rel = "stylesheet",
-      href = "/css"
-    }),
-    H.script("\n      var iv = " .. tostring(interval) .. " * 1000;\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'omit'})\n          .then(function(r){ if(r.status===401) location.href='/'; })\n          .catch(function(){});\n      }\n      setInterval(ping, iv);\n      ping();\n    ")
-  })
-  local body = H.body({
+  return page({
     H.p("Connexion réussie. Votre accès réseau est actif tant que cette fenêtre est ouverte."),
     H.p(H.a({
       href = "/logout"
-    }, "Déconnexion"))
+    }, "Déconnexion")),
+    H.script("\n      var iv = " .. tostring(interval) .. " * 1000;\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'omit'})\n          .then(function(r){ if(r.status===401) location.href='/'; })\n          .catch(function(){});\n      }\n      setInterval(ping, iv);\n      ping();\n    ")
   })
-  return "<!DOCTYPE html>\n" .. H.html({
-    lang = "fr"
-  }, head, body)
 end
-local register_page
-register_page = function()
-  local head = H.head({
-    H.meta({
-      charset = "UTF-8"
-    }),
-    H.title("CustosVirginum — Compte créé"),
-    H.link({
-      rel = "stylesheet",
-      href = "/css"
-    })
+local register_form_page
+register_form_page = function(req)
+  return page({
+    H.form({
+      method = "POST",
+      action = "/register"
+    }, H.label("Utilisateur ", H.input({
+      name = "user",
+      type = "text"
+    }), H.br()), H.label("Mot de passe ", H.input({
+      name = "password",
+      type = "password"
+    }), H.br()), H.button({
+      type = "submit"
+    }, "S'inscrire")),
+    H.a({
+      href = "/"
+    }, "Déjà un compte ? Se connecter")
   })
-  local body = H.body({
+end
+local register_success_page
+register_success_page = function(req)
+  return page({
     H.p("Compte créé. Vous pouvez maintenant vous connecter."),
     H.a({
       href = "/"
     }, "Se connecter")
   })
-  return "<!DOCTYPE html>\n" .. H.html({
-    lang = "fr"
-  }, head, body)
 end
 local login_page
 login_page = function()
-  local head = H.head({
-    H.meta({
-      charset = "UTF-8"
-    }),
-    H.title("CustosVirginum — Authentification"),
-    H.link({
-      rel = "stylesheet",
-      href = "/css"
-    })
-  })
-  local body = H.body({
+  return page({
     H.form({
       method = "POST",
       action = "/login"
@@ -200,11 +205,11 @@ login_page = function()
       type = "password"
     }), H.br()), H.button({
       type = "submit"
-    }, "Connexion"))
+    }, "Connexion")),
+    H.a({
+      href = "/register"
+    }, "Inscription")
   })
-  return "<!DOCTYPE html>\n" .. H.html({
-    lang = "fr"
-  }, head, body)
 end
 local refresh_nft
 refresh_nft = function(nft_sess, ip, mac, ttl)
@@ -344,7 +349,7 @@ handle_register = function(req, peer_ip, peer_mac, state)
   state.secrets = new_secrets
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
-  }, register_page()
+  }, register_success_page(req)
 end
 local css_content = [[  * {
     margin: 0;
@@ -450,6 +455,10 @@ handle_request = function(req, peer_ip, peer_mac, state)
     return handle_ping(req, peer_ip, peer_mac, state)
   elseif req.path == "/logout" then
     return handle_logout(req, peer_ip, peer_mac, state)
+  elseif req.path == "/register" and req.method == "GET" then
+    return 200, {
+      ["Content-Type"] = "text/html; charset=UTF-8"
+    }, register_form_page(req)
   elseif req.path == "/register" and req.method == "POST" then
     return handle_register(req, peer_ip, peer_mac, state)
   else
