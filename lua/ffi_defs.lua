@@ -55,6 +55,7 @@ ffi.cdef([[  /* ── Types de base ── */
   uint32_t htonl(uint32_t h);
   uint16_t htons(uint16_t h);
   const char* inet_ntop(int af, const void *src, char *dst, unsigned int size);
+  int          inet_pton(int af, const char *src, void *dst);
 
   /* ── Sockets UDP (pour send_refused) ── */
   typedef unsigned int socklen_t;
