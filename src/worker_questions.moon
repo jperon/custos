@@ -17,14 +17,44 @@ ndpi                     = require "parse/ndpi"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_allow, :log_block, :log_warn, :log_debug } = require "log"
+{ :log_allow, :log_block, :log_warn, :log_debug, :log_info } = require "log"
 { :user_for_mac } = require "auth.sessions"
+forge_dns = require "forge_dns"
+{ detect: detect_captive_ips } = require "captive_ips"
+bridge_raw = require "bridge_raw"
+{ new: new_eth, proto: {:IP4, :IP6} } = require "ipparse.l2.ethernet"
 
 -- fd d'écriture du pipe IPC Q0→Q1, injecté par main.moon avant fork()
 pipe_wfd = nil
 
 -- fd d'écriture du pipe d'apprentissage Q0→mac_learner.
 mac_learn_wfd = nil
+
+-- ── Vol de question DNS pour le portail captif ───────────────────
+-- Initialisés dans run() depuis filter.get_auth_cfg().
+-- captive_domain : hostname en casse basse (ex. "custos.mon-routeur.lan"),
+--                 nil si redirect_url absent ou contient une IP brute.
+-- captive_ip4/6  : adresses IP du portail captif pour les RR A et AAAA.
+-- raw_fd/_ifindex/_bridge_mac : socket AF_PACKET et infos bridge pour
+--                 l'injection directe de la réponse DNS vers le client.
+captive_domain = nil
+captive_ip4    = nil
+captive_ip6    = nil
+raw_fd         = nil
+_ifindex       = nil
+_bridge_mac    = nil
+
+--- Extrait le hostname d'une URL https?://host[:port]/...
+-- Retourne nil si l'URL contient une IP brute (IPv4 x.x.x.x ou IPv6 [::]).
+-- @tparam string|nil url URL du portail captif
+-- @treturn string|nil Hostname en casse basse, ou nil
+domain_from_url = (url) ->
+  return nil unless url
+  host = url\match "^https?://([^/:]+)"
+  return nil unless host
+  return nil if host\match "^%d+%.%d+%.%d+%.%d+$"   -- IPv4 brute
+  return nil if host\match "^%["                      -- [IPv6] entre crochets
+  host\lower!
 
 -- ── Apprentissage MAC ────────────────────────────────────────────
 
@@ -109,6 +139,55 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- Écriture best-effort : l'échec ne doit pas bloquer ni refuser la requête DNS.
   write_learn_msg pkt.ip.src_ip_raw, l2.mac_raw
 
+  -- ── Vol de question DNS pour le portail captif ───────────────────
+  -- Si la question porte sur le hostname du portail captif (extrait de
+  -- redirect_url), on forge une réponse DNS (A ou AAAA) et on l'injecte
+  -- directement via AF_PACKET sur le bridge, comme le fait Q2 pour les TCP.
+  -- La question originale est droptée (NF_DROP) ; aucun message IPC vers Q1.
+  -- Cette approche est nécessaire car nfq_set_verdict(NF_ACCEPT, payload) ne
+  -- peut pas inverser la direction d'un paquet (le paquet resterait sur le
+  -- chemin LAN→WAN au lieu d'être renvoyé vers le client).
+  if captive_domain and raw_fd and _bridge_mac
+    for _, q in ipairs pkt.questions
+      norm = q.qname\lower!\gsub "%.+$", ""
+      if norm == captive_domain and (q.qtype == 1 or q.qtype == 28)   -- A ou AAAA
+        mac_raw = l2.mac_raw
+        if not mac_raw or mac_raw == "\0\0\0\0\0\0"
+          log_warn {
+            action:  "dns_steal_no_mac"
+            domain:  q.qname
+            src_ip:  pkt.ip.src_ip
+          }
+          break   -- MAC inconnue : laisser passer normalement
+        forged_ip = forge_dns.forge_dns_response pkt, q, captive_ip4, captive_ip6
+        if forged_ip
+          eth_obj = new_eth {
+            src:      _bridge_mac
+            dst:      mac_raw
+            protocol: pkt.ip.version == 6 and IP6 or IP4
+            data:     forged_ip
+          }
+          ok = bridge_raw.send raw_fd, "#{eth_obj}", _ifindex
+          log_info {
+            action:   "dns_stolen"
+            domain:   q.qname
+            qtype:    q.qtype_name
+            src_ip:   pkt.ip.src_ip
+            resolver: pkt.ip.dst_ip
+            mac:      l2.mac_src
+            ancount:  (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0
+            sent:     ok
+          }
+          return NF_DROP
+        else
+          log_warn {
+            action:  "dns_steal_forge_failed"
+            domain:  q.qname
+            qtype:   q.qtype_name
+            src_ip:  pkt.ip.src_ip
+          }
+          break   -- forge échouée : laisser passer normalement
+
   -- ── Décision par question ────────────────────────────────────
   -- Un paquet DNS peut contenir plusieurs questions (rare en pratique,
   -- mais prévu par le RFC). On bloque si AU MOINS UNE question est refusée.
@@ -184,6 +263,33 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 run = (queue_num, wfd, learn_wfd) ->
   pipe_wfd      = wfd
   mac_learn_wfd = learn_wfd
+
+  -- ── Interception DNS portail captif ─────────────────────────
+  -- Lit redirect_url depuis auth_cfg pour extraire le hostname captif.
+  -- Ouvre un socket AF_PACKET si un hostname est trouvé (comme Q2).
+  do
+    auth = filter.get_auth_cfg!
+    captive_domain = domain_from_url auth.redirect_url
+    captive_ip4, captive_ip6 = detect_captive_ips auth
+    if captive_domain
+      ifname = auth.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+      fd, err = bridge_raw.open_socket ifname
+      if fd
+        raw_fd   = fd
+        _ifindex = tonumber ffi.C.if_nametoindex ifname
+        _bridge_mac = bridge_raw.read_mac ifname
+        log_info {
+          action:      "dns_steal_armed"
+          domain:      captive_domain
+          captive_ip4: captive_ip4 or "none"
+          captive_ip6: captive_ip6 or "none"
+          ifname:      ifname
+        }
+      else
+        log_warn { action: "dns_steal_socket_failed", err: err, ifname: ifname }
+    else
+      log_info { action: "dns_steal_disabled", reason: "no hostname in redirect_url" }
+
   ndpi.warmup!
   run_queue tonumber(queue_num), handle_question
   ndpi.cleanup!

@@ -21,6 +21,7 @@ local ip_whitelist = require("ip_whitelist")
 local DEST_WHITELIST
 DEST_WHITELIST = require("config").DEST_WHITELIST
 local rules
+local auth_cfg_cache
 local config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
 local set_config_path
 set_config_path = function(path)
@@ -37,6 +38,7 @@ load = function()
     return 
   end
   rules = compile_rules(cfg)
+  auth_cfg_cache = cfg.auth
   local whitelist
   if DEST_WHITELIST and #DEST_WHITELIST > 0 then
     whitelist = DEST_WHITELIST
@@ -62,8 +64,13 @@ decide = function(req)
   end
   return _decide(rules, req)
 end
+local get_auth_cfg
+get_auth_cfg = function()
+  return auth_cfg_cache or { }
+end
 return {
   load = load,
   decide = decide,
-  set_config_path = set_config_path
+  set_config_path = set_config_path,
+  get_auth_cfg = get_auth_cfg
 }

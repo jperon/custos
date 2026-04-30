@@ -22,6 +22,7 @@ ip_whitelist = require "ip_whitelist"
 { :DEST_WHITELIST } = require "config"
 
 local rules
+local auth_cfg_cache
 config_path = os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
 
 -- ── Chemin de configuration ───────────────────────────────────────
@@ -41,6 +42,7 @@ load = ->
     log_warn { action: "filter_load_failed", err: err }
     return
   rules = compile_rules cfg
+  auth_cfg_cache = cfg.auth
   -- Priorité : config.DEST_WHITELIST (UCI) > cfg.dest_whitelist (filter.yml)
   whitelist = if DEST_WHITELIST and #DEST_WHITELIST > 0
     DEST_WHITELIST
@@ -68,4 +70,11 @@ decide = (req) ->
     return false, "filter not loaded", nil
   _decide rules, req
 
-{ :load, :decide, :set_config_path }
+-- ── Auth config accessor ────────────────────────────────────────
+--- Retourne la configuration auth telle que chargée depuis filter.yml.
+-- Disponible après load(). Retourne {} si load() n'a pas encore été appelé.
+-- @treturn table Configuration auth (peut contenir redirect_url, captive_ip4, captive_ip6, etc.)
+get_auth_cfg = ->
+  auth_cfg_cache or {}
+
+{ :load, :decide, :set_config_path, :get_auth_cfg }

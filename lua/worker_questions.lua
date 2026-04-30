@@ -22,15 +22,47 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_allow, log_block, log_warn, log_debug
+local log_allow, log_block, log_warn, log_debug, log_info
 do
   local _obj_0 = require("log")
-  log_allow, log_block, log_warn, log_debug = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug
+  log_allow, log_block, log_warn, log_debug, log_info = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_info
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
+local forge_dns = require("forge_dns")
+local detect_captive_ips
+detect_captive_ips = require("captive_ips").detect
+local bridge_raw = require("bridge_raw")
+local new_eth, IP4, IP6
+do
+  local _obj_0 = require("ipparse.l2.ethernet")
+  new_eth, IP4, IP6 = _obj_0.new, _obj_0.proto.IP4, _obj_0.proto.IP6
+end
 local pipe_wfd = nil
 local mac_learn_wfd = nil
+local captive_domain = nil
+local captive_ip4 = nil
+local captive_ip6 = nil
+local raw_fd = nil
+local _ifindex = nil
+local _bridge_mac = nil
+local domain_from_url
+domain_from_url = function(url)
+  if not (url) then
+    return nil
+  end
+  local host = url:match("^https?://([^/:]+)")
+  if not (host) then
+    return nil
+  end
+  if host:match("^%d+%.%d+%.%d+%.%d+$") then
+    return nil
+  end
+  if host:match("^%[") then
+    return nil
+  end
+  return host:lower()
+end
 local write_learn_msg
 write_learn_msg = function(ip_raw, mac_raw)
   if not (mac_learn_wfd and mac_learn_wfd >= 0) then
@@ -106,6 +138,51 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     return NF_ACCEPT
   end
   write_learn_msg(pkt.ip.src_ip_raw, l2.mac_raw)
+  if captive_domain and raw_fd and _bridge_mac then
+    for _, q in ipairs(pkt.questions) do
+      local norm = q.qname:lower():gsub("%.+$", "")
+      if norm == captive_domain and (q.qtype == 1 or q.qtype == 28) then
+        local mac_raw = l2.mac_raw
+        if not mac_raw or mac_raw == "\0\0\0\0\0\0" then
+          log_warn({
+            action = "dns_steal_no_mac",
+            domain = q.qname,
+            src_ip = pkt.ip.src_ip
+          })
+          break
+        end
+        local forged_ip = forge_dns.forge_dns_response(pkt, q, captive_ip4, captive_ip6)
+        if forged_ip then
+          local eth_obj = new_eth({
+            src = _bridge_mac,
+            dst = mac_raw,
+            protocol = pkt.ip.version == 6 and IP6 or IP4,
+            data = forged_ip
+          })
+          local ok = bridge_raw.send(raw_fd, tostring(eth_obj), _ifindex)
+          log_info({
+            action = "dns_stolen",
+            domain = q.qname,
+            qtype = q.qtype_name,
+            src_ip = pkt.ip.src_ip,
+            resolver = pkt.ip.dst_ip,
+            mac = l2.mac_src,
+            ancount = (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0,
+            sent = ok
+          })
+          return NF_DROP
+        else
+          log_warn({
+            action = "dns_steal_forge_failed",
+            domain = q.qname,
+            qtype = q.qtype_name,
+            src_ip = pkt.ip.src_ip
+          })
+          break
+        end
+      end
+    end
+  end
   local verdict = NF_ACCEPT
   local dnsonly = false
   local q_fields = {
@@ -172,6 +249,38 @@ local run
 run = function(queue_num, wfd, learn_wfd)
   pipe_wfd = wfd
   mac_learn_wfd = learn_wfd
+  do
+    local auth = filter.get_auth_cfg()
+    captive_domain = domain_from_url(auth.redirect_url)
+    captive_ip4, captive_ip6 = detect_captive_ips(auth)
+    if captive_domain then
+      local ifname = auth.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+      local fd, err = bridge_raw.open_socket(ifname)
+      if fd then
+        raw_fd = fd
+        _ifindex = tonumber(ffi.C.if_nametoindex(ifname))
+        _bridge_mac = bridge_raw.read_mac(ifname)
+        log_info({
+          action = "dns_steal_armed",
+          domain = captive_domain,
+          captive_ip4 = captive_ip4 or "none",
+          captive_ip6 = captive_ip6 or "none",
+          ifname = ifname
+        })
+      else
+        log_warn({
+          action = "dns_steal_socket_failed",
+          err = err,
+          ifname = ifname
+        })
+      end
+    else
+      log_info({
+        action = "dns_steal_disabled",
+        reason = "no hostname in redirect_url"
+      })
+    end
+  end
   ndpi.warmup()
   run_queue(tonumber(queue_num), handle_question)
   return ndpi.cleanup()
