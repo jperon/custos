@@ -22,6 +22,8 @@ parse: parse_tcp = require "ipparse.l4.tcp"
 { :get_l2 } = require "parse/ethernet"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_error } = require "log"
+{ detect: detect_captive_ips } = require "captive_ips"
+bridge_raw = require "bridge_raw"
 { :flags } = require "ipparse.l4.tcp"
 { :SYN, :ACK, :FIN, :PSH } = flags
 mac_learner_ipc = require "mac_learner_ipc"
@@ -29,9 +31,6 @@ mac_learner_ipc = require "mac_learner_ipc"
 
 -- ── TCP helper functions (ipparse for parsing and serialization) ──
 
-AF_PACKET   = 17
-SOCK_RAW    = 3
-ETH_P_ALL   = 0x0300  -- htons(0x0003)
 PROTO_TCP   = l3_proto.TCP
 PROTO_UDP   = l3_proto.UDP
 
@@ -97,20 +96,9 @@ build_response_frames = (eth, ip, tcp, redirect_url) ->
   syn_ack, data, fin_ack
 
 -- AF_PACKET sender (keep from original)
-open_raw_socket = (ifname) ->
-  fd = libc.socket AF_PACKET, SOCK_RAW, ETH_P_ALL
-  return nil, "socket() failed: #{ffi.errno!}" if fd < 0
-  fd
+open_raw_socket = (ifname) -> bridge_raw.open_socket ifname
 
-send_frame = (fd, frame, ifindex) ->
-  sll = ffi.new "struct sockaddr_ll"
-  ffi.fill sll, ffi.sizeof(sll), 0
-  sll.sll_family   = AF_PACKET
-  sll.sll_protocol = ETH_P_ALL
-  sll.sll_ifindex  = ifindex
-  n = libc.sendto fd, frame, #frame, 0,
-    ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll)
-  n == #frame
+send_frame = (fd, frame, ifindex) -> bridge_raw.send fd, frame, ifindex
 
 -- fd du socket AF_PACKET, ouvert une seule fois au démarrage du worker
 raw_fd   = nil
@@ -226,69 +214,14 @@ run = (queue_num, auth_cfg) ->
   https_port = auth_cfg.port or 33443
 
   -- URL de redirection personnalisée (optionnelle)
-  -- Si spécifiée, elle est utilisée pour IPv4 et IPv6, ignorant captive_ip4/6
+  -- Si spécifiée, elle est utilisée pour IPv4 et IPv6 (custom_redirect_url a
+  -- la priorité dans handle_syn ; local_ip4/6 servent de fallback uniquement).
   custom_redirect_url = auth_cfg.redirect_url
 
-  -- IPv4 captive IP (from config, env var, or auto-detect)
-  -- Ignoré si redirect_url est spécifié
-  local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4") unless custom_redirect_url
-  local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6") unless custom_redirect_url
-
-  -- Fallback to single captive_ip for backwards compatibility
-  -- NOTE: do not default to 127.0.0.1 here — that prevents auto-detection.
-  if not local_ip4 and not local_ip6
-    local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP")
-    if local_ip
-      if local_ip\find(":", 1, true)
-        local_ip6 = local_ip
-      else
-        local_ip4 = local_ip
-
-  -- Auto-detect local IPs if not specified
-  ok_sock, socket = pcall require, "socket"
-  if ok_sock
-    pcall ->
-      -- Prefer the IPv4 address configured on the bridge interface before
-      -- falling back to the socket.connect heuristic (more deterministic).
-      if not local_ip4
-        ok, out = pcall ->
-          fh = io.popen "ip -4 addr show dev #{ifname} scope global 2>/dev/null | awk '/inet/{print $2}' | head -1 | cut -d'/' -f1"
-          return nil unless fh
-          s = fh\read "*a"
-          fh\close!
-          s = s\gsub "%s+", ""
-          s
-        if ok and out and out != "" and out != "0.0.0.0"
-          local_ip4 = out
-
-      -- Fallback to socket method for IPv4 if interface read failed or returned nothing
-      u = nil
-      if not local_ip4
-        ok_udp, u_or_err = pcall socket.udp
-        u = u_or_err if ok_udp and u_or_err
-        if u
-          ok_conn, _ = pcall u.connect, u, "1.1.1.1", 80
-          if ok_conn
-            ok_get, ip = pcall u.getsockname, u
-            if ok_get and ip and ip != "" and ip != "0.0.0.0"
-              local_ip4 = ip
-
-      u\close! if u
-
-  -- Fallback: read IPv6 from bridge interface if auto-detection failed
-  if not local_ip6
-    bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
-    -- Try to get IPv6 address from ip command
-    ok, ip = pcall ->
-      f = io.popen "ip -6 addr show dev #{bridge_ifname} scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1"
-      if f
-        addr = f\read "*a"
-        f\close!
-        -- Strip all whitespace (newlines, carriage returns, spaces)
-        addr\gsub "%s+", ""
-    if ok and ip and ip != "" and ip != "::"
-      local_ip6 = ip
-      log_info { action: "q2_ipv6_from_interface", ip: local_ip6, ifname: bridge_ifname }
+  -- Détection des IPs du portail captif (config explicite, env, auto-détection).
+  -- captive_ips.detect couvre tous les cas : config YAML, variables d'env,
+  -- compatibilité ascendante captive_ip, ip addr show, socket.connect.
+  local_ip4, local_ip6 = detect_captive_ips auth_cfg
 
   -- Build IPv4 redirect URL
   if local_ip4
@@ -315,12 +248,7 @@ run = (queue_num, auth_cfg) ->
     return
 
   -- Lire le MAC du bridge une seule fois (évite un open sysfs par SYN TCP)
-  do
-    fh = io.open "/sys/class/net/#{ifname}/address", "r"
-    if fh
-      mac_str = fh\read("*a")\gsub "\n", ""
-      fh\close!
-      _bridge_mac = s2mac mac_str if mac_str and #mac_str > 0
+  _bridge_mac = bridge_raw.read_mac ifname
 
   log_info {
     action: "q2_worker_start"

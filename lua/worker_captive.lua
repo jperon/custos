@@ -29,6 +29,9 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_error = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error
 end
+local detect_captive_ips
+detect_captive_ips = require("captive_ips").detect
+local bridge_raw = require("bridge_raw")
 local flags
 flags = require("ipparse.l4.tcp").flags
 local SYN, ACK, FIN, PSH
@@ -36,9 +39,6 @@ SYN, ACK, FIN, PSH = flags.SYN, flags.ACK, flags.FIN, flags.PSH
 local mac_learner_ipc = require("mac_learner_ipc")
 local user_for_ip
 user_for_ip = require("auth.sessions").user_for_ip
-local AF_PACKET = 17
-local SOCK_RAW = 3
-local ETH_P_ALL = 0x0300
 local PROTO_TCP = l3_proto.TCP
 local PROTO_UDP = l3_proto.UDP
 local parse_syn
@@ -92,21 +92,11 @@ build_response_frames = function(eth, ip, tcp, redirect_url)
 end
 local open_raw_socket
 open_raw_socket = function(ifname)
-  local fd = libc.socket(AF_PACKET, SOCK_RAW, ETH_P_ALL)
-  if fd < 0 then
-    return nil, "socket() failed: " .. tostring(ffi.errno())
-  end
-  return fd
+  return bridge_raw.open_socket(ifname)
 end
 local send_frame
 send_frame = function(fd, frame, ifindex)
-  local sll = ffi.new("struct sockaddr_ll")
-  ffi.fill(sll, ffi.sizeof(sll), 0)
-  sll.sll_family = AF_PACKET
-  sll.sll_protocol = ETH_P_ALL
-  sll.sll_ifindex = ifindex
-  local n = libc.sendto(fd, frame, #frame, 0, ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll))
-  return n == #frame
+  return bridge_raw.send(fd, frame, ifindex)
 end
 local raw_fd = nil
 local ifindex = nil
@@ -223,82 +213,7 @@ run = function(queue_num, auth_cfg)
   local ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
   local https_port = auth_cfg.port or 33443
   custom_redirect_url = auth_cfg.redirect_url
-  local local_ip4
-  if not (custom_redirect_url) then
-    local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4")
-  end
-  local local_ip6
-  if not (custom_redirect_url) then
-    local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
-  end
-  if not local_ip4 and not local_ip6 then
-    local local_ip = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP")
-    if local_ip then
-      if local_ip:find(":", 1, true) then
-        local_ip6 = local_ip
-      else
-        local_ip4 = local_ip
-      end
-    end
-  end
-  local ok_sock, socket = pcall(require, "socket")
-  if ok_sock then
-    pcall(function()
-      if not local_ip4 then
-        local ok, out = pcall(function()
-          local fh = io.popen("ip -4 addr show dev " .. tostring(ifname) .. " scope global 2>/dev/null | awk '/inet/{print $2}' | head -1 | cut -d'/' -f1")
-          if not (fh) then
-            return nil
-          end
-          local s = fh:read("*a")
-          fh:close()
-          s = s:gsub("%s+", "")
-          return s
-        end)
-        if ok and out and out ~= "" and out ~= "0.0.0.0" then
-          local_ip4 = out
-        end
-      end
-      local u = nil
-      if not local_ip4 then
-        local ok_udp, u_or_err = pcall(socket.udp)
-        if ok_udp and u_or_err then
-          u = u_or_err
-        end
-        if u then
-          local ok_conn, _ = pcall(u.connect, u, "1.1.1.1", 80)
-          if ok_conn then
-            local ok_get, ip = pcall(u.getsockname, u)
-            if ok_get and ip and ip ~= "" and ip ~= "0.0.0.0" then
-              local_ip4 = ip
-            end
-          end
-        end
-      end
-      if u then
-        return u:close()
-      end
-    end)
-  end
-  if not local_ip6 then
-    local bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
-    local ok, ip = pcall(function()
-      local f = io.popen("ip -6 addr show dev " .. tostring(bridge_ifname) .. " scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1")
-      if f then
-        local addr = f:read("*a")
-        f:close()
-        return addr:gsub("%s+", "")
-      end
-    end)
-    if ok and ip and ip ~= "" and ip ~= "::" then
-      local_ip6 = ip
-      log_info({
-        action = "q2_ipv6_from_interface",
-        ip = local_ip6,
-        ifname = bridge_ifname
-      })
-    end
-  end
+  local local_ip4, local_ip6 = detect_captive_ips(auth_cfg)
   if local_ip4 then
     redirect_url4 = "https://" .. tostring(local_ip4) .. ":" .. tostring(https_port) .. "/"
   else
@@ -333,16 +248,7 @@ run = function(queue_num, auth_cfg)
     })
     return 
   end
-  do
-    local fh = io.open("/sys/class/net/" .. tostring(ifname) .. "/address", "r")
-    if fh then
-      local mac_str = fh:read("*a"):gsub("\n", "")
-      fh:close()
-      if mac_str and #mac_str > 0 then
-        _bridge_mac = s2mac(mac_str)
-      end
-    end
-  end
+  _bridge_mac = bridge_raw.read_mac(ifname)
   log_info({
     action = "q2_worker_start",
     ifname = ifname,
