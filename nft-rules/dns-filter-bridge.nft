@@ -102,13 +102,22 @@ table bridge dns-filter-bridge {
   chain forward {
     type filter hook forward priority 0; policy accept;
 
+    # Trames non-unicast (multicast L2 et broadcast)
+    meta pkttype {broadcast, multicast} accept
+
     # Core & Infrastructure
     udp dport { 67, 68 } accept
     udp dport { 546, 547 } accept
+    # ARP unicast (réponses point-à-point). Placé ici, avant toute règle queue,
+    # pour éviter qu'un client authentifié (ether saddr @authenticated_macs) ne
+    # fasse acheminer ses réponses ARP vers QUEUE_REJECT.
+    # L'ARP broadcast est déjà accepté par `meta pkttype broadcast` ci-dessus.
+    ether type arp accept
+    vlan type arp  accept
+    # IPv6 link-local unicast (fe80::/10) : NDP unicast, ICMPv6 direct entre hôtes.
+    ip6 daddr fe80::/10 accept
     # Allow all local ICMP (IPv4)
-    meta l4proto icmp ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} accept
-    # Allow all local ICMPv6
-    meta l4proto icmpv6 ip6 daddr {fc00::/7, fe80::/10} accept
+    meta l4proto icmp ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } accept
     # Essential ICMPv4 types for diagnostics and connectivity (excluding echo for tunnel prevention)
     meta l4proto icmp icmp type { destination-unreachable, time-exceeded } accept
     # Essential ICMPv6 types for Neighbor Discovery, diagnostics, and connectivity (excluding echo for tunnel prevention)
@@ -136,6 +145,9 @@ table bridge dns-filter-bridge {
     meta l4proto { udp, tcp } th dport 53 log level debug prefix "custos question: " counter queue num {QUEUE_QUESTIONS}
     meta l4proto { udp, tcp } th sport 53 log level debug prefix "custos response: " counter queue num {QUEUE_RESPONSES}
 
+    # ULA IPv6
+    ip6 daddr fc00::/7 accept
+
     ct state established,related accept
 
     # Whitelist statique
@@ -150,7 +162,9 @@ table bridge dns-filter-bridge {
     ip    saddr . ip  daddr @ip4_allowed  log level debug prefix "custos ip4_allowed: "  counter accept
 
     ip  daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} meta l4proto != {tcp, udp} accept
-    ip6 daddr {fc00::/7, fe80::/10} meta l4proto != {tcp, udp} accept
+    # fc00::/7 (ULA) est déjà intégralement accepté par `ip6 daddr fc00::/7 accept`
+    # ci-dessus ; seul fe80::/10 (link-local unicast non-TCP/UDP) est utile ici.
+    ip6 daddr fe80::/10 meta l4proto != {tcp, udp} accept
 
     # Portail captif : le client doit pouvoir joindre les adresses locales du
     # routeur (portail HTTPS + sondes de détection) même sans être dans les sets.
@@ -168,8 +182,14 @@ table bridge dns-filter-bridge {
 
     # All remaining unauthorised traffic → {QUEUE_REJECT} (MAC learning + forge RST or ICMP admin-prohibited).
     # Rate-limited to protect {QUEUE_REJECT} against floods; surplus is dropped silently.
-    ether type {ip, ip6} limit rate 100/second log level debug prefix "custos default: " counter queue num {QUEUE_REJECT} bypass
+    # Two variants : untagged frames (ether type ip/ip6) and 802.1Q-tagged frames
+    # (ether type 8021q + vlan type ip/ip6). `ether type {ip, ip6}` does NOT match
+    # tagged frames because their outer EtherType is 0x8100, not 0x0800/0x86DD.
+    ether type {ip, ip6} limit rate 100/second log level debug prefix "custos default: "      counter queue num {QUEUE_REJECT} bypass
+    vlan type {ip, ip6}  limit rate 100/second log level debug prefix "custos default vlan: " counter queue num {QUEUE_REJECT} bypass
     ether type {ip, ip6} drop
+    vlan type {ip, ip6}  drop
+    log level warn prefix "custos pass :" counter
   }
 
 }
