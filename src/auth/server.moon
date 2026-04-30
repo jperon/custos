@@ -103,7 +103,7 @@ success_page = (auth_cfg, created_at) ->
   interval = 30 if interval <= 0
   session_start = tonumber(created_at) or 0
   page {
-    H.p "Connexion réussie. Votre accès réseau est actif tant que cette fenêtre est ouverte."
+    H.p "Connexion réussie. Votre accès est actif tant que cette fenêtre est ouverte."
     H.p { id: "session-timer" }, "Session ouverte depuis : --"
     H.p H.a { href: "/logout" }, "Déconnexion"
     H.script "
@@ -111,7 +111,13 @@ success_page = (auth_cfg, created_at) ->
       var sessionStart = #{session_start};
       function ping(){
         fetch('/ping',{method:'GET',credentials:'omit'})
-          .then(function(r){ if(r.status===401) location.href='/'; })
+          .then(function(r){
+            if(r.status===401){
+              if(document.visibilityState!=='visible')
+                alert('Connexion perdue, veuillez vous authentifier de nouveau.');
+              location.href='/';
+            }
+          })
           .catch(function(){});
       }
       function updateTimer(){
