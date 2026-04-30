@@ -514,10 +514,6 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     sessions_file: sessions_file
   }
 
-  -- Pipe IPC pour recevoir les infos du worker_auth_queue (MAC/IP)
-  -- Créé par main.moon et passé dans state.auth_ipc_rfd
-  auth_ipc_rfd = state.auth_ipc_rfd
-
   while true
     reload_secrets_if_needed state
 

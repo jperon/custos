@@ -35,8 +35,8 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 ## worker_auth_queue (`src/worker_auth_queue.moon`)
 
-- **In :** NFQUEUE `QUEUE_AUTH` (trafic port 33443) ; fd d'écriture `auth_ipc` injecté par `main.moon`.
-- **Out :** `NF_ACCEPT` (laisse passer le paquet vers `auth/worker`) ; écrit le couple MAC+IP dans le pipe `auth_ipc` (22 octets).
+- **In :** NFQUEUE `QUEUE_AUTH` (trafic port 33443) ; fd d'écriture `learn` injecté par `main.moon`.
+- **Out :** `NF_ACCEPT` (laisse passer le paquet vers `auth/worker`) ; écrit le couple MAC+IP dans le pipe `learn` (22 octets) → `mac_learner`.
 
 ## worker_arp_sniffer (`src/worker_arp_sniffer.moon`)
 
@@ -52,7 +52,7 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 ## auth/worker (`src/auth/worker.moon`)
 
-- **In :** sockets `AF_INET` + `AF_INET6` `SOCK_STREAM` sur `auth_cfg.port` (HTTPS, TLS via luasec) ; `/etc/custos/secrets` ; `sessions.lua` ; pipe `auth_ipc` (lu dans `auth/server`).
+- **In :** sockets `AF_INET` + `AF_INET6` `SOCK_STREAM` sur `auth_cfg.port` (HTTPS, TLS via luasec) ; `/etc/custos/secrets` ; `sessions.lua` ; résolution MAC via socket Unix → `mac_learner`.
 - **Out :** écrit `sessions.lua` (rename atomique) ; gère les sets nft `authenticated_macs`, `authenticated_ips`, `authenticated_ips6`.
 - **Signaux :** `SIGHUP` → flag positionné dans le handler, rechargement des secrets au prochain cycle.
 - **IPv6 dual-stack :** deux sockets distincts + `socket.select` ; ne jamais remplacer par `socket.bind "*"` (IPv4 uniquement).
@@ -72,10 +72,9 @@ Défini dans `src/ipc.moon`. Écriture atomique garantie (< `PIPE_BUF = 4096`).
 | 21–26 | 6 | MAC client (zéros si inconnu) |
 | 27–42 | 16 | IP resolver — même convention de padding |
 
-## Format IPC `learn` et `auth_ipc` (22 octets)
+## Format IPC `learn` (22 octets)
 
-Utilisé par `worker_questions`, `worker_arp_sniffer` → `mac_learner`,
-et par `worker_auth_queue` → `auth/worker`.
+Utilisé par `worker_questions`, `worker_arp_sniffer` et `worker_auth_queue` → `mac_learner`.
 
 | Offset | Taille | Champ |
 |--------|--------|-------|

@@ -597,7 +597,6 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     ipv6 = listen6 and "::" or nil,
     sessions_file = sessions_file
   })
-  local auth_ipc_rfd = state.auth_ipc_rfd
   while true do
     reload_secrets_if_needed(state)
     while true do
