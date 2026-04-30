@@ -12,6 +12,7 @@ serialize = function(sessions)
     local safe_user = s.user:gsub('"', '\\"')
     local expires = s.expires and (", expires = " .. tostring(s.expires)) or ""
     local hb = s.heartbeat and (", heartbeat = " .. tostring(s.heartbeat)) or ""
+    local ca = s.created_at and (", created_at = " .. tostring(s.created_at)) or ""
     local ips_parts = { }
     if s.ips then
       for family, ip in pairs(s.ips) do
@@ -19,7 +20,7 @@ serialize = function(sessions)
       end
     end
     local ips_str = #ips_parts > 0 and (", ips = { " .. table.concat(ips_parts, ", ") .. " }") or ""
-    parts[#parts + 1] = string.format('  ["%s"] = { user = "%s"%s%s%s, mac = "%s" },\n', safe_mac, safe_user, expires, hb, ips_str, safe_mac)
+    parts[#parts + 1] = string.format('  ["%s"] = { user = "%s"%s%s%s%s, mac = "%s" },\n', safe_mac, safe_user, expires, hb, ca, ips_str, safe_mac)
   end
   parts[#parts + 1] = "}\n"
   return table.concat(parts)
@@ -73,6 +74,7 @@ add_session = function(sessions, mac, ip, user, session_ttl, idle_timeout)
     s.expires = nil
   end
   s.heartbeat = hb
+  s.created_at = s.created_at or now
   if ip then
     local family
     if ip:find(":", 1, true) then

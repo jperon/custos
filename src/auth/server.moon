@@ -93,26 +93,46 @@ page = =>
       H.meta charset: "UTF-8",
       H.title "CustosVirginum",
       H.link rel: "stylesheet", href: "/css"
-      H.link rel: "icon", href: "data:image/svg+xml,data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>🚀</text></svg>"
+      H.link rel: "icon", href: "data:image/svg+xml,<svg viewBox='0 0 100 100'><text y='75' font-size='75'>✞</text></svg>"
     }
     H.body @
   }
 
-success_page = (auth_cfg) ->
+success_page = (auth_cfg, created_at) ->
   interval = tonumber(auth_cfg and auth_cfg.heartbeat_interval) or 30
   interval = 30 if interval <= 0
+  session_start = tonumber(created_at) or 0
   page {
     H.p "Connexion réussie. Votre accès réseau est actif tant que cette fenêtre est ouverte."
+    H.p { id: "session-timer" }, "Session ouverte depuis : --"
     H.p H.a { href: "/logout" }, "Déconnexion"
     H.script "
       var iv = #{interval} * 1000;
+      var sessionStart = #{session_start};
       function ping(){
         fetch('/ping',{method:'GET',credentials:'omit'})
           .then(function(r){ if(r.status===401) location.href='/'; })
           .catch(function(){});
       }
+      function updateTimer(){
+        var now = Math.floor(Date.now() / 1000);
+        var elapsed = now - sessionStart;
+        if (elapsed < 0) elapsed = 0;
+        var h = Math.floor(elapsed / 3600);
+        var m = Math.floor((elapsed % 3600) / 60);
+        var txt;
+        if (h > 0) {
+          txt = h + 'h ' + (m < 10 ? '0' : '') + m + 'min';
+        } else {
+          txt = m + ' min';
+        }
+        var el = document.getElementById('session-timer');
+        if (el) el.textContent = 'Session ouverte depuis : ' + txt;
+      }
       setInterval(ping, iv);
+      setInterval(updateTimer, 10000);
       ping();
+      updateTimer();
     "
   }
 
@@ -166,7 +186,7 @@ handle_login = (req, peer_ip, peer_mac, state) ->
 
   unless mac and mac ~= "unknown"
     log_warn { action: "auth_login_mac_missing", ip: peer_ip, mac: mac }
-    return 401, {}, "Unable to identify client MAC"
+    return 401, {}, "Unable to identify client MAC (IP: #{peer_ip})"
 
   log_info { action: "auth_login_success", user: user, mac: mac, ip: peer_ip }
 
@@ -189,7 +209,9 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   else
     log_warn { action: "auth_nft_sess_missing" }
 
-  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, success_page state.auth_cfg
+  session = sessions[mac\lower!]
+  created_at = session and session.created_at or os.time!
+  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, success_page state.auth_cfg, created_at
 
 handle_ping = (req, peer_ip, peer_mac, state) ->
   sessions = load_sessions state.sessions_file

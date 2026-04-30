@@ -142,24 +142,28 @@ page = function(self)
       }),
       H.link({
         rel = "icon",
-        href = "data:image/svg+xml,data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>🚀</text></svg>"
+        href = "data:image/svg+xml,<svg viewBox='0 0 100 100'><text y='75' font-size='75'>✞</text></svg>"
       })
     }),
     H.body(self)
   })
 end
 local success_page
-success_page = function(auth_cfg)
+success_page = function(auth_cfg, created_at)
   local interval = tonumber(auth_cfg and auth_cfg.heartbeat_interval) or 30
   if interval <= 0 then
     interval = 30
   end
+  local session_start = tonumber(created_at) or 0
   return page({
     H.p("Connexion réussie. Votre accès réseau est actif tant que cette fenêtre est ouverte."),
+    H.p({
+      id = "session-timer"
+    }, "Session ouverte depuis : --"),
     H.p(H.a({
       href = "/logout"
     }, "Déconnexion")),
-    H.script("\n      var iv = " .. tostring(interval) .. " * 1000;\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'omit'})\n          .then(function(r){ if(r.status===401) location.href='/'; })\n          .catch(function(){});\n      }\n      setInterval(ping, iv);\n      ping();\n    ")
+    H.script("\n      var iv = " .. tostring(interval) .. " * 1000;\n      var sessionStart = " .. tostring(session_start) .. ";\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'omit'})\n          .then(function(r){ if(r.status===401) location.href='/'; })\n          .catch(function(){});\n      }\n      function updateTimer(){\n        var now = Math.floor(Date.now() / 1000);\n        var elapsed = now - sessionStart;\n        if (elapsed < 0) elapsed = 0;\n        var h = Math.floor(elapsed / 3600);\n        var m = Math.floor((elapsed % 3600) / 60);\n        var txt;\n        if (h > 0) {\n          txt = h + 'h ' + (m < 10 ? '0' : '') + m + 'min';\n        } else {\n          txt = m + ' min';\n        }\n        var el = document.getElementById('session-timer');\n        if (el) el.textContent = 'Session ouverte depuis : ' + txt;\n      }\n      setInterval(ping, iv);\n      setInterval(updateTimer, 10000);\n      ping();\n      updateTimer();\n    ")
   })
 end
 local register_form_page
@@ -244,7 +248,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
       ip = peer_ip,
       mac = mac
     })
-    return 401, { }, "Unable to identify client MAC"
+    return 401, { }, "Unable to identify client MAC (IP: " .. tostring(peer_ip) .. ")"
   end
   log_info({
     action = "auth_login_success",
@@ -285,9 +289,11 @@ handle_login = function(req, peer_ip, peer_mac, state)
       action = "auth_nft_sess_missing"
     })
   end
+  local session = sessions[mac:lower()]
+  local created_at = session and session.created_at or os.time()
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
-  }, success_page(state.auth_cfg)
+  }, success_page(state.auth_cfg, created_at)
 end
 local handle_ping
 handle_ping = function(req, peer_ip, peer_mac, state)
