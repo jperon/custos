@@ -157,17 +157,27 @@ supervise = function(pipes, sfd)
   local responses_queues = parse_queues(config.QUEUE_RESPONSES)
   local captive_queues = parse_queues(config.QUEUE_CAPTIVE)
   local reject_queues = parse_queues(config.QUEUE_REJECT)
+  local bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
   local workers = {
     {
       name = "MAC-learner",
       pid = nil,
       restart_fn = function()
         return fork_worker("MAC-learner", function(rfd)
-          return require("mac_learner").run(rfd)
+          return require("mac_learner").run(rfd, bridge_ifname)
         end, pipes.learn.rfd)
       end
     }
   }
+  table.insert(workers, {
+    name = "arp-sniffer",
+    pid = nil,
+    restart_fn = function()
+      return fork_worker("arp-sniffer", function(wfd)
+        return require("worker_arp_sniffer").run(bridge_ifname, wfd)
+      end, pipes.learn.wfd)
+    end
+  })
   local auth_queue_num = tonumber(config.QUEUE_AUTH) or 5
   table.insert(workers, {
     name = "auth_queue",

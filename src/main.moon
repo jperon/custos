@@ -173,14 +173,28 @@ supervise = (pipes, sfd) ->
   captive_queues   = parse_queues config.QUEUE_CAPTIVE
   reject_queues    = parse_queues config.QUEUE_REJECT
 
+  -- Nom de l'interface bridge : requis pour mac_learner (prober ARP/NS)
+  -- et arp-sniffer. Déclaré avant `workers` pour que les closures puissent le capturer.
+  bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+
   workers = {
     {
       name: "MAC-learner"
       pid: nil
       restart_fn: -> fork_worker "MAC-learner",
-        (rfd) -> require("mac_learner").run rfd,
-        pipes.learn.rfd
+          (rfd) -> require("mac_learner").run rfd, bridge_ifname,
+          pipes.learn.rfd
     }
+  }
+
+  -- Worker passif ARP/NDP : apprend les associations IP→MAC pour tous les VLANs
+  -- en sniffant les trames ARP et les messages NDP NS/NA sur le bridge.
+  table.insert workers, {
+    name: "arp-sniffer"
+    pid: nil
+    restart_fn: -> fork_worker "arp-sniffer",
+      (wfd) -> require("worker_arp_sniffer").run bridge_ifname, wfd,
+      pipes.learn.wfd
   }
 
   -- Worker NFQUEUE hybride pour l'authentification
