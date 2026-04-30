@@ -23,6 +23,7 @@ pcall ->
   ffi.cdef [[
     typedef struct { long tv_sec; long tv_nsec; } timespec_t;
     const char* inet_ntop(int af, const void *src, char *dst, unsigned int size);
+    int          inet_pton(int af, const char *src, void *dst);
     int nanosleep(const timespec_t *req, timespec_t *rem);
   ]]
 
@@ -2776,6 +2777,59 @@ test "parse/ndpi — parse_packet(raw) OK sur paquet IP brut", ->
 
 
 
+
+-- ════════════════════════════════════════════════════════════════
+-- mac_learner_ipc — mac_from_eui64
+-- ════════════════════════════════════════════════════════════════
+io.write "\n── mac_learner_ipc / EUI-64 ──\n"
+
+-- Stub les dépendances IPC (socket Unix vers mac_learner, absent en test)
+-- La fonction mac_from_eui64 n'utilise que ffi.C.inet_pton et bit : pas de stub nécessaire.
+package.loaded["mac_learner_ipc"] = nil
+{ :mac_from_eui64 } = require "mac_learner_ipc"
+
+-- Vecteur de test canonique :
+--   MAC  6c:1c:71:2f:76:f1
+--   EUI-64 : flip bit U/L → 6e, insert ff:fe →  6e:1c:71:ff:fe:2f:76:f1
+--   Adresse globale  : fd00:28::6e1c:71ff:fe2f:76f1
+--   Adresse link-local : fe80::6e1c:71ff:fe2f:76f1
+
+test "mac_from_eui64 — adresse globale EUI-64", ->
+  mac = mac_from_eui64 "fd00:28::6e1c:71ff:fe2f:76f1"
+  assert_eq mac, "6c:1c:71:2f:76:f1", "global EUI-64"
+
+test "mac_from_eui64 — link-local EUI-64", ->
+  mac = mac_from_eui64 "fe80::6e1c:71ff:fe2f:76f1"
+  assert_eq mac, "6c:1c:71:2f:76:f1", "link-local EUI-64"
+
+test "mac_from_eui64 — adresse non-EUI-64 (random/opaque) → nil", ->
+  mac = mac_from_eui64 "fd00::1"
+  assert_eq mac, nil, "adresse courte, pas EUI-64"
+
+test "mac_from_eui64 — privacy extension (pas de ff:fe) → nil", ->
+  -- Adresse avec identifiant aléatoire sans ff:fe en positions 11-12
+  mac = mac_from_eui64 "2001:db8::1a2b:3c4d:5e6f:7a8b"
+  assert_eq mac, nil, "privacy extension → nil"
+
+test "mac_from_eui64 — IPv4 → nil", ->
+  mac = mac_from_eui64 "192.168.1.1"
+  assert_eq mac, nil, "IPv4 rejeté"
+
+test "mac_from_eui64 — nil → nil", ->
+  mac = mac_from_eui64 nil
+  assert_eq mac, nil, "nil rejeté"
+
+test "mac_from_eui64 — bit U/L flippé correctement (premier octet pair)", ->
+  -- MAC 00:11:22:33:44:55 → EUI-64 → 02:11:22:ff:fe:33:44:55
+  -- IPv6 : fe80::0211:22ff:fe33:4455
+  mac = mac_from_eui64 "fe80::211:22ff:fe33:4455"
+  assert_eq mac, "00:11:22:33:44:55", "bit U/L pair"
+
+test "mac_from_eui64 — bit U/L flippé correctement (premier octet impair)", ->
+  -- MAC 01:23:45:67:89:ab → EUI-64 → 03:23:45:ff:fe:67:89:ab
+  -- IPv6 : fe80::323:45ff:fe67:89ab
+  mac = mac_from_eui64 "fe80::323:45ff:fe67:89ab"
+  assert_eq mac, "01:23:45:67:89:ab", "bit U/L impair"
 
 io.write string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed)
 os.exit failed == 0 and 0 or 1
