@@ -79,6 +79,22 @@ ssh "logread | sed -n '/#{LOG_MARKER}/,$p' | grep queue_listening"
 
 ## Refactoring Pitfalls
 
+**Destructuration avec alias : `{ key: alias }`, pas `{ :key: alias }`**
+
+`{ :name }` est un raccourci pour `{ name: name }` (clé = nom local identiques).
+Dès que le nom local diffère de la clé, le `:` préfixe est invalide :
+
+```moonscript
+-- WRONG: syntaxe invalide, le parser rejette :key: alias
+{ :new: new_eth } = require "ipparse.l2.ethernet"
+
+-- CORRECT: forme explicite clé: alias
+{ new: new_eth } = require "ipparse.l2.ethernet"
+
+-- CORRECT: raccourci uniquement quand clé = nom local
+{ :new } = require "ipparse.l2.ethernet"   -- équivalent à { new: new }
+```
+
 **Module functions vs methods: use `.` not `\`**
 
 Modules that export plain functions (like `auth.nft_sessions`) must be called
