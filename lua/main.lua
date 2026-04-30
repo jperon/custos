@@ -70,7 +70,8 @@ local create_pipes
 create_pipes = function()
   return {
     q0q1 = create_pipe("q0q1"),
-    learn = create_pipe("mac_learn")
+    learn = create_pipe("mac_learn"),
+    events = create_pipe("events")
   }
 end
 local load_auth_cfg
@@ -113,6 +114,14 @@ close_supervisor_fds = function(pipes)
       end
       if pipes.learn.wfd then
         libc.close(pipes.learn.wfd)
+      end
+    end
+    if pipes.events then
+      if pipes.events.rfd then
+        libc.close(pipes.events.rfd)
+      end
+      if pipes.events.wfd then
+        libc.close(pipes.events.wfd)
       end
     end
   end
@@ -170,6 +179,20 @@ supervise = function(pipes, sfd)
     }
   }
   table.insert(workers, {
+    name = "events",
+    pid = nil,
+    restart_fn = function()
+      return fork_worker("events", (function(fds)
+        return require("worker_events").run(fds.rfd, fds.dir, fds.max_age_hours, fds.min_free_pct)
+      end), {
+        rfd = pipes.events.rfd,
+        dir = config.EVENTS_DIR or "/tmp/custos/events",
+        max_age_hours = config.EVENTS_MAX_AGE_HOURS or 168,
+        min_free_pct = config.EVENTS_MIN_FREE_PCT or 30
+      })
+    end
+  })
+  table.insert(workers, {
     name = "arp-sniffer",
     pid = nil,
     restart_fn = function()
@@ -194,10 +217,11 @@ supervise = function(pipes, sfd)
       pid = nil,
       restart_fn = function()
         return fork_worker("questions-q" .. tostring(q_num), (function(fds)
-          return require("worker_questions").run(q_num, fds.q0q1_wfd, fds.learn_wfd)
+          return require("worker_questions").run(q_num, fds.q0q1_wfd, fds.learn_wfd, fds.events_wfd)
         end), {
           q0q1_wfd = pipes.q0q1.wfd,
-          learn_wfd = pipes.learn.wfd
+          learn_wfd = pipes.learn.wfd,
+          events_wfd = pipes.events.wfd
         })
       end
     })
@@ -341,6 +365,8 @@ log_info({
   q0q1_rfd = pipes.q0q1.rfd,
   q0q1_wfd = pipes.q0q1.wfd,
   learn_rfd = pipes.learn.rfd,
-  learn_wfd = pipes.learn.wfd
+  learn_wfd = pipes.learn.wfd,
+  events_rfd = pipes.events.rfd,
+  events_wfd = pipes.events.wfd
 })
 return supervise(pipes, sfd)

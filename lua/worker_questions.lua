@@ -40,6 +40,7 @@ do
 end
 local pipe_wfd = nil
 local mac_learn_wfd = nil
+local events_wfd = nil
 local captive_domain = nil
 local captive_ip4 = nil
 local captive_ip6 = nil
@@ -89,6 +90,50 @@ write_learn_msg = function(ip_raw, mac_raw)
   end
   local n = libc.write(mac_learn_wfd, msg, 22)
   return n == 22
+end
+local tsv_field
+tsv_field = function(v)
+  local s
+  if v ~= nil then
+    s = tostring(v)
+  else
+    s = ""
+  end
+  if #s == 0 then
+    return "-"
+  else
+    return s
+  end
+end
+local write_event
+write_event = function(fields, allowed)
+  if not (events_wfd) then
+    return 
+  end
+  local decision
+  if allowed == "dnsonly" then
+    decision = "dnsonly"
+  elseif allowed then
+    decision = "allow"
+  else
+    decision = "block"
+  end
+  local line = table.concat({
+    tostring(os.time()),
+    decision,
+    tsv_field(fields.qname),
+    tsv_field(fields.mac_src),
+    tsv_field(fields.src_ip),
+    tsv_field(fields.dst_ip),
+    tsv_field(fields.vlan),
+    tsv_field(fields.user),
+    tsv_field(fields.af),
+    tsv_field(fields.ndpi_master),
+    tsv_field(fields.ndpi_app),
+    tsv_field(fields.reason),
+    tsv_field(fields.rule)
+  }, "\t") .. "\n"
+  return libc.write(events_wfd, line, #line)
 end
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
@@ -226,6 +271,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       verdict = NF_DROP
       block_reason = reason
     end
+    write_event(q_fields, allowed)
   end
   local ipc_ok = false
   if verdict == NF_ACCEPT then
@@ -251,9 +297,10 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   return NF_ACCEPT
 end
 local run
-run = function(queue_num, wfd, learn_wfd)
+run = function(queue_num, wfd, learn_wfd, ev_wfd)
   pipe_wfd = wfd
   mac_learn_wfd = learn_wfd
+  events_wfd = ev_wfd
   do
     local auth = filter.get_auth_cfg()
     captive_domain = domain_from_url(auth.redirect_url)

@@ -30,6 +30,8 @@ pipe_wfd = nil
 -- fd d'écriture du pipe d'apprentissage Q0→mac_learner.
 mac_learn_wfd = nil
 
+events_wfd = nil  -- fd d'écriture du pipe vers worker_events (nil si désactivé)
+
 -- ── Vol de question DNS pour le portail captif ───────────────────
 -- Initialisés dans run() depuis filter.get_auth_cfg().
 -- captive_domain : hostname en casse basse (ex. "custos.mon-routeur.lan"),
@@ -83,6 +85,41 @@ write_learn_msg = (ip_raw, mac_raw) ->
 
   n = libc.write mac_learn_wfd, msg, 22
   n == 22
+
+-- Helper : retourne la valeur sous forme de string, ou "-" si nil/vide.
+-- @tparam any v  Valeur à formater
+-- @treturn string Valeur formatée pour TSV
+tsv_field = (v) ->
+  s = if v ~= nil then tostring v else ""
+  if #s == 0 then "-" else s
+
+--- Envoie un événement de décision DNS vers worker_events (best-effort).
+-- Écrit une ligne TSV sur le pipe events_wfd si disponible.
+-- Format : ts<TAB>decision<TAB>qname<TAB>mac_src<TAB>src_ip<TAB>dst_ip<TAB>vlan
+--          <TAB>user<TAB>af<TAB>ndpi_master<TAB>ndpi_app<TAB>reason<TAB>rule<LF>
+-- Pas de qtype. Écriture atomique unique (≤ PIPE_BUF), EAGAIN ignoré silencieusement.
+-- @tparam table  fields  Champs de la décision (qname, mac_src, src_ip, dst_ip, etc.)
+-- @tparam        allowed Résultat de filter.decide : true, "dnsonly", ou false/nil
+-- @treturn nil
+write_event = (fields, allowed) ->
+  return unless events_wfd
+  decision = if allowed == "dnsonly" then "dnsonly" elseif allowed then "allow" else "block"
+  line = table.concat({
+    tostring os.time!
+    decision
+    tsv_field fields.qname
+    tsv_field fields.mac_src
+    tsv_field fields.src_ip
+    tsv_field fields.dst_ip
+    tsv_field fields.vlan
+    tsv_field fields.user
+    tsv_field fields.af
+    tsv_field fields.ndpi_master
+    tsv_field fields.ndpi_app
+    tsv_field fields.reason
+    tsv_field fields.rule
+  }, "\t") .. "\n"
+  libc.write events_wfd, line, #line
 
 -- ── Callback principal ───────────────────────────────────────────
 handle_question = (qh_ptr, nfad, pkt_id) ->
@@ -235,6 +272,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       log_block q_fields
       verdict = NF_DROP
       block_reason = reason
+    write_event q_fields, allowed
 
   -- Enregistre la transaction IPC pour Q1 (toujours NF_ACCEPT — Q1 gère tout).
   -- Si autorisé   : Q1 patche TTL + injecte EDE "Custos vigilat."
@@ -265,9 +303,10 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 
 -- ── Point d'entrée ───────────────────────────────────────────────
 -- Appelé par main.moon après fork(), avec les fd des pipes IPC.
-run = (queue_num, wfd, learn_wfd) ->
+run = (queue_num, wfd, learn_wfd, ev_wfd) ->
   pipe_wfd      = wfd
   mac_learn_wfd = learn_wfd
+  events_wfd    = ev_wfd
 
   -- ── Interception DNS portail captif ─────────────────────────
   -- Lit redirect_url depuis auth_cfg pour extraire le hostname captif.

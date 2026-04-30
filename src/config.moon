@@ -73,6 +73,19 @@ MAC_LEARNER_ENTRY_TTL      = 300
 -- workers Q0/Q1 (via from_user). Surchargeable via cfg/filter.yml (auth.sessions_file).
 AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
 
+-- ── Enregistrement des événements DNS ───────────────────────────
+-- Répertoire de sortie des fichiers TSV horaires (créé si absent).
+-- Surchargeable via UCI (custos.main.events_dir).
+EVENTS_DIR          = "/tmp/custos/events"
+-- Âge maximum des fichiers .tsv.zst avant suppression (heures).
+-- Surchargeable via UCI (custos.main.events_max_age_hours).
+EVENTS_MAX_AGE_HOURS = 168    -- 7 jours
+-- Seuil d'espace libre minimum sur le filesystem d'events_dir (%).
+-- Si l'espace libre passe en-dessous, les .tsv.zst les plus anciens
+-- sont supprimés jusqu'au rétablissement du seuil.
+-- Surchargeable via UCI (custos.main.events_min_free_pct).
+EVENTS_MIN_FREE_PCT  = 30
+
 -- ── Destination whitelist (CIDR networks bypassing DNS analysis) ─────
 -- Configuré via UCI (custos.main.dest_whitelist) ou filter.yml (ip_whitelist).
 -- Trafic vers ces réseaux autorisé sans résolution DNS préalable.
@@ -101,6 +114,7 @@ NFT_EXTRA_RULES = {}
   :FORCED_TTL
   :DNS_PORT, :AF_INET, :AF_INET6
   :AUTH_SESSIONS_FILE
+  :EVENTS_DIR, :EVENTS_MAX_AGE_HOURS, :EVENTS_MIN_FREE_PCT
   :DEST_WHITELIST, :ALLOWED_DOMAINS, :NFT_EXTRA_RULES
   :LOG_LEVEL
 }

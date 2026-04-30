@@ -90,14 +90,16 @@ create_pipe = (name) ->
 
   { rfd: fds[0], wfd: fds[1] }
 
---- Crée les deux pipes utilisés par Custos.
+--- Crée les trois pipes utilisés par Custos.
 -- q0q1 : transactions DNS Q0 → Q1.
 -- learn : apprentissage IP→MAC Q0 → mac_learner.
--- @treturn table {q0q1, learn}
+-- events : événements DNS Q0 → worker_events.
+-- @treturn table {q0q1, learn, events}
 create_pipes = ->
   {
-    q0q1: create_pipe "q0q1"
-    learn: create_pipe "mac_learn"
+    q0q1:   create_pipe "q0q1"
+    learn:  create_pipe "mac_learn"
+    events: create_pipe "events"
   }
 
 -- ── Configuration AUTH ───────────────────────────────────────────
@@ -135,6 +137,9 @@ close_supervisor_fds = (pipes) ->
     if pipes.learn
       libc.close pipes.learn.rfd if pipes.learn.rfd
       libc.close pipes.learn.wfd if pipes.learn.wfd
+    if pipes.events
+      libc.close pipes.events.rfd if pipes.events.rfd
+      libc.close pipes.events.wfd if pipes.events.wfd
   nil
 
 -- ── Boucle de supervision ────────────────────────────────────────
@@ -187,6 +192,16 @@ supervise = (pipes, sfd) ->
     }
   }
 
+  table.insert workers, {
+    name: "events"
+    pid: nil
+    restart_fn: -> fork_worker "events",
+      ((fds) -> require("worker_events").run fds.rfd, fds.dir, fds.max_age_hours, fds.min_free_pct),
+      { rfd: pipes.events.rfd, dir: config.EVENTS_DIR or "/tmp/custos/events",
+        max_age_hours: config.EVENTS_MAX_AGE_HOURS or 168,
+        min_free_pct:  config.EVENTS_MIN_FREE_PCT  or 30 }
+  }
+
   -- Worker passif ARP/NDP : apprend les associations IP→MAC pour tous les VLANs
   -- en sniffant les trames ARP et les messages NDP NS/NA sur le bridge.
   table.insert workers, {
@@ -214,8 +229,8 @@ supervise = (pipes, sfd) ->
       name: "questions-q#{q_num}"
       pid: nil
       restart_fn: -> fork_worker "questions-q#{q_num}",
-        ((fds) -> require("worker_questions").run q_num, fds.q0q1_wfd, fds.learn_wfd),
-        { q0q1_wfd: pipes.q0q1.wfd, learn_wfd: pipes.learn.wfd }
+        ((fds) -> require("worker_questions").run q_num, fds.q0q1_wfd, fds.learn_wfd, fds.events_wfd),
+        { q0q1_wfd: pipes.q0q1.wfd, learn_wfd: pipes.learn.wfd, events_wfd: pipes.events.wfd }
     }
 
   -- Multiple workers for responses (parallel Q1)
@@ -337,6 +352,8 @@ log_info {
   q0q1_wfd: pipes.q0q1.wfd
   learn_rfd: pipes.learn.rfd
   learn_wfd: pipes.learn.wfd
+  events_rfd: pipes.events.rfd
+  events_wfd: pipes.events.wfd
 }
 
 supervise pipes, sfd
