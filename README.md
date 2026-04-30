@@ -24,20 +24,25 @@ detection — all without any C compilation step.
 │  ├── set authenticated_macs{ ether_addr timeout <idle_timeout> }│
 │  ├── set authenticated_ips { ipv4_addr timeout <idle_timeout> } │
 │  ├── set authenticated_ips6{ ipv6_addr timeout <idle_timeout> } │
-│  ├── TCP :80 LAN SYN → NFQUEUE 2  (portail captif, non-auth)  │
-│  ├── UDP/53 + TCP/53 src=LAN → NFQUEUE 0  (questions)          │
-│  └── UDP/53 + TCP/53 dst=LAN → NFQUEUE 1  (réponses)           │
+│  ├── TCP :80 LAN SYN    → NFQUEUE_CAPTIVE    (portail captif)  │
+│  ├── TCP :33443          → NFQUEUE_AUTH       (extrait MAC/IP)  │
+│  ├── Reject résiduel     → NFQUEUE_REJECT     (reject, rate-limité) │
+│  ├── UDP/TCP :53 src=LAN → NFQUEUE_QUESTIONS  (questions)       │
+│  └── UDP/TCP :53 dst=LAN → NFQUEUE_RESPONSES  (réponses)        │
 │                                                                │
-│  LuaJIT (userspace)  BRIDGE_IFNAME=<br>         │
-│  ├── main.lua        supervisor + fork                         │
-│  ├── worker Q0  ─────────────────── pipe IPC ──► worker Q1    │
-│  │   parse L2/L3/L4/L7 (FFI)                    drain pipe     │
-│  │   rules (conditions + actions)               verify txid    │
-│  │   log + ACCEPT/REFUSED/DNSONLY               patch TTL→60s  │
-│  │   write(pipe, txid+ip+port+mac+type)         nft set add    │
-│  │   or send REFUSED (socket UDP/53)            ACCEPT+payload │
-│  ├── worker AUTH — HTTPS login (port 33443)                    │
-│  ├── worker Q2   — TCP/80 SYN intercept → 302 → portail        │
+│  LuaJIT (userspace)  BRIDGE_IFNAME=<br>                       │
+│  ├── main.lua           supervisor + fork                      │
+│  ├── mac_learner        table IP→MAC (socket Unix)             │
+│  ├── worker_arp_sniffer ARP/NDP passif → pipe learn (22 B)     │
+│  ├── worker_questions ── pipe q0q1 (43 B) ──► worker_responses │
+│  │   parse L2/L3/L4/L7      └─ pipe learn (22 B) → mac_learner│
+│  │   rules (conditions+actions)              verify txid       │
+│  │   log + ACCEPT/REFUSED/DNSONLY            patch TTL→60s     │
+│  │                                           nft set add       │
+│  ├── worker_auth_queue ─ pipe auth_ipc (22 B) ──► worker AUTH  │
+│  ├── worker AUTH       — HTTPS login (port 33443)              │
+│  ├── worker_captive    — TCP/80 SYN → AF_PACKET 302            │
+│  ├── worker_reject     — forge RST/ICMP admin-prohibited       │
 │  │                                                              │
 │  └── logs → syslog (journald / logread)                        │
 └────────────────────────────────────────────────────────────────┘
@@ -115,17 +120,38 @@ custos/
 │   ├── ffi_defs.moon        Déclarations FFI centralisées
 │   ├── log.moon             Logging structuré key=value + rate-limiting
 │   ├── ipc.moon             Protocole pipe Q0→Q1 (msg 43 octets)
-│   ├── neigh.moon           Lecture table voisins kernel (ip neigh show)
 │   ├── nft.moon             Injection sets nftables via libnftables
 │   ├── nft_add_helper.moon  Helper retry/backoff pour insertions nft
+│   ├── nft_rules.moon       Règles nft statiques
+│   ├── nft_extra_rules.moon Gestion règles nft supplémentaires (UCI)
 │   ├── nfq_loop.moon        Boucle générique NFQUEUE
-│   ├── worker_q0.moon       Worker questions DNS
-│   ├── worker_q1.moon       Worker réponses DNS
-│   ├── worker_q2.moon       Worker portail captif TCP SYN
-│   ├── main.moon            Superviseur + fork (Q0, Q1, AUTH, Q2)
+│   ├── bridge_raw.moon      AF_PACKET : injection de frames brutes
+│   ├── captive_ips.moon     Détection IPs portail captif
+│   ├── forge_dns.moon       Construction de réponses DNS forgées
+│   ├── ip_whitelist.moon    Gestion whitelist IP statique
+│   ├── mac_learner.moon     Table IP→MAC en mémoire + socket Unix
+│   ├── mac_learner_ipc.moon Client IPC pour mac_learner
+│   ├── mac_prober.moon      Sondage actif ARP/NDP
 │   ├── ffi_ndpi.moon        Façade détection version (charge v4 ou v5)
 │   ├── ffi_ndpi_v4.moon     FFI cdef pour nDPI 4.2–4.8
 │   ├── ffi_ndpi_v5.moon     FFI cdef pour nDPI 5.0+
+│   ├── ffi_xxhash.moon      FFI xxHash
+│   ├── worker_questions.moon  Worker questions DNS
+│   ├── worker_responses.moon  Worker réponses DNS
+│   ├── worker_captive.moon    Worker portail captif TCP/80
+│   ├── worker_auth_queue.moon Worker NFQUEUE port 33443 (extrait MAC/IP)
+│   ├── worker_reject.moon     Worker forge RST/ICMP admin-prohibited
+│   ├── worker_arp_sniffer.moon Worker sniffer ARP/NDP passif
+│   ├── main.moon            Superviseur + fork
+│   ├── auth/
+│   │   ├── worker.moon          Worker AUTH principal
+│   │   ├── server.moon          Serveur HTTPS (luasec)
+│   │   ├── worker_conn.moon     Gestion des connexions HTTPS
+│   │   ├── sessions.moon        Lecture/écriture sessions.lua
+│   │   ├── nft_sessions.moon    Gestion sets nft pour sessions
+│   │   ├── credentials.moon     Vérification PBKDF2
+│   │   ├── cert.moon            Génération certificat TLS auto-signé
+│   │   └── html.moon            Templates HTML du portail
 │   ├── filter/
 │   │   ├── init.moon        Moteur de filtrage (load/decide/reload)
 │   │   ├── rule.moon        Évaluateur de règles (conditions + actions)
@@ -134,8 +160,7 @@ custos/
 │   │   ├── actions/
 │   │   │   ├── allow.moon   Action allow — injecte IPs dans mac4/mac6_allowed
 │   │   │   ├── deny.moon    Action deny — répond REFUSED + EDE
-│   │   │   ├── dnsonly.moon Action dnsonly — DNS autorisé sans injection nft
-│   │   │   └── mail.moon    Action mail (future)
+│   │   │   └── dnsonly.moon Action dnsonly — DNS autorisé sans injection nft
 │   │   ├── conditions/
 │   │   │   ├── from_net.moon / from_nets.moon / from_netlist.moon / from_netlists.moon
 │   │   │   ├── from_mac.moon / from_macs.moon / from_maclist.moon / from_maclists.moon
@@ -148,14 +173,12 @@ custos/
 │   │       ├── ipcalc.moon          Test d'appartenance CIDR
 │   │       ├── load_config.moon     Chargeur YAML (lyaml)
 │   │       └── parse_domains.moon   Parser multi-format de listes de domaines
-│   └── parse/
-│       ├── ethernet.moon    L2 : MAC src via nfq_get_packet_hw
-│       ├── ip.moon          L3 : IPv4 + IPv6 + checksums
-│       ├── udp.moon         L4 : UDP + recalcul checksum
-│       ├── dns.moon         L7 : RFC 1035 complet + patch TTL
-│       ├── ndpi.moon        L3-L7 parseur unifié (façade)
-│       ├── ndpi_v4.moon     Backend nDPI 4.2–4.8
-│       └── ndpi_v5.moon     Backend nDPI 5.0+
+│   ├── parse/
+│   │   ├── ethernet.moon    L2 : MAC src via nfq_get_packet_hw
+│   │   ├── ndpi.moon        L3–L7 parseur unifié (façade)
+│   │   ├── ndpi_v4.moon     Backend nDPI 4.2–4.8
+│   │   └── ndpi_v5.moon     Backend nDPI 5.0+
+│   └── ipparse/         Bibliothèque parsing L2/L3/L4/L7 (submodule)
 ├── lua/                     Lua généré par moonc (ne pas éditer)
 ├── nft-rules/
 │   └── dns-filter-bridge.nft       Ruleset nftables (bridge mode)
@@ -166,9 +189,10 @@ custos/
 │   ├── run_tests.moon       Tests unitaires source (sans root)
 │   ├── run_tests.lua        Tests unitaires compilés
 │   ├── test_ndpi.moon       Tests du wrapper nDPI
-│   ├── test_ndpi.lua        Tests nDPI compilés
-│   ├── test_openwrt.moon    Tests E2E OpenWrt via SSH source
-│   └── test_openwrt.lua     Tests E2E OpenWrt compilés
+│   ├── test_e2e.moon        Tests E2E (VM/SSH)
+│   ├── test_openwrt.moon    Tests E2E OpenWrt via SSH
+│   ├── run_e2e.moon         Runner de la suite E2E
+│   └── e2e_holos.moon       Suite E2E Holos
 ├── install-owrt.moon        Installeur OpenWrt (déploiement SSH)
 ├── install-owrt.lua         Installeur compilé
 ├── LICENSE                  Licence MIT
@@ -340,7 +364,9 @@ Example log:
 
 ---
 
-## IPC Protocol Q0 → Q1
+## IPC Protocols
+
+### Pipe Q0 → Q1 (`q0q1`, 43 octets)
 
 The Unix pipe (created before `fork()`) carries 43-byte messages.
 Atomicity is guaranteed by POSIX for messages ≤ PIPE_BUF (4096 bytes).
@@ -367,6 +393,20 @@ the upstream response into a REFUSED reply instead of patching TTL.
 captive portal probes): Q1 patches TTL + EDE but does not call `nft add element`.
 Purge is **lazy**: an expired entry is removed at lookup time,
 without a separate timer.
+
+### Pipe `learn` et `auth_ipc` (22 octets)
+
+Two additional pipes carry MAC/IP associations:
+
+- **`learn` pipe** : written by `worker_questions` and `worker_arp_sniffer`, read by `mac_learner`.
+- **`auth_ipc` pipe** : written by `worker_auth_queue`, read by `auth/worker`.
+
+```
+Bytes 0-15 : IP address — 16 bytes
+               IPv4 : 4 bytes address + 12 zero bytes (left-padded)
+               IPv6 : 16 bytes address (complete)
+Bytes 16-21: source MAC (6 bytes)
+```
 
 ---
 
@@ -399,8 +439,10 @@ as long as the client actively resolves the name.
 
 ## nDPI Integration
 
-The `parse/ndpi` module replaces the separate `parse/ip` + `parse/udp` +
-`parse/dns` pipeline with a single unified parser. It uses:
+The `parse/ndpi` module provides a single unified L3+L4+L7 parser on top of
+**pure FFI pointer arithmetic** and **libndpi**. Per-layer parsing (L2/L3/L4/L7)
+is handled by the `ipparse` library (`src/ipparse/`), still used directly by
+some workers (e.g. `worker_responses` uses `ipparse.l7.dns`).
 
 - **Pure FFI pointer arithmetic** (`uint8_t*` + `bit` library) for
   L3/L4/L7 header decoding — no `string.byte()`, no C bridge, no
@@ -465,9 +507,6 @@ patched = ndpi.patch_and_checksum raw, pkt, answers, 60
 ndpi.cleanup!
 ```
 
-The old per-layer modules (`parse/ip`, `parse/udp`, `parse/dns`) remain
-available for reference or fallback.
-
 ---
 
 ## Authentication
@@ -478,13 +517,19 @@ accounts. The `from_user` filter condition allows rules such as
 
 ### Process model
 
-A third worker (`AUTH`) is forked by the supervisor alongside Q0 and Q1:
+A third worker (`AUTH`) is forked by the supervisor alongside the DNS workers,
+the captive portal worker, and several auxiliary workers:
 
 ```
 main (supervisor)
-├── worker Q0 (DNS questions)
-├── worker Q1 (DNS answers)
-└── worker AUTH (HTTPS login server)
+├── mac_learner          (table IP→MAC, socket Unix)
+├── worker_arp_sniffer   (ARP/NDP passif → pipe learn)
+├── worker_auth_queue    (NFQUEUE port 33443 → pipe auth_ipc)
+├── worker_questions ×N (DNS questions)
+├── worker_responses ×N (DNS réponses)
+├── worker_captive   ×N (TCP/80 SYN → AF_PACKET 302)
+├── worker_reject    ×N (forge RST/ICMP)
+└── worker AUTH          (HTTPS login server)
 ```
 
 Sessions are shared via a Lua-evaluable file (`tmp/sessions.lua`). Q0/Q1 workers
@@ -598,8 +643,13 @@ Plusieurs utilisateurs (OR logique) :
 ## Known Limitations
 
 - **DoH / DoT**: not covered (ports 443/853).
-- **Single-threaded per worker**: one worker per queue. For very
-  high throughput, use `--queue-balance N-M` with N workers per range.
+- **Scaling**: each worker processes its NFQUEUE socket single-threadedly by
+  design (share-nothing architecture). libnfq does support out-of-order verdicts
+  (each verdict references its packet by `packet_id`), but intra-queue parallelism
+  would require shared-state synchronisation in workers that maintain flow context
+  (nDPI, `pending` table, TCP reassembly). Horizontal scaling via multiple queue
+  numbers (`QUEUE_QUESTIONS="0,1,2"`) with nftables hash distribution
+  (`queue num 0-2`) is the correct approach.
 - **MAC spoofing**: `mac4_allowed`/`mac6_allowed` rely on the MAC address
   reported by `nfq_get_packet_hw`. On a bridge, this is the L2 source MAC
   and can be spoofed by a LAN client.
@@ -610,11 +660,16 @@ The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode
 
 ### How it works
 
-- DNS (UDP/TCP port 53) from LAN → **NFQUEUE 0** (questions, worker Q0)
-- DNS responses (sport 53) to LAN → **NFQUEUE 1** (responses, worker Q1)
-- TCP/80 SYN from LAN → **NFQUEUE 2** (captive portal, worker Q2)
+- DNS (UDP/TCP port 53) from LAN → **NFQUEUE_QUESTIONS** (`worker_questions`)
+- DNS responses (sport 53) to LAN → **NFQUEUE_RESPONSES** (`worker_responses`)
+- TCP/80 SYN from LAN → **NFQUEUE_CAPTIVE** (`worker_captive`)
+- TCP/33443 → **NFQUEUE_AUTH** (`worker_auth_queue`)
+- Rate-limited reject traffic → **NFQUEUE_REJECT** (`worker_reject`)
+- Queue numbers are **configurable via UCI** (`QUEUE_QUESTIONS`, `QUEUE_RESPONSES`,
+  `QUEUE_CAPTIVE`, `QUEUE_AUTH`, `QUEUE_REJECT`); defaults: 0, 1, 2, 5, 3.
+  Ranges like `"0,2,5-7"` spawn one worker per queue number.
 - LuaJIT decides ACCEPT, REFUSED, or DNSONLY; populates `ip4_allowed`/`ip6_allowed` on success
-- Clients in `authenticated_ips` bypass TCP/80 interception (Q2 sees their SYN and passes)
+- Clients in `authenticated_ips` bypass TCP/80 interception (QUEUE_CAPTIVE)
 - All forwarded traffic matching a set entry → ACCEPT; rest → DROP/REJECT
 
 ### Sets nftables
