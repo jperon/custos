@@ -192,8 +192,10 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- Un paquet DNS peut contenir plusieurs questions (rare en pratique,
   -- mais prévu par le RFC). On bloque si AU MOINS UNE question est refusée.
   -- Si toutes sont autorisées mais au moins une est "dnsonly", on envoie dnsonly.
-  verdict  = NF_ACCEPT
-  dnsonly  = false
+  verdict      = NF_ACCEPT
+  dnsonly      = false
+  block_reason = nil
+  allow_reason = nil
   q_fields = {
     mac_src:     l2.mac_src
     vlan:        l2.vlan
@@ -225,11 +227,14 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     if allowed == "dnsonly"
       log_allow q_fields
       dnsonly = true
+      allow_reason = reason
     elseif allowed
       log_allow q_fields
+      allow_reason = reason
     else
       log_block q_fields
       verdict = NF_DROP
+      block_reason = reason
 
   -- Enregistre la transaction IPC pour Q1 (toujours NF_ACCEPT — Q1 gère tout).
   -- Si autorisé   : Q1 patche TTL + injecte EDE "Custos vigilat."
@@ -238,11 +243,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   ipc_ok = false
   if verdict == NF_ACCEPT
     if dnsonly
-      ipc_ok = write_dnsonly_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw
+      ipc_ok = write_dnsonly_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason
     else
-      ipc_ok = write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw
+      ipc_ok = write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason
   else
-    ipc_ok = write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw
+    ipc_ok = write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason
 
   unless ipc_ok
     log_warn {

@@ -1,10 +1,10 @@
 -- src/ipc.moon
 -- Protocole IPC entre worker Q0 (questions) et worker Q1 (réponses).
 -- Transport : pipe Unix anonyme créé avant fork().
--- Les messages sont des enregistrements binaires de taille fixe (43 octets).
+-- Les messages sont des enregistrements binaires de taille fixe (107 octets).
 -- L'atomicité est garantie par POSIX pour les écritures <= PIPE_BUF (4096).
 --
--- Format du message (43 octets) :
+-- Format du message (107 octets) :
 --
 --   Octet 0      : version/type (6 bits) + flags (2 bits)
 --                  bits 6-0: message type/family
@@ -20,13 +20,16 @@
 --   Octets 19-20 : src_port (big-endian uint16)
 --   Octets 21-26 : adresse MAC source (6 octets, 0x00×6 si inconnue)
 --   Octets 27-42 : resolver_ip — 16 octets (IPv4 4 octets + 12 octets 0x00 ; IPv6 16 octets)
---   → Total : 43 octets, largement sous PIPE_BUF → écriture atomique garantie
+--   Octets 43-106 : reason — null-terminated UTF-8 (max 63 chars + null terminator)
+--   → Total : 107 octets, largement sous PIPE_BUF → écriture atomique garantie
 
 { :ffi, :libc } = require "ffi_defs"
 { :IPC_PENDING_TTL } = require "config"
 { :log_warn } = require "log"
 
-IPC_MSG_SIZE = 43
+IPC_MSG_SIZE   = 107
+REASON_OFFSET  = 43   -- offset C (0-based) où commence le champ reason
+REASON_SIZE    = 64   -- 63 chars max + null terminator
 IPC_WRITE_RETRY_COUNT = 5
 
 EAGAIN = 11
@@ -86,9 +89,10 @@ write_with_retry = (pipe_wfd, msg) ->
 -- @tparam string      resolver_ip_raw 4 ou 16 octets bruts de l'IP resolver
 -- @tparam boolean     refused   true si la transaction est refusée (Q1 spoofing REFUSED+EDE)
 -- @tparam boolean     dnsonly   true si DNS autorisé mais pas d'injection nft
+-- @tparam string|nil  reason    Raison textuelle (max 63 chars UTF-8, nil si absent)
 -- @treturn string message binaire de IPC_MSG_SIZE octets
-encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly) ->
-  buf = ffi.new "uint8_t[43]"
+encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly, reason) ->
+  buf = ffi.new "uint8_t[107]"
 
   -- Type : encode à la fois le refus/dnsonly et la famille d'adresse (IPv4/IPv6)
   msg_type = if #ip_raw == 4
@@ -99,10 +103,10 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly
     if dnsonly then MSG_IPV6_DNSONLY
     elseif refused then MSG_IPV6_REFUSED
     else MSG_IPV6
-  
+
   -- Set RESOLVER_IPV6_FLAG bit if resolver is IPv6
   msg_type = bit.bor msg_type, RESOLVER_IPV6_FLAG if #resolver_ip_raw == 16
-  
+
   buf[0] = msg_type
 
   -- txid big-endian
@@ -129,6 +133,13 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly
   for i = 1, #resolver_ip_raw
     buf[26 + i] = resolver_ip_raw\byte i
 
+  -- Reason: C bytes 43-106 (max REASON_SIZE-1 = 63 chars + implicit null)
+  if reason and #reason > 0
+    max_len = REASON_SIZE - 1
+    s = if #reason > max_len then reason\sub(1, max_len) else reason
+    for i = 1, #s
+      buf[REASON_OFFSET - 1 + i] = s\byte i
+
   ffi.string buf, IPC_MSG_SIZE
 
 --- Écrit un message IPC pour une transaction autorisée dans le pipe (côté Q0).
@@ -138,9 +149,10 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly
 -- @tparam number     src_port Port source
 -- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
 -- @tparam string     resolver_ip_raw 4 ou 16 octets bruts de l'IP resolver
+-- @tparam string|nil reason   Raison textuelle de l'autorisation (max 63 chars UTF-8, nil si absent)
 -- @treturn boolean true si l'écriture est complète
-write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false
+write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, reason
   write_with_retry pipe_wfd, msg
 
 --- Écrit un message IPC pour une transaction refusée dans le pipe (côté Q0).
@@ -151,9 +163,10 @@ write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw) ->
 -- @tparam number     src_port Port source
 -- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
 -- @tparam string     resolver_ip_raw 4 ou 16 octets bruts de l'IP resolver
+-- @tparam string|nil reason   Raison textuelle du refus (max 63 chars UTF-8, nil si absent)
 -- @treturn boolean true si l'écriture est complète
-write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false
+write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false, reason
   write_with_retry pipe_wfd, msg
 
 --- Écrit un message IPC pour une transaction DNS-seulement dans le pipe (côté Q0).
@@ -165,22 +178,23 @@ write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw)
 -- @tparam number     src_port Port source
 -- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
 -- @tparam string     resolver_ip_raw 4 ou 16 octets bruts de l'IP resolver
+-- @tparam string|nil reason   Raison textuelle de l'autorisation (max 63 chars UTF-8, nil si absent)
 -- @treturn boolean true si l'écriture est complète
-write_dnsonly_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true
+write_dnsonly_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true, reason
   write_with_retry pipe_wfd, msg
 
 -- ── Décodage (côté Q1) ───────────────────────────────────────────
 --- Décode un message binaire IPC en table.
 -- @tparam  string    raw Message de IPC_MSG_SIZE octets
--- @treturn table|nil Table {txid, ip_str, src_port, resolver_ip_str, msg_type, mac_str, ipv4, refused} ou nil si invalide
+-- @treturn table|nil Table {txid, ip_str, src_port, resolver_ip_str, msg_type, mac_str, ipv4, refused, reason} ou nil si invalide
 decode_msg = (raw) ->
   return nil if #raw < IPC_MSG_SIZE
 
   msg_type_full = raw\byte 1
   msg_type      = bit.band msg_type_full, 0x7F  -- mask out RESOLVER_IPV6_FLAG
   resolver_ipv6 = (bit.band(msg_type_full, RESOLVER_IPV6_FLAG) != 0)
-  
+
   txid     = bit.bor bit.lshift(raw\byte(2), 8), raw\byte(3)
   src_port = bit.bor bit.lshift(raw\byte(20), 8), raw\byte(21)
 
@@ -213,7 +227,15 @@ decode_msg = (raw) ->
     raw\byte(22), raw\byte(23), raw\byte(24),
     raw\byte(25), raw\byte(26), raw\byte(27)
 
-  { :txid, :ip_str, :src_port, :resolver_ip_str, :msg_type, :mac_str, :ipv4, :refused, :dnsonly }
+  -- Reason: C bytes 43-106 = Lua 1-based bytes 44-107
+  reason_parts = {}
+  for i = 44, 107
+    b = raw\byte i
+    break if b == 0
+    reason_parts[#reason_parts + 1] = string.char b
+  reason = table.concat reason_parts
+
+  { :txid, :ip_str, :src_port, :resolver_ip_str, :msg_type, :mac_str, :ipv4, :refused, :dnsonly, :reason }
 
 -- ── Table des transactions en attente (côté Q1) ──────────────────
 -- pending[key] = {expire: expire_time, refused: bool}
@@ -247,7 +269,7 @@ drain_pipe = (pipe_rfd, now_fn, on_msg) ->
       msg = decode_msg raw
       if msg
         key = make_key msg.txid, msg.ip_str, msg.src_port, msg.resolver_ip_str
-        pending[key] = { expire: now_fn! + IPC_PENDING_TTL, refused: msg.refused, dnsonly: msg.dnsonly }
+        pending[key] = { expire: now_fn! + IPC_PENDING_TTL, refused: msg.refused, dnsonly: msg.dnsonly, reason: msg.reason }
         absorbed += 1
         on_msg msg if on_msg
 

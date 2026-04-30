@@ -50,8 +50,6 @@ do
 end
 local EDE_BLOCKED = ede_codes.Filtered
 local EDE_TTL_MODIFIED = ede_codes.Forged_Answer
-local EDE_BLOCKED_TEXT = "Ne intretis."
-local EDE_TTL_TEXT = "Custos vigilat."
 local add_ede
 add_ede = function(self, ede_code, text)
   for i = #(self.additionals or { }), 1, -1 do
@@ -71,7 +69,7 @@ add_ede = function(self, ede_code, text)
   return self
 end
 local build_blocked_response
-build_blocked_response = function(dns_orig, dns_raw)
+build_blocked_response = function(dns_orig, dns_raw, reason)
   if not (dns_orig and dns_raw) then
     return nil
   end
@@ -100,16 +98,28 @@ build_blocked_response = function(dns_orig, dns_raw)
     }
     dns.header.ancount = 1
   end
-  add_ede(dns, EDE_BLOCKED, EDE_BLOCKED_TEXT)
+  local ede_text
+  if reason and reason ~= "" then
+    ede_text = "Ne intretis. " .. reason
+  else
+    ede_text = "Ne intretis."
+  end
+  add_ede(dns, EDE_BLOCKED, ede_text)
   return tostring(dns)
 end
 local add_ede_ttl
-add_ede_ttl = function(dns_payload)
+add_ede_ttl = function(dns_payload, reason)
   local dns = parse(dns_payload, 1, false)
   if not (dns) then
     return dns_payload
   end
-  add_ede(dns, EDE_TTL_MODIFIED, EDE_TTL_TEXT)
+  local ede_text
+  if reason and reason ~= "" then
+    ede_text = "Custos vigilat. " .. reason
+  else
+    ede_text = "Custos vigilat."
+  end
+  add_ede(dns, EDE_TTL_MODIFIED, ede_text)
   return tostring(dns)
 end
 local IPC_RETRY_ENABLED
@@ -303,7 +313,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local dnsonly = entry and entry.dnsonly or false
   if refused then
     local dns_raw = ndpi.extract_dns_payload(raw, pkt)
-    local refused_dns = build_blocked_response(pkt.dns, dns_raw)
+    local refused_dns = build_blocked_response(pkt.dns, dns_raw, entry.reason)
     if not (refused_dns) then
       return NF_DROP
     end
@@ -433,7 +443,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local dns_raw = ndpi.extract_dns_payload(raw, pkt)
   local new_dns = ndpi.patch_ttl_in_dns(dns_raw, answers, FORCED_TTL)
-  new_dns = add_ede_ttl(new_dns) or new_dns
+  new_dns = add_ede_ttl(new_dns, entry.reason) or new_dns
   local patched = ndpi.replace_dns_payload(raw, pkt, new_dns)
   local qnames = table.concat((function()
     local _accum_0 = { }

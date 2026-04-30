@@ -491,7 +491,7 @@ test("encode/decode IPv4 round-trip", function()
   local txid = 0x1234
   local port = 54321
   local msg = encode_msg(txid, ip_raw, port, mac_raw, resolver_raw)
-  assert_eq(#msg, 43, "taille message = 43")
+  assert_eq(#msg, 107, "taille message = 107")
   local decoded = decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.txid, txid, "txid")
@@ -505,7 +505,7 @@ test("encode/decode IPv4 round-trip sans MAC (nil)", function()
   local ip_raw = "\xC0\xA8\x01\x2A"
   local resolver_raw = "\x01\x01\x01\x01"
   local msg = encode_msg(0x1234, ip_raw, 54321, nil, resolver_raw)
-  assert_eq(#msg, 43, "taille message = 43 meme sans MAC")
+  assert_eq(#msg, 107, "taille message = 107 meme sans MAC")
   local decoded = decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.resolver_ip_str, "1.1.1.1", "resolver_ip_str")
@@ -518,7 +518,7 @@ test("encode/decode IPv6 round-trip", function()
   local txid = 0xABCD
   local port = 5353
   local msg = encode_msg(txid, ip_raw, port, mac_raw, resolver_raw)
-  assert_eq(#msg, 43, "taille message = 43")
+  assert_eq(#msg, 107, "taille message = 107")
   local decoded = decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.txid, txid, "txid")
@@ -537,7 +537,7 @@ test("make_key — unicité", function()
   assert((k1 ~= k3), "txid différents → clés différentes")
   return assert((k1 ~= k4), "resolver différents → clés différentes")
 end)
-test("drain_pipe — lit IPC_MSG_SIZE=43 octets sans overflow", function()
+test("drain_pipe — lit IPC_MSG_SIZE=107 octets sans overflow", function()
   pcall(ffi.cdef, [[    int pipe2(int pipefd[2], int flags);
     int fcntl(int fd, int cmd, ...);
     int close(int fd);
@@ -728,7 +728,7 @@ test("encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", function()
   local ip_raw = "\xC0\xA8\x01\x2A"
   local resolver_raw = "\x01\x01\x01\x03"
   local msg = m_ipc.encode_msg(0x1234, ip_raw, 54321, nil, resolver_raw, true, false)
-  assert_eq(#msg, 43, "taille = 43")
+  assert_eq(#msg, 107, "taille = 107")
   local decoded = m_ipc.decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.msg_type, m_ipc.MSG_IPV4_REFUSED, "msg_type = MSG_IPV4_REFUSED")
@@ -749,7 +749,7 @@ test("encode_msg dnsonly=true IPv4 → MSG_IPV4_DNSONLY (0x44)", function()
   local ip_raw = "\xC0\xA8\x01\x2A"
   local resolver_raw = "\x01\x01\x01\x03"
   local msg = m_ipc.encode_msg(0x1234, ip_raw, 54321, nil, resolver_raw, false, true)
-  assert_eq(#msg, 43, "taille = 43")
+  assert_eq(#msg, 107, "taille = 107")
   local decoded = m_ipc.decode_msg(msg)
   assert(decoded, "decode_msg nil")
   assert_eq(decoded.msg_type, m_ipc.MSG_IPV4_DNSONLY, "msg_type = MSG_IPV4_DNSONLY (0x44)")
@@ -813,6 +813,120 @@ test("write_refused_msg + drain_pipe + get_pending_entry → entry.refused = tru
   assert(entry, "get_pending_entry retourne nil")
   assert_eq(entry.refused, true, "entry.refused = true")
   return assert((entry.expire > 0), "entry.expire > 0")
+end)
+test("ipc — reason round-trip via encode/decode", function()
+  local ip_raw = "\xC0\xA8\x01\x01"
+  local resolver_raw = "\x01\x01\x01\x01"
+  local reason_in = "Denied by rule: Contrôle parental"
+  local msg = m_ipc.encode_msg(0x1234, ip_raw, 53, nil, resolver_raw, true, false, reason_in)
+  assert_eq(#msg, 107, "taille = 107 avec reason")
+  local decoded = m_ipc.decode_msg(msg)
+  assert(decoded, "decode_msg nil")
+  return assert_eq(decoded.reason, reason_in, "reason round-trip")
+end)
+test("ipc — reason tronquée à 63 chars", function()
+  local ip_raw = "\xC0\xA8\x01\x01"
+  local resolver_raw = "\x01\x01\x01\x01"
+  local reason_long = string.rep("A", 100)
+  local msg = m_ipc.encode_msg(0x5678, ip_raw, 53, nil, resolver_raw, true, false, reason_long)
+  local decoded = m_ipc.decode_msg(msg)
+  assert(decoded, "decode_msg nil")
+  assert_eq(#decoded.reason, 63, "reason tronquée à 63 chars")
+  return assert_eq(decoded.reason, string.rep("A", 63), "contenu tronqué correct")
+end)
+test("ipc — write_refused_msg avec reason → entry.reason préservé", function()
+  package.loaded["ipc"] = nil
+  local m_r2 = dofile("lua/ipc.lua")
+  local pfd2 = ffi.new("int[2]")
+  assert((ffi.C.pipe2(pfd2, 0) == 0), "pipe2")
+  local rfd_r2, wfd_r2 = pfd2[0], pfd2[1]
+  ffi.C.fcntl(rfd_r2, 4, 2048)
+  local ip_r2 = "\x07\x07\x07\x07"
+  local resolver_r2 = "\x01\x01\x01\x01"
+  local reason_r2 = "No matching rule (default deny)"
+  local ok = m_r2.write_refused_msg(wfd_r2, 0xBBBB, ip_r2, 7777, nil, resolver_r2, reason_r2)
+  assert(ok, "write_refused_msg avec reason failed")
+  ffi.C.close(wfd_r2)
+  m_r2.drain_pipe(rfd_r2, function()
+    return 0
+  end)
+  ffi.C.close(rfd_r2)
+  local entry2 = m_r2.get_pending_entry(0xBBBB, "7.7.7.7", 7777, "1.1.1.1", function()
+    return 0
+  end)
+  assert(entry2, "get_pending_entry retourne nil")
+  assert_eq(entry2.refused, true, "entry.refused = true")
+  return assert_eq(entry2.reason, reason_r2, "entry.reason préservé")
+end)
+test("ipc — reason absente → entry.reason vide ou nil", function()
+  package.loaded["ipc"] = nil
+  local m_r3 = dofile("lua/ipc.lua")
+  local pfd3 = ffi.new("int[2]")
+  assert((ffi.C.pipe2(pfd3, 0) == 0), "pipe2")
+  local rfd_r3, wfd_r3 = pfd3[0], pfd3[1]
+  ffi.C.fcntl(rfd_r3, 4, 2048)
+  local ip_r3 = "\x08\x08\x08\x08"
+  local resolver_r3 = "\x01\x01\x01\x01"
+  local ok = m_r3.write_refused_msg(wfd_r3, 0xCCCC, ip_r3, 8888, nil, resolver_r3)
+  assert(ok, "write_refused_msg sans reason failed")
+  ffi.C.close(wfd_r3)
+  m_r3.drain_pipe(rfd_r3, function()
+    return 0
+  end)
+  ffi.C.close(rfd_r3)
+  local entry3 = m_r3.get_pending_entry(0xCCCC, "8.8.8.8", 8888, "1.1.1.1", function()
+    return 0
+  end)
+  assert(entry3, "get_pending_entry retourne nil")
+  return assert((entry3.reason == nil or entry3.reason == ""), "reason absente = nil ou vide")
+end)
+test("ipc — write_msg avec reason → entry.reason préservé", function()
+  package.loaded["ipc"] = nil
+  local m_allow = dofile("lua/ipc.lua")
+  local pfd_a = ffi.new("int[2]")
+  assert((ffi.C.pipe2(pfd_a, 0) == 0), "pipe2")
+  local rfd_a, wfd_a = pfd_a[0], pfd_a[1]
+  ffi.C.fcntl(rfd_a, 4, 2048)
+  local ip_a = "\x0A\x00\x01\x01"
+  local resolver_a = "\x01\x01\x01\x01"
+  local reason_a = "Allowed by rule: Accès général"
+  local ok = m_allow.write_msg(wfd_a, 0xAAAA, ip_a, 1111, nil, resolver_a, reason_a)
+  assert(ok, "write_msg avec reason failed")
+  ffi.C.close(wfd_a)
+  m_allow.drain_pipe(rfd_a, function()
+    return 0
+  end)
+  ffi.C.close(rfd_a)
+  local entry_a = m_allow.get_pending_entry(0xAAAA, "10.0.1.1", 1111, "1.1.1.1", function()
+    return 0
+  end)
+  assert(entry_a, "get_pending_entry retourne nil")
+  assert_eq(entry_a.refused, false, "entry.refused = false (allow)")
+  return assert_eq(entry_a.reason, reason_a, "entry.reason préservé (allow)")
+end)
+test("ipc — write_dnsonly_msg avec reason → entry.reason préservé", function()
+  package.loaded["ipc"] = nil
+  local m_dns2 = dofile("lua/ipc.lua")
+  local pfd_d = ffi.new("int[2]")
+  assert((ffi.C.pipe2(pfd_d, 0) == 0), "pipe2")
+  local rfd_d, wfd_d = pfd_d[0], pfd_d[1]
+  ffi.C.fcntl(rfd_d, 4, 2048)
+  local ip_d = "\x0A\x00\x02\x02"
+  local resolver_d = "\x01\x01\x01\x01"
+  local reason_d = "Allowed by rule: DNS only zone"
+  local ok = m_dns2.write_dnsonly_msg(wfd_d, 0xBBBB, ip_d, 2222, nil, resolver_d, reason_d)
+  assert(ok, "write_dnsonly_msg avec reason failed")
+  ffi.C.close(wfd_d)
+  m_dns2.drain_pipe(rfd_d, function()
+    return 0
+  end)
+  ffi.C.close(rfd_d)
+  local entry_d = m_dns2.get_pending_entry(0xBBBB, "10.0.2.2", 2222, "1.1.1.1", function()
+    return 0
+  end)
+  assert(entry_d, "get_pending_entry retourne nil")
+  assert_eq(entry_d.dnsonly, true, "entry.dnsonly = true")
+  return assert_eq(entry_d.reason, reason_d, "entry.reason préservé (dnsonly)")
 end)
 io.write("\n── filter ──\n")
 local bsearch

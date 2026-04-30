@@ -815,7 +815,7 @@ test "encode/decode IPv4 round-trip", ->
   txid    = 0x1234
   port    = 54321
   msg     = encode_msg txid, ip_raw, port, mac_raw, resolver_raw
-  assert_eq #msg, 43, "taille message = 43"
+  assert_eq #msg, 107, "taille message = 107"
   decoded = decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.txid,     txid,               "txid"
@@ -829,7 +829,7 @@ test "encode/decode IPv4 round-trip sans MAC (nil)", ->
   ip_raw = "\xC0\xA8\x01\x2A"
   resolver_raw = "\x01\x01\x01\x01"
   msg    = encode_msg 0x1234, ip_raw, 54321, nil, resolver_raw
-  assert_eq #msg, 43, "taille message = 43 meme sans MAC"
+  assert_eq #msg, 107, "taille message = 107 meme sans MAC"
   decoded = decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.resolver_ip_str, "1.1.1.1", "resolver_ip_str"
@@ -842,7 +842,7 @@ test "encode/decode IPv6 round-trip", ->
   txid   = 0xABCD
   port   = 5353
   msg    = encode_msg txid, ip_raw, port, mac_raw, resolver_raw
-  assert_eq #msg, 43, "taille message = 43"
+  assert_eq #msg, 107, "taille message = 107"
   decoded = decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.txid,     txid,                    "txid"
@@ -861,7 +861,7 @@ test "make_key — unicité", ->
   assert (k1 ~= k3), "txid différents → clés différentes"
   assert (k1 ~= k4), "resolver différents → clés différentes"
 
-test "drain_pipe — lit IPC_MSG_SIZE=43 octets sans overflow", ->
+test "drain_pipe — lit IPC_MSG_SIZE=107 octets sans overflow", ->
   -- Déclare les appels POSIX nécessaires (pcall évite l'erreur si déjà déclarés)
   pcall ffi.cdef, [[
     int pipe2(int pipefd[2], int flags);
@@ -890,7 +890,7 @@ test "drain_pipe — lit IPC_MSG_SIZE=43 octets sans overflow", ->
   ok = m2.write_msg wfd, txid2, ip_raw2, port2, mac_raw2, resolver_raw2
   assert ok, "write_msg failed"
   ffi.C.close wfd
-  -- drain_pipe doit lire les 43 octets sans segfault ni corruption
+  -- drain_pipe doit lire les 107 octets sans segfault ni corruption
   m2.drain_pipe rfd, os.time
   ffi.C.close rfd
   -- Le message doit être présent dans pending après drain
@@ -1266,7 +1266,7 @@ test "encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52)", ->
   ip_raw  = "\xC0\xA8\x01\x2A"
   resolver_raw = "\x01\x01\x01\x03"
   msg     = m_ipc.encode_msg 0x1234, ip_raw, 54321, nil, resolver_raw, true, false
-  assert_eq #msg, 43, "taille = 43"
+  assert_eq #msg, 107, "taille = 107"
   decoded = m_ipc.decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.msg_type, m_ipc.MSG_IPV4_REFUSED, "msg_type = MSG_IPV4_REFUSED"
@@ -1287,7 +1287,7 @@ test "encode_msg dnsonly=true IPv4 → MSG_IPV4_DNSONLY (0x44)", ->
   ip_raw  = "\xC0\xA8\x01\x2A"
   resolver_raw = "\x01\x01\x01\x03"
   msg     = m_ipc.encode_msg 0x1234, ip_raw, 54321, nil, resolver_raw, false, true
-  assert_eq #msg, 43, "taille = 43"
+  assert_eq #msg, 107, "taille = 107"
   decoded = m_ipc.decode_msg msg
   assert decoded, "decode_msg nil"
   assert_eq decoded.msg_type, m_ipc.MSG_IPV4_DNSONLY, "msg_type = MSG_IPV4_DNSONLY (0x44)"
@@ -1343,6 +1343,104 @@ test "write_refused_msg + drain_pipe + get_pending_entry → entry.refused = tru
   assert entry, "get_pending_entry retourne nil"
   assert_eq entry.refused, true, "entry.refused = true"
   assert (entry.expire > 0), "entry.expire > 0"
+
+test "ipc — reason round-trip via encode/decode", ->
+  ip_raw  = "\xC0\xA8\x01\x01"
+  resolver_raw = "\x01\x01\x01\x01"
+  reason_in = "Denied by rule: Contrôle parental"
+  msg = m_ipc.encode_msg 0x1234, ip_raw, 53, nil, resolver_raw, true, false, reason_in
+  assert_eq #msg, 107, "taille = 107 avec reason"
+  decoded = m_ipc.decode_msg msg
+  assert decoded, "decode_msg nil"
+  assert_eq decoded.reason, reason_in, "reason round-trip"
+
+test "ipc — reason tronquée à 63 chars", ->
+  ip_raw       = "\xC0\xA8\x01\x01"
+  resolver_raw = "\x01\x01\x01\x01"
+  reason_long  = string.rep "A", 100
+  msg     = m_ipc.encode_msg 0x5678, ip_raw, 53, nil, resolver_raw, true, false, reason_long
+  decoded = m_ipc.decode_msg msg
+  assert decoded, "decode_msg nil"
+  assert_eq #decoded.reason, 63, "reason tronquée à 63 chars"
+  assert_eq decoded.reason, string.rep("A", 63), "contenu tronqué correct"
+
+test "ipc — write_refused_msg avec reason → entry.reason préservé", ->
+  package.loaded["ipc"] = nil
+  m_r2 = dofile "lua/ipc.lua"
+  pfd2 = ffi.new "int[2]"
+  assert (ffi.C.pipe2(pfd2, 0) == 0), "pipe2"
+  rfd_r2, wfd_r2 = pfd2[0], pfd2[1]
+  ffi.C.fcntl rfd_r2, 4, 2048
+  ip_r2 = "\x07\x07\x07\x07"
+  resolver_r2 = "\x01\x01\x01\x01"
+  reason_r2 = "No matching rule (default deny)"
+  ok = m_r2.write_refused_msg wfd_r2, 0xBBBB, ip_r2, 7777, nil, resolver_r2, reason_r2
+  assert ok, "write_refused_msg avec reason failed"
+  ffi.C.close wfd_r2
+  m_r2.drain_pipe rfd_r2, -> 0
+  ffi.C.close rfd_r2
+  entry2 = m_r2.get_pending_entry 0xBBBB, "7.7.7.7", 7777, "1.1.1.1", -> 0
+  assert entry2, "get_pending_entry retourne nil"
+  assert_eq entry2.refused, true, "entry.refused = true"
+  assert_eq entry2.reason, reason_r2, "entry.reason préservé"
+
+test "ipc — reason absente → entry.reason vide ou nil", ->
+  package.loaded["ipc"] = nil
+  m_r3 = dofile "lua/ipc.lua"
+  pfd3 = ffi.new "int[2]"
+  assert (ffi.C.pipe2(pfd3, 0) == 0), "pipe2"
+  rfd_r3, wfd_r3 = pfd3[0], pfd3[1]
+  ffi.C.fcntl rfd_r3, 4, 2048
+  ip_r3 = "\x08\x08\x08\x08"
+  resolver_r3 = "\x01\x01\x01\x01"
+  ok = m_r3.write_refused_msg wfd_r3, 0xCCCC, ip_r3, 8888, nil, resolver_r3
+  assert ok, "write_refused_msg sans reason failed"
+  ffi.C.close wfd_r3
+  m_r3.drain_pipe rfd_r3, -> 0
+  ffi.C.close rfd_r3
+  entry3 = m_r3.get_pending_entry 0xCCCC, "8.8.8.8", 8888, "1.1.1.1", -> 0
+  assert entry3, "get_pending_entry retourne nil"
+  assert (entry3.reason == nil or entry3.reason == ""), "reason absente = nil ou vide"
+
+test "ipc — write_msg avec reason → entry.reason préservé", ->
+  package.loaded["ipc"] = nil
+  m_allow = dofile "lua/ipc.lua"
+  pfd_a = ffi.new "int[2]"
+  assert (ffi.C.pipe2(pfd_a, 0) == 0), "pipe2"
+  rfd_a, wfd_a = pfd_a[0], pfd_a[1]
+  ffi.C.fcntl rfd_a, 4, 2048
+  ip_a = "\x0A\x00\x01\x01"
+  resolver_a = "\x01\x01\x01\x01"
+  reason_a = "Allowed by rule: Accès général"
+  ok = m_allow.write_msg wfd_a, 0xAAAA, ip_a, 1111, nil, resolver_a, reason_a
+  assert ok, "write_msg avec reason failed"
+  ffi.C.close wfd_a
+  m_allow.drain_pipe rfd_a, -> 0
+  ffi.C.close rfd_a
+  entry_a = m_allow.get_pending_entry 0xAAAA, "10.0.1.1", 1111, "1.1.1.1", -> 0
+  assert entry_a, "get_pending_entry retourne nil"
+  assert_eq entry_a.refused, false, "entry.refused = false (allow)"
+  assert_eq entry_a.reason, reason_a, "entry.reason préservé (allow)"
+
+test "ipc — write_dnsonly_msg avec reason → entry.reason préservé", ->
+  package.loaded["ipc"] = nil
+  m_dns2 = dofile "lua/ipc.lua"
+  pfd_d = ffi.new "int[2]"
+  assert (ffi.C.pipe2(pfd_d, 0) == 0), "pipe2"
+  rfd_d, wfd_d = pfd_d[0], pfd_d[1]
+  ffi.C.fcntl rfd_d, 4, 2048
+  ip_d = "\x0A\x00\x02\x02"
+  resolver_d = "\x01\x01\x01\x01"
+  reason_d = "Allowed by rule: DNS only zone"
+  ok = m_dns2.write_dnsonly_msg wfd_d, 0xBBBB, ip_d, 2222, nil, resolver_d, reason_d
+  assert ok, "write_dnsonly_msg avec reason failed"
+  ffi.C.close wfd_d
+  m_dns2.drain_pipe rfd_d, -> 0
+  ffi.C.close rfd_d
+  entry_d = m_dns2.get_pending_entry 0xBBBB, "10.0.2.2", 2222, "1.1.1.1", -> 0
+  assert entry_d, "get_pending_entry retourne nil"
+  assert_eq entry_d.dnsonly, true,  "entry.dnsonly = true"
+  assert_eq entry_d.reason, reason_d, "entry.reason préservé (dnsonly)"
 
 -- ════════════════════════════════════════════════════════════════
 -- Tests filter — conditions, rule, intégration

@@ -7,7 +7,9 @@ local IPC_PENDING_TTL
 IPC_PENDING_TTL = require("config").IPC_PENDING_TTL
 local log_warn
 log_warn = require("log").log_warn
-local IPC_MSG_SIZE = 43
+local IPC_MSG_SIZE = 107
+local REASON_OFFSET = 43
+local REASON_SIZE = 64
 local IPC_WRITE_RETRY_COUNT = 5
 local EAGAIN = 11
 local EWOULDBLOCK = 11
@@ -66,8 +68,8 @@ write_with_retry = function(pipe_wfd, msg)
   return false
 end
 local encode_msg
-encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly)
-  local buf = ffi.new("uint8_t[43]")
+encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly, reason)
+  local buf = ffi.new("uint8_t[107]")
   local msg_type
   if #ip_raw == 4 then
     if dnsonly then
@@ -105,21 +107,33 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
   for i = 1, #resolver_ip_raw do
     buf[26 + i] = resolver_ip_raw:byte(i)
   end
+  if reason and #reason > 0 then
+    local max_len = REASON_SIZE - 1
+    local s
+    if #reason > max_len then
+      s = reason:sub(1, max_len)
+    else
+      s = reason
+    end
+    for i = 1, #s do
+      buf[REASON_OFFSET - 1 + i] = s:byte(i)
+    end
+  end
   return ffi.string(buf, IPC_MSG_SIZE)
 end
 local write_msg
-write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false)
+write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, reason)
   return write_with_retry(pipe_wfd, msg)
 end
 local write_refused_msg
-write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false)
+write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false, reason)
   return write_with_retry(pipe_wfd, msg)
 end
 local write_dnsonly_msg
-write_dnsonly_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true)
+write_dnsonly_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true, reason)
   return write_with_retry(pipe_wfd, msg)
 end
 local decode_msg
@@ -158,6 +172,15 @@ decode_msg = function(raw)
     resolver_ip_str = tostring(raw:byte(28)) .. "." .. tostring(raw:byte(29)) .. "." .. tostring(raw:byte(30)) .. "." .. tostring(raw:byte(31))
   end
   local mac_str = string.format("%02x:%02x:%02x:%02x:%02x:%02x", raw:byte(22), raw:byte(23), raw:byte(24), raw:byte(25), raw:byte(26), raw:byte(27))
+  local reason_parts = { }
+  for i = 44, 107 do
+    local b = raw:byte(i)
+    if b == 0 then
+      break
+    end
+    reason_parts[#reason_parts + 1] = string.char(b)
+  end
+  local reason = table.concat(reason_parts)
   return {
     txid = txid,
     ip_str = ip_str,
@@ -167,7 +190,8 @@ decode_msg = function(raw)
     mac_str = mac_str,
     ipv4 = ipv4,
     refused = refused,
-    dnsonly = dnsonly
+    dnsonly = dnsonly,
+    reason = reason
   }
 end
 local pending = { }
@@ -199,7 +223,8 @@ drain_pipe = function(pipe_rfd, now_fn, on_msg)
         pending[key] = {
           expire = now_fn() + IPC_PENDING_TTL,
           refused = msg.refused,
-          dnsonly = msg.dnsonly
+          dnsonly = msg.dnsonly,
+          reason = msg.reason
         }
         absorbed = absorbed + 1
         if on_msg then

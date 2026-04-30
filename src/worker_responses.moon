@@ -45,10 +45,6 @@ pack: sp = require"ipparse.lib.pack_compat"
 EDE_BLOCKED = ede_codes.Filtered  -- 17
 EDE_TTL_MODIFIED = ede_codes.Forged_Answer       -- 4
 
--- Message texts
-EDE_BLOCKED_TEXT = "Ne intretis."
-EDE_TTL_TEXT = "Custos vigilat."
-
 -- Add or replace EDNS EDE option in DNS message
 -- Following shelterwall pattern: remove existing OPT RR, add new one with EDE
 add_ede = (ede_code, text) =>
@@ -70,7 +66,7 @@ add_ede = (ede_code, text) =>
   @
 
 -- Build blocked DNS response: REFUSED + synthetic 0.0.0.0/:: + EDE 17
-build_blocked_response = (dns_orig, dns_raw) ->
+build_blocked_response = (dns_orig, dns_raw, reason) ->
   return nil unless dns_orig and dns_raw
 
   -- Parse original DNS message (dns_raw is already extracted DNS payload)
@@ -101,20 +97,28 @@ build_blocked_response = (dns_orig, dns_raw) ->
     }
     dns.header.ancount = 1
 
-  -- Add EDE 17 (Blocked) with "Ne intretis."
-  add_ede dns, EDE_BLOCKED, EDE_BLOCKED_TEXT
+  -- Add EDE 17 (Blocked) with reason from filter.decide
+  ede_text = if reason and reason != ""
+    "Ne intretis. " .. reason
+  else
+    "Ne intretis."
+  add_ede dns, EDE_BLOCKED, ede_text
 
   -- Pack DNS message
   tostring dns
 
 -- Add EDE 4 (DNSSEC_Bogus) to DNS message for TTL-modified responses
-add_ede_ttl = (dns_payload) ->
+add_ede_ttl = (dns_payload, reason) ->
   -- Parse DNS message
   dns = parse dns_payload, 1, false
   return dns_payload unless dns
 
-  -- Add EDE 4 with "Custos vigilat."
-  add_ede dns, EDE_TTL_MODIFIED, EDE_TTL_TEXT
+  -- Add EDE 4 with reason from filter.decide
+  ede_text = if reason and reason != ""
+    "Custos vigilat. " .. reason
+  else
+    "Custos vigilat."
+  add_ede dns, EDE_TTL_MODIFIED, ede_text
 
   -- Pack DNS message
   tostring dns
@@ -327,7 +331,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- ── Branche REFUSED : réponse du serveur transformée en REFUSED+EDE ──
   if refused
     dns_raw    = ndpi.extract_dns_payload raw, pkt
-    refused_dns = build_blocked_response pkt.dns, dns_raw
+    refused_dns = build_blocked_response pkt.dns, dns_raw, entry.reason
     unless refused_dns
       return NF_DROP
     patched = ndpi.replace_dns_payload raw, pkt, refused_dns
@@ -418,7 +422,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- 4. Reconstruire le paquet IP complet avec le nouveau payload
   dns_raw = ndpi.extract_dns_payload raw, pkt
   new_dns = ndpi.patch_ttl_in_dns dns_raw, answers, FORCED_TTL
-  new_dns = add_ede_ttl(new_dns) or new_dns
+  new_dns = add_ede_ttl(new_dns, entry.reason) or new_dns
   patched = ndpi.replace_dns_payload raw, pkt, new_dns
 
   -- Log de la réponse

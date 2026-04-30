@@ -185,6 +185,8 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   end
   local verdict = NF_ACCEPT
   local dnsonly = false
+  local block_reason = nil
+  local allow_reason = nil
   local q_fields = {
     mac_src = l2.mac_src,
     vlan = l2.vlan,
@@ -215,22 +217,25 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     if allowed == "dnsonly" then
       log_allow(q_fields)
       dnsonly = true
+      allow_reason = reason
     elseif allowed then
       log_allow(q_fields)
+      allow_reason = reason
     else
       log_block(q_fields)
       verdict = NF_DROP
+      block_reason = reason
     end
   end
   local ipc_ok = false
   if verdict == NF_ACCEPT then
     if dnsonly then
-      ipc_ok = write_dnsonly_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw)
+      ipc_ok = write_dnsonly_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason)
     else
-      ipc_ok = write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw)
+      ipc_ok = write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason)
     end
   else
-    ipc_ok = write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw)
+    ipc_ok = write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason)
   end
   if not (ipc_ok) then
     log_warn({
