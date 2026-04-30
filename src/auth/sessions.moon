@@ -136,7 +136,7 @@ session_for_mac = (mac, ip, path, sessions_arg) ->
   s = sessions_table[lookup_mac]
 
   -- Fallback : si la MAC est inconnue mais qu'une IP est fournie, on cherche
-  -- dans toutes les sessions si une d'entre elles possède cette IP.
+  -- dans toutes les sessions si une d'entre elles possède cette IP exacte.
   if not s and ip
     for m, sess in pairs sessions_table
       if sess.ips

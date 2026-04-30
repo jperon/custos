@@ -133,6 +133,24 @@ success_page = (auth_cfg, created_at) ->
       setInterval(updateTimer, 10000);
       ping();
       updateTimer();
+      // Envoyer un ping immédiat au retour en foreground (anti-throttling navigateur).
+      document.addEventListener('visibilitychange', function(){
+        if (document.visibilityState === 'visible') ping();
+      });
+      // Déconnexion explicite à la fermeture du navigateur / de l'onglet.
+      // sendBeacon est envoyé de manière garantie même pendant le déchargement.
+      // pagehide est plus fiable que beforeunload sur mobile (iOS Safari).
+      // On ne déconnecte pas si la page est mise en BFCache (event.persisted).
+      function logout(){
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/logout');
+        } else {
+          fetch('/logout', {method:'GET', keepalive:true, credentials:'omit'});
+        }
+      }
+      window.addEventListener('pagehide', function(e){
+        if (!e.persisted) logout();
+      });
     "
   }
 
@@ -430,7 +448,7 @@ make_server4 = (port) ->
   unless ok
     srv\close!
     return nil, err
-  srv\listen 8
+  srv\listen 32
   srv\settimeout 1
   srv
 
@@ -446,7 +464,7 @@ make_server6 = (port) ->
   unless ok62
     srv6\close!
     return nil
-  srv6\listen 8
+  srv6\listen 32
   srv6\settimeout 1
   srv6
 

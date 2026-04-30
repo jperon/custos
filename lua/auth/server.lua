@@ -163,7 +163,7 @@ success_page = function(auth_cfg, created_at)
     H.p(H.a({
       href = "/logout"
     }, "Déconnexion")),
-    H.script("\n      var iv = " .. tostring(interval) .. " * 1000;\n      var sessionStart = " .. tostring(session_start) .. ";\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'omit'})\n          .then(function(r){ if(r.status===401) location.href='/'; })\n          .catch(function(){});\n      }\n      function updateTimer(){\n        var now = Math.floor(Date.now() / 1000);\n        var elapsed = now - sessionStart;\n        if (elapsed < 0) elapsed = 0;\n        var h = Math.floor(elapsed / 3600);\n        var m = Math.floor((elapsed % 3600) / 60);\n        var txt;\n        if (h > 0) {\n          txt = h + 'h ' + (m < 10 ? '0' : '') + m + 'min';\n        } else {\n          txt = m + ' min';\n        }\n        var el = document.getElementById('session-timer');\n        if (el) el.textContent = 'Session ouverte depuis : ' + txt;\n      }\n      setInterval(ping, iv);\n      setInterval(updateTimer, 10000);\n      ping();\n      updateTimer();\n    ")
+    H.script("\n      var iv = " .. tostring(interval) .. " * 1000;\n      var sessionStart = " .. tostring(session_start) .. ";\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'omit'})\n          .then(function(r){ if(r.status===401) location.href='/'; })\n          .catch(function(){});\n      }\n      function updateTimer(){\n        var now = Math.floor(Date.now() / 1000);\n        var elapsed = now - sessionStart;\n        if (elapsed < 0) elapsed = 0;\n        var h = Math.floor(elapsed / 3600);\n        var m = Math.floor((elapsed % 3600) / 60);\n        var txt;\n        if (h > 0) {\n          txt = h + 'h ' + (m < 10 ? '0' : '') + m + 'min';\n        } else {\n          txt = m + ' min';\n        }\n        var el = document.getElementById('session-timer');\n        if (el) el.textContent = 'Session ouverte depuis : ' + txt;\n      }\n      setInterval(ping, iv);\n      setInterval(updateTimer, 10000);\n      ping();\n      updateTimer();\n      // Envoyer un ping immédiat au retour en foreground (anti-throttling navigateur).\n      document.addEventListener('visibilitychange', function(){\n        if (document.visibilityState === 'visible') ping();\n      });\n      // Déconnexion explicite à la fermeture du navigateur / de l'onglet.\n      // sendBeacon est envoyé de manière garantie même pendant le déchargement.\n      // pagehide est plus fiable que beforeunload sur mobile (iOS Safari).\n      // On ne déconnecte pas si la page est mise en BFCache (event.persisted).\n      function logout(){\n        if (navigator.sendBeacon) {\n          navigator.sendBeacon('/logout');\n        } else {\n          fetch('/logout', {method:'GET', keepalive:true, credentials:'omit'});\n        }\n      }\n      window.addEventListener('pagehide', function(e){\n        if (!e.persisted) logout();\n      });\n    ")
   })
 end
 local register_form_page
@@ -542,7 +542,7 @@ make_server4 = function(port)
     srv:close()
     return nil, err
   end
-  srv:listen(8)
+  srv:listen(32)
   srv:settimeout(1)
   return srv
 end
@@ -559,7 +559,7 @@ make_server6 = function(port)
     srv6:close()
     return nil
   end
-  srv6:listen(8)
+  srv6:listen(32)
   srv6:settimeout(1)
   return srv6
 end
