@@ -52,6 +52,12 @@ images/
 *.bak
 .aider*
 
+# Lua files compiled from .moon sources (canonical output goes to lua/)
+# src/ipparse/**/*.lua are hand-written and must remain tracked.
+src/*.lua
+src/auth/*.lua
+src/filter/*.lua
+src/parse/*.lua
+
 
 idefix3.json
-
