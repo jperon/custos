@@ -12,7 +12,7 @@ ssl = require "auth.ffi_wolfssl"
 { :session_for_mac, :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
 { :verify_password, :register_user } = require "auth.credentials"
 { :load_or_generate } = require "auth.cert"
-{ :log_info, :log_warn, :log_error } = require "log"
+{ :log_info, :log_warn, :log_error, :log_debug } = require "log"
 { :AUTH_SESSIONS_FILE } = require "config"
 
 { :get_mac } = require "mac_learner_ipc"
@@ -410,36 +410,36 @@ handle_client = (args) ->
   peer_ip = args.peer_ip or "unknown"
 
   ok, err = pcall ->
-    print "[DEBUG-SERVER] handle_client started for peer="..peer_ip..", client.fd="..client.fd
+    log_debug { action: "handle_client_start", peer: peer_ip, fd: client.fd }
     
     -- Set socket to BLOCKING mode for handshake
-    print "[DEBUG-SERVER] Setting socket to blocking mode for TLS handshake"
+    log_debug { action: "set_blocking_mode" }
     client\settimeout nil  -- nil = blocking mode
-    print "[DEBUG-SERVER] Socket is now blocking"
+    log_debug { action: "blocking_mode_set" }
 
-    print "[DEBUG-SERVER] About to call ssl.wrap(client="..tostring(client)..", ctx="..tostring(state.tls_ctx)..")"
+    log_debug { action: "ssl_wrap_start" }
     tls_client, tls_err = ssl.wrap client, state.tls_ctx
-    print "[DEBUG-SERVER] ssl.wrap returned: tls_client="..tostring(tls_client)..", err="..tostring(tls_err)
+    log_debug { action: "ssl_wrap_done" }
     
     unless tls_client
       log_warn { action: "auth_tls_wrap_failed", err: tls_err }
       client\close!
       return
 
-    print "[DEBUG-SERVER] About to call tls_client:dohandshake()"
+    log_debug { action: "dohandshake_start" }
     
     -- Handshake loop: keep trying until complete or error
     handshake_complete = false
     handshake_attempts = 0
     while not handshake_complete and handshake_attempts < 50
       handshake_attempts += 1
-      print "[DEBUG-SERVER] Handshake attempt #"..handshake_attempts
+      log_debug { action: "handshake_attempt", attempt: handshake_attempts }
       
       ok_hs, hs_err = tls_client\dohandshake!
-      print "[DEBUG-SERVER] dohandshake() returned: ok="..tostring(ok_hs)..", err="..tostring(hs_err)
+      log_debug { action: "dohandshake_returned", ok: ok_hs }
       
       if ok_hs
-        print "[DEBUG-SERVER] Handshake COMPLETE"
+        log_debug { action: "handshake_complete" }
         handshake_complete = true
     
     unless handshake_complete
@@ -448,7 +448,7 @@ handle_client = (args) ->
       return
     
     -- Switch to non-blocking after successful handshake for HTTP I/O
-    print "[DEBUG-SERVER] Handshake done, setting socket to non-blocking for HTTP"
+    log_debug { action: "set_nonblocking_mode" }
     client\settimeout 0
 
     peer_mac = get_mac peer_ip
@@ -551,22 +551,22 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     readable, _ = socket.select all_servers, nil, 0.1
     if readable
       for srv in *readable
-        print "[DEBUG-SERVER] socket.select returned readable, attempting accept()"
+        log_debug { action: "socket_select_readable" }
         client = srv\accept!
-        print "[DEBUG-SERVER] accept() returned: "..tostring(client)
+        log_debug { action: "accept_returned" }
         
         if client
-          print "[DEBUG-SERVER] Got client socket, calling getpeername()"
+          log_debug { action: "got_client" }
           peer_ip = client\getpeername! or "unknown"
-          print "[DEBUG-SERVER] peer_ip="..peer_ip
+          log_debug { action: "getpeername_result", peer: peer_ip }
 
-          print "[DEBUG-SERVER] About to fork_child for peer="..peer_ip..", client.fd="..client.fd
+          log_debug { action: "fork_child_start", peer: peer_ip, fd: client.fd }
           pid = fork_child "AUTH-conn",
             handle_client,
             { client: client, peer_ip: peer_ip, state: state },
             { log_start: false }
           
-          print "[DEBUG-SERVER] fork_child returned pid="..pid
+          log_debug { action: "fork_child_done", pid: pid }
 
           log_info { action: "auth_conn_started", pid: pid, peer: peer_ip }
           client\close!
