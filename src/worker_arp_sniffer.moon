@@ -12,19 +12,17 @@
 -- Aucune modification de paquet, aucun verdict NFQUEUE, aucune règle nftables.
 
 { :ffi, :libc } = require "ffi_defs"
+{ :C, :AF_PACKET, :SOCK_RAW, :AF_INET6 } = require "auth.ffi_socket"
 { :log_info, :log_warn, :log_debug } = require "log"
 
 -- ── Constantes réseau ────────────────────────────────────────────
 
-AF_PACKET  = 17
-AF_INET6   = 10
-SOCK_RAW   = 3
 POLLIN     = 1
 
 -- htons() pour les protocoles passés à socket() :
 -- AF_PACKET reçoit le protocole en network byte order.
-ETH_P_ARP  = libc.htons 0x0806   -- ARP
-ETH_P_IPV6 = libc.htons 0x86DD   -- IPv6
+ETH_P_ARP  = C.htons 0x0806   -- ARP
+ETH_P_IPV6 = C.htons 0x86DD   -- IPv6
 
 -- ICMPv6 next-header number et types NDP
 ICMPV6_PROTO        = 58
@@ -56,7 +54,7 @@ fmt_ipv6 = (s, o) ->
   for i = 0, 15
     buf[i] = s\byte(o + i)
   ntop = ffi.new "char[46]"
-  rc = libc.inet_ntop AF_INET6, buf, ntop, 46
+  rc = C.inet_ntop AF_INET6, buf, ntop, 46
   return "?" if rc == nil
   ffi.string ntop
 
@@ -95,7 +93,7 @@ write_learn = (learn_wfd, msg) ->
 -- @tparam number  ifindex    Index de l'interface (résultat de if_nametoindex)
 -- @treturn number|nil  fd du socket, ou nil en cas d'erreur
 open_socket = (eth_proto, ifindex) ->
-  fd = libc.socket AF_PACKET, SOCK_RAW, eth_proto
+  fd = C.socket AF_PACKET, SOCK_RAW, eth_proto
   if fd < 0
     return nil
 
@@ -105,7 +103,7 @@ open_socket = (eth_proto, ifindex) ->
   sll.sll_protocol = eth_proto
   sll.sll_ifindex  = ifindex
 
-  if libc.bind(fd, ffi.cast("struct sockaddr*", sll), ffi.sizeof(sll)) ~= 0
+  if C.bind(fd, ffi.cast("struct sockaddr*", sll), ffi.sizeof(sll)) ~= 0
     libc.close fd
     return nil
 
@@ -219,7 +217,7 @@ process_ipv6 = (raw, len, learn_wfd) ->
 -- @tparam string ifname    Nom de l'interface bridge (ex : "br")
 -- @tparam number learn_wfd fd d'écriture du pipe Q0→mac_learner
 run = (ifname, learn_wfd) ->
-  ifindex = tonumber libc.if_nametoindex ifname
+  ifindex = tonumber C.if_nametoindex ifname
   if ifindex == 0
     log_warn { action: "arp_sniffer_ifindex_failed", ifname: ifname }
     return
@@ -251,15 +249,15 @@ run = (ifname, learn_wfd) ->
   bit = require "bit"
 
   while true
-    libc.poll pfds, 2, 5000
+    C.poll pfds, 2, 5000
 
     if bit.band(pfds[0].revents, POLLIN) ~= 0
-      n = libc.recv arp_fd, buf, buf_len, 0
+      n = C.recv arp_fd, buf, buf_len, 0
       if n >= ARP_MIN_LEN
         process_arp ffi.string(buf, n), n, learn_wfd
 
     if bit.band(pfds[1].revents, POLLIN) ~= 0
-      n = libc.recv ip6_fd, buf, buf_len, 0
+      n = C.recv ip6_fd, buf, buf_len, 0
       if n >= NDP_MIN_LEN
         process_ipv6 ffi.string(buf, n), n, learn_wfd
 

@@ -1,0 +1,203 @@
+local ffi = require("ffi")
+ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
+  typedef struct WOLFSSL WOLFSSL;
+  typedef struct WOLFSSL_METHOD WOLFSSL_METHOD;
+
+  WOLFSSL_METHOD* wolfTLS_server_method(void);
+  WOLFSSL_METHOD* wolfTLS_client_method(void);
+  WOLFSSL_METHOD* wolfSSLv23_server_method(void);
+
+  WOLFSSL_CTX* wolfSSL_CTX_new(WOLFSSL_METHOD *method);
+  void         wolfSSL_CTX_free(WOLFSSL_CTX *ctx);
+  int          wolfSSL_CTX_use_certificate_file(WOLFSSL_CTX *ctx, const char *file, int type);
+  int          wolfSSL_CTX_use_PrivateKey_file(WOLFSSL_CTX *ctx, const char *file, int type);
+
+  WOLFSSL* wolfSSL_new(WOLFSSL_CTX *ctx);
+  void     wolfSSL_free(WOLFSSL *ssl);
+  int      wolfSSL_set_fd(WOLFSSL *ssl, int fd);
+
+  int wolfSSL_connect(WOLFSSL *ssl);
+  int wolfSSL_accept(WOLFSSL *ssl);
+  int wolfSSL_write(WOLFSSL *ssl, const void *data, int sz);
+  int wolfSSL_read(WOLFSSL *ssl, void *data, int sz);
+  int wolfSSL_shutdown(WOLFSSL *ssl);
+  int wolfSSL_get_error(WOLFSSL *ssl, int ret);
+]])
+local libwolfssl = nil
+for _, name in ipairs({
+  "libwolfssl.so.5.8.4.e624513f",
+  "libwolfssl.so.5",
+  "libwolfssl.so.44",
+  "wolfssl",
+  "libwolfssl.so"
+}) do
+  local ok, lib = pcall(ffi.load, name)
+  if ok then
+    libwolfssl = lib
+    break
+  end
+end
+if not libwolfssl then
+  local f = io.popen("find /usr/lib /lib -name 'libwolfssl*.so*' -type f 2>/dev/null | sort -V | tail -1")
+  local path = f:read("*a"):gsub("\n", "")
+  f:close()
+  if path and path ~= "" then
+    local ok, lib = pcall(ffi.load, path)
+    if ok then
+      libwolfssl = lib
+    end
+  end
+end
+if not libwolfssl then
+  error("libwolfssl not found in: /usr/lib, /lib, or standard search paths")
+end
+local SSL_ERROR_NONE = 0
+local SSL_ERROR_WANT_READ = 2
+local SSL_ERROR_WANT_WRITE = 3
+local SSL_ERROR_SSL = 1
+local SSL_FILETYPE_PEM = 1
+local SSL_FILETYPE_ASN1 = 2
+local ssl_mt = {
+  __index = { }
+}
+local newcontext
+newcontext = function(opts)
+  if opts == nil then
+    opts = { }
+  end
+  local cert_file = opts.certificate or opts[1]
+  local key_file = opts.key or opts[2]
+  if not cert_file or not key_file then
+    error("newcontext requires {certificate: 'path', key: 'path'}")
+  end
+  local method = libwolfssl.wolfTLS_server_method()
+  if method == nil then
+    error("wolfTLS_server_method() failed")
+  end
+  local ctx = libwolfssl.wolfSSL_CTX_new(method)
+  if ctx == nil then
+    error("wolfSSL_CTX_new() failed")
+  end
+  local ret = libwolfssl.wolfSSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM)
+  if ret < 0 then
+    libwolfssl.wolfSSL_CTX_free(ctx)
+    error("wolfSSL_CTX_use_certificate_file() failed")
+  end
+  ret = libwolfssl.wolfSSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM)
+  if ret < 0 then
+    libwolfssl.wolfSSL_CTX_free(ctx)
+    error("wolfSSL_CTX_use_PrivateKey_file() failed")
+  end
+  return {
+    ctx = ctx,
+    closed = false
+  }
+end
+local wrap
+wrap = function(raw_socket, ctx_obj)
+  local ssl = libwolfssl.wolfSSL_new(ctx_obj.ctx)
+  if ssl == nil then
+    error("wolfSSL_new() failed")
+  end
+  local ret = libwolfssl.wolfSSL_set_fd(ssl, raw_socket.fd)
+  if ret < 0 then
+    libwolfssl.wolfSSL_free(ssl)
+    error("wolfSSL_set_fd() failed")
+  end
+  local wrapped = {
+    ssl = ssl,
+    raw_socket = raw_socket,
+    handshake_done = false,
+    closed = false
+  }
+  setmetatable(wrapped, ssl_mt)
+  return wrapped
+end
+ssl_mt.__index.dohandshake = function(self)
+  if self.closed then
+    error("SSL connection is closed")
+  end
+  if self.handshake_done then
+    return true
+  end
+  local ret = libwolfssl.wolfSSL_accept(self.ssl)
+  if ret > 0 then
+    self.handshake_done = true
+    return true
+  end
+  local err = libwolfssl.wolfSSL_get_error(self.ssl, ret)
+  if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE then
+    return false
+  end
+  if err == SSL_ERROR_SSL then
+    error("TLS error during handshake")
+  end
+  return error("Unexpected error: " .. err)
+end
+ssl_mt.__index.send = function(self, data)
+  if self.closed then
+    error("SSL connection is closed")
+  end
+  if not self.handshake_done then
+    return nil
+  end
+  local n = libwolfssl.wolfSSL_write(self.ssl, data, #data)
+  if n > 0 then
+    return n
+  end
+  local err = libwolfssl.wolfSSL_get_error(self.ssl, n)
+  if err == SSL_ERROR_WANT_WRITE or err == SSL_ERROR_WANT_READ then
+    return nil
+  end
+  return error("wolfSSL_write() error")
+end
+ssl_mt.__index.receive = function(self, size)
+  if size == nil then
+    size = 4096
+  end
+  if self.closed then
+    error("SSL connection is closed")
+  end
+  if not self.handshake_done then
+    return nil
+  end
+  local buf = ffi.new("uint8_t[?]", size)
+  local n = libwolfssl.wolfSSL_read(self.ssl, buf, size)
+  if n > 0 then
+    return ffi.string(buf, n)
+  end
+  if n == 0 then
+    return nil
+  end
+  local err = libwolfssl.wolfSSL_get_error(self.ssl, n)
+  if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE then
+    return nil
+  end
+  return error("wolfSSL_read() error")
+end
+ssl_mt.__index.close = function(self)
+  if not self.closed then
+    libwolfssl.wolfSSL_shutdown(self.ssl)
+    libwolfssl.wolfSSL_free(self.ssl)
+    self.raw_socket:close()
+    self.closed = true
+  end
+  return true
+end
+local free_context
+free_context = function(ctx_obj)
+  if ctx_obj and ctx_obj.ctx then
+    libwolfssl.wolfSSL_CTX_free(ctx_obj.ctx)
+  end
+  return true
+end
+return {
+  newcontext = newcontext,
+  wrap = wrap,
+  free_context = free_context,
+  libwolfssl = libwolfssl,
+  SSL_ERROR_NONE = SSL_ERROR_NONE,
+  SSL_ERROR_WANT_READ = SSL_ERROR_WANT_READ,
+  SSL_ERROR_WANT_WRITE = SSL_ERROR_WANT_WRITE,
+  SSL_ERROR_SSL = SSL_ERROR_SSL
+}

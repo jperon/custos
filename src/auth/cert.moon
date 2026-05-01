@@ -1,12 +1,12 @@
 -- src/auth/cert.moon
--- Génération d'un certificat TLS auto-signé et chargement du contexte luasec.
+-- Génération d'un certificat TLS auto-signé et chargement du contexte wolfssl FFI.
 --
 -- Si les fichiers cert/key existent déjà, ils sont réutilisés directement.
 -- Sinon, un certificat RSA-2048 auto-signé est généré via `openssl req`.
 --
--- Dépendance : luasec (paquet Debian : lua-luasec).
+-- Utilise ffi_wolfssl (FFI wrapper pour WolfSSL, remplace luasec).
 
-ssl = require "ssl"
+ssl = require "auth.ffi_wolfssl"
 
 CERT_DAYS     = 3650    -- validité : ~10 ans
 CERT_KEY_BITS = 2048

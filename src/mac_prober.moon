@@ -15,6 +15,7 @@
 -- en arrière-plan) ; les deux peuvent coexister sur la même interface.
 
 { :ffi, :libc } = require "ffi_defs"
+{ :C, :AF_PACKET, :SOCK_RAW, :AF_INET6 } = require "auth.ffi_socket"
 { :log_debug, :log_warn } = require "log"
 
 bit = require "bit"
@@ -28,8 +29,8 @@ AF_INET6   = 10
 CLOCK_MONOTONIC = 1
 
 -- Protocoles passés à socket(AF_PACKET, SOCK_RAW, proto) : network byte order.
-ETH_P_ARP  = libc.htons 0x0806
-ETH_P_IPV6 = libc.htons 0x86DD
+ETH_P_ARP  = C.htons 0x0806
+ETH_P_IPV6 = C.htons 0x86DD
 
 ICMPV6_TYPE_NA = 136   -- Neighbor Advertisement
 
@@ -99,7 +100,7 @@ ip4_to_bin = (s) ->
 -- @treturn string|nil  16 octets ou nil si parse échoué
 ip6_to_bin = (s) ->
   buf = ffi.new "uint8_t[16]"
-  return nil if libc.inet_pton(AF_INET6, s, buf) ~= 1
+  return nil if C.inet_pton(AF_INET6, s, buf) ~= 1
   ffi.string buf, 16
 
 --- Formate 6 octets (1-based) d'une chaîne en "aa:bb:cc:dd:ee:ff".
@@ -160,7 +161,7 @@ read_own_ip6 = (ifname) ->
 -- @tparam number  ifindex  Index de l'interface
 -- @treturn number|nil  fd ou nil en cas d'erreur
 open_socket = (proto, ifindex) ->
-  fd = libc.socket AF_PACKET, SOCK_RAW, proto
+  fd = C.socket AF_PACKET, SOCK_RAW, proto
   return nil if fd < 0
 
   sll = ffi.new "struct sockaddr_ll"
@@ -169,7 +170,7 @@ open_socket = (proto, ifindex) ->
   sll.sll_protocol = proto
   sll.sll_ifindex  = ifindex
 
-  if libc.bind(fd, ffi.cast("struct sockaddr*", sll), ffi.sizeof(sll)) ~= 0
+  if C.bind(fd, ffi.cast("struct sockaddr*", sll), ffi.sizeof(sll)) ~= 0
     libc.close fd
     return nil
 
@@ -257,7 +258,7 @@ send_frame = (fd, ifindex, frame) ->
   ffi.fill sll, ffi.sizeof(sll), 0
   sll.sll_family  = AF_PACKET
   sll.sll_ifindex = ifindex
-  n = libc.sendto fd, frame, #frame, 0,
+  n = C.sendto fd, frame, #frame, 0,
     ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll)
   n == #frame
 
@@ -332,7 +333,7 @@ parse_na_reply = (raw, len, tgt6_bin) ->
   for i = 0, 15
     ip6_buf[i] = raw\byte 23 + i
   ntop = ffi.new "char[46]"
-  return nil, nil if libc.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil
+  return nil, nil if C.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil
 
   ffi.string(ntop), mac_str
 
@@ -354,11 +355,11 @@ wait_reply = (fd, timeout_ms, parse_fn) ->
   while true
     remaining = timeout_ms - (get_ms! - start_ms)
     break if remaining <= 0
-    rc = libc.poll pfd, 1, remaining
+    rc = C.poll pfd, 1, remaining
     break if rc <= 0   -- 0 = timeout, <0 = erreur
 
     if bit.band(pfd[0].revents, POLLIN) ~= 0
-      n = libc.recv fd, buf, 2048, 0
+      n = C.recv fd, buf, 2048, 0
       if n > 0
         raw = ffi.string buf, n
         mac = parse_fn raw, n
@@ -380,7 +381,7 @@ init = (ifname) ->
     log_warn { action: "mac_prober_no_mac", ifname: ifname }
     return nil
 
-  ifindex = tonumber libc.if_nametoindex ifname
+  ifindex = tonumber C.if_nametoindex ifname
   if ifindex == 0
     log_warn { action: "mac_prober_no_ifindex", ifname: ifname }
     return nil
@@ -526,7 +527,7 @@ parse_na_frame = (raw, n) ->
   for i = 0, 15
     ip6_buf[i] = raw\byte 63 + i
   ntop = ffi.new "char[46]"
-  return nil, nil if libc.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil
+  return nil, nil if C.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil
   ffi.string(ntop), fmt_mac(raw, 7)
 
 { :init, :probe_and_wait, :send_probe, :parse_arp_frame, :parse_na_frame, :get_ms }

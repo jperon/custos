@@ -1,4 +1,3 @@
-local socket = require("socket")
 local log_info
 log_info = require("log").log_info
 local build_ipc_message

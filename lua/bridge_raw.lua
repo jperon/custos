@@ -3,14 +3,16 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
+local C, AF_PACKET, SOCK_RAW, ETH_P_ALL
+do
+  local _obj_0 = require("auth.ffi_socket")
+  C, AF_PACKET, SOCK_RAW, ETH_P_ALL = _obj_0.C, _obj_0.AF_PACKET, _obj_0.SOCK_RAW, _obj_0.ETH_P_ALL
+end
 local s2mac
 s2mac = require("ipparse.l2.ethernet").s2mac
-local AF_PACKET = 17
-local SOCK_RAW = 3
-local ETH_P_ALL = 0x0300
 local open_socket
 open_socket = function(ifname)
-  local fd = libc.socket(AF_PACKET, SOCK_RAW, ETH_P_ALL)
+  local fd = C.socket(AF_PACKET, SOCK_RAW, ETH_P_ALL)
   if fd < 0 then
     return nil, "socket() failed on " .. tostring(ifname) .. ": errno " .. tostring(ffi.errno())
   end
@@ -36,7 +38,7 @@ send = function(fd, frame, ifindex)
   sll.sll_family = AF_PACKET
   sll.sll_protocol = ETH_P_ALL
   sll.sll_ifindex = ifindex
-  local n = libc.sendto(fd, frame, #frame, 0, ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll))
+  local n = C.sendto(fd, frame, #frame, 0, ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll))
   return n == #frame
 end
 return {

@@ -4,18 +4,15 @@
 -- worker_questions (Q0, réponses DNS forgées).
 
 { :ffi, :libc } = require "ffi_defs"
-{ :s2mac }      = require "ipparse.l2.ethernet"
-
-AF_PACKET = 17
-SOCK_RAW  = 3
-ETH_P_ALL = 0x0300   -- htons(ETH_P_ALL = 0x0003)
+{ :C, :AF_PACKET, :SOCK_RAW, :ETH_P_ALL } = require "auth.ffi_socket"
+{ :s2mac } = require "ipparse.l2.ethernet"
 
 --- Ouvre un socket AF_PACKET/SOCK_RAW non lié.
 -- @tparam  string     ifname Nom de l'interface (pour le message d'erreur uniquement)
 -- @treturn number|nil        fd du socket, ou nil en cas d'erreur
 -- @treturn nil|string        Message d'erreur
 open_socket = (ifname) ->
-  fd = libc.socket AF_PACKET, SOCK_RAW, ETH_P_ALL
+  fd = C.socket AF_PACKET, SOCK_RAW, ETH_P_ALL
   return nil, "socket() failed on #{ifname}: errno #{ffi.errno!}" if fd < 0
   fd, nil
 
@@ -41,7 +38,7 @@ send = (fd, frame, ifindex) ->
   sll.sll_family   = AF_PACKET
   sll.sll_protocol = ETH_P_ALL
   sll.sll_ifindex  = ifindex
-  n = libc.sendto fd, frame, #frame, 0,
+  n = C.sendto fd, frame, #frame, 0,
     ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll)
   n == #frame
 

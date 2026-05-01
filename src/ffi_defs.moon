@@ -59,7 +59,7 @@ ffi.cdef [[
   /* ── errno (Linux glibc) ── */
   int* __errno_location(void);  /* errno = *__errno_location() */
 
-  /* ── Réseau ── */
+  /* ── Réseau (network utilities) ── */
   uint32_t ntohl(uint32_t n);
   uint16_t ntohs(uint16_t n);
   uint32_t htonl(uint32_t h);
@@ -67,7 +67,26 @@ ffi.cdef [[
   const char* inet_ntop(int af, const void *src, char *dst, unsigned int size);
   int          inet_pton(int af, const char *src, void *dst);
 
-  /* ── Sockets UDP (pour send_refused) ── */
+  /* ── I/O multiplexing (poll, select) ── */
+  struct pollfd {
+    int   fd;
+    short events;
+    short revents;
+  };
+  int poll(struct pollfd *fds, unsigned long nfds, int timeout);
+
+  typedef long __fd_mask;
+  struct fd_set {
+    __fd_mask __fds_bits[16];
+  };
+  struct timeval {
+    long tv_sec;
+    long tv_usec;
+  };
+  int select(int nfds, struct fd_set *readfds, struct fd_set *writefds,
+             struct fd_set *exceptfds, struct timeval *timeout);
+
+  /* ── AF_UNIX & AF_PACKET raw sockets (non-TCP) ── */
   typedef unsigned int socklen_t;
 
   struct sockaddr {
@@ -90,34 +109,25 @@ ffi.cdef [[
     uint32_t sin6_scope_id;
   };
 
+  /* Core socket operations */
   int     socket(int domain, int type, int protocol);
   int     bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
-  int     setsockopt(int sockfd, int level, int optname,
-                     const void *optval, socklen_t optlen);
-  ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
-                 const struct sockaddr *dest_addr, socklen_t addrlen);
-  ssize_t send(int sockfd, const void *buf, size_t len, int flags);
-  ssize_t recv(int sockfd, void *buf, size_t len, int flags);
-  int     connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
   int     listen(int sockfd, int backlog);
   int     accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
-  int     unlink(const char *pathname);
+  int     connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+  int     close(int fd);
+  ssize_t send(int sockfd, const void *buf, size_t len, int flags);
+  ssize_t recv(int sockfd, void *buf, size_t len, int flags);
+  int     setsockopt(int sockfd, int level, int optname,
+                     const void *optval, socklen_t optlen);
+  int     getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+  int     getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
-  /* ── AF_UNIX socket ── */
   struct sockaddr_un {
     uint16_t sun_family;
     char     sun_path[108];
   };
 
-  /* ── poll ── */
-  struct pollfd {
-    int   fd;
-    short events;
-    short revents;
-  };
-  int poll(struct pollfd *fds, unsigned long nfds, int timeout);
-
-  /* ── AF_PACKET raw socket (pour worker Q2 portail captif bridge) ── */
   unsigned int if_nametoindex(const char *ifname);
 
   struct sockaddr_ll {
@@ -129,6 +139,13 @@ ffi.cdef [[
     unsigned char  sll_halen;
     unsigned char  sll_addr[8];
   };
+
+  /* ── Raw operations for AF_PACKET ── */
+  ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
+                 const struct sockaddr *dest_addr, socklen_t addrlen);
+
+  /* ── File operations ── */
+  int     unlink(const char *pathname);
 ]]
 
 -- ═══════════════════════════════════════════════════════════════
@@ -209,12 +226,55 @@ ffi.cdef [[
 ]]
 
 -- ═══════════════════════════════════════════════════════════════
+-- libwolfssl (TLS/SSL library)
+-- ═══════════════════════════════════════════════════════════════
+ffi.cdef [[
+  /* ── Types opaques WolfSSL ── */
+  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
+  typedef struct WOLFSSL     WOLFSSL;
+  typedef struct WOLFSSL_METHOD WOLFSSL_METHOD;
+
+  /* ── Méthodes TLS ── */
+  WOLFSSL_METHOD* TLSv1_2_server_method(void);
+  WOLFSSL_METHOD* TLSv1_2_client_method(void);
+  WOLFSSL_METHOD* TLS_server_method(void);
+  WOLFSSL_METHOD* TLS_client_method(void);
+
+  /* ── Gestion du contexte ── */
+  WOLFSSL_CTX* wolfSSL_CTX_new(WOLFSSL_METHOD *method);
+  void         wolfSSL_CTX_free(WOLFSSL_CTX *ctx);
+  int          wolfSSL_CTX_use_certificate_file(WOLFSSL_CTX *ctx,
+                                                const char *file, int type);
+  int          wolfSSL_CTX_use_PrivateKey_file(WOLFSSL_CTX *ctx,
+                                               const char *file, int type);
+
+  /* ── Gestion de la connexion ── */
+  WOLFSSL* wolfSSL_new(WOLFSSL_CTX *ctx);
+  void     wolfSSL_free(WOLFSSL *ssl);
+  int      wolfSSL_set_fd(WOLFSSL *ssl, int fd);
+  int      wolfSSL_get_fd(WOLFSSL *ssl);
+
+  /* ── Handshake et I/O ── */
+  int wolfSSL_connect(WOLFSSL *ssl);
+  int wolfSSL_accept(WOLFSSL *ssl);
+  int wolfSSL_write(WOLFSSL *ssl, const void *data, int sz);
+  int wolfSSL_read(WOLFSSL *ssl, void *data, int sz);
+  int wolfSSL_shutdown(WOLFSSL *ssl);
+
+  /* ── Codes d'erreur ── */
+  int wolfSSL_get_error(WOLFSSL *ssl, int ret);
+
+  /* ── Constantes ── */
+]]
+
+-- ═══════════════════════════════════════════════════════════════
 -- Chargement des bibliothèques
 -- ═══════════════════════════════════════════════════════════════
 
 --- Tente de charger une bibliothèque parmi plusieurs noms candidats.
 -- Utile pour gérer les noms sans version (``netfilter_queue``) et les
 -- noms versionnés Debian (``libnetfilter_queue.so.1``).
+-- Ajoute un fallback: scanner /usr/lib et /lib pour trouver des fichiers correspondants.
 -- @tparam table names  Liste ordonnée de noms à essayer
 -- @treturn cdata       Bibliothèque FFI chargée
 -- @raise  string       Si aucun nom ne peut être chargé
@@ -222,6 +282,19 @@ try_load = (names) ->
   for name in *names
     ok, lib = pcall ffi.load, name
     return lib if ok
+  
+  -- Fallback: scan filesystem for any matching library file
+  for name in *names
+    prefix = name\gsub("%.so.*$", "")  -- Remove version suffix
+    cmd = "find /usr/lib /lib -name '" .. prefix .. "*.so*' -type f 2>/dev/null | sort -V | tail -1"
+    f = io.popen(cmd)
+    path = f\read("*a")\gsub("\n", "")
+    f\close!
+    
+    if path and path ~= ""
+      ok, lib = pcall ffi.load, path
+      return lib if ok
+  
   error "ffi_defs: cannot load any of: #{table.concat names, ', '}"
 
 libc    = ffi.C
@@ -229,4 +302,7 @@ libnfq  = try_load { "netfilter_queue", "libnetfilter_queue.so.1" }
 libnft  = try_load { "nftables", "libnftables.so.1" }
 
 -- ── Export ──────────────────────────────────────────────────────
-{ :ffi, :libc, :libnfq, :libnft }
+libwolfssl = try_load { "wolfssl", "libwolfssl.so.5", "libwolfssl.so" }
+
+-- ── Export ──────────────────────────────────────────────────
+{ :ffi, :libc, :libnfq, :libnft, :libwolfssl }

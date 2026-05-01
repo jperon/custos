@@ -1,5 +1,5 @@
-local socket = require("socket")
-local ssl = require("ssl")
+local socket = require("auth.ffi_socket")
+local ssl = require("auth.ffi_wolfssl")
 local fork_child, reap_one
 do
   local _obj_0 = require("lib.process")

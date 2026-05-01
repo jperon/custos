@@ -3,19 +3,24 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
+local C, AF_PACKET, SOCK_RAW, AF_INET6
+do
+  local _obj_0 = require("auth.ffi_socket")
+  C, AF_PACKET, SOCK_RAW, AF_INET6 = _obj_0.C, _obj_0.AF_PACKET, _obj_0.SOCK_RAW, _obj_0.AF_INET6
+end
 local log_debug, log_warn
 do
   local _obj_0 = require("log")
   log_debug, log_warn = _obj_0.log_debug, _obj_0.log_warn
 end
 local bit = require("bit")
-local AF_PACKET = 17
-local SOCK_RAW = 3
+AF_PACKET = 17
+SOCK_RAW = 3
 local POLLIN = 1
-local AF_INET6 = 10
+AF_INET6 = 10
 local CLOCK_MONOTONIC = 1
-local ETH_P_ARP = libc.htons(0x0806)
-local ETH_P_IPV6 = libc.htons(0x86DD)
+local ETH_P_ARP = C.htons(0x0806)
+local ETH_P_IPV6 = C.htons(0x86DD)
 local ICMPV6_TYPE_NA = 136
 local get_ms
 get_ms = function()
@@ -60,7 +65,7 @@ end
 local ip6_to_bin
 ip6_to_bin = function(s)
   local buf = ffi.new("uint8_t[16]")
-  if libc.inet_pton(AF_INET6, s, buf) ~= 1 then
+  if C.inet_pton(AF_INET6, s, buf) ~= 1 then
     return nil
   end
   return ffi.string(buf, 16)
@@ -112,7 +117,7 @@ read_own_ip6 = function(ifname)
 end
 local open_socket
 open_socket = function(proto, ifindex)
-  local fd = libc.socket(AF_PACKET, SOCK_RAW, proto)
+  local fd = C.socket(AF_PACKET, SOCK_RAW, proto)
   if fd < 0 then
     return nil
   end
@@ -121,7 +126,7 @@ open_socket = function(proto, ifindex)
   sll.sll_family = AF_PACKET
   sll.sll_protocol = proto
   sll.sll_ifindex = ifindex
-  if libc.bind(fd, ffi.cast("struct sockaddr*", sll), ffi.sizeof(sll)) ~= 0 then
+  if C.bind(fd, ffi.cast("struct sockaddr*", sll), ffi.sizeof(sll)) ~= 0 then
     libc.close(fd)
     return nil
   end
@@ -151,7 +156,7 @@ send_frame = function(fd, ifindex, frame)
   ffi.fill(sll, ffi.sizeof(sll), 0)
   sll.sll_family = AF_PACKET
   sll.sll_ifindex = ifindex
-  local n = libc.sendto(fd, frame, #frame, 0, ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll))
+  local n = C.sendto(fd, frame, #frame, 0, ffi.cast("const struct sockaddr*", sll), ffi.sizeof(sll))
   return n == #frame
 end
 local parse_arp_reply
@@ -204,7 +209,7 @@ parse_na_reply = function(raw, len, tgt6_bin)
     ip6_buf[i] = raw:byte(23 + i)
   end
   local ntop = ffi.new("char[46]")
-  if libc.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil then
+  if C.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil then
     return nil, nil
   end
   return ffi.string(ntop), mac_str
@@ -221,12 +226,12 @@ wait_reply = function(fd, timeout_ms, parse_fn)
     if remaining <= 0 then
       break
     end
-    local rc = libc.poll(pfd, 1, remaining)
+    local rc = C.poll(pfd, 1, remaining)
     if rc <= 0 then
       break
     end
     if bit.band(pfd[0].revents, POLLIN) ~= 0 then
-      local n = libc.recv(fd, buf, 2048, 0)
+      local n = C.recv(fd, buf, 2048, 0)
       if n > 0 then
         local raw = ffi.string(buf, n)
         local mac = parse_fn(raw, n)
@@ -248,7 +253,7 @@ init = function(ifname)
     })
     return nil
   end
-  local ifindex = tonumber(libc.if_nametoindex(ifname))
+  local ifindex = tonumber(C.if_nametoindex(ifname))
   if ifindex == 0 then
     log_warn({
       action = "mac_prober_no_ifindex",
@@ -435,7 +440,7 @@ parse_na_frame = function(raw, n)
     ip6_buf[i] = raw:byte(63 + i)
   end
   local ntop = ffi.new("char[46]")
-  if libc.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil then
+  if C.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil then
     return nil, nil
   end
   return ffi.string(ntop), fmt_mac(raw, 7)

@@ -3,17 +3,19 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
+local C, AF_PACKET, SOCK_RAW, AF_INET6
+do
+  local _obj_0 = require("auth.ffi_socket")
+  C, AF_PACKET, SOCK_RAW, AF_INET6 = _obj_0.C, _obj_0.AF_PACKET, _obj_0.SOCK_RAW, _obj_0.AF_INET6
+end
 local log_info, log_warn, log_debug
 do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug
 end
-local AF_PACKET = 17
-local AF_INET6 = 10
-local SOCK_RAW = 3
 local POLLIN = 1
-local ETH_P_ARP = libc.htons(0x0806)
-local ETH_P_IPV6 = libc.htons(0x86DD)
+local ETH_P_ARP = C.htons(0x0806)
+local ETH_P_IPV6 = C.htons(0x86DD)
 local ICMPV6_PROTO = 58
 local ICMPV6_TYPE_NS = 135
 local ICMPV6_TYPE_NA = 136
@@ -30,7 +32,7 @@ fmt_ipv6 = function(s, o)
     buf[i] = s:byte(o + i)
   end
   local ntop = ffi.new("char[46]")
-  local rc = libc.inet_ntop(AF_INET6, buf, ntop, 46)
+  local rc = C.inet_ntop(AF_INET6, buf, ntop, 46)
   if rc == nil then
     return "?"
   end
@@ -54,7 +56,7 @@ write_learn = function(learn_wfd, msg)
 end
 local open_socket
 open_socket = function(eth_proto, ifindex)
-  local fd = libc.socket(AF_PACKET, SOCK_RAW, eth_proto)
+  local fd = C.socket(AF_PACKET, SOCK_RAW, eth_proto)
   if fd < 0 then
     return nil
   end
@@ -63,7 +65,7 @@ open_socket = function(eth_proto, ifindex)
   sll.sll_family = AF_PACKET
   sll.sll_protocol = eth_proto
   sll.sll_ifindex = ifindex
-  if libc.bind(fd, ffi.cast("struct sockaddr*", sll), ffi.sizeof(sll)) ~= 0 then
+  if C.bind(fd, ffi.cast("struct sockaddr*", sll), ffi.sizeof(sll)) ~= 0 then
     libc.close(fd)
     return nil
   end
@@ -153,7 +155,7 @@ process_ipv6 = function(raw, len, learn_wfd)
 end
 local run
 run = function(ifname, learn_wfd)
-  local ifindex = tonumber(libc.if_nametoindex(ifname))
+  local ifindex = tonumber(C.if_nametoindex(ifname))
   if ifindex == 0 then
     log_warn({
       action = "arp_sniffer_ifindex_failed",
@@ -194,15 +196,15 @@ run = function(ifname, learn_wfd)
   local buf_len = 2048
   local bit = require("bit")
   while true do
-    libc.poll(pfds, 2, 5000)
+    C.poll(pfds, 2, 5000)
     if bit.band(pfds[0].revents, POLLIN) ~= 0 then
-      local n = libc.recv(arp_fd, buf, buf_len, 0)
+      local n = C.recv(arp_fd, buf, buf_len, 0)
       if n >= ARP_MIN_LEN then
         process_arp(ffi.string(buf, n), n, learn_wfd)
       end
     end
     if bit.band(pfds[1].revents, POLLIN) ~= 0 then
-      local n = libc.recv(ip6_fd, buf, buf_len, 0)
+      local n = C.recv(ip6_fd, buf, buf_len, 0)
       if n >= NDP_MIN_LEN then
         process_ipv6(ffi.string(buf, n), n, learn_wfd)
       end

@@ -4,7 +4,7 @@
 # Targets:
 #   all          - Compile all .moon files to .lua
 #   check        - Syntax check generated Lua files
-#   test         - Unit tests (no root required)
+#   test         - Unit tests + FFI socket/WolfSSL tests (no root required)
 #   test-ndpi    - nDPI wrapper tests (requires libndpi)
 #   test-openwrt - OpenWrt live tests via SSH (HOST=user@host required)
 #   test-env     - Create/start libvirt 3-VM environment (Debian client, OpenWrt filter, Debian DNS)
@@ -67,9 +67,37 @@ check: all
 # Unit tests (no root required)
 test: all
 	@echo "Tests unitaires..."
-	$(MOONC) -o tests/run_tests.lua tests/run_tests.moon
-	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) tests/run_tests.lua
+	@$(MOONC) -o tests/run_tests.lua tests/run_tests.moon
+	@LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" $(LUAJIT) tests/run_tests.lua > /tmp/test_unit.log 2>&1; \
+	cat /tmp/test_unit.log
+	@echo ""
+	@echo "Tests FFI socket + WolfSSL + Syntax validation..."
+	@$(MOONC) -o tests/test_ffi_socket.lua tests/test_ffi_socket.moon
+	@$(MOONC) -o tests/test_ffi_wolfssl.lua tests/test_ffi_wolfssl.moon
+	@$(MOONC) -o tests/test_ffi_integration.lua tests/test_ffi_integration.moon
+	@$(MOONC) -o tests/test_ffi_defs_syntax.lua tests/test_ffi_defs_syntax.moon
+	@LUA_PATH="src/auth/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;;" $(LUAJIT) tests/test_ffi_defs_syntax.lua > /tmp/test_ffi.log 2>&1; \
+	cat /tmp/test_ffi.log
+	@LUA_PATH="src/auth/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;;" $(LUAJIT) tests/test_ffi_socket.lua >> /tmp/test_ffi.log 2>&1; \
+	cat /tmp/test_ffi.log | tail -30 | head -25
+	@LUA_PATH="src/auth/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;;" $(LUAJIT) tests/test_ffi_wolfssl.lua >> /tmp/test_ffi.log 2>&1; \
+	tail -30 /tmp/test_ffi.log | head -25
+	@LUA_PATH="src/auth/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;;" $(LUAJIT) tests/test_ffi_integration.lua >> /tmp/test_ffi.log 2>&1; \
+	tail -20 /tmp/test_ffi.log
+	@echo ""
+	@unit_passed=$$(grep -o '[0-9]\+ test(s) passé' /tmp/test_unit.log | grep -o '[0-9]\+'); \
+	unit_failed=$$(grep -o '[0-9]\+ échec' /tmp/test_unit.log | grep -o '[0-9]\+'); \
+	ffi_count=$$(grep -c 'Passed:' /tmp/test_ffi.log); \
+	ffi_passed=$$(grep 'Passed:' /tmp/test_ffi.log | awk '{split($$2,a,"/"); sum+=a[1]} END {print sum}'); \
+	total_passed=$$((unit_passed + ffi_passed)); \
+	if [ -z "$$unit_failed" ]; then unit_failed=0; fi; \
+	echo "╔════════════════════════════════════════════════════════════╗"; \
+	if [ "$$unit_failed" -eq 0 ]; then \
+		echo "║  ✅ TOUS LES TESTS: $$total_passed test(s) passé(s), 0 échec(s)  ║"; \
+	else \
+		echo "║  ⚠️  TOUS LES TESTS: $$total_passed test(s), $$unit_failed échec(s)              ║"; \
+	fi; \
+	echo "╚════════════════════════════════════════════════════════════╝"
 
 # nDPI wrapper tests (requires libndpi)
 test-ndpi: all
@@ -178,7 +206,7 @@ help:
 	@echo "Cibles disponibles:"
 	@echo "  all          - Compile tous les fichiers .moon"
 	@echo "  check        - Vérification syntaxique des fichiers Lua"
-	@echo "  test         - Tests unitaires (pas root requis)"
+	@echo "  test         - Tests unitaires + FFI socket/WolfSSL (pas root requis)"
 	@echo "  test-ndpi    - Tests nDPI wrapper (libndpi requis)"
 	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis, ARGS=--setup optionnel)"
 	@echo "  test-env     - Crée/démarre l'environnement libvirt 3 VMs pour E2E"

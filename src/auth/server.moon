@@ -5,8 +5,8 @@
 -- et fork un enfant court par connexion entrante avec lib.process, sans utiliser
 -- socket.fork().
 
-socket = require "socket"
-ssl = require "ssl"
+socket = require "auth.ffi_socket"
+ssl = require "auth.ffi_wolfssl"
 
 { :fork_child, :reap_one } = require "lib.process"
 { :session_for_mac, :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"

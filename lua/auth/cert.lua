@@ -1,4 +1,4 @@
-local ssl = require("ssl")
+local ssl = require("auth.ffi_wolfssl")
 local CERT_DAYS = 3650
 local CERT_KEY_BITS = 2048
 local hash_string

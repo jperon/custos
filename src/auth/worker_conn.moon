@@ -2,7 +2,6 @@
 -- Forké par server.moon pour chaque connexion HTTP entrante.
 -- Communique avec le session_manager via IPC binaire (stdin/stdout).
 
-socket = require "socket"
 { :log_info } = require "log"
 
 -- ── Construction du message IPC binaire ────────────────────────
