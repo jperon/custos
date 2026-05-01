@@ -13,7 +13,7 @@ local get_local_ips
 get_local_ips = function()
   local ips = { }
   local ok, out = pcall(function()
-    local f = io.popen("ip -4 addr show scope global | awk '/inet/{print $2}' | cut -d'/' -f1")
+    local f = io.popen("ip -4 addr show | awk '/inet/{print $2}' | cut -d'/' -f1 | grep -v '^127\\.' | sort -u")
     local res = f:read("*a")
     f:close()
     return res
@@ -24,7 +24,7 @@ get_local_ips = function()
     end
   end
   ok, out = pcall(function()
-    local f = io.popen("ip -6 addr show scope global | awk '/inet6/{print $2}' | cut -d'/' -f1")
+    local f = io.popen("ip -6 addr show | awk '/inet6/{print $2}' | cut -d'/' -f1 | grep -v '^::1$' | grep -v '^fe80:' | sort -u")
     local res = f:read("*a")
     f:close()
     return res
@@ -52,9 +52,9 @@ generate_self_signed = function(key_path, cert_path, sans)
   local cmd = string.format("openssl req -x509 -newkey rsa:%d -keyout '%s' -out '%s' " .. "-days %d -nodes -config '%s' 2>&1", CERT_KEY_BITS, key_path, cert_path, CERT_DAYS, cnf_path)
   local fh = io.popen(cmd)
   local out = fh:read("*a")
-  local exit_code = fh:close()
-  pcall(io.remove, cnf_path)
-  return (exit_code == 0), out
+  local ok_close = fh:close()
+  pcall(os.remove, cnf_path)
+  return (ok_close ~= nil and ok_close ~= false), out
 end
 local make_context
 make_context = function(key_path, cert_path)

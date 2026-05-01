@@ -20,13 +20,14 @@ hash_string = (s) ->
     h = (h * 31 + s\byte i) % 0x7FFFFFFF
   string.format "%x", h
 
---- Détecte les adresses IP globales (v4 et v6) du système.
+--- Détecte les adresses IP non-loopback (v4 et v6) du système.
+-- Inclut adresses privées et publiques (exclut loopback et adresses link-local IPv6).
 -- @treturn table Liste des SANs au format "IP:adresse"
 get_local_ips = () ->
   ips = {}
-  -- IPv4
+  -- IPv4 : toutes les adresses sauf loopback
   ok, out = pcall ->
-    f = io.popen "ip -4 addr show scope global | awk '/inet/{print $2}' | cut -d'/' -f1"
+    f = io.popen "ip -4 addr show | awk '/inet/{print $2}' | cut -d'/' -f1 | grep -v '^127\\.' | sort -u"
     res = f\read "*a"
     f\close!
     res
@@ -34,9 +35,9 @@ get_local_ips = () ->
     for ip in out\gmatch "%S+"
       table.insert ips, "IP:#{ip}"
 
-  -- IPv6
+  -- IPv6 : toutes les adresses sauf loopback et link-local (fe80::)
   ok, out = pcall ->
-    f = io.popen "ip -6 addr show scope global | awk '/inet6/{print $2}' | cut -d'/' -f1"
+    f = io.popen "ip -6 addr show | awk '/inet6/{print $2}' | cut -d'/' -f1 | grep -v '^::1$' | grep -v '^fe80:' | sort -u"
     res = f\read "*a"
     f\close!
     res
@@ -81,9 +82,11 @@ generate_self_signed = (key_path, cert_path, sans) ->
   )
   fh = io.popen cmd
   out = fh\read "*a"
-  exit_code = fh\close!
-  pcall io.remove, cnf_path
-  (exit_code == 0), out
+  -- En Lua 5.1 / LuaJIT, popen:close() retourne true (booléen) si exit 0,
+  -- et nil en cas d'échec — jamais le nombre 0. Tester la truthiness.
+  ok_close = fh\close!
+  pcall os.remove, cnf_path
+  (ok_close ~= nil and ok_close ~= false), out
 
 --- Crée un contexte TLS luasec en mode serveur.
 -- @tparam string key_path  Chemin de la clé privée PEM
