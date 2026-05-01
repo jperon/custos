@@ -237,8 +237,10 @@ socket_mt.__index.accept = function(self)
   local addrlen = ffi.new("socklen_t[1]")
   addrlen[0] = ffi.sizeof(addr)
   local fd = C.accept(self.fd, ffi.cast("struct sockaddr*", addr), addrlen)
+  print("[DEBUG-SOCKET-ACCEPT] accept() on fd=" .. self.fd .. " returned: " .. fd)
   if fd < 0 then
     local errno = get_errno()
+    print("[DEBUG-SOCKET-ACCEPT] accept() failed with errno=" .. errno)
     if errno == EAGAIN or errno == EWOULDBLOCK then
       return nil
     end
@@ -250,6 +252,7 @@ socket_mt.__index.accept = function(self)
     closed = false,
     timeout = nil
   }
+  print("[DEBUG-SOCKET-ACCEPT] Created client socket with fd=" .. fd .. ", family=" .. self.family)
   setmetatable(client, socket_mt)
   return client
 end
@@ -357,7 +360,9 @@ socket_mt.__index.setoption = function(self, option, value)
   return true
 end
 socket_mt.__index.getpeername = function(self)
+  print("[DEBUG-GETPEERNAME] Starting. closed=" .. tostring(self.closed) .. ", family=" .. self.family)
   if self.closed then
+    print("[DEBUG-GETPEERNAME] Socket is closed, returning nil")
     return nil
   end
   local addr
@@ -366,20 +371,42 @@ socket_mt.__index.getpeername = function(self)
   else
     addr = ffi.new("struct sockaddr_in")
   end
+  print("[DEBUG-GETPEERNAME] Created addr struct. AF_INET6=" .. AF_INET6 .. ", AF_INET=" .. (AF_INET or -1))
   local addrlen = ffi.new("socklen_t[1]")
   addrlen[0] = ffi.sizeof(addr)
+  print("[DEBUG-GETPEERNAME] Set addrlen to " .. addrlen[0])
   local ret = C.getpeername(self.fd, ffi.cast("struct sockaddr*", addr), addrlen)
+  print("[DEBUG-GETPEERNAME] C.getpeername() returned: " .. ret .. " (addrlen now " .. addrlen[0] .. ")")
   if ret < 0 then
+    print("[DEBUG-GETPEERNAME] getpeername() failed, returning nil")
     return nil
   end
+  print("[DEBUG-GETPEERNAME] Converting address to string. family=" .. self.family)
+  local buf
   if self.family == AF_INET6 then
-    local buf = ffi.new("char[46]")
-    C.inet_ntop(AF_INET6, addr.sin6_addr, buf, 46)
+    print("[DEBUG-GETPEERNAME] IPv6 path: allocating char[46]")
+    local inet6_buf = ffi.new("char[46]")
+    local src_ptr = ffi.cast("const void*", addr.sin6_addr)
+    print("[DEBUG-GETPEERNAME] IPv6 src_ptr=" .. tostring(src_ptr) .. ", calling inet_ntop()")
+    local ret_ntop = C.inet_ntop(AF_INET6, src_ptr, inet6_buf, 46)
+    print("[DEBUG-GETPEERNAME] inet_ntop() returned: " .. tostring(ret_ntop))
+    buf = inet6_buf
   else
-    local buf = ffi.new("char[16]")
-    C.inet_ntop(AF_INET, addr.sin_addr, buf, 16)
+    print("[DEBUG-GETPEERNAME] IPv4 path: allocating char[16]")
+    local inet_buf = ffi.new("char[16]")
+    local src_ptr = ffi.cast("const void*", addr.sin_addr)
+    print("[DEBUG-GETPEERNAME] IPv4 src_ptr=" .. tostring(src_ptr) .. ", calling inet_ntop(AF_INET=" .. AF_INET .. ", buf, 16)")
+    local ret_ntop = C.inet_ntop(AF_INET, src_ptr, inet_buf, 16)
+    print("[DEBUG-GETPEERNAME] inet_ntop() returned: " .. tostring(ret_ntop))
+    buf = inet_buf
   end
-  return ffi.string(buf)
+  print("[DEBUG-GETPEERNAME] After if/else: buf=" .. tostring(buf))
+  local buf_ptr = ffi.cast("char*", buf)
+  print("[DEBUG-GETPEERNAME] Cast buf to char*, buf_ptr=" .. tostring(buf_ptr))
+  local result = ffi.string(buf_ptr)
+  print("[DEBUG-GETPEERNAME] ffi.string() returned, result=" .. tostring(result) .. ", length=" .. #result)
+  print("[DEBUG-GETPEERNAME] Returning: " .. result)
+  return result
 end
 socket_mt.__index.getsockname = function(self)
   if self.closed then
@@ -397,14 +424,19 @@ socket_mt.__index.getsockname = function(self)
   if ret < 0 then
     return nil
   end
+  local buf
   if self.family == AF_INET6 then
-    local buf = ffi.new("char[46]")
-    C.inet_ntop(AF_INET6, addr.sin6_addr, buf, 46)
+    local inet6_buf = ffi.new("char[46]")
+    local src_ptr = ffi.cast("const void*", addr.sin6_addr)
+    C.inet_ntop(AF_INET6, src_ptr, inet6_buf, 46)
+    buf = inet6_buf
   else
-    local buf = ffi.new("char[16]")
-    C.inet_ntop(AF_INET, addr.sin_addr, buf, 16)
+    local inet_buf = ffi.new("char[16]")
+    local src_ptr = ffi.cast("const void*", addr.sin_addr)
+    C.inet_ntop(AF_INET, src_ptr, inet_buf, 16)
+    buf = inet_buf
   end
-  return ffi.string(buf)
+  return ffi.string(ffi.cast("char*", buf))
 end
 socket_mt.__index.close = function(self)
   if not self.closed then

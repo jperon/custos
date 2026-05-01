@@ -103,14 +103,18 @@ newcontext = (opts = {}) ->
 
 -- Wrap raw socket with TLS
 wrap = (raw_socket, ctx_obj) ->
+  print "[DEBUG-WOLFSSL-WRAP] Starting wrap. socket.fd="..raw_socket.fd..", ctx_obj.ctx="..tostring(ctx_obj.ctx)
+  
   ssl = libwolfssl.wolfSSL_new(ctx_obj.ctx)
+  print "[DEBUG-WOLFSSL-WRAP] wolfSSL_new() returned: "..tostring(ssl)
   if ssl == nil
     error "wolfSSL_new() failed"
   
   ret = libwolfssl.wolfSSL_set_fd(ssl, raw_socket.fd)
+  print "[DEBUG-WOLFSSL-WRAP] wolfSSL_set_fd(ssl="..tostring(ssl)..", fd="..raw_socket.fd..") returned: "..ret
   if ret < 0
     libwolfssl.wolfSSL_free(ssl)
-    error "wolfSSL_set_fd() failed"
+    error "wolfSSL_set_fd() failed: ret="..ret
   
   wrapped = {
     :ssl
@@ -119,28 +123,41 @@ wrap = (raw_socket, ctx_obj) ->
     closed: false
   }
   setmetatable(wrapped, ssl_mt)
+  print "[DEBUG-WOLFSSL-WRAP] Wrap complete. TLS connection object created."
   wrapped
 
 -- Do handshake
 ssl_mt.__index.dohandshake = =>
+  print "[DEBUG-WOLFSSL-HS] Starting handshake. closed="..tostring(@closed)..", handshake_done="..tostring(@handshake_done)
+  
   if @closed
     error "SSL connection is closed"
   
   if @handshake_done
+    print "[DEBUG-WOLFSSL-HS] Handshake already done, returning true"
     return true
   
+  print "[DEBUG-WOLFSSL-HS] Calling wolfSSL_accept()"
   ret = libwolfssl.wolfSSL_accept(@ssl)
+  print "[DEBUG-WOLFSSL-HS] wolfSSL_accept() returned: "..ret
+  
   if ret > 0
     @handshake_done = true
+    print "[DEBUG-WOLFSSL-HS] Handshake SUCCESS"
     return true
   
   err = libwolfssl.wolfSSL_get_error(@ssl, ret)
+  print "[DEBUG-WOLFSSL-HS] wolfSSL_get_error() returned: "..err.." (WANT_READ=2, WANT_WRITE=3, SSL_ERROR_SSL=1)"
+  
   if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE
+    print "[DEBUG-WOLFSSL-HS] Handshake needs more data (WANT_READ/WANT_WRITE)"
     return false
   
   if err == SSL_ERROR_SSL
+    print "[DEBUG-WOLFSSL-HS] TLS error during handshake"
     error "TLS error during handshake"
   
+  print "[DEBUG-WOLFSSL-HS] Unexpected error code: "..err
   error "Unexpected error: "..err
 
 -- Send
@@ -162,27 +179,69 @@ ssl_mt.__index.send = (data) =>
   error "wolfSSL_write() error"
 
 -- Receive
-ssl_mt.__index.receive = (size = 4096) =>
+ssl_mt.__index.receive = (mode = 4096) =>
   if @closed
     error "SSL connection is closed"
   
   if not @handshake_done
-    return nil
+    error "TLS handshake not complete"
   
-  buf = ffi.new("uint8_t[?]", size)
-  n = libwolfssl.wolfSSL_read(@ssl, buf, size)
-  
-  if n > 0
-    return ffi.string(buf, n)
-  
-  if n == 0
-    return nil
-  
-  err = libwolfssl.wolfSSL_get_error(@ssl, n)
-  if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE
-    return nil
-  
-  error "wolfSSL_read() error"
+  -- Handle both "*l" (line) and numeric (size) modes
+  if mode == "*l"
+    -- Read line-by-line (HTTP request format)
+    print "[DEBUG-WOLFSSL-RECV] receive('*l') called, reading line"
+    max_line = 4096
+    line_buf = ffi.new("uint8_t[?]", max_line)
+    line_len = 0
+    
+    while line_len < max_line - 1
+      n = libwolfssl.wolfSSL_read(@ssl, ffi.cast("uint8_t*", ffi.cast("void*", line_buf)) + line_len, 1)
+      print "[DEBUG-WOLFSSL-RECV] Read 1 byte, n="..n
+      
+      if n <= 0
+        if line_len > 0
+          print "[DEBUG-WOLFSSL-RECV] Returning partial line of "..line_len.." bytes"
+          return ffi.string(line_buf, line_len)
+        err = libwolfssl.wolfSSL_get_error(@ssl, n)
+        if err == SSL_ERROR_WANT_READ
+          return nil
+        error "wolfSSL_read() failed"
+      
+      -- Check for newline
+      byte_val = line_buf[line_len]
+      if byte_val == 10  -- '\n'
+        print "[DEBUG-WOLFSSL-RECV] Found newline at position "..line_len
+        -- Strip trailing \r if present
+        if line_len > 0 and line_buf[line_len - 1] == 13
+          print "[DEBUG-WOLFSSL-RECV] Stripping trailing CR"
+          return ffi.string(line_buf, line_len - 1)
+        return ffi.string(line_buf, line_len)
+      
+      line_len += 1
+    
+    error "Line too long"
+  else
+    -- Numeric size mode
+    size = tonumber(mode) or 4096
+    print "[DEBUG-WOLFSSL-RECV] receive("..size..") called, reading bytes"
+    
+    buf = ffi.new("uint8_t[?]", size)
+    n = libwolfssl.wolfSSL_read(@ssl, buf, size)
+    print "[DEBUG-WOLFSSL-RECV] wolfSSL_read returned "..n
+    
+    if n > 0
+      return ffi.string(buf, n)
+    
+    if n == 0
+      print "[DEBUG-WOLFSSL-RECV] EOF from peer"
+      return nil
+    
+    err = libwolfssl.wolfSSL_get_error(@ssl, n)
+    if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE
+      print "[DEBUG-WOLFSSL-RECV] WANT_READ/WRITE, returning nil"
+      return nil
+    
+    error "wolfSSL_read() error"
 
 -- Close
 ssl_mt.__index.close = =>

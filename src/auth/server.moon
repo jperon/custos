@@ -410,19 +410,46 @@ handle_client = (args) ->
   peer_ip = args.peer_ip or "unknown"
 
   ok, err = pcall ->
-    client\settimeout 10
+    print "[DEBUG-SERVER] handle_client started for peer="..peer_ip..", client.fd="..client.fd
+    
+    -- Set socket to BLOCKING mode for handshake
+    print "[DEBUG-SERVER] Setting socket to blocking mode for TLS handshake"
+    client\settimeout nil  -- nil = blocking mode
+    print "[DEBUG-SERVER] Socket is now blocking"
 
+    print "[DEBUG-SERVER] About to call ssl.wrap(client="..tostring(client)..", ctx="..tostring(state.tls_ctx)..")"
     tls_client, tls_err = ssl.wrap client, state.tls_ctx
+    print "[DEBUG-SERVER] ssl.wrap returned: tls_client="..tostring(tls_client)..", err="..tostring(tls_err)
+    
     unless tls_client
       log_warn { action: "auth_tls_wrap_failed", err: tls_err }
       client\close!
       return
 
-    ok_hs, hs_err = tls_client\dohandshake!
-    unless ok_hs
-      log_warn { action: "auth_tls_handshake_failed", err: hs_err }
+    print "[DEBUG-SERVER] About to call tls_client:dohandshake()"
+    
+    -- Handshake loop: keep trying until complete or error
+    handshake_complete = false
+    handshake_attempts = 0
+    while not handshake_complete and handshake_attempts < 50
+      handshake_attempts += 1
+      print "[DEBUG-SERVER] Handshake attempt #"..handshake_attempts
+      
+      ok_hs, hs_err = tls_client\dohandshake!
+      print "[DEBUG-SERVER] dohandshake() returned: ok="..tostring(ok_hs)..", err="..tostring(hs_err)
+      
+      if ok_hs
+        print "[DEBUG-SERVER] Handshake COMPLETE"
+        handshake_complete = true
+    
+    unless handshake_complete
+      log_warn { action: "auth_tls_handshake_failed", err: "max attempts or error" }
       tls_client\close!
       return
+    
+    -- Switch to non-blocking after successful handshake for HTTP I/O
+    print "[DEBUG-SERVER] Handshake done, setting socket to non-blocking for HTTP"
+    client\settimeout 0
 
     peer_mac = get_mac peer_ip
     req, req_err = read_request tls_client
@@ -524,14 +551,22 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     readable, _ = socket.select all_servers, nil, 0.1
     if readable
       for srv in *readable
+        print "[DEBUG-SERVER] socket.select returned readable, attempting accept()"
         client = srv\accept!
+        print "[DEBUG-SERVER] accept() returned: "..tostring(client)
+        
         if client
+          print "[DEBUG-SERVER] Got client socket, calling getpeername()"
           peer_ip = client\getpeername! or "unknown"
+          print "[DEBUG-SERVER] peer_ip="..peer_ip
 
+          print "[DEBUG-SERVER] About to fork_child for peer="..peer_ip..", client.fd="..client.fd
           pid = fork_child "AUTH-conn",
             handle_client,
             { client: client, peer_ip: peer_ip, state: state },
             { log_start: false }
+          
+          print "[DEBUG-SERVER] fork_child returned pid="..pid
 
           log_info { action: "auth_conn_started", pid: pid, peer: peer_ip }
           client\close!
