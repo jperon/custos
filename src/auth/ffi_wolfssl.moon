@@ -28,6 +28,8 @@ ffi.cdef [[
   int wolfSSL_read(WOLFSSL *ssl, void *data, int sz);
   int wolfSSL_shutdown(WOLFSSL *ssl);
   int wolfSSL_get_error(WOLFSSL *ssl, int ret);
+  unsigned long wolfSSL_ERR_get_error(void);
+  char* wolfSSL_ERR_reason_error_string(unsigned long err);
 ]]
 
 -- Load library with multiple fallback strategies
@@ -63,6 +65,17 @@ SSL_ERROR_SSL = 1
 -- File types
 SSL_FILETYPE_PEM = 1
 SSL_FILETYPE_ASN1 = 2
+
+--- Extract WolfSSL error queue messages
+get_ssl_errors = () ->
+  errors = {}
+  while true
+    err = libwolfssl.wolfSSL_ERR_get_error!
+    break if err == 0
+    reason_ptr = libwolfssl.wolfSSL_ERR_reason_error_string(err)
+    reason = if reason_ptr != nil then ffi.string(reason_ptr) else "unknown"
+    table.insert errors, "#{err}:#{reason}"
+  table.concat errors, " | "
 
 -- SSL object metatable
 ssl_mt = {
@@ -155,11 +168,14 @@ ssl_mt.__index.dohandshake = =>
     return false
   
   if err == SSL_ERROR_SSL
-    log_debug { action: "handshake_ssl_error" }
-    error "TLS error during handshake"
+    ssl_errors = get_ssl_errors!
+    log_debug { action: "handshake_ssl_error", ssl_err: ssl_errors }
+    error "TLS error during handshake: #{ssl_errors}"
   
-  log_debug { action: "handshake_unexpected_error", err: err }
-  error "Unexpected error: "..err
+  -- Unexpected error code
+  ssl_errors = get_ssl_errors!
+  log_debug { action: "handshake_unexpected_error", err: err, ssl_err: ssl_errors }
+  error "Unexpected error #{err}: #{ssl_errors}"
 
 -- Send
 ssl_mt.__index.send = (data) =>

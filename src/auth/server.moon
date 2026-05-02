@@ -12,6 +12,7 @@ ssl = require "auth.ffi_wolfssl"
 { :session_for_mac, :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
 { :verify_password, :register_user } = require "auth.credentials"
 { :load_or_generate, :load_or_generate_sni } = require "auth.cert"
+{ :extract_sni } = require "auth.sni_extractor"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 { :AUTH_SESSIONS_FILE } = require "config"
 
@@ -33,7 +34,8 @@ parse_form = (body) ->
 
 read_request = (client) ->
   request_line, err = client\receive "*l"
-  return nil, err unless request_line
+  unless request_line
+    return nil, err or "connection_closed_or_timeout"
 
   method, path = request_line\match "^(%w+)%s+([^%s]+)%s+HTTP"
   return nil, "bad_request_line" unless method and path
@@ -43,7 +45,8 @@ read_request = (client) ->
 
   while true
     line, line_err = client\receive "*l"
-    return nil, line_err unless line
+    unless line
+      return nil, line_err or "header_read_error"
     break if line == ""
 
     name, value = line\match "^([^:]+):%s*(.*)$"
@@ -412,13 +415,34 @@ handle_client = (args) ->
   ok, err = pcall ->
     log_debug { action: "server_handle_client_start", peer: peer_ip, fd: client.fd }
     
+    -- Obtenir l'IP locale du socket (sur laquelle le client s'est connecté)
+    local_ip = client\getsockname!
+    unless local_ip
+      log_warn { action: "server_getsockname_failed" }
+      local_ip = "custos"  -- Fallback
+    
+    log_debug { action: "server_local_ip_detected", local_ip: local_ip }
+    
+    -- Générer ou charger le certificat avec l'IP locale comme CN
+    tls_ctx = nil
+    tls_ctx_ok, tls_ctx_err = pcall ->
+      tls_ctx = load_or_generate_sni local_ip, state.cert_cache
+    unless tls_ctx_ok
+      log_error { action: "server_cert_generation_failed", local_ip: local_ip, err: tls_ctx_err }
+      error "Cannot generate certificate: #{tls_ctx_err}"
+    unless tls_ctx
+      log_error { action: "server_cert_null", local_ip: local_ip }
+      error "Certificate context is nil"
+    
+    log_debug { action: "server_cert_loaded", local_ip: local_ip }
+    
     -- Set socket to BLOCKING mode for handshake
     log_debug { action: "server_set_blocking_mode" }
     client\settimeout nil  -- nil = blocking mode
     log_debug { action: "server_blocking_mode_set" }
 
     log_debug { action: "server_ssl_wrap_start" }
-    tls_client, tls_err = ssl.wrap client, state.tls_ctx
+    tls_client, tls_err = ssl.wrap client, tls_ctx
     log_debug { action: "server_ssl_wrap_done" }
     
     unless tls_client
@@ -447,9 +471,9 @@ handle_client = (args) ->
       tls_client\close!
       return
     
-    -- Switch to non-blocking after successful handshake for HTTP I/O
-    log_debug { action: "server_set_nonblocking_mode" }
-    client\settimeout 0
+    -- After handshake, socket is still blocking (nil timeout)
+    -- Leave it blocking for HTTP I/O (client must send request promptly)
+    log_debug { action: "server_set_http_timeout" }
 
     peer_mac = get_mac peer_ip
     req, req_err = read_request tls_client
@@ -514,23 +538,10 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   
   log_debug { action: "server_startup", port: port }
   
-  -- Initialiser le cache de certificats SNI
+  -- Initialiser le cache de certificats (persistant, 90 jours TTL)
   log_debug { action: "server_cert_cache_init" }
   cert_cache_module = require "auth.cert_cache"
-  cert_cache = cert_cache_module.create_cache 100, 86400  -- 100 certs, 24h TTL
-  
-  -- Générer le certificat initial (fallback générique pour "custos")
-  log_debug { action: "server_generating_fallback_cert", hostname: "custos" }
-  tls_ctx = nil  -- Déclarer avant pcall pour qu'elle soit accessible après
-  ok, err = pcall ->
-    tls_ctx = load_or_generate_sni "custos", cert_cache
-  unless ok
-    log_error { action: "server_fallback_cert_generation_failed", err: err }
-    error "Cannot generate fallback certificate: #{err}"
-  unless tls_ctx
-    log_error { action: "server_fallback_cert_null" }
-    error "Fallback certificate context is nil"
-  log_debug { action: "server_fallback_cert_ready" }
+  cert_cache = cert_cache_module.create_cache 500, 7776000  -- 500 certs, 90 days TTL
 
   listen4, err4 = make_server4 port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4

@@ -24,6 +24,8 @@ ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
   int wolfSSL_read(WOLFSSL *ssl, void *data, int sz);
   int wolfSSL_shutdown(WOLFSSL *ssl);
   int wolfSSL_get_error(WOLFSSL *ssl, int ret);
+  unsigned long wolfSSL_ERR_get_error(void);
+  char* wolfSSL_ERR_reason_error_string(unsigned long err);
 ]])
 local libwolfssl = nil
 for _, name in ipairs({
@@ -59,6 +61,25 @@ local SSL_ERROR_WANT_WRITE = 3
 local SSL_ERROR_SSL = 1
 local SSL_FILETYPE_PEM = 1
 local SSL_FILETYPE_ASN1 = 2
+local get_ssl_errors
+get_ssl_errors = function()
+  local errors = { }
+  while true do
+    local err = libwolfssl.wolfSSL_ERR_get_error()
+    if err == 0 then
+      break
+    end
+    local reason_ptr = libwolfssl.wolfSSL_ERR_reason_error_string(err)
+    local reason
+    if reason_ptr ~= nil then
+      reason = ffi.string(reason_ptr)
+    else
+      reason = "unknown"
+    end
+    table.insert(errors, tostring(err) .. ":" .. tostring(reason))
+  end
+  return table.concat(errors, " | ")
+end
 local ssl_mt = {
   __index = { }
 }
@@ -171,16 +192,20 @@ ssl_mt.__index.dohandshake = function(self)
     return false
   end
   if err == SSL_ERROR_SSL then
+    local ssl_errors = get_ssl_errors()
     log_debug({
-      action = "handshake_ssl_error"
+      action = "handshake_ssl_error",
+      ssl_err = ssl_errors
     })
-    error("TLS error during handshake")
+    error("TLS error during handshake: " .. tostring(ssl_errors))
   end
+  local ssl_errors = get_ssl_errors()
   log_debug({
     action = "handshake_unexpected_error",
-    err = err
+    err = err,
+    ssl_err = ssl_errors
   })
-  return error("Unexpected error: " .. err)
+  return error("Unexpected error " .. tostring(err) .. ": " .. tostring(ssl_errors))
 end
 ssl_mt.__index.send = function(self, data)
   if self.closed then

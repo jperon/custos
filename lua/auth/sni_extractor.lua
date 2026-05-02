@@ -33,7 +33,7 @@ local extract_sni
 extract_sni = function(data)
   if not (data and #data >= 43) then
     log_debug({
-      action = "sni_extract_too_short",
+      action = "server_sni_extract_too_short",
       len = #data or 0
     })
     return nil
@@ -41,7 +41,7 @@ extract_sni = function(data)
   local record_type = read_u8(data, 1)
   if not (record_type == 0x16) then
     log_debug({
-      action = "sni_extract_not_handshake",
+      action = "server_sni_extract_not_handshake",
       type = record_type
     })
     return nil
@@ -49,7 +49,7 @@ extract_sni = function(data)
   local record_length = read_u16_be(data, 3)
   if not (#data >= 5 + record_length) then
     log_debug({
-      action = "sni_extract_truncated_record",
+      action = "server_sni_extract_truncated_record",
       avail = #data,
       need = 5 + record_length
     })
@@ -59,7 +59,7 @@ extract_sni = function(data)
   local hs_type = read_u8(data, hs_offset + 1)
   if not (hs_type == 0x01) then
     log_debug({
-      action = "sni_extract_not_clienthello",
+      action = "server_sni_extract_not_clienthello",
       hs_type = hs_type
     })
     return nil
@@ -71,7 +71,7 @@ extract_sni = function(data)
   local cipher_suites_offset = ch_offset + 35 + session_id_len
   if not (cipher_suites_offset + 1 <= #data) then
     log_debug({
-      action = "sni_extract_truncated_cipher_suites"
+      action = "server_sni_extract_truncated_cipher_suites"
     })
     return nil
   end
@@ -79,7 +79,7 @@ extract_sni = function(data)
   local compression_offset = cipher_suites_offset + 2 + cipher_suites_len
   if not (compression_offset + 1 <= #data) then
     log_debug({
-      action = "sni_extract_truncated_compression"
+      action = "server_sni_extract_truncated_compression"
     })
     return nil
   end
@@ -87,14 +87,14 @@ extract_sni = function(data)
   local extensions_offset = compression_offset + 1 + compression_len
   if not (extensions_offset + 1 <= #data) then
     log_debug({
-      action = "sni_extract_no_extensions"
+      action = "server_sni_extract_no_extensions"
     })
     return nil
   end
   local extensions_len = read_u16_be(data, extensions_offset)
   if not (extensions_len > 0) then
     log_debug({
-      action = "sni_extract_empty_extensions"
+      action = "server_sni_extract_empty_extensions"
     })
     return nil
   end
@@ -102,7 +102,7 @@ extract_sni = function(data)
   local ext_data_end = ext_data_offset + extensions_len
   if not (ext_data_end <= #data) then
     log_debug({
-      action = "sni_extract_truncated_extensions"
+      action = "server_sni_extract_truncated_extensions"
     })
     return nil
   end
@@ -117,7 +117,7 @@ extract_sni = function(data)
     if ext_type == 0x0000 then
       if not (ext_payload_offset + 1 <= #data) then
         log_debug({
-          action = "sni_extract_snl_truncated"
+          action = "server_sni_extract_snl_truncated"
         })
         return nil
       end
@@ -125,7 +125,7 @@ extract_sni = function(data)
       local snl_offset = ext_payload_offset + 2
       if not (snl_offset + 2 <= #data) then
         log_debug({
-          action = "sni_extract_sn_header_truncated"
+          action = "server_sni_extract_sn_header_truncated"
         })
         return nil
       end
@@ -133,7 +133,7 @@ extract_sni = function(data)
       local name_len = read_u16_be(data, snl_offset + 1)
       if not (name_type == 0) then
         log_debug({
-          action = "sni_extract_unknown_name_type",
+          action = "server_sni_extract_unknown_name_type",
           type = name_type
         })
         return nil
@@ -141,7 +141,7 @@ extract_sni = function(data)
       local name_offset = snl_offset + 3
       if not (name_offset + name_len - 1 <= #data) then
         log_debug({
-          action = "sni_extract_sn_name_truncated",
+          action = "server_sni_extract_sn_name_truncated",
           need = name_offset + name_len,
           have = #data
         })
@@ -150,13 +150,13 @@ extract_sni = function(data)
       local hostname = data:sub(name_offset, name_offset + name_len - 1)
       if not (hostname:match("^[a-zA-Z0-9._*-]+$")) then
         log_warn({
-          action = "sni_extract_invalid_hostname",
+          action = "server_sni_extract_invalid_hostname",
           hostname = hostname
         })
         return nil
       end
       log_debug({
-        action = "sni_extract_found",
+        action = "server_sni_extract_found",
         hostname = hostname
       })
       return hostname
@@ -164,7 +164,7 @@ extract_sni = function(data)
     pos = ext_payload_offset + ext_len
   end
   log_debug({
-    action = "sni_extract_no_sni_extension"
+    action = "server_sni_extract_no_sni_extension"
   })
   return nil
 end

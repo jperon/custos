@@ -159,12 +159,37 @@ load_or_generate_sni = (hostname, cache) ->
   -- Vérifier le cache
   entry = cache.get hostname_lower
   if entry and entry.ctx
-    log_debug { action: "cert_sni_cache_hit", hostname: hostname_lower }
+    log_debug { action: "cert_sni_cache_hit_ram", hostname: hostname_lower }
     return entry.ctx
   
+  if entry and entry.cert_pem and entry.key_pem
+    -- Entry depuis disque, recréer contexte
+    log_debug { action: "cert_sni_cache_hit_disk", hostname: hostname_lower }
+    
+    key_file = "tmp/auth_sni_#{hostname_lower}_#{os.time!}.key"
+    cert_file = "tmp/auth_sni_#{hostname_lower}_#{os.time!}.crt"
+    
+    key_ok = pcall ->
+      key_fh = io.open key_file, "w"
+      error "Cannot open key file" unless key_fh
+      key_fh\write entry.key_pem
+      key_fh\close!
+    
+    cert_ok = pcall ->
+      cert_fh = io.open cert_file, "w"
+      error "Cannot open cert file" unless cert_fh
+      cert_fh\write entry.cert_pem
+      cert_fh\close!
+    
+    if key_ok and cert_ok
+      ctx = ssl.newcontext { certificate: cert_file, key: key_file }
+      cache.set hostname_lower, entry.cert_pem, entry.key_pem, ctx
+      log_debug { action: "cert_sni_context_recreated", hostname: hostname_lower }
+      return ctx
+  
+  -- Pas en cache ou erreur : générer
   log_debug { action: "cert_sni_cache_miss", hostname: hostname_lower }
   
-  -- Pas en cache ou pas de contexte : générer
   gen = require "auth.cert_generator"
   log_debug { action: "cert_sni_generating", hostname: hostname_lower }
   key_pem, cert_pem, ok, err = gen.generate_self_signed hostname_lower

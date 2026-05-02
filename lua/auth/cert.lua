@@ -133,10 +133,46 @@ load_or_generate_sni = function(hostname, cache)
   local entry = cache.get(hostname_lower)
   if entry and entry.ctx then
     log_debug({
-      action = "cert_sni_cache_hit",
+      action = "cert_sni_cache_hit_ram",
       hostname = hostname_lower
     })
     return entry.ctx
+  end
+  if entry and entry.cert_pem and entry.key_pem then
+    log_debug({
+      action = "cert_sni_cache_hit_disk",
+      hostname = hostname_lower
+    })
+    local key_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.time()) .. ".key"
+    local cert_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.time()) .. ".crt"
+    local key_ok = pcall(function()
+      local key_fh = io.open(key_file, "w")
+      if not (key_fh) then
+        error("Cannot open key file")
+      end
+      key_fh:write(entry.key_pem)
+      return key_fh:close()
+    end)
+    local cert_ok = pcall(function()
+      local cert_fh = io.open(cert_file, "w")
+      if not (cert_fh) then
+        error("Cannot open cert file")
+      end
+      cert_fh:write(entry.cert_pem)
+      return cert_fh:close()
+    end)
+    if key_ok and cert_ok then
+      local ctx = ssl.newcontext({
+        certificate = cert_file,
+        key = key_file
+      })
+      cache.set(hostname_lower, entry.cert_pem, entry.key_pem, ctx)
+      log_debug({
+        action = "cert_sni_context_recreated",
+        hostname = hostname_lower
+      })
+      return ctx
+    end
   end
   log_debug({
     action = "cert_sni_cache_miss",

@@ -20,6 +20,8 @@ do
   local _obj_0 = require("auth.cert")
   load_or_generate, load_or_generate_sni = _obj_0.load_or_generate, _obj_0.load_or_generate_sni
 end
+local extract_sni
+extract_sni = require("auth.sni_extractor").extract_sni
 local log_info, log_warn, log_error, log_debug
 do
   local _obj_0 = require("log")
@@ -55,7 +57,7 @@ local read_request
 read_request = function(client)
   local request_line, err = client:receive("*l")
   if not (request_line) then
-    return nil, err
+    return nil, err or "connection_closed_or_timeout"
   end
   local method, path = request_line:match("^(%w+)%s+([^%s]+)%s+HTTP")
   if not (method and path) then
@@ -66,7 +68,7 @@ read_request = function(client)
   while true do
     local line, line_err = client:receive("*l")
     if not (line) then
-      return nil, line_err
+      return nil, line_err or "header_read_error"
     end
     if line == "" then
       break
@@ -487,6 +489,40 @@ handle_client = function(args)
       peer = peer_ip,
       fd = client.fd
     })
+    local local_ip = client:getsockname()
+    if not (local_ip) then
+      log_warn({
+        action = "server_getsockname_failed"
+      })
+      local_ip = "custos"
+    end
+    log_debug({
+      action = "server_local_ip_detected",
+      local_ip = local_ip
+    })
+    local tls_ctx = nil
+    local tls_ctx_ok, tls_ctx_err = pcall(function()
+      tls_ctx = load_or_generate_sni(local_ip, state.cert_cache)
+    end)
+    if not (tls_ctx_ok) then
+      log_error({
+        action = "server_cert_generation_failed",
+        local_ip = local_ip,
+        err = tls_ctx_err
+      })
+      error("Cannot generate certificate: " .. tostring(tls_ctx_err))
+    end
+    if not (tls_ctx) then
+      log_error({
+        action = "server_cert_null",
+        local_ip = local_ip
+      })
+      error("Certificate context is nil")
+    end
+    log_debug({
+      action = "server_cert_loaded",
+      local_ip = local_ip
+    })
     log_debug({
       action = "server_set_blocking_mode"
     })
@@ -497,7 +533,7 @@ handle_client = function(args)
     log_debug({
       action = "server_ssl_wrap_start"
     })
-    local tls_client, tls_err = ssl.wrap(client, state.tls_ctx)
+    local tls_client, tls_err = ssl.wrap(client, tls_ctx)
     log_debug({
       action = "server_ssl_wrap_done"
     })
@@ -541,9 +577,8 @@ handle_client = function(args)
       return 
     end
     log_debug({
-      action = "server_set_nonblocking_mode"
+      action = "server_set_http_timeout"
     })
-    client:settimeout(0)
     local peer_mac = get_mac(peer_ip)
     local req, req_err = read_request(tls_client)
     if not (req) then
@@ -621,31 +656,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     action = "server_cert_cache_init"
   })
   local cert_cache_module = require("auth.cert_cache")
-  local cert_cache = cert_cache_module.create_cache(100, 86400)
-  log_debug({
-    action = "server_generating_fallback_cert",
-    hostname = "custos"
-  })
-  local tls_ctx = nil
-  local ok, err = pcall(function()
-    tls_ctx = load_or_generate_sni("custos", cert_cache)
-  end)
-  if not (ok) then
-    log_error({
-      action = "server_fallback_cert_generation_failed",
-      err = err
-    })
-    error("Cannot generate fallback certificate: " .. tostring(err))
-  end
-  if not (tls_ctx) then
-    log_error({
-      action = "server_fallback_cert_null"
-    })
-    error("Fallback certificate context is nil")
-  end
-  log_debug({
-    action = "server_fallback_cert_ready"
-  })
+  local cert_cache = cert_cache_module.create_cache(500, 7776000)
   local listen4, err4 = make_server4(port)
   if not (listen4) then
     error("Impossible de démarrer le serveur IPv4 sur port " .. tostring(port) .. " : " .. tostring(err4))
