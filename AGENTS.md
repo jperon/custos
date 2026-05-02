@@ -56,3 +56,18 @@ Voir [README.md](README.md) pour l'architecture complète.
   sockets distincts + `socket.select`
 - **`\` au lieu de `.`** pour appeler des fonctions de module (ex. `nft_sessions`) →
   injecte la table comme premier argument
+
+---
+
+## px5g Migration — Dynamic TLS Certificate Generation
+
+See [.agents/px5g_migration.md](.agents/px5g_migration.md) for full documentation on the migration from static (openssl-based) to dynamic (px5g-based) certificate generation with LRU/TTL caching.
+
+**New modules**:
+- `src/auth/cert_generator.moon` — px5g wrapper for dynamic cert generation
+- `src/auth/cert_cache.moon` — LRU cache with TTL for generated certs
+- `src/auth/sni_extractor.moon` — TLS ClientHello SNI parser (RFC 5246/6066)
+
+**Modified modules**:
+- `src/auth/cert.moon` — Added `load_or_generate_sni()` for SNI-aware certs
+- `src/auth/server.moon` — Cache initialization on AUTH server startup

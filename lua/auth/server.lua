@@ -15,12 +15,15 @@ do
   local _obj_0 = require("auth.credentials")
   verify_password, register_user = _obj_0.verify_password, _obj_0.register_user
 end
-local load_or_generate
-load_or_generate = require("auth.cert").load_or_generate
-local log_info, log_warn, log_error
+local load_or_generate, load_or_generate_sni
+do
+  local _obj_0 = require("auth.cert")
+  load_or_generate, load_or_generate_sni = _obj_0.load_or_generate, _obj_0.load_or_generate_sni
+end
+local log_info, log_warn, log_error, log_debug
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_error = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error
+  log_info, log_warn, log_error, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug
 end
 local AUTH_SESSIONS_FILE
 AUTH_SESSIONS_FILE = require("config").AUTH_SESSIONS_FILE
@@ -244,14 +247,14 @@ handle_login = function(req, peer_ip, peer_mac, state)
   local mac = peer_mac
   if not (mac and mac ~= "unknown") then
     log_warn({
-      action = "auth_login_mac_missing",
+      action = "server_login_mac_missing",
       ip = peer_ip,
       mac = mac
     })
     return 401, { }, "Unable to identify client MAC (IP: " .. tostring(peer_ip) .. ")"
   end
   log_info({
-    action = "auth_login_success",
+    action = "server_login_success",
     user = user,
     mac = mac,
     ip = peer_ip
@@ -261,7 +264,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
   end)
   if not (ok) then
     log_warn({
-      action = "auth_session_add_failed",
+      action = "server_session_add_failed",
       err = tostring(err)
     })
     return 500, { }, "Session creation failed"
@@ -269,7 +272,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
   ok, err = write_sessions(sessions, state.sessions_file)
   if not (ok) then
     log_warn({
-      action = "auth_sessions_write_failed",
+      action = "server_sessions_write_failed",
       err = err
     })
     return 500, { }, "Session persistence failed"
@@ -280,13 +283,13 @@ handle_login = function(req, peer_ip, peer_mac, state)
     end)
     if not (ok) then
       log_warn({
-        action = "auth_nft_refresh_failed",
+        action = "server_nft_refresh_failed",
         err = tostring(err)
       })
     end
   else
     log_warn({
-      action = "auth_nft_sess_missing"
+      action = "server_nft_sess_missing"
     })
   end
   local session = sessions[mac:lower()]
@@ -479,49 +482,73 @@ handle_client = function(args)
   local state = args.state
   local peer_ip = args.peer_ip or "unknown"
   local ok, err = pcall(function()
-    print("[DEBUG-SERVER] handle_client started for peer=" .. peer_ip .. ", client.fd=" .. client.fd)
-    print("[DEBUG-SERVER] Setting socket to blocking mode for TLS handshake")
+    log_debug({
+      action = "server_handle_client_start",
+      peer = peer_ip,
+      fd = client.fd
+    })
+    log_debug({
+      action = "server_set_blocking_mode"
+    })
     client:settimeout(nil)
-    print("[DEBUG-SERVER] Socket is now blocking")
-    print("[DEBUG-SERVER] About to call ssl.wrap(client=" .. tostring(client) .. ", ctx=" .. tostring(state.tls_ctx) .. ")")
+    log_debug({
+      action = "server_blocking_mode_set"
+    })
+    log_debug({
+      action = "server_ssl_wrap_start"
+    })
     local tls_client, tls_err = ssl.wrap(client, state.tls_ctx)
-    print("[DEBUG-SERVER] ssl.wrap returned: tls_client=" .. tostring(tls_client) .. ", err=" .. tostring(tls_err))
+    log_debug({
+      action = "server_ssl_wrap_done"
+    })
     if not (tls_client) then
       log_warn({
-        action = "auth_tls_wrap_failed",
+        action = "server_tls_wrap_failed",
         err = tls_err
       })
       client:close()
       return 
     end
-    print("[DEBUG-SERVER] About to call tls_client:dohandshake()")
+    log_debug({
+      action = "server_dohandshake_start"
+    })
     local handshake_complete = false
     local handshake_attempts = 0
     while not handshake_complete and handshake_attempts < 50 do
       handshake_attempts = handshake_attempts + 1
-      print("[DEBUG-SERVER] Handshake attempt #" .. handshake_attempts)
+      log_debug({
+        action = "server_handshake_attempt",
+        attempt = handshake_attempts
+      })
       local ok_hs, hs_err = tls_client:dohandshake()
-      print("[DEBUG-SERVER] dohandshake() returned: ok=" .. tostring(ok_hs) .. ", err=" .. tostring(hs_err))
+      log_debug({
+        action = "server_dohandshake_returned",
+        ok = ok_hs
+      })
       if ok_hs then
-        print("[DEBUG-SERVER] Handshake COMPLETE")
+        log_debug({
+          action = "server_handshake_complete"
+        })
         handshake_complete = true
       end
     end
     if not (handshake_complete) then
       log_warn({
-        action = "auth_tls_handshake_failed",
+        action = "server_tls_handshake_failed",
         err = "max attempts or error"
       })
       tls_client:close()
       return 
     end
-    print("[DEBUG-SERVER] Handshake done, setting socket to non-blocking for HTTP")
+    log_debug({
+      action = "server_set_nonblocking_mode"
+    })
     client:settimeout(0)
     local peer_mac = get_mac(peer_ip)
     local req, req_err = read_request(tls_client)
     if not (req) then
       log_warn({
-        action = "auth_request_read_failed",
+        action = "server_request_read_failed",
         peer = peer_ip,
         err = req_err
       })
@@ -534,7 +561,7 @@ handle_client = function(args)
   end)
   if not (ok) then
     log_error({
-      action = "auth_client_failed",
+      action = "server_client_failed",
       err = tostring(err)
     })
     return pcall(function()
@@ -586,9 +613,32 @@ local run
 run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
   local port = auth_cfg.port or 33443
   local sessions_file = auth_cfg.sessions_file or AUTH_SESSIONS_FILE
-  local cert_path = auth_cfg.cert or "tmp/auth.crt"
-  local key_path = auth_cfg.key or "tmp/auth.key"
-  local tls_ctx = load_or_generate(key_path, cert_path)
+  log_debug({
+    action = "server_startup",
+    port = port
+  })
+  log_debug({
+    action = "server_cert_cache_init"
+  })
+  local cert_cache_module = require("auth.cert_cache")
+  local cert_cache = cert_cache_module.create_cache(100, 86400)
+  log_debug({
+    action = "server_generating_fallback_cert",
+    hostname = "custos"
+  })
+  local ok, err = pcall(function()
+    local tls_ctx = load_or_generate_sni("custos", cert_cache)
+  end)
+  if not (ok) then
+    log_error({
+      action = "server_fallback_cert_generation_failed",
+      err = err
+    })
+    error("Cannot generate fallback certificate: " .. tostring(err))
+  end
+  log_debug({
+    action = "server_fallback_cert_ready"
+  })
   local listen4, err4 = make_server4(port)
   if not (listen4) then
     error("Impossible de démarrer le serveur IPv4 sur port " .. tostring(port) .. " : " .. tostring(err4))
@@ -607,14 +657,16 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     nft_sess = nft_sess,
     secrets_path = secrets_path,
     sessions_file = sessions_file,
-    tls_ctx = tls_ctx
+    tls_ctx = tls_ctx,
+    cert_cache = cert_cache
   }
   log_info({
-    action = "auth_listening",
+    action = "server_listening",
     port = port,
     ipv4 = "0.0.0.0",
     ipv6 = listen6 and "::" or nil,
-    sessions_file = sessions_file
+    sessions_file = sessions_file,
+    cert_cache = "enabled (100 slots, 24h TTL)"
   })
   while true do
     reload_secrets_if_needed(state)
@@ -628,14 +680,27 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     if readable then
       for _index_0 = 1, #readable do
         local srv = readable[_index_0]
-        print("[DEBUG-SERVER] socket.select returned readable, attempting accept()")
+        log_debug({
+          action = "server_socket_select_readable"
+        })
         local client = srv:accept()
-        print("[DEBUG-SERVER] accept() returned: " .. tostring(client))
+        log_debug({
+          action = "server_accept_returned"
+        })
         if client then
-          print("[DEBUG-SERVER] Got client socket, calling getpeername()")
+          log_debug({
+            action = "server_got_client"
+          })
           local peer_ip = client:getpeername() or "unknown"
-          print("[DEBUG-SERVER] peer_ip=" .. peer_ip)
-          print("[DEBUG-SERVER] About to fork_child for peer=" .. peer_ip .. ", client.fd=" .. client.fd)
+          log_debug({
+            action = "server_getpeername_result",
+            peer = peer_ip
+          })
+          log_debug({
+            action = "server_fork_child_start",
+            peer = peer_ip,
+            fd = client.fd
+          })
           local pid = fork_child("AUTH-conn", handle_client, {
             client = client,
             peer_ip = peer_ip,
@@ -643,9 +708,12 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
           }, {
             log_start = false
           })
-          print("[DEBUG-SERVER] fork_child returned pid=" .. pid)
+          log_debug({
+            action = "server_fork_child_done",
+            pid = pid
+          })
           log_info({
-            action = "auth_conn_started",
+            action = "server_conn_started",
             pid = pid,
             peer = peer_ip
           })

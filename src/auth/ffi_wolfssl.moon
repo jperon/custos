@@ -204,9 +204,10 @@ ssl_mt.__index.receive = (mode = 4096) =>
           log_debug { action: "partial_line", len: line_len }
           return ffi.string(line_buf, line_len)
         err = libwolfssl.wolfSSL_get_error(@ssl, n)
+        log_debug { action: "wolfssl_read_error", ret: n, err: err }
         if err == SSL_ERROR_WANT_READ
           return nil
-        error "wolfSSL_read() failed"
+        error "wolfSSL_read() failed (error code: #{err})"
       
       -- Check for newline
       byte_val = line_buf[line_len]
@@ -238,11 +239,12 @@ ssl_mt.__index.receive = (mode = 4096) =>
       return nil
     
     err = libwolfssl.wolfSSL_get_error(@ssl, n)
+    log_debug { action: "wolfssl_read_error_numeric", ret: n, err: err }
     if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE
       log_debug { action: "want_read_write" }
       return nil
     
-    error "wolfSSL_read() error"
+    error "wolfSSL_read() error (code: #{err})"
 
 -- Close
 ssl_mt.__index.close = =>

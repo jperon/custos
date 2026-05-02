@@ -1,4 +1,6 @@
 local ffi = require("ffi")
+local log_debug
+log_debug = require("log").log_debug
 ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
   typedef struct WOLFSSL WOLFSSL;
   typedef struct WOLFSSL_METHOD WOLFSSL_METHOD;
@@ -95,14 +97,22 @@ newcontext = function(opts)
 end
 local wrap
 wrap = function(raw_socket, ctx_obj)
-  print("[DEBUG-WOLFSSL-WRAP] Starting wrap. socket.fd=" .. raw_socket.fd .. ", ctx_obj.ctx=" .. tostring(ctx_obj.ctx))
+  log_debug({
+    action = "wrap_start",
+    fd = raw_socket.fd
+  })
   local ssl = libwolfssl.wolfSSL_new(ctx_obj.ctx)
-  print("[DEBUG-WOLFSSL-WRAP] wolfSSL_new() returned: " .. tostring(ssl))
+  log_debug({
+    action = "wolfssl_new"
+  })
   if ssl == nil then
     error("wolfSSL_new() failed")
   end
   local ret = libwolfssl.wolfSSL_set_fd(ssl, raw_socket.fd)
-  print("[DEBUG-WOLFSSL-WRAP] wolfSSL_set_fd(ssl=" .. tostring(ssl) .. ", fd=" .. raw_socket.fd .. ") returned: " .. ret)
+  log_debug({
+    action = "wolfssl_set_fd",
+    ret = ret
+  })
   if ret < 0 then
     libwolfssl.wolfSSL_free(ssl)
     error("wolfSSL_set_fd() failed: ret=" .. ret)
@@ -114,37 +124,62 @@ wrap = function(raw_socket, ctx_obj)
     closed = false
   }
   setmetatable(wrapped, ssl_mt)
-  print("[DEBUG-WOLFSSL-WRAP] Wrap complete. TLS connection object created.")
+  log_debug({
+    action = "wrap_complete"
+  })
   return wrapped
 end
 ssl_mt.__index.dohandshake = function(self)
-  print("[DEBUG-WOLFSSL-HS] Starting handshake. closed=" .. tostring(self.closed) .. ", handshake_done=" .. tostring(self.handshake_done))
+  log_debug({
+    action = "dohandshake_start",
+    closed = self.closed,
+    handshake_done = self.handshake_done
+  })
   if self.closed then
     error("SSL connection is closed")
   end
   if self.handshake_done then
-    print("[DEBUG-WOLFSSL-HS] Handshake already done, returning true")
+    log_debug({
+      action = "handshake_already_done"
+    })
     return true
   end
-  print("[DEBUG-WOLFSSL-HS] Calling wolfSSL_accept()")
+  log_debug({
+    action = "wolfssl_accept_call"
+  })
   local ret = libwolfssl.wolfSSL_accept(self.ssl)
-  print("[DEBUG-WOLFSSL-HS] wolfSSL_accept() returned: " .. ret)
+  log_debug({
+    action = "wolfssl_accept_returned",
+    ret = ret
+  })
   if ret > 0 then
     self.handshake_done = true
-    print("[DEBUG-WOLFSSL-HS] Handshake SUCCESS")
+    log_debug({
+      action = "handshake_success"
+    })
     return true
   end
   local err = libwolfssl.wolfSSL_get_error(self.ssl, ret)
-  print("[DEBUG-WOLFSSL-HS] wolfSSL_get_error() returned: " .. err .. " (WANT_READ=2, WANT_WRITE=3, SSL_ERROR_SSL=1)")
+  log_debug({
+    action = "wolfssl_get_error",
+    err = err
+  })
   if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE then
-    print("[DEBUG-WOLFSSL-HS] Handshake needs more data (WANT_READ/WANT_WRITE)")
+    log_debug({
+      action = "handshake_want_read_write"
+    })
     return false
   end
   if err == SSL_ERROR_SSL then
-    print("[DEBUG-WOLFSSL-HS] TLS error during handshake")
+    log_debug({
+      action = "handshake_ssl_error"
+    })
     error("TLS error during handshake")
   end
-  print("[DEBUG-WOLFSSL-HS] Unexpected error code: " .. err)
+  log_debug({
+    action = "handshake_unexpected_error",
+    err = err
+  })
   return error("Unexpected error: " .. err)
 end
 ssl_mt.__index.send = function(self, data)
@@ -175,29 +210,47 @@ ssl_mt.__index.receive = function(self, mode)
     error("TLS handshake not complete")
   end
   if mode == "*l" then
-    print("[DEBUG-WOLFSSL-RECV] receive('*l') called, reading line")
+    log_debug({
+      action = "receive_line_mode"
+    })
     local max_line = 4096
     local line_buf = ffi.new("uint8_t[?]", max_line)
     local line_len = 0
     while line_len < max_line - 1 do
       local n = libwolfssl.wolfSSL_read(self.ssl, ffi.cast("uint8_t*", ffi.cast("void*", line_buf)) + line_len, 1)
-      print("[DEBUG-WOLFSSL-RECV] Read 1 byte, n=" .. n)
+      log_debug({
+        action = "read_byte",
+        ret = n
+      })
       if n <= 0 then
         if line_len > 0 then
-          print("[DEBUG-WOLFSSL-RECV] Returning partial line of " .. line_len .. " bytes")
+          log_debug({
+            action = "partial_line",
+            len = line_len
+          })
           return ffi.string(line_buf, line_len)
         end
         local err = libwolfssl.wolfSSL_get_error(self.ssl, n)
+        log_debug({
+          action = "wolfssl_read_error",
+          ret = n,
+          err = err
+        })
         if err == SSL_ERROR_WANT_READ then
           return nil
         end
-        error("wolfSSL_read() failed")
+        error("wolfSSL_read() failed (error code: " .. tostring(err) .. ")")
       end
       local byte_val = line_buf[line_len]
       if byte_val == 10 then
-        print("[DEBUG-WOLFSSL-RECV] Found newline at position " .. line_len)
+        log_debug({
+          action = "found_newline",
+          pos = line_len
+        })
         if line_len > 0 and line_buf[line_len - 1] == 13 then
-          print("[DEBUG-WOLFSSL-RECV] Stripping trailing CR")
+          log_debug({
+            action = "strip_cr"
+          })
           return ffi.string(line_buf, line_len - 1)
         end
         return ffi.string(line_buf, line_len)
@@ -207,23 +260,38 @@ ssl_mt.__index.receive = function(self, mode)
     return error("Line too long")
   else
     local size = tonumber(mode) or 4096
-    print("[DEBUG-WOLFSSL-RECV] receive(" .. size .. ") called, reading bytes")
+    log_debug({
+      action = "receive_bytes",
+      size = size
+    })
     local buf = ffi.new("uint8_t[?]", size)
     local n = libwolfssl.wolfSSL_read(self.ssl, buf, size)
-    print("[DEBUG-WOLFSSL-RECV] wolfSSL_read returned " .. n)
+    log_debug({
+      action = "wolfssl_read_returned",
+      ret = n
+    })
     if n > 0 then
       return ffi.string(buf, n)
     end
     if n == 0 then
-      print("[DEBUG-WOLFSSL-RECV] EOF from peer")
+      log_debug({
+        action = "eof_from_peer"
+      })
       return nil
     end
     local err = libwolfssl.wolfSSL_get_error(self.ssl, n)
+    log_debug({
+      action = "wolfssl_read_error_numeric",
+      ret = n,
+      err = err
+    })
     if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE then
-      print("[DEBUG-WOLFSSL-RECV] WANT_READ/WRITE, returning nil")
+      log_debug({
+        action = "want_read_write"
+      })
       return nil
     end
-    return error("wolfSSL_read() error")
+    return error("wolfSSL_read() error (code: " .. tostring(err) .. ")")
   end
 end
 ssl_mt.__index.close = function(self)

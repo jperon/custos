@@ -7,6 +7,7 @@
 -- Utilise ffi_wolfssl (FFI wrapper pour WolfSSL, remplace luasec).
 
 ssl = require "auth.ffi_wolfssl"
+{ :log_debug, :log_warn, :log_error } = require "log"
 
 CERT_DAYS     = 3650    -- validité : ~10 ans
 CERT_KEY_BITS = 2048
@@ -143,4 +144,95 @@ load_or_generate = (key_path, cert_path) ->
     error "Impossible de générer le certificat TLS :\n#{out}" unless ok
   make_context key_path, cert_path
 
-{ :load_or_generate, :generate_self_signed, :make_context }
+--- Charge ou génère un contexte TLS pour un hostname SNI spécifique.
+-- Utilise un cache LRU avec TTL pour éviter la régénération répétée.
+-- @tparam string hostname Hostname SNI (ex: "example.com"), ou nil pour fallback générique
+-- @tparam table cache Instance du cache (créée par cert_cache.create_cache)
+-- @treturn table  Contexte TLS WolfSSL (ssl.newcontext)
+-- @raise   string Message d'erreur si échec
+load_or_generate_sni = (hostname, cache) ->
+  hostname = hostname or "custos"
+  hostname_lower = hostname\lower!
+  
+  log_debug { action: "cert_sni_request", hostname: hostname_lower }
+  
+  -- Vérifier le cache
+  entry = cache.get hostname_lower
+  if entry and entry.ctx
+    log_debug { action: "cert_sni_cache_hit", hostname: hostname_lower }
+    return entry.ctx
+  
+  log_debug { action: "cert_sni_cache_miss", hostname: hostname_lower }
+  
+  -- Pas en cache ou pas de contexte : générer
+  gen = require "auth.cert_generator"
+  log_debug { action: "cert_sni_generating", hostname: hostname_lower }
+  key_pem, cert_pem, ok, err = gen.generate_self_signed hostname_lower
+  unless ok
+    log_error { action: "cert_sni_generation_failed", hostname: hostname_lower, err: err }
+    error "Impossible de générer le certificat SNI pour #{hostname_lower} : #{err}"
+  
+  log_debug { action: "cert_sni_generated", hostname: hostname_lower, key_size: #key_pem, cert_size: #cert_pem }
+  
+  -- WolfSSL utilise des fichiers, pas des PEM strings.
+  -- Écrire les PEM dans des fichiers temporaires.
+  key_file = "tmp/auth_sni_#{hostname_lower}_#{os.time!}.key"
+  cert_file = "tmp/auth_sni_#{hostname_lower}_#{os.time!}.crt"
+  
+  log_debug { action: "cert_sni_writing_files", key_file: key_file, cert_file: cert_file }
+  
+  -- Écrire la clé
+  key_fh = io.open key_file, "w"
+  unless key_fh
+    log_error { action: "cert_sni_key_write_failed", key_file: key_file }
+    error "Impossible d'écrire la clé SNI : #{key_file}"
+  bytes_written = key_fh\write key_pem
+  key_fh\close!
+  
+  log_debug { action: "cert_sni_key_written", key_file: key_file, bytes: bytes_written }
+  
+  -- Vérifier que le fichier existe et peut être lu
+  key_stat = io.open key_file, "r"
+  unless key_stat
+    log_error { action: "cert_sni_key_verify_failed", key_file: key_file }
+    error "Clé SNI écrite mais non relisible : #{key_file}"
+  key_stat\close!
+  
+  -- Écrire le certificat
+  cert_fh = io.open cert_file, "w"
+  unless cert_fh
+    os.remove key_file
+    log_error { action: "cert_sni_cert_write_failed", cert_file: cert_file }
+    error "Impossible d'écrire le certificat SNI : #{cert_file}"
+  bytes_written = cert_fh\write cert_pem
+  cert_fh\close!
+  
+  log_debug { action: "cert_sni_cert_written", cert_file: cert_file, bytes: bytes_written }
+  
+  -- Vérifier que le fichier existe et peut être lu
+  cert_stat = io.open cert_file, "r"
+  unless cert_stat
+    log_error { action: "cert_sni_cert_verify_failed", cert_file: cert_file }
+    error "Certificat SNI écrit mais non relisible : #{cert_file}"
+  cert_stat\close!
+  
+  -- Créer le contexte TLS via les fichiers
+  log_debug { action: "cert_sni_newcontext", hostname: hostname_lower, protocol: "tlsv1_2" }
+  ctx = ssl.newcontext {
+    mode: "server"
+    protocol: "tlsv1_2"
+    certificate: cert_file
+    key: key_file
+    options: {"no_sslv2", "no_sslv3", "no_tlsv1", "no_tlsv1_1"}
+  }
+  
+  log_debug { action: "cert_sni_context_created", hostname: hostname_lower }
+  
+  -- Mettre en cache (avec les fichiers temporaires)
+  cache.set hostname_lower, cert_pem, key_pem, ctx
+  
+  log_debug { action: "cert_sni_cached", hostname: hostname_lower }
+  
+  ctx
+
+{ :load_or_generate, :generate_self_signed, :make_context, :load_or_generate_sni }

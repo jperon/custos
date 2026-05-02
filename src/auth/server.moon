@@ -11,7 +11,7 @@ ssl = require "auth.ffi_wolfssl"
 { :fork_child, :reap_one } = require "lib.process"
 { :session_for_mac, :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
 { :verify_password, :register_user } = require "auth.credentials"
-{ :load_or_generate } = require "auth.cert"
+{ :load_or_generate, :load_or_generate_sni } = require "auth.cert"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 { :AUTH_SESSIONS_FILE } = require "config"
 
@@ -209,29 +209,29 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   mac = peer_mac
 
   unless mac and mac ~= "unknown"
-    log_warn { action: "auth_login_mac_missing", ip: peer_ip, mac: mac }
+    log_warn { action: "server_login_mac_missing", ip: peer_ip, mac: mac }
     return 401, {}, "Unable to identify client MAC (IP: #{peer_ip})"
 
-  log_info { action: "auth_login_success", user: user, mac: mac, ip: peer_ip }
+  log_info { action: "server_login_success", user: user, mac: mac, ip: peer_ip }
 
   ok, err = pcall(->
     add_session sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout
   )
   unless ok
-    log_warn { action: "auth_session_add_failed", err: tostring(err) }
+    log_warn { action: "server_session_add_failed", err: tostring(err) }
     return 500, {}, "Session creation failed"
 
   ok, err = write_sessions sessions, state.sessions_file
   unless ok
-    log_warn { action: "auth_sessions_write_failed", err: err }
+    log_warn { action: "server_sessions_write_failed", err: err }
     return 500, {}, "Session persistence failed"
 
   if state.nft_sess
     ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout
     unless ok
-      log_warn { action: "auth_nft_refresh_failed", err: tostring(err) }
+      log_warn { action: "server_nft_refresh_failed", err: tostring(err) }
   else
-    log_warn { action: "auth_nft_sess_missing" }
+    log_warn { action: "server_nft_sess_missing" }
 
   session = sessions[mac\lower!]
   created_at = session and session.created_at or os.time!
@@ -410,51 +410,51 @@ handle_client = (args) ->
   peer_ip = args.peer_ip or "unknown"
 
   ok, err = pcall ->
-    log_debug { action: "handle_client_start", peer: peer_ip, fd: client.fd }
+    log_debug { action: "server_handle_client_start", peer: peer_ip, fd: client.fd }
     
     -- Set socket to BLOCKING mode for handshake
-    log_debug { action: "set_blocking_mode" }
+    log_debug { action: "server_set_blocking_mode" }
     client\settimeout nil  -- nil = blocking mode
-    log_debug { action: "blocking_mode_set" }
+    log_debug { action: "server_blocking_mode_set" }
 
-    log_debug { action: "ssl_wrap_start" }
+    log_debug { action: "server_ssl_wrap_start" }
     tls_client, tls_err = ssl.wrap client, state.tls_ctx
-    log_debug { action: "ssl_wrap_done" }
+    log_debug { action: "server_ssl_wrap_done" }
     
     unless tls_client
-      log_warn { action: "auth_tls_wrap_failed", err: tls_err }
+      log_warn { action: "server_tls_wrap_failed", err: tls_err }
       client\close!
       return
 
-    log_debug { action: "dohandshake_start" }
+    log_debug { action: "server_dohandshake_start" }
     
     -- Handshake loop: keep trying until complete or error
     handshake_complete = false
     handshake_attempts = 0
     while not handshake_complete and handshake_attempts < 50
       handshake_attempts += 1
-      log_debug { action: "handshake_attempt", attempt: handshake_attempts }
+      log_debug { action: "server_handshake_attempt", attempt: handshake_attempts }
       
       ok_hs, hs_err = tls_client\dohandshake!
-      log_debug { action: "dohandshake_returned", ok: ok_hs }
+      log_debug { action: "server_dohandshake_returned", ok: ok_hs }
       
       if ok_hs
-        log_debug { action: "handshake_complete" }
+        log_debug { action: "server_handshake_complete" }
         handshake_complete = true
     
     unless handshake_complete
-      log_warn { action: "auth_tls_handshake_failed", err: "max attempts or error" }
+      log_warn { action: "server_tls_handshake_failed", err: "max attempts or error" }
       tls_client\close!
       return
     
     -- Switch to non-blocking after successful handshake for HTTP I/O
-    log_debug { action: "set_nonblocking_mode" }
+    log_debug { action: "server_set_nonblocking_mode" }
     client\settimeout 0
 
     peer_mac = get_mac peer_ip
     req, req_err = read_request tls_client
     unless req
-      log_warn { action: "auth_request_read_failed", peer: peer_ip, err: req_err }
+      log_warn { action: "server_request_read_failed", peer: peer_ip, err: req_err }
       tls_client\close!
       return
 
@@ -463,7 +463,7 @@ handle_client = (args) ->
     tls_client\close!
 
   unless ok
-    log_error { action: "auth_client_failed", err: tostring err }
+    log_error { action: "server_client_failed", err: tostring err }
     pcall -> client\close!
 
 reload_secrets_if_needed = (state) ->
@@ -511,10 +511,22 @@ make_server6 = (port) ->
 run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   port = auth_cfg.port or 33443
   sessions_file = auth_cfg.sessions_file or AUTH_SESSIONS_FILE
-  cert_path = auth_cfg.cert or "tmp/auth.crt"
-  key_path = auth_cfg.key or "tmp/auth.key"
-
-  tls_ctx = load_or_generate key_path, cert_path
+  
+  log_debug { action: "server_startup", port: port }
+  
+  -- Initialiser le cache de certificats SNI
+  log_debug { action: "server_cert_cache_init" }
+  cert_cache_module = require "auth.cert_cache"
+  cert_cache = cert_cache_module.create_cache 100, 86400  -- 100 certs, 24h TTL
+  
+  -- Générer le certificat initial (fallback générique pour "custos")
+  log_debug { action: "server_generating_fallback_cert", hostname: "custos" }
+  ok, err = pcall ->
+    tls_ctx = load_or_generate_sni "custos", cert_cache
+  unless ok
+    log_error { action: "server_fallback_cert_generation_failed", err: err }
+    error "Cannot generate fallback certificate: #{err}"
+  log_debug { action: "server_fallback_cert_ready" }
 
   listen4, err4 = make_server4 port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
@@ -531,14 +543,16 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     secrets_path: secrets_path
     sessions_file: sessions_file
     tls_ctx: tls_ctx
+    cert_cache: cert_cache
   }
 
   log_info {
-    action: "auth_listening"
+    action: "server_listening"
     port: port
     ipv4: "0.0.0.0"
     ipv6: listen6 and "::" or nil
     sessions_file: sessions_file
+    cert_cache: "enabled (100 slots, 24h TTL)"
   }
 
   while true
@@ -551,24 +565,24 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     readable, _ = socket.select all_servers, nil, 0.1
     if readable
       for srv in *readable
-        log_debug { action: "socket_select_readable" }
+        log_debug { action: "server_socket_select_readable" }
         client = srv\accept!
-        log_debug { action: "accept_returned" }
+        log_debug { action: "server_accept_returned" }
         
         if client
-          log_debug { action: "got_client" }
+          log_debug { action: "server_got_client" }
           peer_ip = client\getpeername! or "unknown"
-          log_debug { action: "getpeername_result", peer: peer_ip }
+          log_debug { action: "server_getpeername_result", peer: peer_ip }
 
-          log_debug { action: "fork_child_start", peer: peer_ip, fd: client.fd }
+          log_debug { action: "server_fork_child_start", peer: peer_ip, fd: client.fd }
           pid = fork_child "AUTH-conn",
             handle_client,
             { client: client, peer_ip: peer_ip, state: state },
             { log_start: false }
           
-          log_debug { action: "fork_child_done", pid: pid }
+          log_debug { action: "server_fork_child_done", pid: pid }
 
-          log_info { action: "auth_conn_started", pid: pid, peer: peer_ip }
+          log_info { action: "server_conn_started", pid: pid, peer: peer_ip }
           client\close!
 
 { :run }

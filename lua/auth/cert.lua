@@ -1,4 +1,9 @@
 local ssl = require("auth.ffi_wolfssl")
+local log_debug, log_warn, log_error
+do
+  local _obj_0 = require("log")
+  log_debug, log_warn, log_error = _obj_0.log_debug, _obj_0.log_warn, _obj_0.log_error
+end
 local CERT_DAYS = 3650
 local CERT_KEY_BITS = 2048
 local hash_string
@@ -117,8 +122,133 @@ load_or_generate = function(key_path, cert_path)
   end
   return make_context(key_path, cert_path)
 end
+local load_or_generate_sni
+load_or_generate_sni = function(hostname, cache)
+  hostname = hostname or "custos"
+  local hostname_lower = hostname:lower()
+  log_debug({
+    action = "cert_sni_request",
+    hostname = hostname_lower
+  })
+  local entry = cache.get(hostname_lower)
+  if entry and entry.ctx then
+    log_debug({
+      action = "cert_sni_cache_hit",
+      hostname = hostname_lower
+    })
+    return entry.ctx
+  end
+  log_debug({
+    action = "cert_sni_cache_miss",
+    hostname = hostname_lower
+  })
+  local gen = require("auth.cert_generator")
+  log_debug({
+    action = "cert_sni_generating",
+    hostname = hostname_lower
+  })
+  local key_pem, cert_pem, ok, err = gen.generate_self_signed(hostname_lower)
+  if not (ok) then
+    log_error({
+      action = "cert_sni_generation_failed",
+      hostname = hostname_lower,
+      err = err
+    })
+    error("Impossible de générer le certificat SNI pour " .. tostring(hostname_lower) .. " : " .. tostring(err))
+  end
+  log_debug({
+    action = "cert_sni_generated",
+    hostname = hostname_lower,
+    key_size = #key_pem,
+    cert_size = #cert_pem
+  })
+  local key_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.time()) .. ".key"
+  local cert_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.time()) .. ".crt"
+  log_debug({
+    action = "cert_sni_writing_files",
+    key_file = key_file,
+    cert_file = cert_file
+  })
+  local key_fh = io.open(key_file, "w")
+  if not (key_fh) then
+    log_error({
+      action = "cert_sni_key_write_failed",
+      key_file = key_file
+    })
+    error("Impossible d'écrire la clé SNI : " .. tostring(key_file))
+  end
+  local bytes_written = key_fh:write(key_pem)
+  key_fh:close()
+  log_debug({
+    action = "cert_sni_key_written",
+    key_file = key_file,
+    bytes = bytes_written
+  })
+  local key_stat = io.open(key_file, "r")
+  if not (key_stat) then
+    log_error({
+      action = "cert_sni_key_verify_failed",
+      key_file = key_file
+    })
+    error("Clé SNI écrite mais non relisible : " .. tostring(key_file))
+  end
+  key_stat:close()
+  local cert_fh = io.open(cert_file, "w")
+  if not (cert_fh) then
+    os.remove(key_file)
+    log_error({
+      action = "cert_sni_cert_write_failed",
+      cert_file = cert_file
+    })
+    error("Impossible d'écrire le certificat SNI : " .. tostring(cert_file))
+  end
+  bytes_written = cert_fh:write(cert_pem)
+  cert_fh:close()
+  log_debug({
+    action = "cert_sni_cert_written",
+    cert_file = cert_file,
+    bytes = bytes_written
+  })
+  local cert_stat = io.open(cert_file, "r")
+  if not (cert_stat) then
+    log_error({
+      action = "cert_sni_cert_verify_failed",
+      cert_file = cert_file
+    })
+    error("Certificat SNI écrit mais non relisible : " .. tostring(cert_file))
+  end
+  cert_stat:close()
+  log_debug({
+    action = "cert_sni_newcontext",
+    hostname = hostname_lower,
+    protocol = "tlsv1_2"
+  })
+  local ctx = ssl.newcontext({
+    mode = "server",
+    protocol = "tlsv1_2",
+    certificate = cert_file,
+    key = key_file,
+    options = {
+      "no_sslv2",
+      "no_sslv3",
+      "no_tlsv1",
+      "no_tlsv1_1"
+    }
+  })
+  log_debug({
+    action = "cert_sni_context_created",
+    hostname = hostname_lower
+  })
+  cache.set(hostname_lower, cert_pem, key_pem, ctx)
+  log_debug({
+    action = "cert_sni_cached",
+    hostname = hostname_lower
+  })
+  return ctx
+end
 return {
   load_or_generate = load_or_generate,
   generate_self_signed = generate_self_signed,
-  make_context = make_context
+  make_context = make_context,
+  load_or_generate_sni = load_or_generate_sni
 }
