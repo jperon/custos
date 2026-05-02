@@ -521,11 +521,15 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   
   -- Générer le certificat initial (fallback générique pour "custos")
   log_debug { action: "server_generating_fallback_cert", hostname: "custos" }
+  tls_ctx = nil  -- Déclarer avant pcall pour qu'elle soit accessible après
   ok, err = pcall ->
     tls_ctx = load_or_generate_sni "custos", cert_cache
   unless ok
     log_error { action: "server_fallback_cert_generation_failed", err: err }
     error "Cannot generate fallback certificate: #{err}"
+  unless tls_ctx
+    log_error { action: "server_fallback_cert_null" }
+    error "Fallback certificate context is nil"
   log_debug { action: "server_fallback_cert_ready" }
 
   listen4, err4 = make_server4 port

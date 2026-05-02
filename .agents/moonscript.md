@@ -200,6 +200,75 @@ Un status 0 dans les DevTools du navigateur indique que la connexion a été
 fermée avant tout réponse HTTP — généralement un crash dans le handler
 capturé par `pcall`.
 
+## Pièges de scope en MoonScript
+
+### Variables dans les blocs de contrôle (`if`, `pcall`, etc.)
+
+**Piège critique** : Les variables définies pour la première fois *dans* un bloc
+`if`, `pcall`, `for`, ou autres structures de contrôle ne sont accessibles que
+*dans* ce bloc. Elles sont indéfinies (nil) après le bloc.
+
+```moonscript
+-- ❌ INCORRECT : x est undefined après le if
+if condition
+  x = 10
+print x  -- nil (erreur!)
+
+-- ✓ CORRECT : déclarer avant le bloc
+x = nil
+if condition
+  x = 10
+print x  -- OK
+
+-- ❌ INCORRECT : ctx est undefined après pcall
+ok, err = pcall ->
+  ctx = load_or_generate_sni "custos", cache
+print ctx  -- nil (erreur!)
+
+-- ✓ CORRECT : déclarer avant pcall
+ctx = nil
+ok, err = pcall ->
+  ctx = load_or_generate_sni "custos", cache
+-- ctx est maintenant accessible et non-nil
+```
+
+**Règle générale** : Si une variable doit être utilisée *après* un bloc de
+contrôle, **la déclarer avant le bloc** (même si la déclaration est `var = nil`).
+
+### Portée des boucles
+
+Les variables de boucle (`for i`, `for k, v`) sont toujours locales à la boucle.
+Les variables *modifiées* dans une boucle restent accessibles après.
+
+```moonscript
+x = 0
+for i = 1, 10
+  x = x + i  -- x accessible, modifiable
+print x  -- 55 (OK)
+
+for i = 1, 10
+  y = i  -- y créée dans la boucle
+print y  -- 10 (OK, persist après boucle)
+```
+
+### Problème avec les closures et `pcall`
+
+MoonScript autorise les closures, mais `pcall` crée une portée supplémentaire.
+Les variables créées dans le callback `pcall` ne survivent pas à la fin du callback.
+
+```moonscript
+-- ❌ PROBLÈME : ctx échappé du callback pcall
+ok = pcall ->
+  ctx = create_context()
+ssl.wrap socket, ctx  -- ctx est nil!
+
+-- ✓ SOLUTION : déclarer ctx avant
+ctx = nil
+ok = pcall ->
+  ctx = create_context()
+ssl.wrap socket, ctx  -- OK
+```
+
 ### Matrice de test pour les modifications du worker AUTH
 
 Toujours tester toutes les combinaisons après une modification du worker AUTH :

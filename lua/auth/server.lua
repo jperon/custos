@@ -626,8 +626,9 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     action = "server_generating_fallback_cert",
     hostname = "custos"
   })
+  local tls_ctx = nil
   local ok, err = pcall(function()
-    local tls_ctx = load_or_generate_sni("custos", cert_cache)
+    tls_ctx = load_or_generate_sni("custos", cert_cache)
   end)
   if not (ok) then
     log_error({
@@ -635,6 +636,12 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
       err = err
     })
     error("Cannot generate fallback certificate: " .. tostring(err))
+  end
+  if not (tls_ctx) then
+    log_error({
+      action = "server_fallback_cert_null"
+    })
+    error("Fallback certificate context is nil")
   end
   log_debug({
     action = "server_fallback_cert_ready"
