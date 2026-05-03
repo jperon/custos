@@ -501,11 +501,26 @@ handle_client = function(args)
       local_ip = local_ip
     })
     local tls_ctx = nil
-    if state.static_tls_ctx then
-      tls_ctx = state.static_tls_ctx
+    if state.static_cert_paths then
       log_debug({
-        action = "server_using_static_cert"
+        action = "server_loading_static_cert_child",
+        cert = state.static_cert_paths.cert,
+        key = state.static_cert_paths.key
       })
+      local ctx
+      ok, ctx = load_static(state.static_cert_paths.key, state.static_cert_paths.cert)
+      if ok then
+        tls_ctx = ctx
+        log_debug({
+          action = "server_using_static_cert"
+        })
+      else
+        log_error({
+          action = "server_static_cert_load_child_failed",
+          err = ctx
+        })
+        error("Cannot load static certificate in child: " .. tostring(ctx))
+      end
     else
       local tls_ctx_ok, tls_ctx_err = pcall(function()
         tls_ctx = load_or_generate_sni(local_ip, state.cert_cache)
@@ -715,7 +730,16 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     nft_sess = nft_sess,
     secrets_path = secrets_path,
     sessions_file = sessions_file,
-    static_tls_ctx = static_tls_ctx,
+    static_cert_paths = (function()
+      if auth_cfg.cert and auth_cfg.key then
+        return {
+          cert = auth_cfg.cert,
+          key = auth_cfg.key
+        }
+      else
+        return nil
+      end
+    end)(),
     cert_cache = cert_cache
   }
   log_info({
@@ -724,7 +748,13 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     ipv4 = "0.0.0.0",
     ipv6 = listen6 and "::" or nil,
     sessions_file = sessions_file,
-    cert_cache = static_tls_ctx and "static cert + dynamic SNI cache" or "dynamic SNI cache (500 slots, 90d TTL)"
+    cert_cache = (function()
+      if auth_cfg.cert and auth_cfg.key then
+        return "static cert + dynamic SNI cache"
+      else
+        return "dynamic SNI cache (500 slots, 90d TTL)"
+      end
+    end)()
   })
   while true do
     reload_secrets_if_needed(state)

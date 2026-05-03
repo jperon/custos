@@ -423,12 +423,18 @@ handle_client = (args) ->
     
     log_debug { action: "server_local_ip_detected", local_ip: local_ip }
     
-    -- Utiliser le certificat statique s'il a été chargé au démarrage
+    -- Utiliser le certificat statique s'il a été configuré
     -- Sinon, générer/charger le certificat avec l'IP locale comme CN
     tls_ctx = nil
-    if state.static_tls_ctx
-      tls_ctx = state.static_tls_ctx
-      log_debug { action: "server_using_static_cert" }
+    if state.static_cert_paths
+      log_debug { action: "server_loading_static_cert_child", cert: state.static_cert_paths.cert, key: state.static_cert_paths.key }
+      ok, ctx = load_static state.static_cert_paths.key, state.static_cert_paths.cert
+      if ok
+        tls_ctx = ctx
+        log_debug { action: "server_using_static_cert" }
+      else
+        log_error { action: "server_static_cert_load_child_failed", err: ctx }
+        error "Cannot load static certificate in child: #{ctx}"
     else
       tls_ctx_ok, tls_ctx_err = pcall ->
         tls_ctx = load_or_generate_sni local_ip, state.cert_cache
@@ -577,7 +583,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     nft_sess: nft_sess
     secrets_path: secrets_path
     sessions_file: sessions_file
-    static_tls_ctx: static_tls_ctx
+    static_cert_paths: if auth_cfg.cert and auth_cfg.key then { cert: auth_cfg.cert, key: auth_cfg.key } else nil
     cert_cache: cert_cache
   }
 
@@ -587,7 +593,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     ipv4: "0.0.0.0"
     ipv6: listen6 and "::" or nil
     sessions_file: sessions_file
-    cert_cache: static_tls_ctx and "static cert + dynamic SNI cache" or "dynamic SNI cache (500 slots, 90d TTL)"
+    cert_cache: if auth_cfg.cert and auth_cfg.key then "static cert + dynamic SNI cache" else "dynamic SNI cache (500 slots, 90d TTL)"
   }
 
   while true
