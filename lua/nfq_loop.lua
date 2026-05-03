@@ -8,10 +8,10 @@ do
   local _obj_0 = require("config")
   AF_INET, AF_INET6 = _obj_0.AF_INET, _obj_0.AF_INET6
 end
-local log_info, log_warn, log_error
+local log_info, log_warn, log_error, log_debug
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_error = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error
+  log_info, log_warn, log_error, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug
 end
 local AF_BRIDGE = 7
 local NFQNL_COPY_PACKET = 2
@@ -27,14 +27,30 @@ run_queue = function(queue_num, callback)
     action = "queue_open",
     queue = queue_num
   })
+  log_debug({
+    action = "queue_nfq_open_call",
+    queue = queue_num
+  })
   local h = libnfq.nfq_open()
   if h == nil then
+    log_error({
+      action = "queue_nfq_open_failed",
+      queue = queue_num
+    })
     error("nfq_open() échoué")
   end
+  log_debug({
+    action = "queue_bind_pf",
+    queue = queue_num
+  })
   libnfq.nfq_bind_pf(h, AF_INET)
   libnfq.nfq_bind_pf(h, AF_INET6)
   libnfq.nfq_bind_pf(h, AF_BRIDGE)
   local qh_box = ffi.new("nfq_q_handle*[1]")
+  log_debug({
+    action = "queue_callback_setup",
+    queue = queue_num
+  })
   local c_callback = ffi.cast("nfq_callback", function(qh, nfmsg, nfad, data)
     local raw_hdr = libnfq.nfq_get_msg_packet_hdr(nfad)
     local pkt_id = libc.ntohl(raw_hdr.packet_id)
@@ -52,11 +68,23 @@ run_queue = function(queue_num, callback)
     end
     return 0
   end)
+  log_debug({
+    action = "queue_create_queue_call",
+    queue = queue_num
+  })
   local qh = libnfq.nfq_create_queue(h, queue_num, c_callback, nil)
   if qh == nil then
+    log_error({
+      action = "queue_create_queue_failed",
+      queue = queue_num
+    })
     error("nfq_create_queue(" .. tostring(queue_num) .. ") échoué")
   end
   qh_box[0] = qh
+  log_debug({
+    action = "queue_set_mode_call",
+    queue = queue_num
+  })
   libnfq.nfq_set_mode(qh, NFQNL_COPY_PACKET, READ_BUF_SIZE)
   local fd = libnfq.nfq_fd(h)
   local buf = ffi.new("char[65536]")
@@ -66,14 +94,31 @@ run_queue = function(queue_num, callback)
     pid = tonumber(ffi.C.getpid and ffi.C.getpid() or 0)
   })
   while true do
+    log_debug({
+      action = "queue_read_call",
+      queue = queue_num
+    })
     local rv = libc.read(fd, buf, READ_BUF_SIZE)
     if rv > 0 then
+      log_debug({
+        action = "queue_handle_packet",
+        queue = queue_num,
+        rv = rv
+      })
       libnfq.nfq_handle_packet(h, buf, tonumber(rv))
     elseif rv == 0 then
+      log_warn({
+        action = "queue_read_eof",
+        queue = queue_num
+      })
       break
     else
       local en = libc.__errno_location()[0]
       if en == EINTR then
+        log_debug({
+          action = "queue_read_eintr",
+          queue = queue_num
+        })
         break
       end
       log_warn({

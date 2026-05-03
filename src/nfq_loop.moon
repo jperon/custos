@@ -5,7 +5,7 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :AF_INET, :AF_INET6 } = require "config"
-{ :log_info, :log_warn, :log_error } = require "log"
+{ :log_info, :log_warn, :log_error, :log_debug } = require "log"
 
 AF_BRIDGE = 7   -- Linux AF_BRIDGE : famille d'adresses pour les hooks bridge nftables
 
@@ -32,9 +32,13 @@ VERDICT_DONE = -1
 run_queue = (queue_num, callback) ->
   log_info { action: "queue_open", queue: queue_num }
 
+  log_debug { action: "queue_nfq_open_call", queue: queue_num }
   h = libnfq.nfq_open!
-  error "nfq_open() échoué" if h == nil
+  if h == nil
+    log_error { action: "queue_nfq_open_failed", queue: queue_num }
+    error "nfq_open() échoué"
 
+  log_debug { action: "queue_bind_pf", queue: queue_num }
   -- bind_pf : attache le handle aux familles AF_INET et AF_INET6 (et AF_BRIDGE en mode bridge).
   -- Peut renvoyer une erreur si déjà bindé par un autre handle dans le process ;
   -- on ignore l'erreur (comportement historique de libnetfilter_queue).
@@ -45,6 +49,7 @@ run_queue = (queue_num, callback) ->
   -- Pointeur partagé entre la closure C et la closure Lua du callback
   qh_box = ffi.new "nfq_q_handle*[1]"
 
+  log_debug { action: "queue_callback_setup", queue: queue_num }
   -- Wrapper C minimal : extrait pkt_id et délègue au callback Lua
   c_callback = ffi.cast "nfq_callback", (qh, nfmsg, nfad, data) ->
     -- Extraction de l'id du paquet depuis le header nfq
@@ -67,12 +72,16 @@ run_queue = (queue_num, callback) ->
     0   -- retour C : 0 = succès
 
 
+  log_debug { action: "queue_create_queue_call", queue: queue_num }
   qh = libnfq.nfq_create_queue h, queue_num, c_callback, nil
-  error "nfq_create_queue(#{queue_num}) échoué" if qh == nil
+  if qh == nil
+    log_error { action: "queue_create_queue_failed", queue: queue_num }
+    error "nfq_create_queue(#{queue_num}) échoué"
 
   qh_box[0] = qh
 
   -- Copie complète du paquet (payload + métadonnées L2)
+  log_debug { action: "queue_set_mode_call", queue: queue_num }
   libnfq.nfq_set_mode qh, NFQNL_COPY_PACKET, READ_BUF_SIZE
 
   fd  = libnfq.nfq_fd h
@@ -81,15 +90,19 @@ run_queue = (queue_num, callback) ->
   log_info { action: "queue_listening", queue: queue_num, pid: tonumber(ffi.C.getpid and ffi.C.getpid() or 0) }
 
   while true
+    log_debug { action: "queue_read_call", queue: queue_num }
     rv = libc.read fd, buf, READ_BUF_SIZE
     if rv > 0
+      log_debug { action: "queue_handle_packet", queue: queue_num, rv: rv }
       libnfq.nfq_handle_packet h, buf, tonumber rv
     elseif rv == 0
+      log_warn { action: "queue_read_eof", queue: queue_num }
       break   -- EOF inattendu
     else
       -- rv < 0 : EINTR (signal reçu) → on sort proprement
       en = libc.__errno_location()[0]
       if en == EINTR
+        log_debug { action: "queue_read_eintr", queue: queue_num }
         break
       log_warn { action: "queue_read_error", queue: queue_num, errno: en }
       break   -- autre erreur (ENOBUFS, etc.) → on sort

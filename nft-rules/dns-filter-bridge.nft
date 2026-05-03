@@ -193,3 +193,16 @@ table bridge dns-filter-bridge {
   }
 
 }
+# Note : la chaîne output bridge n'est pas utilisée ici.
+# Le DNS émis par le filtre lui-même transite par la table ip locale,
+# pas par la table bridge (le bridge ne traite que le trafic bridgé).
+
+table inet auth_queue {
+  chain prerouting {
+    type filter hook prerouting priority 0; policy accept;
+
+    # Portail captif HTTPS : apprentissage MAC/IP avant acceptation.
+    # Le worker auth_queue extrait la MAC et l'envoie au serveur HTTPS.
+    tcp dport 33443 log level debug prefix "custos auth_input_l3: " counter queue num {QUEUE_AUTH}
+  }
+}

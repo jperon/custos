@@ -167,6 +167,30 @@ supervise = function(pipes, sfd)
   local captive_queues = parse_queues(config.QUEUE_CAPTIVE)
   local reject_queues = parse_queues(config.QUEUE_REJECT)
   local bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+  local detect_bridge_slaves
+  detect_bridge_slaves = function()
+    local handle = io.popen("ip -brief link show type bridge_slave 2>/dev/null")
+    if not (handle) then
+      return nil
+    end
+    local slaves = { }
+    for line in handle:lines() do
+      local ifname = line:match("^(%S+)")
+      if ifname then
+        table.insert(slaves, ifname)
+      end
+    end
+    handle:close()
+    return #slaves > 0 and slaves or nil
+  end
+  local bridge_slaves = detect_bridge_slaves() or {
+    bridge_ifname
+  }
+  log_info({
+    action = "bridge_slaves_detected",
+    count = #bridge_slaves,
+    interfaces = table.concat(bridge_slaves, ",")
+  })
   local workers = {
     {
       name = "MAC-learner",

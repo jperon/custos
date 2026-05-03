@@ -182,6 +182,26 @@ supervise = (pipes, sfd) ->
   -- et arp-sniffer. Déclaré avant `workers` pour que les closures puissent le capturer.
   bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
 
+  -- Autodétection des interfaces physiques attachées à la bridge (bridge slaves)
+  -- pour le sniffer TCP/33443. Ces interfaces physiques voient les paquets entrants,
+  -- contrairement à la bridge elle-même qui ne voit pas les paquets traités localement.
+  detect_bridge_slaves = () ->
+    handle = io.popen "ip -brief link show type bridge_slave 2>/dev/null"
+    return nil unless handle
+    slaves = {}
+    for line in handle\lines()
+      ifname = line\match "^(%S+)"
+      table.insert slaves, ifname if ifname
+    handle\close()
+    #slaves > 0 and slaves or nil
+
+  bridge_slaves = detect_bridge_slaves() or { bridge_ifname }
+  log_info {
+    action: "bridge_slaves_detected"
+    count: #bridge_slaves
+    interfaces: table.concat(bridge_slaves, ",")
+  }
+
   workers = {
     {
       name: "MAC-learner"
