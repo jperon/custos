@@ -107,19 +107,110 @@ read_cached = function(path)
   end
   return _cache
 end
+local reload_cached
+reload_cached = function(path)
+  _cache = load_sessions(path)
+  _cache_time = os_time()
+  return _cache
+end
 local reset_cache
 reset_cache = function()
   _cache = nil
   _cache_time = 0
 end
-local session_for_mac
-session_for_mac = function(mac, ip, path, sessions_arg)
-  local sessions_table = sessions_arg or read_cached(path)
-  if not (sessions_table) then
-    return nil
+local valid_mac
+valid_mac = function(mac)
+  return mac and mac ~= "unknown" and mac ~= "\x00\x00\x00\x00\x00\x00"
+end
+local find_session_by_ip
+find_session_by_ip = function(sessions, ip)
+  if not (ip) then
+    return nil, nil
   end
-  local lookup_mac = mac
-  lookup_mac = (lookup_mac and lookup_mac ~= "unknown") and lookup_mac:lower() or "unknown"
+  for m, sess in pairs(sessions) do
+    if sess.ips and (sess.ips.ipv4 == ip or sess.ips.ipv6 == ip) then
+      return m, sess
+    end
+  end
+  return nil, nil
+end
+local enrich_session_ip
+enrich_session_ip = function(mac, ip, path)
+  if not (valid_mac(mac) and ip and path) then
+    return false
+  end
+  mac = mac:lower()
+  local sessions = load_sessions(path)
+  local s = sessions[mac]
+  if not (s) then
+    local _old_mac, found = find_session_by_ip(sessions, ip)
+    s = found
+  end
+  if not (s) then
+    return false
+  end
+  local family
+  if ip:find(":", 1, true) then
+    family = "ipv6"
+  else
+    family = "ipv4"
+  end
+  s.ips = s.ips or { }
+  if s.ips[family] and s.ips[family] ~= ip then
+    return false
+  end
+  if s.ips[family] == ip and sessions[mac] == s then
+    return false
+  end
+  s.ips[family] = ip
+  s.mac = mac
+  sessions[mac] = s
+  write_sessions(sessions, path)
+  reset_cache()
+  return true
+end
+local bind_session_mac
+bind_session_mac = function(session_mac, current_mac, ip, path)
+  if not (valid_mac(current_mac) and path) then
+    return false
+  end
+  current_mac = current_mac:lower()
+  session_mac = session_mac and session_mac:lower() or nil
+  if session_mac == current_mac then
+    return enrich_session_ip(current_mac, ip, path)
+  end
+  local sessions = load_sessions(path)
+  local s = (session_mac and sessions[session_mac]) or nil
+  if not (s) then
+    local _old_mac, found = find_session_by_ip(sessions, ip)
+    session_mac = _old_mac
+    s = found
+  end
+  if not (s) then
+    return false
+  end
+  s.mac = current_mac
+  if ip then
+    local family
+    if ip:find(":", 1, true) then
+      family = "ipv6"
+    else
+      family = "ipv4"
+    end
+    s.ips = s.ips or { }
+    local _update_0 = family
+    s.ips[_update_0] = s.ips[_update_0] or ip
+  end
+  sessions[current_mac] = s
+  if session_mac and session_mac ~= current_mac then
+    sessions[session_mac] = nil
+  end
+  write_sessions(sessions, path)
+  reset_cache()
+  return true
+end
+local lookup_session
+lookup_session = function(sessions_table, lookup_mac, ip)
   local s = sessions_table[lookup_mac]
   if not s and ip then
     for m, sess in pairs(sessions_table) do
@@ -132,8 +223,44 @@ session_for_mac = function(mac, ip, path, sessions_arg)
       end
     end
   end
+  return s
+end
+local session_for_mac
+session_for_mac = function(mac, ip, path, sessions_arg)
+  local sessions_table = sessions_arg or read_cached(path)
+  if not (sessions_table) then
+    return nil
+  end
+  local lookup_mac = mac
+  lookup_mac = (lookup_mac and lookup_mac ~= "unknown") and lookup_mac:lower() or "unknown"
+  local s = lookup_session(sessions_table, lookup_mac, ip)
+  if not s and not sessions_arg and path then
+    sessions_table = reload_cached(path)
+    if sessions_table then
+      s = lookup_session(sessions_table, lookup_mac, ip)
+    end
+  end
   if not (s) then
     return nil
+  end
+  local now = os_time()
+  if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat) then
+    if not sessions_arg and path then
+      sessions_table = reload_cached(path)
+      if sessions_table then
+        s = lookup_session(sessions_table, lookup_mac, ip)
+      end
+      if not (s) then
+        return nil
+      end
+      now = os_time()
+    end
+    if s.expires and now > s.expires then
+      return nil
+    end
+    if s.heartbeat and now > s.heartbeat then
+      return nil
+    end
   end
   if ip then
     local family
@@ -143,14 +270,8 @@ session_for_mac = function(mac, ip, path, sessions_arg)
       family = "ipv4"
     end
     s.ips = s.ips or { }
-    s.ips[family] = ip
-  end
-  local now = os_time()
-  if s.expires and now > s.expires then
-    return nil
-  end
-  if s.heartbeat and now > s.heartbeat then
-    return nil
+    local _update_0 = family
+    s.ips[_update_0] = s.ips[_update_0] or ip
   end
   return s
 end
@@ -169,6 +290,8 @@ return {
   reset_cache = reset_cache,
   session_for_mac = session_for_mac,
   user_for_mac = user_for_mac,
+  enrich_session_ip = enrich_session_ip,
+  bind_session_mac = bind_session_mac,
   session_for_ip = function(ip, path, mac)
     return session_for_mac(mac, ip, path)
   end,

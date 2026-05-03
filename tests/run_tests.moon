@@ -2513,10 +2513,9 @@ test "auth/sessions — purge_expired : conserve une session sans expires", ->
 --   2. Scan de toutes les sessions à la recherche d'une IP dans ips.ipv4/ipv6
 do
   SF_FILE = "./tmp/test_sf_sessions.lua"
-  { :session_for_ip, :user_for_ip, :reset_cache } = require "auth.sessions"
+  { :session_for_ip, :user_for_ip, :reset_cache, :write_sessions, :bind_session_mac } = require "auth.sessions"
 
   write_sf_sessions = (sessions) ->
-    { :write_sessions } = require "auth.sessions"
     write_sessions sessions, SF_FILE
     reset_cache!
 
@@ -2527,6 +2526,28 @@ do
     write_sf_sessions { [MAC]: { user: "alice", expires: FUTURE } }
     s = session_for_ip nil, SF_FILE, MAC
     assert s and s.user == "alice", "session trouvée par MAC"
+
+  test "session_for_ip — cache obsolète relu sur miss", ->
+    write_sessions {}, SF_FILE
+    reset_cache!
+    assert not (session_for_ip "10.0.0.10", SF_FILE, MAC), "cache initial vide"
+    write_sessions { [MAC]: { user: "alice", expires: FUTURE } }, SF_FILE
+    s = session_for_ip "10.0.0.10", SF_FILE, MAC
+    assert s and s.user == "alice", "session trouvée après relecture du fichier"
+
+  test "auth/sessions — bind_session_mac réindexe une session trouvée via IPv6", ->
+    ROUTER_MAC = "58:d6:1f:57:4f:94"
+    CLIENT_MAC = "e0:8f:4c:c8:91:fa"
+    IP6 = "2a11:6c7:1700:7899:b807:9388:cb93:8d51"
+    write_sf_sessions {
+      [ROUTER_MAC]: { user: "j@prn.ovh", expires: FUTURE, ips: { ipv6: IP6 } }
+    }
+    s6 = session_for_ip IP6, SF_FILE, CLIENT_MAC
+    assert s6 and s6.user == "j@prn.ovh", "session IPv6 trouvée par fallback IP"
+    bind_session_mac s6.mac, CLIENT_MAC, IP6, SF_FILE
+    reset_cache!
+    s4 = session_for_ip "10.35.99.39", SF_FILE, CLIENT_MAC
+    assert s4 and s4.user == "j@prn.ovh", "session réindexée sous la vraie MAC cliente"
 
   test "session_for_ip — session retrouvée par scan des IPs (IPv4)", ->
     -- Sans MAC connue, session_for_mac scanne toutes les sessions à la

@@ -114,11 +114,105 @@ read_cached = (path) ->
     _cache_time = now
   _cache
 
+reload_cached = (path) ->
+  _cache      = load_sessions path
+  _cache_time = os_time!
+  _cache
+
 reset_cache = ->
   _cache      = nil
   _cache_time = 0
 
+--- Enrichit une session existante avec une nouvelle IP (sans écraser l'existante).
+-- Utile pour enregistrer les deux IPs (IPv4 et IPv6) d'un client authentifié.
+-- Relit le fichier, enrichit, et réécrit si changement.
+-- @tparam string mac   Adresse MAC du client
+-- @tparam string ip    Adresse IP à enregistrer (IPv4 ou IPv6)
+-- @tparam string path  Chemin du fichier de sessions
+-- @treturn boolean true si enrichissement a eu lieu
+valid_mac = (mac) ->
+  mac and mac != "unknown" and mac != "\x00\x00\x00\x00\x00\x00"
+
+find_session_by_ip = (sessions, ip) ->
+  return nil, nil unless ip
+  for m, sess in pairs sessions
+    if sess.ips and (sess.ips.ipv4 == ip or sess.ips.ipv6 == ip)
+      return m, sess
+  nil, nil
+
+enrich_session_ip = (mac, ip, path) ->
+  return false unless valid_mac(mac) and ip and path
+  mac = mac\lower!
+
+  sessions = load_sessions path
+  s = sessions[mac]
+  unless s
+    _old_mac, found = find_session_by_ip sessions, ip
+    s = found
+  return false unless s
+
+  family = if ip\find ":", 1, true then "ipv6" else "ipv4"
+  s.ips or= {}
+
+  -- Ne pas écraser une IP existante de la même famille
+  if s.ips[family] and s.ips[family] != ip
+    return false  -- IP différente pour cette famille : pas d'enrichissement
+
+  if s.ips[family] == ip and sessions[mac] == s
+    return false  -- Déjà présente sous cette MAC : rien à faire
+
+  -- Nouvelle IP ou session trouvée par IP sous une autre MAC : enregistrer
+  -- sous la MAC réellement observée sur le paquet DNS.
+  s.ips[family] = ip
+  s.mac = mac
+  sessions[mac] = s
+  write_sessions sessions, path
+  reset_cache!  -- Invalider le cache pour que la nouvelle IP soit lue prochainement
+
+  true
+
+bind_session_mac = (session_mac, current_mac, ip, path) ->
+  return false unless valid_mac(current_mac) and path
+  current_mac = current_mac\lower!
+  session_mac = session_mac and session_mac\lower! or nil
+  return enrich_session_ip current_mac, ip, path if session_mac == current_mac
+
+  sessions = load_sessions path
+  s = (session_mac and sessions[session_mac]) or nil
+  unless s
+    _old_mac, found = find_session_by_ip sessions, ip
+    session_mac = _old_mac
+    s = found
+  return false unless s
+
+  s.mac = current_mac
+  if ip
+    family = if ip\find ":", 1, true then "ipv6" else "ipv4"
+    s.ips or= {}
+    s.ips[family] or= ip
+
+  sessions[current_mac] = s
+  sessions[session_mac] = nil if session_mac and session_mac != current_mac
+  write_sessions sessions, path
+  reset_cache!
+  true
+
 -- ── Recherche de session ─────────────────────────────────────────
+
+lookup_session = (sessions_table, lookup_mac, ip) ->
+  s = sessions_table[lookup_mac]
+
+  -- Fallback : si la MAC est inconnue mais qu'une IP est fournie, on cherche
+  -- dans toutes les sessions si une d'entre elles possède cette IP exacte.
+  if not s and ip
+    for m, sess in pairs sessions_table
+      if sess.ips
+        if sess.ips.ipv4 == ip or sess.ips.ipv6 == ip
+          s = sess
+          s.mac = m
+          break
+
+  s
 
 --- Retourne la session valide pour une MAC (ou IP), ou nil.
 -- @tparam string|nil mac  Adresse MAC du client (privilégié)
@@ -133,29 +227,33 @@ session_for_mac = (mac, ip, path, sessions_arg) ->
 
   lookup_mac = (lookup_mac and lookup_mac != "unknown") and lookup_mac\lower! or "unknown"
 
-  s = sessions_table[lookup_mac]
+  s = lookup_session sessions_table, lookup_mac, ip
 
-  -- Fallback : si la MAC est inconnue mais qu'une IP est fournie, on cherche
-  -- dans toutes les sessions si une d'entre elles possède cette IP exacte.
-  if not s and ip
-    for m, sess in pairs sessions_table
-      if sess.ips
-        if sess.ips.ipv4 == ip or sess.ips.ipv6 == ip
-          s = sess
-          s.mac = m
-          break
+  -- Les workers Q0/Q1 gardent un cache court. Juste après une authentification,
+  -- ce cache peut être encore vide ou obsolète : en cas de miss, relire le
+  -- fichier immédiatement avant de refuser. Les hits gardent le chemin rapide.
+  if not s and not sessions_arg and path
+    sessions_table = reload_cached path
+    s = lookup_session sessions_table, lookup_mac, ip if sessions_table
 
   return nil unless s
+
+  now = os_time!
+  if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat)
+    if not sessions_arg and path
+      sessions_table = reload_cached path
+      s = lookup_session sessions_table, lookup_mac, ip if sessions_table
+      return nil unless s
+      now = os_time!
+    return nil if s.expires and now > s.expires
+    return nil if s.heartbeat and now > s.heartbeat
 
   -- Si on a l'IP actuelle, on peut mettre à jour le cache ips (en mémoire seulement ici)
   if ip
     family = if ip\find ":", 1, true then "ipv6" else "ipv4"
     s.ips or= {}
-    s.ips[family] = ip
+    s.ips[family] or= ip
 
-  now = os_time!
-  return nil if s.expires and now > s.expires
-  return nil if s.heartbeat and now > s.heartbeat
   s
 
 --- Retourne l'utilisateur authentifié pour une MAC/IP, ou nil.
@@ -166,7 +264,7 @@ user_for_mac = (mac, ip, path) ->
 {
   :serialize, :write_sessions, :load_sessions, :add_session
   :purge_expired, :read_cached, :reset_cache
-  :session_for_mac, :user_for_mac
+  :session_for_mac, :user_for_mac, :enrich_session_ip, :bind_session_mac
   -- Compatibilité (alias avec réordonnancement des arguments)
   session_for_ip: (ip, path, mac) -> session_for_mac mac, ip, path
   user_for_ip: (ip, path, mac) -> user_for_mac mac, ip, path
