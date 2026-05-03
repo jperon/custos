@@ -508,8 +508,8 @@ handle_client = function(args)
         key = state.static_cert_paths.key
       })
       local ctx
-      ok, ctx = load_static(state.static_cert_paths.key, state.static_cert_paths.cert)
-      if ok then
+      ctx, err = load_static(state.static_cert_paths.key, state.static_cert_paths.cert)
+      if ctx then
         tls_ctx = ctx
         log_debug({
           action = "server_using_static_cert"
@@ -517,9 +517,9 @@ handle_client = function(args)
       else
         log_error({
           action = "server_static_cert_load_child_failed",
-          err = ctx
+          err = err
         })
-        error("Cannot load static certificate in child: " .. tostring(ctx))
+        error("Cannot load static certificate in child: " .. tostring(err))
       end
     else
       local tls_ctx_ok, tls_ctx_err = pcall(function()

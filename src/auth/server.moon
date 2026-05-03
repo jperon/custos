@@ -428,13 +428,13 @@ handle_client = (args) ->
     tls_ctx = nil
     if state.static_cert_paths
       log_debug { action: "server_loading_static_cert_child", cert: state.static_cert_paths.cert, key: state.static_cert_paths.key }
-      ok, ctx = load_static state.static_cert_paths.key, state.static_cert_paths.cert
-      if ok
+      ctx, err = load_static state.static_cert_paths.key, state.static_cert_paths.cert
+      if ctx
         tls_ctx = ctx
         log_debug { action: "server_using_static_cert" }
       else
-        log_error { action: "server_static_cert_load_child_failed", err: ctx }
-        error "Cannot load static certificate in child: #{ctx}"
+        log_error { action: "server_static_cert_load_child_failed", err: err }
+        error "Cannot load static certificate in child: #{err}"
     else
       tls_ctx_ok, tls_ctx_err = pcall ->
         tls_ctx = load_or_generate_sni local_ip, state.cert_cache
