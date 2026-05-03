@@ -660,12 +660,22 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     port = port
   })
   log_debug({
+    action = "server_auth_cfg_received",
+    cert = auth_cfg.cert,
+    key = auth_cfg.key
+  })
+  log_debug({
     action = "server_cert_cache_init"
   })
   local cert_cache_module = require("auth.cert_cache")
   local cert_cache = cert_cache_module.create_cache(500, 7776000)
   local static_tls_ctx = nil
   if auth_cfg.cert and auth_cfg.key then
+    log_info({
+      action = "server_loading_static_cert",
+      cert = auth_cfg.cert,
+      key = auth_cfg.key
+    })
     local ok, ctx = load_static(auth_cfg.key, auth_cfg.cert)
     if ok then
       static_tls_ctx = ctx
@@ -682,6 +692,10 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
         err = ctx
       })
     end
+  else
+    log_debug({
+      action = "server_no_static_cert_configured"
+    })
   end
   local listen4, err4 = make_server4(port)
   if not (listen4) then

@@ -543,6 +543,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   sessions_file = auth_cfg.sessions_file or AUTH_SESSIONS_FILE
   
   log_debug { action: "server_startup", port: port }
+  log_debug { action: "server_auth_cfg_received", cert: auth_cfg.cert, key: auth_cfg.key }
   
   -- Initialiser le cache de certificats (persistant, 90 jours TTL)
   log_debug { action: "server_cert_cache_init" }
@@ -552,12 +553,15 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   -- Charger le certificat statique s'il est fourni dans la configuration
   static_tls_ctx = nil
   if auth_cfg.cert and auth_cfg.key
+    log_info { action: "server_loading_static_cert", cert: auth_cfg.cert, key: auth_cfg.key }
     ok, ctx = load_static auth_cfg.key, auth_cfg.cert
     if ok
       static_tls_ctx = ctx
       log_info { action: "server_static_cert_loaded", cert: auth_cfg.cert, key: auth_cfg.key }
     else
       log_warn { action: "server_static_cert_failed", cert: auth_cfg.cert, key: auth_cfg.key, err: ctx }
+  else
+    log_debug { action: "server_no_static_cert_configured" }
 
   listen4, err4 = make_server4 port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
