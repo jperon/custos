@@ -15,10 +15,10 @@ do
   local _obj_0 = require("auth.credentials")
   verify_password, register_user = _obj_0.verify_password, _obj_0.register_user
 end
-local load_or_generate, load_or_generate_sni
+local load_or_generate, load_or_generate_sni, load_static
 do
   local _obj_0 = require("auth.cert")
-  load_or_generate, load_or_generate_sni = _obj_0.load_or_generate, _obj_0.load_or_generate_sni
+  load_or_generate, load_or_generate_sni, load_static = _obj_0.load_or_generate, _obj_0.load_or_generate_sni, _obj_0.load_static
 end
 local extract_sni
 extract_sni = require("auth.sni_extractor").extract_sni
@@ -501,16 +501,23 @@ handle_client = function(args)
       local_ip = local_ip
     })
     local tls_ctx = nil
-    local tls_ctx_ok, tls_ctx_err = pcall(function()
-      tls_ctx = load_or_generate_sni(local_ip, state.cert_cache)
-    end)
-    if not (tls_ctx_ok) then
-      log_error({
-        action = "server_cert_generation_failed",
-        local_ip = local_ip,
-        err = tls_ctx_err
+    if state.static_tls_ctx then
+      tls_ctx = state.static_tls_ctx
+      log_debug({
+        action = "server_using_static_cert"
       })
-      error("Cannot generate certificate: " .. tostring(tls_ctx_err))
+    else
+      local tls_ctx_ok, tls_ctx_err = pcall(function()
+        tls_ctx = load_or_generate_sni(local_ip, state.cert_cache)
+      end)
+      if not (tls_ctx_ok) then
+        log_error({
+          action = "server_cert_generation_failed",
+          local_ip = local_ip,
+          err = tls_ctx_err
+        })
+        error("Cannot generate certificate: " .. tostring(tls_ctx_err))
+      end
     end
     if not (tls_ctx) then
       log_error({
@@ -657,6 +664,25 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
   })
   local cert_cache_module = require("auth.cert_cache")
   local cert_cache = cert_cache_module.create_cache(500, 7776000)
+  local static_tls_ctx = nil
+  if auth_cfg.cert and auth_cfg.key then
+    local ok, ctx = load_static(auth_cfg.key, auth_cfg.cert)
+    if ok then
+      static_tls_ctx = ctx
+      log_info({
+        action = "server_static_cert_loaded",
+        cert = auth_cfg.cert,
+        key = auth_cfg.key
+      })
+    else
+      log_warn({
+        action = "server_static_cert_failed",
+        cert = auth_cfg.cert,
+        key = auth_cfg.key,
+        err = ctx
+      })
+    end
+  end
   local listen4, err4 = make_server4(port)
   if not (listen4) then
     error("Impossible de démarrer le serveur IPv4 sur port " .. tostring(port) .. " : " .. tostring(err4))
@@ -675,7 +701,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     nft_sess = nft_sess,
     secrets_path = secrets_path,
     sessions_file = sessions_file,
-    tls_ctx = tls_ctx,
+    static_tls_ctx = static_tls_ctx,
     cert_cache = cert_cache
   }
   log_info({
@@ -684,7 +710,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     ipv4 = "0.0.0.0",
     ipv6 = listen6 and "::" or nil,
     sessions_file = sessions_file,
-    cert_cache = "enabled (100 slots, 24h TTL)"
+    cert_cache = static_tls_ctx and "static cert + dynamic SNI cache" or "dynamic SNI cache (500 slots, 90d TTL)"
   })
   while true do
     reload_secrets_if_needed(state)

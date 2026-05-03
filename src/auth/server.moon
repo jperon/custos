@@ -11,7 +11,7 @@ ssl = require "auth.ffi_wolfssl"
 { :fork_child, :reap_one } = require "lib.process"
 { :session_for_mac, :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
 { :verify_password, :register_user } = require "auth.credentials"
-{ :load_or_generate, :load_or_generate_sni } = require "auth.cert"
+{ :load_or_generate, :load_or_generate_sni, :load_static } = require "auth.cert"
 { :extract_sni } = require "auth.sni_extractor"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 { :AUTH_SESSIONS_FILE } = require "config"
@@ -423,13 +423,19 @@ handle_client = (args) ->
     
     log_debug { action: "server_local_ip_detected", local_ip: local_ip }
     
-    -- Générer ou charger le certificat avec l'IP locale comme CN
+    -- Utiliser le certificat statique s'il a été chargé au démarrage
+    -- Sinon, générer/charger le certificat avec l'IP locale comme CN
     tls_ctx = nil
-    tls_ctx_ok, tls_ctx_err = pcall ->
-      tls_ctx = load_or_generate_sni local_ip, state.cert_cache
-    unless tls_ctx_ok
-      log_error { action: "server_cert_generation_failed", local_ip: local_ip, err: tls_ctx_err }
-      error "Cannot generate certificate: #{tls_ctx_err}"
+    if state.static_tls_ctx
+      tls_ctx = state.static_tls_ctx
+      log_debug { action: "server_using_static_cert" }
+    else
+      tls_ctx_ok, tls_ctx_err = pcall ->
+        tls_ctx = load_or_generate_sni local_ip, state.cert_cache
+      unless tls_ctx_ok
+        log_error { action: "server_cert_generation_failed", local_ip: local_ip, err: tls_ctx_err }
+        error "Cannot generate certificate: #{tls_ctx_err}"
+    
     unless tls_ctx
       log_error { action: "server_cert_null", local_ip: local_ip }
       error "Certificate context is nil"
@@ -542,6 +548,16 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   log_debug { action: "server_cert_cache_init" }
   cert_cache_module = require "auth.cert_cache"
   cert_cache = cert_cache_module.create_cache 500, 7776000  -- 500 certs, 90 days TTL
+  
+  -- Charger le certificat statique s'il est fourni dans la configuration
+  static_tls_ctx = nil
+  if auth_cfg.cert and auth_cfg.key
+    ok, ctx = load_static auth_cfg.key, auth_cfg.cert
+    if ok
+      static_tls_ctx = ctx
+      log_info { action: "server_static_cert_loaded", cert: auth_cfg.cert, key: auth_cfg.key }
+    else
+      log_warn { action: "server_static_cert_failed", cert: auth_cfg.cert, key: auth_cfg.key, err: ctx }
 
   listen4, err4 = make_server4 port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
@@ -557,7 +573,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     nft_sess: nft_sess
     secrets_path: secrets_path
     sessions_file: sessions_file
-    tls_ctx: tls_ctx
+    static_tls_ctx: static_tls_ctx
     cert_cache: cert_cache
   }
 
@@ -567,7 +583,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     ipv4: "0.0.0.0"
     ipv6: listen6 and "::" or nil
     sessions_file: sessions_file
-    cert_cache: "enabled (100 slots, 24h TTL)"
+    cert_cache: static_tls_ctx and "static cert + dynamic SNI cache" or "dynamic SNI cache (500 slots, 90d TTL)"
   }
 
   while true

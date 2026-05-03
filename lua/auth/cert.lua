@@ -282,9 +282,26 @@ load_or_generate_sni = function(hostname, cache)
   })
   return ctx
 end
+local load_static
+load_static = function(key_path, cert_path)
+  if not (key_path and cert_path) then
+    return nil, "cert_path and key_path must be provided"
+  end
+  if not (file_exists(key_path) and file_exists(cert_path)) then
+    return nil, "cert or key file not found"
+  end
+  local ok, ctx = pcall(function()
+    return make_context(key_path, cert_path)
+  end)
+  if not (ok) then
+    return nil, "Failed to create TLS context from static files"
+  end
+  return ctx, nil
+end
 return {
   load_or_generate = load_or_generate,
   generate_self_signed = generate_self_signed,
   make_context = make_context,
-  load_or_generate_sni = load_or_generate_sni
+  load_or_generate_sni = load_or_generate_sni,
+  load_static = load_static
 }

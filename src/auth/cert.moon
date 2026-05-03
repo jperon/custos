@@ -260,4 +260,23 @@ load_or_generate_sni = (hostname, cache) ->
   
   ctx
 
-{ :load_or_generate, :generate_self_signed, :make_context, :load_or_generate_sni }
+--- Charge un certificat et clé statiques (depuis filter.yml).
+-- @tparam string key_path  Chemin de la clé privée PEM
+-- @tparam string cert_path Chemin du certificat PEM
+-- @treturn table  Contexte TLS WolfSSL (ssl.newcontext), ou nil si succès
+-- @treturn string Message d'erreur, ou nil si succès
+load_static = (key_path, cert_path) ->
+  unless key_path and cert_path
+    return nil, "cert_path and key_path must be provided"
+  
+  unless file_exists(key_path) and file_exists(cert_path)
+    return nil, "cert or key file not found"
+  
+  ok, ctx = pcall ->
+    make_context key_path, cert_path
+  unless ok
+    return nil, "Failed to create TLS context from static files"
+  
+  ctx, nil
+
+{ :load_or_generate, :generate_self_signed, :make_context, :load_or_generate_sni, :load_static }
