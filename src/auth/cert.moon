@@ -9,7 +9,7 @@
 ssl = require "auth.ffi_wolfssl"
 { :log_debug, :log_warn, :log_error } = require "log"
 
-CERT_DAYS     = 3650    -- validité : ~10 ans
+CERT_DAYS     = 730     -- validité : 2 ans
 CERT_KEY_BITS = 2048
 
 --- Génère un hash court pour une chaîne de caractères.
@@ -166,8 +166,8 @@ load_or_generate_sni = (hostname, cache) ->
     -- Entry depuis disque, recréer contexte
     log_debug { action: "cert_sni_cache_hit_disk", hostname: hostname_lower }
     
-    key_file = "tmp/auth_sni_#{hostname_lower}_#{os.time!}.key"
-    cert_file = "tmp/auth_sni_#{hostname_lower}_#{os.time!}.crt"
+    key_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.key"
+    cert_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.crt"
     
     key_ok = pcall ->
       key_fh = io.open key_file, "w"
@@ -201,8 +201,8 @@ load_or_generate_sni = (hostname, cache) ->
   
   -- WolfSSL utilise des fichiers, pas des PEM strings.
   -- Écrire les PEM dans des fichiers temporaires.
-  key_file = "tmp/auth_sni_#{hostname_lower}_#{os.time!}.key"
-  cert_file = "tmp/auth_sni_#{hostname_lower}_#{os.time!}.crt"
+  key_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.key"
+  cert_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.crt"
   
   log_debug { action: "cert_sni_writing_files", key_file: key_file, cert_file: cert_file }
   

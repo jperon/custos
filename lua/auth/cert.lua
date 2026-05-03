@@ -4,7 +4,7 @@ do
   local _obj_0 = require("log")
   log_debug, log_warn, log_error = _obj_0.log_debug, _obj_0.log_warn, _obj_0.log_error
 end
-local CERT_DAYS = 3650
+local CERT_DAYS = 730
 local CERT_KEY_BITS = 2048
 local hash_string
 hash_string = function(s)
@@ -143,8 +143,8 @@ load_or_generate_sni = function(hostname, cache)
       action = "cert_sni_cache_hit_disk",
       hostname = hostname_lower
     })
-    local key_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.time()) .. ".key"
-    local cert_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.time()) .. ".crt"
+    local key_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.date("%Y")) .. ".key"
+    local cert_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.date("%Y")) .. ".crt"
     local key_ok = pcall(function()
       local key_fh = io.open(key_file, "w")
       if not (key_fh) then
@@ -198,8 +198,8 @@ load_or_generate_sni = function(hostname, cache)
     key_size = #key_pem,
     cert_size = #cert_pem
   })
-  local key_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.time()) .. ".key"
-  local cert_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.time()) .. ".crt"
+  local key_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.date("%Y")) .. ".key"
+  local cert_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.date("%Y")) .. ".crt"
   log_debug({
     action = "cert_sni_writing_files",
     key_file = key_file,
