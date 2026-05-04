@@ -4,7 +4,7 @@
 -- worker_questions (Q0, réponses DNS forgées).
 
 { :ffi, :libc } = require "ffi_defs"
-{ :C, :AF_PACKET, :SOCK_RAW, :ETH_P_ALL } = require "auth.ffi_socket"
+{ :C, :AF_PACKET, :SOCK_RAW, :ETH_P_ALL } = require "lib.socket"
 { :s2mac } = require "ipparse.l2.ethernet"
 
 --- Ouvre un socket AF_PACKET/SOCK_RAW non lié.

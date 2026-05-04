@@ -22,10 +22,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_allow, log_block, log_warn, log_debug, log_info
+local log_allow, log_block, log_warn, log_debug, log_info, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_allow, log_block, log_warn, log_debug, log_info = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_info
+  log_allow, log_block, log_warn, log_debug, log_info, set_action_prefix = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_info, _obj_0.set_action_prefix
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
@@ -298,6 +298,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
 end
 local run
 run = function(queue_num, wfd, learn_wfd, ev_wfd)
+  set_action_prefix("questions_")
   pipe_wfd = wfd
   mac_learn_wfd = learn_wfd
   events_wfd = ev_wfd

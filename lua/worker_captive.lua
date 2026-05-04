@@ -24,10 +24,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_info, log_warn, log_error
+local log_info, log_warn, log_error, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_error = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error
+  log_info, log_warn, log_error, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.set_action_prefix
 end
 local detect_captive_ips
 detect_captive_ips = require("captive_ips").detect
@@ -116,7 +116,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   local ip, ip_off, tcp, tcp_off = parse_syn(raw)
   if not (ip) then
     log_warn({
-      action = "q2_parse_failed",
+      action = "parse_failed",
       queue = 2,
       len = payload_len
     })
@@ -143,7 +143,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     local res = send_frame(raw_fd, f, ifindex)
     if not (res) then
       log_warn({
-        action = "q2_frame_send_error",
+        action = "frame_send_error",
         queue = 2,
         ip = client_ip_str,
         user = user
@@ -160,7 +160,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   end)())
   if not (url) then
     log_warn({
-      action = "q2_no_redirect_url",
+      action = "no_redirect_url",
       queue = 2,
       ip = client_ip_str,
       version = ip.version,
@@ -171,7 +171,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   local ok, err = pcall(function()
     local f1, f2, f3 = build_response_frames(eth, ip, tcp, url)
     log_info({
-      action = "q2_sending_frames",
+      action = "sending_frames",
       queue = 2,
       ip = client_ip_str,
       frames = 3,
@@ -184,7 +184,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   end)
   if ok then
     local fields = {
-      action = "captive_redirect_q2",
+      action = "redirect_q2",
       queue = 2,
       ip = client_ip_str,
       sport = tcp.spt,
@@ -198,7 +198,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     log_info(fields)
   else
     log_warn({
-      action = "q2_send_failed",
+      action = "send_failed",
       queue = 2,
       err = tostring(err),
       ip = client_ip_str,
@@ -209,6 +209,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
 end
 local run
 run = function(queue_num, auth_cfg)
+  set_action_prefix("captive_")
   auth_cfg = auth_cfg or { }
   local ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
   local https_port = auth_cfg.port or 33443
@@ -218,7 +219,7 @@ run = function(queue_num, auth_cfg)
     redirect_url4 = "https://" .. tostring(local_ip4) .. ":" .. tostring(https_port) .. "/"
   else
     log_warn({
-      action = "q2_no_ipv4",
+      action = "no_ipv4",
       msg = "No IPv4 captive IP configured"
     })
   end
@@ -226,14 +227,14 @@ run = function(queue_num, auth_cfg)
     redirect_url6 = "https://[" .. tostring(local_ip6) .. "]:" .. tostring(https_port) .. "/"
   else
     log_warn({
-      action = "q2_no_ipv6",
+      action = "no_ipv6",
       msg = "No IPv6 captive IP configured"
     })
   end
   local fd, err = open_raw_socket(ifname)
   if not (fd) then
     log_error({
-      action = "q2_socket_failed",
+      action = "socket_failed",
       err = err,
       ifname = ifname
     })
@@ -243,14 +244,14 @@ run = function(queue_num, auth_cfg)
   ifindex = tonumber(ffi.C.if_nametoindex(ifname))
   if ifindex == 0 then
     log_error({
-      action = "q2_ifindex_failed",
+      action = "ifindex_failed",
       ifname = ifname
     })
     return 
   end
   _bridge_mac = bridge_raw.read_mac(ifname)
   log_info({
-    action = "q2_worker_start",
+    action = "worker_start",
     ifname = ifname,
     ifindex = ifindex,
     custom_url = custom_redirect_url or "auto",

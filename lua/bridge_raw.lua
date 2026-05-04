@@ -5,7 +5,7 @@ do
 end
 local C, AF_PACKET, SOCK_RAW, ETH_P_ALL
 do
-  local _obj_0 = require("auth.ffi_socket")
+  local _obj_0 = require("lib.socket")
   C, AF_PACKET, SOCK_RAW, ETH_P_ALL = _obj_0.C, _obj_0.AF_PACKET, _obj_0.SOCK_RAW, _obj_0.ETH_P_ALL
 end
 local s2mac

@@ -22,6 +22,11 @@ unblock_worker_signals = function()
   libc.sigprocmask(SIG_UNBLOCK, unmask, nil)
   return nil
 end
+local set_process_name
+set_process_name = function(name)
+  libc.prctl(15, ffi.cast("unsigned long", ffi.cast("const char*", name)), 0, 0, 0)
+  return nil
+end
 local set_parent_death_signal
 set_parent_death_signal = function(name)
   if libc.prctl(1, SIGTERM, 0, 0, 0) ~= 0 then
@@ -60,6 +65,7 @@ fork_child = function(name, child_fn, arg, opts)
     error("fork() échoué pour " .. tostring(name))
   end
   if pid == 0 then
+    set_process_name("custos:" .. tostring(name))
     if unblock_signals then
       unblock_worker_signals()
     end
@@ -151,6 +157,7 @@ return {
   SIGTERM = SIGTERM,
   SIGHUP = SIGHUP,
   WNOHANG = WNOHANG,
+  set_process_name = set_process_name,
   unblock_worker_signals = unblock_worker_signals,
   set_parent_death_signal = set_parent_death_signal,
   fork_child = fork_child,

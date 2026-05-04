@@ -414,13 +414,7 @@ exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
       @ssh_run "sed -i '/custos-update/d' /etc/crontabs/root 2>/dev/null || true"
       @ssh_run "/etc/init.d/cron restart 2>/dev/null || true"
 
-      -- 3. Nettoyage sysctl
-      info "  Nettoyage de sysctl..."
-      @ssh_run "rm -f /etc/sysctl.d/10-custos.conf"
-      @ssh_run "sysctl -w net.bridge.bridge-nf-call-iptables=0 2>/dev/null || true"
-      @ssh_run "sysctl -w net.bridge.bridge-nf-call-ip6tables=0 2>/dev/null || true"
-
-      -- 4. Nettoyage nftables (on tente de supprimer les tables si elles existent)
+      -- 3. Nettoyage nftables (on tente de supprimer les tables si elles existent)
       info "  Nettoyage nftables..."
       @ssh_run "nft delete table bridge dns-filter-bridge 2>/dev/null || true"
 

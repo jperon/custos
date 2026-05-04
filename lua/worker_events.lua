@@ -3,10 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
-local log_info, log_warn
+local log_info, log_warn, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
+  log_info, log_warn, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.set_action_prefix
 end
 local bit = require("bit")
 local POLLIN = 1
@@ -92,7 +92,7 @@ flush_to_file = function(agg, hour, events_dir)
   local fd = libc.open(path, bit.bor(O_WRONLY, O_CREAT, O_APPEND), FILE_MODE)
   if fd < 0 then
     log_warn({
-      action = "worker_events_open_failed",
+      action = "open_failed",
       path = path
     })
     return 
@@ -226,6 +226,7 @@ cleanup_old = function(events_dir, max_age_hours, min_free_pct)
 end
 local run
 run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
+  set_action_prefix("events_")
   os.execute("mkdir -p '" .. tostring(events_dir) .. "'")
   local sfd = create_signal_fd()
   local pfds = ffi.new("struct pollfd[2]")
@@ -239,7 +240,7 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
   local siginfo = ffi.new("signalfd_siginfo")
   local sig_sz = ffi.sizeof("signalfd_siginfo")
   log_info({
-    action = "worker_events_start",
+    action = "start",
     events_dir = events_dir,
     hour = hour,
     max_age_hours = max_age_hours,
@@ -252,7 +253,7 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
       libc.read(sfd, siginfo, sig_sz)
       if siginfo.ssi_signo == SIGTERM then
         log_info({
-          action = "worker_events_sigterm",
+          action = "sigterm",
           hour = hour
         })
         flush_to_file(agg, hour, events_dir)
@@ -263,7 +264,7 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
       local chunk = read_chunk(events_rfd)
       if chunk == nil then
         log_warn({
-          action = "worker_events_pipe_eof",
+          action = "pipe_eof",
           fd = events_rfd
         })
       elseif #chunk > 0 then
@@ -284,7 +285,7 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
     local new_hour = current_hour()
     if new_hour ~= hour then
       log_info({
-        action = "worker_events_hour_change",
+        action = "hour_change",
         old = hour,
         new = new_hour
       })

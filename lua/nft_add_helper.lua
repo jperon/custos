@@ -5,20 +5,26 @@ do
   local _obj_0 = require("config")
   NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS = _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS
 end
+local log_warn
+log_warn = require("log").log_warn
 local _timespec = ffi.new("timespec_t[1]")
 local try_add_with_retries
 try_add_with_retries = function(fn, ...)
-  local attempts = NFT_ADD_RETRY_COUNT or 3
+  local attempts = NFT_ADD_RETRY_COUNT or 6
   local backoffs = NFT_ADD_BACKOFF_MS or {
     20,
     50,
-    100
+    100,
+    200,
+    400,
+    800
   }
   for i = 1, attempts do
-    local ok = fn(...)
+    local ok, err = fn(...)
     if ok then
       return true
     end
+    local last_err = err
     if i < attempts then
       local ms = backoffs[i] or backoffs[#backoffs]
       _timespec[0].tv_sec = math.floor(ms / 1000)
@@ -26,6 +32,16 @@ try_add_with_retries = function(fn, ...)
       pcall(ffi.C.nanosleep, _timespec, nil)
     end
   end
+  local args = {
+    ...
+  }
+  log_warn({
+    action = "nft_add_retries_exhausted",
+    attempts = attempts,
+    err = last_err or "",
+    arg1 = args[1] or "",
+    arg2 = args[2] or ""
+  })
   return false
 end
 return {

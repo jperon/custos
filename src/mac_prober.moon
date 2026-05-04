@@ -15,7 +15,7 @@
 -- en arrière-plan) ; les deux peuvent coexister sur la même interface.
 
 { :ffi, :libc } = require "ffi_defs"
-{ :C, :AF_PACKET, :SOCK_RAW, :AF_INET6 } = require "auth.ffi_socket"
+{ :C, :AF_PACKET, :SOCK_RAW, :AF_INET6 } = require "lib.socket"
 { :log_debug, :log_warn } = require "log"
 
 bit = require "bit"

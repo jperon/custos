@@ -29,7 +29,9 @@ _cfg = require "config"
 MAC_LEARNER_QUERY_SOCK     = _cfg.MAC_LEARNER_QUERY_SOCK     or "/var/run/custos/mac_query.sock"
 MAC_LEARNER_LEARN_MSG_SIZE = _cfg.MAC_LEARNER_LEARN_MSG_SIZE or 22
 MAC_LEARNER_ENTRY_TTL      = _cfg.MAC_LEARNER_ENTRY_TTL      or 300
+AUTH_SESSIONS_FILE         = _cfg.AUTH_SESSIONS_FILE         or "./tmp/sessions.lua"
 { :log_info, :log_warn, :log_debug } = require "log"
+{ :enrich_session_ip } = require "auth.sessions"
 
 -- Délai maximum (ms) avant de répondre "unknown" aux clients en attente d'un probe.
 PROBE_TIMEOUT_MS = 200
@@ -86,7 +88,13 @@ ip16_to_str = (ip16) ->
 -- @tparam string ip_str   Adresse IP (clé de mac_table et pending_queries)
 -- @tparam string mac_str  Adresse MAC "aa:bb:cc:dd:ee:ff"
 learn_mac = (ip_str, mac_str) ->
+  existing = mac_table[ip_str]
+  is_new = not existing or existing[1] != mac_str
   mac_table[ip_str] = { mac_str, os.time! + MAC_LEARNER_ENTRY_TTL }
+  if is_new
+    ok, enriched = pcall enrich_session_ip, mac_str, ip_str, AUTH_SESSIONS_FILE
+    if ok and enriched
+      log_info { action: "session_enriched", ip: ip_str, mac: mac_str }
   waiters = pending_queries[ip_str]
   return unless waiters
   resp = mac_str .. "\n"

@@ -1,6 +1,8 @@
 local ffi = require("ffi")
 local log_debug
 log_debug = require("log").log_debug
+local get_errno
+get_errno = require("lib.socket").get_errno
 ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
   typedef struct WOLFSSL WOLFSSL;
   typedef struct WOLFSSL_METHOD WOLFSSL_METHOD;
@@ -24,6 +26,9 @@ ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
   int wolfSSL_read(WOLFSSL *ssl, void *data, int sz);
   int wolfSSL_shutdown(WOLFSSL *ssl);
   int wolfSSL_get_error(WOLFSSL *ssl, int ret);
+  int wolfSSL_CTX_UseALPN(WOLFSSL_CTX *ctx, char *protocol_name_list,
+                          unsigned int protocol_name_listSz, unsigned char options);
+  int wolfSSL_ALPN_GetProtocol(WOLFSSL *ssl, char **protocol_name, unsigned short *size);
   unsigned long wolfSSL_ERR_get_error(void);
   char* wolfSSL_ERR_reason_error_string(unsigned long err);
 ]])
@@ -61,6 +66,8 @@ local SSL_ERROR_WANT_WRITE = 3
 local SSL_ERROR_SSL = 1
 local SSL_FILETYPE_PEM = 1
 local SSL_FILETYPE_ASN1 = 2
+local WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x01
+local _alpn_available = nil
 local get_ssl_errors
 get_ssl_errors = function()
   local errors = { }
@@ -110,6 +117,28 @@ newcontext = function(opts)
   if ret < 0 then
     libwolfssl.wolfSSL_CTX_free(ctx)
     error("wolfSSL_CTX_use_PrivateKey_file() failed")
+  end
+  if _alpn_available ~= false then
+    local alpn = string.char(2) .. "h2" .. string.char(8) .. "http/1.1"
+    local ok_alpn, ret_alpn = pcall(function()
+      return libwolfssl.wolfSSL_CTX_UseALPN(ctx, ffi.cast("char*", alpn), #alpn, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH)
+    end)
+    _alpn_available = ok_alpn
+    if ok_alpn then
+      log_debug({
+        action = "ctx_use_alpn",
+        ret = ret_alpn or "nil",
+        protocols = "h2,http/1.1"
+      })
+    else
+      log_debug({
+        action = "alpn_unavailable"
+      })
+    end
+  else
+    log_debug({
+      action = "alpn_unavailable"
+    })
   end
   return {
     ctx = ctx,
@@ -207,6 +236,20 @@ ssl_mt.__index.dohandshake = function(self)
   })
   return error("Unexpected error " .. tostring(err) .. ": " .. tostring(ssl_errors))
 end
+ssl_mt.__index.selected_alpn = function(self)
+  if _alpn_available == false then
+    return nil
+  end
+  local proto_ptr = ffi.new("char*[1]")
+  local proto_len = ffi.new("unsigned short[1]")
+  local ok, ret = pcall(function()
+    return libwolfssl.wolfSSL_ALPN_GetProtocol(self.ssl, proto_ptr, proto_len)
+  end)
+  if not (ok and ret == 0 and proto_ptr[0] ~= nil and proto_len[0] > 0) then
+    return nil
+  end
+  return ffi.string(proto_ptr[0], proto_len[0])
+end
 ssl_mt.__index.send = function(self, data)
   if self.closed then
     error("SSL connection is closed")
@@ -256,15 +299,21 @@ ssl_mt.__index.receive = function(self, mode)
           return ffi.string(line_buf, line_len)
         end
         local err = libwolfssl.wolfSSL_get_error(self.ssl, n)
+        local errno = get_errno()
         log_debug({
           action = "wolfssl_read_error",
           ret = n,
-          err = err
+          err = err,
+          errno = errno
         })
-        if err == SSL_ERROR_WANT_READ then
-          return nil
+        if n == 0 then
+          return nil, "eof_from_peer"
         end
-        error("wolfSSL_read() failed (error code: " .. tostring(err) .. ")")
+        if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE then
+          return nil, "want_read_write"
+        end
+        local ssl_errors = get_ssl_errors()
+        return nil, "wolfSSL_read() failed (ret: " .. tostring(n) .. ", error code: " .. tostring(err) .. ", errno: " .. tostring(errno) .. ", ssl_err: " .. tostring(ssl_errors) .. ")"
       end
       local byte_val = line_buf[line_len]
       if byte_val == 10 then
@@ -302,21 +351,24 @@ ssl_mt.__index.receive = function(self, mode)
       log_debug({
         action = "eof_from_peer"
       })
-      return nil
+      return nil, "eof_from_peer"
     end
     local err = libwolfssl.wolfSSL_get_error(self.ssl, n)
+    local errno = get_errno()
     log_debug({
       action = "wolfssl_read_error_numeric",
       ret = n,
-      err = err
+      err = err,
+      errno = errno
     })
     if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE then
       log_debug({
         action = "want_read_write"
       })
-      return nil
+      return nil, "want_read_write"
     end
-    return error("wolfSSL_read() error (code: " .. tostring(err) .. ")")
+    local ssl_errors = get_ssl_errors()
+    return nil, "wolfSSL_read() error (ret: " .. tostring(n) .. ", code: " .. tostring(err) .. ", errno: " .. tostring(errno) .. ", ssl_err: " .. tostring(ssl_errors) .. ")"
   end
 end
 ssl_mt.__index.close = function(self)

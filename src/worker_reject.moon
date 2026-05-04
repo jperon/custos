@@ -13,7 +13,7 @@
 { :ffi, :libnfq } = require "ffi_defs"
 
 { :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE } = require "nfq_loop"
-{ :log_info, :log_warn, :log_debug } = require "log"
+{ :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
 parse: parse_ip, new: new_ip, proto: ip_proto = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
 parse: parse_udp = require "ipparse.l4.udp"
@@ -192,7 +192,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
       forge_icmp_reject raw, ip
 
   unless ok
-    log_warn { action: "q3_forge_error", src: src_ip, dst: dst_ip, proto: proto, err: tostring(err_or_frame) }
+    log_warn { action: "forge_error", src: src_ip, dst: dst_ip, proto: proto, err: tostring(err_or_frame) }
     libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_DROP, 0, nil
     return VERDICT_DONE
 
@@ -228,7 +228,8 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
 -- @tparam table _cfg  Ignored (reserved for future use).
 -- @treturn nil
 run = (queue_num, cfg) ->
-  log_info { action: "q3_worker_start", queue: queue_num }
+  set_action_prefix "reject_"
+  log_info { action: "worker_start", queue: queue_num }
   run_queue tonumber(queue_num), handle_reject
 
 { :run }

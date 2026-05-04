@@ -21,7 +21,7 @@ parse: parse_ip, proto: l3_proto, :ip2s = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
 { :get_l2 } = require "parse/ethernet"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_info, :log_warn, :log_error } = require "log"
+{ :log_info, :log_warn, :log_error, :set_action_prefix } = require "log"
 { detect: detect_captive_ips } = require "captive_ips"
 bridge_raw = require "bridge_raw"
 { :flags } = require "ipparse.l4.tcp"
@@ -133,7 +133,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
   ip, ip_off, tcp, tcp_off = parse_syn(raw)
   unless ip
-    log_warn { action: "q2_parse_failed", queue: 2, len: payload_len }
+    log_warn { action: "parse_failed", queue: 2, len: payload_len }
     return NF_DROP
 
   -- Use client MAC from NFQUEUE metadata (l2.mac_raw contains the source MAC from the packet)
@@ -161,7 +161,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
   send = (f) ->
     res = send_frame raw_fd, f, ifindex
     unless res
-      log_warn { action: "q2_frame_send_error", queue: 2, ip: client_ip_str, user: user }
+      log_warn { action: "frame_send_error", queue: 2, ip: client_ip_str, user: user }
     res
 
   url = custom_redirect_url or (if ip.version == 6
@@ -170,19 +170,19 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
     redirect_url4 or redirect_url6)
 
   unless url
-    log_warn { action: "q2_no_redirect_url", queue: 2, ip: client_ip_str, version: ip.version, user: user }
+    log_warn { action: "no_redirect_url", queue: 2, ip: client_ip_str, version: ip.version, user: user }
     return NF_DROP
 
   ok, err = pcall ->
     f1, f2, f3 = build_response_frames eth, ip, tcp, url
-    log_info { action: "q2_sending_frames", queue: 2, ip: client_ip_str, frames: 3, url: url, user: user }
+    log_info { action: "sending_frames", queue: 2, ip: client_ip_str, frames: 3, url: url, user: user }
     send f1
     send f2
     send f3
 
   if ok
     fields = {
-      action:  "captive_redirect_q2"
+      action:  "redirect_q2"
       queue:   2
       ip:      client_ip_str
       sport:   tcp.spt
@@ -194,7 +194,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
       fields.mac = l2.mac_src
     log_info fields
   else
-    log_warn { action: "q2_send_failed", queue: 2, err: "#{err}", ip: client_ip_str, user: user }
+    log_warn { action: "send_failed", queue: 2, err: "#{err}", ip: client_ip_str, user: user }
 
   NF_DROP
 
@@ -206,6 +206,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 -- @tparam table auth_cfg  Auth configuration from cfg/filter.yml.
 -- @treturn nil
 run = (queue_num, auth_cfg) ->
+  set_action_prefix "captive_"
   auth_cfg or= {}
 
   -- Interface LAN (br0 or br)
@@ -227,31 +228,31 @@ run = (queue_num, auth_cfg) ->
   if local_ip4
     redirect_url4 = "https://#{local_ip4}:#{https_port}/"
   else
-    log_warn { action: "q2_no_ipv4", msg: "No IPv4 captive IP configured" }
+    log_warn { action: "no_ipv4", msg: "No IPv4 captive IP configured" }
 
   -- Build IPv6 redirect URL (wrap in brackets for URL)
   if local_ip6
     redirect_url6 = "https://[#{local_ip6}]:#{https_port}/"
   else
-    log_warn { action: "q2_no_ipv6", msg: "No IPv6 captive IP configured" }
+    log_warn { action: "no_ipv6", msg: "No IPv6 captive IP configured" }
 
   -- Open AF_PACKET socket (bridge mode)
   fd, err = open_raw_socket ifname
   unless fd
-    log_error { action: "q2_socket_failed", err: err, ifname: ifname }
+    log_error { action: "socket_failed", err: err, ifname: ifname }
     return
 
   raw_fd = fd
   ifindex = tonumber ffi.C.if_nametoindex ifname
   if ifindex == 0
-    log_error { action: "q2_ifindex_failed", ifname: ifname }
+    log_error { action: "ifindex_failed", ifname: ifname }
     return
 
   -- Lire le MAC du bridge une seule fois (évite un open sysfs par SYN TCP)
   _bridge_mac = bridge_raw.read_mac ifname
 
   log_info {
-    action: "q2_worker_start"
+    action: "worker_start"
     :ifname
     :ifindex
     custom_url: custom_redirect_url or "auto"

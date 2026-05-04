@@ -20,14 +20,9 @@ do
   local _obj_0 = require("ipc")
   drain_pipe, is_pending, get_pending_entry, consume = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.get_pending_entry, _obj_0.consume
 end
-local parse, pack, parse_header, pack_header, parse_question, pack_question, parse_questions, parse_rr, pack_rr, parse_rrs, REFUSED, A, AAAA, ede_codes
-do
-  local _obj_0 = require("ipparse.l7.dns")
-  parse, pack, parse_header, pack_header, parse_question, pack_question, parse_questions, parse_rr, pack_rr, parse_rrs, REFUSED, A, AAAA, ede_codes = _obj_0.parse, _obj_0.pack, _obj_0.parse_header, _obj_0.pack_header, _obj_0.parse_question, _obj_0.pack_question, _obj_0.parse_questions, _obj_0.parse_rr, _obj_0.pack_rr, _obj_0.parse_rrs, _obj_0.rcodes.REFUSED, _obj_0.types.A, _obj_0.types.AAAA, _obj_0.ede_codes
-end
 local add_ip4, add_ip6, add_mac4, add_mac6
 do
-  local _obj_0 = require("nft")
+  local _obj_0 = require("nft_queue")
   add_ip4, add_ip6, add_mac4, add_mac6 = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6
 end
 local run_queue, NF_ACCEPT, NF_DROP
@@ -35,92 +30,21 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_info, log_warn, log_debug, now
+local log_info, log_warn, log_debug, now, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug, now = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now
+  log_info, log_warn, log_debug, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now, _obj_0.set_action_prefix
+end
+local build_blocked_response, add_ede_ttl
+do
+  local _obj_0 = require("dns_ede")
+  build_blocked_response, add_ede_ttl = _obj_0.build_blocked_response, _obj_0.add_ede_ttl
 end
 local bit = require("bit")
-local sp
-sp = require("ipparse.lib.pack_compat").pack
 local concat, insert, remove
 do
   local _obj_0 = table
   concat, insert, remove = _obj_0.concat, _obj_0.insert, _obj_0.remove
-end
-local EDE_BLOCKED = ede_codes.Filtered
-local EDE_TTL_MODIFIED = ede_codes.Forged_Answer
-local add_ede
-add_ede = function(self, ede_code, text)
-  for i = #(self.additionals or { }), 1, -1 do
-    if self.additionals[i].rtype == 0x29 then
-      remove(self.additionals, i)
-    end
-  end
-  self.additionals = self.additionals or { }
-  insert(self.additionals, 1, {
-    rname = "\0",
-    rtype = 0x29,
-    rclass = 0,
-    ttl = 0,
-    rdata = sp(">Hs2", 0x000F, (sp(">H", ede_code) .. text))
-  })
-  self.header.arcount = #(self.additionals or { })
-  return self
-end
-local build_blocked_response
-build_blocked_response = function(dns_orig, dns_raw, reason)
-  if not (dns_orig and dns_raw) then
-    return nil
-  end
-  local dns = parse(dns_raw, 1, false)
-  if not (dns) then
-    return nil
-  end
-  dns.header.rcode = REFUSED
-  dns.answers = { }
-  if dns.question and dns.question.qtype then
-    local qtype = dns.question.qtype
-    local rdata
-    if qtype == A then
-      rdata = string.char(0, 0, 0, 0)
-    elseif qtype == AAAA then
-      rdata = string.char(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    else
-      rdata = string.char(0, 0, 0, 0)
-    end
-    dns.answers[1] = {
-      rname = string.char(0xC0, 0x0C),
-      rtype = qtype,
-      rclass = 1,
-      ttl = 60,
-      rdata = rdata
-    }
-    dns.header.ancount = 1
-  end
-  local ede_text
-  if reason and reason ~= "" then
-    ede_text = "Ne intretis. " .. reason
-  else
-    ede_text = "Ne intretis."
-  end
-  add_ede(dns, EDE_BLOCKED, ede_text)
-  return tostring(dns)
-end
-local add_ede_ttl
-add_ede_ttl = function(dns_payload, reason)
-  local dns = parse(dns_payload, 1, false)
-  if not (dns) then
-    return dns_payload
-  end
-  local ede_text
-  if reason and reason ~= "" then
-    ede_text = "Custos vigilat. " .. reason
-  else
-    ede_text = "Custos vigilat."
-  end
-  add_ede(dns, EDE_TTL_MODIFIED, ede_text)
-  return tostring(dns)
 end
 local IPC_RETRY_ENABLED
 if IPC_MATCH_RETRY_ENABLED == nil then
@@ -135,8 +59,6 @@ local mac_valid
 mac_valid = function(mac)
   return mac ~= "unknown" and mac ~= MAC_ZERO
 end
-local try_add_with_retries
-try_add_with_retries = require("nft_add_helper").try_add_with_retries
 local mac_clients = { }
 local ip_to_mac = { }
 local pipe_rfd = nil
@@ -368,7 +290,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       if not (dnsonly) then
         if client_v4 then
           records_to_add = records_to_add + 1
-          local ok = try_add_with_retries(add_ip4, client_v4, ans.rdata_str)
+          local ok = add_ip4(client_v4, ans.rdata_str)
           if ok then
             ip_count = ip_count + 1
           end
@@ -377,7 +299,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
         end
         if mac_valid(client_mac) then
-          local m_ok = try_add_with_retries(add_mac4, client_mac, ans.rdata_str)
+          local m_ok = add_mac4(client_mac, ans.rdata_str)
           success_any = success_any or m_ok
         end
       end
@@ -392,7 +314,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       if not (dnsonly) then
         if client_v6 then
           records_to_add = records_to_add + 1
-          local ok = try_add_with_retries(add_ip6, client_v6, ans.rdata_str)
+          local ok = add_ip6(client_v6, ans.rdata_str)
           if ok then
             ip_count = ip_count + 1
           end
@@ -401,7 +323,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
         end
         if mac_valid(client_mac) then
-          local m_ok = try_add_with_retries(add_mac6, client_mac, ans.rdata_str)
+          local m_ok = add_mac6(client_mac, ans.rdata_str)
           success_any = success_any or m_ok
         end
       end
@@ -503,6 +425,13 @@ handle_response = function(qh_ptr, nfad, pkt_id)
 end
 local run
 run = function(queue_num, rfd)
+  set_action_prefix("q1_")
+  if type(rfd) == "table" and rfd.nft_wfd then
+    require("nft_queue").set_wfd(rfd.nft_wfd)
+  end
+  if type(rfd) == "table" then
+    rfd = rfd.q0q1_rfd
+  end
   pipe_rfd = rfd
   ndpi.warmup()
   run_queue(tonumber(queue_num), handle_response)

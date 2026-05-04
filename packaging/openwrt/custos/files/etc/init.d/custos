@@ -4,7 +4,8 @@ USE_PROCD=1
 START=95
 STOP=05
 
-PROG=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)
+LUAJIT=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)
+PROG=/usr/bin/custos
 CUSTOS_DIR=/usr/share/custos
 FILTER_CONFIG=/etc/custos/filter.yml
 CRONTABS_ROOT=/etc/crontabs/root
@@ -12,7 +13,11 @@ CUSTOS_CRON_MARKER="# custos-update-lists"
 
 start_service() {
     [ "$(uci get custos.main.enabled 2>/dev/null)" = "0" ] && return 0
-    [ -z "$PROG" ] && { echo "custos: luajit introuvable"; return 1; }
+    [ -z "$LUAJIT" ] && { echo "custos: luajit introuvable"; return 1; }
+
+    # Crée un symlink /usr/bin/custos → luajit{,2} pour que procd utilise
+    # "custos" comme ident syslog (procd extrait basename(command[0])).
+    [ -L "$PROG" ] || ln -sf "$LUAJIT" "$PROG"
 
     # Génère /var/run/custos/config.lua depuis /etc/config/custos.
     # En cas d'échec, custos utilise le config.lua compilé dans CUSTOS_DIR.
@@ -68,7 +73,7 @@ service_triggers() {
 # ── Mise à jour des listes de domaines ───────────────────────────
 
 update_lists() {
-    [ -z "$PROG" ] && { echo "custos: luajit introuvable"; return 1; }
+    [ -z "$LUAJIT" ] && { echo "custos: luajit introuvable"; return 1; }
 
     local config pid_file
     config=$(uci get custos.main.filter_config 2>/dev/null)
@@ -124,7 +129,7 @@ _apply_lua_nft_rules() {
 # Attend jusqu'à 5 s puis SIGKILL en dernier recours.
 _kill_workers() {
     local i pid pids
-    pids=$(ps 2>/dev/null | awk '/luajit.*main\.lua/ && !/awk/ { print $1 }')
+    pids=$(ps 2>/dev/null | awk '/main\.lua/ && !/awk/ { print $1 }')
     [ -z "$pids" ] && return 0
 
     echo "custos: arrêt des workers (SIGTERM)..."
@@ -133,7 +138,7 @@ _kill_workers() {
     i=0
     while [ $i -lt 5 ]; do
         sleep 1
-        pids=$(ps 2>/dev/null | awk '/luajit.*main\.lua/ && !/awk/ { print $1 }')
+        pids=$(ps 2>/dev/null | awk '/main\.lua/ && !/awk/ { print $1 }')
         [ -z "$pids" ] && return 0
         i=$((i + 1))
     done

@@ -29,6 +29,14 @@ unblock_worker_signals = ->
   libc.sigprocmask SIG_UNBLOCK, unmask, nil
   nil
 
+--- Renomme le processus courant (visible dans ps et syslog).
+-- Utilise PR_SET_NAME (option 15) ; le nom est tronqué à 15 caractères par le kernel.
+-- @tparam string name Nouveau nom du processus
+-- @treturn nil
+set_process_name = (name) ->
+  libc.prctl 15, ffi.cast("unsigned long", ffi.cast("const char*", name)), 0, 0, 0
+  nil
+
 --- Arme PR_SET_PDEATHSIG pour tuer l'enfant si son parent disparaît.
 -- @tparam string name Nom logique de l'enfant, utilisé dans les logs
 -- @treturn boolean true si prctl a réussi
@@ -68,6 +76,8 @@ fork_child = (name, child_fn, arg=nil, opts=nil) ->
     error "fork() échoué pour #{name}"
 
   if pid == 0
+    set_process_name "custos:#{name}"
+
     if unblock_signals
       unblock_worker_signals!
 
@@ -146,6 +156,7 @@ reap_one = ->
 
 {
   :SIGTERM, :SIGHUP, :WNOHANG
+  :set_process_name
   :unblock_worker_signals
   :set_parent_death_signal
   :fork_child

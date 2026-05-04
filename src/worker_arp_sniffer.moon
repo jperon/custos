@@ -12,8 +12,8 @@
 -- Aucune modification de paquet, aucun verdict NFQUEUE, aucune règle nftables.
 
 { :ffi, :libc } = require "ffi_defs"
-{ :C, :AF_PACKET, :SOCK_RAW, :AF_INET6 } = require "auth.ffi_socket"
-{ :log_info, :log_warn, :log_debug } = require "log"
+{ :C, :AF_PACKET, :SOCK_RAW, :AF_INET6 } = require "lib.socket"
+{ :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
 
 -- ── Constantes réseau ────────────────────────────────────────────
 
@@ -217,23 +217,24 @@ process_ipv6 = (raw, len, learn_wfd) ->
 -- @tparam string ifname    Nom de l'interface bridge (ex : "br")
 -- @tparam number learn_wfd fd d'écriture du pipe Q0→mac_learner
 run = (ifname, learn_wfd) ->
+  set_action_prefix "arp_"
   ifindex = tonumber C.if_nametoindex ifname
   if ifindex == 0
-    log_warn { action: "arp_sniffer_ifindex_failed", ifname: ifname }
+    log_warn { action: "ifindex_failed", ifname: ifname }
     return
 
   arp_fd = open_socket ETH_P_ARP, ifindex
   unless arp_fd
-    log_warn { action: "arp_sniffer_socket_failed", proto: "ARP", ifname: ifname }
+    log_warn { action: "socket_failed", proto: "ARP", ifname: ifname }
     return
 
   ip6_fd = open_socket ETH_P_IPV6, ifindex
   unless ip6_fd
-    log_warn { action: "arp_sniffer_socket_failed", proto: "IPv6", ifname: ifname }
+    log_warn { action: "socket_failed", proto: "IPv6", ifname: ifname }
     libc.close arp_fd
     return
 
-  log_info { action: "arp_sniffer_start", ifname: ifname, ifindex: ifindex }
+  log_info { action: "start", ifname: ifname, ifindex: ifindex }
 
   -- poll sur les deux sockets
   pfds = ffi.new "struct pollfd[2]"

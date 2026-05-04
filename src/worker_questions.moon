@@ -17,7 +17,7 @@ ndpi                     = require "parse/ndpi"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_allow, :log_block, :log_warn, :log_debug, :log_info } = require "log"
+{ :log_allow, :log_block, :log_warn, :log_debug, :log_info, :set_action_prefix } = require "log"
 { :user_for_mac } = require "auth.sessions"
 forge_dns = require "forge_dns"
 { detect: detect_captive_ips } = require "captive_ips"
@@ -304,6 +304,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 -- ── Point d'entrée ───────────────────────────────────────────────
 -- Appelé par main.moon après fork(), avec les fd des pipes IPC.
 run = (queue_num, wfd, learn_wfd, ev_wfd) ->
+  set_action_prefix "questions_"
   pipe_wfd      = wfd
   mac_learn_wfd = learn_wfd
   events_wfd    = ev_wfd

@@ -3,25 +3,26 @@ load_secrets = require("auth.credentials").load_secrets
 local run
 run = require("auth.server").run
 local nft_sess = require("auth.nft_sessions")
-local log_info, log_warn, log_error
+local log_info, log_warn, log_error, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_error = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error
+  log_info, log_warn, log_error, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.set_action_prefix
 end
 local ffi = require("ffi")
 local SIGHUP = 1
 local _reload_requested = false
 local run_auth_worker
 run_auth_worker = function(auth_cfg)
+  set_action_prefix("auth_")
   log_info({
-    action = "auth_worker_start",
+    action = "worker_start",
     port = auth_cfg.port
   })
   local secrets_path = auth_cfg.secrets or "/etc/custos/secrets"
   local secrets, err = load_secrets(secrets_path)
   if not (secrets) then
     log_error({
-      action = "auth_secrets_load_failed",
+      action = "secrets_load_failed",
       err = err
     })
     secrets = { }
@@ -31,7 +32,7 @@ run_auth_worker = function(auth_cfg)
     n_users = n_users + 1
   end
   log_info({
-    action = "auth_secrets_loaded",
+    action = "secrets_loaded",
     path = secrets_path,
     users = n_users
   })
@@ -47,13 +48,13 @@ run_auth_worker = function(auth_cfg)
     local new_secrets, err2 = load_secrets(secrets_path)
     if new_secrets then
       log_info({
-        action = "auth_secrets_reloaded",
+        action = "secrets_reloaded",
         path = secrets_path
       })
       return new_secrets
     else
       log_warn({
-        action = "auth_secrets_reload_failed",
+        action = "secrets_reload_failed",
         err = err2
       })
       return nil

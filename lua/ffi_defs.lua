@@ -199,6 +199,8 @@ ffi.cdef([[  typedef struct nft_ctx nft_ctx;
 
   /* Supprime la sortie standard/erreur (on n'en a pas besoin) */
   void nft_ctx_set_dry_run(nft_ctx *ctx, bool dry);
+  int  nft_ctx_buffer_error(nft_ctx *ctx);
+  const char *nft_ctx_get_error_buffer(nft_ctx *ctx);
 
   /* Exécute une commande nft sous forme de chaîne C */
   /* Retourne 0 en cas de succès */

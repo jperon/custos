@@ -2,9 +2,9 @@
 # dns-filter-bridge.nft
 # Ruleset nftables pour le filtre DNS en mode bridge pur.
 #
-# Fonctionne sans br_netfilter : la table bridge intercepte tout le trafic
+# Fonctionne en mode bridge natif : la table bridge intercepte tout le trafic
 # traversant le bridge, y compris le transit inter-VLAN (client → résolveur
-# tiers) invisible aux tables ip/ip6 sans br_netfilter.
+# tiers).
 #
 # Ce fichier est un template : les placeholders {QUEUE_*} et {NFT_IP_TIMEOUT}
 # sont substitués par les valeurs de config.moon avant application via libnft.
@@ -25,7 +25,7 @@
 #   - Surplus au-delà du rate-limit → drop silencieux
 #
 # Prérequis :
-#   - br_netfilter NON requis
+#   (aucun module noyau supplémentaire requis)
 
 flush ruleset
 
@@ -105,6 +105,9 @@ table bridge dns-filter-bridge {
     # Trames non-unicast (multicast L2 et broadcast)
     meta pkttype {broadcast, multicast} accept
 
+    # Portail captif HTTPS : apprentissage MAC/IP avant acceptation.
+    # Le worker auth_queue extrait la MAC et l'envoie au serveur HTTPS.
+    tcp dport 33443 log level debug prefix "custos auth_input: " counter queue num {QUEUE_AUTH}
     # Core & Infrastructure
     udp dport { 67, 68 } accept
     udp dport { 546, 547 } accept
@@ -196,13 +199,3 @@ table bridge dns-filter-bridge {
 # Note : la chaîne output bridge n'est pas utilisée ici.
 # Le DNS émis par le filtre lui-même transite par la table ip locale,
 # pas par la table bridge (le bridge ne traite que le trafic bridgé).
-
-table inet auth_queue {
-  chain prerouting {
-    type filter hook prerouting priority 0; policy accept;
-
-    # Portail captif HTTPS : apprentissage MAC/IP avant acceptation.
-    # Le worker auth_queue extrait la MAC et l'envoie au serveur HTTPS.
-    tcp dport 33443 log level debug prefix "custos auth_input_l3: " counter queue num {QUEUE_AUTH}
-  }
-}

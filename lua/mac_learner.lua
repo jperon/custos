@@ -8,11 +8,14 @@ local _cfg = require("config")
 local MAC_LEARNER_QUERY_SOCK = _cfg.MAC_LEARNER_QUERY_SOCK or "/var/run/custos/mac_query.sock"
 local MAC_LEARNER_LEARN_MSG_SIZE = _cfg.MAC_LEARNER_LEARN_MSG_SIZE or 22
 local MAC_LEARNER_ENTRY_TTL = _cfg.MAC_LEARNER_ENTRY_TTL or 300
+local AUTH_SESSIONS_FILE = _cfg.AUTH_SESSIONS_FILE or "./tmp/sessions.lua"
 local log_info, log_warn, log_debug
 do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug
 end
+local enrich_session_ip
+enrich_session_ip = require("auth.sessions").enrich_session_ip
 local PROBE_TIMEOUT_MS = 200
 local NEGATIVE_TTL = 30
 local PURGE_INTERVAL = 60
@@ -48,10 +51,22 @@ ip16_to_str = function(ip16)
 end
 local learn_mac
 learn_mac = function(ip_str, mac_str)
+  local existing = mac_table[ip_str]
+  local is_new = not existing or existing[1] ~= mac_str
   mac_table[ip_str] = {
     mac_str,
     os.time() + MAC_LEARNER_ENTRY_TTL
   }
+  if is_new then
+    local ok, enriched = pcall(enrich_session_ip, mac_str, ip_str, AUTH_SESSIONS_FILE)
+    if ok and enriched then
+      log_info({
+        action = "session_enriched",
+        ip = ip_str,
+        mac = mac_str
+      })
+    end
+  end
   local waiters = pending_queries[ip_str]
   if not (waiters) then
     return 

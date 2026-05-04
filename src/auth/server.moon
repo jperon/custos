@@ -5,7 +5,7 @@
 -- et fork un enfant court par connexion entrante avec lib.process, sans utiliser
 -- socket.fork().
 
-socket = require "auth.ffi_socket"
+socket = require "lib.socket"
 ssl = require "auth.ffi_wolfssl"
 
 { :fork_child, :reap_one } = require "lib.process"
@@ -15,6 +15,7 @@ ssl = require "auth.ffi_wolfssl"
 { :extract_sni } = require "auth.sni_extractor"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 { :AUTH_SESSIONS_FILE } = require "config"
+{ :read_request, :send_response } = require "lib.http"
 
 { :get_mac } = require "mac_learner_ipc"
 
@@ -31,64 +32,6 @@ parse_form = (body) ->
   for k, v in body\gmatch "([^&=]+)=([^&]*)"
     out[url_decode k] = url_decode v
   out
-
-read_request = (client) ->
-  request_line, err = client\receive "*l"
-  unless request_line
-    return nil, err or "connection_closed_or_timeout"
-
-  method, path = request_line\match "^(%w+)%s+([^%s]+)%s+HTTP"
-  return nil, "bad_request_line" unless method and path
-
-  headers = {}
-  content_length = 0
-
-  while true
-    line, line_err = client\receive "*l"
-    unless line
-      return nil, line_err or "header_read_error"
-    break if line == ""
-
-    name, value = line\match "^([^:]+):%s*(.*)$"
-    if name
-      lname = name\lower!
-      headers[lname] = value
-      if lname == "content-length"
-        content_length = tonumber(value) or 0
-
-  body = ""
-  if content_length > 0
-    body = client\receive content_length
-    body = body or ""
-
-  {
-    method: method
-    path: path
-    headers: headers
-    body: body
-  }
-
-send_response = (client, status, headers, body) ->
-  body or= ""
-  reason = switch status
-    when 200 then "OK"
-    when 204 then "No Content"
-    when 302 then "Found"
-    when 400 then "Bad Request"
-    when 401 then "Unauthorized"
-    when 404 then "Not Found"
-    when 409 then "Conflict"
-    else "Internal Server Error"
-
-  headers or= {}
-  headers["Content-Length"] = tostring #body unless headers["Content-Length"]
-  headers["Connection"] = "close" unless headers["Connection"]
-
-  client\send "HTTP/1.1 #{status} #{reason}\r\n"
-  for name, value in pairs headers
-    client\send "#{name}: #{value}\r\n"
-  client\send "\r\n"
-  client\send body if #body > 0
 
 page = =>
   "<!DOCTYPE html>\n" .. H.html {lang: "fr",
@@ -414,15 +357,15 @@ handle_client = (args) ->
 
   ok, err = pcall ->
     log_debug { action: "server_handle_client_start", peer: peer_ip, fd: client.fd }
-    
+
     -- Obtenir l'IP locale du socket (sur laquelle le client s'est connecté)
     local_ip = client\getsockname!
     unless local_ip
       log_warn { action: "server_getsockname_failed" }
       local_ip = "custos"  -- Fallback
-    
+
     log_debug { action: "server_local_ip_detected", local_ip: local_ip }
-    
+
     -- Utiliser le certificat statique s'il a été configuré
     -- Sinon, générer/charger le certificat avec l'IP locale comme CN
     tls_ctx = nil
@@ -441,13 +384,13 @@ handle_client = (args) ->
       unless tls_ctx_ok
         log_error { action: "server_cert_generation_failed", local_ip: local_ip, err: tls_ctx_err }
         error "Cannot generate certificate: #{tls_ctx_err}"
-    
+
     unless tls_ctx
       log_error { action: "server_cert_null", local_ip: local_ip }
       error "Certificate context is nil"
-    
+
     log_debug { action: "server_cert_loaded", local_ip: local_ip }
-    
+
     -- Set socket to BLOCKING mode for handshake
     log_debug { action: "server_set_blocking_mode" }
     client\settimeout nil  -- nil = blocking mode
@@ -456,33 +399,33 @@ handle_client = (args) ->
     log_debug { action: "server_ssl_wrap_start" }
     tls_client, tls_err = ssl.wrap client, tls_ctx
     log_debug { action: "server_ssl_wrap_done" }
-    
+
     unless tls_client
       log_warn { action: "server_tls_wrap_failed", err: tls_err }
       client\close!
       return
 
     log_debug { action: "server_dohandshake_start" }
-    
+
     -- Handshake loop: keep trying until complete or error
     handshake_complete = false
     handshake_attempts = 0
     while not handshake_complete and handshake_attempts < 50
       handshake_attempts += 1
       log_debug { action: "server_handshake_attempt", attempt: handshake_attempts }
-      
+
       ok_hs, hs_err = tls_client\dohandshake!
       log_debug { action: "server_dohandshake_returned", ok: ok_hs }
-      
+
       if ok_hs
         log_debug { action: "server_handshake_complete" }
         handshake_complete = true
-    
+
     unless handshake_complete
       log_warn { action: "server_tls_handshake_failed", err: "max attempts or error" }
       tls_client\close!
       return
-    
+
     -- After handshake, socket is still blocking (nil timeout)
     -- Leave it blocking for HTTP I/O (client must send request promptly)
     log_debug { action: "server_set_http_timeout" }
@@ -547,15 +490,15 @@ make_server6 = (port) ->
 run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   port = auth_cfg.port or 33443
   sessions_file = auth_cfg.sessions_file or AUTH_SESSIONS_FILE
-  
+
   log_debug { action: "server_startup", port: port }
   log_debug { action: "server_auth_cfg_received", cert: auth_cfg.cert, key: auth_cfg.key }
-  
+
   -- Initialiser le cache de certificats (persistant, 90 jours TTL)
   log_debug { action: "server_cert_cache_init" }
   cert_cache_module = require "auth.cert_cache"
   cert_cache = cert_cache_module.create_cache 500, 7776000  -- 500 certs, 90 days TTL
-  
+
   -- Charger le certificat statique s'il est fourni dans la configuration
   static_tls_ctx = nil
   if auth_cfg.cert and auth_cfg.key
@@ -609,7 +552,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
         log_debug { action: "server_socket_select_readable" }
         client = srv\accept!
         log_debug { action: "server_accept_returned" }
-        
+
         if client
           log_debug { action: "server_got_client" }
           peer_ip = client\getpeername! or "unknown"
@@ -620,7 +563,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
             handle_client,
             { client: client, peer_ip: peer_ip, state: state },
             { log_start: false }
-          
+
           log_debug { action: "server_fork_child_done", pid: pid }
 
           log_info { action: "server_conn_started", pid: pid, peer: peer_ip }

@@ -16,7 +16,7 @@
 --              repasse au-dessus de min_free_pct % du filesystem.
 
 { :ffi, :libc } = require "ffi_defs"
-{ :log_info, :log_warn } = require "log"
+{ :log_info, :log_warn, :set_action_prefix } = require "log"
 
 bit = require "bit"
 
@@ -125,7 +125,7 @@ flush_to_file = (agg, hour, events_dir) ->
   -- Ouverture en append pour les lignes de données
   fd = libc.open path, bit.bor(O_WRONLY, O_CREAT, O_APPEND), FILE_MODE
   if fd < 0
-    log_warn { action: "worker_events_open_failed", path: path }
+    log_warn { action: "open_failed", path: path }
     return
 
   for key, entry in pairs agg
@@ -231,6 +231,7 @@ cleanup_old = (events_dir, max_age_hours, min_free_pct) ->
 -- @tparam number min_free_pct  Seuil d'espace libre minimum avant purge (%)
 -- @treturn nil
 run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
+  set_action_prefix "events_"
   os.execute "mkdir -p '#{events_dir}'"
 
   sfd = create_signal_fd!
@@ -248,7 +249,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
   siginfo = ffi.new "signalfd_siginfo"
   sig_sz  = ffi.sizeof "signalfd_siginfo"
 
-  log_info { action: "worker_events_start", events_dir: events_dir, hour: hour,
+  log_info { action: "start", events_dir: events_dir, hour: hour,
              max_age_hours: max_age_hours, min_free_pct: min_free_pct }
 
   -- Purge initiale au démarrage (utile si events_dir est sur stockage persistant)
@@ -261,7 +262,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
     if bit.band(pfds[1].revents, POLLIN) ~= 0
       libc.read sfd, siginfo, sig_sz
       if siginfo.ssi_signo == SIGTERM
-        log_info { action: "worker_events_sigterm", hour: hour }
+        log_info { action: "sigterm", hour: hour }
         flush_to_file agg, hour, events_dir
         libc._exit 0
 
@@ -271,7 +272,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       if chunk == nil
         -- EOF : l'extrémité écriture est fermée (worker_questions mort)
         -- Le superviseur va redémarrer Q0 ; le pipe reste ouvert côté superviseur.
-        log_warn { action: "worker_events_pipe_eof", fd: events_rfd }
+        log_warn { action: "pipe_eof", fd: events_rfd }
       elseif #chunk > 0
         line_buf ..= chunk
         -- Découpe line_buf sur les \n et traite chaque ligne complète
@@ -285,7 +286,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
     -- Détection du changement d'heure après chaque retour de poll
     new_hour = current_hour!
     if new_hour ~= hour
-      log_info { action: "worker_events_hour_change", old: hour, new: new_hour }
+      log_info { action: "hour_change", old: hour, new: new_hour }
       flush_to_file agg, hour, events_dir
       compress_old events_dir, new_hour
       cleanup_old events_dir, max_age_hours, min_free_pct

@@ -48,7 +48,7 @@ get_log_level_num = (level) -> LOG_LEVEL_MAP[level] or 0
 -- La clé de RL est fields.action ou, à défaut, le niveau (ALLOW/BLOCK).
 RL_CONFIG = {
   captive_probe:      { keys: {"ip", "path"},                window: 60  }
-  captive_redirect_q2:   { keys: {"ip", "path"},                window: 60  }
+  captive_redirect_q2: { keys: {"ip", "path"},                window: 60  }
   ALLOW:              { keys: {"mac_src", "qname", "qtype"}, window: 30  }
   no_ipv6_for_client: { keys: {"client"},                    window: 120 }
   no_ipv4_for_client: { keys: {"client"},                    window: 120 }
@@ -57,6 +57,16 @@ RL_CONFIG = {
 }
 
 _rl = {}  -- { fingerprint → { ts, count } }
+
+-- Process-scoped action prefix (set once per worker, inherited by fork children).
+_action_prefix = ""
+
+--- Set a prefix prepended to every action= field in log output.
+-- Actions already starting with the prefix are not double-prefixed.
+-- @tparam string prefix  Short prefix string, e.g. "doh_"
+-- @treturn nil
+set_action_prefix = (prefix) ->
+  _action_prefix = prefix or ""
 
 --- Vérifie si un message doit être supprimé (rate-limiting).
 -- @tparam string level  Niveau de log
@@ -107,6 +117,15 @@ write_log = (level, fields) ->
   if get_log_level_num(level) < CURRENT_LOG_LEVEL_NUM
     return
 
+  -- Apply process-scoped action prefix if set and not already present.
+  if _action_prefix != "" and fields.action
+    unless fields.action\sub(1, #_action_prefix) == _action_prefix
+      new_fields = {}
+      for k, v in pairs fields
+        new_fields[k] = v
+      new_fields.action = _action_prefix .. fields.action
+      fields = new_fields
+
   libc.clock_gettime 0, ts   -- remplit ts utilisé par check_rl
   epoch = tonumber ts.tv_sec
   pid   = tonumber ffi.C.getpid()
@@ -152,4 +171,4 @@ log_debug = (fields) -> write_log "DEBUG", fields
 -- @treturn nil
 log_trace = (fields) -> write_log "TRACE", fields
 
-{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num }
+{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :set_action_prefix }

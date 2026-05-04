@@ -3,7 +3,6 @@
 # Usage : sudo ./setup.sh [up|down|status]
 #
 # Prérequis vérifiés automatiquement :
-#   - br_netfilter chargé
 #   - nft disponible
 #   - libnetfilter-queue et libnftables présents
 #   - LuaJIT + moonc disponibles
@@ -93,19 +92,6 @@ check_deps() {
   [ $errors -eq 0 ] || { fail "$errors dépendance(s) manquante(s)"; exit 1; }
 }
 
-# ── br_netfilter ─────────────────────────────────────────────────
-enable_br_netfilter() {
-  modprobe br_netfilter 2>/dev/null || true
-
-  if [ "$(cat /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null)" != "1" ]; then
-    sysctl -qw net.bridge.bridge-nf-call-iptables=1
-    sysctl -qw net.bridge.bridge-nf-call-ip6tables=1
-    ok "br_netfilter activé"
-  else
-    ok "br_netfilter déjà actif"
-  fi
-}
-
 # ── Application des règles nft ────────────────────────────────────
 apply_nft_rules() {
   nft -f "$NFT_RULES"
@@ -116,7 +102,6 @@ apply_nft_rules() {
 rules_up() {
   require_root
   check_deps
-  enable_br_netfilter
   apply_nft_rules
 
   echo ""

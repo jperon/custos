@@ -5,7 +5,7 @@ do
 end
 local C, AF_PACKET, SOCK_RAW, AF_INET6
 do
-  local _obj_0 = require("auth.ffi_socket")
+  local _obj_0 = require("lib.socket")
   C, AF_PACKET, SOCK_RAW, AF_INET6 = _obj_0.C, _obj_0.AF_PACKET, _obj_0.SOCK_RAW, _obj_0.AF_INET6
 end
 local log_debug, log_warn

@@ -8,10 +8,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP, VERDICT_DONE = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP, _obj_0.VERDICT_DONE
 end
-local log_info, log_warn, log_debug
+local log_info, log_warn, log_debug, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug
+  log_info, log_warn, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix
 end
 local parse_ip, new_ip, ip_proto
 do
@@ -161,7 +161,7 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
   end)
   if not (ok) then
     log_warn({
-      action = "q3_forge_error",
+      action = "forge_error",
       src = src_ip,
       dst = dst_ip,
       proto = proto,
@@ -191,8 +191,9 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
 end
 local run
 run = function(queue_num, cfg)
+  set_action_prefix("reject_")
   log_info({
-    action = "q3_worker_start",
+    action = "worker_start",
     queue = queue_num
   })
   return run_queue(tonumber(queue_num), handle_reject)

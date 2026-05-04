@@ -74,6 +74,11 @@ local RL_CONFIG = {
   }
 }
 local _rl = { }
+local _action_prefix = ""
+local set_action_prefix
+set_action_prefix = function(prefix)
+  _action_prefix = prefix or ""
+end
 local check_rl
 check_rl = function(level, fields)
   local action_key = fields.action or level
@@ -119,6 +124,16 @@ local write_log
 write_log = function(level, fields)
   if get_log_level_num(level) < CURRENT_LOG_LEVEL_NUM then
     return 
+  end
+  if _action_prefix ~= "" and fields.action then
+    if not (fields.action:sub(1, #_action_prefix) == _action_prefix) then
+      local new_fields = { }
+      for k, v in pairs(fields) do
+        new_fields[k] = v
+      end
+      new_fields.action = _action_prefix .. fields.action
+      fields = new_fields
+    end
   end
   libc.clock_gettime(0, ts)
   local epoch = tonumber(ts.tv_sec)
@@ -184,5 +199,6 @@ return {
   log_debug = log_debug,
   log_trace = log_trace,
   now = now,
-  get_log_level_num = get_log_level_num
+  get_log_level_num = get_log_level_num,
+  set_action_prefix = set_action_prefix
 }

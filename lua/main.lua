@@ -8,11 +8,14 @@ do
   local _obj_0 = require("log")
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
-local SIGTERM, SIGHUP, WNOHANG, fork_worker, shutdown_workers
+local probe_ipv6
+probe_ipv6 = require("doh.upstream").probe_ipv6
+local SIGTERM, SIGHUP, WNOHANG, set_process_name, fork_worker, shutdown_workers
 do
   local _obj_0 = require("lib.process")
-  SIGTERM, SIGHUP, WNOHANG, fork_worker, shutdown_workers = _obj_0.SIGTERM, _obj_0.SIGHUP, _obj_0.WNOHANG, _obj_0.fork_worker, _obj_0.shutdown_workers
+  SIGTERM, SIGHUP, WNOHANG, set_process_name, fork_worker, shutdown_workers = _obj_0.SIGTERM, _obj_0.SIGHUP, _obj_0.WNOHANG, _obj_0.set_process_name, _obj_0.fork_worker, _obj_0.shutdown_workers
 end
+set_process_name("custos")
 local bit = require("bit")
 local config = require("config")
 local filter = require("filter")
@@ -71,7 +74,8 @@ create_pipes = function()
   return {
     q0q1 = create_pipe("q0q1"),
     learn = create_pipe("mac_learn"),
-    events = create_pipe("events")
+    events = create_pipe("events"),
+    nft = create_pipe("nft")
   }
 end
 local load_auth_cfg
@@ -96,6 +100,36 @@ load_auth_cfg = function()
   auth.secrets = auth.secrets or "/etc/custos/secrets"
   auth.sessions_file = auth.sessions_file or "./tmp/sessions.lua"
   return auth
+end
+local load_doh_cfg
+load_doh_cfg = function()
+  return {
+    enabled = config.DOH_ENABLED == "1",
+    port = tonumber(config.DOH_PORT) or 8443,
+    upstream_ip = (function()
+      if config.DOH_PREFER_IPV6 == "1" and probe_ipv6(config.DOH_UPSTREAM_IPV6) then
+        return config.DOH_UPSTREAM_IPV6
+      else
+        return config.DOH_UPSTREAM_IPV4
+      end
+    end)(),
+    upstream_port = tonumber(config.DOH_UPSTREAM_PORT) or 53,
+    timeout_ms = tonumber(config.DOH_UPSTREAM_TIMEOUT_MS) or 2000,
+    cert_path = (function()
+      if config.DOH_CERT_PATH and #config.DOH_CERT_PATH > 0 then
+        return config.DOH_CERT_PATH
+      else
+        return nil
+      end
+    end)(),
+    key_path = (function()
+      if config.DOH_KEY_PATH and #config.DOH_KEY_PATH > 0 then
+        return config.DOH_KEY_PATH
+      else
+        return nil
+      end
+    end)()
+  }
 end
 local close_supervisor_fds
 close_supervisor_fds = function(pipes)
@@ -122,6 +156,14 @@ close_supervisor_fds = function(pipes)
       end
       if pipes.events.wfd then
         libc.close(pipes.events.wfd)
+      end
+    end
+    if pipes.nft then
+      if pipes.nft.rfd then
+        libc.close(pipes.nft.rfd)
+      end
+      if pipes.nft.wfd then
+        libc.close(pipes.nft.wfd)
       end
     end
   end
@@ -193,15 +235,24 @@ supervise = function(pipes, sfd)
   })
   local workers = {
     {
-      name = "MAC-learner",
+      name = "mac-lrn",
       pid = nil,
       restart_fn = function()
-        return fork_worker("MAC-learner", function(rfd)
+        return fork_worker("mac-lrn", function(rfd)
           return require("mac_learner").run(rfd, bridge_ifname)
         end, pipes.learn.rfd)
       end
     }
   }
+  table.insert(workers, {
+    name = "nft",
+    pid = nil,
+    restart_fn = function()
+      return fork_worker("nft", function(rfd)
+        return require("worker_nft").run(rfd)
+      end, pipes.nft.rfd)
+    end
+  })
   table.insert(workers, {
     name = "events",
     pid = nil,
@@ -217,30 +268,30 @@ supervise = function(pipes, sfd)
     end
   })
   table.insert(workers, {
-    name = "arp-sniffer",
+    name = "arp",
     pid = nil,
     restart_fn = function()
-      return fork_worker("arp-sniffer", function(wfd)
+      return fork_worker("arp", function(wfd)
         return require("worker_arp_sniffer").run(bridge_ifname, wfd)
       end, pipes.learn.wfd)
     end
   })
   local auth_queue_num = tonumber(config.QUEUE_AUTH) or 5
   table.insert(workers, {
-    name = "auth_queue",
+    name = "auth-q",
     pid = nil,
     restart_fn = function()
-      return fork_worker("auth_queue", function(wfd)
+      return fork_worker("auth-q", function(wfd)
         return require("worker_auth_queue").run(auth_queue_num, wfd)
       end, pipes.learn.wfd)
     end
   })
   for i, q_num in ipairs(questions_queues) do
     table.insert(workers, {
-      name = "questions-q" .. tostring(q_num),
+      name = "dns-q" .. tostring(q_num),
       pid = nil,
       restart_fn = function()
-        return fork_worker("questions-q" .. tostring(q_num), (function(fds)
+        return fork_worker("dns-q" .. tostring(q_num), (function(fds)
           return require("worker_questions").run(q_num, fds.q0q1_wfd, fds.learn_wfd, fds.events_wfd)
         end), {
           q0q1_wfd = pipes.q0q1.wfd,
@@ -252,21 +303,24 @@ supervise = function(pipes, sfd)
   end
   for i, q_num in ipairs(responses_queues) do
     table.insert(workers, {
-      name = "responses-q" .. tostring(q_num),
+      name = "resp-q" .. tostring(q_num),
       pid = nil,
       restart_fn = function()
-        return fork_worker("responses-q" .. tostring(q_num), function(rfd)
-          return require("worker_responses").run(q_num, rfd)
-        end, pipes.q0q1.rfd)
+        return fork_worker("resp-q" .. tostring(q_num), function(fds)
+          return require("worker_responses").run(q_num, fds)
+        end, {
+          q0q1_rfd = pipes.q0q1.rfd,
+          nft_wfd = pipes.nft.wfd
+        })
       end
     })
   end
   for i, q_num in ipairs(captive_queues) do
     table.insert(workers, {
-      name = "captive-q" .. tostring(q_num),
+      name = "cap-q" .. tostring(q_num),
       pid = nil,
       restart_fn = function()
-        return fork_worker("captive-q" .. tostring(q_num), function(cfg)
+        return fork_worker("cap-q" .. tostring(q_num), function(cfg)
           return require("worker_captive").run(q_num, cfg)
         end, auth_cfg)
       end
@@ -274,24 +328,37 @@ supervise = function(pipes, sfd)
   end
   for i, q_num in ipairs(reject_queues) do
     table.insert(workers, {
-      name = "reject-q" .. tostring(q_num),
+      name = "rej-q" .. tostring(q_num),
       pid = nil,
       restart_fn = function()
-        return fork_worker("reject-q" .. tostring(q_num), function(cfg)
+        return fork_worker("rej-q" .. tostring(q_num), function(cfg)
           return require("worker_reject").run(q_num, cfg)
         end, auth_cfg)
       end
     })
   end
   table.insert(workers, {
-    name = "AUTH",
+    name = "auth",
     pid = nil,
     restart_fn = function()
-      return fork_worker("AUTH", function(cfg)
+      return fork_worker("auth", function(cfg)
         return require("auth.worker").run_auth_worker(cfg)
       end, auth_cfg)
     end
   })
+  local doh_cfg = load_doh_cfg()
+  if doh_cfg.enabled then
+    doh_cfg.nft_wfd = pipes.nft.wfd
+    table.insert(workers, {
+      name = "doh",
+      pid = nil,
+      restart_fn = function()
+        return fork_worker("doh", function(cfg)
+          return require("worker_doh").run(cfg)
+        end, doh_cfg)
+      end
+    })
+  end
   nft_rules.apply()
   filter.load()
   nft_extra.apply_from_config()
@@ -316,7 +383,7 @@ supervise = function(pipes, sfd)
         filter.load()
         for _index_0 = 1, #workers do
           local w = workers[_index_0]
-          if (w.name:match("^questions%-q") or w.name:match("^responses%-q") or w.name:match("^captive%-q") or w.name:match("^reject%-q")) and w.pid and w.pid > 0 then
+          if (w.name:match("^questions%-q") or w.name:match("^responses%-q") or w.name:match("^captive%-q") or w.name:match("^reject%-q") or w.name == "DOH") and w.pid and w.pid > 0 then
             log_info({
               action = "supervisor_sighup_kill",
               name = w.name,

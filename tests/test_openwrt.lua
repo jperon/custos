@@ -224,7 +224,6 @@ report("mac4_allowed dans bridge dns-filter-bridge", (mac_sets and mac_sets:matc
 report("mac6_allowed dans bridge dns-filter-bridge", (mac_sets and mac_sets:match("mac6_allowed")) ~= nil, mac_sets or "")
 report("ether saddr . ip daddr @mac4_allowed dans bridge forward", (fwd and fwd:match("mac4_allowed")) ~= nil, fwd or "")
 report("ether saddr . ip6 daddr @mac6_allowed dans bridge forward", (fwd and fwd:match("mac6_allowed")) ~= nil, fwd or "")
-report("bridge-nf-call-iptables (mode bridge, sans br_netfilter)", true, "non requis en mode bridge nftables natif")
 local qraw
 _, qraw = ssh("cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null")
 report("NFQUEUE 0 connecté (worker Q0)", (qraw and qraw:match("^%s*0%s")) ~= nil, qraw or "")

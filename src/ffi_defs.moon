@@ -219,6 +219,8 @@ ffi.cdef [[
 
   /* Supprime la sortie standard/erreur (on n'en a pas besoin) */
   void nft_ctx_set_dry_run(nft_ctx *ctx, bool dry);
+  int  nft_ctx_buffer_error(nft_ctx *ctx);
+  const char *nft_ctx_get_error_buffer(nft_ctx *ctx);
 
   /* Exécute une commande nft sous forme de chaîne C */
   /* Retourne 0 en cas de succès */
@@ -282,7 +284,7 @@ try_load = (names) ->
   for name in *names
     ok, lib = pcall ffi.load, name
     return lib if ok
-  
+
   -- Fallback: scan filesystem for any matching library file
   for name in *names
     prefix = name\gsub("%.so.*$", "")  -- Remove version suffix
@@ -290,11 +292,11 @@ try_load = (names) ->
     f = io.popen(cmd)
     path = f\read("*a")\gsub("\n", "")
     f\close!
-    
+
     if path and path ~= ""
       ok, lib = pcall ffi.load, path
       return lib if ok
-  
+
   error "ffi_defs: cannot load any of: #{table.concat names, ', '}"
 
 libc    = ffi.C

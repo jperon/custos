@@ -23,105 +23,12 @@ ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
 { :get_l2 } = require "parse/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
-{
-  :parse, :pack
-  :parse_header, :pack_header
-  :parse_question, :pack_question, :parse_questions
-  :parse_rr, :pack_rr, :parse_rrs
-  rcodes: {:REFUSED}
-  types: {:A, :AAAA}
-  :ede_codes
-} = require "ipparse.l7.dns"
-{ :add_ip4, :add_ip6, :add_mac4, :add_mac6 } = require "nft"
+{ :add_ip4, :add_ip6, :add_mac4, :add_mac6 } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_info, :log_warn, :log_debug, :now } = require "log"
+{ :log_info, :log_warn, :log_debug, :now, :set_action_prefix } = require "log"
+{ :build_blocked_response, :add_ede_ttl } = require "dns_ede"
 bit = require "bit"
-pack: sp = require"ipparse.lib.pack_compat"
 :concat, :insert, :remove = table
-
--- ── DNS helper functions (ipparse.l7.dns pattern) ───────────────────────
-
--- EDE codes from RFC 8914 (bidirectional in ipparse)
-EDE_BLOCKED = ede_codes.Filtered  -- 17
-EDE_TTL_MODIFIED = ede_codes.Forged_Answer       -- 4
-
--- Add or replace EDNS EDE option in DNS message
--- Following shelterwall pattern: remove existing OPT RR, add new one with EDE
-add_ede = (ede_code, text) =>
-  -- Remove existing OPT RR (rtype 0x29)
-  for i = #(@additionals or {}), 1, -1
-    if @additionals[i].rtype == 0x29
-      remove @additionals, i
-
-  -- Add new OPT RR with EDE option (RFC 6891, RFC 8914)
-  @additionals or= {}
-  insert @additionals, 1, {
-    rname: "\0"          -- root name
-    rtype: 0x29         -- OPT
-    rclass: 0           -- UDP payload size (ignored in response)
-    ttl: 0              -- extended RCODE and flags
-    rdata: sp ">Hs2", 0x000F, (sp(">H", ede_code)..text)  -- EDE option
-  }
-  @header.arcount = #(@additionals or {})
-  @
-
--- Build blocked DNS response: REFUSED + synthetic 0.0.0.0/:: + EDE 17
-build_blocked_response = (dns_orig, dns_raw, reason) ->
-  return nil unless dns_orig and dns_raw
-
-  -- Parse original DNS message (dns_raw is already extracted DNS payload)
-  dns = parse dns_raw, 1, false
-  return nil unless dns
-
-  -- Set RCODE to REFUSED
-  dns.header.rcode = REFUSED
-
-  -- Clear answers, add synthetic 0.0.0.0 or :: based on QTYPE
-  dns.answers = {}
-  if dns.question and dns.question.qtype
-    qtype = dns.question.qtype
-    rdata = if qtype == A
-      string.char(0, 0, 0, 0)  -- 0.0.0.0
-    elseif qtype == AAAA
-      string.char(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)  -- ::
-    else
-      string.char(0, 0, 0, 0)  -- default 0.0.0.0
-
-    -- Add synthetic answer with compression pointer (0xC0 0x0C points to question name)
-    dns.answers[1] = {
-      rname: string.char(0xC0, 0x0C)  -- pointer to offset 12
-      rtype: qtype
-      rclass: 1  -- IN
-      ttl: 60
-      rdata: rdata
-    }
-    dns.header.ancount = 1
-
-  -- Add EDE 17 (Blocked) with reason from filter.decide
-  ede_text = if reason and reason != ""
-    "Ne intretis. " .. reason
-  else
-    "Ne intretis."
-  add_ede dns, EDE_BLOCKED, ede_text
-
-  -- Pack DNS message
-  tostring dns
-
--- Add EDE 4 (DNSSEC_Bogus) to DNS message for TTL-modified responses
-add_ede_ttl = (dns_payload, reason) ->
-  -- Parse DNS message
-  dns = parse dns_payload, 1, false
-  return dns_payload unless dns
-
-  -- Add EDE 4 with reason from filter.decide
-  ede_text = if reason and reason != ""
-    "Custos vigilat. " .. reason
-  else
-    "Custos vigilat."
-  add_ede dns, EDE_TTL_MODIFIED, ede_text
-
-  -- Pack DNS message
-  tostring dns
 
 IPC_RETRY_ENABLED = if IPC_MATCH_RETRY_ENABLED == nil then true else IPC_MATCH_RETRY_ENABLED
 IPC_RETRY_COUNT = IPC_MATCH_RETRY_COUNT or 5
@@ -133,7 +40,6 @@ MAC_ZERO = "00:00:00:00:00:00"
 -- mac_valid : vrai si mac est une adresse MAC connue et non nulle
 mac_valid = (mac) -> mac != "unknown" and mac != MAC_ZERO
 
-{ :try_add_with_retries } = require "nft_add_helper"
 
 -- mac_clients[mac_str] = {ipv4, ipv6, last_seen}
 -- Permet de résoudre l'adresse cross-family d'un client (ex: IPv4 ↔ IPv6)
@@ -376,13 +282,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       unless dnsonly
         if client_v4
           records_to_add += 1
-          ok = try_add_with_retries add_ip4, client_v4, ans.rdata_str
+          ok = add_ip4 client_v4, ans.rdata_str
           ip_count += 1 if ok
           success_any or= ok
         else
           no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
         if mac_valid client_mac
-          m_ok = try_add_with_retries add_mac4, client_mac, ans.rdata_str
+          m_ok = add_mac4 client_mac, ans.rdata_str
           success_any or= m_ok
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
@@ -394,13 +300,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       unless dnsonly
         if client_v6
           records_to_add += 1
-          ok = try_add_with_retries add_ip6, client_v6, ans.rdata_str
+          ok = add_ip6 client_v6, ans.rdata_str
           ip_count += 1 if ok
           success_any or= ok
         else
           no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
         if mac_valid client_mac
-          m_ok = try_add_with_retries add_mac6, client_mac, ans.rdata_str
+          m_ok = add_mac6 client_mac, ans.rdata_str
           success_any or= m_ok
 
   -- Logguer les cas cross-family sans IP connue (groupés par réponse)
@@ -466,6 +372,9 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 -- Blocks in the NFQUEUE loop until the process exits.
 -- @tparam number rfd Read end of the IPC pipe from Q0.
 run = (queue_num, rfd) ->
+  set_action_prefix "q1_"
+  require("nft_queue").set_wfd rfd.nft_wfd if type(rfd) == "table" and rfd.nft_wfd
+  rfd = rfd.q0q1_rfd if type(rfd) == "table"
   pipe_rfd = rfd
   -- Pré-remplit mac_clients / ip_to_mac depuis la table ARP/NDP courante,
   -- avant même la première requête DNS. Indispensable pour le cross-family

@@ -10,10 +10,10 @@ do
 end
 local get_l2
 get_l2 = require("parse/ethernet").get_l2
-local log_info, log_warn, log_error, log_debug
+local log_info, log_warn, log_error, log_debug, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_error, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug
+  log_info, log_warn, log_error, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix
 end
 local ipparse_ip = require("ipparse.l3.ip")
 local ipc_wfd = nil
@@ -44,13 +44,13 @@ end
 local handle_auth_packet
 handle_auth_packet = function(qh_ptr, nfad, pkt_id)
   log_debug({
-    action = "auth_queue_callback",
+    action = "callback",
     pkt_id = pkt_id
   })
   local l2 = get_l2(nfad)
   if not (l2) then
     log_warn({
-      action = "auth_queue_no_l2"
+      action = "no_l2"
     })
     return NF_ACCEPT
   end
@@ -58,20 +58,20 @@ handle_auth_packet = function(qh_ptr, nfad, pkt_id)
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
   if payload_len <= 0 then
     log_warn({
-      action = "auth_queue_no_payload",
+      action = "no_payload",
       payload_len = payload_len
     })
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
   log_debug({
-    action = "auth_queue_payload_len",
+    action = "payload_len",
     len = payload_len
   })
   local ip, err = ipparse_ip.parse(raw, 1)
   if not (ip) then
     log_debug({
-      action = "auth_queue_parse_failed",
+      action = "parse_failed",
       err = err
     })
     return NF_ACCEPT
@@ -80,27 +80,28 @@ handle_auth_packet = function(qh_ptr, nfad, pkt_id)
   local mac_raw = l2.mac_raw
   if not (ip_raw and mac_raw) then
     log_warn({
-      action = "auth_queue_missing_info"
+      action = "missing_info"
     })
     return NF_ACCEPT
   end
   local ok = send_to_auth_server(ip.version, ip_raw, mac_raw)
   if not (ok) then
     log_warn({
-      action = "auth_queue_ipc_failed"
+      action = "ipc_failed"
     })
   end
   log_info({
-    action = "auth_queue_processed",
+    action = "processed",
     pkt_id = pkt_id
   })
   return NF_ACCEPT
 end
 local run
 run = function(queue_num, wfd)
+  set_action_prefix("auth_queue_")
   ipc_wfd = wfd
   log_info({
-    action = "auth_queue_starting",
+    action = "starting",
     queue = queue_num,
     ipc_fd = wfd
   })

@@ -29,8 +29,8 @@ NFT_SET_MAC6   = "mac6_allowed"   -- ether_addr . ipv6_addr (client MAC + dest I
 NFT_IP_TIMEOUT = "2m"             -- durée de vie des IPs dans les sets
 
 -- ── Politique et retry pour les insertions dynamiques dans nft
-NFT_ADD_RETRY_COUNT = 3
-NFT_ADD_BACKOFF_MS = {20, 50, 100}
+NFT_ADD_RETRY_COUNT = 6
+NFT_ADD_BACKOFF_MS = {20, 50, 100, 200, 400, 800}
 NFT_ADD_FAILURE_POLICY = "fail-closed"  -- options: "fail-open" or "fail-closed"
 
 -- ── Pipe IPC Q0 → Q1 ────────────────────────────────────────────
@@ -102,6 +102,18 @@ ALLOWED_DOMAINS = { "local", "lan", "home.arpa" }
 -- Surchargeables via UCI (custos.main.nft_extra_rules).
 NFT_EXTRA_RULES = {}
 
+-- ── DoH worker ──────────────────────────────────────────────────
+-- All values overridable via UCI (custos.main.*).
+DOH_ENABLED             = "1"                      -- set to "1" to activate
+DOH_PORT                = 8443                     -- TLS listen port
+DOH_UPSTREAM_IPV4       = "1.1.1.3"               -- Cloudflare Family (IPv4)
+DOH_UPSTREAM_IPV6       = "2606:4700:4700::1113"  -- Cloudflare Family (IPv6)
+DOH_UPSTREAM_PORT       = 53                       -- upstream DNS UDP port
+DOH_UPSTREAM_TIMEOUT_MS = 2000                     -- upstream recv timeout (ms)
+DOH_CERT_PATH           = ""                       -- static cert PEM (optional)
+DOH_KEY_PATH            = ""                       -- static key PEM (optional)
+DOH_PREFER_IPV6         = "1"                      -- "1" = prefer IPv6 upstream
+
 -- ── Export ──────────────────────────────────────────────────────
 {
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE, :QUEUE_REJECT, :QUEUE_AUTH
@@ -117,4 +129,7 @@ NFT_EXTRA_RULES = {}
   :EVENTS_DIR, :EVENTS_MAX_AGE_HOURS, :EVENTS_MIN_FREE_PCT
   :DEST_WHITELIST, :ALLOWED_DOMAINS, :NFT_EXTRA_RULES
   :LOG_LEVEL
+  :DOH_ENABLED, :DOH_PORT, :DOH_UPSTREAM_IPV4, :DOH_UPSTREAM_IPV6
+  :DOH_UPSTREAM_PORT, :DOH_UPSTREAM_TIMEOUT_MS
+  :DOH_CERT_PATH, :DOH_KEY_PATH, :DOH_PREFER_IPV6
 }

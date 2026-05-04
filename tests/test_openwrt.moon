@@ -319,10 +319,6 @@ report "ether saddr . ip daddr @mac4_allowed dans bridge forward",
 report "ether saddr . ip6 daddr @mac6_allowed dans bridge forward",
   (fwd and fwd\match "mac6_allowed") != nil, fwd or ""
 
-
-report "bridge-nf-call-iptables (mode bridge, sans br_netfilter)",
-  true, "non requis en mode bridge nftables natif"
-
 -- NFQUEUE workers
 _, qraw = ssh "cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null"
 report "NFQUEUE 0 connecté (worker Q0)",

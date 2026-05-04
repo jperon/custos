@@ -11,6 +11,14 @@
 -- NFT_CTX_DEFAULT = 0
 ctx = libnft.nft_ctx_new 0
 error "nft_ctx_new() échoué" if ctx == nil
+ok_buf = pcall -> libnft.nft_ctx_buffer_error ctx
+
+get_error_buffer = ->
+  return nil unless ok_buf
+  ok, ptr = pcall -> libnft.nft_ctx_get_error_buffer ctx
+  return nil unless ok and ptr != nil
+  msg = ffi.string ptr
+  msg if msg and msg != ""
 
 -- Silencer les sorties stdout/stderr du contexte nft
 -- (on gère nos propres logs)
@@ -19,13 +27,16 @@ error "nft_ctx_new() échoué" if ctx == nil
 
 -- ── Exécution d'une commande nft ─────────────────────────────────
 -- Retourne true si succès, false + log si erreur.
-run_cmd = (cmd) ->
+run_cmd = (cmd, opts=nil) ->
   rc = libnft.nft_run_cmd_from_buffer ctx, cmd
   if rc != 0
     ts = os.time!
-    log_warn { action: "nft_cmd_failed", cmd: cmd, rc: rc, ts: ts }
-    return false
-  true
+    nft_err = get_error_buffer!
+    busy = nft_err and nft_err\match "Resource busy"
+    unless opts and opts.quiet
+      log_warn { action: "nft_cmd_failed", cmd: cmd, rc: rc, ts: ts, nft_err: nft_err or "", transient: busy and "resource_busy" or "" }
+    return false, nft_err
+  true, nil
 
 -- ── API publique ─────────────────────────────────────────────────
 
@@ -37,6 +48,11 @@ add_ip4 = (client_ip, ip_str) ->
   cmd = "add element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET_IP4} { #{client_ip} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
   run_cmd cmd
 
+add_ip4_quiet = (client_ip, ip_str) ->
+  cmd = "add element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET_IP4} { #{client_ip} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
+  ok, err = run_cmd cmd, { quiet: true }
+  ok, err or "nft add ip4 failed"
+
 --- Ajoute une paire (client IPv6, destination IPv6) dans le set ip6_allowed.
 -- @tparam string client_ip Adresse IPv6 du client LAN (ex: "fd00:28::1")
 -- @tparam string ip_str    Adresse IPv6 de destination (ex: "2001:db8::1")
@@ -45,6 +61,12 @@ add_ip6 = (client_ip, ip_str) ->
   return false unless client_ip\find ":"
   cmd = "add element #{NFT_FAMILY6} #{NFT_TABLE} #{NFT_SET_IP6} { #{client_ip} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
   run_cmd cmd
+
+add_ip6_quiet = (client_ip, ip_str) ->
+  return false unless client_ip\find ":"
+  cmd = "add element #{NFT_FAMILY6} #{NFT_TABLE} #{NFT_SET_IP6} { #{client_ip} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
+  ok, err = run_cmd cmd, { quiet: true }
+  ok, err or "nft add ip6 failed"
 
 --- Ajoute une paire (client, destination), famille détectée par ':' dans ip_str.
 -- client_ip et ip_str doivent être de la même famille (IPv4 ou IPv6).
@@ -66,6 +88,12 @@ add_mac4 = (mac, ip_str) ->
   cmd = "add element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET_MAC4} { #{mac} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
   run_cmd cmd
 
+add_mac4_quiet = (mac, ip_str) ->
+  return false unless NFT_SET_MAC4
+  cmd = "add element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET_MAC4} { #{mac} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
+  ok, err = run_cmd cmd, { quiet: true }
+  ok, err or "nft add mac4 failed"
+
 --- Ajoute une paire (MAC client, destination IPv6) dans le set mac6_allowed.
 -- @tparam string mac    Adresse MAC du client LAN (ex: "aa:bb:cc:dd:ee:ff")
 -- @tparam string ip_str Adresse IPv6 de destination (ex: "2001:db8::1")
@@ -75,9 +103,19 @@ add_mac6 = (mac, ip_str) ->
   cmd = "add element #{NFT_FAMILY6} #{NFT_TABLE} #{NFT_SET_MAC6} { #{mac} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
   run_cmd cmd
 
+add_mac6_quiet = (mac, ip_str) ->
+  return false unless NFT_SET_MAC6
+  cmd = "add element #{NFT_FAMILY6} #{NFT_TABLE} #{NFT_SET_MAC6} { #{mac} . #{ip_str} timeout #{NFT_IP_TIMEOUT} }"
+  ok, err = run_cmd cmd, { quiet: true }
+  ok, err or "nft add mac6 failed"
+
 --- Libère le contexte nftables (appelé à l'arrêt du processus).
 -- @treturn nil
 cleanup = ->
   libnft.nft_ctx_free ctx if ctx != nil
 
-{ :add_ip4, :add_ip6, :add_ip, :add_mac4, :add_mac6, :run_cmd, :cleanup }
+{
+  :add_ip4, :add_ip6, :add_ip, :add_mac4, :add_mac6
+  :add_ip4_quiet, :add_ip6_quiet, :add_mac4_quiet, :add_mac6_quiet
+  :run_cmd, :cleanup
+}

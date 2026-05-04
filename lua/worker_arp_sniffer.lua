@@ -5,13 +5,13 @@ do
 end
 local C, AF_PACKET, SOCK_RAW, AF_INET6
 do
-  local _obj_0 = require("auth.ffi_socket")
+  local _obj_0 = require("lib.socket")
   C, AF_PACKET, SOCK_RAW, AF_INET6 = _obj_0.C, _obj_0.AF_PACKET, _obj_0.SOCK_RAW, _obj_0.AF_INET6
 end
-local log_info, log_warn, log_debug
+local log_info, log_warn, log_debug, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug
+  log_info, log_warn, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix
 end
 local POLLIN = 1
 local ETH_P_ARP = C.htons(0x0806)
@@ -155,10 +155,11 @@ process_ipv6 = function(raw, len, learn_wfd)
 end
 local run
 run = function(ifname, learn_wfd)
+  set_action_prefix("arp_")
   local ifindex = tonumber(C.if_nametoindex(ifname))
   if ifindex == 0 then
     log_warn({
-      action = "arp_sniffer_ifindex_failed",
+      action = "ifindex_failed",
       ifname = ifname
     })
     return 
@@ -166,7 +167,7 @@ run = function(ifname, learn_wfd)
   local arp_fd = open_socket(ETH_P_ARP, ifindex)
   if not (arp_fd) then
     log_warn({
-      action = "arp_sniffer_socket_failed",
+      action = "socket_failed",
       proto = "ARP",
       ifname = ifname
     })
@@ -175,7 +176,7 @@ run = function(ifname, learn_wfd)
   local ip6_fd = open_socket(ETH_P_IPV6, ifindex)
   if not (ip6_fd) then
     log_warn({
-      action = "arp_sniffer_socket_failed",
+      action = "socket_failed",
       proto = "IPv6",
       ifname = ifname
     })
@@ -183,7 +184,7 @@ run = function(ifname, learn_wfd)
     return 
   end
   log_info({
-    action = "arp_sniffer_start",
+    action = "start",
     ifname = ifname,
     ifindex = ifindex
   })
