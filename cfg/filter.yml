@@ -10,14 +10,16 @@
 #            chemins relatifs a ce repertoire, sans extension :
 #            ex. "toulouse/malware" -> <domainlists_dir>/toulouse/malware.bin
 #
-# custom_lists_dir : repertoire de listes personnalisees (optionnel).
+# custom_lists_dir : repertoire source des listes personnalisees (optionnel).
 #            Contient des fichiers .txt (un domaine par ligne, # pour les
-#            commentaires). custos-update convertit chaque .txt en .bin dans
-#            le meme repertoire ; les originaux sont conserves.
-#            Les listes sont accessibles dans les regles comme :
+#            commentaires). custos-update compile chaque .txt en .bin et
+#            ecrit les .bin dans <domainlists_dir>/custom/ (cree si absent).
+#            Les originaux .txt sont conserves dans custom_lists_dir.
+#            Les listes sont alors accessibles dans les regles comme :
 #              to_domainlist: custom/<nom_sans_extension>
-#            Pour que ce chemin fonctionne, custom_lists_dir doit etre un
-#            sous-dossier de domainlists_dir (ex. /etc/custos/lists/custom/).
+#            Note : custom_lists_dir peut etre n'importe quel chemin (meme
+#            hors de domainlists_dir) ; c'est domainlists_dir/custom/ qui
+#            contient les .bin lus par le filtre.
 #
 # nets     : nom -> liste de CIDR IPv4/IPv6
 #            Utilise dans les conditions from_netlist / from_netlists.

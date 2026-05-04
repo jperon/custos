@@ -15,11 +15,15 @@
 # Exemple : 'toulouse/malware' -> /etc/custos/lists/toulouse/malware.bin
 domainlists_dir: /etc/custos/lists
 
-# Répertoire pour les listes personnalisées (optionnel).
+# Répertoire source des listes personnalisées (optionnel).
 # Les fichiers .txt (un domaine par ligne) dans ce dossier sont automatiquement
-# convertis en .bin par 'custos-update'. Ces listes sont accessibles via
-# 'to_domainlist: custom/<nom_sans_extension>'.
-# Doit être un sous-dossier de 'domainlists_dir'.
+# compilés en .bin par 'custos-update'. Les .bin sont écrits dans
+# <domainlists_dir>/custom/ (créé si absent) ; les .txt sources sont conservés.
+# Ces listes sont accessibles dans les règles via :
+#   to_domainlist: custom/<nom_sans_extension>
+# Note : custom_lists_dir peut être n'importe quel chemin, indépendamment de
+# domainlists_dir ; c'est domainlists_dir/custom/ qui contient les .bin lus
+# par le filtre.
 custom_lists_dir: /etc/custos/lists/custom
 
 # Liste blanche statique de destinations (IPs ou CIDRs, IPv4/IPv6).

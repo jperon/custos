@@ -250,15 +250,18 @@ fetch_local = function(name, source, dry_run)
   return write_bin(domains, output, dry_run)
 end
 local process_custom_dir
-process_custom_dir = function(dir, dry_run)
+process_custom_dir = function(src_dir, output_dir, dry_run)
+  output_dir = output_dir or src_dir
   local local_updated, local_errors = 0, 0
-  ensure_dir(dir)
-  local quoted_dir = sh_quote(dir)
+  ensure_dir(src_dir)
+  ensure_dir(output_dir)
+  local quoted_dir = sh_quote(src_dir)
   local fh = io.popen("cd " .. tostring(quoted_dir) .. " 2>/dev/null && ls -1 *.txt 2>/dev/null")
   if not (fh) then
     return 0, 0
   end
-  local base = dir:gsub("/+$", "")
+  local src_base = src_dir:gsub("/+$", "")
+  local out_base = output_dir:gsub("/+$", "")
   for txt_name in fh:lines() do
     local _continue_0 = false
     repeat
@@ -267,9 +270,9 @@ process_custom_dir = function(dir, dry_run)
         _continue_0 = true
         break
       end
-      local txt_path = base .. "/" .. txt_name
+      local txt_path = src_base .. "/" .. txt_name
       local name = txt_name:match("([^/]+)%.txt$" or txt_name)
-      local bin_path = txt_path:gsub("%.txt$", ".bin")
+      local bin_path = out_base .. "/" .. name .. ".bin"
       local ok_l, msg = fetch_local(name, {
         file = txt_path,
         format = "simple",
@@ -422,8 +425,14 @@ for name, source in pairs(sources) do
   end
 end
 if custom_lists_dir then
-  io.stderr:write("\n[custom] Scan de " .. tostring(custom_lists_dir) .. "/*.txt\n")
-  local n_ok, n_err = process_custom_dir(custom_lists_dir, opts.dry_run)
+  local custom_bin_dir
+  if domainlists_dir then
+    custom_bin_dir = (domainlists_dir:gsub("/*$", "")) .. "/custom"
+  else
+    custom_bin_dir = custom_lists_dir
+  end
+  io.stderr:write("\n[custom] Scan de " .. tostring(custom_lists_dir) .. "/*.txt → " .. tostring(custom_bin_dir) .. "/\n")
+  local n_ok, n_err = process_custom_dir(custom_lists_dir, custom_bin_dir, opts.dry_run)
   updated = updated + n_ok
   errors = errors + n_err
   io.stderr:write("[custom] " .. tostring(n_ok) .. " liste(s) mise(s) à jour, " .. tostring(n_err) .. " erreur(s).\n")

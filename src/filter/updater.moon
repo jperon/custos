@@ -295,26 +295,33 @@ fetch_local = (name, source, dry_run) ->
   io.stderr\write "[#{name}] #{#domains} domaines depuis #{path}\n"
   write_bin domains, output, dry_run
 
---- Parcourt un répertoire et compile tous les fichiers .txt en .bin.
--- Les fichiers .txt originaux sont conservés.
--- @tparam  string   dir      Répertoire à scanner
+--- Parcourt un répertoire source et compile tous les fichiers .txt en .bin.
+-- Les fichiers .txt originaux sont conservés dans src_dir.
+-- Les .bin sont écrits dans output_dir (défaut : src_dir).
+-- Cela permet de séparer les sources (ex. /etc/custos/lists/custom/) de
+-- la sortie compilée lue par le filtre (ex. domainlists_dir/custom/).
+-- @tparam  string   src_dir    Répertoire contenant les .txt à compiler
+-- @tparam  string   output_dir Répertoire de destination des .bin (défaut : src_dir)
 -- @tparam  boolean  dry_run
--- @treturn number            Nombre de listes mises à jour
--- @treturn number            Nombre d'erreurs
-process_custom_dir = (dir, dry_run) ->
+-- @treturn number              Nombre de listes mises à jour
+-- @treturn number              Nombre d'erreurs
+process_custom_dir = (src_dir, output_dir, dry_run) ->
+  output_dir = output_dir or src_dir
   local_updated, local_errors = 0, 0
-  ensure_dir dir
-  quoted_dir = sh_quote dir
+  ensure_dir src_dir
+  ensure_dir output_dir
+  quoted_dir = sh_quote src_dir
   fh = io.popen "cd #{quoted_dir} 2>/dev/null && ls -1 *.txt 2>/dev/null"
   unless fh
     return 0, 0
-  base = dir\gsub "/+$", ""
+  src_base = src_dir\gsub "/+$", ""
+  out_base = output_dir\gsub "/+$", ""
   for txt_name in fh\lines!
     txt_name = txt_name\gsub "%s+$", ""
     continue if txt_name == ""
-    txt_path = base .. "/" .. txt_name
+    txt_path = src_base .. "/" .. txt_name
     name = txt_name\match "([^/]+)%.txt$" or txt_name
-    bin_path = txt_path\gsub "%.txt$", ".bin"
+    bin_path = out_base .. "/" .. name .. ".bin"
     ok_l, msg = fetch_local name, { file: txt_path, format: "simple", output: bin_path }, dry_run
     if ok_l
       io.stderr\write "[custom/#{name}] ✓ #{msg}\n"
@@ -443,9 +450,15 @@ for name, source in pairs sources
     errors += 1
 
 -- Listes personnalisées (custom_lists_dir : scan automatique)
+-- Les .bin sont écrits dans domainlists_dir/custom/ si domainlists_dir est
+-- défini, sinon dans custom_lists_dir lui-même (rétrocompatibilité).
 if custom_lists_dir
-  io.stderr\write "\n[custom] Scan de #{custom_lists_dir}/*.txt\n"
-  n_ok, n_err = process_custom_dir custom_lists_dir, opts.dry_run
+  custom_bin_dir = if domainlists_dir
+    (domainlists_dir\gsub "/*$", "") .. "/custom"
+  else
+    custom_lists_dir
+  io.stderr\write "\n[custom] Scan de #{custom_lists_dir}/*.txt → #{custom_bin_dir}/\n"
+  n_ok, n_err = process_custom_dir custom_lists_dir, custom_bin_dir, opts.dry_run
   updated += n_ok
   errors  += n_err
   io.stderr\write "[custom] #{n_ok} liste(s) mise(s) à jour, #{n_err} erreur(s).\n"
