@@ -334,7 +334,10 @@ handle_doh_client = (args) ->
 -- @treturn nil
 run = (doh_cfg) ->
   set_action_prefix "doh_"
-  require("nft_queue").set_wfd doh_cfg.nft_wfd if doh_cfg.nft_wfd
+  nft_q = require "nft_queue"
+  nft_q.set_wfd doh_cfg.nft_wfd if doh_cfg.nft_wfd
+  -- Configure le canal ACK bidirectionnel si le superviseur en a alloué un.
+  nft_q.set_ack_rfd doh_cfg.ack_rfd, doh_cfg.worker_idx if doh_cfg.ack_rfd and doh_cfg.worker_idx != nil
   unless doh_cfg.enabled
     log_info { action: "worker_disabled" }
     return

@@ -23,7 +23,7 @@ ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
 { :get_l2 } = require "parse/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
-{ :add_ip4, :add_ip6, :add_mac4, :add_mac6 } = require "nft_queue"
+{ :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :now, :set_action_prefix } = require "log"
 { :build_blocked_response, :add_ede_ttl } = require "dns_ede"
@@ -357,6 +357,16 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     else
       log_warn { action: "nft_add_failed_fail_open", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
 
+  -- ── Attente ACK nft avant verdict ────────────────────────────
+  -- On attend que worker_nft confirme l'insertion des IPs dans les sets nftables
+  -- avant de rendre la réponse DNS au client. Cela élimine la race condition
+  -- où le client reçoit la réponse DNS et tente immédiatement une connexion TCP
+  -- avant que ses IPs ne soient dans ip4_allowed / ip6_allowed.
+  -- Fail-open (avec log) si worker_nft ne répond pas dans NFT_ACK_TIMEOUT_MS.
+  if not dnsonly and records_to_add > 0
+    pending_seq = get_last_seq!
+    wait_ack pending_seq if pending_seq
+
   -- ── Verdict avec payload modifié ─────────────────────────────
   -- On appelle nfq_set_verdict directement ici avec le payload modifié,
   -- puis on retourne le sentinel -1 pour que nfq_loop ne repose
@@ -373,8 +383,12 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 -- @tparam number rfd Read end of the IPC pipe from Q0.
 run = (queue_num, rfd) ->
   set_action_prefix "q1_"
-  require("nft_queue").set_wfd rfd.nft_wfd if type(rfd) == "table" and rfd.nft_wfd
-  rfd = rfd.q0q1_rfd if type(rfd) == "table"
+  if type(rfd) == "table"
+    nft_q = require "nft_queue"
+    nft_q.set_wfd rfd.nft_wfd if rfd.nft_wfd
+    -- Configure le canal ACK bidirectionnel si le superviseur en a alloué un.
+    nft_q.set_ack_rfd rfd.ack_rfd, rfd.worker_idx if rfd.ack_rfd and rfd.worker_idx != nil
+    rfd = rfd.q0q1_rfd
   pipe_rfd = rfd
   -- Pré-remplit mac_clients / ip_to_mac depuis la table ARP/NDP courante,
   -- avant même la première requête DNS. Indispensable pour le cross-family

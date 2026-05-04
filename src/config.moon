@@ -32,6 +32,9 @@ NFT_IP_TIMEOUT = "2m"             -- durée de vie des IPs dans les sets
 NFT_ADD_RETRY_COUNT = 6
 NFT_ADD_BACKOFF_MS = {20, 50, 100, 200, 400, 800}
 NFT_ADD_FAILURE_POLICY = "fail-closed"  -- options: "fail-open" or "fail-closed"
+-- Délai max d'attente de l'ACK de worker_nft avant de rendre le verdict DNS (fail-open si dépassé).
+-- Doit être > FLUSH_MS (50 ms dans worker_nft) + temps d'exécution nft (typiquement 5-15 ms).
+NFT_ACK_TIMEOUT_MS = 150
 
 -- ── Pipe IPC Q0 → Q1 ────────────────────────────────────────────
 -- Durée de vie d'une transaction en attente de réponse (secondes)
@@ -118,7 +121,7 @@ DOH_PREFER_IPV6         = "1"                      -- "1" = prefer IPv6 upstream
 {
   :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE, :QUEUE_REJECT, :QUEUE_AUTH
   :NFT_FAMILY, :NFT_FAMILY6, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
-  :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY
+  :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :NFT_ACK_TIMEOUT_MS
   :IPC_PENDING_TTL
   :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS
   :CLIENT_EXPIRY

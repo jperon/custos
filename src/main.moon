@@ -242,12 +242,30 @@ supervise = (pipes, sfd) ->
     }
   }
 
+  -- ── Pipes ACK nft (un par worker_responses + un pour DoH) ──────
+  -- Chaque pipe est dédié à un worker ; worker_nft écrit 1 octet d'ACK
+  -- après chaque flush de batch, avant que le worker rende son verdict DNS.
+  -- worker_idx est 0-based ; le tableau ack_wfds est 1-indexed côté Lua.
+  ack_pipes  = {}  -- liste de {rfd, wfd} créés ici
+  ack_wfds   = {}  -- tableau des wfd passés à worker_nft (1-indexed)
+  next_widx  = 0   -- compteur d'attribution des worker_idx
+
+  alloc_ack_pipe = ->
+    p = create_pipe "ack_#{next_widx}"
+    ack_pipes[#ack_pipes + 1] = p
+    ack_wfds[next_widx + 1]   = p.wfd   -- 1-indexed pour le tableau Lua
+    widx = next_widx
+    next_widx += 1
+    { rfd: p.rfd, worker_idx: widx }
+
   table.insert workers, {
     name: "nft"
     pid: nil
+    -- La restart_fn capture ack_wfds par référence ; si worker_nft redémarre,
+    -- il reçoit le même tableau (les pipes ACK restent ouverts).
     restart_fn: -> fork_worker "nft",
-      (rfd) -> require("worker_nft").run rfd,
-      pipes.nft.rfd
+      (args) -> require("worker_nft").run args.rfd, args.ack_wfds,
+      { rfd: pipes.nft.rfd, ack_wfds: ack_wfds }
   }
 
   table.insert workers, {
@@ -292,13 +310,16 @@ supervise = (pipes, sfd) ->
     }
 
   -- Multiple workers for responses (parallel Q1)
+  -- Chaque worker_responses reçoit un pipe ACK dédié pour la synchronisation nft.
   for i, q_num in ipairs responses_queues
+    ack_info = alloc_ack_pipe!
     table.insert workers, {
       name: "resp-q#{q_num}"
       pid: nil
       restart_fn: -> fork_worker "resp-q#{q_num}",
         (fds) -> require("worker_responses").run q_num, fds,
-        { q0q1_rfd: pipes.q0q1.rfd, nft_wfd: pipes.nft.wfd }
+        { q0q1_rfd: pipes.q0q1.rfd, nft_wfd: pipes.nft.wfd,
+          ack_rfd: ack_info.rfd, worker_idx: ack_info.worker_idx }
     }
 
   -- Multiple workers for captive (parallel Q2)
@@ -335,6 +356,10 @@ supervise = (pipes, sfd) ->
   doh_cfg = load_doh_cfg!
   if doh_cfg.enabled
     doh_cfg.nft_wfd = pipes.nft.wfd
+    -- Allouer un pipe ACK dédié au worker DoH.
+    doh_ack_info     = alloc_ack_pipe!
+    doh_cfg.ack_rfd    = doh_ack_info.rfd
+    doh_cfg.worker_idx = doh_ack_info.worker_idx
     table.insert workers, {
       name: "doh"
       pid: nil
@@ -390,6 +415,10 @@ supervise = (pipes, sfd) ->
         nft_extra.cleanup!
         shutdown_workers workers
         close_supervisor_fds pipes
+        -- Ferme les pipes ACK côté superviseur (les enfants ont déjà quitté).
+        for p in *ack_pipes
+          libc.close p.rfd
+          libc.close p.wfd
         libc._exit 0
 
     dead_pid = tonumber libc.waitpid -1, status, WNOHANG

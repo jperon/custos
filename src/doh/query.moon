@@ -13,7 +13,7 @@ dns_mod = require "ipparse.l7.dns"
 parse = dns_mod.parse
 { :QTYPE } = require "parse/ndpi"
 { :decide } = require "filter"
-{ :add_ip4, :add_ip6, :add_mac4, :add_mac6 } = require "nft_queue"
+{ :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
 { :build_blocked_response, :add_ede } = require "dns_ede"
 { :user_for_mac } = require "auth.sessions"
 { :log_allow, :log_block, :log_warn, :log_debug, :log_info } = require "log"
@@ -33,8 +33,10 @@ rr_addr = (ans) ->
     return table.concat words, ":"
   ans.rdata_str
 
---- Inject A/AAAA records from a parsed DNS response into nftables sets.
--- Mirrors the nft injection logic in worker_responses.
+--- Inject A/AAAA records from a parsed DNS response into nftables sets,
+-- then wait for worker_nft to confirm the flush before returning.
+-- This prevents the race condition where the DoH response is sent to the client
+-- before the resolved IPs are present in the nftables sets.
 -- @tparam table  answers    Array of parsed RR tables (from ipparse.l7.dns).
 -- @tparam string client_ip  Peer IP address (IPv4 or IPv6 string).
 -- @tparam string client_mac MAC address string, or "unknown".
@@ -58,6 +60,11 @@ inject_answers = (answers, client_ip, client_mac) ->
       if mac_valid client_mac
         log_debug { action: "nft_add_mac6", client_mac: client_mac, dest: addr }
         add_mac6 client_mac, addr
+  -- Attendre que worker_nft ait effectivement inséré les IPs dans nftables
+  -- avant de retourner la réponse DNS au client DoH.
+  -- Fail-open (avec log) si worker_nft ne répond pas dans NFT_ACK_TIMEOUT_MS.
+  pending_seq = get_last_seq!
+  wait_ack pending_seq if pending_seq
 
 --- Process a raw DNS query from a DoH client.
 -- @tparam string      dns_raw     Raw DNS query bytes (wire format).
