@@ -10,6 +10,7 @@ EAGAIN    = 11
 EWOULDBLOCK = 11
 
 sleep_req = ffi.new "timespec_t[1]"
+clock_ts  = ffi.new "timespec_t[1]"
 read_buf  = ffi.new "char[?]", BUF_SIZE
 ack_byte  = ffi.new "uint8_t[1]"
 ack_byte[0] = 0x01
@@ -18,6 +19,10 @@ sleep_ms = (ms) ->
   sleep_req[0].tv_sec = math.floor ms / 1000
   sleep_req[0].tv_nsec = (ms % 1000) * 1000000
   libc.nanosleep sleep_req, nil
+
+monotonic_ms = ->
+  libc.clock_gettime 1, clock_ts  -- CLOCK_MONOTONIC = 1
+  tonumber(clock_ts[0].tv_sec) * 1000 + math.floor tonumber(clock_ts[0].tv_nsec) / 1000000
 
 --- Parse une ligne du pipe nft.
 -- Format court (compatibilité callers sans ACK) : "kind|key|ip"
@@ -42,49 +47,46 @@ send_ack = (ack_wfds, widx) ->
   return unless wfd
   libc.write wfd, ack_byte, 1
 
---- Exécute le batch d'insertions nft et ACK les workers concernés.
+--- Exécute le batch d'insertions nft et ACK chaque message reçu.
 -- Vide la table pending en place.
--- @tparam table pending   { key = {kind, key, ip, worker_idx|nil, widx_set|nil} }
+-- @tparam table pending   { key = {kind, key, ip} } (commandes nft dédoublonnées)
+-- @tparam table ack_queue liste FIFO des worker_idx à ACKer (un item par message reçu)
 -- @tparam table ack_wfds  tableau des fd d'écriture ACK (peut être vide)
 -- @treturn nil
-flush_batch = (pending, ack_wfds) ->
+flush_batch = (pending, ack_queue, ack_wfds) ->
   count = 0
   for _, _ in pairs pending
     count += 1
-  return if count == 0
+  return if count == 0 and #ack_queue == 0
 
-  lines  = {}
-  -- Ensemble de tous les worker_idx à ACKer après ce flush.
-  to_ack = {}
+  lines = {}
   for _, item in pairs pending
     cmd = cmd_for item.kind, item.key, item.ip
     lines[#lines + 1] = cmd if cmd
-    -- Collecter le widx principal
-    if item.worker_idx
-      to_ack[item.worker_idx] = true
-    -- Collecter les widx supplémentaires (même entrée, plusieurs workers en attente)
-    if item.widx_set
-      for widx, _ in pairs item.widx_set
-        to_ack[widx] = true
   for k in pairs pending
     pending[k] = nil
 
-  return if #lines == 0
-
-  cmd = table.concat lines, "\n"
-  ok, err = run_cmd cmd, { quiet: true }
-  if ok
-    log_debug { action: "batch_ok", count: #lines }
+  if #lines > 0
+    cmd = table.concat lines, "\n"
+    ok, err = run_cmd cmd, { quiet: true }
+    if ok
+      log_debug { action: "batch_ok", count: #lines, acks: #ack_queue }
+    else
+      log_warn { action: "batch_failed", count: #lines, acks: #ack_queue, err: err or "" }
+      for line in *lines
+        ok_one, err_one = run_cmd line, { quiet: true }
+        log_warn { action: "single_failed", err: err_one or "", cmd: line } unless ok_one
   else
-    log_warn { action: "batch_failed", count: #lines, err: err or "" }
-    for line in *lines
-      ok_one, err_one = run_cmd line, { quiet: true }
-      log_warn { action: "single_failed", err: err_one or "", cmd: line } unless ok_one
+    log_debug { action: "batch_ack_only", acks: #ack_queue }
 
-  -- ACK tous les workers ayant contribué au batch.
+  -- ACK chaque message reçu, pas seulement chaque worker_idx.
+  -- Plusieurs processus/enfants DoH peuvent attendre simultanément sur le même
+  -- worker_idx ; un seul ACK par worker_idx laisserait les autres timeout.
   -- On ACK même en cas d'échec partiel : la politique est fail-open côté Q1/DoH.
-  for widx, _ in pairs to_ack
+  for widx in *ack_queue
     send_ack ack_wfds, widx
+  for i = #ack_queue, 1, -1
+    ack_queue[i] = nil
 
 --- Boucle principale du worker nft.
 -- Lit des lignes depuis rfd, batchifie, flush périodiquement ou sur MAX_BATCH.
@@ -96,8 +98,9 @@ run = (rfd, ack_wfds) ->
   ack_wfds = ack_wfds or {}
   log_info { action: "worker_start", rfd: rfd, ack_workers: #ack_wfds }
   pending    = {}
+  ack_queue  = {}
   partial    = ""
-  last_flush = os.clock!
+  last_flush = monotonic_ms!
 
   while true
     n = libc.read rfd, read_buf, BUF_SIZE
@@ -111,21 +114,9 @@ run = (rfd, ack_wfds) ->
         data = data\sub nl + 1
         kind, key, ip, seq, widx = parse_line line
         if kind and key and ip
+          ack_queue[#ack_queue + 1] = widx if widx
           entry_key = "#{kind}|#{key}|#{ip}"
-          existing  = pending[entry_key]
-          if existing
-            -- Même paire (kind, key, ip) : dédoublonnée dans nft, mais plusieurs
-            -- workers peuvent en attendre l'ACK → on accumule les widx.
-            if widx
-              if existing.worker_idx == widx
-                nil  -- même worker, pas de doublon à gérer
-              else
-                existing.widx_set = existing.widx_set or {}
-                existing.widx_set[existing.worker_idx] = true if existing.worker_idx
-                existing.widx_set[widx] = true
-                existing.worker_idx = nil  -- géré via widx_set désormais
-          else
-            pending[entry_key] = { :kind, :key, :ip, worker_idx: widx }
+          pending[entry_key] = { :kind, :key, :ip } unless pending[entry_key]
       partial = data
     else
       errno_p = libc.__errno_location!
@@ -137,13 +128,13 @@ run = (rfd, ack_wfds) ->
         log_warn { action: "read_failed", errno: errno }
         sleep_ms 100
 
-    now_clock = os.clock!
+    now_clock = monotonic_ms!
     pending_count = 0
     for _, _ in pairs pending
       pending_count += 1
-    if pending_count >= MAX_BATCH or (pending_count > 0 and (now_clock - last_flush) * 1000 >= FLUSH_MS)
-      flush_batch pending, ack_wfds
-      last_flush = os.clock!
+    if pending_count >= MAX_BATCH or (#ack_queue >= MAX_BATCH) or ((pending_count > 0 or #ack_queue > 0) and now_clock - last_flush >= FLUSH_MS)
+      flush_batch pending, ack_queue, ack_wfds
+      last_flush = monotonic_ms!
     else
       sleep_ms 10
 

@@ -18,6 +18,7 @@ local FLUSH_MS = 50
 local EAGAIN = 11
 local EWOULDBLOCK = 11
 local sleep_req = ffi.new("timespec_t[1]")
+local clock_ts = ffi.new("timespec_t[1]")
 local read_buf = ffi.new("char[?]", BUF_SIZE)
 local ack_byte = ffi.new("uint8_t[1]")
 ack_byte[0] = 0x01
@@ -26,6 +27,11 @@ sleep_ms = function(ms)
   sleep_req[0].tv_sec = math.floor(ms / 1000)
   sleep_req[0].tv_nsec = (ms % 1000) * 1000000
   return libc.nanosleep(sleep_req, nil)
+end
+local monotonic_ms
+monotonic_ms = function()
+  libc.clock_gettime(1, clock_ts)
+  return tonumber(clock_ts[0].tv_sec) * 1000 + math.floor(tonumber(clock_ts[0].tv_nsec) / 1000000)
 end
 local parse_line
 parse_line = function(line)
@@ -45,67 +51,68 @@ send_ack = function(ack_wfds, widx)
   return libc.write(wfd, ack_byte, 1)
 end
 local flush_batch
-flush_batch = function(pending, ack_wfds)
+flush_batch = function(pending, ack_queue, ack_wfds)
   local count = 0
   for _, _ in pairs(pending) do
     count = count + 1
   end
-  if count == 0 then
+  if count == 0 and #ack_queue == 0 then
     return 
   end
   local lines = { }
-  local to_ack = { }
   for _, item in pairs(pending) do
     local cmd = cmd_for(item.kind, item.key, item.ip)
     if cmd then
       lines[#lines + 1] = cmd
     end
-    if item.worker_idx then
-      to_ack[item.worker_idx] = true
-    end
-    if item.widx_set then
-      for widx, _ in pairs(item.widx_set) do
-        to_ack[widx] = true
-      end
-    end
   end
   for k in pairs(pending) do
     pending[k] = nil
   end
-  if #lines == 0 then
-    return 
-  end
-  local cmd = table.concat(lines, "\n")
-  local ok, err = run_cmd(cmd, {
-    quiet = true
-  })
-  if ok then
-    log_debug({
-      action = "batch_ok",
-      count = #lines
+  if #lines > 0 then
+    local cmd = table.concat(lines, "\n")
+    local ok, err = run_cmd(cmd, {
+      quiet = true
     })
-  else
-    log_warn({
-      action = "batch_failed",
-      count = #lines,
-      err = err or ""
-    })
-    for _index_0 = 1, #lines do
-      local line = lines[_index_0]
-      local ok_one, err_one = run_cmd(line, {
-        quiet = true
+    if ok then
+      log_debug({
+        action = "batch_ok",
+        count = #lines,
+        acks = #ack_queue
       })
-      if not (ok_one) then
-        log_warn({
-          action = "single_failed",
-          err = err_one or "",
-          cmd = line
+    else
+      log_warn({
+        action = "batch_failed",
+        count = #lines,
+        acks = #ack_queue,
+        err = err or ""
+      })
+      for _index_0 = 1, #lines do
+        local line = lines[_index_0]
+        local ok_one, err_one = run_cmd(line, {
+          quiet = true
         })
+        if not (ok_one) then
+          log_warn({
+            action = "single_failed",
+            err = err_one or "",
+            cmd = line
+          })
+        end
       end
     end
+  else
+    log_debug({
+      action = "batch_ack_only",
+      acks = #ack_queue
+    })
   end
-  for widx, _ in pairs(to_ack) do
+  for _index_0 = 1, #ack_queue do
+    local widx = ack_queue[_index_0]
     send_ack(ack_wfds, widx)
+  end
+  for i = #ack_queue, 1, -1 do
+    ack_queue[i] = nil
   end
 end
 local run
@@ -118,8 +125,9 @@ run = function(rfd, ack_wfds)
     ack_workers = #ack_wfds
   })
   local pending = { }
+  local ack_queue = { }
   local partial = ""
-  local last_flush = os.clock()
+  local last_flush = monotonic_ms()
   while true do
     local n = libc.read(rfd, read_buf, BUF_SIZE)
     if n and n > 0 then
@@ -134,27 +142,15 @@ run = function(rfd, ack_wfds)
         data = data:sub(nl + 1)
         local kind, key, ip, seq, widx = parse_line(line)
         if kind and key and ip then
+          if widx then
+            ack_queue[#ack_queue + 1] = widx
+          end
           local entry_key = tostring(kind) .. "|" .. tostring(key) .. "|" .. tostring(ip)
-          local existing = pending[entry_key]
-          if existing then
-            if widx then
-              if existing.worker_idx == widx then
-                local _ = nil
-              else
-                existing.widx_set = existing.widx_set or { }
-                if existing.worker_idx then
-                  existing.widx_set[existing.worker_idx] = true
-                end
-                existing.widx_set[widx] = true
-                existing.worker_idx = nil
-              end
-            end
-          else
+          if not (pending[entry_key]) then
             pending[entry_key] = {
               kind = kind,
               key = key,
-              ip = ip,
-              worker_idx = widx
+              ip = ip
             }
           end
         end
@@ -182,14 +178,14 @@ run = function(rfd, ack_wfds)
         sleep_ms(100)
       end
     end
-    local now_clock = os.clock()
+    local now_clock = monotonic_ms()
     local pending_count = 0
     for _, _ in pairs(pending) do
       pending_count = pending_count + 1
     end
-    if pending_count >= MAX_BATCH or (pending_count > 0 and (now_clock - last_flush) * 1000 >= FLUSH_MS) then
-      flush_batch(pending, ack_wfds)
-      last_flush = os.clock()
+    if pending_count >= MAX_BATCH or (#ack_queue >= MAX_BATCH) or ((pending_count > 0 or #ack_queue > 0) and now_clock - last_flush >= FLUSH_MS) then
+      flush_batch(pending, ack_queue, ack_wfds)
+      last_flush = monotonic_ms()
     else
       sleep_ms(10)
     end
