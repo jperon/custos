@@ -1,0 +1,34 @@
+-- .luacov — configuration de la couverture pour CustosVirginum
+--
+-- Utilisation :
+--   make coverage             → compile + busted --coverage + luacov
+--   tmp/coverage/luacov.report.out  → rapport texte
+--
+-- Le fichier de stats (.stats.out) est écrit en cours de session ;
+-- luacov le consomme et produit le rapport.
+
+return {
+  statsfile  = "tmp/coverage/luacov.stats.out",
+  reportfile = "tmp/coverage/luacov.report.out",
+
+  -- Seul le code produit (lua/) nous intéresse.
+  include = {
+    "^lua/",
+  },
+
+  -- Exclure les modules système, FFI bas-niveau et les exemples.
+  exclude = {
+    "^tests/",
+    "^tmp/",
+    "^%.kilo/",
+    "^libvirt/",
+    "^lua/ipparse/examples/",
+    -- Les stubs FFI pur ne peuvent pas être couverts sans les bibliothèques
+    -- natives ; on les exclut au départ pour éviter du bruit.
+    "^lua/ffi_defs",
+    "^lua/ffi_ndpi",
+    "^lua/ffi_xxhash",
+    "^lua/auth/ffi_socket",
+    "^lua/auth/ffi_wolfssl",
+  },
+}

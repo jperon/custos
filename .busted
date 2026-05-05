@@ -1,0 +1,23 @@
+-- .busted — configuration du runner Busted pour CustosVirginum
+-- Toutes les cibles Makefile (test, coverage) partagent ce fichier.
+--
+-- Paramètres susceptibles d'être surchargés sur la ligne de commande :
+--   busted --tags=ffi          → uniquement les tests marqués #ffi
+--   busted --tags=~slow        → exclut les tests marqués #slow
+--   busted --coverage          → active luacov (requiert luacov installé)
+
+return {
+  _all = {
+    lua = "luajit",
+    -- Compile les .moon en .lua avant de les exécuter.
+    -- Les specs sont donc des fichiers *_spec.lua dans tests/unit/.
+    pattern = "_spec%.lua$",
+    verbose = true,
+    output = "utfTerminal",
+  },
+
+  default = {
+    -- helper chargé avant chaque spec ; injecte les stubs communs et LUA_PATH.
+    helper = "tests/helpers/busted_setup.lua",
+  },
+}

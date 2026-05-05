@@ -4,7 +4,7 @@
 # Targets:
 #   all          - Compile all .moon files to .lua
 #   check        - Syntax check generated Lua files
-#   test         - Unit tests + FFI socket/WolfSSL tests (no root required)
+#   test         - Unit tests (Busted, no root required)
 #   test-ndpi    - nDPI wrapper tests (requires libndpi)
 #   test-openwrt - OpenWrt live tests via SSH (HOST=user@host required)
 #   test-env     - Create/start libvirt 3-VM environment (Debian client, OpenWrt filter, Debian DNS)
@@ -12,6 +12,7 @@
 #   test-env-nuke- Delete everything
 #   test-e2e     - End-to-end tests via SSH (FILTER_SSH=... CLIENT_SSH=... [CLIENT2_SSH=...])
 #   test-kvm     - Full KVM E2E suite (requires test-env running)
+#   coverage     - Unit tests + luacov report in tmp/coverage/
 #   run          - Start supervisor (requires root + nft rules)
 #   clean        - Remove compiled Lua files
 #   reload       - SIGHUP to restart config
@@ -21,8 +22,15 @@
 
 MOONC   ?= moonc
 LUAJIT  ?= luajit
+BUSTED  ?= busted
 SRC     := src
 LUA     := lua
+
+# Chemins Lua pour les tests (modules compilés + rocks locaux)
+LUAROCKS_PATH := $(HOME)/.luarocks/share/lua/5.1/?.lua;$(HOME)/.luarocks/share/lua/5.1/?/init.lua
+LUAROCKS_CPATH := $(HOME)/.luarocks/lib/lua/5.1/?.so
+TEST_LUA_PATH := tests/helpers/?.lua;tests/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;$(LUAROCKS_PATH);;
+TEST_LUA_CPATH := $(LUAROCKS_CPATH);;
 
 # List of modules to compile (order respects dependencies)
 MOONS := $(shell find $(SRC) -name '*.moon' | sort)
@@ -41,7 +49,13 @@ AUTH_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(AUTH_MOONS))
 IPPARSE_MOONS := $(shell find $(SRC)/ipparse -name '*.moon' 2>/dev/null | grep -v examples)
 IPPARSE_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(IPPARSE_MOONS))
 
-.PHONY: all clean check test test-ndpi test-openwrt test-env test-env-down test-env-nuke test-e2e test-e2e-ci test-kvm run reload update-lists make-secret logs help debug-env
+# Specs unitaires (tous les *_spec.moon dans tests/unit/)
+UNIT_SPEC_MOONS := $(shell find tests/unit -name '*_spec.moon' 2>/dev/null | sort)
+UNIT_SPEC_LUAS  := $(patsubst %.moon,%.lua,$(UNIT_SPEC_MOONS))
+
+.PHONY: all clean check test test-unit test-ffi test-ndpi test-openwrt \
+        test-env test-env-down test-env-nuke test-e2e test-e2e-ci test-kvm \
+        coverage run reload update-lists make-secret logs help debug-env
 
 all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
@@ -57,6 +71,10 @@ $(LUA)/%.lua: $(SRC)/%.moon
 	mkdir -p $(@D)
 	$(MOONC) -o $@ $<
 
+# Compile a spec .moon → .lua (rule for tests/unit/**/*_spec.moon)
+tests/unit/%.lua: tests/unit/%.moon
+	$(MOONC) -o $@ $<
+
 # Syntax check all generated Lua files
 check: all
 	@echo "Vérification syntaxique..."
@@ -64,49 +82,58 @@ check: all
 	  luajit -e "local ok,e=loadfile('$$f'); if not ok then print('FAIL '..e) else print('OK   $$f') end"; \
 	done
 
-# Unit tests (no root required)
-test: all
-	@echo "Tests unitaires..."
-	@$(MOONC) -o tests/run_tests.lua tests/run_tests.moon
-	@LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" $(LUAJIT) tests/run_tests.lua > /tmp/test_unit.log 2>&1; \
-	cat /tmp/test_unit.log
-	@echo ""
-	@echo "Tests FFI socket + WolfSSL + Syntax validation..."
-	@$(MOONC) -o tests/test_ffi_socket.lua tests/test_ffi_socket.moon
-	@$(MOONC) -o tests/test_ffi_wolfssl.lua tests/test_ffi_wolfssl.moon
-	@$(MOONC) -o tests/test_ffi_integration.lua tests/test_ffi_integration.moon
-	@$(MOONC) -o tests/test_ffi_defs_syntax.lua tests/test_ffi_defs_syntax.moon
-	@LUA_PATH="src/auth/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;;" $(LUAJIT) tests/test_ffi_defs_syntax.lua > /tmp/test_ffi.log 2>&1; \
-	cat /tmp/test_ffi.log
-	@LUA_PATH="src/auth/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;;" $(LUAJIT) tests/test_ffi_socket.lua >> /tmp/test_ffi.log 2>&1; \
-	cat /tmp/test_ffi.log | tail -30 | head -25
-	@LUA_PATH="src/auth/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;;" $(LUAJIT) tests/test_ffi_wolfssl.lua >> /tmp/test_ffi.log 2>&1; \
-	tail -30 /tmp/test_ffi.log | head -25
-	@LUA_PATH="src/auth/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;;" $(LUAJIT) tests/test_ffi_integration.lua >> /tmp/test_ffi.log 2>&1; \
-	tail -20 /tmp/test_ffi.log
-	@echo ""
-	@unit_passed=$$(grep -o '[0-9]\+ test(s) passé' /tmp/test_unit.log | grep -o '[0-9]\+'); \
-	unit_failed=$$(grep -o '[0-9]\+ échec' /tmp/test_unit.log | grep -o '[0-9]\+'); \
-	ffi_count=$$(grep -c 'Passed:' /tmp/test_ffi.log); \
-	ffi_passed=$$(grep 'Passed:' /tmp/test_ffi.log | awk '{split($$2,a,"/"); sum+=a[1]} END {print sum}'); \
-	total_passed=$$((unit_passed + ffi_passed)); \
-	if [ -z "$$unit_failed" ]; then unit_failed=0; fi; \
-	echo "╔════════════════════════════════════════════════════════════╗"; \
-	if [ "$$unit_failed" -eq 0 ]; then \
-		echo "║  ✅ TOUS LES TESTS: $$total_passed test(s) passé(s), 0 échec(s)  ║"; \
-	else \
-		echo "║  ⚠️  TOUS LES TESTS: $$total_passed test(s), $$unit_failed échec(s)              ║"; \
-	fi; \
-	echo "╚════════════════════════════════════════════════════════════╝"
+# ── Tests unitaires (Busted) ──────────────────────────────────────────────
 
-# nDPI wrapper tests (requires libndpi)
+# Compile tous les specs .moon → .lua, puis lance Busted
+compile-specs: $(UNIT_SPEC_LUAS)
+
+test-unit: all compile-specs
+	@mkdir -p tmp/test-logs
+	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  $(BUSTED) --config=.busted tests/unit 2>&1 | tee tmp/test-logs/unit.log; \
+	  rc=$$?; exit $$rc
+
+# Tests FFI socket + WolfSSL + intégration (sous-ensemble de test-unit si specs présentes)
+test-ffi: all
+	@mkdir -p tmp/test-logs
+	@$(MOONC) -o tests/test_ffi_socket.lua     tests/test_ffi_socket.moon
+	@$(MOONC) -o tests/test_ffi_wolfssl.lua    tests/test_ffi_wolfssl.moon
+	@$(MOONC) -o tests/test_ffi_integration.lua tests/test_ffi_integration.moon
+	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  $(LUAJIT) tests/test_ffi_socket.lua     2>&1 | tee    tmp/test-logs/ffi.log
+	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  $(LUAJIT) tests/test_ffi_wolfssl.lua    2>&1 | tee -a tmp/test-logs/ffi.log
+	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  $(LUAJIT) tests/test_ffi_integration.lua 2>&1 | tee -a tmp/test-logs/ffi.log
+
+# Cible publique : tous les tests unitaires locaux (pas root, pas VM)
+test: all compile-specs test-unit test-ffi
+
+# ── Couverture ────────────────────────────────────────────────────────────
+
+coverage: all compile-specs
+	@mkdir -p tmp/coverage
+	@rm -f tmp/coverage/luacov.stats.out tmp/coverage/luacov.report.out
+	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  $(BUSTED) --config=.busted --coverage tests/unit 2>&1 | tee tmp/test-logs/coverage.log
+	@mv luacov.stats.out  tmp/coverage/luacov.stats.out  2>/dev/null || true
+	@mv luacov.report.out tmp/coverage/luacov.report.out 2>/dev/null || true
+	@echo ""
+	@echo "Rapport de couverture : tmp/coverage/luacov.report.out"
+	@if [ -f tmp/coverage/luacov.report.out ]; then \
+	  grep -E "^Total" tmp/coverage/luacov.report.out || true; \
+	fi
+
+# ── nDPI wrapper tests (requires libndpi) ────────────────────────────────
+
 test-ndpi: all
 	@echo "Tests nDPI wrapper..."
 	$(MOONC) -o tests/test_ndpi.lua tests/test_ndpi.moon
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_ndpi.lua
 
-# OpenWrt live tests via SSH
+# ── OpenWrt live tests via SSH ────────────────────────────────────────────
+
 test-openwrt: all
 	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis. Ex: make test-openwrt HOST=root@DEST"; exit 1)
 	@echo "Tests OpenWrt end-to-end..."
@@ -114,7 +141,8 @@ test-openwrt: all
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_openwrt.lua $(HOST) $(ARGS)
 
-# Libvirt environment (3 VMs: client, filter, dns)
+# ── Libvirt environment (3 VMs: client, filter, dns) ─────────────────────
+
 test-env:
 	bash libvirt/custos-libvirt.sh ensure
 	@echo ""
@@ -126,7 +154,8 @@ test-env-down:
 test-env-nuke:
 	bash libvirt/custos-libvirt.sh nuke
 
-# End-to-end tests (requires test-env running)
+# ── End-to-end tests (requires test-env running) ──────────────────────────
+
 test-e2e: all
 	@bash libvirt/custos-libvirt.sh filter-ip >/dev/null 2>&1 \
 	  || (echo "ERREUR : environnement non démarré. Exécute d'abord: make test-env"; exit 1)
@@ -153,6 +182,8 @@ test-kvm: all
 # Debug libvirt environment
 debug-env:
 	@bash libvirt/debug.sh $(ARGS)
+
+# ── Utilitaires ───────────────────────────────────────────────────────────
 
 # Generate PBKDF2-SHA256 hash for secrets file
 make-secret: all
@@ -206,9 +237,12 @@ help:
 	@echo "Cibles disponibles:"
 	@echo "  all          - Compile tous les fichiers .moon"
 	@echo "  check        - Vérification syntaxique des fichiers Lua"
-	@echo "  test         - Tests unitaires + FFI socket/WolfSSL (pas root requis)"
+	@echo "  test         - Tests unitaires Busted (pas root requis)"
+	@echo "  test-unit    - Tests unitaires Busted uniquement (sans FFI)"
+	@echo "  test-ffi     - Tests FFI socket/WolfSSL/intégration"
+	@echo "  coverage     - Tests unitaires + rapport luacov (tmp/coverage/)"
 	@echo "  test-ndpi    - Tests nDPI wrapper (libndpi requis)"
-	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis, ARGS=--setup optionnel)"
+	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis)"
 	@echo "  test-env     - Crée/démarre l'environnement libvirt 3 VMs pour E2E"
 	@echo "  test-env-down - Arrête les VMs (conserve les disques)"
 	@echo "  test-env-nuke - Supprime VMs, réseaux, images (scratch)"
@@ -222,4 +256,3 @@ help:
 	@echo "  make-secret  - Génère un hash PBKDF2-SHA256 pour cfg/secrets (USER=, PASS=)"
 	@echo "  update-lists - Télécharge et compile les listes de domaines"
 	@echo "  logs         - Affiche les logs en temps réel"
-	@echo "  help         - Affiche cette aide"
