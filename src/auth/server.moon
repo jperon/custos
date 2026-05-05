@@ -164,20 +164,20 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     add_session sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout
   )
   unless ok
-    log_warn { action: "server_session_add_failed", err: tostring(err) }
+    log_warn { action: "server_session_add_failed", peer: peer_ip, mac: mac, err: tostring(err) }
     return 500, {}, "Session creation failed"
 
   ok, err = write_sessions sessions, state.sessions_file
   unless ok
-    log_warn { action: "server_sessions_write_failed", err: err }
+    log_warn { action: "server_sessions_write_failed", path: state.sessions_file, err: err }
     return 500, {}, "Session persistence failed"
 
   if state.nft_sess
     ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout
     unless ok
-      log_warn { action: "server_nft_refresh_failed", err: tostring(err) }
+      log_warn { action: "server_nft_refresh_failed", peer: peer_ip, mac: mac, err: tostring(err) }
   else
-    log_warn { action: "server_nft_sess_missing" }
+    log_warn { action: "server_nft_sess_missing", peer: peer_ip, mac: mac }
 
   session = sessions[mac\lower!]
   created_at = session and session.created_at or os.time!
@@ -361,7 +361,8 @@ handle_client = (args) ->
     -- Obtenir l'IP locale du socket (sur laquelle le client s'est connecté)
     local_ip = client\getsockname!
     unless local_ip
-      log_warn { action: "server_getsockname_failed" }
+      errno = tonumber(ffi.C.__errno_location()[0])
+      log_warn { action: "server_getsockname_failed", peer: peer_ip, errno: errno }
       local_ip = "custos"  -- Fallback
 
     log_debug { action: "server_local_ip_detected", local_ip: local_ip }
@@ -401,7 +402,7 @@ handle_client = (args) ->
     log_debug { action: "server_ssl_wrap_done" }
 
     unless tls_client
-      log_warn { action: "server_tls_wrap_failed", err: tls_err }
+      log_warn { action: "server_tls_wrap_failed", peer: peer_ip, err: tls_err }
       client\close!
       return
 
@@ -422,7 +423,7 @@ handle_client = (args) ->
         handshake_complete = true
 
     unless handshake_complete
-      log_warn { action: "server_tls_handshake_failed", err: "max attempts or error" }
+      log_warn { action: "server_tls_handshake_failed", peer: peer_ip, attempts: handshake_attempts, err: hs_err or "max attempts reached" }
       tls_client\close!
       return
 
@@ -442,7 +443,7 @@ handle_client = (args) ->
     tls_client\close!
 
   unless ok
-    log_error { action: "server_client_failed", err: tostring err }
+    log_error { action: "server_client_failed", peer: peer_ip, err: tostring err }
     pcall -> client\close!
 
 reload_secrets_if_needed = (state) ->

@@ -59,9 +59,17 @@ apply = ->
 
   content = substitute content
 
-  rc = libnft.nft_run_cmd_from_buffer ctx, content
+  tmpfile = "/tmp/custos-rules.nft"
+  tmpfh, tmp_err = io.open tmpfile, "w"
+  unless tmpfh
+    log_warn { action: "nft_rules_tempfile_failed", path: tmpfile, err: tmp_err }
+    return false
+  tmpfh\write content
+  tmpfh\close!
+
+  rc = os.execute "nft -f #{tmpfile} 2>/dev/null"
   if rc != 0
-    log_warn { action: "nft_rules_apply_failed", path: path, rc: rc }
+    log_warn { action: "nft_rules_apply_failed", path: path }
     return false
 
   log_info { action: "nft_rules_applied", path: path }

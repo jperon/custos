@@ -92,7 +92,8 @@ create_pipe = (name) ->
   if sz and sz >= 0
     log_info { action: "pipe_resize", name: name, fd: fds[1], new_size: sz }
   else
-    log_warn { action: "pipe_resize_failed", name: name, fd: fds[1], rc: sz }
+    errno = tonumber(ffi.C.__errno_location()[0])
+    log_warn { action: "pipe_resize_failed", name: name, fd: fds[1], rc: sz, errno: errno }
 
   { rfd: fds[0], wfd: fds[1] }
 
@@ -117,9 +118,10 @@ create_pipes = ->
 load_auth_cfg = ->
   { :load_config } = require "filter.lib.load_config"
 
-  filter_cfg, cfg_err = load_config os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
+  filter_cfg_path = os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
+  filter_cfg, cfg_err = load_config filter_cfg_path
   unless filter_cfg
-    log_warn { action: "auth_cfg_load_warning", err: cfg_err }
+    log_warn { action: "auth_cfg_load_warning", path: filter_cfg_path, err: cfg_err }
     filter_cfg = { auth: {} }
 
   auth = filter_cfg.auth or {}

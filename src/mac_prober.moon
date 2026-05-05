@@ -383,12 +383,14 @@ init = (ifname) ->
 
   ifindex = tonumber C.if_nametoindex ifname
   if ifindex == 0
-    log_warn { action: "mac_prober_no_ifindex", ifname: ifname }
+    errno = tonumber(ffi.C.__errno_location()[0])
+    log_warn { action: "mac_prober_no_ifindex", ifname: ifname, errno: errno }
     return nil
 
   arp_fd = open_socket ETH_P_ARP, ifindex
   unless arp_fd
-    log_warn { action: "mac_prober_arp_socket_failed", ifname: ifname }
+    errno = tonumber(ffi.C.__errno_location()[0])
+    log_warn { action: "mac_prober_arp_socket_failed", ifname: ifname, errno: errno }
     return nil
 
   our_ip6 = read_own_ip6 ifname
@@ -397,7 +399,8 @@ init = (ifname) ->
   if our_ip6
     ip6_fd = open_socket ETH_P_IPV6, ifindex
     unless ip6_fd
-      log_warn { action: "mac_prober_ip6_socket_failed", ifname: ifname,
+      errno = tonumber(ffi.C.__errno_location()[0])
+      log_warn { action: "mac_prober_ip6_socket_failed", ifname: ifname, errno: errno,
         msg: "NS probes disabled" }
   else
     log_warn { action: "mac_prober_no_ip6", ifname: ifname,

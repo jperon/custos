@@ -217,9 +217,11 @@ run = function(learn_rfd, ifname)
   end
   local query_sock = create_server(MAC_LEARNER_QUERY_SOCK)
   if query_sock < 0 then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_warn({
       action = "mac_learner_socket_failed",
-      path = MAC_LEARNER_QUERY_SOCK
+      path = MAC_LEARNER_QUERY_SOCK,
+      errno = errno
     })
     return 
   end

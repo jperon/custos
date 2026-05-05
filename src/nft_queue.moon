@@ -50,10 +50,10 @@ write_line = (line) ->
     errno_p = libc.__errno_location!
     errno = if errno_p then errno_p[0] else 0
     if errno != EAGAIN and errno != EWOULDBLOCK
-      log_warn { action: "nft_queue_write_failed", errno: errno }
+      log_warn { action: "nft_queue_write_failed", fd: pipe_wfd, line: line, errno: errno }
       return false
     sleep_ms 10
-  log_warn { action: "nft_queue_write_exhausted" }
+  log_warn { action: "nft_queue_write_exhausted", fd: pipe_wfd, line: line }
   false
 
 --- Enfile une insertion nft dans le pipe vers worker_nft.

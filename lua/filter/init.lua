@@ -33,6 +33,7 @@ load = function()
   if not (cfg) then
     log_warn({
       action = "filter_load_failed",
+      path = config_path,
       err = err
     })
     return 
@@ -58,7 +59,8 @@ local decide
 decide = function(req)
   if not (rules) then
     log_warn({
-      action = "filter_not_loaded"
+      action = "filter_not_loaded",
+      domain = req and req.domain or "unknown"
     })
     return false, "filter not loaded", nil
   end

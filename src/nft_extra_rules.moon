@@ -38,8 +38,8 @@ run_cmd = (cmd) ->
   if rc != 0
     ts = os.time!
     log_warn { action: "nft_extra_cmd_failed", cmd: cmd, rc: rc, ts: ts }
-    return false
-  true
+    return false, rc
+  true, 0
 
 --- Insère une liste de règles en tête de la chaîne `forward`.
 -- Avant insertion, recherche les occurrences existantes via `nft -a list chain`
@@ -82,22 +82,22 @@ init = (rules) ->
     if handles and #handles > 0
       for h in *handles
         del_cmd = "delete rule #{NFT_FAMILY} #{NFT_TABLE} forward handle #{h}"
-        removed = run_cmd del_cmd
+        removed, rc = run_cmd del_cmd
         if removed
           log_info { action: "nft_extra_rule_removed_existing", rule: r, handle: h }
         else
-          log_warn { action: "nft_extra_rule_remove_failed", rule: r, handle: h }
+          log_warn { action: "nft_extra_rule_remove_failed", rule: r, handle: h, rc: rc }
 
     -- Insérer une unique occurrence en position 0
     insert_cmd = "insert rule #{NFT_FAMILY} #{NFT_TABLE} forward position 0 #{r}"
-    ok = run_cmd insert_cmd
+    ok, rc = run_cmd insert_cmd
     if ok
       -- Conserver la représentation exacte pour tentative de suppression ultérieure.
       table.insert inserted_rules, r
       log_info { action: "nft_extra_rule_added", rule: r }
     else
       all_ok = false
-      log_warn { action: "nft_extra_rule_add_failed", rule: r }
+      log_warn { action: "nft_extra_rule_add_failed", rule: r, rc: rc }
   all_ok
 
 --- Applique les règles définies dans la config exportée (config.NFT_EXTRA_RULES).
@@ -110,9 +110,9 @@ apply_from_config = ->
   -- après un stop/start non coordonné), ré-appliquer le ruleset principal.
   rc_check = os.execute "nft list chain #{NFT_FAMILY} #{NFT_TABLE} forward >/dev/null 2>&1"
   if rc_check ~= 0
-    ok = require("nft_rules").apply!
+    ok, rc = require("nft_rules").apply!
     unless ok
-      log_warn { action: "nft_extra_main_rules_reapply_failed" }
+      log_warn { action: "nft_extra_main_rules_reapply_failed", rc: rc or -1 }
       return false
     log_info { action: "nft_extra_main_rules_reapplied" }
   cfg = require "config"
@@ -158,11 +158,11 @@ cleanup = ->
       if handles and #handles > 0
         for h in *handles
           cmd = "delete rule #{NFT_FAMILY} #{NFT_TABLE} forward handle #{h}"
-          ok = run_cmd cmd
+          ok, rc = run_cmd cmd
           if ok
             log_info { action: "nft_extra_rule_removed_on_cleanup", rule: r, handle: h }
           else
-            log_warn { action: "nft_extra_rule_delete_failed", rule: r, handle: h }
+            log_warn { action: "nft_extra_rule_delete_failed", rule: r, handle: h, rc: rc }
 
     inserted_rules = {}
 

@@ -122,10 +122,10 @@ run = (rfd, ack_wfds) ->
       errno_p = libc.__errno_location!
       errno = if errno_p then errno_p[0] else 0
       if n == 0
-        log_warn { action: "pipe_closed" }
+        log_warn { action: "pipe_closed", rfd: rfd }
         return
       if errno != EAGAIN and errno != EWOULDBLOCK
-        log_warn { action: "read_failed", errno: errno }
+        log_warn { action: "read_failed", rfd: rfd, errno: errno }
         sleep_ms 100
 
     now_clock = monotonic_ms!

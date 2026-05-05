@@ -133,7 +133,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
   ip, ip_off, tcp, tcp_off = parse_syn(raw)
   unless ip
-    log_warn { action: "parse_failed", queue: 2, len: payload_len }
+    log_warn { action: "parse_failed", queue: 2, len: payload_len, err: "parse_syn returned nil" }
     return NF_DROP
 
   -- Use client MAC from NFQUEUE metadata (l2.mac_raw contains the source MAC from the packet)
@@ -161,7 +161,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
   send = (f) ->
     res = send_frame raw_fd, f, ifindex
     unless res
-      log_warn { action: "frame_send_error", queue: 2, ip: client_ip_str, user: user }
+      log_warn { action: "frame_send_error", queue: 2, ip: client_ip_str, user: user, err: "send_frame returned false" }
     res
 
   url = custom_redirect_url or (if ip.version == 6
@@ -245,7 +245,8 @@ run = (queue_num, auth_cfg) ->
   raw_fd = fd
   ifindex = tonumber ffi.C.if_nametoindex ifname
   if ifindex == 0
-    log_error { action: "ifindex_failed", ifname: ifname }
+    errno = tonumber(ffi.C.__errno_location()[0])
+    log_error { action: "ifindex_failed", ifname: ifname, errno: errno }
     return
 
   -- Lire le MAC du bridge une seule fois (évite un open sysfs par SYN TCP)

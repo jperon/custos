@@ -64,6 +64,8 @@ write_line = function(line)
     if errno ~= EAGAIN and errno ~= EWOULDBLOCK then
       log_warn({
         action = "nft_queue_write_failed",
+        fd = pipe_wfd,
+        line = line,
         errno = errno
       })
       return false
@@ -71,7 +73,9 @@ write_line = function(line)
     sleep_ms(10)
   end
   log_warn({
-    action = "nft_queue_write_exhausted"
+    action = "nft_queue_write_exhausted",
+    fd = pipe_wfd,
+    line = line
   })
   return false
 end

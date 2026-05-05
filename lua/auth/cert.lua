@@ -205,11 +205,12 @@ load_or_generate_sni = function(hostname, cache)
     key_file = key_file,
     cert_file = cert_file
   })
-  local key_fh = io.open(key_file, "w")
+  local key_fh, open_err = io.open(key_file, "w")
   if not (key_fh) then
     log_error({
       action = "cert_sni_key_write_failed",
-      key_file = key_file
+      key_file = key_file,
+      reason = open_err or "io.open failed"
     })
     error("Impossible d'écrire la clé SNI : " .. tostring(key_file))
   end
@@ -220,21 +221,25 @@ load_or_generate_sni = function(hostname, cache)
     key_file = key_file,
     bytes = bytes_written
   })
-  local key_stat = io.open(key_file, "r")
+  local key_stat
+  key_stat, open_err = io.open(key_file, "r")
   if not (key_stat) then
     log_error({
       action = "cert_sni_key_verify_failed",
-      key_file = key_file
+      key_file = key_file,
+      reason = open_err or "io.open failed"
     })
     error("Clé SNI écrite mais non relisible : " .. tostring(key_file))
   end
   key_stat:close()
-  local cert_fh = io.open(cert_file, "w")
+  local cert_fh
+  cert_fh, open_err = io.open(cert_file, "w")
   if not (cert_fh) then
     os.remove(key_file)
     log_error({
       action = "cert_sni_cert_write_failed",
-      cert_file = cert_file
+      cert_file = cert_file,
+      reason = open_err or "io.open failed"
     })
     error("Impossible d'écrire le certificat SNI : " .. tostring(cert_file))
   end
@@ -245,11 +250,13 @@ load_or_generate_sni = function(hostname, cache)
     cert_file = cert_file,
     bytes = bytes_written
   })
-  local cert_stat = io.open(cert_file, "r")
+  local cert_stat
+  cert_stat, open_err = io.open(cert_file, "r")
   if not (cert_stat) then
     log_error({
       action = "cert_sni_cert_verify_failed",
-      cert_file = cert_file
+      cert_file = cert_file,
+      reason = open_err or "io.open failed"
     })
     error("Certificat SNI écrit mais non relisible : " .. tostring(cert_file))
   end
@@ -303,5 +310,6 @@ return {
   generate_self_signed = generate_self_signed,
   make_context = make_context,
   load_or_generate_sni = load_or_generate_sni,
-  load_static = load_static
+  load_static = load_static,
+  hash_string = hash_string
 }

@@ -46,7 +46,7 @@ extract_sni = function(data)
     })
     return nil
   end
-  local record_length = read_u16_be(data, 3)
+  local record_length = read_u16_be(data, 4)
   if not (#data >= 5 + record_length) then
     log_debug({
       action = "server_sni_extract_truncated_record",
@@ -100,7 +100,7 @@ extract_sni = function(data)
   end
   local ext_data_offset = extensions_offset + 2
   local ext_data_end = ext_data_offset + extensions_len
-  if not (ext_data_end <= #data) then
+  if not (ext_data_end - 1 <= #data) then
     log_debug({
       action = "server_sni_extract_truncated_extensions"
     })

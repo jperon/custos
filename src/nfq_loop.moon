@@ -35,7 +35,8 @@ run_queue = (queue_num, callback) ->
   log_debug { action: "queue_nfq_open_call", queue: queue_num }
   h = libnfq.nfq_open!
   if h == nil
-    log_error { action: "queue_nfq_open_failed", queue: queue_num }
+    errno = tonumber(ffi.C.__errno_location()[0])
+    log_error { action: "queue_nfq_open_failed", queue: queue_num, errno: errno }
     error "nfq_open() échoué"
 
   log_debug { action: "queue_bind_pf", queue: queue_num }
@@ -75,7 +76,8 @@ run_queue = (queue_num, callback) ->
   log_debug { action: "queue_create_queue_call", queue: queue_num }
   qh = libnfq.nfq_create_queue h, queue_num, c_callback, nil
   if qh == nil
-    log_error { action: "queue_create_queue_failed", queue: queue_num }
+    errno = tonumber(ffi.C.__errno_location()[0])
+    log_error { action: "queue_create_queue_failed", queue: queue_num, errno: errno }
     error "nfq_create_queue(#{queue_num}) échoué"
 
   qh_box[0] = qh

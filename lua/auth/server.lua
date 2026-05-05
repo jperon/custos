@@ -193,6 +193,8 @@ handle_login = function(req, peer_ip, peer_mac, state)
   if not (ok) then
     log_warn({
       action = "server_session_add_failed",
+      peer = peer_ip,
+      mac = mac,
       err = tostring(err)
     })
     return 500, { }, "Session creation failed"
@@ -201,6 +203,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
   if not (ok) then
     log_warn({
       action = "server_sessions_write_failed",
+      path = state.sessions_file,
       err = err
     })
     return 500, { }, "Session persistence failed"
@@ -212,12 +215,16 @@ handle_login = function(req, peer_ip, peer_mac, state)
     if not (ok) then
       log_warn({
         action = "server_nft_refresh_failed",
+        peer = peer_ip,
+        mac = mac,
         err = tostring(err)
       })
     end
   else
     log_warn({
-      action = "server_nft_sess_missing"
+      action = "server_nft_sess_missing",
+      peer = peer_ip,
+      mac = mac
     })
   end
   local session = sessions[mac:lower()]
@@ -417,8 +424,11 @@ handle_client = function(args)
     })
     local local_ip = client:getsockname()
     if not (local_ip) then
+      local errno = tonumber(ffi.C.__errno_location()[0])
       log_warn({
-        action = "server_getsockname_failed"
+        action = "server_getsockname_failed",
+        peer = peer_ip,
+        errno = errno
       })
       local_ip = "custos"
     end
@@ -488,6 +498,7 @@ handle_client = function(args)
     if not (tls_client) then
       log_warn({
         action = "server_tls_wrap_failed",
+        peer = peer_ip,
         err = tls_err
       })
       client:close()
@@ -519,7 +530,9 @@ handle_client = function(args)
     if not (handshake_complete) then
       log_warn({
         action = "server_tls_handshake_failed",
-        err = "max attempts or error"
+        peer = peer_ip,
+        attempts = handshake_attempts,
+        err = hs_err or "max attempts reached"
       })
       tls_client:close()
       return 
@@ -545,6 +558,7 @@ handle_client = function(args)
   if not (ok) then
     log_error({
       action = "server_client_failed",
+      peer = peer_ip,
       err = tostring(err)
     })
     return pcall(function()

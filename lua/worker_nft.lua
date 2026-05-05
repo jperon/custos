@@ -166,13 +166,15 @@ run = function(rfd, ack_wfds)
       end
       if n == 0 then
         log_warn({
-          action = "pipe_closed"
+          action = "pipe_closed",
+          rfd = rfd
         })
         return 
       end
       if errno ~= EAGAIN and errno ~= EWOULDBLOCK then
         log_warn({
           action = "read_failed",
+          rfd = rfd,
           errno = errno
         })
         sleep_ms(100)

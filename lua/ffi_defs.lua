@@ -279,6 +279,7 @@ local libnft = try_load({
 })
 local libwolfssl = try_load({
   "wolfssl",
+  "libwolfssl.so.5.7.6.e624513f",
   "libwolfssl.so.5",
   "libwolfssl.so"
 })

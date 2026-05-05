@@ -34,7 +34,7 @@ run_auth_worker = (auth_cfg) ->
   secrets_path = auth_cfg.secrets or "/etc/custos/secrets"
   secrets, err = load_secrets secrets_path
   unless secrets
-    log_error { action: "secrets_load_failed", err: err }
+    log_error { action: "secrets_load_failed", path: secrets_path, err: err }
     secrets = {}
 
   n_users = 0
@@ -54,7 +54,7 @@ run_auth_worker = (auth_cfg) ->
       log_info { action: "secrets_reloaded", path: secrets_path }
       new_secrets
     else
-      log_warn { action: "secrets_reload_failed", err: err2 }
+      log_warn { action: "secrets_reload_failed", path: secrets_path, err: err2 }
       nil
 
   run secrets, auth_cfg, reload_fn, nft_sess, secrets_path

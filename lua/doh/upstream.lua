@@ -29,11 +29,26 @@ probe_ipv6 = function(ipv6_addr, port)
   local ret = C.inet_pton(AF_INET6, ipv6_addr, addr.sin6_addr)
   if ret <= 0 then
     C.close(fd)
+    log_warn({
+      action = "probe_ipv6_failed",
+      addr = ipv6_addr,
+      port = port,
+      reason = "inet_pton_failed"
+    })
     return false
   end
   local rc = C.connect(fd, ffi.cast("struct sockaddr*", addr), ffi.sizeof(addr))
   C.close(fd)
   local ok = rc == 0
+  if not (ok) then
+    log_warn({
+      action = "probe_ipv6_failed",
+      addr = ipv6_addr,
+      port = port,
+      reason = "connect_failed",
+      errno = get_errno()
+    })
+  end
   log_debug({
     action = "probe_ipv6",
     addr = ipv6_addr,
@@ -103,7 +118,8 @@ new_client = function(upstream_ip, upstream_port, timeout_ms)
     action = "upstream_connected",
     upstream_ip = upstream_ip,
     upstream_port = upstream_port,
-    family = family
+    family = family,
+    fd = fd
   })
   return {
     fd = fd,

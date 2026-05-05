@@ -50,10 +50,13 @@ RL_CONFIG = {
   captive_probe:      { keys: {"ip", "path"},                window: 60  }
   captive_redirect_q2: { keys: {"ip", "path"},                window: 60  }
   ALLOW:              { keys: {"mac_src", "qname", "qtype"}, window: 30  }
+  BLOCK:              { keys: {"mac_src", "qname", "qtype"}, window: 30  }
   no_ipv6_for_client: { keys: {"client"},                    window: 120 }
   no_ipv4_for_client: { keys: {"client"},                    window: 120 }
   neigh_refreshed:    { keys: {},                            window: 30  }
   response_dnsonly:   { keys: {"dst_ip", "qnames"},          window: 30  }
+  INFO:               { keys: {"action"},                     window: 10  }
+  DEBUG:              { keys: {"action"},                     window: 10  }
 }
 
 _rl = {}  -- { fingerprint → { ts, count } }

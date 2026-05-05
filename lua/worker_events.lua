@@ -91,9 +91,11 @@ flush_to_file = function(agg, hour, events_dir)
   end
   local fd = libc.open(path, bit.bor(O_WRONLY, O_CREAT, O_APPEND), FILE_MODE)
   if fd < 0 then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_warn({
       action = "open_failed",
-      path = path
+      path = path,
+      errno = errno
     })
     return 
   end

@@ -255,17 +255,21 @@ init = function(ifname)
   end
   local ifindex = tonumber(C.if_nametoindex(ifname))
   if ifindex == 0 then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_warn({
       action = "mac_prober_no_ifindex",
-      ifname = ifname
+      ifname = ifname,
+      errno = errno
     })
     return nil
   end
   local arp_fd = open_socket(ETH_P_ARP, ifindex)
   if not (arp_fd) then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_warn({
       action = "mac_prober_arp_socket_failed",
-      ifname = ifname
+      ifname = ifname,
+      errno = errno
     })
     return nil
   end
@@ -274,9 +278,11 @@ init = function(ifname)
   if our_ip6 then
     ip6_fd = open_socket(ETH_P_IPV6, ifindex)
     if not (ip6_fd) then
+      local errno = tonumber(ffi.C.__errno_location()[0])
       log_warn({
         action = "mac_prober_ip6_socket_failed",
         ifname = ifname,
+        errno = errno,
         msg = "NS probes disabled"
       })
     end

@@ -153,94 +153,94 @@ load_or_generate = (key_path, cert_path) ->
 load_or_generate_sni = (hostname, cache) ->
   hostname = hostname or "custos"
   hostname_lower = hostname\lower!
-  
+
   log_debug { action: "cert_sni_request", hostname: hostname_lower }
-  
+
   -- Vérifier le cache
   entry = cache.get hostname_lower
   if entry and entry.ctx
     log_debug { action: "cert_sni_cache_hit_ram", hostname: hostname_lower }
     return entry.ctx
-  
+
   if entry and entry.cert_pem and entry.key_pem
     -- Entry depuis disque, recréer contexte
     log_debug { action: "cert_sni_cache_hit_disk", hostname: hostname_lower }
-    
+
     key_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.key"
     cert_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.crt"
-    
+
     key_ok = pcall ->
       key_fh = io.open key_file, "w"
       error "Cannot open key file" unless key_fh
       key_fh\write entry.key_pem
       key_fh\close!
-    
+
     cert_ok = pcall ->
       cert_fh = io.open cert_file, "w"
       error "Cannot open cert file" unless cert_fh
       cert_fh\write entry.cert_pem
       cert_fh\close!
-    
+
     if key_ok and cert_ok
       ctx = ssl.newcontext { certificate: cert_file, key: key_file }
       cache.set hostname_lower, entry.cert_pem, entry.key_pem, ctx
       log_debug { action: "cert_sni_context_recreated", hostname: hostname_lower }
       return ctx
-  
+
   -- Pas en cache ou erreur : générer
   log_debug { action: "cert_sni_cache_miss", hostname: hostname_lower }
-  
+
   gen = require "auth.cert_generator"
   log_debug { action: "cert_sni_generating", hostname: hostname_lower }
   key_pem, cert_pem, ok, err = gen.generate_self_signed hostname_lower
   unless ok
     log_error { action: "cert_sni_generation_failed", hostname: hostname_lower, err: err }
     error "Impossible de générer le certificat SNI pour #{hostname_lower} : #{err}"
-  
+
   log_debug { action: "cert_sni_generated", hostname: hostname_lower, key_size: #key_pem, cert_size: #cert_pem }
-  
+
   -- WolfSSL utilise des fichiers, pas des PEM strings.
   -- Écrire les PEM dans des fichiers temporaires.
   key_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.key"
   cert_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.crt"
-  
+
   log_debug { action: "cert_sni_writing_files", key_file: key_file, cert_file: cert_file }
-  
+
   -- Écrire la clé
-  key_fh = io.open key_file, "w"
+  key_fh, open_err = io.open key_file, "w"
   unless key_fh
-    log_error { action: "cert_sni_key_write_failed", key_file: key_file }
+    log_error { action: "cert_sni_key_write_failed", key_file: key_file, reason: open_err or "io.open failed" }
     error "Impossible d'écrire la clé SNI : #{key_file}"
   bytes_written = key_fh\write key_pem
   key_fh\close!
-  
+
   log_debug { action: "cert_sni_key_written", key_file: key_file, bytes: bytes_written }
-  
+
   -- Vérifier que le fichier existe et peut être lu
-  key_stat = io.open key_file, "r"
+  key_stat, open_err = io.open key_file, "r"
   unless key_stat
-    log_error { action: "cert_sni_key_verify_failed", key_file: key_file }
+    log_error { action: "cert_sni_key_verify_failed", key_file: key_file, reason: open_err or "io.open failed" }
     error "Clé SNI écrite mais non relisible : #{key_file}"
   key_stat\close!
-  
+
   -- Écrire le certificat
-  cert_fh = io.open cert_file, "w"
+  cert_fh, open_err = io.open cert_file, "w"
   unless cert_fh
     os.remove key_file
-    log_error { action: "cert_sni_cert_write_failed", cert_file: cert_file }
+    log_error { action: "cert_sni_cert_write_failed", cert_file: cert_file, reason: open_err or "io.open failed" }
     error "Impossible d'écrire le certificat SNI : #{cert_file}"
   bytes_written = cert_fh\write cert_pem
   cert_fh\close!
-  
+
   log_debug { action: "cert_sni_cert_written", cert_file: cert_file, bytes: bytes_written }
-  
+
   -- Vérifier que le fichier existe et peut être lu
-  cert_stat = io.open cert_file, "r"
+  cert_stat, open_err = io.open cert_file, "r"
   unless cert_stat
-    log_error { action: "cert_sni_cert_verify_failed", cert_file: cert_file }
+    log_error { action: "cert_sni_cert_verify_failed", cert_file: cert_file, reason: open_err or "io.open failed" }
     error "Certificat SNI écrit mais non relisible : #{cert_file}"
   cert_stat\close!
-  
+
   -- Créer le contexte TLS via les fichiers
   log_debug { action: "cert_sni_newcontext", hostname: hostname_lower, protocol: "tlsv1_2" }
   ctx = ssl.newcontext {
@@ -250,14 +250,14 @@ load_or_generate_sni = (hostname, cache) ->
     key: key_file
     options: {"no_sslv2", "no_sslv3", "no_tlsv1", "no_tlsv1_1"}
   }
-  
+
   log_debug { action: "cert_sni_context_created", hostname: hostname_lower }
-  
+
   -- Mettre en cache (avec les fichiers temporaires)
   cache.set hostname_lower, cert_pem, key_pem, ctx
-  
+
   log_debug { action: "cert_sni_cached", hostname: hostname_lower }
-  
+
   ctx
 
 --- Charge un certificat et clé statiques (depuis filter.yml).
@@ -268,15 +268,15 @@ load_or_generate_sni = (hostname, cache) ->
 load_static = (key_path, cert_path) ->
   unless key_path and cert_path
     return nil, "cert_path and key_path must be provided"
-  
+
   unless file_exists(key_path) and file_exists(cert_path)
     return nil, "cert or key file not found"
-  
+
   ok, ctx = pcall ->
     make_context key_path, cert_path
   unless ok
     return nil, "Failed to create TLS context from static files"
-  
+
   ctx, nil
 
-{ :load_or_generate, :generate_self_signed, :make_context, :load_or_generate_sni, :load_static }
+{ :load_or_generate, :generate_self_signed, :make_context, :load_or_generate_sni, :load_static, :hash_string }

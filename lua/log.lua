@@ -49,6 +49,14 @@ local RL_CONFIG = {
     },
     window = 30
   },
+  BLOCK = {
+    keys = {
+      "mac_src",
+      "qname",
+      "qtype"
+    },
+    window = 30
+  },
   no_ipv6_for_client = {
     keys = {
       "client"
@@ -71,6 +79,18 @@ local RL_CONFIG = {
       "qnames"
     },
     window = 30
+  },
+  INFO = {
+    keys = {
+      "action"
+    },
+    window = 10
+  },
+  DEBUG = {
+    keys = {
+      "action"
+    },
+    window = 10
   }
 }
 local _rl = { }

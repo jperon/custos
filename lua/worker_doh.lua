@@ -270,9 +270,16 @@ handle_doh_client = function(args)
       tls_ctx = ctx_or_err
     end
     if not (tls_ctx) then
+      local cert_type
+      if state.static_cert_paths then
+        cert_type = "static"
+      else
+        cert_type = "sni"
+      end
       log_error({
         action = "cert_null",
-        local_ip = local_ip
+        local_ip = local_ip,
+        cert_type = cert_type
       })
       error("Certificate context is nil")
     end
@@ -515,6 +522,8 @@ run = function(doh_cfg)
     else
       log_warn({
         action = "static_cert_load_failed",
+        cert = doh_cfg.cert_path,
+        key = doh_cfg.key_path,
         err = ctx
       })
     end
@@ -576,6 +585,9 @@ run = function(doh_cfg)
             if not (up) then
               log_warn({
                 action = "upstream_socket_failed",
+                peer = args.peer_ip,
+                upstream_ip = args.state.upstream_ip,
+                upstream_port = args.state.upstream_port,
                 err = up_err
               })
               args.client:close()

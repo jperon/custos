@@ -42,7 +42,8 @@ set_process_name = (name) ->
 -- @treturn boolean true si prctl a réussi
 set_parent_death_signal = (name) ->
   if libc.prctl(1, SIGTERM, 0, 0, 0) != 0
-    log_error { action: "prctl_failed", name: name }
+    errno = tonumber(ffi.C.__errno_location()[0])
+    log_error { action: "prctl_failed", name: name, errno: errno }
     return false
   true
 
@@ -91,7 +92,7 @@ fork_child = (name, child_fn, arg=nil, opts=nil) ->
 
     ok, err = pcall child_fn, arg
     unless ok
-      log_error { action: "child_crashed", name: name, err: tostring err }
+      log_error { action: "child_crashed", name: name, pid: tonumber(libc.getpid!), err: tostring err }
       libc._exit 1
 
     libc._exit 0

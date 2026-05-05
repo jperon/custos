@@ -223,7 +223,8 @@ handle_doh_client = (args) ->
       tls_ctx = ctx_or_err
 
     unless tls_ctx
-      log_error { action: "cert_null", local_ip: local_ip }
+      cert_type = if state.static_cert_paths then "static" else "sni"
+      log_error { action: "cert_null", local_ip: local_ip, cert_type: cert_type }
       error "Certificate context is nil"
 
     client\settimeout nil   -- blocking for TLS handshake
@@ -370,7 +371,7 @@ run = (doh_cfg) ->
       static_cert_paths = { cert: doh_cfg.cert_path, key: doh_cfg.key_path }
       log_info { action: "static_cert_loaded" }
     else
-      log_warn { action: "static_cert_load_failed", err: ctx }
+      log_warn { action: "static_cert_load_failed", cert: doh_cfg.cert_path, key: doh_cfg.key_path, err: ctx }
 
   listen4, err4 = make_server4 port
   error "DoH: cannot bind port #{port}: #{err4}" unless listen4
@@ -419,7 +420,7 @@ run = (doh_cfg) ->
           child_fn = (args) ->
             up, up_err = upstream_mod.new_client args.state.upstream_ip, args.state.upstream_port, args.state.timeout_ms
             unless up
-              log_warn { action: "upstream_socket_failed", err: up_err }
+              log_warn { action: "upstream_socket_failed", peer: args.peer_ip, upstream_ip: args.state.upstream_ip, upstream_port: args.state.upstream_port, err: up_err }
               args.client\close!
               return
             args.state.upstream = up

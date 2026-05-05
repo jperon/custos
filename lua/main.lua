@@ -57,11 +57,13 @@ create_pipe = function(name)
       new_size = sz
     })
   else
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_warn({
       action = "pipe_resize_failed",
       name = name,
       fd = fds[1],
-      rc = sz
+      rc = sz,
+      errno = errno
     })
   end
   return {
@@ -82,10 +84,12 @@ local load_auth_cfg
 load_auth_cfg = function()
   local load_config
   load_config = require("filter.lib.load_config").load_config
-  local filter_cfg, cfg_err = load_config(os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml")
+  local filter_cfg_path = os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
+  local filter_cfg, cfg_err = load_config(filter_cfg_path)
   if not (filter_cfg) then
     log_warn({
       action = "auth_cfg_load_warning",
+      path = filter_cfg_path,
       err = cfg_err
     })
     filter_cfg = {

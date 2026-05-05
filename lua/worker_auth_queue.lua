@@ -50,7 +50,8 @@ handle_auth_packet = function(qh_ptr, nfad, pkt_id)
   local l2 = get_l2(nfad)
   if not (l2) then
     log_warn({
-      action = "no_l2"
+      action = "no_l2",
+      pkt_id = pkt_id
     })
     return NF_ACCEPT
   end
@@ -59,6 +60,7 @@ handle_auth_packet = function(qh_ptr, nfad, pkt_id)
   if payload_len <= 0 then
     log_warn({
       action = "no_payload",
+      pkt_id = pkt_id,
       payload_len = payload_len
     })
     return NF_DROP
@@ -72,6 +74,7 @@ handle_auth_packet = function(qh_ptr, nfad, pkt_id)
   if not (ip) then
     log_debug({
       action = "parse_failed",
+      pkt_id = pkt_id,
       err = err
     })
     return NF_ACCEPT
@@ -80,14 +83,19 @@ handle_auth_packet = function(qh_ptr, nfad, pkt_id)
   local mac_raw = l2.mac_raw
   if not (ip_raw and mac_raw) then
     log_warn({
-      action = "missing_info"
+      action = "missing_info",
+      pkt_id = pkt_id,
+      has_ip = ip_raw ~= nil,
+      has_mac = mac_raw ~= nil
     })
     return NF_ACCEPT
   end
   local ok = send_to_auth_server(ip.version, ip_raw, mac_raw)
   if not (ok) then
     log_warn({
-      action = "ipc_failed"
+      action = "ipc_failed",
+      pkt_id = pkt_id,
+      ip_version = ip.version
     })
   end
   log_info({

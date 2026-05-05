@@ -29,9 +29,9 @@ run_cmd = function(cmd)
       rc = rc,
       ts = ts
     })
-    return false
+    return false, rc
   end
-  return true
+  return true, 0
 end
 local find_handles_for_fragment
 find_handles_for_fragment = function(fragment)
@@ -76,7 +76,7 @@ init = function(rules)
         for _index_0 = 1, #handles do
           local h = handles[_index_0]
           local del_cmd = "delete rule " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " forward handle " .. tostring(h)
-          local removed = run_cmd(del_cmd)
+          local removed, rc = run_cmd(del_cmd)
           if removed then
             log_info({
               action = "nft_extra_rule_removed_existing",
@@ -87,13 +87,14 @@ init = function(rules)
             log_warn({
               action = "nft_extra_rule_remove_failed",
               rule = r,
-              handle = h
+              handle = h,
+              rc = rc
             })
           end
         end
       end
       local insert_cmd = "insert rule " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " forward position 0 " .. tostring(r)
-      local ok = run_cmd(insert_cmd)
+      local ok, rc = run_cmd(insert_cmd)
       if ok then
         table.insert(inserted_rules, r)
         log_info({
@@ -104,7 +105,8 @@ init = function(rules)
         all_ok = false
         log_warn({
           action = "nft_extra_rule_add_failed",
-          rule = r
+          rule = r,
+          rc = rc
         })
       end
       _continue_0 = true
@@ -119,10 +121,11 @@ local apply_from_config
 apply_from_config = function()
   local rc_check = os.execute("nft list chain " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " forward >/dev/null 2>&1")
   if rc_check ~= 0 then
-    local ok = require("nft_rules").apply()
+    local ok, rc = require("nft_rules").apply()
     if not (ok) then
       log_warn({
-        action = "nft_extra_main_rules_reapply_failed"
+        action = "nft_extra_main_rules_reapply_failed",
+        rc = rc or -1
       })
       return false
     end
@@ -181,7 +184,8 @@ cleanup = function()
           for _index_1 = 1, #handles do
             local h = handles[_index_1]
             local cmd = "delete rule " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " forward handle " .. tostring(h)
-            ok = run_cmd(cmd)
+            local rc
+            ok, rc = run_cmd(cmd)
             if ok then
               log_info({
                 action = "nft_extra_rule_removed_on_cleanup",
@@ -192,7 +196,8 @@ cleanup = function()
               log_warn({
                 action = "nft_extra_rule_delete_failed",
                 rule = r,
-                handle = h
+                handle = h,
+                rc = rc
               })
             end
           end

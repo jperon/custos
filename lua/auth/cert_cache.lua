@@ -77,21 +77,23 @@ create_cache = function(max_size, ttl, cert_dir)
     local hostname_lower = hostname:lower()
     local cert_file = tostring(cert_dir) .. "/" .. tostring(hostname_lower) .. ".crt"
     local key_file = tostring(cert_dir) .. "/" .. tostring(hostname_lower) .. ".key"
-    local cert_fh = io.open(cert_file, "w")
+    local cert_fh, cert_err = io.open(cert_file, "w")
     if not (cert_fh) then
       log_warn({
         action = "cert_cache_disk_write_failed",
-        file = cert_file
+        file = cert_file,
+        reason = cert_err or "io.open failed"
       })
       return false
     end
     cert_fh:write(cert_pem)
     cert_fh:close()
-    local key_fh = io.open(key_file, "w")
+    local key_fh, key_err = io.open(key_file, "w")
     if not (key_fh) then
       log_warn({
         action = "cert_cache_disk_write_failed",
-        file = key_file
+        file = key_file,
+        reason = key_err or "io.open failed"
       })
       os.remove(cert_file)
       return false
@@ -138,7 +140,8 @@ create_cache = function(max_size, ttl, cert_dir)
     if not (save_cert_to_disk(hostname_lower, cert_pem, key_pem)) then
       log_warn({
         action = "cert_cache_set_disk_failed",
-        hostname = hostname_lower
+        hostname = hostname_lower,
+        reason = "save_cert_to_disk returned false"
       })
       return false
     end

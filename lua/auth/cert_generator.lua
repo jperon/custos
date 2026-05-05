@@ -16,7 +16,8 @@ generate_rsa_key = function(bits)
     log_error({
       action = "cert_gen_spawn_failed",
       cmd = cmd,
-      err = err
+      err = err,
+      errno = tonumber(ffi.C.__errno_location()[0]) or 0
     })
     return nil, false, err
   end
@@ -42,7 +43,8 @@ generate_rsa_key = function(bits)
   if not (key_pem:match("BEGIN.*PRIVATE KEY")) then
     local err = "px5g rsakey output is not valid PEM"
     log_warn({
-      action = "cert_gen_rsakey_invalid_pem"
+      action = "cert_gen_rsakey_invalid_pem",
+      bits = bits
     })
     return nil, false, err
   end

@@ -118,7 +118,8 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     log_warn({
       action = "parse_failed",
       queue = 2,
-      len = payload_len
+      len = payload_len,
+      err = "parse_syn returned nil"
     })
     return NF_DROP
   end
@@ -146,7 +147,8 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
         action = "frame_send_error",
         queue = 2,
         ip = client_ip_str,
-        user = user
+        user = user,
+        err = "send_frame returned false"
       })
     end
     return res
@@ -243,9 +245,11 @@ run = function(queue_num, auth_cfg)
   raw_fd = fd
   ifindex = tonumber(ffi.C.if_nametoindex(ifname))
   if ifindex == 0 then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_error({
       action = "ifindex_failed",
-      ifname = ifname
+      ifname = ifname,
+      errno = errno
     })
     return 
   end

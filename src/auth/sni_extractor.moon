@@ -67,8 +67,8 @@ extract_sni = (data) ->
     log_debug { action: "server_sni_extract_not_handshake", type: record_type }
     return nil
 
-  -- Lire longueur du record (bytes 3-4)
-  record_length = read_u16_be data, 3
+  -- Lire longueur du record (bytes 4-5, 1-indexed Lua)
+  record_length = read_u16_be data, 4
 
   -- Vérifier que le buffer contient le record complet
   unless #data >= 5 + record_length
@@ -130,7 +130,7 @@ extract_sni = (data) ->
   ext_data_offset = extensions_offset + 2
   ext_data_end = ext_data_offset + extensions_len
 
-  unless ext_data_end <= #data
+  unless ext_data_end - 1 <= #data
     log_debug { action: "server_sni_extract_truncated_extensions" }
     return nil
 

@@ -219,7 +219,9 @@ ssl_mt.__index.send = (data) =>
   if err == SSL_ERROR_WANT_WRITE or err == SSL_ERROR_WANT_READ
     return nil
 
-  error "wolfSSL_write() error"
+  ssl_errors = get_ssl_errors!
+  log_debug { action: "wolfssl_write_error", ret: n, err: err, ssl_err: ssl_errors }
+  error "wolfSSL_write() failed (ret: #{n}, error code: #{err}, ssl_err: #{ssl_errors})"
 
 -- Receive
 ssl_mt.__index.receive = (mode = 4096) =>

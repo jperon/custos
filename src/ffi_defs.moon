@@ -304,7 +304,7 @@ libnfq  = try_load { "netfilter_queue", "libnetfilter_queue.so.1" }
 libnft  = try_load { "nftables", "libnftables.so.1" }
 
 -- ── Export ──────────────────────────────────────────────────────
-libwolfssl = try_load { "wolfssl", "libwolfssl.so.5", "libwolfssl.so" }
+libwolfssl = try_load { "wolfssl", "libwolfssl.so.5.7.6.e624513f", "libwolfssl.so.5", "libwolfssl.so" }
 
 -- ── Export ──────────────────────────────────────────────────
 { :ffi, :libc, :libnfq, :libnft, :libwolfssl }

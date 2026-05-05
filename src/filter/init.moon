@@ -39,7 +39,7 @@ set_config_path = (path) ->
 load = ->
   cfg, err = load_config config_path
   unless cfg
-    log_warn { action: "filter_load_failed", err: err }
+    log_warn { action: "filter_load_failed", path: config_path, err: err }
     return
   rules = compile_rules cfg
   auth_cfg_cache = cfg.auth
@@ -66,7 +66,7 @@ load = ->
 -- @treturn string  Description de la règle ayant matché (pour le log)
 decide = (req) ->
   unless rules
-    log_warn { action: "filter_not_loaded" }
+    log_warn { action: "filter_not_loaded", domain: req and req.domain or "unknown" }
     return false, "filter not loaded", nil
   _decide rules, req
 

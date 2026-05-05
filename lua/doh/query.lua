@@ -176,7 +176,8 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
     if not (blocked) then
       log_warn({
         action = "blocked_build_failed",
-        client_ip = client_ip
+        client_ip = client_ip,
+        reason = block_reason
       })
       return nil, "blocked_response_build_failed"
     end
@@ -196,7 +197,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
     })
     return nil, upstream_err or "upstream_failed"
   end
-  local resp_dns = parse(resp_raw, 1, false)
+  local resp_dns, resp_err = parse(resp_raw, 1, false)
   if resp_dns then
     local answers = resp_dns.answers or { }
     inject_answers(answers, client_ip, client_mac)
@@ -211,7 +212,8 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
   else
     log_warn({
       action = "response_parse_failed",
-      client_ip = client_ip
+      client_ip = client_ip,
+      err = tostring(resp_err) or "unknown"
     })
   end
   return resp_raw

@@ -30,9 +30,11 @@ end
 local set_parent_death_signal
 set_parent_death_signal = function(name)
   if libc.prctl(1, SIGTERM, 0, 0, 0) ~= 0 then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_error({
       action = "prctl_failed",
-      name = name
+      name = name,
+      errno = errno
     })
     return false
   end
@@ -82,6 +84,7 @@ fork_child = function(name, child_fn, arg, opts)
       log_error({
         action = "child_crashed",
         name = name,
+        pid = tonumber(libc.getpid()),
         err = tostring(err)
       })
       libc._exit(1)

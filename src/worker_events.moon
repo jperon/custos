@@ -125,7 +125,8 @@ flush_to_file = (agg, hour, events_dir) ->
   -- Ouverture en append pour les lignes de données
   fd = libc.open path, bit.bor(O_WRONLY, O_CREAT, O_APPEND), FILE_MODE
   if fd < 0
-    log_warn { action: "open_failed", path: path }
+    errno = tonumber(ffi.C.__errno_location()[0])
+    log_warn { action: "open_failed", path: path, errno: errno }
     return
 
   for key, entry in pairs agg

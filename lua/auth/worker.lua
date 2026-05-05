@@ -23,6 +23,7 @@ run_auth_worker = function(auth_cfg)
   if not (secrets) then
     log_error({
       action = "secrets_load_failed",
+      path = secrets_path,
       err = err
     })
     secrets = { }
@@ -55,6 +56,7 @@ run_auth_worker = function(auth_cfg)
     else
       log_warn({
         action = "secrets_reload_failed",
+        path = secrets_path,
         err = err2
       })
       return nil

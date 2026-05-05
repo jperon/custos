@@ -47,12 +47,23 @@ apply = function()
   local content = fh:read("*a")
   fh:close()
   content = substitute(content)
-  local rc = libnft.nft_run_cmd_from_buffer(ctx, content)
+  local tmpfile = "/tmp/custos-rules.nft"
+  local tmpfh, tmp_err = io.open(tmpfile, "w")
+  if not (tmpfh) then
+    log_warn({
+      action = "nft_rules_tempfile_failed",
+      path = tmpfile,
+      err = tmp_err
+    })
+    return false
+  end
+  tmpfh:write(content)
+  tmpfh:close()
+  local rc = os.execute("nft -f " .. tostring(tmpfile) .. " 2>/dev/null")
   if rc ~= 0 then
     log_warn({
       action = "nft_rules_apply_failed",
-      path = path,
-      rc = rc
+      path = path
     })
     return false
   end

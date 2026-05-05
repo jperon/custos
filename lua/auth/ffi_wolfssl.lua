@@ -265,7 +265,14 @@ ssl_mt.__index.send = function(self, data)
   if err == SSL_ERROR_WANT_WRITE or err == SSL_ERROR_WANT_READ then
     return nil
   end
-  return error("wolfSSL_write() error")
+  local ssl_errors = get_ssl_errors()
+  log_debug({
+    action = "wolfssl_write_error",
+    ret = n,
+    err = err,
+    ssl_err = ssl_errors
+  })
+  return error("wolfSSL_write() failed (ret: " .. tostring(n) .. ", error code: " .. tostring(err) .. ", ssl_err: " .. tostring(ssl_errors) .. ")")
 end
 ssl_mt.__index.receive = function(self, mode)
   if mode == nil then

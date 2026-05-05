@@ -158,27 +158,33 @@ run = function(ifname, learn_wfd)
   set_action_prefix("arp_")
   local ifindex = tonumber(C.if_nametoindex(ifname))
   if ifindex == 0 then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_warn({
       action = "ifindex_failed",
-      ifname = ifname
+      ifname = ifname,
+      errno = errno
     })
     return 
   end
   local arp_fd = open_socket(ETH_P_ARP, ifindex)
   if not (arp_fd) then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_warn({
       action = "socket_failed",
       proto = "ARP",
-      ifname = ifname
+      ifname = ifname,
+      errno = errno
     })
     return 
   end
   local ip6_fd = open_socket(ETH_P_IPV6, ifindex)
   if not (ip6_fd) then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_warn({
       action = "socket_failed",
       proto = "IPv6",
-      ifname = ifname
+      ifname = ifname,
+      errno = errno
     })
     libc.close(arp_fd)
     return 

@@ -33,9 +33,11 @@ run_queue = function(queue_num, callback)
   })
   local h = libnfq.nfq_open()
   if h == nil then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_error({
       action = "queue_nfq_open_failed",
-      queue = queue_num
+      queue = queue_num,
+      errno = errno
     })
     error("nfq_open() échoué")
   end
@@ -74,9 +76,11 @@ run_queue = function(queue_num, callback)
   })
   local qh = libnfq.nfq_create_queue(h, queue_num, c_callback, nil)
   if qh == nil then
+    local errno = tonumber(ffi.C.__errno_location()[0])
     log_error({
       action = "queue_create_queue_failed",
-      queue = queue_num
+      queue = queue_num,
+      errno = errno
     })
     error("nfq_create_queue(" .. tostring(queue_num) .. ") échoué")
   end

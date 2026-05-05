@@ -24,10 +24,13 @@ probe_ipv6 = (ipv6_addr, port=53) ->
   ret = C.inet_pton AF_INET6, ipv6_addr, addr.sin6_addr
   if ret <= 0
     C.close fd
+    log_warn { action: "probe_ipv6_failed", addr: ipv6_addr, port: port, reason: "inet_pton_failed" }
     return false
   rc = C.connect fd, ffi.cast("struct sockaddr*", addr), ffi.sizeof(addr)
   C.close fd
   ok = rc == 0
+  unless ok
+    log_warn { action: "probe_ipv6_failed", addr: ipv6_addr, port: port, reason: "connect_failed", errno: get_errno! }
   log_debug { action: "probe_ipv6", addr: ipv6_addr, port: port, ok: ok }
   ok
 
@@ -82,8 +85,8 @@ new_client = (upstream_ip, upstream_port=53, timeout_ms=2000) ->
       C.close fd
       return nil, "connect(AF_INET) failed: errno=" .. get_errno!
 
-  log_debug { action: "upstream_connected", upstream_ip: upstream_ip, upstream_port: upstream_port, family: family }
-  { :fd, :family, upstream_ip: upstream_ip, upstream_port: upstream_port }
+  log_debug { action: "upstream_connected", :upstream_ip, :upstream_port, :family, :fd }
+  { :fd, :family, :upstream_ip, :upstream_port }
 
 --- Send a raw DNS query and wait for the response.
 -- The socket must have been created with new_client().
