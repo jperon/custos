@@ -103,96 +103,107 @@ table bridge dns-filter-bridge {
     type filter hook forward priority 0; policy accept;
 
     # Trames non-unicast (multicast L2 et broadcast)
-    meta pkttype {broadcast, multicast} accept
+    meta pkttype {broadcast, multicast} accept comment "L2 broadcast/multicast"
 
     # Portail captif HTTPS : apprentissage MAC/IP avant acceptation.
     # Le worker auth_queue extrait la MAC et l'envoie au serveur HTTPS.
-    tcp dport 33443 log level debug prefix "custos auth_input: " counter queue num {QUEUE_AUTH}
+    tcp dport 33443 log level debug prefix "custos auth_input: " counter queue num {QUEUE_AUTH} comment "Captive portal HTTPS input"
     # Core & Infrastructure
-    udp dport { 67, 68 } accept
-    udp dport { 546, 547 } accept
+    udp dport { 67, 68 } accept comment "DHCPv4"
+    udp dport { 546, 547 } accept comment "DHCPv6"
     # ARP unicast (réponses point-à-point). Placé ici, avant toute règle queue,
     # pour éviter qu'un client authentifié (ether saddr @authenticated_macs) ne
     # fasse acheminer ses réponses ARP vers QUEUE_REJECT.
     # L'ARP broadcast est déjà accepté par `meta pkttype broadcast` ci-dessus.
-    ether type arp accept
-    vlan type arp  accept
+    ether type arp accept comment "ARP unicast"
+    vlan type arp  accept comment "ARP VLAN"
     # IPv6 link-local unicast (fe80::/10) : NDP unicast, ICMPv6 direct entre hôtes.
-    ip6 daddr fe80::/10 accept
+    ip6 daddr fe80::/10 accept comment "IPv6 link-local unicast"
     # Allow all local ICMP (IPv4)
-    meta l4proto icmp ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } accept
+    meta l4proto icmp ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } accept comment "ICMPv4 local"
     # Essential ICMPv4 types for diagnostics and connectivity (excluding echo for tunnel prevention)
-    meta l4proto icmp icmp type { destination-unreachable, time-exceeded } accept
+    meta l4proto icmp icmp type { destination-unreachable, time-exceeded } accept comment "Essential ICMPv4"
     # Essential ICMPv6 types for Neighbor Discovery, diagnostics, and connectivity (excluding echo for tunnel prevention)
-    meta l4proto icmpv6 icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert, nd-redirect } accept
+    meta l4proto icmpv6 icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert, nd-redirect } accept comment "Essential ICMPv6/NDP"
 
     # UniFi Core Services & Infrastructure (restricted to local IPs)
     # NTP (time), mDNS for device discovery (local only)
-    udp dport {123, 5353} ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} accept
-    udp dport {123, 5353} ip6 daddr {fc00::/7, fe80::/10} accept
-    tcp dport 123 ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} accept
-    tcp dport 123 ip6 daddr {fc00::/7, fe80::/10} accept
+    udp dport {123, 5353} ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} accept comment "NTP/mDNS local v4"
+    udp dport {123, 5353} ip6 daddr {fc00::/7, fe80::/10} accept comment "NTP/mDNS local v6"
+    tcp dport 123 ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} accept comment "NTP local v4"
+    tcp dport 123 ip6 daddr {fc00::/7, fe80::/10} accept comment "NTP local v6"
     # Syslog (local only)
     # UniFi Controller and Management Ports (local only)
-    udp dport {319, 514, 10001} ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} accept
-    udp dport {319, 514, 10001} ip6 daddr {fc00::/7, fe80::/10} accept
-    tcp dport { 6789, 8080, 8443, 8880, 8843 } ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} accept
-    tcp dport { 6789, 8080, 8443, 8880, 8843 } ip6 daddr {fc00::/7, fe80::/10} accept
+    udp dport {319, 514, 10001} ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16}  accept comment "Syslog/UniFi local v4"
+    udp dport {319, 514, 10001} ip6 daddr {fc00::/7, fe80::/10}                       accept comment "Syslog/UniFi local v6"
+    tcp dport {6789, 8080, 8443, 8880, 8843} ip daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16}  accept comment "UniFi mgmt local v4"
+    tcp dport {6789, 8080, 8443, 8880, 8843} ip6 daddr {fc00::/7, fe80::/10}                       accept comment "UniFi mgmt local v6"
 
     # VLAN mark : posée ici, avant DNS et allowlist.
-    vlan id != 0 meta mark set vlan id
+    vlan id != 0 meta mark set vlan id comment "Tag VLAN → conntrack mark"
 
     # DNS → NFQUEUE.
     # La table bridge voit TOUT le trafic bridgé, y compris le transit
     # inter-VLAN (client → résolveur tiers).
-    meta l4proto { udp, tcp } th dport 53 log level debug prefix "custos question: " counter queue num {QUEUE_QUESTIONS}
-    meta l4proto { udp, tcp } th sport 53 log level debug prefix "custos response: " counter queue num {QUEUE_RESPONSES}
+    meta l4proto {udp, tcp} th dport 53 log level debug prefix "custos question: " counter queue num {QUEUE_QUESTIONS} comment "DNS questions → NFQUEUE"
+    meta l4proto {udp, tcp} th sport 53 log level debug prefix "custos response: " counter queue num {QUEUE_RESPONSES} comment "DNS responses → NFQUEUE"
 
     # ULA IPv6
-    ip6 daddr fc00::/7 accept
-
-    ct state established,related accept
+    ip6 daddr fc00::/7 accept comment "ULA IPv6"
 
     # Whitelist statique
-    ip6 daddr @ip6_dest_whitelist accept
-    ip  daddr @ip4_dest_whitelist accept
+    ip6 daddr @ip6_dest_whitelist accept comment "Static IPv6 whitelist"
+    ip  daddr @ip4_dest_whitelist accept comment "Static IPv4 whitelist"
 
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
-    ether saddr . ip6 daddr @mac6_allowed log level debug prefix "custos mac6_allowed: " counter accept
-    ether saddr . ip  daddr @mac4_allowed log level debug prefix "custos mac4_allowed: " counter accept
-    ip6   saddr . ip6 daddr @ip6_allowed  log level debug prefix "custos ip6_allowed: "  counter accept
-    ip    saddr . ip  daddr @ip4_allowed  log level debug prefix "custos ip4_allowed: "  counter accept
+    ether saddr . ip6 daddr @mac6_allowed log level debug prefix "custos mac6_allowed: " counter accept comment "DNS-allowed MAC+IPv6"
+    ether saddr . ip  daddr @mac4_allowed log level debug prefix "custos mac4_allowed: " counter accept comment "DNS-allowed MAC+IPv4"
+    ip6   saddr . ip6 daddr @ip6_allowed  log level debug prefix "custos ip6_allowed: "  counter accept comment "DNS-allowed IPv6 pair"
+    ip    saddr . ip  daddr @ip4_allowed  log level debug prefix "custos ip4_allowed: "  counter accept comment "DNS-allowed IPv4 pair"
 
-    ip  daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} meta l4proto != {tcp, udp} accept
+    # Courriel : heuristiques rapides (dport = client → serveur).
+    # Placées APRÈS les sets whitelist/allowed : un client autorisé passe avant
+    # et ne déclenche jamais ces règles.  Seuls les clients non-autorisés sont
+    # logués en warn, ce qui permet d'identifier les comportements imprévus.
+    tcp dport  25 @th,40,32 { 0x45484c4f, 0x48454c4f }              log level warn prefix "custos mail SMTP: "  counter accept comment "SMTP EHLO/HELO"
+    tcp dport 110 @th,40,32 { 0x55534552, 0x43415041, 0x53544c53 }  log level warn prefix "custos mail POP3: "  counter accept comment "POP3 USER/CAPA/STLS"
+    tcp dport 143 @th,40,32 != 0x5353482d @th,40,8 != 0x16          log level warn prefix "custos mail IMAP: "  counter accept comment "IMAP: not SSH, not TLS"
+    tcp dport 465 @th,40,8 0x16                                     log level warn prefix "custos mail SMTPS: " counter accept comment "SMTPS TLS ClientHello"
+    tcp dport 993 @th,40,8 0x16                                     log level warn prefix "custos mail IMAPS: " counter accept comment "IMAPS TLS ClientHello"
+    tcp dport 995 @th,40,8 0x16                                     log level warn prefix "custos mail POP3S: " counter accept comment "POP3S TLS ClientHello"
+
+    ct state established,related accept comment "Established/related connections"
+
+    ip  daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} meta l4proto != {tcp, udp} accept comment "Non-TCP/UDP local v4"
     # fc00::/7 (ULA) est déjà intégralement accepté par `ip6 daddr fc00::/7 accept`
     # ci-dessus ; seul fe80::/10 (link-local unicast non-TCP/UDP) est utile ici.
-    ip6 daddr fe80::/10 meta l4proto != {tcp, udp} accept
+    ip6 daddr fe80::/10 meta l4proto != {tcp, udp} accept comment "Non-TCP/UDP link-local v6"
 
     # Portail captif : le client doit pouvoir joindre les adresses locales du
     # routeur (portail HTTPS + sondes de détection) même sans être dans les sets.
     # meta pkttype host couvre toutes les IPs assignées au routeur (v4 et v6).
-    meta pkttype host accept
+    meta pkttype host accept comment "Traffic to router itself"
 
     # Authenticated client, destination not in sets → {QUEUE_REJECT} (MAC learning + forge RST or ICMP admin-prohibited).
     # Must come before {QUEUE_CAPTIVE} so authenticated clients never see the captive portal again.
-    ether saddr @authenticated_macs limit rate 50/second log level debug prefix "custos auth ether: " counter queue num {QUEUE_REJECT}
-    ip6   saddr @authenticated_ips6 limit rate 50/second log level debug prefix "custos auth ip6: "   counter queue num {QUEUE_REJECT}
-    ip    saddr @authenticated_ips  limit rate 50/second log level debug prefix "custos auth ip: "    counter queue num {QUEUE_REJECT}
+    ether saddr @authenticated_macs limit rate 50/second burst 10 packets log level debug prefix "custos auth ether: " counter queue num {QUEUE_REJECT} comment "Auth reject MAC"
+    ip6   saddr @authenticated_ips6 limit rate 50/second burst 10 packets log level debug prefix "custos auth ip6: "   counter queue num {QUEUE_REJECT} comment "Auth reject IPv6"
+    ip    saddr @authenticated_ips  limit rate 50/second burst 10 packets log level debug prefix "custos auth ip: "    counter queue num {QUEUE_REJECT} comment "Auth reject IPv4"
 
     # Unauthenticated client, TCP SYN port 80 → {QUEUE_CAPTIVE} (forge TCP 302).
-    meta l4proto tcp th dport 80 tcp flags & (fin | syn | rst | ack) == syn queue num {QUEUE_CAPTIVE}
+    meta l4proto tcp th dport 80 tcp flags & (fin | syn | rst | ack) == syn queue num {QUEUE_CAPTIVE} comment "Captive portal SYN/80"
 
     # All remaining unauthorised traffic → {QUEUE_REJECT} (MAC learning + forge RST or ICMP admin-prohibited).
     # Rate-limited to protect {QUEUE_REJECT} against floods; surplus is dropped silently.
     # Two variants : untagged frames (ether type ip/ip6) and 802.1Q-tagged frames
     # (ether type 8021q + vlan type ip/ip6). `ether type {ip, ip6}` does NOT match
     # tagged frames because their outer EtherType is 0x8100, not 0x0800/0x86DD.
-    ether type {ip, ip6} limit rate 100/second log level debug prefix "custos default: "      counter queue num {QUEUE_REJECT} bypass
-    vlan type {ip, ip6}  limit rate 100/second log level debug prefix "custos default vlan: " counter queue num {QUEUE_REJECT} bypass
-    ether type {ip, ip6} drop
-    vlan type {ip, ip6}  drop
-    log level warn prefix "custos pass :" counter
+    ether type {ip, ip6} limit rate 100/second burst 20 packets log level debug prefix "custos default: "      counter queue num {QUEUE_REJECT} bypass comment "Default reject untagged"
+    vlan  type {ip, ip6} limit rate 100/second burst 20 packets log level debug prefix "custos default vlan: " counter queue num {QUEUE_REJECT} bypass comment "Default reject VLAN"
+    ether type {ip, ip6} drop comment "Drop untagged surplus"
+    vlan  type {ip, ip6} drop comment "Drop VLAN surplus"
+    log level warn prefix "custos pass :" counter comment "Warn unhandled"
   }
 
 }
