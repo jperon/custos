@@ -119,7 +119,12 @@ coverage: all compile-specs
 	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
 	    --coverage --coverage-config-file=.luacov \
 	    tests/unit 2>&1 | tee tmp/test-logs/coverage.log
+	@# Busted écrit luacov.stats.out à la racine ; le déplacer si besoin
 	@mv luacov.stats.out  tmp/coverage/luacov.stats.out  2>/dev/null || true
+	@# Générer le rapport texte depuis les stats
+	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  luajit -e "require('luacov.reporter').report()" 2>&1 || \
+	  $(HOME)/.luarocks/bin/luacov 2>&1 || true
 	@mv luacov.report.out tmp/coverage/luacov.report.out 2>/dev/null || true
 	@echo ""
 	@echo "Rapport de couverture : tmp/coverage/luacov.report.out"

@@ -1,78 +1,163 @@
-# Tests for CustosVirginum
+# Tests — CustosVirginum
 
-This directory contains test scripts for the DNS filter.
+## Arborescence
 
-## Unit Tests
-
-### `run_tests.lua`
-General unit tests that don't require root privileges:
-- Configuration parsing
-- IPC communication
-- Allowlist management
-
-Run with:
-```bash
-make test
-# or
-LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit tests/run_tests.lua
 ```
+tests/
+  unit/                       ← specs Busted (runner principal)
+    auth/
+      cert_cache_spec.moon    cert, cache LRU/TTL
+      cert_generator_spec.moon  génération px5g
+      cert_spec.moon          charge / génère certificats TLS
+      credentials_spec.moon   PBKDF2, hash, vérification
+      html_spec.moon          portail captif HTML
+      sessions_spec.moon      sérialise, charge, purge, lookup
+      sni_extractor_spec.moon parse ClientHello TLS SNI
+    ffi/
+      ffi_defs_spec.moon      disponibilité des fonctions FFI
+    filter/
+      allowlist_spec.moon     correspondance par suffixe DNS
+      convert_spec.moon       CLI convert.lua : hash + tri binaire
+      filter_spec.moon        bsearch, ipcalc, conditions (domain/mac/net/
+                              user/vlan/time), règles, actions, parse_domains,
+                              load_config
+    ipc/
+      ipc_spec.moon           encode/decode IPv4/IPv6, make_key, drain_pipe,
+                              refused/dnsonly, reason, expiry
+    parse/
+      mac_learner_spec.moon   mac_from_eui64, get_mac (fallback EUI-64)
+      ndpi_spec.moon          parse_packet UDP/TCP/IPv6+ext, patch_and_checksum,
+                              extract/patch/replace DNS payload
+  helpers/
+    busted_setup.lua          stubs globaux (ffi_defs, config, log, ethernet)
+  run_tests.moon              ancienne suite monolithique (gardée pour référence)
+  test_ffi_socket.moon        FFI socket (luajit direct, hors Busted)
+  test_ffi_wolfssl.moon       FFI WolfSSL (luajit direct)
+  test_ffi_integration.moon   tests d'intégration socket+SSL
+  test_ndpi.moon              wrapper nDPI (nécessite libndpi)
+  test_openwrt.moon           E2E via SSH sur routeur OpenWrt
+  test_e2e.moon               E2E libvirt (3 VMs)
+```
+
+---
+
+## Commandes rapides
+
+```bash
+# Tous les tests locaux (Busted + FFI, sans root)
+make test
+
+# Specs Busted uniquement
+make test-unit
+
+# Couverture luacov → tmp/coverage/luacov.report.out
+make coverage
+
+# Tests FFI hors-Busted (socket, WolfSSL, intégration)
+make test-ffi
+
+# Tests nDPI (nécessite libndpi)
+make test-ndpi
+
+# E2E via SSH OpenWrt
+make test-openwrt HOST=root@<routeur>
+
+# E2E KVM (environnement libvirt 3 VMs)
+make test-env        # crée/démarre les VMs (~5 min la première fois)
+make test-kvm        # exécute la suite E2E
+make test-env-down   # arrête les VMs
+make test-env-nuke   # supprime tout
+```
+
+---
+
+## Specs Busted — détail
+
+### Résultat courant
+
+```
+241 successes / 0 failures / 0 errors / 1 pending
+```
+
+Le seul `pending` est `cert_generator génération avec px5g` — intentionnel, px5g
+n'est pas installé sur le poste de développement.
+
+### Lancer un sous-ensemble
+
+```bash
+# Toutes les specs auth
+PATH="$HOME/.luarocks/bin:$PATH" \
+LUA_PATH="$HOME/.luarocks/share/lua/5.1/?.lua;$HOME/.luarocks/share/lua/5.1/?/init.lua;lua/?.lua;lua/?/init.lua;;" \
+LUA_CPATH="$HOME/.luarocks/lib/lua/5.1/?.so;;" \
+busted --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
+  tests/unit/auth/
+
+# Un seul spec
+busted --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
+  tests/unit/ipc/ipc_spec.lua
+```
+
+### Stubs injectés par `busted_setup.lua`
+
+Le helper est chargé automatiquement via `.busted` (clé `helper`). Il injecte :
+
+| `package.loaded` | Contenu |
+|---|---|
+| `ffi_defs` | stub vide (pas de `ffi.cdef` global) |
+| `config`   | constantes réseau (PROTO_TCP/UDP, AF_INET/6, DNS_PORT, …) |
+| `log`      | nop (toutes les fonctions no-op) |
+| `parse/ethernet` | stub pass-through |
+
+---
+
+## Couverture
+
+```bash
+make coverage
+# → tmp/coverage/luacov.report.out
+```
+
+Seul le code sous `lua/` est mesuré. Les stubs FFI bas-niveau
+(`ffi_defs`, `ffi_ndpi`, `ffi_xxhash`, `auth/ffi_*`) sont exclus car
+ils nécessitent les bibliothèques natives pour être exercés.
+
+---
 
 ## nDPI Integration Tests
 
-### `test_ndpi.lua`
-Tests for the pure FFI nDPI wrapper:
-- Packet parsing (L3/L4/L7)
-- DNS name decompression
-- TTL patching and checksum recalculation
-- Version detection (4.2–4.8 vs 5.0+)
+### `test_ndpi.moon`
 
-Requires libndpi installed:
+Nécessite `libndpi` installé :
+
 ```bash
 make test-ndpi
-# or
-LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit tests/test_ndpi.lua
 ```
 
-## OpenWrt End-to-End Tests
+Tests : parsing L3/L4/L7, décompression DNS, patch TTL + recalcul checksum,
+détection de version (4.x vs 5.x).
 
-### `test_openwrt.moon`
-Automated end-to-end testing on OpenWrt routers via SSH:
-- Deploys Lua files and nft rules
-- Tests DNS filtering (allowed/blocked domains)
-- Verifies nftables allowlist sets
-- Checks filter logs for protocol information
-- Tests authentication and captive portal
+---
 
-Usage:
+## Tests E2E OpenWrt via SSH
+
 ```bash
-make test-openwrt HOST=root@<router>
-# or
-LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit tests/test_openwrt.lua HOST=root@<router>
+make test-openwrt HOST=root@<routeur>
 ```
 
-Prerequisites:
-- SSH access to OpenWrt router with LuaJIT and nftables installed
-- Router must be reachable from the test machine
+Prérequis : accès SSH, LuaJIT + nftables installés sur le routeur.
 
-## Libvirt KVM End-to-End Tests
+---
 
-### `test_kvm.lua` (exécuté via `make test-kvm`)
-Suite E2E complète sur un environnement 3 VMs KVM/libvirt :
-- Client Debian, serveur DNS Debian, filtre OpenWrt
-- Bridge transparent, NFQUEUE, nftables
-- Tests exhaustifs : DNS autorisé/bloqué, TTL patché, IPv6, authentification, portail captif, isolation par client, DNAT, TCP segmented, etc.
+## Tests E2E KVM (libvirt)
 
-Usage:
+Environnement 3 VMs : client Debian, filtre OpenWrt, serveur DNS Debian.
+
 ```bash
-make test-env      # Crée/démarre l'environnement (premier run ~5min)
-make test-kvm      # Exécute la suite E2E KVM
-# ou directement :
-LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/test_kvm.lua
+make test-env    # premier démarrage
+make test-kvm    # suite exhaustive
 ```
 
-Prerequisites:
-- qemu-kvm, libvirt-daemon-system, virsh, genisoimage
-- ~2 Go d'espace disque
-- Accès root (sudo) pour la gestion des VMs
+Prérequis : `qemu-kvm`, `libvirt-daemon-system`, `virsh`, `genisoimage`,
+~2 Go d'espace disque, accès sudo.
 
-Voir `libvirt/README.md` pour la documentation complète de l'environnement.
+Voir `libvirt/README.md` pour la documentation complète.
