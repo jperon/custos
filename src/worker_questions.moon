@@ -11,7 +11,7 @@
 --   6. Log structuré avec champs nDPI (ndpi_master / ndpi_app)
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_QUESTIONS, :AUTH_SESSIONS_FILE } = require "config"
+{ :QUEUE_QUESTIONS, :AUTH_SESSIONS_FILE, :BENCHMARK } = require "config"
 { :get_l2 } = require "parse/ethernet"
 ndpi                     = require "parse/ndpi"
 filter                   = require "filter"
@@ -29,6 +29,17 @@ pipe_wfd = nil
 
 -- fd d'écriture du pipe d'apprentissage Q0→mac_learner.
 mac_learn_wfd = nil
+
+-- Benchmark : buffer timespec réutilisé pour éviter l'allocation hot-path
+_benchmark_ts = ffi.new "timespec_t[1]"
+CLOCK_MONOTONIC = 1
+
+--- Retourne les millisecondes depuis boot (CLOCK_MONOTONIC), ou nil.
+-- @treturn number|nil
+get_benchmark_ms = ->
+  return nil unless BENCHMARK
+  libc.clock_gettime CLOCK_MONOTONIC, _benchmark_ts
+  tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
 
 events_wfd = nil  -- fd d'écriture du pipe vers worker_events (nil si désactivé)
 
@@ -141,7 +152,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     return NF_ACCEPT if parse_status == "buffering"
     -- TCP control segments (SYN/ACK/FIN without DNS payload) must pass.
     return NF_ACCEPT if parse_status == "tcp_control"
-    log_warn { action: "parse_failed", mac_src: l2.mac_src }
+    log_warn { action: "parse_failed", mac_src: l2.mac_src, status: parse_status }
     return NF_DROP
 
   -- Log L2 metadata une fois le parse réussi (src_ip disponible pour corrélation).
@@ -278,14 +289,15 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- Si autorisé   : Q1 patche TTL + injecte EDE "Custos vigilat."
   -- Si dnsonly    : Q1 patche TTL + EDE mais n'injecte pas les IPs dans nft
   -- Si refusé     : Q1 transforme la réponse du serveur en REFUSED+EDE Filtered
+  benchmark_ms = get_benchmark_ms!
   ipc_ok = false
   if verdict == NF_ACCEPT
     if dnsonly
-      ipc_ok = write_dnsonly_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason
+      ipc_ok = write_dnsonly_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms
     else
-      ipc_ok = write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason
+      ipc_ok = write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms
   else
-    ipc_ok = write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason
+    ipc_ok = write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason, benchmark_ms
 
   unless ipc_ok
     log_warn {
@@ -331,7 +343,7 @@ run = (queue_num, wfd, learn_wfd, ev_wfd) ->
           ifname:      ifname
         }
       else
-        log_warn { action: "dns_steal_socket_failed", err: err, ifname: ifname }
+        log_warn { action: "dns_steal_socket_failed", err: err, ifname: ifname, errno: tonumber(ffi.C.__errno_location()[0]) or 0 }
     else
       log_info { action: "dns_steal_disabled", reason: "no hostname in redirect_url" }
 

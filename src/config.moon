@@ -18,6 +18,11 @@ QUEUE_AUTH      = "5"      -- TCP 33443 (authentification captive)
 -- Niveau de log par défaut. Peut être surchargé par UCI (custos.main.log_level).
 LOG_LEVEL = "INFO" -- ERROR, WARN, INFO, DEBUG, TRACE
 
+-- ── Benchmark DNS (Q0 → Q1) ─────────────────────────────────────
+-- Active le logging du temps de traitement entre la réception de la question
+-- DNS dans worker_questions et l'émission de la réponse DNS dans worker_responses.
+BENCHMARK = false
+
 -- ── Noms de sets nftables ────────────────────────────────────────
 NFT_FAMILY     = "bridge"
 NFT_FAMILY6    = "bridge"
@@ -132,6 +137,7 @@ DOH_PREFER_IPV6         = "1"                      -- "1" = prefer IPv6 upstream
   :EVENTS_DIR, :EVENTS_MAX_AGE_HOURS, :EVENTS_MIN_FREE_PCT
   :DEST_WHITELIST, :ALLOWED_DOMAINS, :NFT_EXTRA_RULES
   :LOG_LEVEL
+  :BENCHMARK
   :DOH_ENABLED, :DOH_PORT, :DOH_UPSTREAM_IPV4, :DOH_UPSTREAM_IPV6
   :DOH_UPSTREAM_PORT, :DOH_UPSTREAM_TIMEOUT_MS
   :DOH_CERT_PATH, :DOH_KEY_PATH, :DOH_PREFER_IPV6

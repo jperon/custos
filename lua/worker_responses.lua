@@ -3,10 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE
+local QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE, BENCHMARK
 do
   local _obj_0 = require("config")
-  QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE = _obj_0.QUEUE_RESPONSES, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS, _obj_0.NFT_ADD_FAILURE_POLICY, _obj_0.IPC_MATCH_RETRY_ENABLED, _obj_0.IPC_MATCH_RETRY_COUNT, _obj_0.IPC_MATCH_RETRY_SLEEP_MS, _obj_0.AUTH_SESSIONS_FILE
+  QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE, BENCHMARK = _obj_0.QUEUE_RESPONSES, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS, _obj_0.NFT_ADD_FAILURE_POLICY, _obj_0.IPC_MATCH_RETRY_ENABLED, _obj_0.IPC_MATCH_RETRY_COUNT, _obj_0.IPC_MATCH_RETRY_SLEEP_MS, _obj_0.AUTH_SESSIONS_FILE, _obj_0.BENCHMARK
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
@@ -63,6 +63,13 @@ local mac_clients = { }
 local ip_to_mac = { }
 local pipe_rfd = nil
 local sleep_req = ffi.new("timespec_t[1]")
+local CLOCK_MONOTONIC = 1
+local _benchmark_ts = ffi.new("timespec_t[1]")
+local current_benchmark_ms
+current_benchmark_ms = function()
+  libc.clock_gettime(CLOCK_MONOTONIC, _benchmark_ts)
+  return tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
+end
 local update_mac_clients = nil
 local drain_ts = 0
 local drain_on_msg
@@ -231,6 +238,21 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end
   end
   consume(txid, pkt.ip.dst_ip, client_port, resolver_ip)
+  if BENCHMARK and entry and entry.benchmark_ms then
+    local delta_ms = current_benchmark_ms() - entry.benchmark_ms
+    if delta_ms >= 0 then
+      log_info({
+        action = "dns_benchmark",
+        txid = string.format("0x%04x", txid),
+        src_ip = pkt.ip.src_ip,
+        dst_ip = pkt.ip.dst_ip,
+        delta_ms = delta_ms,
+        refused = entry.refused,
+        dnsonly = entry.dnsonly,
+        user = user
+      })
+    end
+  end
   local refused = entry and entry.refused or false
   local dnsonly = entry and entry.dnsonly or false
   if refused then

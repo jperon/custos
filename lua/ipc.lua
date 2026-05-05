@@ -7,9 +7,10 @@ local IPC_PENDING_TTL
 IPC_PENDING_TTL = require("config").IPC_PENDING_TTL
 local log_warn
 log_warn = require("log").log_warn
-local IPC_MSG_SIZE = 107
+local IPC_MSG_SIZE = 115
 local REASON_OFFSET = 43
 local REASON_SIZE = 64
+local BENCHMARK_OFFSET = 107
 local IPC_WRITE_RETRY_COUNT = 5
 local EAGAIN = 11
 local EWOULDBLOCK = 11
@@ -68,8 +69,8 @@ write_with_retry = function(pipe_wfd, msg)
   return false
 end
 local encode_msg
-encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly, reason)
-  local buf = ffi.new("uint8_t[107]")
+encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly, reason, benchmark_ms)
+  local buf = ffi.new("uint8_t[115]")
   local msg_type
   if #ip_raw == 4 then
     if dnsonly then
@@ -119,21 +120,34 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
       buf[REASON_OFFSET - 1 + i] = s:byte(i)
     end
   end
+  if benchmark_ms and benchmark_ms > 0 then
+    local high = math.floor(benchmark_ms / 4294967296)
+    local low = math.floor(benchmark_ms % 4294967296)
+    local off = BENCHMARK_OFFSET
+    buf[off] = bit.rshift(bit.band(high, 0xFF000000), 24)
+    buf[off + 1] = bit.rshift(bit.band(high, 0x00FF0000), 16)
+    buf[off + 2] = bit.rshift(bit.band(high, 0x0000FF00), 8)
+    buf[off + 3] = bit.band(high, 0x000000FF)
+    buf[off + 4] = bit.rshift(bit.band(low, 0xFF000000), 24)
+    buf[off + 5] = bit.rshift(bit.band(low, 0x00FF0000), 16)
+    buf[off + 6] = bit.rshift(bit.band(low, 0x0000FF00), 8)
+    buf[off + 7] = bit.band(low, 0x000000FF)
+  end
   return ffi.string(buf, IPC_MSG_SIZE)
 end
 local write_msg
-write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, reason)
+write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, reason, benchmark_ms)
   return write_with_retry(pipe_wfd, msg)
 end
 local write_refused_msg
-write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false, reason)
+write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false, reason, benchmark_ms)
   return write_with_retry(pipe_wfd, msg)
 end
 local write_dnsonly_msg
-write_dnsonly_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true, reason)
+write_dnsonly_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true, reason, benchmark_ms)
   return write_with_retry(pipe_wfd, msg)
 end
 local decode_msg
@@ -181,6 +195,14 @@ decode_msg = function(raw)
     reason_parts[#reason_parts + 1] = string.char(b)
   end
   local reason = table.concat(reason_parts)
+  local high = bit.bor(bit.lshift(raw:byte(108), 24), bit.lshift(raw:byte(109), 16), bit.lshift(raw:byte(110), 8), raw:byte(111))
+  local low = bit.bor(bit.lshift(raw:byte(112), 24), bit.lshift(raw:byte(113), 16), bit.lshift(raw:byte(114), 8), raw:byte(115))
+  local benchmark_ms
+  if high > 0 or low > 0 then
+    benchmark_ms = high * 4294967296 + low
+  else
+    benchmark_ms = nil
+  end
   return {
     txid = txid,
     ip_str = ip_str,
@@ -191,7 +213,8 @@ decode_msg = function(raw)
     ipv4 = ipv4,
     refused = refused,
     dnsonly = dnsonly,
-    reason = reason
+    reason = reason,
+    benchmark_ms = benchmark_ms
   }
 end
 local pending = { }
@@ -224,7 +247,8 @@ drain_pipe = function(pipe_rfd, now_fn, on_msg)
           expire = now_fn() + IPC_PENDING_TTL,
           refused = msg.refused,
           dnsonly = msg.dnsonly,
-          reason = msg.reason
+          reason = msg.reason,
+          benchmark_ms = msg.benchmark_ms
         }
         absorbed = absorbed + 1
         if on_msg then

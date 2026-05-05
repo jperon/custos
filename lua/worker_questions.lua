@@ -3,10 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_QUESTIONS, AUTH_SESSIONS_FILE
+local QUEUE_QUESTIONS, AUTH_SESSIONS_FILE, BENCHMARK
 do
   local _obj_0 = require("config")
-  QUEUE_QUESTIONS, AUTH_SESSIONS_FILE = _obj_0.QUEUE_QUESTIONS, _obj_0.AUTH_SESSIONS_FILE
+  QUEUE_QUESTIONS, AUTH_SESSIONS_FILE, BENCHMARK = _obj_0.QUEUE_QUESTIONS, _obj_0.AUTH_SESSIONS_FILE, _obj_0.BENCHMARK
 end
 local get_l2
 get_l2 = require("parse/ethernet").get_l2
@@ -40,6 +40,16 @@ do
 end
 local pipe_wfd = nil
 local mac_learn_wfd = nil
+local _benchmark_ts = ffi.new("timespec_t[1]")
+local CLOCK_MONOTONIC = 1
+local get_benchmark_ms
+get_benchmark_ms = function()
+  if not (BENCHMARK) then
+    return nil
+  end
+  libc.clock_gettime(CLOCK_MONOTONIC, _benchmark_ts)
+  return tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
+end
 local events_wfd = nil
 local captive_domain = nil
 local captive_ip4 = nil
@@ -154,7 +164,8 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end
     log_warn({
       action = "parse_failed",
-      mac_src = l2.mac_src
+      mac_src = l2.mac_src,
+      status = parse_status
     })
     return NF_DROP
   end
@@ -273,15 +284,16 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end
     write_event(q_fields, allowed)
   end
+  local benchmark_ms = get_benchmark_ms()
   local ipc_ok = false
   if verdict == NF_ACCEPT then
     if dnsonly then
-      ipc_ok = write_dnsonly_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason)
+      ipc_ok = write_dnsonly_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms)
     else
-      ipc_ok = write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason)
+      ipc_ok = write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms)
     end
   else
-    ipc_ok = write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason)
+    ipc_ok = write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason, benchmark_ms)
   end
   if not (ipc_ok) then
     log_warn({
@@ -324,7 +336,8 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd)
         log_warn({
           action = "dns_steal_socket_failed",
           err = err,
-          ifname = ifname
+          ifname = ifname,
+          errno = tonumber(ffi.C.__errno_location()[0]) or 0
         })
       end
     else

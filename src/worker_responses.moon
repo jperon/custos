@@ -17,7 +17,7 @@
 --        f. Envoie le paquet modifié avec NF_ACCEPT + payload
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS, :AUTH_SESSIONS_FILE } = require "config"
+{ :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS, :AUTH_SESSIONS_FILE, :BENCHMARK } = require "config"
 { :user_for_mac } = require "auth.sessions"
 ndpi = require "parse/ndpi"
 { :QTYPE } = ndpi
@@ -52,6 +52,16 @@ ip_to_mac = {}
 pipe_rfd = nil
 
 sleep_req = ffi.new "timespec_t[1]"
+CLOCK_MONOTONIC = 1
+
+-- Benchmark : buffer timespec réutilisé
+_benchmark_ts = ffi.new "timespec_t[1]"
+
+--- Retourne les millisecondes depuis boot (CLOCK_MONOTONIC).
+-- @treturn number
+current_benchmark_ms = ->
+  libc.clock_gettime CLOCK_MONOTONIC, _benchmark_ts
+  tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
 
 update_mac_clients = nil
 drain_ts = 0
@@ -230,6 +240,21 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       return NF_DROP
   -- Transaction consommée (one-shot : une réponse par question)
   consume txid, pkt.ip.dst_ip, client_port, resolver_ip
+
+  -- Benchmark : log le temps de traitement question → réponse
+  if BENCHMARK and entry and entry.benchmark_ms
+    delta_ms = current_benchmark_ms! - entry.benchmark_ms
+    if delta_ms >= 0
+      log_info {
+        action: "dns_benchmark"
+        txid: string.format "0x%04x", txid
+        src_ip: pkt.ip.src_ip
+        dst_ip: pkt.ip.dst_ip
+        delta_ms: delta_ms
+        refused: entry.refused
+        dnsonly: entry.dnsonly
+        user: user
+      }
 
   refused = entry and entry.refused or false
   dnsonly = entry and entry.dnsonly or false
