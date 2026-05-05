@@ -84,9 +84,13 @@ lookup = (arr, n, domain) ->
   -- Validation du nom de liste
   if listname\match "^/" or listname\match "%.%." or listname\match "%.bin$"
     return (req) -> false, "Nom de liste invalide: '#{listname}'"
-  path = (cfg.domainlists_dir\gsub "/*$", "") .. "/" .. listname .. ".bin"
+  base = (cfg.domainlists_dir\gsub "/*$", "") .. "/" .. listname
+  path = base .. ".bin"
 
   arr, n_or_err = load_list path
+  -- Fallback : si le .bin est absent, essayer un fichier texte (.domains)
+  unless arr
+    arr, n_or_err = load_list base .. ".domains"
   unless arr
     msg = "Cannot load domain list '#{listname}': #{n_or_err}"
     return (req) -> false, msg

@@ -540,3 +540,277 @@ describe "parse/ndpi", ->
 
       -- DNS payload aux bytes 43..42+#new_dns
       assert.equals new_dns, result\sub(43, 42 + #new_dns), "payload DNS TCP correct"
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- Couverture supplémentaire : branches non couvertes
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- ── ndpi_v5 backend ──────────────────────────────────────────────────────────
+describe "parse/ndpi — ndpi_v5 backend", ->
+
+  it "major=5 charge le backend ndpi_v5", ->
+    -- Réinitialiser les modules pour forcer le rechargement
+    package.loaded["parse.ndpi"] = nil
+    package.loaded["ffi_ndpi"] = {
+      ffi:      ffi
+      ndpi_lib: {}
+      major:    5
+    }
+    -- Les stubs v4/v5 sont déjà dans package.loaded depuis le début du fichier
+    m5 = dofile "lua/parse/ndpi.lua"
+    -- On vérifie que le module se charge sans erreur avec major=5
+    assert.is_not_nil m5, "module ndpi chargé avec major=5"
+    assert.is_not_nil m5.parse_packet, "parse_packet exporté"
+    assert.is_not_nil m5.purge_flows, "purge_flows exporté"
+    -- Restaurer le stub v4 pour le reste des tests
+    package.loaded["parse.ndpi"] = nil
+    package.loaded["ffi_ndpi"] = {
+      ffi:      ffi
+      ndpi_lib: {}
+      major:    4
+    }
+
+-- ── QTYPE / RCODE constants ──────────────────────────────────────────────────
+describe "parse/ndpi — constantes QTYPE et RCODE", ->
+
+  it "QTYPE.ANY == 255", ->
+    assert.equals 255, m_ndpi.QTYPE.ANY
+
+  it "RCODE.REFUSED == 5", ->
+    assert.equals 5, m_ndpi.RCODE.REFUSED
+
+  it "QTYPE_NAME[255] == 'ANY'", ->
+    assert.equals "ANY", m_ndpi.QTYPE_NAME[255]
+
+-- ── purge_flows / purge_tcp_buffers ──────────────────────────────────────────
+describe "parse/ndpi — purge_flows et purge_tcp_buffers", ->
+
+  -- Module frais avec un ndpi_lib qui peut répondre à get_sizeof
+  fresh_ndpi_with_flow = ->
+    package.loaded["parse.ndpi"] = nil
+    package.loaded["ffi_ndpi"] = {
+      ffi:      ffi
+      ndpi_lib: {
+        ndpi_detection_get_sizeof_ndpi_flow_struct: -> 64
+      }
+      major:    4
+    }
+    -- ndpi_flow_struct doit être déclaré pour ffi.cast
+    pcall ffi.cdef, "typedef struct ndpi_flow_struct ndpi_flow_struct;"
+    package.loaded["parse.ndpi_v4"] = {
+      init:    -> nil
+      detect:  -> 0, 0
+      cleanup: -> nil
+    }
+    m = dofile "lua/parse/ndpi.lua"
+    -- Restaurer le stub original
+    package.loaded["parse.ndpi"] = nil
+    package.loaded["ffi_ndpi"] = { ffi: ffi, ndpi_lib: {}, major: 4 }
+    m
+
+  it "purge_flows(0) s'exécute sans erreur (table vide)", ->
+    m = fresh_ndpi_with_flow!
+    ok, err = pcall m.purge_flows, 0
+    assert.is_true ok, "purge_flows ne doit pas lever d'erreur: " .. tostring(err)
+
+  it "purge_flows(300) avec défaut max_age", ->
+    m = fresh_ndpi_with_flow!
+    ok, err = pcall m.purge_flows
+    assert.is_true ok, "purge_flows() sans argument ne doit pas lever d'erreur: " .. tostring(err)
+
+  it "purge_tcp_buffers(0) s'exécute sans erreur", ->
+    m = fresh_ndpi_with_flow!
+    ok, err = pcall m.purge_tcp_buffers, 0
+    assert.is_true ok, "purge_tcp_buffers ne doit pas lever d'erreur: " .. tostring(err)
+
+  it "purge_tcp_buffers() avec défaut max_age", ->
+    m = fresh_ndpi_with_flow!
+    ok, err = pcall m.purge_tcp_buffers
+    assert.is_true ok, "purge_tcp_buffers() sans argument: " .. tostring(err)
+
+  it "purge_flows expire un flow créé dans le passé", ->
+    m = fresh_ndpi_with_flow!
+    -- Créer un flow via parse_packet (TCP, port unique pour isoler)
+    dns = make_dns "\3foo\3bar\0", 1, false, 0xABCD
+    raw = make_ipv4_tcp_dns "192.168.5.1", "8.8.8.8", 59990, 53, dns
+    parse_packet raw  -- peuple tcp_buffers et potentiellement flow_cache
+    -- purge avec max_age=0 → tous les flows expirés (timestamp passé)
+    ok, err = pcall m.purge_flows, 0
+    assert.is_true ok, "purge_flows(0) apres flow: " .. tostring(err)
+
+  it "purge_tcp_buffers expire un buffer TCP créé dans le passé", ->
+    m = fresh_ndpi_with_flow!
+    -- Créer un buffer TCP avec port unique
+    dns = make_dns "\3baz\3qux\0", 1, false, 0xDEF0
+    raw = make_ipv4_tcp_dns "192.168.6.1", "8.8.8.8", 59991, 53, dns
+    parse_packet raw  -- peuple tcp_buffers
+    -- purge avec max_age=0 → expire tout
+    ok, err = pcall m.purge_tcp_buffers, 0
+    assert.is_true ok, "purge_tcp_buffers(0) apres buffer: " .. tostring(err)
+
+-- ── IPv6 Next Header 59 et inconnu ───────────────────────────────────────────
+describe "parse/ndpi — IPv6 Next Header 59 et inconnu", ->
+
+  src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+
+  -- Helper : IPv6 minimal 40 B avec NH donné et payload_len=0
+  make_ipv6_bare = (nh) ->
+    string.char(0x60, 0, 0, 0, 0, 0, nh, 64) .. src6 .. dst6
+
+  it "IPv6 NH=59 (No Next Header) → parse_packet retourne nil", ->
+    raw = make_ipv6_bare 59
+    pkt = parse_packet raw
+    assert.is_nil pkt, "NH=59 doit retourner nil (pas de couche transport)"
+
+  it "IPv6 NH=253 (inconnu) → parse_packet retourne nil", ->
+    raw = make_ipv6_bare 253
+    pkt = parse_packet raw
+    assert.is_nil pkt, "NH=253 (inconnu) doit retourner nil"
+
+  it "IPv6 NH=0 (HBH) trop court → parse_packet retourne nil", ->
+    -- Seuls 40 octets : off+2=42 > 40=len → skip_ipv6_ext_hdrs retourne nil
+    raw = make_ipv6_bare 0
+    pkt = parse_packet raw
+    assert.is_nil pkt, "HBH trop court doit retourner nil"
+
+  it "IPv6 NH=0 (HBH) un seul octet → parse_packet retourne nil", ->
+    -- 41 octets : off+2=42 > 41 → nil
+    raw = make_ipv6_bare(0) .. string.char(17)
+    pkt = parse_packet raw
+    assert.is_nil pkt, "HBH 1-octet doit retourner nil"
+
+-- ── AH extension header (NH=51) ──────────────────────────────────────────────
+describe "parse/ndpi — IPv6 AH extension header (NH=51)", ->
+
+  src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+
+  it "IPv6 + AH (NH=51, len=1 → 12B) + UDP DNS → parse OK", ->
+    dns = make_dns "\3www\6github\3com\0", 1, false
+    -- AH: NH=17(UDP), len=1 → (1+2)*4=12 octets
+    ah = string.char(17, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    raw = make_ipv6_ext_udp_dns src6, dst6, 54326, 53, dns, 51, ah
+    pkt = parse_packet raw
+    assert.is_not_nil pkt, "parse_packet nil avec AH header"
+    assert.equals 6,   pkt.ip.version
+    assert.equals "udp", pkt.l4.proto
+    assert.equals 0x1234, pkt.dns.txid
+
+-- ── TCP tcp_control (ACK sans données, pas de buffer) ────────────────────────
+describe "parse/ndpi — TCP tcp_control (flag RST/FIN, pas de données)", ->
+
+  it "TCP ACK pur (0 payload, pas de buffer) → nil + tcp_control", ->
+    src_bytes = "\xC0\xA8\x01\x01"
+    dst_bytes = "\x08\x08\x08\x08"
+    total_len = 20 + 20
+    ip_hdr = string.char(0x45, 0,
+      bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF),
+      0, 1, 0, 0, 64, 6, 0, 0) .. src_bytes .. dst_bytes
+    tcp_hdr = string.char(
+      0xD4, 0x31,
+      0, 53,
+      0, 0, 0, 1,
+      0, 0, 0, 0,
+      0x50, 0x10,
+      0x72, 0x10, 0, 0, 0, 0
+    )
+    raw = ip_hdr .. tcp_hdr
+    pkt, status = parse_packet raw
+    assert.is_nil    pkt,          "TCP ACK pur doit retourner nil"
+    assert.equals "tcp_control", status, "statut doit être tcp_control"
+
+  it "TCP RST (flag 0x04) sans données → nil + tcp_control", ->
+    src_bytes = "\xC0\xA8\x01\x01"
+    dst_bytes = "\x08\x08\x08\x08"
+    total_len = 20 + 20
+    ip_hdr = string.char(0x45, 0,
+      bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF),
+      0, 1, 0, 0, 64, 6, 0, 0) .. src_bytes .. dst_bytes
+    tcp_hdr = string.char(
+      0xD4, 0x32,
+      0, 53,
+      0, 0, 0, 2,
+      0, 0, 0, 0,
+      0x50, 0x04,
+      0x72, 0x10, 0, 0, 0, 0
+    )
+    raw = ip_hdr .. tcp_hdr
+    pkt, status = parse_packet raw
+    assert.is_nil    pkt,          "TCP RST sans données → nil"
+    assert.equals "tcp_control", status
+
+-- ── patch_and_checksum IPv6 UDP ───────────────────────────────────────────────
+describe "parse/ndpi — patch_and_checksum IPv6 UDP (fix_udp6_cksum)", ->
+
+  it "patch_and_checksum sur IPv6 UDP recalcule le checksum correctement", ->
+    src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+    dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+
+    -- DNS réponse : 1 question + 1 A RR, TTL=300
+    qname_enc = "\x03www\x06github\x03com\x00"
+    hdr       = string.char(0xAB, 0xCD, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+    question  = qname_enc .. string.char(0, 1, 0, 1)
+    rr        = "\xC0\x0C" ..
+      string.char(0, 1, 0, 1) ..
+      string.char(0, 0, 1, 0x2C) ..
+      string.char(0, 4) ..
+      string.char(1, 2, 3, 4)
+    dns_payload = hdr .. question .. rr
+
+    raw = make_ipv6_udp_dns src6, dst6, 54327, 53, dns_payload
+    pkt = parse_packet raw
+    assert.is_not_nil pkt, "parse_packet IPv6 UDP retourne nil"
+    assert.equals 6,     pkt.ip.version
+    assert.equals "udp", pkt.l4.proto
+
+    answers = m_ndpi.parse_answers raw, pkt
+    assert.equals 1, #answers, "1 réponse attendue"
+
+    patched = patch_and_checksum raw, pkt, answers, 60
+    assert.is_not_nil patched, "patch_and_checksum IPv6 UDP retourne nil"
+    assert.equals #raw, #patched, "longueur du paquet inchangée"
+
+-- ── patch_and_checksum IPv6 TCP ───────────────────────────────────────────────
+describe "parse/ndpi — patch_and_checksum IPv6 TCP (fix_tcp6_cksum)", ->
+
+  it "patch_and_checksum sur IPv6 TCP fonctionne", ->
+    src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+    dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+
+    -- DNS réponse TCP
+    qname_enc = "\x03foo\x03bar\x00"
+    hdr       = string.char(0xEF, 0x01, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+    question  = qname_enc .. string.char(0, 1, 0, 1)
+    rr        = "\xC0\x0C" ..
+      string.char(0, 1, 0, 1) ..
+      string.char(0, 0, 1, 0x2C) ..
+      string.char(0, 4) ..
+      string.char(5, 6, 7, 8)
+    dns_payload = hdr .. question .. rr
+    dns_len     = #dns_payload
+
+    -- Construire manuellement un paquet IPv6/TCP/DNS
+    pfx = string.char(bit.rshift(bit.band(dns_len, 0xFF00), 8), bit.band(dns_len, 0xFF))
+    tcp_payload = pfx .. dns_payload
+    pay_len = 20 + #tcp_payload   -- TCP hdr + payload (payloadlen dans IPv6 = tcp + data)
+    ip6 = string.char(0x60, 0, 0, 0,
+      bit.rshift(bit.band(pay_len, 0xFF00), 8), bit.band(pay_len, 0xFF),
+      6, 64) .. src6 .. dst6
+    tcp_hdr6 = string.char(
+      0xD4, 0x38,
+      0, 53,
+      0, 0, 0, 1,
+      0, 0, 0, 0,
+      0x50, 0x18,
+      0x72, 0x10, 0, 0, 0, 0
+    )
+    raw = ip6 .. tcp_hdr6 .. tcp_payload
+    pkt = parse_packet raw
+    assert.is_not_nil pkt, "parse_packet IPv6 TCP retourne nil"
+    assert.equals 6,     pkt.ip.version
+    assert.equals "tcp", pkt.l4.proto
+
+    answers = m_ndpi.parse_answers raw, pkt
+    patched = patch_and_checksum raw, pkt, answers, 60
+    assert.is_not_nil patched, "patch_and_checksum IPv6 TCP retourne nil"

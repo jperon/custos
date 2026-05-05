@@ -63,9 +63,23 @@ describe("filter.lib.ipcalc", function()
     local n = ipcalc.Net("2001:db8::/32")
     return assert.is_false((n:contains("2001:db9::1")))
   end)
-  return it("CIDR invalide → nil", function()
+  it("CIDR invalide → nil", function()
     local n = ipcalc.Net("not_an_ip/24")
     return assert.is_nil(n)
+  end)
+  it("contains avec IP invalide → false", function()
+    local n = ipcalc.Net("192.168.0.0/16")
+    return assert.is_false((n:contains("not_an_ip")))
+  end)
+  it("contains avec IP vide → false", function()
+    local n = ipcalc.Net("192.168.0.0/16")
+    return assert.is_false((n:contains("")))
+  end)
+  return it("/31 boundary (dernier bit)", function()
+    local n = ipcalc.Net("10.0.0.2/31")
+    assert.is_true((n:contains("10.0.0.2")))
+    assert.is_true((n:contains("10.0.0.3")))
+    return assert.is_false((n:contains("10.0.0.4")))
   end)
 end)
 describe("filter.conditions.to_domain", function()
@@ -92,10 +106,38 @@ describe("filter.conditions.to_domain", function()
     })
     return assert.is_false(v)
   end)
-  return it("domaine vide → faux", function()
+  it("domaine vide → faux", function()
     local f = (to_domain({ }))("github.com")
     local v = f({
       domain = nil
+    })
+    return assert.is_false(v)
+  end)
+  it("_any → true si domaine présent", function()
+    local f = (to_domain({ }))("_any")
+    local v = f({
+      domain = "github.com"
+    })
+    return assert.is_true(v)
+  end)
+  it("_any → false si domaine absent", function()
+    local f = (to_domain({ }))("_any")
+    local v = f({
+      domain = nil
+    })
+    return assert.is_false(v)
+  end)
+  it("_none → true si domaine absent", function()
+    local f = (to_domain({ }))("_none")
+    local v = f({
+      domain = nil
+    })
+    return assert.is_true(v)
+  end)
+  return it("_none → false si domaine présent", function()
+    local f = (to_domain({ }))("_none")
+    local v = f({
+      domain = "github.com"
     })
     return assert.is_false(v)
   end)
@@ -203,12 +245,110 @@ describe("filter.conditions.to_domainlist", function()
       domain = "evil.com"
     })))
   end)
-  return it("domainlists_dir absent → faux", function()
+  it("domainlists_dir absent → faux", function()
     local cfg = { }
     local f = (to_domainlist(cfg))("nonexistent")
     return assert.is_false((f({
       domain = "github.com"
     })))
+  end)
+  it("fichier .bin absent → faux (load échoue)", function()
+    local cfg = {
+      domainlists_dir = TMPDIR
+    }
+    local f = (to_domainlist(cfg))("does_not_exist_xyz")
+    local v, r = f({
+      domain = "github.com"
+    })
+    assert.is_false(v)
+    return assert.is_not_nil(r)
+  end)
+  it("fichier .bin vide (0 octets) → faux", function()
+    local ok = pcall(require, "ffi_xxhash")
+    if not (ok) then
+      pending("ffi_xxhash non disponible")
+    end
+    local empty_bin = TMPDIR .. "/empty_domainlist.bin"
+    local fd = io.open(empty_bin, "wb")
+    fd:close()
+    local cfg = {
+      domainlists_dir = TMPDIR
+    }
+    local f = (to_domainlist(cfg))("empty_domainlist")
+    local v, r = f({
+      domain = "github.com"
+    })
+    assert.is_false(v)
+    return os.remove(empty_bin)
+  end)
+  it("nom de liste invalide (commence par /) → faux", function()
+    local cfg = {
+      domainlists_dir = TMPDIR
+    }
+    local f = (to_domainlist(cfg))("/etc/passwd")
+    local v, r = f({
+      domain = "github.com"
+    })
+    assert.is_false(v)
+    return assert.is_not_nil((r:find("invalide", 1, true)))
+  end)
+  it("domaine absent dans req → faux", function()
+    local ok = pcall(require, "ffi_xxhash")
+    if not (ok) then
+      pending("ffi_xxhash non disponible")
+    end
+    local cfg = {
+      domainlists_dir = TMPDIR
+    }
+    local f = (to_domainlist(cfg))("test_filter_domainlist")
+    local v, r = f({
+      domain = nil
+    })
+    assert.is_false(v)
+    return assert.is_not_nil((r:find("Missing", 1, true)))
+  end)
+  it("fichier texte .domains → domaines chargés et matchés", function()
+    local ok = pcall(require, "ffi_xxhash")
+    if not (ok) then
+      pending("ffi_xxhash non disponible")
+    end
+    local domains_path = TMPDIR .. "/test_text_domainlist.domains"
+    local fd = io.open(domains_path, "w")
+    fd:write("# commentaire\ngithub.com\ndebian.org\n")
+    fd:close()
+    local cfg = {
+      domainlists_dir = TMPDIR
+    }
+    local f = (to_domainlist(cfg))("test_text_domainlist")
+    assert.is_true((f({
+      domain = "github.com"
+    })))
+    assert.is_true((f({
+      domain = "api.debian.org"
+    })))
+    assert.is_false((f({
+      domain = "evil.com"
+    })))
+    return os.remove(domains_path)
+  end)
+  return it("fichier .domains vide → faux", function()
+    local ok = pcall(require, "ffi_xxhash")
+    if not (ok) then
+      pending("ffi_xxhash non disponible")
+    end
+    local empty_domains = TMPDIR .. "/empty_text_domainlist.domains"
+    local fd = io.open(empty_domains, "w")
+    fd:write("")
+    fd:close()
+    local cfg = {
+      domainlists_dir = TMPDIR
+    }
+    local f = (to_domainlist(cfg))("empty_text_domainlist")
+    local v, r = f({
+      domain = "github.com"
+    })
+    assert.is_false(v)
+    return os.remove(empty_domains)
   end)
 end)
 describe("filter.conditions.to_domainlists", function()
@@ -314,9 +454,33 @@ describe("filter.conditions.from_mac", function()
       mac = nil
     })))
   end)
-  return it("insensible à la casse", function()
+  it("insensible à la casse", function()
     local f = (from_mac({ }))("AA:BB:CC:DD:EE:FF")
     return assert.is_true((f({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })))
+  end)
+  it("_any → true si MAC présente", function()
+    local f = (from_mac({ }))("_any")
+    return assert.is_true((f({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })))
+  end)
+  it("_any → false si MAC absente", function()
+    local f = (from_mac({ }))("_any")
+    return assert.is_false((f({
+      mac = nil
+    })))
+  end)
+  it("_none → true si MAC absente", function()
+    local f = (from_mac({ }))("_none")
+    return assert.is_true((f({
+      mac = nil
+    })))
+  end)
+  return it("_none → false si MAC présente", function()
+    local f = (from_mac({ }))("_none")
+    return assert.is_false((f({
       mac = "aa:bb:cc:dd:ee:ff"
     })))
   end)
@@ -431,11 +595,46 @@ describe("filter.conditions.from_net", function()
       src_ip = "10.0.0.1"
     })))
   end)
-  return it("CIDR invalide → faux", function()
+  it("CIDR invalide → faux", function()
     local f = (from_net({ }))("invalid/24")
     return assert.is_false((f({
       src_ip = "192.168.1.1"
     })))
+  end)
+  it("_any → true si src_ip présente", function()
+    local f = (from_net({ }))("_any")
+    local v = f({
+      src_ip = "10.0.0.1"
+    })
+    return assert.is_true(v)
+  end)
+  it("_any → false si src_ip absente", function()
+    local f = (from_net({ }))("_any")
+    local v = f({
+      src_ip = nil
+    })
+    return assert.is_false(v)
+  end)
+  it("_none → true si src_ip absente", function()
+    local f = (from_net({ }))("_none")
+    local v = f({
+      src_ip = nil
+    })
+    return assert.is_true(v)
+  end)
+  it("_none → false si src_ip présente", function()
+    local f = (from_net({ }))("_none")
+    local v = f({
+      src_ip = "10.0.0.1"
+    })
+    return assert.is_false(v)
+  end)
+  return it("src_ip absente sur CIDR valide → faux", function()
+    local f = (from_net({ }))("192.168.0.0/16")
+    local v = f({
+      src_ip = nil
+    })
+    return assert.is_false(v)
   end)
 end)
 describe("filter.conditions.from_nets", function()
@@ -594,7 +793,7 @@ describe("filter.conditions.from_user", function()
       src_ip = "10.0.0.1"
     })))
   end)
-  return it("session expirée", function()
+  it("session expirée", function()
     local sessions_mod = require("auth.sessions")
     local write_session_file
     write_session_file = function(entries)
@@ -623,6 +822,112 @@ describe("filter.conditions.from_user", function()
       mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
     })))
+  end)
+  it("_any → true si session active", function()
+    local f = (from_user(USER_CFG))("_any")
+    local v = f({
+      mac = "aa:bb:cc:dd:ee:ff",
+      src_ip = "10.0.0.1"
+    })
+    return assert.is_true(v)
+  end)
+  it("_any → false si pas de session", function()
+    local f = (from_user(USER_CFG))("_any")
+    local v = f({
+      mac = "ff:ff:ff:ff:ff:ff",
+      src_ip = "10.0.0.2"
+    })
+    return assert.is_false(v)
+  end)
+  it("_none → true si pas de session", function()
+    local f = (from_user(USER_CFG))("_none")
+    local v = f({
+      mac = "ff:ff:ff:ff:ff:ff",
+      src_ip = "10.0.0.2"
+    })
+    return assert.is_true(v)
+  end)
+  it("_none → false si session active", function()
+    local f = (from_user(USER_CFG))("_none")
+    local v = f({
+      mac = "aa:bb:cc:dd:ee:ff",
+      src_ip = "10.0.0.1"
+    })
+    return assert.is_false(v)
+  end)
+  it("mac=nil, src_ip=nil → safe_get_mac(nil) → retourne nil", function()
+    package.loaded["filter.conditions.from_user"] = nil
+    local cfg_stub = package.loaded["config"]
+    cfg_stub.MAC_LEARNER_QUERY_SOCK = cfg_stub.MAC_LEARNER_QUERY_SOCK or "/nonexistent/custos/mac_query.sock"
+    local fu = require("filter.conditions.from_user")
+    local f = (fu(USER_CFG))("_none")
+    local v = f({
+      mac = nil,
+      src_ip = nil
+    })
+    return assert.is_true(v)
+  end)
+  it("mac=nil, src_ip présent + learner stub → safe_get_mac retourne nil", function()
+    package.loaded["filter.conditions.from_user"] = nil
+    package.loaded["mac_learner_ipc"] = nil
+    local old_preload = package.preload["mac_learner_ipc"]
+    package.preload["mac_learner_ipc"] = function()
+      return {
+        get_mac = function()
+          return nil
+        end
+      }
+    end
+    local fu = require("filter.conditions.from_user")
+    local f = (fu(USER_CFG))("_none")
+    local v = f({
+      mac = nil,
+      src_ip = "10.0.0.1"
+    })
+    assert.is_true(v)
+    package.preload["mac_learner_ipc"] = old_preload
+    package.loaded["mac_learner_ipc"] = nil
+    package.loaded["filter.conditions.from_user"] = nil
+  end)
+  it("mac=nil → safe_get_mac: chargement mac_learner_ipc échoue → nil", function()
+    package.loaded["filter.conditions.from_user"] = nil
+    package.loaded["mac_learner_ipc"] = nil
+    local old_preload = package.preload["mac_learner_ipc"]
+    package.preload["mac_learner_ipc"] = function()
+      return error("mac_learner_ipc non disponible (test)")
+    end
+    local fu = require("filter.conditions.from_user")
+    local f = (fu(USER_CFG))("_none")
+    local v = f({
+      mac = nil,
+      src_ip = "10.0.0.1"
+    })
+    assert.is_true(v)
+    package.preload["mac_learner_ipc"] = old_preload
+    package.loaded["mac_learner_ipc"] = nil
+  end)
+  return it("mac=nil → safe_get_mac: _get_mac absent (mod sans get_mac) → nil", function()
+    package.loaded["filter.conditions.from_user"] = nil
+    package.loaded["mac_learner_ipc"] = nil
+    local old_preload = package.preload["mac_learner_ipc"]
+    package.preload["mac_learner_ipc"] = function()
+      return { }
+    end
+    local fu = require("filter.conditions.from_user")
+    local f = (fu(USER_CFG))("_none")
+    local v = f({
+      mac = nil,
+      src_ip = "10.0.0.1"
+    })
+    assert.is_true(v)
+    local v2 = f({
+      mac = nil,
+      src_ip = "10.0.0.2"
+    })
+    assert.is_true(v2)
+    package.preload["mac_learner_ipc"] = old_preload
+    package.loaded["mac_learner_ipc"] = nil
+    package.loaded["filter.conditions.from_user"] = nil
   end)
 end)
 describe("filter.conditions.from_users", function()
@@ -881,11 +1186,20 @@ describe("filter.conditions.stolen_computer", function()
     })
     return assert.is_false(v)
   end)
-  return it("liste vide → faux", function()
+  it("liste vide → faux", function()
     local f = (stolen_computer({ }))({ })
     return assert.is_false((f({
       mac = "de:ad:be:ef:00:01"
     })))
+  end)
+  return it("MAC nil → faux", function()
+    local f = (stolen_computer({ }))({
+      "de:ad:be:ef:00:01"
+    })
+    local v = f({
+      mac = nil
+    })
+    return assert.is_false(v)
   end)
 end)
 describe("filter.conditions.in_time", function()
@@ -1070,7 +1384,7 @@ describe("filter.rule", function()
     assert.is_false(v)
     return assert.equals("Bloquer evil", desc)
   end)
-  return it("compile_rules + decide : règles multiples", function()
+  it("compile_rules + decide : règles multiples", function()
     local cfg = {
       rules = {
         {
@@ -1109,6 +1423,51 @@ describe("filter.rule", function()
     })
     assert.is_false(v2)
     return assert.equals("Bloquer tout", desc2)
+  end)
+  it("condition inconnue → erreur", function()
+    local cfg = {
+      rules = {
+        {
+          description = "Règle invalide",
+          conditions = {
+            {
+              nonexistent_condition_xyz = "foo"
+            }
+          },
+          actions = {
+            "allow"
+          }
+        }
+      }
+    }
+    return assert.has_error(function()
+      return m_rule.compile_rules(cfg)
+    end)
+  end)
+  it("action inconnue → erreur", function()
+    local cfg = {
+      rules = {
+        {
+          description = "Action invalide",
+          conditions = { },
+          actions = {
+            "nonexistent_action_xyz"
+          }
+        }
+      }
+    }
+    return assert.has_error(function()
+      return m_rule.compile_rules(cfg)
+    end)
+  end)
+  return it("decide sans règles → false (default deny)", function()
+    local v, msg = m_rule.decide({ }, {
+      domain = "foo.com",
+      src_ip = "10.0.0.1",
+      ts = os.time()
+    })
+    assert.is_false(v)
+    return assert.equals("No matching rule (default deny)", msg)
   end)
 end)
 describe("filter.actions.dnsonly", function()
@@ -1273,7 +1632,7 @@ rules:
     assert.equals("table", type(cfg.times))
     return assert.equals("table", type(cfg.sources))
   end)
-  return it("auth defaults", function()
+  it("auth defaults", function()
     local yaml = "rules: []\n"
     local fd = io.open(TMP_YAML, "w")
     fd:write(yaml)
@@ -1284,5 +1643,14 @@ rules:
     assert.equals("::", cfg.auth.host)
     assert.equals(30, cfg.auth.heartbeat_interval)
     return assert.equals(120, cfg.auth.idle_timeout)
+  end)
+  return it("YAML scalaire (non-table) → nil + erreur", function()
+    local fd = io.open(TMP_YAML, "w")
+    fd:write("just a string\n")
+    fd:close()
+    local cfg, err = load_config(TMP_YAML)
+    if cfg == nil then
+      return assert.is_not_nil(err)
+    end
   end)
 end)

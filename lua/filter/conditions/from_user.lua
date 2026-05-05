@@ -31,7 +31,11 @@ return function(cfg)
   local sessions_file = (cfg.auth and cfg.auth.sessions_file) or AUTH_SESSIONS_FILE
   return function(user)
     return function(req)
-      local s = session_for_mac(req.mac, req.src_ip, sessions_file)
+      local mac = req.mac
+      if not (mac) then
+        mac = safe_get_mac(req.src_ip)
+      end
+      local s = session_for_mac(mac, req.src_ip, sessions_file)
       if user == "_any" then
         if s then
           bind_session_mac(s.mac, req.mac, req.src_ip, sessions_file)

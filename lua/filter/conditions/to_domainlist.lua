@@ -72,8 +72,12 @@ return function(cfg)
         return false, "Nom de liste invalide: '" .. tostring(listname) .. "'"
       end
     end
-    local path = (cfg.domainlists_dir:gsub("/*$", "")) .. "/" .. listname .. ".bin"
+    local base = (cfg.domainlists_dir:gsub("/*$", "")) .. "/" .. listname
+    local path = base .. ".bin"
     local arr, n_or_err = load_list(path)
+    if not (arr) then
+      arr, n_or_err = load_list(base .. ".domains")
+    end
     if not (arr) then
       local msg = "Cannot load domain list '" .. tostring(listname) .. "': " .. tostring(n_or_err)
       return function(req)

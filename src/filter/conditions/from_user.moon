@@ -38,10 +38,11 @@ safe_get_mac = (ip_str) ->
     (req) ->
       -- session_for_mac indexée par MAC évite le coût du fallback par get_mac
       -- dans la majorité des cas en mode bridge.
-      s = session_for_mac req.mac, req.src_ip, sessions_file
-
-      -- TODO: fallback via get_mac sera ajouté plus tard
-      -- (actuellement causant issues au déploiement)
+      mac = req.mac
+      -- Fallback : si le MAC est inconnu, tenter de le résoudre via le learner
+      unless mac
+        mac = safe_get_mac req.src_ip
+      s = session_for_mac mac, req.src_ip, sessions_file
 
       if user == "_any"
         if s

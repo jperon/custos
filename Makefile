@@ -114,18 +114,22 @@ test: all compile-specs test-unit test-ffi
 
 coverage: all compile-specs
 	@mkdir -p tmp/coverage tmp/test-logs
-	@rm -f tmp/coverage/luacov.stats.out tmp/coverage/luacov.report.out
+	@rm -f tmp/coverage/luacov.stats.out tmp/coverage/luacov.report.out luacov.stats.out luacov.report.out
 	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
 	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
 	    --coverage --coverage-config-file=.luacov \
 	    tests/unit 2>&1 | tee tmp/test-logs/coverage.log
-	@# Busted écrit luacov.stats.out à la racine ; le déplacer si besoin
-	@mv luacov.stats.out  tmp/coverage/luacov.stats.out  2>/dev/null || true
-	@# Générer le rapport texte depuis les stats
-	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  luajit -e "require('luacov.reporter').report()" 2>&1 || \
-	  $(HOME)/.luarocks/bin/luacov 2>&1 || true
-	@mv luacov.report.out tmp/coverage/luacov.report.out 2>/dev/null || true
+	@# Busted écrit luacov.stats.out à la racine ; le déplacer si pas déjà au bon endroit
+	@test -f luacov.stats.out && mv luacov.stats.out tmp/coverage/luacov.stats.out || true
+	@# Générer le rapport depuis le stats (luacov lit .luacov pour statsfile/reportfile)
+	@if [ -f tmp/coverage/luacov.stats.out ]; then \
+	  LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  luajit -e "require('luacov.reporter').report('.luacov')" 2>/dev/null || \
+	  LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  luajit -e "local r=require('luacov.reporter'); r.report()" 2>/dev/null || \
+	  $(HOME)/.luarocks/bin/luacov -c .luacov 2>/dev/null || true; \
+	fi
+	@test -f luacov.report.out && mv luacov.report.out tmp/coverage/luacov.report.out || true
 	@echo ""
 	@echo "Rapport de couverture : tmp/coverage/luacov.report.out"
 	@if [ -f tmp/coverage/luacov.report.out ]; then \

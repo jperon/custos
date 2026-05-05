@@ -129,3 +129,281 @@ describe "parse/mac_learner", ->
       -- inet_pton AF_INET6 échoue pour IPv4 pure → mac_from_eui64 nil → "unknown"
       mac = get_mac "10.0.0.1"
       assert.equals "unknown", mac
+
+  -- ── mac_from_eui64 : branche inet_pton échoue ───────────────────────────
+
+  describe "mac_from_eui64 inet_pton failure", ->
+    it "chaîne avec ':' mais IPv6 invalide → inet_pton retourne 0 → nil", ->
+      -- "not:a:valid:v6" passe le filtre find(':') mais inet_pton AF_INET6 retourne 0
+      mac = mac_from_eui64 "not:a:valid:v6addr:xyz"
+      assert.is_nil mac
+
+    it "chaîne '::-' invalide → nil", ->
+      mac = mac_from_eui64 "zz::gg::hh"
+      assert.is_nil mac
+
+  -- ── get_mac : chemin post-connect (learner actif) ───────────────────────
+  -- On lance un serveur Unix socket en Python pour simuler le mac_learner.
+
+  describe "get_mac avec learner actif", ->
+    SOCK_PATH = "./tmp/test_mac_ipc_query.sock"
+    server_pid = nil
+
+    -- Vérifie la compatibilité du layout de struct sockaddr_un.
+    -- Si socket.lua a été chargé avant ce spec, sa_family_t = unsigned int (4 bytes)
+    -- au lieu de unsigned short (2 bytes), ce qui casse mac_learner_ipc (addr_len hardcodé).
+    -- Dans ce cas, on skippe les tests qui nécessitent une vraie connexion AF_UNIX.
+    un_family_size = ffi.sizeof(ffi.typeof("struct sockaddr_un")) - 108  -- sun_family offset
+    compatible_layout = (un_family_size == 2)
+
+    -- Démarre le serveur Python en arrière-plan et attend la création du socket.
+    -- Retourne le PID du processus background.
+    start_server = (response, max_conns) ->
+      max_conns = max_conns or 5
+      script = "./tmp/mac_server_test.py"
+      os.execute "rm -f " .. SOCK_PATH
+      pid_file = SOCK_PATH .. ".pid"
+      -- Lancer le serveur en background ; écrire le PID dans pid_file
+      os.execute string.format(
+        "python3 %s %s '%s' %d >/dev/null 2>&1 & echo $! > %s",
+        script, SOCK_PATH, response, max_conns, pid_file
+      )
+      -- Attendre que le socket Unix soit créé (os.execute retourne true en LuaJIT)
+      for i = 1, 40
+        if os.execute("test -S " .. SOCK_PATH)
+          os.execute "sleep 0.05"  -- petit délai supplémentaire pour listen()
+          break
+        os.execute "sleep 0.1"
+      -- Lire le PID
+      fh_pid = io.open pid_file, "r"
+      pid = 0
+      if fh_pid
+        pid = tonumber(fh_pid\read "*l") or 0
+        fh_pid\close!
+        os.remove pid_file
+      pid
+
+    stop_server = (pid) ->
+      os.execute "kill #{pid} 2>/dev/null; true"
+      os.remove SOCK_PATH
+
+    before_each ->
+      -- Recharger mac_learner_ipc avec le bon socket path
+      package.loaded["mac_learner_ipc"] = nil
+      cfg = package.loaded["config"]
+      cfg.MAC_LEARNER_QUERY_SOCK = SOCK_PATH
+
+    after_each ->
+      stop_server server_pid if server_pid
+      server_pid = nil
+      -- Restaurer socket path non-existent pour isoler les autres tests
+      cfg = package.loaded["config"]
+      cfg.MAC_LEARNER_QUERY_SOCK = "/nonexistent/custos/mac_query.sock"
+      package.loaded["mac_learner_ipc"] = nil
+
+    it "learner répond avec un MAC valide → retourne ce MAC", ->
+      -- Ce test nécessite que struct sockaddr_un ait sun_family = 2 octets (unsigned short).
+      -- Si socket.lua a été chargé avant, sa_family_t = unsigned int (4 octets) → skip.
+      pending "struct sockaddr_un incompatible (sa_family_t=uint32 de socket.lua)" unless compatible_layout
+      server_pid = start_server "aa:bb:cc:dd:ee:ff", 3
+      m = require "mac_learner_ipc"
+      result = m.get_mac "10.0.0.1"
+      assert.equals "aa:bb:cc:dd:ee:ff", result
+
+    it "learner répond avec MAC invalide + IP non-EUI-64 → \"unknown\"", ->
+      pending "struct sockaddr_un incompatible (sa_family_t=uint32 de socket.lua)" unless compatible_layout
+      server_pid = start_server "INVALID_RESPONSE", 3
+      m = require "mac_learner_ipc"
+      result = m.get_mac "10.0.0.1"
+      assert.equals "unknown", result
+
+    it "learner répond avec MAC invalide + IP EUI-64 → MAC via fallback", ->
+      pending "struct sockaddr_un incompatible (sa_family_t=uint32 de socket.lua)" unless compatible_layout
+      server_pid = start_server "INVALID", 3
+      m = require "mac_learner_ipc"
+      -- fe80::211:22ff:fe33:4455 → MAC 00:11:22:33:44:55
+      result = m.get_mac "fe80::211:22ff:fe33:4455"
+      assert.equals "00:11:22:33:44:55", result
+
+  -- ── get_mac : n <= 0 (recv retourne 0 ou erreur) ────────────────────────
+  -- Serveur ferme connexion sans envoyer de données
+
+  describe "get_mac recv vide (n <= 0)", ->
+    SOCK_PATH2 = "./tmp/test_mac_ipc_empty.sock"
+    server_pid2 = nil
+    un_family_size2 = ffi.sizeof(ffi.typeof("struct sockaddr_un")) - 108
+    compatible2 = (un_family_size2 == 2)
+
+    before_each ->
+      package.loaded["mac_learner_ipc"] = nil
+      cfg = package.loaded["config"]
+      cfg.MAC_LEARNER_QUERY_SOCK = SOCK_PATH2
+
+    after_each ->
+      os.execute "kill #{server_pid2} 2>/dev/null; true" if server_pid2
+      os.remove SOCK_PATH2
+      server_pid2 = nil
+      cfg = package.loaded["config"]
+      cfg.MAC_LEARNER_QUERY_SOCK = "/nonexistent/custos/mac_query.sock"
+      package.loaded["mac_learner_ipc"] = nil
+
+    it "learner ferme connexion sans données → \"unknown\"", ->
+      pending "struct sockaddr_un incompatible (sa_family_t=uint32 de socket.lua)" unless compatible2
+      -- Serveur qui accepte mais ne renvoie rien (n <= 0)
+      os.execute "rm -f " .. SOCK_PATH2
+      cmd = string.format(
+        "python3 ./tmp/mac_server_empty.py %s 3 >/dev/null 2>&1 & echo $!",
+        SOCK_PATH2
+      )
+      fh = io.popen cmd
+      pid_str = fh\read "*l"
+      fh\close!
+      server_pid2 = tonumber pid_str
+      -- Attendre que le socket Unix soit créé (os.execute retourne true en LuaJIT)
+      for i = 1, 20
+        if os.execute("test -S " .. SOCK_PATH2)
+          os.execute "sleep 0.05"
+          break
+        os.execute "sleep 0.1"
+      m = require "mac_learner_ipc"
+      result = m.get_mac "10.0.0.1"
+      assert.equals "unknown", result
+
+  -- ── get_mac : mock libc — couvre sock<0 et chemin post-connect ───────────
+  -- Ces tests remplacent ffi_defs.libc par un proxy Lua permettant de
+  -- simuler des erreurs de socket ou des réponses contrôlées.
+  -- Ils n'utilisent PAS struct sockaddr_un → pas de conflit de layout.
+
+  describe "get_mac mock libc", ->
+    -- Proxy libc : table plate avec des wrappers Lua qui appellent ffi.C.*
+    -- directement (sans pré-cache au niveau describe — évite les accès à
+    -- ffi.C sous le debug hook de luacov qui peut les désactiver).
+    make_mock_libc = ->
+      {
+        socket:           (a, b, c)    -> ffi.C.socket a, b, c
+        close:            (fd)         -> ffi.C.close fd
+        connect:          (s, a, l)    -> ffi.C.connect s, a, l
+        send:             (s, b, n, f) -> ffi.C.send s, b, n, f
+        recv:             (s, b, n, f) -> ffi.C.recv s, b, n, f
+        inet_pton:        (af, src, d) -> ffi.C.inet_pton af, src, d
+        __errno_location: ()           -> ffi.C.__errno_location!
+      }
+
+    orig_ffi_defs = nil
+    mock_libc = nil
+
+    before_each ->
+      -- Sauvegarder ffi_defs original
+      orig_ffi_defs = package.loaded["ffi_defs"]
+      -- Créer un nouveau mock libc
+      mock_libc = make_mock_libc!
+      -- Injecter dans ffi_defs stub
+      package.loaded["ffi_defs"] = {
+        ffi: ffi,
+        libc: mock_libc,
+        libnfq: {},
+        libnft: {},
+      }
+      -- Recharger mac_learner_ipc pour qu'il capture le mock libc
+      package.loaded["mac_learner_ipc"] = nil
+      cfg = package.loaded["config"]
+      cfg.MAC_LEARNER_QUERY_SOCK = "/nonexistent/sock"
+
+    after_each ->
+      -- Restaurer ffi_defs original
+      package.loaded["ffi_defs"] = orig_ffi_defs
+      package.loaded["mac_learner_ipc"] = nil
+      mock_libc = nil
+
+    it "socket() retourne -1 → log_warn + fallback EUI-64 ou unknown", ->
+      -- Couvre la branche 'sock < 0' : log_warn + errno + return fallback
+      log_calls = {}
+      old_log = package.loaded["log"]
+      package.loaded["log"] = { log_warn: (x) -> log_calls[#log_calls + 1] = x }
+      -- Simuler socket() qui échoue : remplacer la fonction dans mock_libc
+      mock_libc.socket = -> -1
+      m = require "mac_learner_ipc"
+      result = m.get_mac "10.0.0.1"
+      -- Vérifier que la branche sock<0 a été prise
+      assert.equals "unknown", result
+      assert.equals 1, #log_calls
+      assert.equals "mac_ipc_socket_failed", log_calls[1].action
+      package.loaded["log"] = old_log
+
+    it "socket() retourne -1 + IP EUI-64 → fallback EUI-64", ->
+      -- Couvre la branche 'sock < 0' avec fallback mac_from_eui64 réussi
+      package.loaded["log"] = { log_warn: (x) -> nil }
+      mock_libc.socket = -> -1
+      m = require "mac_learner_ipc"
+      -- fe80::211:22ff:fe33:4455 → 00:11:22:33:44:55
+      result = m.get_mac "fe80::211:22ff:fe33:4455"
+      assert.equals "00:11:22:33:44:55", result
+
+    it "connect réussi + recv MAC valide → retourne MAC", ->
+      -- Couvre le chemin post-connect complet (send/recv/parse)
+      pcall -> ffi.cdef "int socketpair(int domain, int type, int protocol, int sv[2]);"
+      sv = ffi.new "int[2]"
+      rc = ffi.C.socketpair 1, 1, 0, sv
+      pending "socketpair non disponible" unless rc == 0
+      -- Écrire la réponse côté serveur (sv[1]) AVANT que get_mac lise
+      mac_resp = "aa:bb:cc:dd:ee:ff"
+      ffi.C.send sv[1], mac_resp, #mac_resp, 0
+      ffi.C.close sv[1]
+      -- Remplacer socket() → fd client déjà connecté
+      client_fd = sv[0]
+      mock_libc.socket = -> client_fd
+      -- Remplacer connect() → succès
+      mock_libc.connect = (s, a, l) -> 0
+      -- Mocker send() → no-op (sv[1] fermé, évite SIGPIPE)
+      mock_libc.send = (s, b, n, f) -> n
+      m = require "mac_learner_ipc"
+      result = m.get_mac "10.0.0.1"
+      assert.equals "aa:bb:cc:dd:ee:ff", result
+
+    it "connect réussi + recv réponse invalide + non-EUI-64 → unknown", ->
+      pcall -> ffi.cdef "int socketpair(int domain, int type, int protocol, int sv[2]);"
+      sv = ffi.new "int[2]"
+      rc = ffi.C.socketpair 1, 1, 0, sv
+      pending "socketpair non disponible" unless rc == 0
+      resp = "NOT_A_MAC"
+      ffi.C.send sv[1], resp, #resp, 0
+      ffi.C.close sv[1]
+      client_fd = sv[0]
+      mock_libc.socket = -> client_fd
+      mock_libc.connect = (s, a, l) -> 0
+      mock_libc.send = (s, b, n, f) -> n
+      m = require "mac_learner_ipc"
+      result = m.get_mac "10.0.0.1"
+      assert.equals "unknown", result
+
+    it "connect réussi + recv réponse invalide + IP EUI-64 → MAC via EUI-64", ->
+      pcall -> ffi.cdef "int socketpair(int domain, int type, int protocol, int sv[2]);"
+      sv = ffi.new "int[2]"
+      rc = ffi.C.socketpair 1, 1, 0, sv
+      pending "socketpair non disponible" unless rc == 0
+      resp = "INVALID_MAC"
+      ffi.C.send sv[1], resp, #resp, 0
+      ffi.C.close sv[1]
+      client_fd = sv[0]
+      mock_libc.socket = -> client_fd
+      mock_libc.connect = (s, a, l) -> 0
+      mock_libc.send = (s, b, n, f) -> n
+      m = require "mac_learner_ipc"
+      -- fe80::211:22ff:fe33:4455 → 00:11:22:33:44:55 via EUI-64 fallback
+      result = m.get_mac "fe80::211:22ff:fe33:4455"
+      assert.equals "00:11:22:33:44:55", result
+
+    it "connect réussi + recv retourne 0 (connexion fermée) → unknown", ->
+      pcall -> ffi.cdef "int socketpair(int domain, int type, int protocol, int sv[2]);"
+      sv = ffi.new "int[2]"
+      rc = ffi.C.socketpair 1, 1, 0, sv
+      pending "socketpair non disponible" unless rc == 0
+      -- Fermer le côté serveur sans envoyer → recv retourne 0
+      ffi.C.close sv[1]
+      client_fd = sv[0]
+      mock_libc.socket = -> client_fd
+      mock_libc.connect = (s, a, l) -> 0
+      mock_libc.send = (s, b, n, f) -> n
+      m = require "mac_learner_ipc"
+      result = m.get_mac "10.0.0.1"
+      assert.equals "unknown", result

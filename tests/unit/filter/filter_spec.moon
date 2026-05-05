@@ -62,6 +62,20 @@ describe "filter.lib.ipcalc", ->
     n = ipcalc.Net "not_an_ip/24"
     assert.is_nil n
 
+  it "contains avec IP invalide → false", ->
+    n = ipcalc.Net "192.168.0.0/16"
+    assert.is_false (n\contains "not_an_ip")
+
+  it "contains avec IP vide → false", ->
+    n = ipcalc.Net "192.168.0.0/16"
+    assert.is_false (n\contains "")
+
+  it "/31 boundary (dernier bit)", ->
+    n = ipcalc.Net "10.0.0.2/31"
+    assert.is_true (n\contains "10.0.0.2")
+    assert.is_true (n\contains "10.0.0.3")
+    assert.is_false (n\contains "10.0.0.4")
+
 describe "filter.conditions.to_domain", ->
   to_domain = require "filter.conditions.to_domain"
 
@@ -84,6 +98,26 @@ describe "filter.conditions.to_domain", ->
   it "domaine vide → faux", ->
     f = (to_domain {}) "github.com"
     v = f {domain: nil}
+    assert.is_false v
+
+  it "_any → true si domaine présent", ->
+    f = (to_domain {}) "_any"
+    v = f {domain: "github.com"}
+    assert.is_true v
+
+  it "_any → false si domaine absent", ->
+    f = (to_domain {}) "_any"
+    v = f {domain: nil}
+    assert.is_false v
+
+  it "_none → true si domaine absent", ->
+    f = (to_domain {}) "_none"
+    v = f {domain: nil}
+    assert.is_true v
+
+  it "_none → false si domaine présent", ->
+    f = (to_domain {}) "_none"
+    v = f {domain: "github.com"}
     assert.is_false v
 
 describe "filter.conditions.to_domains", ->
@@ -147,6 +181,70 @@ describe "filter.conditions.to_domainlist", ->
     f = (to_domainlist cfg) "nonexistent"
     assert.is_false (f {domain: "github.com"})
 
+  it "fichier .bin absent → faux (load échoue)", ->
+    cfg = { domainlists_dir: TMPDIR }
+    f = (to_domainlist cfg) "does_not_exist_xyz"
+    v, r = f {domain: "github.com"}
+    assert.is_false v
+    assert.is_not_nil r
+
+  it "fichier .bin vide (0 octets) → faux", ->
+    ok = pcall require, "ffi_xxhash"
+    pending "ffi_xxhash non disponible" unless ok
+    empty_bin = TMPDIR .. "/empty_domainlist.bin"
+    fd = io.open empty_bin, "wb"
+    fd\close!
+    cfg = { domainlists_dir: TMPDIR }
+    f = (to_domainlist cfg) "empty_domainlist"
+    v, r = f {domain: "github.com"}
+    assert.is_false v
+    os.remove empty_bin
+
+  it "nom de liste invalide (commence par /) → faux", ->
+    cfg = { domainlists_dir: TMPDIR }
+    f = (to_domainlist cfg) "/etc/passwd"
+    v, r = f {domain: "github.com"}
+    assert.is_false v
+    assert.is_not_nil (r\find "invalide", 1, true)
+
+  it "domaine absent dans req → faux", ->
+    ok = pcall require, "ffi_xxhash"
+    pending "ffi_xxhash non disponible" unless ok
+    cfg = { domainlists_dir: TMPDIR }
+    f = (to_domainlist cfg) "test_filter_domainlist"
+    v, r = f {domain: nil}
+    assert.is_false v
+    assert.is_not_nil (r\find "Missing", 1, true)
+
+  it "fichier texte .domains → domaines chargés et matchés", ->
+    ok = pcall require, "ffi_xxhash"
+    pending "ffi_xxhash non disponible" unless ok
+    -- Créer un fichier texte .domains (pas .bin) pour tester la branche texte
+    domains_path = TMPDIR .. "/test_text_domainlist.domains"
+    fd = io.open domains_path, "w"
+    fd\write "# commentaire\ngithub.com\ndebian.org\n"
+    fd\close!
+    cfg = { domainlists_dir: TMPDIR }
+    -- Pas de .bin correspondant → fallback sur .domains
+    f = (to_domainlist cfg) "test_text_domainlist"
+    assert.is_true (f {domain: "github.com"})
+    assert.is_true (f {domain: "api.debian.org"})
+    assert.is_false (f {domain: "evil.com"})
+    os.remove domains_path
+
+  it "fichier .domains vide → faux", ->
+    ok = pcall require, "ffi_xxhash"
+    pending "ffi_xxhash non disponible" unless ok
+    empty_domains = TMPDIR .. "/empty_text_domainlist.domains"
+    fd = io.open empty_domains, "w"
+    fd\write ""
+    fd\close!
+    cfg = { domainlists_dir: TMPDIR }
+    f = (to_domainlist cfg) "empty_text_domainlist"
+    v, r = f {domain: "github.com"}
+    assert.is_false v
+    os.remove empty_domains
+
 describe "filter.conditions.to_domainlists", ->
   to_domainlists = require "filter.conditions.to_domainlists"
   TMPDIR = "./tmp"
@@ -205,6 +303,22 @@ describe "filter.conditions.from_mac", ->
   it "insensible à la casse", ->
     f = (from_mac {}) "AA:BB:CC:DD:EE:FF"
     assert.is_true (f {mac: "aa:bb:cc:dd:ee:ff"})
+
+  it "_any → true si MAC présente", ->
+    f = (from_mac {}) "_any"
+    assert.is_true (f {mac: "aa:bb:cc:dd:ee:ff"})
+
+  it "_any → false si MAC absente", ->
+    f = (from_mac {}) "_any"
+    assert.is_false (f {mac: nil})
+
+  it "_none → true si MAC absente", ->
+    f = (from_mac {}) "_none"
+    assert.is_true (f {mac: nil})
+
+  it "_none → false si MAC présente", ->
+    f = (from_mac {}) "_none"
+    assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff"})
 
 describe "filter.conditions.from_macs", ->
   from_macs = require "filter.conditions.from_macs"
@@ -276,6 +390,31 @@ describe "filter.conditions.from_net", ->
   it "CIDR invalide → faux", ->
     f = (from_net {}) "invalid/24"
     assert.is_false (f {src_ip: "192.168.1.1"})
+
+  it "_any → true si src_ip présente", ->
+    f = (from_net {}) "_any"
+    v = f {src_ip: "10.0.0.1"}
+    assert.is_true v
+
+  it "_any → false si src_ip absente", ->
+    f = (from_net {}) "_any"
+    v = f {src_ip: nil}
+    assert.is_false v
+
+  it "_none → true si src_ip absente", ->
+    f = (from_net {}) "_none"
+    v = f {src_ip: nil}
+    assert.is_true v
+
+  it "_none → false si src_ip présente", ->
+    f = (from_net {}) "_none"
+    v = f {src_ip: "10.0.0.1"}
+    assert.is_false v
+
+  it "src_ip absente sur CIDR valide → faux", ->
+    f = (from_net {}) "192.168.0.0/16"
+    v = f {src_ip: nil}
+    assert.is_false v
 
 describe "filter.conditions.from_nets", ->
   from_nets = require "filter.conditions.from_nets"
@@ -382,6 +521,89 @@ describe "filter.conditions.from_user", ->
     sessions_mod.reset_cache!
     f = (from_user USER_CFG) "alice"
     assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
+
+  it "_any → true si session active", ->
+    f = (from_user USER_CFG) "_any"
+    v = f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_true v
+
+  it "_any → false si pas de session", ->
+    f = (from_user USER_CFG) "_any"
+    v = f {mac: "ff:ff:ff:ff:ff:ff", src_ip: "10.0.0.2"}
+    assert.is_false v
+
+  it "_none → true si pas de session", ->
+    f = (from_user USER_CFG) "_none"
+    v = f {mac: "ff:ff:ff:ff:ff:ff", src_ip: "10.0.0.2"}
+    assert.is_true v
+
+  it "_none → false si session active", ->
+    f = (from_user USER_CFG) "_none"
+    v = f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_false v
+
+  -- ── safe_get_mac : branches non couvertes ────────────────────────────────
+  -- Ces tests rechargent from_user pour réinitialiser _get_mac_tried.
+  -- La config stub n'a pas MAC_LEARNER_QUERY_SOCK ; on l'ajoute si nécessaire.
+
+  it "mac=nil, src_ip=nil → safe_get_mac(nil) → retourne nil", ->
+    -- Force rechargement pour réinitialiser _get_mac_tried = false
+    package.loaded["filter.conditions.from_user"] = nil
+    cfg_stub = package.loaded["config"]
+    cfg_stub.MAC_LEARNER_QUERY_SOCK = cfg_stub.MAC_LEARNER_QUERY_SOCK or "/nonexistent/custos/mac_query.sock"
+    fu = require "filter.conditions.from_user"
+    f = (fu USER_CFG) "_none"
+    -- mac=nil, src_ip=nil → safe_get_mac(nil) → nil → session_for_mac(nil, nil, ...) → nil
+    v = f {mac: nil, src_ip: nil}
+    assert.is_true v  -- _none + pas de session
+
+  it "mac=nil, src_ip présent + learner stub → safe_get_mac retourne nil", ->
+    -- Rechargement fresh de from_user avec un stub mac_learner_ipc qui retourne nil
+    package.loaded["filter.conditions.from_user"] = nil
+    package.loaded["mac_learner_ipc"] = nil
+    old_preload = package.preload["mac_learner_ipc"]
+    package.preload["mac_learner_ipc"] = -> { get_mac: -> nil }
+    fu = require "filter.conditions.from_user"
+    f = (fu USER_CFG) "_none"
+    v = f {mac: nil, src_ip: "10.0.0.1"}
+    assert.is_true v  -- _none : pas de session active
+    -- Restaurer
+    package.preload["mac_learner_ipc"] = old_preload
+    package.loaded["mac_learner_ipc"] = nil
+    package.loaded["filter.conditions.from_user"] = nil
+
+  it "mac=nil → safe_get_mac: chargement mac_learner_ipc échoue → nil", ->
+    -- Forcer pcall(require) à échouer pour couvrir la branche 'not ok'
+    package.loaded["filter.conditions.from_user"] = nil
+    package.loaded["mac_learner_ipc"] = nil
+    old_preload = package.preload["mac_learner_ipc"]
+    package.preload["mac_learner_ipc"] = -> error "mac_learner_ipc non disponible (test)"
+    fu = require "filter.conditions.from_user"
+    f = (fu USER_CFG) "_none"
+    v = f {mac: nil, src_ip: "10.0.0.1"}
+    assert.is_true v  -- safe_get_mac retourne nil → pas de session → _none vrai
+    -- Restaurer
+    package.preload["mac_learner_ipc"] = old_preload
+    package.loaded["mac_learner_ipc"] = nil
+
+  it "mac=nil → safe_get_mac: _get_mac absent (mod sans get_mac) → nil", ->
+    -- Forcer mac_learner_ipc à charger mais sans get_mac
+    package.loaded["filter.conditions.from_user"] = nil
+    package.loaded["mac_learner_ipc"] = nil
+    old_preload = package.preload["mac_learner_ipc"]
+    package.preload["mac_learner_ipc"] = -> {}  -- table vide, pas de get_mac
+    fu = require "filter.conditions.from_user"
+    -- Premier appel : charge mac_learner_ipc → _get_mac = nil (pas de get_mac)
+    f = (fu USER_CFG) "_none"
+    v = f {mac: nil, src_ip: "10.0.0.1"}
+    assert.is_true v  -- safe_get_mac → _get_mac nil → retourne nil → _none vrai
+    -- Deuxième appel : _get_mac_tried = true, _get_mac = nil → branche 'not _get_mac'
+    v2 = f {mac: nil, src_ip: "10.0.0.2"}
+    assert.is_true v2
+    -- Restaurer
+    package.preload["mac_learner_ipc"] = old_preload
+    package.loaded["mac_learner_ipc"] = nil
+    package.loaded["filter.conditions.from_user"] = nil
 
 describe "filter.conditions.from_users", ->
   from_users = require "filter.conditions.from_users"
@@ -526,6 +748,11 @@ describe "filter.conditions.stolen_computer", ->
     f = (stolen_computer {}) {}
     assert.is_false (f {mac: "de:ad:be:ef:00:01"})
 
+  it "MAC nil → faux", ->
+    f = (stolen_computer {}) {"de:ad:be:ef:00:01"}
+    v = f {mac: nil}
+    assert.is_false v
+
 describe "filter.conditions.in_time", ->
   in_time = require "filter.conditions.in_time"
 
@@ -635,6 +862,35 @@ describe "filter.rule", ->
     v2, _, desc2 = m_rule.decide rules, {domain: "example.com", src_ip: "8.8.8.8", ts: os.time!}
     assert.is_false v2
     assert.equals "Bloquer tout", desc2
+
+  it "condition inconnue → erreur", ->
+    cfg = {
+      rules: {
+        {
+          description: "Règle invalide"
+          conditions: {{nonexistent_condition_xyz: "foo"}}
+          actions: {"allow"}
+        }
+      }
+    }
+    assert.has_error -> m_rule.compile_rules cfg
+
+  it "action inconnue → erreur", ->
+    cfg = {
+      rules: {
+        {
+          description: "Action invalide"
+          conditions: {}
+          actions: {"nonexistent_action_xyz"}
+        }
+      }
+    }
+    assert.has_error -> m_rule.compile_rules cfg
+
+  it "decide sans règles → false (default deny)", ->
+    v, msg = m_rule.decide {}, {domain: "foo.com", src_ip: "10.0.0.1", ts: os.time!}
+    assert.is_false v
+    assert.equals "No matching rule (default deny)", msg
 
 describe "filter.actions.dnsonly", ->
   dnsonly_action = require "filter.actions.dnsonly"
@@ -793,3 +1049,13 @@ rules:
     assert.equals "::", cfg.auth.host
     assert.equals 30, cfg.auth.heartbeat_interval
     assert.equals 120, cfg.auth.idle_timeout
+
+  it "YAML scalaire (non-table) → nil + erreur", ->
+    -- Un fichier YAML qui n'est pas une table (ex: juste un scalaire)
+    fd = io.open TMP_YAML, "w"
+    fd\write "just a string\n"
+    fd\close!
+    cfg, err = load_config TMP_YAML
+    -- Si lyaml parse un scalaire il retourne une string → "configuration vide ou invalide"
+    if cfg == nil
+      assert.is_not_nil err

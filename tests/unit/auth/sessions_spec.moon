@@ -329,3 +329,60 @@ describe "auth/sessions", ->
       }, SF_FILE
       user = user_for_ip "10.0.0.1", SF_FILE, MAC
       assert.is_nil user
+
+  -- ── load_sessions cas limites ────────────────────────────────────────────
+  describe "load_sessions cas limites", ->
+    it "load_sessions nil → table vide", ->
+      { :load_sessions } = require "auth.sessions"
+      result = load_sessions nil
+      assert.is_not_nil result
+      assert.equals 0, #(result or {})
+
+    it "load_sessions fichier Lua valide mais sans return → table vide", ->
+      path = "tmp/sessions_noreturn.lua"
+      fh = io.open path, "w"
+      fh\write "-- no return\nlocal x = 1\n"
+      fh\close!
+      { :load_sessions } = require "auth.sessions"
+      result = load_sessions path
+      assert.is_not_nil result
+      os.remove path
+
+  -- ── enrich_session_ip + bind_session_mac ─────────────────────────────────
+  describe "enrich_session_ip + bind_session_mac", ->
+    { :enrich_session_ip, :bind_session_mac, :session_for_mac } = require "auth.sessions"
+    ENRICH_FILE = "tmp/sessions_enrich.lua"
+    EMAC = "11:22:33:44:55:66"
+    EMAC2 = "aa:bb:cc:dd:ee:ff"
+
+    before_each ->
+      reset_cache!
+
+    it "enrich_session_ip : args invalides → false", ->
+      assert.is_false (enrich_session_ip nil, "10.0.0.1", ENRICH_FILE)
+      assert.is_false (enrich_session_ip EMAC, nil, ENRICH_FILE)
+      assert.is_false (enrich_session_ip EMAC, "10.0.0.1", nil)
+
+    it "enrich_session_ip : IPv6 address → family=ipv6", ->
+      fh = io.open ENRICH_FILE, "w"
+      fh\write string.format('return { ["%s"] = { user="bob", expires=%d } }\n', EMAC, FUTURE)
+      fh\close!
+      reset_cache!
+      enrich_session_ip EMAC, "2001:db8::1", ENRICH_FILE
+      -- La session doit avoir ips.ipv6
+      s = session_for_mac EMAC, "2001:db8::1", ENRICH_FILE
+      assert.is_not_nil s
+      os.remove ENRICH_FILE
+
+    it "bind_session_mac : args invalides → false", ->
+      assert.is_false (bind_session_mac EMAC, nil, "10.0.0.1", ENRICH_FILE)
+      assert.is_false (bind_session_mac EMAC, EMAC2, "10.0.0.1", nil)
+
+    it "bind_session_mac : même MAC → appelle enrich", ->
+      fh = io.open ENRICH_FILE, "w"
+      fh\write string.format('return { ["%s"] = { user="carol", expires=%d } }\n', EMAC, FUTURE)
+      fh\close!
+      reset_cache!
+      result = bind_session_mac EMAC, EMAC, "10.0.0.1", ENRICH_FILE
+      -- Devrait appeler enrich_session_ip (même MAC)
+      os.remove ENRICH_FILE

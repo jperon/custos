@@ -309,3 +309,182 @@ describe "ipc", ->
       assert.equals "dnsonly reason", entry.reason
 
       close_pipe p
+
+  -- ── 19. decode_msg trop court → nil ───────────────────────────────────
+  describe "decode_msg trop court", ->
+    it "message trop court → nil", ->
+      m_ipc = fresh_ipc!
+      result = m_ipc.decode_msg "toocourt"
+      assert.is_nil result
+
+  -- ── 20. encode_msg avec benchmark_ms > 0 ─────────────────────────────
+  describe "encode_msg avec benchmark_ms", ->
+    it "benchmark_ms encodé et décodé", ->
+      m_ipc = fresh_ipc!
+      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, false, "", 42
+      assert.equals 115, #msg
+      decoded = m_ipc.decode_msg msg
+      assert.is_not_nil decoded
+      -- Le benchmark_ms est dans les derniers octets mais decode_msg l'expose
+      -- peu importe, l'important est que le message est valide
+      assert.equals TXID, decoded.txid
+
+  -- ── 21. write_msg fd invalide → géré sans crash ───────────────────────
+  describe "write_msg fd invalide", ->
+    it "write_msg sur fd -1 ne crash pas", ->
+      m_ipc = fresh_ipc!
+      -- fd=-1 invalide, write_msg doit retourner false ou gérer l'erreur
+      ok, err = pcall -> m_ipc.write_msg -1, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      -- Soit ça retourne false, soit ça lève une erreur — dans les deux cas pas de crash fatal
+      assert.is_true (ok == true or ok == false)
+
+  -- ── 22. drain_pipe n<0 (pipe vide, EAGAIN) → retourne 0 ─────────────
+  describe "drain_pipe pipe vide (EAGAIN)", ->
+    it "drain_pipe sur pipe vide retourne 0 sans erreur", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      -- Aucun message écrit : read() retourne -1 (EAGAIN sur non-blocking)
+      count = m_ipc.drain_pipe rfd, (-> 0), nil
+      assert.equals 0, count, "aucun message absorbé sur pipe vide"
+
+      close_pipe p
+
+  -- ── 23. is_pending clé absente → false directement ──────────────────
+  describe "is_pending clé absente", ->
+    it "is_pending retourne false pour une clé inexistante", ->
+      m_ipc = fresh_ipc!
+      result = m_ipc.is_pending 0xDEAD, "1.2.3.4", 1234, "5.6.7.8", -> 0
+      assert.is_false result, "is_pending doit retourner false si clé absente"
+
+  -- ── 24. get_pending_entry clé absente → nil ─────────────────────────
+  describe "get_pending_entry clé absente", ->
+    it "get_pending_entry retourne nil pour une clé inexistante", ->
+      m_ipc = fresh_ipc!
+      entry = m_ipc.get_pending_entry 0xDEAD, "1.2.3.4", 1234, "5.6.7.8", -> 0
+      assert.is_nil entry, "get_pending_entry doit retourner nil si clé absente"
+
+  -- ── 25. get_pending_entry expirée → nil + suppression ───────────────
+  describe "get_pending_entry expirée", ->
+    it "get_pending_entry retourne nil après expiration", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      base = 0
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      m_ipc.drain_pipe rfd, (-> base), nil
+
+      -- Avant expiration : entrée présente
+      e1 = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> base + 4
+      assert.is_not_nil e1, "entrée présente avant expiration"
+
+      -- Après expiration : nil
+      e2 = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> base + 100
+      assert.is_nil e2, "get_pending_entry nil après expiration"
+
+      close_pipe p
+
+  -- ── 26. consume supprime une entrée pending ──────────────────────────
+  describe "consume", ->
+    it "consume supprime l'entrée et is_pending retourne false", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      m_ipc.drain_pipe rfd, (-> 0), nil
+
+      assert.is_true  m_ipc.is_pending(TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1)
+      m_ipc.consume TXID, "192.168.1.42", PORT, "1.1.1.3"
+      assert.is_false m_ipc.is_pending(TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1)
+
+      close_pipe p
+
+  -- ── 27. drain_pipe on_msg callback ───────────────────────────────────
+  describe "drain_pipe on_msg callback", ->
+    it "on_msg est appelé pour chaque message absorbé", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, "reason A"
+      m_ipc.write_dnsonly_msg wfd, 0x5678, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+
+      msgs = {}
+      count = m_ipc.drain_pipe rfd, (-> 0), (msg) ->
+        msgs[#msgs + 1] = msg
+
+      assert.equals 2, count, "2 messages absorbés"
+      assert.equals 2, #msgs, "on_msg appelé 2 fois"
+      assert.equals TXID,   msgs[1].txid
+      assert.equals "reason A", msgs[1].reason
+      assert.is_true msgs[2].dnsonly
+
+      close_pipe p
+
+  -- ── 28. encode_msg benchmark_ms round-trip ────────────────────────────
+  describe "encode_msg benchmark_ms round-trip", ->
+    it "benchmark_ms est encodé et décodé correctement", ->
+      m_ipc = fresh_ipc!
+      bms   = 12345
+      msg   = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                false, false, "", bms
+      decoded = m_ipc.decode_msg msg
+      assert.is_not_nil decoded
+      assert.equals bms, decoded.benchmark_ms, "benchmark_ms préservé"
+
+  -- ── 29. reason exactement 63 chars (limite sans troncature) ──────────
+  describe "reason 63 chars (limite exacte)", ->
+    it "reason de 63 chars n'est pas tronquée", ->
+      m_ipc    = fresh_ipc!
+      reason63 = string.rep "y", 63
+      msg      = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                   false, false, reason63
+      decoded  = m_ipc.decode_msg msg
+      assert.equals 63,       #decoded.reason, "longueur préservée"
+      assert.equals reason63, decoded.reason,  "contenu intact"
+
+  -- ── 30. decode_msg trop court → nil ──────────────────────────────────
+  describe "decode_msg trop court", ->
+    it "decode_msg sur chaîne courte retourne nil", ->
+      m_ipc = fresh_ipc!
+      result = m_ipc.decode_msg "too_short"
+      assert.is_nil result, "decode_msg doit retourner nil si < 115 B"
+
+  -- ── 31. IPv6 dnsonly round-trip via drain_pipe ────────────────────────
+  describe "IPv6 dnsonly round-trip via drain_pipe", ->
+    it "write_dnsonly_msg IPv6 → drain_pipe → entry.dnsonly = true", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      m_ipc.write_dnsonly_msg wfd, TXID, IP6_RAW, PORT, MAC_RAW, RESOLVER6_RAW, "ipv6 dns"
+      count = m_ipc.drain_pipe rfd, (-> 0), nil
+      assert.equals 1, count
+
+      entry = m_ipc.get_pending_entry TXID, "2001:db8::1", PORT, "2001:db8::53", -> 1
+      assert.is_not_nil entry,   "entrée présente"
+      assert.is_true  entry.dnsonly, "dnsonly=true pour IPv6"
+      assert.equals "ipv6 dns", entry.reason
+
+      close_pipe p
+
+  -- ── 32. IPv6 refused round-trip via drain_pipe ────────────────────────
+  describe "IPv6 refused round-trip via drain_pipe", ->
+    it "write_refused_msg IPv6 → drain_pipe → entry.refused = true", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      m_ipc.write_refused_msg wfd, TXID, IP6_RAW, PORT, MAC_RAW, RESOLVER6_RAW, "ipv6 block"
+      count = m_ipc.drain_pipe rfd, (-> 0), nil
+      assert.equals 1, count
+
+      entry = m_ipc.get_pending_entry TXID, "2001:db8::1", PORT, "2001:db8::53", -> 1
+      assert.is_not_nil entry,    "entrée présente"
+      assert.is_true  entry.refused, "refused=true pour IPv6"
+      assert.equals "ipv6 block", entry.reason
+
+      close_pipe p

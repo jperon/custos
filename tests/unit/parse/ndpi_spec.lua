@@ -102,7 +102,7 @@ make_tcp_raw = function(src_ip, dst_ip, src_port, dst_port, tcp_seq, tcp_payload
   local tcp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), bit.rshift(bit.band(tcp_seq, 0xFF000000), 24), bit.rshift(bit.band(tcp_seq, 0x00FF0000), 16), bit.rshift(bit.band(tcp_seq, 0x0000FF00), 8), bit.band(tcp_seq, 0xFF), 0, 0, 0, 0, 0x50, 0x18, 0x72, 0x10, 0, 0, 0, 0)
   return ip .. tcp .. tcp_payload
 end
-return describe("parse/ndpi", function()
+describe("parse/ndpi", function()
   describe("parse_packet", function()
     it("UDP DNS minimal", function()
       local dns = make_dns("\3www\6github\3com\0", 1, false)
@@ -376,5 +376,219 @@ return describe("parse/ndpi", function()
       assert.equals(#new_dns, dns_prefix, "DNS length prefix (TCP) = longueur DNS")
       return assert.equals(new_dns, result:sub(43, 42 + #new_dns), "payload DNS TCP correct")
     end)
+  end)
+end)
+describe("parse/ndpi — ndpi_v5 backend", function()
+  return it("major=5 charge le backend ndpi_v5", function()
+    package.loaded["parse.ndpi"] = nil
+    package.loaded["ffi_ndpi"] = {
+      ffi = ffi,
+      ndpi_lib = { },
+      major = 5
+    }
+    local m5 = dofile("lua/parse/ndpi.lua")
+    assert.is_not_nil(m5, "module ndpi chargé avec major=5")
+    assert.is_not_nil(m5.parse_packet, "parse_packet exporté")
+    assert.is_not_nil(m5.purge_flows, "purge_flows exporté")
+    package.loaded["parse.ndpi"] = nil
+    package.loaded["ffi_ndpi"] = {
+      ffi = ffi,
+      ndpi_lib = { },
+      major = 4
+    }
+  end)
+end)
+describe("parse/ndpi — constantes QTYPE et RCODE", function()
+  it("QTYPE.ANY == 255", function()
+    return assert.equals(255, m_ndpi.QTYPE.ANY)
+  end)
+  it("RCODE.REFUSED == 5", function()
+    return assert.equals(5, m_ndpi.RCODE.REFUSED)
+  end)
+  return it("QTYPE_NAME[255] == 'ANY'", function()
+    return assert.equals("ANY", m_ndpi.QTYPE_NAME[255])
+  end)
+end)
+describe("parse/ndpi — purge_flows et purge_tcp_buffers", function()
+  local fresh_ndpi_with_flow
+  fresh_ndpi_with_flow = function()
+    package.loaded["parse.ndpi"] = nil
+    package.loaded["ffi_ndpi"] = {
+      ffi = ffi,
+      ndpi_lib = {
+        ndpi_detection_get_sizeof_ndpi_flow_struct = function()
+          return 64
+        end
+      },
+      major = 4
+    }
+    pcall(ffi.cdef, "typedef struct ndpi_flow_struct ndpi_flow_struct;")
+    package.loaded["parse.ndpi_v4"] = {
+      init = function()
+        return nil
+      end,
+      detect = function()
+        return 0, 0
+      end,
+      cleanup = function()
+        return nil
+      end
+    }
+    local m = dofile("lua/parse/ndpi.lua")
+    package.loaded["parse.ndpi"] = nil
+    package.loaded["ffi_ndpi"] = {
+      ffi = ffi,
+      ndpi_lib = { },
+      major = 4
+    }
+    return m
+  end
+  it("purge_flows(0) s'exécute sans erreur (table vide)", function()
+    local m = fresh_ndpi_with_flow()
+    local ok, err = pcall(m.purge_flows, 0)
+    return assert.is_true(ok, "purge_flows ne doit pas lever d'erreur: " .. tostring(err))
+  end)
+  it("purge_flows(300) avec défaut max_age", function()
+    local m = fresh_ndpi_with_flow()
+    local ok, err = pcall(m.purge_flows)
+    return assert.is_true(ok, "purge_flows() sans argument ne doit pas lever d'erreur: " .. tostring(err))
+  end)
+  it("purge_tcp_buffers(0) s'exécute sans erreur", function()
+    local m = fresh_ndpi_with_flow()
+    local ok, err = pcall(m.purge_tcp_buffers, 0)
+    return assert.is_true(ok, "purge_tcp_buffers ne doit pas lever d'erreur: " .. tostring(err))
+  end)
+  it("purge_tcp_buffers() avec défaut max_age", function()
+    local m = fresh_ndpi_with_flow()
+    local ok, err = pcall(m.purge_tcp_buffers)
+    return assert.is_true(ok, "purge_tcp_buffers() sans argument: " .. tostring(err))
+  end)
+  it("purge_flows expire un flow créé dans le passé", function()
+    local m = fresh_ndpi_with_flow()
+    local dns = make_dns("\3foo\3bar\0", 1, false, 0xABCD)
+    local raw = make_ipv4_tcp_dns("192.168.5.1", "8.8.8.8", 59990, 53, dns)
+    parse_packet(raw)
+    local ok, err = pcall(m.purge_flows, 0)
+    return assert.is_true(ok, "purge_flows(0) apres flow: " .. tostring(err))
+  end)
+  return it("purge_tcp_buffers expire un buffer TCP créé dans le passé", function()
+    local m = fresh_ndpi_with_flow()
+    local dns = make_dns("\3baz\3qux\0", 1, false, 0xDEF0)
+    local raw = make_ipv4_tcp_dns("192.168.6.1", "8.8.8.8", 59991, 53, dns)
+    parse_packet(raw)
+    local ok, err = pcall(m.purge_tcp_buffers, 0)
+    return assert.is_true(ok, "purge_tcp_buffers(0) apres buffer: " .. tostring(err))
+  end)
+end)
+describe("parse/ndpi — IPv6 Next Header 59 et inconnu", function()
+  local src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  local dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  local make_ipv6_bare
+  make_ipv6_bare = function(nh)
+    return string.char(0x60, 0, 0, 0, 0, 0, nh, 64) .. src6 .. dst6
+  end
+  it("IPv6 NH=59 (No Next Header) → parse_packet retourne nil", function()
+    local raw = make_ipv6_bare(59)
+    local pkt = parse_packet(raw)
+    return assert.is_nil(pkt, "NH=59 doit retourner nil (pas de couche transport)")
+  end)
+  it("IPv6 NH=253 (inconnu) → parse_packet retourne nil", function()
+    local raw = make_ipv6_bare(253)
+    local pkt = parse_packet(raw)
+    return assert.is_nil(pkt, "NH=253 (inconnu) doit retourner nil")
+  end)
+  it("IPv6 NH=0 (HBH) trop court → parse_packet retourne nil", function()
+    local raw = make_ipv6_bare(0)
+    local pkt = parse_packet(raw)
+    return assert.is_nil(pkt, "HBH trop court doit retourner nil")
+  end)
+  return it("IPv6 NH=0 (HBH) un seul octet → parse_packet retourne nil", function()
+    local raw = make_ipv6_bare(0) .. string.char(17)
+    local pkt = parse_packet(raw)
+    return assert.is_nil(pkt, "HBH 1-octet doit retourner nil")
+  end)
+end)
+describe("parse/ndpi — IPv6 AH extension header (NH=51)", function()
+  local src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+  local dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+  return it("IPv6 + AH (NH=51, len=1 → 12B) + UDP DNS → parse OK", function()
+    local dns = make_dns("\3www\6github\3com\0", 1, false)
+    local ah = string.char(17, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    local raw = make_ipv6_ext_udp_dns(src6, dst6, 54326, 53, dns, 51, ah)
+    local pkt = parse_packet(raw)
+    assert.is_not_nil(pkt, "parse_packet nil avec AH header")
+    assert.equals(6, pkt.ip.version)
+    assert.equals("udp", pkt.l4.proto)
+    return assert.equals(0x1234, pkt.dns.txid)
+  end)
+end)
+describe("parse/ndpi — TCP tcp_control (flag RST/FIN, pas de données)", function()
+  it("TCP ACK pur (0 payload, pas de buffer) → nil + tcp_control", function()
+    local src_bytes = "\xC0\xA8\x01\x01"
+    local dst_bytes = "\x08\x08\x08\x08"
+    local total_len = 20 + 20
+    local ip_hdr = string.char(0x45, 0, bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF), 0, 1, 0, 0, 64, 6, 0, 0) .. src_bytes .. dst_bytes
+    local tcp_hdr = string.char(0xD4, 0x31, 0, 53, 0, 0, 0, 1, 0, 0, 0, 0, 0x50, 0x10, 0x72, 0x10, 0, 0, 0, 0)
+    local raw = ip_hdr .. tcp_hdr
+    local pkt, status = parse_packet(raw)
+    assert.is_nil(pkt, "TCP ACK pur doit retourner nil")
+    return assert.equals("tcp_control", status, "statut doit être tcp_control")
+  end)
+  return it("TCP RST (flag 0x04) sans données → nil + tcp_control", function()
+    local src_bytes = "\xC0\xA8\x01\x01"
+    local dst_bytes = "\x08\x08\x08\x08"
+    local total_len = 20 + 20
+    local ip_hdr = string.char(0x45, 0, bit.rshift(bit.band(total_len, 0xFF00), 8), bit.band(total_len, 0xFF), 0, 1, 0, 0, 64, 6, 0, 0) .. src_bytes .. dst_bytes
+    local tcp_hdr = string.char(0xD4, 0x32, 0, 53, 0, 0, 0, 2, 0, 0, 0, 0, 0x50, 0x04, 0x72, 0x10, 0, 0, 0, 0)
+    local raw = ip_hdr .. tcp_hdr
+    local pkt, status = parse_packet(raw)
+    assert.is_nil(pkt, "TCP RST sans données → nil")
+    return assert.equals("tcp_control", status)
+  end)
+end)
+describe("parse/ndpi — patch_and_checksum IPv6 UDP (fix_udp6_cksum)", function()
+  return it("patch_and_checksum sur IPv6 UDP recalcule le checksum correctement", function()
+    local src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+    local dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+    local qname_enc = "\x03www\x06github\x03com\x00"
+    local hdr = string.char(0xAB, 0xCD, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+    local question = qname_enc .. string.char(0, 1, 0, 1)
+    local rr = "\xC0\x0C" .. string.char(0, 1, 0, 1) .. string.char(0, 0, 1, 0x2C) .. string.char(0, 4) .. string.char(1, 2, 3, 4)
+    local dns_payload = hdr .. question .. rr
+    local raw = make_ipv6_udp_dns(src6, dst6, 54327, 53, dns_payload)
+    local pkt = parse_packet(raw)
+    assert.is_not_nil(pkt, "parse_packet IPv6 UDP retourne nil")
+    assert.equals(6, pkt.ip.version)
+    assert.equals("udp", pkt.l4.proto)
+    local answers = m_ndpi.parse_answers(raw, pkt)
+    assert.equals(1, #answers, "1 réponse attendue")
+    local patched = patch_and_checksum(raw, pkt, answers, 60)
+    assert.is_not_nil(patched, "patch_and_checksum IPv6 UDP retourne nil")
+    return assert.equals(#raw, #patched, "longueur du paquet inchangée")
+  end)
+end)
+return describe("parse/ndpi — patch_and_checksum IPv6 TCP (fix_tcp6_cksum)", function()
+  return it("patch_and_checksum sur IPv6 TCP fonctionne", function()
+    local src6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x42"
+    local dst6 = "\x20\x01\x0d\xb8" .. string.rep("\x00", 11) .. "\x01"
+    local qname_enc = "\x03foo\x03bar\x00"
+    local hdr = string.char(0xEF, 0x01, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0)
+    local question = qname_enc .. string.char(0, 1, 0, 1)
+    local rr = "\xC0\x0C" .. string.char(0, 1, 0, 1) .. string.char(0, 0, 1, 0x2C) .. string.char(0, 4) .. string.char(5, 6, 7, 8)
+    local dns_payload = hdr .. question .. rr
+    local dns_len = #dns_payload
+    local pfx = string.char(bit.rshift(bit.band(dns_len, 0xFF00), 8), bit.band(dns_len, 0xFF))
+    local tcp_payload = pfx .. dns_payload
+    local pay_len = 20 + #tcp_payload
+    local ip6 = string.char(0x60, 0, 0, 0, bit.rshift(bit.band(pay_len, 0xFF00), 8), bit.band(pay_len, 0xFF), 6, 64) .. src6 .. dst6
+    local tcp_hdr6 = string.char(0xD4, 0x38, 0, 53, 0, 0, 0, 1, 0, 0, 0, 0, 0x50, 0x18, 0x72, 0x10, 0, 0, 0, 0)
+    local raw = ip6 .. tcp_hdr6 .. tcp_payload
+    local pkt = parse_packet(raw)
+    assert.is_not_nil(pkt, "parse_packet IPv6 TCP retourne nil")
+    assert.equals(6, pkt.ip.version)
+    assert.equals("tcp", pkt.l4.proto)
+    local answers = m_ndpi.parse_answers(raw, pkt)
+    local patched = patch_and_checksum(raw, pkt, answers, 60)
+    return assert.is_not_nil(patched, "patch_and_checksum IPv6 TCP retourne nil")
   end)
 end)
