@@ -90,7 +90,8 @@ compile-specs: $(UNIT_SPEC_LUAS)
 test-unit: all compile-specs
 	@mkdir -p tmp/test-logs
 	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  $(BUSTED) --config=.busted tests/unit 2>&1 | tee tmp/test-logs/unit.log; \
+	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
+	    tests/unit 2>&1 | tee tmp/test-logs/unit.log; \
 	  rc=$$?; exit $$rc
 
 # Tests FFI socket + WolfSSL + intégration (sous-ensemble de test-unit si specs présentes)
@@ -112,10 +113,12 @@ test: all compile-specs test-unit test-ffi
 # ── Couverture ────────────────────────────────────────────────────────────
 
 coverage: all compile-specs
-	@mkdir -p tmp/coverage
+	@mkdir -p tmp/coverage tmp/test-logs
 	@rm -f tmp/coverage/luacov.stats.out tmp/coverage/luacov.report.out
 	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  $(BUSTED) --config=.busted --coverage tests/unit 2>&1 | tee tmp/test-logs/coverage.log
+	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
+	    --coverage --coverage-config-file=.luacov \
+	    tests/unit 2>&1 | tee tmp/test-logs/coverage.log
 	@mv luacov.stats.out  tmp/coverage/luacov.stats.out  2>/dev/null || true
 	@mv luacov.report.out tmp/coverage/luacov.report.out 2>/dev/null || true
 	@echo ""

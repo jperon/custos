@@ -1,0 +1,28 @@
+local h = require("auth.html")
+return describe("auth/html", function()
+  it("balise simple", function()
+    return assert.equals("<div>hello</div>", h.div("hello"))
+  end)
+  it("balise avec attributs", function()
+    return assert.equals('<div id="test">hello</div>', h.div({
+      id = "test"
+    }, "hello"))
+  end)
+  it("balise auto-fermante", function()
+    return assert.equals("<br/>", h.br())
+  end)
+  it("balises imbriquées", function()
+    local result = h.div({
+      id = "outer"
+    }, h.p("paragraph"))
+    assert.truthy(result:find('<div id="outer">', 1, true))
+    assert.truthy(result:find("<p>paragraph</p>", 1, true))
+    return assert.truthy(result:find("</div>", 1, true))
+  end)
+  return it("escape wraps dans une balise escape", function()
+    local result = h.escape("<script>alert('xss')</script>")
+    assert.truthy(result:find("<escape>", 1, true))
+    assert.truthy(result:find("</escape>", 1, true))
+    return assert.truthy(result:find("<script>", 1, true))
+  end)
+end)
