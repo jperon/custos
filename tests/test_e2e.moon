@@ -16,7 +16,7 @@
 
 LIBVIRT_SCRIPT = "libvirt/custos-libvirt.sh"
 SSH_KEY        = (os.getenv "HOME") .. "/.ssh/id_rsa"
-SSH_OPTS       = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
+SSH_OPTS       = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -A"  -- redéfini dynamiquement plus bas
 
 FILTER_USER = "root"
 CLIENT_USER = "debian"
@@ -60,16 +60,18 @@ filter_ip = ->
   error "No IP in filter-ip output:\n#{out}" unless ip
   ip
 
+ENV_CLEAN = "env -u SSH_ASKPASS -u SSH_ASKPASS_REQUIRE -u DISPLAY"
+
 -- Exécute une commande sur le filtre (OpenWrt).
 ssh_filter = (ip, cmd) ->
   escaped = cmd\gsub("'", "'\\''")
-  run "ssh #{SSH_OPTS} -i #{SSH_KEY} #{FILTER_USER}@#{ip} '#{escaped}'"
+  run "#{ENV_CLEAN} ssh #{SSH_OPTS} -i #{SSH_KEY} #{FILTER_USER}@#{ip} '#{escaped}'"
 
--- Exécute une commande sur le client, via ProxyJump par le filtre.
+-- Exécute une commande sur le client, via ProxyCommand par le filtre.
 ssh_client = (filter_ip_str, cmd) ->
   escaped = cmd\gsub("'", "'\\''")
-  proxy = "#{FILTER_USER}@#{filter_ip_str}"
-  run "ssh #{SSH_OPTS} -i #{SSH_KEY} -J #{proxy} #{CLIENT_USER}@#{CLIENT_IP} '#{escaped}'"
+  proxy_cmd = "#{ENV_CLEAN} ssh #{SSH_OPTS} -i #{SSH_KEY} -W %h:%p #{FILTER_USER}@#{filter_ip_str}"
+  run "#{ENV_CLEAN} ssh #{SSH_OPTS} -o ProxyCommand='#{proxy_cmd}' -i #{SSH_KEY} #{CLIENT_USER}@#{CLIENT_IP} '#{escaped}'"
 
 -- ── Mini framework ────────────────────────────────────────────────
 
@@ -96,6 +98,15 @@ assert_matches = (haystack, pattern, msg) ->
 print "#{C.bold}CustosVirginum — tests E2E libvirt#{C.reset}"
 
 FILTER_IP = filter_ip!
+
+-- Génération d'un known_hosts propre pour éviter les conflits et les askpass
+KH = "tmp/known_hosts_e2e"
+os.execute "mkdir -p tmp"
+ok_kh, _ = run "env -i HOME=#{os.getenv('HOME')} PATH=/usr/bin:/bin ssh-keyscan -t ed25519 -H #{FILTER_IP} #{CLIENT_IP} #{DNS_IP} #{FILTER_BR} 2>/dev/null > #{KH}"
+unless ok_kh
+  error "Failed to generate known_hosts via ssh-keyscan"
+
+SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=#{KH} -o ConnectTimeout=10 -A"
 print "  Filtre mgmt : #{FILTER_IP}"
 print "  Client      : #{CLIENT_IP} (ProxyJump par le filtre)"
 print "  DNS         : #{DNS_IP}"

@@ -7,6 +7,8 @@ auth:
   register_rate_limit: 100
   register_rate_window: 60
   secrets: /etc/custos/secrets
+  bridge_ifname: br-lan
+  captive_ip4: 10.99.0.254
 
 nets:
   lan:

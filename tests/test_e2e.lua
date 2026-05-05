@@ -1,6 +1,6 @@
 local LIBVIRT_SCRIPT = "libvirt/custos-libvirt.sh"
 local SSH_KEY = (os.getenv("HOME")) .. "/.ssh/id_rsa"
-local SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
+local SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -A"
 local FILTER_USER = "root"
 local CLIENT_USER = "debian"
 local CLIENT_IP = "10.99.0.10"
@@ -45,16 +45,17 @@ filter_ip = function()
   end
   return ip
 end
+local ENV_CLEAN = "env -u SSH_ASKPASS -u SSH_ASKPASS_REQUIRE -u DISPLAY"
 local ssh_filter
 ssh_filter = function(ip, cmd)
   local escaped = cmd:gsub("'", "'\\''")
-  return run("ssh " .. tostring(SSH_OPTS) .. " -i " .. tostring(SSH_KEY) .. " " .. tostring(FILTER_USER) .. "@" .. tostring(ip) .. " '" .. tostring(escaped) .. "'")
+  return run(tostring(ENV_CLEAN) .. " ssh " .. tostring(SSH_OPTS) .. " -i " .. tostring(SSH_KEY) .. " " .. tostring(FILTER_USER) .. "@" .. tostring(ip) .. " '" .. tostring(escaped) .. "'")
 end
 local ssh_client
 ssh_client = function(filter_ip_str, cmd)
   local escaped = cmd:gsub("'", "'\\''")
-  local proxy = tostring(FILTER_USER) .. "@" .. tostring(filter_ip_str)
-  return run("ssh " .. tostring(SSH_OPTS) .. " -i " .. tostring(SSH_KEY) .. " -J " .. tostring(proxy) .. " " .. tostring(CLIENT_USER) .. "@" .. tostring(CLIENT_IP) .. " '" .. tostring(escaped) .. "'")
+  local proxy_cmd = tostring(ENV_CLEAN) .. " ssh " .. tostring(SSH_OPTS) .. " -i " .. tostring(SSH_KEY) .. " -W %h:%p " .. tostring(FILTER_USER) .. "@" .. tostring(filter_ip_str)
+  return run(tostring(ENV_CLEAN) .. " ssh " .. tostring(SSH_OPTS) .. " -o ProxyCommand='" .. tostring(proxy_cmd) .. "' -i " .. tostring(SSH_KEY) .. " " .. tostring(CLIENT_USER) .. "@" .. tostring(CLIENT_IP) .. " '" .. tostring(escaped) .. "'")
 end
 local test
 test = function(name, fn)
@@ -82,12 +83,20 @@ assert_matches = function(haystack, pattern, msg)
 end
 print(tostring(C.bold) .. "CustosVirginum — tests E2E libvirt" .. tostring(C.reset))
 local FILTER_IP = filter_ip()
+local KH = "tmp/known_hosts_e2e"
+os.execute("mkdir -p tmp")
+local ok_kh, _ = run("env -i HOME=" .. tostring(os.getenv('HOME')) .. " PATH=/usr/bin:/bin ssh-keyscan -t ed25519 -H " .. tostring(FILTER_IP) .. " " .. tostring(CLIENT_IP) .. " " .. tostring(DNS_IP) .. " " .. tostring(FILTER_BR) .. " 2>/dev/null > " .. tostring(KH))
+if not (ok_kh) then
+  error("Failed to generate known_hosts via ssh-keyscan")
+end
+SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=" .. tostring(KH) .. " -o ConnectTimeout=10 -A"
 print("  Filtre mgmt : " .. tostring(FILTER_IP))
 print("  Client      : " .. tostring(CLIENT_IP) .. " (ProxyJump par le filtre)")
 print("  DNS         : " .. tostring(DNS_IP))
 print("")
 print(tostring(C.bold) .. "[1/5] Connectivité SSH" .. tostring(C.reset))
-local ok_f, _ = ssh_filter(FILTER_IP, "uname -r")
+local ok_f
+ok_f, _ = ssh_filter(FILTER_IP, "uname -r")
 if not (ok_f) then
   print(tostring(C.red) .. "✗ filter SSH KO" .. tostring(C.reset))
   os.exit(1)
