@@ -1,0 +1,88 @@
+local ffi = require("ffi")
+pcall(function()
+  return ffi.cdef([[    typedef unsigned int socklen_t;
+    struct sockaddr     { unsigned short sa_family; char sa_data[14]; };
+    struct sockaddr_un  { unsigned short sun_family; char sun_path[108]; };
+    int    socket(int domain, int type, int protocol);
+    int    close(int fd);
+    int    connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+    long   send(int sockfd, const void *buf, unsigned long len, int flags);
+    long   recv(int sockfd, void *buf, unsigned long len, int flags);
+    int   *__errno_location(void);
+  ]])
+end)
+do
+  local cfg = package.loaded["config"]
+  cfg.MAC_LEARNER_QUERY_SOCK = cfg.MAC_LEARNER_QUERY_SOCK or "/nonexistent/custos/mac_query.sock"
+end
+package.loaded["mac_learner_ipc"] = nil
+local mac_learner_ipc = require("mac_learner_ipc")
+local mac_from_eui64 = mac_learner_ipc.mac_from_eui64
+local get_mac = mac_learner_ipc.get_mac
+return describe("parse/mac_learner", function()
+  describe("mac_from_eui64", function()
+    it("adresse globale EUI-64 → MAC correcte", function()
+      local mac = mac_from_eui64("fd00:28::6e1c:71ff:fe2f:76f1")
+      return assert.equals("6c:1c:71:2f:76:f1", mac)
+    end)
+    it("adresse link-local EUI-64 → MAC correcte", function()
+      local mac = mac_from_eui64("fe80::6e1c:71ff:fe2f:76f1")
+      return assert.equals("6c:1c:71:2f:76:f1", mac)
+    end)
+    it("bit U/L inversé — premier octet pair (02 → 00)", function()
+      local mac = mac_from_eui64("fe80::211:22ff:fe33:4455")
+      return assert.equals("00:11:22:33:44:55", mac)
+    end)
+    it("bit U/L inversé — premier octet impair (03 → 01)", function()
+      local mac = mac_from_eui64("fe80::323:45ff:fe67:89ab")
+      return assert.equals("01:23:45:67:89:ab", mac)
+    end)
+    it("adresse non-EUI-64 courte (pas de ff:fe) → nil", function()
+      local mac = mac_from_eui64("fd00::1")
+      return assert.is_nil(mac)
+    end)
+    it("privacy extension (identifiant aléatoire sans ff:fe) → nil", function()
+      local mac = mac_from_eui64("2001:db8::1a2b:3c4d:5e6f:7a8b")
+      return assert.is_nil(mac)
+    end)
+    it("adresse IPv4 → nil", function()
+      local mac = mac_from_eui64("192.168.1.1")
+      return assert.is_nil(mac)
+    end)
+    it("nil → nil", function()
+      local mac = mac_from_eui64(nil)
+      return assert.is_nil(mac)
+    end)
+    it("chaîne vide → nil", function()
+      local mac = mac_from_eui64("")
+      return assert.is_nil(mac)
+    end)
+    return it("chaîne invalide (ni IPv4 ni IPv6 parsable) → nil", function()
+      local mac = mac_from_eui64("not-an-address")
+      return assert.is_nil(mac)
+    end)
+  end)
+  return describe("get_mac", function()
+    it("nil → \"unknown\"", function()
+      return assert.equals("unknown", get_mac(nil))
+    end)
+    it("chaîne vide → \"unknown\"", function()
+      return assert.equals("unknown", get_mac(""))
+    end)
+    it("\"unknown\" → \"unknown\"", function()
+      return assert.equals("unknown", get_mac("unknown"))
+    end)
+    it("adresse EUI-64 (pas de learner) → MAC via fallback EUI-64", function()
+      local mac = get_mac("fe80::211:22ff:fe33:4455")
+      return assert.equals("00:11:22:33:44:55", mac)
+    end)
+    it("adresse IPv6 non-EUI-64 (pas de learner) → \"unknown\"", function()
+      local mac = get_mac("2001:db8::1")
+      return assert.equals("unknown", mac)
+    end)
+    return it("adresse IPv4 (pas de learner) → \"unknown\"", function()
+      local mac = get_mac("10.0.0.1")
+      return assert.equals("unknown", mac)
+    end)
+  end)
+end)
