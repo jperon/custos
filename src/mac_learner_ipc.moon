@@ -59,8 +59,8 @@ get_mac = (ip_str) ->
   addr = ffi.new "struct sockaddr_un"
   addr.sun_family = AF_UNIX
   ffi.copy addr.sun_path, MAC_LEARNER_QUERY_SOCK
-  -- addrlen = taille fixe de sun_family (2) + longueur du chemin + '\0'
-  addr_len = 2 + #MAC_LEARNER_QUERY_SOCK + 1
+  -- addrlen = offset de sun_path + longueur du chemin + '\0'
+  addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #MAC_LEARNER_QUERY_SOCK + 1
 
   if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0
     libc.close sock

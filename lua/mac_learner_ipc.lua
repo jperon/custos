@@ -45,7 +45,7 @@ get_mac = function(ip_str)
   local addr = ffi.new("struct sockaddr_un")
   addr.sun_family = AF_UNIX
   ffi.copy(addr.sun_path, MAC_LEARNER_QUERY_SOCK)
-  local addr_len = 2 + #MAC_LEARNER_QUERY_SOCK + 1
+  local addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #MAC_LEARNER_QUERY_SOCK + 1
   if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0 then
     libc.close(sock)
     return mac_from_eui64(ip_str) or "unknown"

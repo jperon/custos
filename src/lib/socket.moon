@@ -10,7 +10,7 @@ ffi = require "ffi"
 pcall ->
   ffi.cdef [[
     typedef int socklen_t;
-    typedef unsigned int sa_family_t;
+    typedef uint16_t sa_family_t;
     typedef unsigned int ssize_t;
 
     struct sockaddr {

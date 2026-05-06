@@ -3,7 +3,7 @@ local log_debug
 log_debug = require("log").log_debug
 pcall(function()
   return ffi.cdef([[    typedef int socklen_t;
-    typedef unsigned int sa_family_t;
+    typedef uint16_t sa_family_t;
     typedef unsigned int ssize_t;
 
     struct sockaddr {
