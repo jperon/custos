@@ -10,7 +10,7 @@ do
 end
 local get_l2
 get_l2 = require("parse/ethernet").get_l2
-local ndpi = require("parse/ndpi")
+local packet = require("parse/ndpi")
 local filter = require("filter")
 local write_msg, write_refused_msg, write_dnsonly_msg
 do
@@ -138,8 +138,6 @@ write_event = function(fields, allowed)
     tsv_field(fields.vlan),
     tsv_field(fields.user),
     tsv_field(fields.af),
-    tsv_field(fields.ndpi_master),
-    tsv_field(fields.ndpi_app),
     tsv_field(fields.reason),
     tsv_field(fields.rule)
   }, "\t") .. "\n"
@@ -154,7 +152,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
   local l2 = get_l2(nfad)
-  local pkt, parse_status = ndpi.parse_packet(raw)
+  local pkt, parse_status = packet.parse_packet(raw)
   if not (pkt) then
     if parse_status == "buffering" then
       return NF_ACCEPT
@@ -184,11 +182,6 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       in_ifindex = l2.in_ifindex,
       vlan = l2.vlan
     })
-  end
-  ndpi.get_flow(pkt)
-  if math.random(1000) == 1 then
-    ndpi.purge_flows()
-    ndpi.purge_tcp_buffers()
   end
   if pkt.dns.is_response then
     return NF_ACCEPT
@@ -253,8 +246,6 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     dst_port = pkt.l4.dst_port,
     txid = string.format("0x%04x", pkt.dns.txid),
     af = pkt.ip.version == 6 and "ipv6" or "ipv4",
-    ndpi_master = pkt.ndpi_master,
-    ndpi_app = pkt.ndpi_app,
     user = user_for_mac(l2.mac_src, pkt.ip.src_ip, AUTH_SESSIONS_FILE)
   }
   for _, q in ipairs(pkt.questions) do
@@ -347,9 +338,7 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd)
       })
     end
   end
-  ndpi.warmup()
-  run_queue(tonumber(queue_num), handle_question)
-  return ndpi.cleanup()
+  return run_queue(tonumber(queue_num), handle_question)
 end
 return {
   run = run

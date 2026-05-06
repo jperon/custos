@@ -20,7 +20,7 @@ local O_CREAT = 64
 local O_EXCL = 128
 local O_APPEND = 1024
 local FILE_MODE = 420
-local HEADER = "decision\tqname\tmac_src\tsrc_ip\tdst_ip\tvlan\tuser\taf\tndpi_master\tndpi_app\treason\trule\tcount\tfirst_ts\tlast_ts\n"
+local HEADER = "decision\tqname\tmac_src\tsrc_ip\tdst_ip\tvlan\tuser\taf\treason\trule\tcount\tfirst_ts\tlast_ts\n"
 local _read_buf = ffi.new("uint8_t[?]", READ_BUF)
 local current_hour
 current_hour = function()

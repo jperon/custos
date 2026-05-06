@@ -35,7 +35,7 @@ O_APPEND     = 1024
 FILE_MODE    = 420     -- 0644 décimal
 
 -- Header TSV (écrit une seule fois à la création du fichier via O_EXCL)
-HEADER = "decision\tqname\tmac_src\tsrc_ip\tdst_ip\tvlan\tuser\taf\tndpi_master\tndpi_app\treason\trule\tcount\tfirst_ts\tlast_ts\n"
+HEADER = "decision\tqname\tmac_src\tsrc_ip\tdst_ip\tvlan\tuser\taf\treason\trule\tcount\tfirst_ts\tlast_ts\n"
 
 -- Buffer de lecture partagé (alloué une seule fois au chargement du module)
 _read_buf = ffi.new "uint8_t[?]", READ_BUF

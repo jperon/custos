@@ -146,8 +146,6 @@ make_ipv6_ext_udp_dns = function(src_ip6, dst_ip6, src_port, dst_port, dns_paylo
 end
 local m_ndpi = dofile("lua/parse/ndpi.lua")
 local parse_packet = m_ndpi.parse_packet
-local get_flow = m_ndpi.get_flow
-local purge_flows = m_ndpi.purge_flows
 test("parse_packet — UDP DNS minimal", function()
   local dns = make_dns("\3www\6github\3com\0", 1, false)
   local raw = make_ipv4_udp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns)

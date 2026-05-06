@@ -10,9 +10,9 @@ do
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
-local ndpi = require("parse/ndpi")
+local packet = require("parse/ndpi")
 local QTYPE
-QTYPE = ndpi.QTYPE
+QTYPE = packet.QTYPE
 local get_l2
 get_l2 = require("parse/ethernet").get_l2
 local drain_pipe, is_pending, get_pending_entry, consume
@@ -178,7 +178,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
   local l2 = get_l2(nfad)
-  local pkt, parse_status = ndpi.parse_packet(raw)
+  local pkt, parse_status = packet.parse_packet(raw)
   if not (pkt) then
     if parse_status == "buffering" then
       return NF_DROP
@@ -416,8 +416,6 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     answers = ip_count,
     ttl_set = FORCED_TTL,
     rcode = pkt.dns.rcode,
-    ndpi_master = pkt.ndpi_master,
-    ndpi_app = pkt.ndpi_app,
     client_mac = client_mac,
     user = user
   })

@@ -8,12 +8,12 @@
 --   4. Si autorisé : envoie write_msg (allowed) dans le pipe IPC vers Q1, NF_ACCEPT
 --   5. Si refusé   : envoie write_refused_msg dans le pipe IPC vers Q1, NF_ACCEPT
 --      Q1 intercepte la réponse du serveur et la transforme en REFUSED+EDE
---   6. Log structuré avec champs nDPI (ndpi_master / ndpi_app)
+--   6. Log structuré TSV (champs: decision, qname, mac_src, src_ip, dst_ip, vlan, user, af, reason, rule)
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_QUESTIONS, :AUTH_SESSIONS_FILE, :BENCHMARK } = require "config"
 { :get_l2 } = require "parse/ethernet"
-ndpi                     = require "parse/ndpi"
+packet                   = require "parse/ndpi"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
@@ -125,8 +125,6 @@ write_event = (fields, allowed) ->
     tsv_field fields.vlan
     tsv_field fields.user
     tsv_field fields.af
-    tsv_field fields.ndpi_master
-    tsv_field fields.ndpi_app
     tsv_field fields.reason
     tsv_field fields.rule
   }, "\t") .. "\n"
@@ -146,7 +144,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   l2 = get_l2 nfad
 
   -- ── L3 / L4 / L7 ───────────────────────────────────────────────
-  pkt, parse_status = ndpi.parse_packet raw
+  pkt, parse_status = packet.parse_packet raw
   unless pkt
     -- TCP segments arriving before a complete DNS message are buffered; let them through.
     return NF_ACCEPT if parse_status == "buffering"
@@ -173,12 +171,6 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       in_ifindex: l2.in_ifindex
       vlan:       l2.vlan
     }
-
-  -- ── nDPI State Tracking ──────────────────────────────────────
-  ndpi.get_flow pkt
-  if math.random(1000) == 1
-    ndpi.purge_flows!
-    ndpi.purge_tcp_buffers!
 
   -- On ne traite que les questions (QR bit = 0)
   return NF_ACCEPT if pkt.dns.is_response
@@ -254,8 +246,6 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     dst_port:    pkt.l4.dst_port
     txid:        string.format "0x%04x", pkt.dns.txid
     af:          pkt.ip.version == 6 and "ipv6" or "ipv4"
-    ndpi_master: pkt.ndpi_master
-    ndpi_app:    pkt.ndpi_app
     user:        user_for_mac l2.mac_src, pkt.ip.src_ip, AUTH_SESSIONS_FILE
   }
 
@@ -347,8 +337,6 @@ run = (queue_num, wfd, learn_wfd, ev_wfd) ->
     else
       log_info { action: "dns_steal_disabled", reason: "no hostname in redirect_url" }
 
-  ndpi.warmup!
   run_queue tonumber(queue_num), handle_question
-  ndpi.cleanup!
 
 { :run }

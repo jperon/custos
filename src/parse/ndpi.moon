@@ -1,20 +1,11 @@
---- High-level packet parser using pure LuaJIT FFI + libndpi.
--- Replaces parse/ip + parse/udp + parse/dns with FFI pointer
--- arithmetic for L3/L4/L7 and nDPI for protocol detection.
--- Version-tolerant: dispatches to parse.ndpi_v4 (4.2–4.8) or
--- parse.ndpi_v5 (5.0+) for nDPI-specific calls.
+--- Packet parser using pure LuaJIT FFI pointer arithmetic.
+-- Parses L3/L4/L7 headers (IPv4/IPv6, UDP/TCP, DNS).
+-- Includes TCP stream reassembly for multi-segment DNS/TCP.
 -- @module parse.ndpi
 
-{ :ffi, :ndpi_lib, :major } = require "ffi_ndpi"
+{ :ffi } = require "ffi"
 { :AF_INET, :AF_INET6 } = require "config"
 bit = require "bit"
-
--- ── Version-specific backend ─────────────────────────────────
-
-backend = if major >= 5
-  require "parse.ndpi_v5"
-else
-  require "parse.ndpi_v4"
 
 -- ── Constants ──────────────────────────────────────────────────
 PROTO_UDP = 17
@@ -32,47 +23,12 @@ for k, v in pairs QTYPE
 --- RCODE constants.
 RCODE = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3, REFUSED: 5 }
 
--- ── Flow Cache for nDPI State Persistence ───────────────────────
--- Maps 5-tuple (src_ip_raw, src_port, dst_ip_raw, dst_port, proto) -> ndpi_flow_struct*
-flow_cache = {}
-flow_expiry = {}
+-- ── TCP stream reassembly buffers ──────────────────────────────
 
 -- TCP stream reassembly buffers: "src_ip|src_port|dst_ip|dst_port" → accumulated payload string.
 -- Keyed by 4-tuple; cleared on FIN/RST; consumed when a complete DNS message is assembled.
 -- Each entry tracks { data: payload, init_seq: uint32, timestamp: os.time() } for garbage collection.
 tcp_buffers = {}
-
---- Get or create an nDPI flow struct for a given packet.
--- @tparam table pkt Parsed packet from parse_packet.
--- @treturn cdata ndpi_flow_struct pointer.
-get_flow = (pkt) ->
-  tup = {
-    pkt.ip.src_ip_raw, pkt.l4.src_port
-    pkt.ip.dst_ip_raw, pkt.l4.dst_port
-    pkt.ip.protocol
-  }
-  key = table.concat tup, "|"
-
-  if flow_cache[key]
-    return flow_cache[key]
-
-  -- Allocate new flow struct
-  size = ndpi_lib.ndpi_detection_get_sizeof_ndpi_flow_struct!
-  buf = ffi.new "uint8_t[?]", size
-  ffi.fill buf, size, 0
-  flow = ffi.cast "ndpi_flow_struct*", buf
-
-  flow_cache[key] = flow
-  flow_expiry[key] = os.time()
-  flow
-
---- Purge expired flows from the cache.
-purge_flows = (max_age = 300) ->
-  now = os.time()
-  for key, expiry in pairs flow_expiry
-    if now - expiry > max_age
-      flow_cache[key] = nil
-      flow_expiry[key] = nil
 
 --- Purge expired TCP reassembly buffers.
 -- Removes entries older than max_age seconds to prevent unbounded memory growth.
@@ -576,13 +532,9 @@ parse_packet = (raw, eth_offset = 0) ->
 
   answers_off = qpos
 
-  -- nDPI protocol detection.
-  ndpi_master, ndpi_app = backend.detect p, len
-
   {
     ip: ip, l4: l4, dns: dns, questions: questions
     answers_off: answers_off
-    ndpi_master: ndpi_master, ndpi_app: ndpi_app
     tcp_dns_raw:        dns_raw_ref  -- reassembled DNS payload (TCP only, nil for UDP)
     tcp_single_segment: dns_single   -- true iff DNS arrived in a single TCP segment
     tcp_init_seq:       tcp_init_seq -- seq of first segment; used for coalesced reinject
@@ -798,23 +750,11 @@ replace_dns_payload = (raw, pkt, new_dns) ->
 
   nil   -- protocole inconnu
 
---- Release the nDPI detection module.
+--- Release resources (cleanup).
+-- No-op for current implementation.
 cleanup = ->
-  backend.cleanup!
-
---- Pre-initialize the nDPI detection module to avoid first-packet latency.
--- Call once at worker startup, before entering the NFQUEUE packet loop.
--- Without this call, the first real packet would block in the kernel queue
--- for the full duration of ndpi_init_detection_module (~1–2 s).
-warmup = ->
-  -- Minimal zero-filled IPv4/UDP dummy packet: 20B IP + 8B UDP.
-  dummy = ffi.new "uint8_t[28]"
-  ffi.fill dummy, 28, 0
-  dummy[0] = 0x45  -- IPv4, IHL=20
-  dummy[9] = 17    -- proto=UDP
-  backend.detect dummy, 28
   nil
 
-{ :parse_packet, :parse_answers, :patch_and_checksum, :cleanup, :warmup
+{ :parse_packet, :parse_answers, :patch_and_checksum, :cleanup
   :extract_dns_payload, :patch_ttl_in_dns, :replace_dns_payload
-  :get_flow, :purge_flows, :purge_tcp_buffers, :QTYPE, :QTYPE_NAME, :RCODE }
+  :purge_tcp_buffers, :QTYPE, :QTYPE_NAME, :RCODE }

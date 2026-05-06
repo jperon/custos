@@ -19,8 +19,8 @@
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS, :AUTH_SESSIONS_FILE, :BENCHMARK } = require "config"
 { :user_for_mac } = require "auth.sessions"
-ndpi = require "parse/ndpi"
-{ :QTYPE } = ndpi
+packet = require "parse/ndpi"
+{ :QTYPE } = packet
 { :get_l2 } = require "parse/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
@@ -175,7 +175,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- ── L3 / L4 / L7 ───────────────────────────────────────────────
   -- parse_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
-  pkt, parse_status = ndpi.parse_packet raw
+  pkt, parse_status = packet.parse_packet raw
   unless pkt
     -- Intermediate TCP data segments are DROPped so Q1 can reinject a single
     -- coalesced+TTL-patched packet once the full DNS message is assembled.
@@ -368,8 +368,6 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     answers:     ip_count
     ttl_set:     FORCED_TTL
     rcode:       pkt.dns.rcode
-    ndpi_master: pkt.ndpi_master
-    ndpi_app:    pkt.ndpi_app
     client_mac:  client_mac
     user:        user
   }

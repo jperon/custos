@@ -1,20 +1,11 @@
-local ffi, ndpi_lib, major
-do
-  local _obj_0 = require("ffi_ndpi")
-  ffi, ndpi_lib, major = _obj_0.ffi, _obj_0.ndpi_lib, _obj_0.major
-end
+local ffi
+ffi = require("ffi").ffi
 local AF_INET, AF_INET6
 do
   local _obj_0 = require("config")
   AF_INET, AF_INET6 = _obj_0.AF_INET, _obj_0.AF_INET6
 end
 local bit = require("bit")
-local backend
-if major >= 5 then
-  backend = require("parse.ndpi_v5")
-else
-  backend = require("parse.ndpi_v4")
-end
 local PROTO_UDP = 17
 local PROTO_TCP = 6
 local QTYPE = {
@@ -39,43 +30,7 @@ local RCODE = {
   NXDOMAIN = 3,
   REFUSED = 5
 }
-local flow_cache = { }
-local flow_expiry = { }
 local tcp_buffers = { }
-local get_flow
-get_flow = function(pkt)
-  local tup = {
-    pkt.ip.src_ip_raw,
-    pkt.l4.src_port,
-    pkt.ip.dst_ip_raw,
-    pkt.l4.dst_port,
-    pkt.ip.protocol
-  }
-  local key = table.concat(tup, "|")
-  if flow_cache[key] then
-    return flow_cache[key]
-  end
-  local size = ndpi_lib.ndpi_detection_get_sizeof_ndpi_flow_struct()
-  local buf = ffi.new("uint8_t[?]", size)
-  ffi.fill(buf, size, 0)
-  local flow = ffi.cast("ndpi_flow_struct*", buf)
-  flow_cache[key] = flow
-  flow_expiry[key] = os.time()
-  return flow
-end
-local purge_flows
-purge_flows = function(max_age)
-  if max_age == nil then
-    max_age = 300
-  end
-  local now = os.time()
-  for key, expiry in pairs(flow_expiry) do
-    if now - expiry > max_age then
-      flow_cache[key] = nil
-      flow_expiry[key] = nil
-    end
-  end
-end
 local purge_tcp_buffers
 purge_tcp_buffers = function(max_age)
   if max_age == nil then
@@ -580,15 +535,12 @@ parse_packet = function(raw, eth_offset)
     }
   end
   local answers_off = qpos
-  local ndpi_master, ndpi_app = backend.detect(p, len)
   return {
     ip = ip,
     l4 = l4,
     dns = dns,
     questions = questions,
     answers_off = answers_off,
-    ndpi_master = ndpi_master,
-    ndpi_app = ndpi_app,
     tcp_dns_raw = dns_raw_ref,
     tcp_single_segment = dns_single,
     tcp_init_seq = tcp_init_seq
@@ -802,15 +754,6 @@ replace_dns_payload = function(raw, pkt, new_dns)
 end
 local cleanup
 cleanup = function()
-  return backend.cleanup()
-end
-local warmup
-warmup = function()
-  local dummy = ffi.new("uint8_t[28]")
-  ffi.fill(dummy, 28, 0)
-  dummy[0] = 0x45
-  dummy[9] = 17
-  backend.detect(dummy, 28)
   return nil
 end
 return {
@@ -818,12 +761,9 @@ return {
   parse_answers = parse_answers,
   patch_and_checksum = patch_and_checksum,
   cleanup = cleanup,
-  warmup = warmup,
   extract_dns_payload = extract_dns_payload,
   patch_ttl_in_dns = patch_ttl_in_dns,
   replace_dns_payload = replace_dns_payload,
-  get_flow = get_flow,
-  purge_flows = purge_flows,
   purge_tcp_buffers = purge_tcp_buffers,
   QTYPE = QTYPE,
   QTYPE_NAME = QTYPE_NAME,
