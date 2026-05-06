@@ -107,7 +107,7 @@ tsv_field = (v) ->
 --- Envoie un événement de décision DNS vers worker_events (best-effort).
 -- Écrit une ligne TSV sur le pipe events_wfd si disponible.
 -- Format : ts<TAB>decision<TAB>qname<TAB>mac_src<TAB>src_ip<TAB>dst_ip<TAB>vlan
---          <TAB>user<TAB>af<TAB>ndpi_master<TAB>ndpi_app<TAB>reason<TAB>rule<LF>
+--          <TAB>user<TAB>af<TAB>reason<TAB>rule<LF>
 -- Pas de qtype. Écriture atomique unique (≤ PIPE_BUF), EAGAIN ignoré silencieusement.
 -- @tparam table  fields  Champs de la décision (qname, mac_src, src_ip, dst_ip, etc.)
 -- @tparam        allowed Résultat de filter.decide : true, "dnsonly", ou false/nil

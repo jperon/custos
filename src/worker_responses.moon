@@ -20,7 +20,7 @@
 { :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS, :AUTH_SESSIONS_FILE, :BENCHMARK } = require "config"
 { :user_for_mac } = require "auth.sessions"
 packet = require "nfq/packet"
-{ :QTYPE } = packet
+{ :QTYPE, :parse_answers, :extract_dns_payload, :replace_dns_payload, :patch_ttl_in_dns, :purge_tcp_buffers, :cleanup } = packet
 { :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
@@ -184,11 +184,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     return NF_DROP if parse_status == "buffering"
     return NF_ACCEPT
 
-  -- Pass to nDPI for flow state tracking (TCP sequence, etc.)
-  ndpi.get_flow pkt
   if math.random(1000) == 1
-    ndpi.purge_flows!
-    ndpi.purge_tcp_buffers!
+    purge_tcp_buffers!
     purge_mac_clients ts
 
   unless pkt.dns.is_response
@@ -261,11 +258,11 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- ── Branche REFUSED : réponse du serveur transformée en REFUSED+EDE ──
   if refused
-    dns_raw    = ndpi.extract_dns_payload raw, pkt
+    dns_raw    = extract_dns_payload raw, pkt
     refused_dns = build_blocked_response pkt.dns, dns_raw, entry.reason
     unless refused_dns
       return NF_DROP
-    patched = ndpi.replace_dns_payload raw, pkt, refused_dns
+    patched = replace_dns_payload raw, pkt, refused_dns
     unless patched
       return NF_DROP
     qnames = table.concat [q.qname for q in *pkt.questions], ","
@@ -286,7 +283,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- ── Branche ACCEPT : patch TTL + EDE + injection nft ─────────
   -- En mode "dnsonly", on ne modifie pas les sets nft : les IPs résolues ne
   -- sont pas autorisées dans les sets — la redirection HTTP/80 reste active.
-  answers  = ndpi.parse_answers raw, pkt
+  answers  = parse_answers raw, pkt
   -- IP du client LAN (destination de la réponse DNS = source de la question)
   client_ip = pkt.ip.dst_ip
   client_v4 = nil
@@ -351,10 +348,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- 2. Réécrire les TTL DNS
   -- 3. Injecter EDE code 0 "Custos vigilat." pour la transparence envers le client
   -- 4. Reconstruire le paquet IP complet avec le nouveau payload
-  dns_raw = ndpi.extract_dns_payload raw, pkt
-  new_dns = ndpi.patch_ttl_in_dns dns_raw, answers, FORCED_TTL
+  dns_raw = extract_dns_payload raw, pkt
+  new_dns = patch_ttl_in_dns dns_raw, answers, FORCED_TTL
   new_dns = add_ede_ttl(new_dns, entry.reason) or new_dns
-  patched = ndpi.replace_dns_payload raw, pkt, new_dns
+  patched = replace_dns_payload raw, pkt, new_dns
 
   -- Log de la réponse
   qnames = table.concat [q.qname for q in *pkt.questions], ","
@@ -418,10 +415,7 @@ run = (queue_num, rfd) ->
   -- (IPv6 client → RR A) quand aucun message IPC n'a encore été reçu.
   -- mac_clients et ip_to_mac démarrent vides ; ils sont alimentés organiquement
   -- par les messages IPC reçus de Q0 (update_mac_clients dans drain_on_msg).
-  -- Pré-initialise le module nDPI avant le démarrage de la boucle pour éviter
-  -- une latence de 1–2 s sur le premier paquet (ndpi_init_detection_module).
-  ndpi.warmup!
   run_queue tonumber(queue_num), handle_response
-  ndpi.cleanup!
+  cleanup!
 
 { :run }

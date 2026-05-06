@@ -11,8 +11,8 @@ end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
 local packet = require("nfq/packet")
-local QTYPE
-QTYPE = packet.QTYPE
+local QTYPE, parse_answers, extract_dns_payload, replace_dns_payload, patch_ttl_in_dns, purge_tcp_buffers, cleanup
+QTYPE, parse_answers, extract_dns_payload, replace_dns_payload, patch_ttl_in_dns, purge_tcp_buffers, cleanup = packet.QTYPE, packet.parse_answers, packet.extract_dns_payload, packet.replace_dns_payload, packet.patch_ttl_in_dns, packet.purge_tcp_buffers, packet.cleanup
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
 local drain_pipe, is_pending, get_pending_entry, consume
@@ -185,10 +185,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end
     return NF_ACCEPT
   end
-  ndpi.get_flow(pkt)
   if math.random(1000) == 1 then
-    ndpi.purge_flows()
-    ndpi.purge_tcp_buffers()
+    purge_tcp_buffers()
     purge_mac_clients(ts)
   end
   if not (pkt.dns.is_response) then
@@ -256,12 +254,12 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local refused = entry and entry.refused or false
   local dnsonly = entry and entry.dnsonly or false
   if refused then
-    local dns_raw = ndpi.extract_dns_payload(raw, pkt)
+    local dns_raw = extract_dns_payload(raw, pkt)
     local refused_dns = build_blocked_response(pkt.dns, dns_raw, entry.reason)
     if not (refused_dns) then
       return NF_DROP
     end
-    local patched = ndpi.replace_dns_payload(raw, pkt, refused_dns)
+    local patched = replace_dns_payload(raw, pkt, refused_dns)
     if not (patched) then
       return NF_DROP
     end
@@ -290,7 +288,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
     return -1
   end
-  local answers = ndpi.parse_answers(raw, pkt)
+  local answers = parse_answers(raw, pkt)
   client_ip = pkt.ip.dst_ip
   local client_v4 = nil
   local client_v6 = nil
@@ -385,10 +383,10 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       user = user
     })
   end
-  local dns_raw = ndpi.extract_dns_payload(raw, pkt)
-  local new_dns = ndpi.patch_ttl_in_dns(dns_raw, answers, FORCED_TTL)
+  local dns_raw = extract_dns_payload(raw, pkt)
+  local new_dns = patch_ttl_in_dns(dns_raw, answers, FORCED_TTL)
   new_dns = add_ede_ttl(new_dns, entry.reason) or new_dns
-  local patched = ndpi.replace_dns_payload(raw, pkt, new_dns)
+  local patched = replace_dns_payload(raw, pkt, new_dns)
   local qnames = table.concat((function()
     local _accum_0 = { }
     local _len_0 = 1
@@ -463,9 +461,8 @@ run = function(queue_num, rfd)
     rfd = rfd.q0q1_rfd
   end
   pipe_rfd = rfd
-  ndpi.warmup()
   run_queue(tonumber(queue_num), handle_response)
-  return ndpi.cleanup()
+  return cleanup()
 end
 return {
   run = run
