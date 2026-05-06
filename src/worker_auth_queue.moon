@@ -4,7 +4,7 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :get_l2 } = require "parse/ethernet"
+{ :get_l2 } = require "nfq/ethernet"
 { :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
 
 -- Import ipparse for L3 IP parsing

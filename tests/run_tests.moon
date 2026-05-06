@@ -51,8 +51,8 @@ package.loaded["config"] = {
   :QUEUE_CAPTIVE
 }
 
--- parse/ethernet stub
-package.loaded["parse/ethernet"] = {
+-- nfq/ethernet stub
+package.loaded["nfq/ethernet"] = {
   get_l2: -> { mac_src: "00:00:00:00:00:00", mac_dst: "unknown", mac_raw: "\0\0\0\0\0\0", in_ifindex: 0, vlan: nil }
 }
 

@@ -9,8 +9,8 @@ do
   QUEUE_QUESTIONS, AUTH_SESSIONS_FILE, BENCHMARK = _obj_0.QUEUE_QUESTIONS, _obj_0.AUTH_SESSIONS_FILE, _obj_0.BENCHMARK
 end
 local get_l2
-get_l2 = require("parse/ethernet").get_l2
-local packet = require("parse/packet")
+get_l2 = require("nfq/ethernet").get_l2
+local packet = require("nfq/packet")
 local filter = require("filter")
 local write_msg, write_refused_msg, write_dnsonly_msg
 do

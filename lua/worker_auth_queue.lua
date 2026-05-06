@@ -9,7 +9,7 @@ do
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
 local get_l2
-get_l2 = require("parse/ethernet").get_l2
+get_l2 = require("nfq/ethernet").get_l2
 local log_info, log_warn, log_error, log_debug, set_action_prefix
 do
   local _obj_0 = require("log")

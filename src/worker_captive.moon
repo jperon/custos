@@ -19,7 +19,7 @@
 parse: parse_eth, :new, :mac2s, :s2mac, proto: {:IP6, :IP4} = require "ipparse.l2.ethernet"
 parse: parse_ip, proto: l3_proto, :ip2s = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
-{ :get_l2 } = require "parse/ethernet"
+{ :get_l2 } = require "nfq/ethernet"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_error, :set_action_prefix } = require "log"
 { detect: detect_captive_ips } = require "captive_ips"

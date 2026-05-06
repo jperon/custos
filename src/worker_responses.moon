@@ -19,9 +19,9 @@
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS, :AUTH_SESSIONS_FILE, :BENCHMARK } = require "config"
 { :user_for_mac } = require "auth.sessions"
-packet = require "parse/packet"
+packet = require "nfq/packet"
 { :QTYPE } = packet
-{ :get_l2 } = require "parse/ethernet"
+{ :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"

@@ -65,9 +65,9 @@ if not package.loaded["log"] then
   }
 end
 
--- ── Stub parse/ethernet ────────────────────────────────────────────────────
-if not package.loaded["parse/ethernet"] then
-  package.loaded["parse/ethernet"] = {
+-- ── Stub nfq/ethernet ────────────────────────────────────────────────────
+if not package.loaded["nfq/ethernet"] then
+  package.loaded["nfq/ethernet"] = {
     get_l2         = function() return { mac_src="00:00:00:00:00:00", mac_dst="unknown",
                                          mac_raw="\0\0\0\0\0\0", in_ifindex=0, vlan=nil } end,
   }

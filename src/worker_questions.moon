@@ -12,8 +12,8 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_QUESTIONS, :AUTH_SESSIONS_FILE, :BENCHMARK } = require "config"
-{ :get_l2 } = require "parse/ethernet"
-packet                   = require "parse/packet"
+{ :get_l2 } = require "nfq/ethernet"
+packet                   = require "nfq/packet"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"

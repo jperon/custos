@@ -10,11 +10,11 @@ do
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
-local packet = require("parse/packet")
+local packet = require("nfq/packet")
 local QTYPE
 QTYPE = packet.QTYPE
 local get_l2
-get_l2 = require("parse/ethernet").get_l2
+get_l2 = require("nfq/ethernet").get_l2
 local drain_pipe, is_pending, get_pending_entry, consume
 do
   local _obj_0 = require("ipc")
