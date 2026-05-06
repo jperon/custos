@@ -4,7 +4,7 @@
 # Targets:
 #   all          - Compile all .moon files to .lua
 #   check        - Syntax check generated Lua files
-#   test         - Unit tests (Busted, no root required)
+#   test         - Unit tests (Busted: all specs in tests/unit/, no root required)
 #   test-ndpi    - nDPI wrapper tests (requires libndpi)
 #   test-openwrt - OpenWrt live tests via SSH (HOST=user@host required)
 #   test-env     - Create/start libvirt 3-VM environment (Debian client, OpenWrt filter, Debian DNS)
@@ -53,7 +53,7 @@ IPPARSE_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(IPPARSE_MOONS))
 UNIT_SPEC_MOONS := $(shell find tests/unit -name '*_spec.moon' 2>/dev/null | sort)
 UNIT_SPEC_LUAS  := $(patsubst %.moon,%.lua,$(UNIT_SPEC_MOONS))
 
-.PHONY: all clean check test test-unit test-ffi test-ndpi test-openwrt \
+.PHONY: all clean check test test-unit test-ndpi test-openwrt \
         test-env test-env-down test-env-nuke test-e2e test-e2e-ci test-kvm \
         coverage run reload update-lists make-secret logs help debug-env
 
@@ -94,42 +94,21 @@ test-unit: all compile-specs
 	    tests/unit 2>&1 | tee tmp/test-logs/unit.log; \
 	  rc=$$?; exit $$rc
 
-# Tests FFI socket + WolfSSL + intégration (sous-ensemble de test-unit si specs présentes)
-test-ffi: all
-	@mkdir -p tmp/test-logs
-	@$(MOONC) -o tests/test_ffi_socket.lua     tests/test_ffi_socket.moon
-	@$(MOONC) -o tests/test_ffi_wolfssl.lua    tests/test_ffi_wolfssl.moon
-	@$(MOONC) -o tests/test_ffi_integration.lua tests/test_ffi_integration.moon
-	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  $(LUAJIT) tests/test_ffi_socket.lua     2>&1 | tee    tmp/test-logs/ffi.log
-	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  $(LUAJIT) tests/test_ffi_wolfssl.lua    2>&1 | tee -a tmp/test-logs/ffi.log
-	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  $(LUAJIT) tests/test_ffi_integration.lua 2>&1 | tee -a tmp/test-logs/ffi.log
-
 # Cible publique : tous les tests unitaires locaux (pas root, pas VM)
-test: all compile-specs test-unit test-ffi
+test: all compile-specs test-unit
 
 # ── Couverture ────────────────────────────────────────────────────────────
 
 coverage: all compile-specs
 	@mkdir -p tmp/coverage tmp/test-logs
-	@rm -f tmp/coverage/luacov.stats.out tmp/coverage/luacov.report.out luacov.stats.out luacov.report.out
+	@rm -f tmp/coverage/luacov.stats.out tmp/coverage/luacov.report.out
 	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
 	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
 	    --coverage --coverage-config-file=.luacov \
 	    tests/unit 2>&1 | tee tmp/test-logs/coverage.log
-	@# Busted écrit luacov.stats.out à la racine ; le déplacer si pas déjà au bon endroit
-	@test -f luacov.stats.out && mv luacov.stats.out tmp/coverage/luacov.stats.out || true
-	@# Générer le rapport depuis le stats (luacov lit .luacov pour statsfile/reportfile)
-	@if [ -f tmp/coverage/luacov.stats.out ]; then \
-	  LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  luajit -e "require('luacov.reporter').report('.luacov')" 2>/dev/null || \
-	  LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  luajit -e "local r=require('luacov.reporter'); r.report()" 2>/dev/null || \
-	  $(HOME)/.luarocks/bin/luacov -c .luacov 2>/dev/null || true; \
-	fi
-	@test -f luacov.report.out && mv luacov.report.out tmp/coverage/luacov.report.out || true
+	@# Générer le rapport (luacov lit statsfile/reportfile depuis .luacov)
+	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  $(HOME)/.luarocks/bin/luacov -c .luacov 2>/dev/null || true
 	@echo ""
 	@echo "Rapport de couverture : tmp/coverage/luacov.report.out"
 	@if [ -f tmp/coverage/luacov.report.out ]; then \
