@@ -227,7 +227,7 @@ decode_msg = (raw) ->
     "#{raw\byte 4}.#{raw\byte 5}.#{raw\byte 6}.#{raw\byte 7}"
   else
     -- IPv6 : utiliser inet_ntop pour obtenir la forme canonique compressée (fd00:28::a)
-    -- identique à fmt_ipv6 dans parse/ndpi pour garantir la cohérence des clés pending.
+    -- identique à fmt_ipv6 dans parse/packet pour garantir la cohérence des clés pending.
     ip_bytes = ffi.new "uint8_t[16]"
     for i = 0, 15
       ip_bytes[i] = raw\byte 4 + i

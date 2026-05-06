@@ -11,7 +11,7 @@
 
 dns_mod = require "ipparse.l7.dns"
 parse = dns_mod.parse
-{ :QTYPE } = require "parse/ndpi"
+{ :QTYPE } = require "parse/packet"
 { :decide } = require "filter"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
 { :build_blocked_response, :add_ede } = require "dns_ede"

@@ -1,7 +1,7 @@
 local dns_mod = require("ipparse.l7.dns")
 local parse = dns_mod.parse
 local QTYPE
-QTYPE = require("parse/ndpi").QTYPE
+QTYPE = require("parse/packet").QTYPE
 local decide
 decide = require("filter").decide
 local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack

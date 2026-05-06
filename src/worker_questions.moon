@@ -3,7 +3,7 @@
 --
 -- Pour chaque paquet :
 --   1. Parse L2 (MAC src via nfq_get_packet_hw)
---   2. Parse L3/L4/L7 via parse/ndpi (IPv4 et IPv6)
+--   2. Parse L3/L4/L7 via parse/packet (IPv4 et IPv6)
 --   3. Vérifie allowlist → décide allow ou refuse
 --   4. Si autorisé : envoie write_msg (allowed) dans le pipe IPC vers Q1, NF_ACCEPT
 --   5. Si refusé   : envoie write_refused_msg dans le pipe IPC vers Q1, NF_ACCEPT
@@ -13,7 +13,7 @@
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_QUESTIONS, :AUTH_SESSIONS_FILE, :BENCHMARK } = require "config"
 { :get_l2 } = require "parse/ethernet"
-packet                   = require "parse/ndpi"
+packet                   = require "parse/packet"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"

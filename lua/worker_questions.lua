@@ -10,7 +10,7 @@ do
 end
 local get_l2
 get_l2 = require("parse/ethernet").get_l2
-local packet = require("parse/ndpi")
+local packet = require("parse/packet")
 local filter = require("filter")
 local write_msg, write_refused_msg, write_dnsonly_msg
 do

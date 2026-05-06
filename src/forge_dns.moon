@@ -38,7 +38,7 @@ encode_dns_name = (name) ->
 -- If the required IP family is not configured, returns an NOERROR response
 -- with ancount=0 (empty answer section) rather than nil, so the client can
 -- try the other address family.
--- @tparam table    pkt     Parsed packet from parse/ndpi.parse_packet
+-- @tparam table    pkt     Parsed packet from parse/packet.parse_packet
 -- @tparam table    q       DNS question {qname, qtype, qtype_name}
 -- @tparam string|nil ip4_str Captive portal IPv4 address string (e.g. "192.168.1.1"), or nil
 -- @tparam string|nil ip6_str Captive portal IPv6 address string (e.g. "fd00::1"), or nil

@@ -144,7 +144,7 @@ make_ipv6_ext_udp_dns = function(src_ip6, dst_ip6, src_port, dst_port, dns_paylo
   local udp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), bit.rshift(bit.band(udp_len, 0xFF00), 8), bit.band(udp_len, 0xFF), 0, 0)
   return ip6 .. ext_raw .. udp .. dns_payload
 end
-local m_ndpi = dofile("lua/parse/ndpi.lua")
+local m_ndpi = dofile("lua/parse/packet.lua")
 local parse_packet = m_ndpi.parse_packet
 test("parse_packet — UDP DNS minimal", function()
   local dns = make_dns("\3www\6github\3com\0", 1, false)
@@ -587,7 +587,7 @@ test("ipc — token expiré est rejeté (purge paresseuse)", function()
     return 6
   end)), "token expiré doit être rejeté à t=6")
 end)
-io.write("\n── parse/ndpi helpers ──\n")
+io.write("\n── parse/packet helpers ──\n")
 package.loaded["ffi_ndpi"] = {
   ffi = ffi,
   ndpi_lib = { },
@@ -615,7 +615,7 @@ package.loaded["parse.ndpi_v5"] = {
     return nil
   end
 }
-local m_ndpi2 = dofile("lua/parse/ndpi.lua")
+local m_ndpi2 = dofile("lua/parse/packet.lua")
 local extract_dns_payload = m_ndpi2.extract_dns_payload
 local patch_ttl_in_dns = m_ndpi2.patch_ttl_in_dns
 local replace_dns_payload = m_ndpi2.replace_dns_payload
@@ -2934,9 +2934,9 @@ test("filter/convert — commentaires et lignes vides ignorés", function()
   os.remove(CONV_INPUT)
   return os.remove(CONV_OUTPUT)
 end)
-io.write("\n── parse/ndpi ──\n")
-local ndpi_mod = require("parse/ndpi")
-test("parse/ndpi — parse_packet(raw) OK sur paquet IP brut", function()
+io.write("\n── parse/packet ──\n")
+local packet_mod = require("parse/packet")
+test("parse/packet — parse_packet(raw) OK sur paquet IP brut", function()
   local dns = make_dns("\x03www\x08facebook\x03com\0", 1, false)
   local raw = make_ipv4_udp_dns("1.2.3.4", "8.8.8.8", 12345, 53, dns)
   local pkt, status = ndpi_mod.parse_packet(raw)

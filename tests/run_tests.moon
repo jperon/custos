@@ -212,7 +212,7 @@ make_ipv6_ext_udp_dns = (src_ip6, dst_ip6, src_port, dst_port, dns_payload, firs
   )
   ip6 .. ext_raw .. udp .. dns_payload
 
-m_ndpi = dofile "lua/parse/ndpi.lua"
+m_ndpi = dofile "lua/parse/packet.lua"
 parse_packet = m_ndpi.parse_packet
 get_flow = m_ndpi.get_flow
 purge_flows = m_ndpi.purge_flows
@@ -1142,9 +1142,9 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
 -- test "append_ede_to_dns — toutes options code=0 → payload inchangé", ->
 
 -- ════════════════════════════════════════════════════════════════
--- Tests parse/ndpi — helpers purs (extract_dns_payload, patch_ttl_in_dns, replace_dns_payload)
+-- Tests parse/packet — helpers purs (extract_dns_payload, patch_ttl_in_dns, replace_dns_payload)
 -- ════════════════════════════════════════════════════════════════
-io.write "\n── parse/ndpi helpers ──\n"
+io.write "\n── parse/packet helpers ──\n"
 
 -- Stub ffi_ndpi pour charger ndpi.lua sans libndpi
 package.loaded["ffi_ndpi"] = {
@@ -1162,7 +1162,7 @@ package.loaded["parse.ndpi_v5"] = {
   detect:  -> 0, 0
   cleanup: -> nil
 }
-m_ndpi2             = dofile "lua/parse/ndpi.lua"
+m_ndpi2             = dofile "lua/parse/packet.lua"
 extract_dns_payload = m_ndpi2.extract_dns_payload
 patch_ttl_in_dns    = m_ndpi2.patch_ttl_in_dns
 replace_dns_payload = m_ndpi2.replace_dns_payload
@@ -2879,14 +2879,14 @@ test "filter/convert — commentaires et lignes vides ignorés", ->
 --   assert_eq mac_d, eth_dst, "MAC dst inversée"
 --   assert_eq mac_s, eth_src, "MAC src inversée"
 
--- ── Tests parse/ndpi ────────────────────────────────────────────
+-- ── Tests parse/packet ────────────────────────────────────────────
 -- Le payload NFQUEUE (table bridge) commence à l'en-tête IP :
 -- parse_packet doit accepter un paquet IP brut sans offset.
-io.write "\n── parse/ndpi ──\n"
+io.write "\n── parse/packet ──\n"
 
-ndpi_mod = require "parse/ndpi"
+packet_mod = require "parse/packet"
 
-test "parse/ndpi — parse_packet(raw) OK sur paquet IP brut", ->
+test "parse/packet — parse_packet(raw) OK sur paquet IP brut", ->
   dns = make_dns "\x03www\x08facebook\x03com\0", 1, false
   raw = make_ipv4_udp_dns "1.2.3.4", "8.8.8.8", 12345, 53, dns
   pkt, status = ndpi_mod.parse_packet raw

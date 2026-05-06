@@ -10,7 +10,7 @@ do
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
-local packet = require("parse/ndpi")
+local packet = require("parse/packet")
 local QTYPE
 QTYPE = packet.QTYPE
 local get_l2

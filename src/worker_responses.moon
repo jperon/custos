@@ -3,7 +3,7 @@
 --
 -- Pour chaque paquet :
 --   1. Draine le pipe IPC (absorbe les tokens Q0 → table pending)
---   2. Parse L3/L4/L7 via parse/ndpi (IPv4 et IPv6)
+--   2. Parse L3/L4/L7 via parse/packet (IPv4 et IPv6)
 --   3. Vérifie que la transaction (txid, dst_ip, dst_port) est dans pending
 --   4. Si refusée (entry.refused = true) :
 --        a. Remplace le payload DNS par une réponse REFUSED+EDE (Filtered)
@@ -19,7 +19,7 @@
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :QUEUE_RESPONSES, :FORCED_TTL, :CLIENT_EXPIRY, :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS, :AUTH_SESSIONS_FILE, :BENCHMARK } = require "config"
 { :user_for_mac } = require "auth.sessions"
-packet = require "parse/ndpi"
+packet = require "parse/packet"
 { :QTYPE } = packet
 { :get_l2 } = require "parse/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
