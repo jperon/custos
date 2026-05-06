@@ -145,12 +145,16 @@ custos/
 │   ├── main.moon            Superviseur + fork
 │   ├── auth/
 │   │   ├── worker.moon          Worker AUTH principal
-│   │   ├── server.moon          Serveur HTTPS (luasec)
+│   │   ├── server.moon          Serveur HTTPS (FFI WolfSSL)
 │   │   ├── worker_conn.moon     Gestion des connexions HTTPS
 │   │   ├── sessions.moon        Lecture/écriture sessions.lua
 │   │   ├── nft_sessions.moon    Gestion sets nft pour sessions
 │   │   ├── credentials.moon     Vérification PBKDF2
-│   │   ├── cert.moon            Génération certificat TLS auto-signé
+│   │   ├── cert.moon            Gestion certificats TLS (cache LRU/TTL)
+│   │   ├── cert_generator.moon  Génération dynamique via px5g
+│   │   ├── cert_cache.moon      Cache LRU/TTL pour certificats
+│   │   ├── sni_extractor.moon   Parser SNI (TLS ClientHello)
+│   │   ├── ffi_wolfssl.moon     FFI wrapper WolfSSL (remplace luasec)
 │   │   └── html.moon            Templates HTML du portail
 │   ├── filter/
 │   │   ├── init.moon        Moteur de filtrage (load/decide/reload)
@@ -197,7 +201,6 @@ custos/
 ├── install-owrt.lua         Installeur compilé
 ├── LICENSE                  Licence MIT
 ├── Makefile
-├── setup.sh
 └── README.md
 ```
 
@@ -205,33 +208,30 @@ custos/
 
 ## Prerequisites
 
-### System Packages
+### OpenWrt Packages
 
 | Package                  | Role                                    |
 |--------------------------|-----------------------------------------|
 | `luajit`                 | Compiled Lua execution                  |
 | `moonscript`             | `.moon` → `.lua` compilation            |
-| `lua-yaml`               | YAML config loader (`lyaml`, LuaJIT)    |
-| `libnetfilter-queue1`    | NFQUEUE C library                       |
-| `libnftables1`           | nftables library (set injection)        |
-| `libndpi-dev`            | nDPI deep packet inspection (FFI)       |
+| `lyaml`                  | YAML config loader (`lyaml`, LuaJIT)    |
+| `libnetfilter-queue`     | NFQUEUE C library                       |
+| `libnftables`            | nftables library (set injection)        |
+| `libndpi`                | nDPI deep packet inspection (FFI)       |
 | `nftables`               | `nft` tool                              |
+| `wolfssl`                | TLS/SSL library (via FFI)               |
+| `px5g-wolfssl`           | Dynamic TLS certificate generation      |
 
-**Debian/Ubuntu:**
 ```bash
-apt install luajit lua-yaml libnetfilter-queue1 libnftables1 libndpi-dev nftables
-luarocks install moonscript
-```
-
-**OpenWrt:**
-```bash
-apk install luajit lyaml libndpi libnetfilter-queue nftables
+opkg install luajit lyaml libndpi libnetfilter-queue nftables wolfssl px5g-wolfssl
 # moonscript via luarocks or build from source
 ```
 
 ---
 
 ## Installation
+
+### Déploiement sur OpenWrt
 
 ```bash
 git clone <repo> custos
@@ -246,9 +246,15 @@ make test
 # Run nDPI wrapper tests (requires libndpi)
 make test-ndpi
 
-# Check deps, apply nft rules
-sudo ./setup.sh up
+# Deploy to OpenWrt router via SSH
+luajit install-owrt.lua root@<routeur>
 ```
+
+L'installeur (`install-owrt.moon`) :
+1. Installe les paquets opkg requis
+2. Déploie les fichiers dans `/usr/sbin/custos/`
+3. Configure le service `/etc/init.d/custos`
+4. Démarre le service
 
 ---
 
@@ -336,15 +342,20 @@ automatique des listes.
 
 ## Running
 
+### Sur OpenWrt
+
 ```bash
-# Verify nft rules are in place
-sudo ./setup.sh status
+# Start the service
+/etc/init.d/custos start
 
-# Start the filter (stays in foreground)
-sudo make run
+# Stop the service
+/etc/init.d/custos stop
 
-# In another terminal, watch logs
-make logs
+# Restart the service
+/etc/init.d/custos restart
+
+# View logs
+logread -e custos
 ```
 
 Example log:
@@ -537,10 +548,12 @@ reload it every 5 seconds (TTL cache). No inter-process socket is needed.
 
 ### TLS certificate
 
-On first start the AUTH worker generates a **self-signed certificate** via
-`openssl req` and stores it in `tmp/auth.crt` / `tmp/auth.key`.
+The AUTH worker generates **self-signed certificates dynamically** via `px5g`
+(WolfSSL-based) with an LRU/TTL cache (100 slots, 24h). Certificates are
+generated on-demand based on the SNI (Server Name Indication) from the
+TLS ClientHello.
 
-To use your own certificate, set `cert` and `key` in `cfg/filter.yml`:
+To use your own static certificate, set `cert` and `key` in `cfg/filter.yml`:
 
 ```yaml
 auth:
@@ -686,11 +699,10 @@ The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode
 
 ### Prerequisites
 
+Sur OpenWrt, les règles nft sont appliquées automatiquement par le service au démarrage. Pour appliquer manuellement :
+
 ```bash
-# Apply (no parameters needed)
-sudo nft -f nft-rules/dns-filter-bridge.nft
-# or
-sudo ./setup.sh up
+nft -f nft-rules/dns-filter-bridge.nft
 ```
 
 ### DHCP / SLAAC
@@ -741,51 +753,3 @@ ip_whitelist:
 ```
 
 ---
-
-## OpenWrt
-
-CustosVirginum peut être déployé directement sur un routeur OpenWrt
-(LuaJIT + lyaml + libnetfilter-queue + nftables).
-
-### Installation
-
-```bash
-# Déploiement complet sur un routeur via SSH (première installation)
-luajit install-owrt.lua root@<routeur>
-
-# Déploiement (mise à jour code uniquement, sans réinstallation des paquets)
-make test-openwrt HOST=root@<routeur>
-```
-
-L'installeur (`install-owrt.moon`) :
-1. Installe les paquets opkg requis
-2. Copie les fichiers Lua + nft dans `/usr/share/custos/`
-3. Copie la config dans `/etc/custos/`
-4. Génère `/usr/sbin/custos-update` (mise à jour des listes)
-5. Configure un procd initscript pour le démarrage automatique
-6. Active une tâche cron quotidienne (`0 4 * * *`) pour `custos-update`
-
-### Tests E2E OpenWrt (`make test-openwrt`)
-
-```bash
-make test-openwrt HOST=root@<routeur>
-```
-
-Le test (`tests/test_openwrt.moon`) se connecte via SSH, déploie les
-fichiers Lua + nft, démarre les workers, puis exécute les requêtes DNS
-depuis la machine locale et vérifie les résultats via `logread`.
-
-Les logs sont acheminés vers le syslog du routeur via
-`luajit main.lua 2>&1 | logger -t custos`. `logread` filtre les entrées
-depuis un marqueur inséré avant le démarrage des workers.
-
-| Catégorie | Vérifications |
-|-----------|--------------|
-| Infrastructure | Tables nft, sets, NFQUEUE, ports 33443/33080 |
-| DNS ALLOW | `mac4_allowed` peuplé, TTL patché |
-| DNS REFUSED | RCODE 5 attendu |
-| IPv6 AAAA | `mac6_allowed` + cross-family |
-| Authentification | Login/logout, heartbeat, sessions.lua |
-| Portail captif | DNAT, redirect, `/generate_204` |
-| Bypass MAC | `authenticated_macs` ip + ip6 |
-| Whitelist statique | `ip4_dest_whitelist`, rechargement SIGHUP |
