@@ -27,21 +27,20 @@ describe "auth/cert_generator", ->
     assert.is_false ok
     assert.is_not_nil err
 
-  it "sans=nil et jours=nil → valeurs par défaut, px5g absent → erreur exit code", ->
+  it "sans=nil et jours=nil → valeurs par défaut → succès (chemin nominal)", ->
     -- Couvre: if sans == nil → sans={}, if days == nil → days=3650
-    -- puis days = tonumber(days), cmd building, os.execute(cmd) → nil (px5g absent)
-    -- puis if not (exit_code == 0 or exit_code == true) → erreur
-    cert, key, ok, err = generate_self_signed "example.com"
-    assert.is_false ok
-    assert.is_not_nil err
-    assert.is_string err
+    -- puis days = tonumber(days), cmd building, os.execute, lecture fichiers
+    key_pem, cert_pem, ok, err = generate_self_signed "example.com"
+    assert.is_true ok, tostring(err)
+    assert.is_not_nil key_pem
+    assert.is_not_nil cert_pem
 
-  it "CN valide avec jours explicites → chemin px5g (px5g absent → erreur)", ->
+  it "CN valide avec jours explicites → chemin nominal px5g", ->
     -- Couvre: days = tonumber(days) avec valeur non-nil, cmd building avec CN+days
-    cert, key, ok, err = generate_self_signed "test.local", {}, 365
-    assert.is_false ok
-    assert.is_not_nil err
-    assert.is_string err
+    key_pem, cert_pem, ok, err = generate_self_signed "test.local", {}, 365
+    assert.is_true ok, tostring(err)
+    assert.is_not_nil key_pem
+    assert.is_not_nil cert_pem
 
   it "module se charge sans crash même si px5g absent", ->
     -- Vérifie que require "auth.cert_generator" ne plante pas
@@ -159,9 +158,10 @@ describe "auth/cert_generator", ->
 
     pending "px5g non installé" unless has_px5g
 
-    cert, key, ok, err = generate_self_signed "test.example.com", {}, 365
+    -- generate_self_signed retourne : key_pem, cert_pem, ok, err
+    key_pem, cert_pem, ok, err = generate_self_signed "test.example.com", {}, 365
     assert.is_true ok, tostring(err)
-    assert.is_not_nil cert
-    assert.is_not_nil key
-    assert.truthy cert\find("BEGIN CERTIFICATE", 1, true)
-    assert.truthy key\find("BEGIN", 1, true)
+    assert.is_not_nil key_pem
+    assert.is_not_nil cert_pem
+    assert.truthy cert_pem\find("BEGIN CERTIFICATE", 1, true)
+    assert.truthy key_pem\find("BEGIN", 1, true)
