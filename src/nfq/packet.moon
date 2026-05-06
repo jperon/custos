@@ -3,7 +3,7 @@
 -- Includes TCP stream reassembly for multi-segment DNS/TCP.
 -- @module parse.ndpi
 
-{ :ffi } = require "ffi"
+{ :ffi } = require "ffi_defs"
 { :AF_INET, :AF_INET6 } = require "config"
 bit = require "bit"
 

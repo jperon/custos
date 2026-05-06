@@ -1,5 +1,5 @@
 local ffi
-ffi = require("ffi").ffi
+ffi = require("ffi_defs").ffi
 local AF_INET, AF_INET6
 do
   local _obj_0 = require("config")
