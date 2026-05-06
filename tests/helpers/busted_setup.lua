@@ -70,7 +70,5 @@ if not package.loaded["parse/ethernet"] then
   package.loaded["parse/ethernet"] = {
     get_l2         = function() return { mac_src="00:00:00:00:00:00", mac_dst="unknown",
                                          mac_raw="\0\0\0\0\0\0", in_ifindex=0, vlan=nil } end,
-    format_mac     = function() return "00:00:00:00:00:00" end,
-    format_mac_ptr = function() return "00:00:00:00:00:00" end,
   }
 end

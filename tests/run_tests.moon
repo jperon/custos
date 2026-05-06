@@ -54,8 +54,6 @@ package.loaded["config"] = {
 -- parse/ethernet stub
 package.loaded["parse/ethernet"] = {
   get_l2: -> { mac_src: "00:00:00:00:00:00", mac_dst: "unknown", mac_raw: "\0\0\0\0\0\0", in_ifindex: 0, vlan: nil }
-  format_mac: -> "00:00:00:00:00:00"
-  format_mac_ptr: -> "00:00:00:00:00:00"
 }
 
 -- ── Mini framework de test ───────────────────────────────────────

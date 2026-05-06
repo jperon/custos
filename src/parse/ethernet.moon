@@ -9,22 +9,6 @@
 
 { :ffi, :libnfq } = require "ffi_defs"
 
---- Formate 6 octets d'un pointeur FFI en chaîne "aa:bb:cc:dd:ee:ff".
--- @tparam cdata p   uint8_t pointer.
--- @tparam number o  0-based byte offset.
--- @treturn string Adresse MAC formatée.
-format_mac_ptr = (p, o) ->
-  string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-    p[o], p[o+1], p[o+2], p[o+3], p[o+4], p[o+5]
-
---- Formate 6 octets d'un nfqnl_msg_packet_hw en chaîne "aa:bb:cc:dd:ee:ff".
--- @tparam cdata hw_ptr Pointeur vers nfqnl_msg_packet_hw.
--- @treturn string Adresse MAC formatée.
-format_mac = (hw_ptr) ->
-  string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-    hw_ptr.hw_addr[0], hw_ptr.hw_addr[1], hw_ptr.hw_addr[2],
-    hw_ptr.hw_addr[3], hw_ptr.hw_addr[4], hw_ptr.hw_addr[5]
-
 --- Extrait les informations L2 depuis les métadonnées nfq_data.
 -- Utilise nfq_get_packet_hw() pour obtenir la MAC source (la seule exposée
 -- par libnetfilter_queue). Les paquets OUTPUT locaux n'ont pas de hw_addr :
@@ -38,7 +22,9 @@ get_l2 = (nfad) ->
 
   hw = libnfq.nfq_get_packet_hw nfad
   if hw != nil and hw.hw_addrlen > 0
-    mac_src = format_mac hw
+    mac_src = string.format "%02x:%02x:%02x:%02x:%02x:%02x",
+      hw.hw_addr[0], hw.hw_addr[1], hw.hw_addr[2],
+      hw.hw_addr[3], hw.hw_addr[4], hw.hw_addr[5]
     mac_raw = ffi.string hw.hw_addr, 6
 
   in_ifindex = tonumber libnfq.nfq_get_indev nfad
@@ -47,4 +33,4 @@ get_l2 = (nfad) ->
 
   { :mac_src, :mac_dst, :mac_raw, :in_ifindex, :vlan }
 
-{ :get_l2, :format_mac, :format_mac_ptr }
+{ :get_l2 }

@@ -44,12 +44,6 @@ package.loaded["parse/ethernet"] = {
       in_ifindex = 0,
       vlan = nil
     }
-  end,
-  format_mac = function()
-    return "00:00:00:00:00:00"
-  end,
-  format_mac_ptr = function()
-    return "00:00:00:00:00:00"
   end
 }
 local passed, failed = 0, 0
