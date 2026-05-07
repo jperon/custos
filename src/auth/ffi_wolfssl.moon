@@ -189,8 +189,12 @@ ssl_mt.__index.dohandshake = =>
     log_debug { action: "handshake_ssl_error", ssl_err: ssl_errors }
     error "TLS error during handshake: #{ssl_errors}"
 
-  -- Unexpected error code
   ssl_errors = get_ssl_errors!
+  if err == -308 or (ssl_errors and ssl_errors\find "error state on socket", 1, true)
+    log_debug { action: "handshake_peer_closed", err: err, ssl_err: ssl_errors }
+    return false, "peer_closed"
+
+  -- Unexpected error code
   log_debug { action: "handshake_unexpected_error", err: err, ssl_err: ssl_errors }
   error "Unexpected error #{err}: #{ssl_errors}"
 

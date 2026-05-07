@@ -438,7 +438,10 @@ handle_client = (args) ->
         handshake_complete = true
 
     unless handshake_complete
-      log_warn { action: "server_tls_handshake_failed", peer: peer_ip, attempts: handshake_attempts, err: hs_err or "max attempts reached" }
+      if hs_err == "peer_closed"
+        log_warn { action: "server_tls_handshake_peer_closed", peer: peer_ip, attempts: handshake_attempts }
+      else
+        log_warn { action: "server_tls_handshake_failed", peer: peer_ip, attempts: handshake_attempts, err: hs_err or "max attempts reached" }
       tls_client\close!
       return
 

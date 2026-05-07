@@ -550,12 +550,20 @@ handle_client = function(args)
       end
     end
     if not (handshake_complete) then
-      log_warn({
-        action = "server_tls_handshake_failed",
-        peer = peer_ip,
-        attempts = handshake_attempts,
-        err = hs_err or "max attempts reached"
-      })
+      if hs_err == "peer_closed" then
+        log_warn({
+          action = "server_tls_handshake_peer_closed",
+          peer = peer_ip,
+          attempts = handshake_attempts
+        })
+      else
+        log_warn({
+          action = "server_tls_handshake_failed",
+          peer = peer_ip,
+          attempts = handshake_attempts,
+          err = hs_err or "max attempts reached"
+        })
+      end
       tls_client:close()
       return 
     end

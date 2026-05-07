@@ -229,6 +229,14 @@ ssl_mt.__index.dohandshake = function(self)
     error("TLS error during handshake: " .. tostring(ssl_errors))
   end
   local ssl_errors = get_ssl_errors()
+  if err == -308 or (ssl_errors and ssl_errors:find("error state on socket", 1, true)) then
+    log_debug({
+      action = "handshake_peer_closed",
+      err = err,
+      ssl_err = ssl_errors
+    })
+    return false, "peer_closed"
+  end
   log_debug({
     action = "handshake_unexpected_error",
     err = err,
