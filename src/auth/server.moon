@@ -7,6 +7,7 @@
 
 socket = require "lib.socket"
 ssl = require "auth.ffi_wolfssl"
+ffi = require "ffi"
 
 { :fork_child, :reap_one } = require "lib.process"
 { :session_for_mac, :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
@@ -18,6 +19,14 @@ ssl = require "auth.ffi_wolfssl"
 { :read_request, :send_response } = require "lib.http"
 
 { :get_mac } = require "mac_learner_ipc"
+
+ffi.cdef [[
+  typedef int pid_t;
+  pid_t getppid(void);
+  int kill(pid_t pid, int sig);
+]]
+
+SIGHUP = 1
 
 H = require "auth.html"
 
@@ -136,6 +145,11 @@ refresh_nft = (nft_sess, ip, mac, ttl) ->
   nft_sess.add_authenticated ip, ttl if ip and ip ~= "unknown"
   nft_sess.add_authenticated_mac mac, ttl if mac and mac ~= "unknown"
 
+signal_parent_reload = ->
+  parent_pid = tonumber ffi.C.getppid!
+  return false unless parent_pid and parent_pid > 1
+  ffi.C.kill(parent_pid, SIGHUP) == 0
+
 handle_login = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
   user = form.user
@@ -211,9 +225,8 @@ handle_logout = (req, peer_ip, peer_mac, state) ->
   sessions = load_sessions state.sessions_file
   s = session_for_mac peer_mac, peer_ip, state.sessions_file, sessions
 
-
   unless s
-    return 404, {}, ""
+    return 302, { ["Location"]: "/" }, ""
 
   mac = s.mac or peer_mac
   if state.nft_sess
@@ -240,6 +253,8 @@ handle_register = (req, peer_ip, peer_mac, state) ->
     return 500, {}, err or "Registration failed"
 
   state.secrets = new_secrets
+  if not signal_parent_reload!
+    log_warn { action: "server_reload_signal_failed", parent_pid: tonumber(ffi.C.getppid!) }
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_success_page req
 
 css_content = [[

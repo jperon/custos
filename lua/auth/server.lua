@@ -1,5 +1,6 @@
 local socket = require("lib.socket")
 local ssl = require("auth.ffi_wolfssl")
+local ffi = require("ffi")
 local fork_child, reap_one
 do
   local _obj_0 = require("lib.process")
@@ -36,6 +37,11 @@ do
 end
 local get_mac
 get_mac = require("mac_learner_ipc").get_mac
+ffi.cdef([[  typedef int pid_t;
+  pid_t getppid(void);
+  int kill(pid_t pid, int sig);
+]])
+local SIGHUP = 1
 local H = require("auth.html")
 local url_decode
 url_decode = function(s)
@@ -158,6 +164,14 @@ refresh_nft = function(nft_sess, ip, mac, ttl)
     return nft_sess.add_authenticated_mac(mac, ttl)
   end
 end
+local signal_parent_reload
+signal_parent_reload = function()
+  local parent_pid = tonumber(ffi.C.getppid())
+  if not (parent_pid and parent_pid > 1) then
+    return false
+  end
+  return ffi.C.kill(parent_pid, SIGHUP) == 0
+end
 local handle_login
 handle_login = function(req, peer_ip, peer_mac, state)
   local form = parse_form(req.body)
@@ -260,7 +274,9 @@ handle_logout = function(req, peer_ip, peer_mac, state)
   local sessions = load_sessions(state.sessions_file)
   local s = session_for_mac(peer_mac, peer_ip, state.sessions_file, sessions)
   if not (s) then
-    return 404, { }, ""
+    return 302, {
+      ["Location"] = "/"
+    }, ""
   end
   local mac = s.mac or peer_mac
   if state.nft_sess then
@@ -291,6 +307,12 @@ handle_register = function(req, peer_ip, peer_mac, state)
     return 500, { }, err or "Registration failed"
   end
   state.secrets = new_secrets
+  if not signal_parent_reload() then
+    log_warn({
+      action = "server_reload_signal_failed",
+      parent_pid = tonumber(ffi.C.getppid())
+    })
+  end
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
   }, register_success_page(req)

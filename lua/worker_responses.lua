@@ -35,10 +35,10 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now, _obj_0.set_action_prefix
 end
-local build_blocked_response, add_ede_ttl
+local build_blocked_response, add_ede_ttl, strip_https_rr
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, add_ede_ttl = _obj_0.build_blocked_response, _obj_0.add_ede_ttl
+  build_blocked_response, add_ede_ttl, strip_https_rr = _obj_0.build_blocked_response, _obj_0.add_ede_ttl, _obj_0.strip_https_rr
 end
 local bit = require("bit")
 local concat, insert, remove
@@ -259,6 +259,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     if not (refused_dns) then
       return NF_DROP
     end
+    refused_dns = strip_https_rr(refused_dns) or refused_dns
     local patched = replace_dns_payload(raw, pkt, refused_dns)
     if not (patched) then
       return NF_DROP
@@ -385,6 +386,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local dns_raw = extract_dns_payload(raw, pkt)
   local new_dns = patch_ttl_in_dns(dns_raw, answers, FORCED_TTL)
+  new_dns = strip_https_rr(new_dns) or new_dns
   new_dns = add_ede_ttl(new_dns, entry.reason) or new_dns
   local patched = replace_dns_payload(raw, pkt, new_dns)
   local qnames = table.concat((function()

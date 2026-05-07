@@ -419,6 +419,10 @@ local out_code
 _, out_code = auth_curl("GET", "/logout")
 out_code = out_code:gsub("%s+", "")
 report("Auth — logout → 303", out_code == "303", "HTTP " .. tostring(out_code))
+local out_code2
+_, out_code2 = auth_curl("GET", "/logout")
+out_code2 = out_code2:gsub("%s+", "")
+report("Auth — logout répété → 303", out_code2 == "303", "HTTP " .. tostring(out_code2))
 print("  Attente flush cache session (6 s)...")
 os.execute("sleep 6")
 local ref_out
@@ -504,6 +508,10 @@ if code == "200" then
   local sess2
   _, sess2 = ssh("cat " .. tostring(SESSIONS_FILE) .. " 2>/dev/null")
   report("Inscription — sessions.lua contient newuser", (sess2 and sess2:match("newuser")) ~= nil, (sess2 or "(absent)"):sub(1, 120))
+  local login_new_code
+  _, login_new_code = auth_curl("POST", "/login", "user=newuser&password=newpass123")
+  login_new_code = login_new_code:gsub("%s+", "")
+  report("Inscription — login immédiat newuser → 200", login_new_code == "200", "HTTP " .. tostring(login_new_code))
 end
 print("")
 print(tostring(C.bold) .. "▶ Vérification du log" .. tostring(C.reset))

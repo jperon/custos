@@ -5,12 +5,14 @@
 --   add_ede(dns, code, text)         -- injects/replaces OPT RR with EDE option
 --   build_blocked_response(dns_orig, dns_raw, reason) -- REFUSED + EDE 17
 --   add_ede_ttl(dns_payload, reason) -- EDE 4 on TTL-modified allowed responses
+--   strip_https_rr(dns_payload)      -- removes HTTPS (type 65) RRs from all sections
 
 dns_mod = require "ipparse.l7.dns"
 parse    = dns_mod.parse
 REFUSED  = dns_mod.rcodes.REFUSED
 A        = dns_mod.types.A
 AAAA     = dns_mod.types.AAAA
+HTTPS    = dns_mod.types.HTTPS
 ede_codes = dns_mod.ede_codes
 
 pack: sp = require "ipparse.lib.pack_compat"
@@ -100,4 +102,31 @@ add_ede_ttl = (dns_payload, reason) ->
 
   tostring dns
 
-{ :add_ede, :build_blocked_response, :add_ede_ttl, :EDE_BLOCKED, :EDE_TTL_MODIFIED }
+strip_rrtype = (dns_payload, rrtype) ->
+  dns = parse dns_payload, 1, false
+  return dns_payload unless dns and dns.header
+
+  changed = false
+  filter_rrs = (rrs) ->
+    out = {}
+    for rr in *(rrs or {})
+      if rr.rtype == rrtype
+        changed = true
+      else
+        out[#out + 1] = rr
+    out
+
+  dns.answers = filter_rrs dns.answers
+  dns.authorities = filter_rrs dns.authorities
+  dns.additionals = filter_rrs dns.additionals
+  dns.header.ancount = #dns.answers
+  dns.header.nscount = #dns.authorities
+  dns.header.arcount = #dns.additionals
+
+  return dns_payload unless changed
+  tostring dns
+
+strip_https_rr = (dns_payload) ->
+  strip_rrtype dns_payload, HTTPS
+
+{ :add_ede, :build_blocked_response, :add_ede_ttl, :strip_https_rr, :EDE_BLOCKED, :EDE_TTL_MODIFIED }

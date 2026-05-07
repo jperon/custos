@@ -26,7 +26,7 @@ packet = require "nfq/packet"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :now, :set_action_prefix } = require "log"
-{ :build_blocked_response, :add_ede_ttl } = require "dns_ede"
+{ :build_blocked_response, :add_ede_ttl, :strip_https_rr } = require "dns_ede"
 bit = require "bit"
 :concat, :insert, :remove = table
 
@@ -262,6 +262,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     refused_dns = build_blocked_response pkt.dns, dns_raw, entry.reason
     unless refused_dns
       return NF_DROP
+    refused_dns = strip_https_rr(refused_dns) or refused_dns
     patched = replace_dns_payload raw, pkt, refused_dns
     unless patched
       return NF_DROP
@@ -350,6 +351,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- 4. Reconstruire le paquet IP complet avec le nouveau payload
   dns_raw = extract_dns_payload raw, pkt
   new_dns = patch_ttl_in_dns dns_raw, answers, FORCED_TTL
+  new_dns = strip_https_rr(new_dns) or new_dns
   new_dns = add_ede_ttl(new_dns, entry.reason) or new_dns
   patched = replace_dns_payload raw, pkt, new_dns
 

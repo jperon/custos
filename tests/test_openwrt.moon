@@ -614,6 +614,11 @@ out_code = out_code\gsub "%s+", ""
 report "Auth — logout → 303",
   out_code == "303", "HTTP #{out_code}"
 
+_, out_code2 = auth_curl "GET", "/logout"
+out_code2 = out_code2\gsub "%s+", ""
+report "Auth — logout répété → 303",
+  out_code2 == "303", "HTTP #{out_code2}"
+
 print "  Attente flush cache session (6 s)..."
 os.execute "sleep 6"
 
@@ -761,6 +766,11 @@ if code == "200"
   report "Inscription — sessions.lua contient newuser",
     (sess2 and sess2\match "newuser") != nil,
     (sess2 or "(absent)")\sub(1, 120)
+
+  _, login_new_code = auth_curl "POST", "/login", "user=newuser&password=newpass123"
+  login_new_code = login_new_code\gsub "%s+", ""
+  report "Inscription — login immédiat newuser → 200",
+    login_new_code == "200", "HTTP #{login_new_code}"
 
 -- ── Log verification ──────────────────────────────────────────────────────────
 

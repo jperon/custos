@@ -3,6 +3,7 @@ local parse = dns_mod.parse
 local REFUSED = dns_mod.rcodes.REFUSED
 local A = dns_mod.types.A
 local AAAA = dns_mod.types.AAAA
+local HTTPS = dns_mod.types.HTTPS
 local ede_codes = dns_mod.ede_codes
 local sp
 sp = require("ipparse.lib.pack_compat").pack
@@ -85,10 +86,47 @@ add_ede_ttl = function(dns_payload, reason)
   add_ede(dns, EDE_TTL_MODIFIED, ede_text)
   return tostring(dns)
 end
+local strip_rrtype
+strip_rrtype = function(dns_payload, rrtype)
+  local dns = parse(dns_payload, 1, false)
+  if not (dns and dns.header) then
+    return dns_payload
+  end
+  local changed = false
+  local filter_rrs
+  filter_rrs = function(rrs)
+    local out = { }
+    local _list_0 = (rrs or { })
+    for _index_0 = 1, #_list_0 do
+      local rr = _list_0[_index_0]
+      if rr.rtype == rrtype then
+        changed = true
+      else
+        out[#out + 1] = rr
+      end
+    end
+    return out
+  end
+  dns.answers = filter_rrs(dns.answers)
+  dns.authorities = filter_rrs(dns.authorities)
+  dns.additionals = filter_rrs(dns.additionals)
+  dns.header.ancount = #dns.answers
+  dns.header.nscount = #dns.authorities
+  dns.header.arcount = #dns.additionals
+  if not (changed) then
+    return dns_payload
+  end
+  return tostring(dns)
+end
+local strip_https_rr
+strip_https_rr = function(dns_payload)
+  return strip_rrtype(dns_payload, HTTPS)
+end
 return {
   add_ede = add_ede,
   build_blocked_response = build_blocked_response,
   add_ede_ttl = add_ede_ttl,
+  strip_https_rr = strip_https_rr,
   EDE_BLOCKED = EDE_BLOCKED,
   EDE_TTL_MODIFIED = EDE_TTL_MODIFIED
 }
