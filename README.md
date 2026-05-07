@@ -132,9 +132,6 @@ custos/
 │   ├── mac_learner.moon     Table IP→MAC en mémoire + socket Unix
 │   ├── mac_learner_ipc.moon Client IPC pour mac_learner
 │   ├── mac_prober.moon      Sondage actif ARP/NDP
-│   ├── ffi_ndpi.moon        Façade détection version (charge v4 ou v5)
-│   ├── ffi_ndpi_v4.moon     FFI cdef pour nDPI 4.2–4.8
-│   ├── ffi_ndpi_v5.moon     FFI cdef pour nDPI 5.0+
 │   ├── ffi_xxhash.moon      FFI xxHash
 │   ├── worker_questions.moon  Worker questions DNS
 │   ├── worker_responses.moon  Worker réponses DNS

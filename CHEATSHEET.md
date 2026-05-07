@@ -37,7 +37,7 @@ Detailed explanations and architecture remain in `README.md`.
 
 - REFUSED, EDE, TTL:
   - DNS helpers: `src/parse/dns.moon`
-  - Patch/rebuild packet: `src/parse/ndpi.moon`
+  - Patch/rebuild packet: `src/nfq/packet.moon`
   - Forced TTL: `FORCED_TTL` in `src/config.moon`
 
 - nft injection (sets):
@@ -54,9 +54,9 @@ Detailed explanations and architecture remain in `README.md`.
   - Secrets/hash: `src/auth/credentials.moon`
 
 - Parsing + nDPI:
-  - Facade: `src/parse/ndpi.moon`
-  - nDPI 4.x: `src/parse/ndpi_v4.moon`, `src/ffi_ndpi_v4.moon`
-  - nDPI 5.x: `src/parse/ndpi_v5.moon`, `src/ffi_ndpi_v5.moon`
+  - Facade: `src/nfq/packet.moon`
+  - nDPI 4.x: `src/nfq/packet.moon`, `src/ffi_ndpi_v4.moon`
+  - nDPI 5.x: `src/nfq/packet.moon`, `src/ffi_ndpi_v5.moon`
   - Version dispatch: `src/ffi_ndpi.moon`
 
 ## Useful contracts

@@ -5,7 +5,6 @@
 #   all          - Compile all .moon files to .lua
 #   check        - Syntax check generated Lua files
 #   test         - Unit tests (Busted: all specs in tests/unit/, no root required)
-#   test-ndpi    - nDPI wrapper tests (requires libndpi)
 #   test-openwrt - OpenWrt live tests via SSH (HOST=user@host required)
 #   test-env     - Create/start libvirt 3-VM environment (Debian client, OpenWrt filter, Debian DNS)
 #   test-env-down- Stop VMs (keep disks)
@@ -53,18 +52,18 @@ IPPARSE_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(IPPARSE_MOONS))
 UNIT_SPEC_MOONS := $(shell find tests/unit -name '*_spec.moon' 2>/dev/null | sort)
 UNIT_SPEC_LUAS  := $(patsubst %.moon,%.lua,$(UNIT_SPEC_MOONS))
 
-.PHONY: all clean check test test-unit test-ndpi test-openwrt \
+.PHONY: all clean check test test-unit test-openwrt \
         test-env test-env-down test-env-nuke test-e2e test-e2e-ci test-kvm \
         coverage run reload update-lists make-secret logs help debug-env
 
-all: $(LUA)/parse $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) install-owrt.lua
+all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
 
 install-owrt.lua: install-owrt.moon
 	$(MOONC) -o $@ $<
 
-$(LUA)/parse:
-	mkdir -p $(LUA)/parse
+$(LUA)/nfq:
+	mkdir -p $(LUA)/nfq
 
 # Create parent directory before compiling (idempotent)
 $(LUA)/%.lua: $(SRC)/%.moon
@@ -114,14 +113,6 @@ coverage: all compile-specs
 	@if [ -f tmp/coverage/luacov.report.out ]; then \
 	  grep -E "^Total" tmp/coverage/luacov.report.out || true; \
 	fi
-
-# ── nDPI wrapper tests (requires libndpi) ────────────────────────────────
-
-test-ndpi: all
-	@echo "Tests nDPI wrapper..."
-	$(MOONC) -o tests/test_ndpi.lua tests/test_ndpi.moon
-	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) tests/test_ndpi.lua
 
 # ── OpenWrt live tests via SSH ────────────────────────────────────────────
 

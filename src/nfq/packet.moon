@@ -1,7 +1,7 @@
 --- Packet parser using pure LuaJIT FFI pointer arithmetic.
 -- Parses L3/L4/L7 headers (IPv4/IPv6, UDP/TCP, DNS).
 -- Includes TCP stream reassembly for multi-segment DNS/TCP.
--- @module parse.ndpi
+-- @module nfq.packet
 
 { :ffi } = require "ffi_defs"
 { :AF_INET, :AF_INET6 } = require "config"

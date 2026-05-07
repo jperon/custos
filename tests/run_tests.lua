@@ -138,9 +138,8 @@ make_ipv6_ext_udp_dns = function(src_ip6, dst_ip6, src_port, dst_port, dns_paylo
   local udp = string.char(bit.rshift(bit.band(src_port, 0xFF00), 8), bit.band(src_port, 0xFF), bit.rshift(bit.band(dst_port, 0xFF00), 8), bit.band(dst_port, 0xFF), bit.rshift(bit.band(udp_len, 0xFF00), 8), bit.band(udp_len, 0xFF), 0, 0)
   return ip6 .. ext_raw .. udp .. dns_payload
 end
-local m_ndpi = dofile("lua/parse/packet.lua")
-local parse_packet = m_ndpi.parse_packet
-local get_flow = m_ndpi.get_flow
+local m_packet = dofile("lua/nfq/packet.lua")
+local parse_packet = m_packet.parse_packet
 local purge_flows = m_ndpi.purge_flows
 test("parse_packet — UDP DNS minimal", function()
   local dns = make_dns("\3www\6github\3com\0", 1, false)

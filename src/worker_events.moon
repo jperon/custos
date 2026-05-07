@@ -3,7 +3,7 @@
 --
 -- Reçoit des lignes TSV depuis worker_questions via le pipe events_rfd :
 --   ts<TAB>decision<TAB>qname<TAB>mac_src<TAB>src_ip<TAB>dst_ip<TAB>vlan<TAB>user
---     <TAB>af<TAB>ndpi_master<TAB>ndpi_app<TAB>reason<TAB>rule
+--     <TAB>af<TAB>reason<TAB>rule
 --
 -- Agrège les événements identiques (même clé = les 12 champs sans ts)
 -- et les écrit dans des fichiers TSV horaires dans events_dir.

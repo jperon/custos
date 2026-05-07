@@ -210,9 +210,8 @@ make_ipv6_ext_udp_dns = (src_ip6, dst_ip6, src_port, dst_port, dns_payload, firs
   )
   ip6 .. ext_raw .. udp .. dns_payload
 
-m_ndpi = dofile "lua/parse/packet.lua"
-parse_packet = m_ndpi.parse_packet
-get_flow = m_ndpi.get_flow
+m_packet = dofile "lua/nfq/packet.lua"
+parse_packet = m_packet.parse_packet
 purge_flows = m_ndpi.purge_flows
 
 test "parse_packet — UDP DNS minimal", ->

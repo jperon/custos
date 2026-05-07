@@ -26,7 +26,7 @@ tests/
                               refused/dnsonly, reason, expiry
     parse/
       mac_learner_spec.moon   mac_from_eui64, get_mac (fallback EUI-64)
-      ndpi_spec.moon          parse_packet UDP/TCP/IPv6+ext, patch_and_checksum,
+      packet_spec.moon        parse_packet UDP/TCP/IPv6+ext, patch_and_checksum,
                               extract/patch/replace DNS payload
   helpers/
     busted_setup.lua          stubs globaux (ffi_defs, config, log, ethernet)
@@ -34,7 +34,6 @@ tests/
   test_ffi_socket.moon        FFI socket (luajit direct, hors Busted)
   test_ffi_wolfssl.moon       FFI WolfSSL (luajit direct)
   test_ffi_integration.moon   tests d'intégration socket+SSL
-  test_ndpi.moon              wrapper nDPI (nécessite libndpi)
   test_openwrt.moon           E2E via SSH sur routeur OpenWrt
   test_e2e.moon               E2E libvirt (3 VMs)
 ```
@@ -57,7 +56,7 @@ make coverage
 make test-ffi
 
 # Tests nDPI (nécessite libndpi)
-make test-ndpi
+# Tests nDPI removed
 
 # E2E via SSH OpenWrt
 make test-openwrt HOST=root@<routeur>
@@ -125,12 +124,11 @@ ils nécessitent les bibliothèques natives pour être exercés.
 
 ## nDPI Integration Tests
 
-### `test_ndpi.moon`
 
 Nécessite `libndpi` installé :
 
 ```bash
-make test-ndpi
+# Tests nDPI removed
 ```
 
 Tests : parsing L3/L4/L7, décompression DNS, patch TTL + recalcul checksum,

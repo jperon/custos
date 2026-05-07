@@ -136,8 +136,7 @@ Installer = (cfg) ->
         for _, src in ipairs {
             "config", "ffi_defs", "log",
             "parse/ethernet", "parse/ip", "parse/udp", "parse/dns",
-            "ffi_ndpi", "ffi_ndpi_v4", "ffi_ndpi_v5",
-            "parse/ndpi", "parse/ndpi_v4", "parse/ndpi_v5",
+            "nfq/packet", "nfq/packet_v4", "nfq/packet_v5",
             "ipc", "allowlist", "nft", "nfq_loop",
             "worker_q0", "worker_q1", "worker_auth_queue", "main"
           }

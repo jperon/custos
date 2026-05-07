@@ -49,7 +49,6 @@ packages:
   - luajit
   - lua5.3
   - lua5.3-dev
-  - libndpi-dev
   - libnetfilter-queue-dev
   - libnftnl-dev
   - libmnl-dev
@@ -132,7 +131,7 @@ rsync -aP -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i
 
 if [ "$TEST_NDPI5" = "1" ]; then
     echo "Running tests in the isolated VM (nDPI 5.0)..."
-    $SSH_CMD 'cd ~/custos && make test-docker-ndpi5-internal'
+    $SSH_CMD 'cd ~/custos && make test'
 else
     echo "Running tests in the isolated VM (nDPI 4.x)..."
     $SSH_CMD 'cd ~/custos && make test-docker-internal'

@@ -27,7 +27,6 @@ Voir [README.md](README.md) pour l'architecture complète.
 | Architecture, workers, queues, pipes, nft sets, superviseur | [.agents/architecture.md](.agents/architecture.md) |
 | I/O par worker et formats de messages IPC | [.agents/workers.md](.agents/workers.md) |
 | Syntaxe MoonScript, LDoc, pièges de refactoring | [.agents/moonscript.md](.agents/moonscript.md) |
-| Intégration nDPI (FFI pur, multi-version) | [.agents/ndpi.md](.agents/ndpi.md) |
 | Suites de tests et pièges OpenWrt | [.agents/testing.md](.agents/testing.md) |
 
 ---
