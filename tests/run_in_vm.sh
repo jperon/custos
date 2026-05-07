@@ -129,12 +129,12 @@ rsync -aP -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i
     --exclude 'cidata.iso' \
     . debian@$IP:~/custos/ >/dev/null
 
-if [ "$TEST_NDPI5" = "1" ]; then
-    echo "Running tests in the isolated VM (nDPI 5.0)..."
+if [ "$TEST_VM" = "1" ]; then
+    echo "Running tests in the isolated VM..."
     $SSH_CMD 'cd ~/custos && make test'
 else
-    echo "Running tests in the isolated VM (nDPI 4.x)..."
-    $SSH_CMD 'cd ~/custos && make test-docker-internal'
+    echo "Running tests in the isolated VM..."
+    $SSH_CMD 'cd ~/custos && make test'
 fi
 RESULT=$?
 

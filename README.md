@@ -6,8 +6,7 @@ logs L2/L3/L4/L7 information, and dynamically builds nftables allowlists
 as DNS resolutions occur.
 
 Packet parsing uses **pure LuaJIT FFI pointer arithmetic** for L3/L4/L7
-decoding, combined with **libndpi** for deep packet inspection and protocol
-detection — all without any C compilation step.
+decoding — all without any C compilation step.
 
 ---
 
@@ -174,11 +173,9 @@ custos/
 │   │       ├── ipcalc.moon          Test d'appartenance CIDR
 │   │       ├── load_config.moon     Chargeur YAML (lyaml)
 │   │       └── parse_domains.moon   Parser multi-format de listes de domaines
-│   ├── parse/
+│   ├── nfq/
 │   │   ├── ethernet.moon    L2 : MAC src via nfq_get_packet_hw
-│   │   ├── ndpi.moon        L3–L7 parseur unifié (façade)
-│   │   ├── ndpi_v4.moon     Backend nDPI 4.2–4.8
-│   │   └── ndpi_v5.moon     Backend nDPI 5.0+
+│   │   └── packet.moon      L3–L7 parseur unifié
 │   └── ipparse/         Bibliothèque parsing L2/L3/L4/L7 (submodule)
 ├── lua/                     Lua généré par moonc (ne pas éditer)
 ├── nft-rules/
@@ -189,7 +186,6 @@ custos/
 ├── tests/
 │   ├── run_tests.moon       Tests unitaires source (sans root)
 │   ├── run_tests.lua        Tests unitaires compilés
-│   ├── test_ndpi.moon       Tests du wrapper nDPI
 │   ├── test_e2e.moon        Tests E2E (VM/SSH)
 │   ├── test_openwrt.moon    Tests E2E OpenWrt via SSH
 │   ├── run_e2e.moon         Runner de la suite E2E
@@ -214,13 +210,12 @@ custos/
 | `lyaml`                  | YAML config loader (`lyaml`, LuaJIT)    |
 | `libnetfilter-queue`     | NFQUEUE C library                       |
 | `libnftables`            | nftables library (set injection)        |
-| `libndpi`                | nDPI deep packet inspection (FFI)       |
 | `nftables`               | `nft` tool                              |
 | `wolfssl`                | TLS/SSL library (via FFI)               |
 | `px5g-wolfssl`           | Dynamic TLS certificate generation      |
 
 ```bash
-opkg install luajit lyaml libndpi libnetfilter-queue nftables wolfssl px5g-wolfssl
+opkg install luajit lyaml libnetfilter-queue nftables wolfssl px5g-wolfssl
 # moonscript via luarocks or build from source
 ```
 
@@ -239,9 +234,6 @@ make
 
 # Run unit tests (no root required)
 make test
-
-# Run nDPI wrapper tests (requires libndpi)
-make test-ndpi
 
 # Deploy to OpenWrt router via SSH
 luajit install-owrt.lua root@<routeur>
@@ -445,78 +437,6 @@ as long as the client actively resolves the name.
 
 ---
 
-## nDPI Integration
-
-The `parse/ndpi` module provides a single unified L3+L4+L7 parser on top of
-**pure FFI pointer arithmetic** and **libndpi**. Per-layer parsing (L2/L3/L4/L7)
-is handled by the `ipparse` library (`src/ipparse/`), still used directly by
-some workers (e.g. `worker_responses` uses `ipparse.l7.dns`).
-
-- **Pure FFI pointer arithmetic** (`uint8_t*` + `bit` library) for
-  L3/L4/L7 header decoding — no `string.byte()`, no C bridge, no
-  compilation step.
-- **libndpi** (loaded at runtime via `ffi.load "ndpi"`) for protocol
-  detection. nDPI provides two levels of classification:
-  - `ndpi_master` — transport protocol (e.g. `5` = DNS)
-  - `ndpi_app` — application behind the query (e.g. `203` = Github)
-- **Pre-allocated buffers** (`flow_buf`, `ipv6_str`) reused across calls
-  to avoid GC pressure in the hot path.
-- **DNS name decompression** (RFC 1035 §4.1.4) implemented in MoonScript
-  with FFI pointers — JIT-compilable by LuaJIT.
-
-### Version Tolerance
-
-The wrapper auto-detects the installed libndpi version via
-`ndpi_revision()` at load time, then dispatches to the appropriate
-backend:
-
-| Versions | Backend | Key differences |
-|----------|---------|----------------|
-| 4.2–4.4  | `v4`    | 5-arg `ndpi_detection_process_packet` |
-| 4.6–4.8  | `v4`    | 6-arg (added `input_info`), `bitmask2` returns `int` |
-| 5.0+     | `v5`    | No `NDPI_PROTOCOL_BITMASK`, different `ndpi_init_detection_module` signature, opaque `ndpi_protocol` struct (read via accessors) |
-
-```
-ffi_ndpi.moon       → ndpi_revision() → major >= 5?
-                       ├── yes → ffi_ndpi_v5 cdef + parse.ndpi_v5
-                       └── no  → ffi_ndpi_v4 cdef + parse.ndpi_v4
-                                  └── minor >= 6? → 5-arg or 6-arg
-```
-
-### API
-
-```moonscript
-ndpi = require "parse.ndpi"
-
--- Single-call L3+L4+L7 parse + nDPI detection
--- Returns (pkt, nil) on success, (nil, "buffering") while reassembling a
--- multi-segment TCP DNS stream, (nil, "tcp_control") for TCP control packets
--- without DNS payload (SYN/ACK/FIN), or (nil, nil) on unrecognised packets.
-pkt, status = ndpi.parse_packet raw
--- pkt.ip    (version, ihl, src_ip, dst_ip, src_ip_raw, ...)
--- pkt.l4    (proto, src_port, dst_port, len, off, payload_len)
---   proto = "udp" or "tcp"
---   TCP extras: pkt.tcp_dns_raw        (assembled DNS payload, multi-segment)
---               pkt.tcp_single_segment  (bool — false when reassembled from N segments)
---               pkt.tcp_init_seq        (uint32 — TCP seq of first segment; used to
---                                        reinject a coalesced+TTL-patched reply)
--- pkt.dns   (txid, is_response, qdcount, ancount, rcode, ...)
--- pkt.questions  [{qname, qtype, qclass, qtype_name}, ...]
--- pkt.ndpi_master, pkt.ndpi_app
-
--- Parse DNS answer RRs
-answers = ndpi.parse_answers raw, pkt
--- [{name, rtype, ttl, ttl_offset, rdata_str, rdata_raw}, ...]
-
--- Patch TTLs + fix checksums, return modified packet
-patched = ndpi.patch_and_checksum raw, pkt, answers, 60
-
--- Cleanup
-ndpi.cleanup!
-```
-
----
-
 ## Authentication
 
 CustosVirginum includes an HTTPS authentication server that maps LAN client IPs to user
@@ -657,7 +577,7 @@ Plusieurs utilisateurs (OR logique) :
   design (share-nothing architecture). libnfq does support out-of-order verdicts
   (each verdict references its packet by `packet_id`), but intra-queue parallelism
   would require shared-state synchronisation in workers that maintain flow context
-  (nDPI, `pending` table, TCP reassembly). Horizontal scaling via multiple queue
+  (`pending` table, TCP reassembly). Horizontal scaling via multiple queue
   numbers (`QUEUE_QUESTIONS="0,1,2"`) with nftables hash distribution
   (`queue num 0-2`) is the correct approach.
 - **MAC spoofing**: `mac4_allowed`/`mac6_allowed` rely on the MAC address

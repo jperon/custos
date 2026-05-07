@@ -140,7 +140,7 @@ make_ipv6_ext_udp_dns = function(src_ip6, dst_ip6, src_port, dst_port, dns_paylo
 end
 local m_packet = dofile("lua/nfq/packet.lua")
 local parse_packet = m_packet.parse_packet
-local purge_flows = m_ndpi.purge_flows
+local purge_tcp_buffers = m_packet.purge_tcp_buffers
 test("parse_packet — UDP DNS minimal", function()
   local dns = make_dns("\3www\6github\3com\0", 1, false)
   local raw = make_ipv4_udp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns)
@@ -218,7 +218,7 @@ test("parse_packet — IPv6 + Hop-by-Hop + Routing (chained) + UDP DNS", functio
   dns = make_dns("\3www\6github\3com\0", 1, false)
   raw = make_ipv4_udp_dns("192.168.1.42", "8.8.8.8", 54321, 53, dns)
   pkt = parse_packet(raw)
-  return true
+  return assert(pkt ~= nil, "parse_packet should return a valid packet")
 end)
 test("patch_and_checksum — TCP response", function()
   local qname_enc = "\6github\3com\0"
@@ -231,8 +231,8 @@ test("patch_and_checksum — TCP response", function()
   local tcp_payload = string.char(bit.rshift(bit.band(dns_len, 0xFF00), 8), bit.band(dns_len, 0xFF)) .. dns_payload
   local raw = make_ipv4_tcp_dns("192.168.1.42", "8.8.8.8", 54323, 53, dns_payload)
   local pkt = parse_packet(raw)
-  local answers = m_ndpi.parse_answers(raw, pkt)
-  local patched = m_ndpi.patch_and_checksum(raw, pkt, answers, 60)
+  local answers = m_packet.parse_answers(raw, pkt)
+  local patched = m_packet.patch_and_checksum(raw, pkt, answers, 60)
   local ttl_offset = 20 + 20 + 2 + 12 + 16 + 6 + 3
   return assert_eq(patched:byte(ttl_offset + 1), 60, "TTL patched to 60 in TCP packet")
 end)
@@ -270,9 +270,9 @@ test("patch_and_checksum — TCP 2-segment reassembly patches TTL", function()
   assert_eq(pkt2.tcp_single_segment, false, "multi-segment: not single")
   assert((pkt2.tcp_init_seq ~= nil), "tcp_init_seq should be set")
   assert_eq(pkt2.tcp_init_seq, init_seq, "tcp_init_seq == init_seq of seg1")
-  local answers2 = m_ndpi.parse_answers(raw2, pkt2)
+  local answers2 = m_packet.parse_answers(raw2, pkt2)
   assert_eq(#answers2, 1, "1 answer expected")
-  local patched2 = m_ndpi.patch_and_checksum(raw2, pkt2, answers2, 60)
+  local patched2 = m_packet.patch_and_checksum(raw2, pkt2, answers2, 60)
   local expected_len = 20 + 20 + 2 + dns_len
   assert_eq(#patched2, expected_len, "coalesced packet size")
   local ttl_off2 = 20 + 20 + 2 + 12 + 16 + 6 + 3
@@ -318,11 +318,11 @@ test("patch_and_checksum — TCP 2-segment CNAME+A patches all TTLs", function()
   assert(pkt3, "seg2 completes DNS")
   assert_eq(pkt3.dns.txid, 0xBBCC, "txid")
   assert_eq(pkt3.tcp_single_segment, false, "multi-segment")
-  local ans3 = m_ndpi.parse_answers(raw2, pkt3)
+  local ans3 = m_packet.parse_answers(raw2, pkt3)
   assert_eq(#ans3, 2, "2 answers (CNAME + A)")
   assert_eq(ans3[1].ttl, 300, "RR1 original TTL")
   assert_eq(ans3[2].ttl, 300, "RR2 original TTL")
-  local patched3 = m_ndpi.patch_and_checksum(raw2, pkt3, ans3, 42)
+  local patched3 = m_packet.patch_and_checksum(raw2, pkt3, ans3, 42)
   local base = 42
   assert_eq(patched3:byte(base + 34 + 3 + 1), 42, "RR1 (CNAME) TTL patched to 42")
   assert_eq(patched3:byte(base + 62 + 3 + 1), 42, "RR2 (A)     TTL patched to 42")
@@ -583,37 +583,10 @@ test("ipc — token expiré est rejeté (purge paresseuse)", function()
   end)), "token expiré doit être rejeté à t=6")
 end)
 io.write("\n── parse/packet helpers ──\n")
-package.loaded["ffi_ndpi"] = {
-  ffi = ffi,
-  ndpi_lib = { },
-  major = 4
-}
-package.loaded["parse.ndpi_v4"] = {
-  init = function()
-    return nil
-  end,
-  detect = function()
-    return 0, 0
-  end,
-  cleanup = function()
-    return nil
-  end
-}
-package.loaded["parse.ndpi_v5"] = {
-  init = function()
-    return nil
-  end,
-  detect = function()
-    return 0, 0
-  end,
-  cleanup = function()
-    return nil
-  end
-}
-local m_ndpi2 = dofile("lua/parse/packet.lua")
-local extract_dns_payload = m_ndpi2.extract_dns_payload
-local patch_ttl_in_dns = m_ndpi2.patch_ttl_in_dns
-local replace_dns_payload = m_ndpi2.replace_dns_payload
+local m_packet_funcs = dofile("lua/nfq/packet.lua")
+local extract_dns_payload = m_packet_funcs.extract_dns_payload
+local patch_ttl_in_dns = m_packet_funcs.patch_ttl_in_dns
+local replace_dns_payload = m_packet_funcs.replace_dns_payload
 test("extract_dns_payload — UDP : retourne la sous-chaîne DNS", function()
   local dns = make_dns("\x06github\x03com\x00", 1, false, 0xABCD)
   local raw = make_ipv4_udp_dns("192.168.1.2", "8.8.8.8", 54321, 53, dns)
@@ -2930,11 +2903,11 @@ test("filter/convert — commentaires et lignes vides ignorés", function()
   return os.remove(CONV_OUTPUT)
 end)
 io.write("\n── parse/packet ──\n")
-local packet_mod = require("parse/packet")
-test("parse/packet — parse_packet(raw) OK sur paquet IP brut", function()
+local packet_mod = require("nfq/packet")
+test("nfq/packet — parse_packet(raw) OK sur paquet IP brut", function()
   local dns = make_dns("\x03www\x08facebook\x03com\0", 1, false)
   local raw = make_ipv4_udp_dns("1.2.3.4", "8.8.8.8", 12345, 53, dns)
-  local pkt, status = ndpi_mod.parse_packet(raw)
+  local pkt, status = packet_mod.parse_packet(raw)
   assert(pkt ~= nil, "parse_packet retourne nil : " .. tostring(tostring(status)))
   assert_eq(pkt.ip.src_ip, "1.2.3.4", "src_ip")
   return assert_eq(pkt.l4.dst_port, 53, "dst_port DNS")

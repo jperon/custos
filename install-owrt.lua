@@ -211,8 +211,7 @@ Installer = function(cfg)
         "lyaml",
         "luasec",
         "libxxhash",
-        "openssl-util",
-        "libndpi"
+        "openssl-util"
       }
       local pkg_list = table.concat(pkgs_required, " ")
       local install_cmd

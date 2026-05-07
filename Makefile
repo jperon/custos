@@ -223,7 +223,6 @@ help:
 	@echo "  test-unit    - Tests unitaires Busted uniquement (sans FFI)"
 	@echo "  test-ffi     - Tests FFI socket/WolfSSL/intégration"
 	@echo "  coverage     - Tests unitaires + rapport luacov (tmp/coverage/)"
-	@echo "  test-ndpi    - Tests nDPI wrapper (libndpi requis)"
 	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis)"
 	@echo "  test-env     - Crée/démarre l'environnement libvirt 3 VMs pour E2E"
 	@echo "  test-env-down - Arrête les VMs (conserve les disques)"

@@ -53,11 +53,8 @@ Detailed explanations and architecture remain in `README.md`.
   - Auth nft integration: `src/auth/nft_sessions.moon`
   - Secrets/hash: `src/auth/credentials.moon`
 
-- Parsing + nDPI:
+- Parsing:
   - Facade: `src/nfq/packet.moon`
-  - nDPI 4.x: `src/nfq/packet.moon`, `src/ffi_ndpi_v4.moon`
-  - nDPI 5.x: `src/nfq/packet.moon`, `src/ffi_ndpi_v5.moon`
-  - Version dispatch: `src/ffi_ndpi.moon`
 
 ## Useful contracts
 
@@ -103,7 +100,6 @@ Detailed explanations and architecture remain in `README.md`.
 ## Tests (quick selection)
 
 - Unit: `make test`
-- nDPI: `make test-ndpi`
 - OpenWrt E2E: `make test-openwrt HOST=root@<router>`
 
 ## Quick playbooks

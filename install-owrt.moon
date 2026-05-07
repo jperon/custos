@@ -181,7 +181,7 @@ Installer = (cfg) ->
 
       pkgs_required = {
         "luajit", "libnetfilter-queue", "nftables", "kmod-nft-queue",
-        "lyaml", "luasec", "libxxhash", "openssl-util", "libndpi"
+        "lyaml", "luasec", "libxxhash", "openssl-util"
       }
 
       pkg_list = table.concat pkgs_required, " "

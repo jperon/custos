@@ -25,7 +25,7 @@ if not package.loaded["ffi_defs"] then
 end
 
 -- ── cdef POSIX minimaux ────────────────────────────────────────────────────
--- Déclarations nécessaires aux parsers de paquets (parse/ndpi, ipc…) quand
+-- Déclarations nécessaires aux parsers de paquets (nfq/packet, ipc…) quand
 -- ffi_defs est stubbé et n'exécute donc pas ses propres cdef.
 -- pcall → idempotent si un autre module les a déjà déclarées.
 pcall(function()

@@ -212,7 +212,7 @@ make_ipv6_ext_udp_dns = (src_ip6, dst_ip6, src_port, dst_port, dns_payload, firs
 
 m_packet = dofile "lua/nfq/packet.lua"
 parse_packet = m_packet.parse_packet
-purge_flows = m_ndpi.purge_flows
+purge_tcp_buffers = m_packet.purge_tcp_buffers
 
 test "parse_packet — UDP DNS minimal", ->
   dns = make_dns "\3www\6github\3com\0", 1, false
@@ -295,28 +295,14 @@ test "parse_packet — IPv6 + Hop-by-Hop + Routing (chained) + UDP DNS", ->
   assert_eq pkt.ip.ihl, 56, "ihl=56 (40 + 8 + 8)"
   assert_eq pkt.l4.proto, "udp", "proto=udp"
   assert_eq pkt.questions[1].qname, "www.github.com", "qname"
-  -- We need a mock for ndpi_lib.ndpi_detection_get_sizeof_ndpi_flow_struct
-  -- But m_ndpi is already loaded. Since it's a module, we can inject the mock.
-  -- Actually, in run_tests.lua, we don't have a real libndpi.
-  -- So we must wrap the call.
-  -- For this test, we will just mock the backend in m_ndpi since we can't easily
-  -- mock the FFI call inside the module.
-  -- In our case, the l4.src_port etc are parsed from the raw packet.
 
   -- First, we create a packet to get a flow
   dns = make_dns "\3www\6github\3com\0", 1, false
   raw = make_ipv4_udp_dns "192.168.1.42", "8.8.8.8", 54321, 53, dns
   pkt = parse_packet raw
 
-  -- We need to mock ndpi_lib.ndpi_detection_get_sizeof_ndpi_flow_struct
-  -- In the test environment, we have a mock libndpi.
-  -- So let's just verify that the key is generated and stored.
-  -- This is hard because we can't call get_flow without a real FFI allocation.
-  -- To bypass this in unit tests (where libndpi is missing),
-  -- we can wrap get_flow to be a no-op if libndpi is missing.
-  -- But let's ignore get_flow unit tests if they require a real libndpi.
-  -- Instead, we'll test the parsing logic.
-  return true
+  -- Verify that parsing succeeded
+  return assert pkt != nil, "parse_packet should return a valid packet"
 
 test "patch_and_checksum — TCP response", ->
   -- Response payload: length(2) + header(12) + question(15) + answer(16)
@@ -334,10 +320,10 @@ test "patch_and_checksum — TCP response", ->
   raw = make_ipv4_tcp_dns "192.168.1.42", "8.8.8.8", 54323, 53, dns_payload
 
   pkt = parse_packet raw
-  answers = m_ndpi.parse_answers raw, pkt
+  answers = m_packet.parse_answers raw, pkt
 
   -- Patch TTL to 60
-  patched = m_ndpi.patch_and_checksum raw, pkt, answers, 60
+  patched = m_packet.patch_and_checksum raw, pkt, answers, 60
 
   -- Verify TTL in patched buffer
   -- IP(20) + TCP(20) + LenPfx(2) + DNS_hdr(12) + question(16) + RR_name+type+class(6) + TTL_last_byte(3)
@@ -401,9 +387,9 @@ test "patch_and_checksum — TCP 2-segment reassembly patches TTL", ->
   assert_eq pkt2.tcp_init_seq, init_seq, "tcp_init_seq == init_seq of seg1"
 
   -- Parse answers and patch TTL.
-  answers2 = m_ndpi.parse_answers raw2, pkt2
+  answers2 = m_packet.parse_answers raw2, pkt2
   assert_eq #answers2, 1, "1 answer expected"
-  patched2 = m_ndpi.patch_and_checksum raw2, pkt2, answers2, 60
+  patched2 = m_packet.patch_and_checksum raw2, pkt2, answers2, 60
 
   -- Coalesced packet length = IP(20) + TCP(20) + prefix(2) + dns_len.
   expected_len = 20 + 20 + 2 + dns_len
@@ -485,12 +471,12 @@ test "patch_and_checksum — TCP 2-segment CNAME+A patches all TTLs", ->
   assert pkt3, "seg2 completes DNS"
   assert_eq pkt3.dns.txid,           0xBBCC, "txid"
   assert_eq pkt3.tcp_single_segment, false,  "multi-segment"
-  ans3 = m_ndpi.parse_answers raw2, pkt3
+  ans3 = m_packet.parse_answers raw2, pkt3
   assert_eq #ans3, 2, "2 answers (CNAME + A)"
   -- Both TTLs must be 300 before patching.
   assert_eq ans3[1].ttl, 300, "RR1 original TTL"
   assert_eq ans3[2].ttl, 300, "RR2 original TTL"
-  patched3 = m_ndpi.patch_and_checksum raw2, pkt3, ans3, 42
+  patched3 = m_packet.patch_and_checksum raw2, pkt3, ans3, 42
   -- In the coalesced packet: base = IP(20)+TCP(20)+prefix(2) = 42
   -- RR1 ttl_offset=34 → TTL LSB at 42+34+3 = 79 (0-based) → .byte(80)
   -- RR2 ttl_offset=62 → TTL LSB at 42+62+3 = 107 (0-based) → .byte(108)
@@ -1143,26 +1129,11 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
 -- ════════════════════════════════════════════════════════════════
 io.write "\n── parse/packet helpers ──\n"
 
--- Stub ffi_ndpi pour charger ndpi.lua sans libndpi
-package.loaded["ffi_ndpi"] = {
-  ffi:      ffi
-  ndpi_lib: {}
-  major:    4
-}
-package.loaded["parse.ndpi_v4"] = {
-  init:    -> nil
-  detect:  -> 0, 0
-  cleanup: -> nil
-}
-package.loaded["parse.ndpi_v5"] = {
-  init:    -> nil
-  detect:  -> 0, 0
-  cleanup: -> nil
-}
-m_ndpi2             = dofile "lua/parse/packet.lua"
-extract_dns_payload = m_ndpi2.extract_dns_payload
-patch_ttl_in_dns    = m_ndpi2.patch_ttl_in_dns
-replace_dns_payload = m_ndpi2.replace_dns_payload
+-- Load packet parsing module
+m_packet_funcs        = dofile "lua/nfq/packet.lua"
+extract_dns_payload   = m_packet_funcs.extract_dns_payload
+patch_ttl_in_dns      = m_packet_funcs.patch_ttl_in_dns
+replace_dns_payload   = m_packet_funcs.replace_dns_payload
 
 test "extract_dns_payload — UDP : retourne la sous-chaîne DNS", ->
   dns = make_dns "\x06github\x03com\x00", 1, false, 0xABCD
@@ -2881,12 +2852,12 @@ test "filter/convert — commentaires et lignes vides ignorés", ->
 -- parse_packet doit accepter un paquet IP brut sans offset.
 io.write "\n── parse/packet ──\n"
 
-packet_mod = require "parse/packet"
+packet_mod = require "nfq/packet"
 
-test "parse/packet — parse_packet(raw) OK sur paquet IP brut", ->
+test "nfq/packet — parse_packet(raw) OK sur paquet IP brut", ->
   dns = make_dns "\x03www\x08facebook\x03com\0", 1, false
   raw = make_ipv4_udp_dns "1.2.3.4", "8.8.8.8", 12345, 53, dns
-  pkt, status = ndpi_mod.parse_packet raw
+  pkt, status = packet_mod.parse_packet raw
   assert pkt != nil, "parse_packet retourne nil : #{tostring status}"
   assert_eq pkt.ip.src_ip, "1.2.3.4", "src_ip"
   assert_eq pkt.l4.dst_port, 53,       "dst_port DNS"

@@ -55,9 +55,6 @@ make coverage
 # Tests FFI hors-Busted (socket, WolfSSL, intégration)
 make test-ffi
 
-# Tests nDPI (nécessite libndpi)
-# Tests nDPI removed
-
 # E2E via SSH OpenWrt
 make test-openwrt HOST=root@<routeur>
 
@@ -117,19 +114,11 @@ make coverage
 ```
 
 Seul le code sous `lua/` est mesuré. Les stubs FFI bas-niveau
-(`ffi_defs`, `ffi_ndpi`, `ffi_xxhash`, `auth/ffi_*`) sont exclus car
+(`ffi_defs`, `ffi_xxhash`, `auth/ffi_*`) sont exclus car
 ils nécessitent les bibliothèques natives pour être exercés.
 
 ---
 
-## nDPI Integration Tests
-
-
-Nécessite `libndpi` installé :
-
-```bash
-# Tests nDPI removed
-```
 
 Tests : parsing L3/L4/L7, décompression DNS, patch TTL + recalcul checksum,
 détection de version (4.x vs 5.x).
