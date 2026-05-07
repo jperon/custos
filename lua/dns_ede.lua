@@ -88,35 +88,109 @@ add_ede_ttl = function(dns_payload, reason)
 end
 local strip_rrtype
 strip_rrtype = function(dns_payload, rrtype)
-  local dns = parse(dns_payload, 1, false)
-  if not (dns and dns.header) then
+  if not (dns_payload and #dns_payload >= 12) then
     return dns_payload
   end
-  local changed = false
-  local filter_rrs
-  filter_rrs = function(rrs)
-    local out = { }
-    local _list_0 = (rrs or { })
-    for _index_0 = 1, #_list_0 do
-      local rr = _list_0[_index_0]
-      if rr.rtype == rrtype then
-        changed = true
+  local len = #dns_payload
+  local u16
+  u16 = function(off)
+    if off + 1 > len then
+      return nil
+    end
+    return dns_payload:byte(off) * 256 + dns_payload:byte(off + 1)
+  end
+  local skip_name
+  skip_name = function(off)
+    local cur = off
+    local steps = 0
+    while cur <= len do
+      steps = steps + 1
+      if steps > 128 then
+        return nil
+      end
+      local b = dns_payload:byte(cur)
+      if not (b) then
+        return nil
+      end
+      if b == 0 then
+        return cur + 1
+      elseif b >= 0xC0 then
+        if cur + 1 > len then
+          return nil
+        end
+        return cur + 2
       else
-        out[#out + 1] = rr
+        if cur + b > len then
+          return nil
+        end
+        cur = cur + (1 + b)
       end
     end
-    return out
+    return nil
   end
-  dns.answers = filter_rrs(dns.answers)
-  dns.authorities = filter_rrs(dns.authorities)
-  dns.additionals = filter_rrs(dns.additionals)
-  dns.header.ancount = #dns.answers
-  dns.header.nscount = #dns.authorities
-  dns.header.arcount = #dns.additionals
-  if not (changed) then
+  local id = u16(1)
+  local flags = u16(3)
+  local qdcount = u16(5)
+  local ancount = u16(7)
+  local nscount = u16(9)
+  local arcount = u16(11)
+  if not (id and flags and qdcount and ancount and nscount and arcount) then
     return dns_payload
   end
-  return tostring(dns)
+  local off = 13
+  local question_parts = { }
+  for i = 1, qdcount do
+    local q_end = skip_name(off)
+    if not (q_end) then
+      return dns_payload
+    end
+    if q_end + 3 > len then
+      return dns_payload
+    end
+    question_parts[#question_parts + 1] = dns_payload:sub(off, q_end + 3)
+    off = q_end + 4
+  end
+  local copy_section
+  copy_section = function(count)
+    local kept = 0
+    local sec = { }
+    for i = 1, count do
+      local rr_start = off
+      local name_end = skip_name(off)
+      if not (name_end) then
+        return nil
+      end
+      if name_end + 9 > len then
+        return nil
+      end
+      rrtype = u16(name_end)
+      local rdlength = u16(name_end + 8)
+      local rr_end = name_end + 10 + rdlength - 1
+      if rr_end > len then
+        return nil
+      end
+      if rrtype ~= HTTPS then
+        sec[#sec + 1] = dns_payload:sub(rr_start, rr_end)
+        kept = kept + 1
+      end
+      off = rr_end + 1
+    end
+    return kept, table.concat(sec)
+  end
+  local ancount_new, answers = copy_section(ancount)
+  if not (answers) then
+    return dns_payload
+  end
+  local nscount_new, authorities = copy_section(nscount)
+  if not (authorities) then
+    return dns_payload
+  end
+  local arcount_new, additionals = copy_section(arcount)
+  if not (additionals) then
+    return dns_payload
+  end
+  local header = sp(">H H H H H H", id, flags, qdcount, ancount_new, nscount_new, arcount_new)
+  return header .. table.concat(question_parts) .. answers .. authorities .. additionals
 end
 local strip_https_rr
 strip_https_rr = function(dns_payload)

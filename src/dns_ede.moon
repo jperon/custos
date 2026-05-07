@@ -103,28 +103,80 @@ add_ede_ttl = (dns_payload, reason) ->
   tostring dns
 
 strip_rrtype = (dns_payload, rrtype) ->
-  dns = parse dns_payload, 1, false
-  return dns_payload unless dns and dns.header
+  return dns_payload unless dns_payload and #dns_payload >= 12
 
-  changed = false
-  filter_rrs = (rrs) ->
-    out = {}
-    for rr in *(rrs or {})
-      if rr.rtype == rrtype
-        changed = true
+  len = #dns_payload
+  u16 = (off) ->
+    return nil if off + 1 > len
+    dns_payload\byte(off) * 256 + dns_payload\byte(off + 1)
+
+  skip_name = (off) ->
+    cur = off
+    steps = 0
+    while cur <= len
+      steps += 1
+      return nil if steps > 128
+      b = dns_payload\byte cur
+      return nil unless b
+      if b == 0
+        return cur + 1
+      elseif b >= 0xC0
+        return nil if cur + 1 > len
+        return cur + 2
       else
-        out[#out + 1] = rr
-    out
+        return nil if cur + b > len
+        cur += 1 + b
 
-  dns.answers = filter_rrs dns.answers
-  dns.authorities = filter_rrs dns.authorities
-  dns.additionals = filter_rrs dns.additionals
-  dns.header.ancount = #dns.answers
-  dns.header.nscount = #dns.authorities
-  dns.header.arcount = #dns.additionals
+    nil
 
-  return dns_payload unless changed
-  tostring dns
+  id = u16 1
+  flags = u16 3
+  qdcount = u16 5
+  ancount = u16 7
+  nscount = u16 9
+  arcount = u16 11
+  return dns_payload unless id and flags and qdcount and ancount and nscount and arcount
+
+  off = 13
+  question_parts = {}
+  for i = 1, qdcount
+    q_end = skip_name off
+    return dns_payload unless q_end
+    return dns_payload if q_end + 3 > len
+    question_parts[#question_parts + 1] = dns_payload\sub off, q_end + 3
+    off = q_end + 4
+
+  copy_section = (count) ->
+    kept = 0
+    sec = {}
+    for i = 1, count
+      rr_start = off
+      name_end = skip_name off
+      return nil unless name_end
+      return nil if name_end + 9 > len
+
+      rrtype = u16(name_end)
+      rdlength = u16(name_end + 8)
+      rr_end = name_end + 10 + rdlength - 1
+      return nil if rr_end > len
+
+      if rrtype != HTTPS
+        sec[#sec + 1] = dns_payload\sub rr_start, rr_end
+        kept += 1
+
+      off = rr_end + 1
+
+    kept, table.concat sec
+
+  ancount_new, answers = copy_section ancount
+  return dns_payload unless answers
+  nscount_new, authorities = copy_section nscount
+  return dns_payload unless authorities
+  arcount_new, additionals = copy_section arcount
+  return dns_payload unless additionals
+
+  header = sp ">H H H H H H", id, flags, qdcount, ancount_new, nscount_new, arcount_new
+  header .. table.concat(question_parts) .. answers .. authorities .. additionals
 
 strip_https_rr = (dns_payload) ->
   strip_rrtype dns_payload, HTTPS
