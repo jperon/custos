@@ -38,6 +38,17 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 - **In :** NFQUEUE `QUEUE_AUTH` (trafic port 33443) ; fd d'écriture `learn` injecté par `main.moon`.
 - **Out :** `NF_ACCEPT` (laisse passer le paquet vers `auth/worker`) ; écrit le couple MAC+IP dans le pipe `learn` (22 octets) → `mac_learner`.
 
+## worker_tls (`src/worker_tls.moon`)
+
+- **In :** NFQUEUE `QUEUE_SNI_LOG` (TCP/443 ACK path + UDP/443 QUIC Initial).
+- **Traitement :**
+  - extrait le SNI (TLS/QUIC) via `ipparse`,
+  - applique `filter.decide` sur le SNI normalisé,
+  - en mode `auth.sni_verdict.mode = strict-443` :
+    - **allow** → ajoute la paire client→destination dans les sets nft (`ip*_allowed`, `mac*_allowed`) avec `NFT_IP_TIMEOUT`,
+    - **deny/no_sni** → `NF_DROP`.
+- **Out :** `NF_ACCEPT` ou `NF_DROP` selon la policy `auth.sni_verdict` (`protocols`, `nft_failure_policy`).
+
 ## worker_arp_sniffer (`src/worker_arp_sniffer.moon`)
 
 - **In :** deux sockets `AF_PACKET/SOCK_RAW` sur `br` : EtherType `0x0806` (ARP) + `0x86DD` (IPv6, filtrage NDP ICMPv6 type 135/136 en Lua).

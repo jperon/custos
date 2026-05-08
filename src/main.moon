@@ -349,11 +349,11 @@ supervise = (pipes, sfd) ->
   sni_queue_num = tonumber(config.QUEUE_SNI_LOG) or 6
   if config.QUEUE_SNI_LOG
     table.insert workers, {
-      name: "sni-log"
+      name: "tls-log"
       pid: nil
-      restart_fn: -> fork_worker "sni-log",
-        (q_num) -> require("worker_sni_logger").run tonumber(q_num),
-        sni_queue_num
+      restart_fn: -> fork_worker "tls-log",
+        (fds) -> require("worker_tls").run tonumber(fds.q_num), fds.events_wfd,
+        { q_num: sni_queue_num, events_wfd: pipes.events.wfd }
     }
 
   -- AUTH (single).

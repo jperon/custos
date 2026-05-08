@@ -2,7 +2,7 @@
 -- Unit tests for SNI logger worker
 
 describe "SNI extraction from TLS ClientHello", ->
-  sni_logger = require "worker_sni_logger"
+  sni_logger = require "worker_tls"
 
   it "should extract SNI from valid TLS ClientHello", ->
     -- Mock TLS ClientHello with SNI for example.com
@@ -70,13 +70,13 @@ describe "SNI extraction from TLS ClientHello", ->
     assert sni_logger ~= nil
 
 describe "SNI logger module", ->
-  it "should load worker_sni_logger module", ->
-    sni_logger = require "worker_sni_logger"
+  it "should load worker_tls module", ->
+    sni_logger = require "worker_tls"
     assert sni_logger ~= nil
     assert sni_logger.run ~= nil
 
 describe "Mock SNI extraction", ->
   it "should handle empty payload gracefully", ->
     -- Just verify module exists
-    sni_logger = require "worker_sni_logger"
+    sni_logger = require "worker_tls"
     assert sni_logger ~= nil

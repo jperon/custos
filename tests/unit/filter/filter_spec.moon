@@ -1049,6 +1049,10 @@ rules:
     assert.equals "::", cfg.auth.host
     assert.equals 30, cfg.auth.heartbeat_interval
     assert.equals 120, cfg.auth.idle_timeout
+    assert.is_true cfg.auth.sni_verdict.enabled
+    assert.equals "strict-443", cfg.auth.sni_verdict.mode
+    assert.equals "both", cfg.auth.sni_verdict.protocols
+    assert.equals "fail-closed", cfg.auth.sni_verdict.nft_failure_policy
 
   it "YAML scalaire (non-table) → nil + erreur", ->
     -- Un fichier YAML qui n'est pas une table (ex: juste un scalaire)

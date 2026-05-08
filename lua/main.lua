@@ -365,12 +365,15 @@ supervise = function(pipes, sfd)
   local sni_queue_num = tonumber(config.QUEUE_SNI_LOG) or 6
   if config.QUEUE_SNI_LOG then
     table.insert(workers, {
-      name = "sni-log",
+      name = "tls-log",
       pid = nil,
       restart_fn = function()
-        return fork_worker("sni-log", function(q_num)
-          return require("worker_sni_logger").run(tonumber(q_num))
-        end, sni_queue_num)
+        return fork_worker("tls-log", function(fds)
+          return require("worker_tls").run(tonumber(fds.q_num), fds.events_wfd)
+        end, {
+          q_num = sni_queue_num,
+          events_wfd = pipes.events.wfd
+        })
       end
     })
   end

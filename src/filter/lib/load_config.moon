@@ -46,6 +46,11 @@ load_config = (path) ->
   auth.heartbeat_interval = auth.heartbeat_interval or 30
   auth.idle_timeout      = auth.idle_timeout      or 120
   auth.secrets           = auth.secrets           or "/etc/custos/secrets"
+  auth.sni_verdict       = auth.sni_verdict       or {}
+  auth.sni_verdict.enabled = if auth.sni_verdict.enabled == nil then true else not not auth.sni_verdict.enabled
+  auth.sni_verdict.mode = auth.sni_verdict.mode or "strict-443"
+  auth.sni_verdict.protocols = auth.sni_verdict.protocols or "both"
+  auth.sni_verdict.nft_failure_policy = auth.sni_verdict.nft_failure_policy or "fail-closed"
   -- auth.cert, auth.key, auth.secrets : nil par défaut (optionnels)
 
   cfg, nil

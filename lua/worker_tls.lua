@@ -10,10 +10,10 @@ do
 end
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
-local log_info, log_warn, log_error, log_debug, set_action_prefix
+local log_allow, log_block, log_info, log_warn, log_error, log_debug, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_error, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix
+  log_allow, log_block, log_info, log_warn, log_error, log_debug, set_action_prefix = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix
 end
 local ipparse_ip = require("ipparse.l3.ip")
 local ipparse_tcp = require("ipparse.l4.tcp")
@@ -25,6 +25,11 @@ local ipparse_server_name = require("ipparse.l7.tls.handshake.extension.server_n
 local ipparse_supported_versions = require("ipparse.l7.tls.handshake.extension.supported_versions")
 local bit = require("bit")
 local quic_sessions = { }
+local filter = nil
+local sni_policy = nil
+local cmd_for = nil
+local run_cmd = nil
+local events_wfd = nil
 local tls_version_name
 tls_version_name = function(ver)
   if not (ver) then
@@ -452,6 +457,145 @@ format_ip = function(version, ip_raw)
     return "unknown"
   end
 end
+local tsv_field
+tsv_field = function(v)
+  local s
+  if v ~= nil then
+    s = tostring(v)
+  else
+    s = ""
+  end
+  if #s == 0 then
+    return "-"
+  else
+    return s
+  end
+end
+local write_sni_event
+write_sni_event = function(decision, fields)
+  if not (events_wfd) then
+    return 
+  end
+  local line = table.concat({
+    tostring(os.time()),
+    tsv_field(decision),
+    tsv_field(fields.sni),
+    tsv_field(fields.mac_src),
+    tsv_field(fields.src_ip),
+    tsv_field(fields.dst_ip),
+    tsv_field(fields.vlan),
+    tsv_field(fields.user),
+    tsv_field(fields.af),
+    tsv_field(fields.reason),
+    tsv_field(fields.rule)
+  }, "\t") .. "\n"
+  return libc.write(events_wfd, line, #line)
+end
+local normalize_sni
+normalize_sni = function(sni)
+  if not (sni and #sni > 0) then
+    return nil
+  end
+  return sni:lower():gsub("%.+$", "")
+end
+local protocol_in_scope
+protocol_in_scope = function(policy, l4_proto)
+  if not (policy) then
+    return false
+  end
+  local p = policy.protocols or "both"
+  if p == "both" then
+    return true
+  end
+  if p == "tcp-only" then
+    return l4_proto == "tcp"
+  end
+  if p == "quic-only" then
+    return l4_proto == "udp"
+  end
+  return false
+end
+local is_ipv6
+is_ipv6 = function(ip)
+  return ip and ip:find(":", 1, true)
+end
+local safe_filter_decide
+safe_filter_decide = function(req)
+  if not (filter and filter.decide) then
+    return nil, "filter_unavailable", nil
+  end
+  local ok, allowed, reason, rule = pcall(filter.decide, req)
+  if not (ok) then
+    return nil, "filter_decide_exception", nil
+  end
+  return allowed, reason, rule
+end
+local ensure_nft_modules
+ensure_nft_modules = function()
+  if not (cmd_for) then
+    local ok_cmd, nft_queue = pcall(require, "nft_queue")
+    if not (ok_cmd and nft_queue and nft_queue.cmd_for) then
+      return false, "nft_queue_require_failed"
+    end
+    cmd_for = nft_queue.cmd_for
+  end
+  if not (run_cmd) then
+    local ok_nft, nft_mod = pcall(require, "nft")
+    if not (ok_nft and nft_mod and nft_mod.run_cmd) then
+      return false, "nft_require_failed"
+    end
+    run_cmd = nft_mod.run_cmd
+  end
+  return true, nil
+end
+local apply_nft_allow
+apply_nft_allow = function(src_ip, dst_ip, mac, policy)
+  local ok_mods, mod_err = ensure_nft_modules()
+  if not (ok_mods) then
+    return false, mod_err
+  end
+  if not (src_ip and dst_ip and src_ip ~= "unknown" and dst_ip ~= "unknown") then
+    return false, "invalid_ip_pair"
+  end
+  if is_ipv6(src_ip) ~= is_ipv6(dst_ip) then
+    return false, "family_mismatch"
+  end
+  local ip_kind
+  if is_ipv6(dst_ip) then
+    ip_kind = "ip6"
+  else
+    ip_kind = "ip4"
+  end
+  local mac_kind
+  if is_ipv6(dst_ip) then
+    mac_kind = "mac6"
+  else
+    mac_kind = "mac4"
+  end
+  local cmds = { }
+  local ip_cmd = cmd_for(ip_kind, src_ip, dst_ip)
+  if ip_cmd then
+    cmds[#cmds + 1] = ip_cmd
+  else
+    return false, "nft_cmd_build_failed"
+  end
+  if mac and mac ~= "unknown" and mac ~= "00:00:00:00:00:00" then
+    local mac_cmd = cmd_for(mac_kind, mac, dst_ip)
+    if mac_cmd then
+      cmds[#cmds + 1] = mac_cmd
+    end
+  end
+  local ok, err = run_cmd(table.concat(cmds, "\n"), {
+    quiet = true
+  })
+  if ok then
+    return true
+  end
+  if policy and policy.nft_failure_policy == "fail-closed" then
+    return false, err or "nft_cmd_failed"
+  end
+  return true, "nft_failed_fail_open"
+end
 local handle_sni_packet
 handle_sni_packet = function(qh_ptr, nfad, pkt_id)
   log_debug({
@@ -562,6 +706,17 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       sni, tls_reason, tls_meta = extract_sni_from_quic(quic_payload, quic_session_key)
     end
   end
+  local mac_str = format_mac(l2.mac_raw)
+  local ip_src_str = format_ip(ip.version, ip.src)
+  local ip_dst_str = format_ip(ip.version, ip.dst)
+  local af
+  if ip.version == 6 then
+    af = "ipv6"
+  else
+    af = "ipv4"
+  end
+  local strict_mode = sni_policy and sni_policy.mode == "strict-443"
+  local in_scope = protocol_in_scope(sni_policy, l4_proto)
   if not (sni) then
     if protocol_name == "quic" and tls_reason and (tls_reason:match("^quic_session_init_failed") or tls_reason:match("^quic_push_failed")) then
       log_warn({
@@ -571,10 +726,36 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
         quic_parser_path = tls_meta and tls_meta.quic_parser_path
       })
     end
+    if strict_mode and in_scope then
+      log_block({
+        action = "sni_verdict_block_no_sni",
+        pkt_id = pkt_id,
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        ip_src = ip_src_str,
+        ip_dst = ip_dst_str,
+        port_src = src_port,
+        port_dst = dst_port,
+        reason = tls_reason or "no_sni"
+      })
+      write_sni_event("block", {
+        sni = nil,
+        mac_src = mac_str,
+        src_ip = ip_src_str,
+        dst_ip = ip_dst_str,
+        vlan = l2.vlan,
+        user = nil,
+        af = af,
+        reason = tls_reason or "no_sni",
+        rule = "strict-443/no_sni"
+      })
+      return NF_DROP
+    end
     log_debug({
-      action = "no_sni_found",
+      action = "sni_verdict_skip_no_sni",
       pkt_id = pkt_id,
       protocol = protocol_name,
+      l4_proto = l4_proto,
       reason = tls_reason,
       tls_version = tls_meta and tls_meta.tls_version,
       tls_record_version = tls_meta and tls_meta.tls_record_version,
@@ -585,14 +766,12 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     })
     return NF_ACCEPT
   end
-  local mac_str = format_mac(l2.mac_raw)
-  local ip_src_str = format_ip(ip.version, ip.src)
-  local ip_dst_str = format_ip(ip.version, ip.dst)
+  local sni_norm = normalize_sni(sni)
   log_info({
     action = "sni_captured",
     protocol = protocol_name,
     l4_proto = l4_proto,
-    sni = sni,
+    sni = sni_norm or sni,
     mac_src = mac_str,
     ip_src = ip_src_str,
     ip_dst = ip_dst_str,
@@ -605,17 +784,236 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     tls_parser_path = tls_meta and tls_meta.tls_parser_path,
     quic_parser_path = tls_meta and tls_meta.quic_parser_path
   })
+  local req = {
+    domain = sni_norm or sni,
+    src_ip = ip_src_str,
+    mac = mac_str,
+    vlan = l2.vlan,
+    ts = os.time()
+  }
+  local allowed, decide_reason, decide_rule = safe_filter_decide(req)
+  if not in_scope then
+    log_debug({
+      action = "sni_verdict_skip_protocol",
+      pkt_id = pkt_id,
+      protocol = protocol_name,
+      l4_proto = l4_proto,
+      sni = sni_norm or sni,
+      policy_protocols = sni_policy and sni_policy.protocols or "both"
+    })
+    return NF_ACCEPT
+  end
+  if allowed == nil then
+    log_warn({
+      action = "sni_verdict_skip_filter_error",
+      pkt_id = pkt_id,
+      protocol = protocol_name,
+      l4_proto = l4_proto,
+      sni = sni_norm or sni,
+      reason = decide_reason or "filter_error"
+    })
+    return NF_ACCEPT
+  end
+  if allowed == true then
+    local ok_nft, nft_reason = apply_nft_allow(ip_src_str, ip_dst_str, mac_str, sni_policy)
+    if not (ok_nft) then
+      log_block({
+        action = "sni_verdict_nft_failed",
+        pkt_id = pkt_id,
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        sni = sni_norm or sni,
+        ip_src = ip_src_str,
+        ip_dst = ip_dst_str,
+        mac_src = mac_str,
+        reason = nft_reason,
+        nft_failure_policy = sni_policy and sni_policy.nft_failure_policy or "fail-closed"
+      })
+      write_sni_event("block", {
+        sni = sni_norm or sni,
+        mac_src = mac_str,
+        src_ip = ip_src_str,
+        dst_ip = ip_dst_str,
+        vlan = l2.vlan,
+        user = nil,
+        af = af,
+        reason = nft_reason,
+        rule = decide_rule or "nft_insert_failed"
+      })
+      if (sni_policy and sni_policy.nft_failure_policy or "fail-closed") == "fail-closed" then
+        return NF_DROP
+      end
+      return NF_ACCEPT
+    end
+    log_allow({
+      action = "sni_verdict_allow",
+      protocol = protocol_name,
+      l4_proto = l4_proto,
+      sni = sni_norm or sni,
+      ip_src = ip_src_str,
+      ip_dst = ip_dst_str,
+      mac_src = mac_str,
+      port_src = src_port,
+      port_dst = dst_port,
+      filter_reason = decide_reason,
+      rule = decide_rule,
+      nft_outcome = nft_reason or "ok",
+      tls_version = tls_meta and tls_meta.tls_version,
+      tls_record_version = tls_meta and tls_meta.tls_record_version,
+      tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
+      tls_supported_version = tls_meta and tls_meta.tls_supported_version,
+      tls_parser_path = tls_meta and tls_meta.tls_parser_path,
+      quic_parser_path = tls_meta and tls_meta.quic_parser_path
+    })
+    write_sni_event("allow", {
+      sni = sni_norm or sni,
+      mac_src = mac_str,
+      src_ip = ip_src_str,
+      dst_ip = ip_dst_str,
+      vlan = l2.vlan,
+      user = nil,
+      af = af,
+      reason = decide_reason,
+      rule = decide_rule
+    })
+    return NF_ACCEPT
+  end
+  if allowed == "dnsonly" then
+    if strict_mode then
+      log_block({
+        action = "sni_verdict_block_dnsonly",
+        pkt_id = pkt_id,
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        sni = sni_norm or sni,
+        ip_src = ip_src_str,
+        ip_dst = ip_dst_str,
+        mac_src = mac_str,
+        reason = decide_reason or "dnsonly",
+        rule = decide_rule
+      })
+      write_sni_event("block", {
+        sni = sni_norm or sni,
+        mac_src = mac_str,
+        src_ip = ip_src_str,
+        dst_ip = ip_dst_str,
+        vlan = l2.vlan,
+        user = nil,
+        af = af,
+        reason = decide_reason or "dnsonly",
+        rule = decide_rule or "dnsonly"
+      })
+      return NF_DROP
+    end
+    log_debug({
+      action = "sni_verdict_skip_dnsonly",
+      pkt_id = pkt_id,
+      protocol = protocol_name,
+      l4_proto = l4_proto,
+      sni = sni_norm or sni,
+      reason = decide_reason or "dnsonly",
+      rule = decide_rule
+    })
+    return NF_ACCEPT
+  end
+  if strict_mode then
+    log_block({
+      action = "sni_verdict_block",
+      pkt_id = pkt_id,
+      protocol = protocol_name,
+      l4_proto = l4_proto,
+      sni = sni_norm or sni,
+      ip_src = ip_src_str,
+      ip_dst = ip_dst_str,
+      mac_src = mac_str,
+      reason = decide_reason or "denied",
+      rule = decide_rule
+    })
+    write_sni_event("block", {
+      sni = sni_norm or sni,
+      mac_src = mac_str,
+      src_ip = ip_src_str,
+      dst_ip = ip_dst_str,
+      vlan = l2.vlan,
+      user = nil,
+      af = af,
+      reason = decide_reason or "denied",
+      rule = decide_rule
+    })
+    return NF_DROP
+  end
+  log_debug({
+    action = "sni_verdict_skip",
+    pkt_id = pkt_id,
+    protocol = protocol_name,
+    l4_proto = l4_proto,
+    sni = sni_norm or sni,
+    reason = decide_reason or "denied",
+    rule = decide_rule
+  })
   return NF_ACCEPT
 end
 local run
-run = function(queue_num)
+run = function(queue_num, ev_wfd)
+  if ev_wfd == nil then
+    ev_wfd = nil
+  end
   set_action_prefix("sni_log_")
+  events_wfd = ev_wfd
+  local ok_filter, filter_or_err = pcall(require, "filter")
+  if ok_filter and filter_or_err then
+    filter = filter_or_err
+    pcall(function()
+      return filter.load()
+    end)
+    local auth_cfg
+    if filter.get_auth_cfg then
+      auth_cfg = filter.get_auth_cfg()
+    else
+      auth_cfg = { }
+    end
+    sni_policy = auth_cfg and auth_cfg.sni_verdict or { }
+  else
+    filter = nil
+    sni_policy = { }
+    log_warn({
+      action = "filter_require_failed",
+      err = tostring(filter_or_err)
+    })
+  end
+  if sni_policy.enabled == nil then
+    sni_policy.enabled = true
+  else
+    sni_policy.enabled = not not sni_policy.enabled
+  end
+  sni_policy.mode = sni_policy.mode or "strict-443"
+  sni_policy.protocols = sni_policy.protocols or "both"
+  sni_policy.nft_failure_policy = sni_policy.nft_failure_policy or "fail-closed"
   log_info({
     action = "starting",
     queue = queue_num
   })
+  if not (sni_policy.enabled) then
+    log_info({
+      action = "disabled",
+      queue = queue_num
+    })
+    return run_queue(tonumber(queue_num), function(qh_ptr, nfad, pkt_id)
+      return NF_ACCEPT
+    end)
+  end
+  log_info({
+    action = "policy_loaded",
+    queue = queue_num,
+    mode = sni_policy.mode,
+    protocols = sni_policy.protocols,
+    nft_failure_policy = sni_policy.nft_failure_policy
+  })
   return run_queue(tonumber(queue_num), handle_sni_packet)
 end
 return {
-  run = run
+  run = run,
+  normalize_sni = normalize_sni,
+  protocol_in_scope = protocol_in_scope,
+  apply_nft_allow = apply_nft_allow
 }

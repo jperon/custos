@@ -23,6 +23,8 @@ nftables (table bridge)
     │
     ├─ Port 33443     → QUEUE_AUTH      → worker_auth_queue → learn pipe (22 B) → mac_learner
     │
+    ├─ TCP/443 + UDP/443 → QUEUE_SNI_LOG → worker_tls
+    │
     └─ Drop résiduel  → QUEUE_REJECT    → worker_reject
 ```
 
@@ -35,6 +37,7 @@ nftables (table bridge)
 | `mac_learner` | Table IP→MAC en mémoire + TTL ; répond sur socket Unix |
 | `worker_arp_sniffer` | Sniffer ARP/NDP passif ; alimente le pipe `learn` |
 | `worker_auth_queue` | NFQUEUE sur `QUEUE_AUTH` ; extrait MAC/IP, écrit dans `learn` (mac_learner) |
+| `worker_tls` | NFQUEUE sur `QUEUE_SNI_LOG` ; verdict SNI TLS/QUIC + refresh des sets nft |
 | `worker_questions` | NFQUEUE sur `QUEUE_QUESTIONS` (1 worker par queue) |
 | `worker_responses` | NFQUEUE sur `QUEUE_RESPONSES` (1 worker par queue) |
 | `worker_captive` | NFQUEUE sur `QUEUE_CAPTIVE` ; injection AF_PACKET |

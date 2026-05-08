@@ -1,4 +1,4 @@
--- src/worker_sni_logger.moon
+-- src/worker_tls.moon
 -- Worker NFQUEUE pour l'enregistrement des SNI depuis TLS/QUIC.
 -- Capture les paquets TCP/443 avec payload TLS (ClientHello) et UDP/443 (QUIC Initial),
 -- extrait les SNI via ipparse, et enregistre les métadonnées enrichies (MAC, IPs, ports, protocole).
@@ -6,7 +6,7 @@
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :get_l2 } = require "nfq/ethernet"
-{ :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
+{ :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
 
 -- ipparse modules for packet parsing and SNI extraction
 ipparse_ip = require "ipparse.l3.ip"
@@ -20,6 +20,11 @@ ipparse_supported_versions = require "ipparse.l7.tls.handshake.extension.support
 
 bit = require "bit"
 quic_sessions = {}
+filter = nil
+sni_policy = nil
+cmd_for = nil
+run_cmd = nil
+events_wfd = nil
 
 -- ── SNI Extraction Helpers ────────────────────────────────
 
@@ -361,6 +366,86 @@ format_ip = (version, ip_raw) ->
   else
     "unknown"
 
+tsv_field = (v) ->
+  s = if v ~= nil then tostring v else ""
+  if #s == 0 then "-" else s
+
+write_sni_event = (decision, fields) ->
+  return unless events_wfd
+  line = table.concat({
+    tostring os.time!
+    tsv_field decision
+    tsv_field fields.sni
+    tsv_field fields.mac_src
+    tsv_field fields.src_ip
+    tsv_field fields.dst_ip
+    tsv_field fields.vlan
+    tsv_field fields.user
+    tsv_field fields.af
+    tsv_field fields.reason
+    tsv_field fields.rule
+  }, "\t") .. "\n"
+  libc.write events_wfd, line, #line
+
+normalize_sni = (sni) ->
+  return nil unless sni and #sni > 0
+  sni\lower!\gsub "%.+$", ""
+
+protocol_in_scope = (policy, l4_proto) ->
+  return false unless policy
+  p = policy.protocols or "both"
+  return true if p == "both"
+  return l4_proto == "tcp" if p == "tcp-only"
+  return l4_proto == "udp" if p == "quic-only"
+  false
+
+is_ipv6 = (ip) ->
+  ip and ip\find ":", 1, true
+
+safe_filter_decide = (req) ->
+  return nil, "filter_unavailable", nil unless filter and filter.decide
+  ok, allowed, reason, rule = pcall filter.decide, req
+  return nil, "filter_decide_exception", nil unless ok
+  allowed, reason, rule
+
+ensure_nft_modules = ->
+  unless cmd_for
+    ok_cmd, nft_queue = pcall require, "nft_queue"
+    return false, "nft_queue_require_failed" unless ok_cmd and nft_queue and nft_queue.cmd_for
+    cmd_for = nft_queue.cmd_for
+
+  unless run_cmd
+    ok_nft, nft_mod = pcall require, "nft"
+    return false, "nft_require_failed" unless ok_nft and nft_mod and nft_mod.run_cmd
+    run_cmd = nft_mod.run_cmd
+
+  true, nil
+
+apply_nft_allow = (src_ip, dst_ip, mac, policy) ->
+  ok_mods, mod_err = ensure_nft_modules!
+  return false, mod_err unless ok_mods
+  return false, "invalid_ip_pair" unless src_ip and dst_ip and src_ip != "unknown" and dst_ip != "unknown"
+  return false, "family_mismatch" if is_ipv6(src_ip) != is_ipv6(dst_ip)
+
+  ip_kind = if is_ipv6(dst_ip) then "ip6" else "ip4"
+  mac_kind = if is_ipv6(dst_ip) then "mac6" else "mac4"
+  cmds = {}
+
+  ip_cmd = cmd_for ip_kind, src_ip, dst_ip
+  if ip_cmd
+    cmds[#cmds + 1] = ip_cmd
+  else
+    return false, "nft_cmd_build_failed"
+
+  if mac and mac != "unknown" and mac != "00:00:00:00:00:00"
+    mac_cmd = cmd_for mac_kind, mac, dst_ip
+    cmds[#cmds + 1] = mac_cmd if mac_cmd
+
+  ok, err = run_cmd table.concat(cmds, "\n"), { quiet: true }
+  return true if ok
+  return false, err or "nft_cmd_failed" if policy and policy.nft_failure_policy == "fail-closed"
+  true, "nft_failed_fail_open"
+
 -- ── Main Packet Handler ──────────────────────────────────
 
 --- Main callback for SNI logger NFQUEUE.
@@ -451,6 +536,13 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
       quic_session_key = quic_flow_key src_ip, dst_ip, src_port, dst_port
       sni, tls_reason, tls_meta = extract_sni_from_quic quic_payload, quic_session_key
 
+  mac_str = format_mac l2.mac_raw
+  ip_src_str = format_ip ip.version, ip.src
+  ip_dst_str = format_ip ip.version, ip.dst
+  af = if ip.version == 6 then "ipv6" else "ipv4"
+  strict_mode = sni_policy and sni_policy.mode == "strict-443"
+  in_scope = protocol_in_scope sni_policy, l4_proto
+
   unless sni
     if protocol_name == "quic" and tls_reason and (
       tls_reason\match("^quic_session_init_failed") or tls_reason\match("^quic_push_failed")
@@ -461,8 +553,32 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         reason: tls_reason
         quic_parser_path: tls_meta and tls_meta.quic_parser_path
       }
+    if strict_mode and in_scope
+      log_block {
+        action: "sni_verdict_block_no_sni"
+        pkt_id: pkt_id
+        protocol: protocol_name
+        l4_proto: l4_proto
+        ip_src: ip_src_str
+        ip_dst: ip_dst_str
+        port_src: src_port
+        port_dst: dst_port
+        reason: tls_reason or "no_sni"
+      }
+      write_sni_event "block", {
+        sni: nil
+        mac_src: mac_str
+        src_ip: ip_src_str
+        dst_ip: ip_dst_str
+        vlan: l2.vlan
+        user: nil
+        af: af
+        reason: tls_reason or "no_sni"
+        rule: "strict-443/no_sni"
+      }
+      return NF_DROP
     log_debug {
-      action: "no_sni_found", pkt_id: pkt_id, protocol: protocol_name, reason: tls_reason
+      action: "sni_verdict_skip_no_sni", pkt_id: pkt_id, protocol: protocol_name, l4_proto: l4_proto, reason: tls_reason
       tls_version: tls_meta and tls_meta.tls_version
       tls_record_version: tls_meta and tls_meta.tls_record_version
       tls_client_hello_version: tls_meta and tls_meta.tls_client_hello_version
@@ -472,16 +588,12 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     }
     return NF_ACCEPT
 
-  -- 5. Log enriched SNI information
-  mac_str = format_mac l2.mac_raw
-  ip_src_str = format_ip ip.version, ip.src
-  ip_dst_str = format_ip ip.version, ip.dst
-
+  sni_norm = normalize_sni sni
   log_info {
     action: "sni_captured"
     protocol: protocol_name
     l4_proto: l4_proto
-    sni: sni
+    sni: sni_norm or sni
     mac_src: mac_str
     ip_src: ip_src_str
     ip_dst: ip_dst_str
@@ -495,14 +607,205 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     quic_parser_path: tls_meta and tls_meta.quic_parser_path
   }
 
-  -- 6. Accept the packet (non-blocking observation)
+  req = {
+    domain: sni_norm or sni
+    src_ip: ip_src_str
+    mac: mac_str
+    vlan: l2.vlan
+    ts: os.time!
+  }
+  allowed, decide_reason, decide_rule = safe_filter_decide req
+
+  if not in_scope
+    log_debug {
+      action: "sni_verdict_skip_protocol"
+      pkt_id: pkt_id
+      protocol: protocol_name
+      l4_proto: l4_proto
+      sni: sni_norm or sni
+      policy_protocols: sni_policy and sni_policy.protocols or "both"
+    }
+    return NF_ACCEPT
+
+  if allowed == nil
+    log_warn {
+      action: "sni_verdict_skip_filter_error"
+      pkt_id: pkt_id
+      protocol: protocol_name
+      l4_proto: l4_proto
+      sni: sni_norm or sni
+      reason: decide_reason or "filter_error"
+    }
+    return NF_ACCEPT
+
+  if allowed == true
+    ok_nft, nft_reason = apply_nft_allow ip_src_str, ip_dst_str, mac_str, sni_policy
+    unless ok_nft
+      log_block {
+        action: "sni_verdict_nft_failed"
+        pkt_id: pkt_id
+        protocol: protocol_name
+        l4_proto: l4_proto
+        sni: sni_norm or sni
+        ip_src: ip_src_str
+        ip_dst: ip_dst_str
+        mac_src: mac_str
+        reason: nft_reason
+        nft_failure_policy: sni_policy and sni_policy.nft_failure_policy or "fail-closed"
+      }
+      write_sni_event "block", {
+        sni: sni_norm or sni
+        mac_src: mac_str
+        src_ip: ip_src_str
+        dst_ip: ip_dst_str
+        vlan: l2.vlan
+        user: nil
+        af: af
+        reason: nft_reason
+        rule: decide_rule or "nft_insert_failed"
+      }
+      return NF_DROP if (sni_policy and sni_policy.nft_failure_policy or "fail-closed") == "fail-closed"
+      return NF_ACCEPT
+
+    log_allow {
+      action: "sni_verdict_allow"
+      protocol: protocol_name
+      l4_proto: l4_proto
+      sni: sni_norm or sni
+      ip_src: ip_src_str
+      ip_dst: ip_dst_str
+      mac_src: mac_str
+      port_src: src_port
+      port_dst: dst_port
+      filter_reason: decide_reason
+      rule: decide_rule
+      nft_outcome: nft_reason or "ok"
+      tls_version: tls_meta and tls_meta.tls_version
+      tls_record_version: tls_meta and tls_meta.tls_record_version
+      tls_client_hello_version: tls_meta and tls_meta.tls_client_hello_version
+      tls_supported_version: tls_meta and tls_meta.tls_supported_version
+      tls_parser_path: tls_meta and tls_meta.tls_parser_path
+      quic_parser_path: tls_meta and tls_meta.quic_parser_path
+    }
+    write_sni_event "allow", {
+      sni: sni_norm or sni
+      mac_src: mac_str
+      src_ip: ip_src_str
+      dst_ip: ip_dst_str
+      vlan: l2.vlan
+      user: nil
+      af: af
+      reason: decide_reason
+      rule: decide_rule
+    }
+    return NF_ACCEPT
+
+  if allowed == "dnsonly"
+    if strict_mode
+      log_block {
+        action: "sni_verdict_block_dnsonly"
+        pkt_id: pkt_id
+        protocol: protocol_name
+        l4_proto: l4_proto
+        sni: sni_norm or sni
+        ip_src: ip_src_str
+        ip_dst: ip_dst_str
+        mac_src: mac_str
+        reason: decide_reason or "dnsonly"
+        rule: decide_rule
+      }
+      write_sni_event "block", {
+        sni: sni_norm or sni
+        mac_src: mac_str
+        src_ip: ip_src_str
+        dst_ip: ip_dst_str
+        vlan: l2.vlan
+        user: nil
+        af: af
+        reason: decide_reason or "dnsonly"
+        rule: decide_rule or "dnsonly"
+      }
+      return NF_DROP
+    log_debug {
+      action: "sni_verdict_skip_dnsonly"
+      pkt_id: pkt_id
+      protocol: protocol_name
+      l4_proto: l4_proto
+      sni: sni_norm or sni
+      reason: decide_reason or "dnsonly"
+      rule: decide_rule
+    }
+    return NF_ACCEPT
+
+  if strict_mode
+    log_block {
+      action: "sni_verdict_block"
+      pkt_id: pkt_id
+      protocol: protocol_name
+      l4_proto: l4_proto
+      sni: sni_norm or sni
+      ip_src: ip_src_str
+      ip_dst: ip_dst_str
+      mac_src: mac_str
+      reason: decide_reason or "denied"
+      rule: decide_rule
+    }
+    write_sni_event "block", {
+      sni: sni_norm or sni
+      mac_src: mac_str
+      src_ip: ip_src_str
+      dst_ip: ip_dst_str
+      vlan: l2.vlan
+      user: nil
+      af: af
+      reason: decide_reason or "denied"
+      rule: decide_rule
+    }
+    return NF_DROP
+
+  log_debug {
+    action: "sni_verdict_skip"
+    pkt_id: pkt_id
+    protocol: protocol_name
+    l4_proto: l4_proto
+    sni: sni_norm or sni
+    reason: decide_reason or "denied"
+    rule: decide_rule
+  }
   NF_ACCEPT
 
 --- Entry point for the worker.
 -- @tparam number queue_num Queue number
-run = (queue_num) ->
+run = (queue_num, ev_wfd=nil) ->
   set_action_prefix "sni_log_"
+  events_wfd = ev_wfd
+  ok_filter, filter_or_err = pcall require, "filter"
+  if ok_filter and filter_or_err
+    filter = filter_or_err
+    pcall -> filter.load!
+    auth_cfg = if filter.get_auth_cfg then filter.get_auth_cfg! else {}
+    sni_policy = auth_cfg and auth_cfg.sni_verdict or {}
+  else
+    filter = nil
+    sni_policy = {}
+    log_warn { action: "filter_require_failed", err: tostring(filter_or_err) }
+  sni_policy.enabled = if sni_policy.enabled == nil then true else not not sni_policy.enabled
+  sni_policy.mode = sni_policy.mode or "strict-443"
+  sni_policy.protocols = sni_policy.protocols or "both"
+  sni_policy.nft_failure_policy = sni_policy.nft_failure_policy or "fail-closed"
   log_info { action: "starting", queue: queue_num }
+
+  unless sni_policy.enabled
+    log_info { action: "disabled", queue: queue_num }
+    return run_queue tonumber(queue_num), (qh_ptr, nfad, pkt_id) -> NF_ACCEPT
+
+  log_info {
+    action: "policy_loaded"
+    queue: queue_num
+    mode: sni_policy.mode
+    protocols: sni_policy.protocols
+    nft_failure_policy: sni_policy.nft_failure_policy
+  }
   run_queue tonumber(queue_num), handle_sni_packet
 
-{ :run }
+{ :run, :normalize_sni, :protocol_in_scope, :apply_nft_allow }
