@@ -17,7 +17,7 @@
 -- - RFC 8200: Internet Protocol, Version 6 (IPv6) Specification
 -- - RFC 1071: Computing the Internet Checksum
 --
--- @module lib
+-- @module l3.lib
 
 pack: sp, unpack: su = require "ipparse.lib.pack_compat"
 {:band, :bor, :bnot, :lshift, :rshift} = require"ipparse.lib.bit_compat"

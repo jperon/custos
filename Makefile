@@ -47,6 +47,8 @@ AUTH_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(AUTH_MOONS))
 # ipparse modules (auto-discovered, exclude examples)
 IPPARSE_MOONS := $(shell find $(SRC)/ipparse -name '*.moon' 2>/dev/null | grep -v examples)
 IPPARSE_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(IPPARSE_MOONS))
+IPPARSE_STATIC_SRCS := $(SRC)/ipparse/lib/sha.lua $(SRC)/ipparse/lib/sha2.lua
+IPPARSE_STATIC_LUAS := $(patsubst $(SRC)/%.lua,$(LUA)/%.lua,$(IPPARSE_STATIC_SRCS))
 
 # Specs unitaires (tous les *_spec.moon dans tests/unit/)
 UNIT_SPEC_MOONS := $(shell find tests/unit -name '*_spec.moon' 2>/dev/null | sort)
@@ -56,7 +58,7 @@ UNIT_SPEC_LUAS  := $(patsubst %.moon,%.lua,$(UNIT_SPEC_MOONS))
         test-env test-env-down test-env-nuke test-e2e test-e2e-ci test-kvm \
         coverage run reload update-lists make-secret logs help debug-env
 
-all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) install-owrt.lua
+all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
 
 install-owrt.lua: install-owrt.moon
@@ -69,6 +71,10 @@ $(LUA)/nfq:
 $(LUA)/%.lua: $(SRC)/%.moon
 	mkdir -p $(@D)
 	$(MOONC) -o $@ $<
+
+$(LUA)/%.lua: $(SRC)/%.lua
+	mkdir -p $(@D)
+	cp $< $@
 
 # Compile a spec .moon → .lua (rule for tests/unit/**/*_spec.moon)
 tests/unit/%.lua: tests/unit/%.moon

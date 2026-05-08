@@ -33,7 +33,7 @@
 -- References:
 -- - RFC 793: Transmission Control Protocol (TCP)
 --
--- @module tcp
+-- @module l4.tcp
 
 pack: sp, unpack: su, :sub, :upper = require "ipparse.lib.pack_compat"
 :bidirectional = require"ipparse.fun"
@@ -81,7 +81,6 @@ _mt =
 
 --- Parses a binary string into a TCP header structure.
 -- Extracts the source port, destination port, sequence number, acknowledgment number, flags, and other fields.
--- @tparam string self The binary string containing the TCP header.
 -- @tparam[opt=1] number off Offset to start parsing from. Defaults to 1.
 -- @treturn table Parsed TCP header as a table.
 -- @treturn number The next offset after parsing.

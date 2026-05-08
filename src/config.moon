@@ -9,6 +9,7 @@ QUEUE_RESPONSES = "4"      -- UDP/53 dst LAN (réponses)
 QUEUE_CAPTIVE   = "20"     -- TCP SYN/80 (captif)
 QUEUE_REJECT    = "10-11"  -- Reject rate-limited
 QUEUE_AUTH      = "5"      -- TCP 33443 (authentification captive)
+QUEUE_SNI_LOG   = "6"      -- TCP/443 SYN + UDP/443 QUIC Initial (SNI logging)
 
 -- ── Logging ─────────────────────────────────────────────────────
 -- Les messages sont écrits sur stdout (fd=1).
@@ -124,7 +125,7 @@ DOH_PREFER_IPV6         = "1"                      -- "1" = prefer IPv6 upstream
 
 -- ── Export ──────────────────────────────────────────────────────
 {
-  :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE, :QUEUE_REJECT, :QUEUE_AUTH
+  :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE, :QUEUE_REJECT, :QUEUE_AUTH, :QUEUE_SNI_LOG
   :NFT_FAMILY, :NFT_FAMILY6, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
   :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :NFT_ACK_TIMEOUT_MS
   :IPC_PENDING_TTL

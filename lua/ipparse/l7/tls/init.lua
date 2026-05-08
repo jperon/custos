@@ -5,8 +5,6 @@ do
 end
 local bidirectional
 bidirectional = require("ipparse.fun").bidirectional
-local HKDF
-HKDF = require("crypto.hkdf").HKDF
 local pack
 pack = function(self)
   return sp(">B BB H", self.type, self.ver, self.subver, self.len)
@@ -27,12 +25,6 @@ parse = function(self, off)
     subver = subver,
     len = len
   }, _mt), _off
-end
-local hkdf_tls13_expand_label
-hkdf_tls13_expand_label = function(prk, label, context, length)
-  local hkdf = HKDF.new("sha256")
-  local hkdf_label_info = pack(">Hs1s1", length, "tls13 " .. label, context)
-  return hkdf:expand(prk, hkdf_label_info, length)
 end
 local record_types = bidirectional({
   [0x14] = "change_cipher_spec",

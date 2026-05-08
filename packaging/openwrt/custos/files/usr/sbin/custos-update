@@ -18,7 +18,8 @@ PROG=$(command -v luajit2 2>/dev/null || command -v luajit 2>/dev/null)
 [ -z "$PROG" ] && { echo "custos-update: luajit introuvable"; exit 1; }
 [ -f "$CONFIG" ] || { echo "custos-update: $CONFIG introuvable"; exit 1; }
 
-export LUA_PATH="$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
+export LUA_PATH="/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
+export LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;"
 
 PID_ARG=""
 [ -f "$PID_FILE" ] && PID_ARG="--pid $PID_FILE"

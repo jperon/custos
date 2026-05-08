@@ -22,7 +22,7 @@
 -- References:
 -- - RFC 6066: Transport Layer Security (TLS) Extensions
 --
--- @module tls.handshake.extension
+-- @module l7.tls.handshake.extension
 
 pack: sp, unpack: su = require "ipparse.lib.pack_compat"
 

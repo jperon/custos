@@ -26,7 +26,7 @@
 -- - RFC 9000: QUIC: A UDP-Based Multiplexed and Secure Transport
 -- - RFC 9001: Using TLS to Secure QUIC
 --
--- @module quic.frames
+-- @module l4.quic.frames
 
 pack: sp, unpack: su = require "ipparse.lib.pack_compat"
 :bidirectional = require"ipparse.fun"
@@ -97,7 +97,16 @@ parse_varint = (data, offset) ->
     when 3  -- 8 bytes
       return nil, offset if offset + 7 > #data
       high, low = su ">I4I4", data, offset
-      lshift(band(high, 0x3FFFFFFF), 32) + low, offset + 8
+      (band(high, 0x3FFFFFFF) * 4294967296) + low, offset + 8
+
+need_bytes = (data, offset, len) ->
+  return false if offset < 1 or len < 0
+  (offset + len - 1) <= #data
+
+parse_varint_required = (data, offset, field_name) ->
+  value, next_off = parse_varint data, offset
+  return nil, offset, "truncated #{field_name}" if value == nil
+  value, next_off
 
 --- Encodes a number as a QUIC variable-length integer (VarInt)
 -- @tparam number value The integer value to encode
@@ -108,11 +117,28 @@ encode_varint = (value) ->
   elseif value < 16384
     sp ">H", bor(0x4000, value)
   elseif value < 1073741824
-    sp ">I4", bor(0x80000000, value)
+    -- bor(0x80000000, value) produces a negative int32 which confuses write_uint
+    -- encode manually: top 2 bits = 10, remaining 30 bits = value
+    string.char(
+      bor(0x80, band(rshift(value, 24), 0x3F))
+      band(rshift(value, 16), 0xFF)
+      band(rshift(value, 8), 0xFF)
+      band(value, 0xFF)
+    )
   else
-    high = band(rshift(value, 32), 0x3FFFFFFF)
-    low = band(value, 0xFFFFFFFF)
-    sp ">I4I4", bor(0xC0000000, high), low
+    high = math.floor(value / 4294967296)
+    low = value % 4294967296
+    -- Same issue: encode manually with top 2 bits = 11
+    string.char(
+      bor(0xC0, band(math.floor(high / 16777216), 0x3F))
+      band(math.floor(high / 65536), 0xFF)
+      band(math.floor(high / 256), 0xFF)
+      band(high, 0xFF)
+      band(math.floor(low / 16777216), 0xFF)
+      band(math.floor(low / 65536), 0xFF)
+      band(math.floor(low / 256), 0xFF)
+      band(low, 0xFF)
+    )
 
 --- Parses a PADDING frame
 -- PADDING frames consist only of the frame type (0x00)
@@ -140,15 +166,21 @@ parse_ping_frame = (data, offset) ->
 -- @treturn table Parsed ACK frame
 -- @treturn number Next offset after the frame
 parse_ack_frame = (data, offset, frame_type) ->
-  largest_acked, offset = parse_varint data, offset
-  ack_delay, offset = parse_varint data, offset
-  ack_range_count, offset = parse_varint data, offset
-  first_ack_range, offset = parse_varint data, offset
+  largest_acked, offset, err = parse_varint_required data, offset, "ACK largest_acked"
+  return nil, offset, err unless largest_acked != nil
+  ack_delay, offset, err = parse_varint_required data, offset, "ACK ack_delay"
+  return nil, offset, err unless ack_delay != nil
+  ack_range_count, offset, err = parse_varint_required data, offset, "ACK ack_range_count"
+  return nil, offset, err unless ack_range_count != nil
+  first_ack_range, offset, err = parse_varint_required data, offset, "ACK first_ack_range"
+  return nil, offset, err unless first_ack_range != nil
 
   ack_ranges = {}
   for i = 1, ack_range_count
-    gap, offset = parse_varint data, offset
-    ack_range_len, offset = parse_varint data, offset
+    gap, offset, err = parse_varint_required data, offset, "ACK gap[#{i}]"
+    return nil, offset, err unless gap != nil
+    ack_range_len, offset, err = parse_varint_required data, offset, "ACK range_length[#{i}]"
+    return nil, offset, err unless ack_range_len != nil
     ack_ranges[#ack_ranges + 1] = {gap: gap, length: ack_range_len}
 
   frame = {
@@ -159,9 +191,12 @@ parse_ack_frame = (data, offset, frame_type) ->
 
   -- Parse ECN counts if this is an ACK_ECN frame
   if frame_type == 0x03
-    frame.ect0_count, offset = parse_varint data, offset
-    frame.ect1_count, offset = parse_varint data, offset
-    frame.ecn_ce_count, offset = parse_varint data, offset
+    frame.ect0_count, offset, err = parse_varint_required data, offset, "ACK_ECN ect0_count"
+    return nil, offset, err unless frame.ect0_count != nil
+    frame.ect1_count, offset, err = parse_varint_required data, offset, "ACK_ECN ect1_count"
+    return nil, offset, err unless frame.ect1_count != nil
+    frame.ecn_ce_count, offset, err = parse_varint_required data, offset, "ACK_ECN ecn_ce_count"
+    return nil, offset, err unless frame.ecn_ce_count != nil
 
   frame, offset
 
@@ -172,8 +207,11 @@ parse_ack_frame = (data, offset, frame_type) ->
 -- @treturn table Parsed CRYPTO frame with TLS data
 -- @treturn number Next offset after the frame
 parse_crypto_frame = (data, offset) ->
-  crypto_offset, offset = parse_varint data, offset
-  length, offset = parse_varint data, offset
+  crypto_offset, offset, err = parse_varint_required data, offset, "CRYPTO offset"
+  return nil, offset, err unless crypto_offset != nil
+  length, offset, err = parse_varint_required data, offset, "CRYPTO length"
+  return nil, offset, err unless length != nil
+  return nil, offset, "CRYPTO payload exceeds frame data" unless need_bytes data, offset, length
 
   -- Extract crypto data
   crypto_data = data\sub offset, offset + length - 1
@@ -196,20 +234,24 @@ parse_crypto_frame = (data, offset) ->
 -- @treturn table Parsed STREAM frame
 -- @treturn number Next offset after the frame
 parse_stream_frame = (data, offset, frame_type) ->
-  stream_id, offset = parse_varint data, offset
+  stream_id, offset, err = parse_varint_required data, offset, "STREAM id"
+  return nil, offset, err unless stream_id != nil
 
   -- Parse optional offset field (bit 2 of frame type)
   stream_offset = 0
   if band(frame_type, 0x04) != 0
-    stream_offset, offset = parse_varint data, offset
+    stream_offset, offset, err = parse_varint_required data, offset, "STREAM offset"
+    return nil, offset, err unless stream_offset != nil
 
   -- Parse optional length field (bit 1 of frame type)
   local length
   if band(frame_type, 0x02) != 0
-    length, offset = parse_varint data, offset
+    length, offset, err = parse_varint_required data, offset, "STREAM length"
+    return nil, offset, err unless length != nil
   else
     -- Length extends to end of packet if not specified
     length = #data - offset + 1
+  return nil, offset, "STREAM payload exceeds frame data" unless need_bytes data, offset, length
 
   -- Extract stream data
   stream_data = data\sub offset, offset + length - 1
@@ -233,7 +275,9 @@ parse_stream_frame = (data, offset, frame_type) ->
 -- @treturn table Parsed NEW_TOKEN frame
 -- @treturn number Next offset after the frame
 parse_new_token_frame = (data, offset) ->
-  token_length, offset = parse_varint data, offset
+  token_length, offset, err = parse_varint_required data, offset, "NEW_TOKEN length"
+  return nil, offset, err unless token_length != nil
+  return nil, offset, "NEW_TOKEN payload exceeds frame data" unless need_bytes data, offset, token_length
   token = data\sub offset, offset + token_length - 1
 
   frame = {
@@ -245,7 +289,129 @@ parse_new_token_frame = (data, offset) ->
 
   frame, offset + token_length
 
---- Parses a generic frame header and delegates to specific parsers
+--- Parses a RESET_STREAM frame (0x04)
+parse_reset_stream_frame = (data, offset) ->
+  stream_id, offset, err = parse_varint_required data, offset, "RESET_STREAM id"
+  return nil, offset, err unless stream_id != nil
+  app_error_code, offset, err = parse_varint_required data, offset, "RESET_STREAM app_error_code"
+  return nil, offset, err unless app_error_code != nil
+  final_size, offset, err = parse_varint_required data, offset, "RESET_STREAM final_size"
+  return nil, offset, err unless final_size != nil
+  {type: 0x04, name: "RESET_STREAM", :stream_id, :app_error_code, :final_size}, offset
+
+--- Parses a STOP_SENDING frame (0x05)
+parse_stop_sending_frame = (data, offset) ->
+  stream_id, offset, err = parse_varint_required data, offset, "STOP_SENDING id"
+  return nil, offset, err unless stream_id != nil
+  app_error_code, offset, err = parse_varint_required data, offset, "STOP_SENDING app_error_code"
+  return nil, offset, err unless app_error_code != nil
+  {type: 0x05, name: "STOP_SENDING", :stream_id, :app_error_code}, offset
+
+--- Parses a MAX_DATA frame (0x10)
+parse_max_data_frame = (data, offset) ->
+  maximum_data, offset, err = parse_varint_required data, offset, "MAX_DATA maximum_data"
+  return nil, offset, err unless maximum_data != nil
+  {type: 0x10, name: "MAX_DATA", :maximum_data}, offset
+
+--- Parses a MAX_STREAM_DATA frame (0x11)
+parse_max_stream_data_frame = (data, offset) ->
+  stream_id, offset, err = parse_varint_required data, offset, "MAX_STREAM_DATA stream_id"
+  return nil, offset, err unless stream_id != nil
+  maximum_stream_data, offset, err = parse_varint_required data, offset, "MAX_STREAM_DATA maximum_stream_data"
+  return nil, offset, err unless maximum_stream_data != nil
+  {type: 0x11, name: "MAX_STREAM_DATA", :stream_id, :maximum_stream_data}, offset
+
+--- Parses MAX_STREAMS frames (0x12 bidi, 0x13 uni)
+parse_max_streams_frame = (data, offset, frame_type) ->
+  maximum_streams, offset, err = parse_varint_required data, offset, "MAX_STREAMS maximum_streams"
+  return nil, offset, err unless maximum_streams != nil
+  name = frame_type == 0x12 and "MAX_STREAMS_BIDI" or "MAX_STREAMS_UNI"
+  {type: frame_type, :name, :maximum_streams}, offset
+
+--- Parses a DATA_BLOCKED frame (0x14)
+parse_data_blocked_frame = (data, offset) ->
+  maximum_data, offset, err = parse_varint_required data, offset, "DATA_BLOCKED maximum_data"
+  return nil, offset, err unless maximum_data != nil
+  {type: 0x14, name: "DATA_BLOCKED", :maximum_data}, offset
+
+--- Parses a STREAM_DATA_BLOCKED frame (0x15)
+parse_stream_data_blocked_frame = (data, offset) ->
+  stream_id, offset, err = parse_varint_required data, offset, "STREAM_DATA_BLOCKED stream_id"
+  return nil, offset, err unless stream_id != nil
+  maximum_stream_data, offset, err = parse_varint_required data, offset, "STREAM_DATA_BLOCKED maximum_stream_data"
+  return nil, offset, err unless maximum_stream_data != nil
+  {type: 0x15, name: "STREAM_DATA_BLOCKED", :stream_id, :maximum_stream_data}, offset
+
+--- Parses STREAMS_BLOCKED frames (0x16 bidi, 0x17 uni)
+parse_streams_blocked_frame = (data, offset, frame_type) ->
+  maximum_streams, offset, err = parse_varint_required data, offset, "STREAMS_BLOCKED maximum_streams"
+  return nil, offset, err unless maximum_streams != nil
+  name = frame_type == 0x16 and "STREAMS_BLOCKED_BIDI" or "STREAMS_BLOCKED_UNI"
+  {type: frame_type, :name, :maximum_streams}, offset
+
+--- Parses a NEW_CONNECTION_ID frame (0x18)
+parse_new_connection_id_frame = (data, offset) ->
+  sequence_number, offset, err = parse_varint_required data, offset, "NEW_CONNECTION_ID sequence_number"
+  return nil, offset, err unless sequence_number != nil
+  retire_prior_to, offset, err = parse_varint_required data, offset, "NEW_CONNECTION_ID retire_prior_to"
+  return nil, offset, err unless retire_prior_to != nil
+  return nil, offset, "truncated NEW_CONNECTION_ID cid_length" unless need_bytes data, offset, 1
+  cid_length = su "B", data, offset
+  offset += 1
+  return nil, offset, "NEW_CONNECTION_ID connection_id exceeds frame data" unless need_bytes data, offset, cid_length
+  connection_id = data\sub offset, offset + cid_length - 1
+  offset += cid_length
+  return nil, offset, "NEW_CONNECTION_ID stateless_reset_token exceeds frame data" unless need_bytes data, offset, 16
+  stateless_reset_token = data\sub offset, offset + 15
+  offset += 16
+  {
+    type: 0x18, name: "NEW_CONNECTION_ID"
+    :sequence_number, :retire_prior_to, :cid_length, :connection_id, :stateless_reset_token
+  }, offset
+
+--- Parses a RETIRE_CONNECTION_ID frame (0x19)
+parse_retire_connection_id_frame = (data, offset) ->
+  sequence_number, offset, err = parse_varint_required data, offset, "RETIRE_CONNECTION_ID sequence_number"
+  return nil, offset, err unless sequence_number != nil
+  {type: 0x19, name: "RETIRE_CONNECTION_ID", :sequence_number}, offset
+
+--- Parses a PATH_CHALLENGE frame (0x1a)
+parse_path_challenge_frame = (data, offset) ->
+  return nil, offset, "PATH_CHALLENGE requires 8 bytes" unless need_bytes data, offset, 8
+  path_data = data\sub offset, offset + 7
+  {type: 0x1a, name: "PATH_CHALLENGE", data: path_data}, offset + 8
+
+--- Parses a PATH_RESPONSE frame (0x1b)
+parse_path_response_frame = (data, offset) ->
+  return nil, offset, "PATH_RESPONSE requires 8 bytes" unless need_bytes data, offset, 8
+  path_data = data\sub offset, offset + 7
+  {type: 0x1b, name: "PATH_RESPONSE", data: path_data}, offset + 8
+
+--- Parses a CONNECTION_CLOSE frame (0x1c or 0x1d)
+parse_connection_close_frame = (data, offset, frame_type) ->
+  error_code, offset, err = parse_varint_required data, offset, "CONNECTION_CLOSE error_code"
+  return nil, offset, err unless error_code != nil
+  local frame_type_field
+  if frame_type == 0x1c
+    frame_type_field, offset, err = parse_varint_required data, offset, "CONNECTION_CLOSE frame_type"
+    return nil, offset, err unless frame_type_field != nil
+  reason_length, offset, err = parse_varint_required data, offset, "CONNECTION_CLOSE reason_length"
+  return nil, offset, err unless reason_length != nil
+  return nil, offset, "CONNECTION_CLOSE reason exceeds frame data" unless need_bytes data, offset, reason_length
+  reason_phrase = data\sub offset, offset + reason_length - 1
+  name = frame_type == 0x1c and "CONNECTION_CLOSE" or "CONNECTION_CLOSE_APP"
+  {
+    type: frame_type, :name, :error_code, frame_type: frame_type_field
+    :reason_length, :reason_phrase
+  }, offset + reason_length
+
+--- Parses a HANDSHAKE_DONE frame (0x1e) — no fields
+parse_handshake_done_frame = (data, offset) ->
+  {type: 0x1e, name: "HANDSHAKE_DONE"}, offset
+
+--- Parses a generic frame header and delegates to specific parsers.
+-- Returns nil only when offset is past end-of-data; returns an UNKNOWN frame
+-- for unrecognised types (advances by 1 byte to avoid infinite loops).
 -- @tparam string data The binary data containing the frame
 -- @tparam number offset Starting offset in the data
 -- @treturn table Parsed frame object
@@ -254,32 +420,38 @@ parse_frame = (data, offset) ->
   return nil, offset if offset > #data
 
   frame_type, new_offset = parse_varint data, offset
-  return nil, offset unless frame_type
+  return nil, offset, "truncated frame type varint" unless frame_type
 
-  switch frame_type
-    when 0x00
-      parse_padding_frame data, new_offset
-    when 0x01
-      parse_ping_frame data, new_offset
-    when 0x02, 0x03
-      parse_ack_frame data, new_offset, frame_type
-    when 0x06
-      parse_crypto_frame data, new_offset
-    when 0x07
-      parse_new_token_frame data, new_offset
+  parser = switch frame_type
+    when 0x00  then parse_padding_frame
+    when 0x01  then parse_ping_frame
+    when 0x02, 0x03 then (d, o) -> parse_ack_frame d, o, frame_type
+    when 0x04  then parse_reset_stream_frame
+    when 0x05  then parse_stop_sending_frame
+    when 0x06  then parse_crypto_frame
+    when 0x07  then parse_new_token_frame
+    when 0x10  then parse_max_data_frame
+    when 0x11  then parse_max_stream_data_frame
+    when 0x12, 0x13 then (d, o) -> parse_max_streams_frame d, o, frame_type
+    when 0x14  then parse_data_blocked_frame
+    when 0x15  then parse_stream_data_blocked_frame
+    when 0x16, 0x17 then (d, o) -> parse_streams_blocked_frame d, o, frame_type
+    when 0x18  then parse_new_connection_id_frame
+    when 0x19  then parse_retire_connection_id_frame
+    when 0x1a  then parse_path_challenge_frame
+    when 0x1b  then parse_path_response_frame
+    when 0x1c, 0x1d then (d, o) -> parse_connection_close_frame d, o, frame_type
+    when 0x1e  then parse_handshake_done_frame
     else
-      -- Check if it's a STREAM frame (0x08-0x0f)
       if frame_type >= 0x08 and frame_type <= 0x0f
-        parse_stream_frame data, new_offset, frame_type
+        (d, o) -> parse_stream_frame d, o, frame_type
       else
-        -- Unknown frame type - skip it by reading length if present
-        -- For now, just create a generic frame object
-        frame = {
-          type: frame_type
-          name: frame_types[frame_type] or "UNKNOWN"
-          raw_data: data\sub new_offset
-        }
-        frame, #data + 1  -- Skip to end
+        nil
+
+  return {type: frame_type, name: "UNKNOWN"}, new_offset unless parser
+  frame, parsed_off, err = parser data, new_offset
+  return nil, offset, err unless frame
+  frame, parsed_off
 
 --- Iterates over all frames in a decrypted QUIC packet payload
 -- @tparam string payload_data The decrypted packet payload containing frames
@@ -290,6 +462,7 @@ iter_frames = (payload_data) ->
     return nil if offset > #payload_data
 
     frame, new_offset = parse_frame payload_data, offset
+    return nil unless frame
     offset = new_offset
     frame
 
@@ -302,9 +475,9 @@ validate_frames = (payload_data) ->
   frame_count = 0
 
   while offset <= #payload_data
-    frame, new_offset = parse_frame payload_data, offset
+    frame, new_offset, err = parse_frame payload_data, offset
     unless frame
-      return false, "Failed to parse frame at offset #{offset}"
+      return false, err or "Failed to parse frame at offset #{offset}"
 
     if new_offset <= offset
       return false, "Frame parser did not advance at offset #{offset}"

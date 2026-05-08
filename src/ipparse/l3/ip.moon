@@ -18,7 +18,7 @@
 -- - RFC 8200: Internet Protocol, Version 6 (IPv6) Specification
 -- - RFC 791: Internet Protocol (IPv4)
 --
--- @module ip
+-- @module l3.ip
 
 :bidirectional = require"ipparse.fun"
 :IP6, :IP4 = require"ipparse.l2.ethernet".proto
@@ -28,7 +28,6 @@ parse: ip4, new: ip4_new, pack: ip4_pack, :ip42s, :s2ip4, :net42s, :s2net4 = req
 {:band, :lshift, :rshift} = require"ipparse.lib.bit_compat"
 
 --- Determines the IP version from a binary string.
--- @tparam string self The binary string containing the IP header.
 -- @tparam number off The offset to start reading from.
 -- @treturn number The IP version (4 or 6).
 get_version = (off) =>
@@ -43,7 +42,6 @@ pack = =>
 
 --- Parses a binary string into an IP header structure.
 -- Determines the IP version and delegates to the appropriate IPv4 or IPv6 parse function.
--- @tparam string self The binary string containing the IP header.
 -- @tparam number off The offset to start parsing from.
 -- @tparam[opt] number eth_proto The Ethernet protocol (optional).
 -- @treturn table Parsed IP header as a table.
@@ -96,7 +94,6 @@ s2net = =>
   (@match":" and s2net6 or @match"%." and s2net4) @
 
 --- Checks whether a network contains a specific IP address.
--- @tparam string self The binary network address.
 -- @tparam string i The binary IP address.
 -- @tparam[opt] number nmask The network mask (optional).
 -- @treturn boolean `true` if the network contains the IP, `false` otherwise.
@@ -112,7 +109,6 @@ contains_ip = (i, nmask) =>
   false
 
 --- Checks whether a network contains a specific subnet.
--- @tparam string self The binary network address.
 -- @tparam string subnet The binary subnet address.
 -- @treturn boolean `true` if the network contains the subnet, `false` otherwise.
 contains_subnet = (subnet) =>

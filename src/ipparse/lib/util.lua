@@ -7,6 +7,8 @@
 -- @module util
 
 local util = {}
+util._pass  = 0
+util._total = 0
 local char, format, gsub, rep, su = string.char, string.format, string.gsub, string.rep, string.unpack
 
 --- Converts a binary string to its hexadecimal representation.
@@ -41,11 +43,24 @@ end
 -- @usage util.test("Test Name", function() ... end)
 function util.test(test_name, func)
 	local status, err = pcall(func)
+	util._total = util._total + 1
 	if status then
+		util._pass = util._pass + 1
 		util.log("pass", test_name)
 	else
 		util.log("fail", test_name, err, "\n" .. debug.traceback())
 	end
+end
+
+--- Prints a per-module summary and resets counters.
+-- @tparam string name Module display name.
+-- @treturn number passed Number of tests that passed.
+-- @treturn number total Total number of tests run.
+function util.summary(name)
+	local passed, total = util._pass, util._total
+	util._last_pass, util._last_total = passed, total
+	util._pass, util._total = 0, 0
+	print(string.format("  --> %s: %d/%d", name, passed, total))
 end
 
 return util

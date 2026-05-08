@@ -54,6 +54,19 @@ read_request = (client) ->
 -- @tparam string body    Response body (may be empty string).
 -- @treturn nil
 send_response = (client, status, headers, body) ->
+  is_peer_closed_err = (err) ->
+    return false unless err
+    s = tostring err
+    s\find("error state on socket", 1, true) or
+      s\find("Peer closed underlying transport Error", 1, true) or
+      s\find("eof_from_peer", 1, true)
+
+  send_chunk = (chunk) ->
+    ok, err = pcall -> client\send chunk
+    return true if ok
+    return nil, "peer_closed" if is_peer_closed_err err
+    error tostring err
+
   body or= ""
   reason = switch status
     when 200 then "OK"
@@ -71,10 +84,16 @@ send_response = (client, status, headers, body) ->
   headers["Content-Length"] = tostring #body unless headers["Content-Length"]
   headers["Connection"] = "close" unless headers["Connection"]
 
-  client\send "HTTP/1.1 #{status} #{reason}\r\n"
+  ok, err = send_chunk "HTTP/1.1 #{status} #{reason}\r\n"
+  return nil, err unless ok
   for name, value in pairs headers
-    client\send "#{name}: #{value}\r\n"
-  client\send "\r\n"
-  client\send body if #body > 0
+    ok, err = send_chunk "#{name}: #{value}\r\n"
+    return nil, err unless ok
+  ok, err = send_chunk "\r\n"
+  return nil, err unless ok
+  if #body > 0
+    ok, err = send_chunk body
+    return nil, err unless ok
+  true
 
 { :read_request, :send_response }

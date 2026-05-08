@@ -26,7 +26,7 @@
 -- References:
 -- - RFC 8200: Internet Protocol, Version 6 (IPv6) Specification
 --
--- @module ip6
+-- @module l3.ip6
 
 :format, pack: sp, unpack: su = require "ipparse.lib.pack_compat"
 :insert, :remove = table
@@ -54,7 +54,6 @@ pack = =>
 _mt = __tostring: pack
 
 --- Parses a binary string into an IPv6 header structure.
--- @tparam string self The binary string to parse.
 -- @tparam[opt=1] number off Offset to start parsing from. Defaults to 1.
 -- @treturn table Parsed IPv6 header as a table.
 -- @treturn number The next offset after parsing.

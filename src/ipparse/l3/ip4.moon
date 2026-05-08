@@ -35,7 +35,7 @@
 -- - RFC 791: Internet Protocol (IPv4)
 -- - RFC 1122: Requirements for Internet Hosts - Communication Layers
 --
--- @module ip4
+-- @module l3.ip4
 
 :format, :sub, :upper, pack: sp, unpack: su = require "ipparse.lib.pack_compat"
 :checksum = require"ipparse.l3.lib"
@@ -90,7 +90,6 @@ _mt =
     rawset @, k, v
 
 --- Parses a binary string into an IPv4 header structure.
--- @tparam string self The binary string to parse.
 -- @tparam[opt=1] number off Offset to start parsing from. Defaults to 1.
 -- @treturn table Parsed IPv4 header as a table.
 -- @treturn number The next offset after parsing.

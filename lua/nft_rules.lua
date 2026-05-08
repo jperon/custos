@@ -26,6 +26,7 @@ substitute = function(content)
   content = content:gsub("{QUEUE_CAPTIVE}", cfg.QUEUE_CAPTIVE)
   content = content:gsub("{QUEUE_REJECT}", cfg.QUEUE_REJECT)
   content = content:gsub("{QUEUE_AUTH}", cfg.QUEUE_AUTH)
+  content = content:gsub("{QUEUE_SNI_LOG}", cfg.QUEUE_SNI_LOG)
   content = content:gsub("{NFT_IP_TIMEOUT}", cfg.NFT_IP_TIMEOUT)
   if get_log_level_num("DEBUG") < get_log_level_num(cfg.LOG_LEVEL) then
     content = content:gsub("log%s+level%s+debug%s+prefix%s+\"[^\"]*\"", "")

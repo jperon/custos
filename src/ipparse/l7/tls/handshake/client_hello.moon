@@ -27,7 +27,7 @@
 -- - RFC 5246: The Transport Layer Security (TLS) Protocol Version 1.2
 -- - RFC 8446: The Transport Layer Security (TLS) Protocol Version 1.3
 --
--- @module tls.handshake.client_hello
+-- @module l7.tls.handshake.client_hello
 
 pack: sp, unpack: su = require "ipparse.lib.pack_compat"
 

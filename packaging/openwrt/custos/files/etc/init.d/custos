@@ -32,7 +32,7 @@ start_service() {
 
     procd_open_instance
     procd_set_param command "$PROG" "$CUSTOS_DIR/main.lua"
-    procd_set_param env LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;;" CUSTOS_FILTER_CONFIG="$FILTER_CONFIG"
+    procd_set_param env LUA_PATH="/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;" CUSTOS_FILTER_CONFIG="$FILTER_CONFIG"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -47,15 +47,17 @@ start_service() {
 }
 
 stop_service() {
-    # Nettoyer les règles nftables avant d'arrêter le service
+    # Tuer explicitement les processus main.lua (couvre le cas où ils ont été
+    # démarrés hors de procd, p.ex. par la suite de tests).
+    _kill_workers
+
+    # Nettoyer les règles nftables une fois les workers arrêtés.
+    # Sinon les workers encore actifs peuvent tenter des opérations nft
+    # sur une table déjà supprimée, ce qui spamme les logs de WARN.
     _cleanup_nft_rules
 
     # Supprimer le cron pour les mises à jour de listes
     _cron_remove
-
-    # Tuer explicitement les processus main.lua (couvre le cas où ils ont été
-    # démarrés hors de procd, p.ex. par la suite de tests).
-    _kill_workers
 }
 
 # Un rechargement applique tous les paramètres UCI : redémarrage complet nécessaire
@@ -116,8 +118,8 @@ _cron_remove() {
 # nft extra UCI (via nft_extra_rules.apply_from_config()) en un seul appel Lua.
 # Appelé depuis start_service() avant que procd ne démarre le worker.
 _apply_lua_nft_rules() {
-    LUA_PATH="/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" \
-    LUA_CPATH="/usr/lib/lua/?.so;;" \
+    LUA_PATH="/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" \
+    LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;" \
     CUSTOS_FILTER_CONFIG="$FILTER_CONFIG" \
         "$PROG" -e "if not require('nft_rules').apply() then os.exit(1) end; require('nft_extra_rules').apply_from_config()" \
         2>/dev/null

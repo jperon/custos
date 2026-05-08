@@ -10,14 +10,35 @@
 -- - Lua 5.2: Uses the `bit32` library
 -- - Lua 5.3+: Uses native bitwise operators
 --
--- @module bit_compat
+-- @module lib.bit_compat
 
--- Try to load the bit library (LuaJIT/Lua 5.1)
+pow2 = (n) ->
+  p = 1
+  for _ = 1, n
+    p *= 2
+  p
+
+fallback_lshift = (a, n) ->
+  return a if n <= 0
+  a * pow2(n)
+
+fallback_rshift = (a, n) ->
+  return a if n <= 0
+  math.floor((a % 0x100000000) / pow2(n))
+
+normalize = (bit) ->
+  bit.lshift = bit.lshift or bit.blshift or fallback_lshift
+  bit.rshift = bit.rshift or bit.brshift or fallback_rshift
+  bit.arshift = bit.arshift or bit.rshift
+  bit
+
+-- Try to load the bit library (LuaJIT/Lua 5.1 / Lunatik variants)
 ok, bit = pcall require, "bit"
-return bit if ok
+return normalize(bit) if ok and bit
 -- Fall back to bit32 (Lua 5.2)
 ok, bit = pcall require, "bit32"
-return bit if ok
--- Use native operators for Lua 5.3+
-ok, bit = pcall require, "bit53"
-return bit
+return normalize(bit) if ok and bit
+-- Use native operators for Lua 5.3+ (through helper module)
+ok, bit = pcall require, "ipparse.lib.bit53"
+return normalize(bit) if ok and bit
+error "no bitwise compatibility backend available"

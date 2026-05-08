@@ -23,7 +23,7 @@
 -- - RFC 894: Standard for the Transmission of IP Datagrams over Ethernet Networks
 -- - IEEE 802.3: Ethernet Standards
 --
--- @module ethernet
+-- @module l2.ethernet
 
 :bidirectional = require"ipparse.fun"
 :format, pack: sp, unpack: su = require "ipparse.lib.pack_compat"

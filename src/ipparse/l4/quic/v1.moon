@@ -35,7 +35,7 @@
 -- - RFC 9000: QUIC: A UDP-Based Multiplexed and Secure Transport
 -- - RFC 9001: Using TLS to Secure QUIC
 --
--- @module quic.v1
+-- @module l4.quic.v1
 
 :upper = string
 :bidirectional, :zero_indexed = require"ipparse.fun"

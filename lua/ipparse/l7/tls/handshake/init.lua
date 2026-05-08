@@ -7,10 +7,10 @@ local bidirectional
 bidirectional = require("ipparse.fun").bidirectional
 local parse_extension
 parse_extension = require("ipparse.l7.tls.handshake.extension").parse
-local band, rshift
+local band, rshift, lshift
 do
   local _obj_0 = require("ipparse.lib.bit_compat")
-  band, rshift = _obj_0.band, _obj_0.rshift
+  band, rshift, lshift = _obj_0.band, _obj_0.rshift, _obj_0.lshift
 end
 local pack
 pack = function(self)
@@ -144,16 +144,16 @@ local extensions = bidirectional({
   [0x17] = "extended_master_secret",
   [0x18] = "token_binding",
   [0x19] = "cached_info",
+  [0x001b] = "compress_certificate",
+  [0x001c] = "record_size_limit",
   [0x1a] = "tls_ticket_early_data_info",
-  [0x1b] = "pre_shared_key",
-  [0x1c] = "early_data",
-  [0x1d] = "supported_versions",
-  [0x1e] = "cookie",
-  [0x1f] = "psk_key_exchange_modes",
+  [0x0029] = "pre_shared_key",
+  [0x002a] = "early_data",
+  [0x002b] = "supported_versions",
+  [0x002c] = "cookie",
+  [0x002d] = "psk_key_exchange_modes",
   [0x20] = "ticket_early_data_info",
   [0x21] = "test",
-  [0x22] = "compress_certificate",
-  [0x23] = "record_size_limit",
   [0xff] = "unknown"
 })
 return {

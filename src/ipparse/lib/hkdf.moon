@@ -1,25 +1,47 @@
-#!/usr/bin/env moon
--- Include current path in lua package path, so that this file can be moved anywhere
--- along with sha2.lua.
-script = debug.getinfo(1,"S").source\sub 2
-path = ";" .. script\match".+/" .. "?.lua"
-package.path ..= path if not package.path\match path
+is_hex_digest = (s) ->
+  type(s) == "string" and #s == 64 and s\match("^[0-9a-fA-F]+$") != nil
 
-:hmac, :sha256, :hex_to_bin = require"sha2"
+bin_to_hex = (s) ->
+  (s\gsub ".", (c) -> string.format "%02x", string.byte c)
+
+load_sha = ->
+  ok, mod = pcall require, "ipparse.lib.sha"
+  return mod if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin
+  ok, mod = pcall require, "ipparse.lib.sha2"
+  return mod if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin
+  ok, mod = pcall require, "sha2"
+  return mod if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin
+  error "no SHA backend available for HKDF"
+
+sha = load_sha!
+:hmac, :sha256, :hex_to_bin = sha
+
+hmac_bin = (key, msg) ->
+  d = hmac sha256, key, msg
+  if is_hex_digest d
+    hex_to_bin d
+  else
+    d
+
+hmac_hex = (key, msg) ->
+  d = hmac sha256, key, msg
+  if is_hex_digest d
+    d
+  else
+    bin_to_hex d
 pack: sp, :char, :rep, :sub = require "ipparse.lib.pack_compat"
 
 
 hkdf_extract = (salt="", ikm) ->
   salt = rep "\0", 64 if salt == ""
-  hmac sha256, salt, ikm
+  hmac_bin salt, ikm
 
 
 hkdf_expand = (prk, info="", len) ->
-  prk = hex_to_bin prk
   len *= 2
   i, okm, t = 1, "", ""
   while #okm < len
-    t = hmac sha256, prk, hex_to_bin(t) .. info .. char(i)
+    t = hmac_hex prk, hex_to_bin(t) .. info .. char(i)
     okm ..= t
     i += 1
   sub okm, 1, len
@@ -57,11 +79,11 @@ test = ->
 
   init_secret = hkdf_extract hex_to_bin"38762cf7f55934b34d179ae6a4c80cadccbb7f0a", hex_to_bin"0001020304050607"
   csecret = hkdf_expand_label init_secret, "client in", "", 32
-  assert hkdf_expand_label(csecret, "quic key", "", 16) == "b14b918124fda5c8d79847602fa3520b"
+  assert hkdf_expand_label(hex_to_bin(csecret), "quic key", "", 16) == "b14b918124fda5c8d79847602fa3520b"
   print "OK"
 
 
-if arg[0] == script
+if arg and arg[0] == debug.getinfo(1,"S").source\sub 2
   print "Running tests"
   test!
 

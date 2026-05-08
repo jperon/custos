@@ -56,6 +56,27 @@ read_request = function(client)
 end
 local send_response
 send_response = function(client, status, headers, body)
+  local is_peer_closed_err
+  is_peer_closed_err = function(err)
+    if not (err) then
+      return false
+    end
+    local s = tostring(err)
+    return s:find("error state on socket", 1, true) or s:find("Peer closed underlying transport Error", 1, true) or s:find("eof_from_peer", 1, true)
+  end
+  local send_chunk
+  send_chunk = function(chunk)
+    local ok, err = pcall(function()
+      return client:send(chunk)
+    end)
+    if ok then
+      return true
+    end
+    if is_peer_closed_err(err) then
+      return nil, "peer_closed"
+    end
+    return error(tostring(err))
+  end
   body = body or ""
   local reason
   local _exp_0 = status
@@ -87,14 +108,27 @@ send_response = function(client, status, headers, body)
   if not (headers["Connection"]) then
     headers["Connection"] = "close"
   end
-  client:send("HTTP/1.1 " .. tostring(status) .. " " .. tostring(reason) .. "\r\n")
+  local ok, err = send_chunk("HTTP/1.1 " .. tostring(status) .. " " .. tostring(reason) .. "\r\n")
+  if not (ok) then
+    return nil, err
+  end
   for name, value in pairs(headers) do
-    client:send(tostring(name) .. ": " .. tostring(value) .. "\r\n")
+    ok, err = send_chunk(tostring(name) .. ": " .. tostring(value) .. "\r\n")
+    if not (ok) then
+      return nil, err
+    end
   end
-  client:send("\r\n")
+  ok, err = send_chunk("\r\n")
+  if not (ok) then
+    return nil, err
+  end
   if #body > 0 then
-    return client:send(body)
+    ok, err = send_chunk(body)
+    if not (ok) then
+      return nil, err
+    end
   end
+  return true
 end
 return {
   read_request = read_request,

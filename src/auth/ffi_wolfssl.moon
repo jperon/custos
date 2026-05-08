@@ -190,7 +190,7 @@ ssl_mt.__index.dohandshake = =>
     error "TLS error during handshake: #{ssl_errors}"
 
   ssl_errors = get_ssl_errors!
-  if err == -308 or (ssl_errors and ssl_errors\find "error state on socket", 1, true)
+  if err == -308 or err == -313 or err == 6 or (ssl_errors and (ssl_errors\find("error state on socket", 1, true) or ssl_errors\find("received alert fatal error", 1, true) or ssl_errors\find("peer sent close notify alert", 1, true)))
     log_debug { action: "handshake_peer_closed", err: err, ssl_err: ssl_errors }
     return false, "peer_closed"
 

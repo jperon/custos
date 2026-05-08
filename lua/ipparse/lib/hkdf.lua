@@ -1,12 +1,49 @@
-local script = debug.getinfo(1, "S").source:sub(2)
-local path = ";" .. script:match(".+/") .. "?.lua"
-if not package.path:match(path) then
-  package.path = package.path .. path
+local is_hex_digest
+is_hex_digest = function(s)
+  return type(s) == "string" and #s == 64 and s:match("^[0-9a-fA-F]+$") ~= nil
 end
+local bin_to_hex
+bin_to_hex = function(s)
+  return (s:gsub(".", function(c)
+    return string.format("%02x", string.byte(c))
+  end))
+end
+local load_sha
+load_sha = function()
+  local ok, mod = pcall(require, "ipparse.lib.sha")
+  if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin then
+    return mod
+  end
+  ok, mod = pcall(require, "ipparse.lib.sha2")
+  if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin then
+    return mod
+  end
+  ok, mod = pcall(require, "sha2")
+  if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin then
+    return mod
+  end
+  return error("no SHA backend available for HKDF")
+end
+local sha = load_sha()
 local hmac, sha256, hex_to_bin
-do
-  local _obj_0 = require("sha2")
-  hmac, sha256, hex_to_bin = _obj_0.hmac, _obj_0.sha256, _obj_0.hex_to_bin
+hmac, sha256, hex_to_bin = sha.hmac, sha.sha256, sha.hex_to_bin
+local hmac_bin
+hmac_bin = function(key, msg)
+  local d = hmac(sha256, key, msg)
+  if is_hex_digest(d) then
+    return hex_to_bin(d)
+  else
+    return d
+  end
+end
+local hmac_hex
+hmac_hex = function(key, msg)
+  local d = hmac(sha256, key, msg)
+  if is_hex_digest(d) then
+    return d
+  else
+    return bin_to_hex(d)
+  end
 end
 local sp, char, rep, sub
 do
@@ -21,18 +58,17 @@ hkdf_extract = function(salt, ikm)
   if salt == "" then
     salt = rep("\0", 64)
   end
-  return hmac(sha256, salt, ikm)
+  return hmac_bin(salt, ikm)
 end
 local hkdf_expand
 hkdf_expand = function(prk, info, len)
   if info == nil then
     info = ""
   end
-  prk = hex_to_bin(prk)
   len = len * 2
   local i, okm, t = 1, "", ""
   while #okm < len do
-    t = hmac(sha256, prk, hex_to_bin(t) .. info .. char(i))
+    t = hmac_hex(prk, hex_to_bin(t) .. info .. char(i))
     okm = okm .. t
     i = i + 1
   end
@@ -53,10 +89,10 @@ test = function()
   assert(hkdf("", hex_to_bin("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"), "", 42) == "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8")
   local init_secret = hkdf_extract(hex_to_bin("38762cf7f55934b34d179ae6a4c80cadccbb7f0a"), hex_to_bin("0001020304050607"))
   local csecret = hkdf_expand_label(init_secret, "client in", "", 32)
-  assert(hkdf_expand_label(csecret, "quic key", "", 16) == "b14b918124fda5c8d79847602fa3520b")
+  assert(hkdf_expand_label(hex_to_bin(csecret), "quic key", "", 16) == "b14b918124fda5c8d79847602fa3520b")
   return print("OK")
 end
-if arg[0] == script then
+if arg and arg[0] == debug.getinfo(1, "S").source:sub(2) then
   print("Running tests")
   test()
 end

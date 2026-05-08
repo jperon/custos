@@ -6,7 +6,7 @@ local bit = {
     return a | b
   end,
   bxor = function(a, b)
-    return a(~b)
+    return (a | b) & (~(a & b))
   end,
   bnot = function(a)
     return ~a

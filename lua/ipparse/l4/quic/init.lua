@@ -7,6 +7,8 @@ local bidirectional
 bidirectional = require("ipparse.fun").bidirectional
 local band
 band = require("ipparse.lib.bit_compat").band
+local parse_varint
+parse_varint = require("ipparse.l4.quic.frames").parse_varint
 local versions
 do
   local _tbl_0 = { }
@@ -64,18 +66,33 @@ local parse_long_header
 parse_long_header = function(self, off, byte1)
   local version, dst_connection_id, src_connection_id, _off = su(">I4 s1 s1", self, off)
   local mt
+  local pkt_type, token, pkt_length
   do
     local v = versions[version]
     if v then
       mt = v.long_mt
+      pkt_type = band(byte1, 0x30)
     end
   end
   mt = mt or _mt
+  if pkt_type == 0x00 then
+    local token_len
+    token_len, _off = parse_varint(self, _off)
+    token = self:sub(_off, _off + token_len - 1)
+    _off = _off + token_len
+  end
+  if pkt_type ~= 0x30 then
+    pkt_length, _off = parse_varint(self, _off)
+  end
   return setmetatable({
     byte1 = byte1,
     version = version,
     dst_connection_id = dst_connection_id,
     src_connection_id = src_connection_id,
+    token = token,
+    pkt_length = pkt_length,
+    pkt_type = pkt_type,
+    pn_off = _off,
     data_off = _off,
     payload_off = _off,
     long_header = true

@@ -39,7 +39,6 @@ hex2bin = => gsub @, "%x%x", => char tonumber @, 16
 -- Each row contains `cols` columns of `len` bytes, with both hex and ASCII representations.
 -- Non-printable ASCII bytes are shown as `.` in the ASCII section.
 -- The function handles incomplete rows and aligns output accordingly.
--- @tparam string self The input data to be dumped.
 -- @tparam[opt=1] number off The starting offset in the input data.
 -- @tparam[opt=8] number len The number of bytes per row.
 -- @tparam[opt=2] number cols The number of columns per row.

@@ -344,6 +344,18 @@ supervise = (pipes, sfd) ->
         auth_cfg
     }
 
+  -- SNI logger for TLS/QUIC (single, optional).
+  -- Captures TCP/443 SYN (TLS ClientHello) and UDP/443 (QUIC Initial) packets.
+  sni_queue_num = tonumber(config.QUEUE_SNI_LOG) or 6
+  if config.QUEUE_SNI_LOG
+    table.insert workers, {
+      name: "sni-log"
+      pid: nil
+      restart_fn: -> fork_worker "sni-log",
+        (q_num) -> require("worker_sni_logger").run tonumber(q_num),
+        sni_queue_num
+    }
+
   -- AUTH (single).
   -- Utilise mac_learner_ipc (get_mac) pour obtenir la MAC de manière fiable.
   table.insert workers, {

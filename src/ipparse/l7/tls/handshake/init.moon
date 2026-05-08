@@ -24,12 +24,12 @@
 -- - RFC 5246: The Transport Layer Security (TLS) Protocol Version 1.2
 -- - RFC 6066: TLS Extensions
 --
--- @module tls.handshake
+-- @module l7.tls.handshake
 
 pack: sp, unpack: su = require "ipparse.lib.pack_compat"
 :bidirectional = require"ipparse.fun"
 parse: parse_extension = require"ipparse.l7.tls.handshake.extension"
-{:band, :rshift} = require"ipparse.lib.bit_compat"
+{:band, :rshift, :lshift} = require"ipparse.lib.bit_compat"
 
 --- Packs a TLS handshake message into a binary string.
 -- Constructs the binary representation of the handshake message.
@@ -68,7 +68,6 @@ parse_compressions = => [su "B", @, i for i = 1, #@]
 
 --- Iterates over TLS extensions in a binary string.
 -- Extracts extensions one by one from the binary string.
--- @tparam string self The binary string containing the extensions.
 -- @tparam[opt=1] number off Offset to start parsing from. Defaults to 1.
 -- @tparam[opt=#self] number len Length of the extensions data. Defaults to the full string length.
 -- @treturn function Iterator function returning each parsed extension.
@@ -170,16 +169,16 @@ extensions = bidirectional {
   [0x17]: "extended_master_secret"
   [0x18]: "token_binding"
   [0x19]: "cached_info"
+  [0x001b]: "compress_certificate"
+  [0x001c]: "record_size_limit"
   [0x1a]: "tls_ticket_early_data_info"
-  [0x1b]: "pre_shared_key"
-  [0x1c]: "early_data"
-  [0x1d]: "supported_versions"
-  [0x1e]: "cookie"
-  [0x1f]: "psk_key_exchange_modes"
+  [0x0029]: "pre_shared_key"
+  [0x002a]: "early_data"
+  [0x002b]: "supported_versions"
+  [0x002c]: "cookie"
+  [0x002d]: "psk_key_exchange_modes"
   [0x20]: "ticket_early_data_info"
   [0x21]: "test"
-  [0x22]: "compress_certificate"
-  [0x23]: "record_size_limit"
   [0xff]: "unknown"
 }
 

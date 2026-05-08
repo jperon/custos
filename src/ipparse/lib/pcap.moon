@@ -28,7 +28,7 @@
 -- - RFC 2838: Pcap File Format
 -- - PCAPNG Specification: https://github.com/pcapng/pcapng
 --
--- @module pcap
+-- @module lib.pcap
 
 {:lshift} = require"ipparse.lib.bit_compat"
 

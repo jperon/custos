@@ -21,7 +21,7 @@
 -- References:
 -- - RFC 768: User Datagram Protocol (UDP)
 --
--- @module udp
+-- @module l4.udp
 
 pack: sp, unpack: su = require "ipparse.lib.pack_compat"
 
@@ -37,7 +37,6 @@ _mt = __tostring: pack
 
 --- Parses a binary string into a UDP header structure.
 -- Extracts the source port, destination port, length, and checksum from the binary string.
--- @tparam string self The binary string containing the UDP header.
 -- @tparam[opt=1] number off Offset to start parsing from. Defaults to 1.
 -- @treturn table Parsed UDP header as a table.
 -- @treturn number The next offset after parsing.

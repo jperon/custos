@@ -15,6 +15,13 @@ do
   local _obj_0 = require("ipparse.lib.bit_compat")
   band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
 end
+local need_bytes
+need_bytes = function(data, off, len)
+  if off < 1 or len < 0 then
+    return false
+  end
+  return (off + len - 1) <= #data
+end
 local pack_header
 pack_header = function(self)
   return (self.size and sp(">H", self.size) or "") .. sp(">H B B H H H H", self.id, self.qr_opcode_aa_tc_rd, self.ra_z_rcode, self.qdcount, self.ancount, self.nscount, self.arcount)
@@ -78,7 +85,7 @@ local _header_mt = {
 }
 local parse_header
 parse_header = function(self, off, is_tcp)
-  local len = #self - off
+  local len = #self - off + 1
   local size
   if is_tcp then
     if len < 2 then
@@ -106,27 +113,70 @@ parse_header = function(self, off, is_tcp)
 end
 local labels
 local label
-label = function(self, off, l7_off)
+label = function(self, off, l7_off, visited, depth)
   if l7_off == nil then
     l7_off = 1
   end
-  if off + 2 > #self then
-    return nil
+  if visited == nil then
+    visited = nil
   end
-  local size, pos, _off = su("B B", self, off)
+  if depth == nil then
+    depth = 0
+  end
+  if not (need_bytes(self, off, 1)) then
+    return nil, off, nil, "invalid label offset " .. tostring(off)
+  end
+  local size = su("B", self, off)
+  local _off = off + 1
   if size == 0 then
     return nil, off + 1
   end
-  if band(size, 0xC0) == 0 then
-    return su("s1", self, off)
+  if band(size, 0xC0) == 0xC0 then
+    if not (need_bytes(self, off, 2)) then
+      return nil, off, nil, "truncated DNS compression pointer"
+    end
+    local pos = su("B", self, off + 1)
+    local ptr = lshift(band(size, 0x3F), 8) + pos
+    local target_off = l7_off + ptr
+    if not (target_off >= l7_off and target_off <= #self) then
+      return nil, _off + 1, nil, "DNS compression pointer out of bounds (" .. tostring(ptr) .. ")"
+    end
+    if depth >= 32 then
+      return nil, _off + 1, nil, "DNS compression pointer recursion limit reached"
+    end
+    if visited and visited[target_off] then
+      return nil, _off + 1, nil, "DNS compression pointer loop at " .. tostring(ptr)
+    end
+    visited = visited or { }
+    visited[target_off] = true
+    local pointed_labels, _, err = labels(self, target_off, l7_off, visited, depth + 1)
+    visited[target_off] = nil
+    if not (pointed_labels) then
+      return nil, _off + 1, nil, err
+    end
+    return concat(pointed_labels, "."), _off + 1, true
   end
-  off = lshift(band(size, 0x3F), 8) + pos
-  return concat(labels(self, l7_off + off, l7_off), "."), _off, true
+  if band(size, 0xC0) == 0 then
+    if not (need_bytes(self, off + 1, size)) then
+      return nil, off, nil, "truncated DNS label (len=" .. tostring(size) .. ")"
+    end
+    return sub(self, off + 1, off + size), off + size + 1
+  end
+  return nil, off, nil, "invalid DNS label prefix at offset " .. tostring(off)
 end
-labels = function(self, off, l7_off)
+labels = function(self, off, l7_off, visited, depth)
+  if visited == nil then
+    visited = nil
+  end
+  if depth == nil then
+    depth = 0
+  end
   local lbls = { }
   for i = 1, 1024 do
-    local lbl_segment, next_parse_off, is_from_pointer = label(self, off, l7_off)
+    local lbl_segment, next_parse_off, is_from_pointer, err = label(self, off, l7_off, visited, depth)
+    if err then
+      return nil, off, err
+    end
     if not lbl_segment then
       off = next_parse_off
       break
@@ -148,7 +198,13 @@ local _question_mt = {
 }
 local parse_question
 parse_question = function(self, off, l7_off)
-  local lbls, _off = labels(self, off, l7_off)
+  local lbls, _off, err = labels(self, off, l7_off)
+  if not (lbls) then
+    return nil, off, err
+  end
+  if not (need_bytes(self, _off, 4)) then
+    return nil, off, "truncated DNS question fields"
+  end
   local qname = sub(self, off, _off - 1)
   local qtype, qclass
   qtype, qclass, _off = su(">H H", self, _off)
@@ -165,8 +221,11 @@ local parse_questions
 parse_questions = function(self, off, qdcount, l7_off)
   local res = { }
   for i = 1, qdcount do
-    local q
-    q, off = parse_question(self, off, l7_off)
+    local q, err
+    q, off, err = parse_question(self, off, l7_off)
+    if not (q) then
+      return nil, off, err
+    end
     res[i] = q
   end
   return res, off
@@ -180,10 +239,21 @@ local _rr_mt = {
 }
 local parse_rr
 parse_rr = function(self, off, l7_off)
-  local lbls, _off = labels(self, off, l7_off)
+  local lbls, _off, err = labels(self, off, l7_off)
+  if not (lbls) then
+    return nil, off, err
+  end
+  if not (need_bytes(self, _off, 10)) then
+    return nil, off, "truncated DNS resource record header"
+  end
   local rname = sub(self, off, _off - 1)
-  local rtype, rclass, ttl, rdata
-  rtype, rclass, ttl, rdata, _off = su(">H H I4 s2", self, _off)
+  local rtype, rclass, ttl, rdlen
+  rtype, rclass, ttl, rdlen, _off = su(">H H I4 H", self, _off)
+  if not (need_bytes(self, _off, rdlen)) then
+    return nil, off, "truncated DNS resource record data"
+  end
+  local rdata = sub(self, _off, _off + rdlen - 1)
+  _off = _off + rdlen
   return setmetatable({
     name = concat(lbls, "."),
     rname = rname,
@@ -199,8 +269,11 @@ local parse_rrs
 parse_rrs = function(self, off, count, l7_off)
   local res = { }
   for i = 1, count do
-    local r
-    r, off = parse_rr(self, off, l7_off)
+    local r, err
+    r, off, err = parse_rr(self, off, l7_off)
+    if not (r) then
+      return nil, off, err
+    end
     res[i] = r
   end
   return res, off
@@ -246,22 +319,36 @@ parse_opt = function(self, off)
   if off == nil then
     off = 1
   end
-  local code, data, _off = su(">Hs2", self, off)
-  local len = #data
+  if not (need_bytes(self, off, 4)) then
+    return nil, off, "truncated EDNS option header"
+  end
+  local code, len, _off = su(">H H", self, off)
+  if not (need_bytes(self, _off, len)) then
+    return nil, off, "truncated EDNS option data"
+  end
+  local raw_data = sub(self, _off, _off + len - 1)
+  _off = _off + len
+  local data = nil
   do
     local opt_parser = edns_opts[code]
     if opt_parser then
       local typ, fields, fmt
       typ, fields, fmt = opt_parser[1], opt_parser[2], opt_parser[3]
-      if fmt then
+      if fmt and code == 8 then
+        if not (need_bytes(raw_data, 1, 4)) then
+          return nil, off, "truncated EDNS client_subnet option"
+        end
+        local family, source_netmask, scope_netmask, data_off = su(fmt, raw_data)
         local _data = {
-          su(fmt, data)
+          family,
+          source_netmask,
+          scope_netmask,
+          sub(raw_data, data_off)
         }
-        _data[#_data] = sub(data, _data[#_data])
         data = _data
       else
         data = {
-          data
+          raw_data
         }
       end
       data.type = typ
@@ -284,7 +371,7 @@ parse_opt = function(self, off)
       })
     else
       setmetatable({
-        data
+        raw_data
       }, {
         __tostring = function(self)
           return self[1]
@@ -301,8 +388,13 @@ end
 local parse_opts
 parse_opts = function(self)
   local opts, off = { }, 1
-  while off < #self do
-    opts[#opts + 1], off = parse_opt(self, off)
+  while off <= #self do
+    local opt, err
+    opt, off, err = parse_opt(self, off)
+    if not (opt) then
+      return nil, off, err
+    end
+    opts[#opts + 1] = opt
   end
   return opts
 end
@@ -368,18 +460,31 @@ local _mt = {
 }
 local parse
 parse = function(self, l7_off, is_tcp)
-  local header, _off = parse_header(self, l7_off, is_tcp)
+  local header, _off_or_err = parse_header(self, l7_off, is_tcp)
   if not header then
-    return nil, l7_off, "No DNS data"
+    return nil, l7_off, _off_or_err or "No DNS data"
   end
-  local questions
-  questions, _off = parse_questions(self, _off, header.qdcount, l7_off)
+  local _off = _off_or_err
+  local questions, err
+  questions, _off, err = parse_questions(self, _off, header.qdcount, l7_off)
+  if not (questions) then
+    return nil, _off, err
+  end
   local answers
-  answers, _off = parse_rrs(self, _off, header.ancount, l7_off)
+  answers, _off, err = parse_rrs(self, _off, header.ancount, l7_off)
+  if not (answers) then
+    return nil, _off, err
+  end
   local authorities
-  authorities, _off = parse_rrs(self, _off, header.nscount, l7_off)
+  authorities, _off, err = parse_rrs(self, _off, header.nscount, l7_off)
+  if not (authorities) then
+    return nil, _off, err
+  end
   local additionals
-  additionals, _off = parse_rrs(self, _off, header.arcount, l7_off)
+  additionals, _off, err = parse_rrs(self, _off, header.arcount, l7_off)
+  if not (additionals) then
+    return nil, _off, err
+  end
   return setmetatable({
     header = header,
     question = questions[1],
