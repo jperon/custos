@@ -1,14 +1,13 @@
 -- src/captive_ips.moon
 -- Détection des adresses IP du portail captif.
--- Factorisé pour être partagé entre worker_captive (Q2, construction des URLs
--- de redirection TCP) et worker_questions (Q0, forge des réponses DNS).
+-- Factorisé pour être partagé entre worker_captive (captive, construction des URLs
+-- de redirection TCP) et worker_questions (question, forge des réponses DNS).
 --
 -- Ordre de priorité :
 --   1. auth_cfg.captive_ip4 / auth_cfg.captive_ip6 (config explicite)
 --   2. Variables d'environnement CAPTIVE_IP4 / CAPTIVE_IP6
---   3. Compatibilité ascendante : auth_cfg.captive_ip / CAPTIVE_IP
---   4. Auto-détection via `ip addr show dev <bridge>` (IPv4 puis IPv6)
---   5. Fallback IPv4 via socket.connect (heuristique)
+--   3. Auto-détection via `ip addr show dev <bridge>` (IPv4 puis IPv6)
+--   4. Fallback IPv4 via socket.connect (heuristique)
 
 { :log_info, :log_warn } = require "log"
 
@@ -27,16 +26,7 @@ detect = (auth_cfg) ->
   local_ip4 = auth_cfg.captive_ip4 or os.getenv "CAPTIVE_IP4"
   local_ip6 = auth_cfg.captive_ip6 or os.getenv "CAPTIVE_IP6"
 
-  -- ── 3 : compatibilité ascendante (captive_ip unique) ─────────
-  if not local_ip4 and not local_ip6
-    legacy = auth_cfg.captive_ip or os.getenv "CAPTIVE_IP"
-    if legacy
-      if legacy\find ":", 1, true
-        local_ip6 = legacy
-      else
-        local_ip4 = legacy
-
-  -- ── 4a : auto-détection IPv4 via `ip addr show dev <bridge>` ─
+  -- ── 3a : auto-détection IPv4 via `ip addr show dev <bridge>` ─
   if not local_ip4
     ok, out = pcall ->
       fh = io.popen "ip -4 addr show dev #{ifname} scope global 2>/dev/null | awk '/inet/{print $2}' | head -1 | cut -d'/' -f1"
@@ -48,7 +38,7 @@ detect = (auth_cfg) ->
       local_ip4 = out
       log_info { action: "captive_ip4_autodetected", ip: local_ip4, ifname: ifname }
 
-  -- ── 4b : fallback IPv4 via socket.connect ────────────────────
+  -- ── 4 : fallback IPv4 via socket.connect ─────────────────────
   if not local_ip4
     ok_sock, socket = pcall require, "socket"
     if ok_sock
@@ -64,7 +54,7 @@ detect = (auth_cfg) ->
               log_info { action: "captive_ip4_autodetected_socket", ip: local_ip4 }
           u\close!
 
-  -- ── 5 : auto-détection IPv6 via `ip addr show dev <bridge>` ──
+  -- ── 3b : auto-détection IPv6 via `ip addr show dev <bridge>` ──
   if not local_ip6
     ok, ip = pcall ->
       f = io.popen "ip -6 addr show dev #{ifname} scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1"

@@ -5,13 +5,13 @@
 -- Architecture des processus :
 --
 --   main (superviseur)
---   ├── mac_learner          — lit pipe learn Q0→learner, répond socket Unix
---   ├── worker Q0 questions  — écrit Q0→Q1 et Q0→mac_learner
---   ├── worker Q1 réponses   — lit Q0→Q1
+--   ├── mac_learner          — lit pipe learn question→learner, répond socket Unix
+--   ├── worker question            — écrit question→response et question→mac_learner
+--   ├── worker response            — lit question→response
 --   ├── worker_auth_queue   — capture trafic 33443, extrait MAC/IP, écrit vers AUTH
 --   ├── worker AUTH          — portail HTTPS (lit pipe auth_ipc)
---   ├── worker Q2 captif     — mode bridge
---   └── worker Q3 reject     — mode bridge
+--   ├── worker captive             — mode bridge
+--   └── worker reject              — mode bridge
 --
 -- Le superviseur ne traite aucun paquet. Il boucle sur waitpid()
 -- et relance le worker mort après un délai de 1 seconde.
@@ -24,7 +24,7 @@
 --
 -- Rechargement à chaud sur SIGHUP :
 --   • SIGHUP est masqué et capturé via le même signalfd
---   • Sur réception : SIGHUP propagé à Q0 et AUTH.
+--   • Sur réception : SIGHUP propagé à question et AUTH.
 
 { :ffi, :libc } = require "ffi_defs"
 { :log_info, :log_warn } = require "log"
@@ -98,14 +98,14 @@ create_pipe = (name) ->
   { rfd: fds[0], wfd: fds[1] }
 
 --- Crée les trois pipes utilisés par Custos.
--- q0q1 : transactions DNS Q0 → Q1.
--- learn : apprentissage IP→MAC Q0 → mac_learner.
--- events : événements DNS Q0 → worker_events.
+-- question_response : transactions DNS question → response.
+-- learn : apprentissage IP→MAC question → mac_learner.
+-- events : événements DNS question → worker_events.
 -- nft : serialized dynamic nft insertions.
--- @treturn table {q0q1, learn, events}
+-- @treturn table {question_response, learn, events}
 create_pipes = ->
   {
-    q0q1:   create_pipe "q0q1"
+    question_response:   create_pipe "question_response"
     learn:  create_pipe "mac_learn"
     events: create_pipe "events"
     nft:    create_pipe "nft"
@@ -116,22 +116,15 @@ create_pipes = ->
 --- Charge la configuration auth avec les valeurs par défaut nécessaires.
 -- @treturn table Configuration auth
 load_auth_cfg = ->
-  { :load_config } = require "filter.lib.load_config"
-
-  filter_cfg_path = os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
-  filter_cfg, cfg_err = load_config filter_cfg_path
-  unless filter_cfg
-    log_warn { action: "auth_cfg_load_warning", path: filter_cfg_path, err: cfg_err }
-    filter_cfg = { auth: {} }
-
-  auth = filter_cfg.auth or {}
-  auth.port               = auth.port               or 33443
-  auth.idle_timeout       = auth.idle_timeout       or 120
-  auth.heartbeat_interval = auth.heartbeat_interval or 30
-  auth.session_ttl        = auth.session_ttl        or 0
-  auth.secrets            = auth.secrets            or "/etc/custos/secrets"
-  auth.sessions_file      = auth.sessions_file      or "./tmp/sessions.lua"
-
+  auth = {}
+  for k, v in pairs(config.auth or {})
+    auth[k] = v
+  auth.port               = tonumber(auth.port) or 33443
+  auth.idle_timeout       = tonumber(auth.idle_timeout) or 120
+  auth.heartbeat_interval = tonumber(auth.heartbeat_interval) or 30
+  auth.session_ttl        = tonumber(auth.session_ttl) or 0
+  auth.secrets            = auth.secrets or "/etc/custos/secrets"
+  auth.sessions_file      = auth.sessions_file or "./tmp/sessions.lua"
   auth
 
 -- ── Configuration DoH ──────────────────────────────────────────
@@ -140,17 +133,17 @@ load_auth_cfg = ->
 -- @treturn table doh_cfg
 load_doh_cfg = ->
   {
-    enabled:      config.DOH_ENABLED == "1"
-    port:         tonumber(config.DOH_PORT) or 8443
+    enabled:      config.doh.enabled
+    port:         tonumber(config.doh.port) or 8443
     upstream_ip:  do
-      if config.DOH_PREFER_IPV6 == "1" and probe_ipv6 config.DOH_UPSTREAM_IPV6
-        config.DOH_UPSTREAM_IPV6
+      if config.doh.prefer_ipv6 and probe_ipv6 config.doh.upstream_ipv6
+        config.doh.upstream_ipv6
       else
-        config.DOH_UPSTREAM_IPV4
-    upstream_port: tonumber(config.DOH_UPSTREAM_PORT) or 53
-    timeout_ms:   tonumber(config.DOH_UPSTREAM_TIMEOUT_MS) or 2000
-    cert_path:    if config.DOH_CERT_PATH and #config.DOH_CERT_PATH > 0 then config.DOH_CERT_PATH else nil
-    key_path:     if config.DOH_KEY_PATH  and #config.DOH_KEY_PATH  > 0 then config.DOH_KEY_PATH  else nil
+        config.doh.upstream_ipv4
+    upstream_port: tonumber(config.doh.upstream_port) or 53
+    timeout_ms:   tonumber(config.doh.upstream_timeout_ms) or 2000
+    cert_path:    if config.doh.cert_path and #config.doh.cert_path > 0 then config.doh.cert_path else nil
+    key_path:     if config.doh.key_path  and #config.doh.key_path  > 0 then config.doh.key_path  else nil
   }
 
 -- ── Shutdown explicite des workers ───────────────────────────────
@@ -160,9 +153,9 @@ load_doh_cfg = ->
 -- @treturn nil
 close_supervisor_fds = (pipes) ->
   if pipes
-    if pipes.q0q1
-      libc.close pipes.q0q1.rfd if pipes.q0q1.rfd
-      libc.close pipes.q0q1.wfd if pipes.q0q1.wfd
+    if pipes.question_response
+      libc.close pipes.question_response.rfd if pipes.question_response.rfd
+      libc.close pipes.question_response.wfd if pipes.question_response.wfd
     if pipes.learn
       libc.close pipes.learn.rfd if pipes.learn.rfd
       libc.close pipes.learn.wfd if pipes.learn.wfd
@@ -205,10 +198,10 @@ supervise = (pipes, sfd) ->
         if n then table.insert queues, n
     queues
 
-  questions_queues = parse_queues config.QUEUE_QUESTIONS
-  responses_queues = parse_queues config.QUEUE_RESPONSES
-  captive_queues   = parse_queues config.QUEUE_CAPTIVE
-  reject_queues    = parse_queues config.QUEUE_REJECT
+  questions_queues = parse_queues config.nfqueue.questions
+  responses_queues = parse_queues config.nfqueue.responses
+  captive_queues   = parse_queues config.nfqueue.captive
+  reject_queues    = parse_queues config.nfqueue.reject
 
   -- Nom de l'interface bridge : requis pour mac_learner (prober ARP/NS)
   -- et arp-sniffer. Déclaré avant `workers` pour que les closures puissent le capturer.
@@ -271,13 +264,13 @@ supervise = (pipes, sfd) ->
   }
 
   table.insert workers, {
-    name: "events"
-    pid: nil
-    restart_fn: -> fork_worker "events",
-      ((fds) -> require("worker_events").run fds.rfd, fds.dir, fds.max_age_hours, fds.min_free_pct),
-      { rfd: pipes.events.rfd, dir: config.EVENTS_DIR or "/tmp/custos/events",
-        max_age_hours: config.EVENTS_MAX_AGE_HOURS or 168,
-        min_free_pct:  config.EVENTS_MIN_FREE_PCT  or 30 }
+      name: "events"
+      pid: nil
+      restart_fn: -> fork_worker "events",
+        ((fds) -> require("worker_events").run fds.rfd, fds.dir, fds.max_age_hours, fds.min_free_pct),
+        { rfd: pipes.events.rfd, dir: config.events.dir or "/tmp/custos/events",
+          max_age_hours: config.events.max_age_hours or 168,
+          min_free_pct:  config.events.min_free_pct  or 30 }
   }
 
   -- Worker passif ARP/NDP : apprend les associations IP→MAC pour tous les VLANs
@@ -292,7 +285,7 @@ supervise = (pipes, sfd) ->
 
   -- Worker NFQUEUE hybride pour l'authentification
   -- Écrit dans le pipe 'learn' pour alimenter le mac_learner
-  auth_queue_num = tonumber(config.QUEUE_AUTH) or 5
+  auth_queue_num = tonumber(config.nfqueue.auth) or 5
   table.insert workers, {
     name: "auth-q"
     pid: nil
@@ -301,17 +294,17 @@ supervise = (pipes, sfd) ->
       pipes.learn.wfd
   }
 
-  -- Multiple workers for questions (parallel Q0)
+  -- Multiple workers for questions (parallel question)
   for i, q_num in ipairs questions_queues
     table.insert workers, {
       name: "dns-q#{q_num}"
       pid: nil
       restart_fn: -> fork_worker "dns-q#{q_num}",
-        ((fds) -> require("worker_questions").run q_num, fds.q0q1_wfd, fds.learn_wfd, fds.events_wfd),
-        { q0q1_wfd: pipes.q0q1.wfd, learn_wfd: pipes.learn.wfd, events_wfd: pipes.events.wfd }
+        ((fds) -> require("worker_questions").run q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd),
+        { question_response_wfd: pipes.question_response.wfd, learn_wfd: pipes.learn.wfd, events_wfd: pipes.events.wfd }
     }
 
-  -- Multiple workers for responses (parallel Q1)
+  -- Multiple workers for responses (parallel response)
   -- Chaque worker_responses reçoit un pipe ACK dédié pour la synchronisation nft.
   for i, q_num in ipairs responses_queues
     ack_info = alloc_ack_pipe!
@@ -320,11 +313,11 @@ supervise = (pipes, sfd) ->
       pid: nil
       restart_fn: -> fork_worker "resp-q#{q_num}",
         (fds) -> require("worker_responses").run q_num, fds,
-        { q0q1_rfd: pipes.q0q1.rfd, nft_wfd: pipes.nft.wfd,
+        { question_response_rfd: pipes.question_response.rfd, nft_wfd: pipes.nft.wfd,
           ack_rfd: ack_info.rfd, worker_idx: ack_info.worker_idx }
     }
 
-  -- Multiple workers for captive (parallel Q2)
+  -- Multiple workers for captive (parallel captive)
   for i, q_num in ipairs captive_queues
     table.insert workers, {
       name: "cap-q#{q_num}"
@@ -334,7 +327,7 @@ supervise = (pipes, sfd) ->
         auth_cfg
     }
 
-  -- Multiple workers for reject (parallel Q3)
+  -- Multiple workers for reject (parallel reject)
   for i, q_num in ipairs reject_queues
     table.insert workers, {
       name: "rej-q#{q_num}"
@@ -346,8 +339,8 @@ supervise = (pipes, sfd) ->
 
   -- SNI logger for TLS/QUIC (single, optional).
   -- Captures TCP/443 SYN (TLS ClientHello) and UDP/443 (QUIC Initial) packets.
-  sni_queue_num = tonumber(config.QUEUE_SNI_LOG) or 6
-  if config.QUEUE_SNI_LOG
+  sni_queue_num = tonumber(config.nfqueue.sni_log) or 6
+  if config.nfqueue.sni_log
     table.insert workers, {
       name: "tls-log"
       pid: nil
@@ -408,9 +401,9 @@ supervise = (pipes, sfd) ->
         log_info { action: "supervisor_sighup_reload" }
         filter.load!
 
-        -- Kill + refork all Q0/Q1/Q2/Q3/DOH workers to refresh COW filter lists
+        -- Kill + refork all question/response/captive/reject/DOH workers to refresh COW filter lists
         for w in *workers
-          if (w.name\match("^questions%-q") or w.name\match("^responses%-q") or w.name\match("^captive%-q") or w.name\match("^reject%-q") or w.name == "DOH") and w.pid and w.pid > 0
+          if (w.name\match("^dns%-q") or w.name\match("^resp%-q") or w.name\match("^cap%-q") or w.name\match("^rej%-q") or w.name == "doh") and w.pid and w.pid > 0
             log_info { action: "supervisor_sighup_kill", name: w.name, pid: w.pid }
             libc.kill w.pid, SIGTERM
             status = ffi.new "int[1]"
@@ -421,7 +414,7 @@ supervise = (pipes, sfd) ->
 
         -- Forward SIGHUP to AUTH only (secrets reload)
         for w in *workers
-          if w.name == "AUTH" and w.pid and w.pid > 0
+          if w.name == "auth" and w.pid and w.pid > 0
             log_info { action: "supervisor_sighup_forward_auth", pid: w.pid }
             libc.kill w.pid, SIGHUP
       else
@@ -461,8 +454,8 @@ pipes = create_pipes!
 
 log_info {
   action: "ipc_pipes_created"
-  q0q1_rfd: pipes.q0q1.rfd
-  q0q1_wfd: pipes.q0q1.wfd
+  question_response_rfd: pipes.question_response.rfd
+  question_response_wfd: pipes.question_response.wfd
   learn_rfd: pipes.learn.rfd
   learn_wfd: pipes.learn.wfd
   events_rfd: pipes.events.rfd

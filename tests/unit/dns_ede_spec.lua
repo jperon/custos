@@ -1,5 +1,8 @@
-local strip_https_rr
-strip_https_rr = require("dns_ede").strip_https_rr
+local strip_https_rr, add_ede_modified
+do
+  local _obj_0 = require("dns_ede")
+  strip_https_rr, add_ede_modified = _obj_0.strip_https_rr, _obj_0.add_ede_modified
+end
 local dns_mod = require("ipparse.l7.dns")
 local sp
 sp = require("ipparse.lib.pack_compat").pack
@@ -26,7 +29,7 @@ make_dns_payload = function()
   local header = sp(">H H H H H H", 0x1234, 0x8180, 1, 2, 1, 1)
   return header .. question .. answer_a .. answer_https .. authority_https .. additional_https
 end
-return describe("dns_ede.strip_https_rr", function()
+describe("dns_ede.strip_https_rr", function()
   it("retire les RR HTTPS (type 65) et SVCB (type 64) de toutes les sections", function()
     local raw = make_dns_payload()
     local parsed_before = dns_mod.parse(raw, 1, false)
@@ -64,5 +67,19 @@ return describe("dns_ede.strip_https_rr", function()
     local header = sp(">H H H H H H", 0x4321, 0x8180, 1, 1, 0, 0)
     local raw = header .. question .. answer_a
     return assert.equals(raw, strip_https_rr(raw))
+  end)
+end)
+return describe("dns_ede.add_ede_modified", function()
+  return it("ajoute un OPT/EDE code 4 avec texte Custos vigilat", function()
+    local question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    local answer_a = pack_rr(QTYPE_A, string.char(9, 9, 9, 9))
+    local header = sp(">H H H H H H", 0xBEEF, 0x8180, 1, 1, 0, 0)
+    local raw = header .. question .. answer_a
+    local patched = add_ede_modified(raw, "policy")
+    local parsed = dns_mod.parse(patched, 1, false)
+    assert.is_not_nil(parsed)
+    assert.equals(1, #parsed.additionals)
+    assert.equals(0x29, parsed.additionals[1].rtype)
+    return assert.is_true(patched:find("Custos vigilat%. policy", 1) ~= nil)
   end)
 end)

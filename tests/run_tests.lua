@@ -2598,10 +2598,10 @@ test("auth/sessions — purge_expired : conserve une session sans expires", func
 end)
 do
   local SF_FILE = "./tmp/test_sf_sessions.lua"
-  local session_for_ip, user_for_ip, reset_cache, bind_session_mac
+  local session_for_mac, user_for_mac, reset_cache, bind_session_mac
   do
     local _obj_0 = require("auth.sessions")
-    session_for_ip, user_for_ip, reset_cache, write_sessions, bind_session_mac = _obj_0.session_for_ip, _obj_0.user_for_ip, _obj_0.reset_cache, _obj_0.write_sessions, _obj_0.bind_session_mac
+    session_for_mac, user_for_mac, reset_cache, write_sessions, bind_session_mac = _obj_0.session_for_mac, _obj_0.user_for_mac, _obj_0.reset_cache, _obj_0.write_sessions, _obj_0.bind_session_mac
   end
   local write_sf_sessions
   write_sf_sessions = function(sessions)
@@ -2610,27 +2610,27 @@ do
   end
   local MAC = "aa:bb:cc:dd:ee:ff"
   local FUTURE = 9999999999
-  test("session_for_ip — session directe par MAC", function()
+  test("session_for_mac — session directe par MAC", function()
     write_sf_sessions({
       [MAC] = {
         user = "alice",
         expires = FUTURE
       }
     })
-    local s = session_for_ip(nil, SF_FILE, MAC)
+    local s = session_for_mac(MAC, nil, SF_FILE)
     return assert(s and s.user == "alice", "session trouvée par MAC")
   end)
-  test("session_for_ip — cache obsolète relu sur miss", function()
+  test("session_for_mac — cache obsolète relu sur miss", function()
     write_sessions({ }, SF_FILE)
     reset_cache()
-    assert(not (session_for_ip("10.0.0.10", SF_FILE, MAC)), "cache initial vide")
+    assert(not (session_for_mac(MAC, "10.0.0.10", SF_FILE)), "cache initial vide")
     write_sessions({
       [MAC] = {
         user = "alice",
         expires = FUTURE
       }
     }, SF_FILE)
-    local s = session_for_ip("10.0.0.10", SF_FILE, MAC)
+    local s = session_for_mac(MAC, "10.0.0.10", SF_FILE)
     return assert(s and s.user == "alice", "session trouvée après relecture du fichier")
   end)
   test("auth/sessions — bind_session_mac réindexe une session trouvée via IPv6", function()
@@ -2646,14 +2646,14 @@ do
         }
       }
     })
-    local s6 = session_for_ip(IP6, SF_FILE, CLIENT_MAC)
+    local s6 = session_for_mac(CLIENT_MAC, IP6, SF_FILE)
     assert(s6 and s6.user == "j@prn.ovh", "session IPv6 trouvée par fallback IP")
     bind_session_mac(s6.mac, CLIENT_MAC, IP6, SF_FILE)
     reset_cache()
-    local s4 = session_for_ip("10.35.99.39", SF_FILE, CLIENT_MAC)
+    local s4 = session_for_mac(CLIENT_MAC, "10.35.99.39", SF_FILE)
     return assert(s4 and s4.user == "j@prn.ovh", "session réindexée sous la vraie MAC cliente")
   end)
-  test("session_for_ip — session retrouvée par scan des IPs (IPv4)", function()
+  test("session_for_mac — session retrouvée par scan des IPs (IPv4)", function()
     write_sf_sessions({
       [MAC] = {
         user = "alice",
@@ -2663,10 +2663,10 @@ do
         }
       }
     })
-    local s = session_for_ip("10.0.0.1", SF_FILE)
+    local s = session_for_mac(nil, "10.0.0.1", SF_FILE)
     return assert(s and s.user == "alice", "session trouvée par scan IPv4")
   end)
-  test("session_for_ip — session retrouvée par scan des IPs (IPv6)", function()
+  test("session_for_mac — session retrouvée par scan des IPs (IPv6)", function()
     write_sf_sessions({
       [MAC] = {
         user = "j@prn.ovh",
@@ -2676,10 +2676,10 @@ do
         }
       }
     })
-    local s = session_for_ip("fd00::1", SF_FILE)
+    local s = session_for_mac(nil, "fd00::1", SF_FILE)
     return assert(s and s.user == "j@prn.ovh", "session trouvée par scan IPv6")
   end)
-  test("session_for_ip — MAC 'unknown' → scan ips", function()
+  test("session_for_mac — MAC 'unknown' → scan ips", function()
     write_sf_sessions({
       [MAC] = {
         user = "alice",
@@ -2689,40 +2689,40 @@ do
         }
       }
     })
-    local s = session_for_ip("10.0.0.99", SF_FILE, "unknown")
+    local s = session_for_mac("unknown", "10.0.0.99", SF_FILE)
     return assert(s and s.user == "alice", "MAC 'unknown' → scan ips trouve la session")
   end)
-  test("session_for_ip — aucune session avec cet IP", function()
+  test("session_for_mac — aucune session avec cet IP", function()
     write_sf_sessions({
       [MAC] = {
         user = "alice",
         expires = FUTURE
       }
     })
-    local s = session_for_ip("10.0.0.2", SF_FILE)
+    local s = session_for_mac(nil, "10.0.0.2", SF_FILE)
     return assert(not s, "aucune session pour cet IP")
   end)
-  test("session_for_ip — ip inconnue → nil", function()
+  test("session_for_mac — ip inconnue → nil", function()
     write_sf_sessions({
       [MAC] = {
         user = "alice",
         expires = FUTURE
       }
     })
-    local s = session_for_ip("9.9.9.9", SF_FILE)
+    local s = session_for_mac(nil, "9.9.9.9", SF_FILE)
     return assert(not s, "IP inconnue → nil")
   end)
-  test("session_for_ip — session expirée → nil", function()
+  test("session_for_mac — session expirée → nil", function()
     write_sf_sessions({
       [MAC] = {
         user = "alice",
         expires = 1
       }
     })
-    local s = session_for_ip("10.0.0.9", SF_FILE, MAC)
+    local s = session_for_mac(MAC, "10.0.0.9", SF_FILE)
     return assert(not s, "session expirée rejetée")
   end)
-  test("user_for_ip — retourne user via scan ips", function()
+  test("user_for_mac — retourne user via scan ips", function()
     write_sf_sessions({
       [MAC] = {
         user = "j@prn.ovh",
@@ -2732,19 +2732,19 @@ do
         }
       }
     })
-    return assert_eq((user_for_ip("10.35.1.53", SF_FILE)), "j@prn.ovh", "user retrouvé via scan ips")
+    return assert_eq((user_for_mac(nil, "10.35.1.53", SF_FILE)), "j@prn.ovh", "user retrouvé via scan ips")
   end)
-  test("user_for_ip — ip nil → nil", function()
-    return assert(not (user_for_ip(nil, SF_FILE)), "ip nil retourne nil")
+  test("user_for_mac — ip nil → nil", function()
+    return assert(not (user_for_mac(nil, nil, SF_FILE)), "ip nil retourne nil")
   end)
-  test("session_for_ip — MAC passée explicitement prime sur scan", function()
+  test("session_for_mac — MAC passée explicitement prime sur scan", function()
     write_sf_sessions({
       [MAC] = {
         user = "j@prn.ovh",
         expires = FUTURE
       }
     })
-    local s = session_for_ip("10.35.1.53", SF_FILE, MAC)
+    local s = session_for_mac(MAC, "10.35.1.53", SF_FILE)
     assert(s, "session trouvée via MAC du paquet")
     return assert_eq(s.user, "j@prn.ovh", "user correct")
   end)

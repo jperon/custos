@@ -1,5 +1,5 @@
--- src/worker_q2.moon
--- Worker Q2 : portail captif (bridge mode).
+-- src/worker_captive.moon
+-- Worker captive : portail captif (bridge mode).
 --
 -- Reçoit les TCP SYN vers le port 80 non autorisés (NFQUEUE 2).
 -- Le payload NFQUEUE commence à l'en-tête IP (pas d'Ethernet).
@@ -15,7 +15,7 @@
 --   4. Log structuré
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :AUTH_SESSIONS_FILE } = require "config"
+config = require "config"
 parse: parse_eth, :new, :mac2s, :s2mac, proto: {:IP6, :IP4} = require "ipparse.l2.ethernet"
 parse: parse_ip, proto: l3_proto, :ip2s = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
@@ -27,7 +27,7 @@ bridge_raw = require "bridge_raw"
 { :flags } = require "ipparse.l4.tcp"
 { :SYN, :ACK, :FIN, :PSH } = flags
 mac_learner_ipc = require "mac_learner_ipc"
-{ :user_for_ip } = require "auth.sessions"
+{ :user_for_mac } = require "auth.sessions"
 
 -- ── TCP helper functions (ipparse for parsing and serialization) ──
 
@@ -35,7 +35,7 @@ PROTO_TCP   = l3_proto.TCP
 PROTO_UDP   = l3_proto.UDP
 
 -- Parse TCP SYN from NFQUEUE payload (bridge mode).
--- Q2 receives IP-only packets (no Ethernet header).
+-- captive receives IP-only packets (no Ethernet header).
 -- Returns the parsed IP and TCP objects (no Ethernet header).
 parse_syn = (raw) ->
   -- Parse IP at offset 1 (Lua 1-based string indexing)
@@ -156,7 +156,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
   if not client_mac_str or client_mac_str == "unknown"
     client_mac_str = mac_learner_ipc.get_mac client_ip_str
 
-  user          = user_for_ip client_ip_str, AUTH_SESSIONS_FILE, client_mac_str
+  user          = user_for_mac client_mac_str, client_ip_str, config.auth.sessions_file
 
   send = (f) ->
     res = send_frame raw_fd, f, ifindex
@@ -182,7 +182,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
   if ok
     fields = {
-      action:  "redirect_q2"
+      action:  "redirect_captive"
       queue:   2
       ip:      client_ip_str
       sport:   tcp.spt
@@ -201,9 +201,9 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
 
 -- ── Point d'entrée ───────────────────────────────────────────────
---- Start the Q2 captive portal worker.
+--- Start the captive captive portal worker.
 -- Opens the AF_PACKET socket (SOCK_RAW) and starts the NFQUEUE loop.
--- @tparam table auth_cfg  Auth configuration from cfg/filter.yml.
+-- @tparam table auth_cfg  Auth configuration from runtime config.
 -- @treturn nil
 run = (queue_num, auth_cfg) ->
   set_action_prefix "captive_"
@@ -220,8 +220,7 @@ run = (queue_num, auth_cfg) ->
   custom_redirect_url = auth_cfg.redirect_url
 
   -- Détection des IPs du portail captif (config explicite, env, auto-détection).
-  -- captive_ips.detect couvre tous les cas : config YAML, variables d'env,
-  -- compatibilité ascendante captive_ip, ip addr show, socket.connect.
+  -- captive_ips.detect couvre: captive_ip4/6, CAPTIVE_IP4/6, ip addr show, socket.connect.
   local_ip4, local_ip6 = detect_captive_ips auth_cfg
 
   -- Build IPv4 redirect URL

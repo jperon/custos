@@ -1,16 +1,12 @@
 -- src/auth/cert.moon
--- Génération d'un certificat TLS auto-signé et chargement du contexte wolfssl FFI.
---
--- Si les fichiers cert/key existent déjà, ils sont réutilisés directement.
--- Sinon, un certificat RSA-2048 auto-signé est généré via `openssl req`.
+-- Chargement de certificats TLS et génération dynamique via px5g (auth.cert_generator).
 --
 -- Utilise ffi_wolfssl (FFI wrapper pour WolfSSL, remplace luasec).
 
 ssl = require "auth.ffi_wolfssl"
 { :log_debug, :log_warn, :log_error } = require "log"
 
-CERT_DAYS     = 730     -- validité : 2 ans
-CERT_KEY_BITS = 2048
+CERT_DAYS = 730     -- validité : 2 ans
 
 --- Génère un hash court pour une chaîne de caractères.
 -- @tparam string s La chaîne à hacher
@@ -47,47 +43,52 @@ get_local_ips = () ->
       table.insert ips, "IP:#{ip}"
   ips
 
---- Génère un certificat RSA auto-signé via l'outil `openssl`.
+--- Écrit un PEM dans un fichier.
+-- @tparam string path Chemin de destination
+-- @tparam string content Contenu PEM
+-- @treturn boolean true si succès
+-- @treturn string|nil Message d'erreur si échec
+write_pem_file = (path, content) ->
+  fh, err = io.open path, "w"
+  unless fh
+    return false, "Impossible d'ouvrir #{path} : #{err}"
+  ok_w, write_err = pcall -> fh\write content
+  fh\close!
+  unless ok_w
+    return false, "Impossible d'écrire #{path} : #{write_err}"
+  true, nil
+
+--- Génère un certificat auto-signé via px5g et l'écrit dans les chemins demandés.
 -- @tparam string key_path  Chemin de destination pour la clé privée
 -- @tparam string cert_path Chemin de destination pour le certificat
 -- @tparam table sans Liste des Subject Alternative Names (ex: {"DNS:custos", "IP:1.2.3.4"})
 -- @treturn boolean true si la génération a réussi
--- @treturn string  Sortie de la commande (stderr inclus), ou message d'erreur
+-- @treturn string  Message d'erreur éventuel
 generate_self_signed = (key_path, cert_path, sans) ->
-  cnf_path = "tmp/auth.cnf"
-  san_str = table.concat sans, ","
-  config = " [ req ]\n" ..
-           " distinguished_name = req_distinguished_name\n" ..
-           " x509_extensions = v3_req\n" ..
-           " prompt = no\n\n" ..
-           " [ req_distinguished_name ]\n" ..
-           " CN = custos\n\n" ..
-           " [ v3_req ]\n" ..
-           " basicConstraints = CA:FALSE\n" ..
-           " keyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" ..
-           " extendedKeyUsage = serverAuth\n" ..
-           " subjectKeyIdentifier = hash\n" ..
-           " authorityKeyIdentifier = keyid:always,issuer:always\n" ..
-           " subjectAltName = #{san_str}\n"
-  ok_w, err_w = pcall ->
-    fh = io.open cnf_path, "w"
-    fh\write config
-    fh\close!
-  unless ok_w
-    return false, "Échec écriture config SAN : #{err_w}"
+  gen = require "auth.cert_generator"
+  dns_sans = {}
+  cn = "custos"
 
-  cmd = string.format(
-    "openssl req -x509 -newkey rsa:%d -keyout '%s' -out '%s' " ..
-    "-days %d -nodes -config '%s' 2>&1",
-    CERT_KEY_BITS, key_path, cert_path, CERT_DAYS, cnf_path
-  )
-  fh = io.popen cmd
-  out = fh\read "*a"
-  -- En Lua 5.1 / LuaJIT, popen:close() retourne true (booléen) si exit 0,
-  -- et nil en cas d'échec — jamais le nombre 0. Tester la truthiness.
-  ok_close = fh\close!
-  pcall os.remove, cnf_path
-  (ok_close ~= nil and ok_close ~= false), out
+  if sans
+    for san in *sans
+      dns_name = san\match "^DNS:(.+)$"
+      if dns_name and #dns_name > 0
+        cn = dns_name if cn == "custos"
+        table.insert dns_sans, dns_name
+
+  key_pem, cert_pem, ok, err = gen.generate_self_signed cn, dns_sans, CERT_DAYS
+  unless ok
+    return false, err or "Échec génération px5g"
+
+  ok_key, key_err = write_pem_file key_path, key_pem
+  return false, key_err unless ok_key
+
+  ok_cert, cert_err = write_pem_file cert_path, cert_pem
+  unless ok_cert
+    pcall os.remove, key_path
+    return false, cert_err
+
+  true, nil
 
 --- Crée un contexte TLS luasec en mode serveur.
 -- @tparam string key_path  Chemin de la clé privée PEM
@@ -124,8 +125,11 @@ file_exists = (path) ->
 -- @treturn table  Contexte luasec (ssl.newcontext)
 -- @raise   string Message d'erreur si échec
 load_or_generate = (key_path, cert_path) ->
+  key_path = key_path or "tmp/auth.key"
+  cert_path = cert_path or "tmp/auth.crt"
+
   -- Si on utilise les chemins par défaut, on bascule sur le nommage par hash
-  if (key_path == "tmp/auth.key" or key_path == nil) and (cert_path == "tmp/auth.crt" or cert_path == nil)
+  if key_path == "tmp/auth.key" and cert_path == "tmp/auth.crt"
     ips = get_local_ips()
     sans = { "DNS:custos" }
     for ip_san in *ips

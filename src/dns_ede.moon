@@ -4,7 +4,7 @@
 -- Provides:
 --   add_ede(dns, code, text)         -- injects/replaces OPT RR with EDE option
 --   build_blocked_response(dns_orig, dns_raw, reason) -- REFUSED + EDE 17
---   add_ede_ttl(dns_payload, reason) -- EDE 4 on TTL-modified allowed responses
+--   add_ede_modified(dns_payload, reason) -- EDE 4 on modified allowed/dnsonly responses
 --   strip_https_rr(dns_payload)      -- removes HTTPS/SVCB RRs from all sections
 
 dns_mod = require "ipparse.l7.dns"
@@ -86,12 +86,12 @@ build_blocked_response = (dns_orig, dns_raw, reason) ->
 
   tostring dns
 
---- Add EDE code 4 (Forged_Answer / TTL modified) to a raw DNS payload.
+--- Add EDE code 4 (Forged_Answer / modified answer) to a raw DNS payload.
 -- Returns the original payload unchanged on parse failure.
 -- @tparam string     dns_payload Raw DNS payload bytes.
 -- @tparam string|nil reason      Human-readable reason for EDE text.
 -- @treturn string Modified (or original) DNS payload.
-add_ede_ttl = (dns_payload, reason) ->
+add_ede_modified = (dns_payload, reason) ->
   dns = parse dns_payload, 1, false
   return dns_payload unless dns
 
@@ -185,4 +185,4 @@ strip_https_rr = (dns_payload) ->
     [SVCB]: true
   }
 
-{ :add_ede, :build_blocked_response, :add_ede_ttl, :strip_https_rr, :EDE_BLOCKED, :EDE_TTL_MODIFIED }
+{ :add_ede, :build_blocked_response, :add_ede_modified, :strip_https_rr, :EDE_BLOCKED, :EDE_TTL_MODIFIED }

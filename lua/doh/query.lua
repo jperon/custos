@@ -21,11 +21,7 @@ do
   local _obj_0 = require("log")
   log_allow, log_block, log_warn, log_debug, log_info = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_info
 end
-local AUTH_SESSIONS_FILE, NFT_SET_MAC4, NFT_SET_MAC6
-do
-  local _obj_0 = require("config")
-  AUTH_SESSIONS_FILE, NFT_SET_MAC4, NFT_SET_MAC6 = _obj_0.AUTH_SESSIONS_FILE, _obj_0.NFT_SET_MAC4, _obj_0.NFT_SET_MAC6
-end
+local config = require("config")
 local upstream_mod = require("doh.upstream")
 local MAC_ZERO = "00:00:00:00:00:00"
 local mac_valid
@@ -47,7 +43,9 @@ rr_addr = function(ans)
   return ans.rdata_str
 end
 local inject_answers
-inject_answers = function(answers, client_ip, client_mac)
+inject_answers = function(answers, client_ip, client_mac, rule_id, timeout, ack_corr)
+  rule_id = rule_id or "unknown_rule"
+  timeout = timeout or config.nft.ip_timeout
   local is_v6_client = (client_ip:find(":")) ~= nil
   for _index_0 = 1, #answers do
     local _continue_0 = false
@@ -65,7 +63,7 @@ inject_answers = function(answers, client_ip, client_mac)
             client_ip = client_ip,
             dest = addr
           })
-          add_ip4(client_ip, addr)
+          add_ip4(client_ip, addr, rule_id, timeout, ack_corr)
         end
         if mac_valid(client_mac) then
           log_debug({
@@ -73,7 +71,7 @@ inject_answers = function(answers, client_ip, client_mac)
             client_mac = client_mac,
             dest = addr
           })
-          add_mac4(client_mac, addr)
+          add_mac4(client_mac, addr, rule_id, timeout, ack_corr)
         end
       elseif ans.rtype == QTYPE.AAAA then
         if is_v6_client then
@@ -82,7 +80,7 @@ inject_answers = function(answers, client_ip, client_mac)
             client_ip = client_ip,
             dest = addr
           })
-          add_ip6(client_ip, addr)
+          add_ip6(client_ip, addr, rule_id, timeout, ack_corr)
         end
         if mac_valid(client_mac) then
           log_debug({
@@ -90,7 +88,7 @@ inject_answers = function(answers, client_ip, client_mac)
             client_mac = client_mac,
             dest = addr
           })
-          add_mac6(client_mac, addr)
+          add_mac6(client_mac, addr, rule_id, timeout, ack_corr)
         end
       end
       _continue_0 = true
@@ -101,7 +99,7 @@ inject_answers = function(answers, client_ip, client_mac)
   end
   local pending_seq = get_last_seq()
   if pending_seq then
-    return wait_ack(pending_seq)
+    return wait_ack(pending_seq, ack_corr)
   end
 end
 local process_query
@@ -115,7 +113,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
     })
     return nil, "dns_parse_failed"
   end
-  local user = user_for_mac(client_mac, client_ip, AUTH_SESSIONS_FILE)
+  local user = user_for_mac(client_mac, client_ip, config.auth.sessions_file)
   log_debug({
     action = "process_query",
     client_ip = client_ip,
@@ -127,6 +125,8 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
   local allow_reason = nil
   local blocked_dns = nil
   local any_blocked = false
+  local allow_rule_id = nil
+  local allow_timeout = nil
   local questions = dns.questions or (dns.question and {
     dns.question
   } or { })
@@ -145,7 +145,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       qtype = q.qtype_name or tostring(q.qtype),
       client_ip = client_ip
     })
-    local allowed, reason, rule = decide(req)
+    local allowed, reason, rule, timeout = decide(req)
     local fields = {
       action = (function()
         if allowed then
@@ -165,6 +165,8 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
     if allowed then
       log_allow(fields)
       allow_reason = reason
+      allow_rule_id = rule
+      allow_timeout = timeout
     else
       log_block(fields)
       any_blocked = true
@@ -200,7 +202,8 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
   local resp_dns, resp_err = parse(resp_raw, 1, false)
   if resp_dns then
     local answers = resp_dns.answers or { }
-    inject_answers(answers, client_ip, client_mac)
+    local ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")
+    inject_answers(answers, client_ip, client_mac, allow_rule_id, allow_timeout, ack_corr)
     log_debug({
       action = "query_allowed",
       client_ip = client_ip,

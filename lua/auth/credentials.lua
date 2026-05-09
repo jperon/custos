@@ -1,70 +1,110 @@
-local ffi = require("ffi")
 local bit = require("bit")
-local crypto
-do
-  local ok, lib = pcall(ffi.load, "crypto")
-  if not (ok) then
-    ok, lib = pcall(ffi.load, "libcrypto.so.3")
-  end
-  if not (ok) then
-    ok, lib = pcall(ffi.load, "libcrypto.so.1.1")
-  end
-  if not (ok) then
-    error("libcrypto introuvable (paquet openssl requis)")
-  end
-  crypto = lib
-end
-ffi.cdef([[  int PKCS5_PBKDF2_HMAC(
-    const char *pass, int passlen,
-    const unsigned char *salt, int saltlen,
-    int iter,
-    const void *digest,
-    int keylen, unsigned char *out
-  );
-  const void* EVP_sha256(void);
-  int RAND_bytes(unsigned char *buf, int num);
-  int chmod(const char *path, unsigned int mode);
+local ffi = require("ffi")
+ffi.cdef([[  int chmod(const char *path, unsigned int mode);
 ]])
-local ENOENT = 2
 local HASH_LEN = 32
 local DEFAULT_ITER = 100000
 local DEFAULT_SALT_LEN = 16
-local hex_to_buf
-hex_to_buf = function(hex)
-  local n = math.floor(#hex / 2)
-  local buf = ffi.new("uint8_t[?]", n)
-  for i = 0, n - 1 do
-    buf[i] = tonumber(hex:sub(i * 2 + 1, i * 2 + 2), 16)
-  end
-  return buf, n
+local is_hex_digest
+is_hex_digest = function(s)
+  return type(s) == "string" and #s == 64 and s:match("^[0-9a-fA-F]+$") ~= nil
 end
-local buf_to_hex
-buf_to_hex = function(buf, len)
-  local t = { }
-  for i = 0, len - 1 do
-    t[i + 1] = string.format("%02x", buf[i])
+local load_sha
+load_sha = function()
+  local ok, mod = pcall(require, "ipparse.lib.sha")
+  if ok and mod and mod.hmac and mod.sha256 then
+    return mod
   end
-  return table.concat(t)
+  ok, mod = pcall(require, "ipparse.lib.sha2")
+  if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin then
+    return mod
+  end
+  ok, mod = pcall(require, "sha2")
+  if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin then
+    return mod
+  end
+  return error("Aucun backend SHA/HMAC disponible")
+end
+local sha = load_sha()
+local hmac, sha256
+hmac, sha256 = sha.hmac, sha.sha256
+local hex_to_bin = sha.hex_to_bin or function(hex)
+  local out = { }
+  for i = 1, #hex, 2 do
+    out[#out + 1] = string.char(tonumber(hex:sub(i, i + 1), 16))
+  end
+  return table.concat(out)
+end
+local hmac_bin
+hmac_bin = function(key, msg)
+  local d = hmac(sha256, key, msg)
+  if is_hex_digest(d) then
+    return hex_to_bin(d)
+  else
+    return d
+  end
+end
+local bin_to_hex
+bin_to_hex = function(s)
+  return (s:gsub(".", function(c)
+    return string.format("%02x", string.byte(c))
+  end))
+end
+local u32be
+u32be = function(n)
+  return string.char(bit.band(bit.rshift(n, 24), 0xFF), bit.band(bit.rshift(n, 16), 0xFF), bit.band(bit.rshift(n, 8), 0xFF), bit.band(n, 0xFF))
+end
+local xor_bytes
+xor_bytes = function(a, b)
+  local out = { }
+  for i = 1, #a do
+    out[i] = string.char(bit.bxor(a:byte(i), b:byte(i)))
+  end
+  return table.concat(out)
+end
+local pbkdf2_raw
+pbkdf2_raw = function(password, salt_bin, iterations, dk_len)
+  if dk_len == nil then
+    dk_len = HASH_LEN
+  end
+  local hlen = HASH_LEN
+  local blocks = math.ceil(dk_len / hlen)
+  local t = { }
+  for i = 1, blocks do
+    local u = hmac_bin(password, salt_bin .. u32be(i))
+    local acc = u
+    for _ = 2, iterations do
+      u = hmac_bin(password, u)
+      acc = xor_bytes(acc, u)
+    end
+    t[#t + 1] = acc
+  end
+  local derived = table.concat(t)
+  return derived:sub(1, dk_len)
 end
 local pbkdf2
 pbkdf2 = function(password, salt_hex, iterations)
-  local salt_buf, salt_len = hex_to_buf(salt_hex)
-  local out = ffi.new("uint8_t[32]")
-  local rc = crypto.PKCS5_PBKDF2_HMAC(password, #password, salt_buf, salt_len, iterations, crypto.EVP_sha256(), HASH_LEN, out)
-  if not (rc == 1) then
-    error("PKCS5_PBKDF2_HMAC a échoué")
+  local salt_bin = hex_to_bin(salt_hex)
+  local out = pbkdf2_raw(password, salt_bin, iterations, HASH_LEN)
+  return bin_to_hex(out)
+end
+local read_urandom
+read_urandom = function(n)
+  local fh, err = io.open("/dev/urandom", "rb")
+  if not (fh) then
+    error("Impossible d'ouvrir /dev/urandom : " .. tostring(err))
   end
-  return buf_to_hex(out, HASH_LEN)
+  local data = fh:read(n)
+  fh:close()
+  if not (data and #data == n) then
+    error("Lecture incomplète de /dev/urandom")
+  end
+  return data
 end
 local hash_password
 hash_password = function(password, iterations)
   iterations = iterations or DEFAULT_ITER
-  local salt_buf = ffi.new("uint8_t[?]", DEFAULT_SALT_LEN)
-  local rc = crypto.RAND_bytes(salt_buf, DEFAULT_SALT_LEN)
-  if not (rc == 1) then
-    error("RAND_bytes a échoué")
-  end
-  local salt_hex = buf_to_hex(salt_buf, DEFAULT_SALT_LEN)
+  local salt_hex = bin_to_hex(read_urandom(DEFAULT_SALT_LEN))
   local hash = pbkdf2(password, salt_hex, iterations)
   return "pbkdf2-sha256:" .. tostring(iterations) .. ":" .. tostring(salt_hex) .. ":" .. tostring(hash)
 end
@@ -130,18 +170,12 @@ register_user = function(username, password, secrets_path, current_secrets)
   if not (fh) then
     return nil, "Impossible de créer le fichier temporaire : " .. tostring(err)
   end
-  local existing, exist_err = io.open(secrets_path, "r")
+  local existing = io.open(secrets_path, "r")
   if existing then
     for line in existing:lines() do
       fh:write(line .. "\n")
     end
     existing:close()
-  else
-    if not (ffi.C.__errno_location()[0] == ENOENT) then
-      fh:close()
-      os.remove(tmp_path)
-      return nil, "Impossible de lire le fichier secrets : " .. tostring(exist_err)
-    end
   end
   fh:write(tostring(username) .. ":" .. tostring(hash_entry) .. "\n")
   fh:close()

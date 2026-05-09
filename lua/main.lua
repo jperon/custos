@@ -74,7 +74,7 @@ end
 local create_pipes
 create_pipes = function()
   return {
-    q0q1 = create_pipe("q0q1"),
+    question_response = create_pipe("question_response"),
     learn = create_pipe("mac_learn"),
     events = create_pipe("events"),
     nft = create_pipe("nft")
@@ -82,25 +82,14 @@ create_pipes = function()
 end
 local load_auth_cfg
 load_auth_cfg = function()
-  local load_config
-  load_config = require("filter.lib.load_config").load_config
-  local filter_cfg_path = os.getenv("CUSTOS_FILTER_CONFIG") or "/etc/custos/filter.yml"
-  local filter_cfg, cfg_err = load_config(filter_cfg_path)
-  if not (filter_cfg) then
-    log_warn({
-      action = "auth_cfg_load_warning",
-      path = filter_cfg_path,
-      err = cfg_err
-    })
-    filter_cfg = {
-      auth = { }
-    }
+  local auth = { }
+  for k, v in pairs(config.auth or { }) do
+    auth[k] = v
   end
-  local auth = filter_cfg.auth or { }
-  auth.port = auth.port or 33443
-  auth.idle_timeout = auth.idle_timeout or 120
-  auth.heartbeat_interval = auth.heartbeat_interval or 30
-  auth.session_ttl = auth.session_ttl or 0
+  auth.port = tonumber(auth.port) or 33443
+  auth.idle_timeout = tonumber(auth.idle_timeout) or 120
+  auth.heartbeat_interval = tonumber(auth.heartbeat_interval) or 30
+  auth.session_ttl = tonumber(auth.session_ttl) or 0
   auth.secrets = auth.secrets or "/etc/custos/secrets"
   auth.sessions_file = auth.sessions_file or "./tmp/sessions.lua"
   return auth
@@ -108,27 +97,27 @@ end
 local load_doh_cfg
 load_doh_cfg = function()
   return {
-    enabled = config.DOH_ENABLED == "1",
-    port = tonumber(config.DOH_PORT) or 8443,
+    enabled = config.doh.enabled,
+    port = tonumber(config.doh.port) or 8443,
     upstream_ip = (function()
-      if config.DOH_PREFER_IPV6 == "1" and probe_ipv6(config.DOH_UPSTREAM_IPV6) then
-        return config.DOH_UPSTREAM_IPV6
+      if config.doh.prefer_ipv6 and probe_ipv6(config.doh.upstream_ipv6) then
+        return config.doh.upstream_ipv6
       else
-        return config.DOH_UPSTREAM_IPV4
+        return config.doh.upstream_ipv4
       end
     end)(),
-    upstream_port = tonumber(config.DOH_UPSTREAM_PORT) or 53,
-    timeout_ms = tonumber(config.DOH_UPSTREAM_TIMEOUT_MS) or 2000,
+    upstream_port = tonumber(config.doh.upstream_port) or 53,
+    timeout_ms = tonumber(config.doh.upstream_timeout_ms) or 2000,
     cert_path = (function()
-      if config.DOH_CERT_PATH and #config.DOH_CERT_PATH > 0 then
-        return config.DOH_CERT_PATH
+      if config.doh.cert_path and #config.doh.cert_path > 0 then
+        return config.doh.cert_path
       else
         return nil
       end
     end)(),
     key_path = (function()
-      if config.DOH_KEY_PATH and #config.DOH_KEY_PATH > 0 then
-        return config.DOH_KEY_PATH
+      if config.doh.key_path and #config.doh.key_path > 0 then
+        return config.doh.key_path
       else
         return nil
       end
@@ -138,12 +127,12 @@ end
 local close_supervisor_fds
 close_supervisor_fds = function(pipes)
   if pipes then
-    if pipes.q0q1 then
-      if pipes.q0q1.rfd then
-        libc.close(pipes.q0q1.rfd)
+    if pipes.question_response then
+      if pipes.question_response.rfd then
+        libc.close(pipes.question_response.rfd)
       end
-      if pipes.q0q1.wfd then
-        libc.close(pipes.q0q1.wfd)
+      if pipes.question_response.wfd then
+        libc.close(pipes.question_response.wfd)
       end
     end
     if pipes.learn then
@@ -208,10 +197,10 @@ supervise = function(pipes, sfd)
     end
     return queues
   end
-  local questions_queues = parse_queues(config.QUEUE_QUESTIONS)
-  local responses_queues = parse_queues(config.QUEUE_RESPONSES)
-  local captive_queues = parse_queues(config.QUEUE_CAPTIVE)
-  local reject_queues = parse_queues(config.QUEUE_REJECT)
+  local questions_queues = parse_queues(config.nfqueue.questions)
+  local responses_queues = parse_queues(config.nfqueue.responses)
+  local captive_queues = parse_queues(config.nfqueue.captive)
+  local reject_queues = parse_queues(config.nfqueue.reject)
   local bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
   local detect_bridge_slaves
   detect_bridge_slaves = function()
@@ -283,9 +272,9 @@ supervise = function(pipes, sfd)
         return require("worker_events").run(fds.rfd, fds.dir, fds.max_age_hours, fds.min_free_pct)
       end), {
         rfd = pipes.events.rfd,
-        dir = config.EVENTS_DIR or "/tmp/custos/events",
-        max_age_hours = config.EVENTS_MAX_AGE_HOURS or 168,
-        min_free_pct = config.EVENTS_MIN_FREE_PCT or 30
+        dir = config.events.dir or "/tmp/custos/events",
+        max_age_hours = config.events.max_age_hours or 168,
+        min_free_pct = config.events.min_free_pct or 30
       })
     end
   })
@@ -298,7 +287,7 @@ supervise = function(pipes, sfd)
       end, pipes.learn.wfd)
     end
   })
-  local auth_queue_num = tonumber(config.QUEUE_AUTH) or 5
+  local auth_queue_num = tonumber(config.nfqueue.auth) or 5
   table.insert(workers, {
     name = "auth-q",
     pid = nil,
@@ -314,9 +303,9 @@ supervise = function(pipes, sfd)
       pid = nil,
       restart_fn = function()
         return fork_worker("dns-q" .. tostring(q_num), (function(fds)
-          return require("worker_questions").run(q_num, fds.q0q1_wfd, fds.learn_wfd, fds.events_wfd)
+          return require("worker_questions").run(q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd)
         end), {
-          q0q1_wfd = pipes.q0q1.wfd,
+          question_response_wfd = pipes.question_response.wfd,
           learn_wfd = pipes.learn.wfd,
           events_wfd = pipes.events.wfd
         })
@@ -332,7 +321,7 @@ supervise = function(pipes, sfd)
         return fork_worker("resp-q" .. tostring(q_num), function(fds)
           return require("worker_responses").run(q_num, fds)
         end, {
-          q0q1_rfd = pipes.q0q1.rfd,
+          question_response_rfd = pipes.question_response.rfd,
           nft_wfd = pipes.nft.wfd,
           ack_rfd = ack_info.rfd,
           worker_idx = ack_info.worker_idx
@@ -362,8 +351,8 @@ supervise = function(pipes, sfd)
       end
     })
   end
-  local sni_queue_num = tonumber(config.QUEUE_SNI_LOG) or 6
-  if config.QUEUE_SNI_LOG then
+  local sni_queue_num = tonumber(config.nfqueue.sni_log) or 6
+  if config.nfqueue.sni_log then
     table.insert(workers, {
       name = "tls-log",
       pid = nil,
@@ -426,7 +415,7 @@ supervise = function(pipes, sfd)
         filter.load()
         for _index_0 = 1, #workers do
           local w = workers[_index_0]
-          if (w.name:match("^questions%-q") or w.name:match("^responses%-q") or w.name:match("^captive%-q") or w.name:match("^reject%-q") or w.name == "DOH") and w.pid and w.pid > 0 then
+          if (w.name:match("^dns%-q") or w.name:match("^resp%-q") or w.name:match("^cap%-q") or w.name:match("^rej%-q") or w.name == "doh") and w.pid and w.pid > 0 then
             log_info({
               action = "supervisor_sighup_kill",
               name = w.name,
@@ -448,7 +437,7 @@ supervise = function(pipes, sfd)
         end
         for _index_0 = 1, #workers do
           local w = workers[_index_0]
-          if w.name == "AUTH" and w.pid and w.pid > 0 then
+          if w.name == "auth" and w.pid and w.pid > 0 then
             log_info({
               action = "supervisor_sighup_forward_auth",
               pid = w.pid
@@ -501,8 +490,8 @@ local sfd = create_signal_fd()
 local pipes = create_pipes()
 log_info({
   action = "ipc_pipes_created",
-  q0q1_rfd = pipes.q0q1.rfd,
-  q0q1_wfd = pipes.q0q1.wfd,
+  question_response_rfd = pipes.question_response.rfd,
+  question_response_wfd = pipes.question_response.wfd,
   learn_rfd = pipes.learn.rfd,
   learn_wfd = pipes.learn.wfd,
   events_rfd = pipes.events.rfd,

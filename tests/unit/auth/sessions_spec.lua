@@ -1,7 +1,7 @@
-local serialize, write_sessions, load_sessions, add_session, purge_expired, session_for_ip, user_for_ip, reset_cache
+local serialize, write_sessions, load_sessions, add_session, purge_expired, session_for_mac, user_for_mac, reset_cache
 do
   local _obj_0 = require("auth.sessions")
-  serialize, write_sessions, load_sessions, add_session, purge_expired, session_for_ip, user_for_ip, reset_cache = _obj_0.serialize, _obj_0.write_sessions, _obj_0.load_sessions, _obj_0.add_session, _obj_0.purge_expired, _obj_0.session_for_ip, _obj_0.user_for_ip, _obj_0.reset_cache
+  serialize, write_sessions, load_sessions, add_session, purge_expired, session_for_mac, user_for_mac, reset_cache = _obj_0.serialize, _obj_0.write_sessions, _obj_0.load_sessions, _obj_0.add_session, _obj_0.purge_expired, _obj_0.session_for_mac, _obj_0.user_for_mac, _obj_0.reset_cache
 end
 local SESS_FILE = "tmp/sessions_spec_main.lua"
 local SF_FILE = "tmp/sessions_spec_sf.lua"
@@ -280,7 +280,7 @@ return describe("auth/sessions", function()
       return assert.is_nil(sessions["aa:bb:cc:dd:ee:07"])
     end)
   end)
-  describe("session_for_ip", function()
+  describe("session_for_mac", function()
     local MAC = "aa:bb:cc:dd:ee:ff"
     before_each(function()
       return reset_cache()
@@ -295,7 +295,7 @@ return describe("auth/sessions", function()
           expires = FUTURE
         }
       }, SF_FILE)
-      local s = session_for_ip(nil, SF_FILE, MAC)
+      local s = session_for_mac(MAC, nil, SF_FILE)
       assert.is_not_nil(s)
       return assert.equals("alice", s.user)
     end)
@@ -309,7 +309,7 @@ return describe("auth/sessions", function()
           }
         }
       }, SF_FILE)
-      local s = session_for_ip("10.0.0.1", SF_FILE)
+      local s = session_for_mac(nil, "10.0.0.1", SF_FILE)
       assert.is_not_nil(s)
       return assert.equals("alice", s.user)
     end)
@@ -323,7 +323,7 @@ return describe("auth/sessions", function()
           }
         }
       }, SF_FILE)
-      local s = session_for_ip("fd00::1", SF_FILE)
+      local s = session_for_mac(nil, "fd00::1", SF_FILE)
       assert.is_not_nil(s)
       return assert.equals("j@prn.ovh", s.user)
     end)
@@ -337,7 +337,7 @@ return describe("auth/sessions", function()
           }
         }
       }, SF_FILE)
-      local s = session_for_ip("10.0.0.99", SF_FILE, "unknown")
+      local s = session_for_mac("unknown", "10.0.0.99", SF_FILE)
       assert.is_not_nil(s)
       return assert.equals("alice", s.user)
     end)
@@ -348,7 +348,7 @@ return describe("auth/sessions", function()
           expires = FUTURE
         }
       }, SF_FILE)
-      local s = session_for_ip("9.9.9.9", SF_FILE)
+      local s = session_for_mac(nil, "9.9.9.9", SF_FILE)
       return assert.is_nil(s)
     end)
     it("session expirée → nil", function()
@@ -358,7 +358,7 @@ return describe("auth/sessions", function()
           expires = 1
         }
       }, SF_FILE)
-      local s = session_for_ip("10.0.0.9", SF_FILE, MAC)
+      local s = session_for_mac(MAC, "10.0.0.9", SF_FILE)
       return assert.is_nil(s)
     end)
     return it("MAC fournie explicitement prime sur scan IP", function()
@@ -368,12 +368,12 @@ return describe("auth/sessions", function()
           expires = FUTURE
         }
       }, SF_FILE)
-      local s = session_for_ip("10.35.1.53", SF_FILE, MAC)
+      local s = session_for_mac(MAC, "10.35.1.53", SF_FILE)
       assert.is_not_nil(s)
       return assert.equals("j@prn.ovh", s.user)
     end)
   end)
-  describe("user_for_ip", function()
+  describe("user_for_mac", function()
     local MAC = "aa:bb:cc:dd:ee:ff"
     before_each(function()
       return reset_cache()
@@ -391,11 +391,11 @@ return describe("auth/sessions", function()
           }
         }
       }, SF_FILE)
-      local user = user_for_ip("10.35.1.53", SF_FILE)
+      local user = user_for_mac(nil, "10.35.1.53", SF_FILE)
       return assert.equals("j@prn.ovh", user)
     end)
     it("IP nil → nil", function()
-      local user = user_for_ip(nil, SF_FILE)
+      local user = user_for_mac(nil, nil, SF_FILE)
       return assert.is_nil(user)
     end)
     it("IP sans session correspondante → nil", function()
@@ -408,7 +408,7 @@ return describe("auth/sessions", function()
           }
         }
       }, SF_FILE)
-      local user = user_for_ip("192.168.99.1", SF_FILE)
+      local user = user_for_mac(nil, "192.168.99.1", SF_FILE)
       return assert.is_nil(user)
     end)
     return it("session expirée → nil", function()
@@ -421,7 +421,7 @@ return describe("auth/sessions", function()
           }
         }
       }, SF_FILE)
-      local user = user_for_ip("10.0.0.1", SF_FILE, MAC)
+      local user = user_for_mac(MAC, "10.0.0.1", SF_FILE)
       return assert.is_nil(user)
     end)
   end)
@@ -444,7 +444,7 @@ return describe("auth/sessions", function()
     end)
   end)
   return describe("enrich_session_ip + bind_session_mac", function()
-    local enrich_session_ip, bind_session_mac, session_for_mac
+    local enrich_session_ip, bind_session_mac
     do
       local _obj_0 = require("auth.sessions")
       enrich_session_ip, bind_session_mac, session_for_mac = _obj_0.enrich_session_ip, _obj_0.bind_session_mac, _obj_0.session_for_mac

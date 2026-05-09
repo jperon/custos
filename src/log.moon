@@ -11,7 +11,7 @@
 -- message après la fenêtre inclut le champ `suppressed=N`.
 
 { :ffi, :libc } = require "ffi_defs"
-{ :LOG_LEVEL } = require "config" -- Importer LOG_LEVEL de config.moon
+config = require "config"
 
 bit = require "bit"
 
@@ -36,7 +36,7 @@ LOG_LEVEL_MAP = {
 }
 
 -- Niveau de log configuré, converti en numérique
-CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[LOG_LEVEL] or LOG_LEVEL_MAP.INFO
+CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[config.runtime.log_level] or LOG_LEVEL_MAP.INFO
 
 --- Retourne la valeur numérique d'un niveau de log.
 -- @tparam string level Niveau de log (ex: "INFO", "WARN")
@@ -48,7 +48,7 @@ get_log_level_num = (level) -> LOG_LEVEL_MAP[level] or 0
 -- La clé de RL est fields.action ou, à défaut, le niveau (ALLOW/BLOCK).
 RL_CONFIG = {
   captive_probe:      { keys: {"ip", "path"},                window: 60  }
-  captive_redirect_q2: { keys: {"ip", "path"},                window: 60  }
+  captive_redirect: { keys: {"ip", "path"},                window: 60  }
   ALLOW:              { keys: {"mac_src", "qname", "qtype"}, window: 30  }
   BLOCK:              { keys: {"mac_src", "qname", "qtype"}, window: 30  }
   no_ipv6_for_client: { keys: {"client"},                    window: 120 }

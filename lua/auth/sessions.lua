@@ -291,11 +291,5 @@ return {
   session_for_mac = session_for_mac,
   user_for_mac = user_for_mac,
   enrich_session_ip = enrich_session_ip,
-  bind_session_mac = bind_session_mac,
-  session_for_ip = function(ip, path, mac)
-    return session_for_mac(mac, ip, path)
-  end,
-  user_for_ip = function(ip, path, mac)
-    return user_for_mac(mac, ip, path)
-  end
+  bind_session_mac = bind_session_mac
 }

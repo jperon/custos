@@ -226,9 +226,9 @@ report("ether saddr . ip daddr @mac4_allowed dans bridge forward", (fwd and fwd:
 report("ether saddr . ip6 daddr @mac6_allowed dans bridge forward", (fwd and fwd:match("mac6_allowed")) ~= nil, fwd or "")
 local qraw
 _, qraw = ssh("cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null")
-report("NFQUEUE 0 connecté (worker Q0)", (qraw and qraw:match("^%s*0%s")) ~= nil, qraw or "")
-report("NFQUEUE 1 connecté (worker Q1)", (qraw and qraw:match("\n?%s*1%s")) ~= nil, qraw or "")
-report("NFQUEUE 2 connecté (worker Q2-captive)", (qraw and qraw:match("\n?%s*2%s")) ~= nil, qraw or "")
+report("NFQUEUE 0 connecté (worker question)", (qraw and qraw:match("^%s*0%s")) ~= nil, qraw or "")
+report("NFQUEUE 1 connecté (worker response)", (qraw and qraw:match("\n?%s*1%s")) ~= nil, qraw or "")
+report("NFQUEUE 2 connecté (worker captive-captive)", (qraw and qraw:match("\n?%s*2%s")) ~= nil, qraw or "")
 local nc443
 _, nc443 = run("nc -z -w3 " .. tostring(LAN_IP) .. " 33443 2>/dev/null && echo open || echo closed")
 report("Auth server sur 33443", (nc443 and nc443:match("open")) ~= nil, "")
@@ -240,7 +240,7 @@ _, br_fwd = ssh("nft list chain bridge dns-filter-bridge forward 2>/dev/null")
 report("Queue 0 DNS dans bridge forward", (br_fwd and br_fwd:match("queue to 0")) ~= nil, br_fwd or "")
 report("Queue 1 DNS dans bridge forward", (br_fwd and br_fwd:match("queue to 1")) ~= nil, br_fwd or "")
 report("Queue 2 captif dans bridge forward", (br_fwd and br_fwd:match("queue to 2")) ~= nil, br_fwd or "")
-report("REJECT/RST (Q3) dans bridge forward", (br_fwd and br_fwd:match("queue to 3")) ~= nil, br_fwd or "")
+report("REJECT/RST (reject) dans bridge forward", (br_fwd and br_fwd:match("queue to 3")) ~= nil, br_fwd or "")
 local wl4
 _, wl4 = ssh("nft list set bridge dns-filter-bridge ip4_dest_whitelist 2>/dev/null")
 report("Set ip4_dest_whitelist dans bridge dns-filter-bridge", (wl4 and wl4:match("ip4_dest_whitelist")) ~= nil, wl4 or "")
@@ -433,22 +433,22 @@ local auth_set2
 _, auth_set2 = ssh("nft list set bridge dns-filter-bridge authenticated_ips 2>/dev/null")
 report("IP retirée de authenticated_ips après logout", not (auth_set2 and auth_set2:match(local_ip_pat)), (auth_set2 or "(vide)"):sub(1, 120))
 print("")
-print(tostring(C.bold) .. "▶ Portail captif Q2 (interception TCP/80)" .. tostring(C.reset))
+print(tostring(C.bold) .. "▶ Portail captif (interception TCP/80)" .. tostring(C.reset))
 ssh("nft flush set ip  dns-filter-bridge authenticated_ips 2>/dev/null; true")
 ssh("nft flush set ip6 dns-filter-bridge authenticated_ips6 2>/dev/null; true")
 run("curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 3 http://1.2.3.4/ 2>&1")
 os.execute("sleep 2")
-local log_q2_out
-_, log_q2_out = ssh(log_since_start("grep captive_redirect_q2 | grep '" .. tostring(LOCAL_IP) .. "' | tail -1"))
-report("Portail captif Q2 — log captive_redirect_q2 présent", (log_q2_out and #log_q2_out > 5) ~= nil, log_q2_out or "(aucun log Q2)")
-local ok_code_q2
-_, ok_code_q2 = run("curl -k -s -o /dev/null -w '%{http_code}' -X POST -d 'user=testuser&password=testpass' " .. tostring(AUTH_URL) .. "/login 2>&1")
-ok_code_q2 = (ok_code_q2 or ""):gsub("%s+", "")
+local log_captive_out
+_, log_captive_out = ssh(log_since_start("grep captive_redirect | grep '" .. tostring(LOCAL_IP) .. "' | tail -1"))
+report("Portail captif — log captive_redirect présent", (log_captive_out and #log_captive_out > 5) ~= nil, log_captive_out or "(aucun log captive)")
+local ok_code_captive
+_, ok_code_captive = run("curl -k -s -o /dev/null -w '%{http_code}' -X POST -d 'user=testuser&password=testpass' " .. tostring(AUTH_URL) .. "/login 2>&1")
+ok_code_captive = (ok_code_captive or ""):gsub("%s+", "")
 os.execute("sleep 1")
-local auth_set_q2
-_, auth_set_q2 = ssh("nft list set ip dns-filter-bridge authenticated_ips 2>/dev/null")
+local auth_set_captive
+_, auth_set_captive = ssh("nft list set ip dns-filter-bridge authenticated_ips 2>/dev/null")
 local_ip_pat = LOCAL_IP:gsub("%.", "%%.")
-report("Portail captif — IP (" .. tostring(LOCAL_IP) .. ") dans authenticated_ips après login", (auth_set_q2 and auth_set_q2:match(local_ip_pat)) ~= nil, (auth_set_q2 or "(vide)"):sub(1, 120))
+report("Portail captif — IP (" .. tostring(LOCAL_IP) .. ") dans authenticated_ips après login", (auth_set_captive and auth_set_captive:match(local_ip_pat)) ~= nil, (auth_set_captive or "(vide)"):sub(1, 120))
 print("")
 print(tostring(C.bold) .. "▶ Portail captif (port 33080)" .. tostring(C.reset))
 local captive_get

@@ -3,11 +3,7 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local AF_INET, AF_INET6
-do
-  local _obj_0 = require("config")
-  AF_INET, AF_INET6 = _obj_0.AF_INET, _obj_0.AF_INET6
-end
+local config = require("config")
 local log_info, log_warn, log_error, log_debug
 do
   local _obj_0 = require("log")
@@ -45,8 +41,8 @@ run_queue = function(queue_num, callback)
     action = "queue_bind_pf",
     queue = queue_num
   })
-  libnfq.nfq_bind_pf(h, AF_INET)
-  libnfq.nfq_bind_pf(h, AF_INET6)
+  libnfq.nfq_bind_pf(h, config.runtime.af_inet)
+  libnfq.nfq_bind_pf(h, config.runtime.af_inet6)
   libnfq.nfq_bind_pf(h, AF_BRIDGE)
   local qh_box = ffi.new("nfq_q_handle*[1]")
   log_debug({

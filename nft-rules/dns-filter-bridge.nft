@@ -191,6 +191,9 @@ table bridge dns-filter-bridge {
     # meta pkttype host couvre toutes les IPs assignées au routeur (v4 et v6).
     meta pkttype host accept comment "Traffic to router itself"
 
+    # SSH management access (required for remote administration).
+    tcp dport 22 accept comment "SSH management"
+
     # Authenticated client, destination not in sets → {QUEUE_REJECT} (MAC learning + forge RST or ICMP admin-prohibited).
     # Must come before {QUEUE_CAPTIVE} so authenticated clients never see the captive portal again.
     ether saddr @authenticated_macs limit rate 50/second burst 10 packets log level debug prefix "custos auth ether: " counter queue num {QUEUE_REJECT} comment "Auth reject MAC"

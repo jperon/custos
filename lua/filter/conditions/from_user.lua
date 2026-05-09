@@ -3,8 +3,7 @@ do
   local _obj_0 = require("auth.sessions")
   session_for_mac, enrich_session_ip, bind_session_mac = _obj_0.session_for_mac, _obj_0.enrich_session_ip, _obj_0.bind_session_mac
 end
-local AUTH_SESSIONS_FILE
-AUTH_SESSIONS_FILE = require("config").AUTH_SESSIONS_FILE
+local config = require("config")
 local _get_mac = nil
 local _get_mac_tried = false
 local safe_get_mac
@@ -28,7 +27,7 @@ safe_get_mac = function(ip_str)
   return _get_mac(ip_str)
 end
 return function(cfg)
-  local sessions_file = (cfg.auth and cfg.auth.sessions_file) or AUTH_SESSIONS_FILE
+  local sessions_file = (cfg.auth and cfg.auth.sessions_file) or config.auth.sessions_file
   return function(user)
     return function(req)
       local mac = req.mac

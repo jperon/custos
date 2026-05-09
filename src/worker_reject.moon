@@ -1,5 +1,5 @@
--- src/worker_q3.moon
--- Worker Q3: forge reject (bridge mode).
+-- src/worker_reject.moon
+-- Worker reject: forge reject (bridge mode).
 --
 -- Receives all silently-dropped packets from NFQUEUE 3.
 -- The payload starts at the IP header (nftables bridge NFQUEUE delivers
@@ -210,7 +210,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
   libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #forged, forged_ptr
 
   log_debug {
-    action:   "q3_reject"
+    action:   "reject_forge"
     queue:    3
     src:      src_ip
     dst:      dst_ip
@@ -223,7 +223,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
   VERDICT_DONE
 
 -- ── Entry point ───────────────────────────────────────────────────
---- Start the Q3 forge-reject worker.
+--- Start the reject forge-reject worker.
 -- Opens NFQUEUE 3 and enters the packet processing loop.
 -- @tparam table _cfg  Ignored (reserved for future use).
 -- @treturn nil

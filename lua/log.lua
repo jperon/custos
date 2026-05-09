@@ -3,8 +3,7 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
-local LOG_LEVEL
-LOG_LEVEL = require("config").LOG_LEVEL
+local config = require("config")
 local bit = require("bit")
 local STDOUT_FILENO = 1
 local ts = ffi.new("timespec_t")
@@ -21,7 +20,7 @@ local LOG_LEVEL_MAP = {
   BLOCK = 4,
   TRACE = 6
 }
-local CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[LOG_LEVEL] or LOG_LEVEL_MAP.INFO
+local CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[config.runtime.log_level] or LOG_LEVEL_MAP.INFO
 local get_log_level_num
 get_log_level_num = function(level)
   return LOG_LEVEL_MAP[level] or 0
@@ -34,7 +33,7 @@ local RL_CONFIG = {
     },
     window = 60
   },
-  captive_redirect_q2 = {
+  captive_redirect = {
     keys = {
       "ip",
       "path"

@@ -3,10 +3,10 @@
 --
 -- Ces sets contiennent des destinations statiques (IPs ou CIDRs) accessibles
 -- par n'importe quel client, sans résolution DNS préalable.
--- Rechargeable à chaud via filter.reload() (déclenché par SIGHUP sur Q0).
+-- Rechargeable à chaud via filter.reload() (déclenché par SIGHUP sur question).
 
 { :ffi, :libnft } = require "ffi_defs"
-{ :NFT_FAMILY, :NFT_TABLE } = require "config"
+config = require "config"
 
 ctx = libnft.nft_ctx_new 0
 error "nft_ctx_new() échoué dans ip_whitelist" if ctx == nil
@@ -28,8 +28,8 @@ run_nft = (cmd) ->
 -- @tparam table entries  Liste de strings (IPs ou CIDRs, IPv4 ou IPv6). Peut être vide.
 -- @treturn nil
 init = (entries) ->
-  run_nft "flush set #{NFT_FAMILY} #{NFT_TABLE} #{SET4}"
-  run_nft "flush set #{NFT_FAMILY} #{NFT_TABLE} #{SET6}"
+  run_nft "flush set #{config.nft.family} #{config.nft.table} #{SET4}"
+  run_nft "flush set #{config.nft.family} #{config.nft.table} #{SET6}"
   return if not entries or #entries == 0
 
   v4, v6 = {}, {}
@@ -42,9 +42,9 @@ init = (entries) ->
       v4[#v4 + 1] = e
 
   if #v4 > 0
-    run_nft "add element #{NFT_FAMILY} #{NFT_TABLE} #{SET4} { #{table.concat v4, ", "} }"
+    run_nft "add element #{config.nft.family} #{config.nft.table} #{SET4} { #{table.concat v4, ", "} }"
   if #v6 > 0
-    run_nft "add element #{NFT_FAMILY} #{NFT_TABLE} #{SET6} { #{table.concat v6, ", "} }"
+    run_nft "add element #{config.nft.family} #{config.nft.table} #{SET6} { #{table.concat v6, ", "} }"
 
 --- Libère le contexte nftables (appelé à l'arrêt du processus).
 -- @treturn nil

@@ -12,7 +12,7 @@
 -- AUTH_SESSIONS_FILE par défaut).
 
 { :session_for_mac, :enrich_session_ip, :bind_session_mac } = require "auth.sessions"
-{ :AUTH_SESSIONS_FILE } = require "config"
+config = require "config"
 
 -- get_mac est optionnel et utilisé seulement si le MAC learner est dispo
 _get_mac = nil
@@ -30,7 +30,7 @@ safe_get_mac = (ip_str) ->
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (user: string) → (req) → bool, reason
 (cfg) ->
-  sessions_file = (cfg.auth and cfg.auth.sessions_file) or AUTH_SESSIONS_FILE
+  sessions_file = (cfg.auth and cfg.auth.sessions_file) or config.auth.sessions_file
 
   (user) ->
     --- @tparam table req {src_ip: string, mac: string, ...}

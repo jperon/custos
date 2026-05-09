@@ -10,7 +10,7 @@
 ctx = libnft.nft_ctx_new 0
 error "nft_ctx_new() failed in auth worker" if ctx == nil
 
-{ :NFT_FAMILY, :NFT_TABLE } = require "config"
+config = require "config"
 NFT_SET4    = "authenticated_ips"
 NFT_SET6    = "authenticated_ips6"
 NFT_SET_MAC = "authenticated_macs"
@@ -27,26 +27,26 @@ run_nft = (cmd) ->
 -- @tparam number ttl Durée de vie en secondes
 -- @treturn boolean   true si succès
 add_authenticated4 = (ip, ttl) ->
-  run_nft "add element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET4} { #{ip} timeout #{ttl}s }"
+  run_nft "add element #{config.nft.family} #{config.nft.table} #{NFT_SET4} { #{ip} timeout #{ttl}s }"
 
 --- Retire une IPv4 du set (logout explicite).
 -- @tparam string ip  Adresse IPv4 du client
 -- @treturn boolean   true si succès
 del_authenticated4 = (ip) ->
-  run_nft "delete element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET4} { #{ip} }"
+  run_nft "delete element #{config.nft.family} #{config.nft.table} #{NFT_SET4} { #{ip} }"
 
 --- Ajoute une IPv6 authentifiée dans le set nft avec TTL.
 -- @tparam string ip  Adresse IPv6 du client
 -- @tparam number ttl Durée de vie en secondes
 -- @treturn boolean   true si succès
 add_authenticated6 = (ip, ttl) ->
-  run_nft "add element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET6} { #{ip} timeout #{ttl}s }"
+  run_nft "add element #{config.nft.family} #{config.nft.table} #{NFT_SET6} { #{ip} timeout #{ttl}s }"
 
 --- Retire une IPv6 du set (logout explicite).
 -- @tparam string ip  Adresse IPv6 du client
 -- @treturn boolean   true si succès
 del_authenticated6 = (ip) ->
-  run_nft "delete element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET6} { #{ip} }"
+  run_nft "delete element #{config.nft.family} #{config.nft.table} #{NFT_SET6} { #{ip} }"
 
 --- Dispatche add_authenticated vers IPv4 ou IPv6 selon la présence de ':' dans l'IP.
 -- @tparam string ip  Adresse IP du client (IPv4 ou IPv6)
@@ -72,13 +72,13 @@ del_authenticated = (ip) ->
 -- @tparam number ttl Durée de vie en secondes
 -- @treturn boolean   true si les deux insertions réussissent
 add_authenticated_mac = (mac, ttl) ->
-  run_nft "add element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET_MAC} { #{mac} timeout #{ttl}s }"
+  run_nft "add element #{config.nft.family} #{config.nft.table} #{NFT_SET_MAC} { #{mac} timeout #{ttl}s }"
 
 --- Retire un MAC des sets ip et ip6 (logout explicite ou expiration de session).
 -- @tparam string mac Adresse MAC du client (format "aa:bb:cc:dd:ee:ff")
 -- @treturn boolean   true si les deux suppressions réussissent
 del_authenticated_mac = (mac) ->
-  run_nft "delete element #{NFT_FAMILY} #{NFT_TABLE} #{NFT_SET_MAC} { #{mac} }"
+  run_nft "delete element #{config.nft.family} #{config.nft.table} #{NFT_SET_MAC} { #{mac} }"
 
 --- Libère le contexte nft (appelé à l'arrêt du worker AUTH).
 cleanup = ->

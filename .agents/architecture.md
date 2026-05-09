@@ -14,7 +14,7 @@ LAN clients
     ▼
 nftables (table bridge)
     │
-    ├─ DNS questions  → QUEUE_QUESTIONS → worker_questions  ─┬→ q0q1 pipe (43 B) → worker_responses
+    ├─ DNS questions  → QUEUE_QUESTIONS → worker_questions  ─┬→ question_response pipe (43 B) → worker_responses
     │                                                         └→ learn pipe (22 B) → mac_learner
     │
     ├─ DNS responses  → QUEUE_RESPONSES → worker_responses
@@ -54,12 +54,12 @@ supportent les plages, p. ex. `"0,2,5-7"`. Valeurs par défaut : 0, 1, 2, 3, 5.
 
 | Canal | Format | Producteur → Consommateur |
 |-------|--------|---------------------------|
-| `q0q1` pipe | 43 octets (voir [workers.md](workers.md)) | `worker_questions` → `worker_responses` |
+| `question_response` pipe | 43 octets (voir [workers.md](workers.md)) | `worker_questions` → `worker_responses` |
 | `learn` pipe | 22 octets : ip16 + mac6 | `worker_questions` + `worker_arp_sniffer` + `worker_auth_queue` → `mac_learner` |
 | Socket Unix SOCK_STREAM | texte ligne : `"ip_str\n"` → `"mac\n"\|"unknown\n"` | requérants → `mac_learner` |
 | `AF_PACKET SOCK_RAW` sur `br` | frames Ethernet brutes | `worker_captive` → bridge |
 
-Les deux pipes unidirectionnels `q0q1` et `learn` sont créés dans `main.moon`
+Les deux pipes unidirectionnels `question_response` et `learn` sont créés dans `main.moon`
 via `pipe2(O_NONBLOCK)` avant tout `fork()`. Atomicité garantie (< `PIPE_BUF`).
 
 ---
@@ -68,10 +68,10 @@ via `pipe2(O_NONBLOCK)` avant tout `fork()`. Atomicité garantie (< `PIPE_BUF`).
 
 | Chemin | Rôle | Lecteurs |
 |--------|------|---------|
-| `/etc/custos/filter.yml` | Allowlist DNS, config auth, TTL, etc. | `src/filter/` (hot-reload sur SIGHUP) |
-| `/var/run/custos/config.lua` | Config UCI runtime | tous workers au démarrage |
+| `/etc/config.moon` | Config runtime hiérarchique (filter/auth/dns/nft, etc.) | `src/config.moon` puis consommateurs |
+| `/etc/config/custos` | UCI OpenWrt plateforme (enabled, cron update-lists) | init script OpenWrt |
 | `/etc/custos/secrets` | Identifiants utilisateurs | `auth/worker` (rechargé sur SIGHUP) |
-| `<sessions_file>` (défaut `tmp/sessions.lua`) | Sessions MAC (atomique rename) | écrit par AUTH, lu par workers Q0/Q1/Q2 |
+| `<sessions_file>` (défaut `tmp/sessions.lua`) | Sessions MAC (atomique rename) | écrit par AUTH, lu par workers question/response/captive |
 
 ---
 
@@ -98,7 +98,7 @@ via `pipe2(O_NONBLOCK)` avant tout `fork()`. Atomicité garantie (< `PIPE_BUF`).
 
 | Queue | Worker | Règle nft (table `bridge`) | Verdict | Injection |
 |-------|--------|----------------------------|---------|-----------|
-| `QUEUE_QUESTIONS` | `worker_questions` | `th dport 53 queue to N` | `NF_ACCEPT` (fail-closed sur erreur) | Aucune ; transaction dans q0q1 + learn |
+| `QUEUE_QUESTIONS` | `worker_questions` | `th dport 53 queue to N` | `NF_ACCEPT` (fail-closed sur erreur) | Aucune ; transaction dans question_response + learn |
 | `QUEUE_RESPONSES` | `worker_responses` | `th sport 53 queue to N` | `NF_ACCEPT` ± payload patché | DNS TTL + EDE `Custos vigilat`, ou NXDOMAIN+EDE `Filtered` |
 | `QUEUE_CAPTIVE` | `worker_captive` | `tcp dport 80 … syn queue to N` | `NF_DROP` | 3 frames Ethernet via AF_PACKET (SYN-ACK, HTTP 302, FIN-ACK) |
 | `QUEUE_AUTH` | `worker_auth_queue` | trafic port 33443 | `NF_ACCEPT` | Aucune ; mac+ip dans `learn` → `mac_learner` |
@@ -122,7 +122,7 @@ via `pipe2(O_NONBLOCK)` avant tout `fork()`. Atomicité garantie (< `PIPE_BUF`).
 - Fork chaque worker et surveille via `waitpid(-1, …, WNOHANG)` ; redémarre
   après un backoff de 1 seconde en cas de crash.
 - Boucle `signalfd` pour `SIGHUP` / `SIGTERM`.
-- `SIGHUP` → propagé à `worker_questions` (recharge `filter.yml`) et `auth/worker` (recharge secrets).
+- `SIGHUP` → `filter.load!` (relecture de `config` déjà chargé) + propagation AUTH (recharge secrets).
 - `SIGTERM` → arrête tous les workers, supprime les règles nft ajoutées au démarrage.
 
 ---

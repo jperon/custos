@@ -606,7 +606,7 @@ test "nft_add_helper returns false after retries", ->
 -- ════════════════════════════════════════════════════════════════
 -- Tests parse/dns
 -- ════════════════════════════════════════════════════════════════
--- parse/dns.moon deleted - migrated to ipparse.l7.dns in worker_q1.moon
+-- parse/dns.moon deleted - migrated to ipparse.l7.dns in worker_responses.moon
 -- io.write "\n── parse/dns ──\n"
 
 -- package.loaded["parse/ip"] = dofile "lua/parse/ip.lua"
@@ -906,18 +906,18 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
     "token expiré doit être rejeté à t=6"
 
 -- ════════════════════════════════════════════════════════════════
--- worker_q0 : verdict multi-questions
+-- worker_questions : verdict multi-questions
 -- ════════════════════════════════════════════════════════════════
--- worker_q0 tests use parse/dns which is now deleted - migrated to ipparse.l7.dns in worker_q1.moon
--- io.write "\n── worker_q0 ──\n"
+-- worker_questions tests use parse/dns which is now deleted - migrated to ipparse.l7.dns in worker_responses.moon
+-- io.write "\n── worker_questions ──\n"
 
--- test "worker_q0 — paquet 2 questions (1 allowée + 1 bloquée) → NF_DROP, write_msg non appelé", ->
+-- test "worker_questions — paquet 2 questions (1 allowée + 1 bloquée) → NF_DROP, write_msg non appelé", ->
 --   -- Charge un module parse_dns frais (indépendant des autres tests)
 --   package.loaded["parse/dns"] = nil
 --   dns_mod = dofile "lua/parse/dns.lua"
 --   -- Construit un paquet DNS à 2 questions :
---   --   Q1: github.com  (A) — autorisée
---   --   Q2: evil.com    (A) — bloquée
+--   --   response: github.com  (A) — autorisée
+--   --   captive: evil.com    (A) — bloquée
 --   txid = 0xCAFE
 --   -- header: txid, flags(RD=1,QR=0), qdcount=2, ancount=0, nscount=0, arcount=0
 --   hdr = string.char(
@@ -926,15 +926,15 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
 --     0, 2,
 --     0, 0, 0, 0, 0, 0
 --   )
---   q1 = "\x06github\x03com\x00" .. string.char(0, 1, 0, 1)  -- A IN
---   q2 = "\x04evil\x03com\x00"   .. string.char(0, 1, 0, 1)  -- A IN
---   dns_payload = hdr .. q1 .. q2
+--   response = "\x06github\x03com\x00" .. string.char(0, 1, 0, 1)  -- A IN
+--   captive = "\x04evil\x03com\x00"   .. string.char(0, 1, 0, 1)  -- A IN
+--   dns_payload = hdr .. response .. captive
 --   dns = dns_mod.parse_dns dns_payload
 --   assert dns, "parse_dns a échoué"
 --   assert (#dns.questions == 2), string.format("attendu 2 questions, obtenu %d", #dns.questions)
---   assert_eq dns.questions[1].qname, "github.com", "Q1 qname"
---   assert_eq dns.questions[2].qname, "evil.com",   "Q2 qname"
---   -- Simule la logique de verdict du worker Q0
+--   assert_eq dns.questions[1].qname, "github.com", "response qname"
+--   assert_eq dns.questions[2].qname, "evil.com",   "captive qname"
+--   -- Simule la logique de verdict du worker question
 --   is_allowed_local = (qname) ->
 --     local_allowed = { ["github.com"]: true }
 --     name = qname\lower!
@@ -955,7 +955,7 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
 --   assert_eq write_msg_would_be_called, false, "write_msg ne doit pas être appelé quand verdict == NF_DROP"
 
 -- do
---   -- Helper partagé : logique de verdict Q0 (simulée sans NFQ)
+--   -- Helper partagé : logique de verdict question (simulée sans NFQ)
 --   -- Retourne NF_ACCEPT(1) ou NF_DROP(0) selon les qnames et l'allowlist locale.
 --   make_verdict = (allowed_set, questions) ->
 --     NF_ACCEPT_V, NF_DROP_V = 1, 0
@@ -972,7 +972,7 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
 --     v
 
 --   -- Question unique autorisée
---   test "worker_q0 — question unique autorisée → NF_ACCEPT", ->
+--   test "worker_questions — question unique autorisée → NF_ACCEPT", ->
 --     package.loaded["parse/dns"] = nil
 --     dns2 = dofile "lua/parse/dns.lua"
 --     txid2 = 0x0001
@@ -987,7 +987,7 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
 --     assert_eq verdict2, 1, "NF_ACCEPT pour github.com autorisé"
 
 --   -- Question unique bloquée
---   test "worker_q0 — question unique bloquée → NF_DROP", ->
+--   test "worker_questions — question unique bloquée → NF_DROP", ->
 --     package.loaded["parse/dns"] = nil
 --     dns3 = dofile "lua/parse/dns.lua"
 --     txid3 = 0x0002
@@ -1002,7 +1002,7 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
 --     assert_eq verdict3, 0, "NF_DROP pour evil.com bloqué"
 
 --   -- Sous-domaine autorisé par le domaine parent dans l'allowlist
---   test "worker_q0 — sous-domaine autorisé via domaine parent", ->
+--   test "worker_questions — sous-domaine autorisé via domaine parent", ->
 --     package.loaded["parse/dns"] = nil
 --     dns4 = dofile "lua/parse/dns.lua"
 --     txid4 = 0x0003
@@ -1020,7 +1020,7 @@ test "ipc — token expiré est rejeté (purge paresseuse)", ->
 
 -- Tests parse/dns — nouvelles fonctions (skip, build_opt, append_ede)
 -- ════════════════════════════════════════════════════════════════
--- parse/dns.moon deleted - migrated to ipparse.l7.dns in worker_q1.moon
+-- parse/dns.moon deleted - migrated to ipparse.l7.dns in worker_responses.moon
 -- io.write "\n── parse/dns nouvelles fonctions ──\n"
 
 -- m_dns est déjà chargé depuis la section parse/dns
@@ -2083,7 +2083,7 @@ test "dnsonly — compile_rules avec action dnsonly → verdict \"dnsonly\"", ->
 
 test "dnsonly — client authentifié → verdict dnsonly", ->
   -- dnsonly retourne toujours "dnsonly" (la gestion des sessions authentifiées
-  -- se fait au niveau du worker Q2 pour la redirection HTTP, pas dans filter.actions)
+  -- se fait au niveau du worker captive pour la redirection HTTP, pas dans filter.actions)
   package.loaded["auth.sessions"] = nil
   SESS_DN = "./tmp/test_dnsonly_sess.lua"
   { :write_sessions, :reset_cache } = require "auth.sessions"
@@ -2474,14 +2474,14 @@ test "auth/sessions — purge_expired : conserve une session sans expires", ->
   purge_expired sessions
   assert sessions["aa:bb:cc:dd:ee:04"] ~= nil, "session sans expiration absolue conservée"
 
--- ── session_for_ip / user_for_ip ─────────────────────────────────
+-- ── session_for_mac / user_for_mac ───────────────────────────────
 -- Le fallback MAC via NDP (neigh) a été supprimé. La résolution se fait
 -- maintenant uniquement par :
 --   1. Lookup direct par MAC (si MAC connue)
 --   2. Scan de toutes les sessions à la recherche d'une IP dans ips.ipv4/ipv6
 do
   SF_FILE = "./tmp/test_sf_sessions.lua"
-  { :session_for_ip, :user_for_ip, :reset_cache, :write_sessions, :bind_session_mac } = require "auth.sessions"
+  { :session_for_mac, :user_for_mac, :reset_cache, :write_sessions, :bind_session_mac } = require "auth.sessions"
 
   write_sf_sessions = (sessions) ->
     write_sessions sessions, SF_FILE
@@ -2490,17 +2490,17 @@ do
   MAC = "aa:bb:cc:dd:ee:ff"
   FUTURE = 9999999999
 
-  test "session_for_ip — session directe par MAC", ->
+  test "session_for_mac — session directe par MAC", ->
     write_sf_sessions { [MAC]: { user: "alice", expires: FUTURE } }
-    s = session_for_ip nil, SF_FILE, MAC
+    s = session_for_mac MAC, nil, SF_FILE
     assert s and s.user == "alice", "session trouvée par MAC"
 
-  test "session_for_ip — cache obsolète relu sur miss", ->
+  test "session_for_mac — cache obsolète relu sur miss", ->
     write_sessions {}, SF_FILE
     reset_cache!
-    assert not (session_for_ip "10.0.0.10", SF_FILE, MAC), "cache initial vide"
+    assert not (session_for_mac MAC, "10.0.0.10", SF_FILE), "cache initial vide"
     write_sessions { [MAC]: { user: "alice", expires: FUTURE } }, SF_FILE
-    s = session_for_ip "10.0.0.10", SF_FILE, MAC
+    s = session_for_mac MAC, "10.0.0.10", SF_FILE
     assert s and s.user == "alice", "session trouvée après relecture du fichier"
 
   test "auth/sessions — bind_session_mac réindexe une session trouvée via IPv6", ->
@@ -2510,73 +2510,73 @@ do
     write_sf_sessions {
       [ROUTER_MAC]: { user: "j@prn.ovh", expires: FUTURE, ips: { ipv6: IP6 } }
     }
-    s6 = session_for_ip IP6, SF_FILE, CLIENT_MAC
+    s6 = session_for_mac CLIENT_MAC, IP6, SF_FILE
     assert s6 and s6.user == "j@prn.ovh", "session IPv6 trouvée par fallback IP"
     bind_session_mac s6.mac, CLIENT_MAC, IP6, SF_FILE
     reset_cache!
-    s4 = session_for_ip "10.35.99.39", SF_FILE, CLIENT_MAC
+    s4 = session_for_mac CLIENT_MAC, "10.35.99.39", SF_FILE
     assert s4 and s4.user == "j@prn.ovh", "session réindexée sous la vraie MAC cliente"
 
-  test "session_for_ip — session retrouvée par scan des IPs (IPv4)", ->
+  test "session_for_mac — session retrouvée par scan des IPs (IPv4)", ->
     -- Sans MAC connue, session_for_mac scanne toutes les sessions à la
     -- recherche d'une IP correspondante dans le champ ips.
     write_sf_sessions {
       [MAC]: { user: "alice", expires: FUTURE, ips: { ipv4: "10.0.0.1" } }
     }
-    s = session_for_ip "10.0.0.1", SF_FILE
+    s = session_for_mac nil, "10.0.0.1", SF_FILE
     assert s and s.user == "alice", "session trouvée par scan IPv4"
 
-  test "session_for_ip — session retrouvée par scan des IPs (IPv6)", ->
+  test "session_for_mac — session retrouvée par scan des IPs (IPv6)", ->
     write_sf_sessions {
       [MAC]: { user: "j@prn.ovh", expires: FUTURE, ips: { ipv6: "fd00::1" } }
     }
-    s = session_for_ip "fd00::1", SF_FILE
+    s = session_for_mac nil, "fd00::1", SF_FILE
     assert s and s.user == "j@prn.ovh", "session trouvée par scan IPv6"
 
-  test "session_for_ip — MAC 'unknown' → scan ips", ->
+  test "session_for_mac — MAC 'unknown' → scan ips", ->
     -- MAC 'unknown' n'est pas cherchée dans la table ; le scan IP prend le relais.
     write_sf_sessions {
       [MAC]: { user: "alice", expires: FUTURE, ips: { ipv4: "10.0.0.99" } }
     }
-    s = session_for_ip "10.0.0.99", SF_FILE, "unknown"
+    s = session_for_mac "unknown", "10.0.0.99", SF_FILE
     assert s and s.user == "alice", "MAC 'unknown' → scan ips trouve la session"
 
-  test "session_for_ip — aucune session avec cet IP", ->
+  test "session_for_mac — aucune session avec cet IP", ->
     write_sf_sessions {
       [MAC]: { user: "alice", expires: FUTURE }
     }
-    s = session_for_ip "10.0.0.2", SF_FILE
+    s = session_for_mac nil, "10.0.0.2", SF_FILE
     assert not s, "aucune session pour cet IP"
 
-  test "session_for_ip — ip inconnue → nil", ->
+  test "session_for_mac — ip inconnue → nil", ->
     write_sf_sessions {
       [MAC]: { user: "alice", expires: FUTURE }
     }
-    s = session_for_ip "9.9.9.9", SF_FILE
+    s = session_for_mac nil, "9.9.9.9", SF_FILE
     assert not s, "IP inconnue → nil"
 
-  test "session_for_ip — session expirée → nil", ->
+  test "session_for_mac — session expirée → nil", ->
     write_sf_sessions {
       [MAC]: { user: "alice", expires: 1 }  -- expirée
     }
-    s = session_for_ip "10.0.0.9", SF_FILE, MAC
+    s = session_for_mac MAC, "10.0.0.9", SF_FILE
     assert not s, "session expirée rejetée"
 
-  test "user_for_ip — retourne user via scan ips", ->
+  test "user_for_mac — retourne user via scan ips", ->
     write_sf_sessions {
       [MAC]: { user: "j@prn.ovh", expires: FUTURE, ips: { ipv4: "10.35.1.53" } }
     }
-    assert_eq (user_for_ip "10.35.1.53", SF_FILE), "j@prn.ovh", "user retrouvé via scan ips"
+    assert_eq (user_for_mac nil, "10.35.1.53", SF_FILE), "j@prn.ovh", "user retrouvé via scan ips"
 
-  test "user_for_ip — ip nil → nil", ->
-    assert not (user_for_ip nil, SF_FILE), "ip nil retourne nil"
+  test "user_for_mac — ip nil → nil", ->
+    assert not (user_for_mac nil, nil, SF_FILE), "ip nil retourne nil"
 
-  test "session_for_ip — MAC passée explicitement prime sur scan", ->
+  test "session_for_mac — MAC passée explicitement prime sur scan", ->
     -- La MAC fournie par L2 trouve directement la session sans scan IP.
     write_sf_sessions {
       [MAC]: { user: "j@prn.ovh", expires: FUTURE }
     }
-    s = session_for_ip "10.35.1.53", SF_FILE, MAC
+    s = session_for_mac MAC, "10.35.1.53", SF_FILE
     assert s, "session trouvée via MAC du paquet"
     assert_eq s.user, "j@prn.ovh", "user correct"
 
@@ -2731,7 +2731,7 @@ test "filter/convert — commentaires et lignes vides ignorés", ->
 
 
 -- ── Tests parse/tcp ──────────────────────────────────────────────
--- parse/tcp.moon deleted - migrated to ipparse in worker_q2.moon
+-- parse/tcp.moon deleted - migrated to ipparse in worker_captive.moon
 -- io.write "\n── parse/tcp ──\n"
 
 -- tcp_mod = require "parse/tcp"

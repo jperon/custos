@@ -1424,6 +1424,100 @@ describe("filter.rule", function()
     assert.is_false(v2)
     return assert.equals("Bloquer tout", desc2)
   end)
+  it("first_match_wins garde la première règle horaire", function()
+    local cfg = {
+      times = {
+        business = {
+          "09:00",
+          "18:00"
+        }
+      },
+      decision = {
+        first_match_wins = true
+      },
+      rules = {
+        {
+          description = "Autoriser heures ouvrées",
+          conditions = {
+            {
+              in_time = "business"
+            }
+          },
+          actions = {
+            "allow"
+          }
+        },
+        {
+          description = "Deny final",
+          conditions = { },
+          actions = {
+            "deny"
+          }
+        }
+      }
+    }
+    local rules = m_rule.compile_rules(cfg)
+    local ts = os.time({
+      year = 2024,
+      month = 1,
+      day = 1,
+      hour = 15,
+      min = 0,
+      sec = 0
+    })
+    local v, _, desc = m_rule.decide(rules, {
+      ts = ts
+    })
+    assert.is_true(v)
+    return assert.equals("Autoriser heures ouvrées", desc)
+  end)
+  it("first_match_wins=false laisse la dernière règle horaire gagner", function()
+    local cfg = {
+      times = {
+        business = {
+          "09:00",
+          "18:00"
+        }
+      },
+      decision = {
+        first_match_wins = false
+      },
+      rules = {
+        {
+          description = "Autoriser heures ouvrées",
+          conditions = {
+            {
+              in_time = "business"
+            }
+          },
+          actions = {
+            "allow"
+          }
+        },
+        {
+          description = "Deny final",
+          conditions = { },
+          actions = {
+            "deny"
+          }
+        }
+      }
+    }
+    local rules = m_rule.compile_rules(cfg)
+    local ts = os.time({
+      year = 2024,
+      month = 1,
+      day = 1,
+      hour = 15,
+      min = 0,
+      sec = 0
+    })
+    local v, _, desc = m_rule.decide(rules, {
+      ts = ts
+    })
+    assert.is_false(v)
+    return assert.equals("Deny final", desc)
+  end)
   it("condition inconnue → erreur", function()
     local cfg = {
       rules = {

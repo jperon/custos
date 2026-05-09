@@ -1,34 +1,7 @@
 config custos 'main'
 	option enabled           '1'
 
-	# Chemin du fichier de log
-	option log_path          '/var/log/custos.log'
-
-	# TTL (secondes) injecté sur toutes les réponses DNS autorisées
-	option forced_ttl        '60'
-
-	# Durée de vie des IPs dans les sets nftables (format : Xs, Xm, Xh)
-	option nft_ip_timeout    '2m'
-
-	# Durée de vie (secondes) d'une transaction DNS en attente dans le pipe IPC
-	option ipc_pending_ttl   '5'
-
-	# Délai (secondes) avant expiration d'un client inactif dans le cache MAC
-	option client_expiry     '300'
-
-	# Délai minimal (secondes) entre deux rafraîchissements de la table ARP/NDP
-	option neigh_refresh_cooldown '10'
-
 	# Mise à jour automatique des listes de domaines via cron
 	# Lancer manuellement : /etc/init.d/custos update_lists
 	option update_lists_enabled  '1'
 	option update_lists_schedule '0 3 * * *'
-
-	# Chemin vers le fichier de configuration du filtre YAML
-	option filter_config     '/etc/custos/filter.yml'
-
-	# Domaines autorisés (correspondance par suffixe : "example.com" couvre aussi
-	# "sub.example.com"). Modifier puis relancer : /etc/init.d/custos reload
-	list   allowed_domains   'local'
-	list   allowed_domains   'lan'
-	list   allowed_domains   'home.arpa'

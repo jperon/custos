@@ -31,11 +31,6 @@ do
   parse, types, rcodes = _obj_0.parse, _obj_0.types, _obj_0.rcodes
 end
 local upstream_mod = require("doh.upstream")
-local DOH_ENABLED, DOH_PORT, DOH_UPSTREAM_IPV4, DOH_UPSTREAM_IPV6, DOH_UPSTREAM_PORT, DOH_UPSTREAM_TIMEOUT_MS, DOH_CERT_PATH, DOH_KEY_PATH, DOH_PREFER_IPV6
-do
-  local _obj_0 = require("config")
-  DOH_ENABLED, DOH_PORT, DOH_UPSTREAM_IPV4, DOH_UPSTREAM_IPV6, DOH_UPSTREAM_PORT, DOH_UPSTREAM_TIMEOUT_MS, DOH_CERT_PATH, DOH_KEY_PATH, DOH_PREFER_IPV6 = _obj_0.DOH_ENABLED, _obj_0.DOH_PORT, _obj_0.DOH_UPSTREAM_IPV4, _obj_0.DOH_UPSTREAM_IPV6, _obj_0.DOH_UPSTREAM_PORT, _obj_0.DOH_UPSTREAM_TIMEOUT_MS, _obj_0.DOH_CERT_PATH, _obj_0.DOH_KEY_PATH, _obj_0.DOH_PREFER_IPV6
-end
 local b64_chars = { }
 do
   local s = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

@@ -4,13 +4,16 @@
 -- Fourni uniquement la fonction `get_mac(ip_str)` qui interroge le socket
 -- Unix du learner et retourne la MAC textuelle ou "unknown".
 --
--- Anciennement ce module fournissait aussi `learn()` (Q0 → learner via pipe).
+-- Anciennement ce module fournissait aussi `learn()` (question → learner via pipe).
 -- Aujourd'hui l'apprentissage se fait via le worker mac_learner (socket Unix).
 -- `learn()` n'est plus nécessaire ici.
 
 { :ffi, :libc } = require "ffi_defs"
-{ :MAC_LEARNER_QUERY_SOCK } = require "config"
+config = require "config"
 { :log_warn } = require "log"
+
+learner_cfg = config.mac_learner or {}
+QUERY_SOCK = learner_cfg.query_sock or config.MAC_LEARNER_QUERY_SOCK or "/var/run/custos/mac_query.sock"
 
 AF_UNIX     = 1
 AF_INET6    = 10
@@ -45,7 +48,7 @@ mac_from_eui64 = (ip_str) ->
 
 --- Retourne la MAC associée à une IP via une requête au MAC learner.
 -- Connexion synchrone sur socket Unix SOCK_STREAM : approprié pour AUTH
--- (une requête par connexion entrante) et pour Q2 (SYNs rate-limités par nft).
+-- (une requête par connexion entrante) et pour captive (SYNs rate-limités par nft).
 -- @tparam string ip_str Adresse IP sous forme de chaîne
 -- @treturn string MAC "aa:bb:cc:dd:ee:ff" ou "unknown"
 get_mac = (ip_str) ->
@@ -58,9 +61,9 @@ get_mac = (ip_str) ->
 
   addr = ffi.new "struct sockaddr_un"
   addr.sun_family = AF_UNIX
-  ffi.copy addr.sun_path, MAC_LEARNER_QUERY_SOCK
+  ffi.copy addr.sun_path, QUERY_SOCK
   -- addrlen = offset de sun_path + longueur du chemin + '\0'
-  addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #MAC_LEARNER_QUERY_SOCK + 1
+  addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
 
   if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0
     libc.close sock

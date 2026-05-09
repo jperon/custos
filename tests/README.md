@@ -20,10 +20,12 @@ tests/
       convert_spec.moon       CLI convert.lua : hash + tri binaire
       filter_spec.moon        bsearch, ipcalc, conditions (domain/mac/net/
                               user/vlan/time), règles, actions, parse_domains,
-                              load_config
+                              load_config, first_match_wins
     ipc/
       ipc_spec.moon           encode/decode IPv4/IPv6, make_key, drain_pipe,
-                              refused/dnsonly, reason, expiry
+                              refused/dnsonly, reason, rule_id, timeout, expiry
+      nft_queue_spec.moon     cmd_for, ligne IPC avec rule_id + timeout
+      worker_responses_spec.moon rr_timeout, EDE conditionnel
     parse/
       mac_learner_spec.moon   mac_from_eui64, get_mac (fallback EUI-64)
       packet_spec.moon        parse_packet UDP/TCP/IPv6+ext, patch_and_checksum,
@@ -71,12 +73,8 @@ make test-env-nuke   # supprime tout
 
 ### Résultat courant
 
-```
-241 successes / 0 failures / 0 errors / 1 pending
-```
-
-Le seul `pending` est `cert_generator génération avec px5g` — intentionnel, px5g
-n'est pas installé sur le poste de développement.
+Le nombre de succès varie selon les binaires installés. Un `pending` peut rester
+sur la génération px5g si l'outil n'est pas disponible.
 
 ### Lancer un sous-ensemble
 
@@ -91,6 +89,10 @@ busted --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
 # Un seul spec
 busted --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
   tests/unit/ipc/ipc_spec.lua
+
+# Pipeline IPC/NFT (rule_id + timeout)
+busted --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
+  tests/unit/nft_queue_spec.lua tests/unit/worker_responses_spec.lua
 ```
 
 ### Stubs injectés par `busted_setup.lua`

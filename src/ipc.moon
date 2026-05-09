@@ -1,360 +1,334 @@
 -- src/ipc.moon
--- Protocole IPC entre worker Q0 (questions) et worker Q1 (réponses).
--- Transport : pipe Unix anonyme créé avant fork().
--- Les messages sont des enregistrements binaires de taille fixe (115 octets).
--- L'atomicité est garantie par POSIX pour les écritures <= PIPE_BUF (4096).
---
--- Format du message (115 octets) :
---
---   Octet 0      : version/type (6 bits) + flags (2 bits)
---                  bits 6-0: message type/family
---                    0x41 ('A') & 0x7F = transaction IPv4 acceptée
---                    0x36 ('6') & 0x7F = transaction IPv6 acceptée
---                    0x52 ('R') & 0x7F = transaction IPv4 refusée (Q1 forge REFUSED+EDE)
---                    0x72 ('r') & 0x7F = transaction IPv6 refusée
---                    0x44 ('D') & 0x7F = transaction IPv4 DNS-seulement
---                    0x64 ('d') & 0x7F = transaction IPv6 DNS-seulement
---                  bit 7: RESOLVER_IPV6_FLAG — set if resolver is IPv6 (avoids false negatives)
---   Octets 1-2   : txid DNS (big-endian uint16)
---   Octets 3-18  : src_ip — 16 octets (IPv4 4 octets + 12 octets 0x00 ; IPv6 16 octets complets)
---   Octets 19-20 : src_port (big-endian uint16)
---   Octets 21-26 : adresse MAC source (6 octets, 0x00×6 si inconnue)
---   Octets 27-42 : resolver_ip — 16 octets (IPv4 4 octets + 12 octets 0x00 ; IPv6 16 octets)
---   Octets 43-106 : reason — null-terminated UTF-8 (max 63 chars + null terminator)
---   Octets 107-110 : benchmark_ms high (big-endian uint32) — ms depuis boot, 0 si inactif
---   Octets 111-114 : benchmark_ms low  (big-endian uint32)
---   → Total : 115 octets, largement sous PIPE_BUF → écriture atomique garantie
+-- Protocole IPC entre worker_questions (question) et worker_responses (response).
+-- Format A3 : message structuré, versionné, one-line.
 
 { :ffi, :libc } = require "ffi_defs"
-{ :IPC_PENDING_TTL } = require "config"
+config = require "config"
 { :log_warn } = require "log"
 
-IPC_MSG_SIZE   = 115
-REASON_OFFSET  = 43   -- offset C (0-based) où commence le champ reason
-REASON_SIZE    = 64   -- 63 chars max + null terminator
-BENCHMARK_OFFSET = 107 -- offset C (0-based) des 8 octets benchmark_ms (high 4 + low 4)
+bit = require "bit"
+
+runtime_cfg = config.runtime or {}
+nft_cfg = config.nft or {}
+ipc_cfg = config.ipc or {}
+
+IPC_VERSION = "v1"
+IPC_READ_CHUNK = 2048
+IPC_MAX_LINE = 1024
 IPC_WRITE_RETRY_COUNT = 5
 
 EAGAIN = 11
 EWOULDBLOCK = 11
 
-bit = require "bit"
-
-AF_INET6 = 10
+AF_INET6 = runtime_cfg.af_inet6 or 10
 ipv6_ntop_buf = ffi.new "char[46]"
 
 timespec_ptr_t = ffi.typeof "timespec_t[1]"
+read_buf = ffi.new "uint8_t[?]", IPC_READ_CHUNK
 
--- ── Constantes de type ───────────────────────────────────────────
-MSG_IPV4         = 0x41   -- 'A' : transaction IPv4 autorisée
-MSG_IPV6         = 0x36   -- '6' : transaction IPv6 autorisée
-MSG_IPV4_REFUSED = 0x52   -- 'R' : transaction IPv4 refusée (Q1 doit transformer la réponse)
-MSG_IPV6_REFUSED = 0x72   -- 'r' : transaction IPv6 refusée
-MSG_IPV4_DNSONLY = 0x44   -- 'D' : transaction IPv4 DNS-seulement (pas d'injection nft)
-MSG_IPV6_DNSONLY = 0x64   -- 'd' : transaction IPv6 DNS-seulement
-
--- Bit flag 0x80 : set when resolver is IPv6 (avoids false negatives for addrs like fd00::)
+MSG_IPV4         = 0x41
+MSG_IPV6         = 0x36
+MSG_IPV4_REFUSED = 0x52
+MSG_IPV6_REFUSED = 0x72
+MSG_IPV4_DNSONLY = 0x44
+MSG_IPV6_DNSONLY = 0x64
 RESOLVER_IPV6_FLAG = 0x80
 
+to_hex = (s) ->
+  return "" unless s and #s > 0
+  (s\gsub ".", (c) -> string.format "%02x", c\byte!)
+
+from_hex = (h) ->
+  return "", nil if not h or #h == 0
+  return nil, "hex_odd_length" if (#h % 2) != 0
+  return nil, "hex_invalid_chars" unless h\match "^[0-9a-fA-F]+$"
+  out = {}
+  for i = 1, #h, 2
+    out[#out + 1] = string.char tonumber(h\sub(i, i + 1), 16)
+  table.concat(out), nil
+
+mac_raw_to_str = (mac_raw) ->
+  return "00:00:00:00:00:00" unless mac_raw and #mac_raw == 6
+  string.format "%02x:%02x:%02x:%02x:%02x:%02x",
+    mac_raw\byte(1), mac_raw\byte(2), mac_raw\byte(3),
+    mac_raw\byte(4), mac_raw\byte(5), mac_raw\byte(6)
+
+ip_raw_to_str = (ip_raw) ->
+  return nil unless ip_raw and (#ip_raw == 4 or #ip_raw == 16)
+  if #ip_raw == 4
+    return "#{ip_raw\byte(1)}.#{ip_raw\byte(2)}.#{ip_raw\byte(3)}.#{ip_raw\byte(4)}"
+  ip_bytes = ffi.new "uint8_t[16]"
+  for i = 0, 15
+    ip_bytes[i] = ip_raw\byte i + 1
+  libc.inet_ntop AF_INET6, ip_bytes, ipv6_ntop_buf, 46
+  ffi.string ipv6_ntop_buf
+
+is_ipv4_str = (s) -> s and s\match "^%d+%.%d+%.%d+%.%d+$"
+is_ipv6_str = (s) -> s and s\find ":", 1, true
+is_valid_mac = (s) -> s and s\match "^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$"
+
+is_valid_timeout = (t) ->
+  return false unless type(t) == "string"
+  return false unless #t > 0 and #t <= 16
+  t\match("^%d+[smhdw]?$") ~= nil
+
+msg_type_for = (ipv4, refused, dnsonly) ->
+  if ipv4
+    return MSG_IPV4_DNSONLY if dnsonly
+    return MSG_IPV4_REFUSED if refused
+    return MSG_IPV4
+  return MSG_IPV6_DNSONLY if dnsonly
+  return MSG_IPV6_REFUSED if refused
+  MSG_IPV6
+
 write_with_retry = (pipe_wfd, msg) ->
-  -- timespec buffer for nanosleep between retries (20 ms)
   sleep_req = timespec_ptr_t!
-
   for i = 1, IPC_WRITE_RETRY_COUNT
-    n = libc.write pipe_wfd, msg, IPC_MSG_SIZE
-    return true if n == IPC_MSG_SIZE
-
+    n = libc.write pipe_wfd, msg, #msg
+    return true if n == #msg
     errno_p = libc.__errno_location!
     errno = if errno_p then errno_p[0] else 0
-
-    -- If it's an unrecoverable error, log errno and abort immediately.
     if errno != EAGAIN and errno != EWOULDBLOCK
       log_warn { action: "ipc_write_syscall_failed", fd: pipe_wfd, errno: errno, attempt: i }
       return false
-
-    -- Otherwise it's transient (EAGAIN/EWOULDBLOCK) — sleep a bit before retrying.
     sleep_req[0].tv_sec = 0
-    sleep_req[0].tv_nsec = 20000000    -- 20 ms
+    sleep_req[0].tv_nsec = 20000000
     libc.nanosleep sleep_req, nil
-
-  -- Exhausted retries — log final errno for debugging and return false.
   errno_p = libc.__errno_location!
   errno = if errno_p then errno_p[0] else 0
   log_warn { action: "ipc_write_failed_exhausted", fd: pipe_wfd, errno: errno, attempts: IPC_WRITE_RETRY_COUNT }
   false
 
--- ── Encodage (côté Q0) ───────────────────────────────────────────
---- Encode une transaction en binaire IPC_MSG_SIZE octets.
--- @tparam number      txid      Identifiant de transaction DNS (uint16)
--- @tparam string      ip_raw    4 octets (IPv4) ou 16 octets (IPv6) bruts (IP client)
--- @tparam number      src_port  Port source de la question DNS (uint16)
--- @tparam string|nil  mac_raw   6 octets MAC bruts (nil ou zeros si inconnu)
--- @tparam string      resolver_ip_raw 4 ou 16 octets bruts de l'IP resolver
--- @tparam boolean     refused   true si la transaction est refusée (Q1 spoofing REFUSED+EDE)
--- @tparam boolean     dnsonly   true si DNS autorisé mais pas d'injection nft
--- @tparam string|nil  reason    Raison textuelle (max 63 chars UTF-8, nil si absent)
--- @tparam number|nil  benchmark_ms  Millisecondes depuis boot (CLOCK_MONOTONIC), ou nil
--- @treturn string message binaire de IPC_MSG_SIZE octets
-encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly, reason, benchmark_ms) ->
-  buf = ffi.new "uint8_t[115]"
+encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly, reason, benchmark_ms, rule_id, timeout) ->
+  return nil unless ip_raw and resolver_ip_raw
+  return nil unless (#ip_raw == 4 or #ip_raw == 16)
+  return nil unless (#resolver_ip_raw == 4 or #resolver_ip_raw == 16)
 
-  -- Type : encode à la fois le refus/dnsonly et la famille d'adresse (IPv4/IPv6)
-  msg_type = if #ip_raw == 4
-    if dnsonly then MSG_IPV4_DNSONLY
-    elseif refused then MSG_IPV4_REFUSED
-    else MSG_IPV4
-  else
-    if dnsonly then MSG_IPV6_DNSONLY
-    elseif refused then MSG_IPV6_REFUSED
-    else MSG_IPV6
-
-  -- Set RESOLVER_IPV6_FLAG bit if resolver is IPv6
+  ipv4 = #ip_raw == 4
+  msg_type = msg_type_for ipv4, not not refused, not not dnsonly
   msg_type = bit.bor msg_type, RESOLVER_IPV6_FLAG if #resolver_ip_raw == 16
 
-  buf[0] = msg_type
+  client_ip = ip_raw_to_str ip_raw
+  resolver_ip = ip_raw_to_str resolver_ip_raw
+  return nil unless client_ip and resolver_ip
 
-  -- txid big-endian
-  buf[1] = bit.rshift bit.band(txid, 0xFF00), 8
-  buf[2] = bit.band txid, 0xFF
+  timeout = timeout or nft_cfg.ip_timeout or "2m"
+  timeout = tostring timeout
+  return nil unless is_valid_timeout timeout
 
-  -- IP source dans buf[3..18] (16 octets)
-  -- IPv4 : 4 octets écrits, les 12 suivants restent à 0x00 (ffi.new initialise à zéro)
-  -- IPv6 : 16 octets écrits exactement
-  for i = 1, #ip_raw
-    buf[2 + i] = ip_raw\byte i
+  reason = tostring(reason or "")
+  rule_id = tostring(rule_id or "")
+  if #reason > 63
+    reason = reason\sub 1, 63
+  if #rule_id > 63
+    rule_id = rule_id\sub 1, 63
 
-  -- Port source big-endian dans buf[19..20]
-  buf[19] = bit.rshift bit.band(src_port, 0xFF00), 8
-  buf[20] = bit.band src_port, 0xFF
+  bench = tonumber(benchmark_ms) or 0
+  bench = 0 if bench < 0
+  bench = math.floor bench
 
-  -- MAC source dans buf[21..26] (6 octets, 0x00 si inconnu)
-  if mac_raw and #mac_raw == 6
-    for i = 1, 6
-      buf[20 + i] = mac_raw\byte i
-  -- else : buf déjà zéroïsé par ffi.new
+  line = table.concat({
+    IPC_VERSION
+    string.format "%02x", msg_type
+    tostring(tonumber(txid) or 0)
+    client_ip
+    tostring(tonumber(src_port) or 0)
+    resolver_ip
+    mac_raw_to_str mac_raw
+    to_hex reason or ""
+    to_hex rule_id or ""
+    timeout
+    tostring bench
+  }, "|") .. "\n"
 
-  -- IP resolver dans buf[27..42] (16 octets)
-  for i = 1, #resolver_ip_raw
-    buf[26 + i] = resolver_ip_raw\byte i
+  return nil if #line > IPC_MAX_LINE
+  line
 
-  -- Reason: C bytes 43-106 (max REASON_SIZE-1 = 63 chars + implicit null)
-  if reason and #reason > 0
-    max_len = REASON_SIZE - 1
-    s = if #reason > max_len then reason\sub(1, max_len) else reason
-    for i = 1, #s
-      buf[REASON_OFFSET - 1 + i] = s\byte i
-
-  -- Benchmark: C bytes 107-114 (high uint32 BE, low uint32 BE)
-  if benchmark_ms and benchmark_ms > 0
-    high = math.floor benchmark_ms / 4294967296
-    low  = math.floor benchmark_ms % 4294967296
-    off = BENCHMARK_OFFSET
-    buf[off]     = bit.rshift bit.band(high, 0xFF000000), 24
-    buf[off + 1] = bit.rshift bit.band(high, 0x00FF0000), 16
-    buf[off + 2] = bit.rshift bit.band(high, 0x0000FF00), 8
-    buf[off + 3] = bit.band high, 0x000000FF
-    buf[off + 4] = bit.rshift bit.band(low, 0xFF000000), 24
-    buf[off + 5] = bit.rshift bit.band(low, 0x00FF0000), 16
-    buf[off + 6] = bit.rshift bit.band(low, 0x0000FF00), 8
-    buf[off + 7] = bit.band low, 0x000000FF
-
-  ffi.string buf, IPC_MSG_SIZE
-
---- Écrit un message IPC pour une transaction autorisée dans le pipe (côté Q0).
--- @tparam number     pipe_wfd fd d'écriture du pipe
--- @tparam number     txid     Identifiant de transaction DNS
--- @tparam string     ip_raw   4 ou 16 octets bruts de l'IP source (client)
--- @tparam number     src_port Port source
--- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
--- @tparam string     resolver_ip_raw 4 ou 16 octets bruts de l'IP resolver
--- @tparam string|nil reason   Raison textuelle de l'autorisation (max 63 chars UTF-8, nil si absent)
--- @tparam number|nil benchmark_ms  Millisecondes depuis boot, ou nil
--- @treturn boolean true si l'écriture est complète
-write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, reason, benchmark_ms
+write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, reason, benchmark_ms, rule_id, timeout
+  return false unless msg
   write_with_retry pipe_wfd, msg
 
---- Écrit un message IPC pour une transaction refusée dans le pipe (côté Q0).
--- Q1 intercèptera la réponse du serveur et la transformera en REFUSED+EDE.
--- @tparam number     pipe_wfd fd d'écriture du pipe
--- @tparam number     txid     Identifiant de transaction DNS
--- @tparam string     ip_raw   4 ou 16 octets bruts de l'IP source (client)
--- @tparam number     src_port Port source
--- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
--- @tparam string     resolver_ip_raw 4 ou 16 octets bruts de l'IP resolver
--- @tparam string|nil reason   Raison textuelle du refus (max 63 chars UTF-8, nil si absent)
--- @tparam number|nil benchmark_ms  Millisecondes depuis boot, ou nil
--- @treturn boolean true si l'écriture est complète
-write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false, reason, benchmark_ms
+write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false, reason, benchmark_ms, rule_id, timeout
+  return false unless msg
   write_with_retry pipe_wfd, msg
 
---- Écrit un message IPC pour une transaction DNS-seulement dans le pipe (côté Q0).
--- Q1 laissera passer la réponse (avec patch TTL+EDE) mais n'injectera pas
--- les IPs dans les sets nft — les redirections HTTP restent actives.
--- @tparam number     pipe_wfd fd d'écriture du pipe
--- @tparam number     txid     Identifiant de transaction DNS
--- @tparam string     ip_raw   4 ou 16 octets bruts de l'IP source (client)
--- @tparam number     src_port Port source
--- @tparam string|nil mac_raw  6 octets MAC bruts (nil si inconnu)
--- @tparam string     resolver_ip_raw 4 ou 16 octets bruts de l'IP resolver
--- @tparam string|nil reason   Raison textuelle de l'autorisation (max 63 chars UTF-8, nil si absent)
--- @tparam number|nil benchmark_ms  Millisecondes depuis boot, ou nil
--- @treturn boolean true si l'écriture est complète
-write_dnsonly_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true, reason, benchmark_ms
+write_dnsonly_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true, reason, benchmark_ms, rule_id, timeout
+  return false unless msg
   write_with_retry pipe_wfd, msg
 
--- ── Décodage (côté Q1) ───────────────────────────────────────────
---- Décode un message binaire IPC en table.
--- @tparam  string    raw Message de IPC_MSG_SIZE octets
--- @treturn table|nil Table {txid, ip_str, src_port, resolver_ip_str, msg_type, mac_str, ipv4, refused, reason} ou nil si invalide
+split_fields = (line) ->
+  out = {}
+  i = 1
+  while true
+    j = line\find "|", i, true
+    if j
+      out[#out + 1] = line\sub i, j - 1
+      i = j + 1
+    else
+      out[#out + 1] = line\sub i
+      break
+  out
+
 decode_msg = (raw) ->
-  return nil if #raw < IPC_MSG_SIZE
+  return nil, "empty" unless raw and #raw > 0
+  line = raw\gsub "\n+$", ""
+  parts = split_fields line
+  return nil, "field_count" unless #parts == 11
 
-  msg_type_full = raw\byte 1
-  msg_type      = bit.band msg_type_full, 0x7F  -- mask out RESOLVER_IPV6_FLAG
-  resolver_ipv6 = (bit.band(msg_type_full, RESOLVER_IPV6_FLAG) != 0)
+  version = parts[1]
+  return nil, "version" unless version == IPC_VERSION
 
-  txid     = bit.bor bit.lshift(raw\byte(2), 8), raw\byte(3)
-  src_port = bit.bor bit.lshift(raw\byte(20), 8), raw\byte(21)
+  msg_type_full = tonumber parts[2], 16
+  return nil, "msg_type" unless msg_type_full
+  msg_type = bit.band msg_type_full, 0x7F
+  resolver_ipv6 = bit.band(msg_type_full, RESOLVER_IPV6_FLAG) != 0
 
-  ipv4    = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV4_DNSONLY)
+  txid = tonumber parts[3]
+  src_port = tonumber parts[5]
+  benchmark_num = tonumber parts[11]
+  return nil, "txid" unless txid and txid >= 0 and txid <= 65535
+  return nil, "src_port" unless src_port and src_port >= 0 and src_port <= 65535
+  benchmark_num = 0 unless benchmark_num and benchmark_num >= 0
+
+  ipv4 = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV4_DNSONLY)
+  return nil, "family" unless ipv4 or msg_type == MSG_IPV6 or msg_type == MSG_IPV6_REFUSED or msg_type == MSG_IPV6_DNSONLY
   refused = (msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV6_REFUSED)
   dnsonly = (msg_type == MSG_IPV4_DNSONLY or msg_type == MSG_IPV6_DNSONLY)
 
-  ip_str = if ipv4
-    "#{raw\byte 4}.#{raw\byte 5}.#{raw\byte 6}.#{raw\byte 7}"
-  else
-    -- IPv6 : utiliser inet_ntop pour obtenir la forme canonique compressée (fd00:28::a)
-    -- identique à fmt_ipv6 dans parse/packet pour garantir la cohérence des clés pending.
-    ip_bytes = ffi.new "uint8_t[16]"
-    for i = 0, 15
-      ip_bytes[i] = raw\byte 4 + i
-    libc.inet_ntop AF_INET6, ip_bytes, ipv6_ntop_buf, 46
-    ffi.string ipv6_ntop_buf
+  ip_str = parts[4]
+  resolver_ip_str = parts[6]
+  return nil, "ip_client" unless (ipv4 and is_ipv4_str(ip_str)) or ((not ipv4) and is_ipv6_str(ip_str))
+  return nil, "ip_resolver" unless (resolver_ipv6 and is_ipv6_str(resolver_ip_str)) or ((not resolver_ipv6) and is_ipv4_str(resolver_ip_str))
 
-  resolver_ip_str = if resolver_ipv6
-    resolver_ip_bytes = ffi.new "uint8_t[16]"
-    for i = 0, 15
-      resolver_ip_bytes[i] = raw\byte 28 + i
-    libc.inet_ntop AF_INET6, resolver_ip_bytes, ipv6_ntop_buf, 46
-    ffi.string ipv6_ntop_buf
-  else
-    "#{raw\byte 28}.#{raw\byte 29}.#{raw\byte 30}.#{raw\byte 31}"
+  mac_str = parts[7]\lower!
+  return nil, "mac" unless is_valid_mac mac_str
 
-  -- MAC : octets 21-26 (indices Lua 22-27)
-  mac_str = string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-    raw\byte(22), raw\byte(23), raw\byte(24),
-    raw\byte(25), raw\byte(26), raw\byte(27)
+  reason, reason_err = from_hex parts[8]
+  return nil, "reason_#{reason_err}" if reason_err
+  rule_id, rule_err = from_hex parts[9]
+  return nil, "rule_id_#{rule_err}" if rule_err
 
-  -- Reason: C bytes 43-106 = Lua 1-based bytes 44-107
-  reason_parts = {}
-  for i = 44, 107
-    b = raw\byte i
-    break if b == 0
-    reason_parts[#reason_parts + 1] = string.char b
-  reason = table.concat reason_parts
+  timeout = parts[10]
+  return nil, "timeout" unless is_valid_timeout timeout
 
-  -- Benchmark: C bytes 107-114 = Lua 1-based bytes 108-115
-  high = bit.bor bit.lshift(raw\byte(108), 24), bit.lshift(raw\byte(109), 16),
-                 bit.lshift(raw\byte(110), 8), raw\byte(111)
-  low  = bit.bor bit.lshift(raw\byte(112), 24), bit.lshift(raw\byte(113), 16),
-                 bit.lshift(raw\byte(114), 8), raw\byte(115)
-  benchmark_ms = if high > 0 or low > 0
-    high * 4294967296 + low
-  else
-    nil
+  benchmark_ms = if benchmark_num > 0 then benchmark_num else nil
 
-  { :txid, :ip_str, :src_port, :resolver_ip_str, :msg_type, :mac_str, :ipv4, :refused, :dnsonly, :reason, :benchmark_ms }
-
--- ── Table des transactions en attente (côté Q1) ──────────────────
--- pending[key] = {expire: expire_time, refused: bool}
--- key = txid_hex .. ":" .. ip_str .. ":" .. port_str .. ":" .. resolver_ip_str
--- Accès O(1), purge paresseuse au moment du lookup.
+  {
+    :txid
+    :ip_str
+    :src_port
+    :resolver_ip_str
+    :msg_type
+    :mac_str
+    :ipv4
+    :refused
+    :dnsonly
+    :reason
+    :benchmark_ms
+    :rule_id
+    :timeout
+  }, nil
 
 pending = {}
+read_states = {}
 
 make_key = (txid, ip_str, src_port, resolver_ip_str) ->
   string.format "%04x:%s:%d:%s", txid, ip_str, src_port, resolver_ip_str
 
---- Draine le pipe (lecture non-bloquante) et remplit la table pending.
--- Pour chaque message décodé, appelle on_msg(msg) si fourni (optionnel).
--- @tparam number        pipe_rfd fd de lecture du pipe (mode O_NONBLOCK requis)
--- @tparam function      now_fn   Fonction retournant l'epoch courant (seconde)
--- @tparam function|nil  on_msg   Callback appelé pour chaque message décodé
--- @treturn number nombre de messages absorbés
-drain_pipe = (pipe_rfd, now_fn, on_msg) ->
-  buf = ffi.new "uint8_t[?]", IPC_MSG_SIZE
+set_pending = (msg, now_fn) ->
+  key = make_key msg.txid, msg.ip_str, msg.src_port, msg.resolver_ip_str
+  pending[key] = {
+    expire: now_fn! + (ipc_cfg.pending_ttl or 5)
+    refused: msg.refused
+    dnsonly: msg.dnsonly
+    reason: msg.reason
+    benchmark_ms: msg.benchmark_ms
+    rule_id: msg.rule_id
+    timeout: msg.timeout
+  }
+
+drain_lines = (pipe_rfd, buf, now_fn, on_msg) ->
   absorbed = 0
-
   while true
-    n = libc.read pipe_rfd, buf, IPC_MSG_SIZE
+    nl = buf\find "\n", 1, true
+    break unless nl
+    line = buf\sub 1, nl - 1
+    buf = buf\sub nl + 1
+    if #line == 0
+      continue
+    msg, err = decode_msg line
+    if msg
+      set_pending msg, now_fn
+      absorbed += 1
+      on_msg msg if on_msg
+    else
+      log_warn { action: "ipc_invalid_message", fd: pipe_rfd, reason: err or "decode_failed", raw: line\sub(1, 180) }
+  buf, absorbed
+
+drain_pipe = (pipe_rfd, now_fn, on_msg) ->
+  state = read_states[pipe_rfd] or ""
+  absorbed = 0
+  while true
+    n = libc.read pipe_rfd, read_buf, IPC_READ_CHUNK
     if n == 0
-      log_warn { action: "ipc_pipe_eof", fd: pipe_rfd }   -- Q0 died
+      log_warn { action: "ipc_pipe_eof", fd: pipe_rfd }
       break
-    break if n < 0   -- EAGAIN / other transient error
-
-    if n == IPC_MSG_SIZE
-      raw = ffi.string buf, IPC_MSG_SIZE
-      msg = decode_msg raw
-      if msg
-        key = make_key msg.txid, msg.ip_str, msg.src_port, msg.resolver_ip_str
-        pending[key] = { expire: now_fn! + IPC_PENDING_TTL, refused: msg.refused, dnsonly: msg.dnsonly, reason: msg.reason, benchmark_ms: msg.benchmark_ms }
-        absorbed += 1
-        on_msg msg if on_msg
-
+    if n < 0
+      errno_p = libc.__errno_location!
+      errno = if errno_p then errno_p[0] else 0
+      break if errno == EAGAIN or errno == EWOULDBLOCK
+      log_warn { action: "ipc_read_failed", fd: pipe_rfd, errno: errno }
+      break
+    state ..= ffi.string read_buf, n
+    if #state > IPC_MAX_LINE * 4
+      log_warn { action: "ipc_buffer_oversize", fd: pipe_rfd, size: #state }
+      state = ""
+    state, added = drain_lines pipe_rfd, state, now_fn, on_msg
+    absorbed += added
+    break if n < IPC_READ_CHUNK
+  read_states[pipe_rfd] = state
   absorbed
 
---- Vérifie si une transaction est en attente (et non expirée).
--- Purge l'entrée si elle est expirée (purge paresseuse).
--- @tparam number   txid     Identifiant de transaction DNS
--- @tparam string   ip_str   Adresse IP source (texte)
--- @tparam number   src_port Port source
--- @tparam string   resolver_ip_str Adresse IP du resolver (texte)
--- @tparam function now_fn   Fonction retournant l'epoch courant
--- @treturn boolean true si la transaction est présente et valide
 is_pending = (txid, ip_str, src_port, resolver_ip_str, now_fn) ->
   key = make_key txid, ip_str, src_port, resolver_ip_str
   entry = pending[key]
   return false unless entry
-
   if now_fn! > entry.expire
-    pending[key] = nil   -- purge paresseuse
+    pending[key] = nil
     return false
-
   true
 
---- Retourne l'entrée pending d'une transaction, ou nil si absente/expirée.
--- Purge l'entrée si elle est expirée (purge paresseuse).
--- @tparam number   txid     Identifiant de transaction DNS
--- @tparam string   ip_str   Adresse IP source (texte)
--- @tparam number   src_port Port source
--- @tparam string   resolver_ip_str Adresse IP du resolver (texte)
--- @tparam function now_fn   Fonction retournant l'epoch courant
--- @treturn table|nil Table {expire, refused} ou nil si absent/expiré
 get_pending_entry = (txid, ip_str, src_port, resolver_ip_str, now_fn) ->
   key = make_key txid, ip_str, src_port, resolver_ip_str
   entry = pending[key]
   return nil unless entry
-
   if now_fn! > entry.expire
     pending[key] = nil
     return nil
-
   entry
 
---- Retire une transaction de la table pending (une réponse par question).
--- @tparam number txid     Identifiant de transaction DNS
--- @tparam string ip_str   Adresse IP source (texte)
--- @tparam number src_port Port source
--- @tparam string resolver_ip_str Adresse IP du resolver (texte)
--- @treturn nil
 consume = (txid, ip_str, src_port, resolver_ip_str) ->
   key = make_key txid, ip_str, src_port, resolver_ip_str
   pending[key] = nil
 
-{ :encode_msg, :decode_msg, :write_msg, :write_refused_msg, :write_dnsonly_msg, :drain_pipe
-  :is_pending, :get_pending_entry, :consume
-  :MSG_IPV4, :MSG_IPV6, :MSG_IPV4_REFUSED, :MSG_IPV6_REFUSED
-  :MSG_IPV4_DNSONLY, :MSG_IPV6_DNSONLY, :make_key }
+{
+  :encode_msg
+  :decode_msg
+  :write_msg
+  :write_refused_msg
+  :write_dnsonly_msg
+  :drain_pipe
+  :is_pending
+  :get_pending_entry
+  :consume
+  :MSG_IPV4
+  :MSG_IPV6
+  :MSG_IPV4_REFUSED
+  :MSG_IPV6_REFUSED
+  :MSG_IPV4_DNSONLY
+  :MSG_IPV6_DNSONLY
+  :make_key
+}

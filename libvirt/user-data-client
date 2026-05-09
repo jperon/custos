@@ -15,7 +15,7 @@ packages:
 write_files:
   # Static entries for blocked targets. Custos forges NXDOMAIN/REFUSED for
   # these domains, so curl would fail at DNS resolution and never emit a
-  # SYN to trigger Q2 (captive) or Q3 (reject). /etc/hosts lets us bypass
+  # SYN to trigger captive (captive) or reject (reject). /etc/hosts lets us bypass
   # resolution and exercise the TCP path directly.
   - path: /etc/hosts.custos
     content: |

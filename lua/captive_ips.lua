@@ -9,16 +9,6 @@ detect = function(auth_cfg)
   local ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
   local local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4")
   local local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
-  if not local_ip4 and not local_ip6 then
-    local legacy = auth_cfg.captive_ip or os.getenv("CAPTIVE_IP")
-    if legacy then
-      if legacy:find(":", 1, true) then
-        local_ip6 = legacy
-      else
-        local_ip4 = legacy
-      end
-    end
-  end
   if not local_ip4 then
     local ok, out = pcall(function()
       local fh = io.popen("ip -4 addr show dev " .. tostring(ifname) .. " scope global 2>/dev/null | awk '/inet/{print $2}' | head -1 | cut -d'/' -f1")

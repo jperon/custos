@@ -24,18 +24,6 @@ bit     = require "bit"
 { :parse, :types, :rcodes }              = require "ipparse.l7.dns"
 upstream_mod                            = require "doh.upstream"
 
-{
-  :DOH_ENABLED
-  :DOH_PORT
-  :DOH_UPSTREAM_IPV4
-  :DOH_UPSTREAM_IPV6
-  :DOH_UPSTREAM_PORT
-  :DOH_UPSTREAM_TIMEOUT_MS
-  :DOH_CERT_PATH
-  :DOH_KEY_PATH
-  :DOH_PREFER_IPV6
-} = require "config"
-
 -- ── Base64url decoder (RFC 4648 §5, no padding required) ────────────────────
 
 b64_chars = {}

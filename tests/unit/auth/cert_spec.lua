@@ -3,6 +3,16 @@ do
   local _obj_0 = require("auth.cert")
   hash_string, generate_self_signed, make_context, load_static, load_or_generate_sni = _obj_0.hash_string, _obj_0.generate_self_signed, _obj_0.make_context, _obj_0.load_static, _obj_0.load_or_generate_sni
 end
+local has_px5g
+has_px5g = function()
+  local f = io.popen("command -v px5g 2>/dev/null")
+  if not (f) then
+    return false
+  end
+  local out = f:read("*l")
+  f:close()
+  return out ~= nil and out ~= ""
+end
 return describe("auth/cert", function()
   it("hash_string est déterministe", function()
     return assert.equals(hash_string("hello"), hash_string("hello"))
@@ -21,6 +31,9 @@ return describe("auth/cert", function()
     return assert.not_equals(result, hash_string("x"))
   end)
   it("generate_self_signed génère un certificat et une clé valides", function()
+    if not (has_px5g()) then
+      pending("px5g non installé")
+    end
     local key_path = "tmp/spec_test_gen.key"
     local cert_path = "tmp/spec_test_gen.crt"
     os.remove(key_path)
@@ -28,7 +41,7 @@ return describe("auth/cert", function()
     local ok, out = generate_self_signed(key_path, cert_path, {
       "DNS:spec-test.local"
     })
-    assert.is_true(ok, "openssl doit réussir: " .. tostring(out))
+    assert.is_true(ok, "px5g doit réussir: " .. tostring(out))
     local fh_key = io.open(key_path, "r")
     local fh_crt = io.open(cert_path, "r")
     assert.is_not_nil(fh_key, "fichier clé doit exister")
@@ -37,6 +50,9 @@ return describe("auth/cert", function()
     return fh_crt:close()
   end)
   it("generate_self_signed avec plusieurs SANs", function()
+    if not (has_px5g()) then
+      pending("px5g non installé")
+    end
     local key_path = "tmp/spec_test_multi.key"
     local cert_path = "tmp/spec_test_multi.crt"
     local ok, out = generate_self_signed(key_path, cert_path, {
@@ -47,6 +63,9 @@ return describe("auth/cert", function()
     return assert.is_true(ok)
   end)
   it("generate_self_signed retourne false si le chemin clé est invalide", function()
+    if not (has_px5g()) then
+      pending("px5g non installé")
+    end
     local ok, out = generate_self_signed("/nonexistent/path/test.key", "/nonexistent/path/test.crt", {
       "DNS:test.local"
     })

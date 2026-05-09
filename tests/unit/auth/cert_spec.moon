@@ -4,6 +4,13 @@
 { :hash_string, :generate_self_signed, :make_context, :load_static,
   :load_or_generate_sni } = require "auth.cert"
 
+has_px5g = ->
+  f = io.popen "command -v px5g 2>/dev/null"
+  return false unless f
+  out = f\read "*l"
+  f\close!
+  out ~= nil and out ~= ""
+
 describe "auth/cert", ->
 
   it "hash_string est déterministe", ->
@@ -24,15 +31,16 @@ describe "auth/cert", ->
     assert.is_string result
     assert.not_equals result, hash_string("x")
 
-  -- ── generate_self_signed : génération réelle via openssl ─────────────────
+  -- ── generate_self_signed : génération réelle via px5g ────────────────────
 
   it "generate_self_signed génère un certificat et une clé valides", ->
+    pending "px5g non installé" unless has_px5g!
     key_path  = "tmp/spec_test_gen.key"
     cert_path = "tmp/spec_test_gen.crt"
     os.remove key_path
     os.remove cert_path
     ok, out = generate_self_signed key_path, cert_path, {"DNS:spec-test.local"}
-    assert.is_true ok, "openssl doit réussir: " .. tostring(out)
+    assert.is_true ok, "px5g doit réussir: " .. tostring(out)
     -- Vérifier que les fichiers ont été créés
     fh_key = io.open key_path, "r"
     fh_crt = io.open cert_path, "r"
@@ -42,6 +50,7 @@ describe "auth/cert", ->
     fh_crt\close!
 
   it "generate_self_signed avec plusieurs SANs", ->
+    pending "px5g non installé" unless has_px5g!
     key_path  = "tmp/spec_test_multi.key"
     cert_path = "tmp/spec_test_multi.crt"
     ok, out = generate_self_signed key_path, cert_path,
@@ -49,6 +58,7 @@ describe "auth/cert", ->
     assert.is_true ok
 
   it "generate_self_signed retourne false si le chemin clé est invalide", ->
+    pending "px5g non installé" unless has_px5g!
     -- Un chemin dans un répertoire inexistant
     ok, out = generate_self_signed "/nonexistent/path/test.key", "/nonexistent/path/test.crt",
       {"DNS:test.local"}

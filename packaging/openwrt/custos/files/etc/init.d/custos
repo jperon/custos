@@ -19,12 +19,7 @@ start_service() {
     # "custos" comme ident syslog (procd extrait basename(command[0])).
     [ -L "$PROG" ] || ln -sf "$LUAJIT" "$PROG"
 
-    # Génère /var/run/custos/config.lua depuis /etc/config/custos.
-    # En cas d'échec, custos utilise le config.lua compilé dans CUSTOS_DIR.
-    "$PROG" "$CUSTOS_DIR/uci_config.lua" || \
-        echo "custos: avertissement — génération config UCI échouée, utilise les défauts compilés"
-
-    # Applique le ruleset nftables (règles principales + extra UCI) depuis Lua
+    # Applique le ruleset nftables (règles principales + extra config.moon) depuis Lua
     # synchronement avant que procd ne démarre le worker.
     if ! _apply_lua_nft_rules; then
         echo "custos: avertissement — échec de l'application des règles nftables, démarrage en mode dégradé"
@@ -32,7 +27,7 @@ start_service() {
 
     procd_open_instance
     procd_set_param command "$PROG" "$CUSTOS_DIR/main.lua"
-    procd_set_param env LUA_PATH="/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;" CUSTOS_FILTER_CONFIG="$FILTER_CONFIG"
+    procd_set_param env LUA_PATH="/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -60,8 +55,8 @@ stop_service() {
     _cron_remove
 }
 
-# Un rechargement applique tous les paramètres UCI : redémarrage complet nécessaire
-# car les valeurs de config.lua sont capturées à l'initialisation des modules Lua.
+# Un rechargement applique les paramètres plateforme UCI et /etc/config.moon :
+# redémarrage complet nécessaire car les valeurs sont capturées à l'init Lua.
 reload_service() {
     stop
     start
@@ -78,8 +73,7 @@ update_lists() {
     [ -z "$LUAJIT" ] && { echo "custos: luajit introuvable"; return 1; }
 
     local config pid_file
-    config=$(uci get custos.main.filter_config 2>/dev/null)
-    config="${config:-$FILTER_CONFIG}"
+    config="$FILTER_CONFIG"
     pid_file=/var/run/custos.pid
 
     echo "custos: mise à jour des listes de domaines (config: $config)..."
@@ -94,8 +88,7 @@ _cron_add() {
     local schedule config
     schedule=$(uci get custos.main.update_lists_schedule 2>/dev/null)
     schedule="${schedule:-0 3 * * *}"
-    config=$(uci get custos.main.filter_config 2>/dev/null)
-    config="${config:-$FILTER_CONFIG}"
+    config="$FILTER_CONFIG"
 
     _cron_remove
     mkdir -p "$(dirname "$CRONTABS_ROOT")"
@@ -115,12 +108,11 @@ _cron_remove() {
 # ── Règles nftables ───────────────────────────────────────────────────────────
 
 # Applique le ruleset nftables principal (via nft_rules.apply()) et les règles
-# nft extra UCI (via nft_extra_rules.apply_from_config()) en un seul appel Lua.
+# nft extra de config.moon (via nft_extra_rules.apply_from_config()) en un seul appel Lua.
 # Appelé depuis start_service() avant que procd ne démarre le worker.
 _apply_lua_nft_rules() {
-    LUA_PATH="/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;/var/run/custos/?.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" \
+    LUA_PATH="/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" \
     LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;" \
-    CUSTOS_FILTER_CONFIG="$FILTER_CONFIG" \
         "$PROG" -e "if not require('nft_rules').apply() then os.exit(1) end; require('nft_extra_rules').apply_from_config()" \
         2>/dev/null
 }

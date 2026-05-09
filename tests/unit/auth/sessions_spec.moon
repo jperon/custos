@@ -1,13 +1,13 @@
 -- tests/unit/auth/sessions_spec.moon
 -- Tests des fonctions pures de auth/sessions :
 --   serialize, write_sessions, load_sessions, add_session, purge_expired,
---   session_for_ip, user_for_ip.
+--   session_for_mac, user_for_mac.
 -- Pas de FFI, pas de root requis.
 -- Stubs injectés par tests/helpers/busted_setup.lua.
 
 { :serialize, :write_sessions, :load_sessions,
   :add_session, :purge_expired,
-  :session_for_ip, :user_for_ip,
+  :session_for_mac, :user_for_mac,
   :reset_cache } = require "auth.sessions"
 
 -- Tous les fichiers temporaires restent dans ./tmp/ (règle AGENTS.md).
@@ -18,7 +18,7 @@ SF_FILE   = "tmp/sessions_spec_sf.lua"
 FUTURE = 9999999999
 
 -- Écrire + invalider le cache en une seule opération (pattern identique à
--- run_tests.moon pour session_for_ip).
+-- run_tests.moon pour session_for_mac).
 write_and_reset = (sessions, path) ->
   write_sessions sessions, path
   reset_cache!
@@ -230,8 +230,8 @@ describe "auth/sessions", ->
       assert.is_nil     sessions["aa:bb:cc:dd:ee:07"]
 
 
-  -- ── session_for_ip / user_for_ip ──────────────────────────────────────────
-  describe "session_for_ip", ->
+  -- ── session_for_mac / user_for_mac ───────────────────────────────────────
+  describe "session_for_mac", ->
 
     MAC = "aa:bb:cc:dd:ee:ff"
 
@@ -243,7 +243,7 @@ describe "auth/sessions", ->
 
     it "retourne la session par lookup MAC direct", ->
       write_and_reset { [MAC]: { user: "alice", expires: FUTURE } }, SF_FILE
-      s = session_for_ip nil, SF_FILE, MAC
+      s = session_for_mac MAC, nil, SF_FILE
       assert.is_not_nil s
       assert.equals "alice", s.user
 
@@ -251,7 +251,7 @@ describe "auth/sessions", ->
       write_and_reset {
         [MAC]: { user: "alice", expires: FUTURE, ips: { ipv4: "10.0.0.1" } }
       }, SF_FILE
-      s = session_for_ip "10.0.0.1", SF_FILE
+      s = session_for_mac nil, "10.0.0.1", SF_FILE
       assert.is_not_nil s
       assert.equals "alice", s.user
 
@@ -259,7 +259,7 @@ describe "auth/sessions", ->
       write_and_reset {
         [MAC]: { user: "j@prn.ovh", expires: FUTURE, ips: { ipv6: "fd00::1" } }
       }, SF_FILE
-      s = session_for_ip "fd00::1", SF_FILE
+      s = session_for_mac nil, "fd00::1", SF_FILE
       assert.is_not_nil s
       assert.equals "j@prn.ovh", s.user
 
@@ -267,7 +267,7 @@ describe "auth/sessions", ->
       write_and_reset {
         [MAC]: { user: "alice", expires: FUTURE, ips: { ipv4: "10.0.0.99" } }
       }, SF_FILE
-      s = session_for_ip "10.0.0.99", SF_FILE, "unknown"
+      s = session_for_mac "unknown", "10.0.0.99", SF_FILE
       assert.is_not_nil s
       assert.equals "alice", s.user
 
@@ -275,27 +275,27 @@ describe "auth/sessions", ->
       write_and_reset {
         [MAC]: { user: "alice", expires: FUTURE }
       }, SF_FILE
-      s = session_for_ip "9.9.9.9", SF_FILE
+      s = session_for_mac nil, "9.9.9.9", SF_FILE
       assert.is_nil s
 
     it "session expirée → nil", ->
       write_and_reset {
         [MAC]: { user: "alice", expires: 1 }
       }, SF_FILE
-      s = session_for_ip "10.0.0.9", SF_FILE, MAC
+      s = session_for_mac MAC, "10.0.0.9", SF_FILE
       assert.is_nil s
 
     it "MAC fournie explicitement prime sur scan IP", ->
       write_and_reset {
         [MAC]: { user: "j@prn.ovh", expires: FUTURE }
       }, SF_FILE
-      s = session_for_ip "10.35.1.53", SF_FILE, MAC
+      s = session_for_mac MAC, "10.35.1.53", SF_FILE
       assert.is_not_nil s
       assert.equals "j@prn.ovh", s.user
 
 
-  -- ── user_for_ip ───────────────────────────────────────────────────────────
-  describe "user_for_ip", ->
+  -- ── user_for_mac ──────────────────────────────────────────────────────────
+  describe "user_for_mac", ->
 
     MAC = "aa:bb:cc:dd:ee:ff"
 
@@ -309,25 +309,25 @@ describe "auth/sessions", ->
       write_and_reset {
         [MAC]: { user: "j@prn.ovh", expires: FUTURE, ips: { ipv4: "10.35.1.53" } }
       }, SF_FILE
-      user = user_for_ip "10.35.1.53", SF_FILE
+      user = user_for_mac nil, "10.35.1.53", SF_FILE
       assert.equals "j@prn.ovh", user
 
     it "IP nil → nil", ->
-      user = user_for_ip nil, SF_FILE
+      user = user_for_mac nil, nil, SF_FILE
       assert.is_nil user
 
     it "IP sans session correspondante → nil", ->
       write_and_reset {
         [MAC]: { user: "alice", expires: FUTURE, ips: { ipv4: "10.0.0.1" } }
       }, SF_FILE
-      user = user_for_ip "192.168.99.1", SF_FILE
+      user = user_for_mac nil, "192.168.99.1", SF_FILE
       assert.is_nil user
 
     it "session expirée → nil", ->
       write_and_reset {
         [MAC]: { user: "alice", expires: 1, ips: { ipv4: "10.0.0.1" } }
       }, SF_FILE
-      user = user_for_ip "10.0.0.1", SF_FILE, MAC
+      user = user_for_mac MAC, "10.0.0.1", SF_FILE
       assert.is_nil user
 
   -- ── load_sessions cas limites ────────────────────────────────────────────

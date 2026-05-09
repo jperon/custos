@@ -1,7 +1,7 @@
 -- src/bridge_raw.moon
 -- Socket AF_PACKET/SOCK_RAW pour injection de trames Ethernet sur un bridge.
--- Factorisé pour être partagé entre worker_captive (Q2, redirections TCP) et
--- worker_questions (Q0, réponses DNS forgées).
+-- Factorisé pour être partagé entre worker_captive (captive, redirections TCP) et
+-- worker_questions (question, réponses DNS forgées).
 
 { :ffi, :libc } = require "ffi_defs"
 { :C, :AF_PACKET, :SOCK_RAW, :ETH_P_ALL } = require "lib.socket"

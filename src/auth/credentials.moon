@@ -5,67 +5,87 @@
 --   user:pbkdf2-sha256:<iter>:<salt_hex>:<hash_hex>
 -- Lignes vides et commentaires (#) ignorés.
 --
--- Le hash est calculé via PKCS5_PBKDF2_HMAC (OpenSSL libcrypto),
--- déjà disponible comme dépendance transitive de luasec.
+-- Implémentation crypto pure Lua (pas de dépendance OpenSSL/libcrypto).
 --
 -- Pour générer un hash (helper CLI) :
 --   luajit lua/auth/credentials.lua <user> <password>
 
-ffi = require "ffi"
 bit = require "bit"
-
-local crypto
-do
-  ok, lib = pcall ffi.load, "crypto"
-  unless ok
-    ok, lib = pcall ffi.load, "libcrypto.so.3"
-  unless ok
-    ok, lib = pcall ffi.load, "libcrypto.so.1.1"
-  error "libcrypto introuvable (paquet openssl requis)" unless ok
-  crypto = lib
+ffi = require "ffi"
 
 ffi.cdef [[
-  int PKCS5_PBKDF2_HMAC(
-    const char *pass, int passlen,
-    const unsigned char *salt, int saltlen,
-    int iter,
-    const void *digest,
-    int keylen, unsigned char *out
-  );
-  const void* EVP_sha256(void);
-  int RAND_bytes(unsigned char *buf, int num);
   int chmod(const char *path, unsigned int mode);
 ]]
-
-ENOENT = 2
 
 HASH_LEN         = 32     -- SHA-256 → 32 octets
 DEFAULT_ITER     = 100000
 DEFAULT_SALT_LEN = 16     -- 128 bits
 
--- ── Utilitaires hex ─────────────────────────────────────────────
+-- ── Backend SHA/HMAC ───────────────────────────────────────────────
 
---- Convertit une chaîne hexadécimale en buffer FFI.
--- @tparam  string hex Chaîne hexadécimale (longueur paire)
--- @treturn cdata, number Buffer uint8_t[] et sa longueur en octets
-hex_to_buf = (hex) ->
-  n = math.floor(#hex / 2)
-  buf = ffi.new "uint8_t[?]", n
-  for i = 0, n - 1
-    buf[i] = tonumber hex\sub(i * 2 + 1, i * 2 + 2), 16
-  buf, n
+is_hex_digest = (s) ->
+  type(s) == "string" and #s == 64 and s\match("^[0-9a-fA-F]+$") != nil
 
---- Convertit un buffer FFI en chaîne hexadécimale minuscule.
--- @tparam cdata  buf Buffer uint8_t[]
--- @tparam number len Nombre d'octets à convertir
--- @treturn string Chaîne hexadécimale
-buf_to_hex = (buf, len) ->
+load_sha = ->
+  ok, mod = pcall require, "ipparse.lib.sha"
+  return mod if ok and mod and mod.hmac and mod.sha256
+  ok, mod = pcall require, "ipparse.lib.sha2"
+  return mod if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin
+  ok, mod = pcall require, "sha2"
+  return mod if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin
+  error "Aucun backend SHA/HMAC disponible"
+
+sha = load_sha!
+:hmac, :sha256 = sha
+hex_to_bin = sha.hex_to_bin or (hex) ->
+  out = {}
+  for i = 1, #hex, 2
+    out[#out + 1] = string.char tonumber(hex\sub(i, i + 1), 16)
+  table.concat out
+
+hmac_bin = (key, msg) ->
+  d = hmac sha256, key, msg
+  if is_hex_digest d
+    hex_to_bin d
+  else
+    d
+
+-- ── Utilitaires hex/bin ────────────────────────────────────────────
+
+bin_to_hex = (s) ->
+  (s\gsub ".", (c) -> string.format "%02x", string.byte c)
+
+u32be = (n) ->
+  string.char(
+    bit.band(bit.rshift(n, 24), 0xFF),
+    bit.band(bit.rshift(n, 16), 0xFF),
+    bit.band(bit.rshift(n, 8), 0xFF),
+    bit.band(n, 0xFF)
+  )
+
+xor_bytes = (a, b) ->
+  out = {}
+  for i = 1, #a
+    out[i] = string.char bit.bxor(a\byte(i), b\byte(i))
+  table.concat out
+
+-- ── PBKDF2-SHA256 ──────────────────────────────────────────────────
+
+pbkdf2_raw = (password, salt_bin, iterations, dk_len = HASH_LEN) ->
+  hlen = HASH_LEN
+  blocks = math.ceil dk_len / hlen
   t = {}
-  for i = 0, len - 1
-    t[i + 1] = string.format "%02x", buf[i]
-  table.concat t
 
--- ── PBKDF2-SHA256 ───────────────────────────────────────────────
+  for i = 1, blocks
+    u = hmac_bin password, salt_bin .. u32be(i)
+    acc = u
+    for _ = 2, iterations
+      u = hmac_bin password, u
+      acc = xor_bytes acc, u
+    t[#t + 1] = acc
+
+  derived = table.concat t
+  derived\sub 1, dk_len
 
 --- Calcule le hash PBKDF2-SHA256 d'un mot de passe.
 -- @tparam string password   Mot de passe en clair
@@ -73,17 +93,17 @@ buf_to_hex = (buf, len) ->
 -- @tparam number iterations Nombre d'itérations PBKDF2
 -- @treturn string Hash en hexadécimal (64 caractères)
 pbkdf2 = (password, salt_hex, iterations) ->
-  salt_buf, salt_len = hex_to_buf salt_hex
-  out = ffi.new "uint8_t[32]"
-  rc = crypto.PKCS5_PBKDF2_HMAC(
-    password, #password,
-    salt_buf, salt_len,
-    iterations,
-    crypto.EVP_sha256!,
-    HASH_LEN, out
-  )
-  error "PKCS5_PBKDF2_HMAC a échoué" unless rc == 1
-  buf_to_hex out, HASH_LEN
+  salt_bin = hex_to_bin salt_hex
+  out = pbkdf2_raw password, salt_bin, iterations, HASH_LEN
+  bin_to_hex out
+
+read_urandom = (n) ->
+  fh, err = io.open "/dev/urandom", "rb"
+  error "Impossible d'ouvrir /dev/urandom : #{err}" unless fh
+  data = fh\read n
+  fh\close!
+  error "Lecture incomplète de /dev/urandom" unless data and #data == n
+  data
 
 --- Génère un enregistrement de hash pour un mot de passe.
 -- Retourne la chaîne à écrire dans le fichier secrets.
@@ -92,11 +112,8 @@ pbkdf2 = (password, salt_hex, iterations) ->
 -- @treturn string Chaîne au format pbkdf2-sha256:<iter>:<salt_hex>:<hash_hex>
 hash_password = (password, iterations) ->
   iterations = iterations or DEFAULT_ITER
-  salt_buf = ffi.new "uint8_t[?]", DEFAULT_SALT_LEN
-  rc = crypto.RAND_bytes salt_buf, DEFAULT_SALT_LEN
-  error "RAND_bytes a échoué" unless rc == 1
-  salt_hex = buf_to_hex salt_buf, DEFAULT_SALT_LEN
-  hash     = pbkdf2 password, salt_hex, iterations
+  salt_hex = bin_to_hex read_urandom DEFAULT_SALT_LEN
+  hash = pbkdf2 password, salt_hex, iterations
   "pbkdf2-sha256:#{iterations}:#{salt_hex}:#{hash}"
 
 --- Vérifie un mot de passe contre un enregistrement stocké.
@@ -115,7 +132,7 @@ verify_password = (password, stored) ->
     diff = bit.bor diff, bit.bxor computed\byte(i), hash_hex\byte(i)
   diff == 0
 
--- ── Chargement du fichier secrets ───────────────────────────────
+-- ── Chargement du fichier secrets ──────────────────────────────────
 
 --- Charge un fichier secrets et retourne une table user → hash stocké.
 -- Format : une ligne par utilisateur "user:pbkdf2-sha256:<iter>:<salt>:<hash>".
@@ -135,7 +152,7 @@ load_secrets = (path) ->
   fh\close!
   secrets
 
--- ── Inscription ───────────────────────────────────────────────────
+-- ── Inscription ────────────────────────────────────────────────────
 
 --- Valide un identifiant (courriel) pour l'inscription.
 -- Doit être une adresse de type local@domaine, 3 à 64 caractères.
@@ -172,16 +189,11 @@ register_user = (username, password, secrets_path, current_secrets) ->
   unless fh
     return nil, "Impossible de créer le fichier temporaire : #{err}"
 
-  existing, exist_err = io.open secrets_path, "r"
+  existing = io.open secrets_path, "r"
   if existing
     for line in existing\lines!
       fh\write line .. "\n"
     existing\close!
-  else
-    unless ffi.C.__errno_location()[0] == ENOENT
-      fh\close!
-      os.remove tmp_path
-      return nil, "Impossible de lire le fichier secrets : #{exist_err}"
 
   fh\write "#{username}:#{hash_entry}\n"
   fh\close!

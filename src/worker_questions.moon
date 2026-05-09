@@ -1,17 +1,20 @@
--- src/worker_q0.moon
--- Worker Q0 : traitement des questions DNS (UDP/53 src=LAN, dst=resolver).
+-- src/worker_questions.moon
+-- Worker question : traitement des questions DNS (UDP/53 src=LAN, dst=resolver).
 --
 -- Pour chaque paquet :
 --   1. Parse L2 (MAC src via nfq_get_packet_hw)
 --   2. Parse L3/L4/L7 via parse/packet (IPv4 et IPv6)
 --   3. Vérifie allowlist → décide allow ou refuse
---   4. Si autorisé : envoie write_msg (allowed) dans le pipe IPC vers Q1, NF_ACCEPT
---   5. Si refusé   : envoie write_refused_msg dans le pipe IPC vers Q1, NF_ACCEPT
---      Q1 intercepte la réponse du serveur et la transforme en REFUSED+EDE
+--   4. Si autorisé : envoie write_msg (allowed) dans le pipe IPC vers response, NF_ACCEPT
+--   5. Si refusé   : envoie write_refused_msg dans le pipe IPC vers response, NF_ACCEPT
+--      response intercepte la réponse du serveur et la transforme en REFUSED+EDE
 --   6. Log structuré TSV (champs: decision, qname, mac_src, src_ip, dst_ip, vlan, user, af, reason, rule)
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :QUEUE_QUESTIONS, :AUTH_SESSIONS_FILE, :BENCHMARK } = require "config"
+config = require "config"
+runtime_cfg = config.runtime or {}
+nft_cfg = config.nft or {}
+auth_cfg = config.auth or {}
 { :get_l2 } = require "nfq/ethernet"
 packet                   = require "nfq/packet"
 filter                   = require "filter"
@@ -24,10 +27,10 @@ forge_dns = require "forge_dns"
 bridge_raw = require "bridge_raw"
 { new: new_eth, proto: {:IP4, :IP6} } = require "ipparse.l2.ethernet"
 
--- fd d'écriture du pipe IPC Q0→Q1, injecté par main.moon avant fork()
+-- fd d'écriture du pipe IPC question→response, injecté par main.moon avant fork()
 pipe_wfd = nil
 
--- fd d'écriture du pipe d'apprentissage Q0→mac_learner.
+-- fd d'écriture du pipe d'apprentissage question→mac_learner.
 mac_learn_wfd = nil
 
 -- Benchmark : buffer timespec réutilisé pour éviter l'allocation hot-path
@@ -37,7 +40,7 @@ CLOCK_MONOTONIC = 1
 --- Retourne les millisecondes depuis boot (CLOCK_MONOTONIC), ou nil.
 -- @treturn number|nil
 get_benchmark_ms = ->
-  return nil unless BENCHMARK
+  return nil unless runtime_cfg.benchmark
   libc.clock_gettime CLOCK_MONOTONIC, _benchmark_ts
   tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
 
@@ -182,8 +185,8 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- ── Vol de question DNS pour le portail captif ───────────────────
   -- Si la question porte sur le hostname du portail captif (extrait de
   -- redirect_url), on forge une réponse DNS (A ou AAAA) et on l'injecte
-  -- directement via AF_PACKET sur le bridge, comme le fait Q2 pour les TCP.
-  -- La question originale est droptée (NF_DROP) ; aucun message IPC vers Q1.
+  -- directement via AF_PACKET sur le bridge, comme le fait captive pour les TCP.
+  -- La question originale est droptée (NF_DROP) ; aucun message IPC vers response.
   -- Cette approche est nécessaire car nfq_set_verdict(NF_ACCEPT, payload) ne
   -- peut pas inverser la direction d'un paquet (le paquet resterait sur le
   -- chemin LAN→WAN au lieu d'être renvoyé vers le client).
@@ -236,6 +239,10 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   dnsonly      = false
   block_reason = nil
   allow_reason = nil
+  block_rule_id = nil
+  allow_rule_id = nil
+  block_timeout = nil
+  allow_timeout = nil
   q_fields = {
     mac_src:     l2.mac_src
     vlan:        l2.vlan
@@ -246,7 +253,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     dst_port:    pkt.l4.dst_port
     txid:        string.format "0x%04x", pkt.dns.txid
     af:          pkt.ip.version == 6 and "ipv6" or "ipv4"
-    user:        user_for_mac l2.mac_src, pkt.ip.src_ip, AUTH_SESSIONS_FILE
+    user:        user_for_mac l2.mac_src, pkt.ip.src_ip, auth_cfg.sessions_file
   }
 
   for _, q in ipairs pkt.questions
@@ -259,35 +266,52 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       vlan:   l2.vlan
       ts:     os.time!
     }
-    allowed, reason, rule = filter.decide req
+    decision = if filter.decide_meta then filter.decide_meta req else nil
+    if decision
+      allowed = decision.verdict
+      reason = decision.reason
+      rule_id = decision.rule_id
+      nft_timeout = decision.timeout
+    else
+      allowed, reason, rule_id = filter.decide req
+      nft_timeout = nil
     q_fields.reason = reason or (allowed == "dnsonly" and "dnsonly") or (allowed and "allowed") or "denied"
-    q_fields.rule = rule or ""
+    q_fields.rule = rule_id or ""
     if allowed == "dnsonly"
       log_allow q_fields
       dnsonly = true
       allow_reason = reason
+      allow_rule_id = rule_id
+      allow_timeout = nft_timeout
     elseif allowed
       log_allow q_fields
       allow_reason = reason
+      allow_rule_id = rule_id
+      allow_timeout = nft_timeout
     else
       log_block q_fields
       verdict = NF_DROP
       block_reason = reason
+      block_rule_id = rule_id
+      block_timeout = nft_timeout
     write_event q_fields, allowed
 
-  -- Enregistre la transaction IPC pour Q1 (toujours NF_ACCEPT — Q1 gère tout).
-  -- Si autorisé   : Q1 patche TTL + injecte EDE "Custos vigilat."
-  -- Si dnsonly    : Q1 patche TTL + EDE mais n'injecte pas les IPs dans nft
-  -- Si refusé     : Q1 transforme la réponse du serveur en REFUSED+EDE Filtered
+  -- Enregistre la transaction IPC pour response (toujours NF_ACCEPT — response gère tout).
+  -- Si autorisé   : response patche TTL + injecte EDE "Custos vigilat."
+  -- Si dnsonly    : response patche TTL + EDE mais n'injecte pas les IPs dans nft
+  -- Si refusé     : response transforme la réponse du serveur en REFUSED+EDE Filtered
   benchmark_ms = get_benchmark_ms!
+  allow_timeout = allow_timeout or nft_cfg.ip_timeout
+  block_timeout = block_timeout or nft_cfg.ip_timeout
+  q_fields.timeout = if verdict == NF_ACCEPT then allow_timeout else block_timeout
   ipc_ok = false
   if verdict == NF_ACCEPT
     if dnsonly
-      ipc_ok = write_dnsonly_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms
+      ipc_ok = write_dnsonly_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout
     else
-      ipc_ok = write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms
+      ipc_ok = write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout
   else
-    ipc_ok = write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason, benchmark_ms
+    ipc_ok = write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason, benchmark_ms, block_rule_id, block_timeout
 
   unless ipc_ok
     log_warn {
@@ -313,7 +337,7 @@ run = (queue_num, wfd, learn_wfd, ev_wfd) ->
 
   -- ── Interception DNS portail captif ─────────────────────────
   -- Lit redirect_url depuis auth_cfg pour extraire le hostname captif.
-  -- Ouvre un socket AF_PACKET si un hostname est trouvé (comme Q2).
+  -- Ouvre un socket AF_PACKET si un hostname est trouvé (comme captive).
   do
     auth = filter.get_auth_cfg!
     captive_domain = domain_from_url auth.redirect_url

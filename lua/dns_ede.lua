@@ -72,8 +72,8 @@ build_blocked_response = function(dns_orig, dns_raw, reason)
   add_ede(dns, EDE_BLOCKED, ede_text)
   return tostring(dns)
 end
-local add_ede_ttl
-add_ede_ttl = function(dns_payload, reason)
+local add_ede_modified
+add_ede_modified = function(dns_payload, reason)
   local dns = parse(dns_payload, 1, false)
   if not (dns) then
     return dns_payload
@@ -203,7 +203,7 @@ end
 return {
   add_ede = add_ede,
   build_blocked_response = build_blocked_response,
-  add_ede_ttl = add_ede_ttl,
+  add_ede_modified = add_ede_modified,
   strip_https_rr = strip_https_rr,
   EDE_BLOCKED = EDE_BLOCKED,
   EDE_TTL_MODIFIED = EDE_TTL_MODIFIED

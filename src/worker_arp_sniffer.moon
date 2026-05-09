@@ -215,7 +215,7 @@ process_ipv6 = (raw, len, learn_wfd) ->
 -- Écoute passivement les trames ARP et NDP sur l'interface bridge
 -- et alimente le mac_learner via le pipe learn.
 -- @tparam string ifname    Nom de l'interface bridge (ex : "br")
--- @tparam number learn_wfd fd d'écriture du pipe Q0→mac_learner
+-- @tparam number learn_wfd fd d'écriture du pipe question→mac_learner
 run = (ifname, learn_wfd) ->
   set_action_prefix "arp_"
   ifindex = tonumber C.if_nametoindex ifname

@@ -3,16 +3,19 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE, BENCHMARK
-do
-  local _obj_0 = require("config")
-  QUEUE_RESPONSES, FORCED_TTL, CLIENT_EXPIRY, NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS, NFT_ADD_FAILURE_POLICY, IPC_MATCH_RETRY_ENABLED, IPC_MATCH_RETRY_COUNT, IPC_MATCH_RETRY_SLEEP_MS, AUTH_SESSIONS_FILE, BENCHMARK = _obj_0.QUEUE_RESPONSES, _obj_0.FORCED_TTL, _obj_0.CLIENT_EXPIRY, _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS, _obj_0.NFT_ADD_FAILURE_POLICY, _obj_0.IPC_MATCH_RETRY_ENABLED, _obj_0.IPC_MATCH_RETRY_COUNT, _obj_0.IPC_MATCH_RETRY_SLEEP_MS, _obj_0.AUTH_SESSIONS_FILE, _obj_0.BENCHMARK
-end
+local config = require("config")
+local runtime_cfg = config.runtime or { }
+local ipc_cfg = config.ipc or { }
+local match_retry_cfg = ipc_cfg.match_retry or { }
+local dns_cfg = config.dns or { }
+local ttl_cfg = dns_cfg.ttl_grace or { }
+local auth_cfg = config.auth or { }
+local clients_cfg = config.clients or { }
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
 local packet = require("nfq/packet")
-local QTYPE, parse_answers, extract_dns_payload, replace_dns_payload, patch_ttl_in_dns, purge_tcp_buffers, cleanup
-QTYPE, parse_answers, extract_dns_payload, replace_dns_payload, patch_ttl_in_dns, purge_tcp_buffers, cleanup = packet.QTYPE, packet.parse_answers, packet.extract_dns_payload, packet.replace_dns_payload, packet.patch_ttl_in_dns, packet.purge_tcp_buffers, packet.cleanup
+local QTYPE, parse_answers, extract_dns_payload, replace_dns_payload, purge_tcp_buffers, cleanup
+QTYPE, parse_answers, extract_dns_payload, replace_dns_payload, purge_tcp_buffers, cleanup = packet.QTYPE, packet.parse_answers, packet.extract_dns_payload, packet.replace_dns_payload, packet.purge_tcp_buffers, packet.cleanup
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
 local drain_pipe, is_pending, get_pending_entry, consume
@@ -35,10 +38,10 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now, _obj_0.set_action_prefix
 end
-local build_blocked_response, add_ede_ttl, strip_https_rr
+local build_blocked_response, add_ede_modified, strip_https_rr
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, add_ede_ttl, strip_https_rr = _obj_0.build_blocked_response, _obj_0.add_ede_ttl, _obj_0.strip_https_rr
+  build_blocked_response, add_ede_modified, strip_https_rr = _obj_0.build_blocked_response, _obj_0.add_ede_modified, _obj_0.strip_https_rr
 end
 local bit = require("bit")
 local concat, insert, remove
@@ -47,13 +50,13 @@ do
   concat, insert, remove = _obj_0.concat, _obj_0.insert, _obj_0.remove
 end
 local IPC_RETRY_ENABLED
-if IPC_MATCH_RETRY_ENABLED == nil then
+if match_retry_cfg.enabled == nil then
   IPC_RETRY_ENABLED = true
 else
-  IPC_RETRY_ENABLED = IPC_MATCH_RETRY_ENABLED
+  IPC_RETRY_ENABLED = match_retry_cfg.enabled
 end
-local IPC_RETRY_COUNT = IPC_MATCH_RETRY_COUNT or 5
-local IPC_RETRY_SLEEP_MS = IPC_MATCH_RETRY_SLEEP_MS or 20
+local IPC_RETRY_COUNT = match_retry_cfg.count or 5
+local IPC_RETRY_SLEEP_MS = match_retry_cfg.sleep_ms or 20
 local MAC_ZERO = "00:00:00:00:00:00"
 local mac_valid
 mac_valid = function(mac)
@@ -138,7 +141,7 @@ end
 local purge_mac_clients
 purge_mac_clients = function(ts)
   for mac, entry in pairs(mac_clients) do
-    if ts - entry.last_seen > CLIENT_EXPIRY then
+    if ts - entry.last_seen > (clients_cfg.expiry or 300) then
       if entry.ipv4 then
         ip_to_mac[entry.ipv4] = nil
       end
@@ -165,6 +168,38 @@ resolve_client_family = function(ip_str, want)
     end
   end
   return nil
+end
+local clamp
+clamp = function(value, min_v, max_v)
+  if value < min_v then
+    return min_v
+  end
+  if value > max_v then
+    return max_v
+  end
+  return value
+end
+local rr_timeout
+rr_timeout = function(ttl)
+  local grace = math.max(0, math.floor(tonumber(ttl_cfg.grace) or 600))
+  local min_t = math.max(1, math.floor(tonumber(ttl_cfg.min) or 60))
+  local max_t = math.max(min_t, math.floor(tonumber(ttl_cfg.max) or 2592000))
+  local rr_ttl = tonumber(ttl) or 0
+  rr_ttl = math.floor(rr_ttl)
+  if rr_ttl < 0 then
+    rr_ttl = 0
+  end
+  local effective = clamp(rr_ttl + grace, min_t, max_t)
+  return tostring(effective) .. "s", effective
+end
+local patch_modified_dns
+patch_modified_dns = function(dns_raw, reason)
+  local new_dns = strip_https_rr(dns_raw) or dns_raw
+  local payload_modified = new_dns ~= dns_raw
+  if payload_modified then
+    new_dns = add_ede_modified(new_dns, reason) or new_dns
+  end
+  return new_dns, payload_modified
 end
 local handle_response
 handle_response = function(qh_ptr, nfad, pkt_id)
@@ -197,7 +232,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local client_ip = pkt.ip.dst_ip
   local resolver_ip = pkt.ip.src_ip
   local client_mac = ip_to_mac[client_ip] or "unknown"
-  local user = user_for_mac(client_mac, client_ip, AUTH_SESSIONS_FILE)
+  local user = user_for_mac(client_mac, client_ip, auth_cfg.sessions_file or "./tmp/sessions.lua")
   local entry = get_pending_entry(txid, pkt.ip.dst_ip, client_port, resolver_ip, now)
   if not (entry) then
     local retry_attempts = 0
@@ -236,7 +271,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end
   end
   consume(txid, pkt.ip.dst_ip, client_port, resolver_ip)
-  if BENCHMARK and entry and entry.benchmark_ms then
+  if runtime_cfg.benchmark and entry and entry.benchmark_ms then
     local delta_ms = current_benchmark_ms() - entry.benchmark_ms
     if delta_ms >= 0 then
       log_info({
@@ -253,6 +288,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local refused = entry and entry.refused or false
   local dnsonly = entry and entry.dnsonly or false
+  local nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
+  local ack_corr = string.format("%04x:%s:%d:%s", txid, pkt.ip.dst_ip, client_port, resolver_ip)
   if refused then
     local dns_raw = extract_dns_payload(raw, pkt)
     local refused_dns = build_blocked_response(pkt.dns, dns_raw, entry.reason)
@@ -311,7 +348,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       if not (dnsonly) then
         if client_v4 then
           records_to_add = records_to_add + 1
-          local ok = add_ip4(client_v4, ans.rdata_str)
+          local rr_timeout_str, _ = rr_timeout(ans.ttl)
+          local ok = add_ip4(client_v4, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
           if ok then
             ip_count = ip_count + 1
           end
@@ -320,7 +358,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
         end
         if mac_valid(client_mac) then
-          local m_ok = add_mac4(client_mac, ans.rdata_str)
+          local rr_timeout_str, _ = rr_timeout(ans.ttl)
+          local m_ok = add_mac4(client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
           success_any = success_any or m_ok
         end
       end
@@ -335,7 +374,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       if not (dnsonly) then
         if client_v6 then
           records_to_add = records_to_add + 1
-          local ok = add_ip6(client_v6, ans.rdata_str)
+          local rr_timeout_str, _ = rr_timeout(ans.ttl)
+          local ok = add_ip6(client_v6, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
           if ok then
             ip_count = ip_count + 1
           end
@@ -344,7 +384,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
         end
         if mac_valid(client_mac) then
-          local m_ok = add_mac6(client_mac, ans.rdata_str)
+          local rr_timeout_str, _ = rr_timeout(ans.ttl)
+          local m_ok = add_mac6(client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
           success_any = success_any or m_ok
         end
       end
@@ -385,10 +426,14 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     })
   end
   local dns_raw = extract_dns_payload(raw, pkt)
-  local new_dns = patch_ttl_in_dns(dns_raw, answers, FORCED_TTL)
-  new_dns = strip_https_rr(new_dns) or new_dns
-  new_dns = add_ede_ttl(new_dns, entry.reason) or new_dns
-  local patched = replace_dns_payload(raw, pkt, new_dns)
+  local new_dns, payload_modified = patch_modified_dns(dns_raw, entry.reason)
+  local patched = nil
+  if payload_modified then
+    patched = replace_dns_payload(raw, pkt, new_dns)
+    if not (patched) then
+      return NF_DROP
+    end
+  end
   local qnames = table.concat((function()
     local _accum_0 = { }
     local _len_0 = 1
@@ -404,8 +449,10 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     action = (function()
       if dnsonly then
         return "response_dnsonly"
-      else
+      elseif payload_modified then
         return "response_patched"
+      else
+        return "response_allow"
       end
     end)(),
     src_ip = pkt.ip.src_ip,
@@ -414,13 +461,14 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     txid = string.format("0x%04x", txid),
     qnames = qnames,
     answers = ip_count,
-    ttl_set = FORCED_TTL,
+    nft_rule_id = nft_rule_id,
+    payload_modified = payload_modified,
     rcode = pkt.dns.rcode,
     client_mac = client_mac,
     user = user
   })
   if records_to_add > 0 and not success_any then
-    if NFT_ADD_FAILURE_POLICY == "fail-closed" then
+    if ((config.nft or { }).add_failure_policy or "fail-closed") == "fail-closed" then
       log_debug({
         action = "nft_add_failed_policy_fail_closed",
         txid = string.format("0x%04x", txid),
@@ -442,8 +490,11 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   if not dnsonly and records_to_add > 0 then
     local pending_seq = get_last_seq()
     if pending_seq then
-      wait_ack(pending_seq)
+      wait_ack(pending_seq, ack_corr)
     end
+  end
+  if not (payload_modified) then
+    return NF_ACCEPT
   end
   local patched_ptr = ffi.cast("const unsigned char*", patched)
   libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
@@ -451,7 +502,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
 end
 local run
 run = function(queue_num, rfd)
-  set_action_prefix("q1_")
+  set_action_prefix("response_")
   if type(rfd) == "table" then
     local nft_q = require("nft_queue")
     if rfd.nft_wfd then
@@ -460,12 +511,14 @@ run = function(queue_num, rfd)
     if rfd.ack_rfd and rfd.worker_idx ~= nil then
       nft_q.set_ack_rfd(rfd.ack_rfd, rfd.worker_idx)
     end
-    rfd = rfd.q0q1_rfd
+    rfd = rfd.question_response_rfd
   end
   pipe_rfd = rfd
   run_queue(tonumber(queue_num), handle_response)
   return cleanup()
 end
 return {
-  run = run
+  run = run,
+  rr_timeout = rr_timeout,
+  patch_modified_dns = patch_modified_dns
 }

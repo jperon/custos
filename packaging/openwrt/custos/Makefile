@@ -12,7 +12,7 @@ define Package/custos
   SECTION:=net
   CATEGORY:=Network
   TITLE:=CustosVirginum inline DNS filter
-  DEPENDS:=+luajit +lyaml +nftables +kmod-br-netfilter +kmod-nfnetlink-queue +kmod-nft-queue +wolfssl
+  DEPENDS:=+luajit +lyaml +lpeg +nftables +kmod-br-netfilter +kmod-nfnetlink-queue +kmod-nft-queue +wolfssl
   PKGARCH:=all
 endef
 

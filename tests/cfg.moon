@@ -1,0 +1,300 @@
+cfg = {}
+
+cfg.auth =
+  idle_timeout: 90
+  heartbeat_interval: 20
+  register_rate_limit: 1000
+  register_rate_window: 60
+  secrets: "/etc/custos/secrets"
+  port: 33443
+  redirect_url: "https://custos.stemarie.dynv6.net:33443"
+  cert: "/etc/ssl/stemarie_full.pem"
+  key: "/etc/ssl/stemarie_key.pem"
+
+cfg.filter =
+  domainlists_dir: "/tmp/custos/lists"
+  custom_lists_dir: "/etc/custos/lists/custom"
+
+cfg.filter.userlists =
+  communaute: {
+    "j@prn.ovh"
+    "ljvaillant@gmail.com"
+    "esm35economat@gmail.com"
+    "esm35intendance@gmail.com"
+    "esm35.lycee@gmail.com"
+    "esm35.6e5e@gmail.com"
+    "esm35.4e3e@gmail.com"
+    "esm35.primaire@gmail.com"
+    "primaire.esm@gmail.com"
+  }
+  professeurs: {
+    "afd.86@orange.fr"
+  }
+
+cfg.filter.sources =
+  toulouse:
+    url: "https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz"
+    format: "toulouse"
+    output_dir: "/tmp/custos/lists/toulouse"
+  captive:
+    file: "/etc/custos/lists/captive.txt"
+    format: "simple"
+    output: "/tmp/custos/lists/captive.bin"
+  ouvert:
+    file: "/etc/custos/lists/ouvert.txt"
+    format: "simple"
+    output: "/tmp/custos/lists/ouvert.bin"
+
+cfg.filter.macs =
+  Economat_ancien: "a4:1f:72:6b:4b:ea"
+  GAndre: "54:8c:a0:9d:62:0b"
+  Blois_liseuse: "58:b0:d4:73:9a:b5"
+  samsung_test: "00:24:54:ef:c4:5d"
+  HP_entertainment: "c4:17:fe:33:57:ad"
+  Secretariat_ancien: "38:c9:86:24:d9:96"
+  Imprimante_AbVaillant: "78:8c:77:58:a8:b9"
+  oratorium: "90:5f:66:41:a4:0a"
+  Penfentenyo: "e0:d4:64:76:07:9b"
+  AbDeBruyn_ethernet: "00:e0:4c:36:02:43"
+  AbMarignol_wifi: "80:3f:5d:16:c0:c1"
+  Troussard_Mme: "14:4f:8a:db:b7:cb"
+  AbDeBlois: "9c:da:3e:80:88:d8"
+  Economat: "00:d8:61:92:29:7c"
+  Salon_profs: "a4:2b:b0:f2:c1:fd"
+  Vencay: "10:94:bb:cb:88:98"
+  peron: "00:e0:4c:36:2c:8c"
+  Vaillant: "b8:e8:56:36:30:a0"
+  Saigault: "9c:58:84:33:c9:a0"
+  PBennejean: "8c:55:4a:e3:b1:6a"
+  eMachine: "4c:0f:6e:64:d3:da"
+  AbMarignol: "28:ee:52:0f:d6:ae"
+  Economat2: "26:a1:43:96:1d:e2"
+  FHugues: "80:91:33:e7:3a:25"
+  AbRoussel_tmp: "a0:d3:7a:d4:70:74"
+  Etude: "74:da:38:61:3b:e1"
+  Professeurs_wifi: "34:f3:9a:00:6e:2d"
+  Imprimante_Profs: "00:20:6b:45:b0:76"
+  AbPeron: "e0:8f:4c:c8:91:fa"
+  AbDeBlois_ethernet: "54:e1:ad:d7:18:c8"
+  Roussel: "c0:b6:f9:13:9e:99"
+  Kobo: "58:b0:d4:50:54:12"
+  AbDeBruyn: "bc:d0:74:59:90:64"
+  ForestDivonne: "a2:db:79:47:a2:3c"
+  Secretariat: "f8:75:a4:50:2e:eb"
+  device2: "01:01:01:01:01:01"
+  Professeurs: "00:24:32:24:16:57"
+  Chomard: "5c:61:99:47:5c:8d"
+  Jacques_Mme: "34:02:86:06:68:55"
+  hp_test: "ec:9a:74:49:77:f0"
+  Imprimante_Secretariat: "78:8c:77:58:78:71"
+  Prof_1: "dc:e9:94:8b:4f:15"
+  Jourdain: "46:84:b1:4a:6c:f5"
+  Troussard: "d8:f2:ca:33:89:bb"
+  GalaxTab_S10: "24:a4:52:e1:7f:b2"
+
+cfg.filter.maclists =
+  defaut: {"device2", "device1"}
+  salon_profs: {"Salon_profs"}
+  abbes: {
+    "AbDeBruyn_ethernet"
+    "AbDeBruyn"
+    "samsung_test"
+    "AbDeBlois"
+    "AbMarignol"
+    "Roussel"
+    "AbMarignol_wifi"
+    "Vaillant"
+    "AbPeron"
+    "HP_entertainment"
+    "FHugues"
+    "Imprimante_Secrétariat"
+    "AbRoussel_tmp"
+    "Imprimante_Profs"
+    "Imprimante_AbVaillant"
+    "AbDeBlois_ethernet"
+  }
+  profs: {
+    "peron"
+    "Saigault"
+    "GAndre"
+    "eMachine"
+    "Economat2"
+    "Secretariat_ancien"
+    "Professeurs_wifi"
+    "oratorium"
+    "GalaxTab_S10"
+    "Penfentenyo"
+    "Jacques_Mme"
+    "Jourdain"
+    "Blois_liseuse"
+    "Kobo"
+    "Secretariat"
+    "PBennejean"
+    "Professeurs"
+    "Chomard"
+    "Troussard_Mme"
+    "hp_test"
+    "Economat_ancien"
+    "Economat"
+    "Etude"
+    "ForestDivonne"
+    "Troussard"
+    "Vencay"
+    "Prof_1"
+  }
+  eleves_limites: {}
+
+cfg.filter.rules = {
+  {
+    description: "Domaines locaux"
+    actions: {"allow"}
+    conditions: {
+      { to_domainlist: "ouvert" }
+    }
+  }
+  {
+    description: "Mises à jour"
+    actions: {"allow"}
+    conditions: {
+      { to_domainlists: {"toulouse/update", "custom/addenda_maj"} }
+    }
+  }
+  {
+    description: "Blocages prioritaires"
+    actions: {"deny"}
+    conditions: {
+      { to_domainlists: {
+        "custom/block_yahoo"
+        "toulouse/malware"
+        "toulouse/phishing"
+        "toulouse/ddos"
+        "toulouse/hacking"
+        "toulouse/cryptojacking"
+        "toulouse/redirector"
+        "toulouse/strong_redirector"
+        "toulouse/warez"
+        "toulouse/drugs"
+        "toulouse/gambling"
+        "toulouse/adult"
+        "toulouse/mixed_adult"
+        "toulouse/lingerie"
+        "toulouse/publicite"
+        "toulouse/marketingware"
+      } }
+    }
+  }
+  {
+    description: "Accès total non authentifié"
+    actions: {"allow"}
+    conditions: {
+      { from_vlans: {2, 3, 4, 5, 6, 7, 8, 9, 35} }
+    }
+  }
+  {
+    description: "Les utilisateurs authentifiés ne sont pas redirigés vers le portail captif"
+    actions: {"allow"}
+    conditions: {
+      { to_domainlist: "captive" }
+      { from_user: "_any" }
+    }
+  }
+  {
+    description: "Détection de portail captif par les navigateurs et OS"
+    actions: {"dnsonly"}
+    conditions: {
+      { to_domainlist: "captive" }
+    }
+  }
+  {
+    description: "Infrastructure et local"
+    actions: {"allow"}
+    conditions: {
+      { to_domains: {"local", "lan", "home.arpa"} }
+    }
+  }
+  {
+    description: "Profil Abbés"
+    actions: {"allow"}
+    conditions: {
+      { from_vlan: 7 }
+      { to_domainlists: {
+        "custom/addenda_religieux"
+        "custom/addenda_auth"
+        "custom/addenda_banque"
+        "custom/addenda_cloud"
+        "custom/addenda_communication"
+        "custom/addenda_courriel"
+        "custom/addenda_gps"
+        "custom/addenda_peripheriques"
+        "custom/default_fsspx"
+        "custom/limite_eleves_fsspx"
+        "custom/_deepl"
+        "custom/_google_meet"
+        "custom/antivirus.bin"
+        "custom/mozilla.bin"
+        "custom/mozilla.bin"
+        "custom/traduction.bin"
+        "custom/achats.bin"
+        "custom/addenda_gps.bin"
+        "custom/annuaires.bin"
+        "custom/bible.bin"
+        "custom/cartes.bin"
+        "custom/chartreuse.bin"
+        "custom/dictionnaires.bin"
+        "custom/livres.bin"
+        "custom/meteo.bin"
+        "custom/poste.bin"
+        "custom/religieux.bin"
+        "custom/skype.bin"
+        "custom/technique.bin"
+        "custom/telephone.bin"
+        "custom/transfert_fichiers.bin"
+        "custom/transports.bin"
+        "custom/vatican.bin"
+        "toulouse/webmail"
+        "toulouse/webhosting"
+        "toulouse/remote-control"
+        "toulouse/mobile-phone"
+        "toulouse/chat"
+      } }
+    }
+  }
+  {
+    description: "Profil élèves Limités"
+    actions: {"allow"}
+    conditions: {
+      { from_vlan: 1 }
+      { to_domainlists: {
+        "custom/addenda_apple"
+        "custom/addenda_cloud"
+        "custom/addenda_courriel"
+        "custom/addenda_maj"
+        "custom/addenda_peripheriques"
+        "custom/addenda_stemarie"
+        "custom/default_fsspx"
+        "custom/limite_eleves_fsspx"
+      } }
+    }
+  }
+  {
+    description: "Spotify Salon Profs"
+    actions: {"allow"}
+    conditions: {
+      { from_maclist: "salon_profs" }
+      { to_domainlist: "custom/spotify" }
+    }
+  }
+  {
+    description: "Utilisateurs"
+    actions: {"allow"}
+    conditions: {
+      { from_userlists: {"communaute", "professeurs"} }
+    }
+  }
+  {
+    description: "Refus a priori"
+    actions: {"deny"}
+  }
+}
+
+cfg

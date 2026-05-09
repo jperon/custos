@@ -178,7 +178,7 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
   local forged_ptr = ffi.cast("const unsigned char*", forged)
   libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #forged, forged_ptr)
   log_debug({
-    action = "q3_reject",
+    action = "reject_forge",
     queue = 3,
     src = src_ip,
     dst = dst_ip,

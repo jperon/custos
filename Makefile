@@ -24,6 +24,7 @@ LUAJIT  ?= luajit
 BUSTED  ?= busted
 SRC     := src
 LUA     := lua
+MOONSCRIPT_SUBMODULE := $(SRC)/lib/moonscript
 
 # Chemins Lua pour les tests (modules compilés + rocks locaux)
 LUAROCKS_PATH := $(HOME)/.luarocks/share/lua/5.1/?.lua;$(HOME)/.luarocks/share/lua/5.1/?/init.lua
@@ -31,9 +32,13 @@ LUAROCKS_CPATH := $(HOME)/.luarocks/lib/lua/5.1/?.so
 TEST_LUA_PATH := tests/helpers/?.lua;tests/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;$(LUAROCKS_PATH);;
 TEST_LUA_CPATH := $(LUAROCKS_CPATH);;
 
-# List of modules to compile (order respects dependencies)
-MOONS := $(shell find $(SRC) -name '*.moon' | sort)
+# List of project modules to compile (excluding embedded moonscript submodule)
+MOONS := $(shell find $(SRC) -path '$(MOONSCRIPT_SUBMODULE)' -prune -o -name '*.moon' -print | sort)
 LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(MOONS))
+
+# Embedded MoonScript runtime (from git submodule)
+MOONSCRIPT_RUNTIME_MOONS := $(shell find $(MOONSCRIPT_SUBMODULE)/moonscript $(MOONSCRIPT_SUBMODULE)/moon -name '*.moon' 2>/dev/null | sort)
+MOONSCRIPT_RUNTIME_LUAS  := $(patsubst $(MOONSCRIPT_SUBMODULE)/%.moon,$(LUA)/%.lua,$(MOONSCRIPT_RUNTIME_MOONS))
 
 # Filter modules (auto-discovered)
 FILTER_MOONS := $(shell find $(SRC)/filter -name '*.moon' 2>/dev/null) \
@@ -58,7 +63,7 @@ UNIT_SPEC_LUAS  := $(patsubst %.moon,%.lua,$(UNIT_SPEC_MOONS))
         test-env test-env-down test-env-nuke test-e2e test-e2e-ci test-kvm \
         coverage run reload update-lists make-secret logs help debug-env
 
-all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) install-owrt.lua
+all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) $(MOONSCRIPT_RUNTIME_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
 
 install-owrt.lua: install-owrt.moon
@@ -69,6 +74,10 @@ $(LUA)/nfq:
 
 # Create parent directory before compiling (idempotent)
 $(LUA)/%.lua: $(SRC)/%.moon
+	mkdir -p $(@D)
+	$(MOONC) -o $@ $<
+
+$(LUA)/%.lua: $(MOONSCRIPT_SUBMODULE)/%.moon
 	mkdir -p $(@D)
 	$(MOONC) -o $@ $<
 

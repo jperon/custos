@@ -4,13 +4,13 @@
 -- Connects to a running OpenWrt router via SSH and tests all functionality.
 --
 -- Architecture tested (bridge mode, seul mode supporté) :
---   [router bridge table] -- queue 0/1/2/3 --> worker Q0/Q1/Q2/Q3
+--   [router bridge table] -- queue 0/1/2/3 --> worker question/response/captive/reject
 --   dns-filter-bridge.nft est déployé.
---   Worker Q2 (portail captif TCP forge) et Q3 (reject) sont actifs.
+--   Worker captive (portail captif TCP forge) et reject (reject) sont actifs.
 --
 -- DNS queries are sent from the local machine to an EXTERNAL resolver (1.1.1.3).
 -- Those packets transit the router's FORWARD/bridge chain, where NFQUEUE
--- intercepts them (Q0 decides allow/deny, Q1 patches the response).
+-- intercepts them (question decides allow/deny, response patches the response).
 -- Auth curl source IP = LOCAL_IP = DNS query source IP → from_user matches.
 --
 -- Usage:
@@ -150,7 +150,7 @@ LOCAL_IP = local_raw and local_raw\match "%d+%.%d+%.%d+%.%d+"
 LOCAL_IP = LOCAL_IP or "127.0.0.1"
 print "  IP locale : #{LOCAL_IP}"
 -- Detect LOCAL_IPV6 (IPv6 source address routed via the bridge, for AAAA tests)
--- When a DNS query is sent over IPv6, Q1 directly knows client_v6 without MAC lookup.
+-- When a DNS query is sent over IPv6, response directly knows client_v6 without MAC lookup.
 _, local_v6_raw = run "ip -6 route get 2001:4860:4860::8888 2>/dev/null | sed -En 's/.*src ([0-9a-f:]+).*/\\1/p' | head -1"
 LOCAL_IPV6 = local_v6_raw and local_v6_raw\match "[0-9a-f]+:[0-9a-f:]+"
 print "  IP locale IPv6 : #{LOCAL_IPV6 or '(aucune)'}"
@@ -277,7 +277,7 @@ else
   check_service_status!
 
 -- DNS and auth tests run from the LOCAL machine (not via SSH):
---   • dig @8.8.8.8 domain  → packets transit router FORWARD chain → intercepted by Q0/Q1
+--   • dig @8.8.8.8 domain  → packets transit router FORWARD chain → intercepted by question/response
 --   • curl https://LAN_IP:33443  → auth server, source IP = LOCAL_IP
 -- Both use LOCAL_IP as session key → from_user matching is consistent.
 -- This also avoids needing dig/curl on the router (busybox doesn't have them).
@@ -321,11 +321,11 @@ report "ether saddr . ip6 daddr @mac6_allowed dans bridge forward",
 
 -- NFQUEUE workers
 _, qraw = ssh "cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null"
-report "NFQUEUE 0 connecté (worker Q0)",
+report "NFQUEUE 0 connecté (worker question)",
   (qraw and qraw\match "^%s*0%s") != nil, qraw or ""
-report "NFQUEUE 1 connecté (worker Q1)",
+report "NFQUEUE 1 connecté (worker response)",
   (qraw and qraw\match "\n?%s*1%s") != nil, qraw or ""
-report "NFQUEUE 2 connecté (worker Q2-captive)",
+report "NFQUEUE 2 connecté (worker captive-captive)",
   (qraw and qraw\match "\n?%s*2%s") != nil, qraw or ""
 
 -- Auth + captive portal ports (test from local machine via nc)
@@ -345,7 +345,7 @@ report "Queue 1 DNS dans bridge forward",
   (br_fwd and br_fwd\match "queue to 1") != nil, br_fwd or ""
 report "Queue 2 captif dans bridge forward",
   (br_fwd and br_fwd\match "queue to 2") != nil, br_fwd or ""
-report "REJECT/RST (Q3) dans bridge forward",
+report "REJECT/RST (reject) dans bridge forward",
   (br_fwd and br_fwd\match "queue to 3") != nil, br_fwd or ""
 
 
@@ -367,7 +367,7 @@ print ""
 
 --- Query DNS via the router's FORWARD-chain filter, from the local machine.
 -- dig sends queries to 8.8.8.8. Those packets transit the router's FORWARD
--- chain where NFQUEUE intercepts them (Q0 decide allow/deny, Q1 patches TTL).
+-- chain where NFQUEUE intercepts them (question decide allow/deny, response patches TTL).
 -- Source IP = LOCAL_IP, same as auth curl → from_user session key matches.
 -- @tparam string domain
 -- @tparam[opt] string qtype  Record type (default "A")
@@ -414,7 +414,7 @@ report "dig #{DOMAIN_BLOCKED} → REFUSED",
   (blk_out and blk_out\upper!\match "REFUSED") != nil,
   (blk_out or "")\gsub("%s+$", "")\sub(1, 200)
 
--- Check the log: Q0 must have logged a BLOCK entry for LOCAL_IP + facebook.com.
+-- Check the log: question must have logged a BLOCK entry for LOCAL_IP + facebook.com.
 -- Checking the nft set is unreliable because background DNS traffic from the
 -- test machine (allowed domains) adds LOCAL_IP entries independently.
 os.execute "sleep 1"
@@ -436,15 +436,15 @@ report "dig #{DOMAIN_UNKNOWN} → NXDOMAIN",
 --
 -- Deux scénarios sont testés quand LOCAL_IPV6 est disponible :
 --
--- 1. DNS sur IPv6 → AAAA : Q1 obtient client_v6 = client_ip directement.
---    Sert aussi de warmup : Q0 enregistre MAC → IPv6 dans mac_clients, ce qui
---    permet à Q1 de résoudre l'IPv6 du client pour le scénario 2 ci-dessous.
+-- 1. DNS sur IPv6 → AAAA : response obtient client_v6 = client_ip directement.
+--    Sert aussi de warmup : question enregistre MAC → IPv6 dans mac_clients, ce qui
+--    permet à response de résoudre l'IPv6 du client pour le scénario 2 ci-dessous.
 --
--- 2. Cross-family (DNS sur IPv4 → AAAA) : Q1 peuple mac6_allowed avec
+-- 2. Cross-family (DNS sur IPv4 → AAAA) : response peuple mac6_allowed avec
 --    l'adresse MAC du client (toujours connue) + les IPs AAAA résolues.
 --    mac6_allowed doit contenir LOCAL_MAC . <ipv6_dest>.
 --
--- 3. Cross-family inverse (DNS sur IPv6 → A) : Q1 peuple mac4_allowed avec
+-- 3. Cross-family inverse (DNS sur IPv6 → A) : response peuple mac4_allowed avec
 --    l'adresse MAC du client + les IPs A résolues.
 --    mac4_allowed doit contenir LOCAL_MAC . <ipv4_dest>.
 
@@ -482,7 +482,7 @@ else
 -- ── Cross-family: DNS IPv6 → A   → mac4_allowed (client identifié par MAC) ────
 --
 -- Ces tests vérifient le cas réel : un client interroge DNS dans une famille
--- et reçoit des enregistrements de l'autre famille. Q1 peuple mac4_allowed /
+-- et reçoit des enregistrements de l'autre famille. response peuple mac4_allowed /
 -- mac6_allowed directement à partir du MAC client (toujours connu via IPC).
 -- Pas besoin de warmup ni de résolution IP cross-family.
 -- Requis : LOCAL_MAC disponible (interface locale détectée).
@@ -492,7 +492,7 @@ if LOCAL_MAC
   print "#{C.bold}▶ Cross-family: DNS sur IPv4 → AAAA → mac6_allowed#{C.reset}"
   print "  (MAC client attendu : #{LOCAL_MAC})"
 
-  -- Q1 reçoit le MAC du client via IPC (Q0) indépendamment du transport DNS.
+  -- response reçoit le MAC du client via IPC (question) indépendamment du transport DNS.
   -- mac6_allowed doit être peuplé avec LOCAL_MAC . <dest_ipv6>.
   ssh "nft flush set bridge dns-filter-bridge mac6_allowed 2>/dev/null; true"
   _, aa4_out = run "dig +time=8 +tries=1 AAAA #{DOMAIN_AAAA} @8.8.8.8 2>&1"
@@ -510,7 +510,7 @@ if LOCAL_MAC
   print "#{C.bold}▶ Cross-family: DNS sur IPv6 → A → mac4_allowed#{C.reset}"
   print "  (MAC client attendu : #{LOCAL_MAC})"
 
-  -- Q1 reçoit le MAC du client via IPC, indépendamment du transport DNS IPv6.
+  -- response reçoit le MAC du client via IPC, indépendamment du transport DNS IPv6.
   -- mac4_allowed doit être peuplé avec LOCAL_MAC . <dest_ipv4>.
   ssh "nft flush set bridge dns-filter-bridge mac4_allowed 2>/dev/null; true"
   a6_dns_target = if LOCAL_IPV6 then "2606:4700:4700::1003" else DNS_RESOLVER
@@ -635,32 +635,32 @@ report "IP retirée de authenticated_ips après logout",
   not (auth_set2 and auth_set2\match local_ip_pat),
   (auth_set2 or "(vide)")\sub(1, 120)
 
--- ── Portail captif Q2 (interception TCP/80) ──────────────────────────────────────
+-- ── Portail captif (interception TCP/80) ──────────────────────────────────────
 print ""
-print "#{C.bold}▶ Portail captif Q2 (interception TCP/80)#{C.reset}"
+print "#{C.bold}▶ Portail captif (interception TCP/80)#{C.reset}"
 
 ssh "nft flush set ip  dns-filter-bridge authenticated_ips 2>/dev/null; true"
 ssh "nft flush set ip6 dns-filter-bridge authenticated_ips6 2>/dev/null; true"
 
--- Envoyer un SYN TCP/80 vers une IP arbitraire pour déclencher Q2
+-- Envoyer un SYN TCP/80 vers une IP arbitraire pour déclencher captive
 run "curl -s -o /dev/null -w '%{http_code}' --max-redirs 0 --connect-timeout 3 http://1.2.3.4/ 2>&1"
 os.execute "sleep 2"
 
--- Vérifier que Q2 a loggé captive_redirect_q2 avec l'IP locale
-_, log_q2_out = ssh log_since_start "grep captive_redirect_q2 | grep '#{LOCAL_IP}' | tail -1"
-report "Portail captif Q2 — log captive_redirect_q2 présent",
-  (log_q2_out and #log_q2_out > 5) != nil, log_q2_out or "(aucun log Q2)"
+-- Vérifier que captive a loggé captive_redirect avec l'IP locale
+_, log_captive_out = ssh log_since_start "grep captive_redirect | grep '#{LOCAL_IP}' | tail -1"
+report "Portail captif — log captive_redirect présent",
+  (log_captive_out and #log_captive_out > 5) != nil, log_captive_out or "(aucun log captive)"
 
 -- Re-login pour vérifier authenticated_ips
-_, ok_code_q2 = run "curl -k -s -o /dev/null -w '%{http_code}' -X POST -d 'user=testuser&password=testpass' #{AUTH_URL}/login 2>&1"
-ok_code_q2 = (ok_code_q2 or "")\gsub "%s+", ""
+_, ok_code_captive = run "curl -k -s -o /dev/null -w '%{http_code}' -X POST -d 'user=testuser&password=testpass' #{AUTH_URL}/login 2>&1"
+ok_code_captive = (ok_code_captive or "")\gsub "%s+", ""
 os.execute "sleep 1"
 
-_, auth_set_q2 = ssh "nft list set ip dns-filter-bridge authenticated_ips 2>/dev/null"
+_, auth_set_captive = ssh "nft list set ip dns-filter-bridge authenticated_ips 2>/dev/null"
 local_ip_pat = LOCAL_IP\gsub "%.", "%%."
 report "Portail captif — IP (#{LOCAL_IP}) dans authenticated_ips après login",
-  (auth_set_q2 and auth_set_q2\match local_ip_pat) != nil,
-  (auth_set_q2 or "(vide)")\sub(1, 120)
+  (auth_set_captive and auth_set_captive\match local_ip_pat) != nil,
+  (auth_set_captive or "(vide)")\sub(1, 120)
 
 -- ── Portail captif (direct access, port 33080) ────────────────────────────────
 
@@ -799,7 +799,7 @@ ssh "printf '\\ndest_whitelist:\\n- #{TEST_WL_IP}\\n- #{TEST_WL_IP6}\\n' >> #{FI
 -- Send SIGHUP to the main process (propagated to workers via pipe)
 -- filter.reload() is called on the next DNS packet, so trigger one.
 ssh "pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && kill -HUP $pid 2>/dev/null; true"
--- Trigger a DNS packet so Q0 worker picks up reload_requested
+-- Trigger a DNS packet so question worker picks up reload_requested
 os.execute "dig @#{DNS_RESOLVER} github.com A +time=2 +tries=1 >/dev/null 2>&1; true"
 os.execute "sleep 1"
 

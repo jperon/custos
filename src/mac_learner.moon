@@ -1,7 +1,7 @@
 -- src/mac_learner.moon
 -- Worker MAC Learner : table IP → MAC en mémoire avec TTL.
 --
--- Sources  : messages binaires 22 octets (ip16 + mac6) via pipe (Q0 → learner)
+-- Sources  : messages binaires 22 octets (ip16 + mac6) via pipe (question → learner)
 -- Clients  : requêtes texte ligne par ligne via socket Unix SOCK_STREAM
 --            "ip_str\n" → "aa:bb:cc:dd:ee:ff\n" ou "unknown\n"
 --
@@ -13,7 +13,7 @@
 --   en attente pour cette IP sont notifiés. Aucun blocage quelle que soit la charge.
 --
 -- Boucle poll (4 fds max) :
---   [0] pipe learn       — messages ip16+mac6 depuis Q0/arp_sniffer/auth_queue
+--   [0] pipe learn       — messages ip16+mac6 depuis question/arp_sniffer/auth_queue
 --   [1] socket Unix      — connexions de requête MAC
 --   [2] prober.arp_fd    — ARP replies (IPv4, si prober disponible)
 --   [3] prober.ip6_fd    — Neighbor Advertisements (IPv6, si prober IPv6 dispo)
@@ -23,15 +23,11 @@
 
 { :ffi, :libc } = require "ffi_defs"
 mac_prober = require "mac_prober"
-_cfg = require "config"
--- Fallbacks pour compatibilité avec d'anciennes versions de config.lua
--- (déploiements partiels où MAC_LEARNER_* n'est pas encore exporté).
-MAC_LEARNER_QUERY_SOCK     = _cfg.MAC_LEARNER_QUERY_SOCK     or "/var/run/custos/mac_query.sock"
-MAC_LEARNER_LEARN_MSG_SIZE = _cfg.MAC_LEARNER_LEARN_MSG_SIZE or 22
-MAC_LEARNER_ENTRY_TTL      = _cfg.MAC_LEARNER_ENTRY_TTL      or 300
-AUTH_SESSIONS_FILE         = _cfg.AUTH_SESSIONS_FILE         or "./tmp/sessions.lua"
+config = require "config"
 { :log_info, :log_warn, :log_debug } = require "log"
 { :enrich_session_ip } = require "auth.sessions"
+mac_cfg = config.mac_learner or {}
+auth_cfg = config.auth or {}
 
 -- Délai maximum (ms) avant de répondre "unknown" aux clients en attente d'un probe.
 PROBE_TIMEOUT_MS = 200
@@ -46,6 +42,15 @@ AF_UNIX     = 1
 SOCK_STREAM = 1
 POLLIN      = 1
 AF_INET6    = 10
+
+sh_quote = (s) ->
+  "'" .. tostring(s)\gsub("'", "'\"'\"'") .. "'"
+
+ensure_parent_dir = (path) ->
+  parent = tostring(path)\match "^(.*)/[^/]+$"
+  return true unless parent and parent != ""
+  ret = os.execute "mkdir -p #{sh_quote(parent)}"
+  ret == 0 or ret == true
 
 -- ── Tables en mémoire ───────────────────────────────────────────
 -- mac_table       : { ip_str → { mac_str, expires_epoch } }
@@ -90,9 +95,9 @@ ip16_to_str = (ip16) ->
 learn_mac = (ip_str, mac_str) ->
   existing = mac_table[ip_str]
   is_new = not existing or existing[1] != mac_str
-  mac_table[ip_str] = { mac_str, os.time! + MAC_LEARNER_ENTRY_TTL }
+  mac_table[ip_str] = { mac_str, os.time! + (mac_cfg.entry_ttl or 300) }
   if is_new
-    ok, enriched = pcall enrich_session_ip, mac_str, ip_str, AUTH_SESSIONS_FILE
+    ok, enriched = pcall enrich_session_ip, mac_str, ip_str, auth_cfg.sessions_file
     if ok and enriched
       log_info { action: "session_enriched", ip: ip_str, mac: mac_str }
   waiters = pending_queries[ip_str]
@@ -106,10 +111,11 @@ learn_mac = (ip_str, mac_str) ->
 -- ── Traitement des messages de learn ─────────────────────────────
 
 --- Traite un message binaire de learn reçu depuis le pipe.
--- Ignore les messages avec MAC nulle (client inconnu de Q0).
+-- Ignore les messages avec MAC nulle (client inconnu de question).
 -- @tparam string msg MAC_LEARNER_LEARN_MSG_SIZE octets (ip16 + mac6)
 process_learn = (msg) ->
-  return if #msg < MAC_LEARNER_LEARN_MSG_SIZE
+  msg_size = mac_cfg.learn_msg_size or 22
+  return if #msg < msg_size
   ip16    = msg\sub 1, 16
   mac_raw = msg\sub 17, 22
 
@@ -216,6 +222,7 @@ start_query = (client_fd) ->
 -- @tparam string path Chemin du fichier socket
 -- @treturn number fd du socket serveur, ou -1 en cas d'erreur
 create_server = (path) ->
+  return -1 unless ensure_parent_dir path
   libc.unlink path
 
   sock = libc.socket AF_UNIX, SOCK_STREAM, 0
@@ -243,7 +250,7 @@ create_server = (path) ->
 --- Démarre le worker MAC Learner.
 -- Initialise le prober ARP/NS, ouvre le socket Unix, entre dans la boucle
 -- poll sur jusqu'à 4 fds (pipe learn, query sock, arp_fd, ip6_fd).
--- @tparam number learn_rfd  fd de lecture du pipe de learn (Q0 → learner)
+-- @tparam number learn_rfd  fd de lecture du pipe de learn (question → learner)
 -- @tparam string [ifname]   Nom de l'interface bridge (défaut : "br")
 run = (learn_rfd, ifname) ->
   ifname = ifname or "br"
@@ -254,13 +261,14 @@ run = (learn_rfd, ifname) ->
   else
     log_warn { action: "mac_prober_disabled", ifname: ifname }
 
-  query_sock = create_server MAC_LEARNER_QUERY_SOCK
+  query_sock_path = mac_cfg.query_sock or config.MAC_LEARNER_QUERY_SOCK or "/var/run/custos/mac_query.sock"
+  query_sock = create_server query_sock_path
   if query_sock < 0
     errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn { action: "mac_learner_socket_failed", path: MAC_LEARNER_QUERY_SOCK, errno: errno }
+    log_warn { action: "mac_learner_socket_failed", path: query_sock_path, errno: errno }
     return
 
-  log_info { action: "mac_learner_start", sock: MAC_LEARNER_QUERY_SOCK }
+  log_info { action: "mac_learner_start", sock: query_sock_path }
 
   -- Tableau pollfd[4] : [0] pipe learn, [1] query sock,
   --                     [2] arp_fd (opt.), [3] ip6_fd (opt.)
@@ -280,7 +288,8 @@ run = (learn_rfd, ifname) ->
       pfds[3].events = POLLIN
       nfds = 4
 
-  learn_buf  = ffi.new "uint8_t[?]", MAC_LEARNER_LEARN_MSG_SIZE
+  msg_size = mac_cfg.learn_msg_size or 22
+  learn_buf  = ffi.new "uint8_t[?]", msg_size
   arp_buf    = ffi.new "uint8_t[512]"
   ipv6_buf   = ffi.new "uint8_t[2048]"
   last_purge = 0
@@ -294,10 +303,10 @@ run = (learn_rfd, ifname) ->
     -- [0] Pipe de learn : draine tous les messages disponibles (non-bloquant)
     if bit.band(pfds[0].revents, POLLIN) ~= 0
       while true
-        n = libc.read learn_rfd, learn_buf, MAC_LEARNER_LEARN_MSG_SIZE
+        n = libc.read learn_rfd, learn_buf, msg_size
         break if n <= 0
-        if n == MAC_LEARNER_LEARN_MSG_SIZE
-          process_learn ffi.string(learn_buf, MAC_LEARNER_LEARN_MSG_SIZE)
+        if n == msg_size
+          process_learn ffi.string(learn_buf, msg_size)
 
     -- [1] Socket de requêtes : une connexion par itération (accept non-bloquant)
     if bit.band(pfds[1].revents, POLLIN) ~= 0

@@ -3,8 +3,7 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local AUTH_SESSIONS_FILE
-AUTH_SESSIONS_FILE = require("config").AUTH_SESSIONS_FILE
+local config = require("config")
 local parse_eth, new, mac2s, s2mac, IP6, IP4
 do
   local _obj_0 = require("ipparse.l2.ethernet")
@@ -37,8 +36,8 @@ flags = require("ipparse.l4.tcp").flags
 local SYN, ACK, FIN, PSH
 SYN, ACK, FIN, PSH = flags.SYN, flags.ACK, flags.FIN, flags.PSH
 local mac_learner_ipc = require("mac_learner_ipc")
-local user_for_ip
-user_for_ip = require("auth.sessions").user_for_ip
+local user_for_mac
+user_for_mac = require("auth.sessions").user_for_mac
 local PROTO_TCP = l3_proto.TCP
 local PROTO_UDP = l3_proto.UDP
 local parse_syn
@@ -138,7 +137,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   if not client_mac_str or client_mac_str == "unknown" then
     client_mac_str = mac_learner_ipc.get_mac(client_ip_str)
   end
-  local user = user_for_ip(client_ip_str, AUTH_SESSIONS_FILE, client_mac_str)
+  local user = user_for_mac(client_mac_str, client_ip_str, config.auth.sessions_file)
   local send
   send = function(f)
     local res = send_frame(raw_fd, f, ifindex)
@@ -186,7 +185,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   end)
   if ok then
     local fields = {
-      action = "redirect_q2",
+      action = "redirect_captive",
       queue = 2,
       ip = client_ip_str,
       sport = tcp.spt,

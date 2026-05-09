@@ -19,7 +19,7 @@
 -- NOTE: Le module utilise libnft via FFI. Les erreurs rc != 0 sont loggées.
 
 { :ffi, :libnft } = require "ffi_defs"
-{ :NFT_FAMILY, :NFT_TABLE } = require "config"
+config = require "config"
 { :log_warn, :log_info } = require "log"
 
 -- Contexte nft
@@ -52,7 +52,7 @@ find_handles_for_fragment = (fragment) ->
   -- Retourne une table de handles (numbers) pour les lignes contenant fragment
   handles = {}
   -- Utilise le binaire nft en lecture pour obtenir la sortie annotée (-a)
-  cmd = "nft -a list chain #{NFT_FAMILY} #{NFT_TABLE} forward 2>/dev/null"
+  cmd = "nft -a list chain #{config.nft.family} #{config.nft.table} forward 2>/dev/null"
   fh = io.popen cmd
   return handles unless fh
   out = fh\read "*a"
@@ -81,7 +81,7 @@ init = (rules) ->
     handles = find_handles_for_fragment r
     if handles and #handles > 0
       for h in *handles
-        del_cmd = "delete rule #{NFT_FAMILY} #{NFT_TABLE} forward handle #{h}"
+        del_cmd = "delete rule #{config.nft.family} #{config.nft.table} forward handle #{h}"
         removed, rc = run_cmd del_cmd
         if removed
           log_info { action: "nft_extra_rule_removed_existing", rule: r, handle: h }
@@ -89,7 +89,7 @@ init = (rules) ->
           log_warn { action: "nft_extra_rule_remove_failed", rule: r, handle: h, rc: rc }
 
     -- Insérer une unique occurrence en position 0
-    insert_cmd = "insert rule #{NFT_FAMILY} #{NFT_TABLE} forward position 0 #{r}"
+    insert_cmd = "insert rule #{config.nft.family} #{config.nft.table} forward position 0 #{r}"
     ok, rc = run_cmd insert_cmd
     if ok
       -- Conserver la représentation exacte pour tentative de suppression ultérieure.
@@ -108,7 +108,7 @@ init = (rules) ->
 apply_from_config = ->
   -- Vérifier si la chaîne forward existe. Si non (cas typique : respawn procd
   -- après un stop/start non coordonné), ré-appliquer le ruleset principal.
-  rc_check = os.execute "nft list chain #{NFT_FAMILY} #{NFT_TABLE} forward >/dev/null 2>&1"
+  rc_check = os.execute "nft list chain #{config.nft.family} #{config.nft.table} forward >/dev/null 2>&1"
   if rc_check ~= 0
     ok, rc = require("nft_rules").apply!
     unless ok
@@ -116,7 +116,7 @@ apply_from_config = ->
       return false
     log_info { action: "nft_extra_main_rules_reapplied" }
   cfg = require "config"
-  rules = cfg.NFT_EXTRA_RULES or {}
+  rules = cfg.nft.extra_rules or {}
   init rules
 
 --- Supprime les règles précédemment insérées par ce module.
@@ -134,8 +134,8 @@ cleanup = ->
 
   -- Ajouter aussi les fragments depuis la config (au cas où inserted_rules est vide)
   ok, cfg = pcall -> require "config"
-  if ok and cfg and cfg.NFT_EXTRA_RULES
-    for r in *cfg.NFT_EXTRA_RULES
+  if ok and cfg and cfg.nft and cfg.nft.extra_rules
+    for r in *cfg.nft.extra_rules
       if r and #tostring(r) > 0
         table.insert rules_to_clean, tostring r
 
@@ -157,7 +157,7 @@ cleanup = ->
       handles = find_handles_for_fragment r
       if handles and #handles > 0
         for h in *handles
-          cmd = "delete rule #{NFT_FAMILY} #{NFT_TABLE} forward handle #{h}"
+          cmd = "delete rule #{config.nft.family} #{config.nft.table} forward handle #{h}"
           ok, rc = run_cmd cmd
           if ok
             log_info { action: "nft_extra_rule_removed_on_cleanup", rule: r, handle: h }

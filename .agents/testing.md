@@ -6,7 +6,7 @@
 
 | Commande | Prérequis | Description |
 |----------|-----------|-------------|
-| `make test` | aucun (pas de root) | Tests unitaires : compile `tests/run_tests.moon` → `tests/run_tests.lua` puis l'exécute. Couvre les modules de parsing (`dns`, `ip`, `udp`, `ipc`, `allowlist`). |
+| `make test` | aucun (pas de root) | Tests unitaires : compile `tests/unit/*_spec.moon` puis exécute Busted. Couvre parsing, `filter.rule`, `ipc`, `nft_queue`, `dns_ede` et les helpers de workers. |
 | `make test-ndpi` | libndpi installée | Tests du wrapper nDPI et du dispatch de version. |
 | `make test-openwrt HOST=root@<host>` | SSH + OpenWrt avec LuaJIT + nftables | Déploie les fichiers Lua + règles nft via `scp`, démarre les workers via `logger -t custos`, puis lance les vérifications DNS/auth depuis la machine locale. |
 | `make test-e2e` | environnement VM démarré (`make test-env`) | Suite E2E complète via SSH (`FILTER_SSH=... CLIENT_SSH=... [CLIENT2_SSH=...]`). |
@@ -30,6 +30,10 @@ ssh "(cd #{CUSTOS_DIR} && luajit2 main.lua </dev/null 2>&1 | logger -t custos) &
 -- puis interroger :
 ssh "logread | sed -n '/#{LOG_MARKER}/,$p' | grep queue_listening"
 ```
+
+Les logs utiles pour valider l'architecture courante sont `questions_*`
+(champ `rule` + `timeout`) et `response_*` (champ `nft_rule_id` +
+`payload_modified`).
 
 ### `grep -c` vs `wc -l`
 

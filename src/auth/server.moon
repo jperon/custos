@@ -12,10 +12,10 @@ ffi = require "ffi"
 { :fork_child, :reap_one } = require "lib.process"
 { :session_for_mac, :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
 { :verify_password, :register_user } = require "auth.credentials"
-{ :load_or_generate, :load_or_generate_sni, :load_static } = require "auth.cert"
+{ :load_or_generate_sni, :load_static } = require "auth.cert"
 { :extract_sni } = require "auth.sni_extractor"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
-{ :AUTH_SESSIONS_FILE } = require "config"
+config = require "config"
 { :read_request, :send_response } = require "lib.http"
 
 { :get_mac } = require "mac_learner_ipc"
@@ -508,7 +508,7 @@ make_server6 = (port) ->
 -- @treturn nil
 run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   port = auth_cfg.port or 33443
-  sessions_file = auth_cfg.sessions_file or AUTH_SESSIONS_FILE
+  sessions_file = auth_cfg.sessions_file or config.auth.sessions_file
 
   log_debug { action: "server_startup", port: port }
   log_debug { action: "server_auth_cfg_received", cert: auth_cfg.cert, key: auth_cfg.key }

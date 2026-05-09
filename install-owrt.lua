@@ -155,8 +155,8 @@ Installer = function(cfg)
           "allowlist",
           "nft",
           "nfq_loop",
-          "worker_q0",
-          "worker_q1",
+          "worker_questions",
+          "worker_responses",
           "worker_auth_queue",
           "main"
         }) do
@@ -210,8 +210,8 @@ Installer = function(cfg)
         "kmod-nft-queue",
         "lyaml",
         "luasec",
-        "libxxhash",
-        "openssl-util"
+        "lpeg",
+        "libxxhash"
       }
       local pkg_list = table.concat(pkgs_required, " ")
       local install_cmd
@@ -332,45 +332,13 @@ Installer = function(cfg)
       end
       return true
     end,
-    install_uci_config = function(self)
-      step("Configuration UCI (/etc/config/custos)")
-      local exists = self:ssh_capture("[ -f /etc/config/custos ] && echo yes || echo no")
-      if exists and exists:find("yes") then
-        warn("/etc/config/custos existe déjà — configuration préservée")
-        return true
-      end
-      local uci_cfg = [[config custos 'main'
-	option enabled           '1'
-	option forced_ttl        '60'
-	option nft_ip_timeout    '2m'
-	option ipc_pending_ttl   '5'
-	option client_expiry     '300'
-	list   allowed_domains   'local'
-	list   allowed_domains   'lan'
-	list   allowed_domains   'home.arpa'
-]]
-      local tmplocal = "tmp/owrt-custos-uci"
-      if not (self.cfg.dry) then
-        local fh = io.open(tmplocal, "w")
-        if fh then
-          fh:write(uci_cfg)
-          fh:close()
-        end
-      end
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/etc/config/custos")) then
-        fail("Échec de la copie de /etc/config/custos")
-        return false
-      end
-      ok("/etc/config/custos installé")
-      return true
-    end,
     start_service = function(self)
       step("Démarrage du service custos")
       if self.cfg.no_start then
         warn("--no-start : démarrage ignoré")
         return true
       end
-      if not (self:ssh_run("/etc/init.d/custos restart")) then
+      if not (self:ssh_run("/etc/init.d/custos restart ; sleep 2 ; /etc/init.d/custos stop")) then
         fail("Échec du démarrage")
         return false
       end
@@ -618,12 +586,6 @@ main = function()
       name = "/etc/custos/",
       fn = function()
         return inst:install_etc_custos()
-      end
-    },
-    {
-      name = "config UCI",
-      fn = function()
-        return inst:install_uci_config()
       end
     },
     {

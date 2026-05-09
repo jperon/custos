@@ -3,11 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local QUEUE_QUESTIONS, AUTH_SESSIONS_FILE, BENCHMARK
-do
-  local _obj_0 = require("config")
-  QUEUE_QUESTIONS, AUTH_SESSIONS_FILE, BENCHMARK = _obj_0.QUEUE_QUESTIONS, _obj_0.AUTH_SESSIONS_FILE, _obj_0.BENCHMARK
-end
+local config = require("config")
+local runtime_cfg = config.runtime or { }
+local nft_cfg = config.nft or { }
+local auth_cfg = config.auth or { }
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
 local packet = require("nfq/packet")
@@ -44,7 +43,7 @@ local _benchmark_ts = ffi.new("timespec_t[1]")
 local CLOCK_MONOTONIC = 1
 local get_benchmark_ms
 get_benchmark_ms = function()
-  if not (BENCHMARK) then
+  if not (runtime_cfg.benchmark) then
     return nil
   end
   libc.clock_gettime(CLOCK_MONOTONIC, _benchmark_ts)
@@ -236,6 +235,10 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   local dnsonly = false
   local block_reason = nil
   local allow_reason = nil
+  local block_rule_id = nil
+  local allow_rule_id = nil
+  local block_timeout = nil
+  local allow_timeout = nil
   local q_fields = {
     mac_src = l2.mac_src,
     vlan = l2.vlan,
@@ -246,7 +249,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     dst_port = pkt.l4.dst_port,
     txid = string.format("0x%04x", pkt.dns.txid),
     af = pkt.ip.version == 6 and "ipv6" or "ipv4",
-    user = user_for_mac(l2.mac_src, pkt.ip.src_ip, AUTH_SESSIONS_FILE)
+    user = user_for_mac(l2.mac_src, pkt.ip.src_ip, auth_cfg.sessions_file)
   }
   for _, q in ipairs(pkt.questions) do
     q_fields.qname = q.qname
@@ -258,33 +261,60 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       vlan = l2.vlan,
       ts = os.time()
     }
-    local allowed, reason, rule = filter.decide(req)
+    local decision
+    if filter.decide_meta then
+      decision = filter.decide_meta(req)
+    else
+      decision = nil
+    end
+    if decision then
+      local allowed = decision.verdict
+      local reason = decision.reason
+      local rule_id = decision.rule_id
+      local nft_timeout = decision.timeout
+    else
+      local allowed, reason, rule_id = filter.decide(req)
+      local nft_timeout = nil
+    end
     q_fields.reason = reason or (allowed == "dnsonly" and "dnsonly") or (allowed and "allowed") or "denied"
-    q_fields.rule = rule or ""
+    q_fields.rule = rule_id or ""
     if allowed == "dnsonly" then
       log_allow(q_fields)
       dnsonly = true
       allow_reason = reason
+      allow_rule_id = rule_id
+      allow_timeout = nft_timeout
     elseif allowed then
       log_allow(q_fields)
       allow_reason = reason
+      allow_rule_id = rule_id
+      allow_timeout = nft_timeout
     else
       log_block(q_fields)
       verdict = NF_DROP
       block_reason = reason
+      block_rule_id = rule_id
+      block_timeout = nft_timeout
     end
     write_event(q_fields, allowed)
   end
   local benchmark_ms = get_benchmark_ms()
+  allow_timeout = allow_timeout or nft_cfg.ip_timeout
+  block_timeout = block_timeout or nft_cfg.ip_timeout
+  if verdict == NF_ACCEPT then
+    q_fields.timeout = allow_timeout
+  else
+    q_fields.timeout = block_timeout
+  end
   local ipc_ok = false
   if verdict == NF_ACCEPT then
     if dnsonly then
-      ipc_ok = write_dnsonly_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms)
+      ipc_ok = write_dnsonly_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout)
     else
-      ipc_ok = write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms)
+      ipc_ok = write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout)
     end
   else
-    ipc_ok = write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason, benchmark_ms)
+    ipc_ok = write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason, benchmark_ms, block_rule_id, block_timeout)
   end
   if not (ipc_ok) then
     log_warn({

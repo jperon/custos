@@ -6,8 +6,8 @@ Detailed explanations and architecture remain in `README.md`.
 ## Quick entry
 
 - Supervision: `src/main.moon`
-- DNS workers: `src/worker_q0.moon` (questions), `src/worker_q1.moon` (responses)
-- IPC Q0 -> Q1: `src/ipc.moon`
+- DNS workers: `src/worker_questions.moon` (questions), `src/worker_responses.moon` (responses)
+- IPC question -> response: `src/ipc.moon`
 - nftables ruleset: `nft-rules/dns-filter-bridge.nft`
 - NFT extra rules (via UCI): `custos.main.nft_extra_rules` can hold one fragment per entry. Each fragment is a nft expression (without the `insert rule <table> <chain> ...` prefix) and will be inserted at the head of the `forward` chain at service startup and removed at shutdown. Example UCI fragment:
   - `nft_extra_rules='ip saddr 10.0.0.0/8 counter log prefix "extra: " accept'`
@@ -30,25 +30,27 @@ Detailed explanations and architecture remain in `README.md`.
   - Loaded via `require("filter.actions.<name>")` in `src/filter/rule.moon`
 
 - DNS logic (decision, correlation, reinjection):
-  - Q0: `src/worker_q0.moon`
+  - question: `src/worker_questions.moon`
   - IPC: `src/ipc.moon`
-  - Q1: `src/worker_q1.moon`
+  - response: `src/worker_responses.moon`
   - NFQUEUE loop: `src/nfq_loop.moon`
+  - `rule_id` + `timeout` transitent de question → response → nft
 
 - REFUSED, EDE, TTL:
   - DNS helpers: `src/parse/dns.moon`
   - Patch/rebuild packet: `src/nfq/packet.moon`
-  - Forced TTL: `FORCED_TTL` in `src/config.moon`
+  - Forced TTL + grace: `dns.ttl_grace` in `src/config.moon`
+  - EDE code 4 n'est ajouté que si la réponse a réellement été modifiée
 
 - nft injection (sets):
   - nft commands: `src/nft.moon`
-  - A/AAAA/dnsonly injection conditions: `src/worker_q1.moon`
+  - A/AAAA/dnsonly injection conditions: `src/worker_responses.moon`
   - Set names/timeouts: `src/config.moon`
 
 - Authentication / captive portal:
   - Auth worker: `src/auth/worker.moon`
   - Auth server: `src/auth/server.moon`
-  - Worker Q2 (TCP/80 intercept): `src/worker_q2.moon`
+  - Worker captive (TCP/80 intercept): `src/worker_captive.moon`
   - Sessions (MAC-primary): `src/auth/sessions.moon`
   - Auth nft integration: `src/auth/nft_sessions.moon`
   - Secrets/hash: `src/auth/credentials.moon`
@@ -60,12 +62,13 @@ Detailed explanations and architecture remain in `README.md`.
 
 - Compiled condition: `(req) -> ok, reason`
 - Compiled action: `(req) -> verdict|nil, message`
-- Q1 pending key: `txid:ip:port`
-- Workers: Q0 (questions), Q1 (responses), AUTH (HTTPS), Q2 (TCP/80 captive portal), Q3 (forge RST/ICMP reject)
+- response pending key: `txid:ip:port`
+- Workers: question (questions), response (responses), AUTH (HTTPS), captive (TCP/80 captive portal), reject (forge RST/ICMP reject)
 - SIGHUP:
-  - `main` propagates it to Q0
-  - Q0 does `filter.reload()`
+  - `main` propagates it to question
+  - question does `filter.reload()`
 - Active nft sets: `ip4_allowed`, `ip6_allowed`, `authenticated_macs`, `authenticated_ips`, `authenticated_ips6`
+  - Le timeout des éléments injectés suit `TTL + grace` borné
 
 ## Build, run, debug
 
@@ -113,21 +116,22 @@ Detailed explanations and architecture remain in `README.md`.
   1. Create `src/filter/actions/<name>.moon` (`(req) -> verdict|nil, message`).
   2. Call it via `actions:` in `cfg/filter.yml`.
   3. Verify action order (first non-nil verdict wins).
+  4. `filter.decision.first_match_wins` contrôle si la première ou la dernière règle gagnante est conservée.
 
 - Modify REFUSED/EDE behavior:
   1. Adjust `src/parse/dns.moon` (REFUSED construction, EDNS/EDE options).
-  2. Verify call in `src/worker_q1.moon` (`refused` branch).
+  2. Verify call in `src/worker_responses.moon` (`refused` branch).
   3. Test at minimum `make test` then an E2E (`test-openwrt`).
 
 - Modify nft injection:
   1. Adjust `src/nft.moon` (`add element` command).
-  2. Adjust A/AAAA/dnsonly logic in `src/worker_q1.moon`.
+  2. Adjust A/AAAA/dnsonly logic in `src/worker_responses.moon`.
   3. Verify sets via `nft list set ...`.
 
-- Debug IPC Q0/Q1 correlation:
+- Debug IPC question/response correlation:
   1. Verify format/key in `src/ipc.moon` (key `txid:ip:port`).
-  2. Watch logs `response_no_matching_question` (Q1).
-  3. Confirm Q0 sends `write_msg`/`write_refused_msg`/`write_dnsonly_msg`.
+  2. Watch logs `response_no_matching_question` (response).
+  3. Confirm question sends `write_msg`/`write_refused_msg`/`write_dnsonly_msg`.
 
 ## Ops Debian/OpenWrt
 

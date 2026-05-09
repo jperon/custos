@@ -33,7 +33,7 @@ decoding — all without any C compilation step.
 │  ├── main.lua           supervisor + fork                      │
 │  ├── mac_learner        table IP→MAC (socket Unix)             │
 │  ├── worker_arp_sniffer ARP/NDP passif → pipe learn (22 B)     │
-│  ├── worker_questions ── pipe q0q1 (43 B) ──► worker_responses │
+│  ├── worker_questions ── pipe question_response (43 B, rule_id + timeout) ──► worker_responses │
 │  │   parse L2/L3/L4/L7      └─ pipe learn (22 B) → mac_learner│
 │  │   rules (conditions+actions)              verify txid       │
 │  │   log + ACCEPT/REFUSED/DNSONLY            patch TTL→60s     │
@@ -55,7 +55,7 @@ DNS Client (LAN)
    ▼
 nft FORWARD → NFQUEUE 0
    ▼
-worker Q0 : parse L2+L3+L4+DNS → qname="www.github.com"
+worker question : parse L2+L3+L4+DNS → qname="www.github.com"
    │  is_allowed("www.github.com") → true (suffix "github.com")
    │  log: ALLOW mac_src=aa:bb:.. src_ip=192.168.1.42 qname=www.github.com
    │  write(pipe, txid=0x1234, ip=192.168.1.42, port=54321, mac=aa:bb:cc:dd:ee:ff)
@@ -65,10 +65,10 @@ DNS Resolver (8.8.8.8) responds
    ▼
 nft FORWARD → NFQUEUE 1
    ▼
-worker Q1 : drain pipe → pending[0x1234:192.168.1.42:54321] found (refused=false)
+worker response : drain pipe → pending[0x1234:192.168.1.42:54321] found (refused=false)
    │  parse response → A 140.82.121.4
-   │  patch TTL → 60s + append EDE code 0 "Custos vigilat." + recalc checksums
-   │  nft add element ip dns-filter ip4_allowed { 192.168.1.42 . 140.82.121.4 timeout 2m }
+   │  patch TTL → 60s + append EDE only when payload was modified + recalc checksums
+   │  nft add element ip dns-filter ip4_allowed { 192.168.1.42 . 140.82.121.4 timeout TTL+grace (borné) }
    │  log: ALLOW action=response_patched answers=1 ttl_set=60
    └► NF_ACCEPT + modified payload
    ▼
@@ -87,7 +87,7 @@ DNS Client (LAN)
    ▼
 nft FORWARD → NFQUEUE 0
    ▼
-worker Q0 : qname="www.facebook.com"
+worker question : qname="www.facebook.com"
    │  is_allowed("www.facebook.com") → false
    │  log: BLOCK reason=not_in_allowlist
    │  write_refused_msg(pipe, txid=0x1234|REFUSED, ip, port, mac)
@@ -97,9 +97,9 @@ DNS Resolver (8.8.8.8) responds
    ▼
 nft FORWARD → NFQUEUE 1
    ▼
-worker Q1 : drain pipe → pending[0x1234:192.168.1.42:54321] found (refused=true)
+worker response : drain pipe → pending[0x1234:192.168.1.42:54321] found (refused=true)
    │  transform response → RCODE=5 REFUSED + EDE code 15 "Filtered" + "Custos vigilat."
-   │  replace DNS payload, recalc checksums
+   │  replace DNS payload, strip HTTPS/SVCB if present, recalc checksums
    │  log: BLOCK action=response_refused
    └► NF_ACCEPT + REFUSED payload (client receives REFUSED + EDE)
 ```
@@ -111,14 +111,13 @@ worker Q1 : drain pipe → pending[0x1234:192.168.1.42:54321] found (refused=tru
 ```
 custos/
 ├── cfg/
-│   ├── filter.yml           Config du filtre (YAML) — règles, listes, auth
+│   ├── filter.yml           Configuration des listes de domaines (updater)
 │   └── secrets.sample       Exemple de fichier de mots de passe
 ├── src/
-│   ├── config.moon          Configuration : constantes, chemins
-│   ├── uci_config.moon      Chargeur config UCI (OpenWrt)
+│   ├── config.moon          Configuration hiérarchique runtime (/etc/config.moon)
 │   ├── ffi_defs.moon        Déclarations FFI centralisées
 │   ├── log.moon             Logging structuré key=value + rate-limiting
-│   ├── ipc.moon             Protocole pipe Q0→Q1 (msg 43 octets)
+│   ├── ipc.moon             Protocole pipe question→response (msg 43 octets)
 │   ├── nft.moon             Injection sets nftables via libnftables
 │   ├── nft_add_helper.moon  Helper retry/backoff pour insertions nft
 │   ├── nft_rules.moon       Règles nft statiques
@@ -249,11 +248,13 @@ L'installeur (`install-owrt.moon`) :
 
 ## Configuration
 
-La configuration principale est dans `cfg/filter.yml`. Elle couvre :
-- les règles de filtrage (conditions + actions)
-- les listes de domaines (`domainlists_dir`, `custom_lists_dir`)
-- le serveur d'authentification (`auth:`)
-- les dictionnaires de réseaux, MACs, utilisateurs, plages horaires
+La configuration runtime principale est `/etc/config.moon` (surcharge partielle des
+défauts de `src/config.moon`). Elle couvre :
+- runtime/NFQUEUE/nft/dns/auth/doh/events
+- le moteur de filtrage (`filter.rules`, `filter.nets`, `filter.macs`, `filter.times`)
+- les décisions de parcours de règles (`filter.decision.first_match_wins`,
+  `filter.decision.continue_to_next_rule`)
+- `dns.ttl_grace` (`grace`, `min`, `max`) — timeout nft = `TTL + grace`, borné
 
 NFT extra rules (via UCI)
 - Il est possible d’ajouter des règles nft supplémentaires depuis UCI (section `custos.main`) via l’option `nft_extra_rules`.
@@ -366,7 +367,7 @@ Example log:
 
 ## IPC Protocols
 
-### Pipe Q0 → Q1 (`q0q1`, 43 octets)
+### Pipe question → response (`question_response`, 43 octets)
 
 The Unix pipe (created before `fork()`) carries 43-byte messages.
 Atomicity is guaranteed by POSIX for messages ≤ PIPE_BUF (4096 bytes).
@@ -386,11 +387,11 @@ Bytes 27-42  : resolver IP — 16 bytes
                  IPv6 : 16 bytes address (complete, no truncation)
 ```
 
-Q1 maintains a table `pending[txid:ip:port:resolver_ip] = {expire, refused, dnsonly}` (TTL 5s).
-`refused=true` means Q0 determined the query must be blocked; Q1 transforms
+response maintains a table `pending[txid:ip:port:resolver_ip] = {expire, refused, dnsonly}` (TTL 5s).
+`refused=true` means question determined the query must be blocked; response transforms
 the upstream response into a REFUSED reply instead of patching TTL.
-`dnsonly=true` means Q0 allowed the query but without nft IP injection (e.g.
-captive portal probes): Q1 patches TTL + EDE but does not call `nft add element`.
+`dnsonly=true` means question allowed the query but without nft IP injection (e.g.
+captive portal probes): response patches TTL + EDE but does not call `nft add element`.
 Purge is **lazy**: an expired entry is removed at lookup time,
 without a separate timer.
 
@@ -422,12 +423,12 @@ Each allowed DNS response is modified before being returned to the client:
 5. `NF_ACCEPT` verdict is set with modified payload via
    `nfq_set_verdict(qh, pkt_id, NF_ACCEPT, len, patched_ptr)`
 
-Each blocked DNS response (where Q0 sent `refused=true`) is replaced by
+Each blocked DNS response (where question sent `refused=true`) is replaced by
 a REFUSED reply with EDE code 15 "Filtered" and extra-text `"Custos vigilat."`,
 reconstructed from the upstream server's TCP/UDP framing (so no raw-socket
 spoofing is needed).
 
-For multi-segment TCP DNS responses, Q1 buffers segments, patches the fully
+For multi-segment TCP DNS responses, response buffers segments, patches the fully
 assembled DNS payload once complete, then reinjects a single coalesced
 `PSH|ACK` segment (with corrected checksums and initial sequence number).
 
@@ -460,7 +461,7 @@ main (supervisor)
 └── worker AUTH          (HTTPS login server)
 ```
 
-Sessions are shared via a Lua-evaluable file (`tmp/sessions.lua`). Q0/Q1 workers
+Sessions are shared via a Lua-evaluable file (`tmp/sessions.lua`). question/response workers
 reload it every 5 seconds (TTL cache). No inter-process socket is needed.
 
 ### TLS certificate
@@ -526,7 +527,7 @@ Multiple users can be listed (logical OR):
 
 ### Captive portal
 
-Un **worker Q2** dédié intercepte les SYN TCP/80 des clients non authentifiés
+Un **worker captive** dédié intercepte les SYN TCP/80 des clients non authentifiés
 via NFQUEUE 2 et répond directement avec une réponse HTTP 302 vers le portail
 HTTPS (port 33443), sans passer par le proxy kernel. Une fois authentifié,
 l'IP cliente est ajoutée à `authenticated_ips` et les SYN TCP/80 ne sont plus
@@ -608,9 +609,9 @@ The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode
 |-----|------|------|
 | `ip4_allowed` | `ipv4_addr . ipv4_addr` | Paire (src IP client, IPv4 dest) autorisée après résolution DNS |
 | `ip6_allowed` | `ipv6_addr . ipv6_addr` | Paire (src IPv6 client, IPv6 dest) autorisée après résolution DNS |
-| `authenticated_macs` | `ether_addr` | MACs clientes authentifiées (bypass intercept TCP/80 Q2) |
-| `authenticated_ips` | `ipv4_addr` | IPs clientes IPv4 authentifiées (bypass intercept TCP/80 Q2) |
-| `authenticated_ips6` | `ipv6_addr` | IPs clientes IPv6 authentifiées (bypass intercept TCP/80 Q2) |
+| `authenticated_macs` | `ether_addr` | MACs clientes authentifiées (bypass intercept TCP/80 captive) |
+| `authenticated_ips` | `ipv4_addr` | IPs clientes IPv4 authentifiées (bypass intercept TCP/80 captive) |
+| `authenticated_ips6` | `ipv6_addr` | IPs clientes IPv6 authentifiées (bypass intercept TCP/80 captive) |
 | `ip4_dest_whitelist` | `ipv4_addr` | Destinations IPv4 toujours autorisées (bypass DNS, rechargement SIGHUP) |
 | `ip6_dest_whitelist` | `ipv6_addr` | Destinations IPv6 toujours autorisées (bypass DNS, rechargement SIGHUP) |
 
@@ -661,7 +662,7 @@ uci commit custos
 
 Traffic to these CIDRs is allowed without DNS resolution. The `ip4_dest_whitelist` and `ip6_dest_whitelist` nftables sets are checked before DNS NFQUEUE, enabling direct access.
 
-The whitelist can also be configured in `cfg/filter.yml` (fallback if UCI is empty):
+The whitelist can also be configured in `cfg/filter.yml`:
 
 ```yaml
 ip_whitelist:

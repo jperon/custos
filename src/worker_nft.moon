@@ -1,6 +1,6 @@
 { :ffi, :libc } = require "ffi_defs"
 { :run_cmd } = require "nft"
-{ :cmd_for } = require "nft_queue"
+{ :cmd_for, :sanitize_timeout } = require "nft_queue"
 { :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
 
 BUF_SIZE  = 8192
@@ -8,6 +8,8 @@ MAX_BATCH = 64
 FLUSH_MS  = 50
 EAGAIN    = 11
 EWOULDBLOCK = 11
+
+LINE_VERSION = "v1"
 
 sleep_req = ffi.new "timespec_t[1]"
 clock_ts  = ffi.new "timespec_t[1]"
@@ -21,38 +23,80 @@ sleep_ms = (ms) ->
   libc.nanosleep sleep_req, nil
 
 monotonic_ms = ->
-  libc.clock_gettime 1, clock_ts  -- CLOCK_MONOTONIC = 1
+  libc.clock_gettime 1, clock_ts
   tonumber(clock_ts[0].tv_sec) * 1000 + math.floor tonumber(clock_ts[0].tv_nsec) / 1000000
 
---- Parse une ligne du pipe nft.
--- Format court (compatibilité callers sans ACK) : "kind|key|ip"
--- Format étendu (avec ACK) :                     "kind|key|ip|seq|worker_idx"
--- @tparam  string line  ligne sans le \n final
--- @treturn string|nil kind, key, ip, seq (number|nil), worker_idx (number|nil)
-parse_line = (line) ->
-  -- Essaie d'abord le format étendu (5 champs).
-  kind, key, ip, seq_s, widx_s = line\match "^([^|]+)|([^|]+)|([^|]+)|(%d+)|(%d+)$"
-  if kind
-    return kind, key, ip, tonumber(seq_s), tonumber(widx_s)
-  -- Fallback format court (3 champs, sans ACK).
-  kind, key, ip = line\match "^([^|]+)|([^|]+)|([^|]+)$"
-  kind, key, ip, nil, nil
+split_fields = (line) ->
+  out = {}
+  i = 1
+  while true
+    j = line\find "|", i, true
+    if j
+      out[#out + 1] = line\sub i, j - 1
+      i = j + 1
+    else
+      out[#out + 1] = line\sub i
+      break
+  out
 
---- Envoie 1 octet d'ACK dans le pipe dédié au worker identifié par worker_idx.
--- @tparam table  ack_wfds  tableau des fd d'écriture ACK (1-indexed par worker_idx+1)
--- @tparam number widx      index du worker destinataire (0-based)
--- @treturn nil
+from_hex = (h) ->
+  return "", nil if not h or #h == 0
+  return nil, "hex_odd_length" if (#h % 2) != 0
+  return nil, "hex_invalid_chars" unless h\match "^[0-9a-fA-F]+$"
+  out = {}
+  for i = 1, #h, 2
+    out[#out + 1] = string.char tonumber(h\sub(i, i + 1), 16)
+  table.concat(out), nil
+
+is_ipv4 = (s) -> s and s\match "^%d+%.%d+%.%d+%.%d+$"
+is_ipv6 = (s) -> s and s\find ":", 1, true
+is_mac  = (s) -> s and s\match "^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$"
+
+validate_item = (kind, key, ip) ->
+  if kind == "ip4"
+    return false unless is_ipv4(key) and is_ipv4(ip)
+  elseif kind == "ip6"
+    return false unless is_ipv6(key) and is_ipv6(ip)
+  elseif kind == "mac4"
+    return false unless is_mac(key) and is_ipv4(ip)
+  elseif kind == "mac6"
+    return false unless is_mac(key) and is_ipv6(ip)
+  else
+    return false
+  true
+
+parse_line = (line) ->
+  parts = split_fields line
+  return nil, "field_count" unless #parts == 9
+  return nil, "version" unless parts[1] == LINE_VERSION
+  kind, key, ip = parts[2], parts[3], parts[4]
+  return nil, "tuple" unless validate_item kind, key, ip
+  rule_id, err_rule = from_hex parts[5]
+  return nil, "rule_id_#{err_rule}" if err_rule
+  timeout = sanitize_timeout parts[6]
+  seq = tonumber parts[7]
+  return nil, "seq" unless seq and seq >= 0
+  widx = tonumber parts[8]
+  return nil, "worker_idx" unless widx
+  corr, err_corr = from_hex parts[9]
+  return nil, "corr_#{err_corr}" if err_corr
+  {
+    :kind
+    :key
+    :ip
+    :rule_id
+    :timeout
+    :seq
+    :widx
+    :corr
+  }, nil
+
 send_ack = (ack_wfds, widx) ->
-  wfd = ack_wfds[widx + 1]  -- tableau Lua 1-indexed
+  return unless widx and widx >= 0
+  wfd = ack_wfds[widx + 1]
   return unless wfd
   libc.write wfd, ack_byte, 1
 
---- Exécute le batch d'insertions nft et ACK chaque message reçu.
--- Vide la table pending en place.
--- @tparam table pending   { key = {kind, key, ip} } (commandes nft dédoublonnées)
--- @tparam table ack_queue liste FIFO des worker_idx à ACKer (un item par message reçu)
--- @tparam table ack_wfds  tableau des fd d'écriture ACK (peut être vide)
--- @treturn nil
 flush_batch = (pending, ack_queue, ack_wfds) ->
   count = 0
   for _, _ in pairs pending
@@ -61,7 +105,7 @@ flush_batch = (pending, ack_queue, ack_wfds) ->
 
   lines = {}
   for _, item in pairs pending
-    cmd = cmd_for item.kind, item.key, item.ip
+    cmd = cmd_for item.kind, item.key, item.ip, item.timeout
     lines[#lines + 1] = cmd if cmd
   for k in pairs pending
     pending[k] = nil
@@ -79,20 +123,11 @@ flush_batch = (pending, ack_queue, ack_wfds) ->
   else
     log_debug { action: "batch_ack_only", acks: #ack_queue }
 
-  -- ACK chaque message reçu, pas seulement chaque worker_idx.
-  -- Plusieurs processus/enfants DoH peuvent attendre simultanément sur le même
-  -- worker_idx ; un seul ACK par worker_idx laisserait les autres timeout.
-  -- On ACK même en cas d'échec partiel : la politique est fail-open côté Q1/DoH.
-  for widx in *ack_queue
-    send_ack ack_wfds, widx
+  for ack in *ack_queue
+    send_ack ack_wfds, ack.widx
   for i = #ack_queue, 1, -1
     ack_queue[i] = nil
 
---- Boucle principale du worker nft.
--- Lit des lignes depuis rfd, batchifie, flush périodiquement ou sur MAX_BATCH.
--- @tparam number rfd       fd de lecture du pipe nft
--- @tparam table  ack_wfds  tableau des fd d'écriture ACK (1-indexed, peut être nil)
--- @treturn nil
 run = (rfd, ack_wfds) ->
   set_action_prefix "nft_"
   ack_wfds = ack_wfds or {}
@@ -112,12 +147,19 @@ run = (rfd, ack_wfds) ->
         break unless nl
         line = data\sub 1, nl - 1
         data = data\sub nl + 1
-        kind, key, ip, seq, widx = parse_line line
-        if kind and key and ip
-          ack_queue[#ack_queue + 1] = widx if widx
-          entry_key = "#{kind}|#{key}|#{ip}"
-          pending[entry_key] = { :kind, :key, :ip } unless pending[entry_key]
+        if #line == 0
+          continue
+        item, parse_err = parse_line line
+        if item
+          ack_queue[#ack_queue + 1] = { widx: item.widx, seq: item.seq, corr: item.corr, rule_id: item.rule_id }
+          entry_key = "#{item.kind}|#{item.key}|#{item.ip}|#{item.timeout}"
+          pending[entry_key] = item unless pending[entry_key]
+        else
+          log_warn { action: "nft_invalid_message", reason: parse_err or "parse_failed", raw: line\sub(1, 220) }
       partial = data
+      if #partial > 4096
+        log_warn { action: "nft_partial_oversize", size: #partial }
+        partial = ""
     else
       errno_p = libc.__errno_location!
       errno = if errno_p then errno_p[0] else 0

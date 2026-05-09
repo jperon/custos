@@ -1,17 +1,13 @@
 local ffi
 ffi = require("ffi_defs").ffi
-local NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS
-do
-  local _obj_0 = require("config")
-  NFT_ADD_RETRY_COUNT, NFT_ADD_BACKOFF_MS = _obj_0.NFT_ADD_RETRY_COUNT, _obj_0.NFT_ADD_BACKOFF_MS
-end
+local config = require("config")
 local log_warn
 log_warn = require("log").log_warn
 local _timespec = ffi.new("timespec_t[1]")
 local try_add_with_retries
 try_add_with_retries = function(fn, ...)
-  local attempts = NFT_ADD_RETRY_COUNT or 6
-  local backoffs = NFT_ADD_BACKOFF_MS or {
+  local attempts = config.nft.add_retry_count or 6
+  local backoffs = config.nft.add_backoff_ms or {
     20,
     50,
     100,

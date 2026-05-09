@@ -4,11 +4,7 @@ do
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
 local mac_prober = require("mac_prober")
-local _cfg = require("config")
-local MAC_LEARNER_QUERY_SOCK = _cfg.MAC_LEARNER_QUERY_SOCK or "/var/run/custos/mac_query.sock"
-local MAC_LEARNER_LEARN_MSG_SIZE = _cfg.MAC_LEARNER_LEARN_MSG_SIZE or 22
-local MAC_LEARNER_ENTRY_TTL = _cfg.MAC_LEARNER_ENTRY_TTL or 300
-local AUTH_SESSIONS_FILE = _cfg.AUTH_SESSIONS_FILE or "./tmp/sessions.lua"
+local config = require("config")
 local log_info, log_warn, log_debug
 do
   local _obj_0 = require("log")
@@ -16,6 +12,8 @@ do
 end
 local enrich_session_ip
 enrich_session_ip = require("auth.sessions").enrich_session_ip
+local mac_cfg = config.mac_learner or { }
+local auth_cfg = config.auth or { }
 local PROBE_TIMEOUT_MS = 200
 local NEGATIVE_TTL = 30
 local PURGE_INTERVAL = 60
@@ -24,6 +22,19 @@ local AF_UNIX = 1
 local SOCK_STREAM = 1
 local POLLIN = 1
 local AF_INET6 = 10
+local sh_quote
+sh_quote = function(s)
+  return "'" .. tostring(s):gsub("'", "'\"'\"'") .. "'"
+end
+local ensure_parent_dir
+ensure_parent_dir = function(path)
+  local parent = tostring(path):match("^(.*)/[^/]+$")
+  if not (parent and parent ~= "") then
+    return true
+  end
+  local ret = os.execute("mkdir -p " .. tostring(sh_quote(parent)))
+  return ret == 0 or ret == true
+end
 local mac_table = { }
 local negative_cache = { }
 local pending_queries = { }
@@ -55,10 +66,10 @@ learn_mac = function(ip_str, mac_str)
   local is_new = not existing or existing[1] ~= mac_str
   mac_table[ip_str] = {
     mac_str,
-    os.time() + MAC_LEARNER_ENTRY_TTL
+    os.time() + (mac_cfg.entry_ttl or 300)
   }
   if is_new then
-    local ok, enriched = pcall(enrich_session_ip, mac_str, ip_str, AUTH_SESSIONS_FILE)
+    local ok, enriched = pcall(enrich_session_ip, mac_str, ip_str, auth_cfg.sessions_file)
     if ok and enriched then
       log_info({
         action = "session_enriched",
@@ -80,7 +91,8 @@ learn_mac = function(ip_str, mac_str)
 end
 local process_learn
 process_learn = function(msg)
-  if #msg < MAC_LEARNER_LEARN_MSG_SIZE then
+  local msg_size = mac_cfg.learn_msg_size or 22
+  if #msg < msg_size then
     return 
   end
   local ip16 = msg:sub(1, 16)
@@ -180,6 +192,9 @@ start_query = function(client_fd)
 end
 local create_server
 create_server = function(path)
+  if not (ensure_parent_dir(path)) then
+    return -1
+  end
   libc.unlink(path)
   local sock = libc.socket(AF_UNIX, SOCK_STREAM, 0)
   if sock < 0 then
@@ -215,19 +230,20 @@ run = function(learn_rfd, ifname)
       ifname = ifname
     })
   end
-  local query_sock = create_server(MAC_LEARNER_QUERY_SOCK)
+  local query_sock_path = mac_cfg.query_sock or config.MAC_LEARNER_QUERY_SOCK or "/var/run/custos/mac_query.sock"
+  local query_sock = create_server(query_sock_path)
   if query_sock < 0 then
     local errno = tonumber(ffi.C.__errno_location()[0])
     log_warn({
       action = "mac_learner_socket_failed",
-      path = MAC_LEARNER_QUERY_SOCK,
+      path = query_sock_path,
       errno = errno
     })
     return 
   end
   log_info({
     action = "mac_learner_start",
-    sock = MAC_LEARNER_QUERY_SOCK
+    sock = query_sock_path
   })
   local pfds = ffi.new("struct pollfd[4]")
   pfds[0].fd = learn_rfd
@@ -245,7 +261,8 @@ run = function(learn_rfd, ifname)
       nfds = 4
     end
   end
-  local learn_buf = ffi.new("uint8_t[?]", MAC_LEARNER_LEARN_MSG_SIZE)
+  local msg_size = mac_cfg.learn_msg_size or 22
+  local learn_buf = ffi.new("uint8_t[?]", msg_size)
   local arp_buf = ffi.new("uint8_t[512]")
   local ipv6_buf = ffi.new("uint8_t[2048]")
   local last_purge = 0
@@ -259,12 +276,12 @@ run = function(learn_rfd, ifname)
     libc.poll(pfds, nfds, poll_ms)
     if bit.band(pfds[0].revents, POLLIN) ~= 0 then
       while true do
-        local n = libc.read(learn_rfd, learn_buf, MAC_LEARNER_LEARN_MSG_SIZE)
+        local n = libc.read(learn_rfd, learn_buf, msg_size)
         if n <= 0 then
           break
         end
-        if n == MAC_LEARNER_LEARN_MSG_SIZE then
-          process_learn(ffi.string(learn_buf, MAC_LEARNER_LEARN_MSG_SIZE))
+        if n == msg_size then
+          process_learn(ffi.string(learn_buf, msg_size))
         end
       end
     end

@@ -1,7 +1,7 @@
 -- tests/unit/dns_ede_spec.moon
 -- Tests unitaires des helpers DNS EDE.
 
-{ :strip_https_rr } = require "dns_ede"
+{ :strip_https_rr, :add_ede_modified } = require "dns_ede"
 dns_mod = require "ipparse.l7.dns"
 pack: sp = require "ipparse.lib.pack_compat"
 
@@ -65,3 +65,17 @@ describe "dns_ede.strip_https_rr", ->
     header = sp(">H H H H H H", 0x4321, 0x8180, 1, 1, 0, 0)
     raw = header .. question .. answer_a
     assert.equals raw, strip_https_rr(raw)
+
+describe "dns_ede.add_ede_modified", ->
+  it "ajoute un OPT/EDE code 4 avec texte Custos vigilat", ->
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    answer_a = pack_rr QTYPE_A, string.char(9, 9, 9, 9)
+    header = sp(">H H H H H H", 0xBEEF, 0x8180, 1, 1, 0, 0)
+    raw = header .. question .. answer_a
+
+    patched = add_ede_modified raw, "policy"
+    parsed = dns_mod.parse patched, 1, false
+    assert.is_not_nil parsed
+    assert.equals 1, #parsed.additionals
+    assert.equals 0x29, parsed.additionals[1].rtype
+    assert.is_true patched\find("Custos vigilat%. policy", 1) ~= nil

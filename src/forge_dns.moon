@@ -1,15 +1,15 @@
 -- src/forge_dns.moon
 -- Forge des réponses DNS pour le vol de question DNS (portail captif).
 --
--- Utilisé par worker_questions (Q0) : quand une question DNS porte sur le
--- hostname du portail captif, Q0 appelle forge_dns_response et injecte la
+-- Utilisé par worker_questions (question) : quand une question DNS porte sur le
+-- hostname du portail captif, question appelle forge_dns_response et injecte la
 -- réponse forgée directement via nfq_set_verdict, sans la laisser atteindre
--- le resolver. Q1 n'est pas impliqué (pas de message IPC).
+-- le resolver. response n'est pas impliqué (pas de message IPC).
 --
 -- Le paquet retourné est un paquet IP+UDP brut (sans Ethernet header) avec
 -- src/dst inversés par rapport à la question d'origine, compatible avec
 -- nfq_set_verdict(NF_ACCEPT, payload, len) sur un hook bridge nftables.
--- La même mécanique empirique que worker_reject (Q3) permet au bridge de
+-- La même mécanique empirique que worker_reject (reject) permet au bridge de
 -- router le paquet vers le client.
 
 { new: new_ip, proto: ip_proto, :s2ip } = require "ipparse.l3.ip"
@@ -94,7 +94,7 @@ forge_dns_response = (pkt, q, ip4_str, ip6_str) ->
   -- ── Paquet IP (src/dst inversés) ────────────────────────────
   -- src = IP du resolver → le paquet semble venir du resolver
   -- dst = IP du client   → destinataire de la réponse forgée
-  -- La même mécanique empirique que Q3 (worker_reject) délivre le paquet
+  -- La même mécanique empirique que reject (worker_reject) délivre le paquet
   -- au client via le bridge, même si le header L2 original n'est pas modifié.
   local ip_obj
   if pkt.ip.version == 6

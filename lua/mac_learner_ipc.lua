@@ -3,10 +3,11 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
-local MAC_LEARNER_QUERY_SOCK
-MAC_LEARNER_QUERY_SOCK = require("config").MAC_LEARNER_QUERY_SOCK
+local config = require("config")
 local log_warn
 log_warn = require("log").log_warn
+local learner_cfg = config.mac_learner or { }
+local QUERY_SOCK = learner_cfg.query_sock or config.MAC_LEARNER_QUERY_SOCK or "/var/run/custos/mac_query.sock"
 local AF_UNIX = 1
 local AF_INET6 = 10
 local SOCK_STREAM = 1
@@ -44,8 +45,8 @@ get_mac = function(ip_str)
   end
   local addr = ffi.new("struct sockaddr_un")
   addr.sun_family = AF_UNIX
-  ffi.copy(addr.sun_path, MAC_LEARNER_QUERY_SOCK)
-  local addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #MAC_LEARNER_QUERY_SOCK + 1
+  ffi.copy(addr.sun_path, QUERY_SOCK)
+  local addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
   if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0 then
     libc.close(sock)
     return mac_from_eui64(ip_str) or "unknown"

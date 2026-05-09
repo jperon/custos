@@ -2,7 +2,7 @@
 -- Helper to try adding elements to nft with retries and backoff.
 
 { :ffi } = require "ffi_defs"
-{ :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS } = require "config"
+config = require "config"
 { :log_warn } = require "log"
 
 -- Pre-allocated timespec for backoff sleep (avoids allocation on each retry)
@@ -10,8 +10,8 @@ _timespec = ffi.new "timespec_t[1]"
 
 -- Try calling fn(args...). Returns true if fn returned truthy within retries.
 try_add_with_retries = (fn, ...) ->
-  attempts = NFT_ADD_RETRY_COUNT or 6
-  backoffs = NFT_ADD_BACKOFF_MS or {20, 50, 100, 200, 400, 800}
+  attempts = config.nft.add_retry_count or 6
+  backoffs = config.nft.add_backoff_ms or {20, 50, 100, 200, 400, 800}
 
   for i = 1, attempts
     ok, err = fn ...

@@ -1,145 +1,235 @@
 -- src/config.moon
--- Configuration centrale : constantes, paramètres runtime, chemins.
--- NOTE : La configuration du filtre (règles, listes de domaines, auth) se trouve
--- dans filter.yml. Ce fichier ne contient que des constantes compile-time.
+-- Configuration runtime hiérarchique.
+-- Source de vérité : /etc/config.moon (surcharge partielle des défauts).
 
--- ── Queues NFQUEUE ──────────────────────────────────────────────
-QUEUE_QUESTIONS = "0-1"    -- UDP/53 src LAN (questions)
-QUEUE_RESPONSES = "4"      -- UDP/53 dst LAN (réponses)
-QUEUE_CAPTIVE   = "20"     -- TCP SYN/80 (captif)
-QUEUE_REJECT    = "10-11"  -- Reject rate-limited
-QUEUE_AUTH      = "5"      -- TCP 33443 (authentification captive)
-QUEUE_SNI_LOG   = "6"      -- TCP/443 SYN + UDP/443 QUIC Initial (SNI logging)
+DEFAULT_CONFIG_PATH = "/etc/config.moon"
 
--- ── Logging ─────────────────────────────────────────────────────
--- Les messages sont écrits sur stdout (fd=1).
--- Le superviseur de processus les capture vers le système de log natif :
---   OpenWrt / procd  → logread   (procd_set_param stdout 1)
---   systemd          → journalctl
--- Niveau de log par défaut. Peut être surchargé par UCI (custos.main.log_level).
-LOG_LEVEL = "INFO" -- ERROR, WARN, INFO, DEBUG, TRACE
+DEFAULTS = {
+  runtime: {
+    log_level: "INFO"
+    benchmark: false
+    af_inet: 2
+    af_inet6: 10
+  }
 
--- ── Benchmark DNS (Q0 → Q1) ─────────────────────────────────────
--- Active le logging du temps de traitement entre la réception de la question
--- DNS dans worker_questions et l'émission de la réponse DNS dans worker_responses.
-BENCHMARK = false
+  nfqueue: {
+    questions: "0-1"
+    responses: "4"
+    captive: "20"
+    reject: "10-11"
+    auth: "5"
+    sni_log: "6"
+  }
 
--- ── Noms de sets nftables ────────────────────────────────────────
-NFT_FAMILY     = "bridge"
-NFT_FAMILY6    = "bridge"
-NFT_TABLE      = "dns-filter-bridge"
-NFT_SET_IP4    = "ip4_allowed"
-NFT_SET_IP6    = "ip6_allowed"
-NFT_SET_MAC4   = "mac4_allowed"   -- ether_addr . ipv4_addr (client MAC + dest IPv4)
-NFT_SET_MAC6   = "mac6_allowed"   -- ether_addr . ipv6_addr (client MAC + dest IPv6)
-NFT_IP_TIMEOUT = "2m"             -- durée de vie des IPs dans les sets
+  dns: {
+    port: 53
+    forced_ttl: 60
+    ttl_grace: {
+      grace: 600
+      min: 60
+      max: 2592000
+    }
+  }
 
--- ── Politique et retry pour les insertions dynamiques dans nft
-NFT_ADD_RETRY_COUNT = 6
-NFT_ADD_BACKOFF_MS = {20, 50, 100, 200, 400, 800}
-NFT_ADD_FAILURE_POLICY = "fail-closed"  -- options: "fail-open" or "fail-closed"
--- Délai max d'attente de l'ACK de worker_nft avant de rendre le verdict DNS (fail-open si dépassé).
--- Doit être > FLUSH_MS (50 ms dans worker_nft) + temps d'exécution nft (typiquement 5-15 ms).
-NFT_ACK_TIMEOUT_MS = 150
+  nft: {
+    family: "bridge"
+    family6: "bridge"
+    table: "dns-filter-bridge"
+    set_ip4: "ip4_allowed"
+    set_ip6: "ip6_allowed"
+    set_mac4: "mac4_allowed"
+    set_mac6: "mac6_allowed"
+    ip_timeout: "2m"
+    add_retry_count: 6
+    add_backoff_ms: {20, 50, 100, 200, 400, 800}
+    add_failure_policy: "fail-closed"
+    ack_timeout_ms: 150
+    extra_rules: {}
+  }
 
--- ── Pipe IPC Q0 → Q1 ────────────────────────────────────────────
--- Durée de vie d'une transaction en attente de réponse (secondes)
-IPC_PENDING_TTL = 5
+  ipc: {
+    pending_ttl: 5
+    match_retry: {
+      enabled: true
+      count: 5
+      sleep_ms: 20
+    }
+  }
 
--- Retry borné de corrélation IPC côté Q1 (anti-course Q0→Q1)
--- Chemin miss uniquement : pas de busy wait (nanosleep entre tentatives)
-IPC_MATCH_RETRY_ENABLED = true
-IPC_MATCH_RETRY_COUNT = 5
-IPC_MATCH_RETRY_SLEEP_MS = 20
+  clients: {
+    expiry: 300
+  }
 
--- ── Client tracking ─────────────────────────────────────────────
--- Durée en secondes sans activité DNS avant qu'un client soit purgé
--- du cache MAC (worker Q1). Le timeout nftables sur les sets gère
--- l'expiration des paires (client, dest) indépendamment.
-CLIENT_EXPIRY = 300
+  mac_learner: {
+    query_sock: "/var/run/custos/mac_query.sock"
+    learn_msg_size: 22
+    entry_ttl: 300
+  }
 
+  auth: {
+    host: "::"
+    port: 33443
+    captive_port: 33080
+    session_ttl: 0
+    heartbeat_interval: 30
+    idle_timeout: 120
+    secrets: "/etc/custos/secrets"
+    sessions_file: "./tmp/sessions.lua"
+    sni_verdict: {
+      enabled: true
+      mode: "strict-443"
+      protocols: "both"
+      nft_failure_policy: "fail-closed"
+    }
+  }
 
+  doh: {
+    enabled: true
+    port: 8443
+    upstream_ipv4: "1.1.1.3"
+    upstream_ipv6: "2606:4700:4700::1113"
+    upstream_port: 53
+    upstream_timeout_ms: 2000
+    cert_path: nil
+    key_path: nil
+    prefer_ipv6: true
+  }
 
--- ── TTL forcé ────────────────────────────────────
--- TTL injecté sur tous les RR des réponses autorisées (secondes).
-FORCED_TTL = 60
+  events: {
+    dir: "/tmp/custos/events"
+    max_age_hours: 168
+    min_free_pct: 30
+  }
 
--- ── Constantes réseau ───────────────────────────────────────────
-DNS_PORT   = 53
-AF_INET    = 2
-AF_INET6   = 10
-
--- ── MAC Learner ─────────────────────────────────────────────────
--- Socket Unix SOCK_STREAM pour les requêtes MAC (AUTH, Q2, …).
-MAC_LEARNER_QUERY_SOCK     = "/var/run/custos/mac_query.sock"
--- Taille d'un message de learn binaire (ip16 + mac6).
-MAC_LEARNER_LEARN_MSG_SIZE = 22
--- Durée de vie d'une entrée IP→MAC dans la table du learner (secondes).
-MAC_LEARNER_ENTRY_TTL      = 300
-
--- ── Authentification HTTPS ───────────────────────────────────────
--- Chemin du fichier de sessions partagé entre le worker auth et les
--- workers Q0/Q1 (via from_user). Surchargeable via cfg/filter.yml (auth.sessions_file).
-AUTH_SESSIONS_FILE = "./tmp/sessions.lua"
-
--- ── Enregistrement des événements DNS ───────────────────────────
--- Répertoire de sortie des fichiers TSV horaires (créé si absent).
--- Surchargeable via UCI (custos.main.events_dir).
-EVENTS_DIR          = "/tmp/custos/events"
--- Âge maximum des fichiers .tsv.zst avant suppression (heures).
--- Surchargeable via UCI (custos.main.events_max_age_hours).
-EVENTS_MAX_AGE_HOURS = 168    -- 7 jours
--- Seuil d'espace libre minimum sur le filesystem d'events_dir (%).
--- Si l'espace libre passe en-dessous, les .tsv.zst les plus anciens
--- sont supprimés jusqu'au rétablissement du seuil.
--- Surchargeable via UCI (custos.main.events_min_free_pct).
-EVENTS_MIN_FREE_PCT  = 30
-
--- ── Destination whitelist (CIDR networks bypassing DNS analysis) ─────
--- Configuré via UCI (custos.main.dest_whitelist) ou filter.yml (ip_whitelist).
--- Trafic vers ces réseaux autorisé sans résolution DNS préalable.
--- Note : la source peut être filtrée via les règles filter (from_net, from_netlist, etc.),
--- mais la destination ne peut l'être que via cette whitelist (contournement DNS).
-DEST_WHITELIST = {}
-
--- ── Domaines DNS autorisés par défaut ───────────────────────────
--- Surchargeables via UCI (custos.main.allowed_domains).
-ALLOWED_DOMAINS = { "local", "lan", "home.arpa" }
-
--- ── Règles nftables supplémentaires ─────────────────────────────
--- Injectées en tête de chaîne `forward` au démarrage.
--- Surchargeables via UCI (custos.main.nft_extra_rules).
-NFT_EXTRA_RULES = {}
-
--- ── DoH worker ──────────────────────────────────────────────────
--- All values overridable via UCI (custos.main.*).
-DOH_ENABLED             = "1"                      -- set to "1" to activate
-DOH_PORT                = 8443                     -- TLS listen port
-DOH_UPSTREAM_IPV4       = "1.1.1.3"               -- Cloudflare Family (IPv4)
-DOH_UPSTREAM_IPV6       = "2606:4700:4700::1113"  -- Cloudflare Family (IPv6)
-DOH_UPSTREAM_PORT       = 53                       -- upstream DNS UDP port
-DOH_UPSTREAM_TIMEOUT_MS = 2000                     -- upstream recv timeout (ms)
-DOH_CERT_PATH           = ""                       -- static cert PEM (optional)
-DOH_KEY_PATH            = ""                       -- static key PEM (optional)
-DOH_PREFER_IPV6         = "1"                      -- "1" = prefer IPv6 upstream
-
--- ── Export ──────────────────────────────────────────────────────
-{
-  :QUEUE_QUESTIONS, :QUEUE_RESPONSES, :QUEUE_CAPTIVE, :QUEUE_REJECT, :QUEUE_AUTH, :QUEUE_SNI_LOG
-  :NFT_FAMILY, :NFT_FAMILY6, :NFT_TABLE, :NFT_SET_IP4, :NFT_SET_IP6, :NFT_SET_MAC4, :NFT_SET_MAC6, :NFT_IP_TIMEOUT
-  :NFT_ADD_RETRY_COUNT, :NFT_ADD_BACKOFF_MS, :NFT_ADD_FAILURE_POLICY, :NFT_ACK_TIMEOUT_MS
-  :IPC_PENDING_TTL
-  :IPC_MATCH_RETRY_ENABLED, :IPC_MATCH_RETRY_COUNT, :IPC_MATCH_RETRY_SLEEP_MS
-  :CLIENT_EXPIRY
-  :MAC_LEARNER_QUERY_SOCK, :MAC_LEARNER_LEARN_MSG_SIZE, :MAC_LEARNER_ENTRY_TTL
-  :FORCED_TTL
-  :DNS_PORT, :AF_INET, :AF_INET6
-  :AUTH_SESSIONS_FILE
-  :EVENTS_DIR, :EVENTS_MAX_AGE_HOURS, :EVENTS_MIN_FREE_PCT
-  :DEST_WHITELIST, :ALLOWED_DOMAINS, :NFT_EXTRA_RULES
-  :LOG_LEVEL
-  :BENCHMARK
-  :DOH_ENABLED, :DOH_PORT, :DOH_UPSTREAM_IPV4, :DOH_UPSTREAM_IPV6
-  :DOH_UPSTREAM_PORT, :DOH_UPSTREAM_TIMEOUT_MS
-  :DOH_CERT_PATH, :DOH_KEY_PATH, :DOH_PREFER_IPV6
+  filter: {
+    domainlists_dir: "/etc/custos/lists"
+    custom_lists_dir: nil
+    allow_localnets: false
+    nets: {}
+    macs: {}
+    times: {}
+    sources: {}
+    users: {}
+    rules: {}
+    dest_whitelist: {}
+    allowed_domains: { "local", "lan", "home.arpa" }
+    decision: {
+      first_match_wins: true
+      continue_to_next_rule: false
+    }
+  }
 }
+
+is_array = (t) ->
+  return false unless type(t) == "table"
+  n = #t
+  return false if n == 0
+  for i = 1, n
+    return false if t[i] == nil
+  true
+
+clone = (v) ->
+  return v unless type(v) == "table"
+  out = {}
+  for k, item in pairs v
+    out[k] = clone item
+  out
+
+merge_into = (dst, src) ->
+  return dst unless type(src) == "table"
+  for k, v in pairs src
+    if type(v) == "table" and type(dst[k]) == "table" and not is_array(v)
+      merge_into dst[k], v
+    else
+      dst[k] = clone v
+  dst
+
+coerce_boolean = (v) ->
+  return v if type(v) == "boolean"
+  return true if v == "1" or v == "true"
+  return false if v == "0" or v == "false"
+  v
+
+normalize = (cfg) ->
+  cfg.runtime = cfg.runtime or {}
+  cfg.doh = cfg.doh or {}
+  cfg.dns = cfg.dns or {}
+  cfg.dns.ttl_grace = cfg.dns.ttl_grace or {}
+  cfg.filter = cfg.filter or {}
+  cfg.filter.decision = cfg.filter.decision or {}
+  cfg.filter.dest_whitelist = cfg.filter.dest_whitelist or {}
+  cfg.filter.allowed_domains = cfg.filter.allowed_domains or {}
+  cfg.filter.nets = cfg.filter.nets or {}
+  cfg.filter.macs = cfg.filter.macs or {}
+  cfg.filter.times = cfg.filter.times or {}
+  cfg.filter.sources = cfg.filter.sources or {}
+  cfg.filter.rules = cfg.filter.rules or {}
+  cfg.filter.users = cfg.filter.users or {}
+  cfg.auth = cfg.auth or {}
+  cfg.auth.sni_verdict = cfg.auth.sni_verdict or {}
+  defaults = DEFAULTS
+  decision_defaults = defaults.filter and defaults.filter.decision or {}
+  ttl_defaults = defaults.dns and defaults.dns.ttl_grace or {}
+  auth_defaults = defaults.auth or {}
+  sni_defaults = auth_defaults.sni_verdict or {}
+
+  cfg.doh.enabled = coerce_boolean cfg.doh.enabled
+  cfg.doh.prefer_ipv6 = coerce_boolean cfg.doh.prefer_ipv6
+  cfg.runtime.benchmark = coerce_boolean cfg.runtime.benchmark
+
+  if cfg.filter.decision.first_match_wins == nil
+    cfg.filter.decision.first_match_wins = decision_defaults.first_match_wins
+  else
+    cfg.filter.decision.first_match_wins = coerce_boolean cfg.filter.decision.first_match_wins
+
+  if cfg.filter.decision.continue_to_next_rule == nil
+    cfg.filter.decision.continue_to_next_rule = decision_defaults.continue_to_next_rule
+  else
+    cfg.filter.decision.continue_to_next_rule = coerce_boolean cfg.filter.decision.continue_to_next_rule
+
+  cfg.filter.allow_localnets = coerce_boolean cfg.filter.allow_localnets
+
+  ttl = cfg.dns.ttl_grace
+  ttl.grace = tonumber(ttl.grace) or ttl_defaults.grace
+  ttl.min = tonumber(ttl.min) or ttl_defaults.min
+  ttl.max = tonumber(ttl.max) or ttl_defaults.max
+
+  cfg.auth.port = tonumber(cfg.auth.port) or auth_defaults.port
+  cfg.auth.captive_port = tonumber(cfg.auth.captive_port) or auth_defaults.captive_port
+  cfg.auth.session_ttl = tonumber(cfg.auth.session_ttl) or auth_defaults.session_ttl
+  cfg.auth.heartbeat_interval = tonumber(cfg.auth.heartbeat_interval) or auth_defaults.heartbeat_interval
+  cfg.auth.idle_timeout = tonumber(cfg.auth.idle_timeout) or auth_defaults.idle_timeout
+  if cfg.auth.sni_verdict.enabled == nil
+    cfg.auth.sni_verdict.enabled = sni_defaults.enabled
+  else
+    cfg.auth.sni_verdict.enabled = coerce_boolean cfg.auth.sni_verdict.enabled
+  cfg.auth.sni_verdict.mode = cfg.auth.sni_verdict.mode or sni_defaults.mode
+  cfg.auth.sni_verdict.protocols = cfg.auth.sni_verdict.protocols or sni_defaults.protocols
+  cfg.auth.sni_verdict.nft_failure_policy = cfg.auth.sni_verdict.nft_failure_policy or sni_defaults.nft_failure_policy
+
+  cfg
+
+load_external_config = (path) ->
+  moon_base = require "moonscript.base"
+  chunk, load_err = moon_base.loadfile path
+  return nil, load_err unless chunk
+
+  ok, custom = pcall chunk
+  return nil, custom unless ok
+  return nil, "config file must return a table" unless type(custom) == "table"
+  custom, nil
+
+build = ->
+  cfg = clone DEFAULTS
+  path = os.getenv("CUSTOS_CONFIG_PATH") or DEFAULT_CONFIG_PATH
+
+  custom, err = load_external_config path
+  if custom
+    merge_into cfg, custom
+  else
+    if err and not tostring(err)\match "No such file"
+      io.stderr\write "config: failed to load #{path}: #{tostring(err)}\n"
+
+  normalize cfg
+
+build!

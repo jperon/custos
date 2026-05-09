@@ -234,6 +234,16 @@ describe "ipc", ->
       assert.is_not_nil decoded.reason
       assert.truthy decoded.reason\find "blocked", 1, true
 
+  describe "rule_id + timeout round-trip", ->
+    it "préserve rule_id et timeout", ->
+      m_ipc   = fresh_ipc!
+      msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                  false, false, "allowed", 17, "dns_workhours", "240s"
+      decoded = m_ipc.decode_msg msg
+
+      assert.equals "dns_workhours", decoded.rule_id
+      assert.equals "240s", decoded.timeout
+
   -- ── 14. reason tronquée à 63 chars ───────────────────────────────────
   describe "reason troncature", ->
     it "reason de 70 chars est tronquée à 63", ->
@@ -321,13 +331,14 @@ describe "ipc", ->
   describe "encode_msg avec benchmark_ms", ->
     it "benchmark_ms encodé et décodé", ->
       m_ipc = fresh_ipc!
-      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, false, "", 42
-      assert.equals 115, #msg
+      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, false, "", 42, "rule_dns", "90s"
+      assert.is_true #msg > 0
       decoded = m_ipc.decode_msg msg
       assert.is_not_nil decoded
-      -- Le benchmark_ms est dans les derniers octets mais decode_msg l'expose
-      -- peu importe, l'important est que le message est valide
       assert.equals TXID, decoded.txid
+      assert.equals 42, decoded.benchmark_ms
+      assert.equals "rule_dns", decoded.rule_id
+      assert.equals "90s", decoded.timeout
 
   -- ── 21. write_msg fd invalide → géré sans crash ───────────────────────
   describe "write_msg fd invalide", ->

@@ -31,15 +31,15 @@ nft_file_path = ->
 
 substitute = (content) ->
   cfg = require "config"
-  content = content\gsub "{QUEUE_QUESTIONS}", cfg.QUEUE_QUESTIONS
-  content = content\gsub "{QUEUE_RESPONSES}", cfg.QUEUE_RESPONSES
-  content = content\gsub "{QUEUE_CAPTIVE}",   cfg.QUEUE_CAPTIVE
-  content = content\gsub "{QUEUE_REJECT}",    cfg.QUEUE_REJECT
-  content = content\gsub "{QUEUE_AUTH}",      cfg.QUEUE_AUTH
-  content = content\gsub "{QUEUE_SNI_LOG}",   cfg.QUEUE_SNI_LOG
-  content = content\gsub "{NFT_IP_TIMEOUT}",  cfg.NFT_IP_TIMEOUT
+  content = content\gsub "{QUEUE_QUESTIONS}", cfg.nfqueue.questions
+  content = content\gsub "{QUEUE_RESPONSES}", cfg.nfqueue.responses
+  content = content\gsub "{QUEUE_CAPTIVE}",   cfg.nfqueue.captive
+  content = content\gsub "{QUEUE_REJECT}",    cfg.nfqueue.reject
+  content = content\gsub "{QUEUE_AUTH}",      cfg.nfqueue.auth
+  content = content\gsub "{QUEUE_SNI_LOG}",   cfg.nfqueue.sni_log
+  content = content\gsub "{NFT_IP_TIMEOUT}",  cfg.nft.ip_timeout
 
-  if get_log_level_num"DEBUG" < get_log_level_num cfg.LOG_LEVEL
+  if get_log_level_num"DEBUG" < get_log_level_num cfg.runtime.log_level
     content = content\gsub "log%s+level%s+debug%s+prefix%s+\"[^\"]*\"", ""
 
   content

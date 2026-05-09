@@ -4,7 +4,7 @@
 -- @module nfq.packet
 
 { :ffi } = require "ffi_defs"
-{ :AF_INET, :AF_INET6 } = require "config"
+config = require "config"
 bit = require "bit"
 
 -- ── Constants ──────────────────────────────────────────────────
@@ -96,7 +96,7 @@ fmt_ipv4 = (p, o) ->
 -- @tparam number o 0-based offset.
 -- @treturn string IPv6 address.
 fmt_ipv6 = (p, o) ->
-  ffi.C.inet_ntop AF_INET6, p + o, ipv6_str, 46
+  ffi.C.inet_ntop config.runtime.af_inet6, p + o, ipv6_str, 46
   ffi.string ipv6_str
 
 -- ── DNS name decompression (RFC 1035 §4.1.4) ──────────────────
@@ -159,7 +159,7 @@ parse_l3_v4 = (p, len) ->
     dst_ip:     fmt_ipv4 p, 16
     src_ip_raw: ffi.string p + 12, 4
     dst_ip_raw: ffi.string p + 16, 4
-    af: AF_INET
+    af: config.runtime.af_inet
   }
 
 -- IPv6 extension header type → skip formula:
@@ -218,7 +218,7 @@ parse_l3_v6 = (p, len) ->
     dst_ip:     fmt_ipv6 p, 24
     src_ip_raw: ffi.string p + 8,  16
     dst_ip_raw: ffi.string p + 24, 16
-    af: AF_INET6
+    af: config.runtime.af_inet6
   }
 
 -- ── Checksum helpers ───────────────────────────────────────────
@@ -614,7 +614,7 @@ parse_answers = (raw, pkt) ->
 -- @treturn string Modified packet as a Lua string.
 patch_and_checksum = (raw, pkt, answers, new_ttl) ->
   -- Multi-segment TCP: reconstruct a coalesced segment with patched TTLs.
-  -- The intermediate segments were DROPped in Q1 so the client never ACKed them;
+  -- The intermediate segments were DROPped in response so the client never ACKed them;
   -- resetting seq to tcp_init_seq lets the client TCP stack accept the coalesced packet.
   if pkt.l4.proto == "tcp" and not pkt.tcp_single_segment
     -- Patch TTLs in an FFI copy of the reassembled DNS buffer.

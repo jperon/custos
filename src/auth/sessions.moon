@@ -3,7 +3,7 @@
 --
 -- Persistance via un fichier Lua évaluable (return { ... }) écrit de
 -- manière atomique (écriture dans .sessions.lua.new, puis rename).
--- Les workers Q0/Q1 chargent ce fichier via loadfile() avec un cache TTL.
+-- Les workers question/response chargent ce fichier via loadfile() avec un cache TTL.
 
 os_time   = os.time
 os_rename = os.rename
@@ -101,7 +101,7 @@ purge_expired = (sessions) ->
     if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat)
       sessions[mac] = nil
 
--- ── Cache de lecture (côté workers Q0/Q1) ────────────────────────
+-- ── Cache de lecture (côté workers question/response) ────────────────────────
 
 _cache      = nil
 _cache_time = 0
@@ -229,7 +229,7 @@ session_for_mac = (mac, ip, path, sessions_arg) ->
 
   s = lookup_session sessions_table, lookup_mac, ip
 
-  -- Les workers Q0/Q1 gardent un cache court. Juste après une authentification,
+  -- Les workers question/response gardent un cache court. Juste après une authentification,
   -- ce cache peut être encore vide ou obsolète : en cas de miss, relire le
   -- fichier immédiatement avant de refuser. Les hits gardent le chemin rapide.
   if not s and not sessions_arg and path
@@ -265,7 +265,4 @@ user_for_mac = (mac, ip, path) ->
   :serialize, :write_sessions, :load_sessions, :add_session
   :purge_expired, :read_cached, :reset_cache
   :session_for_mac, :user_for_mac, :enrich_session_ip, :bind_session_mac
-  -- Compatibilité (alias avec réordonnancement des arguments)
-  session_for_ip: (ip, path, mac) -> session_for_mac mac, ip, path
-  user_for_ip: (ip, path, mac) -> user_for_mac mac, ip, path
 }

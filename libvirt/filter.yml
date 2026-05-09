@@ -24,12 +24,12 @@ rules:
         - mail.allowed.test
 
   # Bloque explicitement les domaines de test
-  - description: E2E — domaine bloqué (HTTP, déclenche Q2 captive)
+  - description: E2E — domaine bloqué (HTTP, déclenche captive captive)
     actions: [deny]
     conditions:
       to_domain: blocked.test
 
-  - description: E2E — tracker (HTTPS, déclenche Q3 reject)
+  - description: E2E — tracker (HTTPS, déclenche reject)
     actions: [deny]
     conditions:
       to_domain: tracker.test

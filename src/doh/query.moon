@@ -17,7 +17,7 @@ parse = dns_mod.parse
 { :build_blocked_response, :add_ede } = require "dns_ede"
 { :user_for_mac } = require "auth.sessions"
 { :log_allow, :log_block, :log_warn, :log_debug, :log_info } = require "log"
-{ :AUTH_SESSIONS_FILE, :NFT_SET_MAC4, :NFT_SET_MAC6 } = require "config"
+config = require "config"
 upstream_mod = require "doh.upstream"
 
 MAC_ZERO = "00:00:00:00:00:00"
@@ -41,7 +41,9 @@ rr_addr = (ans) ->
 -- @tparam string client_ip  Peer IP address (IPv4 or IPv6 string).
 -- @tparam string client_mac MAC address string, or "unknown".
 -- @treturn nil
-inject_answers = (answers, client_ip, client_mac) ->
+inject_answers = (answers, client_ip, client_mac, rule_id, timeout, ack_corr) ->
+  rule_id = rule_id or "unknown_rule"
+  timeout = timeout or config.nft.ip_timeout
   is_v6_client = (client_ip\find ":") ~= nil
   for ans in *answers
     addr = rr_addr ans
@@ -49,22 +51,22 @@ inject_answers = (answers, client_ip, client_mac) ->
     if ans.rtype == QTYPE.A
       unless is_v6_client
         log_debug { action: "nft_add_ip4", client_ip: client_ip, dest: addr }
-        add_ip4 client_ip, addr
+        add_ip4 client_ip, addr, rule_id, timeout, ack_corr
       if mac_valid client_mac
         log_debug { action: "nft_add_mac4", client_mac: client_mac, dest: addr }
-        add_mac4 client_mac, addr
+        add_mac4 client_mac, addr, rule_id, timeout, ack_corr
     elseif ans.rtype == QTYPE.AAAA
       if is_v6_client
         log_debug { action: "nft_add_ip6", client_ip: client_ip, dest: addr }
-        add_ip6 client_ip, addr
+        add_ip6 client_ip, addr, rule_id, timeout, ack_corr
       if mac_valid client_mac
         log_debug { action: "nft_add_mac6", client_mac: client_mac, dest: addr }
-        add_mac6 client_mac, addr
+        add_mac6 client_mac, addr, rule_id, timeout, ack_corr
   -- Attendre que worker_nft ait effectivement inséré les IPs dans nftables
   -- avant de retourner la réponse DNS au client DoH.
   -- Fail-open (avec log) si worker_nft ne répond pas dans NFT_ACK_TIMEOUT_MS.
   pending_seq = get_last_seq!
-  wait_ack pending_seq if pending_seq
+  wait_ack pending_seq, ack_corr if pending_seq
 
 --- Process a raw DNS query from a DoH client.
 -- @tparam string      dns_raw     Raw DNS query bytes (wire format).
@@ -79,7 +81,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
     log_warn { action: "parse_failed", client_ip: client_ip, err: tostring parse_err }
     return nil, "dns_parse_failed"
 
-  user = user_for_mac client_mac, client_ip, AUTH_SESSIONS_FILE
+  user = user_for_mac client_mac, client_ip, config.auth.sessions_file
   log_debug { action: "process_query", client_ip: client_ip, client_mac: client_mac, user: user, query_bytes: #dns_raw }
 
   -- Evaluate all questions; block if any is refused.
@@ -87,6 +89,8 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
   allow_reason = nil
   blocked_dns  = nil
   any_blocked  = false
+  allow_rule_id = nil
+  allow_timeout = nil
 
   questions = dns.questions or (dns.question and { dns.question } or {})
   for q in *questions
@@ -98,7 +102,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       ts:     os.time!
     }
     log_debug { action: "filter_decide", qname: qname_text, qtype: q.qtype_name or tostring(q.qtype), client_ip: client_ip }
-    allowed, reason, rule = decide req
+    allowed, reason, rule, timeout = decide req
     fields = {
       action:   if allowed then "allow" else "block"
       qname:    qname_text
@@ -112,6 +116,8 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
     if allowed
       log_allow fields
       allow_reason = reason
+      allow_rule_id = rule
+      allow_timeout = timeout
     else
       log_block fields
       any_blocked  = true
@@ -135,7 +141,8 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
   resp_dns, resp_err = parse resp_raw, 1, false
   if resp_dns
     answers = resp_dns.answers or {}
-    inject_answers answers, client_ip, client_mac
+    ack_corr = string.format "%04x:%s", dns.txid or 0, client_ip or "unknown"
+    inject_answers answers, client_ip, client_mac, allow_rule_id, allow_timeout, ack_corr
     log_debug {
       action:     "query_allowed"
       client_ip:  client_ip

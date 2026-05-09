@@ -3,11 +3,7 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libnft = _obj_0.ffi, _obj_0.libnft
 end
-local NFT_FAMILY, NFT_FAMILY6, NFT_TABLE, NFT_SET_IP4, NFT_SET_IP6, NFT_SET_MAC4, NFT_SET_MAC6, NFT_IP_TIMEOUT
-do
-  local _obj_0 = require("config")
-  NFT_FAMILY, NFT_FAMILY6, NFT_TABLE, NFT_SET_IP4, NFT_SET_IP6, NFT_SET_MAC4, NFT_SET_MAC6, NFT_IP_TIMEOUT = _obj_0.NFT_FAMILY, _obj_0.NFT_FAMILY6, _obj_0.NFT_TABLE, _obj_0.NFT_SET_IP4, _obj_0.NFT_SET_IP6, _obj_0.NFT_SET_MAC4, _obj_0.NFT_SET_MAC6, _obj_0.NFT_IP_TIMEOUT
-end
+local config = require("config")
 local log_warn, log_error
 do
   local _obj_0 = require("log")
@@ -62,12 +58,12 @@ run_cmd = function(cmd, opts)
 end
 local add_ip4
 add_ip4 = function(client_ip, ip_str)
-  local cmd = "add element " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_IP4) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+  local cmd = "add element " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(config.nft.set_ip4) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(config.nft.ip_timeout) .. " }"
   return run_cmd(cmd)
 end
 local add_ip4_quiet
 add_ip4_quiet = function(client_ip, ip_str)
-  local cmd = "add element " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_IP4) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+  local cmd = "add element " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(config.nft.set_ip4) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(config.nft.ip_timeout) .. " }"
   local ok, err = run_cmd(cmd, {
     quiet = true
   })
@@ -78,7 +74,7 @@ add_ip6 = function(client_ip, ip_str)
   if not (client_ip:find(":")) then
     return false
   end
-  local cmd = "add element " .. tostring(NFT_FAMILY6) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_IP6) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+  local cmd = "add element " .. tostring(config.nft.family6) .. " " .. tostring(config.nft.table) .. " " .. tostring(config.nft.set_ip6) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(config.nft.ip_timeout) .. " }"
   return run_cmd(cmd)
 end
 local add_ip6_quiet
@@ -86,7 +82,7 @@ add_ip6_quiet = function(client_ip, ip_str)
   if not (client_ip:find(":")) then
     return false
   end
-  local cmd = "add element " .. tostring(NFT_FAMILY6) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_IP6) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+  local cmd = "add element " .. tostring(config.nft.family6) .. " " .. tostring(config.nft.table) .. " " .. tostring(config.nft.set_ip6) .. " { " .. tostring(client_ip) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(config.nft.ip_timeout) .. " }"
   local ok, err = run_cmd(cmd, {
     quiet = true
   })
@@ -102,18 +98,18 @@ add_ip = function(client_ip, ip_str)
 end
 local add_mac4
 add_mac4 = function(mac, ip_str)
-  if not (NFT_SET_MAC4) then
+  if not (config.nft.set_mac4) then
     return false
   end
-  local cmd = "add element " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC4) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+  local cmd = "add element " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(config.nft.set_mac4) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(config.nft.ip_timeout) .. " }"
   return run_cmd(cmd)
 end
 local add_mac4_quiet
 add_mac4_quiet = function(mac, ip_str)
-  if not (NFT_SET_MAC4) then
+  if not (config.nft.set_mac4) then
     return false
   end
-  local cmd = "add element " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC4) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+  local cmd = "add element " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(config.nft.set_mac4) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(config.nft.ip_timeout) .. " }"
   local ok, err = run_cmd(cmd, {
     quiet = true
   })
@@ -121,18 +117,18 @@ add_mac4_quiet = function(mac, ip_str)
 end
 local add_mac6
 add_mac6 = function(mac, ip_str)
-  if not (NFT_SET_MAC6) then
+  if not (config.nft.set_mac6) then
     return false
   end
-  local cmd = "add element " .. tostring(NFT_FAMILY6) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC6) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+  local cmd = "add element " .. tostring(config.nft.family6) .. " " .. tostring(config.nft.table) .. " " .. tostring(config.nft.set_mac6) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(config.nft.ip_timeout) .. " }"
   return run_cmd(cmd)
 end
 local add_mac6_quiet
 add_mac6_quiet = function(mac, ip_str)
-  if not (NFT_SET_MAC6) then
+  if not (config.nft.set_mac6) then
     return false
   end
-  local cmd = "add element " .. tostring(NFT_FAMILY6) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(NFT_SET_MAC6) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(NFT_IP_TIMEOUT) .. " }"
+  local cmd = "add element " .. tostring(config.nft.family6) .. " " .. tostring(config.nft.table) .. " " .. tostring(config.nft.set_mac6) .. " { " .. tostring(mac) .. " . " .. tostring(ip_str) .. " timeout " .. tostring(config.nft.ip_timeout) .. " }"
   local ok, err = run_cmd(cmd, {
     quiet = true
   })

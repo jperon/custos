@@ -6,14 +6,14 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 ## worker_questions (`src/worker_questions.moon`)
 
-- **In :** NFQUEUE `QUEUE_QUESTIONS`, fd d'écriture `q0q1` et `learn` injectés par `main.moon`.
-- **Lecture config :** `filter.yml` via module `src/filter/` (hot-reload sur `SIGHUP`).
-- **Out :** `NF_ACCEPT`/`NF_DROP` ; messages IPC via `ipc.write_msg` / `write_refused_msg` / `write_dnsonly_msg` dans `q0q1` ; association IP→MAC dans `learn`.
+- **In :** NFQUEUE `QUEUE_QUESTIONS`, fd d'écriture `question_response` et `learn` injectés par `main.moon`.
+- **Lecture config :** section `filter` de `/etc/config.moon` via module `src/filter/`.
+- **Out :** `NF_ACCEPT`/`NF_DROP` ; messages IPC via `ipc.write_msg` / `write_refused_msg` / `write_dnsonly_msg` dans `question_response` ; association IP→MAC dans `learn`.
 - **Effets de bord :** flow tracking nDPI (`ndpi.get_flow`) ; logs `log_allow`/`log_block`.
 
 ## worker_responses (`src/worker_responses.moon`)
 
-- **In :** NFQUEUE `QUEUE_RESPONSES` ; pipe `q0q1` (lecture via `drain_pipe`) ; `sessions.lua` (cache mtime).
+- **In :** NFQUEUE `QUEUE_RESPONSES` ; pipe `question_response` (lecture via `drain_pipe`) ; `sessions.lua` (cache mtime).
 - **Out :** `NF_ACCEPT` ou `nfq_set_verdict(NF_ACCEPT, patched_payload)` (TTL + EDE `Custos vigilat`) ou NXDOMAIN+EDE `Filtered` pour les transactions refusées.
 - **Effets de bord :** alimente `ip4_allowed`, `ip6_allowed`, `mac4_allowed`, `mac6_allowed` (timeout 2 min) ; rafraîchit la table de voisins (`ip neigh show`) au plus toutes les `NEIGH_REFRESH_COOLDOWN` secondes.
 
@@ -70,7 +70,7 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 ---
 
-## Format IPC Q0 → Q1 (`q0q1` pipe, 43 octets)
+## Format IPC question → response (`question_response` pipe, 43 octets)
 
 Défini dans `src/ipc.moon`. Écriture atomique garantie (< `PIPE_BUF = 4096`).
 

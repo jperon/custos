@@ -1,10 +1,6 @@
 local ffi
 ffi = require("ffi_defs").ffi
-local AF_INET, AF_INET6
-do
-  local _obj_0 = require("config")
-  AF_INET, AF_INET6 = _obj_0.AF_INET, _obj_0.AF_INET6
-end
+local config = require("config")
 local bit = require("bit")
 local PROTO_UDP = 17
 local PROTO_TCP = 6
@@ -70,7 +66,7 @@ fmt_ipv4 = function(p, o)
 end
 local fmt_ipv6
 fmt_ipv6 = function(p, o)
-  ffi.C.inet_ntop(AF_INET6, p + o, ipv6_str, 46)
+  ffi.C.inet_ntop(config.runtime.af_inet6, p + o, ipv6_str, 46)
   return ffi.string(ipv6_str)
 end
 local decode_name
@@ -136,7 +132,7 @@ parse_l3_v4 = function(p, len)
     dst_ip = fmt_ipv4(p, 16),
     src_ip_raw = ffi.string(p + 12, 4),
     dst_ip_raw = ffi.string(p + 16, 4),
-    af = AF_INET
+    af = config.runtime.af_inet
   }
 end
 local IPV6_EXT_HDRS = {
@@ -194,7 +190,7 @@ parse_l3_v6 = function(p, len)
     dst_ip = fmt_ipv6(p, 24),
     src_ip_raw = ffi.string(p + 8, 16),
     dst_ip_raw = ffi.string(p + 24, 16),
-    af = AF_INET6
+    af = config.runtime.af_inet6
   }
 end
 local fix_ip4_cksum

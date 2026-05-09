@@ -5,7 +5,6 @@ do
   log_debug, log_warn, log_error = _obj_0.log_debug, _obj_0.log_warn, _obj_0.log_error
 end
 local CERT_DAYS = 730
-local CERT_KEY_BITS = 2048
 local hash_string
 hash_string = function(s)
   local h = 0
@@ -41,25 +40,52 @@ get_local_ips = function()
   end
   return ips
 end
+local write_pem_file
+write_pem_file = function(path, content)
+  local fh, err = io.open(path, "w")
+  if not (fh) then
+    return false, "Impossible d'ouvrir " .. tostring(path) .. " : " .. tostring(err)
+  end
+  local ok_w, write_err = pcall(function()
+    return fh:write(content)
+  end)
+  fh:close()
+  if not (ok_w) then
+    return false, "Impossible d'écrire " .. tostring(path) .. " : " .. tostring(write_err)
+  end
+  return true, nil
+end
 local generate_self_signed
 generate_self_signed = function(key_path, cert_path, sans)
-  local cnf_path = "tmp/auth.cnf"
-  local san_str = table.concat(sans, ",")
-  local config = " [ req ]\n" .. " distinguished_name = req_distinguished_name\n" .. " x509_extensions = v3_req\n" .. " prompt = no\n\n" .. " [ req_distinguished_name ]\n" .. " CN = custos\n\n" .. " [ v3_req ]\n" .. " basicConstraints = CA:FALSE\n" .. " keyUsage = nonRepudiation, digitalSignature, keyEncipherment\n" .. " extendedKeyUsage = serverAuth\n" .. " subjectKeyIdentifier = hash\n" .. " authorityKeyIdentifier = keyid:always,issuer:always\n" .. " subjectAltName = " .. tostring(san_str) .. "\n"
-  local ok_w, err_w = pcall(function()
-    local fh = io.open(cnf_path, "w")
-    fh:write(config)
-    return fh:close()
-  end)
-  if not (ok_w) then
-    return false, "Échec écriture config SAN : " .. tostring(err_w)
+  local gen = require("auth.cert_generator")
+  local dns_sans = { }
+  local cn = "custos"
+  if sans then
+    for _index_0 = 1, #sans do
+      local san = sans[_index_0]
+      local dns_name = san:match("^DNS:(.+)$")
+      if dns_name and #dns_name > 0 then
+        if cn == "custos" then
+          cn = dns_name
+        end
+        table.insert(dns_sans, dns_name)
+      end
+    end
   end
-  local cmd = string.format("openssl req -x509 -newkey rsa:%d -keyout '%s' -out '%s' " .. "-days %d -nodes -config '%s' 2>&1", CERT_KEY_BITS, key_path, cert_path, CERT_DAYS, cnf_path)
-  local fh = io.popen(cmd)
-  local out = fh:read("*a")
-  local ok_close = fh:close()
-  pcall(os.remove, cnf_path)
-  return (ok_close ~= nil and ok_close ~= false), out
+  local key_pem, cert_pem, ok, err = gen.generate_self_signed(cn, dns_sans, CERT_DAYS)
+  if not (ok) then
+    return false, err or "Échec génération px5g"
+  end
+  local ok_key, key_err = write_pem_file(key_path, key_pem)
+  if not (ok_key) then
+    return false, key_err
+  end
+  local ok_cert, cert_err = write_pem_file(cert_path, cert_pem)
+  if not (ok_cert) then
+    pcall(os.remove, key_path)
+    return false, cert_err
+  end
+  return true, nil
 end
 local make_context
 make_context = function(key_path, cert_path)
@@ -92,7 +118,9 @@ file_exists = function(path)
 end
 local load_or_generate
 load_or_generate = function(key_path, cert_path)
-  if (key_path == "tmp/auth.key" or key_path == nil) and (cert_path == "tmp/auth.crt" or cert_path == nil) then
+  key_path = key_path or "tmp/auth.key"
+  cert_path = cert_path or "tmp/auth.crt"
+  if key_path == "tmp/auth.key" and cert_path == "tmp/auth.crt" then
     local ips = get_local_ips()
     local sans = {
       "DNS:custos"

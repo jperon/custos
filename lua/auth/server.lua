@@ -16,10 +16,10 @@ do
   local _obj_0 = require("auth.credentials")
   verify_password, register_user = _obj_0.verify_password, _obj_0.register_user
 end
-local load_or_generate, load_or_generate_sni, load_static
+local load_or_generate_sni, load_static
 do
   local _obj_0 = require("auth.cert")
-  load_or_generate, load_or_generate_sni, load_static = _obj_0.load_or_generate, _obj_0.load_or_generate_sni, _obj_0.load_static
+  load_or_generate_sni, load_static = _obj_0.load_or_generate_sni, _obj_0.load_static
 end
 local extract_sni
 extract_sni = require("auth.sni_extractor").extract_sni
@@ -28,8 +28,7 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_error, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug
 end
-local AUTH_SESSIONS_FILE
-AUTH_SESSIONS_FILE = require("config").AUTH_SESSIONS_FILE
+local config = require("config")
 local read_request, send_response
 do
   local _obj_0 = require("lib.http")
@@ -639,7 +638,7 @@ end
 local run
 run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
   local port = auth_cfg.port or 33443
-  local sessions_file = auth_cfg.sessions_file or AUTH_SESSIONS_FILE
+  local sessions_file = auth_cfg.sessions_file or config.auth.sessions_file
   log_debug({
     action = "server_startup",
     port = port

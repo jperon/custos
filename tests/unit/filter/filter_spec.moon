@@ -863,6 +863,60 @@ describe "filter.rule", ->
     assert.is_false v2
     assert.equals "Bloquer tout", desc2
 
+  it "first_match_wins garde la première règle horaire", ->
+    cfg = {
+      times: {
+        business: {"09:00", "18:00"}
+      }
+      decision: {
+        first_match_wins: true
+      }
+      rules: {
+        {
+          description: "Autoriser heures ouvrées"
+          conditions: {{in_time: "business"}}
+          actions: {"allow"}
+        }
+        {
+          description: "Deny final"
+          conditions: {}
+          actions: {"deny"}
+        }
+      }
+    }
+    rules = m_rule.compile_rules cfg
+    ts = os.time {year: 2024, month: 1, day: 1, hour: 15, min: 0, sec: 0}
+    v, _, desc = m_rule.decide rules, {ts: ts}
+    assert.is_true v
+    assert.equals "Autoriser heures ouvrées", desc
+
+  it "first_match_wins=false laisse la dernière règle horaire gagner", ->
+    cfg = {
+      times: {
+        business: {"09:00", "18:00"}
+      }
+      decision: {
+        first_match_wins: false
+      }
+      rules: {
+        {
+          description: "Autoriser heures ouvrées"
+          conditions: {{in_time: "business"}}
+          actions: {"allow"}
+        }
+        {
+          description: "Deny final"
+          conditions: {}
+          actions: {"deny"}
+        }
+      }
+    }
+    rules = m_rule.compile_rules cfg
+    ts = os.time {year: 2024, month: 1, day: 1, hour: 15, min: 0, sec: 0}
+    v, _, desc = m_rule.decide rules, {ts: ts}
+    assert.is_false v
+    assert.equals "Deny final", desc
+
   it "condition inconnue → erreur", ->
     cfg = {
       rules: {

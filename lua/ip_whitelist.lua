@@ -3,11 +3,7 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libnft = _obj_0.ffi, _obj_0.libnft
 end
-local NFT_FAMILY, NFT_TABLE
-do
-  local _obj_0 = require("config")
-  NFT_FAMILY, NFT_TABLE = _obj_0.NFT_FAMILY, _obj_0.NFT_TABLE
-end
+local config = require("config")
 local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
   error("nft_ctx_new() échoué dans ip_whitelist")
@@ -21,8 +17,8 @@ run_nft = function(cmd)
 end
 local init
 init = function(entries)
-  run_nft("flush set " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(SET4))
-  run_nft("flush set " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(SET6))
+  run_nft("flush set " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(SET4))
+  run_nft("flush set " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(SET6))
   if not entries or #entries == 0 then
     return 
   end
@@ -48,10 +44,10 @@ init = function(entries)
     end
   end
   if #v4 > 0 then
-    run_nft("add element " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(SET4) .. " { " .. tostring(table.concat(v4, ", ")) .. " }")
+    run_nft("add element " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(SET4) .. " { " .. tostring(table.concat(v4, ", ")) .. " }")
   end
   if #v6 > 0 then
-    return run_nft("add element " .. tostring(NFT_FAMILY) .. " " .. tostring(NFT_TABLE) .. " " .. tostring(SET6) .. " { " .. tostring(table.concat(v6, ", ")) .. " }")
+    return run_nft("add element " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(SET6) .. " { " .. tostring(table.concat(v6, ", ")) .. " }")
   end
 end
 local cleanup

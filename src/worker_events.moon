@@ -272,7 +272,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       chunk = read_chunk events_rfd
       if chunk == nil
         -- EOF : l'extrémité écriture est fermée (worker_questions mort)
-        -- Le superviseur va redémarrer Q0 ; le pipe reste ouvert côté superviseur.
+        -- Le superviseur va redémarrer question ; le pipe reste ouvert côté superviseur.
         log_warn { action: "pipe_eof", fd: events_rfd }
       elseif #chunk > 0
         line_buf ..= chunk

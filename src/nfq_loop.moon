@@ -1,10 +1,10 @@
 -- src/nfq_loop.moon
 -- Boucle NFQUEUE générique : ouvre une queue, installe le callback,
--- tourne jusqu'à erreur. Factorisé pour être réutilisé par Q0 et Q1.
+-- tourne jusqu'à erreur. Factorisé pour être réutilisé par question et response.
 -- Le caller fournit le numéro de queue et la fonction de callback Lua.
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :AF_INET, :AF_INET6 } = require "config"
+config = require "config"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 
 AF_BRIDGE = 7   -- Linux AF_BRIDGE : famille d'adresses pour les hooks bridge nftables
@@ -20,7 +20,7 @@ EINTR = 4                -- code errno Linux : appel interrompu par signal
 -- Taille du buffer de lecture netlink (doit être > MTU + overhead netlink)
 READ_BUF_SIZE = 65536
 
--- Sentinel : le callback a déjà posé son propre verdict (ex: Q1 avec payload patché)
+-- Sentinel : le callback a déjà posé son propre verdict (ex: response avec payload patché)
 VERDICT_DONE = -1
 
 --- Lance la boucle de traitement d'une queue NFQUEUE.
@@ -43,8 +43,8 @@ run_queue = (queue_num, callback) ->
   -- bind_pf : attache le handle aux familles AF_INET et AF_INET6 (et AF_BRIDGE en mode bridge).
   -- Peut renvoyer une erreur si déjà bindé par un autre handle dans le process ;
   -- on ignore l'erreur (comportement historique de libnetfilter_queue).
-  libnfq.nfq_bind_pf h, AF_INET
-  libnfq.nfq_bind_pf h, AF_INET6
+  libnfq.nfq_bind_pf h, config.runtime.af_inet
+  libnfq.nfq_bind_pf h, config.runtime.af_inet6
   libnfq.nfq_bind_pf h, AF_BRIDGE
 
   -- Pointeur partagé entre la closure C et la closure Lua du callback
@@ -67,7 +67,7 @@ run_queue = (queue_num, callback) ->
       verdict = NF_DROP
 
     -- Si verdict == VERDICT_DONE, le callback a déjà appelé nfq_set_verdict
-    -- (ex: Q1 qui envoie un payload modifié) → on ne repose pas de verdict.
+    -- (ex: response qui envoie un payload modifié) → on ne repose pas de verdict.
     if verdict != VERDICT_DONE
       libnfq.nfq_set_verdict qh_box[0], pkt_id, verdict, 0, nil
     0   -- retour C : 0 = succès

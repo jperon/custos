@@ -169,7 +169,7 @@ workers_ready = false
 for _ = 1, 30
   _, out = ssh_filter FILTER_IP, log_since "grep -c queue_listening || true"
   n = tonumber (out or "0")\match("%d+")
-  if n and n >= 3    -- Q0, Q1, Q2 minimum ; AUTH + Q3 aussi selon config
+  if n and n >= 3    -- question, response, captive minimum ; AUTH + reject aussi selon config
     workers_ready = true
     break
   os.execute "sleep 2"
@@ -192,6 +192,16 @@ test "host allowed.test → 10.99.0.50", ->
     "host -W 2 -t A allowed.test #{DNS_IP}"
   assert_contains out, "10.99.0.50"
 
+test "logs questions_allow avec rule et timeout", ->
+  _, out = ssh_filter FILTER_IP, log_since_start("grep 'questions_allow' | tail -1")
+  assert_contains out, "rule="
+  assert_contains out, "timeout="
+
+test "logs response_allow sans réécriture DNS", ->
+  _, out = ssh_filter FILTER_IP, log_since_start("grep 'response_allow' | tail -1")
+  assert_contains out, "nft_rule_id="
+  assert_contains out, "payload_modified=false"
+
 -- 2. DNS block (refuse par règle explicite)
 test "host blocked.test → NXDOMAIN", ->
   _, out = ssh_client FILTER_IP,
@@ -213,7 +223,7 @@ test "curl http://allowed.test → 200 allowed", ->
     "curl -s --max-time 3 http://allowed.test/"
   assert_contains out, "allowed"
 
--- 5. HTTP blocked → Q2 capture, 302 vers portail
+-- 5. HTTP blocked → captive capture, 302 vers portail
 test "curl http://blocked.test → 302 captive portal", ->
   _, out = ssh_client FILTER_IP,
     "curl -s -o /dev/null -w '%{http_code} %{redirect_url}' " ..
@@ -221,15 +231,15 @@ test "curl http://blocked.test → 302 captive portal", ->
   assert_matches out, "302"
   assert_contains out, "10.99.0.254:33443"
 
--- 6. HTTPS blocked → Q3 RST, connexion refusée rapide
-test "curl https://tracker.test → Q3 reject <500ms", ->
+-- 6. HTTPS blocked → reject RST, connexion refusée rapide
+test "curl https://tracker.test → reject <500ms", ->
   start = os.time!
   ok, out = ssh_client FILTER_IP,
     "curl -k -s -o /dev/null -w '%{http_code}' --max-time 3 " ..
     "https://tracker.test/ 2>&1; echo exit=$?"
   elapsed = os.time! - start
   -- Le curl doit échouer (code HTTP 000 ou exit != 0) ET rapidement.
-  assert elapsed < 3, "trop lent (#{elapsed}s) — Q3 n'a pas RST ?"
+  assert elapsed < 3, "trop lent (#{elapsed}s) — reject n'a pas RST ?"
   assert_matches out, "exit=[^0]", "curl aurait dû échouer"
 
 -- 7. Portail captif joignable directement

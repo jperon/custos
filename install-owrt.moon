@@ -138,7 +138,7 @@ Installer = (cfg) ->
             "parse/ethernet", "parse/ip", "parse/udp", "parse/dns",
             "nfq/packet", "nfq/packet_v4", "nfq/packet_v5",
             "ipc", "allowlist", "nft", "nfq_loop",
-            "worker_q0", "worker_q1", "worker_auth_queue", "main"
+            "worker_questions", "worker_responses", "worker_auth_queue", "main"
           }
           dst = "lua/#{src}.lua"
           if not @run "moonc -o #{dst} src/#{src}.moon"
@@ -181,7 +181,7 @@ Installer = (cfg) ->
 
       pkgs_required = {
         "luajit", "libnetfilter-queue", "nftables", "kmod-nft-queue",
-        "lyaml", "luasec", "libxxhash", "openssl-util"
+        "lyaml", "luasec", "lpeg", "libxxhash"
       }
 
       pkg_list = table.concat pkgs_required, " "
@@ -282,46 +282,13 @@ Installer = (cfg) ->
         ok "#{entry.dst} installe"
       true
 
-    -- Installe /etc/config/custos si absent (préserve la config existante).
-    install_uci_config: =>
-      step "Configuration UCI (/etc/config/custos)"
-      exists = @ssh_capture "[ -f /etc/config/custos ] && echo yes || echo no"
-      if exists and exists\find "yes"
-        warn "/etc/config/custos existe déjà — configuration préservée"
-        return true
-
-      uci_cfg = [[
-config custos 'main'
-	option enabled           '1'
-	option forced_ttl        '60'
-	option nft_ip_timeout    '2m'
-	option ipc_pending_ttl   '5'
-	option client_expiry     '300'
-	list   allowed_domains   'local'
-	list   allowed_domains   'lan'
-	list   allowed_domains   'home.arpa'
-]]
-      tmplocal = "tmp/owrt-custos-uci"
-      unless @cfg.dry
-        fh = io.open tmplocal, "w"
-        if fh
-          fh\write uci_cfg
-          fh\close!
-
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/etc/config/custos"
-        fail "Échec de la copie de /etc/config/custos"
-        return false
-
-      ok "/etc/config/custos installé"
-      true
-
     start_service: =>
       step "Démarrage du service custos"
       if @cfg.no_start
         warn "--no-start : démarrage ignoré"
         return true
 
-      unless @ssh_run "/etc/init.d/custos restart"
+      unless @ssh_run "/etc/init.d/custos restart ; sleep 2 ; /etc/init.d/custos stop"
         fail "Échec du démarrage"
         return false
 
@@ -543,7 +510,6 @@ main = ->
     { name: "upload fichiers",   fn: -> inst\upload_files!        }
     { name: "service init.d",    fn: -> inst\install_initd!       }
     { name: "/etc/custos/",      fn: -> inst\install_etc_custos!  }
-    { name: "config UCI",        fn: -> inst\install_uci_config!  }
     { name: "script update",     fn: -> inst\install_updater!     }
     { name: "démarrage service", fn: -> inst\start_service!       }
     { name: "santé",             fn: -> inst\health_check!        }
