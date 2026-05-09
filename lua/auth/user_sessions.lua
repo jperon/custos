@@ -24,13 +24,15 @@ add_session = function(username, src_ip, mac)
     auth_time = now,
     expires = now + _session_timeout
   }
-  log_debug({
-    action = "user_session_added",
-    username = username_lower,
-    src_ip = src_ip,
-    mac = mac,
-    expires_in_s = _session_timeout
-  })
+  if log_debug then
+    log_debug({
+      action = "user_session_added",
+      username = username_lower,
+      src_ip = src_ip,
+      mac = mac,
+      expires_in_s = _session_timeout
+    })
+  end
   return true
 end
 local get_session
@@ -46,10 +48,12 @@ get_session = function(username)
   local now = os.time()
   if session.expires and now > session.expires then
     _sessions[username_lower] = nil
-    log_debug({
-      action = "user_session_expired",
-      username = username_lower
-    })
+    if log_debug then
+      log_debug({
+        action = "user_session_expired",
+        username = username_lower
+      })
+    end
     return nil
   end
   return session
@@ -76,11 +80,13 @@ refresh_session = function(username)
   end
   local now = os.time()
   session.expires = now + _session_timeout
-  log_debug({
-    action = "user_session_refreshed",
-    username = username:lower(),
-    expires_in_s = _session_timeout
-  })
+  if log_debug then
+    log_debug({
+      action = "user_session_refreshed",
+      username = username:lower(),
+      expires_in_s = _session_timeout
+    })
+  end
   return true
 end
 local remove_session
@@ -91,10 +97,12 @@ remove_session = function(username)
   local username_lower = username:lower()
   if _sessions[username_lower] then
     _sessions[username_lower] = nil
-    log_debug({
-      action = "user_session_removed",
-      username = username_lower
-    })
+    if log_debug then
+      log_debug({
+        action = "user_session_removed",
+        username = username_lower
+      })
+    end
     return true
   end
   return false
@@ -122,7 +130,7 @@ cleanup_expired = function()
       count = count + 1
     end
   end
-  if count > 0 then
+  if count > 0 and log_debug then
     log_debug({
       action = "user_session_cleanup",
       removed_count = count

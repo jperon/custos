@@ -30,8 +30,11 @@ day_name_to_wday = (name) ->
   map[name]
 
 build_day_bitmask = (days) ->
-  return 0x7f unless days or type(days) != "table"  -- all days if not specified
-  return 0x7f if type(days) == "table" and #days == 0  -- empty table = all days
+  -- If days is nil or not a table, treat as all days
+  return 0x7f unless type(days) == "table"
+  -- If empty table, treat as all days
+  return 0x7f if #days == 0
+  -- Build bitmask from day names
   mask = 0
   for _, day_name in ipairs days
     wday = day_name_to_wday day_name

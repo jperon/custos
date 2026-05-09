@@ -629,5 +629,7 @@ end
 return {
   compile = compile,
   render = render,
-  serialize_stable = serialize_stable
+  serialize_stable = serialize_stable,
+  collect_subnets = collect_subnets,
+  build_rule = build_rule
 }

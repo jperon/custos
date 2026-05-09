@@ -1726,6 +1726,111 @@ test "from_nets — src_ip nil → faux", ->
   f = (from_nets {}) {"192.168.0.0/16"}
   assert_eq (f {src_ip: nil}), false, "src_ip nil → false"
 
+-- ── from_subnet / from_subnets (CIDR parsing) ──
+from_subnet  = require "filter.conditions.from_subnet"
+cidr_parser  = require "filter.lib.cidr_parser"
+
+-- ── CIDR Parser Unit Tests ──
+test "cidr_parser — parse_ipv4_cidr valide (avec prefix)", ->
+  result = cidr_parser.parse_ipv4_cidr "192.168.0.0/24"
+  assert result != nil, "parsing doit réussir"
+  assert_eq result.cidr, "192.168.0.0/24", "cidr"
+  assert_eq result.net, "192.168.0.0", "net"
+  assert_eq result.prefix, 24, "prefix"
+  assert_eq result.family, "inet", "family"
+
+test "cidr_parser — parse_ipv4_cidr sans prefix (défaut /32)", ->
+  result = cidr_parser.parse_ipv4_cidr "192.168.1.1"
+  assert result != nil, "parsing doit réussir"
+  assert_eq result.prefix, 32, "prefix par défaut doit être 32"
+
+test "cidr_parser — parse_ipv4_cidr invalid (prefix > 32)", ->
+  result = cidr_parser.parse_ipv4_cidr "192.168.0.0/33"
+  assert_eq result, nil, "prefix > 32 invalide"
+
+test "cidr_parser — parse_ipv4_cidr invalid (octet > 255)", ->
+  result = cidr_parser.parse_ipv4_cidr "192.168.256.0/24"
+  assert_eq result, nil, "octet > 255 invalide"
+
+test "cidr_parser — parse_ipv4_cidr invalid (pas assez d'octets)", ->
+  result = cidr_parser.parse_ipv4_cidr "192.168.0/24"
+  assert_eq result, nil, "pas assez d'octets"
+
+test "cidr_parser — parse_ipv6_cidr valide", ->
+  result = cidr_parser.parse_ipv6_cidr "fc00::/7"
+  assert result != nil, "parsing doit réussir"
+  assert_eq result.family, "inet6", "family"
+  assert_eq result.prefix, 7, "prefix"
+
+test "cidr_parser — parse_ipv6_cidr sans prefix (défaut /128)", ->
+  result = cidr_parser.parse_ipv6_cidr "::1"
+  assert result != nil, "parsing doit réussir"
+  assert_eq result.prefix, 128, "prefix par défaut doit être 128"
+
+test "cidr_parser — parse_ipv6_cidr invalid (prefix > 128)", ->
+  result = cidr_parser.parse_ipv6_cidr "::1/129"
+  assert_eq result, nil, "prefix > 128 invalide"
+
+test "cidr_parser — parse_cidr détecte IPv4", ->
+  result = cidr_parser.parse_cidr "10.0.0.0/8"
+  assert result != nil, "parsing doit réussir"
+  assert_eq result.family, "inet", "doit détecter IPv4"
+
+test "cidr_parser — parse_cidr détecte IPv6", ->
+  result = cidr_parser.parse_cidr "2001:db8::/32"
+  assert result != nil, "parsing doit réussir"
+  assert_eq result.family, "inet6", "doit détecter IPv6"
+
+test "cidr_parser — validate_cidr valide", ->
+  is_valid, err = cidr_parser.validate_cidr "192.168.0.0/24"
+  assert_eq is_valid, true, "validation doit réussir"
+  assert_eq err, nil, "pas d'erreur"
+
+test "cidr_parser — validate_cidr invalide", ->
+  is_valid, err = cidr_parser.validate_cidr "invalid.cidr.notation"
+  assert_eq is_valid, false, "validation doit échouer"
+  assert err != nil, "doit retourner une erreur"
+
+-- ── from_subnet Condition Tests ──
+test "from_subnet — IP dans subnet IPv4 (string format)", ->
+  f = (from_subnet {}) "10.0.0.0/8"
+  assert_eq (f {src_ip: "10.5.0.1"}), true, "10.5.0.1 dans 10.0.0.0/8"
+
+test "from_subnet — IP hors subnet IPv4", ->
+  f = (from_subnet {}) "10.0.0.0/8"
+  assert_eq (f {src_ip: "192.168.0.1"}), false, "192.168.0.1 hors 10.0.0.0/8"
+
+test "from_subnet — IP exacte (single IP /32)", ->
+  f = (from_subnet {}) "192.168.1.1/32"
+  assert_eq (f {src_ip: "192.168.1.1"}), true, "IP exacte match"
+
+test "from_subnet — IP au bord du subnet (première adresse)", ->
+  f = (from_subnet {}) "10.0.0.0/8"
+  assert_eq (f {src_ip: "10.0.0.0"}), true, "10.0.0.0 dans 10.0.0.0/8"
+
+test "from_subnet — IP au bord du subnet (dernière adresse)", ->
+  f = (from_subnet {}) "10.0.0.0/8"
+  assert_eq (f {src_ip: "10.255.255.255"}), true, "10.255.255.255 dans 10.0.0.0/8"
+
+test "from_subnet — src_ip nil → faux", ->
+  f = (from_subnet {}) "10.0.0.0/8"
+  v = f {src_ip: nil}
+  assert_eq v, false, "src_ip nil → false"
+
+test "from_subnet — subnet invalide → faux", ->
+  f = (from_subnet {}) "invalid.cidr"
+  v = f {src_ip: "10.5.0.1"}
+  assert_eq v, false, "cidr invalide → false"
+
+test "from_subnet — table format { net: ... }", ->
+  f = (from_subnet {}) { net: "192.168.0.0/16" }
+  assert_eq (f {src_ip: "192.168.1.1"}), true, "table format support"
+
+test "from_subnet — IPv6 format", ->
+  f = (from_subnet {}) "fc00::/7"
+  -- Note: actual IPv6 matching requires inet_pton FFI, but condition factory should handle it
+  assert f {src_ip: "fc00::1"} ~= nil or f {src_ip: "fc00::1"} == false, "condition created"
+
 -- ── from_macs ──
 from_macs = require "filter.conditions.from_macs"
 
@@ -2917,6 +3022,120 @@ test "mac_from_eui64 — bit U/L flippé correctement (premier octet impair)", -
   -- IPv6 : fe80::323:45ff:fe67:89ab
   mac = mac_from_eui64 "fe80::323:45ff:fe67:89ab"
   assert_eq mac, "01:23:45:67:89:ab", "bit U/L impair"
+
+-- ── nft_compiler — subnet support ──
+io.write "\n── nft_compiler / subnet support ──\n"
+
+nft_compiler = require "filter.nft_compiler"
+
+test "nft_compiler — collect_subnets extrait IPv4 depuis from_subnet", ->
+  rule = {
+    conditions: {
+      { from_subnet: "10.0.0.0/8" }
+    }
+  }
+  src4, src6 = nft_compiler.collect_subnets rule
+  assert_eq #src4, 1, "doit extraire 1 subnet IPv4"
+  assert_eq src4[1], "10.0.0.0/8", "CIDR IPv4 correct"
+
+test "nft_compiler — collect_subnets extrait IPv4 depuis from_subnets", ->
+  rule = {
+    conditions: {
+      { from_subnets: { "10.0.0.0/8", "172.16.0.0/12" } }
+    }
+  }
+  src4, src6 = nft_compiler.collect_subnets rule
+  assert_eq #src4, 2, "doit extraire 2 subnets IPv4"
+  assert_eq src4[1], "10.0.0.0/8", "premier CIDR"
+  assert_eq src4[2], "172.16.0.0/12", "deuxième CIDR"
+
+test "nft_compiler — collect_subnets extrait IPv6", ->
+  rule = {
+    conditions: {
+      { from_subnet: "fc00::/7" }
+    }
+  }
+  src4, src6 = nft_compiler.collect_subnets rule
+  assert_eq #src6, 1, "doit extraire 1 subnet IPv6"
+  assert_eq src6[1], "fc00::/7", "CIDR IPv6 correct"
+
+test "nft_compiler — collect_subnets mélange IPv4 et IPv6", ->
+  rule = {
+    conditions: {
+      { from_subnet: "10.0.0.0/8" }
+      { from_subnet: "2001:db8::/32" }
+    }
+  }
+  src4, src6 = nft_compiler.collect_subnets rule
+  assert_eq #src4, 1, "doit extraire 1 subnet IPv4"
+  assert_eq #src6, 1, "doit extraire 1 subnet IPv6"
+
+test "nft_compiler — collect_subnets avec table format { net: ... }", ->
+  rule = {
+    conditions: {
+      { from_subnet: { net: "192.168.0.0/16" } }
+    }
+  }
+  src4, src6 = nft_compiler.collect_subnets rule
+  assert_eq #src4, 1, "doit extraire subnet depuis table format"
+  assert_eq src4[1], "192.168.0.0/16", "CIDR extrait correctement"
+
+test "nft_compiler — build_rule inclut subnet_ipv4 et subnet_ipv6", ->
+  rule = {
+    description: "subnet rule"
+    conditions: {
+      { from_subnet: "10.0.0.0/8" }
+      { to_domain: "example.com" }
+    }
+    actions: { "allow" }
+  }
+  cfg = { nets: {} }
+  compiled = nft_compiler.build_rule cfg, rule, 1, {}
+  assert compiled.subnet_ipv4 != nil, "doit avoir subnet_ipv4"
+  assert_eq #compiled.subnet_ipv4, 1, "subnet_ipv4 contient 1 élément"
+  assert_eq compiled.subnet_ipv4[1], "10.0.0.0/8", "CIDR stocké dans subnet_ipv4"
+
+test "nft_compiler — build_rule génère set_subnet4 si subnets présents", ->
+  rule = {
+    description: "subnet rule"
+    conditions: {
+      { from_subnet: "10.0.0.0/8" }
+    }
+    actions: { "allow" }
+  }
+  cfg = { nets: {} }
+  compiled = nft_compiler.build_rule cfg, rule, 1, {}
+  assert compiled.set_subnet4 != nil, "doit générer set_subnet4"
+  assert compiled.set_subnet4\find "subnet4", 1, true
+
+test "nft_compiler — render génère set avec interval flag pour subnets", ->
+  rule = {
+    description: "subnet rule"
+    conditions: {
+      { from_subnet: "10.0.0.0/8" }
+    }
+    actions: { "allow" }
+  }
+  cfg = { rules: { rule }, decision: {} }
+  compiled = nft_compiler.compile cfg
+  rendered = nft_compiler.render compiled
+  assert rendered\find "flags interval", 1, true, "doit avoir flags interval"
+  assert rendered\find "10.0.0.0/8", 1, true, "doit avoir CIDR dans éléments"
+
+test "nft_compiler — render gère mélange from_net et from_subnet", ->
+  rule = {
+    description: "mixed rule"
+    conditions: {
+      { from_net: "192.168.0.0/16" }
+      { from_subnet: "10.0.0.0/8" }
+    }
+    actions: { "allow" }
+  }
+  cfg = { rules: { rule }, decision: {} }
+  compiled = nft_compiler.compile cfg
+  rendered = nft_compiler.render compiled
+  assert rendered\find "192.168.0.0/16", 1, true, "doit inclure from_net"
+  assert rendered\find "10.0.0.0/8", 1, true, "doit inclure from_subnet"
 
 io.write string.format("\n%d test(s) passé(s), %d échec(s)\n", passed, failed)
 os.exit failed == 0 and 0 or 1

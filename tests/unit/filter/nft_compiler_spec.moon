@@ -106,3 +106,4 @@ describe "filter.nft_compiler", ->
     assert.is_not_nil out\find "set cv_rule_r_frag_dports", 1, true
     assert.is_not_nil out\find "chain cv_rule_r_frag", 1, true
     assert.is_not_nil out\find "meta l4proto { tcp } th dport @cv_rule_r_frag_dports", 1, true
+

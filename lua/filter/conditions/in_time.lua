@@ -49,10 +49,10 @@ day_name_to_wday = function(name)
 end
 local build_day_bitmask
 build_day_bitmask = function(days)
-  if not (days or type(days) ~= "table") then
+  if not (type(days) == "table") then
     return 0x7f
   end
-  if type(days) == "table" and #days == 0 then
+  if #days == 0 then
     return 0x7f
   end
   local mask = 0

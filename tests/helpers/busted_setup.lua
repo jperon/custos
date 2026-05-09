@@ -50,6 +50,16 @@ if not package.loaded["config"] then
     IPC_PENDING_TTL = 5,
     CLIENT_EXPIRY   = 300,
     QUEUE_CAPTIVE   = 2,
+    nft = {
+      family  = "bridge",
+      family6 = "bridge",
+      table   = "dns-filter-bridge",
+      set_ip4 = "ip4_allowed",
+      set_ip6 = "ip6_allowed",
+      set_mac4 = "mac4_allowed",
+      set_mac6 = "mac6_allowed",
+      ip_timeout = "2m",
+    }
   }
 end
 
@@ -62,6 +72,9 @@ if not package.loaded["log"] then
     log_error = nop,
     log_info  = nop,
     now        = function() return os.time() end,
+    get_log_level_num = function(level)
+      return 0
+    end,
   }
 end
 

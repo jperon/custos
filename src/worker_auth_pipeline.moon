@@ -17,11 +17,10 @@ cleanup_expired = user_sessions.cleanup_expired
 { :extract_username, :validate_username } = require "auth.cert_parser"
 ipc = require "ipc"
 
-set_action_prefix "auth_pipeline_"
-
 -- Configuration
 _cfg = {}
 _nft_wfd = nil
+_action_prefix_set = false
 
 --- Initialize the authentication pipeline worker.
 -- @tparam table cfg Configuration with auth settings
@@ -31,17 +30,23 @@ init = (cfg, nft_wfd) ->
   _cfg = cfg or {}
   _nft_wfd = nft_wfd
   
+  unless _action_prefix_set
+    if set_action_prefix
+      set_action_prefix "auth_pipeline_"
+    _action_prefix_set = true
+  
   auth_cfg = _cfg.auth or {}
   session_timeout = auth_cfg.session_timeout or auth_cfg.session_ttl or 3600
   user_field = auth_cfg.user_field or "subject"
   
   init_sessions session_timeout
   
-  log_info {
-    action: "init"
-    session_timeout: session_timeout
-    user_field: user_field
-  }
+  if log_info
+    log_info {
+      action: "init"
+      session_timeout: session_timeout
+      user_field: user_field
+    }
 
 --- Process a TLS client certificate for user authentication.
 -- Extracts username from certificate and creates user session.
@@ -64,17 +69,19 @@ process_tls_certificate = (tls_data) ->
   username = extract_username cert_data, user_field
   
   unless username
-    log_warn {
-      action: "username_extraction_failed"
-      cert_subject: cert_data.subject or "unknown"
-    }
+    if log_warn
+      log_warn {
+        action: "username_extraction_failed"
+        cert_subject: cert_data.subject or "unknown"
+      }
     return false, "unable to extract username from certificate"
   
   unless validate_username username
-    log_warn {
-      action: "username_validation_failed"
-      username: username
-    }
+    if log_warn
+      log_warn {
+        action: "username_validation_failed"
+        username: username
+      }
     return false, "invalid username format"
   
   -- Create user session
@@ -82,12 +89,13 @@ process_tls_certificate = (tls_data) ->
   success = add_session username, src_ip, mac
   
   if success
-    log_info {
-      action: "user_authenticated"
-      username: username
-      src_ip: src_ip
-      mac: mac
-    }
+    if log_info
+      log_info {
+        action: "user_authenticated"
+        username: username
+        src_ip: src_ip
+        mac: mac
+      }
     
     -- Notify nftables worker to add user to authenticated set
     if _nft_wfd and _nft_wfd >= 0
@@ -95,10 +103,11 @@ process_tls_certificate = (tls_data) ->
     
     return true, nil
   else
-    log_warn {
-      action: "session_creation_failed"
-      username: username
-    }
+    if log_warn
+      log_warn {
+        action: "session_creation_failed"
+        username: username
+      }
     return false, "unable to create user session"
 
 --- Send authenticated user info to nftables worker.

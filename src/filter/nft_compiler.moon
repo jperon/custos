@@ -407,4 +407,4 @@ render = (plan, indent="  ", include_elements=true) ->
   lines[#lines + 1] = "#{indent}}"
   table.concat(lines, "\n") .. "\n"
 
-{ :compile, :render, :serialize_stable }
+{ :compile, :render, :serialize_stable, :collect_subnets, :build_rule }

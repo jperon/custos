@@ -14,22 +14,30 @@ do
   extract_username, validate_username = _obj_0.extract_username, _obj_0.validate_username
 end
 local ipc = require("ipc")
-set_action_prefix("auth_pipeline_")
 local _cfg = { }
 local _nft_wfd = nil
+local _action_prefix_set = false
 local init
 init = function(cfg, nft_wfd)
   _cfg = cfg or { }
   _nft_wfd = nft_wfd
+  if not (_action_prefix_set) then
+    if set_action_prefix then
+      set_action_prefix("auth_pipeline_")
+    end
+    _action_prefix_set = true
+  end
   local auth_cfg = _cfg.auth or { }
   local session_timeout = auth_cfg.session_timeout or auth_cfg.session_ttl or 3600
   local user_field = auth_cfg.user_field or "subject"
   init_sessions(session_timeout)
-  return log_info({
-    action = "init",
-    session_timeout = session_timeout,
-    user_field = user_field
-  })
+  if log_info then
+    return log_info({
+      action = "init",
+      session_timeout = session_timeout,
+      user_field = user_field
+    })
+  end
 end
 local process_tls_certificate
 process_tls_certificate = function(tls_data)
@@ -49,37 +57,45 @@ process_tls_certificate = function(tls_data)
   local user_field = auth_cfg.user_field or "subject"
   local username = extract_username(cert_data, user_field)
   if not (username) then
-    log_warn({
-      action = "username_extraction_failed",
-      cert_subject = cert_data.subject or "unknown"
-    })
+    if log_warn then
+      log_warn({
+        action = "username_extraction_failed",
+        cert_subject = cert_data.subject or "unknown"
+      })
+    end
     return false, "unable to extract username from certificate"
   end
   if not (validate_username(username)) then
-    log_warn({
-      action = "username_validation_failed",
-      username = username
-    })
+    if log_warn then
+      log_warn({
+        action = "username_validation_failed",
+        username = username
+      })
+    end
     return false, "invalid username format"
   end
   mac = mac or "unknown"
   local success = add_session(username, src_ip, mac)
   if success then
-    log_info({
-      action = "user_authenticated",
-      username = username,
-      src_ip = src_ip,
-      mac = mac
-    })
+    if log_info then
+      log_info({
+        action = "user_authenticated",
+        username = username,
+        src_ip = src_ip,
+        mac = mac
+      })
+    end
     if _nft_wfd and _nft_wfd >= 0 then
       send_user_auth_to_nft(username, src_ip, mac)
     end
     return true, nil
   else
-    log_warn({
-      action = "session_creation_failed",
-      username = username
-    })
+    if log_warn then
+      log_warn({
+        action = "session_creation_failed",
+        username = username
+      })
+    end
     return false, "unable to create user session"
   end
 end
