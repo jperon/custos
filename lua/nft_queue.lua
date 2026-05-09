@@ -246,7 +246,13 @@ get_set_name = function(kind, rule_id)
   return "rule_" .. tostring(rule_id) .. "_" .. tostring(family_suffix)
 end
 local cmd_for
-cmd_for = function(kind, key, ip, rule_id, timeout)
+cmd_for = function(kind, key, ip, rule_id_or_timeout, timeout)
+  if timeout == nil then
+    timeout = rule_id_or_timeout
+    local rule_id = nil
+  else
+    local rule_id = rule_id_or_timeout
+  end
   timeout = sanitize_timeout(timeout)
   local set_name = get_set_name(kind, rule_id)
   if not (set_name) then

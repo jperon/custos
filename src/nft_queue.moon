@@ -158,7 +158,19 @@ get_set_name = (kind, rule_id) ->
   family_suffix = if kind == "ip4" or kind == "mac4" then "ip4" else "ip6"
   "rule_#{rule_id}_#{family_suffix}"
 
-cmd_for = (kind, key, ip, rule_id, timeout) ->
+-- cmd_for supports both 4-arg (backward compat) and 5-arg (new per-rule) calls
+-- 4-arg: cmd_for(kind, key, ip, timeout)
+-- 5-arg: cmd_for(kind, key, ip, rule_id, timeout)
+cmd_for = (kind, key, ip, rule_id_or_timeout, timeout) ->
+  -- Detect calling convention: if 5th arg is nil, 4th is timeout (old style)
+  if timeout == nil
+    -- Old 4-arg style: (kind, key, ip, timeout)
+    timeout = rule_id_or_timeout
+    rule_id = nil
+  else
+    -- New 5-arg style: (kind, key, ip, rule_id, timeout)
+    rule_id = rule_id_or_timeout
+  
   timeout = sanitize_timeout timeout
   set_name = get_set_name kind, rule_id
   return nil unless set_name
