@@ -13,6 +13,7 @@
 
 { :ffi, :libnft } = require "ffi_defs"
 { :log_info, :log_warn, :get_log_level_num } = require "log"
+nft_compiler = require "filter.nft_compiler"
 
 -- ── Contexte nft (singleton) ─────────────────────────────────────────────────
 
@@ -44,10 +45,15 @@ substitute = (content) ->
 
   content
 
+-- Compile filter rules into per-rule nft objects (sets, chains, maps)
+compile_filter_rules = (filter_cfg) ->
+  return "" unless filter_cfg and filter_cfg.rules and #filter_cfg.rules > 0
+  plan = nft_compiler.compile filter_cfg
+  nft_compiler.render plan
+
 -- ── Application Bridge ─────────────────────────────────────────────────────
 
---- Lit le template dns-filter-bridge.nft, substitue les placeholders
--- depuis config.moon et applique le ruleset via libnft.
+--- Applique le ruleset bridge principal : template substitué + règles compilées.
 -- @treturn boolean true si succès
 apply = ->
   path = nft_file_path!
@@ -59,6 +65,13 @@ apply = ->
   fh\close!
 
   content = substitute content
+
+  -- Compile filter rules into per-rule nft objects and inject into template
+  cfg = require "config"
+  compiled_rules = compile_filter_rules cfg.filter
+  if compiled_rules and #compiled_rules > 0
+    -- Insert compiled rules before the closing brace of the table
+    content = content\gsub "(table%s+bridge%s+[%w_%-]+%s*{.-)(%s*}%s*$)", "%1\n" .. compiled_rules .. "%2"
 
   tmpfile = "/tmp/custos-rules.nft"
   tmpfh, tmp_err = io.open tmpfile, "w"
