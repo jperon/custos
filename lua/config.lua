@@ -16,7 +16,6 @@ local DEFAULTS = {
   },
   dns = {
     port = 53,
-    forced_ttl = 60,
     ttl_grace = {
       grace = 600,
       min = 60,
