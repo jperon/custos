@@ -33,7 +33,7 @@ packet = require "nfq/packet"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :now, :set_action_prefix } = require "log"
-{ :build_blocked_response, :add_ede_modified, :strip_https_rr } = require "dns_ede"
+{ :build_blocked_response, :add_ede_modified, :strip_https_rr, :clear_ad_bit } = require "dns_ede"
 bit = require "bit"
 :concat, :insert, :remove = table
 
@@ -172,8 +172,12 @@ rr_timeout = (ttl) ->
 patch_modified_dns = (dns_raw, reason) ->
   new_dns = strip_https_rr(dns_raw) or dns_raw
   payload_modified = new_dns != dns_raw
+  
+  -- If HTTPS/SVCB records were stripped, clear AD bit (signature is now invalid)
   if payload_modified
+    new_dns = clear_ad_bit(new_dns)
     new_dns = add_ede_modified(new_dns, reason) or new_dns
+  
   new_dns, payload_modified
 
 --- Process a DNS response packet from NFQUEUE.

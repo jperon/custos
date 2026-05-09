@@ -1,11 +1,12 @@
-local strip_https_rr, add_ede_modified
+local strip_https_rr, add_ede_modified, clear_ad_bit
 do
   local _obj_0 = require("dns_ede")
-  strip_https_rr, add_ede_modified = _obj_0.strip_https_rr, _obj_0.add_ede_modified
+  strip_https_rr, add_ede_modified, clear_ad_bit = _obj_0.strip_https_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit
 end
 local dns_mod = require("ipparse.l7.dns")
 local sp
 sp = require("ipparse.lib.pack_compat").pack
+local bit = require("bit")
 local QTYPE_A = dns_mod.types.A
 local QTYPE_SVCB = dns_mod.types.SVCB
 local QTYPE_HTTPS = dns_mod.types.HTTPS
@@ -69,7 +70,7 @@ describe("dns_ede.strip_https_rr", function()
     return assert.equals(raw, strip_https_rr(raw))
   end)
 end)
-return describe("dns_ede.add_ede_modified", function()
+describe("dns_ede.add_ede_modified", function()
   return it("ajoute un OPT/EDE code 4 avec texte Custos vigilat", function()
     local question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
     local answer_a = pack_rr(QTYPE_A, string.char(9, 9, 9, 9))
@@ -81,5 +82,26 @@ return describe("dns_ede.add_ede_modified", function()
     assert.equals(1, #parsed.additionals)
     assert.equals(0x29, parsed.additionals[1].rtype)
     return assert.is_true(patched:find("Custos vigilat%. policy", 1) ~= nil)
+  end)
+end)
+return describe("dns_ede.clear_ad_bit", function()
+  it("efface le bit AD (0x0020) dans le champ flags", function()
+    local question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    local answer_a = pack_rr(QTYPE_A, string.char(10, 10, 10, 10))
+    local header = sp(">H H H H H H", 0xBEEF, 0x8520, 1, 1, 0, 0)
+    local raw = header .. question .. answer_a
+    local cleared = clear_ad_bit(raw)
+    assert.is_not_nil(cleared)
+    assert.equals(raw:byte(1), cleared:byte(1))
+    local flags_cleared = cleared:byte(3) * 256 + cleared:byte(4)
+    return assert.equals(0x8500, flags_cleared)
+  end)
+  return it("laisse inchangé un payload sans bit AD", function()
+    local question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    local answer_a = pack_rr(QTYPE_A, string.char(11, 11, 11, 11))
+    local header = sp(">H H H H H H", 0xABCD, 0x8180, 1, 1, 0, 0)
+    local raw = header .. question .. answer_a
+    local cleared = clear_ad_bit(raw)
+    return assert.equals(raw, cleared)
   end)
 end)

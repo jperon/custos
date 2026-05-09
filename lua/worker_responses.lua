@@ -38,10 +38,10 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now, _obj_0.set_action_prefix
 end
-local build_blocked_response, add_ede_modified, strip_https_rr
+local build_blocked_response, add_ede_modified, strip_https_rr, clear_ad_bit
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, add_ede_modified, strip_https_rr = _obj_0.build_blocked_response, _obj_0.add_ede_modified, _obj_0.strip_https_rr
+  build_blocked_response, add_ede_modified, strip_https_rr, clear_ad_bit = _obj_0.build_blocked_response, _obj_0.add_ede_modified, _obj_0.strip_https_rr, _obj_0.clear_ad_bit
 end
 local bit = require("bit")
 local concat, insert, remove
@@ -197,6 +197,7 @@ patch_modified_dns = function(dns_raw, reason)
   local new_dns = strip_https_rr(dns_raw) or dns_raw
   local payload_modified = new_dns ~= dns_raw
   if payload_modified then
+    new_dns = clear_ad_bit(new_dns)
     new_dns = add_ede_modified(new_dns, reason) or new_dns
   end
   return new_dns, payload_modified

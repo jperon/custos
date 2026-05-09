@@ -63,3 +63,26 @@ describe "worker_responses helpers", ->
     patched_modified, modified_flag = m.patch_modified_dns modified, "policy"
     assert.is_true modified_flag
     assert.is_not_nil patched_modified\find("Custos vigilat%. policy", 1)
+
+  it "patch_modified_dns efface le bit AD quand HTTPS/SVCB sont stripés", ->
+    m = fresh_worker_responses!
+    bit = require "bit"
+    -- Create DNS payload with HTTPS record and AD bit set (0x8520)
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    answer_a = pack_rr QTYPE_A, string.char(1, 2, 3, 4)
+    answer_https = pack_rr QTYPE_HTTPS, "\0\1"
+    header_with_ad = sp(">H H H H H H", 0x1234, 0x8520, 1, 2, 0, 0)
+    raw_with_https_and_ad = header_with_ad .. question .. answer_a .. answer_https
+
+    patched, modified = m.patch_modified_dns raw_with_https_and_ad, "test"
+    assert.is_true modified
+    
+    -- Verify AD bit was cleared (0x8520 & ~0x0020 = 0x8500)
+    -- Flags field is at bytes 3-4 (1-indexed)
+    flags_after = patched\byte(3) * 256 + patched\byte(4)
+    assert.equals 0x8500, flags_after
+    
+    -- Verify HTTPS record was removed
+    parsed = dns_mod.parse patched, 1, false
+    assert.equals 1, #parsed.answers
+    assert.equals QTYPE_A, parsed.answers[1].rtype

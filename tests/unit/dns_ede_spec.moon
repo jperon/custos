@@ -1,9 +1,10 @@
 -- tests/unit/dns_ede_spec.moon
 -- Tests unitaires des helpers DNS EDE.
 
-{ :strip_https_rr, :add_ede_modified } = require "dns_ede"
+{ :strip_https_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
 dns_mod = require "ipparse.l7.dns"
 pack: sp = require "ipparse.lib.pack_compat"
+bit = require "bit"
 
 QTYPE_A = dns_mod.types.A
 QTYPE_SVCB = dns_mod.types.SVCB
@@ -79,3 +80,30 @@ describe "dns_ede.add_ede_modified", ->
     assert.equals 1, #parsed.additionals
     assert.equals 0x29, parsed.additionals[1].rtype
     assert.is_true patched\find("Custos vigilat%. policy", 1) ~= nil
+
+describe "dns_ede.clear_ad_bit", ->
+  it "efface le bit AD (0x0020) dans le champ flags", ->
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    answer_a = pack_rr QTYPE_A, string.char(10, 10, 10, 10)
+    -- Flags with AD bit set: 0x8520 = 1000 0101 0010 0000 (AD at bit 5 of flags)
+    -- QR=1, AA=1, RD=1, RA=1, AD=1
+    header = sp(">H H H H H H", 0xBEEF, 0x8520, 1, 1, 0, 0)
+    raw = header .. question .. answer_a
+
+    cleared = clear_ad_bit raw
+    assert.is_not_nil cleared
+    assert.equals raw\byte(1), cleared\byte(1)
+    -- Check that AD bit was cleared: 0x8520 & ~0x0020 = 0x8500
+    -- Flags field is at bytes 3-4 (1-indexed)
+    flags_cleared = cleared\byte(3) * 256 + cleared\byte(4)
+    assert.equals 0x8500, flags_cleared
+
+  it "laisse inchangé un payload sans bit AD", ->
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    answer_a = pack_rr QTYPE_A, string.char(11, 11, 11, 11)
+    -- Flags without AD bit: 0x8180
+    header = sp(">H H H H H H", 0xABCD, 0x8180, 1, 1, 0, 0)
+    raw = header .. question .. answer_a
+
+    cleared = clear_ad_bit raw
+    assert.equals raw, cleared

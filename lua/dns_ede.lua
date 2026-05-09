@@ -8,6 +8,7 @@ local SVCB = dns_mod.types.SVCB
 local ede_codes = dns_mod.ede_codes
 local sp
 sp = require("ipparse.lib.pack_compat").pack
+local bit = require("bit")
 local insert, remove
 do
   local _obj_0 = table
@@ -15,6 +16,7 @@ do
 end
 local EDE_BLOCKED = ede_codes.Filtered
 local EDE_TTL_MODIFIED = ede_codes.Forged_Answer
+local DNS_FLAG_AD = 0x0020
 local add_ede
 add_ede = function(dns, code, text)
   for i = #(dns.additionals or { }), 1, -1 do
@@ -200,11 +202,24 @@ strip_https_rr = function(dns_payload)
     [SVCB] = true
   })
 end
+local clear_ad_bit
+clear_ad_bit = function(dns_payload)
+  if not (dns_payload and #dns_payload >= 4) then
+    return dns_payload
+  end
+  local flags = dns_payload:byte(3) * 256 + dns_payload:byte(4)
+  local flags_new = bit.band(flags, bit.bnot(DNS_FLAG_AD))
+  if flags_new == flags then
+    return dns_payload
+  end
+  return dns_payload:sub(1, 2) .. string.char(bit.rshift(flags_new, 8)) .. string.char(bit.band(flags_new, 0xFF)) .. dns_payload:sub(5)
+end
 return {
   add_ede = add_ede,
   build_blocked_response = build_blocked_response,
   add_ede_modified = add_ede_modified,
   strip_https_rr = strip_https_rr,
+  clear_ad_bit = clear_ad_bit,
   EDE_BLOCKED = EDE_BLOCKED,
   EDE_TTL_MODIFIED = EDE_TTL_MODIFIED
 }

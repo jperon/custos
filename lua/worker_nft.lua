@@ -168,7 +168,7 @@ flush_batch = function(pending, ack_queue, ack_wfds)
   end
   local lines = { }
   for _, item in pairs(pending) do
-    local cmd = cmd_for(item.kind, item.key, item.ip, item.timeout)
+    local cmd = cmd_for(item.kind, item.key, item.ip, item.rule_id, item.timeout)
     if cmd then
       lines[#lines + 1] = cmd
     end

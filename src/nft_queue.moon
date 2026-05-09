@@ -129,18 +129,48 @@ wait_ack = (pending_seq, corr) ->
   }
   false
 
-cmd_for = (kind, key, ip, timeout) ->
+sanitize_rule_id = (rule_id) ->
+  return "" unless rule_id
+  s = tostring rule_id
+  return "" if #s == 0
+  -- Rule IDs should be hex-decodable; limit to 63 bytes for safety
+  if #s > 126
+    s = s\sub 1, 126
+  s
+
+get_set_name = (kind, rule_id) ->
+  rule_id = sanitize_rule_id rule_id
+  if rule_id == ""
+    -- Fallback to global sets for unknown/empty rule_id
+    if kind == "ip4"
+      return SET_IP4
+    if kind == "ip6"
+      return SET_IP6
+    if kind == "mac4"
+      return SET_MAC4 if SET_MAC4
+      return nil
+    if kind == "mac6"
+      return SET_MAC6 if SET_MAC6
+      return nil
+    return nil
+  
+  -- Per-rule set naming: rule_{rule_id}_{family}
+  family_suffix = if kind == "ip4" or kind == "mac4" then "ip4" else "ip6"
+  "rule_#{rule_id}_#{family_suffix}"
+
+cmd_for = (kind, key, ip, rule_id, timeout) ->
   timeout = sanitize_timeout timeout
+  set_name = get_set_name kind, rule_id
+  return nil unless set_name
+  
   if kind == "ip4"
-    return "add element #{FAMILY} #{TABLE} #{SET_IP4} { #{key} . #{ip} timeout #{timeout} }"
+    return "add element #{FAMILY} #{TABLE} #{set_name} { #{key} . #{ip} timeout #{timeout} }"
   if kind == "ip6"
-    return "add element #{FAMILY6} #{TABLE} #{SET_IP6} { #{key} . #{ip} timeout #{timeout} }"
+    return "add element #{FAMILY6} #{TABLE} #{set_name} { #{key} . #{ip} timeout #{timeout} }"
   if kind == "mac4"
-    return nil unless SET_MAC4
-    return "add element #{FAMILY} #{TABLE} #{SET_MAC4} { #{key} . #{ip} timeout #{timeout} }"
+    return "add element #{FAMILY} #{TABLE} #{set_name} { #{key} . #{ip} timeout #{timeout} }"
   if kind == "mac6"
-    return nil unless SET_MAC6
-    return "add element #{FAMILY6} #{TABLE} #{SET_MAC6} { #{key} . #{ip} timeout #{timeout} }"
+    return "add element #{FAMILY6} #{TABLE} #{set_name} { #{key} . #{ip} timeout #{timeout} }"
   nil
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :wait_ack, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :cmd_for, :sanitize_timeout }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :wait_ack, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :cmd_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id }

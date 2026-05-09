@@ -17,11 +17,15 @@ SVCB     = dns_mod.types.SVCB
 ede_codes = dns_mod.ede_codes
 
 pack: sp = require "ipparse.lib.pack_compat"
+bit = require "bit"
 
 :insert, :remove = table
 
 EDE_BLOCKED     = ede_codes.Filtered       -- 17
 EDE_TTL_MODIFIED = ede_codes.Forged_Answer -- 4
+
+-- DNS header flags bit masks (RFC 1035)
+DNS_FLAG_AD = 0x0020  -- Authenticated Data bit (bit 5)
 
 --- Add or replace the EDNS OPT RR carrying an EDE option in a parsed DNS message.
 -- Removes any existing OPT RR (rtype 0x29) then prepends a new one.
@@ -185,4 +189,25 @@ strip_https_rr = (dns_payload) ->
     [SVCB]: true
   }
 
-{ :add_ede, :build_blocked_response, :add_ede_modified, :strip_https_rr, :EDE_BLOCKED, :EDE_TTL_MODIFIED }
+--- Clear the AD (Authenticated Data) bit in a DNS response.
+-- This is used when HTTPS/SVCB records are stripped, as the signature
+-- becomes invalid and the response is no longer authenticated.
+-- @tparam string dns_payload Raw DNS payload bytes.
+-- @treturn string Modified DNS payload with AD bit cleared (or original if invalid).
+clear_ad_bit = (dns_payload) ->
+  return dns_payload unless dns_payload and #dns_payload >= 4
+  
+  -- Flags field is at offset 3-4 (1-indexed; big-endian 16-bit value)
+  -- DNS header: bytes 1-2=ID, bytes 3-4=FLAGS, bytes 5-6=QDCOUNT, etc.
+  flags = dns_payload\byte(3) * 256 + dns_payload\byte(4)
+  
+  -- Clear AD bit (0x0020)
+  flags_new = bit.band(flags, bit.bnot(DNS_FLAG_AD))
+  
+  -- If flags unchanged, return original
+  return dns_payload if flags_new == flags
+  
+  -- Reconstruct DNS payload with cleared AD bit
+  dns_payload\sub(1, 2) .. string.char(bit.rshift(flags_new, 8)) .. string.char(bit.band(flags_new, 0xFF)) .. dns_payload\sub(5)
+
+{ :add_ede, :build_blocked_response, :add_ede_modified, :strip_https_rr, :clear_ad_bit, :EDE_BLOCKED, :EDE_TTL_MODIFIED }

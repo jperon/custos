@@ -105,7 +105,7 @@ flush_batch = (pending, ack_queue, ack_wfds) ->
 
   lines = {}
   for _, item in pairs pending
-    cmd = cmd_for item.kind, item.key, item.ip, item.timeout
+    cmd = cmd_for item.kind, item.key, item.ip, item.rule_id, item.timeout
     lines[#lines + 1] = cmd if cmd
   for k in pairs pending
     pending[k] = nil

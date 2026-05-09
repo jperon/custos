@@ -199,26 +199,70 @@ wait_ack = function(pending_seq, corr)
   })
   return false
 end
+local sanitize_rule_id
+sanitize_rule_id = function(rule_id)
+  if not (rule_id) then
+    return ""
+  end
+  local s = tostring(rule_id)
+  if #s == 0 then
+    return ""
+  end
+  if #s > 126 then
+    s = s:sub(1, 126)
+  end
+  return s
+end
+local get_set_name
+get_set_name = function(kind, rule_id)
+  rule_id = sanitize_rule_id(rule_id)
+  if rule_id == "" then
+    if kind == "ip4" then
+      return SET_IP4
+    end
+    if kind == "ip6" then
+      return SET_IP6
+    end
+    if kind == "mac4" then
+      if SET_MAC4 then
+        return SET_MAC4
+      end
+      return nil
+    end
+    if kind == "mac6" then
+      if SET_MAC6 then
+        return SET_MAC6
+      end
+      return nil
+    end
+    return nil
+  end
+  local family_suffix
+  if kind == "ip4" or kind == "mac4" then
+    family_suffix = "ip4"
+  else
+    family_suffix = "ip6"
+  end
+  return "rule_" .. tostring(rule_id) .. "_" .. tostring(family_suffix)
+end
 local cmd_for
-cmd_for = function(kind, key, ip, timeout)
+cmd_for = function(kind, key, ip, rule_id, timeout)
   timeout = sanitize_timeout(timeout)
+  local set_name = get_set_name(kind, rule_id)
+  if not (set_name) then
+    return nil
+  end
   if kind == "ip4" then
-    return "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(SET_IP4) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+    return "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
   end
   if kind == "ip6" then
-    return "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(SET_IP6) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+    return "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
   end
   if kind == "mac4" then
-    if not (SET_MAC4) then
-      return nil
-    end
-    return "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(SET_MAC4) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+    return "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
   end
   if kind == "mac6" then
-    if not (SET_MAC6) then
-      return nil
-    end
-    return "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(SET_MAC6) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+    return "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
   end
   return nil
 end
@@ -232,5 +276,7 @@ return {
   add_mac4 = add_mac4,
   add_mac6 = add_mac6,
   cmd_for = cmd_for,
-  sanitize_timeout = sanitize_timeout
+  sanitize_timeout = sanitize_timeout,
+  get_set_name = get_set_name,
+  sanitize_rule_id = sanitize_rule_id
 }
