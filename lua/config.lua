@@ -92,6 +92,11 @@ local DEFAULTS = {
     max_age_hours = 168,
     min_free_pct = 30
   },
+  metrics = {
+    enabled = true,
+    flush_interval = 60,
+    max_rules = 1000
+  },
   filter = {
     domainlists_dir = "/etc/custos/lists",
     custom_lists_dir = nil,

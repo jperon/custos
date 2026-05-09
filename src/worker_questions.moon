@@ -15,6 +15,7 @@ config = require "config"
 runtime_cfg = config.runtime or {}
 nft_cfg = config.nft or {}
 auth_cfg = config.auth or {}
+metrics = require "metrics"
 { :get_l2 } = require "nfq/ethernet"
 packet                   = require "nfq/packet"
 filter                   = require "filter"
@@ -279,17 +280,20 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     q_fields.rule = rule_id or ""
     if allowed == "dnsonly"
       log_allow q_fields
+      metrics.record_verdict rule_id, "dnsonly" if rule_id
       dnsonly = true
       allow_reason = reason
       allow_rule_id = rule_id
       allow_timeout = nft_timeout
     elseif allowed
       log_allow q_fields
+      metrics.record_verdict rule_id, "allow" if rule_id
       allow_reason = reason
       allow_rule_id = rule_id
       allow_timeout = nft_timeout
     else
       log_block q_fields
+      metrics.record_verdict rule_id, "refuse" if rule_id
       verdict = NF_DROP
       block_reason = reason
       block_rule_id = rule_id
@@ -331,6 +335,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 -- Appelé par main.moon après fork(), avec les fd des pipes IPC.
 run = (queue_num, wfd, learn_wfd, ev_wfd) ->
   set_action_prefix "questions_"
+  metrics.init config.metrics
   pipe_wfd      = wfd
   mac_learn_wfd = learn_wfd
   events_wfd    = ev_wfd

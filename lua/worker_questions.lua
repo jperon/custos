@@ -7,6 +7,7 @@ local config = require("config")
 local runtime_cfg = config.runtime or { }
 local nft_cfg = config.nft or { }
 local auth_cfg = config.auth or { }
+local metrics = require("metrics")
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
 local packet = require("nfq/packet")
@@ -280,17 +281,26 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     q_fields.rule = rule_id or ""
     if allowed == "dnsonly" then
       log_allow(q_fields)
+      if rule_id then
+        metrics.record_verdict(rule_id, "dnsonly")
+      end
       dnsonly = true
       allow_reason = reason
       allow_rule_id = rule_id
       allow_timeout = nft_timeout
     elseif allowed then
       log_allow(q_fields)
+      if rule_id then
+        metrics.record_verdict(rule_id, "allow")
+      end
       allow_reason = reason
       allow_rule_id = rule_id
       allow_timeout = nft_timeout
     else
       log_block(q_fields)
+      if rule_id then
+        metrics.record_verdict(rule_id, "refuse")
+      end
       verdict = NF_DROP
       block_reason = reason
       block_rule_id = rule_id
@@ -332,6 +342,7 @@ end
 local run
 run = function(queue_num, wfd, learn_wfd, ev_wfd)
   set_action_prefix("questions_")
+  metrics.init(config.metrics)
   pipe_wfd = wfd
   mac_learn_wfd = learn_wfd
   events_wfd = ev_wfd
