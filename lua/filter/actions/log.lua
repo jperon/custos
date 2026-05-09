@@ -14,7 +14,6 @@ return function(cfg, rule_cfg)
     if rule_cfg.description then
       log_fields.rule_description = rule_cfg.description
     end
-    local _ = end
     log.log_info(log_fields)
     return nil, log_message
   end

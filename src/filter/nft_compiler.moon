@@ -129,6 +129,38 @@ collect_nets = (cfg, rule) ->
   table.sort v6
   v4, v6
 
+collect_subnets = (rule) ->
+  v4, v6 = {}, {}
+  seen4, seen6 = {}, {}
+
+  add_subnet = (cidr_str) ->
+    return unless cidr_str
+    net = tostring(cidr_str)\match "^%s*(.-)%s*$"
+    return unless net and #net > 0
+    if net\find ":", 1, true
+      append_unique v6, seen6, net
+    else
+      append_unique v4, seen4, net
+
+  for _, cond in ipairs rule.conditions or {}
+    continue unless type(cond) == "table"
+    for k, args in pairs cond
+      if k == "from_subnet"
+        if type(args) == "string"
+          add_subnet args
+        elseif type(args) == "table" and args.net
+          add_subnet args.net
+      elseif k == "from_subnets"
+        for _, subnet_spec in ipairs as_list args
+          if type(subnet_spec) == "string"
+            add_subnet subnet_spec
+          elseif type(subnet_spec) == "table" and subnet_spec.net
+            add_subnet subnet_spec.net
+
+  table.sort v4
+  table.sort v6
+  v4, v6
+
 collect_times = (rule) ->
   out = {}
   seen = {}
@@ -206,6 +238,7 @@ resolve_action = (rule) ->
 build_rule = (cfg, rule, idx, used_ids) ->
   rid = stable_rule_id rule, idx, used_ids
   src4, src6 = collect_nets cfg, rule
+  subnet4, subnet6 = collect_subnets rule
   times = collect_times rule
   dns_refs = collect_dns rule
   protos, ports = collect_proto_ports rule
@@ -223,12 +256,16 @@ build_rule = (cfg, rule, idx, used_ids) ->
     time_ranges: times
     source_ipv4: src4
     source_ipv6: src6
+    subnet_ipv4: subnet4
+    subnet_ipv6: subnet6
     protocols: protos
     ports: ports
     chain: chain
     mark: mark
     set_src4: #src4 > 0 and "#{chain}_src4" or nil
     set_src6: #src6 > 0 and "#{chain}_src6" or nil
+    set_subnet4: #subnet4 > 0 and "#{chain}_subnet4" or nil
+    set_subnet6: #subnet6 > 0 and "#{chain}_subnet6" or nil
     set_ports: #ports > 0 and "#{chain}_dports" or nil
     stubs: {
       time_match: #times > 0
@@ -260,12 +297,12 @@ compile = (filter_cfg) ->
     action_map: action_map
   }
 
-render_set = (name, set_type, flags, elems, indent) ->
+render_set = (name, set_type, flags, elems, indent, include_elems=true) ->
   lines = {}
   lines[#lines + 1] = "#{indent}set #{name} {"
   lines[#lines + 1] = "#{indent}  type #{set_type}"
   lines[#lines + 1] = "#{indent}  flags #{flags}" if flags and #flags > 0
-  lines[#lines + 1] = "#{indent}  elements = { #{table.concat elems, ", "} }" if elems and #elems > 0
+  lines[#lines + 1] = "#{indent}  elements = { #{table.concat elems, ", "} }" if include_elems and elems and #elems > 0
   lines[#lines + 1] = "#{indent}}"
   lines
 
@@ -278,10 +315,33 @@ match_exprs = (rule) ->
   base = table.concat l4, " "
 
   exprs = {}
-  if rule.set_src4
-    exprs[#exprs + 1] = table.concat({ "ip saddr @#{rule.set_src4}", base }, " ")\gsub "%s+", " "
-  if rule.set_src6
-    exprs[#exprs + 1] = table.concat({ "ip6 saddr @#{rule.set_src6}", base }, " ")\gsub "%s+", " "
+  
+  -- IPv4: from_net, from_netlist, and from_subnet
+  if rule.set_src4 or rule.set_subnet4
+    expr_parts = { "ip saddr" }
+    if rule.set_src4 and rule.set_subnet4
+      expr_parts[#expr_parts + 1] = "{ @#{rule.set_src4}, @#{rule.set_subnet4} }"
+    elseif rule.set_src4
+      expr_parts[#expr_parts + 1] = "@#{rule.set_src4}"
+    else
+      expr_parts[#expr_parts + 1] = "@#{rule.set_subnet4}"
+    
+    ipv4_match = table.concat(expr_parts, " ")
+    exprs[#exprs + 1] = table.concat({ ipv4_match, base }, " ")\gsub "%s+", " "
+  
+  -- IPv6: from_net, from_netlist, and from_subnet
+  if rule.set_src6 or rule.set_subnet6
+    expr_parts = { "ip6 saddr" }
+    if rule.set_src6 and rule.set_subnet6
+      expr_parts[#expr_parts + 1] = "{ @#{rule.set_src6}, @#{rule.set_subnet6} }"
+    elseif rule.set_src6
+      expr_parts[#expr_parts + 1] = "@#{rule.set_src6}"
+    else
+      expr_parts[#expr_parts + 1] = "@#{rule.set_subnet6}"
+    
+    ipv6_match = table.concat(expr_parts, " ")
+    exprs[#exprs + 1] = table.concat({ ipv6_match, base }, " ")\gsub "%s+", " "
+  
   if #exprs == 0
     exprs[1] = base
   exprs
@@ -305,7 +365,7 @@ render_rule_chain = (rule, indent) ->
   lines[#lines + 1] = "#{indent}}"
   lines
 
-render = (plan, indent="  ") ->
+render = (plan, indent="  ", include_elements=true) ->
   return "#{indent}# b2: no compiled rule objects\n" unless plan and plan.rules and #plan.rules > 0
 
   lines = {}
@@ -320,13 +380,19 @@ render = (plan, indent="  ") ->
 
   for _, rule in ipairs plan.rules
     if rule.set_src4
-      for _, l in ipairs render_set rule.set_src4, "ipv4_addr", "interval", rule.source_ipv4, indent
+      for _, l in ipairs render_set rule.set_src4, "ipv4_addr", "interval", rule.source_ipv4, indent, include_elements
         lines[#lines + 1] = l
     if rule.set_src6
-      for _, l in ipairs render_set rule.set_src6, "ipv6_addr", "interval", rule.source_ipv6, indent
+      for _, l in ipairs render_set rule.set_src6, "ipv6_addr", "interval", rule.source_ipv6, indent, include_elements
+        lines[#lines + 1] = l
+    if rule.set_subnet4
+      for _, l in ipairs render_set rule.set_subnet4, "ipv4_addr", "interval", rule.subnet_ipv4, indent, include_elements
+        lines[#lines + 1] = l
+    if rule.set_subnet6
+      for _, l in ipairs render_set rule.set_subnet6, "ipv6_addr", "interval", rule.subnet_ipv6, indent, include_elements
         lines[#lines + 1] = l
     if rule.set_ports
-      for _, l in ipairs render_set rule.set_ports, "inet_service", "", rule.ports, indent
+      for _, l in ipairs render_set rule.set_ports, "inet_service", "", rule.ports, indent, include_elements
         lines[#lines + 1] = l
     for _, l in ipairs render_rule_chain rule, indent
       lines[#lines + 1] = l

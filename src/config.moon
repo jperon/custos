@@ -1,6 +1,52 @@
 -- src/config.moon
 -- Configuration runtime hiérarchique.
 -- Source de vérité : /etc/config.moon (surcharge partielle des défauts).
+--
+-- RULES - Filter Conditions and Syntax:
+--
+-- Conditions supported in rule.conditions array:
+--   • to_domain/to_domains/to_domainlist/to_domainlists - DNS name matching
+--   • from_net/from_nets/from_netlist/from_netlists - Source IP from named lists
+--   • from_subnet/from_subnets - Source IP with inline CIDR notation
+--   • from_mac/from_macs/from_maclist/from_maclists - Source MAC address
+--   • in_time/in_times/in_timelist/in_timelists - Time window matching
+--   • from_user/from_userlist/from_users - User/identity matching
+--   • from_vlan/from_vlans/from_vlanlist/from_vlans - VLAN ID matching
+--   • stolen_computer - Stolen device detection
+--
+-- SUBNET CONDITION SYNTAX:
+-- from_subnet supports two formats:
+--   1. Inline CIDR:    { from_subnet: "10.0.0.0/8" }
+--   2. With family:    { from_subnet: { net: "10.0.0.0/8", family: "inet" } }
+--   3. Multiple:       { from_subnets: ["10.0.0.0/8", "172.16.0.0/12"] }
+--
+-- CIDR Notation:
+--   • IPv4: x.x.x.x/prefix (e.g., "192.168.0.0/24", "10.0.0.0/8")
+--   • IPv6: xxxx::.../prefix (e.g., "fc00::/7", "2001:db8::/32")
+--   • Single IP: "192.168.1.1/32" or just "192.168.1.1"
+--
+-- NFTABLES IMPLEMENTATION:
+--   • Subnet sets use "interval" flag for CIDR range matching
+--   • Set type: ipv4_addr (IPv4) or ipv6_addr (IPv6)
+--   • Elements stored in CIDR notation: { 10.0.0.0/8, 172.16.0.0/12 }
+--   • Performance: O(log n) lookup with interval flag
+--
+-- EXAMPLE:
+--   filter:
+--     rules:
+--       - description: "Allow 10.0.0.0/8 to example.com"
+--         conditions:
+--           - to_domain: "example.com"
+--           - from_subnet: "10.0.0.0/8"
+--         actions:
+--           - allow
+--
+--       - description: "Block guest network from internal sites"
+--         conditions:
+--           - from_subnet: "192.168.100.0/24"
+--           - to_domains: ["internal.example.com", "vpn.example.com"]
+--         actions:
+--           - deny
 
 DEFAULT_CONFIG_PATH = "/etc/config.moon"
 

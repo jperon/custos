@@ -6,7 +6,7 @@ log = require "log"
 -- Factory function for the action.
 -- cfg: global filter configuration.
 -- rule_cfg: configuration for this specific rule. The action factory receives the entire rule configuration.
-(cfg, rule_cfg) ->
+return (cfg, rule_cfg) ->
   -- Extract log message from rule_cfg.log.log_msg if present.
   -- Default message if not found.
   log_message = "Log action triggered by rule"
@@ -29,10 +29,9 @@ log = require "log"
     -- Add rule description only if it exists.
     if rule_cfg.description
       log_fields.rule_description = rule_cfg.description
-    end
 
     log.log_info(log_fields)
 
     -- This action does not make a decision (allow/deny).
     -- It returns nil, so other actions or rules can still be evaluated.
-    return nil, log_message
+    nil, log_message
