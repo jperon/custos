@@ -4,6 +4,7 @@ local REFUSED = dns_mod.rcodes.REFUSED
 local A = dns_mod.types.A
 local AAAA = dns_mod.types.AAAA
 local HTTPS = dns_mod.types.HTTPS
+local SVCB = dns_mod.types.SVCB
 local ede_codes = dns_mod.ede_codes
 local sp
 sp = require("ipparse.lib.pack_compat").pack
@@ -86,8 +87,8 @@ add_ede_ttl = function(dns_payload, reason)
   add_ede(dns, EDE_TTL_MODIFIED, ede_text)
   return tostring(dns)
 end
-local strip_rrtype
-strip_rrtype = function(dns_payload, rrtype)
+local strip_rrtypes
+strip_rrtypes = function(dns_payload, rrtypes)
   if not (dns_payload and #dns_payload >= 12) then
     return dns_payload
   end
@@ -163,13 +164,13 @@ strip_rrtype = function(dns_payload, rrtype)
       if name_end + 9 > len then
         return nil
       end
-      rrtype = u16(name_end)
+      local rrtype = u16(name_end)
       local rdlength = u16(name_end + 8)
       local rr_end = name_end + 10 + rdlength - 1
       if rr_end > len then
         return nil
       end
-      if rrtype ~= HTTPS then
+      if not rrtypes[rrtype] then
         sec[#sec + 1] = dns_payload:sub(rr_start, rr_end)
         kept = kept + 1
       end
@@ -194,7 +195,10 @@ strip_rrtype = function(dns_payload, rrtype)
 end
 local strip_https_rr
 strip_https_rr = function(dns_payload)
-  return strip_rrtype(dns_payload, HTTPS)
+  return strip_rrtypes(dns_payload, {
+    [HTTPS] = true,
+    [SVCB] = true
+  })
 end
 return {
   add_ede = add_ede,
