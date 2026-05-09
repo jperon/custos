@@ -26,6 +26,26 @@ nft_dynamic_sets = require "filter.nft_dynamic_sets"
 ctx = libnft.nft_ctx_new 0
 error "nft_rules: nft_ctx_new() failed" if ctx == nil
 
+-- ── Interface with libnft ──────────────────────────────────────────────
+
+--- Retourne le code erreur du contexte nft.
+get_error_buffer = ->
+  return nil unless ctx
+  ok, ptr = pcall -> libnft.nft_ctx_get_error_buffer ctx
+  return nil unless ok and ptr != nil
+  msg = ffi.string ptr
+  msg if msg and msg != ""
+
+--- Execute nft command via libnft context.
+run_cmd = (cmd, opts=nil) ->
+  rc = libnft.nft_run_cmd_from_buffer ctx, cmd
+  if rc != 0
+    nft_err = get_error_buffer!
+    unless opts and opts.quiet
+      log_warn { action: "nft_cmd_failed", cmd: cmd, rc: rc, nft_err: nft_err or "" }
+    return false, nft_err
+  true, nil
+
 -- ── Localisation des templates ─────────────────────────────────────────
 
 --- Retourne le chemin du template dns-filter-bridge.nft.
@@ -66,7 +86,6 @@ compile_filter_rules = (filter_cfg) ->
 create_filter_rule_sets = (plan) ->
   return true unless plan and plan.rules and #plan.rules > 0
   
-  cfg = require "config"
   commands = nft_dynamic_sets.generate_set_creation_commands plan
   
   if #commands == 0
@@ -87,25 +106,6 @@ create_filter_rule_sets = (plan) ->
         all_ok = false
   
   all_ok
-
--- ── Interface with libnft ──────────────────────────────────────────────
-
---- Execute nft command via libnft context.
-run_cmd = (cmd, opts=nil) ->
-  rc = libnft.nft_run_cmd_from_buffer ctx, cmd
-  if rc != 0
-    nft_err = get_error_buffer!
-    unless opts and opts.quiet
-      log_warn { action: "nft_cmd_failed", cmd: cmd, rc: rc, nft_err: nft_err or "" }
-    return false, nft_err
-  true, nil
-
-get_error_buffer = ->
-  return nil unless ctx
-  ok, ptr = pcall -> libnft.nft_ctx_get_error_buffer ctx
-  return nil unless ok and ptr != nil
-  msg = ffi.string ptr
-  msg if msg and msg != ""
 
 -- ── Application Bridge ─────────────────────────────────────────────────────
 

@@ -14,6 +14,42 @@ local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
   error("nft_rules: nft_ctx_new() failed")
 end
+local get_error_buffer
+get_error_buffer = function()
+  if not (ctx) then
+    return nil
+  end
+  local ok, ptr = pcall(function()
+    return libnft.nft_ctx_get_error_buffer(ctx)
+  end)
+  if not (ok and ptr ~= nil) then
+    return nil
+  end
+  local msg = ffi.string(ptr)
+  if msg and msg ~= "" then
+    return msg
+  end
+end
+local run_cmd
+run_cmd = function(cmd, opts)
+  if opts == nil then
+    opts = nil
+  end
+  local rc = libnft.nft_run_cmd_from_buffer(ctx, cmd)
+  if rc ~= 0 then
+    local nft_err = get_error_buffer()
+    if not (opts and opts.quiet) then
+      log_warn({
+        action = "nft_cmd_failed",
+        cmd = cmd,
+        rc = rc,
+        nft_err = nft_err or ""
+      })
+    end
+    return false, nft_err
+  end
+  return true, nil
+end
 local nft_file_path
 nft_file_path = function()
   local src = debug.getinfo(1, "S").source
@@ -47,7 +83,6 @@ create_filter_rule_sets = function(plan)
   if not (plan and plan.rules and #plan.rules > 0) then
     return true
   end
-  local cfg = require("config")
   local commands = nft_dynamic_sets.generate_set_creation_commands(plan)
   if #commands == 0 then
     log_debug({
@@ -81,42 +116,6 @@ create_filter_rule_sets = function(plan)
     end
   end
   return all_ok
-end
-local run_cmd
-run_cmd = function(cmd, opts)
-  if opts == nil then
-    opts = nil
-  end
-  local rc = libnft.nft_run_cmd_from_buffer(ctx, cmd)
-  if rc ~= 0 then
-    local nft_err = get_error_buffer()
-    if not (opts and opts.quiet) then
-      log_warn({
-        action = "nft_cmd_failed",
-        cmd = cmd,
-        rc = rc,
-        nft_err = nft_err or ""
-      })
-    end
-    return false, nft_err
-  end
-  return true, nil
-end
-local get_error_buffer
-get_error_buffer = function()
-  if not (ctx) then
-    return nil
-  end
-  local ok, ptr = pcall(function()
-    return libnft.nft_ctx_get_error_buffer(ctx)
-  end)
-  if not (ok and ptr ~= nil) then
-    return nil
-  end
-  local msg = ffi.string(ptr)
-  if msg and msg ~= "" then
-    return msg
-  end
 end
 local apply
 apply = function()
