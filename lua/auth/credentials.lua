@@ -46,8 +46,19 @@ hmac_bin = function(key, msg)
 end
 local wolfssl_pbkdf2 = nil
 do
-  local ok_defs, ffi_defs = pcall(require, "ffi_defs")
-  if ok_defs and ffi_defs and ffi_defs.libwolfssl then
+  local lib = nil
+  local ok, mod = pcall(require, "auth.ffi_wolfssl")
+  if ok and mod and mod.libwolfssl then
+    lib = mod.libwolfssl
+  end
+  if not (lib) then
+    local ffi_defs
+    ok, ffi_defs = pcall(require, "ffi_defs")
+    if ok and ffi_defs and ffi_defs.libwolfssl then
+      lib = ffi_defs.libwolfssl
+    end
+  end
+  if lib then
     local ok_cdef = pcall(ffi.cdef, [[      enum wc_HashType {
         WC_HASH_TYPE_SHA256 = 2
       };
@@ -56,8 +67,11 @@ do
                     const unsigned char* salt, int sLen, int iterations, int kLen,
                     int hashType);
     ]])
-    if ok_cdef and ffi_defs.libwolfssl.wc_PBKDF2 then
-      local wolfssl = ffi_defs.libwolfssl
+    local ok_sym = ok_cdef and pcall(function()
+      return lib.wc_PBKDF2
+    end)
+    if ok_sym then
+      local wolfssl = lib
       wolfssl_pbkdf2 = function(password, salt_bin, iterations, dk_len)
         if dk_len == nil then
           dk_len = HASH_LEN
@@ -79,6 +93,22 @@ do
         end
         return ffi.string(out, dk_len)
       end
+    end
+  end
+end
+do
+  local ok_log, log = pcall(require, "log")
+  if ok_log and log and log.log_info then
+    if wolfssl_pbkdf2 then
+      log.log_info({
+        action = "pbkdf2_backend",
+        backend = "wolfssl"
+      })
+    else
+      log.log_info({
+        action = "pbkdf2_backend",
+        backend = "lua_pure"
+      })
     end
   end
 end

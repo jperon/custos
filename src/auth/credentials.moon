@@ -52,8 +52,16 @@ hmac_bin = (key, msg) ->
 
 wolfssl_pbkdf2 = nil
 do
-  ok_defs, ffi_defs = pcall require, "ffi_defs"
-  if ok_defs and ffi_defs and ffi_defs.libwolfssl
+  -- Prefer auth.ffi_wolfssl (already loaded in server context, reliable handle).
+  -- Fall back to ffi_defs for standalone CLI usage.
+  lib = nil
+  ok, mod = pcall require, "auth.ffi_wolfssl"
+  lib = mod.libwolfssl if ok and mod and mod.libwolfssl
+  unless lib
+    ok, ffi_defs = pcall require, "ffi_defs"
+    lib = ffi_defs.libwolfssl if ok and ffi_defs and ffi_defs.libwolfssl
+
+  if lib
     ok_cdef = pcall ffi.cdef, [[
       enum wc_HashType {
         WC_HASH_TYPE_SHA256 = 2
@@ -63,8 +71,9 @@ do
                     const unsigned char* salt, int sLen, int iterations, int kLen,
                     int hashType);
     ]]
-    if ok_cdef and ffi_defs.libwolfssl.wc_PBKDF2
-      wolfssl = ffi_defs.libwolfssl
+    ok_sym = ok_cdef and pcall(-> lib.wc_PBKDF2)
+    if ok_sym
+      wolfssl = lib
       wolfssl_pbkdf2 = (password, salt_bin, iterations, dk_len = HASH_LEN) ->
         pass_len = #password
         salt_len = #salt_bin
@@ -81,7 +90,16 @@ do
         return nil, "wc_PBKDF2 rc=#{rc}" if rc != 0
         ffi.string out, dk_len
 
--- ── Utilitaires hex/bin ────────────────────────────────────────────
+-- Log which PBKDF2 backend is active (best-effort: log module may not be present in CLI mode).
+do
+  ok_log, log = pcall require, "log"
+  if ok_log and log and log.log_info
+    if wolfssl_pbkdf2
+      log.log_info { action: "pbkdf2_backend", backend: "wolfssl" }
+    else
+      log.log_info { action: "pbkdf2_backend", backend: "lua_pure" }
+
+
 
 bin_to_hex = (s) ->
   (s\gsub ".", (c) -> string.format "%02x", string.byte c)
