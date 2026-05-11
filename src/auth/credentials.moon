@@ -5,7 +5,7 @@
 --   user:pbkdf2-sha256:<iter>:<salt_hex>:<hash_hex>
 -- Lignes vides et commentaires (#) ignorés.
 --
--- Implémentation crypto pure Lua (pas de dépendance OpenSSL/libcrypto).
+-- Implémentation crypto pure Lua, avec backend wolfSSL opportuniste si disponible.
 --
 -- Pour générer un hash (helper CLI) :
 --   luajit lua/auth/credentials.lua <user> <password>
@@ -49,6 +49,37 @@ hmac_bin = (key, msg) ->
     hex_to_bin d
   else
     d
+
+wolfssl_pbkdf2 = nil
+do
+  ok_defs, ffi_defs = pcall require, "ffi_defs"
+  if ok_defs and ffi_defs and ffi_defs.libwolfssl
+    ok_cdef = pcall ffi.cdef, [[
+      enum wc_HashType {
+        WC_HASH_TYPE_SHA256 = 2
+      };
+
+      int wc_PBKDF2(unsigned char* output, const unsigned char* passwd, int pLen,
+                    const unsigned char* salt, int sLen, int iterations, int kLen,
+                    int hashType);
+    ]]
+    if ok_cdef and ffi_defs.libwolfssl.wc_PBKDF2
+      wolfssl = ffi_defs.libwolfssl
+      wolfssl_pbkdf2 = (password, salt_bin, iterations, dk_len = HASH_LEN) ->
+        pass_len = #password
+        salt_len = #salt_bin
+        pass_buf = ffi.new "unsigned char[?]", math.max(pass_len, 1)
+        salt_buf = ffi.new "unsigned char[?]", math.max(salt_len, 1)
+        out = ffi.new "unsigned char[?]", dk_len
+
+        if pass_len > 0
+          ffi.copy pass_buf, password, pass_len
+        if salt_len > 0
+          ffi.copy salt_buf, salt_bin, salt_len
+
+        rc = wolfssl.wc_PBKDF2 out, pass_buf, pass_len, salt_buf, salt_len, iterations, dk_len, 2
+        return nil, "wc_PBKDF2 rc=#{rc}" if rc != 0
+        ffi.string out, dk_len
 
 -- ── Utilitaires hex/bin ────────────────────────────────────────────
 
@@ -94,6 +125,9 @@ pbkdf2_raw = (password, salt_bin, iterations, dk_len = HASH_LEN) ->
 -- @treturn string Hash en hexadécimal (64 caractères)
 pbkdf2 = (password, salt_hex, iterations) ->
   salt_bin = hex_to_bin salt_hex
+  if wolfssl_pbkdf2
+    ok, out = pcall wolfssl_pbkdf2, password, salt_bin, iterations, HASH_LEN
+    return bin_to_hex(out) if ok and out
   out = pbkdf2_raw password, salt_bin, iterations, HASH_LEN
   bin_to_hex out
 

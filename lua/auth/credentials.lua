@@ -44,6 +44,44 @@ hmac_bin = function(key, msg)
     return d
   end
 end
+local wolfssl_pbkdf2 = nil
+do
+  local ok_defs, ffi_defs = pcall(require, "ffi_defs")
+  if ok_defs and ffi_defs and ffi_defs.libwolfssl then
+    local ok_cdef = pcall(ffi.cdef, [[      enum wc_HashType {
+        WC_HASH_TYPE_SHA256 = 2
+      };
+
+      int wc_PBKDF2(unsigned char* output, const unsigned char* passwd, int pLen,
+                    const unsigned char* salt, int sLen, int iterations, int kLen,
+                    int hashType);
+    ]])
+    if ok_cdef and ffi_defs.libwolfssl.wc_PBKDF2 then
+      local wolfssl = ffi_defs.libwolfssl
+      wolfssl_pbkdf2 = function(password, salt_bin, iterations, dk_len)
+        if dk_len == nil then
+          dk_len = HASH_LEN
+        end
+        local pass_len = #password
+        local salt_len = #salt_bin
+        local pass_buf = ffi.new("unsigned char[?]", math.max(pass_len, 1))
+        local salt_buf = ffi.new("unsigned char[?]", math.max(salt_len, 1))
+        local out = ffi.new("unsigned char[?]", dk_len)
+        if pass_len > 0 then
+          ffi.copy(pass_buf, password, pass_len)
+        end
+        if salt_len > 0 then
+          ffi.copy(salt_buf, salt_bin, salt_len)
+        end
+        local rc = wolfssl.wc_PBKDF2(out, pass_buf, pass_len, salt_buf, salt_len, iterations, dk_len, 2)
+        if rc ~= 0 then
+          return nil, "wc_PBKDF2 rc=" .. tostring(rc)
+        end
+        return ffi.string(out, dk_len)
+      end
+    end
+  end
+end
 local bin_to_hex
 bin_to_hex = function(s)
   return (s:gsub(".", function(c)
@@ -85,6 +123,12 @@ end
 local pbkdf2
 pbkdf2 = function(password, salt_hex, iterations)
   local salt_bin = hex_to_bin(salt_hex)
+  if wolfssl_pbkdf2 then
+    local ok, out = pcall(wolfssl_pbkdf2, password, salt_bin, iterations, HASH_LEN)
+    if ok and out then
+      return bin_to_hex(out)
+    end
+  end
   local out = pbkdf2_raw(password, salt_bin, iterations, HASH_LEN)
   return bin_to_hex(out)
 end
