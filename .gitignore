@@ -52,29 +52,5 @@ images/
 *.bak
 .aider*
 
-# Lua files compiled from .moon sources (canonical output goes to lua/)
-# Rule: tout .lua dans src/ ayant un .moon homonyme est un artefact de build.
-# Les .lua sans .moon (src/ipparse/lib/*, src/ipparse/tests/crypto/*, etc.)
-# sont des fichiers Lua purs maintenus à la main et restent trackés.
-src/*.lua
-src/auth/*.lua
-src/doh/*.lua
-src/filter/*.lua
-src/lib/*.lua
-src/ipparse/*.lua
-src/ipparse/examples/*.lua
-src/ipparse/l2/*.lua
-src/ipparse/l3/*.lua
-src/ipparse/l4/*.lua
-src/ipparse/l4/quic/*.lua
-src/ipparse/l7/*.lua
-src/ipparse/l7/quic/*.lua
-src/ipparse/l7/tls/*.lua
-src/ipparse/l7/tls/handshake/*.lua
-src/ipparse/l7/tls/handshake/extension/*.lua
-src/ipparse/lib/*.lua
-src/ipparse/lib/crypto/*.lua
-src/ipparse/tests/*.lua
-
 
 idefix3.json
