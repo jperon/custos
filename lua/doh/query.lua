@@ -137,7 +137,8 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       domain = qname_text,
       src_ip = client_ip,
       mac = client_mac,
-      ts = os.time()
+      ts = os.time(),
+      user = user
     }
     log_debug({
       action = "filter_decide",

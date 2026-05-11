@@ -7,6 +7,7 @@
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :get_l2 } = require "nfq/ethernet"
 { :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
+{ :user_for_mac } = require "auth.sessions"
 
 -- ipparse modules for packet parsing and SNI extraction
 ipparse_ip = require "ipparse.l3.ip"
@@ -613,6 +614,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     mac: mac_str
     vlan: l2.vlan
     ts: os.time!
+    user: user_for_mac mac_str, ip_src_str, auth_sessions_file
   }
   allowed, decide_reason, decide_rule = safe_filter_decide req
 
@@ -784,6 +786,7 @@ run = (queue_num, ev_wfd=nil) ->
     filter = filter_or_err
     pcall -> filter.load!
     auth_cfg = if filter.get_auth_cfg then filter.get_auth_cfg! else {}
+    auth_sessions_file = auth_cfg.sessions_file or auth_sessions_file
     sni_policy = auth_cfg and auth_cfg.sni_verdict or {}
   else
     filter = nil

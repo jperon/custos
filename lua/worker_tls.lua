@@ -15,6 +15,8 @@ do
   local _obj_0 = require("log")
   log_allow, log_block, log_info, log_warn, log_error, log_debug, set_action_prefix = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix
 end
+local user_for_mac
+user_for_mac = require("auth.sessions").user_for_mac
 local ipparse_ip = require("ipparse.l3.ip")
 local ipparse_tcp = require("ipparse.l4.tcp")
 local ipparse_udp = require("ipparse.l4.udp")
@@ -789,7 +791,8 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     src_ip = ip_src_str,
     mac = mac_str,
     vlan = l2.vlan,
-    ts = os.time()
+    ts = os.time(),
+    user = user_for_mac(mac_str, ip_src_str, auth_sessions_file)
   }
   local allowed, decide_reason, decide_rule = safe_filter_decide(req)
   if not in_scope then
@@ -972,6 +975,7 @@ run = function(queue_num, ev_wfd)
     else
       auth_cfg = { }
     end
+    local auth_sessions_file = auth_cfg.sessions_file or auth_sessions_file
     sni_policy = auth_cfg and auth_cfg.sni_verdict or { }
   else
     filter = nil

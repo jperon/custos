@@ -30,6 +30,27 @@ return function(cfg)
   local sessions_file = (cfg.auth and cfg.auth.sessions_file) or config.auth.sessions_file
   return function(user)
     return function(req)
+      local hinted_user = req.user
+      if hinted_user and hinted_user ~= "unknown" then
+        if user == "_any" then
+          return true, "from_user: session active (" .. tostring(hinted_user) .. ")"
+        end
+        if user == "_none" then
+          return false, "from_user: une session est déjà identifiée (" .. tostring(hinted_user) .. ")"
+        end
+        if hinted_user == user then
+          local mac = req.mac
+          if not (mac) then
+            mac = safe_get_mac(req.src_ip)
+          end
+          local s = session_for_mac(mac, req.src_ip, sessions_file)
+          if s then
+            bind_session_mac(s.mac, req.mac, req.src_ip, sessions_file)
+            enrich_session_ip(req.mac, req.src_ip, sessions_file)
+          end
+          return true, "from_user: " .. tostring(req.src_ip) .. " → " .. tostring(hinted_user)
+        end
+      end
       local mac = req.mac
       if not (mac) then
         mac = safe_get_mac(req.src_ip)

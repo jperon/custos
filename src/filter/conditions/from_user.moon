@@ -36,6 +36,23 @@ safe_get_mac = (ip_str) ->
     --- @tparam table req {src_ip: string, mac: string, ...}
     -- @treturn boolean, string
     (req) ->
+      hinted_user = req.user
+
+      if hinted_user and hinted_user ~= "unknown"
+        if user == "_any"
+          return true, "from_user: session active (#{hinted_user})"
+        if user == "_none"
+          return false, "from_user: une session est déjà identifiée (#{hinted_user})"
+        if hinted_user == user
+          mac = req.mac
+          unless mac
+            mac = safe_get_mac req.src_ip
+          s = session_for_mac mac, req.src_ip, sessions_file
+          if s
+            bind_session_mac s.mac, req.mac, req.src_ip, sessions_file
+            enrich_session_ip req.mac, req.src_ip, sessions_file
+          return true, "from_user: #{req.src_ip} → #{hinted_user}"
+
       -- session_for_mac indexée par MAC évite le coût du fallback par get_mac
       -- dans la majorité des cas en mode bridge.
       mac = req.mac

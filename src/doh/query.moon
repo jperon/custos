@@ -100,6 +100,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       src_ip: client_ip
       mac:    client_mac
       ts:     os.time!
+      user:   user
     }
     log_debug { action: "filter_decide", qname: qname_text, qtype: q.qtype_name or tostring(q.qtype), client_ip: client_ip }
     allowed, reason, rule, timeout = decide req

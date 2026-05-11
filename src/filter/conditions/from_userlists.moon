@@ -3,6 +3,8 @@
 -- appartenant à au moins un des groupes nommés (cfg.userlists).
 -- Analogue de from_netlists / from_maclists pour les utilisateurs.
 
+{ :log_debug } = require "log"
+
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (names: table) → (req) → bool, reason
 (cfg) -> (names) ->
@@ -11,7 +13,17 @@
   --- @tparam table req {src_ip: string, ...}
   -- @treturn boolean, string
   (req) ->
+    last_reason = nil
     for _, name in ipairs names
-      ok = (_from_userlist name)(req)
+      ok, reason = (_from_userlist name)(req)
       return true, "In one of: #{table.concat names, ', '}" if ok
+      last_reason = reason
+    if req.user and req.user ~= "unknown"
+      log_debug {
+        action: "from_userlists_no_match"
+        hinted_user: req.user
+        src_ip: req.src_ip or ""
+        lists: table.concat names, ","
+        last_reason: last_reason or ""
+      }
     false, "Not in any of: #{table.concat names, ', '}"
