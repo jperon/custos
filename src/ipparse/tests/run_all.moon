@@ -1,3 +1,8 @@
+--
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
+-- SPDX-License-Identifier: MIT OR GPL-2.0-only
+--
+
 -- Runs all test modules in order and reports per-module + grand total
 util = require"ipparse.lib.util"
 total_pass, total_all = 0, 0
@@ -30,6 +35,7 @@ mods = {
   "ipparse.tests.l4.quic.test_integration"
   "ipparse.tests.l7.quic.test_sni"
   "ipparse.tests.l7.quic.test_session"
+  "ipparse.tests.l7.quic.test_google_capture_backends"
 }
 
 if is_luajit or is_pre53

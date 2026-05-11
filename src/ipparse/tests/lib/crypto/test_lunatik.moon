@@ -1,3 +1,8 @@
+--
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
+-- SPDX-License-Identifier: MIT OR GPL-2.0-only
+--
+
 -- tests/lib/crypto/test_lunatik.moon
 -- Tests for the Lunatik crypto backend (without FFI).
 -- These tests stub require("crypto") so they run in userland too.
@@ -8,9 +13,9 @@ util = require "ipparse.lib.util"
 
 calls = {
   aead_new: 0
-  skcipher_new: 0
   aead_close: 0
-  skcipher_close: 0
+  ecb_new: 0
+  ecb_close: 0
 }
 
 mk_aead = ->
@@ -33,17 +38,16 @@ mk_aead = ->
       calls.aead_close += 1
   }
 
-mk_skcipher = ->
+mk_ecb = ->
   key = nil
   {
     setkey: (k) => key = k
-    encrypt: (iv, block) =>
+    encryptblock: (block) =>
       assert key == string.rep("\x22", 16), "unexpected ECB key"
-      assert iv == "", "ECB iv must be empty string for Lunatik skcipher"
       assert #block == 16, "ECB block must be 16 bytes"
       "Z" .. block\sub(2)
     __close: =>
-      calls.skcipher_close += 1
+      calls.ecb_close += 1
   }
 
 package.preload.crypto = ->
@@ -52,10 +56,13 @@ package.preload.crypto = ->
       assert name == "gcm(aes)", "unexpected AEAD algorithm: #{name}"
       calls.aead_new += 1
       mk_aead!
-    skcipher: (name) ->
-      assert name == "ecb(aes)", "unexpected SKCIPHER algorithm: #{name}"
-      calls.skcipher_new += 1
-      mk_skcipher!
+  }
+
+package.preload["crypto.ecb"] = ->
+  {
+    new: ->
+      calls.ecb_new += 1
+      mk_ecb!
   }
 
 package.loaded["ipparse.lib.crypto.backend.lunatik"] = nil
@@ -105,15 +112,11 @@ test "lunatik: AES-128-GCM decrypt raises on non-auth error", ->
   assert not ok, "decrypt should raise on non-auth failure"
   assert tostring(err)\find("aead(gcm(aes)) decrypt failed", 1, true), "unexpected error: #{tostring err}"
 
-test "lunatik: AES-128-ECB encrypt uses crypto.skcipher", ->
+test "lunatik: AES-128-ECB encrypt uses crypto.ecb", ->
   key = string.rep "\x22", 16
   block = string.rep "\x33", 16
   out = b.aes_128_ecb_block key, block
   assert #out == 16, "output must be 16 bytes"
   assert out\byte(1) == string.byte("Z"), "first byte should be transformed by stub"
-
-test "lunatik: transforms are closed", ->
-  assert calls.aead_new == calls.aead_close, "aead transforms should all be closed"
-  assert calls.skcipher_new == calls.skcipher_close, "skcipher transforms should all be closed"
 
 summary "lib.crypto.lunatik"

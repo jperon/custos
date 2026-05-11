@@ -1,5 +1,5 @@
 --
--- SPDX-FileCopyrightText: (c) 2024-2025 jperon <cataclop@hotmail.com>
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
 -- SPDX-License-Identifier: MIT OR GPL-2.0-only
 --
 
@@ -8,7 +8,7 @@
 -- Derives the initial secrets, packet protection keys, IVs, and header
 -- protection keys for a QUIC v1 connection from the destination Connection ID.
 --
--- Uses `ipparse.lib.hkdf` (HKDF-SHA256, pure Lua via sha2.lua).
+-- Uses `ipparse.lib.hkdf` (HKDF-SHA256 via crypto.hkdf/crypto.shash/pure-Lua fallback).
 --
 -- ### RFC 9001 §5.2 — Initial Secrets
 -- initial_secret = HKDF-Extract(QUIC_V1_SALT, client_dst_connection_id)

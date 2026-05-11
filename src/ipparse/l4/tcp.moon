@@ -1,5 +1,5 @@
 --
--- SPDX-FileCopyrightText: (c) 2024-2025 jperon <cataclop@hotmail.com>
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
 -- SPDX-License-Identifier: MIT OR GPL-2.0-only
 --
 
@@ -38,6 +38,7 @@
 pack: sp, unpack: su, :sub, :upper = require "ipparse.lib.pack_compat"
 :bidirectional = require"ipparse.fun"
 {:band, :bor, :bnot, :lshift, :rshift} = require"ipparse.lib.bit_compat"
+{:need_bytes} = require "ipparse"
 
 flags = bidirectional {
   FIN: 0x01
@@ -85,8 +86,10 @@ _mt =
 -- @treturn table Parsed TCP header as a table.
 -- @treturn number The next offset after parsing.
 parse = (off=1) =>
+  return nil, off unless need_bytes @, off, 20
   spt, dpt, seq_n, ack_n, header_len, _flags, window, checksum, urg_ptr, _off = su ">H H I4 I4 B B H H H", @, off
   data_off = off + rshift(band(header_len, 0xf0), 2)
+  return nil, off unless need_bytes @, off, data_off - off
   options = sub @, _off, data_off-1
   setmetatable({
     :spt, :dpt, :seq_n, :ack_n

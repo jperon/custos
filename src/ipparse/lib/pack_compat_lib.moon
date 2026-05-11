@@ -1,3 +1,18 @@
+--
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
+-- SPDX-License-Identifier: MIT OR GPL-2.0-only
+--
+
+--- Binary pack/unpack implementation for LuaJIT (Lua 5.1 compatibility).
+-- This module provides a pure Lua (with FFI) implementation of Lua 5.3's string.pack,
+-- string.unpack, and string.packsize for use on LuaJIT and Lua 5.1.
+--
+-- The implementation is compatible with the Lua 5.3+ specification and uses FFI
+-- for efficient low-level operations without requiring compilation.
+--
+-- @module lib.pack_compat_lib
+-- @return table Module with pack, unpack, packsize, and inject functions
+
 -- string_compat.moon
 -- Implémentation de string.pack / string.unpack / string.packsize pour LuaJIT
 -- Utilise FFI pour les opérations bas niveau, sans étape de compilation.
@@ -379,6 +394,24 @@ unpack = (fmt, s, pos) ->
   -- Ajoute la position suivante (1-based) comme dernier résultat
   results[#results+1] = pos + 1
   tunpack results
+
+-- ─── Injection dans string.* ─────────────────────────────────────────────────
+
+--- Injects pack/unpack functions into the global string table.
+-- This makes string.pack, string.unpack, and string.packsize available globally.
+inject = ->
+  string.pack     = pack
+  string.unpack   = unpack
+  string.packsize = packsize
+
+-- ─── Export ──────────────────────────────────────────────────────────────────
+
+setmetatable {
+  :pack
+  :unpack
+  :packsize
+  :inject
+}, __index: string
 
 -- ─── Injection dans string.* ─────────────────────────────────────────────────
 

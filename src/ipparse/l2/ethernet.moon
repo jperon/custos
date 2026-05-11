@@ -1,5 +1,5 @@
 --
--- SPDX-FileCopyrightText: (c) 2024-2025 jperon <cataclop@hotmail.com>
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
 -- SPDX-License-Identifier: MIT OR GPL-2.0-only
 --
 
@@ -27,6 +27,7 @@
 
 :bidirectional = require"ipparse.fun"
 :format, pack: sp, unpack: su = require "ipparse.lib.pack_compat"
+{:need_bytes} = require "ipparse"
 unpack or= table.unpack
 
 --- Packs the Ethernet frame fields into a binary string.
@@ -47,6 +48,7 @@ _mt =
 -- @treturn table A table containing the Ethernet header fields: `dst` (destination MAC), `src` (source MAC), `protocol` (EtherType), `off` (input offset), `data_off` (offset after header).
 -- @treturn number The offset after the Ethernet header (data_off).
 parse = (off=1) =>
+  return nil, off unless need_bytes @, off, 14
   dst, src, protocol, data_off = su "c6 c6 >H", @, off
   setmetatable({:dst, :src, :protocol, :off, :data_off}, _mt), data_off
 

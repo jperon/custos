@@ -1,5 +1,5 @@
 --
--- SPDX-FileCopyrightText: (c) 2024-2025 jperon <cataclop@hotmail.com>
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
 -- SPDX-License-Identifier: MIT OR GPL-2.0-only
 --
 
@@ -39,4 +39,14 @@ checksum = =>
   -- Return the one's complement of the checksum
   band(bnot(cksm), 0xFFFF)
 
-:checksum
+--- Computes a transport checksum over the IPv6 pseudo-header and payload bytes.
+-- RFC8200 Section 8.1 (Upper-Layer Checksums).
+-- @tparam string src 16-byte IPv6 source address.
+-- @tparam string dst 16-byte IPv6 destination address.
+-- @tparam number next_header Next Header value (e.g. 17 for UDP, 6 for TCP).
+-- @tparam string payload Transport payload (header + data for checksum context).
+-- @treturn number 16-bit checksum.
+checksum6 = (src, dst, next_header, payload) ->
+  checksum sp(">c16c16 I4 xxx B c#{#payload}", src, dst, #payload, next_header, payload)
+
+:checksum, :checksum6

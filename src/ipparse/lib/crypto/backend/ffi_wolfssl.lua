@@ -1,5 +1,10 @@
 local ffi = require("ffi")
-pcall(ffi.cdef, [[  typedef struct { char _opaque[1024]; } WC_Aes;
+local validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv
+do
+  local _obj_0 = require("ipparse.lib.crypto.backend.common")
+  validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv = _obj_0.validate_gcm_key, _obj_0.validate_gcm_nonce, _obj_0.validate_ecb_key, _obj_0.validate_ecb_block, _obj_0.validate_quic_iv
+end
+pcall(ffi.cdef, [[  typedef struct { char _opaque[4096]; } WC_Aes;
 
   int wc_AesGcmSetKey (WC_Aes *aes, const unsigned char *key, unsigned int keySz);
   int wc_AesGcmEncrypt(WC_Aes *aes,
@@ -72,7 +77,7 @@ if not (direct_ecb_available) then
 end
 local construct_nonce
 construct_nonce = function(iv, packet_number)
-  assert(#iv == 12, "IV must be 12 bytes")
+  validate_quic_iv(iv)
   local buf = ffi.new("uint8_t[12]")
   ffi.copy(buf, iv, 12)
   local pn = packet_number
@@ -96,8 +101,8 @@ aes_128_gcm_encrypt = function(key, nonce, plaintext, aad)
   if aad == nil then
     aad = ""
   end
-  assert(#key == 16, "AES-128-GCM key must be 16 bytes")
-  assert(#nonce == 12, "AES-128-GCM nonce must be 12 bytes")
+  assert(#key == 16, "AES-128-GCM key must be 16 bytes (got " .. tostring(#key) .. ")")
+  assert(#nonce == 12, "AES-128-GCM nonce must be 12 bytes (got " .. tostring(#nonce) .. ")")
   local pt_buf, pt_len = str_to_buf(plaintext)
   local aad_buf, aad_len = str_to_buf(aad)
   local aes = ffi.new("WC_Aes")
@@ -137,8 +142,8 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
 end
 local aes_128_ecb_block
 aes_128_ecb_block = function(key, block)
-  assert(#key == 16, "AES-128-ECB key must be 16 bytes")
-  assert(#block == 16, "AES-128-ECB block must be 16 bytes")
+  validate_ecb_key(key)
+  validate_ecb_block(block)
   local out_buf = ffi.new("uint8_t[16]")
   local aes = ffi.new("WC_Aes")
   local rc = wssl.wc_AesSetKey(aes, key, 16, nil, 0)

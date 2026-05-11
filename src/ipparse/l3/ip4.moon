@@ -1,5 +1,5 @@
 --
--- SPDX-FileCopyrightText: (c) 2024-2025 jperon <cataclop@hotmail.com>
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
 -- SPDX-License-Identifier: MIT OR GPL-2.0-only
 --
 
@@ -41,6 +41,7 @@
 :checksum = require"ipparse.l3.lib"
 :bidirectional = require"ipparse.fun"
 {:band, :bor, :bnot, :lshift, :rshift} = require"ipparse.lib.bit_compat"
+{:need_bytes} = require "ipparse"
 
 flags =
   DF: 0x4000  -- Don't Fragment
@@ -94,10 +95,12 @@ _mt =
 -- @treturn table Parsed IPv4 header as a table.
 -- @treturn number The next offset after parsing.
 parse = (off=1) =>
+  return nil, off unless need_bytes @, off, 20
   v_ihl, tos, total_len, id, ff, ttl, protocol, cksum, src, dst, _off = su ">BBHHHBBH c4c4", @, off
   version, ihl = rshift(v_ihl, 4), band(v_ihl, 0x0f)
   payload_off = lshift(ihl, 2)
   data_off = off + payload_off
+  return nil, off unless need_bytes @, off, data_off - off
   options = sub @, _off, data_off-1
   setmetatable({
     :version, :ihl, :v_ihl, :off, :payload_off, :data_off
@@ -128,7 +131,7 @@ parse = (off=1) =>
 -- @treturn table The new IPv4 header object.
 new = =>
   @version or= 4
-  assert @version == 4, "IPv4 only"
+  assert @version == 4, "IPv4 only (got version #{@version})"
   -- Initialize v_ihl if version and ihl are provided and v_ihl isn't already set.
   -- Note: pack() will definitively calculate ihl from the @options string and then v_ihl.
   -- This line is a convenience if user provides version and ihl.

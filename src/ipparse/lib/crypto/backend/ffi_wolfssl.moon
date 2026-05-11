@@ -1,5 +1,5 @@
 --
--- SPDX-FileCopyrightText: (c) 2024-2025 jperon <cataclop@hotmail.com>
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
 -- SPDX-License-Identifier: MIT OR GPL-2.0-only
 --
 
@@ -23,10 +23,13 @@
 -- @module lib.crypto.backend.ffi_wolfssl
 
 ffi = require "ffi"
+{:validate_gcm_key, :validate_gcm_nonce, :validate_ecb_key, :validate_ecb_block, :validate_quic_iv} = require "ipparse.lib.crypto.backend.common"
 
--- Native GCM API — opaque Aes struct (1024 bytes, safe upper bound).
+-- Native GCM API — opaque Aes struct.
+-- Some distro builds enable larger WC_Aes layouts (AES-NI/ARM accel paths),
+-- so keep a generous buffer to avoid overruns when wolfSSL writes internals.
 pcall ffi.cdef, [[
-  typedef struct { char _opaque[1024]; } WC_Aes;
+  typedef struct { char _opaque[4096]; } WC_Aes;
 
   int wc_AesGcmSetKey (WC_Aes *aes, const unsigned char *key, unsigned int keySz);
   int wc_AesGcmEncrypt(WC_Aes *aes,
@@ -87,7 +90,7 @@ unless direct_ecb_available
 -- @tparam number packet_number QUIC packet number
 -- @treturn string 12-byte nonce
 construct_nonce = (iv, packet_number) ->
-  assert #iv == 12, "IV must be 12 bytes"
+  validate_quic_iv iv
   buf = ffi.new "uint8_t[12]"
   ffi.copy buf, iv, 12
   pn = packet_number
@@ -113,8 +116,8 @@ str_to_buf = (s) ->
 -- @tparam string aad additional authenticated data (may be "")
 -- @treturn string ciphertext .. 16-byte authentication tag
 aes_128_gcm_encrypt = (key, nonce, plaintext, aad="") ->
-  assert #key == 16,   "AES-128-GCM key must be 16 bytes"
-  assert #nonce == 12, "AES-128-GCM nonce must be 12 bytes"
+  assert #key == 16,   "AES-128-GCM key must be 16 bytes (got #{#key})"
+  assert #nonce == 12, "AES-128-GCM nonce must be 12 bytes (got #{#nonce})"
 
   pt_buf, pt_len   = str_to_buf plaintext
   aad_buf, aad_len = str_to_buf aad
@@ -178,8 +181,8 @@ aes_128_gcm_decrypt = (key, nonce, ciphertext_with_tag, aad="") ->
 -- @tparam string block exactly 16 bytes of input
 -- @treturn string exactly 16 bytes of output
 aes_128_ecb_block = (key, block) ->
-  assert #key == 16,   "AES-128-ECB key must be 16 bytes"
-  assert #block == 16, "AES-128-ECB block must be 16 bytes"
+  validate_ecb_key key
+  validate_ecb_block block
 
   out_buf = ffi.new "uint8_t[16]"
   aes = ffi.new "WC_Aes"

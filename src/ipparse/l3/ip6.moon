@@ -1,5 +1,5 @@
 --
--- SPDX-FileCopyrightText: (c) 2024-2025 jperon <cataclop@hotmail.com>
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
 -- SPDX-License-Identifier: MIT OR GPL-2.0-only
 --
 
@@ -32,7 +32,7 @@
 :insert, :remove = table
 unpack or= table.unpack
 :toarray = require"ipparse.fun"
-checksum: checksum = require"ipparse.l3.lib"
+:checksum, :checksum6 = require"ipparse.l3.lib"
 {:band, :bor, :bnot, :lshift, :rshift} = require"ipparse.lib.bit_compat"
 
 local s2ip6
@@ -45,7 +45,7 @@ pack = =>
   if type(data) == "table"
     data.checksum = 0
     d = "#{data}"  -- Let the L4 payload recalculate its length
-    data.checksum = checksum sp ">c16c16 I4 xxx B c#{#d}", @src, @dst, #d, @next_header, d  -- RCF8200 Section 8.1
+    data.checksum = checksum6 @src, @dst, @next_header, d
     data = "#{data}"
   @payload_len = #data
   @vtf or= bor(lshift(@version, 28), lshift(@traffic_class or 0, 20), @flow_label or 0)
@@ -83,7 +83,7 @@ parse = (off=1) =>
 -- @treturn table The new IPv6 header object.
 new = =>
   @version or= 6
-  assert @version == 6, "IPv6 only"
+  assert @version == 6, "IPv6 only (got version #{@version})"
   @hop_limit or= 64
   @payload_len or= 0
   @next_header or= 0
@@ -103,7 +103,8 @@ new = =>
 parse_ip6 = =>
   address = toarray @gmatch"([^:]*):?"
   zeros = 9 - #address
-  for i = 1, 8
+  i = 1
+  while i <= 8
     part = address[i]
     if part == "" and zeros
       for _ = 1, zeros
@@ -113,6 +114,7 @@ parse_ip6 = =>
       remove address, i
     else
       address[i] = type(part) == "string" and tonumber(part, 16) or part
+      i += 1
   address
 
 --- Converts a binary IPv6 address to a readable string.

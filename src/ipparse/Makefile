@@ -12,6 +12,7 @@ install: all
 	mkdir ${LUA_MODULE_DIR}/${NAME} || true
 	cp --parents `find . -name \*.lua` ${LUA_MODULE_DIR}/${NAME}
 	cp quic.pcapng ${LUA_MODULE_DIR}/${NAME}/quic.pcapng 2>/dev/null || true
+	cp quic_google.pcapng ${LUA_MODULE_DIR}/${NAME}/quic_google.pcapng 2>/dev/null || true
 
 uninstall:
 	rm -rf ${LUA_MODULE_DIR}/${NAME}
@@ -35,7 +36,7 @@ test-lunatik: all
 	@start=$$(dmesg | wc -l); \
 	echo "Running kernel Lunatik crypto tests..."; \
 	status=0; \
-	for test in ipparse/tests/lib/crypto/test_lunatik_kernel_quic_session_e2e ipparse/tests/lib/crypto/test_lunatik_kernel ipparse/tests/lib/crypto/test_lunatik_kernel_quic_simple ipparse/tests/lib/crypto/test_lunatik_kernel_quic_comprehensive ipparse/tests/lib/crypto/test_lunatik_kernel_integration ipparse/tests/lib/crypto/test_lunatik_kernel_crypto_pipeline; do \
+	for test in ipparse/tests/lib/crypto/test_lunatik_kernel_quic_session_e2e ipparse/tests/lib/crypto/test_lunatik_kernel ipparse/tests/lib/crypto/test_lunatik_kernel_quic_simple ipparse/tests/lib/crypto/test_lunatik_kernel_quic_comprehensive ipparse/tests/lib/crypto/test_lunatik_kernel_integration ipparse/tests/lib/crypto/test_lunatik_kernel_crypto_pipeline ipparse/tests/lib/crypto/test_lunatik_kernel_quic_google_capture; do \
 		echo "Running $$test..."; \
 		if lunatik run "$$test"; then \
 			: ; \

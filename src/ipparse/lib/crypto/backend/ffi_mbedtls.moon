@@ -1,5 +1,5 @@
 --
--- SPDX-FileCopyrightText: (c) 2024-2025 jperon <cataclop@hotmail.com>
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
 -- SPDX-License-Identifier: MIT OR GPL-2.0-only
 --
 
@@ -81,13 +81,14 @@ MBEDTLS_AES_ENCRYPT   = 1
 MBEDTLS_ERR_GCM_AUTH_FAILED = -18
 
 mbed = ffi.load "mbedcrypto"
+{:validate_gcm_key, :validate_gcm_nonce, :validate_ecb_key, :validate_ecb_block, :validate_quic_iv} = require "ipparse.lib.crypto.backend.common"
 
 --- Constructs a QUIC nonce: XOR last 8 bytes of iv with packet_number (big-endian).
 -- @tparam string iv 12-byte IV
 -- @tparam number packet_number QUIC packet number
 -- @treturn string 12-byte nonce
 construct_nonce = (iv, packet_number) ->
-  assert #iv == 12, "IV must be 12 bytes"
+  assert #iv == 12, "IV must be 12 bytes (got #{#iv})"
   buf = ffi.new "uint8_t[12]"
   ffi.copy buf, iv, 12
   pn = packet_number
@@ -142,8 +143,8 @@ aes_128_gcm_encrypt = (key, nonce, plaintext, aad="") ->
 -- @treturn string plaintext on success
 -- @treturn nil, string on authentication failure
 aes_128_gcm_decrypt = (key, nonce, ciphertext_with_tag, aad="") ->
-  assert #key == 16,   "AES-128-GCM key must be 16 bytes"
-  assert #nonce == 12, "AES-128-GCM nonce must be 12 bytes"
+  validate_gcm_key key
+  validate_gcm_nonce nonce
   if #ciphertext_with_tag < 16
     return nil, "ciphertext too short (no room for auth tag)"
 
@@ -181,8 +182,8 @@ aes_128_gcm_decrypt = (key, nonce, ciphertext_with_tag, aad="") ->
 -- @tparam string block exactly 16 bytes of input
 -- @treturn string exactly 16 bytes of output
 aes_128_ecb_block = (key, block) ->
-  assert #key == 16,   "AES-128-ECB key must be 16 bytes"
-  assert #block == 16, "AES-128-ECB block must be 16 bytes"
+  validate_ecb_key key
+  validate_ecb_block block
 
   ctx = ffi.new "mbedtls_aes_context_t"
   mbed.mbedtls_aes_init ctx

@@ -2,6 +2,8 @@ local util = require("ipparse.lib.util")
 local test
 test = util.test
 local udp = require("ipparse.l4.udp")
+local checksum6
+checksum6 = require("ipparse.l3.lib").checksum6
 test("parse extracts spt, dpt, len, checksum", function()
   local u = udp.new({
     spt = 12345,
@@ -76,5 +78,21 @@ test("packed output includes data", function()
   })
   local raw = tostring(u)
   return assert(#raw == 11, "UDP with 3-byte data should be 11 bytes, got " .. tostring(#raw))
+end)
+test("checksum6 computes IPv6 UDP pseudo-header checksum", function()
+  local src = string.char(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
+  local dst = string.char(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2)
+  local pkt = tostring(udp.new({
+    spt = 1234,
+    dpt = 443,
+    checksum = 0,
+    data = "hello"
+  }))
+  local got = udp.checksum6(src, dst, pkt)
+  local expected = checksum6(src, dst, 17, pkt)
+  if expected == 0 then
+    expected = 0xFFFF
+  end
+  return assert(got == expected, "checksum6 mismatch: got " .. tostring(got) .. ", expected " .. tostring(expected))
 end)
 return util.summary("l4/udp")

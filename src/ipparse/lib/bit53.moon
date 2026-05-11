@@ -1,3 +1,15 @@
+--
+-- SPDX-FileCopyrightText: (c) 2024-2026 jperon <cataclop@hotmail.com>
+-- SPDX-License-Identifier: MIT OR GPL-2.0-only
+--
+
+--- Bitwise operations compatibility layer (Lua 5.3 style).
+-- This module provides Lua 5.3-style bitwise operations using LuaJIT's native operators.
+-- MoonScript parses `~` ambiguously, so XOR is expressed using boolean identities.
+--
+-- @module lib.bit53
+-- @return table Bitwise operations table
+
 bit =
   band: (a, b) -> a & b
   bor: (a, b) -> a | b

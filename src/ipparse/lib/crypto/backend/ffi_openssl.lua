@@ -26,9 +26,14 @@ local EVP_CTRL_GCM_SET_IVLEN = 0x9
 local EVP_CTRL_GCM_GET_TAG = 0x10
 local EVP_CTRL_GCM_SET_TAG = 0x11
 local ssl = ffi.load("crypto")
+local validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv
+do
+  local _obj_0 = require("ipparse.lib.crypto.backend.common")
+  validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv = _obj_0.validate_gcm_key, _obj_0.validate_gcm_nonce, _obj_0.validate_ecb_key, _obj_0.validate_ecb_block, _obj_0.validate_quic_iv
+end
 local construct_nonce
 construct_nonce = function(iv, packet_number)
-  assert(#iv == 12, "IV must be 12 bytes")
+  validate_quic_iv(iv)
   local buf = ffi.new("uint8_t[12]")
   ffi.copy(buf, iv, 12)
   local pn = packet_number
@@ -43,8 +48,8 @@ aes_128_gcm_encrypt = function(key, nonce, plaintext, aad)
   if aad == nil then
     aad = ""
   end
-  assert(#key == 16, "AES-128-GCM key must be 16 bytes")
-  assert(#nonce == 12, "AES-128-GCM nonce must be 12 bytes")
+  validate_gcm_key(key)
+  validate_gcm_nonce(nonce)
   local ctx = ssl.EVP_CIPHER_CTX_new()
   assert(ctx ~= nil, "EVP_CIPHER_CTX_new failed")
   local ok = ssl.EVP_EncryptInit_ex(ctx, ssl.EVP_aes_128_gcm(), nil, nil, nil)
@@ -77,8 +82,8 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
   if aad == nil then
     aad = ""
   end
-  assert(#key == 16, "AES-128-GCM key must be 16 bytes")
-  assert(#nonce == 12, "AES-128-GCM nonce must be 12 bytes")
+  validate_gcm_key(key)
+  validate_gcm_nonce(nonce)
   if #ciphertext_with_tag < 16 then
     return nil, "ciphertext too short (no room for auth tag)"
   end
@@ -116,8 +121,8 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
 end
 local aes_128_ecb_block
 aes_128_ecb_block = function(key, block)
-  assert(#key == 16, "AES-128-ECB key must be 16 bytes")
-  assert(#block == 16, "AES-128-ECB block must be 16 bytes")
+  validate_ecb_key(key)
+  validate_ecb_block(block)
   local ctx = ssl.EVP_CIPHER_CTX_new()
   assert(ctx ~= nil, "EVP_CIPHER_CTX_new failed")
   local ok = ssl.EVP_EncryptInit_ex(ctx, ssl.EVP_aes_128_ecb(), nil, key, nil)
