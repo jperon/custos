@@ -235,6 +235,39 @@ ok, err = pcall ->
 **Règle générale** : Si une variable doit être utilisée *après* un bloc de
 contrôle, **la déclarer avant le bloc** (même si la déclaration est `var = nil`).
 
+### Bug `if`/`else` dual-branch (piège subtil)
+
+Le cas le plus trompeur : la variable est assignée dans **les deux branches**
+d'un `if`/`else`. On pense que la variable sera définie dans tous les cas —
+mais elle reste nil après le bloc car chaque branche crée sa propre locale.
+
+```moonscript
+-- ❌ INCORRECT : allowed/reason sont locaux à chaque branche
+if decision
+  allowed = decision.verdict   -- local au bloc if
+  reason  = decision.reason    -- local au bloc if
+else
+  allowed, reason = filter.decide req  -- local au bloc else
+log(reason)  -- nil! (et allowed == nil → verdict "denied" par défaut)
+
+-- ✓ CORRECT : pré-déclarer avant le if
+allowed, reason = nil, nil
+if decision
+  allowed = decision.verdict
+  reason  = decision.reason
+else
+  allowed, reason = filter.decide req
+log(reason)  -- OK
+```
+
+Ce bug a causé `reason=denied rule=` dans tous les logs DNS de `worker_questions`
+même quand une règle catch-all (`actions: {"allow"}`, sans conditions) était
+présente — **la règle s'appliquait bien mais son résultat était perdu**.
+Commit de correction : `39562b9`.
+
+**Indicateur** : si le Lua compilé contient `local x = …` à l'intérieur
+d'un bloc `if`/`else`, c'est un signal de ce bug.
+
 ### Portée des boucles
 
 Les variables de boucle (`for i`, `for k, v`) sont toujours locales à la boucle.
