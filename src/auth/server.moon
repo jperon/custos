@@ -11,7 +11,7 @@ ffi = require "ffi"
 
 { :fork_child, :reap_one } = require "lib.process"
 { :session_for_mac, :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
-{ :verify_password, :register_user } = require "auth.credentials"
+{ :verify_password, :register_user, :update_user_hash } = require "auth.credentials"
 { :load_or_generate_sni, :load_static } = require "auth.cert"
 { :extract_sni } = require "auth.sni_extractor"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
@@ -159,8 +159,19 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     return 400, {}, "Missing credentials"
 
   stored = state.secrets and state.secrets[user]
-  unless stored and verify_password pass, stored
+  unless stored
     return 401, {}, "Invalid credentials"
+  ok, needs_rehash = verify_password pass, stored
+  unless ok
+    return 401, {}, "Invalid credentials"
+
+  -- Migrate hash to current DEFAULT_ITER if needed (transparent to the user).
+  if needs_rehash and state.secrets_path
+    rh_ok, rh_err = update_user_hash user, pass, state.secrets_path
+    if rh_ok
+      log_info { action: "credentials_rehashed", user: user }
+    else
+      log_warn { action: "credentials_rehash_failed", user: user, err: tostring rh_err }
 
   sessions = load_sessions state.sessions_file
   purge_expired sessions

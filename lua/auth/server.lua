@@ -11,10 +11,10 @@ do
   local _obj_0 = require("auth.sessions")
   session_for_mac, add_session, purge_expired, load_sessions, write_sessions = _obj_0.session_for_mac, _obj_0.add_session, _obj_0.purge_expired, _obj_0.load_sessions, _obj_0.write_sessions
 end
-local verify_password, register_user
+local verify_password, register_user, update_user_hash
 do
   local _obj_0 = require("auth.credentials")
-  verify_password, register_user = _obj_0.verify_password, _obj_0.register_user
+  verify_password, register_user, update_user_hash = _obj_0.verify_password, _obj_0.register_user, _obj_0.update_user_hash
 end
 local load_or_generate_sni, load_static
 do
@@ -180,8 +180,27 @@ handle_login = function(req, peer_ip, peer_mac, state)
     return 400, { }, "Missing credentials"
   end
   local stored = state.secrets and state.secrets[user]
-  if not (stored and verify_password(pass, stored)) then
+  if not (stored) then
     return 401, { }, "Invalid credentials"
+  end
+  local ok, needs_rehash = verify_password(pass, stored)
+  if not (ok) then
+    return 401, { }, "Invalid credentials"
+  end
+  if needs_rehash and state.secrets_path then
+    local rh_ok, rh_err = update_user_hash(user, pass, state.secrets_path)
+    if rh_ok then
+      log_info({
+        action = "credentials_rehashed",
+        user = user
+      })
+    else
+      log_warn({
+        action = "credentials_rehash_failed",
+        user = user,
+        err = tostring(rh_err)
+      })
+    end
   end
   local sessions = load_sessions(state.sessions_file)
   purge_expired(sessions)
@@ -200,7 +219,8 @@ handle_login = function(req, peer_ip, peer_mac, state)
     mac = mac,
     ip = peer_ip
   })
-  local ok, err = pcall(function()
+  local err
+  ok, err = pcall(function()
     return add_session(sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout)
   end)
   if not (ok) then

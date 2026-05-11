@@ -3,7 +3,7 @@ local ffi = require("ffi")
 ffi.cdef([[  int chmod(const char *path, unsigned int mode);
 ]])
 local HASH_LEN = 32
-local DEFAULT_ITER = 100000
+local DEFAULT_ITER = 10000
 local DEFAULT_SALT_LEN = 16
 local is_hex_digest
 is_hex_digest = function(s)
@@ -188,7 +188,8 @@ verify_password = function(password, stored)
   if not (algo == "pbkdf2-sha256" and iter_s and salt_hex and hash_hex) then
     return false
   end
-  local computed = pbkdf2(password, salt_hex, tonumber(iter_s))
+  local iter = tonumber(iter_s)
+  local computed = pbkdf2(password, salt_hex, iter)
   if #computed ~= #hash_hex then
     return false
   end
@@ -196,7 +197,10 @@ verify_password = function(password, stored)
   for i = 1, #computed do
     diff = bit.bor(diff, bit.bxor(computed:byte(i), hash_hex:byte(i)))
   end
-  return diff == 0
+  if diff ~= 0 then
+    return false
+  end
+  return true, iter > DEFAULT_ITER
 end
 local load_secrets
 load_secrets = function(path)
@@ -265,10 +269,40 @@ register_user = function(username, password, secrets_path, current_secrets)
   end
   return new_secrets
 end
+local update_user_hash
+update_user_hash = function(username, password, secrets_path)
+  local new_entry = hash_password(password)
+  local tmp_path = secrets_path .. ".new"
+  local fh, err = io.open(tmp_path, "w")
+  if not (fh) then
+    return nil, "Impossible de créer le fichier temporaire : " .. tostring(err)
+  end
+  local existing = io.open(secrets_path, "r")
+  if existing then
+    for line in existing:lines() do
+      local u = line:match("^([^:]+):")
+      if u == username then
+        fh:write(tostring(username) .. ":" .. tostring(new_entry) .. "\n")
+      else
+        fh:write(line .. "\n")
+      end
+    end
+    existing:close()
+  end
+  fh:close()
+  ffi.C.chmod(tmp_path, 0x180)
+  local ok, rename_err = os.rename(tmp_path, secrets_path)
+  if not (ok) then
+    os.remove(tmp_path)
+    return nil, "Impossible de renommer le fichier secrets : " .. tostring(rename_err)
+  end
+  return true
+end
 return {
   pbkdf2 = pbkdf2,
   hash_password = hash_password,
   verify_password = verify_password,
+  update_user_hash = update_user_hash,
   load_secrets = load_secrets,
   valid_username = valid_username,
   register_user = register_user

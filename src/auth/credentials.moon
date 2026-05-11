@@ -18,7 +18,7 @@ ffi.cdef [[
 ]]
 
 HASH_LEN         = 32     -- SHA-256 → 32 octets
-DEFAULT_ITER     = 100000
+DEFAULT_ITER     = 10000
 DEFAULT_SALT_LEN = 16     -- 128 bits
 
 -- ── Backend SHA/HMAC ───────────────────────────────────────────────
@@ -172,17 +172,20 @@ hash_password = (password, iterations) ->
 -- Comparaison en temps constant pour éviter les attaques timing.
 -- @tparam string password Mot de passe en clair
 -- @tparam string stored   Enregistrement au format pbkdf2-sha256:<iter>:<salt>:<hash>
--- @treturn boolean true si le mot de passe correspond
+-- @treturn boolean        true si le mot de passe correspond
+-- @treturn boolean        true si le hash doit être mis à jour (iter > DEFAULT_ITER)
 verify_password = (password, stored) ->
   algo, iter_s, salt_hex, hash_hex = stored\match "^([^:]+):(%d+):([0-9a-f]+):([0-9a-f]+)$"
   return false unless algo == "pbkdf2-sha256" and iter_s and salt_hex and hash_hex
-  computed = pbkdf2 password, salt_hex, tonumber iter_s
+  iter = tonumber iter_s
+  computed = pbkdf2 password, salt_hex, iter
   -- Comparaison en temps constant (évite les timing attacks)
   return false if #computed ~= #hash_hex
   diff = 0
   for i = 1, #computed
     diff = bit.bor diff, bit.bxor computed\byte(i), hash_hex\byte(i)
-  diff == 0
+  return false if diff != 0
+  true, iter > DEFAULT_ITER
 
 -- ── Chargement du fichier secrets ──────────────────────────────────
 
@@ -264,4 +267,38 @@ register_user = (username, password, secrets_path, current_secrets) ->
 
   new_secrets
 
-{ :pbkdf2, :hash_password, :verify_password, :load_secrets, :valid_username, :register_user }
+--- Met à jour le hash d'un utilisateur existant dans le fichier secrets.
+-- Réécrit le fichier de façon atomique (temp + rename).
+-- Typiquement appelé après verify_password pour migrer un hash obsolète.
+-- @tparam string username     Nom d'utilisateur
+-- @tparam string password     Mot de passe en clair (pour recalculer le hash)
+-- @tparam string secrets_path Chemin du fichier secrets
+-- @treturn true|nil   true en cas de succès, nil + message d'erreur sinon
+-- @treturn nil|string Message d'erreur
+update_user_hash = (username, password, secrets_path) ->
+  new_entry = hash_password password
+  tmp_path = secrets_path .. ".new"
+  fh, err = io.open tmp_path, "w"
+  return nil, "Impossible de créer le fichier temporaire : #{err}" unless fh
+
+  existing = io.open secrets_path, "r"
+  if existing
+    for line in existing\lines!
+      u = line\match "^([^:]+):"
+      if u == username
+        fh\write "#{username}:#{new_entry}\n"
+      else
+        fh\write line .. "\n"
+    existing\close!
+
+  fh\close!
+  ffi.C.chmod tmp_path, 0x180  -- 0o600
+
+  ok, rename_err = os.rename tmp_path, secrets_path
+  unless ok
+    os.remove tmp_path
+    return nil, "Impossible de renommer le fichier secrets : #{rename_err}"
+
+  true
+
+{ :pbkdf2, :hash_password, :verify_password, :update_user_hash, :load_secrets, :valid_username, :register_user }
