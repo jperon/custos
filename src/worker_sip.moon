@@ -80,6 +80,22 @@ allow_mac_ip = (mac, ip, family, reason) ->
     nft_q.wait_ack pending, reason if pending
   ok
 
+--- Insert {ip_src . ip_dst} into ip4_allowed or ip6_allowed (fire-and-forget).
+-- Used to whitelist a server that replies from a different source IP than the
+-- one the client sent to (e.g. IPBX responding from its nearest VLAN interface).
+-- No wait_ack: this covers future packets, not the current one.
+-- @tparam string ip_src  Server/IPBX source IP
+-- @tparam string ip_dst  Phone/client destination IP
+-- @tparam string family  "ip4" or "ip6"
+-- @tparam string reason  Log label
+allow_ip_pair = (ip_src, ip_dst, family, reason) ->
+  return unless ip_src and ip_dst and family
+  nft_q = require "nft_queue"
+  if family == "ip6"
+    nft_q.add_ip6 ip_src, ip_dst, nil, sip_ttl, reason
+  else
+    nft_q.add_ip4 ip_src, ip_dst, nil, sip_ttl, reason
+
 -- ── Packet handler ────────────────────────────────────────────────────────────
 
 handle_packet = (qh_ptr, nfad, pkt_id) ->
@@ -134,7 +150,11 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   -- phone sent to (e.g. router uses its nearest interface), breaking conntrack.
   -- The nft rule `sport 3478 queue num N bypass` routes these here so we can
   -- NF_ACCEPT them explicitly instead of falling through to the reject queue.
+  -- We also learn the actual response IP and add it to ip4/ip6_allowed so that
+  -- future RTP media from that same IP to this phone is also accepted.
   if ip.protocol == 17 and sport == 3478
+    if ip_src_str and ip_dst_str
+      allow_ip_pair ip_src_str, ip_dst_str, ip_family, "sip_rtp_return"
     log_debug { action: "stun_response_accepted", ip: ip_src_str, dst: ip_dst_str }
     return NF_ACCEPT
 
@@ -146,6 +166,16 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   outbound = (dport == 5060)  -- phone → proxy
   inbound  = (sport == 5060)  -- proxy → phone
   return NF_ACCEPT unless outbound or inbound
+
+  -- When sport=dport=5060 both flags are set. Resolve the ambiguity by
+  -- checking the ip_to_mac cache: if the destination IP is a cached phone,
+  -- the packet is an inbound response (183, 200 OK, etc.); otherwise the
+  -- source is the phone and it is an outbound request (INVITE, REGISTER…).
+  if outbound and inbound
+    if ip_to_mac[ip_dst_str]
+      outbound = false
+    else
+      inbound = false
 
   -- Outbound: whitelist the proxy IP + cache phone MAC.
   if outbound and ip_dst_str and mac != "unknown"
@@ -175,12 +205,17 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
 
   for entry in *msg.sdp_ips
     allow_mac_ip target_mac, entry.ip, entry.family, "sip_media"
+    -- For inbound (proxy→phone), also whitelist the reverse direction so the
+    -- media server can send RTP to the phone even if it uses a different source
+    -- IP than the one the SDP advertises.
+    if inbound and ip_dst_str
+      allow_ip_pair entry.ip, ip_dst_str, entry.family, "sip_media_return"
     log_debug {
       action:      "sip_media_ip_added"
       mac:         target_mac
       media_ip:    entry.ip
       family:      entry.family
-      direction:   if outbound then "outbound" else "inbound"
+      direction:   if inbound then "inbound" else "outbound"
       cseq_method: msg.cseq_method or ""
       sip_status:  tostring(msg.status_code or "")
       sip_method:  msg.method or ""

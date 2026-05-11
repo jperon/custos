@@ -83,6 +83,18 @@ allow_mac_ip = function(mac, ip, family, reason)
   end
   return ok
 end
+local allow_ip_pair
+allow_ip_pair = function(ip_src, ip_dst, family, reason)
+  if not (ip_src and ip_dst and family) then
+    return 
+  end
+  local nft_q = require("nft_queue")
+  if family == "ip6" then
+    return nft_q.add_ip6(ip_src, ip_dst, nil, sip_ttl, reason)
+  else
+    return nft_q.add_ip4(ip_src, ip_dst, nil, sip_ttl, reason)
+  end
+end
 local handle_packet
 handle_packet = function(qh_ptr, nfad, pkt_id)
   local l2 = get_l2(nfad)
@@ -149,6 +161,17 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
     end
     return NF_ACCEPT
   end
+  if ip.protocol == 17 and sport == 3478 then
+    if ip_src_str and ip_dst_str then
+      allow_ip_pair(ip_src_str, ip_dst_str, ip_family, "sip_rtp_return")
+    end
+    log_debug({
+      action = "stun_response_accepted",
+      ip = ip_src_str,
+      dst = ip_dst_str
+    })
+    return NF_ACCEPT
+  end
   if dport == 5061 or sport == 5061 then
     return NF_ACCEPT
   end
@@ -156,6 +179,13 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
   local inbound = (sport == 5060)
   if not (outbound or inbound) then
     return NF_ACCEPT
+  end
+  if outbound and inbound then
+    if ip_to_mac[ip_dst_str] then
+      outbound = false
+    else
+      inbound = false
+    end
   end
   if outbound and ip_dst_str and mac ~= "unknown" then
     allow_mac_ip(mac, ip_dst_str, ip_family, "sip_signal")
@@ -189,16 +219,19 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
   for _index_0 = 1, #_list_0 do
     local entry = _list_0[_index_0]
     allow_mac_ip(target_mac, entry.ip, entry.family, "sip_media")
+    if inbound and ip_dst_str then
+      allow_ip_pair(entry.ip, ip_dst_str, entry.family, "sip_media_return")
+    end
     log_debug({
       action = "sip_media_ip_added",
       mac = target_mac,
       media_ip = entry.ip,
       family = entry.family,
       direction = (function()
-        if outbound then
-          return "outbound"
-        else
+        if inbound then
           return "inbound"
+        else
+          return "outbound"
         end
       end)(),
       cseq_method = msg.cseq_method or "",

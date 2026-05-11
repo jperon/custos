@@ -26,6 +26,10 @@ local ipparse_tls_client_hello = require("ipparse.l7.tls.handshake.client_hello"
 local ipparse_server_name = require("ipparse.l7.tls.handshake.extension.server_name")
 local ipparse_supported_versions = require("ipparse.l7.tls.handshake.extension.supported_versions")
 local bit = require("bit")
+local nft
+nft = require("config").nft
+local nft_cfg = nft or { }
+local SNI_TIMEOUT = nft_cfg.sni_timeout or nft_cfg.ip_timeout or "2m"
 local quic_sessions = { }
 local filter = nil
 local sni_policy = nil
@@ -575,14 +579,14 @@ apply_nft_allow = function(src_ip, dst_ip, mac, policy)
     mac_kind = "mac4"
   end
   local cmds = { }
-  local ip_cmd = cmd_for(ip_kind, src_ip, dst_ip)
+  local ip_cmd = cmd_for(ip_kind, src_ip, dst_ip, SNI_TIMEOUT)
   if ip_cmd then
     cmds[#cmds + 1] = ip_cmd
   else
     return false, "nft_cmd_build_failed"
   end
   if mac and mac ~= "unknown" and mac ~= "00:00:00:00:00:00" then
-    local mac_cmd = cmd_for(mac_kind, mac, dst_ip)
+    local mac_cmd = cmd_for(mac_kind, mac, dst_ip, SNI_TIMEOUT)
     if mac_cmd then
       cmds[#cmds + 1] = mac_cmd
     end

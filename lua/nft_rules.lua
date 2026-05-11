@@ -75,7 +75,8 @@ substitute = function(content)
       "    # bypass : si le worker est absent, le trafic SIP passe quand même.",
       "    meta l4proto {udp, tcp} th dport {5060, 5061} queue num " .. tostring(q) .. " bypass comment \"SIP outbound → NFQUEUE\"",
       "    meta l4proto {udp, tcp} th sport {5060, 5061} queue num " .. tostring(q) .. " bypass comment \"SIP inbound → NFQUEUE\"",
-      "    meta l4proto udp        th dport 3478         queue num " .. tostring(q) .. " bypass comment \"STUN/ICE → NFQUEUE\""
+      "    meta l4proto udp        th dport 3478         queue num " .. tostring(q) .. " bypass comment \"STUN/ICE → NFQUEUE\"",
+      "    meta l4proto udp        th sport 3478         queue num " .. tostring(q) .. " bypass comment \"STUN/ICE responses → NFQUEUE\""
     }, "\n")
   else
     sip_rules = ""

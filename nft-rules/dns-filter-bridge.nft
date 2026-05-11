@@ -156,6 +156,12 @@ table bridge dns-filter-bridge {
     ip6 daddr @ip6_dest_whitelist accept comment "Static IPv6 whitelist"
     ip  daddr @ip4_dest_whitelist accept comment "Static IPv4 whitelist"
 
+    # SIP/STUN : placées AVANT les sets DNS-allowed pour garantir que la
+    # signalisation SIP (notamment les 200 OK entrants avec SDP) passe toujours
+    # par le worker SIP, même si mac4_allowed/ip4_allowed accepterait déjà le
+    # paquet (ex : entrée ajoutée après résolution DNS du proxy SIP).
+{SIP_RULES}
+
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
     ether saddr . ip6 daddr @mac6_allowed log level debug prefix "custos mac6_allowed: " counter accept comment "DNS-allowed MAC+IPv6"
@@ -178,8 +184,6 @@ table bridge dns-filter-bridge {
     tcp dport 465 @th,40,8 0x16                                     log level warn prefix "custos mail SMTPS: " counter accept comment "SMTPS TLS ClientHello"
     tcp dport 993 @th,40,8 0x16                                     log level warn prefix "custos mail IMAPS: " counter accept comment "IMAPS TLS ClientHello"
     tcp dport 995 @th,40,8 0x16                                     log level warn prefix "custos mail POP3S: " counter accept comment "POP3S TLS ClientHello"
-
-{SIP_RULES}
 
     ct state established,related accept comment "Established/related connections"
 
