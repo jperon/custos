@@ -20,6 +20,10 @@ ipparse_server_name = require "ipparse.l7.tls.handshake.extension.server_name"
 ipparse_supported_versions = require "ipparse.l7.tls.handshake.extension.supported_versions"
 
 bit = require "bit"
+{ :nft } = require "config"
+nft_cfg = nft or {}
+SNI_TIMEOUT = nft_cfg.sni_timeout or nft_cfg.ip_timeout or "2m"
+
 quic_sessions = {}
 filter = nil
 sni_policy = nil
@@ -432,14 +436,14 @@ apply_nft_allow = (src_ip, dst_ip, mac, policy) ->
   mac_kind = if is_ipv6(dst_ip) then "mac6" else "mac4"
   cmds = {}
 
-  ip_cmd = cmd_for ip_kind, src_ip, dst_ip
+  ip_cmd = cmd_for ip_kind, src_ip, dst_ip, SNI_TIMEOUT
   if ip_cmd
     cmds[#cmds + 1] = ip_cmd
   else
     return false, "nft_cmd_build_failed"
 
   if mac and mac != "unknown" and mac != "00:00:00:00:00:00"
-    mac_cmd = cmd_for mac_kind, mac, dst_ip
+    mac_cmd = cmd_for mac_kind, mac, dst_ip, SNI_TIMEOUT
     cmds[#cmds + 1] = mac_cmd if mac_cmd
 
   ok, err = run_cmd table.concat(cmds, "\n"), { quiet: true }
