@@ -260,8 +260,10 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       src_ip = pkt.ip.src_ip,
       mac = l2.mac_src,
       vlan = l2.vlan,
-      ts = os.time()
+      ts = os.time(),
+      user = q_fields.user
     }
+    local allowed, reason, rule_id, nft_timeout = nil, nil, nil, nil
     local decision
     if filter.decide_meta then
       decision = filter.decide_meta(req)
@@ -269,13 +271,13 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       decision = nil
     end
     if decision then
-      local allowed = decision.verdict
-      local reason = decision.reason
-      local rule_id = decision.rule_id
-      local nft_timeout = decision.timeout
+      allowed = decision.verdict
+      reason = decision.reason
+      rule_id = decision.rule_id
+      nft_timeout = decision.timeout
     else
-      local allowed, reason, rule_id = filter.decide(req)
-      local nft_timeout = nil
+      allowed, reason, rule_id = filter.decide(req)
+      nft_timeout = nil
     end
     q_fields.reason = reason or (allowed == "dnsonly" and "dnsonly") or (allowed and "allowed") or "denied"
     q_fields.rule = rule_id or ""

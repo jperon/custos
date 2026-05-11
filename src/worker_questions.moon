@@ -266,7 +266,9 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       mac:    l2.mac_src
       vlan:   l2.vlan
       ts:     os.time!
+      user:   q_fields.user
     }
+    allowed, reason, rule_id, nft_timeout = nil, nil, nil, nil
     decision = if filter.decide_meta then filter.decide_meta req else nil
     if decision
       allowed = decision.verdict
