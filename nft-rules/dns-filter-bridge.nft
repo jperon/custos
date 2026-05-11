@@ -179,6 +179,8 @@ table bridge dns-filter-bridge {
     tcp dport 993 @th,40,8 0x16                                     log level warn prefix "custos mail IMAPS: " counter accept comment "IMAPS TLS ClientHello"
     tcp dport 995 @th,40,8 0x16                                     log level warn prefix "custos mail POP3S: " counter accept comment "POP3S TLS ClientHello"
 
+{SIP_RULES}
+
     ct state established,related accept comment "Established/related connections"
 
     ip  daddr {10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16} meta l4proto != {tcp, udp} accept comment "Non-TCP/UDP local v4"

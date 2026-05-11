@@ -66,6 +66,21 @@ substitute = function(content)
   content = content:gsub("{QUEUE_AUTH}", cfg.nfqueue.auth)
   content = content:gsub("{QUEUE_SNI_LOG}", cfg.nfqueue.sni_log)
   content = content:gsub("{NFT_IP_TIMEOUT}", cfg.nft.ip_timeout)
+  local sip_rules
+  if cfg.nfqueue.sip then
+    local q = cfg.nfqueue.sip
+    sip_rules = table.concat({
+      "    # SIP signalling + STUN → NFQUEUE (worker_sip).",
+      "    # Toujours NF_ACCEPT ; insère les IPs media dans mac4/mac6_allowed.",
+      "    # bypass : si le worker est absent, le trafic SIP passe quand même.",
+      "    meta l4proto {udp, tcp} th dport {5060, 5061} queue num " .. tostring(q) .. " bypass comment \"SIP outbound → NFQUEUE\"",
+      "    meta l4proto {udp, tcp} th sport {5060, 5061} queue num " .. tostring(q) .. " bypass comment \"SIP inbound → NFQUEUE\"",
+      "    meta l4proto udp        th dport 3478         queue num " .. tostring(q) .. " bypass comment \"STUN/ICE → NFQUEUE\""
+    }, "\n")
+  else
+    sip_rules = ""
+  end
+  content = content:gsub("{SIP_RULES}", sip_rules)
   if get_log_level_num("DEBUG") < get_log_level_num(cfg.runtime.log_level) then
     content = content:gsub("log%s+level%s+debug%s+prefix%s+\"[^\"]*\"", "")
   end

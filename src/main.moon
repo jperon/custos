@@ -349,6 +349,20 @@ supervise = (pipes, sfd) ->
         { q_num: sni_queue_num, events_wfd: pipes.events.wfd }
     }
 
+  -- SIP/STUN worker (single, optional).
+  -- Whitelists proxy IPs and SDP media IPs in mac4/mac6_allowed.
+  if config.nfqueue.sip
+    sip_queue_num = tonumber(config.nfqueue.sip) or 12
+    sip_ack_info  = alloc_ack_pipe!
+    table.insert workers, {
+      name: "sip"
+      pid: nil
+      restart_fn: -> fork_worker "sip",
+        (fds) -> require("worker_sip").run fds.q_num, fds,
+        { q_num: sip_queue_num, nft_wfd: pipes.nft.wfd,
+          ack_rfd: sip_ack_info.rfd, worker_idx: sip_ack_info.worker_idx }
+    }
+
   -- AUTH (single).
   -- Utilise mac_learner_ipc (get_mac) pour obtenir la MAC de manière fiable.
   table.insert workers, {

@@ -65,6 +65,7 @@ DEFAULTS = {
     reject: "10-11"
     auth: "5"
     sni_log: "6"
+    sip: "12"
   }
 
   dns: {
@@ -85,6 +86,7 @@ DEFAULTS = {
     set_mac4: "mac4_allowed"
     set_mac6: "mac6_allowed"
     ip_timeout: "2m"
+    sip_session_ttl: "5m"
     add_retry_count: 6
     add_backoff_ms: {20, 50, 100, 200, 400, 800}
     add_failure_policy: "fail-closed"
