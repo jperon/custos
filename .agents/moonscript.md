@@ -154,6 +154,28 @@ nft_sess.add_authenticated ip, ttl
 Signe de ce bug : `"attempt to call a nil value (field 'find')"` ou erreur
 similaire sur une méthode string appelée sur ce qui devrait être une string.
 
+### Appel de méthode `\` : l'argument sans parenthèses avale le `and`
+
+Un appel `obj\method "arg"` sans parenthèses consomme tout ce qui suit comme
+argument, y compris un opérateur `and` :
+
+```moonscript
+-- FAUX : ":" and ip6 ~= "::" est évalué en Lua comme argument unique
+-- Résultat compilé : ip6:find(":" and ip6 ~= "::") → ip6:find(boolean)
+if ip6 and ip6\find ":" and ip6 != "::"
+
+-- CORRECT (parenthèses) : délimite explicitement l'argument
+if ip6 and (ip6\find ":") and ip6 != "::"
+
+-- CORRECT (sans espace) : guillemets accolés au nom → argument limité à la string
+if ip6 and ip6\find":" and ip6 != "::"
+```
+
+La règle : un espace entre le nom de méthode et la string ouvre une liste
+d'arguments qui consomme tout ce qui suit (y compris `and`, `or`, `==`, …).
+Sans espace (`\find"..."`), l'argument s'arrête à la fin de la string littérale
+et les opérateurs suivants sont des opérateurs booléens normaux.
+
 ### Appels multi-lignes : précalculer les arguments complexes
 
 ```custos/.agents/moonscript.md#L1-1
