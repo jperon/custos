@@ -237,7 +237,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- Utilisateur authentifié (nil si l'IP n'a pas de session valide)
   -- L'indexation par MAC permet de reconnaître un client authentifié
   -- en IPv6 quand ses paquets IPv4 arrivent (et vice-versa) de manière O(1).
-  user        = user_for_mac client_mac, client_ip, auth_cfg.sessions_file or "./tmp/sessions.lua"
+  user        = user_for_mac client_mac, client_ip, auth_cfg.sessions_file or "/tmp/sessions.lua"
 
   -- ── Vérification IPC ─────────────────────────────────────────
   entry = get_pending_entry txid, pkt.ip.dst_ip, client_port, resolver_ip, now

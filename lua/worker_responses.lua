@@ -233,7 +233,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local client_ip = pkt.ip.dst_ip
   local resolver_ip = pkt.ip.src_ip
   local client_mac = ip_to_mac[client_ip] or "unknown"
-  local user = user_for_mac(client_mac, client_ip, auth_cfg.sessions_file or "./tmp/sessions.lua")
+  local user = user_for_mac(client_mac, client_ip, auth_cfg.sessions_file or "/tmp/sessions.lua")
   local entry = get_pending_entry(txid, pkt.ip.dst_ip, client_port, resolver_ip, now)
   if not (entry) then
     local retry_attempts = 0

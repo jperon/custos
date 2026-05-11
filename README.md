@@ -114,7 +114,7 @@ custos/
 │   ├── filter.yml           Configuration des listes de domaines (updater)
 │   └── secrets.sample       Exemple de fichier de mots de passe
 ├── src/
-│   ├── config.moon          Configuration hiérarchique runtime (/etc/config.moon)
+│   ├── config.moon          Configuration hiérarchique runtime (/etc/custos/config.moon)
 │   ├── ffi_defs.moon        Déclarations FFI centralisées
 │   ├── log.moon             Logging structuré key=value + rate-limiting
 │   ├── ipc.moon             Protocole pipe question→response (msg 43 octets)
@@ -248,7 +248,7 @@ L'installeur (`install-owrt.moon`) :
 
 ## Configuration
 
-La configuration runtime principale est `/etc/config.moon` (surcharge partielle des
+La configuration runtime principale est `/etc/custos/config.moon` (surcharge partielle des
 défauts de `src/config.moon`). Elle couvre :
 - runtime/NFQUEUE/nft/dns/auth/doh/events
 - le moteur de filtrage (`filter.rules`, `filter.nets`, `filter.macs`, `filter.times`)
@@ -461,7 +461,7 @@ main (supervisor)
 └── worker AUTH          (HTTPS login server)
 ```
 
-Sessions are shared via a Lua-evaluable file (`tmp/sessions.lua`). question/response workers
+Sessions are shared via a Lua-evaluable file (`/tmp/sessions.lua`). question/response workers
 reload it every 5 seconds (TTL cache). No inter-process socket is needed.
 
 ### TLS certificate

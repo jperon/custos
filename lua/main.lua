@@ -91,7 +91,7 @@ load_auth_cfg = function()
   auth.heartbeat_interval = tonumber(auth.heartbeat_interval) or 30
   auth.session_ttl = tonumber(auth.session_ttl) or 0
   auth.secrets = auth.secrets or "/etc/custos/secrets"
-  auth.sessions_file = auth.sessions_file or "./tmp/sessions.lua"
+  auth.sessions_file = auth.sessions_file or "/tmp/sessions.lua"
   return auth
 end
 local load_doh_cfg
@@ -486,6 +486,21 @@ log_info({
   action = "dns-filter_start",
   version = "1.0.0"
 })
+local cfg_meta = config.__meta or { }
+log_info({
+  action = "config_source",
+  path = cfg_meta.path or "unknown",
+  env_path = cfg_meta.env_path or "",
+  external_loaded = cfg_meta.external_loaded and 1 or 0,
+  load_error = cfg_meta.load_error or ""
+})
+if not (cfg_meta.external_loaded) then
+  log_warn({
+    action = "config_external_missing",
+    path = cfg_meta.path or "unknown",
+    detail = "running defaults (likely restrictive)"
+  })
+end
 local sfd = create_signal_fd()
 local pipes = create_pipes()
 log_info({

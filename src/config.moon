@@ -1,6 +1,6 @@
 -- src/config.moon
 -- Configuration runtime hiérarchique.
--- Source de vérité : /etc/config.moon (surcharge partielle des défauts).
+-- Source de vérité : /etc/custos/config.moon (surcharge partielle des défauts).
 --
 -- RULES - Filter Conditions and Syntax:
 --
@@ -48,7 +48,7 @@
 --         actions:
 --           - deny
 
-DEFAULT_CONFIG_PATH = "/etc/config.moon"
+DEFAULT_CONFIG_PATH = "/etc/custos/config.moon"
 
 DEFAULTS = {
   runtime: {
@@ -119,7 +119,7 @@ DEFAULTS = {
     heartbeat_interval: 30
     idle_timeout: 120
     secrets: "/etc/custos/secrets"
-    sessions_file: "./tmp/sessions.lua"
+    sessions_file: "/tmp/sessions.lua"
     sni_verdict: {
       enabled: true
       mode: "strict-443"
@@ -161,6 +161,7 @@ DEFAULTS = {
     times: {}
     sources: {}
     users: {}
+    userlists: {}
     rules: {}
     dest_whitelist: {}
     allowed_domains: { "local", "lan", "home.arpa" }
@@ -216,6 +217,8 @@ normalize = (cfg) ->
   cfg.filter.sources = cfg.filter.sources or {}
   cfg.filter.rules = cfg.filter.rules or {}
   cfg.filter.users = cfg.filter.users or {}
+  cfg.filter.userlists = cfg.filter.userlists or cfg.filter.users or {}
+  cfg.filter.users = cfg.filter.users or cfg.filter.userlists or {}
   cfg.auth = cfg.auth or {}
   cfg.auth.sni_verdict = cfg.auth.sni_verdict or {}
   defaults = DEFAULTS
@@ -272,15 +275,29 @@ load_external_config = (path) ->
 
 build = ->
   cfg = clone DEFAULTS
-  path = os.getenv("CUSTOS_CONFIG_PATH") or DEFAULT_CONFIG_PATH
+  env_path = os.getenv "CUSTOS_CONFIG_PATH"
+  require_external = os.getenv "CUSTOS_REQUIRE_EXTERNAL_CONFIG"
+  require_external = require_external == "1" or require_external == "true"
+  path = env_path or DEFAULT_CONFIG_PATH
 
   custom, err = load_external_config path
+  load_err = nil
   if custom
     merge_into cfg, custom
   else
+    load_err = tostring err if err
+    if require_external
+      error "config: required external config failed to load #{path}: #{load_err or 'unknown error'}"
     if err and not tostring(err)\match "No such file"
       io.stderr\write "config: failed to load #{path}: #{tostring(err)}\n"
 
   normalize cfg
+  cfg.__meta = {
+    path: path
+    env_path: env_path
+    external_loaded: custom ~= nil
+    load_error: load_err
+  }
+  cfg
 
 build!

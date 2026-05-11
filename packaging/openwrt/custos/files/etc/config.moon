@@ -49,7 +49,7 @@ return {
   }
 
   auth: {
-    sessions_file: "/tmp/custos/sessions.lua"
+    sessions_file: "/tmp/sessions.lua"
   }
 
   doh: {

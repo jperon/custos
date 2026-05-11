@@ -32,6 +32,8 @@ load_config = (path) ->
   cfg.sources          = cfg.sources          or {}
   cfg.rules            = cfg.rules            or {}
   cfg.users            = cfg.users            or {}
+  cfg.userlists        = cfg.userlists        or cfg.users or {}
+  cfg.users            = cfg.users            or cfg.userlists or {}
   cfg.dest_whitelist     = cfg.dest_whitelist     or {}
   -- cfg.custom_lists_dir : nil par défaut (chemin facultatif)
 
@@ -42,7 +44,7 @@ load_config = (path) ->
   auth.port              = auth.port              or 33443
   auth.captive_port      = auth.captive_port      or 33080
   auth.session_ttl       = auth.session_ttl       or 0
-  auth.sessions_file     = auth.sessions_file     or "./tmp/sessions.lua"
+  auth.sessions_file     = auth.sessions_file     or "/tmp/sessions.lua"
   auth.heartbeat_interval = auth.heartbeat_interval or 30
   auth.idle_timeout      = auth.idle_timeout      or 120
   auth.secrets           = auth.secrets           or "/etc/custos/secrets"

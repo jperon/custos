@@ -8,6 +8,7 @@ LUAJIT=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)
 PROG=/usr/bin/custos
 CUSTOS_DIR=/usr/share/custos
 FILTER_CONFIG=/etc/custos/filter.yml
+CONFIG_MOON=/etc/custos/config.moon
 CRONTABS_ROOT=/etc/crontabs/root
 CUSTOS_CRON_MARKER="# custos-update-lists"
 
@@ -27,7 +28,7 @@ start_service() {
 
     procd_open_instance
     procd_set_param command "$PROG" "$CUSTOS_DIR/main.lua"
-    procd_set_param env LUA_PATH="/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;"
+    procd_set_param env LUA_PATH="$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;;" LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;" CUSTOS_CONFIG_PATH="$CONFIG_MOON" CUSTOS_REQUIRE_EXTERNAL_CONFIG="1"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -55,7 +56,7 @@ stop_service() {
     _cron_remove
 }
 
-# Un rechargement applique les paramètres plateforme UCI et /etc/config.moon :
+# Un rechargement applique les paramètres plateforme UCI et /etc/custos/config.moon :
 # redémarrage complet nécessaire car les valeurs sont capturées à l'init Lua.
 reload_service() {
     stop
@@ -111,8 +112,10 @@ _cron_remove() {
 # nft extra de config.moon (via nft_extra_rules.apply_from_config()) en un seul appel Lua.
 # Appelé depuis start_service() avant que procd ne démarre le worker.
 _apply_lua_nft_rules() {
-    LUA_PATH="/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;" \
+    LUA_PATH="$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;;" \
     LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;" \
+    CUSTOS_CONFIG_PATH="$CONFIG_MOON" \
+    CUSTOS_REQUIRE_EXTERNAL_CONFIG="1" \
         "$PROG" -e "if not require('nft_rules').apply() then os.exit(1) end; require('nft_extra_rules').apply_from_config()" \
         2>/dev/null
 }

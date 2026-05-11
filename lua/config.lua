@@ -1,4 +1,4 @@
-local DEFAULT_CONFIG_PATH = "/etc/config.moon"
+local DEFAULT_CONFIG_PATH = "/etc/custos/config.moon"
 local DEFAULTS = {
   runtime = {
     log_level = "INFO",
@@ -68,7 +68,7 @@ local DEFAULTS = {
     heartbeat_interval = 30,
     idle_timeout = 120,
     secrets = "/etc/custos/secrets",
-    sessions_file = "./tmp/sessions.lua",
+    sessions_file = "/tmp/sessions.lua",
     sni_verdict = {
       enabled = true,
       mode = "strict-443",
@@ -106,6 +106,7 @@ local DEFAULTS = {
     times = { },
     sources = { },
     users = { },
+    userlists = { },
     rules = { },
     dest_whitelist = { },
     allowed_domains = {
@@ -189,6 +190,8 @@ normalize = function(cfg)
   cfg.filter.sources = cfg.filter.sources or { }
   cfg.filter.rules = cfg.filter.rules or { }
   cfg.filter.users = cfg.filter.users or { }
+  cfg.filter.userlists = cfg.filter.userlists or cfg.filter.users or { }
+  cfg.filter.users = cfg.filter.users or cfg.filter.userlists or { }
   cfg.auth = cfg.auth or { }
   cfg.auth.sni_verdict = cfg.auth.sni_verdict or { }
   local defaults = DEFAULTS
@@ -248,15 +251,32 @@ end
 local build
 build = function()
   local cfg = clone(DEFAULTS)
-  local path = os.getenv("CUSTOS_CONFIG_PATH") or DEFAULT_CONFIG_PATH
+  local env_path = os.getenv("CUSTOS_CONFIG_PATH")
+  local require_external = os.getenv("CUSTOS_REQUIRE_EXTERNAL_CONFIG")
+  require_external = require_external == "1" or require_external == "true"
+  local path = env_path or DEFAULT_CONFIG_PATH
   local custom, err = load_external_config(path)
+  local load_err = nil
   if custom then
     merge_into(cfg, custom)
   else
+    if err then
+      load_err = tostring(err)
+    end
+    if require_external then
+      error("config: required external config failed to load " .. tostring(path) .. ": " .. tostring(load_err or 'unknown error'))
+    end
     if err and not tostring(err):match("No such file") then
       io.stderr:write("config: failed to load " .. tostring(path) .. ": " .. tostring(tostring(err)) .. "\n")
     end
   end
-  return normalize(cfg)
+  normalize(cfg)
+  cfg.__meta = {
+    path = path,
+    env_path = env_path,
+    external_loaded = custom ~= nil,
+    load_error = load_err
+  }
+  return cfg
 end
 return build()
