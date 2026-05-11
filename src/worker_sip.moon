@@ -129,6 +129,15 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
       log_debug { action: "stun_ip_added", mac: mac, ip: ip_dst_str }
     return NF_ACCEPT
 
+  -- ── STUN responses (UDP sport 3478) ──────────────────────────────────────
+  -- The STUN server may reply from a different source IP than the one the
+  -- phone sent to (e.g. router uses its nearest interface), breaking conntrack.
+  -- The nft rule `sport 3478 queue num N bypass` routes these here so we can
+  -- NF_ACCEPT them explicitly instead of falling through to the reject queue.
+  if ip.protocol == 17 and sport == 3478
+    log_debug { action: "stun_response_accepted", ip: ip_src_str, dst: ip_dst_str }
+    return NF_ACCEPT
+
   -- ── SIP/TLS (port 5061) : accept without parsing ─────────────────────────
   if dport == 5061 or sport == 5061
     return NF_ACCEPT

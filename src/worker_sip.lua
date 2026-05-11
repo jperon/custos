@@ -149,6 +149,14 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
     end
     return NF_ACCEPT
   end
+  if ip.protocol == 17 and sport == 3478 then
+    log_debug({
+      action = "stun_response_accepted",
+      ip = ip_src_str,
+      dst = ip_dst_str
+    })
+    return NF_ACCEPT
+  end
   if dport == 5061 or sport == 5061 then
     return NF_ACCEPT
   end
