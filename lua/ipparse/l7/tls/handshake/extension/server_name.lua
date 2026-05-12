@@ -54,11 +54,12 @@ parse = function(self, off)
   local end_offset = _off + len
   local names = { }
   local ok = true
+  local err = nil
   while _off < end_offset do
     local entry
     ok, entry, _off = pcall(parse_entry, self, _off)
     if not ok then
-      print(entry)
+      err = tostring(entry)
       break
     end
     names[#names + 1] = entry
@@ -66,7 +67,8 @@ parse = function(self, off)
   return setmetatable({
     names = names,
     name = (names[1] and names[1].name),
-    incomplete = not ok
+    incomplete = not ok,
+    err = err
   }, _mt), _off
 end
 local name_types = bidirectional(zero_indexed({

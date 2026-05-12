@@ -3,6 +3,8 @@ do
   local _obj_0 = require("ipparse.lib.pack_compat")
   sp, su, byte = _obj_0.pack, _obj_0.unpack, _obj_0.byte
 end
+local unpack
+unpack = table.unpack
 local bidirectional
 bidirectional = require("ipparse.fun").bidirectional
 local band
@@ -141,8 +143,47 @@ parse = function(self, off, ...)
     return parse_long_header(self, off + 1, byte1)
   end
 end
+local split_datagrams
+split_datagrams = function(self, off, ...)
+  if off == nil then
+    off = 1
+  end
+  local frame = self
+  local args = {
+    ...
+  }
+  local packets = { }
+  while off <= #frame do
+    local q, err = parse(frame, off, unpack(args))
+    if not (q) then
+      return nil, "QUIC header parse error at offset " .. tostring(off) .. ": " .. tostring(err)
+    end
+    if not (q.long_header) then
+      return nil, "unsupported QUIC short header at offset " .. tostring(off)
+    end
+    if not (q.pn_off) then
+      return nil, "missing QUIC packet number offset at offset " .. tostring(off)
+    end
+    if not (q.pkt_length) then
+      return nil, "missing QUIC packet length at offset " .. tostring(off)
+    end
+    local packet_end = (q.pn_off - 1) + q.pkt_length
+    if not (packet_end >= off and packet_end <= #frame) then
+      return nil, "invalid QUIC packet bounds at offset " .. tostring(off)
+    end
+    packets[#packets + 1] = {
+      header = q,
+      off = off,
+      packet_end = packet_end,
+      data = frame:sub(off, packet_end)
+    }
+    off = packet_end + 1
+  end
+  return packets
+end
 return {
   versions = versions,
   pack = pack,
-  parse = parse
+  parse = parse,
+  split_datagrams = split_datagrams
 }

@@ -419,6 +419,19 @@ inject = function()
   string.unpack = unpack
   string.packsize = packsize
 end
+setmetatable({
+  pack = pack,
+  unpack = unpack,
+  packsize = packsize,
+  inject = inject
+}, {
+  __index = string
+})
+inject = function()
+  string.pack = pack
+  string.unpack = unpack
+  string.packsize = packsize
+end
 return setmetatable({
   pack = pack,
   unpack = unpack,

@@ -2,6 +2,7 @@ local util = require("ipparse.lib.util")
 local test
 test = util.test
 local ip4 = require("ipparse.l3.ip4")
+local fragmented_ip4 = require("ipparse.l3.fragmented_ip4")
 test("ip42s converts 4 bytes to dotted decimal", function()
   local result = ip4.ip42s("\xc0\xa8\x01\x01")
   return assert(result == "192.168.1.1", "expected '192.168.1.1', got '" .. tostring(result) .. "'")
@@ -142,5 +143,60 @@ test("parse round-trip preserves ihl=5", function()
   local raw = tostring(hdr)
   local parsed, _ = ip4.parse(raw, 1)
   return assert(parsed.ihl == 5, "ihl should be 5, got " .. tostring(parsed.ihl))
+end)
+test("collect handles fragmented packets correctly", function()
+  local payload = data_new(10240)
+  payload:setstring(0, "a" * 10240)
+  local id = "frag_test"
+  fragmented_ip4.fragmented[id] = { }
+  local fragments = { }
+  local total_len = 0
+  local frag1 = {
+    id = id,
+    skb = data_new(4096),
+    off = 0,
+    data_off = 0,
+    data_len = 4096,
+    mf = 1
+  }
+  frag1:setstring(0, "a" * 4096)
+  fragments[#fragments + 1] = frag1
+  total_len = total_len + 4096
+  local frag2 = {
+    id = id,
+    skb = data_new(4096),
+    off = 4096,
+    data_off = 4096,
+    data_len = 4096,
+    mf = 0
+  }
+  frag2:setstring(0, "a" * 4096)
+  fragments[#fragments + 1] = frag2
+  total_len = total_len + 4096
+  local frag3 = {
+    id = id,
+    skb = data_new(2048),
+    off = 8192,
+    data_off = 8192,
+    data_len = 2048,
+    mf = 0
+  }
+  frag3:setstring(0, "a" * 2048)
+  fragments[#fragments + 1] = frag3
+  total_len = total_len + 2048
+  for _index_0 = 1, #fragments do
+    local frag = fragments[_index_0]
+    local ip = fragmented_ip4.collect(frag.skb, frag)
+    assert(ip.__len == total_len, "Total length should be " .. tostring(total_len) .. ", got " .. tostring(ip.__len))
+    assert(ip.skb:getstring(0 == "a" * total_len, "Reconstructed payload should match original"))
+    assert((function()
+      local _base_0 = ip.skb
+      local _fn_0 = _base_0.len
+      return function(...)
+        return _fn_0(_base_0, ...)
+      end
+    end)() == total_len, "skb length should match total length")
+  end
+  return assert(fragmented_ip4.fragmented[id] == nil, "fragmented state should be cleared after collection")
 end)
 return util.summary("l3/ip4")

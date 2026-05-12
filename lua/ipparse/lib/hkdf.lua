@@ -8,6 +8,12 @@ bin_to_hex = function(s)
     return string.format("%02x", string.byte(c))
   end))
 end
+local hex_to_bin
+hex_to_bin = function(hex)
+  return (hex:gsub("..", function(cc)
+    return string.char(tonumber(cc, 16))
+  end))
+end
 local load_sha
 load_sha = function()
   local ok, mod = pcall(require, "ipparse.lib.sha")
@@ -22,13 +28,55 @@ load_sha = function()
   if ok and mod and mod.hmac and mod.sha256 and mod.hex_to_bin then
     return mod
   end
-  return error("no SHA backend available for HKDF")
+  return nil
 end
-local sha = load_sha()
-local hmac, sha256, hex_to_bin
-hmac, sha256, hex_to_bin = sha.hmac, sha.sha256, sha.hex_to_bin
+local load_crypto_hkdf
+load_crypto_hkdf = function()
+  local ok, mod = pcall(require, "crypto.hkdf")
+  if ok and mod and mod.new then
+    return mod
+  end
+  return nil
+end
+local load_crypto_shash
+load_crypto_shash = function()
+  local ok, crypto = pcall(require, "crypto")
+  if not (ok and crypto and crypto.shash) then
+    return nil
+  end
+  return crypto.shash
+end
+local crypto_hkdf = load_crypto_hkdf()
+local crypto_shash = nil
+if not (crypto_hkdf) then
+  crypto_shash = load_crypto_shash()
+end
+local sha = nil
+local hmac, sha256 = nil, nil
+if not (crypto_hkdf or crypto_shash) then
+  sha = load_sha()
+  if not (sha) then
+    error("no SHA backend available for HKDF")
+  end
+  hmac, sha256 = sha.hmac, sha.sha256
+  if sha.hex_to_bin then
+    hex_to_bin = sha.hex_to_bin
+  end
+end
+local hmac_shash_bin
+hmac_shash_bin = function(key, msg)
+  local h = crypto_shash("hmac(sha256)")
+  h:setkey(key)
+  return h:digest(msg)
+end
 local hmac_bin
 hmac_bin = function(key, msg)
+  if crypto_shash then
+    return hmac_shash_bin(key, msg)
+  end
+  if not (hmac and sha256) then
+    error("hmac backend unavailable")
+  end
   local d = hmac(sha256, key, msg)
   if is_hex_digest(d) then
     return hex_to_bin(d)
@@ -38,6 +86,9 @@ hmac_bin = function(key, msg)
 end
 local hmac_hex
 hmac_hex = function(key, msg)
+  if not (hmac and sha256) then
+    error("hmac backend unavailable")
+  end
   local d = hmac(sha256, key, msg)
   if is_hex_digest(d) then
     return d
@@ -58,12 +109,18 @@ hkdf_extract = function(salt, ikm)
   if salt == "" then
     salt = rep("\0", 64)
   end
+  if crypto_hkdf then
+    return crypto_hkdf.new("sha256"):extract(salt, ikm)
+  end
   return hmac_bin(salt, ikm)
 end
 local hkdf_expand
 hkdf_expand = function(prk, info, len)
   if info == nil then
     info = ""
+  end
+  if crypto_hkdf then
+    return bin_to_hex(crypto_hkdf.new("sha256"):expand(prk, info, len))
   end
   len = len * 2
   local i, okm, t = 1, "", ""
@@ -76,6 +133,9 @@ hkdf_expand = function(prk, info, len)
 end
 local hkdf
 hkdf = function(salt, ikm, info, len)
+  if crypto_hkdf then
+    return bin_to_hex(crypto_hkdf.new("sha256"):hkdf(salt, ikm, info, len))
+  end
   return hkdf_expand(hkdf_extract(salt, ikm), info, len)
 end
 local hkdf_expand_label

@@ -26,6 +26,11 @@ checksum = function(self)
   end
   return band(bnot(cksm), 0xFFFF)
 end
+local checksum6
+checksum6 = function(src, dst, next_header, payload)
+  return checksum(sp(">c16c16 I4 xxx B c" .. tostring(#payload), src, dst, #payload, next_header, payload))
+end
 return {
-  checksum = checksum
+  checksum = checksum,
+  checksum6 = checksum6
 }

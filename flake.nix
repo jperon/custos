@@ -16,8 +16,12 @@
             pkgs.luajit
             pkgs.luajitPackages.moonscript
             pkgs.luajitPackages.luarocks
+            pkgs.luajitPackages.lyaml
             pkgs.git
-            pkgs.make
+            pkgs.gnumake
+            pkgs.mbedtls
+            pkgs.openssl
+            pkgs.xxhash
           ];
 
           shellHook = ''

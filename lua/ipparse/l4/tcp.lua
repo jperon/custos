@@ -10,6 +10,8 @@ do
   local _obj_0 = require("ipparse.lib.bit_compat")
   band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
 end
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local flags = bidirectional({
   FIN = 0x01,
   SYN = 0x02,
@@ -64,8 +66,14 @@ parse = function(self, off)
   if off == nil then
     off = 1
   end
+  if not (need_bytes(self, off, 20)) then
+    return nil, off
+  end
   local spt, dpt, seq_n, ack_n, header_len, _flags, window, checksum, urg_ptr, _off = su(">H H I4 I4 B B H H H", self, off)
   local data_off = off + rshift(band(header_len, 0xf0), 2)
+  if not (need_bytes(self, off, data_off - off)) then
+    return nil, off
+  end
   local options = sub(self, _off, data_off - 1)
   return setmetatable({
     spt = spt,

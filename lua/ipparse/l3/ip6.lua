@@ -11,8 +11,11 @@ end
 local unpack = unpack or table.unpack
 local toarray
 toarray = require("ipparse.fun").toarray
-local checksum
-checksum = require("ipparse.l3.lib").checksum
+local checksum, checksum6
+do
+  local _obj_0 = require("ipparse.l3.lib")
+  checksum, checksum6 = _obj_0.checksum, _obj_0.checksum6
+end
 local band, bor, bnot, lshift, rshift
 do
   local _obj_0 = require("ipparse.lib.bit_compat")
@@ -25,7 +28,7 @@ pack = function(self)
   if type(data) == "table" then
     data.checksum = 0
     local d = tostring(data)
-    data.checksum = checksum(sp(">c16c16 I4 xxx B c" .. tostring(#d), self.src, self.dst, #d, self.next_header, d))
+    data.checksum = checksum6(self.src, self.dst, self.next_header, d)
     data = tostring(data)
   end
   self.payload_len = #data
@@ -58,7 +61,7 @@ end
 local new
 new = function(self)
   self.version = self.version or 6
-  assert(self.version == 6, "IPv6 only")
+  assert(self.version == 6, "IPv6 only (got version " .. tostring(self.version) .. ")")
   self.hop_limit = self.hop_limit or 64
   self.payload_len = self.payload_len or 0
   self.next_header = self.next_header or 0
@@ -71,7 +74,8 @@ local parse_ip6
 parse_ip6 = function(self)
   local address = toarray(self:gmatch("([^:]*):?"))
   local zeros = 9 - #address
-  for i = 1, 8 do
+  local i = 1
+  while i <= 8 do
     local part = address[i]
     if part == "" and zeros then
       for _ = 1, zeros do
@@ -82,6 +86,7 @@ parse_ip6 = function(self)
       remove(address, i)
     else
       address[i] = type(part) == "string" and tonumber(part, 16) or part
+      i = i + 1
     end
   end
   return address

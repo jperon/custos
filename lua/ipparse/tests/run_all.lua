@@ -26,7 +26,8 @@ local mods = {
   "ipparse.tests.l4.quic.test_protection",
   "ipparse.tests.l4.quic.test_integration",
   "ipparse.tests.l7.quic.test_sni",
-  "ipparse.tests.l7.quic.test_session"
+  "ipparse.tests.l7.quic.test_session",
+  "ipparse.tests.l7.quic.test_google_capture_backends"
 }
 if is_luajit or is_pre53 then
   print("SKIP\tipparse.tests.lib.crypto.test_lunatik (requires Lua >= 5.3 non-LuaJIT runtime)")

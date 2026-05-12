@@ -24,7 +24,9 @@ end
 local sample_from_packet
 sample_from_packet = function(pkt, enc_off)
   local s = enc_off + 4
-  assert(s + 15 <= #pkt, "packet too short to extract header protection sample")
+  if not (s + 15 <= #pkt) then
+    return nil, "packet too short to extract header protection sample"
+  end
   return pkt:sub(s, s + 15)
 end
 local apply_header_mask
@@ -39,8 +41,17 @@ end
 local recover_packet_number = nil
 local unprotect_header
 unprotect_header = function(pkt, pn_off, hp_key, long, expected_pn, crypto)
-  local sample = sample_from_packet(pkt, pn_off)
+  if not (pn_off and pn_off >= 2 and pn_off <= #pkt) then
+    return nil, "invalid pn_off " .. tostring(pn_off)
+  end
+  local sample, serr = sample_from_packet(pkt, pn_off)
+  if not (sample) then
+    return nil, serr
+  end
   local mask = crypto.aes_128_ecb_block(hp_key, sample)
+  if not (mask and #mask >= 5) then
+    return nil, "header protection mask unavailable"
+  end
   local m0 = byte(mask, 1)
   local fb_mask = long and 0x0F or 0x1F
   local first = bxor(byte(pkt, 1), band(m0, fb_mask))
@@ -48,7 +59,12 @@ unprotect_header = function(pkt, pn_off, hp_key, long, expected_pn, crypto)
   local truncated_pn = 0
   local pn_chars = { }
   for i = 1, pn_len do
-    local b = bxor(byte(pkt, pn_off + i - 1), byte(mask, i + 1))
+    local pkt_b = byte(pkt, pn_off + i - 1)
+    local mask_b = byte(mask, i + 1)
+    if not (pkt_b and mask_b) then
+      return nil, "packet too short for packet number bytes"
+    end
+    local b = bxor(pkt_b, mask_b)
     truncated_pn = truncated_pn * 256 + b
     pn_chars[i] = string.char(b)
   end

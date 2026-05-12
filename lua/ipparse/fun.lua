@@ -257,15 +257,19 @@ opairs = function(self, f)
     return keys[i], self[keys[i]]
   end
 end
+local _ = nil
 local protected
 protected = function(fn, op)
+  local leak_debug = _ and _.leak_debug
   return function(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z)
     local ok
     ok, a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z = xpcall((function()
       return fn(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z)
     end), function(err)
       print(err)
-      print(debug.traceback())
+      if leak_debug then
+        print(debug.traceback())
+      end
       if op then
         return op()
       end
@@ -275,7 +279,7 @@ protected = function(fn, op)
     end
   end
 end
-local _ = {
+_ = {
   bidirectional = bidirectional,
   memo = memo,
   memoN = memoN,

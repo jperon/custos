@@ -47,9 +47,14 @@ local MBEDTLS_GCM_ENCRYPT = 1
 local MBEDTLS_AES_ENCRYPT = 1
 local MBEDTLS_ERR_GCM_AUTH_FAILED = -18
 local mbed = ffi.load("mbedcrypto")
+local validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv
+do
+  local _obj_0 = require("ipparse.lib.crypto.backend.common")
+  validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv = _obj_0.validate_gcm_key, _obj_0.validate_gcm_nonce, _obj_0.validate_ecb_key, _obj_0.validate_ecb_block, _obj_0.validate_quic_iv
+end
 local construct_nonce
 construct_nonce = function(iv, packet_number)
-  assert(#iv == 12, "IV must be 12 bytes")
+  assert(#iv == 12, "IV must be 12 bytes (got " .. tostring(#iv) .. ")")
   local buf = ffi.new("uint8_t[12]")
   ffi.copy(buf, iv, 12)
   local pn = packet_number
@@ -93,8 +98,8 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
   if aad == nil then
     aad = ""
   end
-  assert(#key == 16, "AES-128-GCM key must be 16 bytes")
-  assert(#nonce == 12, "AES-128-GCM nonce must be 12 bytes")
+  validate_gcm_key(key)
+  validate_gcm_nonce(nonce)
   if #ciphertext_with_tag < 16 then
     return nil, "ciphertext too short (no room for auth tag)"
   end
@@ -121,8 +126,8 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
 end
 local aes_128_ecb_block
 aes_128_ecb_block = function(key, block)
-  assert(#key == 16, "AES-128-ECB key must be 16 bytes")
-  assert(#block == 16, "AES-128-ECB block must be 16 bytes")
+  validate_ecb_key(key)
+  validate_ecb_block(block)
   local ctx = ffi.new("mbedtls_aes_context_t")
   mbed.mbedtls_aes_init(ctx)
   local rc = mbed.mbedtls_aes_setkey_enc(ctx, key, 128)

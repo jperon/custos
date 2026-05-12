@@ -12,6 +12,8 @@ do
   local _obj_0 = require("ipparse.lib.bit_compat")
   band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
 end
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local flags = {
   DF = 0x4000,
   MF = 0x2000
@@ -65,10 +67,16 @@ parse = function(self, off)
   if off == nil then
     off = 1
   end
+  if not (need_bytes(self, off, 20)) then
+    return nil, off
+  end
   local v_ihl, tos, total_len, id, ff, ttl, protocol, cksum, src, dst, _off = su(">BBHHHBBH c4c4", self, off)
   local version, ihl = rshift(v_ihl, 4), band(v_ihl, 0x0f)
   local payload_off = lshift(ihl, 2)
   local data_off = off + payload_off
+  if not (need_bytes(self, off, data_off - off)) then
+    return nil, off
+  end
   local options = sub(self, _off, data_off - 1)
   return setmetatable({
     version = version,
@@ -92,7 +100,7 @@ end
 local new
 new = function(self)
   self.version = self.version or 4
-  assert(self.version == 4, "IPv4 only")
+  assert(self.version == 4, "IPv4 only (got version " .. tostring(self.version) .. ")")
   self.v_ihl = self.v_ihl or bor(lshift(self.version, 4), self.ihl or 0)
   self.ff = self.ff or bor((self.DF and flags.DF or 0), (self.MF and flags.MF or 0), self.frag_offset or 0)
   self.tos = self.tos or 0

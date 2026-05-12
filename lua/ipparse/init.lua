@@ -14,6 +14,7 @@ local concat
 concat = table.concat
 local opairs
 opairs = require("ipparse.fun").opairs
+require("ipparse.fun").leak_debug = leak_debug
 local dump
 dump = function(self)
   return concat((function()
@@ -27,14 +28,21 @@ dump = function(self)
   end)(), ", ")
 end
 local filterascii
-filterascii = function(self)
-  return gsub(self, ".", function(self)
+filterascii = function(s)
+  return gsub(s, ".", function(self)
     return " " <= self and self <= "~" and self or "."
   end)
 end
+local need_bytes
+need_bytes = function(self, off, len)
+  if off < 1 or len < 0 then
+    return false
+  end
+  return (off + len - 1) <= #self
+end
 local bin2hex
-bin2hex = function(self)
-  return format(rep("%.2x", #self), su(rep("B", #self), self))
+bin2hex = function(s)
+  return format(rep("%.2x", #s), su(rep("B", #s), s))
 end
 local lbin2hex
 lbin2hex = function(self)
@@ -87,5 +95,7 @@ return {
   dump = dump,
   filterascii = filterascii,
   hex2bin = hex2bin,
-  hexdump = hexdump
+  hexdump = hexdump,
+  leak_debug = leak_debug,
+  need_bytes = need_bytes
 }

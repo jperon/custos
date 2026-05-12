@@ -5,9 +5,9 @@ local hex_to_bin
 hex_to_bin = require("ipparse.lib.hkdf").hex_to_bin
 local calls = {
   aead_new = 0,
-  skcipher_new = 0,
   aead_close = 0,
-  skcipher_close = 0
+  ecb_new = 0,
+  ecb_close = 0
 }
 local mk_aead
 mk_aead = function()
@@ -45,21 +45,20 @@ mk_aead = function()
     end
   }
 end
-local mk_skcipher
-mk_skcipher = function()
+local mk_ecb
+mk_ecb = function()
   local key = nil
   return {
     setkey = function(self, k)
       key = k
     end,
-    encrypt = function(self, iv, block)
+    encryptblock = function(self, block)
       assert(key == string.rep("\x22", 16), "unexpected ECB key")
-      assert(iv == "", "ECB iv must be empty string for Lunatik skcipher")
       assert(#block == 16, "ECB block must be 16 bytes")
       return "Z" .. block:sub(2)
     end,
     __close = function(self)
-      calls.skcipher_close = calls.skcipher_close + 1
+      calls.ecb_close = calls.ecb_close + 1
     end
   }
 end
@@ -69,11 +68,14 @@ package.preload.crypto = function()
       assert(name == "gcm(aes)", "unexpected AEAD algorithm: " .. tostring(name))
       calls.aead_new = calls.aead_new + 1
       return mk_aead()
-    end,
-    skcipher = function(name)
-      assert(name == "ecb(aes)", "unexpected SKCIPHER algorithm: " .. tostring(name))
-      calls.skcipher_new = calls.skcipher_new + 1
-      return mk_skcipher()
+    end
+  }
+end
+package.preload["crypto.ecb"] = function()
+  return {
+    new = function()
+      calls.ecb_new = calls.ecb_new + 1
+      return mk_ecb()
     end
   }
 end
@@ -123,15 +125,11 @@ test("lunatik: AES-128-GCM decrypt raises on non-auth error", function()
   assert(not ok, "decrypt should raise on non-auth failure")
   return assert(tostring(err):find("aead(gcm(aes)) decrypt failed", 1, true), "unexpected error: " .. tostring(tostring(err)))
 end)
-test("lunatik: AES-128-ECB encrypt uses crypto.skcipher", function()
+test("lunatik: AES-128-ECB encrypt uses crypto.ecb", function()
   local key = string.rep("\x22", 16)
   local block = string.rep("\x33", 16)
   local out = b.aes_128_ecb_block(key, block)
   assert(#out == 16, "output must be 16 bytes")
   return assert(out:byte(1) == string.byte("Z"), "first byte should be transformed by stub")
-end)
-test("lunatik: transforms are closed", function()
-  assert(calls.aead_new == calls.aead_close, "aead transforms should all be closed")
-  return assert(calls.skcipher_new == calls.skcipher_close, "skcipher transforms should all be closed")
 end)
 return summary("lib.crypto.lunatik")

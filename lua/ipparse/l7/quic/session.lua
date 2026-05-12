@@ -195,9 +195,7 @@ direction_from_header = function(self, q, meta)
 end
 local ensure_keys
 ensure_keys = function(self, q, direction)
-  if not self.initial_dcid then
-    self.initial_dcid = q.dst_connection_id
-  end
+  self.initial_dcid = self.initial_dcid or q.dst_connection_id
   if direction == "client" then
     if not self.client_keys then
       local keys, kerr = load_keys_module()
@@ -248,6 +246,9 @@ decrypt_initial = function(self, quic_packet, q, direction, keys_override)
   end
   local pn_off = q.pn_off
   local aad, pn, pn_len = prot_mod.unprotect_header(quic_packet, pn_off, keys.hp_key, true, expected, self.backend)
+  if not (aad) then
+    return nil, pn
+  end
   local payload_off = pn_off + pn_len
   local plaintext, err = prot_mod.decrypt_payload(quic_packet, payload_off, keys.key, keys.iv, pn, aad, self.backend)
   if not (plaintext) then

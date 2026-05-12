@@ -5,6 +5,8 @@ do
   local _obj_0 = require("ipparse.lib.pack_compat")
   format, sp, su = _obj_0.format, _obj_0.pack, _obj_0.unpack
 end
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local unpack = unpack or table.unpack
 local pack
 pack = function(self)
@@ -17,6 +19,9 @@ local parse
 parse = function(self, off)
   if off == nil then
     off = 1
+  end
+  if not (need_bytes(self, off, 14)) then
+    return nil, off
   end
   local dst, src, protocol, data_off = su("c6 c6 >H", self, off)
   return setmetatable({

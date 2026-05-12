@@ -1,8 +1,13 @@
 local util = require("ipparse.lib.util")
 local test
 test = util.test
-local checksum
-checksum = require("ipparse.l3.lib").checksum
+local sp
+sp = require("ipparse.lib.pack_compat").pack
+local checksum, checksum6
+do
+  local _obj_0 = require("ipparse.l3.lib")
+  checksum, checksum6 = _obj_0.checksum, _obj_0.checksum6
+end
 local ip4 = require("ipparse.l3.ip4")
 test("checksum of 0xffff is 0", function()
   local result = checksum("\xff\xff")
@@ -27,5 +32,13 @@ end)
 test("checksum odd-length pads with zero", function()
   local result = checksum("\xff")
   return assert(result == 0x00ff, "checksum(\\xff) should be 0x00ff, got " .. tostring(result))
+end)
+test("checksum6 matches IPv6 pseudo-header formula", function()
+  local src = string.char(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
+  local dst = string.char(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2)
+  local payload = "abcdef"
+  local got = checksum6(src, dst, 17, payload)
+  local expected = checksum(sp(">c16c16 I4 xxx B c" .. tostring(#payload), src, dst, #payload, 17, payload))
+  return assert(got == expected, "checksum6 mismatch: got " .. tostring(got) .. ", expected " .. tostring(expected))
 end)
 return util.summary("l3/checksum")
