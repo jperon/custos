@@ -33,7 +33,7 @@ endef
 
 define Package/custos/conffiles
 /etc/config/custos
-/etc/custos/filter.yml
+/etc/custos/config.moon
 endef
 
 define Package/custos/install
@@ -45,7 +45,7 @@ define Package/custos/install
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) $(CURDIR)/files/etc/config/custos $(1)/etc/config/custos
 	$(INSTALL_DIR) $(1)/etc/custos/lists
-	$(INSTALL_CONF) $(CURDIR)/files/etc/custos/filter.yml $(1)/etc/custos/filter.yml
+	$(INSTALL_CONF) $(CURDIR)/files/etc/custos/config.moon $(1)/etc/custos/config.moon
 endef
 
 $(eval $(call BuildPackage,custos))

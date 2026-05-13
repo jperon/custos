@@ -203,11 +203,11 @@ clean:
 reload:
 	@pkill -SIGHUP -f "luajit.*main" && echo "SIGHUP envoyé" || echo "Processus introuvable"
 
-# Update domain lists from sources defined in cfg/filter.yml
+# Update domain lists from sources defined in config.moon
 update-lists: all
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) $(LUA)/filter/updater.lua \
-	  --config $(or $(CONFIG),cfg/filter.yml) \
+	  --config $(or $(CONFIG),cfg/config.moon) \
 	  $(if $(PID),--pid $(PID),)
 
 # Tail logs with human-readable timestamps

@@ -23,6 +23,8 @@ Thumbs.db
 *.o
 *.so
 *.a
+src/*.lua
+src/*/*.lua
 
 # Test artifacts
 .coverage
