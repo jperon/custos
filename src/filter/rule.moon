@@ -43,7 +43,7 @@ compile_rule = (cfg, rule, idx) ->
       name: name
       args: args
       capabilities: cond_obj.capabilities
-      worker_only: cond_obj.worker_only
+      worker_only: compiler_api.compute_worker_only(cond_obj)
       compile_nft: cond_obj.compile_nft
       creates_dynamic_scope: cond_obj.creates_dynamic_scope
     }
@@ -60,7 +60,7 @@ compile_rule = (cfg, rule, idx) ->
     actions_meta[#actions_meta + 1] = {
       name: action_name
       capabilities: action_obj.capabilities
-      worker_only: action_obj.worker_only
+      worker_only: compiler_api.compute_worker_only(action_obj)
       compile_nft: action_obj.compile_nft
       verdict: action_obj.verdict
     }

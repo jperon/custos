@@ -4,10 +4,12 @@
 -- Les modules conditions/actions peuvent exposer soit :
 --   • Ancien style : une factory function `(cfg) -> (args) -> checker`
 --   • Nouveau style : un objet/table avec :
---       - capabilities : table des backends supportés
+--       - capabilities : table des backends supportés { worker, nft_static, nft_dynamic }
 --       - eval         : fonction d'évaluation runtime (checker)
 --       - compile_nft  : fonction de compilation nft (optionnel)
---       - worker_only  : boolean (true si nft ne peut pas gérer cette condition)
+--       - creates_dynamic_scope : boolean (true si condition DNS)
+--
+-- Note: worker_only est DÉDUIT de capabilities.nft_static (pas de champ explicite)
 
 --- Détecte si un objet est au nouveau style enrichi.
 -- @tparam any obj Objet retourné par la factory après application cfg/args
@@ -16,6 +18,14 @@ is_new_style = (obj) ->
   return false unless type(obj) == "table"
   return false unless obj.capabilities
   true
+
+--- Déduit si une condition/action est worker-only de ses capabilities.
+-- @tparam table obj Objet enrichi avec capabilities
+-- @treturn boolean true si worker-only (pas de support nft_static)
+compute_worker_only = (obj) ->
+  return true unless type(obj) == "table"
+  return true unless obj.capabilities
+  return not obj.capabilities.nft_static
 
 --- Charge un module condition avec adaptation automatique.
 -- Retourne une factory (cfg) -> (args) -> enriched_obj
@@ -37,9 +47,9 @@ load_condition = (name) ->
         return result
       else
         -- Ancien style: result est la fonction checker, on wrappe
+        -- worker_only est déduit de capabilities.nft_static (false ici)
         {
           capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-          worker_only: true
           eval: result
           compile_nft: -> nil, "unsupported"
           creates_dynamic_scope: false
@@ -65,9 +75,9 @@ load_action = (name) ->
         return result
       else
         -- Ancien style: result est la fonction checker, on wrappe
+        -- worker_only est déduit de capabilities.nft (false ici)
         {
           capabilities: { worker: true, nft: false }
-          worker_only: true
           eval: result
           compile_nft: -> nil, "unsupported"
           verdict: -> nil
@@ -81,7 +91,6 @@ load_action = (name) ->
 create_net_condition = (prop, net_cidr) ->
   {
     capabilities: { worker: true, nft_static: true, nft_dynamic: false }
-    worker_only: false
     prop: prop
     net_cidr: net_cidr
     eval: (req) ->
