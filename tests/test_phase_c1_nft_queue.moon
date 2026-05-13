@@ -54,13 +54,13 @@ describe "nft_queue per-rule sets (Phase C1)", ->
       result = get_set_name("ip6", "test")
       assert.equal "rule_test_ip6", result
     
-    it "returns per-rule set rule_test_ip4 for rule_id and mac4", ->
+    it "returns per-rule set rule_test_mac4 for rule_id and mac4", ->
       result = get_set_name("mac4", "test")
-      assert.equal "rule_test_ip4", result
+      assert.equal "rule_test_mac4", result
     
-    it "returns per-rule set rule_test_ip6 for rule_id and mac6", ->
+    it "returns per-rule set rule_test_mac6 for rule_id and mac6", ->
       result = get_set_name("mac6", "test")
-      assert.equal "rule_test_ip6", result
+      assert.equal "rule_test_mac6", result
     
     it "returns nil for nil kind with rule_id", ->
       result = get_set_name("invalid", "test")
@@ -87,13 +87,13 @@ describe "nft_queue per-rule sets (Phase C1)", ->
     
     it "generates MAC4 add element command with rule_id", ->
       cmd = cmd_for("mac4", "aa:bb:cc:dd:ee:ff", "10.0.0.1", "test", "180s")
-      assert.match "add element bridge dns%-filter%-bridge rule_test_ip4", cmd
+      assert.match "add element bridge dns%-filter%-bridge rule_test_mac4", cmd
       assert.match "aa:bb:cc:dd:ee:ff", cmd
       assert.match "timeout 180s", cmd
     
     it "generates MAC6 add element command with rule_id", ->
       cmd = cmd_for("mac6", "aa:bb:cc:dd:ee:ff", "2001:db8::1", "test", "300s")
-      assert.match "add element bridge dns%-filter%-bridge rule_test_ip6", cmd
+      assert.match "add element bridge dns%-filter%-bridge rule_test_mac6", cmd
       assert.match "aa:bb:cc:dd:ee:ff", cmd
       assert.match "timeout 300s", cmd
     

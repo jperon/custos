@@ -59,8 +59,8 @@ describe "E2E Migration Validation (Phase E1)", ->
       nft_queue = require "nft_queue"
       assert.equals nft_queue.get_set_name("ip4", "test123"), "rule_test123_ip4"
       assert.equals nft_queue.get_set_name("ip6", "test123"), "rule_test123_ip6"
-      assert.equals nft_queue.get_set_name("mac4", "test123"), "rule_test123_ip4"
-      assert.equals nft_queue.get_set_name("mac6", "test123"), "rule_test123_ip6"
+      assert.equals nft_queue.get_set_name("mac4", "test123"), "rule_test123_mac4"
+      assert.equals nft_queue.get_set_name("mac6", "test123"), "rule_test123_mac6"
 
     it "nft_queue.cmd_for() generates per-rule nft add commands", ->
       nft_queue = require "nft_queue"
