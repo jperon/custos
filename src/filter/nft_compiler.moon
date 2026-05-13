@@ -235,8 +235,9 @@ resolve_action = (rule) ->
       return action
   nil
 
-build_rule = (cfg, rule, idx, used_ids) ->
-  rid = stable_rule_id rule, idx, used_ids
+build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
+  -- Use metadata rule_id if provided (must match runtime filter decision)
+  rid = metadata_rule_id or stable_rule_id rule, idx, used_ids
   src4, src6 = collect_nets cfg, rule
   subnet4, subnet6 = collect_subnets rule
   times = collect_times rule
@@ -284,7 +285,10 @@ compile = (filter_cfg, rules_metadata=nil) ->
   first_match_wins = if decision.first_match_wins == nil then true else not not decision.first_match_wins
 
   used_ids = {}
-  rules = [build_rule(cfg, rule, idx, used_ids) for idx, rule in ipairs rules_cfg]
+  rules = for idx, rule in ipairs rules_cfg
+    -- Get rule_id from metadata if available (ensures consistency with runtime)
+    meta_rid = rules_metadata and rules_metadata[idx] and rules_metadata[idx].rule_id
+    build_rule cfg, rule, idx, used_ids, meta_rid
   action_map = {}
   rules_by_id = {}
 
