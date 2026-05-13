@@ -27,57 +27,58 @@ safe_get_mac = (ip_str) ->
   return nil unless _get_mac
   _get_mac ip_str
 
---- @tparam table cfg Configuration du filtre
--- @treturn function factory (user: string) → (req) → bool, reason
+--- @tparam table cfg Configuration
+-- @treturn function factory (user) → enriched_condition
+-- Note: worker-only due to dynamic session lookup.
 (cfg) ->
   sessions_file = (cfg.auth and cfg.auth.sessions_file) or config.auth.sessions_file
 
   (user) ->
-    --- @tparam table req {src_ip: string, mac: string, ...}
-    -- @treturn boolean, string
-    (req) ->
-      hinted_user = req.user
+    {
+      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      worker_only: true
+      user: user
+      eval: (req) ->
+        hinted_user = req.user
 
-      if hinted_user and hinted_user ~= "unknown"
+        if hinted_user and hinted_user ~= "unknown"
+          if user == "_any"
+            return true, "from_user: session active (#{hinted_user})"
+          if user == "_none"
+            return false, "from_user: une session est déjà identifiée (#{hinted_user})"
+          if hinted_user == user
+            mac = req.mac
+            unless mac
+              mac = safe_get_mac req.src_ip
+            s = session_for_mac mac, req.src_ip, sessions_file
+            if s
+              bind_session_mac s.mac, req.mac, req.src_ip, sessions_file
+              enrich_session_ip req.mac, req.src_ip, sessions_file
+            return true, "from_user: #{req.src_ip} → #{hinted_user}"
+
+        -- session_for_mac indexée par MAC
+        mac = req.mac
+        unless mac
+          mac = safe_get_mac req.src_ip
+        s = session_for_mac mac, req.src_ip, sessions_file
+
         if user == "_any"
-          return true, "from_user: session active (#{hinted_user})"
-        if user == "_none"
-          return false, "from_user: une session est déjà identifiée (#{hinted_user})"
-        if hinted_user == user
-          mac = req.mac
-          unless mac
-            mac = safe_get_mac req.src_ip
-          s = session_for_mac mac, req.src_ip, sessions_file
           if s
             bind_session_mac s.mac, req.mac, req.src_ip, sessions_file
             enrich_session_ip req.mac, req.src_ip, sessions_file
-          return true, "from_user: #{req.src_ip} → #{hinted_user}"
+          return s ~= nil, "from_user: session active (#{s and s.user or 'unknown'})"
+        if user == "_none"
+          return s == nil, "from_user: aucune session active"
 
-      -- session_for_mac indexée par MAC évite le coût du fallback par get_mac
-      -- dans la majorité des cas en mode bridge.
-      mac = req.mac
-      -- Fallback : si le MAC est inconnu, tenter de le résoudre via le learner
-      unless mac
-        mac = safe_get_mac req.src_ip
-      s = session_for_mac mac, req.src_ip, sessions_file
+        unless s
+          return false, "from_user: aucune session valide pour #{req.src_ip}"
+        if s.user ~= user
+          return false, "from_user: #{req.src_ip} authentifié en tant que #{s.user}, attendu #{user}"
 
-      if user == "_any"
-        if s
-          bind_session_mac s.mac, req.mac, req.src_ip, sessions_file
-          enrich_session_ip req.mac, req.src_ip, sessions_file
-        return s ~= nil, "from_user: session active (#{s and s.user or 'unknown'})"
-      if user == "_none"
-        return s == nil, "from_user: aucune session active"
+        bind_session_mac s.mac, req.mac, req.src_ip, sessions_file
+        enrich_session_ip req.mac, req.src_ip, sessions_file
 
-      unless s
-        return false, "from_user: aucune session valide pour #{req.src_ip}"
-      if s.user ~= user
-        return false, "from_user: #{req.src_ip} authentifié en tant que #{s.user}, attendu #{user}"
-
-      -- Enrichir/réindexer la session avec la MAC courante (accumule IPv4+IPv6
-      -- en disque). Cas important : authentification HTTPS via IPv6 routée où
-      -- AUTH voit la MAC du routeur, puis DNS voit la vraie MAC cliente.
-      bind_session_mac s.mac, req.mac, req.src_ip, sessions_file
-      enrich_session_ip req.mac, req.src_ip, sessions_file
-
-      true, "from_user: #{req.src_ip} → #{s.user}"
+        true, "from_user: #{req.src_ip} → #{s.user}"
+      compile_nft: -> nil, "from_user requires worker (dynamic sessions)"
+      creates_dynamic_scope: false
+    }

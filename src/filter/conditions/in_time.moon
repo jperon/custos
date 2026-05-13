@@ -43,64 +43,105 @@ build_day_bitmask = (days) ->
   mask
 
 --- @tparam table cfg Configuration du filtre
--- @treturn function factory (spec: string|table) → (req) → bool, reason
-(cfg) -> (spec) ->
-  times = cfg.times or {}
-  
-  -- Parse spec: either string (named window) or table (inline)
-  start_s, end_s, day_bitmask = nil, nil, nil
-  desc_str = nil
-  
-  if type(spec) == "string"
-    -- Named window reference
-    window = times[spec]
-    unless window
-      return (req) -> false, "Time window '#{spec}' not defined"
-    start_s, end_s = window[1], window[2]
-    desc_str = "'#{spec}'"
-  elseif type(spec) == "table"
-    -- Inline specification
-    start_s = spec.start
-    end_s = spec.end
-    days = spec.days
+-- @treturn function factory (spec: string|table) → enriched_condition
+-- Note: in_time is worker-only. nftables has 'time' extension but it's not standard.
+-- Future: could compile to 'meta hour >= X hour < Y' with nftables time extension.
+(cfg) ->
+  (spec) ->
+    times = cfg.times or {}
     
-    unless start_s and end_s
-      return (req) -> false, "Inline time spec requires 'start' and 'end'"
+    -- Parse spec: either string (named window) or table (inline)
+    start_s, end_s, day_bitmask = nil, nil, nil
+    desc_str = nil
     
-    day_bitmask = build_day_bitmask days
-    unless day_bitmask
-      return (req) -> false, "Invalid day names in inline time spec"
-    
-    day_desc = if days
-      table.concat days, ","
+    if type(spec) == "string"
+      -- Named window reference
+      window = times[spec]
+      unless window
+        return {
+          capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+          worker_only: true
+          eval: (req) -> false, "Time window '#{spec}' not defined"
+          compile_nft: -> nil, "in_time requires worker (undefined window)"
+          creates_dynamic_scope: false
+        }
+      start_s, end_s = window[1], window[2]
+      desc_str = "'#{spec}'"
+    elseif type(spec) == "table"
+      -- Inline specification
+      start_s = spec.start
+      end_s = spec.end
+      days = spec.days
+      
+      unless start_s and end_s
+        return {
+          capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+          worker_only: true
+          eval: (req) -> false, "Inline time spec requires 'start' and 'end'"
+          compile_nft: -> nil, "in_time requires worker (invalid spec)"
+          creates_dynamic_scope: false
+        }
+      
+      day_bitmask = build_day_bitmask days
+      unless day_bitmask
+        return {
+          capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+          worker_only: true
+          eval: (req) -> false, "Invalid day names in inline time spec"
+          compile_nft: -> nil, "in_time requires worker (invalid days)"
+          creates_dynamic_scope: false
+        }
+      
+      day_desc = if days
+        table.concat days, ","
+      else
+        "daily"
+      desc_str = "#{start_s}–#{end_s} (#{day_desc})"
     else
-      "daily"
-    desc_str = "#{start_s}–#{end_s} (#{day_desc})"
-  else
-    return (req) -> false, "Time window spec must be string or table"
+      return {
+        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        worker_only: true
+        eval: (req) -> false, "Time window spec must be string or table"
+        compile_nft: -> nil, "in_time requires worker (invalid spec type)"
+        creates_dynamic_scope: false
+      }
 
-  start_parsed = parse_time_str start_s
-  end_parsed = parse_time_str end_s
-  unless start_parsed and end_parsed
-    return (req) -> false, "Invalid time window format (expected HH:MM)"
+    start_parsed = parse_time_str start_s
+    end_parsed = parse_time_str end_s
+    unless start_parsed and end_parsed
+      return {
+        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        worker_only: true
+        eval: (req) -> false, "Invalid time window format (expected HH:MM)"
+        compile_nft: -> nil, "in_time requires worker (invalid format)"
+        creates_dynamic_scope: false
+      }
 
-  --- @tparam table req {ts: number, ...}  (ts = os.time())
-  -- @treturn boolean, string
-  (req) ->
-    ts = req.ts or os.time!
-    t = os.date "*t", ts
-    year, month, day = t.year, t.month, t.day
-    wday = t.wday  -- 1=Sunday, 2=Monday, ..., 7=Saturday
+    {
+      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      worker_only: true
+      start_parsed: start_parsed
+      end_parsed: end_parsed
+      day_bitmask: day_bitmask
+      desc_str: desc_str
+      eval: (req) ->
+        ts = req.ts or os.time!
+        t = os.date "*t", ts
+        year, month, day = t.year, t.month, t.day
+        wday = t.wday  -- 1=Sunday, 2=Monday, ..., 7=Saturday
 
-    -- Check day-of-week if constraint was specified
-    if day_bitmask
-      unless bit.band(day_bitmask, bit.lshift(1, wday - 1)) > 0
-        return false, "Outside time window #{desc_str} (not a matching day)"
+        -- Check day-of-week if constraint was specified
+        if day_bitmask
+          unless bit.band(day_bitmask, bit.lshift(1, wday - 1)) > 0
+            return false, "Outside time window #{desc_str} (not a matching day)"
 
-    _start = os.time { :year, :month, :day, hour: start_parsed.hour, min: start_parsed.min, sec: 0 }
-    _end   = os.time { :year, :month, :day, hour: end_parsed.hour, min: end_parsed.min, sec: 0 }
+        _start = os.time { :year, :month, :day, hour: start_parsed.hour, min: start_parsed.min, sec: 0 }
+        _end   = os.time { :year, :month, :day, hour: end_parsed.hour, min: end_parsed.min, sec: 0 }
 
-    if _start < ts and ts < _end
-      true, "In time window #{desc_str}"
-    else
-      false, "Outside time window #{desc_str}"
+        if _start < ts and ts < _end
+          true, "In time window #{desc_str}"
+        else
+          false, "Outside time window #{desc_str}"
+      compile_nft: -> nil, "in_time requires worker processing (time-based)"
+      creates_dynamic_scope: false
+    }
