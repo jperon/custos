@@ -3,6 +3,7 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libnfq = _obj_0.ffi, _obj_0.libnfq
 end
+local bit = require("bit")
 local run_queue, NF_ACCEPT, NF_DROP, VERDICT_DONE
 do
   local _obj_0 = require("nfq_loop")
@@ -41,6 +42,100 @@ local ICMP4_CODE = 13
 local ICMP6_TYPE = 1
 local ICMP6_CODE = 1
 local ICMP_QUOTE_MAX = 576
+local rtp_passthrough = { }
+local rtp_passthrough_dport = { }
+local RTP_PASSTHROUGH_TTL = 120
+local rtp_key
+rtp_key = function(src, dst, sport, dport)
+  return tostring(src) .. "|" .. tostring(dst) .. "|" .. tostring(sport) .. "|" .. tostring(dport)
+end
+local rtp_dport_key
+rtp_dport_key = function(src, dst, dport)
+  return tostring(src) .. "|" .. tostring(dst) .. "|" .. tostring(dport)
+end
+local is_private_ipv4
+is_private_ipv4 = function(ip)
+  if not (ip and ip:find(".", 1, true)) then
+    return false
+  end
+  local a_s, b_s = ip:match("^(%d+)%.(%d+)%.")
+  if not (a_s and b_s) then
+    return false
+  end
+  local a, b = tonumber(a_s), tonumber(b_s)
+  if not (a and b) then
+    return false
+  end
+  if a == 10 then
+    return true
+  end
+  if a == 192 and b == 168 then
+    return true
+  end
+  if a == 172 and b >= 16 and b <= 31 then
+    return true
+  end
+  return false
+end
+local is_public_ipv4
+is_public_ipv4 = function(ip)
+  if not (ip and ip:find(".", 1, true)) then
+    return false
+  end
+  local a_s, b_s = ip:match("^(%d+)%.(%d+)%.")
+  if not (a_s and b_s) then
+    return false
+  end
+  local a, b = tonumber(a_s), tonumber(b_s)
+  if not (a and b) then
+    return false
+  end
+  if a == 127 then
+    return false
+  end
+  if a == 169 and b == 254 then
+    return false
+  end
+  if is_private_ipv4(ip) then
+    return false
+  end
+  return true
+end
+local looks_like_rtp_payload
+looks_like_rtp_payload = function(raw, l4_off)
+  local payload_off = l4_off + 8
+  if #raw < payload_off + 11 then
+    return false
+  end
+  local b1 = raw:byte(payload_off)
+  if not (b1) then
+    return false
+  end
+  if not (bit.rshift(b1, 6) == 2) then
+    return false
+  end
+  local c1, c2, c3, c4 = raw:byte(payload_off + 4, payload_off + 7)
+  if c1 == 0x21 and c2 == 0x12 and c3 == 0xA4 and c4 == 0x42 then
+    return false
+  end
+  return true
+end
+local should_track_rtp_udp
+should_track_rtp_udp = function(proto, ip_version, src_ip, dst_ip, sport, dport, raw, l4_off)
+  if not (proto == PROTO_UDP and ip_version == 4) then
+    return false
+  end
+  if not (sport and dport) then
+    return false
+  end
+  if not (sport >= 1024 and dport >= 1024) then
+    return false
+  end
+  if not (is_private_ipv4(src_ip) and is_public_ipv4(dst_ip)) then
+    return false
+  end
+  return looks_like_rtp_payload(raw, l4_off)
+end
 local forge_tcp_rst
 forge_tcp_rst = function(ip, tcp)
   local rst = {
@@ -145,6 +240,68 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
       sport, dport = udp.spt, udp.dpt
     end
   end
+  if proto == PROTO_UDP and ip.version == 4 and sport and dport then
+    local key = rtp_key(src_ip, dst_ip, sport, dport)
+    local key_dport = rtp_dport_key(src_ip, dst_ip, dport)
+    local now = os.time()
+    local exp = rtp_passthrough[key]
+    local exp_dport = rtp_passthrough_dport[key_dport]
+    if exp and exp <= now then
+      rtp_passthrough[key] = nil
+      exp = nil
+    end
+    if exp_dport and exp_dport <= now then
+      rtp_passthrough_dport[key_dport] = nil
+      exp_dport = nil
+    end
+    if exp and exp > now then
+      local raw_ptr = ffi.cast("const unsigned char*", raw)
+      libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr)
+      log_debug({
+        action = "rtp_passthrough_hit",
+        queue = 3,
+        src = src_ip,
+        dst = dst_ip,
+        sport = sport,
+        dport = dport,
+        ttl_s = exp - now
+      })
+      return VERDICT_DONE
+    elseif exp_dport and exp_dport > now then
+      local raw_ptr = ffi.cast("const unsigned char*", raw)
+      libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr)
+      log_debug({
+        action = "rtp_passthrough_hit_dport",
+        queue = 3,
+        src = src_ip,
+        dst = dst_ip,
+        sport = sport,
+        dport = dport,
+        ttl_s = exp_dport - now
+      })
+      return VERDICT_DONE
+    end
+    if should_track_rtp_udp(proto, ip.version, src_ip, dst_ip, sport, dport, raw, l4_off) then
+      local rev_key = rtp_key(dst_ip, src_ip, dport, sport)
+      local rev_dport_key = rtp_dport_key(dst_ip, src_ip, sport)
+      local expiry = now + RTP_PASSTHROUGH_TTL
+      rtp_passthrough[key] = expiry
+      rtp_passthrough[rev_key] = expiry
+      rtp_passthrough_dport[rev_dport_key] = expiry
+      local raw_ptr = ffi.cast("const unsigned char*", raw)
+      libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr)
+      log_debug({
+        action = "rtp_passthrough_add",
+        queue = 3,
+        src = src_ip,
+        dst = dst_ip,
+        sport = sport,
+        dport = dport,
+        ttl_s = RTP_PASSTHROUGH_TTL
+      })
+      return VERDICT_DONE
+    end
+  end
   local forged, response_type
   local ok, err_or_frame = pcall(function()
     if proto == PROTO_TCP then
@@ -199,5 +356,9 @@ run = function(queue_num, cfg)
   return run_queue(tonumber(queue_num), handle_reject)
 end
 return {
-  run = run
+  run = run,
+  is_private_ipv4 = is_private_ipv4,
+  is_public_ipv4 = is_public_ipv4,
+  looks_like_rtp_payload = looks_like_rtp_payload,
+  should_track_rtp_udp = should_track_rtp_udp
 }

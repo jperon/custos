@@ -100,6 +100,14 @@ validate_item = function(kind, key, ip)
     if not (is_mac(key) and is_ipv6(ip)) then
       return false
     end
+  elseif kind == "sip4" then
+    if not (is_ipv4(key)) then
+      return false
+    end
+  elseif kind == "sip6" then
+    if not (is_ipv6(key)) then
+      return false
+    end
   else
     return false
   end

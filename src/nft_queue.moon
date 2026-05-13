@@ -104,6 +104,8 @@ add_ip4  = (client_ip, ip_str, rule_id, timeout, corr) -> enqueue "ip4",  client
 add_ip6  = (client_ip, ip_str, rule_id, timeout, corr) -> enqueue "ip6",  client_ip, ip_str, rule_id, timeout, corr
 add_mac4 = (mac, ip_str, rule_id, timeout, corr)       -> enqueue "mac4", mac,       ip_str, rule_id, timeout, corr
 add_mac6 = (mac, ip_str, rule_id, timeout, corr)       -> enqueue "mac6", mac,       ip_str, rule_id, timeout, corr
+add_sip4 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip4", ip_str,    ip_str, rule_id, timeout, corr
+add_sip6 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip6", ip_str,    ip_str, rule_id, timeout, corr
 
 get_last_seq = ->
   s = last_enqueued_seq
@@ -152,6 +154,10 @@ get_set_name = (kind, rule_id) ->
     if kind == "mac6"
       return SET_MAC6 if SET_MAC6
       return nil
+    if kind == "sip4"
+      return "sip_peers"
+    if kind == "sip6"
+      return "sip_peers6"
     return nil
   
   -- Per-rule set naming: rule_{rule_id}_{family}
@@ -183,6 +189,10 @@ cmd_for = (kind, key, ip, rule_id_or_timeout, timeout) ->
     return "add element #{FAMILY} #{TABLE} #{set_name} { #{key} . #{ip} timeout #{timeout} }"
   if kind == "mac6"
     return "add element #{FAMILY6} #{TABLE} #{set_name} { #{key} . #{ip} timeout #{timeout} }"
+  if kind == "sip4"
+    return "add element #{FAMILY} #{TABLE} #{set_name} { #{key} timeout #{timeout} }"
+  if kind == "sip6"
+    return "add element #{FAMILY6} #{TABLE} #{set_name} { #{key} timeout #{timeout} }"
   nil
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :wait_ack, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :cmd_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :wait_ack, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :cmd_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id }

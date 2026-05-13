@@ -67,6 +67,21 @@ table bridge dns-filter-bridge {
     timeout {NFT_IP_TIMEOUT}
   }
 
+  # IPs SIP apprises dynamiquement (signalisation + media).
+  # Peuplé par worker_sip pour chaque pair SIP observé (téléphone, proxy, serveur RTP).
+  # Pas de flag interval : IPs exactes uniquement, plus fiable en mode bridge.
+  set sip_peers {
+    type  ipv4_addr
+    flags timeout
+    timeout {NFT_IP_TIMEOUT}
+  }
+
+  set sip_peers6 {
+    type  ipv6_addr
+    flags timeout
+    timeout {NFT_IP_TIMEOUT}
+  }
+
   # IPs clientes IPv6 authentifiées via le portail captif.
   set authenticated_ips6 {
     type  ipv6_addr
@@ -156,11 +171,16 @@ table bridge dns-filter-bridge {
     ip6 daddr @ip6_dest_whitelist accept comment "Static IPv6 whitelist"
     ip  daddr @ip4_dest_whitelist accept comment "Static IPv4 whitelist"
 
-    # SIP/STUN : placées AVANT les sets DNS-allowed pour garantir que la
-    # signalisation SIP (notamment les 200 OK entrants avec SDP) passe toujours
-    # par le worker SIP, même si mac4_allowed/ip4_allowed accepterait déjà le
-    # paquet (ex : entrée ajoutée après résolution DNS du proxy SIP).
+    # SIP/STUN : signalisation → NFQUEUE (worker_sip apprend les IPs media).
+    # RTP/media : accepté dès que src ET dst sont des pairs SIP appris.
+    # Placées AVANT les sets DNS pour que la signalisation passe toujours
+    # par le worker même si une entrée DNS couvrait déjà l'adresse.
 {SIP_RULES}
+    # RTP/media SIP : accepter UDP entre pairs SIP appris dynamiquement.
+    # Les deux IPs (src et dst) doivent figurer dans sip_peers (ou sip_peers6).
+    # Cette règle gère les flux RTP entrants qui ne passent pas par mac4_allowed.
+    meta l4proto udp ip  saddr @sip_peers  ip  daddr @sip_peers  accept comment "SIP RTP pairs appris v4"
+    meta l4proto udp ip6 saddr @sip_peers6 ip6 daddr @sip_peers6 accept comment "SIP RTP pairs appris v6"
 
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
@@ -171,7 +191,8 @@ table bridge dns-filter-bridge {
 
     # SNI logging/enforcement: capture TCP/443 client packets (ACK path, excluding SYN/RST/FIN) + QUIC UDP/443.
     # Certains clients envoient ClientHello sans flag PSH, donc on ne filtre pas sur PSH.
-    meta l4proto tcp th dport 443 tcp flags & (fin | syn | rst | ack) == ack log level debug prefix "custos sni_tls: " counter queue num {QUEUE_SNI_LOG} comment "TLS packets on TCP/443 (ACK, non-SYN) → SNI logger"
+    # Ports mail SSL (SMTPS 465, IMAPS 993, POP3S 995, STARTTLS 587) : même logique SNI mais absence de SNI = alerte (pas de blocage).
+    meta l4proto tcp th dport {443, 465, 587, 993, 995} tcp flags & (fin | syn | rst | ack) == ack log level debug prefix "custos sni_tls: " counter queue num {QUEUE_SNI_LOG} comment "TLS packets on TCP/443,465,587,993,995 (ACK, non-SYN) → SNI logger"
     meta l4proto udp th dport 443 log level debug prefix "custos sni_quic: " counter queue num {QUEUE_SNI_LOG} comment "QUIC Initial UDP/443 → SNI logger"
 
     # Courriel : heuristiques rapides (dport = client → serveur).

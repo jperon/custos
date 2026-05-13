@@ -4,19 +4,20 @@
 --
 -- Usage : luajit lua/filter/updater.lua [--config path] [--pid path] [--dry-run]
 --
--- Lit la section cfg.sources de la configuration du filtre :
---   sources:
---     nom_liste:
---       urls:   { "https://...", ... }   -- une ou plusieurs URLs (fusionnées)
---       format: "simple"|"hosts"|"adblock"
---       output: "/chemin/vers/liste.bin"
+-- Lit la section filter.sources de la configuration runtime (config.moon) :
+--   filter:
+--     sources:
+--       nom_liste:
+--         urls:   { "https://...", ... }   -- une ou plusieurs URLs (fusionnées)
+--         format: "simple"|"hosts"|"adblock"
+--         output: "/chemin/vers/liste.bin"
 --
---   # Format Toulouse (tar.gz DSI UT Capitole) :
---     nom_liste:
---       url:        "https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz"
---       format:     toulouse
---       categories: [ads, malware, phishing, ...]   -- optionnel, toutes si absent
---       output:     "/chemin/vers/liste.bin"
+--       # Format Toulouse (tar.gz DSI UT Capitole) :
+--       nom_liste:
+--         url:        "https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz"
+--         format:     toulouse
+--         categories: [ads, malware, phishing, ...]   -- optionnel, toutes si absent
+--         output:     "/chemin/vers/liste.bin"
 --
 -- Formats supportés (voir filter/lib/parse_domains.moon) :
 --   simple   : un domaine par ligne, # pour les commentaires
@@ -35,7 +36,7 @@
 ffi          = require "ffi"
 xxhash       = require "ffi_xxhash"
 parse_domains = require "filter.lib.parse_domains"
-{ :load_config } = require "filter.lib.load_config"
+config       = require "config"
 
 ffi.cdef [[
   int rename(const char *oldpath, const char *newpath);
@@ -336,15 +337,14 @@ process_custom_dir = (src_dir, output_dir, dry_run) ->
 
 opts = parse_args arg
 
-cfg_path = opts.config or "/etc/custos/filter.yml"
-cfg, err = load_config cfg_path
-unless cfg
-  io.stderr\write "Erreur de chargement de la config #{cfg_path} : #{err}\n"
-  os.exit 1
+-- Permettre de surcharger le chemin de config via --config ou CUSTOS_CONFIG_PATH
+if opts.config
+  os.setenv "CUSTOS_CONFIG_PATH", opts.config
 
-sources         = cfg.sources or {}
-domainlists_dir = cfg.domainlists_dir
-custom_lists_dir = cfg.custom_lists_dir
+cfg = config
+sources         = cfg.filter.sources or {}
+domainlists_dir = cfg.filter.domainlists_dir
+custom_lists_dir = cfg.filter.custom_lists_dir
 
 -- Créer les répertoires de base avant tout téléchargement
 if domainlists_dir

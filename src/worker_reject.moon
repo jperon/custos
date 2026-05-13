@@ -11,6 +11,7 @@
 --   5. Structured log.
 
 { :ffi, :libnfq } = require "ffi_defs"
+bit = require "bit"
 
 { :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
@@ -40,6 +41,62 @@ ICMP6_CODE = 1
 -- RFC 792 requires at least IP header + 8 bytes of original datagram.
 -- We quote up to 576 bytes to stay within a safe ICMP payload size.
 ICMP_QUOTE_MAX = 576
+
+-- Temporary RTP passthrough cache: key = "src|dst|sport|dport", value = expiry epoch.
+rtp_passthrough = {}
+-- Reverse-direction relaxed cache: key = "src|dst|dport", value = expiry epoch.
+rtp_passthrough_dport = {}
+RTP_PASSTHROUGH_TTL = 120
+
+rtp_key = (src, dst, sport, dport) ->
+  "#{src}|#{dst}|#{sport}|#{dport}"
+
+rtp_dport_key = (src, dst, dport) ->
+  "#{src}|#{dst}|#{dport}"
+
+is_private_ipv4 = (ip) ->
+  return false unless ip and ip\find ".", 1, true
+  a_s, b_s = ip\match "^(%d+)%.(%d+)%."
+  return false unless a_s and b_s
+  a, b = tonumber(a_s), tonumber(b_s)
+  return false unless a and b
+  return true if a == 10
+  return true if a == 192 and b == 168
+  return true if a == 172 and b >= 16 and b <= 31
+  false
+
+is_public_ipv4 = (ip) ->
+  return false unless ip and ip\find ".", 1, true
+  a_s, b_s = ip\match "^(%d+)%.(%d+)%."
+  return false unless a_s and b_s
+  a, b = tonumber(a_s), tonumber(b_s)
+  return false unless a and b
+  return false if a == 127
+  return false if a == 169 and b == 254
+  return false if is_private_ipv4 ip
+  true
+
+looks_like_rtp_payload = (raw, l4_off) ->
+  payload_off = l4_off + 8
+  return false if #raw < payload_off + 11
+
+  b1 = raw\byte payload_off
+  return false unless b1
+  -- RTP/RTCP version must be 2 (bits 7..6 = 10b).
+  return false unless bit.rshift(b1, 6) == 2
+
+  -- Exclude classic STUN packets (magic cookie 0x2112A442 at bytes 4..7 of body).
+  c1, c2, c3, c4 = raw\byte payload_off + 4, payload_off + 7
+  return false if c1 == 0x21 and c2 == 0x12 and c3 == 0xA4 and c4 == 0x42
+
+  true
+
+should_track_rtp_udp = (proto, ip_version, src_ip, dst_ip, sport, dport, raw, l4_off) ->
+  return false unless proto == PROTO_UDP and ip_version == 4
+  return false unless sport and dport
+  return false unless sport >= 1024 and dport >= 1024
+  return false unless is_private_ipv4(src_ip) and is_public_ipv4(dst_ip)
+  looks_like_rtp_payload raw, l4_off
 
 --- Forge a TCP RST/ACK IP packet in response to any TCP packet from the client.
 -- Swaps src/dst addresses at L3 and L4. Returns raw IP payload (no Ethernet header)
@@ -179,6 +236,68 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
     if udp
       sport, dport = udp.spt, udp.dpt
 
+  -- SIP/RTP fallback: pass through RTP-like outbound UDP tuples for a short time.
+  -- This covers providers that use media relay IPs not advertised in parsed SDP.
+  if proto == PROTO_UDP and ip.version == 4 and sport and dport
+    key = rtp_key src_ip, dst_ip, sport, dport
+    key_dport = rtp_dport_key src_ip, dst_ip, dport
+    now = os.time!
+    exp = rtp_passthrough[key]
+    exp_dport = rtp_passthrough_dport[key_dport]
+    if exp and exp <= now
+      rtp_passthrough[key] = nil
+      exp = nil
+    if exp_dport and exp_dport <= now
+      rtp_passthrough_dport[key_dport] = nil
+      exp_dport = nil
+
+    if exp and exp > now
+      raw_ptr = ffi.cast "const unsigned char*", raw
+      libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
+      log_debug {
+        action: "rtp_passthrough_hit"
+        queue: 3
+        src: src_ip
+        dst: dst_ip
+        sport: sport
+        dport: dport
+        ttl_s: exp - now
+      }
+      return VERDICT_DONE
+    elseif exp_dport and exp_dport > now
+      raw_ptr = ffi.cast "const unsigned char*", raw
+      libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
+      log_debug {
+        action: "rtp_passthrough_hit_dport"
+        queue: 3
+        src: src_ip
+        dst: dst_ip
+        sport: sport
+        dport: dport
+        ttl_s: exp_dport - now
+      }
+      return VERDICT_DONE
+
+    if should_track_rtp_udp(proto, ip.version, src_ip, dst_ip, sport, dport, raw, l4_off)
+      rev_key = rtp_key dst_ip, src_ip, dport, sport
+      rev_dport_key = rtp_dport_key dst_ip, src_ip, sport
+      expiry = now + RTP_PASSTHROUGH_TTL
+      rtp_passthrough[key] = expiry
+      rtp_passthrough[rev_key] = expiry
+      rtp_passthrough_dport[rev_dport_key] = expiry
+      raw_ptr = ffi.cast "const unsigned char*", raw
+      libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
+      log_debug {
+        action: "rtp_passthrough_add"
+        queue: 3
+        src: src_ip
+        dst: dst_ip
+        sport: sport
+        dport: dport
+        ttl_s: RTP_PASSTHROUGH_TTL
+      }
+      return VERDICT_DONE
+
   local forged, response_type
   ok, err_or_frame = pcall ->
     if proto == PROTO_TCP
@@ -232,4 +351,10 @@ run = (queue_num, cfg) ->
   log_info { action: "worker_start", queue: queue_num }
   run_queue tonumber(queue_num), handle_reject
 
-{ :run }
+{
+  :run
+  :is_private_ipv4
+  :is_public_ipv4
+  :looks_like_rtp_payload
+  :should_track_rtp_udp
+}

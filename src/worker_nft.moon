@@ -61,6 +61,10 @@ validate_item = (kind, key, ip) ->
     return false unless is_mac(key) and is_ipv4(ip)
   elseif kind == "mac6"
     return false unless is_mac(key) and is_ipv6(ip)
+  elseif kind == "sip4"
+    return false unless is_ipv4(key)
+  elseif kind == "sip6"
+    return false unless is_ipv6(key)
   else
     return false
   true

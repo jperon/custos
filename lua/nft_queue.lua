@@ -170,6 +170,14 @@ local add_mac6
 add_mac6 = function(mac, ip_str, rule_id, timeout, corr)
   return enqueue("mac6", mac, ip_str, rule_id, timeout, corr)
 end
+local add_sip4
+add_sip4 = function(ip_str, rule_id, timeout, corr)
+  return enqueue("sip4", ip_str, ip_str, rule_id, timeout, corr)
+end
+local add_sip6
+add_sip6 = function(ip_str, rule_id, timeout, corr)
+  return enqueue("sip6", ip_str, ip_str, rule_id, timeout, corr)
+end
 local get_last_seq
 get_last_seq = function()
   local s = last_enqueued_seq
@@ -235,6 +243,12 @@ get_set_name = function(kind, rule_id)
       end
       return nil
     end
+    if kind == "sip4" then
+      return "sip_peers"
+    end
+    if kind == "sip6" then
+      return "sip_peers6"
+    end
     return nil
   end
   local family_suffix
@@ -270,6 +284,12 @@ cmd_for = function(kind, key, ip, rule_id_or_timeout, timeout)
   if kind == "mac6" then
     return "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
   end
+  if kind == "sip4" then
+    return "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
+  end
+  if kind == "sip6" then
+    return "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
+  end
   return nil
 end
 return {
@@ -281,6 +301,8 @@ return {
   add_ip6 = add_ip6,
   add_mac4 = add_mac4,
   add_mac6 = add_mac6,
+  add_sip4 = add_sip4,
+  add_sip6 = add_sip6,
   cmd_for = cmd_for,
   sanitize_timeout = sanitize_timeout,
   get_set_name = get_set_name,

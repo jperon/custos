@@ -1,8 +1,7 @@
 local ffi = require("ffi")
 local xxhash = require("ffi_xxhash")
 local parse_domains = require("filter.lib.parse_domains")
-local load_config
-load_config = require("filter.lib.load_config").load_config
+local config = require("config")
 ffi.cdef([[  int rename(const char *oldpath, const char *newpath);
   int kill(int pid, int sig);
 ]])
@@ -295,15 +294,13 @@ process_custom_dir = function(src_dir, output_dir, dry_run)
   return local_updated, local_errors
 end
 local opts = parse_args(arg)
-local cfg_path = opts.config or "/etc/custos/filter.yml"
-local cfg, err = load_config(cfg_path)
-if not (cfg) then
-  io.stderr:write("Erreur de chargement de la config " .. tostring(cfg_path) .. " : " .. tostring(err) .. "\n")
-  os.exit(1)
+if opts.config then
+  os.setenv("CUSTOS_CONFIG_PATH", opts.config)
 end
-local sources = cfg.sources or { }
-local domainlists_dir = cfg.domainlists_dir
-local custom_lists_dir = cfg.custom_lists_dir
+local cfg = config
+local sources = cfg.filter.sources or { }
+local domainlists_dir = cfg.filter.domainlists_dir
+local custom_lists_dir = cfg.filter.custom_lists_dir
 if domainlists_dir then
   if not (ensure_dir(domainlists_dir)) then
     io.stderr:write("Impossible de créer domainlists_dir : " .. tostring(domainlists_dir) .. "\n")
@@ -389,8 +386,7 @@ for name, source in pairs(sources) do
     for _index_0 = 1, #urls do
       local url = urls[_index_0]
       io.stderr:write("[" .. tostring(name) .. "] GET " .. tostring(url) .. " ... ")
-      local data
-      data, err = download(url)
+      local data, err = download(url)
       if err then
         io.stderr:write("ERREUR : " .. tostring(err) .. "\n")
         failed = true

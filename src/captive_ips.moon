@@ -15,7 +15,7 @@
 -- Lit d'abord la configuration explicite et les variables d'environnement,
 -- puis tente une auto-détection sur l'interface bridge si nécessaire.
 -- Aucun appel ne lève d'exception : toutes les erreurs sont absorbées.
--- @tparam table auth_cfg Configuration auth issue de filter.yml (peut être {})
+-- @tparam table auth_cfg Configuration auth issue de config.moon (peut être {})
 -- @treturn string|nil Adresse IPv4 du portail captif, ou nil si introuvable
 -- @treturn string|nil Adresse IPv6 du portail captif, ou nil si introuvable
 detect = (auth_cfg) ->
