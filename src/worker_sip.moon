@@ -22,6 +22,7 @@ ipparse_ip  = require "ipparse.l3.ip"
 ipparse_udp = require "ipparse.l4.udp"
 ipparse_tcp = require "ipparse.l4.tcp"
 sip_parser  = require "sip.parser"
+ok_mac_ipc, mac_ipc = pcall -> require "mac_learner_ipc"
 
 -- Module-level TTL, set during run().
 sip_ttl = nil
@@ -63,6 +64,58 @@ cache_ip_to_mac = (ip, mac) ->
     ip_to_mac[first_k] = nil if first_k
   ip_to_mac[ip] = mac
 
+known_phone_mac = (ip) ->
+  return nil unless ip
+  ip_to_mac[ip]
+
+is_lan_ip = (ip) ->
+  return false unless ip
+  return true if ip\match("^10%.")
+  return true if ip\match("^192%.168%.")
+  if b = tonumber ip\match("^172%.(%d+)%.")
+    return true if b >= 16 and b <= 31
+  return true if ip\match("^[Ff][CcDd][0-9a-fA-F:]*$")
+  false
+
+query_phone_mac = (ip) ->
+  return nil unless is_lan_ip ip
+  return nil unless ok_mac_ipc and mac_ipc and mac_ipc.get_mac and ip
+  mac = mac_ipc.get_mac ip
+  return nil unless mac and mac != "unknown"
+  cache_ip_to_mac ip, mac
+  mac
+
+resolve_outbound_mac = (ip_src_str, packet_mac) ->
+  mac = known_phone_mac ip_src_str
+  return mac, "cache" if mac
+  if is_lan_ip(ip_src_str) and packet_mac and packet_mac != "unknown"
+    return packet_mac, "packet"
+  mac = query_phone_mac ip_src_str
+  return mac, "learner" if mac
+  nil, "none"
+
+classify_direction = (sport, dport, ip_src_str, ip_dst_str) ->
+  outbound = (dport == 5060)
+  inbound  = (sport == 5060)
+  return false, false, false unless outbound or inbound
+
+  -- sport=dport=5060: disambiguate with phone cache.
+  if outbound and inbound
+    if known_phone_mac ip_dst_str
+      outbound = false
+    else
+      inbound = false
+  -- dport=5060 only: can still be inbound when provider uses random source port.
+  elseif outbound and (not inbound) and known_phone_mac(ip_dst_str)
+    outbound = false
+    inbound = true
+  -- sport=5060 only: symmetric safeguard (rare).
+  elseif inbound and (not outbound) and known_phone_mac(ip_src_str)
+    inbound = false
+    outbound = true
+
+  outbound, inbound, true
+
 --- Insert {mac . ip} into mac4_allowed or mac6_allowed and wait for ACK.
 -- @tparam string mac     Source MAC address
 -- @tparam string ip      Destination IP address
@@ -80,21 +133,20 @@ allow_mac_ip = (mac, ip, family, reason) ->
     nft_q.wait_ack pending, reason if pending
   ok
 
---- Insert {ip_src . ip_dst} into ip4_allowed or ip6_allowed (fire-and-forget).
--- Used to whitelist a server that replies from a different source IP than the
--- one the client sent to (e.g. IPBX responding from its nearest VLAN interface).
--- No wait_ack: this covers future packets, not the current one.
--- @tparam string ip_src  Server/IPBX source IP
--- @tparam string ip_dst  Phone/client destination IP
+--- Insert an IP into sip_peers (or sip_peers6), fire-and-forget.
+-- Called for every IP seen in a SIP dialog (phone, proxy, media server).
+-- The nft rule `ip saddr @sip_peers ip daddr @sip_peers accept` then lets
+-- RTP flow freely between any two known SIP peers (both directions).
+-- @tparam string ip      IP address string
 -- @tparam string family  "ip4" or "ip6"
--- @tparam string reason  Log label
-allow_ip_pair = (ip_src, ip_dst, family, reason) ->
-  return unless ip_src and ip_dst and family
+-- @tparam string reason  Log label (correlation)
+allow_sip_peer = (ip, family, reason) ->
+  return unless ip and family
   nft_q = require "nft_queue"
   if family == "ip6"
-    nft_q.add_ip6 ip_src, ip_dst, nil, sip_ttl, reason
+    nft_q.add_sip6 ip, nil, sip_ttl, reason
   else
-    nft_q.add_ip4 ip_src, ip_dst, nil, sip_ttl, reason
+    nft_q.add_sip4 ip, nil, sip_ttl, reason
 
 -- ── Packet handler ────────────────────────────────────────────────────────────
 
@@ -154,7 +206,8 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   -- future RTP media from that same IP to this phone is also accepted.
   if ip.protocol == 17 and sport == 3478
     if ip_src_str and ip_dst_str
-      allow_ip_pair ip_src_str, ip_dst_str, ip_family, "sip_rtp_return"
+      allow_sip_peer ip_src_str, ip_family, "stun_src"
+      allow_sip_peer ip_dst_str, ip_family, "stun_dst"
     log_debug { action: "stun_response_accepted", ip: ip_src_str, dst: ip_dst_str }
     return NF_ACCEPT
 
@@ -163,29 +216,40 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
     return NF_ACCEPT
 
   -- ── SIP/clear (port 5060) ─────────────────────────────────────────────────
-  outbound = (dport == 5060)  -- phone → proxy
-  inbound  = (sport == 5060)  -- proxy → phone
-  return NF_ACCEPT unless outbound or inbound
-
-  -- When sport=dport=5060 both flags are set. Resolve the ambiguity by
-  -- checking the ip_to_mac cache: if the destination IP is a cached phone,
-  -- the packet is an inbound response (183, 200 OK, etc.); otherwise the
-  -- source is the phone and it is an outbound request (INVITE, REGISTER…).
-  if outbound and inbound
-    if ip_to_mac[ip_dst_str]
-      outbound = false
-    else
-      inbound = false
+  outbound, inbound, is_sip = classify_direction sport, dport, ip_src_str, ip_dst_str
+  return NF_ACCEPT unless is_sip
+  outbound_mac = nil
+  outbound_mac_src = "none"
+  if outbound
+    outbound_mac, outbound_mac_src = resolve_outbound_mac ip_src_str, mac
+    log_debug {
+      action: "sip_outbound_mac_selected"
+      ip_src: ip_src_str or ""
+      packet_mac: mac or ""
+      selected_mac: outbound_mac or ""
+      source: outbound_mac_src
+    }
 
   -- Outbound: whitelist the proxy IP + cache phone MAC.
-  if outbound and ip_dst_str and mac != "unknown"
-    allow_mac_ip mac, ip_dst_str, ip_family, "sip_signal"
-    cache_ip_to_mac ip_src_str, mac if ip_src_str
+  if outbound and ip_dst_str and outbound_mac
+    allow_mac_ip outbound_mac, ip_dst_str, ip_family, "sip_signal"
+    cache_ip_to_mac ip_src_str, outbound_mac if ip_src_str and is_lan_ip(ip_src_str)
 
-  -- Parse SIP to extract SDP media IPs.
+  -- Parse SIP payload.
   return NF_ACCEPT unless l7_payload and #l7_payload > 4
 
   msg = sip_parser.parse l7_payload
+  return NF_ACCEPT unless msg
+
+  -- Enregistrer les deux IPs du paquet SIP comme pairs connus.
+  -- La règle nft `ip saddr @sip_peers ip daddr @sip_peers accept`
+  -- autorisera ensuite le RTP entre ces IPs sans passer par ip4_allowed.
+  allow_sip_peer ip_src_str, ip_family, "sip_peer_src"
+  allow_sip_peer ip_dst_str, ip_family, "sip_peer_dst"
+
+  dst_phone_mac = known_phone_mac(ip_dst_str) or query_phone_mac(ip_dst_str)
+
+  -- Parse SIP to extract SDP media IPs.
   return NF_ACCEPT unless msg and msg.sdp_ips and #msg.sdp_ips > 0
 
   -- Determine which MAC to use for SDP IP insertion:
@@ -193,9 +257,15 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   --   inbound  → look up phone MAC from reverse cache (ip_dst = phone IP)
   target_mac = nil
   if outbound
-    target_mac = mac
+    target_mac = outbound_mac
+    unless target_mac
+      log_debug {
+        action: "sip_no_mac_for_src"
+        ip_src: ip_src_str or "unknown"
+      }
+      return NF_ACCEPT
   elseif inbound
-    target_mac = ip_to_mac[ip_dst_str] if ip_dst_str
+    target_mac = dst_phone_mac
     unless target_mac
       log_debug {
         action: "sip_no_mac_for_dst"
@@ -204,12 +274,10 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
       return NF_ACCEPT
 
   for entry in *msg.sdp_ips
+    -- Ajouter l'IP media dans sip_peers pour le passage RTP bidirectionnel.
+    allow_sip_peer entry.ip, entry.family, "sip_media"
+    -- Conserver l'entrée MAC pour l'outbound (téléphone → media server).
     allow_mac_ip target_mac, entry.ip, entry.family, "sip_media"
-    -- For inbound (proxy→phone), also whitelist the reverse direction so the
-    -- media server can send RTP to the phone even if it uses a different source
-    -- IP than the one the SDP advertises.
-    if inbound and ip_dst_str
-      allow_ip_pair entry.ip, ip_dst_str, entry.family, "sip_media_return"
     log_debug {
       action:      "sip_media_ip_added"
       mac:         target_mac
@@ -241,4 +309,9 @@ run = (queue_num, fds) ->
   log_info { action: "worker_sip_starting", queue: queue_num, ttl: sip_ttl }
   run_queue tonumber(queue_num), handle_packet
 
-{ :run }
+{
+  :run
+  :classify_direction
+  :resolve_outbound_mac
+  remember_phone_ip: cache_ip_to_mac
+}

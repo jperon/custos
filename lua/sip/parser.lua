@@ -58,25 +58,58 @@ parse = function(raw)
     end
   end
   local sdp_ips = { }
+  local seen_ips = { }
+  local add_sdp_ip
+  add_sdp_ip = function(ip, family)
+    if not (ip and family) then
+      return 
+    end
+    if seen_ips[ip] then
+      return 
+    end
+    seen_ips[ip] = true
+    return table.insert(sdp_ips, {
+      ip = ip,
+      family = family
+    })
+  end
   if body and content_type and content_type:find("application/sdp") then
     for sdp_line in body:gmatch("[^\n]+") do
       local _continue_0 = false
       repeat
         local ip4 = sdp_line:match("^c=IN IP4 (%d+%.%d+%.%d+%.%d+)")
         if ip4 then
-          table.insert(sdp_ips, {
-            ip = ip4,
-            family = "ip4"
-          })
+          add_sdp_ip(ip4, "ip4")
           _continue_0 = true
           break
         end
         local ip6 = sdp_line:match("^c=IN IP6 (%S+)")
         if ip6 and (ip6:find(":")) and ip6 ~= "::" then
-          table.insert(sdp_ips, {
-            ip = ip6,
-            family = "ip6"
-          })
+          add_sdp_ip(ip6, "ip6")
+          _continue_0 = true
+          break
+        end
+        local rtcp_ip4 = sdp_line:match("^a=rtcp:%d+ IN IP4 (%d+%.%d+%.%d+%.%d+)")
+        if rtcp_ip4 then
+          add_sdp_ip(rtcp_ip4, "ip4")
+          _continue_0 = true
+          break
+        end
+        local rtcp_ip6 = sdp_line:match("^a=rtcp:%d+ IN IP6 (%S+)")
+        if rtcp_ip6 and (rtcp_ip6:find(":")) and rtcp_ip6 ~= "::" then
+          add_sdp_ip(rtcp_ip6, "ip6")
+          _continue_0 = true
+          break
+        end
+        local cand_ip4 = sdp_line:match("^a=candidate:%S+%s+%d+%s+%S+%s+%d+%s+(%d+%.%d+%.%d+%.%d+)%s+%d+%s+typ%s+%S+")
+        if cand_ip4 then
+          add_sdp_ip(cand_ip4, "ip4")
+          _continue_0 = true
+          break
+        end
+        local cand_ip6 = sdp_line:match("^a=candidate:%S+%s+%d+%s+%S+%s+%d+%s+(%S+)%s+%d+%s+typ%s+%S+")
+        if cand_ip6 and (cand_ip6:find(":")) and cand_ip6 ~= "::" then
+          add_sdp_ip(cand_ip6, "ip6")
         end
         _continue_0 = true
       until true

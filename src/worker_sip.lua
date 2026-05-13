@@ -19,6 +19,9 @@ local ipparse_ip = require("ipparse.l3.ip")
 local ipparse_udp = require("ipparse.l4.udp")
 local ipparse_tcp = require("ipparse.l4.tcp")
 local sip_parser = require("sip.parser")
+local ok_mac_ipc, mac_ipc = pcall(function()
+  return require("mac_learner_ipc")
+end)
 local sip_ttl = nil
 local ip_to_mac = { }
 local IP_MAC_MAX = 256
@@ -63,6 +66,66 @@ cache_ip_to_mac = function(ip, mac)
   end
   ip_to_mac[ip] = mac
 end
+local known_phone_mac
+known_phone_mac = function(ip)
+  if not (ip) then
+    return nil
+  end
+  return ip_to_mac[ip]
+end
+local query_phone_mac
+query_phone_mac = function(ip)
+  if not (ok_mac_ipc and mac_ipc and mac_ipc.get_mac and ip) then
+    return nil
+  end
+  local mac = mac_ipc.get_mac(ip)
+  if not (mac and mac ~= "unknown") then
+    return nil
+  end
+  cache_ip_to_mac(ip, mac)
+  return mac
+end
+local resolve_outbound_mac
+resolve_outbound_mac = function(ip_src_str, packet_mac)
+  local mac = known_phone_mac(ip_src_str)
+  if mac then
+    return mac, "cache"
+  end
+  mac = query_phone_mac(ip_src_str)
+  if mac then
+    return mac, "learner"
+  end
+  return nil, "none"
+end
+local should_allow_signal_return
+should_allow_signal_return = function(msg, ip_dst_str)
+  if not (msg) then
+    return false
+  end
+  return (known_phone_mac(ip_dst_str) or query_phone_mac(ip_dst_str)) ~= nil
+end
+local classify_direction
+classify_direction = function(sport, dport, ip_src_str, ip_dst_str)
+  local outbound = (dport == 5060)
+  local inbound = (sport == 5060)
+  if not (outbound or inbound) then
+    return false, false, false
+  end
+  if outbound and inbound then
+    if known_phone_mac(ip_dst_str) then
+      outbound = false
+    else
+      inbound = false
+    end
+  elseif outbound and (not inbound) and known_phone_mac(ip_dst_str) then
+    outbound = false
+    inbound = true
+  elseif inbound and (not outbound) and known_phone_mac(ip_src_str) then
+    inbound = false
+    outbound = true
+  end
+  return outbound, inbound, true
+end
 local allow_mac_ip
 allow_mac_ip = function(mac, ip, family, reason)
   if not (mac and mac ~= "unknown" and ip and family) then
@@ -82,6 +145,18 @@ allow_mac_ip = function(mac, ip, family, reason)
     end
   end
   return ok
+end
+local allow_ip_pair
+allow_ip_pair = function(ip_src, ip_dst, family, reason)
+  if not (ip_src and ip_dst and family) then
+    return 
+  end
+  local nft_q = require("nft_queue")
+  if family == "ip6" then
+    return nft_q.add_ip6(ip_src, ip_dst, nil, sip_ttl, reason)
+  else
+    return nft_q.add_ip4(ip_src, ip_dst, nil, sip_ttl, reason)
+  end
 end
 local handle_packet
 handle_packet = function(qh_ptr, nfad, pkt_id)
@@ -150,6 +225,9 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
     return NF_ACCEPT
   end
   if ip.protocol == 17 and sport == 3478 then
+    if ip_src_str and ip_dst_str then
+      allow_ip_pair(ip_src_str, ip_dst_str, ip_family, "sip_rtp_return")
+    end
     log_debug({
       action = "stun_response_accepted",
       ip = ip_src_str,
@@ -160,31 +238,66 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
   if dport == 5061 or sport == 5061 then
     return NF_ACCEPT
   end
-  local outbound = (dport == 5060)
-  local inbound = (sport == 5060)
-  if not (outbound or inbound) then
+  local outbound, inbound, is_sip = classify_direction(sport, dport, ip_src_str, ip_dst_str)
+  if not (is_sip) then
     return NF_ACCEPT
   end
-  if outbound and ip_dst_str and mac ~= "unknown" then
-    allow_mac_ip(mac, ip_dst_str, ip_family, "sip_signal")
+  local outbound_mac = nil
+  local outbound_mac_src = "none"
+  if outbound then
+    outbound_mac, outbound_mac_src = resolve_outbound_mac(ip_src_str, mac)
+    log_debug({
+      action = "sip_outbound_mac_selected",
+      ip_src = ip_src_str or "",
+      packet_mac = mac or "",
+      selected_mac = outbound_mac or "",
+      source = outbound_mac_src
+    })
+  end
+  if outbound and ip_dst_str and outbound_mac then
+    allow_mac_ip(outbound_mac, ip_dst_str, ip_family, "sip_signal")
     if ip_src_str then
-      cache_ip_to_mac(ip_src_str, mac)
+      cache_ip_to_mac(ip_src_str, outbound_mac)
     end
   end
   if not (l7_payload and #l7_payload > 4) then
     return NF_ACCEPT
   end
   local msg = sip_parser.parse(l7_payload)
+  if not (msg) then
+    return NF_ACCEPT
+  end
+  local dst_phone_mac = known_phone_mac(ip_dst_str) or query_phone_mac(ip_dst_str)
+  if should_allow_signal_return(msg, ip_dst_str) then
+    allow_ip_pair(ip_src_str, ip_dst_str, ip_family, "sip_signal_return")
+    log_debug({
+      action = "sip_signal_return_added",
+      ip_src = ip_src_str or "",
+      ip_dst = ip_dst_str or "",
+      family = ip_family,
+      cseq_method = msg.cseq_method or "",
+      sip_status = tostring(msg.status_code or ""),
+      sip_method = msg.method or ""
+    })
+  end
   if not (msg and msg.sdp_ips and #msg.sdp_ips > 0) then
     return NF_ACCEPT
   end
+  if inbound and ip_src_str and ip_dst_str then
+    allow_ip_pair(ip_src_str, ip_dst_str, ip_family, "sip_media_return_src")
+  end
   local target_mac = nil
   if outbound then
-    target_mac = mac
-  elseif inbound then
-    if ip_dst_str then
-      target_mac = ip_to_mac[ip_dst_str]
+    target_mac = outbound_mac
+    if not (target_mac) then
+      log_debug({
+        action = "sip_no_mac_for_src",
+        ip_src = ip_src_str or "unknown"
+      })
+      return NF_ACCEPT
     end
+  elseif inbound then
+    target_mac = dst_phone_mac
     if not (target_mac) then
       log_debug({
         action = "sip_no_mac_for_dst",
@@ -197,16 +310,19 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
   for _index_0 = 1, #_list_0 do
     local entry = _list_0[_index_0]
     allow_mac_ip(target_mac, entry.ip, entry.family, "sip_media")
+    if inbound and ip_dst_str then
+      allow_ip_pair(entry.ip, ip_dst_str, entry.family, "sip_media_return")
+    end
     log_debug({
       action = "sip_media_ip_added",
       mac = target_mac,
       media_ip = entry.ip,
       family = entry.family,
       direction = (function()
-        if outbound then
-          return "outbound"
-        else
+        if inbound then
           return "inbound"
+        else
+          return "outbound"
         end
       end)(),
       cseq_method = msg.cseq_method or "",
@@ -238,5 +354,9 @@ run = function(queue_num, fds)
   return run_queue(tonumber(queue_num), handle_packet)
 end
 return {
-  run = run
+  run = run,
+  classify_direction = classify_direction,
+  resolve_outbound_mac = resolve_outbound_mac,
+  should_allow_signal_return = should_allow_signal_return,
+  remember_phone_ip = cache_ip_to_mac
 }

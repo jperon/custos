@@ -111,6 +111,24 @@ t=0 0
 m=audio 5004 RTP/AVP 0
 ]]
 
+ICE_SDP = [[SIP/2.0 183 Session Progress
+Via: SIP/2.0/UDP 10.35.3.6:5060;branch=z9hG4bKice
+Call-ID: call-ice@10.35.3.6
+CSeq: 4 INVITE
+Content-Type: application/sdp
+Content-Length: 320
+
+v=0
+o=- 1 2 IN IP4 83.136.164.102
+s=-
+c=IN IP4 83.136.164.102
+t=0 0
+m=audio 61348 RTP/AVP 0 8
+a=rtcp:61349 IN IP4 83.136.162.33
+a=candidate:1 1 UDP 2130706431 83.136.162.33 61348 typ host
+a=candidate:2 1 UDP 2130706431 83.136.164.102 61348 typ host
+]]
+
 -- ── Tests ─────────────────────────────────────────────────────────────────────
 
 -- 1. Returns nil for non-SIP input
@@ -174,6 +192,14 @@ if msg and #msg.sdp_ips >= 1
 check "nil for empty",  parse("") == nil,   nil, nil
 check "nil for nil",    parse(nil) == nil,   nil, nil
 check "nil for short",  parse("abc") == nil, nil, nil
+
+-- 9. ICE/RTCP SDP extraction
+msg = parse ICE_SDP
+check "ICE: status_code", msg and eq(msg.status_code, 183), msg and msg.status_code, 183
+check "ICE: sdp_ips count 2", msg and #msg.sdp_ips == 2, msg and #msg.sdp_ips, 2
+if msg and #msg.sdp_ips >= 2
+  check "ICE: ip[1] c-line", eq(msg.sdp_ips[1].ip, "83.136.164.102"), msg.sdp_ips[1].ip, "83.136.164.102"
+  check "ICE: ip[2] rtcp/candidate", eq(msg.sdp_ips[2].ip, "83.136.162.33"), msg.sdp_ips[2].ip, "83.136.162.33"
 
 -- ── Summary ───────────────────────────────────────────────────────────────────
 
