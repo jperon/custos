@@ -12,7 +12,6 @@
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       lists: lists
       eval: (req) ->
         _val = req.vlan
@@ -22,6 +21,4 @@
           for _, v in ipairs vlans
             return true, "vlan #{_val} in #{list_name}" if v == _val
         false, "vlan #{_val} not in any list"
-      compile_nft: -> nil, "from_vlanlists requires worker (multiple lists)"
-      creates_dynamic_scope: false
     }

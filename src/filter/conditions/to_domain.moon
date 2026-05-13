@@ -11,25 +11,19 @@
     if domain == "_any"
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
         creates_dynamic_scope: true
         domain: domain
         eval: (req) -> req.domain ~= nil, "domain available"
-        compile_nft: -> nil, "to_domain requires worker (DNS)"
       }
     if domain == "_none"
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
-        creates_dynamic_scope: false
         domain: domain
         eval: (req) -> req.domain == nil, "domain not available"
-        compile_nft: -> nil, "to_domain requires worker (DNS)"
       }
 
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       creates_dynamic_scope: true
       domain: domain
       eval: (req) ->
@@ -45,5 +39,4 @@
           pos = _domain\find ".", pos + 1, true
 
         false, "Domain not matched"
-      compile_nft: -> nil, "to_domain requires worker (DNS matching)"
     }

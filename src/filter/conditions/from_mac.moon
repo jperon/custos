@@ -17,30 +17,23 @@
     if mac_or_alias == "_any"
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
         mac_or_alias: mac_or_alias
         eval: (req) ->
           _mac = req.mac
           _mac ~= nil, "MAC available"
-        compile_nft: -> nil, "_any not supported in nft"
-        creates_dynamic_scope: false
       }
     if mac_or_alias == "_none"
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
         mac_or_alias: mac_or_alias
         eval: (req) ->
           _mac = req.mac
           _mac == nil, "MAC not available"
-        compile_nft: -> nil, "_none not supported in nft"
-        creates_dynamic_scope: false
       }
 
     -- Cas normal : MAC spécifique
     {
       capabilities: { worker: true, nft_static: true, nft_dynamic: false }
-      worker_only: false
       mac_or_alias: mac_or_alias
       target_mac: target_mac
       eval: (req) ->
@@ -48,7 +41,5 @@
         return false, "MAC not available" unless _mac
         _mac\lower! == target_mac, "MAC #{_mac} vs #{target_mac}"
       compile_nft: (family) ->
-        -- nftables ether saddr match
         return "ether saddr #{target_mac}", nil
-      creates_dynamic_scope: false
     }

@@ -8,7 +8,6 @@
   (vlan_id) ->
     {
       capabilities: { worker: true, nft_static: true, nft_dynamic: false }
-      worker_only: false
       vlan_id: vlan_id
       eval: (req) ->
         _val = req.vlan
@@ -21,7 +20,5 @@
       compile_nft: (family) ->
         if vlan_id == "_any" or vlan_id == "_none"
           return nil, "vlan _any/_none not supported in nft"
-        -- nftables vlan match: vlan id <id>
         return "vlan id #{vlan_id}", nil
-      creates_dynamic_scope: false
     }

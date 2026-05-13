@@ -14,15 +14,11 @@
     unless username
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
         eval: (req) -> false, "from_authenticated_user: no username specified"
-        compile_nft: -> nil, "username required"
-        creates_dynamic_scope: false
       }
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       username: username
       eval: (req) ->
         -- Get session for this user
@@ -40,6 +36,4 @@
           return false, "from_authenticated_user: MAC mismatch for #{username}"
         
         true, "from_authenticated_user: user #{username} authenticated"
-      compile_nft: -> nil, "from_authenticated_user requires worker (dynamic sessions)"
-      creates_dynamic_scope: false
     }

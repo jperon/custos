@@ -12,7 +12,6 @@
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       lists: lists
       eval: (req) ->
         in_timelist_factory = require "filter.conditions.in_timelist"
@@ -21,6 +20,4 @@
           ok, reason = list_cond.eval req
           return true, reason if ok
         false, "Outside all windows in specified lists"
-      compile_nft: -> nil, "in_timelists requires worker (time-based)"
-      creates_dynamic_scope: false
     }

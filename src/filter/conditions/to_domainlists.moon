@@ -12,7 +12,6 @@
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       lists: lists
       eval: (req) ->
         to_domainlist_factory = require "filter.conditions.to_domainlist"
@@ -21,6 +20,5 @@
           ok, msg = list_cond.eval req
           return ok, msg if ok
         false, "Domain not in any of: #{table.concat lists, ', '}"
-      compile_nft: -> nil, "to_domainlists requires worker (DNS lookup)"
       creates_dynamic_scope: true
     }

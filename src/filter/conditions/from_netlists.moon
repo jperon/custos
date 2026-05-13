@@ -12,7 +12,6 @@
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       lists: lists
       eval: (req) ->
         ip = req.src_ip
@@ -25,6 +24,4 @@
             if net and net\contains ip
               return true, "#{ip} in #{cidr} (#{list_name})"
         false, "#{ip} not in any netlist"
-      compile_nft: -> nil, "from_netlists requires worker (multiple lists)"
-      creates_dynamic_scope: false
     }

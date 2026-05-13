@@ -36,7 +36,6 @@ safe_get_mac = (ip_str) ->
   (user) ->
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       user: user
       eval: (req) ->
         hinted_user = req.user
@@ -79,6 +78,4 @@ safe_get_mac = (ip_str) ->
         enrich_session_ip req.mac, req.src_ip, sessions_file
 
         true, "from_user: #{req.src_ip} → #{s.user}"
-      compile_nft: -> nil, "from_user requires worker (dynamic sessions)"
-      creates_dynamic_scope: false
     }

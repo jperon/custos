@@ -9,10 +9,7 @@
     unless subnet_spec
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
         eval: (req) -> false, "from_subnet requires a subnet specification"
-        compile_nft: -> nil, "invalid subnet spec"
-        creates_dynamic_scope: false
       }
 
     -- Handle both formats
@@ -25,10 +22,7 @@
     unless net_cidr
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
         eval: (req) -> false, "Invalid subnet specification"
-        compile_nft: -> nil, "invalid subnet spec"
-        creates_dynamic_scope: false
       }
 
     { :Net } = require "filter.lib.ipcalc"
@@ -37,15 +31,11 @@
     unless _net
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
         eval: (req) -> false, "Invalid CIDR: #{net_cidr}"
-        compile_nft: -> nil, "invalid CIDR"
-        creates_dynamic_scope: false
       }
 
     {
       capabilities: { worker: true, nft_static: true, nft_dynamic: false }
-      worker_only: false
       net_cidr: net_cidr
       _net: _net
       eval: (req) ->
@@ -64,5 +54,4 @@
           if family == "inet" or family == "ip"
             return "ip saddr #{net_cidr}", nil
           return nil, "IPv4 CIDR in IPv6 family"
-      creates_dynamic_scope: false
     }

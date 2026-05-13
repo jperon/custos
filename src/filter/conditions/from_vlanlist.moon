@@ -10,7 +10,6 @@
     
     {
       capabilities: { worker: true, nft_static: true, nft_dynamic: false }
-      worker_only: false
       list_name: list_name
       vlans: vlans
       eval: (req) ->
@@ -23,5 +22,4 @@
         -- Build set name for this vlan list
         set_name = "vlans_#{list_name}"
         return "vlan id @#{set_name}", nil
-      creates_dynamic_scope: false
     }

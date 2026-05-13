@@ -8,7 +8,6 @@
   (rule) ->
     {
       capabilities: { worker: true, nft: true }
-      worker_only: false
       eval: (req) ->
         false, "Denied by rule: #{rule.description or '?'}"
       compile_nft: ->

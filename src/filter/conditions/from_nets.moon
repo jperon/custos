@@ -9,10 +9,7 @@
     unless type(cidrs) == "table"
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
         eval: (req) -> false, "from_nets requires a table of CIDRs"
-        compile_nft: -> nil, "invalid cidrs"
-        creates_dynamic_scope: false
       }
     
     -- Pre-compile nets
@@ -25,7 +22,6 @@
     
     {
       capabilities: { worker: true, nft_static: true, nft_dynamic: false }
-      worker_only: false
       cidrs: cidrs
       eval: (req) ->
         ip = req.src_ip
@@ -42,5 +38,4 @@
           return "ip6 saddr { #{cidr_str} }", nil
         else
           return "ip saddr { #{cidr_str} }", nil
-      creates_dynamic_scope: false
     }

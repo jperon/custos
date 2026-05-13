@@ -12,15 +12,11 @@
     unless window_names
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
         eval: (req) -> false, "Time list '#{list_name}' not defined"
-        compile_nft: -> nil, "undefined time list"
-        creates_dynamic_scope: false
       }
 
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       list_name: list_name
       window_names: window_names
       eval: (req) ->
@@ -31,6 +27,4 @@
           ok, reason = window_cond.eval req
           return true, reason if ok
         false, "Outside all windows in list '#{list_name}'"
-      compile_nft: -> nil, "in_timelist requires worker (time-based)"
-      creates_dynamic_scope: false
     }

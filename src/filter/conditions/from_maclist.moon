@@ -10,7 +10,6 @@
     
     {
       capabilities: { worker: true, nft_static: true, nft_dynamic: false }
-      worker_only: false
       list_name: list_name
       macs: macs
       eval: (req) ->
@@ -23,5 +22,4 @@
       compile_nft: (family) ->
         set_name = "macs_#{list_name}"
         return "ether saddr @#{set_name}", nil
-      creates_dynamic_scope: false
     }

@@ -10,7 +10,6 @@
     
     {
       capabilities: { worker: true, nft_static: true, nft_dynamic: false }
-      worker_only: false
       list_name: list_name
       nets: nets
       eval: (req) ->
@@ -30,5 +29,4 @@
           return "ip6 saddr @#{set_name}", nil
         else
           return "ip saddr @#{set_name}", nil
-      creates_dynamic_scope: false
     }

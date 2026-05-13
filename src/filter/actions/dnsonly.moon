@@ -13,11 +13,9 @@
   (rule) ->
     {
       capabilities: { worker: true, nft: false }
-      worker_only: true
       eval: (req) ->
         "dnsonly", "DNS only (no nft) by rule: #{rule.description or '?'}"
       compile_nft: ->
-        nil, "dnsonly requires worker processing"
       verdict: ->
         "dnsonly"
     }

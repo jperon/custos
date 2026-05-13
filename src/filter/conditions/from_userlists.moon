@@ -15,7 +15,6 @@
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       list_names: list_names
       eval: (req) ->
         _from_userlist = (require "filter.conditions.from_userlist") cfg
@@ -34,6 +33,4 @@
             last_reason: last_reason or ""
           }
         false, "Not in any of: #{table.concat list_names, ', '}"
-      compile_nft: -> nil, "from_userlists requires worker (dynamic sessions)"
-      creates_dynamic_scope: false
     }

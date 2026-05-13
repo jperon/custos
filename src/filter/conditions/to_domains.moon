@@ -12,7 +12,6 @@
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       domains: domain_list
       eval: (req) ->
         to_domain_factory = require "filter.conditions.to_domain"
@@ -21,6 +20,5 @@
           ok, msg = domain_cond.eval req
           return ok, msg if ok
         false, "Not matched by any domain"
-      compile_nft: -> nil, "to_domains requires worker (DNS matching)"
       creates_dynamic_scope: true
     }

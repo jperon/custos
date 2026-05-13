@@ -16,7 +16,6 @@
     unless userlist
       return {
         capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        worker_only: true
         eval: (req) ->
           if req.user and req.user ~= "unknown"
             log_debug {
@@ -27,13 +26,10 @@
               sessions_file: sessions_file
             }
           false, "User list '#{name}' not defined"
-        compile_nft: -> nil, "undefined userlist"
-        creates_dynamic_scope: false
       }
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       name: name
       userlist: userlist
       eval: (req) ->
@@ -55,6 +51,4 @@
             last_reason: last_reason or ""
           }
         false, "Not in userlist '#{name}'"
-      compile_nft: -> nil, "from_userlist requires worker (dynamic sessions)"
-      creates_dynamic_scope: false
     }

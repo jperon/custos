@@ -12,7 +12,6 @@
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       window_names: window_names
       eval: (req) ->
         in_time_factory = require "filter.conditions.in_time"
@@ -21,6 +20,4 @@
           ok, msg = time_cond.eval req
           return ok, msg if ok
         false, "Not in any time window: #{table.concat window_names, ', '}"
-      compile_nft: -> nil, "in_times requires worker (time-based)"
-      creates_dynamic_scope: false
     }

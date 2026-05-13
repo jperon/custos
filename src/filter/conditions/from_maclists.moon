@@ -12,7 +12,6 @@
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       lists: lists
       eval: (req) ->
         _mac = req.mac
@@ -23,6 +22,4 @@
           for _, mac in ipairs macs
             return true, "mac #{_mac} in #{list_name}" if _mac_lower == mac\lower!
         false, "mac #{_mac} not in any list"
-      compile_nft: -> nil, "from_maclists requires worker (multiple lists)"
-      creates_dynamic_scope: false
     }

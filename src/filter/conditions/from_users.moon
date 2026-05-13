@@ -12,7 +12,6 @@
     
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-      worker_only: true
       user_list: user_list
       eval: (req) ->
         _from_user = require "filter.conditions.from_user"
@@ -21,6 +20,4 @@
           ok, msg = user_cond.eval req
           return ok, msg if ok
         false, "Not matched by any user"
-      compile_nft: -> nil, "from_users requires worker (dynamic sessions)"
-      creates_dynamic_scope: false
     }

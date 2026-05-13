@@ -10,6 +10,7 @@ do
 end
 local nft_compiler = require("filter.nft_compiler")
 local nft_dynamic_sets = require("filter.nft_dynamic_sets")
+local rule = require("filter.rule")
 local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
   error("nft_rules: nft_ctx_new() failed")
@@ -57,7 +58,10 @@ nft_file_path = function()
   return dir .. "dns-filter-bridge.nft"
 end
 local substitute
-substitute = function(content)
+substitute = function(content, plan)
+  if plan == nil then
+    plan = nil
+  end
   local cfg = require("config")
   content = content:gsub("{QUEUE_QUESTIONS}", cfg.nfqueue.questions)
   content = content:gsub("{QUEUE_RESPONSES}", cfg.nfqueue.responses)
@@ -66,12 +70,19 @@ substitute = function(content)
   content = content:gsub("{QUEUE_AUTH}", cfg.nfqueue.auth)
   content = content:gsub("{QUEUE_SNI_LOG}", cfg.nfqueue.sni_log)
   content = content:gsub("{NFT_IP_TIMEOUT}", cfg.nft.ip_timeout)
+  local compiled_rules
+  if plan then
+    compiled_rules = nft_compiler.render(plan, "  ", true)
+  else
+    compiled_rules = "  chain cv_rules_dispatch {\n    return\n  }\n"
+  end
+  content = content:gsub("{COMPILED_FILTER_RULES}", compiled_rules)
   local sip_rules
   if cfg.nfqueue.sip then
     local q = cfg.nfqueue.sip
     sip_rules = table.concat({
       "    # SIP signalling + STUN → NFQUEUE (worker_sip).",
-      "    # Toujours NF_ACCEPT ; insère les IPs media dans mac4/mac6_allowed.",
+      "    # Toujours NF_ACCEPT ; apprend les IPs dans sip_peers + mac4/mac6_allowed.",
       "    # dport 5060/5061 capture aussi les réponses opérateur à source port dynamique.",
       "    # bypass : si le worker est absent, le trafic SIP passe quand même.",
       "    meta l4proto {udp, tcp} th dport {5060, 5061} queue num " .. tostring(q) .. " bypass comment \"SIP outbound → NFQUEUE\"",
@@ -89,11 +100,14 @@ substitute = function(content)
   return content
 end
 local compile_filter_rules
-compile_filter_rules = function(filter_cfg)
+compile_filter_rules = function(filter_cfg, rules_metadata)
+  if rules_metadata == nil then
+    rules_metadata = nil
+  end
   if not (filter_cfg and filter_cfg.rules and #filter_cfg.rules > 0) then
     return nil
   end
-  return nft_compiler.compile(filter_cfg)
+  return nft_compiler.compile(filter_cfg, rules_metadata)
 end
 local create_filter_rule_sets
 create_filter_rule_sets = function(plan)
@@ -148,7 +162,11 @@ apply = function()
   end
   local content = fh:read("*a")
   fh:close()
-  content = substitute(content)
+  local cfg = require("config")
+  local compiled_rules = rule.compile_rules(cfg.filter)
+  local rules_metadata = compiled_rules.rules_metadata
+  local plan = compile_filter_rules(cfg.filter, rules_metadata)
+  content = substitute(content, plan)
   local tmpdir = "./tmp"
   os.execute("mkdir -p " .. tostring(tmpdir))
   local tmpfile = tostring(tmpdir) .. "/custos-rules-" .. tostring(os.time()) .. ".nft"
@@ -176,8 +194,6 @@ apply = function()
     action = "nft_rules_template_applied",
     path = path
   })
-  local cfg = require("config")
-  local plan = compile_filter_rules(cfg.filter)
   if not (create_filter_rule_sets(plan)) then
     log_warn({
       action = "nft_rules_sets_creation_failed"

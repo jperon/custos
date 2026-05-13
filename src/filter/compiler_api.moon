@@ -52,7 +52,6 @@ load_condition = (name) ->
           capabilities: { worker: true, nft_static: false, nft_dynamic: false }
           eval: result
           compile_nft: -> nil, "unsupported"
-          creates_dynamic_scope: false
         }
 
 --- Charge un module action avec adaptation automatique.
@@ -110,7 +109,6 @@ create_net_condition = (prop, net_cidr) ->
       if family == "inet6" or family == "ip6"
         return "ip6 saddr #{net_cidr}", nil
       return nil, "unsupported family #{family}"
-    creates_dynamic_scope: false
   }
 
 --- Crée une action enrichie "allow".
@@ -118,11 +116,9 @@ create_net_condition = (prop, net_cidr) ->
 create_allow_action = ->
   {
     capabilities: { worker: true, nft: true }
-    worker_only: false
     eval: (req) -> true, "Allowed"
     compile_nft: -> "accept", nil
     verdict: -> "accept"
-    creates_dynamic_scope: false
   }
 
 --- Crée une action enrichie "deny".
@@ -130,11 +126,9 @@ create_allow_action = ->
 create_deny_action = ->
   {
     capabilities: { worker: true, nft: true }
-    worker_only: false
     eval: (req) -> false, "Denied"
     compile_nft: -> "drop", nil
     verdict: -> "drop"
-    creates_dynamic_scope: false
   }
 
 --- Crée une action enrichie "dnsonly".
@@ -143,11 +137,8 @@ create_deny_action = ->
 create_dnsonly_action = ->
   {
     capabilities: { worker: true, nft: false }
-    worker_only: true
     eval: (req) -> "dnsonly", "DNS only (no nft)"
-    compile_nft: -> nil, "dnsonly requires worker"
     verdict: -> "dnsonly"
-    creates_dynamic_scope: false
   }
 
 {
