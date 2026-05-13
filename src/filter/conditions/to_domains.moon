@@ -1,18 +1,26 @@
 -- src/filter/conditions/to_domains.moon
 -- Condition : le domaine demandé correspond à l'un des domaines listés.
--- Port direct de shelterfilter conditions/to_domains.moon.
--- Essaie chaque domaine de la liste jusqu'à trouver une correspondance.
+-- API enrichie : worker-only (DNS matching).
 
---- @tparam table cfg Configuration du filtre
--- @treturn function factory (domains: table) → (req) → bool, reason
-(cfg) -> (domains) ->
-  _to_domain = require "filter.conditions.to_domain"
-  checkers   = [(_to_domain cfg)(d) for d in *domains]
-
-  --- @tparam table req {domain: string, ...}
-  -- @treturn boolean, string
-  (req) ->
-    for _, c in ipairs checkers
-      ok, msg = c req
-      return ok, msg if ok
-    false, "Not matched by any domain"
+--- @tparam table cfg Configuration
+-- @treturn function factory (domains) → enriched_condition
+(cfg) ->
+  (domains) ->
+    domain_list = domains
+    unless type(domains) == "table"
+      domain_list = { domains }
+    
+    {
+      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      worker_only: true
+      domains: domain_list
+      eval: (req) ->
+        to_domain_factory = require "filter.conditions.to_domain"
+        for _, d in ipairs domain_list
+          domain_cond = to_domain_factory(cfg)(d)
+          ok, msg = domain_cond.eval req
+          return ok, msg if ok
+        false, "Not matched by any domain"
+      compile_nft: -> nil, "to_domains requires worker (DNS matching)"
+      creates_dynamic_scope: true
+    }

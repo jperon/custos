@@ -73,36 +73,58 @@ lookup = (arr, n, domain) ->
 
   false
 
---- @tparam table cfg Configuration du filtre ({domainlists_dir: string, ...})
--- @treturn function factory (listname: string) → (req) → bool, reason
--- listname est un chemin relatif à domainlists_dir, sans extension :
---   ex. "toulouse/malware" → "<domainlists_dir>/toulouse/malware.bin"
--- Valide : pas de chemin absolu, pas de "..", pas de suffixe ".bin".
-(cfg) -> (listname) ->
-  unless cfg.domainlists_dir
-    return (req) -> false, "domainlists_dir non défini dans la configuration"
-  -- Validation du nom de liste
-  if listname\match "^/" or listname\match "%.%." or listname\match "%.bin$"
-    return (req) -> false, "Nom de liste invalide: '#{listname}'"
-  base = (cfg.domainlists_dir\gsub "/*$", "") .. "/" .. listname
-  path = base .. ".bin"
+--- @tparam table cfg Configuration
+-- @treturn function factory (listname) → enriched_condition
+(cfg) ->
+  (listname) ->
+    unless cfg.domainlists_dir
+      return {
+        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        worker_only: true
+        eval: (req) -> false, "domainlists_dir non défini"
+        compile_nft: -> nil, "domainlists_dir not configured"
+        creates_dynamic_scope: false
+      }
+    
+    -- Validation du nom de liste
+    if listname\match "^/" or listname\match "%.%." or listname\match "%.bin$"
+      return {
+        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        worker_only: true
+        eval: (req) -> false, "Nom de liste invalide: '#{listname}'"
+        compile_nft: -> nil, "invalid list name"
+        creates_dynamic_scope: false
+      }
+    
+    base = (cfg.domainlists_dir\gsub "/*$", "") .. "/" .. listname
+    path = base .. ".bin"
 
-  arr, n_or_err = load_list path
-  -- Fallback : si le .bin est absent, essayer un fichier texte (.domains)
-  unless arr
-    arr, n_or_err = load_list base .. ".domains"
-  unless arr
-    msg = "Cannot load domain list '#{listname}': #{n_or_err}"
-    return (req) -> false, msg
+    arr, n_or_err = load_list path
+    -- Fallback : si le .bin est absent, essayer un fichier texte (.domains)
+    unless arr
+      arr, n_or_err = load_list base .. ".domains"
+    unless arr
+      return {
+        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        worker_only: true
+        eval: (req) -> false, "Cannot load domain list '#{listname}': #{n_or_err}"
+        compile_nft: -> nil, "failed to load domain list"
+        creates_dynamic_scope: false
+      }
 
-  n = n_or_err
+    n = n_or_err
 
-  --- @tparam table req {domain: string, ...}
-  -- @treturn boolean, string
-  (req) ->
-    domain = req.domain
-    return false, "Missing domain in request" unless domain
-    if lookup arr, n, domain
-      true, "Domain matched in list '#{listname}'"
-    else
-      false, "Domain not in list '#{listname}'"
+    {
+      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      worker_only: true
+      listname: listname
+      eval: (req) ->
+        domain = req.domain
+        return false, "Missing domain in request" unless domain
+        if lookup arr, n, domain
+          true, "Domain matched in list '#{listname}'"
+        else
+          false, "Domain not in list '#{listname}'"
+      compile_nft: -> nil, "to_domainlist requires worker (DNS hash lookup)"
+      creates_dynamic_scope: true
+    }
