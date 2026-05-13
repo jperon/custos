@@ -10,7 +10,7 @@
 
 ---
 
-## 2. Modules Conditions Migrés (25 modules)
+## 2. Modules Conditions Migrés (24 modules)
 
 ### ✅ NFT-Compatibles (nft_static: true)
 
@@ -35,11 +35,10 @@
 | `from_vlanlists` | Multiple VLAN lists - complexe en NFT |
 | `from_netlists` | Multiple netlists - complexe en NFT |
 | `from_maclists` | Multiple MAC lists - complexe en NFT |
-| `from_user` | Sessions dynamiques |
+| `from_user` | Sessions dynamiques (fichier ou TLS via `source` param) |
 | `from_users` | Sessions dynamiques |
 | `from_userlist` | Sessions dynamiques |
 | `from_userlists` | Sessions dynamiques |
-| `from_authenticated_user` | Vérification TLS dynamique |
 | `in_time` | Time-based - nécessite worker |
 | `in_times` | Time-based - nécessite worker |
 | `in_timelist` | Time-based - nécessite worker |
@@ -166,12 +165,19 @@ rule_<id>_mac6  (ether_addr . ipv6_addr, timeout)
 
 | Élément | Statut |
 |---------|--------|
-| Tous modules conditions migrés | ✅ 25/25 |
+| Tous modules conditions migrés | ✅ 24/24 |
 | Tous modules actions migrés | ✅ 3/3 |
 | Modules legacy supprimés | ✅ 9/9 |
 | Tests passants | ✅ 10/10 |
 | Documentation API | ✅ Complète |
 | Rétrocompatibilité | ✅ Maintenue |
+
+---
+
+## 11. Consolidation des Modules
+
+- `from_authenticated_user.moon` → fusionné dans `from_user` avec paramètre `source: "tls"`
+- API unifiée: `from_user "alice"` (fichier) ou `from_user { user: "alice", source: "tls" }`
 
 ---
 

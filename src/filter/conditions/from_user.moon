@@ -6,12 +6,15 @@
 --   - "_any" : match si n'importe quel utilisateur est authentifié.
 --   - "_none" : match si aucun utilisateur n'est authentifié.
 --
--- Le fichier de sessions est maintenu par le worker AUTH (auth/worker.moon)
--- et lu ici via un cache TTL de 5 secondes (sessions.read_cached).
+-- Sources de sessions configurables via le paramètre 'source':
+--   - "sessions_file" (défaut) : fichier de sessions maintenu par worker AUTH
+--   - "tls" ou "user_sessions" : sessions TLS/certificate via user_sessions
+--
 -- Le chemin du fichier est issu de cfg.auth.sessions_file (ou la constante
 -- AUTH_SESSIONS_FILE par défaut).
 
 { :session_for_mac, :enrich_session_ip, :bind_session_mac } = require "auth.sessions"
+{ :get_session } = require "auth.user_sessions"
 config = require "config"
 
 -- get_mac est optionnel et utilisé seulement si le MAC learner est dispo
@@ -28,15 +31,48 @@ safe_get_mac = (ip_str) ->
   _get_mac ip_str
 
 --- @tparam table cfg Configuration
--- @treturn function factory (user) → enriched_condition
+-- @treturn function factory (user_or_opts) → enriched_condition
 -- Note: worker-only due to dynamic session lookup.
 (cfg) ->
   sessions_file = (cfg.auth and cfg.auth.sessions_file) or config.auth.sessions_file
 
-  (user) ->
+  (user_or_opts) ->
+    -- Détecter si on reçoit un string ou une table d'options
+    user = user_or_opts
+    source = "sessions_file"  -- défaut
+
+    if type(user_or_opts) == "table"
+      user = user_or_opts.user
+      source = user_or_opts.source or source
+
+    unless user
+      return {
+        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        eval: (req) -> false, "from_user: no user specified"
+      }
+
+    -- Source TLS/user_sessions (anciennement from_authenticated_user)
+    if source == "tls" or source == "user_sessions"
+      return {
+        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        user: user
+        source: source
+        eval: (req) ->
+          session = get_session user
+          unless session
+            return false, "from_user: user #{user} not authenticated (tls)"
+          if req.src_ip and session.src_ip ~= req.src_ip
+            return false, "from_user: IP mismatch for #{user} (tls)"
+          if req.mac and session.mac ~= req.mac\lower()
+            return false, "from_user: MAC mismatch for #{user} (tls)"
+          true, "from_user: user #{user} authenticated (tls)"
+      }
+
+    -- Source sessions_file (défaut)
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
       user: user
+      source: source
       eval: (req) ->
         hinted_user = req.user
 

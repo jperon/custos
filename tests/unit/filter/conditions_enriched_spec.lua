@@ -1,0 +1,135 @@
+package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
+package.loaded["config"] = {
+  nft = {
+    ip_timeout = "2m"
+  }
+}
+package.loaded["filter.lib.ipcalc"] = {
+  Net = function(cidr)
+    if not (cidr and cidr:find("/")) then
+      return nil
+    end
+    return {
+      cidr = cidr,
+      contains = function(ip)
+        return type(ip) == "string"
+      end
+    }
+  end
+}
+local rule = require("filter.rule")
+local assert_eq
+assert_eq = function(got, expected, msg)
+  if not (got == expected) then
+    return error(tostring(msg or 'assert_eq failed') .. ": got=" .. tostring(tostring(got)) .. " expected=" .. tostring(tostring(expected)))
+  end
+end
+print("Testing from_vlan enriched...")
+local test_rule_vlan = {
+  description = "VLAN test",
+  rule_id = "vlan123",
+  conditions = {
+    {
+      from_vlan = 100
+    }
+  },
+  actions = {
+    "allow"
+  }
+}
+local eval_fn, metadata = rule.compile_rule({
+  nft = {
+    ip_timeout = "2m"
+  }
+}, test_rule_vlan, 1)
+assert_eq(#metadata.conditions, 1, "one condition")
+assert_eq(metadata.conditions[1].name, "from_vlan", "condition name")
+assert_eq(metadata.conditions[1].worker_only, false, "from_vlan not worker_only")
+assert_eq(metadata.conditions[1].capabilities.nft_static, true, "from_vlan supports nft_static")
+local ok, msg = eval_fn({
+  vlan = 100
+})
+assert_eq(ok, true, "vlan matches")
+local ok2, msg2 = eval_fn({
+  vlan = 200
+})
+assert_eq(ok2, nil, "vlan doesn't match")
+local expr, err = metadata.conditions[1].compile_nft("inet")
+assert_eq(expr, "vlan id 100", "vlan nft expression")
+assert_eq(err, nil, "vlan compile_nft no error")
+print("OK from_vlan enriched")
+print("Testing from_net enriched...")
+local ipcalc = require("filter.lib.ipcalc")
+local net = ipcalc.Net("192.168.0.0/16")
+print("Net object:", net)
+print("Net.contains test:", net:contains("192.168.1.100"))
+local test_rule_net = {
+  description = "Net test",
+  rule_id = "net456",
+  conditions = {
+    {
+      from_net = "192.168.0.0/16"
+    }
+  },
+  actions = {
+    "allow"
+  }
+}
+local eval_fn2, metadata2 = rule.compile_rule({
+  nft = {
+    ip_timeout = "2m"
+  }
+}, test_rule_net, 1)
+print("metadata2.conditions[1]:", metadata2.conditions[1])
+print("metadata2.conditions[1]._net:", metadata2.conditions[1]._net)
+assert_eq(metadata2.conditions[1].worker_only, false, "from_net not worker_only")
+assert_eq(metadata2.conditions[1].capabilities.nft_static, true, "from_net supports nft_static")
+local ok3, msg3 = eval_fn2({
+  src_ip = "192.168.1.100"
+})
+print("ok3:", ok3, "msg3:", msg3)
+assert_eq(ok3, true, "net matches local IP")
+local ok4, _ = eval_fn2({
+  src_ip = "10.0.0.1"
+})
+assert_eq(ok4, nil, "net doesn't match remote IP")
+local expr2
+expr2, _ = metadata2.conditions[1].compile_nft("ip")
+assert_eq(expr2, "ip saddr 192.168.0.0/16", "net nft IPv4 expression")
+print("OK from_net enriched")
+print("Testing from_mac enriched...")
+local test_rule_mac = {
+  description = "MAC test",
+  rule_id = "mac789",
+  conditions = {
+    {
+      from_mac = "aa:bb:cc:dd:ee:ff"
+    }
+  },
+  actions = {
+    "allow"
+  }
+}
+local eval_fn3, metadata3 = rule.compile_rule({
+  nft = {
+    ip_timeout = "2m"
+  },
+  macs = { }
+}, test_rule_mac, 1)
+assert_eq(metadata3.conditions[1].worker_only, false, "from_mac not worker_only")
+assert_eq(metadata3.conditions[1].capabilities.nft_static, true, "from_mac supports nft_static")
+local ok5
+ok5, _ = eval_fn3({
+  mac = "AA:BB:CC:DD:EE:FF"
+})
+assert_eq(ok5, true, "mac matches (case insensitive)")
+local ok6
+ok6, _ = eval_fn3({
+  mac = "11:22:33:44:55:66"
+})
+assert_eq(ok6, nil, "mac doesn't match")
+local expr3
+expr3, _ = metadata3.conditions[1].compile_nft("inet")
+assert_eq(expr3, "ether saddr aa:bb:cc:dd:ee:ff", "mac nft expression (lowercase)")
+print("OK from_mac enriched")
+return print("\nOK all enriched conditions tests passed")

@@ -14,7 +14,7 @@
     
     -- Pre-compile nets
     { :Net } = require "filter.lib.ipcalc"
-    nets = []
+    nets = {}
     for _, cidr in ipairs cidrs
       net = Net cidr
       if net

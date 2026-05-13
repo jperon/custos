@@ -143,6 +143,7 @@ create_dnsonly_action = ->
 
 {
   :is_new_style
+  :compute_worker_only
   :load_condition
   :load_action
   :create_net_condition
