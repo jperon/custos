@@ -15,17 +15,13 @@ config = require "config"
 -- @tparam string flags set flags (interval, timeout, etc) - empty string if none
 -- @treturn string nft command string
 create_set_cmd = (family, table_name, set_name, set_type, flags) ->
-  parts = {
-    "add set #{family} #{table_name} #{set_name}"
-    "{"
-    "type #{set_type}"
-  }
+  base = "add set #{family} #{table_name} #{set_name}"
+  inner = "type #{set_type}"
   
   if flags and #flags > 0
-    parts[#parts + 1] = "flags #{flags}"
+    inner = inner .. "; flags #{flags}"
   
-  parts[#parts + 1] = "}"
-  table.concat parts, " "
+  "#{base} { #{inner}; }"
 
 --- Extract all unique sets from compiled rules plan.
 -- Returns a set of {name, type, flags} entries to avoid duplicates.
