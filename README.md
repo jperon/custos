@@ -111,7 +111,9 @@ worker response : drain pipe → pending[0x1234:192.168.1.42:54321] found (refus
 ```
 custos/
 ├── cfg/
-│   ├── filter.yml           Configuration des listes de domaines (updater)
+│   ├── config.moon          Exemple de configuration runtime (MoonScript)
+│   ├── filter.yml           Configuration des sources de listes (updater)
+│   ├── filter.yml.sample    Documentation complète des paramètres YAML
 │   └── secrets.sample       Exemple de fichier de mots de passe
 ├── src/
 │   ├── config.moon          Configuration hiérarchique runtime (/etc/custos/config.moon)
@@ -248,13 +250,28 @@ L'installeur (`install-owrt.moon`) :
 
 ## Configuration
 
+### Configuration runtime (`config.moon`)
+
 La configuration runtime principale est `/etc/custos/config.moon` (surcharge partielle des
-défauts de `src/config.moon`). Elle couvre :
-- runtime/NFQUEUE/nft/dns/auth/doh/events
+défauts de `src/config.moon`). Elle est au format **MoonScript** et couvre :
+- runtime/NFQUEUE/nft/dns/auth/doh/events/metrics
 - le moteur de filtrage (`filter.rules`, `filter.nets`, `filter.macs`, `filter.times`)
 - les décisions de parcours de règles (`filter.decision.first_match_wins`,
   `filter.decision.continue_to_next_rule`)
 - `dns.ttl_grace` (`grace`, `min`, `max`) — timeout nft = `TTL + grace`, borné
+- configuration authentification (port, cert/key, sessions, etc.)
+- whitelist de destinations IP (`filter.dest_whitelist`)
+
+### Configuration de l'updater (`filter.yml`)
+
+Le fichier `cfg/filter.yml` (ou `/etc/custos/filter.yml` sur OpenWrt) est utilisé **uniquement**
+par l'updater (`src/filter/updater.moon`) pour :
+- définir les sources de téléchargement des listes de domaines
+- configurer les répertoires de listes personnalisées
+- spécifier les formats de conversion
+
+Ce fichier **n'est pas** lu par le runtime du filtre. Les règles de filtrage et la configuration
+auth doivent être définies dans `config.moon`.
 
 NFT extra rules (via UCI)
 - Il est possible d’ajouter des règles nft supplémentaires depuis UCI (section `custos.main`) via l’option `nft_extra_rules`.
@@ -278,8 +295,11 @@ make reload   # envoie SIGHUP aux workers (rechargement à chaud)
 des listes de domaines au format binaire optimisé pour la recherche binaire.
 
 ```bash
-# Télécharger et compiler toutes les listes définies dans filter.yml
-LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/filter/updater.lua cfg/filter.yml
+# Télécharger et compiler toutes les listes définies dans config.moon
+LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/filter/updater.lua
+
+# Avec un fichier de configuration alternatif :
+LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/filter/updater.lua --config /path/to/config.moon
 
 # Sur OpenWrt (après installation) :
 custos-update
@@ -287,29 +307,33 @@ custos-update
 
 ### Sources
 
-Chaque entrée `sources:` dans `filter.yml` peut être :
+Chaque entrée `filter.sources` dans `config.moon` peut être :
 
-```yaml
-sources:
-  toulouse:
-    url:    https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz
-    format: toulouse          # archive tar.gz multi-catégories
-    subdir: toulouse          # sous-dossier de domainlists_dir
+```moonscript
+filter:
+  sources:
+    toulouse: {
+      url: "https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz"
+      format: "toulouse"          -- archive tar.gz multi-catégories
+      subdir: "toulouse"          -- sous-dossier de domainlists_dir
+    }
 
-  ma-liste:
-    file:   /etc/custos/lists/custom/ma-liste.txt
-    format: simple            # un domaine par ligne
-    output: /etc/custos/lists/custom/ma-liste.bin
+    ma_liste: {
+      file: "/etc/custos/lists/custom/ma-liste.txt"
+      format: "simple"            -- un domaine par ligne
+      output: "/etc/custos/lists/custom/ma-liste.bin"
+    }
 ```
 
 ### Listes personnalisées
 
-Positionner `custom_lists_dir` dans `filter.yml` pour activer le scan
+Positionner `filter.custom_lists_dir` dans `config.moon` pour activer le scan
 automatique de fichiers `.txt` :
 
-```yaml
-domainlists_dir: /etc/custos/lists
-custom_lists_dir: /etc/custos/lists/custom
+```moonscript
+filter:
+  domainlists_dir: "/etc/custos/lists"
+  custom_lists_dir: "/etc/custos/lists/custom"
 ```
 
 Chaque fichier `custom/*.txt` (un domaine par ligne, `#` pour les commentaires)
@@ -317,9 +341,9 @@ est converti en `custom/*.bin`. Les originaux sont conservés.
 
 Les listes sont référençables dans les règles :
 
-```yaml
+```moonscript
 conditions:
-  to_domainlist: custom/ma-liste
+  { to_domainlist: "custom/ma-liste" }
 ```
 
 ### `custos-update` (OpenWrt)
@@ -471,15 +495,15 @@ The AUTH worker generates **self-signed certificates dynamically** via `px5g`
 generated on-demand based on the SNI (Server Name Indication) from the
 TLS ClientHello.
 
-To use your own static certificate, set `cert` and `key` in `cfg/filter.yml`:
+To use your own static certificate, configure `auth.cert` and `auth.key` in
+`/etc/custos/config.moon`:
 
-```yaml
+```moonscript
 auth:
-  port: 8443
-  cert: /etc/custos/auth.crt
-  key:  /etc/custos/auth.key
-  secrets: cfg/secrets
-  session_ttl: 0            # seconds (default: 0 = no absolute expiry)
+  cert: "/etc/custos/auth.crt"
+  key:  "/etc/custos/auth.key"
+  secrets: "/etc/custos/secrets"
+  session_ttl: 0            -- seconds (default: 0 = no absolute expiry)
 ```
 
 ### Secrets file
@@ -509,20 +533,23 @@ Sessions expire after `idle_timeout` seconds without heartbeat, or on explicit l
 
 ### Using `from_user` in rules
 
-```yaml
-rules:
-  - name: alice-only
-    conditions:
-      from_user: alice
-    action: allow
-    domains: [github.com, pypi.org]
+```moonscript
+filter:
+  rules:
+    {
+      description: "alice-only"
+      conditions:
+        { from_user: "alice" }
+        { to_domains: {"github.com", "pypi.org"} }
+      actions: {"allow"}
+    }
 ```
 
 Multiple users can be listed (logical OR):
 
-```yaml
-    conditions:
-      from_user: [alice, bob]
+```moonscript
+      conditions:
+        { from_users: {"alice", "bob"} }
 ```
 
 ### Captive portal
@@ -538,14 +565,17 @@ La condition `dnsonly` permet de détecter les sondes de portail captif
 DNS **sans injecter les IPs dans les sets nft** — le client peut ainsi résoudre
 les noms de domaine sans accéder aux serveurs cibles avant d'être authentifié :
 
-```yaml
-- description: Sondes portail captif
-  actions: [dnsonly]
+```moonscript
+{
+  description: "Sondes portail captif"
+  actions: {"dnsonly"}
   conditions:
-    to_domains:
-      - connectivitycheck.gstatic.com
-      - captive.apple.com
-      - www.msftconnecttest.com
+    { to_domains: {
+      "connectivitycheck.gstatic.com"
+      "captive.apple.com"
+      "www.msftconnecttest.com"
+    } }
+}
 ```
 
 ### Conditions utilisateur
@@ -553,20 +583,21 @@ les noms de domaine sans accéder aux serveurs cibles avant d'être authentifié
 `from_user`, `from_users`, `from_userlist`, `from_userlists` permettent
 d'associer des règles à des comptes authentifiés :
 
-```yaml
-- name: alice-only
+```moonscript
+{
+  description: "alice-only"
   conditions:
-    from_user: alice
-  actions: [allow]
-  conditions:
-    to_domainlist: toulouse/adult
+    { from_user: "alice" }
+    { to_domainlist: "toulouse/adult" }
+  actions: {"allow"}
+}
 ```
 
 Plusieurs utilisateurs (OR logique) :
 
-```yaml
+```moonscript
   conditions:
-    from_users: [alice, bob]
+    { from_users: {"alice", "bob"} }
 ```
 
 ---
@@ -662,12 +693,17 @@ uci commit custos
 
 Traffic to these CIDRs is allowed without DNS resolution. The `ip4_dest_whitelist` and `ip6_dest_whitelist` nftables sets are checked before DNS NFQUEUE, enabling direct access.
 
-The whitelist can also be configured in `cfg/filter.yml`:
+The whitelist can also be configured in `/etc/custos/config.moon`:
 
-```yaml
-ip_whitelist:
-  - 10.0.0.0/24
-  - 2001:db8::/32
+```moonscript
+filter:
+  dest_whitelist: {
+    "10.0.0.0/24"
+    "2001:db8::/32"
+  }
 ```
 
 ---
+
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/jperon/custos)

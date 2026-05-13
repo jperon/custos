@@ -11,12 +11,12 @@ Detailed explanations and architecture remain in `README.md`.
 - nftables ruleset: `nft-rules/dns-filter-bridge.nft`
 - NFT extra rules (via UCI): `custos.main.nft_extra_rules` can hold one fragment per entry. Each fragment is a nft expression (without the `insert rule <table> <chain> ...` prefix) and will be inserted at the head of the `forward` chain at service startup and removed at shutdown. Example UCI fragment:
   - `nft_extra_rules='ip saddr 10.0.0.0/8 counter log prefix "extra: " accept'`
-- Filtering rules: `cfg/filter.yml`
+- Filtering rules: `cfg/config.moon`
 
 ## Where to modify what
 
 - Business rules:
-  - `cfg/filter.yml`
+  - `cfg/config.moon`
   - `src/filter/init.moon`
   - `src/filter/rule.moon`
   - `src/filter/convert.moon`
@@ -81,17 +81,17 @@ Detailed explanations and architecture remain in `README.md`.
 ## Domainlists / Customlists
 
 - Config source:
-  - Main file: `cfg/filter.yml` (or `/etc/custos/filter.yml` on OpenWrt)
-  - Useful fields: `sources`, `domainlists_dir`, `custom_lists_dir`
+  - Main file: `cfg/config.moon` (or `/etc/custos/config.moon` on OpenWrt)
+  - Useful fields: `filter.sources`, `filter.domainlists_dir`, `filter.custom_lists_dir`
 
 - Update lists (Debian/dev machine):
   - `make update-lists`
   - Direct equivalent:
-    - `LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/filter/updater.lua --config cfg/filter.yml`
+    - `LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/filter/updater.lua --config cfg/config.moon`
 
 - Update lists (OpenWrt):
   - `ssh root@<router> 'custos-update'`
-  - The script uses `/etc/custos/filter.yml` and reloads compiled lists.
+  - The script uses `/etc/custos/config.moon` and reloads compiled lists.
 
 - Custom lists (workflow):
   1. Drop `.txt` files in `custom_lists_dir` (1 domain per line, `#` for comments).
@@ -109,12 +109,12 @@ Detailed explanations and architecture remain in `README.md`.
 
 - Add a condition:
   1. Create `src/filter/conditions/<name>.moon` (factory -> predicate `(req) -> ok, reason`).
-  2. Reference the condition in `cfg/filter.yml`.
+  2. Reference the condition in `cfg/config.moon`.
   3. `make && make test`.
 
 - Add an action:
   1. Create `src/filter/actions/<name>.moon` (`(req) -> verdict|nil, message`).
-  2. Call it via `actions:` in `cfg/filter.yml`.
+  2. Call it via `actions:` in `cfg/config.moon`.
   3. Verify action order (first non-nil verdict wins).
   4. `filter.decision.first_match_wins` contrôle si la première ou la dernière règle gagnante est conservée.
 
