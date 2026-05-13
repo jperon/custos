@@ -264,12 +264,12 @@ Installer = (cfg) ->
       ok "Service installé et activé au démarrage"
       true
 
-    -- Installe /etc/custos/filter.yml et /etc/custos/secrets (preserve si existants).
+    -- Installe /etc/custos/config.moon et /etc/custos/secrets (preserve si existants).
     install_etc_custos: =>
       step "Configuration /etc/custos/"
       @ssh_run "mkdir -p /etc/custos"
 
-      for entry in *{ { src: "cfg/filter.yml", dst: "/etc/custos/filter.yml" },
+      for entry in *{ { src: "cfg/config.moon", dst: "/etc/custos/config.moon" },
                       { src: "cfg/secrets",    dst: "/etc/custos/secrets"    } }
         exists = @ssh_capture "[ -f #{entry.dst} ] && echo yes || echo no"
         if exists and exists\find "yes"
@@ -320,7 +320,7 @@ Installer = (cfg) ->
 #!/bin/sh
 CUSTOS_DIR=]] .. @cfg.dest .. "\n" .. [[
 
-CONFIG=/etc/custos/filter.yml
+CONFIG=/etc/custos/config.moon
 PID_FILE=/var/run/custos.pid
 
 PROG=$(command -v luajit2 2>/dev/null || command -v luajit 2>/dev/null)

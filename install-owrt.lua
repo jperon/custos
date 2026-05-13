@@ -300,8 +300,8 @@ Installer = function(cfg)
       self:ssh_run("mkdir -p /etc/custos")
       local _list_0 = {
         {
-          src = "cfg/filter.yml",
-          dst = "/etc/custos/filter.yml"
+          src = "cfg/config.moon",
+          dst = "/etc/custos/config.moon"
         },
         {
           src = "cfg/secrets",
@@ -368,7 +368,7 @@ Installer = function(cfg)
       step("Script de mise à jour des listes (custos-update)")
       local script = [[#!/bin/sh
 CUSTOS_DIR=]] .. self.cfg.dest .. "\n" .. [[
-CONFIG=/etc/custos/filter.yml
+CONFIG=/etc/custos/config.moon
 PID_FILE=/var/run/custos.pid
 
 PROG=$(command -v luajit2 2>/dev/null || command -v luajit 2>/dev/null)

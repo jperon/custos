@@ -74,7 +74,7 @@ update_lists() {
     [ -z "$LUAJIT" ] && { echo "custos: luajit introuvable"; return 1; }
 
     local config pid_file
-    config="$FILTER_CONFIG"
+    config="$CONFIG_MOON"
     pid_file=/var/run/custos.pid
 
     echo "custos: mise à jour des listes de domaines (config: $config)..."
@@ -89,7 +89,7 @@ _cron_add() {
     local schedule config
     schedule=$(uci get custos.main.update_lists_schedule 2>/dev/null)
     schedule="${schedule:-0 3 * * *}"
-    config="$FILTER_CONFIG"
+    config="$CONFIG_MOON"
 
     _cron_remove
     mkdir -p "$(dirname "$CRONTABS_ROOT")"

@@ -3,15 +3,15 @@
 #
 # Usage : custos-update [--dry-run]
 #
-# Télécharge et compile les listes définies dans sources: de filter.yml,
-# et convertit les listes personnalisées dans custom_lists_dir:.
+# Télécharge et compile les listes définies dans filter.sources: de config.moon,
+# et convertit les listes personnalisées dans filter.custom_lists_dir:.
 # Envoie SIGHUP au daemon si au moins une liste est mise à jour.
 #
 # Ce script est installé par install-owrt.lua.
 # CUSTOS_DIR est substitué à l'installation.
 
 CUSTOS_DIR=@DEST@
-CONFIG=/etc/custos/filter.yml
+CONFIG=/etc/custos/config.moon
 PID_FILE=/var/run/custos.pid
 
 PROG=$(command -v luajit2 2>/dev/null || command -v luajit 2>/dev/null)
