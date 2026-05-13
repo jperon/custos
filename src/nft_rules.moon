@@ -20,6 +20,7 @@
 { :log_info, :log_warn, :log_debug, :get_log_level_num } = require "log"
 nft_compiler = require "filter.nft_compiler"
 nft_dynamic_sets = require "filter.nft_dynamic_sets"
+rule = require "filter.rule"
 
 -- ── Contexte nft (singleton) ─────────────────────────────────────────────────
 
@@ -56,7 +57,7 @@ nft_file_path = ->
   dir = src\match("^@(.*/)") or "./"
   dir .. "dns-filter-bridge.nft"
 
-substitute = (content) ->
+substitute = (content, plan=nil) ->
   cfg = require "config"
   content = content\gsub "{QUEUE_QUESTIONS}", cfg.nfqueue.questions
   content = content\gsub "{QUEUE_RESPONSES}", cfg.nfqueue.responses
@@ -65,6 +66,11 @@ substitute = (content) ->
   content = content\gsub "{QUEUE_AUTH}",      cfg.nfqueue.auth
   content = content\gsub "{QUEUE_SNI_LOG}",   cfg.nfqueue.sni_log
   content = content\gsub "{NFT_IP_TIMEOUT}",  cfg.nft.ip_timeout
+  compiled_rules = if plan
+    nft_compiler.render plan, "  ", true
+  else
+    "  chain cv_rules_dispatch {\n    return\n  }\n"
+  content = content\gsub "{COMPILED_FILTER_RULES}", compiled_rules
 
   sip_rules = if cfg.nfqueue.sip
     q = cfg.nfqueue.sip
@@ -88,9 +94,12 @@ substitute = (content) ->
   content
 
 -- Compile filter rules and return plan (without rendering into template)
-compile_filter_rules = (filter_cfg) ->
+-- @tparam table filter_cfg Filter configuration
+-- @tparam table|nil rules_metadata Enriched metadata from rule.compile_rules()
+-- @treturn table|nil Compiled plan
+compile_filter_rules = (filter_cfg, rules_metadata=nil) ->
   return nil unless filter_cfg and filter_cfg.rules and #filter_cfg.rules > 0
-  nft_compiler.compile filter_cfg
+  nft_compiler.compile filter_cfg, rules_metadata
 
 -- ── Dynamic Set Creation ─────────────────────────────────────────────────────
 
@@ -136,7 +145,24 @@ apply = ->
   content = fh\read "*a"
   fh\close!
 
-  content = substitute content
+  cfg = require "config"
+  -- Compile rules with enriched metadata for nft compilation
+  compiled_rules = rule.compile_rules cfg.filter
+  rules_metadata = compiled_rules.rules_metadata
+  plan = compile_filter_rules cfg.filter, rules_metadata
+
+  -- Log compilation metrics
+  if plan and plan.metrics
+    log_info {
+      action: "nft_compile_metrics"
+      total_rules: plan.metrics.total_rules
+      nft_compilable: plan.metrics.nft_compilable
+      worker_only: plan.metrics.worker_only
+      conditions_compiled: plan.metrics.conditions_compiled
+      conditions_worker_only: plan.metrics.conditions_worker_only
+    }
+
+  content = substitute content, plan
 
   -- Write template to temporary file and apply via nft -f
   tmpdir = "./tmp"
@@ -160,8 +186,6 @@ apply = ->
   log_info { action: "nft_rules_template_applied", path: path }
 
   -- Now create per-rule sets dynamically
-  cfg = require "config"
-  plan = compile_filter_rules cfg.filter
   unless create_filter_rule_sets plan
     log_warn { action: "nft_rules_sets_creation_failed" }
     return false

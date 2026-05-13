@@ -12,14 +12,20 @@
 --   • Premier verdict gagnant : les règles sont évaluées dans l'ordre ;
 --     dès qu'une règle passe, ses actions sont exécutées et on s'arrête.
 
+compiler_api = require "filter.compiler_api"
+
 --- Compile une règle depuis sa table de configuration.
+-- Supporte les modules ancien style (factory function) et nouveau style
+-- (API enrichie avec capabilities/compile_nft).
 -- @tparam table cfg     Configuration globale du filtre
 -- @tparam table rule    Table de configuration d'une règle
--- @treturn function compiled_rule (req) → boolean|nil, string
-local compile_rule
+-- @tparam number idx    Index de la règle (pour rule_id implicite)
+-- @treturn function compiled_rule (req) → verdict, msg, rule_id, timeout, desc
+-- @treturn table metadata Métadonnées pour compilation nft
 compile_rule = (cfg, rule, idx) ->
-  -- Compilation des conditions
+  -- Compilation des conditions avec adaptation API
   conditions = {}
+  conditions_meta = {}
   for condition in *(rule.conditions or {})
     name, args = nil, nil
     if type(condition) == "table"
@@ -27,25 +33,73 @@ compile_rule = (cfg, rule, idx) ->
         name, args = _name, _args
     else
       name = condition
-    ok, factory_loader = pcall require, "filter.conditions.#{name}"
-    error "Condition inconnue '#{name}': #{factory_loader}" unless ok
-    factory = factory_loader cfg
-    conditions[#conditions + 1] = factory args
+    
+    cond_factory, err = compiler_api.load_condition name
+    error "Condition inconnue '#{name}': #{err}" unless cond_factory
+    
+    cond_obj = cond_factory(cfg)(args)
+    conditions[#conditions + 1] = cond_obj.eval
+    conditions_meta[#conditions_meta + 1] = {
+      name: name
+      args: args
+      capabilities: cond_obj.capabilities
+      worker_only: cond_obj.worker_only
+      compile_nft: cond_obj.compile_nft
+      creates_dynamic_scope: cond_obj.creates_dynamic_scope
+    }
 
-  -- Compilation des actions
+  -- Compilation des actions avec adaptation API
   actions = {}
-  for action in *(rule.actions or {})
-    ok, factory_loader = pcall require, "filter.actions.#{action}"
-    error "Action inconnue '#{action}': #{factory_loader}" unless ok
-    actions[#actions + 1] = (factory_loader cfg) rule
+  actions_meta = {}
+  for action_name in *(rule.actions or {})
+    action_factory, err = compiler_api.load_action action_name
+    error "Action inconnue '#{action_name}': #{err}" unless action_factory
+    
+    action_obj = action_factory(cfg)(rule)
+    actions[#actions + 1] = action_obj.eval
+    actions_meta[#actions_meta + 1] = {
+      name: action_name
+      capabilities: action_obj.capabilities
+      worker_only: action_obj.worker_only
+      compile_nft: action_obj.compile_nft
+      verdict: action_obj.verdict
+    }
 
   -- Métadonnées de règle propagées au pipeline IPC/NFT.
   rule_desc = rule.description or "rule_#{idx}"
   rule_id = rule.rule_id or "rule_#{idx}"
   rule_timeout = rule.nft_timeout or (cfg.nft and cfg.nft.ip_timeout) or "2m"
 
+  -- Métadonnées pour compilation nft
+  metadata = {
+    rule_id: rule_id
+    description: rule_desc
+    timeout: rule_timeout
+    conditions: conditions_meta
+    actions: actions_meta
+    worker_only: false
+  }
+
+  -- Déterminer si la règle est worker-only (toutes conditions/actions worker-only)
+  for cond in *conditions_meta
+    if cond.worker_only
+      metadata.worker_only = true
+      break
+  unless metadata.worker_only
+    for act in *actions_meta
+      if act.worker_only
+        metadata.worker_only = true
+        break
+
+  -- Déterminer si la règle crée un scope dynamique (DNS)
+  metadata.creates_dynamic_scope = false
+  for cond in *conditions_meta
+    if cond.creates_dynamic_scope
+      metadata.creates_dynamic_scope = true
+      break
+
   -- Fonction d'évaluation de la règle
-  (req) ->
+  eval_fn = (req) ->
     -- Vérifier toutes les conditions (ET logique)
     for cond in *conditions
       ok, reason = cond req
@@ -64,6 +118,8 @@ compile_rule = (cfg, rule, idx) ->
         msg = msg or m
 
     verdict, msg, rule_id, rule_timeout, rule_desc
+
+  eval_fn, metadata
 
 details_of = (rules, req, decision_cfg=nil) ->
   effective_cfg = decision_cfg or (rules and rules.decision_cfg) or {}
@@ -87,12 +143,15 @@ details_of = (rules, req, decision_cfg=nil) ->
 --- Compile une liste ordonnée de règles.
 -- @tparam table cfg          Configuration globale du filtre
 -- @tparam table rules_cfg    Table de configurations de règles (tableau ordonné)
--- @treturn table             Tableau de fonctions compilées
+-- @treturn table             Tableau de fonctions compilées + métadonnées nft
 compile_rules = (cfg) ->
   rules_cfg = cfg.rules or {}
   out = {}
+  out.rules_metadata = {}
   for idx, rule in ipairs rules_cfg
-    out[#out + 1] = compile_rule cfg, rule, idx
+    eval_fn, metadata = compile_rule cfg, rule, idx
+    out[#out + 1] = eval_fn
+    out.rules_metadata[idx] = metadata
   out.decision_cfg = cfg.decision or {}
   out
 
@@ -116,4 +175,4 @@ decide_meta = (rules, req, decision_cfg=nil) ->
     description: rule_desc
   }
 
-{ :compile_rules, :decide, :decide_meta }
+{ :compile_rule, :compile_rules, :decide, :decide_meta }

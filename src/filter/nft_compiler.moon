@@ -267,13 +267,17 @@ build_rule = (cfg, rule, idx, used_ids) ->
     set_subnet4: #subnet4 > 0 and "#{chain}_subnet4" or nil
     set_subnet6: #subnet6 > 0 and "#{chain}_subnet6" or nil
     set_ports: #ports > 0 and "#{chain}_dports" or nil
+    set_dyn_ip4: "rule_#{rid}_ip4"
+    set_dyn_ip6: "rule_#{rid}_ip6"
+    set_dyn_mac4: "rule_#{rid}_mac4"
+    set_dyn_mac6: "rule_#{rid}_mac6"
     stubs: {
       time_match: #times > 0
       dns_match: #dns_refs > 0
     }
   }
 
-compile = (filter_cfg) ->
+compile = (filter_cfg, rules_metadata=nil) ->
   cfg = filter_cfg or {}
   rules_cfg = cfg.rules or {}
   decision = cfg.decision or {}
@@ -283,10 +287,39 @@ compile = (filter_cfg) ->
   rules = [build_rule(cfg, rule, idx, used_ids) for idx, rule in ipairs rules_cfg]
   action_map = {}
   rules_by_id = {}
-  for _, r in ipairs rules
+
+  -- Compilation metrics
+  metrics = {
+    total_rules: #rules
+    nft_compilable: 0
+    worker_only: 0
+    conditions_compiled: 0
+    conditions_worker_only: 0
+  }
+
+  for idx, r in ipairs rules
     verdict = if r.action == "deny" then "drop" else "accept"
     action_map[#action_map + 1] = { mark: r.mark, verdict: verdict, rule_id: r.rule_id, action: r.action }
     rules_by_id[r.rule_id] = r
+    -- Attach enriched metadata if available
+    if rules_metadata and rules_metadata[idx]
+      r.conditions_meta = rules_metadata[idx].conditions
+      r.actions_meta = rules_metadata[idx].actions
+      r.worker_only = rules_metadata[idx].worker_only
+
+      -- Track metrics
+      if rules_metadata[idx].worker_only
+        metrics.worker_only += 1
+      else
+        metrics.nft_compilable += 1
+
+      -- Count conditions by backend
+      if rules_metadata[idx].conditions
+        for _, cond in ipairs rules_metadata[idx].conditions
+          if cond.capabilities and cond.capabilities.nft_static
+            metrics.conditions_compiled += 1
+          else
+            metrics.conditions_worker_only += 1
 
   {
     first_match_wins: first_match_wins
@@ -295,9 +328,11 @@ compile = (filter_cfg) ->
     rules: rules
     rules_by_id: rules_by_id
     action_map: action_map
+    rules_metadata: rules_metadata
+    metrics: metrics
   }
 
-render_set = (name, set_type, flags, elems, indent, include_elems=true) ->
+render_set = (name, set_type, flags, elems, indent, include_elements=true) ->
   lines = {}
   lines[#lines + 1] = "#{indent}set #{name} {"
   lines[#lines + 1] = "#{indent}  type #{set_type}"
@@ -305,6 +340,43 @@ render_set = (name, set_type, flags, elems, indent, include_elems=true) ->
   lines[#lines + 1] = "#{indent}  elements = { #{table.concat elems, ", "} }" if include_elems and elems and #elems > 0
   lines[#lines + 1] = "#{indent}}"
   lines
+
+--- Compile les conditions enrichies en expressions nft.
+-- Pour chaque condition qui supporte nft_static, appelle compile_nft(family).
+-- @tparam table conditions_meta Métadonnées des conditions depuis rule.compile_rule
+-- @tparam string family Famille nft ("ip", "ip6", "inet")
+-- @treturn table Liste des expressions nft compilées
+compile_conditions_nft = (conditions_meta, family) ->
+  return {} unless conditions_meta and #conditions_meta > 0
+
+  exprs = {}
+  for _, cond_meta in ipairs conditions_meta
+    -- Skip conditions that are worker-only or don't support nft_static
+    continue unless cond_meta.capabilities
+    continue unless cond_meta.capabilities.nft_static
+
+    -- Call compile_nft on the condition
+    if cond_meta.compile_nft
+      expr, err = cond_meta.compile_nft family
+      if expr
+        exprs[#exprs + 1] = expr
+
+  exprs
+
+--- Compile l'action enrichie en verdict nft.
+-- @tparam table actions_meta Métadonnées des actions depuis rule.compile_rule
+-- @treturn string|nil Verdict nft ("accept", "drop", etc.) ou nil si worker-only
+compile_action_nft = (actions_meta) ->
+  return nil unless actions_meta and #actions_meta > 0
+
+  for _, act_meta in ipairs actions_meta
+    -- Use first action that supports nft
+    if act_meta.capabilities and act_meta.capabilities.nft
+      if act_meta.compile_nft
+        verdict, _ = act_meta.compile_nft!
+        return verdict if verdict
+
+  nil
 
 match_exprs = (rule) ->
   l4 = {}
@@ -314,6 +386,16 @@ match_exprs = (rule) ->
     l4[#l4 + 1] = "th dport @#{rule.set_ports}"
   base = table.concat l4, " "
 
+  -- If enriched metadata available, use compile_conditions_nft
+  if rule.conditions_meta
+    compiled_exprs = compile_conditions_nft rule.conditions_meta, "inet"
+    if #compiled_exprs > 0
+      exprs = {}
+      for _, expr in ipairs compiled_exprs
+        exprs[#exprs + 1] = table.concat({ expr, base }, " ")\gsub "%s+", " "
+      return exprs
+
+  -- Fallback to legacy set-based matching
   exprs = {}
   
   -- IPv4: from_net, from_netlist, and from_subnet
@@ -346,6 +428,25 @@ match_exprs = (rule) ->
     exprs[1] = base
   exprs
 
+dynamic_match_exprs = (rule) ->
+  return {} unless rule.dns_scope and rule.action != "dnsonly"
+  l4 = {}
+  if #rule.protocols > 0
+    l4[#l4 + 1] = "meta l4proto { #{table.concat(rule.protocols, ", ")} }"
+  if rule.set_ports
+    l4[#l4 + 1] = "th dport @#{rule.set_ports}"
+  base = table.concat l4, " "
+  parts = {
+    "ether saddr . ip6 daddr @#{rule.set_dyn_mac6}"
+    "ether saddr . ip daddr @#{rule.set_dyn_mac4}"
+    "ip6 saddr . ip6 daddr @#{rule.set_dyn_ip6}"
+    "ip saddr . ip daddr @#{rule.set_dyn_ip4}"
+  }
+  out = {}
+  for _, p in ipairs parts
+    out[#out + 1] = table.concat({ p, base }, " ")\gsub "%s+", " "
+  out
+
 render_rule_chain = (rule, indent) ->
   lines = {}
   lines[#lines + 1] = "#{indent}chain #{rule.chain} {"
@@ -354,7 +455,14 @@ render_rule_chain = (rule, indent) ->
   if rule.stubs.time_match
     lines[#lines + 1] = "#{indent}  counter comment \"stub:time_ranges=#{table.concat(rule.time_ranges, ',')}\""
 
-  for _, expr in ipairs match_exprs rule
+  all_exprs = {}
+  for _, expr in ipairs dynamic_match_exprs rule
+    all_exprs[#all_exprs + 1] = expr
+  unless rule.dns_scope
+    for _, expr in ipairs match_exprs rule
+      all_exprs[#all_exprs + 1] = expr
+
+  for _, expr in ipairs all_exprs
     e = expr\match "^%s*(.-)%s*$"
     if e and #e > 0
       lines[#lines + 1] = "#{indent}  #{e} meta mark set #{rule.mark} counter return comment \"rule_id=#{rule.rule_id}\""
@@ -394,6 +502,14 @@ render = (plan, indent="  ", include_elements=true) ->
     if rule.set_ports
       for _, l in ipairs render_set rule.set_ports, "inet_service", "", rule.ports, indent, include_elements
         lines[#lines + 1] = l
+    for _, l in ipairs render_set rule.set_dyn_ip4, "ipv4_addr . ipv4_addr", "timeout", {}, indent, false
+      lines[#lines + 1] = l
+    for _, l in ipairs render_set rule.set_dyn_ip6, "ipv6_addr . ipv6_addr", "timeout", {}, indent, false
+      lines[#lines + 1] = l
+    for _, l in ipairs render_set rule.set_dyn_mac4, "ether_addr . ipv4_addr", "timeout", {}, indent, false
+      lines[#lines + 1] = l
+    for _, l in ipairs render_set rule.set_dyn_mac6, "ether_addr . ipv6_addr", "timeout", {}, indent, false
+      lines[#lines + 1] = l
     for _, l in ipairs render_rule_chain rule, indent
       lines[#lines + 1] = l
 
@@ -407,4 +523,4 @@ render = (plan, indent="  ", include_elements=true) ->
   lines[#lines + 1] = "#{indent}}"
   table.concat(lines, "\n") .. "\n"
 
-{ :compile, :render, :serialize_stable, :collect_subnets, :build_rule }
+{ :compile, :render, :serialize_stable, :collect_subnets, :build_rule, :compile_conditions_nft, :compile_action_nft }
