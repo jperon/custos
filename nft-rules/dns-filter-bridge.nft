@@ -114,6 +114,8 @@ table bridge dns-filter-bridge {
     flags interval
   }
 
+{COMPILED_FILTER_RULES}
+
   # ── Chaîne FORWARD (tout le trafic traversant le bridge) ──────
   chain forward {
     type filter hook forward priority 0; policy accept;
@@ -184,6 +186,7 @@ table bridge dns-filter-bridge {
 
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
+    jump cv_rules_dispatch comment "Compiled filter rules"
     ether saddr . ip6 daddr @mac6_allowed log level debug prefix "custos mac6_allowed: " counter accept comment "DNS-allowed MAC+IPv6"
     ether saddr . ip  daddr @mac4_allowed log level debug prefix "custos mac4_allowed: " counter accept comment "DNS-allowed MAC+IPv4"
     ip6   saddr . ip6 daddr @ip6_allowed  log level debug prefix "custos ip6_allowed: "  counter accept comment "DNS-allowed IPv6 pair"

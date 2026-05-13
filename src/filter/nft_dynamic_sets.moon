@@ -82,6 +82,17 @@ collect_rule_sets = (plan) ->
         type: "inet_service"
         flags: ""
       }
+
+    dynamic_sets = {
+      { name: rule.set_dyn_ip4, type: "ipv4_addr . ipv4_addr", flags: "timeout" }
+      { name: rule.set_dyn_ip6, type: "ipv6_addr . ipv6_addr", flags: "timeout" }
+      { name: rule.set_dyn_mac4, type: "ether_addr . ipv4_addr", flags: "timeout" }
+      { name: rule.set_dyn_mac6, type: "ether_addr . ipv6_addr", flags: "timeout" }
+    }
+    for _, dyn in ipairs dynamic_sets
+      if dyn.name and not sets_seen[dyn.name]
+        sets_seen[dyn.name] = true
+        sets[#sets + 1] = dyn
   
   sets
 
