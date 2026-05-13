@@ -404,6 +404,13 @@ protocol_in_scope = (policy, l4_proto) ->
   return l4_proto == "udp" if p == "quic-only"
   false
 
+is_mail_ssl_port = (port) ->
+  return true if port == 465  -- SMTPS
+  return true if port == 587  -- STARTTLS (SMTP)
+  return true if port == 993  -- IMAPS
+  return true if port == 995  -- POP3S
+  false
+
 is_ipv6 = (ip) ->
   ip and ip\find ":", 1, true
 
@@ -502,7 +509,14 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
 
     src_port = tcp.spt
     dst_port = tcp.dpt
-    protocol_name = "https"
+    protocol_name = if is_mail_ssl_port dst_port
+      switch dst_port
+        when 465 then "smtps"
+        when 587 then "smtp_starttls"
+        when 993 then "imaps"
+        when 995 then "pop3s"
+        else "mail_ssl"
+    else "https"
 
     if tcp.data_off > #raw
       log_debug { action: "tcp_no_payload", pkt_id: pkt_id }
@@ -547,6 +561,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
   af = if ip.version == 6 then "ipv6" else "ipv4"
   strict_mode = sni_policy and sni_policy.mode == "strict-443"
   in_scope = protocol_in_scope sni_policy, l4_proto
+  mail_port = is_mail_ssl_port dst_port
 
   unless sni
     if protocol_name == "quic" and tls_reason and (
@@ -558,7 +573,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         reason: tls_reason
         quic_parser_path: tls_meta and tls_meta.quic_parser_path
       }
-    if strict_mode and in_scope
+    if strict_mode and in_scope and not mail_port
       log_block {
         action: "sni_verdict_block_no_sni"
         pkt_id: pkt_id
@@ -582,6 +597,35 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         rule: "strict-443/no_sni"
       }
       return NF_DROP
+    if mail_port and strict_mode and in_scope
+      log_warn {
+        action: "sni_verdict_warn_no_sni_mail"
+        pkt_id: pkt_id
+        protocol: protocol_name
+        l4_proto: l4_proto
+        ip_src: ip_src_str
+        ip_dst: ip_dst_str
+        port_src: src_port
+        port_dst: dst_port
+        reason: tls_reason or "no_sni"
+        tls_version: tls_meta and tls_meta.tls_version
+        tls_record_version: tls_meta and tls_meta.tls_record_version
+        tls_client_hello_version: tls_meta and tls_meta.tls_client_hello_version
+        tls_supported_version: tls_meta and tls_meta.tls_supported_version
+        tls_parser_path: tls_meta and tls_meta.tls_parser_path
+      }
+      write_sni_event "warn", {
+        sni: nil
+        mac_src: mac_str
+        src_ip: ip_src_str
+        dst_ip: ip_dst_str
+        vlan: l2.vlan
+        user: nil
+        af: af
+        reason: tls_reason or "no_sni"
+        rule: "mail_ssl/no_sni"
+      }
+      return NF_ACCEPT
     log_debug {
       action: "sni_verdict_skip_no_sni", pkt_id: pkt_id, protocol: protocol_name, l4_proto: l4_proto, reason: tls_reason
       tls_version: tls_meta and tls_meta.tls_version

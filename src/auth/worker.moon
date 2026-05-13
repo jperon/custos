@@ -25,7 +25,7 @@ _reload_requested = false
 -- ── Démarrage du worker ───────────────────────────────────────────
 
 --- Démarre le worker d'authentification.
--- @tparam table auth_cfg Configuration auth issue de cfg/filter.yml
+-- @tparam table auth_cfg Configuration auth issue de config.moon
 run_auth_worker = (auth_cfg) ->
   set_action_prefix "auth_"
   log_info { action: "worker_start", port: auth_cfg.port }

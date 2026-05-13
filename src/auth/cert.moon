@@ -264,7 +264,7 @@ load_or_generate_sni = (hostname, cache) ->
 
   ctx
 
---- Charge un certificat et clé statiques (depuis filter.yml).
+--- Charge un certificat et clé statiques (depuis config.moon).
 -- @tparam string key_path  Chemin de la clé privée PEM
 -- @tparam string cert_path Chemin du certificat PEM
 -- @treturn table  Contexte TLS WolfSSL (ssl.newcontext), ou nil si succès
