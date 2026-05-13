@@ -195,7 +195,7 @@ setup_service = function()
     print("  Démarrage des workers LuaJIT...")
     local lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;" .. tostring(CUSTOS_DIR) .. "/?.lua;" .. tostring(CUSTOS_DIR) .. "/?/init.lua;;"
     ssh("logger -t custos '" .. tostring(LOG_MARKER) .. "'")
-    ssh("(cd " .. tostring(CUSTOS_DIR) .. " && CUSTOS_FILTER_CONFIG=" .. tostring(CFG_DIR) .. "/filter.yml LUA_PATH=\"" .. tostring(lua_path) .. "\" luajit2 " .. tostring(CUSTOS_DIR) .. "/main.lua </dev/null 2>&1 | logger -t custos) &")
+    ssh("(cd " .. tostring(CUSTOS_DIR) .. " && CUSTOS_CONFIG_PATH=" .. tostring(CFG_DIR) .. "/config.moon LUA_PATH=\"" .. tostring(lua_path) .. "\" luajit2 " .. tostring(CUSTOS_DIR) .. "/main.lua </dev/null 2>&1 | logger -t custos) &")
     os.execute("sleep 5")
   end
   return check_service_status()

@@ -259,13 +259,13 @@ setup_service = ->
 
     -- Start LuaJIT workers in background (busybox-compatible, no nohup)
     -- cd to CUSTOS_DIR so relative paths (tmp/auth.key, cfg/secrets, etc.) work.
-    -- CUSTOS_FILTER_CONFIG must point to the deployed config file (absolute path).
+    -- CUSTOS_CONFIG_PATH must point to the deployed config file (absolute path).
     -- LUA_PATH must include /usr/lib/lua/ for LuaSocket/LuaSSL on OpenWrt.
     -- stdout/stderr sont transmis via logger(1) vers syslog (logread sur OpenWrt).
     print "  Démarrage des workers LuaJIT..."
     lua_path = "/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;#{CUSTOS_DIR}/?.lua;#{CUSTOS_DIR}/?/init.lua;;"
     ssh "logger -t custos '#{LOG_MARKER}'"
-    ssh "(cd #{CUSTOS_DIR} && CUSTOS_FILTER_CONFIG=#{CFG_DIR}/filter.yml LUA_PATH=\"#{lua_path}\" luajit2 #{CUSTOS_DIR}/main.lua </dev/null 2>&1 | logger -t custos) &"
+    ssh "(cd #{CUSTOS_DIR} && CUSTOS_CONFIG_PATH=#{CFG_DIR}/config.moon LUA_PATH=\"#{lua_path}\" luajit2 #{CUSTOS_DIR}/main.lua </dev/null 2>&1 | logger -t custos) &"
     os.execute "sleep 5"
 
   check_service_status!
@@ -791,10 +791,10 @@ print "#{C.bold}▶ Liste blanche statique (dest_whitelist, rechargement SIGHUP)
 
 TEST_WL_IP = "10.253.254.255"
 TEST_WL_IP6 = "fd99::1"
-FILTER_YML = "#{CFG_DIR}/filter.yml"
+CONFIG_MOON = "#{CFG_DIR}/config.moon"
 
--- Inject test IPs into filter.yml
-ssh "printf '\\ndest_whitelist:\\n- #{TEST_WL_IP}\\n- #{TEST_WL_IP6}\\n' >> #{FILTER_YML}"
+-- Inject test IPs into config.moon
+ssh "printf '\\nfilter:\\n  dest_whitelist:\\n    \"#{TEST_WL_IP}\"\\n    \"#{TEST_WL_IP6}\"\\n' >> #{CONFIG_MOON}"
 
 -- Send SIGHUP to the main process (propagated to workers via pipe)
 -- filter.reload() is called on the next DNS packet, so trigger one.
@@ -811,8 +811,8 @@ _, wl6_set = ssh "nft list set bridge dns-filter-bridge ip6_dest_whitelist 2>/de
 report "dest_whitelist — #{TEST_WL_IP6} présent dans ip6_dest_whitelist après SIGHUP",
   (wl6_set and wl6_set\match "fd99") != nil, wl6_set or "(vide)"
 
--- Remove test IPs from filter.yml and reload again
-ssh "grep -v '^dest_whitelist:\\|^- #{TEST_WL_IP}\\|^- #{TEST_WL_IP6}' #{FILTER_YML} > /tmp/_filter.tmp && mv /tmp/_filter.tmp #{FILTER_YML}; true"
+-- Remove test IPs from config.moon and reload again
+ssh "grep -v '^dest_whitelist:\\|\"#{TEST_WL_IP}\"\\|\"#{TEST_WL_IP6}\"' #{CONFIG_MOON} > /tmp/_config.tmp && mv /tmp/_config.tmp #{CONFIG_MOON}; true"
 ssh "pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && kill -HUP $pid 2>/dev/null; true"
 os.execute "dig @#{DNS_RESOLVER} github.com A +time=2 +tries=1 >/dev/null 2>&1; true"
 os.execute "sleep 1"

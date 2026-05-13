@@ -150,10 +150,10 @@ LUAEOF
 scp $SSH_OPTS /tmp/config.lua vagrant@$FILTER_IP:/tmp/config.lua >/dev/null 2>&1
 ssh_filter "sudo cp /tmp/config.lua /var/run/custos/config.lua"
 
-# Création du /etc/custos et copie de filter.yml
+# Création du /etc/custos et copie de config.moon
 ssh_filter "sudo mkdir -p /etc/custos"
-scp $SSH_OPTS libvirt/filter.yml vagrant@$FILTER_IP:/tmp/filter.yml >/dev/null 2>&1
-ssh_filter "sudo cp /tmp/filter.yml /etc/custos/filter.yml"
+scp $SSH_OPTS libvirt/config.moon vagrant@$FILTER_IP:/tmp/config.moon >/dev/null 2>&1
+ssh_filter "sudo cp /tmp/config.moon /etc/custos/config.moon"
 
 # Création d'un service systemd minimal pour custos
 echo "  Création du service systemd custos..."
@@ -167,7 +167,7 @@ Type=simple
 ExecStart=/usr/bin/luajit /usr/share/custos/main.lua
 Environment=LUA_PATH=/usr/share/custos/?.lua;/usr/share/custos/?/init.lua;;
 Environment=LUA_CPATH=/usr/lib/x86_64-linux-gnu/lua/5.1/?.so;;
-Environment=CUSTOS_FILTER_CONFIG=/etc/custos/filter.yml
+Environment=CUSTOS_CONFIG_PATH=/etc/custos/config.moon
 Restart=always
 RestartSec=2
 StandardOutput=file:/var/log/custos/custos.log

@@ -147,8 +147,8 @@ install_out = run_check "luajit install-owrt.lua #{FILTER_IP} --user #{FILTER_US
 -- notre config de test avant redémarrage.
 
 print "  Push de la config de test..."
-run_check "scp -O #{SSH_OPTS} -i #{SSH_KEY} libvirt/filter.yml " ..
-          "#{FILTER_USER}@#{FILTER_IP}:/etc/custos/filter.yml"
+run_check "scp -O #{SSH_OPTS} -i #{SSH_KEY} libvirt/config.moon " ..
+          "#{FILTER_USER}@#{FILTER_IP}:/etc/custos/config.moon"
 run_check "scp -O #{SSH_OPTS} -i #{SSH_KEY} libvirt/custos-test.uci " ..
           "#{FILTER_USER}@#{FILTER_IP}:/tmp/custos.uci"
 ssh_filter FILTER_IP, "cp /tmp/custos.uci /etc/config/custos && uci commit custos"
