@@ -176,11 +176,18 @@ apply = ->
   tmpfh\write content
   tmpfh\close!
 
-  rc = os.execute "nft -f #{tmpfile} 2>/dev/null"
+  errfile = "#{tmpfile}.err"
+  rc = os.execute "nft -f #{tmpfile} 2>#{errfile}"
+  errtxt = ""
+  errfh = io.open errfile, "r"
+  if errfh
+    errtxt = errfh\read("*a") or ""
+    errfh\close!
   os.remove tmpfile
+  os.remove errfile
   
   if rc != 0
-    log_warn { action: "nft_rules_apply_failed", path: path }
+    log_warn { action: "nft_rules_apply_failed", path: path, rc: rc, err: errtxt }
     return false
 
   log_info { action: "nft_rules_template_applied", path: path }

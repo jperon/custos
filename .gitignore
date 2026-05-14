@@ -4,6 +4,7 @@
 # Runtime output directory
 tmp/*
 !tmp/.gitkeep
+!tmp/logread.txt
 
 # Temporary files
 *.tmp

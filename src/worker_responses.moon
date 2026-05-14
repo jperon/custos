@@ -343,6 +343,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           records_to_add += 1
           rr_timeout_str, _ = rr_timeout ans.ttl
           ok = add_ip4 client_v4, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
+          if nft_rule_id == "rule_11"
+            log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "ip4", key: client_v4, dest: ans.rdata_str, timeout: rr_timeout_str, ok: ok, corr: ack_corr }
           ip_count += 1 if ok
           success_any or= ok
         else
@@ -350,6 +352,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         if mac_valid client_mac
           rr_timeout_str, _ = rr_timeout ans.ttl
           m_ok = add_mac4 client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
+          if nft_rule_id == "rule_11"
+            log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "mac4", key: client_mac, dest: ans.rdata_str, timeout: rr_timeout_str, ok: m_ok, corr: ack_corr }
           success_any or= m_ok
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
@@ -363,6 +367,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           records_to_add += 1
           rr_timeout_str, _ = rr_timeout ans.ttl
           ok = add_ip6 client_v6, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
+          if nft_rule_id == "rule_11"
+            log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "ip6", key: client_v6, dest: ans.rdata_str, timeout: rr_timeout_str, ok: ok, corr: ack_corr }
           ip_count += 1 if ok
           success_any or= ok
         else
@@ -370,6 +376,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         if mac_valid client_mac
           rr_timeout_str, _ = rr_timeout ans.ttl
           m_ok = add_mac6 client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
+          if nft_rule_id == "rule_11"
+            log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "mac6", key: client_mac, dest: ans.rdata_str, timeout: rr_timeout_str, ok: m_ok, corr: ack_corr }
           success_any or= m_ok
 
   -- Logguer les cas cross-family sans IP connue (groupés par réponse)

@@ -108,15 +108,22 @@ flush_batch = (pending, ack_queue, ack_wfds) ->
   return if count == 0 and #ack_queue == 0
 
   lines = {}
+  rule11_count = 0
+  rule11_items = {}
   for _, item in pairs pending
     cmd = cmd_for item.kind, item.key, item.ip, item.rule_id, item.timeout
     lines[#lines + 1] = cmd if cmd
+    if item.rule_id == "rule_11"
+      rule11_count += 1
+      rule11_items[#rule11_items + 1] = "#{item.kind}:#{item.key}>#{item.ip}"
   for k in pairs pending
     pending[k] = nil
 
   if #lines > 0
     cmd = table.concat lines, "\n"
     ok, err = run_cmd cmd, { quiet: true }
+    if rule11_count > 0
+      log_info { action: "nft_batch_rule", rule_id: "rule_11", count: rule11_count, ok: ok, items: table.concat(rule11_items, " ") }
     if ok
       log_debug { action: "batch_ok", count: #lines, acks: #ack_queue }
     else

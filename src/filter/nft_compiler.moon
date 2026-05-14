@@ -428,6 +428,15 @@ match_exprs = (rule) ->
     ipv6_match = table.concat(expr_parts, " ")
     exprs[#exprs + 1] = table.concat({ ipv6_match, base }, " ")\gsub "%s+", " "
   
+  if rule.set_dyn_mac6
+    exprs[#exprs + 1] = "ether saddr . ip6 daddr @#{rule.set_dyn_mac6} #{base}"\gsub "%s+", " "
+  if rule.set_dyn_mac4
+    exprs[#exprs + 1] = "ether saddr . ip daddr @#{rule.set_dyn_mac4} #{base}"\gsub "%s+", " "
+  if rule.set_dyn_ip6
+    exprs[#exprs + 1] = "ip6 saddr . ip6 daddr @#{rule.set_dyn_ip6} #{base}"\gsub "%s+", " "
+  if rule.set_dyn_ip4
+    exprs[#exprs + 1] = "ip saddr . ip daddr @#{rule.set_dyn_ip4} #{base}"\gsub "%s+", " "
+  
   if #exprs == 0
     exprs[1] = base
   exprs
@@ -458,6 +467,7 @@ render_rule_chain = (rule, indent) ->
   lines[#lines + 1] = "#{indent}  counter comment \"dns_scope=#{rule.dns_scope and 'yes' or 'no'}\""
   if rule.stubs.time_match
     lines[#lines + 1] = "#{indent}  counter comment \"stub:time_ranges=#{table.concat(rule.time_ranges, ',')}\""
+  verdict = if rule.action == "deny" then "drop" else "accept"
 
   all_exprs = {}
   for _, expr in ipairs dynamic_match_exprs rule
@@ -469,9 +479,9 @@ render_rule_chain = (rule, indent) ->
   for _, expr in ipairs all_exprs
     e = expr\match "^%s*(.-)%s*$"
     if e and #e > 0
-      lines[#lines + 1] = "#{indent}  #{e} meta mark set #{rule.mark} counter return comment \"rule_id=#{rule.rule_id}\""
+      lines[#lines + 1] = "#{indent}  #{e} meta mark set #{rule.mark} counter #{verdict} comment \"rule_id=#{rule.rule_id}\""
     else
-      lines[#lines + 1] = "#{indent}  meta mark set #{rule.mark} counter return comment \"rule_id=#{rule.rule_id}\""
+      lines[#lines + 1] = "#{indent}  meta mark set #{rule.mark} counter #{verdict} comment \"rule_id=#{rule.rule_id}\""
 
   lines[#lines + 1] = "#{indent}  return"
   lines[#lines + 1] = "#{indent}}"
