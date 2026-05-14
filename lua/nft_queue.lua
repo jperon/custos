@@ -30,6 +30,7 @@ local last_enqueued_seq = nil
 local sleep_req = ffi.new("timespec_t[1]")
 local poll_fds = ffi.new("struct pollfd[1]")
 local ack_buf = ffi.new("uint8_t[1]")
+local drain_buf = ffi.new("uint8_t[64]")
 local is_valid_timeout
 is_valid_timeout = function(t)
   if not (type(t) == "string") then
@@ -126,6 +127,18 @@ write_line = function(line)
   })
   return false
 end
+local drain_ack
+drain_ack = function()
+  if not (ack_rfd) then
+    return 
+  end
+  while true do
+    local n = libc.read(ack_rfd, drain_buf, 64)
+    if not (n and n > 0) then
+      break
+    end
+  end
+end
 local build_line
 build_line = function(kind, key, ip, rule_id, timeout, corr, item_seq, widx)
   return table.concat({
@@ -178,6 +191,20 @@ local add_sip6
 add_sip6 = function(ip_str, rule_id, timeout, corr)
   return enqueue("sip6", ip_str, ip_str, rule_id, timeout, corr)
 end
+local send_barrier
+send_barrier = function(corr)
+  if not (pipe_wfd) then
+    return false
+  end
+  drain_ack()
+  seq = seq + 1
+  local line = build_line("barrier", "_", "_", "", "0s", corr, seq, worker_idx)
+  local ok = write_line(line)
+  if ok then
+    last_enqueued_seq = seq
+  end
+  return ok
+end
 local get_last_seq
 get_last_seq = function()
   local s = last_enqueued_seq
@@ -187,7 +214,7 @@ end
 local wait_ack
 wait_ack = function(pending_seq, corr)
   if not (ack_rfd) then
-    return true
+    return false
   end
   local timeout_ms = ACK_TIMEOUT_MS
   poll_fds[0].fd = ack_rfd
@@ -251,52 +278,74 @@ get_set_name = function(kind, rule_id)
     end
     return nil
   end
-  local family_suffix
-  if kind == "ip4" or kind == "mac4" then
-    family_suffix = "ip4"
-  else
-    family_suffix = "ip6"
+  if kind == "ip4" or kind == "ip6" or kind == "mac4" or kind == "mac6" then
+    return "rule_" .. tostring(rule_id) .. "_" .. tostring(kind)
   end
-  return "rule_" .. tostring(rule_id) .. "_" .. tostring(family_suffix)
+  return nil
 end
-local cmd_for
-cmd_for = function(kind, key, ip, rule_id_or_timeout, timeout)
+local cmd_lines_for
+cmd_lines_for = function(kind, key, ip, rule_id_or_timeout, timeout)
+  local rule_id = nil
   if timeout == nil then
     timeout = rule_id_or_timeout
-    local rule_id = nil
+    rule_id = nil
   else
-    local rule_id = rule_id_or_timeout
+    rule_id = rule_id_or_timeout
   end
   timeout = sanitize_timeout(timeout)
   local set_name = get_set_name(kind, rule_id)
   if not (set_name) then
     return nil
   end
-  if kind == "ip4" then
-    return "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+  local set_names = {
+    set_name
+  }
+  if rule_id and rule_id ~= "" then
+    if kind == "ip4" and SET_IP4 then
+      set_names[#set_names + 1] = SET_IP4
+    elseif kind == "ip6" and SET_IP6 then
+      set_names[#set_names + 1] = SET_IP6
+    elseif kind == "mac4" and SET_MAC4 then
+      set_names[#set_names + 1] = SET_MAC4
+    elseif kind == "mac6" and SET_MAC6 then
+      set_names[#set_names + 1] = SET_MAC6
+    end
   end
-  if kind == "ip6" then
-    return "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+  local lines = { }
+  for _, name in ipairs(set_names) do
+    if kind == "ip4" then
+      lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+    elseif kind == "ip6" then
+      lines[#lines + 1] = "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+    elseif kind == "mac4" then
+      lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+    elseif kind == "mac6" then
+      lines[#lines + 1] = "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+    elseif kind == "sip4" then
+      lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
+    elseif kind == "sip6" then
+      lines[#lines + 1] = "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
+    end
   end
-  if kind == "mac4" then
-    return "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+  if #lines == 0 then
+    return nil
   end
-  if kind == "mac6" then
-    return "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
+  return lines
+end
+local cmd_for
+cmd_for = function(kind, key, ip, rule_id_or_timeout, timeout)
+  local lines = cmd_lines_for(kind, key, ip, rule_id_or_timeout, timeout)
+  if not (lines and #lines > 0) then
+    return nil
   end
-  if kind == "sip4" then
-    return "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
-  end
-  if kind == "sip6" then
-    return "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(set_name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
-  end
-  return nil
+  return table.concat(lines, "\n")
 end
 return {
   set_wfd = set_wfd,
   set_ack_rfd = set_ack_rfd,
   get_last_seq = get_last_seq,
   wait_ack = wait_ack,
+  send_barrier = send_barrier,
   add_ip4 = add_ip4,
   add_ip6 = add_ip6,
   add_mac4 = add_mac4,
@@ -304,6 +353,7 @@ return {
   add_sip4 = add_sip4,
   add_sip6 = add_sip6,
   cmd_for = cmd_for,
+  cmd_lines_for = cmd_lines_for,
   sanitize_timeout = sanitize_timeout,
   get_set_name = get_set_name,
   sanitize_rule_id = sanitize_rule_id
