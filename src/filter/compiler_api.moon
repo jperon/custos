@@ -27,6 +27,66 @@ compute_worker_only = (obj) ->
   return true unless obj.capabilities
   return not obj.capabilities.nft_static
 
+sanitize_ascii = (raw) ->
+  return "" unless raw
+  s = tostring raw
+  replacements = {
+    {"À", "A"}, {"Á", "A"}, {"Â", "A"}, {"Ã", "A"}, {"Ä", "A"}, {"Å", "A"}
+    {"à", "a"}, {"á", "a"}, {"â", "a"}, {"ã", "a"}, {"ä", "a"}, {"å", "a"}
+    {"È", "E"}, {"É", "E"}, {"Ê", "E"}, {"Ë", "E"}
+    {"è", "e"}, {"é", "e"}, {"ê", "e"}, {"ë", "e"}
+    {"Ì", "I"}, {"Í", "I"}, {"Î", "I"}, {"Ï", "I"}
+    {"ì", "i"}, {"í", "i"}, {"î", "i"}, {"ï", "i"}
+    {"Ò", "O"}, {"Ó", "O"}, {"Ô", "O"}, {"Õ", "O"}, {"Ö", "O"}
+    {"ò", "o"}, {"ó", "o"}, {"ô", "o"}, {"õ", "o"}, {"ö", "o"}
+    {"Ù", "U"}, {"Ú", "U"}, {"Û", "U"}, {"Ü", "U"}
+    {"ù", "u"}, {"ú", "u"}, {"û", "u"}, {"ü", "u"}
+    {"Ý", "Y"}, {"Ÿ", "Y"}, {"ý", "y"}, {"ÿ", "y"}
+    {"Ç", "C"}, {"ç", "c"}, {"Ñ", "N"}, {"ñ", "n"}
+    {"ß", "ss"}, {"æ", "ae"}, {"Æ", "AE"}, {"œ", "oe"}, {"Œ", "OE"}
+  }
+  for _, pair in ipairs replacements
+    s = s\gsub pair[1], pair[2]
+  out = {}
+  for i = 1, #s
+    b = s\byte i
+    if b >= 32 and b <= 126 and b != 34 and b != 92
+      out[#out + 1] = string.char b
+    elseif b == 9 or b == 10 or b == 13 or b == 34 or b == 92
+      out[#out + 1] = " "
+  sanitized = table.concat(out, "")\gsub "%s+", " "
+  sanitized\match "^%s*(.-)%s*$"
+
+sanitize_id = (raw) ->
+  s = sanitize_ascii(raw)\lower!
+  s = s\gsub "[^a-z0-9_%-]+", "_"
+  s = s\gsub "_+", "_"
+  s = s\gsub "^_+", ""
+  s = s\gsub "_+$", ""
+  s = s\gsub "%-+", "_"
+  if #s > 40
+    s = s\sub 1, 40
+  s
+
+rule_id_base = (rule, idx) ->
+  if rule and rule.rule_id and tostring(rule.rule_id)\match "%S"
+    base = sanitize_id rule.rule_id
+    return base if #base > 0
+  if rule and rule.description and tostring(rule.description)\match "%S"
+    base = sanitize_id rule.description
+    return "r_#{base}" if #base > 0
+  "rule_#{idx}"
+
+unique_rule_id = (rule, idx, used) ->
+  base = rule_id_base rule, idx
+  rid = base
+  n = 1
+  while used and used[rid]
+    n += 1
+    rid = "#{base}_#{n}"
+  used[rid] = true if used
+  rid
+
 --- Charge un module condition avec adaptation automatique.
 -- Retourne une factory (cfg) -> (args) -> enriched_obj
 -- Détecte le style au moment de l'appel (le module exporte toujours une factory).
@@ -144,6 +204,10 @@ create_dnsonly_action = ->
 {
   :is_new_style
   :compute_worker_only
+  :sanitize_ascii
+  :sanitize_id
+  :rule_id_base
+  :unique_rule_id
   :load_condition
   :load_action
   :create_net_condition

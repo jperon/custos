@@ -1,6 +1,11 @@
+local compiler_api = require("filter.compiler_api")
 local compile_rule
-compile_rule = function(cfg, rule, idx)
+compile_rule = function(cfg, rule, idx, used_ids)
+  if used_ids == nil then
+    used_ids = nil
+  end
   local conditions = { }
+  local conditions_meta = { }
   local _list_0 = (rule.conditions or { })
   for _index_0 = 1, #_list_0 do
     local condition = _list_0[_index_0]
@@ -12,27 +17,77 @@ compile_rule = function(cfg, rule, idx)
     else
       name = condition
     end
-    local ok, factory_loader = pcall(require, "filter.conditions." .. tostring(name))
-    if not (ok) then
-      error("Condition inconnue '" .. tostring(name) .. "': " .. tostring(factory_loader))
+    local cond_factory, err = compiler_api.load_condition(name)
+    if not (cond_factory) then
+      error("Condition inconnue '" .. tostring(name) .. "': " .. tostring(err))
     end
-    local factory = factory_loader(cfg)
-    conditions[#conditions + 1] = factory(args)
+    local cond_obj = cond_factory(cfg)(args)
+    conditions[#conditions + 1] = cond_obj.eval
+    conditions_meta[#conditions_meta + 1] = {
+      name = name,
+      args = args,
+      capabilities = cond_obj.capabilities,
+      worker_only = compiler_api.compute_worker_only(cond_obj),
+      compile_nft = cond_obj.compile_nft,
+      creates_dynamic_scope = cond_obj.creates_dynamic_scope
+    }
   end
   local actions = { }
+  local actions_meta = { }
   local _list_1 = (rule.actions or { })
   for _index_0 = 1, #_list_1 do
-    local action = _list_1[_index_0]
-    local ok, factory_loader = pcall(require, "filter.actions." .. tostring(action))
-    if not (ok) then
-      error("Action inconnue '" .. tostring(action) .. "': " .. tostring(factory_loader))
+    local action_name = _list_1[_index_0]
+    local action_factory, err = compiler_api.load_action(action_name)
+    if not (action_factory) then
+      error("Action inconnue '" .. tostring(action_name) .. "': " .. tostring(err))
     end
-    actions[#actions + 1] = (factory_loader(cfg))(rule)
+    local action_obj = action_factory(cfg)(rule)
+    actions[#actions + 1] = action_obj.eval
+    actions_meta[#actions_meta + 1] = {
+      name = action_name,
+      capabilities = action_obj.capabilities,
+      worker_only = compiler_api.compute_worker_only(action_obj),
+      compile_nft = action_obj.compile_nft,
+      verdict = action_obj.verdict
+    }
   end
   local rule_desc = rule.description or "rule_" .. tostring(idx)
-  local rule_id = rule.rule_id or "rule_" .. tostring(idx)
+  local rule_id = compiler_api.unique_rule_id(rule, idx, used_ids)
   local rule_timeout = rule.nft_timeout or (cfg.nft and cfg.nft.ip_timeout) or "2m"
-  return function(req)
+  local metadata = {
+    rule_id = rule_id,
+    description = rule_desc,
+    timeout = rule_timeout,
+    conditions = conditions_meta,
+    actions = actions_meta,
+    worker_only = false
+  }
+  for _index_0 = 1, #conditions_meta do
+    local cond = conditions_meta[_index_0]
+    if cond.worker_only then
+      metadata.worker_only = true
+      break
+    end
+  end
+  if not (metadata.worker_only) then
+    for _index_0 = 1, #actions_meta do
+      local act = actions_meta[_index_0]
+      if act.worker_only then
+        metadata.worker_only = true
+        break
+      end
+    end
+  end
+  metadata.creates_dynamic_scope = false
+  for _index_0 = 1, #conditions_meta do
+    local cond = conditions_meta[_index_0]
+    if cond.creates_dynamic_scope then
+      metadata.creates_dynamic_scope = true
+      break
+    end
+  end
+  local eval_fn
+  eval_fn = function(req)
     for _index_0 = 1, #conditions do
       local cond = conditions[_index_0]
       local ok, reason = cond(req)
@@ -53,6 +108,7 @@ compile_rule = function(cfg, rule, idx)
     end
     return verdict, msg, rule_id, rule_timeout, rule_desc
   end
+  return eval_fn, metadata
 end
 local details_of
 details_of = function(rules, req, decision_cfg)
@@ -86,8 +142,12 @@ local compile_rules
 compile_rules = function(cfg)
   local rules_cfg = cfg.rules or { }
   local out = { }
+  out.rules_metadata = { }
+  local used_ids = { }
   for idx, rule in ipairs(rules_cfg) do
-    out[#out + 1] = compile_rule(cfg, rule, idx)
+    local eval_fn, metadata = compile_rule(cfg, rule, idx, used_ids)
+    out[#out + 1] = eval_fn
+    out.rules_metadata[idx] = metadata
   end
   out.decision_cfg = cfg.decision or { }
   return out
@@ -116,6 +176,7 @@ decide_meta = function(rules, req, decision_cfg)
   }
 end
 return {
+  compile_rule = compile_rule,
   compile_rules = compile_rules,
   decide = decide,
   decide_meta = decide_meta

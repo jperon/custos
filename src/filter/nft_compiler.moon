@@ -4,7 +4,10 @@
 -- Cette phase (b2) produit une architecture par règle (sets/maps/chains) avec
 -- rule_id stable, sans brancher la sémantique finale DNS/IPC (c1/c2).
 
-bit = require "bit"
+compiler_api = require "filter.compiler_api"
+sanitize_ascii = compiler_api.sanitize_ascii
+sanitize_id = compiler_api.sanitize_id
+NFT_COMMENT_MAX = 128
 
 is_array = (t) ->
   return false unless type(t) == "table"
@@ -41,56 +44,6 @@ serialize_stable = (v) ->
     parts[#parts + 1] = "#{serialize_stable k}:#{serialize_stable v[k]}"
   "{" .. table.concat(parts, ",") .. "}"
 
-fnv1a32_hex = (s) ->
-  hash = 2166136261
-  for i = 1, #s
-    hash = bit.bxor hash, s\byte i
-    hash = (hash * 16777619) % 4294967296
-  string.format "%08x", hash
-
-sanitize_id = (raw) ->
-  s = tostring(raw or "")\lower!
-  s = s\gsub "[^a-z0-9_%-]+", "_"
-  s = s\gsub "_+", "_"
-  s = s\gsub "^_+", ""
-  s = s\gsub "_+$", ""
-  s = s\gsub "%-+", "_"
-  if #s == 0
-    s = "rule"
-  if #s > 40
-    s = s\sub 1, 40
-  s
-
-sanitize_ascii = (raw) ->
-  return "" unless raw
-  s = tostring raw
-  replacements = {
-    {"À", "A"}, {"Á", "A"}, {"Â", "A"}, {"Ã", "A"}, {"Ä", "A"}, {"Å", "A"}
-    {"à", "a"}, {"á", "a"}, {"â", "a"}, {"ã", "a"}, {"ä", "a"}, {"å", "a"}
-    {"È", "E"}, {"É", "E"}, {"Ê", "E"}, {"Ë", "E"}
-    {"è", "e"}, {"é", "e"}, {"ê", "e"}, {"ë", "e"}
-    {"Ì", "I"}, {"Í", "I"}, {"Î", "I"}, {"Ï", "I"}
-    {"ì", "i"}, {"í", "i"}, {"î", "i"}, {"ï", "i"}
-    {"Ò", "O"}, {"Ó", "O"}, {"Ô", "O"}, {"Õ", "O"}, {"Ö", "O"}
-    {"ò", "o"}, {"ó", "o"}, {"ô", "o"}, {"õ", "o"}, {"ö", "o"}
-    {"Ù", "U"}, {"Ú", "U"}, {"Û", "U"}, {"Ü", "U"}
-    {"ù", "u"}, {"ú", "u"}, {"û", "u"}, {"ü", "u"}
-    {"Ý", "Y"}, {"Ÿ", "Y"}, {"ý", "y"}, {"ÿ", "y"}
-    {"Ç", "C"}, {"ç", "c"}, {"Ñ", "N"}, {"ñ", "n"}
-    {"ß", "ss"}, {"æ", "ae"}, {"Æ", "AE"}, {"œ", "oe"}, {"Œ", "OE"}
-  }
-  for _, pair in ipairs replacements
-    s = s\gsub pair[1], pair[2]
-  out = {}
-  for i = 1, #s
-    b = s\byte i
-    if b >= 32 and b <= 126 and b != 34 and b != 92
-      out[#out + 1] = string.char b
-    elseif b == 9 or b == 10 or b == 13 or b == 34 or b == 92
-      out[#out + 1] = " "
-  sanitized = table.concat(out, "")\gsub "%s+", " "
-  sanitized\match "^%s*(.-)%s*$"
-
 stable_rule_id = (rule, idx, used) ->
   explicit = rule.rule_id
   base = nil
@@ -98,13 +51,7 @@ stable_rule_id = (rule, idx, used) ->
   if explicit and tostring(explicit)\match "%S"
     base = sanitize_id explicit
   else
-    canonical = serialize_stable {
-      description: rule.description or ""
-      conditions: rule.conditions or {}
-      actions: rule.actions or {}
-      network: rule.network or {}
-    }
-    base = "r_" .. fnv1a32_hex canonical
+    base = compiler_api.rule_id_base rule, idx
 
   rid = base
   n = 1
@@ -113,6 +60,13 @@ stable_rule_id = (rule, idx, used) ->
     rid = "#{base}_#{n}"
   used[rid] = true
   rid
+
+nft_comment = (text) ->
+  s = sanitize_ascii text
+  if #s > NFT_COMMENT_MAX
+    s\sub 1, NFT_COMMENT_MAX
+  else
+    s
 
 append_unique = (dst, seen, val) ->
   return unless val and tostring(val)\match "%S"
@@ -493,7 +447,7 @@ dynamic_match_exprs = (rule) ->
 render_rule_chain = (rule, indent) ->
   lines = {}
   lines[#lines + 1] = "#{indent}chain #{rule.chain} {"
-  lines[#lines + 1] = "#{indent}  comment \"custos rule_id=#{rule.rule_id} action=#{rule.action} desc=#{sanitize_ascii rule.description}\""
+  lines[#lines + 1] = "#{indent}  comment \"#{nft_comment "custos rule_id=#{rule.rule_id} action=#{rule.action}"}\""
   lines[#lines + 1] = "#{indent}  counter comment \"dns_scope=#{rule.dns_scope and 'yes' or 'no'}\""
   if rule.stubs.time_match
     lines[#lines + 1] = "#{indent}  counter comment \"stub:time_ranges=#{table.concat(rule.time_ranges, ',')}\""
@@ -509,9 +463,9 @@ render_rule_chain = (rule, indent) ->
   for _, expr in ipairs all_exprs
     e = expr\match "^%s*(.-)%s*$"
     if e and #e > 0
-      lines[#lines + 1] = "#{indent}  #{e} meta mark set #{rule.mark} counter #{verdict} comment \"rule_id=#{rule.rule_id} desc=#{sanitize_ascii rule.description}\""
+      lines[#lines + 1] = "#{indent}  #{e} meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
     else
-      lines[#lines + 1] = "#{indent}  meta mark set #{rule.mark} counter #{verdict} comment \"rule_id=#{rule.rule_id} desc=#{sanitize_ascii rule.description}\""
+      lines[#lines + 1] = "#{indent}  meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
 
   lines[#lines + 1] = "#{indent}  return"
   lines[#lines + 1] = "#{indent}}"
@@ -560,7 +514,7 @@ render = (plan, indent="  ", include_elements=true) ->
   lines[#lines + 1] = "#{indent}chain #{plan.dispatch_chain} {"
   lines[#lines + 1] = "#{indent}  comment \"b2 dispatch skeleton (not hooked before c1/c2)\""
   for _, rule in ipairs plan.rules
-    lines[#lines + 1] = "#{indent}  jump #{rule.chain} comment \"idx=#{rule.index} rule_id=#{rule.rule_id} desc=#{sanitize_ascii rule.description}\""
+    lines[#lines + 1] = "#{indent}  jump #{rule.chain} comment \"#{nft_comment "idx=#{rule.index} rule_id=#{rule.rule_id}"}\""
     if plan.first_match_wins
       lines[#lines + 1] = "#{indent}  meta mark != 0x0 return comment \"first_match_wins\""
   lines[#lines + 1] = "#{indent}  return"

@@ -22,7 +22,7 @@ compiler_api = require "filter.compiler_api"
 -- @tparam number idx    Index de la règle (pour rule_id implicite)
 -- @treturn function compiled_rule (req) → verdict, msg, rule_id, timeout, desc
 -- @treturn table metadata Métadonnées pour compilation nft
-compile_rule = (cfg, rule, idx) ->
+compile_rule = (cfg, rule, idx, used_ids=nil) ->
   -- Compilation des conditions avec adaptation API
   conditions = {}
   conditions_meta = {}
@@ -67,7 +67,7 @@ compile_rule = (cfg, rule, idx) ->
 
   -- Métadonnées de règle propagées au pipeline IPC/NFT.
   rule_desc = rule.description or "rule_#{idx}"
-  rule_id = rule.rule_id or "rule_#{idx}"
+  rule_id = compiler_api.unique_rule_id rule, idx, used_ids
   rule_timeout = rule.nft_timeout or (cfg.nft and cfg.nft.ip_timeout) or "2m"
 
   -- Métadonnées pour compilation nft
@@ -148,8 +148,9 @@ compile_rules = (cfg) ->
   rules_cfg = cfg.rules or {}
   out = {}
   out.rules_metadata = {}
+  used_ids = {}
   for idx, rule in ipairs rules_cfg
-    eval_fn, metadata = compile_rule cfg, rule, idx
+    eval_fn, metadata = compile_rule cfg, rule, idx, used_ids
     out[#out + 1] = eval_fn
     out.rules_metadata[idx] = metadata
   out.decision_cfg = cfg.decision or {}

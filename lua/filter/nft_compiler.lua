@@ -1,4 +1,7 @@
-local bit = require("bit")
+local compiler_api = require("filter.compiler_api")
+local sanitize_ascii = compiler_api.sanitize_ascii
+local sanitize_id = compiler_api.sanitize_id
+local NFT_COMMENT_MAX = 128
 local is_array
 is_array = function(t)
   if not (type(t) == "table") then
@@ -80,290 +83,6 @@ serialize_stable = function(v)
   end
   return "{" .. table.concat(parts, ",") .. "}"
 end
-local fnv1a32_hex
-fnv1a32_hex = function(s)
-  local hash = 2166136261
-  for i = 1, #s do
-    hash = bit.bxor(hash, s:byte(i))
-    hash = (hash * 16777619) % 4294967296
-  end
-  return string.format("%08x", hash)
-end
-local sanitize_id
-sanitize_id = function(raw)
-  local s = tostring(raw or ""):lower()
-  s = s:gsub("[^a-z0-9_%-]+", "_")
-  s = s:gsub("_+", "_")
-  s = s:gsub("^_+", "")
-  s = s:gsub("_+$", "")
-  s = s:gsub("%-+", "_")
-  if #s == 0 then
-    s = "rule"
-  end
-  if #s > 40 then
-    s = s:sub(1, 40)
-  end
-  return s
-end
-local sanitize_ascii
-sanitize_ascii = function(raw)
-  if not (raw) then
-    return ""
-  end
-  local s = tostring(raw)
-  local replacements = {
-    {
-      "À",
-      "A"
-    },
-    {
-      "Á",
-      "A"
-    },
-    {
-      "Â",
-      "A"
-    },
-    {
-      "Ã",
-      "A"
-    },
-    {
-      "Ä",
-      "A"
-    },
-    {
-      "Å",
-      "A"
-    },
-    {
-      "à",
-      "a"
-    },
-    {
-      "á",
-      "a"
-    },
-    {
-      "â",
-      "a"
-    },
-    {
-      "ã",
-      "a"
-    },
-    {
-      "ä",
-      "a"
-    },
-    {
-      "å",
-      "a"
-    },
-    {
-      "È",
-      "E"
-    },
-    {
-      "É",
-      "E"
-    },
-    {
-      "Ê",
-      "E"
-    },
-    {
-      "Ë",
-      "E"
-    },
-    {
-      "è",
-      "e"
-    },
-    {
-      "é",
-      "e"
-    },
-    {
-      "ê",
-      "e"
-    },
-    {
-      "ë",
-      "e"
-    },
-    {
-      "Ì",
-      "I"
-    },
-    {
-      "Í",
-      "I"
-    },
-    {
-      "Î",
-      "I"
-    },
-    {
-      "Ï",
-      "I"
-    },
-    {
-      "ì",
-      "i"
-    },
-    {
-      "í",
-      "i"
-    },
-    {
-      "î",
-      "i"
-    },
-    {
-      "ï",
-      "i"
-    },
-    {
-      "Ò",
-      "O"
-    },
-    {
-      "Ó",
-      "O"
-    },
-    {
-      "Ô",
-      "O"
-    },
-    {
-      "Õ",
-      "O"
-    },
-    {
-      "Ö",
-      "O"
-    },
-    {
-      "ò",
-      "o"
-    },
-    {
-      "ó",
-      "o"
-    },
-    {
-      "ô",
-      "o"
-    },
-    {
-      "õ",
-      "o"
-    },
-    {
-      "ö",
-      "o"
-    },
-    {
-      "Ù",
-      "U"
-    },
-    {
-      "Ú",
-      "U"
-    },
-    {
-      "Û",
-      "U"
-    },
-    {
-      "Ü",
-      "U"
-    },
-    {
-      "ù",
-      "u"
-    },
-    {
-      "ú",
-      "u"
-    },
-    {
-      "û",
-      "u"
-    },
-    {
-      "ü",
-      "u"
-    },
-    {
-      "Ý",
-      "Y"
-    },
-    {
-      "Ÿ",
-      "Y"
-    },
-    {
-      "ý",
-      "y"
-    },
-    {
-      "ÿ",
-      "y"
-    },
-    {
-      "Ç",
-      "C"
-    },
-    {
-      "ç",
-      "c"
-    },
-    {
-      "Ñ",
-      "N"
-    },
-    {
-      "ñ",
-      "n"
-    },
-    {
-      "ß",
-      "ss"
-    },
-    {
-      "æ",
-      "ae"
-    },
-    {
-      "Æ",
-      "AE"
-    },
-    {
-      "œ",
-      "oe"
-    },
-    {
-      "Œ",
-      "OE"
-    }
-  }
-  for _, pair in ipairs(replacements) do
-    s = s:gsub(pair[1], pair[2])
-  end
-  local out = { }
-  for i = 1, #s do
-    local b = s:byte(i)
-    if b >= 32 and b <= 126 and b ~= 34 and b ~= 92 then
-      out[#out + 1] = string.char(b)
-    elseif b == 9 or b == 10 or b == 13 or b == 34 or b == 92 then
-      out[#out + 1] = " "
-    end
-  end
-  local sanitized = table.concat(out, ""):gsub("%s+", " ")
-  return sanitized:match("^%s*(.-)%s*$")
-end
 local stable_rule_id
 stable_rule_id = function(rule, idx, used)
   local explicit = rule.rule_id
@@ -371,13 +90,7 @@ stable_rule_id = function(rule, idx, used)
   if explicit and tostring(explicit):match("%S") then
     base = sanitize_id(explicit)
   else
-    local canonical = serialize_stable({
-      description = rule.description or "",
-      conditions = rule.conditions or { },
-      actions = rule.actions or { },
-      network = rule.network or { }
-    })
-    base = "r_" .. fnv1a32_hex(canonical)
+    base = compiler_api.rule_id_base(rule, idx)
   end
   local rid = base
   local n = 1
@@ -387,6 +100,15 @@ stable_rule_id = function(rule, idx, used)
   end
   used[rid] = true
   return rid
+end
+local nft_comment
+nft_comment = function(text)
+  local s = sanitize_ascii(text)
+  if #s > NFT_COMMENT_MAX then
+    return s:sub(1, NFT_COMMENT_MAX)
+  else
+    return s
+  end
 end
 local append_unique
 append_unique = function(dst, seen, val)
@@ -938,7 +660,7 @@ local render_rule_chain
 render_rule_chain = function(rule, indent)
   local lines = { }
   lines[#lines + 1] = tostring(indent) .. "chain " .. tostring(rule.chain) .. " {"
-  lines[#lines + 1] = tostring(indent) .. "  comment \"custos rule_id=" .. tostring(rule.rule_id) .. " action=" .. tostring(rule.action) .. " desc=" .. tostring(sanitize_ascii(rule.description)) .. "\""
+  lines[#lines + 1] = tostring(indent) .. "  comment \"" .. tostring(nft_comment("custos rule_id=" .. tostring(rule.rule_id) .. " action=" .. tostring(rule.action))) .. "\""
   lines[#lines + 1] = tostring(indent) .. "  counter comment \"dns_scope=" .. tostring(rule.dns_scope and 'yes' or 'no') .. "\""
   if rule.stubs.time_match then
     lines[#lines + 1] = tostring(indent) .. "  counter comment \"stub:time_ranges=" .. tostring(table.concat(rule.time_ranges, ',')) .. "\""
@@ -961,9 +683,9 @@ render_rule_chain = function(rule, indent)
   for _, expr in ipairs(all_exprs) do
     local e = expr:match("^%s*(.-)%s*$")
     if e and #e > 0 then
-      lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"rule_id=" .. tostring(rule.rule_id) .. " desc=" .. tostring(sanitize_ascii(rule.description)) .. "\""
+      lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
     else
-      lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"rule_id=" .. tostring(rule.rule_id) .. " desc=" .. tostring(sanitize_ascii(rule.description)) .. "\""
+      lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
     end
   end
   lines[#lines + 1] = tostring(indent) .. "  return"
@@ -1045,7 +767,7 @@ render = function(plan, indent, include_elements)
   lines[#lines + 1] = tostring(indent) .. "chain " .. tostring(plan.dispatch_chain) .. " {"
   lines[#lines + 1] = tostring(indent) .. "  comment \"b2 dispatch skeleton (not hooked before c1/c2)\""
   for _, rule in ipairs(plan.rules) do
-    lines[#lines + 1] = tostring(indent) .. "  jump " .. tostring(rule.chain) .. " comment \"idx=" .. tostring(rule.index) .. " rule_id=" .. tostring(rule.rule_id) .. " desc=" .. tostring(sanitize_ascii(rule.description)) .. "\""
+    lines[#lines + 1] = tostring(indent) .. "  jump " .. tostring(rule.chain) .. " comment \"" .. tostring(nft_comment("idx=" .. tostring(rule.index) .. " rule_id=" .. tostring(rule.rule_id))) .. "\""
     if plan.first_match_wins then
       lines[#lines + 1] = tostring(indent) .. "  meta mark != 0x0 return comment \"first_match_wins\""
     end
