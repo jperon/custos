@@ -105,6 +105,265 @@ sanitize_id = function(raw)
   end
   return s
 end
+local sanitize_ascii
+sanitize_ascii = function(raw)
+  if not (raw) then
+    return ""
+  end
+  local s = tostring(raw)
+  local replacements = {
+    {
+      "À",
+      "A"
+    },
+    {
+      "Á",
+      "A"
+    },
+    {
+      "Â",
+      "A"
+    },
+    {
+      "Ã",
+      "A"
+    },
+    {
+      "Ä",
+      "A"
+    },
+    {
+      "Å",
+      "A"
+    },
+    {
+      "à",
+      "a"
+    },
+    {
+      "á",
+      "a"
+    },
+    {
+      "â",
+      "a"
+    },
+    {
+      "ã",
+      "a"
+    },
+    {
+      "ä",
+      "a"
+    },
+    {
+      "å",
+      "a"
+    },
+    {
+      "È",
+      "E"
+    },
+    {
+      "É",
+      "E"
+    },
+    {
+      "Ê",
+      "E"
+    },
+    {
+      "Ë",
+      "E"
+    },
+    {
+      "è",
+      "e"
+    },
+    {
+      "é",
+      "e"
+    },
+    {
+      "ê",
+      "e"
+    },
+    {
+      "ë",
+      "e"
+    },
+    {
+      "Ì",
+      "I"
+    },
+    {
+      "Í",
+      "I"
+    },
+    {
+      "Î",
+      "I"
+    },
+    {
+      "Ï",
+      "I"
+    },
+    {
+      "ì",
+      "i"
+    },
+    {
+      "í",
+      "i"
+    },
+    {
+      "î",
+      "i"
+    },
+    {
+      "ï",
+      "i"
+    },
+    {
+      "Ò",
+      "O"
+    },
+    {
+      "Ó",
+      "O"
+    },
+    {
+      "Ô",
+      "O"
+    },
+    {
+      "Õ",
+      "O"
+    },
+    {
+      "Ö",
+      "O"
+    },
+    {
+      "ò",
+      "o"
+    },
+    {
+      "ó",
+      "o"
+    },
+    {
+      "ô",
+      "o"
+    },
+    {
+      "õ",
+      "o"
+    },
+    {
+      "ö",
+      "o"
+    },
+    {
+      "Ù",
+      "U"
+    },
+    {
+      "Ú",
+      "U"
+    },
+    {
+      "Û",
+      "U"
+    },
+    {
+      "Ü",
+      "U"
+    },
+    {
+      "ù",
+      "u"
+    },
+    {
+      "ú",
+      "u"
+    },
+    {
+      "û",
+      "u"
+    },
+    {
+      "ü",
+      "u"
+    },
+    {
+      "Ý",
+      "Y"
+    },
+    {
+      "Ÿ",
+      "Y"
+    },
+    {
+      "ý",
+      "y"
+    },
+    {
+      "ÿ",
+      "y"
+    },
+    {
+      "Ç",
+      "C"
+    },
+    {
+      "ç",
+      "c"
+    },
+    {
+      "Ñ",
+      "N"
+    },
+    {
+      "ñ",
+      "n"
+    },
+    {
+      "ß",
+      "ss"
+    },
+    {
+      "æ",
+      "ae"
+    },
+    {
+      "Æ",
+      "AE"
+    },
+    {
+      "œ",
+      "oe"
+    },
+    {
+      "Œ",
+      "OE"
+    }
+  }
+  for _, pair in ipairs(replacements) do
+    s = s:gsub(pair[1], pair[2])
+  end
+  local out = { }
+  for i = 1, #s do
+    local b = s:byte(i)
+    if b >= 32 and b <= 126 and b ~= 34 and b ~= 92 then
+      out[#out + 1] = string.char(b)
+    elseif b == 9 or b == 10 or b == 13 or b == 34 or b == 92 then
+      out[#out + 1] = " "
+    end
+  end
+  local sanitized = table.concat(out, ""):gsub("%s+", " ")
+  return sanitized:match("^%s*(.-)%s*$")
+end
 local stable_rule_id
 stable_rule_id = function(rule, idx, used)
   local explicit = rule.rule_id
@@ -381,8 +640,11 @@ resolve_action = function(rule)
   return nil
 end
 local build_rule
-build_rule = function(cfg, rule, idx, used_ids)
-  local rid = stable_rule_id(rule, idx, used_ids)
+build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id)
+  if metadata_rule_id == nil then
+    metadata_rule_id = nil
+  end
+  local rid = metadata_rule_id or stable_rule_id(rule, idx, used_ids)
   local src4, src6 = collect_nets(cfg, rule)
   local subnet4, subnet6 = collect_subnets(rule)
   local times = collect_times(rule)
@@ -412,6 +674,10 @@ build_rule = function(cfg, rule, idx, used_ids)
     set_subnet4 = #subnet4 > 0 and tostring(chain) .. "_subnet4" or nil,
     set_subnet6 = #subnet6 > 0 and tostring(chain) .. "_subnet6" or nil,
     set_ports = #ports > 0 and tostring(chain) .. "_dports" or nil,
+    set_dyn_ip4 = "rule_" .. tostring(rid) .. "_ip4",
+    set_dyn_ip6 = "rule_" .. tostring(rid) .. "_ip6",
+    set_dyn_mac4 = "rule_" .. tostring(rid) .. "_mac4",
+    set_dyn_mac6 = "rule_" .. tostring(rid) .. "_mac6",
     stubs = {
       time_match = #times > 0,
       dns_match = #dns_refs > 0
@@ -419,7 +685,10 @@ build_rule = function(cfg, rule, idx, used_ids)
   }
 end
 local compile
-compile = function(filter_cfg)
+compile = function(filter_cfg, rules_metadata)
+  if rules_metadata == nil then
+    rules_metadata = nil
+  end
   local cfg = filter_cfg or { }
   local rules_cfg = cfg.rules or { }
   local decision = cfg.decision or { }
@@ -435,14 +704,23 @@ compile = function(filter_cfg)
     local _accum_0 = { }
     local _len_0 = 1
     for idx, rule in ipairs(rules_cfg) do
-      _accum_0[_len_0] = build_rule(cfg, rule, idx, used_ids)
+      local meta_rid = rules_metadata and rules_metadata[idx] and rules_metadata[idx].rule_id
+      local _value_0 = build_rule(cfg, rule, idx, used_ids, meta_rid)
+      _accum_0[_len_0] = _value_0
       _len_0 = _len_0 + 1
     end
     rules = _accum_0
   end
   local action_map = { }
   local rules_by_id = { }
-  for _, r in ipairs(rules) do
+  local metrics = {
+    total_rules = #rules,
+    nft_compilable = 0,
+    worker_only = 0,
+    conditions_compiled = 0,
+    conditions_worker_only = 0
+  }
+  for idx, r in ipairs(rules) do
     local verdict
     if r.action == "deny" then
       verdict = "drop"
@@ -456,6 +734,25 @@ compile = function(filter_cfg)
       action = r.action
     }
     rules_by_id[r.rule_id] = r
+    if rules_metadata and rules_metadata[idx] then
+      r.conditions_meta = rules_metadata[idx].conditions
+      r.actions_meta = rules_metadata[idx].actions
+      r.worker_only = rules_metadata[idx].worker_only
+      if rules_metadata[idx].worker_only then
+        metrics.worker_only = metrics.worker_only + 1
+      else
+        metrics.nft_compilable = metrics.nft_compilable + 1
+      end
+      if rules_metadata[idx].conditions then
+        for _, cond in ipairs(rules_metadata[idx].conditions) do
+          if cond.capabilities and cond.capabilities.nft_static then
+            metrics.conditions_compiled = metrics.conditions_compiled + 1
+          else
+            metrics.conditions_worker_only = metrics.conditions_worker_only + 1
+          end
+        end
+      end
+    end
   end
   return {
     first_match_wins = first_match_wins,
@@ -463,13 +760,15 @@ compile = function(filter_cfg)
     action_vmap = "cv_rule_action_vmap",
     rules = rules,
     rules_by_id = rules_by_id,
-    action_map = action_map
+    action_map = action_map,
+    rules_metadata = rules_metadata,
+    metrics = metrics
   }
 end
 local render_set
-render_set = function(name, set_type, flags, elems, indent, include_elems)
-  if include_elems == nil then
-    include_elems = true
+render_set = function(name, set_type, flags, elems, indent, include_elements)
+  if include_elements == nil then
+    include_elements = true
   end
   local lines = { }
   lines[#lines + 1] = tostring(indent) .. "set " .. tostring(name) .. " {"
@@ -483,6 +782,55 @@ render_set = function(name, set_type, flags, elems, indent, include_elems)
   lines[#lines + 1] = tostring(indent) .. "}"
   return lines
 end
+local compile_conditions_nft
+compile_conditions_nft = function(conditions_meta, family)
+  if not (conditions_meta and #conditions_meta > 0) then
+    return { }
+  end
+  local exprs = { }
+  for _, cond_meta in ipairs(conditions_meta) do
+    local _continue_0 = false
+    repeat
+      if not (cond_meta.capabilities) then
+        _continue_0 = true
+        break
+      end
+      if not (cond_meta.capabilities.nft_static) then
+        _continue_0 = true
+        break
+      end
+      if cond_meta.compile_nft then
+        local expr, err = cond_meta.compile_nft(family)
+        if expr then
+          exprs[#exprs + 1] = expr
+        end
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  return exprs
+end
+local compile_action_nft
+compile_action_nft = function(actions_meta)
+  if not (actions_meta and #actions_meta > 0) then
+    return nil
+  end
+  for _, act_meta in ipairs(actions_meta) do
+    if act_meta.capabilities and act_meta.capabilities.nft then
+      if act_meta.compile_nft then
+        local verdict
+        verdict, _ = act_meta.compile_nft()
+        if verdict then
+          return verdict
+        end
+      end
+    end
+  end
+  return nil
+end
 local match_exprs
 match_exprs = function(rule)
   local l4 = { }
@@ -493,6 +841,19 @@ match_exprs = function(rule)
     l4[#l4 + 1] = "th dport @" .. tostring(rule.set_ports)
   end
   local base = table.concat(l4, " ")
+  if rule.conditions_meta then
+    local compiled_exprs = compile_conditions_nft(rule.conditions_meta, "inet")
+    if #compiled_exprs > 0 then
+      local exprs = { }
+      for _, expr in ipairs(compiled_exprs) do
+        exprs[#exprs + 1] = table.concat({
+          expr,
+          base
+        }, " "):gsub("%s+", " ")
+      end
+      return exprs
+    end
+  end
   local exprs = { }
   if rule.set_src4 or rule.set_subnet4 then
     local expr_parts = {
@@ -528,26 +889,81 @@ match_exprs = function(rule)
       base
     }, " "):gsub("%s+", " ")
   end
+  if rule.set_dyn_mac6 then
+    exprs[#exprs + 1] = ("ether saddr . ip6 daddr @" .. tostring(rule.set_dyn_mac6) .. " " .. tostring(base)):gsub("%s+", " ")
+  end
+  if rule.set_dyn_mac4 then
+    exprs[#exprs + 1] = ("ether saddr . ip daddr @" .. tostring(rule.set_dyn_mac4) .. " " .. tostring(base)):gsub("%s+", " ")
+  end
+  if rule.set_dyn_ip6 then
+    exprs[#exprs + 1] = ("ip6 saddr . ip6 daddr @" .. tostring(rule.set_dyn_ip6) .. " " .. tostring(base)):gsub("%s+", " ")
+  end
+  if rule.set_dyn_ip4 then
+    exprs[#exprs + 1] = ("ip saddr . ip daddr @" .. tostring(rule.set_dyn_ip4) .. " " .. tostring(base)):gsub("%s+", " ")
+  end
   if #exprs == 0 then
     exprs[1] = base
   end
   return exprs
 end
+local dynamic_match_exprs
+dynamic_match_exprs = function(rule)
+  if not (rule.dns_scope and rule.action ~= "dnsonly") then
+    return { }
+  end
+  local l4 = { }
+  if #rule.protocols > 0 then
+    l4[#l4 + 1] = "meta l4proto { " .. tostring(table.concat(rule.protocols, ", ")) .. " }"
+  end
+  if rule.set_ports then
+    l4[#l4 + 1] = "th dport @" .. tostring(rule.set_ports)
+  end
+  local base = table.concat(l4, " ")
+  local parts = {
+    "ether saddr . ip6 daddr @" .. tostring(rule.set_dyn_mac6),
+    "ether saddr . ip daddr @" .. tostring(rule.set_dyn_mac4),
+    "ip6 saddr . ip6 daddr @" .. tostring(rule.set_dyn_ip6),
+    "ip saddr . ip daddr @" .. tostring(rule.set_dyn_ip4)
+  }
+  local out = { }
+  for _, p in ipairs(parts) do
+    out[#out + 1] = table.concat({
+      p,
+      base
+    }, " "):gsub("%s+", " ")
+  end
+  return out
+end
 local render_rule_chain
 render_rule_chain = function(rule, indent)
   local lines = { }
   lines[#lines + 1] = tostring(indent) .. "chain " .. tostring(rule.chain) .. " {"
-  lines[#lines + 1] = tostring(indent) .. "  comment \"custos rule_id=" .. tostring(rule.rule_id) .. " action=" .. tostring(rule.action) .. "\""
+  lines[#lines + 1] = tostring(indent) .. "  comment \"custos rule_id=" .. tostring(rule.rule_id) .. " action=" .. tostring(rule.action) .. " desc=" .. tostring(sanitize_ascii(rule.description)) .. "\""
   lines[#lines + 1] = tostring(indent) .. "  counter comment \"dns_scope=" .. tostring(rule.dns_scope and 'yes' or 'no') .. "\""
   if rule.stubs.time_match then
     lines[#lines + 1] = tostring(indent) .. "  counter comment \"stub:time_ranges=" .. tostring(table.concat(rule.time_ranges, ',')) .. "\""
   end
-  for _, expr in ipairs(match_exprs(rule)) do
+  local verdict
+  if rule.action == "deny" then
+    verdict = "drop"
+  else
+    verdict = "accept"
+  end
+  local all_exprs = { }
+  for _, expr in ipairs(dynamic_match_exprs(rule)) do
+    all_exprs[#all_exprs + 1] = expr
+  end
+  if not (rule.dns_scope) then
+    for _, expr in ipairs(match_exprs(rule)) do
+      all_exprs[#all_exprs + 1] = expr
+    end
+  end
+  for _, expr in ipairs(all_exprs) do
     local e = expr:match("^%s*(.-)%s*$")
     if e and #e > 0 then
-      lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter return comment \"rule_id=" .. tostring(rule.rule_id) .. "\""
+      lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"rule_id=" .. tostring(rule.rule_id) .. " desc=" .. tostring(sanitize_ascii(rule.description)) .. "\""
     else
-      lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter return comment \"rule_id=" .. tostring(rule.rule_id) .. "\""
+      lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"rule_id=" .. tostring(rule.rule_id) .. " desc=" .. tostring(sanitize_ascii(rule.description)) .. "\""
     end
   end
   lines[#lines + 1] = tostring(indent) .. "  return"
@@ -610,6 +1026,18 @@ render = function(plan, indent, include_elements)
         lines[#lines + 1] = l
       end
     end
+    for _, l in ipairs(render_set(rule.set_dyn_ip4, "ipv4_addr . ipv4_addr", "timeout", { }, indent, false)) do
+      lines[#lines + 1] = l
+    end
+    for _, l in ipairs(render_set(rule.set_dyn_ip6, "ipv6_addr . ipv6_addr", "timeout", { }, indent, false)) do
+      lines[#lines + 1] = l
+    end
+    for _, l in ipairs(render_set(rule.set_dyn_mac4, "ether_addr . ipv4_addr", "timeout", { }, indent, false)) do
+      lines[#lines + 1] = l
+    end
+    for _, l in ipairs(render_set(rule.set_dyn_mac6, "ether_addr . ipv6_addr", "timeout", { }, indent, false)) do
+      lines[#lines + 1] = l
+    end
     for _, l in ipairs(render_rule_chain(rule, indent)) do
       lines[#lines + 1] = l
     end
@@ -617,7 +1045,7 @@ render = function(plan, indent, include_elements)
   lines[#lines + 1] = tostring(indent) .. "chain " .. tostring(plan.dispatch_chain) .. " {"
   lines[#lines + 1] = tostring(indent) .. "  comment \"b2 dispatch skeleton (not hooked before c1/c2)\""
   for _, rule in ipairs(plan.rules) do
-    lines[#lines + 1] = tostring(indent) .. "  jump " .. tostring(rule.chain) .. " comment \"idx=" .. tostring(rule.index) .. " rule_id=" .. tostring(rule.rule_id) .. "\""
+    lines[#lines + 1] = tostring(indent) .. "  jump " .. tostring(rule.chain) .. " comment \"idx=" .. tostring(rule.index) .. " rule_id=" .. tostring(rule.rule_id) .. " desc=" .. tostring(sanitize_ascii(rule.description)) .. "\""
     if plan.first_match_wins then
       lines[#lines + 1] = tostring(indent) .. "  meta mark != 0x0 return comment \"first_match_wins\""
     end
@@ -631,5 +1059,7 @@ return {
   render = render,
   serialize_stable = serialize_stable,
   collect_subnets = collect_subnets,
-  build_rule = build_rule
+  build_rule = build_rule,
+  compile_conditions_nft = compile_conditions_nft,
+  compile_action_nft = compile_action_nft
 }
