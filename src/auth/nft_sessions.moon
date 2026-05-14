@@ -22,12 +22,16 @@ run_nft = (cmd) ->
   rc = libnft.nft_run_cmd_from_buffer ctx, cmd
   rc == 0
 
+upsert_element = (set_name, value, ttl) ->
+  cmd = "#{config.nft.family} #{config.nft.table} #{set_name} { #{value} timeout #{ttl}s }"
+  run_nft("update element #{cmd}") or run_nft("add element #{cmd}")
+
 --- Ajoute une IPv4 authentifiée dans le set nft avec TTL.
 -- @tparam string ip  Adresse IPv4 du client
 -- @tparam number ttl Durée de vie en secondes
 -- @treturn boolean   true si succès
 add_authenticated4 = (ip, ttl) ->
-  run_nft "add element #{config.nft.family} #{config.nft.table} #{NFT_SET4} { #{ip} timeout #{ttl}s }"
+  upsert_element NFT_SET4, ip, ttl
 
 --- Retire une IPv4 du set (logout explicite).
 -- @tparam string ip  Adresse IPv4 du client
@@ -40,7 +44,7 @@ del_authenticated4 = (ip) ->
 -- @tparam number ttl Durée de vie en secondes
 -- @treturn boolean   true si succès
 add_authenticated6 = (ip, ttl) ->
-  run_nft "add element #{config.nft.family} #{config.nft.table} #{NFT_SET6} { #{ip} timeout #{ttl}s }"
+  upsert_element NFT_SET6, ip, ttl
 
 --- Retire une IPv6 du set (logout explicite).
 -- @tparam string ip  Adresse IPv6 du client
@@ -72,7 +76,7 @@ del_authenticated = (ip) ->
 -- @tparam number ttl Durée de vie en secondes
 -- @treturn boolean   true si les deux insertions réussissent
 add_authenticated_mac = (mac, ttl) ->
-  run_nft "add element #{config.nft.family} #{config.nft.table} #{NFT_SET_MAC} { #{mac} timeout #{ttl}s }"
+  upsert_element NFT_SET_MAC, mac, ttl
 
 --- Retire un MAC des sets ip et ip6 (logout explicite ou expiration de session).
 -- @tparam string mac Adresse MAC du client (format "aa:bb:cc:dd:ee:ff")

@@ -16,9 +16,14 @@ run_nft = function(cmd)
   local rc = libnft.nft_run_cmd_from_buffer(ctx, cmd)
   return rc == 0
 end
+local upsert_element
+upsert_element = function(set_name, value, ttl)
+  local cmd = tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(set_name) .. " { " .. tostring(value) .. " timeout " .. tostring(ttl) .. "s }"
+  return run_nft("update element " .. tostring(cmd)) or run_nft("add element " .. tostring(cmd))
+end
 local add_authenticated4
 add_authenticated4 = function(ip, ttl)
-  return run_nft("add element " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(NFT_SET4) .. " { " .. tostring(ip) .. " timeout " .. tostring(ttl) .. "s }")
+  return upsert_element(NFT_SET4, ip, ttl)
 end
 local del_authenticated4
 del_authenticated4 = function(ip)
@@ -26,7 +31,7 @@ del_authenticated4 = function(ip)
 end
 local add_authenticated6
 add_authenticated6 = function(ip, ttl)
-  return run_nft("add element " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(NFT_SET6) .. " { " .. tostring(ip) .. " timeout " .. tostring(ttl) .. "s }")
+  return upsert_element(NFT_SET6, ip, ttl)
 end
 local del_authenticated6
 del_authenticated6 = function(ip)
@@ -50,7 +55,7 @@ del_authenticated = function(ip)
 end
 local add_authenticated_mac
 add_authenticated_mac = function(mac, ttl)
-  return run_nft("add element " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(NFT_SET_MAC) .. " { " .. tostring(mac) .. " timeout " .. tostring(ttl) .. "s }")
+  return upsert_element(NFT_SET_MAC, mac, ttl)
 end
 local del_authenticated_mac
 del_authenticated_mac = function(mac)
