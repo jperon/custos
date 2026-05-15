@@ -37,6 +37,28 @@ packet = require "nfq/packet"
 bit = require "bit"
 :concat, :insert, :remove = table
 
+-- Load filter rules to identify auth-only wildcard rules
+filter_cfg = config.filter or {}
+compiled_rules = require("filter.rule").compile_rules filter_cfg
+rules_metadata = compiled_rules.rules_metadata
+
+-- Cache of auth-only wildcard rules (requires_auth=true, #dns_refs==0)
+auth_wildcard_rules = {}
+for idx, meta in ipairs rules_metadata or {}
+  requires_auth = false
+  dns_refs = 0
+  if meta.conditions
+    for _, cond in ipairs meta.conditions
+      if cond.capabilities and cond.capabilities.worker_only
+        for k, _ in pairs cond
+          if k == "from_users" or k == "from_userlists"
+            requires_auth = true
+          if k == "to_domains" or k == "to_domainlist"
+            dns_refs += 1
+  if requires_auth and dns_refs == 0
+    rule_id = meta.rule_id or "unknown_#{idx}"
+    auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
+
 IPC_RETRY_ENABLED = if match_retry_cfg.enabled == nil then true else match_retry_cfg.enabled
 IPC_RETRY_COUNT = match_retry_cfg.count or 5
 IPC_RETRY_SLEEP_MS = match_retry_cfg.sleep_ms or 20
@@ -347,6 +369,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
             log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "ip4", key: client_v4, dest: ans.rdata_str, timeout: rr_timeout_str, ok: ok, corr: ack_corr }
           ip_count += 1 if ok
           success_any or= ok
+
+          -- Also add to auth-only wildcard rules if user is authenticated
+          if user and #auth_wildcard_rules > 0
+            for _, auth_rule_id in ipairs auth_wildcard_rules
+              if auth_rule_id ~= nft_rule_id
+                auth_ok = add_ip4 client_v4, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
+                success_any or= auth_ok
         else
           no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
         if mac_valid client_mac
@@ -355,6 +384,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           if nft_rule_id == "rule_11"
             log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "mac4", key: client_mac, dest: ans.rdata_str, timeout: rr_timeout_str, ok: m_ok, corr: ack_corr }
           success_any or= m_ok
+
+          -- Also add to auth-only wildcard rules if user is authenticated
+          if user and #auth_wildcard_rules > 0
+            for _, auth_rule_id in ipairs auth_wildcard_rules
+              if auth_rule_id ~= nft_rule_id
+                auth_m_ok = add_mac4 client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
+                success_any or= auth_m_ok
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
       client_v6 or= if pkt.ip.version == 6
@@ -371,6 +407,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
             log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "ip6", key: client_v6, dest: ans.rdata_str, timeout: rr_timeout_str, ok: ok, corr: ack_corr }
           ip_count += 1 if ok
           success_any or= ok
+
+          -- Also add to auth-only wildcard rules if user is authenticated
+          if user and #auth_wildcard_rules > 0
+            for _, auth_rule_id in ipairs auth_wildcard_rules
+              if auth_rule_id ~= nft_rule_id
+                auth_ok = add_ip6 client_v6, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
+                success_any or= auth_ok
         else
           no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
         if mac_valid client_mac
@@ -379,6 +422,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           if nft_rule_id == "rule_11"
             log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "mac6", key: client_mac, dest: ans.rdata_str, timeout: rr_timeout_str, ok: m_ok, corr: ack_corr }
           success_any or= m_ok
+
+          -- Also add to auth-only wildcard rules if user is authenticated
+          if user and #auth_wildcard_rules > 0
+            for _, auth_rule_id in ipairs auth_wildcard_rules
+              if auth_rule_id ~= nft_rule_id
+                auth_m_ok = add_mac6 client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
+                success_any or= auth_m_ok
 
   -- Logguer les cas cross-family sans IP connue (groupés par réponse)
   if #no_ipv4_records > 0

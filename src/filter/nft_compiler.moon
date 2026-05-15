@@ -233,7 +233,7 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
     rule_id: rid
     description: rule.description or rid
     action: action or "allow"
-    dns_scope: #dns_refs > 0  -- Only set dns_scope if there are DNS conditions
+    dns_scope: #dns_refs > 0 or requires_auth
     dns_refs: dns_refs
     time_ranges: times
     source_ipv4: src4

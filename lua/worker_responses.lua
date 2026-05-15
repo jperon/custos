@@ -49,6 +49,32 @@ do
   local _obj_0 = table
   concat, insert, remove = _obj_0.concat, _obj_0.insert, _obj_0.remove
 end
+local filter_cfg = config.filter or { }
+local compiled_rules = require("filter.rule").compile_rules(filter_cfg)
+local rules_metadata = compiled_rules.rules_metadata
+local auth_wildcard_rules = { }
+for idx, meta in ipairs(rules_metadata or { }) do
+  local requires_auth = false
+  local dns_refs = 0
+  if meta.conditions then
+    for _, cond in ipairs(meta.conditions) do
+      if cond.capabilities and cond.capabilities.worker_only then
+        for k, _ in pairs(cond) do
+          if k == "from_users" or k == "from_userlists" then
+            requires_auth = true
+          end
+          if k == "to_domains" or k == "to_domainlist" then
+            dns_refs = dns_refs + 1
+          end
+        end
+      end
+    end
+  end
+  if requires_auth and dns_refs == 0 then
+    local rule_id = meta.rule_id or "unknown_" .. tostring(idx)
+    auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
+  end
+end
 local IPC_RETRY_ENABLED
 if match_retry_cfg.enabled == nil then
   IPC_RETRY_ENABLED = true
@@ -367,6 +393,14 @@ handle_response = function(qh_ptr, nfad, pkt_id)
             ip_count = ip_count + 1
           end
           success_any = success_any or ok
+          if user and #auth_wildcard_rules > 0 then
+            for _, auth_rule_id in ipairs(auth_wildcard_rules) do
+              if auth_rule_id ~= nft_rule_id then
+                local auth_ok = add_ip4(client_v4, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
+                success_any = success_any or auth_ok
+              end
+            end
+          end
         else
           no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
         end
@@ -386,6 +420,14 @@ handle_response = function(qh_ptr, nfad, pkt_id)
             })
           end
           success_any = success_any or m_ok
+          if user and #auth_wildcard_rules > 0 then
+            for _, auth_rule_id in ipairs(auth_wildcard_rules) do
+              if auth_rule_id ~= nft_rule_id then
+                local auth_m_ok = add_mac4(client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
+                success_any = success_any or auth_m_ok
+              end
+            end
+          end
         end
       end
     elseif ans.rtype == QTYPE.AAAA then
@@ -417,6 +459,14 @@ handle_response = function(qh_ptr, nfad, pkt_id)
             ip_count = ip_count + 1
           end
           success_any = success_any or ok
+          if user and #auth_wildcard_rules > 0 then
+            for _, auth_rule_id in ipairs(auth_wildcard_rules) do
+              if auth_rule_id ~= nft_rule_id then
+                local auth_ok = add_ip6(client_v6, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
+                success_any = success_any or auth_ok
+              end
+            end
+          end
         else
           no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
         end
@@ -436,6 +486,14 @@ handle_response = function(qh_ptr, nfad, pkt_id)
             })
           end
           success_any = success_any or m_ok
+          if user and #auth_wildcard_rules > 0 then
+            for _, auth_rule_id in ipairs(auth_wildcard_rules) do
+              if auth_rule_id ~= nft_rule_id then
+                local auth_m_ok = add_mac6(client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
+                success_any = success_any or auth_m_ok
+              end
+            end
+          end
         end
       end
     end
