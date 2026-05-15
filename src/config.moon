@@ -81,10 +81,6 @@ DEFAULTS = {
     family: "bridge"
     family6: "bridge"
     table: "dns-filter-bridge"
-    set_ip4: "ip4_allowed"
-    set_ip6: "ip6_allowed"
-    set_mac4: "mac4_allowed"
-    set_mac6: "mac6_allowed"
     ip_timeout: "2m"
     sip_session_ttl: "5m"
     add_retry_count: 6
