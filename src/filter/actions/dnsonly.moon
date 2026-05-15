@@ -5,7 +5,7 @@
 --
 -- Retourne "dnsonly" (valeur truthy distincte de `true`).
 -- Le worker question la traite via write_dnsonly_msg ; response patche le TTL + EDE
--- mais n'injecte aucune entrée dans mac4_allowed / mac6_allowed / ip4/ip6.
+-- mais n'injecte aucune entrée dans les sets par règle.
 
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (rule) → enriched_action
