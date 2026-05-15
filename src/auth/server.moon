@@ -140,10 +140,32 @@ login_page = ->
   }
 
 
-refresh_nft = (nft_sess, ip, mac, ttl) ->
+refresh_nft = (nft_sess, ip, mac, ttl, user) ->
   return unless nft_sess
   nft_sess.add_authenticated ip, ttl if ip and ip ~= "unknown"
   nft_sess.add_authenticated_mac mac, ttl if mac and mac ~= "unknown"
+
+  -- Populate per-rule auth sets for rules requiring authentication
+  filter_cfg = config.filter or {}
+  rules = filter_cfg.rules or {}
+  for idx, rule in ipairs rules
+    continue unless rule_requires_auth rule
+    continue unless user_qualifies_for_rule user, rule
+
+    -- Generate stable rule_id
+    rule_id = generate_rule_id rule, idx
+
+    -- Populate auth sets directly via nft_sessions.run_nft()
+    ok, err = pcall ->
+      if nft_sess
+        nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_mac { #{mac} timeout #{ttl}s }", { quiet: true }
+        if ip and ip ~= "unknown"
+          if ip\find ":"
+            nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip6 { #{ip} timeout #{ttl}s }", { quiet: true }
+          else
+            nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip4 { #{ip} timeout #{ttl}s }", { quiet: true }
+    unless ok
+      log_warn { action: "refresh_nft_auth_set_add_failed", rule_id: rule_id, mac: mac, ip: ip, err: tostring(err) }
 
 -- Check if a rule requires authentication (has from_users or from_userlists condition)
 rule_requires_auth = (rule) ->
@@ -192,14 +214,9 @@ sanitize_id = (raw) ->
     s = s\sub 1, 40
   s
 
-generate_rule_id = (rule, idx) ->
-  if rule and rule.rule_id and tostring(rule.rule_id)\match "%S"
-    base = sanitize_id rule.rule_id
-    return base if #base > 0
-  if rule and rule.description and tostring(rule.description)\match "%S"
-    base = sanitize_id rule.description
-    return "r_#{base}" if #base > 0
-  "rule_#{idx}"
+rule_id = require "filter.rule_id"
+
+generate_rule_id = rule_id.generate
 
 handle_login = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
@@ -249,7 +266,7 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     return 500, {}, "Session persistence failed"
 
   if state.nft_sess
-    ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout
+    ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user
     unless ok
       log_warn { action: "server_nft_refresh_failed", peer: peer_ip, mac: mac, err: tostring(err) }
   else
@@ -272,14 +289,14 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     -- Populate auth sets directly via nft_sessions.run_nft()
     ok, err = pcall ->
       if state.nft_sess
-        state.nft_sess.run_nft "add element bridge dns-filter-bridge rule_#{rule_id}_auth_mac { #{mac} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
+        state.nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_mac { #{mac} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
         log_info { action: "server_auth_set_add_mac", rule_id: rule_id, mac: mac }
         if peer_ip and peer_ip ~= "unknown"
           if peer_ip\find ":"
-            state.nft_sess.run_nft "add element bridge dns-filter-bridge rule_#{rule_id}_auth_ip6 { #{peer_ip} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
+            state.nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip6 { #{peer_ip} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
             log_info { action: "server_auth_set_add_ip6", rule_id: rule_id, ip: peer_ip }
           else
-            state.nft_sess.run_nft "add element bridge dns-filter-bridge rule_#{rule_id}_auth_ip4 { #{peer_ip} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
+            state.nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip4 { #{peer_ip} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
             log_info { action: "server_auth_set_add_ip4", rule_id: rule_id, ip: peer_ip }
     unless ok
       log_warn { action: "server_auth_set_add_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) }

@@ -152,7 +152,7 @@ login_page = function()
   })
 end
 local refresh_nft
-refresh_nft = function(nft_sess, ip, mac, ttl)
+refresh_nft = function(nft_sess, ip, mac, ttl, user)
   if not (nft_sess) then
     return 
   end
@@ -160,7 +160,54 @@ refresh_nft = function(nft_sess, ip, mac, ttl)
     nft_sess.add_authenticated(ip, ttl)
   end
   if mac and mac ~= "unknown" then
-    return nft_sess.add_authenticated_mac(mac, ttl)
+    nft_sess.add_authenticated_mac(mac, ttl)
+  end
+  local filter_cfg = config.filter or { }
+  local rules = filter_cfg.rules or { }
+  for idx, rule in ipairs(rules) do
+    local _continue_0 = false
+    repeat
+      if not (rule_requires_auth(rule)) then
+        _continue_0 = true
+        break
+      end
+      if not (user_qualifies_for_rule(user, rule)) then
+        _continue_0 = true
+        break
+      end
+      local rule_id = generate_rule_id(rule, idx)
+      local ok, err = pcall(function()
+        if nft_sess then
+          nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " timeout " .. tostring(ttl) .. "s }", {
+            quiet = true
+          })
+          if ip and ip ~= "unknown" then
+            if ip:find(":") then
+              return nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(ip) .. " timeout " .. tostring(ttl) .. "s }", {
+                quiet = true
+              })
+            else
+              return nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(ip) .. " timeout " .. tostring(ttl) .. "s }", {
+                quiet = true
+              })
+            end
+          end
+        end
+      end)
+      if not (ok) then
+        log_warn({
+          action = "refresh_nft_auth_set_add_failed",
+          rule_id = rule_id,
+          mac = mac,
+          ip = ip,
+          err = tostring(err)
+        })
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
   end
 end
 local rule_requires_auth
@@ -334,7 +381,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
   end
   if state.nft_sess then
     ok, err = pcall(function()
-      return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout)
+      return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
     end)
     if not (ok) then
       log_warn({
