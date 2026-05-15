@@ -58,13 +58,11 @@ for idx, meta in ipairs(rules_metadata or { }) do
   local dns_refs = 0
   if meta.conditions then
     for _, cond in ipairs(meta.conditions) do
-      for k, _ in pairs(cond) do
-        if k == "from_users" or k == "from_userlists" then
-          requires_auth = true
-        end
-        if k == "to_domains" or k == "to_domainlist" then
-          dns_refs = dns_refs + 1
-        end
+      if cond.name == "from_users" or cond.name == "from_userlists" then
+        requires_auth = true
+      end
+      if cond.name == "to_domains" or cond.name == "to_domainlist" then
+        dns_refs = dns_refs + 1
       end
     end
   end

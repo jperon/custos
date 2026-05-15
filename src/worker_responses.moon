@@ -49,11 +49,10 @@ for idx, meta in ipairs rules_metadata or {}
   dns_refs = 0
   if meta.conditions
     for _, cond in ipairs meta.conditions
-      for k, _ in pairs cond
-        if k == "from_users" or k == "from_userlists"
-          requires_auth = true
-        if k == "to_domains" or k == "to_domainlist"
-          dns_refs += 1
+      if cond.name == "from_users" or cond.name == "from_userlists"
+        requires_auth = true
+      if cond.name == "to_domains" or cond.name == "to_domainlist"
+        dns_refs += 1
   if requires_auth and dns_refs == 0
     rule_id = meta.rule_id or "unknown_#{idx}"
     auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
