@@ -290,22 +290,8 @@ sanitize_id = function(raw)
   end
   return s
 end
-local rule_id_base
-rule_id_base = function(rule, idx)
-  if rule and rule.rule_id and tostring(rule.rule_id):match("%S") then
-    local base = sanitize_id(rule.rule_id)
-    if #base > 0 then
-      return base
-    end
-  end
-  if rule and rule.description and tostring(rule.description):match("%S") then
-    local base = sanitize_id(rule.description)
-    if #base > 0 then
-      return "r_" .. tostring(base)
-    end
-  end
-  return "rule_" .. tostring(idx)
-end
+local rule_id = require("filter.rule_id")
+local rule_id_base = rule_id.generate
 local unique_rule_id
 unique_rule_id = function(rule, idx, used)
   local base = rule_id_base(rule, idx)

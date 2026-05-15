@@ -68,14 +68,9 @@ sanitize_id = (raw) ->
     s = s\sub 1, 40
   s
 
-rule_id_base = (rule, idx) ->
-  if rule and rule.rule_id and tostring(rule.rule_id)\match "%S"
-    base = sanitize_id rule.rule_id
-    return base if #base > 0
-  if rule and rule.description and tostring(rule.description)\match "%S"
-    base = sanitize_id rule.description
-    return "r_#{base}" if #base > 0
-  "rule_#{idx}"
+rule_id = require "filter.rule_id"
+
+rule_id_base = rule_id.generate
 
 unique_rule_id = (rule, idx, used) ->
   base = rule_id_base rule, idx
