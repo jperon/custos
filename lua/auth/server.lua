@@ -151,65 +151,21 @@ login_page = function()
     }, "Inscription")
   })
 end
-local refresh_nft
-refresh_nft = function(nft_sess, ip, mac, ttl, user)
-  if not (nft_sess) then
-    return 
+local sanitize_id
+sanitize_id = function(raw)
+  local s = tostring(raw):lower()
+  s = s:gsub("[^a-z0-9_%-]+", "_")
+  s = s:gsub("_+", "_")
+  s = s:gsub("^_+", "")
+  s = s:gsub("_+$", "")
+  s = s:gsub("%-+", "_")
+  if #s > 40 then
+    s = s:sub(1, 40)
   end
-  if ip and ip ~= "unknown" then
-    nft_sess.add_authenticated(ip, ttl)
-  end
-  if mac and mac ~= "unknown" then
-    nft_sess.add_authenticated_mac(mac, ttl)
-  end
-  local filter_cfg = config.filter or { }
-  local rules = filter_cfg.rules or { }
-  for idx, rule in ipairs(rules) do
-    local _continue_0 = false
-    repeat
-      if not (rule_requires_auth(rule)) then
-        _continue_0 = true
-        break
-      end
-      if not (user_qualifies_for_rule(user, rule)) then
-        _continue_0 = true
-        break
-      end
-      local rule_id = generate_rule_id(rule, idx)
-      local ok, err = pcall(function()
-        if nft_sess then
-          nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " timeout " .. tostring(ttl) .. "s }", {
-            quiet = true
-          })
-          if ip and ip ~= "unknown" then
-            if ip:find(":") then
-              return nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(ip) .. " timeout " .. tostring(ttl) .. "s }", {
-                quiet = true
-              })
-            else
-              return nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(ip) .. " timeout " .. tostring(ttl) .. "s }", {
-                quiet = true
-              })
-            end
-          end
-        end
-      end)
-      if not (ok) then
-        log_warn({
-          action = "refresh_nft_auth_set_add_failed",
-          rule_id = rule_id,
-          mac = mac,
-          ip = ip,
-          err = tostring(err)
-        })
-      end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
-    end
-  end
+  return s
 end
+local rule_id = require("filter.rule_id")
+local generate_rule_id = rule_id.generate
 local rule_requires_auth
 rule_requires_auth = function(rule)
   if not (rule and rule.conditions) then
@@ -294,21 +250,65 @@ user_qualifies_for_rule = function(user, rule)
   end
   return true
 end
-local sanitize_id
-sanitize_id = function(raw)
-  local s = tostring(raw):lower()
-  s = s:gsub("[^a-z0-9_%-]+", "_")
-  s = s:gsub("_+", "_")
-  s = s:gsub("^_+", "")
-  s = s:gsub("_+$", "")
-  s = s:gsub("%-+", "_")
-  if #s > 40 then
-    s = s:sub(1, 40)
+local refresh_nft
+refresh_nft = function(nft_sess, ip, mac, ttl, user)
+  if not (nft_sess) then
+    return 
   end
-  return s
+  if ip and ip ~= "unknown" then
+    nft_sess.add_authenticated(ip, ttl)
+  end
+  if mac and mac ~= "unknown" then
+    nft_sess.add_authenticated_mac(mac, ttl)
+  end
+  local filter_cfg = config.filter or { }
+  local rules = filter_cfg.rules or { }
+  for idx, rule in ipairs(rules) do
+    local _continue_0 = false
+    repeat
+      if not (rule_requires_auth(rule)) then
+        _continue_0 = true
+        break
+      end
+      if not (user_qualifies_for_rule(user, rule)) then
+        _continue_0 = true
+        break
+      end
+      rule_id = generate_rule_id(rule, idx)
+      local ok, err = pcall(function()
+        if nft_sess then
+          nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " timeout " .. tostring(ttl) .. "s }", {
+            quiet = true
+          })
+          if ip and ip ~= "unknown" then
+            if ip:find(":") then
+              return nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(ip) .. " timeout " .. tostring(ttl) .. "s }", {
+                quiet = true
+              })
+            else
+              return nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(ip) .. " timeout " .. tostring(ttl) .. "s }", {
+                quiet = true
+              })
+            end
+          end
+        end
+      end)
+      if not (ok) then
+        log_warn({
+          action = "refresh_nft_auth_set_add_failed",
+          rule_id = rule_id,
+          mac = mac,
+          ip = ip,
+          err = tostring(err)
+        })
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
 end
-local rule_id = require("filter.rule_id")
-local generate_rule_id = rule_id.generate
 local handle_login
 handle_login = function(req, peer_ip, peer_mac, state)
   local form = parse_form(req.body)

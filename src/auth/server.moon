@@ -140,32 +140,21 @@ login_page = ->
   }
 
 
-refresh_nft = (nft_sess, ip, mac, ttl, user) ->
-  return unless nft_sess
-  nft_sess.add_authenticated ip, ttl if ip and ip ~= "unknown"
-  nft_sess.add_authenticated_mac mac, ttl if mac and mac ~= "unknown"
+-- Generate stable rule_id matching compiler_api.rule_id_base
+sanitize_id = (raw) ->
+  s = tostring(raw)\lower!
+  s = s\gsub "[^a-z0-9_%-]+", "_"
+  s = s\gsub "_+", "_"
+  s = s\gsub "^_+", ""
+  s = s\gsub "_+$", ""
+  s = s\gsub "%-+", "_"
+  if #s > 40
+    s = s\sub 1, 40
+  s
 
-  -- Populate per-rule auth sets for rules requiring authentication
-  filter_cfg = config.filter or {}
-  rules = filter_cfg.rules or {}
-  for idx, rule in ipairs rules
-    continue unless rule_requires_auth rule
-    continue unless user_qualifies_for_rule user, rule
+rule_id = require "filter.rule_id"
 
-    -- Generate stable rule_id
-    rule_id = generate_rule_id rule, idx
-
-    -- Populate auth sets directly via nft_sessions.run_nft()
-    ok, err = pcall ->
-      if nft_sess
-        nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_mac { #{mac} timeout #{ttl}s }", { quiet: true }
-        if ip and ip ~= "unknown"
-          if ip\find ":"
-            nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip6 { #{ip} timeout #{ttl}s }", { quiet: true }
-          else
-            nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip4 { #{ip} timeout #{ttl}s }", { quiet: true }
-    unless ok
-      log_warn { action: "refresh_nft_auth_set_add_failed", rule_id: rule_id, mac: mac, ip: ip, err: tostring(err) }
+generate_rule_id = rule_id.generate
 
 -- Check if a rule requires authentication (has from_users or from_userlists condition)
 rule_requires_auth = (rule) ->
@@ -202,21 +191,33 @@ user_qualifies_for_rule = (user, rule) ->
         return false
   true -- No from_users/from_userlists condition means anyone qualifies
 
--- Generate stable rule_id matching compiler_api.rule_id_base
-sanitize_id = (raw) ->
-  s = tostring(raw)\lower!
-  s = s\gsub "[^a-z0-9_%-]+", "_"
-  s = s\gsub "_+", "_"
-  s = s\gsub "^_+", ""
-  s = s\gsub "_+$", ""
-  s = s\gsub "%-+", "_"
-  if #s > 40
-    s = s\sub 1, 40
-  s
+-- Refresh nft sets for authenticated user (called by ping and login)
+refresh_nft = (nft_sess, ip, mac, ttl, user) ->
+  return unless nft_sess
+  nft_sess.add_authenticated ip, ttl if ip and ip ~= "unknown"
+  nft_sess.add_authenticated_mac mac, ttl if mac and mac ~= "unknown"
 
-rule_id = require "filter.rule_id"
+  -- Populate per-rule auth sets for rules requiring authentication
+  filter_cfg = config.filter or {}
+  rules = filter_cfg.rules or {}
+  for idx, rule in ipairs rules
+    continue unless rule_requires_auth rule
+    continue unless user_qualifies_for_rule user, rule
 
-generate_rule_id = rule_id.generate
+    -- Generate stable rule_id
+    rule_id = generate_rule_id rule, idx
+
+    -- Populate auth sets directly via nft_sessions.run_nft()
+    ok, err = pcall ->
+      if nft_sess
+        nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_mac { #{mac} timeout #{ttl}s }", { quiet: true }
+        if ip and ip ~= "unknown"
+          if ip\find ":"
+            nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip6 { #{ip} timeout #{ttl}s }", { quiet: true }
+          else
+            nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip4 { #{ip} timeout #{ttl}s }", { quiet: true }
+    unless ok
+      log_warn { action: "refresh_nft_auth_set_add_failed", rule_id: rule_id, mac: mac, ip: ip, err: tostring(err) }
 
 handle_login = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
