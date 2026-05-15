@@ -1,8 +1,8 @@
 -- src/worker_sip.moon
--- Worker NFQUEUE pour la signalisation SIP et STUN/ICE.
---
--- Rôle : toujours NF_ACCEPT le trafic SIP/STUN, et insérer dynamiquement
--- les IPs media (extraites du SDP) et les IPs proxy/STUN dans mac4/mac6_allowed,
+--- Worker NFQUEUE pour la signalisation SIP et STUN/ICE.
+---
+--- Rôle : toujours NF_ACCEPT le trafic SIP/STUN, et insérer dynamiquement
+-- les IPs media (extraites du SDP) et les IPs proxy/STUN dans les sets par règle,
 -- de manière cohérente avec l'architecture DNS-centric de Custos.
 --
 -- Placement nft : après les whitelists DNS, avant ct state established,related.
@@ -116,7 +116,7 @@ classify_direction = (sport, dport, ip_src_str, ip_dst_str) ->
 
   outbound, inbound, true
 
---- Insert {mac . ip} into mac4_allowed or mac6_allowed and wait for ACK.
+--- Insert {mac . ip} into per-rule sets and wait for ACK.
 -- @tparam string mac     Source MAC address
 -- @tparam string ip      Destination IP address
 -- @tparam string family  "ip4" or "ip6"
@@ -202,7 +202,7 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   -- phone sent to (e.g. router uses its nearest interface), breaking conntrack.
   -- The nft rule `sport 3478 queue num N bypass` routes these here so we can
   -- NF_ACCEPT them explicitly instead of falling through to the reject queue.
-  -- We also learn the actual response IP and add it to ip4/ip6_allowed so that
+  -- We also learn the actual response IP and add it to per-rule sets so that
   -- future RTP media from that same IP to this phone is also accepted.
   if ip.protocol == 17 and sport == 3478
     if ip_src_str and ip_dst_str
@@ -243,7 +243,7 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
 
   -- Enregistrer les deux IPs du paquet SIP comme pairs connus.
   -- La règle nft `ip saddr @sip_peers ip daddr @sip_peers accept`
-  -- autorisera ensuite le RTP entre ces IPs sans passer par ip4_allowed.
+  -- autorisera ensuite le RTP entre ces IPs sans passer par les sets par règle.
   allow_sip_peer ip_src_str, ip_family, "sip_peer_src"
   allow_sip_peer ip_dst_str, ip_family, "sip_peer_dst"
 

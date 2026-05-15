@@ -350,7 +350,7 @@ supervise = (pipes, sfd) ->
     }
 
   -- SIP/STUN worker (single, optional).
-  -- Whitelists proxy IPs and SDP media IPs in mac4/mac6_allowed.
+  -- Whitelists proxy IPs and SDP media IPs in per-rule sets.
   if config.nfqueue.sip
     sip_queue_num = tonumber(config.nfqueue.sip) or 12
     sip_ack_info  = alloc_ack_pipe!

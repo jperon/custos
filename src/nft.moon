@@ -1,6 +1,6 @@
 -- src/nft.moon
 -- Interface avec nftables via libnftables FFI.
--- Permet d'ajouter des IPs dans les sets ip4_allowed / ip6_allowed
+-- Permet d'ajouter des IPs dans les sets nftables par règle
 -- sans fork() ni popen() — le contexte nft_ctx est réutilisé.
 
 { :ffi, :libnft } = require "ffi_defs"

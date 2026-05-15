@@ -433,7 +433,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- On attend que worker_nft confirme l'insertion des IPs dans les sets nftables
   -- avant de rendre la réponse DNS au client. Cela élimine la race condition
   -- où le client reçoit la réponse DNS et tente immédiatement une connexion TCP
-  -- avant que ses IPs ne soient dans ip4_allowed / ip6_allowed.
+  -- avant que ses IPs ne soient dans les sets par règle.
   -- Fail-open (avec log) si worker_nft ne répond pas dans NFT_ACK_TIMEOUT_MS.
   if not dnsonly and records_to_add > 0
     pending_seq = get_last_seq!

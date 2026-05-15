@@ -76,7 +76,7 @@ substitute = (content, plan=nil) ->
     q = cfg.nfqueue.sip
     table.concat {
       "    # SIP signalling + STUN → NFQUEUE (worker_sip)."
-      "    # Toujours NF_ACCEPT ; apprend les IPs dans sip_peers + mac4/mac6_allowed."
+      "    # Toujours NF_ACCEPT ; apprend les IPs dans sip_peers + sets par règle."
       "    # dport 5060/5061 capture aussi les réponses opérateur à source port dynamique."
       "    # bypass : si le worker est absent, le trafic SIP passe quand même."
       "    meta l4proto {udp, tcp} th dport {5060, 5061} queue num #{q} bypass comment \"SIP outbound → NFQUEUE\""
