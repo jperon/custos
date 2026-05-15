@@ -57,6 +57,9 @@ for idx, meta in ipairs rules_metadata or {}
   if requires_auth and dns_refs == 0
     rule_id = meta.rule_id or "unknown_#{idx}"
     auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
+    log_info { action: "auth_wildcard_rule_detected", rule_id: rule_id, idx: idx }
+
+log_info { action: "auth_wildcard_rules_loaded", count: #auth_wildcard_rules, rules: table.concat(auth_wildcard_rules, ", ") }
 
 IPC_RETRY_ENABLED = if match_retry_cfg.enabled == nil then true else match_retry_cfg.enabled
 IPC_RETRY_COUNT = match_retry_cfg.count or 5
