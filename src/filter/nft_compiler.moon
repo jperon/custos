@@ -44,22 +44,9 @@ serialize_stable = (v) ->
     parts[#parts + 1] = "#{serialize_stable k}:#{serialize_stable v[k]}"
   "{" .. table.concat(parts, ",") .. "}"
 
-stable_rule_id = (rule, idx, used) ->
-  explicit = rule.rule_id
-  base = nil
+rule_id = require "filter.rule_id"
 
-  if explicit and tostring(explicit)\match "%S"
-    base = sanitize_id explicit
-  else
-    base = compiler_api.rule_id_base rule, idx
-
-  rid = base
-  n = 1
-  while used[rid]
-    n += 1
-    rid = "#{base}_#{n}"
-  used[rid] = true
-  rid
+stable_rule_id = rule_id.generate_unique
 
 nft_comment = (text) ->
   s = sanitize_ascii text
@@ -246,7 +233,7 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
     rule_id: rid
     description: rule.description or rid
     action: action or "allow"
-    dns_scope: #dns_refs > 0
+    dns_scope: #dns_refs > 0 or requires_auth
     dns_refs: dns_refs
     time_ranges: times
     source_ipv4: src4
@@ -263,13 +250,13 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
     set_subnet4: #subnet4 > 0 and "#{chain}_subnet4" or nil
     set_subnet6: #subnet6 > 0 and "#{chain}_subnet6" or nil
     set_ports: #ports > 0 and "#{chain}_dports" or nil
-    set_dyn_ip4: "rule_#{rid}_ip4"
-    set_dyn_ip6: "rule_#{rid}_ip6"
-    set_dyn_mac4: "rule_#{rid}_mac4"
-    set_dyn_mac6: "rule_#{rid}_mac6"
-    set_auth_mac: requires_auth and "rule_#{rid}_auth_mac" or nil
-    set_auth_ip4: requires_auth and "rule_#{rid}_auth_ip4" or nil
-    set_auth_ip6: requires_auth and "rule_#{rid}_auth_ip6" or nil
+    set_dyn_ip4: "#{rid}_ip4"
+    set_dyn_ip6: "#{rid}_ip6"
+    set_dyn_mac4: "#{rid}_mac4"
+    set_dyn_mac6: "#{rid}_mac6"
+    set_auth_mac: requires_auth and "#{rid}_auth_mac" or nil
+    set_auth_ip4: requires_auth and "#{rid}_auth_ip4" or nil
+    set_auth_ip6: requires_auth and "#{rid}_auth_ip6" or nil
     stubs: {
       time_match: #times > 0
       dns_match: #dns_refs > 0
@@ -468,6 +455,15 @@ render_rule_chain = (rule, indent) ->
 
   verdict = if rule.action == "deny" then "drop" else "accept"
 
+  -- Auth check: if requires_auth, jump to auth subchain and check mark
+  if rule.requires_auth
+    auth_chain = "#{rule.chain}_auth"
+    auth_mark = "0x00010000"  -- Use bit 16 to avoid conflict with VLAN mark (bits 0-11)
+    -- Reset VLAN mark (bits 0-11) and auth mark (bits 16+) to 0
+    lines[#lines + 1] = "#{indent}  meta mark set 0x00000000 comment \"reset VLAN and auth marks\""
+    lines[#lines + 1] = "#{indent}  jump #{auth_chain} comment \"check authentication\""
+    lines[#lines + 1] = "#{indent}  meta mark != #{auth_mark} return comment \"no auth match\""
+
   all_exprs = {}
   for _, expr in ipairs dynamic_match_exprs rule
     all_exprs[#all_exprs + 1] = expr
@@ -484,6 +480,18 @@ render_rule_chain = (rule, indent) ->
 
   lines[#lines + 1] = "#{indent}  return"
   lines[#lines + 1] = "#{indent}}"
+
+  -- Render auth subchain if requires_auth
+  if rule.requires_auth
+    auth_chain = "#{rule.chain}_auth"
+    auth_mark = "0x00010000"  -- Use bit 16 to avoid conflict with VLAN mark (bits 0-11)
+    lines[#lines + 1] = "#{indent}chain #{auth_chain} {"
+    lines[#lines + 1] = "#{indent}  ether saddr @#{rule.set_auth_mac} meta mark set #{auth_mark} return comment \"auth MAC matched\""
+    lines[#lines + 1] = "#{indent}  ip saddr @#{rule.set_auth_ip4} meta mark set #{auth_mark} return comment \"auth IPv4 matched\""
+    lines[#lines + 1] = "#{indent}  ip6 saddr @#{rule.set_auth_ip6} meta mark set #{auth_mark} return comment \"auth IPv6 matched\""
+    lines[#lines + 1] = "#{indent}  return comment \"no auth match\""
+    lines[#lines + 1] = "#{indent}}"
+
   lines
 
 render = (plan, indent="  ", include_elements=true) ->
@@ -537,6 +545,7 @@ render = (plan, indent="  ", include_elements=true) ->
 
   lines[#lines + 1] = "#{indent}chain #{plan.dispatch_chain} {"
   lines[#lines + 1] = "#{indent}  comment \"b2 dispatch skeleton (not hooked before c1/c2)\""
+  lines[#lines + 1] = "#{indent}  meta mark set 0x0 comment \"reset VLAN mark before dispatch\""
   for _, rule in ipairs plan.rules
     lines[#lines + 1] = "#{indent}  jump #{rule.chain} comment \"#{nft_comment "idx=#{rule.index} rule_id=#{rule.rule_id}"}\""
     if plan.first_match_wins

@@ -260,22 +260,8 @@ sanitize_id = function(raw)
   end
   return s
 end
-local generate_rule_id
-generate_rule_id = function(rule, idx)
-  if rule and rule.rule_id and tostring(rule.rule_id):match("%S") then
-    local base = sanitize_id(rule.rule_id)
-    if #base > 0 then
-      return base
-    end
-  end
-  if rule and rule.description and tostring(rule.description):match("%S") then
-    local base = sanitize_id(rule.description)
-    if #base > 0 then
-      return "r_" .. tostring(base)
-    end
-  end
-  return "rule_" .. tostring(idx)
-end
+local rule_id = require("filter.rule_id")
+local generate_rule_id = rule_id.generate
 local handle_login
 handle_login = function(req, peer_ip, peer_mac, state)
   local form = parse_form(req.body)
@@ -388,7 +374,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
         _continue_0 = true
         break
       end
-      local rule_id = generate_rule_id(rule, idx)
+      rule_id = generate_rule_id(rule, idx)
       log_info({
         action = "server_rule_id_generated",
         rule_id = rule_id,
@@ -396,7 +382,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
       })
       ok, err = pcall(function()
         if state.nft_sess then
-          state.nft_sess.run_nft("add element bridge dns-filter-bridge rule_" .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
+          state.nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
             quiet = true
           })
           log_info({
@@ -406,7 +392,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
           })
           if peer_ip and peer_ip ~= "unknown" then
             if peer_ip:find(":") then
-              state.nft_sess.run_nft("add element bridge dns-filter-bridge rule_" .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(peer_ip) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
+              state.nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(peer_ip) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
                 quiet = true
               })
               return log_info({
@@ -415,7 +401,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
                 ip = peer_ip
               })
             else
-              state.nft_sess.run_nft("add element bridge dns-filter-bridge rule_" .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(peer_ip) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
+              state.nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(peer_ip) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
                 quiet = true
               })
               return log_info({
@@ -500,7 +486,7 @@ handle_logout = function(req, peer_ip, peer_mac, state)
         _continue_0 = true
         break
       end
-      local rule_id = generate_rule_id(rule, idx)
+      rule_id = generate_rule_id(rule, idx)
       local ok, err = pcall(function()
         if state.nft_sess then
           state.nft_sess.run_nft("delete element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " }", {

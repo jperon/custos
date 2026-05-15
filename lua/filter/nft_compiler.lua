@@ -83,24 +83,8 @@ serialize_stable = function(v)
   end
   return "{" .. table.concat(parts, ",") .. "}"
 end
-local stable_rule_id
-stable_rule_id = function(rule, idx, used)
-  local explicit = rule.rule_id
-  local base = nil
-  if explicit and tostring(explicit):match("%S") then
-    base = sanitize_id(explicit)
-  else
-    base = compiler_api.rule_id_base(rule, idx)
-  end
-  local rid = base
-  local n = 1
-  while used[rid] do
-    n = n + 1
-    rid = tostring(base) .. "_" .. tostring(n)
-  end
-  used[rid] = true
-  return rid
-end
+local rule_id = require("filter.rule_id")
+local stable_rule_id = rule_id.generate_unique
 local nft_comment
 nft_comment = function(text)
   local s = sanitize_ascii(text)
@@ -403,7 +387,7 @@ build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id)
     rule_id = rid,
     description = rule.description or rid,
     action = action or "allow",
-    dns_scope = #dns_refs > 0,
+    dns_scope = #dns_refs > 0 or requires_auth,
     dns_refs = dns_refs,
     time_ranges = times,
     source_ipv4 = src4,
@@ -420,13 +404,13 @@ build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id)
     set_subnet4 = #subnet4 > 0 and tostring(chain) .. "_subnet4" or nil,
     set_subnet6 = #subnet6 > 0 and tostring(chain) .. "_subnet6" or nil,
     set_ports = #ports > 0 and tostring(chain) .. "_dports" or nil,
-    set_dyn_ip4 = "rule_" .. tostring(rid) .. "_ip4",
-    set_dyn_ip6 = "rule_" .. tostring(rid) .. "_ip6",
-    set_dyn_mac4 = "rule_" .. tostring(rid) .. "_mac4",
-    set_dyn_mac6 = "rule_" .. tostring(rid) .. "_mac6",
-    set_auth_mac = requires_auth and "rule_" .. tostring(rid) .. "_auth_mac" or nil,
-    set_auth_ip4 = requires_auth and "rule_" .. tostring(rid) .. "_auth_ip4" or nil,
-    set_auth_ip6 = requires_auth and "rule_" .. tostring(rid) .. "_auth_ip6" or nil,
+    set_dyn_ip4 = tostring(rid) .. "_ip4",
+    set_dyn_ip6 = tostring(rid) .. "_ip6",
+    set_dyn_mac4 = tostring(rid) .. "_mac4",
+    set_dyn_mac6 = tostring(rid) .. "_mac6",
+    set_auth_mac = requires_auth and tostring(rid) .. "_auth_mac" or nil,
+    set_auth_ip4 = requires_auth and tostring(rid) .. "_auth_ip4" or nil,
+    set_auth_ip6 = requires_auth and tostring(rid) .. "_auth_ip6" or nil,
     stubs = {
       time_match = #times > 0,
       dns_match = #dns_refs > 0
@@ -698,6 +682,13 @@ render_rule_chain = function(rule, indent)
   else
     verdict = "accept"
   end
+  if rule.requires_auth then
+    local auth_chain = tostring(rule.chain) .. "_auth"
+    local auth_mark = "0x00010000"
+    lines[#lines + 1] = tostring(indent) .. "  meta mark set 0x00000000 comment \"reset VLAN and auth marks\""
+    lines[#lines + 1] = tostring(indent) .. "  jump " .. tostring(auth_chain) .. " comment \"check authentication\""
+    lines[#lines + 1] = tostring(indent) .. "  meta mark != " .. tostring(auth_mark) .. " return comment \"no auth match\""
+  end
   local all_exprs = { }
   for _, expr in ipairs(dynamic_match_exprs(rule)) do
     all_exprs[#all_exprs + 1] = expr
@@ -717,6 +708,16 @@ render_rule_chain = function(rule, indent)
   end
   lines[#lines + 1] = tostring(indent) .. "  return"
   lines[#lines + 1] = tostring(indent) .. "}"
+  if rule.requires_auth then
+    local auth_chain = tostring(rule.chain) .. "_auth"
+    local auth_mark = "0x00010000"
+    lines[#lines + 1] = tostring(indent) .. "chain " .. tostring(auth_chain) .. " {"
+    lines[#lines + 1] = tostring(indent) .. "  ether saddr @" .. tostring(rule.set_auth_mac) .. " meta mark set " .. tostring(auth_mark) .. " return comment \"auth MAC matched\""
+    lines[#lines + 1] = tostring(indent) .. "  ip saddr @" .. tostring(rule.set_auth_ip4) .. " meta mark set " .. tostring(auth_mark) .. " return comment \"auth IPv4 matched\""
+    lines[#lines + 1] = tostring(indent) .. "  ip6 saddr @" .. tostring(rule.set_auth_ip6) .. " meta mark set " .. tostring(auth_mark) .. " return comment \"auth IPv6 matched\""
+    lines[#lines + 1] = tostring(indent) .. "  return comment \"no auth match\""
+    lines[#lines + 1] = tostring(indent) .. "}"
+  end
   return lines
 end
 local render
@@ -808,6 +809,7 @@ render = function(plan, indent, include_elements)
   end
   lines[#lines + 1] = tostring(indent) .. "chain " .. tostring(plan.dispatch_chain) .. " {"
   lines[#lines + 1] = tostring(indent) .. "  comment \"b2 dispatch skeleton (not hooked before c1/c2)\""
+  lines[#lines + 1] = tostring(indent) .. "  meta mark set 0x0 comment \"reset VLAN mark before dispatch\""
   for _, rule in ipairs(plan.rules) do
     lines[#lines + 1] = tostring(indent) .. "  jump " .. tostring(rule.chain) .. " comment \"" .. tostring(nft_comment("idx=" .. tostring(rule.index) .. " rule_id=" .. tostring(rule.rule_id))) .. "\""
     if plan.first_match_wins then
