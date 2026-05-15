@@ -374,9 +374,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           -- Also add to auth-only wildcard rules if user is authenticated
           if user and #auth_wildcard_rules > 0
             for _, auth_rule_id in ipairs auth_wildcard_rules
-              if auth_rule_id ~= nft_rule_id
-                auth_ok = add_ip4 client_v4, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
-                success_any or= auth_ok
+              auth_ok = add_ip4 client_v4, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
+              success_any or= auth_ok
         else
           no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
         if mac_valid client_mac
@@ -389,9 +388,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           -- Also add to auth-only wildcard rules if user is authenticated
           if user and #auth_wildcard_rules > 0
             for _, auth_rule_id in ipairs auth_wildcard_rules
-              if auth_rule_id ~= nft_rule_id
-                auth_m_ok = add_mac4 client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
-                success_any or= auth_m_ok
+              auth_m_ok = add_mac4 client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
+              success_any or= auth_m_ok
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
       client_v6 or= if pkt.ip.version == 6
@@ -412,9 +410,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           -- Also add to auth-only wildcard rules if user is authenticated
           if user and #auth_wildcard_rules > 0
             for _, auth_rule_id in ipairs auth_wildcard_rules
-              if auth_rule_id ~= nft_rule_id
-                auth_ok = add_ip6 client_v6, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
-                success_any or= auth_ok
+              auth_ok = add_ip6 client_v6, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
+              success_any or= auth_ok
         else
           no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
         if mac_valid client_mac
@@ -427,9 +424,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           -- Also add to auth-only wildcard rules if user is authenticated
           if user and #auth_wildcard_rules > 0
             for _, auth_rule_id in ipairs auth_wildcard_rules
-              if auth_rule_id ~= nft_rule_id
-                auth_m_ok = add_mac6 client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
-                success_any or= auth_m_ok
+              auth_m_ok = add_mac6 client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
+              success_any or= auth_m_ok
 
   -- Logguer les cas cross-family sans IP connue (groupés par réponse)
   if #no_ipv4_records > 0

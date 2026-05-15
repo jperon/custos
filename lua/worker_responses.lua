@@ -401,10 +401,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           success_any = success_any or ok
           if user and #auth_wildcard_rules > 0 then
             for _, auth_rule_id in ipairs(auth_wildcard_rules) do
-              if auth_rule_id ~= nft_rule_id then
-                local auth_ok = add_ip4(client_v4, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
-                success_any = success_any or auth_ok
-              end
+              local auth_ok = add_ip4(client_v4, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
+              success_any = success_any or auth_ok
             end
           end
         else
@@ -428,10 +426,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           success_any = success_any or m_ok
           if user and #auth_wildcard_rules > 0 then
             for _, auth_rule_id in ipairs(auth_wildcard_rules) do
-              if auth_rule_id ~= nft_rule_id then
-                local auth_m_ok = add_mac4(client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
-                success_any = success_any or auth_m_ok
-              end
+              local auth_m_ok = add_mac4(client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
+              success_any = success_any or auth_m_ok
             end
           end
         end
@@ -467,10 +463,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           success_any = success_any or ok
           if user and #auth_wildcard_rules > 0 then
             for _, auth_rule_id in ipairs(auth_wildcard_rules) do
-              if auth_rule_id ~= nft_rule_id then
-                local auth_ok = add_ip6(client_v6, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
-                success_any = success_any or auth_ok
-              end
+              local auth_ok = add_ip6(client_v6, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
+              success_any = success_any or auth_ok
             end
           end
         else
@@ -494,10 +488,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           success_any = success_any or m_ok
           if user and #auth_wildcard_rules > 0 then
             for _, auth_rule_id in ipairs(auth_wildcard_rules) do
-              if auth_rule_id ~= nft_rule_id then
-                local auth_m_ok = add_mac6(client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
-                success_any = success_any or auth_m_ok
-              end
+              local auth_m_ok = add_mac6(client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr)
+              success_any = success_any or auth_m_ok
             end
           end
         end
