@@ -10,10 +10,6 @@ local nft_cfg = config.nft or { }
 local FAMILY = nft_cfg.family or "bridge"
 local FAMILY6 = nft_cfg.family6 or "bridge"
 local TABLE = nft_cfg.table or "dns-filter-bridge"
-local SET_IP4 = nft_cfg.set_ip4 or "ip4_allowed"
-local SET_IP6 = nft_cfg.set_ip6 or "ip6_allowed"
-local SET_MAC4 = nft_cfg.set_mac4 or "mac4_allowed"
-local SET_MAC6 = nft_cfg.set_mac6 or "mac6_allowed"
 local IP_TIMEOUT = nft_cfg.ip_timeout or "2m"
 local ACK_TIMEOUT_MS = nft_cfg.ack_timeout_ms or 150
 local PIPE_BUF_SAFE = 512
@@ -264,24 +260,6 @@ local get_set_name
 get_set_name = function(kind, rule_id)
   rule_id = sanitize_rule_id(rule_id)
   if rule_id == "" then
-    if kind == "ip4" then
-      return SET_IP4
-    end
-    if kind == "ip6" then
-      return SET_IP6
-    end
-    if kind == "mac4" then
-      if SET_MAC4 then
-        return SET_MAC4
-      end
-      return nil
-    end
-    if kind == "mac6" then
-      if SET_MAC6 then
-        return SET_MAC6
-      end
-      return nil
-    end
     if kind == "sip4" then
       return "sip_peers"
     end
@@ -291,16 +269,16 @@ get_set_name = function(kind, rule_id)
     return nil
   end
   if kind == "auth_mac" then
-    return "rule_" .. tostring(rule_id) .. "_auth_mac"
+    return tostring(rule_id) .. "_auth_mac"
   end
   if kind == "auth_ip4" then
-    return "rule_" .. tostring(rule_id) .. "_auth_ip4"
+    return tostring(rule_id) .. "_auth_ip4"
   end
   if kind == "auth_ip6" then
-    return "rule_" .. tostring(rule_id) .. "_auth_ip6"
+    return tostring(rule_id) .. "_auth_ip6"
   end
   if kind == "ip4" or kind == "ip6" or kind == "mac4" or kind == "mac6" then
-    return "rule_" .. tostring(rule_id) .. "_" .. tostring(kind)
+    return tostring(rule_id) .. "_" .. tostring(kind)
   end
   return nil
 end
@@ -321,17 +299,6 @@ cmd_lines_for = function(kind, key, ip, rule_id_or_timeout, timeout)
   local set_names = {
     set_name
   }
-  if rule_id and rule_id ~= "" then
-    if kind == "ip4" and SET_IP4 then
-      set_names[#set_names + 1] = SET_IP4
-    elseif kind == "ip6" and SET_IP6 then
-      set_names[#set_names + 1] = SET_IP6
-    elseif kind == "mac4" and SET_MAC4 then
-      set_names[#set_names + 1] = SET_MAC4
-    elseif kind == "mac6" and SET_MAC6 then
-      set_names[#set_names + 1] = SET_MAC6
-    end
-  end
   local lines = { }
   for _, name in ipairs(set_names) do
     if kind == "ip4" then

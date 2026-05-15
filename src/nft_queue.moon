@@ -6,10 +6,6 @@ nft_cfg = config.nft or {}
 FAMILY = nft_cfg.family or "bridge"
 FAMILY6 = nft_cfg.family6 or "bridge"
 TABLE = nft_cfg.table or "dns-filter-bridge"
-SET_IP4 = nft_cfg.set_ip4 or "ip4_allowed"
-SET_IP6 = nft_cfg.set_ip6 or "ip6_allowed"
-SET_MAC4 = nft_cfg.set_mac4 or "mac4_allowed"
-SET_MAC6 = nft_cfg.set_mac6 or "mac6_allowed"
 IP_TIMEOUT = nft_cfg.ip_timeout or "2m"
 ACK_TIMEOUT_MS = nft_cfg.ack_timeout_ms or 150
 
@@ -162,17 +158,7 @@ sanitize_rule_id = (rule_id) ->
 get_set_name = (kind, rule_id) ->
   rule_id = sanitize_rule_id rule_id
   if rule_id == ""
-    -- Fallback to global sets for unknown/empty rule_id
-    if kind == "ip4"
-      return SET_IP4
-    if kind == "ip6"
-      return SET_IP6
-    if kind == "mac4"
-      return SET_MAC4 if SET_MAC4
-      return nil
-    if kind == "mac6"
-      return SET_MAC6 if SET_MAC6
-      return nil
+    -- No fallback to global sets: rule_id is required for per-rule sets
     if kind == "sip4"
       return "sip_peers"
     if kind == "sip6"
@@ -180,13 +166,13 @@ get_set_name = (kind, rule_id) ->
     return nil
 
   if kind == "auth_mac"
-    return "rule_#{rule_id}_auth_mac"
+    return "#{rule_id}_auth_mac"
   if kind == "auth_ip4"
-    return "rule_#{rule_id}_auth_ip4"
+    return "#{rule_id}_auth_ip4"
   if kind == "auth_ip6"
-    return "rule_#{rule_id}_auth_ip6"
+    return "#{rule_id}_auth_ip6"
   if kind == "ip4" or kind == "ip6" or kind == "mac4" or kind == "mac6"
-    return "rule_#{rule_id}_#{kind}"
+    return "#{rule_id}_#{kind}"
   nil
 
 -- cmd_for supports both 4-arg (backward compat) and 5-arg (new per-rule) calls
@@ -207,15 +193,6 @@ cmd_lines_for = (kind, key, ip, rule_id_or_timeout, timeout) ->
   set_name = get_set_name kind, rule_id
   return nil unless set_name
   set_names = { set_name }
-  if rule_id and rule_id != ""
-    if kind == "ip4" and SET_IP4
-      set_names[#set_names + 1] = SET_IP4
-    elseif kind == "ip6" and SET_IP6
-      set_names[#set_names + 1] = SET_IP6
-    elseif kind == "mac4" and SET_MAC4
-      set_names[#set_names + 1] = SET_MAC4
-    elseif kind == "mac6" and SET_MAC6
-      set_names[#set_names + 1] = SET_MAC6
 
   lines = {}
   for _, name in ipairs set_names
