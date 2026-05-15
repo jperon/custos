@@ -163,13 +163,118 @@ refresh_nft = function(nft_sess, ip, mac, ttl)
     return nft_sess.add_authenticated_mac(mac, ttl)
   end
 end
-local signal_parent_reload
-signal_parent_reload = function()
-  local parent_pid = tonumber(ffi.C.getppid())
-  if not (parent_pid and parent_pid > 1) then
+local rule_requires_auth
+rule_requires_auth = function(rule)
+  if not (rule and rule.conditions) then
     return false
   end
-  return ffi.C.kill(parent_pid, SIGHUP) == 0
+  for _, cond in ipairs(rule.conditions) do
+    local _continue_0 = false
+    repeat
+      if not (type(cond) == "table") then
+        _continue_0 = true
+        break
+      end
+      for k, _ in pairs(cond) do
+        if k == "from_users" or k == "from_userlists" then
+          return true
+        end
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  return false
+end
+local user_qualifies_for_rule
+user_qualifies_for_rule = function(user, rule)
+  if not (rule and rule.conditions) then
+    return false
+  end
+  local filter_cfg = config.filter or { }
+  local userlists_cfg = filter_cfg.userlists or { }
+  for _, cond in ipairs(rule.conditions) do
+    local _continue_0 = false
+    repeat
+      if not (type(cond) == "table") then
+        _continue_0 = true
+        break
+      end
+      for k, v in pairs(cond) do
+        if k == "from_users" then
+          local users_list
+          if type(v) == "table" then
+            users_list = v
+          else
+            users_list = {
+              v
+            }
+          end
+          for _, allowed_user in ipairs(users_list) do
+            if tostring(allowed_user) == tostring(user) then
+              return true
+            end
+          end
+          return false
+        end
+        if k == "from_userlists" then
+          local list_names
+          if type(v) == "table" then
+            list_names = v
+          else
+            list_names = {
+              v
+            }
+          end
+          for _, list_name in ipairs(list_names) do
+            local list_users = userlists_cfg[list_name] or { }
+            for _, allowed_user in ipairs(list_users) do
+              if tostring(allowed_user) == tostring(user) then
+                return true
+              end
+            end
+          end
+          return false
+        end
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  return true
+end
+local sanitize_id
+sanitize_id = function(raw)
+  local s = tostring(raw):lower()
+  s = s:gsub("[^a-z0-9_%-]+", "_")
+  s = s:gsub("_+", "_")
+  s = s:gsub("^_+", "")
+  s = s:gsub("_+$", "")
+  s = s:gsub("%-+", "_")
+  if #s > 40 then
+    s = s:sub(1, 40)
+  end
+  return s
+end
+local generate_rule_id
+generate_rule_id = function(rule, idx)
+  if rule and rule.rule_id and tostring(rule.rule_id):match("%S") then
+    local base = sanitize_id(rule.rule_id)
+    if #base > 0 then
+      return base
+    end
+  end
+  if rule and rule.description and tostring(rule.description):match("%S") then
+    local base = sanitize_id(rule.description)
+    if #base > 0 then
+      return "r_" .. tostring(base)
+    end
+  end
+  return "rule_" .. tostring(idx)
 end
 local handle_login
 handle_login = function(req, peer_ip, peer_mac, state)
@@ -260,6 +365,83 @@ handle_login = function(req, peer_ip, peer_mac, state)
       mac = mac
     })
   end
+  local filter_cfg = config.filter or { }
+  local rules = filter_cfg.rules or { }
+  for idx, rule in ipairs(rules) do
+    local _continue_0 = false
+    repeat
+      local requires_auth = rule_requires_auth(rule)
+      local qualifies = user_qualifies_for_rule(user, rule)
+      log_info({
+        action = "server_rule_check",
+        idx = idx,
+        description = rule.description,
+        requires_auth = requires_auth,
+        qualifies = qualifies,
+        user = user
+      })
+      if not (requires_auth) then
+        _continue_0 = true
+        break
+      end
+      if not (qualifies) then
+        _continue_0 = true
+        break
+      end
+      local rule_id = generate_rule_id(rule, idx)
+      log_info({
+        action = "server_rule_id_generated",
+        rule_id = rule_id,
+        description = rule.description
+      })
+      ok, err = pcall(function()
+        if state.nft_sess then
+          state.nft_sess.run_nft("add element bridge dns-filter-bridge rule_" .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
+            quiet = true
+          })
+          log_info({
+            action = "server_auth_set_add_mac",
+            rule_id = rule_id,
+            mac = mac
+          })
+          if peer_ip and peer_ip ~= "unknown" then
+            if peer_ip:find(":") then
+              state.nft_sess.run_nft("add element bridge dns-filter-bridge rule_" .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(peer_ip) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
+                quiet = true
+              })
+              return log_info({
+                action = "server_auth_set_add_ip6",
+                rule_id = rule_id,
+                ip = peer_ip
+              })
+            else
+              state.nft_sess.run_nft("add element bridge dns-filter-bridge rule_" .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(peer_ip) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
+                quiet = true
+              })
+              return log_info({
+                action = "server_auth_set_add_ip4",
+                rule_id = rule_id,
+                ip = peer_ip
+              })
+            end
+          end
+        end
+      end)
+      if not (ok) then
+        log_warn({
+          action = "server_auth_set_add_failed",
+          rule_id = rule_id,
+          mac = mac,
+          ip = peer_ip,
+          err = tostring(err)
+        })
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
   local session = sessions[mac:lower()]
   local created_at = session and session.created_at or os.time()
   return 200, {
@@ -285,7 +467,7 @@ handle_ping = function(req, peer_ip, peer_mac, state)
     s.heartbeat = now + state.auth_cfg.idle_timeout
     write_sessions(sessions, state.sessions_file)
   end
-  refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout)
+  refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, s.user)
   return 204, { }, ""
 end
 local handle_logout
@@ -298,10 +480,58 @@ handle_logout = function(req, peer_ip, peer_mac, state)
     }, ""
   end
   local mac = s.mac or peer_mac
+  local user = s.user
   if state.nft_sess then
     state.nft_sess.del_authenticated(peer_ip)
     if s.mac then
       state.nft_sess.del_authenticated_mac(s.mac)
+    end
+  end
+  local filter_cfg = config.filter or { }
+  local rules = filter_cfg.rules or { }
+  for idx, rule in ipairs(rules) do
+    local _continue_0 = false
+    repeat
+      if not (rule_requires_auth(rule)) then
+        _continue_0 = true
+        break
+      end
+      if not (user_qualifies_for_rule(user, rule)) then
+        _continue_0 = true
+        break
+      end
+      local rule_id = generate_rule_id(rule, idx)
+      local ok, err = pcall(function()
+        if state.nft_sess then
+          state.nft_sess.run_nft("delete element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " }", {
+            quiet = true
+          })
+          if peer_ip and peer_ip ~= "unknown" then
+            if peer_ip:find(":") then
+              return state.nft_sess.run_nft("delete element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(peer_ip) .. " }", {
+                quiet = true
+              })
+            else
+              return state.nft_sess.run_nft("delete element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(peer_ip) .. " }", {
+                quiet = true
+              })
+            end
+          end
+        end
+      end)
+      if not (ok) then
+        log_warn({
+          action = "server_auth_set_delete_failed",
+          rule_id = rule_id,
+          mac = mac,
+          ip = peer_ip,
+          err = tostring(err)
+        })
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
     end
   end
   sessions[mac] = nil

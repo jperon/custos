@@ -19,7 +19,7 @@ end
 local upsert_element
 upsert_element = function(set_name, value, ttl)
   local cmd = tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " " .. tostring(set_name) .. " { " .. tostring(value) .. " timeout " .. tostring(ttl) .. "s }"
-  return run_nft("update element " .. tostring(cmd)) or run_nft("add element " .. tostring(cmd))
+  return run_nft("add element " .. tostring(cmd))
 end
 local add_authenticated4
 add_authenticated4 = function(ip, ttl)
@@ -76,5 +76,6 @@ return {
   del_authenticated = del_authenticated,
   add_authenticated_mac = add_authenticated_mac,
   del_authenticated_mac = del_authenticated_mac,
+  run_nft = run_nft,
   cleanup = cleanup
 }

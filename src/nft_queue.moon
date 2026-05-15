@@ -113,6 +113,9 @@ add_mac4 = (mac, ip_str, rule_id, timeout, corr)       -> enqueue "mac4", mac,  
 add_mac6 = (mac, ip_str, rule_id, timeout, corr)       -> enqueue "mac6", mac,       ip_str, rule_id, timeout, corr
 add_sip4 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip4", ip_str,    ip_str, rule_id, timeout, corr
 add_sip6 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip6", ip_str,    ip_str, rule_id, timeout, corr
+add_auth_mac = (mac, rule_id, timeout, corr)           -> enqueue "auth_mac", mac, "_", rule_id, timeout, corr
+add_auth_ip4 = (ip, rule_id, timeout, corr)            -> enqueue "auth_ip4", ip, "_", rule_id, timeout, corr
+add_auth_ip6 = (ip, rule_id, timeout, corr)            -> enqueue "auth_ip6", ip, "_", rule_id, timeout, corr
 
 send_barrier = (corr) ->
   return false unless pipe_wfd
@@ -175,7 +178,13 @@ get_set_name = (kind, rule_id) ->
     if kind == "sip6"
       return "sip_peers6"
     return nil
-  
+
+  if kind == "auth_mac"
+    return "rule_#{rule_id}_auth_mac"
+  if kind == "auth_ip4"
+    return "rule_#{rule_id}_auth_ip4"
+  if kind == "auth_ip6"
+    return "rule_#{rule_id}_auth_ip6"
   if kind == "ip4" or kind == "ip6" or kind == "mac4" or kind == "mac6"
     return "rule_#{rule_id}_#{kind}"
   nil
@@ -222,6 +231,12 @@ cmd_lines_for = (kind, key, ip, rule_id_or_timeout, timeout) ->
       lines[#lines + 1] = "add element #{FAMILY} #{TABLE} #{name} { #{key} timeout #{timeout} }"
     elseif kind == "sip6"
       lines[#lines + 1] = "add element #{FAMILY6} #{TABLE} #{name} { #{key} timeout #{timeout} }"
+    elseif kind == "auth_mac"
+      lines[#lines + 1] = "add element #{FAMILY} #{TABLE} #{name} { #{key} timeout #{timeout} }"
+    elseif kind == "auth_ip4"
+      lines[#lines + 1] = "add element #{FAMILY} #{TABLE} #{name} { #{key} timeout #{timeout} }"
+    elseif kind == "auth_ip6"
+      lines[#lines + 1] = "add element #{FAMILY6} #{TABLE} #{name} { #{key} timeout #{timeout} }"
   return nil if #lines == 0
   lines
 
@@ -230,4 +245,4 @@ cmd_for = (kind, key, ip, rule_id_or_timeout, timeout) ->
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :wait_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :cmd_for, :cmd_lines_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :wait_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :add_auth_mac, :add_auth_ip4, :add_auth_ip6, :cmd_for, :cmd_lines_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id }

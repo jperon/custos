@@ -175,10 +175,16 @@ flush_batch = function(pending, ack_queue, ack_wfds)
     return 
   end
   local lines = { }
+  local rule11_count = 0
+  local rule11_items = { }
   for _, item in pairs(pending) do
     local cmd = cmd_for(item.kind, item.key, item.ip, item.rule_id, item.timeout)
     if cmd then
       lines[#lines + 1] = cmd
+    end
+    if item.rule_id == "rule_11" then
+      rule11_count = rule11_count + 1
+      rule11_items[#rule11_items + 1] = tostring(item.kind) .. ":" .. tostring(item.key) .. ">" .. tostring(item.ip)
     end
   end
   for k in pairs(pending) do
@@ -189,6 +195,15 @@ flush_batch = function(pending, ack_queue, ack_wfds)
     local ok, err = run_cmd(cmd, {
       quiet = true
     })
+    if rule11_count > 0 then
+      log_info({
+        action = "nft_batch_rule",
+        rule_id = "rule_11",
+        count = rule11_count,
+        ok = ok,
+        items = table.concat(rule11_items, " ")
+      })
+    end
     if ok then
       log_debug({
         action = "batch_ok",
@@ -222,9 +237,13 @@ flush_batch = function(pending, ack_queue, ack_wfds)
       acks = #ack_queue
     })
   end
+  local workers_to_ack = { }
   for _index_0 = 1, #ack_queue do
     local ack = ack_queue[_index_0]
-    send_ack(ack_wfds, ack.widx)
+    workers_to_ack[ack.widx] = true
+  end
+  for widx, _ in pairs(workers_to_ack) do
+    send_ack(ack_wfds, widx)
   end
   for i = #ack_queue, 1, -1 do
     ack_queue[i] = nil

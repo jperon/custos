@@ -36,7 +36,7 @@ flush ruleset
 table bridge dns-filter-bridge {
 
   # Paires (MAC client, destination IPv6) autorisées après résolution DNS.
-  # Expiration automatique après 2 minutes.
+  # Expiration automatique après {NFT_IP_TIMEOUT}.
   set mac6_allowed {
     type    ether_addr . ipv6_addr
     flags   timeout
@@ -173,7 +173,18 @@ table bridge dns-filter-bridge {
     ip6 daddr @ip6_dest_whitelist accept comment "Static IPv6 whitelist"
     ip  daddr @ip4_dest_whitelist accept comment "Static IPv4 whitelist"
 
-    # SIP/STUN : signalisation → NFQUEUE (worker_sip apprend les IPs media).
+    # Trafic autorisé après résolution DNS (sets globaux peuplés par worker DNS)
+    ether saddr . ip6 daddr @mac6_allowed accept comment "MAC+IPv6 allowed after DNS resolution"
+    ether saddr . ip  daddr @mac4_allowed accept comment "MAC+IPv4 allowed after DNS resolution"
+    ip6 saddr . ip6 daddr @ip6_allowed accept comment "IPv6+IPv6 allowed after DNS resolution"
+    ip  saddr . ip  daddr @ip4_allowed accept comment "IPv4+IPv4 allowed after DNS resolution"
+
+    # Trafic autorisé après résolution DNS pour règles avec from_users/from_userlists
+    # Vérification double : set auth (peuplé par auth/server) + set dynamique (peuplé par worker DNS)
+    ether saddr @rule_r_utilisateurs_auth_mac ether saddr . ip daddr @mac4_allowed accept comment "MAC auth + MAC+IPv4 allowed (r_utilisateurs)"
+    ip saddr @rule_r_utilisateurs_auth_ip4 ip saddr . ip daddr @ip4_allowed accept comment "IPv4 auth + IPv4+IPv4 allowed (r_utilisateurs)"
+
+    # SIP → NFQUEUE (signalisation + media).NFQUEUE (worker_sip apprend les IPs media).
     # RTP/media : accepté dès que src ET dst sont des pairs SIP appris.
     # Placées AVANT les sets DNS pour que la signalisation passe toujours
     # par le worker même si une entrée DNS couvrait déjà l'adresse.
@@ -187,10 +198,6 @@ table bridge dns-filter-bridge {
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
     jump cv_rules_dispatch comment "Compiled filter rules"
-    ether saddr . ip6 daddr @mac6_allowed log level debug prefix "custos mac6_allowed: " counter accept comment "DNS-allowed MAC+IPv6"
-    ether saddr . ip  daddr @mac4_allowed log level debug prefix "custos mac4_allowed: " counter accept comment "DNS-allowed MAC+IPv4"
-    ip6   saddr . ip6 daddr @ip6_allowed  log level debug prefix "custos ip6_allowed: "  counter accept comment "DNS-allowed IPv6 pair"
-    ip    saddr . ip  daddr @ip4_allowed  log level debug prefix "custos ip4_allowed: "  counter accept comment "DNS-allowed IPv4 pair"
 
     # SNI logging/enforcement: capture TCP/443 client packets (ACK path, excluding SYN/RST/FIN) + QUIC UDP/443.
     # Certains clients envoient ClientHello sans flag PSH, donc on ne filtre pas sur PSH.

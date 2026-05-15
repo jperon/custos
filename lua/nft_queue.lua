@@ -191,6 +191,18 @@ local add_sip6
 add_sip6 = function(ip_str, rule_id, timeout, corr)
   return enqueue("sip6", ip_str, ip_str, rule_id, timeout, corr)
 end
+local add_auth_mac
+add_auth_mac = function(mac, rule_id, timeout, corr)
+  return enqueue("auth_mac", mac, "_", rule_id, timeout, corr)
+end
+local add_auth_ip4
+add_auth_ip4 = function(ip, rule_id, timeout, corr)
+  return enqueue("auth_ip4", ip, "_", rule_id, timeout, corr)
+end
+local add_auth_ip6
+add_auth_ip6 = function(ip, rule_id, timeout, corr)
+  return enqueue("auth_ip6", ip, "_", rule_id, timeout, corr)
+end
 local send_barrier
 send_barrier = function(corr)
   if not (pipe_wfd) then
@@ -278,6 +290,15 @@ get_set_name = function(kind, rule_id)
     end
     return nil
   end
+  if kind == "auth_mac" then
+    return "rule_" .. tostring(rule_id) .. "_auth_mac"
+  end
+  if kind == "auth_ip4" then
+    return "rule_" .. tostring(rule_id) .. "_auth_ip4"
+  end
+  if kind == "auth_ip6" then
+    return "rule_" .. tostring(rule_id) .. "_auth_ip6"
+  end
   if kind == "ip4" or kind == "ip6" or kind == "mac4" or kind == "mac6" then
     return "rule_" .. tostring(rule_id) .. "_" .. tostring(kind)
   end
@@ -325,6 +346,12 @@ cmd_lines_for = function(kind, key, ip, rule_id_or_timeout, timeout)
       lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
     elseif kind == "sip6" then
       lines[#lines + 1] = "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
+    elseif kind == "auth_mac" then
+      lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
+    elseif kind == "auth_ip4" then
+      lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
+    elseif kind == "auth_ip6" then
+      lines[#lines + 1] = "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
     end
   end
   if #lines == 0 then
@@ -352,6 +379,9 @@ return {
   add_mac6 = add_mac6,
   add_sip4 = add_sip4,
   add_sip6 = add_sip6,
+  add_auth_mac = add_auth_mac,
+  add_auth_ip4 = add_auth_ip4,
+  add_auth_ip6 = add_auth_ip6,
   cmd_for = cmd_for,
   cmd_lines_for = cmd_lines_for,
   sanitize_timeout = sanitize_timeout,

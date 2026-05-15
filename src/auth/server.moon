@@ -145,10 +145,61 @@ refresh_nft = (nft_sess, ip, mac, ttl) ->
   nft_sess.add_authenticated ip, ttl if ip and ip ~= "unknown"
   nft_sess.add_authenticated_mac mac, ttl if mac and mac ~= "unknown"
 
-signal_parent_reload = ->
-  parent_pid = tonumber ffi.C.getppid!
-  return false unless parent_pid and parent_pid > 1
-  ffi.C.kill(parent_pid, SIGHUP) == 0
+-- Check if a rule requires authentication (has from_users or from_userlists condition)
+rule_requires_auth = (rule) ->
+  return false unless rule and rule.conditions
+  for _, cond in ipairs rule.conditions
+    continue unless type(cond) == "table"
+    for k, _ in pairs cond
+      if k == "from_users" or k == "from_userlists"
+        return true
+  false
+
+-- Check if a user qualifies for a rule (e.g., user is in from_users or from_userlists)
+user_qualifies_for_rule = (user, rule) ->
+  return false unless rule and rule.conditions
+  filter_cfg = config.filter or {}
+  userlists_cfg = filter_cfg.userlists or {}
+
+  for _, cond in ipairs rule.conditions
+    continue unless type(cond) == "table"
+    for k, v in pairs cond
+      if k == "from_users"
+        users_list = if type(v) == "table" then v else {v}
+        for _, allowed_user in ipairs users_list
+          if tostring(allowed_user) == tostring(user)
+            return true
+        return false
+      if k == "from_userlists"
+        list_names = if type(v) == "table" then v else {v}
+        for _, list_name in ipairs list_names
+          list_users = userlists_cfg[list_name] or {}
+          for _, allowed_user in ipairs list_users
+            if tostring(allowed_user) == tostring(user)
+              return true
+        return false
+  true -- No from_users/from_userlists condition means anyone qualifies
+
+-- Generate stable rule_id matching compiler_api.rule_id_base
+sanitize_id = (raw) ->
+  s = tostring(raw)\lower!
+  s = s\gsub "[^a-z0-9_%-]+", "_"
+  s = s\gsub "_+", "_"
+  s = s\gsub "^_+", ""
+  s = s\gsub "_+$", ""
+  s = s\gsub "%-+", "_"
+  if #s > 40
+    s = s\sub 1, 40
+  s
+
+generate_rule_id = (rule, idx) ->
+  if rule and rule.rule_id and tostring(rule.rule_id)\match "%S"
+    base = sanitize_id rule.rule_id
+    return base if #base > 0
+  if rule and rule.description and tostring(rule.description)\match "%S"
+    base = sanitize_id rule.description
+    return "r_#{base}" if #base > 0
+  "rule_#{idx}"
 
 handle_login = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
@@ -204,6 +255,35 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   else
     log_warn { action: "server_nft_sess_missing", peer: peer_ip, mac: mac }
 
+  -- Populate per-rule auth sets for rules requiring authentication
+  filter_cfg = config.filter or {}
+  rules = filter_cfg.rules or {}
+  for idx, rule in ipairs rules
+    requires_auth = rule_requires_auth rule
+    qualifies = user_qualifies_for_rule user, rule
+    log_info { action: "server_rule_check", idx: idx, description: rule.description, requires_auth: requires_auth, qualifies: qualifies, user: user }
+    continue unless requires_auth
+    continue unless qualifies
+
+    -- Generate stable rule_id
+    rule_id = generate_rule_id rule, idx
+    log_info { action: "server_rule_id_generated", rule_id: rule_id, description: rule.description }
+
+    -- Populate auth sets directly via nft_sessions.run_nft()
+    ok, err = pcall ->
+      if state.nft_sess
+        state.nft_sess.run_nft "add element bridge dns-filter-bridge rule_#{rule_id}_auth_mac { #{mac} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
+        log_info { action: "server_auth_set_add_mac", rule_id: rule_id, mac: mac }
+        if peer_ip and peer_ip ~= "unknown"
+          if peer_ip\find ":"
+            state.nft_sess.run_nft "add element bridge dns-filter-bridge rule_#{rule_id}_auth_ip6 { #{peer_ip} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
+            log_info { action: "server_auth_set_add_ip6", rule_id: rule_id, ip: peer_ip }
+          else
+            state.nft_sess.run_nft "add element bridge dns-filter-bridge rule_#{rule_id}_auth_ip4 { #{peer_ip} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
+            log_info { action: "server_auth_set_add_ip4", rule_id: rule_id, ip: peer_ip }
+    unless ok
+      log_warn { action: "server_auth_set_add_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) }
+
   session = sessions[mac\lower!]
   created_at = session and session.created_at or os.time!
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, success_page state.auth_cfg, created_at
@@ -228,7 +308,7 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
     s.heartbeat = now + state.auth_cfg.idle_timeout
     write_sessions sessions, state.sessions_file
 
-  refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout
+  refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, s.user
 
   204, {}, ""
 
@@ -240,9 +320,33 @@ handle_logout = (req, peer_ip, peer_mac, state) ->
     return 302, { ["Location"]: "/" }, ""
 
   mac = s.mac or peer_mac
+  user = s.user
+
   if state.nft_sess
     state.nft_sess.del_authenticated peer_ip
     state.nft_sess.del_authenticated_mac s.mac if s.mac
+
+  -- Remove entries from per-rule auth sets
+  filter_cfg = config.filter or {}
+  rules = filter_cfg.rules or {}
+  for idx, rule in ipairs rules
+    continue unless rule_requires_auth rule
+    continue unless user_qualifies_for_rule user, rule
+
+    -- Generate stable rule_id
+    rule_id = generate_rule_id rule, idx
+
+    -- Generate nft delete commands for auth sets
+    ok, err = pcall ->
+      if state.nft_sess
+        state.nft_sess.run_nft "delete element bridge dns-filter-bridge #{rule_id}_auth_mac { #{mac} }", { quiet: true }
+        if peer_ip and peer_ip ~= "unknown"
+          if peer_ip\find ":"
+            state.nft_sess.run_nft "delete element bridge dns-filter-bridge #{rule_id}_auth_ip6 { #{peer_ip} }", { quiet: true }
+          else
+            state.nft_sess.run_nft "delete element bridge dns-filter-bridge #{rule_id}_auth_ip4 { #{peer_ip} }", { quiet: true }
+    unless ok
+      log_warn { action: "server_auth_set_delete_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) }
 
   sessions[mac] = nil
   write_sessions sessions, state.sessions_file

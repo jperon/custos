@@ -134,8 +134,15 @@ flush_batch = (pending, ack_queue, ack_wfds) ->
   else
     log_debug { action: "batch_ack_only", acks: #ack_queue }
 
+  -- Send one ACK per unique worker (widx) that had items in this batch
+  -- This fixes the race condition where worker_responses enqueues multiple items
+  -- but only waits for one ACK. Previously we sent one ACK per item, causing
+  -- ACKs to accumulate in the pipe and be consumed by wrong responses.
+  workers_to_ack = {}
   for ack in *ack_queue
-    send_ack ack_wfds, ack.widx
+    workers_to_ack[ack.widx] = true
+  for widx, _ in pairs workers_to_ack
+    send_ack ack_wfds, widx
   for i = #ack_queue, 1, -1
     ack_queue[i] = nil
 

@@ -231,6 +231,16 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
   chain = "cv_rule_" .. rid
   mark = string.format "0x%x", 0x4000 + idx
 
+  -- Check if rule requires authentication (has from_users or from_userlists)
+  requires_auth = false
+  for _, cond in ipairs rule.conditions or {}
+    continue unless type(cond) == "table"
+    for k, _ in pairs cond
+      if k == "from_users" or k == "from_userlists"
+        requires_auth = true
+        break
+    break if requires_auth
+
   {
     index: idx
     rule_id: rid
@@ -247,6 +257,7 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
     ports: ports
     chain: chain
     mark: mark
+    requires_auth: requires_auth
     set_src4: #src4 > 0 and "#{chain}_src4" or nil
     set_src6: #src6 > 0 and "#{chain}_src6" or nil
     set_subnet4: #subnet4 > 0 and "#{chain}_subnet4" or nil
@@ -256,6 +267,9 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
     set_dyn_ip6: "rule_#{rid}_ip6"
     set_dyn_mac4: "rule_#{rid}_mac4"
     set_dyn_mac6: "rule_#{rid}_mac6"
+    set_auth_mac: requires_auth and "rule_#{rid}_auth_mac" or nil
+    set_auth_ip4: requires_auth and "rule_#{rid}_auth_ip4" or nil
+    set_auth_ip6: requires_auth and "rule_#{rid}_auth_ip6" or nil
     stubs: {
       time_match: #times > 0
       dns_match: #dns_refs > 0
@@ -451,6 +465,7 @@ render_rule_chain = (rule, indent) ->
   lines[#lines + 1] = "#{indent}  counter comment \"dns_scope=#{rule.dns_scope and 'yes' or 'no'}\""
   if rule.stubs.time_match
     lines[#lines + 1] = "#{indent}  counter comment \"stub:time_ranges=#{table.concat(rule.time_ranges, ',')}\""
+
   verdict = if rule.action == "deny" then "drop" else "accept"
 
   all_exprs = {}
@@ -508,6 +523,15 @@ render = (plan, indent="  ", include_elements=true) ->
       lines[#lines + 1] = l
     for _, l in ipairs render_set rule.set_dyn_mac6, "ether_addr . ipv6_addr", "timeout", {}, indent, false
       lines[#lines + 1] = l
+    if rule.set_auth_mac
+      for _, l in ipairs render_set rule.set_auth_mac, "ether_addr", "timeout", {}, indent, false
+        lines[#lines + 1] = l
+    if rule.set_auth_ip4
+      for _, l in ipairs render_set rule.set_auth_ip4, "ipv4_addr", "timeout", {}, indent, false
+        lines[#lines + 1] = l
+    if rule.set_auth_ip6
+      for _, l in ipairs render_set rule.set_auth_ip6, "ipv6_addr", "timeout", {}, indent, false
+        lines[#lines + 1] = l
     for _, l in ipairs render_rule_chain rule, indent
       lines[#lines + 1] = l
 

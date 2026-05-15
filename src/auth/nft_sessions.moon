@@ -24,7 +24,7 @@ run_nft = (cmd) ->
 
 upsert_element = (set_name, value, ttl) ->
   cmd = "#{config.nft.family} #{config.nft.table} #{set_name} { #{value} timeout #{ttl}s }"
-  run_nft("update element #{cmd}") or run_nft("add element #{cmd}")
+  run_nft("add element #{cmd}")
 
 --- Ajoute une IPv4 authentifiée dans le set nft avec TTL.
 -- @tparam string ip  Adresse IPv4 du client
@@ -78,13 +78,13 @@ del_authenticated = (ip) ->
 add_authenticated_mac = (mac, ttl) ->
   upsert_element NFT_SET_MAC, mac, ttl
 
---- Retire un MAC des sets ip et ip6 (logout explicite ou expiration de session).
+---- Retire un MAC des sets ip et ip6 (logout explicite ou expiration de session).
 -- @tparam string mac Adresse MAC du client (format "aa:bb:cc:dd:ee:ff")
 -- @treturn boolean   true si les deux suppressions réussissent
 del_authenticated_mac = (mac) ->
   run_nft "delete element #{config.nft.family} #{config.nft.table} #{NFT_SET_MAC} { #{mac} }"
 
---- Libère le contexte nft (appelé à l'arrêt du worker AUTH).
+---- Libère le contexte nft (appelé à l'arrêt du worker AUTH).
 cleanup = ->
   libnft.nft_ctx_free ctx if ctx != nil
 
@@ -92,4 +92,5 @@ cleanup = ->
   :add_authenticated6, :del_authenticated6,
   :add_authenticated,  :del_authenticated,
   :add_authenticated_mac, :del_authenticated_mac,
+  :run_nft,
   :cleanup }

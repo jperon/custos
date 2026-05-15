@@ -351,6 +351,18 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           records_to_add = records_to_add + 1
           local rr_timeout_str, _ = rr_timeout(ans.ttl)
           local ok = add_ip4(client_v4, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
+          if nft_rule_id == "rule_11" then
+            log_info({
+              action = "nft_enqueue_rule",
+              rule_id = nft_rule_id,
+              kind = "ip4",
+              key = client_v4,
+              dest = ans.rdata_str,
+              timeout = rr_timeout_str,
+              ok = ok,
+              corr = ack_corr
+            })
+          end
           if ok then
             ip_count = ip_count + 1
           end
@@ -361,6 +373,18 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         if mac_valid(client_mac) then
           local rr_timeout_str, _ = rr_timeout(ans.ttl)
           local m_ok = add_mac4(client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
+          if nft_rule_id == "rule_11" then
+            log_info({
+              action = "nft_enqueue_rule",
+              rule_id = nft_rule_id,
+              kind = "mac4",
+              key = client_mac,
+              dest = ans.rdata_str,
+              timeout = rr_timeout_str,
+              ok = m_ok,
+              corr = ack_corr
+            })
+          end
           success_any = success_any or m_ok
         end
       end
@@ -377,6 +401,18 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           records_to_add = records_to_add + 1
           local rr_timeout_str, _ = rr_timeout(ans.ttl)
           local ok = add_ip6(client_v6, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
+          if nft_rule_id == "rule_11" then
+            log_info({
+              action = "nft_enqueue_rule",
+              rule_id = nft_rule_id,
+              kind = "ip6",
+              key = client_v6,
+              dest = ans.rdata_str,
+              timeout = rr_timeout_str,
+              ok = ok,
+              corr = ack_corr
+            })
+          end
           if ok then
             ip_count = ip_count + 1
           end
@@ -387,6 +423,18 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         if mac_valid(client_mac) then
           local rr_timeout_str, _ = rr_timeout(ans.ttl)
           local m_ok = add_mac6(client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
+          if nft_rule_id == "rule_11" then
+            log_info({
+              action = "nft_enqueue_rule",
+              rule_id = nft_rule_id,
+              kind = "mac6",
+              key = client_mac,
+              dest = ans.rdata_str,
+              timeout = rr_timeout_str,
+              ok = m_ok,
+              corr = ack_corr
+            })
+          end
           success_any = success_any or m_ok
         end
       end
