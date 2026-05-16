@@ -1,3 +1,8 @@
+---
+name: moonscript
+description: Moonscript syntax and usage
+---
+
 # MoonScript — Syntaxe, LDoc et pièges
 
 Ce projet **évite le mot-clé `class`** de MoonScript. Le code compilé doit être

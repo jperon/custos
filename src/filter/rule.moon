@@ -110,7 +110,7 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
     for cond_group in *condition_groups
       -- Évaluer toutes les conditions du groupe avec ET logique
       group_passed = true
-      for cond in cond_group
+      for cond in *cond_group
         ok, _ = cond req
         unless ok
           group_passed = false

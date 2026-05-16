@@ -168,6 +168,68 @@ collect_nets = function(cfg, rule)
   table.sort(v6)
   return v4, v6
 end
+local collect_dest_nets
+collect_dest_nets = function(cfg, rule)
+  local v4, v6 = { }, { }
+  local seen4, seen6 = { }, { }
+  local named = cfg.nets or { }
+  local add_net
+  add_net = function(raw)
+    if not (raw) then
+      return 
+    end
+    local net = tostring(raw):match("^%s*(.-)%s*$")
+    if not (net and #net > 0) then
+      return 
+    end
+    if net:find(":", 1, true) then
+      return append_unique(v6, seen6, net)
+    else
+      return append_unique(v4, seen4, net)
+    end
+  end
+  local add_named
+  add_named = function(list_name)
+    if not (list_name) then
+      return 
+    end
+    local nets = named[list_name] or { }
+    for _, n in ipairs(as_list(nets)) do
+      add_net(n)
+    end
+  end
+  for _, cond in ipairs(rule.conditions or { }) do
+    local _continue_0 = false
+    repeat
+      if not (type(cond) == "table") then
+        _continue_0 = true
+        break
+      end
+      for k, args in pairs(cond) do
+        if k == "to_net" then
+          add_net(args)
+        elseif k == "to_nets" then
+          for _, n in ipairs(as_list(args)) do
+            add_net(n)
+          end
+        elseif k == "to_netlist" then
+          add_named(args)
+        elseif k == "to_netlists" then
+          for _, list_name in ipairs(as_list(args)) do
+            add_named(list_name)
+          end
+        end
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  table.sort(v4)
+  table.sort(v6)
+  return v4, v6
+end
 local collect_subnets
 collect_subnets = function(rule)
   local v4, v6 = { }, { }
@@ -352,6 +414,7 @@ build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id)
   end
   local rid = metadata_rule_id or stable_rule_id(rule, idx, used_ids)
   local src4, src6 = collect_nets(cfg, rule)
+  local dst4, dst6 = collect_dest_nets(cfg, rule)
   local subnet4, subnet6 = collect_subnets(rule)
   local times = collect_times(rule)
   local dns_refs = collect_dns(rule)
@@ -392,6 +455,8 @@ build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id)
     time_ranges = times,
     source_ipv4 = src4,
     source_ipv6 = src6,
+    dest_ipv4 = dst4,
+    dest_ipv6 = dst6,
     subnet_ipv4 = subnet4,
     subnet_ipv6 = subnet6,
     protocols = protos,
@@ -401,6 +466,8 @@ build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id)
     requires_auth = requires_auth,
     set_src4 = #src4 > 0 and tostring(chain) .. "_src4" or nil,
     set_src6 = #src6 > 0 and tostring(chain) .. "_src6" or nil,
+    set_dst4 = #dst4 > 0 and tostring(chain) .. "_dst4" or nil,
+    set_dst6 = #dst6 > 0 and tostring(chain) .. "_dst6" or nil,
     set_subnet4 = #subnet4 > 0 and tostring(chain) .. "_subnet4" or nil,
     set_subnet6 = #subnet6 > 0 and tostring(chain) .. "_subnet6" or nil,
     set_ports = #ports > 0 and tostring(chain) .. "_dports" or nil,
@@ -481,9 +548,14 @@ compile = function(filter_cfg, rules_metadata)
     end
     local conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
     if conditions_meta then
-      for _, cond_meta in ipairs(conditions_meta) do
-        if cond_meta.name == "from_user" or cond_meta.name == "from_users" or cond_meta.name == "from_userlist" or cond_meta.name == "from_userlists" then
-          r.requires_auth = true
+      for _, group_meta in ipairs(conditions_meta) do
+        for _, cond_meta in ipairs(group_meta) do
+          if cond_meta.name == "from_user" or cond_meta.name == "from_users" or cond_meta.name == "from_userlist" or cond_meta.name == "from_userlists" then
+            r.requires_auth = true
+            break
+          end
+        end
+        if r.requires_auth then
           break
         end
       end
@@ -500,19 +572,26 @@ compile = function(filter_cfg, rules_metadata)
       end
     end
     if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions then
-      for _, cond in ipairs(rules_metadata[idx].conditions) do
-        if cond.capabilities and cond.capabilities.nft then
-          metrics.conditions_compiled = metrics.conditions_compiled + 1
-        else
-          metrics.conditions_worker_only = metrics.conditions_worker_only + 1
+      for _, group in ipairs(rules_metadata[idx].conditions) do
+        for _, cond in ipairs(group) do
+          if cond.capabilities and cond.capabilities.nft then
+            metrics.conditions_compiled = metrics.conditions_compiled + 1
+          else
+            metrics.conditions_worker_only = metrics.conditions_worker_only + 1
+          end
         end
       end
     end
     local has_nft_cond = false
     if conditions_meta then
-      for _, cond_meta in ipairs(conditions_meta) do
-        if cond_meta.capabilities and cond_meta.capabilities.nft then
-          has_nft_cond = true
+      for _, group_meta in ipairs(conditions_meta) do
+        for _, cond_meta in ipairs(group_meta) do
+          if cond_meta.capabilities and cond_meta.capabilities.nft then
+            has_nft_cond = true
+            break
+          end
+        end
+        if has_nft_cond then
           break
         end
       end
@@ -570,6 +649,17 @@ compile_conditions_nft = function(conditions_meta, family)
         local expr, err = cond_meta.compile_nft(family)
         if expr then
           exprs[#exprs + 1] = expr
+        else
+          if family == "inet" then
+            local expr_ip, err_ip = cond_meta.compile_nft("ip")
+            if expr_ip then
+              exprs[#exprs + 1] = expr_ip
+            end
+            local expr_ip6, err_ip6 = cond_meta.compile_nft("ip6")
+            if expr_ip6 then
+              exprs[#exprs + 1] = expr_ip6
+            end
+          end
         end
       end
       _continue_0 = true
@@ -609,52 +699,81 @@ match_exprs = function(rule)
   end
   local base = table.concat(l4, " ")
   if rule.conditions_meta then
-    local compiled_exprs = compile_conditions_nft(rule.conditions_meta, "inet")
-    if #compiled_exprs > 0 then
+    local group_exprs = { }
+    local _list_0 = rule.conditions_meta
+    for _index_0 = 1, #_list_0 do
+      local group_meta = _list_0[_index_0]
+      local compiled_group_exprs = compile_conditions_nft(group_meta, "inet")
+      if #compiled_group_exprs > 0 then
+        local combined_group = table.concat(compiled_group_exprs, " ")
+        group_exprs[#group_exprs + 1] = combined_group
+      end
+    end
+    if #group_exprs > 0 then
       local exprs = { }
-      for _, expr in ipairs(compiled_exprs) do
-        exprs[#exprs + 1] = table.concat({
-          expr,
+      for _index_0 = 1, #group_exprs do
+        local group_expr = group_exprs[_index_0]
+        local full_expr = table.concat({
+          group_expr,
           base
         }, " "):gsub("%s+", " ")
+        exprs[#exprs + 1] = full_expr
       end
       return exprs
     end
   end
   local exprs = { }
-  if rule.set_src4 or rule.set_subnet4 then
-    local expr_parts = {
-      "ip saddr"
-    }
-    if rule.set_src4 and rule.set_subnet4 then
-      expr_parts[#expr_parts + 1] = "{ @" .. tostring(rule.set_src4) .. ", @" .. tostring(rule.set_subnet4) .. " }"
-    elseif rule.set_src4 then
-      expr_parts[#expr_parts + 1] = "@" .. tostring(rule.set_src4)
-    else
-      expr_parts[#expr_parts + 1] = "@" .. tostring(rule.set_subnet4)
+  if rule.set_src4 or rule.set_subnet4 or rule.set_dst4 then
+    local parts = { }
+    if rule.set_src4 or rule.set_subnet4 then
+      local src_parts = {
+        "ip saddr"
+      }
+      if rule.set_src4 and rule.set_subnet4 then
+        src_parts[#src_parts + 1] = "{ @" .. tostring(rule.set_src4) .. ", @" .. tostring(rule.set_subnet4) .. " }"
+      elseif rule.set_src4 then
+        src_parts[#src_parts + 1] = "@" .. tostring(rule.set_src4)
+      else
+        src_parts[#src_parts + 1] = "@" .. tostring(rule.set_subnet4)
+      end
+      parts[#parts + 1] = table.concat(src_parts, " ")
     end
-    local ipv4_match = table.concat(expr_parts, " ")
-    exprs[#exprs + 1] = table.concat({
-      ipv4_match,
-      base
-    }, " "):gsub("%s+", " ")
+    if rule.set_dst4 then
+      parts[#parts + 1] = "ip daddr @" .. tostring(rule.set_dst4)
+    end
+    if #parts > 0 then
+      local ipv4_match = table.concat(parts, " ")
+      exprs[#exprs + 1] = table.concat({
+        ipv4_match,
+        base
+      }, " "):gsub("%s+", " ")
+    end
   end
-  if rule.set_src6 or rule.set_subnet6 then
-    local expr_parts = {
-      "ip6 saddr"
-    }
-    if rule.set_src6 and rule.set_subnet6 then
-      expr_parts[#expr_parts + 1] = "{ @" .. tostring(rule.set_src6) .. ", @" .. tostring(rule.set_subnet6) .. " }"
-    elseif rule.set_src6 then
-      expr_parts[#expr_parts + 1] = "@" .. tostring(rule.set_src6)
-    else
-      expr_parts[#expr_parts + 1] = "@" .. tostring(rule.set_subnet6)
+  if rule.set_src6 or rule.set_subnet6 or rule.set_dst6 then
+    local parts = { }
+    if rule.set_src6 or rule.set_subnet6 then
+      local src_parts = {
+        "ip6 saddr"
+      }
+      if rule.set_src6 and rule.set_subnet6 then
+        src_parts[#src_parts + 1] = "{ @" .. tostring(rule.set_src6) .. ", @" .. tostring(rule.set_subnet6) .. " }"
+      elseif rule.set_src6 then
+        src_parts[#src_parts + 1] = "@" .. tostring(rule.set_src6)
+      else
+        src_parts[#src_parts + 1] = "@" .. tostring(rule.set_subnet6)
+      end
+      parts[#parts + 1] = table.concat(src_parts, " ")
     end
-    local ipv6_match = table.concat(expr_parts, " ")
-    exprs[#exprs + 1] = table.concat({
-      ipv6_match,
-      base
-    }, " "):gsub("%s+", " ")
+    if rule.set_dst6 then
+      parts[#parts + 1] = "ip6 daddr @" .. tostring(rule.set_dst6)
+    end
+    if #parts > 0 then
+      local ipv6_match = table.concat(parts, " ")
+      exprs[#exprs + 1] = table.concat({
+        ipv6_match,
+        base
+      }, " "):gsub("%s+", " ")
+    end
   end
   if rule.set_dyn_mac6 then
     exprs[#exprs + 1] = ("ether saddr . ip6 daddr @" .. tostring(rule.set_dyn_mac6) .. " " .. tostring(base)):gsub("%s+", " ")
@@ -797,6 +916,16 @@ render = function(plan, indent, include_elements)
     end
     if rule.set_src6 then
       for _, l in ipairs(render_set(rule.set_src6, "ipv6_addr", "interval", rule.source_ipv6, indent, include_elements)) do
+        lines[#lines + 1] = l
+      end
+    end
+    if rule.set_dst4 then
+      for _, l in ipairs(render_set(rule.set_dst4, "ipv4_addr", "interval", rule.dest_ipv4, indent, include_elements)) do
+        lines[#lines + 1] = l
+      end
+    end
+    if rule.set_dst6 then
+      for _, l in ipairs(render_set(rule.set_dst6, "ipv6_addr", "interval", rule.dest_ipv6, indent, include_elements)) do
         lines[#lines + 1] = l
       end
     end

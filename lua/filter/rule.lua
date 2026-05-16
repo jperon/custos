@@ -4,33 +4,34 @@ compile_rule = function(cfg, rule, idx, used_ids)
   if used_ids == nil then
     used_ids = nil
   end
-  local conditions = { }
+  local condition_groups = { }
   local conditions_meta = { }
   local _list_0 = (rule.conditions or { })
   for _index_0 = 1, #_list_0 do
-    local condition = _list_0[_index_0]
-    local name, args = nil, nil
-    if type(condition) == "table" then
-      for _name, _args in pairs(condition) do
-        name, args = _name, _args
+    local condition_table = _list_0[_index_0]
+    if not (type(condition_table) == "table") then
+      error("Condition doit être une table, got " .. tostring(type(condition_table)))
+    end
+    local group = { }
+    local group_meta = { }
+    for name, args in pairs(condition_table) do
+      local cond_factory, err = compiler_api.load_condition(name)
+      if not (cond_factory) then
+        error("Condition inconnue '" .. tostring(name) .. "': " .. tostring(err))
       end
-    else
-      name = condition
+      local cond_obj = cond_factory(cfg)(args)
+      group[#group + 1] = cond_obj.eval
+      group_meta[#group_meta + 1] = {
+        name = name,
+        args = args,
+        capabilities = cond_obj.capabilities,
+        worker_only = compiler_api.compute_worker_only(cond_obj),
+        compile_nft = cond_obj.compile_nft,
+        creates_dynamic_scope = cond_obj.creates_dynamic_scope
+      }
     end
-    local cond_factory, err = compiler_api.load_condition(name)
-    if not (cond_factory) then
-      error("Condition inconnue '" .. tostring(name) .. "': " .. tostring(err))
-    end
-    local cond_obj = cond_factory(cfg)(args)
-    conditions[#conditions + 1] = cond_obj.eval
-    conditions_meta[#conditions_meta + 1] = {
-      name = name,
-      args = args,
-      capabilities = cond_obj.capabilities,
-      worker_only = compiler_api.compute_worker_only(cond_obj),
-      compile_nft = cond_obj.compile_nft,
-      creates_dynamic_scope = cond_obj.creates_dynamic_scope
-    }
+    condition_groups[#condition_groups + 1] = group
+    conditions_meta[#conditions_meta + 1] = group_meta
   end
   local actions = { }
   local actions_meta = { }
@@ -88,12 +89,25 @@ compile_rule = function(cfg, rule, idx, used_ids)
   end
   local eval_fn
   eval_fn = function(req)
-    for _index_0 = 1, #conditions do
-      local cond = conditions[_index_0]
-      local ok, reason = cond(req)
-      if not (ok) then
-        return nil, reason
+    local any_group_passed = false
+    for _index_0 = 1, #condition_groups do
+      local cond_group = condition_groups[_index_0]
+      local group_passed = true
+      for _index_1 = 1, #cond_group do
+        local cond = cond_group[_index_1]
+        local ok, _ = cond(req)
+        if not (ok) then
+          group_passed = false
+          break
+        end
       end
+      if group_passed then
+        any_group_passed = true
+        break
+      end
+    end
+    if not (any_group_passed) then
+      return nil, "No condition group matched"
     end
     local verdict, msg
     for _index_0 = 1, #actions do
