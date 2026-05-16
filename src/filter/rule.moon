@@ -24,29 +24,32 @@ compiler_api = require "filter.compiler_api"
 -- @treturn table metadata Métadonnées pour compilation nft
 compile_rule = (cfg, rule, idx, used_ids=nil) ->
   -- Compilation des conditions avec adaptation API
-  conditions = {}
+  -- Chaque table de conditions est un groupe (ET logique à l'intérieur, OU logique entre groupes)
+  condition_groups = {}
   conditions_meta = {}
-  for condition in *(rule.conditions or {})
-    name, args = nil, nil
-    if type(condition) == "table"
-      for _name, _args in pairs condition
-        name, args = _name, _args
-    else
-      name = condition
-    
-    cond_factory, err = compiler_api.load_condition name
-    error "Condition inconnue '#{name}': #{err}" unless cond_factory
-    
-    cond_obj = cond_factory(cfg)(args)
-    conditions[#conditions + 1] = cond_obj.eval
-    conditions_meta[#conditions_meta + 1] = {
-      name: name
-      args: args
-      capabilities: cond_obj.capabilities
-      worker_only: compiler_api.compute_worker_only(cond_obj)
-      compile_nft: cond_obj.compile_nft
-      creates_dynamic_scope: cond_obj.creates_dynamic_scope
-    }
+  for condition_table in *(rule.conditions or {})
+    unless type(condition_table) == "table"
+      error "Condition doit être une table, got #{type(condition_table)}"
+
+    group = {}
+    group_meta = {}
+    for name, args in pairs condition_table
+      cond_factory, err = compiler_api.load_condition name
+      error "Condition inconnue '#{name}': #{err}" unless cond_factory
+
+      cond_obj = cond_factory(cfg)(args)
+      group[#group + 1] = cond_obj.eval
+      group_meta[#group_meta + 1] = {
+        name: name
+        args: args
+        capabilities: cond_obj.capabilities
+        worker_only: compiler_api.compute_worker_only(cond_obj)
+        compile_nft: cond_obj.compile_nft
+        creates_dynamic_scope: cond_obj.creates_dynamic_scope
+      }
+
+    condition_groups[#condition_groups + 1] = group
+    conditions_meta[#conditions_meta + 1] = group_meta
 
   -- Compilation des actions avec adaptation API
   actions = {}
@@ -100,12 +103,26 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
 
   -- Fonction d'évaluation de la règle
   eval_fn = (req) ->
-    -- Vérifier toutes les conditions (ET logique)
-    for cond in *conditions
-      ok, reason = cond req
-      return nil, reason unless ok
+    -- Chaque table de conditions est un groupe : ET logique à l'intérieur, OU logique entre groupes
+    -- Exemple : { {from_nets: {...}}, {to_net: "..."} } → (from_nets) OR (to_net)
+    -- Exemple : { {from_nets: {...}, to_net: "..."} } → (from_nets AND to_net)
+    any_group_passed = false
+    for cond_group in *condition_groups
+      -- Évaluer toutes les conditions du groupe avec ET logique
+      group_passed = true
+      for cond in cond_group
+        ok, _ = cond req
+        unless ok
+          group_passed = false
+          break
+      if group_passed
+        any_group_passed = true
+        break
 
-    -- Toutes les conditions passées : exécuter les actions
+    unless any_group_passed
+      return nil, "No condition group matched"
+
+    -- Au moins un groupe de conditions passé : exécuter les actions
     local verdict, msg
     for action in *actions
       v, m = action req

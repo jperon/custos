@@ -100,6 +100,44 @@ collect_nets = (cfg, rule) ->
   table.sort v6
   v4, v6
 
+collect_dest_nets = (cfg, rule) ->
+  v4, v6 = {}, {}
+  seen4, seen6 = {}, {}
+  named = cfg.nets or {}
+
+  add_net = (raw) ->
+    return unless raw
+    net = tostring(raw)\match "^%s*(.-)%s*$"
+    return unless net and #net > 0
+    if net\find ":", 1, true
+      append_unique v6, seen6, net
+    else
+      append_unique v4, seen4, net
+
+  add_named = (list_name) ->
+    return unless list_name
+    nets = named[list_name] or {}
+    for _, n in ipairs as_list nets
+      add_net n
+
+  for _, cond in ipairs rule.conditions or {}
+    continue unless type(cond) == "table"
+    for k, args in pairs cond
+      if k == "to_net"
+        add_net args
+      elseif k == "to_nets"
+        for _, n in ipairs as_list args
+          add_net n
+      elseif k == "to_netlist"
+        add_named args
+      elseif k == "to_netlists"
+        for _, list_name in ipairs as_list args
+          add_named list_name
+
+  table.sort v4
+  table.sort v6
+  v4, v6
+
 collect_subnets = (rule) ->
   v4, v6 = {}, {}
   seen4, seen6 = {}, {}
@@ -210,6 +248,7 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
   -- Use metadata rule_id if provided (must match runtime filter decision)
   rid = metadata_rule_id or stable_rule_id rule, idx, used_ids
   src4, src6 = collect_nets cfg, rule
+  dst4, dst6 = collect_dest_nets cfg, rule
   subnet4, subnet6 = collect_subnets rule
   times = collect_times rule
   dns_refs = collect_dns rule
@@ -238,6 +277,8 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
     time_ranges: times
     source_ipv4: src4
     source_ipv6: src6
+    dest_ipv4: dst4
+    dest_ipv6: dst6
     subnet_ipv4: subnet4
     subnet_ipv6: subnet6
     protocols: protos
@@ -247,6 +288,8 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
     requires_auth: requires_auth
     set_src4: #src4 > 0 and "#{chain}_src4" or nil
     set_src6: #src6 > 0 and "#{chain}_src6" or nil
+    set_dst4: #dst4 > 0 and "#{chain}_dst4" or nil
+    set_dst6: #dst6 > 0 and "#{chain}_dst6" or nil
     set_subnet4: #subnet4 > 0 and "#{chain}_subnet4" or nil
     set_subnet6: #subnet6 > 0 and "#{chain}_subnet6" or nil
     set_ports: #ports > 0 and "#{chain}_dports" or nil
@@ -313,11 +356,14 @@ compile = (filter_cfg, rules_metadata=nil) ->
     -- Re-check requires_auth for all rules using enriched metadata
     conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
     if conditions_meta
-      for _, cond_meta in ipairs conditions_meta
-        if cond_meta.name == "from_user" or cond_meta.name == "from_users" or
-           cond_meta.name == "from_userlist" or cond_meta.name == "from_userlists"
-          r.requires_auth = true
-          break
+      -- conditions_meta is now an array of groups (each group is an array of conditions)
+      for _, group_meta in ipairs conditions_meta
+        for _, cond_meta in ipairs group_meta
+          if cond_meta.name == "from_user" or cond_meta.name == "from_users" or
+             cond_meta.name == "from_userlist" or cond_meta.name == "from_userlists"
+            r.requires_auth = true
+            break
+        break if r.requires_auth
 
     -- Set auth set names for rules that require authentication
     if r.requires_auth
@@ -327,19 +373,24 @@ compile = (filter_cfg, rules_metadata=nil) ->
 
     -- Count conditions by backend
     if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions
-      for _, cond in ipairs rules_metadata[idx].conditions
-        if cond.capabilities and cond.capabilities.nft
-          metrics.conditions_compiled += 1
-        else
-          metrics.conditions_worker_only += 1
+      -- conditions is now an array of groups
+      for _, group in ipairs rules_metadata[idx].conditions
+        for _, cond in ipairs group
+          if cond.capabilities and cond.capabilities.nft
+            metrics.conditions_compiled += 1
+          else
+            metrics.conditions_worker_only += 1
 
     -- Determine if rule has at least one nft-compilable condition
     has_nft_cond = false
     if conditions_meta
-      for _, cond_meta in ipairs conditions_meta
-        if cond_meta.capabilities and cond_meta.capabilities.nft
-          has_nft_cond = true
-          break
+      -- conditions_meta is now an array of groups
+      for _, group_meta in ipairs conditions_meta
+        for _, cond_meta in ipairs group_meta
+          if cond_meta.capabilities and cond_meta.capabilities.nft
+            has_nft_cond = true
+            break
+        break if has_nft_cond
 
     -- Include: fully static rule (has nft cond + not worker_only), or needs auth subchains
     if (has_nft_cond and not is_worker_only) or r.requires_auth
@@ -366,7 +417,7 @@ render_set = (name, set_type, flags, elems, indent, include_elements=true) ->
   lines
 
 --- Compile les conditions enrichies en expressions nft.
--- Pour chaque condition qui supporte nft, appelle compile_nft(family).
+-- Pour chaque condition qui supporte nft, appelle compile_nft avec les familles appropriées.
 -- @tparam table conditions_meta Métadonnées des conditions depuis rule.compile_rule
 -- @tparam string family Famille nft ("ip", "ip6", "inet")
 -- @treturn table Liste des expressions nft compilées
@@ -379,11 +430,20 @@ compile_conditions_nft = (conditions_meta, family) ->
     continue unless cond_meta.capabilities
     continue unless cond_meta.capabilities.nft
 
-    -- Call compile_nft on the condition
+    -- Call compile_nft on the condition with appropriate family
     if cond_meta.compile_nft
       expr, err = cond_meta.compile_nft family
       if expr
         exprs[#exprs + 1] = expr
+      else
+        -- If family is "inet", try both "ip" and "ip6"
+        if family == "inet"
+          expr_ip, err_ip = cond_meta.compile_nft "ip"
+          if expr_ip
+            exprs[#exprs + 1] = expr_ip
+          expr_ip6, err_ip6 = cond_meta.compile_nft "ip6"
+          if expr_ip6
+            exprs[#exprs + 1] = expr_ip6
 
   exprs
 
@@ -412,41 +472,62 @@ match_exprs = (rule) ->
 
   -- If enriched metadata available, use compile_conditions_nft
   if rule.conditions_meta
-    compiled_exprs = compile_conditions_nft rule.conditions_meta, "inet"
-    if #compiled_exprs > 0
+    -- conditions_meta is now an array of groups (each group is an array of conditions)
+    -- OR between groups, AND within each group
+    group_exprs = {}
+    for group_meta in *rule.conditions_meta
+      compiled_group_exprs = compile_conditions_nft group_meta, "inet"
+      if #compiled_group_exprs > 0
+        -- AND within group: combine all conditions in the group
+        combined_group = table.concat(compiled_group_exprs, " ")
+        group_exprs[#group_exprs + 1] = combined_group
+
+    if #group_exprs > 0
+      -- OR between groups: create separate expressions for each group
       exprs = {}
-      for _, expr in ipairs compiled_exprs
-        exprs[#exprs + 1] = table.concat({ expr, base }, " ")\gsub "%s+", " "
+      for group_expr in *group_exprs
+        full_expr = table.concat({ group_expr, base }, " ")\gsub "%s+", " "
+        exprs[#exprs + 1] = full_expr
       return exprs
 
   -- Fallback to legacy set-based matching
   exprs = {}
-  
-  -- IPv4: from_net, from_netlist, and from_subnet
-  if rule.set_src4 or rule.set_subnet4
-    expr_parts = { "ip saddr" }
-    if rule.set_src4 and rule.set_subnet4
-      expr_parts[#expr_parts + 1] = "{ @#{rule.set_src4}, @#{rule.set_subnet4} }"
-    elseif rule.set_src4
-      expr_parts[#expr_parts + 1] = "@#{rule.set_src4}"
-    else
-      expr_parts[#expr_parts + 1] = "@#{rule.set_subnet4}"
-    
-    ipv4_match = table.concat(expr_parts, " ")
-    exprs[#exprs + 1] = table.concat({ ipv4_match, base }, " ")\gsub "%s+", " "
-  
-  -- IPv6: from_net, from_netlist, and from_subnet
-  if rule.set_src6 or rule.set_subnet6
-    expr_parts = { "ip6 saddr" }
-    if rule.set_src6 and rule.set_subnet6
-      expr_parts[#expr_parts + 1] = "{ @#{rule.set_src6}, @#{rule.set_subnet6} }"
-    elseif rule.set_src6
-      expr_parts[#expr_parts + 1] = "@#{rule.set_src6}"
-    else
-      expr_parts[#expr_parts + 1] = "@#{rule.set_subnet6}"
-    
-    ipv6_match = table.concat(expr_parts, " ")
-    exprs[#exprs + 1] = table.concat({ ipv6_match, base }, " ")\gsub "%s+", " "
+
+  -- IPv4: combine from_net/from_netlist/from_subnet with to_net/to_netlist
+  if rule.set_src4 or rule.set_subnet4 or rule.set_dst4
+    parts = {}
+    if rule.set_src4 or rule.set_subnet4
+      src_parts = { "ip saddr" }
+      if rule.set_src4 and rule.set_subnet4
+        src_parts[#src_parts + 1] = "{ @#{rule.set_src4}, @#{rule.set_subnet4} }"
+      elseif rule.set_src4
+        src_parts[#src_parts + 1] = "@#{rule.set_src4}"
+      else
+        src_parts[#src_parts + 1] = "@#{rule.set_subnet4}"
+      parts[#parts + 1] = table.concat(src_parts, " ")
+    if rule.set_dst4
+      parts[#parts + 1] = "ip daddr @#{rule.set_dst4}"
+    if #parts > 0
+      ipv4_match = table.concat(parts, " ")
+      exprs[#exprs + 1] = table.concat({ ipv4_match, base }, " ")\gsub "%s+", " "
+
+  -- IPv6: combine from_net/from_netlist/from_subnet with to_net/to_netlist
+  if rule.set_src6 or rule.set_subnet6 or rule.set_dst6
+    parts = {}
+    if rule.set_src6 or rule.set_subnet6
+      src_parts = { "ip6 saddr" }
+      if rule.set_src6 and rule.set_subnet6
+        src_parts[#src_parts + 1] = "{ @#{rule.set_src6}, @#{rule.set_subnet6} }"
+      elseif rule.set_src6
+        src_parts[#src_parts + 1] = "@#{rule.set_src6}"
+      else
+        src_parts[#src_parts + 1] = "@#{rule.set_subnet6}"
+      parts[#parts + 1] = table.concat(src_parts, " ")
+    if rule.set_dst6
+      parts[#parts + 1] = "ip6 daddr @#{rule.set_dst6}"
+    if #parts > 0
+      ipv6_match = table.concat(parts, " ")
+      exprs[#exprs + 1] = table.concat({ ipv6_match, base }, " ")\gsub "%s+", " "
   
   if rule.set_dyn_mac6
     exprs[#exprs + 1] = "ether saddr . ip6 daddr @#{rule.set_dyn_mac6} #{base}"\gsub "%s+", " "
@@ -554,6 +635,12 @@ render = (plan, indent="  ", include_elements=true) ->
         lines[#lines + 1] = l
     if rule.set_src6
       for _, l in ipairs render_set rule.set_src6, "ipv6_addr", "interval", rule.source_ipv6, indent, include_elements
+        lines[#lines + 1] = l
+    if rule.set_dst4
+      for _, l in ipairs render_set rule.set_dst4, "ipv4_addr", "interval", rule.dest_ipv4, indent, include_elements
+        lines[#lines + 1] = l
+    if rule.set_dst6
+      for _, l in ipairs render_set rule.set_dst6, "ipv6_addr", "interval", rule.dest_ipv6, indent, include_elements
         lines[#lines + 1] = l
     if rule.set_subnet4
       for _, l in ipairs render_set rule.set_subnet4, "ipv4_addr", "interval", rule.subnet_ipv4, indent, include_elements
