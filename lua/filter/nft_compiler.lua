@@ -453,6 +453,9 @@ compile = function(filter_cfg, rules_metadata)
     conditions_compiled = 0,
     conditions_worker_only = 0
   }
+  local worker_only_auth_rules = { }
+  local nft_compilable_rules = { }
+  local plan_rules = { }
   for idx, r in ipairs(rules) do
     local verdict
     if r.action == "deny" then
@@ -471,27 +474,66 @@ compile = function(filter_cfg, rules_metadata)
       r.conditions_meta = rules_metadata[idx].conditions
       r.actions_meta = rules_metadata[idx].actions
       r.worker_only = rules_metadata[idx].worker_only
-      if rules_metadata[idx].worker_only then
-        metrics.worker_only = metrics.worker_only + 1
-      else
-        metrics.nft_compilable = metrics.nft_compilable + 1
-      end
-      if rules_metadata[idx].conditions then
-        for _, cond in ipairs(rules_metadata[idx].conditions) do
-          if cond.capabilities and cond.capabilities.nft_static then
-            metrics.conditions_compiled = metrics.conditions_compiled + 1
-          else
-            metrics.conditions_worker_only = metrics.conditions_worker_only + 1
+    end
+    local is_worker_only = r.worker_only or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].worker_only)
+    if is_worker_only then
+      metrics.worker_only = metrics.worker_only + 1
+      local rule_requires_auth = false
+      local conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
+      if conditions_meta then
+        for _, cond_meta in ipairs(conditions_meta) do
+          if cond_meta.name == "from_user" or cond_meta.name == "from_users" or cond_meta.name == "from_userlists" then
+            rule_requires_auth = true
+            break
           end
         end
       end
+      if not (r.requires_auth) then
+        r.requires_auth = rule_requires_auth
+      end
+      if r.requires_auth then
+        if not (r.set_auth_mac) then
+          r.set_auth_mac = tostring(r.rule_id) .. "_auth_mac"
+        end
+        if not (r.set_auth_ip4) then
+          r.set_auth_ip4 = tostring(r.rule_id) .. "_auth_ip4"
+        end
+        if not (r.set_auth_ip6) then
+          r.set_auth_ip6 = tostring(r.rule_id) .. "_auth_ip6"
+        end
+        worker_only_auth_rules[#worker_only_auth_rules + 1] = r
+      end
+    else
+      metrics.nft_compilable = metrics.nft_compilable + 1
+      nft_compilable_rules[#nft_compilable_rules + 1] = r
+    end
+    if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions then
+      for _, cond in ipairs(rules_metadata[idx].conditions) do
+        if cond.capabilities and cond.capabilities.nft_static then
+          metrics.conditions_compiled = metrics.conditions_compiled + 1
+        else
+          metrics.conditions_worker_only = metrics.conditions_worker_only + 1
+        end
+      end
+    end
+  end
+  if #nft_compilable_rules == 0 and #worker_only_auth_rules > 0 then
+    plan_rules = worker_only_auth_rules
+    metrics.nft_compilable = #worker_only_auth_rules
+  else
+    plan_rules = { }
+    for _, r in ipairs(nft_compilable_rules) do
+      plan_rules[#plan_rules + 1] = r
+    end
+    for _, r in ipairs(worker_only_auth_rules) do
+      plan_rules[#plan_rules + 1] = r
     end
   end
   return {
     first_match_wins = first_match_wins,
     dispatch_chain = "cv_rules_dispatch",
     action_vmap = "cv_rule_action_vmap",
-    rules = rules,
+    rules = plan_rules,
     rules_by_id = rules_by_id,
     action_map = action_map,
     rules_metadata = rules_metadata,
@@ -689,24 +731,29 @@ render_rule_chain = function(rule, indent)
     lines[#lines + 1] = tostring(indent) .. "  jump " .. tostring(auth_chain) .. " comment \"check authentication\""
     lines[#lines + 1] = tostring(indent) .. "  meta mark != " .. tostring(auth_mark) .. " return comment \"no auth match\""
   end
-  local all_exprs = { }
-  for _, expr in ipairs(dynamic_match_exprs(rule)) do
-    all_exprs[#all_exprs + 1] = expr
-  end
-  if not (rule.dns_scope) then
-    for _, expr in ipairs(match_exprs(rule)) do
+  if rule.worker_only and rule.requires_auth then
+    lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id) .. " worker-only auth")) .. "\""
+    lines[#lines + 1] = tostring(indent) .. "  return"
+  else
+    local all_exprs = { }
+    for _, expr in ipairs(dynamic_match_exprs(rule)) do
       all_exprs[#all_exprs + 1] = expr
     end
-  end
-  for _, expr in ipairs(all_exprs) do
-    local e = expr:match("^%s*(.-)%s*$")
-    if e and #e > 0 then
-      lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
-    else
-      lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
+    if not (rule.dns_scope) then
+      for _, expr in ipairs(match_exprs(rule)) do
+        all_exprs[#all_exprs + 1] = expr
+      end
     end
+    for _, expr in ipairs(all_exprs) do
+      local e = expr:match("^%s*(.-)%s*$")
+      if e and #e > 0 then
+        lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
+      else
+        lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
+      end
+    end
+    lines[#lines + 1] = tostring(indent) .. "  return"
   end
-  lines[#lines + 1] = tostring(indent) .. "  return"
   lines[#lines + 1] = tostring(indent) .. "}"
   if rule.requires_auth then
     local auth_chain = tostring(rule.chain) .. "_auth"

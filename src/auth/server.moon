@@ -56,6 +56,7 @@ page = =>
 success_page = (auth_cfg, created_at) ->
   interval = tonumber(auth_cfg and auth_cfg.heartbeat_interval) or 30
   interval = 30 if interval <= 0
+  idle_timeout = tonumber(auth_cfg and auth_cfg.idle_timeout) or 90
   session_start = tonumber(created_at) or 0
   page {
     H.p "Connexion réussie. Votre accès est actif tant que cette fenêtre est ouverte."
@@ -63,17 +64,24 @@ success_page = (auth_cfg, created_at) ->
     H.p H.a { href: "/logout" }, "Déconnexion"
     H.script "
       var iv = #{interval} * 1000;
+      var idle = #{idle_timeout} * 1000;
       var sessionStart = #{session_start};
+      var lastSuccess = Date.now();
       function ping(){
         fetch('/ping',{method:'GET',credentials:'omit'})
           .then(function(r){
+            lastSuccess = Date.now();
             if(r.status===401){
               if(document.visibilityState!=='visible')
                 alert('Connexion perdue, veuillez vous authentifier de nouveau.');
               location.href='/';
             }
           })
-          .catch(function(){});
+          .catch(function(){
+            if (Date.now() - lastSuccess > idle) {
+              if (document.visibilityState === 'visible') location.href='/';
+            }
+          });
       }
       function updateTimer(){
         var now = Math.floor(Date.now() / 1000);
