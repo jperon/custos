@@ -4,12 +4,12 @@
 -- Les modules conditions/actions peuvent exposer soit :
 --   • Ancien style : une factory function `(cfg) -> (args) -> checker`
 --   • Nouveau style : un objet/table avec :
---       - capabilities : table des backends supportés { worker, nft_static, nft_dynamic }
+--       - capabilities : table des backends supportés { worker, nft }
 --       - eval         : fonction d'évaluation runtime (checker)
 --       - compile_nft  : fonction de compilation nft (optionnel)
 --       - creates_dynamic_scope : boolean (true si condition DNS)
 --
--- Note: worker_only est DÉDUIT de capabilities.nft_static (pas de champ explicite)
+-- Note: worker_only est DÉDUIT de capabilities.nft (pas de champ explicite)
 
 --- Détecte si un objet est au nouveau style enrichi.
 -- @tparam any obj Objet retourné par la factory après application cfg/args
@@ -21,11 +21,11 @@ is_new_style = (obj) ->
 
 --- Déduit si une condition/action est worker-only de ses capabilities.
 -- @tparam table obj Objet enrichi avec capabilities
--- @treturn boolean true si worker-only (pas de support nft_static)
+-- @treturn boolean true si worker-only (pas de support nft)
 compute_worker_only = (obj) ->
   return true unless type(obj) == "table"
   return true unless obj.capabilities
-  return not obj.capabilities.nft_static
+  return not obj.capabilities.nft
 
 sanitize_ascii = (raw) ->
   return "" unless raw
@@ -102,9 +102,9 @@ load_condition = (name) ->
         return result
       else
         -- Ancien style: result est la fonction checker, on wrappe
-        -- worker_only est déduit de capabilities.nft_static (false ici)
+        -- worker_only est déduit de capabilities.nft (false ici)
         {
-          capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+          capabilities: { worker: true, nft: false }
           eval: result
           compile_nft: -> nil, "unsupported"
         }
@@ -144,7 +144,7 @@ load_action = (name) ->
 -- @treturn table Objet API enrichie
 create_net_condition = (prop, net_cidr) ->
   {
-    capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+    capabilities: { worker: true, nft: true, nft_dynamic: false }
     prop: prop
     net_cidr: net_cidr
     eval: (req) ->

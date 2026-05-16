@@ -16,7 +16,7 @@
       time_conds[#time_conds + 1] = in_time_factory(cfg)(name)
       
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       window_names: window_names
       eval: (req) ->
         for _, time_cond in ipairs time_conds

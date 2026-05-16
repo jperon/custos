@@ -16,7 +16,7 @@ return function(cfg)
     return {
       capabilities = {
         worker = true,
-        nft_static = false,
+        nft = false,
         nft_dynamic = false
       },
       list_names = list_names,

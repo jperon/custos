@@ -4,18 +4,15 @@ return function(cfg)
       return {
         capabilities = {
           worker = true,
-          nft_static = false,
+          nft = false,
           nft_dynamic = false
-        },
-        eval = function(req)
-          return false, "from_vlans requires a table of integers"
-        end
+        }
       }
     end
     return {
       capabilities = {
         worker = true,
-        nft_static = true,
+        nft = true,
         nft_dynamic = false
       },
       vlan_list = vlan_list,

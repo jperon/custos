@@ -79,14 +79,14 @@ lookup = (arr, n, domain) ->
   (listname) ->
     unless cfg.domainlists_dir
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "domainlists_dir non défini"
       }
     
     -- Validation du nom de liste
     if listname\match "^/" or listname\match "%.%." or listname\match "%.bin$"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "Nom de liste invalide: '#{listname}'"
       }
     
@@ -99,14 +99,14 @@ lookup = (arr, n, domain) ->
       arr, n_or_err = load_list base .. ".domains"
     unless arr
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "Cannot load domain list '#{listname}': #{n_or_err}"
       }
 
     n = n_or_err
 
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       listname: listname
       eval: (req) ->
         domain = req.domain

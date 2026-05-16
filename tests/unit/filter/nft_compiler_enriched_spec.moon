@@ -59,7 +59,7 @@ assert_eq #compiled_rules.rules_metadata, 2, "metadata for both rules"
 plan = nft_compiler.compile cfg, compiled_rules.rules_metadata
 assert_eq type(plan), "table", "compile returns plan"
 assert_eq #plan.rules, 2, "plan has two rules"
-assert_eq plan.rules[1].worker_only, true, "rule 1 worker_only (vlan uses _match_int)"
+assert_eq plan.rules[1].worker_only, false, "rule 1 not worker_only (from_vlan is nft-compilable)"
 assert_eq plan.rules[2].worker_only, false, "rule 2 not worker_only (enriched from_net)"
 
 -- Check that conditions_meta are attached
@@ -67,7 +67,7 @@ assert_eq type(plan.rules[2].conditions_meta), "table", "rule 2 has conditions_m
 assert_eq #plan.rules[2].conditions_meta, 1, "one condition meta"
 assert_eq plan.rules[2].conditions_meta[1].name, "from_net", "condition is from_net"
 assert_eq plan.rules[2].conditions_meta[1].worker_only, false, "from_net not worker_only"
-assert_eq plan.rules[2].conditions_meta[1].capabilities.nft_static, true, "from_net supports nft_static"
+assert_eq plan.rules[2].conditions_meta[1].capabilities.nft, true, "from_net supports nft"
 
 -- Test compile_conditions_nft function
 exprs = nft_compiler.compile_conditions_nft plan.rules[2].conditions_meta, "ip"

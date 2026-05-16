@@ -4,7 +4,7 @@ return function(cfg)
       return {
         capabilities = {
           worker = true,
-          nft_static = false,
+          nft = false,
           nft_dynamic = false
         },
         eval = function(req)
@@ -23,7 +23,7 @@ return function(cfg)
     return {
       capabilities = {
         worker = true,
-        nft_static = true,
+        nft = true,
         nft_dynamic = false
       },
       macs = macs,

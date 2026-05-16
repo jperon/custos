@@ -8,7 +8,7 @@
   (macs) ->
     unless type(macs) == "table"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "stolen_computer requires a table of MACs"
       }
     
@@ -20,7 +20,7 @@
       macs_lower[#macs_lower + 1] = mac_lower
     
     {
-      capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+      capabilities: { worker: true, nft: true, nft_dynamic: false }
       macs: macs
       eval: (req) ->
         _mac = req.mac

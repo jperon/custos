@@ -9,7 +9,7 @@ return function(cfg)
       return {
         capabilities = {
           worker = true,
-          nft_static = false,
+          nft = false,
           nft_dynamic = false
         },
         mac_or_alias = mac_or_alias,
@@ -23,7 +23,7 @@ return function(cfg)
       return {
         capabilities = {
           worker = true,
-          nft_static = false,
+          nft = false,
           nft_dynamic = false
         },
         mac_or_alias = mac_or_alias,
@@ -36,7 +36,7 @@ return function(cfg)
     return {
       capabilities = {
         worker = true,
-        nft_static = true,
+        nft = true,
         nft_dynamic = false
       },
       mac_or_alias = mac_or_alias,

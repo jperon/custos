@@ -8,12 +8,11 @@
   (vlan_list) ->
     unless type(vlan_list) == "table"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
-        eval: (req) -> false, "from_vlans requires a table of integers"
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
       }
     
     {
-      capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+      capabilities: { worker: true, nft: true, nft_dynamic: false }
       vlan_list: vlan_list
       eval: (req) ->
         _val = req.vlan

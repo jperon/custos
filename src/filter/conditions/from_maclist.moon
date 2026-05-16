@@ -12,7 +12,7 @@
     macs_lower = [mac\lower! for mac in *raw_macs]
     
     {
-      capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+      capabilities: { worker: true, nft: true, nft_dynamic: false }
       list_name: list_name
       macs: raw_macs
       eval: (req) ->

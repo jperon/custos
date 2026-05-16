@@ -16,7 +16,7 @@ compute_worker_only = function(obj)
   if not (obj.capabilities) then
     return true
   end
-  return not obj.capabilities.nft_static
+  return not obj.capabilities.nft
 end
 local sanitize_ascii
 sanitize_ascii = function(raw)
@@ -322,8 +322,7 @@ load_condition = function(name)
         return {
           capabilities = {
             worker = true,
-            nft_static = false,
-            nft_dynamic = false
+            nft = false
           },
           eval = result,
           compile_nft = function()
@@ -369,7 +368,7 @@ create_net_condition = function(prop, net_cidr)
   return {
     capabilities = {
       worker = true,
-      nft_static = true,
+      nft = true,
       nft_dynamic = false
     },
     prop = prop,

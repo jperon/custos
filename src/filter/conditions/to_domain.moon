@@ -10,20 +10,20 @@
   (domain) ->
     if domain == "_any"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         creates_dynamic_scope: true
         domain: domain
         eval: (req) -> req.domain ~= nil, "domain available"
       }
     if domain == "_none"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         domain: domain
         eval: (req) -> req.domain == nil, "domain not available"
       }
 
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       creates_dynamic_scope: true
       domain: domain
       eval: (req) ->

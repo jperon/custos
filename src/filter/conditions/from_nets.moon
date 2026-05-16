@@ -8,7 +8,7 @@
   (cidrs) ->
     unless type(cidrs) == "table"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "from_nets requires a table of CIDRs"
       }
     
@@ -21,7 +21,7 @@
         nets[#nets + 1] = { :net, :cidr }
     
     {
-      capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+      capabilities: { worker: true, nft: true, nft_dynamic: false }
       cidrs: cidrs
       eval: (req) ->
         ip = req.src_ip

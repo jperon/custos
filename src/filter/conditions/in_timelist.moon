@@ -12,7 +12,7 @@
     window_names = time_lists[list_name]
     unless window_names
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "Time list '#{list_name}' not defined"
       }
 
@@ -21,7 +21,7 @@
       window_conds[#window_conds + 1] = in_time_factory(cfg)(name)
       
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       list_name: list_name
       window_names: window_names
       eval: (req) ->

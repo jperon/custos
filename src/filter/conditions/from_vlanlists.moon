@@ -16,7 +16,7 @@
       list_conds[#list_conds + 1] = _from_vlanlist(cfg)(name)
     
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       lists: lists
       eval: (req) ->
         for _, list_cond in ipairs list_conds

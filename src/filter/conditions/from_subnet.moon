@@ -8,7 +8,7 @@
   (subnet_spec) ->
     unless subnet_spec
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "from_subnet requires a subnet specification"
       }
 
@@ -21,7 +21,7 @@
     
     unless net_cidr
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "Invalid subnet specification"
       }
 
@@ -30,12 +30,12 @@
 
     unless _net
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "Invalid CIDR: #{net_cidr}"
       }
 
     {
-      capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+      capabilities: { worker: true, nft: true, nft_dynamic: false }
       net_cidr: net_cidr
       _net: _net
       eval: (req) ->

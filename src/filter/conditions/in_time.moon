@@ -59,7 +59,7 @@ build_day_bitmask = (days) ->
       window = times[spec]
       unless window
         return {
-          capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+          capabilities: { worker: true, nft: false, nft_dynamic: false }
           eval: (req) -> false, "Time window '#{spec}' not defined"
         }
       start_s, end_s = window[1], window[2]
@@ -72,14 +72,14 @@ build_day_bitmask = (days) ->
       
       unless start_s and end_s
         return {
-          capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+          capabilities: { worker: true, nft: false, nft_dynamic: false }
           eval: (req) -> false, "Inline time spec requires 'start' and 'end'"
         }
       
       day_bitmask = build_day_bitmask days
       unless day_bitmask
         return {
-          capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+          capabilities: { worker: true, nft: false, nft_dynamic: false }
           eval: (req) -> false, "Invalid day names in inline time spec"
         }
       
@@ -90,7 +90,7 @@ build_day_bitmask = (days) ->
       desc_str = "#{start_s}–#{end_s} (#{day_desc})"
     else
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "Time window spec must be string or table"
       }
 
@@ -98,12 +98,12 @@ build_day_bitmask = (days) ->
     end_parsed = parse_time_str end_s
     unless start_parsed and end_parsed
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "Invalid time window format (expected HH:MM)"
       }
 
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       start_parsed: start_parsed
       end_parsed: end_parsed
       day_bitmask: day_bitmask

@@ -286,11 +286,11 @@ compile = (filter_cfg, rules_metadata=nil) ->
     conditions_worker_only: 0
   }
 
-  -- Separate worker-only rules that require authentication
-  -- These need to be compiled to generate auth subchains even though
-  -- their conditions cannot be compiled to nft
-  worker_only_auth_rules = {}
-  nft_compilable_rules = {}
+  -- Build plan_rules in original order.
+  -- A rule is included if it has at least one nft-compilable condition AND is not
+  -- worker-only (fully static), OR if it requires authentication (needs auth subchains).
+  -- Rules with no nft conditions (e.g. catch-all deny) are excluded to avoid
+  -- bypassing QUEUE_CAPTIVE / QUEUE_REJECT in the nft template.
   plan_rules = {}
 
   for idx, r in ipairs rules
@@ -307,50 +307,42 @@ compile = (filter_cfg, rules_metadata=nil) ->
     is_worker_only = r.worker_only or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].worker_only)
     if is_worker_only
       metrics.worker_only += 1
-      -- Re-check requires_auth using enriched metadata
-      -- This is necessary because build_rule only checks raw conditions,
-      -- but some conditions (like from_userlists) might be detected differently
-      -- after enrichment. We need to ensure requires_auth is set correctly
-      -- even for worker-only rules.
-      rule_requires_auth = false
-      conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
-      if conditions_meta
-        for _, cond_meta in ipairs conditions_meta
-          -- Check if condition name is from_user, from_users, or from_userlists
-          -- These conditions indicate that authentication is required
-          if cond_meta.name == "from_user" or cond_meta.name == "from_users" or cond_meta.name == "from_userlists"
-            rule_requires_auth = true
-            break
-      -- Update r.requires_auth if not already set
-      r.requires_auth = rule_requires_auth unless r.requires_auth
-      -- Set auth set names for worker-only auth rules
-      if r.requires_auth
-        r.set_auth_mac = "#{r.rule_id}_auth_mac" unless r.set_auth_mac
-        r.set_auth_ip4 = "#{r.rule_id}_auth_ip4" unless r.set_auth_ip4
-        r.set_auth_ip6 = "#{r.rule_id}_auth_ip6" unless r.set_auth_ip6
-        worker_only_auth_rules[#worker_only_auth_rules + 1] = r
     else
       metrics.nft_compilable += 1
-      nft_compilable_rules[#nft_compilable_rules + 1] = r
+
+    -- Re-check requires_auth for all rules using enriched metadata
+    conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
+    if conditions_meta
+      for _, cond_meta in ipairs conditions_meta
+        if cond_meta.name == "from_user" or cond_meta.name == "from_users" or
+           cond_meta.name == "from_userlist" or cond_meta.name == "from_userlists"
+          r.requires_auth = true
+          break
+
+    -- Set auth set names for rules that require authentication
+    if r.requires_auth
+      r.set_auth_mac = "#{r.rule_id}_auth_mac" unless r.set_auth_mac
+      r.set_auth_ip4 = "#{r.rule_id}_auth_ip4" unless r.set_auth_ip4
+      r.set_auth_ip6 = "#{r.rule_id}_auth_ip6" unless r.set_auth_ip6
 
     -- Count conditions by backend
     if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions
       for _, cond in ipairs rules_metadata[idx].conditions
-        if cond.capabilities and cond.capabilities.nft_static
+        if cond.capabilities and cond.capabilities.nft
           metrics.conditions_compiled += 1
         else
           metrics.conditions_worker_only += 1
 
-  -- If no nft-compilable rules but we have worker-only auth rules, use them
-  if #nft_compilable_rules == 0 and #worker_only_auth_rules > 0
-    plan_rules = worker_only_auth_rules
-    metrics.nft_compilable = #worker_only_auth_rules
-  else
-    -- Combine nft-compilable rules with worker-only auth rules
-    plan_rules = {}
-    for _, r in ipairs nft_compilable_rules
-      plan_rules[#plan_rules + 1] = r
-    for _, r in ipairs worker_only_auth_rules
+    -- Determine if rule has at least one nft-compilable condition
+    has_nft_cond = false
+    if conditions_meta
+      for _, cond_meta in ipairs conditions_meta
+        if cond_meta.capabilities and cond_meta.capabilities.nft
+          has_nft_cond = true
+          break
+
+    -- Include: fully static rule (has nft cond + not worker_only), or needs auth subchains
+    if (has_nft_cond and not is_worker_only) or r.requires_auth
       plan_rules[#plan_rules + 1] = r
 
   {
@@ -374,7 +366,7 @@ render_set = (name, set_type, flags, elems, indent, include_elements=true) ->
   lines
 
 --- Compile les conditions enrichies en expressions nft.
--- Pour chaque condition qui supporte nft_static, appelle compile_nft(family).
+-- Pour chaque condition qui supporte nft, appelle compile_nft(family).
 -- @tparam table conditions_meta Métadonnées des conditions depuis rule.compile_rule
 -- @tparam string family Famille nft ("ip", "ip6", "inet")
 -- @treturn table Liste des expressions nft compilées
@@ -383,9 +375,9 @@ compile_conditions_nft = (conditions_meta, family) ->
 
   exprs = {}
   for _, cond_meta in ipairs conditions_meta
-    -- Skip conditions that are worker-only or don't support nft_static
+    -- Skip conditions that are worker-only or don't support nft
     continue unless cond_meta.capabilities
-    continue unless cond_meta.capabilities.nft_static
+    continue unless cond_meta.capabilities.nft
 
     -- Call compile_nft on the condition
     if cond_meta.compile_nft

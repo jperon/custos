@@ -76,7 +76,7 @@ return function(cfg)
         return {
           capabilities = {
             worker = true,
-            nft_static = false,
+            nft = false,
             nft_dynamic = false
           },
           eval = function(req)
@@ -94,7 +94,7 @@ return function(cfg)
         return {
           capabilities = {
             worker = true,
-            nft_static = false,
+            nft = false,
             nft_dynamic = false
           },
           eval = function(req)
@@ -107,7 +107,7 @@ return function(cfg)
         return {
           capabilities = {
             worker = true,
-            nft_static = false,
+            nft = false,
             nft_dynamic = false
           },
           eval = function(req)
@@ -126,7 +126,7 @@ return function(cfg)
       return {
         capabilities = {
           worker = true,
-          nft_static = false,
+          nft = false,
           nft_dynamic = false
         },
         eval = function(req)
@@ -140,7 +140,7 @@ return function(cfg)
       return {
         capabilities = {
           worker = true,
-          nft_static = false,
+          nft = false,
           nft_dynamic = false
         },
         eval = function(req)
@@ -151,7 +151,7 @@ return function(cfg)
     return {
       capabilities = {
         worker = true,
-        nft_static = false,
+        nft = false,
         nft_dynamic = false
       },
       start_parsed = start_parsed,

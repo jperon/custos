@@ -19,7 +19,7 @@
       list_conds[#list_conds + 1] = _from_userlist_factory(cfg)(name)
     
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       list_names: list_names
       eval: (req) ->
         last_reason = nil

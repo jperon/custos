@@ -13,7 +13,7 @@ compiler_api = require "filter.compiler_api"
   (sub_conditions) ->
     unless type(sub_conditions) == "table" and #sub_conditions > 0
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "any_of requires a non-empty table of conditions"
       }
 
@@ -36,7 +36,7 @@ compiler_api = require "filter.compiler_api"
       has_dynamic_scope = true if cond_obj.creates_dynamic_scope
 
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       creates_dynamic_scope: has_dynamic_scope
       eval: (req) ->
         for _, cond in ipairs compiled

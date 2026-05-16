@@ -39,7 +39,7 @@ cfg_vlan = {
 compiled_vlan = rule.compile_rules cfg_vlan
 plan_vlan = nft_compiler.compile cfg_vlan, compiled_vlan.rules_metadata
 assert_eq plan_vlan.rules[1].worker_only, false, "from_vlan not worker_only"
-assert_eq plan_vlan.rules[1].conditions_meta[1].capabilities.nft_static, true, "from_vlan nft_static"
+assert_eq plan_vlan.rules[1].conditions_meta[1].capabilities.nft, true, "from_vlan nft"
 expr_vlan = plan_vlan.rules[1].conditions_meta[1].compile_nft "inet"
 assert_eq expr_vlan, "vlan id 100", "vlan id expression"
 print "  ✓ from_vlan enriched and compiles to 'vlan id 100'\n"
@@ -91,9 +91,13 @@ cfg_time = {
 }
 compiled_time = rule.compile_rules cfg_time
 plan_time = nft_compiler.compile cfg_time, compiled_time.rules_metadata
-assert_eq plan_time.rules[1].worker_only, true, "in_time worker_only"
-assert_eq plan_time.rules[1].conditions_meta[1].capabilities.nft_static, false, "in_time no nft_static"
-expr_time, err_time = plan_time.rules[1].conditions_meta[1].compile_nft "inet"
+-- in_time has no nft conditions → not included in plan_rules
+assert_eq #plan_time.rules, 0, "in_time not in plan_rules (no nft conditions)"
+-- But the metadata is available via rules_metadata
+assert_eq compiled_time.rules_metadata[1].worker_only, true, "in_time worker_only"
+assert_eq compiled_time.rules_metadata[1].conditions[1].capabilities.nft, false, "in_time no nft"
+cond_obj = compiled_time.rules_metadata[1].conditions[1]
+expr_time, err_time = cond_obj.compile_nft "inet"
 assert_eq expr_time, nil, "in_time compile_nft returns nil"
 assert_eq type(err_time), "string", "in_time returns error"
 print "  ✓ in_time enriched and correctly worker-only\n"
@@ -106,10 +110,12 @@ cfg_domain = {
 }
 compiled_domain = rule.compile_rules cfg_domain
 plan_domain = nft_compiler.compile cfg_domain, compiled_domain.rules_metadata
-assert_eq plan_domain.rules[1].worker_only, true, "to_domain worker_only"
-assert_eq plan_domain.rules[1].conditions_meta[1].creates_dynamic_scope, true, "to_domain creates_dynamic_scope"
-assert_eq plan_domain.rules[1].dns_scope, true, "to_domain sets dns_scope"
-expr_domain, err_domain = plan_domain.rules[1].conditions_meta[1].compile_nft "inet"
+-- to_domain has no nft conditions → not included in plan_rules
+assert_eq #plan_domain.rules, 0, "to_domain not in plan_rules (no nft conditions)"
+-- But the metadata is available via rules_metadata
+assert_eq compiled_domain.rules_metadata[1].worker_only, true, "to_domain worker_only"
+assert_eq compiled_domain.rules_metadata[1].conditions[1].creates_dynamic_scope, true, "to_domain creates_dynamic_scope"
+expr_domain, err_domain = compiled_domain.rules_metadata[1].conditions[1].compile_nft "inet"
 assert_eq expr_domain, nil, "to_domain compile_nft returns nil"
 print "  ✓ to_domain enriched, worker-only with dns_scope\n"
 
@@ -130,12 +136,14 @@ cfg_combined = {
 }
 compiled_combined = rule.compile_rules cfg_combined
 plan_combined = nft_compiler.compile cfg_combined, compiled_combined.rules_metadata
-assert_eq plan_combined.rules[1].worker_only, true, "combined rule worker_only (due to in_time)"
-assert_eq #plan_combined.rules[1].conditions_meta, 2, "two conditions in meta"
+-- Combined rule: has nft condition (from_net) but is worker_only (due to in_time) → not in plan_rules
+assert_eq #plan_combined.rules, 0, "combined rule not in plan_rules (worker_only due to in_time)"
+assert_eq compiled_combined.rules_metadata[1].worker_only, true, "combined rule worker_only (due to in_time)"
+assert_eq #compiled_combined.rules_metadata[1].conditions, 2, "two conditions in meta"
 -- First condition should be compilable
-assert_eq plan_combined.rules[1].conditions_meta[1].capabilities.nft_static, true, "from_net nft_static"
+assert_eq compiled_combined.rules_metadata[1].conditions[1].capabilities.nft, true, "from_net nft"
 -- Second condition should be worker-only
-assert_eq plan_combined.rules[1].conditions_meta[2].capabilities.nft_static, false, "in_time no nft_static"
+assert_eq compiled_combined.rules_metadata[1].conditions[2].capabilities.nft, false, "in_time no nft"
 print "  ✓ Combined rule correctly marked worker-only\n"
 
 print "=== All Migrated Conditions Tests PASSED ==="

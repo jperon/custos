@@ -16,7 +16,7 @@
       domain_conds[#domain_conds + 1] = to_domain_factory(cfg)(d)
     
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       domains: domain_list
       eval: (req) ->
         for _, domain_cond in ipairs domain_conds

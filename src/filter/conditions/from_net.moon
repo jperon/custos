@@ -9,7 +9,7 @@
     -- Gérer les cas spéciaux _any et _none
     if net_cidr == "_any"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         net_cidr: net_cidr
         eval: (req) ->
           ip = req.src_ip
@@ -17,7 +17,7 @@
       }
     if net_cidr == "_none"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         net_cidr: net_cidr
         eval: (req) ->
           ip = req.src_ip
@@ -29,13 +29,13 @@
     _net = Net net_cidr
     unless _net
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         net_cidr: net_cidr
         eval: (req) -> false, "Invalid CIDR: #{net_cidr}"
       }
 
     {
-      capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+      capabilities: { worker: true, nft: true, nft_dynamic: false }
       net_cidr: net_cidr
       _net: _net
       eval: (req) ->

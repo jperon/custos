@@ -47,14 +47,14 @@ safe_get_mac = (ip_str) ->
 
     unless user
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "from_user: no user specified"
       }
 
     -- Source TLS/user_sessions (anciennement from_authenticated_user)
     if source == "tls" or source == "user_sessions"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         user: user
         source: source
         eval: (req) ->
@@ -70,7 +70,7 @@ safe_get_mac = (ip_str) ->
 
     -- Source sessions_file (défaut)
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       user: user
       source: source
       eval: (req) ->

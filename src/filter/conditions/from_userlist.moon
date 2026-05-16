@@ -16,7 +16,7 @@
     
     unless userlist
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) ->
           if req.user and req.user ~= "unknown"
             log_debug {
@@ -34,7 +34,7 @@
       user_conds[#user_conds + 1] = _from_user_factory(cfg)(user)
       
     {
-      capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+      capabilities: { worker: true, nft: false, nft_dynamic: false }
       name: name
       userlist: userlist
       eval: (req) ->

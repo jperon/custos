@@ -3,7 +3,7 @@ return function(cfg)
     return {
       capabilities = {
         worker = true,
-        nft_static = true,
+        nft = true,
         nft_dynamic = false
       },
       vlan_id = vlan_id,

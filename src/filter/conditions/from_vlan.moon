@@ -7,7 +7,7 @@
 (cfg) ->
   (vlan_id) ->
     {
-      capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+      capabilities: { worker: true, nft: true, nft_dynamic: false }
       vlan_id: vlan_id
       eval: (req) ->
         _val = req.vlan

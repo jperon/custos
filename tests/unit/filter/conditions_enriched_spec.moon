@@ -39,7 +39,7 @@ eval_fn, metadata = rule.compile_rule { nft: { ip_timeout: "2m" } }, test_rule_v
 assert_eq #metadata.conditions, 1, "one condition"
 assert_eq metadata.conditions[1].name, "from_vlan", "condition name"
 assert_eq metadata.conditions[1].worker_only, false, "from_vlan not worker_only"
-assert_eq metadata.conditions[1].capabilities.nft_static, true, "from_vlan supports nft_static"
+assert_eq metadata.conditions[1].capabilities.nft, true, "from_vlan supports nft"
 
 -- Test eval
 ok, msg = eval_fn { vlan: 100 }
@@ -76,7 +76,7 @@ eval_fn2, metadata2 = rule.compile_rule { nft: { ip_timeout: "2m" } }, test_rule
 print "metadata2.conditions[1]:", metadata2.conditions[1]
 print "metadata2.conditions[1]._net:", metadata2.conditions[1]._net
 assert_eq metadata2.conditions[1].worker_only, false, "from_net not worker_only"
-assert_eq metadata2.conditions[1].capabilities.nft_static, true, "from_net supports nft_static"
+assert_eq metadata2.conditions[1].capabilities.nft, true, "from_net supports nft"
 
 -- Test eval with debug
 ok3, msg3 = eval_fn2 { src_ip: "192.168.1.100" }
@@ -105,7 +105,7 @@ eval_fn3, metadata3 = rule.compile_rule { nft: { ip_timeout: "2m" }, macs: {} },
 
 -- Check condition metadata
 assert_eq metadata3.conditions[1].worker_only, false, "from_mac not worker_only"
-assert_eq metadata3.conditions[1].capabilities.nft_static, true, "from_mac supports nft_static"
+assert_eq metadata3.conditions[1].capabilities.nft, true, "from_mac supports nft"
 
 -- Test eval
 ok5, _ = eval_fn3 { mac: "AA:BB:CC:DD:EE:FF" }

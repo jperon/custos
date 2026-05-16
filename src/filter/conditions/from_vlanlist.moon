@@ -14,7 +14,7 @@
       vlan_set[v] = true
     
     {
-      capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+      capabilities: { worker: true, nft: true, nft_dynamic: false }
       list_name: list_name
       vlans: vlans
       eval: (req) ->

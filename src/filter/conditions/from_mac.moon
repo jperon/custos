@@ -16,7 +16,7 @@
     -- Cas spéciaux _any et _none
     if mac_or_alias == "_any"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         mac_or_alias: mac_or_alias
         eval: (req) ->
           _mac = req.mac
@@ -24,7 +24,7 @@
       }
     if mac_or_alias == "_none"
       return {
-        capabilities: { worker: true, nft_static: false, nft_dynamic: false }
+        capabilities: { worker: true, nft: false, nft_dynamic: false }
         mac_or_alias: mac_or_alias
         eval: (req) ->
           _mac = req.mac
@@ -33,7 +33,7 @@
 
     -- Cas normal : MAC spécifique
     {
-      capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+      capabilities: { worker: true, nft: true, nft_dynamic: false }
       mac_or_alias: mac_or_alias
       target_mac: target_mac
       eval: (req) ->

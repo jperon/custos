@@ -16,7 +16,7 @@
       compiled[#compiled + 1] = { :net, :cidr } if net
     
     {
-      capabilities: { worker: true, nft_static: true, nft_dynamic: false }
+      capabilities: { worker: true, nft: true, nft_dynamic: false }
       list_name: list_name
       nets: raw_nets
       eval: (req) ->
