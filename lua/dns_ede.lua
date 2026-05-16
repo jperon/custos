@@ -202,6 +202,18 @@ strip_https_rr = function(dns_payload)
     [SVCB] = true
   })
 end
+local strip_a_rr
+strip_a_rr = function(dns_payload)
+  return strip_rrtypes(dns_payload, {
+    [A] = true
+  })
+end
+local strip_aaaa_rr
+strip_aaaa_rr = function(dns_payload)
+  return strip_rrtypes(dns_payload, {
+    [AAAA] = true
+  })
+end
 local clear_ad_bit
 clear_ad_bit = function(dns_payload)
   if not (dns_payload and #dns_payload >= 4) then
@@ -219,6 +231,8 @@ return {
   build_blocked_response = build_blocked_response,
   add_ede_modified = add_ede_modified,
   strip_https_rr = strip_https_rr,
+  strip_a_rr = strip_a_rr,
+  strip_aaaa_rr = strip_aaaa_rr,
   clear_ad_bit = clear_ad_bit,
   EDE_BLOCKED = EDE_BLOCKED,
   EDE_TTL_MODIFIED = EDE_TTL_MODIFIED

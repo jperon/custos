@@ -19,7 +19,7 @@ metrics = require "metrics"
 { :get_l2 } = require "nfq/ethernet"
 packet                   = require "nfq/packet"
 filter                   = require "filter"
-{ :write_msg, :write_refused_msg, :write_dnsonly_msg } = require "ipc"
+{ :write_msg, :write_refused_msg, :write_dnsonly_msg, :write_allow_ip4_msg, :write_allow_ip6_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn, :log_debug, :log_info, :set_action_prefix } = require "log"
 { :user_for_mac } = require "auth.sessions"
@@ -118,7 +118,7 @@ tsv_field = (v) ->
 -- @treturn nil
 write_event = (fields, allowed) ->
   return unless events_wfd
-  decision = if allowed == "dnsonly" then "dnsonly" elseif allowed then "allow" else "block"
+  decision = if allowed == "dnsonly" then "dnsonly" elseif allowed == "allow_ip4" then "allow_ip4" elseif allowed == "allow_ip6" then "allow_ip6" elseif allowed then "allow" else "block"
   line = table.concat({
     tostring os.time!
     decision
@@ -238,6 +238,8 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- Si toutes sont autorisées mais au moins une est "dnsonly", on envoie dnsonly.
   verdict      = NF_ACCEPT
   dnsonly      = false
+  allow_ip4    = false
+  allow_ip6    = false
   block_reason = nil
   allow_reason = nil
   block_rule_id = nil
@@ -278,12 +280,26 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     else
       allowed, reason, rule_id = filter.decide req
       nft_timeout = nil
-    q_fields.reason = reason or (allowed == "dnsonly" and "dnsonly") or (allowed and "allowed") or "denied"
+    q_fields.reason = reason or (allowed == "dnsonly" and "dnsonly") or (allowed == "allow_ip4" and "allow_ip4") or (allowed == "allow_ip6" and "allow_ip6") or (allowed and "allowed") or "denied"
     q_fields.rule = rule_id or ""
     if allowed == "dnsonly"
       log_allow q_fields
       metrics.record_verdict rule_id, "dnsonly" if rule_id
       dnsonly = true
+      allow_reason = reason
+      allow_rule_id = rule_id
+      allow_timeout = nft_timeout
+    elseif allowed == "allow_ip4"
+      log_allow q_fields
+      metrics.record_verdict rule_id, "allow_ip4" if rule_id
+      allow_ip4 = true
+      allow_reason = reason
+      allow_rule_id = rule_id
+      allow_timeout = nft_timeout
+    elseif allowed == "allow_ip6"
+      log_allow q_fields
+      metrics.record_verdict rule_id, "allow_ip6" if rule_id
+      allow_ip6 = true
       allow_reason = reason
       allow_rule_id = rule_id
       allow_timeout = nft_timeout
@@ -303,9 +319,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     write_event q_fields, allowed
 
   -- Enregistre la transaction IPC pour response (toujours NF_ACCEPT — response gère tout).
-  -- Si autorisé   : response patche TTL + injecte EDE "Custos vigilat."
-  -- Si dnsonly    : response patche TTL + EDE mais n'injecte pas les IPs dans nft
-  -- Si refusé     : response transforme la réponse du serveur en REFUSED+EDE Filtered
+  -- Si autorisé     : response patche TTL + injecte EDE "Custos vigilat."
+  -- Si dnsonly      : response patche TTL + EDE mais n'injecte pas les IPs dans nft
+  -- Si allow_ip4    : response strip les AAAA du payload DNS + EDE 4
+  -- Si allow_ip6    : response strip les A du payload DNS + EDE 4
+  -- Si refusé       : response transforme la réponse du serveur en REFUSED+EDE Filtered
   benchmark_ms = get_benchmark_ms!
   allow_timeout = allow_timeout or nft_cfg.ip_timeout
   block_timeout = block_timeout or nft_cfg.ip_timeout
@@ -314,6 +332,10 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   if verdict == NF_ACCEPT
     if dnsonly
       ipc_ok = write_dnsonly_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout
+    elseif allow_ip4
+      ipc_ok = write_allow_ip4_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout
+    elseif allow_ip6
+      ipc_ok = write_allow_ip6_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout
     else
       ipc_ok = write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout
   else

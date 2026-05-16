@@ -32,6 +32,10 @@ MSG_IPV4_REFUSED = 0x52
 MSG_IPV6_REFUSED = 0x72
 MSG_IPV4_DNSONLY = 0x44
 MSG_IPV6_DNSONLY = 0x64
+MSG_IPV4_ALLOW_IP4 = 0x45
+MSG_IPV6_ALLOW_IP4 = 0x34
+MSG_IPV4_ALLOW_IP6 = 0x61
+MSG_IPV6_ALLOW_IP6 = 0x33
 RESOLVER_IPV6_FLAG = 0x80
 
 to_hex = (s) ->
@@ -67,11 +71,15 @@ is_valid_timeout = (t) ->
   return false unless #t > 0 and #t <= 16
   t\match("^%d+[smhdw]?$") ~= nil
 
-msg_type_for = (ipv4, refused, dnsonly) ->
+msg_type_for = (ipv4, refused, dnsonly, allow_ip4, allow_ip6) ->
   if ipv4
+    return MSG_IPV4_ALLOW_IP4 if allow_ip4
+    return MSG_IPV4_ALLOW_IP6 if allow_ip6
     return MSG_IPV4_DNSONLY if dnsonly
     return MSG_IPV4_REFUSED if refused
     return MSG_IPV4
+  return MSG_IPV6_ALLOW_IP4 if allow_ip4
+  return MSG_IPV6_ALLOW_IP6 if allow_ip6
   return MSG_IPV6_DNSONLY if dnsonly
   return MSG_IPV6_REFUSED if refused
   MSG_IPV6
@@ -94,13 +102,13 @@ write_with_retry = (pipe_wfd, msg) ->
   log_warn { action: "ipc_write_failed_exhausted", fd: pipe_wfd, errno: errno, attempts: IPC_WRITE_RETRY_COUNT }
   false
 
-encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly, reason, benchmark_ms, rule_id, timeout) ->
+encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly, allow_ip4, allow_ip6, reason, benchmark_ms, rule_id, timeout) ->
   return nil unless ip_raw and resolver_ip_raw
   return nil unless (#ip_raw == 4 or #ip_raw == 16)
   return nil unless (#resolver_ip_raw == 4 or #resolver_ip_raw == 16)
 
   ipv4 = #ip_raw == 4
-  msg_type = msg_type_for ipv4, not not refused, not not dnsonly
+  msg_type = msg_type_for ipv4, not not refused, not not dnsonly, not not allow_ip4, not not allow_ip6
   msg_type = bit.bor msg_type, RESOLVER_IPV6_FLAG if #resolver_ip_raw == 16
 
   client_ip = ip_raw_to_str ip_raw
@@ -140,17 +148,27 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly
   line
 
 write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, reason, benchmark_ms, rule_id, timeout
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, false, false, reason, benchmark_ms, rule_id, timeout
   return false unless msg
   write_with_retry pipe_wfd, msg
 
 write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false, reason, benchmark_ms, rule_id, timeout
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false, false, false, reason, benchmark_ms, rule_id, timeout
   return false unless msg
   write_with_retry pipe_wfd, msg
 
 write_dnsonly_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true, reason, benchmark_ms, rule_id, timeout
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true, false, false, reason, benchmark_ms, rule_id, timeout
+  return false unless msg
+  write_with_retry pipe_wfd, msg
+
+write_allow_ip4_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, true, false, reason, benchmark_ms, rule_id, timeout
+  return false unless msg
+  write_with_retry pipe_wfd, msg
+
+write_allow_ip6_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, false, true, reason, benchmark_ms, rule_id, timeout
   return false unless msg
   write_with_retry pipe_wfd, msg
 
@@ -188,10 +206,12 @@ decode_msg = (raw) ->
   return nil, "src_port" unless src_port and src_port >= 0 and src_port <= 65535
   benchmark_num = 0 unless benchmark_num and benchmark_num >= 0
 
-  ipv4 = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV4_DNSONLY)
-  return nil, "family" unless ipv4 or msg_type == MSG_IPV6 or msg_type == MSG_IPV6_REFUSED or msg_type == MSG_IPV6_DNSONLY
+  ipv4 = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV4_DNSONLY or msg_type == MSG_IPV4_ALLOW_IP4 or msg_type == MSG_IPV4_ALLOW_IP6)
+  return nil, "family" unless ipv4 or msg_type == MSG_IPV6 or msg_type == MSG_IPV6_REFUSED or msg_type == MSG_IPV6_DNSONLY or msg_type == MSG_IPV6_ALLOW_IP4 or msg_type == MSG_IPV6_ALLOW_IP6
   refused = (msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV6_REFUSED)
   dnsonly = (msg_type == MSG_IPV4_DNSONLY or msg_type == MSG_IPV6_DNSONLY)
+  allow_ip4 = (msg_type == MSG_IPV4_ALLOW_IP4 or msg_type == MSG_IPV6_ALLOW_IP4)
+  allow_ip6 = (msg_type == MSG_IPV4_ALLOW_IP6 or msg_type == MSG_IPV6_ALLOW_IP6)
 
   ip_str = parts[4]
   resolver_ip_str = parts[6]
@@ -221,6 +241,8 @@ decode_msg = (raw) ->
     :ipv4
     :refused
     :dnsonly
+    :allow_ip4
+    :allow_ip6
     :reason
     :benchmark_ms
     :rule_id
@@ -239,6 +261,8 @@ set_pending = (msg, now_fn) ->
     expire: now_fn! + (ipc_cfg.pending_ttl or 5)
     refused: msg.refused
     dnsonly: msg.dnsonly
+    allow_ip4: msg.allow_ip4
+    allow_ip6: msg.allow_ip6
     reason: msg.reason
     benchmark_ms: msg.benchmark_ms
     rule_id: msg.rule_id
@@ -315,6 +339,8 @@ consume = (txid, ip_str, src_port, resolver_ip_str) ->
   :write_msg
   :write_refused_msg
   :write_dnsonly_msg
+  :write_allow_ip4_msg
+  :write_allow_ip6_msg
   :drain_pipe
   :is_pending
   :get_pending_entry
@@ -325,5 +351,9 @@ consume = (txid, ip_str, src_port, resolver_ip_str) ->
   :MSG_IPV6_REFUSED
   :MSG_IPV4_DNSONLY
   :MSG_IPV6_DNSONLY
+  :MSG_IPV4_ALLOW_IP4
+  :MSG_IPV6_ALLOW_IP4
+  :MSG_IPV4_ALLOW_IP6
+  :MSG_IPV6_ALLOW_IP6
   :make_key
 }

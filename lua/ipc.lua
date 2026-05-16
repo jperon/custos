@@ -26,6 +26,10 @@ local MSG_IPV4_REFUSED = 0x52
 local MSG_IPV6_REFUSED = 0x72
 local MSG_IPV4_DNSONLY = 0x44
 local MSG_IPV6_DNSONLY = 0x64
+local MSG_IPV4_ALLOW_IP4 = 0x45
+local MSG_IPV6_ALLOW_IP4 = 0x34
+local MSG_IPV4_ALLOW_IP6 = 0x61
+local MSG_IPV6_ALLOW_IP6 = 0x33
 local RESOLVER_IPV6_FLAG = 0x80
 local to_hex
 to_hex = function(s)
@@ -94,8 +98,14 @@ is_valid_timeout = function(t)
   return t:match("^%d+[smhdw]?$") ~= nil
 end
 local msg_type_for
-msg_type_for = function(ipv4, refused, dnsonly)
+msg_type_for = function(ipv4, refused, dnsonly, allow_ip4, allow_ip6)
   if ipv4 then
+    if allow_ip4 then
+      return MSG_IPV4_ALLOW_IP4
+    end
+    if allow_ip6 then
+      return MSG_IPV4_ALLOW_IP6
+    end
     if dnsonly then
       return MSG_IPV4_DNSONLY
     end
@@ -103,6 +113,12 @@ msg_type_for = function(ipv4, refused, dnsonly)
       return MSG_IPV4_REFUSED
     end
     return MSG_IPV4
+  end
+  if allow_ip4 then
+    return MSG_IPV6_ALLOW_IP4
+  end
+  if allow_ip6 then
+    return MSG_IPV6_ALLOW_IP6
   end
   if dnsonly then
     return MSG_IPV6_DNSONLY
@@ -156,7 +172,7 @@ write_with_retry = function(pipe_wfd, msg)
   return false
 end
 local encode_msg
-encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly, reason, benchmark_ms, rule_id, timeout)
+encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, dnsonly, allow_ip4, allow_ip6, reason, benchmark_ms, rule_id, timeout)
   if not (ip_raw and resolver_ip_raw) then
     return nil
   end
@@ -167,7 +183,7 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
     return nil
   end
   local ipv4 = #ip_raw == 4
-  local msg_type = msg_type_for(ipv4, not not refused, not not dnsonly)
+  local msg_type = msg_type_for(ipv4, not not refused, not not dnsonly, not not allow_ip4, not not allow_ip6)
   if #resolver_ip_raw == 16 then
     msg_type = bit.bor(msg_type, RESOLVER_IPV6_FLAG)
   end
@@ -214,7 +230,7 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
 end
 local write_msg
 write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, reason, benchmark_ms, rule_id, timeout)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, false, false, reason, benchmark_ms, rule_id, timeout)
   if not (msg) then
     return false
   end
@@ -222,7 +238,7 @@ write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw,
 end
 local write_refused_msg
 write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false, reason, benchmark_ms, rule_id, timeout)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, false, false, false, reason, benchmark_ms, rule_id, timeout)
   if not (msg) then
     return false
   end
@@ -230,7 +246,23 @@ write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver
 end
 local write_dnsonly_msg
 write_dnsonly_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true, reason, benchmark_ms, rule_id, timeout)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, true, false, false, reason, benchmark_ms, rule_id, timeout)
+  if not (msg) then
+    return false
+  end
+  return write_with_retry(pipe_wfd, msg)
+end
+local write_allow_ip4_msg
+write_allow_ip4_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, true, false, reason, benchmark_ms, rule_id, timeout)
+  if not (msg) then
+    return false
+  end
+  return write_with_retry(pipe_wfd, msg)
+end
+local write_allow_ip6_msg
+write_allow_ip6_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, false, false, true, reason, benchmark_ms, rule_id, timeout)
   if not (msg) then
     return false
   end
@@ -284,12 +316,14 @@ decode_msg = function(raw)
   if not (benchmark_num and benchmark_num >= 0) then
     benchmark_num = 0
   end
-  local ipv4 = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV4_DNSONLY)
-  if not (ipv4 or msg_type == MSG_IPV6 or msg_type == MSG_IPV6_REFUSED or msg_type == MSG_IPV6_DNSONLY) then
+  local ipv4 = (msg_type == MSG_IPV4 or msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV4_DNSONLY or msg_type == MSG_IPV4_ALLOW_IP4 or msg_type == MSG_IPV4_ALLOW_IP6)
+  if not (ipv4 or msg_type == MSG_IPV6 or msg_type == MSG_IPV6_REFUSED or msg_type == MSG_IPV6_DNSONLY or msg_type == MSG_IPV6_ALLOW_IP4 or msg_type == MSG_IPV6_ALLOW_IP6) then
     return nil, "family"
   end
   local refused = (msg_type == MSG_IPV4_REFUSED or msg_type == MSG_IPV6_REFUSED)
   local dnsonly = (msg_type == MSG_IPV4_DNSONLY or msg_type == MSG_IPV6_DNSONLY)
+  local allow_ip4 = (msg_type == MSG_IPV4_ALLOW_IP4 or msg_type == MSG_IPV6_ALLOW_IP4)
+  local allow_ip6 = (msg_type == MSG_IPV4_ALLOW_IP6 or msg_type == MSG_IPV6_ALLOW_IP6)
   local ip_str = parts[4]
   local resolver_ip_str = parts[6]
   if not ((ipv4 and is_ipv4_str(ip_str)) or ((not ipv4) and is_ipv6_str(ip_str))) then
@@ -330,6 +364,8 @@ decode_msg = function(raw)
     ipv4 = ipv4,
     refused = refused,
     dnsonly = dnsonly,
+    allow_ip4 = allow_ip4,
+    allow_ip6 = allow_ip6,
     reason = reason,
     benchmark_ms = benchmark_ms,
     rule_id = rule_id,
@@ -349,6 +385,8 @@ set_pending = function(msg, now_fn)
     expire = now_fn() + (ipc_cfg.pending_ttl or 5),
     refused = msg.refused,
     dnsonly = msg.dnsonly,
+    allow_ip4 = msg.allow_ip4,
+    allow_ip6 = msg.allow_ip6,
     reason = msg.reason,
     benchmark_ms = msg.benchmark_ms,
     rule_id = msg.rule_id,
@@ -481,6 +519,8 @@ return {
   write_msg = write_msg,
   write_refused_msg = write_refused_msg,
   write_dnsonly_msg = write_dnsonly_msg,
+  write_allow_ip4_msg = write_allow_ip4_msg,
+  write_allow_ip6_msg = write_allow_ip6_msg,
   drain_pipe = drain_pipe,
   is_pending = is_pending,
   get_pending_entry = get_pending_entry,
@@ -491,5 +531,9 @@ return {
   MSG_IPV6_REFUSED = MSG_IPV6_REFUSED,
   MSG_IPV4_DNSONLY = MSG_IPV4_DNSONLY,
   MSG_IPV6_DNSONLY = MSG_IPV6_DNSONLY,
+  MSG_IPV4_ALLOW_IP4 = MSG_IPV4_ALLOW_IP4,
+  MSG_IPV6_ALLOW_IP4 = MSG_IPV6_ALLOW_IP4,
+  MSG_IPV4_ALLOW_IP6 = MSG_IPV4_ALLOW_IP6,
+  MSG_IPV6_ALLOW_IP6 = MSG_IPV6_ALLOW_IP6,
   make_key = make_key
 }

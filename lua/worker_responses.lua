@@ -38,10 +38,10 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now, _obj_0.set_action_prefix
 end
-local build_blocked_response, add_ede_modified, strip_https_rr, clear_ad_bit
+local build_blocked_response, add_ede_modified, strip_https_rr, strip_a_rr, strip_aaaa_rr, clear_ad_bit
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, add_ede_modified, strip_https_rr, clear_ad_bit = _obj_0.build_blocked_response, _obj_0.add_ede_modified, _obj_0.strip_https_rr, _obj_0.clear_ad_bit
+  build_blocked_response, add_ede_modified, strip_https_rr, strip_a_rr, strip_aaaa_rr, clear_ad_bit = _obj_0.build_blocked_response, _obj_0.add_ede_modified, _obj_0.strip_https_rr, _obj_0.strip_a_rr, _obj_0.strip_aaaa_rr, _obj_0.clear_ad_bit
 end
 local bit = require("bit")
 local concat, insert, remove
@@ -321,6 +321,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local refused = entry and entry.refused or false
   local dnsonly = entry and entry.dnsonly or false
+  local allow_ip4 = entry and entry.allow_ip4 or false
+  local allow_ip6 = entry and entry.allow_ip6 or false
   local nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
   local ack_corr = string.format("%04x:%s:%d:%s", txid, pkt.ip.dst_ip, client_port, resolver_ip)
   if refused then
@@ -531,7 +533,26 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     })
   end
   local dns_raw = extract_dns_payload(raw, pkt)
-  local new_dns, payload_modified = patch_modified_dns(dns_raw, entry.reason)
+  local payload_modified = false
+  if allow_ip4 then
+    local stripped = strip_aaaa_rr(dns_raw)
+    if stripped ~= dns_raw then
+      dns_raw = stripped
+      payload_modified = true
+      dns_raw = add_ede_modified(dns_raw, entry.reason) or dns_raw
+      dns_raw = clear_ad_bit(dns_raw)
+    end
+  elseif allow_ip6 then
+    local stripped = strip_a_rr(dns_raw)
+    if stripped ~= dns_raw then
+      dns_raw = stripped
+      payload_modified = true
+      dns_raw = add_ede_modified(dns_raw, entry.reason) or dns_raw
+      dns_raw = clear_ad_bit(dns_raw)
+    end
+  end
+  local new_dns, dns_modified = patch_modified_dns(dns_raw, entry.reason)
+  payload_modified = payload_modified or dns_modified
   local patched = nil
   if payload_modified then
     patched = replace_dns_payload(raw, pkt, new_dns)
@@ -554,6 +575,10 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     action = (function()
       if dnsonly then
         return "response_dnsonly"
+      elseif allow_ip4 then
+        return "response_allow_ip4"
+      elseif allow_ip6 then
+        return "response_allow_ip6"
       elseif payload_modified then
         return "response_patched"
       else
