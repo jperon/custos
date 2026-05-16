@@ -8,19 +8,22 @@
 --- @tparam table cfg Configuration
 -- @treturn function factory (names) → enriched_condition
 (cfg) ->
+  _from_userlist_factory = require "filter.conditions.from_userlist"
   (names) ->
     list_names = names
     unless type(names) == "table"
       list_names = { names }
     
+    list_conds = {}
+    for _, name in ipairs list_names
+      list_conds[#list_conds + 1] = _from_userlist_factory(cfg)(name)
+    
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
       list_names: list_names
       eval: (req) ->
-        _from_userlist = (require "filter.conditions.from_userlist") cfg
         last_reason = nil
-        for _, name in ipairs list_names
-          list_cond = _from_userlist(name)
+        for _, list_cond in ipairs list_conds
           ok, reason = list_cond.eval req
           return true, "In one of: #{table.concat list_names, ', '}" if ok
           last_reason = reason

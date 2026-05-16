@@ -1,25 +1,52 @@
 return function(cfg)
   return function(macs)
-    local _from_mac = require("filter.conditions.from_mac")
-    local checkers
+    if not (type(macs) == "table") then
+      return {
+        capabilities = {
+          worker = true,
+          nft_static = false,
+          nft_dynamic = false
+        },
+        eval = function(req)
+          return false, "from_macs requires a table of MACs"
+        end
+      }
+    end
+    local macs_lower
     do
       local _accum_0 = { }
       local _len_0 = 1
       for _index_0 = 1, #macs do
         local mac = macs[_index_0]
-        _accum_0[_len_0] = (_from_mac(cfg))(mac)
+        _accum_0[_len_0] = mac:lower()
         _len_0 = _len_0 + 1
       end
-      checkers = _accum_0
+      macs_lower = _accum_0
     end
-    return function(req)
-      for _, c in ipairs(checkers) do
-        local ok, msg = c(req)
-        if ok then
-          return ok, msg
+    return {
+      capabilities = {
+        worker = true,
+        nft_static = true,
+        nft_dynamic = false
+      },
+      macs = macs,
+      eval = function(req)
+        local _mac = req.mac
+        if not (_mac) then
+          return false, "mac not available"
         end
+        local _mac_lower = _mac:lower()
+        for _, mac in ipairs(macs_lower) do
+          if _mac_lower == mac then
+            return true, "mac " .. tostring(_mac) .. " matched"
+          end
+        end
+        return false, "mac " .. tostring(_mac) .. " not in list"
+      end,
+      compile_nft = function(family)
+        local mac_str = table.concat(macs_lower, ", ")
+        return "ether saddr { " .. tostring(mac_str) .. " }", nil
       end
-      return false, "Not matched by any MAC"
-    end
+    }
   end
 end

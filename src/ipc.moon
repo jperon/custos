@@ -47,21 +47,16 @@ from_hex = (h) ->
     out[#out + 1] = string.char tonumber(h\sub(i, i + 1), 16)
   table.concat(out), nil
 
+{ :mac2s } = require "ipparse.l2.ethernet"
+{ :ip2s } = require "ipparse.l3.ip"
+
 mac_raw_to_str = (mac_raw) ->
   return "00:00:00:00:00:00" unless mac_raw and #mac_raw == 6
-  string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-    mac_raw\byte(1), mac_raw\byte(2), mac_raw\byte(3),
-    mac_raw\byte(4), mac_raw\byte(5), mac_raw\byte(6)
+  mac2s mac_raw
 
 ip_raw_to_str = (ip_raw) ->
   return nil unless ip_raw and (#ip_raw == 4 or #ip_raw == 16)
-  if #ip_raw == 4
-    return "#{ip_raw\byte(1)}.#{ip_raw\byte(2)}.#{ip_raw\byte(3)}.#{ip_raw\byte(4)}"
-  ip_bytes = ffi.new "uint8_t[16]"
-  for i = 0, 15
-    ip_bytes[i] = ip_raw\byte i + 1
-  libc.inet_ntop AF_INET6, ip_bytes, ipv6_ntop_buf, 46
-  ffi.string ipv6_ntop_buf
+  ip2s ip_raw
 
 is_ipv4_str = (s) -> s and s\match "^%d+%.%d+%.%d+%.%d+$"
 is_ipv6_str = (s) -> s and s\find ":", 1, true

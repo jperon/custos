@@ -8,6 +8,7 @@
 --- @tparam table cfg Configuration
 -- @treturn function factory (name) → enriched_condition
 (cfg) ->
+  _from_user_factory = require "filter.conditions.from_user"
   (name) ->
     userlists_cfg = cfg.userlists or {}
     sessions_file = (cfg.auth and cfg.auth.sessions_file) or "unknown"
@@ -28,15 +29,17 @@
           false, "User list '#{name}' not defined"
       }
     
+    user_conds = {}
+    for user in *userlist
+      user_conds[#user_conds + 1] = _from_user_factory(cfg)(user)
+      
     {
       capabilities: { worker: true, nft_static: false, nft_dynamic: false }
       name: name
       userlist: userlist
       eval: (req) ->
-        _from_user = (require "filter.conditions.from_user") cfg
         last_reason = nil
-        for user in *userlist
-          user_cond = _from_user(user)
+        for _, user_cond in ipairs user_conds
           ok, reason = user_cond.eval req
           return true, "#{req.src_ip} in userlist '#{name}'" if ok
           last_reason = reason

@@ -53,27 +53,23 @@ from_hex = function(h)
   end
   return table.concat(out), nil
 end
+local mac2s
+mac2s = require("ipparse.l2.ethernet").mac2s
+local ip2s
+ip2s = require("ipparse.l3.ip").ip2s
 local mac_raw_to_str
 mac_raw_to_str = function(mac_raw)
   if not (mac_raw and #mac_raw == 6) then
     return "00:00:00:00:00:00"
   end
-  return string.format("%02x:%02x:%02x:%02x:%02x:%02x", mac_raw:byte(1), mac_raw:byte(2), mac_raw:byte(3), mac_raw:byte(4), mac_raw:byte(5), mac_raw:byte(6))
+  return mac2s(mac_raw)
 end
 local ip_raw_to_str
 ip_raw_to_str = function(ip_raw)
   if not (ip_raw and (#ip_raw == 4 or #ip_raw == 16)) then
     return nil
   end
-  if #ip_raw == 4 then
-    return tostring(ip_raw:byte(1)) .. "." .. tostring(ip_raw:byte(2)) .. "." .. tostring(ip_raw:byte(3)) .. "." .. tostring(ip_raw:byte(4))
-  end
-  local ip_bytes = ffi.new("uint8_t[16]")
-  for i = 0, 15 do
-    ip_bytes[i] = ip_raw:byte(i + 1)
-  end
-  libc.inet_ntop(AF_INET6, ip_bytes, ipv6_ntop_buf, 46)
-  return ffi.string(ipv6_ntop_buf)
+  return ip2s(ip_raw)
 end
 local is_ipv4_str
 is_ipv4_str = function(s)

@@ -1,7 +1,19 @@
 return function(cfg)
   return function(rule)
-    return function(req)
-      return true, "Allowed by rule: " .. tostring(rule.description or '?')
-    end
+    return {
+      capabilities = {
+        worker = true,
+        nft = true
+      },
+      eval = function(req)
+        return true, "Allowed by rule: " .. tostring(rule.description or '?')
+      end,
+      compile_nft = function()
+        return "accept", nil
+      end,
+      verdict = function()
+        return "accept"
+      end
+    }
   end
 end

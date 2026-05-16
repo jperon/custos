@@ -1,25 +1,32 @@
 return function(cfg)
+  local _from_user_factory = require("filter.conditions.from_user")
   return function(users)
-    local _from_user = require("filter.conditions.from_user")
-    local checkers
-    do
-      local _accum_0 = { }
-      local _len_0 = 1
-      for _index_0 = 1, #users do
-        local user = users[_index_0]
-        _accum_0[_len_0] = (_from_user(cfg))(user)
-        _len_0 = _len_0 + 1
-      end
-      checkers = _accum_0
+    local user_list = users
+    if not (type(users) == "table") then
+      user_list = {
+        users
+      }
     end
-    return function(req)
-      for _, c in ipairs(checkers) do
-        local ok, msg = c(req)
-        if ok then
-          return ok, msg
+    local user_conds = { }
+    for _, user in ipairs(user_list) do
+      user_conds[#user_conds + 1] = _from_user_factory(cfg)(user)
+    end
+    return {
+      capabilities = {
+        worker = true,
+        nft_static = false,
+        nft_dynamic = false
+      },
+      user_list = user_list,
+      eval = function(req)
+        for _, user_cond in ipairs(user_conds) do
+          local ok, msg = user_cond.eval(req)
+          if ok then
+            return ok, msg
+          end
         end
+        return false, "Not matched by any user"
       end
-      return false, "Not matched by any user"
-    end
+    }
   end
 end

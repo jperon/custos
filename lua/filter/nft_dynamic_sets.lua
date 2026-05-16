@@ -1,16 +1,12 @@
 local config = require("config")
 local create_set_cmd
 create_set_cmd = function(family, table_name, set_name, set_type, flags)
-  local parts = {
-    "add set " .. tostring(family) .. " " .. tostring(table_name) .. " " .. tostring(set_name),
-    "{",
-    "type " .. tostring(set_type)
-  }
+  local base = "add set " .. tostring(family) .. " " .. tostring(table_name) .. " " .. tostring(set_name)
+  local inner = "type " .. tostring(set_type)
   if flags and #flags > 0 then
-    parts[#parts + 1] = "flags " .. tostring(flags)
+    inner = inner .. "; flags " .. tostring(flags)
   end
-  parts[#parts + 1] = "}"
-  return table.concat(parts, " ")
+  return tostring(base) .. " { " .. tostring(inner) .. "; }"
 end
 local collect_rule_sets
 collect_rule_sets = function(plan)
@@ -59,6 +55,34 @@ collect_rule_sets = function(plan)
         type = "inet_service",
         flags = ""
       }
+    end
+    local dynamic_sets = {
+      {
+        name = rule.set_dyn_ip4,
+        type = "ipv4_addr . ipv4_addr",
+        flags = "timeout"
+      },
+      {
+        name = rule.set_dyn_ip6,
+        type = "ipv6_addr . ipv6_addr",
+        flags = "timeout"
+      },
+      {
+        name = rule.set_dyn_mac4,
+        type = "ether_addr . ipv4_addr",
+        flags = "timeout"
+      },
+      {
+        name = rule.set_dyn_mac6,
+        type = "ether_addr . ipv6_addr",
+        flags = "timeout"
+      }
+    }
+    for _, dyn in ipairs(dynamic_sets) do
+      if dyn.name and not sets_seen[dyn.name] then
+        sets_seen[dyn.name] = true
+        sets[#sets + 1] = dyn
+      end
     end
   end
   return sets

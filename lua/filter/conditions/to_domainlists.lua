@@ -1,25 +1,33 @@
 return function(cfg)
+  local to_domainlist_factory = require("filter.conditions.to_domainlist")
   return function(listnames)
-    local _to_domainlist = require("filter.conditions.to_domainlist")
-    local checkers
-    do
-      local _accum_0 = { }
-      local _len_0 = 1
-      for _index_0 = 1, #listnames do
-        local name = listnames[_index_0]
-        _accum_0[_len_0] = (_to_domainlist(cfg))(name)
-        _len_0 = _len_0 + 1
-      end
-      checkers = _accum_0
+    local lists = listnames
+    if not (type(listnames) == "table") then
+      lists = {
+        listnames
+      }
     end
-    return function(req)
-      for _, c in ipairs(checkers) do
-        local ok, msg = c(req)
-        if ok then
-          return ok, msg
+    local list_conds = { }
+    for _, name in ipairs(lists) do
+      list_conds[#list_conds + 1] = to_domainlist_factory(cfg)(name)
+    end
+    return {
+      capabilities = {
+        worker = true,
+        nft_static = false,
+        nft_dynamic = false
+      },
+      lists = lists,
+      eval = function(req)
+        for _, list_cond in ipairs(list_conds) do
+          local ok, msg = list_cond.eval(req)
+          if ok then
+            return ok, msg
+          end
         end
-      end
-      return false, "Domain not in any of: " .. tostring(table.concat(listnames, ', '))
-    end
+        return false, "Domain not in any of: " .. tostring(table.concat(lists, ', '))
+      end,
+      creates_dynamic_scope = true
+    }
   end
 end

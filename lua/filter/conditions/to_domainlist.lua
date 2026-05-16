@@ -63,14 +63,28 @@ end
 return function(cfg)
   return function(listname)
     if not (cfg.domainlists_dir) then
-      return function(req)
-        return false, "domainlists_dir non défini dans la configuration"
-      end
+      return {
+        capabilities = {
+          worker = true,
+          nft_static = false,
+          nft_dynamic = false
+        },
+        eval = function(req)
+          return false, "domainlists_dir non défini"
+        end
+      }
     end
     if listname:match("^/" or listname:match("%.%." or listname:match("%.bin$"))) then
-      return function(req)
-        return false, "Nom de liste invalide: '" .. tostring(listname) .. "'"
-      end
+      return {
+        capabilities = {
+          worker = true,
+          nft_static = false,
+          nft_dynamic = false
+        },
+        eval = function(req)
+          return false, "Nom de liste invalide: '" .. tostring(listname) .. "'"
+        end
+      }
     end
     local base = (cfg.domainlists_dir:gsub("/*$", "")) .. "/" .. listname
     local path = base .. ".bin"
@@ -79,22 +93,37 @@ return function(cfg)
       arr, n_or_err = load_list(base .. ".domains")
     end
     if not (arr) then
-      local msg = "Cannot load domain list '" .. tostring(listname) .. "': " .. tostring(n_or_err)
-      return function(req)
-        return false, msg
-      end
+      return {
+        capabilities = {
+          worker = true,
+          nft_static = false,
+          nft_dynamic = false
+        },
+        eval = function(req)
+          return false, "Cannot load domain list '" .. tostring(listname) .. "': " .. tostring(n_or_err)
+        end
+      }
     end
     local n = n_or_err
-    return function(req)
-      local domain = req.domain
-      if not (domain) then
-        return false, "Missing domain in request"
-      end
-      if lookup(arr, n, domain) then
-        return true, "Domain matched in list '" .. tostring(listname) .. "'"
-      else
-        return false, "Domain not in list '" .. tostring(listname) .. "'"
-      end
-    end
+    return {
+      capabilities = {
+        worker = true,
+        nft_static = false,
+        nft_dynamic = false
+      },
+      listname = listname,
+      eval = function(req)
+        local domain = req.domain
+        if not (domain) then
+          return false, "Missing domain in request"
+        end
+        if lookup(arr, n, domain) then
+          return true, "Domain matched in list '" .. tostring(listname) .. "'"
+        else
+          return false, "Domain not in list '" .. tostring(listname) .. "'"
+        end
+      end,
+      creates_dynamic_scope = true
+    }
   end
 end

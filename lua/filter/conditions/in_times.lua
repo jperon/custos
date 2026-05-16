@@ -1,25 +1,32 @@
 return function(cfg)
+  local in_time_factory = require("filter.conditions.in_time")
   return function(names)
-    local _in_time = require("filter.conditions.in_time")
-    local checkers
-    do
-      local _accum_0 = { }
-      local _len_0 = 1
-      for _index_0 = 1, #names do
-        local name = names[_index_0]
-        _accum_0[_len_0] = (_in_time(cfg))(name)
-        _len_0 = _len_0 + 1
-      end
-      checkers = _accum_0
+    local window_names = names
+    if not (type(names) == "table") then
+      window_names = {
+        names
+      }
     end
-    return function(req)
-      for _, c in ipairs(checkers) do
-        local ok, msg = c(req)
-        if ok then
-          return ok, msg
+    local time_conds = { }
+    for _, name in ipairs(window_names) do
+      time_conds[#time_conds + 1] = in_time_factory(cfg)(name)
+    end
+    return {
+      capabilities = {
+        worker = true,
+        nft_static = false,
+        nft_dynamic = false
+      },
+      window_names = window_names,
+      eval = function(req)
+        for _, time_cond in ipairs(time_conds) do
+          local ok, msg = time_cond.eval(req)
+          if ok then
+            return ok, msg
+          end
         end
+        return false, "Not in any time window: " .. tostring(table.concat(window_names, ', '))
       end
-      return false, "Not in any time window: " .. tostring(table.concat(names, ', '))
-    end
+    }
   end
 end
