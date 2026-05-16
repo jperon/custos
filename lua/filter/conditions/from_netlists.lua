@@ -1,10 +1,15 @@
 return function(cfg)
+  local _from_netlist = require("filter.conditions.from_netlist")
   return function(list_names)
     local lists = list_names
     if not (type(list_names) == "table") then
       lists = {
         list_names
       }
+    end
+    local list_conds = { }
+    for _, name in ipairs(lists) do
+      list_conds[#list_conds + 1] = _from_netlist(cfg)(name)
     end
     return {
       capabilities = {
@@ -14,22 +19,13 @@ return function(cfg)
       },
       lists = lists,
       eval = function(req)
-        local ip = req.src_ip
-        if not (ip) then
-          return false, "src_ip not available"
-        end
-        local Net
-        Net = require("filter.lib.ipcalc").Net
-        for _, list_name in ipairs(lists) do
-          local nets = cfg.nets and cfg.nets[list_name] or { }
-          for _, cidr in ipairs(nets) do
-            local net = Net(cidr)
-            if net and net:contains(ip) then
-              return true, tostring(ip) .. " in " .. tostring(cidr) .. " (" .. tostring(list_name) .. ")"
-            end
+        for _, list_cond in ipairs(list_conds) do
+          local ok, msg = list_cond.eval(req)
+          if ok then
+            return ok, msg
           end
         end
-        return false, tostring(ip) .. " not in any netlist"
+        return false, tostring(req.src_ip or '?') .. " not in any netlist"
       end
     }
   end

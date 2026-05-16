@@ -5,26 +5,30 @@
 --- @tparam table cfg Configuration
 -- @treturn function factory (list_name) → enriched_condition
 (cfg) ->
+  { :Net } = require "filter.lib.ipcalc"
   (list_name) ->
-    nets = cfg.nets and cfg.nets[list_name] or {}
+    raw_nets = cfg.nets and cfg.nets[list_name] or {}
+    
+    -- Pré-compiler les CIDRs à l'init
+    compiled = {}
+    for _, cidr in ipairs raw_nets
+      net = Net cidr
+      compiled[#compiled + 1] = { :net, :cidr } if net
     
     {
       capabilities: { worker: true, nft_static: true, nft_dynamic: false }
       list_name: list_name
-      nets: nets
+      nets: raw_nets
       eval: (req) ->
         ip = req.src_ip
         return false, "src_ip not available" unless ip
-        { :Net } = require "filter.lib.ipcalc"
-        for _, cidr in ipairs nets
-          net = Net cidr
-          if net and net\contains ip
-            return true, "#{ip} in #{cidr} (#{list_name})"
+        for _, entry in ipairs compiled
+          if entry.net\contains ip
+            return true, "#{ip} in #{entry.cidr} (#{list_name})"
         false, "#{ip} not in #{list_name}"
       compile_nft: (family) ->
-        -- Determine if IPv4 or IPv6 based on first entry
         set_name = "nets_#{list_name}"
-        is_ipv6 = nets[1] and nets[1]\find(":")
+        is_ipv6 = raw_nets[1] and raw_nets[1]\find(":")
         if is_ipv6
           return "ip6 saddr @#{set_name}", nil
         else

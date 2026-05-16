@@ -1,10 +1,15 @@
 return function(cfg)
+  local _from_vlanlist = require("filter.conditions.from_vlanlist")
   return function(list_names)
     local lists = list_names
     if not (type(list_names) == "table") then
       lists = {
         list_names
       }
+    end
+    local list_conds = { }
+    for _, name in ipairs(lists) do
+      list_conds[#list_conds + 1] = _from_vlanlist(cfg)(name)
     end
     return {
       capabilities = {
@@ -14,19 +19,13 @@ return function(cfg)
       },
       lists = lists,
       eval = function(req)
-        local _val = req.vlan
-        if not (_val) then
-          return false, "vlan not available"
-        end
-        for _, list_name in ipairs(lists) do
-          local vlans = cfg.vlans and cfg.vlans[list_name] or { }
-          for _, v in ipairs(vlans) do
-            if v == _val then
-              return true, "vlan " .. tostring(_val) .. " in " .. tostring(list_name)
-            end
+        for _, list_cond in ipairs(list_conds) do
+          local ok, msg = list_cond.eval(req)
+          if ok then
+            return ok, msg
           end
         end
-        return false, "vlan " .. tostring(_val) .. " not in any list"
+        return false, "vlan " .. tostring(req.vlan or '?') .. " not in any list"
       end
     }
   end

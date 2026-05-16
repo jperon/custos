@@ -8,6 +8,11 @@
   (list_name) ->
     vlans = cfg.vlans and cfg.vlans[list_name] or {}
     
+    -- Pré-construire un set pour lookup O(1)
+    vlan_set = {}
+    for _, v in ipairs vlans
+      vlan_set[v] = true
+    
     {
       capabilities: { worker: true, nft_static: true, nft_dynamic: false }
       list_name: list_name
@@ -15,11 +20,10 @@
       eval: (req) ->
         _val = req.vlan
         return false, "vlan not available" unless _val
-        for _, v in ipairs vlans
-          return true, "vlan #{_val} in #{list_name}" if v == _val
+        if vlan_set[_val]
+          return true, "vlan #{_val} in #{list_name}"
         false, "vlan #{_val} not in #{list_name}"
       compile_nft: (family) ->
-        -- Build set name for this vlan list
         set_name = "vlans_#{list_name}"
         return "vlan id @#{set_name}", nil
     }

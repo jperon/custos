@@ -1,6 +1,10 @@
 return function(cfg)
   return function(list_name)
     local vlans = cfg.vlans and cfg.vlans[list_name] or { }
+    local vlan_set = { }
+    for _, v in ipairs(vlans) do
+      vlan_set[v] = true
+    end
     return {
       capabilities = {
         worker = true,
@@ -14,10 +18,8 @@ return function(cfg)
         if not (_val) then
           return false, "vlan not available"
         end
-        for _, v in ipairs(vlans) do
-          if v == _val then
-            return true, "vlan " .. tostring(_val) .. " in " .. tostring(list_name)
-          end
+        if vlan_set[_val] then
+          return true, "vlan " .. tostring(_val) .. " in " .. tostring(list_name)
         end
         return false, "vlan " .. tostring(_val) .. " not in " .. tostring(list_name)
       end,
