@@ -286,6 +286,13 @@ compile = (filter_cfg, rules_metadata=nil) ->
     conditions_worker_only: 0
   }
 
+  -- Separate worker-only rules that require authentication
+  -- These need to be compiled to generate auth subchains even though
+  -- their conditions cannot be compiled to nft
+  worker_only_auth_rules = {}
+  nft_compilable_rules = {}
+  plan_rules = {}
+
   for idx, r in ipairs rules
     verdict = if r.action == "deny" then "drop" else "accept"
     action_map[#action_map + 1] = { mark: r.mark, verdict: verdict, rule_id: r.rule_id, action: r.action }
@@ -296,25 +303,61 @@ compile = (filter_cfg, rules_metadata=nil) ->
       r.actions_meta = rules_metadata[idx].actions
       r.worker_only = rules_metadata[idx].worker_only
 
-      -- Track metrics
-      if rules_metadata[idx].worker_only
-        metrics.worker_only += 1
-      else
-        metrics.nft_compilable += 1
+    -- Track metrics
+    is_worker_only = r.worker_only or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].worker_only)
+    if is_worker_only
+      metrics.worker_only += 1
+      -- Re-check requires_auth using enriched metadata
+      -- This is necessary because build_rule only checks raw conditions,
+      -- but some conditions (like from_userlists) might be detected differently
+      -- after enrichment. We need to ensure requires_auth is set correctly
+      -- even for worker-only rules.
+      rule_requires_auth = false
+      conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
+      if conditions_meta
+        for _, cond_meta in ipairs conditions_meta
+          -- Check if condition name is from_user, from_users, or from_userlists
+          -- These conditions indicate that authentication is required
+          if cond_meta.name == "from_user" or cond_meta.name == "from_users" or cond_meta.name == "from_userlists"
+            rule_requires_auth = true
+            break
+      -- Update r.requires_auth if not already set
+      r.requires_auth = rule_requires_auth unless r.requires_auth
+      -- Set auth set names for worker-only auth rules
+      if r.requires_auth
+        r.set_auth_mac = "#{r.rule_id}_auth_mac" unless r.set_auth_mac
+        r.set_auth_ip4 = "#{r.rule_id}_auth_ip4" unless r.set_auth_ip4
+        r.set_auth_ip6 = "#{r.rule_id}_auth_ip6" unless r.set_auth_ip6
+        worker_only_auth_rules[#worker_only_auth_rules + 1] = r
+    else
+      metrics.nft_compilable += 1
+      nft_compilable_rules[#nft_compilable_rules + 1] = r
 
-      -- Count conditions by backend
-      if rules_metadata[idx].conditions
-        for _, cond in ipairs rules_metadata[idx].conditions
-          if cond.capabilities and cond.capabilities.nft_static
-            metrics.conditions_compiled += 1
-          else
-            metrics.conditions_worker_only += 1
+    -- Count conditions by backend
+    if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions
+      for _, cond in ipairs rules_metadata[idx].conditions
+        if cond.capabilities and cond.capabilities.nft_static
+          metrics.conditions_compiled += 1
+        else
+          metrics.conditions_worker_only += 1
+
+  -- If no nft-compilable rules but we have worker-only auth rules, use them
+  if #nft_compilable_rules == 0 and #worker_only_auth_rules > 0
+    plan_rules = worker_only_auth_rules
+    metrics.nft_compilable = #worker_only_auth_rules
+  else
+    -- Combine nft-compilable rules with worker-only auth rules
+    plan_rules = {}
+    for _, r in ipairs nft_compilable_rules
+      plan_rules[#plan_rules + 1] = r
+    for _, r in ipairs worker_only_auth_rules
+      plan_rules[#plan_rules + 1] = r
 
   {
     first_match_wins: first_match_wins
     dispatch_chain: "cv_rules_dispatch"
     action_vmap: "cv_rule_action_vmap"
-    rules: rules
+    rules: plan_rules
     rules_by_id: rules_by_id
     action_map: action_map
     rules_metadata: rules_metadata
@@ -464,21 +507,27 @@ render_rule_chain = (rule, indent) ->
     lines[#lines + 1] = "#{indent}  jump #{auth_chain} comment \"check authentication\""
     lines[#lines + 1] = "#{indent}  meta mark != #{auth_mark} return comment \"no auth match\""
 
-  all_exprs = {}
-  for _, expr in ipairs dynamic_match_exprs rule
-    all_exprs[#all_exprs + 1] = expr
-  unless rule.dns_scope
-    for _, expr in ipairs match_exprs rule
+  -- For worker-only rules, accept traffic after auth check without compiling conditions
+  if rule.worker_only and rule.requires_auth
+    lines[#lines + 1] = "#{indent}  meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id} worker-only auth"}\""
+    lines[#lines + 1] = "#{indent}  return"
+  else
+    all_exprs = {}
+    for _, expr in ipairs dynamic_match_exprs rule
       all_exprs[#all_exprs + 1] = expr
+    unless rule.dns_scope
+      for _, expr in ipairs match_exprs rule
+        all_exprs[#all_exprs + 1] = expr
 
-  for _, expr in ipairs all_exprs
-    e = expr\match "^%s*(.-)%s*$"
-    if e and #e > 0
-      lines[#lines + 1] = "#{indent}  #{e} meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
-    else
-      lines[#lines + 1] = "#{indent}  meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
+    for _, expr in ipairs all_exprs
+      e = expr\match "^%s*(.-)%s*$"
+      if e and #e > 0
+        lines[#lines + 1] = "#{indent}  #{e} meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
+      else
+        lines[#lines + 1] = "#{indent}  meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
 
-  lines[#lines + 1] = "#{indent}  return"
+    lines[#lines + 1] = "#{indent}  return"
+
   lines[#lines + 1] = "#{indent}}"
 
   -- Render auth subchain if requires_auth
