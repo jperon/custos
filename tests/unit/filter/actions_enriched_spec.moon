@@ -97,8 +97,64 @@ assert_eq verdict3, "dnsonly", "dnsonly returns string"
 -- Test compile_nft
 stmt3, err3 = metadata3.actions[1].compile_nft!
 assert_eq stmt3, nil, "dnsonly compile_nft returns nil"
-assert_eq type(err3), "string", "dnsonly compile_nft returns error"
+assert_eq err3, nil, "dnsonly compile_nft returns nil error"
 
 print "OK enriched dnsonly"
+
+print "Testing enriched allow_ip4 action..."
+
+test_rule_allow_ip4 = {
+  description: "Allow IPv4 only test"
+  rule_id: "allow4123"
+  conditions: { { always_true: "test" } }
+  actions: { "allow_ip4" }
+}
+
+eval_fn4, metadata4 = rule.compile_rule { nft: { ip_timeout: "2m" } }, test_rule_allow_ip4, 1
+
+-- Rule is worker_only (action worker_only)
+assert_eq metadata4.worker_only, true, "allow_ip4 rule is worker_only"
+assert_eq metadata4.actions[1].worker_only, true, "allow_ip4 action is worker_only"
+assert_eq metadata4.actions[1].capabilities.nft, false, "allow_ip4 no nft support"
+assert_eq metadata4.actions[1].capabilities.worker, true, "allow_ip4 supports worker"
+
+-- Test eval
+verdict4, _, _, _, _ = eval_fn4 {}
+assert_eq verdict4, "allow_ip4", "allow_ip4 returns string"
+
+-- Test compile_nft
+stmt4, err4 = metadata4.actions[1].compile_nft!
+assert_eq stmt4, nil, "allow_ip4 compile_nft returns nil"
+assert_eq err4, nil, "allow_ip4 compile_nft returns nil error"
+
+print "OK enriched allow_ip4"
+
+print "Testing enriched allow_ip6 action..."
+
+test_rule_allow_ip6 = {
+  description: "Allow IPv6 only test"
+  rule_id: "allow6456"
+  conditions: { { always_true: "test" } }
+  actions: { "allow_ip6" }
+}
+
+eval_fn5, metadata5 = rule.compile_rule { nft: { ip_timeout: "2m" } }, test_rule_allow_ip6, 1
+
+-- Rule is worker_only (action worker_only)
+assert_eq metadata5.worker_only, true, "allow_ip6 rule is worker_only"
+assert_eq metadata5.actions[1].worker_only, true, "allow_ip6 action is worker_only"
+assert_eq metadata5.actions[1].capabilities.nft, false, "allow_ip6 no nft support"
+assert_eq metadata5.actions[1].capabilities.worker, true, "allow_ip6 supports worker"
+
+-- Test eval
+verdict5, _, _, _, _ = eval_fn5 {}
+assert_eq verdict5, "allow_ip6", "allow_ip6 returns string"
+
+-- Test compile_nft
+stmt5, err5 = metadata5.actions[1].compile_nft!
+assert_eq stmt5, nil, "allow_ip6 compile_nft returns nil"
+assert_eq err5, nil, "allow_ip6 compile_nft returns nil error"
+
+print "OK enriched allow_ip6"
 
 print "\nOK all enriched actions tests passed"

@@ -202,7 +202,94 @@ describe "ipc", ->
       assert.is_not_nil entry
       assert.is_true  entry.dnsonly
       assert.is_false entry.refused
+      close_pipe p
 
+  -- ── 12. encode_msg allow_ip4=true IPv4 → MSG_IPV4_ALLOW_IP4 (0x45) ────────
+  describe "MSG_IPV4_ALLOW_IP4", ->
+    it "msg_type == 0x45 et allow_ip4 == true", ->
+      m_ipc   = fresh_ipc!
+      msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, false, true, false
+      decoded = m_ipc.decode_msg msg
+
+      assert.equals 0x45, decoded.msg_type
+      assert.is_true  decoded.allow_ip4
+      assert.is_false decoded.allow_ip6
+      assert.is_false decoded.refused
+      assert.is_false decoded.dnsonly
+
+  -- ── 13. encode_msg allow_ip4=true IPv6 → MSG_IPV6_ALLOW_IP4 (0x34) ────────
+  describe "MSG_IPV6_ALLOW_IP4", ->
+    it "msg_type == 0x34 et allow_ip4 == true pour IPv6", ->
+      m_ipc   = fresh_ipc!
+      msg     = m_ipc.encode_msg 0xABCD, IP6_RAW, 5353,
+                  "\x00\x11\x22\x33\x44\x55", RESOLVER6_RAW, false, false, true, false
+      decoded = m_ipc.decode_msg msg
+
+      assert.equals 0x34, decoded.msg_type
+      assert.is_true  decoded.allow_ip4
+      assert.is_false decoded.allow_ip6
+      assert.is_false decoded.ipv4
+
+  -- ── 14. encode_msg allow_ip6=true IPv4 → MSG_IPV4_ALLOW_IP6 (0x61) ────────
+  describe "MSG_IPV4_ALLOW_IP6", ->
+    it "msg_type == 0x61 et allow_ip6 == true", ->
+      m_ipc   = fresh_ipc!
+      msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, false, false, true
+      decoded = m_ipc.decode_msg msg
+
+      assert.equals 0x61, decoded.msg_type
+      assert.is_true  decoded.allow_ip6
+      assert.is_false decoded.allow_ip4
+      assert.is_false decoded.refused
+      assert.is_false decoded.dnsonly
+
+  -- ── 15. encode_msg allow_ip6=true IPv6 → MSG_IPV6_ALLOW_IP6 (0x33) ────────
+  describe "MSG_IPV6_ALLOW_IP6", ->
+    it "msg_type == 0x33 et allow_ip6 == true pour IPv6", ->
+      m_ipc   = fresh_ipc!
+      msg     = m_ipc.encode_msg 0xABCD, IP6_RAW, 5353,
+                  "\x00\x11\x22\x33\x44\x55", RESOLVER6_RAW, false, false, false, true
+      decoded = m_ipc.decode_msg msg
+
+      assert.equals 0x33, decoded.msg_type
+      assert.is_true  decoded.allow_ip6
+      assert.is_false decoded.allow_ip4
+      assert.is_false decoded.ipv4
+
+  -- ── 16. write_allow_ip4_msg + drain_pipe → entry.allow_ip4 = true ─────────
+  describe "write_allow_ip4_msg via pipe", ->
+    it "drain_pipe stocke un entry avec allow_ip4=true", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      m_ipc.write_allow_ip4_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      m_ipc.drain_pipe rfd, (-> 0), nil
+
+      entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
+      assert.is_not_nil entry
+      assert.is_true  entry.allow_ip4
+      assert.is_false entry.allow_ip6
+      assert.is_false entry.dnsonly
+      assert.is_false entry.refused
+      close_pipe p
+
+  -- ── 17. write_allow_ip6_msg + drain_pipe → entry.allow_ip6 = true ─────────
+  describe "write_allow_ip6_msg via pipe", ->
+    it "drain_pipe stocke un entry avec allow_ip6=true", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      m_ipc.write_allow_ip6_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      m_ipc.drain_pipe rfd, (-> 0), nil
+
+      entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
+      assert.is_not_nil entry
+      assert.is_true  entry.allow_ip6
+      assert.is_false entry.allow_ip4
+      assert.is_false entry.dnsonly
+      assert.is_false entry.refused
       close_pipe p
 
   -- ── 12. write_refused_msg + drain_pipe → entry.refused = true ─────────

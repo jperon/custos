@@ -1,7 +1,9 @@
 -- tests/unit/dns_ede_spec.moon
 -- Tests unitaires des helpers DNS EDE.
 
-{ :strip_https_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
+package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
+
+{ :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
 dns_mod = require "ipparse.l7.dns"
 pack: sp = require "ipparse.lib.pack_compat"
 bit = require "bit"
@@ -107,3 +109,69 @@ describe "dns_ede.clear_ad_bit", ->
 
     cleared = clear_ad_bit raw
     assert.equals raw, cleared
+
+describe "dns_ede.strip_a_rr", ->
+  it "retire les RR A (IPv4) de la section answers", ->
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    answer_a1 = pack_rr QTYPE_A, string.char(1, 2, 3, 4)
+    answer_a2 = pack_rr QTYPE_A, string.char(5, 6, 7, 8)
+    header = sp(">H H H H H H", 0x1234, 0x8180, 1, 2, 0, 0)
+    raw = header .. question .. answer_a1 .. answer_a2
+
+    stripped = strip_a_rr raw
+    parsed_after = dns_mod.parse stripped, 1, false
+    assert.is_not_nil parsed_after
+    assert.equals 0, #parsed_after.answers
+
+  it "retire seulement les RR A, conserve les autres types", ->
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    answer_a = pack_rr QTYPE_A, string.char(1, 2, 3, 4)
+    answer_aaaa = pack_rr dns_mod.types.AAAA, string.char(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1)
+    header = sp(">H H H H H H", 0x2345, 0x8180, 1, 2, 0, 0)
+    raw = header .. question .. answer_a .. answer_aaaa
+
+    stripped = strip_a_rr raw
+    parsed_after = dns_mod.parse stripped, 1, false
+    assert.is_not_nil parsed_after
+    assert.equals 1, #parsed_after.answers
+    assert.equals dns_mod.types.AAAA, parsed_after.answers[1].rtype
+
+  it "laisse inchangé un payload sans RR A", ->
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    answer_aaaa = pack_rr dns_mod.types.AAAA, string.char(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1)
+    header = sp(">H H H H H H", 0x4321, 0x8180, 1, 1, 0, 0)
+    raw = header .. question .. answer_aaaa
+    assert.equals raw, strip_a_rr(raw)
+
+describe "dns_ede.strip_aaaa_rr", ->
+  it "retire les RR AAAA (IPv6) de la section answers", ->
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    answer_aaaa1 = pack_rr dns_mod.types.AAAA, string.char(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1)
+    answer_aaaa2 = pack_rr dns_mod.types.AAAA, string.char(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2)
+    header = sp(">H H H H H H", 0x1234, 0x8180, 1, 2, 0, 0)
+    raw = header .. question .. answer_aaaa1 .. answer_aaaa2
+
+    stripped = strip_aaaa_rr raw
+    parsed_after = dns_mod.parse stripped, 1, false
+    assert.is_not_nil parsed_after
+    assert.equals 0, #parsed_after.answers
+
+  it "retire seulement les RR AAAA, conserve les autres types", ->
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    answer_a = pack_rr QTYPE_A, string.char(1, 2, 3, 4)
+    answer_aaaa = pack_rr dns_mod.types.AAAA, string.char(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1)
+    header = sp(">H H H H H H", 0x2345, 0x8180, 1, 2, 0, 0)
+    raw = header .. question .. answer_a .. answer_aaaa
+
+    stripped = strip_aaaa_rr raw
+    parsed_after = dns_mod.parse stripped, 1, false
+    assert.is_not_nil parsed_after
+    assert.equals 1, #parsed_after.answers
+    assert.equals QTYPE_A, parsed_after.answers[1].rtype
+
+  it "laisse inchangé un payload sans RR AAAA", ->
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    answer_a = pack_rr QTYPE_A, string.char(1, 2, 3, 4)
+    header = sp(">H H H H H H", 0x4321, 0x8180, 1, 1, 0, 0)
+    raw = header .. question .. answer_a
+    assert.equals raw, strip_aaaa_rr(raw)

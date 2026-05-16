@@ -189,6 +189,22 @@ strip_https_rr = (dns_payload) ->
     [SVCB]: true
   }
 
+--- Strip all A (IPv4) resource records from a DNS response payload.
+-- Uses strip_rrtypes to remove A records from the raw DNS payload.
+-- Returns the original payload unchanged if no A records were removed.
+-- @tparam string dns_payload Raw DNS payload bytes.
+-- @treturn string Modified (or original) DNS payload.
+strip_a_rr = (dns_payload) ->
+  strip_rrtypes dns_payload, { [A]: true }
+
+--- Strip all AAAA (IPv6) resource records from a DNS response payload.
+-- Uses strip_rrtypes to remove AAAA records from the raw DNS payload.
+-- Returns the original payload unchanged if no AAAA records were removed.
+-- @tparam string dns_payload Raw DNS payload bytes.
+-- @treturn string Modified (or original) DNS payload.
+strip_aaaa_rr = (dns_payload) ->
+  strip_rrtypes dns_payload, { [AAAA]: true }
+
 --- Clear the AD (Authenticated Data) bit in a DNS response.
 -- This is used when HTTPS/SVCB records are stripped, as the signature
 -- becomes invalid and the response is no longer authenticated.
@@ -210,4 +226,4 @@ clear_ad_bit = (dns_payload) ->
   -- Reconstruct DNS payload with cleared AD bit
   dns_payload\sub(1, 2) .. string.char(bit.rshift(flags_new, 8)) .. string.char(bit.band(flags_new, 0xFF)) .. dns_payload\sub(5)
 
-{ :add_ede, :build_blocked_response, :add_ede_modified, :strip_https_rr, :clear_ad_bit, :EDE_BLOCKED, :EDE_TTL_MODIFIED }
+{ :add_ede, :build_blocked_response, :add_ede_modified, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :EDE_BLOCKED, :EDE_TTL_MODIFIED }

@@ -33,7 +33,7 @@ packet = require "nfq/packet"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :now, :set_action_prefix } = require "log"
-{ :build_blocked_response, :add_ede_modified, :strip_https_rr, :clear_ad_bit } = require "dns_ede"
+{ :build_blocked_response, :add_ede_modified, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit } = require "dns_ede"
 bit = require "bit"
 :concat, :insert, :remove = table
 
@@ -312,6 +312,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   refused = entry and entry.refused or false
   dnsonly = entry and entry.dnsonly or false
+  allow_ip4 = entry and entry.allow_ip4 or false
+  allow_ip6 = entry and entry.allow_ip6 or false
   nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
   ack_corr = string.format "%04x:%s:%d:%s", txid, pkt.ip.dst_ip, client_port, resolver_ip
 
@@ -442,10 +444,29 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- ── Patch conditionnel + EDE + checksums (IPv4 et IPv6) ───────
   -- 1. Extraire le payload DNS brut
   -- 2. Appliquer les modifications DNS explicites (ex: strip HTTPS/SVCB)
-  -- 3. Injecter EDE code 4 seulement si la réponse a été modifiée
-  -- 4. Reconstruire le paquet IP complet uniquement si payload modifié
+  -- 3. Strip A ou AAAA selon allow_ip4 / allow_ip6
+  -- 4. Injecter EDE code 4 seulement si la réponse a été modifiée
+  -- 5. Reconstruire le paquet IP complet uniquement si payload modifié
   dns_raw = extract_dns_payload raw, pkt
-  new_dns, payload_modified = patch_modified_dns dns_raw, entry.reason
+  payload_modified = false
+
+  if allow_ip4
+    stripped = strip_aaaa_rr(dns_raw)
+    if stripped != dns_raw
+      dns_raw = stripped
+      payload_modified = true
+      dns_raw = add_ede_modified(dns_raw, entry.reason) or dns_raw
+      dns_raw = clear_ad_bit(dns_raw)
+  elseif allow_ip6
+    stripped = strip_a_rr(dns_raw)
+    if stripped != dns_raw
+      dns_raw = stripped
+      payload_modified = true
+      dns_raw = add_ede_modified(dns_raw, entry.reason) or dns_raw
+      dns_raw = clear_ad_bit(dns_raw)
+
+  new_dns, dns_modified = patch_modified_dns dns_raw, entry.reason
+  payload_modified = payload_modified or dns_modified
   patched = nil
   if payload_modified
     patched = replace_dns_payload raw, pkt, new_dns
@@ -454,7 +475,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- Log de la réponse
   qnames = table.concat [q.qname for q in *pkt.questions], ","
   log_debug {
-    action:      if dnsonly then "response_dnsonly" elseif payload_modified then "response_patched" else "response_allow"
+    action:      if dnsonly then "response_dnsonly" elseif allow_ip4 then "response_allow_ip4" elseif allow_ip6 then "response_allow_ip6" elseif payload_modified then "response_patched" else "response_allow"
     src_ip:      pkt.ip.src_ip
     dst_ip:      pkt.ip.dst_ip
     vlan:        l2.vlan
