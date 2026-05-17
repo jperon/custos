@@ -43,7 +43,6 @@ set_process_name "custos"
 bit = require "bit"
 config = require "config"
 filter = require "filter"
-nft_rules = require "nft_rules"
 nft_extra = require "nft_extra_rules"
 
 -- ── Helpers POSIX ────────────────────────────────────────────────
@@ -227,7 +226,8 @@ supervise = (pipes, sfd) ->
     interfaces: table.concat(bridge_slaves, ",")
   }
 
-  workers = {
+  -- Workers WITHOUT filter data (forked first)
+  workers_without_filter = {
     {
       name: "mac-lrn"
       pid: nil
@@ -253,17 +253,8 @@ supervise = (pipes, sfd) ->
     next_widx += 1
     { rfd: p.rfd, worker_idx: widx }
 
-  table.insert workers, {
-    name: "nft"
-    pid: nil
-    -- La restart_fn capture ack_wfds par référence ; si worker_nft redémarre,
-    -- il reçoit le même tableau (les pipes ACK restent ouverts).
-    restart_fn: -> fork_worker "nft",
-      (args) -> require("worker_nft").run args.rfd, args.ack_wfds,
-      { rfd: pipes.nft.rfd, ack_wfds: ack_wfds }
-  }
 
-  table.insert workers, {
+  table.insert workers_without_filter, {
       name: "events"
       pid: nil
       restart_fn: -> fork_worker "events",
@@ -275,7 +266,7 @@ supervise = (pipes, sfd) ->
 
   -- Worker passif ARP/NDP : apprend les associations IP→MAC pour tous les VLANs
   -- en sniffant les trames ARP et les messages NDP NS/NA sur le bridge.
-  table.insert workers, {
+  table.insert workers_without_filter, {
     name: "arp"
     pid: nil
     restart_fn: -> fork_worker "arp",
@@ -286,7 +277,7 @@ supervise = (pipes, sfd) ->
   -- Worker NFQUEUE hybride pour l'authentification
   -- Écrit dans le pipe 'learn' pour alimenter le mac_learner
   auth_queue_num = tonumber(config.nfqueue.auth) or 5
-  table.insert workers, {
+  table.insert workers_without_filter, {
     name: "auth-q"
     pid: nil
     restart_fn: -> fork_worker "auth-q",
@@ -294,21 +285,11 @@ supervise = (pipes, sfd) ->
       pipes.learn.wfd
   }
 
-  -- Multiple workers for questions (parallel question)
-  for i, q_num in ipairs questions_queues
-    table.insert workers, {
-      name: "dns-q#{q_num}"
-      pid: nil
-      restart_fn: -> fork_worker "dns-q#{q_num}",
-        ((fds) -> require("worker_questions").run q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd, filter_data),
-        { question_response_wfd: pipes.question_response.wfd, learn_wfd: pipes.learn.wfd, events_wfd: pipes.events.wfd, filter_data: filter_data }
-    }
-
   -- Multiple workers for responses (parallel response)
   -- Chaque worker_responses reçoit un pipe ACK dédié pour la synchronisation nft.
   for i, q_num in ipairs responses_queues
     ack_info = alloc_ack_pipe!
-    table.insert workers, {
+    table.insert workers_without_filter, {
       name: "resp-q#{q_num}"
       pid: nil
       restart_fn: -> fork_worker "resp-q#{q_num}",
@@ -319,7 +300,7 @@ supervise = (pipes, sfd) ->
 
   -- Multiple workers for captive (parallel captive)
   for i, q_num in ipairs captive_queues
-    table.insert workers, {
+    table.insert workers_without_filter, {
       name: "cap-q#{q_num}"
       pid: nil
       restart_fn: -> fork_worker "cap-q#{q_num}",
@@ -329,7 +310,7 @@ supervise = (pipes, sfd) ->
 
   -- Multiple workers for reject (parallel reject)
   for i, q_num in ipairs reject_queues
-    table.insert workers, {
+    table.insert workers_without_filter, {
       name: "rej-q#{q_num}"
       pid: nil
       restart_fn: -> fork_worker "rej-q#{q_num}",
@@ -337,24 +318,12 @@ supervise = (pipes, sfd) ->
         auth_cfg
     }
 
-  -- SNI logger for TLS/QUIC (single, optional).
-  -- Captures TCP/443 SYN (TLS ClientHello) and UDP/443 (QUIC Initial) packets.
-  sni_queue_num = tonumber(config.nfqueue.sni_log) or 6
-  if config.nfqueue.sni_log
-    table.insert workers, {
-      name: "tls-log"
-      pid: nil
-      restart_fn: -> fork_worker "tls-log",
-        (fds) -> require("worker_tls").run tonumber(fds.q_num), fds.events_wfd, filter_data,
-        { q_num: sni_queue_num, events_wfd: pipes.events.wfd, filter_data: filter_data }
-    }
-
   -- SIP/STUN worker (single, optional).
   -- Whitelists proxy IPs and SDP media IPs in per-rule sets.
   if config.nfqueue.sip
     sip_queue_num = tonumber(config.nfqueue.sip) or 12
     sip_ack_info  = alloc_ack_pipe!
-    table.insert workers, {
+    table.insert workers_without_filter, {
       name: "sip"
       pid: nil
       restart_fn: -> fork_worker "sip",
@@ -365,7 +334,7 @@ supervise = (pipes, sfd) ->
 
   -- AUTH (single).
   -- Utilise mac_learner_ipc (get_mac) pour obtenir la MAC de manière fiable.
-  table.insert workers, {
+  table.insert workers_without_filter, {
     name: "auth"
     pid: nil
     restart_fn: -> fork_worker "auth",
@@ -373,26 +342,20 @@ supervise = (pipes, sfd) ->
       auth_cfg
   }
 
-  -- DoH worker (single, optional). Only forked when DOH_ENABLED == "1".
-  doh_cfg = load_doh_cfg!
-  if doh_cfg.enabled
-    doh_cfg.nft_wfd = pipes.nft.wfd
-    -- Allouer un pipe ACK dédié au worker DoH.
-    doh_ack_info     = alloc_ack_pipe!
-    doh_cfg.ack_rfd    = doh_ack_info.rfd
-    doh_cfg.worker_idx = doh_ack_info.worker_idx
-    table.insert workers, {
-      name: "doh"
-      pid: nil
-      restart_fn: -> fork_worker "doh",
-        (cfg) -> require("worker_doh").run cfg, filter_data,
-        { cfg: doh_cfg, filter_data: filter_data }
-    }
+  -- Fork workers WITHOUT filter data first (they won't have filter lists in memory)
+  for w in *workers_without_filter
+    w.pid = w.restart_fn!
 
   -- Apply main nftables ruleset (with queue numbers and timeouts from config).
+  -- This must be after fork because it loads filter rules via compile_rules
+  nft_rules = require "nft_rules"
   nft_rules.apply!
 
-  -- Load filter rules before forking so workers inherit via COW.
+  -- Apply extra nft rules before forking workers, so the bypass is in place
+  -- before any queue starts intercepting traffic.
+  nft_extra.apply_from_config!
+
+  -- Load filter lists before forking workers that need it
   filter.load!
 
   -- Extract filter data to pass to workers that need it
@@ -402,12 +365,68 @@ supervise = (pipes, sfd) ->
     decision_cfg: filter.decision_cfg
   }
 
-  -- Apply extra nft rules before forking workers, so the bypass is in place
-  -- before any queue starts intercepting traffic.
-  nft_extra.apply_from_config!
+  -- Workers WITH filter data (forked after filter.load!)
+  workers_with_filter = {}
 
-  for w in *workers
+  -- NFT worker (needs nft rules to be applied first)
+  table.insert workers_with_filter, {
+    name: "nft"
+    pid: nil
+    -- La restart_fn capture ack_wfds par référence ; si worker_nft redémarre,
+    -- il reçoit le même tableau (les pipes ACK restent ouverts).
+    restart_fn: -> fork_worker "nft",
+      (args) -> require("worker_nft").run args.rfd, args.ack_wfds,
+      { rfd: pipes.nft.rfd, ack_wfds: ack_wfds }
+  }
+
+  -- Multiple workers for questions (parallel question)
+  for i, q_num in ipairs questions_queues
+    table.insert workers_with_filter, {
+      name: "dns-q#{q_num}"
+      pid: nil
+      restart_fn: -> fork_worker "dns-q#{q_num}",
+        ((fds) -> require("worker_questions").run q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd, filter_data),
+        { question_response_wfd: pipes.question_response.wfd, learn_wfd: pipes.learn.wfd, events_wfd: pipes.events.wfd, filter_data: filter_data }
+    }
+
+  -- SNI logger for TLS/QUIC (single, optional).
+  -- Captures TCP/443 SYN (TLS ClientHello) and UDP/443 (QUIC Initial) packets.
+  sni_queue_num = tonumber(config.nfqueue.sni_log) or 6
+  if config.nfqueue.sni_log
+    table.insert workers_with_filter, {
+      name: "tls-log"
+      pid: nil
+      restart_fn: -> fork_worker "tls-log",
+        (fds) -> require("worker_tls").run tonumber(fds.q_num), fds.events_wfd, filter_data,
+        { q_num: sni_queue_num, events_wfd: pipes.events.wfd, filter_data: filter_data }
+    }
+
+  -- DoH worker (single, optional). Only forked when DOH_ENABLED == "1".
+  doh_cfg = load_doh_cfg!
+  if doh_cfg.enabled
+    doh_cfg.nft_wfd = pipes.nft.wfd
+    -- Allouer un pipe ACK dédié au worker DoH.
+    doh_ack_info     = alloc_ack_pipe!
+    doh_cfg.ack_rfd    = doh_ack_info.rfd
+    doh_cfg.worker_idx = doh_ack_info.worker_idx
+    table.insert workers_with_filter, {
+      name: "doh"
+      pid: nil
+      restart_fn: -> fork_worker "doh",
+        (args) -> require("worker_doh").run args.cfg, args.filter_data,
+        { cfg: doh_cfg, filter_data: filter_data }
+    }
+
+  -- Fork workers WITH filter data (they will have filter lists in memory)
+  for w in *workers_with_filter
     w.pid = w.restart_fn!
+
+  -- Combine both groups for SIGHUP handling
+  workers = {}
+  for w in *workers_without_filter
+    table.insert workers, w
+  for w in *workers_with_filter
+    table.insert workers, w
 
   status  = ffi.new "int[1]"
   siginfo = ffi.new "signalfd_siginfo"

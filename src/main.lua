@@ -19,7 +19,6 @@ set_process_name("custos")
 local bit = require("bit")
 local config = require("config")
 local filter = require("filter")
-local nft_rules = require("nft_rules")
 local nft_extra = require("nft_extra_rules")
 ffi.cdef([[  unsigned int sleep(unsigned int seconds);
 ]])
@@ -226,7 +225,7 @@ supervise = function(pipes, sfd)
     count = #bridge_slaves,
     interfaces = table.concat(bridge_slaves, ",")
   })
-  local workers = {
+  local workers_without_filter = {
     {
       name = "mac-lrn",
       pid = nil,
@@ -252,19 +251,7 @@ supervise = function(pipes, sfd)
       worker_idx = widx
     }
   end
-  table.insert(workers, {
-    name = "nft",
-    pid = nil,
-    restart_fn = function()
-      return fork_worker("nft", function(args)
-        return require("worker_nft").run(args.rfd, args.ack_wfds)
-      end, {
-        rfd = pipes.nft.rfd,
-        ack_wfds = ack_wfds
-      })
-    end
-  })
-  table.insert(workers, {
+  table.insert(workers_without_filter, {
     name = "events",
     pid = nil,
     restart_fn = function()
@@ -278,7 +265,7 @@ supervise = function(pipes, sfd)
       })
     end
   })
-  table.insert(workers, {
+  table.insert(workers_without_filter, {
     name = "arp",
     pid = nil,
     restart_fn = function()
@@ -288,7 +275,7 @@ supervise = function(pipes, sfd)
     end
   })
   local auth_queue_num = tonumber(config.nfqueue.auth) or 5
-  table.insert(workers, {
+  table.insert(workers_without_filter, {
     name = "auth-q",
     pid = nil,
     restart_fn = function()
@@ -297,25 +284,9 @@ supervise = function(pipes, sfd)
       end, pipes.learn.wfd)
     end
   })
-  for i, q_num in ipairs(questions_queues) do
-    table.insert(workers, {
-      name = "dns-q" .. tostring(q_num),
-      pid = nil,
-      restart_fn = function()
-        return fork_worker("dns-q" .. tostring(q_num), (function(fds)
-          return require("worker_questions").run(q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd, filter_data)
-        end), {
-          question_response_wfd = pipes.question_response.wfd,
-          learn_wfd = pipes.learn.wfd,
-          events_wfd = pipes.events.wfd,
-          filter_data = filter_data
-        })
-      end
-    })
-  end
   for i, q_num in ipairs(responses_queues) do
     local ack_info = alloc_ack_pipe()
-    table.insert(workers, {
+    table.insert(workers_without_filter, {
       name = "resp-q" .. tostring(q_num),
       pid = nil,
       restart_fn = function()
@@ -331,7 +302,7 @@ supervise = function(pipes, sfd)
     })
   end
   for i, q_num in ipairs(captive_queues) do
-    table.insert(workers, {
+    table.insert(workers_without_filter, {
       name = "cap-q" .. tostring(q_num),
       pid = nil,
       restart_fn = function()
@@ -342,7 +313,7 @@ supervise = function(pipes, sfd)
     })
   end
   for i, q_num in ipairs(reject_queues) do
-    table.insert(workers, {
+    table.insert(workers_without_filter, {
       name = "rej-q" .. tostring(q_num),
       pid = nil,
       restart_fn = function()
@@ -352,26 +323,10 @@ supervise = function(pipes, sfd)
       end
     })
   end
-  local sni_queue_num = tonumber(config.nfqueue.sni_log) or 6
-  if config.nfqueue.sni_log then
-    table.insert(workers, {
-      name = "tls-log",
-      pid = nil,
-      restart_fn = function()
-        return fork_worker("tls-log", function(fds)
-          return require("worker_tls").run(tonumber(fds.q_num), fds.events_wfd, filter_data)
-        end, {
-          q_num = sni_queue_num,
-          events_wfd = pipes.events.wfd,
-          filter_data = filter_data
-        })
-      end
-    })
-  end
   if config.nfqueue.sip then
     local sip_queue_num = tonumber(config.nfqueue.sip) or 12
     local sip_ack_info = alloc_ack_pipe()
-    table.insert(workers, {
+    table.insert(workers_without_filter, {
       name = "sip",
       pid = nil,
       restart_fn = function()
@@ -386,7 +341,7 @@ supervise = function(pipes, sfd)
       end
     })
   end
-  table.insert(workers, {
+  table.insert(workers_without_filter, {
     name = "auth",
     pid = nil,
     restart_fn = function()
@@ -395,18 +350,76 @@ supervise = function(pipes, sfd)
       end, auth_cfg)
     end
   })
+  for _index_0 = 1, #workers_without_filter do
+    local w = workers_without_filter[_index_0]
+    w.pid = w.restart_fn()
+  end
+  local nft_rules = require("nft_rules")
+  nft_rules.apply()
+  nft_extra.apply_from_config()
+  filter.load()
+  local filter_data = {
+    rules = filter.rules,
+    auth_cfg_cache = filter.auth_cfg_cache,
+    decision_cfg = filter.decision_cfg
+  }
+  local workers_with_filter = { }
+  table.insert(workers_with_filter, {
+    name = "nft",
+    pid = nil,
+    restart_fn = function()
+      return fork_worker("nft", function(args)
+        return require("worker_nft").run(args.rfd, args.ack_wfds)
+      end, {
+        rfd = pipes.nft.rfd,
+        ack_wfds = ack_wfds
+      })
+    end
+  })
+  for i, q_num in ipairs(questions_queues) do
+    table.insert(workers_with_filter, {
+      name = "dns-q" .. tostring(q_num),
+      pid = nil,
+      restart_fn = function()
+        return fork_worker("dns-q" .. tostring(q_num), (function(fds)
+          return require("worker_questions").run(q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd, filter_data)
+        end), {
+          question_response_wfd = pipes.question_response.wfd,
+          learn_wfd = pipes.learn.wfd,
+          events_wfd = pipes.events.wfd,
+          filter_data = filter_data
+        })
+      end
+    })
+  end
+  local sni_queue_num = tonumber(config.nfqueue.sni_log) or 6
+  if config.nfqueue.sni_log then
+    table.insert(workers_with_filter, {
+      name = "tls-log",
+      pid = nil,
+      restart_fn = function()
+        return fork_worker("tls-log", function(fds)
+          return require("worker_tls").run(tonumber(fds.q_num), fds.events_wfd, filter_data)
+        end, {
+          q_num = sni_queue_num,
+          events_wfd = pipes.events.wfd,
+          filter_data = filter_data
+        })
+      end
+    })
+  end
   local doh_cfg = load_doh_cfg()
   if doh_cfg.enabled then
     doh_cfg.nft_wfd = pipes.nft.wfd
     local doh_ack_info = alloc_ack_pipe()
     doh_cfg.ack_rfd = doh_ack_info.rfd
     doh_cfg.worker_idx = doh_ack_info.worker_idx
-    table.insert(workers, {
+    table.insert(workers_with_filter, {
       name = "doh",
       pid = nil,
       restart_fn = function()
-        return fork_worker("doh", function(cfg)
-          return require("worker_doh").run(cfg, filter_data)
+        return fork_worker("doh", function(args)
+          return require("worker_doh").run(args.cfg, args.filter_data)
         end, {
           cfg = doh_cfg,
           filter_data = filter_data
@@ -414,17 +427,18 @@ supervise = function(pipes, sfd)
       end
     })
   end
-  nft_rules.apply()
-  filter.load()
-  local filter_data = {
-    rules = filter.rules,
-    auth_cfg_cache = filter.auth_cfg_cache,
-    decision_cfg = filter.decision_cfg
-  }
-  nft_extra.apply_from_config()
-  for _index_0 = 1, #workers do
-    local w = workers[_index_0]
+  for _index_0 = 1, #workers_with_filter do
+    local w = workers_with_filter[_index_0]
     w.pid = w.restart_fn()
+  end
+  local workers = { }
+  for _index_0 = 1, #workers_without_filter do
+    local w = workers_without_filter[_index_0]
+    table.insert(workers, w)
+  end
+  for _index_0 = 1, #workers_with_filter do
+    local w = workers_with_filter[_index_0]
+    table.insert(workers, w)
   end
   local status = ffi.new("int[1]")
   local siginfo = ffi.new("signalfd_siginfo")
