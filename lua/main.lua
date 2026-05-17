@@ -303,11 +303,12 @@ supervise = function(pipes, sfd)
       pid = nil,
       restart_fn = function()
         return fork_worker("dns-q" .. tostring(q_num), (function(fds)
-          return require("worker_questions").run(q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd)
+          return require("worker_questions").run(q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd, filter_data)
         end), {
           question_response_wfd = pipes.question_response.wfd,
           learn_wfd = pipes.learn.wfd,
-          events_wfd = pipes.events.wfd
+          events_wfd = pipes.events.wfd,
+          filter_data = filter_data
         })
       end
     })
@@ -358,10 +359,11 @@ supervise = function(pipes, sfd)
       pid = nil,
       restart_fn = function()
         return fork_worker("tls-log", function(fds)
-          return require("worker_tls").run(tonumber(fds.q_num), fds.events_wfd)
+          return require("worker_tls").run(tonumber(fds.q_num), fds.events_wfd, filter_data)
         end, {
           q_num = sni_queue_num,
-          events_wfd = pipes.events.wfd
+          events_wfd = pipes.events.wfd,
+          filter_data = filter_data
         })
       end
     })
@@ -404,13 +406,21 @@ supervise = function(pipes, sfd)
       pid = nil,
       restart_fn = function()
         return fork_worker("doh", function(cfg)
-          return require("worker_doh").run(cfg)
-        end, doh_cfg)
+          return require("worker_doh").run(cfg, filter_data)
+        end, {
+          cfg = doh_cfg,
+          filter_data = filter_data
+        })
       end
     })
   end
   nft_rules.apply()
   filter.load()
+  local filter_data = {
+    rules = filter.rules,
+    auth_cfg_cache = filter.auth_cfg_cache,
+    decision_cfg = filter.decision_cfg
+  }
   nft_extra.apply_from_config()
   for _index_0 = 1, #workers do
     local w = workers[_index_0]
@@ -431,6 +441,11 @@ supervise = function(pipes, sfd)
           action = "supervisor_sighup_reload"
         })
         filter.load()
+        filter_data = {
+          rules = filter.rules,
+          auth_cfg_cache = filter.auth_cfg_cache,
+          decision_cfg = filter.decision_cfg
+        }
         for _index_0 = 1, #workers do
           local w = workers[_index_0]
           if (w.name:match("^dns%-q") or w.name:match("^resp%-q") or w.name:match("^cap%-q") or w.name:match("^rej%-q") or w.name == "doh") and w.pid and w.pid > 0 then

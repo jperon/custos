@@ -320,13 +320,21 @@ handle_doh_client = (args) ->
 --- Start the DoH worker.
 -- Exits immediately if DOH_ENABLED is not "1".
 -- @tparam table doh_cfg Configuration table (see load_doh_cfg in main.moon).
+-- @tparam table filter_data Filter data (rules, auth_cfg_cache, decision_cfg) from main.moon.
 -- @treturn nil
-run = (doh_cfg) ->
+run = (doh_cfg, filter_data) ->
   set_action_prefix "doh_"
   nft_q = require "nft_queue"
   nft_q.set_wfd doh_cfg.nft_wfd if doh_cfg.nft_wfd
   -- Configure le canal ACK bidirectionnel si le superviseur en a alloué un.
   nft_q.set_ack_rfd doh_cfg.ack_rfd, doh_cfg.worker_idx if doh_cfg.ack_rfd and doh_cfg.worker_idx != nil
+
+  -- Initialize filter with data passed from main.moon
+  if filter_data
+    filter = require "filter"
+    filter.rules = filter_data.rules
+    filter.auth_cfg_cache = filter_data.auth_cfg_cache
+    filter.decision_cfg = filter_data.decision_cfg
   unless doh_cfg.enabled
     log_info { action: "worker_disabled" }
     return

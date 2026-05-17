@@ -12,6 +12,8 @@ do
 end
 local enrich_session_ip
 enrich_session_ip = require("auth.sessions").enrich_session_ip
+local ip2s
+ip2s = require("ipparse.l3.ip").ip2s
 local mac_cfg = config.mac_learner or { }
 local auth_cfg = config.auth or { }
 local PROBE_TIMEOUT_MS = 200
@@ -21,7 +23,6 @@ local bit = require("bit")
 local AF_UNIX = 1
 local SOCK_STREAM = 1
 local POLLIN = 1
-local AF_INET6 = 10
 local sh_quote
 sh_quote = function(s)
   return "'" .. tostring(s):gsub("'", "'\"'\"'") .. "'"
@@ -49,15 +50,9 @@ ip16_to_str = function(ip16)
     end
   end
   if is_ipv4 then
-    return tostring(ip16:byte(1)) .. "." .. tostring(ip16:byte(2)) .. "." .. tostring(ip16:byte(3)) .. "." .. tostring(ip16:byte(4))
+    return ip2s(ip16:sub(1, 4))
   else
-    local buf = ffi.new("uint8_t[16]")
-    for i = 0, 15 do
-      buf[i] = ip16:byte(i + 1)
-    end
-    local ntop = ffi.new("char[46]")
-    libc.inet_ntop(AF_INET6, buf, ntop, 46)
-    return ffi.string(ntop)
+    return ip2s(ip16)
   end
 end
 local learn_mac

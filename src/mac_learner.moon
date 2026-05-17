@@ -26,6 +26,7 @@ mac_prober = require "mac_prober"
 config = require "config"
 { :log_info, :log_warn, :log_debug } = require "log"
 { :enrich_session_ip } = require "auth.sessions"
+{ :ip2s } = require "ipparse.l3.ip"
 mac_cfg = config.mac_learner or {}
 auth_cfg = config.auth or {}
 
@@ -41,7 +42,6 @@ bit = require "bit"
 AF_UNIX     = 1
 SOCK_STREAM = 1
 POLLIN      = 1
-AF_INET6    = 10
 
 sh_quote = (s) ->
   "'" .. tostring(s)\gsub("'", "'\"'\"'") .. "'"
@@ -67,6 +67,7 @@ prober          = nil
 --- Convertit 16 octets bruts (format IPC) en adresse IP textuelle.
 -- IPv4 : octets 1-4 significatifs, octets 5-16 nuls.
 -- IPv6 : les 16 octets sont l'adresse complète.
+-- Utilise ip2s pour garantir la cohérence avec le reste du codebase.
 -- @tparam string ip16 Chaîne de 16 octets
 -- @treturn string Adresse IP textuelle (ex : "192.168.1.5" ou "fd00::1")
 ip16_to_str = (ip16) ->
@@ -76,14 +77,9 @@ ip16_to_str = (ip16) ->
       is_ipv4 = false
       break
   if is_ipv4
-    "#{ip16\byte 1}.#{ip16\byte 2}.#{ip16\byte 3}.#{ip16\byte 4}"
+    ip2s ip16\sub 1, 4
   else
-    buf = ffi.new "uint8_t[16]"
-    for i = 0, 15
-      buf[i] = ip16\byte(i + 1)
-    ntop = ffi.new "char[46]"
-    libc.inet_ntop AF_INET6, buf, ntop, 46
-    ffi.string ntop
+    ip2s ip16
 
 -- ── Apprentissage centralisé ─────────────────────────────────────
 

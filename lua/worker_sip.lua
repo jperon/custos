@@ -30,19 +30,12 @@ format_ip = function(version, raw)
   if not (raw) then
     return nil
   end
+  local ip2s = require("ipparse.l3.ip").ip2s
   if version == 4 then
-    local b1, b2, b3, b4 = raw:byte(1, 4)
-    if not (b1 and b4) then
-      return nil
-    end
-    return string.format("%d.%d.%d.%d", b1, b2, b3, b4)
+    return ip2s(raw:sub(1, 4))
   elseif version == 6 then
-    local ok, s = pcall(function()
-      return require("ipparse.l3.ip6").ip62s(raw)
-    end)
-    if ok and s then
-      return s
-    end
+    return ip2s(raw)
+  else
     return nil
   end
 end

@@ -12,8 +12,9 @@
 -- Aucune modification de paquet, aucun verdict NFQUEUE, aucune règle nftables.
 
 { :ffi, :libc } = require "ffi_defs"
-{ :C, :AF_PACKET, :SOCK_RAW, :AF_INET6 } = require "lib.socket"
+{ :C, :AF_PACKET, :SOCK_RAW } = require "lib.socket"
 { :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
+{ :ip2s } = require "ipparse.l3.ip"
 
 -- ── Constantes réseau ────────────────────────────────────────────
 
@@ -45,18 +46,12 @@ fmt_mac = (s, o) ->
     s\byte(o+3), s\byte(o+4), s\byte(o+5)
 
 --- Formate 16 octets d'une chaîne Lua en adresse IPv6 textuelle (pour les logs).
--- Utilise inet_ntop pour obtenir la forme canonique compressée.
+-- Utilise ip2s pour garantir la cohérence avec le reste du codebase.
 -- @tparam string s  Chaîne d'au moins o+15 octets
 -- @tparam number o  Offset 1-based du premier octet dans s
--- @treturn string Adresse IPv6 (ex : "fd00:28::a") ou "?" en cas d'échec
+-- @treturn string Adresse IPv6
 fmt_ipv6 = (s, o) ->
-  buf = ffi.new "uint8_t[16]"
-  for i = 0, 15
-    buf[i] = s\byte(o + i)
-  ntop = ffi.new "char[46]"
-  rc = C.inet_ntop AF_INET6, buf, ntop, 46
-  return "?" if rc == nil
-  ffi.string ntop
+  ip2s s\sub o, o + 15
 
 --- Construit un message binaire 22 octets (ip16 + mac6) pour le pipe learn.
 -- @tparam string raw  Trame Ethernet brute (base 1 Lua)

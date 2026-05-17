@@ -35,18 +35,18 @@ IP_MAC_MAX  = 256
 -- ── Helpers ───────────────────────────────────────────────────────────────────
 
 --- Convert raw binary IP bytes to dotted/colon notation.
+-- Utilise ip2s pour garantir la cohérence avec le reste du codebase.
 -- @tparam number version  IP version (4 or 6)
 -- @tparam string raw      Raw IP bytes (4 or 16 bytes)
 -- @treturn string|nil
 format_ip = (version, raw) ->
   return nil unless raw
+  ip2s = require("ipparse.l3.ip").ip2s
   if version == 4
-    b1, b2, b3, b4 = raw\byte 1, 4
-    return nil unless b1 and b4
-    string.format "%d.%d.%d.%d", b1, b2, b3, b4
+    ip2s raw\sub 1, 4
   elseif version == 6
-    ok, s = pcall -> require("ipparse.l3.ip6").ip62s raw
-    return s if ok and s
+    ip2s raw
+  else
     nil
 
 --- Record an ip → mac mapping for later reverse lookups.

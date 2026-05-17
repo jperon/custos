@@ -13,6 +13,8 @@ do
   local _obj_0 = require("log")
   log_debug, log_warn = _obj_0.log_debug, _obj_0.log_warn
 end
+local ip2s
+ip2s = require("ipparse.l3.ip").ip2s
 local bit = require("bit")
 AF_PACKET = 17
 SOCK_RAW = 3
@@ -204,15 +206,11 @@ parse_na_reply = function(raw, len, tgt6_bin)
     return nil, nil
   end
   local mac_str = fmt_mac(raw, 7)
-  local ip6_buf = ffi.new("uint8_t[16]")
-  for i = 0, 15 do
-    ip6_buf[i] = raw:byte(23 + i)
-  end
-  local ntop = ffi.new("char[46]")
-  if C.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil then
+  local ip6_src = ip2s(raw:sub(23, 38))
+  if not (ip6_src) then
     return nil, nil
   end
-  return ffi.string(ntop), mac_str
+  return ip6_src, mac_str
 end
 local wait_reply
 wait_reply = function(fd, timeout_ms, parse_fn)
@@ -441,15 +439,11 @@ parse_na_frame = function(raw, n)
   if all_zero then
     return nil, nil
   end
-  local ip6_buf = ffi.new("uint8_t[16]")
-  for i = 0, 15 do
-    ip6_buf[i] = raw:byte(63 + i)
-  end
-  local ntop = ffi.new("char[46]")
-  if C.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil then
+  local na_target_ip = ip2s(raw:sub(63, 78))
+  if not (na_target_ip) then
     return nil, nil
   end
-  return ffi.string(ntop), fmt_mac(raw, 7)
+  return na_target_ip, fmt_mac(raw, 7)
 end
 return {
   init = init,

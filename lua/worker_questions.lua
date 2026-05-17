@@ -370,12 +370,17 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   return NF_ACCEPT
 end
 local run
-run = function(queue_num, wfd, learn_wfd, ev_wfd)
+run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
   set_action_prefix("questions_")
   metrics.init(config.metrics)
   pipe_wfd = wfd
   mac_learn_wfd = learn_wfd
   events_wfd = ev_wfd
+  if filter_data then
+    filter.rules = filter_data.rules
+    filter.auth_cfg_cache = filter_data.auth_cfg_cache
+    filter.decision_cfg = filter_data.decision_cfg
+  end
   do
     local auth = filter.get_auth_cfg()
     captive_domain = domain_from_url(auth.redirect_url)

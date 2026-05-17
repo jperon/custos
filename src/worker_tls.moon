@@ -826,13 +826,18 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
 
 --- Entry point for the worker.
 -- @tparam number queue_num Queue number
-run = (queue_num, ev_wfd=nil) ->
+run = (queue_num, ev_wfd=nil, filter_data=nil) ->
   set_action_prefix "sni_log_"
   events_wfd = ev_wfd
+
   ok_filter, filter_or_err = pcall require, "filter"
   if ok_filter and filter_or_err
     filter = filter_or_err
-    pcall -> filter.load!
+    -- Initialize filter with data passed from main.moon
+    if filter_data
+      filter.rules = filter_data.rules
+      filter.auth_cfg_cache = filter_data.auth_cfg_cache
+      filter.decision_cfg = filter_data.decision_cfg
     auth_cfg = if filter.get_auth_cfg then filter.get_auth_cfg! else {}
     auth_sessions_file = auth_cfg.sessions_file or auth_sessions_file
     sni_policy = auth_cfg and auth_cfg.sni_verdict or {}

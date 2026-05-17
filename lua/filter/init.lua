@@ -17,9 +17,9 @@ local inject_localnets
 inject_localnets = require("filter.localnets").inject_localnets
 local ip_whitelist = require("ip_whitelist")
 local config = require("config")
-local rules
-local auth_cfg_cache
-local decision_cfg
+local rules = nil
+local auth_cfg_cache = nil
+local decision_cfg = nil
 local clone
 clone = function(v)
   if not (type(v) == "table") then

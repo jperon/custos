@@ -6,6 +6,7 @@
 { :ffi } = require "ffi_defs"
 config = require "config"
 bit = require "bit"
+{ :ip2s } = require "ipparse.l3.ip"
 
 -- ── Constants ──────────────────────────────────────────────────
 PROTO_UDP = 17
@@ -40,8 +41,6 @@ purge_tcp_buffers = (max_age = 300) ->
       tcp_buffers[key] = nil
 
 -- ── Pre-allocated buffers ──────────────────────────────────────
-
-ipv6_str = ffi.new "char[46]"
 
 -- ── Byte-level helpers (0-based FFI pointer, big-endian) ───────
 
@@ -84,20 +83,13 @@ w16 = (p, o, v) ->
 
 -- ── IP address formatting ──────────────────────────────────────
 
---- Format 4 bytes starting at ptr+off as dotted-quad IPv4.
+--- Format IP address (IPv4 or IPv6) using ip2s.
 -- @tparam cdata p uint8_t pointer.
 -- @tparam number o 0-based offset.
--- @treturn string "a.b.c.d".
-fmt_ipv4 = (p, o) ->
-  string.format "%d.%d.%d.%d", p[o], p[o+1], p[o+2], p[o+3]
-
---- Format 16 bytes starting at ptr+off as IPv6 string.
--- @tparam cdata p uint8_t pointer.
--- @tparam number o 0-based offset.
--- @treturn string IPv6 address.
-fmt_ipv6 = (p, o) ->
-  ffi.C.inet_ntop config.runtime.af_inet6, p + o, ipv6_str, 46
-  ffi.string ipv6_str
+-- @tparam number len 4 for IPv4, 16 for IPv6.
+-- @treturn string IP address.
+fmt_ip = (p, o, len) ->
+  ip2s ffi.string p + o, len
 
 -- ── DNS name decompression (RFC 1035 §4.1.4) ──────────────────
 
@@ -155,8 +147,8 @@ parse_l3_v4 = (p, len) ->
     version: 4, :ihl
     total_len: r16(p, 2)
     protocol:  p[9]
-    src_ip:     fmt_ipv4 p, 12
-    dst_ip:     fmt_ipv4 p, 16
+    src_ip:     fmt_ip p, 12, 4
+    dst_ip:     fmt_ip p, 16, 4
     src_ip_raw: ffi.string p + 12, 4
     dst_ip_raw: ffi.string p + 16, 4
     af: config.runtime.af_inet
@@ -214,8 +206,8 @@ parse_l3_v6 = (p, len) ->
     version: 6, ihl: l4_off
     total_len: 40 + r16(p, 4)
     protocol:  proto
-    src_ip:     fmt_ipv6 p, 8
-    dst_ip:     fmt_ipv6 p, 24
+    src_ip:     fmt_ip p, 8, 16
+    dst_ip:     fmt_ip p, 24, 16
     src_ip_raw: ffi.string p + 8,  16
     dst_ip_raw: ffi.string p + 24, 16
     af: config.runtime.af_inet6
@@ -579,9 +571,9 @@ parse_answers = (raw, pkt) ->
     break if pos + rdlength > dns_len
 
     rdata_str = if rtype == QTYPE.A and rdlength == 4
-      fmt_ipv4 dns_p, pos
+      fmt_ip dns_p, pos, 4
     elseif rtype == QTYPE.AAAA and rdlength == 16
-      fmt_ipv6 dns_p, pos
+      fmt_ip dns_p, pos, 16
     elseif rtype == QTYPE.CNAME
       cname, _ = decode_name dns_p, dns_len, pos
       cname or "?"

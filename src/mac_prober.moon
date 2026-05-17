@@ -17,6 +17,7 @@
 { :ffi, :libc } = require "ffi_defs"
 { :C, :AF_PACKET, :SOCK_RAW, :AF_INET6 } = require "lib.socket"
 { :log_debug, :log_warn } = require "log"
+{ :ip2s } = require "ipparse.l3.ip"
 
 bit = require "bit"
 
@@ -328,14 +329,11 @@ parse_na_reply = (raw, len, tgt6_bin) ->
   -- MAC source Ethernet (bytes 7-12)
   mac_str = fmt_mac raw, 7
 
-  -- IPv6 source via inet_ntop pour forme canonique compressée
-  ip6_buf = ffi.new "uint8_t[16]"
-  for i = 0, 15
-    ip6_buf[i] = raw\byte 23 + i
-  ntop = ffi.new "char[46]"
-  return nil, nil if C.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil
+  -- IPv6 source via ip2s pour cohérence avec le reste du codebase
+  ip6_src = ip2s raw\sub 23, 38
+  return nil, nil unless ip6_src
 
-  ffi.string(ntop), mac_str
+  ip6_src, mac_str
 
 -- ── Boucle de réception ──────────────────────────────────────────
 
@@ -525,12 +523,9 @@ parse_na_frame = (raw, n) ->
       all_zero = false
       break
   return nil, nil if all_zero
-  -- NA target : bytes 63-78 → inet_ntop pour forme canonique
-  ip6_buf = ffi.new "uint8_t[16]"
-  for i = 0, 15
-    ip6_buf[i] = raw\byte 63 + i
-  ntop = ffi.new "char[46]"
-  return nil, nil if C.inet_ntop(AF_INET6, ip6_buf, ntop, 46) == nil
-  ffi.string(ntop), fmt_mac(raw, 7)
+  -- NA target : bytes 63-78 → ip2s pour cohérence avec le reste du codebase
+  na_target_ip = ip2s raw\sub 63, 78
+  return nil, nil unless na_target_ip
+  na_target_ip, fmt_mac(raw, 7)
 
 { :init, :probe_and_wait, :send_probe, :parse_arp_frame, :parse_na_frame, :get_ms }

@@ -3,16 +3,18 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
-local C, AF_PACKET, SOCK_RAW, AF_INET6
+local C, AF_PACKET, SOCK_RAW
 do
   local _obj_0 = require("lib.socket")
-  C, AF_PACKET, SOCK_RAW, AF_INET6 = _obj_0.C, _obj_0.AF_PACKET, _obj_0.SOCK_RAW, _obj_0.AF_INET6
+  C, AF_PACKET, SOCK_RAW = _obj_0.C, _obj_0.AF_PACKET, _obj_0.SOCK_RAW
 end
 local log_info, log_warn, log_debug, set_action_prefix
 do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix
 end
+local ip2s
+ip2s = require("ipparse.l3.ip").ip2s
 local POLLIN = 1
 local ETH_P_ARP = C.htons(0x0806)
 local ETH_P_IPV6 = C.htons(0x86DD)
@@ -27,16 +29,7 @@ fmt_mac = function(s, o)
 end
 local fmt_ipv6
 fmt_ipv6 = function(s, o)
-  local buf = ffi.new("uint8_t[16]")
-  for i = 0, 15 do
-    buf[i] = s:byte(o + i)
-  end
-  local ntop = ffi.new("char[46]")
-  local rc = C.inet_ntop(AF_INET6, buf, ntop, 46)
-  if rc == nil then
-    return "?"
-  end
-  return ffi.string(ntop)
+  return ip2s(s:sub(o, o + 15))
 end
 local build_learn_msg
 build_learn_msg = function(raw, ip_off, ip_len, mac_off)

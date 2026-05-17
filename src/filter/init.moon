@@ -20,9 +20,9 @@
 ip_whitelist = require "ip_whitelist"
 config = require "config"
 
-local rules
-local auth_cfg_cache
-local decision_cfg
+rules = nil
+auth_cfg_cache = nil
+decision_cfg = nil
 
 clone = (v) ->
   return v unless type(v) == "table"

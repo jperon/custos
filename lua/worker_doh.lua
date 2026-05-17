@@ -472,7 +472,7 @@ handle_doh_client = function(args)
   end
 end
 local run
-run = function(doh_cfg)
+run = function(doh_cfg, filter_data)
   set_action_prefix("doh_")
   local nft_q = require("nft_queue")
   if doh_cfg.nft_wfd then
@@ -480,6 +480,12 @@ run = function(doh_cfg)
   end
   if doh_cfg.ack_rfd and doh_cfg.worker_idx ~= nil then
     nft_q.set_ack_rfd(doh_cfg.ack_rfd, doh_cfg.worker_idx)
+  end
+  if filter_data then
+    local filter = require("filter")
+    filter.rules = filter_data.rules
+    filter.auth_cfg_cache = filter_data.auth_cfg_cache
+    filter.decision_cfg = filter_data.decision_cfg
   end
   if not (doh_cfg.enabled) then
     log_info({

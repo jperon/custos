@@ -356,13 +356,19 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 
 
 -- ── Point d'entrée ───────────────────────────────────────────────
--- Appelé par main.moon après fork(), avec les fd des pipes IPC.
-run = (queue_num, wfd, learn_wfd, ev_wfd) ->
+-- Appelé par main.moon après fork(), avec les fd des pipes IPC et filter_data.
+run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   set_action_prefix "questions_"
   metrics.init config.metrics
   pipe_wfd      = wfd
   mac_learn_wfd = learn_wfd
   events_wfd    = ev_wfd
+
+  -- Initialize filter with data passed from main.moon
+  if filter_data
+    filter.rules = filter_data.rules
+    filter.auth_cfg_cache = filter_data.auth_cfg_cache
+    filter.decision_cfg = filter_data.decision_cfg
 
   -- ── Interception DNS portail captif ─────────────────────────
   -- Lit redirect_url depuis auth_cfg pour extraire le hostname captif.

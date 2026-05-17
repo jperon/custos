@@ -2,6 +2,8 @@ local ffi
 ffi = require("ffi_defs").ffi
 local config = require("config")
 local bit = require("bit")
+local ip2s
+ip2s = require("ipparse.l3.ip").ip2s
 local PROTO_UDP = 17
 local PROTO_TCP = 6
 local QTYPE = {
@@ -39,7 +41,6 @@ purge_tcp_buffers = function(max_age)
     end
   end
 end
-local ipv6_str = ffi.new("char[46]")
 local r16
 r16 = function(p, o)
   return bit.bor(bit.lshift(p[o], 8), p[o + 1])
@@ -60,14 +61,9 @@ w16 = function(p, o, v)
   p[o] = bit.band(bit.rshift(v, 8), 0xFF)
   p[o + 1] = bit.band(v, 0xFF)
 end
-local fmt_ipv4
-fmt_ipv4 = function(p, o)
-  return string.format("%d.%d.%d.%d", p[o], p[o + 1], p[o + 2], p[o + 3])
-end
-local fmt_ipv6
-fmt_ipv6 = function(p, o)
-  ffi.C.inet_ntop(config.runtime.af_inet6, p + o, ipv6_str, 46)
-  return ffi.string(ipv6_str)
+local fmt_ip
+fmt_ip = function(p, o, len)
+  return ip2s(ffi.string(p + o, len))
 end
 local decode_name
 decode_name = function(dns, len, off)
@@ -128,8 +124,8 @@ parse_l3_v4 = function(p, len)
     ihl = ihl,
     total_len = r16(p, 2),
     protocol = p[9],
-    src_ip = fmt_ipv4(p, 12),
-    dst_ip = fmt_ipv4(p, 16),
+    src_ip = fmt_ip(p, 12, 4),
+    dst_ip = fmt_ip(p, 16, 4),
     src_ip_raw = ffi.string(p + 12, 4),
     dst_ip_raw = ffi.string(p + 16, 4),
     af = config.runtime.af_inet
@@ -186,8 +182,8 @@ parse_l3_v6 = function(p, len)
     ihl = l4_off,
     total_len = 40 + r16(p, 4),
     protocol = proto,
-    src_ip = fmt_ipv6(p, 8),
-    dst_ip = fmt_ipv6(p, 24),
+    src_ip = fmt_ip(p, 8, 16),
+    dst_ip = fmt_ip(p, 24, 16),
     src_ip_raw = ffi.string(p + 8, 16),
     dst_ip_raw = ffi.string(p + 24, 16),
     af = config.runtime.af_inet6
@@ -589,9 +585,9 @@ parse_answers = function(raw, pkt)
     end
     local rdata_str
     if rtype == QTYPE.A and rdlength == 4 then
-      rdata_str = fmt_ipv4(dns_p, pos)
+      rdata_str = fmt_ip(dns_p, pos, 4)
     elseif rtype == QTYPE.AAAA and rdlength == 16 then
-      rdata_str = fmt_ipv6(dns_p, pos)
+      rdata_str = fmt_ip(dns_p, pos, 16)
     elseif rtype == QTYPE.CNAME then
       local cname
       cname, _ = decode_name(dns_p, dns_len, pos)

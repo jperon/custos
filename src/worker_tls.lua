@@ -679,13 +679,14 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     src_port = tcp.spt
     dst_port = tcp.dpt
     if is_mail_ssl_port(dst_port) then
-      if dst_port == 465 then
+      local _exp_0 = dst_port
+      if 465 == _exp_0 then
         protocol_name = "smtps"
-      elseif dst_port == 587 then
+      elseif 587 == _exp_0 then
         protocol_name = "smtp_starttls"
-      elseif dst_port == 993 then
+      elseif 993 == _exp_0 then
         protocol_name = "imaps"
-      elseif dst_port == 995 then
+      elseif 995 == _exp_0 then
         protocol_name = "pop3s"
       else
         protocol_name = "mail_ssl"
@@ -1022,18 +1023,23 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
   return NF_ACCEPT
 end
 local run
-run = function(queue_num, ev_wfd)
+run = function(queue_num, ev_wfd, filter_data)
   if ev_wfd == nil then
     ev_wfd = nil
+  end
+  if filter_data == nil then
+    filter_data = nil
   end
   set_action_prefix("sni_log_")
   events_wfd = ev_wfd
   local ok_filter, filter_or_err = pcall(require, "filter")
   if ok_filter and filter_or_err then
     filter = filter_or_err
-    pcall(function()
-      return filter.load()
-    end)
+    if filter_data then
+      filter.rules = filter_data.rules
+      filter.auth_cfg_cache = filter_data.auth_cfg_cache
+      filter.decision_cfg = filter_data.decision_cfg
+    end
     local auth_cfg
     if filter.get_auth_cfg then
       auth_cfg = filter.get_auth_cfg()

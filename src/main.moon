@@ -300,8 +300,8 @@ supervise = (pipes, sfd) ->
       name: "dns-q#{q_num}"
       pid: nil
       restart_fn: -> fork_worker "dns-q#{q_num}",
-        ((fds) -> require("worker_questions").run q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd),
-        { question_response_wfd: pipes.question_response.wfd, learn_wfd: pipes.learn.wfd, events_wfd: pipes.events.wfd }
+        ((fds) -> require("worker_questions").run q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd, filter_data),
+        { question_response_wfd: pipes.question_response.wfd, learn_wfd: pipes.learn.wfd, events_wfd: pipes.events.wfd, filter_data: filter_data }
     }
 
   -- Multiple workers for responses (parallel response)
@@ -345,8 +345,8 @@ supervise = (pipes, sfd) ->
       name: "tls-log"
       pid: nil
       restart_fn: -> fork_worker "tls-log",
-        (fds) -> require("worker_tls").run tonumber(fds.q_num), fds.events_wfd,
-        { q_num: sni_queue_num, events_wfd: pipes.events.wfd }
+        (fds) -> require("worker_tls").run tonumber(fds.q_num), fds.events_wfd, filter_data,
+        { q_num: sni_queue_num, events_wfd: pipes.events.wfd, filter_data: filter_data }
     }
 
   -- SIP/STUN worker (single, optional).
@@ -385,8 +385,8 @@ supervise = (pipes, sfd) ->
       name: "doh"
       pid: nil
       restart_fn: -> fork_worker "doh",
-        (cfg) -> require("worker_doh").run cfg,
-        doh_cfg
+        (cfg) -> require("worker_doh").run cfg, filter_data,
+        { cfg: doh_cfg, filter_data: filter_data }
     }
 
   -- Apply main nftables ruleset (with queue numbers and timeouts from config).
@@ -394,6 +394,13 @@ supervise = (pipes, sfd) ->
 
   -- Load filter rules before forking so workers inherit via COW.
   filter.load!
+
+  -- Extract filter data to pass to workers that need it
+  filter_data = {
+    rules: filter.rules
+    auth_cfg_cache: filter.auth_cfg_cache
+    decision_cfg: filter.decision_cfg
+  }
 
   -- Apply extra nft rules before forking workers, so the bypass is in place
   -- before any queue starts intercepting traffic.
@@ -414,6 +421,13 @@ supervise = (pipes, sfd) ->
       if siginfo.ssi_signo == SIGHUP
         log_info { action: "supervisor_sighup_reload" }
         filter.load!
+
+        -- Update filter_data with reloaded data
+        filter_data = {
+          rules: filter.rules
+          auth_cfg_cache: filter.auth_cfg_cache
+          decision_cfg: filter.decision_cfg
+        }
 
         -- Kill + refork all question/response/captive/reject/DOH workers to refresh COW filter lists
         for w in *workers
