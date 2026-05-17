@@ -136,32 +136,19 @@ collect_nets = function(cfg, rule)
       add_net(n)
     end
   end
-  for _, cond in ipairs(rule.conditions or { }) do
-    local _continue_0 = false
-    repeat
-      if not (type(cond) == "table") then
-        _continue_0 = true
-        break
+  for k, args in pairs(rule.conditions or { }) do
+    if k == "from_net" then
+      add_net(args)
+    elseif k == "from_nets" then
+      for _, n in ipairs(as_list(args)) do
+        add_net(n)
       end
-      for k, args in pairs(cond) do
-        if k == "from_net" then
-          add_net(args)
-        elseif k == "from_nets" then
-          for _, n in ipairs(as_list(args)) do
-            add_net(n)
-          end
-        elseif k == "from_netlist" then
-          add_named(args)
-        elseif k == "from_netlists" then
-          for _, list_name in ipairs(as_list(args)) do
-            add_named(list_name)
-          end
-        end
+    elseif k == "from_netlist" then
+      add_named(args)
+    elseif k == "from_netlists" then
+      for _, list_name in ipairs(as_list(args)) do
+        add_named(list_name)
       end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
     end
   end
   table.sort(v4)
@@ -198,32 +185,19 @@ collect_dest_nets = function(cfg, rule)
       add_net(n)
     end
   end
-  for _, cond in ipairs(rule.conditions or { }) do
-    local _continue_0 = false
-    repeat
-      if not (type(cond) == "table") then
-        _continue_0 = true
-        break
+  for k, args in pairs(rule.conditions or { }) do
+    if k == "to_net" then
+      add_net(args)
+    elseif k == "to_nets" then
+      for _, n in ipairs(as_list(args)) do
+        add_net(n)
       end
-      for k, args in pairs(cond) do
-        if k == "to_net" then
-          add_net(args)
-        elseif k == "to_nets" then
-          for _, n in ipairs(as_list(args)) do
-            add_net(n)
-          end
-        elseif k == "to_netlist" then
-          add_named(args)
-        elseif k == "to_netlists" then
-          for _, list_name in ipairs(as_list(args)) do
-            add_named(list_name)
-          end
-        end
+    elseif k == "to_netlist" then
+      add_named(args)
+    elseif k == "to_netlists" then
+      for _, list_name in ipairs(as_list(args)) do
+        add_named(list_name)
       end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
     end
   end
   table.sort(v4)
@@ -249,34 +223,23 @@ collect_subnets = function(rule)
       return append_unique(v4, seen4, net)
     end
   end
-  for _, cond in ipairs(rule.conditions or { }) do
-    local _continue_0 = false
-    repeat
-      if not (type(cond) == "table") then
-        _continue_0 = true
-        break
-      end
-      for k, args in pairs(cond) do
-        if k == "from_subnet" then
-          if type(args) == "string" then
-            add_subnet(args)
-          elseif type(args) == "table" and args.net then
-            add_subnet(args.net)
-          end
-        elseif k == "from_subnets" then
-          for _, subnet_spec in ipairs(as_list(args)) do
-            if type(subnet_spec) == "string" then
-              add_subnet(subnet_spec)
-            elseif type(subnet_spec) == "table" and subnet_spec.net then
-              add_subnet(subnet_spec.net)
-            end
-          end
+  for k, args in pairs(rule.conditions or { }) do
+    if k == "from_subnet" then
+      if type(args) == "string" then
+        add_subnet(args)
+      elseif type(args) == "table" then
+        for _, s in ipairs(as_list(args)) do
+          add_subnet(s)
         end
       end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
+    elseif k == "from_subnets" then
+      for _, s in ipairs(as_list(args)) do
+        if type(s) == "string" then
+          add_subnet(s)
+        elseif type(s) == "table" and s.net then
+          add_subnet(s.net)
+        end
+      end
     end
   end
   table.sort(v4)
@@ -287,26 +250,19 @@ local collect_times
 collect_times = function(rule)
   local out = { }
   local seen = { }
-  for _, cond in ipairs(rule.conditions or { }) do
-    local _continue_0 = false
-    repeat
-      if not (type(cond) == "table") then
-        _continue_0 = true
-        break
+  for k, args in pairs(rule.conditions or { }) do
+    if k == "in_time" then
+      append_unique(out, seen, args)
+    elseif k == "in_times" then
+      for _, t in ipairs(as_list(args)) do
+        append_unique(out, seen, t)
       end
-      for k, args in pairs(cond) do
-        if k == "in_time" then
-          append_unique(out, seen, args)
-        elseif k == "in_times" then
-          for _, t in ipairs(as_list(args)) do
-            append_unique(out, seen, t)
-          end
-        end
+    elseif k == "in_timelist" then
+      append_unique(out, seen, args)
+    elseif k == "in_timelists" then
+      for _, list_name in ipairs(as_list(args)) do
+        append_unique(out, seen, list_name)
       end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
     end
   end
   table.sort(out)
@@ -322,28 +278,15 @@ collect_dns = function(rule)
     to_domainlist = true,
     to_domainlists = true
   }
-  for _, cond in ipairs(rule.conditions or { }) do
-    local _continue_0 = false
-    repeat
-      if not (type(cond) == "table") then
-        _continue_0 = true
-        break
-      end
-      for k, args in pairs(cond) do
-        if dns_keys[k] then
-          if k == "to_domain" or k == "to_domainlist" then
-            append_unique(refs, seen, tostring(k) .. ":" .. tostring(tostring(args)))
-          else
-            for _, v in ipairs(as_list(args)) do
-              append_unique(refs, seen, tostring(k) .. ":" .. tostring(tostring(v)))
-            end
-          end
+  for k, args in pairs(rule.conditions or { }) do
+    if dns_keys[k] then
+      if k == "to_domain" or k == "to_domainlist" then
+        append_unique(refs, seen, tostring(k) .. ":" .. tostring(tostring(args)))
+      elseif k == "to_domains" or k == "to_domainlists" then
+        for _, d in ipairs(as_list(args)) do
+          append_unique(refs, seen, tostring(k) .. ":" .. tostring(tostring(d)))
         end
       end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
     end
   end
   table.sort(refs)
@@ -423,25 +366,9 @@ build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id)
   local chain = "cv_rule_" .. rid
   local mark = string.format("0x%x", 0x4000 + idx)
   local requires_auth = false
-  for _, cond in ipairs(rule.conditions or { }) do
-    local _continue_0 = false
-    repeat
-      if not (type(cond) == "table") then
-        _continue_0 = true
-        break
-      end
-      for k, _ in pairs(cond) do
-        if k == "from_users" or k == "from_userlists" then
-          requires_auth = true
-          break
-        end
-      end
-      if requires_auth then
-        break
-      end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
+  for k, _ in pairs(rule.conditions or { }) do
+    if k == "from_users" or k == "from_userlists" then
+      requires_auth = true
       break
     end
   end
@@ -521,6 +448,7 @@ compile = function(filter_cfg, rules_metadata)
     conditions_worker_only = 0
   }
   local plan_rules = { }
+  local all_rules = { }
   for idx, r in ipairs(rules) do
     local verdict
     if r.action == "deny" then
@@ -535,6 +463,7 @@ compile = function(filter_cfg, rules_metadata)
       action = r.action
     }
     rules_by_id[r.rule_id] = r
+    all_rules[#all_rules + 1] = r
     if rules_metadata and rules_metadata[idx] then
       r.conditions_meta = rules_metadata[idx].conditions
       r.actions_meta = rules_metadata[idx].actions
@@ -548,15 +477,14 @@ compile = function(filter_cfg, rules_metadata)
     end
     local conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
     if conditions_meta then
-      for _, group_meta in ipairs(conditions_meta) do
-        for _, cond_meta in ipairs(group_meta) do
+      local first_elem = conditions_meta[1]
+      local is_flat_format = first_elem and first_elem.name and first_elem.args
+      if is_flat_format then
+        for _, cond_meta in ipairs(conditions_meta) do
           if cond_meta.name == "from_user" or cond_meta.name == "from_users" or cond_meta.name == "from_userlist" or cond_meta.name == "from_userlists" then
             r.requires_auth = true
             break
           end
-        end
-        if r.requires_auth then
-          break
         end
       end
     end
@@ -572,31 +500,29 @@ compile = function(filter_cfg, rules_metadata)
       end
     end
     if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions then
-      for _, group in ipairs(rules_metadata[idx].conditions) do
-        for _, cond in ipairs(group) do
-          if cond.capabilities and cond.capabilities.nft then
-            metrics.conditions_compiled = metrics.conditions_compiled + 1
-          else
-            metrics.conditions_worker_only = metrics.conditions_worker_only + 1
-          end
+      for _, cond in ipairs(rules_metadata[idx].conditions) do
+        if cond.capabilities and cond.capabilities.nft then
+          metrics.conditions_compiled = metrics.conditions_compiled + 1
+        else
+          metrics.conditions_worker_only = metrics.conditions_worker_only + 1
         end
       end
     end
     local has_nft_cond = false
     if conditions_meta then
-      for _, group_meta in ipairs(conditions_meta) do
-        for _, cond_meta in ipairs(group_meta) do
+      local first_elem = conditions_meta[1]
+      local is_flat_format = first_elem and first_elem.name and first_elem.args
+      if is_flat_format then
+        for _, cond_meta in ipairs(conditions_meta) do
           if cond_meta.capabilities and cond_meta.capabilities.nft then
             has_nft_cond = true
             break
           end
         end
-        if has_nft_cond then
-          break
-        end
       end
     end
-    if (has_nft_cond and not is_worker_only) or r.requires_auth then
+    local include_rule = (has_nft_cond and not is_worker_only) or r.requires_auth or (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6)
+    if include_rule then
       plan_rules[#plan_rules + 1] = r
     end
   end
@@ -605,6 +531,7 @@ compile = function(filter_cfg, rules_metadata)
     dispatch_chain = "cv_rules_dispatch",
     action_vmap = "cv_rule_action_vmap",
     rules = plan_rules,
+    all_rules = all_rules,
     rules_by_id = rules_by_id,
     action_map = action_map,
     rules_metadata = rules_metadata,
@@ -699,14 +626,14 @@ match_exprs = function(rule)
   end
   local base = table.concat(l4, " ")
   if rule.conditions_meta then
+    local first_elem = rule.conditions_meta[1]
+    local is_flat_format = first_elem and first_elem.name and first_elem.args
     local group_exprs = { }
-    local _list_0 = rule.conditions_meta
-    for _index_0 = 1, #_list_0 do
-      local group_meta = _list_0[_index_0]
-      local compiled_group_exprs = compile_conditions_nft(group_meta, "inet")
-      if #compiled_group_exprs > 0 then
-        local combined_group = table.concat(compiled_group_exprs, " ")
-        group_exprs[#group_exprs + 1] = combined_group
+    if is_flat_format then
+      local compiled_exprs = compile_conditions_nft(rule.conditions_meta, "inet")
+      if #compiled_exprs > 0 then
+        local combined = table.concat(compiled_exprs, " ")
+        group_exprs[#group_exprs + 1] = combined
       end
     end
     if #group_exprs > 0 then
@@ -793,8 +720,11 @@ match_exprs = function(rule)
   return exprs
 end
 local dynamic_match_exprs
-dynamic_match_exprs = function(rule)
-  if not (rule.dns_scope and rule.action ~= "dnsonly") then
+dynamic_match_exprs = function(rule, force)
+  if force == nil then
+    force = false
+  end
+  if not ((rule.dns_scope and rule.action ~= "dnsonly") or force) then
     return { }
   end
   local l4 = { }
@@ -843,7 +773,28 @@ render_rule_chain = function(rule, indent)
     lines[#lines + 1] = tostring(indent) .. "  meta mark != " .. tostring(auth_mark) .. " return comment \"no auth match\""
   end
   if rule.worker_only and rule.requires_auth then
-    lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id) .. " worker-only auth")) .. "\""
+    local all_exprs = { }
+    for _, expr in ipairs(dynamic_match_exprs(rule, true)) do
+      all_exprs[#all_exprs + 1] = expr
+    end
+    for _, expr in ipairs(all_exprs) do
+      local e = expr:match("^%s*(.-)%s*$")
+      if e and #e > 0 then
+        lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id) .. " worker-only auth dynamic")) .. "\""
+      end
+    end
+    lines[#lines + 1] = tostring(indent) .. "  return"
+  elseif rule.worker_only then
+    local all_exprs = { }
+    for _, expr in ipairs(dynamic_match_exprs(rule, true)) do
+      all_exprs[#all_exprs + 1] = expr
+    end
+    for _, expr in ipairs(all_exprs) do
+      local e = expr:match("^%s*(.-)%s*$")
+      if e and #e > 0 then
+        lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id) .. " worker-only dynamic")) .. "\""
+      end
+    end
     lines[#lines + 1] = tostring(indent) .. "  return"
   else
     local all_exprs = { }
@@ -878,6 +829,106 @@ render_rule_chain = function(rule, indent)
   end
   return lines
 end
+local render_sets_only
+render_sets_only = function(plan, indent, include_elements)
+  if indent == nil then
+    indent = "  "
+  end
+  if include_elements == nil then
+    include_elements = true
+  end
+  local lines = { }
+  lines[#lines + 1] = tostring(indent) .. "# ── b2: compiled per-rule nft sets (must be defined before chains) ──"
+  lines[#lines + 1] = tostring(indent) .. "map " .. tostring(plan.action_vmap) .. " {"
+  lines[#lines + 1] = tostring(indent) .. "  type mark : verdict"
+  if plan and plan.action_map and #plan.action_map > 0 then
+    local entries
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      local _list_0 = plan.action_map
+      for _index_0 = 1, #_list_0 do
+        local e = _list_0[_index_0]
+        _accum_0[_len_0] = tostring(e.mark) .. " : " .. tostring(e.verdict)
+        _len_0 = _len_0 + 1
+      end
+      entries = _accum_0
+    end
+    lines[#lines + 1] = tostring(indent) .. "  elements = { " .. tostring(table.concat(entries, ', ')) .. " }"
+  else
+    lines[#lines + 1] = tostring(indent) .. "  elements = { }"
+  end
+  lines[#lines + 1] = tostring(indent) .. "}"
+  if plan and plan.all_rules then
+    for _, rule in ipairs(plan.all_rules) do
+      if rule.set_dyn_ip4 then
+        for _, l in ipairs(render_set(rule.set_dyn_ip4, "ipv4_addr . ipv4_addr", "timeout", { }, indent, false)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_dyn_ip6 then
+        for _, l in ipairs(render_set(rule.set_dyn_ip6, "ipv6_addr . ipv6_addr", "timeout", { }, indent, false)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_dyn_mac4 then
+        for _, l in ipairs(render_set(rule.set_dyn_mac4, "ether_addr . ipv4_addr", "timeout", { }, indent, false)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_dyn_mac6 then
+        for _, l in ipairs(render_set(rule.set_dyn_mac6, "ether_addr . ipv6_addr", "timeout", { }, indent, false)) do
+          lines[#lines + 1] = l
+        end
+      end
+    end
+  end
+  if plan and plan.rules then
+    for _, rule in ipairs(plan.rules) do
+      if rule.set_src4 then
+        for _, l in ipairs(render_set(rule.set_src4, "ipv4_addr", "interval", rule.source_ipv4, indent, include_elements)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_src6 then
+        for _, l in ipairs(render_set(rule.set_src6, "ipv6_addr", "interval", rule.source_ipv6, indent, include_elements)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_dst4 then
+        for _, l in ipairs(render_set(rule.set_dst4, "ipv4_addr", "interval", rule.dest_ipv4, indent, include_elements)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_dst6 then
+        for _, l in ipairs(render_set(rule.set_dst6, "ipv6_addr", "interval", rule.dest_ipv6, indent, include_elements)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_subnet4 then
+        for _, l in ipairs(render_set(rule.set_subnet4, "ipv4_addr", "interval", rule.subnet_ipv4, indent, include_elements)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_subnet6 then
+        for _, l in ipairs(render_set(rule.set_subnet6, "ipv6_addr", "interval", rule.subnet_ipv6, indent, include_elements)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_ports then
+        for _, l in ipairs(render_set(rule.set_ports, "inet_service", "", rule.ports, indent, include_elements)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_auth_mac then
+        for _, l in ipairs(render_set(rule.set_auth_mac, "ether_addr", "timeout", { }, indent, false)) do
+          lines[#lines + 1] = l
+        end
+      end
+    end
+  end
+  return table.concat(lines, "\n")
+end
 local render
 render = function(plan, indent, include_elements)
   if indent == nil then
@@ -887,27 +938,11 @@ render = function(plan, indent, include_elements)
     include_elements = true
   end
   if not (plan and plan.rules and #plan.rules > 0) then
-    return tostring(indent) .. "# b2: no compiled rule objects\n"
+    return tostring(indent) .. "chain cv_rules_dispatch {\n    return\n  }\n"
   end
   local lines = { }
-  lines[#lines + 1] = tostring(indent) .. "# ── b2: compiled per-rule nft objects (staging for c1/c2) ──"
+  lines[#lines + 1] = tostring(indent) .. "# ── b2: compiled per-rule nft chains (staging for c1/c2) ──"
   lines[#lines + 1] = tostring(indent) .. "# first_match_wins=" .. tostring(plan.first_match_wins and 'true' or 'false')
-  lines[#lines + 1] = tostring(indent) .. "map " .. tostring(plan.action_vmap) .. " {"
-  lines[#lines + 1] = tostring(indent) .. "  type mark : verdict"
-  local entries
-  do
-    local _accum_0 = { }
-    local _len_0 = 1
-    local _list_0 = plan.action_map
-    for _index_0 = 1, #_list_0 do
-      local e = _list_0[_index_0]
-      _accum_0[_len_0] = tostring(e.mark) .. " : " .. tostring(e.verdict)
-      _len_0 = _len_0 + 1
-    end
-    entries = _accum_0
-  end
-  lines[#lines + 1] = tostring(indent) .. "  elements = { " .. tostring(table.concat(entries, ', ')) .. " }"
-  lines[#lines + 1] = tostring(indent) .. "}"
   for _, rule in ipairs(plan.rules) do
     if rule.set_src4 then
       for _, l in ipairs(render_set(rule.set_src4, "ipv4_addr", "interval", rule.source_ipv4, indent, include_elements)) do
@@ -944,18 +979,6 @@ render = function(plan, indent, include_elements)
         lines[#lines + 1] = l
       end
     end
-    for _, l in ipairs(render_set(rule.set_dyn_ip4, "ipv4_addr . ipv4_addr", "timeout", { }, indent, false)) do
-      lines[#lines + 1] = l
-    end
-    for _, l in ipairs(render_set(rule.set_dyn_ip6, "ipv6_addr . ipv6_addr", "timeout", { }, indent, false)) do
-      lines[#lines + 1] = l
-    end
-    for _, l in ipairs(render_set(rule.set_dyn_mac4, "ether_addr . ipv4_addr", "timeout", { }, indent, false)) do
-      lines[#lines + 1] = l
-    end
-    for _, l in ipairs(render_set(rule.set_dyn_mac6, "ether_addr . ipv6_addr", "timeout", { }, indent, false)) do
-      lines[#lines + 1] = l
-    end
     if rule.set_auth_mac then
       for _, l in ipairs(render_set(rule.set_auth_mac, "ether_addr", "timeout", { }, indent, false)) do
         lines[#lines + 1] = l
@@ -991,6 +1014,7 @@ end
 return {
   compile = compile,
   render = render,
+  render_sets_only = render_sets_only,
   serialize_stable = serialize_stable,
   collect_subnets = collect_subnets,
   build_rule = build_rule,

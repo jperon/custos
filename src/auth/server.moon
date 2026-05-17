@@ -167,9 +167,21 @@ generate_rule_id = rule_id.generate
 -- Check if a rule requires authentication (has from_users or from_userlists condition)
 rule_requires_auth = (rule) ->
   return false unless rule and rule.conditions
-  for _, cond in ipairs rule.conditions
-    continue unless type(cond) == "table"
-    for k, _ in pairs cond
+  conditions = rule.conditions
+  -- If conditions is a table with numeric keys, it's an array (old format)
+  -- If conditions is a table with string keys, it's a table (new format with implicit AND)
+  is_array_format = type(conditions[1]) == "table"
+
+  if is_array_format
+    -- Old format: array of conditions
+    for _, cond in ipairs conditions
+      continue unless type(cond) == "table"
+      for k, _ in pairs cond
+        if k == "from_users" or k == "from_userlists"
+          return true
+  else
+    -- New format: table of conditions (implicit AND)
+    for k, _ in pairs conditions
       if k == "from_users" or k == "from_userlists"
         return true
   false
@@ -180,9 +192,34 @@ user_qualifies_for_rule = (user, rule) ->
   filter_cfg = config.filter or {}
   userlists_cfg = filter_cfg.userlists or {}
 
-  for _, cond in ipairs rule.conditions
-    continue unless type(cond) == "table"
-    for k, v in pairs cond
+  -- Handle both formats: array of conditions (old) and table of conditions (new)
+  conditions = rule.conditions
+  -- If conditions is a table with numeric keys, it's an array (old format)
+  -- If conditions is a table with string keys, it's a table (new format with implicit AND)
+  is_array_format = type(conditions[1]) == "table"
+
+  if is_array_format
+    -- Old format: array of conditions
+    for _, cond in ipairs conditions
+      continue unless type(cond) == "table"
+      for k, v in pairs cond
+        if k == "from_users"
+          users_list = if type(v) == "table" then v else {v}
+          for _, allowed_user in ipairs users_list
+            if tostring(allowed_user) == tostring(user)
+              return true
+          return false
+        if k == "from_userlists"
+          list_names = if type(v) == "table" then v else {v}
+          for _, list_name in ipairs list_names
+            list_users = userlists_cfg[list_name] or {}
+            for _, allowed_user in ipairs list_users
+              if tostring(allowed_user) == tostring(user)
+                return true
+          return false
+  else
+    -- New format: table of conditions (implicit AND)
+    for k, v in pairs conditions
       if k == "from_users"
         users_list = if type(v) == "table" then v else {v}
         for _, allowed_user in ipairs users_list
@@ -209,8 +246,10 @@ refresh_nft = (nft_sess, ip, mac, ttl, user) ->
   filter_cfg = config.filter or {}
   rules = filter_cfg.rules or {}
   for idx, rule in ipairs rules
-    continue unless rule_requires_auth rule
-    continue unless user_qualifies_for_rule user, rule
+    requires_auth = rule_requires_auth rule
+    continue unless requires_auth
+    qualifies = user_qualifies_for_rule user, rule
+    continue unless qualifies
 
     -- Generate stable rule_id
     rule_id = generate_rule_id rule, idx
@@ -225,7 +264,7 @@ refresh_nft = (nft_sess, ip, mac, ttl, user) ->
           else
             nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip4 { #{ip} timeout #{ttl}s }", { quiet: true }
     unless ok
-      log_warn { action: "refresh_nft_auth_set_add_failed", rule_id: rule_id, mac: mac, ip: ip, err: tostring(err) }
+      log_warn { action: "auth_set_add_failed", rule_id: rule_id, mac: mac, ip: ip, err: tostring(err) }
 
 handle_login = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
