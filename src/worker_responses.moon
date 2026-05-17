@@ -38,27 +38,28 @@ bit = require "bit"
 :concat, :insert, :remove = table
 
 -- Load filter rules to identify auth-only wildcard rules
-filter_cfg = config.filter or {}
-compiled_rules = require("filter.rule").compile_rules filter_cfg
-rules_metadata = compiled_rules.rules_metadata
+-- rules_metadata is passed from main.moon to avoid recompiling (which would reload domain lists)
+rules_metadata = nil
 
 -- Cache of auth-only wildcard rules (requires_auth=true, #dns_refs==0)
 auth_wildcard_rules = {}
-for idx, meta in ipairs rules_metadata or {}
-  requires_auth = false
-  dns_refs = 0
-  if meta.conditions
-    for _, cond in ipairs meta.conditions
-      if cond.name == "from_users" or cond.name == "from_userlists"
-        requires_auth = true
-      if cond.name == "to_domains" or cond.name == "to_domainlist"
-        dns_refs += 1
-  if requires_auth and dns_refs == 0
-    rule_id = meta.rule_id or "unknown_#{idx}"
-    auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
-    log_info { action: "auth_wildcard_rule_detected", rule_id: rule_id, idx: idx }
-
-log_info { action: "auth_wildcard_rules_loaded", count: #auth_wildcard_rules, rules: table.concat(auth_wildcard_rules, ", ") }
+load_auth_wildcard_rules = (metadata) ->
+  rules_metadata = metadata
+  auth_wildcard_rules = {}
+  for idx, meta in ipairs rules_metadata or {}
+    requires_auth = false
+    dns_refs = 0
+    if meta.conditions
+      for _, cond in ipairs meta.conditions
+        if cond.name == "from_users" or cond.name == "from_userlists"
+          requires_auth = true
+        if cond.name == "to_domains" or cond.name == "to_domainlist"
+          dns_refs += 1
+    if requires_auth and dns_refs == 0
+      rule_id = meta.rule_id or "unknown_#{idx}"
+      auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
+      log_info { action: "auth_wildcard_rule_detected", rule_id: rule_id, idx: idx }
+  log_info { action: "auth_wildcard_rules_loaded", count: #auth_wildcard_rules, rules: table.concat(auth_wildcard_rules, ", ") }
 
 IPC_RETRY_ENABLED = if match_retry_cfg.enabled == nil then true else match_retry_cfg.enabled
 IPC_RETRY_COUNT = match_retry_cfg.count or 5
@@ -521,8 +522,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 --- Start the response worker.
 -- Blocks in the NFQUEUE loop until the process exits.
 -- @tparam number rfd Read end of the IPC pipe from question.
-run = (queue_num, rfd) ->
+-- @tparam table rules_metadata Rules metadata passed from main.moon to avoid recompiling
+run = (queue_num, rfd, rules_metadata) ->
   set_action_prefix "response_"
+  load_auth_wildcard_rules rules_metadata if rules_metadata
   if type(rfd) == "table"
     nft_q = require "nft_queue"
     nft_q.set_wfd rfd.nft_wfd if rfd.nft_wfd

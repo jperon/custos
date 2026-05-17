@@ -284,23 +284,6 @@ supervise = function(pipes, sfd)
       end, pipes.learn.wfd)
     end
   })
-  for i, q_num in ipairs(responses_queues) do
-    local ack_info = alloc_ack_pipe()
-    table.insert(workers_without_filter, {
-      name = "resp-q" .. tostring(q_num),
-      pid = nil,
-      restart_fn = function()
-        return fork_worker("resp-q" .. tostring(q_num), function(fds)
-          return require("worker_responses").run(q_num, fds)
-        end, {
-          question_response_rfd = pipes.question_response.rfd,
-          nft_wfd = pipes.nft.wfd,
-          ack_rfd = ack_info.rfd,
-          worker_idx = ack_info.worker_idx
-        })
-      end
-    })
-  end
   for i, q_num in ipairs(captive_queues) do
     table.insert(workers_without_filter, {
       name = "cap-q" .. tostring(q_num),
@@ -356,6 +339,7 @@ supervise = function(pipes, sfd)
   end
   local nft_rules = require("nft_rules")
   nft_rules.apply()
+  local rules_metadata = nft_rules.rules_metadata
   nft_extra.apply_from_config()
   filter.load()
   local filter_data = {
@@ -364,6 +348,23 @@ supervise = function(pipes, sfd)
     decision_cfg = filter.decision_cfg
   }
   local workers_with_filter = { }
+  for i, q_num in ipairs(responses_queues) do
+    local ack_info = alloc_ack_pipe()
+    table.insert(workers_with_filter, {
+      name = "resp-q" .. tostring(q_num),
+      pid = nil,
+      restart_fn = function()
+        return fork_worker("resp-q" .. tostring(q_num), function(fds)
+          return require("worker_responses").run(q_num, fds, rules_metadata)
+        end, {
+          question_response_rfd = pipes.question_response.rfd,
+          nft_wfd = pipes.nft.wfd,
+          ack_rfd = ack_info.rfd,
+          worker_idx = ack_info.worker_idx
+        })
+      end
+    })
+  end
   table.insert(workers_with_filter, {
     name = "nft",
     pid = nil,

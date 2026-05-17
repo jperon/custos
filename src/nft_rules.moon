@@ -22,6 +22,9 @@ nft_compiler = require "filter.nft_compiler"
 nft_dynamic_sets = require "filter.nft_dynamic_sets"
 rule = require "filter.rule"
 
+-- Expose rules_metadata for other modules to reuse without recompiling
+rules_metadata = nil
+
 -- ── Contexte nft (singleton) ─────────────────────────────────────────────────
 
 ctx = libnft.nft_ctx_new 0

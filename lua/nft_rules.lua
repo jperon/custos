@@ -11,6 +11,7 @@ end
 local nft_compiler = require("filter.nft_compiler")
 local nft_dynamic_sets = require("filter.nft_dynamic_sets")
 local rule = require("filter.rule")
+local rules_metadata = nil
 local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
   error("nft_rules: nft_ctx_new() failed")
@@ -164,7 +165,7 @@ apply = function()
   fh:close()
   local cfg = require("config")
   local compiled_rules = rule.compile_rules(cfg.filter)
-  local rules_metadata = compiled_rules.rules_metadata
+  rules_metadata = compiled_rules.rules_metadata
   local plan = compile_filter_rules(cfg.filter, rules_metadata)
   if plan and plan.metrics then
     log_info({

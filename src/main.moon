@@ -285,18 +285,6 @@ supervise = (pipes, sfd) ->
       pipes.learn.wfd
   }
 
-  -- Multiple workers for responses (parallel response)
-  -- Chaque worker_responses reçoit un pipe ACK dédié pour la synchronisation nft.
-  for i, q_num in ipairs responses_queues
-    ack_info = alloc_ack_pipe!
-    table.insert workers_without_filter, {
-      name: "resp-q#{q_num}"
-      pid: nil
-      restart_fn: -> fork_worker "resp-q#{q_num}",
-        (fds) -> require("worker_responses").run q_num, fds,
-        { question_response_rfd: pipes.question_response.rfd, nft_wfd: pipes.nft.wfd,
-          ack_rfd: ack_info.rfd, worker_idx: ack_info.worker_idx }
-    }
 
   -- Multiple workers for captive (parallel captive)
   for i, q_num in ipairs captive_queues
@@ -351,6 +339,11 @@ supervise = (pipes, sfd) ->
   nft_rules = require "nft_rules"
   nft_rules.apply!
 
+  -- Extract rules_metadata from nft_rules compilation
+  -- nft_rules.apply! already compiled rules and stored metadata in module variable
+  -- This avoids recompiling rules (which would reload domain lists)
+  rules_metadata = nft_rules.rules_metadata
+
   -- Apply extra nft rules before forking workers, so the bypass is in place
   -- before any queue starts intercepting traffic.
   nft_extra.apply_from_config!
@@ -367,6 +360,21 @@ supervise = (pipes, sfd) ->
 
   -- Workers WITH filter data (forked after filter.load!)
   workers_with_filter = {}
+
+  -- Multiple workers for responses (parallel response)
+  -- Chaque worker_responses reçoit un pipe ACK dédié pour la synchronisation nft.
+  -- Moved here to benefit from COW after nft_rules.apply! and filter.load!
+  -- Pass rules_metadata to avoid recompiling rules (which would reload domain lists)
+  for i, q_num in ipairs responses_queues
+    ack_info = alloc_ack_pipe!
+    table.insert workers_with_filter, {
+      name: "resp-q#{q_num}"
+      pid: nil
+      restart_fn: -> fork_worker "resp-q#{q_num}",
+        (fds) -> require("worker_responses").run q_num, fds, rules_metadata,
+        { question_response_rfd: pipes.question_response.rfd, nft_wfd: pipes.nft.wfd,
+          ack_rfd: ack_info.rfd, worker_idx: ack_info.worker_idx }
+    }
 
   -- NFT worker (needs nft rules to be applied first)
   table.insert workers_with_filter, {

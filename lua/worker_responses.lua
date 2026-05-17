@@ -49,38 +49,41 @@ do
   local _obj_0 = table
   concat, insert, remove = _obj_0.concat, _obj_0.insert, _obj_0.remove
 end
-local filter_cfg = config.filter or { }
-local compiled_rules = require("filter.rule").compile_rules(filter_cfg)
-local rules_metadata = compiled_rules.rules_metadata
+local rules_metadata = nil
 local auth_wildcard_rules = { }
-for idx, meta in ipairs(rules_metadata or { }) do
-  local requires_auth = false
-  local dns_refs = 0
-  if meta.conditions then
-    for _, cond in ipairs(meta.conditions) do
-      if cond.name == "from_users" or cond.name == "from_userlists" then
-        requires_auth = true
-      end
-      if cond.name == "to_domains" or cond.name == "to_domainlist" then
-        dns_refs = dns_refs + 1
+local load_auth_wildcard_rules
+load_auth_wildcard_rules = function(metadata)
+  rules_metadata = metadata
+  auth_wildcard_rules = { }
+  for idx, meta in ipairs(rules_metadata or { }) do
+    local requires_auth = false
+    local dns_refs = 0
+    if meta.conditions then
+      for _, cond in ipairs(meta.conditions) do
+        if cond.name == "from_users" or cond.name == "from_userlists" then
+          requires_auth = true
+        end
+        if cond.name == "to_domains" or cond.name == "to_domainlist" then
+          dns_refs = dns_refs + 1
+        end
       end
     end
+    if requires_auth and dns_refs == 0 then
+      local rule_id = meta.rule_id or "unknown_" .. tostring(idx)
+      auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
+      log_info({
+        action = "auth_wildcard_rule_detected",
+        rule_id = rule_id,
+        idx = idx
+      })
+    end
   end
-  if requires_auth and dns_refs == 0 then
-    local rule_id = meta.rule_id or "unknown_" .. tostring(idx)
-    auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
-    log_info({
-      action = "auth_wildcard_rule_detected",
-      rule_id = rule_id,
-      idx = idx
-    })
-  end
+  return log_info({
+    action = "auth_wildcard_rules_loaded",
+    count = #auth_wildcard_rules,
+    rules = table.concat(auth_wildcard_rules, ", ")
+  })
 end
-log_info({
-  action = "auth_wildcard_rules_loaded",
-  count = #auth_wildcard_rules,
-  rules = table.concat(auth_wildcard_rules, ", ")
-})
 local IPC_RETRY_ENABLED
 if match_retry_cfg.enabled == nil then
   IPC_RETRY_ENABLED = true
@@ -631,8 +634,11 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   return -1
 end
 local run
-run = function(queue_num, rfd)
+run = function(queue_num, rfd, rules_metadata)
   set_action_prefix("response_")
+  if rules_metadata then
+    load_auth_wildcard_rules(rules_metadata)
+  end
   if type(rfd) == "table" then
     local nft_q = require("nft_queue")
     if rfd.nft_wfd then
