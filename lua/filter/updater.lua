@@ -4,6 +4,7 @@ local parse_domains = require("filter.lib.parse_domains")
 local config = require("config")
 ffi.cdef([[  int rename(const char *oldpath, const char *newpath);
   int kill(int pid, int sig);
+  int setenv(const char *name, const char *value, int overwrite);
 ]])
 local SIGHUP = 1
 local write_bin
@@ -295,7 +296,7 @@ process_custom_dir = function(src_dir, output_dir, dry_run)
 end
 local opts = parse_args(arg)
 if opts.config then
-  os.setenv("CUSTOS_CONFIG_PATH", opts.config)
+  ffi.C.setenv("CUSTOS_CONFIG_PATH", opts.config, 1)
 end
 local cfg = config
 local sources = cfg.filter.sources or { }

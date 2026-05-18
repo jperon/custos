@@ -41,6 +41,7 @@ config       = require "config"
 ffi.cdef [[
   int rename(const char *oldpath, const char *newpath);
   int kill(int pid, int sig);
+  int setenv(const char *name, const char *value, int overwrite);
 ]]
 
 SIGHUP = 1
@@ -338,8 +339,9 @@ process_custom_dir = (src_dir, output_dir, dry_run) ->
 opts = parse_args arg
 
 -- Permettre de surcharger le chemin de config via --config ou CUSTOS_CONFIG_PATH
+-- os.setenv n'existe pas en Lua 5.1/LuaJIT, on utilise FFI
 if opts.config
-  os.setenv "CUSTOS_CONFIG_PATH", opts.config
+  ffi.C.setenv("CUSTOS_CONFIG_PATH", opts.config, 1)
 
 cfg = config
 sources         = cfg.filter.sources or {}
