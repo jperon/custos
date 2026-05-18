@@ -70,7 +70,7 @@ substitute = (content, plan=nil) ->
   content = content\gsub "{QUEUE_SNI_LOG}",   cfg.nfqueue.sni_log
   content = content\gsub "{NFT_IP_TIMEOUT}",  cfg.nft.ip_timeout
   compiled_sets = if plan
-    nft_compiler.render_sets_only plan, "  ", true
+    nft_compiler.render_sets_only cfg.filter, plan, "  ", true
   else
     "  # No compiled filter sets\n"
   content = content\gsub "{COMPILED_FILTER_SETS}", compiled_sets

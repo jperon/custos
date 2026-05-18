@@ -134,6 +134,134 @@ collect_dest_nets = (cfg, rule) ->
   table.sort v6
   v4, v6
 
+--- Collect all netlist names referenced by rules.
+-- @tparam table cfg Filter configuration (can be full config or cfg.filter)
+-- @tparam table plan Compiled plan with rules
+-- @treturn table Set of netlist names
+collect_referenced_netlists = (cfg, plan) ->
+  netlists = {}
+  seen = {}
+
+  add_netlist = (list_name) ->
+    return unless list_name
+    key = tostring(list_name)
+    return if seen[key]
+    -- Only include if the netlist actually exists in config
+    -- Support multiple config structures (merge all locations):
+    -- - Full config: cfg.nets or cfg.filter.netlists
+    -- - Filter config: cfg.netlists
+    -- Check all locations (not short-circuiting with or)
+    found = false
+    if cfg.nets and cfg.nets[list_name]
+      found = true
+    if cfg.netlists and cfg.netlists[list_name]
+      found = true
+    if cfg.filter and cfg.filter.netlists and cfg.filter.netlists[list_name]
+      found = true
+    if found
+      seen[key] = true
+      netlists[#netlists + 1] = list_name
+
+  -- Look at original rules configuration
+  rules_cfg = cfg.rules or {}
+  for _, rule in ipairs rules_cfg
+    for k, args in pairs rule.conditions or {}
+      if k == "from_netlist"
+        add_netlist args
+      elseif k == "from_netlists"
+        for _, list_name in ipairs as_list args
+          add_netlist list_name
+      elseif k == "to_netlist"
+        add_netlist args
+      elseif k == "to_netlists"
+        for _, list_name in ipairs as_list args
+          add_netlist list_name
+
+  -- Also check enriched metadata if available
+  if plan.rules_metadata
+    for _, meta in ipairs plan.rules_metadata
+      if meta.conditions
+        for _, cond in ipairs meta.conditions
+          -- Check if this is a from_netlist, from_netlists, to_netlist, or to_netlists condition
+          if cond.name == "from_netlist" or cond.name == "to_netlist"
+            -- Extract list_name from args
+            list_name = nil
+            if cond.args
+              if type(cond.args) == "string"
+                list_name = cond.args
+              elseif type(cond.args) == "table"
+                list_name = cond.args[1] or cond.args.list_name
+            add_netlist list_name if list_name
+          elseif cond.name == "from_netlists" or cond.name == "to_netlists"
+            -- Extract list_names from args (array of list names)
+            if cond.args and type(cond.args) == "table"
+              for _, list_name in ipairs as_list cond.args
+                add_netlist list_name if list_name
+
+  table.sort netlists
+  netlists
+
+--- Render global netlist sets (nets_<name>).
+-- These sets are referenced by from_netlist/to_netlist conditions.
+-- @tparam table cfg Filter configuration (can be full config or cfg.filter)
+-- @tparam table plan Compiled plan with rules
+-- @tparam string indent Indentation string
+-- @treturn string Nft set definitions for netlists
+render_netlist_sets = (cfg, plan, indent="  ") ->
+  netlist_names = collect_referenced_netlists cfg, plan
+  return "" if #netlist_names == 0
+
+  lines = {}
+  lines[#lines + 1] = "#{indent}# ── b2: global netlist sets (nets_<name>) ──"
+
+  -- Support multiple config structures (merge all locations):
+  -- - Full config: cfg.nets or cfg.filter.netlists
+  -- - Filter config: cfg.netlists
+  nets_config = {}
+  if cfg.nets
+    for k, v in pairs cfg.nets
+      nets_config[k] = v
+  if cfg.netlists
+    for k, v in pairs cfg.netlists
+      nets_config[k] = v
+  if cfg.filter and cfg.filter.netlists
+    for k, v in pairs cfg.filter.netlists
+      nets_config[k] = v
+
+  for _, list_name in ipairs netlist_names
+    nets = nets_config[list_name] or {}
+    v4, v6 = {}, {}
+    seen4, seen6 = {}, {}
+
+    for _, raw in ipairs as_list nets
+      net = tostring(raw)\match "^%s*(.-)%s*$"
+      continue unless net and #net > 0
+      if net\find ":", 1, true
+        append_unique v6, seen6, net
+      else
+        append_unique v4, seen4, net
+
+    table.sort v4
+    table.sort v6
+
+    set_name = "nets_#{list_name}"
+
+    if #v4 > 0
+      lines[#lines + 1] = "#{indent}set #{set_name} {"
+      lines[#lines + 1] = "#{indent}  type ipv4_addr"
+      lines[#lines + 1] = "#{indent}  flags interval"
+      lines[#lines + 1] = "#{indent}  elements = { #{table.concat(v4, ", ")} }"
+      lines[#lines + 1] = "#{indent}}"
+
+    if #v6 > 0
+      lines[#lines + 1] = "#{indent}set #{set_name}6 {"
+      lines[#lines + 1] = "#{indent}  type ipv6_addr"
+      lines[#lines + 1] = "#{indent}  flags interval"
+      lines[#lines + 1] = "#{indent}  elements = { #{table.concat(v6, ", ")} }"
+      lines[#lines + 1] = "#{indent}}"
+
+  table.concat lines, "\n"
+
 collect_subnets = (rule) ->
   v4, v6 = {}, {}
   seen4, seen6 = {}, {}
@@ -651,9 +779,14 @@ render_rule_chain = (rule, indent) ->
 
   lines
 
-render_sets_only = (plan, indent="  ", include_elements=true) ->
+render_sets_only = (cfg, plan, indent="  ", include_elements=true) ->
   lines = {}
   lines[#lines + 1] = "#{indent}# ── b2: compiled per-rule nft sets (must be defined before chains) ──"
+
+  -- Render global netlist sets first
+  netlist_sets = render_netlist_sets cfg, plan, indent
+  if #netlist_sets > 0
+    lines[#lines + 1] = netlist_sets
 
   lines[#lines + 1] = "#{indent}map #{plan.action_vmap} {"
   lines[#lines + 1] = "#{indent}  type mark : verdict"
@@ -768,4 +901,4 @@ render = (plan, indent="  ", include_elements=true) ->
   lines[#lines + 1] = "#{indent}}"
   table.concat(lines, "\n") .. "\n"
 
-{ :compile, :render, :render_sets_only, :serialize_stable, :collect_subnets, :build_rule, :compile_conditions_nft, :compile_action_nft }
+{ :compile, :render, :render_sets_only, :render_netlist_sets, :collect_referenced_netlists, :serialize_stable, :collect_subnets, :build_rule, :compile_conditions_nft, :compile_action_nft }

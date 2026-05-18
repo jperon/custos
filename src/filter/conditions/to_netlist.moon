@@ -7,7 +7,16 @@
 (cfg) ->
   { :Net } = require "filter.lib.ipcalc"
   (list_name) ->
-    raw_nets = cfg.nets and cfg.nets[list_name] or {}
+    -- Support multiple config structures (merge all locations):
+    -- - Full config: cfg.nets or cfg.filter.netlists
+    -- - Filter config: cfg.netlists
+    -- Check all locations (not short-circuiting with or)
+    raw_nets = cfg.nets and cfg.nets[list_name] or
+                cfg.netlists and cfg.netlists[list_name] or
+                (cfg.filter and cfg.filter.netlists and cfg.filter.netlists[list_name]) or {}
+    -- If raw_nets is a string (single CIDR), wrap it in a table
+    if type(raw_nets) == "string"
+      raw_nets = { raw_nets }
 
     -- Pré-compiler les CIDRs à l'init
     compiled = {}
@@ -28,9 +37,9 @@
         false, "#{ip} not in #{list_name}"
       compile_nft: (family) ->
         set_name = "nets_#{list_name}"
-        is_ipv6 = raw_nets[1] and raw_nets[1]\find(":")
-        if is_ipv6
-          return "ip6 daddr @#{set_name}", nil
+        -- Use family-specific set names for nft compilation
+        if family == "ip6"
+          return "ip6 daddr @#{set_name}6", nil
         else
           return "ip daddr @#{set_name}", nil
     }
