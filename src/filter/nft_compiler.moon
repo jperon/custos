@@ -401,7 +401,8 @@ compile = (filter_cfg, rules_metadata=nil) ->
     -- 1. Has nft conditions and is not worker-only (standard nft-compilable rule)
     -- 2. Requires auth (for auth subchain generation)
     -- 3. Has dynamic sets (need nft rules to check dynamic sets, regardless of worker_only)
-    include_rule = (has_nft_cond and not is_worker_only) or r.requires_auth or (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6)
+    -- 4. Worker-only with dynamic sets or auth (need chains to check sets)
+    include_rule = (has_nft_cond and not is_worker_only) or r.requires_auth or (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6) or (is_worker_only and (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6 or r.requires_auth))
     if include_rule
       plan_rules[#plan_rules + 1] = r
 

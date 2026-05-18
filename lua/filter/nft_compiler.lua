@@ -521,7 +521,7 @@ compile = function(filter_cfg, rules_metadata)
         end
       end
     end
-    local include_rule = (has_nft_cond and not is_worker_only) or r.requires_auth or (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6)
+    local include_rule = (has_nft_cond and not is_worker_only) or r.requires_auth or (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6) or (is_worker_only and (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6 or r.requires_auth))
     if include_rule then
       plan_rules[#plan_rules + 1] = r
     end
