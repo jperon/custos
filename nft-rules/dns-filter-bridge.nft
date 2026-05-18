@@ -83,6 +83,8 @@ table bridge dns-filter-bridge {
     flags interval
   }
 
+{COMPILED_FILTER_SETS}
+
 {COMPILED_FILTER_RULES}
 
   # ── Chaîne FORWARD (tout le trafic traversant le bridge) ──────
