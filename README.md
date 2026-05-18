@@ -13,38 +13,38 @@ decoding — all without any C compilation step.
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│  Linux bridge machine                                          │
-│                                                                │
-│  nftables (kernel)                                             │
-│  ├── policy DROP + REJECT LAN                                  │
-│  ├── set ip4_allowed   { ipv4_src . ipv4_dst  timeout 2m }     │
-│  ├── set ip6_allowed   { ipv6_src . ipv6_dst  timeout 2m }     │
-│  ├── set authenticated_macs{ ether_addr timeout <idle_timeout> }│
-│  ├── set authenticated_ips { ipv4_addr timeout <idle_timeout> } │
-│  ├── set authenticated_ips6{ ipv6_addr timeout <idle_timeout> } │
-│  ├── TCP :80 LAN SYN    → NFQUEUE_CAPTIVE    (portail captif)  │
-│  ├── TCP :33443          → NFQUEUE_AUTH       (extrait MAC/IP)  │
-│  ├── Reject résiduel     → NFQUEUE_REJECT     (reject, rate-limité) │
-│  ├── UDP/TCP :53 src=LAN → NFQUEUE_QUESTIONS  (questions)       │
-│  └── UDP/TCP :53 dst=LAN → NFQUEUE_RESPONSES  (réponses)        │
-│                                                                │
-│  LuaJIT (userspace)  BRIDGE_IFNAME=<br>                       │
-│  ├── main.lua           supervisor + fork                      │
-│  ├── mac_learner        table IP→MAC (socket Unix)             │
-│  ├── worker_arp_sniffer ARP/NDP passif → pipe learn (22 B)     │
-│  ├── worker_questions ── pipe question_response (43 B, rule_id + timeout) ──► worker_responses │
-│  │   parse L2/L3/L4/L7      └─ pipe learn (22 B) → mac_learner│
-│  │   rules (conditions+actions)              verify txid       │
-│  │   log + ACCEPT/REFUSED/DNSONLY            patch TTL→60s     │
-│  │                                           nft set add       │
-│  ├── worker_auth_queue ─ pipe auth_ipc (22 B) ──► worker AUTH  │
-│  ├── worker AUTH       — HTTPS login (port 33443)              │
-│  ├── worker_captive    — TCP/80 SYN → AF_PACKET 302            │
-│  ├── worker_reject     — forge RST/ICMP admin-prohibited       │
-│  │                                                              │
-│  └── logs → syslog (journald / logread)                        │
-└────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│  Linux bridge machine                                                                        │
+│                                                                                              │
+│  nftables (kernel)                                                                           │
+│  ├── policy DROP + REJECT LAN                                                                │
+│  ├── set ip4_allowed   { ipv4_src . ipv4_dst  timeout 2m }                                   │
+│  ├── set ip6_allowed   { ipv6_src . ipv6_dst  timeout 2m }                                   │
+│  ├── set authenticated_macs{ ether_addr timeout <idle_timeout>}                              │
+│  ├── set authenticated_ips { ipv4_addr timeout <idle_timeout>}                               │
+│  ├── set authenticated_ips6{ ipv6_addr timeout <idle_timeout>}                               │
+│  ├── TCP :80 LAN SYN    → NFQUEUE_CAPTIVE    (portail captif)                                │
+│  ├── TCP :33443          → NFQUEUE_AUTH       (extrait MAC/IP)                               │
+│  ├── Reject résiduel     → NFQUEUE_REJECT     (reject, rate-limité)                          │
+│  ├── UDP/TCP :53 src=LAN → NFQUEUE_QUESTIONS  (questions)                                    │
+│  └── UDP/TCP :53 dst=LAN → NFQUEUE_RESPONSES  (réponses)                                     │
+│                                                                                              │
+│  LuaJIT (userspace)  BRIDGE_IFNAME=<br>                                                      │
+│  ├── main.lua           supervisor + fork                                                    │
+│  ├── mac_learner        table IP→MAC (socket Unix)                                           │
+│  ├── worker_arp_sniffer ARP/NDP passif → pipe learn (22 B)                                   │
+│  ├── worker_questions ── pipe question_response (43 B, rule_id+timeout) ──► worker_responses │
+│  │   parse L2/L3/L4/L7      └─ pipe learn (22 B) → mac_learner                               │
+│  │   rules (conditions+actions)              verify txid                                     │
+│  │   log + ACCEPT/REFUSED/DNSONLY            patch TTL→60s                                   │
+│  │                                           nft set add                                     │
+│  ├── worker_auth_queue ─ pipe auth_ipc (22 B) ──► worker AUTH                                │
+│  ├── worker AUTH       — HTTPS login (port 33443)                                            │
+│  ├── worker_captive    — TCP/80 SYN → AF_PACKET 302                                          │
+│  ├── worker_reject     — forge RST/ICMP admin-prohibited                                     │
+│  │                                                                                           │
+│  └── logs → syslog (journald / logread)                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Allowed packet flow
@@ -202,16 +202,16 @@ custos/
 
 ### OpenWrt Packages
 
-| Package                  | Role                                    |
-|--------------------------|-----------------------------------------|
-| `luajit`                 | Compiled Lua execution                  |
-| `moonscript`             | `.moon` → `.lua` compilation            |
-| `lyaml`                  | YAML config loader (`lyaml`, LuaJIT)    |
-| `libnetfilter-queue`     | NFQUEUE C library                       |
-| `libnftables`            | nftables library (set injection)        |
-| `nftables`               | `nft` tool                              |
-| `wolfssl`                | TLS/SSL library (via FFI)               |
-| `px5g-wolfssl`           | Dynamic TLS certificate generation      |
+| Package              | Role                                    |
+|----------------------|-----------------------------------------|
+| `luajit`             | Compiled Lua execution                  |
+| `moonscript`         | `.moon` → `.lua` compilation            |
+| `lyaml`              | YAML config loader (`lyaml`, LuaJIT)    |
+| `libnetfilter-queue` | NFQUEUE C library                       |
+| `libnftables`        | nftables library (set injection)        |
+| `nftables`           | `nft` tool                              |
+| `wolfssl`            | TLS/SSL library (via FFI)               |
+| `px5g-wolfssl`       | Dynamic TLS certificate generation      |
 
 ```bash
 opkg install luajit lyaml libnetfilter-queue nftables wolfssl px5g-wolfssl
@@ -623,15 +623,15 @@ The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode
 
 ### Sets nftables
 
-| Set | Type | Rôle |
-|-----|------|------|
-| `ip4_allowed` | `ipv4_addr . ipv4_addr` | Paire (src IP client, IPv4 dest) autorisée après résolution DNS |
-| `ip6_allowed` | `ipv6_addr . ipv6_addr` | Paire (src IPv6 client, IPv6 dest) autorisée après résolution DNS |
-| `authenticated_macs` | `ether_addr` | MACs clientes authentifiées (bypass intercept TCP/80 captive) |
-| `authenticated_ips` | `ipv4_addr` | IPs clientes IPv4 authentifiées (bypass intercept TCP/80 captive) |
-| `authenticated_ips6` | `ipv6_addr` | IPs clientes IPv6 authentifiées (bypass intercept TCP/80 captive) |
-| `ip4_dest_whitelist` | `ipv4_addr` | Destinations IPv4 toujours autorisées (bypass DNS, rechargement SIGHUP) |
-| `ip6_dest_whitelist` | `ipv6_addr` | Destinations IPv6 toujours autorisées (bypass DNS, rechargement SIGHUP) |
+| Set                   | Type                    | Rôle                                                                    |    
+|-----------------------|-------------------------|-------------------------------------------------------------------------|    
+| `ip4_allowed`         | `ipv4_addr . ipv4_addr` | Paire (src IP client, IPv4 dest) autorisée après résolution DNS         |  
+| `ip6_allowed`         | `ipv6_addr . ipv6_addr` | Paire (src IPv6 client, IPv6 dest) autorisée après résolution DNS       |
+| `authenticated_macs`  | `ether_addr`            | MACs clientes authentifiées (bypass intercept TCP/80 captive)           |  
+| `authenticated_ips`   | `ipv4_addr`             | IPs clientes IPv4 authentifiées (bypass intercept TCP/80 captive)       |
+| `authenticated_ips6`  | `ipv6_addr`             | IPs clientes IPv6 authentifiées (bypass intercept TCP/80 captive)       |
+| `ip4_dest_whitelist`  | `ipv4_addr`             | Destinations IPv4 toujours autorisées (bypass DNS, rechargement SIGHUP) |
+| `ip6_dest_whitelist`  | `ipv6_addr`             | Destinations IPv6 toujours autorisées (bypass DNS, rechargement SIGHUP) |
 
 ### Prerequisites
 
@@ -646,13 +646,13 @@ nft -f nft-rules/dns-filter-bridge.nft
 The ruleset explicitly passes bootstrap traffic that cannot be tracked by
 conntrack and must therefore bypass the `policy drop`:
 
-| Traffic | Direction | Rule |
-|---------|-----------|------|
-| DHCPv4 (UDP 67/68) | FORWARD | `udp dport { 67, 68 } accept` |
-| DHCPv4 server on filter machine | INPUT | `udp dport 67 accept` |
-| DHCPv6 (UDP 546/547) | FORWARD | `udp dport { 546, 547 } accept` |
-| DHCPv6 server on filter machine | INPUT | `udp dport 547 accept` |
-| SLAAC Router Advertisement from upstream router | FORWARD | `icmpv6 type nd-router-advert accept` |
+| Traffic                                           | Direction | Rule                                  | 
+|---------------------------------------------------|-----------|---------------------------------------| 
+| DHCPv4 (UDP 67/68)                                | FORWARD   | `udp dport { 67, 68 } accept`         |  
+| DHCPv4 server on filter machine                   | INPUT     | `udp dport 67 accept`                 |  
+| DHCPv6 (UDP 546/547)                              | FORWARD   | `udp dport { 546, 547 } accept`       |  
+| DHCPv6 server on filter machine                   | INPUT     | `udp dport 547 accept`                |  
+| SLAAC Router Advertisement from upstream router   | FORWARD   | `icmpv6 type nd-router-advert accept` |
 
 Router Advertisements **emitted by the filter machine itself** (radvd,
 WireGuard relay…) exit via the OUTPUT chain whose `policy accept` already
