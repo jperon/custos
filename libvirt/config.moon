@@ -1,5 +1,5 @@
-# libvirt/filter.yml — configuration custos pour l'environnement E2E libvirt.
-# Déployée sur /etc/custos/filter.yml par `make test-e2e`.
+# libvirt/config.moon — configuration custos pour l'environnement E2E libvirt.
+# Déployée sur /etc/custos/config.moon par `make test-e2e`.
 
 auth:
   idle_timeout: 10

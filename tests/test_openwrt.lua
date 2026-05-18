@@ -525,8 +525,8 @@ print("")
 print(tostring(C.bold) .. "▶ Liste blanche statique (dest_whitelist, rechargement SIGHUP)" .. tostring(C.reset))
 local TEST_WL_IP = "10.253.254.255"
 local TEST_WL_IP6 = "fd99::1"
-local FILTER_YML = tostring(CFG_DIR) .. "/filter.yml"
-ssh("printf '\\ndest_whitelist:\\n- " .. tostring(TEST_WL_IP) .. "\\n- " .. tostring(TEST_WL_IP6) .. "\\n' >> " .. tostring(FILTER_YML))
+local CONFIG_MOON = tostring(CFG_DIR) .. "/config.moon"
+ssh("printf '\\ndest_whitelist:\\n- " .. tostring(TEST_WL_IP) .. "\\n- " .. tostring(TEST_WL_IP6) .. "\\n' >> " .. tostring(CONFIG_MOON))
 ssh("pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && kill -HUP $pid 2>/dev/null; true")
 os.execute("dig @" .. tostring(DNS_RESOLVER) .. " github.com A +time=2 +tries=1 >/dev/null 2>&1; true")
 os.execute("sleep 1")
@@ -536,7 +536,7 @@ report("dest_whitelist — " .. tostring(TEST_WL_IP) .. " présent dans ip4_dest
 local wl6_set
 _, wl6_set = ssh("nft list set bridge dns-filter-bridge ip6_dest_whitelist 2>/dev/null")
 report("dest_whitelist — " .. tostring(TEST_WL_IP6) .. " présent dans ip6_dest_whitelist après SIGHUP", (wl6_set and wl6_set:match("fd99")) ~= nil, wl6_set or "(vide)")
-ssh("grep -v '^dest_whitelist:\\|^- " .. tostring(TEST_WL_IP) .. "\\|^- " .. tostring(TEST_WL_IP6) .. "' " .. tostring(FILTER_YML) .. " > /tmp/_filter.tmp && mv /tmp/_filter.tmp " .. tostring(FILTER_YML) .. "; true")
+ssh("grep -v '^dest_whitelist:\\|^- " .. tostring(TEST_WL_IP) .. "\\|^- " .. tostring(TEST_WL_IP6) .. "' " .. tostring(CONFIG_MOON) .. " > /tmp/_filter.tmp && mv /tmp/_filter.tmp " .. tostring(CONFIG_MOON) .. "; true")
 ssh("pid=$(pgrep -f 'luajit2.*main' 2>/dev/null | head -1); [ -n \"$pid\" ] && kill -HUP $pid 2>/dev/null; true")
 os.execute("dig @" .. tostring(DNS_RESOLVER) .. " github.com A +time=2 +tries=1 >/dev/null 2>&1; true")
 os.execute("sleep 1")

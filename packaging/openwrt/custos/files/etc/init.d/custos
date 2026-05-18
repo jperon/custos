@@ -7,7 +7,6 @@ STOP=05
 LUAJIT=$(command -v luajit 2>/dev/null || command -v luajit2 2>/dev/null)
 PROG=/usr/bin/custos
 CUSTOS_DIR=/usr/share/custos
-FILTER_CONFIG=/etc/custos/filter.yml
 CONFIG_MOON=/etc/custos/config.moon
 CRONTABS_ROOT=/etc/crontabs/root
 CUSTOS_CRON_MARKER="# custos-update-lists"

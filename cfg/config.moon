@@ -1,4 +1,4 @@
--- Exemple config.moon dérivé de cfg/filter.yml.sample
+-- Exemple config.moon
 -- Peut être chargé via CUSTOS_CONFIG_PATH=./cfg/config.moon
 
 {

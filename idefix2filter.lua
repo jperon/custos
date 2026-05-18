@@ -182,10 +182,7 @@ for _, r in ipairs(rules) do
   end
   yml = yml .. "\n"
 end
-local f_out = io.open("cfg/esm/filter.yml", "w")
-_ = {
-  f_out = write(yml)
-}
+-- Note: filter.yml has been removed from the project
 return {
   f_out = close()
 }

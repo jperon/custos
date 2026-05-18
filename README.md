@@ -112,8 +112,6 @@ worker response : drain pipe → pending[0x1234:192.168.1.42:54321] found (refus
 custos/
 ├── cfg/
 │   ├── config.moon          Exemple de configuration runtime (MoonScript)
-│   ├── filter.yml           Configuration des sources de listes (updater)
-│   ├── filter.yml.sample    Documentation complète des paramètres YAML
 │   └── secrets.sample       Exemple de fichier de mots de passe
 ├── src/
 │   ├── config.moon          Configuration hiérarchique runtime (/etc/custos/config.moon)
@@ -261,17 +259,6 @@ défauts de `src/config.moon`). Elle est au format **MoonScript** et couvre :
 - `dns.ttl_grace` (`grace`, `min`, `max`) — timeout nft = `TTL + grace`, borné
 - configuration authentification (port, cert/key, sessions, etc.)
 - whitelist de destinations IP (`filter.dest_whitelist`)
-
-### Configuration de l'updater (`filter.yml`)
-
-Le fichier `cfg/filter.yml` (ou `/etc/custos/filter.yml` sur OpenWrt) est utilisé **uniquement**
-par l'updater (`src/filter/updater.moon`) pour :
-- définir les sources de téléchargement des listes de domaines
-- configurer les répertoires de listes personnalisées
-- spécifier les formats de conversion
-
-Ce fichier **n'est pas** lu par le runtime du filtre. Les règles de filtrage et la configuration
-auth doivent être définies dans `config.moon`.
 
 NFT extra rules (via UCI)
 - Il est possible d’ajouter des règles nft supplémentaires depuis UCI (section `custos.main`) via l’option `nft_extra_rules`.

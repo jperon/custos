@@ -9,7 +9,7 @@
 -- Le script :
 --   1. Interroge `libvirt/custos-libvirt.sh filter-ip` pour l'IP mgmt du filtre.
 --   2. Exécute `install-owrt.lua` pour déployer custos sur le filtre.
---   3. Pousse filter.yml et la config UCI de test sur le filtre.
+--   3. Pousse la config UCI de test sur le filtre.
 --   4. Redémarre le service custos et attend `queue_listening`.
 --   5. Exécute la matrice de tests depuis le client (via ProxyJump par le filtre).
 --   6. Affiche un résumé.
