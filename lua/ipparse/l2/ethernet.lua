@@ -7,10 +7,17 @@ do
 end
 local need_bytes
 need_bytes = require("ipparse").need_bytes
+local band
+band = require("ipparse.lib.bit_compat").band
 local unpack = unpack or table.unpack
+local ETH_P_8021Q = 0x8100
 local pack
 pack = function(self)
-  return sp("c6 c6 >H", self.dst, self.src, self.protocol) .. tostring(self.data or '')
+  if self.vlan and self.vlan ~= 0 then
+    return sp("c6 c6 >HHH", self.dst, self.src, ETH_P_8021Q, self.vlan, self.protocol) .. tostring(self.data or '')
+  else
+    return sp("c6 c6 >H", self.dst, self.src, self.protocol) .. tostring(self.data or '')
+  end
 end
 local _mt = {
   __tostring = pack
@@ -24,10 +31,20 @@ parse = function(self, off)
     return nil, off
   end
   local dst, src, protocol, data_off = su("c6 c6 >H", self, off)
+  local vlan = nil
+  if protocol == ETH_P_8021Q then
+    if not (need_bytes(self, data_off, 4)) then
+      return nil, off
+    end
+    local tci
+    tci, protocol, data_off = su(">HH", self, data_off)
+    vlan = band(tci, 0xFFF)
+  end
   return setmetatable({
     dst = dst,
     src = src,
     protocol = protocol,
+    vlan = vlan,
     off = off,
     data_off = data_off
   }, _mt), data_off
@@ -63,5 +80,6 @@ return {
   pack = pack,
   proto = proto,
   mac2s = mac2s,
-  s2mac = s2mac
+  s2mac = s2mac,
+  ETH_P_8021Q = ETH_P_8021Q
 }

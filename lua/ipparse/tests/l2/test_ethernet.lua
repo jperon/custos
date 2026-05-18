@@ -57,4 +57,52 @@ test("new + tostring round-trip", function()
   assert(parsed.src == "\x00\x11\x22\x33\x44\x55", "round-trip src mismatch")
   return assert(parsed.protocol == 0x0800, "round-trip protocol mismatch")
 end)
+local eth_vlan_raw = sp("c6c6>HHH", "\xaa\xbb\xcc\xdd\xee\xff", "\x00\x11\x22\x33\x44\x55", 0x8100, 6, 0x0800)
+test("parse detects 802.1Q tag and extracts vlan", function()
+  local frame, next_off = eth.parse(eth_vlan_raw, 1)
+  return assert(frame.vlan == 6, "vlan should be 6, got " .. tostring(frame.vlan))
+end)
+test("parse 802.1Q: inner protocol is correct", function()
+  local frame, _ = eth.parse(eth_vlan_raw, 1)
+  return assert(frame.protocol == 0x0800, "inner protocol should be 0x0800, got " .. tostring(frame.protocol))
+end)
+test("parse 802.1Q: data_off is 19 (18-byte header + 1-based)", function()
+  local frame, next_off = eth.parse(eth_vlan_raw, 1)
+  assert(frame.data_off == 19, "data_off should be 19, got " .. tostring(frame.data_off))
+  return assert(next_off == 19, "next_off should be 19, got " .. tostring(next_off))
+end)
+test("parse untagged frame: vlan is nil", function()
+  local frame, _ = eth.parse(eth_raw, 1)
+  return assert(frame.vlan == nil, "vlan should be nil for untagged frame, got " .. tostring(frame.vlan))
+end)
+test("new with vlan: tostring produces 802.1Q frame", function()
+  local frame = eth.new({
+    dst = "\xaa\xbb\xcc\xdd\xee\xff",
+    src = "\x00\x11\x22\x33\x44\x55",
+    protocol = 0x0800,
+    vlan = 6
+  })
+  return assert(tostring(frame) == eth_vlan_raw, "VLAN-tagged frame bytes mismatch")
+end)
+test("new with vlan=0: tostring produces plain frame (no tag)", function()
+  local frame = eth.new({
+    dst = "\xaa\xbb\xcc\xdd\xee\xff",
+    src = "\x00\x11\x22\x33\x44\x55",
+    protocol = 0x0800,
+    vlan = 0
+  })
+  return assert(tostring(frame) == eth_raw, "vlan=0 should produce plain frame")
+end)
+test("new + tostring round-trip with vlan", function()
+  local frame = eth.new({
+    dst = "\xaa\xbb\xcc\xdd\xee\xff",
+    src = "\x00\x11\x22\x33\x44\x55",
+    protocol = 0x0800,
+    vlan = 42
+  })
+  local parsed, _ = eth.parse(tostring(frame), 1)
+  assert(parsed.vlan == 42, "round-trip vlan mismatch: got " .. tostring(parsed.vlan))
+  assert(parsed.protocol == 0x0800, "round-trip protocol mismatch")
+  return assert(parsed.dst == "\xaa\xbb\xcc\xdd\xee\xff", "round-trip dst mismatch")
+end)
 return util.summary("l2/ethernet")

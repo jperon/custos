@@ -206,13 +206,15 @@ handle_question = function(qh_ptr, nfad, pkt_id)
         end
         local forged_ip = forge_dns.forge_dns_response(pkt, q, captive_ip4, captive_ip6)
         if forged_ip then
-          local eth_obj = new_eth({
+          local ethertype = pkt.ip.version == 6 and IP6 or IP4
+          local eth_bytes = tostring(new_eth({
             src = _bridge_mac,
             dst = mac_raw,
-            protocol = pkt.ip.version == 6 and IP6 or IP4,
+            protocol = ethertype,
+            vlan = l2.vlan,
             data = forged_ip
-          })
-          local ok = bridge_raw.send(raw_fd, tostring(eth_obj), _ifindex)
+          }))
+          local ok = bridge_raw.send(raw_fd, eth_bytes, _ifindex)
           log_info({
             action = "dns_stolen",
             domain = q.qname,
