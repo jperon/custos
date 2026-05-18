@@ -125,9 +125,9 @@ ip62s = =>
   parts = { su ">HHHH HHHH", @ }
 
   -- Find the longest run of consecutive zeros
-  max_zero_start = 0
+  max_zero_start = 1
   max_zero_len = 0
-  zero_start = 0
+  zero_start = 1
   zero_len = 0
 
   for i = 1, 8
@@ -148,19 +148,28 @@ ip62s = =>
 
   -- Only compress if we have at least 2 consecutive zeros
   if max_zero_len >= 2
-    -- Build the compressed address
-    result = {}
+    -- Build the compressed address in two parts
+    before = {}
+    after = {}
+
     for i = 1, 8
-      if i == max_zero_start
-        if max_zero_len > 1
-          table.insert result, ""
-          -- Skip the zero run
-          i += max_zero_len - 1
-        else
-          table.insert result, format "%x", parts[i]
-      else
-        table.insert result, format "%x", parts[i]
-    return table.concat result, ":"
+      if i < max_zero_start
+        table.insert before, format "%x", parts[i]
+      elseif i >= max_zero_start + max_zero_len
+        table.insert after, format "%x", parts[i]
+
+    before_str = table.concat before, ":"
+    after_str = table.concat after, ":"
+
+    -- Handle edge cases
+    if #before == 0 and #after == 0
+      return "::"
+    elseif #before == 0
+      return "::" .. after_str
+    elseif #after == 0
+      return before_str .. "::"
+    else
+      return before_str .. "::" .. after_str
   else
     -- No compression needed
     format "%x:%x:%x:%x:%x:%x:%x:%x", unpack parts
