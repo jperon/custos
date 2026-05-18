@@ -571,7 +571,7 @@ ensure_nft_modules = function()
   return true, nil
 end
 local apply_nft_allow
-apply_nft_allow = function(src_ip, dst_ip, mac, policy)
+apply_nft_allow = function(src_ip, dst_ip, mac, policy, rule_id)
   local ok_mods, mod_err = ensure_nft_modules()
   if not (ok_mods) then
     return false, mod_err
@@ -595,14 +595,14 @@ apply_nft_allow = function(src_ip, dst_ip, mac, policy)
     mac_kind = "mac4"
   end
   local cmds = { }
-  local ip_cmd = cmd_for(ip_kind, src_ip, dst_ip, SNI_TIMEOUT)
+  local ip_cmd = cmd_for(ip_kind, src_ip, dst_ip, rule_id, SNI_TIMEOUT)
   if ip_cmd then
     cmds[#cmds + 1] = ip_cmd
   else
     return false, "nft_cmd_build_failed"
   end
   if mac and mac ~= "unknown" and mac ~= "00:00:00:00:00:00" then
-    local mac_cmd = cmd_for(mac_kind, mac, dst_ip, SNI_TIMEOUT)
+    local mac_cmd = cmd_for(mac_kind, mac, dst_ip, rule_id, SNI_TIMEOUT)
     if mac_cmd then
       cmds[#cmds + 1] = mac_cmd
     end
@@ -884,7 +884,7 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     return NF_ACCEPT
   end
   if allowed == true then
-    local ok_nft, nft_reason = apply_nft_allow(ip_src_str, ip_dst_str, mac_str, sni_policy)
+    local ok_nft, nft_reason = apply_nft_allow(ip_src_str, ip_dst_str, mac_str, sni_policy, decide_rule)
     if not (ok_nft) then
       log_block({
         action = "sni_verdict_nft_failed",

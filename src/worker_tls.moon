@@ -433,7 +433,7 @@ ensure_nft_modules = ->
 
   true, nil
 
-apply_nft_allow = (src_ip, dst_ip, mac, policy) ->
+apply_nft_allow = (src_ip, dst_ip, mac, policy, rule_id) ->
   ok_mods, mod_err = ensure_nft_modules!
   return false, mod_err unless ok_mods
   return false, "invalid_ip_pair" unless src_ip and dst_ip and src_ip != "unknown" and dst_ip != "unknown"
@@ -443,14 +443,14 @@ apply_nft_allow = (src_ip, dst_ip, mac, policy) ->
   mac_kind = if is_ipv6(dst_ip) then "mac6" else "mac4"
   cmds = {}
 
-  ip_cmd = cmd_for ip_kind, src_ip, dst_ip, SNI_TIMEOUT
+  ip_cmd = cmd_for ip_kind, src_ip, dst_ip, rule_id, SNI_TIMEOUT
   if ip_cmd
     cmds[#cmds + 1] = ip_cmd
   else
     return false, "nft_cmd_build_failed"
 
   if mac and mac != "unknown" and mac != "00:00:00:00:00:00"
-    mac_cmd = cmd_for mac_kind, mac, dst_ip, SNI_TIMEOUT
+    mac_cmd = cmd_for mac_kind, mac, dst_ip, rule_id, SNI_TIMEOUT
     cmds[#cmds + 1] = mac_cmd if mac_cmd
 
   ok, err = run_cmd table.concat(cmds, "\n"), { quiet: true }
@@ -689,7 +689,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     return NF_ACCEPT
 
   if allowed == true
-    ok_nft, nft_reason = apply_nft_allow ip_src_str, ip_dst_str, mac_str, sni_policy
+    ok_nft, nft_reason = apply_nft_allow ip_src_str, ip_dst_str, mac_str, sni_policy, decide_rule
     unless ok_nft
       log_block {
         action: "sni_verdict_nft_failed"

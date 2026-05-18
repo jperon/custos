@@ -30,23 +30,23 @@ describe "nft_queue per-rule sets (Phase C1)", ->
       assert.equal "12345", result
 
   describe "get_set_name", ->
-    it "returns global ip4_allowed for empty rule_id and ip4", ->
+    it "returns nil for empty rule_id and ip4 (per-rule required)", ->
       result = get_set_name("ip4", "")
-      assert.equal "ip4_allowed", result
-    
-    it "returns global ip6_allowed for empty rule_id and ip6", ->
+      assert.is_nil result
+
+    it "returns nil for empty rule_id and ip6 (per-rule required)", ->
       result = get_set_name("ip6", "")
-      assert.equal "ip6_allowed", result
-    
-    it "returns global mac4_allowed for empty rule_id and mac4", ->
+      assert.is_nil result
+
+    it "returns nil for empty rule_id and mac4 (per-rule required)", ->
       result = get_set_name("mac4", "")
-      assert.equal "mac4_allowed", result
-    
-    it "returns global mac6_allowed for empty rule_id and mac6", ->
+      assert.is_nil result
+
+    it "returns nil for empty rule_id and mac6 (per-rule required)", ->
       result = get_set_name("mac6", "")
-      assert.equal "mac6_allowed", result
-    
-    it "returns per-rule set rule_test_ip4_ip4 for rule_id and ip4", ->
+      assert.is_nil result
+
+    it "returns per-rule set rule_test_ip4 for rule_id and ip4", ->
       result = get_set_name("ip4", "test")
       assert.equal "rule_test_ip4", result
     

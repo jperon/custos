@@ -284,7 +284,7 @@ end
 print("  ✓ Legacy _match_* files removed\n")
 print("=== MIGRATION COMPLETE ✓ ===")
 print("\nAll conditions and actions are now using the enriched API:")
-print("  • capabilities table with worker/nft_static/nft_dynamic")
+print("  • capabilities table with worker/nft/nft_dynamic")
 print("  • eval() function for runtime checks")
 print("  • compile_nft() function for nft compilation")
 print("  • worker_only flag for conditional nft generation")
