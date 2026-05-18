@@ -204,6 +204,146 @@ collect_dest_nets = function(cfg, rule)
   table.sort(v6)
   return v4, v6
 end
+local collect_referenced_netlists
+collect_referenced_netlists = function(cfg, plan)
+  local netlists = { }
+  local seen = { }
+  local add_netlist
+  add_netlist = function(list_name)
+    if not (list_name) then
+      return 
+    end
+    local key = tostring(list_name)
+    if seen[key] then
+      return 
+    end
+    local found = false
+    if cfg.nets and cfg.nets[list_name] then
+      found = true
+    end
+    if cfg.netlists and cfg.netlists[list_name] then
+      found = true
+    end
+    if cfg.filter and cfg.filter.netlists and cfg.filter.netlists[list_name] then
+      found = true
+    end
+    if found then
+      seen[key] = true
+      netlists[#netlists + 1] = list_name
+    end
+  end
+  local rules_cfg = cfg.rules or { }
+  for _, rule in ipairs(rules_cfg) do
+    for k, args in pairs(rule.conditions or { }) do
+      if k == "from_netlist" then
+        add_netlist(args)
+      elseif k == "from_netlists" then
+        for _, list_name in ipairs(as_list(args)) do
+          add_netlist(list_name)
+        end
+      elseif k == "to_netlist" then
+        add_netlist(args)
+      elseif k == "to_netlists" then
+        for _, list_name in ipairs(as_list(args)) do
+          add_netlist(list_name)
+        end
+      end
+    end
+  end
+  if plan.rules_metadata then
+    for _, meta in ipairs(plan.rules_metadata) do
+      if meta.conditions then
+        for _, cond in ipairs(meta.conditions) do
+          if cond.name == "from_netlist" or cond.name == "to_netlist" then
+            local list_name = nil
+            if cond.args then
+              if type(cond.args) == "string" then
+                list_name = cond.args
+              elseif type(cond.args) == "table" then
+                list_name = cond.args[1] or cond.args.list_name
+              end
+            end
+            if list_name then
+              add_netlist(list_name)
+            end
+          end
+        end
+      end
+    end
+  end
+  table.sort(netlists)
+  return netlists
+end
+local render_netlist_sets
+render_netlist_sets = function(cfg, plan, indent)
+  if indent == nil then
+    indent = "  "
+  end
+  local netlist_names = collect_referenced_netlists(cfg, plan)
+  if #netlist_names == 0 then
+    return ""
+  end
+  local lines = { }
+  lines[#lines + 1] = tostring(indent) .. "# ── b2: global netlist sets (nets_<name>) ──"
+  local nets_config = { }
+  if cfg.nets then
+    for k, v in pairs(cfg.nets) do
+      nets_config[k] = v
+    end
+  end
+  if cfg.netlists then
+    for k, v in pairs(cfg.netlists) do
+      nets_config[k] = v
+    end
+  end
+  if cfg.filter and cfg.filter.netlists then
+    for k, v in pairs(cfg.filter.netlists) do
+      nets_config[k] = v
+    end
+  end
+  for _, list_name in ipairs(netlist_names) do
+    local nets = nets_config[list_name] or { }
+    local v4, v6 = { }, { }
+    local seen4, seen6 = { }, { }
+    for _, raw in ipairs(as_list(nets)) do
+      local _continue_0 = false
+      repeat
+        local net = tostring(raw):match("^%s*(.-)%s*$")
+        if not (net and #net > 0) then
+          _continue_0 = true
+          break
+        end
+        if net:find(":", 1, true) then
+          append_unique(v6, seen6, net)
+        else
+          append_unique(v4, seen4, net)
+        end
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
+      end
+    end
+    table.sort(v4)
+    table.sort(v6)
+    local set_name = "nets_" .. tostring(list_name)
+    if #v4 > 0 then
+      lines[#lines + 1] = tostring(indent) .. "set " .. tostring(set_name) .. " {"
+      lines[#lines + 1] = tostring(indent) .. "  type ipv4_addr"
+      lines[#lines + 1] = tostring(indent) .. "  flags interval"
+      lines[#lines + 1] = tostring(indent) .. "  elements = { " .. tostring(table.concat(v4, ", ")) .. " }"
+      lines[#lines + 1] = tostring(indent) .. "}"
+    end
+    if #v6 > 0 then
+      lines[#lines + 1] = tostring(indent) .. "set " .. tostring(set_name) .. "6 {"
+      lines[#lines + 1] = tostring(indent) .. "  type ipv6_addr"
+      lines[#lines + 1] = tostring(indent) .. "  flags interval"
+      lines[#lines + 1] = tostring(indent) .. "  elements = { " .. tostring(table.concat(v6, ", ")) .. " }"
+      lines[#lines + 1] = tostring(indent) .. "}"
+    end
+  end
+  return table.concat(lines, "\n")
+end
 local collect_subnets
 collect_subnets = function(rule)
   local v4, v6 = { }, { }
@@ -830,15 +970,20 @@ render_rule_chain = function(rule, indent)
   return lines
 end
 local render_sets_only
-render_sets_only = function(plan, indent, include_elements)
+render_sets_only = function(cfg, plan, indent, include_elements)
   if indent == nil then
     indent = "  "
   end
   if include_elements == nil then
     include_elements = true
   end
+  io.stderr:write("DEBUG: render_sets_only called\n")
   local lines = { }
   lines[#lines + 1] = tostring(indent) .. "# ── b2: compiled per-rule nft sets (must be defined before chains) ──"
+  local netlist_sets = render_netlist_sets(cfg, plan, indent)
+  if #netlist_sets > 0 then
+    lines[#lines + 1] = netlist_sets
+  end
   lines[#lines + 1] = tostring(indent) .. "map " .. tostring(plan.action_vmap) .. " {"
   lines[#lines + 1] = tostring(indent) .. "  type mark : verdict"
   if plan and plan.action_map and #plan.action_map > 0 then
@@ -1025,6 +1170,8 @@ return {
   compile = compile,
   render = render,
   render_sets_only = render_sets_only,
+  render_netlist_sets = render_netlist_sets,
+  collect_referenced_netlists = collect_referenced_netlists,
   serialize_stable = serialize_stable,
   collect_subnets = collect_subnets,
   build_rule = build_rule,

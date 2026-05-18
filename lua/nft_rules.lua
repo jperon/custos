@@ -73,7 +73,7 @@ substitute = function(content, plan)
   content = content:gsub("{NFT_IP_TIMEOUT}", cfg.nft.ip_timeout)
   local compiled_sets
   if plan then
-    compiled_sets = nft_compiler.render_sets_only(plan, "  ", true)
+    compiled_sets = nft_compiler.render_sets_only(cfg.filter, plan, "  ", true)
   else
     compiled_sets = "  # No compiled filter sets\n"
   end

@@ -2,7 +2,12 @@ return function(cfg)
   local Net
   Net = require("filter.lib.ipcalc").Net
   return function(list_name)
-    local raw_nets = cfg.nets and cfg.nets[list_name] or { }
+    local raw_nets = cfg.nets and cfg.nets[list_name] or cfg.netlists and cfg.netlists[list_name] or (cfg.filter and cfg.filter.netlists and cfg.filter.netlists[list_name]) or { }
+    if type(raw_nets) == "string" then
+      raw_nets = {
+        raw_nets
+      }
+    end
     local compiled = { }
     for _, cidr in ipairs(raw_nets) do
       local net = Net(cidr)
@@ -35,9 +40,8 @@ return function(cfg)
       end,
       compile_nft = function(family)
         local set_name = "nets_" .. tostring(list_name)
-        local is_ipv6 = raw_nets[1] and raw_nets[1]:find(":")
-        if is_ipv6 then
-          return "ip6 daddr @" .. tostring(set_name), nil
+        if family == "ip6" then
+          return "ip6 daddr @" .. tostring(set_name) .. "6", nil
         else
           return "ip daddr @" .. tostring(set_name), nil
         end
