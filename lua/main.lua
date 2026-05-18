@@ -270,7 +270,7 @@ supervise = function(pipes, sfd)
     pid = nil,
     restart_fn = function()
       return fork_worker("arp", function(wfd)
-        return require("worker_arp_sniffer").run(bridge_ifname, wfd)
+        return require("worker_arp_sniffer").run(bridge_slaves, wfd)
       end, pipes.learn.wfd)
     end
   })

@@ -130,6 +130,14 @@ ffi.cdef([[  /* ── Types de base ── */
     unsigned char  sll_addr[8];
   };
 
+  /* ── Packet socket options (SOL_PACKET) ── */
+  struct packet_mreq {
+    int            mr_ifindex;
+    unsigned short mr_type;
+    unsigned short mr_alen;
+    unsigned char  mr_address[8];
+  };
+
   /* ── Raw operations for AF_PACKET ── */
   ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                  const struct sockaddr *dest_addr, socklen_t addrlen);

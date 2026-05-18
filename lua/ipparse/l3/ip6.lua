@@ -93,7 +93,55 @@ parse_ip6 = function(self)
 end
 local ip62s
 ip62s = function(self)
-  return format("%x:%x:%x:%x:%x:%x:%x:%x", su(">HHHH HHHH", self))
+  local parts = {
+    su(">HHHH HHHH", self)
+  }
+  local max_zero_start = 1
+  local max_zero_len = 0
+  local zero_start = 1
+  local zero_len = 0
+  for i = 1, 8 do
+    if parts[i] == 0 then
+      if zero_len == 0 then
+        zero_start = i
+      end
+      zero_len = zero_len + 1
+    else
+      if zero_len > max_zero_len then
+        max_zero_start = zero_start
+        max_zero_len = zero_len
+      end
+      zero_len = 0
+    end
+  end
+  if zero_len > max_zero_len then
+    max_zero_start = zero_start
+    max_zero_len = zero_len
+  end
+  if max_zero_len >= 2 then
+    local before = { }
+    local after = { }
+    for i = 1, 8 do
+      if i < max_zero_start then
+        table.insert(before, format("%x", parts[i]))
+      elseif i >= max_zero_start + max_zero_len then
+        table.insert(after, format("%x", parts[i]))
+      end
+    end
+    local before_str = table.concat(before, ":")
+    local after_str = table.concat(after, ":")
+    if #before == 0 and #after == 0 then
+      return "::"
+    elseif #before == 0 then
+      return "::" .. after_str
+    elseif #after == 0 then
+      return before_str .. "::"
+    else
+      return before_str .. "::" .. after_str
+    end
+  else
+    return format("%x:%x:%x:%x:%x:%x:%x:%x", unpack(parts))
+  end
 end
 s2ip6 = function(self)
   return sp(">HHHH HHHH", unpack(parse_ip6(self)))
