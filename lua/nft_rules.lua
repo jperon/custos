@@ -71,13 +71,20 @@ substitute = function(content, plan)
   content = content:gsub("{QUEUE_AUTH}", cfg.nfqueue.auth)
   content = content:gsub("{QUEUE_SNI_LOG}", cfg.nfqueue.sni_log)
   content = content:gsub("{NFT_IP_TIMEOUT}", cfg.nft.ip_timeout)
-  local compiled_rules
+  local compiled_sets
   if plan then
-    compiled_rules = nft_compiler.render(plan, "  ", true)
+    compiled_sets = nft_compiler.render_sets_only(plan, "  ", true)
   else
-    compiled_rules = "  chain cv_rules_dispatch {\n    return\n  }\n"
+    compiled_sets = "  # No compiled filter sets\n"
   end
-  content = content:gsub("{COMPILED_FILTER_RULES}", compiled_rules)
+  content = content:gsub("{COMPILED_FILTER_SETS}", compiled_sets)
+  local compiled_chains
+  if plan then
+    compiled_chains = nft_compiler.render(plan, "  ", true)
+  else
+    compiled_chains = "  chain cv_rules_dispatch {\n    return\n  }\n"
+  end
+  content = content:gsub("{COMPILED_FILTER_RULES}", compiled_chains)
   local sip_rules
   if cfg.nfqueue.sip then
     local q = cfg.nfqueue.sip

@@ -416,6 +416,11 @@ handle_login = function(req, peer_ip, peer_mac, state)
   ok, err = pcall(function()
     return add_session(sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout)
   end)
+  log_info({
+    action = "server_session_add_pcall_result",
+    ok = ok,
+    err = tostring(err)
+  })
   if not (ok) then
     log_warn({
       action = "server_session_add_failed",
@@ -425,6 +430,22 @@ handle_login = function(req, peer_ip, peer_mac, state)
     })
     return 500, { }, "Session creation failed"
   end
+  log_info({
+    action = "server_counting_sessions_start"
+  })
+  local count = 0
+  for _ in pairs(sessions) do
+    count = count + 1
+  end
+  log_info({
+    action = "server_counting_sessions_done",
+    count = count
+  })
+  log_info({
+    action = "server_sessions_write_start",
+    path = state.sessions_file,
+    sessions_count = count
+  })
   ok, err = write_sessions(sessions, state.sessions_file)
   if not (ok) then
     log_warn({
@@ -434,6 +455,11 @@ handle_login = function(req, peer_ip, peer_mac, state)
     })
     return 500, { }, "Session persistence failed"
   end
+  log_info({
+    action = "server_sessions_write_success",
+    path = state.sessions_file,
+    mac = mac
+  })
   if state.nft_sess then
     ok, err = pcall(function()
       return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
@@ -538,24 +564,59 @@ handle_login = function(req, peer_ip, peer_mac, state)
 end
 local handle_ping
 handle_ping = function(req, peer_ip, peer_mac, state)
+  log_info({
+    action = "server_ping_received",
+    peer_ip = peer_ip,
+    peer_mac = peer_mac
+  })
   local sessions = load_sessions(state.sessions_file)
   purge_expired(sessions)
   local s = session_for_mac(peer_mac, peer_ip, state.sessions_file, sessions)
   if not (s) then
+    log_info({
+      action = "server_ping_no_session",
+      peer_ip = peer_ip,
+      peer_mac = peer_mac
+    })
     return 401, { }, ""
   end
   local mac = s.mac or peer_mac
   local now = os.time()
+  log_info({
+    action = "server_ping_checking_expiry",
+    peer_mac = peer_mac,
+    now = now,
+    heartbeat = s.heartbeat,
+    expires = s.expires
+  })
   if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat) then
+    log_info({
+      action = "server_ping_session_expired",
+      peer_mac = peer_mac,
+      now = now,
+      heartbeat = s.heartbeat,
+      expires = s.expires
+    })
     sessions[mac] = nil
     write_sessions(sessions, state.sessions_file)
     return 401, { }, ""
   end
   if state.auth_cfg.idle_timeout and state.auth_cfg.idle_timeout > 0 then
     s.heartbeat = now + state.auth_cfg.idle_timeout
+    log_info({
+      action = "server_ping_heartbeat_updated",
+      peer_mac = peer_mac,
+      now = now,
+      new_heartbeat = s.heartbeat,
+      idle_timeout = state.auth_cfg.idle_timeout
+    })
     write_sessions(sessions, state.sessions_file)
   end
   refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, s.user)
+  log_info({
+    action = "server_ping_success",
+    peer_mac = peer_mac
+  })
   return 204, { }, ""
 end
 local handle_logout
@@ -744,6 +805,13 @@ local css_content = [[  * {
   ]]
 local handle_request
 handle_request = function(req, peer_ip, peer_mac, state)
+  log_info({
+    action = "server_request_received",
+    path = req.path,
+    method = req.method,
+    peer_ip = peer_ip,
+    peer_mac = peer_mac
+  })
   if req.path == "/" and req.method == "GET" then
     return 200, {
       ["Content-Type"] = "text/html; charset=UTF-8"
@@ -753,6 +821,11 @@ handle_request = function(req, peer_ip, peer_mac, state)
       ["Content-Type"] = "text/css"
     }, css_content
   elseif req.path == "/login" and req.method == "POST" then
+    log_info({
+      action = "server_routing_to_handle_login",
+      path = req.path,
+      method = req.method
+    })
     return handle_login(req, peer_ip, peer_mac, state)
   elseif req.path == "/ping" and req.method == "GET" then
     return handle_ping(req, peer_ip, peer_mac, state)

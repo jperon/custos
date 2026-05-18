@@ -4,40 +4,33 @@ compile_rule = function(cfg, rule, idx, used_ids)
   if used_ids == nil then
     used_ids = nil
   end
-  local condition_groups = { }
+  local conditions_eval = { }
   local conditions_meta = { }
-  local _list_0 = (rule.conditions or { })
-  for _index_0 = 1, #_list_0 do
-    local condition_table = _list_0[_index_0]
-    if not (type(condition_table) == "table") then
-      error("Condition doit être une table, got " .. tostring(type(condition_table)))
+  local condition_table = rule.conditions or { }
+  if not (type(condition_table) == "table") then
+    error("Conditions doit être une table, got " .. tostring(type(condition_table)))
+  end
+  for name, args in pairs(condition_table) do
+    local cond_factory, err = compiler_api.load_condition(name)
+    if not (cond_factory) then
+      error("Condition inconnue '" .. tostring(name) .. "': " .. tostring(err))
     end
-    local group = { }
-    local group_meta = { }
-    for name, args in pairs(condition_table) do
-      local cond_factory, err = compiler_api.load_condition(name)
-      if not (cond_factory) then
-        error("Condition inconnue '" .. tostring(name) .. "': " .. tostring(err))
-      end
-      local cond_obj = cond_factory(cfg)(args)
-      group[#group + 1] = cond_obj.eval
-      group_meta[#group_meta + 1] = {
-        name = name,
-        args = args,
-        capabilities = cond_obj.capabilities,
-        worker_only = compiler_api.compute_worker_only(cond_obj),
-        compile_nft = cond_obj.compile_nft,
-        creates_dynamic_scope = cond_obj.creates_dynamic_scope
-      }
-    end
-    condition_groups[#condition_groups + 1] = group
-    conditions_meta[#conditions_meta + 1] = group_meta
+    local cond_obj = cond_factory(cfg)(args)
+    conditions_eval[#conditions_eval + 1] = cond_obj.eval
+    conditions_meta[#conditions_meta + 1] = {
+      name = name,
+      args = args,
+      capabilities = cond_obj.capabilities,
+      worker_only = compiler_api.compute_worker_only(cond_obj),
+      compile_nft = cond_obj.compile_nft,
+      creates_dynamic_scope = cond_obj.creates_dynamic_scope
+    }
   end
   local actions = { }
   local actions_meta = { }
-  local _list_1 = (rule.actions or { })
-  for _index_0 = 1, #_list_1 do
-    local action_name = _list_1[_index_0]
+  local _list_0 = (rule.actions or { })
+  for _index_0 = 1, #_list_0 do
+    local action_name = _list_0[_index_0]
     local action_factory, err = compiler_api.load_action(action_name)
     if not (action_factory) then
       error("Action inconnue '" .. tostring(action_name) .. "': " .. tostring(err))
@@ -81,33 +74,25 @@ compile_rule = function(cfg, rule, idx, used_ids)
   end
   metadata.creates_dynamic_scope = false
   for _index_0 = 1, #conditions_meta do
-    local cond = conditions_meta[_index_0]
-    if cond.creates_dynamic_scope then
+    local cond_meta = conditions_meta[_index_0]
+    if cond_meta.creates_dynamic_scope then
       metadata.creates_dynamic_scope = true
       break
     end
   end
   local eval_fn
   eval_fn = function(req)
-    local any_group_passed = false
-    for _index_0 = 1, #condition_groups do
-      local cond_group = condition_groups[_index_0]
-      local group_passed = true
-      for _index_1 = 1, #cond_group do
-        local cond = cond_group[_index_1]
-        local ok, _ = cond(req)
-        if not (ok) then
-          group_passed = false
-          break
-        end
-      end
-      if group_passed then
-        any_group_passed = true
+    local all_passed = true
+    for _index_0 = 1, #conditions_eval do
+      local cond = conditions_eval[_index_0]
+      local ok, _ = cond(req)
+      if not (ok) then
+        all_passed = false
         break
       end
     end
-    if not (any_group_passed) then
-      return nil, "No condition group matched"
+    if not (all_passed) then
+      return nil, "No condition matched"
     end
     local verdict, msg
     for _index_0 = 1, #actions do

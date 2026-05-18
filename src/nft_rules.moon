@@ -69,11 +69,16 @@ substitute = (content, plan=nil) ->
   content = content\gsub "{QUEUE_AUTH}",      cfg.nfqueue.auth
   content = content\gsub "{QUEUE_SNI_LOG}",   cfg.nfqueue.sni_log
   content = content\gsub "{NFT_IP_TIMEOUT}",  cfg.nft.ip_timeout
-  compiled_rules = if plan
+  compiled_sets = if plan
+    nft_compiler.render_sets_only plan, "  ", true
+  else
+    "  # No compiled filter sets\n"
+  content = content\gsub "{COMPILED_FILTER_SETS}", compiled_sets
+  compiled_chains = if plan
     nft_compiler.render plan, "  ", true
   else
     "  chain cv_rules_dispatch {\n    return\n  }\n"
-  content = content\gsub "{COMPILED_FILTER_RULES}", compiled_rules
+  content = content\gsub "{COMPILED_FILTER_RULES}", compiled_chains
 
   sip_rules = if cfg.nfqueue.sip
     q = cfg.nfqueue.sip

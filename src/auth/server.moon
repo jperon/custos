@@ -304,14 +304,22 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   ok, err = pcall(->
     add_session sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout
   )
+  log_info { action: "server_session_add_pcall_result", ok: ok, err: tostring(err) }
   unless ok
     log_warn { action: "server_session_add_failed", peer: peer_ip, mac: mac, err: tostring(err) }
     return 500, {}, "Session creation failed"
 
+  log_info { action: "server_counting_sessions_start" }
+  count = 0
+  for _ in pairs sessions
+    count += 1
+  log_info { action: "server_counting_sessions_done", count: count }
+  log_info { action: "server_sessions_write_start", path: state.sessions_file, sessions_count: count }
   ok, err = write_sessions sessions, state.sessions_file
   unless ok
     log_warn { action: "server_sessions_write_failed", path: state.sessions_file, err: err }
     return 500, {}, "Session persistence failed"
+  log_info { action: "server_sessions_write_success", path: state.sessions_file, mac: mac }
 
   if state.nft_sess
     ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user
@@ -354,27 +362,33 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, success_page state.auth_cfg, created_at
 
 handle_ping = (req, peer_ip, peer_mac, state) ->
+  log_info { action: "server_ping_received", peer_ip: peer_ip, peer_mac: peer_mac }
   sessions = load_sessions state.sessions_file
   purge_expired sessions
 
   s = session_for_mac peer_mac, peer_ip, state.sessions_file, sessions
 
   unless s
+    log_info { action: "server_ping_no_session", peer_ip: peer_ip, peer_mac: peer_mac }
     return 401, {}, ""
 
   mac = s.mac or peer_mac
   now = os.time!
+  log_info { action: "server_ping_checking_expiry", peer_mac: peer_mac, now: now, heartbeat: s.heartbeat, expires: s.expires }
   if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat)
+    log_info { action: "server_ping_session_expired", peer_mac: peer_mac, now: now, heartbeat: s.heartbeat, expires: s.expires }
     sessions[mac] = nil
     write_sessions sessions, state.sessions_file
     return 401, {}, ""
 
   if state.auth_cfg.idle_timeout and state.auth_cfg.idle_timeout > 0
     s.heartbeat = now + state.auth_cfg.idle_timeout
+    log_info { action: "server_ping_heartbeat_updated", peer_mac: peer_mac, now: now, new_heartbeat: s.heartbeat, idle_timeout: state.auth_cfg.idle_timeout }
     write_sessions sessions, state.sessions_file
 
   refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, s.user
 
+  log_info { action: "server_ping_success", peer_mac: peer_mac }
   204, {}, ""
 
 handle_logout = (req, peer_ip, peer_mac, state) ->
@@ -528,11 +542,13 @@ css_content = [[
   ]]
 
 handle_request = (req, peer_ip, peer_mac, state) ->
+  log_info { action: "server_request_received", path: req.path, method: req.method, peer_ip: peer_ip, peer_mac: peer_mac }
   if req.path == "/" and req.method == "GET"
     return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, login_page!
   elseif req.path == "/css" and req.method == "GET"
     return 200, { ["Content-Type"]: "text/css" }, css_content
   elseif req.path == "/login" and req.method == "POST"
+    log_info { action: "server_routing_to_handle_login", path: req.path, method: req.method }
     return handle_login req, peer_ip, peer_mac, state
   elseif req.path == "/ping" and req.method == "GET"
     return handle_ping req, peer_ip, peer_mac, state

@@ -2,9 +2,9 @@
 -- Compilation et évaluation des règles du filtre.
 --
 -- Une règle est un triplet (conditions, actions, métadonnées) :
---   • Conditions : ET logique — toutes doivent passer pour que la règle
---     s'applique. Chaque condition est compilée depuis son module
---     filter.conditions.<name>.
+--   • Conditions : ET logique implicite entre toutes les clés/valeurs — toutes
+--     doivent passer pour que la règle s'applique. Chaque condition est compilée
+--     depuis son module filter.conditions.<name>.
 --   • Actions : la première action qui retourne un verdict non-nil donne
 --     le résultat (allow=true, deny=false). Les actions suivantes sont
 --     ignorées pour le verdict mais peuvent avoir des effets de bord
@@ -24,32 +24,28 @@ compiler_api = require "filter.compiler_api"
 -- @treturn table metadata Métadonnées pour compilation nft
 compile_rule = (cfg, rule, idx, used_ids=nil) ->
   -- Compilation des conditions avec adaptation API
-  -- Chaque table de conditions est un groupe (ET logique à l'intérieur, OU logique entre groupes)
-  condition_groups = {}
+  -- conditions est une seule table clé/valeur : ET logique implicite entre toutes
+  conditions_eval = {}
   conditions_meta = {}
-  for condition_table in *(rule.conditions or {})
-    unless type(condition_table) == "table"
-      error "Condition doit être une table, got #{type(condition_table)}"
+  condition_table = rule.conditions or {}
+  
+  unless type(condition_table) == "table"
+    error "Conditions doit être une table, got #{type(condition_table)}"
 
-    group = {}
-    group_meta = {}
-    for name, args in pairs condition_table
-      cond_factory, err = compiler_api.load_condition name
-      error "Condition inconnue '#{name}': #{err}" unless cond_factory
+  for name, args in pairs condition_table
+    cond_factory, err = compiler_api.load_condition name
+    error "Condition inconnue '#{name}': #{err}" unless cond_factory
 
-      cond_obj = cond_factory(cfg)(args)
-      group[#group + 1] = cond_obj.eval
-      group_meta[#group_meta + 1] = {
-        name: name
-        args: args
-        capabilities: cond_obj.capabilities
-        worker_only: compiler_api.compute_worker_only(cond_obj)
-        compile_nft: cond_obj.compile_nft
-        creates_dynamic_scope: cond_obj.creates_dynamic_scope
-      }
-
-    condition_groups[#condition_groups + 1] = group
-    conditions_meta[#conditions_meta + 1] = group_meta
+    cond_obj = cond_factory(cfg)(args)
+    conditions_eval[#conditions_eval + 1] = cond_obj.eval
+    conditions_meta[#conditions_meta + 1] = {
+      name: name
+      args: args
+      capabilities: cond_obj.capabilities
+      worker_only: compiler_api.compute_worker_only(cond_obj)
+      compile_nft: cond_obj.compile_nft
+      creates_dynamic_scope: cond_obj.creates_dynamic_scope
+    }
 
   -- Compilation des actions avec adaptation API
   actions = {}
@@ -96,33 +92,26 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
 
   -- Déterminer si la règle crée un scope dynamique (DNS)
   metadata.creates_dynamic_scope = false
-  for cond in *conditions_meta
-    if cond.creates_dynamic_scope
+  for cond_meta in *conditions_meta
+    if cond_meta.creates_dynamic_scope
       metadata.creates_dynamic_scope = true
       break
 
   -- Fonction d'évaluation de la règle
   eval_fn = (req) ->
-    -- Chaque table de conditions est un groupe : ET logique à l'intérieur, OU logique entre groupes
-    -- Exemple : { {from_nets: {...}}, {to_net: "..."} } → (from_nets) OR (to_net)
-    -- Exemple : { {from_nets: {...}, to_net: "..."} } → (from_nets AND to_net)
-    any_group_passed = false
-    for cond_group in *condition_groups
-      -- Évaluer toutes les conditions du groupe avec ET logique
-      group_passed = true
-      for cond in *cond_group
-        ok, _ = cond req
-        unless ok
-          group_passed = false
-          break
-      if group_passed
-        any_group_passed = true
+    -- Toutes les conditions sont en ET logique implicite
+    -- Exemple : {from_net: "...", to_domain: "..."} → (from_net AND to_domain)
+    all_passed = true
+    for cond in *conditions_eval
+      ok, _ = cond req
+      unless ok
+        all_passed = false
         break
 
-    unless any_group_passed
-      return nil, "No condition group matched"
+    unless all_passed
+      return nil, "No condition matched"
 
-    -- Au moins un groupe de conditions passé : exécuter les actions
+    -- Toutes les conditions passées : exécuter les actions
     local verdict, msg
     for action in *actions
       v, m = action req
