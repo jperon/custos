@@ -881,6 +881,21 @@ render_sets_only = function(plan, indent, include_elements)
           lines[#lines + 1] = l
         end
       end
+      if rule.set_auth_mac then
+        for _, l in ipairs(render_set(rule.set_auth_mac, "ether_addr", "timeout", { }, indent, false)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_auth_ip4 then
+        for _, l in ipairs(render_set(rule.set_auth_ip4, "ipv4_addr", "timeout", { }, indent, false)) do
+          lines[#lines + 1] = l
+        end
+      end
+      if rule.set_auth_ip6 then
+        for _, l in ipairs(render_set(rule.set_auth_ip6, "ipv6_addr", "timeout", { }, indent, false)) do
+          lines[#lines + 1] = l
+        end
+      end
     end
   end
   if plan and plan.rules then
@@ -917,11 +932,6 @@ render_sets_only = function(plan, indent, include_elements)
       end
       if rule.set_ports then
         for _, l in ipairs(render_set(rule.set_ports, "inet_service", "", rule.ports, indent, include_elements)) do
-          lines[#lines + 1] = l
-        end
-      end
-      if rule.set_auth_mac then
-        for _, l in ipairs(render_set(rule.set_auth_mac, "ether_addr", "timeout", { }, indent, false)) do
           lines[#lines + 1] = l
         end
       end

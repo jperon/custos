@@ -664,7 +664,7 @@ render_sets_only = (plan, indent="  ", include_elements=true) ->
   lines[#lines + 1] = "#{indent}}"
 
   -- Generate all sets (static and dynamic)
-  -- Use all_rules for dynamic sets (needed for all rules), plan.rules for static sets
+  -- Use all_rules for dynamic sets and auth sets (needed for all rules), plan.rules for static sets
   if plan and plan.all_rules
     for _, rule in ipairs plan.all_rules
       if rule.set_dyn_ip4
@@ -678,6 +678,15 @@ render_sets_only = (plan, indent="  ", include_elements=true) ->
           lines[#lines + 1] = l
       if rule.set_dyn_mac6
         for _, l in ipairs render_set rule.set_dyn_mac6, "ether_addr . ipv6_addr", "timeout", {}, indent, false
+          lines[#lines + 1] = l
+      if rule.set_auth_mac
+        for _, l in ipairs render_set rule.set_auth_mac, "ether_addr", "timeout", {}, indent, false
+          lines[#lines + 1] = l
+      if rule.set_auth_ip4
+        for _, l in ipairs render_set rule.set_auth_ip4, "ipv4_addr", "timeout", {}, indent, false
+          lines[#lines + 1] = l
+      if rule.set_auth_ip6
+        for _, l in ipairs render_set rule.set_auth_ip6, "ipv6_addr", "timeout", {}, indent, false
           lines[#lines + 1] = l
 
   if plan and plan.rules
@@ -702,9 +711,6 @@ render_sets_only = (plan, indent="  ", include_elements=true) ->
           lines[#lines + 1] = l
       if rule.set_ports
         for _, l in ipairs render_set rule.set_ports, "inet_service", "", rule.ports, indent, include_elements
-          lines[#lines + 1] = l
-      if rule.set_auth_mac
-        for _, l in ipairs render_set rule.set_auth_mac, "ether_addr", "timeout", {}, indent, false
           lines[#lines + 1] = l
 
   table.concat lines, "\n"
