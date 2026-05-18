@@ -265,12 +265,13 @@ supervise = (pipes, sfd) ->
   }
 
   -- Worker passif ARP/NDP : apprend les associations IP→MAC pour tous les VLANs
-  -- en sniffant les trames ARP et les messages NDP NS/NA sur le bridge.
+  -- en sniffant les trames ARP et les messages NDP NS/NA sur les interfaces bridge slaves.
+  -- Le bridge lui-même ne voit pas les paquets traités localement.
   table.insert workers_without_filter, {
     name: "arp"
     pid: nil
     restart_fn: -> fork_worker "arp",
-      (wfd) -> require("worker_arp_sniffer").run bridge_ifname, wfd,
+      (wfd) -> require("worker_arp_sniffer").run bridge_slaves, wfd,
       pipes.learn.wfd
   }
 

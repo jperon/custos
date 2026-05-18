@@ -22,17 +22,25 @@ POLLIN     = 1
 
 -- htons() pour les protocoles passés à socket() :
 -- AF_PACKET reçoit le protocole en network byte order.
-ETH_P_ARP  = C.htons 0x0806   -- ARP
-ETH_P_IPV6 = C.htons 0x86DD   -- IPv6
+ETH_P_ALL  = C.htons 0x0003   -- Tous les protocoles (pour capturer les paquets sortants)
+
+-- Socket options pour AF_PACKET (packet_mreq)
+SOL_PACKET              = 263
+PACKET_ADD_MEMBERSHIP   = 1
+PACKET_MR_PROMISC       = 1
 
 -- ICMPv6 next-header number et types NDP
 ICMPV6_PROTO        = 58
 ICMPV6_TYPE_NS      = 135   -- Neighbor Solicitation
 ICMPV6_TYPE_NA      = 136   -- Neighbor Advertisement
 
+-- Options NDP (RFC 4861 section 4.6)
+NDP_OPT_TGT_LLA      = 2    -- Target Link-Layer Address
+
 -- Taille minimale des trames attendues (octets, base 1 Lua)
 ARP_MIN_LEN  = 42    -- 14 (Eth) + 28 (ARP IPv4/Ethernet)
 NDP_MIN_LEN  = 56    -- 14 (Eth) + 40 (IPv6) + 2 (ICMPv6 type+code)
+NDP_OPT_MIN_LEN = 8  -- Taille minimale pour une option (Type + Length + au moins 6 octets de MAC)
 
 -- ── Helpers ──────────────────────────────────────────────────────
 
@@ -81,26 +89,73 @@ write_learn = (learn_wfd, msg) ->
   n = libc.write learn_wfd, msg, 22
   n == 22
 
+--- Extrait l'option TLLA (Target Link-Layer Address) d'un message NDP.
+-- Les options NDP commencent après l'en-tête ICMPv6 fixe (24 octets pour NS/NA).
+-- Format option : Type(1) + Length(1, unités de 8 octets) + Data
+-- @tparam string raw       Trame brute complète
+-- @tparam number opt_start  Offset 1-based du début des options (après Target Address)
+-- @tparam number len       Longueur totale de la trame
+-- @treturn string|nil  6 octets de la MAC si trouvée, nil sinon
+extract_tlla = (raw, opt_start, len) ->
+  return nil if len < opt_start + NDP_OPT_MIN_LEN
+
+  offset = opt_start
+  while offset + 2 <= len
+    opt_type = raw\byte offset
+    opt_len  = raw\byte(offset + 1) * 8  -- Length est en unités de 8 octets
+
+    return nil if opt_len < 2 or opt_len > 255  -- Option invalide
+    return nil if offset + opt_len > len  -- Option tronquée
+
+    if opt_type == NDP_OPT_TGT_LLA
+      -- Vérifier qu'il y a au moins 6 octets de données (après Type + Length)
+      if opt_len >= 8  -- 2 octets header + 6 octets MAC minimum
+        mac_start = offset + 2
+        -- Vérifier que la MAC n'est pas nulle
+        all_zero = true
+        for i = 0, 5
+          if raw\byte(mac_start + i) ~= 0
+            all_zero = false
+            break
+        return raw\sub(mac_start, mac_start + 5) unless all_zero
+
+    offset += opt_len
+
+  nil
+
 -- ── Sockets AF_PACKET ────────────────────────────────────────────
 
---- Ouvre et lie un socket AF_PACKET/SOCK_RAW à une interface.
--- @tparam number  eth_proto  Protocole réseau (résultat de htons, ex : ETH_P_ARP)
+--- Ouvre et lie un socket AF_PACKET/SOCK_RAW à une interface avec ETH_P_ALL.
+-- Utilise ETH_P_ALL pour capturer tous les protocoles, y compris les paquets sortants.
+-- Le filtrage de protocole se fait en userspace.
 -- @tparam number  ifindex    Index de l'interface (résultat de if_nametoindex)
 -- @treturn number|nil  fd du socket, ou nil en cas d'erreur
-open_socket = (eth_proto, ifindex) ->
-  fd = C.socket AF_PACKET, SOCK_RAW, eth_proto
+open_socket = (ifindex) ->
+  fd = C.socket AF_PACKET, SOCK_RAW, ETH_P_ALL
   if fd < 0
     return nil
 
   sll = ffi.new "struct sockaddr_ll"
   ffi.fill sll, ffi.sizeof(sll), 0
   sll.sll_family   = AF_PACKET
-  sll.sll_protocol = eth_proto
+  sll.sll_protocol = ETH_P_ALL
   sll.sll_ifindex  = ifindex
 
   if C.bind(fd, ffi.cast("struct sockaddr*", sll), ffi.sizeof(sll)) ~= 0
     libc.close fd
     return nil
+
+  -- Activer le mode promiscuous pour capturer les paquets sortants
+  mreq = ffi.new "struct packet_mreq"
+  ffi.fill mreq, ffi.sizeof(mreq), 0
+  mreq.mr_ifindex = ifindex
+  mreq.mr_type    = PACKET_MR_PROMISC
+  mreq.mr_alen    = 0
+
+  if C.setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, mreq, ffi.sizeof(mreq)) ~= 0
+    -- Le mode promiscuous peut échouer (permissions, interface non bridge, etc.)
+    -- On continue quand même, on captura seulement les paquets entrants
+    log_debug { action: "promisc_failed", ifindex: ifindex, errno: tonumber(ffi.C.__errno_location()[0]) }
 
   fd
 
@@ -151,18 +206,27 @@ process_arp = (raw, len, learn_wfd) ->
 --- Traite une trame IPv6 et écrit l'association IPv6→MAC dans le pipe
 -- si c'est un NDP Neighbor Solicitation (135) ou Advertisement (136).
 --
+-- Conformément à RFC 4861 :
+--   • NS (135) : utilise IPv6 source + MAC source Ethernet
+--   • NA (136) : utilise Target Address + option TLLA (Target Link-Layer Address)
+--               ou MAC source Ethernet en fallback si TLLA absent
+--
 -- Structure de la trame (offset 1-based Lua, EtherType 0x86DD filtré) :
 --   1-6   Ethernet dst MAC
---   7-12  Ethernet src MAC  ← MAC cliente
+--   7-12  Ethernet src MAC
 --   13-14 EtherType (0x86DD)
 --   ── IPv6 header (40 octets) ──────────────────────────────────
 --   15-20 version / TC / flow label / payload length
 --   21    next header       (doit être 58 = ICMPv6)
 --   22    hop limit
---   23-38 source IPv6       ← IPv6 cliente
+--   23-38 source IPv6
 --   39-54 destination IPv6
 --   ── ICMPv6 ───────────────────────────────────────────────────
---   55    ICMPv6 type       (doit être 135 ou 136)
+--   55    ICMPv6 type       (135 = NS, 136 = NA)
+--   56-58 ICMPv6 code + checksum
+--   59-62 ICMPv6 reserved/flags
+--   63-78 Target Address   ← Important pour NA (adresse annoncée)
+--   79+   Options NDP     ← TLLA (type 2) pour NA
 --
 -- @tparam string raw      Trame brute
 -- @tparam number len      Longueur utilisable de raw
@@ -177,69 +241,125 @@ process_ipv6 = (raw, len, learn_wfd) ->
   return unless next_header == ICMPV6_PROTO
   return unless icmpv6_type == ICMPV6_TYPE_NS or icmpv6_type == ICMPV6_TYPE_NA
 
-  -- Rejeter les Neighbor Solicitation de DAD (source = ::)
-  -- et les sources multicast (commence par 0xff)
-  src_first = raw\byte 23
-  return if src_first == 0xff   -- multicast
-
-  all_zero = true
-  for i = 23, 38
-    if raw\byte(i) ~= 0
-      all_zero = false
-      break
-  return if all_zero   -- DAD (source non encore attribuée)
-
-  -- Ignorer les MACs nulles
-  mac_off = 7
+  -- Ignorer les MACs nulles (source Ethernet)
+  mac_src_off = 7
   all_zero_mac = true
   for i = 0, 5
-    if raw\byte(mac_off + i) ~= 0
+    if raw\byte(mac_src_off + i) ~= 0
       all_zero_mac = false
       break
   return if all_zero_mac
 
-  msg = build_learn_msg raw, 23, 16, mac_off
-  ok = write_learn learn_wfd, msg
-  log_debug { action: "ndp_learned", mac: fmt_mac(raw, mac_off),
-    ip: fmt_ipv6(raw, 23),
-    type: icmpv6_type == ICMPV6_TYPE_NS and "NS" or "NA" } if ok
+  if icmpv6_type == ICMPV6_TYPE_NS
+    -- ── Neighbor Solicitation (RFC 4861 section 4.3) ──
+    -- Utiliser IPv6 source + MAC source Ethernet
+    -- Rejeter DAD (source = ::) et sources multicast
+
+    src_first = raw\byte 23
+    return if src_first == 0xff   -- multicast
+
+    all_zero = true
+    for i = 23, 38
+      if raw\byte(i) ~= 0
+        all_zero = false
+        break
+    return if all_zero   -- DAD (source non encore attribuée)
+
+    msg = build_learn_msg raw, 23, 16, mac_src_off
+    ok = write_learn learn_wfd, msg
+    log_debug { action: "ndp_learned", mac: fmt_mac(raw, mac_src_off),
+      ip: fmt_ipv6(raw, 23), type: "NS" } if ok
+
+  else
+    -- ── Neighbor Advertisement (RFC 4861 section 4.4) ──
+    -- Utiliser Target Address (bytes 63-78) + option TLLA (type 2)
+    -- ou MAC source Ethernet en fallback si TLLA absent
+    -- NA peut avoir Source Address = :: (gratuitous NA), ne pas filtrer
+
+    -- Vérifier que la trame contient au moins le Target Address (78 octets)
+    return if len < 78
+
+    -- Target Address : bytes 63-78
+    target_off = 63
+    -- Vérifier que Target Address n'est pas multicast (commence par 0xff)
+    target_first = raw\byte target_off
+    return if target_first == 0xff
+
+    -- Rechercher l'option TLLA (Target Link-Layer Address, type 2)
+    -- Options commencent après Target Address (byte 79)
+    tlla_mac = extract_tlla raw, 79, len
+
+    if tlla_mac
+      -- Utiliser la MAC de l'option TLLA
+      -- Construire le message manuellement car tlla_mac est déjà extrait
+      msg = ffi.new "uint8_t[22]"
+      -- Target Address (16 octets)
+      for i = 0, 15
+        msg[i] = raw\byte(target_off + i)
+      -- MAC TLLA (6 octets)
+      for i = 0, 5
+        msg[16 + i] = tlla_mac\byte(i + 1)
+
+      ok = write_learn learn_wfd, msg
+      log_debug { action: "ndp_learned",
+        mac: fmt_mac(tlla_mac, 1),
+        ip: fmt_ipv6(raw, target_off),
+        type: "NA",
+        tlla: true } if ok
+    else
+      -- Fallback : utiliser MAC source Ethernet
+      msg = build_learn_msg raw, target_off, 16, mac_src_off
+      ok = write_learn learn_wfd, msg
+      log_debug { action: "ndp_learned",
+        mac: fmt_mac(raw, mac_src_off),
+        ip: fmt_ipv6(raw, target_off),
+        type: "NA",
+        tlla: false } if ok
 
 -- ── Boucle principale ─────────────────────────────────────────────
 
 --- Démarre le worker ARP/NDP sniffer.
--- Écoute passivement les trames ARP et NDP sur l'interface bridge
--- et alimente le mac_learner via le pipe learn.
--- @tparam string ifname    Nom de l'interface bridge (ex : "br")
+-- Écoute passivement les trames ARP et NDP sur les interfaces bridge slaves.
+-- Utilise ETH_P_ALL pour capturer tous les protocoles, y compris les paquets sortants.
+-- Le filtrage de protocole se fait en userspace.
+-- @tparam table ifnames   Tableau de noms d'interfaces (bridge slaves ou bridge)
 -- @tparam number learn_wfd fd d'écriture du pipe question→mac_learner
-run = (ifname, learn_wfd) ->
+run = (ifnames, learn_wfd) ->
   set_action_prefix "arp_"
-  ifindex = tonumber C.if_nametoindex ifname
-  if ifindex == 0
-    errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn { action: "ifindex_failed", ifname: ifname, errno: errno }
+
+  -- Normaliser ifnames en tableau
+  if type(ifnames) == "string"
+    ifnames = { ifnames }
+
+  -- Ouvrir un socket par interface avec ETH_P_ALL
+  fds = {}
+
+  for ifname in *ifnames
+    ifindex = tonumber C.if_nametoindex ifname
+    if ifindex == 0
+      errno = tonumber(ffi.C.__errno_location()[0])
+      log_warn { action: "ifindex_failed", ifname: ifname, errno: errno }
+      continue
+
+    fd = open_socket ifindex
+    if fd
+      table.insert fds, fd
+      log_debug { action: "socket_open", ifname: ifname, ifindex: ifindex }
+    else
+      errno = tonumber(ffi.C.__errno_location()[0])
+      log_warn { action: "socket_failed", ifname: ifname, errno: errno }
+
+  if #fds == 0
+    log_warn { action: "no_sockets", interfaces: table.concat(ifnames, ",") }
     return
 
-  arp_fd = open_socket ETH_P_ARP, ifindex
-  unless arp_fd
-    errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn { action: "socket_failed", proto: "ARP", ifname: ifname, errno: errno }
-    return
+  log_info { action: "start", interfaces: table.concat(ifnames, ","), sockets: #fds }
 
-  ip6_fd = open_socket ETH_P_IPV6, ifindex
-  unless ip6_fd
-    errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn { action: "socket_failed", proto: "IPv6", ifname: ifname, errno: errno }
-    libc.close arp_fd
-    return
-
-  log_info { action: "start", ifname: ifname, ifindex: ifindex }
-
-  -- poll sur les deux sockets
-  pfds = ffi.new "struct pollfd[2]"
-  pfds[0].fd     = arp_fd
-  pfds[0].events = POLLIN
-  pfds[1].fd     = ip6_fd
-  pfds[1].events = POLLIN
+  -- poll sur tous les sockets
+  pfds = ffi.new "struct pollfd[?]", #fds
+  for i, fd in ipairs fds
+    pfds[i].fd = fd
+    pfds[i].events = POLLIN
 
   -- Buffer de réception partagé (MTU 1500 + Eth 14 + marge)
   buf     = ffi.new "uint8_t[2048]"
@@ -248,16 +368,20 @@ run = (ifname, learn_wfd) ->
   bit = require "bit"
 
   while true
-    C.poll pfds, 2, 5000
+    C.poll pfds, #fds, 5000
 
-    if bit.band(pfds[0].revents, POLLIN) ~= 0
-      n = C.recv arp_fd, buf, buf_len, 0
-      if n >= ARP_MIN_LEN
-        process_arp ffi.string(buf, n), n, learn_wfd
+    for i = 0, #fds - 1
+      if bit.band(pfds[i].revents, POLLIN) ~= 0
+        fd = pfds[i].fd
+        n = C.recv fd, buf, buf_len, 0
+        if n > 14  -- Au moins un header Ethernet
+          raw = ffi.string buf, n
+          -- Filtrer par EtherType (bytes 13-14 en network byte order)
+          ethertype = raw\byte(13) * 256 + raw\byte(14)
 
-    if bit.band(pfds[1].revents, POLLIN) ~= 0
-      n = C.recv ip6_fd, buf, buf_len, 0
-      if n >= NDP_MIN_LEN
-        process_ipv6 ffi.string(buf, n), n, learn_wfd
+          if ethertype == 0x0806 and n >= ARP_MIN_LEN
+            process_arp raw, n, learn_wfd
+          elseif ethertype == 0x86DD and n >= NDP_MIN_LEN
+            process_ipv6 raw, n, learn_wfd
 
 { :run }
