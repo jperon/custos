@@ -370,7 +370,7 @@ resolve_action = (rule) ->
       return action
   nil
 
-build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
+build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil, rule_metadata=nil) ->
   -- Use metadata rule_id if provided (must match runtime filter decision)
   rid = metadata_rule_id or stable_rule_id rule, idx, used_ids
   src4, src6 = collect_nets cfg, rule
@@ -383,12 +383,12 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil) ->
   chain = "cv_rule_" .. rid
   mark = string.format "0x%x", 0x4000 + idx
 
-  -- Check if rule requires authentication (has from_users or from_userlists)
   requires_auth = false
-  for k, _ in pairs rule.conditions or {}
-    if k == "from_users" or k == "from_userlists"
-      requires_auth = true
-      break
+  if rule_metadata and rule_metadata.conditions
+    for _, cond_meta in ipairs rule_metadata.conditions
+      if cond_meta.capabilities and cond_meta.capabilities.requires_auth
+        requires_auth = true
+        break
 
   {
     index: idx
@@ -438,8 +438,9 @@ compile = (filter_cfg, rules_metadata=nil) ->
   used_ids = {}
   rules = for idx, rule in ipairs rules_cfg
     -- Get rule_id from metadata if available (ensures consistency with runtime)
-    meta_rid = rules_metadata and rules_metadata[idx] and rules_metadata[idx].rule_id
-    build_rule cfg, rule, idx, used_ids, meta_rid
+    rmeta = rules_metadata and rules_metadata[idx]
+    meta_rid = rmeta and rmeta.rule_id
+    build_rule cfg, rule, idx, used_ids, meta_rid, rmeta
   action_map = {}
   rules_by_id = {}
 
@@ -480,27 +481,7 @@ compile = (filter_cfg, rules_metadata=nil) ->
     else
       metrics.nft_compilable += 1
 
-    -- Re-check requires_auth for all rules using enriched metadata
     conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
-    if conditions_meta
-      -- conditions_meta is a flat array of conditions (from rule.moon)
-      -- Each condition has 'name', 'args', 'capabilities', etc.
-      first_elem = conditions_meta[1]
-      is_flat_format = first_elem and first_elem.name and first_elem.args
-
-      if is_flat_format
-        -- conditions_meta is an array of conditions
-        for _, cond_meta in ipairs conditions_meta
-          if cond_meta.name == "from_user" or cond_meta.name == "from_users" or
-             cond_meta.name == "from_userlist" or cond_meta.name == "from_userlists"
-            r.requires_auth = true
-            break
-
-    -- Set auth set names for rules that require authentication
-    if r.requires_auth
-      r.set_auth_mac = "#{r.rule_id}_auth_mac" unless r.set_auth_mac
-      r.set_auth_ip4 = "#{r.rule_id}_auth_ip4" unless r.set_auth_ip4
-      r.set_auth_ip6 = "#{r.rule_id}_auth_ip6" unless r.set_auth_ip6
 
     -- Count conditions by backend
     if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions
@@ -560,10 +541,13 @@ render_set = (name, set_type, flags, elems, indent, include_elements=true) ->
 -- @tparam table conditions_meta Métadonnées des conditions depuis rule.compile_rule
 -- @tparam string family Famille nft ("ip", "ip6", "inet")
 -- @treturn table Liste des expressions nft compilées
+-- @treturn boolean ok false si une condition nft-capable n'a pu être exprimée
+--                    dans cette famille (sémantique AND : un seul échec l'invalide).
 compile_conditions_nft = (conditions_meta, family) ->
-  return {} unless conditions_meta and #conditions_meta > 0
+  return {}, true unless conditions_meta and #conditions_meta > 0
 
   exprs = {}
+  ok = true
   for _, cond_meta in ipairs conditions_meta
     -- Skip conditions that are worker-only or don't support nft
     continue unless cond_meta.capabilities
@@ -575,7 +559,6 @@ compile_conditions_nft = (conditions_meta, family) ->
       if expr
         exprs[#exprs + 1] = expr
       else
-        -- If family is "inet", try both "ip" and "ip6"
         if family == "inet"
           expr_ip, err_ip = cond_meta.compile_nft "ip"
           if expr_ip
@@ -583,8 +566,11 @@ compile_conditions_nft = (conditions_meta, family) ->
           expr_ip6, err_ip6 = cond_meta.compile_nft "ip6"
           if expr_ip6
             exprs[#exprs + 1] = expr_ip6
+          ok = false unless expr_ip or expr_ip6
+        else
+          ok = false
 
-  exprs
+  exprs, ok
 
 --- Compile l'action enrichie en verdict nft.
 -- @tparam table actions_meta Métadonnées des actions depuis rule.compile_rule
@@ -617,12 +603,19 @@ match_exprs = (rule) ->
 
     group_exprs = {}
     if is_flat_format
-      -- conditions_meta is an array of conditions (implicit AND)
-      compiled_exprs = compile_conditions_nft rule.conditions_meta, "inet"
-      if #compiled_exprs > 0
-        -- AND within conditions: combine all conditions
-        combined = table.concat(compiled_exprs, " ")
-        group_exprs[#group_exprs + 1] = combined
+      -- Compile ip et ip6 séparément : une liste mixte IPv4/IPv6 produit deux règles.
+      exprs_ip, ok_ip = compile_conditions_nft rule.conditions_meta, "ip"
+      exprs_ip6, ok_ip6 = compile_conditions_nft rule.conditions_meta, "ip6"
+      combined_ip = ok_ip and #exprs_ip > 0 and table.concat(exprs_ip, " ") or nil
+      combined_ip6 = ok_ip6 and #exprs_ip6 > 0 and table.concat(exprs_ip6, " ") or nil
+
+      if combined_ip and combined_ip6 and combined_ip != combined_ip6
+        group_exprs[#group_exprs + 1] = combined_ip
+        group_exprs[#group_exprs + 1] = combined_ip6
+      elseif combined_ip
+        group_exprs[#group_exprs + 1] = combined_ip
+      elseif combined_ip6
+        group_exprs[#group_exprs + 1] = combined_ip6
 
     if #group_exprs > 0
       -- OR between groups: create separate expressions for each group

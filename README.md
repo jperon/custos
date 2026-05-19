@@ -160,13 +160,19 @@ custos/
 │   │   │   ├── allow.moon   Action allow — injecte IPs dans mac4/mac6_allowed
 │   │   │   ├── deny.moon    Action deny — répond REFUSED + EDE
 │   │   │   └── dnsonly.moon Action dnsonly — DNS autorisé sans injection nft
+│   │   ├── compiler_api.moon  Chargeur de conditions (auto-génération des variantes)
 │   │   ├── conditions/
-│   │   │   ├── from_net.moon / from_nets.moon / from_netlist.moon / from_netlists.moon
-│   │   │   ├── from_mac.moon / from_macs.moon / from_maclist.moon / from_maclists.moon
-│   │   │   ├── from_user.moon / from_users.moon / from_userlist.moon / from_userlists.moon
+│   │   │   ├── from_net.moon    Condition atomique IP source (CIDR)
+│   │   │   ├── from_mac.moon    Condition atomique adresse MAC source
+│   │   │   ├── from_vlan.moon   Condition atomique VLAN source
+│   │   │   ├── from_user.moon   Condition atomique session authentifiée
+│   │   │   ├── from_subnet.moon Condition IP source via sous-réseau config
+│   │   │   ├── to_net.moon      Condition atomique IP destination (CIDR)
 │   │   │   ├── to_domain.moon / to_domains.moon / to_domainlist.moon / to_domainlists.moon
-│   │   │   ├── in_time.moon / in_times.moon
+│   │   │   ├── in_time.moon     Condition atomique fenêtre horaire
 │   │   │   └── stolen_computer.moon
+│   │   │   (les variantes from_xxxs / from_xxx_list / from_xxx_lists sont
+│   │   │    auto-générées à partir de from_xxx par compiler_api)
 │   │   └── lib/
 │   │       ├── bsearch.moon         Recherche binaire dans fichiers de listes
 │   │       ├── ipcalc.moon          Test d'appartenance CIDR
@@ -259,6 +265,7 @@ défauts de `src/config.moon`). Elle est au format **MoonScript** et couvre :
 - `dns.ttl_grace` (`grace`, `min`, `max`) — timeout nft = `TTL + grace`, borné
 - configuration authentification (port, cert/key, sessions, etc.)
 - whitelist de destinations IP (`filter.dest_whitelist`)
+- `lists_dir` — répertoire racine des listes de conditions (voir ci-dessous)
 
 NFT extra rules (via UCI)
 - Il est possible d’ajouter des règles nft supplémentaires depuis UCI (section `custos.main`) via l’option `nft_extra_rules`.
@@ -273,6 +280,67 @@ NFT extra rules (via UCI)
 make          # recompile après modification des sources
 make reload   # envoie SIGHUP aux workers (rechargement à chaud)
 ```
+
+---
+
+## Listes de conditions (`lists_dir`)
+
+Il existe deux systèmes de listes distincts selon le type de condition :
+
+| Système | Conditions | Format | Évaluation |
+|---------|-----------|--------|------------|
+| `domainlists_dir` + `custos-update` | `to_domainlist`, `to_domainlists` | binaire (xxhash64 triés) | O(log n) FFI userspace |
+| `lists_dir` (plain text) | `from_xxx_list`, `from_xxx_lists` | texte (1 item/ligne) | kernel nft (interval tree / hash) |
+
+Les listes de domaines peuvent contenir des millions d'entrées et passent obligatoirement
+par `custos-update` pour être compilées en format binaire optimisé.
+
+Les autres types de listes (réseaux, MACs, VLANs…) sont lus depuis des fichiers texte au
+démarrage, puis compilés en expressions nft d'ensemble inline (`ip saddr { cidr1, cidr2 }`)
+évaluées côté kernel. Nftables optimise ces ensembles via interval trees (CIDRs) ou hash
+maps (MACs, VLANs). Les listes d'utilisateurs restent worker-only (les sessions sont
+dynamiques et ne peuvent pas être exprimées en nft statique).
+
+Les variantes `from_xxx_list` et `from_xxx_lists` lisent des fichiers texte organisés
+par type dans un répertoire configurable :
+
+```moonscript
+filter:
+  lists_dir: "/etc/custos/lists"   -- défaut : /etc/custos/lists
+```
+
+### Convention de nommage
+
+| Condition | Argument | Fichier lu |
+|-----------|----------|------------|
+| `from_net_list "lan"` | nom de liste | `{lists_dir}/net/lan.txt` |
+| `from_net_lists {"lan","dmz"}` | liste de noms | plusieurs fichiers |
+| `from_mac_list "trusted"` | nom de liste | `{lists_dir}/mac/trusted.txt` |
+| `from_user_list "admins"` | nom de liste | `{lists_dir}/user/admins.txt` |
+| `from_vlan_list "corp"` | nom de liste | `{lists_dir}/vlan/corp.txt` |
+| `from_in_time_list "biz"` | nom de liste | `{lists_dir}/in_time/biz.txt` |
+
+Format des fichiers : 1 item valide par ligne, lignes vides et `#commentaires` ignorés.
+
+### Auto-génération des variantes
+
+Le chargeur `compiler_api` génère automatiquement les variantes à partir de la
+condition atomique `from_xxx` :
+
+- `from_xxxs {"a","b"}` — OR sur une table Lua (pas de fichier)
+- `from_xxx_list "nom"` — lit `{lists_dir}/{xxx}/{nom}.txt`
+- `from_xxx_lists {"n1","n2"}` — OR sur plusieurs fichiers
+
+Il suffit de définir `from_xxx.moon` ; les trois variantes sont disponibles sans
+fichier supplémentaire. Tout nouveau type de condition (ex. `from_mytype.moon`)
+hérite automatiquement de `from_mytype_list` et `from_mytype_lists`.
+
+### `requires_auth` dans les capabilities
+
+Une condition peut déclarer `capabilities.requires_auth = true` pour indiquer
+au compilateur nft qu'elle nécessite des sous-chaînes d'authentification.
+`from_user.moon` le fait nativement ; tout nouveau type d'auth suit la même
+convention sans modifier `nft_compiler`.
 
 ---
 
@@ -539,6 +607,20 @@ Multiple users can be listed (logical OR):
         { from_users: {"alice", "bob"} }
 ```
 
+Users from a text file (`lists_dir/user/admins.txt`, one username per line):
+
+```moonscript
+      conditions:
+        { from_user_list: "admins" }
+```
+
+Multiple files (OR):
+
+```moonscript
+      conditions:
+        { from_user_lists: {"admins", "vip"} }
+```
+
 ### Captive portal
 
 Un **worker captive** dédié intercepte les SYN TCP/80 des clients non authentifiés
@@ -567,7 +649,7 @@ les noms de domaine sans accéder aux serveurs cibles avant d'être authentifié
 
 ### Conditions utilisateur
 
-`from_user`, `from_users`, `from_userlist`, `from_userlists` permettent
+`from_user`, `from_users`, `from_user_list`, `from_user_lists` permettent
 d'associer des règles à des comptes authentifiés :
 
 ```moonscript
@@ -585,6 +667,13 @@ Plusieurs utilisateurs (OR logique) :
 ```moonscript
   conditions:
     { from_users: {"alice", "bob"} }
+```
+
+Depuis un fichier texte (`{lists_dir}/user/admins.txt`) :
+
+```moonscript
+  conditions:
+    { from_user_list: "admins" }
 ```
 
 ---

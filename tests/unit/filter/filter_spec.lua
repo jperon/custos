@@ -485,100 +485,122 @@ describe("filter.conditions.from_mac", function()
     })))
   end)
 end)
-describe("filter.conditions.from_macs", function()
-  local from_macs = require("filter.conditions.from_macs")
+describe("filter.conditions.from_macs (auto-généré)", function()
+  local compiler_api = require("filter.compiler_api")
+  local factory = compiler_api.load_condition("from_macs")
   it("MAC dans liste", function()
-    local f = (from_macs({ }))({
+    local cond = factory({ })({
       "aa:bb:cc:dd:ee:ff",
       "11:22:33:44:55:66"
     })
-    assert.is_true((f({
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff"
-    })))
-    return assert.is_true((f({
+    })
+    assert.is_true(ok)
+    ok, _ = cond.eval({
       mac = "11:22:33:44:55:66"
-    })))
+    })
+    return assert.is_true(ok)
   end)
   it("MAC absente", function()
-    local f = (from_macs({ }))({
+    local cond = factory({ })({
       "aa:bb:cc:dd:ee:ff",
       "11:22:33:44:55:66"
     })
-    return assert.is_false((f({
+    local ok, _ = cond.eval({
       mac = "de:ad:be:ef:00:01"
-    })))
+    })
+    return assert.is_false(ok)
   end)
   return it("liste vide → faux", function()
-    local f = (from_macs({ }))({ })
-    return assert.is_false((f({
+    local cond = factory({ })({ })
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff"
-    })))
+    })
+    return assert.is_false(ok)
   end)
 end)
-describe("filter.conditions.from_maclist", function()
-  local from_maclist = require("filter.conditions.from_maclist")
-  local MACLIST_CFG = {
-    maclists = {
-      trusted = {
-        "aa:bb:cc:dd:ee:ff",
-        "11:22:33:44:55:66"
-      },
-      printers = {
-        "de:ad:be:ef:00:01"
-      }
-    }
+describe("filter.conditions.from_mac_list (auto-généré, fichier)", function()
+  local compiler_api = require("filter.compiler_api")
+  local factory = compiler_api.load_condition("from_mac_list")
+  local LIST_DIR = "/tmp/custos_test_mac_list"
+  local CFG = {
+    lists_dir = LIST_DIR
   }
-  it("MAC dans groupe", function()
-    local f = (from_maclist(MACLIST_CFG))("trusted")
-    return assert.is_true((f({
-      mac = "aa:bb:cc:dd:ee:ff"
-    })))
+  before_each(function()
+    os.execute("mkdir -p " .. tostring(LIST_DIR) .. "/mac")
+    local fh = io.open(tostring(LIST_DIR) .. "/mac/trusted.txt", "w")
+    fh:write("aa:bb:cc:dd:ee:ff\n11:22:33:44:55:66\n# commentaire\n\n")
+    return fh:close()
   end)
-  it("MAC hors groupe", function()
-    local f = (from_maclist(MACLIST_CFG))("trusted")
-    return assert.is_false((f({
+  after_each(function()
+    return os.execute("rm -rf " .. tostring(LIST_DIR))
+  end)
+  it("MAC dans fichier liste", function()
+    local cond = factory(CFG)("trusted")
+    local ok, _ = cond.eval({
+      mac = "aa:bb:cc:dd:ee:ff"
+    })
+    return assert.is_true(ok)
+  end)
+  it("MAC absente du fichier", function()
+    local cond = factory(CFG)("trusted")
+    local ok, _ = cond.eval({
       mac = "de:ad:be:ef:00:01"
-    })))
+    })
+    return assert.is_false(ok)
   end)
-  return it("groupe inconnu → faux", function()
-    local f = (from_maclist(MACLIST_CFG))("unknown")
-    return assert.is_false((f({
+  return it("liste inconnue → faux", function()
+    local cond = factory(CFG)("unknown")
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff"
-    })))
+    })
+    return assert.is_false(ok)
   end)
 end)
-describe("filter.conditions.from_maclists", function()
-  local from_maclists = require("filter.conditions.from_maclists")
-  local MACLIST_CFG = {
-    maclists = {
-      trusted = {
-        "aa:bb:cc:dd:ee:ff"
-      },
-      printers = {
-        "de:ad:be:ef:00:01"
-      }
-    }
+describe("filter.conditions.from_mac_lists (auto-généré, fichiers)", function()
+  local compiler_api = require("filter.compiler_api")
+  local factory = compiler_api.load_condition("from_mac_lists")
+  local LIST_DIR = "/tmp/custos_test_mac_lists"
+  local CFG = {
+    lists_dir = LIST_DIR
   }
-  it("OR sur plusieurs groupes", function()
-    local f = (from_maclists(MACLIST_CFG))({
+  before_each(function()
+    os.execute("mkdir -p " .. tostring(LIST_DIR) .. "/mac")
+    local fh = io.open(tostring(LIST_DIR) .. "/mac/trusted.txt", "w")
+    fh:write("aa:bb:cc:dd:ee:ff\n")
+    fh:close()
+    fh = io.open(tostring(LIST_DIR) .. "/mac/printers.txt", "w")
+    fh:write("de:ad:be:ef:00:01\n")
+    return fh:close()
+  end)
+  after_each(function()
+    return os.execute("rm -rf " .. tostring(LIST_DIR))
+  end)
+  it("OR sur plusieurs fichiers listes", function()
+    local cond = factory(CFG)({
       "trusted",
       "printers"
     })
-    assert.is_true((f({
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff"
-    })))
-    assert.is_true((f({
+    })
+    assert.is_true(ok)
+    ok, _ = cond.eval({
       mac = "de:ad:be:ef:00:01"
-    })))
-    return assert.is_false((f({
+    })
+    assert.is_true(ok)
+    ok, _ = cond.eval({
       mac = "00:00:00:00:00:00"
-    })))
+    })
+    return assert.is_false(ok)
   end)
   return it("liste vide → faux", function()
-    local f = (from_maclists(MACLIST_CFG))({ })
-    return assert.is_false((f({
+    local cond = factory(CFG)({ })
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff"
-    })))
+    })
+    return assert.is_false(ok)
   end)
 end)
 describe("filter.conditions.from_net", function()
@@ -637,103 +659,126 @@ describe("filter.conditions.from_net", function()
     return assert.is_false(v)
   end)
 end)
-describe("filter.conditions.from_nets", function()
-  local from_nets = require("filter.conditions.from_nets")
+describe("filter.conditions.from_nets (auto-généré)", function()
+  local compiler_api = require("filter.compiler_api")
+  local factory = compiler_api.load_condition("from_nets")
   it("IP dans l'un des CIDRs", function()
-    local f = (from_nets({ }))({
+    local cond = factory({ })({
       "192.168.0.0/16",
       "10.0.0.0/8"
     })
-    assert.is_true((f({
+    local ok, _ = cond.eval({
       src_ip = "192.168.1.1"
-    })))
-    return assert.is_true((f({
+    })
+    assert.is_true(ok)
+    ok, _ = cond.eval({
       src_ip = "10.5.0.1"
-    })))
+    })
+    return assert.is_true(ok)
   end)
   it("IP hors de tous les CIDRs", function()
-    local f = (from_nets({ }))({
+    local cond = factory({ })({
       "192.168.0.0/16",
       "10.0.0.0/8"
     })
-    return assert.is_false((f({
+    local ok, _ = cond.eval({
       src_ip = "8.8.8.8"
-    })))
+    })
+    return assert.is_false(ok)
   end)
   return it("liste vide → faux", function()
-    local f = (from_nets({ }))({ })
-    return assert.is_false((f({
+    local cond = factory({ })({ })
+    local ok, _ = cond.eval({
       src_ip = "192.168.1.1"
-    })))
+    })
+    return assert.is_false(ok)
   end)
 end)
-describe("filter.conditions.from_netlist", function()
-  local from_netlist = require("filter.conditions.from_netlist")
-  local NETLIST_CFG = {
-    nets = {
-      lan = {
-        "192.168.0.0/16",
-        "10.0.0.0/8"
-      },
-      dmz = {
-        "172.16.0.0/12"
-      }
-    }
+describe("filter.conditions.from_net_list (auto-généré, fichier)", function()
+  local compiler_api = require("filter.compiler_api")
+  local factory = compiler_api.load_condition("from_net_list")
+  local LIST_DIR = "/tmp/custos_test_net_list"
+  local CFG = {
+    lists_dir = LIST_DIR
   }
-  it("IP dans netlist", function()
-    local f = (from_netlist(NETLIST_CFG))("lan")
-    assert.is_true((f({
+  before_each(function()
+    os.execute("mkdir -p " .. tostring(LIST_DIR) .. "/net")
+    local fh = io.open(tostring(LIST_DIR) .. "/net/lan.txt", "w")
+    fh:write("192.168.0.0/16\n10.0.0.0/8\n# commentaire\n\n")
+    return fh:close()
+  end)
+  after_each(function()
+    return os.execute("rm -rf " .. tostring(LIST_DIR))
+  end)
+  it("IP dans fichier netlist", function()
+    local cond = factory(CFG)("lan")
+    local ok, _ = cond.eval({
       src_ip = "192.168.1.42"
-    })))
-    return assert.is_true((f({
+    })
+    assert.is_true(ok)
+    ok, _ = cond.eval({
       src_ip = "10.5.0.1"
-    })))
+    })
+    return assert.is_true(ok)
   end)
-  it("IP hors netlist", function()
-    local f = (from_netlist(NETLIST_CFG))("lan")
-    return assert.is_false((f({
+  it("IP hors fichier netlist", function()
+    local cond = factory(CFG)("lan")
+    local ok, _ = cond.eval({
       src_ip = "8.8.8.8"
-    })))
+    })
+    return assert.is_false(ok)
   end)
-  return it("netlist inconnue → faux", function()
-    local f = (from_netlist(NETLIST_CFG))("unknown")
-    return assert.is_false((f({
+  return it("liste inconnue → faux", function()
+    local cond = factory(CFG)("unknown")
+    local ok, _ = cond.eval({
       src_ip = "192.168.1.1"
-    })))
+    })
+    return assert.is_false(ok)
   end)
 end)
-describe("filter.conditions.from_netlists", function()
-  local from_netlists = require("filter.conditions.from_netlists")
-  local NETLIST_CFG = {
-    nets = {
-      lan = {
-        "192.168.0.0/16"
-      },
-      dmz = {
-        "172.16.0.0/12"
-      }
-    }
+describe("filter.conditions.from_net_lists (auto-généré, fichiers)", function()
+  local compiler_api = require("filter.compiler_api")
+  local factory = compiler_api.load_condition("from_net_lists")
+  local LIST_DIR = "/tmp/custos_test_net_lists"
+  local CFG = {
+    lists_dir = LIST_DIR
   }
-  it("OR sur plusieurs netlists", function()
-    local f = (from_netlists(NETLIST_CFG))({
+  before_each(function()
+    os.execute("mkdir -p " .. tostring(LIST_DIR) .. "/net")
+    local fh = io.open(tostring(LIST_DIR) .. "/net/lan.txt", "w")
+    fh:write("192.168.0.0/16\n")
+    fh:close()
+    fh = io.open(tostring(LIST_DIR) .. "/net/dmz.txt", "w")
+    fh:write("172.16.0.0/12\n")
+    return fh:close()
+  end)
+  after_each(function()
+    return os.execute("rm -rf " .. tostring(LIST_DIR))
+  end)
+  it("OR sur plusieurs fichiers netlists", function()
+    local cond = factory(CFG)({
       "lan",
       "dmz"
     })
-    assert.is_true((f({
+    local ok, _ = cond.eval({
       src_ip = "192.168.0.1"
-    })))
-    assert.is_true((f({
+    })
+    assert.is_true(ok)
+    ok, _ = cond.eval({
       src_ip = "172.16.1.1"
-    })))
-    return assert.is_false((f({
+    })
+    assert.is_true(ok)
+    ok, _ = cond.eval({
       src_ip = "1.2.3.4"
-    })))
+    })
+    return assert.is_false(ok)
   end)
   return it("liste vide → faux", function()
-    local f = (from_netlists(NETLIST_CFG))({ })
-    return assert.is_false((f({
+    local cond = factory(CFG)({ })
+    local ok, _ = cond.eval({
       src_ip = "192.168.1.1"
-    })))
+    })
+    return assert.is_false(ok)
   end)
 end)
 describe("filter.conditions.from_user", function()
@@ -930,8 +975,9 @@ describe("filter.conditions.from_user", function()
     package.loaded["filter.conditions.from_user"] = nil
   end)
 end)
-describe("filter.conditions.from_users", function()
-  local from_users = require("filter.conditions.from_users")
+describe("filter.conditions.from_users (auto-généré)", function()
+  local compiler_api = require("filter.compiler_api")
+  local factory = compiler_api.load_condition("from_users")
   local SESSION_FILE = "./tmp/test_from_users.lua"
   local USER_CFG = {
     auth = {
@@ -970,64 +1016,68 @@ describe("filter.conditions.from_users", function()
     end
   end)
   it("premier utilisateur match", function()
-    local f = (from_users(USER_CFG))({
+    local cond = factory(USER_CFG)({
       "alice",
       "bob"
     })
-    return assert.is_true((f({
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
-    })))
+    })
+    return assert.is_true(ok)
   end)
   it("aucun match", function()
-    local f = (from_users(USER_CFG))({
+    local cond = factory(USER_CFG)({
       "bob",
       "charlie"
     })
-    return assert.is_false((f({
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
-    })))
+    })
+    return assert.is_false(ok)
   end)
   return it("liste vide → faux", function()
-    local f = (from_users(USER_CFG))({ })
-    return assert.is_false((f({
+    local cond = factory(USER_CFG)({ })
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
-    })))
+    })
+    return assert.is_false(ok)
   end)
 end)
-describe("filter.conditions.from_userlist", function()
-  local from_userlist = require("filter.conditions.from_userlist")
-  local SESSION_FILE = "./tmp/test_from_userlist.lua"
+describe("filter.conditions.from_user_list (auto-généré, fichier)", function()
+  local compiler_api = require("filter.compiler_api")
+  local factory = compiler_api.load_condition("from_user_list")
+  local LIST_DIR = "/tmp/custos_test_user_list"
+  local SESSION_FILE = "./tmp/test_from_user_list.lua"
   local USER_CFG = {
+    lists_dir = LIST_DIR,
     auth = {
       sessions_file = SESSION_FILE
-    },
-    userlists = {
-      admins = {
-        "alice",
-        "bob"
-      },
-      guests = {
-        "charlie"
-      }
     }
   }
   local FAR_FUTURE = os.time() + 86400 * 365
+  local write_session_file
+  write_session_file = function(entries)
+    local fh = io.open(SESSION_FILE, "w")
+    fh:write("return {\n")
+    for _index_0 = 1, #entries do
+      local entry = entries[_index_0]
+      fh:write(string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3]))
+    end
+    fh:write("}\n")
+    return fh:close()
+  end
   before_each(function()
     local sessions_mod = require("auth.sessions")
-    local write_session_file
-    write_session_file = function(entries)
-      local fh = io.open(SESSION_FILE, "w")
-      fh:write("return {\n")
-      for _index_0 = 1, #entries do
-        local entry = entries[_index_0]
-        fh:write(string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3]))
-      end
-      fh:write("}\n")
-      return fh:close()
-    end
+    os.execute("mkdir -p " .. tostring(LIST_DIR) .. "/user")
+    local fh = io.open(tostring(LIST_DIR) .. "/user/admins.txt", "w")
+    fh:write("alice\nbob\n# commentaire\n\n")
+    fh:close()
+    fh = io.open(tostring(LIST_DIR) .. "/user/guests.txt", "w")
+    fh:write("charlie\n")
+    fh:close()
     if io.open(SESSION_FILE, "r") then
       os.remove(SESSION_FILE)
     end
@@ -1041,62 +1091,68 @@ describe("filter.conditions.from_userlist", function()
     return sessions_mod.reset_cache()
   end)
   after_each(function()
+    os.execute("rm -rf " .. tostring(LIST_DIR))
     if io.open(SESSION_FILE, "r") then
       return os.remove(SESSION_FILE)
     end
   end)
-  it("utilisateur dans groupe", function()
-    local f = (from_userlist(USER_CFG))("admins")
-    return assert.is_true((f({
+  it("utilisateur dans fichier liste", function()
+    local cond = factory(USER_CFG)("admins")
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
-    })))
+    })
+    return assert.is_true(ok)
   end)
-  it("utilisateur hors groupe", function()
-    local f = (from_userlist(USER_CFG))("guests")
-    return assert.is_false((f({
+  it("utilisateur hors fichier liste", function()
+    local cond = factory(USER_CFG)("guests")
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
-    })))
+    })
+    return assert.is_false(ok)
   end)
-  return it("groupe inconnu → faux", function()
-    local f = (from_userlist(USER_CFG))("unknown")
-    return assert.is_false((f({
+  return it("liste inconnue → faux", function()
+    local cond = factory(USER_CFG)("unknown")
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
-    })))
+    })
+    return assert.is_false(ok)
   end)
 end)
-describe("filter.conditions.from_userlists", function()
-  local from_userlists = require("filter.conditions.from_userlists")
-  local SESSION_FILE = "./tmp/test_from_userlists.lua"
+describe("filter.conditions.from_user_lists (auto-généré, fichiers)", function()
+  local compiler_api = require("filter.compiler_api")
+  local factory = compiler_api.load_condition("from_user_lists")
+  local LIST_DIR = "/tmp/custos_test_user_lists"
+  local SESSION_FILE = "./tmp/test_from_user_lists.lua"
   local USER_CFG = {
+    lists_dir = LIST_DIR,
     auth = {
       sessions_file = SESSION_FILE
-    },
-    userlists = {
-      admins = {
-        "alice"
-      },
-      guests = {
-        "charlie"
-      }
     }
   }
   local FAR_FUTURE = os.time() + 86400 * 365
+  local write_session_file
+  write_session_file = function(entries)
+    local fh = io.open(SESSION_FILE, "w")
+    fh:write("return {\n")
+    for _index_0 = 1, #entries do
+      local entry = entries[_index_0]
+      fh:write(string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3]))
+    end
+    fh:write("}\n")
+    return fh:close()
+  end
   before_each(function()
     local sessions_mod = require("auth.sessions")
-    local write_session_file
-    write_session_file = function(entries)
-      local fh = io.open(SESSION_FILE, "w")
-      fh:write("return {\n")
-      for _index_0 = 1, #entries do
-        local entry = entries[_index_0]
-        fh:write(string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3]))
-      end
-      fh:write("}\n")
-      return fh:close()
-    end
+    os.execute("mkdir -p " .. tostring(LIST_DIR) .. "/user")
+    local fh = io.open(tostring(LIST_DIR) .. "/user/admins.txt", "w")
+    fh:write("alice\n")
+    fh:close()
+    fh = io.open(tostring(LIST_DIR) .. "/user/guests.txt", "w")
+    fh:write("charlie\n")
+    fh:close()
     if io.open(SESSION_FILE, "r") then
       os.remove(SESSION_FILE)
     end
@@ -1110,33 +1166,24 @@ describe("filter.conditions.from_userlists", function()
     return sessions_mod.reset_cache()
   end)
   after_each(function()
+    os.execute("rm -rf " .. tostring(LIST_DIR))
     if io.open(SESSION_FILE, "r") then
       return os.remove(SESSION_FILE)
     end
   end)
-  it("premier groupe match", function()
-    local f = (from_userlists(USER_CFG))({
+  it("premier fichier liste match", function()
+    local cond = factory(USER_CFG)({
       "admins",
       "guests"
     })
-    return assert.is_true((f({
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
-    })))
+    })
+    return assert.is_true(ok)
   end)
-  it("deuxième groupe match", function()
+  it("deuxième fichier liste match", function()
     local sessions_mod = require("auth.sessions")
-    local write_session_file
-    write_session_file = function(entries)
-      local fh = io.open(SESSION_FILE, "w")
-      fh:write("return {\n")
-      for _index_0 = 1, #entries do
-        local entry = entries[_index_0]
-        fh:write(string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3]))
-      end
-      fh:write("}\n")
-      return fh:close()
-    end
     if io.open(SESSION_FILE, "r") then
       os.remove(SESSION_FILE)
     end
@@ -1148,21 +1195,23 @@ describe("filter.conditions.from_userlists", function()
       }
     })
     sessions_mod.reset_cache()
-    local f = (from_userlists(USER_CFG))({
+    local cond = factory(USER_CFG)({
       "admins",
       "guests"
     })
-    return assert.is_true((f({
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
-    })))
+    })
+    return assert.is_true(ok)
   end)
   return it("liste vide → faux", function()
-    local f = (from_userlists(USER_CFG))({ })
-    return assert.is_false((f({
+    local cond = factory(USER_CFG)({ })
+    local ok, _ = cond.eval({
       mac = "aa:bb:cc:dd:ee:ff",
       src_ip = "10.0.0.1"
-    })))
+    })
+    return assert.is_false(ok)
   end)
 end)
 describe("filter.conditions.stolen_computer", function()
@@ -1262,8 +1311,9 @@ describe("filter.conditions.in_time", function()
     return assert.equals("Time window 'unknown' not defined", r)
   end)
 end)
-describe("filter.conditions.in_times", function()
-  local in_times = require("filter.conditions.in_times")
+describe("filter.conditions.in_times (auto-généré)", function()
+  local compiler_api = require("filter.compiler_api")
+  local factory = compiler_api.load_condition("in_times")
   it("OR sur plusieurs fenêtres", function()
     local cfg = {
       times = {
@@ -1277,7 +1327,7 @@ describe("filter.conditions.in_times", function()
         }
       }
     }
-    local f = (in_times(cfg))({
+    local cond = factory(cfg)({
       "morning",
       "evening"
     })
@@ -1289,9 +1339,10 @@ describe("filter.conditions.in_times", function()
       min = 0,
       sec = 0
     })
-    assert.is_true((f({
+    local ok, _ = cond.eval({
       ts = ts1
-    })))
+    })
+    assert.is_true(ok)
     local ts2 = os.time({
       year = 2024,
       month = 1,
@@ -1300,9 +1351,10 @@ describe("filter.conditions.in_times", function()
       min = 0,
       sec = 0
     })
-    assert.is_true((f({
+    ok, _ = cond.eval({
       ts = ts2
-    })))
+    })
+    assert.is_true(ok)
     local ts3 = os.time({
       year = 2024,
       month = 1,
@@ -1311,9 +1363,10 @@ describe("filter.conditions.in_times", function()
       min = 0,
       sec = 0
     })
-    return assert.is_false((f({
+    ok, _ = cond.eval({
       ts = ts3
-    })))
+    })
+    return assert.is_false(ok)
   end)
   return it("liste vide → faux", function()
     local cfg = {
@@ -1324,10 +1377,11 @@ describe("filter.conditions.in_times", function()
         }
       }
     }
-    local f = (in_times(cfg))({ })
-    return assert.is_false((f({
+    local cond = factory(cfg)({ })
+    local ok, _ = cond.eval({
       ts = os.time()
-    })))
+    })
+    return assert.is_false(ok)
   end)
 end)
 describe("filter.rule", function()

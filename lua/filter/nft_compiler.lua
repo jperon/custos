@@ -499,9 +499,12 @@ resolve_action = function(rule)
   return nil
 end
 local build_rule
-build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id)
+build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id, rule_metadata)
   if metadata_rule_id == nil then
     metadata_rule_id = nil
+  end
+  if rule_metadata == nil then
+    rule_metadata = nil
   end
   local rid = metadata_rule_id or stable_rule_id(rule, idx, used_ids)
   local src4, src6 = collect_nets(cfg, rule)
@@ -514,10 +517,12 @@ build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id)
   local chain = "cv_rule_" .. rid
   local mark = string.format("0x%x", 0x4000 + idx)
   local requires_auth = false
-  for k, _ in pairs(rule.conditions or { }) do
-    if k == "from_users" or k == "from_userlists" then
-      requires_auth = true
-      break
+  if rule_metadata and rule_metadata.conditions then
+    for _, cond_meta in ipairs(rule_metadata.conditions) do
+      if cond_meta.capabilities and cond_meta.capabilities.requires_auth then
+        requires_auth = true
+        break
+      end
     end
   end
   return {
@@ -579,8 +584,9 @@ compile = function(filter_cfg, rules_metadata)
     local _accum_0 = { }
     local _len_0 = 1
     for idx, rule in ipairs(rules_cfg) do
-      local meta_rid = rules_metadata and rules_metadata[idx] and rules_metadata[idx].rule_id
-      local _value_0 = build_rule(cfg, rule, idx, used_ids, meta_rid)
+      local rmeta = rules_metadata and rules_metadata[idx]
+      local meta_rid = rmeta and rmeta.rule_id
+      local _value_0 = build_rule(cfg, rule, idx, used_ids, meta_rid, rmeta)
       _accum_0[_len_0] = _value_0
       _len_0 = _len_0 + 1
     end
@@ -624,29 +630,6 @@ compile = function(filter_cfg, rules_metadata)
       metrics.nft_compilable = metrics.nft_compilable + 1
     end
     local conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
-    if conditions_meta then
-      local first_elem = conditions_meta[1]
-      local is_flat_format = first_elem and first_elem.name and first_elem.args
-      if is_flat_format then
-        for _, cond_meta in ipairs(conditions_meta) do
-          if cond_meta.name == "from_user" or cond_meta.name == "from_users" or cond_meta.name == "from_userlist" or cond_meta.name == "from_userlists" then
-            r.requires_auth = true
-            break
-          end
-        end
-      end
-    end
-    if r.requires_auth then
-      if not (r.set_auth_mac) then
-        r.set_auth_mac = tostring(r.rule_id) .. "_auth_mac"
-      end
-      if not (r.set_auth_ip4) then
-        r.set_auth_ip4 = tostring(r.rule_id) .. "_auth_ip4"
-      end
-      if not (r.set_auth_ip6) then
-        r.set_auth_ip6 = tostring(r.rule_id) .. "_auth_ip6"
-      end
-    end
     if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions then
       for _, cond in ipairs(rules_metadata[idx].conditions) do
         if cond.capabilities and cond.capabilities.nft then
@@ -706,9 +689,10 @@ end
 local compile_conditions_nft
 compile_conditions_nft = function(conditions_meta, family)
   if not (conditions_meta and #conditions_meta > 0) then
-    return { }
+    return { }, true
   end
   local exprs = { }
+  local ok = true
   for _, cond_meta in ipairs(conditions_meta) do
     local _continue_0 = false
     repeat
@@ -734,6 +718,11 @@ compile_conditions_nft = function(conditions_meta, family)
             if expr_ip6 then
               exprs[#exprs + 1] = expr_ip6
             end
+            if not (expr_ip or expr_ip6) then
+              ok = false
+            end
+          else
+            ok = false
           end
         end
       end
@@ -743,7 +732,7 @@ compile_conditions_nft = function(conditions_meta, family)
       break
     end
   end
-  return exprs
+  return exprs, ok
 end
 local compile_action_nft
 compile_action_nft = function(actions_meta)
@@ -778,10 +767,17 @@ match_exprs = function(rule)
     local is_flat_format = first_elem and first_elem.name and first_elem.args
     local group_exprs = { }
     if is_flat_format then
-      local compiled_exprs = compile_conditions_nft(rule.conditions_meta, "inet")
-      if #compiled_exprs > 0 then
-        local combined = table.concat(compiled_exprs, " ")
-        group_exprs[#group_exprs + 1] = combined
+      local exprs_ip, ok_ip = compile_conditions_nft(rule.conditions_meta, "ip")
+      local exprs_ip6, ok_ip6 = compile_conditions_nft(rule.conditions_meta, "ip6")
+      local combined_ip = ok_ip and #exprs_ip > 0 and table.concat(exprs_ip, " ") or nil
+      local combined_ip6 = ok_ip6 and #exprs_ip6 > 0 and table.concat(exprs_ip6, " ") or nil
+      if combined_ip and combined_ip6 and combined_ip ~= combined_ip6 then
+        group_exprs[#group_exprs + 1] = combined_ip
+        group_exprs[#group_exprs + 1] = combined_ip6
+      elseif combined_ip then
+        group_exprs[#group_exprs + 1] = combined_ip
+      elseif combined_ip6 then
+        group_exprs[#group_exprs + 1] = combined_ip6
       end
     end
     if #group_exprs > 0 then

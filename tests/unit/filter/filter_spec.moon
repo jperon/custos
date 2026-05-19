@@ -320,61 +320,88 @@ describe "filter.conditions.from_mac", ->
     f = (from_mac {}) "_none"
     assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff"})
 
-describe "filter.conditions.from_macs", ->
-  from_macs = require "filter.conditions.from_macs"
+describe "filter.conditions.from_macs (auto-généré)", ->
+  compiler_api = require "filter.compiler_api"
+  factory = compiler_api.load_condition "from_macs"
 
   it "MAC dans liste", ->
-    f = (from_macs {}) {"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"}
-    assert.is_true (f {mac: "aa:bb:cc:dd:ee:ff"})
-    assert.is_true (f {mac: "11:22:33:44:55:66"})
+    cond = factory({}) {"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"}
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff"}
+    assert.is_true ok
+    ok, _ = cond.eval {mac: "11:22:33:44:55:66"}
+    assert.is_true ok
 
   it "MAC absente", ->
-    f = (from_macs {}) {"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"}
-    assert.is_false (f {mac: "de:ad:be:ef:00:01"})
+    cond = factory({}) {"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"}
+    ok, _ = cond.eval {mac: "de:ad:be:ef:00:01"}
+    assert.is_false ok
 
   it "liste vide → faux", ->
-    f = (from_macs {}) {}
-    assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff"})
+    cond = factory({}) {}
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff"}
+    assert.is_false ok
 
-describe "filter.conditions.from_maclist", ->
-  from_maclist = require "filter.conditions.from_maclist"
-  MACLIST_CFG = {
-    maclists: {
-      trusted: { "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66" }
-      printers: { "de:ad:be:ef:00:01" }
-    }
-  }
+describe "filter.conditions.from_mac_list (auto-généré, fichier)", ->
+  compiler_api = require "filter.compiler_api"
+  factory = compiler_api.load_condition "from_mac_list"
+  LIST_DIR = "/tmp/custos_test_mac_list"
+  CFG = { lists_dir: LIST_DIR }
 
-  it "MAC dans groupe", ->
-    f = (from_maclist MACLIST_CFG) "trusted"
-    assert.is_true (f {mac: "aa:bb:cc:dd:ee:ff"})
+  before_each ->
+    os.execute "mkdir -p #{LIST_DIR}/mac"
+    fh = io.open "#{LIST_DIR}/mac/trusted.txt", "w"
+    fh\write "aa:bb:cc:dd:ee:ff\n11:22:33:44:55:66\n# commentaire\n\n"
+    fh\close!
 
-  it "MAC hors groupe", ->
-    f = (from_maclist MACLIST_CFG) "trusted"
-    assert.is_false (f {mac: "de:ad:be:ef:00:01"})
+  after_each ->
+    os.execute "rm -rf #{LIST_DIR}"
 
-  it "groupe inconnu → faux", ->
-    f = (from_maclist MACLIST_CFG) "unknown"
-    assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff"})
+  it "MAC dans fichier liste", ->
+    cond = factory(CFG) "trusted"
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff"}
+    assert.is_true ok
 
-describe "filter.conditions.from_maclists", ->
-  from_maclists = require "filter.conditions.from_maclists"
-  MACLIST_CFG = {
-    maclists: {
-      trusted: { "aa:bb:cc:dd:ee:ff" }
-      printers: { "de:ad:be:ef:00:01" }
-    }
-  }
+  it "MAC absente du fichier", ->
+    cond = factory(CFG) "trusted"
+    ok, _ = cond.eval {mac: "de:ad:be:ef:00:01"}
+    assert.is_false ok
 
-  it "OR sur plusieurs groupes", ->
-    f = (from_maclists MACLIST_CFG) {"trusted", "printers"}
-    assert.is_true (f {mac: "aa:bb:cc:dd:ee:ff"})
-    assert.is_true (f {mac: "de:ad:be:ef:00:01"})
-    assert.is_false (f {mac: "00:00:00:00:00:00"})
+  it "liste inconnue → faux", ->
+    cond = factory(CFG) "unknown"
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff"}
+    assert.is_false ok
+
+describe "filter.conditions.from_mac_lists (auto-généré, fichiers)", ->
+  compiler_api = require "filter.compiler_api"
+  factory = compiler_api.load_condition "from_mac_lists"
+  LIST_DIR = "/tmp/custos_test_mac_lists"
+  CFG = { lists_dir: LIST_DIR }
+
+  before_each ->
+    os.execute "mkdir -p #{LIST_DIR}/mac"
+    fh = io.open "#{LIST_DIR}/mac/trusted.txt", "w"
+    fh\write "aa:bb:cc:dd:ee:ff\n"
+    fh\close!
+    fh = io.open "#{LIST_DIR}/mac/printers.txt", "w"
+    fh\write "de:ad:be:ef:00:01\n"
+    fh\close!
+
+  after_each ->
+    os.execute "rm -rf #{LIST_DIR}"
+
+  it "OR sur plusieurs fichiers listes", ->
+    cond = factory(CFG) {"trusted", "printers"}
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff"}
+    assert.is_true ok
+    ok, _ = cond.eval {mac: "de:ad:be:ef:00:01"}
+    assert.is_true ok
+    ok, _ = cond.eval {mac: "00:00:00:00:00:00"}
+    assert.is_false ok
 
   it "liste vide → faux", ->
-    f = (from_maclists MACLIST_CFG) {}
-    assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff"})
+    cond = factory(CFG) {}
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff"}
+    assert.is_false ok
 
 describe "filter.conditions.from_net", ->
   from_net = require "filter.conditions.from_net"
@@ -416,62 +443,90 @@ describe "filter.conditions.from_net", ->
     v = f {src_ip: nil}
     assert.is_false v
 
-describe "filter.conditions.from_nets", ->
-  from_nets = require "filter.conditions.from_nets"
+describe "filter.conditions.from_nets (auto-généré)", ->
+  compiler_api = require "filter.compiler_api"
+  factory = compiler_api.load_condition "from_nets"
 
   it "IP dans l'un des CIDRs", ->
-    f = (from_nets {}) {"192.168.0.0/16", "10.0.0.0/8"}
-    assert.is_true (f {src_ip: "192.168.1.1"})
-    assert.is_true (f {src_ip: "10.5.0.1"})
+    cond = factory({}) {"192.168.0.0/16", "10.0.0.0/8"}
+    ok, _ = cond.eval {src_ip: "192.168.1.1"}
+    assert.is_true ok
+    ok, _ = cond.eval {src_ip: "10.5.0.1"}
+    assert.is_true ok
 
   it "IP hors de tous les CIDRs", ->
-    f = (from_nets {}) {"192.168.0.0/16", "10.0.0.0/8"}
-    assert.is_false (f {src_ip: "8.8.8.8"})
+    cond = factory({}) {"192.168.0.0/16", "10.0.0.0/8"}
+    ok, _ = cond.eval {src_ip: "8.8.8.8"}
+    assert.is_false ok
 
   it "liste vide → faux", ->
-    f = (from_nets {}) {}
-    assert.is_false (f {src_ip: "192.168.1.1"})
+    cond = factory({}) {}
+    ok, _ = cond.eval {src_ip: "192.168.1.1"}
+    assert.is_false ok
 
-describe "filter.conditions.from_netlist", ->
-  from_netlist = require "filter.conditions.from_netlist"
-  NETLIST_CFG = {
-    nets: {
-      lan: {"192.168.0.0/16", "10.0.0.0/8"}
-      dmz: {"172.16.0.0/12"}
-    }
-  }
+describe "filter.conditions.from_net_list (auto-généré, fichier)", ->
+  compiler_api = require "filter.compiler_api"
+  factory = compiler_api.load_condition "from_net_list"
+  LIST_DIR = "/tmp/custos_test_net_list"
+  CFG = { lists_dir: LIST_DIR }
 
-  it "IP dans netlist", ->
-    f = (from_netlist NETLIST_CFG) "lan"
-    assert.is_true (f {src_ip: "192.168.1.42"})
-    assert.is_true (f {src_ip: "10.5.0.1"})
+  before_each ->
+    os.execute "mkdir -p #{LIST_DIR}/net"
+    fh = io.open "#{LIST_DIR}/net/lan.txt", "w"
+    fh\write "192.168.0.0/16\n10.0.0.0/8\n# commentaire\n\n"
+    fh\close!
 
-  it "IP hors netlist", ->
-    f = (from_netlist NETLIST_CFG) "lan"
-    assert.is_false (f {src_ip: "8.8.8.8"})
+  after_each ->
+    os.execute "rm -rf #{LIST_DIR}"
 
-  it "netlist inconnue → faux", ->
-    f = (from_netlist NETLIST_CFG) "unknown"
-    assert.is_false (f {src_ip: "192.168.1.1"})
+  it "IP dans fichier netlist", ->
+    cond = factory(CFG) "lan"
+    ok, _ = cond.eval {src_ip: "192.168.1.42"}
+    assert.is_true ok
+    ok, _ = cond.eval {src_ip: "10.5.0.1"}
+    assert.is_true ok
 
-describe "filter.conditions.from_netlists", ->
-  from_netlists = require "filter.conditions.from_netlists"
-  NETLIST_CFG = {
-    nets: {
-      lan: {"192.168.0.0/16"}
-      dmz: {"172.16.0.0/12"}
-    }
-  }
+  it "IP hors fichier netlist", ->
+    cond = factory(CFG) "lan"
+    ok, _ = cond.eval {src_ip: "8.8.8.8"}
+    assert.is_false ok
 
-  it "OR sur plusieurs netlists", ->
-    f = (from_netlists NETLIST_CFG) {"lan", "dmz"}
-    assert.is_true (f {src_ip: "192.168.0.1"})
-    assert.is_true (f {src_ip: "172.16.1.1"})
-    assert.is_false (f {src_ip: "1.2.3.4"})
+  it "liste inconnue → faux", ->
+    cond = factory(CFG) "unknown"
+    ok, _ = cond.eval {src_ip: "192.168.1.1"}
+    assert.is_false ok
+
+describe "filter.conditions.from_net_lists (auto-généré, fichiers)", ->
+  compiler_api = require "filter.compiler_api"
+  factory = compiler_api.load_condition "from_net_lists"
+  LIST_DIR = "/tmp/custos_test_net_lists"
+  CFG = { lists_dir: LIST_DIR }
+
+  before_each ->
+    os.execute "mkdir -p #{LIST_DIR}/net"
+    fh = io.open "#{LIST_DIR}/net/lan.txt", "w"
+    fh\write "192.168.0.0/16\n"
+    fh\close!
+    fh = io.open "#{LIST_DIR}/net/dmz.txt", "w"
+    fh\write "172.16.0.0/12\n"
+    fh\close!
+
+  after_each ->
+    os.execute "rm -rf #{LIST_DIR}"
+
+  it "OR sur plusieurs fichiers netlists", ->
+    cond = factory(CFG) {"lan", "dmz"}
+    ok, _ = cond.eval {src_ip: "192.168.0.1"}
+    assert.is_true ok
+    ok, _ = cond.eval {src_ip: "172.16.1.1"}
+    assert.is_true ok
+    ok, _ = cond.eval {src_ip: "1.2.3.4"}
+    assert.is_false ok
 
   it "liste vide → faux", ->
-    f = (from_netlists NETLIST_CFG) {}
-    assert.is_false (f {src_ip: "192.168.1.1"})
+    cond = factory(CFG) {}
+    ok, _ = cond.eval {src_ip: "192.168.1.1"}
+    assert.is_false ok
 
 describe "filter.conditions.from_user", ->
   from_user = require "filter.conditions.from_user"
@@ -605,8 +660,9 @@ describe "filter.conditions.from_user", ->
     package.loaded["mac_learner_ipc"] = nil
     package.loaded["filter.conditions.from_user"] = nil
 
-describe "filter.conditions.from_users", ->
-  from_users = require "filter.conditions.from_users"
+describe "filter.conditions.from_users (auto-généré)", ->
+  compiler_api = require "filter.compiler_api"
+  factory = compiler_api.load_condition "from_users"
   SESSION_FILE = "./tmp/test_from_users.lua"
   USER_CFG = { auth: { sessions_file: SESSION_FILE } }
   FAR_FUTURE = os.time! + 86400 * 365
@@ -628,107 +684,119 @@ describe "filter.conditions.from_users", ->
     os.remove SESSION_FILE if io.open(SESSION_FILE, "r")
 
   it "premier utilisateur match", ->
-    f = (from_users USER_CFG) {"alice", "bob"}
-    assert.is_true (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
+    cond = factory(USER_CFG) {"alice", "bob"}
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_true ok
 
   it "aucun match", ->
-    f = (from_users USER_CFG) {"bob", "charlie"}
-    assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
+    cond = factory(USER_CFG) {"bob", "charlie"}
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_false ok
 
   it "liste vide → faux", ->
-    f = (from_users USER_CFG) {}
-    assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
+    cond = factory(USER_CFG) {}
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_false ok
 
-describe "filter.conditions.from_userlist", ->
-  from_userlist = require "filter.conditions.from_userlist"
-  SESSION_FILE = "./tmp/test_from_userlist.lua"
-  USER_CFG = {
-    auth: { sessions_file: SESSION_FILE }
-    userlists: {
-      admins: {"alice", "bob"}
-      guests: {"charlie"}
-    }
-  }
+describe "filter.conditions.from_user_list (auto-généré, fichier)", ->
+  compiler_api = require "filter.compiler_api"
+  factory = compiler_api.load_condition "from_user_list"
+  LIST_DIR = "/tmp/custos_test_user_list"
+  SESSION_FILE = "./tmp/test_from_user_list.lua"
+  USER_CFG = { lists_dir: LIST_DIR, auth: { sessions_file: SESSION_FILE } }
   FAR_FUTURE = os.time! + 86400 * 365
+
+  write_session_file = (entries) ->
+    fh = io.open SESSION_FILE, "w"
+    fh\write "return {\n"
+    for entry in *entries
+      fh\write string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3])
+    fh\write "}\n"
+    fh\close!
 
   before_each ->
     sessions_mod = require "auth.sessions"
-    write_session_file = (entries) ->
-      fh = io.open SESSION_FILE, "w"
-      fh\write "return {\n"
-      for entry in *entries
-        fh\write string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3])
-      fh\write "}\n"
-      fh\close!
+    os.execute "mkdir -p #{LIST_DIR}/user"
+    fh = io.open "#{LIST_DIR}/user/admins.txt", "w"
+    fh\write "alice\nbob\n# commentaire\n\n"
+    fh\close!
+    fh = io.open "#{LIST_DIR}/user/guests.txt", "w"
+    fh\write "charlie\n"
+    fh\close!
     os.remove SESSION_FILE if io.open(SESSION_FILE, "r")
     write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", FAR_FUTURE} }
     sessions_mod.reset_cache!
 
   after_each ->
+    os.execute "rm -rf #{LIST_DIR}"
     os.remove SESSION_FILE if io.open(SESSION_FILE, "r")
 
-  it "utilisateur dans groupe", ->
-    f = (from_userlist USER_CFG) "admins"
-    assert.is_true (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
+  it "utilisateur dans fichier liste", ->
+    cond = factory(USER_CFG) "admins"
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_true ok
 
-  it "utilisateur hors groupe", ->
-    f = (from_userlist USER_CFG) "guests"
-    assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
+  it "utilisateur hors fichier liste", ->
+    cond = factory(USER_CFG) "guests"
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_false ok
 
-  it "groupe inconnu → faux", ->
-    f = (from_userlist USER_CFG) "unknown"
-    assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
+  it "liste inconnue → faux", ->
+    cond = factory(USER_CFG) "unknown"
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_false ok
 
-describe "filter.conditions.from_userlists", ->
-  from_userlists = require "filter.conditions.from_userlists"
-  SESSION_FILE = "./tmp/test_from_userlists.lua"
-  USER_CFG = {
-    auth: { sessions_file: SESSION_FILE }
-    userlists: {
-      admins: {"alice"}
-      guests: {"charlie"}
-    }
-  }
+describe "filter.conditions.from_user_lists (auto-généré, fichiers)", ->
+  compiler_api = require "filter.compiler_api"
+  factory = compiler_api.load_condition "from_user_lists"
+  LIST_DIR = "/tmp/custos_test_user_lists"
+  SESSION_FILE = "./tmp/test_from_user_lists.lua"
+  USER_CFG = { lists_dir: LIST_DIR, auth: { sessions_file: SESSION_FILE } }
   FAR_FUTURE = os.time! + 86400 * 365
+
+  write_session_file = (entries) ->
+    fh = io.open SESSION_FILE, "w"
+    fh\write "return {\n"
+    for entry in *entries
+      fh\write string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3])
+    fh\write "}\n"
+    fh\close!
 
   before_each ->
     sessions_mod = require "auth.sessions"
-    write_session_file = (entries) ->
-      fh = io.open SESSION_FILE, "w"
-      fh\write "return {\n"
-      for entry in *entries
-        fh\write string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3])
-      fh\write "}\n"
-      fh\close!
+    os.execute "mkdir -p #{LIST_DIR}/user"
+    fh = io.open "#{LIST_DIR}/user/admins.txt", "w"
+    fh\write "alice\n"
+    fh\close!
+    fh = io.open "#{LIST_DIR}/user/guests.txt", "w"
+    fh\write "charlie\n"
+    fh\close!
     os.remove SESSION_FILE if io.open(SESSION_FILE, "r")
     write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", FAR_FUTURE} }
     sessions_mod.reset_cache!
 
   after_each ->
+    os.execute "rm -rf #{LIST_DIR}"
     os.remove SESSION_FILE if io.open(SESSION_FILE, "r")
 
-  it "premier groupe match", ->
-    f = (from_userlists USER_CFG) {"admins", "guests"}
-    assert.is_true (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
+  it "premier fichier liste match", ->
+    cond = factory(USER_CFG) {"admins", "guests"}
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_true ok
 
-  it "deuxième groupe match", ->
+  it "deuxième fichier liste match", ->
     sessions_mod = require "auth.sessions"
-    write_session_file = (entries) ->
-      fh = io.open SESSION_FILE, "w"
-      fh\write "return {\n"
-      for entry in *entries
-        fh\write string.format('  ["%s"] = { user = "%s", expires = %d },\n', entry[1], entry[2], entry[3])
-      fh\write "}\n"
-      fh\close!
     os.remove SESSION_FILE if io.open(SESSION_FILE, "r")
     write_session_file { {"aa:bb:cc:dd:ee:ff", "charlie", FAR_FUTURE} }
     sessions_mod.reset_cache!
-    f = (from_userlists USER_CFG) {"admins", "guests"}
-    assert.is_true (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
+    cond = factory(USER_CFG) {"admins", "guests"}
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_true ok
 
   it "liste vide → faux", ->
-    f = (from_userlists USER_CFG) {}
-    assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
+    cond = factory(USER_CFG) {}
+    ok, _ = cond.eval {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"}
+    assert.is_false ok
 
 describe "filter.conditions.stolen_computer", ->
   stolen_computer = require "filter.conditions.stolen_computer"
@@ -779,8 +847,9 @@ describe "filter.conditions.in_time", ->
     assert.is_false v
     assert.equals "Time window 'unknown' not defined", r
 
-describe "filter.conditions.in_times", ->
-  in_times = require "filter.conditions.in_times"
+describe "filter.conditions.in_times (auto-généré)", ->
+  compiler_api = require "filter.compiler_api"
+  factory = compiler_api.load_condition "in_times"
 
   it "OR sur plusieurs fenêtres", ->
     cfg = {
@@ -789,21 +858,22 @@ describe "filter.conditions.in_times", ->
         evening: {"18:00", "22:00"}
       }
     }
-    f = (in_times cfg) {"morning", "evening"}
-    -- 08h00 (dans morning)
+    cond = factory(cfg) {"morning", "evening"}
     ts1 = os.time {year: 2024, month: 1, day: 1, hour: 8, min: 0, sec: 0}
-    assert.is_true (f {ts: ts1})
-    -- 20h00 (dans evening)
+    ok, _ = cond.eval {ts: ts1}
+    assert.is_true ok
     ts2 = os.time {year: 2024, month: 1, day: 1, hour: 20, min: 0, sec: 0}
-    assert.is_true (f {ts: ts2})
-    -- 15h00 (nulle part)
+    ok, _ = cond.eval {ts: ts2}
+    assert.is_true ok
     ts3 = os.time {year: 2024, month: 1, day: 1, hour: 15, min: 0, sec: 0}
-    assert.is_false (f {ts: ts3})
+    ok, _ = cond.eval {ts: ts3}
+    assert.is_false ok
 
   it "liste vide → faux", ->
     cfg = {times: {business: {"09:00", "18:00"}}}
-    f = (in_times cfg) {}
-    assert.is_false (f {ts: os.time!})
+    cond = factory(cfg) {}
+    ok, _ = cond.eval {ts: os.time!}
+    assert.is_false ok
 
 describe "filter.rule", ->
   m_rule = require "filter.rule"

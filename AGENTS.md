@@ -46,6 +46,57 @@ Voir [README.md](README.md) pour l'architecture complète.
 
 ---
 
+## Système de conditions du filtre
+
+### Interface standard d'une condition
+
+```moonscript
+-- src/filter/conditions/from_xxx.moon
+(cfg) ->
+  (args) ->
+    {
+      capabilities: { worker: true, nft: true|false, nft_dynamic: false }
+      eval: (req) -> ok, msg
+      compile_nft: (family) -> expr, err   -- si nft: true
+    }
+```
+
+### Variantes auto-générées
+
+Définir uniquement `from_xxx.moon` suffit. `compiler_api.load_condition` génère
+automatiquement les variantes :
+
+| Condition demandée | Dérivée de | Comportement |
+|--------------------|-----------|--------------|
+| `from_xxxs {…}` | `from_xxx` | OR sur table Lua |
+| `from_xxx_list "nom"` | `from_xxx` | Lit `{lists_dir}/{xxx}/{nom}.txt` |
+| `from_xxx_lists {…}` | `from_xxx` | OR sur plusieurs fichiers |
+
+Format fichiers : 1 item/ligne, ignores vides et `#commentaires`.
+`lists_dir` se configure via `cfg.lists_dir` ou `cfg.filter.lists_dir` (défaut : `/etc/custos/lists`).
+
+### `requires_auth` dans les capabilities
+
+Pour qu'une condition déclenche les sous-chaînes nft d'authentification
+(sets `_auth_mac`, `_auth_ip4`, `_auth_ip6`), déclarer dans ses capabilities :
+
+```moonscript
+capabilities: { worker: true, nft: false, requires_auth: true }
+```
+
+`nft_compiler` lit ce flag dans `conditions_meta` — aucun nom hardcodé n'est
+nécessaire. `from_user.moon` le déclare nativement ; tout nouveau type d'auth
+suit la même convention sans toucher à `nft_compiler`.
+
+### Ajouter un nouveau type de condition
+
+1. Créer `src/filter/conditions/from_mytype.moon` (interface standard ci-dessus)
+2. Compiler : `moonc -o lua/filter/conditions/from_mytype.lua src/filter/conditions/from_mytype.moon`
+3. Les variantes `from_mytypes`, `from_mytype_list`, `from_mytype_lists` sont
+   disponibles immédiatement via l'auto-génération — aucun autre fichier à créer.
+
+---
+
 ## Interdictions absolues
 
 - **`class`, `extends`** (syntaxe MoonScript orientée objet) → jamais : utiliser `setmetatable`

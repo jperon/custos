@@ -42,7 +42,8 @@ return function(cfg)
         capabilities = {
           worker = true,
           nft = false,
-          nft_dynamic = false
+          nft_dynamic = false,
+          requires_auth = true
         },
         eval = function(req)
           return false, "from_user: no user specified"
@@ -54,7 +55,8 @@ return function(cfg)
         capabilities = {
           worker = true,
           nft = false,
-          nft_dynamic = false
+          nft_dynamic = false,
+          requires_auth = true
         },
         user = user,
         source = source,
@@ -77,7 +79,8 @@ return function(cfg)
       capabilities = {
         worker = true,
         nft = false,
-        nft_dynamic = false
+        nft_dynamic = false,
+        requires_auth = true
       },
       user = user,
       source = source,
