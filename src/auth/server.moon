@@ -28,6 +28,12 @@ ffi.cdef [[
 
 SIGHUP = 1
 
+signal_parent_reload = ->
+  parent_pid = tonumber ffi.C.getppid!
+  return false if parent_pid <= 0
+  rc = ffi.C.kill parent_pid, SIGHUP
+  rc == 0
+
 H = require "auth.html"
 
 url_decode = (s) ->

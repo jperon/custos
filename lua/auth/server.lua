@@ -41,6 +41,15 @@ ffi.cdef([[  typedef int pid_t;
   int kill(pid_t pid, int sig);
 ]])
 local SIGHUP = 1
+local signal_parent_reload
+signal_parent_reload = function()
+  local parent_pid = tonumber(ffi.C.getppid())
+  if parent_pid <= 0 then
+    return false
+  end
+  local rc = ffi.C.kill(parent_pid, SIGHUP)
+  return rc == 0
+end
 local H = require("auth.html")
 local url_decode
 url_decode = function(s)

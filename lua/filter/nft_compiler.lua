@@ -266,6 +266,14 @@ collect_referenced_netlists = function(cfg, plan)
             if list_name then
               add_netlist(list_name)
             end
+          elseif cond.name == "from_netlists" or cond.name == "to_netlists" then
+            if cond.args and type(cond.args) == "table" then
+              for _, list_name in ipairs(as_list(cond.args)) do
+                if list_name then
+                  add_netlist(list_name)
+                end
+              end
+            end
           end
         end
       end
@@ -977,7 +985,6 @@ render_sets_only = function(cfg, plan, indent, include_elements)
   if include_elements == nil then
     include_elements = true
   end
-  io.stderr:write("DEBUG: render_sets_only called\n")
   local lines = { }
   lines[#lines + 1] = tostring(indent) .. "# ── b2: compiled per-rule nft sets (must be defined before chains) ──"
   local netlist_sets = render_netlist_sets(cfg, plan, indent)
