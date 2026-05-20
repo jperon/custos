@@ -4,6 +4,11 @@ package.loaded["config"] = {
     ip_timeout = "2m"
   }
 }
+package.loaded["ipc"] = {
+  register_modifier = function()
+    return nil
+  end
+}
 package.loaded["filter.conditions.always_true"] = function(cfg)
   return function(args)
     return function(req)
@@ -101,7 +106,7 @@ local stmt3, err3 = metadata3.actions[1].compile_nft()
 assert_eq(stmt3, nil, "dnsonly compile_nft returns nil")
 assert_eq(err3, nil, "dnsonly compile_nft returns nil error")
 print("OK enriched dnsonly")
-print("Testing strip_AAAA + allow (équivaut à l'ancien allow_ip4)...")
+print("Testing dns_strip (AAAA) + allow (équivaut à l'ancien allow_ip4)...")
 local test_rule_strip_aaaa_allow = {
   description = "Strip AAAA + allow test",
   rule_id = "strip_aaaa_allow123",
@@ -109,8 +114,11 @@ local test_rule_strip_aaaa_allow = {
     always_true = "test"
   },
   actions = {
-    "strip_AAAA",
+    "dns_strip",
     "allow"
+  },
+  dns_strip = {
+    rr_type = "AAAA"
   }
 }
 local eval_fn4, metadata4 = rule.compile_rule({
@@ -118,14 +126,14 @@ local eval_fn4, metadata4 = rule.compile_rule({
     ip_timeout = "2m"
   }
 }, test_rule_strip_aaaa_allow, 1)
-assert_eq(metadata4.worker_only, true, "strip_AAAA+allow rule is worker_only")
-assert_eq(#metadata4.actions, 2, "strip_AAAA+allow has 2 actions")
-assert_eq(#metadata4.on_response, 2, "strip_AAAA+allow has 2 on_response callbacks")
+assert_eq(metadata4.worker_only, true, "dns_strip(AAAA)+allow rule is worker_only")
+assert_eq(#metadata4.actions, 2, "dns_strip(AAAA)+allow has 2 actions")
+assert_eq(#metadata4.on_response, 2, "dns_strip(AAAA)+allow has 2 on_response callbacks")
 local verdict4
 verdict4, _, _, _, _ = eval_fn4({ })
-assert_eq(verdict4, true, "strip_AAAA+allow returns true")
-print("OK strip_AAAA + allow")
-print("Testing strip_A + allow (équivaut à l'ancien allow_ip6)...")
+assert_eq(verdict4, true, "dns_strip(AAAA)+allow returns true")
+print("OK dns_strip (AAAA) + allow")
+print("Testing dns_strip (A) + allow (équivaut à l'ancien allow_ip6)...")
 local test_rule_strip_a_allow = {
   description = "Strip A + allow test",
   rule_id = "strip_a_allow456",
@@ -133,8 +141,11 @@ local test_rule_strip_a_allow = {
     always_true = "test"
   },
   actions = {
-    "strip_A",
+    "dns_strip",
     "allow"
+  },
+  dns_strip = {
+    rr_type = "A"
   }
 }
 local eval_fn5, metadata5 = rule.compile_rule({
@@ -142,11 +153,11 @@ local eval_fn5, metadata5 = rule.compile_rule({
     ip_timeout = "2m"
   }
 }, test_rule_strip_a_allow, 1)
-assert_eq(metadata5.worker_only, true, "strip_A+allow rule is worker_only")
-assert_eq(#metadata5.actions, 2, "strip_A+allow has 2 actions")
-assert_eq(#metadata5.on_response, 2, "strip_A+allow has 2 on_response callbacks")
+assert_eq(metadata5.worker_only, true, "dns_strip(A)+allow rule is worker_only")
+assert_eq(#metadata5.actions, 2, "dns_strip(A)+allow has 2 actions")
+assert_eq(#metadata5.on_response, 2, "dns_strip(A)+allow has 2 on_response callbacks")
 local verdict5
 verdict5, _, _, _, _ = eval_fn5({ })
-assert_eq(verdict5, true, "strip_A+allow returns true")
-print("OK strip_A + allow")
+assert_eq(verdict5, true, "dns_strip(A)+allow returns true")
+print("OK dns_strip (A) + allow")
 return print("\nOK all enriched actions tests passed")

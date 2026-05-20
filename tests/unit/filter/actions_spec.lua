@@ -21,34 +21,91 @@ _dns_ede_stub = {
   end
 }
 package.loaded["dns_ede"] = _dns_ede_stub
-describe("filter.actions.strip_A", function()
-  local strip_A_factory = require("filter.actions.strip_A")
+describe("filter.actions.dns_strip", function()
+  local dns_strip_factory = require("filter.actions.dns_strip")
   local cfg = {
     nft = {
       ip_timeout = "2m"
     }
   }
-  local rule = {
-    description = "Strip A rule"
-  }
-  local action = (strip_A_factory(cfg))(rule)
-  it("eval retourne true (verdict allow)", function()
+  it("strip A : eval retourne true", function()
+    local rule = {
+      description = "Strip A rule",
+      dns_strip = {
+        rr_type = "A"
+      }
+    }
+    local action = (dns_strip_factory(cfg))(rule)
     local v, msg = action.eval({ })
     assert.is_true(v)
-    return assert.is_not_nil(msg)
+    assert.is_not_nil(msg)
+    return assert.match("Strip A", msg)
+  end)
+  it("strip AAAA : eval retourne true", function()
+    local rule = {
+      description = "Strip AAAA rule",
+      dns_strip = {
+        rr_type = "AAAA"
+      }
+    }
+    local action = (dns_strip_factory(cfg))(rule)
+    local v, msg = action.eval({ })
+    assert.is_true(v)
+    return assert.match("Strip AAAA", msg)
+  end)
+  it("rr_type par défaut = A", function()
+    local rule = {
+      description = "Default rule"
+    }
+    local action = (dns_strip_factory(cfg))(rule)
+    local v, msg = action.eval({ })
+    assert.is_true(v)
+    return assert.match("Strip A", msg)
   end)
   it("compile_nft retourne nil (pas de support nft)", function()
+    local rule_cfg = {
+      dns_strip = {
+        rr_type = "A"
+      }
+    }
+    local rule = {
+      description = "Strip rule"
+    }
+    local action = (dns_strip_factory(cfg, rule_cfg))(rule)
     local stmt = action.compile_nft()
     return assert.is_nil(stmt)
   end)
   it("verdict retourne 'accept'", function()
+    local rule_cfg = {
+      dns_strip = {
+        rr_type = "A"
+      }
+    }
+    local rule = {
+      description = "Strip rule"
+    }
+    local action = (dns_strip_factory(cfg, rule_cfg))(rule)
     return assert.equals("accept", action.verdict())
   end)
   it("capabilities : worker=true, nft=false", function()
+    local rule = {
+      description = "Strip rule",
+      dns_strip = {
+        rr_type = "A"
+      }
+    }
+    local action = (dns_strip_factory(cfg))(rule)
     assert.is_true(action.capabilities.worker)
     return assert.is_false(action.capabilities.nft)
   end)
-  it("on_response : strip les enregistrements A et marque skip_nft", function()
+  it("on_response strip A : strip les enregistrements et marque skip_nft", function()
+    local rule = {
+      description = "Strip A rule",
+      dns_strip = {
+        rr_type = "A"
+      }
+    }
+    local action = (dns_strip_factory(cfg))(rule)
     local ctx = {
       dns_raw = "original_dns",
       modified = false,
@@ -57,12 +114,36 @@ describe("filter.actions.strip_A", function()
     action.on_response(ctx)
     assert.is_true(ctx.skip_nft)
     assert.is_true(ctx.modified)
-    return assert.equals("response_strip_a", ctx.action_label)
+    return assert.equals("response_strip_A", ctx.action_label)
+  end)
+  it("on_response strip AAAA : strip les enregistrements et marque skip_nft", function()
+    local rule = {
+      description = "Strip AAAA rule",
+      dns_strip = {
+        rr_type = "AAAA"
+      }
+    }
+    local action = (dns_strip_factory(cfg))(rule)
+    local ctx = {
+      dns_raw = "original_dns",
+      modified = false,
+      skip_nft = false
+    }
+    action.on_response(ctx)
+    assert.is_true(ctx.skip_nft)
+    assert.is_true(ctx.modified)
+    return assert.equals("response_strip_AAAA", ctx.action_label)
   end)
   return it("on_response : pas de modification si strip ne change rien", function()
+    local rule = {
+      description = "Strip A rule",
+      dns_strip = {
+        rr_type = "A"
+      }
+    }
     local old_stub = package.loaded["dns_ede"]
     package.loaded["dns_ede"] = nil
-    package.loaded["filter.actions.strip_A"] = nil
+    package.loaded["filter.actions.dns_strip"] = nil
     package.loaded["dns_ede"] = {
       strip_dns_rr = function(raw, _t)
         return raw
@@ -74,7 +155,7 @@ describe("filter.actions.strip_A", function()
         return raw
       end
     }
-    local local_factory = require("filter.actions.strip_A")
+    local local_factory = require("filter.actions.dns_strip")
     local local_action = (local_factory(cfg))(rule)
     local ctx = {
       dns_raw = "original_dns",
@@ -84,46 +165,8 @@ describe("filter.actions.strip_A", function()
     local_action.on_response(ctx)
     assert.is_true(ctx.skip_nft)
     assert.is_false(ctx.modified)
-    package.loaded["filter.actions.strip_A"] = nil
+    package.loaded["filter.actions.dns_strip"] = nil
     package.loaded["dns_ede"] = old_stub
-  end)
-end)
-describe("filter.actions.strip_AAAA", function()
-  package.loaded["filter.actions.strip_AAAA"] = nil
-  local strip_AAAA_factory = require("filter.actions.strip_AAAA")
-  local cfg = {
-    nft = {
-      ip_timeout = "2m"
-    }
-  }
-  local rule = {
-    description = "Strip AAAA rule"
-  }
-  local action = (strip_AAAA_factory(cfg))(rule)
-  it("eval retourne true", function()
-    local v, _ = action.eval({ })
-    return assert.is_true(v)
-  end)
-  it("compile_nft retourne nil", function()
-    return assert.is_nil(action.compile_nft())
-  end)
-  it("verdict retourne 'accept'", function()
-    return assert.equals("accept", action.verdict())
-  end)
-  it("capabilities : worker=true, nft=false", function()
-    assert.is_true(action.capabilities.worker)
-    return assert.is_false(action.capabilities.nft)
-  end)
-  return it("on_response : strip les AAAA et marque skip_nft + modified", function()
-    local ctx = {
-      dns_raw = "original_dns",
-      modified = false,
-      skip_nft = false
-    }
-    action.on_response(ctx)
-    assert.is_true(ctx.skip_nft)
-    assert.is_true(ctx.modified)
-    return assert.equals("response_strip_aaaa", ctx.action_label)
   end)
 end)
 return describe("filter.actions.mail", function()

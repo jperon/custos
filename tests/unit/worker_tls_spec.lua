@@ -1,11 +1,9 @@
--- Stubs pour nft_queue et nft (nécessaires pour make test et test-vm)
--- On stubbe toujours pour éviter d'exécuter réellement des commandes nft
-
+-- Stubs pour nft_queue et nft (toujours stubber pour éviter d'exécuter nft)
 -- Réinitialiser package.loaded pour forcer le rechargement
 package.loaded["nft_queue"] = nil
 package.loaded["nft"] = nil
 
--- Définir les stubs AVANT de charger worker_tls
+-- Définir les stubs
 package.loaded["nft_queue"] = {
   cmd_for = function(kind, src, dst, rule_id, timeout)
     return "add element bridge dns-filter-bridge " .. tostring(kind) .. "_allowed { " .. tostring(src) .. " . " .. tostring(dst) .. " timeout " .. tostring(timeout) .. " }"
@@ -71,7 +69,7 @@ return describe("worker_tls helpers", function()
       end
     end)
 
-    -- Ces tests nécessitent nft_queue et nft qui ne sont pas disponibles dans test-vm
+    -- Ces tests nécessitent nft configuré (rulesets) qui n'est pas disponible dans test-vm
     pending("IPv4 pair valide → true", function()
       local ok, err = sni_logger.apply_nft_allow("192.168.1.1", "8.8.8.8", nil, { }, "r_test")
       return assert.is_true(ok)

@@ -5,6 +5,11 @@ package.loaded["config"] = {
   nft: { ip_timeout: "2m" }
 }
 
+-- Stub IPC pour register_modifier
+package.loaded["ipc"] = {
+  register_modifier: -> nil
+}
+
 -- Simple old-style condition that always returns true
 package.loaded["filter.conditions.always_true"] = (cfg) ->
   (args) ->

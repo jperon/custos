@@ -104,24 +104,30 @@ return describe("filter.rule", function()
       v, _ = eval_fn({ })
       return assert.is_nil(v)
     end)
-    it("strip_A + allow → on_response collecté (2 callbacks)", function()
+    it("dns_strip (A) + allow → on_response collecté (2 callbacks)", function()
       local eval_fn, meta = rule_mod.compile_rule(cfg, {
         description = "Strip A + allow",
         actions = {
-          "strip_A",
+          "dns_strip",
           "allow"
+        },
+        dns_strip = {
+          rr_type = "A"
         }
       }, 1)
       assert.equals(2, #meta.on_response)
       local v, _ = eval_fn({ })
       return assert.is_true(v)
     end)
-    it("strip_AAAA + allow → on_response collecté (2 callbacks)", function()
+    it("dns_strip (AAAA) + allow → on_response collecté (2 callbacks)", function()
       local eval_fn, meta = rule_mod.compile_rule(cfg, {
         description = "Strip AAAA + allow",
         actions = {
-          "strip_AAAA",
+          "dns_strip",
           "allow"
+        },
+        dns_strip = {
+          rr_type = "AAAA"
         }
       }, 1)
       assert.equals(2, #meta.on_response)
