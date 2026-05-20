@@ -338,7 +338,7 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil, rule_metadata=nil)
   dns_refs = static_meta.netlist_refs
   protos, ports = collect_proto_ports rule
   action = resolve_action rule
-  chain = "cv_rule_" .. rid
+  chain = "cv_" .. rid
   mark = string.format "0x%x", 0x4000 + idx
 
   requires_auth = false
@@ -476,7 +476,7 @@ compile = (filter_cfg, rules_metadata=nil) ->
   {
     first_match_wins: first_match_wins
     dispatch_chain: "cv_rules_dispatch"
-    action_vmap: "cv_rule_action_vmap"
+    action_vmap: "cv_action_vmap"
     rules: plan_rules
     all_rules: all_rules
     rules_by_id: rules_by_id

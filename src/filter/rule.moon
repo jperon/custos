@@ -2,33 +2,27 @@
 -- Compilation et évaluation des règles du filtre.
 --
 -- Une règle est un triplet (conditions, actions, métadonnées) :
---   • Conditions : ET logique implicite entre toutes les clés/valeurs — toutes
---     doivent passer pour que la règle s'applique. Chaque condition est compilée
---     depuis son module filter.conditions.<name>.
---   • Actions : la première action qui retourne un verdict non-nil donne
---     le résultat (allow=true, deny=false). Les actions suivantes sont
---     ignorées pour le verdict mais peuvent avoir des effets de bord
---     (future : notifications).
---   • Premier verdict gagnant : les règles sont évaluées dans l'ordre ;
---     dès qu'une règle passe, ses actions sont exécutées et on s'arrête.
+--   • Conditions : ET logique implicite — toutes doivent passer.
+--   • Actions    : la première qui retourne un verdict non-nil (true/false) gagne.
+--                  Une action retournant nil est un effet de bord pur (log, mail…)
+--                  et laisse l'évaluation continuer aux règles suivantes.
+--   • on_response: callbacks statiques des actions, stockés dans les métadonnées
+--                  et appelés par worker_responses via filter.get_rule_on_response.
+--                  Le moteur les collecte sans en connaître la sémantique.
 
 compiler_api = require "filter.compiler_api"
 
 --- Compile une règle depuis sa table de configuration.
--- Supporte les modules ancien style (factory function) et nouveau style
--- (API enrichie avec capabilities/compile_nft).
 -- @tparam table cfg     Configuration globale du filtre
 -- @tparam table rule    Table de configuration d'une règle
 -- @tparam number idx    Index de la règle (pour rule_id implicite)
 -- @treturn function compiled_rule (req) → verdict, msg, rule_id, timeout, desc
 -- @treturn table metadata Métadonnées pour compilation nft
 compile_rule = (cfg, rule, idx, used_ids=nil) ->
-  -- Compilation des conditions avec adaptation API
-  -- conditions est une seule table clé/valeur : ET logique implicite entre toutes
   conditions_eval = {}
   conditions_meta = {}
   condition_table = rule.conditions or {}
-  
+
   unless type(condition_table) == "table"
     error "Conditions doit être une table, got #{type(condition_table)}"
 
@@ -39,47 +33,51 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
     cond_obj = cond_factory(cfg)(args)
     conditions_eval[#conditions_eval + 1] = cond_obj.eval
     conditions_meta[#conditions_meta + 1] = {
-      name: name
-      args: args
-      capabilities: cond_obj.capabilities
-      worker_only: compiler_api.compute_worker_only(cond_obj)
-      compile_nft: cond_obj.compile_nft
+      name:                name
+      args:                args
+      capabilities:        cond_obj.capabilities
+      worker_only:         compiler_api.compute_worker_only(cond_obj)
+      compile_nft:         cond_obj.compile_nft
       creates_dynamic_scope: cond_obj.creates_dynamic_scope
     }
 
-  -- Compilation des actions avec adaptation API
-  actions = {}
+  -- Compilation des actions : on stocke eval et on_response séparément.
+  -- on_response est un callback statique appelé par worker_responses ; le moteur
+  -- l'accumule dans les métadonnées sans en interpréter le contenu.
+  action_evals = {}
   actions_meta = {}
   for action_name in *(rule.actions or {})
     action_factory, err = compiler_api.load_action action_name
     error "Action inconnue '#{action_name}': #{err}" unless action_factory
-    
+
     action_obj = action_factory(cfg)(rule)
-    actions[#actions + 1] = action_obj.eval
+    action_evals[#action_evals + 1] = action_obj.eval
     actions_meta[#actions_meta + 1] = {
-      name: action_name
+      name:         action_name
       capabilities: action_obj.capabilities
-      worker_only: compiler_api.compute_worker_only(action_obj)
-      compile_nft: action_obj.compile_nft
-      verdict: action_obj.verdict
+      worker_only:  compiler_api.compute_worker_only(action_obj)
+      compile_nft:  action_obj.compile_nft
+      verdict:      action_obj.verdict
+      on_response:  action_obj.on_response
     }
 
-  -- Métadonnées de règle propagées au pipeline IPC/NFT.
-  rule_desc = rule.description or "rule_#{idx}"
-  rule_id = compiler_api.unique_rule_id rule, idx, used_ids
+  rule_desc    = rule.description or "rule_#{idx}"
+  rule_id      = compiler_api.unique_rule_id rule, idx, used_ids
   rule_timeout = rule.nft_timeout or (cfg.nft and cfg.nft.ip_timeout) or "2m"
 
-  -- Métadonnées pour compilation nft
+  -- Liste plate des on_response non-nil pour lookup O(1) depuis worker_responses.
+  on_response_list = [am.on_response for am in *actions_meta when am.on_response]
+
   metadata = {
-    rule_id: rule_id
+    rule_id:     rule_id
     description: rule_desc
-    timeout: rule_timeout
-    conditions: conditions_meta
-    actions: actions_meta
+    timeout:     rule_timeout
+    conditions:  conditions_meta
+    actions:     actions_meta
+    on_response: on_response_list
     worker_only: false
   }
 
-  -- Déterminer si la règle est worker-only (toutes conditions/actions worker-only)
   for cond in *conditions_meta
     if cond.worker_only
       metadata.worker_only = true
@@ -90,17 +88,16 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
         metadata.worker_only = true
         break
 
-  -- Déterminer si la règle crée un scope dynamique (DNS)
   metadata.creates_dynamic_scope = false
   for cond_meta in *conditions_meta
     if cond_meta.creates_dynamic_scope
       metadata.creates_dynamic_scope = true
       break
 
-  -- Fonction d'évaluation de la règle
+  -- Fonction d'évaluation : premier verdict non-nil gagne.
+  -- Une action retournant nil (log, mail, etc.) est un effet de bord pur :
+  -- elle n'interrompt pas l'évaluation des règles suivantes.
   eval_fn = (req) ->
-    -- Toutes les conditions sont en ET logique implicite
-    -- Exemple : {from_net: "...", to_domain: "..."} → (from_net AND to_domain)
     all_passed = true
     for cond in *conditions_eval
       ok, _ = cond req
@@ -108,19 +105,15 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
         all_passed = false
         break
 
-    unless all_passed
-      return nil, "No condition matched"
+    return nil, "No condition matched" unless all_passed
 
-    -- Toutes les conditions passées : exécuter les actions
     local verdict, msg
-    for action in *actions
-      v, m = action req
-      -- Premier verdict : mémoriser (peut être false, garder `== nil`)
+    for action_eval in *action_evals
+      v, m = action_eval req
       if v ~= nil and verdict == nil
         verdict = v
-        msg     = m
+        msg     = m or msg
       elseif v == nil and m
-        -- Action sans verdict (ex. mail) : logué ailleurs
         msg = msg or m
 
     verdict, msg, rule_id, rule_timeout, rule_desc
@@ -128,8 +121,8 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
   eval_fn, metadata
 
 details_of = (rules, req, decision_cfg=nil) ->
-  effective_cfg = decision_cfg or (rules and rules.decision_cfg) or {}
-  continue_mode = effective_cfg.continue_to_next_rule
+  effective_cfg   = decision_cfg or (rules and rules.decision_cfg) or {}
+  continue_mode   = effective_cfg.continue_to_next_rule
   first_match_wins = true
   if effective_cfg.first_match_wins != nil
     first_match_wins = not not effective_cfg.first_match_wins
@@ -147,9 +140,6 @@ details_of = (rules, req, decision_cfg=nil) ->
   false, "No matching rule (default deny)", nil, nil, nil
 
 --- Compile une liste ordonnée de règles.
--- @tparam table cfg          Configuration globale du filtre
--- @tparam table rules_cfg    Table de configurations de règles (tableau ordonné)
--- @treturn table             Tableau de fonctions compilées + métadonnées nft
 compile_rules = (cfg) ->
   rules_cfg = cfg.rules or {}
   out = {}
@@ -162,12 +152,6 @@ compile_rules = (cfg) ->
   out.decision_cfg = cfg.decision or {}
   out
 
---- Évalue les règles dans l'ordre et retourne le premier verdict.
--- Si aucune règle ne correspond, retourne false (deny par défaut).
--- @tparam table  rules Résultat de compile_rules
--- @tparam table  req   {domain, src_ip, mac, ts, ...}
--- @tparam table|nil decision_cfg {first_match_wins, continue_to_next_rule}
--- @treturn boolean, string, string|nil, string|nil, string|nil
 decide = (rules, req, decision_cfg=nil) ->
   verdict, msg, _, _, rule_desc = details_of rules, req, decision_cfg
   verdict, msg, rule_desc
@@ -175,10 +159,10 @@ decide = (rules, req, decision_cfg=nil) ->
 decide_meta = (rules, req, decision_cfg=nil) ->
   verdict, msg, rule_id, rule_timeout, rule_desc = details_of rules, req, decision_cfg
   {
-    verdict: verdict
-    reason: msg
-    rule_id: rule_id
-    timeout: rule_timeout
+    verdict:     verdict
+    reason:      msg
+    rule_id:     rule_id
+    timeout:     rule_timeout
     description: rule_desc
   }
 
