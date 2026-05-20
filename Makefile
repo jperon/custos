@@ -6,11 +6,11 @@
 #   check        - Syntax check generated Lua files
 #   test         - Unit tests (Busted: all specs in tests/unit/, no root required)
 #   test-openwrt - OpenWrt live tests via SSH (HOST=user@host required)
-#   test-env     - Create/start libvirt 3-VM environment (Debian client, OpenWrt filter, Debian DNS)
-#   test-env-down- Stop VMs (keep disks)
-#   test-env-nuke- Delete everything
-#   test-e2e     - End-to-end tests via SSH (FILTER_SSH=... CLIENT_SSH=... [CLIENT2_SSH=...])
-#   test-kvm     - Full KVM E2E suite (requires test-env running)
+#   homelab-up    - Create/start 3-VM OpenWrt homelab (via/custos/servus)
+#   homelab-down  - Shutdown the homelab
+#   homelab-nuke  - Delete VMs, networks, derived images
+#   homelab-redeploy - Recompile MoonScript and push to custos VM
+#   test-e2e      - End-to-end DNS chain test (servus → custos → via)
 #   coverage     - Unit tests + luacov report in tmp/coverage/
 #   run          - Start supervisor (requires root + nft rules)
 #   clean        - Remove compiled Lua files
@@ -59,9 +59,9 @@ IPPARSE_STATIC_LUAS := $(patsubst $(SRC)/%.lua,$(LUA)/%.lua,$(IPPARSE_STATIC_SRC
 UNIT_SPEC_MOONS := $(shell find tests/unit -name '*_spec.moon' 2>/dev/null | sort)
 UNIT_SPEC_LUAS  := $(patsubst %.moon,%.lua,$(UNIT_SPEC_MOONS))
 
-.PHONY: all clean check test test-unit test-openwrt \
-        test-env test-env-down test-env-nuke test-e2e test-e2e-ci test-kvm \
-        coverage run reload update-lists make-secret logs help debug-env
+.PHONY: all clean check test test-unit test-vm test-openwrt test-e2e \
+        homelab-up homelab-down homelab-nuke homelab-redeploy \
+        coverage run reload update-lists make-secret logs help
 
 all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) $(MOONSCRIPT_RUNTIME_LUAS) install-owrt.lua
 	@echo "Compilation terminée → $(LUA)/"
@@ -122,7 +122,7 @@ coverage: all compile-specs
 	    tests/unit 2>&1 | tee tmp/test-logs/coverage.log
 	@# Générer le rapport (luacov lit statsfile/reportfile depuis .luacov)
 	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  $(HOME)/.luarocks/bin/luacov -c .luacov 2>/dev/null || true
+	  luacov -c .luacov 2>/dev/null || true
 	@echo ""
 	@echo "Rapport de couverture : tmp/coverage/luacov.report.out"
 	@if [ -f tmp/coverage/luacov.report.out ]; then \
@@ -138,47 +138,27 @@ test-openwrt: all
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) tests/test_openwrt.lua $(HOST) $(ARGS)
 
-# ── Libvirt environment (3 VMs: client, filter, dns) ─────────────────────
+# ── Homelab libvirt (3 VMs OpenWrt : via, custos, servus) ────────────────
+# Voir libvirt/README.md pour la topologie et le dépannage.
 
-test-env:
-	bash libvirt/custos-libvirt.sh ensure
-	@echo ""
-	@bash libvirt/custos-libvirt.sh show
+homelab-up:
+	bash libvirt/homelab.sh ensure
+	bash libvirt/homelab.sh start
 
-test-env-down:
-	bash libvirt/custos-libvirt.sh stop
+homelab-down:
+	bash libvirt/homelab.sh stop
 
-test-env-nuke:
-	bash libvirt/custos-libvirt.sh nuke
+homelab-nuke:
+	bash libvirt/homelab.sh nuke
 
-# ── End-to-end tests (requires test-env running) ──────────────────────────
+homelab-redeploy: all
+	bash libvirt/homelab.sh redeploy
 
 test-e2e: all
-	@bash libvirt/custos-libvirt.sh filter-ip >/dev/null 2>&1 \
-	  || (echo "ERREUR : environnement non démarré. Exécute d'abord: make test-env"; exit 1)
-	$(MOONC) -o tests/test_e2e.lua tests/test_e2e.moon
-	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) tests/test_e2e.lua
+	bash libvirt/homelab.sh test
 
-# End-to-end tests with logs
-test-e2e-ci: all
-	@mkdir -p tmp
-	@bash libvirt/custos-libvirt.sh filter-ip >/dev/null 2>&1 \
-	  || (echo "ERREUR : environnement non démarré"; exit 1)
-	$(MOONC) -o tests/test_e2e.lua tests/test_e2e.moon
-	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) tests/test_e2e.lua 2>&1 | tee tmp/test-e2e.log
-
-# KVM exhaustive E2E suite
-test-kvm: all
-	@bash libvirt/custos-libvirt.sh filter-ip >/dev/null 2>&1 \
-	  || (echo "ERREUR : environnement non démarré. Exécute d'abord: make test-env"; exit 1)
-	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
-	  $(LUAJIT) lua/test_kvm.lua
-
-# Debug libvirt environment
-debug-env:
-	@bash libvirt/debug.sh $(ARGS)
+test-vm: all
+	bash libvirt/homelab.sh test-unit
 
 # ── Utilitaires ───────────────────────────────────────────────────────────
 
@@ -239,14 +219,13 @@ help:
 	@echo "  test-ffi     - Tests FFI socket/WolfSSL/intégration"
 	@echo "  coverage     - Tests unitaires + rapport luacov (tmp/coverage/)"
 	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis)"
-	@echo "  test-env     - Crée/démarre l'environnement libvirt 3 VMs pour E2E"
-	@echo "  test-env-down - Arrête les VMs (conserve les disques)"
-	@echo "  test-env-nuke - Supprime VMs, réseaux, images (scratch)"
-	@echo "  test-e2e     - Suite E2E complète (requiert test-env déjà démarré)"
-	@echo "  test-e2e-ci  - Suite E2E avec logs dans tmp/test-e2e.log"
-	@echo "  test-kvm     - Suite E2E KVM exhaustive (requiert test-env)"
-	@echo "  test-e2e-ssh - Suite E2E via SSH (FILTER_SSH=... CLIENT_SSH=... [CLIENT2_SSH=...])"
-	@echo "  debug-env    - Outil de diagnostic libvirt (Usage: make debug-env ARGS=logs)"
+	@echo "  homelab-up    - Crée/démarre les 3 VMs OpenWrt (via/custos/servus)"
+	@echo "  homelab-down  - Arrête les VMs"
+	@echo "  homelab-nuke  - Supprime VMs, réseaux, qcow2 dérivés"
+	@echo "  homelab-redeploy - Recompile et pousse custos dans la VM custos"
+	@echo "  test-e2e      - Test E2E DNS via la chaîne servus → custos → via"
+	@echo "  test-vm       - Tests unitaires exécutés dans la VM custos (mini_busted)"
+	@echo "  test-e2e-ssh  - Suite E2E via SSH distant (FILTER_SSH=... CLIENT_SSH=... [CLIENT2_SSH=...])"
 	@echo "  run          - Lance le superviseur (root requis)"
 	@echo "  clean        - Nettoie les fichiers compilés"
 	@echo "  make-secret  - Génère un hash PBKDF2-SHA256 pour cfg/secrets (USER=, PASS=)"

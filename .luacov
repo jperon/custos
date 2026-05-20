@@ -22,7 +22,7 @@ return {
     "^tmp/",
     "^%.kilo/",
     "^libvirt/",
-    "^lua/ipparse/examples/",
+    "^lua/ipparse/",   -- bibliothèque séparée, coverage géré indépendamment
     -- Les stubs FFI pur ne peuvent pas être couverts sans les bibliothèques
     -- natives ; on les exclut au départ pour éviter du bruit.
     "^lua/ffi_defs",
