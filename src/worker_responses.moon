@@ -33,8 +33,15 @@ packet = require "nfq/packet"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :now, :set_action_prefix } = require "log"
-{ :build_blocked_response, :add_ede_modified, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit } = require "dns_ede"
+{ :build_blocked_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
 bit = require "bit"
+
+-- Chargement paresseux de filter pour éviter de tirer ip_whitelist (libnftnl)
+-- au chargement du module — critique pour les tests unitaires.
+_filter = nil
+get_rule_on_response = (rule_id) ->
+  _filter or= require "filter"
+  _filter.get_rule_on_response rule_id
 :concat, :insert, :remove = table
 
 -- Load filter rules to identify auth-only wildcard rules
@@ -313,8 +320,17 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   refused = entry and entry.refused or false
   dnsonly = entry and entry.dnsonly or false
-  allow_ip4 = entry and entry.allow_ip4 or false
-  allow_ip6 = entry and entry.allow_ip6 or false
+  -- Dispatch on_response : les callbacks déclarent eux-mêmes leur comportement
+  -- (strip DNS, skip_nft, etc.) — aucun hardcode ici.
+  on_response_cbs = get_rule_on_response nft_rule_id
+  resp_ctx = {
+    dns_raw:        nil    -- sera rempli plus bas
+    modified:       false
+    explicit_allow: false
+    skip_nft:       false
+    action_label:   nil
+    reason:         entry and entry.reason or ""
+  }
   nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
   ack_corr = string.format "%04x:%s:%d:%s", txid, pkt.ip.dst_ip, client_port, resolver_ip
 
@@ -343,9 +359,20 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr
     return -1
 
-  -- ── Branche ACCEPT : patch TTL + EDE + injection nft ─────────
-  -- En mode "dnsonly", on ne modifie pas les sets nft : les IPs résolues ne
-  -- sont pas autorisées dans les sets — la redirection HTTP/80 reste active.
+  -- ── Branche ACCEPT : callbacks on_response → injection nft ──────
+  -- Les callbacks on_response de chaque action portent toute la logique :
+  -- modification DNS (strip, EDE), skip_nft, action_label.
+  -- inject_nft = explicit_allow OR (NOT skip_nft) : "allow" supplante "skip".
+  dns_raw = extract_dns_payload raw, pkt
+  resp_ctx.dns_raw = dns_raw
+
+  for cb in *on_response_cbs
+    cb resp_ctx
+
+  dns_raw         = resp_ctx.dns_raw
+  payload_modified = resp_ctx.modified
+  inject_nft      = resp_ctx.explicit_allow or not resp_ctx.skip_nft
+
   answers  = parse_answers raw, pkt
   -- IP du client LAN (destination de la réponse DNS = source de la question)
   client_ip = pkt.ip.dst_ip
@@ -364,7 +391,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       else
         -- DNS transporté en IPv6 : résoudre l'IPv4 via mac_clients
         resolve_client_family client_ip, "ipv4"
-      unless dnsonly
+      if inject_nft
         if client_v4
           records_to_add += 1
           rr_timeout_str, _ = rr_timeout ans.ttl
@@ -400,7 +427,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       else
         -- DNS transporté en IPv4 : résoudre l'IPv6 via mac_clients
         resolve_client_family client_ip, "ipv6"
-      unless dnsonly
+      if inject_nft
         if client_v6
           records_to_add += 1
           rr_timeout_str, _ = rr_timeout ans.ttl
@@ -442,30 +469,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           records: table.concat(no_ipv6_records, " "),
           reason: "client_ipv6_unknown", mac_fallback: mac_valid(client_mac), user: user }
 
-  -- ── Patch conditionnel + EDE + checksums (IPv4 et IPv6) ───────
-  -- 1. Extraire le payload DNS brut
-  -- 2. Appliquer les modifications DNS explicites (ex: strip HTTPS/SVCB)
-  -- 3. Strip A ou AAAA selon allow_ip4 / allow_ip6
-  -- 4. Injecter EDE code 4 seulement si la réponse a été modifiée
-  -- 5. Reconstruire le paquet IP complet uniquement si payload modifié
-  dns_raw = extract_dns_payload raw, pkt
-  payload_modified = false
-
-  if allow_ip4
-    stripped = strip_aaaa_rr(dns_raw)
-    if stripped != dns_raw
-      dns_raw = stripped
-      payload_modified = true
-      dns_raw = add_ede_modified(dns_raw, entry.reason) or dns_raw
-      dns_raw = clear_ad_bit(dns_raw)
-  elseif allow_ip6
-    stripped = strip_a_rr(dns_raw)
-    if stripped != dns_raw
-      dns_raw = stripped
-      payload_modified = true
-      dns_raw = add_ede_modified(dns_raw, entry.reason) or dns_raw
-      dns_raw = clear_ad_bit(dns_raw)
-
+  -- ── Patch TTL + HTTPS/SVCB (toujours appliqué) ─────────────────
   new_dns, dns_modified = patch_modified_dns dns_raw, entry.reason
   payload_modified = payload_modified or dns_modified
   patched = nil
@@ -476,7 +480,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- Log de la réponse
   qnames = table.concat [q.qname for q in *pkt.questions], ","
   log_debug {
-    action:      if dnsonly then "response_dnsonly" elseif allow_ip4 then "response_allow_ip4" elseif allow_ip6 then "response_allow_ip6" elseif payload_modified then "response_patched" else "response_allow"
+    action:      resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow")
     src_ip:      pkt.ip.src_ip
     dst_ip:      pkt.ip.dst_ip
     vlan:        l2.vlan

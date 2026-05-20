@@ -100,6 +100,35 @@ init = (rules) ->
       log_warn { action: "nft_extra_rule_add_failed", rule: r, rc: rc }
   all_ok
 
+--- Peuple les sets filter_ips4/filter_ips6 avec les IPs propres du filtre.
+-- Détectées via `ip addr show`. Exclut les link-local (fe80::/10).
+-- Ces sets sont utilisés dans la chaîne forward pour restreindre les règles
+-- sport 33443/33080 aux réponses du serveur auth, empêchant le forgeage.
+-- @treturn nil
+populate_filter_ips = ->
+  family = config.nft.family
+  tbl    = config.nft.table
+
+  -- IPv4
+  fh = io.popen "ip -4 addr show 2>/dev/null"
+  if fh
+    for line in fh\lines!
+      ip = line\match "%s+inet%s+([%d%.]+)/"
+      if ip
+        ok = run_cmd "add element #{family} #{tbl} filter_ips4 { #{ip} }"
+        log_info { action: "nft_filter_ip4_added", ip: ip } if ok
+    fh\close!
+
+  -- IPv6 (hors link-local fe80::/10)
+  fh = io.popen "ip -6 addr show 2>/dev/null"
+  if fh
+    for line in fh\lines!
+      ip6 = line\match "%s+inet6%s+([%x:]+)/"
+      if ip6 and not ip6\match "^fe80"
+        ok = run_cmd "add element #{family} #{tbl} filter_ips6 { #{ip6} }"
+        log_info { action: "nft_filter_ip6_added", ip: ip6 } if ok
+    fh\close!
+
 --- Applique les règles définies dans la config exportée (config.NFT_EXTRA_RULES).
 -- Si la chaîne `forward` est absente (ex : respawn procd sans appel de
 -- start_service), le fichier nft principal est ré-appliqué automatiquement
@@ -115,6 +144,7 @@ apply_from_config = ->
       log_warn { action: "nft_extra_main_rules_reapply_failed", rc: rc or -1 }
       return false
     log_info { action: "nft_extra_main_rules_reapplied" }
+  populate_filter_ips!
   cfg = require "config"
   rules = cfg.nft.extra_rules or {}
   init rules
