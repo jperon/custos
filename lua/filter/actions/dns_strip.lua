@@ -4,12 +4,12 @@ do
   strip_dns_rr, add_ede_modified, clear_ad_bit = _obj_0.strip_dns_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit
 end
 (require("ipc")).register_modifier("dns_strip")
-return function(cfg, rule_cfg)
-  local rr_type = "HTTPS"
-  if rule_cfg.dns_strip and rule_cfg.dns_strip.rr_type then
-    rr_type = rule_cfg.dns_strip.rr_type
-  end
+return function(cfg)
   return function(rule)
+    local rr_type = "A"
+    if rule.dns_strip and rule.dns_strip.rr_type then
+      rr_type = rule.dns_strip.rr_type
+    end
     return {
       capabilities = {
         worker = true,
