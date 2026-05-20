@@ -165,9 +165,22 @@ local get_auth_cfg
 get_auth_cfg = function()
   return auth_cfg_cache or { }
 end
+local get_rule_on_response
+get_rule_on_response = function(rule_id)
+  if not (rules and rule_id) then
+    return { }
+  end
+  for idx, meta in ipairs((rules.rules_metadata or { })) do
+    if meta.rule_id == rule_id then
+      return meta.on_response or { }
+    end
+  end
+  return { }
+end
 return {
   load = load,
   decide = decide,
   decide_meta = decide_meta,
-  get_auth_cfg = get_auth_cfg
+  get_auth_cfg = get_auth_cfg,
+  get_rule_on_response = get_rule_on_response
 }

@@ -478,7 +478,7 @@ build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id, rule_metadata)
   local dns_refs = static_meta.netlist_refs
   local protos, ports = collect_proto_ports(rule)
   local action = resolve_action(rule)
-  local chain = "cv_rule_" .. rid
+  local chain = "cv_" .. rid
   local mark = string.format("0x%x", 0x4000 + idx)
   local requires_auth = false
   if rule_metadata and rule_metadata.conditions then
@@ -624,7 +624,7 @@ compile = function(filter_cfg, rules_metadata)
   return {
     first_match_wins = first_match_wins,
     dispatch_chain = "cv_rules_dispatch",
-    action_vmap = "cv_rule_action_vmap",
+    action_vmap = "cv_action_vmap",
     rules = plan_rules,
     all_rules = all_rules,
     rules_by_id = rules_by_id,

@@ -26,7 +26,7 @@ compile_rule = function(cfg, rule, idx, used_ids)
       creates_dynamic_scope = cond_obj.creates_dynamic_scope
     }
   end
-  local actions = { }
+  local action_evals = { }
   local actions_meta = { }
   local _list_0 = (rule.actions or { })
   for _index_0 = 1, #_list_0 do
@@ -36,24 +36,39 @@ compile_rule = function(cfg, rule, idx, used_ids)
       error("Action inconnue '" .. tostring(action_name) .. "': " .. tostring(err))
     end
     local action_obj = action_factory(cfg)(rule)
-    actions[#actions + 1] = action_obj.eval
+    action_evals[#action_evals + 1] = action_obj.eval
     actions_meta[#actions_meta + 1] = {
       name = action_name,
       capabilities = action_obj.capabilities,
       worker_only = compiler_api.compute_worker_only(action_obj),
       compile_nft = action_obj.compile_nft,
-      verdict = action_obj.verdict
+      verdict = action_obj.verdict,
+      on_response = action_obj.on_response
     }
   end
   local rule_desc = rule.description or "rule_" .. tostring(idx)
   local rule_id = compiler_api.unique_rule_id(rule, idx, used_ids)
   local rule_timeout = rule.nft_timeout or (cfg.nft and cfg.nft.ip_timeout) or "2m"
+  local on_response_list
+  do
+    local _accum_0 = { }
+    local _len_0 = 1
+    for _index_0 = 1, #actions_meta do
+      local am = actions_meta[_index_0]
+      if am.on_response then
+        _accum_0[_len_0] = am.on_response
+        _len_0 = _len_0 + 1
+      end
+    end
+    on_response_list = _accum_0
+  end
   local metadata = {
     rule_id = rule_id,
     description = rule_desc,
     timeout = rule_timeout,
     conditions = conditions_meta,
     actions = actions_meta,
+    on_response = on_response_list,
     worker_only = false
   }
   for _index_0 = 1, #conditions_meta do
@@ -95,12 +110,12 @@ compile_rule = function(cfg, rule, idx, used_ids)
       return nil, "No condition matched"
     end
     local verdict, msg
-    for _index_0 = 1, #actions do
-      local action = actions[_index_0]
-      local v, m = action(req)
+    for _index_0 = 1, #action_evals do
+      local action_eval = action_evals[_index_0]
+      local v, m = action_eval(req)
       if v ~= nil and verdict == nil then
         verdict = v
-        msg = m
+        msg = m or msg
       elseif v == nil and m then
         msg = msg or m
       end

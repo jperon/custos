@@ -38,12 +38,18 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now, _obj_0.set_action_prefix
 end
-local build_blocked_response, add_ede_modified, strip_https_rr, strip_a_rr, strip_aaaa_rr, clear_ad_bit
+local build_blocked_response, strip_https_rr, add_ede_modified, clear_ad_bit
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, add_ede_modified, strip_https_rr, strip_a_rr, strip_aaaa_rr, clear_ad_bit = _obj_0.build_blocked_response, _obj_0.add_ede_modified, _obj_0.strip_https_rr, _obj_0.strip_a_rr, _obj_0.strip_aaaa_rr, _obj_0.clear_ad_bit
+  build_blocked_response, strip_https_rr, add_ede_modified, clear_ad_bit = _obj_0.build_blocked_response, _obj_0.strip_https_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit
 end
 local bit = require("bit")
+local _filter = nil
+local get_rule_on_response
+get_rule_on_response = function(rule_id)
+  _filter = _filter or require("filter")
+  return _filter.get_rule_on_response(rule_id)
+end
 local concat, insert, remove
 do
   local _obj_0 = table
@@ -324,8 +330,15 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local refused = entry and entry.refused or false
   local dnsonly = entry and entry.dnsonly or false
-  local allow_ip4 = entry and entry.allow_ip4 or false
-  local allow_ip6 = entry and entry.allow_ip6 or false
+  local on_response_cbs = get_rule_on_response(nft_rule_id)
+  local resp_ctx = {
+    dns_raw = nil,
+    modified = false,
+    explicit_allow = false,
+    skip_nft = false,
+    action_label = nil,
+    reason = entry and entry.reason or ""
+  }
   local nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
   local ack_corr = string.format("%04x:%s:%d:%s", txid, pkt.ip.dst_ip, client_port, resolver_ip)
   if refused then
@@ -364,6 +377,15 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
     return -1
   end
+  local dns_raw = extract_dns_payload(raw, pkt)
+  resp_ctx.dns_raw = dns_raw
+  for _index_0 = 1, #on_response_cbs do
+    local cb = on_response_cbs[_index_0]
+    cb(resp_ctx)
+  end
+  dns_raw = resp_ctx.dns_raw
+  local payload_modified = resp_ctx.modified
+  local inject_nft = resp_ctx.explicit_allow or not resp_ctx.skip_nft
   local answers = parse_answers(raw, pkt)
   client_ip = pkt.ip.dst_ip
   local client_v4 = nil
@@ -383,7 +405,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           return resolve_client_family(client_ip, "ipv4")
         end
       end)()
-      if not (dnsonly) then
+      if inject_nft then
         if client_v4 then
           records_to_add = records_to_add + 1
           local rr_timeout_str, _ = rr_timeout(ans.ttl)
@@ -445,7 +467,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           return resolve_client_family(client_ip, "ipv6")
         end
       end)()
-      if not (dnsonly) then
+      if inject_nft then
         if client_v6 then
           records_to_add = records_to_add + 1
           local rr_timeout_str, _ = rr_timeout(ans.ttl)
@@ -535,25 +557,6 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       user = user
     })
   end
-  local dns_raw = extract_dns_payload(raw, pkt)
-  local payload_modified = false
-  if allow_ip4 then
-    local stripped = strip_aaaa_rr(dns_raw)
-    if stripped ~= dns_raw then
-      dns_raw = stripped
-      payload_modified = true
-      dns_raw = add_ede_modified(dns_raw, entry.reason) or dns_raw
-      dns_raw = clear_ad_bit(dns_raw)
-    end
-  elseif allow_ip6 then
-    local stripped = strip_a_rr(dns_raw)
-    if stripped ~= dns_raw then
-      dns_raw = stripped
-      payload_modified = true
-      dns_raw = add_ede_modified(dns_raw, entry.reason) or dns_raw
-      dns_raw = clear_ad_bit(dns_raw)
-    end
-  end
   local new_dns, dns_modified = patch_modified_dns(dns_raw, entry.reason)
   payload_modified = payload_modified or dns_modified
   local patched = nil
@@ -575,19 +578,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     return _accum_0
   end)(), ",")
   log_debug({
-    action = (function()
-      if dnsonly then
-        return "response_dnsonly"
-      elseif allow_ip4 then
-        return "response_allow_ip4"
-      elseif allow_ip6 then
-        return "response_allow_ip6"
-      elseif payload_modified then
-        return "response_patched"
-      else
-        return "response_allow"
-      end
-    end)(),
+    action = resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow"),
     src_ip = pkt.ip.src_ip,
     dst_ip = pkt.ip.dst_ip,
     vlan = l2.vlan,

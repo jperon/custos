@@ -195,23 +195,43 @@ strip_rrtypes = function(dns_payload, rrtypes)
   local header = sp(">H H H H H H", id, flags, qdcount, ancount_new, nscount_new, arcount_new)
   return header .. table.concat(question_parts) .. answers .. authorities .. additionals
 end
-local strip_https_rr
-strip_https_rr = function(dns_payload)
-  return strip_rrtypes(dns_payload, {
-    [HTTPS] = true,
-    [SVCB] = true
-  })
+local strip_dns_rr
+strip_dns_rr = function(dns_payload, rtype)
+  local resolve
+  resolve = function(t)
+    if type(t) == "number" then
+      return t
+    end
+    local v = dns_mod.types[t]
+    if not (v) then
+      error("strip_dns_rr : type DNS inconnu '" .. tostring(t) .. "'")
+    end
+    return v
+  end
+  local set = { }
+  if type(rtype) == "table" then
+    for _index_0 = 1, #rtype do
+      local t = rtype[_index_0]
+      set[resolve(t)] = true
+    end
+  else
+    set[resolve(rtype)] = true
+  end
+  return strip_rrtypes(dns_payload, set)
 end
 local strip_a_rr
-strip_a_rr = function(dns_payload)
-  return strip_rrtypes(dns_payload, {
-    [A] = true
-  })
+strip_a_rr = function(p)
+  return strip_dns_rr(p, A)
 end
 local strip_aaaa_rr
-strip_aaaa_rr = function(dns_payload)
-  return strip_rrtypes(dns_payload, {
-    [AAAA] = true
+strip_aaaa_rr = function(p)
+  return strip_dns_rr(p, AAAA)
+end
+local strip_https_rr
+strip_https_rr = function(p)
+  return strip_dns_rr(p, {
+    HTTPS,
+    SVCB
   })
 end
 local clear_ad_bit
@@ -230,6 +250,7 @@ return {
   add_ede = add_ede,
   build_blocked_response = build_blocked_response,
   add_ede_modified = add_ede_modified,
+  strip_dns_rr = strip_dns_rr,
   strip_https_rr = strip_https_rr,
   strip_a_rr = strip_a_rr,
   strip_aaaa_rr = strip_aaaa_rr,

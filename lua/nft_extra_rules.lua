@@ -113,6 +113,43 @@ init = function(rules)
   end
   return all_ok
 end
+local populate_filter_ips
+populate_filter_ips = function()
+  local family = config.nft.family
+  local tbl = config.nft.table
+  local fh = io.popen("ip -4 addr show 2>/dev/null")
+  if fh then
+    for line in fh:lines() do
+      local ip = line:match("%s+inet%s+([%d%.]+)/")
+      if ip then
+        local ok = run_cmd("add element " .. tostring(family) .. " " .. tostring(tbl) .. " filter_ips4 { " .. tostring(ip) .. " }")
+        if ok then
+          log_info({
+            action = "nft_filter_ip4_added",
+            ip = ip
+          })
+        end
+      end
+    end
+    fh:close()
+  end
+  fh = io.popen("ip -6 addr show 2>/dev/null")
+  if fh then
+    for line in fh:lines() do
+      local ip6 = line:match("%s+inet6%s+([%x:]+)/")
+      if ip6 and not ip6:match("^fe80") then
+        local ok = run_cmd("add element " .. tostring(family) .. " " .. tostring(tbl) .. " filter_ips6 { " .. tostring(ip6) .. " }")
+        if ok then
+          log_info({
+            action = "nft_filter_ip6_added",
+            ip = ip6
+          })
+        end
+      end
+    end
+    return fh:close()
+  end
+end
 local apply_from_config
 apply_from_config = function()
   local rc_check = os.execute("nft list chain " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " forward >/dev/null 2>&1")
@@ -129,6 +166,7 @@ apply_from_config = function()
       action = "nft_extra_main_rules_reapplied"
     })
   end
+  populate_filter_ips()
   local cfg = require("config")
   local rules = cfg.nft.extra_rules or { }
   return init(rules)

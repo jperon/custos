@@ -12,10 +12,10 @@ local get_l2
 get_l2 = require("nfq/ethernet").get_l2
 local packet = require("nfq/packet")
 local filter = require("filter")
-local write_msg, write_refused_msg, write_dnsonly_msg, write_allow_ip4_msg, write_allow_ip6_msg
+local write_msg, write_refused_msg
 do
   local _obj_0 = require("ipc")
-  write_msg, write_refused_msg, write_dnsonly_msg, write_allow_ip4_msg, write_allow_ip6_msg = _obj_0.write_msg, _obj_0.write_refused_msg, _obj_0.write_dnsonly_msg, _obj_0.write_allow_ip4_msg, _obj_0.write_allow_ip6_msg
+  write_msg, write_refused_msg = _obj_0.write_msg, _obj_0.write_refused_msg
 end
 local run_queue, NF_ACCEPT, NF_DROP
 do
@@ -121,13 +121,7 @@ write_event = function(fields, allowed)
     return 
   end
   local decision
-  if allowed == "dnsonly" then
-    decision = "dnsonly"
-  elseif allowed == "allow_ip4" then
-    decision = "allow_ip4"
-  elseif allowed == "allow_ip6" then
-    decision = "allow_ip6"
-  elseif allowed then
+  if allowed then
     decision = "allow"
   else
     decision = "block"
@@ -239,9 +233,6 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end
   end
   local verdict = NF_ACCEPT
-  local dnsonly = false
-  local allow_ip4 = false
-  local allow_ip6 = false
   local block_reason = nil
   local allow_reason = nil
   local block_rule_id = nil
@@ -287,36 +278,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       allowed, reason, rule_id = filter.decide(req)
       nft_timeout = nil
     end
-    q_fields.reason = reason or (allowed == "dnsonly" and "dnsonly") or (allowed == "allow_ip4" and "allow_ip4") or (allowed == "allow_ip6" and "allow_ip6") or (allowed and "allowed") or "denied"
+    q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule = rule_id or ""
-    if allowed == "dnsonly" then
-      log_allow(q_fields)
-      if rule_id then
-        metrics.record_verdict(rule_id, "dnsonly")
-      end
-      dnsonly = true
-      allow_reason = reason
-      allow_rule_id = rule_id
-      allow_timeout = nft_timeout
-    elseif allowed == "allow_ip4" then
-      log_allow(q_fields)
-      if rule_id then
-        metrics.record_verdict(rule_id, "allow_ip4")
-      end
-      allow_ip4 = true
-      allow_reason = reason
-      allow_rule_id = rule_id
-      allow_timeout = nft_timeout
-    elseif allowed == "allow_ip6" then
-      log_allow(q_fields)
-      if rule_id then
-        metrics.record_verdict(rule_id, "allow_ip6")
-      end
-      allow_ip6 = true
-      allow_reason = reason
-      allow_rule_id = rule_id
-      allow_timeout = nft_timeout
-    elseif allowed then
+    if allowed then
       log_allow(q_fields)
       if rule_id then
         metrics.record_verdict(rule_id, "allow")
@@ -346,15 +310,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   end
   local ipc_ok = false
   if verdict == NF_ACCEPT then
-    if dnsonly then
-      ipc_ok = write_dnsonly_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout)
-    elseif allow_ip4 then
-      ipc_ok = write_allow_ip4_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout)
-    elseif allow_ip6 then
-      ipc_ok = write_allow_ip6_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout)
-    else
-      ipc_ok = write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout)
-    end
+    ipc_ok = write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout)
   else
     ipc_ok = write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason, benchmark_ms, block_rule_id, block_timeout)
   end
