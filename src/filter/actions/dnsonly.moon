@@ -1,11 +1,8 @@
 -- src/filter/actions/dnsonly.moon
--- Action : autoriser la résolution DNS mais ne pas ajouter les IPs dans
--- les sets nft (les redirections HTTP/80 restent actives — captive portal).
--- API enrichie : worker-only (pas de compilation nft possible).
---
--- Retourne "dnsonly" (valeur truthy distincte de `true`).
--- Le worker question la traite via write_dnsonly_msg ; response patche le TTL + EDE
--- mais n'injecte aucune entrée dans les sets par règle.
+-- Action : autoriser la résolution DNS mais ne pas injecter les IPs dans les sets nft.
+-- on_response déclare skip_nft=true ; aucune modification du payload DNS.
+
+(require "ipc").register_modifier "dnsonly"
 
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (rule) → enriched_action
@@ -14,7 +11,10 @@
     {
       capabilities: { worker: true, nft: false }
       eval: (req) ->
-        "dnsonly", "DNS only (no nft) by rule: #{rule.description or '?'}"
+        true, "DNS only (no nft) by rule: #{rule.description or '?'}"
+      on_response: (ctx) ->
+        ctx.skip_nft       = true
+        ctx.action_label   = "response_dnsonly"
       compile_nft: ->
       verdict: ->
         "dnsonly"
