@@ -1615,6 +1615,12 @@ describe("filter.rule", function()
   end)
 end)
 describe("filter.actions.dnsonly", function()
+  -- Stub ipc.register_modifier pour dnsonly
+  package.loaded["ipc"] = {
+    register_modifier = function(name)
+      -- No-op pour les tests
+    end
+  }
   local dnsonly_action = require("filter.actions.dnsonly")
   it("retourne true (verdict allow)", function()
     local factory = dnsonly_action({ })
