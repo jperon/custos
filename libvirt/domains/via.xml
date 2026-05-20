@@ -1,0 +1,49 @@
+<!-- via : routeur OpenWrt entre internet (NAT hôte) et homelab-up.
+     NICs (l'ordre fixe la numérotation eth0..eth2) :
+       eth0 = homelab-wan    (DHCP, NAT vers internet)
+       eth1 = homelab-up     (LAN 10.42.0.1/24, dnsmasq, masquerade)
+       eth2 = homelab-mgmt   (DHCP, SSH depuis l'hôte)
+-->
+<domain type='kvm'>
+  <name>homelab-via</name>
+  <memory unit='MiB'>256</memory>
+  <vcpu>1</vcpu>
+  <cpu mode='host-passthrough' check='none'/>
+  <os>
+    <type arch='x86_64'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+  </features>
+  <devices>
+    <disk type='file' device='disk'>
+      <source file='/var/lib/libvirt/images/homelab-via.qcow2'/>
+      <driver name='qemu' type='qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <interface type='network'>
+      <mac address='52:54:00:fe:01:01'/>
+      <source network='homelab-wan'/>
+      <model type='virtio'/>
+    </interface>
+    <interface type='network'>
+      <mac address='52:54:00:fe:01:02'/>
+      <source network='homelab-up'/>
+      <model type='virtio'/>
+    </interface>
+    <interface type='network'>
+      <mac address='52:54:00:fe:01:03'/>
+      <source network='homelab-mgmt'/>
+      <model type='virtio'/>
+    </interface>
+    <serial type='file'>
+      <source path='/tmp/homelab-via-serial.log' append='on'/>
+      <target type='isa-serial' port='0'/>
+    </serial>
+    <console type='file'>
+      <source path='/tmp/homelab-via-serial.log' append='on'/>
+      <target type='serial' port='0'/>
+    </console>
+  </devices>
+</domain>

@@ -1,0 +1,4 @@
+<network>
+  <name>homelab-lan</name>
+  <bridge name="hl-lan-br" stp="off" delay="0"/>
+</network>

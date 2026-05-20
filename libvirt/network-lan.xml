@@ -1,5 +1,0 @@
-<network>
-  <name>custos-lan</name>
-  <!-- Isolated L2 segment between client and filter (no routing, no DHCP). -->
-  <bridge name="custos-lan"/>
-</network>
