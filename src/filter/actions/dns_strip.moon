@@ -2,20 +2,20 @@
 -- Action : enlever les enregistrements DNS d'un type donné de la réponse.
 -- Seule : pas d'injection nft (skip_nft=true, explicit_allow non défini).
 -- Combinée avec "allow" : allow.on_response pose explicit_allow=true, l'injection a lieu.
--- Configurable via rule_cfg.dns_strip.rr_type (ex: "A", "AAAA", "CNAME", etc.)
+-- Configurable via rule.dns_strip.rr_type (ex: "A", "AAAA", "CNAME", etc.)
 
 { :strip_dns_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
 (require "ipc").register_modifier "dns_strip"
 
 --- @tparam table cfg Configuration du filtre
---- @treturn function factory (rule) → enriched_action
-return (cfg, rule_cfg) ->
-  -- Extraire rr_type de la configuration, défaut "HTTPS" si non spécifié
-  rr_type = "HTTPS"
-  if rule_cfg.dns_strip and rule_cfg.dns_strip.rr_type
-    rr_type = rule_cfg.dns_strip.rr_type
-
+-- @treturn function factory (rule) → enriched_action
+(cfg) ->
   (rule) ->
+    -- Extraire rr_type de la configuration de la règle, défaut "A" si non spécifié
+    rr_type = "A"
+    if rule.dns_strip and rule.dns_strip.rr_type
+      rr_type = rule.dns_strip.rr_type
+
     {
       capabilities: { worker: true, nft: false }
       eval: (req) ->

@@ -5,7 +5,7 @@ do
 end
 (require("ipc")).register_modifier("dns_strip")
 return function(cfg, rule_cfg)
-  local rr_type = "A"
+  local rr_type = "HTTPS"
   if rule_cfg.dns_strip and rule_cfg.dns_strip.rr_type then
     rr_type = rule_cfg.dns_strip.rr_type
   end
