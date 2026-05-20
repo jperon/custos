@@ -1,20 +1,32 @@
 -- Stubs pour nft_queue et nft (nécessaires pour make test normal)
--- On réinitialise le cache de worker_tls avant de définir les stubs
+-- Dans test-vm, les vrais modules sont disponibles et fonctionnels
+-- On détecte si les modules sont réellement disponibles
+local has_real_modules = false
+local ok_nft_queue, nft_queue = pcall(require, "nft_queue")
+local ok_nft, nft_mod = pcall(require, "nft")
+if ok_nft_queue and nft_queue and nft_queue.cmd_for and ok_nft and nft_mod and nft_mod.run_cmd then
+  has_real_modules = true
+end
+
+-- Toujours réinitialiser le cache de worker_tls avant les tests
 local worker_tls = require("worker_tls")
 if worker_tls.reset_nft_modules then
   worker_tls.reset_nft_modules()
 end
 
-package.loaded["nft_queue"] = {
-  cmd_for = function(kind, src, dst, rule_id, timeout)
-    return "add element bridge dns-filter-bridge " .. tostring(kind) .. "_allowed { " .. tostring(src) .. " . " .. tostring(dst) .. " timeout " .. tostring(timeout) .. " }"
-  end
-}
-package.loaded["nft"] = {
-  run_cmd = function(cmd, opts)
-    return true, nil
-  end
-}
+-- Définir les stubs seulement si les vrais modules ne sont pas disponibles
+if not has_real_modules then
+  package.loaded["nft_queue"] = {
+    cmd_for = function(kind, src, dst, rule_id, timeout)
+      return "add element bridge dns-filter-bridge " .. tostring(kind) .. "_allowed { " .. tostring(src) .. " . " .. tostring(dst) .. " timeout " .. tostring(timeout) .. " }"
+    end
+  }
+  package.loaded["nft"] = {
+    run_cmd = function(cmd, opts)
+      return true, nil
+    end
+  }
+end
 
 return describe("worker_tls helpers", function()
   local sni_logger = require("worker_tls")
