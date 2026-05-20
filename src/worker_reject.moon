@@ -47,6 +47,8 @@ rtp_passthrough = {}
 -- Reverse-direction relaxed cache: key = "src|dst|dport", value = expiry epoch.
 rtp_passthrough_dport = {}
 RTP_PASSTHROUGH_TTL = 120
+-- Ports exclus du suivi RTP (initialisé par run() depuis la config).
+_excluded_ports = nil
 
 rtp_key = (src, dst, sport, dport) ->
   "#{src}|#{dst}|#{sport}|#{dport}"
@@ -91,10 +93,11 @@ looks_like_rtp_payload = (raw, l4_off) ->
 
   true
 
-should_track_rtp_udp = (proto, ip_version, src_ip, dst_ip, sport, dport, raw, l4_off) ->
+should_track_rtp_udp = (proto, ip_version, src_ip, dst_ip, sport, dport, raw, l4_off, excluded_ports) ->
   return false unless proto == PROTO_UDP and ip_version == 4
   return false unless sport and dport
   return false unless sport >= 1024 and dport >= 1024
+  return false if excluded_ports and (excluded_ports[sport] or excluded_ports[dport])
   return false unless is_private_ipv4(src_ip) and is_public_ipv4(dst_ip)
   looks_like_rtp_payload raw, l4_off
 
@@ -278,7 +281,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
       }
       return VERDICT_DONE
 
-    if should_track_rtp_udp(proto, ip.version, src_ip, dst_ip, sport, dport, raw, l4_off)
+    if should_track_rtp_udp(proto, ip.version, src_ip, dst_ip, sport, dport, raw, l4_off, _excluded_ports)
       rev_key = rtp_key dst_ip, src_ip, dport, sport
       rev_dport_key = rtp_dport_key dst_ip, src_ip, sport
       expiry = now + RTP_PASSTHROUGH_TTL
@@ -349,6 +352,12 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
 run = (queue_num, cfg) ->
   set_action_prefix "reject_"
   log_info { action: "worker_start", queue: queue_num }
+  -- Initialiser le set des ports exclus du suivi RTP depuis la config
+  rtp_cfg = cfg and cfg.rtp
+  if rtp_cfg and rtp_cfg.excluded_ports
+    _excluded_ports = {}
+    for _, p in ipairs rtp_cfg.excluded_ports
+      _excluded_ports[tonumber(p)] = true
   run_queue tonumber(queue_num), handle_reject
 
 {

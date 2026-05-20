@@ -45,6 +45,7 @@ local ICMP_QUOTE_MAX = 576
 local rtp_passthrough = { }
 local rtp_passthrough_dport = { }
 local RTP_PASSTHROUGH_TTL = 120
+local _excluded_ports = nil
 local rtp_key
 rtp_key = function(src, dst, sport, dport)
   return tostring(src) .. "|" .. tostring(dst) .. "|" .. tostring(sport) .. "|" .. tostring(dport)
@@ -121,7 +122,7 @@ looks_like_rtp_payload = function(raw, l4_off)
   return true
 end
 local should_track_rtp_udp
-should_track_rtp_udp = function(proto, ip_version, src_ip, dst_ip, sport, dport, raw, l4_off)
+should_track_rtp_udp = function(proto, ip_version, src_ip, dst_ip, sport, dport, raw, l4_off, excluded_ports)
   if not (proto == PROTO_UDP and ip_version == 4) then
     return false
   end
@@ -129,6 +130,9 @@ should_track_rtp_udp = function(proto, ip_version, src_ip, dst_ip, sport, dport,
     return false
   end
   if not (sport >= 1024 and dport >= 1024) then
+    return false
+  end
+  if excluded_ports and (excluded_ports[sport] or excluded_ports[dport]) then
     return false
   end
   if not (is_private_ipv4(src_ip) and is_public_ipv4(dst_ip)) then
@@ -281,7 +285,7 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
       })
       return VERDICT_DONE
     end
-    if should_track_rtp_udp(proto, ip.version, src_ip, dst_ip, sport, dport, raw, l4_off) then
+    if should_track_rtp_udp(proto, ip.version, src_ip, dst_ip, sport, dport, raw, l4_off, _excluded_ports) then
       local rev_key = rtp_key(dst_ip, src_ip, dport, sport)
       local rev_dport_key = rtp_dport_key(dst_ip, src_ip, sport)
       local expiry = now + RTP_PASSTHROUGH_TTL
@@ -353,6 +357,13 @@ run = function(queue_num, cfg)
     action = "worker_start",
     queue = queue_num
   })
+  local rtp_cfg = cfg and cfg.rtp
+  if rtp_cfg and rtp_cfg.excluded_ports then
+    _excluded_ports = { }
+    for _, p in ipairs(rtp_cfg.excluded_ports) do
+      _excluded_ports[tonumber(p)] = true
+    end
+  end
   return run_queue(tonumber(queue_num), handle_reject)
 end
 return {

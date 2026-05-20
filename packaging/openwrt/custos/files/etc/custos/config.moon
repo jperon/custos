@@ -184,103 +184,103 @@
         description: "Détection de portail captif (systèmes d'exploitation courants)"
         actions: {"allow"}
         conditions: {
-          { to_domains: {
+          to_domains: {
             "connectivitycheck.gstatic.com"
             "connectivitycheck.android.com"
             "captive.apple.com"
             "www.msftconnecttest.com"
             "detectportal.firefox.com"
             "networkcheck.kde.org"
-          } }
+          }
         }
       }
       {
         description: "Blocage des catégories de menaces connues"
         actions: {"deny"}
         conditions: {
-          { to_domainlists: {
+          to_domainlists: {
             "toulouse/malware"
             "toulouse/phishing"
             "toulouse/gambling"
             "toulouse/adult"
             "toulouse/publicite"
-          } }
-          { from_netlists: {"lan"} }
+          }
+          from_netlists: {"lan"}
         }
       }
       {
         description: "Infrastructure réseau locale et privée toujours autorisée"
         actions: {"allow"}
         conditions: {
-          { to_domains: {"local", "lan", "home.arpa"} }
-          { from_netlist: "lan" }
+          to_domains: {"local", "lan", "home.arpa"}
+          from_netlist: "lan"
         }
       }
       {
         description: "Outils de développement et services essentiels"
         actions: {"allow"}
         conditions: {
-          { to_domains: {"github.com", "gitlab.com", "npmjs.org", "pypi.org", "debian.org"} }
-          { from_maclist: "trusted" }
+          to_domains: {"github.com", "gitlab.com", "npmjs.org", "pypi.org", "debian.org"}
+          from_maclist: "trusted"
         }
       }
       {
         description: "Accès auth-required pour newuser"
         actions: {"allow"}
         conditions: {
-          { from_user: "newuser" }
-          { to_domain: "auth-required.test" }
+          from_user: "newuser"
+          to_domain: "auth-required.test"
         }
       }
       {
         description: "Accès auth-required pour testuser"
         actions: {"allow"}
         conditions: {
-          { from_user: "testuser" }
-          { to_domain: "auth-required.test" }
+          from_user: "testuser"
+          to_domain: "auth-required.test"
         }
       }
       {
         description: "auth-required bloqué sans authentification"
         actions: {"deny"}
         conditions: {
-          { to_domain: "auth-required.test" }
+          to_domain: "auth-required.test"
         }
       }
       {
         description: "Blocage explicite de facebook.com"
         actions: {"deny"}
         conditions: {
-          { to_domain: "facebook.com" }
+          to_domain: "facebook.com"
         }
       }
       {
         description: "Autorisation DNS sondes captives sans ouverture pare-feu"
         actions: {"dnsonly"}
         conditions: {
-          { to_domainlist: "custom/captive_detect" }
+          to_domainlist: "custom/captive_detect"
         }
       }
       {
         description: "Autorisation trafic VLAN 100"
         actions: {"allow"}
         conditions: {
-          { from_vlan: 100 }
+          from_vlan: 100
         }
       }
       {
         description: "Blocage VLANs de test"
         actions: {"deny"}
         conditions: {
-          { from_vlans: {300, 301, 302} }
+          from_vlans: {300, 301, 302}
         }
       }
       {
         description: "Accès restreint groupe VLAN guests"
         actions: {"allow"}
         conditions: {
-          { from_vlanlist: "guests" }
-          { to_domain: "portal.example.com" }
+          from_vlanlist: "guests"
+          to_domain: "portal.example.com"
         }
       }
       {

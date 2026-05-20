@@ -22,7 +22,7 @@ print "Testing enriched allow action..."
 test_rule_allow = {
   description: "Allow test"
   rule_id: "allow123"
-  conditions: { { always_true: "test" } }
+  conditions: { always_true: "test" }
   actions: { "allow" }
 }
 
@@ -52,7 +52,7 @@ print "Testing enriched deny action..."
 test_rule_deny = {
   description: "Deny test"
   rule_id: "deny456"
-  conditions: { { always_true: "test" } }
+  conditions: { always_true: "test" }
   actions: { "deny" }
 }
 
@@ -78,7 +78,7 @@ print "Testing enriched dnsonly action..."
 test_rule_dnsonly = {
   description: "DNS only test"
   rule_id: "dns789"
-  conditions: { { always_true: "test" } }
+  conditions: { always_true: "test" }
   actions: { "dnsonly" }
 }
 
@@ -106,7 +106,7 @@ print "Testing enriched allow_ip4 action..."
 test_rule_allow_ip4 = {
   description: "Allow IPv4 only test"
   rule_id: "allow4123"
-  conditions: { { always_true: "test" } }
+  conditions: { always_true: "test" }
   actions: { "allow_ip4" }
 }
 
@@ -134,7 +134,7 @@ print "Testing enriched allow_ip6 action..."
 test_rule_allow_ip6 = {
   description: "Allow IPv6 only test"
   rule_id: "allow6456"
-  conditions: { { always_true: "test" } }
+  conditions: { always_true: "test" }
   actions: { "allow_ip6" }
 }
 

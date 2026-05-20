@@ -28,6 +28,7 @@ describe "worker_reject RTP helpers", ->
       rtp_payload = string.char 0x80, 0x60, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x12, 0x34, 0x56, 0x78
       raw = udp_header .. rtp_payload
 
+      sip_ports = { [5060]: true }
       assert.is_true worker_reject.should_track_rtp_udp 17, 4, "10.35.3.6", "83.136.163.31", 16440, 57044, raw, 1
       assert.is_false worker_reject.should_track_rtp_udp 17, 4, "10.35.3.6", "10.35.3.7", 16440, 57044, raw, 1
-      assert.is_false worker_reject.should_track_rtp_udp 17, 4, "10.35.3.6", "83.136.163.31", 5060, 57044, raw, 1
+      assert.is_false worker_reject.should_track_rtp_udp 17, 4, "10.35.3.6", "83.136.163.31", 5060, 57044, raw, 1, sip_ports

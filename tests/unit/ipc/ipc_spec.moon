@@ -315,7 +315,7 @@ describe "ipc", ->
       m_ipc   = fresh_ipc!
       reason  = "blocked by policy"
       msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                  false, false, reason
+                  false, false, false, false, reason
       decoded = m_ipc.decode_msg msg
 
       assert.is_not_nil decoded.reason
@@ -325,7 +325,7 @@ describe "ipc", ->
     it "préserve rule_id et timeout", ->
       m_ipc   = fresh_ipc!
       msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                  false, false, "allowed", 17, "dns_workhours", "240s"
+                  false, false, false, false, "allowed", 17, "dns_workhours", "240s"
       decoded = m_ipc.decode_msg msg
 
       assert.equals "dns_workhours", decoded.rule_id
@@ -337,7 +337,7 @@ describe "ipc", ->
       m_ipc   = fresh_ipc!
       long_r  = string.rep "x", 70
       msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                  false, false, long_r
+                  false, false, false, false, long_r
       decoded = m_ipc.decode_msg msg
 
       assert.equals 63, #decoded.reason
@@ -418,7 +418,7 @@ describe "ipc", ->
   describe "encode_msg avec benchmark_ms", ->
     it "benchmark_ms encodé et décodé", ->
       m_ipc = fresh_ipc!
-      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, false, "", 42, "rule_dns", "90s"
+      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, false, false, false, "", 42, "rule_dns", "90s"
       assert.is_true #msg > 0
       decoded = m_ipc.decode_msg msg
       assert.is_not_nil decoded
@@ -528,7 +528,7 @@ describe "ipc", ->
       m_ipc = fresh_ipc!
       bms   = 12345
       msg   = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                false, false, "", bms
+                false, false, false, false, "", bms
       decoded = m_ipc.decode_msg msg
       assert.is_not_nil decoded
       assert.equals bms, decoded.benchmark_ms, "benchmark_ms préservé"
@@ -539,7 +539,7 @@ describe "ipc", ->
       m_ipc    = fresh_ipc!
       reason63 = string.rep "y", 63
       msg      = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                   false, false, reason63
+                   false, false, false, false, reason63
       decoded  = m_ipc.decode_msg msg
       assert.equals 63,       #decoded.reason, "longueur préservée"
       assert.equals reason63, decoded.reason,  "contenu intact"

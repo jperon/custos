@@ -143,7 +143,7 @@ describe "parse/mac_learner", ->
       assert.is_nil mac
 
   -- ── get_mac : chemin post-connect (learner actif) ───────────────────────
-  -- On lance un serveur Unix socket en Python pour simuler le mac_learner.
+  -- On lance un serveur Unix socket en LuaJIT pour simuler le mac_learner.
 
   describe "get_mac avec learner actif", ->
     SOCK_PATH = "./tmp/test_mac_ipc_query.sock"
@@ -156,24 +156,60 @@ describe "parse/mac_learner", ->
     un_family_size = ffi.sizeof(ffi.typeof("struct sockaddr_un")) - 108  -- sun_family offset
     compatible_layout = (un_family_size == 2)
 
-    -- Démarre le serveur Python en arrière-plan et attend la création du socket.
+    -- Démarre le serveur LuaJIT en arrière-plan et attend la création du socket.
     -- Retourne le PID du processus background.
     start_server = (response, max_conns) ->
       max_conns = max_conns or 5
-      script = "./tmp/mac_server_test.py"
+      script = "./tmp/mac_server_test.lua"
+      fh = io.open script, "w"
+      fh\write [=[
+local ffi = require "ffi"
+ffi.cdef[[
+typedef unsigned int socklen_t;
+struct sockaddr { unsigned short sa_family; char sa_data[14]; };
+struct sockaddr_un { unsigned short sun_family; char sun_path[108]; };
+int socket(int domain, int type, int protocol);
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int listen(int sockfd, int backlog);
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+long send(int sockfd, const void *buf, unsigned long len, int flags);
+int close(int fd);
+int unlink(const char *pathname);
+]]
+local path, response, max_conns = arg[1], arg[2] or "", tonumber(arg[3]) or 5
+local AF_UNIX, SOCK_STREAM = 1, 1
+ffi.C.unlink(path)
+local fd = ffi.C.socket(AF_UNIX, SOCK_STREAM, 0)
+if fd < 0 then os.exit(1) end
+local addr = ffi.new("struct sockaddr_un")
+addr.sun_family = AF_UNIX
+ffi.copy(addr.sun_path, path, #path)
+local addrlen = ffi.offsetof("struct sockaddr_un", "sun_path") + #path + 1
+if ffi.C.bind(fd, ffi.cast("const struct sockaddr *", addr), addrlen) ~= 0 then ffi.C.close(fd); os.exit(1) end
+if ffi.C.listen(fd, 8) ~= 0 then ffi.C.close(fd); os.exit(1) end
+for _ = 1, max_conns do
+  local c = ffi.C.accept(fd, nil, nil)
+  if c >= 0 then
+    if #response > 0 then ffi.C.send(c, response, #response, 0) end
+    ffi.C.close(c)
+  end
+end
+ffi.C.close(fd)
+ffi.C.unlink(path)
+]=]
+      fh\close!
       os.execute "rm -f " .. SOCK_PATH
       pid_file = SOCK_PATH .. ".pid"
-      -- Lancer le serveur en background ; écrire le PID dans pid_file
       os.execute string.format(
-        "python3 %s %s '%s' %d >/dev/null 2>&1 & echo $! > %s",
-        script, SOCK_PATH, response, max_conns, pid_file
+        "luajit %s %s %s %d >/dev/null 2>&1 & echo $! > %s",
+        script, string.format("%q", SOCK_PATH), string.format("%q", response), max_conns, pid_file
       )
       -- Attendre que le socket Unix soit créé (os.execute retourne true en LuaJIT)
       for i = 1, 40
         if os.execute("test -S " .. SOCK_PATH)
-          os.execute "sleep 0.05"  -- petit délai supplémentaire pour listen()
+          os.execute "sleep 1"  -- petit délai supplémentaire pour listen()
           break
-        os.execute "sleep 0.1"
+        os.execute "sleep 1"
       -- Lire le PID
       fh_pid = io.open pid_file, "r"
       pid = 0
@@ -251,9 +287,43 @@ describe "parse/mac_learner", ->
       pending "struct sockaddr_un incompatible (sa_family_t=uint32 de socket.lua)" unless compatible2
       -- Serveur qui accepte mais ne renvoie rien (n <= 0)
       os.execute "rm -f " .. SOCK_PATH2
+      script = "./tmp/mac_server_empty.lua"
+      fh_script = io.open script, "w"
+      fh_script\write [=[
+local ffi = require "ffi"
+ffi.cdef[[
+typedef unsigned int socklen_t;
+struct sockaddr { unsigned short sa_family; char sa_data[14]; };
+struct sockaddr_un { unsigned short sun_family; char sun_path[108]; };
+int socket(int domain, int type, int protocol);
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int listen(int sockfd, int backlog);
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+int close(int fd);
+int unlink(const char *pathname);
+]]
+local path, max_conns = arg[1], tonumber(arg[2]) or 3
+local AF_UNIX, SOCK_STREAM = 1, 1
+ffi.C.unlink(path)
+local fd = ffi.C.socket(AF_UNIX, SOCK_STREAM, 0)
+if fd < 0 then os.exit(1) end
+local addr = ffi.new("struct sockaddr_un")
+addr.sun_family = AF_UNIX
+ffi.copy(addr.sun_path, path, #path)
+local addrlen = ffi.offsetof("struct sockaddr_un", "sun_path") + #path + 1
+if ffi.C.bind(fd, ffi.cast("const struct sockaddr *", addr), addrlen) ~= 0 then ffi.C.close(fd); os.exit(1) end
+if ffi.C.listen(fd, 8) ~= 0 then ffi.C.close(fd); os.exit(1) end
+for _ = 1, max_conns do
+  local c = ffi.C.accept(fd, nil, nil)
+  if c >= 0 then ffi.C.close(c) end
+end
+ffi.C.close(fd)
+ffi.C.unlink(path)
+]=]
+      fh_script\close!
       cmd = string.format(
-        "python3 ./tmp/mac_server_empty.py %s 3 >/dev/null 2>&1 & echo $!",
-        SOCK_PATH2
+        "luajit %s %s 3 >/dev/null 2>&1 & echo $!",
+        script, string.format("%q", SOCK_PATH2)
       )
       fh = io.popen cmd
       pid_str = fh\read "*l"
@@ -262,9 +332,9 @@ describe "parse/mac_learner", ->
       -- Attendre que le socket Unix soit créé (os.execute retourne true en LuaJIT)
       for i = 1, 20
         if os.execute("test -S " .. SOCK_PATH2)
-          os.execute "sleep 0.05"
+          os.execute "sleep 1"
           break
-        os.execute "sleep 0.1"
+        os.execute "sleep 1"
       m = require "mac_learner_ipc"
       result = m.get_mac "10.0.0.1"
       assert.equals "unknown", result

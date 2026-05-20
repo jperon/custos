@@ -103,7 +103,7 @@ return function(cfg)
               bind_session_mac(s.mac, req.mac, req.src_ip, sessions_file)
               enrich_session_ip(req.mac, req.src_ip, sessions_file)
             end
-            return true, "from_user: " .. tostring(req.src_ip) .. " → " .. tostring(hinted_user)
+            return s ~= nil, "from_user: " .. tostring(req.src_ip) .. " → " .. tostring(hinted_user)
           end
         end
         local mac = req.mac

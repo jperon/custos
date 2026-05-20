@@ -136,21 +136,6 @@ collect_nets = function(cfg, rule)
       add_net(n)
     end
   end
-  for k, args in pairs(rule.conditions or { }) do
-    if k == "from_net" then
-      add_net(args)
-    elseif k == "from_nets" then
-      for _, n in ipairs(as_list(args)) do
-        add_net(n)
-      end
-    elseif k == "from_netlist" then
-      add_named(args)
-    elseif k == "from_netlists" then
-      for _, list_name in ipairs(as_list(args)) do
-        add_named(list_name)
-      end
-    end
-  end
   table.sort(v4)
   table.sort(v6)
   return v4, v6
@@ -183,21 +168,6 @@ collect_dest_nets = function(cfg, rule)
     local nets = named[list_name] or { }
     for _, n in ipairs(as_list(nets)) do
       add_net(n)
-    end
-  end
-  for k, args in pairs(rule.conditions or { }) do
-    if k == "to_net" then
-      add_net(args)
-    elseif k == "to_nets" then
-      for _, n in ipairs(as_list(args)) do
-        add_net(n)
-      end
-    elseif k == "to_netlist" then
-      add_named(args)
-    elseif k == "to_netlists" then
-      for _, list_name in ipairs(as_list(args)) do
-        add_named(list_name)
-      end
     end
   end
   table.sort(v4)
@@ -235,15 +205,15 @@ collect_referenced_netlists = function(cfg, plan)
   local rules_cfg = cfg.rules or { }
   for _, rule in ipairs(rules_cfg) do
     for k, args in pairs(rule.conditions or { }) do
-      if k == "from_netlist" then
+      if k == "from_net_list" or k == "from_netlist" then
         add_netlist(args)
-      elseif k == "from_netlists" then
+      elseif k == "from_net_lists" or k == "from_netlists" then
         for _, list_name in ipairs(as_list(args)) do
           add_netlist(list_name)
         end
-      elseif k == "to_netlist" then
+      elseif k == "to_net_list" or k == "to_netlist" then
         add_netlist(args)
-      elseif k == "to_netlists" then
+      elseif k == "to_net_lists" or k == "to_netlists" then
         for _, list_name in ipairs(as_list(args)) do
           add_netlist(list_name)
         end
@@ -352,93 +322,86 @@ render_netlist_sets = function(cfg, plan, indent)
   end
   return table.concat(lines, "\n")
 end
-local collect_subnets
-collect_subnets = function(rule)
-  local v4, v6 = { }, { }
-  local seen4, seen6 = { }, { }
-  local add_subnet
-  add_subnet = function(cidr_str)
-    if not (cidr_str) then
-      return 
-    end
-    local net = tostring(cidr_str):match("^%s*(.-)%s*$")
-    if not (net and #net > 0) then
-      return 
-    end
-    if net:find(":", 1, true) then
-      return append_unique(v6, seen6, net)
-    else
-      return append_unique(v4, seen4, net)
-    end
-  end
-  for k, args in pairs(rule.conditions or { }) do
-    if k == "from_subnet" then
-      if type(args) == "string" then
-        add_subnet(args)
-      elseif type(args) == "table" then
-        for _, s in ipairs(as_list(args)) do
-          add_subnet(s)
-        end
-      end
-    elseif k == "from_subnets" then
-      for _, s in ipairs(as_list(args)) do
-        if type(s) == "string" then
-          add_subnet(s)
-        elseif type(s) == "table" and s.net then
-          add_subnet(s.net)
-        end
-      end
-    end
-  end
-  table.sort(v4)
-  table.sort(v6)
-  return v4, v6
-end
-local collect_times
-collect_times = function(rule)
-  local out = { }
-  local seen = { }
-  for k, args in pairs(rule.conditions or { }) do
-    if k == "in_time" then
-      append_unique(out, seen, args)
-    elseif k == "in_times" then
-      for _, t in ipairs(as_list(args)) do
-        append_unique(out, seen, t)
-      end
-    elseif k == "in_timelist" then
-      append_unique(out, seen, args)
-    elseif k == "in_timelists" then
-      for _, list_name in ipairs(as_list(args)) do
-        append_unique(out, seen, list_name)
-      end
-    end
-  end
-  table.sort(out)
-  return out
-end
-local collect_dns
-collect_dns = function(rule)
-  local refs = { }
-  local seen = { }
-  local dns_keys = {
-    to_domain = true,
-    to_domains = true,
-    to_domainlist = true,
-    to_domainlists = true
+local collect_static_meta
+collect_static_meta = function(conditions_meta)
+  local out = {
+    src_ip4 = { },
+    src_ip6 = { },
+    dst_ip4 = { },
+    dst_ip6 = { },
+    subnet_ip4 = { },
+    subnet_ip6 = { },
+    times = { },
+    netlist_refs = { },
+    dns_scope = false
   }
-  for k, args in pairs(rule.conditions or { }) do
-    if dns_keys[k] then
-      if k == "to_domain" or k == "to_domainlist" then
-        append_unique(refs, seen, tostring(k) .. ":" .. tostring(tostring(args)))
-      elseif k == "to_domains" or k == "to_domainlists" then
-        for _, d in ipairs(as_list(args)) do
-          append_unique(refs, seen, tostring(k) .. ":" .. tostring(tostring(d)))
-        end
+  local seen = { }
+  local add
+  add = function(key, val)
+    if not (val) then
+      return 
+    end
+    local _update_0 = key
+    seen[_update_0] = seen[_update_0] or { }
+    if seen[key][val] then
+      return 
+    end
+    seen[key][val] = true
+    out[key][#out[key] + 1] = val
+  end
+  local _list_0 = (conditions_meta or { })
+  for _index_0 = 1, #_list_0 do
+    local _continue_0 = false
+    repeat
+      local cond = _list_0[_index_0]
+      local caps = cond.capabilities
+      if caps and caps.creates_dynamic_scope then
+        out.dns_scope = true
       end
+      if cond.creates_dynamic_scope then
+        out.dns_scope = true
+      end
+      local m = cond.nft_static
+      if not (m) then
+        _continue_0 = true
+        break
+      end
+      for _, v in ipairs(m.src_ip4 or { }) do
+        add("src_ip4", v)
+      end
+      for _, v in ipairs(m.src_ip6 or { }) do
+        add("src_ip6", v)
+      end
+      for _, v in ipairs(m.dst_ip4 or { }) do
+        add("dst_ip4", v)
+      end
+      for _, v in ipairs(m.dst_ip6 or { }) do
+        add("dst_ip6", v)
+      end
+      for _, v in ipairs(m.subnet_ip4 or { }) do
+        add("subnet_ip4", v)
+      end
+      for _, v in ipairs(m.subnet_ip6 or { }) do
+        add("subnet_ip6", v)
+      end
+      for _, v in ipairs(m.times or { }) do
+        add("times", v)
+      end
+      for _, v in ipairs(m.netlist_refs or { }) do
+        add("netlist_refs", v)
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
     end
   end
-  table.sort(refs)
-  return refs
+  for k, v in pairs(out) do
+    if type(v) == "table" then
+      table.sort(v)
+    end
+  end
+  return out
 end
 local normalize_proto
 normalize_proto = function(p)
@@ -509,9 +472,10 @@ build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id, rule_metadata)
   local rid = metadata_rule_id or stable_rule_id(rule, idx, used_ids)
   local src4, src6 = collect_nets(cfg, rule)
   local dst4, dst6 = collect_dest_nets(cfg, rule)
-  local subnet4, subnet6 = collect_subnets(rule)
-  local times = collect_times(rule)
-  local dns_refs = collect_dns(rule)
+  local static_meta = collect_static_meta(rule_metadata and rule_metadata.conditions or { })
+  local subnet4, subnet6 = static_meta.subnet_ip4, static_meta.subnet_ip6
+  local times = static_meta.times
+  local dns_refs = static_meta.netlist_refs
   local protos, ports = collect_proto_ports(rule)
   local action = resolve_action(rule)
   local chain = "cv_rule_" .. rid
@@ -530,7 +494,7 @@ build_rule = function(cfg, rule, idx, used_ids, metadata_rule_id, rule_metadata)
     rule_id = rid,
     description = rule.description or rid,
     action = action or "allow",
-    dns_scope = #dns_refs > 0 or requires_auth,
+    dns_scope = static_meta.dns_scope or #dns_refs > 0 or requires_auth,
     dns_refs = dns_refs,
     time_ranges = times,
     source_ipv4 = src4,
@@ -1176,7 +1140,6 @@ return {
   render_netlist_sets = render_netlist_sets,
   collect_referenced_netlists = collect_referenced_netlists,
   serialize_stable = serialize_stable,
-  collect_subnets = collect_subnets,
   build_rule = build_rule,
   compile_conditions_nft = compile_conditions_nft,
   compile_action_nft = compile_action_nft

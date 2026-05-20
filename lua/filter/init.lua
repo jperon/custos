@@ -82,9 +82,7 @@ build_filter_cfg = function()
           "allow"
         },
         conditions = {
-          {
-            to_domains = clone(cfg.allowed_domains)
-          }
+          to_domains = clone(cfg.allowed_domains)
         }
       },
       {

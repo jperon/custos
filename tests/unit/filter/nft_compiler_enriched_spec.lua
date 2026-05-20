@@ -11,7 +11,7 @@ package.loaded["filter.lib.ipcalc"] = {
     end
     return {
       cidr = cidr,
-      contains = function(ip)
+      contains = function(self, ip)
         return type(ip) == "string"
       end
     }
@@ -41,9 +41,7 @@ local cfg = {
       description = "VLAN 100 rule",
       rule_id = "vlan_rule_1",
       conditions = {
-        {
-          from_vlan = 100
-        }
+        from_vlan = 100
       },
       actions = {
         "allow"
@@ -53,9 +51,7 @@ local cfg = {
       description = "Net rule",
       rule_id = "net_rule_1",
       conditions = {
-        {
-          from_net = "192.168.0.0/16"
-        }
+        from_net = "192.168.0.0/16"
       },
       actions = {
         "allow"
@@ -71,13 +67,13 @@ assert_eq(#compiled_rules.rules_metadata, 2, "metadata for both rules")
 local plan = nft_compiler.compile(cfg, compiled_rules.rules_metadata)
 assert_eq(type(plan), "table", "compile returns plan")
 assert_eq(#plan.rules, 2, "plan has two rules")
-assert_eq(plan.rules[1].worker_only, true, "rule 1 worker_only (vlan uses _match_int)")
+assert_eq(plan.rules[1].worker_only, false, "rule 1 not worker_only (from_vlan is nft-compilable)")
 assert_eq(plan.rules[2].worker_only, false, "rule 2 not worker_only (enriched from_net)")
 assert_eq(type(plan.rules[2].conditions_meta), "table", "rule 2 has conditions_meta")
 assert_eq(#plan.rules[2].conditions_meta, 1, "one condition meta")
 assert_eq(plan.rules[2].conditions_meta[1].name, "from_net", "condition is from_net")
 assert_eq(plan.rules[2].conditions_meta[1].worker_only, false, "from_net not worker_only")
-assert_eq(plan.rules[2].conditions_meta[1].capabilities.nft_static, true, "from_net supports nft_static")
+assert_eq(plan.rules[2].conditions_meta[1].capabilities.nft, true, "from_net supports nft")
 local exprs = nft_compiler.compile_conditions_nft(plan.rules[2].conditions_meta, "ip")
 assert_eq(#exprs, 1, "one compiled expression")
 assert_eq(exprs[1], "ip saddr 192.168.0.0/16", "correct nft expression")
@@ -85,8 +81,8 @@ local rendered = nft_compiler.render(plan, "  ", true)
 assert_eq(type(rendered), "string", "render returns string")
 assert_contains(rendered, "vlan id 100", "rendered contains vlan expression")
 assert_contains(rendered, "ip saddr 192.168.0.0/16", "rendered contains net expression")
-assert_contains(rendered, "cv_rule_vlan_rule_1", "rendered contains vlan rule chain")
-assert_contains(rendered, "cv_rule_net_rule_1", "rendered contains net rule chain")
+assert_contains(rendered, "cv_rule_rule_vlan_rule_1", "rendered contains vlan rule chain")
+assert_contains(rendered, "cv_rule_rule_net_rule_1", "rendered contains net rule chain")
 print("Rendered NFT rules:")
 print("---")
 print(rendered)

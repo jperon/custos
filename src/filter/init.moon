@@ -70,7 +70,7 @@ build_filter_cfg = ->
         description: "Builtin allowlist domains"
         actions: { "allow" }
         conditions: {
-          { to_domains: clone cfg.allowed_domains }
+          to_domains: clone cfg.allowed_domains
         }
       }
       {

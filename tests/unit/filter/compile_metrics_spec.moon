@@ -12,7 +12,7 @@ package.loaded["filter.lib.ipcalc"] = {
       return nil
     {
       cidr: cidr
-      contains: (ip) -> type(ip) == "string"
+      contains: (ip) => type(ip) == "string"
     }
 }
 
@@ -32,19 +32,19 @@ cfg = {
     {
       description: "Enriched net rule"
       rule_id: "net1"
-      conditions: { { from_net: "192.168.0.0/16" } }
+      conditions: { from_net: "192.168.0.0/16" }
       actions: { "allow" }
     }
     {
       description: "Enriched mac rule"
       rule_id: "mac1"
-      conditions: { { from_mac: "aa:bb:cc:dd:ee:ff" } }
+      conditions: { from_mac: "aa:bb:cc:dd:ee:ff" }
       actions: { "allow" }
     }
     {
       description: "Legacy condition rule"
       rule_id: "legacy1"
-      conditions: { { from_vlan: 100 } }
+      conditions: { from_vlan: 100 }
       actions: { "deny" }
     }
   }
@@ -58,13 +58,12 @@ plan = nft_compiler.compile cfg, compiled_rules.rules_metadata
 assert_eq type(plan.metrics), "table", "plan has metrics"
 assert_eq plan.metrics.total_rules, 3, "3 total rules"
 
--- net and mac are enriched (not worker_only), vlan is legacy (worker_only)
-assert_eq plan.metrics.nft_compilable, 2, "2 nft-compilable rules"
-assert_eq plan.metrics.worker_only, 1, "1 worker-only rule"
+-- net, mac et vlan supportent tous nft (enriched) → 3 règles compilables.
+assert_eq plan.metrics.nft_compilable, 3, "3 nft-compilable rules"
+assert_eq plan.metrics.worker_only, 0, "0 worker-only rule"
 
--- Each rule has 1 condition
-assert_eq plan.metrics.conditions_compiled, 2, "2 conditions compiled to nft"
-assert_eq plan.metrics.conditions_worker_only, 1, "1 condition worker-only"
+assert_eq plan.metrics.conditions_compiled, 3, "3 conditions compiled to nft"
+assert_eq plan.metrics.conditions_worker_only, 0, "0 condition worker-only"
 
 print "Metrics:"
 print "  total_rules:", plan.metrics.total_rules

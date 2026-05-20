@@ -23,9 +23,7 @@ local test_rule_allow = {
   description = "Allow test",
   rule_id = "allow123",
   conditions = {
-    {
-      always_true = "test"
-    }
+    always_true = "test"
   },
   actions = {
     "allow"
@@ -53,9 +51,7 @@ local test_rule_deny = {
   description = "Deny test",
   rule_id = "deny456",
   conditions = {
-    {
-      always_true = "test"
-    }
+    always_true = "test"
   },
   actions = {
     "deny"
@@ -81,9 +77,7 @@ local test_rule_dnsonly = {
   description = "DNS only test",
   rule_id = "dns789",
   conditions = {
-    {
-      always_true = "test"
-    }
+    always_true = "test"
   },
   actions = {
     "dnsonly"
@@ -110,9 +104,7 @@ local test_rule_allow_ip4 = {
   description = "Allow IPv4 only test",
   rule_id = "allow4123",
   conditions = {
-    {
-      always_true = "test"
-    }
+    always_true = "test"
   },
   actions = {
     "allow_ip4"
@@ -139,9 +131,7 @@ local test_rule_allow_ip6 = {
   description = "Allow IPv6 only test",
   rule_id = "allow6456",
   conditions = {
-    {
-      always_true = "test"
-    }
+    always_true = "test"
   },
   actions = {
     "allow_ip6"

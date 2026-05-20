@@ -12,7 +12,7 @@ package.loaded["filter.lib.ipcalc"] = {
       return nil
     {
       cidr: cidr
-      contains: (ip) -> type(ip) == "string"
+      contains: (ip) => type(ip) == "string"
     }
 }
 
@@ -36,13 +36,13 @@ cfg = {
     {
       description: "VLAN 100 rule"
       rule_id: "vlan_rule_1"
-      conditions: { { from_vlan: 100 } }
+      conditions: { from_vlan: 100 }
       actions: { "allow" }
     }
     {
       description: "Net rule"
       rule_id: "net_rule_1"
-      conditions: { { from_net: "192.168.0.0/16" } }
+      conditions: { from_net: "192.168.0.0/16" }
       actions: { "allow" }
     }
   }
@@ -79,8 +79,9 @@ rendered = nft_compiler.render plan, "  ", true
 assert_eq type(rendered), "string", "render returns string"
 assert_contains rendered, "vlan id 100", "rendered contains vlan expression"
 assert_contains rendered, "ip saddr 192.168.0.0/16", "rendered contains net expression"
-assert_contains rendered, "cv_rule_vlan_rule_1", "rendered contains vlan rule chain"
-assert_contains rendered, "cv_rule_net_rule_1", "rendered contains net rule chain"
+-- rule_id.generate préfixe "rule_" → cv_rule_rule_<id>
+assert_contains rendered, "cv_rule_rule_vlan_rule_1", "rendered contains vlan rule chain"
+assert_contains rendered, "cv_rule_rule_net_rule_1", "rendered contains net rule chain"
 
 print "Rendered NFT rules:"
 print "---"

@@ -19,7 +19,7 @@ package.loaded["filter.lib.ipcalc"] = {
     return {
       cidr = cidr,
       is_ipv6 = is_ipv6,
-      contains = function(ip)
+      contains = function(self, ip)
         return type(ip) == "string"
       end
     }
@@ -43,9 +43,7 @@ local cfg_vlan = {
     {
       description = "VLAN test",
       conditions = {
-        {
-          from_vlan = 100
-        }
+        from_vlan = 100
       },
       actions = {
         "allow"
@@ -69,9 +67,7 @@ local cfg_net = {
     {
       description = "Net test",
       conditions = {
-        {
-          from_net = "192.168.0.0/16"
-        }
+        from_net = "192.168.0.0/16"
       },
       actions = {
         "allow"
@@ -94,9 +90,7 @@ local cfg_mac = {
     {
       description = "MAC test",
       conditions = {
-        {
-          from_mac = "aa:bb:cc:dd:ee:ff"
-        }
+        from_mac = "aa:bb:cc:dd:ee:ff"
       },
       actions = {
         "allow"
@@ -119,9 +113,7 @@ local cfg_subnet = {
     {
       description = "Subnet test",
       conditions = {
-        {
-          from_subnet = "10.0.0.0/8"
-        }
+        from_subnet = "10.0.0.0/8"
       },
       actions = {
         "allow"
@@ -144,9 +136,7 @@ local cfg_time = {
     {
       description = "Time test",
       conditions = {
-        {
-          in_time = "business_hours"
-        }
+        in_time = "business_hours"
       },
       actions = {
         "allow"
@@ -156,7 +146,6 @@ local cfg_time = {
 }
 local compiled_time = rule.compile_rules(cfg_time)
 local plan_time = nft_compiler.compile(cfg_time, compiled_time.rules_metadata)
-assert_eq(#plan_time.rules, 0, "in_time not in plan_rules (no nft conditions)")
 assert_eq(compiled_time.rules_metadata[1].worker_only, true, "in_time worker_only")
 assert_eq(compiled_time.rules_metadata[1].conditions[1].capabilities.nft, false, "in_time no nft")
 local cond_obj = compiled_time.rules_metadata[1].conditions[1]
@@ -173,9 +162,7 @@ local cfg_domain = {
     {
       description = "Domain test",
       conditions = {
-        {
-          to_domain = "example.com"
-        }
+        to_domain = "example.com"
       },
       actions = {
         "allow"
@@ -185,7 +172,6 @@ local cfg_domain = {
 }
 local compiled_domain = rule.compile_rules(cfg_domain)
 local plan_domain = nft_compiler.compile(cfg_domain, compiled_domain.rules_metadata)
-assert_eq(#plan_domain.rules, 0, "to_domain not in plan_rules (no nft conditions)")
 assert_eq(compiled_domain.rules_metadata[1].worker_only, true, "to_domain worker_only")
 assert_eq(compiled_domain.rules_metadata[1].conditions[1].creates_dynamic_scope, true, "to_domain creates_dynamic_scope")
 local expr_domain, err_domain = compiled_domain.rules_metadata[1].conditions[1].compile_nft("inet")
@@ -200,14 +186,10 @@ local cfg_combined = {
     {
       description = "Combined test",
       conditions = {
-        {
-          from_net = "192.168.0.0/16"
-        },
-        {
-          in_time = {
-            start = "09:00",
-            ["end"] = "17:00"
-          }
+        from_net = "192.168.0.0/16",
+        in_time = {
+          start = "09:00",
+          ["end"] = "17:00"
         }
       },
       actions = {
@@ -218,11 +200,19 @@ local cfg_combined = {
 }
 local compiled_combined = rule.compile_rules(cfg_combined)
 local plan_combined = nft_compiler.compile(cfg_combined, compiled_combined.rules_metadata)
-assert_eq(#plan_combined.rules, 0, "combined rule not in plan_rules (worker_only due to in_time)")
 assert_eq(compiled_combined.rules_metadata[1].worker_only, true, "combined rule worker_only (due to in_time)")
 assert_eq(#compiled_combined.rules_metadata[1].conditions, 2, "two conditions in meta")
-assert_eq(compiled_combined.rules_metadata[1].conditions[1].capabilities.nft, true, "from_net nft")
-assert_eq(compiled_combined.rules_metadata[1].conditions[2].capabilities.nft, false, "in_time no nft")
+local nft_count = 0
+local worker_count = 0
+for _, c in ipairs(compiled_combined.rules_metadata[1].conditions) do
+  if c.capabilities.nft then
+    nft_count = nft_count + 1
+  else
+    worker_count = worker_count + 1
+  end
+end
+assert_eq(nft_count, 1, "one nft condition (from_net)")
+assert_eq(worker_count, 1, "one worker condition (in_time)")
 print("  ✓ Combined rule correctly marked worker-only\n")
 print("=== All Migrated Conditions Tests PASSED ===")
 print("\nSummary:")

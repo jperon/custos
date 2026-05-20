@@ -163,7 +163,7 @@ make_plural = (base_factory) ->
             ok, msg = cond.eval req
             return true, msg if ok
           false, "no match in plural condition"
-        compile_nft: compile_nft_merged
+        compile_nft: compile_nft_merged or (-> nil, "unsupported")
       }
 
 --- Génère une condition depuis un fichier texte (1 item valide par ligne).
@@ -199,6 +199,7 @@ make_from_files = (base_factory, type_name) ->
             ok, msg = cond.eval req
             return true, msg if ok
           false, "no match in any list file"
+        compile_nft: -> nil, "unsupported"
       }
 
 --- Charge un module condition avec adaptation automatique.
@@ -323,6 +324,7 @@ create_dnsonly_action = ->
     capabilities: { worker: true, nft: false }
     eval: (req) -> "dnsonly", "DNS only (no nft)"
     verdict: -> "dnsonly"
+    compile_nft: -> nil, "dnsonly is worker-only"
   }
 
 {

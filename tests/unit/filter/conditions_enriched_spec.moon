@@ -5,18 +5,7 @@ package.loaded["config"] = {
   nft: { ip_timeout: "2m" }
 }
 
--- Stub ipcalc - simple version that matches all IPs for testing
-package.loaded["filter.lib.ipcalc"] = {
-  Net: (cidr) ->
-    -- Return nil for invalid CIDR
-    unless cidr and cidr\find("/")
-      return nil
-    -- Simple stub: matches any IP for testing
-    {
-      cidr: cidr
-      contains: (ip) -> type(ip) == "string"
-    }
-}
+-- Pas de stub ipcalc : on utilise le vrai (LuaJIT fournit inet_pton).
 
 rule = require "filter.rule"
 
@@ -29,7 +18,7 @@ print "Testing from_vlan enriched..."
 test_rule_vlan = {
   description: "VLAN test"
   rule_id: "vlan123"
-  conditions: { { from_vlan: 100 } }
+  conditions: { from_vlan: 100 }
   actions: { "allow" }
 }
 
@@ -66,7 +55,7 @@ print "Net.contains test:", net\contains "192.168.1.100"
 test_rule_net = {
   description: "Net test"
   rule_id: "net456"
-  conditions: { { from_net: "192.168.0.0/16" } }
+  conditions: { from_net: "192.168.0.0/16" }
   actions: { "allow" }
 }
 
@@ -97,7 +86,7 @@ print "Testing from_mac enriched..."
 test_rule_mac = {
   description: "MAC test"
   rule_id: "mac789"
-  conditions: { { from_mac: "aa:bb:cc:dd:ee:ff" } }
+  conditions: { from_mac: "aa:bb:cc:dd:ee:ff" }
   actions: { "allow" }
 }
 

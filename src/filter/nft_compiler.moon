@@ -82,18 +82,8 @@ collect_nets = (cfg, rule) ->
     for _, n in ipairs as_list nets
       add_net n
 
-  for k, args in pairs rule.conditions or {}
-    if k == "from_net"
-      add_net args
-    elseif k == "from_nets"
-      for _, n in ipairs as_list args
-        add_net n
-    elseif k == "from_netlist"
-      add_named args
-    elseif k == "from_netlists"
-      for _, list_name in ipairs as_list args
-        add_named list_name
-
+  -- Pas d'introspection ici : les sets statiques sont remplis via les
+  -- métadonnées enrichies des conditions (cf. collect_static_meta).
   table.sort v4
   table.sort v6
   v4, v6
@@ -118,18 +108,8 @@ collect_dest_nets = (cfg, rule) ->
     for _, n in ipairs as_list nets
       add_net n
 
-  for k, args in pairs rule.conditions or {}
-    if k == "to_net"
-      add_net args
-    elseif k == "to_nets"
-      for _, n in ipairs as_list args
-        add_net n
-    elseif k == "to_netlist"
-      add_named args
-    elseif k == "to_netlists"
-      for _, list_name in ipairs as_list args
-        add_named list_name
-
+  -- Pas d'introspection ici : les sets statiques sont remplis via les
+  -- métadonnées enrichies des conditions (cf. collect_static_meta).
   table.sort v4
   table.sort v6
   v4, v6
@@ -166,14 +146,14 @@ collect_referenced_netlists = (cfg, plan) ->
   rules_cfg = cfg.rules or {}
   for _, rule in ipairs rules_cfg
     for k, args in pairs rule.conditions or {}
-      if k == "from_netlist"
+      if k == "from_net_list" or k == "from_netlist"
         add_netlist args
-      elseif k == "from_netlists"
+      elseif k == "from_net_lists" or k == "from_netlists"
         for _, list_name in ipairs as_list args
           add_netlist list_name
-      elseif k == "to_netlist"
+      elseif k == "to_net_list" or k == "to_netlist"
         add_netlist args
-      elseif k == "to_netlists"
+      elseif k == "to_net_lists" or k == "to_netlists"
         for _, list_name in ipairs as_list args
           add_netlist list_name
 
@@ -262,74 +242,50 @@ render_netlist_sets = (cfg, plan, indent="  ") ->
 
   table.concat lines, "\n"
 
-collect_subnets = (rule) ->
-  v4, v6 = {}, {}
-  seen4, seen6 = {}, {}
-
-  add_subnet = (cidr_str) ->
-    return unless cidr_str
-    net = tostring(cidr_str)\match "^%s*(.-)%s*$"
-    return unless net and #net > 0
-    if net\find ":", 1, true
-      append_unique v6, seen6, net
-    else
-      append_unique v4, seen4, net
-
-  for k, args in pairs rule.conditions or {}
-    if k == "from_subnet"
-      if type(args) == "string"
-        add_subnet args
-      elseif type(args) == "table"
-        for _, s in ipairs as_list args
-          add_subnet s
-    elseif k == "from_subnets"
-      for _, s in ipairs as_list args
-        if type(s) == "string"
-          add_subnet s
-        elseif type(s) == "table" and s.net
-          add_subnet s.net
-
-  table.sort v4
-  table.sort v6
-  v4, v6
-
-collect_times = (rule) ->
-  out = {}
-  seen = {}
-  for k, args in pairs rule.conditions or {}
-    if k == "in_time"
-      append_unique out, seen, args
-    elseif k == "in_times"
-      for _, t in ipairs as_list args
-        append_unique out, seen, t
-    elseif k == "in_timelist"
-      append_unique out, seen, args
-    elseif k == "in_timelists"
-      for _, list_name in ipairs as_list args
-        append_unique out, seen, list_name
-
-  table.sort out
-  out
-
-collect_dns = (rule) ->
-  refs = {}
-  seen = {}
-  dns_keys = {
-    to_domain: true
-    to_domains: true
-    to_domainlist: true
-    to_domainlists: true
+-- Agrège les métadonnées statiques publiées par les conditions enrichies.
+-- Chaque condition expose éventuellement une table `nft_static` avec des
+-- listes par catégorie (src_ip4, src_ip6, dst_ip4, dst_ip6, subnet_ip4,
+-- subnet_ip6, times, netlist_refs). nft_compiler agrège sans connaître les
+-- noms de conditions : c'est aux modules de conditions de déclarer ce
+-- qu'ils contribuent.
+collect_static_meta = (conditions_meta) ->
+  out = {
+    src_ip4: {}, src_ip6: {}
+    dst_ip4: {}, dst_ip6: {}
+    subnet_ip4: {}, subnet_ip6: {}
+    times: {}
+    netlist_refs: {}
+    dns_scope: false
   }
-  for k, args in pairs rule.conditions or {}
-    if dns_keys[k]
-      if k == "to_domain" or k == "to_domainlist"
-        append_unique refs, seen, "#{k}:#{tostring(args)}"
-      elseif k == "to_domains" or k == "to_domainlists"
-        for _, d in ipairs as_list args
-          append_unique refs, seen, "#{k}:#{tostring(d)}"
+  seen = {}
+  add = (key, val) ->
+    return unless val
+    seen[key] or= {}
+    return if seen[key][val]
+    seen[key][val] = true
+    out[key][#out[key] + 1] = val
 
-  table.sort refs
-  refs
+  for cond in *(conditions_meta or {})
+    caps = cond.capabilities
+    if caps and caps.creates_dynamic_scope
+      out.dns_scope = true
+    if cond.creates_dynamic_scope
+      out.dns_scope = true
+    m = cond.nft_static
+    continue unless m
+    for _, v in ipairs(m.src_ip4    or {}) do add "src_ip4",     v
+    for _, v in ipairs(m.src_ip6    or {}) do add "src_ip6",     v
+    for _, v in ipairs(m.dst_ip4    or {}) do add "dst_ip4",     v
+    for _, v in ipairs(m.dst_ip6    or {}) do add "dst_ip6",     v
+    for _, v in ipairs(m.subnet_ip4 or {}) do add "subnet_ip4",  v
+    for _, v in ipairs(m.subnet_ip6 or {}) do add "subnet_ip6",  v
+    for _, v in ipairs(m.times      or {}) do add "times",       v
+    for _, v in ipairs(m.netlist_refs or {}) do add "netlist_refs", v
+
+  for k, v in pairs out
+    if type(v) == "table"
+      table.sort v
+  out
 
 normalize_proto = (p) ->
   v = tostring(p)\lower!
@@ -375,9 +331,11 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil, rule_metadata=nil)
   rid = metadata_rule_id or stable_rule_id rule, idx, used_ids
   src4, src6 = collect_nets cfg, rule
   dst4, dst6 = collect_dest_nets cfg, rule
-  subnet4, subnet6 = collect_subnets rule
-  times = collect_times rule
-  dns_refs = collect_dns rule
+  -- Extraire les métadonnées statiques depuis les conditions enrichies si disponibles
+  static_meta = collect_static_meta rule_metadata and rule_metadata.conditions or {}
+  subnet4, subnet6 = static_meta.subnet_ip4, static_meta.subnet_ip6
+  times = static_meta.times
+  dns_refs = static_meta.netlist_refs
   protos, ports = collect_proto_ports rule
   action = resolve_action rule
   chain = "cv_rule_" .. rid
@@ -395,7 +353,7 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil, rule_metadata=nil)
     rule_id: rid
     description: rule.description or rid
     action: action or "allow"
-    dns_scope: #dns_refs > 0 or requires_auth
+    dns_scope: static_meta.dns_scope or #dns_refs > 0 or requires_auth
     dns_refs: dns_refs
     time_ranges: times
     source_ipv4: src4
@@ -894,4 +852,4 @@ render = (plan, indent="  ", include_elements=true) ->
   lines[#lines + 1] = "#{indent}}"
   table.concat(lines, "\n") .. "\n"
 
-{ :compile, :render, :render_sets_only, :render_netlist_sets, :collect_referenced_netlists, :serialize_stable, :collect_subnets, :build_rule, :compile_conditions_nft, :compile_action_nft }
+{ :compile, :render, :render_sets_only, :render_netlist_sets, :collect_referenced_netlists, :serialize_stable, :build_rule, :compile_conditions_nft, :compile_action_nft }

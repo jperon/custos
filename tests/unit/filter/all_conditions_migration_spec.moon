@@ -17,7 +17,7 @@ package.loaded["filter.lib.ipcalc"] = {
     {
       cidr: cidr
       is_ipv6: is_ipv6
-      contains: (ip) -> type(ip) == "string"
+      contains: (ip) => type(ip) == "string"
     }
 }
 
@@ -34,7 +34,7 @@ print "=== Testing All Migrated Conditions ===\n"
 print "[Test 1] from_vlan (enriched)..."
 cfg_vlan = {
   nft: { ip_timeout: "2m" }
-  rules: {{ description: "VLAN test", conditions: {{ from_vlan: 100 }}, actions: { "allow" } }}
+  rules: {{ description: "VLAN test", conditions: { from_vlan: 100 }, actions: { "allow" } }}
 }
 compiled_vlan = rule.compile_rules cfg_vlan
 plan_vlan = nft_compiler.compile cfg_vlan, compiled_vlan.rules_metadata
@@ -48,7 +48,7 @@ print "  ✓ from_vlan enriched and compiles to 'vlan id 100'\n"
 print "[Test 2] from_net (enriched)..."
 cfg_net = {
   nft: { ip_timeout: "2m" }
-  rules: {{ description: "Net test", conditions: {{ from_net: "192.168.0.0/16" }}, actions: { "allow" } }}
+  rules: {{ description: "Net test", conditions: { from_net: "192.168.0.0/16" }, actions: { "allow" } }}
 }
 compiled_net = rule.compile_rules cfg_net
 plan_net = nft_compiler.compile cfg_net, compiled_net.rules_metadata
@@ -61,7 +61,7 @@ print "  ✓ from_net enriched and compiles to 'ip saddr <cidr>'\n"
 print "[Test 3] from_mac (enriched)..."
 cfg_mac = {
   nft: { ip_timeout: "2m" }
-  rules: {{ description: "MAC test", conditions: {{ from_mac: "aa:bb:cc:dd:ee:ff" }}, actions: { "allow" } }}
+  rules: {{ description: "MAC test", conditions: { from_mac: "aa:bb:cc:dd:ee:ff" }, actions: { "allow" } }}
 }
 compiled_mac = rule.compile_rules cfg_mac
 plan_mac = nft_compiler.compile cfg_mac, compiled_mac.rules_metadata
@@ -74,7 +74,7 @@ print "  ✓ from_mac enriched and compiles to 'ether saddr <mac>'\n"
 print "[Test 4] from_subnet (enriched)..."
 cfg_subnet = {
   nft: { ip_timeout: "2m" }
-  rules: {{ description: "Subnet test", conditions: {{ from_subnet: "10.0.0.0/8" }}, actions: { "allow" } }}
+  rules: {{ description: "Subnet test", conditions: { from_subnet: "10.0.0.0/8" }, actions: { "allow" } }}
 }
 compiled_subnet = rule.compile_rules cfg_subnet
 plan_subnet = nft_compiler.compile cfg_subnet, compiled_subnet.rules_metadata
@@ -87,13 +87,12 @@ print "  ✓ from_subnet enriched and compiles to 'ip saddr <cidr>'\n"
 print "[Test 5] in_time (enriched, worker-only)..."
 cfg_time = {
   nft: { ip_timeout: "2m" }
-  rules: {{ description: "Time test", conditions: {{ in_time: "business_hours" }}, actions: { "allow" } }}
+  rules: {{ description: "Time test", conditions: { in_time: "business_hours" }, actions: { "allow" } }}
 }
 compiled_time = rule.compile_rules cfg_time
 plan_time = nft_compiler.compile cfg_time, compiled_time.rules_metadata
--- in_time has no nft conditions → not included in plan_rules
-assert_eq #plan_time.rules, 0, "in_time not in plan_rules (no nft conditions)"
--- But the metadata is available via rules_metadata
+-- Les règles worker-only sont incluses dans plan_rules pour exposer leurs
+-- sets dynamiques (set_dyn_*) au worker, même sans condition nft.
 assert_eq compiled_time.rules_metadata[1].worker_only, true, "in_time worker_only"
 assert_eq compiled_time.rules_metadata[1].conditions[1].capabilities.nft, false, "in_time no nft"
 cond_obj = compiled_time.rules_metadata[1].conditions[1]
@@ -106,13 +105,10 @@ print "  ✓ in_time enriched and correctly worker-only\n"
 print "[Test 6] to_domain (enriched, worker-only with dynamic scope)..."
 cfg_domain = {
   nft: { ip_timeout: "2m" }
-  rules: {{ description: "Domain test", conditions: {{ to_domain: "example.com" }}, actions: { "allow" } }}
+  rules: {{ description: "Domain test", conditions: { to_domain: "example.com" }, actions: { "allow" } }}
 }
 compiled_domain = rule.compile_rules cfg_domain
 plan_domain = nft_compiler.compile cfg_domain, compiled_domain.rules_metadata
--- to_domain has no nft conditions → not included in plan_rules
-assert_eq #plan_domain.rules, 0, "to_domain not in plan_rules (no nft conditions)"
--- But the metadata is available via rules_metadata
 assert_eq compiled_domain.rules_metadata[1].worker_only, true, "to_domain worker_only"
 assert_eq compiled_domain.rules_metadata[1].conditions[1].creates_dynamic_scope, true, "to_domain creates_dynamic_scope"
 expr_domain, err_domain = compiled_domain.rules_metadata[1].conditions[1].compile_nft "inet"
@@ -127,8 +123,8 @@ cfg_combined = {
     {
       description: "Combined test"
       conditions: {
-        { from_net: "192.168.0.0/16" }      -- nft-compatible
-        { in_time: { start: "09:00", end: "17:00" } }  -- worker-only
+        from_net: "192.168.0.0/16"      -- nft-compatible
+        in_time: { start: "09:00", end: "17:00" }  -- worker-only
       }
       actions: { "allow" }
     }
@@ -136,14 +132,16 @@ cfg_combined = {
 }
 compiled_combined = rule.compile_rules cfg_combined
 plan_combined = nft_compiler.compile cfg_combined, compiled_combined.rules_metadata
--- Combined rule: has nft condition (from_net) but is worker_only (due to in_time) → not in plan_rules
-assert_eq #plan_combined.rules, 0, "combined rule not in plan_rules (worker_only due to in_time)"
 assert_eq compiled_combined.rules_metadata[1].worker_only, true, "combined rule worker_only (due to in_time)"
 assert_eq #compiled_combined.rules_metadata[1].conditions, 2, "two conditions in meta"
--- First condition should be compilable
-assert_eq compiled_combined.rules_metadata[1].conditions[1].capabilities.nft, true, "from_net nft"
--- Second condition should be worker-only
-assert_eq compiled_combined.rules_metadata[1].conditions[2].capabilities.nft, false, "in_time no nft"
+-- Verify both conditions exist by name (pairs order not guaranteed)
+nft_count = 0
+worker_count = 0
+for _, c in ipairs compiled_combined.rules_metadata[1].conditions
+  if c.capabilities.nft then nft_count += 1
+  else worker_count += 1
+assert_eq nft_count, 1, "one nft condition (from_net)"
+assert_eq worker_count, 1, "one worker condition (in_time)"
 print "  ✓ Combined rule correctly marked worker-only\n"
 
 print "=== All Migrated Conditions Tests PASSED ==="

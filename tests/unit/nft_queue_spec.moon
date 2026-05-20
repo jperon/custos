@@ -49,7 +49,7 @@ split_fields = (line) ->
 describe "nft_queue", ->
   it "cmd_for inclut le timeout demandé", ->
     q = fresh_nft_queue!
-    cmd = q.cmd_for "ip4", "192.168.1.42", "10.0.0.1", "240s"
+    cmd = q.cmd_for "ip4", "192.168.1.42", "10.0.0.1", "dns_rule", "240s"
     assert.is_not_nil cmd
     assert.is_not_nil cmd\find("timeout 240s", 1, true)
 

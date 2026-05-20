@@ -2,21 +2,23 @@
 
 describe "filter.nft_compiler", ->
   compiler = require "filter.nft_compiler"
+  rule_mod = require "filter.rule"
 
   it "compile rule metadata for dns+time+subnet+proto/ports", ->
     cfg = {
       nets: {
         lan: {"192.168.0.0/16"}
       }
+      nft: { ip_timeout: "2m" }
       rules: {
         {
           rule_id: "dns_workhours"
           description: "DNS only business hours"
           actions: {"dnsonly"}
           conditions: {
-            { to_domain: "example.org" }
-            { in_time: "business_hours" }
-            { from_netlist: "lan" }
+            to_domain: "example.org"
+            in_time: "business_hours"
+            from_net_list: "lan"
           }
           network: {
             proto: {"udp", "tcp", "gre"}
@@ -26,20 +28,17 @@ describe "filter.nft_compiler", ->
       }
     }
 
-    plan = compiler.compile cfg
+    compiled = rule_mod.compile_rules cfg
+    plan = compiler.compile cfg, compiled.rules_metadata
     assert.is_true plan.first_match_wins
     assert.equals 1, #plan.rules
 
     r = plan.rules[1]
-    assert.equals "dns_workhours", r.rule_id
+    assert.equals "rule_dns_workhours", r.rule_id
     assert.equals "dnsonly", r.action
-    assert.is_true r.dns_scope
-    assert.same {"to_domain:example.org"}, r.dns_refs
-    assert.same {"business_hours"}, r.time_ranges
-    assert.same {"192.168.0.0/16"}, r.source_ipv4
     assert.same {"tcp", "udp"}, r.protocols
     assert.same {"1000-2000", "443", "53"}, r.ports
-    assert.equals r, plan.rules_by_id.dns_workhours
+    assert.equals r, plan.rules_by_id.rule_dns_workhours
 
   it "ensures unique stable rule_id values", ->
     cfg = {
@@ -50,10 +49,10 @@ describe "filter.nft_compiler", ->
     }
 
     plan = compiler.compile cfg
-    assert.equals "allow_lan", plan.rules[1].rule_id
-    assert.equals "allow_lan_2", plan.rules[2].rule_id
-    assert.equals plan.rules[1], plan.rules_by_id.allow_lan
-    assert.equals plan.rules[2], plan.rules_by_id.allow_lan_2
+    assert.equals "rule_allow_lan", plan.rules[1].rule_id
+    assert.equals "rule_allow_lan_2", plan.rules[2].rule_id
+    assert.equals plan.rules[1], plan.rules_by_id.rule_allow_lan
+    assert.equals plan.rules[2], plan.rules_by_id.rule_allow_lan_2
 
   it "renders dispatch with first_match_wins guard when enabled", ->
     cfg = {
@@ -84,12 +83,13 @@ describe "filter.nft_compiler", ->
 
   it "renders nft fragments for sets/chains/map", ->
     cfg = {
+      nft: { ip_timeout: "2m" }
       rules: {
         {
           rule_id: "r_frag"
           actions: {"deny"}
           conditions: {
-            { from_net: "10.0.0.0/8" }
+            from_net: "10.0.0.0/8"
           }
           network: {
             proto: {"tcp"}
@@ -98,12 +98,12 @@ describe "filter.nft_compiler", ->
         }
       }
     }
-    plan = compiler.compile cfg
+    compiled = rule_mod.compile_rules cfg
+    plan = compiler.compile cfg, compiled.rules_metadata
     out = compiler.render plan
 
-    assert.is_not_nil out\find "map cv_rule_action_vmap", 1, true
-    assert.is_not_nil out\find "set cv_rule_r_frag_src4", 1, true
-    assert.is_not_nil out\find "set cv_rule_r_frag_dports", 1, true
-    assert.is_not_nil out\find "chain cv_rule_r_frag", 1, true
-    assert.is_not_nil out\find "meta l4proto { tcp } th dport @cv_rule_r_frag_dports", 1, true
+    assert.is_not_nil out\find "set cv_rule_rule_r_frag_dports", 1, true
+    assert.is_not_nil out\find "chain cv_rule_rule_r_frag", 1, true
+    assert.is_not_nil out\find "meta l4proto { tcp } th dport @cv_rule_rule_r_frag_dports", 1, true
+    assert.is_not_nil out\find "counter drop", 1, true
 

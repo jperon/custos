@@ -431,7 +431,9 @@ make_plural = function(base_factory)
           end
           return false, "no match in plural condition"
         end,
-        compile_nft = compile_nft_merged
+        compile_nft = compile_nft_merged or (function()
+          return nil, "unsupported"
+        end)
       }
     end
   end
@@ -483,6 +485,9 @@ make_from_files = function(base_factory, type_name)
             end
           end
           return false, "no match in any list file"
+        end,
+        compile_nft = function()
+          return nil, "unsupported"
         end
       }
     end
@@ -635,6 +640,9 @@ create_dnsonly_action = function()
     end,
     verdict = function()
       return "dnsonly"
+    end,
+    compile_nft = function()
+      return nil, "dnsonly is worker-only"
     end
   }
 end

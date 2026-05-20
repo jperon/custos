@@ -150,6 +150,10 @@ DEFAULTS = {
     max_rules: 1000
   }
 
+  rtp: {
+    excluded_ports: { 5060 }
+  }
+
   filter: {
     domainlists_dir: "/etc/custos/lists"
     custom_lists_dir: nil

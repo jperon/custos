@@ -11,7 +11,7 @@ package.loaded["filter.lib.ipcalc"] = {
     end
     return {
       cidr = cidr,
-      contains = function(ip)
+      contains = function(self, ip)
         return type(ip) == "string"
       end
     }
@@ -41,9 +41,7 @@ local cfg = {
       description = "Allow local net",
       rule_id = "allow_local",
       conditions = {
-        {
-          from_net = "192.168.0.0/16"
-        }
+        from_net = "192.168.0.0/16"
       },
       actions = {
         "allow"
@@ -53,9 +51,7 @@ local cfg = {
       description = "Deny specific host",
       rule_id = "deny_host",
       conditions = {
-        {
-          from_net = "192.168.1.100/32"
-        }
+        from_net = "192.168.1.100/32"
       },
       actions = {
         "deny"
@@ -65,9 +61,7 @@ local cfg = {
       description = "Deny all other",
       rule_id = "deny_all",
       conditions = {
-        {
-          from_net = "0.0.0.0/0"
-        }
+        from_net = "0.0.0.0/0"
       },
       actions = {
         "deny"
@@ -85,9 +79,9 @@ assert_eq(plan.action_map[2].action, "deny", "action is deny")
 assert_eq(plan.action_map[3].verdict, "drop", "deny rule -> drop")
 assert_eq(plan.action_map[3].action, "deny", "action is deny")
 local rendered = nft_compiler.render(plan, "  ", true)
-assert_contains(rendered, "0x4001 : accept", "action_vmap has accept")
-assert_contains(rendered, "0x4002 : drop", "action_vmap has drop for deny_host")
-assert_contains(rendered, "0x4003 : drop", "action_vmap has drop for deny_all")
+assert_contains(rendered, "set 0x4001 counter accept", "allow rule emits accept verdict")
+assert_contains(rendered, "set 0x4002 counter drop", "deny_host rule emits drop verdict")
+assert_contains(rendered, "set 0x4003 counter drop", "deny_all rule emits drop verdict")
 assert_contains(rendered, "action=allow", "allow rule has action=allow")
 assert_contains(rendered, "action=deny", "deny rule has action=deny")
 print("Rendered NFT rules with deny:")

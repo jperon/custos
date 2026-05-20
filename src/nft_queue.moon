@@ -175,20 +175,8 @@ get_set_name = (kind, rule_id) ->
     return "#{rule_id}_#{kind}"
   nil
 
--- cmd_for supports both 4-arg (backward compat) and 5-arg (new per-rule) calls
--- 4-arg: cmd_for(kind, key, ip, timeout)
--- 5-arg: cmd_for(kind, key, ip, rule_id, timeout)
-cmd_lines_for = (kind, key, ip, rule_id_or_timeout, timeout) ->
-  rule_id = nil
-  -- Detect calling convention: if 5th arg is nil, 4th is timeout (old style)
-  if timeout == nil
-    -- Old 4-arg style: (kind, key, ip, timeout)
-    timeout = rule_id_or_timeout
-    rule_id = nil
-  else
-    -- New 5-arg style: (kind, key, ip, rule_id, timeout)
-    rule_id = rule_id_or_timeout
-  
+-- cmd_for(kind, key, ip, rule_id, timeout)
+cmd_lines_for = (kind, key, ip, rule_id, timeout) ->
   timeout = sanitize_timeout timeout
   set_name = get_set_name kind, rule_id
   return nil unless set_name
@@ -217,8 +205,8 @@ cmd_lines_for = (kind, key, ip, rule_id_or_timeout, timeout) ->
   return nil if #lines == 0
   lines
 
-cmd_for = (kind, key, ip, rule_id_or_timeout, timeout) ->
-  lines = cmd_lines_for kind, key, ip, rule_id_or_timeout, timeout
+cmd_for = (kind, key, ip, rule_id, timeout) ->
+  lines = cmd_lines_for kind, key, ip, rule_id, timeout
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 

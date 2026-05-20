@@ -11,7 +11,7 @@ package.loaded["filter.lib.ipcalc"] = {
     end
     return {
       cidr = cidr,
-      contains = function(ip)
+      contains = function(self, ip)
         return type(ip) == "string"
       end
     }
@@ -35,9 +35,7 @@ local cfg = {
       description = "Enriched net rule",
       rule_id = "net1",
       conditions = {
-        {
-          from_net = "192.168.0.0/16"
-        }
+        from_net = "192.168.0.0/16"
       },
       actions = {
         "allow"
@@ -47,9 +45,7 @@ local cfg = {
       description = "Enriched mac rule",
       rule_id = "mac1",
       conditions = {
-        {
-          from_mac = "aa:bb:cc:dd:ee:ff"
-        }
+        from_mac = "aa:bb:cc:dd:ee:ff"
       },
       actions = {
         "allow"
@@ -59,9 +55,7 @@ local cfg = {
       description = "Legacy condition rule",
       rule_id = "legacy1",
       conditions = {
-        {
-          from_vlan = 100
-        }
+        from_vlan = 100
       },
       actions = {
         "deny"
@@ -73,10 +67,10 @@ local compiled_rules = rule.compile_rules(cfg)
 local plan = nft_compiler.compile(cfg, compiled_rules.rules_metadata)
 assert_eq(type(plan.metrics), "table", "plan has metrics")
 assert_eq(plan.metrics.total_rules, 3, "3 total rules")
-assert_eq(plan.metrics.nft_compilable, 2, "2 nft-compilable rules")
-assert_eq(plan.metrics.worker_only, 1, "1 worker-only rule")
-assert_eq(plan.metrics.conditions_compiled, 2, "2 conditions compiled to nft")
-assert_eq(plan.metrics.conditions_worker_only, 1, "1 condition worker-only")
+assert_eq(plan.metrics.nft_compilable, 3, "3 nft-compilable rules")
+assert_eq(plan.metrics.worker_only, 0, "0 worker-only rule")
+assert_eq(plan.metrics.conditions_compiled, 3, "3 conditions compiled to nft")
+assert_eq(plan.metrics.conditions_worker_only, 0, "0 condition worker-only")
 print("Metrics:")
 print("  total_rules:", plan.metrics.total_rules)
 print("  nft_compilable:", plan.metrics.nft_compilable)

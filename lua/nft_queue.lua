@@ -283,14 +283,7 @@ get_set_name = function(kind, rule_id)
   return nil
 end
 local cmd_lines_for
-cmd_lines_for = function(kind, key, ip, rule_id_or_timeout, timeout)
-  local rule_id = nil
-  if timeout == nil then
-    timeout = rule_id_or_timeout
-    rule_id = nil
-  else
-    rule_id = rule_id_or_timeout
-  end
+cmd_lines_for = function(kind, key, ip, rule_id, timeout)
   timeout = sanitize_timeout(timeout)
   local set_name = get_set_name(kind, rule_id)
   if not (set_name) then
@@ -327,8 +320,8 @@ cmd_lines_for = function(kind, key, ip, rule_id_or_timeout, timeout)
   return lines
 end
 local cmd_for
-cmd_for = function(kind, key, ip, rule_id_or_timeout, timeout)
-  local lines = cmd_lines_for(kind, key, ip, rule_id_or_timeout, timeout)
+cmd_for = function(kind, key, ip, rule_id, timeout)
+  local lines = cmd_lines_for(kind, key, ip, rule_id, timeout)
   if not (lines and #lines > 0) then
     return nil
   end

@@ -9,7 +9,7 @@ package.loaded["config"] = {
 package.loaded["filter.lib.ipcalc"] = {
   Net: (cidr) -> {
     cidr: cidr
-    contains: (ip) -> true
+    contains: (ip) => true
   }
 }
 
@@ -29,7 +29,7 @@ print "OK is_new_style"
 -- Test create_allow_action
 print "Testing create_allow_action..."
 allow = compiler_api.create_allow_action!
-assert_eq allow.worker_only, false, "allow not worker_only"
+assert_eq allow.capabilities.nft, true, "allow supports nft"
 assert_eq type(allow.eval), "function", "allow has eval"
 verdict, msg = allow.eval {}
 assert_eq verdict, true, "allow returns true"
@@ -40,7 +40,7 @@ print "OK create_allow_action"
 -- Test create_deny_action
 print "Testing create_deny_action..."
 deny = compiler_api.create_deny_action!
-assert_eq deny.worker_only, false, "deny not worker_only"
+assert_eq deny.capabilities.nft, true, "deny supports nft"
 verdict, _ = deny.eval {}
 assert_eq verdict, false, "deny returns false"
 ok, _ = deny.compile_nft!
@@ -50,7 +50,7 @@ print "OK create_deny_action"
 -- Test create_dnsonly_action
 print "Testing create_dnsonly_action..."
 dnsonly = compiler_api.create_dnsonly_action!
-assert_eq dnsonly.worker_only, true, "dnsonly is worker_only"
+assert_eq dnsonly.capabilities.nft, false, "dnsonly is worker-only"
 verdict, _ = dnsonly.eval {}
 assert_eq verdict, "dnsonly", "dnsonly returns string"
 ok, err = dnsonly.compile_nft!
@@ -60,7 +60,7 @@ print "OK create_dnsonly_action"
 -- Test create_net_condition
 print "Testing create_net_condition..."
 net_cond = compiler_api.create_net_condition "src_ip", "192.168.1.0/24"
-assert_eq net_cond.worker_only, false, "net condition not worker_only"
+assert_eq net_cond.capabilities.nft, true, "net condition supports nft"
 ok, _ = net_cond.eval { src_ip: "192.168.1.100" }
 assert_eq ok, true, "net condition matches"
 

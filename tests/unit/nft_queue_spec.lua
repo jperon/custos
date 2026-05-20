@@ -60,7 +60,7 @@ end
 return describe("nft_queue", function()
   it("cmd_for inclut le timeout demandé", function()
     local q = fresh_nft_queue()
-    local cmd = q.cmd_for("ip4", "192.168.1.42", "10.0.0.1", "240s")
+    local cmd = q.cmd_for("ip4", "192.168.1.42", "10.0.0.1", "dns_rule", "240s")
     assert.is_not_nil(cmd)
     return assert.is_not_nil(cmd:find("timeout 240s", 1, true))
   end)

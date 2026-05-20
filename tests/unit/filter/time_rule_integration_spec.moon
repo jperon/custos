@@ -15,8 +15,8 @@ describe "time-based rule enforcement", ->
             description: "Allow during business hours"
             actions: {"allow"}
             conditions: {
-              { to_domain: "work.com" }
-              { in_time: "business_hours" }
+              to_domain: "work.com"
+              in_time: "business_hours"
             }
           }
         }
@@ -44,8 +44,8 @@ describe "time-based rule enforcement", ->
             description: "Allow during business hours"
             actions: {"allow"}
             conditions: {
-              { to_domain: "work.com" }
-              { in_time: "business_hours" }
+              to_domain: "work.com"
+              in_time: "business_hours"
             }
           }
         }
@@ -72,8 +72,8 @@ describe "time-based rule enforcement", ->
             description: "Allow Mon-Fri 8am-5pm"
             actions: {"allow"}
             conditions: {
-              { to_domain: "youtube.com" }
-              { in_time: { start: "08:00", end: "17:00", days: {"Mon", "Tue", "Wed", "Thu", "Fri"} } }
+              to_domain: "youtube.com"
+              in_time: { start: "08:00", end: "17:00", days: {"Mon", "Tue", "Wed", "Thu", "Fri"} }
             }
           }
         }
@@ -98,8 +98,8 @@ describe "time-based rule enforcement", ->
             description: "Allow Mon-Fri 8am-5pm"
             actions: {"allow"}
             conditions: {
-              { to_domain: "youtube.com" }
-              { in_time: { start: "08:00", end: "17:00", days: {"Mon", "Tue", "Wed", "Thu", "Fri"} } }
+              to_domain: "youtube.com"
+              in_time: { start: "08:00", end: "17:00", days: {"Mon", "Tue", "Wed", "Thu", "Fri"} }
             }
           }
         }
@@ -125,8 +125,8 @@ describe "time-based rule enforcement", ->
             description: "Allow Mon-Fri 8am-5pm"
             actions: {"allow"}
             conditions: {
-              { to_domain: "youtube.com" }
-              { in_time: { start: "08:00", end: "17:00", days: {"Mon", "Tue", "Wed", "Thu", "Fri"} } }
+              to_domain: "youtube.com"
+              in_time: { start: "08:00", end: "17:00", days: {"Mon", "Tue", "Wed", "Thu", "Fri"} }
             }
           }
         }
@@ -153,16 +153,14 @@ describe "time-based rule enforcement", ->
             description: "Allow youtube only during work hours"
             actions: {"deny"}
             conditions: {
-              { to_domain: "youtube.com" }
-              { in_time: { start: "08:00", end: "17:00", days: {"Mon", "Tue", "Wed", "Thu", "Fri"} } }
+              to_domain: "youtube.com"
+              in_time: { start: "08:00", end: "17:00", days: {"Mon", "Tue", "Wed", "Thu", "Fri"} }
             }
           }
           {
             description: "Default allow all other domains"
             actions: {"allow"}
-            conditions: {
-              -- no conditions = always match
-            }
+            conditions: {}
           }
         }
         decision: {

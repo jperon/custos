@@ -4,19 +4,6 @@ package.loaded["config"] = {
     ip_timeout = "2m"
   }
 }
-package.loaded["filter.lib.ipcalc"] = {
-  Net = function(cidr)
-    if not (cidr and cidr:find("/")) then
-      return nil
-    end
-    return {
-      cidr = cidr,
-      contains = function(ip)
-        return type(ip) == "string"
-      end
-    }
-  end
-}
 local rule = require("filter.rule")
 local assert_eq
 assert_eq = function(got, expected, msg)
@@ -29,9 +16,7 @@ local test_rule_vlan = {
   description = "VLAN test",
   rule_id = "vlan123",
   conditions = {
-    {
-      from_vlan = 100
-    }
+    from_vlan = 100
   },
   actions = {
     "allow"
@@ -45,7 +30,7 @@ local eval_fn, metadata = rule.compile_rule({
 assert_eq(#metadata.conditions, 1, "one condition")
 assert_eq(metadata.conditions[1].name, "from_vlan", "condition name")
 assert_eq(metadata.conditions[1].worker_only, false, "from_vlan not worker_only")
-assert_eq(metadata.conditions[1].capabilities.nft_static, true, "from_vlan supports nft_static")
+assert_eq(metadata.conditions[1].capabilities.nft, true, "from_vlan supports nft")
 local ok, msg = eval_fn({
   vlan = 100
 })
@@ -67,9 +52,7 @@ local test_rule_net = {
   description = "Net test",
   rule_id = "net456",
   conditions = {
-    {
-      from_net = "192.168.0.0/16"
-    }
+    from_net = "192.168.0.0/16"
   },
   actions = {
     "allow"
@@ -83,7 +66,7 @@ local eval_fn2, metadata2 = rule.compile_rule({
 print("metadata2.conditions[1]:", metadata2.conditions[1])
 print("metadata2.conditions[1]._net:", metadata2.conditions[1]._net)
 assert_eq(metadata2.conditions[1].worker_only, false, "from_net not worker_only")
-assert_eq(metadata2.conditions[1].capabilities.nft_static, true, "from_net supports nft_static")
+assert_eq(metadata2.conditions[1].capabilities.nft, true, "from_net supports nft")
 local ok3, msg3 = eval_fn2({
   src_ip = "192.168.1.100"
 })
@@ -102,9 +85,7 @@ local test_rule_mac = {
   description = "MAC test",
   rule_id = "mac789",
   conditions = {
-    {
-      from_mac = "aa:bb:cc:dd:ee:ff"
-    }
+    from_mac = "aa:bb:cc:dd:ee:ff"
   },
   actions = {
     "allow"
@@ -117,7 +98,7 @@ local eval_fn3, metadata3 = rule.compile_rule({
   macs = { }
 }, test_rule_mac, 1)
 assert_eq(metadata3.conditions[1].worker_only, false, "from_mac not worker_only")
-assert_eq(metadata3.conditions[1].capabilities.nft_static, true, "from_mac supports nft_static")
+assert_eq(metadata3.conditions[1].capabilities.nft, true, "from_mac supports nft")
 local ok5
 ok5, _ = eval_fn3({
   mac = "AA:BB:CC:DD:EE:FF"

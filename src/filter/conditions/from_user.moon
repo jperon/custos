@@ -89,7 +89,7 @@ safe_get_mac = (ip_str) ->
             if s
               bind_session_mac s.mac, req.mac, req.src_ip, sessions_file
               enrich_session_ip req.mac, req.src_ip, sessions_file
-            return true, "from_user: #{req.src_ip} → #{hinted_user}"
+            return s ~= nil, "from_user: #{req.src_ip} → #{hinted_user}"
 
         -- session_for_mac indexée par MAC
         mac = req.mac

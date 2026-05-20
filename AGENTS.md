@@ -28,6 +28,7 @@ Voir [README.md](README.md) pour l'architecture complète.
 | I/O par worker et formats de messages IPC | [.agents/workers.md](.agents/workers.md) |
 | Syntaxe MoonScript, LDoc, pièges de refactoring | [.agents/skills/moonscript/SKILL.md](.agents/skills/moonscript/SKILL.md) |
 | Suites de tests et pièges OpenWrt | [.agents/testing.md](.agents/testing.md) |
+| Homelab libvirt (3 VMs OpenWrt : via/custos/servus) pour tests E2E | [libvirt/README.md](libvirt/README.md) |
 
 ---
 

@@ -16,12 +16,8 @@ return describe("time-based rule enforcement", function()
               "allow"
             },
             conditions = {
-              {
-                to_domain = "work.com"
-              },
-              {
-                in_time = "business_hours"
-              }
+              to_domain = "work.com",
+              in_time = "business_hours"
             }
           }
         },
@@ -59,12 +55,8 @@ return describe("time-based rule enforcement", function()
               "allow"
             },
             conditions = {
-              {
-                to_domain = "work.com"
-              },
-              {
-                in_time = "business_hours"
-              }
+              to_domain = "work.com",
+              in_time = "business_hours"
             }
           }
         },
@@ -98,20 +90,16 @@ return describe("time-based rule enforcement", function()
               "allow"
             },
             conditions = {
-              {
-                to_domain = "youtube.com"
-              },
-              {
-                in_time = {
-                  start = "08:00",
-                  ["end"] = "17:00",
-                  days = {
-                    "Mon",
-                    "Tue",
-                    "Wed",
-                    "Thu",
-                    "Fri"
-                  }
+              to_domain = "youtube.com",
+              in_time = {
+                start = "08:00",
+                ["end"] = "17:00",
+                days = {
+                  "Mon",
+                  "Tue",
+                  "Wed",
+                  "Thu",
+                  "Fri"
                 }
               }
             }
@@ -145,20 +133,16 @@ return describe("time-based rule enforcement", function()
               "allow"
             },
             conditions = {
-              {
-                to_domain = "youtube.com"
-              },
-              {
-                in_time = {
-                  start = "08:00",
-                  ["end"] = "17:00",
-                  days = {
-                    "Mon",
-                    "Tue",
-                    "Wed",
-                    "Thu",
-                    "Fri"
-                  }
+              to_domain = "youtube.com",
+              in_time = {
+                start = "08:00",
+                ["end"] = "17:00",
+                days = {
+                  "Mon",
+                  "Tue",
+                  "Wed",
+                  "Thu",
+                  "Fri"
                 }
               }
             }
@@ -192,20 +176,16 @@ return describe("time-based rule enforcement", function()
               "allow"
             },
             conditions = {
-              {
-                to_domain = "youtube.com"
-              },
-              {
-                in_time = {
-                  start = "08:00",
-                  ["end"] = "17:00",
-                  days = {
-                    "Mon",
-                    "Tue",
-                    "Wed",
-                    "Thu",
-                    "Fri"
-                  }
+              to_domain = "youtube.com",
+              in_time = {
+                start = "08:00",
+                ["end"] = "17:00",
+                days = {
+                  "Mon",
+                  "Tue",
+                  "Wed",
+                  "Thu",
+                  "Fri"
                 }
               }
             }
@@ -241,20 +221,16 @@ return describe("time-based rule enforcement", function()
               "deny"
             },
             conditions = {
-              {
-                to_domain = "youtube.com"
-              },
-              {
-                in_time = {
-                  start = "08:00",
-                  ["end"] = "17:00",
-                  days = {
-                    "Mon",
-                    "Tue",
-                    "Wed",
-                    "Thu",
-                    "Fri"
-                  }
+              to_domain = "youtube.com",
+              in_time = {
+                start = "08:00",
+                ["end"] = "17:00",
+                days = {
+                  "Mon",
+                  "Tue",
+                  "Wed",
+                  "Thu",
+                  "Fri"
                 }
               }
             }
