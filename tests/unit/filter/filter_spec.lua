@@ -791,6 +791,7 @@ describe("filter.conditions.from_user", function()
   }
   local FAR_FUTURE = os.time() + 86400 * 365
   before_each(function()
+    package.loaded["auth.sessions"] = nil
     local sessions_mod = require("auth.sessions")
     local write_session_file
     write_session_file = function(entries)
@@ -841,6 +842,7 @@ describe("filter.conditions.from_user", function()
     })))
   end)
   it("session expirée", function()
+    package.loaded["auth.sessions"] = nil
     local sessions_mod = require("auth.sessions")
     local write_session_file
     write_session_file = function(entries)
@@ -988,6 +990,7 @@ describe("filter.conditions.from_users (auto-généré)", function()
   }
   local FAR_FUTURE = os.time() + 86400 * 365
   before_each(function()
+    package.loaded["auth.sessions"] = nil
     local sessions_mod = require("auth.sessions")
     local write_session_file
     write_session_file = function(entries)
@@ -1072,6 +1075,7 @@ describe("filter.conditions.from_user_list (auto-généré, fichier)", function(
     return fh:close()
   end
   before_each(function()
+    package.loaded["auth.sessions"] = nil
     local sessions_mod = require("auth.sessions")
     os.execute("mkdir -p " .. tostring(LIST_DIR) .. "/user")
     local fh = io.open(tostring(LIST_DIR) .. "/user/admins.txt", "w")
@@ -1147,6 +1151,7 @@ describe("filter.conditions.from_user_lists (auto-généré, fichiers)", functio
     return fh:close()
   end
   before_each(function()
+    package.loaded["auth.sessions"] = nil
     local sessions_mod = require("auth.sessions")
     os.execute("mkdir -p " .. tostring(LIST_DIR) .. "/user")
     local fh = io.open(tostring(LIST_DIR) .. "/user/admins.txt", "w")
@@ -1185,6 +1190,7 @@ describe("filter.conditions.from_user_lists (auto-généré, fichiers)", functio
     return assert.is_true(ok)
   end)
   it("deuxième fichier liste match", function()
+    package.loaded["auth.sessions"] = nil
     local sessions_mod = require("auth.sessions")
     if io.open(SESSION_FILE, "r") then
       os.remove(SESSION_FILE)
