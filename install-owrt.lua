@@ -260,6 +260,66 @@ Installer = function(cfg)
       ok("Fichiers copiés")
       return true
     end,
+    cleanup_stale_files = function(self)
+      step("Nettoyage des fichiers obsolètes dans " .. tostring(self.cfg.dest))
+      local archive = "tmp/custos-lua.tar.gz"
+      local fh = io.popen("tar -tzf '" .. tostring(archive) .. "'")
+      if not (fh) then
+        warn("Impossible de lire l'archive — nettoyage ignoré")
+        return true
+      end
+      local entries = { }
+      for line in fh:lines() do
+        local path = line:gsub("^%./", "")
+        if path:match("%.lua$") and path ~= "" then
+          entries[#entries + 1] = path
+        end
+      end
+      fh:close()
+      table.sort(entries)
+      if not (#entries > 0) then
+        warn("Manifest vide — nettoyage ignoré")
+        return true
+      end
+      info("  " .. tostring(#entries) .. " fichiers .lua dans la version courante")
+      local manifest_path = "tmp/custos-manifest.txt"
+      fh = io.open(manifest_path, "w")
+      if not (fh) then
+        warn("Impossible d'écrire le manifest — nettoyage ignoré")
+        return true
+      end
+      fh:write(table.concat(entries, "\n") .. "\n")
+      fh:close()
+      if self.cfg.dry then
+        io.write("  " .. tostring(CYAN) .. "DRY" .. tostring(NC) .. " scp manifest → routeur puis suppression des .lua absents du manifest\n")
+        return true
+      end
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(manifest_path) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/tmp/custos-manifest.txt")) then
+        warn("Impossible d'envoyer le manifest — nettoyage ignoré")
+        return true
+      end
+      local dest = self.cfg.dest
+      local out = self:ssh_capture("find '" .. tostring(dest) .. "' -name '*.lua' | sed 's|^" .. tostring(dest) .. "/||' | while read f; do grep -qxF \"$f\" /tmp/custos-manifest.txt || echo \"$f\"; done; rm -f /tmp/custos-manifest.txt")
+      local stale = { }
+      if out then
+        for line in out:gmatch("[^\n]+") do
+          if #line > 0 and not line:match("^grep:") then
+            stale[#stale + 1] = line
+          end
+        end
+      end
+      if #stale == 0 then
+        ok("Aucun fichier obsolète")
+        return true
+      end
+      for _index_0 = 1, #stale do
+        local f = stale[_index_0]
+        info("  supprimé : " .. tostring(f))
+        self:ssh_run("rm -f '" .. tostring(dest) .. "/" .. tostring(f) .. "'")
+      end
+      ok(tostring(#stale) .. " fichier(s) obsolète(s) supprimé(s)")
+      return true
+    end,
     install_initd = function(self)
       step("Installation du service init.d/custos (procd)")
       local init_src = "packaging/openwrt/custos/files/etc/init.d/custos"
@@ -574,6 +634,12 @@ main = function()
       name = "upload fichiers",
       fn = function()
         return inst:upload_files()
+      end
+    },
+    {
+      name = "nettoyage obsolètes",
+      fn = function()
+        return inst:cleanup_stale_files()
       end
     },
     {

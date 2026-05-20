@@ -229,6 +229,68 @@ Installer = (cfg) ->
       ok "Fichiers copiés"
       true
 
+    -- Supprime les fichiers .lua présents dans @cfg.dest mais absents de l'archive
+    -- locale lua/. Évite l'accumulation de modules obsolètes entre versions.
+    cleanup_stale_files: =>
+      step "Nettoyage des fichiers obsolètes dans #{@cfg.dest}"
+      archive = "tmp/custos-lua.tar.gz"
+
+      -- Construire le manifest depuis l'archive (chemins relatifs, sans ./)
+      fh = io.popen "tar -tzf '#{archive}'"
+      unless fh
+        warn "Impossible de lire l'archive — nettoyage ignoré"
+        return true
+      entries = {}
+      for line in fh\lines!
+        path = line\gsub "^%./", ""
+        entries[#entries + 1] = path if path\match("%.lua$") and path != ""
+      fh\close!
+      table.sort entries
+
+      unless #entries > 0
+        warn "Manifest vide — nettoyage ignoré"
+        return true
+
+      info "  #{#entries} fichiers .lua dans la version courante"
+
+      -- Écrire le manifest localement et l'envoyer sur le routeur
+      manifest_path = "tmp/custos-manifest.txt"
+      fh = io.open manifest_path, "w"
+      unless fh
+        warn "Impossible d'écrire le manifest — nettoyage ignoré"
+        return true
+      fh\write table.concat(entries, "\n") .. "\n"
+      fh\close!
+
+      if @cfg.dry
+        io.write "  #{CYAN}DRY#{NC} scp manifest → routeur puis suppression des .lua absents du manifest\n"
+        return true
+
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{manifest_path} #{@cfg.user}@#{@ssh_host!}:/tmp/custos-manifest.txt"
+        warn "Impossible d'envoyer le manifest — nettoyage ignoré"
+        return true
+
+      -- Identifier les fichiers obsolètes (présents sur le routeur, absents du manifest)
+      dest = @cfg.dest
+      out = @ssh_capture "find '#{dest}' -name '*.lua' | sed 's|^#{dest}/||' | while read f; do grep -qxF \"$f\" /tmp/custos-manifest.txt || echo \"$f\"; done; rm -f /tmp/custos-manifest.txt"
+
+      stale = {}
+      if out
+        for line in out\gmatch "[^\n]+"
+          -- Ignorer les messages d'erreur grep (manifest absent, etc.)
+          stale[#stale + 1] = line if #line > 0 and not line\match "^grep:"
+
+      if #stale == 0
+        ok "Aucun fichier obsolète"
+        return true
+
+      for f in *stale
+        info "  supprimé : #{f}"
+        @ssh_run "rm -f '#{dest}/#{f}'"
+
+      ok "#{#stale} fichier(s) obsolète(s) supprimé(s)"
+      true
+
     install_initd: =>
       step "Installation du service init.d/custos (procd)"
       init_src = "packaging/openwrt/custos/files/etc/init.d/custos"
@@ -508,6 +570,7 @@ main = ->
     { name: "détection pkg mgr", fn: -> inst\detect_pkg_manager!  }
     { name: "paquets",           fn: -> inst\install_pkg_deps!    }
     { name: "upload fichiers",   fn: -> inst\upload_files!        }
+    { name: "nettoyage obsolètes", fn: -> inst\cleanup_stale_files! }
     { name: "service init.d",    fn: -> inst\install_initd!       }
     { name: "/etc/custos/",      fn: -> inst\install_etc_custos!  }
     { name: "script update",     fn: -> inst\install_updater!     }
