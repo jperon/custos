@@ -138,13 +138,7 @@ decide = (req) ->
 decide_meta = (req) ->
   unless rules
     log_warn { action: "filter_not_loaded", domain: req and req.domain or "unknown" }
-    return {
-      verdict: false
-      reason: "filter not loaded"
-      rule_id: nil
-      timeout: nil
-      description: nil
-    }
+    return { verdict: false, reason: "filter not loaded", rule_id: nil, timeout: nil, description: nil }
   _decide_meta rules, req, decision_cfg
 
 -- ── Auth config accessor ────────────────────────────────────────
@@ -154,4 +148,15 @@ decide_meta = (req) ->
 get_auth_cfg = ->
   auth_cfg_cache or {}
 
-{ :load, :decide, :decide_meta, :get_auth_cfg }
+--- Retourne les callbacks on_response pour une règle donnée (par rule_id).
+-- Utilisé par worker_responses pour le dispatch générique sans hardcode.
+-- @tparam string rule_id Identifiant de règle (depuis l'entrée IPC)
+-- @treturn table Liste (possiblement vide) de fonctions on_response
+get_rule_on_response = (rule_id) ->
+  return {} unless rules and rule_id
+  for idx, meta in ipairs (rules.rules_metadata or {})
+    if meta.rule_id == rule_id
+      return meta.on_response or {}
+  {}
+
+{ :load, :decide, :decide_meta, :get_auth_cfg, :get_rule_on_response }
