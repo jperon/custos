@@ -83,6 +83,18 @@ table bridge dns-filter-bridge {
     flags interval
   }
 
+  # IPs propres du filtre (toutes interfaces, v4 et v6).
+  # Peuplé au démarrage par nft_extra_rules via `ip addr show`.
+  # Utilisé pour restreindre les règles sport 33443/33080 aux
+  # réponses qui émanent réellement du filtre (empêche le tunnel
+  # sport-forgé depuis un hôte du LAN).
+  set filter_ips4 {
+    type ipv4_addr
+  }
+  set filter_ips6 {
+    type ipv6_addr
+  }
+
 {COMPILED_FILTER_SETS}
 
 {COMPILED_FILTER_RULES}
@@ -158,7 +170,7 @@ table bridge dns-filter-bridge {
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
     jump cv_rules_dispatch comment "Compiled filter rules"
-    meta mark vmap @cv_rule_action_vmap comment "Apply verdict from compiled rules"
+    meta mark vmap @cv_action_vmap comment "Apply verdict from compiled rules"
 
     # SNI logging/enforcement: capture TCP/443 client packets (ACK path, excluding SYN/RST/FIN) + QUIC UDP/443.
     # Certains clients envoient ClientHello sans flag PSH, donc on ne filtre pas sur PSH.
@@ -185,15 +197,29 @@ table bridge dns-filter-bridge {
     ip6 daddr fe80::/10 meta l4proto != {tcp, udp} accept comment "Non-TCP/UDP link-local v6"
 
     # Portail captif : le client doit pouvoir joindre les adresses locales du
-    # routeur (portail HTTPS + sondes de détection) même sans être dans les sets.
-    # meta pkttype host couvre toutes les IPs assignées au routeur (v4 et v6).
-    meta pkttype host accept comment "Traffic to router itself"
+    # filtre (portail HTTPS + sondes de détection) même sans être dans les sets.
+    # meta pkttype host couvre toutes les IPs assignées au filtre (v4 et v6).
+    meta pkttype host accept comment "Traffic to filter itself"
+
+    # Réponses du serveur auth (sport 33443/33080) : le SYN-ACK émis par le
+    # serveur auth vers les clients traverse le bridge dans le sens inverse du
+    # SYN initial.  Quand le client a rejoint le portail via le nom DNS externe
+    # (hairpin via routeur upstream), la connexion TCP est locale au filtre
+    # mais le SYN-ACK repasse par la chaîne FORWARD.  Sans cette règle, le
+    # ct state established/related ne matche pas (connexion locale ≠ connexion
+    # bridgée) et le SYN-ACK est rejeté par le worker reject.
+    # Accepte uniquement si la source est une IP propre du filtre (set
+    # @filter_ips4/6 peuplé par nft_extra_rules au démarrage).
+    # Empêche un hôte du LAN de forger sport=33443/33080 pour contourner
+    # le filtre.
+    ip  saddr @filter_ips4 tcp sport { 33443, 33080 } accept comment "Auth server responses (hairpin, source is filter)"
+    ip6 saddr @filter_ips6 tcp sport { 33443, 33080 } accept comment "Auth server responses (hairpin, source is filter)"
 
     # SSH management access (required for remote administration).
     tcp dport 22 accept comment "SSH management"
 
     # Authenticated client, destination not in sets → {QUEUE_REJECT} (MAC learning + forge RST or ICMP admin-prohibited).
-    # OBSOLETE: Authentication is now handled per-rule via cv_rule_rule_*_auth chains.
+    # OBSOLETE: Authentication is now handled per-rule via cv_r_*_auth chains.
     # Must come before {QUEUE_CAPTIVE} so authenticated clients never see the captive portal again.
     # ether saddr @authenticated_macs limit rate 50/second burst 10 packets log level debug prefix "custos auth ether: " counter queue num {QUEUE_REJECT} comment "Auth reject MAC"
     # ip6   saddr @authenticated_ips6 limit rate 50/second burst 10 packets log level debug prefix "custos auth ip6: "   counter queue num {QUEUE_REJECT} comment "Auth reject IPv6"
