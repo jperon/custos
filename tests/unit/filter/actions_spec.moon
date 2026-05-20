@@ -59,16 +59,14 @@ describe "filter.actions.dns_strip", ->
     assert.equals "accept", action.verdict!
 
   it "capabilities : worker=true, nft=false", ->
-    rule_cfg = { dns_strip: { rr_type: "A" } }
-    rule = { description: "Strip rule" }
-    action = (dns_strip_factory cfg, rule_cfg) rule
+    rule = { description: "Strip rule", dns_strip: { rr_type: "A" } }
+    action = (dns_strip_factory cfg) rule
     assert.is_true action.capabilities.worker
     assert.is_false action.capabilities.nft
 
   it "on_response strip A : strip les enregistrements et marque skip_nft", ->
-    rule_cfg = { dns_strip: { rr_type: "A" } }
-    rule = { description: "Strip A rule" }
-    action = (dns_strip_factory cfg, rule_cfg) rule
+    rule = { description: "Strip A rule", dns_strip: { rr_type: "A" } }
+    action = (dns_strip_factory cfg) rule
     ctx = { dns_raw: "original_dns", modified: false, skip_nft: false }
     action.on_response ctx
     assert.is_true ctx.skip_nft
@@ -76,9 +74,8 @@ describe "filter.actions.dns_strip", ->
     assert.equals "response_strip_A", ctx.action_label
 
   it "on_response strip AAAA : strip les enregistrements et marque skip_nft", ->
-    rule_cfg = { dns_strip: { rr_type: "AAAA" } }
-    rule = { description: "Strip AAAA rule" }
-    action = (dns_strip_factory cfg, rule_cfg) rule
+    rule = { description: "Strip AAAA rule", dns_strip: { rr_type: "AAAA" } }
+    action = (dns_strip_factory cfg) rule
     ctx = { dns_raw: "original_dns", modified: false, skip_nft: false }
     action.on_response ctx
     assert.is_true ctx.skip_nft
@@ -86,8 +83,7 @@ describe "filter.actions.dns_strip", ->
     assert.equals "response_strip_AAAA", ctx.action_label
 
   it "on_response : pas de modification si strip ne change rien", ->
-    rule_cfg = { dns_strip: { rr_type: "A" } }
-    rule = { description: "Strip A rule" }
+    rule = { description: "Strip A rule", dns_strip: { rr_type: "A" } }
     -- Recréer l'action avec un dns_ede qui ne strip rien
     old_stub = package.loaded["dns_ede"]
     package.loaded["dns_ede"] = nil
