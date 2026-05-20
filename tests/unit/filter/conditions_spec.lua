@@ -17,7 +17,8 @@ package.loaded[_update_1] = package.loaded[_update_1] or {
   end
 }
 local _auth_sessions_stub = {
-  session_for_mac = function()
+  session_for_mac = function(mac, src_ip, sessions_file)
+    -- Stub qui peut être remplacé dynamiquement par les tests
     return nil
   end,
   enrich_session_ip = function()
@@ -406,7 +407,8 @@ return describe("filter.conditions.from_user", function()
     return assert.is_false(v)
   end)
   it("utilisateur spécifique → true si session correspond", function()
-    _auth_sessions_stub.session_for_mac = function()
+    local original_session_for_mac = _auth_sessions_stub.session_for_mac
+    _auth_sessions_stub.session_for_mac = function(mac, src_ip, sessions_file)
       return {
         user = "alice",
         mac = "aa:bb:cc:dd:ee:ff"
@@ -418,9 +420,7 @@ return describe("filter.conditions.from_user", function()
       mac = "aa:bb:cc:dd:ee:ff"
     })
     assert.is_true(v)
-    _auth_sessions_stub.session_for_mac = function()
-      return nil
-    end
+    _auth_sessions_stub.session_for_mac = original_session_for_mac
   end)
   it("source tls : get_session nil → false", function()
     package.loaded["auth.user_sessions"] = {
