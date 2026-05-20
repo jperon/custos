@@ -24,26 +24,23 @@ describe "filter.actions.dns_strip", ->
   cfg = { nft: { ip_timeout: "2m" } }
 
   it "strip A : eval retourne true", ->
-    rule_cfg = { dns_strip: { rr_type: "A" } }
-    rule = { description: "Strip A rule" }
-    action = (dns_strip_factory cfg, rule_cfg) rule
+    rule = { description: "Strip A rule", dns_strip: { rr_type: "A" } }
+    action = (dns_strip_factory cfg) rule
     v, msg = action.eval {}
     assert.is_true v
     assert.is_not_nil msg
     assert.match "Strip A", msg
 
   it "strip AAAA : eval retourne true", ->
-    rule_cfg = { dns_strip: { rr_type: "AAAA" } }
-    rule = { description: "Strip AAAA rule" }
-    action = (dns_strip_factory cfg, rule_cfg) rule
+    rule = { description: "Strip AAAA rule", dns_strip: { rr_type: "AAAA" } }
+    action = (dns_strip_factory cfg) rule
     v, msg = action.eval {}
     assert.is_true v
     assert.match "Strip AAAA", msg
 
   it "rr_type par défaut = A", ->
-    rule_cfg = {}
     rule = { description: "Default rule" }
-    action = (dns_strip_factory cfg, rule_cfg) rule
+    action = (dns_strip_factory cfg) rule
     v, msg = action.eval {}
     assert.is_true v
     assert.match "Strip A", msg
@@ -101,7 +98,7 @@ describe "filter.actions.dns_strip", ->
       clear_ad_bit: (raw) -> raw
     }
     local_factory = require "filter.actions.dns_strip"
-    local_action = (local_factory cfg, rule_cfg) rule
+    local_action = (local_factory cfg) rule
     ctx = { dns_raw: "original_dns", modified: false, skip_nft: false }
     local_action.on_response ctx
     assert.is_true ctx.skip_nft
