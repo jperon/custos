@@ -16,7 +16,8 @@ ffi  = require "ffi"
 -- @treturn cdata, number Tableau uint64_t[] et nombre d'entrées, ou nil, msg
 local load_list
 load_list = (path) ->
-  xxhash = require "ffi_xxhash"
+  xxhash_ok, xxhash = pcall require, "ffi_xxhash"
+  return nil, "ffi_xxhash non disponible" unless xxhash_ok
   bsearch_m = require "filter.lib.bsearch"
 
   fh = io.open path, "rb"

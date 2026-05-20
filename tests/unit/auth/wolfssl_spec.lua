@@ -1,5 +1,11 @@
-local ssl = require("auth.ffi_wolfssl")
+local ssl_ok, ssl = pcall(require, "auth.ffi_wolfssl")
 return describe("auth/ffi_wolfssl", function()
+  if not ssl_ok then
+    it("libwolfssl non disponible", function()
+      return pending("libwolfssl non disponible")
+    end)
+    return 
+  end
   describe("exports du module", function()
     it("newcontext est une fonction", function()
       return assert.equals("function", type(ssl.newcontext))

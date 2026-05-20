@@ -1,8 +1,4 @@
-local hash_string, generate_self_signed, make_context, load_static, load_or_generate_sni
-do
-  local _obj_0 = require("auth.cert")
-  hash_string, generate_self_signed, make_context, load_static, load_or_generate_sni = _obj_0.hash_string, _obj_0.generate_self_signed, _obj_0.make_context, _obj_0.load_static, _obj_0.load_or_generate_sni
-end
+local cert_ok, cert_mod = pcall(require, "auth.cert")
 local has_px5g
 has_px5g = function()
   local f = io.popen("command -v px5g 2>/dev/null")
@@ -13,6 +9,16 @@ has_px5g = function()
   f:close()
   return out ~= nil and out ~= ""
 end
+if not (cert_ok) then
+  describe("auth/cert", function()
+    return it("libwolfssl non disponible", function()
+      return pending("libwolfssl non disponible")
+    end)
+  end)
+  return 
+end
+local hash_string, generate_self_signed, make_context, load_static, load_or_generate_sni
+hash_string, generate_self_signed, make_context, load_static, load_or_generate_sni = cert_mod.hash_string, cert_mod.generate_self_signed, cert_mod.make_context, cert_mod.load_static, cert_mod.load_or_generate_sni
 return describe("auth/cert", function()
   it("hash_string est déterministe", function()
     return assert.equals(hash_string("hello"), hash_string("hello"))

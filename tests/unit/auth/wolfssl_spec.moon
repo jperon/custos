@@ -3,9 +3,13 @@
 -- Les tests de handshake TLS complet nécessitent des certificats valides
 -- et sont couverts par les tests E2E.
 
-ssl = require "auth.ffi_wolfssl"
+ssl_ok, ssl = pcall require, "auth.ffi_wolfssl"
 
 describe "auth/ffi_wolfssl", ->
+  if not ssl_ok
+    it "libwolfssl non disponible", -> pending "libwolfssl non disponible"
+    return
+
   describe "exports du module", ->
     it "newcontext est une fonction", ->
       assert.equals "function", type ssl.newcontext

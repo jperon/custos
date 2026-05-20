@@ -17,9 +17,11 @@ CONV_OUTPUT = "tmp/test_convert_spec.bin"
 LUA_CMD = "LUA_PATH='lua/?.lua;lua/?/init.lua;;' luajit lua/filter/convert.lua"
 
 -- Lance le script avec les arguments donnés ; retourne true si exit 0.
+-- Lua 5.1/LuaJIT : os.execute renvoie l'exit code (0 = succès).
+-- Lua 5.2+      : renvoie (true|nil, "exit"|"signal", code).
 run_convert = (args) ->
   code = os.execute "#{LUA_CMD} #{args} 2>/dev/null"
-  code == true  -- LuaJIT/Lua 5.2+ : os.execute retourne true/false
+  code == 0 or code == true
 
 -- Lit un fichier binaire ; retourne nil en cas d'erreur.
 read_bin = (path) ->
@@ -53,22 +55,32 @@ cleanup = ->
   os.remove CONV_OUTPUT
 
 
+-- Vérifie la disponibilité de ffi_xxhash une seule fois.
+-- Notre fix dans ffi_xxhash.moon réinitialise package.loaded en cas d'échec,
+-- donc le pcall est propre même si une suite précédente avait déjà échoué.
+xxhash_ok = (pcall require, "ffi_xxhash")
+
 -- ════════════════════════════════════════════════════════════════════════════
 describe "filter/convert (CLI)", ->
 
   after_each -> cleanup!
 
-  -- ── invocation sans arguments ────────────────────────────────────────────
+  -- ── invocation sans arguments (exit non nul attendu, pas besoin de xxhash)
   describe "sans arguments", ->
 
     it "exit non nul si aucun argument", ->
       assert.is_false run_convert ""
 
-  -- ── fichier d'entrée absent ───────────────────────────────────────────────
+  -- ── fichier d'entrée absent (exit non nul attendu) ───────────────────────
   describe "fichier d'entrée absent", ->
 
     it "exit non nul si le fichier source n'existe pas", ->
       assert.is_false run_convert "tmp/__nonexistent__.domains #{CONV_OUTPUT}"
+
+  -- ── tests nécessitant libxxhash ──────────────────────────────────────────
+  unless xxhash_ok
+    it "libxxhash non disponible → tests CLI ignorés", -> pending "libxxhash non disponible"
+    return
 
   -- ── domaines valides → binaire trié ──────────────────────────────────────
   describe "domaines valides", ->

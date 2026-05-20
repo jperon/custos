@@ -1,7 +1,10 @@
 local ffi = require("ffi")
 local load_list
 load_list = function(path)
-  local xxhash = require("ffi_xxhash")
+  local xxhash_ok, xxhash = pcall(require, "ffi_xxhash")
+  if not (xxhash_ok) then
+    return nil, "ffi_xxhash non disponible"
+  end
   local bsearch_m = require("filter.lib.bsearch")
   local fh = io.open(path, "rb")
   if not (fh) then

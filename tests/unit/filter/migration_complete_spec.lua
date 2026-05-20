@@ -1,4 +1,4 @@
-package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
+package.path = "lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
 package.loaded["config"] = {
   nft = {
     ip_timeout = "2m"
@@ -48,7 +48,7 @@ package.loaded["filter.lib.ipcalc"] = {
     end
     return {
       cidr = cidr,
-      contains = function(ip)
+      contains = function(self, ip)
         return type(ip) == "string"
       end
     }
@@ -91,34 +91,33 @@ assert_is_enriched = function(obj, name)
   if not (obj.eval) then
     error(tostring(name) .. " missing eval function (not enriched)")
   end
-  if not (obj.compile_nft) then
-    return error(tostring(name) .. " missing compile_nft function (not enriched)")
+  if obj.capabilities.nft and not obj.compile_nft then
+    return error(tostring(name) .. " déclare nft:true mais n'a pas compile_nft")
   end
 end
 print("=== MIGRATION COMPLETE VERIFICATION ===\n")
 local conditions = {
   "from_vlan",
   "from_vlans",
-  "from_vlanlist",
-  "from_vlanlists",
+  "from_vlan_list",
+  "from_vlan_lists",
   "from_net",
   "from_nets",
-  "from_netlist",
-  "from_netlists",
+  "from_net_list",
+  "from_net_lists",
   "from_subnet",
   "from_mac",
   "from_macs",
-  "from_maclist",
-  "from_maclists",
+  "from_mac_list",
+  "from_mac_lists",
   "from_user",
   "from_users",
-  "from_userlist",
-  "from_userlists",
-  "from_authenticated_user",
+  "from_user_list",
+  "from_user_lists",
   "in_time",
   "in_times",
-  "in_timelist",
-  "in_timelists",
+  "in_time_list",
+  "in_time_lists",
   "to_domain",
   "to_domains",
   "to_domainlist",
@@ -139,22 +138,26 @@ for _, name in ipairs(conditions) do
   local _exp_0 = name
   if "from_vlan" == _exp_0 then
     args = 100
-  elseif "from_vlans" == _exp_0 or "from_vlanlist" == _exp_0 then
+  elseif "from_vlans" == _exp_0 then
     args = {
       100,
       200
     }
-  elseif "from_vlanlists" == _exp_0 then
+  elseif "from_vlan_list" == _exp_0 then
+    args = "corp"
+  elseif "from_vlan_lists" == _exp_0 then
     args = {
       "corp"
     }
   elseif "from_net" == _exp_0 then
     args = "192.168.0.0/16"
-  elseif "from_nets" == _exp_0 or "from_netlist" == _exp_0 then
+  elseif "from_nets" == _exp_0 then
     args = {
       "192.168.0.0/16"
     }
-  elseif "from_netlists" == _exp_0 then
+  elseif "from_net_list" == _exp_0 then
+    args = "office"
+  elseif "from_net_lists" == _exp_0 then
     args = {
       "office"
     }
@@ -164,35 +167,37 @@ for _, name in ipairs(conditions) do
     }
   elseif "from_mac" == _exp_0 then
     args = "aa:bb:cc:dd:ee:ff"
-  elseif "from_macs" == _exp_0 or "from_maclist" == _exp_0 then
+  elseif "from_macs" == _exp_0 then
     args = {
       "aa:bb:cc:dd:ee:ff"
     }
-  elseif "from_maclists" == _exp_0 then
+  elseif "from_mac_list" == _exp_0 then
+    args = "printers"
+  elseif "from_mac_lists" == _exp_0 then
     args = {
       "printers"
     }
-  elseif "from_user" == _exp_0 or "from_users" == _exp_0 then
+  elseif "from_user" == _exp_0 then
+    args = "alice"
+  elseif "from_users" == _exp_0 then
     args = {
       "alice"
     }
-  elseif "from_userlist" == _exp_0 then
+  elseif "from_user_list" == _exp_0 then
     args = "admins"
-  elseif "from_userlists" == _exp_0 then
+  elseif "from_user_lists" == _exp_0 then
     args = {
       "admins"
     }
-  elseif "from_authenticated_user" == _exp_0 then
-    args = "alice"
   elseif "in_time" == _exp_0 then
     args = "business_hours"
   elseif "in_times" == _exp_0 then
     args = {
       "business_hours"
     }
-  elseif "in_timelist" == _exp_0 then
+  elseif "in_time_list" == _exp_0 then
     args = "workdays"
-  elseif "in_timelists" == _exp_0 then
+  elseif "in_time_lists" == _exp_0 then
     args = {
       "workdays"
     }
@@ -277,8 +282,13 @@ for _, name in ipairs(actions) do
 end
 print("  ✓ All " .. tostring(#actions) .. " action modules migrated\n")
 print("[3] Checking legacy files removed...")
-local legacy_files = os.execute("ls src/filter/conditions/_match_*.moon 2>/dev/null")
-if legacy_files then
+local pipe = io.popen("ls src/filter/conditions/_match_*.moon 2>/dev/null")
+local has_legacy = false
+if pipe then
+  has_legacy = pipe:read("*a") ~= ""
+  pipe:close()
+end
+if has_legacy then
   error("Legacy _match_* files still exist!")
 end
 print("  ✓ Legacy _match_* files removed\n")

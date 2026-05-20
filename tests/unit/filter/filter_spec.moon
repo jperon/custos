@@ -550,6 +550,8 @@ describe "filter.conditions.from_user", ->
     os.remove SESSION_FILE if io.open(SESSION_FILE, "r")
     write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", FAR_FUTURE} }
     sessions_mod.reset_cache!
+    package.loaded["filter.conditions.from_user"] = nil
+    from_user = require "filter.conditions.from_user"
 
   after_each ->
     os.remove SESSION_FILE if io.open(SESSION_FILE, "r")
@@ -572,7 +574,7 @@ describe "filter.conditions.from_user", ->
       fh\write "}\n"
       fh\close!
     os.remove SESSION_FILE if io.open(SESSION_FILE, "r")
-    write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", 1} }
+    write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", os.time! - 1} }
     sessions_mod.reset_cache!
     f = (from_user USER_CFG) "alice"
     assert.is_false (f {mac: "aa:bb:cc:dd:ee:ff", src_ip: "10.0.0.1"})
@@ -883,7 +885,7 @@ describe "filter.rule", ->
       rules: {
         {
           description: "Autoriser local"
-          conditions: {{to_domain: "local"}}
+          conditions: {to_domain: "local"}
           actions: {"allow"}
         }
       }
@@ -898,7 +900,7 @@ describe "filter.rule", ->
       rules: {
         {
           description: "Bloquer evil"
-          conditions: {{to_domain: "evil.com"}}
+          conditions: {to_domain: "evil.com"}
           actions: {"deny"}
         }
       }
@@ -913,7 +915,7 @@ describe "filter.rule", ->
       rules: {
         {
           description: "Autoriser LAN"
-          conditions: {{from_net: "192.168.0.0/16"}}
+          conditions: {from_net: "192.168.0.0/16"}
           actions: {"allow"}
         }
         {
@@ -944,7 +946,7 @@ describe "filter.rule", ->
       rules: {
         {
           description: "Autoriser heures ouvrées"
-          conditions: {{in_time: "business"}}
+          conditions: {in_time: "business"}
           actions: {"allow"}
         }
         {
@@ -971,7 +973,7 @@ describe "filter.rule", ->
       rules: {
         {
           description: "Autoriser heures ouvrées"
-          conditions: {{in_time: "business"}}
+          conditions: {in_time: "business"}
           actions: {"allow"}
         }
         {
@@ -992,7 +994,7 @@ describe "filter.rule", ->
       rules: {
         {
           description: "Règle invalide"
-          conditions: {{nonexistent_condition_xyz: "foo"}}
+          conditions: {nonexistent_condition_xyz: "foo"}
           actions: {"allow"}
         }
       }
@@ -1105,32 +1107,30 @@ DOUBLECLICK.NET
 
 describe "filter.lib.load_config", ->
   { :load_config } = require "filter.lib.load_config"
-  TMP_YAML = "./tmp/test_filter_config.yml"
+  TMP_CFG = "./tmp/test_filter_config.moon"
 
   before_each ->
-    os.remove TMP_YAML if io.open(TMP_YAML, "r")
+    os.remove TMP_CFG if io.open(TMP_CFG, "r")
 
   after_each ->
-    os.remove TMP_YAML if io.open(TMP_YAML, "r")
+    os.remove TMP_CFG if io.open(TMP_CFG, "r")
 
   it "chargement valide", ->
-    yaml = [[
-domainlists_dir: /etc/custos/lists
-nets:
-  lan:
-  - 192.168.0.0/16
-times:
-  business: ["8:00", "18:00"]
-rules:
-- description: Test rule
-  actions: [allow]
-  conditions:
-  - to_domain: example.com
+    src = [[
+{
+  domainlists_dir: "/etc/custos/lists"
+  nets: { lan: {"192.168.0.0/16"} }
+  times: { business: {"8:00", "18:00"} }
+  rules: {
+    { description: "Test rule", actions: {"allow"},
+      conditions: { {to_domain: "example.com"} } }
+  }
+}
 ]]
-    fd = io.open TMP_YAML, "w"
-    fd\write yaml
+    fd = io.open TMP_CFG, "w"
+    fd\write src
     fd\close!
-    cfg, err = load_config TMP_YAML
+    cfg, err = load_config TMP_CFG
     assert.is_not_nil cfg
     assert.is_nil err
     assert.equals "/etc/custos/lists", cfg.domainlists_dir
@@ -1139,35 +1139,33 @@ rules:
     assert.equals 1, #cfg.rules
 
   it "fichier absent → nil + erreur", ->
-    cfg, err = load_config "/nonexistent.yml"
+    cfg, err = load_config "/nonexistent.moon"
     assert.is_nil cfg
     assert.is_not_nil err
     assert.is_string err
 
-  it "YAML invalide → nil + erreur", ->
-    fd = io.open TMP_YAML, "w"
-    fd\write "invalid: yaml: ["
+  it "syntaxe invalide → nil + erreur", ->
+    fd = io.open TMP_CFG, "w"
+    fd\write "{ invalid moon syntax ===\n"
     fd\close!
-    cfg, err = load_config TMP_YAML
+    cfg, err = load_config TMP_CFG
     assert.is_nil cfg
     assert.is_not_nil err
 
   it "sections manquantes → tables vides", ->
-    yaml = "rules: []\n"
-    fd = io.open TMP_YAML, "w"
-    fd\write yaml
+    fd = io.open TMP_CFG, "w"
+    fd\write "{ rules: {} }\n"
     fd\close!
-    cfg, _ = load_config TMP_YAML
+    cfg, _ = load_config TMP_CFG
     assert.equals "table", type(cfg.nets)
     assert.equals "table", type(cfg.times)
     assert.equals "table", type(cfg.sources)
 
   it "auth defaults", ->
-    yaml = "rules: []\n"
-    fd = io.open TMP_YAML, "w"
-    fd\write yaml
+    fd = io.open TMP_CFG, "w"
+    fd\write "{ rules: {} }\n"
     fd\close!
-    cfg, _ = load_config TMP_YAML
+    cfg, _ = load_config TMP_CFG
     assert.equals 33443, cfg.auth.port
     assert.equals 33080, cfg.auth.captive_port
     assert.equals "::", cfg.auth.host
@@ -1178,12 +1176,10 @@ rules:
     assert.equals "both", cfg.auth.sni_verdict.protocols
     assert.equals "fail-closed", cfg.auth.sni_verdict.nft_failure_policy
 
-  it "YAML scalaire (non-table) → nil + erreur", ->
-    -- Un fichier YAML qui n'est pas une table (ex: juste un scalaire)
-    fd = io.open TMP_YAML, "w"
-    fd\write "just a string\n"
+  it "non-table → nil + erreur", ->
+    fd = io.open TMP_CFG, "w"
+    fd\write '"just a string"\n'
     fd\close!
-    cfg, err = load_config TMP_YAML
-    -- Si lyaml parse un scalaire il retourne une string → "configuration vide ou invalide"
-    if cfg == nil
-      assert.is_not_nil err
+    cfg, err = load_config TMP_CFG
+    assert.is_nil cfg
+    assert.is_not_nil err

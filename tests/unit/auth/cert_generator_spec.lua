@@ -21,12 +21,28 @@ return describe("auth/cert_generator", function()
     return assert.is_not_nil(err)
   end)
   it("sans=nil et jours=nil → valeurs par défaut → succès (chemin nominal)", function()
+    local f = io.popen("command -v px5g 2>/dev/null")
+    local has = f and (f:read("*l") ~= nil)
+    if f then
+      f:close()
+    end
+    if not (has) then
+      pending("px5g non installé")
+    end
     local key_pem, cert_pem, ok, err = generate_self_signed("example.com")
     assert.is_true(ok, tostring(err))
     assert.is_not_nil(key_pem)
     return assert.is_not_nil(cert_pem)
   end)
   it("CN valide avec jours explicites → chemin nominal px5g", function()
+    local f = io.popen("command -v px5g 2>/dev/null")
+    local has = f and (f:read("*l") ~= nil)
+    if f then
+      f:close()
+    end
+    if not (has) then
+      pending("px5g non installé")
+    end
     local key_pem, cert_pem, ok, err = generate_self_signed("test.local", { }, 365)
     assert.is_true(ok, tostring(err))
     assert.is_not_nil(key_pem)

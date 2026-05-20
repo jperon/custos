@@ -47,7 +47,19 @@ for _, name in ipairs({
   end
 end
 if not libwolfssl then
-  local f = io.popen("find /usr/lib /lib -name 'libwolfssl*.so*' -type f 2>/dev/null | sort -V | tail -1")
+  local dirs = { }
+  for p in (os.getenv("LD_LIBRARY_PATH") or ""):gmatch("[^:]+") do
+    dirs[#dirs + 1] = p
+  end
+  for _, p in ipairs({
+    "/usr/lib",
+    "/lib",
+    "/usr/local/lib"
+  }) do
+    dirs[#dirs + 1] = p
+  end
+  local search = table.concat(dirs, " ")
+  local f = io.popen("find " .. tostring(search) .. " -name 'libwolfssl*.so*' -type f 2>/dev/null | sort -V | tail -1")
   local path = f:read("*a"):gsub("\n", "")
   f:close()
   if path and path ~= "" then
@@ -58,7 +70,7 @@ if not libwolfssl then
   end
 end
 if not libwolfssl then
-  error("libwolfssl not found in: /usr/lib, /lib, or standard search paths")
+  error("libwolfssl not found in: /usr/lib, /lib, LD_LIBRARY_PATH, or standard search paths")
 end
 local SSL_ERROR_NONE = 0
 local SSL_ERROR_WANT_READ = 2

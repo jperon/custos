@@ -1,8 +1,7 @@
 -- tests/unit/auth/cert_spec.moon
 -- Tests des utilitaires de auth/cert.
 
-{ :hash_string, :generate_self_signed, :make_context, :load_static,
-  :load_or_generate_sni } = require "auth.cert"
+cert_ok, cert_mod = pcall require, "auth.cert"
 
 has_px5g = ->
   f = io.popen "command -v px5g 2>/dev/null"
@@ -11,7 +10,16 @@ has_px5g = ->
   f\close!
   out ~= nil and out ~= ""
 
+unless cert_ok
+  describe "auth/cert", ->
+    it "libwolfssl non disponible", -> pending "libwolfssl non disponible"
+  return
+
+{ :hash_string, :generate_self_signed, :make_context, :load_static,
+  :load_or_generate_sni } = cert_mod
+
 describe "auth/cert", ->
+
 
   it "hash_string est déterministe", ->
     assert.equals hash_string("hello"), hash_string("hello")

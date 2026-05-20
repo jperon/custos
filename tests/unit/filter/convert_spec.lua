@@ -4,7 +4,7 @@ local LUA_CMD = "LUA_PATH='lua/?.lua;lua/?/init.lua;;' luajit lua/filter/convert
 local run_convert
 run_convert = function(args)
   local code = os.execute(tostring(LUA_CMD) .. " " .. tostring(args) .. " 2>/dev/null")
-  return code == true
+  return code == 0 or code == true
 end
 local read_bin
 read_bin = function(path)
@@ -48,6 +48,7 @@ cleanup = function()
   os.remove(CONV_INPUT)
   return os.remove(CONV_OUTPUT)
 end
+local xxhash_ok = (pcall(require, "ffi_xxhash"))
 return describe("filter/convert (CLI)", function()
   after_each(function()
     return cleanup()
@@ -62,6 +63,12 @@ return describe("filter/convert (CLI)", function()
       return assert.is_false(run_convert("tmp/__nonexistent__.domains " .. tostring(CONV_OUTPUT)))
     end)
   end)
+  if not (xxhash_ok) then
+    it("libxxhash non disponible → tests CLI ignorés", function()
+      return pending("libxxhash non disponible")
+    end)
+    return 
+  end
   describe("domaines valides", function()
     it("produit un fichier binaire (exit 0)", function()
       local fh = io.open(CONV_INPUT, "w")

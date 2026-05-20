@@ -1,18 +1,13 @@
-local ok, lyaml = pcall(require, "lyaml")
-if not (ok) then
-  error("lyaml introuvable — installer le paquet lua-yaml (apt install lua-yaml)")
-end
+local moon_base = require("moonscript.base")
 local load_config
 load_config = function(path)
-  local fh, err = io.open(path, "r")
-  if not (fh) then
-    return nil, "impossible d'ouvrir " .. tostring(path) .. " : " .. tostring(err)
+  local chunk, load_err = moon_base.loadfile(path)
+  if not (chunk) then
+    return nil, "impossible de charger " .. tostring(path) .. " : " .. tostring(load_err)
   end
-  local content = fh:read("*a")
-  fh:close()
-  local ok2, cfg = pcall(lyaml.load, content)
+  local ok2, cfg = pcall(chunk)
   if not (ok2) then
-    return nil, "erreur de syntaxe YAML dans " .. tostring(path) .. " : " .. tostring(cfg)
+    return nil, "erreur à l'exécution de " .. tostring(path) .. " : " .. tostring(cfg)
   end
   if not (type(cfg) == "table") then
     return nil, "configuration vide ou invalide dans " .. tostring(path)

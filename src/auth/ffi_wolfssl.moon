@@ -46,19 +46,23 @@ for _, name in ipairs({"libwolfssl.so.5.8.4.e624513f", "libwolfssl.so.5", "libwo
     libwolfssl = lib
     break
 
--- Strategy 2: If not found, scan /usr/lib for any libwolfssl*.so*
+-- Strategy 2: scan LD_LIBRARY_PATH directories then standard paths
 if not libwolfssl
-  f = io.popen("find /usr/lib /lib -name 'libwolfssl*.so*' -type f 2>/dev/null | sort -V | tail -1")
+  dirs = {}
+  for p in (os.getenv("LD_LIBRARY_PATH") or "")\gmatch("[^:]+")
+    dirs[#dirs + 1] = p
+  for _, p in ipairs({"/usr/lib", "/lib", "/usr/local/lib"})
+    dirs[#dirs + 1] = p
+  search = table.concat(dirs, " ")
+  f = io.popen("find #{search} -name 'libwolfssl*.so*' -type f 2>/dev/null | sort -V | tail -1")
   path = f\read("*a")\gsub("\n", "")
   f\close!
-
   if path and path ~= ""
     ok, lib = pcall(ffi.load, path)
-    if ok
-      libwolfssl = lib
+    libwolfssl = lib if ok
 
 if not libwolfssl
-  error "libwolfssl not found in: /usr/lib, /lib, or standard search paths"
+  error "libwolfssl not found in: /usr/lib, /lib, LD_LIBRARY_PATH, or standard search paths"
 
 -- Error codes
 SSL_ERROR_NONE = 0

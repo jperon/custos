@@ -1,28 +1,22 @@
 -- src/filter/lib/load_config.moon
--- Charge une configuration de filtre depuis un fichier YAML.
---
--- Dépendance : lyaml (paquet Debian : lua-yaml / apt install lua-yaml).
+-- Charge une configuration de filtre depuis un fichier MoonScript ou Lua.
 -- Retourne une table compatible avec la structure attendue par filter/rule.moon
 -- et les modules de conditions/actions.
 
-ok, lyaml = pcall require, "lyaml"
-unless ok
-  error "lyaml introuvable — installer le paquet lua-yaml (apt install lua-yaml)"
+moon_base = require "moonscript.base"
 
---- Charge un fichier YAML de configuration du filtre.
+--- Charge un fichier de configuration du filtre (MoonScript ou Lua).
 -- Normalise la table résultante : les sections manquantes sont initialisées
 -- à des tables vides pour éviter les nil dans le code appelant.
--- @tparam  string      path Chemin vers le fichier .yml
+-- @tparam  string      path Chemin vers le fichier .moon/.lua
 -- @treturn table|nil        Table de configuration, ou nil en cas d'erreur
 -- @treturn nil|string       Message d'erreur
 load_config = (path) ->
-  fh, err = io.open path, "r"
-  return nil, "impossible d'ouvrir #{path} : #{err}" unless fh
-  content = fh\read "*a"
-  fh\close!
+  chunk, load_err = moon_base.loadfile path
+  return nil, "impossible de charger #{path} : #{load_err}" unless chunk
 
-  ok2, cfg = pcall lyaml.load, content
-  return nil, "erreur de syntaxe YAML dans #{path} : #{cfg}" unless ok2
+  ok2, cfg = pcall chunk
+  return nil, "erreur à l'exécution de #{path} : #{cfg}" unless ok2
   return nil, "configuration vide ou invalide dans #{path}" unless type(cfg) == "table"
 
   -- Sections facultatives → tables vides par défaut
@@ -35,7 +29,6 @@ load_config = (path) ->
   cfg.userlists        = cfg.userlists        or cfg.users or {}
   cfg.users            = cfg.users            or cfg.userlists or {}
   cfg.dest_whitelist     = cfg.dest_whitelist     or {}
-  -- cfg.custom_lists_dir : nil par défaut (chemin facultatif)
 
   -- Section auth : valeurs par défaut
   cfg.auth = cfg.auth or {}
@@ -53,7 +46,6 @@ load_config = (path) ->
   auth.sni_verdict.mode = auth.sni_verdict.mode or "strict-443"
   auth.sni_verdict.protocols = auth.sni_verdict.protocols or "both"
   auth.sni_verdict.nft_failure_policy = auth.sni_verdict.nft_failure_policy or "fail-closed"
-  -- auth.cert, auth.key, auth.secrets : nil par défaut (optionnels)
 
   cfg, nil
 

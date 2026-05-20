@@ -30,6 +30,10 @@ describe "auth/cert_generator", ->
   it "sans=nil et jours=nil → valeurs par défaut → succès (chemin nominal)", ->
     -- Couvre: if sans == nil → sans={}, if days == nil → days=3650
     -- puis days = tonumber(days), cmd building, os.execute, lecture fichiers
+    f = io.popen "command -v px5g 2>/dev/null"
+    has = f and (f\read("*l") ~= nil)
+    f\close! if f
+    pending "px5g non installé" unless has
     key_pem, cert_pem, ok, err = generate_self_signed "example.com"
     assert.is_true ok, tostring(err)
     assert.is_not_nil key_pem
@@ -37,6 +41,10 @@ describe "auth/cert_generator", ->
 
   it "CN valide avec jours explicites → chemin nominal px5g", ->
     -- Couvre: days = tonumber(days) avec valeur non-nil, cmd building avec CN+days
+    f = io.popen "command -v px5g 2>/dev/null"
+    has = f and (f\read("*l") ~= nil)
+    f\close! if f
+    pending "px5g non installé" unless has
     key_pem, cert_pem, ok, err = generate_self_signed "test.local", {}, 365
     assert.is_true ok, tostring(err)
     assert.is_not_nil key_pem

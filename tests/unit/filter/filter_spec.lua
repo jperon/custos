@@ -817,7 +817,9 @@ describe("filter.conditions.from_user", function()
         FAR_FUTURE
       }
     })
-    return sessions_mod.reset_cache()
+    sessions_mod.reset_cache()
+    package.loaded["filter.conditions.from_user"] = nil
+    from_user = require("filter.conditions.from_user")
   end)
   after_each(function()
     if io.open(SESSION_FILE, "r") then
@@ -858,7 +860,7 @@ describe("filter.conditions.from_user", function()
       {
         "aa:bb:cc:dd:ee:ff",
         "alice",
-        1
+        os.time() - 1
       }
     })
     sessions_mod.reset_cache()
@@ -1392,9 +1394,7 @@ describe("filter.rule", function()
         {
           description = "Autoriser local",
           conditions = {
-            {
-              to_domain = "local"
-            }
+            to_domain = "local"
           },
           actions = {
             "allow"
@@ -1418,9 +1418,7 @@ describe("filter.rule", function()
         {
           description = "Bloquer evil",
           conditions = {
-            {
-              to_domain = "evil.com"
-            }
+            to_domain = "evil.com"
           },
           actions = {
             "deny"
@@ -1444,9 +1442,7 @@ describe("filter.rule", function()
         {
           description = "Autoriser LAN",
           conditions = {
-            {
-              from_net = "192.168.0.0/16"
-            }
+            from_net = "192.168.0.0/16"
           },
           actions = {
             "allow"
@@ -1493,9 +1489,7 @@ describe("filter.rule", function()
         {
           description = "Autoriser heures ouvrées",
           conditions = {
-            {
-              in_time = "business"
-            }
+            in_time = "business"
           },
           actions = {
             "allow"
@@ -1540,9 +1534,7 @@ describe("filter.rule", function()
         {
           description = "Autoriser heures ouvrées",
           conditions = {
-            {
-              in_time = "business"
-            }
+            in_time = "business"
           },
           actions = {
             "allow"
@@ -1578,9 +1570,7 @@ describe("filter.rule", function()
         {
           description = "Règle invalide",
           conditions = {
-            {
-              nonexistent_condition_xyz = "foo"
-            }
+            nonexistent_condition_xyz = "foo"
           },
           actions = {
             "allow"
@@ -1721,34 +1711,32 @@ end)
 return describe("filter.lib.load_config", function()
   local load_config
   load_config = require("filter.lib.load_config").load_config
-  local TMP_YAML = "./tmp/test_filter_config.yml"
+  local TMP_CFG = "./tmp/test_filter_config.moon"
   before_each(function()
-    if io.open(TMP_YAML, "r") then
-      return os.remove(TMP_YAML)
+    if io.open(TMP_CFG, "r") then
+      return os.remove(TMP_CFG)
     end
   end)
   after_each(function()
-    if io.open(TMP_YAML, "r") then
-      return os.remove(TMP_YAML)
+    if io.open(TMP_CFG, "r") then
+      return os.remove(TMP_CFG)
     end
   end)
   it("chargement valide", function()
-    local yaml = [[domainlists_dir: /etc/custos/lists
-nets:
-  lan:
-  - 192.168.0.0/16
-times:
-  business: ["8:00", "18:00"]
-rules:
-- description: Test rule
-  actions: [allow]
-  conditions:
-  - to_domain: example.com
+    local src = [[{
+  domainlists_dir: "/etc/custos/lists"
+  nets: { lan: {"192.168.0.0/16"} }
+  times: { business: {"8:00", "18:00"} }
+  rules: {
+    { description: "Test rule", actions: {"allow"},
+      conditions: { {to_domain: "example.com"} } }
+  }
+}
 ]]
-    local fd = io.open(TMP_YAML, "w")
-    fd:write(yaml)
+    local fd = io.open(TMP_CFG, "w")
+    fd:write(src)
     fd:close()
-    local cfg, err = load_config(TMP_YAML)
+    local cfg, err = load_config(TMP_CFG)
     assert.is_not_nil(cfg)
     assert.is_nil(err)
     assert.equals("/etc/custos/lists", cfg.domainlists_dir)
@@ -1757,35 +1745,33 @@ rules:
     return assert.equals(1, #cfg.rules)
   end)
   it("fichier absent → nil + erreur", function()
-    local cfg, err = load_config("/nonexistent.yml")
+    local cfg, err = load_config("/nonexistent.moon")
     assert.is_nil(cfg)
     assert.is_not_nil(err)
     return assert.is_string(err)
   end)
-  it("YAML invalide → nil + erreur", function()
-    local fd = io.open(TMP_YAML, "w")
-    fd:write("invalid: yaml: [")
+  it("syntaxe invalide → nil + erreur", function()
+    local fd = io.open(TMP_CFG, "w")
+    fd:write("{ invalid moon syntax ===\n")
     fd:close()
-    local cfg, err = load_config(TMP_YAML)
+    local cfg, err = load_config(TMP_CFG)
     assert.is_nil(cfg)
     return assert.is_not_nil(err)
   end)
   it("sections manquantes → tables vides", function()
-    local yaml = "rules: []\n"
-    local fd = io.open(TMP_YAML, "w")
-    fd:write(yaml)
+    local fd = io.open(TMP_CFG, "w")
+    fd:write("{ rules: {} }\n")
     fd:close()
-    local cfg, _ = load_config(TMP_YAML)
+    local cfg, _ = load_config(TMP_CFG)
     assert.equals("table", type(cfg.nets))
     assert.equals("table", type(cfg.times))
     return assert.equals("table", type(cfg.sources))
   end)
   it("auth defaults", function()
-    local yaml = "rules: []\n"
-    local fd = io.open(TMP_YAML, "w")
-    fd:write(yaml)
+    local fd = io.open(TMP_CFG, "w")
+    fd:write("{ rules: {} }\n")
     fd:close()
-    local cfg, _ = load_config(TMP_YAML)
+    local cfg, _ = load_config(TMP_CFG)
     assert.equals(33443, cfg.auth.port)
     assert.equals(33080, cfg.auth.captive_port)
     assert.equals("::", cfg.auth.host)
@@ -1796,13 +1782,12 @@ rules:
     assert.equals("both", cfg.auth.sni_verdict.protocols)
     return assert.equals("fail-closed", cfg.auth.sni_verdict.nft_failure_policy)
   end)
-  return it("YAML scalaire (non-table) → nil + erreur", function()
-    local fd = io.open(TMP_YAML, "w")
-    fd:write("just a string\n")
+  return it("non-table → nil + erreur", function()
+    local fd = io.open(TMP_CFG, "w")
+    fd:write('"just a string"\n')
     fd:close()
-    local cfg, err = load_config(TMP_YAML)
-    if cfg == nil then
-      return assert.is_not_nil(err)
-    end
+    local cfg, err = load_config(TMP_CFG)
+    assert.is_nil(cfg)
+    return assert.is_not_nil(err)
   end)
 end)

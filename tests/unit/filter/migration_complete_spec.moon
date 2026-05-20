@@ -1,5 +1,7 @@
 -- Final test: verify all modules migrated to enriched API
-package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
+-- Ne pas ajouter src/ au package.path : les .lua compilés sont dans lua/,
+-- et des .lua parasites dans src/ pollueraient les suites suivantes.
+package.path = "lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
 
 package.loaded["config"] = {
   nft: { ip_timeout: "2m" }
@@ -20,7 +22,7 @@ package.loaded["filter.lib.ipcalc"] = {
       return nil
     {
       cidr: cidr
-      contains: (ip) -> type(ip) == "string"
+      contains: (ip) => type(ip) == "string"
     }
 }
 
@@ -53,19 +55,21 @@ assert_is_enriched = (obj, name) ->
     error "#{name} missing capabilities (not enriched)"
   unless obj.eval
     error "#{name} missing eval function (not enriched)"
-  unless obj.compile_nft
-    error "#{name} missing compile_nft function (not enriched)"
+  -- compile_nft est optionnel : les conditions worker-only ne le définissent
+  -- pas. capabilities.nft = true requiert en revanche compile_nft.
+  if obj.capabilities.nft and not obj.compile_nft
+    error "#{name} déclare nft:true mais n'a pas compile_nft"
 
 print "=== MIGRATION COMPLETE VERIFICATION ===\n"
 
--- List of all condition modules to check
+-- List of all condition modules to check. Les variantes _list/_lists et le
+-- pluriel sont auto-générées par compiler_api.load_condition (cf. README).
 conditions = {
-  "from_vlan", "from_vlans", "from_vlanlist", "from_vlanlists"
-  "from_net", "from_nets", "from_netlist", "from_netlists", "from_subnet"
-  "from_mac", "from_macs", "from_maclist", "from_maclists"
-  "from_user", "from_users", "from_userlist", "from_userlists"
-  "from_authenticated_user"
-  "in_time", "in_times", "in_timelist", "in_timelists"
+  "from_vlan", "from_vlans", "from_vlan_list", "from_vlan_lists"
+  "from_net", "from_nets", "from_net_list", "from_net_lists", "from_subnet"
+  "from_mac", "from_macs", "from_mac_list", "from_mac_lists"
+  "from_user", "from_users", "from_user_list", "from_user_lists"
+  "in_time", "in_times", "in_time_list", "in_time_lists"
   "to_domain", "to_domains", "to_domainlist", "to_domainlists"
   "stolen_computer"
 }
@@ -84,23 +88,26 @@ for _, name in ipairs conditions
   -- Create with appropriate args
   args = switch name
     when "from_vlan" then 100
-    when "from_vlans", "from_vlanlist" then {100, 200}
-    when "from_vlanlists" then {"corp"}
+    when "from_vlans" then {100, 200}
+    when "from_vlan_list" then "corp"
+    when "from_vlan_lists" then {"corp"}
     when "from_net" then "192.168.0.0/16"
-    when "from_nets", "from_netlist" then {"192.168.0.0/16"}
-    when "from_netlists" then {"office"}
+    when "from_nets" then {"192.168.0.0/16"}
+    when "from_net_list" then "office"
+    when "from_net_lists" then {"office"}
     when "from_subnet" then {net: "10.0.0.0/8"}
     when "from_mac" then "aa:bb:cc:dd:ee:ff"
-    when "from_macs", "from_maclist" then {"aa:bb:cc:dd:ee:ff"}
-    when "from_maclists" then {"printers"}
-    when "from_user", "from_users" then {"alice"}
-    when "from_userlist" then "admins"
-    when "from_userlists" then {"admins"}
-    when "from_authenticated_user" then "alice"
+    when "from_macs" then {"aa:bb:cc:dd:ee:ff"}
+    when "from_mac_list" then "printers"
+    when "from_mac_lists" then {"printers"}
+    when "from_user" then "alice"
+    when "from_users" then {"alice"}
+    when "from_user_list" then "admins"
+    when "from_user_lists" then {"admins"}
     when "in_time" then "business_hours"
     when "in_times" then {"business_hours"}
-    when "in_timelist" then "workdays"
-    when "in_timelists" then {"workdays"}
+    when "in_time_list" then "workdays"
+    when "in_time_lists" then {"workdays"}
     when "to_domain" then "example.com"
     when "to_domains" then {"example.com"}
     when "to_domainlist" then "blocked"
@@ -127,8 +134,14 @@ for _, name in ipairs actions
 print "  ✓ All #{#actions} action modules migrated\n"
 
 print "[3] Checking legacy files removed..."
-legacy_files = os.execute "ls src/filter/conditions/_match_*.moon 2>/dev/null"
-if legacy_files
+-- os.execute renvoie un code de sortie variable selon Lua/LuaJIT : on lit
+-- explicitement la sortie de la commande pour vérifier l'absence des fichiers.
+pipe = io.popen "ls src/filter/conditions/_match_*.moon 2>/dev/null"
+has_legacy = false
+if pipe
+  has_legacy = pipe\read("*a") ~= ""
+  pipe\close!
+if has_legacy
   error "Legacy _match_* files still exist!"
 print "  ✓ Legacy _match_* files removed\n"
 

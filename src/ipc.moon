@@ -20,9 +20,6 @@ IPC_WRITE_RETRY_COUNT = 5
 EAGAIN = 11
 EWOULDBLOCK = 11
 
-AF_INET6 = runtime_cfg.af_inet6 or 10
-ipv6_ntop_buf = ffi.new "char[46]"
-
 timespec_ptr_t = ffi.typeof "timespec_t[1]"
 read_buf = ffi.new "uint8_t[?]", IPC_READ_CHUNK
 
