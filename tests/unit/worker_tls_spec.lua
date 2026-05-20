@@ -1,15 +1,21 @@
-local _update_0 = "nft_queue"
-package.loaded[_update_0] = package.loaded[_update_0] or {
+-- Stubs pour nft_queue et nft (nécessaires pour make test normal)
+-- On réinitialise le cache de worker_tls avant de définir les stubs
+local worker_tls = require("worker_tls")
+if worker_tls.reset_nft_modules then
+  worker_tls.reset_nft_modules()
+end
+
+package.loaded["nft_queue"] = {
   cmd_for = function(kind, src, dst, rule_id, timeout)
     return "add element bridge dns-filter-bridge " .. tostring(kind) .. "_allowed { " .. tostring(src) .. " . " .. tostring(dst) .. " timeout " .. tostring(timeout) .. " }"
   end
 }
-local _update_1 = "nft"
-package.loaded[_update_1] = package.loaded[_update_1] or {
+package.loaded["nft"] = {
   run_cmd = function(cmd, opts)
     return true, nil
   end
 }
+
 return describe("worker_tls helpers", function()
   local sni_logger = require("worker_tls")
   describe("normalize_sni", function()
@@ -54,11 +60,11 @@ return describe("worker_tls helpers", function()
     end)
   end)
   return describe("apply_nft_allow", function()
-    pending("IPv4 pair valide → true", function()
+    it("IPv4 pair valide → true", function()
       local ok, err = sni_logger.apply_nft_allow("192.168.1.1", "8.8.8.8", nil, { }, "r_test")
       return assert.is_true(ok)
     end)
-    pending("IPv4 avec MAC valide → true", function()
+    it("IPv4 avec MAC valide → true", function()
       local ok, _ = sni_logger.apply_nft_allow("192.168.1.1", "8.8.8.8", "aa:bb:cc:dd:ee:ff", { }, "r_test")
       return assert.is_true(ok)
     end)
@@ -78,15 +84,15 @@ return describe("worker_tls helpers", function()
       local ok, err = sni_logger.apply_nft_allow("192.168.1.1", "2001:db8::1", nil, { }, "r_test")
       return assert.is_false(ok)
     end)
-    pending("IPv6 pair valide → true", function()
+    it("IPv6 pair valide → true", function()
       local ok, _ = sni_logger.apply_nft_allow("2001:db8::1", "2001:db8::2", nil, { }, "r_test")
       return assert.is_true(ok)
     end)
-    pending("MAC 'unknown' ignoré (pas de commande MAC)", function()
+    it("MAC 'unknown' ignoré (pas de commande MAC)", function()
       local ok, _ = sni_logger.apply_nft_allow("192.168.1.1", "8.8.8.8", "unknown", { }, "r_test")
       return assert.is_true(ok)
     end)
-    return pending("MAC 00:00:00:00:00:00 ignoré", function()
+    return it("MAC 00:00:00:00:00:00 ignoré", function()
       local ok, _ = sni_logger.apply_nft_allow("192.168.1.1", "8.8.8.8", "00:00:00:00:00:00", { }, "r_test")
       return assert.is_true(ok)
     end)

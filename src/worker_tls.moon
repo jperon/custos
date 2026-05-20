@@ -433,6 +433,11 @@ ensure_nft_modules = ->
 
   true, nil
 
+-- Réinitialise le cache des modules nft (utile pour les tests avec stubs)
+reset_nft_modules = ->
+  cmd_for = nil
+  run_cmd = nil
+
 apply_nft_allow = (src_ip, dst_ip, mac, policy, rule_id) ->
   ok_mods, mod_err = ensure_nft_modules!
   return false, mod_err unless ok_mods
@@ -859,7 +864,7 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
     action: "policy_loaded"
     queue: queue_num
     mode: sni_policy.mode
-    protocols: sni_policy.protocols
+    protocols: sni_policy.protocols, :reset_nft_modules
     nft_failure_policy: sni_policy.nft_failure_policy
   }
   run_queue tonumber(queue_num), handle_sni_packet

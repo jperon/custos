@@ -570,6 +570,11 @@ ensure_nft_modules = function()
   end
   return true, nil
 end
+local reset_nft_modules
+reset_nft_modules = function()
+  cmd_for = nil
+  run_cmd = nil
+end
 local apply_nft_allow
 apply_nft_allow = function(src_ip, dst_ip, mac, policy, rule_id)
   local ok_mods, mod_err = ensure_nft_modules()
@@ -1082,6 +1087,7 @@ run = function(queue_num, ev_wfd, filter_data)
     queue = queue_num,
     mode = sni_policy.mode,
     protocols = sni_policy.protocols,
+    reset_nft_modules = reset_nft_modules,
     nft_failure_policy = sni_policy.nft_failure_policy
   })
   return run_queue(tonumber(queue_num), handle_sni_packet)
