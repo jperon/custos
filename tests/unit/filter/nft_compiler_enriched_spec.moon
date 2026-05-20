@@ -79,9 +79,9 @@ rendered = nft_compiler.render plan, "  ", true
 assert_eq type(rendered), "string", "render returns string"
 assert_contains rendered, "vlan id 100", "rendered contains vlan expression"
 assert_contains rendered, "ip saddr 192.168.0.0/16", "rendered contains net expression"
--- rule_id.generate préfixe "rule_" → cv_rule_rule_<id>
-assert_contains rendered, "cv_rule_rule_vlan_rule_1", "rendered contains vlan rule chain"
-assert_contains rendered, "cv_rule_rule_net_rule_1", "rendered contains net rule chain"
+-- rule_id.generate préfixe "r_" → cv_r_<id>
+assert_contains rendered, "cv_r_vlan_rule_1", "rendered contains vlan rule chain"
+assert_contains rendered, "cv_r_net_rule_1", "rendered contains net rule chain"
 
 print "Rendered NFT rules:"
 print "---"

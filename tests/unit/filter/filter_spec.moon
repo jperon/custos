@@ -1021,21 +1021,18 @@ describe "filter.rule", ->
 describe "filter.actions.dnsonly", ->
   dnsonly_action = require "filter.actions.dnsonly"
 
-  it "retourne \"dnsonly\"", ->
+  it "retourne true (verdict allow)", ->
     factory = dnsonly_action {}
-    rule_fn = factory {description: "test-dnsonly"}
-    v, msg = rule_fn {domain: "example.com", src_ip: "1.2.3.4", mac: "aa:bb:cc:dd:ee:ff", ts: os.time!}
-    assert.equals "dnsonly", v
+    obj = factory {description: "test-dnsonly"}
+    v, msg = obj.eval {domain: "example.com", src_ip: "1.2.3.4", mac: "aa:bb:cc:dd:ee:ff", ts: os.time!}
+    assert.is_true v
     assert.is_not_nil msg
     assert msg\find("DNS only", 1, true)
 
-  it "verdict distinct de true/false", ->
+  it "déclare on_response", ->
     factory = dnsonly_action {}
-    rule_fn = factory {description: "test"}
-    v, _ = rule_fn {}
-    assert.equals "string", type(v)
-    assert.is_not_true v  -- pas true
-    assert.is_not_false v -- pas false
+    obj = factory {description: "test"}
+    assert.equals "function", type(obj.on_response)
 
 describe "filter.lib.parse_domains", ->
   { :parse, :parse_simple, :parse_hosts, :parse_adblock, :is_valid } = require "filter.lib.parse_domains"

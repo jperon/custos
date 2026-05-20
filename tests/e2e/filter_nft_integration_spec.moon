@@ -22,7 +22,7 @@ package.loaded["filter.lib.ipcalc"] = {
     {
       cidr: cidr
       is_ipv6: is_ipv6
-      contains: (ip) ->
+      contains: (ip) =>
         return false unless type(ip) == "string"
         if is_ipv6
           return ip\find(":") ~= nil
@@ -55,8 +55,8 @@ filter_cfg = {
       description: "Allow local office net"
       rule_id: "office_net"
       conditions: {
-        { from_net: "192.168.10.0/24" }
-        { from_mac: "aa:bb:cc:dd:ee:01" }
+        from_net: "192.168.10.0/24"
+        from_mac: "aa:bb:cc:dd:ee:01"
       }
       actions: { "allow" }
     }
@@ -64,7 +64,7 @@ filter_cfg = {
       description: "Block specific host"
       rule_id: "blocked_host"
       conditions: {
-        { from_net: "192.168.10.50/32" }
+        from_net: "192.168.10.50/32"
       }
       actions: { "deny" }
     }
@@ -72,7 +72,7 @@ filter_cfg = {
       description: "DNS only for guest vlan"
       rule_id: "guest_dns"
       conditions: {
-        { from_vlan: 999 }
+        from_vlan: 999
       }
       actions: { "dnsonly" }
     }
@@ -138,13 +138,13 @@ rendered = nft_compiler.render plan, "  ", true
 assert_eq type(rendered), "string", "rendered rules"
 
 -- Verify rendered content
-assert_contains rendered, "cv_rule_office_net", "office_net chain present"
-assert_contains rendered, "cv_rule_blocked_host", "blocked_host chain present"
-assert_contains rendered, "cv_rule_guest_dns", "guest_dns chain present"
+assert_contains rendered, "cv_r_office_net", "office_net chain present"
+assert_contains rendered, "cv_r_blocked_host", "blocked_host chain present"
+assert_contains rendered, "cv_r_guest_dns", "guest_dns chain present"
 assert_contains rendered, "ip saddr 192.168.10.0/24", "office net condition"
 assert_contains rendered, "ether saddr aa:bb:cc:dd:ee:01", "office mac condition"
-assert_contains rendered, "0x4001 : accept", "accept verdict in map"
-assert_contains rendered, "0x4002 : drop", "drop verdict in map"
+assert_contains rendered, "meta mark set 0x4001 counter accept", "office_net accept mark"
+assert_contains rendered, "meta mark set 0x4002 counter drop", "blocked_host drop mark"
 
 print "  - NFT rules rendered successfully"
 print "  - Key elements verified in output"

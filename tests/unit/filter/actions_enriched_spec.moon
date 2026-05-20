@@ -90,9 +90,11 @@ assert_eq metadata3.actions[1].worker_only, true, "dnsonly action is worker_only
 assert_eq metadata3.actions[1].capabilities.nft, false, "dnsonly no nft support"
 assert_eq metadata3.actions[1].capabilities.worker, true, "dnsonly supports worker"
 
--- Test eval
+-- Test eval : retourne true (verdict allow) + on_response déclaré
 verdict3, _, _, _, _ = eval_fn3 {}
-assert_eq verdict3, "dnsonly", "dnsonly returns string"
+assert_eq verdict3, true, "dnsonly returns true"
+assert_eq type(metadata3.on_response), "table", "dnsonly on_response list exists"
+assert_eq #metadata3.on_response > 0, true, "dnsonly has on_response callback"
 
 -- Test compile_nft
 stmt3, err3 = metadata3.actions[1].compile_nft!
@@ -101,60 +103,44 @@ assert_eq err3, nil, "dnsonly compile_nft returns nil error"
 
 print "OK enriched dnsonly"
 
-print "Testing enriched allow_ip4 action..."
+print "Testing strip_AAAA + allow (équivaut à l'ancien allow_ip4)..."
 
-test_rule_allow_ip4 = {
-  description: "Allow IPv4 only test"
-  rule_id: "allow4123"
+test_rule_strip_aaaa_allow = {
+  description: "Strip AAAA + allow test"
+  rule_id: "strip_aaaa_allow123"
   conditions: { always_true: "test" }
-  actions: { "allow_ip4" }
+  actions: { "strip_AAAA", "allow" }
 }
 
-eval_fn4, metadata4 = rule.compile_rule { nft: { ip_timeout: "2m" } }, test_rule_allow_ip4, 1
+eval_fn4, metadata4 = rule.compile_rule { nft: { ip_timeout: "2m" } }, test_rule_strip_aaaa_allow, 1
 
--- Rule is worker_only (action worker_only)
-assert_eq metadata4.worker_only, true, "allow_ip4 rule is worker_only"
-assert_eq metadata4.actions[1].worker_only, true, "allow_ip4 action is worker_only"
-assert_eq metadata4.actions[1].capabilities.nft, false, "allow_ip4 no nft support"
-assert_eq metadata4.actions[1].capabilities.worker, true, "allow_ip4 supports worker"
+assert_eq metadata4.worker_only, true, "strip_AAAA+allow rule is worker_only"
+assert_eq #metadata4.actions, 2, "strip_AAAA+allow has 2 actions"
+assert_eq #metadata4.on_response, 2, "strip_AAAA+allow has 2 on_response callbacks"
 
--- Test eval
 verdict4, _, _, _, _ = eval_fn4 {}
-assert_eq verdict4, "allow_ip4", "allow_ip4 returns string"
+assert_eq verdict4, true, "strip_AAAA+allow returns true"
 
--- Test compile_nft
-stmt4, err4 = metadata4.actions[1].compile_nft!
-assert_eq stmt4, nil, "allow_ip4 compile_nft returns nil"
-assert_eq err4, nil, "allow_ip4 compile_nft returns nil error"
+print "OK strip_AAAA + allow"
 
-print "OK enriched allow_ip4"
+print "Testing strip_A + allow (équivaut à l'ancien allow_ip6)..."
 
-print "Testing enriched allow_ip6 action..."
-
-test_rule_allow_ip6 = {
-  description: "Allow IPv6 only test"
-  rule_id: "allow6456"
+test_rule_strip_a_allow = {
+  description: "Strip A + allow test"
+  rule_id: "strip_a_allow456"
   conditions: { always_true: "test" }
-  actions: { "allow_ip6" }
+  actions: { "strip_A", "allow" }
 }
 
-eval_fn5, metadata5 = rule.compile_rule { nft: { ip_timeout: "2m" } }, test_rule_allow_ip6, 1
+eval_fn5, metadata5 = rule.compile_rule { nft: { ip_timeout: "2m" } }, test_rule_strip_a_allow, 1
 
--- Rule is worker_only (action worker_only)
-assert_eq metadata5.worker_only, true, "allow_ip6 rule is worker_only"
-assert_eq metadata5.actions[1].worker_only, true, "allow_ip6 action is worker_only"
-assert_eq metadata5.actions[1].capabilities.nft, false, "allow_ip6 no nft support"
-assert_eq metadata5.actions[1].capabilities.worker, true, "allow_ip6 supports worker"
+assert_eq metadata5.worker_only, true, "strip_A+allow rule is worker_only"
+assert_eq #metadata5.actions, 2, "strip_A+allow has 2 actions"
+assert_eq #metadata5.on_response, 2, "strip_A+allow has 2 on_response callbacks"
 
--- Test eval
 verdict5, _, _, _, _ = eval_fn5 {}
-assert_eq verdict5, "allow_ip6", "allow_ip6 returns string"
+assert_eq verdict5, true, "strip_A+allow returns true"
 
--- Test compile_nft
-stmt5, err5 = metadata5.actions[1].compile_nft!
-assert_eq stmt5, nil, "allow_ip6 compile_nft returns nil"
-assert_eq err5, nil, "allow_ip6 compile_nft returns nil error"
-
-print "OK enriched allow_ip6"
+print "OK strip_A + allow"
 
 print "\nOK all enriched actions tests passed"

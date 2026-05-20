@@ -44,7 +44,7 @@ return describe("filter.nft_compiler", function()
     assert.is_true(plan.first_match_wins)
     assert.equals(1, #plan.rules)
     local r = plan.rules[1]
-    assert.equals("rule_dns_workhours", r.rule_id)
+    assert.equals("r_dns_workhours", r.rule_id)
     assert.equals("dnsonly", r.action)
     assert.same({
       "tcp",
@@ -55,7 +55,7 @@ return describe("filter.nft_compiler", function()
       "443",
       "53"
     }, r.ports)
-    return assert.equals(r, plan.rules_by_id.rule_dns_workhours)
+    return assert.equals(r, plan.rules_by_id.r_dns_workhours)
   end)
   it("ensures unique stable rule_id values", function()
     local cfg = {
@@ -75,10 +75,10 @@ return describe("filter.nft_compiler", function()
       }
     }
     local plan = compiler.compile(cfg)
-    assert.equals("rule_allow_lan", plan.rules[1].rule_id)
-    assert.equals("rule_allow_lan_2", plan.rules[2].rule_id)
-    assert.equals(plan.rules[1], plan.rules_by_id.rule_allow_lan)
-    return assert.equals(plan.rules[2], plan.rules_by_id.rule_allow_lan_2)
+    assert.equals("r_allow_lan", plan.rules[1].rule_id)
+    assert.equals("r_allow_lan_2", plan.rules[2].rule_id)
+    assert.equals(plan.rules[1], plan.rules_by_id.r_allow_lan)
+    return assert.equals(plan.rules[2], plan.rules_by_id.r_allow_lan_2)
   end)
   it("renders dispatch with first_match_wins guard when enabled", function()
     local cfg = {
@@ -136,7 +136,7 @@ return describe("filter.nft_compiler", function()
       },
       rules = {
         {
-          rule_id = "r_frag",
+          rule_id = "frag",
           actions = {
             "deny"
           },
@@ -157,9 +157,9 @@ return describe("filter.nft_compiler", function()
     local compiled = rule_mod.compile_rules(cfg)
     local plan = compiler.compile(cfg, compiled.rules_metadata)
     local out = compiler.render(plan)
-    assert.is_not_nil(out:find("set cv_rule_rule_r_frag_dports", 1, true))
-    assert.is_not_nil(out:find("chain cv_rule_rule_r_frag", 1, true))
-    assert.is_not_nil(out:find("meta l4proto { tcp } th dport @cv_rule_rule_r_frag_dports", 1, true))
+    assert.is_not_nil(out:find("set cv_r_frag_dports", 1, true))
+    assert.is_not_nil(out:find("chain cv_r_frag", 1, true))
+    assert.is_not_nil(out:find("meta l4proto { tcp } th dport @cv_r_frag_dports", 1, true))
     return assert.is_not_nil(out:find("counter drop", 1, true))
   end)
 end)

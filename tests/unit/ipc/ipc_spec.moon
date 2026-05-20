@@ -67,7 +67,6 @@ describe "ipc", ->
       assert.equals "aa:bb:cc:dd:ee:ff", decoded.mac_str
       assert.is_true  decoded.ipv4
       assert.is_false decoded.refused
-      assert.is_false decoded.dnsonly
 
   -- ── 2. encode/decode IPv4 sans MAC (nil) ─────────────────────────────
   describe "encode/decode IPv4 sans MAC", ->
@@ -92,7 +91,6 @@ describe "ipc", ->
       assert.equals 0x36,           decoded.msg_type   -- MSG_IPV6
       assert.is_false decoded.ipv4
       assert.is_false decoded.refused
-      assert.is_false decoded.dnsonly
 
   -- ── 4. make_key — unicité ─────────────────────────────────────────────
   describe "make_key", ->
@@ -146,153 +144,71 @@ describe "ipc", ->
   describe "MSG_IPV4_REFUSED", ->
     it "msg_type == 0x52 et refused == true", ->
       m_ipc   = fresh_ipc!
-      msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, true, false
+      msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, true
       decoded = m_ipc.decode_msg msg
 
       assert.equals 0x52, decoded.msg_type
       assert.is_true  decoded.refused
-      assert.is_false decoded.dnsonly
 
   -- ── 8. decode MSG_IPV6_REFUSED (0x72) → refused=true, ipv4=false ─────
   describe "MSG_IPV6_REFUSED", ->
     it "refused=true et ipv4=false pour une adresse IPv6", ->
       m_ipc   = fresh_ipc!
       msg     = m_ipc.encode_msg 0xABCD, IP6_RAW, 5353,
-                  "\x00\x11\x22\x33\x44\x55", RESOLVER6_RAW, true, false
+                  "\x00\x11\x22\x33\x44\x55", RESOLVER6_RAW, true
       decoded = m_ipc.decode_msg msg
 
       assert.equals 0x72, decoded.msg_type
       assert.is_true  decoded.refused
       assert.is_false decoded.ipv4
 
-  -- ── 9. encode_msg dnsonly=true IPv4 → MSG_IPV4_DNSONLY (0x44) ────────
-  describe "MSG_IPV4_DNSONLY", ->
-    it "msg_type == 0x44 et dnsonly == true", ->
-      m_ipc   = fresh_ipc!
-      msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, true
-      decoded = m_ipc.decode_msg msg
-
-      assert.equals 0x44, decoded.msg_type
-      assert.is_true  decoded.dnsonly
-      assert.is_false decoded.refused
-
-  -- ── 10. encode_msg dnsonly=true IPv6 → MSG_IPV6_DNSONLY (0x64) ───────
-  describe "MSG_IPV6_DNSONLY", ->
-    it "msg_type == 0x64 et dnsonly == true pour IPv6", ->
-      m_ipc   = fresh_ipc!
-      msg     = m_ipc.encode_msg 0xABCD, IP6_RAW, 5353,
-                  "\x00\x11\x22\x33\x44\x55", RESOLVER6_RAW, false, true
-      decoded = m_ipc.decode_msg msg
-
-      assert.equals 0x64, decoded.msg_type
-      assert.is_true  decoded.dnsonly
-      assert.is_false decoded.refused
-
-  -- ── 11. write_dnsonly_msg + drain_pipe → entry.dnsonly = true ─────────
-  describe "write_dnsonly_msg via pipe", ->
-    it "drain_pipe stocke un entry avec dnsonly=true", ->
+  -- ── 9. registre dynamique : register_modifier + encode/decode ────────
+  describe "registre dynamique de modificateurs", ->
+    it "register_modifier + encode_modifiers + decode_modifiers round-trip", ->
       m_ipc = fresh_ipc!
+      m_ipc.register_modifier "foo"
+      m_ipc.register_modifier "bar"
+
+      bits = m_ipc.encode_modifiers { foo: true, bar: false }
+      assert.is_true bits > 0, "foo=true → bitmask non nul"
+
+      mods = m_ipc.decode_modifiers bits
+      assert.is_true  mods.foo, "foo décodé à true"
+      assert.is_false mods.bar, "bar décodé à false"
+
+    it "modifier_bit retourne 0 pour un nom inconnu", ->
+      m_ipc = fresh_ipc!
+      assert.equals 0, m_ipc.modifier_bit("unknown_mod")
+
+    it "deux modificateurs ont des bits distincts", ->
+      m_ipc = fresh_ipc!
+      m_ipc.register_modifier "alpha"
+      m_ipc.register_modifier "beta"
+      ba = m_ipc.modifier_bit "alpha"
+      bb = m_ipc.modifier_bit "beta"
+      assert.is_true ba > 0
+      assert.is_true bb > 0
+      assert.not_equals ba, bb
+
+  -- ── 10. modificateur transmis via pipe (encode → drain_pipe → entry) ──
+  describe "modificateur via pipe", ->
+    it "write_msg + modifiers → entry.modifiers décodé", ->
+      m_ipc = fresh_ipc!
+      m_ipc.register_modifier "dnsonly"
       p     = make_pipe!
       rfd, wfd = p[1], p[2]
 
-      m_ipc.write_dnsonly_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                      "reason", nil, nil, nil, { dnsonly: true }
       m_ipc.drain_pipe rfd, (-> 0), nil
 
       entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
       assert.is_not_nil entry
-      assert.is_true  entry.dnsonly
       assert.is_false entry.refused
+      assert.is_true  entry.modifiers.dnsonly, "dnsonly transmis dans modifiers"
       close_pipe p
 
-  -- ── 12. encode_msg allow_ip4=true IPv4 → MSG_IPV4_ALLOW_IP4 (0x45) ────────
-  describe "MSG_IPV4_ALLOW_IP4", ->
-    it "msg_type == 0x45 et allow_ip4 == true", ->
-      m_ipc   = fresh_ipc!
-      msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, false, true, false
-      decoded = m_ipc.decode_msg msg
-
-      assert.equals 0x45, decoded.msg_type
-      assert.is_true  decoded.allow_ip4
-      assert.is_false decoded.allow_ip6
-      assert.is_false decoded.refused
-      assert.is_false decoded.dnsonly
-
-  -- ── 13. encode_msg allow_ip4=true IPv6 → MSG_IPV6_ALLOW_IP4 (0x34) ────────
-  describe "MSG_IPV6_ALLOW_IP4", ->
-    it "msg_type == 0x34 et allow_ip4 == true pour IPv6", ->
-      m_ipc   = fresh_ipc!
-      msg     = m_ipc.encode_msg 0xABCD, IP6_RAW, 5353,
-                  "\x00\x11\x22\x33\x44\x55", RESOLVER6_RAW, false, false, true, false
-      decoded = m_ipc.decode_msg msg
-
-      assert.equals 0x34, decoded.msg_type
-      assert.is_true  decoded.allow_ip4
-      assert.is_false decoded.allow_ip6
-      assert.is_false decoded.ipv4
-
-  -- ── 14. encode_msg allow_ip6=true IPv4 → MSG_IPV4_ALLOW_IP6 (0x61) ────────
-  describe "MSG_IPV4_ALLOW_IP6", ->
-    it "msg_type == 0x61 et allow_ip6 == true", ->
-      m_ipc   = fresh_ipc!
-      msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, false, false, true
-      decoded = m_ipc.decode_msg msg
-
-      assert.equals 0x61, decoded.msg_type
-      assert.is_true  decoded.allow_ip6
-      assert.is_false decoded.allow_ip4
-      assert.is_false decoded.refused
-      assert.is_false decoded.dnsonly
-
-  -- ── 15. encode_msg allow_ip6=true IPv6 → MSG_IPV6_ALLOW_IP6 (0x33) ────────
-  describe "MSG_IPV6_ALLOW_IP6", ->
-    it "msg_type == 0x33 et allow_ip6 == true pour IPv6", ->
-      m_ipc   = fresh_ipc!
-      msg     = m_ipc.encode_msg 0xABCD, IP6_RAW, 5353,
-                  "\x00\x11\x22\x33\x44\x55", RESOLVER6_RAW, false, false, false, true
-      decoded = m_ipc.decode_msg msg
-
-      assert.equals 0x33, decoded.msg_type
-      assert.is_true  decoded.allow_ip6
-      assert.is_false decoded.allow_ip4
-      assert.is_false decoded.ipv4
-
-  -- ── 16. write_allow_ip4_msg + drain_pipe → entry.allow_ip4 = true ─────────
-  describe "write_allow_ip4_msg via pipe", ->
-    it "drain_pipe stocke un entry avec allow_ip4=true", ->
-      m_ipc = fresh_ipc!
-      p     = make_pipe!
-      rfd, wfd = p[1], p[2]
-
-      m_ipc.write_allow_ip4_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
-      m_ipc.drain_pipe rfd, (-> 0), nil
-
-      entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
-      assert.is_not_nil entry
-      assert.is_true  entry.allow_ip4
-      assert.is_false entry.allow_ip6
-      assert.is_false entry.dnsonly
-      assert.is_false entry.refused
-      close_pipe p
-
-  -- ── 17. write_allow_ip6_msg + drain_pipe → entry.allow_ip6 = true ─────────
-  describe "write_allow_ip6_msg via pipe", ->
-    it "drain_pipe stocke un entry avec allow_ip6=true", ->
-      m_ipc = fresh_ipc!
-      p     = make_pipe!
-      rfd, wfd = p[1], p[2]
-
-      m_ipc.write_allow_ip6_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
-      m_ipc.drain_pipe rfd, (-> 0), nil
-
-      entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
-      assert.is_not_nil entry
-      assert.is_true  entry.allow_ip6
-      assert.is_false entry.allow_ip4
-      assert.is_false entry.dnsonly
-      assert.is_false entry.refused
-      close_pipe p
-
-  -- ── 12. write_refused_msg + drain_pipe → entry.refused = true ─────────
+  -- ── 11. write_refused_msg + drain_pipe → entry.refused = true ─────────
   describe "write_refused_msg via pipe", ->
     it "drain_pipe stocke un entry avec refused=true", ->
       m_ipc = fresh_ipc!
@@ -305,7 +221,6 @@ describe "ipc", ->
       entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
       assert.is_not_nil entry
       assert.is_true  entry.refused
-      assert.is_false entry.dnsonly
 
       close_pipe p
 
@@ -315,7 +230,7 @@ describe "ipc", ->
       m_ipc   = fresh_ipc!
       reason  = "blocked by policy"
       msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                  false, false, false, false, reason
+                  false, reason
       decoded = m_ipc.decode_msg msg
 
       assert.is_not_nil decoded.reason
@@ -325,7 +240,7 @@ describe "ipc", ->
     it "préserve rule_id et timeout", ->
       m_ipc   = fresh_ipc!
       msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                  false, false, false, false, "allowed", 17, "dns_workhours", "240s"
+                  false, "allowed", 17, "dns_workhours", "240s"
       decoded = m_ipc.decode_msg msg
 
       assert.equals "dns_workhours", decoded.rule_id
@@ -337,7 +252,7 @@ describe "ipc", ->
       m_ipc   = fresh_ipc!
       long_r  = string.rep "x", 70
       msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                  false, false, false, false, long_r
+                  false, long_r
       decoded = m_ipc.decode_msg msg
 
       assert.equals 63, #decoded.reason
@@ -391,19 +306,22 @@ describe "ipc", ->
 
       close_pipe p
 
-  -- ── 18. write_dnsonly_msg avec reason → entry.reason préservé ─────────
-  describe "write_dnsonly_msg + reason", ->
-    it "entry.reason est préservée pour un message dnsonly", ->
+  -- ── 18. write_msg + reason + modifier → entry complète ──────────────
+  describe "write_msg + reason + modifier", ->
+    it "reason et modifier sont préservés dans l'entrée pending", ->
       m_ipc  = fresh_ipc!
+      m_ipc.register_modifier "dnsonly"
       p      = make_pipe!
       rfd, wfd = p[1], p[2]
 
-      m_ipc.write_dnsonly_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, "dnsonly reason"
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                      "dnsonly reason", nil, nil, nil, { dnsonly: true }
       m_ipc.drain_pipe rfd, (-> 0), nil
 
       entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
       assert.is_not_nil entry
       assert.equals "dnsonly reason", entry.reason
+      assert.is_true entry.modifiers.dnsonly
 
       close_pipe p
 
@@ -418,7 +336,7 @@ describe "ipc", ->
   describe "encode_msg avec benchmark_ms", ->
     it "benchmark_ms encodé et décodé", ->
       m_ipc = fresh_ipc!
-      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, false, false, false, "", 42, "rule_dns", "90s"
+      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false, "", 42, "rule_dns", "90s"
       assert.is_true #msg > 0
       decoded = m_ipc.decode_msg msg
       assert.is_not_nil decoded
@@ -507,8 +425,10 @@ describe "ipc", ->
       p     = make_pipe!
       rfd, wfd = p[1], p[2]
 
+      m_ipc.register_modifier "dnsonly"
       m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, "reason A"
-      m_ipc.write_dnsonly_msg wfd, 0x5678, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      m_ipc.write_msg wfd, 0x5678, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                      nil, nil, nil, nil, { dnsonly: true }
 
       msgs = {}
       count = m_ipc.drain_pipe rfd, (-> 0), (msg) ->
@@ -518,7 +438,7 @@ describe "ipc", ->
       assert.equals 2, #msgs, "on_msg appelé 2 fois"
       assert.equals TXID,   msgs[1].txid
       assert.equals "reason A", msgs[1].reason
-      assert.is_true msgs[2].dnsonly
+      assert.is_true msgs[2].modifiers.dnsonly
 
       close_pipe p
 
@@ -528,7 +448,7 @@ describe "ipc", ->
       m_ipc = fresh_ipc!
       bms   = 12345
       msg   = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                false, false, false, false, "", bms
+                false, "", bms
       decoded = m_ipc.decode_msg msg
       assert.is_not_nil decoded
       assert.equals bms, decoded.benchmark_ms, "benchmark_ms préservé"
@@ -539,7 +459,7 @@ describe "ipc", ->
       m_ipc    = fresh_ipc!
       reason63 = string.rep "y", 63
       msg      = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                   false, false, false, false, reason63
+                   false, reason63
       decoded  = m_ipc.decode_msg msg
       assert.equals 63,       #decoded.reason, "longueur préservée"
       assert.equals reason63, decoded.reason,  "contenu intact"
@@ -551,20 +471,22 @@ describe "ipc", ->
       result = m_ipc.decode_msg "too_short"
       assert.is_nil result, "decode_msg doit retourner nil si < 115 B"
 
-  -- ── 31. IPv6 dnsonly round-trip via drain_pipe ────────────────────────
-  describe "IPv6 dnsonly round-trip via drain_pipe", ->
-    it "write_dnsonly_msg IPv6 → drain_pipe → entry.dnsonly = true", ->
+  -- ── 31. modificateur IPv6 round-trip via drain_pipe ─────────────────
+  describe "modificateur IPv6 round-trip via drain_pipe", ->
+    it "write_msg IPv6 + modifier dnsonly → entry.modifiers.dnsonly = true", ->
       m_ipc = fresh_ipc!
+      m_ipc.register_modifier "dnsonly"
       p     = make_pipe!
       rfd, wfd = p[1], p[2]
 
-      m_ipc.write_dnsonly_msg wfd, TXID, IP6_RAW, PORT, MAC_RAW, RESOLVER6_RAW, "ipv6 dns"
+      m_ipc.write_msg wfd, TXID, IP6_RAW, PORT, MAC_RAW, RESOLVER6_RAW,
+                      "ipv6 dns", nil, nil, nil, { dnsonly: true }
       count = m_ipc.drain_pipe rfd, (-> 0), nil
       assert.equals 1, count
 
       entry = m_ipc.get_pending_entry TXID, "2001:db8::1", PORT, "2001:db8::53", -> 1
       assert.is_not_nil entry,   "entrée présente"
-      assert.is_true  entry.dnsonly, "dnsonly=true pour IPv6"
+      assert.is_true  entry.modifiers.dnsonly, "dnsonly=true pour IPv6"
       assert.equals "ipv6 dns", entry.reason
 
       close_pipe p

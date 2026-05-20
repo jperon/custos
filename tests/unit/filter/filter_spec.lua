@@ -1610,30 +1610,27 @@ describe("filter.rule", function()
 end)
 describe("filter.actions.dnsonly", function()
   local dnsonly_action = require("filter.actions.dnsonly")
-  it("retourne \"dnsonly\"", function()
+  it("retourne true (verdict allow)", function()
     local factory = dnsonly_action({ })
-    local rule_fn = factory({
+    local obj = factory({
       description = "test-dnsonly"
     })
-    local v, msg = rule_fn({
+    local v, msg = obj.eval({
       domain = "example.com",
       src_ip = "1.2.3.4",
       mac = "aa:bb:cc:dd:ee:ff",
       ts = os.time()
     })
-    assert.equals("dnsonly", v)
+    assert.is_true(v)
     assert.is_not_nil(msg)
     return assert(msg:find("DNS only", 1, true))
   end)
-  return it("verdict distinct de true/false", function()
+  return it("déclare on_response", function()
     local factory = dnsonly_action({ })
-    local rule_fn = factory({
+    local obj = factory({
       description = "test"
     })
-    local v, _ = rule_fn({ })
-    assert.equals("string", type(v))
-    assert.is_not_true(v)
-    return assert.is_not_false(v)
+    return assert.equals("function", type(obj.on_response))
   end)
 end)
 describe("filter.lib.parse_domains", function()
