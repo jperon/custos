@@ -380,21 +380,23 @@ return describe("filter.conditions.from_user", function()
     return assert.is_false(v)
   end)
   it("_any → true si session active", function()
-    _auth_sessions_stub.session_for_mac = function()
+    local original_session_for_mac = _auth_sessions_stub.session_for_mac
+    _auth_sessions_stub.session_for_mac = function(mac, src_ip, sessions_file)
       return {
         user = "alice",
         mac = "aa:bb:cc:dd:ee:ff"
       }
     end
+    package.loaded["filter.conditions.from_user"] = nil
+    local from_user_factory = require("filter.conditions.from_user")
     local cond = (from_user_factory(cfg))("_any")
     local v, _ = cond.eval({
       src_ip = "10.0.0.1",
       mac = "aa:bb:cc:dd:ee:ff"
     })
     assert.is_true(v)
-    _auth_sessions_stub.session_for_mac = function()
-      return nil
-    end
+    _auth_sessions_stub.session_for_mac = original_session_for_mac
+    package.loaded["filter.conditions.from_user"] = nil
   end)
   it("utilisateur spécifique → false si pas de session", function()
     _auth_sessions_stub.session_for_mac = function()
@@ -414,6 +416,8 @@ return describe("filter.conditions.from_user", function()
         mac = "aa:bb:cc:dd:ee:ff"
       }
     end
+    package.loaded["filter.conditions.from_user"] = nil
+    local from_user_factory = require("filter.conditions.from_user")
     local cond = (from_user_factory(cfg))("alice")
     local v, _ = cond.eval({
       src_ip = "10.0.0.1",
@@ -421,6 +425,7 @@ return describe("filter.conditions.from_user", function()
     })
     assert.is_true(v)
     _auth_sessions_stub.session_for_mac = original_session_for_mac
+    package.loaded["filter.conditions.from_user"] = nil
   end)
   it("source tls : get_session nil → false", function()
     package.loaded["auth.user_sessions"] = {
@@ -438,6 +443,7 @@ return describe("filter.conditions.from_user", function()
     return assert.is_false(v)
   end)
   it("source tls : session présente → true", function()
+    local original_get_session = package.loaded["auth.user_sessions"].get_session
     package.loaded["auth.user_sessions"] = {
       get_session = function(user)
         if user == "bob" then
@@ -449,12 +455,15 @@ return describe("filter.conditions.from_user", function()
         return nil
       end
     }
+    package.loaded["filter.conditions.from_user"] = nil
+    local from_user_factory = require("filter.conditions.from_user")
     local cond = (from_user_factory(cfg))({
       user = "bob",
       source = "tls"
     })
     local v, _ = cond.eval({
-      src_ip = "10.0.0.1"
+      src_ip = "10.0.0.1",
+      mac = "aa:bb:cc:dd:ee:ff"
     })
     assert.is_true(v)
     package.loaded["auth.user_sessions"] = {
@@ -462,6 +471,7 @@ return describe("filter.conditions.from_user", function()
         return nil
       end
     }
+    package.loaded["filter.conditions.from_user"] = nil
   end)
   it("user nil → false", function()
     local cond = (from_user_factory(cfg))({
