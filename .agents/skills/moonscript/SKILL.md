@@ -50,6 +50,65 @@ assert a == 2  -- OK
 assert b == 2  -- Erreur : b n'est pas visible hors du bloc `do`
 ```
 
+### Tables : syntaxe implicite vs explicite
+
+MoonScript offre deux façons d'écrire une table dict — choisir la plus lisible
+selon le contexte.
+
+**Table implicite par indentation** : quand la valeur d'une clé est elle-même
+un dict multi-clés, on peut omettre les `{}` et indenter les sous-clés. Les
+deux formes compilent en Lua identique :
+
+```moonscript
+-- Forme explicite (accolades)
+auth: {
+  port: 33443
+  idle_timeout: 90
+}
+
+-- Forme implicite (indentation) — équivalent exact
+auth:
+  port: 33443
+  idle_timeout: 90
+```
+
+**Table inline à clé unique** : quand une table ne contient qu'une seule clé,
+on peut l'écrire sur la même ligne sans accolades :
+
+```moonscript
+-- Forme explicite
+conditions: { to_domainlist: "captive" }
+
+-- Forme inline chaînée — équivalent exact
+conditions: to_domainlist: "captive"
+```
+
+**Accolades obligatoires** pour les tableaux (séquences à clés entières) — la
+syntaxe implicite ne fonctionne qu'avec des dicts clé/valeur :
+
+```moonscript
+-- Tableau : {} toujours requis
+actions: {"allow"}
+from_vlans: {2, 3, 4, 5}
+
+-- Module retournant une table : {} requis (valeur de retour nue)
+{
+  runtime:
+    log_level: "DEBUG"
+  filter:
+    domainlists_dir: "/etc/custos/lists"
+}
+```
+
+**Clés qui sont des mots réservés Lua** (`local`, `end`, `if`, …) : les écrire
+entre guillemets dans un constructeur de table :
+
+```moonscript
+nets:
+  "local": {"10.0.0.0/8", "192.168.0.0/16"}
+-- compile en : nets = { ["local"] = {"10.0.0.0/8", "192.168.0.0/16"} }
+```
+
 ### Style fonctionnel (recommandé)
 
 Préférer les modules exportant des fonctions :
