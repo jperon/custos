@@ -72,19 +72,21 @@ describe "filter.rule", ->
       v, _ = eval_fn {}
       assert.is_nil v
 
-    it "strip_A + allow → on_response collecté (2 callbacks)", ->
+    it "dns_strip (A) + allow → on_response collecté (2 callbacks)", ->
       eval_fn, meta = rule_mod.compile_rule cfg, {
         description: "Strip A + allow"
-        actions:     { "strip_A", "allow" }
+        actions:     { "dns_strip", "allow" }
+        dns_strip:   { rr_type: "A" }
       }, 1
       assert.equals 2, #meta.on_response
       v, _ = eval_fn {}
       assert.is_true v
 
-    it "strip_AAAA + allow → on_response collecté (2 callbacks)", ->
+    it "dns_strip (AAAA) + allow → on_response collecté (2 callbacks)", ->
       eval_fn, meta = rule_mod.compile_rule cfg, {
         description: "Strip AAAA + allow"
-        actions:     { "strip_AAAA", "allow" }
+        actions:     { "dns_strip", "allow" }
+        dns_strip:   { rr_type: "AAAA" }
       }, 1
       assert.equals 2, #meta.on_response
       v, _ = eval_fn {}

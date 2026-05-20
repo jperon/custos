@@ -103,44 +103,46 @@ assert_eq err3, nil, "dnsonly compile_nft returns nil error"
 
 print "OK enriched dnsonly"
 
-print "Testing strip_AAAA + allow (équivaut à l'ancien allow_ip4)..."
+print "Testing dns_strip (AAAA) + allow (équivaut à l'ancien allow_ip4)..."
 
 test_rule_strip_aaaa_allow = {
   description: "Strip AAAA + allow test"
   rule_id: "strip_aaaa_allow123"
   conditions: { always_true: "test" }
-  actions: { "strip_AAAA", "allow" }
+  actions: { "dns_strip", "allow" }
+  dns_strip: { rr_type: "AAAA" }
 }
 
 eval_fn4, metadata4 = rule.compile_rule { nft: { ip_timeout: "2m" } }, test_rule_strip_aaaa_allow, 1
 
-assert_eq metadata4.worker_only, true, "strip_AAAA+allow rule is worker_only"
-assert_eq #metadata4.actions, 2, "strip_AAAA+allow has 2 actions"
-assert_eq #metadata4.on_response, 2, "strip_AAAA+allow has 2 on_response callbacks"
+assert_eq metadata4.worker_only, true, "dns_strip(AAAA)+allow rule is worker_only"
+assert_eq #metadata4.actions, 2, "dns_strip(AAAA)+allow has 2 actions"
+assert_eq #metadata4.on_response, 2, "dns_strip(AAAA)+allow has 2 on_response callbacks"
 
 verdict4, _, _, _, _ = eval_fn4 {}
-assert_eq verdict4, true, "strip_AAAA+allow returns true"
+assert_eq verdict4, true, "dns_strip(AAAA)+allow returns true"
 
-print "OK strip_AAAA + allow"
+print "OK dns_strip (AAAA) + allow"
 
-print "Testing strip_A + allow (équivaut à l'ancien allow_ip6)..."
+print "Testing dns_strip (A) + allow (équivaut à l'ancien allow_ip6)..."
 
 test_rule_strip_a_allow = {
   description: "Strip A + allow test"
   rule_id: "strip_a_allow456"
   conditions: { always_true: "test" }
-  actions: { "strip_A", "allow" }
+  actions: { "dns_strip", "allow" }
+  dns_strip: { rr_type: "A" }
 }
 
 eval_fn5, metadata5 = rule.compile_rule { nft: { ip_timeout: "2m" } }, test_rule_strip_a_allow, 1
 
-assert_eq metadata5.worker_only, true, "strip_A+allow rule is worker_only"
-assert_eq #metadata5.actions, 2, "strip_A+allow has 2 actions"
-assert_eq #metadata5.on_response, 2, "strip_A+allow has 2 on_response callbacks"
+assert_eq metadata5.worker_only, true, "dns_strip(A)+allow rule is worker_only"
+assert_eq #metadata5.actions, 2, "dns_strip(A)+allow has 2 actions"
+assert_eq #metadata5.on_response, 2, "dns_strip(A)+allow has 2 on_response callbacks"
 
 verdict5, _, _, _, _ = eval_fn5 {}
-assert_eq verdict5, true, "strip_A+allow returns true"
+assert_eq verdict5, true, "dns_strip(A)+allow returns true"
 
-print "OK strip_A + allow"
+print "OK dns_strip (A) + allow"
 
 print "\nOK all enriched actions tests passed"
