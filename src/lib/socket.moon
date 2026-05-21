@@ -106,6 +106,7 @@ F_SETFL = 4
 O_NONBLOCK = 2048
 SOL_SOCKET = 1
 SO_REUSEADDR = 2
+SO_REUSEPORT = 15  -- Linux ≥ 3.9
 MSG_DONTWAIT = 64
 EWOULDBLOCK = 11
 EAGAIN = 11
@@ -203,6 +204,7 @@ socket_mt.__index.bind = (host, port, backlog = 32) =>
   optval = ffi.new "int[1]"
   optval[0] = 1
   C.setsockopt(@fd, SOL_SOCKET, SO_REUSEADDR, optval, ffi.sizeof(optval))
+  C.setsockopt(@fd, SOL_SOCKET, SO_REUSEPORT, optval, ffi.sizeof(optval))
 
   ret = C.bind(@fd, ffi.cast("struct sockaddr*", addr), ffi.sizeof(addr))
   if ret < 0

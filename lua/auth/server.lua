@@ -970,10 +970,6 @@ end
 local make_server4
 make_server4 = function(port)
   local srv = socket.tcp()
-  srv:setoption("reuseaddr", true)
-  pcall(function()
-    return srv:setoption("reuseport", true)
-  end)
   local ok, err = srv:bind("0.0.0.0", port)
   if not (ok) then
     srv:close()
@@ -989,10 +985,6 @@ make_server6 = function(port)
   if not (ok6 and srv6) then
     return nil
   end
-  srv6:setoption("reuseaddr", true)
-  pcall(function()
-    return srv6:setoption("reuseport", true)
-  end)
   srv6:setoption("ipv6-v6only", true)
   local ok62, _ = pcall(srv6.bind, srv6, "::", port)
   if not (ok62) then

@@ -97,6 +97,7 @@ local F_SETFL = 4
 local O_NONBLOCK = 2048
 local SOL_SOCKET = 1
 local SO_REUSEADDR = 2
+local SO_REUSEPORT = 15
 local MSG_DONTWAIT = 64
 local EWOULDBLOCK = 11
 local EAGAIN = 11
@@ -200,6 +201,7 @@ socket_mt.__index.bind = function(self, host, port, backlog)
   local optval = ffi.new("int[1]")
   optval[0] = 1
   C.setsockopt(self.fd, SOL_SOCKET, SO_REUSEADDR, optval, ffi.sizeof(optval))
+  C.setsockopt(self.fd, SOL_SOCKET, SO_REUSEPORT, optval, ffi.sizeof(optval))
   local ret = C.bind(self.fd, ffi.cast("struct sockaddr*", addr), ffi.sizeof(addr))
   if ret < 0 then
     local errno = get_errno()
