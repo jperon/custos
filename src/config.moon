@@ -54,8 +54,6 @@ DEFAULTS = {
   runtime: {
     log_level: "INFO"
     benchmark: false
-    af_inet: 2
-    af_inet6: 10
   }
 
   nfqueue: {
@@ -83,8 +81,7 @@ DEFAULTS = {
     table: "dns-filter-bridge"
     ip_timeout: "2m"
     sip_session_ttl: "5m"
-    add_retry_count: 6
-    add_backoff_ms: {20, 50, 100, 200, 400, 800}
+    add_backoff_ms: {20, 50, 200, 400, 800, 2000}
     add_failure_policy: "fail-closed"
     ack_timeout_ms: 150
     extra_rules: {}
@@ -93,7 +90,6 @@ DEFAULTS = {
   ipc: {
     pending_ttl: 5
     match_retry: {
-      enabled: true
       count: 5
       sleep_ms: 20
     }
@@ -105,8 +101,7 @@ DEFAULTS = {
 
   mac_learner: {
     query_sock: "/var/run/custos/mac_query.sock"
-    learn_msg_size: 22
-    entry_ttl: 300
+    entry_ttl: 900
   }
 
   auth: {

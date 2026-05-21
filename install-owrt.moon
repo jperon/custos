@@ -66,7 +66,7 @@ Installer = (cfg) ->
 
     -- Utilitaires SSH / SCP
     ssh_prefix: =>
-      "ssh -p #{@cfg.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 #{@cfg.user}@#{@ssh_host!}"
+      "ssh -p #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 #{@cfg.user}@#{@ssh_host!}"
 
     ssh_run: (cmd) =>
       escaped = cmd\gsub("'", "'\"'\"'")
@@ -89,12 +89,12 @@ Installer = (cfg) ->
       else
         io.write "  #{CYAN}DRY#{NC} write #{tmplocal}\n"
 
-      ok_scp = @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/tmp/#{name}.sh"
+      ok_scp = @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/tmp/#{name}.sh"
       return false unless ok_scp
       @ssh_run "sh /tmp/#{name}.sh && rm -f /tmp/#{name}.sh"
 
     scp_send: (src, dst) =>
-      @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -r #{src} #{@cfg.user}@#{@ssh_host!}:#{dst}"
+      @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r #{src} #{@cfg.user}@#{@ssh_host!}:#{dst}"
 
     -- ── Étapes d'installation ────────────────────────────────────────
 
@@ -211,7 +211,7 @@ Installer = (cfg) ->
         return false
 
       info "  Envoi de l'archive → /tmp/"
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{archive} #{@cfg.user}@#{@ssh_host!}:/tmp/custos-lua.tar.gz"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{archive} #{@cfg.user}@#{@ssh_host!}:/tmp/custos-lua.tar.gz"
         fail "Échec du transfert de l'archive"
         return false
 
@@ -266,7 +266,7 @@ Installer = (cfg) ->
         io.write "  #{CYAN}DRY#{NC} scp manifest → routeur puis suppression des .lua absents du manifest\n"
         return true
 
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{manifest_path} #{@cfg.user}@#{@ssh_host!}:/tmp/custos-manifest.txt"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{manifest_path} #{@cfg.user}@#{@ssh_host!}:/tmp/custos-manifest.txt"
         warn "Impossible d'envoyer le manifest — nettoyage ignoré"
         return true
 
@@ -316,7 +316,7 @@ Installer = (cfg) ->
       else
         io.write "  #{CYAN}DRY#{NC} adapt #{init_src} → #{tmplocal}\n"
 
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/etc/init.d/custos"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/etc/init.d/custos"
         fail "Échec de la copie du script init.d"
         return false
 
@@ -337,7 +337,7 @@ Installer = (cfg) ->
         if exists and exists\find "yes"
           warn "#{entry.dst} existe deja -- fichier preserve"
           continue
-        unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{entry.src} #{@cfg.user}@#{@ssh_host!}:#{entry.dst}"
+        unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{entry.src} #{@cfg.user}@#{@ssh_host!}:#{entry.dst}"
           fail "Echec de la copie de #{entry.dst}"
           return false
         @ssh_run "chmod 600 #{entry.dst}"
@@ -406,7 +406,7 @@ exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
           fh\write script
           fh\close!
 
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/usr/sbin/custos-update"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/usr/sbin/custos-update"
         fail "Échec de la copie de custos-update"
         return false
       unless @ssh_run "chmod +x /usr/sbin/custos-update"

@@ -62,7 +62,7 @@ Installer = function(cfg)
       end
     end,
     ssh_prefix = function(self)
-      return "ssh -p " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o ConnectTimeout=10 " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host())
+      return "ssh -p " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host())
     end,
     ssh_run = function(self, cmd)
       local escaped = cmd:gsub("'", "'\"'\"'")
@@ -86,14 +86,14 @@ Installer = function(cfg)
       else
         io.write("  " .. tostring(CYAN) .. "DRY" .. tostring(NC) .. " write " .. tostring(tmplocal) .. "\n")
       end
-      local ok_scp = self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/tmp/" .. tostring(name) .. ".sh")
+      local ok_scp = self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/tmp/" .. tostring(name) .. ".sh")
       if not (ok_scp) then
         return false
       end
       return self:ssh_run("sh /tmp/" .. tostring(name) .. ".sh && rm -f /tmp/" .. tostring(name) .. ".sh")
     end,
     scp_send = function(self, src, dst)
-      return self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -r " .. tostring(src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":" .. tostring(dst))
+      return self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r " .. tostring(src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":" .. tostring(dst))
     end,
     check_local_deps = function(self)
       step("Vérification des dépendances locales")
@@ -211,8 +211,7 @@ Installer = function(cfg)
         "lyaml",
         "luasec",
         "lpeg",
-        "libxxhash",
-        "moonscript"
+        "libxxhash"
       }
       local pkg_list = table.concat(pkgs_required, " ")
       local install_cmd
@@ -243,7 +242,7 @@ Installer = function(cfg)
         return false
       end
       info("  Envoi de l'archive → /tmp/")
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(archive) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/tmp/custos-lua.tar.gz")) then
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(archive) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/tmp/custos-lua.tar.gz")) then
         fail("Échec du transfert de l'archive")
         return false
       end
@@ -295,7 +294,7 @@ Installer = function(cfg)
         io.write("  " .. tostring(CYAN) .. "DRY" .. tostring(NC) .. " scp manifest → routeur puis suppression des .lua absents du manifest\n")
         return true
       end
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(manifest_path) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/tmp/custos-manifest.txt")) then
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(manifest_path) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/tmp/custos-manifest.txt")) then
         warn("Impossible d'envoyer le manifest — nettoyage ignoré")
         return true
       end
@@ -345,7 +344,7 @@ Installer = function(cfg)
       else
         io.write("  " .. tostring(CYAN) .. "DRY" .. tostring(NC) .. " adapt " .. tostring(init_src) .. " → " .. tostring(tmplocal) .. "\n")
       end
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/etc/init.d/custos")) then
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/etc/init.d/custos")) then
         fail("Échec de la copie du script init.d")
         return false
       end
@@ -379,7 +378,7 @@ Installer = function(cfg)
             _continue_0 = true
             break
           end
-          if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(entry.src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":" .. tostring(entry.dst))) then
+          if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(entry.src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":" .. tostring(entry.dst))) then
             fail("Echec de la copie de " .. tostring(entry.dst))
             return false
           end
@@ -454,7 +453,7 @@ exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
           fh:close()
         end
       end
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/usr/sbin/custos-update")) then
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/usr/sbin/custos-update")) then
         fail("Échec de la copie de custos-update")
         return false
       end

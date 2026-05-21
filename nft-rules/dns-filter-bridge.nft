@@ -31,6 +31,20 @@
 flush ruleset
 
 # ════════════════════════════════════════════════════════════════
+# Table ip pour le trafic local vers le filtre lui-même
+# ════════════════════════════════════════════════════════════════
+table ip filter {
+  chain input {
+    type filter hook input priority 0; policy accept;
+
+    # Autoriser le trafic vers le portail captif HTTPS (port 33443)
+    # Le trafic vers l'IP du filtre lui-même traverse cette chaîne INPUT,
+    # pas la chaîne FORWARD du bridge.
+    tcp dport 33443 accept comment "Auth HTTPS to filter (local traffic)"
+  }
+}
+
+# ════════════════════════════════════════════════════════════════
 # Table bridge principale
 # ════════════════════════════════════════════════════════════════
 table bridge dns-filter-bridge {

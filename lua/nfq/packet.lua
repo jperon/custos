@@ -1,11 +1,12 @@
 local ffi
 ffi = require("ffi_defs").ffi
-local config = require("config")
 local bit = require("bit")
 local ip2s
 ip2s = require("ipparse.l3.ip").ip2s
 local PROTO_UDP = 17
 local PROTO_TCP = 6
+local AF_INET = 2
+local AF_INET6 = 10
 local QTYPE = {
   A = 1,
   NS = 2,
@@ -128,7 +129,7 @@ parse_l3_v4 = function(p, len)
     dst_ip = fmt_ip(p, 16, 4),
     src_ip_raw = ffi.string(p + 12, 4),
     dst_ip_raw = ffi.string(p + 16, 4),
-    af = config.runtime.af_inet
+    af = AF_INET
   }
 end
 local IPV6_EXT_HDRS = {
@@ -186,7 +187,7 @@ parse_l3_v6 = function(p, len)
     dst_ip = fmt_ip(p, 24, 16),
     src_ip_raw = ffi.string(p + 8, 16),
     dst_ip_raw = ffi.string(p + 24, 16),
-    af = config.runtime.af_inet6
+    af = AF_INET6
   }
 end
 local fix_ip4_cksum

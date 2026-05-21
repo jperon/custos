@@ -2,6 +2,7 @@
 
 Quick reference for maintainers/contributors.
 Detailed explanations and architecture remain in `README.md`.
+Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
 
 ## Quick entry
 

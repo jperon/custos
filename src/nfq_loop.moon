@@ -43,8 +43,8 @@ run_queue = (queue_num, callback) ->
   -- bind_pf : attache le handle aux familles AF_INET et AF_INET6 (et AF_BRIDGE en mode bridge).
   -- Peut renvoyer une erreur si déjà bindé par un autre handle dans le process ;
   -- on ignore l'erreur (comportement historique de libnetfilter_queue).
-  libnfq.nfq_bind_pf h, config.runtime.af_inet
-  libnfq.nfq_bind_pf h, config.runtime.af_inet6
+  libnfq.nfq_bind_pf h, 2   -- AF_INET
+  libnfq.nfq_bind_pf h, 10  -- AF_INET6
   libnfq.nfq_bind_pf h, AF_BRIDGE
 
   -- Pointeur partagé entre la closure C et la closure Lua du callback

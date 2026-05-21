@@ -41,8 +41,8 @@ run_queue = function(queue_num, callback)
     action = "queue_bind_pf",
     queue = queue_num
   })
-  libnfq.nfq_bind_pf(h, config.runtime.af_inet)
-  libnfq.nfq_bind_pf(h, config.runtime.af_inet6)
+  libnfq.nfq_bind_pf(h, 2)
+  libnfq.nfq_bind_pf(h, 10)
   libnfq.nfq_bind_pf(h, AF_BRIDGE)
   local qh_box = ffi.new("nfq_q_handle*[1]")
   log_debug({

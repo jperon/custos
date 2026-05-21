@@ -4,13 +4,14 @@
 -- @module nfq.packet
 
 { :ffi } = require "ffi_defs"
-config = require "config"
 bit = require "bit"
 { :ip2s } = require "ipparse.l3.ip"
 
 -- ── Constants ──────────────────────────────────────────────────
 PROTO_UDP = 17
 PROTO_TCP = 6
+AF_INET  = 2
+AF_INET6 = 10
 
 --- Qtype numeric-to-name mapping.
 QTYPE = {
@@ -151,7 +152,7 @@ parse_l3_v4 = (p, len) ->
     dst_ip:     fmt_ip p, 16, 4
     src_ip_raw: ffi.string p + 12, 4
     dst_ip_raw: ffi.string p + 16, 4
-    af: config.runtime.af_inet
+    af: AF_INET
   }
 
 -- IPv6 extension header type → skip formula:
@@ -210,7 +211,7 @@ parse_l3_v6 = (p, len) ->
     dst_ip:     fmt_ip p, 24, 16
     src_ip_raw: ffi.string p + 8,  16
     dst_ip_raw: ffi.string p + 24, 16
-    af: config.runtime.af_inet6
+    af: AF_INET6
   }
 
 -- ── Checksum helpers ───────────────────────────────────────────
