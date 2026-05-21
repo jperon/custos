@@ -34,14 +34,15 @@ SSH_PUBKEY_FILE="${SSH_KEY}.pub"
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
           -o ConnectTimeout=5 -o BatchMode=yes -o LogLevel=ERROR"
 
-VMS=(via custos servus)
+VMS=(via custos servus cliens)
 
-# MAC mgmt (3e NIC) par VM ; sert au lookup d'IP via les leases libvirt.
+# MAC mgmt (NIC de gestion) par VM ; sert au lookup d'IP via les leases libvirt.
 mac_mgmt() {
     case "$1" in
         via)    echo "52:54:00:fe:01:03" ;;
         custos) echo "52:54:00:fe:02:03" ;;
         servus) echo "52:54:00:fe:03:02" ;;
+        cliens) echo "52:54:00:fe:04:02" ;;
         *) echo ""; return 1 ;;
     esac
 }
@@ -182,7 +183,7 @@ wait_ssh() {
 cmd_ensure() {
     check_deps
     download_base
-    for net in homelab-wan homelab-up homelab-lan homelab-mgmt; do
+    for net in homelab-wan homelab-up homelab-lan homelab-mgmt homelab-ext-up homelab-ext-dn; do
         ensure_network "$net"
     done
     for vm in "${VMS[@]}"; do
@@ -238,7 +239,7 @@ cmd_nuke() {
         local qcow2 ; qcow2=$(vm_qcow2 "$vm")
         sudo rm -f "$qcow2"
     done
-    for net in homelab-wan homelab-up homelab-lan homelab-mgmt; do
+    for net in homelab-wan homelab-up homelab-lan homelab-mgmt homelab-ext-up homelab-ext-dn; do
         if net_has "$net"; then
             virsh net-destroy  "$net" >/dev/null 2>&1 || true
             virsh net-undefine "$net" >/dev/null 2>&1 || true
@@ -331,6 +332,53 @@ cmd_test() {
     log "tests E2E ok."
 }
 
+cmd_test_e2e() {
+    local ip_custos ip_servus ip_cliens ip_via
+    ip_custos=$(vm_ip custos)  ; [ -n "$ip_custos" ]  || err "IP de custos introuvable"
+    ip_servus=$(vm_ip servus)  ; [ -n "$ip_servus" ]  || err "IP de servus introuvable"
+    ip_cliens=$(vm_ip cliens)  ; [ -n "$ip_cliens" ]  || err "IP de cliens introuvable"
+    ip_via=$(vm_ip via)        ; [ -n "$ip_via" ]      || err "IP de via introuvable"
+
+    log "déploiement config E2E sur custos..."
+    scp -O $SSH_OPTS -i "$SSH_KEY" \
+        "$SCRIPT_DIR/homelab-e2e.moon" "root@$ip_custos:/etc/custos/config.moon"
+    ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip_custos" \
+        '/etc/init.d/custos restart 2>/dev/null; sleep 3'
+
+    log "bootstrap outils de test (idempotent)..."
+    for vm_name in servus cliens; do
+        local _ip ; _ip=$(vm_ip "$vm_name")
+        ssh $SSH_OPTS -i "$SSH_KEY" "root@$_ip" \
+            'command -v dig >/dev/null || { apk update -q 2>/dev/null; apk add -q bind-dig 2>/dev/null; }' || true
+    done
+
+    log "bootstrap certificat TLS sur custos (idempotent)..."
+    ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip_custos" '
+        [ -f /etc/custos/cert.pem ] || {
+            mkdir -p /etc/custos
+            px5g selfsigned -days 3650 -newkey ec \
+                -keyout /etc/custos/key.pem \
+                -out /etc/custos/cert.pem \
+                -subj "/CN=custos.lan" 2>/dev/null
+        }
+        [ -f /etc/custos/sessions.lua ] || echo "{}" > /etc/custos/sessions.lua' || true
+
+    log "exécution de la suite E2E..."
+    export SSH_OPTS SSH_KEY PROJECT_DIR SCRIPT_DIR
+    export E2E_IP_CUSTOS="$ip_custos" E2E_IP_SERVUS="$ip_servus"
+    export E2E_IP_CLIENS="$ip_cliens" E2E_IP_VIA="$ip_via"
+    bash "$PROJECT_DIR/tests/e2e/homelab_e2e.sh"
+    local rc=$?
+
+    log "restauration config minimale (homelab-test.moon)..."
+    scp -O $SSH_OPTS -i "$SSH_KEY" \
+        "$SCRIPT_DIR/homelab-test.moon" "root@$ip_custos:/etc/custos/config.moon"
+    ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip_custos" \
+        '/etc/init.d/custos restart 2>/dev/null; sleep 2' || true
+
+    return $rc
+}
+
 # ─── Dispatch ─────────────────────────────────────────────────────
 
 case "${1:-}" in
@@ -341,11 +389,12 @@ case "${1:-}" in
     ssh)      shift; cmd_ssh      "$@" ;;
     ip)       shift; cmd_ip       "$@" ;;
     redeploy) shift; cmd_redeploy "$@" ;;
-    test)     shift; cmd_test     "$@" ;;
+    test)      shift; cmd_test      "$@" ;;
     test-unit) shift; cmd_test_unit "$@" ;;
+    test-e2e)  shift; cmd_test_e2e  "$@" ;;
     *)
         cat >&2 <<EOF
-Usage : $0 <ensure|start|stop|nuke|ssh|ip|redeploy|test|test-unit> [args]
+Usage : $0 <ensure|start|stop|nuke|ssh|ip|redeploy|test|test-unit|test-e2e> [args]
 EOF
         exit 2
         ;;

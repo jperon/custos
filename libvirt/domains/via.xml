@@ -1,8 +1,9 @@
 <!-- via : routeur OpenWrt entre internet (NAT hôte) et homelab-up.
-     NICs (l'ordre fixe la numérotation eth0..eth2) :
-       eth0 = homelab-wan    (DHCP, NAT vers internet)
-       eth1 = homelab-up     (LAN 10.42.0.1/24, dnsmasq, masquerade)
-       eth2 = homelab-mgmt   (DHCP, SSH depuis l'hôte)
+     NICs (l'ordre fixe la numérotation eth0..eth3) :
+       eth0 = homelab-wan     (DHCP, NAT vers internet)
+       eth1 = homelab-up      (LAN 10.42.0.1/24, dnsmasq, masquerade)
+       eth2 = homelab-mgmt    (DHCP, SSH depuis l'hôte)
+       eth3 = homelab-ext-up  (LAN 10.43.0.1/24, 2ème pont custos)
 -->
 <domain type='kvm'>
   <name>homelab-via</name>
@@ -35,6 +36,11 @@
     <interface type='network'>
       <mac address='52:54:00:fe:01:03'/>
       <source network='homelab-mgmt'/>
+      <model type='virtio'/>
+    </interface>
+    <interface type='network'>
+      <mac address='52:54:00:fe:01:04'/>
+      <source network='homelab-ext-up'/>
       <model type='virtio'/>
     </interface>
     <serial type='file'>

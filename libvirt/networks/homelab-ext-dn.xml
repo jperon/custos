@@ -1,0 +1,4 @@
+<network>
+  <name>homelab-ext-dn</name>
+  <bridge name="hl-ext-dn-br" stp="off" delay="0"/>
+</network>

@@ -1,7 +1,8 @@
 #!/bin/sh
-# custos : pont L2 transparent.
-#   eth0 + eth1 → esclaves de br-lan (sans IP, proto='none')
-#   eth2       → homelab-mgmt (DHCP, SSH depuis l'hôte)
+# custos : deux ponts L2 transparents.
+#   eth0 + eth1 → esclaves de br-lan  (vers servus,  10.42.0.0/24)
+#   eth3 + eth4 → esclaves de br-ext  (vers cliens,  10.43.0.0/24)
+#   eth2        → homelab-mgmt (DHCP, SSH depuis l'hôte)
 # Le filtrage nftables est installé séparément par homelab.sh redeploy.
 
 uci -q delete network.wan
@@ -21,6 +22,18 @@ uci add_list network.@device[-1].ports='eth1'
 uci set network.lan=interface
 uci set network.lan.device='br-lan'
 uci set network.lan.proto='none'
+
+# Définit le 2ème device pont br-ext agrégeant eth3 + eth4 (vers cliens).
+uci add network device >/dev/null
+uci set network.@device[-1].name='br-ext'
+uci set network.@device[-1].type='bridge'
+uci add_list network.@device[-1].ports='eth3'
+uci add_list network.@device[-1].ports='eth4'
+
+# Interface br-ext sans IP (pont pur).
+uci set network.ext=interface
+uci set network.ext.device='br-ext'
+uci set network.ext.proto='none'
 
 # mgmt : SSH depuis l'hôte.
 uci set network.mgmt=interface

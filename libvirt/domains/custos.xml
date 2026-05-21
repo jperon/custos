@@ -1,8 +1,11 @@
-<!-- custos : pont L2 transparent entre homelab-up (côté via) et homelab-lan (côté servus).
-     NICs (l'ordre fixe la numérotation eth0..eth2) :
-       eth0 = homelab-up     (esclave de br-lan, côté routeur)
-       eth1 = homelab-lan    (esclave de br-lan, côté client)
-       eth2 = homelab-mgmt   (DHCP, SSH depuis l'hôte)
+<!-- custos : pont L2 transparent entre homelab-up (côté via) et homelab-lan (côté servus),
+     et second pont entre homelab-ext-up et homelab-ext-dn (côté cliens).
+     NICs (l'ordre fixe la numérotation eth0..eth4) :
+       eth0 = homelab-up      (esclave de br-lan, côté routeur)
+       eth1 = homelab-lan     (esclave de br-lan, côté servus)
+       eth2 = homelab-mgmt    (DHCP, SSH depuis l'hôte)
+       eth3 = homelab-ext-up  (esclave de br-ext, côté routeur 10.43.x)
+       eth4 = homelab-ext-dn  (esclave de br-ext, côté cliens)
 -->
 <domain type='kvm'>
   <name>homelab-custos</name>
@@ -35,6 +38,16 @@
     <interface type='network'>
       <mac address='52:54:00:fe:02:03'/>
       <source network='homelab-mgmt'/>
+      <model type='virtio'/>
+    </interface>
+    <interface type='network'>
+      <mac address='52:54:00:fe:02:04'/>
+      <source network='homelab-ext-up'/>
+      <model type='virtio'/>
+    </interface>
+    <interface type='network'>
+      <mac address='52:54:00:fe:02:05'/>
+      <source network='homelab-ext-dn'/>
       <model type='virtio'/>
     </interface>
     <serial type='file'>

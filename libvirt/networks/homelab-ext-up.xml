@@ -1,0 +1,4 @@
+<network>
+  <name>homelab-ext-up</name>
+  <bridge name="hl-ext-up-br" stp="off" delay="0"/>
+</network>

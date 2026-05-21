@@ -1,0 +1,43 @@
+<!-- cliens : 2ème client OpenWrt branché derrière le 2ème pont de custos.
+     NICs (l'ordre fixe la numérotation eth0..eth1) :
+       eth0 = homelab-ext-dn  (DHCP fourni par via via br-ext de custos, 10.43.0.0/24)
+       eth1 = homelab-mgmt    (DHCP, SSH depuis l'hôte)
+-->
+<domain type='kvm'>
+  <name>homelab-cliens</name>
+  <memory unit='MiB'>128</memory>
+  <vcpu>1</vcpu>
+  <cpu mode='host-passthrough' check='none'/>
+  <os>
+    <type arch='x86_64'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+  </features>
+  <devices>
+    <disk type='file' device='disk'>
+      <source file='/var/lib/libvirt/images/homelab-cliens.qcow2'/>
+      <driver name='qemu' type='qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <interface type='network'>
+      <mac address='52:54:00:fe:04:01'/>
+      <source network='homelab-ext-dn'/>
+      <model type='virtio'/>
+    </interface>
+    <interface type='network'>
+      <mac address='52:54:00:fe:04:02'/>
+      <source network='homelab-mgmt'/>
+      <model type='virtio'/>
+    </interface>
+    <serial type='file'>
+      <source path='/tmp/homelab-cliens-serial.log' append='on'/>
+      <target type='isa-serial' port='0'/>
+    </serial>
+    <console type='file'>
+      <source path='/tmp/homelab-cliens-serial.log' append='on'/>
+      <target type='serial' port='0'/>
+    </console>
+  </devices>
+</domain>
