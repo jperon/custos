@@ -245,8 +245,26 @@ local function run_block(block)
   for _, h in ipairs(block.teardown) do pcall(h) end
 end
 
+-- Isole chaque bloc describe racine : les hooks setup/teardown d'un spec
+-- ne polluent pas les tests des specs suivants dans mini.run().
+local function snapshot_loaded()
+  local snap = {}
+  for k, v in pairs(package.loaded) do snap[k] = v end
+  return snap
+end
+local function restore_loaded(snap)
+  for k in pairs(package.loaded) do
+    if snap[k] == nil then package.loaded[k] = nil end
+  end
+  for k, v in pairs(snap) do package.loaded[k] = v end
+end
+
 function M.run()
-  for _, b in ipairs(root_blocks) do run_block(b) end
+  local baseline = snapshot_loaded()
+  for _, b in ipairs(root_blocks) do
+    run_block(b)
+    restore_loaded(baseline)
+  end
   io.write("\n──────────────────────────────────────────────\n")
   io.write(string.format("Tests: %d  passed: %d  failed: %d  pending: %d\n",
                          total, passed, failed, skipped))

@@ -15,6 +15,7 @@ _auth_sessions_stub = {
   enrich_session_ip: -> nil
   bind_session_mac:  -> nil
   user_for_mac:      -> nil
+  reset_cache:       ->
 }
 package.loaded["auth.sessions"] = _auth_sessions_stub
 package.loaded["auth.user_sessions"] = { get_session: -> nil }
@@ -269,11 +270,15 @@ describe "filter.conditions.from_user", ->
     assert.is_false v
 
   it "_any → true si session active", ->
+    orig = _auth_sessions_stub.session_for_mac
     _auth_sessions_stub.session_for_mac = -> { user: "alice", mac: "aa:bb:cc:dd:ee:ff" }
-    cond = (from_user_factory cfg) "_any"
+    package.loaded["filter.conditions.from_user"] = nil
+    local_factory = require "filter.conditions.from_user"
+    cond = (local_factory cfg) "_any"
     v, _ = cond.eval { src_ip: "10.0.0.1", mac: "aa:bb:cc:dd:ee:ff" }
     assert.is_true v
-    _auth_sessions_stub.session_for_mac = -> nil
+    _auth_sessions_stub.session_for_mac = orig
+    package.loaded["filter.conditions.from_user"] = nil
 
   it "utilisateur spécifique → false si pas de session", ->
     _auth_sessions_stub.session_for_mac = -> nil
@@ -282,11 +287,15 @@ describe "filter.conditions.from_user", ->
     assert.is_false v
 
   it "utilisateur spécifique → true si session correspond", ->
+    orig = _auth_sessions_stub.session_for_mac
     _auth_sessions_stub.session_for_mac = -> { user: "alice", mac: "aa:bb:cc:dd:ee:ff" }
-    cond = (from_user_factory cfg) "alice"
+    package.loaded["filter.conditions.from_user"] = nil
+    local_factory = require "filter.conditions.from_user"
+    cond = (local_factory cfg) "alice"
     v, _ = cond.eval { src_ip: "10.0.0.1", mac: "aa:bb:cc:dd:ee:ff" }
     assert.is_true v
-    _auth_sessions_stub.session_for_mac = -> nil
+    _auth_sessions_stub.session_for_mac = orig
+    package.loaded["filter.conditions.from_user"] = nil
 
   it "source tls : get_session nil → false", ->
     package.loaded["auth.user_sessions"] = { get_session: -> nil }
@@ -300,10 +309,13 @@ describe "filter.conditions.from_user", ->
         return { src_ip: "10.0.0.1", mac: "aa:bb:cc:dd:ee:ff" } if user == "bob"
         nil
     }
-    cond = (from_user_factory cfg) { user: "bob", source: "tls" }
+    package.loaded["filter.conditions.from_user"] = nil
+    local_factory = require "filter.conditions.from_user"
+    cond = (local_factory cfg) { user: "bob", source: "tls" }
     v, _ = cond.eval { src_ip: "10.0.0.1" }
     assert.is_true v
     package.loaded["auth.user_sessions"] = { get_session: -> nil }
+    package.loaded["filter.conditions.from_user"] = nil
 
   it "user nil → false", ->
     cond = (from_user_factory cfg) { source: "tls" }
