@@ -11,6 +11,7 @@
 #   homelab-nuke  - Delete VMs, networks, derived images
 #   homelab-redeploy - Recompile MoonScript and push to custos VM
 #   test-e2e      - Suite E2E complète via homelab libvirt (36 assertions)
+#   test-e2e-rebuild - Reconstruction complète du homelab puis suite E2E
 #   coverage     - Unit tests + luacov report in tmp/coverage/
 #   run          - Start supervisor (requires root + nft rules)
 #   clean        - Remove compiled Lua files
@@ -59,7 +60,7 @@ IPPARSE_STATIC_LUAS := $(patsubst $(SRC)/%.lua,$(LUA)/%.lua,$(IPPARSE_STATIC_SRC
 UNIT_SPEC_MOONS := $(shell find tests/unit -name '*_spec.moon' 2>/dev/null | sort)
 UNIT_SPEC_LUAS  := $(patsubst %.moon,%.lua,$(UNIT_SPEC_MOONS))
 
-.PHONY: all clean check test test-unit test-vm test-openwrt test-e2e \
+.PHONY: all clean check test test-unit test-vm test-openwrt test-e2e test-e2e-rebuild \
         homelab-up homelab-down homelab-nuke homelab-redeploy \
         coverage run reload update-lists make-secret logs help
 
@@ -160,6 +161,16 @@ test-e2e: all
 	bash libvirt/homelab.sh redeploy
 	bash libvirt/homelab.sh test-e2e
 
+# Reconstruction complète du homelab (images qcow2 recréées depuis la base)
+# puis suite E2E. À utiliser quand les uci-defaults ont changé.
+test-e2e-rebuild: all
+	bash libvirt/homelab.sh stop
+	bash libvirt/homelab.sh nuke
+	bash libvirt/homelab.sh ensure
+	bash libvirt/homelab.sh start
+	bash libvirt/homelab.sh redeploy
+	bash libvirt/homelab.sh test-e2e
+
 test-vm: all
 	bash libvirt/homelab.sh test-unit
 
@@ -226,7 +237,8 @@ help:
 	@echo "  homelab-down  - Arrête les VMs"
 	@echo "  homelab-nuke  - Supprime VMs, réseaux, qcow2 dérivés"
 	@echo "  homelab-redeploy - Recompile et pousse custos dans la VM custos"
-	@echo "  test-e2e      - Suite E2E complète via homelab libvirt (36 assertions)"
+	@echo "  test-e2e         - Suite E2E complète via homelab libvirt (36 assertions)"
+	@echo "  test-e2e-rebuild - Reconstruit le homelab (nuke+ensure) puis suite E2E"
 	@echo "  test-vm       - Tests unitaires exécutés dans la VM custos (mini_busted)"
 	@echo "  test-e2e-ssh  - Suite E2E via SSH distant (FILTER_SSH=... CLIENT_SSH=... [CLIENT2_SSH=...])"
 	@echo "  run          - Lance le superviseur (root requis)"
