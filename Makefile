@@ -155,6 +155,8 @@ homelab-redeploy: all
 	bash libvirt/homelab.sh redeploy
 
 test-e2e: all
+	bash libvirt/homelab.sh ensure
+	bash libvirt/homelab.sh start
 	bash libvirt/homelab.sh test-e2e
 
 test-vm: all
