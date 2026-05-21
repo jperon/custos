@@ -43,7 +43,7 @@ local handle_dashboard
 handle_dashboard = function(req, state)
   local rules = (config.filter or { }).rules or { }
   local n_rules = #rules
-  local body = H.section({
+  local s1 = H.section({
     H.h2("Filtre DNS"),
     H.p("Nombre de règles : " .. tostring(n_rules)),
     H.p({
@@ -51,7 +51,8 @@ handle_dashboard = function(req, state)
         href = "/admin/config/filter/rules"
       }, "Éditer les règles")
     })
-  } .. H.section({
+  })
+  local s2 = H.section({
     H.h2("Configuration"),
     H.p({
       H.a({
@@ -63,7 +64,8 @@ handle_dashboard = function(req, state)
         href = "/admin/system/status"
       }, "Statut des workers")
     })
-  } .. H.section({
+  })
+  local s3 = H.section({
     H.h2("Rechargement"),
     H.p("Après modification de la configuration, rechargez les workers DNS."),
     H.form({
@@ -72,10 +74,10 @@ handle_dashboard = function(req, state)
     }, H.button({
       type = "submit"
     }, "Recharger maintenant"))
-  })))
+  })
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
-  }, page("Dashboard", body)
+  }, page("Dashboard", s1 .. s2 .. s3)
 end
 return {
   handle_dashboard = handle_dashboard,
