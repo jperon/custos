@@ -14,16 +14,14 @@ os_rename = os.rename
 -- ── Sérialisation ────────────────────────────────────────────────
 
 --- Sérialise une table de sessions en code Lua évaluable.
--- @tparam table sessions Table {mac → {user, expires?, heartbeat?, ips: {ipv4?, ipv6?}}}
+-- @tparam table sessions Table {mac → {user, expires, ips: {ipv4?, ipv6?}}}
 -- @treturn string Code Lua (return { ... })
 serialize = (sessions) ->
   parts = { "return {\n" }
   for mac, s in pairs sessions
     safe_mac  = mac\gsub('"', '\\"')
     safe_user = s.user\gsub('"', '\\"')
-    expires = s.expires and (", expires = " .. tostring(s.expires)) or ""
-    hb  = s.heartbeat and (", heartbeat = " .. tostring(s.heartbeat)) or ""
-    ca  = s.created_at and (", created_at = " .. tostring(s.created_at)) or ""
+    expires_str = s.expires and (", expires = " .. tostring(s.expires)) or ""
 
     ips_parts = {}
     if s.ips
@@ -32,8 +30,8 @@ serialize = (sessions) ->
     ips_str = #ips_parts > 0 and (", ips = { " .. table.concat(ips_parts, ", ") .. " }") or ""
 
     parts[#parts + 1] = string.format(
-      '  ["%s"] = { user = "%s"%s%s%s%s, mac = "%s" },\n',
-      safe_mac, safe_user, expires, hb, ca, ips_str, safe_mac
+      '  ["%s"] = { user = "%s"%s%s, mac = "%s" },\n',
+      safe_mac, safe_user, expires_str, ips_str, safe_mac
     )
   parts[#parts + 1] = "}\n"
   table.concat parts
@@ -66,27 +64,22 @@ load_sessions = (path) ->
 -- ── Gestion en mémoire ───────────────────────────────────────────
 
 --- Ajoute ou rafraîchit une session pour une MAC.
--- @tparam table  sessions     Table de sessions (modifiée en place)
--- @tparam string mac          Adresse MAC du client
--- @tparam string ip           Adresse IP courante du client (pour mise à jour ips)
--- @tparam string user         Nom d'utilisateur authentifié
--- @tparam number|nil session_ttl  Durée de vie maximale en secondes, nil/0 = pas d'expiration absolue
--- @tparam number idle_timeout Délai d'inactivité (heartbeat) en secondes, 0 = désactivé
-add_session = (sessions, mac, ip, user, session_ttl, idle_timeout) ->
+-- expires est le timestamp absolu d'expiration (os.time() + ttl).
+-- Avec le mécanisme de rolling refresh du token, le caller passe
+-- systématiquement now + idle_timeout, rafraîchi à chaque ping.
+-- @tparam table  sessions  Table de sessions (modifiée en place)
+-- @tparam string mac       Adresse MAC du client
+-- @tparam string ip        Adresse IP courante (pour mise à jour ips)
+-- @tparam string user      Nom d'utilisateur authentifié
+-- @tparam number expires   Timestamp d'expiration (os.time() + ttl)
+add_session = (sessions, mac, ip, user, expires) ->
   return unless mac and mac != "unknown"
   mac = mac\lower!
-  now = os_time!
-  hb  = (idle_timeout and idle_timeout > 0) and (now + idle_timeout) or nil
 
   s = sessions[mac] or { ips: {} }
-  s.mac = mac
-  s.user = user
-  if session_ttl and session_ttl > 0
-    s.expires = now + session_ttl
-  else
-    s.expires = nil
-  s.heartbeat = hb
-  s.created_at = s.created_at or now
+  s.mac     = mac
+  s.user    = user
+  s.expires = expires
 
   if ip
     family = if ip\find ":", 1, true then "ipv6" else "ipv4"
@@ -98,8 +91,7 @@ add_session = (sessions, mac, ip, user, session_ttl, idle_timeout) ->
 purge_expired = (sessions) ->
   now = os_time!
   for mac, s in pairs sessions
-    if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat)
-      sessions[mac] = nil
+    sessions[mac] = nil if s.expires and now > s.expires
 
 -- ── Cache de lecture (côté workers question/response) ────────────────────────
 
@@ -239,14 +231,13 @@ session_for_mac = (mac, ip, path, sessions_arg) ->
   return nil unless s
 
   now = os_time!
-  if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat)
+  if s.expires and now > s.expires
     if not sessions_arg and path
       sessions_table = reload_cached path
       s = lookup_session sessions_table, lookup_mac, ip if sessions_table
       return nil unless s
       now = os_time!
     return nil if s.expires and now > s.expires
-    return nil if s.heartbeat and now > s.heartbeat
 
   -- Si on a l'IP actuelle, on peut mettre à jour le cache ips (en mémoire seulement ici)
   if ip

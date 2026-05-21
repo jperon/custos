@@ -17,7 +17,7 @@ return describe("auth/sessions", function()
       local result = serialize({ })
       return assert.is_true(result:find("return {", 1, true) ~= nil)
     end)
-    it("une session : MAC, user et expires présents", function()
+    it("MAC, user et expires présents", function()
       local sessions = {
         ["aa:bb:cc:dd:ee:ff"] = {
           user = "alice",
@@ -30,29 +30,15 @@ return describe("auth/sessions", function()
       assert.is_true(result:find('"alice"', 1, true) ~= nil)
       return assert.is_true(result:find("expires = 9999", 1, true) ~= nil)
     end)
-    it("heartbeat sérialisé quand présent", function()
-      local sessions = {
-        ["11:22:33:44:55:66"] = {
-          user = "bob",
-          expires = 8888,
-          heartbeat = 7777,
-          mac = "11:22:33:44:55:66"
-        }
-      }
-      local result = serialize(sessions)
-      return assert.is_true(result:find("heartbeat = 7777", 1, true) ~= nil)
-    end)
     it("expires absent si nil", function()
       local sessions = {
-        ["11:22:33:44:55:66"] = {
+        ["aa:bb:cc:dd:ee:ff"] = {
           user = "bob",
-          heartbeat = 7777,
-          mac = "11:22:33:44:55:66"
+          mac = "aa:bb:cc:dd:ee:ff"
         }
       }
       local result = serialize(sessions)
-      assert.is_nil(result:find("expires =", 1, true))
-      return assert.is_true(result:find("heartbeat = 7777", 1, true) ~= nil)
+      return assert.is_nil(result:find("expires =", 1, true))
     end)
     it("ips multi-famille (ipv4 + ipv6) sérialisées", function()
       local sessions = {
@@ -70,7 +56,7 @@ return describe("auth/sessions", function()
       assert.is_true(result:find('ipv4 = "1.2.3.4"', 1, true) ~= nil)
       return assert.is_true(result:find('ipv6 = "::1"', 1, true) ~= nil)
     end)
-    it("pas de champ ips si nil", function()
+    return it("pas de champ ips si nil", function()
       local sessions = {
         ["00:11:22:33:44:55"] = {
           user = "dave",
@@ -81,37 +67,17 @@ return describe("auth/sessions", function()
       local result = serialize(sessions)
       return assert.is_nil(result:find("ips =", 1, true))
     end)
-    return it("IP stockée dans ips.ipv4", function()
-      local sessions = {
-        ["aa:bb:cc:dd:ee:ff"] = {
-          user = "alice",
-          expires = 9999,
-          mac = "aa:bb:cc:dd:ee:ff",
-          ips = {
-            ipv4 = "10.0.0.1"
-          }
-        }
-      }
-      local result = serialize(sessions)
-      return assert.is_true(result:find('ipv4 = "10.0.0.1"', 1, true) ~= nil)
-    end)
   end)
   describe("write_sessions + load_sessions", function()
     after_each(function()
       return os.remove(SESS_FILE)
     end)
-    it("round-trip : trois sessions distinctes", function()
+    it("round-trip : deux sessions distinctes", function()
       local sessions = {
         ["aa:bb:cc:dd:ee:ff"] = {
           user = "alice",
           expires = 9999999,
           mac = "aa:bb:cc:dd:ee:ff"
-        },
-        ["11:22:33:44:55:66"] = {
-          user = "bob",
-          expires = 8888888,
-          heartbeat = 111,
-          mac = "11:22:33:44:55:66"
         },
         ["22:33:44:55:66:77"] = {
           user = "carol",
@@ -125,12 +91,8 @@ return describe("auth/sessions", function()
       local ok, err = write_sessions(sessions, SESS_FILE)
       assert.is_true(ok, tostring(err))
       local loaded = load_sessions(SESS_FILE)
-      assert.is_not_nil(loaded["aa:bb:cc:dd:ee:ff"])
       assert.equals("alice", loaded["aa:bb:cc:dd:ee:ff"].user)
       assert.equals(9999999, loaded["aa:bb:cc:dd:ee:ff"].expires)
-      assert.is_not_nil(loaded["11:22:33:44:55:66"])
-      assert.equals(111, loaded["11:22:33:44:55:66"].heartbeat)
-      assert.is_not_nil(loaded["22:33:44:55:66:77"])
       return assert.equals("192.168.1.30", loaded["22:33:44:55:66:77"].ips.ipv4)
     end)
     it("load_sessions : fichier absent → table vide", function()
@@ -160,43 +122,35 @@ return describe("auth/sessions", function()
   describe("add_session", function()
     it("crée une session avec user et expires dans le futur", function()
       local sessions = { }
-      add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.1", "charlie", 3600, 0)
+      add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.1", "charlie", os.time() + 3600)
       local s = sessions["aa:bb:cc:dd:ee:ff"]
       assert.is_not_nil(s)
       assert.equals("charlie", s.user)
-      assert.is_true(s.expires > os.time())
-      return assert.is_nil(s.heartbeat)
+      return assert.is_true(s.expires > os.time())
     end)
     it("stocke l'IP dans ips.ipv4", function()
       local sessions = { }
-      add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.1", "charlie", 3600, 0)
+      add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.1", "charlie", os.time() + 3600)
       return assert.equals("10.1.0.1", sessions["aa:bb:cc:dd:ee:ff"].ips.ipv4)
     end)
     it("normalise la MAC en minuscules", function()
       local sessions = { }
-      add_session(sessions, "AA:BB:CC:DD:EE:FF", "10.1.0.5", "eve", 3600, 0)
+      add_session(sessions, "AA:BB:CC:DD:EE:FF", "10.1.0.5", "eve", os.time() + 3600)
       assert.is_not_nil(sessions["aa:bb:cc:dd:ee:ff"])
       return assert.equals("eve", sessions["aa:bb:cc:dd:ee:ff"].user)
     end)
-    it("heartbeat non nil si idle_timeout > 0", function()
+    it("mise à jour d'une session existante (même MAC)", function()
       local sessions = { }
-      add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.2", "diana", 3600, 120)
+      add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.0.0.1", "alice", os.time() + 3600)
+      add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.0.0.2", "alice", os.time() + 7200)
       local s = sessions["aa:bb:cc:dd:ee:ff"]
-      assert.is_not_nil(s.heartbeat)
-      return assert.is_true(s.heartbeat > os.time())
-    end)
-    it("session_ttl=0 → expires nil", function()
-      local sessions = { }
-      add_session(sessions, "aa:bb:cc:dd:ee:ff", "10.1.0.3", "frank", 0, 120)
-      local s = sessions["aa:bb:cc:dd:ee:ff"]
-      assert.is_not_nil(s)
-      assert.is_nil(s.expires)
-      return assert.is_true(s.heartbeat > os.time())
+      assert.equals("10.0.0.2", s.ips.ipv4)
+      return assert.is_true(s.expires > os.time() + 3600)
     end)
     it("deux sessions différentes → session_count == 2", function()
       local sessions = { }
-      add_session(sessions, "aa:bb:cc:dd:ee:01", "10.0.0.1", "user1", 3600, 0)
-      add_session(sessions, "aa:bb:cc:dd:ee:02", "10.0.0.2", "user2", 3600, 0)
+      add_session(sessions, "aa:bb:cc:dd:ee:01", "10.0.0.1", "user1", os.time() + 3600)
+      add_session(sessions, "aa:bb:cc:dd:ee:02", "10.0.0.2", "user2", os.time() + 3600)
       local count = 0
       for _ in pairs(sessions) do
         count = count + 1
@@ -205,7 +159,7 @@ return describe("auth/sessions", function()
     end)
     it("MAC 'unknown' est ignorée", function()
       local sessions = { }
-      add_session(sessions, "unknown", "10.0.0.1", "ghost", 3600, 0)
+      add_session(sessions, "unknown", "10.0.0.1", "ghost", os.time() + 3600)
       local count = 0
       for _ in pairs(sessions) do
         count = count + 1
@@ -214,7 +168,7 @@ return describe("auth/sessions", function()
     end)
     return it("MAC nil est ignorée", function()
       local sessions = { }
-      add_session(sessions, nil, "10.0.0.1", "ghost", 3600, 0)
+      add_session(sessions, nil, "10.0.0.1", "ghost", os.time() + 3600)
       local count = 0
       for _ in pairs(sessions) do
         count = count + 1
@@ -238,26 +192,14 @@ return describe("auth/sessions", function()
       assert.is_nil(sessions["aa:bb:cc:dd:ee:01"])
       return assert.is_not_nil(sessions["aa:bb:cc:dd:ee:02"])
     end)
-    it("supprime une session dont heartbeat est expiré (même si expires futur)", function()
+    it("session sans expires n'est pas purgée", function()
       local sessions = {
         ["aa:bb:cc:dd:ee:03"] = {
-          user = "hb",
-          expires = FUTURE,
-          heartbeat = 1
+          user = "noexp"
         }
       }
       purge_expired(sessions)
-      return assert.is_nil(sessions["aa:bb:cc:dd:ee:03"])
-    end)
-    it("conserve une session sans expires absolu (heartbeat futur)", function()
-      local sessions = {
-        ["aa:bb:cc:dd:ee:04"] = {
-          user = "noabs",
-          heartbeat = FUTURE
-        }
-      }
-      purge_expired(sessions)
-      return assert.is_not_nil(sessions["aa:bb:cc:dd:ee:04"])
+      return assert.is_not_nil(sessions["aa:bb:cc:dd:ee:03"])
     end)
     return it("sessions valides restent toutes présentes après purge", function()
       local sessions = {
@@ -395,8 +337,7 @@ return describe("auth/sessions", function()
       return assert.equals("j@prn.ovh", user)
     end)
     it("IP nil → nil", function()
-      local user = user_for_mac(nil, nil, SF_FILE)
-      return assert.is_nil(user)
+      return assert.is_nil(user_for_mac(nil, nil, SF_FILE))
     end)
     it("IP sans session correspondante → nil", function()
       write_and_reset({
@@ -408,8 +349,7 @@ return describe("auth/sessions", function()
           }
         }
       }, SF_FILE)
-      local user = user_for_mac(nil, "192.168.99.1", SF_FILE)
-      return assert.is_nil(user)
+      return assert.is_nil(user_for_mac(nil, "192.168.99.1", SF_FILE))
     end)
     return it("session expirée → nil", function()
       write_and_reset({
@@ -421,8 +361,7 @@ return describe("auth/sessions", function()
           }
         }
       }, SF_FILE)
-      local user = user_for_mac(MAC, "10.0.0.1", SF_FILE)
-      return assert.is_nil(user)
+      return assert.is_nil(user_for_mac(MAC, "10.0.0.1", SF_FILE))
     end)
   end)
   describe("load_sessions cas limites", function()
@@ -479,7 +418,7 @@ return describe("auth/sessions", function()
       fh:write(string.format('return { ["%s"] = { user="carol", expires=%d } }\n', EMAC, FUTURE))
       fh:close()
       reset_cache()
-      local result = bind_session_mac(EMAC, EMAC, "10.0.0.1", ENRICH_FILE)
+      bind_session_mac(EMAC, EMAC, "10.0.0.1", ENRICH_FILE)
       return os.remove(ENRICH_FILE)
     end)
   end)

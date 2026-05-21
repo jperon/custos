@@ -12,6 +12,7 @@ ffi = require "ffi"
 { :fork_child, :reap_one } = require "lib.process"
 { :session_for_mac, :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
 { :verify_password, :register_user, :update_user_hash } = require "auth.credentials"
+token = require "auth.token"
 { :load_or_generate_sni, :load_static } = require "auth.cert"
 { :extract_sni } = require "auth.sni_extractor"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
@@ -27,6 +28,14 @@ ffi.cdef [[
 ]]
 
 SIGHUP = 1
+
+COOKIE_NAME = "custos_session"
+
+make_session_cookie = (tok) ->
+  "#{COOKIE_NAME}=#{tok}; Path=/; HttpOnly; SameSite=Strict"
+
+clear_session_cookie = ->
+  "#{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
 
 signal_parent_reload = ->
   parent_pid = tonumber ffi.C.getppid!
@@ -307,20 +316,9 @@ handle_login = (req, peer_ip, peer_mac, state) ->
 
   log_info { action: "server_login_success", user: user, mac: mac, ip: peer_ip }
 
-  ok, err = pcall(->
-    add_session sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout
-  )
-  log_info { action: "server_session_add_pcall_result", ok: ok, err: tostring(err) }
-  unless ok
-    log_warn { action: "server_session_add_failed", peer: peer_ip, mac: mac, err: tostring(err) }
-    return 500, {}, "Session creation failed"
-
-  log_info { action: "server_counting_sessions_start" }
-  count = 0
-  for _ in pairs sessions
-    count += 1
-  log_info { action: "server_counting_sessions_done", count: count }
-  log_info { action: "server_sessions_write_start", path: state.sessions_file, sessions_count: count }
+  idle_timeout = state.auth_cfg.idle_timeout or 120
+  now = os.time!
+  add_session sessions, mac, peer_ip, user, now + idle_timeout
   ok, err = write_sessions sessions, state.sessions_file
   unless ok
     log_warn { action: "server_sessions_write_failed", path: state.sessions_file, err: err }
@@ -363,80 +361,70 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     unless ok
       log_warn { action: "server_auth_set_add_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) }
 
-  session = sessions[mac\lower!]
-  created_at = session and session.created_at or os.time!
-  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, success_page state.auth_cfg, created_at
+  tok = token.generate "user", user, mac, now + idle_timeout, state.token_key
+  200, {
+    ["Content-Type"]: "text/html; charset=UTF-8"
+    ["Set-Cookie"]: make_session_cookie tok
+  }, success_page state.auth_cfg, now
 
 handle_ping = (req, peer_ip, peer_mac, state) ->
   log_info { action: "server_ping_received", peer_ip: peer_ip, peer_mac: peer_mac }
+
+  cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
+  p, tok_err = token.verify cookie_val, state.token_key
+  unless p
+    log_info { action: "server_ping_token_invalid", peer_ip: peer_ip, err: tok_err }
+    return 401, {}, ""
+
+  user = p.user
+  mac  = p.mac
+  idle_timeout = state.auth_cfg.idle_timeout or 120
+  now  = os.time!
+  new_expires = now + idle_timeout
+
   sessions = load_sessions state.sessions_file
   purge_expired sessions
+  add_session sessions, mac, peer_ip, user, new_expires
+  write_sessions sessions, state.sessions_file
 
-  s = session_for_mac peer_mac, peer_ip, state.sessions_file, sessions
+  refresh_nft state.nft_sess, peer_ip, mac, idle_timeout, user
 
-  unless s
-    log_info { action: "server_ping_no_session", peer_ip: peer_ip, peer_mac: peer_mac }
-    return 401, {}, ""
-
-  mac = s.mac or peer_mac
-  now = os.time!
-  log_info { action: "server_ping_checking_expiry", peer_mac: peer_mac, now: now, heartbeat: s.heartbeat, expires: s.expires }
-  if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat)
-    log_info { action: "server_ping_session_expired", peer_mac: peer_mac, now: now, heartbeat: s.heartbeat, expires: s.expires }
-    sessions[mac] = nil
-    write_sessions sessions, state.sessions_file
-    return 401, {}, ""
-
-  if state.auth_cfg.idle_timeout and state.auth_cfg.idle_timeout > 0
-    s.heartbeat = now + state.auth_cfg.idle_timeout
-    log_info { action: "server_ping_heartbeat_updated", peer_mac: peer_mac, now: now, new_heartbeat: s.heartbeat, idle_timeout: state.auth_cfg.idle_timeout }
-    write_sessions sessions, state.sessions_file
-
-  refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, s.user
-
-  log_info { action: "server_ping_success", peer_mac: peer_mac }
-  204, {}, ""
+  new_tok = token.generate "user", user, mac, new_expires, state.token_key
+  log_info { action: "server_ping_success", peer_mac: mac }
+  204, { ["Set-Cookie"]: make_session_cookie new_tok }, ""
 
 handle_logout = (req, peer_ip, peer_mac, state) ->
-  sessions = load_sessions state.sessions_file
-  s = session_for_mac peer_mac, peer_ip, state.sessions_file, sessions
+  cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
+  p = (token.verify cookie_val, state.token_key)
+  mac  = (p and p.mac) or peer_mac
+  user = p and p.user
 
-  unless s
-    return 302, { ["Location"]: "/" }, ""
-
-  mac = s.mac or peer_mac
-  user = s.user
+  if mac and mac ~= "unknown"
+    sessions = load_sessions state.sessions_file
+    sessions[mac\lower!] = nil
+    write_sessions sessions, state.sessions_file
 
   if state.nft_sess
     state.nft_sess.del_authenticated peer_ip
-    state.nft_sess.del_authenticated_mac s.mac if s.mac
+    state.nft_sess.del_authenticated_mac mac if mac and mac ~= "unknown"
 
-  -- Remove entries from per-rule auth sets
-  filter_cfg = config.filter or {}
-  rules = filter_cfg.rules or {}
-  for idx, rule in ipairs rules
-    continue unless rule_requires_auth rule
-    continue unless user_qualifies_for_rule user, rule
-
-    -- Generate stable rule_id
-    rule_id = generate_rule_id rule, idx
-
-    -- Generate nft delete commands for auth sets
-    ok, err = pcall ->
-      if state.nft_sess
+  if user and state.nft_sess
+    filter_cfg = config.filter or {}
+    rules = filter_cfg.rules or {}
+    for idx, rule in ipairs rules
+      continue unless rule_requires_auth rule
+      continue unless user_qualifies_for_rule user, rule
+      rule_id = generate_rule_id rule, idx
+      ok, err = pcall ->
         state.nft_sess.run_nft "delete element bridge dns-filter-bridge #{rule_id}_auth_mac { #{mac} }", { quiet: true }
         if peer_ip and peer_ip ~= "unknown"
           if peer_ip\find ":"
             state.nft_sess.run_nft "delete element bridge dns-filter-bridge #{rule_id}_auth_ip6 { #{peer_ip} }", { quiet: true }
           else
             state.nft_sess.run_nft "delete element bridge dns-filter-bridge #{rule_id}_auth_ip4 { #{peer_ip} }", { quiet: true }
-    unless ok
-      log_warn { action: "server_auth_set_delete_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) }
+      log_warn { action: "server_auth_set_delete_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) } unless ok
 
-  sessions[mac] = nil
-  write_sessions sessions, state.sessions_file
-
-  302, { ["Location"]: "/" }, ""
+  302, { ["Location"]: "/", ["Set-Cookie"]: clear_session_cookie! }, ""
 
 handle_register = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
@@ -733,6 +721,9 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   else
     log_debug { action: "server_no_static_cert_configured" }
 
+  token_key = token.load_key auth_cfg.session_key or "/etc/custos/session.key"
+  log_info { action: "server_session_key_loaded" }
+
   listen4, err4 = make_server4 port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
   listen6 = make_server6 port
@@ -747,6 +738,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     nft_sess: nft_sess
     secrets_path: secrets_path
     sessions_file: sessions_file
+    token_key: token_key
     static_cert_paths: if auth_cfg.cert and auth_cfg.key then { cert: auth_cfg.cert, key: auth_cfg.key } else nil
     cert_cache: cert_cache
   }

@@ -10,9 +10,7 @@ serialize = function(sessions)
   for mac, s in pairs(sessions) do
     local safe_mac = mac:gsub('"', '\\"')
     local safe_user = s.user:gsub('"', '\\"')
-    local expires = s.expires and (", expires = " .. tostring(s.expires)) or ""
-    local hb = s.heartbeat and (", heartbeat = " .. tostring(s.heartbeat)) or ""
-    local ca = s.created_at and (", created_at = " .. tostring(s.created_at)) or ""
+    local expires_str = s.expires and (", expires = " .. tostring(s.expires)) or ""
     local ips_parts = { }
     if s.ips then
       for family, ip in pairs(s.ips) do
@@ -20,7 +18,7 @@ serialize = function(sessions)
       end
     end
     local ips_str = #ips_parts > 0 and (", ips = { " .. table.concat(ips_parts, ", ") .. " }") or ""
-    parts[#parts + 1] = string.format('  ["%s"] = { user = "%s"%s%s%s%s, mac = "%s" },\n', safe_mac, safe_user, expires, hb, ca, ips_str, safe_mac)
+    parts[#parts + 1] = string.format('  ["%s"] = { user = "%s"%s%s, mac = "%s" },\n', safe_mac, safe_user, expires_str, ips_str, safe_mac)
   end
   parts[#parts + 1] = "}\n"
   return table.concat(parts)
@@ -56,25 +54,17 @@ load_sessions = function(path)
   return result
 end
 local add_session
-add_session = function(sessions, mac, ip, user, session_ttl, idle_timeout)
+add_session = function(sessions, mac, ip, user, expires)
   if not (mac and mac ~= "unknown") then
     return 
   end
   mac = mac:lower()
-  local now = os_time()
-  local hb = (idle_timeout and idle_timeout > 0) and (now + idle_timeout) or nil
   local s = sessions[mac] or {
     ips = { }
   }
   s.mac = mac
   s.user = user
-  if session_ttl and session_ttl > 0 then
-    s.expires = now + session_ttl
-  else
-    s.expires = nil
-  end
-  s.heartbeat = hb
-  s.created_at = s.created_at or now
+  s.expires = expires
   if ip then
     local family
     if ip:find(":", 1, true) then
@@ -90,7 +80,7 @@ local purge_expired
 purge_expired = function(sessions)
   local now = os_time()
   for mac, s in pairs(sessions) do
-    if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat) then
+    if s.expires and now > s.expires then
       sessions[mac] = nil
     end
   end
@@ -244,7 +234,7 @@ session_for_mac = function(mac, ip, path, sessions_arg)
     return nil
   end
   local now = os_time()
-  if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat) then
+  if s.expires and now > s.expires then
     if not sessions_arg and path then
       sessions_table = reload_cached(path)
       if sessions_table then
@@ -256,9 +246,6 @@ session_for_mac = function(mac, ip, path, sessions_arg)
       now = os_time()
     end
     if s.expires and now > s.expires then
-      return nil
-    end
-    if s.heartbeat and now > s.heartbeat then
       return nil
     end
   end

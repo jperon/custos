@@ -16,6 +16,7 @@ do
   local _obj_0 = require("auth.credentials")
   verify_password, register_user, update_user_hash = _obj_0.verify_password, _obj_0.register_user, _obj_0.update_user_hash
 end
+local token = require("auth.token")
 local load_or_generate_sni, load_static
 do
   local _obj_0 = require("auth.cert")
@@ -41,6 +42,15 @@ ffi.cdef([[  typedef int pid_t;
   int kill(pid_t pid, int sig);
 ]])
 local SIGHUP = 1
+local COOKIE_NAME = "custos_session"
+local make_session_cookie
+make_session_cookie = function(tok)
+  return tostring(COOKIE_NAME) .. "=" .. tostring(tok) .. "; Path=/; HttpOnly; SameSite=Strict"
+end
+local clear_session_cookie
+clear_session_cookie = function()
+  return tostring(COOKIE_NAME) .. "=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+end
 local signal_parent_reload
 signal_parent_reload = function()
   local parent_pid = tonumber(ffi.C.getppid())
@@ -421,40 +431,10 @@ handle_login = function(req, peer_ip, peer_mac, state)
     mac = mac,
     ip = peer_ip
   })
+  local idle_timeout = state.auth_cfg.idle_timeout or 120
+  local now = os.time()
+  add_session(sessions, mac, peer_ip, user, now + idle_timeout)
   local err
-  ok, err = pcall(function()
-    return add_session(sessions, mac, peer_ip, user, state.auth_cfg.session_ttl, state.auth_cfg.idle_timeout)
-  end)
-  log_info({
-    action = "server_session_add_pcall_result",
-    ok = ok,
-    err = tostring(err)
-  })
-  if not (ok) then
-    log_warn({
-      action = "server_session_add_failed",
-      peer = peer_ip,
-      mac = mac,
-      err = tostring(err)
-    })
-    return 500, { }, "Session creation failed"
-  end
-  log_info({
-    action = "server_counting_sessions_start"
-  })
-  local count = 0
-  for _ in pairs(sessions) do
-    count = count + 1
-  end
-  log_info({
-    action = "server_counting_sessions_done",
-    count = count
-  })
-  log_info({
-    action = "server_sessions_write_start",
-    path = state.sessions_file,
-    sessions_count = count
-  })
   ok, err = write_sessions(sessions, state.sessions_file)
   if not (ok) then
     log_warn({
@@ -565,11 +545,11 @@ handle_login = function(req, peer_ip, peer_mac, state)
       break
     end
   end
-  local session = sessions[mac:lower()]
-  local created_at = session and session.created_at or os.time()
+  local tok = token.generate("user", user, mac, now + idle_timeout, state.token_key)
   return 200, {
-    ["Content-Type"] = "text/html; charset=UTF-8"
-  }, success_page(state.auth_cfg, created_at)
+    ["Content-Type"] = "text/html; charset=UTF-8",
+    ["Set-Cookie"] = make_session_cookie(tok)
+  }, success_page(state.auth_cfg, now)
 end
 local handle_ping
 handle_ping = function(req, peer_ip, peer_mac, state)
@@ -578,89 +558,68 @@ handle_ping = function(req, peer_ip, peer_mac, state)
     peer_ip = peer_ip,
     peer_mac = peer_mac
   })
+  local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)
+  local p, tok_err = token.verify(cookie_val, state.token_key)
+  if not (p) then
+    log_info({
+      action = "server_ping_token_invalid",
+      peer_ip = peer_ip,
+      err = tok_err
+    })
+    return 401, { }, ""
+  end
+  local user = p.user
+  local mac = p.mac
+  local idle_timeout = state.auth_cfg.idle_timeout or 120
+  local now = os.time()
+  local new_expires = now + idle_timeout
   local sessions = load_sessions(state.sessions_file)
   purge_expired(sessions)
-  local s = session_for_mac(peer_mac, peer_ip, state.sessions_file, sessions)
-  if not (s) then
-    log_info({
-      action = "server_ping_no_session",
-      peer_ip = peer_ip,
-      peer_mac = peer_mac
-    })
-    return 401, { }, ""
-  end
-  local mac = s.mac or peer_mac
-  local now = os.time()
-  log_info({
-    action = "server_ping_checking_expiry",
-    peer_mac = peer_mac,
-    now = now,
-    heartbeat = s.heartbeat,
-    expires = s.expires
-  })
-  if (s.expires and now > s.expires) or (s.heartbeat and now > s.heartbeat) then
-    log_info({
-      action = "server_ping_session_expired",
-      peer_mac = peer_mac,
-      now = now,
-      heartbeat = s.heartbeat,
-      expires = s.expires
-    })
-    sessions[mac] = nil
-    write_sessions(sessions, state.sessions_file)
-    return 401, { }, ""
-  end
-  if state.auth_cfg.idle_timeout and state.auth_cfg.idle_timeout > 0 then
-    s.heartbeat = now + state.auth_cfg.idle_timeout
-    log_info({
-      action = "server_ping_heartbeat_updated",
-      peer_mac = peer_mac,
-      now = now,
-      new_heartbeat = s.heartbeat,
-      idle_timeout = state.auth_cfg.idle_timeout
-    })
-    write_sessions(sessions, state.sessions_file)
-  end
-  refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, s.user)
+  add_session(sessions, mac, peer_ip, user, new_expires)
+  write_sessions(sessions, state.sessions_file)
+  refresh_nft(state.nft_sess, peer_ip, mac, idle_timeout, user)
+  local new_tok = token.generate("user", user, mac, new_expires, state.token_key)
   log_info({
     action = "server_ping_success",
-    peer_mac = peer_mac
+    peer_mac = mac
   })
-  return 204, { }, ""
+  return 204, {
+    ["Set-Cookie"] = make_session_cookie(new_tok)
+  }, ""
 end
 local handle_logout
 handle_logout = function(req, peer_ip, peer_mac, state)
-  local sessions = load_sessions(state.sessions_file)
-  local s = session_for_mac(peer_mac, peer_ip, state.sessions_file, sessions)
-  if not (s) then
-    return 302, {
-      ["Location"] = "/"
-    }, ""
+  local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)
+  local p = (token.verify(cookie_val, state.token_key))
+  local mac = (p and p.mac) or peer_mac
+  local user = p and p.user
+  if mac and mac ~= "unknown" then
+    local sessions = load_sessions(state.sessions_file)
+    sessions[mac:lower()] = nil
+    write_sessions(sessions, state.sessions_file)
   end
-  local mac = s.mac or peer_mac
-  local user = s.user
   if state.nft_sess then
     state.nft_sess.del_authenticated(peer_ip)
-    if s.mac then
-      state.nft_sess.del_authenticated_mac(s.mac)
+    if mac and mac ~= "unknown" then
+      state.nft_sess.del_authenticated_mac(mac)
     end
   end
-  local filter_cfg = config.filter or { }
-  local rules = filter_cfg.rules or { }
-  for idx, rule in ipairs(rules) do
-    local _continue_0 = false
-    repeat
-      if not (rule_requires_auth(rule)) then
-        _continue_0 = true
-        break
-      end
-      if not (user_qualifies_for_rule(user, rule)) then
-        _continue_0 = true
-        break
-      end
-      rule_id = generate_rule_id(rule, idx)
-      local ok, err = pcall(function()
-        if state.nft_sess then
+  if user and state.nft_sess then
+    local filter_cfg = config.filter or { }
+    local rules = filter_cfg.rules or { }
+    for idx, rule in ipairs(rules) do
+      local _continue_0 = false
+      repeat
+        if not (rule_requires_auth(rule)) then
+          _continue_0 = true
+          break
+        end
+        if not (user_qualifies_for_rule(user, rule)) then
+          _continue_0 = true
+          break
+        end
+        rule_id = generate_rule_id(rule, idx)
+        local ok, err = pcall(function()
           state.nft_sess.run_nft("delete element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " }", {
             quiet = true
           })
@@ -675,27 +634,26 @@ handle_logout = function(req, peer_ip, peer_mac, state)
               })
             end
           end
+        end)
+        if not (ok) then
+          log_warn({
+            action = "server_auth_set_delete_failed",
+            rule_id = rule_id,
+            mac = mac,
+            ip = peer_ip,
+            err = tostring(err)
+          })
         end
-      end)
-      if not (ok) then
-        log_warn({
-          action = "server_auth_set_delete_failed",
-          rule_id = rule_id,
-          mac = mac,
-          ip = peer_ip,
-          err = tostring(err)
-        })
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
       end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
     end
   end
-  sessions[mac] = nil
-  write_sessions(sessions, state.sessions_file)
   return 302, {
-    ["Location"] = "/"
+    ["Location"] = "/",
+    ["Set-Cookie"] = clear_session_cookie()
   }, ""
 end
 local handle_register
@@ -1101,6 +1059,10 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
       action = "server_no_static_cert_configured"
     })
   end
+  local token_key = token.load_key(auth_cfg.session_key or "/etc/custos/session.key")
+  log_info({
+    action = "server_session_key_loaded"
+  })
   local listen4, err4 = make_server4(port)
   if not (listen4) then
     error("Impossible de démarrer le serveur IPv4 sur port " .. tostring(port) .. " : " .. tostring(err4))
@@ -1119,6 +1081,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     nft_sess = nft_sess,
     secrets_path = secrets_path,
     sessions_file = sessions_file,
+    token_key = token_key,
     static_cert_paths = (function()
       if auth_cfg.cert and auth_cfg.key then
         return {
