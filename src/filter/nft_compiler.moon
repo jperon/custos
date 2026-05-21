@@ -501,7 +501,7 @@ render_set = (name, set_type, flags, elems, indent, include_elements=true) ->
 -- @treturn table Liste des expressions nft compilées
 -- @treturn boolean ok false si une condition nft-capable n'a pu être exprimée
 --                    dans cette famille (sémantique AND : un seul échec l'invalide).
-compile_conditions_nft = (conditions_meta, family) ->
+compile_conditions_nft = (conditions_meta, family, negate_only=false) ->
   return {}, true unless conditions_meta and #conditions_meta > 0
 
   exprs = {}
@@ -510,6 +510,11 @@ compile_conditions_nft = (conditions_meta, family) ->
     -- Skip conditions that are worker-only or don't support nft
     continue unless cond_meta.capabilities
     continue unless cond_meta.capabilities.nft
+    -- Filtrer selon le mode : normal ou négatif uniquement
+    if negate_only
+      continue unless cond_meta.negate_mark
+    else
+      continue if cond_meta.negate_mark
 
     -- Call compile_nft on the condition with appropriate family
     if cond_meta.compile_nft
@@ -635,6 +640,29 @@ match_exprs = (rule) ->
     exprs[1] = base
   exprs
 
+-- Retourne les expressions nft des conditions avec negate_mark (pour le pattern deux règles).
+negated_match_exprs = (rule) ->
+  return {} unless rule.conditions_meta
+  first_elem = rule.conditions_meta[1]
+  return {} unless first_elem and first_elem.name
+
+  has_negated = false
+  for _, cm in ipairs rule.conditions_meta
+    if cm.negate_mark and cm.capabilities and cm.capabilities.nft
+      has_negated = true
+      break
+  return {} unless has_negated
+
+  exprs_ip, ok_ip = compile_conditions_nft rule.conditions_meta, "ip", true
+  exprs_ip6, ok_ip6 = compile_conditions_nft rule.conditions_meta, "ip6", true
+  combined_ip = ok_ip and #exprs_ip > 0 and table.concat(exprs_ip, " ") or nil
+  combined_ip6 = ok_ip6 and #exprs_ip6 > 0 and table.concat(exprs_ip6, " ") or nil
+
+  out = {}
+  out[#out + 1] = combined_ip if combined_ip
+  out[#out + 1] = combined_ip6 if combined_ip6 and combined_ip6 != combined_ip
+  out
+
 dynamic_match_exprs = (rule, force=false) ->
   return {} unless (rule.dns_scope and rule.action != "dnsonly") or force
   l4 = {}
@@ -699,19 +727,37 @@ render_rule_chain = (rule, indent) ->
 
     lines[#lines + 1] = "#{indent}  return"
   else
-    all_exprs = {}
+    neg_exprs = negated_match_exprs rule
+    all_normal_exprs = {}
     for _, expr in ipairs dynamic_match_exprs rule
-      all_exprs[#all_exprs + 1] = expr
+      all_normal_exprs[#all_normal_exprs + 1] = expr
     unless rule.dns_scope
       for _, expr in ipairs match_exprs rule
-        all_exprs[#all_exprs + 1] = expr
+        all_normal_exprs[#all_normal_exprs + 1] = expr
 
-    for _, expr in ipairs all_exprs
-      e = expr\match "^%s*(.-)%s*$"
-      if e and #e > 0
-        lines[#lines + 1] = "#{indent}  #{e} meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
-      else
-        lines[#lines + 1] = "#{indent}  meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
+    if #neg_exprs > 0
+      -- Pattern deux règles : escape (inner match → return) + fallback (normal → mark)
+      base_exprs = if #all_normal_exprs > 0 then all_normal_exprs else { "" }
+      for _, norm_expr in ipairs base_exprs
+        for _, neg_expr in ipairs neg_exprs
+          parts = {}
+          parts[#parts + 1] = norm_expr if norm_expr and #norm_expr > 0
+          parts[#parts + 1] = neg_expr
+          e = table.concat(parts, " ")\match "^%s*(.-)%s*$"
+          if e and #e > 0
+            lines[#lines + 1] = "#{indent}  #{e} return comment \"#{nft_comment "rule_id=#{rule.rule_id} not-negation"}\""
+        e = norm_expr\match "^%s*(.-)%s*$"
+        if e and #e > 0
+          lines[#lines + 1] = "#{indent}  #{e} meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
+        else
+          lines[#lines + 1] = "#{indent}  meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
+    else
+      for _, expr in ipairs all_normal_exprs
+        e = expr\match "^%s*(.-)%s*$"
+        if e and #e > 0
+          lines[#lines + 1] = "#{indent}  #{e} meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
+        else
+          lines[#lines + 1] = "#{indent}  meta mark set #{rule.mark} counter #{verdict} comment \"#{nft_comment "rule_id=#{rule.rule_id}"}\""
 
     lines[#lines + 1] = "#{indent}  return"
 

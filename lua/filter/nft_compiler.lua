@@ -651,7 +651,10 @@ render_set = function(name, set_type, flags, elems, indent, include_elements)
   return lines
 end
 local compile_conditions_nft
-compile_conditions_nft = function(conditions_meta, family)
+compile_conditions_nft = function(conditions_meta, family, negate_only)
+  if negate_only == nil then
+    negate_only = false
+  end
   if not (conditions_meta and #conditions_meta > 0) then
     return { }, true
   end
@@ -667,6 +670,17 @@ compile_conditions_nft = function(conditions_meta, family)
       if not (cond_meta.capabilities.nft) then
         _continue_0 = true
         break
+      end
+      if negate_only then
+        if not (cond_meta.negate_mark) then
+          _continue_0 = true
+          break
+        end
+      else
+        if cond_meta.negate_mark then
+          _continue_0 = true
+          break
+        end
       end
       if cond_meta.compile_nft then
         local expr, err = cond_meta.compile_nft(family)
@@ -827,6 +841,38 @@ match_exprs = function(rule)
   end
   return exprs
 end
+local negated_match_exprs
+negated_match_exprs = function(rule)
+  if not (rule.conditions_meta) then
+    return { }
+  end
+  local first_elem = rule.conditions_meta[1]
+  if not (first_elem and first_elem.name) then
+    return { }
+  end
+  local has_negated = false
+  for _, cm in ipairs(rule.conditions_meta) do
+    if cm.negate_mark and cm.capabilities and cm.capabilities.nft then
+      has_negated = true
+      break
+    end
+  end
+  if not (has_negated) then
+    return { }
+  end
+  local exprs_ip, ok_ip = compile_conditions_nft(rule.conditions_meta, "ip", true)
+  local exprs_ip6, ok_ip6 = compile_conditions_nft(rule.conditions_meta, "ip6", true)
+  local combined_ip = ok_ip and #exprs_ip > 0 and table.concat(exprs_ip, " ") or nil
+  local combined_ip6 = ok_ip6 and #exprs_ip6 > 0 and table.concat(exprs_ip6, " ") or nil
+  local out = { }
+  if combined_ip then
+    out[#out + 1] = combined_ip
+  end
+  if combined_ip6 and combined_ip6 ~= combined_ip then
+    out[#out + 1] = combined_ip6
+  end
+  return out
+end
 local dynamic_match_exprs
 dynamic_match_exprs = function(rule, force)
   if force == nil then
@@ -905,21 +951,52 @@ render_rule_chain = function(rule, indent)
     end
     lines[#lines + 1] = tostring(indent) .. "  return"
   else
-    local all_exprs = { }
+    local neg_exprs = negated_match_exprs(rule)
+    local all_normal_exprs = { }
     for _, expr in ipairs(dynamic_match_exprs(rule)) do
-      all_exprs[#all_exprs + 1] = expr
+      all_normal_exprs[#all_normal_exprs + 1] = expr
     end
     if not (rule.dns_scope) then
       for _, expr in ipairs(match_exprs(rule)) do
-        all_exprs[#all_exprs + 1] = expr
+        all_normal_exprs[#all_normal_exprs + 1] = expr
       end
     end
-    for _, expr in ipairs(all_exprs) do
-      local e = expr:match("^%s*(.-)%s*$")
-      if e and #e > 0 then
-        lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
+    if #neg_exprs > 0 then
+      local base_exprs
+      if #all_normal_exprs > 0 then
+        base_exprs = all_normal_exprs
       else
-        lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
+        base_exprs = {
+          ""
+        }
+      end
+      for _, norm_expr in ipairs(base_exprs) do
+        for _, neg_expr in ipairs(neg_exprs) do
+          local parts = { }
+          if norm_expr and #norm_expr > 0 then
+            parts[#parts + 1] = norm_expr
+          end
+          parts[#parts + 1] = neg_expr
+          local e = table.concat(parts, " "):match("^%s*(.-)%s*$")
+          if e and #e > 0 then
+            lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " return comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id) .. " not-negation")) .. "\""
+          end
+        end
+        local e = norm_expr:match("^%s*(.-)%s*$")
+        if e and #e > 0 then
+          lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
+        else
+          lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
+        end
+      end
+    else
+      for _, expr in ipairs(all_normal_exprs) do
+        local e = expr:match("^%s*(.-)%s*$")
+        if e and #e > 0 then
+          lines[#lines + 1] = tostring(indent) .. "  " .. tostring(e) .. " meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
+        else
+          lines[#lines + 1] = tostring(indent) .. "  meta mark set " .. tostring(rule.mark) .. " counter " .. tostring(verdict) .. " comment \"" .. tostring(nft_comment("rule_id=" .. tostring(rule.rule_id))) .. "\""
+        end
       end
     end
     lines[#lines + 1] = tostring(indent) .. "  return"

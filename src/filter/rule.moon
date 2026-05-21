@@ -39,6 +39,7 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
       worker_only:         compiler_api.compute_worker_only(cond_obj)
       compile_nft:         cond_obj.compile_nft
       creates_dynamic_scope: cond_obj.creates_dynamic_scope
+      negate_mark:         cond_obj.negate_mark or false
     }
 
   -- Compilation des actions : on stocke eval et on_response séparément.
