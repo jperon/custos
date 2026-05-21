@@ -1096,5 +1096,6 @@ return {
   run = run,
   normalize_sni = normalize_sni,
   protocol_in_scope = protocol_in_scope,
-  apply_nft_allow = apply_nft_allow
+  apply_nft_allow = apply_nft_allow,
+  reset_nft_modules = reset_nft_modules
 }

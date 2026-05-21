@@ -282,6 +282,7 @@ cmd_test_unit() {
         command -v luajit >/dev/null 2>&1 || need_install="$need_install luajit"
         luajit -e "require \"lyaml\"" 2>/dev/null   || need_install="$need_install lyaml"
         [ -e /usr/lib/libwolfssl.so ] || need_install="$need_install libuhttpd-wolfssl"
+        command -v px5g >/dev/null 2>&1  || need_install="$need_install px5g"
         if [ -n "$need_install" ]; then
             apk update >/dev/null 2>&1
             apk add $need_install >/dev/null

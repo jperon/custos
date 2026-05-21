@@ -1,25 +1,5 @@
--- Stubs pour nft_queue et nft (toujours stubber pour éviter d'exécuter nft)
--- Réinitialiser package.loaded pour forcer le rechargement
-package.loaded["nft_queue"] = nil
-package.loaded["nft"] = nil
-
--- Définir les stubs
-package.loaded["nft_queue"] = {
-  cmd_for = function(kind, src, dst, rule_id, timeout)
-    return "add element bridge dns-filter-bridge " .. tostring(kind) .. "_allowed { " .. tostring(src) .. " . " .. tostring(dst) .. " timeout " .. tostring(timeout) .. " }"
-  end
-}
-package.loaded["nft"] = {
-  run_cmd = function(cmd, opts)
-    return true, nil  -- Simuler succès sans exécuter nft
-  end
-}
-
--- Maintenant charger worker_tls (après avoir stubbé les dépendances)
-local worker_tls = require("worker_tls")
-
 return describe("worker_tls helpers", function()
-  local sni_logger = worker_tls
+  local sni_logger = require("worker_tls")
   describe("normalize_sni", function()
     it("met en minuscules et retire les points finaux", function()
       assert.equals("example.com", sni_logger.normalize_sni("ExAmPle.CoM."))
@@ -62,19 +42,26 @@ return describe("worker_tls helpers", function()
     end)
   end)
   return describe("apply_nft_allow", function()
-    -- Réinitialiser le cache avant chaque test pour utiliser les stubs
-    before_each(function()
-      if sni_logger.reset_nft_modules then
-        sni_logger.reset_nft_modules()
-      end
+    setup(function()
+      package.loaded["nft_queue"] = {
+        cmd_for = function(kind, src, dst, rule_id, timeout)
+          return "add element bridge dns-filter-bridge " .. tostring(kind) .. "_allowed { " .. tostring(src) .. " . " .. tostring(dst) .. " timeout " .. tostring(timeout) .. " }"
+        end
+      }
+      package.loaded["nft"] = {
+        run_cmd = function(cmd, opts)
+          return true, nil
+        end
+      }
     end)
-
-    -- Ces tests nécessitent nft configuré (rulesets) qui n'est pas disponible dans test-vm
-    pending("IPv4 pair valide → true", function()
+    before_each(function()
+      return sni_logger.reset_nft_modules()
+    end)
+    it("IPv4 pair valide → true", function()
       local ok, err = sni_logger.apply_nft_allow("192.168.1.1", "8.8.8.8", nil, { }, "r_test")
       return assert.is_true(ok)
     end)
-    pending("IPv4 avec MAC valide → true", function()
+    it("IPv4 avec MAC valide → true", function()
       local ok, _ = sni_logger.apply_nft_allow("192.168.1.1", "8.8.8.8", "aa:bb:cc:dd:ee:ff", { }, "r_test")
       return assert.is_true(ok)
     end)
@@ -94,15 +81,15 @@ return describe("worker_tls helpers", function()
       local ok, err = sni_logger.apply_nft_allow("192.168.1.1", "2001:db8::1", nil, { }, "r_test")
       return assert.is_false(ok)
     end)
-    pending("IPv6 pair valide → true", function()
+    it("IPv6 pair valide → true", function()
       local ok, _ = sni_logger.apply_nft_allow("2001:db8::1", "2001:db8::2", nil, { }, "r_test")
       return assert.is_true(ok)
     end)
-    pending("MAC 'unknown' ignoré (pas de commande MAC)", function()
+    it("MAC 'unknown' ignoré (pas de commande MAC)", function()
       local ok, _ = sni_logger.apply_nft_allow("192.168.1.1", "8.8.8.8", "unknown", { }, "r_test")
       return assert.is_true(ok)
     end)
-    return pending("MAC 00:00:00:00:00:00 ignoré", function()
+    return it("MAC 00:00:00:00:00:00 ignoré", function()
       local ok, _ = sni_logger.apply_nft_allow("192.168.1.1", "8.8.8.8", "00:00:00:00:00:00", { }, "r_test")
       return assert.is_true(ok)
     end)

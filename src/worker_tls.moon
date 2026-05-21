@@ -869,4 +869,4 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
   }
   run_queue tonumber(queue_num), handle_sni_packet
 
-{ :run, :normalize_sni, :protocol_in_scope, :apply_nft_allow }
+{ :run, :normalize_sni, :protocol_in_scope, :apply_nft_allow, :reset_nft_modules }

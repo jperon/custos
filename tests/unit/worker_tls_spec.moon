@@ -1,12 +1,3 @@
--- Stubs nft pour tester apply_nft_allow sans infrastructure réseau
-package.loaded["nft_queue"] or= {
-  cmd_for: (kind, src, dst, rule_id, timeout) ->
-    "add element bridge dns-filter-bridge #{kind}_allowed { #{src} . #{dst} timeout #{timeout} }"
-}
-package.loaded["nft"] or= {
-  run_cmd: (cmd, opts) -> true, nil
-}
-
 describe "worker_tls helpers", ->
   sni_logger = require "worker_tls"
 
@@ -38,6 +29,18 @@ describe "worker_tls helpers", ->
       assert.is_false sni_logger.protocol_in_scope { protocols: "tcp-only" }, "quic"
 
   describe "apply_nft_allow", ->
+    setup ->
+      package.loaded["nft_queue"] = {
+        cmd_for: (kind, src, dst, rule_id, timeout) ->
+          "add element bridge dns-filter-bridge #{kind}_allowed { #{src} . #{dst} timeout #{timeout} }"
+      }
+      package.loaded["nft"] = {
+        run_cmd: (cmd, opts) -> true, nil
+      }
+
+    before_each ->
+      sni_logger.reset_nft_modules!
+
     it "IPv4 pair valide → true", ->
       ok, err = sni_logger.apply_nft_allow "192.168.1.1", "8.8.8.8", nil, {}, "r_test"
       assert.is_true ok
