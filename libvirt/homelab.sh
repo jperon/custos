@@ -62,7 +62,8 @@ need() { command -v "$1" >/dev/null 2>&1 || err "outil manquant : $1"; }
 check_deps() {
     need virsh
     need qemu-img
-    need guestfish
+    command -v guestfish >/dev/null 2>&1 || command -v qemu-nbd >/dev/null 2>&1 \
+        || err "outil manquant : guestfish ou qemu-nbd requis (pacman -S libguestfs  ou  qemu-base)"
     need curl
     need ssh
     need scp
