@@ -27,6 +27,82 @@ ffi.cdef [[
   int kill(pid_t pid, int sig);
 ]]
 
+
+css_content = [[
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.5;
+    color: #333;
+    background-color: #f5f5f5;
+    padding: 1rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  form {
+    background: white;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin: 1rem 0;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+  }
+
+  input[type="text"],
+  input[type="password"] {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+
+  button:hover { background-color: #0056b3; }
+
+  p { margin: 1rem 0; }
+
+  a {
+    color: #007bff;
+    text-decoration: none;
+  }
+
+  a:hover { text-decoration: underline; }
+
+  @media (max-width: 768px) {
+    body { padding: 0.5rem; }
+    form { padding: 1rem; }
+  }
+
+  @media (max-width: 480px) {
+    body { padding: 0.25rem; }
+    form { padding: 0.75rem; }
+  }
+  ]]
+
+
 SIGHUP = 1
 
 COOKIE_NAME = "custos_session"
@@ -62,8 +138,8 @@ page = =>
     H.head {
       H.meta charset: "UTF-8",
       H.title "CustosVirginum",
-      H.link rel: "stylesheet", href: "/css"
       H.link rel: "icon", href: "data:image/svg+xml,<svg viewBox='0 0 100 100'><text y='75' font-size='75'>✞</text></svg>"
+      H.style css_content
     }
     H.body @
   }
@@ -83,7 +159,7 @@ success_page = (auth_cfg, created_at) ->
       var sessionStart = #{session_start};
       var lastSuccess = Date.now();
       function ping(){
-        fetch('/ping',{method:'GET',credentials:'omit'})
+        fetch('/ping',{method:'GET',credentials:'same-origin'})
           .then(function(r){
             lastSuccess = Date.now();
             if(r.status===401){
@@ -444,96 +520,6 @@ handle_register = (req, peer_ip, peer_mac, state) ->
   if not signal_parent_reload!
     log_warn { action: "server_reload_signal_failed", parent_pid: tonumber(ffi.C.getppid!) }
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_success_page req
-
-css_content = [[
-  * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-  }
-
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    line-height: 1.5;
-    color: #333;
-    background-color: #f5f5f5;
-    padding: 1rem;
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-
-  form {
-    background: white;
-    padding: 2rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    margin: 1rem 0;
-  }
-
-  label {
-    display: block;
-    margin-bottom: 0.5rem;
-    font-weight: 500;
-  }
-
-  input[type="text"],
-  input[type="password"] {
-    width: 100%;
-    padding: 0.75rem;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 1rem;
-    margin-bottom: 1rem;
-  }
-
-  button {
-    background-color: #007bff;
-    color: white;
-    border: none;
-    padding: 0.75rem 1.5rem;
-    border-radius: 4px;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: background-color 0.2s;
-  }
-
-  button:hover {
-    background-color: #0056b3;
-  }
-
-  p {
-    margin: 1rem 0;
-  }
-
-  a {
-    color: #007bff;
-    text-decoration: none;
-  }
-
-  a:hover {
-    text-decoration: underline;
-  }
-
-  @media (max-width: 768px) {
-    body {
-      padding: 0.5rem;
-    }
-
-    form {
-      padding: 1rem;
-    }
-  }
-
-  @media (max-width: 480px) {
-    body {
-      padding: 0.25rem;
-    }
-
-    form {
-      padding: 0.75rem;
-    }
-  }
-  ]]
 
 handle_request = (req, peer_ip, peer_mac, state) ->
   log_info { action: "server_request_received", path: req.path, method: req.method, peer_ip: peer_ip, peer_mac: peer_mac }
