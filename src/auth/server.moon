@@ -552,6 +552,9 @@ handle_request = (req, peer_ip, peer_mac, state) ->
     return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_form_page req
   elseif req.path == "/register" and req.method == "POST"
     return handle_register req, peer_ip, peer_mac, state
+  elseif req.path\match "^/admin"
+    webui_router = require "webui.router"
+    return webui_router.dispatch req, state
   else
     return 302, { ["Location"]: "/" }, ""
 
@@ -739,6 +742,8 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     secrets_path: secrets_path
     sessions_file: sessions_file
     token_key: token_key
+    config_path: auth_cfg.config_path or "/etc/custos/config.moon"
+    started_at: os.time!
     static_cert_paths: if auth_cfg.cert and auth_cfg.key then { cert: auth_cfg.cert, key: auth_cfg.key } else nil
     cert_cache: cert_cache
   }

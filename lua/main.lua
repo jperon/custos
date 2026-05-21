@@ -81,6 +81,7 @@ create_pipes = function()
 end
 local load_auth_cfg
 load_auth_cfg = function()
+  local meta = config.__meta or { }
   local auth = { }
   for k, v in pairs(config.auth or { }) do
     auth[k] = v
@@ -91,6 +92,7 @@ load_auth_cfg = function()
   auth.session_ttl = tonumber(auth.session_ttl) or 0
   auth.secrets = auth.secrets or "/etc/custos/secrets"
   auth.sessions_file = auth.sessions_file or "/tmp/sessions.lua"
+  auth.config_path = meta.path or "/etc/custos/config.moon"
   return auth
 end
 local load_doh_cfg

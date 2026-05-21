@@ -115,6 +115,7 @@ create_pipes = ->
 --- Charge la configuration auth avec les valeurs par défaut nécessaires.
 -- @treturn table Configuration auth
 load_auth_cfg = ->
+  meta = config.__meta or {}
   auth = {}
   for k, v in pairs(config.auth or {})
     auth[k] = v
@@ -124,6 +125,7 @@ load_auth_cfg = ->
   auth.session_ttl        = tonumber(auth.session_ttl) or 0
   auth.secrets            = auth.secrets or "/etc/custos/secrets"
   auth.sessions_file      = auth.sessions_file or "/tmp/sessions.lua"
+  auth.config_path        = meta.path or "/etc/custos/config.moon"
   auth
 
 -- ── Configuration DoH ──────────────────────────────────────────
