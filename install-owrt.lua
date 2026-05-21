@@ -211,7 +211,8 @@ Installer = function(cfg)
         "lyaml",
         "luasec",
         "lpeg",
-        "libxxhash"
+        "libxxhash",
+        "moonscript"
       }
       local pkg_list = table.concat(pkgs_required, " ")
       local install_cmd
