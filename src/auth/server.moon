@@ -654,6 +654,7 @@ reload_secrets_if_needed = (state) ->
 make_server4 = (port) ->
   srv = socket.tcp!
   srv\setoption "reuseaddr", true
+  pcall -> srv\setoption "reuseport", true  -- Linux ≥ 3.9, best-effort
   ok, err = srv\bind "0.0.0.0", port
   unless ok
     srv\close!
@@ -669,6 +670,7 @@ make_server6 = (port) ->
   ok6, srv6 = pcall socket.tcp6
   return nil unless ok6 and srv6
   srv6\setoption "reuseaddr", true
+  pcall -> srv6\setoption "reuseport", true  -- Linux ≥ 3.9, best-effort
   srv6\setoption "ipv6-v6only", true
   ok62, _ = pcall srv6.bind, srv6, "::", port
   unless ok62
