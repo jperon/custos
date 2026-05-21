@@ -89,7 +89,7 @@ generate = (type_, user, mac, expires, key) ->
 -- @treturn nil|string   Message d'erreur
 verify = (token, key) ->
   return nil, "token absent" unless token and #token > 0
-  dot = token\find("%.", 1, true)
+  dot = token\find(".", 1, true)
   return nil, "token malformé" unless dot
   encoded = token\sub 1, dot - 1
   sig_hex = token\sub dot + 1

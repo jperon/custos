@@ -75,7 +75,7 @@ verify = function(token, key)
   if not (token and #token > 0) then
     return nil, "token absent"
   end
-  local dot = token:find("%.", 1, true)
+  local dot = token:find(".", 1, true)
   if not (dot) then
     return nil, "token malformé"
   end
