@@ -42,7 +42,7 @@
         actions: {"allow"}
         conditions: {
           to_domains: {"via.lan", "site-a.lan"}
-          from_netlist: "homelab"
+          from_net: "10.42.0.0/24"
         }
       }
       {

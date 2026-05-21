@@ -65,12 +65,12 @@
         conditions:  { from_vlan: 10 }
       }
 
-      -- R2 : sous-réseau ext (cliens) → DNS seulement (teste from_net 10.43/fd42:2)
+      -- R2 : sous-réseau ext (cliens, 10.43.x/fd42:2) → DNS seulement
       {
         rule_id:     "ext_dnsonly"
         description: "Sous-réseau ext : DNS uniquement"
         actions:     {"dnsonly"}
-        conditions:  { from_netlist: "ext" }
+        conditions:  { from_nets: {"10.43.0.0/24", "fd42:42:0:2::/64"} }
       }
 
       -- R3 : depuis homelab, autoriser tout SAUF blocked.lan (teste condition `not`)
@@ -81,8 +81,8 @@
         description: "Homelab : tout sauf blocked.lan"
         actions:     {"allow"}
         conditions:  {
-          not:         { to_domain: "blocked.lan" }
-          from_netlist: "homelab"
+          not:        { to_domain: "blocked.lan" }
+          from_nets:  {"10.42.0.0/24", "fd42:42:0:1::/64"}
         }
       }
 

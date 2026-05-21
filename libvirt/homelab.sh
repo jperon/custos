@@ -346,6 +346,14 @@ cmd_test_e2e() {
     ip_cliens=$(vm_ip cliens)  ; [ -n "$ip_cliens" ]  || err "IP de cliens introuvable"
     ip_via=$(vm_ip via)        ; [ -n "$ip_via" ]      || err "IP de via introuvable"
 
+    log "bootstrap certificat TLS sur custos (avant déploiement config)..."
+    ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip_custos" '
+        mkdir -p /etc/custos
+        [ -f /etc/custos/cert.pem ] || px5g selfsigned -days 3650 -newkey ec \
+            -keyout /etc/custos/key.pem -out /etc/custos/cert.pem \
+            -subj "/CN=custos.lan" 2>/dev/null
+        [ -f /etc/custos/sessions.lua ] || echo "{}" > /etc/custos/sessions.lua' || true
+
     log "déploiement config E2E sur custos..."
     scp -O $SSH_OPTS -i "$SSH_KEY" \
         "$SCRIPT_DIR/homelab-e2e.moon" "root@$ip_custos:/etc/custos/config.moon"
@@ -359,17 +367,6 @@ cmd_test_e2e() {
         timeout 90 ssh $SSH_OPTS -i "$SSH_KEY" "root@$_ip" \
             'command -v dig >/dev/null || { apk update -q 2>/dev/null; apk add -q bind-dig 2>/dev/null; }' || true
     done
-
-    log "bootstrap certificat TLS sur custos (idempotent)..."
-    ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip_custos" '
-        [ -f /etc/custos/cert.pem ] || {
-            mkdir -p /etc/custos
-            px5g selfsigned -days 3650 -newkey ec \
-                -keyout /etc/custos/key.pem \
-                -out /etc/custos/cert.pem \
-                -subj "/CN=custos.lan" 2>/dev/null
-        }
-        [ -f /etc/custos/sessions.lua ] || echo "{}" > /etc/custos/sessions.lua' || true
 
     log "exécution de la suite E2E..."
     export SSH_OPTS SSH_KEY PROJECT_DIR SCRIPT_DIR
