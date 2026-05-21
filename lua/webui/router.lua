@@ -1,7 +1,7 @@
-local check_admin_session, handle_login_get, handle_login_post, handle_logout
+local check_admin_session, forbidden_page
 do
   local _obj_0 = require("webui.handlers.admin_auth")
-  check_admin_session, handle_login_get, handle_login_post, handle_logout = _obj_0.check_admin_session, _obj_0.handle_login_get, _obj_0.handle_login_post, _obj_0.handle_logout
+  check_admin_session, forbidden_page = _obj_0.check_admin_session, _obj_0.forbidden_page
 end
 local handle_dashboard
 handle_dashboard = require("webui.handlers.dashboard").handle_dashboard
@@ -43,22 +43,18 @@ local dispatch
 dispatch = function(req, state)
   local method = req.method
   local path = req.path
-  if path == "/admin/login" then
-    if method == "GET" then
-      return handle_login_get(req, state)
-    end
-    if method == "POST" then
-      return handle_login_post(req, state)
-    end
-    return 405, { }, "Method Not Allowed"
-  end
-  if path == "/admin/logout" then
-    return handle_logout(req, state)
-  end
-  local admin = check_admin_session(req, state.token_key)
+  local admin, reason = check_admin_session(req, state)
   if not (admin) then
+    if reason == "forbidden" then
+      local cookie_val = (require("auth.token")).get_cookie(req.headers.cookie or "", "custos_session")
+      local p = (require("auth.token")).verify(cookie_val, state.token_key)
+      local user = p and p.user or "?"
+      return 403, {
+        ["Content-Type"] = "text/html; charset=UTF-8"
+      }, forbidden_page(user)
+    end
     return 302, {
-      ["Location"] = "/admin/login"
+      ["Location"] = "/login"
     }, ""
   end
   if path == "/admin/" or path == "/admin" then

@@ -728,6 +728,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     secrets_path: secrets_path
     sessions_file: sessions_file
     token_key: token_key
+    admin_users: auth_cfg.admin_users or {}
     config_path: auth_cfg.config_path or "/etc/custos/config.moon"
     started_at: os.time!
     static_cert_paths: if auth_cfg.cert and auth_cfg.key then { cert: auth_cfg.cert, key: auth_cfg.key } else nil

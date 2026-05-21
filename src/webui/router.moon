@@ -1,9 +1,7 @@
 -- src/webui/router.moon
 -- Dispatch des requêtes HTTP sous /admin/* vers les handlers webui.
 
-{ :check_admin_session,
-  :handle_login_get, :handle_login_post,
-  :handle_logout }              = require "webui.handlers.admin_auth"
+{ :check_admin_session, :forbidden_page } = require "webui.handlers.admin_auth"
 { :handle_dashboard }           = require "webui.handlers.dashboard"
 { :handle_reload, :handle_status } = require "webui.handlers.system"
 { :handle_config_index,
@@ -26,27 +24,23 @@ SCALAR_SECTIONS = {
 }
 
 --- Dispatch une requête /admin/* vers le handler approprié.
--- Les routes non-login vérifient d'abord le token admin.
+-- Vérifie d'abord que l'utilisateur est connecté (portail captif) et admin.
 -- @tparam table req   Requête HTTP {method, path, headers, body}
--- @tparam table state État du serveur auth (token_key, secrets, auth_cfg, config_path)
+-- @tparam table state État du serveur (token_key, admin_users, secrets, auth_cfg, config_path)
 -- @treturn number, table, string  (status, headers, body)
 dispatch = (req, state) ->
   method = req.method
   path   = req.path
 
-  -- Routes publiques (pas d'auth requise)
-  if path == "/admin/login"
-    return handle_login_get(req, state)  if method == "GET"
-    return handle_login_post(req, state) if method == "POST"
-    return 405, {}, "Method Not Allowed"
-
-  if path == "/admin/logout"
-    return handle_logout req, state
-
-  -- Toutes les autres routes nécessitent une session admin valide
-  admin = check_admin_session req, state.token_key
+  admin, reason = check_admin_session req, state
   unless admin
-    return 302, { ["Location"]: "/admin/login" }, ""
+    if reason == "forbidden"
+      cookie_val = (require "auth.token").get_cookie req.headers.cookie or "", "custos_session"
+      p = (require "auth.token").verify cookie_val, state.token_key
+      user = p and p.user or "?"
+      return 403, { ["Content-Type"]: "text/html; charset=UTF-8" }, forbidden_page user
+    -- pas de session → portail captif
+    return 302, { ["Location"]: "/login" }, ""
 
   -- Dashboard
   if path == "/admin/" or path == "/admin"

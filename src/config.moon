@@ -113,6 +113,7 @@ DEFAULTS = {
     idle_timeout: 120
     secrets: "/etc/custos/secrets"
     sessions_file: "/tmp/sessions.lua"
+    admin_users: {}
     sni_verdict: {
       enabled: true
       mode: "strict-443"
@@ -245,6 +246,7 @@ normalize = (cfg) ->
   ttl.min = tonumber(ttl.min) or ttl_defaults.min
   ttl.max = tonumber(ttl.max) or ttl_defaults.max
 
+  cfg.auth.admin_users = cfg.auth.admin_users or auth_defaults.admin_users or {}
   cfg.auth.port = tonumber(cfg.auth.port) or auth_defaults.port
   cfg.auth.captive_port = tonumber(cfg.auth.captive_port) or auth_defaults.captive_port
   cfg.auth.session_ttl = tonumber(cfg.auth.session_ttl) or auth_defaults.session_ttl
