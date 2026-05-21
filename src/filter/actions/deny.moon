@@ -4,7 +4,13 @@
 
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (rule) → enriched_action
-(cfg) ->
+_schema = {
+  label:       "Bloquer"
+  description: "Bloque la requête DNS (réponse REFUSED)"
+  arg_type:    nil
+}
+
+_factory = (cfg) ->
   (rule) ->
     {
       capabilities: { worker: true, nft: true }
@@ -15,3 +21,5 @@
       verdict: ->
         "drop"
     }
+
+{ schema: _schema, factory: _factory }

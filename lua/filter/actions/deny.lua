@@ -1,4 +1,10 @@
-return function(cfg)
+local _schema = {
+  label = "Bloquer",
+  description = "Bloque la requête DNS (réponse REFUSED)",
+  arg_type = nil
+}
+local _factory
+_factory = function(cfg)
   return function(rule)
     return {
       capabilities = {
@@ -17,3 +23,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

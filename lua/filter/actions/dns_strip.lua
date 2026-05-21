@@ -4,7 +4,29 @@ do
   strip_dns_rr, add_ede_modified, clear_ad_bit = _obj_0.strip_dns_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit
 end
 (require("ipc")).register_modifier("dns_strip")
-return function(cfg)
+local _schema = {
+  label = "Supprimer enregistrement DNS",
+  description = "Supprime un type d'enregistrement de la réponse DNS",
+  arg_type = "table",
+  arg_fields = {
+    {
+      name = "rr_type",
+      label = "Type RR",
+      type = "enum",
+      values = {
+        "A",
+        "AAAA",
+        "CNAME",
+        "MX",
+        "TXT"
+      },
+      required = true,
+      default = "A"
+    }
+  }
+}
+local _factory
+_factory = function(cfg)
   return function(rule)
     local rr_type = "A"
     if rule.dns_strip and rule.dns_strip.rr_type then
@@ -35,3 +57,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

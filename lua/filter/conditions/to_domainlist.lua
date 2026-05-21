@@ -63,7 +63,15 @@ lookup = function(arr, n, domain)
   end
   return false
 end
-return function(cfg)
+local _schema = {
+  label = "Liste de domaines",
+  description = "Domaine présent dans une liste compilée (.bin/.domains)",
+  category = "destination",
+  arg_type = "string",
+  arg_hint = "ex: toulouse/malware"
+}
+local _factory
+_factory = function(cfg)
   return function(listname)
     if not (cfg.domainlists_dir) then
       return {
@@ -130,3 +138,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

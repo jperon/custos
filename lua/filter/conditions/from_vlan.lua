@@ -1,4 +1,12 @@
-return function(cfg)
+local _schema = {
+  label = "VLAN source",
+  description = "Requête arrivant sur un VLAN ID spécifique (support nft natif)",
+  category = "source",
+  arg_type = "integer",
+  arg_hint = "ex: 100"
+}
+local _factory
+_factory = function(cfg)
   return function(vlan_id)
     return {
       capabilities = {
@@ -29,3 +37,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

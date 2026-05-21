@@ -66,6 +66,8 @@ wrap_factory = (factory_outer) ->
       factory_inner = factory_outer cfg
       result = factory_inner args
       if is_new_style result
+        -- Garantir compile_nft sur toutes les conditions enrichies
+        result.compile_nft or= -> nil, "unsupported"
         result
       else
         {
@@ -171,11 +173,19 @@ make_from_files = (base_factory, type_name) ->
 --   from_xxxs      → make_plural(from_xxx)
 -- @tparam string name Nom du module (ex: "from_net")
 -- @treturn function|nil Factory (cfg) -> (args) -> enriched_obj
+-- Extrait la factory depuis un module : supporte { schema, factory } et la factory brute.
+extract_factory = (mod) ->
+  if type(mod) == "table" and mod.factory then mod.factory else mod
+
+-- Extrait le schéma depuis un module (nil si absent).
+extract_schema = (mod) ->
+  if type(mod) == "table" and mod.schema then mod.schema else nil
+
 load_condition = (name) ->
   -- 1. Chargement direct (les fichiers existants ont priorité)
-  ok, factory_outer = pcall require, "filter.conditions.#{name}"
+  ok, mod = pcall require, "filter.conditions.#{name}"
   if ok
-    return wrap_factory factory_outer
+    return wrap_factory extract_factory mod
 
   -- 2. Suffixe _lists : "from_net_lists" → base "from_net", type "net"
   base_name = name\match "^(.+)_lists$"
@@ -183,7 +193,7 @@ load_condition = (name) ->
     type_name = base_name\match "^[^_]+_(.+)$"
     base_ok, base_mod = pcall require, "filter.conditions.#{base_name}"
     if base_ok and type_name
-      return make_from_files (wrap_factory base_mod), type_name
+      return make_from_files (wrap_factory extract_factory base_mod), type_name
 
   -- 3. Suffixe _list : "from_net_list" → base "from_net", type "net"
   base_name = name\match "^(.+)_list$"
@@ -191,15 +201,30 @@ load_condition = (name) ->
     type_name = base_name\match "^[^_]+_(.+)$"
     base_ok, base_mod = pcall require, "filter.conditions.#{base_name}"
     if base_ok and type_name
-      return make_from_file (wrap_factory base_mod), type_name
+      return make_from_file (wrap_factory extract_factory base_mod), type_name
 
   -- 4. Suffixe s : "from_nets" → base "from_net"
   base_name = name\match "^(.+)s$"
   if base_name
     base_ok, base_mod = pcall require, "filter.conditions.#{base_name}"
-    return make_plural (wrap_factory base_mod) if base_ok
+    return make_plural (wrap_factory extract_factory base_mod) if base_ok
 
   nil, "Condition '#{name}' not found"
+
+--- Retourne le schéma UI d'une condition, ou nil.
+get_condition_schema = (name) ->
+  -- Chargement direct
+  ok, mod = pcall require, "filter.conditions.#{name}"
+  return extract_schema mod if ok
+  -- Variantes : chercher le module de base
+  for pattern in *{ "^(.+)_lists$", "^(.+)_list$", "^(.+)s$" }
+    base = name\match pattern
+    if base
+      base_ok, base_mod = pcall require, "filter.conditions.#{base}"
+      if base_ok
+        s = extract_schema base_mod
+        return s if s
+  nil
 
 --- Charge un module action avec adaptation automatique.
 -- Retourne une factory (cfg) -> (rule) -> enriched_obj
@@ -207,8 +232,9 @@ load_condition = (name) ->
 -- @tparam string name Nom du module (ex: "allow")
 -- @treturn function|nil Factory (cfg) -> (rule) -> enriched_obj
 load_action = (name) ->
-  ok, factory_outer = pcall require, "filter.actions.#{name}"
-  return nil, factory_outer unless ok
+  ok, mod = pcall require, "filter.actions.#{name}"
+  return nil, mod unless ok
+  factory_outer = extract_factory mod
 
   (cfg) ->
     (rule) ->
@@ -289,6 +315,12 @@ create_dnsonly_action = ->
     compile_nft: -> nil, "dnsonly is worker-only"
   }
 
+--- Retourne le schéma UI d'une action, ou nil.
+get_action_schema = (name) ->
+  ok, mod = pcall require, "filter.actions.#{name}"
+  return extract_schema mod if ok
+  nil
+
 {
   :is_new_style
   :compute_worker_only
@@ -298,6 +330,8 @@ create_dnsonly_action = ->
   :unique_rule_id
   :load_condition
   :load_action
+  :get_condition_schema
+  :get_action_schema
   :create_net_condition
   :create_allow_action
   :create_deny_action

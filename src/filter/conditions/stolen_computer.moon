@@ -4,7 +4,15 @@
 
 --- @tparam table cfg Configuration
 -- @treturn function factory (macs) → enriched_condition
-(cfg) ->
+_schema = {
+  label:       "Ordinateur volé"
+  description: "Bloque les requêtes depuis une liste noire de MACs"
+  category:    "source"
+  arg_type:    "string_list"
+  arg_hint:    "liste de MACs aa:bb:cc:dd:ee:ff"
+}
+
+_factory = (cfg) ->
   (macs) ->
     unless type(macs) == "table"
       return {
@@ -34,3 +42,5 @@
         mac_str = table.concat(macs_lower, ", ")
         return "ether saddr { #{mac_str} }", nil
     }
+
+{ schema: _schema, factory: _factory }

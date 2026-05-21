@@ -6,7 +6,15 @@
 
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (domain) → enriched_condition
-(cfg) ->
+_schema = {
+  label:       "Domaine cible"
+  description: "Domaine DNS exact (inclut tous les sous-domaines)"
+  category:    "destination"
+  arg_type:    "string"
+  arg_hint:    "ex: example.com"
+}
+
+_factory = (cfg) ->
   (domain) ->
     if domain == "_any"
       return {
@@ -40,3 +48,5 @@
 
         false, "Domain not matched"
     }
+
+{ schema: _schema, factory: _factory }

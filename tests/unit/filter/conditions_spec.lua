@@ -43,7 +43,7 @@ package.loaded["mac_learner_ipc"] = {
   end
 }
 describe("filter.conditions.any_of", function()
-  local any_of_factory = require("filter.conditions.any_of")
+  local any_of_factory = (require("filter.conditions.any_of")).factory
   local cfg = {
     nft = {
       ip_timeout = "2m"
@@ -131,7 +131,7 @@ describe("filter.conditions.any_of", function()
   end)
 end)
 describe("filter.conditions.to_net", function()
-  local to_net_factory = require("filter.conditions.to_net")
+  local to_net_factory = (require("filter.conditions.to_net")).factory
   local cfg = { }
   it("_any → true si dst_ip présente", function()
     local cond = (to_net_factory(cfg))("_any")
@@ -209,7 +209,7 @@ describe("filter.conditions.to_net", function()
   end)
 end)
 describe("filter.conditions.from_subnet", function()
-  local from_subnet_factory = require("filter.conditions.from_subnet")
+  local from_subnet_factory = (require("filter.conditions.from_subnet")).factory
   local cfg = { }
   it("syntaxe string : match", function()
     local cond = (from_subnet_factory(cfg))("192.168.0.0/16")
@@ -291,7 +291,7 @@ describe("filter.conditions.from_subnet", function()
   end)
 end)
 describe("filter.conditions.stolen_computer", function()
-  local stolen_factory = require("filter.conditions.stolen_computer")
+  local stolen_factory = (require("filter.conditions.stolen_computer")).factory
   local cfg = { }
   it("MAC dans la blacklist → true", function()
     local cond = (stolen_factory(cfg))({
@@ -348,7 +348,7 @@ describe("filter.conditions.stolen_computer", function()
   end)
 end)
 return describe("filter.conditions.from_user", function()
-  local from_user_factory = require("filter.conditions.from_user")
+  local from_user_factory = (require("filter.conditions.from_user")).factory
   local cfg = {
     auth = {
       sessions_file = "/nonexistent/sessions.lua"
@@ -388,7 +388,7 @@ return describe("filter.conditions.from_user", function()
       }
     end
     package.loaded["filter.conditions.from_user"] = nil
-    local local_factory = require("filter.conditions.from_user")
+    local local_factory = (require("filter.conditions.from_user")).factory
     local cond = (local_factory(cfg))("_any")
     local v, _ = cond.eval({
       src_ip = "10.0.0.1",
@@ -417,7 +417,7 @@ return describe("filter.conditions.from_user", function()
       }
     end
     package.loaded["filter.conditions.from_user"] = nil
-    local local_factory = require("filter.conditions.from_user")
+    local local_factory = (require("filter.conditions.from_user")).factory
     local cond = (local_factory(cfg))("alice")
     local v, _ = cond.eval({
       src_ip = "10.0.0.1",
@@ -455,7 +455,7 @@ return describe("filter.conditions.from_user", function()
       end
     }
     package.loaded["filter.conditions.from_user"] = nil
-    local local_factory = require("filter.conditions.from_user")
+    local local_factory = (require("filter.conditions.from_user")).factory
     local cond = (local_factory(cfg))({
       user = "bob",
       source = "tls"

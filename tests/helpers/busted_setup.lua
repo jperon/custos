@@ -123,8 +123,14 @@ do
     local m = orig_require(name)
     if type(name) == "string"
        and (name:match("^filter%.conditions%.") or name:match("^filter%.actions%."))
-       and type(m) == "function" then
-      return wrap_factory(m)
+    then
+      if type(m) == "function" then
+        -- Ancien format : module = factory function
+        return wrap_factory(m)
+      elseif type(m) == "table" and type(m.factory) == "function" then
+        -- Nouveau format : module = { schema, factory }
+        return { schema = m.schema, factory = wrap_factory(m.factory) }
+      end
     end
     return m
   end

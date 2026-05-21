@@ -4,7 +4,15 @@
 -- Syntax: { from_subnet: { net: "10.0.0.0/8", family: "inet" } }
 -- Also supports simplified syntax: { from_subnet: "10.0.0.0/8" }
 
-(cfg) ->
+_schema = {
+  label:       "Sous-réseau source"
+  description: "CIDR IPv4/IPv6 source avec syntaxe inline ou {net,family}"
+  category:    "source"
+  arg_type:    "string_or_table"
+  arg_hint:    "ex: 10.0.0.0/8 ou {net:'10.0.0.0/8'}"
+}
+
+_factory = (cfg) ->
   (subnet_spec) ->
     unless subnet_spec
       return {
@@ -55,3 +63,5 @@
             return "ip saddr #{net_cidr}", nil
           return nil, "IPv4 CIDR in IPv6 family"
     }
+
+{ schema: _schema, factory: _factory }

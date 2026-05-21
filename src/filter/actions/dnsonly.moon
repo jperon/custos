@@ -6,7 +6,13 @@
 
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (rule) → enriched_action
-(cfg) ->
+_schema = {
+  label:       "DNS seulement"
+  description: "Résolution DNS autorisée, sans injection dans nftables"
+  arg_type:    nil
+}
+
+_factory = (cfg) ->
   (rule) ->
     {
       capabilities: { worker: true, nft: false }
@@ -19,3 +25,5 @@
       verdict: ->
         "dnsonly"
     }
+
+{ schema: _schema, factory: _factory }

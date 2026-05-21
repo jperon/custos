@@ -77,7 +77,7 @@ describe "filter.lib.ipcalc", ->
     assert.is_false (n\contains "10.0.0.4")
 
 describe "filter.conditions.to_domain", ->
-  to_domain = require "filter.conditions.to_domain"
+  to_domain = (require "filter.conditions.to_domain").factory
 
   it "correspondance exacte", ->
     f = (to_domain {}) "github.com"
@@ -121,7 +121,7 @@ describe "filter.conditions.to_domain", ->
     assert.is_false v
 
 describe "filter.conditions.to_domains", ->
-  to_domains = require "filter.conditions.to_domains"
+  to_domains = (require "filter.conditions.to_domains").factory
 
   it "OR logique", ->
     f = (to_domains {}) {"github.com", "debian.org"}
@@ -134,7 +134,7 @@ describe "filter.conditions.to_domains", ->
     assert.is_false (f {domain: "github.com"})
 
 describe "filter.conditions.to_domainlist", ->
-  to_domainlist = require "filter.conditions.to_domainlist"
+  to_domainlist = (require "filter.conditions.to_domainlist").factory
   TMPDIR = "./tmp"
   TMPBIN = TMPDIR .. "/test_filter_domainlist.bin"
 
@@ -246,7 +246,7 @@ describe "filter.conditions.to_domainlist", ->
     os.remove empty_domains
 
 describe "filter.conditions.to_domainlists", ->
-  to_domainlists = require "filter.conditions.to_domainlists"
+  to_domainlists = (require "filter.conditions.to_domainlists").factory
   TMPDIR = "./tmp"
 
   before_each ->
@@ -286,7 +286,7 @@ describe "filter.conditions.to_domainlists", ->
     assert.is_false (f {domain: "github.com"})
 
 describe "filter.conditions.from_mac", ->
-  from_mac = require "filter.conditions.from_mac"
+  from_mac = (require "filter.conditions.from_mac").factory
 
   it "MAC correspondant", ->
     f = (from_mac {}) "aa:bb:cc:dd:ee:ff"
@@ -404,7 +404,7 @@ describe "filter.conditions.from_mac_lists (auto-généré, fichiers)", ->
     assert.is_false ok
 
 describe "filter.conditions.from_net", ->
-  from_net = require "filter.conditions.from_net"
+  from_net = (require "filter.conditions.from_net").factory
 
   it "IP dans CIDR", ->
     f = (from_net {}) "192.168.0.0/16"
@@ -529,7 +529,7 @@ describe "filter.conditions.from_net_lists (auto-généré, fichiers)", ->
     assert.is_false ok
 
 describe "filter.conditions.from_user", ->
-  from_user = require "filter.conditions.from_user"
+  from_user = (require "filter.conditions.from_user").factory
   SESSION_FILE = "./tmp/test_from_user.lua"
   USER_CFG = { auth: { sessions_file: SESSION_FILE } }
   FAR_FUTURE = os.time! + 86400 * 365
@@ -551,7 +551,7 @@ describe "filter.conditions.from_user", ->
     write_session_file { {"aa:bb:cc:dd:ee:ff", "alice", FAR_FUTURE} }
     sessions_mod.reset_cache!
     package.loaded["filter.conditions.from_user"] = nil
-    from_user = require "filter.conditions.from_user"
+    from_user = (require "filter.conditions.from_user").factory
 
   after_each ->
     os.remove SESSION_FILE if io.open(SESSION_FILE, "r")
@@ -608,7 +608,7 @@ describe "filter.conditions.from_user", ->
     package.loaded["filter.conditions.from_user"] = nil
     cfg_stub = package.loaded["config"]
     cfg_stub.MAC_LEARNER_QUERY_SOCK = cfg_stub.MAC_LEARNER_QUERY_SOCK or "/nonexistent/custos/mac_query.sock"
-    fu = require "filter.conditions.from_user"
+    fu = (require "filter.conditions.from_user").factory
     f = (fu USER_CFG) "_none"
     -- mac=nil, src_ip=nil → safe_get_mac(nil) → nil → session_for_mac(nil, nil, ...) → nil
     v = f {mac: nil, src_ip: nil}
@@ -620,7 +620,7 @@ describe "filter.conditions.from_user", ->
     package.loaded["mac_learner_ipc"] = nil
     old_preload = package.preload["mac_learner_ipc"]
     package.preload["mac_learner_ipc"] = -> { get_mac: -> nil }
-    fu = require "filter.conditions.from_user"
+    fu = (require "filter.conditions.from_user").factory
     f = (fu USER_CFG) "_none"
     v = f {mac: nil, src_ip: "10.0.0.1"}
     assert.is_true v  -- _none : pas de session active
@@ -635,7 +635,7 @@ describe "filter.conditions.from_user", ->
     package.loaded["mac_learner_ipc"] = nil
     old_preload = package.preload["mac_learner_ipc"]
     package.preload["mac_learner_ipc"] = -> error "mac_learner_ipc non disponible (test)"
-    fu = require "filter.conditions.from_user"
+    fu = (require "filter.conditions.from_user").factory
     f = (fu USER_CFG) "_none"
     v = f {mac: nil, src_ip: "10.0.0.1"}
     assert.is_true v  -- safe_get_mac retourne nil → pas de session → _none vrai
@@ -649,7 +649,7 @@ describe "filter.conditions.from_user", ->
     package.loaded["mac_learner_ipc"] = nil
     old_preload = package.preload["mac_learner_ipc"]
     package.preload["mac_learner_ipc"] = -> {}  -- table vide, pas de get_mac
-    fu = require "filter.conditions.from_user"
+    fu = (require "filter.conditions.from_user").factory
     -- Premier appel : charge mac_learner_ipc → _get_mac = nil (pas de get_mac)
     f = (fu USER_CFG) "_none"
     v = f {mac: nil, src_ip: "10.0.0.1"}
@@ -801,7 +801,7 @@ describe "filter.conditions.from_user_lists (auto-généré, fichiers)", ->
     assert.is_false ok
 
 describe "filter.conditions.stolen_computer", ->
-  stolen_computer = require "filter.conditions.stolen_computer"
+  stolen_computer = (require "filter.conditions.stolen_computer").factory
 
   it "MAC blacklistée", ->
     f = (stolen_computer {}) {"de:ad:be:ef:00:01"}
@@ -824,7 +824,7 @@ describe "filter.conditions.stolen_computer", ->
     assert.is_false v
 
 describe "filter.conditions.in_time", ->
-  in_time = require "filter.conditions.in_time"
+  in_time = (require "filter.conditions.in_time").factory
 
   it "heure dans plage", ->
     cfg = {times: {business: {"09:00", "18:00"}}}
@@ -1019,7 +1019,7 @@ describe "filter.rule", ->
     assert.equals "No matching rule (default deny)", msg
 
 describe "filter.actions.dnsonly", ->
-  dnsonly_action = require "filter.actions.dnsonly"
+  dnsonly_action = (require "filter.actions.dnsonly").factory
 
   it "retourne true (verdict allow)", ->
     factory = dnsonly_action {}

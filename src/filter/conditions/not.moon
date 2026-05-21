@@ -8,9 +8,14 @@
 
 compiler_api = require "filter.compiler_api"
 
---- @tparam table cfg Configuration
--- @treturn function factory (sub_condition_spec) → enriched_condition
-(cfg) ->
+_schema = {
+  label:       "NON logique"
+  description: "Inverse le résultat d'une sous-condition"
+  category:    "meta"
+  arg_type:    "condition"
+}
+
+_factory = (cfg) ->
   (sub_condition_spec) ->
     unless type(sub_condition_spec) == "table"
       return {
@@ -47,3 +52,5 @@ compiler_api = require "filter.compiler_api"
         else
           true, "not(#{cond_name}): unmatched → negated to true"
     }
+
+{ schema: _schema, factory: _factory }

@@ -4,7 +4,15 @@
 
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (vlan_id) → enriched_condition
-(cfg) ->
+_schema = {
+  label:       "VLAN source"
+  description: "Requête arrivant sur un VLAN ID spécifique (support nft natif)"
+  category:    "source"
+  arg_type:    "integer"
+  arg_hint:    "ex: 100"
+}
+
+_factory = (cfg) ->
   (vlan_id) ->
     {
       capabilities: { worker: true, nft: true, nft_dynamic: false }
@@ -22,3 +30,5 @@
           return nil, "vlan _any/_none not supported in nft"
         return "vlan id #{vlan_id}", nil
     }
+
+{ schema: _schema, factory: _factory }

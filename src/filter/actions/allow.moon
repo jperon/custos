@@ -5,7 +5,13 @@
 
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (rule) → enriched_action
-(cfg) ->
+_schema = {
+  label:       "Autoriser"
+  description: "Autorise la requête DNS et injecte les IPs dans nftables"
+  arg_type:    nil
+}
+
+_factory = (cfg) ->
   (rule) ->
     {
       capabilities: { worker: true, nft: true }
@@ -18,3 +24,5 @@
       verdict: ->
         "accept"
     }
+
+{ schema: _schema, factory: _factory }

@@ -9,7 +9,15 @@
 
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (rule) → enriched_action
-(cfg) ->
+_schema = {
+  label:       "Supprimer enregistrement DNS"
+  description: "Supprime un type d'enregistrement de la réponse DNS"
+  arg_type:    "table"
+  arg_fields:  { { name: "rr_type", label: "Type RR", type: "enum",
+                   values: {"A","AAAA","CNAME","MX","TXT"}, required: true, default: "A" } }
+}
+
+_factory = (cfg) ->
   (rule) ->
     -- Extraire rr_type de la configuration de la règle, défaut "A" si non spécifié
     rr_type = "A"
@@ -32,3 +40,5 @@
       verdict: ->
         "accept"
     }
+
+{ schema: _schema, factory: _factory }

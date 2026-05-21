@@ -4,8 +4,15 @@
 
 --- @tparam table cfg Configuration
 -- @treturn function factory (domains) → enriched_condition
-(cfg) ->
-  to_domain_factory = require "filter.conditions.to_domain"
+_schema = {
+  label:       "Domaines cibles"
+  description: "Domaine correspondant à l'un des domaines de la liste"
+  category:    "destination"
+  arg_type:    "string_list"
+}
+
+_factory = (cfg) ->
+  to_domain_factory = (require "filter.conditions.to_domain").factory
   (domains) ->
     domain_list = domains
     unless type(domains) == "table"
@@ -25,3 +32,5 @@
         false, "Not matched by any domain"
       creates_dynamic_scope: true
     }
+
+{ schema: _schema, factory: _factory }

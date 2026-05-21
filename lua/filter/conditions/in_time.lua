@@ -65,7 +65,15 @@ build_day_bitmask = function(days)
   end
   return mask
 end
-return function(cfg)
+local _schema = {
+  label = "Plage horaire",
+  description = "Requête dans une fenêtre horaire nommée ou inline",
+  category = "time",
+  arg_type = "string_or_table",
+  arg_hint = "nom défini dans filter.times ou {start:'08:00',end:'18:00'}"
+}
+local _factory
+_factory = function(cfg)
   return function(spec)
     local times = cfg.times or { }
     local start_s, end_s, day_bitmask = nil, nil, nil
@@ -193,3 +201,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

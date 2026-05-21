@@ -1,4 +1,12 @@
-return function(cfg)
+local _schema = {
+  label = "Sous-réseau source",
+  description = "CIDR IPv4/IPv6 source avec syntaxe inline ou {net,family}",
+  category = "source",
+  arg_type = "string_or_table",
+  arg_hint = "ex: 10.0.0.0/8 ou {net:'10.0.0.0/8'}"
+}
+local _factory
+_factory = function(cfg)
   return function(subnet_spec)
     if not (subnet_spec) then
       return {
@@ -80,3 +88,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

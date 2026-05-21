@@ -20,7 +20,7 @@ _dns_ede_stub = {
 package.loaded["dns_ede"] = _dns_ede_stub
 
 describe "filter.actions.dns_strip", ->
-  dns_strip_factory = require "filter.actions.dns_strip"
+  dns_strip_factory = (require "filter.actions.dns_strip").factory
   cfg = { nft: { ip_timeout: "2m" } }
 
   it "strip A : eval retourne true", ->
@@ -93,7 +93,7 @@ describe "filter.actions.dns_strip", ->
       add_ede_modified: (raw, _r) -> raw
       clear_ad_bit: (raw) -> raw
     }
-    local_factory = require "filter.actions.dns_strip"
+    local_factory = (require "filter.actions.dns_strip").factory
     local_action = (local_factory cfg) rule
     ctx = { dns_raw: "original_dns", modified: false, skip_nft: false }
     local_action.on_response ctx

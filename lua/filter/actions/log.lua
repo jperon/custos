@@ -1,5 +1,19 @@
 local log = require("log")
-return function(cfg, rule_cfg)
+local _schema = {
+  label = "Journaliser",
+  description = "Enregistre un message de log sans prendre de décision (verdict nil)",
+  arg_type = "table",
+  arg_fields = {
+    {
+      name = "log_msg",
+      label = "Message",
+      type = "string",
+      required = false
+    }
+  }
+}
+local _factory
+_factory = function(cfg, rule_cfg)
   local log_message = "Log action triggered by rule"
   if rule_cfg.log_msg then
     log_message = rule_cfg.log_msg
@@ -18,3 +32,7 @@ return function(cfg, rule_cfg)
     return nil, log_message
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

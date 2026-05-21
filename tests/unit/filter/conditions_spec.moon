@@ -22,7 +22,7 @@ package.loaded["auth.user_sessions"] = { get_session: -> nil }
 package.loaded["mac_learner_ipc"] = { get_mac: -> nil }
 
 describe "filter.conditions.any_of", ->
-  any_of_factory = require "filter.conditions.any_of"
+  any_of_factory = (require "filter.conditions.any_of").factory
   cfg = { nft: { ip_timeout: "2m" } }
 
   it "OU logique : retourne true si la première sous-condition passe", ->
@@ -78,7 +78,7 @@ describe "filter.conditions.any_of", ->
     assert.is_false (not not cond.creates_dynamic_scope)
 
 describe "filter.conditions.to_net", ->
-  to_net_factory = require "filter.conditions.to_net"
+  to_net_factory = (require "filter.conditions.to_net").factory
   cfg = {}
 
   it "_any → true si dst_ip présente", ->
@@ -146,7 +146,7 @@ describe "filter.conditions.to_net", ->
     assert.is_not_nil err
 
 describe "filter.conditions.from_subnet", ->
-  from_subnet_factory = require "filter.conditions.from_subnet"
+  from_subnet_factory = (require "filter.conditions.from_subnet").factory
   cfg = {}
 
   it "syntaxe string : match", ->
@@ -208,7 +208,7 @@ describe "filter.conditions.from_subnet", ->
     assert.is_nil err
 
 describe "filter.conditions.stolen_computer", ->
-  stolen_factory = require "filter.conditions.stolen_computer"
+  stolen_factory = (require "filter.conditions.stolen_computer").factory
   cfg = {}
 
   it "MAC dans la blacklist → true", ->
@@ -247,7 +247,7 @@ describe "filter.conditions.stolen_computer", ->
     assert.is_true cond.capabilities.nft
 
 describe "filter.conditions.from_user", ->
-  from_user_factory = require "filter.conditions.from_user"
+  from_user_factory = (require "filter.conditions.from_user").factory
   cfg = {
     auth: { sessions_file: "/nonexistent/sessions.lua" }
     nft: {}
@@ -273,7 +273,7 @@ describe "filter.conditions.from_user", ->
     orig = _auth_sessions_stub.session_for_mac
     _auth_sessions_stub.session_for_mac = -> { user: "alice", mac: "aa:bb:cc:dd:ee:ff" }
     package.loaded["filter.conditions.from_user"] = nil
-    local_factory = require "filter.conditions.from_user"
+    local_factory = (require "filter.conditions.from_user").factory
     cond = (local_factory cfg) "_any"
     v, _ = cond.eval { src_ip: "10.0.0.1", mac: "aa:bb:cc:dd:ee:ff" }
     assert.is_true v
@@ -290,7 +290,7 @@ describe "filter.conditions.from_user", ->
     orig = _auth_sessions_stub.session_for_mac
     _auth_sessions_stub.session_for_mac = -> { user: "alice", mac: "aa:bb:cc:dd:ee:ff" }
     package.loaded["filter.conditions.from_user"] = nil
-    local_factory = require "filter.conditions.from_user"
+    local_factory = (require "filter.conditions.from_user").factory
     cond = (local_factory cfg) "alice"
     v, _ = cond.eval { src_ip: "10.0.0.1", mac: "aa:bb:cc:dd:ee:ff" }
     assert.is_true v
@@ -310,7 +310,7 @@ describe "filter.conditions.from_user", ->
         nil
     }
     package.loaded["filter.conditions.from_user"] = nil
-    local_factory = require "filter.conditions.from_user"
+    local_factory = (require "filter.conditions.from_user").factory
     cond = (local_factory cfg) { user: "bob", source: "tls" }
     v, _ = cond.eval { src_ip: "10.0.0.1" }
     assert.is_true v

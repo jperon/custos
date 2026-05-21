@@ -1,5 +1,5 @@
 describe("filter.conditions.not", function()
-  local not_factory = require("filter.conditions.not")
+  local not_factory = (require("filter.conditions.not")).factory
   local cfg = {
     nft = {
       ip_timeout = "2m"

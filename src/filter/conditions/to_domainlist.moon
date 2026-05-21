@@ -76,7 +76,16 @@ lookup = (arr, n, domain) ->
 
 --- @tparam table cfg Configuration
 -- @treturn function factory (listname) → enriched_condition
-(cfg) ->
+
+_schema = {
+  label:       "Liste de domaines"
+  description: "Domaine présent dans une liste compilée (.bin/.domains)"
+  category:    "destination"
+  arg_type:    "string"
+  arg_hint:    "ex: toulouse/malware"
+}
+
+_factory = (cfg) ->
   (listname) ->
     unless cfg.domainlists_dir
       return {
@@ -118,3 +127,5 @@ lookup = (arr, n, domain) ->
           false, "Domain not in list '#{listname}'"
       creates_dynamic_scope: true
     }
+
+{ schema: _schema, factory: _factory }

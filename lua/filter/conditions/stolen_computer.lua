@@ -1,4 +1,12 @@
-return function(cfg)
+local _schema = {
+  label = "Ordinateur volé",
+  description = "Bloque les requêtes depuis une liste noire de MACs",
+  category = "source",
+  arg_type = "string_list",
+  arg_hint = "liste de MACs aa:bb:cc:dd:ee:ff"
+}
+local _factory
+_factory = function(cfg)
   return function(macs)
     if not (type(macs) == "table") then
       return {
@@ -45,3 +53,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

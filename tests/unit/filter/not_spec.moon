@@ -2,7 +2,7 @@
 -- Tests unitaires pour la méta-condition `not`.
 
 describe "filter.conditions.not", ->
-  not_factory = require "filter.conditions.not"
+  not_factory = (require "filter.conditions.not").factory
   cfg = { nft: { ip_timeout: "2m" } }
 
   describe "eval (worker)", ->

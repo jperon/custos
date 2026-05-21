@@ -1,5 +1,12 @@
-return function(cfg)
-  local to_domain_factory = require("filter.conditions.to_domain")
+local _schema = {
+  label = "Domaines cibles",
+  description = "Domaine correspondant à l'un des domaines de la liste",
+  category = "destination",
+  arg_type = "string_list"
+}
+local _factory
+_factory = function(cfg)
+  local to_domain_factory = (require("filter.conditions.to_domain")).factory
   return function(domains)
     local domain_list = domains
     if not (type(domains) == "table") then
@@ -31,3 +38,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

@@ -1,5 +1,12 @@
 local compiler_api = require("filter.compiler_api")
-return function(cfg)
+local _schema = {
+  label = "NON logique",
+  description = "Inverse le résultat d'une sous-condition",
+  category = "meta",
+  arg_type = "condition"
+}
+local _factory
+_factory = function(cfg)
   return function(sub_condition_spec)
     if not (type(sub_condition_spec) == "table") then
       return {
@@ -58,3 +65,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

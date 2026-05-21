@@ -1,4 +1,12 @@
-return function(cfg)
+local _schema = {
+  label = "Adresse MAC source",
+  description = "Requête depuis une adresse MAC spécifique (support nft natif)",
+  category = "source",
+  arg_type = "string",
+  arg_hint = "ex: aa:bb:cc:dd:ee:ff"
+}
+local _factory
+_factory = function(cfg)
   return function(mac_or_alias)
     local mac_map = cfg.macs or { }
     local target_mac = nil
@@ -54,3 +62,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

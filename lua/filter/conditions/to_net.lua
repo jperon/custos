@@ -1,4 +1,12 @@
-return function(cfg)
+local _schema = {
+  label = "Réseau destination",
+  description = "Requête vers un CIDR IPv4/IPv6 de destination (support nft natif)",
+  category = "destination",
+  arg_type = "string",
+  arg_hint = "ex: 10.0.0.0/8"
+}
+local _factory
+_factory = function(cfg)
   return function(net_cidr)
     if net_cidr == "_any" then
       return {
@@ -79,3 +87,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

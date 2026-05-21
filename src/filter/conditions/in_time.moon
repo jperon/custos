@@ -46,7 +46,16 @@ build_day_bitmask = (days) ->
 -- @treturn function factory (spec: string|table) → enriched_condition
 -- Note: in_time is worker-only. nftables has 'time' extension but it's not standard.
 -- Future: could compile to 'meta hour >= X hour < Y' with nftables time extension.
-(cfg) ->
+
+_schema = {
+  label:       "Plage horaire"
+  description: "Requête dans une fenêtre horaire nommée ou inline"
+  category:    "time"
+  arg_type:    "string_or_table"
+  arg_hint:    "nom défini dans filter.times ou {start:'08:00',end:'18:00'}"
+}
+
+_factory = (cfg) ->
   (spec) ->
     times = cfg.times or {}
     
@@ -127,3 +136,5 @@ build_day_bitmask = (days) ->
         else
           false, "Outside time window #{desc_str}"
     }
+
+{ schema: _schema, factory: _factory }

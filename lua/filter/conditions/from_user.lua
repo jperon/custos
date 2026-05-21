@@ -28,7 +28,16 @@ safe_get_mac = function(ip_str)
   end
   return _get_mac(ip_str)
 end
-return function(cfg)
+local _schema = {
+  label = "Utilisateur authentifié",
+  description = "Requête d'un client avec session auth active pour cet utilisateur",
+  category = "source",
+  arg_type = "string",
+  arg_hint = "ex: alice@example.com",
+  requires_auth = true
+}
+local _factory
+_factory = function(cfg)
   local sessions_file = (cfg.auth and cfg.auth.sessions_file) or config.auth.sessions_file
   return function(user_or_opts)
     local user = user_or_opts
@@ -134,3 +143,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

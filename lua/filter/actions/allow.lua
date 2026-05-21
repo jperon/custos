@@ -1,4 +1,10 @@
-return function(cfg)
+local _schema = {
+  label = "Autoriser",
+  description = "Autorise la requête DNS et injecte les IPs dans nftables",
+  arg_type = nil
+}
+local _factory
+_factory = function(cfg)
   return function(rule)
     return {
       capabilities = {
@@ -20,3 +26,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

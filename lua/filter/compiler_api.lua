@@ -59,6 +59,9 @@ wrap_factory = function(factory_outer)
       local factory_inner = factory_outer(cfg)
       local result = factory_inner(args)
       if is_new_style(result) then
+        result.compile_nft = result.compile_nft or function()
+          return nil, "unsupported"
+        end
         return result
       else
         return {
@@ -223,18 +226,34 @@ make_from_files = function(base_factory, type_name)
     end
   end
 end
+local extract_factory
+extract_factory = function(mod)
+  if type(mod) == "table" and mod.factory then
+    return mod.factory
+  else
+    return mod
+  end
+end
+local extract_schema
+extract_schema = function(mod)
+  if type(mod) == "table" and mod.schema then
+    return mod.schema
+  else
+    return nil
+  end
+end
 local load_condition
 load_condition = function(name)
-  local ok, factory_outer = pcall(require, "filter.conditions." .. tostring(name))
+  local ok, mod = pcall(require, "filter.conditions." .. tostring(name))
   if ok then
-    return wrap_factory(factory_outer)
+    return wrap_factory(extract_factory(mod))
   end
   local base_name = name:match("^(.+)_lists$")
   if base_name then
     local type_name = base_name:match("^[^_]+_(.+)$")
     local base_ok, base_mod = pcall(require, "filter.conditions." .. tostring(base_name))
     if base_ok and type_name then
-      return make_from_files((wrap_factory(base_mod)), type_name)
+      return make_from_files((wrap_factory(extract_factory(base_mod))), type_name)
     end
   end
   base_name = name:match("^(.+)_list$")
@@ -242,24 +261,51 @@ load_condition = function(name)
     local type_name = base_name:match("^[^_]+_(.+)$")
     local base_ok, base_mod = pcall(require, "filter.conditions." .. tostring(base_name))
     if base_ok and type_name then
-      return make_from_file((wrap_factory(base_mod)), type_name)
+      return make_from_file((wrap_factory(extract_factory(base_mod))), type_name)
     end
   end
   base_name = name:match("^(.+)s$")
   if base_name then
     local base_ok, base_mod = pcall(require, "filter.conditions." .. tostring(base_name))
     if base_ok then
-      return make_plural((wrap_factory(base_mod)))
+      return make_plural((wrap_factory(extract_factory(base_mod))))
     end
   end
   return nil, "Condition '" .. tostring(name) .. "' not found"
 end
+local get_condition_schema
+get_condition_schema = function(name)
+  local ok, mod = pcall(require, "filter.conditions." .. tostring(name))
+  if ok then
+    return extract_schema(mod)
+  end
+  local _list_0 = {
+    "^(.+)_lists$",
+    "^(.+)_list$",
+    "^(.+)s$"
+  }
+  for _index_0 = 1, #_list_0 do
+    local pattern = _list_0[_index_0]
+    local base = name:match(pattern)
+    if base then
+      local base_ok, base_mod = pcall(require, "filter.conditions." .. tostring(base))
+      if base_ok then
+        local s = extract_schema(base_mod)
+        if s then
+          return s
+        end
+      end
+    end
+  end
+  return nil
+end
 local load_action
 load_action = function(name)
-  local ok, factory_outer = pcall(require, "filter.actions." .. tostring(name))
+  local ok, mod = pcall(require, "filter.actions." .. tostring(name))
   if not (ok) then
-    return nil, factory_outer
+    return nil, mod
   end
+  local factory_outer = extract_factory(mod)
   return function(cfg)
     return function(rule)
       local factory_inner = factory_outer(cfg)
@@ -376,6 +422,14 @@ create_dnsonly_action = function()
     end
   }
 end
+local get_action_schema
+get_action_schema = function(name)
+  local ok, mod = pcall(require, "filter.actions." .. tostring(name))
+  if ok then
+    return extract_schema(mod)
+  end
+  return nil
+end
 return {
   is_new_style = is_new_style,
   compute_worker_only = compute_worker_only,
@@ -385,6 +439,8 @@ return {
   unique_rule_id = unique_rule_id,
   load_condition = load_condition,
   load_action = load_action,
+  get_condition_schema = get_condition_schema,
+  get_action_schema = get_action_schema,
   create_net_condition = create_net_condition,
   create_allow_action = create_allow_action,
   create_deny_action = create_deny_action,

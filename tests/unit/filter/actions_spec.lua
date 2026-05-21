@@ -22,7 +22,7 @@ _dns_ede_stub = {
 }
 package.loaded["dns_ede"] = _dns_ede_stub
 describe("filter.actions.dns_strip", function()
-  local dns_strip_factory = require("filter.actions.dns_strip")
+  local dns_strip_factory = (require("filter.actions.dns_strip")).factory
   local cfg = {
     nft = {
       ip_timeout = "2m"
@@ -155,7 +155,7 @@ describe("filter.actions.dns_strip", function()
         return raw
       end
     }
-    local local_factory = require("filter.actions.dns_strip")
+    local local_factory = (require("filter.actions.dns_strip")).factory
     local local_action = (local_factory(cfg))(rule)
     local ctx = {
       dns_raw = "original_dns",

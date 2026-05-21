@@ -33,7 +33,17 @@ safe_get_mac = (ip_str) ->
 --- @tparam table cfg Configuration
 -- @treturn function factory (user_or_opts) → enriched_condition
 -- Note: worker-only due to dynamic session lookup.
-(cfg) ->
+
+_schema = {
+  label:       "Utilisateur authentifié"
+  description: "Requête d'un client avec session auth active pour cet utilisateur"
+  category:    "source"
+  arg_type:    "string"
+  arg_hint:    "ex: alice@example.com"
+  requires_auth: true
+}
+
+_factory = (cfg) ->
   sessions_file = (cfg.auth and cfg.auth.sessions_file) or config.auth.sessions_file
 
   (user_or_opts) ->
@@ -115,3 +125,5 @@ safe_get_mac = (ip_str) ->
 
         true, "from_user: #{req.src_ip} → #{s.user}"
     }
+
+{ schema: _schema, factory: _factory }

@@ -1,4 +1,12 @@
-return function(cfg)
+local _schema = {
+  label = "Domaine cible",
+  description = "Domaine DNS exact (inclut tous les sous-domaines)",
+  category = "destination",
+  arg_type = "string",
+  arg_hint = "ex: example.com"
+}
+local _factory
+_factory = function(cfg)
   return function(domain)
     if domain == "_any" then
       return {
@@ -56,3 +64,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

@@ -4,8 +4,15 @@
 
 --- @tparam table cfg Configuration
 -- @treturn function factory (listnames) → enriched_condition
-(cfg) ->
-  to_domainlist_factory = require "filter.conditions.to_domainlist"
+_schema = {
+  label:       "Plusieurs listes de domaines"
+  description: "Domaine présent dans au moins une des listes"
+  category:    "destination"
+  arg_type:    "string_list"
+}
+
+_factory = (cfg) ->
+  to_domainlist_factory = (require "filter.conditions.to_domainlist").factory
   (listnames) ->
     lists = listnames
     unless type(listnames) == "table"
@@ -25,3 +32,5 @@
         false, "Domain not in any of: #{table.concat lists, ', '}"
       creates_dynamic_scope: true
     }
+
+{ schema: _schema, factory: _factory }

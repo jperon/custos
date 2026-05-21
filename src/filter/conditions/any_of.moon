@@ -7,9 +7,14 @@
 
 compiler_api = require "filter.compiler_api"
 
---- @tparam table cfg Configuration
--- @treturn function factory (sub_conditions) → enriched_condition
-(cfg) ->
+_schema = {
+  label:       "OU logique"
+  description: "Vrai si au moins une sous-condition est vraie"
+  category:    "meta"
+  arg_type:    "condition_list"
+}
+
+_factory = (cfg) ->
   (sub_conditions) ->
     unless type(sub_conditions) == "table" and #sub_conditions > 0
       return {
@@ -44,3 +49,5 @@ compiler_api = require "filter.compiler_api"
           return true, msg if ok
         false, "No sub-condition matched in any_of"
     }
+
+{ schema: _schema, factory: _factory }

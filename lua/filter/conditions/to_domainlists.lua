@@ -1,5 +1,12 @@
-return function(cfg)
-  local to_domainlist_factory = require("filter.conditions.to_domainlist")
+local _schema = {
+  label = "Plusieurs listes de domaines",
+  description = "Domaine présent dans au moins une des listes",
+  category = "destination",
+  arg_type = "string_list"
+}
+local _factory
+_factory = function(cfg)
+  local to_domainlist_factory = (require("filter.conditions.to_domainlist")).factory
   return function(listnames)
     local lists = listnames
     if not (type(listnames) == "table") then
@@ -31,3 +38,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

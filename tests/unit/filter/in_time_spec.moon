@@ -1,7 +1,7 @@
 -- tests/unit/filter/in_time_spec.moon
 
 describe "filter.conditions.in_time", ->
-  in_time = require "filter.conditions.in_time"
+  in_time = (require "filter.conditions.in_time").factory
 
   describe "named time window (existing behavior)", ->
     it "matches inside time window", ->

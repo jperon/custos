@@ -4,7 +4,15 @@
 
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (net_cidr) → enriched_condition
-(cfg) ->
+_schema = {
+  label:       "Réseau destination"
+  description: "Requête vers un CIDR IPv4/IPv6 de destination (support nft natif)"
+  category:    "destination"
+  arg_type:    "string"
+  arg_hint:    "ex: 10.0.0.0/8"
+}
+
+_factory = (cfg) ->
   (net_cidr) ->
     -- Gérer les cas spéciaux _any et _none
     if net_cidr == "_any"
@@ -55,3 +63,5 @@
             return "ip daddr #{net_cidr}", nil
           return nil, "IPv4 CIDR in IPv6 family"
     }
+
+{ schema: _schema, factory: _factory }

@@ -1,5 +1,11 @@
 (require("ipc")).register_modifier("dnsonly")
-return function(cfg)
+local _schema = {
+  label = "DNS seulement",
+  description = "Résolution DNS autorisée, sans injection dans nftables",
+  arg_type = nil
+}
+local _factory
+_factory = function(cfg)
   return function(rule)
     return {
       capabilities = {
@@ -20,3 +26,7 @@ return function(cfg)
     }
   end
 end
+return {
+  schema = _schema,
+  factory = _factory
+}

@@ -4,7 +4,15 @@
 
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (mac_or_alias) → enriched_condition
-(cfg) ->
+_schema = {
+  label:       "Adresse MAC source"
+  description: "Requête depuis une adresse MAC spécifique (support nft natif)"
+  category:    "source"
+  arg_type:    "string"
+  arg_hint:    "ex: aa:bb:cc:dd:ee:ff"
+}
+
+_factory = (cfg) ->
   (mac_or_alias) ->
     mac_map = cfg.macs or {}
 
@@ -43,3 +51,5 @@
       compile_nft: (family) ->
         return "ether saddr #{target_mac}", nil
     }
+
+{ schema: _schema, factory: _factory }

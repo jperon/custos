@@ -2,9 +2,15 @@
 -- Condition : l'adresse IP source appartient au réseau CIDR configuré.
 -- API enrichie : support worker + nft.
 
---- @tparam table cfg Configuration du filtre
--- @treturn function factory (net_cidr) → enriched_condition
-(cfg) ->
+_schema = {
+  label:       "Réseau source"
+  description: "Requête provenant d'un CIDR IPv4 ou IPv6 (support nft natif)"
+  category:    "source"
+  arg_type:    "string"
+  arg_hint:    "ex: 192.168.0.0/24"
+}
+
+_factory = (cfg) ->
   (net_cidr) ->
     -- Gérer les cas spéciaux _any et _none
     if net_cidr == "_any"
@@ -55,3 +61,5 @@
             return "ip saddr #{net_cidr}", nil
           return nil, "IPv4 CIDR in IPv6 family"
     }
+
+{ schema: _schema, factory: _factory }

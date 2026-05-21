@@ -1,5 +1,5 @@
 return describe("filter.conditions.in_time", function()
-  local in_time = require("filter.conditions.in_time")
+  local in_time = (require("filter.conditions.in_time")).factory
   describe("named time window (existing behavior)", function()
     it("matches inside time window", function()
       local cfg = {
