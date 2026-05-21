@@ -355,7 +355,8 @@ cmd_test_e2e() {
     log "bootstrap outils de test (idempotent)..."
     for vm_name in servus cliens; do
         local _ip ; _ip=$(vm_ip "$vm_name")
-        ssh $SSH_OPTS -i "$SSH_KEY" "root@$_ip" \
+        # timeout 90s : apk update peut être lent si le réseau de la VM se lève tardivement.
+        timeout 90 ssh $SSH_OPTS -i "$SSH_KEY" "root@$_ip" \
             'command -v dig >/dev/null || { apk update -q 2>/dev/null; apk add -q bind-dig 2>/dev/null; }' || true
     done
 
