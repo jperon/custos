@@ -75,15 +75,15 @@ verify = function(token, key)
   if not (token and #token > 0) then
     return nil, "token absent"
   end
-  local dot = token:find(".", 1, true)
-  if not (dot) then
+  if #token < 66 then
+    return nil, "token trop court"
+  end
+  local sig_hex = token:sub(-64)
+  local dot_pos = #token - 64
+  if not (token:sub(dot_pos, dot_pos) == ".") then
     return nil, "token malformé"
   end
-  local encoded = token:sub(1, dot - 1)
-  local sig_hex = token:sub(dot + 1)
-  if #sig_hex ~= 64 then
-    return nil, "signature trop courte"
-  end
+  local encoded = token:sub(1, dot_pos - 1)
   local expected = bin_to_hex(hmac_bin(key, encoded))
   local diff = 0
   for i = 1, 64 do

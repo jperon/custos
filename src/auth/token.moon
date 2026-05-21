@@ -89,11 +89,11 @@ generate = (type_, user, mac, expires, key) ->
 -- @treturn nil|string   Message d'erreur
 verify = (token, key) ->
   return nil, "token absent" unless token and #token > 0
-  dot = token\find(".", 1, true)
-  return nil, "token malformé" unless dot
-  encoded = token\sub 1, dot - 1
-  sig_hex = token\sub dot + 1
-  return nil, "signature trop courte" if #sig_hex ~= 64
+  return nil, "token trop court" if #token < 66
+  sig_hex = token\sub -64
+  dot_pos = #token - 64
+  return nil, "token malformé" unless token\sub(dot_pos, dot_pos) == "."
+  encoded = token\sub 1, dot_pos - 1
   expected = bin_to_hex hmac_bin key, encoded
   -- Comparaison en temps constant
   diff = 0
