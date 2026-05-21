@@ -333,11 +333,20 @@ cmd_test() {
 }
 
 cmd_test_e2e() {
+    # Vérifier que toutes les VMs sont définies et démarrées avant tout.
+    for _vm in "${VMS[@]}"; do
+        local _dom ; _dom=$(domain_name "$_vm")
+        virsh_has "$_dom" \
+            || err "VM $_dom non définie — lance '$0 ensure' puis '$0 start' d'abord"
+        virsh domstate "$_dom" 2>/dev/null | grep -q running \
+            || err "VM $_dom non démarrée — lance '$0 start' d'abord"
+    done
+
     local ip_custos ip_servus ip_cliens ip_via
-    ip_custos=$(vm_ip custos)  ; [ -n "$ip_custos" ]  || err "IP de custos introuvable"
-    ip_servus=$(vm_ip servus)  ; [ -n "$ip_servus" ]  || err "IP de servus introuvable"
-    ip_cliens=$(vm_ip cliens)  ; [ -n "$ip_cliens" ]  || err "IP de cliens introuvable"
-    ip_via=$(vm_ip via)        ; [ -n "$ip_via" ]      || err "IP de via introuvable"
+    ip_custos=$(vm_ip custos)  ; [ -n "$ip_custos" ]  || err "IP de custos introuvable (DHCP en attente ?)"
+    ip_servus=$(vm_ip servus)  ; [ -n "$ip_servus" ]  || err "IP de servus introuvable (DHCP en attente ?)"
+    ip_cliens=$(vm_ip cliens)  ; [ -n "$ip_cliens" ]  || err "IP de cliens introuvable (DHCP en attente ?)"
+    ip_via=$(vm_ip via)        ; [ -n "$ip_via" ]      || err "IP de via introuvable (DHCP en attente ?)"
 
     log "déploiement config E2E sur custos..."
     scp -O $SSH_OPTS -i "$SSH_KEY" \
