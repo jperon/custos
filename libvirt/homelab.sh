@@ -212,6 +212,12 @@ cmd_start() {
     for vm in "${VMS[@]}"; do
         wait_ssh "$vm"
     done
+    # SSH opérationnel ⇒ réseau établi : installer les outils de test (idempotent).
+    for vm in servus cliens; do
+        local _ip ; _ip=$(vm_ip "$vm")
+        ssh $SSH_OPTS -i "$SSH_KEY" "root@$_ip" \
+            'command -v dig >/dev/null || { apk update -q 2>/dev/null && apk add -q bind-dig 2>/dev/null; }' || true
+    done
     log "homelab opérationnel."
     for vm in "${VMS[@]}"; do
         printf "  %-8s %s\n" "$vm" "$(vm_ip "$vm")"
@@ -359,14 +365,6 @@ cmd_test_e2e() {
         "$SCRIPT_DIR/homelab-e2e.moon" "root@$ip_custos:/etc/custos/config.moon"
     ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip_custos" \
         '/etc/init.d/custos restart 2>/dev/null; sleep 3'
-
-    log "bootstrap outils de test (idempotent)..."
-    for vm_name in servus cliens; do
-        local _ip ; _ip=$(vm_ip "$vm_name")
-        # timeout 90s : apk update peut être lent si le réseau de la VM se lève tardivement.
-        timeout 90 ssh $SSH_OPTS -i "$SSH_KEY" "root@$_ip" \
-            'command -v dig >/dev/null || { apk update -q 2>/dev/null; apk add -q bind-dig 2>/dev/null; }' || true
-    done
 
     log "exécution de la suite E2E..."
     export SSH_OPTS SSH_KEY PROJECT_DIR SCRIPT_DIR
