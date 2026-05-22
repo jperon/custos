@@ -350,7 +350,7 @@ Installer = (cfg) ->
         warn "--no-start : démarrage ignoré"
         return true
 
-      unless @ssh_run "/etc/init.d/custos restart ; sleep 2 ; /etc/init.d/custos stop"
+      unless @ssh_run "/etc/init.d/custos stop ; sleep 2 ; /etc/init.d/custos start"
         fail "Échec du démarrage"
         return false
 

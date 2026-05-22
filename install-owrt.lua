@@ -398,7 +398,7 @@ Installer = function(cfg)
         warn("--no-start : démarrage ignoré")
         return true
       end
-      if not (self:ssh_run("/etc/init.d/custos restart ; sleep 2 ; /etc/init.d/custos stop")) then
+      if not (self:ssh_run("/etc/init.d/custos stop ; sleep 2 ; /etc/init.d/custos start")) then
         fail("Échec du démarrage")
         return false
       end
