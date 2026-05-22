@@ -58,6 +58,28 @@ nft_file_path = function()
   local dir = src:match("^@(.*/)") or "./"
   return dir .. "dns-filter-bridge.nft"
 end
+local collect_ips
+collect_ips = function(cmd, pattern, exclude)
+  local ips = { }
+  local fh = io.popen(cmd)
+  if fh then
+    for line in fh:lines() do
+      local ip = line:match(pattern)
+      if ip and (not exclude or not ip:match(exclude)) then
+        ips[#ips + 1] = ip
+      end
+    end
+    fh:close()
+  end
+  return ips
+end
+local fmt_elements
+fmt_elements = function(ips)
+  if #ips == 0 then
+    return ""
+  end
+  return "    elements = { " .. table.concat(ips, ", ") .. " }\n"
+end
 local substitute
 substitute = function(content, plan)
   if plan == nil then
@@ -102,30 +124,8 @@ substitute = function(content, plan)
     sip_rules = ""
   end
   content = content:gsub("{SIP_RULES}", sip_rules)
-  local collect_ips
-  collect_ips = function(cmd, pattern, exclude)
-    local ips = { }
-    local fh = io.popen(cmd)
-    if fh then
-      for line in fh:lines() do
-        local ip = line:match(pattern)
-        if ip and (not exclude or not ip:match(exclude)) then
-          ips[#ips + 1] = ip
-        end
-      end
-      fh:close()
-    end
-    return ips
-  end
   local ip4s = collect_ips("ip -4 addr show 2>/dev/null", "%s+inet%s+([%d%.]+)/", nil)
   local ip6s = collect_ips("ip -6 addr show 2>/dev/null", "%s+inet6%s+([%x:]+)/", "^fe80")
-  local fmt_elements
-  fmt_elements = function(ips)
-    if #ips == 0 then
-      return ""
-    end
-    return "    elements = { " .. table.concat(ips, ", ") .. " }\n"
-  end
   content = content:gsub("{FILTER_IPS4_ELEMENTS}", fmt_elements(ip4s))
   content = content:gsub("{FILTER_IPS6_ELEMENTS}", fmt_elements(ip6s))
   if get_log_level_num("DEBUG") < get_log_level_num(cfg.runtime.log_level) then
@@ -261,5 +261,9 @@ apply = function()
   return true
 end
 return {
-  apply = apply
+  apply = apply,
+  _test = {
+    collect_ips = collect_ips,
+    fmt_elements = fmt_elements
+  }
 }
