@@ -228,6 +228,8 @@ Portail captif et authentification des utilisateurs.
 | `register_rate_window` | int | `300` | Fenêtre de rate-limiting (s) |
 | `bridge_ifname` | string | `"br0"` | Nom de l'interface bridge (utilisé pour la détection MAC) |
 | `redirect_url` | string | — | URL de redirection après authentification (optionnel) |
+| `admin_users` | array | `{}` | Liste des utilisateurs avec droits administrateur (interface `/admin/*`) |
+| `admin_allow_all_when_empty` | bool | `true` | Si `true` et `admin_users` vide, tous les utilisateurs authentifiés sont admin |
 
 ### 9.1 Sous-section `auth.sni_verdict`
 

@@ -191,7 +191,7 @@ success_page = (auth_cfg, created_at) ->
       }
       setInterval(ping, iv);
       setInterval(updateTimer, 10000);
-      ping();
+      setTimeout(ping, 3000);
       updateTimer();
       // Envoyer un ping immédiat au retour en foreground (anti-throttling navigateur).
       document.addEventListener('visibilitychange', function(){
@@ -727,6 +727,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     sessions_file: sessions_file
     token_key: token_key
     admin_users: auth_cfg.admin_users or {}
+    admin_allow_all_when_empty: auth_cfg.admin_allow_all_when_empty or false
     config_path: auth_cfg.config_path or "/etc/custos/config.moon"
     started_at: os.time!
     static_cert_paths: if auth_cfg.cert and auth_cfg.key then { cert: auth_cfg.cert, key: auth_cfg.key } else nil

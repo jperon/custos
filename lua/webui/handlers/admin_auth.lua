@@ -30,12 +30,15 @@ check_admin_session = function(req, state)
   if not (cookie_val) then
     return nil, "unauth"
   end
-  local p, err = token.verify(cookie_val, state.token_key)
+  local p, _ = token.verify(cookie_val, state.token_key)
   if not (p and p.type == "user") then
     return nil, "unauth"
   end
   local admin_users = state.admin_users or { }
-  for _, u in ipairs(admin_users) do
+  if state.admin_allow_all_when_empty and #admin_users == 0 then
+    return p, nil
+  end
+  for __, u in ipairs(admin_users) do
     if u == p.user then
       return p, nil
     end

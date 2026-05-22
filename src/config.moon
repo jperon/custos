@@ -114,6 +114,7 @@ DEFAULTS = {
     secrets: "/etc/custos/secrets"
     sessions_file: "/tmp/sessions.lua"
     admin_users: {}
+    admin_allow_all_when_empty: true
     sni_verdict: {
       enabled: true
       mode: "strict-443"
@@ -247,6 +248,10 @@ normalize = (cfg) ->
   ttl.max = tonumber(ttl.max) or ttl_defaults.max
 
   cfg.auth.admin_users = cfg.auth.admin_users or auth_defaults.admin_users or {}
+  if cfg.auth.admin_allow_all_when_empty == nil
+    cfg.auth.admin_allow_all_when_empty = auth_defaults.admin_allow_all_when_empty or true
+  else
+    cfg.auth.admin_allow_all_when_empty = coerce_boolean cfg.auth.admin_allow_all_when_empty
   cfg.auth.port = tonumber(cfg.auth.port) or auth_defaults.port
   cfg.auth.captive_port = tonumber(cfg.auth.captive_port) or auth_defaults.captive_port
   cfg.auth.session_ttl = tonumber(cfg.auth.session_ttl) or auth_defaults.session_ttl

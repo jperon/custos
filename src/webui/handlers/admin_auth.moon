@@ -25,17 +25,21 @@ forbidden_page = (user) ->
 
 --- Extrait et vérifie le token de session depuis les headers de la requête,
 -- puis contrôle que l'utilisateur est dans state.admin_users.
+-- Si admin_allow_all_when_empty est true et admin_users est vide, tous les utilisateurs authentifiés sont admin.
 -- @tparam table req    Requête HTTP
--- @tparam table state  État du serveur (token_key, admin_users)
+-- @tparam table state  État du serveur (token_key, admin_users, admin_allow_all_when_empty)
 -- @treturn table|nil   Payload du token, ou nil
 -- @treturn nil|string  "unauth" si pas de session, "forbidden" si pas admin
 check_admin_session = (req, state) ->
   cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
   return nil, "unauth" unless cookie_val
-  p, err = token.verify cookie_val, state.token_key
+  p, _ = token.verify cookie_val, state.token_key
   return nil, "unauth" unless p and p.type == "user"
   admin_users = state.admin_users or {}
-  for _, u in ipairs admin_users
+  -- Si admin_allow_all_when_empty est activé et la liste est vide, tous les utilisateurs sont admin
+  if state.admin_allow_all_when_empty and #admin_users == 0
+    return p, nil
+  for __, u in ipairs admin_users
     return p, nil if u == p.user
   nil, "forbidden"
 
