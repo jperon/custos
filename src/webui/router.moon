@@ -16,6 +16,10 @@
   :handle_rules_new_get,  :handle_rules_new_post,
   :handle_rules_edit_get, :handle_rules_edit_post,
   :handle_rules_delete,   :handle_rules_move }  = require "webui.handlers.rules"
+{ :handle_lists_index,
+  :handle_lists_type,
+  :handle_list_get,     :handle_list_post,
+  :handle_list_new_get, :handle_list_new_post } = require "webui.handlers.lists"
 
 -- Sections scalaires éditables via le handler générique
 SCALAR_SECTIONS = {
@@ -78,6 +82,24 @@ dispatch = (req, state) ->
   if path == "/admin/config/filter/decision"
     return handle_decision_get(req, state)  if method == "GET"
     return handle_decision_post(req, state) if method == "POST"
+
+  -- Listes (from_xxx_list)
+  if path == "/admin/config/filter/lists" or path == "/admin/config/filter/lists/"
+    return handle_lists_index req, state
+
+  type_m = path\match "^/admin/config/filter/lists/([a-z][a-z0-9_]*)$"
+  if type_m
+    return handle_lists_type req, type_m, state
+
+  type_new = path\match "^/admin/config/filter/lists/([a-z][a-z0-9_]*)/new$"
+  if type_new
+    return handle_list_new_get(req, type_new, state)  if method == "GET"
+    return handle_list_new_post(req, type_new, state) if method == "POST"
+
+  type_n, name_n = path\match "^/admin/config/filter/lists/([a-z][a-z0-9_]*)/([a-zA-Z0-9][a-zA-Z0-9_%-]*)$"
+  if type_n and name_n
+    return handle_list_get(req, type_n, name_n, state)  if method == "GET"
+    return handle_list_post(req, type_n, name_n, state) if method == "POST"
 
   -- Filtre DNS — index
   if path == "/admin/config/filter" or path == "/admin/config/filter/"

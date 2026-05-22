@@ -25,6 +25,11 @@ do
   local _obj_0 = require("webui.handlers.rules")
   handle_rules_list, handle_rules_new_get, handle_rules_new_post, handle_rules_edit_get, handle_rules_edit_post, handle_rules_delete, handle_rules_move = _obj_0.handle_rules_list, _obj_0.handle_rules_new_get, _obj_0.handle_rules_new_post, _obj_0.handle_rules_edit_get, _obj_0.handle_rules_edit_post, _obj_0.handle_rules_delete, _obj_0.handle_rules_move
 end
+local handle_lists_index, handle_lists_type, handle_list_get, handle_list_post, handle_list_new_get, handle_list_new_post
+do
+  local _obj_0 = require("webui.handlers.lists")
+  handle_lists_index, handle_lists_type, handle_list_get, handle_list_post, handle_list_new_get, handle_list_new_post = _obj_0.handle_lists_index, _obj_0.handle_lists_type, _obj_0.handle_list_get, _obj_0.handle_list_post, _obj_0.handle_list_new_get, _obj_0.handle_list_new_post
+end
 local SCALAR_SECTIONS = {
   runtime = true,
   nfqueue = true,
@@ -116,6 +121,31 @@ dispatch = function(req, state)
     end
     if method == "POST" then
       return handle_decision_post(req, state)
+    end
+  end
+  if path == "/admin/config/filter/lists" or path == "/admin/config/filter/lists/" then
+    return handle_lists_index(req, state)
+  end
+  local type_m = path:match("^/admin/config/filter/lists/([a-z][a-z0-9_]*)$")
+  if type_m then
+    return handle_lists_type(req, type_m, state)
+  end
+  local type_new = path:match("^/admin/config/filter/lists/([a-z][a-z0-9_]*)/new$")
+  if type_new then
+    if method == "GET" then
+      return handle_list_new_get(req, type_new, state)
+    end
+    if method == "POST" then
+      return handle_list_new_post(req, type_new, state)
+    end
+  end
+  local type_n, name_n = path:match("^/admin/config/filter/lists/([a-z][a-z0-9_]*)/([a-zA-Z0-9][a-zA-Z0-9_%-]*)$")
+  if type_n and name_n then
+    if method == "GET" then
+      return handle_list_get(req, type_n, name_n, state)
+    end
+    if method == "POST" then
+      return handle_list_post(req, type_n, name_n, state)
     end
   end
   if path == "/admin/config/filter" or path == "/admin/config/filter/" then

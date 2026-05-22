@@ -12,6 +12,9 @@ nav_html = function()
       href = "/admin/config/filter/rules"
     }, "Règles"),
     H.a({
+      href = "/admin/config/filter/lists"
+    }, "Listes"),
+    H.a({
       href = "/admin/config/"
     }, "Configuration"),
     H.a({
