@@ -251,6 +251,10 @@ socket_mt.__index.accept = =>
     log_debug { action: "socket_accept_failed", errno: errno }
     if errno == EAGAIN or errno == EWOULDBLOCK
       return nil
+    if errno == 4   -- EINTR : appel interrompu par signal, à réessayer
+      return nil
+    if errno == 103 -- ECONNABORTED : client RST avant accept(), bénin
+      return nil
     error "accept() failed: errno="..errno
 
   client = {
@@ -485,7 +489,9 @@ socket_select = (readfds, writefds, timeout) ->
 
   if ret < 0
     errno = get_errno!
-    error "select() failed"
+    if errno == 4  -- EINTR : appel interrompu par signal, retourner vide
+      return {}, {}
+    error "select() failed: errno="..errno
 
   ready_read = {}
   ready_write = {}

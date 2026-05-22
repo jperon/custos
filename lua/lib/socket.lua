@@ -255,6 +255,12 @@ socket_mt.__index.accept = function(self)
     if errno == EAGAIN or errno == EWOULDBLOCK then
       return nil
     end
+    if errno == 4 then
+      return nil
+    end
+    if errno == 103 then
+      return nil
+    end
     error("accept() failed: errno=" .. errno)
   end
   local client = {
@@ -528,7 +534,10 @@ socket_select = function(readfds, writefds, timeout)
   local ret = C.select(max_fd + 1, readfds and read_set or nil, writefds and write_set or nil, nil, timeout and tv or nil)
   if ret < 0 then
     local errno = get_errno()
-    error("select() failed")
+    if errno == 4 then
+      return { }, { }
+    end
+    error("select() failed: errno=" .. errno)
   end
   local ready_read = { }
   local ready_write = { }
