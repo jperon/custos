@@ -22,6 +22,16 @@ nav a { margin-right: 1rem; }
 section { background: #fff; border: 1px solid #ddd; border-radius: 4px;
           padding: 1rem; margin-bottom: 1rem; }
 
+details { background: #fff; border: 1px solid #ddd; border-radius: 4px;
+          margin-bottom: .4rem; }
+details > summary { padding: .5rem 1rem; cursor: pointer; font-weight: 600;
+                    list-style: none; user-select: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: '▶ '; font-size: .75em; color: #888; }
+details[open] > summary::before { content: '▼ '; }
+details[open] > summary { border-bottom: 1px solid #eee; }
+details > :not(summary) { padding: .75rem 1rem; }
+
 table { border-collapse: collapse; width: 100%; margin: .5rem 0; }
 th, td { text-align: left; padding: .4rem .6rem;
          border-bottom: 1px solid #eee; vertical-align: top; }

@@ -157,8 +157,8 @@ handle_rules_list = function(req, state)
     ["Content-Type"] = "text/html; charset=UTF-8"
   }, page("Règles de filtrage", body)
 end
-local render_condition_select
-render_condition_select = function(prefix, current_type, current_val)
+local cond_type_opts
+cond_type_opts = function(selected_type)
   local conds = registry.conditions()
   local ordered = { }
   for name, s in pairs(conds) do
@@ -180,7 +180,7 @@ render_condition_select = function(prefix, current_type, current_val)
   for _, pair in ipairs(ordered) do
     local name, s = pair[1], pair[2]
     local sel
-    if name == current_type then
+    if name == selected_type then
       sel = "selected"
     else
       sel = nil
@@ -190,42 +190,33 @@ render_condition_select = function(prefix, current_type, current_val)
       selected = sel
     }, (s.label or name))
   end
-  local sel_id = prefix .. "_type"
-  local fieldsets = ""
-  for _, pair in ipairs(ordered) do
-    local name, s = pair[1], pair[2]
-    local fid = prefix .. "_fields_" .. name:gsub("[^%w]", "_")
-    local display
-    if name == current_type then
-      display = ""
-    else
-      display = "display:none"
-    end
-    local field_input = render_condition_input(prefix, name, s, current_val)
-    fieldsets = fieldsets .. H.div({
-      id = fid,
-      style = display
-    }, field_input)
+  return opts
+end
+local cond_val_str
+cond_val_str = function(cval)
+  if type(cval) == "table" then
+    return table.concat(cval, "\n")
+  elseif cval then
+    return tostring(cval)
+  else
+    return ""
   end
-  local js = [[    document.getElementById(']] .. sel_id .. [[').addEventListener('change', function() {
-      var val = this.value;
-      var prefix = ']] .. prefix .. [[';
-      document.querySelectorAll('[id^="' + prefix + '_fields_"]').forEach(function(el) {
-        el.style.display = 'none';
-      });
-      var target = document.getElementById(prefix + '_fields_' + val.replace(/[^a-zA-Z0-9]/g, '_'));
-      if (target) target.style.display = '';
-    });
-  ]]
-  return H.div({
-    H.label("Type de condition"),
-    H.select({
-      id = sel_id,
-      name = prefix .. "[type]"
-    }, opts),
-    fieldsets,
-    H.script(js)
-  })
+end
+local render_cond_row
+render_cond_row = function(idx, ctype, cval)
+  local sel = H.select({
+    name = "cond_" .. tostring(idx) .. "[type]"
+  }, cond_type_opts(ctype))
+  local ta = H.textarea({
+    name = "cond_" .. tostring(idx) .. "[value]",
+    rows = "2"
+  }, cond_val_str(cval))
+  local btn = H.button({
+    type = "button",
+    onclick = "_delCond(this)",
+    class = "btn btn-danger btn-sm"
+  }, "✕")
+  return H.tr((H.td(sel) .. H.td(ta) .. H.td(btn)))
 end
 local render_condition_input
 render_condition_input = function(prefix, cond_name, schema, current_val)
@@ -296,6 +287,76 @@ render_condition_input = function(prefix, cond_name, schema, current_val)
     })
   end
   return ""
+end
+local render_condition_select
+render_condition_select = function(prefix, current_type, current_val)
+  local conds = registry.conditions()
+  local ordered = { }
+  for name, s in pairs(conds) do
+    ordered[#ordered + 1] = {
+      name,
+      s
+    }
+  end
+  table.sort(ordered, function(a, b)
+    local ca = a[2].category or "z"
+    local cb = b[2].category or "z"
+    if ca == cb then
+      return a[2].label < b[2].label
+    else
+      return ca < cb
+    end
+  end)
+  local opts = ""
+  for _, pair in ipairs(ordered) do
+    local name, s = pair[1], pair[2]
+    local sel
+    if name == current_type then
+      sel = "selected"
+    else
+      sel = nil
+    end
+    opts = opts .. H.option({
+      value = name,
+      selected = sel
+    }, (s.label or name))
+  end
+  local sel_id = prefix .. "_type"
+  local fieldsets = ""
+  for _, pair in ipairs(ordered) do
+    local name, s = pair[1], pair[2]
+    local fid = prefix .. "_fields_" .. name:gsub("[^%w]", "_")
+    local display
+    if name == current_type then
+      display = ""
+    else
+      display = "display:none"
+    end
+    local field_input = render_condition_input(prefix, name, s, current_val)
+    fieldsets = fieldsets .. H.div({
+      id = fid,
+      style = display
+    }, field_input)
+  end
+  local js = [[    document.getElementById(']] .. sel_id .. [[').addEventListener('change', function() {
+      var val = this.value;
+      var prefix = ']] .. prefix .. [[';
+      document.querySelectorAll('[id^="' + prefix + '_fields_"]').forEach(function(el) {
+        el.style.display = 'none';
+      });
+      var target = document.getElementById(prefix + '_fields_' + val.replace(/[^a-zA-Z0-9]/g, '_'));
+      if (target) target.style.display = '';
+    });
+  ]]
+  return H.div({
+    H.label("Type de condition"),
+    H.select({
+      id = sel_id,
+      name = prefix .. "[type]"
+    }, opts),
+    fieldsets,
+    H.script(js)
+  })
 end
 local render_action_select
 render_action_select = function(prefix, current_type, current_opts)
@@ -371,7 +432,7 @@ render_rule_form = function(action_url, rule)
   rule = rule or { }
   local conds = rule.conditions or { }
   local actions = rule.actions or { }
-  local desc_field = H.div({
+  local desc_html = H.div({
     H.label("Description"),
     H.input({
       type = "text",
@@ -379,23 +440,48 @@ render_rule_form = function(action_url, rule)
       value = rule.description or ""
     })
   })
-  local cond_fields = ""
-  for i = 1, 5 do
-    local cond_key = next(conds)
-    local cond_type, cond_val = nil, nil
-    local j = 0
-    for k, v in pairs(conds) do
-      j = j + 1
-      if j == i then
-        cond_type, cond_val = k, v
-        break
-      end
-    end
-    cond_fields = cond_fields .. H.fieldset({
-      H.legend("Condition " .. tostring(i) .. " (optionnelle)"),
-      render_condition_select("cond_" .. tostring(i), cond_type, cond_val)
-    })
+  local cond_rows = ""
+  local idx = 0
+  for ctype, cval in pairs(conds) do
+    cond_rows = cond_rows .. render_cond_row(idx, ctype, cval)
+    idx = idx + 1
   end
+  local tpl_sel = H.select({
+    name = "cond___I__[type]"
+  }, cond_type_opts(nil))
+  local tpl_ta = H.textarea({
+    name = "cond___I__[value]",
+    rows = "2"
+  }, "")
+  local tpl_btn = H.button({
+    type = "button",
+    onclick = "_delCond(this)",
+    class = "btn btn-danger btn-sm"
+  }, "✕")
+  local tpl_row = H.tr((H.td(tpl_sel) .. H.td(tpl_ta) .. H.td(tpl_btn)))
+  local cond_tpl = H.template({
+    id = "cond-tpl"
+  }, tpl_row)
+  local cond_thead = H.thead({
+    H.tr({
+      H.th("Type de condition"),
+      H.th("Valeur (une par ligne pour les listes)"),
+      H.th({
+        style = "width:3rem"
+      }, "")
+    })
+  })
+  local cond_tbody = H.tbody({
+    id = "cond-body"
+  }, cond_rows)
+  local cond_table = H.table((cond_thead .. cond_tbody))
+  local add_btn = H.button({
+    type = "button",
+    onclick = "_addCond()",
+    class = "btn btn-secondary btn-sm",
+    style = "margin:.4rem 0 .75rem"
+  }, "+ Ajouter une condition")
+  local js = "var _ci=" .. tostring(idx) .. ";function _addCond(){" .. "var t=document.getElementById('cond-tpl').content.cloneNode(true).querySelector('tr');" .. "t.querySelectorAll('[name]').forEach(function(e){e.name=e.name.replace('__I__',_ci);});" .. "_ci++;document.getElementById('cond-body').appendChild(t);}" .. "function _delCond(b){b.closest('tr').remove();}"
   local action_type = nil
   local action_opts = nil
   if #actions > 0 then
@@ -410,11 +496,11 @@ render_rule_form = function(action_url, rule)
       end
     end
   end
-  local action_field = H.fieldset({
+  local action_html = H.fieldset({
     H.legend("Action"),
     render_action_select("action", action_type, action_opts)
   })
-  local body_html = desc_field .. H.h3("Conditions — toutes en AND") .. cond_fields .. H.h3("Action") .. action_field .. H.div({
+  local buttons = H.div({
     style = "margin-top:1rem"
   }, H.button({
     type = "submit"
@@ -422,6 +508,7 @@ render_rule_form = function(action_url, rule)
     class = "btn btn-secondary",
     href = "/admin/config/filter/rules"
   }, "Annuler"))
+  local body_html = desc_html .. H.h3("Conditions — toutes en AND") .. cond_tpl .. cond_table .. add_btn .. H.h3("Action") .. action_html .. buttons .. H.script(js)
   return H.form({
     method = "POST",
     action = action_url
@@ -432,20 +519,20 @@ rebuild_rule = function(form)
   local rule = { }
   rule.description = form.description or ""
   local conditions = { }
-  for i = 1, 5 do
+  local conds_reg = registry.conditions()
+  for i = 0, 49 do
     local _continue_0 = false
     repeat
       local ctype = form["cond_" .. tostring(i) .. "[type]"]
-      local cval = form["cond_" .. tostring(i) .. "[value]"]
+      local cval = form["cond_" .. tostring(i) .. "[value]"] or ""
       if not (ctype and ctype ~= "") then
         _continue_0 = true
         break
       end
-      if not (cval and cval:match("%S")) then
+      if not (cval:match("%S")) then
         _continue_0 = true
         break
       end
-      local conds_reg = registry.conditions()
       local s = conds_reg[ctype]
       if s and s.arg_type == "string_list" then
         local items = { }
@@ -483,11 +570,10 @@ rebuild_rule = function(form)
         }
       }
     elseif atype == "log" then
-      local msg = form["action[log_msg]"] or ""
       rule.actions = {
         {
           log = {
-            log_msg = msg
+            log_msg = form["action[log_msg]"] or ""
           }
         }
       }

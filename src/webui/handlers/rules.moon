@@ -91,8 +91,70 @@ handle_rules_list = (req, state) ->
 
 -- ── Formulaire de règle autogénéré ─────────────────────────────────────────
 
--- Génère le <select> des types de conditions + les fieldsets de champs
--- (chaque fieldset caché par défaut, affiché via JS onchange)
+-- Options triées catégorie + label pour le select de type de condition
+cond_type_opts = (selected_type) ->
+  conds = registry.conditions!
+  ordered = {}
+  for name, s in pairs conds
+    ordered[#ordered + 1] = {name, s}
+  table.sort ordered, (a, b) ->
+    ca = a[2].category or "z"
+    cb = b[2].category or "z"
+    if ca == cb then a[2].label < b[2].label else ca < cb
+  opts = ""
+  for _, pair in ipairs ordered
+    name, s = pair[1], pair[2]
+    sel = if name == selected_type then "selected" else nil
+    opts ..= H.option { value: name, selected: sel }, (s.label or name)
+  opts
+
+cond_val_str = (cval) ->
+  if type(cval) == "table" then table.concat(cval, "\n")
+  elseif cval then tostring cval
+  else ""
+
+-- Une ligne du tableau de conditions (idx = entier ou "__I__" pour le template)
+render_cond_row = (idx, ctype, cval) ->
+  sel = H.select { name: "cond_#{idx}[type]" }, cond_type_opts(ctype)
+  ta  = H.textarea { name: "cond_#{idx}[value]", rows: "2" }, cond_val_str(cval)
+  btn = H.button { type: "button", onclick: "_delCond(this)", class: "btn btn-danger btn-sm" }, "✕"
+  H.tr (H.td(sel) .. H.td(ta) .. H.td(btn))
+
+-- Ancienne signature gardée pour compatibilité interne (non utilisée en dehors)
+render_condition_input = (prefix, cond_name, schema, current_val) ->
+  t = schema and schema.arg_type
+  return "" unless t
+  fname = prefix .. "[value]"
+  hint = schema.arg_hint or ""
+
+  if t == "string" or t == "string_or_table"
+    val = if type(current_val) == "string" then current_val else ""
+    return H.div {
+      H.label (schema.label or cond_name) .. " — valeur"
+      H.input { type: "text", name: fname, value: val, placeholder: hint }
+    }
+  elseif t == "integer"
+    val = if type(current_val) == "number" then tostring current_val else ""
+    return H.div {
+      H.label (schema.label or cond_name)
+      H.input { type: "number", name: fname, value: val, placeholder: hint }
+    }
+  elseif t == "string_list"
+    val = if type(current_val) == "table"
+      table.concat current_val, "\n"
+    elseif type(current_val) == "string" then current_val
+    else ""
+    return H.div {
+      H.label (schema.label or cond_name) .. " (une valeur par ligne)"
+      H.textarea { name: fname, rows: "3" }, val
+    }
+  elseif t == "condition_list" or t == "condition"
+    return H.div {
+      H.p { style: "color:#888;font-style:italic" }, "Édition manuelle requise pour les méta-conditions."
+      H.input { type: "text", name: fname, value: "" }
+    }
+  ""
+
 render_condition_select = (prefix, current_type, current_val) ->
   conds = registry.conditions!
   -- Trier par catégorie puis par label
@@ -140,40 +202,6 @@ render_condition_select = (prefix, current_type, current_val) ->
     H.script js
   }
 
-render_condition_input = (prefix, cond_name, schema, current_val) ->
-  t = schema and schema.arg_type
-  return "" unless t
-  fname = prefix .. "[value]"
-  hint = schema.arg_hint or ""
-
-  if t == "string" or t == "string_or_table"
-    val = if type(current_val) == "string" then current_val else ""
-    return H.div {
-      H.label (schema.label or cond_name) .. " — valeur"
-      H.input { type: "text", name: fname, value: val, placeholder: hint }
-    }
-  elseif t == "integer"
-    val = if type(current_val) == "number" then tostring current_val else ""
-    return H.div {
-      H.label (schema.label or cond_name)
-      H.input { type: "number", name: fname, value: val, placeholder: hint }
-    }
-  elseif t == "string_list"
-    val = if type(current_val) == "table"
-      table.concat current_val, "\n"
-    elseif type(current_val) == "string" then current_val
-    else ""
-    return H.div {
-      H.label (schema.label or cond_name) .. " (une valeur par ligne)"
-      H.textarea { name: fname, rows: "3" }, val
-    }
-  elseif t == "condition_list" or t == "condition"
-    return H.div {
-      H.p { style: "color:#888;font-style:italic" }, "Édition manuelle requise pour les méta-conditions."
-      H.input { type: "text", name: fname, value: "" }
-    }
-  ""
-
 render_action_select = (prefix, current_type, current_opts) ->
   acts = registry.actions!
   opts = ""
@@ -206,36 +234,50 @@ render_action_select = (prefix, current_type, current_opts) ->
     extra
   }
 
--- Génère le formulaire complet d'une règle
+-- Génère le formulaire complet d'une règle (conditions dynamiques)
 render_rule_form = (action_url, rule) ->
   rule or= {}
-  conds = rule.conditions or {}
+  conds   = rule.conditions or {}
   actions = rule.actions or {}
 
   -- Description
-  desc_field = H.div {
+  desc_html = H.div {
     H.label "Description"
     H.input { type: "text", name: "description", value: rule.description or "" }
   }
 
-  -- Conditions (max 5 conditions par règle pour le MVP)
-  cond_fields = ""
-  for i = 1, 5
-    cond_key = next(conds) -- premier item pour la condition i
-    cond_type, cond_val = nil, nil
-    -- Itérer pour obtenir la i-ème condition
-    j = 0
-    for k, v in pairs conds
-      j += 1
-      if j == i
-        cond_type, cond_val = k, v
-        break
-    cond_fields ..= H.fieldset {
-      H.legend "Condition #{i} (optionnelle)"
-      render_condition_select "cond_#{i}", cond_type, cond_val
-    }
+  -- Tableau de conditions existantes
+  cond_rows = ""
+  idx = 0
+  for ctype, cval in pairs conds
+    cond_rows ..= render_cond_row idx, ctype, cval
+    idx += 1
 
-  -- Actions (simple : 1 action principale pour le MVP)
+  -- Ligne-template pour JS (dans <template>, non soumise)
+  tpl_sel = H.select { name: "cond___I__[type]" }, cond_type_opts(nil)
+  tpl_ta  = H.textarea { name: "cond___I__[value]", rows: "2" }, ""
+  tpl_btn = H.button { type: "button", onclick: "_delCond(this)", class: "btn btn-danger btn-sm" }, "✕"
+  tpl_row = H.tr (H.td(tpl_sel) .. H.td(tpl_ta) .. H.td(tpl_btn))
+  cond_tpl = H.template { id: "cond-tpl" }, tpl_row
+
+  cond_thead = H.thead {
+    H.tr {
+      H.th "Type de condition"
+      H.th "Valeur (une par ligne pour les listes)"
+      H.th { style: "width:3rem" }, ""
+    }
+  }
+  cond_tbody = H.tbody { id: "cond-body" }, cond_rows
+  cond_table = H.table (cond_thead .. cond_tbody)
+  add_btn = H.button { type: "button", onclick: "_addCond()", class: "btn btn-secondary btn-sm",
+                       style: "margin:.4rem 0 .75rem" }, "+ Ajouter une condition"
+  js = "var _ci=#{idx};function _addCond(){" ..
+    "var t=document.getElementById('cond-tpl').content.cloneNode(true).querySelector('tr');" ..
+    "t.querySelectorAll('[name]').forEach(function(e){e.name=e.name.replace('__I__',_ci);});" ..
+    "_ci++;document.getElementById('cond-body').appendChild(t);}" ..
+    "function _delCond(b){b.closest('tr').remove();}"
+
+  -- Action
   action_type = nil
   action_opts = nil
   if #actions > 0
@@ -248,38 +290,38 @@ render_rule_form = (action_url, rule) ->
         action_opts = first[k]
         break
 
-  action_field = H.fieldset {
+  action_html = H.fieldset {
     H.legend "Action"
     render_action_select "action", action_type, action_opts
   }
 
-  body_html = desc_field ..
+  buttons = H.div { style: "margin-top:1rem" },
+    H.button({ type: "submit" }, "Enregistrer") ..
+    " " ..
+    H.a({ class: "btn btn-secondary", href: "/admin/config/filter/rules" }, "Annuler")
+
+  body_html = desc_html ..
     H.h3("Conditions — toutes en AND") ..
-    cond_fields ..
+    cond_tpl .. cond_table .. add_btn ..
     H.h3("Action") ..
-    action_field ..
-    H.div({ style: "margin-top:1rem" },
-      H.button({ type: "submit" }, "Enregistrer") ..
-      " " ..
-      H.a({ class: "btn btn-secondary", href: "/admin/config/filter/rules" }, "Annuler")
-    )
+    action_html .. buttons ..
+    H.script(js)
+
   H.form { method: "POST", action: action_url }, body_html
 
 -- Reconstruit une règle depuis le formulaire POST
+-- Les indices sont épars (suppression possible côté client), on scanne 0..49
 rebuild_rule = (form) ->
   rule = {}
   rule.description = form.description or ""
 
-  -- Conditions
   conditions = {}
-  for i = 1, 5
+  conds_reg = registry.conditions!
+  for i = 0, 49
     ctype = form["cond_#{i}[type]"]
-    cval  = form["cond_#{i}[value]"]
+    cval  = form["cond_#{i}[value]"] or ""
     continue unless ctype and ctype ~= ""
-    continue unless cval and cval\match "%S"
-
-    -- Détecter si la valeur est une liste (string_list)
-    conds_reg = registry.conditions!
+    continue unless cval\match "%S"
     s = conds_reg[ctype]
     if s and s.arg_type == "string_list"
       items = {}
@@ -294,14 +336,12 @@ rebuild_rule = (form) ->
 
   rule.conditions = conditions if next conditions
 
-  -- Action
   atype = form["action[type]"]
   if atype and atype ~= ""
     if atype == "dns_strip"
       rule.actions = { { dns_strip: { rr_type: form["action[rr_type]"] or "A" } } }
     elseif atype == "log"
-      msg = form["action[log_msg]"] or ""
-      rule.actions = { { log: { log_msg: msg } } }
+      rule.actions = { { log: { log_msg: form["action[log_msg]"] or "" } } }
     else
       rule.actions = { atype }
 

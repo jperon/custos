@@ -1,17 +1,13 @@
 local H = require("auth.html")
-local css
-css = require("webui.css").css
-local page, nav_html
-do
-  local _obj_0 = require("webui.handlers.dashboard")
-  page, nav_html = _obj_0.page, _obj_0.nav_html
-end
+local page
+page = require("webui.handlers.dashboard").page
 local read_config, write_config
 do
   local _obj_0 = require("webui.serializer")
   read_config, write_config = _obj_0.read_config, _obj_0.write_config
 end
 local config_schema = require("webui.schema.config_schema")
+local unpack = unpack or table.unpack
 local render_field
 render_field = function(name, field_schema, current_val)
   local t = field_schema.type
@@ -52,7 +48,7 @@ render_field = function(name, field_schema, current_val)
       })
     })
   elseif t == "enum" then
-    local select_inner = ""
+    local opts = ""
     local _list_0 = (field_schema.values or { })
     for _index_0 = 1, #_list_0 do
       local v = _list_0[_index_0]
@@ -62,7 +58,7 @@ render_field = function(name, field_schema, current_val)
       else
         sel = nil
       end
-      select_inner = select_inner .. H.option({
+      opts = opts .. H.option({
         value = v,
         selected = sel
       }, v)
@@ -71,7 +67,7 @@ render_field = function(name, field_schema, current_val)
       label_html .. hint_html,
       H.select({
         name = name
-      }, select_inner)
+      }, opts)
     })
   elseif t == "integer" then
     return H.div({
@@ -161,6 +157,55 @@ parse_form = function(body)
   end
   return out
 end
+local build_section
+build_section = function(schema, prefix, form_data)
+  local result = { }
+  for k, field in pairs(schema) do
+    local _continue_0 = false
+    repeat
+      if k:match("^_") then
+        _continue_0 = true
+        break
+      end
+      local key
+      if prefix then
+        key = tostring(prefix) .. "[" .. tostring(k) .. "]"
+      else
+        key = k
+      end
+      if type(field) == "table" and field._label then
+        local sub = build_section(field, k, form_data)
+        if next(sub) then
+          result[k] = sub
+        end
+      elseif type(field) == "table" and field.type then
+        local raw = form_data[key]
+        local t = field.type
+        if t == "boolean" then
+          result[k] = form_data[key] == "1"
+        elseif t == "integer" then
+          result[k] = tonumber(raw) or field.default
+        elseif t == "string_list" then
+          local items = { }
+          for line in (raw or ""):gmatch("[^\n]+") do
+            line = line:match("^%s*(.-)%s*$")
+            if not (line == "") then
+              items[#items + 1] = line
+            end
+          end
+          result[k] = items
+        else
+          result[k] = raw or field.default or ""
+        end
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  return result
+end
 local EDITABLE_SECTIONS = {
   "runtime",
   "nfqueue",
@@ -175,46 +220,8 @@ local EDITABLE_SECTIONS = {
   "metrics",
   "rtp"
 }
-local handle_config_index
-handle_config_index = function(req, state)
-  local links = { }
-  for _index_0 = 1, #EDITABLE_SECTIONS do
-    local s = EDITABLE_SECTIONS[_index_0]
-    local label_s = config_schema[s] and config_schema[s]._label or s
-    links[#links + 1] = H.li({
-      H.a({
-        href = "/admin/config/" .. tostring(s)
-      }, label_s)
-    })
-  end
-  links[#links + 1] = H.li({
-    H.a({
-      href = "/admin/config/filter"
-    }, "Filtre DNS (règles, listes)")
-  })
-  local body = H.section({
-    H.h2("Sections de configuration"),
-    H.ul({
-      table.unpack(links)
-    })
-  })
-  return 200, {
-    ["Content-Type"] = "text/html; charset=UTF-8"
-  }, page("Configuration", body)
-end
-local handle_config_section_get
-handle_config_section_get = function(req, section, state)
-  local section_schema = config_schema[section]
-  if not (section_schema) then
-    return 404, { }, "Section inconnue : " .. tostring(section)
-  end
-  local cfg, err = read_config(state.config_path)
-  if not (cfg) then
-    return 500, { }, "Erreur lecture config : " .. tostring(tostring(err))
-  end
-  local current = cfg[section] or { }
-  local label = section_schema._label or section
-  local desc = section_schema._description or ""
+local render_section_fields
+render_section_fields = function(section, section_schema, current)
   local fields_html = ""
   for k, v in pairs(section_schema) do
     local _continue_0 = false
@@ -234,31 +241,105 @@ handle_config_section_get = function(req, section, state)
       break
     end
   end
-  local body = H.section({
-    H.h2(label),
-    ((function()
-      if desc ~= "" then
-        return H.p({
-          style = "color:#555"
-        }, desc)
-      else
-        return ""
+  return fields_html
+end
+local render_section_details
+render_section_details = function(section, section_schema, current)
+  local label = section_schema._label or section
+  local desc = section_schema._description or ""
+  local fields_html = render_section_fields(section, section_schema, current)
+  local desc_html
+  if desc ~= "" then
+    desc_html = H.p({
+      style = "color:#555; margin-bottom:.5rem"
+    }, desc)
+  else
+    desc_html = ""
+  end
+  local save_btn = H.div({
+    style = "margin-top:.75rem"
+  }, H.button({
+    type = "submit"
+  }, "Enregistrer"))
+  local form_inner = desc_html .. fields_html .. save_btn
+  local form_html = H.form({
+    method = "POST",
+    action = "/admin/config/" .. tostring(section)
+  }, form_inner)
+  local summary = H.summary(label)
+  return H.details({
+    id = "section-" .. tostring(section)
+  }, summary .. form_html)
+end
+local handle_config_index
+handle_config_index = function(req, state)
+  local cfg, err = read_config(state.config_path)
+  if not (cfg) then
+    return 500, { }, "Erreur config : " .. tostring(err)
+  end
+  local sections_html = ""
+  for _index_0 = 1, #EDITABLE_SECTIONS do
+    local _continue_0 = false
+    repeat
+      local s = EDITABLE_SECTIONS[_index_0]
+      local schema = config_schema[s]
+      if not (schema) then
+        _continue_0 = true
+        break
       end
-    end)()),
-    H.form({
+      sections_html = sections_html .. render_section_details(s, schema, cfg[s] or { })
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  local filter_link = H.p({
+    H.a({
+      href = "/admin/config/filter"
+    }, "Filtre DNS (règles, listes, décision)")
+  })
+  local js = "if(location.hash){var d=document.querySelector(location.hash);if(d&&d.tagName==='DETAILS')d.open=true;}"
+  local body_html = H.h2("Configuration") .. filter_link .. sections_html .. H.script(js)
+  return 200, {
+    ["Content-Type"] = "text/html; charset=UTF-8"
+  }, page("Configuration", body_html)
+end
+local handle_config_section_get
+handle_config_section_get = function(req, section, state)
+  local section_schema = config_schema[section]
+  if not (section_schema) then
+    return 404, { }, "Section inconnue : " .. tostring(section)
+  end
+  local cfg, err = read_config(state.config_path)
+  if not (cfg) then
+    return 500, { }, "Erreur lecture config : " .. tostring(tostring(err))
+  end
+  local label = section_schema._label or section
+  local desc = section_schema._description or ""
+  local fields = render_section_fields(section, section_schema, cfg[section] or { })
+  local desc_html
+  if desc ~= "" then
+    desc_html = H.p({
+      style = "color:#555"
+    }, desc)
+  else
+    desc_html = ""
+  end
+  local save_btn = H.div({
+    style = "margin-top:.75rem"
+  }, H.button({
+    type = "submit"
+  }, "Enregistrer") .. " " .. H.a({
+    class = "btn btn-secondary",
+    href = "/admin/config/"
+  }, "Annuler"))
+  local form_inner = desc_html .. fields .. save_btn
+  local body = H.section({
+    H.h2(label) .. H.form({
       method = "POST",
       action = "/admin/config/" .. tostring(section)
-    }, fields_html),
-    H.div({
-      style = "margin-top:.75rem"
-    }, H.button({
-      type = "submit"
-    }, "Enregistrer")),
-    " ",
-    H.a({
-      class = "btn btn-secondary",
-      href = "/admin/config/"
-    }, "Annuler")
+    }, form_inner)
   })
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
@@ -275,62 +356,13 @@ handle_config_section_post = function(req, section, state)
   if not (cfg) then
     return 500, { }, "Erreur lecture config : " .. tostring(tostring(err))
   end
-  local build_section
-  build_section = function(schema, prefix, form_data)
-    local result = { }
-    for k, field in pairs(schema) do
-      local _continue_0 = false
-      repeat
-        if k:match("^_") then
-          _continue_0 = true
-          break
-        end
-        local key
-        if prefix then
-          key = tostring(prefix) .. "[" .. tostring(k) .. "]"
-        else
-          key = k
-        end
-        if type(field) == "table" and field._label then
-          local sub = build_section(field, k, form_data)
-          if next(sub) then
-            result[k] = sub
-          end
-        elseif type(field) == "table" and field.type then
-          local raw = form_data[key]
-          local t = field.type
-          if t == "boolean" then
-            result[k] = form_data[key] == "1"
-          elseif t == "integer" then
-            result[k] = tonumber(raw) or field.default
-          elseif t == "string_list" then
-            local items = { }
-            for line in (raw or ""):gmatch("[^\n]+") do
-              line = line:match("^%s*(.-)%s*$")
-              if not (line == "") then
-                items[#items + 1] = line
-              end
-            end
-            result[k] = items
-          else
-            result[k] = raw or field.default or ""
-          end
-        end
-        _continue_0 = true
-      until true
-      if not _continue_0 then
-        break
-      end
-    end
-    return result
-  end
   cfg[section] = build_section(section_schema, nil, form)
   local ok2, err2 = write_config(cfg, state.config_path)
   if not (ok2) then
     return 500, { }, "Erreur écriture config : " .. tostring(tostring(err2))
   end
   return 302, {
-    ["Location"] = "/admin/config/" .. tostring(section) .. "?saved=1"
+    ["Location"] = "/admin/config/#section-" .. tostring(section)
   }, ""
 end
 return {
