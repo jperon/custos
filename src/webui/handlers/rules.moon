@@ -55,26 +55,37 @@ handle_rules_list = (req, state) ->
   rows = ""
   for i, rule in ipairs rules
     desc, conds_str, acts_str = rule_summary rule
-    rows ..= H.li {
-      H.span { class: "rule-desc" },
-        H.strong desc
-        H.br!
-        H.span { class: "rule-cond" }, (conds_str ~= "" and "SI " .. conds_str or "(toujours)")
-        " → "
-        H.span { class: "rule-action" }, acts_str
-      H.a { class: "btn btn-secondary btn-sm", href: "/admin/config/filter/rules/#{i}/edit" }, "Éditer"
-      H.form { method: "POST", action: "/admin/config/filter/rules/#{i}/move", style: "display:inline" },
-        H.button { type: "submit", name: "dir", value: "up",   class: "btn btn-secondary btn-sm" }, "↑"
-        H.button { type: "submit", name: "dir", value: "down", class: "btn btn-secondary btn-sm" }, "↓"
-      H.form { method: "POST", action: "/admin/config/filter/rules/#{i}/delete", style: "display:inline" },
-        H.button { type: "submit", class: "btn btn-danger btn-sm",
-                   onclick: "return confirm('Supprimer cette règle ?')" }, "✕"
+    cond_cell = if conds_str ~= "" then conds_str else H.em "(toujours)"
+    btn_move = H.form { method: "POST", action: "/admin/config/filter/rules/#{i}/move", style: "display:inline" },
+      H.button({ type: "submit", name: "dir", value: "up",   class: "btn btn-secondary btn-sm" }, "↑") ..
+      H.button({ type: "submit", name: "dir", value: "down", class: "btn btn-secondary btn-sm" }, "↓")
+    btn_del  = H.form { method: "POST", action: "/admin/config/filter/rules/#{i}/delete", style: "display:inline" },
+      H.button { type: "submit", class: "btn btn-danger btn-sm",
+                 onclick: "return confirm('Supprimer ?')" }, "✕"
+    btn_edit = H.a { class: "btn btn-secondary btn-sm", href: "/admin/config/filter/rules/#{i}/edit" }, "Éditer"
+    rows ..= H.tr {
+      H.td tostring(i)
+      H.td desc
+      H.td { class: "mono" }, cond_cell
+      H.td { class: "mono" }, acts_str
+      H.td { class: "actions" }, btn_edit .. " " .. btn_move .. " " .. btn_del
     }
+
+  thead = H.thead {
+    H.tr {
+      H.th { style: "width:2.5rem" }, "#"
+      H.th { style: "width:20%" }, "Description"
+      H.th "Conditions"
+      H.th { style: "width:12%" }, "Action"
+      H.th { style: "width:11rem" }, ""
+    }
+  }
+  tbl = H.table (thead .. H.tbody rows)
 
   body = H.section {
     H.h2 "Règles de filtrage"
     H.p { H.a { class: "btn", href: "/admin/config/filter/rules/new" }, "Ajouter une règle" }
-    H.ul { class: "rule-list" }, rows
+    tbl
   }
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Règles de filtrage", body
 

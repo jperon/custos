@@ -5,8 +5,7 @@ css = function()
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 14px; line-height: 1.5; color: #222;
-  background: #f5f5f5; padding: 1rem;
-  max-width: 960px; margin: 0 auto;
+  background: #f5f5f5; padding: 1rem 2rem;
 }
 
 a { color: #0070d2; text-decoration: none; }
@@ -69,12 +68,8 @@ button.danger:hover, .btn-danger:hover { background: #a93226; }
 .flash.warning { background: #fef9e7; border-color: #f9e79f; color: #7d6608; }
 .flash.error   { background: #fdedec; border-color: #f5b7b1; color: #922b21; }
 
-.rule-list { list-style: none; }
-.rule-list li { padding: .4rem .6rem; border-bottom: 1px solid #eee;
-                display: flex; align-items: center; gap: .5rem; }
-.rule-list li:last-child { border-bottom: none; }
-.rule-desc { flex: 1; }
-.rule-cond, .rule-action { font-size: .8rem; color: #666; font-family: monospace; }
+td.mono { font-family: monospace; font-size: .85rem; color: #555; }
+td.actions { white-space: nowrap; text-align: right; }
 
 .hidden { display: none; }
 ]]
