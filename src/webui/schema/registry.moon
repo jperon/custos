@@ -5,14 +5,11 @@
 
 compiler_api = require "filter.compiler_api"
 
--- Déduit le répertoire lua/ à partir du package.path
+-- Déduit le répertoire racine des modules Lua via package.searchpath.
 find_lua_dir = ->
-  for p in (package.path or "")\gmatch "[^;]+"
-    -- Cherche un pattern comme ".../lua/?.lua"
-    dir = p\match "^(.+)/lua/%?"
-    return dir .. "/lua" if dir
-    -- Ou directement "lua/?.lua"
-    dir = p\match "^(lua)/%?"
+  path = package.searchpath "filter.conditions.from_net", package.path
+  if path
+    dir = path\match "^(.+)/filter/conditions/from_net%.lua$"
     return dir if dir
   "lua"
 

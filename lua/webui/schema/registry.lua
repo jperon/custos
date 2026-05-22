@@ -1,12 +1,9 @@
 local compiler_api = require("filter.compiler_api")
 local find_lua_dir
 find_lua_dir = function()
-  for p in (package.path or ""):gmatch("[^;]+") do
-    local dir = p:match("^(.+)/lua/%?")
-    if dir then
-      return dir .. "/lua"
-    end
-    dir = p:match("^(lua)/%?")
+  local path = package.searchpath("filter.conditions.from_net", package.path)
+  if path then
+    local dir = path:match("^(.+)/filter/conditions/from_net%.lua$")
     if dir then
       return dir
     end
