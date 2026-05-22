@@ -96,6 +96,29 @@ substitute = (content, plan=nil) ->
     ""
   content = content\gsub "{SIP_RULES}", sip_rules
 
+  -- Pré-peupler filter_ips4/6 dès l'application du ruleset pour éviter la
+  -- race condition entre flush ruleset et nft_extra_rules.apply_from_config().
+  collect_ips = (cmd, pattern, exclude) ->
+    ips = {}
+    fh = io.popen cmd
+    if fh
+      for line in fh\lines!
+        ip = line\match pattern
+        if ip and (not exclude or not ip\match exclude)
+          ips[#ips + 1] = ip
+      fh\close!
+    ips
+
+  ip4s = collect_ips "ip -4 addr show 2>/dev/null", "%s+inet%s+([%d%.]+)/", nil
+  ip6s = collect_ips "ip -6 addr show 2>/dev/null", "%s+inet6%s+([%x:]+)/", "^fe80"
+
+  fmt_elements = (ips) ->
+    return "" if #ips == 0
+    "    elements = { " .. table.concat(ips, ", ") .. " }\n"
+
+  content = content\gsub "{FILTER_IPS4_ELEMENTS}", fmt_elements ip4s
+  content = content\gsub "{FILTER_IPS6_ELEMENTS}", fmt_elements ip6s
+
   if get_log_level_num"DEBUG" < get_log_level_num cfg.runtime.log_level
     content = content\gsub "log%s+level%s+debug%s+prefix%s+\"[^\"]*\"", ""
 

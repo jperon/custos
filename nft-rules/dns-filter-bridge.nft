@@ -104,10 +104,10 @@ table bridge dns-filter-bridge {
   # sport-forgé depuis un hôte du LAN).
   set filter_ips4 {
     type ipv4_addr
-  }
+{FILTER_IPS4_ELEMENTS}  }
   set filter_ips6 {
     type ipv6_addr
-  }
+{FILTER_IPS6_ELEMENTS}  }
 
 {COMPILED_FILTER_SETS}
 
