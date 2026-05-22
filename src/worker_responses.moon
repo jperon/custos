@@ -320,6 +320,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   refused = entry and entry.refused or false
   dnsonly = entry and entry.dnsonly or false
+  nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
   -- Dispatch on_response : les callbacks déclarent eux-mêmes leur comportement
   -- (strip DNS, skip_nft, etc.) — aucun hardcode ici.
   on_response_cbs = get_rule_on_response nft_rule_id
@@ -331,7 +332,6 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     action_label:   nil
     reason:         entry and entry.reason or ""
   }
-  nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
   ack_corr = string.format "%04x:%s:%d:%s", txid, pkt.ip.dst_ip, client_port, resolver_ip
 
   -- ── Branche REFUSED : réponse du serveur transformée en REFUSED+EDE ──

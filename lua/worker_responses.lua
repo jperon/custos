@@ -330,6 +330,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   local refused = entry and entry.refused or false
   local dnsonly = entry and entry.dnsonly or false
+  local nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
   local on_response_cbs = get_rule_on_response(nft_rule_id)
   local resp_ctx = {
     dns_raw = nil,
@@ -339,7 +340,6 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     action_label = nil,
     reason = entry and entry.reason or ""
   }
-  local nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
   local ack_corr = string.format("%04x:%s:%d:%s", txid, pkt.ip.dst_ip, client_port, resolver_ip)
   if refused then
     local dns_raw = extract_dns_payload(raw, pkt)
