@@ -216,8 +216,8 @@ return describe("nft_rules : substitution de {FILTER_IPS4/6_ELEMENTS}", function
       count = count + 1
     end
     assert.equals(1, count)
-    assert.is_truthy(set_block:find("10.0.0.1"))
-    return assert.is_truthy(set_block:find("192.168.1.1"))
+    assert.truthy(set_block:find("10.0.0.1"))
+    return assert.truthy(set_block:find("192.168.1.1"))
   end)
   return it("un set vide (pas d'IPs) ne contient pas de clause elements", function()
     local elements = fmt_elements({ })

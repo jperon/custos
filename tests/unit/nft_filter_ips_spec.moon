@@ -158,8 +158,8 @@ describe "nft_rules : substitution de {FILTER_IPS4/6_ELEMENTS}", ->
     for _ in set_block\gmatch "elements = {" do count += 1
     assert.equals 1, count
     -- et les deux IPs
-    assert.is_truthy set_block\find "10.0.0.1"
-    assert.is_truthy set_block\find "192.168.1.1"
+    assert.truthy set_block\find "10.0.0.1"
+    assert.truthy set_block\find "192.168.1.1"
 
   it "un set vide (pas d'IPs) ne contient pas de clause elements", ->
     elements = fmt_elements {}

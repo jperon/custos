@@ -116,10 +116,10 @@ describe "lib.socket accept() erreurs non fatales", ->
     source = fh\read "*a"
     fh\close!
     -- errno == 4 (EINTR) → return nil
-    assert.is_truthy (source\find "errno == 4"),
+    assert.truthy (source\find "errno == 4"),
       "EINTR (errno=4) doit être géré dans accept()"
     -- errno == 103 (ECONNABORTED) → return nil
-    assert.is_truthy (source\find "errno == 103"),
+    assert.truthy (source\find "errno == 103"),
       "ECONNABORTED (errno=103) doit être géré dans accept()"
 
 -- ── socket_select : EINTR (régression principale) ─────────────────────────
@@ -170,7 +170,7 @@ describe "lib.socket socket_select EINTR", ->
     assert.is_not_nil fh
     source = fh\read "*a"
     fh\close!
-    assert.is_truthy (source\find "errno == 4"),
+    assert.truthy (source\find "errno == 4"),
       "EINTR (errno=4) doit être géré dans socket_select"
 
 -- ── socket_select : comportement nominal ──────────────────────────────────
