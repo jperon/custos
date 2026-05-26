@@ -34,9 +34,9 @@ pack = function(self)
   return self.version == 6 and ip6_pack(self) or ip4_pack(self)
 end
 local parse
-parse = function(self, off, eth_proto)
+parse = function(self, off)
   local res, _off
-  local v = eth_proto or get_version(self, off)
+  local v = get_version(self, off)
   local _exp_0 = v
   if 6 == _exp_0 then
     res, _off = ip6(self, off)
