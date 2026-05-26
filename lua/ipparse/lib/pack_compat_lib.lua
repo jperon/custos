@@ -14,6 +14,17 @@ do
 end
 local read_uint
 read_uint = function(s, offset, size, le)
+  if size == 1 then
+    return string.byte(s, offset + 1)
+  end
+  if size == 2 then
+    local a, b = string.byte(s, offset + 1, offset + 2)
+    return le and (b * 256 + a) or (a * 256 + b)
+  end
+  if size == 4 then
+    local a, b, c, d = string.byte(s, offset + 1, offset + 4)
+    return le and (d * 16777216 + c * 65536 + b * 256 + a) or (a * 16777216 + b * 65536 + c * 256 + d)
+  end
   local val = ffi.cast("uint64_t", 0)
   if le then
     for i = size - 1, 0, -1 do
@@ -167,6 +178,23 @@ packsize = function(fmt)
   end
   return total
 end
+local _fmt_cache = { }
+local parse_format_to_ops
+parse_format_to_ops = function(fmt)
+  local ops = { }
+  local iter = parse_format(fmt)
+  local opt, count, le, align = iter()
+  while opt ~= nil do
+    ops[#ops + 1] = {
+      opt,
+      count,
+      le
+    }
+    opt, count, le, align = iter()
+  end
+  _fmt_cache[fmt] = ops
+  return ops
+end
 local double_to_bytes
 double_to_bytes = function(n, le)
   local buf = ffi.new("double[1]", n)
@@ -254,9 +282,13 @@ pack = function(fmt, ...)
   }
   local argi = 1
   local parts = { }
-  local iter = parse_format(fmt)
-  local opt, count, le, align = iter()
-  while opt ~= nil do
+  local ops = _fmt_cache[fmt] or parse_format_to_ops(fmt)
+  for j = 1, #ops do
+    local opt, count, le
+    do
+      local _obj_0 = ops[j]
+      opt, count, le = _obj_0[1], _obj_0[2], _obj_0[3]
+    end
     local _exp_0 = opt
     if "b" == _exp_0 then
       local v = args[argi]
@@ -333,85 +365,102 @@ pack = function(fmt, ...)
     elseif "X" == _exp_0 then
       local _ = nil
     end
-    opt, count, le, align = iter()
   end
   return table.concat(parts)
 end
+local _results = { }
 local unpack
 unpack = function(fmt, s, pos)
   pos = (pos or 1) - 1
-  local results = { }
-  local iter = parse_format(fmt)
-  local opt, count, le, align = iter()
-  while opt ~= nil do
+  local n = 0
+  local ops = _fmt_cache[fmt] or parse_format_to_ops(fmt)
+  for j = 1, #ops do
+    local opt, count, le
+    do
+      local _obj_0 = ops[j]
+      opt, count, le = _obj_0[1], _obj_0[2], _obj_0[3]
+    end
     local _exp_0 = opt
     if "b" == _exp_0 then
       local v = string.byte(s, pos + 1)
-      v = to_signed(v, 1)
-      results[#results + 1] = v
+      n = n + 1
+      _results[n] = to_signed(v, 1)
       pos = pos + 1
     elseif "B" == _exp_0 then
-      results[#results + 1] = string.byte(s, pos + 1)
+      n = n + 1
+      _results[n] = string.byte(s, pos + 1)
       pos = pos + 1
     elseif "h" == _exp_0 then
       local uv = read_uint(s, pos, 2, le)
-      results[#results + 1] = to_signed(uv, 2)
+      n = n + 1
+      _results[n] = to_signed(uv, 2)
       pos = pos + 2
     elseif "H" == _exp_0 then
-      results[#results + 1] = tonumber(read_uint(s, pos, 2, le))
+      n = n + 1
+      _results[n] = tonumber(read_uint(s, pos, 2, le))
       pos = pos + 2
     elseif "i" == _exp_0 then
       local sz = count or 4
       local uv = read_uint(s, pos, sz, le)
-      results[#results + 1] = to_signed(uv, sz)
+      n = n + 1
+      _results[n] = to_signed(uv, sz)
       pos = pos + sz
     elseif "I" == _exp_0 then
       local sz = count or 4
-      results[#results + 1] = tonumber(read_uint(s, pos, sz, le))
+      n = n + 1
+      _results[n] = tonumber(read_uint(s, pos, sz, le))
       pos = pos + sz
     elseif "l" == _exp_0 then
       local uv = read_uint(s, pos, 8, le)
-      results[#results + 1] = tonumber(ffi.cast("int64_t", uv))
+      n = n + 1
+      _results[n] = tonumber(ffi.cast("int64_t", uv))
       pos = pos + 8
     elseif "L" == _exp_0 or "J" == _exp_0 or "T" == _exp_0 then
-      results[#results + 1] = tonumber(read_uint(s, pos, 8, le))
+      n = n + 1
+      _results[n] = tonumber(read_uint(s, pos, 8, le))
       pos = pos + 8
     elseif "j" == _exp_0 then
       local uv = read_uint(s, pos, 8, le)
-      results[#results + 1] = tonumber(ffi.cast("int64_t", uv))
+      n = n + 1
+      _results[n] = tonumber(ffi.cast("int64_t", uv))
       pos = pos + 8
     elseif "f" == _exp_0 then
-      results[#results + 1] = bytes_to_float(s, pos, le)
+      n = n + 1
+      _results[n] = bytes_to_float(s, pos, le)
       pos = pos + 4
     elseif "d" == _exp_0 or "n" == _exp_0 then
-      results[#results + 1] = bytes_to_double(s, pos, le)
+      n = n + 1
+      _results[n] = bytes_to_double(s, pos, le)
       pos = pos + 8
     elseif "c" == _exp_0 then
       local sz = count or 1
-      results[#results + 1] = s:sub(pos + 1, pos + sz)
+      n = n + 1
+      _results[n] = s:sub(pos + 1, pos + sz)
       pos = pos + sz
     elseif "s" == _exp_0 then
       local sz = count or 8
       local len = tonumber(read_uint(s, pos, sz, le))
       pos = pos + sz
-      results[#results + 1] = s:sub(pos + 1, pos + len)
+      n = n + 1
+      _results[n] = s:sub(pos + 1, pos + len)
       pos = pos + len
     elseif "z" == _exp_0 then
       local nul = s:find("\0", pos + 1, true)
       if not nul then
         error("string.unpack 'z' : pas de \\0 trouvé")
       end
-      results[#results + 1] = s:sub(pos + 1, nul - 1)
+      n = n + 1
+      _results[n] = s:sub(pos + 1, nul - 1)
       pos = nul
     elseif "x" == _exp_0 then
       pos = pos + 1
     elseif "X" == _exp_0 then
       local _ = nil
     end
-    opt, count, le, align = iter()
   end
-  results[#results + 1] = pos + 1
-  return tunpack(results)
+  n = n + 1
+  _results[n] = pos + 1
+  return tunpack(_results, 1, n)
 end
 local inject
 inject = function()
