@@ -111,6 +111,24 @@ parse_header = function(self, off, is_tcp)
     size = size
   }, _header_mt), data_off
 end
+local new_header
+new_header = function(opts)
+  local h = setmetatable({
+    id = 0,
+    qr_opcode_aa_tc_rd = 0,
+    ra_z_rcode = 0,
+    qdcount = 0,
+    ancount = 0,
+    nscount = 0,
+    arcount = 0
+  }, _header_mt)
+  if opts then
+    for k, v in pairs(opts) do
+      h[k] = v
+    end
+  end
+  return h
+end
 local labels
 local label
 label = function(self, off, l7_off, visited, depth)
@@ -232,7 +250,9 @@ parse_questions = function(self, off, qdcount, l7_off)
 end
 local pack_rr
 pack_rr = function(self)
-  return self.rname .. sp(">H H I4 s2", self.rtype, self.rclass, self.ttl, self.rdata)
+  local _rclass = self.rclass or (self.rtype == 0x29 and 0 or 1)
+  local _ttl = self.ttl or 0
+  return self.rname .. sp(">H H I4 s2", self.rtype, _rclass, _ttl, self.rdata)
 end
 local _rr_mt = {
   __tostring = pack_rr
@@ -509,6 +529,14 @@ local rcodes = bidirectional(zero_indexed({
   "NOTIMP",
   "REFUSED"
 }))
+local opcodes = bidirectional(zero_indexed({
+  "QUERY",
+  "IQUERY",
+  "STATUS",
+  "UNASSIGNED",
+  "NOTIFY",
+  "UPDATE"
+}))
 local types = bidirectional({
   "A",
   "NS",
@@ -621,6 +649,15 @@ local ede_codes = bidirectional(zero_indexed({
   "Network_Error",
   "Invalid_Data"
 }))
+local new
+new = function(self)
+  self.header = self.header or new_header()
+  self.questions = self.questions or { }
+  self.answers = self.answers or { }
+  self.authorities = self.authorities or { }
+  self.additionals = self.additionals or { }
+  return setmetatable(self, _mt)
+end
 return {
   parse = parse,
   pack = pack,
@@ -636,9 +673,12 @@ return {
   pack_rr = pack_rr,
   parse_rrs = parse_rrs,
   rcodes = rcodes,
+  opcodes = opcodes,
   parse_opt = parse_opt,
   parse_opts = parse_opts,
   edns_opts = edns_opts,
   types = types,
-  ede_codes = ede_codes
+  ede_codes = ede_codes,
+  new_header = new_header,
+  new = new
 }
