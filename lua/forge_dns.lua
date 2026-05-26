@@ -5,6 +5,7 @@ do
 end
 local new_udp
 new_udp = require("ipparse.l4.udp").new
+local dns_mod = require("ipparse.l7.dns")
 local sp
 sp = require("ipparse.lib.pack_compat").pack
 local PROTO_UDP = ip_proto.UDP
@@ -20,11 +21,8 @@ encode_dns_name = function(name)
   return table.concat(parts) .. "\x00"
 end
 local forge_dns_response
-forge_dns_response = function(pkt, q, ip4_str, ip6_str)
+forge_dns_response = function(ip, udp, txid, q, ip4_str, ip6_str)
   if not (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA) then
-    return nil
-  end
-  if pkt.l4.proto ~= "udp" then
     return nil
   end
   local rdata
@@ -42,43 +40,51 @@ forge_dns_response = function(pkt, q, ip4_str, ip6_str)
       ancount = 1
     end
   end
-  local dns_hdr = sp(">H BB HHHH", pkt.dns.txid, 0x84, 0x00, 1, ancount, 0, 0)
-  local question = encode_dns_name(q.qname) .. sp(">HH", q.qtype, 1)
-  local answer
-  if ancount == 1 then
-    answer = "\xC0\x0C" .. sp(">HH I4 s2", q.qtype, 1, 60, rdata)
-  else
-    answer = ""
-  end
-  local dns_payload = dns_hdr .. question .. answer
-  local udp_obj = new_udp({
-    spt = pkt.l4.dst_port,
-    dpt = pkt.l4.src_port,
-    checksum = 0,
-    data = dns_payload
+  local dns_obj = dns_mod.new({
+    header = dns_mod.new_header({
+      id = txid,
+      qr = true,
+      aa = true
+    }),
+    questions = {
+      {
+        qname = encode_dns_name(q.name),
+        qtype = q.qtype,
+        qclass = 1
+      }
+    },
+    answers = ancount == 1 and {
+      {
+        rname = "\xC0\x0C",
+        rtype = q.qtype,
+        rclass = 1,
+        rdata = rdata
+      }
+    } or { }
   })
-  local ip_obj
-  if pkt.ip.version == 6 then
-    ip_obj = new_ip({
-      version = 6,
-      hop_limit = 64,
-      next_header = PROTO_UDP,
-      src = pkt.ip.dst_ip_raw,
-      dst = pkt.ip.src_ip_raw,
-      data = udp_obj
-    })
-  else
-    ip_obj = new_ip({
-      version = 4,
-      ttl = 64,
-      protocol = PROTO_UDP,
-      src = pkt.ip.dst_ip_raw,
-      dst = pkt.ip.src_ip_raw,
-      options = "",
-      data = udp_obj
-    })
-  end
-  return tostring(ip_obj)
+  local l4 = new_udp({
+    spt = udp.dpt,
+    dpt = udp.spt,
+    checksum = 0,
+    data = dns_obj
+  })
+  local ip_pkt = new_ip({
+    version = ip.version,
+    v_ihl = ip.v_ihl,
+    tos = ip.tos,
+    id = ip.id,
+    ff = ip.ff,
+    ttl = ip.ttl,
+    options = ip.options or "",
+    vtf = ip.vtf,
+    hop_limit = ip.hop_limit,
+    src = ip.dst,
+    dst = ip.src,
+    protocol = PROTO_UDP,
+    next_header = PROTO_UDP,
+    data = l4
+  })
+  return tostring(ip_pkt)
 end
 return {
   forge_dns_response = forge_dns_response

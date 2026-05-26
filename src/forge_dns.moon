@@ -14,6 +14,7 @@
 
 { new: new_ip, proto: ip_proto, :s2ip } = require "ipparse.l3.ip"
 { new: new_udp }                         = require "ipparse.l4.udp"
+dns_mod = require "ipparse.l7.dns"
 pack: sp = require "ipparse.lib.pack_compat"
 
 PROTO_UDP  = ip_proto.UDP   -- 17
@@ -34,18 +35,18 @@ encode_dns_name = (name) ->
 
 --- Forge a DNS A or AAAA response for a stolen captive-portal domain query.
 -- Only handles QTYPE=A (1) and QTYPE=AAAA (28); returns nil for other types.
--- Only handles UDP DNS; returns nil for TCP DNS.
 -- If the required IP family is not configured, returns an NOERROR response
 -- with ancount=0 (empty answer section) rather than nil, so the client can
 -- try the other address family.
--- @tparam table    pkt     Parsed packet from parse/packet.parse_packet
--- @tparam table    q       DNS question {qname, qtype, qtype_name}
+-- @tparam table    ip      Parsed IP header (ipparse.l3.ip4 or ip6).
+-- @tparam table    udp     Parsed UDP header (ipparse.l4.udp).
+-- @tparam number   txid    DNS transaction ID.
+-- @tparam table    q       DNS question {name, qtype} from ipparse.l7.dns.
 -- @tparam string|nil ip4_str Captive portal IPv4 address string (e.g. "192.168.1.1"), or nil
 -- @tparam string|nil ip6_str Captive portal IPv6 address string (e.g. "fd00::1"), or nil
 -- @treturn string|nil Forged raw IP packet (IP+UDP+DNS, no Ethernet), or nil on error/unsupported
-forge_dns_response = (pkt, q, ip4_str, ip6_str) ->
+forge_dns_response = (ip, udp, txid, q, ip4_str, ip6_str) ->
   return nil unless q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA
-  return nil if pkt.l4.proto != "udp"   -- TCP DNS non géré
 
   -- ── Détermination du rdata ──────────────────────────────────
   local rdata
@@ -65,58 +66,34 @@ forge_dns_response = (pkt, q, ip4_str, ip6_str) ->
 
   -- ── Payload DNS ─────────────────────────────────────────────
   -- Flags : QR=1, OPCODE=0, AA=1, TC=0, RD=0 | RA=0, Z=0, RCODE=NOERROR
-  -- qr_opcode_aa_tc_rd = 0x84  (10000100)
-  -- ra_z_rcode         = 0x00  (00000000)
-  dns_hdr  = sp ">H BB HHHH", pkt.dns.txid, 0x84, 0x00, 1, ancount, 0, 0
-
-  -- Section Question : ré-encodage du nom en wire format, type et classe IN
-  question = encode_dns_name(q.qname) .. sp(">HH", q.qtype, 1)
-
-  -- Section Answer : pointeur de compression 0xC00C → offset 12 dans le message DNS
-  -- (début du nom dans la section Question, juste après le header de 12 octets)
-  answer = if ancount == 1
-    "\xC0\x0C" .. sp(">HH I4 s2", q.qtype, 1, 60, rdata)
-  else
-    ""
-
-  dns_payload = dns_hdr .. question .. answer
-
-  -- ── Datagramme UDP (ports inversés) ─────────────────────────
-  -- spt = port resolver (53) → apparaît comme source de la réponse
-  -- dpt = port éphémère du client → destination de la réponse
-  udp_obj = new_udp {
-    spt:      pkt.l4.dst_port   -- 53 (port du resolver)
-    dpt:      pkt.l4.src_port   -- port éphémère du client
-    checksum: 0                  -- calculé par ip4/ip6 pack
-    data:     dns_payload
+  dns_obj = dns_mod.new {
+    header: dns_mod.new_header id: txid, qr: true, aa: true
+    questions: {{qname: encode_dns_name(q.name), qtype: q.qtype, qclass: 1}}
+    answers: ancount == 1 and {{rname: "\xC0\x0C", rtype: q.qtype, rclass: 1, rdata: rdata}} or {}
   }
 
-  -- ── Paquet IP (src/dst inversés) ────────────────────────────
-  -- src = IP du resolver → le paquet semble venir du resolver
-  -- dst = IP du client   → destinataire de la réponse forgée
-  -- La même mécanique empirique que reject (worker_reject) délivre le paquet
-  -- au client via le bridge, même si le header L2 original n'est pas modifié.
-  local ip_obj
-  if pkt.ip.version == 6
-    ip_obj = new_ip {
-      version:     6
-      hop_limit:   64
-      next_header: PROTO_UDP
-      src:         pkt.ip.dst_ip_raw   -- IP resolver (src de la réponse)
-      dst:         pkt.ip.src_ip_raw   -- IP client   (dst de la réponse)
-      data:        udp_obj
-    }
-  else
-    ip_obj = new_ip {
-      version:  4
-      ttl:      64
-      protocol: PROTO_UDP
-      src:      pkt.ip.dst_ip_raw   -- IP resolver (src de la réponse)
-      dst:      pkt.ip.src_ip_raw   -- IP client   (dst de la réponse)
-      options:  ""
-      data:     udp_obj
-    }
-
-  "#{ip_obj}"
+  -- ── Datagramme UDP et IP ─────────────────────────────────────
+  -- src/dst inversés par rapport à la question (réponse vers le client).
+  l4 = new_udp { spt: udp.dpt, dpt: udp.spt, checksum: 0, data: dns_obj }
+  ip_pkt = new_ip {
+    version:     ip.version
+    -- IPv4
+    v_ihl:       ip.v_ihl
+    tos:         ip.tos
+    id:          ip.id
+    ff:          ip.ff
+    ttl:         ip.ttl
+    options:     ip.options or ""
+    -- IPv6
+    vtf:         ip.vtf
+    hop_limit:   ip.hop_limit
+    -- commun
+    src:         ip.dst
+    dst:         ip.src
+    protocol:    PROTO_UDP
+    next_header: PROTO_UDP
+    data:        l4
+  }
+  "#{ip_pkt}"
 
 { :forge_dns_response }

@@ -10,7 +10,24 @@ local auth_cfg = config.auth or { }
 local metrics = require("metrics")
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
-local packet = require("nfq/packet")
+local parse_ip4
+parse_ip4 = require("ipparse.l3.ip4").parse
+local parse_ip6
+parse_ip6 = require("ipparse.l3.ip6").parse
+local parse_udp
+parse_udp = require("ipparse.l4.udp").parse
+local parse_tcp
+parse_tcp = require("ipparse.l4.tcp").parse
+local parse_dns, dns_types
+do
+  local _obj_0 = require("ipparse.l7.dns")
+  parse_dns, dns_types = _obj_0.parse, _obj_0.types
+end
+local ip2s
+ip2s = require("ipparse.l3.ip").ip2s
+local new_stream
+new_stream = require("ipparse.l4.tcp_stream").new
+local bit = require("bit")
 local filter = require("filter")
 local write_msg, write_refused_msg
 do
@@ -141,6 +158,120 @@ write_event = function(fields, allowed)
   }, "\t") .. "\n"
   return libc.write(events_wfd, line, #line)
 end
+local PROTO_UDP = 17
+local PROTO_TCP = 6
+local IPV6_EXT_HDRS = {
+  [0] = true,
+  [43] = true,
+  [44] = true,
+  [51] = false,
+  [60] = true,
+  [135] = true,
+  [139] = true,
+  [140] = true
+}
+local skip_ipv6_ext_hdrs
+skip_ipv6_ext_hdrs = function(p, len, first_nh)
+  local nh = first_nh
+  local off = 40
+  while IPV6_EXT_HDRS[nh] ~= nil do
+    if off + 2 > len then
+      return nil, nil
+    end
+    local next_nh = p[off]
+    local ext_size
+    if nh == 51 then
+      ext_size = (p[off + 1] + 2) * 4
+    else
+      ext_size = (p[off + 1] + 1) * 8
+    end
+    if ext_size < 8 or off + ext_size > len then
+      return nil, nil
+    end
+    off = off + ext_size
+    nh = next_nh
+  end
+  return nh, off
+end
+local dns_tcp_complete
+dns_tcp_complete = function(buf)
+  if #buf < 2 then
+    return false
+  end
+  return #buf >= 2 + buf:byte(1) * 256 + buf:byte(2)
+end
+local tcp_state = new_stream(dns_tcp_complete)
+local parse_packet
+parse_packet = function(raw)
+  local ver = bit.rshift(raw:byte(1), 4)
+  local ip
+  if ver == 4 then
+    local ip4, _ = parse_ip4(raw)
+    ip = ip4
+  elseif ver == 6 then
+    local ip6, _ = parse_ip6(raw)
+    ip = ip6
+  end
+  if not (ip) then
+    return nil, "parse_failed"
+  end
+  local l4_off = ip.data_off
+  local proto = ip.protocol or ip.next_header
+  if ip.version == 6 then
+    local p = ffi.cast("const uint8_t*", raw)
+    local l4_off_0based
+    proto, l4_off_0based = skip_ipv6_ext_hdrs(p, #raw, ip.next_header)
+    if not (proto) then
+      return nil, "parse_failed"
+    end
+    l4_off = l4_off_0based + 1
+  end
+  if proto == PROTO_UDP then
+    local udp, _ = parse_udp(raw, l4_off)
+    if not (udp) then
+      return nil, "parse_failed"
+    end
+    local dns_raw = raw:sub(udp.data_off, udp.off + udp.len - 1)
+    local dns_msg
+    dns_msg, _ = parse_dns(dns_raw, 1, false)
+    if not (dns_msg) then
+      return nil, "parse_failed"
+    end
+    udp.proto = "udp"
+    return ip, udp, dns_msg
+  elseif proto == PROTO_TCP then
+    local tcp, _ = parse_tcp(raw, l4_off)
+    if not (tcp) then
+      return nil, "parse_failed"
+    end
+    local payload = raw:sub(tcp.data_off)
+    local is_fin_rst = bit.band(tcp.flags, 0x05) ~= 0
+    local has_payload = payload ~= ""
+    local key = tostring(ip2s(ip.src)) .. "|" .. tostring(tcp.spt) .. "|" .. tostring(ip2s(ip.dst)) .. "|" .. tostring(tcp.dpt)
+    local buf, init_seq, first_seg = tcp_state.feed(key, payload, tcp.flags, tcp.seq_n)
+    if not (buf) then
+      return nil, (function()
+        if is_fin_rst or not has_payload then
+          return "tcp_control"
+        else
+          return "buffering"
+        end
+      end)()
+    end
+    local dns_raw = buf:sub(3)
+    local dns_msg
+    dns_msg, _ = parse_dns(dns_raw, 1, false)
+    if not (dns_msg) then
+      return nil, "parse_failed"
+    end
+    tcp.proto = "tcp"
+    tcp.tcp_init_seq = init_seq
+    tcp.tcp_single_segment = first_seg
+    tcp.tcp_dns_raw = dns_raw
+    return ip, tcp, dns_msg
+  end
+  return nil, "parse_failed"
+end
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
   local payload_ptr = ffi.new("unsigned char*[1]")
@@ -150,25 +281,27 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
   local l2 = get_l2(nfad)
-  local pkt, parse_status = packet.parse_packet(raw)
-  if not (pkt) then
-    if parse_status == "buffering" then
+  local ip, l4, dns_msg = parse_packet(raw)
+  if not (ip) then
+    if l4 == "buffering" then
       return NF_ACCEPT
     end
-    if parse_status == "tcp_control" then
+    if l4 == "tcp_control" then
       return NF_ACCEPT
     end
     log_warn({
       action = "parse_failed",
       mac_src = l2.mac_src,
-      status = parse_status
+      status = l4
     })
     return NF_DROP
   end
+  local src_ip = ip2s(ip.src)
+  local dst_ip = ip2s(ip.dst)
   if l2.mac_src == "unknown" then
     log_warn({
       action = "l2_mac_missing",
-      src_ip = pkt.ip.src_ip,
+      src_ip = src_ip,
       in_ifindex = l2.in_ifindex,
       vlan = l2.vlan
     })
@@ -176,31 +309,31 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     log_debug({
       action = "l2_info",
       mac_src = l2.mac_src,
-      src_ip = pkt.ip.src_ip,
+      src_ip = src_ip,
       in_ifindex = l2.in_ifindex,
       vlan = l2.vlan
     })
   end
-  if pkt.dns.is_response then
+  if dns_msg.header.qr then
     return NF_ACCEPT
   end
-  write_learn_msg(pkt.ip.src_ip_raw, l2.mac_raw)
-  if captive_domain and raw_fd and _bridge_mac then
-    for _, q in ipairs(pkt.questions) do
-      local norm = q.qname:lower():gsub("%.+$", "")
+  write_learn_msg(ip.src, l2.mac_raw)
+  if captive_domain and raw_fd and _bridge_mac and l4.proto == "udp" then
+    for _, q in ipairs(dns_msg.questions) do
+      local norm = q.name:lower():gsub("%.+$", "")
       if norm == captive_domain and (q.qtype == 1 or q.qtype == 28) then
         local mac_raw = l2.mac_raw
         if not mac_raw or mac_raw == "\0\0\0\0\0\0" then
           log_warn({
             action = "dns_steal_no_mac",
-            domain = q.qname,
-            src_ip = pkt.ip.src_ip
+            domain = q.name,
+            src_ip = src_ip
           })
           break
         end
-        local forged_ip = forge_dns.forge_dns_response(pkt, q, captive_ip4, captive_ip6)
+        local forged_ip = forge_dns.forge_dns_response(ip, l4, dns_msg.header.id, q, captive_ip4, captive_ip6)
         if forged_ip then
-          local ethertype = pkt.ip.version == 6 and IP6 or IP4
+          local ethertype = ip.version == 6 and IP6 or IP4
           local eth_bytes = tostring(new_eth({
             src = _bridge_mac,
             dst = mac_raw,
@@ -211,10 +344,10 @@ handle_question = function(qh_ptr, nfad, pkt_id)
           local ok = bridge_raw.send(raw_fd, eth_bytes, _ifindex)
           log_info({
             action = "dns_stolen",
-            domain = q.qname,
-            qtype = q.qtype_name,
-            src_ip = pkt.ip.src_ip,
-            resolver = pkt.ip.dst_ip,
+            domain = q.name,
+            qtype = dns_types[q.qtype] or "TYPE" .. tostring(q.qtype),
+            src_ip = src_ip,
+            resolver = dst_ip,
             mac = l2.mac_src,
             ancount = (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0,
             sent = ok
@@ -223,9 +356,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
         else
           log_warn({
             action = "dns_steal_forge_failed",
-            domain = q.qname,
-            qtype = q.qtype_name,
-            src_ip = pkt.ip.src_ip
+            domain = q.name,
+            qtype = dns_types[q.qtype] or "TYPE" .. tostring(q.qtype),
+            src_ip = src_ip
           })
           break
         end
@@ -243,20 +376,20 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     mac_src = l2.mac_src,
     vlan = l2.vlan,
     in_if = tostring(l2.in_ifindex),
-    src_ip = pkt.ip.src_ip,
-    dst_ip = pkt.ip.dst_ip,
-    src_port = pkt.l4.src_port,
-    dst_port = pkt.l4.dst_port,
-    txid = string.format("0x%04x", pkt.dns.txid),
-    af = pkt.ip.version == 6 and "ipv6" or "ipv4",
-    user = user_for_mac(l2.mac_src, pkt.ip.src_ip, auth_cfg.sessions_file)
+    src_ip = src_ip,
+    dst_ip = dst_ip,
+    src_port = l4.spt,
+    dst_port = l4.dpt,
+    txid = string.format("0x%04x", dns_msg.header.id),
+    af = ip.version == 6 and "ipv6" or "ipv4",
+    user = user_for_mac(l2.mac_src, src_ip, auth_cfg.sessions_file)
   }
-  for _, q in ipairs(pkt.questions) do
-    q_fields.qname = q.qname
-    q_fields.qtype = q.qtype_name
+  for _, q in ipairs(dns_msg.questions) do
+    q_fields.qname = q.name
+    q_fields.qtype = dns_types[q.qtype] or "TYPE" .. tostring(q.qtype)
     local req = {
-      domain = q.qname,
-      src_ip = pkt.ip.src_ip,
+      domain = q.name,
+      src_ip = src_ip,
       mac = l2.mac_src,
       vlan = l2.vlan,
       ts = os.time(),
@@ -310,17 +443,17 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   end
   local ipc_ok = false
   if verdict == NF_ACCEPT then
-    ipc_ok = write_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout)
+    ipc_ok = write_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, benchmark_ms, allow_rule_id, allow_timeout)
   else
-    ipc_ok = write_refused_msg(pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason, benchmark_ms, block_rule_id, block_timeout)
+    ipc_ok = write_refused_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout)
   end
   if not (ipc_ok) then
     log_warn({
       action = "ipc_write_failed",
-      txid = string.format("0x%04x", pkt.dns.txid),
-      src_ip = pkt.ip.src_ip,
-      dst_ip = pkt.ip.dst_ip,
-      src_port = pkt.l4.src_port,
+      txid = string.format("0x%04x", dns_msg.header.id),
+      src_ip = src_ip,
+      dst_ip = dst_ip,
+      src_port = l4.spt,
       user = q_fields.user
     })
     return NF_DROP

@@ -28,8 +28,6 @@ add_ede = function(dns, code, text)
   insert(dns.additionals, 1, {
     rname = "\0",
     rtype = 0x29,
-    rclass = 0,
-    ttl = 0,
     rdata = sp(">Hs2", 0x000F, (sp(">H", code) .. text))
   })
   dns.header.arcount = #dns.additionals
@@ -60,7 +58,6 @@ build_blocked_response = function(dns_orig, dns_raw, reason)
       rname = string.char(0xC0, 0x0C),
       rtype = qtype,
       rclass = 1,
-      ttl = 60,
       rdata = rdata
     }
     dns.header.ancount = 1

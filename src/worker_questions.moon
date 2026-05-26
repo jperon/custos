@@ -17,7 +17,14 @@ nft_cfg = config.nft or {}
 auth_cfg = config.auth or {}
 metrics = require "metrics"
 { :get_l2 } = require "nfq/ethernet"
-packet                   = require "nfq/packet"
+{ parse: parse_ip4 }                     = require "ipparse.l3.ip4"
+{ parse: parse_ip6 }                     = require "ipparse.l3.ip6"
+{ parse: parse_udp }                     = require "ipparse.l4.udp"
+{ parse: parse_tcp }                     = require "ipparse.l4.tcp"
+{ parse: parse_dns, types: dns_types }   = require "ipparse.l7.dns"
+{ :ip2s }                                = require "ipparse.l3.ip"
+{ new: new_stream }                      = require "ipparse.l4.tcp_stream"
+bit                                      = require "bit"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
@@ -134,6 +141,95 @@ write_event = (fields, allowed) ->
   }, "\t") .. "\n"
   libc.write events_wfd, line, #line
 
+-- ── Parsing L3/L4/L7 ────────────────────────────────────────────
+
+PROTO_UDP = 17
+PROTO_TCP = 6
+
+-- IPv6 extension header type → skip formula
+IPV6_EXT_HDRS = {
+  [0]:   true   -- Hop-by-Hop Options
+  [43]:  true   -- Routing
+  [44]:  true   -- Fragment
+  [51]:  false  -- Authentication Header (AH)
+  [60]:  true   -- Destination Options
+  [135]: true   -- Mobility
+  [139]: true   -- HIP
+  [140]: true   -- Shim6
+}
+
+skip_ipv6_ext_hdrs = (p, len, first_nh) ->
+  nh  = first_nh
+  off = 40
+  while IPV6_EXT_HDRS[nh] != nil
+    return nil, nil if off + 2 > len
+    next_nh  = p[off]
+    ext_size = if nh == 51
+      (p[off + 1] + 2) * 4   -- AH
+    else
+      (p[off + 1] + 1) * 8   -- standard
+    return nil, nil if ext_size < 8 or off + ext_size > len
+    off += ext_size
+    nh   = next_nh
+  nh, off
+
+dns_tcp_complete = (buf) ->
+  return false if #buf < 2
+  #buf >= 2 + buf\byte(1) * 256 + buf\byte(2)
+
+tcp_state = new_stream dns_tcp_complete
+
+-- Extrait ip, l4, dns_msg depuis un paquet IP brut.
+-- Retourne nil, "status" sur les cas spéciaux (buffering, tcp_control, parse_failed).
+parse_packet = (raw) ->
+  ver = bit.rshift raw\byte(1), 4
+  ip = if ver == 4
+    ip4, _ = parse_ip4 raw
+    ip4
+  elseif ver == 6
+    ip6, _ = parse_ip6 raw
+    ip6
+  return nil, "parse_failed" unless ip
+
+  l4_off = ip.data_off
+  proto  = ip.protocol or ip.next_header
+
+  if ip.version == 6
+    p = ffi.cast "const uint8_t*", raw
+    proto, l4_off_0based = skip_ipv6_ext_hdrs p, #raw, ip.next_header
+    return nil, "parse_failed" unless proto
+    l4_off = l4_off_0based + 1
+
+  if proto == PROTO_UDP
+    udp, _ = parse_udp raw, l4_off
+    return nil, "parse_failed" unless udp
+    dns_raw = raw\sub udp.data_off, udp.off + udp.len - 1
+    dns_msg, _ = parse_dns dns_raw, 1, false
+    return nil, "parse_failed" unless dns_msg
+    udp.proto = "udp"
+    return ip, udp, dns_msg
+
+  elseif proto == PROTO_TCP
+    tcp, _ = parse_tcp raw, l4_off
+    return nil, "parse_failed" unless tcp
+    payload = raw\sub tcp.data_off
+    is_fin_rst = bit.band(tcp.flags, 0x05) != 0
+    has_payload = payload != ""
+    key = "#{ip2s ip.src}|#{tcp.spt}|#{ip2s ip.dst}|#{tcp.dpt}"
+    buf, init_seq, first_seg = tcp_state.feed key, payload, tcp.flags, tcp.seq_n
+    unless buf
+      return nil, if is_fin_rst or not has_payload then "tcp_control" else "buffering"
+    dns_raw = buf\sub 3
+    dns_msg, _ = parse_dns dns_raw, 1, false
+    return nil, "parse_failed" unless dns_msg
+    tcp.proto = "tcp"
+    tcp.tcp_init_seq = init_seq
+    tcp.tcp_single_segment = first_seg
+    tcp.tcp_dns_raw = dns_raw
+    return ip, tcp, dns_msg
+
+  nil, "parse_failed"
+
 -- ── Callback principal ───────────────────────────────────────────
 handle_question = (qh_ptr, nfad, pkt_id) ->
   -- ── Payload brut ─────────────────────────────────────────────
@@ -148,14 +244,17 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   l2 = get_l2 nfad
 
   -- ── L3 / L4 / L7 ───────────────────────────────────────────────
-  pkt, parse_status = packet.parse_packet raw
-  unless pkt
+  ip, l4, dns_msg = parse_packet raw
+  unless ip
     -- TCP segments arriving before a complete DNS message are buffered; let them through.
-    return NF_ACCEPT if parse_status == "buffering"
+    return NF_ACCEPT if l4 == "buffering"
     -- TCP control segments (SYN/ACK/FIN without DNS payload) must pass.
-    return NF_ACCEPT if parse_status == "tcp_control"
-    log_warn { action: "parse_failed", mac_src: l2.mac_src, status: parse_status }
+    return NF_ACCEPT if l4 == "tcp_control"
+    log_warn { action: "parse_failed", mac_src: l2.mac_src, status: l4 }
     return NF_DROP
+
+  src_ip = ip2s ip.src
+  dst_ip = ip2s ip.dst
 
   -- Log L2 metadata une fois le parse réussi (src_ip disponible pour corrélation).
   -- WARN si mac inconnue (nfq_get_packet_hw n'a rien retourné) pour faciliter
@@ -163,7 +262,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   if l2.mac_src == "unknown"
     log_warn {
       action:     "l2_mac_missing"
-      src_ip:     pkt.ip.src_ip
+      src_ip:     src_ip
       in_ifindex: l2.in_ifindex
       vlan:       l2.vlan
     }
@@ -171,17 +270,17 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     log_debug {
       action:     "l2_info"
       mac_src:    l2.mac_src
-      src_ip:     pkt.ip.src_ip
+      src_ip:     src_ip
       in_ifindex: l2.in_ifindex
       vlan:       l2.vlan
     }
 
   -- On ne traite que les questions (QR bit = 0)
-  return NF_ACCEPT if pkt.dns.is_response
+  return NF_ACCEPT if dns_msg.header.qr
 
   -- Alimente le mac_learner avec les associations observées sur le trafic DNS.
   -- Écriture best-effort : l'échec ne doit pas bloquer ni refuser la requête DNS.
-  write_learn_msg pkt.ip.src_ip_raw, l2.mac_raw
+  write_learn_msg ip.src, l2.mac_raw
 
   -- ── Vol de question DNS pour le portail captif ───────────────────
   -- Si la question porte sur le hostname du portail captif (extrait de
@@ -191,29 +290,29 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- Cette approche est nécessaire car nfq_set_verdict(NF_ACCEPT, payload) ne
   -- peut pas inverser la direction d'un paquet (le paquet resterait sur le
   -- chemin LAN→WAN au lieu d'être renvoyé vers le client).
-  if captive_domain and raw_fd and _bridge_mac
-    for _, q in ipairs pkt.questions
-      norm = q.qname\lower!\gsub "%.+$", ""
+  if captive_domain and raw_fd and _bridge_mac and l4.proto == "udp"
+    for _, q in ipairs dns_msg.questions
+      norm = q.name\lower!\gsub "%.+$", ""
       if norm == captive_domain and (q.qtype == 1 or q.qtype == 28)   -- A ou AAAA
         mac_raw = l2.mac_raw
         if not mac_raw or mac_raw == "\0\0\0\0\0\0"
           log_warn {
             action:  "dns_steal_no_mac"
-            domain:  q.qname
-            src_ip:  pkt.ip.src_ip
+            domain:  q.name
+            src_ip:  src_ip
           }
           break   -- MAC inconnue : laisser passer normalement
-        forged_ip = forge_dns.forge_dns_response pkt, q, captive_ip4, captive_ip6
+        forged_ip = forge_dns.forge_dns_response ip, l4, dns_msg.header.id, q, captive_ip4, captive_ip6
         if forged_ip
-          ethertype = pkt.ip.version == 6 and IP6 or IP4
+          ethertype = ip.version == 6 and IP6 or IP4
           eth_bytes = "#{new_eth {src: _bridge_mac, dst: mac_raw, protocol: ethertype, vlan: l2.vlan, data: forged_ip}}"
           ok = bridge_raw.send raw_fd, eth_bytes, _ifindex
           log_info {
             action:   "dns_stolen"
-            domain:   q.qname
-            qtype:    q.qtype_name
-            src_ip:   pkt.ip.src_ip
-            resolver: pkt.ip.dst_ip
+            domain:   q.name
+            qtype:    dns_types[q.qtype] or "TYPE#{q.qtype}"
+            src_ip:   src_ip
+            resolver: dst_ip
             mac:      l2.mac_src
             ancount:  (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0
             sent:     ok
@@ -222,9 +321,9 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
         else
           log_warn {
             action:  "dns_steal_forge_failed"
-            domain:  q.qname
-            qtype:   q.qtype_name
-            src_ip:  pkt.ip.src_ip
+            domain:  q.name
+            qtype:   dns_types[q.qtype] or "TYPE#{q.qtype}"
+            src_ip:  src_ip
           }
           break   -- forge échouée : laisser passer normalement
 
@@ -247,21 +346,21 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     mac_src:  l2.mac_src
     vlan:     l2.vlan
     in_if:    tostring l2.in_ifindex
-    src_ip:   pkt.ip.src_ip
-    dst_ip:   pkt.ip.dst_ip
-    src_port: pkt.l4.src_port
-    dst_port: pkt.l4.dst_port
-    txid:     string.format "0x%04x", pkt.dns.txid
-    af:       pkt.ip.version == 6 and "ipv6" or "ipv4"
-    user:     user_for_mac l2.mac_src, pkt.ip.src_ip, auth_cfg.sessions_file
+    src_ip:   src_ip
+    dst_ip:   dst_ip
+    src_port: l4.spt
+    dst_port: l4.dpt
+    txid:     string.format "0x%04x", dns_msg.header.id
+    af:       ip.version == 6 and "ipv6" or "ipv4"
+    user:     user_for_mac l2.mac_src, src_ip, auth_cfg.sessions_file
   }
 
-  for _, q in ipairs pkt.questions
-    q_fields.qname = q.qname
-    q_fields.qtype = q.qtype_name
+  for _, q in ipairs dns_msg.questions
+    q_fields.qname = q.name
+    q_fields.qtype = dns_types[q.qtype] or "TYPE#{q.qtype}"
     req = {
-      domain: q.qname
-      src_ip: pkt.ip.src_ip
+      domain: q.name
+      src_ip: src_ip
       mac:    l2.mac_src
       vlan:   l2.vlan
       ts:     os.time!
@@ -303,17 +402,17 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   q_fields.timeout = if verdict == NF_ACCEPT then allow_timeout else block_timeout
   ipc_ok = false
   if verdict == NF_ACCEPT
-    ipc_ok = write_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, allow_reason, benchmark_ms, allow_rule_id, allow_timeout
+    ipc_ok = write_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, benchmark_ms, allow_rule_id, allow_timeout
   else
-    ipc_ok = write_refused_msg pipe_wfd, pkt.dns.txid, pkt.ip.src_ip_raw, pkt.l4.src_port, l2.mac_raw, pkt.ip.dst_ip_raw, block_reason, benchmark_ms, block_rule_id, block_timeout
+    ipc_ok = write_refused_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout
 
   unless ipc_ok
     log_warn {
       action: "ipc_write_failed"
-      txid: string.format "0x%04x", pkt.dns.txid
-      src_ip: pkt.ip.src_ip
-      dst_ip: pkt.ip.dst_ip
-      src_port: pkt.l4.src_port
+      txid: string.format "0x%04x", dns_msg.header.id
+      src_ip: src_ip
+      dst_ip: dst_ip
+      src_port: l4.spt
       user: q_fields.user
     }
     return NF_DROP

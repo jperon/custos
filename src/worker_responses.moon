@@ -26,8 +26,13 @@ ttl_cfg = dns_cfg.ttl_grace or {}
 auth_cfg = config.auth or {}
 clients_cfg = config.clients or {}
 { :user_for_mac } = require "auth.sessions"
-packet = require "nfq/packet"
-{ :QTYPE, :parse_answers, :extract_dns_payload, :replace_dns_payload, :purge_tcp_buffers, :cleanup } = packet
+{ parse: parse_ip4 }                     = require "ipparse.l3.ip4"
+{ parse: parse_ip6 }                     = require "ipparse.l3.ip6"
+{ parse: parse_udp }                     = require "ipparse.l4.udp"
+{ parse: parse_tcp }                     = require "ipparse.l4.tcp"
+{ parse: parse_dns, types: QTYPE }       = require "ipparse.l7.dns"
+{ :ip2s }                                = require "ipparse.l3.ip"
+{ new: new_stream }                      = require "ipparse.l4.tcp_stream"
 { :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
@@ -36,13 +41,316 @@ packet = require "nfq/packet"
 { :build_blocked_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
 bit = require "bit"
 
--- Chargement paresseux de filter pour éviter de tirer ip_whitelist (libnftnl)
+-- ── Constantes L3/L4 ────────────────────────────────────────────
+
+PROTO_UDP = 17
+PROTO_TCP = 6
+
+-- IPv6 extension headers table
+IPV6_EXT_HDRS = {
+  [0]:   true   -- Hop-by-Hop Options
+  [43]:  true   -- Routing
+  [44]:  true   -- Fragment
+  [51]:  false  -- AH
+  [60]:  true   -- Destination Options
+  [135]: true   -- Mobility
+  [139]: true   -- HIP
+  [140]: true   -- Shim6
+}
+
+skip_ipv6_ext_hdrs = (p, len, first_nh) ->
+  nh  = first_nh
+  off = 40
+  while IPV6_EXT_HDRS[nh] != nil
+    return nil, nil if off + 2 > len
+    next_nh  = p[off]
+    ext_size = if nh == 51
+      (p[off + 1] + 2) * 4
+    else
+      (p[off + 1] + 1) * 8
+    return nil, nil if ext_size < 8 or off + ext_size > len
+    off += ext_size
+    nh   = next_nh
+  nh, off
+
+dns_tcp_complete = (buf) ->
+  return false if #buf < 2
+  #buf >= 2 + buf\byte(1) * 256 + buf\byte(2)
+
+tcp_state = new_stream dns_tcp_complete
+
+-- ── Fonctions de mutation FFI (byte-level, big-endian) ──────────
+
+r16 = (p, o) ->
+  bit.bor bit.lshift(p[o], 8), p[o + 1]
+
+w32 = (p, o, v) ->
+  p[o]   = bit.band bit.rshift(v, 24), 0xFF
+  p[o+1] = bit.band bit.rshift(v, 16), 0xFF
+  p[o+2] = bit.band bit.rshift(v,  8), 0xFF
+  p[o+3] = bit.band v, 0xFF
+
+w16 = (p, o, v) ->
+  p[o]   = bit.band bit.rshift(v, 8), 0xFF
+  p[o+1] = bit.band v, 0xFF
+
+fix_ip4_cksum = (buf, ihl) ->
+  buf[10] = 0
+  buf[11] = 0
+  sum = 0
+  for i = 0, ihl - 1, 2
+    sum += bit.bor bit.lshift(buf[i], 8), buf[i + 1]
+  while bit.rshift(sum, 16) != 0
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  w16 buf, 10, bit.band(bit.bnot(sum), 0xFFFF)
+
+fix_udp4_cksum = (buf, pkt_len, ihl) ->
+  udp_off = ihl
+  return if pkt_len < udp_off + 8
+  udp_len = r16 buf, udp_off + 4
+  buf[udp_off + 6] = 0
+  buf[udp_off + 7] = 0
+  sum = 0
+  for i = 12, 18, 2
+    sum += r16 buf, i
+  sum += PROTO_UDP
+  sum += udp_len
+  udp_end = udp_off + udp_len
+  udp_end = pkt_len if udp_end > pkt_len
+  cksum_off = udp_off + 6
+  i = udp_off
+  while i < udp_end
+    word = if i == cksum_off then 0
+    elseif i + 1 < udp_end then r16 buf, i
+    else bit.lshift buf[i], 8
+    sum += word
+    i += 2
+  while bit.rshift(sum, 16) != 0
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  cksum = bit.band bit.bnot(sum), 0xFFFF
+  cksum = 0xFFFF if cksum == 0
+  w16 buf, udp_off + 6, cksum
+
+fix_udp6_cksum = (buf, pkt_len, l4_off) ->
+  udp_off = l4_off
+  return if pkt_len < udp_off + 8
+  udp_len = r16 buf, udp_off + 4
+  buf[udp_off + 6] = 0
+  buf[udp_off + 7] = 0
+  sum = 0
+  for i = 8, 38, 2
+    sum += r16 buf, i
+  sum += udp_len
+  sum += PROTO_UDP
+  udp_end = udp_off + udp_len
+  udp_end = pkt_len if udp_end > pkt_len
+  cksum_off = udp_off + 6
+  i = udp_off
+  while i < udp_end
+    word = if i == cksum_off then 0
+    elseif i + 1 < udp_end then r16 buf, i
+    else bit.lshift buf[i], 8
+    sum += word
+    i += 2
+  while bit.rshift(sum, 16) != 0
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  cksum = bit.band bit.bnot(sum), 0xFFFF
+  cksum = 0xFFFF if cksum == 0
+  w16 buf, udp_off + 6, cksum
+
+fix_tcp4_cksum = (buf, pkt_len, ihl) ->
+  tcp_off = ihl
+  return if pkt_len < tcp_off + 20
+  tcp_len = pkt_len - tcp_off
+  buf[tcp_off + 16] = 0
+  buf[tcp_off + 17] = 0
+  sum = 0
+  for i = 12, 18, 2
+    sum += r16 buf, i
+  sum += PROTO_TCP
+  sum += tcp_len
+  tcp_end = tcp_off + tcp_len
+  tcp_end = pkt_len if tcp_end > pkt_len
+  cksum_off = tcp_off + 16
+  i = tcp_off
+  while i < tcp_end
+    word = if i == cksum_off then 0
+    elseif i + 1 < tcp_end then r16 buf, i
+    else bit.lshift buf[i], 8
+    sum += word
+    i += 2
+  while bit.rshift(sum, 16) != 0
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  cksum = bit.band bit.bnot(sum), 0xFFFF
+  cksum = 0xFFFF if cksum == 0
+  w16 buf, tcp_off + 16, cksum
+
+fix_tcp6_cksum = (buf, pkt_len, l4_off) ->
+  tcp_off = l4_off
+  return if pkt_len < tcp_off + 20
+  tcp_len = pkt_len - tcp_off
+  buf[tcp_off + 16] = 0
+  buf[tcp_off + 17] = 0
+  sum = 0
+  for i = 8, 38, 2
+    sum += r16 buf, i
+  sum += tcp_len
+  sum += PROTO_TCP
+  tcp_end = tcp_off + tcp_len
+  tcp_end = pkt_len if tcp_end > pkt_len
+  cksum_off = tcp_off + 16
+  i = tcp_off
+  while i < tcp_end
+    word = if i == cksum_off then 0
+    elseif i + 1 < tcp_end then r16 buf, i
+    else bit.lshift buf[i], 8
+    sum += word
+    i += 2
+  while bit.rshift(sum, 16) != 0
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  cksum = bit.band bit.bnot(sum), 0xFFFF
+  cksum = 0xFFFF if cksum == 0
+  w16 buf, tcp_off + 16, cksum
+
+-- Reconstruit un paquet IP avec un nouveau payload DNS.
+-- ip_ihl : offset 0-based (en octets) de l'en-tête L4 depuis le début du paquet.
+replace_dns_payload = (raw, ip, l4, ip_ihl, new_dns) ->
+  p       = ffi.cast "const uint8_t*", raw
+  dns_len = #new_dns
+
+  if l4.proto == "udp"
+    udp_len     = 8 + dns_len
+    new_pkt_len = ip_ihl + udp_len
+    new_buf = ffi.new "uint8_t[?]", new_pkt_len
+    ffi.copy new_buf, p, ip_ihl + 8
+    w16 new_buf, ip_ihl + 4, udp_len
+    ffi.copy new_buf + ip_ihl + 8, new_dns, dns_len
+    if ip.version == 4
+      w16 new_buf, 2, new_pkt_len
+      fix_udp4_cksum new_buf, new_pkt_len, ip_ihl
+      fix_ip4_cksum  new_buf, ip_ihl
+    elseif ip.version == 6
+      w16 new_buf, 4, (ip_ihl - 40) + udp_len
+      fix_udp6_cksum new_buf, new_pkt_len, ip_ihl
+    return ffi.string new_buf, new_pkt_len
+
+  elseif l4.proto == "tcp"
+    tcp_hdr_len = bit.rshift(p[ip_ihl + 12], 4) * 4
+    hdr_len     = ip_ihl + tcp_hdr_len
+    new_pkt_len = hdr_len + 2 + dns_len
+    new_buf = ffi.new "uint8_t[?]", new_pkt_len
+    ffi.copy new_buf, p, hdr_len
+    w16 new_buf, hdr_len, dns_len
+    ffi.copy new_buf + hdr_len + 2, new_dns, dns_len
+    w32 new_buf, ip_ihl + 4, l4.tcp_init_seq
+    new_buf[ip_ihl + 13] = 0x18   -- PSH|ACK
+    if ip.version == 4
+      w16 new_buf, 2, new_pkt_len
+      fix_tcp4_cksum new_buf, new_pkt_len, ip_ihl
+      fix_ip4_cksum  new_buf, ip_ihl
+    elseif ip.version == 6
+      w16 new_buf, 4, (ip_ihl - 40) + tcp_hdr_len + 2 + dns_len
+      fix_tcp6_cksum new_buf, new_pkt_len, ip_ihl
+    return ffi.string new_buf, new_pkt_len
+
+  nil
+
+-- ── Parse answers depuis le dns_msg ipparse ──────────────────────
+
+decode_simple_cname = (rdata) ->
+  parts = {}
+  pos = 1
+  while pos <= #rdata
+    len = rdata\byte pos
+    break if len == 0
+    return "(cname)" if bit.band(len, 0xC0) == 0xC0
+    parts[#parts + 1] = rdata\sub pos+1, pos+len
+    pos += 1 + len
+  table.concat parts, "."
+
+fmt_rdata = (rr) ->
+  if (rr.rtype == 1 or rr.rtype == 28) and (#rr.rdata == 4 or #rr.rdata == 16)
+    ip2s rr.rdata
+  elseif rr.rtype == 5   -- CNAME
+    decode_simple_cname rr.rdata
+  else
+    "(rdata #{#rr.rdata}B)"
+
+parse_answers = (dns_msg) ->
+  [ {
+    name:       rr.name
+    rtype:      rr.rtype
+    rclass:     rr.rclass
+    ttl:        rr.ttl
+    rdlength:   #rr.rdata
+    rdata_raw:  (rr.rtype == 1 or rr.rtype == 28) and rr.rdata or ""
+    rdata_str:  fmt_rdata rr
+    rtype_name: QTYPE[rr.rtype] or "TYPE#{rr.rtype}"
+    ttl_offset: rr.off + #rr.rname + 3   -- 0-based depuis début du payload DNS (l7_off=1)
+  } for rr in *dns_msg.answers ]
+
+-- ── Parsing L3/L4/L7 ────────────────────────────────────────────
+
+-- Extrait ip, l4, dns_msg, dns_raw, ip_ihl depuis un paquet IP brut.
+-- Retourne nil, "status" sur les cas spéciaux.
+-- ip_ihl est l'offset 0-based (octets) de L4 depuis le début du paquet.
+parse_packet = (raw) ->
+  ver = bit.rshift raw\byte(1), 4
+  ip = if ver == 4
+    ip4, _ = parse_ip4 raw
+    ip4
+  elseif ver == 6
+    ip6, _ = parse_ip6 raw
+    ip6
+  return nil, "parse_failed" unless ip
+
+  l4_off = ip.data_off
+  proto  = ip.protocol or ip.next_header
+  ip_ihl = ip.payload_off or (ip.data_off - 1)   -- offset 0-based de L4
+
+  if ip.version == 6
+    p = ffi.cast "const uint8_t*", raw
+    proto, l4_off_0based = skip_ipv6_ext_hdrs p, #raw, ip.next_header
+    return nil, "parse_failed" unless proto
+    l4_off = l4_off_0based + 1
+    ip_ihl = l4_off_0based
+
+  if proto == PROTO_UDP
+    udp, _ = parse_udp raw, l4_off
+    return nil, "parse_failed" unless udp
+    dns_raw = raw\sub udp.data_off, udp.off + udp.len - 1
+    dns_msg, _ = parse_dns dns_raw, 1, false
+    return nil, "parse_failed" unless dns_msg
+    udp.proto = "udp"
+    return ip, udp, dns_msg, dns_raw, ip_ihl
+
+  elseif proto == PROTO_TCP
+    tcp, _ = parse_tcp raw, l4_off
+    return nil, "parse_failed" unless tcp
+    payload = raw\sub tcp.data_off
+    is_fin_rst = bit.band(tcp.flags, 0x05) != 0
+    has_payload = payload != ""
+    key = "#{ip2s ip.src}|#{tcp.spt}|#{ip2s ip.dst}|#{tcp.dpt}"
+    buf, init_seq, first_seg = tcp_state.feed key, payload, tcp.flags, tcp.seq_n
+    unless buf
+      return nil, if is_fin_rst or not has_payload then "tcp_control" else "buffering"
+    dns_raw = buf\sub 3
+    dns_msg, _ = parse_dns dns_raw, 1, false
+    return nil, "parse_failed" unless dns_msg
+    tcp.proto = "tcp"
+    tcp.tcp_init_seq = init_seq
+    tcp.tcp_single_segment = first_seg
+    tcp.tcp_dns_raw = dns_raw
+    return ip, tcp, dns_msg, dns_raw, ip_ihl
+
+  nil, "parse_failed"
+
+-- ── Chargement paresseux de filter pour éviter de tirer ip_whitelist (libnftnl)
 -- au chargement du module — critique pour les tests unitaires.
 _filter = nil
 get_rule_on_response = (rule_id) ->
   _filter or= require "filter"
   _filter.get_rule_on_response rule_id
-:concat, :insert, :remove = table
 
 -- Load filter rules to identify auth-only wildcard rules
 -- rules_metadata is passed from main.moon to avoid recompiling (which would reload domain lists)
@@ -67,6 +375,12 @@ load_auth_wildcard_rules = (metadata) ->
       auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
       log_info { action: "auth_wildcard_rule_detected", rule_id: rule_id, idx: idx }
   log_info { action: "auth_wildcard_rules_loaded", count: #auth_wildcard_rules, rules: table.concat(auth_wildcard_rules, ", ") }
+
+add_to_wildcard_rules = (add_fn, key, dest, timeout, corr) ->
+  any_ok = false
+  for _, auth_rule_id in ipairs auth_wildcard_rules
+    any_ok or= add_fn key, dest, auth_rule_id, timeout, corr
+  any_ok
 
 IPC_RETRY_ENABLED = if match_retry_cfg.enabled == nil then true else match_retry_cfg.enabled
 IPC_RETRY_COUNT = match_retry_cfg.count or 5
@@ -240,28 +554,30 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- ── L3 / L4 / L7 ───────────────────────────────────────────────
   -- parse_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
-  pkt, parse_status = packet.parse_packet raw
-  unless pkt
+  ip, l4, dns_msg, dns_raw, ip_ihl = parse_packet raw
+  unless ip
     -- Intermediate TCP data segments are DROPped so response can reinject a single
     -- coalesced+TTL-patched packet once the full DNS message is assembled.
     -- TCP control packets (SYN-ACK, pure ACK with no payload, FIN) return nil
     -- without "buffering" and must be passed through unchanged.
-    return NF_DROP if parse_status == "buffering"
+    return NF_DROP if l4 == "buffering"
     return NF_ACCEPT
 
   if math.random(1000) == 1
-    purge_tcp_buffers!
+    tcp_state.purge!
     purge_mac_clients ts
 
-  unless pkt.dns.is_response
+  unless dns_msg.header.qr
     return NF_ACCEPT
 
-  -- La question originale avait src_ip=pkt.ip.dst_ip, src_port=pkt.l4.dst_port
+  -- La question originale avait src_ip=ip.dst, src_port=l4.dpt
   -- (la réponse est adressée au client LAN).
-  client_port = pkt.l4.dst_port
-  txid        = pkt.dns.txid
-  client_ip   = pkt.ip.dst_ip
-  resolver_ip = pkt.ip.src_ip
+  src_ip      = ip2s ip.src
+  dst_ip      = ip2s ip.dst
+  client_port = l4.dpt
+  txid        = dns_msg.header.id
+  client_ip   = dst_ip
+  resolver_ip = src_ip
   -- MAC du client : resolution depuis la table ip_to_mac alimentée par question via IPC.
   -- mac_dst n'est jamais exposée par libnfq ; on utilise le reverse-lookup local.
   client_mac = ip_to_mac[client_ip] or "unknown"
@@ -271,16 +587,16 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   user        = user_for_mac client_mac, client_ip, auth_cfg.sessions_file or "/tmp/sessions.lua"
 
   -- ── Vérification IPC ─────────────────────────────────────────
-  entry = get_pending_entry txid, pkt.ip.dst_ip, client_port, resolver_ip, now
+  entry = get_pending_entry txid, dst_ip, client_port, resolver_ip, now
   unless entry
     retry_attempts = 0
     retry_wait_ms = 0
-    entry, retry_attempts, retry_wait_ms = retry_pending_match txid, pkt.ip.dst_ip, client_port, resolver_ip
+    entry, retry_attempts, retry_wait_ms = retry_pending_match txid, dst_ip, client_port, resolver_ip
     if entry
       log_info {
         action: "response_matched_after_retry"
-        src_ip: pkt.ip.src_ip
-        dst_ip: pkt.ip.dst_ip
+        src_ip: src_ip
+        dst_ip: dst_ip
         txid: string.format "0x%04x", txid
         retry_attempts: retry_attempts
         retry_wait_ms: retry_wait_ms
@@ -289,11 +605,11 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     else
       log_debug {
         action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
-        src_ip:    pkt.ip.src_ip
-        dst_ip:    pkt.ip.dst_ip
+        src_ip:    src_ip
+        dst_ip:    dst_ip
         vlan:      l2.vlan
         txid:      string.format "0x%04x", txid
-        rcode:     pkt.dns.rcode
+        rcode:     dns_msg.header.rcode
         client_mac: client_mac
         retry_attempts: retry_attempts
         retry_wait_ms: retry_wait_ms
@@ -301,7 +617,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       }
       return NF_DROP
   -- Transaction consommée (one-shot : une réponse par question)
-  consume txid, pkt.ip.dst_ip, client_port, resolver_ip
+  consume txid, dst_ip, client_port, resolver_ip
 
   -- Benchmark : log le temps de traitement question → réponse
   if runtime_cfg.benchmark and entry and entry.benchmark_ms
@@ -310,8 +626,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       log_info {
         action: "dns_benchmark"
         txid: string.format "0x%04x", txid
-        src_ip: pkt.ip.src_ip
-        dst_ip: pkt.ip.dst_ip
+        src_ip: src_ip
+        dst_ip: dst_ip
         delta_ms: delta_ms
         refused: entry.refused
         dnsonly: entry.dnsonly
@@ -332,23 +648,22 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     action_label:   nil
     reason:         entry and entry.reason or ""
   }
-  ack_corr = string.format "%04x:%s:%d:%s", txid, pkt.ip.dst_ip, client_port, resolver_ip
+  ack_corr = string.format "%04x:%s:%d:%s", txid, dst_ip, client_port, resolver_ip
 
   -- ── Branche REFUSED : réponse du serveur transformée en REFUSED+EDE ──
   if refused
-    dns_raw    = extract_dns_payload raw, pkt
-    refused_dns = build_blocked_response pkt.dns, dns_raw, entry.reason
+    refused_dns = build_blocked_response dns_msg, dns_raw, entry.reason
     unless refused_dns
       return NF_DROP
     refused_dns = strip_https_rr(refused_dns) or refused_dns
-    patched = replace_dns_payload raw, pkt, refused_dns
+    patched = replace_dns_payload raw, ip, l4, ip_ihl, refused_dns
     unless patched
       return NF_DROP
-    qnames = table.concat [q.qname for q in *pkt.questions], ","
+    qnames = table.concat [q.name for q in *dns_msg.questions], ","
     log_debug {
       action:   "response_refused"
-      src_ip:   pkt.ip.src_ip
-      dst_ip:   pkt.ip.dst_ip
+      src_ip:   src_ip
+      dst_ip:   dst_ip
       vlan:     l2.vlan
       txid:     string.format "0x%04x", txid
       qnames:   qnames
@@ -363,7 +678,6 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- Les callbacks on_response de chaque action portent toute la logique :
   -- modification DNS (strip, EDE), skip_nft, action_label.
   -- inject_nft = explicit_allow OR (NOT skip_nft) : "allow" supplante "skip".
-  dns_raw = extract_dns_payload raw, pkt
   resp_ctx.dns_raw = dns_raw
 
   for cb in *on_response_cbs
@@ -373,9 +687,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   payload_modified = resp_ctx.modified
   inject_nft      = resp_ctx.explicit_allow or not resp_ctx.skip_nft
 
-  answers  = parse_answers raw, pkt
-  -- IP du client LAN (destination de la réponse DNS = source de la question)
-  client_ip = pkt.ip.dst_ip
+  answers  = parse_answers dns_msg
   client_v4 = nil
   client_v6 = nil
   ip_count = 0
@@ -386,7 +698,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   for ans in *answers
     if ans.rtype == QTYPE.A
       -- Enregistrement A : le client doit avoir une adresse IPv4
-      client_v4 or= if pkt.ip.version == 4
+      client_v4 or= if ip.version == 4
         client_ip
       else
         -- DNS transporté en IPv6 : résoudre l'IPv4 via mac_clients
@@ -396,33 +708,21 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           records_to_add += 1
           rr_timeout_str, _ = rr_timeout ans.ttl
           ok = add_ip4 client_v4, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
-          if nft_rule_id == "rule_11"
-            log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "ip4", key: client_v4, dest: ans.rdata_str, timeout: rr_timeout_str, ok: ok, corr: ack_corr }
           ip_count += 1 if ok
           success_any or= ok
-
-          -- Also add to auth-only wildcard rules if user is authenticated
           if user and #auth_wildcard_rules > 0
-            for _, auth_rule_id in ipairs auth_wildcard_rules
-              auth_ok = add_ip4 client_v4, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
-              success_any or= auth_ok
+            success_any or= add_to_wildcard_rules add_ip4, client_v4, ans.rdata_str, rr_timeout_str, ack_corr
         else
           no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
         if mac_valid client_mac
           rr_timeout_str, _ = rr_timeout ans.ttl
           m_ok = add_mac4 client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
-          if nft_rule_id == "rule_11"
-            log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "mac4", key: client_mac, dest: ans.rdata_str, timeout: rr_timeout_str, ok: m_ok, corr: ack_corr }
           success_any or= m_ok
-
-          -- Also add to auth-only wildcard rules if user is authenticated
           if user and #auth_wildcard_rules > 0
-            for _, auth_rule_id in ipairs auth_wildcard_rules
-              auth_m_ok = add_mac4 client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
-              success_any or= auth_m_ok
+            success_any or= add_to_wildcard_rules add_mac4, client_mac, ans.rdata_str, rr_timeout_str, ack_corr
     elseif ans.rtype == QTYPE.AAAA
       -- Enregistrement AAAA : le client doit avoir une adresse IPv6
-      client_v6 or= if pkt.ip.version == 6
+      client_v6 or= if ip.version == 6
         client_ip
       else
         -- DNS transporté en IPv4 : résoudre l'IPv6 via mac_clients
@@ -432,30 +732,18 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
           records_to_add += 1
           rr_timeout_str, _ = rr_timeout ans.ttl
           ok = add_ip6 client_v6, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
-          if nft_rule_id == "rule_11"
-            log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "ip6", key: client_v6, dest: ans.rdata_str, timeout: rr_timeout_str, ok: ok, corr: ack_corr }
           ip_count += 1 if ok
           success_any or= ok
-
-          -- Also add to auth-only wildcard rules if user is authenticated
           if user and #auth_wildcard_rules > 0
-            for _, auth_rule_id in ipairs auth_wildcard_rules
-              auth_ok = add_ip6 client_v6, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
-              success_any or= auth_ok
+            success_any or= add_to_wildcard_rules add_ip6, client_v6, ans.rdata_str, rr_timeout_str, ack_corr
         else
           no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
         if mac_valid client_mac
           rr_timeout_str, _ = rr_timeout ans.ttl
           m_ok = add_mac6 client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
-          if nft_rule_id == "rule_11"
-            log_info { action: "nft_enqueue_rule", rule_id: nft_rule_id, kind: "mac6", key: client_mac, dest: ans.rdata_str, timeout: rr_timeout_str, ok: m_ok, corr: ack_corr }
           success_any or= m_ok
-
-          -- Also add to auth-only wildcard rules if user is authenticated
           if user and #auth_wildcard_rules > 0
-            for _, auth_rule_id in ipairs auth_wildcard_rules
-              auth_m_ok = add_mac6 client_mac, ans.rdata_str, auth_rule_id, rr_timeout_str, ack_corr
-              success_any or= auth_m_ok
+            success_any or= add_to_wildcard_rules add_mac6, client_mac, ans.rdata_str, rr_timeout_str, ack_corr
 
   -- Logguer les cas cross-family sans IP connue (groupés par réponse)
   if #no_ipv4_records > 0
@@ -474,22 +762,22 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   payload_modified = payload_modified or dns_modified
   patched = nil
   if payload_modified
-    patched = replace_dns_payload raw, pkt, new_dns
+    patched = replace_dns_payload raw, ip, l4, ip_ihl, new_dns
     return NF_DROP unless patched
 
   -- Log de la réponse
-  qnames = table.concat [q.qname for q in *pkt.questions], ","
+  qnames = table.concat [q.name for q in *dns_msg.questions], ","
   log_debug {
     action:      resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow")
-    src_ip:      pkt.ip.src_ip
-    dst_ip:      pkt.ip.dst_ip
+    src_ip:      src_ip
+    dst_ip:      dst_ip
     vlan:        l2.vlan
     txid:        string.format "0x%04x", txid
     qnames:      qnames
     answers:     ip_count
     nft_rule_id: nft_rule_id
     payload_modified: payload_modified
-    rcode:       pkt.dns.rcode
+    rcode:       dns_msg.header.rcode
     client_mac:  client_mac
     user:        user
   }
@@ -543,6 +831,5 @@ run = (queue_num, rfd, rules_metadata) ->
   -- mac_clients et ip_to_mac démarrent vides ; ils sont alimentés organiquement
   -- par les messages IPC reçus de question (update_mac_clients dans drain_on_msg).
   run_queue tonumber(queue_num), handle_response
-  cleanup!
 
 { :run, :rr_timeout, :patch_modified_dns }
