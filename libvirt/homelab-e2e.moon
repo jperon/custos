@@ -22,26 +22,26 @@
   }
 
   nft: {
-    family:   "bridge"
-    family6:  "bridge"
-    table:    "dns-filter-bridge"
-    set_ip4:  "ip4_allowed"
-    set_ip6:  "ip6_allowed"
-    set_mac4: "mac4_allowed"
-    set_mac6: "mac6_allowed"
-    ip_timeout: "2m"
+    family:        "bridge"
+    family6:       "bridge"
+    table:         "dns-filter-bridge"
+    set_ip4:       "ip4_allowed"
+    set_ip6:       "ip6_allowed"
+    set_mac4:      "mac4_allowed"
+    set_mac6:      "mac6_allowed"
+    ip_timeout:    "2m"
+    bridge_ifname: "br-lan"
   }
 
   auth: {
-    enabled:       true
-    port:          33443
-    redirect_url:  "https://custos.lan:33443/auth"
-    cert:          "/etc/custos/cert.pem"
-    key:           "/etc/custos/key.pem"
-    sessions_file: "/etc/custos/sessions.lua"
-    users: {
-      alice: "motdepasse123"
-    }
+    enabled:            true
+    port:               33443
+    redirect_url:       "https://10.42.0.254:33443/auth"
+    cert:               "/etc/custos/cert.pem"
+    key:                "/etc/custos/key.pem"
+    sessions_file:      "/etc/custos/sessions.lua"
+    idle_timeout:       10
+    heartbeat_interval: 3
   }
 
   filter: {
@@ -74,7 +74,7 @@
       }
 
       -- R3 : depuis homelab, autoriser tout SAUF blocked.lan (teste condition `not`)
-      --   • blocked.lan ne matche pas cette règle → tombe sur R5 default_deny
+      --   • blocked.lan ne matche pas → tombe sur R4 (from_users) puis R5 default_deny
       --   • tout autre domaine depuis homelab → allow
       {
         rule_id:     "homelab_not_blocked"
@@ -86,14 +86,20 @@
         }
       }
 
-      -- R4 : forcer l'authentification si pas de session active
+      -- R4 : homelab authentifié → blocked.lan accessible (teste from_users + sets auth nft)
+      --   • sans auth : from_users échoue → R5 default_deny → REFUSED
+      --   • avec auth : from_users réussit → allow → NOERROR
       {
-        rule_id:     "challenge_auth"
-        description: "Auth requise si pas de session"
-        actions:     {"challenge"}
+        rule_id:     "homelab_auth_blocked"
+        description: "Homelab authentifié : blocked.lan accessible"
+        actions:     {"allow"}
+        conditions:  {
+          from_users: "_any"
+          from_nets:  {"10.42.0.0/24", "fd42:42:0:1::/64"}
+          to_domain:  "blocked.lan"
+        }
       }
 
-      -- R5 : refus par défaut
       {
         rule_id:     "default_deny"
         description: "Refus par défaut"

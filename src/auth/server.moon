@@ -18,6 +18,7 @@ token = require "auth.token"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 config = require "config"
 { :read_request, :send_response } = require "lib.http"
+{ :user_qualifies_for_rule } = require "auth.rule_user"
 
 { :get_mac } = require "mac_learner_ipc"
 
@@ -277,55 +278,10 @@ rule_requires_auth = (rule) ->
         return true
   false
 
--- Check if a user qualifies for a rule (e.g., user is in from_users or from_userlists)
-user_qualifies_for_rule = (user, rule) ->
-  return false unless rule and rule.conditions
+-- Wrapper lisant userlists depuis la config live, délègue à auth.rule_user
+qualifies_for_rule = (user, rule) ->
   filter_cfg = config.filter or {}
-  userlists_cfg = filter_cfg.userlists or {}
-
-  -- Handle both formats: array of conditions (old) and table of conditions (new)
-  conditions = rule.conditions
-  -- If conditions is a table with numeric keys, it's an array (old format)
-  -- If conditions is a table with string keys, it's a table (new format with implicit AND)
-  is_array_format = type(conditions[1]) == "table"
-
-  if is_array_format
-    -- Old format: array of conditions
-    for _, cond in ipairs conditions
-      continue unless type(cond) == "table"
-      for k, v in pairs cond
-        if k == "from_users"
-          users_list = if type(v) == "table" then v else {v}
-          for _, allowed_user in ipairs users_list
-            if tostring(allowed_user) == tostring(user)
-              return true
-          return false
-        if k == "from_userlists"
-          list_names = if type(v) == "table" then v else {v}
-          for _, list_name in ipairs list_names
-            list_users = userlists_cfg[list_name] or {}
-            for _, allowed_user in ipairs list_users
-              if tostring(allowed_user) == tostring(user)
-                return true
-          return false
-  else
-    -- New format: table of conditions (implicit AND)
-    for k, v in pairs conditions
-      if k == "from_users"
-        users_list = if type(v) == "table" then v else {v}
-        for _, allowed_user in ipairs users_list
-          if tostring(allowed_user) == tostring(user)
-            return true
-        return false
-      if k == "from_userlists"
-        list_names = if type(v) == "table" then v else {v}
-        for _, list_name in ipairs list_names
-          list_users = userlists_cfg[list_name] or {}
-          for _, allowed_user in ipairs list_users
-            if tostring(allowed_user) == tostring(user)
-              return true
-        return false
-  true -- No from_users/from_userlists condition means anyone qualifies
+  user_qualifies_for_rule user, rule, filter_cfg.userlists or {}
 
 -- Refresh nft sets for authenticated user (called by ping and login)
 refresh_nft = (nft_sess, ip, mac, ttl, user) ->
@@ -339,7 +295,7 @@ refresh_nft = (nft_sess, ip, mac, ttl, user) ->
   for idx, rule in ipairs rules
     requires_auth = rule_requires_auth rule
     continue unless requires_auth
-    qualifies = user_qualifies_for_rule user, rule
+    qualifies = qualifies_for_rule user, rule
     continue unless qualifies
 
     -- Generate stable rule_id
@@ -413,7 +369,7 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   rules = filter_cfg.rules or {}
   for idx, rule in ipairs rules
     requires_auth = rule_requires_auth rule
-    qualifies = user_qualifies_for_rule user, rule
+    qualifies = qualifies_for_rule user, rule
     log_info -> { action: "server_rule_check", idx: idx, description: rule.description, requires_auth: requires_auth, qualifies: qualifies, user: user }
     continue unless requires_auth
     continue unless qualifies
@@ -460,6 +416,13 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
 
   sessions = load_sessions state.sessions_file
   purge_expired sessions
+
+  -- Rejeter si la session a été explicitement invalidée (logout).
+  -- Un token encore cryptographiquement valide ne doit pas recréer une session détruite.
+  if mac and mac ~= "unknown" and not sessions[mac\lower!]
+    log_info -> { action: "server_ping_session_invalidated", peer_ip: peer_ip, mac: mac }
+    return 401, {}, ""
+
   add_session sessions, mac, peer_ip, user, new_expires
   write_sessions sessions, state.sessions_file
 
@@ -489,7 +452,7 @@ handle_logout = (req, peer_ip, peer_mac, state) ->
     rules = filter_cfg.rules or {}
     for idx, rule in ipairs rules
       continue unless rule_requires_auth rule
-      continue unless user_qualifies_for_rule user, rule
+      continue unless qualifies_for_rule user, rule
       rule_id = generate_rule_id rule, idx
       ok, err = pcall ->
         state.nft_sess.run_nft "delete element bridge dns-filter-bridge #{rule_id}_auth_mac { #{mac} }", { quiet: true }

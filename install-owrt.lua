@@ -208,10 +208,13 @@ Installer = function(cfg)
         "libnetfilter-queue",
         "nftables",
         "kmod-nft-queue",
+        "kmod-nft-bridge",
         "lyaml",
         "luasec",
         "lpeg",
-        "libxxhash"
+        "libxxhash",
+        "libuhttpd-wolfssl",
+        "px5g"
       }
       local pkg_list = table.concat(pkgs_required, " ")
       local install_cmd

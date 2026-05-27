@@ -35,6 +35,8 @@ do
   local _obj_0 = require("lib.http")
   read_request, send_response = _obj_0.read_request, _obj_0.send_response
 end
+local user_qualifies_for_rule
+user_qualifies_for_rule = require("auth.rule_user").user_qualifies_for_rule
 local get_mac
 get_mac = require("mac_learner_ipc").get_mac
 ffi.cdef([[  typedef int pid_t;
@@ -290,106 +292,10 @@ rule_requires_auth = function(rule)
   end
   return false
 end
-local user_qualifies_for_rule
-user_qualifies_for_rule = function(user, rule)
-  if not (rule and rule.conditions) then
-    return false
-  end
+local qualifies_for_rule
+qualifies_for_rule = function(user, rule)
   local filter_cfg = config.filter or { }
-  local userlists_cfg = filter_cfg.userlists or { }
-  local conditions = rule.conditions
-  local is_array_format = type(conditions[1]) == "table"
-  if is_array_format then
-    for _, cond in ipairs(conditions) do
-      local _continue_0 = false
-      repeat
-        if not (type(cond) == "table") then
-          _continue_0 = true
-          break
-        end
-        for k, v in pairs(cond) do
-          if k == "from_users" then
-            local users_list
-            if type(v) == "table" then
-              users_list = v
-            else
-              users_list = {
-                v
-              }
-            end
-            for _, allowed_user in ipairs(users_list) do
-              if tostring(allowed_user) == tostring(user) then
-                return true
-              end
-            end
-            return false
-          end
-          if k == "from_userlists" then
-            local list_names
-            if type(v) == "table" then
-              list_names = v
-            else
-              list_names = {
-                v
-              }
-            end
-            for _, list_name in ipairs(list_names) do
-              local list_users = userlists_cfg[list_name] or { }
-              for _, allowed_user in ipairs(list_users) do
-                if tostring(allowed_user) == tostring(user) then
-                  return true
-                end
-              end
-            end
-            return false
-          end
-        end
-        _continue_0 = true
-      until true
-      if not _continue_0 then
-        break
-      end
-    end
-  else
-    for k, v in pairs(conditions) do
-      if k == "from_users" then
-        local users_list
-        if type(v) == "table" then
-          users_list = v
-        else
-          users_list = {
-            v
-          }
-        end
-        for _, allowed_user in ipairs(users_list) do
-          if tostring(allowed_user) == tostring(user) then
-            return true
-          end
-        end
-        return false
-      end
-      if k == "from_userlists" then
-        local list_names
-        if type(v) == "table" then
-          list_names = v
-        else
-          list_names = {
-            v
-          }
-        end
-        for _, list_name in ipairs(list_names) do
-          local list_users = userlists_cfg[list_name] or { }
-          for _, allowed_user in ipairs(list_users) do
-            if tostring(allowed_user) == tostring(user) then
-              return true
-            end
-          end
-        end
-        return false
-      end
-    end
-  end
-  return true
+  return user_qualifies_for_rule(user, rule, filter_cfg.userlists or { })
 end
 local refresh_nft
 refresh_nft = function(nft_sess, ip, mac, ttl, user)
@@ -412,7 +318,7 @@ refresh_nft = function(nft_sess, ip, mac, ttl, user)
         _continue_0 = true
         break
       end
-      local qualifies = user_qualifies_for_rule(user, rule)
+      local qualifies = qualifies_for_rule(user, rule)
       if not (qualifies) then
         _continue_0 = true
         break
@@ -561,7 +467,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
     local _continue_0 = false
     repeat
       local requires_auth = rule_requires_auth(rule)
-      local qualifies = user_qualifies_for_rule(user, rule)
+      local qualifies = qualifies_for_rule(user, rule)
       log_info(function()
         return {
           action = "server_rule_check",
@@ -678,6 +584,16 @@ handle_ping = function(req, peer_ip, peer_mac, state)
   local new_expires = now + idle_timeout
   local sessions = load_sessions(state.sessions_file)
   purge_expired(sessions)
+  if mac and mac ~= "unknown" and not sessions[mac:lower()] then
+    log_info(function()
+      return {
+        action = "server_ping_session_invalidated",
+        peer_ip = peer_ip,
+        mac = mac
+      }
+    end)
+    return 401, { }, ""
+  end
   add_session(sessions, mac, peer_ip, user, new_expires)
   write_sessions(sessions, state.sessions_file)
   refresh_nft(state.nft_sess, peer_ip, mac, idle_timeout, user)
@@ -719,7 +635,7 @@ handle_logout = function(req, peer_ip, peer_mac, state)
           _continue_0 = true
           break
         end
-        if not (user_qualifies_for_rule(user, rule)) then
+        if not (qualifies_for_rule(user, rule)) then
           _continue_0 = true
           break
         end

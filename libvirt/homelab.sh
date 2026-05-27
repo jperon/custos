@@ -218,6 +218,10 @@ cmd_start() {
         ssh $SSH_OPTS -i "$SSH_KEY" "root@$_ip" \
             'command -v dig >/dev/null || { apk update -q 2>/dev/null && apk add -q bind-dig 2>/dev/null; }' || true
     done
+    # curl requis sur servus pour les tests auth E2E (login/ping/logout via HTTPS).
+    local _ip_s; _ip_s=$(vm_ip servus)
+    ssh $SSH_OPTS -i "$SSH_KEY" "root@$_ip_s" \
+        'command -v curl >/dev/null || { apk update -q 2>/dev/null; apk add -q curl 2>/dev/null; }' || true
     log "homelab opérationnel."
     for vm in "${VMS[@]}"; do
         printf "  %-8s %s\n" "$vm" "$(vm_ip "$vm")"
@@ -360,11 +364,22 @@ cmd_test_e2e() {
             -subj "/CN=custos.lan" 2>/dev/null
         [ -f /etc/custos/sessions.lua ] || echo "{}" > /etc/custos/sessions.lua' || true
 
+    log "ajout IP data-plane 10.42.0.254 sur br-lan (permet à servus d'atteindre auth)..."
+    ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip_custos" \
+        'ip addr add 10.42.0.254/24 dev br-lan 2>/dev/null || true'
+
     log "déploiement config E2E sur custos..."
     scp -O $SSH_OPTS -i "$SSH_KEY" \
         "$SCRIPT_DIR/homelab-e2e.moon" "root@$ip_custos:/etc/custos/config.moon"
     ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip_custos" \
-        '/etc/init.d/custos restart 2>/dev/null; sleep 3'
+        '/etc/init.d/custos restart 2>/dev/null; sleep 4'
+
+    log "création de l'utilisateur alice pour les tests auth..."
+    curl -sk --max-time 10 \
+        -X POST \
+        --data-urlencode "user=alice@test.lan" \
+        --data-urlencode "password=motdepasse123" \
+        "https://$ip_custos:33443/register" >/dev/null || true
 
     log "exécution de la suite E2E..."
     export SSH_OPTS SSH_KEY PROJECT_DIR SCRIPT_DIR
@@ -374,6 +389,8 @@ cmd_test_e2e() {
     local rc=$?
 
     log "restauration config minimale (homelab-test.moon)..."
+    ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip_custos" \
+        'ip addr del 10.42.0.254/24 dev br-lan 2>/dev/null || true'
     scp -O $SSH_OPTS -i "$SSH_KEY" \
         "$SCRIPT_DIR/homelab-test.moon" "root@$ip_custos:/etc/custos/config.moon"
     ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip_custos" \
