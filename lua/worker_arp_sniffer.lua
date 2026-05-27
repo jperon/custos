@@ -106,11 +106,13 @@ open_socket = function(ifindex)
   mreq.mr_type = PACKET_MR_PROMISC
   mreq.mr_alen = 0
   if C.setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, mreq, ffi.sizeof(mreq)) ~= 0 then
-    log_debug({
-      action = "promisc_failed",
-      ifindex = ifindex,
-      errno = tonumber(ffi.C.__errno_location()[0])
-    })
+    log_debug(function()
+      return {
+        action = "promisc_failed",
+        ifindex = ifindex,
+        errno = tonumber(ffi.C.__errno_location()[0])
+      }
+    end)
   end
   return fd
 end
@@ -139,13 +141,15 @@ process_arp = function(raw, len, learn_wfd)
   end
   local msg = build_learn_msg(raw, 29, 4, mac_off)
   local ok = write_learn(learn_wfd, msg)
-  if ok then
-    return log_debug({
-      action = "arp_learned",
-      mac = fmt_mac(raw, mac_off),
-      ip = tostring(raw:byte(29)) .. "." .. tostring(raw:byte(30)) .. "." .. tostring(raw:byte(31)) .. "." .. tostring(raw:byte(32))
-    })
-  end
+  return log_debug(function()
+    if ok then
+      return {
+        action = "arp_learned",
+        mac = fmt_mac(raw, mac_off),
+        ip = tostring(raw:byte(29)) .. "." .. tostring(raw:byte(30)) .. "." .. tostring(raw:byte(31)) .. "." .. tostring(raw:byte(32))
+      }
+    end
+  end)
 end
 local process_ipv6
 process_ipv6 = function(raw, len, learn_wfd)
@@ -188,14 +192,16 @@ process_ipv6 = function(raw, len, learn_wfd)
     end
     local msg = build_learn_msg(raw, 23, 16, mac_src_off)
     local ok = write_learn(learn_wfd, msg)
-    if ok then
-      return log_debug({
-        action = "ndp_learned",
-        mac = fmt_mac(raw, mac_src_off),
-        ip = fmt_ipv6(raw, 23),
-        type = "NS"
-      })
-    end
+    return log_debug(function()
+      if ok then
+        return {
+          action = "ndp_learned",
+          mac = fmt_mac(raw, mac_src_off),
+          ip = fmt_ipv6(raw, 23),
+          type = "NS"
+        }
+      end
+    end)
   else
     if len < 78 then
       return 
@@ -215,27 +221,31 @@ process_ipv6 = function(raw, len, learn_wfd)
         msg[16 + i] = tlla_mac:byte(i + 1)
       end
       local ok = write_learn(learn_wfd, msg)
-      if ok then
-        return log_debug({
-          action = "ndp_learned",
-          mac = fmt_mac(tlla_mac, 1),
-          ip = fmt_ipv6(raw, target_off),
-          type = "NA",
-          tlla = true
-        })
-      end
+      return log_debug(function()
+        if ok then
+          return {
+            action = "ndp_learned",
+            mac = fmt_mac(tlla_mac, 1),
+            ip = fmt_ipv6(raw, target_off),
+            type = "NA",
+            tlla = true
+          }
+        end
+      end)
     else
       local msg = build_learn_msg(raw, target_off, 16, mac_src_off)
       local ok = write_learn(learn_wfd, msg)
-      if ok then
-        return log_debug({
-          action = "ndp_learned",
-          mac = fmt_mac(raw, mac_src_off),
-          ip = fmt_ipv6(raw, target_off),
-          type = "NA",
-          tlla = false
-        })
-      end
+      return log_debug(function()
+        if ok then
+          return {
+            action = "ndp_learned",
+            mac = fmt_mac(raw, mac_src_off),
+            ip = fmt_ipv6(raw, target_off),
+            type = "NA",
+            tlla = false
+          }
+        end
+      end)
     end
   end
 end
@@ -255,29 +265,35 @@ run = function(ifnames, learn_wfd)
       local ifindex = tonumber(C.if_nametoindex(ifname))
       if ifindex == 0 then
         local errno = tonumber(ffi.C.__errno_location()[0])
-        log_warn({
-          action = "ifindex_failed",
-          ifname = ifname,
-          errno = errno
-        })
+        log_warn(function()
+          return {
+            action = "ifindex_failed",
+            ifname = ifname,
+            errno = errno
+          }
+        end)
         _continue_0 = true
         break
       end
       local fd = open_socket(ifindex)
       if fd then
         table.insert(fds, fd)
-        log_debug({
-          action = "socket_open",
-          ifname = ifname,
-          ifindex = ifindex
-        })
+        log_debug(function()
+          return {
+            action = "socket_open",
+            ifname = ifname,
+            ifindex = ifindex
+          }
+        end)
       else
         local errno = tonumber(ffi.C.__errno_location()[0])
-        log_warn({
-          action = "socket_failed",
-          ifname = ifname,
-          errno = errno
-        })
+        log_warn(function()
+          return {
+            action = "socket_failed",
+            ifname = ifname,
+            errno = errno
+          }
+        end)
       end
       _continue_0 = true
     until true
@@ -286,17 +302,21 @@ run = function(ifnames, learn_wfd)
     end
   end
   if #fds == 0 then
-    log_warn({
-      action = "no_sockets",
-      interfaces = table.concat(ifnames, ",")
-    })
+    log_warn(function()
+      return {
+        action = "no_sockets",
+        interfaces = table.concat(ifnames, ",")
+      }
+    end)
     return 
   end
-  log_info({
-    action = "start",
-    interfaces = table.concat(ifnames, ","),
-    sockets = #fds
-  })
+  log_info(function()
+    return {
+      action = "start",
+      interfaces = table.concat(ifnames, ","),
+      sockets = #fds
+    }
+  end)
   local pfds = ffi.new("struct pollfd[?]", #fds)
   for i, fd in ipairs(fds) do
     pfds[i].fd = fd

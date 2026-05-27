@@ -1,10 +1,4 @@
 return describe("filter.nft_compiler", function()
-  -- Stub ipc.register_modifier pour dnsonly avant de charger filter.rule
-  package.loaded["ipc"] = {
-    register_modifier = function(name)
-      -- No-op pour les tests
-    end
-  }
   local compiler = require("filter.nft_compiler")
   local rule_mod = require("filter.rule")
   it("compile rule metadata for dns+time+subnet+proto/ports", function()

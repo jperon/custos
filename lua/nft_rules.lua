@@ -41,12 +41,14 @@ run_cmd = function(cmd, opts)
   if rc ~= 0 then
     local nft_err = get_error_buffer()
     if not (opts and opts.quiet) then
-      log_warn({
-        action = "nft_cmd_failed",
-        cmd = cmd,
-        rc = rc,
-        nft_err = nft_err or ""
-      })
+      log_warn(function()
+        return {
+          action = "nft_cmd_failed",
+          cmd = cmd,
+          rc = rc,
+          nft_err = nft_err or ""
+        }
+      end)
     end
     return false, nft_err
   end
@@ -150,15 +152,19 @@ create_filter_rule_sets = function(plan)
   end
   local commands = nft_dynamic_sets.generate_set_creation_commands(plan)
   if #commands == 0 then
-    log_debug({
-      action = "no_rule_sets_to_create"
-    })
+    log_debug(function()
+      return {
+        action = "no_rule_sets_to_create"
+      }
+    end)
     return true
   end
-  log_info({
-    action = "creating_per_rule_nft_sets",
-    count = #commands
-  })
+  log_info(function()
+    return {
+      action = "creating_per_rule_nft_sets",
+      count = #commands
+    }
+  end)
   local all_ok = true
   for _, cmd in ipairs(commands) do
     local ok, err = run_cmd(cmd, {
@@ -166,16 +172,20 @@ create_filter_rule_sets = function(plan)
     })
     if not (ok) then
       if err and err:find("already exists") then
-        log_debug({
-          action = "set_already_exists",
-          cmd = cmd
-        })
+        log_debug(function()
+          return {
+            action = "set_already_exists",
+            cmd = cmd
+          }
+        end)
       else
-        log_warn({
-          action = "set_creation_failed",
-          cmd = cmd,
-          err = err or ""
-        })
+        log_warn(function()
+          return {
+            action = "set_creation_failed",
+            cmd = cmd,
+            err = err or ""
+          }
+        end)
         all_ok = false
       end
     end
@@ -187,11 +197,13 @@ apply = function()
   local path = nft_file_path()
   local fh, err = io.open(path, "r")
   if not (fh) then
-    log_warn({
-      action = "nft_rules_file_missing",
-      path = path,
-      err = err
-    })
+    log_warn(function()
+      return {
+        action = "nft_rules_file_missing",
+        path = path,
+        err = err
+      }
+    end)
     return false
   end
   local content = fh:read("*a")
@@ -201,14 +213,16 @@ apply = function()
   rules_metadata = compiled_rules.rules_metadata
   local plan = compile_filter_rules(cfg.filter, rules_metadata)
   if plan and plan.metrics then
-    log_info({
-      action = "nft_compile_metrics",
-      total_rules = plan.metrics.total_rules,
-      nft_compilable = plan.metrics.nft_compilable,
-      worker_only = plan.metrics.worker_only,
-      conditions_compiled = plan.metrics.conditions_compiled,
-      conditions_worker_only = plan.metrics.conditions_worker_only
-    })
+    log_info(function()
+      return {
+        action = "nft_compile_metrics",
+        total_rules = plan.metrics.total_rules,
+        nft_compilable = plan.metrics.nft_compilable,
+        worker_only = plan.metrics.worker_only,
+        conditions_compiled = plan.metrics.conditions_compiled,
+        conditions_worker_only = plan.metrics.conditions_worker_only
+      }
+    end)
   end
   content = substitute(content, plan)
   local tmpdir = "./tmp"
@@ -216,11 +230,13 @@ apply = function()
   local tmpfile = tostring(tmpdir) .. "/custos-rules-" .. tostring(os.time()) .. ".nft"
   local tmpfh, tmp_err = io.open(tmpfile, "w")
   if not (tmpfh) then
-    log_warn({
-      action = "nft_rules_tempfile_failed",
-      path = tmpfile,
-      err = tmp_err
-    })
+    log_warn(function()
+      return {
+        action = "nft_rules_tempfile_failed",
+        path = tmpfile,
+        err = tmp_err
+      }
+    end)
     return false
   end
   tmpfh:write(content)
@@ -236,28 +252,36 @@ apply = function()
   os.remove(tmpfile)
   os.remove(errfile)
   if rc ~= 0 then
-    log_warn({
-      action = "nft_rules_apply_failed",
-      path = path,
-      rc = rc,
-      err = errtxt
-    })
+    log_warn(function()
+      return {
+        action = "nft_rules_apply_failed",
+        path = path,
+        rc = rc,
+        err = errtxt
+      }
+    end)
     return false
   end
-  log_info({
-    action = "nft_rules_template_applied",
-    path = path
-  })
+  log_info(function()
+    return {
+      action = "nft_rules_template_applied",
+      path = path
+    }
+  end)
   if not (create_filter_rule_sets(plan)) then
-    log_warn({
-      action = "nft_rules_sets_creation_failed"
-    })
+    log_warn(function()
+      return {
+        action = "nft_rules_sets_creation_failed"
+      }
+    end)
     return false
   end
-  log_info({
-    action = "nft_rules_applied",
-    path = path
-  })
+  log_info(function()
+    return {
+      action = "nft_rules_applied",
+      path = path
+    }
+  end)
   return true
 end
 return {

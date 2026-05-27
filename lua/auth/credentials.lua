@@ -100,15 +100,19 @@ do
   local ok_log, log = pcall(require, "log")
   if ok_log and log and log.log_info then
     if wolfssl_pbkdf2 then
-      log.log_info({
-        action = "pbkdf2_backend",
-        backend = "wolfssl"
-      })
+      log.log_info(function()
+        return {
+          action = "pbkdf2_backend",
+          backend = "wolfssl"
+        }
+      end)
     else
-      log.log_info({
-        action = "pbkdf2_backend",
-        backend = "lua_pure"
-      })
+      log.log_info(function()
+        return {
+          action = "pbkdf2_backend",
+          backend = "lua_pure"
+        }
+      end)
     end
   end
 end

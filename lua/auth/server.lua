@@ -437,13 +437,15 @@ refresh_nft = function(nft_sess, ip, mac, ttl, user)
         end
       end)
       if not (ok) then
-        log_warn({
-          action = "auth_set_add_failed",
-          rule_id = rule_id,
-          mac = mac,
-          ip = ip,
-          err = tostring(err)
-        })
+        log_warn(function()
+          return {
+            action = "auth_set_add_failed",
+            rule_id = rule_id,
+            mac = mac,
+            ip = ip,
+            err = tostring(err)
+          }
+        end)
       end
       _continue_0 = true
     until true
@@ -471,71 +473,87 @@ handle_login = function(req, peer_ip, peer_mac, state)
   if needs_rehash and state.secrets_path then
     local rh_ok, rh_err = update_user_hash(user, pass, state.secrets_path)
     if rh_ok then
-      log_info({
-        action = "credentials_rehashed",
-        user = user
-      })
+      log_info(function()
+        return {
+          action = "credentials_rehashed",
+          user = user
+        }
+      end)
     else
-      log_warn({
-        action = "credentials_rehash_failed",
-        user = user,
-        err = tostring(rh_err)
-      })
+      log_warn(function()
+        return {
+          action = "credentials_rehash_failed",
+          user = user,
+          err = tostring(rh_err)
+        }
+      end)
     end
   end
   local sessions = load_sessions(state.sessions_file)
   purge_expired(sessions)
   local mac = peer_mac
   if not (mac and mac ~= "unknown") then
-    log_warn({
-      action = "server_login_mac_missing",
-      ip = peer_ip,
-      mac = mac
-    })
+    log_warn(function()
+      return {
+        action = "server_login_mac_missing",
+        ip = peer_ip,
+        mac = mac
+      }
+    end)
     return 401, { }, "Unable to identify client MAC (IP: " .. tostring(peer_ip) .. ")"
   end
-  log_info({
-    action = "server_login_success",
-    user = user,
-    mac = mac,
-    ip = peer_ip
-  })
+  log_info(function()
+    return {
+      action = "server_login_success",
+      user = user,
+      mac = mac,
+      ip = peer_ip
+    }
+  end)
   local idle_timeout = state.auth_cfg.idle_timeout or 120
   local now = os.time()
   add_session(sessions, mac, peer_ip, user, now + idle_timeout)
   local err
   ok, err = write_sessions(sessions, state.sessions_file)
   if not (ok) then
-    log_warn({
-      action = "server_sessions_write_failed",
-      path = state.sessions_file,
-      err = err
-    })
+    log_warn(function()
+      return {
+        action = "server_sessions_write_failed",
+        path = state.sessions_file,
+        err = err
+      }
+    end)
     return 500, { }, "Session persistence failed"
   end
-  log_info({
-    action = "server_sessions_write_success",
-    path = state.sessions_file,
-    mac = mac
-  })
+  log_info(function()
+    return {
+      action = "server_sessions_write_success",
+      path = state.sessions_file,
+      mac = mac
+    }
+  end)
   if state.nft_sess then
     ok, err = pcall(function()
       return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
     end)
     if not (ok) then
-      log_warn({
-        action = "server_nft_refresh_failed",
-        peer = peer_ip,
-        mac = mac,
-        err = tostring(err)
-      })
+      log_warn(function()
+        return {
+          action = "server_nft_refresh_failed",
+          peer = peer_ip,
+          mac = mac,
+          err = tostring(err)
+        }
+      end)
     end
   else
-    log_warn({
-      action = "server_nft_sess_missing",
-      peer = peer_ip,
-      mac = mac
-    })
+    log_warn(function()
+      return {
+        action = "server_nft_sess_missing",
+        peer = peer_ip,
+        mac = mac
+      }
+    end)
   end
   local filter_cfg = config.filter or { }
   local rules = filter_cfg.rules or { }
@@ -544,14 +562,16 @@ handle_login = function(req, peer_ip, peer_mac, state)
     repeat
       local requires_auth = rule_requires_auth(rule)
       local qualifies = user_qualifies_for_rule(user, rule)
-      log_info({
-        action = "server_rule_check",
-        idx = idx,
-        description = rule.description,
-        requires_auth = requires_auth,
-        qualifies = qualifies,
-        user = user
-      })
+      log_info(function()
+        return {
+          action = "server_rule_check",
+          idx = idx,
+          description = rule.description,
+          requires_auth = requires_auth,
+          qualifies = qualifies,
+          user = user
+        }
+      end)
       if not (requires_auth) then
         _continue_0 = true
         break
@@ -561,52 +581,62 @@ handle_login = function(req, peer_ip, peer_mac, state)
         break
       end
       rule_id = generate_rule_id(rule, idx)
-      log_info({
-        action = "server_rule_id_generated",
-        rule_id = rule_id,
-        description = rule.description
-      })
+      log_info(function()
+        return {
+          action = "server_rule_id_generated",
+          rule_id = rule_id,
+          description = rule.description
+        }
+      end)
       ok, err = pcall(function()
         if state.nft_sess then
           state.nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
             quiet = true
           })
-          log_info({
-            action = "server_auth_set_add_mac",
-            rule_id = rule_id,
-            mac = mac
-          })
+          log_info(function()
+            return {
+              action = "server_auth_set_add_mac",
+              rule_id = rule_id,
+              mac = mac
+            }
+          end)
           if peer_ip and peer_ip ~= "unknown" then
             if peer_ip:find(":") then
               state.nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(peer_ip) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
                 quiet = true
               })
-              return log_info({
-                action = "server_auth_set_add_ip6",
-                rule_id = rule_id,
-                ip = peer_ip
-              })
+              return log_info(function()
+                return {
+                  action = "server_auth_set_add_ip6",
+                  rule_id = rule_id,
+                  ip = peer_ip
+                }
+              end)
             else
               state.nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(peer_ip) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
                 quiet = true
               })
-              return log_info({
-                action = "server_auth_set_add_ip4",
-                rule_id = rule_id,
-                ip = peer_ip
-              })
+              return log_info(function()
+                return {
+                  action = "server_auth_set_add_ip4",
+                  rule_id = rule_id,
+                  ip = peer_ip
+                }
+              end)
             end
           end
         end
       end)
       if not (ok) then
-        log_warn({
-          action = "server_auth_set_add_failed",
-          rule_id = rule_id,
-          mac = mac,
-          ip = peer_ip,
-          err = tostring(err)
-        })
+        log_warn(function()
+          return {
+            action = "server_auth_set_add_failed",
+            rule_id = rule_id,
+            mac = mac,
+            ip = peer_ip,
+            err = tostring(err)
+          }
+        end)
       end
       _continue_0 = true
     until true
@@ -622,19 +652,23 @@ handle_login = function(req, peer_ip, peer_mac, state)
 end
 local handle_ping
 handle_ping = function(req, peer_ip, peer_mac, state)
-  log_info({
-    action = "server_ping_received",
-    peer_ip = peer_ip,
-    peer_mac = peer_mac
-  })
+  log_info(function()
+    return {
+      action = "server_ping_received",
+      peer_ip = peer_ip,
+      peer_mac = peer_mac
+    }
+  end)
   local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)
   local p, tok_err = token.verify(cookie_val, state.token_key)
   if not (p) then
-    log_info({
-      action = "server_ping_token_invalid",
-      peer_ip = peer_ip,
-      err = tok_err
-    })
+    log_info(function()
+      return {
+        action = "server_ping_token_invalid",
+        peer_ip = peer_ip,
+        err = tok_err
+      }
+    end)
     return 401, { }, ""
   end
   local user = p.user
@@ -648,10 +682,12 @@ handle_ping = function(req, peer_ip, peer_mac, state)
   write_sessions(sessions, state.sessions_file)
   refresh_nft(state.nft_sess, peer_ip, mac, idle_timeout, user)
   local new_tok = token.generate("user", user, mac, new_expires, state.token_key)
-  log_info({
-    action = "server_ping_success",
-    peer_mac = mac
-  })
+  log_info(function()
+    return {
+      action = "server_ping_success",
+      peer_mac = mac
+    }
+  end)
   return 204, {
     ["Set-Cookie"] = make_session_cookie(new_tok)
   }, ""
@@ -704,15 +740,17 @@ handle_logout = function(req, peer_ip, peer_mac, state)
             end
           end
         end)
-        if not (ok) then
-          log_warn({
-            action = "server_auth_set_delete_failed",
-            rule_id = rule_id,
-            mac = mac,
-            ip = peer_ip,
-            err = tostring(err)
-          })
-        end
+        log_warn(function()
+          if not (ok) then
+            return {
+              action = "server_auth_set_delete_failed",
+              rule_id = rule_id,
+              mac = mac,
+              ip = peer_ip,
+              err = tostring(err)
+            }
+          end
+        end)
         _continue_0 = true
       until true
       if not _continue_0 then
@@ -742,10 +780,12 @@ handle_register = function(req, peer_ip, peer_mac, state)
   end
   state.secrets = new_secrets
   if not signal_parent_reload() then
-    log_warn({
-      action = "server_reload_signal_failed",
-      parent_pid = tonumber(ffi.C.getppid())
-    })
+    log_warn(function()
+      return {
+        action = "server_reload_signal_failed",
+        parent_pid = tonumber(ffi.C.getppid())
+      }
+    end)
   end
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
@@ -753,13 +793,15 @@ handle_register = function(req, peer_ip, peer_mac, state)
 end
 local handle_request
 handle_request = function(req, peer_ip, peer_mac, state)
-  log_info({
-    action = "server_request_received",
-    path = req.path,
-    method = req.method,
-    peer_ip = peer_ip,
-    peer_mac = peer_mac
-  })
+  log_info(function()
+    return {
+      action = "server_request_received",
+      path = req.path,
+      method = req.method,
+      peer_ip = peer_ip,
+      peer_mac = peer_mac
+    }
+  end)
   if req.path == "/" and req.method == "GET" then
     return 200, {
       ["Content-Type"] = "text/html; charset=UTF-8"
@@ -769,11 +811,13 @@ handle_request = function(req, peer_ip, peer_mac, state)
       ["Content-Type"] = "text/css"
     }, css_content
   elseif req.path == "/login" and req.method == "POST" then
-    log_info({
-      action = "server_routing_to_handle_login",
-      path = req.path,
-      method = req.method
-    })
+    log_info(function()
+      return {
+        action = "server_routing_to_handle_login",
+        path = req.path,
+        method = req.method
+      }
+    end)
     return handle_login(req, peer_ip, peer_mac, state)
   elseif req.path == "/ping" and req.method == "GET" then
     return handle_ping(req, peer_ip, peer_mac, state)
@@ -800,44 +844,56 @@ handle_client = function(args)
   local state = args.state
   local peer_ip = args.peer_ip or "unknown"
   local ok, err = pcall(function()
-    log_debug({
-      action = "server_handle_client_start",
-      peer = peer_ip,
-      fd = client.fd
-    })
+    log_debug(function()
+      return {
+        action = "server_handle_client_start",
+        peer = peer_ip,
+        fd = client.fd
+      }
+    end)
     local local_ip = client:getsockname()
     if not (local_ip) then
       local errno = tonumber(ffi.C.__errno_location()[0])
-      log_warn({
-        action = "server_getsockname_failed",
-        peer = peer_ip,
-        errno = errno
-      })
+      log_warn(function()
+        return {
+          action = "server_getsockname_failed",
+          peer = peer_ip,
+          errno = errno
+        }
+      end)
       local_ip = "custos"
     end
-    log_debug({
-      action = "server_local_ip_detected",
-      local_ip = local_ip
-    })
+    log_debug(function()
+      return {
+        action = "server_local_ip_detected",
+        local_ip = local_ip
+      }
+    end)
     local tls_ctx = nil
     if state.static_cert_paths then
-      log_debug({
-        action = "server_loading_static_cert_child",
-        cert = state.static_cert_paths.cert,
-        key = state.static_cert_paths.key
-      })
+      log_debug(function()
+        return {
+          action = "server_loading_static_cert_child",
+          cert = state.static_cert_paths.cert,
+          key = state.static_cert_paths.key
+        }
+      end)
       local ctx
       ctx, err = load_static(state.static_cert_paths.key, state.static_cert_paths.cert)
       if ctx then
         tls_ctx = ctx
-        log_debug({
-          action = "server_using_static_cert"
-        })
+        log_debug(function()
+          return {
+            action = "server_using_static_cert"
+          }
+        end)
       else
-        log_error({
-          action = "server_static_cert_load_child_failed",
-          err = err
-        })
+        log_error(function()
+          return {
+            action = "server_static_cert_load_child_failed",
+            err = err
+          }
+        end)
         error("Cannot load static certificate in child: " .. tostring(err))
       end
     else
@@ -845,100 +901,132 @@ handle_client = function(args)
         tls_ctx = load_or_generate_sni(local_ip, state.cert_cache)
       end)
       if not (tls_ctx_ok) then
-        log_error({
-          action = "server_cert_generation_failed",
-          local_ip = local_ip,
-          err = tls_ctx_err
-        })
+        log_error(function()
+          return {
+            action = "server_cert_generation_failed",
+            local_ip = local_ip,
+            err = tls_ctx_err
+          }
+        end)
         error("Cannot generate certificate: " .. tostring(tls_ctx_err))
       end
     end
     if not (tls_ctx) then
-      log_error({
-        action = "server_cert_null",
-        local_ip = local_ip
-      })
+      log_error(function()
+        return {
+          action = "server_cert_null",
+          local_ip = local_ip
+        }
+      end)
       error("Certificate context is nil")
     end
-    log_debug({
-      action = "server_cert_loaded",
-      local_ip = local_ip
-    })
-    log_debug({
-      action = "server_set_blocking_mode"
-    })
+    log_debug(function()
+      return {
+        action = "server_cert_loaded",
+        local_ip = local_ip
+      }
+    end)
+    log_debug(function()
+      return {
+        action = "server_set_blocking_mode"
+      }
+    end)
     client:settimeout(nil)
-    log_debug({
-      action = "server_blocking_mode_set"
-    })
-    log_debug({
-      action = "server_ssl_wrap_start"
-    })
+    log_debug(function()
+      return {
+        action = "server_blocking_mode_set"
+      }
+    end)
+    log_debug(function()
+      return {
+        action = "server_ssl_wrap_start"
+      }
+    end)
     local tls_client, tls_err = ssl.wrap(client, tls_ctx)
-    log_debug({
-      action = "server_ssl_wrap_done"
-    })
+    log_debug(function()
+      return {
+        action = "server_ssl_wrap_done"
+      }
+    end)
     if not (tls_client) then
-      log_warn({
-        action = "server_tls_wrap_failed",
-        peer = peer_ip,
-        err = tls_err
-      })
+      log_warn(function()
+        return {
+          action = "server_tls_wrap_failed",
+          peer = peer_ip,
+          err = tls_err
+        }
+      end)
       client:close()
       return 
     end
-    log_debug({
-      action = "server_dohandshake_start"
-    })
+    log_debug(function()
+      return {
+        action = "server_dohandshake_start"
+      }
+    end)
     local handshake_complete = false
     local handshake_attempts = 0
     while not handshake_complete and handshake_attempts < 50 do
       handshake_attempts = handshake_attempts + 1
-      log_debug({
-        action = "server_handshake_attempt",
-        attempt = handshake_attempts
-      })
+      log_debug(function()
+        return {
+          action = "server_handshake_attempt",
+          attempt = handshake_attempts
+        }
+      end)
       local ok_hs, hs_err = tls_client:dohandshake()
-      log_debug({
-        action = "server_dohandshake_returned",
-        ok = ok_hs
-      })
+      log_debug(function()
+        return {
+          action = "server_dohandshake_returned",
+          ok = ok_hs
+        }
+      end)
       if ok_hs then
-        log_debug({
-          action = "server_handshake_complete"
-        })
+        log_debug(function()
+          return {
+            action = "server_handshake_complete"
+          }
+        end)
         handshake_complete = true
       end
     end
     if not (handshake_complete) then
       if hs_err == "peer_closed" then
-        log_warn({
-          action = "server_tls_handshake_peer_closed",
-          peer = peer_ip,
-          attempts = handshake_attempts
-        })
+        log_warn(function()
+          return {
+            action = "server_tls_handshake_peer_closed",
+            peer = peer_ip,
+            attempts = handshake_attempts
+          }
+        end)
       else
-        log_warn({
-          action = "server_tls_handshake_failed",
-          peer = peer_ip,
-          attempts = handshake_attempts,
-          err = hs_err or "max attempts reached"
-        })
+        log_warn(function()
+          return {
+            action = "server_tls_handshake_failed",
+            peer = peer_ip,
+            attempts = handshake_attempts,
+            err = hs_err or "max attempts reached"
+          }
+        end)
       end
       tls_client:close()
       return 
     end
-    log_debug({
-      action = "server_set_http_timeout"
-    })
+    log_debug(function()
+      return {
+        action = "server_set_http_timeout"
+      }
+    end)
     local peer_mac = get_mac(peer_ip)
     local req, req_err = read_request(tls_client)
     if not (req) then
-      log_warn({
-        action = "server_request_read_failed",
-        peer = peer_ip,
-        err = req_err
-      })
+      log_warn(function()
+        return {
+          action = "server_request_read_failed",
+          peer = peer_ip,
+          err = req_err
+        }
+      end)
       tls_client:close()
       return 
     end
@@ -947,11 +1035,13 @@ handle_client = function(args)
     return tls_client:close()
   end)
   if not (ok) then
-    log_error({
-      action = "server_client_failed",
-      peer = peer_ip,
-      err = tostring(err)
-    })
+    log_error(function()
+      return {
+        action = "server_client_failed",
+        peer = peer_ip,
+        err = tostring(err)
+      }
+    end)
     return pcall(function()
       return client:close()
     end)
@@ -999,52 +1089,68 @@ local run
 run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
   local port = auth_cfg.port or 33443
   local sessions_file = auth_cfg.sessions_file or config.auth.sessions_file
-  log_debug({
-    action = "server_startup",
-    port = port
-  })
-  log_debug({
-    action = "server_auth_cfg_received",
-    cert = auth_cfg.cert,
-    key = auth_cfg.key
-  })
-  log_debug({
-    action = "server_cert_cache_init"
-  })
+  log_debug(function()
+    return {
+      action = "server_startup",
+      port = port
+    }
+  end)
+  log_debug(function()
+    return {
+      action = "server_auth_cfg_received",
+      cert = auth_cfg.cert,
+      key = auth_cfg.key
+    }
+  end)
+  log_debug(function()
+    return {
+      action = "server_cert_cache_init"
+    }
+  end)
   local cert_cache_module = require("auth.cert_cache")
   local cert_cache = cert_cache_module.create_cache(500, 7776000)
   local static_tls_ctx = nil
   if auth_cfg.cert and auth_cfg.key then
-    log_info({
-      action = "server_loading_static_cert",
-      cert = auth_cfg.cert,
-      key = auth_cfg.key
-    })
+    log_info(function()
+      return {
+        action = "server_loading_static_cert",
+        cert = auth_cfg.cert,
+        key = auth_cfg.key
+      }
+    end)
     local ok, ctx = load_static(auth_cfg.key, auth_cfg.cert)
     if ok then
       static_tls_ctx = ctx
-      log_info({
-        action = "server_static_cert_loaded",
-        cert = auth_cfg.cert,
-        key = auth_cfg.key
-      })
+      log_info(function()
+        return {
+          action = "server_static_cert_loaded",
+          cert = auth_cfg.cert,
+          key = auth_cfg.key
+        }
+      end)
     else
-      log_warn({
-        action = "server_static_cert_failed",
-        cert = auth_cfg.cert,
-        key = auth_cfg.key,
-        err = ctx
-      })
+      log_warn(function()
+        return {
+          action = "server_static_cert_failed",
+          cert = auth_cfg.cert,
+          key = auth_cfg.key,
+          err = ctx
+        }
+      end)
     end
   else
-    log_debug({
-      action = "server_no_static_cert_configured"
-    })
+    log_debug(function()
+      return {
+        action = "server_no_static_cert_configured"
+      }
+    end)
   end
   local token_key = token.load_key(auth_cfg.session_key or "/etc/custos/session.key")
-  log_info({
-    action = "server_session_key_loaded"
-  })
+  log_info(function()
+    return {
+      action = "server_session_key_loaded"
+    }
+  end)
   local listen4, err4 = make_server4(port)
   if not (listen4) then
     error("Impossible de démarrer le serveur IPv4 sur port " .. tostring(port) .. " : " .. tostring(err4))
@@ -1080,20 +1186,22 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     end)(),
     cert_cache = cert_cache
   }
-  log_info({
-    action = "server_listening",
-    port = port,
-    ipv4 = "0.0.0.0",
-    ipv6 = listen6 and "::" or nil,
-    sessions_file = sessions_file,
-    cert_cache = (function()
-      if auth_cfg.cert and auth_cfg.key then
-        return "static cert + dynamic SNI cache"
-      else
-        return "dynamic SNI cache (500 slots, 90d TTL)"
-      end
-    end)()
-  })
+  log_info(function()
+    return {
+      action = "server_listening",
+      port = port,
+      ipv4 = "0.0.0.0",
+      ipv6 = listen6 and "::" or nil,
+      sessions_file = sessions_file,
+      cert_cache = (function()
+        if auth_cfg.cert and auth_cfg.key then
+          return "static cert + dynamic SNI cache"
+        else
+          return "dynamic SNI cache (500 slots, 90d TTL)"
+        end
+      end)()
+    }
+  end)
   while true do
     reload_secrets_if_needed(state)
     while true do
@@ -1106,27 +1214,37 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     if readable then
       for _index_0 = 1, #readable do
         local srv = readable[_index_0]
-        log_debug({
-          action = "server_socket_select_readable"
-        })
+        log_debug(function()
+          return {
+            action = "server_socket_select_readable"
+          }
+        end)
         local client = srv:accept()
-        log_debug({
-          action = "server_accept_returned"
-        })
+        log_debug(function()
+          return {
+            action = "server_accept_returned"
+          }
+        end)
         if client then
-          log_debug({
-            action = "server_got_client"
-          })
+          log_debug(function()
+            return {
+              action = "server_got_client"
+            }
+          end)
           local peer_ip = client:getpeername() or "unknown"
-          log_debug({
-            action = "server_getpeername_result",
-            peer = peer_ip
-          })
-          log_debug({
-            action = "server_fork_child_start",
-            peer = peer_ip,
-            fd = client.fd
-          })
+          log_debug(function()
+            return {
+              action = "server_getpeername_result",
+              peer = peer_ip
+            }
+          end)
+          log_debug(function()
+            return {
+              action = "server_fork_child_start",
+              peer = peer_ip,
+              fd = client.fd
+            }
+          end)
           local pid = fork_child("AUTH-conn", handle_client, {
             client = client,
             peer_ip = peer_ip,
@@ -1134,15 +1252,19 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
           }, {
             log_start = false
           })
-          log_debug({
-            action = "server_fork_child_done",
-            pid = pid
-          })
-          log_info({
-            action = "server_conn_started",
-            pid = pid,
-            peer = peer_ip
-          })
+          log_debug(function()
+            return {
+              action = "server_fork_child_done",
+              pid = pid
+            }
+          end)
+          log_info(function()
+            return {
+              action = "server_conn_started",
+              pid = pid,
+              peer = peer_ip
+            }
+          end)
           client:close()
         end
       end

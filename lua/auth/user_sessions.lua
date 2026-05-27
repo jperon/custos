@@ -25,13 +25,15 @@ add_session = function(username, src_ip, mac)
     expires = now + _session_timeout
   }
   if log_debug then
-    log_debug({
-      action = "user_session_added",
-      username = username_lower,
-      src_ip = src_ip,
-      mac = mac,
-      expires_in_s = _session_timeout
-    })
+    log_debug(function()
+      return {
+        action = "user_session_added",
+        username = username_lower,
+        src_ip = src_ip,
+        mac = mac,
+        expires_in_s = _session_timeout
+      }
+    end)
   end
   return true
 end
@@ -49,10 +51,12 @@ get_session = function(username)
   if session.expires and now > session.expires then
     _sessions[username_lower] = nil
     if log_debug then
-      log_debug({
-        action = "user_session_expired",
-        username = username_lower
-      })
+      log_debug(function()
+        return {
+          action = "user_session_expired",
+          username = username_lower
+        }
+      end)
     end
     return nil
   end
@@ -81,11 +85,13 @@ refresh_session = function(username)
   local now = os.time()
   session.expires = now + _session_timeout
   if log_debug then
-    log_debug({
-      action = "user_session_refreshed",
-      username = username:lower(),
-      expires_in_s = _session_timeout
-    })
+    log_debug(function()
+      return {
+        action = "user_session_refreshed",
+        username = username:lower(),
+        expires_in_s = _session_timeout
+      }
+    end)
   end
   return true
 end
@@ -98,10 +104,12 @@ remove_session = function(username)
   if _sessions[username_lower] then
     _sessions[username_lower] = nil
     if log_debug then
-      log_debug({
-        action = "user_session_removed",
-        username = username_lower
-      })
+      log_debug(function()
+        return {
+          action = "user_session_removed",
+          username = username_lower
+        }
+      end)
     end
     return true
   end
@@ -131,10 +139,12 @@ cleanup_expired = function()
     end
   end
   if count > 0 and log_debug then
-    log_debug({
-      action = "user_session_cleanup",
-      removed_count = count
-    })
+    log_debug(function()
+      return {
+        action = "user_session_cleanup",
+        removed_count = count
+      }
+    end)
   end
   return count
 end

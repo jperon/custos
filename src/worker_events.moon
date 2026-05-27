@@ -126,7 +126,7 @@ flush_to_file = (agg, hour, events_dir) ->
   fd = libc.open path, bit.bor(O_WRONLY, O_CREAT, O_APPEND), FILE_MODE
   if fd < 0
     errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn { action: "open_failed", path: path, errno: errno }
+    log_warn -> { action: "open_failed", path: path, errno: errno }
     return
 
   for key, entry in pairs agg
@@ -202,7 +202,7 @@ cleanup_old = (events_dir, max_age_hours, min_free_pct) ->
     age   = file_age_hours fname
     if age and age > max_age_hours
       os.remove path
-      log_info { action: "events_cleanup_age", file: fname, age_h: math.floor age }
+      log_info -> { action: "events_cleanup_age", file: fname, age_h: math.floor age }
 
   -- Étape 2 : suppression par espace libre (recharge la liste après étape 1)
   free = free_pct_on events_dir
@@ -219,7 +219,7 @@ cleanup_old = (events_dir, max_age_hours, min_free_pct) ->
     break unless free and free < min_free_pct
     fname = path\match "([^/]+)$"
     os.remove path
-    log_info { action: "events_cleanup_space", file: fname, free_pct: free }
+    log_info -> { action: "events_cleanup_space", file: fname, free_pct: free }
 
 --- Boucle principale du worker d'agrégation d'événements DNS.
 -- Reçoit des lignes TSV via events_rfd, les agrège par heure,
@@ -250,7 +250,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
   siginfo = ffi.new "signalfd_siginfo"
   sig_sz  = ffi.sizeof "signalfd_siginfo"
 
-  log_info { action: "start", events_dir: events_dir, hour: hour,
+  log_info -> { action: "start", events_dir: events_dir, hour: hour,
              max_age_hours: max_age_hours, min_free_pct: min_free_pct }
 
   -- Purge initiale au démarrage (utile si events_dir est sur stockage persistant)
@@ -263,7 +263,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
     if bit.band(pfds[1].revents, POLLIN) ~= 0
       libc.read sfd, siginfo, sig_sz
       if siginfo.ssi_signo == SIGTERM
-        log_info { action: "sigterm", hour: hour }
+        log_info -> { action: "sigterm", hour: hour }
         flush_to_file agg, hour, events_dir
         libc._exit 0
 
@@ -273,7 +273,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       if chunk == nil
         -- EOF : l'extrémité écriture est fermée (worker_questions mort)
         -- Le superviseur va redémarrer question ; le pipe reste ouvert côté superviseur.
-        log_warn { action: "pipe_eof", fd: events_rfd }
+        log_warn -> { action: "pipe_eof", fd: events_rfd }
       elseif #chunk > 0
         line_buf ..= chunk
         -- Découpe line_buf sur les \n et traite chaque ligne complète
@@ -287,7 +287,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
     -- Détection du changement d'heure après chaque retour de poll
     new_hour = current_hour!
     if new_hour ~= hour
-      log_info { action: "hour_change", old: hour, new: new_hour }
+      log_info -> { action: "hour_change", old: hour, new: new_hour }
       flush_to_file agg, hour, events_dir
       compress_old events_dir, new_hour
       cleanup_old events_dir, max_age_hours, min_free_pct

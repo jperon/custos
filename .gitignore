@@ -26,6 +26,10 @@ Thumbs.db
 src/*.lua
 src/*/*.lua
 
+# Compiled MoonScript tests (sources sont en .moon)
+tests/helpers/*.lua
+tests/unit/**/*_spec.lua
+
 # Test artifacts
 .coverage
 *.prof

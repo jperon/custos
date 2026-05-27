@@ -389,7 +389,8 @@ ffi.C.unlink(path)
       -- Couvre la branche 'sock < 0' : log_warn + errno + return fallback
       log_calls = {}
       old_log = package.loaded["log"]
-      package.loaded["log"] = { log_warn: (x) -> log_calls[#log_calls + 1] = x }
+      -- Lazy logging : log_warn reçoit un thunk, on l'appelle pour extraire les fields
+      package.loaded["log"] = { log_warn: (thunk) -> log_calls[#log_calls + 1] = thunk! }
       -- Simuler socket() qui échoue : remplacer la fonction dans mock_libc
       mock_libc.socket = -> -1
       m = require "mac_learner_ipc"
@@ -402,7 +403,7 @@ ffi.C.unlink(path)
 
     it "socket() retourne -1 + IP EUI-64 → fallback EUI-64", ->
       -- Couvre la branche 'sock < 0' avec fallback mac_from_eui64 réussi
-      package.loaded["log"] = { log_warn: (x) -> nil }
+      package.loaded["log"] = { log_warn: (thunk) -> nil }
       mock_libc.socket = -> -1
       m = require "mac_learner_ipc"
       -- fe80::211:22ff:fe33:4455 → 00:11:22:33:44:55

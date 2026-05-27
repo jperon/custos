@@ -250,7 +250,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     return NF_ACCEPT if l4 == "buffering"
     -- TCP control segments (SYN/ACK/FIN without DNS payload) must pass.
     return NF_ACCEPT if l4 == "tcp_control"
-    log_warn { action: "parse_failed", mac_src: l2.mac_src, status: l4 }
+    log_warn -> { action: "parse_failed", mac_src: l2.mac_src, status: l4 }
     return NF_DROP
 
   src_ip = ip2s ip.src
@@ -260,14 +260,14 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- WARN si mac inconnue (nfq_get_packet_hw n'a rien retourné) pour faciliter
   -- le diagnostic sans avoir à passer en DEBUG.
   if l2.mac_src == "unknown"
-    log_warn {
+    log_warn -> {
       action:     "l2_mac_missing"
       src_ip:     src_ip
       in_ifindex: l2.in_ifindex
       vlan:       l2.vlan
     }
   else
-    log_debug {
+    log_debug -> {
       action:     "l2_info"
       mac_src:    l2.mac_src
       src_ip:     src_ip
@@ -296,7 +296,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       if norm == captive_domain and (q.qtype == 1 or q.qtype == 28)   -- A ou AAAA
         mac_raw = l2.mac_raw
         if not mac_raw or mac_raw == "\0\0\0\0\0\0"
-          log_warn {
+          log_warn -> {
             action:  "dns_steal_no_mac"
             domain:  q.name
             src_ip:  src_ip
@@ -307,7 +307,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
           ethertype = ip.version == 6 and IP6 or IP4
           eth_bytes = "#{new_eth {src: _bridge_mac, dst: mac_raw, protocol: ethertype, vlan: l2.vlan, data: forged_ip}}"
           ok = bridge_raw.send raw_fd, eth_bytes, _ifindex
-          log_info {
+          log_info -> {
             action:   "dns_stolen"
             domain:   q.name
             qtype:    dns_types[q.qtype] or "TYPE#{q.qtype}"
@@ -319,7 +319,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
           }
           return NF_DROP
         else
-          log_warn {
+          log_warn -> {
             action:  "dns_steal_forge_failed"
             domain:  q.name
             qtype:   dns_types[q.qtype] or "TYPE#{q.qtype}"
@@ -379,13 +379,13 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule   = rule_id or ""
     if allowed
-      log_allow q_fields
+      log_allow -> q_fields
       metrics.record_verdict rule_id, "allow" if rule_id
       allow_reason  = reason
       allow_rule_id = rule_id
       allow_timeout = nft_timeout
     else
-      log_block q_fields
+      log_block -> q_fields
       metrics.record_verdict rule_id, "refuse" if rule_id
       verdict       = NF_DROP
       block_reason  = reason
@@ -407,7 +407,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     ipc_ok = write_refused_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout
 
   unless ipc_ok
-    log_warn {
+    log_warn -> {
       action: "ipc_write_failed"
       txid: string.format "0x%04x", dns_msg.header.id
       src_ip: src_ip
@@ -449,7 +449,7 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
         raw_fd   = fd
         _ifindex = tonumber ffi.C.if_nametoindex ifname
         _bridge_mac = bridge_raw.read_mac ifname
-        log_info {
+        log_info -> {
           action:      "dns_steal_armed"
           domain:      captive_domain
           captive_ip4: captive_ip4 or "none"
@@ -457,9 +457,9 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
           ifname:      ifname
         }
       else
-        log_warn { action: "dns_steal_socket_failed", err: err, ifname: ifname, errno: tonumber(ffi.C.__errno_location()[0]) or 0 }
+        log_warn -> { action: "dns_steal_socket_failed", err: err, ifname: ifname, errno: tonumber(ffi.C.__errno_location()[0]) or 0 }
     else
-      log_info { action: "dns_steal_disabled", reason: "no hostname in redirect_url" }
+      log_info -> { action: "dns_steal_disabled", reason: "no hostname in redirect_url" }
 
   run_queue tonumber(queue_num), handle_question
 

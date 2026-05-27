@@ -34,7 +34,7 @@ run_cmd = (cmd, opts=nil) ->
     nft_err = get_error_buffer!
     busy = nft_err and nft_err\match "Resource busy"
     unless opts and opts.quiet
-      log_warn { action: "nft_cmd_failed", cmd: cmd, rc: rc, ts: ts, nft_err: nft_err or "", transient: busy and "resource_busy" or "" }
+      log_warn -> { action: "nft_cmd_failed", cmd: cmd, rc: rc, ts: ts, nft_err: nft_err or "", transient: busy and "resource_busy" or "" }
     return false, nft_err
   true, nil
 

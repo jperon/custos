@@ -43,9 +43,9 @@ sanitize_timeout = (timeout) ->
     return t
   fallback = IP_TIMEOUT
   if is_valid_timeout fallback
-    log_warn { action: "nft_queue_timeout_invalid_fallback", timeout: t, fallback: fallback }
+    log_warn -> { action: "nft_queue_timeout_invalid_fallback", timeout: t, fallback: fallback }
     return fallback
-  log_warn { action: "nft_queue_timeout_invalid_default", timeout: t }
+  log_warn -> { action: "nft_queue_timeout_invalid_default", timeout: t }
   "2m"
 
 sleep_ms = (ms) ->
@@ -69,10 +69,10 @@ write_line = (line) ->
     errno_p = libc.__errno_location!
     errno = if errno_p then errno_p[0] else 0
     if errno != EAGAIN and errno != EWOULDBLOCK
-      log_warn { action: "nft_queue_write_failed", fd: pipe_wfd, errno: errno }
+      log_warn -> { action: "nft_queue_write_failed", fd: pipe_wfd, errno: errno }
       return false
     sleep_ms 10
-  log_warn { action: "nft_queue_write_exhausted", fd: pipe_wfd }
+  log_warn -> { action: "nft_queue_write_exhausted", fd: pipe_wfd }
   false
 
 drain_ack = ->
@@ -137,7 +137,7 @@ wait_ack = (pending_seq, corr) ->
   if rv > 0
     libc.read ack_rfd, ack_buf, 1
     return true
-  log_warn {
+  log_warn -> {
     action: "nft_ack_timeout"
     worker_idx: worker_idx
     seq: pending_seq
@@ -210,4 +210,4 @@ cmd_for = (kind, key, ip, rule_id, timeout) ->
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :wait_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :add_auth_mac, :add_auth_ip4, :add_auth_ip6, :cmd_for, :cmd_lines_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :wait_ack, :drain_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :add_auth_mac, :add_auth_ip4, :add_auth_ip6, :cmd_for, :cmd_lines_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id }

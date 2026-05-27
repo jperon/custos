@@ -11,6 +11,32 @@
 
 ffi  = require "ffi"
 
+-- ── Cache LRU pour domaines fréquents ─────────────────────────────────
+-- Évite de re-hasher et re-bsearch les domaines déjà vus récemment.
+-- Capacité: 1000 entrées, TTL: 5 secondes
+CACHE_MAX_SIZE  = 1000
+CACHE_TTL_SEC   = 5
+_domain_cache   = {}  -- { domain → { found: bool, ts: epoch } }
+_domain_cache_order = {}  -- Liste pour LRU (plus vieux en premier)
+_cache_hits     = 0
+_cache_misses   = 0
+
+--- Retourne les stats du cache (hits, misses).
+get_cache_stats = -> { hits: _cache_hits, misses: _cache_misses }
+
+--- Vide le cache (utile pour tests).
+clear_cache = ->
+  _domain_cache = {}
+  _domain_cache_order = {}
+  _cache_hits = 0
+  _cache_misses = 0
+
+--- Maintient le cache LRU sous la taille max.
+_evict_oldest_if_needed = ->
+  while #_domain_cache_order >= CACHE_MAX_SIZE
+    oldest = table.remove _domain_cache_order, 1
+    _domain_cache[oldest] = nil if oldest
+
 --- Charge une liste de domaines depuis un fichier .bin ou .domains.
 -- @tparam string path Chemin vers le fichier
 -- @treturn cdata, number Tableau uint64_t[] et nombre d'entrées, ou nil, msg
@@ -51,28 +77,57 @@ load_list = (path) ->
       arr[i - 1] = hashes[i]
     return arr, n
 
---- Teste si un domaine (ou un suffixe) est dans le tableau trié.
+--- Teste si un domaine (ou un suffixe) est dans le tableau trié avec cache LRU.
 -- Essaie d'abord le domaine exact, puis chaque suffixe de gauche à droite.
 -- @tparam cdata   arr    Tableau FFI uint64_t[N] trié
 -- @tparam number  n      Nombre d'entrées
 -- @tparam string  domain Domaine à chercher
+-- @tparam string  listname Identifiant de liste pour la clé de cache (optional)
 -- @treturn boolean, string
 local lookup
-lookup = (arr, n, domain) ->
+lookup = (arr, n, domain, listname) ->
   { :xxh64 }   = require "ffi_xxhash"
   { :bsearch } = require "filter.lib.bsearch"
 
+  now = os.time!
+  -- Clé de cache composite: "listname:domain" ou juste "domain" si pas de listname
+  cache_key = listname and "#{listname}:#{domain}" or domain
+
+  -- Vérifier le cache d'abord
+  cached = _domain_cache[cache_key]
+  if cached
+    if now - cached.ts < CACHE_TTL_SEC
+      _cache_hits += 1
+      return cached.found
+    else
+      -- Expiré: retirer
+      _domain_cache[cache_key] = nil
+      for i, d in ipairs _domain_cache_order
+        if d == cache_key
+          table.remove _domain_cache_order, i
+          break
+
+  _cache_misses += 1
+
   -- Exact
-  return true if bsearch arr, n, xxh64(domain)
+  found = bsearch arr, n, xxh64(domain)
 
-  -- Suffixes
-  pos = domain\find ".", 1, true
-  while pos
-    suffix = domain\sub pos + 1
-    return true if bsearch arr, n, xxh64(suffix)
-    pos = domain\find ".", pos + 1, true
+  -- Suffixes (si pas trouvé exact)
+  if not found
+    pos = domain\find ".", 1, true
+    while pos
+      suffix = domain\sub pos + 1
+      if bsearch arr, n, xxh64(suffix)
+        found = true
+        break
+      pos = domain\find ".", pos + 1, true
 
-  false
+  -- Stocker dans le cache
+  _evict_oldest_if_needed!
+  _domain_cache[cache_key] = { found: found, ts: now }
+  _domain_cache_order[#_domain_cache_order + 1] = cache_key
+
+  found
 
 --- @tparam table cfg Configuration
 -- @treturn function factory (listname) → enriched_condition
@@ -121,7 +176,7 @@ _factory = (cfg) ->
       eval: (req) ->
         domain = req.domain
         return false, "Missing domain in request" unless domain
-        if lookup arr, n, domain
+        if lookup arr, n, domain, listname
           true, "Domain matched in list '#{listname}'"
         else
           false, "Domain not in list '#{listname}'"

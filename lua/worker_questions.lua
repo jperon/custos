@@ -289,30 +289,36 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     if l4 == "tcp_control" then
       return NF_ACCEPT
     end
-    log_warn({
-      action = "parse_failed",
-      mac_src = l2.mac_src,
-      status = l4
-    })
+    log_warn(function()
+      return {
+        action = "parse_failed",
+        mac_src = l2.mac_src,
+        status = l4
+      }
+    end)
     return NF_DROP
   end
   local src_ip = ip2s(ip.src)
   local dst_ip = ip2s(ip.dst)
   if l2.mac_src == "unknown" then
-    log_warn({
-      action = "l2_mac_missing",
-      src_ip = src_ip,
-      in_ifindex = l2.in_ifindex,
-      vlan = l2.vlan
-    })
+    log_warn(function()
+      return {
+        action = "l2_mac_missing",
+        src_ip = src_ip,
+        in_ifindex = l2.in_ifindex,
+        vlan = l2.vlan
+      }
+    end)
   else
-    log_debug({
-      action = "l2_info",
-      mac_src = l2.mac_src,
-      src_ip = src_ip,
-      in_ifindex = l2.in_ifindex,
-      vlan = l2.vlan
-    })
+    log_debug(function()
+      return {
+        action = "l2_info",
+        mac_src = l2.mac_src,
+        src_ip = src_ip,
+        in_ifindex = l2.in_ifindex,
+        vlan = l2.vlan
+      }
+    end)
   end
   if dns_msg.header.qr then
     return NF_ACCEPT
@@ -324,11 +330,13 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       if norm == captive_domain and (q.qtype == 1 or q.qtype == 28) then
         local mac_raw = l2.mac_raw
         if not mac_raw or mac_raw == "\0\0\0\0\0\0" then
-          log_warn({
-            action = "dns_steal_no_mac",
-            domain = q.name,
-            src_ip = src_ip
-          })
+          log_warn(function()
+            return {
+              action = "dns_steal_no_mac",
+              domain = q.name,
+              src_ip = src_ip
+            }
+          end)
           break
         end
         local forged_ip = forge_dns.forge_dns_response(ip, l4, dns_msg.header.id, q, captive_ip4, captive_ip6)
@@ -342,24 +350,28 @@ handle_question = function(qh_ptr, nfad, pkt_id)
             data = forged_ip
           }))
           local ok = bridge_raw.send(raw_fd, eth_bytes, _ifindex)
-          log_info({
-            action = "dns_stolen",
-            domain = q.name,
-            qtype = dns_types[q.qtype] or "TYPE" .. tostring(q.qtype),
-            src_ip = src_ip,
-            resolver = dst_ip,
-            mac = l2.mac_src,
-            ancount = (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0,
-            sent = ok
-          })
+          log_info(function()
+            return {
+              action = "dns_stolen",
+              domain = q.name,
+              qtype = dns_types[q.qtype] or "TYPE" .. tostring(q.qtype),
+              src_ip = src_ip,
+              resolver = dst_ip,
+              mac = l2.mac_src,
+              ancount = (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0,
+              sent = ok
+            }
+          end)
           return NF_DROP
         else
-          log_warn({
-            action = "dns_steal_forge_failed",
-            domain = q.name,
-            qtype = dns_types[q.qtype] or "TYPE" .. tostring(q.qtype),
-            src_ip = src_ip
-          })
+          log_warn(function()
+            return {
+              action = "dns_steal_forge_failed",
+              domain = q.name,
+              qtype = dns_types[q.qtype] or "TYPE" .. tostring(q.qtype),
+              src_ip = src_ip
+            }
+          end)
           break
         end
       end
@@ -414,7 +426,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule = rule_id or ""
     if allowed then
-      log_allow(q_fields)
+      log_allow(function()
+        return q_fields
+      end)
       if rule_id then
         metrics.record_verdict(rule_id, "allow")
       end
@@ -422,7 +436,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       allow_rule_id = rule_id
       allow_timeout = nft_timeout
     else
-      log_block(q_fields)
+      log_block(function()
+        return q_fields
+      end)
       if rule_id then
         metrics.record_verdict(rule_id, "refuse")
       end
@@ -448,14 +464,16 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     ipc_ok = write_refused_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout)
   end
   if not (ipc_ok) then
-    log_warn({
-      action = "ipc_write_failed",
-      txid = string.format("0x%04x", dns_msg.header.id),
-      src_ip = src_ip,
-      dst_ip = dst_ip,
-      src_port = l4.spt,
-      user = q_fields.user
-    })
+    log_warn(function()
+      return {
+        action = "ipc_write_failed",
+        txid = string.format("0x%04x", dns_msg.header.id),
+        src_ip = src_ip,
+        dst_ip = dst_ip,
+        src_port = l4.spt,
+        user = q_fields.user
+      }
+    end)
     return NF_DROP
   end
   return NF_ACCEPT
@@ -483,26 +501,32 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
         raw_fd = fd
         _ifindex = tonumber(ffi.C.if_nametoindex(ifname))
         _bridge_mac = bridge_raw.read_mac(ifname)
-        log_info({
-          action = "dns_steal_armed",
-          domain = captive_domain,
-          captive_ip4 = captive_ip4 or "none",
-          captive_ip6 = captive_ip6 or "none",
-          ifname = ifname
-        })
+        log_info(function()
+          return {
+            action = "dns_steal_armed",
+            domain = captive_domain,
+            captive_ip4 = captive_ip4 or "none",
+            captive_ip6 = captive_ip6 or "none",
+            ifname = ifname
+          }
+        end)
       else
-        log_warn({
-          action = "dns_steal_socket_failed",
-          err = err,
-          ifname = ifname,
-          errno = tonumber(ffi.C.__errno_location()[0]) or 0
-        })
+        log_warn(function()
+          return {
+            action = "dns_steal_socket_failed",
+            err = err,
+            ifname = ifname,
+            errno = tonumber(ffi.C.__errno_location()[0]) or 0
+          }
+        end)
       end
     else
-      log_info({
-        action = "dns_steal_disabled",
-        reason = "no hostname in redirect_url"
-      })
+      log_info(function()
+        return {
+          action = "dns_steal_disabled",
+          reason = "no hostname in redirect_url"
+        }
+      end)
     end
   end
   return run_queue(tonumber(queue_num), handle_question)

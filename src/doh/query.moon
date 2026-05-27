@@ -50,17 +50,17 @@ inject_answers = (answers, client_ip, client_mac, rule_id, timeout, ack_corr) ->
     continue unless addr and addr != ""
     if ans.rtype == QTYPE.A
       unless is_v6_client
-        log_debug { action: "nft_add_ip4", client_ip: client_ip, dest: addr }
+        log_debug -> { action: "nft_add_ip4", client_ip: client_ip, dest: addr }
         add_ip4 client_ip, addr, rule_id, timeout, ack_corr
       if mac_valid client_mac
-        log_debug { action: "nft_add_mac4", client_mac: client_mac, dest: addr }
+        log_debug -> { action: "nft_add_mac4", client_mac: client_mac, dest: addr }
         add_mac4 client_mac, addr, rule_id, timeout, ack_corr
     elseif ans.rtype == QTYPE.AAAA
       if is_v6_client
-        log_debug { action: "nft_add_ip6", client_ip: client_ip, dest: addr }
+        log_debug -> { action: "nft_add_ip6", client_ip: client_ip, dest: addr }
         add_ip6 client_ip, addr, rule_id, timeout, ack_corr
       if mac_valid client_mac
-        log_debug { action: "nft_add_mac6", client_mac: client_mac, dest: addr }
+        log_debug -> { action: "nft_add_mac6", client_mac: client_mac, dest: addr }
         add_mac6 client_mac, addr, rule_id, timeout, ack_corr
   -- Attendre que worker_nft ait effectivement inséré les IPs dans nftables
   -- avant de retourner la réponse DNS au client DoH.
@@ -78,11 +78,11 @@ inject_answers = (answers, client_ip, client_mac, rule_id, timeout, ack_corr) ->
 process_query = (dns_raw, client_ip, client_mac, upstream) ->
   dns, parse_err = parse dns_raw, 1, false
   unless dns
-    log_warn { action: "parse_failed", client_ip: client_ip, err: tostring parse_err }
+    log_warn -> { action: "parse_failed", client_ip: client_ip, err: tostring parse_err }
     return nil, "dns_parse_failed"
 
   user = user_for_mac client_mac, client_ip, config.auth.sessions_file
-  log_debug { action: "process_query", client_ip: client_ip, client_mac: client_mac, user: user, query_bytes: #dns_raw }
+  log_debug -> { action: "process_query", client_ip: client_ip, client_mac: client_mac, user: user, query_bytes: #dns_raw }
 
   -- Evaluate all questions; block if any is refused.
   block_reason = nil
@@ -102,7 +102,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       ts:     os.time!
       user:   user
     }
-    log_debug { action: "filter_decide", qname: qname_text, qtype: q.qtype_name or tostring(q.qtype), client_ip: client_ip }
+    log_debug -> { action: "filter_decide", qname: qname_text, qtype: q.qtype_name or tostring(q.qtype), client_ip: client_ip }
     allowed, reason, rule, timeout = decide req
     fields = {
       action:   if allowed then "allow" else "block"
@@ -115,27 +115,27 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       rule:     rule or ""
     }
     if allowed
-      log_allow fields
+      log_allow -> fields
       allow_reason = reason
       allow_rule_id = rule
       allow_timeout = timeout
     else
-      log_block fields
+      log_block -> fields
       any_blocked  = true
       block_reason = reason
 
   if any_blocked
     blocked = build_blocked_response dns, dns_raw, block_reason
     unless blocked
-      log_warn { action: "blocked_build_failed", client_ip: client_ip, reason: block_reason }
+      log_warn -> { action: "blocked_build_failed", client_ip: client_ip, reason: block_reason }
       return nil, "blocked_response_build_failed"
-    log_debug { action: "query_blocked", client_ip: client_ip, reason: block_reason }
+    log_debug -> { action: "query_blocked", client_ip: client_ip, reason: block_reason }
     return blocked
 
   -- Forward to upstream DNS (plain UDP/53).
   resp_raw, upstream_err = upstream_mod.query upstream, dns_raw
   unless resp_raw
-    log_warn { action: "upstream_failed", client_ip: client_ip, err: upstream_err }
+    log_warn -> { action: "upstream_failed", client_ip: client_ip, err: upstream_err }
     return nil, upstream_err or "upstream_failed"
 
   -- Parse the response and inject A/AAAA records into nftables sets.
@@ -144,7 +144,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
     answers = resp_dns.answers or {}
     ack_corr = string.format "%04x:%s", dns.txid or 0, client_ip or "unknown"
     inject_answers answers, client_ip, client_mac, allow_rule_id, allow_timeout, ack_corr
-    log_debug {
+    log_debug -> {
       action:     "query_allowed"
       client_ip:  client_ip
       client_mac: client_mac
@@ -153,7 +153,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       reason:     allow_reason or ""
     }
   else
-    log_warn { action: "response_parse_failed", client_ip: client_ip, err: tostring(resp_err) or "unknown" }
+    log_warn -> { action: "response_parse_failed", client_ip: client_ip, err: tostring(resp_err) or "unknown" }
 
   resp_raw
 

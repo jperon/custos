@@ -14,29 +14,35 @@ local _reload_requested = false
 local run_auth_worker
 run_auth_worker = function(auth_cfg)
   set_action_prefix("auth_")
-  log_info({
-    action = "worker_start",
-    port = auth_cfg.port
-  })
+  log_info(function()
+    return {
+      action = "worker_start",
+      port = auth_cfg.port
+    }
+  end)
   local secrets_path = auth_cfg.secrets or "/etc/custos/secrets"
   local secrets, err = load_secrets(secrets_path)
   if not (secrets) then
-    log_error({
-      action = "secrets_load_failed",
-      path = secrets_path,
-      err = err
-    })
+    log_error(function()
+      return {
+        action = "secrets_load_failed",
+        path = secrets_path,
+        err = err
+      }
+    end)
     secrets = { }
   end
   local n_users = 0
   for _ in pairs(secrets) do
     n_users = n_users + 1
   end
-  log_info({
-    action = "secrets_loaded",
-    path = secrets_path,
-    users = n_users
-  })
+  log_info(function()
+    return {
+      action = "secrets_loaded",
+      path = secrets_path,
+      users = n_users
+    }
+  end)
   ffi.C.signal(SIGHUP, ffi.cast("sighandler_t", function()
     _reload_requested = true
   end))
@@ -48,17 +54,21 @@ run_auth_worker = function(auth_cfg)
     _reload_requested = false
     local new_secrets, err2 = load_secrets(secrets_path)
     if new_secrets then
-      log_info({
-        action = "secrets_reloaded",
-        path = secrets_path
-      })
+      log_info(function()
+        return {
+          action = "secrets_reloaded",
+          path = secrets_path
+        }
+      end)
       return new_secrets
     else
-      log_warn({
-        action = "secrets_reload_failed",
-        path = secrets_path,
-        err = err2
-      })
+      log_warn(function()
+        return {
+          action = "secrets_reload_failed",
+          path = secrets_path,
+          err = err2
+        }
+      end)
       return nil
     end
   end

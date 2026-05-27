@@ -123,16 +123,16 @@ flush_batch = (pending, ack_queue, ack_wfds) ->
     cmd = table.concat lines, "\n"
     ok, err = run_cmd cmd, { quiet: true }
     if rule11_count > 0
-      log_info { action: "nft_batch_rule", rule_id: "rule_11", count: rule11_count, ok: ok, items: table.concat(rule11_items, " ") }
+      log_info -> { action: "nft_batch_rule", rule_id: "rule_11", count: rule11_count, ok: ok, items: table.concat(rule11_items, " ") }
     if ok
-      log_debug { action: "batch_ok", count: #lines, acks: #ack_queue }
+      log_debug -> { action: "batch_ok", count: #lines, acks: #ack_queue }
     else
-      log_warn { action: "batch_failed", count: #lines, acks: #ack_queue, err: err or "" }
+      log_warn -> { action: "batch_failed", count: #lines, acks: #ack_queue, err: err or "" }
       for line in *lines
         ok_one, err_one = run_cmd line, { quiet: true }
-        log_warn { action: "single_failed", err: err_one or "", cmd: line } unless ok_one
+        log_warn -> { action: "single_failed", err: err_one or "", cmd: line } unless ok_one
   else
-    log_debug { action: "batch_ack_only", acks: #ack_queue }
+    log_debug -> { action: "batch_ack_only", acks: #ack_queue }
 
   -- Send one ACK per unique worker (widx) that had items in this batch
   -- This fixes the race condition where worker_responses enqueues multiple items
@@ -149,7 +149,7 @@ flush_batch = (pending, ack_queue, ack_wfds) ->
 run = (rfd, ack_wfds) ->
   set_action_prefix "nft_"
   ack_wfds = ack_wfds or {}
-  log_info { action: "worker_start", rfd: rfd, ack_workers: #ack_wfds }
+  log_info -> { action: "worker_start", rfd: rfd, ack_workers: #ack_wfds }
   pending    = {}
   ack_queue  = {}
   partial    = ""
@@ -173,19 +173,19 @@ run = (rfd, ack_wfds) ->
           entry_key = "#{item.kind}|#{item.key}|#{item.ip}|#{item.timeout}"
           pending[entry_key] = item unless pending[entry_key]
         else
-          log_warn { action: "nft_invalid_message", reason: parse_err or "parse_failed", raw: line\sub(1, 220) }
+          log_warn -> { action: "nft_invalid_message", reason: parse_err or "parse_failed", raw: line\sub(1, 220) }
       partial = data
       if #partial > 4096
-        log_warn { action: "nft_partial_oversize", size: #partial }
+        log_warn -> { action: "nft_partial_oversize", size: #partial }
         partial = ""
     else
       errno_p = libc.__errno_location!
       errno = if errno_p then errno_p[0] else 0
       if n == 0
-        log_warn { action: "pipe_closed", rfd: rfd }
+        log_warn -> { action: "pipe_closed", rfd: rfd }
         return
       if errno != EAGAIN and errno != EWOULDBLOCK
-        log_warn { action: "read_failed", rfd: rfd, errno: errno }
+        log_warn -> { action: "read_failed", rfd: rfd, errno: errno }
         sleep_ms 100
 
     now_clock = monotonic_ms!

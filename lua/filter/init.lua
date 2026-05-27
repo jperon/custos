@@ -71,10 +71,12 @@ build_filter_cfg = function()
   cfg.allowed_domains = cfg.allowed_domains or { }
   cfg.auth = clone(config.auth or { })
   if #cfg.rules == 0 and #cfg.allowed_domains > 0 then
-    log_warn({
-      action = "filter_rules_missing",
-      detail = "falling back to allowlist domains"
-    })
+    log_warn(function()
+      return {
+        action = "filter_rules_missing",
+        detail = "falling back to allowlist domains"
+      }
+    end)
     cfg.rules = {
       {
         description = "Builtin allowlist domains",
@@ -99,25 +101,29 @@ local load
 load = function()
   local cfg = build_filter_cfg()
   if not (cfg) then
-    log_warn({
-      action = "filter_load_failed",
-      err = "invalid runtime config"
-    })
+    log_warn(function()
+      return {
+        action = "filter_load_failed",
+        err = "invalid runtime config"
+      }
+    end)
     return 
   end
   local root_rules = #(config.filter and config.filter.rules or { })
   local fallback_builtin = root_rules == 0 and #cfg.rules > 0
   local cfg_meta = config.__meta or { }
-  log_debug({
-    action = "filter_config_source",
-    path = cfg_meta.path or "unknown",
-    env_path = cfg_meta.env_path or "",
-    external_loaded = cfg_meta.external_loaded and 1 or 0,
-    load_error = cfg_meta.load_error or "",
-    configured_rules = root_rules,
-    effective_rules = #cfg.rules,
-    fallback_builtin = fallback_builtin and 1 or 0
-  })
+  log_debug(function()
+    return {
+      action = "filter_config_source",
+      path = cfg_meta.path or "unknown",
+      env_path = cfg_meta.env_path or "",
+      external_loaded = cfg_meta.external_loaded and 1 or 0,
+      load_error = cfg_meta.load_error or "",
+      configured_rules = root_rules,
+      effective_rules = #cfg.rules,
+      fallback_builtin = fallback_builtin and 1 or 0
+    }
+  end)
   rules = compile_rules(cfg)
   auth_cfg_cache = cfg.auth
   decision_cfg = cfg.decision or { }
@@ -125,21 +131,25 @@ load = function()
   inject_localnets(cfg, whitelist)
   ip_whitelist.init(whitelist)
   local n = #rules
-  return log_info({
-    action = "filter_loaded",
-    rules = n,
-    dest_whitelist = #whitelist,
-    userlists = count_keys(cfg.userlists),
-    users = count_user_entries(cfg.userlists)
-  })
+  return log_info(function()
+    return {
+      action = "filter_loaded",
+      rules = n,
+      dest_whitelist = #whitelist,
+      userlists = count_keys(cfg.userlists),
+      users = count_user_entries(cfg.userlists)
+    }
+  end)
 end
 local decide
 decide = function(req)
   if not (rules) then
-    log_warn({
-      action = "filter_not_loaded",
-      domain = req and req.domain or "unknown"
-    })
+    log_warn(function()
+      return {
+        action = "filter_not_loaded",
+        domain = req and req.domain or "unknown"
+      }
+    end)
     return false, "filter not loaded", nil
   end
   return _decide(rules, req, decision_cfg)
@@ -147,10 +157,12 @@ end
 local decide_meta
 decide_meta = function(req)
   if not (rules) then
-    log_warn({
-      action = "filter_not_loaded",
-      domain = req and req.domain or "unknown"
-    })
+    log_warn(function()
+      return {
+        action = "filter_not_loaded",
+        domain = req and req.domain or "unknown"
+      }
+    end)
     return {
       verdict = false,
       reason = "filter not loaded",

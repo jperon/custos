@@ -36,7 +36,7 @@ detect = (auth_cfg) ->
       s\gsub "%s+", ""
     if ok and out and out != "" and out != "0.0.0.0"
       local_ip4 = out
-      log_info { action: "captive_ip4_autodetected", ip: local_ip4, ifname: ifname }
+      log_info -> { action: "captive_ip4_autodetected", ip: local_ip4, ifname: ifname }
 
   -- ── 4 : fallback IPv4 via socket.connect ─────────────────────
   if not local_ip4
@@ -51,7 +51,7 @@ detect = (auth_cfg) ->
             ok_get, ip = pcall u.getsockname, u
             if ok_get and ip and ip != "" and ip != "0.0.0.0"
               local_ip4 = ip
-              log_info { action: "captive_ip4_autodetected_socket", ip: local_ip4 }
+              log_info -> { action: "captive_ip4_autodetected_socket", ip: local_ip4 }
           u\close!
 
   -- ── 3b : auto-détection IPv6 via `ip addr show dev <bridge>` ──
@@ -64,7 +64,7 @@ detect = (auth_cfg) ->
       addr\gsub "%s+", ""
     if ok and ip and ip != "" and ip != "::"
       local_ip6 = ip
-      log_info { action: "captive_ip6_autodetected", ip: local_ip6, ifname: ifname }
+      log_info -> { action: "captive_ip6_autodetected", ip: local_ip6, ifname: ifname }
 
   local_ip4, local_ip6
 

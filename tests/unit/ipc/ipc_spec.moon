@@ -246,6 +246,39 @@ describe "ipc", ->
       assert.equals "dns_workhours", decoded.rule_id
       assert.equals "240s", decoded.timeout
 
+  -- ── 13b. rule_id long préservé (régression nft set name) ────────────
+  -- Bug historique : rule_id était tronqué à 63 chars dans encode_msg,
+  -- alors que filter.rule_id.sanitize_id autorise 128 chars. Conséquence :
+  -- worker_nft cherchait un set nft inexistant ("did you mean set 'X' ?").
+  -- Voir src/ipc.moon vs src/filter/rule_id.moon.
+  describe "rule_id long round-trip (régression)", ->
+    it "rule_id de 75 chars (cas réel) préservé en entier", ->
+      m_ipc   = fresh_ipc!
+      -- Cas qui a effectivement déclenché le bug en prod :
+      long_rid = "r_les_utilisateurs_authentifies_ne_sont_pas_rediriges_vers_le_portail_captif"
+      assert.equals 76, #long_rid, "longueur du cas de test"
+      msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                  false, "allow", 0, long_rid, "120s"
+      decoded = m_ipc.decode_msg msg
+      assert.equals long_rid, decoded.rule_id,
+        "rule_id ne doit PAS être tronqué (bug nft_single_failed)"
+
+    it "rule_id de 128 chars préservé (limite sanitize_id)", ->
+      m_ipc    = fresh_ipc!
+      rid128   = "r_" .. string.rep("a", 128)
+      msg      = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                   false, "allow", 0, rid128, "120s"
+      decoded  = m_ipc.decode_msg msg
+      assert.equals rid128, decoded.rule_id
+
+    it "rule_id > 130 chars est tronqué à 130", ->
+      m_ipc    = fresh_ipc!
+      rid_long = string.rep "z", 200
+      msg      = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                   false, "allow", 0, rid_long, "120s"
+      decoded  = m_ipc.decode_msg msg
+      assert.equals 130, #decoded.rule_id
+
   -- ── 14. reason tronquée à 63 chars ───────────────────────────────────
   describe "reason troncature", ->
     it "reason de 70 chars est tronquée à 63", ->

@@ -89,10 +89,10 @@ create_pipe = (name) ->
 
   sz = libc.fcntl fds[1], F_SETPIPE_SZ, PIPE_DESIRED_SIZE
   if sz and sz >= 0
-    log_info { action: "pipe_resize", name: name, fd: fds[1], new_size: sz }
+    log_info -> { action: "pipe_resize", name: name, fd: fds[1], new_size: sz }
   else
     errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn { action: "pipe_resize_failed", name: name, fd: fds[1], rc: sz, errno: errno }
+    log_warn -> { action: "pipe_resize_failed", name: name, fd: fds[1], rc: sz, errno: errno }
 
   { rfd: fds[0], wfd: fds[1] }
 
@@ -222,7 +222,7 @@ supervise = (pipes, sfd) ->
     #slaves > 0 and slaves or nil
 
   bridge_slaves = detect_bridge_slaves() or { bridge_ifname }
-  log_info {
+  log_info -> {
     action: "bridge_slaves_detected"
     count: #bridge_slaves
     interfaces: table.concat(bridge_slaves, ",")
@@ -443,13 +443,13 @@ supervise = (pipes, sfd) ->
   siginfo = ffi.new "signalfd_siginfo"
   sig_sz  = ffi.sizeof "signalfd_siginfo"
 
-  log_info { action: "supervisor_running", pid: tonumber libc.getpid! }
+  log_info -> { action: "supervisor_running", pid: tonumber libc.getpid! }
 
   while true
     rv = libc.read sfd, siginfo, sig_sz
     if rv == sig_sz
       if siginfo.ssi_signo == SIGHUP
-        log_info { action: "supervisor_sighup_reload" }
+        log_info -> { action: "supervisor_sighup_reload" }
         filter.load!
 
         -- Update filter_data with reloaded data
@@ -462,21 +462,21 @@ supervise = (pipes, sfd) ->
         -- Kill + refork all question/response/captive/reject/DOH workers to refresh COW filter lists
         for w in *workers
           if (w.name\match("^dns%-q") or w.name\match("^resp%-q") or w.name\match("^cap%-q") or w.name\match("^rej%-q") or w.name == "doh") and w.pid and w.pid > 0
-            log_info { action: "supervisor_sighup_kill", name: w.name, pid: w.pid }
+            log_info -> { action: "supervisor_sighup_kill", name: w.name, pid: w.pid }
             libc.kill w.pid, SIGTERM
             status = ffi.new "int[1]"
             while libc.waitpid(w.pid, status, 0) ~= w.pid do nil
             ffi.C.sleep 1
             w.pid = w.restart_fn!
-            log_info { action: "supervisor_sighup_refork", name: w.name, pid: w.pid }
+            log_info -> { action: "supervisor_sighup_refork", name: w.name, pid: w.pid }
 
         -- Forward SIGHUP to AUTH only (secrets reload)
         for w in *workers
           if w.name == "auth" and w.pid and w.pid > 0
-            log_info { action: "supervisor_sighup_forward_auth", pid: w.pid }
+            log_info -> { action: "supervisor_sighup_forward_auth", pid: w.pid }
             libc.kill w.pid, SIGHUP
       else
-        log_info { action: "supervisor_sigterm" }
+        log_info -> { action: "supervisor_sigterm" }
         nft_extra.cleanup!
         shutdown_workers workers
         close_supervisor_fds pipes
@@ -491,7 +491,7 @@ supervise = (pipes, sfd) ->
       for w in *workers
         if w.pid == dead_pid
           exit_code = bit.rshift bit.band(status[0], 0xFF00), 8
-          log_warn {
+          log_warn -> {
             action: "worker_died"
             name: w.name
             pid: dead_pid
@@ -505,9 +505,9 @@ supervise = (pipes, sfd) ->
 
 -- ── main ─────────────────────────────────────────────────────────
 
-log_info { action: "dns-filter_start", version: "1.0.0" }
+log_info -> { action: "dns-filter_start", version: "1.0.0" }
 cfg_meta = config.__meta or {}
-log_info {
+log_info -> {
   action: "config_source"
   path: cfg_meta.path or "unknown"
   env_path: cfg_meta.env_path or ""
@@ -515,7 +515,7 @@ log_info {
   load_error: cfg_meta.load_error or ""
 }
 unless cfg_meta.external_loaded
-  log_warn {
+  log_warn -> {
     action: "config_external_missing"
     path: cfg_meta.path or "unknown"
     detail: "running defaults (likely restrictive)"
@@ -524,7 +524,7 @@ unless cfg_meta.external_loaded
 sfd   = create_signal_fd!
 pipes = create_pipes!
 
-log_info {
+log_info -> {
   action: "ipc_pipes_created"
   question_response_rfd: pipes.question_response.rfd
   question_response_wfd: pipes.question_response.wfd

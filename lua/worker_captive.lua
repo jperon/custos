@@ -114,12 +114,14 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   local l2 = get_l2(nfad)
   local ip, ip_off, tcp, tcp_off = parse_syn(raw)
   if not (ip) then
-    log_warn({
-      action = "parse_failed",
-      queue = 2,
-      len = payload_len,
-      err = "parse_syn returned nil"
-    })
+    log_warn(function()
+      return {
+        action = "parse_failed",
+        queue = 2,
+        len = payload_len,
+        err = "parse_syn returned nil"
+      }
+    end)
     return NF_DROP
   end
   local client_mac
@@ -142,13 +144,15 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   send = function(f)
     local res = send_frame(raw_fd, f, ifindex)
     if not (res) then
-      log_warn({
-        action = "frame_send_error",
-        queue = 2,
-        ip = client_ip_str,
-        user = user,
-        err = "send_frame returned false"
-      })
+      log_warn(function()
+        return {
+          action = "frame_send_error",
+          queue = 2,
+          ip = client_ip_str,
+          user = user,
+          err = "send_frame returned false"
+        }
+      end)
     end
     return res
   end
@@ -160,25 +164,29 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     end
   end)())
   if not (url) then
-    log_warn({
-      action = "no_redirect_url",
-      queue = 2,
-      ip = client_ip_str,
-      version = ip.version,
-      user = user
-    })
+    log_warn(function()
+      return {
+        action = "no_redirect_url",
+        queue = 2,
+        ip = client_ip_str,
+        version = ip.version,
+        user = user
+      }
+    end)
     return NF_DROP
   end
   local ok, err = pcall(function()
     local f1, f2, f3 = build_response_frames(eth, ip, tcp, url)
-    log_info({
-      action = "sending_frames",
-      queue = 2,
-      ip = client_ip_str,
-      frames = 3,
-      url = url,
-      user = user
-    })
+    log_info(function()
+      return {
+        action = "sending_frames",
+        queue = 2,
+        ip = client_ip_str,
+        frames = 3,
+        url = url,
+        user = user
+      }
+    end)
     send(f1)
     send(f2)
     return send(f3)
@@ -196,15 +204,19 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     if l2.mac_src and l2.mac_src ~= "unknown" then
       fields.mac = l2.mac_src
     end
-    log_info(fields)
+    log_info(function()
+      return fields
+    end)
   else
-    log_warn({
-      action = "send_failed",
-      queue = 2,
-      err = tostring(err),
-      ip = client_ip_str,
-      user = user
-    })
+    log_warn(function()
+      return {
+        action = "send_failed",
+        queue = 2,
+        err = tostring(err),
+        ip = client_ip_str,
+        user = user
+      }
+    end)
   end
   return NF_DROP
 end
@@ -219,48 +231,58 @@ run = function(queue_num, auth_cfg)
   if local_ip4 then
     redirect_url4 = "https://" .. tostring(local_ip4) .. ":" .. tostring(https_port) .. "/"
   else
-    log_warn({
-      action = "no_ipv4",
-      msg = "No IPv4 captive IP configured"
-    })
+    log_warn(function()
+      return {
+        action = "no_ipv4",
+        msg = "No IPv4 captive IP configured"
+      }
+    end)
   end
   if local_ip6 then
     redirect_url6 = "https://[" .. tostring(local_ip6) .. "]:" .. tostring(https_port) .. "/"
   else
-    log_warn({
-      action = "no_ipv6",
-      msg = "No IPv6 captive IP configured"
-    })
+    log_warn(function()
+      return {
+        action = "no_ipv6",
+        msg = "No IPv6 captive IP configured"
+      }
+    end)
   end
   local fd, err = open_raw_socket(ifname)
   if not (fd) then
-    log_error({
-      action = "socket_failed",
-      err = err,
-      ifname = ifname
-    })
+    log_error(function()
+      return {
+        action = "socket_failed",
+        err = err,
+        ifname = ifname
+      }
+    end)
     return 
   end
   raw_fd = fd
   ifindex = tonumber(ffi.C.if_nametoindex(ifname))
   if ifindex == 0 then
     local errno = tonumber(ffi.C.__errno_location()[0])
-    log_error({
-      action = "ifindex_failed",
-      ifname = ifname,
-      errno = errno
-    })
+    log_error(function()
+      return {
+        action = "ifindex_failed",
+        ifname = ifname,
+        errno = errno
+      }
+    end)
     return 
   end
   _bridge_mac = bridge_raw.read_mac(ifname)
-  log_info({
-    action = "worker_start",
-    ifname = ifname,
-    ifindex = ifindex,
-    custom_url = custom_redirect_url or "auto",
-    redirect_url4 = redirect_url4 or "not configured",
-    redirect_url6 = redirect_url6 or "not configured"
-  })
+  log_info(function()
+    return {
+      action = "worker_start",
+      ifname = ifname,
+      ifindex = ifindex,
+      custom_url = custom_redirect_url or "auto",
+      redirect_url4 = redirect_url4 or "not configured",
+      redirect_url6 = redirect_url6 or "not configured"
+    }
+  end)
   return run_queue(tonumber(queue_num), handle_syn)
 end
 return {

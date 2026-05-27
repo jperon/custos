@@ -30,13 +30,15 @@ try_add_with_retries = function(fn, ...)
   local args = {
     ...
   }
-  log_warn({
-    action = "nft_add_retries_exhausted",
-    attempts = #backoffs,
-    err = last_err or "",
-    arg1 = args[1] or "",
-    arg2 = args[2] or ""
-  })
+  log_warn(function()
+    return {
+      action = "nft_add_retries_exhausted",
+      attempts = #backoffs,
+      err = last_err or "",
+      arg1 = args[1] or "",
+      arg2 = args[2] or ""
+    }
+  end)
   return false
 end
 return {

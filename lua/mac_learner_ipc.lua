@@ -37,10 +37,12 @@ get_mac = function(ip_str)
   end
   local sock = libc.socket(AF_UNIX, SOCK_STREAM, 0)
   if not (sock >= 0) then
-    log_warn({
-      action = "mac_ipc_socket_failed",
-      errno = tonumber(ffi.C.__errno_location()[0])
-    })
+    log_warn(function()
+      return {
+        action = "mac_ipc_socket_failed",
+        errno = tonumber(ffi.C.__errno_location()[0])
+      }
+    end)
     return mac_from_eui64(ip_str) or "unknown"
   end
   local addr = ffi.new("struct sockaddr_un")

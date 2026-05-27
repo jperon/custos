@@ -37,10 +37,10 @@ do
   local _obj_0 = require("ipc")
   drain_pipe, is_pending, get_pending_entry, consume = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.get_pending_entry, _obj_0.consume
 end
-local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack
+local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack
 do
   local _obj_0 = require("nft_queue")
-  add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.wait_ack
+  add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.wait_ack, _obj_0.drain_ack
 end
 local run_queue, NF_ACCEPT, NF_DROP
 do
@@ -490,18 +490,22 @@ load_auth_wildcard_rules = function(metadata)
     if requires_auth and dns_refs == 0 then
       local rule_id = meta.rule_id or "unknown_" .. tostring(idx)
       auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
-      log_info({
-        action = "auth_wildcard_rule_detected",
-        rule_id = rule_id,
-        idx = idx
-      })
+      log_info(function()
+        return {
+          action = "auth_wildcard_rule_detected",
+          rule_id = rule_id,
+          idx = idx
+        }
+      end)
     end
   end
-  return log_info({
-    action = "auth_wildcard_rules_loaded",
-    count = #auth_wildcard_rules,
-    rules = table.concat(auth_wildcard_rules, ", ")
-  })
+  return log_info(function()
+    return {
+      action = "auth_wildcard_rules_loaded",
+      count = #auth_wildcard_rules,
+      rules = table.concat(auth_wildcard_rules, ", ")
+    }
+  end)
 end
 local add_to_wildcard_rules
 add_to_wildcard_rules = function(add_fn, key, dest, timeout, corr)
@@ -612,10 +616,12 @@ purge_mac_clients = function(ts)
       end
       entry.ips = nil
       mac_clients[mac] = nil
-      log_info({
-        action = "client_expired",
-        mac = mac
-      })
+      log_info(function()
+        return {
+          action = "client_expired",
+          mac = mac
+        }
+      end)
     end
   end
 end
@@ -683,7 +689,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end
     return NF_ACCEPT
   end
-  if math.random(1000) == 1 then
+  local _purge_counter = ((_purge_counter or 0) + 1) % 1000
+  if _purge_counter == 0 then
     tcp_state.purge()
     purge_mac_clients(ts)
   end
@@ -704,34 +711,38 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     local retry_wait_ms = 0
     entry, retry_attempts, retry_wait_ms = retry_pending_match(txid, dst_ip, client_port, resolver_ip)
     if entry then
-      log_info({
-        action = "response_matched_after_retry",
-        src_ip = src_ip,
-        dst_ip = dst_ip,
-        txid = string.format("0x%04x", txid),
-        retry_attempts = retry_attempts,
-        retry_wait_ms = retry_wait_ms,
-        user = user
-      })
+      log_info(function()
+        return {
+          action = "response_matched_after_retry",
+          src_ip = src_ip,
+          dst_ip = dst_ip,
+          txid = string.format("0x%04x", txid),
+          retry_attempts = retry_attempts,
+          retry_wait_ms = retry_wait_ms,
+          user = user
+        }
+      end)
     else
-      log_debug({
-        action = (function()
-          if retry_attempts > 0 then
-            return "response_no_matching_question_after_retry"
-          else
-            return "response_no_matching_question"
-          end
-        end)(),
-        src_ip = src_ip,
-        dst_ip = dst_ip,
-        vlan = l2.vlan,
-        txid = string.format("0x%04x", txid),
-        rcode = dns_msg.header.rcode,
-        client_mac = client_mac,
-        retry_attempts = retry_attempts,
-        retry_wait_ms = retry_wait_ms,
-        user = user
-      })
+      log_debug(function()
+        return {
+          action = (function()
+            if retry_attempts > 0 then
+              return "response_no_matching_question_after_retry"
+            else
+              return "response_no_matching_question"
+            end
+          end)(),
+          src_ip = src_ip,
+          dst_ip = dst_ip,
+          vlan = l2.vlan,
+          txid = string.format("0x%04x", txid),
+          rcode = dns_msg.header.rcode,
+          client_mac = client_mac,
+          retry_attempts = retry_attempts,
+          retry_wait_ms = retry_wait_ms,
+          user = user
+        }
+      end)
       return NF_DROP
     end
   end
@@ -739,16 +750,18 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   if runtime_cfg.benchmark and entry and entry.benchmark_ms then
     local delta_ms = current_benchmark_ms() - entry.benchmark_ms
     if delta_ms >= 0 then
-      log_info({
-        action = "dns_benchmark",
-        txid = string.format("0x%04x", txid),
-        src_ip = src_ip,
-        dst_ip = dst_ip,
-        delta_ms = delta_ms,
-        refused = entry.refused,
-        dnsonly = entry.dnsonly,
-        user = user
-      })
+      log_info(function()
+        return {
+          action = "dns_benchmark",
+          txid = string.format("0x%04x", txid),
+          src_ip = src_ip,
+          dst_ip = dst_ip,
+          delta_ms = delta_ms,
+          refused = entry.refused,
+          dnsonly = entry.dnsonly,
+          user = user
+        }
+      end)
     end
   end
   local refused = entry and entry.refused or false
@@ -785,16 +798,18 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       end
       return _accum_0
     end)(), ",")
-    log_debug({
-      action = "response_refused",
-      src_ip = src_ip,
-      dst_ip = dst_ip,
-      vlan = l2.vlan,
-      txid = string.format("0x%04x", txid),
-      qnames = qnames,
-      client_mac = client_mac,
-      user = user
-    })
+    log_debug(function()
+      return {
+        action = "response_refused",
+        src_ip = src_ip,
+        dst_ip = dst_ip,
+        vlan = l2.vlan,
+        txid = string.format("0x%04x", txid),
+        qnames = qnames,
+        client_mac = client_mac,
+        user = user
+      }
+    end)
     local patched_ptr = ffi.cast("const unsigned char*", patched)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
     return -1
@@ -815,6 +830,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local success_any = false
   local no_ipv4_records = { }
   local no_ipv6_records = { }
+  if inject_nft and not dnsonly then
+    drain_ack()
+  end
   for _index_0 = 1, #answers do
     local ans = answers[_index_0]
     if ans.rtype == QTYPE.A then
@@ -884,38 +902,42 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end
   end
   if #no_ipv4_records > 0 then
-    local log
+    local log_fn
     if mac_valid(client_mac) then
-      log = log_info
+      log_fn = log_info
     else
-      log = log_warn
+      log_fn = log_warn
     end
-    log({
-      action = "no_ipv4_for_client",
-      client = client_ip,
-      count = #no_ipv4_records,
-      records = table.concat(no_ipv4_records, " "),
-      reason = "client_ipv4_unknown",
-      mac_fallback = mac_valid(client_mac),
-      user = user
-    })
+    log_fn(function()
+      return {
+        action = "no_ipv4_for_client",
+        client = client_ip,
+        count = #no_ipv4_records,
+        records = table.concat(no_ipv4_records, " "),
+        reason = "client_ipv4_unknown",
+        mac_fallback = mac_valid(client_mac),
+        user = user
+      }
+    end)
   end
   if #no_ipv6_records > 0 then
-    local log
+    local log_fn
     if mac_valid(client_mac) then
-      log = log_info
+      log_fn = log_info
     else
-      log = log_warn
+      log_fn = log_warn
     end
-    log({
-      action = "no_ipv6_for_client",
-      client = client_ip,
-      count = #no_ipv6_records,
-      records = table.concat(no_ipv6_records, " "),
-      reason = "client_ipv6_unknown",
-      mac_fallback = mac_valid(client_mac),
-      user = user
-    })
+    log_fn(function()
+      return {
+        action = "no_ipv6_for_client",
+        client = client_ip,
+        count = #no_ipv6_records,
+        records = table.concat(no_ipv6_records, " "),
+        reason = "client_ipv6_unknown",
+        mac_fallback = mac_valid(client_mac),
+        user = user
+      }
+    end)
   end
   local new_dns, dns_modified = patch_modified_dns(dns_raw, entry.reason)
   payload_modified = payload_modified or dns_modified
@@ -937,38 +959,44 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end
     return _accum_0
   end)(), ",")
-  log_debug({
-    action = resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow"),
-    src_ip = src_ip,
-    dst_ip = dst_ip,
-    vlan = l2.vlan,
-    txid = string.format("0x%04x", txid),
-    qnames = qnames,
-    answers = ip_count,
-    nft_rule_id = nft_rule_id,
-    payload_modified = payload_modified,
-    rcode = dns_msg.header.rcode,
-    client_mac = client_mac,
-    user = user
-  })
+  log_debug(function()
+    return {
+      action = resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow"),
+      src_ip = src_ip,
+      dst_ip = dst_ip,
+      vlan = l2.vlan,
+      txid = string.format("0x%04x", txid),
+      qnames = qnames,
+      answers = ip_count,
+      nft_rule_id = nft_rule_id,
+      payload_modified = payload_modified,
+      rcode = dns_msg.header.rcode,
+      client_mac = client_mac,
+      user = user
+    }
+  end)
   if records_to_add > 0 and not success_any then
     if ((config.nft or { }).add_failure_policy or "fail-closed") == "fail-closed" then
-      log_debug({
-        action = "nft_add_failed_policy_fail_closed",
-        txid = string.format("0x%04x", txid),
-        client_ip = client_ip,
-        qnames = qnames,
-        user = user
-      })
+      log_debug(function()
+        return {
+          action = "nft_add_failed_policy_fail_closed",
+          txid = string.format("0x%04x", txid),
+          client_ip = client_ip,
+          qnames = qnames,
+          user = user
+        }
+      end)
       return NF_DROP
     else
-      log_warn({
-        action = "nft_add_failed_fail_open",
-        txid = string.format("0x%04x", txid),
-        client_ip = client_ip,
-        qnames = qnames,
-        user = user
-      })
+      log_warn(function()
+        return {
+          action = "nft_add_failed_fail_open",
+          txid = string.format("0x%04x", txid),
+          client_ip = client_ip,
+          qnames = qnames,
+          user = user
+        }
+      end)
     end
   end
   if not dnsonly and records_to_add > 0 then

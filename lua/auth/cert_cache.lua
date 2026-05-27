@@ -19,10 +19,12 @@ persist_index = function(index_path, index_data)
   table.insert(lines, "}")
   fh:write(table.concat(lines, "\n"))
   fh:close()
-  log_debug({
-    action = "cert_cache_persist_index",
-    path = index_path
-  })
+  log_debug(function()
+    return {
+      action = "cert_cache_persist_index",
+      path = index_path
+    }
+  end)
   return true
 end
 local load_persistent_index
@@ -38,19 +40,23 @@ load_persistent_index = function(index_path)
   end
   local status, result = pcall(loadstring, content)
   if not (status) then
-    log_warn({
-      action = "cert_cache_load_index_failed",
-      path = index_path,
-      err = result
-    })
+    log_warn(function()
+      return {
+        action = "cert_cache_load_index_failed",
+        path = index_path,
+        err = result
+      }
+    end)
     return { }
   end
   local loaded_fn = result()
-  log_debug({
-    action = "cert_cache_loaded_index",
-    path = index_path,
-    entries = #loaded_fn
-  })
+  log_debug(function()
+    return {
+      action = "cert_cache_loaded_index",
+      path = index_path,
+      entries = #loaded_fn
+    }
+  end)
   return loaded_fn or { }
 end
 local create_cache
@@ -79,31 +85,37 @@ create_cache = function(max_size, ttl, cert_dir)
     local key_file = tostring(cert_dir) .. "/" .. tostring(hostname_lower) .. ".key"
     local cert_fh, cert_err = io.open(cert_file, "w")
     if not (cert_fh) then
-      log_warn({
-        action = "cert_cache_disk_write_failed",
-        file = cert_file,
-        reason = cert_err or "io.open failed"
-      })
+      log_warn(function()
+        return {
+          action = "cert_cache_disk_write_failed",
+          file = cert_file,
+          reason = cert_err or "io.open failed"
+        }
+      end)
       return false
     end
     cert_fh:write(cert_pem)
     cert_fh:close()
     local key_fh, key_err = io.open(key_file, "w")
     if not (key_fh) then
-      log_warn({
-        action = "cert_cache_disk_write_failed",
-        file = key_file,
-        reason = key_err or "io.open failed"
-      })
+      log_warn(function()
+        return {
+          action = "cert_cache_disk_write_failed",
+          file = key_file,
+          reason = key_err or "io.open failed"
+        }
+      end)
       os.remove(cert_file)
       return false
     end
     key_fh:write(key_pem)
     key_fh:close()
-    log_debug({
-      action = "cert_cache_disk_saved",
-      hostname = hostname_lower
-    })
+    log_debug(function()
+      return {
+        action = "cert_cache_disk_saved",
+        hostname = hostname_lower
+      }
+    end)
     return true
   end
   local load_cert_from_disk
@@ -123,10 +135,12 @@ create_cache = function(max_size, ttl, cert_dir)
     if not (cert_pem and key_pem and #cert_pem > 0 and #key_pem > 0) then
       return nil, nil
     end
-    log_debug({
-      action = "cert_cache_disk_loaded",
-      hostname = hostname_lower
-    })
+    log_debug(function()
+      return {
+        action = "cert_cache_disk_loaded",
+        hostname = hostname_lower
+      }
+    end)
     return cert_pem, key_pem
   end
   local set
@@ -138,11 +152,13 @@ create_cache = function(max_size, ttl, cert_dir)
     local now = os.time()
     local expires_at = now + ttl
     if not (save_cert_to_disk(hostname_lower, cert_pem, key_pem)) then
-      log_warn({
-        action = "cert_cache_set_disk_failed",
-        hostname = hostname_lower,
-        reason = "save_cert_to_disk returned false"
-      })
+      log_warn(function()
+        return {
+          action = "cert_cache_set_disk_failed",
+          hostname = hostname_lower,
+          reason = "save_cert_to_disk returned false"
+        }
+      end)
       return false
     end
     persistent_index[hostname_lower] = {
@@ -162,11 +178,13 @@ create_cache = function(max_size, ttl, cert_dir)
     while #lru_order > max_size do
       local victim = table.remove(lru_order, 1)
       data[victim] = nil
-      log_debug({
-        action = "cert_cache_evict",
-        hostname = victim,
-        reason = "lru_full"
-      })
+      log_debug(function()
+        return {
+          action = "cert_cache_evict",
+          hostname = victim,
+          reason = "lru_full"
+        }
+      end)
     end
     data[hostname_lower] = {
       cert_pem = cert_pem,
@@ -175,11 +193,13 @@ create_cache = function(max_size, ttl, cert_dir)
       expires_at = expires_at,
       accessed_at = now
     }
-    log_debug({
-      action = "cert_cache_set",
-      hostname = hostname_lower,
-      size = #lru_order
-    })
+    log_debug(function()
+      return {
+        action = "cert_cache_set",
+        hostname = hostname_lower,
+        size = #lru_order
+      }
+    end)
     return true
   end
   local get
@@ -192,10 +212,12 @@ create_cache = function(max_size, ttl, cert_dir)
     if persistent_entry then
       local now = os.time()
       if now >= persistent_entry.expires_at then
-        log_debug({
-          action = "cert_cache_disk_expired",
-          hostname = hostname_lower
-        })
+        log_debug(function()
+          return {
+            action = "cert_cache_disk_expired",
+            hostname = hostname_lower
+          }
+        end)
         persistent_index[hostname_lower] = nil
         persist_index(index_path, persistent_index)
         return nil
@@ -212,10 +234,12 @@ create_cache = function(max_size, ttl, cert_dir)
             break
           end
         end
-        log_debug({
-          action = "cert_cache_expired",
-          hostname = hostname_lower
-        })
+        log_debug(function()
+          return {
+            action = "cert_cache_expired",
+            hostname = hostname_lower
+          }
+        end)
         return nil
       end
       for i = 1, #lru_order do
@@ -226,11 +250,13 @@ create_cache = function(max_size, ttl, cert_dir)
       end
       table.insert(lru_order, hostname_lower)
       entry.accessed_at = now
-      log_debug({
-        action = "cert_cache_hit",
-        hostname = hostname_lower,
-        source = "ram"
-      })
+      log_debug(function()
+        return {
+          action = "cert_cache_hit",
+          hostname = hostname_lower,
+          source = "ram"
+        }
+      end)
       return entry
     end
     local cert_pem, key_pem = load_cert_from_disk(hostname_lower)
@@ -255,18 +281,22 @@ create_cache = function(max_size, ttl, cert_dir)
         data[victim] = nil
       end
       data[hostname_lower] = entry
-      log_debug({
-        action = "cert_cache_hit",
-        hostname = hostname_lower,
-        source = "disk"
-      })
+      log_debug(function()
+        return {
+          action = "cert_cache_hit",
+          hostname = hostname_lower,
+          source = "disk"
+        }
+      end)
       return entry
     end
-    log_debug({
-      action = "cert_cache_miss",
-      hostname = hostname_lower,
-      reason = "not_found"
-    })
+    log_debug(function()
+      return {
+        action = "cert_cache_miss",
+        hostname = hostname_lower,
+        reason = "not_found"
+      }
+    end)
     return nil
   end
   local delete
@@ -288,10 +318,12 @@ create_cache = function(max_size, ttl, cert_dir)
     os.remove(tostring(cert_dir) .. "/" .. tostring(hostname_lower) .. ".key")
     persistent_index[hostname_lower] = nil
     persist_index(index_path, persistent_index)
-    log_debug({
-      action = "cert_cache_delete",
-      hostname = hostname_lower
-    })
+    log_debug(function()
+      return {
+        action = "cert_cache_delete",
+        hostname = hostname_lower
+      }
+    end)
     return true
   end
   local purge_expired
@@ -332,10 +364,12 @@ create_cache = function(max_size, ttl, cert_dir)
       removed_count = removed_count + 1
     end
     if removed_count > 0 then
-      log_debug({
-        action = "cert_cache_purge_expired",
-        count = removed_count
-      })
+      log_debug(function()
+        return {
+          action = "cert_cache_purge_expired",
+          count = removed_count
+        }
+      end)
     end
     return removed_count
   end
@@ -355,9 +389,11 @@ create_cache = function(max_size, ttl, cert_dir)
     os.execute("rm -f " .. tostring(cert_dir) .. "/*.crt " .. tostring(cert_dir) .. "/*.key 2>/dev/null")
     persistent_index = { }
     persist_index(index_path, persistent_index)
-    log_debug({
-      action = "cert_cache_clear"
-    })
+    log_debug(function()
+      return {
+        action = "cert_cache_clear"
+      }
+    end)
     return true
   end
   return {

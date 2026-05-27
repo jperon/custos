@@ -49,21 +49,25 @@ create_pipe = function(name)
   end
   local sz = libc.fcntl(fds[1], F_SETPIPE_SZ, PIPE_DESIRED_SIZE)
   if sz and sz >= 0 then
-    log_info({
-      action = "pipe_resize",
-      name = name,
-      fd = fds[1],
-      new_size = sz
-    })
+    log_info(function()
+      return {
+        action = "pipe_resize",
+        name = name,
+        fd = fds[1],
+        new_size = sz
+      }
+    end)
   else
     local errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn({
-      action = "pipe_resize_failed",
-      name = name,
-      fd = fds[1],
-      rc = sz,
-      errno = errno
-    })
+    log_warn(function()
+      return {
+        action = "pipe_resize_failed",
+        name = name,
+        fd = fds[1],
+        rc = sz,
+        errno = errno
+      }
+    end)
   end
   return {
     rfd = fds[0],
@@ -222,11 +226,13 @@ supervise = function(pipes, sfd)
   local bridge_slaves = detect_bridge_slaves() or {
     bridge_ifname
   }
-  log_info({
-    action = "bridge_slaves_detected",
-    count = #bridge_slaves,
-    interfaces = table.concat(bridge_slaves, ",")
-  })
+  log_info(function()
+    return {
+      action = "bridge_slaves_detected",
+      count = #bridge_slaves,
+      interfaces = table.concat(bridge_slaves, ",")
+    }
+  end)
   local workers_without_filter = {
     {
       name = "mac-lrn",
@@ -446,17 +452,21 @@ supervise = function(pipes, sfd)
   local status = ffi.new("int[1]")
   local siginfo = ffi.new("signalfd_siginfo")
   local sig_sz = ffi.sizeof("signalfd_siginfo")
-  log_info({
-    action = "supervisor_running",
-    pid = tonumber(libc.getpid())
-  })
+  log_info(function()
+    return {
+      action = "supervisor_running",
+      pid = tonumber(libc.getpid())
+    }
+  end)
   while true do
     local rv = libc.read(sfd, siginfo, sig_sz)
     if rv == sig_sz then
       if siginfo.ssi_signo == SIGHUP then
-        log_info({
-          action = "supervisor_sighup_reload"
-        })
+        log_info(function()
+          return {
+            action = "supervisor_sighup_reload"
+          }
+        end)
         filter.load()
         filter_data = {
           rules = filter.rules,
@@ -466,11 +476,13 @@ supervise = function(pipes, sfd)
         for _index_0 = 1, #workers do
           local w = workers[_index_0]
           if (w.name:match("^dns%-q") or w.name:match("^resp%-q") or w.name:match("^cap%-q") or w.name:match("^rej%-q") or w.name == "doh") and w.pid and w.pid > 0 then
-            log_info({
-              action = "supervisor_sighup_kill",
-              name = w.name,
-              pid = w.pid
-            })
+            log_info(function()
+              return {
+                action = "supervisor_sighup_kill",
+                name = w.name,
+                pid = w.pid
+              }
+            end)
             libc.kill(w.pid, SIGTERM)
             status = ffi.new("int[1]")
             while libc.waitpid(w.pid, status, 0) ~= w.pid do
@@ -478,27 +490,33 @@ supervise = function(pipes, sfd)
             end
             ffi.C.sleep(1)
             w.pid = w.restart_fn()
-            log_info({
-              action = "supervisor_sighup_refork",
-              name = w.name,
-              pid = w.pid
-            })
+            log_info(function()
+              return {
+                action = "supervisor_sighup_refork",
+                name = w.name,
+                pid = w.pid
+              }
+            end)
           end
         end
         for _index_0 = 1, #workers do
           local w = workers[_index_0]
           if w.name == "auth" and w.pid and w.pid > 0 then
-            log_info({
-              action = "supervisor_sighup_forward_auth",
-              pid = w.pid
-            })
+            log_info(function()
+              return {
+                action = "supervisor_sighup_forward_auth",
+                pid = w.pid
+              }
+            end)
             libc.kill(w.pid, SIGHUP)
           end
         end
       else
-        log_info({
-          action = "supervisor_sigterm"
-        })
+        log_info(function()
+          return {
+            action = "supervisor_sigterm"
+          }
+        end)
         nft_extra.cleanup()
         shutdown_workers(workers)
         close_supervisor_fds(pipes)
@@ -516,12 +534,14 @@ supervise = function(pipes, sfd)
         local w = workers[_index_0]
         if w.pid == dead_pid then
           local exit_code = bit.rshift(bit.band(status[0], 0xFF00), 8)
-          log_warn({
-            action = "worker_died",
-            name = w.name,
-            pid = dead_pid,
-            exit_code = exit_code
-          })
+          log_warn(function()
+            return {
+              action = "worker_died",
+              name = w.name,
+              pid = dead_pid,
+              exit_code = exit_code
+            }
+          end)
           ffi.C.sleep(1)
           w.pid = w.restart_fn()
           break
@@ -532,34 +552,42 @@ supervise = function(pipes, sfd)
     end
   end
 end
-log_info({
-  action = "dns-filter_start",
-  version = "1.0.0"
-})
+log_info(function()
+  return {
+    action = "dns-filter_start",
+    version = "1.0.0"
+  }
+end)
 local cfg_meta = config.__meta or { }
-log_info({
-  action = "config_source",
-  path = cfg_meta.path or "unknown",
-  env_path = cfg_meta.env_path or "",
-  external_loaded = cfg_meta.external_loaded and 1 or 0,
-  load_error = cfg_meta.load_error or ""
-})
-if not (cfg_meta.external_loaded) then
-  log_warn({
-    action = "config_external_missing",
+log_info(function()
+  return {
+    action = "config_source",
     path = cfg_meta.path or "unknown",
-    detail = "running defaults (likely restrictive)"
-  })
+    env_path = cfg_meta.env_path or "",
+    external_loaded = cfg_meta.external_loaded and 1 or 0,
+    load_error = cfg_meta.load_error or ""
+  }
+end)
+if not (cfg_meta.external_loaded) then
+  log_warn(function()
+    return {
+      action = "config_external_missing",
+      path = cfg_meta.path or "unknown",
+      detail = "running defaults (likely restrictive)"
+    }
+  end)
 end
 local sfd = create_signal_fd()
 local pipes = create_pipes()
-log_info({
-  action = "ipc_pipes_created",
-  question_response_rfd = pipes.question_response.rfd,
-  question_response_wfd = pipes.question_response.wfd,
-  learn_rfd = pipes.learn.rfd,
-  learn_wfd = pipes.learn.wfd,
-  events_rfd = pipes.events.rfd,
-  events_wfd = pipes.events.wfd
-})
+log_info(function()
+  return {
+    action = "ipc_pipes_created",
+    question_response_rfd = pipes.question_response.rfd,
+    question_response_wfd = pipes.question_response.wfd,
+    learn_rfd = pipes.learn.rfd,
+    learn_wfd = pipes.learn.wfd,
+    events_rfd = pipes.events.rfd,
+    events_wfd = pipes.events.wfd
+  }
+end)
 return supervise(pipes, sfd)

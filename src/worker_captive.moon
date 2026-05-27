@@ -133,7 +133,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
   ip, ip_off, tcp, tcp_off = parse_syn(raw)
   unless ip
-    log_warn { action: "parse_failed", queue: 2, len: payload_len, err: "parse_syn returned nil" }
+    log_warn -> { action: "parse_failed", queue: 2, len: payload_len, err: "parse_syn returned nil" }
     return NF_DROP
 
   -- Use client MAC from NFQUEUE metadata (l2.mac_raw contains the source MAC from the packet)
@@ -161,7 +161,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
   send = (f) ->
     res = send_frame raw_fd, f, ifindex
     unless res
-      log_warn { action: "frame_send_error", queue: 2, ip: client_ip_str, user: user, err: "send_frame returned false" }
+      log_warn -> { action: "frame_send_error", queue: 2, ip: client_ip_str, user: user, err: "send_frame returned false" }
     res
 
   url = custom_redirect_url or (if ip.version == 6
@@ -170,12 +170,12 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
     redirect_url4 or redirect_url6)
 
   unless url
-    log_warn { action: "no_redirect_url", queue: 2, ip: client_ip_str, version: ip.version, user: user }
+    log_warn -> { action: "no_redirect_url", queue: 2, ip: client_ip_str, version: ip.version, user: user }
     return NF_DROP
 
   ok, err = pcall ->
     f1, f2, f3 = build_response_frames eth, ip, tcp, url
-    log_info { action: "sending_frames", queue: 2, ip: client_ip_str, frames: 3, url: url, user: user }
+    log_info -> { action: "sending_frames", queue: 2, ip: client_ip_str, frames: 3, url: url, user: user }
     send f1
     send f2
     send f3
@@ -192,9 +192,9 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
     }
     if l2.mac_src and l2.mac_src != "unknown"
       fields.mac = l2.mac_src
-    log_info fields
+    log_info -> fields
   else
-    log_warn { action: "send_failed", queue: 2, err: "#{err}", ip: client_ip_str, user: user }
+    log_warn -> { action: "send_failed", queue: 2, err: "#{err}", ip: client_ip_str, user: user }
 
   NF_DROP
 
@@ -227,31 +227,31 @@ run = (queue_num, auth_cfg) ->
   if local_ip4
     redirect_url4 = "https://#{local_ip4}:#{https_port}/"
   else
-    log_warn { action: "no_ipv4", msg: "No IPv4 captive IP configured" }
+    log_warn -> { action: "no_ipv4", msg: "No IPv4 captive IP configured" }
 
   -- Build IPv6 redirect URL (wrap in brackets for URL)
   if local_ip6
     redirect_url6 = "https://[#{local_ip6}]:#{https_port}/"
   else
-    log_warn { action: "no_ipv6", msg: "No IPv6 captive IP configured" }
+    log_warn -> { action: "no_ipv6", msg: "No IPv6 captive IP configured" }
 
   -- Open AF_PACKET socket (bridge mode)
   fd, err = open_raw_socket ifname
   unless fd
-    log_error { action: "socket_failed", err: err, ifname: ifname }
+    log_error -> { action: "socket_failed", err: err, ifname: ifname }
     return
 
   raw_fd = fd
   ifindex = tonumber ffi.C.if_nametoindex ifname
   if ifindex == 0
     errno = tonumber(ffi.C.__errno_location()[0])
-    log_error { action: "ifindex_failed", ifname: ifname, errno: errno }
+    log_error -> { action: "ifindex_failed", ifname: ifname, errno: errno }
     return
 
   -- Lire le MAC du bridge une seule fois (évite un open sysfs par SYN TCP)
   _bridge_mac = bridge_raw.read_mac ifname
 
-  log_info {
+  log_info -> {
     action: "worker_start"
     :ifname
     :ifindex

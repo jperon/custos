@@ -20,44 +20,54 @@ end
 local extract_sni
 extract_sni = function(data)
   if not (data and #data >= 9) then
-    log_debug({
-      action = "server_sni_extract_too_short",
-      len = #data or 0
-    })
+    log_debug(function()
+      return {
+        action = "server_sni_extract_too_short",
+        len = #data or 0
+      }
+    end)
     return nil
   end
   local record_type = data:byte(1)
   if not (record_type == 0x16) then
-    log_debug({
-      action = "server_sni_extract_not_handshake",
-      type = record_type
-    })
+    log_debug(function()
+      return {
+        action = "server_sni_extract_not_handshake",
+        type = record_type
+      }
+    end)
     return nil
   end
   local record_length = read_u16_be(data, 4)
   if not (#data >= 5 + record_length) then
-    log_debug({
-      action = "server_sni_extract_truncated_record",
-      avail = #data,
-      need = 5 + record_length
-    })
+    log_debug(function()
+      return {
+        action = "server_sni_extract_truncated_record",
+        avail = #data,
+        need = 5 + record_length
+      }
+    end)
     return nil
   end
   local hs_type = data:byte(6)
   if not (hs_type == 0x01) then
-    log_debug({
-      action = "server_sni_extract_not_clienthello",
-      hs_type = hs_type
-    })
+    log_debug(function()
+      return {
+        action = "server_sni_extract_not_clienthello",
+        hs_type = hs_type
+      }
+    end)
     return nil
   end
   local ok_ch, ch = pcall(function()
     return ipparse_tls_client_hello.parse(data, 10)
   end)
   if not (ok_ch and ch and ch.extensions and #ch.extensions > 0) then
-    log_debug({
-      action = "server_sni_extract_clienthello_parse_failed"
-    })
+    log_debug(function()
+      return {
+        action = "server_sni_extract_clienthello_parse_failed"
+      }
+    end)
     return nil
   end
   local ext_data = ch.extensions
@@ -67,16 +77,20 @@ extract_sni = function(data)
       return ipparse_tls_extension.parse(ext_data, ext_offset)
     end)
     if not (ok_ext and ext and next_offset and next_offset > ext_offset) then
-      log_debug({
-        action = "server_sni_extract_truncated_extensions"
-      })
+      log_debug(function()
+        return {
+          action = "server_sni_extract_truncated_extensions"
+        }
+      end)
       return nil
     end
     if ext.type == 0 then
       if not (ext.data and #ext.data >= 5) then
-        log_debug({
-          action = "server_sni_extract_sni_parse_failed"
-        })
+        log_debug(function()
+          return {
+            action = "server_sni_extract_sni_parse_failed"
+          }
+        end)
         return nil
       end
       local name_list_len = read_u16_be(ext.data, 1)
@@ -85,50 +99,64 @@ extract_sni = function(data)
       local name_start = 6
       local name_end = name_start + name_len - 1
       if not (name_list_len >= 3 and #ext.data >= 2 + name_list_len) then
-        log_debug({
-          action = "server_sni_extract_sni_parse_failed"
-        })
+        log_debug(function()
+          return {
+            action = "server_sni_extract_sni_parse_failed"
+          }
+        end)
         return nil
       end
       if not (name_type == 0) then
-        log_debug({
-          action = "server_sni_extract_sni_parse_failed"
-        })
+        log_debug(function()
+          return {
+            action = "server_sni_extract_sni_parse_failed"
+          }
+        end)
         return nil
       end
       if not (name_len > 0 and name_end <= #ext.data and name_end <= 2 + name_list_len) then
-        log_debug({
-          action = "server_sni_extract_sni_parse_failed"
-        })
+        log_debug(function()
+          return {
+            action = "server_sni_extract_sni_parse_failed"
+          }
+        end)
         return nil
       end
       local ok_sni, sni_list = pcall(function()
         return ipparse_server_name.parse(ext.data, 1)
       end)
       if ok_sni and sni_list and sni_list.name and valid_hostname(sni_list.name) then
-        log_debug({
-          action = "server_sni_extract_found",
-          hostname = sni_list.name
-        })
+        log_debug(function()
+          return {
+            action = "server_sni_extract_found",
+            hostname = sni_list.name
+          }
+        end)
         return sni_list.name
       end
       if ok_sni and sni_list and sni_list.name and not valid_hostname(sni_list.name) then
-        log_warn({
-          action = "server_sni_extract_invalid_hostname",
-          hostname = sni_list.name
-        })
+        log_warn(function()
+          return {
+            action = "server_sni_extract_invalid_hostname",
+            hostname = sni_list.name
+          }
+        end)
         return nil
       end
-      log_debug({
-        action = "server_sni_extract_sni_parse_failed"
-      })
+      log_debug(function()
+        return {
+          action = "server_sni_extract_sni_parse_failed"
+        }
+      end)
       return nil
     end
     ext_offset = next_offset
   end
-  log_debug({
-    action = "server_sni_extract_no_sni_extension"
-  })
+  log_debug(function()
+    return {
+      action = "server_sni_extract_no_sni_extension"
+    }
+  end)
   return nil
 end
 return {

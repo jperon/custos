@@ -1,4 +1,33 @@
 local ffi = require("ffi")
+local CACHE_MAX_SIZE = 1000
+local CACHE_TTL_SEC = 5
+local _domain_cache = { }
+local _domain_cache_order = { }
+local _cache_hits = 0
+local _cache_misses = 0
+local get_cache_stats
+get_cache_stats = function()
+  return {
+    hits = _cache_hits,
+    misses = _cache_misses
+  }
+end
+local clear_cache
+clear_cache = function()
+  _domain_cache = { }
+  _domain_cache_order = { }
+  _cache_hits = 0
+  _cache_misses = 0
+end
+local _evict_oldest_if_needed
+_evict_oldest_if_needed = function()
+  while #_domain_cache_order >= CACHE_MAX_SIZE do
+    local oldest = table.remove(_domain_cache_order, 1)
+    if oldest then
+      _domain_cache[oldest] = nil
+    end
+  end
+end
 local load_list
 load_list = function(path)
   local xxhash_ok, xxhash = pcall(require, "ffi_xxhash")
@@ -45,23 +74,48 @@ load_list = function(path)
   end
 end
 local lookup
-lookup = function(arr, n, domain)
+lookup = function(arr, n, domain, listname)
   local xxh64
   xxh64 = require("ffi_xxhash").xxh64
   local bsearch
   bsearch = require("filter.lib.bsearch").bsearch
-  if bsearch(arr, n, xxh64(domain)) then
-    return true
-  end
-  local pos = domain:find(".", 1, true)
-  while pos do
-    local suffix = domain:sub(pos + 1)
-    if bsearch(arr, n, xxh64(suffix)) then
-      return true
+  local now = os.time()
+  local cache_key = listname and tostring(listname) .. ":" .. tostring(domain) or domain
+  local cached = _domain_cache[cache_key]
+  if cached then
+    if now - cached.ts < CACHE_TTL_SEC then
+      _cache_hits = _cache_hits + 1
+      return cached.found
+    else
+      _domain_cache[cache_key] = nil
+      for i, d in ipairs(_domain_cache_order) do
+        if d == cache_key then
+          table.remove(_domain_cache_order, i)
+          break
+        end
+      end
     end
-    pos = domain:find(".", pos + 1, true)
   end
-  return false
+  _cache_misses = _cache_misses + 1
+  local found = bsearch(arr, n, xxh64(domain))
+  if not found then
+    local pos = domain:find(".", 1, true)
+    while pos do
+      local suffix = domain:sub(pos + 1)
+      if bsearch(arr, n, xxh64(suffix)) then
+        found = true
+        break
+      end
+      pos = domain:find(".", pos + 1, true)
+    end
+  end
+  _evict_oldest_if_needed()
+  _domain_cache[cache_key] = {
+    found = found,
+    ts = now
+  }
+  _domain_cache_order[#_domain_cache_order + 1] = cache_key
+  return found
 end
 local _schema = {
   label = "Liste de domaines",
@@ -128,7 +182,7 @@ _factory = function(cfg)
         if not (domain) then
           return false, "Missing domain in request"
         end
-        if lookup(arr, n, domain) then
+        if lookup(arr, n, domain, listname) then
           return true, "Domain matched in list '" .. tostring(listname) .. "'"
         else
           return false, "Domain not in list '" .. tostring(listname) .. "'"

@@ -42,7 +42,7 @@ init = (cfg, nft_wfd) ->
   init_sessions session_timeout
   
   if log_info
-    log_info {
+    log_info -> {
       action: "init"
       session_timeout: session_timeout
       user_field: user_field
@@ -70,7 +70,7 @@ process_tls_certificate = (tls_data) ->
   
   unless username
     if log_warn
-      log_warn {
+      log_warn -> {
         action: "username_extraction_failed"
         cert_subject: cert_data.subject or "unknown"
       }
@@ -78,7 +78,7 @@ process_tls_certificate = (tls_data) ->
   
   unless validate_username username
     if log_warn
-      log_warn {
+      log_warn -> {
         action: "username_validation_failed"
         username: username
       }
@@ -90,7 +90,7 @@ process_tls_certificate = (tls_data) ->
   
   if success
     if log_info
-      log_info {
+      log_info -> {
         action: "user_authenticated"
         username: username
         src_ip: src_ip
@@ -104,7 +104,7 @@ process_tls_certificate = (tls_data) ->
     return true, nil
   else
     if log_warn
-      log_warn {
+      log_warn -> {
         action: "session_creation_failed"
         username: username
       }
@@ -143,7 +143,7 @@ get_user_session = (username) ->
 -- In production, this would be integrated with supervisor/main.moon
 -- @treturn nil
 run = ->
-  log_info { action: "worker_started" }
+  log_info -> { action: "worker_started" }
   
   -- Main loop would process TLS certificate data here
   -- and call process_tls_certificate for each connection

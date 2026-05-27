@@ -37,7 +37,7 @@ run_cmd = (cmd) ->
   rc = libnft.nft_run_cmd_from_buffer ctx, cmd
   if rc != 0
     ts = os.time!
-    log_warn { action: "nft_extra_cmd_failed", cmd: cmd, rc: rc, ts: ts }
+    log_warn -> { action: "nft_extra_cmd_failed", cmd: cmd, rc: rc, ts: ts }
     return false, rc
   true, 0
 
@@ -84,9 +84,9 @@ init = (rules) ->
         del_cmd = "delete rule #{config.nft.family} #{config.nft.table} forward handle #{h}"
         removed, rc = run_cmd del_cmd
         if removed
-          log_info { action: "nft_extra_rule_removed_existing", rule: r, handle: h }
+          log_info -> { action: "nft_extra_rule_removed_existing", rule: r, handle: h }
         else
-          log_warn { action: "nft_extra_rule_remove_failed", rule: r, handle: h, rc: rc }
+          log_warn -> { action: "nft_extra_rule_remove_failed", rule: r, handle: h, rc: rc }
 
     -- Insérer une unique occurrence en position 0
     insert_cmd = "insert rule #{config.nft.family} #{config.nft.table} forward position 0 #{r}"
@@ -94,10 +94,10 @@ init = (rules) ->
     if ok
       -- Conserver la représentation exacte pour tentative de suppression ultérieure.
       table.insert inserted_rules, r
-      log_info { action: "nft_extra_rule_added", rule: r }
+      log_info -> { action: "nft_extra_rule_added", rule: r }
     else
       all_ok = false
-      log_warn { action: "nft_extra_rule_add_failed", rule: r, rc: rc }
+      log_warn -> { action: "nft_extra_rule_add_failed", rule: r, rc: rc }
   all_ok
 
 --- Peuple les sets filter_ips4/filter_ips6 avec les IPs propres du filtre.
@@ -116,7 +116,7 @@ populate_filter_ips = ->
       ip = line\match "%s+inet%s+([%d%.]+)/"
       if ip
         ok = run_cmd "add element #{family} #{tbl} filter_ips4 { #{ip} }"
-        log_info { action: "nft_filter_ip4_added", ip: ip } if ok
+        log_info -> { action: "nft_filter_ip4_added", ip: ip } if ok
     fh\close!
 
   -- IPv6 (hors link-local fe80::/10)
@@ -126,7 +126,7 @@ populate_filter_ips = ->
       ip6 = line\match "%s+inet6%s+([%x:]+)/"
       if ip6 and not ip6\match "^fe80"
         ok = run_cmd "add element #{family} #{tbl} filter_ips6 { #{ip6} }"
-        log_info { action: "nft_filter_ip6_added", ip: ip6 } if ok
+        log_info -> { action: "nft_filter_ip6_added", ip: ip6 } if ok
     fh\close!
 
 --- Applique les règles définies dans la config exportée (config.NFT_EXTRA_RULES).
@@ -141,9 +141,9 @@ apply_from_config = ->
   if rc_check ~= 0
     ok, rc = require("nft_rules").apply!
     unless ok
-      log_warn { action: "nft_extra_main_rules_reapply_failed", rc: rc or -1 }
+      log_warn -> { action: "nft_extra_main_rules_reapply_failed", rc: rc or -1 }
       return false
-    log_info { action: "nft_extra_main_rules_reapplied" }
+    log_info -> { action: "nft_extra_main_rules_reapplied" }
   populate_filter_ips!
   cfg = require "config"
   rules = cfg.nft.extra_rules or {}
@@ -190,9 +190,9 @@ cleanup = ->
           cmd = "delete rule #{config.nft.family} #{config.nft.table} forward handle #{h}"
           ok, rc = run_cmd cmd
           if ok
-            log_info { action: "nft_extra_rule_removed_on_cleanup", rule: r, handle: h }
+            log_info -> { action: "nft_extra_rule_removed_on_cleanup", rule: r, handle: h }
           else
-            log_warn { action: "nft_extra_rule_delete_failed", rule: r, handle: h, rc: rc }
+            log_warn -> { action: "nft_extra_rule_delete_failed", rule: r, handle: h, rc: rc }
 
     inserted_rules = {}
 

@@ -60,6 +60,10 @@ IPPARSE_STATIC_LUAS := $(patsubst $(SRC)/%.lua,$(LUA)/%.lua,$(IPPARSE_STATIC_SRC
 UNIT_SPEC_MOONS := $(shell find tests/unit -name '*_spec.moon' 2>/dev/null | sort)
 UNIT_SPEC_LUAS  := $(patsubst %.moon,%.lua,$(UNIT_SPEC_MOONS))
 
+# Helpers de tests écrits en MoonScript (busted_setup, mini_busted, …)
+TEST_HELPER_MOONS := $(shell find tests/helpers -name '*.moon' 2>/dev/null | sort)
+TEST_HELPER_LUAS  := $(patsubst %.moon,%.lua,$(TEST_HELPER_MOONS))
+
 .PHONY: all clean check test test-unit test-vm test-openwrt test-e2e test-e2e-rebuild \
         homelab-up homelab-down homelab-nuke homelab-redeploy \
         coverage run reload update-lists make-secret logs help
@@ -90,6 +94,13 @@ $(LUA)/%.lua: $(SRC)/%.lua
 tests/unit/%.lua: tests/unit/%.moon
 	$(MOONC) -o $@ $<
 
+# Compile helpers .moon → .lua (rule for tests/helpers/*.moon)
+tests/helpers/%.lua: tests/helpers/%.moon
+	$(MOONC) -o $@ $<
+
+# Cible pour compiler tous les helpers de tests
+compile-helpers: $(TEST_HELPER_LUAS)
+
 # Syntax check all generated Lua files
 check: all
 	@echo "Vérification syntaxique..."
@@ -102,7 +113,7 @@ check: all
 # Compile tous les specs .moon → .lua, puis lance Busted
 compile-specs: $(UNIT_SPEC_LUAS)
 
-test-unit: all compile-specs
+test-unit: all compile-specs compile-helpers
 	@mkdir -p tmp/test-logs
 	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
 	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
@@ -110,11 +121,11 @@ test-unit: all compile-specs
 	  rc=$$?; exit $$rc
 
 # Cible publique : tous les tests unitaires locaux (pas root, pas VM)
-test: all compile-specs test-unit
+test: all compile-specs compile-helpers test-unit
 
 # ── Couverture ────────────────────────────────────────────────────────────
 
-coverage: all compile-specs
+coverage: all compile-specs compile-helpers
 	@mkdir -p tmp/coverage tmp/test-logs
 	@rm -f tmp/coverage/luacov.stats.out tmp/coverage/luacov.report.out
 	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
@@ -192,6 +203,8 @@ run: all
 # Clean compiled files
 clean:
 	rm -rf $(LUA)
+	@# Supprimer les .lua générés depuis des .moon dans tests/
+	rm -f $(UNIT_SPEC_LUAS) $(TEST_HELPER_LUAS)
 
 # Reload config (SIGHUP)
 reload:

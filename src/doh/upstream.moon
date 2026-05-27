@@ -24,14 +24,14 @@ probe_ipv6 = (ipv6_addr, port=53) ->
   ret = C.inet_pton AF_INET6, ipv6_addr, addr.sin6_addr
   if ret <= 0
     C.close fd
-    log_warn { action: "probe_ipv6_failed", addr: ipv6_addr, port: port, reason: "inet_pton_failed" }
+    log_warn -> { action: "probe_ipv6_failed", addr: ipv6_addr, port: port, reason: "inet_pton_failed" }
     return false
   rc = C.connect fd, ffi.cast("struct sockaddr*", addr), ffi.sizeof(addr)
   C.close fd
   ok = rc == 0
   unless ok
-    log_warn { action: "probe_ipv6_failed", addr: ipv6_addr, port: port, reason: "connect_failed", errno: get_errno! }
-  log_debug { action: "probe_ipv6", addr: ipv6_addr, port: port, ok: ok }
+    log_warn -> { action: "probe_ipv6_failed", addr: ipv6_addr, port: port, reason: "connect_failed", errno: get_errno! }
+  log_debug -> { action: "probe_ipv6", addr: ipv6_addr, port: port, ok: ok }
   ok
 
 --- Set SO_RCVTIMEO and SO_SNDTIMEO on a socket fd.
@@ -85,7 +85,7 @@ new_client = (upstream_ip, upstream_port=53, timeout_ms=2000) ->
       C.close fd
       return nil, "connect(AF_INET) failed: errno=" .. get_errno!
 
-  log_debug { action: "upstream_connected", :upstream_ip, :upstream_port, :family, :fd }
+  log_debug -> { action: "upstream_connected", :upstream_ip, :upstream_port, :family, :fd }
   { :fd, :family, :upstream_ip, :upstream_port }
 
 --- Send a raw DNS query and wait for the response.
@@ -95,24 +95,24 @@ new_client = (upstream_ip, upstream_port=53, timeout_ms=2000) ->
 -- @tparam string dns_raw  Raw DNS query bytes (wire format).
 -- @treturn string|nil  Raw DNS response bytes, or nil + error string.
 query = (client, dns_raw) ->
-  log_debug { action: "upstream_send", upstream_ip: client.upstream_ip, bytes: #dns_raw }
+  log_debug -> { action: "upstream_send", upstream_ip: client.upstream_ip, bytes: #dns_raw }
   n = C.send client.fd, dns_raw, #dns_raw, 0
   if n < 0
     errno = get_errno!
-    log_warn { action: "upstream_send_failed", upstream_ip: client.upstream_ip, errno: errno }
+    log_warn -> { action: "upstream_send_failed", upstream_ip: client.upstream_ip, errno: errno }
     return nil, "send() failed: errno=" .. errno
 
   buf = ffi.new "uint8_t[?]", DNS_BUF_SIZE
   n = C.recv client.fd, buf, DNS_BUF_SIZE, 0
   if n < 0
     errno = get_errno!
-    log_warn { action: "upstream_recv_failed", upstream_ip: client.upstream_ip, errno: errno }
+    log_warn -> { action: "upstream_recv_failed", upstream_ip: client.upstream_ip, errno: errno }
     return nil, "recv() timed out or failed: errno=" .. errno
   if n == 0
-    log_warn { action: "upstream_recv_empty", upstream_ip: client.upstream_ip }
+    log_warn -> { action: "upstream_recv_empty", upstream_ip: client.upstream_ip }
     return nil, "recv() returned 0 (connection closed)"
 
-  log_debug { action: "upstream_recv", upstream_ip: client.upstream_ip, bytes: n }
+  log_debug -> { action: "upstream_recv", upstream_ip: client.upstream_ip, bytes: n }
   ffi.string buf, n
 
 --- Close the UDP socket held by a client handle.

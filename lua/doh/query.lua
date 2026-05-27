@@ -58,36 +58,44 @@ inject_answers = function(answers, client_ip, client_mac, rule_id, timeout, ack_
       end
       if ans.rtype == QTYPE.A then
         if not (is_v6_client) then
-          log_debug({
-            action = "nft_add_ip4",
-            client_ip = client_ip,
-            dest = addr
-          })
+          log_debug(function()
+            return {
+              action = "nft_add_ip4",
+              client_ip = client_ip,
+              dest = addr
+            }
+          end)
           add_ip4(client_ip, addr, rule_id, timeout, ack_corr)
         end
         if mac_valid(client_mac) then
-          log_debug({
-            action = "nft_add_mac4",
-            client_mac = client_mac,
-            dest = addr
-          })
+          log_debug(function()
+            return {
+              action = "nft_add_mac4",
+              client_mac = client_mac,
+              dest = addr
+            }
+          end)
           add_mac4(client_mac, addr, rule_id, timeout, ack_corr)
         end
       elseif ans.rtype == QTYPE.AAAA then
         if is_v6_client then
-          log_debug({
-            action = "nft_add_ip6",
-            client_ip = client_ip,
-            dest = addr
-          })
+          log_debug(function()
+            return {
+              action = "nft_add_ip6",
+              client_ip = client_ip,
+              dest = addr
+            }
+          end)
           add_ip6(client_ip, addr, rule_id, timeout, ack_corr)
         end
         if mac_valid(client_mac) then
-          log_debug({
-            action = "nft_add_mac6",
-            client_mac = client_mac,
-            dest = addr
-          })
+          log_debug(function()
+            return {
+              action = "nft_add_mac6",
+              client_mac = client_mac,
+              dest = addr
+            }
+          end)
           add_mac6(client_mac, addr, rule_id, timeout, ack_corr)
         end
       end
@@ -106,21 +114,25 @@ local process_query
 process_query = function(dns_raw, client_ip, client_mac, upstream)
   local dns, parse_err = parse(dns_raw, 1, false)
   if not (dns) then
-    log_warn({
-      action = "parse_failed",
-      client_ip = client_ip,
-      err = tostring(parse_err)
-    })
+    log_warn(function()
+      return {
+        action = "parse_failed",
+        client_ip = client_ip,
+        err = tostring(parse_err)
+      }
+    end)
     return nil, "dns_parse_failed"
   end
   local user = user_for_mac(client_mac, client_ip, config.auth.sessions_file)
-  log_debug({
-    action = "process_query",
-    client_ip = client_ip,
-    client_mac = client_mac,
-    user = user,
-    query_bytes = #dns_raw
-  })
+  log_debug(function()
+    return {
+      action = "process_query",
+      client_ip = client_ip,
+      client_mac = client_mac,
+      user = user,
+      query_bytes = #dns_raw
+    }
+  end)
   local block_reason = nil
   local allow_reason = nil
   local blocked_dns = nil
@@ -140,12 +152,14 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       ts = os.time(),
       user = user
     }
-    log_debug({
-      action = "filter_decide",
-      qname = qname_text,
-      qtype = q.qtype_name or tostring(q.qtype),
-      client_ip = client_ip
-    })
+    log_debug(function()
+      return {
+        action = "filter_decide",
+        qname = qname_text,
+        qtype = q.qtype_name or tostring(q.qtype),
+        client_ip = client_ip
+      }
+    end)
     local allowed, reason, rule, timeout = decide(req)
     local fields = {
       action = (function()
@@ -164,12 +178,16 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       rule = rule or ""
     }
     if allowed then
-      log_allow(fields)
+      log_allow(function()
+        return fields
+      end)
       allow_reason = reason
       allow_rule_id = rule
       allow_timeout = timeout
     else
-      log_block(fields)
+      log_block(function()
+        return fields
+      end)
       any_blocked = true
       block_reason = reason
     end
@@ -177,27 +195,33 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
   if any_blocked then
     local blocked = build_blocked_response(dns, dns_raw, block_reason)
     if not (blocked) then
-      log_warn({
-        action = "blocked_build_failed",
-        client_ip = client_ip,
-        reason = block_reason
-      })
+      log_warn(function()
+        return {
+          action = "blocked_build_failed",
+          client_ip = client_ip,
+          reason = block_reason
+        }
+      end)
       return nil, "blocked_response_build_failed"
     end
-    log_debug({
-      action = "query_blocked",
-      client_ip = client_ip,
-      reason = block_reason
-    })
+    log_debug(function()
+      return {
+        action = "query_blocked",
+        client_ip = client_ip,
+        reason = block_reason
+      }
+    end)
     return blocked
   end
   local resp_raw, upstream_err = upstream_mod.query(upstream, dns_raw)
   if not (resp_raw) then
-    log_warn({
-      action = "upstream_failed",
-      client_ip = client_ip,
-      err = upstream_err
-    })
+    log_warn(function()
+      return {
+        action = "upstream_failed",
+        client_ip = client_ip,
+        err = upstream_err
+      }
+    end)
     return nil, upstream_err or "upstream_failed"
   end
   local resp_dns, resp_err = parse(resp_raw, 1, false)
@@ -205,20 +229,24 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
     local answers = resp_dns.answers or { }
     local ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")
     inject_answers(answers, client_ip, client_mac, allow_rule_id, allow_timeout, ack_corr)
-    log_debug({
-      action = "query_allowed",
-      client_ip = client_ip,
-      client_mac = client_mac,
-      user = user,
-      answers = #answers,
-      reason = allow_reason or ""
-    })
+    log_debug(function()
+      return {
+        action = "query_allowed",
+        client_ip = client_ip,
+        client_mac = client_mac,
+        user = user,
+        answers = #answers,
+        reason = allow_reason or ""
+      }
+    end)
   else
-    log_warn({
-      action = "response_parse_failed",
-      client_ip = client_ip,
-      err = tostring(resp_err) or "unknown"
-    })
+    log_warn(function()
+      return {
+        action = "response_parse_failed",
+        client_ip = client_ip,
+        err = tostring(resp_err) or "unknown"
+      }
+    end)
   end
   return resp_raw
 end

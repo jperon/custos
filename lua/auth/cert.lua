@@ -154,23 +154,29 @@ local load_or_generate_sni
 load_or_generate_sni = function(hostname, cache)
   hostname = hostname or "custos"
   local hostname_lower = hostname:lower()
-  log_debug({
-    action = "cert_sni_request",
-    hostname = hostname_lower
-  })
+  log_debug(function()
+    return {
+      action = "cert_sni_request",
+      hostname = hostname_lower
+    }
+  end)
   local entry = cache.get(hostname_lower)
   if entry and entry.ctx then
-    log_debug({
-      action = "cert_sni_cache_hit_ram",
-      hostname = hostname_lower
-    })
+    log_debug(function()
+      return {
+        action = "cert_sni_cache_hit_ram",
+        hostname = hostname_lower
+      }
+    end)
     return entry.ctx
   end
   if entry and entry.cert_pem and entry.key_pem then
-    log_debug({
-      action = "cert_sni_cache_hit_disk",
-      hostname = hostname_lower
-    })
+    log_debug(function()
+      return {
+        action = "cert_sni_cache_hit_disk",
+        hostname = hostname_lower
+      }
+    end)
     local key_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.date("%Y")) .. ".key"
     local cert_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.date("%Y")) .. ".crt"
     local key_ok = pcall(function()
@@ -195,68 +201,86 @@ load_or_generate_sni = function(hostname, cache)
         key = key_file
       })
       cache.set(hostname_lower, entry.cert_pem, entry.key_pem, ctx)
-      log_debug({
-        action = "cert_sni_context_recreated",
-        hostname = hostname_lower
-      })
+      log_debug(function()
+        return {
+          action = "cert_sni_context_recreated",
+          hostname = hostname_lower
+        }
+      end)
       return ctx
     end
   end
-  log_debug({
-    action = "cert_sni_cache_miss",
-    hostname = hostname_lower
-  })
+  log_debug(function()
+    return {
+      action = "cert_sni_cache_miss",
+      hostname = hostname_lower
+    }
+  end)
   local gen = require("auth.cert_generator")
-  log_debug({
-    action = "cert_sni_generating",
-    hostname = hostname_lower
-  })
+  log_debug(function()
+    return {
+      action = "cert_sni_generating",
+      hostname = hostname_lower
+    }
+  end)
   local key_pem, cert_pem, ok, err = gen.generate_self_signed(hostname_lower)
   if not (ok) then
-    log_error({
-      action = "cert_sni_generation_failed",
-      hostname = hostname_lower,
-      err = err
-    })
+    log_error(function()
+      return {
+        action = "cert_sni_generation_failed",
+        hostname = hostname_lower,
+        err = err
+      }
+    end)
     error("Impossible de générer le certificat SNI pour " .. tostring(hostname_lower) .. " : " .. tostring(err))
   end
-  log_debug({
-    action = "cert_sni_generated",
-    hostname = hostname_lower,
-    key_size = #key_pem,
-    cert_size = #cert_pem
-  })
+  log_debug(function()
+    return {
+      action = "cert_sni_generated",
+      hostname = hostname_lower,
+      key_size = #key_pem,
+      cert_size = #cert_pem
+    }
+  end)
   local key_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.date("%Y")) .. ".key"
   local cert_file = "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(os.date("%Y")) .. ".crt"
-  log_debug({
-    action = "cert_sni_writing_files",
-    key_file = key_file,
-    cert_file = cert_file
-  })
+  log_debug(function()
+    return {
+      action = "cert_sni_writing_files",
+      key_file = key_file,
+      cert_file = cert_file
+    }
+  end)
   local key_fh, open_err = io.open(key_file, "w")
   if not (key_fh) then
-    log_error({
-      action = "cert_sni_key_write_failed",
-      key_file = key_file,
-      reason = open_err or "io.open failed"
-    })
+    log_error(function()
+      return {
+        action = "cert_sni_key_write_failed",
+        key_file = key_file,
+        reason = open_err or "io.open failed"
+      }
+    end)
     error("Impossible d'écrire la clé SNI : " .. tostring(key_file))
   end
   local bytes_written = key_fh:write(key_pem)
   key_fh:close()
-  log_debug({
-    action = "cert_sni_key_written",
-    key_file = key_file,
-    bytes = bytes_written
-  })
+  log_debug(function()
+    return {
+      action = "cert_sni_key_written",
+      key_file = key_file,
+      bytes = bytes_written
+    }
+  end)
   local key_stat
   key_stat, open_err = io.open(key_file, "r")
   if not (key_stat) then
-    log_error({
-      action = "cert_sni_key_verify_failed",
-      key_file = key_file,
-      reason = open_err or "io.open failed"
-    })
+    log_error(function()
+      return {
+        action = "cert_sni_key_verify_failed",
+        key_file = key_file,
+        reason = open_err or "io.open failed"
+      }
+    end)
     error("Clé SNI écrite mais non relisible : " .. tostring(key_file))
   end
   key_stat:close()
@@ -264,36 +288,44 @@ load_or_generate_sni = function(hostname, cache)
   cert_fh, open_err = io.open(cert_file, "w")
   if not (cert_fh) then
     os.remove(key_file)
-    log_error({
-      action = "cert_sni_cert_write_failed",
-      cert_file = cert_file,
-      reason = open_err or "io.open failed"
-    })
+    log_error(function()
+      return {
+        action = "cert_sni_cert_write_failed",
+        cert_file = cert_file,
+        reason = open_err or "io.open failed"
+      }
+    end)
     error("Impossible d'écrire le certificat SNI : " .. tostring(cert_file))
   end
   bytes_written = cert_fh:write(cert_pem)
   cert_fh:close()
-  log_debug({
-    action = "cert_sni_cert_written",
-    cert_file = cert_file,
-    bytes = bytes_written
-  })
+  log_debug(function()
+    return {
+      action = "cert_sni_cert_written",
+      cert_file = cert_file,
+      bytes = bytes_written
+    }
+  end)
   local cert_stat
   cert_stat, open_err = io.open(cert_file, "r")
   if not (cert_stat) then
-    log_error({
-      action = "cert_sni_cert_verify_failed",
-      cert_file = cert_file,
-      reason = open_err or "io.open failed"
-    })
+    log_error(function()
+      return {
+        action = "cert_sni_cert_verify_failed",
+        cert_file = cert_file,
+        reason = open_err or "io.open failed"
+      }
+    end)
     error("Certificat SNI écrit mais non relisible : " .. tostring(cert_file))
   end
   cert_stat:close()
-  log_debug({
-    action = "cert_sni_newcontext",
-    hostname = hostname_lower,
-    protocol = "tlsv1_2"
-  })
+  log_debug(function()
+    return {
+      action = "cert_sni_newcontext",
+      hostname = hostname_lower,
+      protocol = "tlsv1_2"
+    }
+  end)
   local ctx = ssl.newcontext({
     mode = "server",
     protocol = "tlsv1_2",
@@ -306,15 +338,19 @@ load_or_generate_sni = function(hostname, cache)
       "no_tlsv1_1"
     }
   })
-  log_debug({
-    action = "cert_sni_context_created",
-    hostname = hostname_lower
-  })
+  log_debug(function()
+    return {
+      action = "cert_sni_context_created",
+      hostname = hostname_lower
+    }
+  end)
   cache.set(hostname_lower, cert_pem, key_pem, ctx)
-  log_debug({
-    action = "cert_sni_cached",
-    hostname = hostname_lower
-  })
+  log_debug(function()
+    return {
+      action = "cert_sni_cached",
+      hostname = hostname_lower
+    }
+  end)
   return ctx
 end
 local load_static

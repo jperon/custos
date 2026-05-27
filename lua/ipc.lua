@@ -178,12 +178,14 @@ write_with_retry = function(pipe_wfd, msg)
       errno = 0
     end
     if errno ~= EAGAIN and errno ~= EWOULDBLOCK then
-      log_warn({
-        action = "ipc_write_syscall_failed",
-        fd = pipe_wfd,
-        errno = errno,
-        attempt = i
-      })
+      log_warn(function()
+        return {
+          action = "ipc_write_syscall_failed",
+          fd = pipe_wfd,
+          errno = errno,
+          attempt = i
+        }
+      end)
       return false
     end
     sleep_req[0].tv_sec = 0
@@ -197,12 +199,14 @@ write_with_retry = function(pipe_wfd, msg)
   else
     errno = 0
   end
-  log_warn({
-    action = "ipc_write_failed_exhausted",
-    fd = pipe_wfd,
-    errno = errno,
-    attempts = IPC_WRITE_RETRY_COUNT
-  })
+  log_warn(function()
+    return {
+      action = "ipc_write_failed_exhausted",
+      fd = pipe_wfd,
+      errno = errno,
+      attempts = IPC_WRITE_RETRY_COUNT
+    }
+  end)
   return false
 end
 local encode_msg
@@ -236,8 +240,8 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
   if #reason > 63 then
     reason = reason:sub(1, 63)
   end
-  if #rule_id > 63 then
-    rule_id = rule_id:sub(1, 63)
+  if #rule_id > 130 then
+    rule_id = rule_id:sub(1, 130)
   end
   local bench = tonumber(benchmark_ms) or 0
   if bench < 0 then
@@ -425,12 +429,14 @@ drain_lines = function(pipe_rfd, buf, now_fn, on_msg)
           on_msg(msg)
         end
       else
-        log_warn({
-          action = "ipc_invalid_message",
-          fd = pipe_rfd,
-          reason = err or "decode_failed",
-          raw = line:sub(1, 180)
-        })
+        log_warn(function()
+          return {
+            action = "ipc_invalid_message",
+            fd = pipe_rfd,
+            reason = err or "decode_failed",
+            raw = line:sub(1, 180)
+          }
+        end)
       end
       _continue_0 = true
     until true
@@ -447,10 +453,12 @@ drain_pipe = function(pipe_rfd, now_fn, on_msg)
   while true do
     local n = libc.read(pipe_rfd, read_buf, IPC_READ_CHUNK)
     if n == 0 then
-      log_warn({
-        action = "ipc_pipe_eof",
-        fd = pipe_rfd
-      })
+      log_warn(function()
+        return {
+          action = "ipc_pipe_eof",
+          fd = pipe_rfd
+        }
+      end)
       break
     end
     if n < 0 then
@@ -464,20 +472,24 @@ drain_pipe = function(pipe_rfd, now_fn, on_msg)
       if errno == EAGAIN or errno == EWOULDBLOCK then
         break
       end
-      log_warn({
-        action = "ipc_read_failed",
-        fd = pipe_rfd,
-        errno = errno
-      })
+      log_warn(function()
+        return {
+          action = "ipc_read_failed",
+          fd = pipe_rfd,
+          errno = errno
+        }
+      end)
       break
     end
     state = state .. ffi.string(read_buf, n)
     if #state > IPC_MAX_LINE * 4 then
-      log_warn({
-        action = "ipc_buffer_oversize",
-        fd = pipe_rfd,
-        size = #state
-      })
+      log_warn(function()
+        return {
+          action = "ipc_buffer_oversize",
+          fd = pipe_rfd,
+          size = #state
+        }
+      end)
       state = ""
     end
     local added

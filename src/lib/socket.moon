@@ -244,11 +244,11 @@ socket_mt.__index.accept = =>
   addrlen[0] = ffi.sizeof(addr)
 
   fd = C.accept(@fd, ffi.cast("struct sockaddr*", addr), addrlen)
-  log_debug { action: "socket_accept", listen_fd: @fd, client_fd: fd }
+  log_debug -> { action: "socket_accept", listen_fd: @fd, client_fd: fd }
 
   if fd < 0
     errno = get_errno!
-    log_debug { action: "socket_accept_failed", errno: errno }
+    log_debug -> { action: "socket_accept_failed", errno: errno }
     if errno == EAGAIN or errno == EWOULDBLOCK
       return nil
     if errno == 4   -- EINTR : appel interrompu par signal, à réessayer
@@ -263,7 +263,7 @@ socket_mt.__index.accept = =>
     closed: false
     timeout: nil
   }
-  log_debug { action: "socket_created", fd: fd, family: @family }
+  log_debug -> { action: "socket_created", fd: fd, family: @family }
   setmetatable client, socket_mt
   client
 
@@ -371,10 +371,10 @@ socket_mt.__index.setoption = (option, value) =>
 
 -- Get peer address (returns IP address as string)
 socket_mt.__index.getpeername = =>
-  log_debug { action: "getpeername_start", closed: @closed, family: @family }
+  log_debug -> { action: "getpeername_start", closed: @closed, family: @family }
 
   if @closed
-    log_debug { action: "socket_closed" }
+    log_debug -> { action: "socket_closed" }
     return nil
 
   addr = if @family == AF_INET6
@@ -382,42 +382,42 @@ socket_mt.__index.getpeername = =>
   else
     ffi.new "struct sockaddr_in"
 
-  log_debug { action: "addr_struct_created" }
+  log_debug -> { action: "addr_struct_created" }
 
   addrlen = ffi.new "socklen_t[1]"
   addrlen[0] = ffi.sizeof(addr)
-  log_debug { action: "addrlen_set", size: addrlen[0] }
+  log_debug -> { action: "addrlen_set", size: addrlen[0] }
 
   ret = C.getpeername(@fd, ffi.cast("struct sockaddr*", addr), addrlen)
-  log_debug { action: "getpeername_syscall", ret: ret, addrlen: addrlen[0] }
+  log_debug -> { action: "getpeername_syscall", ret: ret, addrlen: addrlen[0] }
 
   if ret < 0
-    log_debug { action: "getpeername_failed" }
+    log_debug -> { action: "getpeername_failed" }
     return nil
 
   -- Convert address to string
-  log_debug { action: "address_to_string", family: @family }
+  log_debug -> { action: "address_to_string", family: @family }
 
   -- Allocate buffer BEFORE if/else to maintain scope
   buf = if @family == AF_INET6
-    log_debug { action: "inet_ntop", family: "IPv6" }
+    log_debug -> { action: "inet_ntop", family: "IPv6" }
     inet6_buf = ffi.new "char[46]"  -- INET6_ADDRSTRLEN
     src_ptr = ffi.cast("const void*", addr.sin6_addr)
     ret_ntop = C.inet_ntop(AF_INET6, src_ptr, inet6_buf, 46)
-    log_debug { action: "inet_ntop_done", ret: tostring(ret_ntop) }
+    log_debug -> { action: "inet_ntop_done", ret: tostring(ret_ntop) }
     inet6_buf
   else
-    log_debug { action: "inet_ntop", family: "IPv4" }
+    log_debug -> { action: "inet_ntop", family: "IPv4" }
     inet_buf = ffi.new "char[16]"  -- INET_ADDRSTRLEN
     src_ptr = ffi.cast("const void*", addr.sin_addr)
     ret_ntop = C.inet_ntop(AF_INET, src_ptr, inet_buf, 16)
-    log_debug { action: "inet_ntop_done", ret: tostring(ret_ntop) }
+    log_debug -> { action: "inet_ntop_done", ret: tostring(ret_ntop) }
     inet_buf
 
-  log_debug { action: "buf_allocated" }
+  log_debug -> { action: "buf_allocated" }
   buf_ptr = ffi.cast("char*", buf)
   result = ffi.string(buf_ptr)
-  log_debug { action: "getpeername_result", ip: result }
+  log_debug -> { action: "getpeername_result", ip: result }
   result
 
 -- Get socket address (returns IP address as string)

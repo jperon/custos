@@ -332,8 +332,8 @@ ffi.C.unlink(path)
       local log_calls = { }
       local old_log = package.loaded["log"]
       package.loaded["log"] = {
-        log_warn = function(x)
-          log_calls[#log_calls + 1] = x
+        log_warn = function(thunk)
+          log_calls[#log_calls + 1] = thunk()
         end
       }
       mock_libc.socket = function()
@@ -348,7 +348,7 @@ ffi.C.unlink(path)
     end)
     it("socket() retourne -1 + IP EUI-64 → fallback EUI-64", function()
       package.loaded["log"] = {
-        log_warn = function(x)
+        log_warn = function(thunk)
           return nil
         end
       }

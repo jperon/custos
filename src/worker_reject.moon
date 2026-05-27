@@ -257,7 +257,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
     if exp and exp > now
       raw_ptr = ffi.cast "const unsigned char*", raw
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
-      log_debug {
+      log_debug -> {
         action: "rtp_passthrough_hit"
         queue: 3
         src: src_ip
@@ -270,7 +270,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
     elseif exp_dport and exp_dport > now
       raw_ptr = ffi.cast "const unsigned char*", raw
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
-      log_debug {
+      log_debug -> {
         action: "rtp_passthrough_hit_dport"
         queue: 3
         src: src_ip
@@ -290,7 +290,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
       rtp_passthrough_dport[rev_dport_key] = expiry
       raw_ptr = ffi.cast "const unsigned char*", raw
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
-      log_debug {
+      log_debug -> {
         action: "rtp_passthrough_add"
         queue: 3
         src: src_ip
@@ -314,7 +314,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
       forge_icmp_reject raw, ip
 
   unless ok
-    log_warn { action: "forge_error", src: src_ip, dst: dst_ip, proto: proto, err: tostring(err_or_frame) }
+    log_warn -> { action: "forge_error", src: src_ip, dst: dst_ip, proto: proto, err: tostring(err_or_frame) }
     libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_DROP, 0, nil
     return VERDICT_DONE
 
@@ -331,7 +331,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
   forged_ptr = ffi.cast "const unsigned char*", forged
   libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #forged, forged_ptr
 
-  log_debug {
+  log_debug -> {
     action:   "reject_forge"
     queue:    3
     src:      src_ip
@@ -351,7 +351,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
 -- @treturn nil
 run = (queue_num, cfg) ->
   set_action_prefix "reject_"
-  log_info { action: "worker_start", queue: queue_num }
+  log_info -> { action: "worker_start", queue: queue_num }
   -- Initialiser le set des ports exclus du suivi RTP depuis la config
   rtp_cfg = cfg and cfg.rtp
   if rtp_cfg and rtp_cfg.excluded_ports

@@ -245,30 +245,36 @@ local init
 init = function(ifname)
   local our_mac = read_own_mac(ifname)
   if not (our_mac) then
-    log_warn({
-      action = "mac_prober_no_mac",
-      ifname = ifname
-    })
+    log_warn(function()
+      return {
+        action = "mac_prober_no_mac",
+        ifname = ifname
+      }
+    end)
     return nil
   end
   local ifindex = tonumber(C.if_nametoindex(ifname))
   if ifindex == 0 then
     local errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn({
-      action = "mac_prober_no_ifindex",
-      ifname = ifname,
-      errno = errno
-    })
+    log_warn(function()
+      return {
+        action = "mac_prober_no_ifindex",
+        ifname = ifname,
+        errno = errno
+      }
+    end)
     return nil
   end
   local arp_fd = open_socket(ETH_P_ARP, ifindex)
   if not (arp_fd) then
     local errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn({
-      action = "mac_prober_arp_socket_failed",
-      ifname = ifname,
-      errno = errno
-    })
+    log_warn(function()
+      return {
+        action = "mac_prober_arp_socket_failed",
+        ifname = ifname,
+        errno = errno
+      }
+    end)
     return nil
   end
   local our_ip6 = read_own_ip6(ifname)
@@ -277,19 +283,23 @@ init = function(ifname)
     ip6_fd = open_socket(ETH_P_IPV6, ifindex)
     if not (ip6_fd) then
       local errno = tonumber(ffi.C.__errno_location()[0])
-      log_warn({
-        action = "mac_prober_ip6_socket_failed",
-        ifname = ifname,
-        errno = errno,
-        msg = "NS probes disabled"
-      })
+      log_warn(function()
+        return {
+          action = "mac_prober_ip6_socket_failed",
+          ifname = ifname,
+          errno = errno,
+          msg = "NS probes disabled"
+        }
+      end)
     end
   else
-    log_warn({
-      action = "mac_prober_no_ip6",
-      ifname = ifname,
-      msg = "no link-local found, NS probes disabled"
-    })
+    log_warn(function()
+      return {
+        action = "mac_prober_no_ip6",
+        ifname = ifname,
+        msg = "no link-local found, NS probes disabled"
+      }
+    end)
   end
   return {
     ifname = ifname,
@@ -320,16 +330,20 @@ probe_and_wait = function(ctx, ip_str, timeout_ms)
       return nil
     end
     if not (send_frame(ctx.ip6_fd, ctx.ifindex, frame)) then
-      log_warn({
-        action = "mac_prober_ns_send_failed",
-        ip = ip_str
-      })
+      log_warn(function()
+        return {
+          action = "mac_prober_ns_send_failed",
+          ip = ip_str
+        }
+      end)
       return nil
     end
-    log_debug({
-      action = "mac_prober_ns_sent",
-      ip = ip_str
-    })
+    log_debug(function()
+      return {
+        action = "mac_prober_ns_sent",
+        ip = ip_str
+      }
+    end)
     return wait_reply(ctx.ip6_fd, timeout_ms, function(raw, n)
       local _, mac = parse_na_reply(raw, n, tgt_bin)
       return mac
@@ -341,16 +355,20 @@ probe_and_wait = function(ctx, ip_str, timeout_ms)
     end
     local frame = build_arp_request(ctx.our_mac, tgt_bin)
     if not (send_frame(ctx.arp_fd, ctx.ifindex, frame)) then
-      log_warn({
-        action = "mac_prober_arp_send_failed",
-        ip = ip_str
-      })
+      log_warn(function()
+        return {
+          action = "mac_prober_arp_send_failed",
+          ip = ip_str
+        }
+      end)
       return nil
     end
-    log_debug({
-      action = "mac_prober_arp_sent",
-      ip = ip_str
-    })
+    log_debug(function()
+      return {
+        action = "mac_prober_arp_sent",
+        ip = ip_str
+      }
+    end)
     return wait_reply(ctx.arp_fd, timeout_ms, function(raw, n)
       local _, mac = parse_arp_reply(raw, n, tgt_bin)
       return mac

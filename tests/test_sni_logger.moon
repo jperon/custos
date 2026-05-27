@@ -11,11 +11,11 @@ describe "SNI extraction from TLS ClientHello", ->
     
     -- Build SNI extension: ext_type(2) + ext_len(2) + list_len(2) + name_type(1) + name_len(2) + name
     sni_ext_data = string.char(
-      0x00, 0x00,  -- extension type (0x0000 = SNI)
-      0x00, 0x00,  -- extension length (placeholder)
-      0x00, 0x00,  -- server_name_list length (placeholder)
-      0x00,        -- name type (0x00 = host_name)
-      0x00, 0x00   -- name length (placeholder)
+      0x00, 0x00,
+      0x00, 0x00,
+      0x00, 0x00,
+      0x00,
+      0x00, 0x00
     ) .. sni
     
     -- Fix lengths

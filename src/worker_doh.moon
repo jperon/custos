@@ -201,24 +201,24 @@ handle_doh_client = (args) ->
       if ctx
         tls_ctx = ctx
       else
-        log_error { action: "static_cert_child_failed", err: ctx_err }
+        log_error -> { action: "static_cert_child_failed", err: ctx_err }
         error "Cannot load static cert: #{ctx_err}"
     else
       ok_c, ctx_or_err = pcall -> load_or_generate_sni local_ip, state.cert_cache
       unless ok_c
-        log_error { action: "cert_gen_failed", local_ip: local_ip, err: ctx_or_err }
+        log_error -> { action: "cert_gen_failed", local_ip: local_ip, err: ctx_or_err }
         error "Cannot generate cert: #{ctx_or_err}"
       tls_ctx = ctx_or_err
 
     unless tls_ctx
       cert_type = if state.static_cert_paths then "static" else "sni"
-      log_error { action: "cert_null", local_ip: local_ip, cert_type: cert_type }
+      log_error -> { action: "cert_null", local_ip: local_ip, cert_type: cert_type }
       error "Certificate context is nil"
 
     client\settimeout nil   -- blocking for TLS handshake
     tls_client, tls_err = ssl.wrap client, tls_ctx
     unless tls_client
-      log_warn { action: "tls_wrap_failed", peer: peer_ip, err: tls_err }
+      log_warn -> { action: "tls_wrap_failed", peer: peer_ip, err: tls_err }
       client\close!
       return
 
@@ -231,63 +231,63 @@ handle_doh_client = (args) ->
       ok_hs, hs_ret = pcall -> tls_client\dohandshake!
       if not ok_hs
         hs_err = tostring hs_ret
-        log_warn { action: "handshake_error", peer: peer_ip, attempts: attempts, err: hs_err }
+        log_warn -> { action: "handshake_error", peer: peer_ip, attempts: attempts, err: hs_err }
         break
       done = true if hs_ret
 
     unless done
-      log_warn { action: "handshake_failed", peer: peer_ip, attempts: attempts, err: hs_err or "max_attempts" }
+      log_warn -> { action: "handshake_failed", peer: peer_ip, attempts: attempts, err: hs_err or "max_attempts" }
       tls_client\close!
       return
 
     selected_alpn = if tls_client.selected_alpn then tls_client\selected_alpn! else nil
-    log_debug { action: "tls_handshake_ok", peer: peer_ip, attempts: attempts, alpn: selected_alpn or "none" }
+    log_debug -> { action: "tls_handshake_ok", peer: peer_ip, attempts: attempts, alpn: selected_alpn or "none" }
     if selected_alpn == "h2"
-      log_warn { action: "http2_not_supported", peer: peer_ip }
+      log_warn -> { action: "http2_not_supported", peer: peer_ip }
       tls_client\close!
       return
     peer_mac = get_mac peer_ip
-    log_debug { action: "mac_lookup", peer: peer_ip, mac: peer_mac or "unknown" }
+    log_debug -> { action: "mac_lookup", peer: peer_ip, mac: peer_mac or "unknown" }
 
     req, req_err = read_request tls_client
     unless req
-      log_warn { action: "request_read_failed", peer: peer_ip, err: req_err }
+      log_warn -> { action: "request_read_failed", peer: peer_ip, err: req_err }
       tls_client\close!
       return
 
     -- ── Route /dns-query ────────────────────────────────────────────────────
-    log_debug { action: "request", peer: peer_ip, method: req.method, path: req.path }
+    log_debug -> { action: "request", peer: peer_ip, method: req.method, path: req.path }
     dns_raw = nil
     json_mode = false
     if req.path == "/dns-query" or req.path\match "^/dns%-query%?"
       ct = req.headers["content-type"] or ""
       accept = req.headers["accept"] or ""
       if req.method == "POST" and ct\match "application/dns%-message"
-        log_debug { action: "post", peer: peer_ip, body_bytes: #req.body }
+        log_debug -> { action: "post", peer: peer_ip, body_bytes: #req.body }
         dns_raw = req.body
       elseif req.method == "GET"
         dns_param = req.path\match "[?&]dns=([^&]+)"
         if dns_param
           dns_raw = b64url_decode dns_param
-          log_debug { action: "get", peer: peer_ip, decoded_bytes: #dns_raw }
+          log_debug -> { action: "get", peer: peer_ip, decoded_bytes: #dns_raw }
         elseif accept\match "application/dns%-json"
           name = query_param req.path, "name"
           qtype = qtype_from_name query_param req.path, "type"
           dns_raw = build_dns_query name, qtype
           json_mode = true if dns_raw
-          log_debug { action: "get_json", peer: peer_ip, name: name or "", qtype: qtype, query_bytes: dns_raw and #dns_raw or 0 }
+          log_debug -> { action: "get_json", peer: peer_ip, name: name or "", qtype: qtype, query_bytes: dns_raw and #dns_raw or 0 }
         else
-          log_debug { action: "get_no_param", peer: peer_ip, path: req.path }
+          log_debug -> { action: "get_no_param", peer: peer_ip, path: req.path }
       else
-        log_debug { action: "unsupported_method", peer: peer_ip, method: req.method, ct: ct }
+        log_debug -> { action: "unsupported_method", peer: peer_ip, method: req.method, ct: ct }
         send_response tls_client, 415, {}, "Unsupported Media Type"
         tls_client\close!
         return
     else
-      log_debug { action: "unknown_path", peer: peer_ip, path: req.path }
+      log_debug -> { action: "unknown_path", peer: peer_ip, path: req.path }
 
     unless dns_raw and #dns_raw > 0
-      log_debug { action: "bad_request", peer: peer_ip, path: req.path }
+      log_debug -> { action: "bad_request", peer: peer_ip, path: req.path }
       send_response tls_client, 400, {}, "Bad Request"
       tls_client\close!
       return
@@ -295,7 +295,7 @@ handle_doh_client = (args) ->
     -- ── process_query: filter + upstream + nft ──────────────────────────────
     resp_raw, q_err = process_query dns_raw, peer_ip, peer_mac, state.upstream
     if resp_raw
-      log_debug { action: "response_ok", peer: peer_ip, resp_bytes: #resp_raw }
+      log_debug -> { action: "response_ok", peer: peer_ip, resp_bytes: #resp_raw }
       if json_mode
         json = dns_response_json resp_raw
         send_response tls_client, 200,
@@ -306,13 +306,13 @@ handle_doh_client = (args) ->
           { ["Content-Type"]: "application/dns-message" },
           resp_raw
     else
-      log_warn { action: "query_error", peer: peer_ip, err: q_err }
+      log_warn -> { action: "query_error", peer: peer_ip, err: q_err }
       send_response tls_client, 502, {}, "Bad Gateway"
 
     tls_client\close!
 
   unless ok
-    log_error { action: "conn_failed", peer: peer_ip, err: tostring err }
+    log_error -> { action: "conn_failed", peer: peer_ip, err: tostring err }
     pcall -> client\close!
 
 -- ── Worker entry point ───────────────────────────────────────────────────────
@@ -336,7 +336,7 @@ run = (doh_cfg, filter_data) ->
     filter.auth_cfg_cache = filter_data.auth_cfg_cache
     filter.decision_cfg = filter_data.decision_cfg
   unless doh_cfg.enabled
-    log_info { action: "worker_disabled" }
+    log_info -> { action: "worker_disabled" }
     return
 
   port         = doh_cfg.port
@@ -344,7 +344,7 @@ run = (doh_cfg, filter_data) ->
   upstream_port = doh_cfg.upstream_port
   timeout_ms   = doh_cfg.timeout_ms
 
-  log_info {
+  log_info -> {
     action: "worker_start"
     port:          port
     upstream_ip:   upstream_ip
@@ -361,13 +361,13 @@ run = (doh_cfg, filter_data) ->
 
   static_cert_paths = nil
   if doh_cfg.cert_path and doh_cfg.key_path
-    log_info { action: "loading_static_cert", cert: doh_cfg.cert_path }
+    log_info -> { action: "loading_static_cert", cert: doh_cfg.cert_path }
     ok, ctx = load_static doh_cfg.key_path, doh_cfg.cert_path
     if ok
       static_cert_paths = { cert: doh_cfg.cert_path, key: doh_cfg.key_path }
-      log_info { action: "static_cert_loaded" }
+      log_info -> { action: "static_cert_loaded" }
     else
-      log_warn { action: "static_cert_load_failed", cert: doh_cfg.cert_path, key: doh_cfg.key_path, err: ctx }
+      log_warn -> { action: "static_cert_load_failed", cert: doh_cfg.cert_path, key: doh_cfg.key_path, err: ctx }
 
   listen4, err4 = make_server4 port
   error "DoH: cannot bind port #{port}: #{err4}" unless listen4
@@ -375,7 +375,7 @@ run = (doh_cfg, filter_data) ->
   all_servers = { listen4 }
   all_servers[#all_servers + 1] = listen6 if listen6
 
-  log_info {
+  log_info -> {
     action: "server_listening"
     port:   port
     ipv4:   "0.0.0.0"
@@ -416,7 +416,7 @@ run = (doh_cfg, filter_data) ->
           child_fn = (args) ->
             up, up_err = upstream_mod.new_client args.state.upstream_ip, args.state.upstream_port, args.state.timeout_ms
             unless up
-              log_warn { action: "upstream_socket_failed", peer: args.peer_ip, upstream_ip: args.state.upstream_ip, upstream_port: args.state.upstream_port, err: up_err }
+              log_warn -> { action: "upstream_socket_failed", peer: args.peer_ip, upstream_ip: args.state.upstream_ip, upstream_port: args.state.upstream_port, err: up_err }
               args.client\close!
               return
             args.state.upstream = up
@@ -425,7 +425,7 @@ run = (doh_cfg, filter_data) ->
 
           pid = fork_child "DOH-conn", child_fn, conn_arg, { log_start: false }
 
-          log_debug { action: "conn_started", pid: pid, peer: peer_ip }
+          log_debug -> { action: "conn_started", pid: pid, peer: peer_ip }
           client\close!
 
 { :run }

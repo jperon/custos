@@ -137,20 +137,26 @@ newcontext = function(opts)
     end)
     _alpn_available = ok_alpn
     if ok_alpn then
-      log_debug({
-        action = "ctx_use_alpn",
-        ret = ret_alpn or "nil",
-        protocols = "h2,http/1.1"
-      })
+      log_debug(function()
+        return {
+          action = "ctx_use_alpn",
+          ret = ret_alpn or "nil",
+          protocols = "h2,http/1.1"
+        }
+      end)
     else
-      log_debug({
-        action = "alpn_unavailable"
-      })
+      log_debug(function()
+        return {
+          action = "alpn_unavailable"
+        }
+      end)
     end
   else
-    log_debug({
-      action = "alpn_unavailable"
-    })
+    log_debug(function()
+      return {
+        action = "alpn_unavailable"
+      }
+    end)
   end
   return {
     ctx = ctx,
@@ -159,22 +165,28 @@ newcontext = function(opts)
 end
 local wrap
 wrap = function(raw_socket, ctx_obj)
-  log_debug({
-    action = "wrap_start",
-    fd = raw_socket.fd
-  })
+  log_debug(function()
+    return {
+      action = "wrap_start",
+      fd = raw_socket.fd
+    }
+  end)
   local ssl = libwolfssl.wolfSSL_new(ctx_obj.ctx)
-  log_debug({
-    action = "wolfssl_new"
-  })
+  log_debug(function()
+    return {
+      action = "wolfssl_new"
+    }
+  end)
   if ssl == nil then
     error("wolfSSL_new() failed")
   end
   local ret = libwolfssl.wolfSSL_set_fd(ssl, raw_socket.fd)
-  log_debug({
-    action = "wolfssl_set_fd",
-    ret = ret
-  })
+  log_debug(function()
+    return {
+      action = "wolfssl_set_fd",
+      ret = ret
+    }
+  end)
   if ret < 0 then
     libwolfssl.wolfSSL_free(ssl)
     error("wolfSSL_set_fd() failed: ret=" .. ret)
@@ -186,74 +198,96 @@ wrap = function(raw_socket, ctx_obj)
     closed = false
   }
   setmetatable(wrapped, ssl_mt)
-  log_debug({
-    action = "wrap_complete"
-  })
+  log_debug(function()
+    return {
+      action = "wrap_complete"
+    }
+  end)
   return wrapped
 end
 ssl_mt.__index.dohandshake = function(self)
-  log_debug({
-    action = "dohandshake_start",
-    closed = self.closed,
-    handshake_done = self.handshake_done
-  })
+  log_debug(function()
+    return {
+      action = "dohandshake_start",
+      closed = self.closed,
+      handshake_done = self.handshake_done
+    }
+  end)
   if self.closed then
     error("SSL connection is closed")
   end
   if self.handshake_done then
-    log_debug({
-      action = "handshake_already_done"
-    })
+    log_debug(function()
+      return {
+        action = "handshake_already_done"
+      }
+    end)
     return true
   end
-  log_debug({
-    action = "wolfssl_accept_call"
-  })
+  log_debug(function()
+    return {
+      action = "wolfssl_accept_call"
+    }
+  end)
   local ret = libwolfssl.wolfSSL_accept(self.ssl)
-  log_debug({
-    action = "wolfssl_accept_returned",
-    ret = ret
-  })
+  log_debug(function()
+    return {
+      action = "wolfssl_accept_returned",
+      ret = ret
+    }
+  end)
   if ret > 0 then
     self.handshake_done = true
-    log_debug({
-      action = "handshake_success"
-    })
+    log_debug(function()
+      return {
+        action = "handshake_success"
+      }
+    end)
     return true
   end
   local err = libwolfssl.wolfSSL_get_error(self.ssl, ret)
-  log_debug({
-    action = "wolfssl_get_error",
-    err = err
-  })
+  log_debug(function()
+    return {
+      action = "wolfssl_get_error",
+      err = err
+    }
+  end)
   if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE then
-    log_debug({
-      action = "handshake_want_read_write"
-    })
+    log_debug(function()
+      return {
+        action = "handshake_want_read_write"
+      }
+    end)
     return false
   end
   if err == SSL_ERROR_SSL then
     local ssl_errors = get_ssl_errors()
-    log_debug({
-      action = "handshake_ssl_error",
-      ssl_err = ssl_errors
-    })
+    log_debug(function()
+      return {
+        action = "handshake_ssl_error",
+        ssl_err = ssl_errors
+      }
+    end)
     error("TLS error during handshake: " .. tostring(ssl_errors))
   end
   local ssl_errors = get_ssl_errors()
   if err == -308 or err == -313 or err == 6 or (ssl_errors and (ssl_errors:find("error state on socket", 1, true) or ssl_errors:find("received alert fatal error", 1, true) or ssl_errors:find("peer sent close notify alert", 1, true))) then
-    log_debug({
-      action = "handshake_peer_closed",
-      err = err,
-      ssl_err = ssl_errors
-    })
+    log_debug(function()
+      return {
+        action = "handshake_peer_closed",
+        err = err,
+        ssl_err = ssl_errors
+      }
+    end)
     return false, "peer_closed"
   end
-  log_debug({
-    action = "handshake_unexpected_error",
-    err = err,
-    ssl_err = ssl_errors
-  })
+  log_debug(function()
+    return {
+      action = "handshake_unexpected_error",
+      err = err,
+      ssl_err = ssl_errors
+    }
+  end)
   return error("Unexpected error " .. tostring(err) .. ": " .. tostring(ssl_errors))
 end
 ssl_mt.__index.selected_alpn = function(self)
@@ -286,12 +320,14 @@ ssl_mt.__index.send = function(self, data)
     return nil
   end
   local ssl_errors = get_ssl_errors()
-  log_debug({
-    action = "wolfssl_write_error",
-    ret = n,
-    err = err,
-    ssl_err = ssl_errors
-  })
+  log_debug(function()
+    return {
+      action = "wolfssl_write_error",
+      ret = n,
+      err = err,
+      ssl_err = ssl_errors
+    }
+  end)
   return error("wolfSSL_write() failed (ret: " .. tostring(n) .. ", error code: " .. tostring(err) .. ", ssl_err: " .. tostring(ssl_errors) .. ")")
 end
 ssl_mt.__index.receive = function(self, mode)
@@ -305,34 +341,42 @@ ssl_mt.__index.receive = function(self, mode)
     error("TLS handshake not complete")
   end
   if mode == "*l" then
-    log_debug({
-      action = "receive_line_mode"
-    })
+    log_debug(function()
+      return {
+        action = "receive_line_mode"
+      }
+    end)
     local max_line = 4096
     local line_buf = ffi.new("uint8_t[?]", max_line)
     local line_len = 0
     while line_len < max_line - 1 do
       local n = libwolfssl.wolfSSL_read(self.ssl, ffi.cast("uint8_t*", ffi.cast("void*", line_buf)) + line_len, 1)
-      log_debug({
-        action = "read_byte",
-        ret = n
-      })
+      log_debug(function()
+        return {
+          action = "read_byte",
+          ret = n
+        }
+      end)
       if n <= 0 then
         if line_len > 0 then
-          log_debug({
-            action = "partial_line",
-            len = line_len
-          })
+          log_debug(function()
+            return {
+              action = "partial_line",
+              len = line_len
+            }
+          end)
           return ffi.string(line_buf, line_len)
         end
         local err = libwolfssl.wolfSSL_get_error(self.ssl, n)
         local errno = get_errno()
-        log_debug({
-          action = "wolfssl_read_error",
-          ret = n,
-          err = err,
-          errno = errno
-        })
+        log_debug(function()
+          return {
+            action = "wolfssl_read_error",
+            ret = n,
+            err = err,
+            errno = errno
+          }
+        end)
         if n == 0 then
           return nil, "eof_from_peer"
         end
@@ -344,14 +388,18 @@ ssl_mt.__index.receive = function(self, mode)
       end
       local byte_val = line_buf[line_len]
       if byte_val == 10 then
-        log_debug({
-          action = "found_newline",
-          pos = line_len
-        })
+        log_debug(function()
+          return {
+            action = "found_newline",
+            pos = line_len
+          }
+        end)
         if line_len > 0 and line_buf[line_len - 1] == 13 then
-          log_debug({
-            action = "strip_cr"
-          })
+          log_debug(function()
+            return {
+              action = "strip_cr"
+            }
+          end)
           return ffi.string(line_buf, line_len - 1)
         end
         return ffi.string(line_buf, line_len)
@@ -361,37 +409,47 @@ ssl_mt.__index.receive = function(self, mode)
     return error("Line too long")
   else
     local size = tonumber(mode) or 4096
-    log_debug({
-      action = "receive_bytes",
-      size = size
-    })
+    log_debug(function()
+      return {
+        action = "receive_bytes",
+        size = size
+      }
+    end)
     local buf = ffi.new("uint8_t[?]", size)
     local n = libwolfssl.wolfSSL_read(self.ssl, buf, size)
-    log_debug({
-      action = "wolfssl_read_returned",
-      ret = n
-    })
+    log_debug(function()
+      return {
+        action = "wolfssl_read_returned",
+        ret = n
+      }
+    end)
     if n > 0 then
       return ffi.string(buf, n)
     end
     if n == 0 then
-      log_debug({
-        action = "eof_from_peer"
-      })
+      log_debug(function()
+        return {
+          action = "eof_from_peer"
+        }
+      end)
       return nil, "eof_from_peer"
     end
     local err = libwolfssl.wolfSSL_get_error(self.ssl, n)
     local errno = get_errno()
-    log_debug({
-      action = "wolfssl_read_error_numeric",
-      ret = n,
-      err = err,
-      errno = errno
-    })
+    log_debug(function()
+      return {
+        action = "wolfssl_read_error_numeric",
+        ret = n,
+        err = err,
+        errno = errno
+      }
+    end)
     if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE then
-      log_debug({
-        action = "want_read_write"
-      })
+      log_debug(function()
+        return {
+          action = "want_read_write"
+        }
+      end)
       return nil, "want_read_write"
     end
     local ssl_errors = get_ssl_errors()

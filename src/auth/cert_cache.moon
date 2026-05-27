@@ -26,7 +26,7 @@ persist_index = (index_path, index_data) ->
   fh\write table.concat(lines, "\n")
   fh\close!
 
-  log_debug { action: "cert_cache_persist_index", path: index_path }
+  log_debug -> { action: "cert_cache_persist_index", path: index_path }
   true
 
 --- Charge l'index persistant depuis disque
@@ -43,11 +43,11 @@ load_persistent_index = (index_path) ->
   -- Charger la table Lua
   status, result = pcall(loadstring, content)
   unless status
-    log_warn { action: "cert_cache_load_index_failed", path: index_path, err: result }
+    log_warn -> { action: "cert_cache_load_index_failed", path: index_path, err: result }
     return {}
 
   loaded_fn = result!
-  log_debug { action: "cert_cache_loaded_index", path: index_path, entries: #loaded_fn }
+  log_debug -> { action: "cert_cache_loaded_index", path: index_path, entries: #loaded_fn }
   loaded_fn or {}
 
 --- Factory pour créer une instance de cache persistant avec TTL.
@@ -81,7 +81,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
     -- Écrire le certificat
     cert_fh, cert_err = io.open cert_file, "w"
     unless cert_fh
-      log_warn { action: "cert_cache_disk_write_failed", file: cert_file, reason: cert_err or "io.open failed" }
+      log_warn -> { action: "cert_cache_disk_write_failed", file: cert_file, reason: cert_err or "io.open failed" }
       return false
     cert_fh\write cert_pem
     cert_fh\close!
@@ -89,13 +89,13 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
     -- Écrire la clé
     key_fh, key_err = io.open key_file, "w"
     unless key_fh
-      log_warn { action: "cert_cache_disk_write_failed", file: key_file, reason: key_err or "io.open failed" }
+      log_warn -> { action: "cert_cache_disk_write_failed", file: key_file, reason: key_err or "io.open failed" }
       os.remove cert_file
       return false
     key_fh\write key_pem
     key_fh\close!
 
-    log_debug { action: "cert_cache_disk_saved", hostname: hostname_lower }
+    log_debug -> { action: "cert_cache_disk_saved", hostname: hostname_lower }
     true
 
   --- Charge une paire cert/key depuis disque
@@ -118,7 +118,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
     unless cert_pem and key_pem and #cert_pem > 0 and #key_pem > 0
       return nil, nil
 
-    log_debug { action: "cert_cache_disk_loaded", hostname: hostname_lower }
+    log_debug -> { action: "cert_cache_disk_loaded", hostname: hostname_lower }
     cert_pem, key_pem
 
   --- Ajoute ou met à jour une entrée de cache.
@@ -137,7 +137,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
 
     -- Sauvegarder sur disque
     unless save_cert_to_disk hostname_lower, cert_pem, key_pem
-      log_warn { action: "cert_cache_set_disk_failed", hostname: hostname_lower, reason: "save_cert_to_disk returned false" }
+      log_warn -> { action: "cert_cache_set_disk_failed", hostname: hostname_lower, reason: "save_cert_to_disk returned false" }
       return false
 
     -- Mettre à jour l'index persistant
@@ -161,7 +161,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
     while #lru_order > max_size
       victim = table.remove lru_order, 1  -- Enlever le plus ancien
       data[victim] = nil
-      log_debug { action: "cert_cache_evict", hostname: victim, reason: "lru_full" }
+      log_debug -> { action: "cert_cache_evict", hostname: victim, reason: "lru_full" }
 
     -- Insérer/mettre à jour l'entrée en RAM
     data[hostname_lower] = {
@@ -172,7 +172,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
       accessed_at: now
     }
 
-    log_debug { action: "cert_cache_set", hostname: hostname_lower, size: #lru_order }
+    log_debug -> { action: "cert_cache_set", hostname: hostname_lower, size: #lru_order }
     true
 
   --- Récupère une entrée du cache (RAM en priorité, puis disque si absent en RAM).
@@ -189,7 +189,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
     if persistent_entry
       now = os.time!
       if now >= persistent_entry.expires_at
-        log_debug { action: "cert_cache_disk_expired", hostname: hostname_lower }
+        log_debug -> { action: "cert_cache_disk_expired", hostname: hostname_lower }
         persistent_index[hostname_lower] = nil
         persist_index index_path, persistent_index
         return nil
@@ -204,7 +204,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
           if lru_order[i] == hostname_lower
             table.remove lru_order, i
             break
-        log_debug { action: "cert_cache_expired", hostname: hostname_lower }
+        log_debug -> { action: "cert_cache_expired", hostname: hostname_lower }
         return nil
 
       -- Mise à jour de la position dans LRU order (déplacer à la fin = plus récent)
@@ -215,7 +215,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
       table.insert lru_order, hostname_lower
 
       entry.accessed_at = now
-      log_debug { action: "cert_cache_hit", hostname: hostname_lower, source: "ram" }
+      log_debug -> { action: "cert_cache_hit", hostname: hostname_lower, source: "ram" }
       return entry
 
     -- Si absent en RAM, charger depuis disque
@@ -239,10 +239,10 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
         data[victim] = nil
       data[hostname_lower] = entry
 
-      log_debug { action: "cert_cache_hit", hostname: hostname_lower, source: "disk" }
+      log_debug -> { action: "cert_cache_hit", hostname: hostname_lower, source: "disk" }
       return entry
 
-    log_debug { action: "cert_cache_miss", hostname: hostname_lower, reason: "not_found" }
+    log_debug -> { action: "cert_cache_miss", hostname: hostname_lower, reason: "not_found" }
     nil
 
   --- Supprime une entrée du cache (RAM et disque).
@@ -269,7 +269,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
     persistent_index[hostname_lower] = nil
     persist_index index_path, persistent_index
 
-    log_debug { action: "cert_cache_delete", hostname: hostname_lower }
+    log_debug -> { action: "cert_cache_delete", hostname: hostname_lower }
     true
 
   --- Purge toutes les entrées expirées (RAM et disque).
@@ -308,7 +308,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
       removed_count += 1
 
     if removed_count > 0
-      log_debug { action: "cert_cache_purge_expired", count: removed_count }
+      log_debug -> { action: "cert_cache_purge_expired", count: removed_count }
 
     removed_count
 
@@ -333,7 +333,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
     persistent_index = {}
     persist_index index_path, persistent_index
 
-    log_debug { action: "cert_cache_clear" }
+    log_debug -> { action: "cert_cache_clear" }
     true
 
   -- Return public interface

@@ -78,11 +78,13 @@ inject_localnets = function(auth_cfg, whitelist)
     table.insert(whitelist, net)
     count = count + 1
   end
-  return log_info({
-    action = "localnets_injected",
-    bridge = ifname,
-    count = count
-  })
+  return log_info(function()
+    return {
+      action = "localnets_injected",
+      bridge = ifname,
+      count = count
+    }
+  end)
 end
 return {
   inject_localnets = inject_localnets,

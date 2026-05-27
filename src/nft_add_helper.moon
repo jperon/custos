@@ -22,7 +22,7 @@ try_add_with_retries = (fn, ...) ->
       _timespec[0].tv_nsec = (ms % 1000) * 1000000
       pcall ffi.C.nanosleep, _timespec, nil
   args = {...}
-  log_warn { action: "nft_add_retries_exhausted", attempts: #backoffs, err: last_err or "", arg1: args[1] or "", arg2: args[2] or "" }
+  log_warn -> { action: "nft_add_retries_exhausted", attempts: #backoffs, err: last_err or "", arg1: args[1] or "", arg2: args[2] or "" }
   false
 
 { :try_add_with_retries }

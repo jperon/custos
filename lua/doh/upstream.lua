@@ -29,32 +29,38 @@ probe_ipv6 = function(ipv6_addr, port)
   local ret = C.inet_pton(AF_INET6, ipv6_addr, addr.sin6_addr)
   if ret <= 0 then
     C.close(fd)
-    log_warn({
-      action = "probe_ipv6_failed",
-      addr = ipv6_addr,
-      port = port,
-      reason = "inet_pton_failed"
-    })
+    log_warn(function()
+      return {
+        action = "probe_ipv6_failed",
+        addr = ipv6_addr,
+        port = port,
+        reason = "inet_pton_failed"
+      }
+    end)
     return false
   end
   local rc = C.connect(fd, ffi.cast("struct sockaddr*", addr), ffi.sizeof(addr))
   C.close(fd)
   local ok = rc == 0
   if not (ok) then
-    log_warn({
-      action = "probe_ipv6_failed",
+    log_warn(function()
+      return {
+        action = "probe_ipv6_failed",
+        addr = ipv6_addr,
+        port = port,
+        reason = "connect_failed",
+        errno = get_errno()
+      }
+    end)
+  end
+  log_debug(function()
+    return {
+      action = "probe_ipv6",
       addr = ipv6_addr,
       port = port,
-      reason = "connect_failed",
-      errno = get_errno()
-    })
-  end
-  log_debug({
-    action = "probe_ipv6",
-    addr = ipv6_addr,
-    port = port,
-    ok = ok
-  })
+      ok = ok
+    }
+  end)
   return ok
 end
 local set_timeouts
@@ -114,13 +120,15 @@ new_client = function(upstream_ip, upstream_port, timeout_ms)
       return nil, "connect(AF_INET) failed: errno=" .. get_errno()
     end
   end
-  log_debug({
-    action = "upstream_connected",
-    upstream_ip = upstream_ip,
-    upstream_port = upstream_port,
-    family = family,
-    fd = fd
-  })
+  log_debug(function()
+    return {
+      action = "upstream_connected",
+      upstream_ip = upstream_ip,
+      upstream_port = upstream_port,
+      family = family,
+      fd = fd
+    }
+  end)
   return {
     fd = fd,
     family = family,
@@ -130,44 +138,54 @@ new_client = function(upstream_ip, upstream_port, timeout_ms)
 end
 local query
 query = function(client, dns_raw)
-  log_debug({
-    action = "upstream_send",
-    upstream_ip = client.upstream_ip,
-    bytes = #dns_raw
-  })
+  log_debug(function()
+    return {
+      action = "upstream_send",
+      upstream_ip = client.upstream_ip,
+      bytes = #dns_raw
+    }
+  end)
   local n = C.send(client.fd, dns_raw, #dns_raw, 0)
   if n < 0 then
     local errno = get_errno()
-    log_warn({
-      action = "upstream_send_failed",
-      upstream_ip = client.upstream_ip,
-      errno = errno
-    })
+    log_warn(function()
+      return {
+        action = "upstream_send_failed",
+        upstream_ip = client.upstream_ip,
+        errno = errno
+      }
+    end)
     return nil, "send() failed: errno=" .. errno
   end
   local buf = ffi.new("uint8_t[?]", DNS_BUF_SIZE)
   n = C.recv(client.fd, buf, DNS_BUF_SIZE, 0)
   if n < 0 then
     local errno = get_errno()
-    log_warn({
-      action = "upstream_recv_failed",
-      upstream_ip = client.upstream_ip,
-      errno = errno
-    })
+    log_warn(function()
+      return {
+        action = "upstream_recv_failed",
+        upstream_ip = client.upstream_ip,
+        errno = errno
+      }
+    end)
     return nil, "recv() timed out or failed: errno=" .. errno
   end
   if n == 0 then
-    log_warn({
-      action = "upstream_recv_empty",
-      upstream_ip = client.upstream_ip
-    })
+    log_warn(function()
+      return {
+        action = "upstream_recv_empty",
+        upstream_ip = client.upstream_ip
+      }
+    end)
     return nil, "recv() returned 0 (connection closed)"
   end
-  log_debug({
-    action = "upstream_recv",
-    upstream_ip = client.upstream_ip,
-    bytes = n
-  })
+  log_debug(function()
+    return {
+      action = "upstream_recv",
+      upstream_ip = client.upstream_ip,
+      bytes = n
+    }
+  end)
   return ffi.string(buf, n)
 end
 local close

@@ -163,7 +163,7 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   raw = ffi.string payload_ptr[0], payload_len
   ip, ip_err = ipparse_ip.parse raw, 1
   unless ip
-    log_debug { action: "ip_parse_failed", pkt_id: pkt_id, err: ip_err or "" }
+    log_debug -> { action: "ip_parse_failed", pkt_id: pkt_id, err: ip_err or "" }
     return NF_ACCEPT
 
   ip_version = ip.version
@@ -194,7 +194,7 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   if ip.protocol == 17 and dport == 3478
     if ip_dst_str and mac != "unknown"
       allow_mac_ip mac, ip_dst_str, ip_family, "sip_stun"
-      log_debug { action: "stun_ip_added", mac: mac, ip: ip_dst_str }
+      log_debug -> { action: "stun_ip_added", mac: mac, ip: ip_dst_str }
     return NF_ACCEPT
 
   -- ── STUN responses (UDP sport 3478) ──────────────────────────────────────
@@ -208,7 +208,7 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
     if ip_src_str and ip_dst_str
       allow_sip_peer ip_src_str, ip_family, "stun_src"
       allow_sip_peer ip_dst_str, ip_family, "stun_dst"
-    log_debug { action: "stun_response_accepted", ip: ip_src_str, dst: ip_dst_str }
+    log_debug -> { action: "stun_response_accepted", ip: ip_src_str, dst: ip_dst_str }
     return NF_ACCEPT
 
   -- ── SIP/TLS (port 5061) : accept without parsing ─────────────────────────
@@ -222,7 +222,7 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   outbound_mac_src = "none"
   if outbound
     outbound_mac, outbound_mac_src = resolve_outbound_mac ip_src_str, mac
-    log_debug {
+    log_debug -> {
       action: "sip_outbound_mac_selected"
       ip_src: ip_src_str or ""
       packet_mac: mac or ""
@@ -259,7 +259,7 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   if outbound
     target_mac = outbound_mac
     unless target_mac
-      log_debug {
+      log_debug -> {
         action: "sip_no_mac_for_src"
         ip_src: ip_src_str or "unknown"
       }
@@ -267,7 +267,7 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   elseif inbound
     target_mac = dst_phone_mac
     unless target_mac
-      log_debug {
+      log_debug -> {
         action: "sip_no_mac_for_dst"
         ip_dst: ip_dst_str or "unknown"
       }
@@ -278,7 +278,7 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
     allow_sip_peer entry.ip, entry.family, "sip_media"
     -- Conserver l'entrée MAC pour l'outbound (téléphone → media server).
     allow_mac_ip target_mac, entry.ip, entry.family, "sip_media"
-    log_debug {
+    log_debug -> {
       action:      "sip_media_ip_added"
       mac:         target_mac
       media_ip:    entry.ip
@@ -306,7 +306,7 @@ run = (queue_num, fds) ->
     nft_q = require "nft_queue"
     nft_q.set_wfd     fds.nft_wfd                   if fds.nft_wfd
     nft_q.set_ack_rfd fds.ack_rfd, fds.worker_idx   if fds.ack_rfd and fds.worker_idx != nil
-  log_info { action: "worker_sip_starting", queue: queue_num, ttl: sip_ttl }
+  log_info -> { action: "worker_sip_starting", queue: queue_num, ttl: sip_ttl }
   run_queue tonumber(queue_num), handle_packet
 
 {

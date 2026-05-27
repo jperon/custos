@@ -19,46 +19,58 @@ local READ_BUF_SIZE = 65536
 local VERDICT_DONE = -1
 local run_queue
 run_queue = function(queue_num, callback)
-  log_info({
-    action = "queue_open",
-    queue = queue_num
-  })
-  log_debug({
-    action = "queue_nfq_open_call",
-    queue = queue_num
-  })
+  log_info(function()
+    return {
+      action = "queue_open",
+      queue = queue_num
+    }
+  end)
+  log_debug(function()
+    return {
+      action = "queue_nfq_open_call",
+      queue = queue_num
+    }
+  end)
   local h = libnfq.nfq_open()
   if h == nil then
     local errno = tonumber(ffi.C.__errno_location()[0])
-    log_error({
-      action = "queue_nfq_open_failed",
-      queue = queue_num,
-      errno = errno
-    })
+    log_error(function()
+      return {
+        action = "queue_nfq_open_failed",
+        queue = queue_num,
+        errno = errno
+      }
+    end)
     error("nfq_open() échoué")
   end
-  log_debug({
-    action = "queue_bind_pf",
-    queue = queue_num
-  })
+  log_debug(function()
+    return {
+      action = "queue_bind_pf",
+      queue = queue_num
+    }
+  end)
   libnfq.nfq_bind_pf(h, 2)
   libnfq.nfq_bind_pf(h, 10)
   libnfq.nfq_bind_pf(h, AF_BRIDGE)
   local qh_box = ffi.new("nfq_q_handle*[1]")
-  log_debug({
-    action = "queue_callback_setup",
-    queue = queue_num
-  })
+  log_debug(function()
+    return {
+      action = "queue_callback_setup",
+      queue = queue_num
+    }
+  end)
   local c_callback = ffi.cast("nfq_callback", function(qh, nfmsg, nfad, data)
     local raw_hdr = libnfq.nfq_get_msg_packet_hdr(nfad)
     local pkt_id = libc.ntohl(raw_hdr.packet_id)
     local ok, verdict = pcall(callback, qh_box[0], nfad, pkt_id)
     if not (ok) then
-      log_error({
-        action = "callback_exception",
-        err = tostring(verdict),
-        queue = queue_num
-      })
+      log_error(function()
+        return {
+          action = "callback_exception",
+          err = tostring(verdict),
+          queue = queue_num
+        }
+      end)
       verdict = NF_DROP
     end
     if verdict ~= VERDICT_DONE then
@@ -66,73 +78,93 @@ run_queue = function(queue_num, callback)
     end
     return 0
   end)
-  log_debug({
-    action = "queue_create_queue_call",
-    queue = queue_num
-  })
+  log_debug(function()
+    return {
+      action = "queue_create_queue_call",
+      queue = queue_num
+    }
+  end)
   local qh = libnfq.nfq_create_queue(h, queue_num, c_callback, nil)
   if qh == nil then
     local errno = tonumber(ffi.C.__errno_location()[0])
-    log_error({
-      action = "queue_create_queue_failed",
-      queue = queue_num,
-      errno = errno
-    })
+    log_error(function()
+      return {
+        action = "queue_create_queue_failed",
+        queue = queue_num,
+        errno = errno
+      }
+    end)
     error("nfq_create_queue(" .. tostring(queue_num) .. ") échoué")
   end
   qh_box[0] = qh
-  log_debug({
-    action = "queue_set_mode_call",
-    queue = queue_num
-  })
+  log_debug(function()
+    return {
+      action = "queue_set_mode_call",
+      queue = queue_num
+    }
+  end)
   libnfq.nfq_set_mode(qh, NFQNL_COPY_PACKET, READ_BUF_SIZE)
   local fd = libnfq.nfq_fd(h)
   local buf = ffi.new("char[65536]")
-  log_info({
-    action = "queue_listening",
-    queue = queue_num,
-    pid = tonumber(ffi.C.getpid and ffi.C.getpid() or 0)
-  })
+  log_info(function()
+    return {
+      action = "queue_listening",
+      queue = queue_num,
+      pid = tonumber(ffi.C.getpid and ffi.C.getpid() or 0)
+    }
+  end)
   while true do
-    log_debug({
-      action = "queue_read_call",
-      queue = queue_num
-    })
+    log_debug(function()
+      return {
+        action = "queue_read_call",
+        queue = queue_num
+      }
+    end)
     local rv = libc.read(fd, buf, READ_BUF_SIZE)
     if rv > 0 then
-      log_debug({
-        action = "queue_handle_packet",
-        queue = queue_num,
-        rv = rv
-      })
+      log_debug(function()
+        return {
+          action = "queue_handle_packet",
+          queue = queue_num,
+          rv = rv
+        }
+      end)
       libnfq.nfq_handle_packet(h, buf, tonumber(rv))
     elseif rv == 0 then
-      log_warn({
-        action = "queue_read_eof",
-        queue = queue_num
-      })
+      log_warn(function()
+        return {
+          action = "queue_read_eof",
+          queue = queue_num
+        }
+      end)
       break
     else
       local en = libc.__errno_location()[0]
       if en == EINTR then
-        log_debug({
-          action = "queue_read_eintr",
-          queue = queue_num
-        })
+        log_debug(function()
+          return {
+            action = "queue_read_eintr",
+            queue = queue_num
+          }
+        end)
         break
       end
-      log_warn({
-        action = "queue_read_error",
-        queue = queue_num,
-        errno = en
-      })
+      log_warn(function()
+        return {
+          action = "queue_read_error",
+          queue = queue_num,
+          errno = en
+        }
+      end)
       break
     end
   end
-  log_info({
-    action = "queue_closed",
-    queue = queue_num
-  })
+  log_info(function()
+    return {
+      action = "queue_closed",
+      queue = queue_num
+    }
+  end)
   libnfq.nfq_destroy_queue(qh)
   libnfq.nfq_close(h)
   return c_callback:free()

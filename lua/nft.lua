@@ -43,14 +43,16 @@ run_cmd = function(cmd, opts)
     local nft_err = get_error_buffer()
     local busy = nft_err and nft_err:match("Resource busy")
     if not (opts and opts.quiet) then
-      log_warn({
-        action = "nft_cmd_failed",
-        cmd = cmd,
-        rc = rc,
-        ts = ts,
-        nft_err = nft_err or "",
-        transient = busy and "resource_busy" or ""
-      })
+      log_warn(function()
+        return {
+          action = "nft_cmd_failed",
+          cmd = cmd,
+          rc = rc,
+          ts = ts,
+          nft_err = nft_err or "",
+          transient = busy and "resource_busy" or ""
+        }
+      end)
     end
     return false, nft_err
   end

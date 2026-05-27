@@ -131,14 +131,14 @@ write_with_retry = (pipe_wfd, msg) ->
     errno_p = libc.__errno_location!
     errno = if errno_p then errno_p[0] else 0
     if errno != EAGAIN and errno != EWOULDBLOCK
-      log_warn { action: "ipc_write_syscall_failed", fd: pipe_wfd, errno: errno, attempt: i }
+      log_warn -> { action: "ipc_write_syscall_failed", fd: pipe_wfd, errno: errno, attempt: i }
       return false
     sleep_req[0].tv_sec = 0
     sleep_req[0].tv_nsec = 20000000
     libc.nanosleep sleep_req, nil
   errno_p = libc.__errno_location!
   errno = if errno_p then errno_p[0] else 0
-  log_warn { action: "ipc_write_failed_exhausted", fd: pipe_wfd, errno: errno, attempts: IPC_WRITE_RETRY_COUNT }
+  log_warn -> { action: "ipc_write_failed_exhausted", fd: pipe_wfd, errno: errno, attempts: IPC_WRITE_RETRY_COUNT }
   false
 
 --- Encode un message IPC.
@@ -173,8 +173,11 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason,
 
   reason  = tostring(reason  or "")
   rule_id = tostring(rule_id or "")
-  reason  = reason\sub(1, 63)  if #reason  > 63
-  rule_id = rule_id\sub(1, 63) if #rule_id > 63
+  reason  = reason\sub(1, 63)   if #reason  > 63
+  -- rule_id : aligner sur la limite filter.rule_id.sanitize_id (128 chars)
+  -- + le préfixe "r_" = 130 chars max. La limite précédente (63) tronquait
+  -- les rule_ids longs et désynchronisait les noms de sets nft côté worker.
+  rule_id = rule_id\sub(1, 130) if #rule_id > 130
 
   bench = tonumber(benchmark_ms) or 0
   bench = 0 if bench < 0
@@ -319,7 +322,7 @@ drain_lines = (pipe_rfd, buf, now_fn, on_msg) ->
       absorbed += 1
       on_msg msg if on_msg
     else
-      log_warn { action: "ipc_invalid_message", fd: pipe_rfd, reason: err or "decode_failed", raw: line\sub(1, 180) }
+      log_warn -> { action: "ipc_invalid_message", fd: pipe_rfd, reason: err or "decode_failed", raw: line\sub(1, 180) }
   buf, absorbed
 
 drain_pipe = (pipe_rfd, now_fn, on_msg) ->
@@ -328,17 +331,17 @@ drain_pipe = (pipe_rfd, now_fn, on_msg) ->
   while true
     n = libc.read pipe_rfd, read_buf, IPC_READ_CHUNK
     if n == 0
-      log_warn { action: "ipc_pipe_eof", fd: pipe_rfd }
+      log_warn -> { action: "ipc_pipe_eof", fd: pipe_rfd }
       break
     if n < 0
       errno_p = libc.__errno_location!
       errno = if errno_p then errno_p[0] else 0
       break if errno == EAGAIN or errno == EWOULDBLOCK
-      log_warn { action: "ipc_read_failed", fd: pipe_rfd, errno: errno }
+      log_warn -> { action: "ipc_read_failed", fd: pipe_rfd, errno: errno }
       break
     state ..= ffi.string read_buf, n
     if #state > IPC_MAX_LINE * 4
-      log_warn { action: "ipc_buffer_oversize", fd: pipe_rfd, size: #state }
+      log_warn -> { action: "ipc_buffer_oversize", fd: pipe_rfd, size: #state }
       state = ""
     state, added = drain_lines pipe_rfd, state, now_fn, on_msg
     absorbed += added

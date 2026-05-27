@@ -140,8 +140,12 @@ now = function()
   return tonumber(ts.tv_sec)
 end
 local write_log
-write_log = function(level, fields)
+write_log = function(level, thunk)
   if get_log_level_num(level) < CURRENT_LOG_LEVEL_NUM then
+    return 
+  end
+  local fields = thunk()
+  if not (fields) then
     return 
   end
   if _action_prefix ~= "" and fields.action then
@@ -181,32 +185,32 @@ write_log = function(level, fields)
   return libc.write(STDOUT_FILENO, line, #line)
 end
 local log_allow
-log_allow = function(fields)
-  return write_log("ALLOW", fields)
+log_allow = function(thunk)
+  return write_log("ALLOW", thunk)
 end
 local log_block
-log_block = function(fields)
-  return write_log("BLOCK", fields)
+log_block = function(thunk)
+  return write_log("BLOCK", thunk)
 end
 local log_info
-log_info = function(fields)
-  return write_log("INFO", fields)
+log_info = function(thunk)
+  return write_log("INFO", thunk)
 end
 local log_warn
-log_warn = function(fields)
-  return write_log("WARN", fields)
+log_warn = function(thunk)
+  return write_log("WARN", thunk)
 end
 local log_error
-log_error = function(fields)
-  return write_log("ERROR", fields)
+log_error = function(thunk)
+  return write_log("ERROR", thunk)
 end
 local log_debug
-log_debug = function(fields)
-  return write_log("DEBUG", fields)
+log_debug = function(thunk)
+  return write_log("DEBUG", thunk)
 end
 local log_trace
-log_trace = function(fields)
-  return write_log("TRACE", fields)
+log_trace = function(thunk)
+  return write_log("TRACE", thunk)
 end
 return {
   write_log = write_log,

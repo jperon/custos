@@ -19,12 +19,14 @@ run_cmd = function(cmd)
   local rc = libnft.nft_run_cmd_from_buffer(ctx, cmd)
   if rc ~= 0 then
     local ts = os.time()
-    log_warn({
-      action = "nft_extra_cmd_failed",
-      cmd = cmd,
-      rc = rc,
-      ts = ts
-    })
+    log_warn(function()
+      return {
+        action = "nft_extra_cmd_failed",
+        cmd = cmd,
+        rc = rc,
+        ts = ts
+      }
+    end)
     return false, rc
   end
   return true, 0
@@ -74,18 +76,22 @@ init = function(rules)
           local del_cmd = "delete rule " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " forward handle " .. tostring(h)
           local removed, rc = run_cmd(del_cmd)
           if removed then
-            log_info({
-              action = "nft_extra_rule_removed_existing",
-              rule = r,
-              handle = h
-            })
+            log_info(function()
+              return {
+                action = "nft_extra_rule_removed_existing",
+                rule = r,
+                handle = h
+              }
+            end)
           else
-            log_warn({
-              action = "nft_extra_rule_remove_failed",
-              rule = r,
-              handle = h,
-              rc = rc
-            })
+            log_warn(function()
+              return {
+                action = "nft_extra_rule_remove_failed",
+                rule = r,
+                handle = h,
+                rc = rc
+              }
+            end)
           end
         end
       end
@@ -93,17 +99,21 @@ init = function(rules)
       local ok, rc = run_cmd(insert_cmd)
       if ok then
         table.insert(inserted_rules, r)
-        log_info({
-          action = "nft_extra_rule_added",
-          rule = r
-        })
+        log_info(function()
+          return {
+            action = "nft_extra_rule_added",
+            rule = r
+          }
+        end)
       else
         all_ok = false
-        log_warn({
-          action = "nft_extra_rule_add_failed",
-          rule = r,
-          rc = rc
-        })
+        log_warn(function()
+          return {
+            action = "nft_extra_rule_add_failed",
+            rule = r,
+            rc = rc
+          }
+        end)
       end
       _continue_0 = true
     until true
@@ -123,12 +133,14 @@ populate_filter_ips = function()
       local ip = line:match("%s+inet%s+([%d%.]+)/")
       if ip then
         local ok = run_cmd("add element " .. tostring(family) .. " " .. tostring(tbl) .. " filter_ips4 { " .. tostring(ip) .. " }")
-        if ok then
-          log_info({
-            action = "nft_filter_ip4_added",
-            ip = ip
-          })
-        end
+        log_info(function()
+          if ok then
+            return {
+              action = "nft_filter_ip4_added",
+              ip = ip
+            }
+          end
+        end)
       end
     end
     fh:close()
@@ -139,12 +151,14 @@ populate_filter_ips = function()
       local ip6 = line:match("%s+inet6%s+([%x:]+)/")
       if ip6 and not ip6:match("^fe80") then
         local ok = run_cmd("add element " .. tostring(family) .. " " .. tostring(tbl) .. " filter_ips6 { " .. tostring(ip6) .. " }")
-        if ok then
-          log_info({
-            action = "nft_filter_ip6_added",
-            ip = ip6
-          })
-        end
+        log_info(function()
+          if ok then
+            return {
+              action = "nft_filter_ip6_added",
+              ip = ip6
+            }
+          end
+        end)
       end
     end
     return fh:close()
@@ -156,15 +170,19 @@ apply_from_config = function()
   if rc_check ~= 0 then
     local ok, rc = require("nft_rules").apply()
     if not (ok) then
-      log_warn({
-        action = "nft_extra_main_rules_reapply_failed",
-        rc = rc or -1
-      })
+      log_warn(function()
+        return {
+          action = "nft_extra_main_rules_reapply_failed",
+          rc = rc or -1
+        }
+      end)
       return false
     end
-    log_info({
-      action = "nft_extra_main_rules_reapplied"
-    })
+    log_info(function()
+      return {
+        action = "nft_extra_main_rules_reapplied"
+      }
+    end)
   end
   populate_filter_ips()
   local cfg = require("config")
@@ -221,18 +239,22 @@ cleanup = function()
             local rc
             ok, rc = run_cmd(cmd)
             if ok then
-              log_info({
-                action = "nft_extra_rule_removed_on_cleanup",
-                rule = r,
-                handle = h
-              })
+              log_info(function()
+                return {
+                  action = "nft_extra_rule_removed_on_cleanup",
+                  rule = r,
+                  handle = h
+                }
+              end)
             else
-              log_warn({
-                action = "nft_extra_rule_delete_failed",
-                rule = r,
-                handle = h,
-                rc = rc
-              })
+              log_warn(function()
+                return {
+                  action = "nft_extra_rule_delete_failed",
+                  rule = r,
+                  handle = h,
+                  rc = rc
+                }
+              end)
             end
           end
         end

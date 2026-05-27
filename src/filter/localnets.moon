@@ -73,6 +73,6 @@ inject_localnets = (auth_cfg, whitelist) ->
     table.insert whitelist, net
     count += 1
   
-  log_info { action: "localnets_injected", bridge: ifname, count: count }
+  log_info -> { action: "localnets_injected", bridge: ifname, count: count }
 
 { :inject_localnets, :get_bridge_ifname }

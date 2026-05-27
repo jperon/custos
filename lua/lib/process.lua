@@ -31,11 +31,13 @@ local set_parent_death_signal
 set_parent_death_signal = function(name)
   if libc.prctl(1, SIGTERM, 0, 0, 0) ~= 0 then
     local errno = tonumber(ffi.C.__errno_location()[0])
-    log_error({
-      action = "prctl_failed",
-      name = name,
-      errno = errno
-    })
+    log_error(function()
+      return {
+        action = "prctl_failed",
+        name = name,
+        errno = errno
+      }
+    end)
     return false
   end
   return true
@@ -81,22 +83,26 @@ fork_child = function(name, child_fn, arg, opts)
     end
     local ok, err = pcall(child_fn, arg)
     if not (ok) then
-      log_error({
-        action = "child_crashed",
-        name = name,
-        pid = tonumber(libc.getpid()),
-        err = tostring(err)
-      })
+      log_error(function()
+        return {
+          action = "child_crashed",
+          name = name,
+          pid = tonumber(libc.getpid()),
+          err = tostring(err)
+        }
+      end)
       libc._exit(1)
     end
     libc._exit(0)
   end
   if log_start then
-    log_info({
-      action = "worker_started",
-      name = name,
-      pid = tonumber(pid)
-    })
+    log_info(function()
+      return {
+        action = "worker_started",
+        name = name,
+        pid = tonumber(pid)
+      }
+    end)
   end
   return pid
 end
@@ -122,11 +128,13 @@ terminate_workers = function(workers)
   for _index_0 = 1, #workers do
     local w = workers[_index_0]
     if w.pid and w.pid > 0 then
-      log_info({
-        action = "worker_stopping",
-        name = w.name,
-        pid = w.pid
-      })
+      log_info(function()
+        return {
+          action = "worker_stopping",
+          name = w.name,
+          pid = w.pid
+        }
+      end)
       libc.kill(w.pid, SIGTERM)
     end
   end

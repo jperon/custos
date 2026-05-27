@@ -196,46 +196,56 @@ flush_batch = function(pending, ack_queue, ack_wfds)
       quiet = true
     })
     if rule11_count > 0 then
-      log_info({
-        action = "nft_batch_rule",
-        rule_id = "rule_11",
-        count = rule11_count,
-        ok = ok,
-        items = table.concat(rule11_items, " ")
-      })
+      log_info(function()
+        return {
+          action = "nft_batch_rule",
+          rule_id = "rule_11",
+          count = rule11_count,
+          ok = ok,
+          items = table.concat(rule11_items, " ")
+        }
+      end)
     end
     if ok then
-      log_debug({
-        action = "batch_ok",
-        count = #lines,
-        acks = #ack_queue
-      })
+      log_debug(function()
+        return {
+          action = "batch_ok",
+          count = #lines,
+          acks = #ack_queue
+        }
+      end)
     else
-      log_warn({
-        action = "batch_failed",
-        count = #lines,
-        acks = #ack_queue,
-        err = err or ""
-      })
+      log_warn(function()
+        return {
+          action = "batch_failed",
+          count = #lines,
+          acks = #ack_queue,
+          err = err or ""
+        }
+      end)
       for _index_0 = 1, #lines do
         local line = lines[_index_0]
         local ok_one, err_one = run_cmd(line, {
           quiet = true
         })
-        if not (ok_one) then
-          log_warn({
-            action = "single_failed",
-            err = err_one or "",
-            cmd = line
-          })
-        end
+        log_warn(function()
+          if not (ok_one) then
+            return {
+              action = "single_failed",
+              err = err_one or "",
+              cmd = line
+            }
+          end
+        end)
       end
     end
   else
-    log_debug({
-      action = "batch_ack_only",
-      acks = #ack_queue
-    })
+    log_debug(function()
+      return {
+        action = "batch_ack_only",
+        acks = #ack_queue
+      }
+    end)
   end
   local workers_to_ack = { }
   for _index_0 = 1, #ack_queue do
@@ -253,11 +263,13 @@ local run
 run = function(rfd, ack_wfds)
   set_action_prefix("nft_")
   ack_wfds = ack_wfds or { }
-  log_info({
-    action = "worker_start",
-    rfd = rfd,
-    ack_workers = #ack_wfds
-  })
+  log_info(function()
+    return {
+      action = "worker_start",
+      rfd = rfd,
+      ack_workers = #ack_wfds
+    }
+  end)
   local pending = { }
   local ack_queue = { }
   local partial = ""
@@ -293,11 +305,13 @@ run = function(rfd, ack_wfds)
               pending[entry_key] = item
             end
           else
-            log_warn({
-              action = "nft_invalid_message",
-              reason = parse_err or "parse_failed",
-              raw = line:sub(1, 220)
-            })
+            log_warn(function()
+              return {
+                action = "nft_invalid_message",
+                reason = parse_err or "parse_failed",
+                raw = line:sub(1, 220)
+              }
+            end)
           end
           _continue_0 = true
         until true
@@ -307,10 +321,12 @@ run = function(rfd, ack_wfds)
       end
       partial = data
       if #partial > 4096 then
-        log_warn({
-          action = "nft_partial_oversize",
-          size = #partial
-        })
+        log_warn(function()
+          return {
+            action = "nft_partial_oversize",
+            size = #partial
+          }
+        end)
         partial = ""
       end
     else
@@ -322,18 +338,22 @@ run = function(rfd, ack_wfds)
         errno = 0
       end
       if n == 0 then
-        log_warn({
-          action = "pipe_closed",
-          rfd = rfd
-        })
+        log_warn(function()
+          return {
+            action = "pipe_closed",
+            rfd = rfd
+          }
+        end)
         return 
       end
       if errno ~= EAGAIN and errno ~= EWOULDBLOCK then
-        log_warn({
-          action = "read_failed",
-          rfd = rfd,
-          errno = errno
-        })
+        log_warn(function()
+          return {
+            action = "read_failed",
+            rfd = rfd,
+            errno = errno
+          }
+        end)
         sleep_ms(100)
       end
     end

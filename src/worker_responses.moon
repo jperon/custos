@@ -35,7 +35,7 @@ clients_cfg = config.clients or {}
 { new: new_stream }                      = require "ipparse.l4.tcp_stream"
 { :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
-{ :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
+{ :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :now, :set_action_prefix } = require "log"
 { :build_blocked_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
@@ -373,8 +373,8 @@ load_auth_wildcard_rules = (metadata) ->
     if requires_auth and dns_refs == 0
       rule_id = meta.rule_id or "unknown_#{idx}"
       auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
-      log_info { action: "auth_wildcard_rule_detected", rule_id: rule_id, idx: idx }
-  log_info { action: "auth_wildcard_rules_loaded", count: #auth_wildcard_rules, rules: table.concat(auth_wildcard_rules, ", ") }
+      log_info -> { action: "auth_wildcard_rule_detected", rule_id: rule_id, idx: idx }
+  log_info -> { action: "auth_wildcard_rules_loaded", count: #auth_wildcard_rules, rules: table.concat(auth_wildcard_rules, ", ") }
 
 add_to_wildcard_rules = (add_fn, key, dest, timeout, corr) ->
   any_ok = false
@@ -482,7 +482,7 @@ purge_mac_clients = (ts) ->
       ip_to_mac[entry.ipv6] = nil if entry.ipv6
       entry.ips = nil
       mac_clients[mac] = nil
-      log_info { action: "client_expired", mac: mac }
+      log_info -> { action: "client_expired", mac: mac }
 
 --- Résout l'adresse IPv4 d'un client connu par son adresse IPv6 (ou vice-versa)
 -- via la table mac_clients.
@@ -563,7 +563,9 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     return NF_DROP if l4 == "buffering"
     return NF_ACCEPT
 
-  if math.random(1000) == 1
+  -- Purge périodique sans math.random (hot-path): compteur mod 1000
+  _purge_counter = ((_purge_counter or 0) + 1) % 1000
+  if _purge_counter == 0
     tcp_state.purge!
     purge_mac_clients ts
 
@@ -593,7 +595,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     retry_wait_ms = 0
     entry, retry_attempts, retry_wait_ms = retry_pending_match txid, dst_ip, client_port, resolver_ip
     if entry
-      log_info {
+      log_info -> {
         action: "response_matched_after_retry"
         src_ip: src_ip
         dst_ip: dst_ip
@@ -603,7 +605,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         user: user
       }
     else
-      log_debug {
+      log_debug -> {
         action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
         src_ip:    src_ip
         dst_ip:    dst_ip
@@ -623,7 +625,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   if runtime_cfg.benchmark and entry and entry.benchmark_ms
     delta_ms = current_benchmark_ms! - entry.benchmark_ms
     if delta_ms >= 0
-      log_info {
+      log_info -> {
         action: "dns_benchmark"
         txid: string.format "0x%04x", txid
         src_ip: src_ip
@@ -660,7 +662,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     unless patched
       return NF_DROP
     qnames = table.concat [q.name for q in *dns_msg.questions], ","
-    log_debug {
+    log_debug -> {
       action:   "response_refused"
       src_ip:   src_ip
       dst_ip:   dst_ip
@@ -695,6 +697,9 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   success_any = false
   no_ipv4_records = {}
   no_ipv6_records = {}
+  -- Purge stale ACKs before enqueueing new items so that wait_ack only
+  -- consumes the ACK produced by the batch that actually contains our adds.
+  drain_ack! if inject_nft and not dnsonly
   for ans in *answers
     if ans.rtype == QTYPE.A
       -- Enregistrement A : le client doit avoir une adresse IPv4
@@ -747,13 +752,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- Logguer les cas cross-family sans IP connue (groupés par réponse)
   if #no_ipv4_records > 0
-    log = if mac_valid(client_mac) then log_info else log_warn
-    log { action: "no_ipv4_for_client", client: client_ip, count: #no_ipv4_records,
+    log_fn = if mac_valid(client_mac) then log_info else log_warn
+    log_fn -> { action: "no_ipv4_for_client", client: client_ip, count: #no_ipv4_records,
           records: table.concat(no_ipv4_records, " "),
           reason: "client_ipv4_unknown", mac_fallback: mac_valid(client_mac), user: user }
   if #no_ipv6_records > 0
-    log = if mac_valid(client_mac) then log_info else log_warn
-    log { action: "no_ipv6_for_client", client: client_ip, count: #no_ipv6_records,
+    log_fn = if mac_valid(client_mac) then log_info else log_warn
+    log_fn -> { action: "no_ipv6_for_client", client: client_ip, count: #no_ipv6_records,
           records: table.concat(no_ipv6_records, " "),
           reason: "client_ipv6_unknown", mac_fallback: mac_valid(client_mac), user: user }
 
@@ -765,9 +770,9 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     patched = replace_dns_payload raw, ip, l4, ip_ihl, new_dns
     return NF_DROP unless patched
 
-  -- Log de la réponse
+  -- Log de la réponse (lazy pour éviter construction si DEBUG filtré)
   qnames = table.concat [q.name for q in *dns_msg.questions], ","
-  log_debug {
+  log_debug -> {
     action:      resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow")
     src_ip:      src_ip
     dst_ip:      dst_ip
@@ -785,10 +790,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- If we had records to add but none succeeded, respect policy
   if records_to_add > 0 and not success_any
     if ((config.nft or {}).add_failure_policy or "fail-closed") == "fail-closed"
-      log_debug { action: "nft_add_failed_policy_fail_closed", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
+      log_debug -> { action: "nft_add_failed_policy_fail_closed", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
       return NF_DROP
     else
-      log_warn { action: "nft_add_failed_fail_open", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
+      log_warn -> { action: "nft_add_failed_fail_open", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
 
   -- ── Attente ACK nft avant verdict ────────────────────────────
   -- On attend que worker_nft confirme l'insertion des IPs dans les sets nftables

@@ -59,17 +59,21 @@ sanitize_timeout = function(timeout)
   end
   local fallback = IP_TIMEOUT
   if is_valid_timeout(fallback) then
-    log_warn({
-      action = "nft_queue_timeout_invalid_fallback",
-      timeout = t,
-      fallback = fallback
-    })
+    log_warn(function()
+      return {
+        action = "nft_queue_timeout_invalid_fallback",
+        timeout = t,
+        fallback = fallback
+      }
+    end)
     return fallback
   end
-  log_warn({
-    action = "nft_queue_timeout_invalid_default",
-    timeout = t
-  })
+  log_warn(function()
+    return {
+      action = "nft_queue_timeout_invalid_default",
+      timeout = t
+    }
+  end)
   return "2m"
 end
 local sleep_ms
@@ -108,19 +112,23 @@ write_line = function(line)
       errno = 0
     end
     if errno ~= EAGAIN and errno ~= EWOULDBLOCK then
-      log_warn({
-        action = "nft_queue_write_failed",
-        fd = pipe_wfd,
-        errno = errno
-      })
+      log_warn(function()
+        return {
+          action = "nft_queue_write_failed",
+          fd = pipe_wfd,
+          errno = errno
+        }
+      end)
       return false
     end
     sleep_ms(10)
   end
-  log_warn({
-    action = "nft_queue_write_exhausted",
-    fd = pipe_wfd
-  })
+  log_warn(function()
+    return {
+      action = "nft_queue_write_exhausted",
+      fd = pipe_wfd
+    }
+  end)
   return false
 end
 local drain_ack
@@ -233,13 +241,15 @@ wait_ack = function(pending_seq, corr)
     libc.read(ack_rfd, ack_buf, 1)
     return true
   end
-  log_warn({
-    action = "nft_ack_timeout",
-    worker_idx = worker_idx,
-    seq = pending_seq,
-    corr = corr or "",
-    timeout_ms = timeout_ms
-  })
+  log_warn(function()
+    return {
+      action = "nft_ack_timeout",
+      worker_idx = worker_idx,
+      seq = pending_seq,
+      corr = corr or "",
+      timeout_ms = timeout_ms
+    }
+  end)
   return false
 end
 local sanitize_rule_id
@@ -332,6 +342,7 @@ return {
   set_ack_rfd = set_ack_rfd,
   get_last_seq = get_last_seq,
   wait_ack = wait_ack,
+  drain_ack = drain_ack,
   send_barrier = send_barrier,
   add_ip4 = add_ip4,
   add_ip6 = add_ip6,

@@ -49,43 +49,43 @@ send_to_auth_server = (ip_version, ip_raw, mac_raw) ->
 -- @tparam number pkt_id ID du paquet
 -- @treturn number NF_ACCEPT ou NF_DROP
 handle_auth_packet = (qh_ptr, nfad, pkt_id) ->
-  log_debug { action: "callback", pkt_id: pkt_id }
+  log_debug -> { action: "callback", pkt_id: pkt_id }
 
   -- 1. Extraire les infos L2 (MAC source)
   l2 = get_l2 nfad
   unless l2
-    log_warn { action: "no_l2", pkt_id: pkt_id }
+    log_warn -> { action: "no_l2", pkt_id: pkt_id }
     return NF_ACCEPT
 
   -- 2. Extraire les infos L3 (IP source)
   payload_ptr = ffi.new "unsigned char*[1]"
   payload_len = libnfq.nfq_get_payload nfad, payload_ptr
   if payload_len <= 0
-    log_warn { action: "no_payload", pkt_id: pkt_id, payload_len: payload_len }
+    log_warn -> { action: "no_payload", pkt_id: pkt_id, payload_len: payload_len }
     return NF_DROP
 
   raw = ffi.string payload_ptr[0], payload_len
-  log_debug { action: "payload_len", len: payload_len }
+  log_debug -> { action: "payload_len", len: payload_len }
 
   -- Parse IP header with ipparse (1-based offset)
   ip, err = ipparse_ip.parse raw, 1
   unless ip
-    log_debug { action: "parse_failed", pkt_id: pkt_id, err: err }
+    log_debug -> { action: "parse_failed", pkt_id: pkt_id, err: err }
     return NF_ACCEPT
 
   ip_raw = ip.src
   mac_raw = l2.mac_raw
   unless ip_raw and mac_raw
-    log_warn { action: "missing_info", pkt_id: pkt_id, has_ip: ip_raw ~= nil, has_mac: mac_raw ~= nil }
+    log_warn -> { action: "missing_info", pkt_id: pkt_id, has_ip: ip_raw ~= nil, has_mac: mac_raw ~= nil }
     return NF_ACCEPT
 
   -- 3. Envoyer les infos au serveur d'authentification via IPC
   ok = send_to_auth_server ip.version, ip_raw, mac_raw
   unless ok
-    log_warn { action: "ipc_failed", pkt_id: pkt_id, ip_version: ip.version }
+    log_warn -> { action: "ipc_failed", pkt_id: pkt_id, ip_version: ip.version }
 
   -- 4. Toujours accepter le paquet : c'est au serveur HTTPS de décider du sort de la connexion
-  log_info { action: "processed", pkt_id: pkt_id }
+  log_info -> { action: "processed", pkt_id: pkt_id }
   NF_ACCEPT
 
 --- Point d'entrée du worker.
@@ -94,7 +94,7 @@ handle_auth_packet = (qh_ptr, nfad, pkt_id) ->
 run = (queue_num, wfd) ->
   set_action_prefix "auth_queue_"
   ipc_wfd = wfd
-  log_info { action: "starting", queue: queue_num, ipc_fd: wfd }
+  log_info -> { action: "starting", queue: queue_num, ipc_fd: wfd }
   run_queue tonumber(queue_num), handle_auth_packet
 
 { :run }

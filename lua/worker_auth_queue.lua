@@ -43,76 +43,94 @@ send_to_auth_server = function(ip_version, ip_raw, mac_raw)
 end
 local handle_auth_packet
 handle_auth_packet = function(qh_ptr, nfad, pkt_id)
-  log_debug({
-    action = "callback",
-    pkt_id = pkt_id
-  })
+  log_debug(function()
+    return {
+      action = "callback",
+      pkt_id = pkt_id
+    }
+  end)
   local l2 = get_l2(nfad)
   if not (l2) then
-    log_warn({
-      action = "no_l2",
-      pkt_id = pkt_id
-    })
+    log_warn(function()
+      return {
+        action = "no_l2",
+        pkt_id = pkt_id
+      }
+    end)
     return NF_ACCEPT
   end
   local payload_ptr = ffi.new("unsigned char*[1]")
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
   if payload_len <= 0 then
-    log_warn({
-      action = "no_payload",
-      pkt_id = pkt_id,
-      payload_len = payload_len
-    })
+    log_warn(function()
+      return {
+        action = "no_payload",
+        pkt_id = pkt_id,
+        payload_len = payload_len
+      }
+    end)
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
-  log_debug({
-    action = "payload_len",
-    len = payload_len
-  })
+  log_debug(function()
+    return {
+      action = "payload_len",
+      len = payload_len
+    }
+  end)
   local ip, err = ipparse_ip.parse(raw, 1)
   if not (ip) then
-    log_debug({
-      action = "parse_failed",
-      pkt_id = pkt_id,
-      err = err
-    })
+    log_debug(function()
+      return {
+        action = "parse_failed",
+        pkt_id = pkt_id,
+        err = err
+      }
+    end)
     return NF_ACCEPT
   end
   local ip_raw = ip.src
   local mac_raw = l2.mac_raw
   if not (ip_raw and mac_raw) then
-    log_warn({
-      action = "missing_info",
-      pkt_id = pkt_id,
-      has_ip = ip_raw ~= nil,
-      has_mac = mac_raw ~= nil
-    })
+    log_warn(function()
+      return {
+        action = "missing_info",
+        pkt_id = pkt_id,
+        has_ip = ip_raw ~= nil,
+        has_mac = mac_raw ~= nil
+      }
+    end)
     return NF_ACCEPT
   end
   local ok = send_to_auth_server(ip.version, ip_raw, mac_raw)
   if not (ok) then
-    log_warn({
-      action = "ipc_failed",
-      pkt_id = pkt_id,
-      ip_version = ip.version
-    })
+    log_warn(function()
+      return {
+        action = "ipc_failed",
+        pkt_id = pkt_id,
+        ip_version = ip.version
+      }
+    end)
   end
-  log_info({
-    action = "processed",
-    pkt_id = pkt_id
-  })
+  log_info(function()
+    return {
+      action = "processed",
+      pkt_id = pkt_id
+    }
+  end)
   return NF_ACCEPT
 end
 local run
 run = function(queue_num, wfd)
   set_action_prefix("auth_queue_")
   ipc_wfd = wfd
-  log_info({
-    action = "starting",
-    queue = queue_num,
-    ipc_fd = wfd
-  })
+  log_info(function()
+    return {
+      action = "starting",
+      queue = queue_num,
+      ipc_fd = wfd
+    }
+  end)
   return run_queue(tonumber(queue_num), handle_auth_packet)
 end
 return {

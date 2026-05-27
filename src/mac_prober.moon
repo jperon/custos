@@ -376,19 +376,19 @@ wait_reply = (fd, timeout_ms, parse_fn) ->
 init = (ifname) ->
   our_mac = read_own_mac ifname
   unless our_mac
-    log_warn { action: "mac_prober_no_mac", ifname: ifname }
+    log_warn -> { action: "mac_prober_no_mac", ifname: ifname }
     return nil
 
   ifindex = tonumber C.if_nametoindex ifname
   if ifindex == 0
     errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn { action: "mac_prober_no_ifindex", ifname: ifname, errno: errno }
+    log_warn -> { action: "mac_prober_no_ifindex", ifname: ifname, errno: errno }
     return nil
 
   arp_fd = open_socket ETH_P_ARP, ifindex
   unless arp_fd
     errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn { action: "mac_prober_arp_socket_failed", ifname: ifname, errno: errno }
+    log_warn -> { action: "mac_prober_arp_socket_failed", ifname: ifname, errno: errno }
     return nil
 
   our_ip6 = read_own_ip6 ifname
@@ -398,10 +398,10 @@ init = (ifname) ->
     ip6_fd = open_socket ETH_P_IPV6, ifindex
     unless ip6_fd
       errno = tonumber(ffi.C.__errno_location()[0])
-      log_warn { action: "mac_prober_ip6_socket_failed", ifname: ifname, errno: errno,
+      log_warn -> { action: "mac_prober_ip6_socket_failed", ifname: ifname, errno: errno,
         msg: "NS probes disabled" }
   else
-    log_warn { action: "mac_prober_no_ip6", ifname: ifname,
+    log_warn -> { action: "mac_prober_no_ip6", ifname: ifname,
       msg: "no link-local found, NS probes disabled" }
 
   { :ifname, :ifindex, :our_mac, :our_ip6, :arp_fd, :ip6_fd }
@@ -431,10 +431,10 @@ probe_and_wait = (ctx, ip_str, timeout_ms) ->
     return nil unless frame
 
     unless send_frame ctx.ip6_fd, ctx.ifindex, frame
-      log_warn { action: "mac_prober_ns_send_failed", ip: ip_str }
+      log_warn -> { action: "mac_prober_ns_send_failed", ip: ip_str }
       return nil
 
-    log_debug { action: "mac_prober_ns_sent", ip: ip_str }
+    log_debug -> { action: "mac_prober_ns_sent", ip: ip_str }
 
     return wait_reply ctx.ip6_fd, timeout_ms, (raw, n) ->
       _, mac = parse_na_reply raw, n, tgt_bin
@@ -447,10 +447,10 @@ probe_and_wait = (ctx, ip_str, timeout_ms) ->
     frame = build_arp_request ctx.our_mac, tgt_bin
 
     unless send_frame ctx.arp_fd, ctx.ifindex, frame
-      log_warn { action: "mac_prober_arp_send_failed", ip: ip_str }
+      log_warn -> { action: "mac_prober_arp_send_failed", ip: ip_str }
       return nil
 
-    log_debug { action: "mac_prober_arp_sent", ip: ip_str }
+    log_debug -> { action: "mac_prober_arp_sent", ip: ip_str }
 
     return wait_reply ctx.arp_fd, timeout_ms, (raw, n) ->
       _, mac = parse_arp_reply raw, n, tgt_bin

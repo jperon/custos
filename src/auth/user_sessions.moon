@@ -45,7 +45,7 @@ add_session = (username, src_ip, mac) ->
   }
   
   if log_debug
-    log_debug {
+    log_debug -> {
       action: "user_session_added"
       username: username_lower
       src_ip: src_ip
@@ -70,7 +70,7 @@ get_session = (username) ->
   if session.expires and now > session.expires
     _sessions[username_lower] = nil
     if log_debug
-      log_debug {
+      log_debug -> {
         action: "user_session_expired"
         username: username_lower
       }
@@ -106,7 +106,7 @@ refresh_session = (username) ->
   session.expires = now + _session_timeout
   
   if log_debug
-    log_debug {
+    log_debug -> {
       action: "user_session_refreshed"
       username: username\lower!
       expires_in_s: _session_timeout
@@ -124,7 +124,7 @@ remove_session = (username) ->
   if _sessions[username_lower]
     _sessions[username_lower] = nil
     if log_debug
-      log_debug {
+      log_debug -> {
         action: "user_session_removed"
         username: username_lower
       }
@@ -158,7 +158,7 @@ cleanup_expired = ->
       count += 1
   
   if count > 0 and log_debug
-    log_debug {
+    log_debug -> {
       action: "user_session_cleanup"
       removed_count: count
     }

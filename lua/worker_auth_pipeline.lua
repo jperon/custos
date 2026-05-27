@@ -32,11 +32,13 @@ init = function(cfg, nft_wfd)
   local user_field = auth_cfg.user_field or "subject"
   init_sessions(session_timeout)
   if log_info then
-    return log_info({
-      action = "init",
-      session_timeout = session_timeout,
-      user_field = user_field
-    })
+    return log_info(function()
+      return {
+        action = "init",
+        session_timeout = session_timeout,
+        user_field = user_field
+      }
+    end)
   end
 end
 local process_tls_certificate
@@ -58,19 +60,23 @@ process_tls_certificate = function(tls_data)
   local username = extract_username(cert_data, user_field)
   if not (username) then
     if log_warn then
-      log_warn({
-        action = "username_extraction_failed",
-        cert_subject = cert_data.subject or "unknown"
-      })
+      log_warn(function()
+        return {
+          action = "username_extraction_failed",
+          cert_subject = cert_data.subject or "unknown"
+        }
+      end)
     end
     return false, "unable to extract username from certificate"
   end
   if not (validate_username(username)) then
     if log_warn then
-      log_warn({
-        action = "username_validation_failed",
-        username = username
-      })
+      log_warn(function()
+        return {
+          action = "username_validation_failed",
+          username = username
+        }
+      end)
     end
     return false, "invalid username format"
   end
@@ -78,12 +84,14 @@ process_tls_certificate = function(tls_data)
   local success = add_session(username, src_ip, mac)
   if success then
     if log_info then
-      log_info({
-        action = "user_authenticated",
-        username = username,
-        src_ip = src_ip,
-        mac = mac
-      })
+      log_info(function()
+        return {
+          action = "user_authenticated",
+          username = username,
+          src_ip = src_ip,
+          mac = mac
+        }
+      end)
     end
     if _nft_wfd and _nft_wfd >= 0 then
       send_user_auth_to_nft(username, src_ip, mac)
@@ -91,10 +99,12 @@ process_tls_certificate = function(tls_data)
     return true, nil
   else
     if log_warn then
-      log_warn({
-        action = "session_creation_failed",
-        username = username
-      })
+      log_warn(function()
+        return {
+          action = "session_creation_failed",
+          username = username
+        }
+      end)
     end
     return false, "unable to create user session"
   end
@@ -124,9 +134,11 @@ get_user_session = function(username)
 end
 local run
 run = function()
-  log_info({
-    action = "worker_started"
-  })
+  log_info(function()
+    return {
+      action = "worker_started"
+    }
+  end)
   while true do
     periodic_cleanup()
     os.execute("sleep 60")

@@ -155,7 +155,7 @@ open_socket = (ifindex) ->
   if C.setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, mreq, ffi.sizeof(mreq)) ~= 0
     -- Le mode promiscuous peut échouer (permissions, interface non bridge, etc.)
     -- On continue quand même, on captura seulement les paquets entrants
-    log_debug { action: "promisc_failed", ifindex: ifindex, errno: tonumber(ffi.C.__errno_location()[0]) }
+    log_debug -> { action: "promisc_failed", ifindex: ifindex, errno: tonumber(ffi.C.__errno_location()[0]) }
 
   fd
 
@@ -200,7 +200,7 @@ process_arp = (raw, len, learn_wfd) ->
 
   msg = build_learn_msg raw, 29, 4, mac_off
   ok = write_learn learn_wfd, msg
-  log_debug { action: "arp_learned", mac: fmt_mac(raw, mac_off),
+  log_debug -> { action: "arp_learned", mac: fmt_mac(raw, mac_off),
     ip: "#{raw\byte 29}.#{raw\byte 30}.#{raw\byte 31}.#{raw\byte 32}" } if ok
 
 --- Traite une trame IPv6 et écrit l'association IPv6→MAC dans le pipe
@@ -267,7 +267,7 @@ process_ipv6 = (raw, len, learn_wfd) ->
 
     msg = build_learn_msg raw, 23, 16, mac_src_off
     ok = write_learn learn_wfd, msg
-    log_debug { action: "ndp_learned", mac: fmt_mac(raw, mac_src_off),
+    log_debug -> { action: "ndp_learned", mac: fmt_mac(raw, mac_src_off),
       ip: fmt_ipv6(raw, 23), type: "NS" } if ok
 
   else
@@ -301,7 +301,7 @@ process_ipv6 = (raw, len, learn_wfd) ->
         msg[16 + i] = tlla_mac\byte(i + 1)
 
       ok = write_learn learn_wfd, msg
-      log_debug { action: "ndp_learned",
+      log_debug -> { action: "ndp_learned",
         mac: fmt_mac(tlla_mac, 1),
         ip: fmt_ipv6(raw, target_off),
         type: "NA",
@@ -310,7 +310,7 @@ process_ipv6 = (raw, len, learn_wfd) ->
       -- Fallback : utiliser MAC source Ethernet
       msg = build_learn_msg raw, target_off, 16, mac_src_off
       ok = write_learn learn_wfd, msg
-      log_debug { action: "ndp_learned",
+      log_debug -> { action: "ndp_learned",
         mac: fmt_mac(raw, mac_src_off),
         ip: fmt_ipv6(raw, target_off),
         type: "NA",
@@ -338,22 +338,22 @@ run = (ifnames, learn_wfd) ->
     ifindex = tonumber C.if_nametoindex ifname
     if ifindex == 0
       errno = tonumber(ffi.C.__errno_location()[0])
-      log_warn { action: "ifindex_failed", ifname: ifname, errno: errno }
+      log_warn -> { action: "ifindex_failed", ifname: ifname, errno: errno }
       continue
 
     fd = open_socket ifindex
     if fd
       table.insert fds, fd
-      log_debug { action: "socket_open", ifname: ifname, ifindex: ifindex }
+      log_debug -> { action: "socket_open", ifname: ifname, ifindex: ifindex }
     else
       errno = tonumber(ffi.C.__errno_location()[0])
-      log_warn { action: "socket_failed", ifname: ifname, errno: errno }
+      log_warn -> { action: "socket_failed", ifname: ifname, errno: errno }
 
   if #fds == 0
-    log_warn { action: "no_sockets", interfaces: table.concat(ifnames, ",") }
+    log_warn -> { action: "no_sockets", interfaces: table.concat(ifnames, ",") }
     return
 
-  log_info { action: "start", interfaces: table.concat(ifnames, ","), sockets: #fds }
+  log_info -> { action: "start", interfaces: table.concat(ifnames, ","), sockets: #fds }
 
   -- poll sur tous les sockets
   pfds = ffi.new "struct pollfd[?]", #fds

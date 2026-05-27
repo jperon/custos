@@ -119,7 +119,9 @@ extract_sni_from_tls = function(payload, ctx)
         e[k] = v
       end
     end
-    return log_debug(e)
+    return log_debug(function()
+      return e
+    end)
   end
   debug_tls("tls_parse_start")
   if not (payload and #payload >= 9) then
@@ -625,34 +627,42 @@ apply_nft_allow = function(src_ip, dst_ip, mac, policy, rule_id)
 end
 local handle_sni_packet
 handle_sni_packet = function(qh_ptr, nfad, pkt_id)
-  log_debug({
-    action = "callback",
-    pkt_id = pkt_id
-  })
+  log_debug(function()
+    return {
+      action = "callback",
+      pkt_id = pkt_id
+    }
+  end)
   local l2 = get_l2(nfad)
   if not (l2) then
-    log_debug({
-      action = "no_l2",
-      pkt_id = pkt_id
-    })
+    log_debug(function()
+      return {
+        action = "no_l2",
+        pkt_id = pkt_id
+      }
+    end)
     return NF_ACCEPT
   end
   local payload_ptr = ffi.new("unsigned char*[1]")
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
   if payload_len <= 0 then
-    log_debug({
-      action = "no_payload",
-      pkt_id = pkt_id
-    })
+    log_debug(function()
+      return {
+        action = "no_payload",
+        pkt_id = pkt_id
+      }
+    end)
     return NF_ACCEPT
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
   local ip, err = ipparse_ip.parse(raw, 1)
   if not (ip) then
-    log_debug({
-      action = "ip_parse_failed",
-      pkt_id = pkt_id
-    })
+    log_debug(function()
+      return {
+        action = "ip_parse_failed",
+        pkt_id = pkt_id
+      }
+    end)
     return NF_ACCEPT
   end
   local protocol_name = nil
@@ -668,17 +678,21 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       return ipparse_tcp.parse(raw, ip.data_off)
     end)
     if not (success and tcp) then
-      log_debug({
-        action = "tcp_parse_failed",
-        pkt_id = pkt_id
-      })
+      log_debug(function()
+        return {
+          action = "tcp_parse_failed",
+          pkt_id = pkt_id
+        }
+      end)
       return NF_ACCEPT
     end
     if not (tcp.data_off and tcp.data_off >= 1) then
-      log_debug({
-        action = "tcp_data_off_invalid",
-        pkt_id = pkt_id
-      })
+      log_debug(function()
+        return {
+          action = "tcp_data_off_invalid",
+          pkt_id = pkt_id
+        }
+      end)
       return NF_ACCEPT
     end
     src_port = tcp.spt
@@ -700,26 +714,32 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       protocol_name = "https"
     end
     if tcp.data_off > #raw then
-      log_debug({
-        action = "tcp_no_payload",
-        pkt_id = pkt_id
-      })
+      log_debug(function()
+        return {
+          action = "tcp_no_payload",
+          pkt_id = pkt_id
+        }
+      end)
       return NF_ACCEPT
     end
     local tls_payload = raw:sub(tcp.data_off)
     if not (tls_payload and #tls_payload > 0) then
-      log_debug({
-        action = "tcp_no_payload",
-        pkt_id = pkt_id
-      })
+      log_debug(function()
+        return {
+          action = "tcp_no_payload",
+          pkt_id = pkt_id
+        }
+      end)
       return NF_ACCEPT
     end
     if not (tls_payload:byte(1) == 0x16) then
-      log_debug({
-        action = "tcp_not_tls_handshake",
-        pkt_id = pkt_id,
-        tls_record_type = string.format("0x%02x", tls_payload:byte(1))
-      })
+      log_debug(function()
+        return {
+          action = "tcp_not_tls_handshake",
+          pkt_id = pkt_id,
+          tls_record_type = string.format("0x%02x", tls_payload:byte(1))
+        }
+      end)
       return NF_ACCEPT
     end
     sni, tls_reason, tls_meta = extract_sni_from_tls(tls_payload, {
@@ -731,10 +751,12 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       return ipparse_udp.parse(raw, ip.data_off)
     end)
     if not (success and udp) then
-      log_debug({
-        action = "udp_parse_failed",
-        pkt_id = pkt_id
-      })
+      log_debug(function()
+        return {
+          action = "udp_parse_failed",
+          pkt_id = pkt_id
+        }
+      end)
       return NF_ACCEPT
     end
     src_port = udp.spt
@@ -762,25 +784,29 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
   local mail_port = is_mail_ssl_port(dst_port)
   if not (sni) then
     if protocol_name == "quic" and tls_reason and (tls_reason:match("^quic_session_init_failed") or tls_reason:match("^quic_push_failed")) then
-      log_warn({
-        action = "quic_parse_failed",
-        pkt_id = pkt_id,
-        reason = tls_reason,
-        quic_parser_path = tls_meta and tls_meta.quic_parser_path
-      })
+      log_warn(function()
+        return {
+          action = "quic_parse_failed",
+          pkt_id = pkt_id,
+          reason = tls_reason,
+          quic_parser_path = tls_meta and tls_meta.quic_parser_path
+        }
+      end)
     end
     if strict_mode and in_scope and not mail_port then
-      log_block({
-        action = "sni_verdict_block_no_sni",
-        pkt_id = pkt_id,
-        protocol = protocol_name,
-        l4_proto = l4_proto,
-        ip_src = ip_src_str,
-        ip_dst = ip_dst_str,
-        port_src = src_port,
-        port_dst = dst_port,
-        reason = tls_reason or "no_sni"
-      })
+      log_block(function()
+        return {
+          action = "sni_verdict_block_no_sni",
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          ip_src = ip_src_str,
+          ip_dst = ip_dst_str,
+          port_src = src_port,
+          port_dst = dst_port,
+          reason = tls_reason or "no_sni"
+        }
+      end)
       write_sni_event("block", {
         sni = nil,
         mac_src = mac_str,
@@ -795,22 +821,24 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       return NF_DROP
     end
     if mail_port and strict_mode and in_scope then
-      log_warn({
-        action = "sni_verdict_warn_no_sni_mail",
-        pkt_id = pkt_id,
-        protocol = protocol_name,
-        l4_proto = l4_proto,
-        ip_src = ip_src_str,
-        ip_dst = ip_dst_str,
-        port_src = src_port,
-        port_dst = dst_port,
-        reason = tls_reason or "no_sni",
-        tls_version = tls_meta and tls_meta.tls_version,
-        tls_record_version = tls_meta and tls_meta.tls_record_version,
-        tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
-        tls_supported_version = tls_meta and tls_meta.tls_supported_version,
-        tls_parser_path = tls_meta and tls_meta.tls_parser_path
-      })
+      log_warn(function()
+        return {
+          action = "sni_verdict_warn_no_sni_mail",
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          ip_src = ip_src_str,
+          ip_dst = ip_dst_str,
+          port_src = src_port,
+          port_dst = dst_port,
+          reason = tls_reason or "no_sni",
+          tls_version = tls_meta and tls_meta.tls_version,
+          tls_record_version = tls_meta and tls_meta.tls_record_version,
+          tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
+          tls_supported_version = tls_meta and tls_meta.tls_supported_version,
+          tls_parser_path = tls_meta and tls_meta.tls_parser_path
+        }
+      end)
       write_sni_event("warn", {
         sni = nil,
         mac_src = mac_str,
@@ -824,39 +852,43 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       })
       return NF_ACCEPT
     end
-    log_debug({
-      action = "sni_verdict_skip_no_sni",
-      pkt_id = pkt_id,
+    log_debug(function()
+      return {
+        action = "sni_verdict_skip_no_sni",
+        pkt_id = pkt_id,
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        reason = tls_reason,
+        tls_version = tls_meta and tls_meta.tls_version,
+        tls_record_version = tls_meta and tls_meta.tls_record_version,
+        tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
+        tls_supported_version = tls_meta and tls_meta.tls_supported_version,
+        tls_parser_path = tls_meta and tls_meta.tls_parser_path,
+        quic_parser_path = tls_meta and tls_meta.quic_parser_path
+      }
+    end)
+    return NF_ACCEPT
+  end
+  local sni_norm = normalize_sni(sni)
+  log_info(function()
+    return {
+      action = "sni_captured",
       protocol = protocol_name,
       l4_proto = l4_proto,
-      reason = tls_reason,
+      sni = sni_norm or sni,
+      mac_src = mac_str,
+      ip_src = ip_src_str,
+      ip_dst = ip_dst_str,
+      port_src = src_port,
+      port_dst = dst_port,
       tls_version = tls_meta and tls_meta.tls_version,
       tls_record_version = tls_meta and tls_meta.tls_record_version,
       tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
       tls_supported_version = tls_meta and tls_meta.tls_supported_version,
       tls_parser_path = tls_meta and tls_meta.tls_parser_path,
       quic_parser_path = tls_meta and tls_meta.quic_parser_path
-    })
-    return NF_ACCEPT
-  end
-  local sni_norm = normalize_sni(sni)
-  log_info({
-    action = "sni_captured",
-    protocol = protocol_name,
-    l4_proto = l4_proto,
-    sni = sni_norm or sni,
-    mac_src = mac_str,
-    ip_src = ip_src_str,
-    ip_dst = ip_dst_str,
-    port_src = src_port,
-    port_dst = dst_port,
-    tls_version = tls_meta and tls_meta.tls_version,
-    tls_record_version = tls_meta and tls_meta.tls_record_version,
-    tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
-    tls_supported_version = tls_meta and tls_meta.tls_supported_version,
-    tls_parser_path = tls_meta and tls_meta.tls_parser_path,
-    quic_parser_path = tls_meta and tls_meta.quic_parser_path
-  })
+    }
+  end)
   local req = {
     domain = sni_norm or sni,
     src_ip = ip_src_str,
@@ -867,42 +899,48 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
   }
   local allowed, decide_reason, decide_rule = safe_filter_decide(req)
   if not in_scope then
-    log_debug({
-      action = "sni_verdict_skip_protocol",
-      pkt_id = pkt_id,
-      protocol = protocol_name,
-      l4_proto = l4_proto,
-      sni = sni_norm or sni,
-      policy_protocols = sni_policy and sni_policy.protocols or "both"
-    })
+    log_debug(function()
+      return {
+        action = "sni_verdict_skip_protocol",
+        pkt_id = pkt_id,
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        sni = sni_norm or sni,
+        policy_protocols = sni_policy and sni_policy.protocols or "both"
+      }
+    end)
     return NF_ACCEPT
   end
   if allowed == nil then
-    log_warn({
-      action = "sni_verdict_skip_filter_error",
-      pkt_id = pkt_id,
-      protocol = protocol_name,
-      l4_proto = l4_proto,
-      sni = sni_norm or sni,
-      reason = decide_reason or "filter_error"
-    })
+    log_warn(function()
+      return {
+        action = "sni_verdict_skip_filter_error",
+        pkt_id = pkt_id,
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        sni = sni_norm or sni,
+        reason = decide_reason or "filter_error"
+      }
+    end)
     return NF_ACCEPT
   end
   if allowed == true then
     local ok_nft, nft_reason = apply_nft_allow(ip_src_str, ip_dst_str, mac_str, sni_policy, decide_rule)
     if not (ok_nft) then
-      log_block({
-        action = "sni_verdict_nft_failed",
-        pkt_id = pkt_id,
-        protocol = protocol_name,
-        l4_proto = l4_proto,
-        sni = sni_norm or sni,
-        ip_src = ip_src_str,
-        ip_dst = ip_dst_str,
-        mac_src = mac_str,
-        reason = nft_reason,
-        nft_failure_policy = sni_policy and sni_policy.nft_failure_policy or "fail-closed"
-      })
+      log_block(function()
+        return {
+          action = "sni_verdict_nft_failed",
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          sni = sni_norm or sni,
+          ip_src = ip_src_str,
+          ip_dst = ip_dst_str,
+          mac_src = mac_str,
+          reason = nft_reason,
+          nft_failure_policy = sni_policy and sni_policy.nft_failure_policy or "fail-closed"
+        }
+      end)
       write_sni_event("block", {
         sni = sni_norm or sni,
         mac_src = mac_str,
@@ -919,26 +957,28 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       end
       return NF_ACCEPT
     end
-    log_allow({
-      action = "sni_verdict_allow",
-      protocol = protocol_name,
-      l4_proto = l4_proto,
-      sni = sni_norm or sni,
-      ip_src = ip_src_str,
-      ip_dst = ip_dst_str,
-      mac_src = mac_str,
-      port_src = src_port,
-      port_dst = dst_port,
-      filter_reason = decide_reason,
-      rule = decide_rule,
-      nft_outcome = nft_reason or "ok",
-      tls_version = tls_meta and tls_meta.tls_version,
-      tls_record_version = tls_meta and tls_meta.tls_record_version,
-      tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
-      tls_supported_version = tls_meta and tls_meta.tls_supported_version,
-      tls_parser_path = tls_meta and tls_meta.tls_parser_path,
-      quic_parser_path = tls_meta and tls_meta.quic_parser_path
-    })
+    log_allow(function()
+      return {
+        action = "sni_verdict_allow",
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        sni = sni_norm or sni,
+        ip_src = ip_src_str,
+        ip_dst = ip_dst_str,
+        mac_src = mac_str,
+        port_src = src_port,
+        port_dst = dst_port,
+        filter_reason = decide_reason,
+        rule = decide_rule,
+        nft_outcome = nft_reason or "ok",
+        tls_version = tls_meta and tls_meta.tls_version,
+        tls_record_version = tls_meta and tls_meta.tls_record_version,
+        tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
+        tls_supported_version = tls_meta and tls_meta.tls_supported_version,
+        tls_parser_path = tls_meta and tls_meta.tls_parser_path,
+        quic_parser_path = tls_meta and tls_meta.quic_parser_path
+      }
+    end)
     write_sni_event("allow", {
       sni = sni_norm or sni,
       mac_src = mac_str,
@@ -954,18 +994,20 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
   end
   if allowed == "dnsonly" then
     if strict_mode then
-      log_block({
-        action = "sni_verdict_block_dnsonly",
-        pkt_id = pkt_id,
-        protocol = protocol_name,
-        l4_proto = l4_proto,
-        sni = sni_norm or sni,
-        ip_src = ip_src_str,
-        ip_dst = ip_dst_str,
-        mac_src = mac_str,
-        reason = decide_reason or "dnsonly",
-        rule = decide_rule
-      })
+      log_block(function()
+        return {
+          action = "sni_verdict_block_dnsonly",
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          sni = sni_norm or sni,
+          ip_src = ip_src_str,
+          ip_dst = ip_dst_str,
+          mac_src = mac_str,
+          reason = decide_reason or "dnsonly",
+          rule = decide_rule
+        }
+      end)
       write_sni_event("block", {
         sni = sni_norm or sni,
         mac_src = mac_str,
@@ -979,30 +1021,34 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       })
       return NF_DROP
     end
-    log_debug({
-      action = "sni_verdict_skip_dnsonly",
-      pkt_id = pkt_id,
-      protocol = protocol_name,
-      l4_proto = l4_proto,
-      sni = sni_norm or sni,
-      reason = decide_reason or "dnsonly",
-      rule = decide_rule
-    })
+    log_debug(function()
+      return {
+        action = "sni_verdict_skip_dnsonly",
+        pkt_id = pkt_id,
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        sni = sni_norm or sni,
+        reason = decide_reason or "dnsonly",
+        rule = decide_rule
+      }
+    end)
     return NF_ACCEPT
   end
   if strict_mode then
-    log_block({
-      action = "sni_verdict_block",
-      pkt_id = pkt_id,
-      protocol = protocol_name,
-      l4_proto = l4_proto,
-      sni = sni_norm or sni,
-      ip_src = ip_src_str,
-      ip_dst = ip_dst_str,
-      mac_src = mac_str,
-      reason = decide_reason or "denied",
-      rule = decide_rule
-    })
+    log_block(function()
+      return {
+        action = "sni_verdict_block",
+        pkt_id = pkt_id,
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        sni = sni_norm or sni,
+        ip_src = ip_src_str,
+        ip_dst = ip_dst_str,
+        mac_src = mac_str,
+        reason = decide_reason or "denied",
+        rule = decide_rule
+      }
+    end)
     write_sni_event("block", {
       sni = sni_norm or sni,
       mac_src = mac_str,
@@ -1016,15 +1062,17 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     })
     return NF_DROP
   end
-  log_debug({
-    action = "sni_verdict_skip",
-    pkt_id = pkt_id,
-    protocol = protocol_name,
-    l4_proto = l4_proto,
-    sni = sni_norm or sni,
-    reason = decide_reason or "denied",
-    rule = decide_rule
-  })
+  log_debug(function()
+    return {
+      action = "sni_verdict_skip",
+      pkt_id = pkt_id,
+      protocol = protocol_name,
+      l4_proto = l4_proto,
+      sni = sni_norm or sni,
+      reason = decide_reason or "denied",
+      rule = decide_rule
+    }
+  end)
   return NF_ACCEPT
 end
 local run
@@ -1056,10 +1104,12 @@ run = function(queue_num, ev_wfd, filter_data)
   else
     filter = nil
     sni_policy = { }
-    log_warn({
-      action = "filter_require_failed",
-      err = tostring(filter_or_err)
-    })
+    log_warn(function()
+      return {
+        action = "filter_require_failed",
+        err = tostring(filter_or_err)
+      }
+    end)
   end
   if sni_policy.enabled == nil then
     sni_policy.enabled = true
@@ -1069,27 +1119,33 @@ run = function(queue_num, ev_wfd, filter_data)
   sni_policy.mode = sni_policy.mode or "strict-443"
   sni_policy.protocols = sni_policy.protocols or "both"
   sni_policy.nft_failure_policy = sni_policy.nft_failure_policy or "fail-closed"
-  log_info({
-    action = "starting",
-    queue = queue_num
-  })
-  if not (sni_policy.enabled) then
-    log_info({
-      action = "disabled",
+  log_info(function()
+    return {
+      action = "starting",
       queue = queue_num
-    })
+    }
+  end)
+  if not (sni_policy.enabled) then
+    log_info(function()
+      return {
+        action = "disabled",
+        queue = queue_num
+      }
+    end)
     return run_queue(tonumber(queue_num), function(qh_ptr, nfad, pkt_id)
       return NF_ACCEPT
     end)
   end
-  log_info({
-    action = "policy_loaded",
-    queue = queue_num,
-    mode = sni_policy.mode,
-    protocols = sni_policy.protocols,
-    reset_nft_modules = reset_nft_modules,
-    nft_failure_policy = sni_policy.nft_failure_policy
-  })
+  log_info(function()
+    return {
+      action = "policy_loaded",
+      queue = queue_num,
+      mode = sni_policy.mode,
+      protocols = sni_policy.protocols,
+      reset_nft_modules = reset_nft_modules,
+      nft_failure_policy = sni_policy.nft_failure_policy
+    }
+  end)
   return run_queue(tonumber(queue_num), handle_sni_packet)
 end
 return {

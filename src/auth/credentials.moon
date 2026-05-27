@@ -95,9 +95,9 @@ do
   ok_log, log = pcall require, "log"
   if ok_log and log and log.log_info
     if wolfssl_pbkdf2
-      log.log_info { action: "pbkdf2_backend", backend: "wolfssl" }
+      log.log_info -> { action: "pbkdf2_backend", backend: "wolfssl" }
     else
-      log.log_info { action: "pbkdf2_backend", backend: "lua_pure" }
+      log.log_info -> { action: "pbkdf2_backend", backend: "lua_pure" }
 
 
 

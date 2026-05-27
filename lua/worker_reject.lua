@@ -261,28 +261,32 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
     if exp and exp > now then
       local raw_ptr = ffi.cast("const unsigned char*", raw)
       libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr)
-      log_debug({
-        action = "rtp_passthrough_hit",
-        queue = 3,
-        src = src_ip,
-        dst = dst_ip,
-        sport = sport,
-        dport = dport,
-        ttl_s = exp - now
-      })
+      log_debug(function()
+        return {
+          action = "rtp_passthrough_hit",
+          queue = 3,
+          src = src_ip,
+          dst = dst_ip,
+          sport = sport,
+          dport = dport,
+          ttl_s = exp - now
+        }
+      end)
       return VERDICT_DONE
     elseif exp_dport and exp_dport > now then
       local raw_ptr = ffi.cast("const unsigned char*", raw)
       libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr)
-      log_debug({
-        action = "rtp_passthrough_hit_dport",
-        queue = 3,
-        src = src_ip,
-        dst = dst_ip,
-        sport = sport,
-        dport = dport,
-        ttl_s = exp_dport - now
-      })
+      log_debug(function()
+        return {
+          action = "rtp_passthrough_hit_dport",
+          queue = 3,
+          src = src_ip,
+          dst = dst_ip,
+          sport = sport,
+          dport = dport,
+          ttl_s = exp_dport - now
+        }
+      end)
       return VERDICT_DONE
     end
     if should_track_rtp_udp(proto, ip.version, src_ip, dst_ip, sport, dport, raw, l4_off, _excluded_ports) then
@@ -294,15 +298,17 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
       rtp_passthrough_dport[rev_dport_key] = expiry
       local raw_ptr = ffi.cast("const unsigned char*", raw)
       libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr)
-      log_debug({
-        action = "rtp_passthrough_add",
-        queue = 3,
-        src = src_ip,
-        dst = dst_ip,
-        sport = sport,
-        dport = dport,
-        ttl_s = RTP_PASSTHROUGH_TTL
-      })
+      log_debug(function()
+        return {
+          action = "rtp_passthrough_add",
+          queue = 3,
+          src = src_ip,
+          dst = dst_ip,
+          sport = sport,
+          dport = dport,
+          ttl_s = RTP_PASSTHROUGH_TTL
+        }
+      end)
       return VERDICT_DONE
     end
   end
@@ -321,13 +327,15 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
     end
   end)
   if not (ok) then
-    log_warn({
-      action = "forge_error",
-      src = src_ip,
-      dst = dst_ip,
-      proto = proto,
-      err = tostring(err_or_frame)
-    })
+    log_warn(function()
+      return {
+        action = "forge_error",
+        src = src_ip,
+        dst = dst_ip,
+        proto = proto,
+        err = tostring(err_or_frame)
+      }
+    end)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_DROP, 0, nil)
     return VERDICT_DONE
   end
@@ -338,25 +346,29 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
   end
   local forged_ptr = ffi.cast("const unsigned char*", forged)
   libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #forged, forged_ptr)
-  log_debug({
-    action = "reject_forge",
-    queue = 3,
-    src = src_ip,
-    dst = dst_ip,
-    sport = sport,
-    dport = dport,
-    proto = proto,
-    response = response_type
-  })
+  log_debug(function()
+    return {
+      action = "reject_forge",
+      queue = 3,
+      src = src_ip,
+      dst = dst_ip,
+      sport = sport,
+      dport = dport,
+      proto = proto,
+      response = response_type
+    }
+  end)
   return VERDICT_DONE
 end
 local run
 run = function(queue_num, cfg)
   set_action_prefix("reject_")
-  log_info({
-    action = "worker_start",
-    queue = queue_num
-  })
+  log_info(function()
+    return {
+      action = "worker_start",
+      queue = queue_num
+    }
+  end)
   local rtp_cfg = cfg and cfg.rtp
   if rtp_cfg and rtp_cfg.excluded_ports then
     _excluded_ports = { }

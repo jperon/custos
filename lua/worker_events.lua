@@ -92,11 +92,13 @@ flush_to_file = function(agg, hour, events_dir)
   local fd = libc.open(path, bit.bor(O_WRONLY, O_CREAT, O_APPEND), FILE_MODE)
   if fd < 0 then
     local errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn({
-      action = "open_failed",
-      path = path,
-      errno = errno
-    })
+    log_warn(function()
+      return {
+        action = "open_failed",
+        path = path,
+        errno = errno
+      }
+    end)
     return 
   end
   for key, entry in pairs(agg) do
@@ -184,11 +186,13 @@ cleanup_old = function(events_dir, max_age_hours, min_free_pct)
     local age = file_age_hours(fname)
     if age and age > max_age_hours then
       os.remove(path)
-      log_info({
-        action = "events_cleanup_age",
-        file = fname,
-        age_h = math.floor(age)
-      })
+      log_info(function()
+        return {
+          action = "events_cleanup_age",
+          file = fname,
+          age_h = math.floor(age)
+        }
+      end)
     end
   end
   local free = free_pct_on(events_dir)
@@ -219,11 +223,13 @@ cleanup_old = function(events_dir, max_age_hours, min_free_pct)
     end
     local fname = path:match("([^/]+)$")
     os.remove(path)
-    log_info({
-      action = "events_cleanup_space",
-      file = fname,
-      free_pct = free
-    })
+    log_info(function()
+      return {
+        action = "events_cleanup_space",
+        file = fname,
+        free_pct = free
+      }
+    end)
   end
 end
 local run
@@ -241,23 +247,27 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
   local hour = current_hour()
   local siginfo = ffi.new("signalfd_siginfo")
   local sig_sz = ffi.sizeof("signalfd_siginfo")
-  log_info({
-    action = "start",
-    events_dir = events_dir,
-    hour = hour,
-    max_age_hours = max_age_hours,
-    min_free_pct = min_free_pct
-  })
+  log_info(function()
+    return {
+      action = "start",
+      events_dir = events_dir,
+      hour = hour,
+      max_age_hours = max_age_hours,
+      min_free_pct = min_free_pct
+    }
+  end)
   cleanup_old(events_dir, max_age_hours, min_free_pct)
   while true do
     libc.poll(pfds, 2, POLL_TIMEOUT)
     if bit.band(pfds[1].revents, POLLIN) ~= 0 then
       libc.read(sfd, siginfo, sig_sz)
       if siginfo.ssi_signo == SIGTERM then
-        log_info({
-          action = "sigterm",
-          hour = hour
-        })
+        log_info(function()
+          return {
+            action = "sigterm",
+            hour = hour
+          }
+        end)
         flush_to_file(agg, hour, events_dir)
         libc._exit(0)
       end
@@ -265,10 +275,12 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
     if bit.band(pfds[0].revents, POLLIN) ~= 0 then
       local chunk = read_chunk(events_rfd)
       if chunk == nil then
-        log_warn({
-          action = "pipe_eof",
-          fd = events_rfd
-        })
+        log_warn(function()
+          return {
+            action = "pipe_eof",
+            fd = events_rfd
+          }
+        end)
       elseif #chunk > 0 then
         line_buf = line_buf .. chunk
         while true do
@@ -286,11 +298,13 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
     end
     local new_hour = current_hour()
     if new_hour ~= hour then
-      log_info({
-        action = "hour_change",
-        old = hour,
-        new = new_hour
-      })
+      log_info(function()
+        return {
+          action = "hour_change",
+          old = hour,
+          new = new_hour
+        }
+      end)
       flush_to_file(agg, hour, events_dir)
       compress_old(events_dir, new_hour)
       cleanup_old(events_dir, max_age_hours, min_free_pct)

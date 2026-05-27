@@ -89,7 +89,7 @@ extract_sni_from_tls = (payload, ctx={}) ->
     if extra
       for k, v in pairs extra
         e[k] = v
-    log_debug e
+    log_debug -> e
 
   debug_tls "tls_parse_start"
   unless payload and #payload >= 9
@@ -468,19 +468,19 @@ apply_nft_allow = (src_ip, dst_ip, mac, policy, rule_id) ->
 --- Main callback for SNI logger NFQUEUE.
 -- Handles both TCP/443 (TLS) and UDP/443 (QUIC) packets.
 handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
-  log_debug { action: "callback", pkt_id: pkt_id }
+  log_debug -> { action: "callback", pkt_id: pkt_id }
 
   -- 1. Extract L2 (MAC source)
   l2 = get_l2 nfad
   unless l2
-    log_debug { action: "no_l2", pkt_id: pkt_id }
+    log_debug -> { action: "no_l2", pkt_id: pkt_id }
     return NF_ACCEPT
 
   -- 2. Extract payload
   payload_ptr = ffi.new "unsigned char*[1]"
   payload_len = libnfq.nfq_get_payload nfad, payload_ptr
   if payload_len <= 0
-    log_debug { action: "no_payload", pkt_id: pkt_id }
+    log_debug -> { action: "no_payload", pkt_id: pkt_id }
     return NF_ACCEPT
 
   raw = ffi.string payload_ptr[0], payload_len
@@ -488,7 +488,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
   -- 3. Parse IP header
   ip, err = ipparse_ip.parse raw, 1
   unless ip
-    log_debug { action: "ip_parse_failed", pkt_id: pkt_id }
+    log_debug -> { action: "ip_parse_failed", pkt_id: pkt_id }
     return NF_ACCEPT
 
   -- 4. Determine protocol and extract SNI
@@ -505,11 +505,11 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     -- Parse TCP header
     success, tcp = pcall -> ipparse_tcp.parse raw, ip.data_off
     unless success and tcp
-      log_debug { action: "tcp_parse_failed", pkt_id: pkt_id }
+      log_debug -> { action: "tcp_parse_failed", pkt_id: pkt_id }
       return NF_ACCEPT
 
     unless tcp.data_off and tcp.data_off >= 1
-      log_debug { action: "tcp_data_off_invalid", pkt_id: pkt_id }
+      log_debug -> { action: "tcp_data_off_invalid", pkt_id: pkt_id }
       return NF_ACCEPT
 
     src_port = tcp.spt
@@ -524,18 +524,18 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     else "https"
 
     if tcp.data_off > #raw
-      log_debug { action: "tcp_no_payload", pkt_id: pkt_id }
+      log_debug -> { action: "tcp_no_payload", pkt_id: pkt_id }
       return NF_ACCEPT
 
     -- Extract TLS ClientHello from TCP payload
     tls_payload = raw\sub tcp.data_off
     unless tls_payload and #tls_payload > 0
-      log_debug { action: "tcp_no_payload", pkt_id: pkt_id }
+      log_debug -> { action: "tcp_no_payload", pkt_id: pkt_id }
       return NF_ACCEPT
 
     -- Ignore non-TLS records to reduce noisy "no_sni_found" logs.
     unless tls_payload\byte(1) == 0x16
-      log_debug { action: "tcp_not_tls_handshake", pkt_id: pkt_id, tls_record_type: string.format("0x%02x", tls_payload\byte(1)) }
+      log_debug -> { action: "tcp_not_tls_handshake", pkt_id: pkt_id, tls_record_type: string.format("0x%02x", tls_payload\byte(1)) }
       return NF_ACCEPT
 
     sni, tls_reason, tls_meta = extract_sni_from_tls tls_payload, { pkt_id: pkt_id }
@@ -545,7 +545,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     -- Parse UDP header
     success, udp = pcall -> ipparse_udp.parse raw, ip.data_off
     unless success and udp
-      log_debug { action: "udp_parse_failed", pkt_id: pkt_id }
+      log_debug -> { action: "udp_parse_failed", pkt_id: pkt_id }
       return NF_ACCEPT
 
     src_port = udp.spt
@@ -572,14 +572,14 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     if protocol_name == "quic" and tls_reason and (
       tls_reason\match("^quic_session_init_failed") or tls_reason\match("^quic_push_failed")
     )
-      log_warn {
+      log_warn -> {
         action: "quic_parse_failed"
         pkt_id: pkt_id
         reason: tls_reason
         quic_parser_path: tls_meta and tls_meta.quic_parser_path
       }
     if strict_mode and in_scope and not mail_port
-      log_block {
+      log_block -> {
         action: "sni_verdict_block_no_sni"
         pkt_id: pkt_id
         protocol: protocol_name
@@ -603,7 +603,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
       }
       return NF_DROP
     if mail_port and strict_mode and in_scope
-      log_warn {
+      log_warn -> {
         action: "sni_verdict_warn_no_sni_mail"
         pkt_id: pkt_id
         protocol: protocol_name
@@ -631,7 +631,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         rule: "mail_ssl/no_sni"
       }
       return NF_ACCEPT
-    log_debug {
+    log_debug -> {
       action: "sni_verdict_skip_no_sni", pkt_id: pkt_id, protocol: protocol_name, l4_proto: l4_proto, reason: tls_reason
       tls_version: tls_meta and tls_meta.tls_version
       tls_record_version: tls_meta and tls_meta.tls_record_version
@@ -643,7 +643,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     return NF_ACCEPT
 
   sni_norm = normalize_sni sni
-  log_info {
+  log_info -> {
     action: "sni_captured"
     protocol: protocol_name
     l4_proto: l4_proto
@@ -672,7 +672,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
   allowed, decide_reason, decide_rule = safe_filter_decide req
 
   if not in_scope
-    log_debug {
+    log_debug -> {
       action: "sni_verdict_skip_protocol"
       pkt_id: pkt_id
       protocol: protocol_name
@@ -683,7 +683,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     return NF_ACCEPT
 
   if allowed == nil
-    log_warn {
+    log_warn -> {
       action: "sni_verdict_skip_filter_error"
       pkt_id: pkt_id
       protocol: protocol_name
@@ -696,7 +696,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
   if allowed == true
     ok_nft, nft_reason = apply_nft_allow ip_src_str, ip_dst_str, mac_str, sni_policy, decide_rule
     unless ok_nft
-      log_block {
+      log_block -> {
         action: "sni_verdict_nft_failed"
         pkt_id: pkt_id
         protocol: protocol_name
@@ -722,7 +722,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
       return NF_DROP if (sni_policy and sni_policy.nft_failure_policy or "fail-closed") == "fail-closed"
       return NF_ACCEPT
 
-    log_allow {
+    log_allow -> {
       action: "sni_verdict_allow"
       protocol: protocol_name
       l4_proto: l4_proto
@@ -757,7 +757,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
 
   if allowed == "dnsonly"
     if strict_mode
-      log_block {
+      log_block -> {
         action: "sni_verdict_block_dnsonly"
         pkt_id: pkt_id
         protocol: protocol_name
@@ -781,7 +781,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         rule: decide_rule or "dnsonly"
       }
       return NF_DROP
-    log_debug {
+    log_debug -> {
       action: "sni_verdict_skip_dnsonly"
       pkt_id: pkt_id
       protocol: protocol_name
@@ -793,7 +793,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     return NF_ACCEPT
 
   if strict_mode
-    log_block {
+    log_block -> {
       action: "sni_verdict_block"
       pkt_id: pkt_id
       protocol: protocol_name
@@ -818,7 +818,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     }
     return NF_DROP
 
-  log_debug {
+  log_debug -> {
     action: "sni_verdict_skip"
     pkt_id: pkt_id
     protocol: protocol_name
@@ -849,18 +849,18 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
   else
     filter = nil
     sni_policy = {}
-    log_warn { action: "filter_require_failed", err: tostring(filter_or_err) }
+    log_warn -> { action: "filter_require_failed", err: tostring(filter_or_err) }
   sni_policy.enabled = if sni_policy.enabled == nil then true else not not sni_policy.enabled
   sni_policy.mode = sni_policy.mode or "strict-443"
   sni_policy.protocols = sni_policy.protocols or "both"
   sni_policy.nft_failure_policy = sni_policy.nft_failure_policy or "fail-closed"
-  log_info { action: "starting", queue: queue_num }
+  log_info -> { action: "starting", queue: queue_num }
 
   unless sni_policy.enabled
-    log_info { action: "disabled", queue: queue_num }
+    log_info -> { action: "disabled", queue: queue_num }
     return run_queue tonumber(queue_num), (qh_ptr, nfad, pkt_id) -> NF_ACCEPT
 
-  log_info {
+  log_info -> {
     action: "policy_loaded"
     queue: queue_num
     mode: sni_policy.mode

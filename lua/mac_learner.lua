@@ -66,11 +66,13 @@ learn_mac = function(ip_str, mac_str)
   if is_new then
     local ok, enriched = pcall(enrich_session_ip, mac_str, ip_str, auth_cfg.sessions_file)
     if ok and enriched then
-      log_info({
-        action = "session_enriched",
-        ip = ip_str,
-        mac = mac_str
-      })
+      log_info(function()
+        return {
+          action = "session_enriched",
+          ip = ip_str,
+          mac = mac_str
+        }
+      end)
     end
   end
   local waiters = pending_queries[ip_str]
@@ -214,32 +216,40 @@ run = function(learn_rfd, ifname)
   ifname = ifname or "br"
   prober = mac_prober.init(ifname)
   if prober then
-    log_info({
-      action = "mac_prober_ready",
-      ifname = ifname,
-      ns_enabled = prober.ip6_fd ~= nil
-    })
+    log_info(function()
+      return {
+        action = "mac_prober_ready",
+        ifname = ifname,
+        ns_enabled = prober.ip6_fd ~= nil
+      }
+    end)
   else
-    log_warn({
-      action = "mac_prober_disabled",
-      ifname = ifname
-    })
+    log_warn(function()
+      return {
+        action = "mac_prober_disabled",
+        ifname = ifname
+      }
+    end)
   end
   local query_sock_path = mac_cfg.query_sock or config.MAC_LEARNER_QUERY_SOCK or "/var/run/custos/mac_query.sock"
   local query_sock = create_server(query_sock_path)
   if query_sock < 0 then
     local errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn({
-      action = "mac_learner_socket_failed",
-      path = query_sock_path,
-      errno = errno
-    })
+    log_warn(function()
+      return {
+        action = "mac_learner_socket_failed",
+        path = query_sock_path,
+        errno = errno
+      }
+    end)
     return 
   end
-  log_info({
-    action = "mac_learner_start",
-    sock = query_sock_path
-  })
+  log_info(function()
+    return {
+      action = "mac_learner_start",
+      sock = query_sock_path
+    }
+  end)
   local pfds = ffi.new("struct pollfd[4]")
   pfds[0].fd = learn_rfd
   pfds[0].events = POLLIN
@@ -293,11 +303,13 @@ run = function(learn_rfd, ifname)
         local ip_str, mac_str = mac_prober.parse_arp_frame(raw, n)
         if ip_str and mac_str then
           learn_mac(ip_str, mac_str)
-          log_debug({
-            action = "mac_learned_arp",
-            ip = ip_str,
-            mac = mac_str
-          })
+          log_debug(function()
+            return {
+              action = "mac_learned_arp",
+              ip = ip_str,
+              mac = mac_str
+            }
+          end)
         end
       end
     end
@@ -308,11 +320,13 @@ run = function(learn_rfd, ifname)
         local ip_str, mac_str = mac_prober.parse_na_frame(raw, n)
         if ip_str and mac_str then
           learn_mac(ip_str, mac_str)
-          log_debug({
-            action = "mac_learned_na",
-            ip = ip_str,
-            mac = mac_str
-          })
+          log_debug(function()
+            return {
+              action = "mac_learned_na",
+              ip = ip_str,
+              mac = mac_str
+            }
+          end)
         end
       end
     end

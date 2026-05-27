@@ -64,7 +64,7 @@ build_filter_cfg = ->
   -- Transition minimale: si aucune règle n'est fournie, on génère
   -- "allow allowed_domains" puis "deny default".
   if #cfg.rules == 0 and #cfg.allowed_domains > 0
-    log_warn { action: "filter_rules_missing", detail: "falling back to allowlist domains" }
+    log_warn -> { action: "filter_rules_missing", detail: "falling back to allowlist domains" }
     cfg.rules = {
       {
         description: "Builtin allowlist domains"
@@ -88,12 +88,12 @@ build_filter_cfg = ->
 load = ->
   cfg = build_filter_cfg!
   unless cfg
-    log_warn { action: "filter_load_failed", err: "invalid runtime config" }
+    log_warn -> { action: "filter_load_failed", err: "invalid runtime config" }
     return
   root_rules = #(config.filter and config.filter.rules or {})
   fallback_builtin = root_rules == 0 and #cfg.rules > 0
   cfg_meta = config.__meta or {}
-  log_debug {
+  log_debug -> {
     action: "filter_config_source"
     path: cfg_meta.path or "unknown"
     env_path: cfg_meta.env_path or ""
@@ -115,7 +115,7 @@ load = ->
   -- NFT extra rules are applied once at process startup by worker_questions
   -- (moved out of filter.load to avoid re-inserting rules on hot-reload)
   n = #rules
-  log_info {
+  log_info -> {
     action: "filter_loaded"
     rules: n
     dest_whitelist: #whitelist
@@ -131,13 +131,13 @@ load = ->
 -- @treturn string  Description de la règle ayant matché (pour le log)
 decide = (req) ->
   unless rules
-    log_warn { action: "filter_not_loaded", domain: req and req.domain or "unknown" }
+    log_warn -> { action: "filter_not_loaded", domain: req and req.domain or "unknown" }
     return false, "filter not loaded", nil
   _decide rules, req, decision_cfg
 
 decide_meta = (req) ->
   unless rules
-    log_warn { action: "filter_not_loaded", domain: req and req.domain or "unknown" }
+    log_warn -> { action: "filter_not_loaded", domain: req and req.domain or "unknown" }
     return { verdict: false, reason: "filter not loaded", rule_id: nil, timeout: nil, description: nil }
   _decide_meta rules, req, decision_cfg
 

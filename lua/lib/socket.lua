@@ -241,17 +241,21 @@ socket_mt.__index.accept = function(self)
   local addrlen = ffi.new("socklen_t[1]")
   addrlen[0] = ffi.sizeof(addr)
   local fd = C.accept(self.fd, ffi.cast("struct sockaddr*", addr), addrlen)
-  log_debug({
-    action = "socket_accept",
-    listen_fd = self.fd,
-    client_fd = fd
-  })
+  log_debug(function()
+    return {
+      action = "socket_accept",
+      listen_fd = self.fd,
+      client_fd = fd
+    }
+  end)
   if fd < 0 then
     local errno = get_errno()
-    log_debug({
-      action = "socket_accept_failed",
-      errno = errno
-    })
+    log_debug(function()
+      return {
+        action = "socket_accept_failed",
+        errno = errno
+      }
+    end)
     if errno == EAGAIN or errno == EWOULDBLOCK then
       return nil
     end
@@ -269,11 +273,13 @@ socket_mt.__index.accept = function(self)
     closed = false,
     timeout = nil
   }
-  log_debug({
-    action = "socket_created",
-    fd = fd,
-    family = self.family
-  })
+  log_debug(function()
+    return {
+      action = "socket_created",
+      fd = fd,
+      family = self.family
+    }
+  end)
   setmetatable(client, socket_mt)
   return client
 end
@@ -381,15 +387,19 @@ socket_mt.__index.setoption = function(self, option, value)
   return true
 end
 socket_mt.__index.getpeername = function(self)
-  log_debug({
-    action = "getpeername_start",
-    closed = self.closed,
-    family = self.family
-  })
+  log_debug(function()
+    return {
+      action = "getpeername_start",
+      closed = self.closed,
+      family = self.family
+    }
+  end)
   if self.closed then
-    log_debug({
-      action = "socket_closed"
-    })
+    log_debug(function()
+      return {
+        action = "socket_closed"
+      }
+    end)
     return nil
   end
   local addr
@@ -398,68 +408,90 @@ socket_mt.__index.getpeername = function(self)
   else
     addr = ffi.new("struct sockaddr_in")
   end
-  log_debug({
-    action = "addr_struct_created"
-  })
+  log_debug(function()
+    return {
+      action = "addr_struct_created"
+    }
+  end)
   local addrlen = ffi.new("socklen_t[1]")
   addrlen[0] = ffi.sizeof(addr)
-  log_debug({
-    action = "addrlen_set",
-    size = addrlen[0]
-  })
+  log_debug(function()
+    return {
+      action = "addrlen_set",
+      size = addrlen[0]
+    }
+  end)
   local ret = C.getpeername(self.fd, ffi.cast("struct sockaddr*", addr), addrlen)
-  log_debug({
-    action = "getpeername_syscall",
-    ret = ret,
-    addrlen = addrlen[0]
-  })
+  log_debug(function()
+    return {
+      action = "getpeername_syscall",
+      ret = ret,
+      addrlen = addrlen[0]
+    }
+  end)
   if ret < 0 then
-    log_debug({
-      action = "getpeername_failed"
-    })
+    log_debug(function()
+      return {
+        action = "getpeername_failed"
+      }
+    end)
     return nil
   end
-  log_debug({
-    action = "address_to_string",
-    family = self.family
-  })
+  log_debug(function()
+    return {
+      action = "address_to_string",
+      family = self.family
+    }
+  end)
   local buf
   if self.family == AF_INET6 then
-    log_debug({
-      action = "inet_ntop",
-      family = "IPv6"
-    })
+    log_debug(function()
+      return {
+        action = "inet_ntop",
+        family = "IPv6"
+      }
+    end)
     local inet6_buf = ffi.new("char[46]")
     local src_ptr = ffi.cast("const void*", addr.sin6_addr)
     local ret_ntop = C.inet_ntop(AF_INET6, src_ptr, inet6_buf, 46)
-    log_debug({
-      action = "inet_ntop_done",
-      ret = tostring(ret_ntop)
-    })
+    log_debug(function()
+      return {
+        action = "inet_ntop_done",
+        ret = tostring(ret_ntop)
+      }
+    end)
     buf = inet6_buf
   else
-    log_debug({
-      action = "inet_ntop",
-      family = "IPv4"
-    })
+    log_debug(function()
+      return {
+        action = "inet_ntop",
+        family = "IPv4"
+      }
+    end)
     local inet_buf = ffi.new("char[16]")
     local src_ptr = ffi.cast("const void*", addr.sin_addr)
     local ret_ntop = C.inet_ntop(AF_INET, src_ptr, inet_buf, 16)
-    log_debug({
-      action = "inet_ntop_done",
-      ret = tostring(ret_ntop)
-    })
+    log_debug(function()
+      return {
+        action = "inet_ntop_done",
+        ret = tostring(ret_ntop)
+      }
+    end)
     buf = inet_buf
   end
-  log_debug({
-    action = "buf_allocated"
-  })
+  log_debug(function()
+    return {
+      action = "buf_allocated"
+    }
+  end)
   local buf_ptr = ffi.cast("char*", buf)
   local result = ffi.string(buf_ptr)
-  log_debug({
-    action = "getpeername_result",
-    ip = result
-  })
+  log_debug(function()
+    return {
+      action = "getpeername_result",
+      ip = result
+    }
+  end)
   return result
 end
 socket_mt.__index.getsockname = function(self)

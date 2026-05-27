@@ -110,15 +110,19 @@ now = ->
   libc.clock_gettime 0, ts   -- CLOCK_REALTIME = 0
   tonumber ts.tv_sec
 
---- Écrit une ligne de log structurée.
+--- Écrit une ligne de log structurée (lazy evaluation obligatoire).
 -- Format : [epoch] [pid] LEVEL k1=v1 k2=v2 ...
 -- @tparam string level  Niveau de log : "ERROR", "WARN", "INFO", "DEBUG", "TRACE", "ALLOW", "BLOCK"
--- @tparam table  fields Table de champs clé=valeur à inclure dans la ligne
+-- @tparam function thunk Fonction () -> table de champs, appelée uniquement si niveau OK
 -- @treturn nil
-write_log = (level, fields) ->
-  -- Filtrer selon le niveau de log configuré
+write_log = (level, thunk) ->
+  -- Filtrer selon le niveau de log configuré (vérification rapide avant d'appeler thunk)
   if get_log_level_num(level) < CURRENT_LOG_LEVEL_NUM
     return
+
+  -- Lazy evaluation: appeler thunk pour obtenir les fields
+  fields = thunk!
+  return unless fields  -- thunk peut retourner nil pour "pas de log"
 
   -- Apply process-scoped action prefix if set and not already present.
   if _action_prefix != "" and fields.action
@@ -149,29 +153,29 @@ write_log = (level, fields) ->
   line = table.concat(parts, " ") .. "\n"
   libc.write STDOUT_FILENO, line, #line
 
---- Raccourcis sémantiques vers write_log avec niveaux prédéfinis.
--- @tparam table fields Table de champs clé=valeur
+--- Raccourcis sémantiques vers write_log avec niveaux prédéfinis (tous lazy).
+-- @tparam function thunk Fonction () -> table de champs clé=valeur
 -- @treturn nil
-log_allow = (fields) -> write_log "ALLOW", fields
---- @tparam table fields Table de champs clé=valeur
+log_allow = (thunk) -> write_log "ALLOW", thunk
+--- @tparam function thunk Fonction () -> table de champs clé=valeur
 -- @treturn nil
-log_block = (fields) -> write_log "BLOCK", fields
---- @tparam table fields Table de champs clé=valeur
+log_block = (thunk) -> write_log "BLOCK", thunk
+--- @tparam function thunk Fonction () -> table de champs clé=valeur
 -- @treturn nil
-log_info  = (fields) -> write_log "INFO",  fields
---- @tparam table fields Table de champs clé=valeur
+log_info  = (thunk) -> write_log "INFO",  thunk
+--- @tparam function thunk Fonction () -> table de champs clé=valeur
 -- @treturn nil
-log_warn  = (fields) -> write_log "WARN",  fields
---- @tparam table fields Table de champs clé=valeur
+log_warn  = (thunk) -> write_log "WARN",  thunk
+--- @tparam function thunk Fonction () -> table de champs clé=valeur
 -- @treturn nil
-log_error = (fields) -> write_log "ERROR", fields
+log_error = (thunk) -> write_log "ERROR", thunk
 
---- @tparam table fields Table de champs clé=valeur
+--- @tparam function thunk Fonction () -> table de champs clé=valeur
 -- @treturn nil
-log_debug = (fields) -> write_log "DEBUG", fields
+log_debug = (thunk) -> write_log "DEBUG", thunk
 
---- @tparam table fields Table de champs clé=valeur
+--- @tparam function thunk Fonction () -> table de champs clé=valeur
 -- @treturn nil
-log_trace = (fields) -> write_log "TRACE", fields
+log_trace = (thunk) -> write_log "TRACE", thunk
 
 { :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :set_action_prefix }

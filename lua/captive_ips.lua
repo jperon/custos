@@ -21,11 +21,13 @@ detect = function(auth_cfg)
     end)
     if ok and out and out ~= "" and out ~= "0.0.0.0" then
       local_ip4 = out
-      log_info({
-        action = "captive_ip4_autodetected",
-        ip = local_ip4,
-        ifname = ifname
-      })
+      log_info(function()
+        return {
+          action = "captive_ip4_autodetected",
+          ip = local_ip4,
+          ifname = ifname
+        }
+      end)
     end
   end
   if not local_ip4 then
@@ -40,10 +42,12 @@ detect = function(auth_cfg)
             local ok_get, ip = pcall(u.getsockname, u)
             if ok_get and ip and ip ~= "" and ip ~= "0.0.0.0" then
               local_ip4 = ip
-              log_info({
-                action = "captive_ip4_autodetected_socket",
-                ip = local_ip4
-              })
+              log_info(function()
+                return {
+                  action = "captive_ip4_autodetected_socket",
+                  ip = local_ip4
+                }
+              end)
             end
           end
           return u:close()
@@ -63,11 +67,13 @@ detect = function(auth_cfg)
     end)
     if ok and ip and ip ~= "" and ip ~= "::" then
       local_ip6 = ip
-      log_info({
-        action = "captive_ip6_autodetected",
-        ip = local_ip6,
-        ifname = ifname
-      })
+      log_info(function()
+        return {
+          action = "captive_ip6_autodetected",
+          ip = local_ip6,
+          ifname = ifname
+        }
+      end)
     end
   end
   return local_ip4, local_ip6

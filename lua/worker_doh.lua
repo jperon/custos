@@ -244,10 +244,12 @@ handle_doh_client = function(args)
       if ctx then
         tls_ctx = ctx
       else
-        log_error({
-          action = "static_cert_child_failed",
-          err = ctx_err
-        })
+        log_error(function()
+          return {
+            action = "static_cert_child_failed",
+            err = ctx_err
+          }
+        end)
         error("Cannot load static cert: " .. tostring(ctx_err))
       end
     else
@@ -255,11 +257,13 @@ handle_doh_client = function(args)
         return load_or_generate_sni(local_ip, state.cert_cache)
       end)
       if not (ok_c) then
-        log_error({
-          action = "cert_gen_failed",
-          local_ip = local_ip,
-          err = ctx_or_err
-        })
+        log_error(function()
+          return {
+            action = "cert_gen_failed",
+            local_ip = local_ip,
+            err = ctx_or_err
+          }
+        end)
         error("Cannot generate cert: " .. tostring(ctx_or_err))
       end
       tls_ctx = ctx_or_err
@@ -271,21 +275,25 @@ handle_doh_client = function(args)
       else
         cert_type = "sni"
       end
-      log_error({
-        action = "cert_null",
-        local_ip = local_ip,
-        cert_type = cert_type
-      })
+      log_error(function()
+        return {
+          action = "cert_null",
+          local_ip = local_ip,
+          cert_type = cert_type
+        }
+      end)
       error("Certificate context is nil")
     end
     client:settimeout(nil)
     local tls_client, tls_err = ssl.wrap(client, tls_ctx)
     if not (tls_client) then
-      log_warn({
-        action = "tls_wrap_failed",
-        peer = peer_ip,
-        err = tls_err
-      })
+      log_warn(function()
+        return {
+          action = "tls_wrap_failed",
+          peer = peer_ip,
+          err = tls_err
+        }
+      end)
       client:close()
       return 
     end
@@ -299,12 +307,14 @@ handle_doh_client = function(args)
       end)
       if not ok_hs then
         hs_err = tostring(hs_ret)
-        log_warn({
-          action = "handshake_error",
-          peer = peer_ip,
-          attempts = attempts,
-          err = hs_err
-        })
+        log_warn(function()
+          return {
+            action = "handshake_error",
+            peer = peer_ip,
+            attempts = attempts,
+            err = hs_err
+          }
+        end)
         break
       end
       if hs_ret then
@@ -312,12 +322,14 @@ handle_doh_client = function(args)
       end
     end
     if not (done) then
-      log_warn({
-        action = "handshake_failed",
-        peer = peer_ip,
-        attempts = attempts,
-        err = hs_err or "max_attempts"
-      })
+      log_warn(function()
+        return {
+          action = "handshake_failed",
+          peer = peer_ip,
+          attempts = attempts,
+          err = hs_err or "max_attempts"
+        }
+      end)
       tls_client:close()
       return 
     end
@@ -327,63 +339,77 @@ handle_doh_client = function(args)
     else
       selected_alpn = nil
     end
-    log_debug({
-      action = "tls_handshake_ok",
-      peer = peer_ip,
-      attempts = attempts,
-      alpn = selected_alpn or "none"
-    })
+    log_debug(function()
+      return {
+        action = "tls_handshake_ok",
+        peer = peer_ip,
+        attempts = attempts,
+        alpn = selected_alpn or "none"
+      }
+    end)
     if selected_alpn == "h2" then
-      log_warn({
-        action = "http2_not_supported",
-        peer = peer_ip
-      })
+      log_warn(function()
+        return {
+          action = "http2_not_supported",
+          peer = peer_ip
+        }
+      end)
       tls_client:close()
       return 
     end
     local peer_mac = get_mac(peer_ip)
-    log_debug({
-      action = "mac_lookup",
-      peer = peer_ip,
-      mac = peer_mac or "unknown"
-    })
+    log_debug(function()
+      return {
+        action = "mac_lookup",
+        peer = peer_ip,
+        mac = peer_mac or "unknown"
+      }
+    end)
     local req, req_err = read_request(tls_client)
     if not (req) then
-      log_warn({
-        action = "request_read_failed",
-        peer = peer_ip,
-        err = req_err
-      })
+      log_warn(function()
+        return {
+          action = "request_read_failed",
+          peer = peer_ip,
+          err = req_err
+        }
+      end)
       tls_client:close()
       return 
     end
-    log_debug({
-      action = "request",
-      peer = peer_ip,
-      method = req.method,
-      path = req.path
-    })
+    log_debug(function()
+      return {
+        action = "request",
+        peer = peer_ip,
+        method = req.method,
+        path = req.path
+      }
+    end)
     local dns_raw = nil
     local json_mode = false
     if req.path == "/dns-query" or req.path:match("^/dns%-query%?") then
       local ct = req.headers["content-type"] or ""
       local accept = req.headers["accept"] or ""
       if req.method == "POST" and ct:match("application/dns%-message") then
-        log_debug({
-          action = "post",
-          peer = peer_ip,
-          body_bytes = #req.body
-        })
+        log_debug(function()
+          return {
+            action = "post",
+            peer = peer_ip,
+            body_bytes = #req.body
+          }
+        end)
         dns_raw = req.body
       elseif req.method == "GET" then
         local dns_param = req.path:match("[?&]dns=([^&]+)")
         if dns_param then
           dns_raw = b64url_decode(dns_param)
-          log_debug({
-            action = "get",
-            peer = peer_ip,
-            decoded_bytes = #dns_raw
-          })
+          log_debug(function()
+            return {
+              action = "get",
+              peer = peer_ip,
+              decoded_bytes = #dns_raw
+            }
+          end)
         elseif accept:match("application/dns%-json") then
           local name = query_param(req.path, "name")
           local qtype = qtype_from_name(query_param(req.path, "type"))
@@ -391,55 +417,67 @@ handle_doh_client = function(args)
           if dns_raw then
             json_mode = true
           end
-          log_debug({
-            action = "get_json",
-            peer = peer_ip,
-            name = name or "",
-            qtype = qtype,
-            query_bytes = dns_raw and #dns_raw or 0
-          })
+          log_debug(function()
+            return {
+              action = "get_json",
+              peer = peer_ip,
+              name = name or "",
+              qtype = qtype,
+              query_bytes = dns_raw and #dns_raw or 0
+            }
+          end)
         else
-          log_debug({
-            action = "get_no_param",
-            peer = peer_ip,
-            path = req.path
-          })
+          log_debug(function()
+            return {
+              action = "get_no_param",
+              peer = peer_ip,
+              path = req.path
+            }
+          end)
         end
       else
-        log_debug({
-          action = "unsupported_method",
-          peer = peer_ip,
-          method = req.method,
-          ct = ct
-        })
+        log_debug(function()
+          return {
+            action = "unsupported_method",
+            peer = peer_ip,
+            method = req.method,
+            ct = ct
+          }
+        end)
         send_response(tls_client, 415, { }, "Unsupported Media Type")
         tls_client:close()
         return 
       end
     else
-      log_debug({
-        action = "unknown_path",
-        peer = peer_ip,
-        path = req.path
-      })
+      log_debug(function()
+        return {
+          action = "unknown_path",
+          peer = peer_ip,
+          path = req.path
+        }
+      end)
     end
     if not (dns_raw and #dns_raw > 0) then
-      log_debug({
-        action = "bad_request",
-        peer = peer_ip,
-        path = req.path
-      })
+      log_debug(function()
+        return {
+          action = "bad_request",
+          peer = peer_ip,
+          path = req.path
+        }
+      end)
       send_response(tls_client, 400, { }, "Bad Request")
       tls_client:close()
       return 
     end
     local resp_raw, q_err = process_query(dns_raw, peer_ip, peer_mac, state.upstream)
     if resp_raw then
-      log_debug({
-        action = "response_ok",
-        peer = peer_ip,
-        resp_bytes = #resp_raw
-      })
+      log_debug(function()
+        return {
+          action = "response_ok",
+          peer = peer_ip,
+          resp_bytes = #resp_raw
+        }
+      end)
       if json_mode then
         local json = dns_response_json(resp_raw)
         send_response(tls_client, 200, {
@@ -451,21 +489,25 @@ handle_doh_client = function(args)
         }, resp_raw)
       end
     else
-      log_warn({
-        action = "query_error",
-        peer = peer_ip,
-        err = q_err
-      })
+      log_warn(function()
+        return {
+          action = "query_error",
+          peer = peer_ip,
+          err = q_err
+        }
+      end)
       send_response(tls_client, 502, { }, "Bad Gateway")
     end
     return tls_client:close()
   end)
   if not (ok) then
-    log_error({
-      action = "conn_failed",
-      peer = peer_ip,
-      err = tostring(err)
-    })
+    log_error(function()
+      return {
+        action = "conn_failed",
+        peer = peer_ip,
+        err = tostring(err)
+      }
+    end)
     return pcall(function()
       return client:close()
     end)
@@ -488,45 +530,55 @@ run = function(doh_cfg, filter_data)
     filter.decision_cfg = filter_data.decision_cfg
   end
   if not (doh_cfg.enabled) then
-    log_info({
-      action = "worker_disabled"
-    })
+    log_info(function()
+      return {
+        action = "worker_disabled"
+      }
+    end)
     return 
   end
   local port = doh_cfg.port
   local upstream_ip = doh_cfg.upstream_ip
   local upstream_port = doh_cfg.upstream_port
   local timeout_ms = doh_cfg.timeout_ms
-  log_info({
-    action = "worker_start",
-    port = port,
-    upstream_ip = upstream_ip,
-    upstream_port = upstream_port
-  })
+  log_info(function()
+    return {
+      action = "worker_start",
+      port = port,
+      upstream_ip = upstream_ip,
+      upstream_port = upstream_port
+    }
+  end)
   local cert_cache_mod = require("auth.cert_cache")
   local cert_cache = cert_cache_mod.create_cache(500, 7776000)
   local static_cert_paths = nil
   if doh_cfg.cert_path and doh_cfg.key_path then
-    log_info({
-      action = "loading_static_cert",
-      cert = doh_cfg.cert_path
-    })
+    log_info(function()
+      return {
+        action = "loading_static_cert",
+        cert = doh_cfg.cert_path
+      }
+    end)
     local ok, ctx = load_static(doh_cfg.key_path, doh_cfg.cert_path)
     if ok then
       static_cert_paths = {
         cert = doh_cfg.cert_path,
         key = doh_cfg.key_path
       }
-      log_info({
-        action = "static_cert_loaded"
-      })
+      log_info(function()
+        return {
+          action = "static_cert_loaded"
+        }
+      end)
     else
-      log_warn({
-        action = "static_cert_load_failed",
-        cert = doh_cfg.cert_path,
-        key = doh_cfg.key_path,
-        err = ctx
-      })
+      log_warn(function()
+        return {
+          action = "static_cert_load_failed",
+          cert = doh_cfg.cert_path,
+          key = doh_cfg.key_path,
+          err = ctx
+        }
+      end)
     end
   end
   local listen4, err4 = make_server4(port)
@@ -540,12 +592,14 @@ run = function(doh_cfg, filter_data)
   if listen6 then
     all_servers[#all_servers + 1] = listen6
   end
-  log_info({
-    action = "server_listening",
-    port = port,
-    ipv4 = "0.0.0.0",
-    ipv6 = listen6 and "::" or nil
-  })
+  log_info(function()
+    return {
+      action = "server_listening",
+      port = port,
+      ipv4 = "0.0.0.0",
+      ipv6 = listen6 and "::" or nil
+    }
+  end)
   local state = {
     cert_cache = cert_cache,
     static_cert_paths = static_cert_paths,
@@ -584,13 +638,15 @@ run = function(doh_cfg, filter_data)
           child_fn = function(args)
             local up, up_err = upstream_mod.new_client(args.state.upstream_ip, args.state.upstream_port, args.state.timeout_ms)
             if not (up) then
-              log_warn({
-                action = "upstream_socket_failed",
-                peer = args.peer_ip,
-                upstream_ip = args.state.upstream_ip,
-                upstream_port = args.state.upstream_port,
-                err = up_err
-              })
+              log_warn(function()
+                return {
+                  action = "upstream_socket_failed",
+                  peer = args.peer_ip,
+                  upstream_ip = args.state.upstream_ip,
+                  upstream_port = args.state.upstream_port,
+                  err = up_err
+                }
+              end)
               args.client:close()
               return 
             end
@@ -601,11 +657,13 @@ run = function(doh_cfg, filter_data)
           local pid = fork_child("DOH-conn", child_fn, conn_arg, {
             log_start = false
           })
-          log_debug({
-            action = "conn_started",
-            pid = pid,
-            peer = peer_ip
-          })
+          log_debug(function()
+            return {
+              action = "conn_started",
+              pid = pid,
+              peer = peer_ip
+            }
+          end)
           client:close()
         end
       end

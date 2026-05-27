@@ -46,7 +46,7 @@ run_cmd = (cmd, opts=nil) ->
   if rc != 0
     nft_err = get_error_buffer!
     unless opts and opts.quiet
-      log_warn { action: "nft_cmd_failed", cmd: cmd, rc: rc, nft_err: nft_err or "" }
+      log_warn -> { action: "nft_cmd_failed", cmd: cmd, rc: rc, nft_err: nft_err or "" }
     return false, nft_err
   true, nil
 
@@ -153,10 +153,10 @@ create_filter_rule_sets = (plan) ->
   commands = nft_dynamic_sets.generate_set_creation_commands plan
   
   if #commands == 0
-    log_debug { action: "no_rule_sets_to_create" }
+    log_debug -> { action: "no_rule_sets_to_create" }
     return true
   
-  log_info { action: "creating_per_rule_nft_sets", count: #commands }
+  log_info -> { action: "creating_per_rule_nft_sets", count: #commands }
   
   all_ok = true
   for _, cmd in ipairs commands
@@ -164,9 +164,9 @@ create_filter_rule_sets = (plan) ->
     unless ok
       -- "already exists" is benign; log as debug only
       if err and err\find "already exists"
-        log_debug { action: "set_already_exists", cmd: cmd }
+        log_debug -> { action: "set_already_exists", cmd: cmd }
       else
-        log_warn { action: "set_creation_failed", cmd: cmd, err: err or "" }
+        log_warn -> { action: "set_creation_failed", cmd: cmd, err: err or "" }
         all_ok = false
   
   all_ok
@@ -179,7 +179,7 @@ apply = ->
   path = nft_file_path!
   fh, err = io.open path, "r"
   unless fh
-    log_warn { action: "nft_rules_file_missing", path: path, err: err }
+    log_warn -> { action: "nft_rules_file_missing", path: path, err: err }
     return false
   content = fh\read "*a"
   fh\close!
@@ -192,7 +192,7 @@ apply = ->
 
   -- Log compilation metrics
   if plan and plan.metrics
-    log_info {
+    log_info -> {
       action: "nft_compile_metrics"
       total_rules: plan.metrics.total_rules
       nft_compilable: plan.metrics.nft_compilable
@@ -210,7 +210,7 @@ apply = ->
   tmpfile = "#{tmpdir}/custos-rules-#{os.time!}.nft"
   tmpfh, tmp_err = io.open tmpfile, "w"
   unless tmpfh
-    log_warn { action: "nft_rules_tempfile_failed", path: tmpfile, err: tmp_err }
+    log_warn -> { action: "nft_rules_tempfile_failed", path: tmpfile, err: tmp_err }
     return false
   tmpfh\write content
   tmpfh\close!
@@ -226,17 +226,17 @@ apply = ->
   os.remove errfile
   
   if rc != 0
-    log_warn { action: "nft_rules_apply_failed", path: path, rc: rc, err: errtxt }
+    log_warn -> { action: "nft_rules_apply_failed", path: path, rc: rc, err: errtxt }
     return false
 
-  log_info { action: "nft_rules_template_applied", path: path }
+  log_info -> { action: "nft_rules_template_applied", path: path }
 
   -- Now create per-rule sets dynamically
   unless create_filter_rule_sets plan
-    log_warn { action: "nft_rules_sets_creation_failed" }
+    log_warn -> { action: "nft_rules_sets_creation_failed" }
     return false
 
-  log_info { action: "nft_rules_applied", path: path }
+  log_info -> { action: "nft_rules_applied", path: path }
   true
 
 { :apply, _test: { :collect_ips, :fmt_elements } }

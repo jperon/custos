@@ -95,7 +95,7 @@ learn_mac = (ip_str, mac_str) ->
   if is_new
     ok, enriched = pcall enrich_session_ip, mac_str, ip_str, auth_cfg.sessions_file
     if ok and enriched
-      log_info { action: "session_enriched", ip: ip_str, mac: mac_str }
+      log_info -> { action: "session_enriched", ip: ip_str, mac: mac_str }
   waiters = pending_queries[ip_str]
   return unless waiters
   resp = mac_str .. "\n"
@@ -252,19 +252,19 @@ run = (learn_rfd, ifname) ->
   ifname = ifname or "br"
   prober = mac_prober.init ifname
   if prober
-    log_info { action: "mac_prober_ready", ifname: ifname,
+    log_info -> { action: "mac_prober_ready", ifname: ifname,
       ns_enabled: prober.ip6_fd ~= nil }
   else
-    log_warn { action: "mac_prober_disabled", ifname: ifname }
+    log_warn -> { action: "mac_prober_disabled", ifname: ifname }
 
   query_sock_path = mac_cfg.query_sock or config.MAC_LEARNER_QUERY_SOCK or "/var/run/custos/mac_query.sock"
   query_sock = create_server query_sock_path
   if query_sock < 0
     errno = tonumber(ffi.C.__errno_location()[0])
-    log_warn { action: "mac_learner_socket_failed", path: query_sock_path, errno: errno }
+    log_warn -> { action: "mac_learner_socket_failed", path: query_sock_path, errno: errno }
     return
 
-  log_info { action: "mac_learner_start", sock: query_sock_path }
+  log_info -> { action: "mac_learner_start", sock: query_sock_path }
 
   -- Tableau pollfd[4] : [0] pipe learn, [1] query sock,
   --                     [2] arp_fd (opt.), [3] ip6_fd (opt.)
@@ -317,7 +317,7 @@ run = (learn_rfd, ifname) ->
         ip_str, mac_str = mac_prober.parse_arp_frame raw, n
         if ip_str and mac_str
           learn_mac ip_str, mac_str
-          log_debug { action: "mac_learned_arp", ip: ip_str, mac: mac_str }
+          log_debug -> { action: "mac_learned_arp", ip: ip_str, mac: mac_str }
 
     -- [3] Neighbor Advertisements : apprend et notifie les clients en attente
     if nfds >= 4 and bit.band(pfds[3].revents, POLLIN) ~= 0
@@ -327,7 +327,7 @@ run = (learn_rfd, ifname) ->
         ip_str, mac_str = mac_prober.parse_na_frame raw, n
         if ip_str and mac_str
           learn_mac ip_str, mac_str
-          log_debug { action: "mac_learned_na", ip: ip_str, mac: mac_str }
+          log_debug -> { action: "mac_learned_na", ip: ip_str, mac: mac_str }
 
     -- Expiration des probes dépassant PROBE_TIMEOUT_MS
     expire_pending! if next(pending_queries) ~= nil

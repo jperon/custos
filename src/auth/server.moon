@@ -355,7 +355,7 @@ refresh_nft = (nft_sess, ip, mac, ttl, user) ->
           else
             nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip4 { #{ip} timeout #{ttl}s }", { quiet: true }
     unless ok
-      log_warn { action: "auth_set_add_failed", rule_id: rule_id, mac: mac, ip: ip, err: tostring(err) }
+      log_warn -> { action: "auth_set_add_failed", rule_id: rule_id, mac: mac, ip: ip, err: tostring(err) }
 
 handle_login = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
@@ -376,9 +376,9 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   if needs_rehash and state.secrets_path
     rh_ok, rh_err = update_user_hash user, pass, state.secrets_path
     if rh_ok
-      log_info { action: "credentials_rehashed", user: user }
+      log_info -> { action: "credentials_rehashed", user: user }
     else
-      log_warn { action: "credentials_rehash_failed", user: user, err: tostring rh_err }
+      log_warn -> { action: "credentials_rehash_failed", user: user, err: tostring rh_err }
 
   sessions = load_sessions state.sessions_file
   purge_expired sessions
@@ -387,26 +387,26 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   mac = peer_mac
 
   unless mac and mac ~= "unknown"
-    log_warn { action: "server_login_mac_missing", ip: peer_ip, mac: mac }
+    log_warn -> { action: "server_login_mac_missing", ip: peer_ip, mac: mac }
     return 401, {}, "Unable to identify client MAC (IP: #{peer_ip})"
 
-  log_info { action: "server_login_success", user: user, mac: mac, ip: peer_ip }
+  log_info -> { action: "server_login_success", user: user, mac: mac, ip: peer_ip }
 
   idle_timeout = state.auth_cfg.idle_timeout or 120
   now = os.time!
   add_session sessions, mac, peer_ip, user, now + idle_timeout
   ok, err = write_sessions sessions, state.sessions_file
   unless ok
-    log_warn { action: "server_sessions_write_failed", path: state.sessions_file, err: err }
+    log_warn -> { action: "server_sessions_write_failed", path: state.sessions_file, err: err }
     return 500, {}, "Session persistence failed"
-  log_info { action: "server_sessions_write_success", path: state.sessions_file, mac: mac }
+  log_info -> { action: "server_sessions_write_success", path: state.sessions_file, mac: mac }
 
   if state.nft_sess
     ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user
     unless ok
-      log_warn { action: "server_nft_refresh_failed", peer: peer_ip, mac: mac, err: tostring(err) }
+      log_warn -> { action: "server_nft_refresh_failed", peer: peer_ip, mac: mac, err: tostring(err) }
   else
-    log_warn { action: "server_nft_sess_missing", peer: peer_ip, mac: mac }
+    log_warn -> { action: "server_nft_sess_missing", peer: peer_ip, mac: mac }
 
   -- Populate per-rule auth sets for rules requiring authentication
   filter_cfg = config.filter or {}
@@ -414,28 +414,28 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   for idx, rule in ipairs rules
     requires_auth = rule_requires_auth rule
     qualifies = user_qualifies_for_rule user, rule
-    log_info { action: "server_rule_check", idx: idx, description: rule.description, requires_auth: requires_auth, qualifies: qualifies, user: user }
+    log_info -> { action: "server_rule_check", idx: idx, description: rule.description, requires_auth: requires_auth, qualifies: qualifies, user: user }
     continue unless requires_auth
     continue unless qualifies
 
     -- Generate stable rule_id
     rule_id = generate_rule_id rule, idx
-    log_info { action: "server_rule_id_generated", rule_id: rule_id, description: rule.description }
+    log_info -> { action: "server_rule_id_generated", rule_id: rule_id, description: rule.description }
 
     -- Populate auth sets directly via nft_sessions.run_nft()
     ok, err = pcall ->
       if state.nft_sess
         state.nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_mac { #{mac} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
-        log_info { action: "server_auth_set_add_mac", rule_id: rule_id, mac: mac }
+        log_info -> { action: "server_auth_set_add_mac", rule_id: rule_id, mac: mac }
         if peer_ip and peer_ip ~= "unknown"
           if peer_ip\find ":"
             state.nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip6 { #{peer_ip} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
-            log_info { action: "server_auth_set_add_ip6", rule_id: rule_id, ip: peer_ip }
+            log_info -> { action: "server_auth_set_add_ip6", rule_id: rule_id, ip: peer_ip }
           else
             state.nft_sess.run_nft "add element bridge dns-filter-bridge #{rule_id}_auth_ip4 { #{peer_ip} timeout #{state.auth_cfg.idle_timeout}s }", { quiet: true }
-            log_info { action: "server_auth_set_add_ip4", rule_id: rule_id, ip: peer_ip }
+            log_info -> { action: "server_auth_set_add_ip4", rule_id: rule_id, ip: peer_ip }
     unless ok
-      log_warn { action: "server_auth_set_add_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) }
+      log_warn -> { action: "server_auth_set_add_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) }
 
   tok = token.generate "user", user, mac, now + idle_timeout, state.token_key
   200, {
@@ -444,12 +444,12 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   }, success_page state.auth_cfg, now
 
 handle_ping = (req, peer_ip, peer_mac, state) ->
-  log_info { action: "server_ping_received", peer_ip: peer_ip, peer_mac: peer_mac }
+  log_info -> { action: "server_ping_received", peer_ip: peer_ip, peer_mac: peer_mac }
 
   cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
   p, tok_err = token.verify cookie_val, state.token_key
   unless p
-    log_info { action: "server_ping_token_invalid", peer_ip: peer_ip, err: tok_err }
+    log_info -> { action: "server_ping_token_invalid", peer_ip: peer_ip, err: tok_err }
     return 401, {}, ""
 
   user = p.user
@@ -466,7 +466,7 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
   refresh_nft state.nft_sess, peer_ip, mac, idle_timeout, user
 
   new_tok = token.generate "user", user, mac, new_expires, state.token_key
-  log_info { action: "server_ping_success", peer_mac: mac }
+  log_info -> { action: "server_ping_success", peer_mac: mac }
   204, { ["Set-Cookie"]: make_session_cookie new_tok }, ""
 
 handle_logout = (req, peer_ip, peer_mac, state) ->
@@ -498,7 +498,7 @@ handle_logout = (req, peer_ip, peer_mac, state) ->
             state.nft_sess.run_nft "delete element bridge dns-filter-bridge #{rule_id}_auth_ip6 { #{peer_ip} }", { quiet: true }
           else
             state.nft_sess.run_nft "delete element bridge dns-filter-bridge #{rule_id}_auth_ip4 { #{peer_ip} }", { quiet: true }
-      log_warn { action: "server_auth_set_delete_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) } unless ok
+      log_warn -> { action: "server_auth_set_delete_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) } unless ok
 
   302, { ["Location"]: "/", ["Set-Cookie"]: clear_session_cookie! }, ""
 
@@ -518,17 +518,17 @@ handle_register = (req, peer_ip, peer_mac, state) ->
 
   state.secrets = new_secrets
   if not signal_parent_reload!
-    log_warn { action: "server_reload_signal_failed", parent_pid: tonumber(ffi.C.getppid!) }
+    log_warn -> { action: "server_reload_signal_failed", parent_pid: tonumber(ffi.C.getppid!) }
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_success_page req
 
 handle_request = (req, peer_ip, peer_mac, state) ->
-  log_info { action: "server_request_received", path: req.path, method: req.method, peer_ip: peer_ip, peer_mac: peer_mac }
+  log_info -> { action: "server_request_received", path: req.path, method: req.method, peer_ip: peer_ip, peer_mac: peer_mac }
   if req.path == "/" and req.method == "GET"
     return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, login_page!
   elseif req.path == "/css" and req.method == "GET"
     return 200, { ["Content-Type"]: "text/css" }, css_content
   elseif req.path == "/login" and req.method == "POST"
-    log_info { action: "server_routing_to_handle_login", path: req.path, method: req.method }
+    log_info -> { action: "server_routing_to_handle_login", path: req.path, method: req.method }
     return handle_login req, peer_ip, peer_mac, state
   elseif req.path == "/ping" and req.method == "GET"
     return handle_ping req, peer_ip, peer_mac, state
@@ -550,88 +550,88 @@ handle_client = (args) ->
   peer_ip = args.peer_ip or "unknown"
 
   ok, err = pcall ->
-    log_debug { action: "server_handle_client_start", peer: peer_ip, fd: client.fd }
+    log_debug -> { action: "server_handle_client_start", peer: peer_ip, fd: client.fd }
 
     -- Obtenir l'IP locale du socket (sur laquelle le client s'est connecté)
     local_ip = client\getsockname!
     unless local_ip
       errno = tonumber(ffi.C.__errno_location()[0])
-      log_warn { action: "server_getsockname_failed", peer: peer_ip, errno: errno }
+      log_warn -> { action: "server_getsockname_failed", peer: peer_ip, errno: errno }
       local_ip = "custos"  -- Fallback
 
-    log_debug { action: "server_local_ip_detected", local_ip: local_ip }
+    log_debug -> { action: "server_local_ip_detected", local_ip: local_ip }
 
     -- Utiliser le certificat statique s'il a été configuré
     -- Sinon, générer/charger le certificat avec l'IP locale comme CN
     tls_ctx = nil
     if state.static_cert_paths
-      log_debug { action: "server_loading_static_cert_child", cert: state.static_cert_paths.cert, key: state.static_cert_paths.key }
+      log_debug -> { action: "server_loading_static_cert_child", cert: state.static_cert_paths.cert, key: state.static_cert_paths.key }
       ctx, err = load_static state.static_cert_paths.key, state.static_cert_paths.cert
       if ctx
         tls_ctx = ctx
-        log_debug { action: "server_using_static_cert" }
+        log_debug -> { action: "server_using_static_cert" }
       else
-        log_error { action: "server_static_cert_load_child_failed", err: err }
+        log_error -> { action: "server_static_cert_load_child_failed", err: err }
         error "Cannot load static certificate in child: #{err}"
     else
       tls_ctx_ok, tls_ctx_err = pcall ->
         tls_ctx = load_or_generate_sni local_ip, state.cert_cache
       unless tls_ctx_ok
-        log_error { action: "server_cert_generation_failed", local_ip: local_ip, err: tls_ctx_err }
+        log_error -> { action: "server_cert_generation_failed", local_ip: local_ip, err: tls_ctx_err }
         error "Cannot generate certificate: #{tls_ctx_err}"
 
     unless tls_ctx
-      log_error { action: "server_cert_null", local_ip: local_ip }
+      log_error -> { action: "server_cert_null", local_ip: local_ip }
       error "Certificate context is nil"
 
-    log_debug { action: "server_cert_loaded", local_ip: local_ip }
+    log_debug -> { action: "server_cert_loaded", local_ip: local_ip }
 
     -- Set socket to BLOCKING mode for handshake
-    log_debug { action: "server_set_blocking_mode" }
+    log_debug -> { action: "server_set_blocking_mode" }
     client\settimeout nil  -- nil = blocking mode
-    log_debug { action: "server_blocking_mode_set" }
+    log_debug -> { action: "server_blocking_mode_set" }
 
-    log_debug { action: "server_ssl_wrap_start" }
+    log_debug -> { action: "server_ssl_wrap_start" }
     tls_client, tls_err = ssl.wrap client, tls_ctx
-    log_debug { action: "server_ssl_wrap_done" }
+    log_debug -> { action: "server_ssl_wrap_done" }
 
     unless tls_client
-      log_warn { action: "server_tls_wrap_failed", peer: peer_ip, err: tls_err }
+      log_warn -> { action: "server_tls_wrap_failed", peer: peer_ip, err: tls_err }
       client\close!
       return
 
-    log_debug { action: "server_dohandshake_start" }
+    log_debug -> { action: "server_dohandshake_start" }
 
     -- Handshake loop: keep trying until complete or error
     handshake_complete = false
     handshake_attempts = 0
     while not handshake_complete and handshake_attempts < 50
       handshake_attempts += 1
-      log_debug { action: "server_handshake_attempt", attempt: handshake_attempts }
+      log_debug -> { action: "server_handshake_attempt", attempt: handshake_attempts }
 
       ok_hs, hs_err = tls_client\dohandshake!
-      log_debug { action: "server_dohandshake_returned", ok: ok_hs }
+      log_debug -> { action: "server_dohandshake_returned", ok: ok_hs }
 
       if ok_hs
-        log_debug { action: "server_handshake_complete" }
+        log_debug -> { action: "server_handshake_complete" }
         handshake_complete = true
 
     unless handshake_complete
       if hs_err == "peer_closed"
-        log_warn { action: "server_tls_handshake_peer_closed", peer: peer_ip, attempts: handshake_attempts }
+        log_warn -> { action: "server_tls_handshake_peer_closed", peer: peer_ip, attempts: handshake_attempts }
       else
-        log_warn { action: "server_tls_handshake_failed", peer: peer_ip, attempts: handshake_attempts, err: hs_err or "max attempts reached" }
+        log_warn -> { action: "server_tls_handshake_failed", peer: peer_ip, attempts: handshake_attempts, err: hs_err or "max attempts reached" }
       tls_client\close!
       return
 
     -- After handshake, socket is still blocking (nil timeout)
     -- Leave it blocking for HTTP I/O (client must send request promptly)
-    log_debug { action: "server_set_http_timeout" }
+    log_debug -> { action: "server_set_http_timeout" }
 
     peer_mac = get_mac peer_ip
     req, req_err = read_request tls_client
     unless req
-      log_warn { action: "server_request_read_failed", peer: peer_ip, err: req_err }
+      log_warn -> { action: "server_request_read_failed", peer: peer_ip, err: req_err }
       tls_client\close!
       return
 
@@ -640,7 +640,7 @@ handle_client = (args) ->
     tls_client\close!
 
   unless ok
-    log_error { action: "server_client_failed", peer: peer_ip, err: tostring err }
+    log_error -> { action: "server_client_failed", peer: peer_ip, err: tostring err }
     pcall -> client\close!
 
 reload_secrets_if_needed = (state) ->
@@ -687,29 +687,29 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   port = auth_cfg.port or 33443
   sessions_file = auth_cfg.sessions_file or config.auth.sessions_file
 
-  log_debug { action: "server_startup", port: port }
-  log_debug { action: "server_auth_cfg_received", cert: auth_cfg.cert, key: auth_cfg.key }
+  log_debug -> { action: "server_startup", port: port }
+  log_debug -> { action: "server_auth_cfg_received", cert: auth_cfg.cert, key: auth_cfg.key }
 
   -- Initialiser le cache de certificats (persistant, 90 jours TTL)
-  log_debug { action: "server_cert_cache_init" }
+  log_debug -> { action: "server_cert_cache_init" }
   cert_cache_module = require "auth.cert_cache"
   cert_cache = cert_cache_module.create_cache 500, 7776000  -- 500 certs, 90 days TTL
 
   -- Charger le certificat statique s'il est fourni dans la configuration
   static_tls_ctx = nil
   if auth_cfg.cert and auth_cfg.key
-    log_info { action: "server_loading_static_cert", cert: auth_cfg.cert, key: auth_cfg.key }
+    log_info -> { action: "server_loading_static_cert", cert: auth_cfg.cert, key: auth_cfg.key }
     ok, ctx = load_static auth_cfg.key, auth_cfg.cert
     if ok
       static_tls_ctx = ctx
-      log_info { action: "server_static_cert_loaded", cert: auth_cfg.cert, key: auth_cfg.key }
+      log_info -> { action: "server_static_cert_loaded", cert: auth_cfg.cert, key: auth_cfg.key }
     else
-      log_warn { action: "server_static_cert_failed", cert: auth_cfg.cert, key: auth_cfg.key, err: ctx }
+      log_warn -> { action: "server_static_cert_failed", cert: auth_cfg.cert, key: auth_cfg.key, err: ctx }
   else
-    log_debug { action: "server_no_static_cert_configured" }
+    log_debug -> { action: "server_no_static_cert_configured" }
 
   token_key = token.load_key auth_cfg.session_key or "/etc/custos/session.key"
-  log_info { action: "server_session_key_loaded" }
+  log_info -> { action: "server_session_key_loaded" }
 
   listen4, err4 = make_server4 port
   error "Impossible de démarrer le serveur IPv4 sur port #{port} : #{err4}" unless listen4
@@ -734,7 +734,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     cert_cache: cert_cache
   }
 
-  log_info {
+  log_info -> {
     action: "server_listening"
     port: port
     ipv4: "0.0.0.0"
@@ -753,24 +753,24 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     readable, _ = socket.select all_servers, nil, 0.1
     if readable
       for srv in *readable
-        log_debug { action: "server_socket_select_readable" }
+        log_debug -> { action: "server_socket_select_readable" }
         client = srv\accept!
-        log_debug { action: "server_accept_returned" }
+        log_debug -> { action: "server_accept_returned" }
 
         if client
-          log_debug { action: "server_got_client" }
+          log_debug -> { action: "server_got_client" }
           peer_ip = client\getpeername! or "unknown"
-          log_debug { action: "server_getpeername_result", peer: peer_ip }
+          log_debug -> { action: "server_getpeername_result", peer: peer_ip }
 
-          log_debug { action: "server_fork_child_start", peer: peer_ip, fd: client.fd }
+          log_debug -> { action: "server_fork_child_start", peer: peer_ip, fd: client.fd }
           pid = fork_child "AUTH-conn",
             handle_client,
             { client: client, peer_ip: peer_ip, state: state },
             { log_start: false }
 
-          log_debug { action: "server_fork_child_done", pid: pid }
+          log_debug -> { action: "server_fork_child_done", pid: pid }
 
-          log_info { action: "server_conn_started", pid: pid, peer: peer_ip }
+          log_info -> { action: "server_conn_started", pid: pid, peer: peer_ip }
           client\close!
 
 { :run }
