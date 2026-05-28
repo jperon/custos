@@ -108,6 +108,36 @@ local DEFAULTS = {
     users = { },
     userlists = { },
     rules = { },
+    default_rules = {
+      {
+        description = "Désactivation DoH sur Firefox",
+        actions = {
+          "nxdomain"
+        },
+        conditions = {
+          to_domainlist = "custom/nxdomain"
+        }
+      },
+      {
+        description = "Les utilisateurs authentifiés ne sont pas redirigés vers le portail captif",
+        actions = {
+          "allow"
+        },
+        conditions = {
+          to_domainlist = "captive",
+          from_user = "_any"
+        }
+      },
+      {
+        description = "Détection de portail captif par les navigateurs et OS",
+        actions = {
+          "dnsonly"
+        },
+        conditions = {
+          to_domainlist = "captive"
+        }
+      }
+    },
     dest_whitelist = { },
     allowed_domains = {
       "local",
@@ -127,7 +157,7 @@ is_array = function(t)
   end
   local n = #t
   if n == 0 then
-    return false
+    return next(t) == nil
   end
   for i = 1, n do
     if t[i] == nil then
@@ -189,6 +219,17 @@ normalize = function(cfg)
   cfg.filter.times = cfg.filter.times or { }
   cfg.filter.sources = cfg.filter.sources or { }
   cfg.filter.rules = cfg.filter.rules or { }
+  cfg.filter.default_rules = cfg.filter.default_rules or { }
+  if #cfg.filter.default_rules > 0 then
+    local merged = { }
+    for _, r in ipairs(cfg.filter.default_rules) do
+      merged[#merged + 1] = r
+    end
+    for _, r in ipairs(cfg.filter.rules) do
+      merged[#merged + 1] = r
+    end
+    cfg.filter.rules = merged
+  end
   cfg.filter.users = cfg.filter.users or { }
   cfg.filter.userlists = cfg.filter.userlists or cfg.filter.users or { }
   cfg.filter.users = cfg.filter.users or cfg.filter.userlists or { }

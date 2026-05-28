@@ -162,6 +162,23 @@ DEFAULTS = {
     users: {}
     userlists: {}
     rules: {}
+    default_rules: {
+      {
+        description: "Désactivation DoH sur Firefox"
+        actions: {"nxdomain"}
+        conditions: { to_domainlist: "custom/nxdomain" }
+      }
+      {
+        description: "Les utilisateurs authentifiés ne sont pas redirigés vers le portail captif"
+        actions: {"allow"}
+        conditions: { to_domainlist: "captive", from_user: "_any" }
+      }
+      {
+        description: "Détection de portail captif par les navigateurs et OS"
+        actions: {"dnsonly"}
+        conditions: { to_domainlist: "captive" }
+      }
+    }
     dest_whitelist: {}
     allowed_domains: { "local", "lan", "home.arpa" }
     decision: {
@@ -174,7 +191,9 @@ DEFAULTS = {
 is_array = (t) ->
   return false unless type(t) == "table"
   n = #t
-  return false if n == 0
+  if n == 0
+    -- {} vide est un tableau (remplaçable) ; { key: val } est un dict (fusionnable).
+    return next(t) == nil
   for i = 1, n
     return false if t[i] == nil
   true
@@ -215,6 +234,14 @@ normalize = (cfg) ->
   cfg.filter.times = cfg.filter.times or {}
   cfg.filter.sources = cfg.filter.sources or {}
   cfg.filter.rules = cfg.filter.rules or {}
+  cfg.filter.default_rules = cfg.filter.default_rules or {}
+  if #cfg.filter.default_rules > 0
+    merged = {}
+    for _, r in ipairs cfg.filter.default_rules
+      merged[#merged + 1] = r
+    for _, r in ipairs cfg.filter.rules
+      merged[#merged + 1] = r
+    cfg.filter.rules = merged
   cfg.filter.users = cfg.filter.users or {}
   cfg.filter.userlists = cfg.filter.userlists or cfg.filter.users or {}
   cfg.filter.users = cfg.filter.users or cfg.filter.userlists or {}
