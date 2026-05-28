@@ -1,3 +1,4 @@
+local unpack = unpack or table.unpack
 local H = require("auth.html")
 local css_content = [[  * {
     margin: 0;
@@ -112,7 +113,7 @@ success_page = function(auth_cfg, created_at, is_admin)
     H.p({
       id = "session-timer"
     }, "Session ouverte depuis : --"),
-    table.unpack(admin_link),
+    unpack(admin_link),
     H.p(H.a({
       href = "/logout"
     }, "Déconnexion")),

@@ -368,15 +368,12 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       user:   q_fields.user
     }
     allowed, reason, rule_id, nft_timeout = nil, nil, nil, nil
-    decision = if filter.decide_meta then filter.decide_meta req else nil
+    decision = filter.decide_meta req
     if decision
       allowed     = decision.verdict
       reason      = decision.reason
       rule_id     = decision.rule_id
       nft_timeout = decision.timeout
-    else
-      allowed, reason, rule_id = filter.decide req
-      nft_timeout = nil
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule   = rule_id or ""
     if allowed

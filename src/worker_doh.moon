@@ -182,6 +182,122 @@ make_server6 = (port) ->
   srv6\settimeout 1
   srv6
 
+-- ── HTTP/2 minimal handler (RFC 7540 + RFC 8484 DoH) ─────────────────────────
+
+H2_FRAME_DATA          = 0x0
+H2_FRAME_HEADERS       = 0x1
+H2_FRAME_SETTINGS      = 0x4
+H2_FRAME_PING          = 0x6
+H2_FRAME_GOAWAY        = 0x7
+H2_FRAME_WINDOW_UPDATE = 0x8
+
+H2_FLAG_END_STREAM     = 0x1
+H2_FLAG_END_HEADERS    = 0x4
+H2_FLAG_ACK            = 0x1
+
+h2_recv_exact = (conn, n) ->
+  buf = ""
+  while #buf < n
+    chunk, err = conn\receive n - #buf
+    return nil, err unless chunk and #chunk > 0
+    buf ..= chunk
+  buf
+
+h2_read_frame = (conn) ->
+  hdr, err = h2_recv_exact conn, 9
+  return nil, err unless hdr
+  len   = hdr\byte(1) * 65536 + hdr\byte(2) * 256 + hdr\byte(3)
+  ftype = hdr\byte(4)
+  flags = hdr\byte(5)
+  sid   = bit.band(
+    bit.bor(
+      bit.lshift(hdr\byte(6), 24),
+      bit.lshift(hdr\byte(7), 16),
+      bit.lshift(hdr\byte(8),  8),
+      hdr\byte(9)
+    ),
+    0x7FFFFFFF
+  )
+  payload = if len > 0
+    p, perr = h2_recv_exact conn, len
+    return nil, perr unless p
+    p
+  else
+    ""
+  ftype, flags, sid, payload
+
+h2_write_frame = (conn, ftype, flags, sid, payload) ->
+  payload = payload or ""
+  n = #payload
+  frame = string.char(
+    bit.band(bit.rshift(n, 16), 0xFF),
+    bit.band(bit.rshift(n,  8), 0xFF),
+    bit.band(n,                 0xFF),
+    ftype, flags,
+    bit.band(bit.rshift(sid, 24), 0xFF),
+    bit.band(bit.rshift(sid, 16), 0xFF),
+    bit.band(bit.rshift(sid,  8), 0xFF),
+    bit.band(sid,                 0xFF)
+  ) .. payload
+  conn\send frame
+
+-- HPACK : :status: 200 (index 8 = 0x88) + content-type: application/dns-message
+-- (content-type = static index 31, literal with incremental indexing: 0x5f)
+h2_encode_response_headers = ->
+  "\x88\x5f\x17application/dns-message"
+
+handle_h2 = (conn, peer_ip, peer_mac, upstream) ->
+  -- Consomme la fin de la préface : "SM\r\n\r\n" (read_request a déjà lu "PRI * HTTP/2.0\r\n\r\n")
+  conn\receive "*l"  -- "SM"
+  conn\receive "*l"  -- "" (ligne vide)
+
+  -- Préface serveur : SETTINGS vide
+  h2_write_frame conn, H2_FRAME_SETTINGS, 0, 0, ""
+
+  stream_id  = nil
+  dns_chunks = {}
+  done       = false
+
+  for _ = 1, 30
+    ftype, flags, sid, payload = h2_read_frame conn
+    break unless ftype
+
+    if ftype == H2_FRAME_SETTINGS and bit.band(flags, H2_FLAG_ACK) == 0
+      h2_write_frame conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, ""
+
+    elseif ftype == H2_FRAME_HEADERS and not stream_id
+      stream_id = sid
+
+    elseif ftype == H2_FRAME_DATA and sid == stream_id
+      dns_chunks[#dns_chunks + 1] = payload if #payload > 0
+      if bit.band(flags, H2_FLAG_END_STREAM) ~= 0
+        done = true
+        break
+
+    elseif ftype == H2_FRAME_PING and bit.band(flags, H2_FLAG_ACK) == 0
+      h2_write_frame conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload
+
+  unless done and stream_id
+    h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01"
+    return nil, "h2_incomplete"
+
+  dns_raw = table.concat dns_chunks
+  unless #dns_raw > 0
+    h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01"
+    return nil, "h2_empty_body"
+
+  resp_raw, q_err = process_query dns_raw, peer_ip, peer_mac, upstream
+  unless resp_raw
+    log_warn -> { action: "h2_query_error", peer: peer_ip, err: q_err }
+    h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x02"
+    return nil, "h2_query_error"
+
+  hpack = h2_encode_response_headers!
+  h2_write_frame conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack
+  h2_write_frame conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw
+  h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x00"
+  resp_raw
+
 -- ── Per-connection child ─────────────────────────────────────────────────────
 
 --- Handle a single DoH connection inside a forked child process.
@@ -228,12 +344,16 @@ handle_doh_client = (args) ->
     hs_err = nil
     while not done and attempts < 50
       attempts += 1
-      ok_hs, hs_ret = pcall -> tls_client\dohandshake!
+      ok_hs, hs_ret, hs_ret2 = pcall -> tls_client\dohandshake!
       if not ok_hs
         hs_err = tostring hs_ret
         log_warn -> { action: "handshake_error", peer: peer_ip, attempts: attempts, err: hs_err }
         break
-      done = true if hs_ret
+      if hs_ret
+        done = true
+      elseif hs_ret2  -- erreur fatale (tls_error, peer_closed) : pas de retry
+        hs_err = hs_ret2
+        break
 
     unless done
       log_warn -> { action: "handshake_failed", peer: peer_ip, attempts: attempts, err: hs_err or "max_attempts" }
@@ -257,6 +377,18 @@ handle_doh_client = (args) ->
 
     -- ── Route /dns-query ────────────────────────────────────────────────────
     log_debug -> { action: "request", peer: peer_ip, method: req.method, path: req.path }
+
+    -- Préambule HTTP/2 sans ALPN : traiter la connexion en HTTP/2 minimal.
+    if req.method == "PRI"
+      log_debug -> { action: "h2_request", peer: peer_ip }
+      h2_resp, h2_err = handle_h2 tls_client, peer_ip, peer_mac, state.upstream
+      if h2_err
+        log_warn -> { action: "h2_failed", peer: peer_ip, err: h2_err }
+      else
+        log_debug -> { action: "h2_ok", peer: peer_ip, resp_bytes: h2_resp and #h2_resp or 0 }
+      tls_client\close!
+      return
+
     dns_raw = nil
     json_mode = false
     if req.path == "/dns-query" or req.path\match "^/dns%-query%?"
@@ -360,14 +492,14 @@ run = (doh_cfg, filter_data) ->
   cert_cache = cert_cache_mod.create_cache 500, 7776000   -- 500 slots, 90-day TTL
 
   static_cert_paths = nil
-  if doh_cfg.cert_path and doh_cfg.key_path
-    log_info -> { action: "loading_static_cert", cert: doh_cfg.cert_path }
-    ok, ctx = load_static doh_cfg.key_path, doh_cfg.cert_path
+  if doh_cfg.cert and doh_cfg.key
+    log_info -> { action: "loading_static_cert", cert: doh_cfg.cert }
+    ok, ctx = load_static doh_cfg.key, doh_cfg.cert
     if ok
-      static_cert_paths = { cert: doh_cfg.cert_path, key: doh_cfg.key_path }
+      static_cert_paths = { cert: doh_cfg.cert, key: doh_cfg.key }
       log_info -> { action: "static_cert_loaded" }
     else
-      log_warn -> { action: "static_cert_load_failed", cert: doh_cfg.cert_path, key: doh_cfg.key_path, err: ctx }
+      log_warn -> { action: "static_cert_load_failed", cert: doh_cfg.cert, key: doh_cfg.key, err: ctx }
 
   listen4, err4 = make_server4 port
   error "DoH: cannot bind port #{port}: #{err4}" unless listen4
@@ -428,4 +560,4 @@ run = (doh_cfg, filter_data) ->
           log_debug -> { action: "conn_started", pid: pid, peer: peer_ip }
           client\close!
 
-{ :run }
+{ :run, :b64url_decode, :query_param, :build_dns_query }

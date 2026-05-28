@@ -6,8 +6,9 @@
 # traversant le bridge, y compris le transit inter-VLAN (client → résolveur
 # tiers).
 #
-# Ce fichier est un template : les placeholders {QUEUE_*} et {NFT_IP_TIMEOUT}
-# sont substitués par les valeurs de config.moon avant application via libnft.
+# Ce fichier est un template : les placeholders {QUEUE_*}, {NFT_IP_TIMEOUT}
+# et {DOH_PORT} sont substitués par les valeurs de config.moon avant application
+# via libnft.
 #
 # Placeholders :
 #   {QUEUE_QUESTIONS}  — file(s) DNS questions  (th dport 53)
@@ -16,6 +17,7 @@
 #   {QUEUE_REJECT}     — file(s) trafic non autorisé → forge RST/ICMP
 #   {QUEUE_SNI_LOG}    — file(s) TCP SYN/443 + UDP/443 QUIC → SNI logging
 #   {NFT_IP_TIMEOUT}   — durée de vie des IPs dans les sets DNS
+#   {DOH_PORT}         — port TCP du worker DoH (défaut : 8443)
 #
 # Politique générale :
 #   - DNS → {QUEUE_QUESTIONS}/{QUEUE_RESPONSES}
@@ -38,9 +40,18 @@ table ip filter {
     type filter hook input priority 0; policy accept;
 
     # Autoriser le trafic vers le portail captif HTTPS (port 33443)
+    # et le worker DoH (port {DOH_PORT}).
     # Le trafic vers l'IP du filtre lui-même traverse cette chaîne INPUT,
     # pas la chaîne FORWARD du bridge.
-    tcp dport 33443 accept comment "Auth HTTPS to filter (local traffic)"
+    tcp dport { 33443, {DOH_PORT} } accept comment "Auth HTTPS + DoH to filter (local traffic)"
+  }
+}
+
+table ip6 filter {
+  chain input {
+    type filter hook input priority 0; policy accept;
+
+    tcp dport { 33443, {DOH_PORT} } accept comment "Auth HTTPS + DoH to filter (local traffic, IPv6)"
   }
 }
 

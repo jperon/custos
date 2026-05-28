@@ -95,6 +95,7 @@ substitute = function(content, plan)
   content = content:gsub("{QUEUE_AUTH}", cfg.nfqueue.auth)
   content = content:gsub("{QUEUE_SNI_LOG}", cfg.nfqueue.sni_log)
   content = content:gsub("{NFT_IP_TIMEOUT}", cfg.nft.ip_timeout)
+  content = content:gsub("{DOH_PORT}", tostring(cfg.doh.port or 8443))
   local compiled_sets
   if plan then
     compiled_sets = nft_compiler.render_sets_only(cfg.filter, plan, "  ", true)

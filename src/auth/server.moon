@@ -429,6 +429,8 @@ handle_client = (args) ->
       if ok_hs
         log_debug -> { action: "server_handshake_complete" }
         handshake_complete = true
+      elseif hs_err and hs_err != "peer_closed"
+        break  -- erreur fatale (tls_error) : inutile de réessayer
 
     unless handshake_complete
       if hs_err == "peer_closed"

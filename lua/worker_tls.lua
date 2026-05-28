@@ -545,14 +545,14 @@ is_ipv6 = function(ip)
 end
 local safe_filter_decide
 safe_filter_decide = function(req)
-  if not (filter and filter.decide) then
+  if not (filter and filter.decide_meta) then
     return nil, "filter_unavailable", nil
   end
-  local ok, allowed, reason, rule = pcall(filter.decide, req)
+  local ok, meta = pcall(filter.decide_meta, req)
   if not (ok) then
     return nil, "filter_decide_exception", nil
   end
-  return allowed, reason, rule
+  return meta.verdict, meta.reason, meta.rule_id
 end
 local ensure_nft_modules
 ensure_nft_modules = function()

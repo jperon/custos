@@ -533,6 +533,152 @@ assert_contains "T90 log homelab_not_blocked présent" "homelab_not_blocked" "$l
 assert_contains "T91 log default_deny présent"        "default_deny"        "$logs"
 assert_contains "T92 log ext_dnsonly présent"         "ext_dnsonly"         "$logs"
 
+# ══════════════════════════════════════════════════════════════════════════════
+# GROUPE 12 — DoH (DNS-over-HTTPS) avec mini CA
+# Crée une CA locale, génère un cert signé pour custos, vérifie que le worker
+# DoH répond 200 avec un cert valide et que la réponse DNS est correctement
+# formée. Le cert Let's Encrypt de prod n'est pas touché : on passe par un
+# fichier de config temporaire sur custos.
+# ══════════════════════════════════════════════════════════════════════════════
+echo ""
+echo "=== G12 : DoH (DNS-over-HTTPS) avec mini CA ==="
+
+DOH_TMP=$(mktemp -d)
+DOH_PORT="${E2E_DOH_PORT:-8444}"   # port de test isolé pour ne pas perturber le port 8443 de prod
+DOH_CLEANUP_DONE=0
+
+doh_cleanup() {
+    [ "$DOH_CLEANUP_DONE" -eq 1 ] && return
+    DOH_CLEANUP_DONE=1
+    # Retire le fichier de config de test sur custos et relance avec la config originale
+    ssh_vm "$E2E_IP_CUSTOS" "rm -f /tmp/doh_test_cert.pem /tmp/doh_test_key.pem /tmp/doh_e2e_config.moon"
+    # Recharge custos avec la config originale (sans le port de test)
+    ssh_vm "$E2E_IP_CUSTOS" \
+        "CUSTOS_CONFIG_PATH=/etc/custos/config.moon /etc/init.d/custos restart >/dev/null 2>&1 || true"
+    rm -rf "$DOH_TMP"
+}
+trap doh_cleanup EXIT
+
+# ── Étape 1 : Génération de la mini CA et du certificat serveur ───────────────
+
+# CA
+openssl ecparam -name prime256v1 -genkey -noout -out "$DOH_TMP/ca.key" 2>/dev/null
+openssl req -new -x509 -key "$DOH_TMP/ca.key" -sha256 -days 1 \
+    -subj "/CN=CustosTestCA" -out "$DOH_TMP/ca.crt" 2>/dev/null
+
+# Certificat serveur : SAN = IP de custos + DNS custos.homelab
+cat > "$DOH_TMP/san.cnf" <<SANCNF
+[req]
+distinguished_name = dn
+[dn]
+[san]
+subjectAltName = IP:${E2E_IP_CUSTOS},DNS:custos.homelab
+SANCNF
+
+openssl ecparam -name prime256v1 -genkey -noout -out "$DOH_TMP/srv.key" 2>/dev/null
+openssl req -new -key "$DOH_TMP/srv.key" -subj "/CN=${E2E_IP_CUSTOS}" \
+    -out "$DOH_TMP/srv.csr" 2>/dev/null
+openssl x509 -req -in "$DOH_TMP/srv.csr" \
+    -CA "$DOH_TMP/ca.crt" -CAkey "$DOH_TMP/ca.key" -CAcreateserial \
+    -days 1 -sha256 -extensions san -extfile "$DOH_TMP/san.cnf" \
+    -out "$DOH_TMP/srv.crt" 2>/dev/null
+
+if [ -f "$DOH_TMP/srv.crt" ] && [ -f "$DOH_TMP/srv.key" ]; then
+    ok "T100 génération mini CA + cert serveur"
+else
+    fail "T100 génération mini CA + cert serveur" "fichiers absents"
+fi
+
+# ── Étape 2 : Déploiement du cert de test sur custos ─────────────────────────
+
+scp -q $SSH_OPTS -i "$SSH_KEY" \
+    "$DOH_TMP/srv.crt" "root@${E2E_IP_CUSTOS}:/tmp/doh_test_cert.pem"
+scp -q $SSH_OPTS -i "$SSH_KEY" \
+    "$DOH_TMP/srv.key" "root@${E2E_IP_CUSTOS}:/tmp/doh_test_key.pem"
+
+# Config temporaire : port de test isolé + cert de la mini CA
+cat > "$DOH_TMP/doh_e2e_config.moon" <<MONCFG
+{
+  doh: {
+    port: ${DOH_PORT}
+    cert: "/tmp/doh_test_cert.pem"
+    key:  "/tmp/doh_test_key.pem"
+    prefer_ipv6: false
+  }
+}
+MONCFG
+
+scp -q $SSH_OPTS -i "$SSH_KEY" \
+    "$DOH_TMP/doh_e2e_config.moon" "root@${E2E_IP_CUSTOS}:/tmp/doh_e2e_config.moon"
+
+# Redémarre custos avec la config de test
+ssh_vm "$E2E_IP_CUSTOS" \
+    "CUSTOS_CONFIG_PATH=/tmp/doh_e2e_config.moon /etc/init.d/custos restart >/dev/null 2>&1 && sleep 2"
+
+if ssh_vm "$E2E_IP_CUSTOS" "ss -tnlp | grep -q ':${DOH_PORT}'"; then
+    ok "T101 worker DoH écoute sur port ${DOH_PORT} avec cert de test"
+else
+    fail "T101 worker DoH écoute sur port ${DOH_PORT} avec cert de test" "port absent"
+fi
+
+# ── Étape 3 : Requête DoH depuis servus avec la mini CA comme trust anchor ────
+
+# Encodage base64url de la requête DNS "example.com A"
+DOH_DNS_QUERY="AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB"
+
+DOH_RESPONSE=$(ssh_vm "$E2E_IP_SERVUS" \
+    "curl -s -w '\n%{http_code}' --max-time 5 \
+     --cacert /tmp/doh_test_ca.crt \
+     'https://${E2E_IP_CUSTOS}:${DOH_PORT}/dns-query?dns=${DOH_DNS_QUERY}' \
+     -H 'Accept: application/dns-message' 2>/dev/null" || true)
+
+# Le CA cert doit aussi être copié sur servus pour que curl puisse valider
+scp -q $SSH_OPTS -i "$SSH_KEY" \
+    "$DOH_TMP/ca.crt" "root@${E2E_IP_SERVUS}:/tmp/doh_test_ca.crt" 2>/dev/null || true
+
+DOH_RESPONSE=$(ssh_vm "$E2E_IP_SERVUS" \
+    "curl -s -w '\n%{http_code}' --max-time 5 \
+     --cacert /tmp/doh_test_ca.crt \
+     'https://${E2E_IP_CUSTOS}:${DOH_PORT}/dns-query?dns=${DOH_DNS_QUERY}' \
+     -H 'Accept: application/dns-message' 2>/dev/null" || true)
+
+DOH_HTTP_CODE=$(echo "$DOH_RESPONSE" | tail -1)
+assert_eq "T102 DoH répond HTTP 200" "$DOH_HTTP_CODE" "200"
+
+# ── Étape 4 : Vérification TLS — le cert présenté correspond à la mini CA ─────
+
+DOH_CERT_CHECK=$(ssh_vm "$E2E_IP_SERVUS" \
+    "echo | openssl s_client -connect ${E2E_IP_CUSTOS}:${DOH_PORT} \
+     -CAfile /tmp/doh_test_ca.crt 2>&1 | grep 'Verify return code'" || true)
+assert_contains "T103 TLS vérifié par mini CA (Verify return code: 0)" \
+    "Verify return code: 0" "$DOH_CERT_CHECK"
+
+# ── Étape 5 : Réponse DNS binaire bien formée ─────────────────────────────────
+
+# La réponse doit faire au moins 12 octets (header DNS)
+DOH_BODY_LEN=$(ssh_vm "$E2E_IP_SERVUS" \
+    "curl -s --max-time 5 --cacert /tmp/doh_test_ca.crt \
+     'https://${E2E_IP_CUSTOS}:${DOH_PORT}/dns-query?dns=${DOH_DNS_QUERY}' \
+     -H 'Accept: application/dns-message' 2>/dev/null | wc -c" || echo "0")
+if [ "${DOH_BODY_LEN:-0}" -ge 12 ]; then
+    ok "T104 réponse DNS ≥ 12 octets (header DNS valide)"
+else
+    fail "T104 réponse DNS ≥ 12 octets" "taille=${DOH_BODY_LEN}"
+fi
+
+# ── Étape 6 : Format JSON DoH ─────────────────────────────────────────────────
+
+DOH_JSON=$(ssh_vm "$E2E_IP_SERVUS" \
+    "curl -s --max-time 5 --cacert /tmp/doh_test_ca.crt \
+     'https://${E2E_IP_CUSTOS}:${DOH_PORT}/dns-query?name=example.com&type=A' \
+     -H 'Accept: application/dns-json' 2>/dev/null" || true)
+assert_contains "T105 DoH JSON contient Status" '"Status"' "$DOH_JSON"
+assert_contains "T106 DoH JSON contient Question" '"Question"' "$DOH_JSON"
+
+# ── Nettoyage ─────────────────────────────────────────────────────────────────
+ssh_vm "$E2E_IP_SERVUS" "rm -f /tmp/doh_test_ca.crt" || true
+doh_cleanup
+
 # ─── RAPPORT FINAL ─────────────────────────────────────────────────────────────
 echo ""
 echo "─────────────────────────────────────────"

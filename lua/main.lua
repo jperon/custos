@@ -113,16 +113,16 @@ load_doh_cfg = function()
     end)(),
     upstream_port = tonumber(config.doh.upstream_port) or 53,
     timeout_ms = tonumber(config.doh.upstream_timeout_ms) or 2000,
-    cert_path = (function()
-      if config.doh.cert_path and #config.doh.cert_path > 0 then
-        return config.doh.cert_path
+    cert = (function()
+      if config.doh.cert and #config.doh.cert > 0 then
+        return config.doh.cert
       else
         return nil
       end
     end)(),
-    key_path = (function()
-      if config.doh.key_path and #config.doh.key_path > 0 then
-        return config.doh.key_path
+    key = (function()
+      if config.doh.key and #config.doh.key > 0 then
+        return config.doh.key
       else
         return nil
       end

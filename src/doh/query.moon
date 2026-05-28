@@ -12,7 +12,7 @@
 dns_mod = require "ipparse.l7.dns"
 parse = dns_mod.parse
 { types: QTYPE } = require "ipparse.l7.dns"
-{ :decide } = require "filter"
+{ :decide_meta } = require "filter"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
 { :build_blocked_response, :add_ede } = require "dns_ede"
 { :user_for_mac } = require "auth.sessions"
@@ -103,26 +103,26 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       user:   user
     }
     log_debug -> { action: "filter_decide", qname: qname_text, qtype: q.qtype_name or tostring(q.qtype), client_ip: client_ip }
-    allowed, reason, rule, timeout = decide req
+    meta = decide_meta req
     fields = {
-      action:   if allowed then "allow" else "block"
+      action:   if meta.verdict then "allow" else "block"
       qname:    qname_text
       qtype:    q.qtype_name or tostring(q.qtype)
       client_ip: client_ip
       client_mac: client_mac
       user:     user
-      reason:   reason or ""
-      rule:     rule or ""
+      reason:   meta.reason or ""
+      rule:     meta.description or ""
     }
-    if allowed
+    if meta.verdict
       log_allow -> fields
-      allow_reason = reason
-      allow_rule_id = rule
-      allow_timeout = timeout
+      allow_reason  = meta.reason
+      allow_rule_id = meta.rule_id
+      allow_timeout = meta.timeout
     else
       log_block -> fields
       any_blocked  = true
-      block_reason = reason
+      block_reason = meta.reason
 
   if any_blocked
     blocked = build_blocked_response dns, dns_raw, block_reason

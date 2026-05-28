@@ -143,8 +143,8 @@ load_doh_cfg = ->
         config.doh.upstream_ipv4
     upstream_port: tonumber(config.doh.upstream_port) or 53
     timeout_ms:   tonumber(config.doh.upstream_timeout_ms) or 2000
-    cert_path:    if config.doh.cert_path and #config.doh.cert_path > 0 then config.doh.cert_path else nil
-    key_path:     if config.doh.key_path  and #config.doh.key_path  > 0 then config.doh.key_path  else nil
+    cert:    if config.doh.cert and #config.doh.cert > 0 then config.doh.cert else nil
+    key:     if config.doh.key  and #config.doh.key  > 0 then config.doh.key  else nil
   }
 
 -- ── Shutdown explicite des workers ───────────────────────────────

@@ -808,6 +808,8 @@ handle_client = function(args)
           }
         end)
         handshake_complete = true
+      elseif hs_err and hs_err ~= "peer_closed" then
+        break
       end
     end
     if not (handshake_complete) then

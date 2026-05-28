@@ -2,8 +2,8 @@ local dns_mod = require("ipparse.l7.dns")
 local parse = dns_mod.parse
 local QTYPE
 QTYPE = require("ipparse.l7.dns").types
-local decide
-decide = require("filter").decide
+local decide_meta
+decide_meta = require("filter").decide_meta
 local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack
 do
   local _obj_0 = require("nft_queue")
@@ -160,10 +160,10 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
         client_ip = client_ip
       }
     end)
-    local allowed, reason, rule, timeout = decide(req)
+    local meta = decide_meta(req)
     local fields = {
       action = (function()
-        if allowed then
+        if meta.verdict then
           return "allow"
         else
           return "block"
@@ -174,22 +174,22 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       client_ip = client_ip,
       client_mac = client_mac,
       user = user,
-      reason = reason or "",
-      rule = rule or ""
+      reason = meta.reason or "",
+      rule = meta.description or ""
     }
-    if allowed then
+    if meta.verdict then
       log_allow(function()
         return fields
       end)
-      allow_reason = reason
-      allow_rule_id = rule
-      allow_timeout = timeout
+      allow_reason = meta.reason
+      allow_rule_id = meta.rule_id
+      allow_timeout = meta.timeout
     else
       log_block(function()
         return fields
       end)
       any_blocked = true
-      block_reason = reason
+      block_reason = meta.reason
     end
   end
   if any_blocked then

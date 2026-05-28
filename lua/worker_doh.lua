@@ -231,6 +231,116 @@ make_server6 = function(port)
   srv6:settimeout(1)
   return srv6
 end
+local H2_FRAME_DATA = 0x0
+local H2_FRAME_HEADERS = 0x1
+local H2_FRAME_SETTINGS = 0x4
+local H2_FRAME_PING = 0x6
+local H2_FRAME_GOAWAY = 0x7
+local H2_FRAME_WINDOW_UPDATE = 0x8
+local H2_FLAG_END_STREAM = 0x1
+local H2_FLAG_END_HEADERS = 0x4
+local H2_FLAG_ACK = 0x1
+local h2_recv_exact
+h2_recv_exact = function(conn, n)
+  local buf = ""
+  while #buf < n do
+    local chunk, err = conn:receive(n - #buf)
+    if not (chunk and #chunk > 0) then
+      return nil, err
+    end
+    buf = buf .. chunk
+  end
+  return buf
+end
+local h2_read_frame
+h2_read_frame = function(conn)
+  local hdr, err = h2_recv_exact(conn, 9)
+  if not (hdr) then
+    return nil, err
+  end
+  local len = hdr:byte(1) * 65536 + hdr:byte(2) * 256 + hdr:byte(3)
+  local ftype = hdr:byte(4)
+  local flags = hdr:byte(5)
+  local sid = bit.band(bit.bor(bit.lshift(hdr:byte(6), 24), bit.lshift(hdr:byte(7), 16), bit.lshift(hdr:byte(8), 8), hdr:byte(9)), 0x7FFFFFFF)
+  local payload
+  if len > 0 then
+    local p, perr = h2_recv_exact(conn, len)
+    if not (p) then
+      return nil, perr
+    end
+    payload = p
+  else
+    payload = ""
+  end
+  return ftype, flags, sid, payload
+end
+local h2_write_frame
+h2_write_frame = function(conn, ftype, flags, sid, payload)
+  payload = payload or ""
+  local n = #payload
+  local frame = string.char(bit.band(bit.rshift(n, 16), 0xFF), bit.band(bit.rshift(n, 8), 0xFF), bit.band(n, 0xFF), ftype, flags, bit.band(bit.rshift(sid, 24), 0xFF), bit.band(bit.rshift(sid, 16), 0xFF), bit.band(bit.rshift(sid, 8), 0xFF), bit.band(sid, 0xFF)) .. payload
+  return conn:send(frame)
+end
+local h2_encode_response_headers
+h2_encode_response_headers = function()
+  return "\x88\x5f\x17application/dns-message"
+end
+local handle_h2
+handle_h2 = function(conn, peer_ip, peer_mac, upstream)
+  conn:receive("*l")
+  conn:receive("*l")
+  h2_write_frame(conn, H2_FRAME_SETTINGS, 0, 0, "")
+  local stream_id = nil
+  local dns_chunks = { }
+  local done = false
+  for _ = 1, 30 do
+    local ftype, flags, sid, payload = h2_read_frame(conn)
+    if not (ftype) then
+      break
+    end
+    if ftype == H2_FRAME_SETTINGS and bit.band(flags, H2_FLAG_ACK) == 0 then
+      h2_write_frame(conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, "")
+    elseif ftype == H2_FRAME_HEADERS and not stream_id then
+      stream_id = sid
+    elseif ftype == H2_FRAME_DATA and sid == stream_id then
+      if #payload > 0 then
+        dns_chunks[#dns_chunks + 1] = payload
+      end
+      if bit.band(flags, H2_FLAG_END_STREAM) ~= 0 then
+        done = true
+        break
+      end
+    elseif ftype == H2_FRAME_PING and bit.band(flags, H2_FLAG_ACK) == 0 then
+      h2_write_frame(conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload)
+    end
+  end
+  if not (done and stream_id) then
+    h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01")
+    return nil, "h2_incomplete"
+  end
+  local dns_raw = table.concat(dns_chunks)
+  if not (#dns_raw > 0) then
+    h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01")
+    return nil, "h2_empty_body"
+  end
+  local resp_raw, q_err = process_query(dns_raw, peer_ip, peer_mac, upstream)
+  if not (resp_raw) then
+    log_warn(function()
+      return {
+        action = "h2_query_error",
+        peer = peer_ip,
+        err = q_err
+      }
+    end)
+    h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x02")
+    return nil, "h2_query_error"
+  end
+  local hpack = h2_encode_response_headers()
+  h2_write_frame(conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack)
+  h2_write_frame(conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw)
+  h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x00")
+  return resp_raw
+end
 local handle_doh_client
 handle_doh_client = function(args)
   local client = args.client
@@ -302,7 +412,7 @@ handle_doh_client = function(args)
     local hs_err = nil
     while not done and attempts < 50 do
       attempts = attempts + 1
-      local ok_hs, hs_ret = pcall(function()
+      local ok_hs, hs_ret, hs_ret2 = pcall(function()
         return tls_client:dohandshake()
       end)
       if not ok_hs then
@@ -319,6 +429,9 @@ handle_doh_client = function(args)
       end
       if hs_ret then
         done = true
+      elseif hs_ret2 then
+        hs_err = hs_ret2
+        break
       end
     end
     if not (done) then
@@ -385,6 +498,34 @@ handle_doh_client = function(args)
         path = req.path
       }
     end)
+    if req.method == "PRI" then
+      log_debug(function()
+        return {
+          action = "h2_request",
+          peer = peer_ip
+        }
+      end)
+      local h2_resp, h2_err = handle_h2(tls_client, peer_ip, peer_mac, state.upstream)
+      if h2_err then
+        log_warn(function()
+          return {
+            action = "h2_failed",
+            peer = peer_ip,
+            err = h2_err
+          }
+        end)
+      else
+        log_debug(function()
+          return {
+            action = "h2_ok",
+            peer = peer_ip,
+            resp_bytes = h2_resp and #h2_resp or 0
+          }
+        end)
+      end
+      tls_client:close()
+      return 
+    end
     local dns_raw = nil
     local json_mode = false
     if req.path == "/dns-query" or req.path:match("^/dns%-query%?") then
@@ -552,18 +693,18 @@ run = function(doh_cfg, filter_data)
   local cert_cache_mod = require("auth.cert_cache")
   local cert_cache = cert_cache_mod.create_cache(500, 7776000)
   local static_cert_paths = nil
-  if doh_cfg.cert_path and doh_cfg.key_path then
+  if doh_cfg.cert and doh_cfg.key then
     log_info(function()
       return {
         action = "loading_static_cert",
-        cert = doh_cfg.cert_path
+        cert = doh_cfg.cert
       }
     end)
-    local ok, ctx = load_static(doh_cfg.key_path, doh_cfg.cert_path)
+    local ok, ctx = load_static(doh_cfg.key, doh_cfg.cert)
     if ok then
       static_cert_paths = {
-        cert = doh_cfg.cert_path,
-        key = doh_cfg.key_path
+        cert = doh_cfg.cert,
+        key = doh_cfg.key
       }
       log_info(function()
         return {
@@ -574,8 +715,8 @@ run = function(doh_cfg, filter_data)
       log_warn(function()
         return {
           action = "static_cert_load_failed",
-          cert = doh_cfg.cert_path,
-          key = doh_cfg.key_path,
+          cert = doh_cfg.cert,
+          key = doh_cfg.key,
           err = ctx
         }
       end)
@@ -671,5 +812,8 @@ run = function(doh_cfg, filter_data)
   end
 end
 return {
-  run = run
+  run = run,
+  b64url_decode = b64url_decode,
+  query_param = query_param,
+  build_dns_query = build_dns_query
 }

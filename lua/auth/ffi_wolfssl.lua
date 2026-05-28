@@ -14,6 +14,7 @@ ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
   WOLFSSL_CTX* wolfSSL_CTX_new(WOLFSSL_METHOD *method);
   void         wolfSSL_CTX_free(WOLFSSL_CTX *ctx);
   int          wolfSSL_CTX_use_certificate_file(WOLFSSL_CTX *ctx, const char *file, int type);
+  int          wolfSSL_CTX_use_certificate_chain_file(WOLFSSL_CTX *ctx, const char *file);
   int          wolfSSL_CTX_use_PrivateKey_file(WOLFSSL_CTX *ctx, const char *file, int type);
 
   WOLFSSL* wolfSSL_new(WOLFSSL_CTX *ctx);
@@ -131,23 +132,25 @@ newcontext = function(opts)
     error("wolfSSL_CTX_use_PrivateKey_file() failed")
   end
   if _alpn_available ~= false then
-    local alpn = string.char(2) .. "h2" .. string.char(8) .. "http/1.1"
+    local alpn = "http/1.1"
     local ok_alpn, ret_alpn = pcall(function()
       return libwolfssl.wolfSSL_CTX_UseALPN(ctx, ffi.cast("char*", alpn), #alpn, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH)
     end)
-    _alpn_available = ok_alpn
-    if ok_alpn then
+    _alpn_available = ok_alpn and ret_alpn == 1
+    if _alpn_available then
       log_debug(function()
         return {
           action = "ctx_use_alpn",
-          ret = ret_alpn or "nil",
-          protocols = "h2,http/1.1"
+          ret = ret_alpn,
+          protocols = "http/1.1"
         }
       end)
     else
       log_debug(function()
         return {
-          action = "alpn_unavailable"
+          action = "alpn_unavailable",
+          ok = ok_alpn,
+          ret = ret_alpn
         }
       end)
     end
@@ -260,16 +263,6 @@ ssl_mt.__index.dohandshake = function(self)
     end)
     return false
   end
-  if err == SSL_ERROR_SSL then
-    local ssl_errors = get_ssl_errors()
-    log_debug(function()
-      return {
-        action = "handshake_ssl_error",
-        ssl_err = ssl_errors
-      }
-    end)
-    error("TLS error during handshake: " .. tostring(ssl_errors))
-  end
   local ssl_errors = get_ssl_errors()
   if err == -308 or err == -313 or err == 6 or (ssl_errors and (ssl_errors:find("error state on socket", 1, true) or ssl_errors:find("received alert fatal error", 1, true) or ssl_errors:find("peer sent close notify alert", 1, true))) then
     log_debug(function()
@@ -283,12 +276,12 @@ ssl_mt.__index.dohandshake = function(self)
   end
   log_debug(function()
     return {
-      action = "handshake_unexpected_error",
+      action = "handshake_tls_error",
       err = err,
-      ssl_err = ssl_errors
+      ssl_err = ssl_errors or ""
     }
   end)
-  return error("Unexpected error " .. tostring(err) .. ": " .. tostring(ssl_errors))
+  return false, "tls_error"
 end
 ssl_mt.__index.selected_alpn = function(self)
   if _alpn_available == false then
@@ -458,6 +451,17 @@ ssl_mt.__index.receive = function(self, mode)
 end
 ssl_mt.__index.close = function(self)
   if not self.closed then
+    if self.handshake_done then
+      self.raw_socket:settimeout(0)
+      local drain_buf = ffi.new("uint8_t[?]", 4096)
+      for _ = 1, 16 do
+        local n = libwolfssl.wolfSSL_read(self.ssl, drain_buf, 4096)
+        if n <= 0 then
+          break
+        end
+      end
+      self.raw_socket:settimeout(nil)
+    end
     libwolfssl.wolfSSL_shutdown(self.ssl)
     libwolfssl.wolfSSL_free(self.ssl)
     self.raw_socket:close()

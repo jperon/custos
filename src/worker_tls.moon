@@ -415,10 +415,10 @@ is_ipv6 = (ip) ->
   ip and ip\find ":", 1, true
 
 safe_filter_decide = (req) ->
-  return nil, "filter_unavailable", nil unless filter and filter.decide
-  ok, allowed, reason, rule = pcall filter.decide, req
+  return nil, "filter_unavailable", nil unless filter and filter.decide_meta
+  ok, meta = pcall filter.decide_meta, req
   return nil, "filter_decide_exception", nil unless ok
-  allowed, reason, rule
+  meta.verdict, meta.reason, meta.rule_id
 
 ensure_nft_modules = ->
   unless cmd_for

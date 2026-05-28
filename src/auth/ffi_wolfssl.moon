@@ -17,6 +17,7 @@ ffi.cdef [[
   WOLFSSL_CTX* wolfSSL_CTX_new(WOLFSSL_METHOD *method);
   void         wolfSSL_CTX_free(WOLFSSL_CTX *ctx);
   int          wolfSSL_CTX_use_certificate_file(WOLFSSL_CTX *ctx, const char *file, int type);
+  int          wolfSSL_CTX_use_certificate_chain_file(WOLFSSL_CTX *ctx, const char *file);
   int          wolfSSL_CTX_use_PrivateKey_file(WOLFSSL_CTX *ctx, const char *file, int type);
 
   WOLFSSL* wolfSSL_new(WOLFSSL_CTX *ctx);
@@ -121,13 +122,14 @@ newcontext = (opts = {}) ->
     error "wolfSSL_CTX_use_PrivateKey_file() failed"
 
   if _alpn_available != false
-    alpn = string.char(2) .. "h2" .. string.char(8) .. "http/1.1"
+    -- WolfSSL UseALPN attend une liste séparée par virgules, pas le format wire TLS.
+    alpn = "http/1.1"
     ok_alpn, ret_alpn = pcall -> libwolfssl.wolfSSL_CTX_UseALPN(ctx, ffi.cast("char*", alpn), #alpn, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH)
-    _alpn_available = ok_alpn
-    if ok_alpn
-      log_debug -> { action: "ctx_use_alpn", ret: ret_alpn or "nil", protocols: "h2,http/1.1" }
+    _alpn_available = ok_alpn and ret_alpn == 1
+    if _alpn_available
+      log_debug -> { action: "ctx_use_alpn", ret: ret_alpn, protocols: "http/1.1" }
     else
-      log_debug -> { action: "alpn_unavailable" }
+      log_debug -> { action: "alpn_unavailable", ok: ok_alpn, ret: ret_alpn }
   else
     log_debug -> { action: "alpn_unavailable" }
 
@@ -188,19 +190,15 @@ ssl_mt.__index.dohandshake = =>
     log_debug -> { action: "handshake_want_read_write" }
     return false
 
-  if err == SSL_ERROR_SSL
-    ssl_errors = get_ssl_errors!
-    log_debug -> { action: "handshake_ssl_error", ssl_err: ssl_errors }
-    error "TLS error during handshake: #{ssl_errors}"
-
   ssl_errors = get_ssl_errors!
   if err == -308 or err == -313 or err == 6 or (ssl_errors and (ssl_errors\find("error state on socket", 1, true) or ssl_errors\find("received alert fatal error", 1, true) or ssl_errors\find("peer sent close notify alert", 1, true)))
     log_debug -> { action: "handshake_peer_closed", err: err, ssl_err: ssl_errors }
     return false, "peer_closed"
 
-  -- Unexpected error code
-  log_debug -> { action: "handshake_unexpected_error", err: err, ssl_err: ssl_errors }
-  error "Unexpected error #{err}: #{ssl_errors}"
+  -- Toute autre erreur WolfSSL (parse error, cipher mismatch, HTTP brut sur port TLS…)
+  -- est une erreur côté client — on la remonte sans exception pour éviter log ERROR.
+  log_debug -> { action: "handshake_tls_error", err: err, ssl_err: ssl_errors or "" }
+  return false, "tls_error"
 
 ssl_mt.__index.selected_alpn = =>
   return nil if _alpn_available == false
@@ -307,6 +305,16 @@ ssl_mt.__index.receive = (mode = 4096) =>
 -- Close
 ssl_mt.__index.close = =>
   if not @closed
+    -- Drain non-bloquant : vide le buffer de réception TCP pour éviter que
+    -- Linux envoie RST à la fermeture quand des données non lues sont présentes
+    -- (ex. frames HTTP/2 après un préambule PRI détecté).
+    if @handshake_done
+      @raw_socket\settimeout 0          -- non-bloquant
+      drain_buf = ffi.new "uint8_t[?]", 4096
+      for _ = 1, 16
+        n = libwolfssl.wolfSSL_read @ssl, drain_buf, 4096
+        break if n <= 0
+      @raw_socket\settimeout nil        -- bloquant (restore)
     libwolfssl.wolfSSL_shutdown(@ssl)
     libwolfssl.wolfSSL_free(@ssl)
     @raw_socket\close()
