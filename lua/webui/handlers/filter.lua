@@ -213,10 +213,11 @@ make_get = function(section_key, title, desc, value_label, value_hint)
     end
     local current = (cfg.filter or { })[section_key] or { }
     local section_title = "Filtre — " .. tostring(title)
+    local body
     if section_key == "times" then
-      local body = render_times_editor(current)
+      body = render_times_editor(current)
     else
-      local body = render_kv_editor(section_key, title, desc, value_label, current, value_hint)
+      body = render_kv_editor(section_key, title, desc, value_label, current, value_hint)
     end
     return 200, {
       ["Content-Type"] = "text/html; charset=UTF-8"

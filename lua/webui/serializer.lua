@@ -53,11 +53,35 @@ serialize_value = function(v, indent)
       if #keys == 0 then
         return "{}"
       end
+      local LUA_KEYWORDS = {
+        ["and"] = 1,
+        ["break"] = 1,
+        ["do"] = 1,
+        ["else"] = 1,
+        ["elseif"] = 1,
+        ["end"] = 1,
+        ["false"] = 1,
+        ["for"] = 1,
+        ["function"] = 1,
+        goto = 1,
+        ["if"] = 1,
+        ["in"] = 1,
+        ["local"] = 1,
+        ["nil"] = 1,
+        ["not"] = 1,
+        ["or"] = 1,
+        ["repeat"] = 1,
+        ["return"] = 1,
+        ["then"] = 1,
+        ["true"] = 1,
+        ["until"] = 1,
+        ["while"] = 1
+      }
       local lines = { }
       for _index_0 = 1, #keys do
         local k = keys[_index_0]
         local key_str
-        if type(k) == "string" and k:match("^[a-zA-Z_][a-zA-Z0-9_]*$") then
+        if type(k) == "string" and k:match("^[a-zA-Z_][a-zA-Z0-9_]*$") and not LUA_KEYWORDS[k] then
           key_str = k
         else
           key_str = "[" .. serialize_value(k, inner) .. "]"

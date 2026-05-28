@@ -93,10 +93,10 @@ make_get = (section_key, title, desc, value_label, value_hint) ->
     return 500, {}, "Erreur config : #{err}" unless cfg
     current = (cfg.filter or {})[section_key] or {}
     section_title = "Filtre — #{title}"
-    if section_key == "times"
-      body = render_times_editor current
+    body = if section_key == "times"
+      render_times_editor current
     else
-      body = render_kv_editor section_key, title, desc, value_label, current, value_hint
+      render_kv_editor section_key, title, desc, value_label, current, value_hint
     200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page section_title, body
 
 handle_nets_get   = make_get "nets",   "Réseaux nommés",        "Groupes de CIDRs IPv4/IPv6 réutilisables dans les conditions.", "CIDRs (un par ligne)", "ex: 192.168.0.0/16"
