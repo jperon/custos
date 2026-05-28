@@ -90,6 +90,12 @@ A.is_not_nil = function(v)
     return fail("expected non-nil", 2)
   end
 end
+A.not_nil = A.is_not_nil
+A.falsy = function(v, msg)
+  if v then
+    return fail("expected falsy, got " .. tostring(fmt(v)) .. " " .. tostring(msg or ''), 2)
+  end
+end
 A.is_not_true = function(v)
   if v == true then
     return fail("expected NOT true", 2)

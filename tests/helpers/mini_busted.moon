@@ -69,6 +69,8 @@ A.is_true       = (v) -> fail "expected true, got #{fmt v}", 2     if v != true
 A.is_false      = (v) -> fail "expected false, got #{fmt v}", 2    if v != false
 A.is_nil        = (v) -> fail "expected nil, got #{fmt v}", 2      if v != nil
 A.is_not_nil    = (v) -> fail "expected non-nil", 2                if v == nil
+A.not_nil       = A.is_not_nil
+A.falsy         = (v, msg) -> fail "expected falsy, got #{fmt v} #{msg or ''}", 2  if v
 A.is_not_true   = (v) -> fail "expected NOT true", 2               if v == true
 A.is_not_false  = (v) -> fail "expected NOT false", 2              if v == false
 A.is_number     = (v) -> fail "expected number, got #{type v}", 2  if type(v) != "number"

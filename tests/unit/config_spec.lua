@@ -3,11 +3,8 @@ pcall(ffi.cdef, [[int setenv(const char*, const char*, int); int unsetenv(const 
 local reload
 reload = function(path)
   package.loaded["config"] = nil
-  if path then
-    ffi.C.setenv("CUSTOS_CONFIG_PATH", path, 1)
-  else
-    ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
-  end
+  local actual = path or "tmp/__no_config_for_test__.moon"
+  ffi.C.setenv("CUSTOS_CONFIG_PATH", actual, 1)
   return require("config")
 end
 local write_moon
