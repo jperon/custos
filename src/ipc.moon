@@ -207,8 +207,8 @@ write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason,
   return false unless msg
   write_with_retry pipe_wfd, msg
 
-write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout
+write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers
   return false unless msg
   write_with_retry pipe_wfd, msg
 

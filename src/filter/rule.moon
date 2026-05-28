@@ -47,6 +47,7 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
   -- l'accumule dans les métadonnées sans en interpréter le contenu.
   action_evals = {}
   actions_meta = {}
+  rule_block_modifiers = {}
   for action_name in *(rule.actions or {})
     action_factory, err = compiler_api.load_action action_name
     error "Action inconnue '#{action_name}': #{err}" unless action_factory
@@ -61,6 +62,9 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
       verdict:      action_obj.verdict
       on_response:  action_obj.on_response
     }
+    if action_obj.block_modifiers
+      for k, v in pairs action_obj.block_modifiers
+        rule_block_modifiers[k] = v
 
   rule_desc    = rule.description or "rule_#{idx}"
   rule_id      = compiler_api.unique_rule_id rule, idx, used_ids
@@ -117,7 +121,7 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
       elseif v == nil and m
         msg = msg or m
 
-    verdict, msg, rule_id, rule_timeout, rule_desc
+    verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers
 
   eval_fn, metadata
 
@@ -128,17 +132,17 @@ details_of = (rules, req, decision_cfg=nil) ->
   if effective_cfg.first_match_wins != nil
     first_match_wins = not not effective_cfg.first_match_wins
 
-  last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc = nil, nil, nil, nil, nil
+  last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers = nil, nil, nil, nil, nil, nil
   for rule_fn in *rules
-    verdict, msg, rule_id, rule_timeout, rule_desc = rule_fn req
+    verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers = rule_fn req
     if verdict ~= nil
       if continue_mode or not first_match_wins
-        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc = verdict, msg, rule_id, rule_timeout, rule_desc
+        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers
       else
-        return verdict, msg, rule_id, rule_timeout, rule_desc
+        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers
   if last_verdict ~= nil
-    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc
-  false, "No matching rule (default deny)", nil, nil, nil
+    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers
+  false, "No matching rule (default deny)", nil, nil, nil, nil
 
 --- Compile une liste ordonnée de règles.
 compile_rules = (cfg) ->
@@ -158,13 +162,14 @@ decide = (rules, req, decision_cfg=nil) ->
   verdict, msg, rule_desc
 
 decide_meta = (rules, req, decision_cfg=nil) ->
-  verdict, msg, rule_id, rule_timeout, rule_desc = details_of rules, req, decision_cfg
+  verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers = details_of rules, req, decision_cfg
   {
     verdict:     verdict
     reason:      msg
     rule_id:     rule_id
     timeout:     rule_timeout
     description: rule_desc
+    modifiers:   rule_modifiers or {}
   }
 
 { :compile_rule, :compile_rules, :decide, :decide_meta }

@@ -277,8 +277,8 @@ write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw,
   return write_with_retry(pipe_wfd, msg)
 end
 local write_refused_msg
-write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout)
+write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers)
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers)
   if not (msg) then
     return false
   end

@@ -43,78 +43,11 @@ ffi.cdef([[  typedef int pid_t;
   pid_t getppid(void);
   int kill(pid_t pid, int sig);
 ]])
-local css_content = [[  * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-  }
-
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    line-height: 1.5;
-    color: #333;
-    background-color: #f5f5f5;
-    padding: 1rem;
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-
-  form {
-    background: white;
-    padding: 2rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    margin: 1rem 0;
-  }
-
-  label {
-    display: block;
-    margin-bottom: 0.5rem;
-    font-weight: 500;
-  }
-
-  input[type="text"],
-  input[type="password"] {
-    width: 100%;
-    padding: 0.75rem;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 1rem;
-    margin-bottom: 1rem;
-  }
-
-  button {
-    background-color: #007bff;
-    color: white;
-    border: none;
-    padding: 0.75rem 1.5rem;
-    border-radius: 4px;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: background-color 0.2s;
-  }
-
-  button:hover { background-color: #0056b3; }
-
-  p { margin: 1rem 0; }
-
-  a {
-    color: #007bff;
-    text-decoration: none;
-  }
-
-  a:hover { text-decoration: underline; }
-
-  @media (max-width: 768px) {
-    body { padding: 0.5rem; }
-    form { padding: 1rem; }
-  }
-
-  @media (max-width: 480px) {
-    body { padding: 0.25rem; }
-    form { padding: 0.75rem; }
-  }
-  ]]
+local page, success_page, css_content
+do
+  local _obj_0 = require("auth.pages")
+  page, success_page, css_content = _obj_0.page, _obj_0.success_page, _obj_0.css_content
+end
 local SIGHUP = 1
 local COOKIE_NAME = "custos_session"
 local make_session_cookie
@@ -155,43 +88,6 @@ parse_form = function(body)
     out[url_decode(k)] = url_decode(v)
   end
   return out
-end
-local page
-page = function(self)
-  return "<!DOCTYPE html>\n" .. H.html({
-    lang = "fr",
-    H.head({
-      H.meta({
-        charset = "UTF-8"
-      }),
-      H.title("CustosVirginum"),
-      H.link({
-        rel = "icon",
-        href = "data:image/svg+xml,<svg viewBox='0 0 100 100'><text y='75' font-size='75'>✞</text></svg>"
-      }),
-      H.style(css_content)
-    }),
-    H.body(self)
-  })
-end
-local success_page
-success_page = function(auth_cfg, created_at)
-  local interval = tonumber(auth_cfg and auth_cfg.heartbeat_interval) or 30
-  if interval <= 0 then
-    interval = 30
-  end
-  local idle_timeout = tonumber(auth_cfg and auth_cfg.idle_timeout) or 90
-  local session_start = tonumber(created_at) or 0
-  return page({
-    H.p("Connexion réussie. Votre accès est actif tant que cette fenêtre est ouverte."),
-    H.p({
-      id = "session-timer"
-    }, "Session ouverte depuis : --"),
-    H.p(H.a({
-      href = "/logout"
-    }, "Déconnexion")),
-    H.script("\n      var iv = " .. tostring(interval) .. " * 1000;\n      var idle = " .. tostring(idle_timeout) .. " * 1000;\n      var sessionStart = " .. tostring(session_start) .. ";\n      var lastSuccess = Date.now();\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'same-origin'})\n          .then(function(r){\n            lastSuccess = Date.now();\n            if(r.status===401){\n              if(document.visibilityState!=='visible')\n                alert('Connexion perdue, veuillez vous authentifier de nouveau.');\n              location.href='/';\n            }\n          })\n          .catch(function(){\n            if (Date.now() - lastSuccess > idle) {\n              if (document.visibilityState === 'visible') location.href='/';\n            }\n          });\n      }\n      function updateTimer(){\n        var now = Math.floor(Date.now() / 1000);\n        var elapsed = now - sessionStart;\n        if (elapsed < 0) elapsed = 0;\n        var h = Math.floor(elapsed / 3600);\n        var m = Math.floor((elapsed % 3600) / 60);\n        var txt;\n        if (h > 0) {\n          txt = h + 'h ' + (m < 10 ? '0' : '') + m + 'min';\n        } else {\n          txt = m + ' min';\n        }\n        var el = document.getElementById('session-timer');\n        if (el) el.textContent = 'Session ouverte depuis : ' + txt;\n      }\n      setInterval(ping, iv);\n      setInterval(updateTimer, 10000);\n      setTimeout(ping, 3000);\n      updateTimer();\n      // Envoyer un ping immédiat au retour en foreground (anti-throttling navigateur).\n      document.addEventListener('visibilitychange', function(){\n        if (document.visibilityState === 'visible') ping();\n      });\n      // Déconnexion explicite à la fermeture du navigateur / de l'onglet.\n      // sendBeacon est envoyé de manière garantie même pendant le déchargement.\n      // pagehide est plus fiable que beforeunload sur mobile (iOS Safari).\n      // On ne déconnecte pas si la page est mise en BFCache (event.persisted).\n      function logout(){\n        if (navigator.sendBeacon) {\n          navigator.sendBeacon('/logout');\n        } else {\n          fetch('/logout', {method:'GET', keepalive:true, credentials:'omit'});\n        }\n      }\n      window.addEventListener('pagehide', function(e){\n        if (!e.persisted) logout();\n      });\n    ")
-  })
 end
 local register_form_page
 register_form_page = function(req)
@@ -551,10 +447,18 @@ handle_login = function(req, peer_ip, peer_mac, state)
     end
   end
   local tok = token.generate("user", user, mac, now + idle_timeout, state.token_key)
+  local admin_users = state.admin_users or { }
+  local user_in_admin = false
+  for _, u in ipairs(admin_users) do
+    if u == user then
+      user_in_admin = true
+    end
+  end
+  local is_admin = (state.admin_allow_all_when_empty and #admin_users == 0) or user_in_admin
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8",
     ["Set-Cookie"] = make_session_cookie(tok)
-  }, success_page(state.auth_cfg, now)
+  }, success_page(state.auth_cfg, now, is_admin)
 end
 local handle_ping
 handle_ping = function(req, peer_ip, peer_mac, state)

@@ -29,6 +29,7 @@ compile_rule = function(cfg, rule, idx, used_ids)
   end
   local action_evals = { }
   local actions_meta = { }
+  local rule_block_modifiers = { }
   local _list_0 = (rule.actions or { })
   for _index_0 = 1, #_list_0 do
     local action_name = _list_0[_index_0]
@@ -46,6 +47,11 @@ compile_rule = function(cfg, rule, idx, used_ids)
       verdict = action_obj.verdict,
       on_response = action_obj.on_response
     }
+    if action_obj.block_modifiers then
+      for k, v in pairs(action_obj.block_modifiers) do
+        rule_block_modifiers[k] = v
+      end
+    end
   end
   local rule_desc = rule.description or "rule_" .. tostring(idx)
   local rule_id = compiler_api.unique_rule_id(rule, idx, used_ids)
@@ -121,7 +127,7 @@ compile_rule = function(cfg, rule, idx, used_ids)
         msg = msg or m
       end
     end
-    return verdict, msg, rule_id, rule_timeout, rule_desc
+    return verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers
   end
   return eval_fn, metadata
 end
@@ -136,22 +142,22 @@ details_of = function(rules, req, decision_cfg)
   if effective_cfg.first_match_wins ~= nil then
     first_match_wins = not not effective_cfg.first_match_wins
   end
-  local last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc = nil, nil, nil, nil, nil
+  local last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers = nil, nil, nil, nil, nil, nil
   for _index_0 = 1, #rules do
     local rule_fn = rules[_index_0]
-    local verdict, msg, rule_id, rule_timeout, rule_desc = rule_fn(req)
+    local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers = rule_fn(req)
     if verdict ~= nil then
       if continue_mode or not first_match_wins then
-        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc = verdict, msg, rule_id, rule_timeout, rule_desc
+        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers
       else
-        return verdict, msg, rule_id, rule_timeout, rule_desc
+        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers
       end
     end
   end
   if last_verdict ~= nil then
-    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc
+    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers
   end
-  return false, "No matching rule (default deny)", nil, nil, nil
+  return false, "No matching rule (default deny)", nil, nil, nil, nil
 end
 local compile_rules
 compile_rules = function(cfg)
@@ -181,13 +187,14 @@ decide_meta = function(rules, req, decision_cfg)
   if decision_cfg == nil then
     decision_cfg = nil
   end
-  local verdict, msg, rule_id, rule_timeout, rule_desc = details_of(rules, req, decision_cfg)
+  local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers = details_of(rules, req, decision_cfg)
   return {
     verdict = verdict,
     reason = msg,
     rule_id = rule_id,
     timeout = rule_timeout,
-    description = rule_desc
+    description = rule_desc,
+    modifiers = rule_modifiers or { }
   }
 end
 return {

@@ -335,13 +335,14 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- est entièrement porté par les callbacks on_response des actions, appelés
   -- par worker_responses via filter.get_rule_on_response(rule_id).
   -- Ici on ne fait que décider allow/refuse et écrire le message IPC correspondant.
-  verdict       = NF_ACCEPT
-  block_reason  = nil
-  allow_reason  = nil
-  block_rule_id = nil
-  allow_rule_id = nil
-  block_timeout = nil
-  allow_timeout = nil
+  verdict         = NF_ACCEPT
+  block_reason    = nil
+  allow_reason    = nil
+  block_rule_id   = nil
+  allow_rule_id   = nil
+  block_timeout   = nil
+  allow_timeout   = nil
+  block_modifiers = nil
   q_fields = {
     mac_src:  l2.mac_src
     vlan:     l2.vlan
@@ -387,10 +388,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     else
       log_block -> q_fields
       metrics.record_verdict rule_id, "refuse" if rule_id
-      verdict       = NF_DROP
-      block_reason  = reason
-      block_rule_id = rule_id
-      block_timeout = nft_timeout
+      verdict         = NF_DROP
+      block_reason    = reason
+      block_rule_id   = rule_id
+      block_timeout   = nft_timeout
+      block_modifiers = decision and decision.modifiers or nil
     write_event q_fields, allowed
 
   -- Écriture IPC : write_msg pour les allow, write_refused_msg pour les refuse.
@@ -404,7 +406,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   if verdict == NF_ACCEPT
     ipc_ok = write_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, benchmark_ms, allow_rule_id, allow_timeout
   else
-    ipc_ok = write_refused_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout
+    ipc_ok = write_refused_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout, block_modifiers
 
   unless ipc_ok
     log_warn -> {

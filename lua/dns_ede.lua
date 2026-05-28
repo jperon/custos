@@ -1,6 +1,7 @@
 local dns_mod = require("ipparse.l7.dns")
 local parse = dns_mod.parse
 local REFUSED = dns_mod.rcodes.REFUSED
+local NXDOMAIN = dns_mod.rcodes.NXDOMAIN
 local A = dns_mod.types.A
 local AAAA = dns_mod.types.AAAA
 local HTTPS = dns_mod.types.HTTPS
@@ -62,6 +63,27 @@ build_blocked_response = function(dns_orig, dns_raw, reason)
     }
     dns.header.ancount = 1
   end
+  local ede_text
+  if reason and reason ~= "" then
+    ede_text = "Ne intretis. " .. reason
+  else
+    ede_text = "Ne intretis."
+  end
+  add_ede(dns, EDE_BLOCKED, ede_text)
+  return tostring(dns)
+end
+local build_nxdomain_response
+build_nxdomain_response = function(dns_orig, dns_raw, reason)
+  if not (dns_orig and dns_raw) then
+    return nil
+  end
+  local dns = parse(dns_raw, 1, false)
+  if not (dns) then
+    return nil
+  end
+  dns.header.rcode = NXDOMAIN
+  dns.answers = { }
+  dns.header.ancount = 0
   local ede_text
   if reason and reason ~= "" then
     ede_text = "Ne intretis. " .. reason
@@ -246,6 +268,7 @@ end
 return {
   add_ede = add_ede,
   build_blocked_response = build_blocked_response,
+  build_nxdomain_response = build_nxdomain_response,
   add_ede_modified = add_ede_modified,
   strip_dns_rr = strip_dns_rr,
   strip_https_rr = strip_https_rr,

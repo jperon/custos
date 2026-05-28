@@ -10,6 +10,7 @@
 dns_mod = require "ipparse.l7.dns"
 parse    = dns_mod.parse
 REFUSED  = dns_mod.rcodes.REFUSED
+NXDOMAIN = dns_mod.rcodes.NXDOMAIN
 A        = dns_mod.types.A
 AAAA     = dns_mod.types.AAAA
 HTTPS    = dns_mod.types.HTTPS
@@ -78,6 +79,31 @@ build_blocked_response = (dns_orig, dns_raw, reason) ->
       rdata:  rdata
     }
     dns.header.ancount = 1
+
+  ede_text = if reason and reason != ""
+    "Ne intretis. " .. reason
+  else
+    "Ne intretis."
+  add_ede dns, EDE_BLOCKED, ede_text
+
+  tostring dns
+
+--- Build a NXDOMAIN DNS response with EDE code 17 (Filtered).
+-- Retourne rcode=NXDOMAIN (3) sans enregistrement synthétique,
+-- ce qui est requis par les canary domains (ex: use-application-dns.net).
+-- @tparam table       dns_orig Parsed question packet's dns table.
+-- @tparam string      dns_raw  Raw DNS payload bytes extracted from the packet.
+-- @tparam string|nil  reason   Human-readable block reason for EDE text.
+-- @treturn string|nil Packed DNS response, or nil.
+build_nxdomain_response = (dns_orig, dns_raw, reason) ->
+  return nil unless dns_orig and dns_raw
+
+  dns = parse dns_raw, 1, false
+  return nil unless dns
+
+  dns.header.rcode = NXDOMAIN
+  dns.answers = {}
+  dns.header.ancount = 0
 
   ede_text = if reason and reason != ""
     "Ne intretis. " .. reason
@@ -225,4 +251,4 @@ clear_ad_bit = (dns_payload) ->
   -- Reconstruct DNS payload with cleared AD bit
   dns_payload\sub(1, 2) .. string.char(bit.rshift(flags_new, 8)) .. string.char(bit.band(flags_new, 0xFF)) .. dns_payload\sub(5)
 
-{ :add_ede, :build_blocked_response, :add_ede_modified, :strip_dns_rr, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :EDE_BLOCKED, :EDE_TTL_MODIFIED }
+{ :add_ede, :build_blocked_response, :build_nxdomain_response, :add_ede_modified, :strip_dns_rr, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :EDE_BLOCKED, :EDE_TTL_MODIFIED }

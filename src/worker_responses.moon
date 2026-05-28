@@ -38,7 +38,7 @@ clients_cfg = config.clients or {}
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :now, :set_action_prefix } = require "log"
-{ :build_blocked_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
+{ :build_blocked_response, :build_nxdomain_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
 bit = require "bit"
 
 -- ── Constantes L3/L4 ────────────────────────────────────────────
@@ -652,9 +652,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   }
   ack_corr = string.format "%04x:%s:%d:%s", txid, dst_ip, client_port, resolver_ip
 
-  -- ── Branche REFUSED : réponse du serveur transformée en REFUSED+EDE ──
+  -- ── Branche REFUSED/NXDOMAIN : réponse du serveur transformée ──────
   if refused
-    refused_dns = build_blocked_response dns_msg, dns_raw, entry.reason
+    nxdomain_mod = entry.modifiers and entry.modifiers.nxdomain
+    refused_dns = if nxdomain_mod
+      build_nxdomain_response dns_msg, dns_raw, entry.reason
+    else
+      build_blocked_response dns_msg, dns_raw, entry.reason
     unless refused_dns
       return NF_DROP
     refused_dns = strip_https_rr(refused_dns) or refused_dns
@@ -663,7 +667,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       return NF_DROP
     qnames = table.concat [q.name for q in *dns_msg.questions], ","
     log_debug -> {
-      action:   "response_refused"
+      action:   nxdomain_mod and "response_nxdomain" or "response_refused"
       src_ip:   src_ip
       dst_ip:   dst_ip
       vlan:     l2.vlan

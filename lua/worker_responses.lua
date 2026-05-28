@@ -52,10 +52,10 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now, _obj_0.set_action_prefix
 end
-local build_blocked_response, strip_https_rr, add_ede_modified, clear_ad_bit
+local build_blocked_response, build_nxdomain_response, strip_https_rr, add_ede_modified, clear_ad_bit
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, strip_https_rr, add_ede_modified, clear_ad_bit = _obj_0.build_blocked_response, _obj_0.strip_https_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit
+  build_blocked_response, build_nxdomain_response, strip_https_rr, add_ede_modified, clear_ad_bit = _obj_0.build_blocked_response, _obj_0.build_nxdomain_response, _obj_0.strip_https_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit
 end
 local bit = require("bit")
 local PROTO_UDP = 17
@@ -778,7 +778,13 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   }
   local ack_corr = string.format("%04x:%s:%d:%s", txid, dst_ip, client_port, resolver_ip)
   if refused then
-    local refused_dns = build_blocked_response(dns_msg, dns_raw, entry.reason)
+    local nxdomain_mod = entry.modifiers and entry.modifiers.nxdomain
+    local refused_dns
+    if nxdomain_mod then
+      refused_dns = build_nxdomain_response(dns_msg, dns_raw, entry.reason)
+    else
+      refused_dns = build_blocked_response(dns_msg, dns_raw, entry.reason)
+    end
     if not (refused_dns) then
       return NF_DROP
     end
@@ -800,7 +806,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end)(), ",")
     log_debug(function()
       return {
-        action = "response_refused",
+        action = nxdomain_mod and "response_nxdomain" or "response_refused",
         src_ip = src_ip,
         dst_ip = dst_ip,
         vlan = l2.vlan,
