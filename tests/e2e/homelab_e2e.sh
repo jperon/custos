@@ -553,11 +553,13 @@ DOH_CLEANUP_DONE=0
 doh_cleanup() {
     [ "$DOH_CLEANUP_DONE" -eq 1 ] && return
     DOH_CLEANUP_DONE=1
-    # Retire le fichier de config de test sur custos et relance avec la config originale
-    ssh_vm "$E2E_IP_CUSTOS" "rm -f /tmp/doh_test_cert.pem /tmp/doh_test_key.pem /tmp/doh_e2e_config.moon"
-    # Recharge custos avec la config originale (sans le port de test)
-    ssh_vm "$E2E_IP_CUSTOS" \
-        "CUSTOS_CONFIG_PATH=/etc/custos/config.moon /etc/init.d/custos restart >/dev/null 2>&1 || true"
+    # Restaure la config d'origine (sauvegardée côté hôte) et relance custos.
+    if [ -f "$DOH_TMP/config_orig.moon" ]; then
+        scp -O -q $SSH_OPTS -i "$SSH_KEY" \
+            "$DOH_TMP/config_orig.moon" "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon" 2>/dev/null || true
+    fi
+    ssh_vm "$E2E_IP_CUSTOS" "rm -f /tmp/doh_test_cert.pem /tmp/doh_test_key.pem"
+    ssh_vm "$E2E_IP_CUSTOS" "/etc/init.d/custos restart >/dev/null 2>&1 || true"
     rm -rf "$DOH_TMP"
 }
 trap doh_cleanup EXIT
@@ -592,36 +594,47 @@ else
     fail "T100 génération mini CA + cert serveur" "fichiers absents"
 fi
 
-# ── Étape 2 : Déploiement du cert de test sur custos ─────────────────────────
+# ── Étape 2 : Injection d'une section doh (port de test + mini CA) ───────────
+# NB : CUSTOS_CONFIG_PATH passé devant `init.d restart` est ignoré — l'init.d
+# procd force CUSTOS_CONFIG_PATH=/etc/custos/config.moon (procd_set_param env).
+# On modifie donc directement /etc/custos/config.moon (sauvegardé pour restauration
+# dans doh_cleanup), en insérant un bloc doh après l'accolade ouvrante du table.
 
 scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "$DOH_TMP/srv.crt" "root@${E2E_IP_CUSTOS}:/tmp/doh_test_cert.pem"
 scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "$DOH_TMP/srv.key" "root@${E2E_IP_CUSTOS}:/tmp/doh_test_key.pem"
 
-# Config temporaire : port de test isolé + cert de la mini CA
-cat > "$DOH_TMP/doh_e2e_config.moon" <<MONCFG
-{
-  doh: {
-    port: ${DOH_PORT}
-    cert: "/tmp/doh_test_cert.pem"
-    key:  "/tmp/doh_test_key.pem"
-    prefer_ipv6: false
-  }
-}
-MONCFG
+# Le CA doit être sur servus avant toute requête curl --cacert
+scp -O -q $SSH_OPTS -i "$SSH_KEY" \
+    "$DOH_TMP/ca.crt" "root@${E2E_IP_SERVUS}:/tmp/doh_test_ca.crt" 2>/dev/null || true
+
+# Sauvegarde la config d'origine côté hôte
+scp -O -q $SSH_OPTS -i "$SSH_KEY" \
+    "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon" "$DOH_TMP/config_orig.moon"
+
+# Bloc doh inline inséré après la 1re ligne « { » (table de config au niveau racine)
+DOH_INJECT="  doh: { port: ${DOH_PORT}, cert: \"/tmp/doh_test_cert.pem\", key: \"/tmp/doh_test_key.pem\", prefer_ipv6: false }"
+awk -v line="$DOH_INJECT" \
+    '!ins && /^[[:space:]]*\{[[:space:]]*$/ {print; print line; ins=1; next} {print}' \
+    "$DOH_TMP/config_orig.moon" > "$DOH_TMP/config_doh.moon"
 
 scp -O -q $SSH_OPTS -i "$SSH_KEY" \
-    "$DOH_TMP/doh_e2e_config.moon" "root@${E2E_IP_CUSTOS}:/tmp/doh_e2e_config.moon"
+    "$DOH_TMP/config_doh.moon" "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon"
 
-# Redémarre custos avec la config de test
-ssh_vm "$E2E_IP_CUSTOS" \
-    "CUSTOS_CONFIG_PATH=/tmp/doh_e2e_config.moon /etc/init.d/custos restart >/dev/null 2>&1 && sleep 2"
+ssh_vm "$E2E_IP_CUSTOS" "/etc/init.d/custos restart >/dev/null 2>&1; sleep 3"
 
-if ssh_vm "$E2E_IP_CUSTOS" "ss -tnlp | grep -q ':${DOH_PORT}'"; then
-    ok "T101 worker DoH écoute sur port ${DOH_PORT} avec cert de test"
+# T101 : le worker DoH journalise son écoute sur le port de test (logread fiable
+# sur OpenWrt : `ss` busybox n'affiche pas toujours le socket, et le format du
+# log varie ; on vérifie donc directement que le port répond en TLS (tout code
+# HTTP renvoyé prouve que le listener TLS est actif).
+doh_listen_code=$(ssh_vm "$E2E_IP_SERVUS" \
+    "curl -sk -o /dev/null --max-time 5 -w '%{http_code}' \
+     'https://${E2E_IP_CUSTOS}:${DOH_PORT}/' 2>/dev/null")
+if [ -n "$doh_listen_code" ] && [ "$doh_listen_code" != "000" ]; then
+    ok "T101 worker DoH écoute en TLS sur port ${DOH_PORT} (HTTP ${doh_listen_code})"
 else
-    fail "T101 worker DoH écoute sur port ${DOH_PORT} avec cert de test" "port absent"
+    fail "T101 worker DoH écoute en TLS sur port ${DOH_PORT}" "pas de réponse TLS (code=${doh_listen_code:-vide})"
 fi
 
 # ── Étape 3 : Requête DoH depuis servus avec la mini CA comme trust anchor ────
@@ -635,26 +648,27 @@ DOH_RESPONSE=$(ssh_vm "$E2E_IP_SERVUS" \
      'https://${E2E_IP_CUSTOS}:${DOH_PORT}/dns-query?dns=${DOH_DNS_QUERY}' \
      -H 'Accept: application/dns-message' 2>/dev/null" || true)
 
-# Le CA cert doit aussi être copié sur servus pour que curl puisse valider
-scp -O -q $SSH_OPTS -i "$SSH_KEY" \
-    "$DOH_TMP/ca.crt" "root@${E2E_IP_SERVUS}:/tmp/doh_test_ca.crt" 2>/dev/null || true
-
-DOH_RESPONSE=$(ssh_vm "$E2E_IP_SERVUS" \
-    "curl -s -w '\n%{http_code}' --max-time 5 \
-     --cacert /tmp/doh_test_ca.crt \
-     'https://${E2E_IP_CUSTOS}:${DOH_PORT}/dns-query?dns=${DOH_DNS_QUERY}' \
-     -H 'Accept: application/dns-message' 2>/dev/null" || true)
-
 DOH_HTTP_CODE=$(echo "$DOH_RESPONSE" | tail -1)
 assert_eq "T102 DoH répond HTTP 200" "$DOH_HTTP_CODE" "200"
 
-# ── Étape 4 : Vérification TLS — le cert présenté correspond à la mini CA ─────
-
-DOH_CERT_CHECK=$(ssh_vm "$E2E_IP_SERVUS" \
-    "echo | openssl s_client -connect ${E2E_IP_CUSTOS}:${DOH_PORT} \
-     -CAfile /tmp/doh_test_ca.crt 2>&1 | grep 'Verify return code'" || true)
-assert_contains "T103 TLS vérifié par mini CA (Verify return code: 0)" \
-    "Verify return code: 0" "$DOH_CERT_CHECK"
+# ── Étape 4 : Vérification TLS — le cert présenté chaîne bien vers la mini CA ─
+# Test robuste (indépendant du format de sortie d'openssl s_client busybox) :
+# avec la mini CA comme trust anchor → succès (200) ; sans aucun CA de confiance
+# (ni -k) → la validation TLS échoue (000). Cela prouve que le cert présenté est
+# bien validé contre NOTRE mini CA et non un CA système.
+DOH_CODE_WITH_CA=$(ssh_vm "$E2E_IP_SERVUS" \
+    "curl -s -o /dev/null --max-time 5 -w '%{http_code}' --cacert /tmp/doh_test_ca.crt \
+     'https://${E2E_IP_CUSTOS}:${DOH_PORT}/dns-query?dns=${DOH_DNS_QUERY}' \
+     -H 'Accept: application/dns-message' 2>/dev/null")
+DOH_CODE_NO_CA=$(ssh_vm "$E2E_IP_SERVUS" \
+    "curl -s -o /dev/null --max-time 5 -w '%{http_code}' \
+     'https://${E2E_IP_CUSTOS}:${DOH_PORT}/dns-query?dns=${DOH_DNS_QUERY}' \
+     -H 'Accept: application/dns-message' 2>/dev/null")
+if [ "$DOH_CODE_WITH_CA" = "200" ] && [ "$DOH_CODE_NO_CA" = "000" ]; then
+    ok "T103 cert TLS validé par la mini CA (avec CA→200, sans CA→échec)"
+else
+    fail "T103 cert TLS validé par la mini CA" "avec_CA=${DOH_CODE_WITH_CA} sans_CA=${DOH_CODE_NO_CA}"
+fi
 
 # ── Étape 5 : Réponse DNS binaire bien formée ─────────────────────────────────
 
