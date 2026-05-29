@@ -123,15 +123,6 @@ login_from_servus() {
 # curl /admin/* depuis servus, en réutilisant la session alice (cookie déjà
 # obtenu par login_from_servus). Sortie : corps + "\nHTTP_STATUS:<code>".
 # La session étant liée à l'IP/MAC du data-plane, l'accès admin doit partir de servus.
-curl_admin_from_servus() {
-    local path="$1"; shift
-    local extra="$*"
-    ssh_vm "$E2E_IP_SERVUS" \
-        "curl -sk --max-time 8 -b /tmp/e2e_cookies.txt $extra \
-         -w '\nHTTP_STATUS:%{http_code}' \
-         'https://${CUSTOS_DATA_IP}:33443${path}' 2>/dev/null; echo"
-}
-
 # curl depuis l'hôte de test (source IP = mgmt, pour tester l'API seule).
 curl_auth() {
     local path="$1"; shift
@@ -603,9 +594,9 @@ fi
 
 # ── Étape 2 : Déploiement du cert de test sur custos ─────────────────────────
 
-scp -q $SSH_OPTS -i "$SSH_KEY" \
+scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "$DOH_TMP/srv.crt" "root@${E2E_IP_CUSTOS}:/tmp/doh_test_cert.pem"
-scp -q $SSH_OPTS -i "$SSH_KEY" \
+scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "$DOH_TMP/srv.key" "root@${E2E_IP_CUSTOS}:/tmp/doh_test_key.pem"
 
 # Config temporaire : port de test isolé + cert de la mini CA
@@ -620,7 +611,7 @@ cat > "$DOH_TMP/doh_e2e_config.moon" <<MONCFG
 }
 MONCFG
 
-scp -q $SSH_OPTS -i "$SSH_KEY" \
+scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "$DOH_TMP/doh_e2e_config.moon" "root@${E2E_IP_CUSTOS}:/tmp/doh_e2e_config.moon"
 
 # Redémarre custos avec la config de test
@@ -645,7 +636,7 @@ DOH_RESPONSE=$(ssh_vm "$E2E_IP_SERVUS" \
      -H 'Accept: application/dns-message' 2>/dev/null" || true)
 
 # Le CA cert doit aussi être copié sur servus pour que curl puisse valider
-scp -q $SSH_OPTS -i "$SSH_KEY" \
+scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "$DOH_TMP/ca.crt" "root@${E2E_IP_SERVUS}:/tmp/doh_test_ca.crt" 2>/dev/null || true
 
 DOH_RESPONSE=$(ssh_vm "$E2E_IP_SERVUS" \
@@ -705,60 +696,65 @@ servus_ip=$(servus_data_ip4)
 if [ -z "$servus_ip" ]; then
     skip "T110-T117 webui admin" "IP data-plane de servus introuvable"
 else
-    # Session admin : login alice depuis servus (cookie réutilisé ensuite)
-    login_from_servus "alice@test.lan" "motdepasse123" >/dev/null
-    sleep 1
+    # La session a un idle_timeout court (10s, voir G7) et un GET /admin ne
+    # rafraîchit pas le timer (seul /ping le fait). On exécute donc, dans UNE
+    # seule session SSH, l'apprentissage MAC (dig) + login + toutes les requêtes
+    # admin back-to-back pour rester sous l'idle_timeout. Chaque endpoint imprime
+    # un marqueur « CLE:<code> » suivi du corps HTML.
+    admin_out=$(ssh_vm "$E2E_IP_SERVUS" "
+        dig +timeout=3 +tries=1 @10.42.0.1 site-a.lan A >/dev/null 2>&1
+        rm -f /tmp/adm_cookies.txt
+        base='https://${CUSTOS_DATA_IP}:33443'
+        # NOCOOKIE : accès admin sans session → doit rediriger (302) ou refuser
+        curl -sk --max-time 8 -o /dev/null -w 'NOCOOKIE:%{http_code}\n' \"\$base/admin/\"
+        # Login admin (alice) → cookie de session
+        curl -sk --max-time 8 -c /tmp/adm_cookies.txt -o /dev/null -w 'LOGIN:%{http_code}\n' \
+            -X POST --data-urlencode 'user=alice@test.lan' \
+            --data-urlencode 'password=motdepasse123' \"\$base/login\"
+        # Helper : requête GET admin imprimant 'CLE:<code>' + le corps
+        ac() { curl -sk --max-time 8 -b /tmp/adm_cookies.txt -w \"\\n\$1:%{http_code}\\n\" \"\$base\$2\"; }
+        ac DASH    /admin/
+        ac CFG     /admin/config/
+        ac AUTHSEC /admin/config/auth
+        ac RULES   /admin/config/filter/rules
+        ac LISTS   /admin/config/filter/lists
+        ac STATUS  /admin/system/status
+        # Reload SIGHUP (POST) — authentifié, redirige (302) après déclenchement
+        curl -sk --max-time 8 -b /tmp/adm_cookies.txt -o /dev/null -w 'RELOAD:%{http_code}\n' \
+            -X POST \"\$base/admin/system/reload\"
+        rm -f /tmp/adm_cookies.txt
+    ")
 
-    # T110 : sans session → /admin redirige (302) ou refuse (401/403)
-    resp=$(ssh_vm "$E2E_IP_SERVUS" \
-        "curl -sk --max-time 8 -w '\nHTTP_STATUS:%{http_code}' \
-         'https://${CUSTOS_DATA_IP}:33443/admin/' 2>/dev/null; echo")
-    code=$(echo "$resp" | grep -oE 'HTTP_STATUS:[0-9]+' | cut -d: -f2)
+    acode() { echo "$admin_out" | grep -oE "$1:[0-9]+" | head -1 | cut -d: -f2; }
+
+    # T110 : sans session → 302/401/403
+    code=$(acode NOCOOKIE)
     if echo "$code" | grep -qE '^(302|401|403)$'; then
         ok "T110 /admin sans cookie → $code (refus/redirect)"
     else
         fail "T110 /admin sans cookie → refus" "code=$code"
     fi
 
-    # T111 : dashboard admin avec session → 200 + contenu connu
-    resp=$(curl_admin_from_servus "/admin/")
-    assert_http_status "T111 GET /admin/ (dashboard) → 200" "$resp" "200"
-    assert_contains    "T111b dashboard contient 'Configuration'" "Configuration" "$resp"
+    # Pré-requis : le login admin a réussi (sinon tout le reste est 302)
+    assert_eq "T111 login admin alice depuis servus → 200" "$(acode LOGIN)" "200"
 
-    # T112 : page de config (toutes les sections)
-    resp=$(curl_admin_from_servus "/admin/config/")
-    assert_http_status "T112 GET /admin/config/ → 200" "$resp" "200"
+    # T112-T117 : chaque endpoint admin renvoie 200 (session admin reconnue)
+    assert_eq "T112 GET /admin/ (dashboard) → 200"             "$(acode DASH)"    "200"
+    assert_contains "T112b dashboard contient 'Configuration'" "Configuration" "$admin_out"
+    assert_eq "T113 GET /admin/config/ → 200"                  "$(acode CFG)"     "200"
+    assert_eq "T114 GET /admin/config/auth → 200"              "$(acode AUTHSEC)" "200"
+    assert_eq "T115 GET /admin/config/filter/rules → 200"      "$(acode RULES)"   "200"
+    assert_contains "T115b rules contient les règles configurées" "blocked.lan" "$admin_out"
+    assert_eq "T116 GET /admin/config/filter/lists → 200"      "$(acode LISTS)"   "200"
+    assert_eq "T117 GET /admin/system/status → 200"            "$(acode STATUS)"  "200"
 
-    # T113 : section scalaire (auth)
-    resp=$(curl_admin_from_servus "/admin/config/auth")
-    assert_http_status "T113 GET /admin/config/auth → 200" "$resp" "200"
-
-    # T114 : éditeur de règles (nouveau formulaire à deux dropdowns)
-    resp=$(curl_admin_from_servus "/admin/rules/")
-    assert_http_status "T114 GET /admin/rules/ → 200" "$resp" "200"
-    assert_contains    "T114b rules contient les règles homelab" "homelab" "$resp"
-
-    # T115 : index des listes de filtrage
-    resp=$(curl_admin_from_servus "/admin/config/filter/lists")
-    assert_http_status "T115 GET /admin/config/filter/lists → 200" "$resp" "200"
-
-    # T116 : statut du service DNS
-    resp=$(curl_admin_from_servus "/admin/system/status")
-    assert_http_status "T116 GET /admin/system/status → 200" "$resp" "200"
-
-    # T117 : reload SIGHUP via POST → 200/302, puis service toujours vivant
-    resp=$(curl_admin_from_servus "/admin/system/reload" "-X POST")
-    code=$(echo "$resp" | grep -oE 'HTTP_STATUS:[0-9]+' | cut -d: -f2)
-    if echo "$code" | grep -qE '^(200|302)$'; then
-        ok "T117 POST /admin/system/reload → $code"
-    else
-        fail "T117 POST /admin/system/reload → 200/302" "code=$code"
-    fi
+    # T118 : reload SIGHUP → 200 (page de confirmation), service toujours vivant
+    assert_eq "T118 POST /admin/system/reload → 200" "$(acode RELOAD)" "200"
     sleep 2
-    if ssh_vm "$E2E_IP_CUSTOS" "ps | grep -q '[c]ustos' && echo UP"; then
-        ok "T117b service toujours vivant après reload"
+    if ssh_vm "$E2E_IP_CUSTOS" "ps | grep -q '[c]ustos' && echo UP" | grep -q UP; then
+        ok "T118b service toujours vivant après reload"
     else
-        fail "T117b service toujours vivant après reload" "custos absent après SIGHUP"
+        fail "T118b service toujours vivant après reload" "custos absent après SIGHUP"
     fi
 fi
 
