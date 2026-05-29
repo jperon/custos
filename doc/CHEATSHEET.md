@@ -38,38 +38,48 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
   - `rule_id` + `timeout` transitent de question → response → nft
 
 - REFUSED, EDE, TTL:
-  - DNS helpers: `src/parse/dns.moon`
-  - Patch/rebuild packet: `src/nfq/packet.moon`
-  - Forced TTL + grace: `dns.ttl_grace` in `src/config.moon`
+  - EDE helpers (RFC 8914): `src/dns_ede.moon` (partagé worker_responses + doh)
+  - Forge de réponses (vol de question / captif): `src/forge_dns.moon`
+  - TTL + grace: `dns.ttl_grace` in `src/config.moon`
   - EDE code 4 n'est ajouté que si la réponse a réellement été modifiée
 
 - nft injection (sets):
-  - nft commands: `src/nft.moon`
-  - A/AAAA/dnsonly injection conditions: `src/worker_responses.moon`
-  - Set names/timeouts: `src/config.moon`
+  - Commandes nft bas niveau: `src/nft.moon`, `src/filter/nft_dynamic_sets.moon`
+  - Sérialisation des insertions: `src/worker_nft.moon` (pipe `nft` + ACK)
+  - Conditions d'injection A/AAAA/dnsonly: `src/worker_responses.moon`
+  - Noms de sets / timeouts: section `nft` de `src/config.moon`
 
-- Authentication / captive portal:
+- Authentication / captive portal / admin web:
   - Auth worker: `src/auth/worker.moon`
-  - Auth server: `src/auth/server.moon`
+  - Auth server (HTTPS WolfSSL + routes `/admin/*`): `src/auth/server.moon`
+  - Interface admin: `src/webui/router.moon` + `src/webui/handlers/`
   - Worker captive (TCP/80 intercept): `src/worker_captive.moon`
   - Sessions (MAC-primary): `src/auth/sessions.moon`
   - Auth nft integration: `src/auth/nft_sessions.moon`
   - Secrets/hash: `src/auth/credentials.moon`
+  - TLS (FFI WolfSSL, certs px5g): `src/auth/ffi_wolfssl.moon`, `cert*.moon`
 
 - Parsing:
-  - Facade: `src/nfq/packet.moon`
+  - L2 (MAC depuis métadonnées NFQUEUE): `src/nfq/ethernet.moon`
+  - L3–L7 (IP/TCP/UDP/DNS/TLS/QUIC): bibliothèque `src/ipparse/`
 
 ## Useful contracts
 
 - Compiled condition: `(req) -> ok, reason`
 - Compiled action: `(req) -> verdict|nil, message`
-- response pending key: `txid:ip:port`
-- Workers: question (questions), response (responses), AUTH (HTTPS), captive (TCP/80 captive portal), reject (forge RST/ICMP reject)
-- SIGHUP:
-  - `main` propagates it to question
-  - question does `filter.reload()`
-- Active nft sets: `ip4_allowed`, `ip6_allowed`, `authenticated_macs`, `authenticated_ips`, `authenticated_ips6`
-  - Le timeout des éléments injectés suit `TTL + grace` borné
+- response pending key: `txid:ip:port:resolver_ip`
+- Workers (cf. `src/main.moon`) :
+  - `mac_learner`, `arp_sniffer`, `auth_queue` (apprentissage MAC)
+  - `questions` / `responses` (DNS), `nft` (sérialise les insertions), `events` (agrégation)
+  - `captive` (TCP/80), `reject` (RST/ICMP)
+  - `auth` (HTTPS WolfSSL + admin)
+  - optionnels : `tls` (SNI 443), `sip` (SIP/STUN), `doh` (DoH 8443)
+- SIGHUP :
+  - `main` relit `filter.load!` puis re-fork les workers questions/responses/captive/reject/doh (COW), et propage SIGHUP à AUTH (reload secrets)
+- Active nft sets: `ip4_allowed`, `ip6_allowed`, `mac4_allowed`, `mac6_allowed`,
+  `authenticated_macs`, `authenticated_ips`, `authenticated_ips6`,
+  `ip4_dest_whitelist`, `ip6_dest_whitelist`
+  - Le timeout des éléments injectés suit `TTL + grace` borné (`dns.ttl_grace`)
 
 ## Build, run, debug
 
@@ -101,6 +111,32 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
      - Debian: `make reload`
      - OpenWrt: `ssh root@<router> '/etc/init.d/custos reload'`
 
+## UI d'installation (redbean)
+
+Interface web locale pour déployer Custos sur un routeur sans CLI.
+
+- **Prérequis** : `redbean.com` présent à la racine (télécharger depuis https://redbean.dev/)
+- **Empaqueter** : `make redbean-ui` (compile `.init.moon` → `.init.lua` + zip dans `redbean.com`)
+- **Lancer** : `./redbean.com` puis ouvrir `http://localhost:8080/`
+- **Source** : `.init.moon` à la racine (compilé en `.init.lua` par `make`)
+
+Routes disponibles :
+
+| Route | Action |
+|-------|--------|
+| `GET /` | Page d'accueil avec liens de navigation |
+| `GET /install` | Formulaire d'installation (hôte, port, user, dest, flags) |
+| `POST /install` | `luajit install-owrt.lua HOST --port P --user U --dest D [flags]` |
+| `GET /uninstall` | Formulaire de désinstallation |
+| `POST /uninstall` | `luajit install-owrt.lua HOST --port P --user U --uninstall` |
+| `GET /sync` | Formulaire sync (radio pull / push) |
+| `POST /sync` | `make sync-init HOST=… REPO=…` ou `make sync-push-init HOST=… REPO=…` |
+
+Notes :
+- Les entrées (hôte, user, dest, repo, port) sont sanitisées avant interpolation dans les commandes shell.
+- La sortie des commandes est échappée HTML avant affichage.
+- Un spinner JS masque l'écran pendant l'exécution (opérations synchrones).
+
 ## Tests (quick selection)
 
 - Unit: `make test`
@@ -120,13 +156,13 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
   4. `filter.decision.first_match_wins` contrôle si la première ou la dernière règle gagnante est conservée.
 
 - Modify REFUSED/EDE behavior:
-  1. Adjust `src/parse/dns.moon` (REFUSED construction, EDNS/EDE options).
+  1. Adjust `src/dns_ede.moon` (EDNS/EDE options) and/or `src/forge_dns.moon` (forge).
   2. Verify call in `src/worker_responses.moon` (`refused` branch).
   3. Test at minimum `make test` then an E2E (`test-openwrt`).
 
 - Modify nft injection:
-  1. Adjust `src/nft.moon` (`add element` command).
-  2. Adjust A/AAAA/dnsonly logic in `src/worker_responses.moon`.
+  1. Adjust `src/nft.moon` / `src/filter/nft_dynamic_sets.moon` (`add element`).
+  2. Adjust A/AAAA/dnsonly logic in `src/worker_responses.moon` (insertions via pipe `nft` → `src/worker_nft.moon`).
   3. Verify sets via `nft list set ...`.
 
 - Debug IPC question/response correlation:

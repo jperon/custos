@@ -107,6 +107,7 @@ nfqueue: {
   reject:    "10-11"
   auth:      "5"
   sni_log:   "6"
+  sip:       "12"
 }
 ```
 

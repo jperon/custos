@@ -15,17 +15,23 @@ LAN clients
 nftables (table bridge)
     │
     ├─ DNS questions  → QUEUE_QUESTIONS → worker_questions  ─┬→ question_response pipe (43 B) → worker_responses
-    │                                                         └→ learn pipe (22 B) → mac_learner
+    │                                                         ├→ learn pipe (22 B)  → mac_learner
+    │                                                         └→ events pipe        → worker_events
     │
-    ├─ DNS responses  → QUEUE_RESPONSES → worker_responses
+    ├─ DNS responses  → QUEUE_RESPONSES → worker_responses ──→ nft pipe → worker_nft (insertions nft sérialisées)
     │
     ├─ TCP/80 SYN     → QUEUE_CAPTIVE   → worker_captive   → AF_PACKET inject (3 frames)
     │
     ├─ Port 33443     → QUEUE_AUTH      → worker_auth_queue → learn pipe (22 B) → mac_learner
     │
-    ├─ TCP/443 + UDP/443 → QUEUE_SNI_LOG → worker_tls
+    ├─ TCP/443 + UDP/443 → QUEUE_SNI_LOG → worker_tls       ──→ nft pipe → worker_nft
+    │
+    ├─ SIP/STUN (opt.)   → QUEUE_SIP     → worker_sip       ──→ nft pipe → worker_nft
     │
     └─ Drop résiduel  → QUEUE_REJECT    → worker_reject
+
+Worker AUTH (HTTPS/WolfSSL, port 33443) : portail captif + interface admin /admin/* (src/webui)
+Worker DoH (opt., HTTPS/WolfSSL, port 8443) : résout via upstream DNS, applique filter.decide ──→ nft pipe
 ```
 
 ---
@@ -37,16 +43,23 @@ nftables (table bridge)
 | `mac_learner` | Table IP→MAC en mémoire + TTL ; répond sur socket Unix |
 | `worker_arp_sniffer` | Sniffer ARP/NDP passif ; alimente le pipe `learn` |
 | `worker_auth_queue` | NFQUEUE sur `QUEUE_AUTH` ; extrait MAC/IP, écrit dans `learn` (mac_learner) |
-| `worker_tls` | NFQUEUE sur `QUEUE_SNI_LOG` ; verdict SNI TLS/QUIC + refresh des sets nft |
+| `worker_tls` | NFQUEUE sur `QUEUE_SNI_LOG` (optionnel) ; verdict SNI TLS/QUIC, insertions via pipe `nft` |
+| `worker_sip` | NFQUEUE sur `QUEUE_SIP` (optionnel) ; whiteliste IP proxy + médias SDP dans des sets nft par règle |
 | `worker_questions` | NFQUEUE sur `QUEUE_QUESTIONS` (1 worker par queue) |
-| `worker_responses` | NFQUEUE sur `QUEUE_RESPONSES` (1 worker par queue) |
+| `worker_responses` | NFQUEUE sur `QUEUE_RESPONSES` (1 worker par queue) ; insertions via pipe `nft` |
 | `worker_captive` | NFQUEUE sur `QUEUE_CAPTIVE` ; injection AF_PACKET |
 | `worker_reject` | NFQUEUE sur `QUEUE_REJECT` ; forge RST/ICMP |
-| `auth/worker` | Portail HTTPS captif (luasec) ; résout la MAC via socket Unix → `mac_learner` |
+| `worker_nft` | Sérialise toutes les insertions nft (lit pipe `nft`, ACK par worker) — pas de NFQUEUE |
+| `worker_events` | Agrège les événements DNS (pipe `events`) et les persiste sous `events.dir` |
+| `worker_doh` | Serveur DoH HTTPS/WolfSSL (optionnel, `doh.enabled`) ; résout en amont + `filter.decide` |
+| `auth/worker` | Portail HTTPS captif **WolfSSL FFI** (port 33443) + interface admin `/admin/*` (`src/webui`) ; résout la MAC via socket Unix → `mac_learner` |
 
-Les numéros de queue sont **configurables via UCI** (`QUEUE_QUESTIONS`,
-`QUEUE_RESPONSES`, `QUEUE_CAPTIVE`, `QUEUE_REJECT`, `QUEUE_AUTH`). Ils
-supportent les plages, p. ex. `"0,2,5-7"`. Valeurs par défaut : 0, 1, 2, 3, 5.
+Les numéros de queue sont **configurables** (section `nfqueue` de la config, ou
+UCI : `QUEUE_QUESTIONS`, `QUEUE_RESPONSES`, `QUEUE_CAPTIVE`, `QUEUE_REJECT`,
+`QUEUE_AUTH`, `QUEUE_SNI_LOG`, `QUEUE_SIP`). Ils supportent les plages, p. ex.
+`"0,2,5-7"`. Valeurs par défaut : questions `0-1`, responses `4`, captive `20`,
+reject `10-11`, auth `5`, sni_log `6`, sip `12`. Les workers `tls`, `sip` et
+`doh` ne sont forkés que si leur clé respective est définie / activée.
 
 ---
 
@@ -56,11 +69,18 @@ supportent les plages, p. ex. `"0,2,5-7"`. Valeurs par défaut : 0, 1, 2, 3, 5.
 |-------|--------|---------------------------|
 | `question_response` pipe | 43 octets (voir [workers.md](workers.md)) | `worker_questions` → `worker_responses` |
 | `learn` pipe | 22 octets : ip16 + mac6 | `worker_questions` + `worker_arp_sniffer` + `worker_auth_queue` → `mac_learner` |
+| `events` pipe | événements DNS sérialisés | `worker_questions` → `worker_events` |
+| `nft` pipe | commandes d'insertion nft sérialisées | `worker_responses` + `worker_tls` + `worker_sip` + `worker_doh` → `worker_nft` |
+| `ack_<i>` pipes | 1 octet d'ACK | `worker_nft` → chaque worker producteur (un pipe dédié par worker) |
 | Socket Unix SOCK_STREAM | texte ligne : `"ip_str\n"` → `"mac\n"\|"unknown\n"` | requérants → `mac_learner` |
 | `AF_PACKET SOCK_RAW` sur `br` | frames Ethernet brutes | `worker_captive` → bridge |
 
-Les deux pipes unidirectionnels `question_response` et `learn` sont créés dans `main.moon`
-via `pipe2(O_NONBLOCK)` avant tout `fork()`. Atomicité garantie (< `PIPE_BUF`).
+Tous les pipes unidirectionnels (`question_response`, `learn`, `events`, `nft`,
+`ack_<i>`) sont créés dans `main.moon` via `pipe2(O_NONBLOCK)` avant tout
+`fork()`. Atomicité garantie (< `PIPE_BUF`). Le pipe `nft` centralise les
+insertions dans `worker_nft` (sérialisation des transactions nftables) ; chaque
+worker producteur attend un ACK 1 octet sur son `ack_<i>` dédié avant de rendre
+son verdict, afin que l'élément soit présent dans le set avant le retour du paquet.
 
 ---
 
@@ -102,16 +122,26 @@ via `pipe2(O_NONBLOCK)` avant tout `fork()`. Atomicité garantie (< `PIPE_BUF`).
 | `QUEUE_RESPONSES` | `worker_responses` | `th sport 53 queue to N` | `NF_ACCEPT` ± payload patché | DNS TTL + EDE `Custos vigilat`, ou NXDOMAIN+EDE `Filtered` |
 | `QUEUE_CAPTIVE` | `worker_captive` | `tcp dport 80 … syn queue to N` | `NF_DROP` | 3 frames Ethernet via AF_PACKET (SYN-ACK, HTTP 302, FIN-ACK) |
 | `QUEUE_AUTH` | `worker_auth_queue` | trafic port 33443 | `NF_ACCEPT` | Aucune ; mac+ip dans `learn` → `mac_learner` |
+| `QUEUE_SNI_LOG` | `worker_tls` | `tcp/udp dport 443 queue to N` (opt.) | `NF_ACCEPT`/`NF_DROP` selon `auth.sni_verdict` | Paire client→dest dans `ip*_allowed`/`mac*_allowed` via pipe `nft` |
+| `QUEUE_SIP` | `worker_sip` | trafic SIP/STUN (opt.) | `NF_ACCEPT` | IP proxy + médias SDP dans des sets nft par règle (TTL `nft.sip_session_ttl`) via pipe `nft` |
 | `QUEUE_REJECT` | `worker_reject` | drop résiduel rate-limité | `NF_ACCEPT` + payload forgé | TCP RST/ACK ou ICMPv4 type 3/code 13 ou ICMPv6 type 1/code 1 |
+
+Le worker DoH (`worker_doh`) n'a pas de NFQUEUE : c'est un serveur HTTPS (port
+`doh.port`, défaut 8443) qui résout les requêtes DoH en amont, applique
+`filter.decide`, et injecte les paires autorisées via le pipe `nft`.
 
 ---
 
 ## nft sets
 
-| Set | Écrivain | Règle nft |
-|-----|----------|-----------|
-| `ip4_allowed`, `ip6_allowed` | Q_RESPONSES | `ip saddr . ip daddr @ip4_allowed accept` |
-| `mac4_allowed`, `mac6_allowed` | Q_RESPONSES | `ether saddr . ip daddr @mac4_allowed accept` |
+Toutes les insertions dynamiques transitent par `worker_nft` (pipe `nft`) ; la
+colonne « Source » indique le worker à l'origine de la commande.
+
+| Set | Source | Règle nft |
+|-----|--------|-----------|
+| `ip4_allowed`, `ip6_allowed` | responses / tls / doh | `ip saddr . ip daddr @ip4_allowed accept` |
+| `mac4_allowed`, `mac6_allowed` | responses / tls | `ether saddr . ip daddr @mac4_allowed accept` |
+| sets par règle (SIP médias) | sip | proxy + IP médias SDP, TTL `nft.sip_session_ttl` |
 | `authenticated_macs`, `authenticated_ips`, `authenticated_ips6` | AUTH (`nft_sessions`) | bypass Q_CAPTIVE |
 | `ip4_dest_whitelist`, `ip6_dest_whitelist` | statique (`.nft`) | `ip daddr @ip4_dest_whitelist accept` |
 

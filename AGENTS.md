@@ -112,6 +112,34 @@ suit la même convention sans toucher à `nft_compiler`.
 
 ---
 
+## Interface admin web (`src/webui/`)
+
+Servie par le worker AUTH (`src/auth/server.moon` `require "webui.router"`) sous
+`/admin/*`, derrière le portail captif **et** une vérification de session admin
+(`auth.admin_users`, `admin_auth.moon`). Permet d'éditer la config (`config.moon`
+relu/réécrit via `webui/serializer.moon`), les règles, les dictionnaires nommés
+(`nets`/`macs`/`users`/`times`), les listes, et de déclencher un reload SIGHUP.
+
+- Routeur + dispatch : `src/webui/router.moon`
+- Handlers : `src/webui/handlers/{dashboard,system,config,filter,rules,lists,admin_auth}.moon`
+- Sérialisation MoonScript : `src/webui/serializer.moon` (+ `schema/`)
+
+## Synchronisation de configuration (`sync/`)
+
+Déploiement multi-routeurs depuis un dépôt git central.
+
+- `sync/apply.moon` (→ `lua/sync/apply.lua`) : fusionne `base/config.moon` +
+  `devices/<hostname>/config.moon` → `/etc/custos/config.moon` (`--reload` envoie SIGHUP).
+- `sync/custos-sync.sh` : pull-only depuis `CUSTOS_CONFIG_REPO` (`/etc/custos/sync.conf`), cron */15.
+- `sync/custos-sync-push.sh` : publie la config d'un filtre de référence vers le dépôt.
+- Init : `make sync-init HOST=… REPO=…` (pull) / `make sync-push-init HOST=… REPO=…` (push).
+
+## UI d'installation redbean (`.init.moon`)
+
+Mini serveur web local (redbean) pour installer/désinstaller/synchroniser Custos
+sur un routeur sans CLI. `make redbean-ui` empaquète `.init.lua` dans `redbean.com`.
+Voir [doc/CHEATSHEET.md](doc/CHEATSHEET.md) § « UI d'installation (redbean) ».
+
 ## px5g Migration — Dynamic TLS Certificate Generation
 
 See [.agents/px5g_migration.md](.agents/px5g_migration.md) for full documentation on the migration from static (openssl-based) to dynamic (px5g-based) certificate generation with LRU/TTL caching.

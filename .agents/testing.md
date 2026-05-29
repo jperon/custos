@@ -6,12 +6,19 @@
 
 | Commande | Prérequis | Description |
 |----------|-----------|-------------|
-| `make test` | aucun (pas de root) | Tests unitaires : compile `tests/unit/*_spec.moon` puis exécute Busted. Couvre parsing, `filter.rule`, `ipc`, `nft_queue`, `dns_ede` et les helpers de workers. |
-| `make test-ndpi` | libndpi installée | Tests du wrapper nDPI et du dispatch de version. |
+| `make test` | aucun (pas de root) | Compile les specs `tests/unit/**/*_spec.moon` + helpers, puis exécute Busted. Couvre parsing, `filter.*`, `ipc`, `nft_queue`, `dns_ede`, `metrics`, `webui`, `sync`, `doh`, `sip` et les workers. |
+| `make test-unit` | aucun | Sous-ensemble Busted sans dépendances FFI (CI rapide). |
+| `make test-ffi` | wolfssl + libsocket | Tests FFI socket / WolfSSL / intégration TLS. |
+| `make coverage` | aucun | `make test` + rapport luacov dans `tmp/coverage/`. |
+| `make check` | aucun | Vérification syntaxique des `.lua` compilés. |
 | `make test-openwrt HOST=root@<host>` | SSH + OpenWrt avec LuaJIT + nftables | Déploie les fichiers Lua + règles nft via `scp`, démarre les workers via `logger -t custos`, puis lance les vérifications DNS/auth depuis la machine locale. |
-| `make test-e2e` | environnement VM démarré (`make test-env`) | Suite E2E complète via SSH (`FILTER_SSH=... CLIENT_SSH=... [CLIENT2_SSH=...]`). |
-| `make test-e2e-ci` | idem | Idem, avec logs dans `tmp/test-e2e.log`. |
-| `make test-kvm` | KVM disponible | Variante KVM de la suite E2E. |
+| `make test-vm` | homelab libvirt démarré | Exécute les tests unitaires *à l'intérieur* de la VM `custos` (runner `mini_busted`). |
+| `make test-e2e` | homelab libvirt | Suite E2E complète via les 3 VMs libvirt (voir [libvirt/README.md](../libvirt/README.md)). |
+| `make test-e2e-rebuild` | libvirt | Reconstruit le homelab (`homelab-nuke` + ensure) puis lance la suite E2E. |
+| `make test-e2e-ssh` | hôtes SSH accessibles | Suite E2E sur machines distantes (`FILTER_SSH=... CLIENT_SSH=... [CLIENT2_SSH=...]`). |
+
+Cibles homelab associées : `make homelab-up` / `homelab-down` / `homelab-nuke` /
+`homelab-redeploy` (cf. [libvirt/README.md](../libvirt/README.md)).
 
 ---
 

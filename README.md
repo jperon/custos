@@ -25,6 +25,8 @@ decoding — all without any C compilation step.
 │  ├── set authenticated_ips6{ ipv6_addr timeout <idle_timeout>}                               │
 │  ├── TCP :80 LAN SYN    → NFQUEUE_CAPTIVE    (portail captif)                                │
 │  ├── TCP :33443          → NFQUEUE_AUTH       (extrait MAC/IP)                               │
+│  ├── TCP/UDP :443        → NFQUEUE_SNI_LOG    (verdict SNI TLS/QUIC, optionnel)              │
+│  ├── SIP/STUN            → NFQUEUE_SIP        (signalisation VoIP, optionnel)                │
 │  ├── Reject résiduel     → NFQUEUE_REJECT     (reject, rate-limité)                          │
 │  ├── UDP/TCP :53 src=LAN → NFQUEUE_QUESTIONS  (questions)                                    │
 │  └── UDP/TCP :53 dst=LAN → NFQUEUE_RESPONSES  (réponses)                                     │
@@ -34,13 +36,17 @@ decoding — all without any C compilation step.
 │  ├── mac_learner        table IP→MAC (socket Unix)                                           │
 │  ├── worker_arp_sniffer ARP/NDP passif → pipe learn (22 B)                                   │
 │  ├── worker_questions ── pipe question_response (43 B, rule_id+timeout) ──► worker_responses │
-│  │   parse L2/L3/L4/L7      └─ pipe learn (22 B) → mac_learner                               │
-│  │   rules (conditions+actions)              verify txid                                     │
-│  │   log + ACCEPT/REFUSED/DNSONLY            patch TTL→60s                                   │
-│  │                                           nft set add                                     │
-│  ├── worker_auth_queue ─ pipe auth_ipc (22 B) ──► worker AUTH                                │
-│  ├── worker AUTH       — HTTPS login (port 33443)                                            │
+│  │   parse L2/L3/L4/L7      ├─ pipe learn (22 B)   → mac_learner                             │
+│  │   rules (conditions+actions)  └─ pipe events    → worker_events                           │
+│  │   log + ACCEPT/REFUSED/DNSONLY            verify txid · patch TTL · ─ pipe nft ─► worker_nft │
+│  ├── worker_nft         — sérialise les insertions nft + ACK par worker                      │
+│  ├── worker_events      — agrège/persiste les événements DNS                                 │
+│  ├── worker_auth_queue ─ pipe learn (22 B) ──► mac_learner                                   │
+│  ├── worker AUTH       — HTTPS WolfSSL (port 33443) : portail captif + admin /admin/*        │
 │  ├── worker_captive    — TCP/80 SYN → AF_PACKET 302                                          │
+│  ├── worker_tls        — verdict SNI TLS/QUIC (443, optionnel) ─ pipe nft ─► worker_nft      │
+│  ├── worker_sip        — IP médias SDP/proxy SIP (optionnel)   ─ pipe nft ─► worker_nft      │
+│  ├── worker_doh        — serveur DoH HTTPS (8443, optionnel)   ─ pipe nft ─► worker_nft      │
 │  ├── worker_reject     — forge RST/ICMP admin-prohibited                                     │
 │  │                                                                                           │
 │  └── logs → syslog (journald / logread)                                                      │
@@ -108,95 +114,141 @@ worker response : drain pipe → pending[0x1234:192.168.1.42:54321] found (refus
 
 ## Project Structure
 
+Les sources sont écrites en MoonScript dans `src/` ; `make` les compile en Lua
+dans `lua/` (ne jamais éditer `lua/` à la main).
+
 ```
 custos/
 ├── cfg/
-│   ├── config.moon          Exemple de configuration runtime (MoonScript)
+│   ├── config.moon          Exemple de configuration runtime annotée (MoonScript)
 │   └── secrets.sample       Exemple de fichier de mots de passe
 ├── src/
 │   ├── config.moon          Configuration hiérarchique runtime (/etc/custos/config.moon)
+│   ├── main.moon            Superviseur : crée les pipes IPC, fork et supervise les workers
 │   ├── ffi_defs.moon        Déclarations FFI centralisées
+│   ├── ffi_xxhash.moon      FFI xxHash
 │   ├── log.moon             Logging structuré key=value + rate-limiting
+│   ├── metrics.moon         Métriques de performance par règle (verdicts, cache, TTL)
 │   ├── ipc.moon             Protocole pipe question→response (msg 43 octets)
+│   ├── dns_ede.moon         Helpers DNS EDE (RFC 8914) — partagés responses + DoH
+│   ├── forge_dns.moon       Construction de réponses DNS forgées (vol de question)
 │   ├── nft.moon             Injection sets nftables via libnftables
 │   ├── nft_add_helper.moon  Helper retry/backoff pour insertions nft
-│   ├── nft_rules.moon       Règles nft statiques
-│   ├── nft_extra_rules.moon Gestion règles nft supplémentaires (UCI)
+│   ├── nft_rules.moon       Application du ruleset nft + compilation des règles
+│   ├── nft_extra_rules.moon Règles nft supplémentaires (UCI)
+│   ├── nft_queue.moon       Helpers de configuration des queues NFQUEUE
 │   ├── nfq_loop.moon        Boucle générique NFQUEUE
 │   ├── bridge_raw.moon      AF_PACKET : injection de frames brutes
 │   ├── captive_ips.moon     Détection IPs portail captif
-│   ├── forge_dns.moon       Construction de réponses DNS forgées
 │   ├── ip_whitelist.moon    Gestion whitelist IP statique
 │   ├── mac_learner.moon     Table IP→MAC en mémoire + socket Unix
 │   ├── mac_learner_ipc.moon Client IPC pour mac_learner
 │   ├── mac_prober.moon      Sondage actif ARP/NDP
-│   ├── ffi_xxhash.moon      FFI xxHash
-│   ├── worker_questions.moon  Worker questions DNS
-│   ├── worker_responses.moon  Worker réponses DNS
-│   ├── worker_captive.moon    Worker portail captif TCP/80
-│   ├── worker_auth_queue.moon Worker NFQUEUE port 33443 (extrait MAC/IP)
-│   ├── worker_reject.moon     Worker forge RST/ICMP admin-prohibited
-│   ├── worker_arp_sniffer.moon Worker sniffer ARP/NDP passif
-│   ├── main.moon            Superviseur + fork
+│   ├── worker_questions.moon    Worker questions DNS
+│   ├── worker_responses.moon    Worker réponses DNS (patch TTL/EDE, insertions nft)
+│   ├── worker_nft.moon          Worker de sérialisation des insertions nft (pipe nft + ACK)
+│   ├── worker_events.moon       Worker d'agrégation/persistance des événements DNS
+│   ├── worker_captive.moon      Worker portail captif TCP/80
+│   ├── worker_auth_queue.moon   Worker NFQUEUE port 33443 (extrait MAC/IP)
+│   ├── worker_auth_pipeline.moon Pipeline d'authentification (parsing requêtes auth)
+│   ├── worker_tls.moon          Worker SNI TLS/QUIC (port 443, optionnel)
+│   ├── worker_sip.moon          Worker SIP/STUN (médias SDP, optionnel)
+│   ├── worker_doh.moon          Worker serveur DoH HTTPS (port 8443, optionnel)
+│   ├── worker_reject.moon       Worker forge RST/ICMP admin-prohibited
+│   ├── worker_arp_sniffer.moon  Worker sniffer ARP/NDP passif
+│   ├── lib/
+│   │   ├── http.moon        Helpers HTTP (parsing requêtes/réponses)
+│   │   ├── process.moon     Fork, set_process_name, signaux, shutdown
+│   │   └── socket.moon      Helpers socket (FFI)
+│   ├── nfq/
+│   │   └── ethernet.moon    L2 : MAC src via nfq_get_packet_hw
+│   ├── doh/
+│   │   ├── query.moon       Résolution DoH (RFC 8484)
+│   │   └── upstream.moon    Sélection upstream + sonde IPv6
+│   ├── sip/
+│   │   └── parser.moon      Parser léger SIP/SDP (méthode, CSeq, IP médias)
 │   ├── auth/
 │   │   ├── worker.moon          Worker AUTH principal
-│   │   ├── server.moon          Serveur HTTPS (FFI WolfSSL)
+│   │   ├── server.moon          Serveur HTTPS (FFI WolfSSL) + routage /admin/*
 │   │   ├── worker_conn.moon     Gestion des connexions HTTPS
-│   │   ├── sessions.moon        Lecture/écriture sessions.lua
-│   │   ├── nft_sessions.moon    Gestion sets nft pour sessions
-│   │   ├── credentials.moon     Vérification PBKDF2
-│   │   ├── cert.moon            Gestion certificats TLS (cache LRU/TTL)
+│   │   ├── ffi_wolfssl.moon     FFI wrapper WolfSSL (remplace luasec)
+│   │   ├── ffi_socket.moon      FFI sockets bas niveau
+│   │   ├── cert.moon            Gestion certificats TLS (load_or_generate_sni)
 │   │   ├── cert_generator.moon  Génération dynamique via px5g
 │   │   ├── cert_cache.moon      Cache LRU/TTL pour certificats
+│   │   ├── cert_parser.moon     Lecture des métadonnées de certificat
 │   │   ├── sni_extractor.moon   Parser SNI (TLS ClientHello)
-│   │   ├── ffi_wolfssl.moon     FFI wrapper WolfSSL (remplace luasec)
-│   │   └── html.moon            Templates HTML du portail
+│   │   ├── sessions.moon        Lecture/écriture sessions.lua (MAC-primary)
+│   │   ├── user_sessions.moon   Sessions par utilisateur authentifié
+│   │   ├── nft_sessions.moon    Gestion sets nft pour sessions
+│   │   ├── credentials.moon     Vérification PBKDF2-SHA256
+│   │   ├── token.moon           Jetons de session signés (cookies)
+│   │   ├── rule_user.moon       Résolution règle ↔ utilisateur
+│   │   ├── html.moon            Templates HTML du portail
+│   │   └── pages.moon           Pages du portail (login, succès…)
 │   ├── filter/
 │   │   ├── init.moon        Moteur de filtrage (load/decide/reload)
 │   │   ├── rule.moon        Évaluateur de règles (conditions + actions)
-│   │   ├── convert.moon     Convertisseurs YAML → types moteur
+│   │   ├── rule_id.moon     Identifiants stables de règles
+│   │   ├── convert.moon     Convertisseurs config → types moteur
 │   │   ├── updater.moon     CLI : téléchargement + compilation listes de domaines
+│   │   ├── compiler_api.moon    Chargeur de conditions (auto-génération des variantes)
+│   │   ├── nft_compiler.moon    Compilation des règles en expressions nft
+│   │   ├── nft_dynamic_sets.moon Gestion des sets nft dynamiques
+│   │   ├── localnets.moon   Détection des réseaux locaux (allow_localnets)
 │   │   ├── actions/
-│   │   │   ├── allow.moon   Action allow — injecte IPs dans mac4/mac6_allowed
-│   │   │   ├── deny.moon    Action deny — répond REFUSED + EDE
-│   │   │   └── dnsonly.moon Action dnsonly — DNS autorisé sans injection nft
-│   │   ├── compiler_api.moon  Chargeur de conditions (auto-génération des variantes)
+│   │   │   ├── allow.moon     Autorise (injecte les IPs dans les sets nft)
+│   │   │   ├── deny.moon      Répond REFUSED + EDE
+│   │   │   ├── dnsonly.moon   DNS autorisé sans injection nft (sondes captives)
+│   │   │   ├── nxdomain.moon  Répond NXDOMAIN (ex. désactivation DoH Firefox)
+│   │   │   ├── dns_strip.moon Retire des enregistrements de la réponse (ex. HTTPS/SVCB)
+│   │   │   ├── log.moon       Journalise sans rendre de verdict
+│   │   │   └── mail.moon      Notification par courriel
 │   │   ├── conditions/
-│   │   │   ├── from_net.moon    Condition atomique IP source (CIDR)
-│   │   │   ├── from_mac.moon    Condition atomique adresse MAC source
-│   │   │   ├── from_vlan.moon   Condition atomique VLAN source
-│   │   │   ├── from_user.moon   Condition atomique session authentifiée
-│   │   │   ├── from_subnet.moon Condition IP source via sous-réseau config
-│   │   │   ├── to_net.moon      Condition atomique IP destination (CIDR)
+│   │   │   ├── from_net.moon    IP source (CIDR)
+│   │   │   ├── from_subnet.moon IP source via sous-réseau config
+│   │   │   ├── from_mac.moon    Adresse MAC source
+│   │   │   ├── from_vlan.moon   VLAN source
+│   │   │   ├── from_user.moon   Session authentifiée
+│   │   │   ├── to_net.moon      IP destination (CIDR)
 │   │   │   ├── to_domain.moon / to_domains.moon / to_domainlist.moon / to_domainlists.moon
-│   │   │   ├── in_time.moon     Condition atomique fenêtre horaire
-│   │   │   └── stolen_computer.moon
+│   │   │   ├── in_time.moon     Fenêtre horaire
+│   │   │   ├── any_of.moon      Méta-condition OR
+│   │   │   ├── not.moon         Méta-condition NOT
+│   │   │   └── stolen_computer.moon  Détection d'appareil volé
 │   │   │   (les variantes from_xxxs / from_xxx_list / from_xxx_lists sont
 │   │   │    auto-générées à partir de from_xxx par compiler_api)
 │   │   └── lib/
-│   │       ├── bsearch.moon         Recherche binaire dans fichiers de listes
-│   │       ├── ipcalc.moon          Test d'appartenance CIDR
-│   │       ├── load_config.moon     Chargeur YAML (lyaml)
-│   │       └── parse_domains.moon   Parser multi-format de listes de domaines
-│   ├── nfq/
-│   │   ├── ethernet.moon    L2 : MAC src via nfq_get_packet_hw
-│   │   └── packet.moon      L3–L7 parseur unifié
-│   └── ipparse/         Bibliothèque parsing L2/L3/L4/L7 (submodule)
+│   │       ├── bsearch.moon       Recherche binaire dans les listes binaires
+│   │       ├── cidr_parser.moon   Parsing CIDR
+│   │       ├── ipcalc.moon        Test d'appartenance CIDR
+│   │       ├── load_config.moon   Chargeur de config
+│   │       └── parse_domains.moon Parser multi-format de listes de domaines
+│   ├── webui/
+│   │   ├── router.moon      Dispatch des requêtes /admin/* vers les handlers
+│   │   ├── serializer.moon  Lecture/écriture de config.moon (round-trip MoonScript)
+│   │   ├── css.moon         Feuille de style de l'interface admin
+│   │   ├── handlers/        dashboard, system, config, filter, rules, lists, admin_auth
+│   │   └── schema/          config_schema, registry (validation des sections)
+│   └── ipparse/             Bibliothèque parsing L2/L3/L4/L7 (sous-module)
+├── sync/
+│   ├── apply.moon           Fusion base + device → /etc/custos/config.moon
+│   ├── custos-sync.sh       Synchronisation pull depuis un dépôt git central
+│   └── custos-sync-push.sh  Publication push vers le dépôt central
+├── .init.moon               UI redbean d'installation (empaquetée par make redbean-ui)
 ├── lua/                     Lua généré par moonc (ne pas éditer)
 ├── nft-rules/
 │   └── dns-filter-bridge.nft       Ruleset nftables (bridge mode)
-├── packaging/
-│   └── openwrt/custos/
-│       └── files/usr/sbin/custos-update   Script de mise à jour des listes
+├── packaging/openwrt/custos/        Paquet OpenWrt (init script, custos-update, UCI)
+├── libvirt/                 Homelab libvirt (3 VMs OpenWrt) pour tests E2E
 ├── tests/
-│   ├── run_tests.moon       Tests unitaires source (sans root)
-│   ├── run_tests.lua        Tests unitaires compilés
-│   ├── test_e2e.moon        Tests E2E (VM/SSH)
-│   ├── test_openwrt.moon    Tests E2E OpenWrt via SSH
-│   ├── run_e2e.moon         Runner de la suite E2E
-│   └── e2e_holos.moon       Suite E2E Holos
+│   ├── unit/**/*_spec.moon  Tests unitaires Busted (compilés par make test)
+│   ├── helpers/             mini_busted, busted_setup
+│   ├── e2e/                 Tests d'intégration nft + E2E
+│   └── run_tests.moon       Runner local
+├── doc/                     CONFIG.md (référence config), CHEATSHEET.md
+├── .agents/                 Documentation détaillée pour agents/contributeurs
 ├── install-owrt.moon        Installeur OpenWrt (déploiement SSH)
-├── install-owrt.lua         Installeur compilé
 ├── LICENSE                  Licence MIT
 ├── Makefile
 └── README.md
@@ -246,8 +298,8 @@ luajit install-owrt.lua root@<routeur>
 
 L'installeur (`install-owrt.moon`) :
 1. Installe les paquets opkg requis
-2. Déploie les fichiers dans `/usr/sbin/custos/`
-3. Configure le service `/etc/init.d/custos`
+2. Déploie les fichiers Lua + ruleset dans `/usr/share/custos/` (configurable via `--dest`)
+3. Installe la config dans `/etc/custos/`, le service `/etc/init.d/custos` et `custos-update` (+ cron)
 4. Démarre le service
 
 ---
@@ -258,14 +310,19 @@ L'installeur (`install-owrt.moon`) :
 
 La configuration runtime principale est `/etc/custos/config.moon` (surcharge partielle des
 défauts de `src/config.moon`). Elle est au format **MoonScript** et couvre :
-- runtime/NFQUEUE/nft/dns/auth/doh/events/metrics
-- le moteur de filtrage (`filter.rules`, `filter.nets`, `filter.macs`, `filter.times`)
+- `runtime`, `nfqueue` (dont `sni_log`, `sip`), `nft`, `dns`, `ipc`, `clients`, `mac_learner`
+- `auth` (port 33443, sessions, admin, et `auth.sni_verdict` pour le verdict SNI 443)
+- `doh` (serveur DoH HTTPS, port 8443, upstream)
+- `events` (persistance des événements), `metrics` (mesures par règle), `rtp` (ports RTP exclus)
+- le moteur de filtrage (`filter.rules`, `filter.nets`, `filter.macs`, `filter.times`,
+  `filter.vlans`, `filter.users`)
 - les décisions de parcours de règles (`filter.decision.first_match_wins`,
   `filter.decision.continue_to_next_rule`)
 - `dns.ttl_grace` (`grace`, `min`, `max`) — timeout nft = `TTL + grace`, borné
-- configuration authentification (port, cert/key, sessions, etc.)
 - whitelist de destinations IP (`filter.dest_whitelist`)
 - `lists_dir` — répertoire racine des listes de conditions (voir ci-dessous)
+
+La **référence exhaustive** de toutes les clés est dans [`doc/CONFIG.md`](doc/CONFIG.md).
 
 NFT extra rules (via UCI)
 - Il est possible d’ajouter des règles nft supplémentaires depuis UCI (section `custos.main`) via l’option `nft_extra_rules`.
@@ -474,12 +531,10 @@ captive portal probes): response patches TTL + EDE but does not call `nft add el
 Purge is **lazy**: an expired entry is removed at lookup time,
 without a separate timer.
 
-### Pipe `learn` et `auth_ipc` (22 octets)
+### Pipe `learn` (22 octets)
 
-Two additional pipes carry MAC/IP associations:
-
-- **`learn` pipe** : written by `worker_questions` and `worker_arp_sniffer`, read by `mac_learner`.
-- **`auth_ipc` pipe** : written by `worker_auth_queue`, read by `auth/worker`.
+The `learn` pipe carries MAC/IP associations, written by `worker_questions`,
+`worker_arp_sniffer` and `worker_auth_queue`, and read by `mac_learner`.
 
 ```
 Bytes 0-15 : IP address — 16 bytes
@@ -487,6 +542,16 @@ Bytes 0-15 : IP address — 16 bytes
                IPv6 : 16 bytes address (complete)
 Bytes 16-21: source MAC (6 bytes)
 ```
+
+### Pipes `events`, `nft` et `ack_<i>`
+
+Three further pipes, all created in `main.moon` before `fork()`:
+
+- **`events`** : DNS events from `worker_questions` → `worker_events` (aggregation/persistence).
+- **`nft`** : serialized nftables insertion commands from `worker_responses`,
+  `worker_tls`, `worker_sip` and `worker_doh` → `worker_nft`.
+- **`ack_<i>`** : one per producer worker; `worker_nft` writes a 1-byte ACK after
+  each batch flush so the producer can return its verdict once the set element is live.
 
 ---
 
@@ -525,19 +590,24 @@ accounts. The `from_user` filter condition allows rules such as
 
 ### Process model
 
-A third worker (`AUTH`) is forked by the supervisor alongside the DNS workers,
+The `AUTH` worker is forked by the supervisor alongside the DNS workers,
 the captive portal worker, and several auxiliary workers:
 
 ```
 main (supervisor)
 ├── mac_learner          (table IP→MAC, socket Unix)
 ├── worker_arp_sniffer   (ARP/NDP passif → pipe learn)
-├── worker_auth_queue    (NFQUEUE port 33443 → pipe auth_ipc)
-├── worker_questions ×N (DNS questions)
-├── worker_responses ×N (DNS réponses)
+├── worker_auth_queue    (NFQUEUE port 33443 → pipe learn)
+├── worker_events        (agrégation des événements DNS)
+├── worker_questions ×N (DNS questions → pipes question_response/learn/events)
+├── worker_responses ×N (DNS réponses → pipe nft)
+├── worker_nft           (sérialise les insertions nft + ACK par worker)
 ├── worker_captive   ×N (TCP/80 SYN → AF_PACKET 302)
 ├── worker_reject    ×N (forge RST/ICMP)
-└── worker AUTH          (HTTPS login server)
+├── worker_tls           (SNI TLS/QUIC 443, optionnel → pipe nft)
+├── worker_sip           (SIP/STUN, optionnel → pipe nft)
+├── worker_doh           (serveur DoH HTTPS 8443, optionnel → pipe nft)
+└── worker AUTH          (HTTPS WolfSSL, port 33443 : portail captif + admin /admin/*)
 ```
 
 Sessions are shared via a Lua-evaluable file (`/tmp/sessions.lua`). question/response workers
@@ -580,7 +650,7 @@ See `cfg/secrets.sample` for a full example.
 
 ### Logging in
 
-Navigate to `https://<router>:8443/` in a browser (accept the self-signed cert
+Navigate to `https://<router>:33443/` in a browser (accept the self-signed cert
 warning). After a successful login the client **MAC address** is recorded in the session
 store as the primary identifier. This MAC-primary architecture allows seamless
 cross-family tracking (IPv4/IPv6) and handles IP changes gracefully.
@@ -680,7 +750,12 @@ Depuis un fichier texte (`{lists_dir}/user/admins.txt`) :
 
 ## Known Limitations
 
-- **DoH / DoT**: not covered (ports 443/853).
+- **DoH (DNS-over-HTTPS)**: partially covered. CustosVirginum can run its own DoH
+  resolver (`worker_doh`, port 8443) and apply the same filtering policy; it also
+  ships a default rule answering NXDOMAIN to Firefox's canary domain to disable its
+  auto-DoH. Arbitrary third-party DoH endpoints over port 443 are constrained via
+  the **SNI verdict** mechanism (`worker_tls`, `auth.sni_verdict`) rather than DNS.
+- **DoT (DNS-over-TLS, port 853)**: not covered.
 - **Scaling**: each worker processes its NFQUEUE socket single-threadedly by
   design (share-nothing architecture). libnfq does support out-of-order verdicts
   (each verdict references its packet by `packet_id`), but intra-queue parallelism
@@ -702,9 +777,13 @@ The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode
 - DNS responses (sport 53) to LAN → **NFQUEUE_RESPONSES** (`worker_responses`)
 - TCP/80 SYN from LAN → **NFQUEUE_CAPTIVE** (`worker_captive`)
 - TCP/33443 → **NFQUEUE_AUTH** (`worker_auth_queue`)
+- TCP/UDP/443 → **NFQUEUE_SNI_LOG** (`worker_tls`, optional)
+- SIP/STUN → **NFQUEUE_SIP** (`worker_sip`, optional)
 - Rate-limited reject traffic → **NFQUEUE_REJECT** (`worker_reject`)
-- Queue numbers are **configurable via UCI** (`QUEUE_QUESTIONS`, `QUEUE_RESPONSES`,
-  `QUEUE_CAPTIVE`, `QUEUE_AUTH`, `QUEUE_REJECT`); defaults: 0, 1, 2, 5, 3.
+- Queue numbers are **configurable** (config section `nfqueue`, or UCI:
+  `QUEUE_QUESTIONS`, `QUEUE_RESPONSES`, `QUEUE_CAPTIVE`, `QUEUE_AUTH`,
+  `QUEUE_SNI_LOG`, `QUEUE_SIP`, `QUEUE_REJECT`). Defaults: questions `0-1`,
+  responses `4`, captive `20`, reject `10-11`, auth `5`, sni_log `6`, sip `12`.
   Ranges like `"0,2,5-7"` spawn one worker per queue number.
 - LuaJIT decides ACCEPT, REFUSED, or DNSONLY; populates `ip4_allowed`/`ip6_allowed` on success
 - Clients in `authenticated_ips` bypass TCP/80 interception (QUEUE_CAPTIVE)
@@ -716,6 +795,8 @@ The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode
 |-----------------------|-------------------------|-------------------------------------------------------------------------|    
 | `ip4_allowed`         | `ipv4_addr . ipv4_addr` | Paire (src IP client, IPv4 dest) autorisée après résolution DNS         |  
 | `ip6_allowed`         | `ipv6_addr . ipv6_addr` | Paire (src IPv6 client, IPv6 dest) autorisée après résolution DNS       |
+| `mac4_allowed`        | `ether_addr . ipv4_addr`| Paire (MAC client, IPv4 dest) autorisée (règles liées à une MAC)        |
+| `mac6_allowed`        | `ether_addr . ipv6_addr`| Paire (MAC client, IPv6 dest) autorisée (règles liées à une MAC)        |
 | `authenticated_macs`  | `ether_addr`            | MACs clientes authentifiées (bypass intercept TCP/80 captive)           |  
 | `authenticated_ips`   | `ipv4_addr`             | IPs clientes IPv4 authentifiées (bypass intercept TCP/80 captive)       |
 | `authenticated_ips6`  | `ipv6_addr`             | IPs clientes IPv6 authentifiées (bypass intercept TCP/80 captive)       |
@@ -778,6 +859,107 @@ filter:
     "2001:db8::/32"
   }
 ```
+
+---
+
+## Interface d'administration web
+
+Le worker AUTH sert une interface d'administration sous `/admin/*` sur le même
+port HTTPS que le portail captif (33443). L'accès est protégé par une session
+authentifiée **et** restreint aux comptes listés dans `auth.admin_users`
+(si la liste est vide, `auth.admin_allow_all_when_empty` autorise tout
+utilisateur authentifié).
+
+L'interface permet, sans CLI :
+- d'éditer les sections de `config.moon` (relues/réécrites via `webui/serializer`) ;
+- de gérer les règles de filtrage (ajout, édition, suppression, réordonnancement) ;
+- de gérer les dictionnaires nommés (`nets`, `macs`, `users`, `times`) et les listes ;
+- de consulter le tableau de bord (statut, événements) et de déclencher un reload (SIGHUP).
+
+```
+https://<router>:33443/admin/
+```
+
+---
+
+## DoH (serveur DNS-over-HTTPS intégré)
+
+`worker_doh` peut exposer un résolveur **DoH** (RFC 8484) en HTTPS sur le port
+`doh.port` (défaut 8443). Les requêtes sont résolues auprès d'un upstream DNS
+(`doh.upstream_ipv4` / `doh.upstream_ipv6`, choix selon `doh.prefer_ipv6`), puis
+passent par le **même moteur de filtrage** que les requêtes DNS classiques :
+les paires autorisées sont injectées dans les sets nft.
+
+```moonscript
+doh:
+  enabled: true
+  port: 8443
+  upstream_ipv4: "1.1.1.3"
+  upstream_ipv6: "2606:4700:4700::1113"
+  prefer_ipv6: true
+  -- cert/key optionnels (sinon certificat px5g dynamique)
+```
+
+Une règle par défaut répond `NXDOMAIN` au domaine canari de Firefox
+(`use-application-dns.net`) pour désactiver son auto-DoH et forcer le passage par
+le résolveur filtré.
+
+---
+
+## Filtrage SNI (TLS / QUIC)
+
+`worker_tls` (optionnel, `nfqueue.sni_log`) intercepte les paquets TCP/443
+(ClientHello TLS) et UDP/443 (QUIC Initial), extrait le **SNI** via `ipparse`,
+puis applique `filter.decide` sur le nom extrait. En mode
+`auth.sni_verdict.mode = "strict-443"` :
+- **allow** → la paire client→destination est ajoutée aux sets nft ;
+- **deny / SNI absent** → le paquet est rejeté (`NF_DROP`).
+
+```moonscript
+auth:
+  sni_verdict:
+    enabled: true
+    mode: "strict-443"     -- ou "log" pour journaliser sans bloquer
+    protocols: "both"       -- "tls" | "quic" | "both"
+    nft_failure_policy: "fail-closed"
+```
+
+Cela complète le filtrage DNS pour les clients qui contournent la résolution
+(IP en dur, DoH tiers).
+
+---
+
+## SIP / VoIP
+
+`worker_sip` (optionnel, `nfqueue.sip`) parse la signalisation SIP/SDP et
+STUN/ICE (`src/sip/parser.moon`), extrait les IP de médias (RTP/RTCP) et l'IP
+du proxy, puis les whiteliste dynamiquement dans des sets nft par règle
+(TTL `nft.sip_session_ttl`). Les ports RTP à exclure sont configurables via
+`rtp.excluded_ports`.
+
+---
+
+## Synchronisation de configuration multi-routeurs
+
+Pour gérer plusieurs filtres depuis un dépôt git central :
+
+```bash
+# Sur la machine de dev : initialiser un device en mode pull (cron */15)
+make sync-init HOST=root@<router> REPO=https://git.example.com/custos-configs
+
+# Initialiser un filtre de référence autorisé à publier (push)
+make sync-push-init HOST=root@<router> REPO=https://git.example.com/custos-configs
+```
+
+`sync/apply.moon` fusionne `base/config.moon` avec
+`devices/<hostname>/config.moon` du dépôt et écrit `/etc/custos/config.moon`
+(option `--reload` pour envoyer SIGHUP). `custos-sync.sh` (pull) et
+`custos-sync-push.sh` (push) lisent `CUSTOS_CONFIG_REPO` depuis
+`/etc/custos/sync.conf`.
+
+Une **UI redbean** locale (`.init.moon`, `make redbean-ui`) permet aussi
+d'installer, désinstaller et synchroniser un routeur sans CLI ; voir
+[`doc/CHEATSHEET.md`](doc/CHEATSHEET.md) § « UI d'installation (redbean) ».
 
 ---
 
