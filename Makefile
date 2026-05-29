@@ -10,7 +10,7 @@
 #   homelab-down  - Shutdown the homelab
 #   homelab-nuke  - Delete VMs, networks, derived images
 #   homelab-redeploy - Recompile MoonScript and push to custos VM
-#   test-e2e      - Suite E2E complète via homelab libvirt (36 assertions)
+#   test-e2e      - Suite E2E complète via homelab libvirt (G0-G13, dont admin webui)
 #   test-e2e-rebuild - Reconstruction complète du homelab puis suite E2E
 #   coverage     - Unit tests + luacov report in tmp/coverage/
 #   run          - Start supervisor (requires root + nft rules)
@@ -301,7 +301,7 @@ help:
 	@echo "  homelab-down  - Arrête les VMs"
 	@echo "  homelab-nuke  - Supprime VMs, réseaux, qcow2 dérivés"
 	@echo "  homelab-redeploy - Recompile et pousse custos dans la VM custos"
-	@echo "  test-e2e         - Suite E2E complète via homelab libvirt (36 assertions)"
+	@echo "  test-e2e         - Suite E2E complète via homelab libvirt (G0-G13, dont admin webui)"
 	@echo "  test-e2e-rebuild - Reconstruit le homelab (nuke+ensure) puis suite E2E"
 	@echo "  test-vm       - Tests unitaires exécutés dans la VM custos (mini_busted)"
 	@echo "  test-e2e-ssh  - Suite E2E via SSH distant (FILTER_SSH=... CLIENT_SSH=... [CLIENT2_SSH=...])"

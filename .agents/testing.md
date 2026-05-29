@@ -13,7 +13,7 @@
 | `make check` | aucun | Vérification syntaxique des `.lua` compilés. |
 | `make test-openwrt HOST=root@<host>` | SSH + OpenWrt avec LuaJIT + nftables | Déploie les fichiers Lua + règles nft via `scp`, démarre les workers via `logger -t custos`, puis lance les vérifications DNS/auth depuis la machine locale. |
 | `make test-vm` | homelab libvirt démarré | Exécute les tests unitaires *à l'intérieur* de la VM `custos` (runner `mini_busted`). |
-| `make test-e2e` | homelab libvirt | Suite E2E complète via les 3 VMs libvirt (voir [libvirt/README.md](../libvirt/README.md)). |
+| `make test-e2e` | homelab libvirt | Suite E2E complète via les 3 VMs libvirt — groupes G0–G13 : DNS allow/block, EDE, auth/sessions, IPv6, DoH, **et interface admin webui `/admin/*`** (voir [libvirt/README.md](../libvirt/README.md)). |
 | `make test-e2e-rebuild` | libvirt | Reconstruit le homelab (`homelab-nuke` + ensure) puis lance la suite E2E. |
 | `make test-e2e-ssh` | hôtes SSH accessibles | Suite E2E sur machines distantes (`FILTER_SSH=... CLIENT_SSH=... [CLIENT2_SSH=...]`). |
 
