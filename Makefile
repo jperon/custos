@@ -25,6 +25,7 @@ LUAJIT  ?= luajit
 BUSTED  ?= busted
 SRC     := src
 LUA     := lua
+SYNC    := sync
 MOONSCRIPT_SUBMODULE := $(SRC)/lib/moonscript
 
 # Chemins Lua pour les tests (modules compilés + rocks locaux)
@@ -64,15 +65,33 @@ UNIT_SPEC_LUAS  := $(patsubst %.moon,%.lua,$(UNIT_SPEC_MOONS))
 TEST_HELPER_MOONS := $(shell find tests/helpers -name '*.moon' 2>/dev/null | sort)
 TEST_HELPER_LUAS  := $(patsubst %.moon,%.lua,$(TEST_HELPER_MOONS))
 
+# Sync infrastructure (sync/*.moon → lua/sync/*.lua)
+SYNC_MOONS := $(shell find $(SYNC) -name '*.moon' 2>/dev/null | sort)
+SYNC_LUAS  := $(patsubst $(SYNC)/%.moon,$(LUA)/sync/%.lua,$(SYNC_MOONS))
+
 .PHONY: all clean check test test-unit test-vm test-openwrt test-e2e test-e2e-rebuild \
         homelab-up homelab-down homelab-nuke homelab-redeploy \
-        coverage run reload update-lists make-secret logs help
+        coverage run reload update-lists make-secret logs \
+        sync-init sync-push-init redbean-ui help
 
-all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) $(MOONSCRIPT_RUNTIME_LUAS) install-owrt.lua
+all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) $(MOONSCRIPT_RUNTIME_LUAS) $(SYNC_LUAS) install-owrt.lua .init.lua
 	@echo "Compilation terminée → $(LUA)/"
 
 install-owrt.lua: install-owrt.moon
 	$(MOONC) -o $@ $<
+
+.init.lua: .init.moon
+	$(MOONC) -o $@ $<
+
+# Empaquette .init.lua + lua/auth/html.lua dans redbean.com (redbean.com requis à la racine)
+redbean-ui: .init.lua
+	@[ -f redbean.com ] || (echo "ERREUR : redbean.com absent. Télécharger depuis https://redbean.dev/" ; exit 1)
+	mkdir -p tmp/.lua
+	cp lua/auth/html.lua tmp/.lua/html.lua
+	cd tmp && zip ../redbean.com .lua/html.lua
+	zip redbean.com .init.lua
+	rm -rf tmp/.lua
+	@echo "UI packagée dans redbean.com — lancer : ./redbean.com"
 
 $(LUA)/nfq:
 	mkdir -p $(LUA)/nfq
@@ -89,6 +108,10 @@ $(LUA)/%.lua: $(MOONSCRIPT_SUBMODULE)/%.moon
 $(LUA)/%.lua: $(SRC)/%.lua
 	mkdir -p $(@D)
 	cp $< $@
+
+$(LUA)/sync/%.lua: $(SYNC)/%.moon
+	mkdir -p $(@D)
+	$(MOONC) -o $@ $<
 
 # Compile a spec .moon → .lua (rule for tests/unit/**/*_spec.moon)
 tests/unit/%.lua: tests/unit/%.moon
@@ -236,6 +259,34 @@ test-e2e-ssh: all
 	@echo "Rapport généré : tmp/test-e2e-report.moon"
 	@echo "Logs dans tmp/e2e-logs/"
 
+# ── Synchronisation de config multi-appareils ────────────────────────────────
+# Voir sync/ pour les scripts et doc/CONFIG.md pour la structure du dépôt.
+
+# Initialise la sync pull-only sur un device OpenWrt (HOST=user@host requis)
+sync-init: all
+	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis. Ex: make sync-init HOST=root@192.168.1.1"; exit 1)
+	@[ -n "$(REPO)" ] || (echo "ERREUR : REPO requis. Ex: make sync-init HOST=... REPO=https://git.example.com/custos-configs"; exit 1)
+	ssh $(HOST) 'mkdir -p /usr/share/custos/sync'
+	scp $(LUA)/sync/apply.lua      $(HOST):/usr/share/custos/sync/apply.lua
+	scp sync/custos-sync.sh        $(HOST):/usr/share/custos/sync/custos-sync.sh
+	ssh $(HOST) 'chmod +x /usr/share/custos/sync/custos-sync.sh'
+	ssh $(HOST) "printf 'CUSTOS_CONFIG_REPO=$(REPO)\n' > /etc/custos/sync.conf"
+	ssh $(HOST) 'crontab -l 2>/dev/null | { cat; echo "*/15 * * * * /usr/share/custos/sync/custos-sync.sh"; } | crontab -'
+	@echo "Sync initialisée sur $(HOST) — cron toutes les 15 min"
+
+# Initialise la sync push sur un filtre de référence (HOST=user@host, REPO=url requis)
+sync-push-init: all
+	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis"; exit 1)
+	@[ -n "$(REPO)" ] || (echo "ERREUR : REPO requis"; exit 1)
+	ssh $(HOST) 'mkdir -p /usr/share/custos/sync'
+	scp $(LUA)/sync/apply.lua      $(HOST):/usr/share/custos/sync/apply.lua
+	scp sync/custos-sync.sh        $(HOST):/usr/share/custos/sync/custos-sync.sh
+	scp sync/custos-sync-push.sh   $(HOST):/usr/share/custos/sync/custos-sync-push.sh
+	ssh $(HOST) 'chmod +x /usr/share/custos/sync/custos-sync.sh /usr/share/custos/sync/custos-sync-push.sh'
+	ssh $(HOST) "printf 'CUSTOS_CONFIG_REPO=$(REPO)\n' > /etc/custos/sync.conf"
+	ssh $(HOST) 'crontab -l 2>/dev/null | { cat; echo "*/15 * * * * /usr/share/custos/sync/custos-sync.sh"; } | crontab -'
+	@echo "Sync push initialisée sur $(HOST) — lancer custos-sync-push.sh manuellement pour publier"
+
 # Help
 help:
 	@echo "Cibles disponibles:"
@@ -259,3 +310,6 @@ help:
 	@echo "  make-secret  - Génère un hash PBKDF2-SHA256 pour cfg/secrets (USER=, PASS=)"
 	@echo "  update-lists - Télécharge et compile les listes de domaines"
 	@echo "  logs         - Affiche les logs en temps réel"
+	@echo "  sync-init    - Init sync pull sur un device (HOST=... REPO=... requis)"
+	@echo "  sync-push-init - Init sync push sur un filtre de référence (HOST=... REPO=... requis)"
+	@echo "  redbean-ui   - Empaquète l'UI d'installation dans redbean.com (redbean.com requis)"
