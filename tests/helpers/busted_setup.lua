@@ -14,6 +14,14 @@ pcall(function()
     int         nanosleep(const timespec_t *req, timespec_t *rem);
   ]])
 end)
+pcall(function()
+  return ffi.cdef([[    int     open(const char *path, int flags, ...);
+    int     close(int fd);
+    long    lseek(int fd, long offset, int whence);
+    void*   mmap(void *addr, unsigned long length, int prot, int flags, int fd, long offset);
+    int     munmap(void *addr, unsigned long length);
+  ]])
+end)
 if not (package.loaded["config"]) then
   package.loaded["config"] = {
     PROTO_TCP = 6,

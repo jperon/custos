@@ -52,9 +52,9 @@ return {
       hint = "n° de file, ex: 5",
       default = "5"
     },
-    sni_log = {
+    sni = {
       type = "string",
-      label = "Journalisation SNI/QUIC",
+      label = "Verdict SNI TLS/QUIC",
       hint = "n° de file, ex: 6",
       default = "6"
     },

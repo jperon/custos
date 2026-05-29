@@ -33,7 +33,7 @@ package.loaded["log"] or= do
 package.loaded["config"] or= do
   {
     nfqueue: { questions: "0", responses: "1", captive: "2", reject: "3",
-               auth: "5", sni_log: "6", sip: nil }
+               auth: "5", sni: "6", sip: nil }
     nft:     { ip_timeout: "2m", family: "bridge", table: "dns-filter-bridge",
                extra_rules: {} }
     runtime: { log_level: "INFO" }

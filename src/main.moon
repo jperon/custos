@@ -43,6 +43,13 @@ set_process_name "custos"
 bit = require "bit"
 config = require "config"
 filter = require "filter"
+
+-- Réglage GC LuaJIT économe (machines à faible RAM). Appliqué dans le
+-- superviseur ; hérité par tous les workers forkés ensuite.
+do
+  gc_cfg = config.runtime or {}
+  collectgarbage "setpause", gc_cfg.gc_pause if gc_cfg.gc_pause
+  collectgarbage "setstepmul", gc_cfg.gc_stepmul if gc_cfg.gc_stepmul
 nft_extra = require "nft_extra_rules"
 
 -- ── Helpers POSIX ────────────────────────────────────────────────
@@ -354,6 +361,10 @@ supervise = (pipes, sfd) ->
   -- Load filter lists before forking workers that need it
   filter.load!
 
+  -- Libère les strings transitoires de compilation des règles AVANT le fork :
+  -- le tas devenu propre est ensuite partagé en COW par tous les workers.
+  collectgarbage "collect"
+
   -- Extract filter data to pass to workers that need it
   filter_data = {
     rules: filter.rules
@@ -402,12 +413,12 @@ supervise = (pipes, sfd) ->
 
   -- SNI logger for TLS/QUIC (single, optional).
   -- Captures TCP/443 SYN (TLS ClientHello) and UDP/443 (QUIC Initial) packets.
-  sni_queue_num = tonumber(config.nfqueue.sni_log) or 6
-  if config.nfqueue.sni_log
+  sni_queue_num = tonumber(config.nfqueue.sni) or 6
+  if config.nfqueue.sni
     table.insert workers_with_filter, {
-      name: "tls-log"
+      name: "tls"
       pid: nil
-      restart_fn: -> fork_worker "tls-log",
+      restart_fn: -> fork_worker "tls",
         (fds) -> require("worker_tls").run tonumber(fds.q_num), fds.events_wfd, filter_data,
         { q_num: sni_queue_num, events_wfd: pipes.events.wfd, filter_data: filter_data }
     }

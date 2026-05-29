@@ -19,6 +19,15 @@ set_process_name("custos")
 local bit = require("bit")
 local config = require("config")
 local filter = require("filter")
+do
+  local gc_cfg = config.runtime or { }
+  if gc_cfg.gc_pause then
+    collectgarbage("setpause", gc_cfg.gc_pause)
+  end
+  if gc_cfg.gc_stepmul then
+    collectgarbage("setstepmul", gc_cfg.gc_stepmul)
+  end
+end
 local nft_extra = require("nft_extra_rules")
 ffi.cdef([[  unsigned int sleep(unsigned int seconds);
 ]])
@@ -350,6 +359,7 @@ supervise = function(pipes, sfd)
   local rules_metadata = nft_rules.rules_metadata
   nft_extra.apply_from_config()
   filter.load()
+  collectgarbage("collect")
   local filter_data = {
     rules = filter.rules,
     auth_cfg_cache = filter.auth_cfg_cache,
@@ -401,13 +411,13 @@ supervise = function(pipes, sfd)
       end
     })
   end
-  local sni_queue_num = tonumber(config.nfqueue.sni_log) or 6
-  if config.nfqueue.sni_log then
+  local sni_queue_num = tonumber(config.nfqueue.sni) or 6
+  if config.nfqueue.sni then
     table.insert(workers_with_filter, {
-      name = "tls-log",
+      name = "tls",
       pid = nil,
       restart_fn = function()
-        return fork_worker("tls-log", function(fds)
+        return fork_worker("tls", function(fds)
           return require("worker_tls").run(tonumber(fds.q_num), fds.events_wfd, filter_data)
         end, {
           q_num = sni_queue_num,

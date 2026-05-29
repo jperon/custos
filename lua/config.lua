@@ -2,7 +2,9 @@ local DEFAULT_CONFIG_PATH = "/etc/custos/config.moon"
 local DEFAULTS = {
   runtime = {
     log_level = "INFO",
-    benchmark = false
+    benchmark = false,
+    gc_pause = 110,
+    gc_stepmul = 400
   },
   nfqueue = {
     questions = "0-1",
@@ -10,7 +12,7 @@ local DEFAULTS = {
     captive = "20",
     reject = "10-11",
     auth = "5",
-    sni_log = "6",
+    sni = "6",
     sip = "12"
   },
   dns = {
@@ -243,6 +245,9 @@ normalize = function(cfg)
   cfg.doh.enabled = coerce_boolean(cfg.doh.enabled)
   cfg.doh.prefer_ipv6 = coerce_boolean(cfg.doh.prefer_ipv6)
   cfg.runtime.benchmark = coerce_boolean(cfg.runtime.benchmark)
+  local runtime_defaults = defaults.runtime or { }
+  cfg.runtime.gc_pause = tonumber(cfg.runtime.gc_pause) or runtime_defaults.gc_pause
+  cfg.runtime.gc_stepmul = tonumber(cfg.runtime.gc_stepmul) or runtime_defaults.gc_stepmul
   if cfg.filter.decision.first_match_wins == nil then
     cfg.filter.decision.first_match_wins = decision_defaults.first_match_wins
   else

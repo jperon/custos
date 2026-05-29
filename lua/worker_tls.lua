@@ -1083,7 +1083,7 @@ run = function(queue_num, ev_wfd, filter_data)
   if filter_data == nil then
     filter_data = nil
   end
-  set_action_prefix("sni_log_")
+  set_action_prefix("sni_")
   events_wfd = ev_wfd
   local ok_filter, filter_or_err = pcall(require, "filter")
   if ok_filter and filter_or_err then

@@ -24,7 +24,8 @@ Une tâche n'est **jamais** terminée tant que les trois conditions suivantes ne
 sont pas vérifiées et constatées (pas supposées) :
 
 1. **Couverture de tests.** Tout code ajouté ou modifié doit être couvert par des
-   tests. Vérifier avec `make coverage` (rapport dans `tmp/coverage/`). Une
+   tests. En toute fin d’un développement, vérifier avec `make coverage`
+   (rapport dans `tmp/coverage/`) ; attention, pas trop tôt (car lent). Une
    branche d'erreur non couvrable en unitaire doit l'être par un mock (cf.
    `tests/unit/auth/cert_generator_spec.moon`) ou par les tests e2e.
 2. **Documentation à jour.** Mettre à jour la doc impactée par le changement

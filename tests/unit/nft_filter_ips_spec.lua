@@ -41,7 +41,7 @@ package.loaded[_update_1] = package.loaded[_update_1] or (function()
       captive = "2",
       reject = "3",
       auth = "5",
-      sni_log = "6",
+      sni = "6",
       sip = nil
     },
     nft = {

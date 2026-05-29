@@ -39,6 +39,17 @@ pcall ->
     int         nanosleep(const timespec_t *req, timespec_t *rem);
   ]]
 
+-- mmap/open/lseek pour le chargement des listes .bin (to_domainlist). Bloc
+-- séparé : un échec (symbole déjà déclaré) ne doit pas empêcher les autres.
+pcall ->
+  ffi.cdef [[
+    int     open(const char *path, int flags, ...);
+    int     close(int fd);
+    long    lseek(int fd, long offset, int whence);
+    void*   mmap(void *addr, unsigned long length, int prot, int flags, int fd, long offset);
+    int     munmap(void *addr, unsigned long length);
+  ]]
+
 -- ── Stub config ────────────────────────────────────────────────────────────
 unless package.loaded["config"]
   package.loaded["config"] = {

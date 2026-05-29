@@ -25,7 +25,7 @@ decoding — all without any C compilation step.
 │  ├── set authenticated_ips6{ ipv6_addr timeout <idle_timeout>}                               │
 │  ├── TCP :80 LAN SYN    → NFQUEUE_CAPTIVE    (portail captif)                                │
 │  ├── TCP :33443          → NFQUEUE_AUTH       (extrait MAC/IP)                               │
-│  ├── TCP/UDP :443        → NFQUEUE_SNI_LOG    (verdict SNI TLS/QUIC, optionnel)              │
+│  ├── TCP/UDP :443        → NFQUEUE_SNI    (verdict SNI TLS/QUIC, optionnel)              │
 │  ├── SIP/STUN            → NFQUEUE_SIP        (signalisation VoIP, optionnel)                │
 │  ├── Reject résiduel     → NFQUEUE_REJECT     (reject, rate-limité)                          │
 │  ├── UDP/TCP :53 src=LAN → NFQUEUE_QUESTIONS  (questions)                                    │
@@ -310,7 +310,7 @@ L'installeur (`install-owrt.moon`) :
 
 La configuration runtime principale est `/etc/custos/config.moon` (surcharge partielle des
 défauts de `src/config.moon`). Elle est au format **MoonScript** et couvre :
-- `runtime`, `nfqueue` (dont `sni_log`, `sip`), `nft`, `dns`, `ipc`, `clients`, `mac_learner`
+- `runtime`, `nfqueue` (dont `sni`, `sip`), `nft`, `dns`, `ipc`, `clients`, `mac_learner`
 - `auth` (port 33443, sessions, admin, et `auth.sni_verdict` pour le verdict SNI 443)
 - `doh` (serveur DoH HTTPS, port 8443, upstream)
 - `events` (persistance des événements), `metrics` (mesures par règle), `rtp` (ports RTP exclus)
@@ -777,13 +777,13 @@ The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode
 - DNS responses (sport 53) to LAN → **NFQUEUE_RESPONSES** (`worker_responses`)
 - TCP/80 SYN from LAN → **NFQUEUE_CAPTIVE** (`worker_captive`)
 - TCP/33443 → **NFQUEUE_AUTH** (`worker_auth_queue`)
-- TCP/UDP/443 → **NFQUEUE_SNI_LOG** (`worker_tls`, optional)
+- TCP/UDP/443 → **NFQUEUE_SNI** (`worker_tls`, optional)
 - SIP/STUN → **NFQUEUE_SIP** (`worker_sip`, optional)
 - Rate-limited reject traffic → **NFQUEUE_REJECT** (`worker_reject`)
 - Queue numbers are **configurable** (config section `nfqueue`, or UCI:
   `QUEUE_QUESTIONS`, `QUEUE_RESPONSES`, `QUEUE_CAPTIVE`, `QUEUE_AUTH`,
-  `QUEUE_SNI_LOG`, `QUEUE_SIP`, `QUEUE_REJECT`). Defaults: questions `0-1`,
-  responses `4`, captive `20`, reject `10-11`, auth `5`, sni_log `6`, sip `12`.
+  `QUEUE_SNI`, `QUEUE_SIP`, `QUEUE_REJECT`). Defaults: questions `0-1`,
+  responses `4`, captive `20`, reject `10-11`, auth `5`, sni `6`, sip `12`.
   Ranges like `"0,2,5-7"` spawn one worker per queue number.
 - LuaJIT decides ACCEPT, REFUSED, or DNSONLY; populates `ip4_allowed`/`ip6_allowed` on success
 - Clients in `authenticated_ips` bypass TCP/80 interception (QUEUE_CAPTIVE)
@@ -908,7 +908,7 @@ le résolveur filtré.
 
 ## Filtrage SNI (TLS / QUIC)
 
-`worker_tls` (optionnel, `nfqueue.sni_log`) intercepte les paquets TCP/443
+`worker_tls` (optionnel, `nfqueue.sni`) intercepte les paquets TCP/443
 (ClientHello TLS) et UDP/443 (QUIC Initial), extrait le **SNI** via `ipparse`,
 puis applique `filter.decide` sur le nom extrait. En mode
 `auth.sni_verdict.mode = "strict-443"` :

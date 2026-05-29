@@ -1,4 +1,12 @@
 local ffi = require("ffi")
+local libc
+libc = require("ffi_defs").libc
+local PROT_READ = 0x1
+local MAP_SHARED = 0x01
+local O_RDONLY = 0
+local SEEK_END = 2
+local MAP_FAILED = ffi.cast("void*", -1)
+local _mappings = { }
 local CACHE_MAX_SIZE = 1000
 local CACHE_TTL_SEC = 5
 local _domain_cache = { }
@@ -35,21 +43,39 @@ load_list = function(path)
     return nil, "ffi_xxhash non disponible"
   end
   local bsearch_m = require("filter.lib.bsearch")
-  local fh = io.open(path, "rb")
-  if not (fh) then
-    return nil, "Cannot open " .. tostring(path)
-  end
-  local data = fh:read("*a")
-  fh:close()
   if path:match("%.bin$") then
-    local n = math.floor(#data / 8)
-    if n == 0 then
+    local fd = libc.open(path, O_RDONLY, 0)
+    if fd < 0 then
+      return nil, "Cannot open " .. tostring(path)
+    end
+    local size = tonumber(libc.lseek(fd, 0, SEEK_END))
+    if size <= 0 then
+      libc.close(fd)
       return nil, "Empty bin file: " .. tostring(path)
     end
-    local arr = ffi.new("uint64_t[?]", n)
-    ffi.copy(arr, data, n * 8)
+    local n = math.floor(size / 8)
+    if n == 0 then
+      libc.close(fd)
+      return nil, "Empty bin file: " .. tostring(path)
+    end
+    local ptr = libc.mmap(nil, size, PROT_READ, MAP_SHARED, fd, 0)
+    libc.close(fd)
+    if ptr == MAP_FAILED then
+      return nil, "mmap failed: " .. tostring(path)
+    end
+    ffi.gc(ptr, function(p)
+      return libc.munmap(p, size)
+    end)
+    _mappings[#_mappings + 1] = ptr
+    local arr = ffi.cast("uint64_t*", ptr)
     return arr, n
   else
+    local fh = io.open(path, "rb")
+    if not (fh) then
+      return nil, "Cannot open " .. tostring(path)
+    end
+    local data = fh:read("*a")
+    fh:close()
     local hashes = { }
     for line in data:gmatch("[^\n]+") do
       local domain = line:match("^%s*(.-)%s*$")

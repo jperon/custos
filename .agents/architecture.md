@@ -24,7 +24,7 @@ nftables (table bridge)
     │
     ├─ Port 33443     → QUEUE_AUTH      → worker_auth_queue → learn pipe (22 B) → mac_learner
     │
-    ├─ TCP/443 + UDP/443 → QUEUE_SNI_LOG → worker_tls       ──→ nft pipe → worker_nft
+    ├─ TCP/443 + UDP/443 → QUEUE_SNI → worker_tls       ──→ nft pipe → worker_nft
     │
     ├─ SIP/STUN (opt.)   → QUEUE_SIP     → worker_sip       ──→ nft pipe → worker_nft
     │
@@ -43,7 +43,7 @@ Worker DoH (opt., HTTPS/WolfSSL, port 8443) : résout via upstream DNS, applique
 | `mac_learner` | Table IP→MAC en mémoire + TTL ; répond sur socket Unix |
 | `worker_arp_sniffer` | Sniffer ARP/NDP passif ; alimente le pipe `learn` |
 | `worker_auth_queue` | NFQUEUE sur `QUEUE_AUTH` ; extrait MAC/IP, écrit dans `learn` (mac_learner) |
-| `worker_tls` | NFQUEUE sur `QUEUE_SNI_LOG` (optionnel) ; verdict SNI TLS/QUIC, insertions via pipe `nft` |
+| `worker_tls` | NFQUEUE sur `QUEUE_SNI` (optionnel) ; verdict SNI TLS/QUIC, insertions via pipe `nft` |
 | `worker_sip` | NFQUEUE sur `QUEUE_SIP` (optionnel) ; whiteliste IP proxy + médias SDP dans des sets nft par règle |
 | `worker_questions` | NFQUEUE sur `QUEUE_QUESTIONS` (1 worker par queue) |
 | `worker_responses` | NFQUEUE sur `QUEUE_RESPONSES` (1 worker par queue) ; insertions via pipe `nft` |
@@ -56,10 +56,31 @@ Worker DoH (opt., HTTPS/WolfSSL, port 8443) : résout via upstream DNS, applique
 
 Les numéros de queue sont **configurables** (section `nfqueue` de la config, ou
 UCI : `QUEUE_QUESTIONS`, `QUEUE_RESPONSES`, `QUEUE_CAPTIVE`, `QUEUE_REJECT`,
-`QUEUE_AUTH`, `QUEUE_SNI_LOG`, `QUEUE_SIP`). Ils supportent les plages, p. ex.
+`QUEUE_AUTH`, `QUEUE_SNI`, `QUEUE_SIP`). Ils supportent les plages, p. ex.
 `"0,2,5-7"`. Valeurs par défaut : questions `0-1`, responses `4`, captive `20`,
-reject `10-11`, auth `5`, sni_log `6`, sip `12`. Les workers `tls`, `sip` et
+reject `10-11`, auth `5`, sni `6`, sip `12`. Les workers `tls`, `sip` et
 `doh` ne sont forkés que si leur clé respective est définie / activée.
+
+### Mémoire : partage des listes de domaines (RAM faible)
+
+Les listes `.bin` (`src/filter/conditions/to_domainlist.moon`) sont chargées par
+`filter.load!` dans le superviseur **avant** le fork des workers porteurs de
+filtre (`dns-q*`, `resp-q*`, `nft`, `tls`, `doh`). Le `.bin` est mappé via
+`mmap(MAP_SHARED, PROT_READ)` : le tableau FFI `uint64_t*` pointe directement sur
+les pages du fichier (en tmpfs, donc déjà en RAM). Conséquences :
+
+- **Aucune recopie** : plus de string Lua transitoire (`read "*a"`) ni de
+  `ffi.copy` — la donnée n'existe qu'une fois en mémoire.
+- **Partage réel entre workers** : le mapping lecture seule hérité par `fork()`
+  référence les **mêmes pages physiques** dans tous les workers (jamais
+  dupliquées, car jamais écrites). Le COW est donc total et permanent.
+
+Un `collectgarbage "collect"` est exécuté juste après `filter.load!` (avant le
+fork) pour purger les strings de compilation des règles : le tas propre est
+ensuite partagé en COW. Les réglages GC (`runtime.gc_pause`/`gc_stepmul`,
+appliqués dans `main.moon` et hérités par les workers) rendent la collecte plus
+agressive sur machines contraintes. Le format texte `.domains` (fallback) reste
+coûteux (hachage + tri en RAM au démarrage) : préférer `.bin`.
 
 ---
 
@@ -122,7 +143,7 @@ son verdict, afin que l'élément soit présent dans le set avant le retour du p
 | `QUEUE_RESPONSES` | `worker_responses` | `th sport 53 queue to N` | `NF_ACCEPT` ± payload patché | DNS TTL + EDE `Custos vigilat`, ou NXDOMAIN+EDE `Filtered` |
 | `QUEUE_CAPTIVE` | `worker_captive` | `tcp dport 80 … syn queue to N` | `NF_DROP` | 3 frames Ethernet via AF_PACKET (SYN-ACK, HTTP 302, FIN-ACK) |
 | `QUEUE_AUTH` | `worker_auth_queue` | trafic port 33443 | `NF_ACCEPT` | Aucune ; mac+ip dans `learn` → `mac_learner` |
-| `QUEUE_SNI_LOG` | `worker_tls` | `tcp/udp dport 443 queue to N` (opt.) | `NF_ACCEPT`/`NF_DROP` selon `auth.sni_verdict` | Paire client→dest dans `ip*_allowed`/`mac*_allowed` via pipe `nft` |
+| `QUEUE_SNI` | `worker_tls` | `tcp/udp dport 443 queue to N` (opt.) | `NF_ACCEPT`/`NF_DROP` selon `auth.sni_verdict` | Paire client→dest dans `ip*_allowed`/`mac*_allowed` via pipe `nft` |
 | `QUEUE_SIP` | `worker_sip` | trafic SIP/STUN (opt.) | `NF_ACCEPT` | IP proxy + médias SDP dans des sets nft par règle (TTL `nft.sip_session_ttl`) via pipe `nft` |
 | `QUEUE_REJECT` | `worker_reject` | drop résiduel rate-limité | `NF_ACCEPT` + payload forgé | TCP RST/ACK ou ICMPv4 type 3/code 13 ou ICMPv6 type 1/code 1 |
 

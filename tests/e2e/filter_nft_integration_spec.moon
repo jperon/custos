@@ -9,7 +9,7 @@ package.loaded["config"] = {
     captive: 2
     reject: 3
     auth: 4
-    sni_log: 5
+    sni: 5
   }
 }
 

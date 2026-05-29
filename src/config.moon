@@ -54,6 +54,11 @@ DEFAULTS = {
   runtime: {
     log_level: "INFO"
     benchmark: false
+    -- Réglage GC LuaJIT (machines à faible RAM). gc_pause=110 collecte dès
+    -- +10 % du tas (défaut LuaJIT 200) ; gc_stepmul=400 fait des pas de GC
+    -- plus gros. Voir doc/CONFIG.md.
+    gc_pause: 110
+    gc_stepmul: 400
   }
 
   nfqueue: {
@@ -62,7 +67,7 @@ DEFAULTS = {
     captive: "20"
     reject: "10-11"
     auth: "5"
-    sni_log: "6"
+    sni: "6"
     sip: "12"
   }
 
@@ -256,6 +261,9 @@ normalize = (cfg) ->
   cfg.doh.enabled = coerce_boolean cfg.doh.enabled
   cfg.doh.prefer_ipv6 = coerce_boolean cfg.doh.prefer_ipv6
   cfg.runtime.benchmark = coerce_boolean cfg.runtime.benchmark
+  runtime_defaults = defaults.runtime or {}
+  cfg.runtime.gc_pause = tonumber(cfg.runtime.gc_pause) or runtime_defaults.gc_pause
+  cfg.runtime.gc_stepmul = tonumber(cfg.runtime.gc_stepmul) or runtime_defaults.gc_stepmul
 
   if cfg.filter.decision.first_match_wins == nil
     cfg.filter.decision.first_match_wins = decision_defaults.first_match_wins

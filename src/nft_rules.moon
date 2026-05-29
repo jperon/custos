@@ -90,7 +90,7 @@ substitute = (content, plan=nil) ->
   content = content\gsub "{QUEUE_CAPTIVE}",   cfg.nfqueue.captive
   content = content\gsub "{QUEUE_REJECT}",    cfg.nfqueue.reject
   content = content\gsub "{QUEUE_AUTH}",      cfg.nfqueue.auth
-  content = content\gsub "{QUEUE_SNI_LOG}",   cfg.nfqueue.sni_log
+  content = content\gsub "{QUEUE_SNI}",   cfg.nfqueue.sni
   content = content\gsub "{NFT_IP_TIMEOUT}",  cfg.nft.ip_timeout
   content = content\gsub "{DOH_PORT}",        tostring(cfg.doh.port or 8443)
   compiled_sets = if plan

@@ -22,7 +22,7 @@
     captive:    { type: "string", label: "Portail captif",      hint: "n° de file, ex: 20",    default: "20" }
     reject:     { type: "string", label: "Paquets à rejeter",   hint: "n° de file, ex: 10-11", default: "10-11" }
     auth:       { type: "string", label: "Handshakes TLS (auth)", hint: "n° de file, ex: 5",   default: "5" }
-    sni_log:    { type: "string", label: "Journalisation SNI/QUIC", hint: "n° de file, ex: 6", default: "6" }
+    sni:        { type: "string", label: "Verdict SNI TLS/QUIC", hint: "n° de file, ex: 6", default: "6" }
     sip:        { type: "string", label: "Trafic SIP/STUN",      hint: "n° de file, ex: 12",   default: "12" }
   }
 

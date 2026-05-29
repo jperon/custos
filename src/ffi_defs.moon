@@ -24,6 +24,11 @@ ffi.cdef [[
   ssize_t write(int fd, const void *buf, size_t n);
   ssize_t read(int fd, void *buf, size_t n);
   int     close(int fd);
+  long    lseek(int fd, long offset, int whence);
+
+  /* ── Mémoire (mmap lecture seule partagée des listes .bin) ── */
+  void*   mmap(void *addr, size_t length, int prot, int flags, int fd, long offset);
+  int     munmap(void *addr, size_t length);
 
   /* ── Processus ── */
   pid_t getpid(void);

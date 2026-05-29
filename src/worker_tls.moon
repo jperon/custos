@@ -832,7 +832,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
 --- Entry point for the worker.
 -- @tparam number queue_num Queue number
 run = (queue_num, ev_wfd=nil, filter_data=nil) ->
-  set_action_prefix "sni_log_"
+  set_action_prefix "sni_"
   events_wfd = ev_wfd
 
   ok_filter, filter_or_err = pcall require, "filter"

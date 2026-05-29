@@ -10,6 +10,20 @@
 --     à la volée au démarrage (utile en développement).
 
 ffi  = require "ffi"
+{ :libc } = require "ffi_defs"
+
+-- ── Constantes mmap (lecture seule partagée des .bin) ─────────────────
+PROT_READ  = 0x1
+MAP_SHARED = 0x01
+O_RDONLY   = 0
+SEEK_END   = 2
+MAP_FAILED = ffi.cast "void*", -1
+
+-- Conserve une référence sur chaque mapping pour la durée du process :
+-- ffi.gc(ptr, munmap) ne se déclenche qu'au GC du cdata. Tant que le tableau
+-- de conditions capture `arr` (pointeur casté), le mapping reste vivant ;
+-- cette table sert d'ancrage de secours.
+_mappings = {}
 
 -- ── Cache LRU pour domaines fréquents ─────────────────────────────────
 -- Évite de re-hasher et re-bsearch les domaines déjà vus récemment.
@@ -46,21 +60,35 @@ load_list = (path) ->
   return nil, "ffi_xxhash non disponible" unless xxhash_ok
   bsearch_m = require "filter.lib.bsearch"
 
-  fh = io.open path, "rb"
-  return nil, "Cannot open #{path}" unless fh
-  data = fh\read "*a"
-  fh\close!
-
   if path\match "%.bin$"
-    -- Fichier binaire précompilé
-    n = math.floor #data / 8
-    return nil, "Empty bin file: #{path}" if n == 0
-    arr = ffi.new "uint64_t[?]", n
-    ffi.copy arr, data, n * 8
+    -- Fichier binaire précompilé : mappé en lecture seule partagée (MAP_SHARED).
+    -- Aucune recopie : le pointeur FFI pointe directement sur la page (tmpfs),
+    -- partagée entre tous les workers forkés (lecture seule → jamais dupliquée).
+    fd = libc.open path, O_RDONLY, 0
+    return nil, "Cannot open #{path}" if fd < 0
+    size = tonumber libc.lseek fd, 0, SEEK_END
+    if size <= 0
+      libc.close fd
+      return nil, "Empty bin file: #{path}"
+    n = math.floor size / 8
+    if n == 0
+      libc.close fd
+      return nil, "Empty bin file: #{path}"
+    ptr = libc.mmap nil, size, PROT_READ, MAP_SHARED, fd, 0
+    libc.close fd  -- le mapping survit au close
+    if ptr == MAP_FAILED
+      return nil, "mmap failed: #{path}"
+    ffi.gc ptr, (p) -> libc.munmap p, size
+    _mappings[#_mappings + 1] = ptr
+    arr = ffi.cast "uint64_t*", ptr
     return arr, n
 
   else
     -- Fichier texte : un domaine par ligne
+    fh = io.open path, "rb"
+    return nil, "Cannot open #{path}" unless fh
+    data = fh\read "*a"
+    fh\close!
     hashes = {}
     for line in data\gmatch "[^\n]+"
       domain = line\match "^%s*(.-)%s*$"

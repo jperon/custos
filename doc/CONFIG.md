@@ -71,13 +71,38 @@ Contrôle le comportement global du service.
 |-----|------|--------|-------------|
 | `log_level` | string | `"INFO"` | Niveau de log : `DEBUG`, `INFO`, `WARN`, `ERROR` |
 | `benchmark` | bool | `false` | Active les mesures de performance dans les logs |
+| `gc_pause` | number | `110` | Réglage GC LuaJIT (`collectgarbage "setpause"`). Le GC se déclenche dès que le tas dépasse de `gc_pause`-100 % la taille post-collecte. Défaut LuaJIT : 200 (le tas peut doubler). 110 ⇒ collecte dès +10 %, plus économe en RAM. |
+| `gc_stepmul` | number | `400` | Réglage GC LuaJIT (`collectgarbage "setstepmul"`). Multiplicateur de la vitesse du GC incrémental ; une valeur plus haute compense le `gc_pause` bas. |
 
 ```moonscript
 runtime: {
   log_level: "DEBUG"
   benchmark: false
+  gc_pause: 110      -- machines à faible RAM (128 Mo) ; 200 = défaut LuaJIT
+  gc_stepmul: 400
 }
 ```
+
+> **RAM faible (≈128 Mo).** Les listes de domaines au format `.bin` sont mappées
+> en lecture seule partagée (`mmap` `MAP_SHARED`) : leurs pages ne sont jamais
+> recopiées, ni au chargement ni entre les workers forkés. Privilégier le format
+> `.bin` (produit par l'updater) plutôt que `.domains` (texte), qui doit être
+> haché/trié en mémoire à chaque démarrage. Stocker les listes en tmpfs (`/tmp`)
+> reste sans surcoût : la donnée mappée *est* la page tmpfs (une seule copie).
+>
+> L'essentiel de la RAM consommée par custos vient du **nombre de processus
+> workers**, pas des listes. Pour alléger une installation contrainte :
+> - **Se passer de DoH** : laisser `doh.enabled = false` (cf. [section `doh`](#10-section-doh))
+>   supprime le worker `doh`.
+> - **Se passer du verdict SNI/TLS** : ne pas définir `nfqueue.sni` (ou
+>   laisser la queue inutilisée) évite le worker `tls`. Le filtrage DNS reste
+>   pleinement fonctionnel sans lui — on perd seulement le contrôle/journal SNI
+>   sur le port 443.
+> - **Réduire le parallélisme** : ramener chaque plage `nfqueue` à une seule
+>   queue (cf. [section `nfqueue`](#3-section-nfqueue)).
+>
+> Ces réglages relèvent du déploiement (config), pas d'un « mode » dédié : custos
+> n'adapte rien automatiquement selon la RAM disponible.
 
 ---
 
@@ -93,7 +118,7 @@ Chaque entrée correspond à un worker distinct qui lit depuis le noyau Linux.
 | `captive` | string | `"20"` | Détection portail captif (TCP/80) |
 | `reject` | string | `"10-11"` | Paquets à rejeter (RST/ICMP) |
 | `auth` | string | `"5"` | Authentification HTTPS |
-| `sni_log` | string | `"6"` | Logging SNI TLS |
+| `sni` | string | `"6"` | Verdict SNI TLS/QUIC (443) |
 | `sip` | string | `"12"` | Trafic SIP/VoIP |
 
 Une plage (ex. `"0-1"`) permet à plusieurs threads de traiter la même queue en
@@ -106,10 +131,19 @@ nfqueue: {
   captive:   "20"
   reject:    "10-11"
   auth:      "5"
-  sni_log:   "6"
+  sni:       "6"
   sip:       "12"
 }
 ```
+
+> **Réduire l'empreinte mémoire.** Chaque numéro de queue = **un worker forké**
+> (un processus LuaJIT). Le coût RAM de custos est essentiellement linéaire au
+> nombre de workers (tas GC, code JIT, buffers FFI propres à chaque processus) —
+> pas aux listes, qui sont partagées via `mmap`. Sur une machine contrainte, on
+> peut **ramener chaque plage à une seule queue** (p. ex. `questions: "0"`,
+> `reject: "10"`) : on perd le traitement parallèle (débit moindre sous forte
+> charge) mais on économise un processus par queue supprimée (~3 à 8 Mo chacun).
+> Voir aussi la note « RAM faible » de la section [`runtime`](#2-section-runtime).
 
 ---
 
