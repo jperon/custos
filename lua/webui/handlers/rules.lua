@@ -157,41 +157,6 @@ handle_rules_list = function(req, state)
     ["Content-Type"] = "text/html; charset=UTF-8"
   }, page("Règles de filtrage", body)
 end
-local cond_type_opts
-cond_type_opts = function(selected_type)
-  local conds = registry.conditions()
-  local ordered = { }
-  for name, s in pairs(conds) do
-    ordered[#ordered + 1] = {
-      name,
-      s
-    }
-  end
-  table.sort(ordered, function(a, b)
-    local ca = a[2].category or "z"
-    local cb = b[2].category or "z"
-    if ca == cb then
-      return a[2].label < b[2].label
-    else
-      return ca < cb
-    end
-  end)
-  local opts = ""
-  for _, pair in ipairs(ordered) do
-    local name, s = pair[1], pair[2]
-    local sel
-    if name == selected_type then
-      sel = "selected"
-    else
-      sel = nil
-    end
-    opts = opts .. H.option({
-      value = name,
-      selected = sel
-    }, (s.label or name))
-  end
-  return opts
-end
 local cond_val_str
 cond_val_str = function(cval)
   if type(cval) == "table" then
@@ -202,161 +167,132 @@ cond_val_str = function(cval)
     return ""
   end
 end
+local FORM_SUFFIX = {
+  base = "",
+  plural = "s",
+  list = "_list",
+  lists = "_lists"
+}
+local fam_by_root
+fam_by_root = function(families, root)
+  for _index_0 = 1, #families do
+    local f = families[_index_0]
+    if f.root == root then
+      return f
+    end
+  end
+  return families[1]
+end
+local cond_a_select
+cond_a_select = function(families, idx, sel_root)
+  local parts = { }
+  local cur_cat = nil
+  for _index_0 = 1, #families do
+    local f = families[_index_0]
+    if f.category ~= cur_cat then
+      if cur_cat ~= nil then
+        parts[#parts + 1] = "</optgroup>"
+      end
+      parts[#parts + 1] = "<optgroup label=\"" .. tostring(registry.category_label(f.category)) .. "\">"
+      cur_cat = f.category
+    end
+    local sel
+    if f.root == sel_root then
+      sel = "selected"
+    else
+      sel = nil
+    end
+    parts[#parts + 1] = H.option({
+      value = f.root,
+      selected = sel,
+      title = (f.description or "")
+    }, f.label)
+  end
+  if cur_cat ~= nil then
+    parts[#parts + 1] = "</optgroup>"
+  end
+  return H.select({
+    class = "cond-a",
+    name = "cond_" .. tostring(idx) .. "[base]",
+    onchange = "_famChange(this)"
+  }, table.concat(parts))
+end
+local cond_b_select
+cond_b_select = function(fam, idx, sel_form)
+  local parts = { }
+  local _list_0 = fam.forms
+  for _index_0 = 1, #_list_0 do
+    local fm = _list_0[_index_0]
+    local sel
+    if fm.key == sel_form then
+      sel = "selected"
+    else
+      sel = nil
+    end
+    parts[#parts + 1] = H.option({
+      value = fm.key,
+      selected = sel,
+      title = (fm.description or "")
+    }, fm.label)
+  end
+  local hidden = #fam.forms <= 1
+  return H.select({
+    class = "cond-b",
+    name = "cond_" .. tostring(idx) .. "[form]",
+    onchange = "_formChange(this)",
+    style = hidden and "display:none" or nil
+  }, table.concat(parts))
+end
 local render_cond_row
-render_cond_row = function(idx, ctype, cval)
-  local sel = H.select({
-    name = "cond_" .. tostring(idx) .. "[type]"
-  }, cond_type_opts(ctype))
+render_cond_row = function(families, idx, root, form, value)
+  root = root or families[1].root
+  local fam = fam_by_root(families, root)
+  form = form or "base"
+  local a = cond_a_select(families, idx, root)
+  local b = cond_b_select(fam, idx, form)
   local ta = H.textarea({
+    class = "cond-value",
     name = "cond_" .. tostring(idx) .. "[value]",
     rows = "2"
-  }, cond_val_str(cval))
+  }, cond_val_str(value))
+  local help = H.div({
+    class = "cond-help",
+    style = "color:#555;font-size:.85em;margin-top:.2rem"
+  }, "")
+  local links = H.div({
+    class = "cond-links",
+    style = "font-size:.85em;margin-top:.2rem"
+  }, "")
   local btn = H.button({
     type = "button",
     onclick = "_delCond(this)",
     class = "btn btn-danger btn-sm"
   }, "✕")
-  return H.tr((H.td(sel) .. H.td(ta) .. H.td(btn)))
+  return H.tr((H.td(a .. b) .. H.td({
+    class = "cond-val"
+  }, ta .. help .. links) .. H.td(btn)))
 end
-local render_condition_input
-render_condition_input = function(prefix, cond_name, schema, current_val)
-  local t = schema and schema.arg_type
-  if not (t) then
-    return ""
-  end
-  local fname = prefix .. "[value]"
-  local hint = schema.arg_hint or ""
-  if t == "string" or t == "string_or_table" then
-    local val
-    if type(current_val) == "string" then
-      val = current_val
-    else
-      val = ""
-    end
-    return H.div({
-      H.label((schema.label or cond_name) .. " — valeur"),
-      H.input({
-        type = "text",
-        name = fname,
-        value = val,
-        placeholder = hint
-      })
-    })
-  elseif t == "integer" then
-    local val
-    if type(current_val) == "number" then
-      val = tostring(current_val)
-    else
-      val = ""
-    end
-    return H.div({
-      H.label((schema.label or cond_name)),
-      H.input({
-        type = "number",
-        name = fname,
-        value = val,
-        placeholder = hint
-      })
-    })
-  elseif t == "string_list" then
-    local val
-    if type(current_val) == "table" then
-      val = table.concat(current_val, "\n")
-    elseif type(current_val) == "string" then
-      val = current_val
-    else
-      val = ""
-    end
-    return H.div({
-      H.label((schema.label or cond_name) .. " (une valeur par ligne)"),
-      H.textarea({
-        name = fname,
-        rows = "3"
-      }, val)
-    })
-  elseif t == "condition_list" or t == "condition" then
-    return H.div({
-      H.p({
-        style = "color:#888;font-style:italic"
-      }, "Édition manuelle requise pour les méta-conditions."),
-      H.input({
-        type = "text",
-        name = fname,
-        value = ""
-      })
-    })
-  end
-  return ""
+local jq
+jq = function(s)
+  s = tostring(s or "")
+  s = s:gsub("\\", "\\\\"):gsub("\"", "\\\""):gsub("\n", "\\n"):gsub("\r", "")
+  return "\"" .. tostring(s) .. "\""
 end
-local render_condition_select
-render_condition_select = function(prefix, current_type, current_val)
-  local conds = registry.conditions()
-  local ordered = { }
-  for name, s in pairs(conds) do
-    ordered[#ordered + 1] = {
-      name,
-      s
-    }
-  end
-  table.sort(ordered, function(a, b)
-    local ca = a[2].category or "z"
-    local cb = b[2].category or "z"
-    if ca == cb then
-      return a[2].label < b[2].label
-    else
-      return ca < cb
+local cond_families_js
+cond_families_js = function(families)
+  local fam_parts = { }
+  for _index_0 = 1, #families do
+    local f = families[_index_0]
+    local form_parts = { }
+    local _list_0 = f.forms
+    for _index_1 = 1, #_list_0 do
+      local fm = _list_0[_index_1]
+      local lt = fm.list_type and jq(fm.list_type) or "null"
+      form_parts[#form_parts + 1] = "{k:" .. tostring(jq(fm.key)) .. ",lbl:" .. tostring(jq(fm.label)) .. ",hint:" .. tostring(jq(fm.hint or '')) .. ",desc:" .. tostring(jq(fm.description or '')) .. ",lt:" .. tostring(lt) .. "}"
     end
-  end)
-  local opts = ""
-  for _, pair in ipairs(ordered) do
-    local name, s = pair[1], pair[2]
-    local sel
-    if name == current_type then
-      sel = "selected"
-    else
-      sel = nil
-    end
-    opts = opts .. H.option({
-      value = name,
-      selected = sel
-    }, (s.label or name))
+    fam_parts[#fam_parts + 1] = tostring(jq(f.root)) .. ":{forms:[" .. tostring(table.concat(form_parts, ',')) .. "]}"
   end
-  local sel_id = prefix .. "_type"
-  local fieldsets = ""
-  for _, pair in ipairs(ordered) do
-    local name, s = pair[1], pair[2]
-    local fid = prefix .. "_fields_" .. name:gsub("[^%w]", "_")
-    local display
-    if name == current_type then
-      display = ""
-    else
-      display = "display:none"
-    end
-    local field_input = render_condition_input(prefix, name, s, current_val)
-    fieldsets = fieldsets .. H.div({
-      id = fid,
-      style = display
-    }, field_input)
-  end
-  local js = [[    document.getElementById(']] .. sel_id .. [[').addEventListener('change', function() {
-      var val = this.value;
-      var prefix = ']] .. prefix .. [[';
-      document.querySelectorAll('[id^="' + prefix + '_fields_"]').forEach(function(el) {
-        el.style.display = 'none';
-      });
-      var target = document.getElementById(prefix + '_fields_' + val.replace(/[^a-zA-Z0-9]/g, '_'));
-      if (target) target.style.display = '';
-    });
-  ]]
-  return H.div({
-    H.label("Type de condition"),
-    H.select({
-      id = sel_id,
-      name = prefix .. "[type]"
-    }, opts),
-    fieldsets,
-    H.script(js)
-  })
+  return "{" .. tostring(table.concat(fam_parts, ',')) .. "}"
 end
 local render_action_select
 render_action_select = function(prefix, current_type, current_opts)
@@ -440,32 +376,22 @@ render_rule_form = function(action_url, rule)
       value = rule.description or ""
     })
   })
+  local families = registry.condition_families()
   local cond_rows = ""
   local idx = 0
   for ctype, cval in pairs(conds) do
-    cond_rows = cond_rows .. render_cond_row(idx, ctype, cval)
+    local root, form = registry.resolve_condition(ctype)
+    cond_rows = cond_rows .. render_cond_row(families, idx, root, form, cval)
     idx = idx + 1
   end
-  local tpl_sel = H.select({
-    name = "cond___I__[type]"
-  }, cond_type_opts(nil))
-  local tpl_ta = H.textarea({
-    name = "cond___I__[value]",
-    rows = "2"
-  }, "")
-  local tpl_btn = H.button({
-    type = "button",
-    onclick = "_delCond(this)",
-    class = "btn btn-danger btn-sm"
-  }, "✕")
-  local tpl_row = H.tr((H.td(tpl_sel) .. H.td(tpl_ta) .. H.td(tpl_btn)))
+  local tpl_row = render_cond_row(families, "__I__", nil, nil, nil)
   local cond_tpl = H.template({
     id = "cond-tpl"
   }, tpl_row)
   local cond_thead = H.thead({
     H.tr({
       H.th("Type de condition"),
-      H.th("Valeur (une par ligne pour les listes)"),
+      H.th("Valeur"),
       H.th({
         style = "width:3rem"
       }, "")
@@ -481,7 +407,7 @@ render_rule_form = function(action_url, rule)
     class = "btn btn-secondary btn-sm",
     style = "margin:.4rem 0 .75rem"
   }, "+ Ajouter une condition")
-  local js = "var _ci=" .. tostring(idx) .. ";function _addCond(){" .. "var t=document.getElementById('cond-tpl').content.cloneNode(true).querySelector('tr');" .. "t.querySelectorAll('[name]').forEach(function(e){e.name=e.name.replace('__I__',_ci);});" .. "_ci++;document.getElementById('cond-body').appendChild(t);}" .. "function _delCond(b){b.closest('tr').remove();}"
+  local js = "var _FAM=" .. tostring(cond_families_js(families)) .. ";" .. "function _rebuildB(row){var a=row.querySelector('.cond-a'),b=row.querySelector('.cond-b');" .. "var fam=_FAM[a.value];if(!fam)return;b.innerHTML='';fam.forms.forEach(function(f){" .. "var o=document.createElement('option');o.value=f.k;o.textContent=f.lbl;if(f.desc)o.title=f.desc;b.appendChild(o);});" .. "b.style.display=fam.forms.length<=1?'none':'';}" .. "function _applyForm(row){var a=row.querySelector('.cond-a'),b=row.querySelector('.cond-b');" .. "var ta=row.querySelector('.cond-value'),help=row.querySelector('.cond-help');" .. "var fam=_FAM[a.value];if(!fam)return;var fk=b.value||'base',f=null;" .. "fam.forms.forEach(function(x){if(x.k===fk)f=x;});if(!f)f=fam.forms[0];if(!f)return;" .. "ta.placeholder=f.hint||'';help.textContent=f.desc||'';" .. "row._lt=(f.k==='list'||f.k==='lists')?f.lt:null;_renderLinks(row);}" .. "function _renderLinks(row){var links=row.querySelector('.cond-links');" .. "var ta=row.querySelector('.cond-value');links.innerHTML='';if(!row._lt)return;" .. "ta.value.split('\\n').forEach(function(line){var n=line.trim();if(!n)return;" .. "var a=document.createElement('a');a.href='/admin/config/filter/lists/'+" .. "encodeURIComponent(row._lt)+'/'+encodeURIComponent(n);a.target='_blank';a.rel='noopener';" .. "a.textContent='\\u270e '+n;a.style.marginRight='.6rem';links.appendChild(a);});}" .. "function _famChange(sel){var row=sel.closest('tr');_rebuildB(row);_applyForm(row);}" .. "function _formChange(sel){_applyForm(sel.closest('tr'));}" .. "var _ci=" .. tostring(idx) .. ";function _addCond(){" .. "var t=document.getElementById('cond-tpl').content.cloneNode(true).querySelector('tr');" .. "t.querySelectorAll('[name]').forEach(function(e){e.name=e.name.replace('__I__',_ci);});" .. "_ci++;var body=document.getElementById('cond-body');body.appendChild(t);" .. "_applyForm(body.lastElementChild);}" .. "function _delCond(b){b.closest('tr').remove();}" .. "document.getElementById('cond-body').addEventListener('input',function(e){" .. "if(e.target.classList.contains('cond-value'))_renderLinks(e.target.closest('tr'));});" .. "Array.prototype.forEach.call(document.querySelectorAll('#cond-body tr'),_applyForm);"
   local action_type = nil
   local action_opts = nil
   if #actions > 0 then
@@ -523,9 +449,10 @@ rebuild_rule = function(form)
   for i = 0, 49 do
     local _continue_0 = false
     repeat
-      local ctype = form["cond_" .. tostring(i) .. "[type]"]
+      local base = form["cond_" .. tostring(i) .. "[base]"]
+      local fkey = form["cond_" .. tostring(i) .. "[form]"] or "base"
       local cval = form["cond_" .. tostring(i) .. "[value]"] or ""
-      if not (ctype and ctype ~= "") then
+      if not (base and base ~= "") then
         _continue_0 = true
         break
       end
@@ -533,6 +460,7 @@ rebuild_rule = function(form)
         _continue_0 = true
         break
       end
+      local ctype = base .. (FORM_SUFFIX[fkey] or "")
       local s = conds_reg[ctype]
       if s and s.arg_type == "string_list" then
         local items = { }

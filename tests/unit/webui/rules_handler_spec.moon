@@ -136,6 +136,36 @@ describe "webui/handlers/rules", ->
       status, _, _ = handle_rules_edit_post make_req("POST", body_str), 99, make_state!
       assert.equals 404, status
 
+  -- ── conditions à deux dropdowns (base + forme) ────────────────────────
+
+  describe "conditions base+forme", ->
+
+    it "recompose le nom de condition depuis base + forme=lists", ->
+      body_str = "description=r&cond_0%5Bbase%5D=to_domain&cond_0%5Bform%5D=lists" ..
+        "&cond_0%5Bvalue%5D=malware%0Aads&action%5Btype%5D=allow"
+      handle_rules_edit_post make_req("POST", body_str), 1, make_state!
+      loaded = (read_config CFG_PATH)
+      conds = loaded.filter.rules[1].conditions
+      assert.same { "malware", "ads" }, conds.to_domain_lists
+
+    it "forme=base donne la condition racine avec valeur scalaire", ->
+      body_str = "description=r&cond_0%5Bbase%5D=to_domain&cond_0%5Bform%5D=base" ..
+        "&cond_0%5Bvalue%5D=example.com&action%5Btype%5D=allow"
+      handle_rules_edit_post make_req("POST", body_str), 1, make_state!
+      loaded = (read_config CFG_PATH)
+      assert.equals "example.com", loaded.filter.rules[1].conditions.to_domain
+
+    it "présélectionne base et forme à l'édition (round-trip)", ->
+      write_cfg base_cfg_with_rules {
+        { description: "r", conditions: { to_domain_lists: { "x" } }, actions: { "allow" } }
+      }
+      _, _, body = handle_rules_edit_get make_req("GET"), 1, make_state!
+      -- le formulaire propose bien les deux dropdowns
+      assert.truthy body\find("cond-a", 1, true)
+      assert.truthy body\find("cond-b", 1, true)
+      -- la racine to_domain et l'option lists sont présentes
+      assert.truthy body\find("to_domain", 1, true)
+
   -- ── handle_rules_delete ───────────────────────────────────────────────
 
   describe "handle_rules_delete", ->

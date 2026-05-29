@@ -131,4 +131,90 @@ reload = ->
   _condition_registry = build_condition_registry!
   _action_registry    = build_action_registry!
 
-{ :conditions, :actions, :reload }
+-- ── Familles de conditions (pour l'UI à deux dropdowns) ────────────────────
+-- Une « famille » regroupe une condition de base et ses variantes
+-- (une valeur / plusieurs valeurs / liste nommée / plusieurs listes).
+-- Ex. famille « to_domain » → to_domain, to_domains, to_domain_list, to_domain_lists.
+
+CATEGORY_ORDER = { source: 1, destination: 2, time: 3, meta: 4 }
+CATEGORY_LABEL = {
+  source:      "Source (origine de la requête)"
+  destination: "Destination (cible de la requête)"
+  time:        "Horaire"
+  meta:        "Méta (combinaisons)"
+}
+FORM_LABELS = {
+  base:   "Une valeur exacte"
+  plural: "Plusieurs valeurs (une par ligne)"
+  list:   "Une liste nommée (fichier)"
+  lists:  "Plusieurs listes nommées (fichiers)"
+}
+FORM_SUFFIX  = { base: "", plural: "s", list: "_list", lists: "_lists" }
+FORM_ORDER   = { "base", "plural", "list", "lists" }
+
+-- Un nom est racine s'il ne dérive pas d'une autre condition du registre.
+is_root = (reg, name) ->
+  b = base_of_variant name
+  not (b and reg[b])
+
+-- Sous-répertoire de listes associé à une racine : "to_domain" → "domain".
+list_type_of = (root) -> root\match "^[^_]+_(.+)$"
+
+--- Résout un nom de condition stocké en (racine, forme).
+-- @tparam string name Nom réel (ex. "to_domain_lists", "to_domains", "from_net")
+-- @treturn string,string racine, clé de forme ("base"|"plural"|"list"|"lists")
+resolve_condition = (name) ->
+  reg = conditions!
+  b = base_of_variant name
+  if b and reg[b]
+    b, variant_type name
+  else
+    name, "base"
+
+--- Construit la liste ordonnée des familles de conditions.
+-- @treturn table tableau de { root, label, category, description, forms }
+--   forms = tableau ordonné de { key, name, label, description, hint, list_type }
+condition_families = ->
+  reg = conditions!
+  fams = {}
+  for name, s in pairs reg
+    continue unless is_root reg, name
+    meta = (s.category == "meta")
+    forms = {}
+    for fkey in *FORM_ORDER
+      -- Les méta-conditions n'ont pas de variantes pertinentes.
+      continue if meta and fkey != "base"
+      fname = name .. FORM_SUFFIX[fkey]
+      fs = reg[fname]
+      continue unless fs
+      hint = switch fkey
+        when "base"   then fs.arg_hint
+        when "plural" then "une valeur par ligne"
+        when "list"   then "nom d'un fichier de liste"
+        when "lists"  then "un nom de liste par ligne"
+      forms[#forms + 1] = {
+        key:         fkey
+        name:        fname
+        label:       FORM_LABELS[fkey]
+        description: fs.description
+        hint:        hint
+        list_type:   (fkey == "list" or fkey == "lists") and list_type_of(name) or nil
+      }
+    fams[#fams + 1] = {
+      root:        name
+      label:       (s.label or name)
+      category:    (s.category or "z")
+      description: s.description
+      :forms
+    }
+  table.sort fams, (a, b) ->
+    ca = CATEGORY_ORDER[a.category] or 99
+    cb = CATEGORY_ORDER[b.category] or 99
+    if ca == cb then a.label < b.label else ca < cb
+  fams
+
+--- Libellé lisible d'une catégorie (pour les optgroups).
+category_label = (cat) -> CATEGORY_LABEL[cat] or cat
+
+{ :conditions, :actions, :reload, :condition_families, :resolve_condition,
+  :category_label }

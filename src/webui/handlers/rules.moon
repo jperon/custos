@@ -91,116 +91,74 @@ handle_rules_list = (req, state) ->
 
 -- ── Formulaire de règle autogénéré ─────────────────────────────────────────
 
--- Options triées catégorie + label pour le select de type de condition
-cond_type_opts = (selected_type) ->
-  conds = registry.conditions!
-  ordered = {}
-  for name, s in pairs conds
-    ordered[#ordered + 1] = {name, s}
-  table.sort ordered, (a, b) ->
-    ca = a[2].category or "z"
-    cb = b[2].category or "z"
-    if ca == cb then a[2].label < b[2].label else ca < cb
-  opts = ""
-  for _, pair in ipairs ordered
-    name, s = pair[1], pair[2]
-    sel = if name == selected_type then "selected" else nil
-    opts ..= H.option { value: name, selected: sel }, (s.label or name)
-  opts
-
 cond_val_str = (cval) ->
   if type(cval) == "table" then table.concat(cval, "\n")
   elseif cval then tostring cval
   else ""
 
+-- Suffixe réel d'une forme de variante (clé UI → suffixe de nom de condition)
+FORM_SUFFIX = { base: "", plural: "s", list: "_list", lists: "_lists" }
+
+-- Recherche une famille par sa racine dans la liste ordonnée
+fam_by_root = (families, root) ->
+  for f in *families
+    return f if f.root == root
+  families[1]
+
+-- Dropdown A — type de condition, groupé par catégorie (optgroups)
+cond_a_select = (families, idx, sel_root) ->
+  parts = {}
+  cur_cat = nil
+  for f in *families
+    if f.category != cur_cat
+      parts[#parts + 1] = "</optgroup>" if cur_cat != nil
+      parts[#parts + 1] = "<optgroup label=\"#{registry.category_label f.category}\">"
+      cur_cat = f.category
+    sel = if f.root == sel_root then "selected" else nil
+    parts[#parts + 1] = H.option { value: f.root, selected: sel, title: (f.description or "") }, f.label
+  parts[#parts + 1] = "</optgroup>" if cur_cat != nil
+  H.select { class: "cond-a", name: "cond_#{idx}[base]", onchange: "_famChange(this)" }, table.concat parts
+
+-- Dropdown B — forme de valeur (masqué si une seule forme dispo)
+cond_b_select = (fam, idx, sel_form) ->
+  parts = {}
+  for fm in *fam.forms
+    sel = if fm.key == sel_form then "selected" else nil
+    parts[#parts + 1] = H.option { value: fm.key, selected: sel, title: (fm.description or "") }, fm.label
+  hidden = #fam.forms <= 1
+  H.select {
+    class: "cond-b", name: "cond_#{idx}[form]", onchange: "_formChange(this)"
+    style: hidden and "display:none" or nil
+  }, table.concat parts
+
 -- Une ligne du tableau de conditions (idx = entier ou "__I__" pour le template)
-render_cond_row = (idx, ctype, cval) ->
-  sel = H.select { name: "cond_#{idx}[type]" }, cond_type_opts(ctype)
-  ta  = H.textarea { name: "cond_#{idx}[value]", rows: "2" }, cond_val_str(cval)
+render_cond_row = (families, idx, root, form, value) ->
+  root or= families[1].root
+  fam = fam_by_root families, root
+  form or= "base"
+  a = cond_a_select families, idx, root
+  b = cond_b_select fam, idx, form
+  ta = H.textarea { class: "cond-value", name: "cond_#{idx}[value]", rows: "2" }, cond_val_str(value)
+  help  = H.div { class: "cond-help",  style: "color:#555;font-size:.85em;margin-top:.2rem" }, ""
+  links = H.div { class: "cond-links", style: "font-size:.85em;margin-top:.2rem" }, ""
   btn = H.button { type: "button", onclick: "_delCond(this)", class: "btn btn-danger btn-sm" }, "✕"
-  H.tr (H.td(sel) .. H.td(ta) .. H.td(btn))
+  H.tr (H.td(a .. b) .. H.td({ class: "cond-val" }, ta .. help .. links) .. H.td(btn))
 
--- Ancienne signature gardée pour compatibilité interne (non utilisée en dehors)
-render_condition_input = (prefix, cond_name, schema, current_val) ->
-  t = schema and schema.arg_type
-  return "" unless t
-  fname = prefix .. "[value]"
-  hint = schema.arg_hint or ""
+-- Données des familles exposées au JS client (pour synchroniser A↔B)
+jq = (s) ->
+  s = tostring(s or "")
+  s = s\gsub("\\", "\\\\")\gsub("\"", "\\\"")\gsub("\n", "\\n")\gsub("\r", "")
+  "\"#{s}\""
 
-  if t == "string" or t == "string_or_table"
-    val = if type(current_val) == "string" then current_val else ""
-    return H.div {
-      H.label (schema.label or cond_name) .. " — valeur"
-      H.input { type: "text", name: fname, value: val, placeholder: hint }
-    }
-  elseif t == "integer"
-    val = if type(current_val) == "number" then tostring current_val else ""
-    return H.div {
-      H.label (schema.label or cond_name)
-      H.input { type: "number", name: fname, value: val, placeholder: hint }
-    }
-  elseif t == "string_list"
-    val = if type(current_val) == "table"
-      table.concat current_val, "\n"
-    elseif type(current_val) == "string" then current_val
-    else ""
-    return H.div {
-      H.label (schema.label or cond_name) .. " (une valeur par ligne)"
-      H.textarea { name: fname, rows: "3" }, val
-    }
-  elseif t == "condition_list" or t == "condition"
-    return H.div {
-      H.p { style: "color:#888;font-style:italic" }, "Édition manuelle requise pour les méta-conditions."
-      H.input { type: "text", name: fname, value: "" }
-    }
-  ""
-
-render_condition_select = (prefix, current_type, current_val) ->
-  conds = registry.conditions!
-  -- Trier par catégorie puis par label
-  ordered = {}
-  for name, s in pairs conds
-    ordered[#ordered + 1] = {name, s}
-  table.sort ordered, (a, b) ->
-    ca = a[2].category or "z"
-    cb = b[2].category or "z"
-    if ca == cb then a[2].label < b[2].label else ca < cb
-
-  opts = ""
-  for _, pair in ipairs ordered
-    name, s = pair[1], pair[2]
-    sel = if name == current_type then "selected" else nil
-    opts ..= H.option { value: name, selected: sel }, (s.label or name)
-
-  sel_id = prefix .. "_type"
-  -- Fieldsets pour chaque type (hidden, revealed by JS)
-  fieldsets = ""
-  for _, pair in ipairs ordered
-    name, s = pair[1], pair[2]
-    fid = prefix .. "_fields_" .. name\gsub("[^%w]","_")
-    display = if name == current_type then "" else "display:none"
-    field_input = render_condition_input prefix, name, s, current_val
-    fieldsets ..= H.div { id: fid, style: display }, field_input
-
-  -- JS minimal pour show/hide
-  js = [[
-    document.getElementById(']] .. sel_id .. [[').addEventListener('change', function() {
-      var val = this.value;
-      var prefix = ']] .. prefix .. [[';
-      document.querySelectorAll('[id^="' + prefix + '_fields_"]').forEach(function(el) {
-        el.style.display = 'none';
-      });
-      var target = document.getElementById(prefix + '_fields_' + val.replace(/[^a-zA-Z0-9]/g, '_'));
-      if (target) target.style.display = '';
-    });
-  ]]
-
-  H.div {
-    H.label "Type de condition"
-    H.select { id: sel_id, name: prefix .. "[type]" }, opts
-    fieldsets
-    H.script js
-  }
+cond_families_js = (families) ->
+  fam_parts = {}
+  for f in *families
+    form_parts = {}
+    for fm in *f.forms
+      lt = fm.list_type and jq(fm.list_type) or "null"
+      form_parts[#form_parts + 1] = "{k:#{jq fm.key},lbl:#{jq fm.label},hint:#{jq(fm.hint or '')},desc:#{jq(fm.description or '')},lt:#{lt}}"
+    fam_parts[#fam_parts + 1] = "#{jq f.root}:{forms:[#{table.concat form_parts, ','}]}"
+  "{#{table.concat fam_parts, ','}}"
 
 render_action_select = (prefix, current_type, current_opts) ->
   acts = registry.actions!
@@ -246,24 +204,24 @@ render_rule_form = (action_url, rule) ->
     H.input { type: "text", name: "description", value: rule.description or "" }
   }
 
-  -- Tableau de conditions existantes
+  families = registry.condition_families!
+
+  -- Tableau de conditions existantes : on résout (racine, forme) depuis le nom stocké
   cond_rows = ""
   idx = 0
   for ctype, cval in pairs conds
-    cond_rows ..= render_cond_row idx, ctype, cval
+    root, form = registry.resolve_condition ctype
+    cond_rows ..= render_cond_row families, idx, root, form, cval
     idx += 1
 
   -- Ligne-template pour JS (dans <template>, non soumise)
-  tpl_sel = H.select { name: "cond___I__[type]" }, cond_type_opts(nil)
-  tpl_ta  = H.textarea { name: "cond___I__[value]", rows: "2" }, ""
-  tpl_btn = H.button { type: "button", onclick: "_delCond(this)", class: "btn btn-danger btn-sm" }, "✕"
-  tpl_row = H.tr (H.td(tpl_sel) .. H.td(tpl_ta) .. H.td(tpl_btn))
+  tpl_row  = render_cond_row families, "__I__", nil, nil, nil
   cond_tpl = H.template { id: "cond-tpl" }, tpl_row
 
   cond_thead = H.thead {
     H.tr {
       H.th "Type de condition"
-      H.th "Valeur (une par ligne pour les listes)"
+      H.th "Valeur"
       H.th { style: "width:3rem" }, ""
     }
   }
@@ -271,11 +229,34 @@ render_rule_form = (action_url, rule) ->
   cond_table = H.table (cond_thead .. cond_tbody)
   add_btn = H.button { type: "button", onclick: "_addCond()", class: "btn btn-secondary btn-sm",
                        style: "margin:.4rem 0 .75rem" }, "+ Ajouter une condition"
-  js = "var _ci=#{idx};function _addCond(){" ..
+  js = "var _FAM=#{cond_families_js families};" ..
+    "function _rebuildB(row){var a=row.querySelector('.cond-a'),b=row.querySelector('.cond-b');" ..
+    "var fam=_FAM[a.value];if(!fam)return;b.innerHTML='';fam.forms.forEach(function(f){" ..
+    "var o=document.createElement('option');o.value=f.k;o.textContent=f.lbl;if(f.desc)o.title=f.desc;b.appendChild(o);});" ..
+    "b.style.display=fam.forms.length<=1?'none':'';}" ..
+    "function _applyForm(row){var a=row.querySelector('.cond-a'),b=row.querySelector('.cond-b');" ..
+    "var ta=row.querySelector('.cond-value'),help=row.querySelector('.cond-help');" ..
+    "var fam=_FAM[a.value];if(!fam)return;var fk=b.value||'base',f=null;" ..
+    "fam.forms.forEach(function(x){if(x.k===fk)f=x;});if(!f)f=fam.forms[0];if(!f)return;" ..
+    "ta.placeholder=f.hint||'';help.textContent=f.desc||'';" ..
+    "row._lt=(f.k==='list'||f.k==='lists')?f.lt:null;_renderLinks(row);}" ..
+    "function _renderLinks(row){var links=row.querySelector('.cond-links');" ..
+    "var ta=row.querySelector('.cond-value');links.innerHTML='';if(!row._lt)return;" ..
+    "ta.value.split('\\n').forEach(function(line){var n=line.trim();if(!n)return;" ..
+    "var a=document.createElement('a');a.href='/admin/config/filter/lists/'+" ..
+    "encodeURIComponent(row._lt)+'/'+encodeURIComponent(n);a.target='_blank';a.rel='noopener';" ..
+    "a.textContent='\\u270e '+n;a.style.marginRight='.6rem';links.appendChild(a);});}" ..
+    "function _famChange(sel){var row=sel.closest('tr');_rebuildB(row);_applyForm(row);}" ..
+    "function _formChange(sel){_applyForm(sel.closest('tr'));}" ..
+    "var _ci=#{idx};function _addCond(){" ..
     "var t=document.getElementById('cond-tpl').content.cloneNode(true).querySelector('tr');" ..
     "t.querySelectorAll('[name]').forEach(function(e){e.name=e.name.replace('__I__',_ci);});" ..
-    "_ci++;document.getElementById('cond-body').appendChild(t);}" ..
-    "function _delCond(b){b.closest('tr').remove();}"
+    "_ci++;var body=document.getElementById('cond-body');body.appendChild(t);" ..
+    "_applyForm(body.lastElementChild);}" ..
+    "function _delCond(b){b.closest('tr').remove();}" ..
+    "document.getElementById('cond-body').addEventListener('input',function(e){" ..
+    "if(e.target.classList.contains('cond-value'))_renderLinks(e.target.closest('tr'));});" ..
+    "Array.prototype.forEach.call(document.querySelectorAll('#cond-body tr'),_applyForm);"
 
   -- Action
   action_type = nil
@@ -318,10 +299,12 @@ rebuild_rule = (form) ->
   conditions = {}
   conds_reg = registry.conditions!
   for i = 0, 49
-    ctype = form["cond_#{i}[type]"]
-    cval  = form["cond_#{i}[value]"] or ""
-    continue unless ctype and ctype ~= ""
+    base = form["cond_#{i}[base]"]
+    fkey = form["cond_#{i}[form]"] or "base"
+    cval = form["cond_#{i}[value]"] or ""
+    continue unless base and base ~= ""
     continue unless cval\match "%S"
+    ctype = base .. (FORM_SUFFIX[fkey] or "")
     s = conds_reg[ctype]
     if s and s.arg_type == "string_list"
       items = {}

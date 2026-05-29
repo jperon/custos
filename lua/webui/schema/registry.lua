@@ -162,8 +162,140 @@ reload = function()
   _condition_registry = build_condition_registry()
   _action_registry = build_action_registry()
 end
+local CATEGORY_ORDER = {
+  source = 1,
+  destination = 2,
+  time = 3,
+  meta = 4
+}
+local CATEGORY_LABEL = {
+  source = "Source (origine de la requête)",
+  destination = "Destination (cible de la requête)",
+  time = "Horaire",
+  meta = "Méta (combinaisons)"
+}
+local FORM_LABELS = {
+  base = "Une valeur exacte",
+  plural = "Plusieurs valeurs (une par ligne)",
+  list = "Une liste nommée (fichier)",
+  lists = "Plusieurs listes nommées (fichiers)"
+}
+local FORM_SUFFIX = {
+  base = "",
+  plural = "s",
+  list = "_list",
+  lists = "_lists"
+}
+local FORM_ORDER = {
+  "base",
+  "plural",
+  "list",
+  "lists"
+}
+local is_root
+is_root = function(reg, name)
+  local b = base_of_variant(name)
+  return not (b and reg[b])
+end
+local list_type_of
+list_type_of = function(root)
+  return root:match("^[^_]+_(.+)$")
+end
+local resolve_condition
+resolve_condition = function(name)
+  local reg = conditions()
+  local b = base_of_variant(name)
+  if b and reg[b] then
+    return b, variant_type(name)
+  else
+    return name, "base"
+  end
+end
+local condition_families
+condition_families = function()
+  local reg = conditions()
+  local fams = { }
+  for name, s in pairs(reg) do
+    local _continue_0 = false
+    repeat
+      if not (is_root(reg, name)) then
+        _continue_0 = true
+        break
+      end
+      local meta = (s.category == "meta")
+      local forms = { }
+      for _index_0 = 1, #FORM_ORDER do
+        local _continue_1 = false
+        repeat
+          local fkey = FORM_ORDER[_index_0]
+          if meta and fkey ~= "base" then
+            _continue_1 = true
+            break
+          end
+          local fname = name .. FORM_SUFFIX[fkey]
+          local fs = reg[fname]
+          if not (fs) then
+            _continue_1 = true
+            break
+          end
+          local hint
+          local _exp_0 = fkey
+          if "base" == _exp_0 then
+            hint = fs.arg_hint
+          elseif "plural" == _exp_0 then
+            hint = "une valeur par ligne"
+          elseif "list" == _exp_0 then
+            hint = "nom d'un fichier de liste"
+          elseif "lists" == _exp_0 then
+            hint = "un nom de liste par ligne"
+          end
+          forms[#forms + 1] = {
+            key = fkey,
+            name = fname,
+            label = FORM_LABELS[fkey],
+            description = fs.description,
+            hint = hint,
+            list_type = (fkey == "list" or fkey == "lists") and list_type_of(name) or nil
+          }
+          _continue_1 = true
+        until true
+        if not _continue_1 then
+          break
+        end
+      end
+      fams[#fams + 1] = {
+        root = name,
+        label = (s.label or name),
+        category = (s.category or "z"),
+        description = s.description,
+        forms = forms
+      }
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  table.sort(fams, function(a, b)
+    local ca = CATEGORY_ORDER[a.category] or 99
+    local cb = CATEGORY_ORDER[b.category] or 99
+    if ca == cb then
+      return a.label < b.label
+    else
+      return ca < cb
+    end
+  end)
+  return fams
+end
+local category_label
+category_label = function(cat)
+  return CATEGORY_LABEL[cat] or cat
+end
 return {
   conditions = conditions,
   actions = actions,
-  reload = reload
+  reload = reload,
+  condition_families = condition_families,
+  resolve_condition = resolve_condition,
+  category_label = category_label
 }
