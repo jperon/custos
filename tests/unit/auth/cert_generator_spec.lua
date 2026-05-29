@@ -159,6 +159,86 @@ return describe("auth/cert_generator", function()
       return assert.are.equal(fake_pem, key_pem)
     end)
   end)
+  describe("generate_self_signed avec os.execute/io.open mockés", function()
+    local orig_execute, orig_open
+    local mock_px5g
+    mock_px5g = function(exit_code, key_content, cert_content)
+      os.execute = function(cmd)
+        return exit_code
+      end
+      io.open = function(path, mode)
+        local content
+        if path:find("key", 1, true) then
+          content = key_content
+        else
+          content = cert_content
+        end
+        if content == nil then
+          return nil
+        end
+        return {
+          read = function(self, fmt)
+            return content
+          end,
+          close = function(self)
+            return true
+          end
+        }
+      end
+    end
+    before_each(function()
+      orig_execute = os.execute
+      orig_open = io.open
+    end)
+    after_each(function()
+      os.execute = orig_execute
+      io.open = orig_open
+    end)
+    it("exit code non-zéro → branche erreur px5g", function()
+      mock_px5g(1, nil, nil)
+      local key, cert, ok, err = generate_self_signed("example.com")
+      assert.is_nil(key)
+      assert.is_nil(cert)
+      assert.is_false(ok)
+      return assert.is_true(err:find("error code", 1, true) ~= nil)
+    end)
+    it("clé illisible → branche key_read_failed", function()
+      mock_px5g(0, nil, "cert")
+      local key, cert, ok, err = generate_self_signed("example.com")
+      assert.is_false(ok)
+      return assert.is_true(err:find("Cannot read generated key", 1, true) ~= nil)
+    end)
+    it("clé vide → branche key_empty", function()
+      mock_px5g(0, "", "cert")
+      local key, cert, ok, err = generate_self_signed("example.com")
+      assert.is_false(ok)
+      return assert.is_true(err:find("empty key", 1, true) ~= nil)
+    end)
+    it("certificat illisible → branche cert_read_failed", function()
+      mock_px5g(0, "-----BEGIN EC PRIVATE KEY-----\nx\n-----END EC PRIVATE KEY-----\n", nil)
+      local key, cert, ok, err = generate_self_signed("example.com")
+      assert.is_false(ok)
+      return assert.is_true(err:find("Cannot read generated cert", 1, true) ~= nil)
+    end)
+    it("certificat vide → branche cert_empty", function()
+      mock_px5g(0, "-----BEGIN EC PRIVATE KEY-----\nx\n-----END EC PRIVATE KEY-----\n", "")
+      local key, cert, ok, err = generate_self_signed("example.com")
+      assert.is_false(ok)
+      return assert.is_true(err:find("empty cert", 1, true) ~= nil)
+    end)
+    return it("clé + certificat valides → succès", function()
+      local fake_key = "-----BEGIN EC PRIVATE KEY-----\nk\n-----END EC PRIVATE KEY-----\n"
+      local fake_cert = "-----BEGIN CERTIFICATE-----\nc\n-----END CERTIFICATE-----\n"
+      mock_px5g(0, fake_key, fake_cert)
+      local key, cert, ok, err = generate_self_signed("example.com", {
+        "a.example.com"
+      }, 365)
+      assert.is_true(ok, tostring(err))
+      assert.are.equal(fake_key, key)
+      assert.are.equal(fake_cert, cert)
+      return assert.is_nil(err)
+    end)
+  end)
   return it("génération avec px5g si disponible #px5g", function()
     local f = io.popen("which px5g 2>/dev/null")
     has_px5g = f and (f:read("*l") ~= nil) or false

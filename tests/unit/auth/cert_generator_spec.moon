@@ -168,6 +168,77 @@ describe "auth/cert_generator", ->
       assert.is_nil err
       assert.are.equal fake_pem, key_pem
 
+  -- ═══════════════════════════════════════════════════════════════════════════
+  -- generate_self_signed — branches d'erreur avec os.execute + io.open mockés
+  -- px5g écrit deux fichiers (clé puis certificat) ; on simule exit code et le
+  -- contenu de chaque fichier selon le chemin (key_file / cert_file).
+  -- ═══════════════════════════════════════════════════════════════════════════
+
+  describe "generate_self_signed avec os.execute/io.open mockés", ->
+    local orig_execute, orig_open
+
+    -- exit_code : code de retour px5g ; key_content / cert_content : contenu lu
+    -- (nil → io.open renvoie nil pour ce fichier, simulant un échec d'ouverture).
+    mock_px5g = (exit_code, key_content, cert_content) ->
+      os.execute = (cmd) -> exit_code
+      io.open = (path, mode) ->
+        content = if path\find("key", 1, true) then key_content else cert_content
+        return nil if content == nil
+        {
+          read:  (self, fmt) -> content
+          close: (self) -> true
+        }
+
+    before_each ->
+      orig_execute = os.execute
+      orig_open    = io.open
+
+    after_each ->
+      os.execute = orig_execute
+      io.open    = orig_open
+
+    it "exit code non-zéro → branche erreur px5g", ->
+      mock_px5g 1, nil, nil
+      key, cert, ok, err = generate_self_signed "example.com"
+      assert.is_nil key
+      assert.is_nil cert
+      assert.is_false ok
+      assert.is_true err\find("error code", 1, true) != nil
+
+    it "clé illisible → branche key_read_failed", ->
+      mock_px5g 0, nil, "cert"
+      key, cert, ok, err = generate_self_signed "example.com"
+      assert.is_false ok
+      assert.is_true err\find("Cannot read generated key", 1, true) != nil
+
+    it "clé vide → branche key_empty", ->
+      mock_px5g 0, "", "cert"
+      key, cert, ok, err = generate_self_signed "example.com"
+      assert.is_false ok
+      assert.is_true err\find("empty key", 1, true) != nil
+
+    it "certificat illisible → branche cert_read_failed", ->
+      mock_px5g 0, "-----BEGIN EC PRIVATE KEY-----\nx\n-----END EC PRIVATE KEY-----\n", nil
+      key, cert, ok, err = generate_self_signed "example.com"
+      assert.is_false ok
+      assert.is_true err\find("Cannot read generated cert", 1, true) != nil
+
+    it "certificat vide → branche cert_empty", ->
+      mock_px5g 0, "-----BEGIN EC PRIVATE KEY-----\nx\n-----END EC PRIVATE KEY-----\n", ""
+      key, cert, ok, err = generate_self_signed "example.com"
+      assert.is_false ok
+      assert.is_true err\find("empty cert", 1, true) != nil
+
+    it "clé + certificat valides → succès", ->
+      fake_key  = "-----BEGIN EC PRIVATE KEY-----\nk\n-----END EC PRIVATE KEY-----\n"
+      fake_cert = "-----BEGIN CERTIFICATE-----\nc\n-----END CERTIFICATE-----\n"
+      mock_px5g 0, fake_key, fake_cert
+      key, cert, ok, err = generate_self_signed "example.com", {"a.example.com"}, 365
+      assert.is_true ok, tostring(err)
+      assert.are.equal fake_key, key
+      assert.are.equal fake_cert, cert
+      assert.is_nil err
+
   it "génération avec px5g si disponible #px5g", ->
     f       = io.popen "which px5g 2>/dev/null"
     has_px5g = f and (f\read("*l") ~= nil) or false
