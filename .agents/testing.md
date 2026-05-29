@@ -1,5 +1,12 @@
 # Tests
 
+> **Definition of Done (rappel).** Avant de conclure toute tâche : (1) le code
+> ajouté/modifié est **couvert** (`make coverage`), (2) la **documentation** est à
+> jour, (3) **`make test` ET `make test-e2e` passent à 100 %** (`0 failed`),
+> commandes réellement exécutées et total lu. Voir [AGENTS.md](../AGENTS.md)
+> § « Definition of Done ». Si une suite ne peut être lancée, le dire — ne jamais
+> annoncer un succès non constaté.
+
 ---
 
 ## Suites disponibles

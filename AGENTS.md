@@ -18,6 +18,26 @@ Voir [README.md](README.md) pour l'architecture complète.
   dans `./tmp/`. Ne jamais utiliser `/tmp/`, `~/.cache/` ou tout autre chemin
   extérieur au projet.
 
+### Definition of Done (obligatoire avant de conclure une tâche)
+
+Une tâche n'est **jamais** terminée tant que les trois conditions suivantes ne
+sont pas vérifiées et constatées (pas supposées) :
+
+1. **Couverture de tests.** Tout code ajouté ou modifié doit être couvert par des
+   tests. Vérifier avec `make coverage` (rapport dans `tmp/coverage/`). Une
+   branche d'erreur non couvrable en unitaire doit l'être par un mock (cf.
+   `tests/unit/auth/cert_generator_spec.moon`) ou par les tests e2e.
+2. **Documentation à jour.** Mettre à jour la doc impactée par le changement
+   (`AGENTS.md`, `.agents/*`, `README.md`, `doc/CONFIG.md`, `doc/CHEATSHEET.md`,
+   etc.). Du code sans sa doc à jour n'est pas livrable.
+3. **`make test` ET `make test-e2e` à 100 %.** Les deux suites doivent passer
+   intégralement (`0 failed`). Lancer effectivement les commandes et lire le
+   total ; ne jamais déclarer un succès non exécuté. `make test-e2e` exige le
+   homelab libvirt provisionné (cf. [.agents/testing.md](.agents/testing.md) et
+   [libvirt/README.md](libvirt/README.md)) ; quand le provisioning est déjà fait,
+   il ne nécessite pas root. Si une suite ne peut pas être exécutée, le dire
+   explicitement plutôt que de la présenter comme verte.
+
 ---
 
 ## Documentation détaillée
