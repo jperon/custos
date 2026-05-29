@@ -42,6 +42,8 @@
     sessions_file:      "/etc/custos/sessions.lua"
     idle_timeout:       10
     heartbeat_interval: 3
+    -- alice est admin → exerce l'interface /admin (G13)
+    admin_users:        {"alice@test.lan"}
   }
 
   filter: {
