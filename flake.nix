@@ -20,7 +20,40 @@
               sha256 = "sha256-PSymctQcLC+mZ4hagNb6A8PpHw9Pcvh67yvJR+jIcjc=";
             };
             nativeBuildInputs = [ super.autoreconfHook super.pkg-config ];
-            configureFlags = [ "--enable-shared" "--enable-static" ];
+            # certgen/keygen/certext/ecc + ALT_NAMES sont requis par px5g
+            # (génération de clés et certificats auto-signés avec SAN).
+            configureFlags = [
+              "--enable-shared"
+              "--enable-static"
+              "--enable-keygen"
+              "--enable-certgen"
+              "--enable-certreq"
+              "--enable-certext"
+              "--enable-ecc"
+              "--enable-opensslextra"
+            ];
+            CFLAGS = "-DWOLFSSL_ALT_NAMES -DFP_MAX_BITS=8192";
+          };
+
+          # px5g-wolfssl : générateur de clés/certificats X.509 (OpenWrt).
+          # Binaire nommé `px5g` (PROVIDES:=px5g dans le paquet OpenWrt).
+          px5g = super.stdenv.mkDerivation {
+            pname = "px5g-wolfssl";
+            # Épinglé sur un commit précis (et non refs/heads/main) pour la
+            # reproductibilité : le contenu ne bougera pas sous nos pieds.
+            version = "openwrt-6aad5ab";
+            src = super.fetchurl {
+              url = "https://github.com/openwrt/openwrt/raw/6aad5ab0992fefd88ce612bc0484e0115a004572/package/utils/px5g-wolfssl/px5g-wolfssl.c";
+              sha256 = "sha256-KXeb029kv008dEfsJcQJdJY7s/ndZCHvKjMycTO/kyI=";
+            };
+            dontUnpack = true;
+            buildInputs = [ self.wolfssl ];
+            buildPhase = ''
+              $CC -DWOLFSSL_ALT_NAMES -o px5g "$src" -lwolfssl
+            '';
+            installPhase = ''
+              install -Dm755 px5g "$out/bin/px5g"
+            '';
           };
         }) ];
       };
@@ -52,6 +85,7 @@
             pkgs.libnetfilter_queue
             pkgs.nftables
             pkgs.wolfssl
+            pkgs.px5g
 
 
             pkgs.mbedtls
