@@ -164,7 +164,10 @@ handle_lists_index = function(req, state)
     }, "Répertoire : " .. H.code(lists_dir)),
     H.p({
       style = "color:#555"
-    }, "Utilisées par les conditions " .. H.code("from_xxx_list") .. "."),
+    }, "Une liste regroupe des valeurs (un domaine, un réseau… par ligne) que vous pouvez réutiliser dans vos règles. Dans l'éditeur de règles, choisissez une condition puis la forme « Une liste nommée » et indiquez le nom de la liste."),
+    H.p({
+      style = "color:#555"
+    }, "Les listes sont rangées par type de condition (domaine, réseau, mac…). Exemple : créez une liste « malware » de type « domaine », puis utilisez-la dans une règle « Domaine cible » → « Une liste nommée »."),
     (function()
       if items ~= "" then
         return H.ul({ }, items)

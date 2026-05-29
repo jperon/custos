@@ -41,11 +41,11 @@ handle_dashboard = (req, state) ->
   s2 = H.section {
     H.h2 "Configuration"
     H.p { H.a { href: "/admin/config/" }, "Toutes les sections" }
-    H.p { H.a { href: "/admin/system/status" }, "Statut des workers" }
+    H.p { H.a { href: "/admin/system/status" }, "État du service DNS" }
   }
   s3 = H.section {
     H.h2 "Rechargement"
-    H.p "Après modification de la configuration, rechargez les workers DNS."
+    H.p "Après modification de la configuration, rechargez le service DNS pour appliquer les changements."
     H.form { method: "POST", action: "/admin/system/reload" },
       H.button { type: "submit" }, "Recharger maintenant"
   }

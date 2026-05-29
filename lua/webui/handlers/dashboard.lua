@@ -65,12 +65,12 @@ handle_dashboard = function(req, state)
     H.p({
       H.a({
         href = "/admin/system/status"
-      }, "Statut des workers")
+      }, "État du service DNS")
     })
   })
   local s3 = H.section({
     H.h2("Rechargement"),
-    H.p("Après modification de la configuration, rechargez les workers DNS."),
+    H.p("Après modification de la configuration, rechargez le service DNS pour appliquer les changements."),
     H.form({
       method = "POST",
       action = "/admin/system/reload"

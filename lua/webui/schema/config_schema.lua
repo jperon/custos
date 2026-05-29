@@ -20,48 +20,48 @@ return {
     }
   },
   nfqueue = {
-    _label = "NFQUEUE",
-    _description = "Numéros de queues Netfilter par worker (ex: '0-1' pour une plage)",
+    _label = "Files de paquets (NFQUEUE)",
+    _description = "Avancé — réservé aux experts. Le pare-feu (nftables) remet les paquets à Custos via des « files » Netfilter numérotées ; chaque type de trafic a la sienne. Ne modifiez ces numéros que pour éviter un conflit avec d'autres outils utilisant NFQUEUE sur la même machine. Une plage s'écrit '0-1'.",
     questions = {
       type = "string",
-      label = "Questions DNS",
-      hint = "ex: 0-1",
+      label = "Requêtes DNS",
+      hint = "n° de file, ex: 0-1",
       default = "0-1"
     },
     responses = {
       type = "string",
       label = "Réponses DNS",
-      hint = "ex: 4",
+      hint = "n° de file, ex: 4",
       default = "4"
     },
     captive = {
       type = "string",
       label = "Portail captif",
-      hint = "ex: 20",
+      hint = "n° de file, ex: 20",
       default = "20"
     },
     reject = {
       type = "string",
-      label = "Rejet (RST/ICMP)",
-      hint = "ex: 10-11",
+      label = "Paquets à rejeter",
+      hint = "n° de file, ex: 10-11",
       default = "10-11"
     },
     auth = {
       type = "string",
-      label = "Auth TLS",
-      hint = "ex: 5",
+      label = "Handshakes TLS (auth)",
+      hint = "n° de file, ex: 5",
       default = "5"
     },
     sni_log = {
       type = "string",
-      label = "SNI/QUIC log",
-      hint = "ex: 6",
+      label = "Journalisation SNI/QUIC",
+      hint = "n° de file, ex: 6",
       default = "6"
     },
     sip = {
       type = "string",
-      label = "SIP/STUN",
-      hint = "ex: 12",
+      label = "Trafic SIP/STUN",
+      hint = "n° de file, ex: 12",
       default = "12"
     }
   },
@@ -95,11 +95,11 @@ return {
     }
   },
   nft = {
-    _label = "Nftables",
-    _description = "Paramètres d'intégration nftables",
+    _label = "Pare-feu (nftables)",
+    _description = "Avancé. Custos autorise dynamiquement les adresses résolues en les ajoutant à des « ensembles » (sets) nftables. Les valeurs par défaut conviennent à un pont (bridge) standard ; ne les changez que si votre topologie réseau l'impose.",
     family = {
       type = "enum",
-      label = "Famille NFT (IPv4)",
+      label = "Famille nftables (IPv4)",
       values = {
         "bridge",
         "inet",
@@ -110,7 +110,7 @@ return {
     },
     family6 = {
       type = "enum",
-      label = "Famille NFT (IPv6)",
+      label = "Famille nftables (IPv6)",
       values = {
         "bridge",
         "inet6",
@@ -125,25 +125,25 @@ return {
     },
     ip_timeout = {
       type = "string",
-      label = "TTL sets IP",
+      label = "Durée des autorisations IP",
       hint = "ex: 2m, 300s",
       default = "2m"
     },
     sip_session_ttl = {
       type = "string",
-      label = "TTL sessions SIP",
+      label = "Durée des sessions SIP",
       hint = "ex: 5m",
       default = "5m"
     },
     add_backoff_ms = {
       type = "string",
-      label = "Backoff retry (ms)",
-      hint = "tableau ex: {20,50,200,400,800,2000}",
+      label = "Délais de réessai (ms)",
+      hint = "liste, ex: {20,50,200,400,800,2000}",
       default = "{20,50,200,400,800,2000}"
     },
     add_failure_policy = {
       type = "enum",
-      label = "Politique d'échec NFT",
+      label = "En cas d'échec d'ajout",
       values = {
         "fail-closed",
         "fail-open"
@@ -152,20 +152,20 @@ return {
     },
     ack_timeout_ms = {
       type = "integer",
-      label = "Timeout ACK nft (ms)",
+      label = "Délai d'attente confirmation (ms)",
       default = 150
     }
   },
   ipc = {
-    _label = "IPC",
-    _description = "Communication interne entre workers DNS",
+    _label = "Communication interne (IPC)",
+    _description = "Avancé. Règle le dialogue entre les processus internes de Custos (corrélation requête/réponse DNS). À n'ajuster qu'en cas de problème de performance diagnostiqué.",
     pending_ttl = {
       type = "integer",
-      label = "TTL requêtes en attente (s)",
+      label = "Durée de conservation d'une requête en attente (s)",
       default = 5
     },
     match_retry = {
-      _label = "Retry appariement",
+      _label = "Corrélation requête/réponse",
       count = {
         type = "integer",
         label = "Nombre de tentatives",
@@ -187,16 +187,16 @@ return {
     }
   },
   mac_learner = {
-    _label = "MAC Learner",
-    _description = "Apprentissage des adresses MAC via socket Unix",
+    _label = "Détection des adresses MAC",
+    _description = "Avancé. Custos associe automatiquement chaque IP à son adresse matérielle (MAC) observée sur le réseau, pour les règles « Adresse MAC source ». Les valeurs par défaut conviennent dans la plupart des cas.",
     query_sock = {
       type = "path",
-      label = "Socket IPC",
+      label = "Socket de communication interne",
       default = "/var/run/custos/mac_query.sock"
     },
     entry_ttl = {
       type = "integer",
-      label = "TTL entrée MAC (s)",
+      label = "Durée de mémorisation d'une MAC (s)",
       default = 900
     }
   },
