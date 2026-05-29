@@ -1,4 +1,3 @@
-local unpack = unpack or table.unpack
 local H = require("auth.html")
 local css_content = [[  * {
     margin: 0;
@@ -100,20 +99,20 @@ success_page = function(auth_cfg, created_at, is_admin)
   local session_start = tonumber(created_at) or 0
   local admin_link
   if is_admin then
-    admin_link = {
-      H.p(H.a({
-        href = "/admin"
-      }, "Administration"))
-    }
+    admin_link = H.p(H.a({
+      href = "/admin",
+      target = "_blank",
+      rel = "noopener"
+    }, "Administration"))
   else
-    admin_link = { }
+    admin_link = ""
   end
   return page({
     H.p("Connexion réussie. Votre accès est actif tant que cette fenêtre est ouverte."),
     H.p({
       id = "session-timer"
     }, "Session ouverte depuis : --"),
-    unpack(admin_link),
+    admin_link,
     H.p(H.a({
       href = "/logout"
     }, "Déconnexion")),

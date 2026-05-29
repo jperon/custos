@@ -9,24 +9,11 @@ generate_rsa_key = function(bits)
     bits = 2048
   end
   bits = tonumber(bits) or 2048
-  local cmd = "px5g rsakey " .. tostring(bits)
-  local handle = io.popen(cmd)
-  if not (handle) then
-    local err = "Failed to spawn px5g rsakey"
-    log_error(function()
-      return {
-        action = "cert_gen_spawn_failed",
-        cmd = cmd,
-        err = err,
-        errno = tonumber(ffi.C.__errno_location()[0]) or 0
-      }
-    end)
-    return nil, false, err
-  end
-  local key_pem, read_err = handle:read("*a")
-  local close_ok = handle:close()
-  if not (close_ok) then
-    local err = "px5g rsakey exited with error (exit code non-zero)"
+  local key_file = "/tmp/px5g_rsakey_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000000)) .. ".pem"
+  local cmd = "px5g rsakey -out " .. tostring(key_file) .. " " .. tostring(bits) .. " 2>/dev/null"
+  local exit_code = os.execute(cmd)
+  if not (exit_code == 0 or exit_code == true) then
+    local err = "px5g rsakey exited with error code " .. tostring(exit_code)
     log_warn(function()
       return {
         action = "cert_gen_rsakey_failed",
@@ -34,8 +21,24 @@ generate_rsa_key = function(bits)
         err = err
       }
     end)
+    os.remove(key_file)
     return nil, false, err
   end
+  local fh = io.open(key_file, "r")
+  if not (fh) then
+    local err = "Cannot read generated key file: " .. tostring(key_file)
+    log_warn(function()
+      return {
+        action = "cert_gen_rsakey_read_failed",
+        bits = bits,
+        err = err
+      }
+    end)
+    return nil, false, err
+  end
+  local key_pem = fh:read("*a")
+  fh:close()
+  os.remove(key_file)
   if not (key_pem and #key_pem > 0) then
     local err = "px5g rsakey produced empty output"
     log_warn(function()

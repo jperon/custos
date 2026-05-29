@@ -12,21 +12,29 @@
 -- @treturn string Message d'erreur si échec
 generate_rsa_key = (bits = 2048) ->
   bits = tonumber(bits) or 2048
-  cmd = "px5g rsakey #{bits}"
 
-  handle = io.popen cmd
-  unless handle
-    err = "Failed to spawn px5g rsakey"
-    log_error -> { action: "cert_gen_spawn_failed", cmd: cmd, err: err, errno: tonumber(ffi.C.__errno_location()[0]) or 0 }
-    return nil, false, err
+  -- px5g écrit la clé dans le fichier passé à -out (sans -out, il écrit sur
+  -- stderr, ce qui échoue sur un pipe). On lit ensuite le fichier en mémoire.
+  key_file = "/tmp/px5g_rsakey_#{os.time!}_#{math.random(1000000)}.pem"
+  cmd = "px5g rsakey -out #{key_file} #{bits} 2>/dev/null"
 
-  key_pem, read_err = handle\read "*a"
-  close_ok = handle\close!
-
-  unless close_ok
-    err = "px5g rsakey exited with error (exit code non-zero)"
+  exit_code = os.execute cmd
+  -- os.execute retourne true en Lua 5.1, 0 en 5.2+
+  unless exit_code == 0 or exit_code == true
+    err = "px5g rsakey exited with error code #{exit_code}"
     log_warn -> { action: "cert_gen_rsakey_failed", bits: bits, err: err }
+    os.remove key_file
     return nil, false, err
+
+  fh = io.open key_file, "r"
+  unless fh
+    err = "Cannot read generated key file: #{key_file}"
+    log_warn -> { action: "cert_gen_rsakey_read_failed", bits: bits, err: err }
+    return nil, false, err
+
+  key_pem = fh\read "*a"
+  fh\close!
+  os.remove key_file
 
   unless key_pem and #key_pem > 0
     err = "px5g rsakey produced empty output"

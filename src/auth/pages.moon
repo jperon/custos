@@ -2,7 +2,6 @@
 -- Constructeurs de pages HTML du portail captif.
 -- Séparé de server.moon pour permettre les tests unitaires.
 
-unpack or= table.unpack
 H = require "auth.html"
 
 css_content = [[
@@ -101,13 +100,13 @@ success_page = (auth_cfg, created_at, is_admin) ->
   idle_timeout = tonumber(auth_cfg and auth_cfg.idle_timeout) or 90
   session_start = tonumber(created_at) or 0
   admin_link = if is_admin
-    { H.p H.a { href: "/admin" }, "Administration" }
+    H.p H.a { href: "/admin", target: "_blank", rel: "noopener" }, "Administration"
   else
-    {}
+    ""
   page {
     H.p "Connexion réussie. Votre accès est actif tant que cette fenêtre est ouverte."
     H.p { id: "session-timer" }, "Session ouverte depuis : --"
-    unpack admin_link
+    admin_link
     H.p H.a { href: "/logout" }, "Déconnexion"
     H.script "
       var iv = #{interval} * 1000;
