@@ -155,6 +155,29 @@ obj = MaTable 10
 obj\increment 5
 ```
 
+### Concaténation en boucle : table + `table.concat`
+
+Ne jamais accumuler une chaîne avec `..=` dans une boucle. Les chaînes Lua sont
+immuables : chaque `..=` réalloue toute la chaîne → coût quadratique. Construire
+une table puis concaténer d'un coup après la boucle.
+
+```moonscript
+-- FAUX : réallocation à chaque itération
+opts = ""
+for o in *options
+  opts ..= render o
+
+-- CORRECT : une seule allocation finale
+parts = {}
+for o in *options
+  parts[#parts + 1] = render o
+table.concat parts          -- ou : table.concat parts, ","
+```
+
+S'applique à toute génération itérative (HTML, JS, JSON, lignes de tableau).
+Exemples dans `src/webui/handlers/rules.moon` (`cond_a_select`,
+`cond_b_select`, `cond_families_js`).
+
 ---
 
 ## LDoc

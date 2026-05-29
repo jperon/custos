@@ -46,6 +46,7 @@ Voir [README.md](README.md) pour l'architecture complète.
 | Parsing de paquets | `ffi.cast("const uint8_t*", raw)` + `bit` |
 | `$` dans une string | Écrire `$` directement — `\$` est invalide en Lua |
 | Rate-limiting de logs | `log.moon` : une entrée par fenêtre de burst pour un même (action, key) |
+| Concaténer en boucle | Accumuler dans une table puis `table.concat` (jamais `..=` en boucle) |
 
 ---
 
