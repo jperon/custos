@@ -32,6 +32,10 @@ page = function(title, body_content)
       H.meta({
         charset = "UTF-8"
       }),
+      H.meta({
+        name = "viewport",
+        content = "width=device-width, initial-scale=1"
+      }),
       H.title("Admin — " .. tostring(title)),
       H.style(css())
     }),
