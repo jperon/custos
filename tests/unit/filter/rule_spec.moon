@@ -112,6 +112,23 @@ describe "filter.rule", ->
       }, 7
       assert.equals "r_7", meta.rule_id
 
+    it "conditions non-table → error", ->
+      assert.has_error ->
+        rule_mod.compile_rule cfg, {
+          actions:    { "allow" }
+          conditions: "pas_une_table"
+        }, 1
+
+    it "nxdomain : block_modifiers collectés dans la règle", ->
+      eval_fn, meta = rule_mod.compile_rule cfg, {
+        description: "NXDOMAIN test"
+        actions:     { "nxdomain" }
+      }, 1
+      -- nxdomain expose block_modifiers (modifiers.nxdomain) → fusionnés
+      assert.equals "nxdomain", meta.actions[1].name
+      v, _ = eval_fn {}
+      assert.is_false v
+
   -- ── compile_rule — conditions ─────────────────────────────────
 
   describe "compile_rule / conditions", ->
@@ -291,3 +308,65 @@ describe "filter.rule", ->
       rules = rule_mod.compile_rules { rules: {} }
       meta = rule_mod.decide_meta rules, {}
       assert.is_false meta.verdict
+
+  -- ── on_response : noyau commun (worker_responses + doh) ──────────
+  describe "on_response_for", ->
+    it "retrouve les callbacks de la règle par rule_id", ->
+      rules = rule_mod.compile_rules {
+        macs: {}
+        rules: {
+          { rule_id: "strip", actions: { "dns_strip", "allow" }, dns_strip: { rr_type: "AAAA" } }
+        }
+      }
+      cbs = rule_mod.on_response_for rules, "r_strip"
+      assert.equals 2, #cbs
+
+    it "retourne {} si rule_id inconnu", ->
+      rules = rule_mod.compile_rules { macs: {}, rules: { { rule_id: "a", actions: { "allow" } } } }
+      assert.same {}, rule_mod.on_response_for rules, "r_inexistant"
+
+    it "retourne {} si rules ou rule_id nil", ->
+      assert.same {}, rule_mod.on_response_for nil, "r_x"
+      assert.same {}, rule_mod.on_response_for {}, nil
+
+  describe "apply_on_response", ->
+    it "liste vide → inject_nft true, dns_raw inchangé", ->
+      ctx = rule_mod.apply_on_response {}, "RAW", "reason"
+      assert.equals "RAW", ctx.dns_raw
+      assert.is_true ctx.inject_nft
+      assert.is_false ctx.modified
+
+    it "skip_nft seul (strip sans allow) → inject_nft false", ->
+      cb = (c) -> c.skip_nft = true
+      ctx = rule_mod.apply_on_response { cb }, "RAW", ""
+      assert.is_true ctx.skip_nft
+      assert.is_false ctx.inject_nft
+
+    it "explicit_allow supplante skip_nft → inject_nft true", ->
+      strip = (c) -> c.skip_nft = true
+      allow = (c) -> c.explicit_allow = true
+      ctx = rule_mod.apply_on_response { strip, allow }, "RAW", ""
+      assert.is_true ctx.inject_nft
+
+    it "callback peut modifier dns_raw et action_label", ->
+      cb = (c) ->
+        c.dns_raw = "PATCHED"
+        c.modified = true
+        c.action_label = "response_strip_AAAA"
+      ctx = rule_mod.apply_on_response { cb }, "RAW", ""
+      assert.equals "PATCHED", ctx.dns_raw
+      assert.is_true ctx.modified
+      assert.equals "response_strip_AAAA", ctx.action_label
+
+  describe "run_on_response", ->
+    it "dispatch complet par rule_id (dns_strip + allow → inject_nft true)", ->
+      rules = rule_mod.compile_rules {
+        macs: {}
+        rules: {
+          { rule_id: "strip", actions: { "dns_strip", "allow" }, dns_strip: { rr_type: "AAAA" } }
+        }
+      }
+      ctx = rule_mod.run_on_response rules, "r_strip", "RAW", "bugfix"
+      -- strip pose skip_nft, allow pose explicit_allow → injection maintenue
+      assert.is_true ctx.skip_nft
+      assert.is_true ctx.inject_nft

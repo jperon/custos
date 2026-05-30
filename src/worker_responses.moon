@@ -348,9 +348,9 @@ parse_packet = (raw) ->
 -- ── Chargement paresseux de filter pour éviter de tirer ip_whitelist (libnftnl)
 -- au chargement du module — critique pour les tests unitaires.
 _filter = nil
-get_rule_on_response = (rule_id) ->
+run_on_response = (rule_id, dns_raw, reason) ->
   _filter or= require "filter"
-  _filter.get_rule_on_response rule_id
+  _filter.run_on_response rule_id, dns_raw, reason
 
 -- Load filter rules to identify auth-only wildcard rules
 -- rules_metadata is passed from main.moon to avoid recompiling (which would reload domain lists)
@@ -639,17 +639,6 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   refused = entry and entry.refused or false
   dnsonly = entry and entry.dnsonly or false
   nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
-  -- Dispatch on_response : les callbacks déclarent eux-mêmes leur comportement
-  -- (strip DNS, skip_nft, etc.) — aucun hardcode ici.
-  on_response_cbs = get_rule_on_response nft_rule_id
-  resp_ctx = {
-    dns_raw:        nil    -- sera rempli plus bas
-    modified:       false
-    explicit_allow: false
-    skip_nft:       false
-    action_label:   nil
-    reason:         entry and entry.reason or ""
-  }
   ack_corr = string.format "%04x:%s:%d:%s", txid, dst_ip, client_port, resolver_ip
 
   -- ── Branche REFUSED/NXDOMAIN : réponse du serveur transformée ──────
@@ -681,17 +670,14 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     return -1
 
   -- ── Branche ACCEPT : callbacks on_response → injection nft ──────
-  -- Les callbacks on_response de chaque action portent toute la logique :
-  -- modification DNS (strip, EDE), skip_nft, action_label.
-  -- inject_nft = explicit_allow OR (NOT skip_nft) : "allow" supplante "skip".
-  resp_ctx.dns_raw = dns_raw
-
-  for cb in *on_response_cbs
-    cb resp_ctx
+  -- Dispatch factorisé (filter.run_on_response) : les callbacks de chaque
+  -- action portent toute la logique (strip DNS, EDE, skip_nft, action_label)
+  -- et la décision inject_nft. Même noyau que le worker DoH.
+  resp_ctx = run_on_response nft_rule_id, dns_raw, (entry and entry.reason or "")
 
   dns_raw         = resp_ctx.dns_raw
   payload_modified = resp_ctx.modified
-  inject_nft      = resp_ctx.explicit_allow or not resp_ctx.skip_nft
+  inject_nft      = resp_ctx.inject_nft
 
   answers  = parse_answers dns_msg
   client_v4 = nil

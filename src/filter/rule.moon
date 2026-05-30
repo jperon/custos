@@ -80,8 +80,10 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
     conditions:  conditions_meta
     actions:     actions_meta
     on_response: on_response_list
-    worker_only: false
   }
+  -- Affectation hors du littéral : un champ constant `false` dans un table
+  -- literal compile en KPRI et échappe au hook de ligne luacov (faux négatif).
+  metadata.worker_only = false
 
   for cond in *conditions_meta
     if cond.worker_only
@@ -172,4 +174,48 @@ decide_meta = (rules, req, decision_cfg=nil) ->
     modifiers:   rule_modifiers or {}
   }
 
-{ :compile_rule, :compile_rules, :decide, :decide_meta }
+--- Retrouve la liste des callbacks on_response d'une règle (par rule_id).
+-- @tparam table  rules   Objet compilé (compile_rules), contient rules_metadata.
+-- @tparam string rule_id Identifiant de règle.
+-- @treturn table Liste (possiblement vide) de fonctions on_response.
+on_response_for = (rules, rule_id) ->
+  return {} unless rules and rule_id
+  for _, meta in ipairs (rules.rules_metadata or {})
+    if meta.rule_id == rule_id
+      return meta.on_response or {}
+  {}
+
+--- Applique une liste de callbacks on_response sur une réponse DNS (fonction pure).
+-- Noyau commun aux workers (worker_responses, doh) : construit le contexte de
+-- réponse, exécute chaque callback (strip DNS, EDE, skip_nft, action_label) puis
+-- calcule la décision d'injection nft.
+-- `inject_nft = explicit_allow OR (NOT skip_nft)` : "allow" supplante "skip".
+-- @tparam table  on_response_cbs Liste de callbacks (peut être vide/nil).
+-- @tparam string dns_raw         Réponse DNS brute (wire format).
+-- @tparam string reason          Raison de l'autorisation (EDE/log).
+-- @treturn table Contexte enrichi : { dns_raw, modified, explicit_allow,
+--   skip_nft, action_label, reason, inject_nft }.
+apply_on_response = (on_response_cbs, dns_raw, reason) ->
+  ctx = {
+    dns_raw:        dns_raw
+    modified:       false
+    explicit_allow: false
+    skip_nft:       false
+    action_label:   nil
+    reason:         reason or ""
+  }
+  for cb in *(on_response_cbs or {})
+    cb ctx
+  ctx.inject_nft = ctx.explicit_allow or not ctx.skip_nft
+  ctx
+
+--- Dispatch on_response complet : lookup par rule_id puis application.
+-- @tparam table  rules   Objet compilé (compile_rules).
+-- @tparam string rule_id Identifiant de règle ayant autorisé la requête.
+-- @tparam string dns_raw Réponse DNS brute.
+-- @tparam string reason  Raison de l'autorisation.
+-- @treturn table Contexte enrichi (cf. apply_on_response).
+run_on_response = (rules, rule_id, dns_raw, reason) ->
+  apply_on_response (on_response_for rules, rule_id), dns_raw, reason
+
+{ :compile_rule, :compile_rules, :decide, :decide_meta, :on_response_for, :apply_on_response, :run_on_response }

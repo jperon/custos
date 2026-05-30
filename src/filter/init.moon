@@ -14,7 +14,7 @@
 --   ts      : timestamp Unix (number, os.time())
 
 { :ffi, :libc } = require "ffi_defs"
-{ :compile_rules, decide: _decide, decide_meta: _decide_meta } = require "filter.rule"
+{ :compile_rules, decide: _decide, decide_meta: _decide_meta, on_response_for: _on_response_for, run_on_response: _run_on_response } = require "filter.rule"
 { :log_info, :log_warn, :log_debug } = require "log"
 { :inject_localnets } = require "filter.localnets"
 ip_whitelist = require "ip_whitelist"
@@ -152,11 +152,15 @@ get_auth_cfg = ->
 -- Utilisé par worker_responses pour le dispatch générique sans hardcode.
 -- @tparam string rule_id Identifiant de règle (depuis l'entrée IPC)
 -- @treturn table Liste (possiblement vide) de fonctions on_response
-get_rule_on_response = (rule_id) ->
-  return {} unless rules and rule_id
-  for idx, meta in ipairs (rules.rules_metadata or {})
-    if meta.rule_id == rule_id
-      return meta.on_response or {}
-  {}
+get_rule_on_response = (rule_id) -> _on_response_for rules, rule_id
 
-{ :load, :decide, :decide_meta, :get_auth_cfg, :get_rule_on_response }
+--- Exécute le dispatch on_response (cf. filter.rule.run_on_response) sur la
+-- règle identifiée par rule_id, en utilisant le jeu de règles chargé du module.
+-- Noyau commun aux workers (worker_responses, doh).
+-- @tparam string rule_id Identifiant de règle ayant autorisé la requête.
+-- @tparam string dns_raw Réponse DNS brute (wire format) reçue de l'upstream.
+-- @tparam string reason  Raison de l'autorisation (pour EDE/log).
+-- @treturn table Contexte enrichi (cf. filter.rule.apply_on_response).
+run_on_response = (rule_id, dns_raw, reason) -> _run_on_response rules, rule_id, dns_raw, reason
+
+{ :load, :decide, :decide_meta, :get_auth_cfg, :get_rule_on_response, :run_on_response }

@@ -463,10 +463,10 @@ parse_packet = function(raw)
   return nil, "parse_failed"
 end
 local _filter = nil
-local get_rule_on_response
-get_rule_on_response = function(rule_id)
+local run_on_response
+run_on_response = function(rule_id, dns_raw, reason)
   _filter = _filter or require("filter")
-  return _filter.get_rule_on_response(rule_id)
+  return _filter.run_on_response(rule_id, dns_raw, reason)
 end
 local rules_metadata = nil
 local auth_wildcard_rules = { }
@@ -767,15 +767,6 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local refused = entry and entry.refused or false
   local dnsonly = entry and entry.dnsonly or false
   local nft_rule_id = (entry and entry.rule_id and #entry.rule_id > 0) and entry.rule_id or "unknown_rule"
-  local on_response_cbs = get_rule_on_response(nft_rule_id)
-  local resp_ctx = {
-    dns_raw = nil,
-    modified = false,
-    explicit_allow = false,
-    skip_nft = false,
-    action_label = nil,
-    reason = entry and entry.reason or ""
-  }
   local ack_corr = string.format("%04x:%s:%d:%s", txid, dst_ip, client_port, resolver_ip)
   if refused then
     local nxdomain_mod = entry.modifiers and entry.modifiers.nxdomain
@@ -820,14 +811,10 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
     return -1
   end
-  resp_ctx.dns_raw = dns_raw
-  for _index_0 = 1, #on_response_cbs do
-    local cb = on_response_cbs[_index_0]
-    cb(resp_ctx)
-  end
+  local resp_ctx = run_on_response(nft_rule_id, dns_raw, (entry and entry.reason or ""))
   dns_raw = resp_ctx.dns_raw
   local payload_modified = resp_ctx.modified
-  local inject_nft = resp_ctx.explicit_allow or not resp_ctx.skip_nft
+  local inject_nft = resp_ctx.inject_nft
   local answers = parse_answers(dns_msg)
   local client_v4 = nil
   local client_v6 = nil

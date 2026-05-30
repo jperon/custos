@@ -2,8 +2,11 @@ local dns_mod = require("ipparse.l7.dns")
 local parse = dns_mod.parse
 local QTYPE
 QTYPE = require("ipparse.l7.dns").types
-local decide_meta
-decide_meta = require("filter").decide_meta
+local decide_meta, run_on_response
+do
+  local _obj_0 = require("filter")
+  decide_meta, run_on_response = _obj_0.decide_meta, _obj_0.run_on_response
+end
 local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack
 do
   local _obj_0 = require("nft_queue")
@@ -225,18 +228,24 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
     end)
     return nil, upstream_err or "upstream_failed"
   end
+  local resp_ctx = run_on_response(allow_rule_id, resp_raw, allow_reason)
+  resp_raw = resp_ctx.dns_raw
   local resp_dns, resp_err = parse(resp_raw, 1, false)
   if resp_dns then
-    local answers = resp_dns.answers or { }
-    local ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")
-    inject_answers(answers, client_ip, client_mac, allow_rule_id, allow_timeout, ack_corr)
+    if resp_ctx.inject_nft then
+      local answers = resp_dns.answers or { }
+      local ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")
+      inject_answers(answers, client_ip, client_mac, allow_rule_id, allow_timeout, ack_corr)
+    end
     log_debug(function()
       return {
-        action = "query_allowed",
+        action = resp_ctx.action_label or "query_allowed",
         client_ip = client_ip,
         client_mac = client_mac,
         user = user,
-        answers = #answers,
+        answers = resp_dns.answers and #resp_dns.answers or 0,
+        inject_nft = resp_ctx.inject_nft,
+        modified = resp_ctx.modified,
         reason = allow_reason or ""
       }
     end)

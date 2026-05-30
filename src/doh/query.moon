@@ -12,7 +12,7 @@
 dns_mod = require "ipparse.l7.dns"
 parse = dns_mod.parse
 { types: QTYPE } = require "ipparse.l7.dns"
-{ :decide_meta } = require "filter"
+{ :decide_meta, :run_on_response } = require "filter"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack } = require "nft_queue"
 { :build_blocked_response, :add_ede } = require "dns_ede"
 { :user_for_mac } = require "auth.sessions"
@@ -139,18 +139,27 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
     log_warn -> { action: "upstream_failed", client_ip: client_ip, err: upstream_err }
     return nil, upstream_err or "upstream_failed"
 
-  -- Parse the response and inject A/AAAA records into nftables sets.
+  -- ── Dispatch on_response : même noyau que worker_responses ──────
+  -- Les callbacks de chaque action portent toute la logique (strip DNS,
+  -- EDE, skip_nft) et la décision inject_nft. "allow" supplante "skip".
+  resp_ctx = run_on_response allow_rule_id, resp_raw, allow_reason
+  resp_raw = resp_ctx.dns_raw
+
+  -- Parse the (possibly modified) response and inject A/AAAA records into nft sets.
   resp_dns, resp_err = parse resp_raw, 1, false
   if resp_dns
-    answers = resp_dns.answers or {}
-    ack_corr = string.format "%04x:%s", dns.txid or 0, client_ip or "unknown"
-    inject_answers answers, client_ip, client_mac, allow_rule_id, allow_timeout, ack_corr
+    if resp_ctx.inject_nft
+      answers = resp_dns.answers or {}
+      ack_corr = string.format "%04x:%s", dns.txid or 0, client_ip or "unknown"
+      inject_answers answers, client_ip, client_mac, allow_rule_id, allow_timeout, ack_corr
     log_debug -> {
-      action:     "query_allowed"
+      action:     resp_ctx.action_label or "query_allowed"
       client_ip:  client_ip
       client_mac: client_mac
       user:       user
-      answers:    #answers
+      answers:    resp_dns.answers and #resp_dns.answers or 0
+      inject_nft: resp_ctx.inject_nft
+      modified:   resp_ctx.modified
       reason:     allow_reason or ""
     }
   else

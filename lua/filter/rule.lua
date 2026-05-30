@@ -75,9 +75,9 @@ compile_rule = function(cfg, rule, idx, used_ids)
     timeout = rule_timeout,
     conditions = conditions_meta,
     actions = actions_meta,
-    on_response = on_response_list,
-    worker_only = false
+    on_response = on_response_list
   }
+  metadata.worker_only = false
   for _index_0 = 1, #conditions_meta do
     local cond = conditions_meta[_index_0]
     if cond.worker_only then
@@ -197,9 +197,46 @@ decide_meta = function(rules, req, decision_cfg)
     modifiers = rule_modifiers or { }
   }
 end
+local on_response_for
+on_response_for = function(rules, rule_id)
+  if not (rules and rule_id) then
+    return { }
+  end
+  for _, meta in ipairs((rules.rules_metadata or { })) do
+    if meta.rule_id == rule_id then
+      return meta.on_response or { }
+    end
+  end
+  return { }
+end
+local apply_on_response
+apply_on_response = function(on_response_cbs, dns_raw, reason)
+  local ctx = {
+    dns_raw = dns_raw,
+    modified = false,
+    explicit_allow = false,
+    skip_nft = false,
+    action_label = nil,
+    reason = reason or ""
+  }
+  local _list_0 = (on_response_cbs or { })
+  for _index_0 = 1, #_list_0 do
+    local cb = _list_0[_index_0]
+    cb(ctx)
+  end
+  ctx.inject_nft = ctx.explicit_allow or not ctx.skip_nft
+  return ctx
+end
+local run_on_response
+run_on_response = function(rules, rule_id, dns_raw, reason)
+  return apply_on_response((on_response_for(rules, rule_id)), dns_raw, reason)
+end
 return {
   compile_rule = compile_rule,
   compile_rules = compile_rules,
   decide = decide,
-  decide_meta = decide_meta
+  decide_meta = decide_meta,
+  on_response_for = on_response_for,
+  apply_on_response = apply_on_response,
+  run_on_response = run_on_response
 }

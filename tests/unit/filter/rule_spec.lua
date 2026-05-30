@@ -154,13 +154,34 @@ return describe("filter.rule", function()
       }, 1)
       return assert.equals("10m", meta.timeout)
     end)
-    return it("rule_id implicite depuis idx", function()
+    it("rule_id implicite depuis idx", function()
       local _, meta = rule_mod.compile_rule(cfg, {
         actions = {
           "allow"
         }
       }, 7)
       return assert.equals("r_7", meta.rule_id)
+    end)
+    it("conditions non-table → error", function()
+      return assert.has_error(function()
+        return rule_mod.compile_rule(cfg, {
+          actions = {
+            "allow"
+          },
+          conditions = "pas_une_table"
+        }, 1)
+      end)
+    end)
+    return it("nxdomain : block_modifiers collectés dans la règle", function()
+      local eval_fn, meta = rule_mod.compile_rule(cfg, {
+        description = "NXDOMAIN test",
+        actions = {
+          "nxdomain"
+        }
+      }, 1)
+      assert.equals("nxdomain", meta.actions[1].name)
+      local v, _ = eval_fn({ })
+      return assert.is_false(v)
     end)
   end)
   describe("compile_rule / conditions", function()
@@ -476,7 +497,7 @@ return describe("filter.rule", function()
       return assert.is_false(v)
     end)
   end)
-  return describe("decide_meta", function()
+  describe("decide_meta", function()
     it("retourne table structurée avec verdict/reason/rule_id/timeout", function()
       local rules = rule_mod.compile_rules({
         nft = {
@@ -505,6 +526,115 @@ return describe("filter.rule", function()
       })
       local meta = rule_mod.decide_meta(rules, { })
       return assert.is_false(meta.verdict)
+    end)
+  end)
+  describe("on_response_for", function()
+    it("retrouve les callbacks de la règle par rule_id", function()
+      local rules = rule_mod.compile_rules({
+        macs = { },
+        rules = {
+          {
+            rule_id = "strip",
+            actions = {
+              "dns_strip",
+              "allow"
+            },
+            dns_strip = {
+              rr_type = "AAAA"
+            }
+          }
+        }
+      })
+      local cbs = rule_mod.on_response_for(rules, "r_strip")
+      return assert.equals(2, #cbs)
+    end)
+    it("retourne {} si rule_id inconnu", function()
+      local rules = rule_mod.compile_rules({
+        macs = { },
+        rules = {
+          {
+            rule_id = "a",
+            actions = {
+              "allow"
+            }
+          }
+        }
+      })
+      return assert.same({ }, rule_mod.on_response_for(rules, "r_inexistant"))
+    end)
+    return it("retourne {} si rules ou rule_id nil", function()
+      assert.same({ }, rule_mod.on_response_for(nil, "r_x"))
+      return assert.same({ }, rule_mod.on_response_for({ }, nil))
+    end)
+  end)
+  describe("apply_on_response", function()
+    it("liste vide → inject_nft true, dns_raw inchangé", function()
+      local ctx = rule_mod.apply_on_response({ }, "RAW", "reason")
+      assert.equals("RAW", ctx.dns_raw)
+      assert.is_true(ctx.inject_nft)
+      return assert.is_false(ctx.modified)
+    end)
+    it("skip_nft seul (strip sans allow) → inject_nft false", function()
+      local cb
+      cb = function(c)
+        c.skip_nft = true
+      end
+      local ctx = rule_mod.apply_on_response({
+        cb
+      }, "RAW", "")
+      assert.is_true(ctx.skip_nft)
+      return assert.is_false(ctx.inject_nft)
+    end)
+    it("explicit_allow supplante skip_nft → inject_nft true", function()
+      local strip
+      strip = function(c)
+        c.skip_nft = true
+      end
+      local allow
+      allow = function(c)
+        c.explicit_allow = true
+      end
+      local ctx = rule_mod.apply_on_response({
+        strip,
+        allow
+      }, "RAW", "")
+      return assert.is_true(ctx.inject_nft)
+    end)
+    return it("callback peut modifier dns_raw et action_label", function()
+      local cb
+      cb = function(c)
+        c.dns_raw = "PATCHED"
+        c.modified = true
+        c.action_label = "response_strip_AAAA"
+      end
+      local ctx = rule_mod.apply_on_response({
+        cb
+      }, "RAW", "")
+      assert.equals("PATCHED", ctx.dns_raw)
+      assert.is_true(ctx.modified)
+      return assert.equals("response_strip_AAAA", ctx.action_label)
+    end)
+  end)
+  return describe("run_on_response", function()
+    return it("dispatch complet par rule_id (dns_strip + allow → inject_nft true)", function()
+      local rules = rule_mod.compile_rules({
+        macs = { },
+        rules = {
+          {
+            rule_id = "strip",
+            actions = {
+              "dns_strip",
+              "allow"
+            },
+            dns_strip = {
+              rr_type = "AAAA"
+            }
+          }
+        }
+      })
+      local ctx = rule_mod.run_on_response(rules, "r_strip", "RAW", "bugfix")
+      assert.is_true(ctx.skip_nft)
+      return assert.is_true(ctx.inject_nft)
     end)
   end)
 end)

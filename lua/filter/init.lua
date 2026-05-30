@@ -3,10 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
-local compile_rules, _decide, _decide_meta
+local compile_rules, _decide, _decide_meta, _on_response_for, _run_on_response
 do
   local _obj_0 = require("filter.rule")
-  compile_rules, _decide, _decide_meta = _obj_0.compile_rules, _obj_0.decide, _obj_0.decide_meta
+  compile_rules, _decide, _decide_meta, _on_response_for, _run_on_response = _obj_0.compile_rules, _obj_0.decide, _obj_0.decide_meta, _obj_0.on_response_for, _obj_0.run_on_response
 end
 local log_info, log_warn, log_debug
 do
@@ -179,20 +179,17 @@ get_auth_cfg = function()
 end
 local get_rule_on_response
 get_rule_on_response = function(rule_id)
-  if not (rules and rule_id) then
-    return { }
-  end
-  for idx, meta in ipairs((rules.rules_metadata or { })) do
-    if meta.rule_id == rule_id then
-      return meta.on_response or { }
-    end
-  end
-  return { }
+  return _on_response_for(rules, rule_id)
+end
+local run_on_response
+run_on_response = function(rule_id, dns_raw, reason)
+  return _run_on_response(rules, rule_id, dns_raw, reason)
 end
 return {
   load = load,
   decide = decide,
   decide_meta = decide_meta,
   get_auth_cfg = get_auth_cfg,
-  get_rule_on_response = get_rule_on_response
+  get_rule_on_response = get_rule_on_response,
+  run_on_response = run_on_response
 }
