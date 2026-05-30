@@ -272,51 +272,52 @@ return {
       type = "string",
       label = "Interface bridge",
       default = "br0"
+    }
+  },
+  sni = {
+    _label = "Verdict SNI",
+    _description = "Inspection et filtrage du trafic TLS/QUIC sur port 443",
+    enabled = {
+      type = "boolean",
+      label = "Activer verdict SNI",
+      default = true
     },
-    sni_verdict = {
-      _label = "Verdict SNI",
-      enabled = {
-        type = "boolean",
-        label = "Activer verdict SNI",
-        default = true
+    mode = {
+      type = "enum",
+      label = "Mode",
+      values = {
+        "strict-443",
+        "permissive"
       },
-      mode = {
-        type = "enum",
-        label = "Mode",
-        values = {
-          "strict-443",
-          "permissive"
-        },
-        default = "strict-443"
+      default = "strict-443"
+    },
+    placement = {
+      type = "enum",
+      label = "Placement nft",
+      values = {
+        "integral",
+        "residual"
       },
-      placement = {
-        type = "enum",
-        label = "Placement nft",
-        values = {
-          "integral",
-          "residual"
-        },
-        default = "residual"
+      default = "residual"
+    },
+    protocols = {
+      type = "enum",
+      label = "Protocoles",
+      values = {
+        "both",
+        "tls",
+        "quic"
       },
-      protocols = {
-        type = "enum",
-        label = "Protocoles",
-        values = {
-          "both",
-          "tls",
-          "quic"
-        },
-        default = "both"
+      default = "both"
+    },
+    nft_failure_policy = {
+      type = "enum",
+      label = "Politique d'échec",
+      values = {
+        "fail-closed",
+        "fail-open"
       },
-      nft_failure_policy = {
-        type = "enum",
-        label = "Politique d'échec",
-        values = {
-          "fail-closed",
-          "fail-open"
-        },
-        default = "fail-closed"
-      }
+      default = "fail-closed"
     }
   },
   doh = {

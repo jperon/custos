@@ -1168,10 +1168,10 @@ describe "filter.lib.load_config", ->
     assert.equals "::", cfg.auth.host
     assert.equals 30, cfg.auth.heartbeat_interval
     assert.equals 120, cfg.auth.idle_timeout
-    assert.is_true cfg.auth.sni_verdict.enabled
-    assert.equals "strict-443", cfg.auth.sni_verdict.mode
-    assert.equals "both", cfg.auth.sni_verdict.protocols
-    assert.equals "fail-closed", cfg.auth.sni_verdict.nft_failure_policy
+    assert.is_true cfg.sni.enabled
+    assert.equals "strict-443", cfg.sni.mode
+    assert.equals "both", cfg.sni.protocols
+    assert.equals "fail-closed", cfg.sni.nft_failure_policy
 
   it "non-table → nil + erreur", ->
     fd = io.open TMP_CFG, "w"

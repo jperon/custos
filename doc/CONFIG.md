@@ -266,9 +266,26 @@ Portail captif et authentification des utilisateurs.
 | `admin_users` | array | `{}` | Liste des utilisateurs avec droits administrateur (interface `/admin/*`) |
 | `admin_allow_all_when_empty` | bool | `true` | Si `true` et `admin_users` vide, tous les utilisateurs authentifiés sont admin |
 
-### 9.1 Sous-section `auth.sni_verdict`
+```moonscript
+auth: {
+  host: "::"
+  port: 33443
+  captive_port: 33080
+  cert: "/etc/custos/certs/auth.crt"
+  key:  "/etc/custos/keys/auth.key"
+  secrets: "/etc/custos/secrets"
+  session_ttl: 0
+  sessions_file: "/var/run/custos/sessions.lua"
+  bridge_ifname: "br0"
+}
+```
 
-Contrôle la vérification SNI pour les connexions TLS interceptées.
+---
+
+## 10. Section `sni`
+
+Inspection et filtrage du trafic TLS/QUIC sur port 443 (worker `worker_tls`,
+queue `nfqueue.sni`).
 
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
@@ -293,30 +310,30 @@ rapport aux règles de filtrage DNS compilées (`cv_rules_dispatch` /
 
 Une valeur inconnue retombe sur le défaut `"residual"`.
 
+**Fragmentation TLS** — les ClientHello étalés sur plusieurs segments TCP
+(petit MTU, PMTUd cassé, ClientHello volumineux avec ECH / post-quantique) sont
+réassemblés avant extraction du SNI, via le défragmenteur générique
+`ipparse.l4.tcp_stream` (le même que pour le DNS sur TCP/53). Le verdict tombe
+sur le segment qui complète l'enregistrement TLS Handshake ; en `strict-443`,
+un DROP à ce moment empêche la finalisation du handshake. Parité avec QUIC, où
+les CRYPTO frames multi-datagrammes étaient déjà réassemblés. *Limite connue* :
+un ClientHello réparti sur plusieurs **records** TLS distincts (>16 Ko, très
+rare) n'est pas recollé au niveau record ; le parser tolérant prend alors le
+relais sur le premier record.
+
 ```moonscript
-auth: {
-  host: "::"
-  port: 33443
-  captive_port: 33080
-  cert: "/etc/custos/certs/auth.crt"
-  key:  "/etc/custos/keys/auth.key"
-  secrets: "/etc/custos/secrets"
-  session_ttl: 0
-  sessions_file: "/var/run/custos/sessions.lua"
-  bridge_ifname: "br0"
-  sni_verdict: {
-    enabled: true
-    mode: "strict-443"
-    placement: "residual"
-    protocols: "both"
-    nft_failure_policy: "fail-closed"
-  }
+sni: {
+  enabled: true
+  mode: "strict-443"
+  placement: "residual"
+  protocols: "both"
+  nft_failure_policy: "fail-closed"
 }
 ```
 
 ---
 
-## 10. Section `doh`
+## 11. Section `doh`
 
 Proxy DNS-over-HTTPS vers un résolveur amont.
 
@@ -334,7 +351,7 @@ Proxy DNS-over-HTTPS vers un résolveur amont.
 
 ---
 
-## 11. Section `events`
+## 12. Section `events`
 
 Stockage des événements système (journaux d'activité).
 
@@ -346,7 +363,7 @@ Stockage des événements système (journaux d'activité).
 
 ---
 
-## 12. Section `metrics`
+## 13. Section `metrics`
 
 Collecte de métriques internes.
 
@@ -358,7 +375,7 @@ Collecte de métriques internes.
 
 ---
 
-## 13. Section `rtp`
+## 14. Section `rtp`
 
 Paramètres pour le trafic RTP/VoIP.
 
@@ -368,7 +385,7 @@ Paramètres pour le trafic RTP/VoIP.
 
 ---
 
-## 14. Section `filter`
+## 15. Section `filter`
 
 Section principale : définit les règles de filtrage DNS, les listes et la logique de décision.
 
@@ -585,7 +602,7 @@ Si aucune règle ne correspond, le verdict est `deny` (fail-closed).
 
 ---
 
-## 15. Référence des conditions
+## 16. Référence des conditions
 
 Les conditions se placent dans le champ `conditions` d'une règle.
 Elles sont combinées en **AND implicite** : toutes doivent être vraies pour que la règle s'applique.
@@ -701,7 +718,7 @@ conditions: {
 
 ---
 
-## 16. Référence des actions
+## 17. Référence des actions
 
 Les actions se placent dans le champ `actions` d'une règle, sous forme de tableau ordonné.
 La première action qui retourne un verdict non-nil (`true` ou `false`) gagne ;

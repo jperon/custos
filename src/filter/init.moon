@@ -22,6 +22,7 @@ config = require "config"
 
 rules = nil
 auth_cfg_cache = nil
+sni_cfg_cache = nil
 decision_cfg = nil
 
 clone = (v) ->
@@ -105,6 +106,7 @@ load = ->
   }
   rules = compile_rules cfg
   auth_cfg_cache = cfg.auth
+  sni_cfg_cache  = cfg.sni
   decision_cfg = cfg.decision or {}
   whitelist = cfg.dest_whitelist or {}
 
@@ -148,6 +150,9 @@ decide_meta = (req) ->
 get_auth_cfg = ->
   auth_cfg_cache or {}
 
+get_sni_cfg = ->
+  sni_cfg_cache or {}
+
 --- Retourne les callbacks on_response pour une règle donnée (par rule_id).
 -- Utilisé par worker_responses pour le dispatch générique sans hardcode.
 -- @tparam string rule_id Identifiant de règle (depuis l'entrée IPC)
@@ -163,4 +168,4 @@ get_rule_on_response = (rule_id) -> _on_response_for rules, rule_id
 -- @treturn table Contexte enrichi (cf. filter.rule.apply_on_response).
 run_on_response = (rule_id, dns_raw, reason) -> _run_on_response rules, rule_id, dns_raw, reason
 
-{ :load, :decide, :decide_meta, :get_auth_cfg, :get_rule_on_response, :run_on_response }
+{ :load, :decide, :decide_meta, :get_auth_cfg, :get_sni_cfg, :get_rule_on_response, :run_on_response }

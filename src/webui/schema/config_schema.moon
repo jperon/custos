@@ -91,14 +91,16 @@
     register_rate_limit:  { type: "integer", label: "Inscriptions max / fenêtre",                               default: 3 }
     register_rate_window: { type: "integer", label: "Fenêtre rate-limit (s)",                                    default: 300 }
     bridge_ifname:      { type: "string",  label: "Interface bridge",                                            default: "br0" }
-    sni_verdict: {
-      _label: "Verdict SNI"
-      enabled:            { type: "boolean", label: "Activer verdict SNI",      default: true }
-      mode:               { type: "enum",    label: "Mode", values: {"strict-443","permissive"}, default: "strict-443" }
-      placement:          { type: "enum",    label: "Placement nft", values: {"integral","residual"}, default: "residual" }
-      protocols:          { type: "enum",    label: "Protocoles", values: {"both","tls","quic"}, default: "both" }
-      nft_failure_policy: { type: "enum",    label: "Politique d'échec", values: {"fail-closed","fail-open"}, default: "fail-closed" }
-    }
+  }
+
+  sni: {
+    _label: "Verdict SNI"
+    _description: "Inspection et filtrage du trafic TLS/QUIC sur port 443"
+    enabled:            { type: "boolean", label: "Activer verdict SNI",      default: true }
+    mode:               { type: "enum",    label: "Mode", values: {"strict-443","permissive"}, default: "strict-443" }
+    placement:          { type: "enum",    label: "Placement nft", values: {"integral","residual"}, default: "residual" }
+    protocols:          { type: "enum",    label: "Protocoles", values: {"both","tls","quic"}, default: "both" }
+    nft_failure_policy: { type: "enum",    label: "Politique d'échec", values: {"fail-closed","fail-open"}, default: "fail-closed" }
   }
 
   doh: {

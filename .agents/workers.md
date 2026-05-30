@@ -41,7 +41,7 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 ## worker_tls (`src/worker_tls.moon`) — optionnel (`nfqueue.sni`)
 
 - **In :** NFQUEUE `QUEUE_SNI` (TCP/443 ACK path + UDP/443 QUIC Initial) ; pipe `events` ; pipe ACK `nft` dédié.
-- **Placement nft (`auth.sni_verdict.placement`) :** le placeholder
+- **Placement nft (`sni.placement`) :** le placeholder
   `{SNI_RULES_PRE}` / `{SNI_RULES_POST}` du template `dns-filter-bridge.nft` est
   rendu par `nft_rules.substitute` selon la valeur de `placement` :
   - `"integral"` : règle posée **AVANT** `cv_rules_dispatch`/`cv_action_vmap`,
@@ -55,12 +55,15 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
   (`nfqueue.sni` non défini → file sans listener), le paquet continue vers le
   dispatch DNS au lieu d'être droppé.
 - **Traitement :**
+  - réassemble les ClientHello TLS fragmentés sur plusieurs segments TCP via
+    `ipparse.l4.tcp_stream` (comme `worker_questions` pour le DNS/TCP) et les
+    CRYPTO frames QUIC multi-datagrammes via `ipparse.l7.quic.session`,
   - extrait le SNI (TLS/QUIC) via `ipparse`,
   - applique `filter.decide` sur le SNI normalisé,
-  - en mode `auth.sni_verdict.mode = strict-443` :
+  - en mode `sni.mode = strict-443` :
     - **allow** → ajoute la paire client→destination dans les sets nft (`ip*_allowed`, `mac*_allowed`) **via le pipe `nft`**,
     - **deny/no_sni** → `NF_DROP`.
-- **Out :** `NF_ACCEPT` ou `NF_DROP` selon la policy `auth.sni_verdict` (`protocols`, `nft_failure_policy`).
+- **Out :** `NF_ACCEPT` ou `NF_DROP` selon la policy `sni` (`protocols`, `nft_failure_policy`).
 
 ## worker_sip (`src/worker_sip.moon`) — optionnel (`nfqueue.sip`)
 

@@ -59,10 +59,8 @@ package.loaded[_update_1] = package.loaded[_update_1] or (function()
     doh = {
       port = 8443
     },
-    auth = {
-      sni_verdict = {
-        placement = "residual"
-      }
+    sni = {
+      placement = "residual"
     }
   }
 end)()
@@ -260,15 +258,14 @@ return describe("nft_rules : placement SNI integral/residual", function()
   cfg.doh = cfg.doh or {
     port = 8443
   }
-  cfg.auth = cfg.auth or { }
-  cfg.auth.sni_verdict = cfg.auth.sni_verdict or { }
+  cfg.sni = cfg.sni or { }
   local tmpl = "[PRE:{SNI_RULES_PRE}][POST:{SNI_RULES_POST}]"
   local split
   split = function(out)
     return out:match("%[PRE:(.-)%]%[POST:(.-)%]")
   end
   it("residual : règles SNI rendues APRÈS (POST), PRE vide", function()
-    cfg.auth.sni_verdict.placement = "residual"
+    cfg.sni.placement = "residual"
     local pre, post = split(substitute(tmpl))
     assert.is_nil(pre:find("queue num 6"))
     assert.truthy(post:find("th dport 443"))
@@ -276,17 +273,17 @@ return describe("nft_rules : placement SNI integral/residual", function()
     return assert.truthy(post:find("sni_quic"))
   end)
   it("integral : règles SNI rendues AVANT (PRE), POST vide", function()
-    cfg.auth.sni_verdict.placement = "integral"
+    cfg.sni.placement = "integral"
     local pre, post = split(substitute(tmpl))
     assert.truthy(pre:find("th dport 443"))
     assert.truthy(pre:find("queue num 6"))
     return assert.is_nil(post:find("queue num 6"))
   end)
   return it("défaut (placement absent) : comportement residual", function()
-    cfg.auth.sni_verdict.placement = nil
+    cfg.sni.placement = nil
     local pre, post = split(substitute(tmpl))
     assert.is_nil(pre:find("queue num 6"))
     assert.truthy(post:find("queue num 6"))
-    cfg.auth.sni_verdict.placement = "residual"
+    cfg.sni.placement = "residual"
   end)
 end)

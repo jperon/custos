@@ -120,13 +120,14 @@ DEFAULTS = {
     sessions_file: "/tmp/sessions.lua"
     admin_users: {}
     admin_allow_all_when_empty: true
-    sni_verdict: {
-      enabled: true
-      mode: "strict-443"
-      placement: "residual"
-      protocols: "both"
-      nft_failure_policy: "fail-closed"
-    }
+  }
+
+  sni: {
+    enabled: true
+    mode: "strict-443"
+    placement: "residual"
+    protocols: "both"
+    nft_failure_policy: "fail-closed"
   }
 
   doh: {
@@ -252,12 +253,12 @@ normalize = (cfg) ->
   cfg.filter.userlists = cfg.filter.userlists or cfg.filter.users or {}
   cfg.filter.users = cfg.filter.users or cfg.filter.userlists or {}
   cfg.auth = cfg.auth or {}
-  cfg.auth.sni_verdict = cfg.auth.sni_verdict or {}
+  cfg.sni  = cfg.sni  or {}
   defaults = DEFAULTS
   decision_defaults = defaults.filter and defaults.filter.decision or {}
   ttl_defaults = defaults.dns and defaults.dns.ttl_grace or {}
   auth_defaults = defaults.auth or {}
-  sni_defaults = auth_defaults.sni_verdict or {}
+  sni_defaults = defaults.sni or {}
 
   cfg.doh.enabled = coerce_boolean cfg.doh.enabled
   cfg.doh.prefer_ipv6 = coerce_boolean cfg.doh.prefer_ipv6
@@ -293,16 +294,16 @@ normalize = (cfg) ->
   cfg.auth.session_ttl = tonumber(cfg.auth.session_ttl) or auth_defaults.session_ttl
   cfg.auth.heartbeat_interval = tonumber(cfg.auth.heartbeat_interval) or auth_defaults.heartbeat_interval
   cfg.auth.idle_timeout = tonumber(cfg.auth.idle_timeout) or auth_defaults.idle_timeout
-  if cfg.auth.sni_verdict.enabled == nil
-    cfg.auth.sni_verdict.enabled = sni_defaults.enabled
+  if cfg.sni.enabled == nil
+    cfg.sni.enabled = sni_defaults.enabled
   else
-    cfg.auth.sni_verdict.enabled = coerce_boolean cfg.auth.sni_verdict.enabled
-  cfg.auth.sni_verdict.mode = cfg.auth.sni_verdict.mode or sni_defaults.mode
-  cfg.auth.sni_verdict.placement = cfg.auth.sni_verdict.placement or sni_defaults.placement
-  unless cfg.auth.sni_verdict.placement == "integral" or cfg.auth.sni_verdict.placement == "residual"
-    cfg.auth.sni_verdict.placement = sni_defaults.placement
-  cfg.auth.sni_verdict.protocols = cfg.auth.sni_verdict.protocols or sni_defaults.protocols
-  cfg.auth.sni_verdict.nft_failure_policy = cfg.auth.sni_verdict.nft_failure_policy or sni_defaults.nft_failure_policy
+    cfg.sni.enabled = coerce_boolean cfg.sni.enabled
+  cfg.sni.mode = cfg.sni.mode or sni_defaults.mode
+  cfg.sni.placement = cfg.sni.placement or sni_defaults.placement
+  unless cfg.sni.placement == "integral" or cfg.sni.placement == "residual"
+    cfg.sni.placement = sni_defaults.placement
+  cfg.sni.protocols = cfg.sni.protocols or sni_defaults.protocols
+  cfg.sni.nft_failure_policy = cfg.sni.nft_failure_policy or sni_defaults.nft_failure_policy
 
   cfg
 

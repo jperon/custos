@@ -311,7 +311,8 @@ L'installeur (`install-owrt.moon`) :
 La configuration runtime principale est `/etc/custos/config.moon` (surcharge partielle des
 défauts de `src/config.moon`). Elle est au format **MoonScript** et couvre :
 - `runtime`, `nfqueue` (dont `sni`, `sip`), `nft`, `dns`, `ipc`, `clients`, `mac_learner`
-- `auth` (port 33443, sessions, admin, et `auth.sni_verdict` pour le verdict SNI 443)
+- `auth` (port 33443, sessions, admin)
+- `sni` (verdict SNI 443 : inspection TLS/QUIC, placement nft, policy d'échec)
 - `doh` (serveur DoH HTTPS, port 8443, upstream)
 - `events` (persistance des événements), `metrics` (mesures par règle), `rtp` (ports RTP exclus)
 - le moteur de filtrage (`filter.rules`, `filter.nets`, `filter.macs`, `filter.times`,
@@ -754,7 +755,7 @@ Depuis un fichier texte (`{lists_dir}/user/admins.txt`) :
   resolver (`worker_doh`, port 8443) and apply the same filtering policy; it also
   ships a default rule answering NXDOMAIN to Firefox's canary domain to disable its
   auto-DoH. Arbitrary third-party DoH endpoints over port 443 are constrained via
-  the **SNI verdict** mechanism (`worker_tls`, `auth.sni_verdict`) rather than DNS.
+  the **SNI verdict** mechanism (`worker_tls`, `cfg.sni`) rather than DNS.
 - **DoT (DNS-over-TLS, port 853)**: not covered.
 - **Scaling**: each worker processes its NFQUEUE socket single-threadedly by
   design (share-nothing architecture). libnfq does support out-of-order verdicts
@@ -911,17 +912,17 @@ le résolveur filtré.
 `worker_tls` (optionnel, `nfqueue.sni`) intercepte les paquets TCP/443
 (ClientHello TLS) et UDP/443 (QUIC Initial), extrait le **SNI** via `ipparse`,
 puis applique `filter.decide` sur le nom extrait. En mode
-`auth.sni_verdict.mode = "strict-443"` :
+`sni.mode = "strict-443"` :
 - **allow** → la paire client→destination est ajoutée aux sets nft ;
 - **deny / SNI absent** → le paquet est rejeté (`NF_DROP`).
 
 ```moonscript
-auth:
-  sni_verdict:
-    enabled: true
-    mode: "strict-443"     -- ou "log" pour journaliser sans bloquer
-    protocols: "both"       -- "tls" | "quic" | "both"
-    nft_failure_policy: "fail-closed"
+sni: {
+  enabled: true
+  mode: "strict-443"     -- ou "permissive" pour journaliser sans bloquer
+  protocols: "both"       -- "tls" | "quic" | "both"
+  nft_failure_policy: "fail-closed"
+}
 ```
 
 Cela complète le filtrage DNS pour les clients qui contournent la résolution

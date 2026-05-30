@@ -13,7 +13,8 @@ package.loaded["config"] = package.loaded["config"] or {
   nft:     { family: "bridge", ip_timeout: "5m" }
   filter:  { rules: {}, default_rules: {}, decision: {}, sources: {},
              nets: {}, macs: {}, times: {}, userlists: {}, users: {} }
-  auth:    { port: 33443, sni_verdict: {} }
+  auth:    { port: 33443 }
+  sni:     {}
 }
 package.loaded["log"] = {
   debug: (->), info: (->), warn: (->), error: (->)

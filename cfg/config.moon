@@ -75,12 +75,13 @@
     register_rate_window: 300
     bridge_ifname: "br0"
     -- redirect_url: "https://portal.example.com/"
-    sni_verdict: {
-      enabled: true
-      mode: "strict-443"
-      protocols: "both"
-      nft_failure_policy: "fail-closed"
-    }
+  }
+
+  sni: {
+    enabled: true
+    mode: "strict-443"
+    protocols: "both"
+    nft_failure_policy: "fail-closed"
   }
 
   doh: {

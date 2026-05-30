@@ -65,14 +65,14 @@ local DEFAULTS = {
     secrets = "/etc/custos/secrets",
     sessions_file = "/tmp/sessions.lua",
     admin_users = { },
-    admin_allow_all_when_empty = true,
-    sni_verdict = {
-      enabled = true,
-      mode = "strict-443",
-      placement = "residual",
-      protocols = "both",
-      nft_failure_policy = "fail-closed"
-    }
+    admin_allow_all_when_empty = true
+  },
+  sni = {
+    enabled = true,
+    mode = "strict-443",
+    placement = "residual",
+    protocols = "both",
+    nft_failure_policy = "fail-closed"
   },
   doh = {
     enabled = true,
@@ -237,12 +237,12 @@ normalize = function(cfg)
   cfg.filter.userlists = cfg.filter.userlists or cfg.filter.users or { }
   cfg.filter.users = cfg.filter.users or cfg.filter.userlists or { }
   cfg.auth = cfg.auth or { }
-  cfg.auth.sni_verdict = cfg.auth.sni_verdict or { }
+  cfg.sni = cfg.sni or { }
   local defaults = DEFAULTS
   local decision_defaults = defaults.filter and defaults.filter.decision or { }
   local ttl_defaults = defaults.dns and defaults.dns.ttl_grace or { }
   local auth_defaults = defaults.auth or { }
-  local sni_defaults = auth_defaults.sni_verdict or { }
+  local sni_defaults = defaults.sni or { }
   cfg.doh.enabled = coerce_boolean(cfg.doh.enabled)
   cfg.doh.prefer_ipv6 = coerce_boolean(cfg.doh.prefer_ipv6)
   cfg.runtime.benchmark = coerce_boolean(cfg.runtime.benchmark)
@@ -275,18 +275,18 @@ normalize = function(cfg)
   cfg.auth.session_ttl = tonumber(cfg.auth.session_ttl) or auth_defaults.session_ttl
   cfg.auth.heartbeat_interval = tonumber(cfg.auth.heartbeat_interval) or auth_defaults.heartbeat_interval
   cfg.auth.idle_timeout = tonumber(cfg.auth.idle_timeout) or auth_defaults.idle_timeout
-  if cfg.auth.sni_verdict.enabled == nil then
-    cfg.auth.sni_verdict.enabled = sni_defaults.enabled
+  if cfg.sni.enabled == nil then
+    cfg.sni.enabled = sni_defaults.enabled
   else
-    cfg.auth.sni_verdict.enabled = coerce_boolean(cfg.auth.sni_verdict.enabled)
+    cfg.sni.enabled = coerce_boolean(cfg.sni.enabled)
   end
-  cfg.auth.sni_verdict.mode = cfg.auth.sni_verdict.mode or sni_defaults.mode
-  cfg.auth.sni_verdict.placement = cfg.auth.sni_verdict.placement or sni_defaults.placement
-  if not (cfg.auth.sni_verdict.placement == "integral" or cfg.auth.sni_verdict.placement == "residual") then
-    cfg.auth.sni_verdict.placement = sni_defaults.placement
+  cfg.sni.mode = cfg.sni.mode or sni_defaults.mode
+  cfg.sni.placement = cfg.sni.placement or sni_defaults.placement
+  if not (cfg.sni.placement == "integral" or cfg.sni.placement == "residual") then
+    cfg.sni.placement = sni_defaults.placement
   end
-  cfg.auth.sni_verdict.protocols = cfg.auth.sni_verdict.protocols or sni_defaults.protocols
-  cfg.auth.sni_verdict.nft_failure_policy = cfg.auth.sni_verdict.nft_failure_policy or sni_defaults.nft_failure_policy
+  cfg.sni.protocols = cfg.sni.protocols or sni_defaults.protocols
+  cfg.sni.nft_failure_policy = cfg.sni.nft_failure_policy or sni_defaults.nft_failure_policy
   return cfg
 end
 local load_external_config

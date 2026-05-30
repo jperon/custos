@@ -120,7 +120,7 @@ substitute = (content, plan=nil) ->
     ""
   content = content\gsub "{SIP_RULES}", sip_rules
 
-  -- Inspection SNI : placement piloté par auth.sni_verdict.placement.
+  -- Inspection SNI : placement piloté par sni.placement.
   --   "integral" → {SNI_RULES_PRE}  (avant cv_rules_dispatch) : tout le 443.
   --   "residual" → {SNI_RULES_POST} (après cv_action_vmap)    : filet de sécurité.
   -- {QUEUE_SNI} ayant déjà été substitué plus haut, on inline directement le n°.
@@ -129,7 +129,7 @@ substitute = (content, plan=nil) ->
     "    meta l4proto tcp th dport {443, 465, 587, 993, 995} tcp flags & (fin | syn | rst | ack) == ack log level debug prefix \"custos sni_tls: \" counter queue num #{sni_q} bypass comment \"TLS packets on TCP/443,465,587,993,995 (ACK, non-SYN) → SNI logger\""
     "    meta l4proto udp th dport 443 log level debug prefix \"custos sni_quic: \" counter queue num #{sni_q} bypass comment \"QUIC Initial UDP/443 → SNI logger\""
   }, "\n"
-  placement = cfg.auth and cfg.auth.sni_verdict and cfg.auth.sni_verdict.placement or "residual"
+  placement = cfg.sni and cfg.sni.placement or "residual"
   pre_rules, post_rules = if placement == "integral"
     sni_rules, ""
   else

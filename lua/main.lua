@@ -363,6 +363,7 @@ supervise = function(pipes, sfd)
   local filter_data = {
     rules = filter.rules,
     auth_cfg_cache = filter.auth_cfg_cache,
+    sni_cfg_cache = filter.sni_cfg_cache,
     decision_cfg = filter.decision_cfg
   }
   local workers_with_filter = { }

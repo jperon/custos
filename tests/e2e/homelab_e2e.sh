@@ -800,7 +800,7 @@ fi
 # 3-way handshake TCP. On installe donc un listener TCP factice (busybox `nc`)
 # sur `via` (alias 10.42.0.50:443) pour que le handshake aboutisse ; curl envoie
 # alors son ClientHello (chemin ACK), capturé par le worker SNI placé AVANT le
-# dispatch DNS (auth.sni_verdict.placement = "integral", cf. homelab-e2e.moon ;
+# dispatch DNS (sni.placement = "integral", cf. homelab-e2e.moon ;
 # en "residual" la paire déjà autorisée contournerait la file SNI).
 #   - SNI=site-a.lan  → R3 homelab_not_blocked → allow.
 #   - SNI=blocked.lan vers une IP autorisée (10.42.0.50) → le SYN passe, le

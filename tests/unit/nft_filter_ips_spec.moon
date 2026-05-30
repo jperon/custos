@@ -39,7 +39,7 @@ package.loaded["config"] or= do
     runtime: { log_level: "INFO" }
     filter:  { rules: {} }
     doh:     { port: 8443 }
-    auth:    { sni_verdict: { placement: "residual" } }
+    sni:     { placement: "residual" }
   }
 
 -- Stubs des modules Lua exigeant libnft ──────────────────────────────────
@@ -168,11 +168,11 @@ describe "nft_rules : substitution de {FILTER_IPS4/6_ELEMENTS}", ->
     set_block = "  set filter_ips4 {\n    type ipv4_addr\n" .. elements .. "  }"
     assert.is_nil set_block\find "elements"
 
--- ── Placement SNI (auth.sni_verdict.placement) ───────────────────────────
+-- ── Placement SNI (sni.placement) ───────────────────────────────────────
 
 describe "nft_rules : placement SNI integral/residual", ->
   -- config peut provenir d'un stub antérieur (chargé via `or=`) ne couvrant pas
-  -- auth/doh : on garantit la structure minimale exigée par substitute.
+  -- sni/doh : on garantit la structure minimale exigée par substitute.
   cfg = require "config"
   cfg.nfqueue = cfg.nfqueue or { questions: "0", responses: "1", captive: "2",
                                 reject: "3", auth: "5", sni: "6", sip: nil }
@@ -182,15 +182,14 @@ describe "nft_rules : placement SNI integral/residual", ->
   cfg.runtime = cfg.runtime or { log_level: "INFO" }
   cfg.filter = cfg.filter or { rules: {} }
   cfg.doh = cfg.doh or { port: 8443 }
-  cfg.auth = cfg.auth or {}
-  cfg.auth.sni_verdict = cfg.auth.sni_verdict or {}
+  cfg.sni = cfg.sni or {}
   tmpl = "[PRE:{SNI_RULES_PRE}][POST:{SNI_RULES_POST}]"
 
   -- Extrait les deux zones [PRE:…] et [POST:…] (le contenu SNI ne contient pas de ']').
   split = (out) -> out\match "%[PRE:(.-)%]%[POST:(.-)%]"
 
   it "residual : règles SNI rendues APRÈS (POST), PRE vide", ->
-    cfg.auth.sni_verdict.placement = "residual"
+    cfg.sni.placement = "residual"
     pre, post = split substitute tmpl
     assert.is_nil pre\find "queue num 6"
     assert.truthy post\find "th dport 443"
@@ -198,15 +197,15 @@ describe "nft_rules : placement SNI integral/residual", ->
     assert.truthy post\find "sni_quic"
 
   it "integral : règles SNI rendues AVANT (PRE), POST vide", ->
-    cfg.auth.sni_verdict.placement = "integral"
+    cfg.sni.placement = "integral"
     pre, post = split substitute tmpl
     assert.truthy pre\find "th dport 443"
     assert.truthy pre\find "queue num 6"
     assert.is_nil post\find "queue num 6"
 
   it "défaut (placement absent) : comportement residual", ->
-    cfg.auth.sni_verdict.placement = nil
+    cfg.sni.placement = nil
     pre, post = split substitute tmpl
     assert.is_nil pre\find "queue num 6"
     assert.truthy post\find "queue num 6"
-    cfg.auth.sni_verdict.placement = "residual"
+    cfg.sni.placement = "residual"

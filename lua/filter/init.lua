@@ -19,6 +19,7 @@ local ip_whitelist = require("ip_whitelist")
 local config = require("config")
 local rules = nil
 local auth_cfg_cache = nil
+local sni_cfg_cache = nil
 local decision_cfg = nil
 local clone
 clone = function(v)
@@ -126,6 +127,7 @@ load = function()
   end)
   rules = compile_rules(cfg)
   auth_cfg_cache = cfg.auth
+  sni_cfg_cache = cfg.sni
   decision_cfg = cfg.decision or { }
   local whitelist = cfg.dest_whitelist or { }
   inject_localnets(cfg, whitelist)
@@ -177,6 +179,10 @@ local get_auth_cfg
 get_auth_cfg = function()
   return auth_cfg_cache or { }
 end
+local get_sni_cfg
+get_sni_cfg = function()
+  return sni_cfg_cache or { }
+end
 local get_rule_on_response
 get_rule_on_response = function(rule_id)
   return _on_response_for(rules, rule_id)
@@ -190,6 +196,7 @@ return {
   decide = decide,
   decide_meta = decide_meta,
   get_auth_cfg = get_auth_cfg,
+  get_sni_cfg = get_sni_cfg,
   get_rule_on_response = get_rule_on_response,
   run_on_response = run_on_response
 }
