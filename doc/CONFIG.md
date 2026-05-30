@@ -274,8 +274,24 @@ Contrôle la vérification SNI pour les connexions TLS interceptées.
 |-----|------|--------|-------------|
 | `enabled` | bool | `true` | Active la vérification SNI |
 | `mode` | string | `"strict-443"` | Mode de vérification : `"strict-443"` n'inspecte que le port 443 |
+| `placement` | string | `"residual"` | Placement de la mise en file SNI dans le ruleset nft (cf. ci-dessous) : `"integral"` ou `"residual"` |
 | `protocols` | string | `"both"` | Protocoles à inspecter : `"both"`, `"tls"`, `"quic"` |
 | `nft_failure_policy` | string | `"fail-closed"` | Comportement si l'extraction SNI échoue : `"fail-closed"` bloque, `"fail-open"` laisse passer |
+
+**`placement`** — détermine *où* la règle de mise en file SNI est insérée par
+rapport aux règles de filtrage DNS compilées (`cv_rules_dispatch` /
+`@cv_action_vmap`) :
+
+- `"integral"` : la règle est placée **avant** le dispatch des règles. *Tout* le
+  trafic 443 (TCP + QUIC) est inspecté par SNI, y compris les destinations déjà
+  autorisées par résolution DNS. Garantit qu'aucun flux ne contourne
+  l'inspection SNI, mais c'est le mode le plus intrusif (peut perturber des
+  connexions légitimes vers des hôtes déjà autorisés).
+- `"residual"` (défaut) : la règle est placée **après** l'application du verdict.
+  Seul le trafic *non déjà autorisé* par DNS atteint la file SNI ; l'inspection
+  agit comme un filet de sécurité sur le trafic résiduel. Moins intrusif.
+
+Une valeur inconnue retombe sur le défaut `"residual"`.
 
 ```moonscript
 auth: {
@@ -291,6 +307,7 @@ auth: {
   sni_verdict: {
     enabled: true
     mode: "strict-443"
+    placement: "residual"
     protocols: "both"
     nft_failure_policy: "fail-closed"
   }

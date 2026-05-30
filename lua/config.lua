@@ -69,6 +69,7 @@ local DEFAULTS = {
     sni_verdict = {
       enabled = true,
       mode = "strict-443",
+      placement = "residual",
       protocols = "both",
       nft_failure_policy = "fail-closed"
     }
@@ -280,6 +281,10 @@ normalize = function(cfg)
     cfg.auth.sni_verdict.enabled = coerce_boolean(cfg.auth.sni_verdict.enabled)
   end
   cfg.auth.sni_verdict.mode = cfg.auth.sni_verdict.mode or sni_defaults.mode
+  cfg.auth.sni_verdict.placement = cfg.auth.sni_verdict.placement or sni_defaults.placement
+  if not (cfg.auth.sni_verdict.placement == "integral" or cfg.auth.sni_verdict.placement == "residual") then
+    cfg.auth.sni_verdict.placement = sni_defaults.placement
+  end
   cfg.auth.sni_verdict.protocols = cfg.auth.sni_verdict.protocols or sni_defaults.protocols
   cfg.auth.sni_verdict.nft_failure_policy = cfg.auth.sni_verdict.nft_failure_policy or sni_defaults.nft_failure_policy
   return cfg

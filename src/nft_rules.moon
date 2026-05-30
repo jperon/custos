@@ -120,6 +120,23 @@ substitute = (content, plan=nil) ->
     ""
   content = content\gsub "{SIP_RULES}", sip_rules
 
+  -- Inspection SNI : placement piloté par auth.sni_verdict.placement.
+  --   "integral" → {SNI_RULES_PRE}  (avant cv_rules_dispatch) : tout le 443.
+  --   "residual" → {SNI_RULES_POST} (après cv_action_vmap)    : filet de sécurité.
+  -- {QUEUE_SNI} ayant déjà été substitué plus haut, on inline directement le n°.
+  sni_q = cfg.nfqueue.sni
+  sni_rules = table.concat {
+    "    meta l4proto tcp th dport {443, 465, 587, 993, 995} tcp flags & (fin | syn | rst | ack) == ack log level debug prefix \"custos sni_tls: \" counter queue num #{sni_q} bypass comment \"TLS packets on TCP/443,465,587,993,995 (ACK, non-SYN) → SNI logger\""
+    "    meta l4proto udp th dport 443 log level debug prefix \"custos sni_quic: \" counter queue num #{sni_q} bypass comment \"QUIC Initial UDP/443 → SNI logger\""
+  }, "\n"
+  placement = cfg.auth and cfg.auth.sni_verdict and cfg.auth.sni_verdict.placement or "residual"
+  pre_rules, post_rules = if placement == "integral"
+    sni_rules, ""
+  else
+    "", sni_rules
+  content = content\gsub "{SNI_RULES_PRE}",  pre_rules
+  content = content\gsub "{SNI_RULES_POST}", post_rules
+
   -- Pré-peupler filter_ips4/6 dès l'application du ruleset pour éviter la
   -- race condition entre flush ruleset et nft_extra_rules.apply_from_config().
   ip4s = collect_ips "ip -4 addr show 2>/dev/null", "%s+inet%s+([%d%.]+)/", nil
@@ -240,4 +257,4 @@ apply = ->
   log_info -> { action: "nft_rules_applied", path: path }
   true
 
-{ :apply, _test: { :collect_ips, :fmt_elements } }
+{ :apply, _test: { :collect_ips, :fmt_elements, :substitute } }

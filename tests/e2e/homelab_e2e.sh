@@ -792,7 +792,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GROUPE 14 — SNI (TLS/HTTPS) via worker_tls (nfqueue.sni), mode strict-443
+# GROUPE 14 — SNI (TLS/HTTPS) via worker_tls (nfqueue.sni), placement=integral
 # Exerce le worker `tls` : capture du SNI depuis un ClientHello TLS (TCP/443),
 # puis verdict allow/deny appliqué sur le SNI normalisé.
 #
@@ -800,14 +800,15 @@ fi
 # 3-way handshake TCP. On installe donc un listener TCP factice (busybox `nc`)
 # sur `via` (alias 10.42.0.50:443) pour que le handshake aboutisse ; curl envoie
 # alors son ClientHello (chemin ACK), capturé par le worker SNI placé AVANT le
-# dispatch DNS (cf. nft-rules/dns-filter-bridge.nft, mode strict-443).
+# dispatch DNS (auth.sni_verdict.placement = "integral", cf. homelab-e2e.moon ;
+# en "residual" la paire déjà autorisée contournerait la file SNI).
 #   - SNI=site-a.lan  → R3 homelab_not_blocked → allow.
 #   - SNI=blocked.lan vers une IP autorisée (10.42.0.50) → le SYN passe, le
 #     worker voit blocked.lan et applique le verdict de blocage (r_default_deny).
 # servus n'a ni openssl ni `timeout` ; on utilise curl (mbedTLS) + --max-time.
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
-echo "=== G14 : SNI TLS (worker_tls, strict-443) ==="
+echo "=== G14 : SNI TLS (worker_tls, placement=integral) ==="
 flush_state
 
 SNI_DEST="10.42.0.50"   # IP de site-a.lan ; sert aussi de cible autorisée pour blocked.lan

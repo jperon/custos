@@ -45,6 +45,10 @@
     heartbeat_interval: 3
     -- alice est admin → exerce l'interface /admin (G13)
     admin_users:        {"alice@test.lan"}
+    -- G14 valide la capture SNI de TOUT le trafic 443, y compris les
+    -- destinations déjà autorisées par DNS → placement "integral" (avant
+    -- cv_action_vmap). Le défaut produit est "residual" (cf. doc/CONFIG.md).
+    sni_verdict: { placement: "integral" }
   }
 
   filter: {

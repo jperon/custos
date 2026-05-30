@@ -95,6 +95,7 @@
       _label: "Verdict SNI"
       enabled:            { type: "boolean", label: "Activer verdict SNI",      default: true }
       mode:               { type: "enum",    label: "Mode", values: {"strict-443","permissive"}, default: "strict-443" }
+      placement:          { type: "enum",    label: "Placement nft", values: {"integral","residual"}, default: "residual" }
       protocols:          { type: "enum",    label: "Protocoles", values: {"both","tls","quic"}, default: "both" }
       nft_failure_policy: { type: "enum",    label: "Politique d'échec", values: {"fail-closed","fail-open"}, default: "fail-closed" }
     }

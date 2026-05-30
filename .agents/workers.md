@@ -41,13 +41,19 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 ## worker_tls (`src/worker_tls.moon`) — optionnel (`nfqueue.sni`)
 
 - **In :** NFQUEUE `QUEUE_SNI` (TCP/443 ACK path + UDP/443 QUIC Initial) ; pipe `events` ; pipe ACK `nft` dédié.
-- **Placement nft (mode strict-443) :** la règle de mise en file SNI est posée
-  **AVANT** `cv_rules_dispatch`/`cv_action_vmap` (cf.
-  `nft-rules/dns-filter-bridge.nft`), afin que **tout** le trafic 443 soit
-  inspecté par SNI, y compris les destinations déjà autorisées par résolution
-  DNS — sinon un client autorisé contournerait l'inspection. La règle porte le
-  flag `bypass` : si le worker SNI est absent (`nfqueue.sni` non défini → file
-  sans listener), le paquet continue vers le dispatch DNS au lieu d'être droppé.
+- **Placement nft (`auth.sni_verdict.placement`) :** le placeholder
+  `{SNI_RULES_PRE}` / `{SNI_RULES_POST}` du template `dns-filter-bridge.nft` est
+  rendu par `nft_rules.substitute` selon la valeur de `placement` :
+  - `"integral"` : règle posée **AVANT** `cv_rules_dispatch`/`cv_action_vmap`,
+    afin que **tout** le trafic 443 soit inspecté par SNI, y compris les
+    destinations déjà autorisées par DNS (aucun contournement possible) ;
+  - `"residual"` (défaut) : règle posée **APRÈS** `@cv_action_vmap`, donc seul le
+    trafic non déjà autorisé atteint la file SNI (filet de sécurité, moins
+    intrusif).
+
+  Dans les deux cas la règle porte le flag `bypass` : si le worker SNI est absent
+  (`nfqueue.sni` non défini → file sans listener), le paquet continue vers le
+  dispatch DNS au lieu d'être droppé.
 - **Traitement :**
   - extrait le SNI (TLS/QUIC) via `ipparse`,
   - applique `filter.decide` sur le SNI normalisé,

@@ -55,6 +55,14 @@ package.loaded[_update_1] = package.loaded[_update_1] or (function()
     },
     filter = {
       rules = { }
+    },
+    doh = {
+      port = 8443
+    },
+    auth = {
+      sni_verdict = {
+        placement = "residual"
+      }
     }
   }
 end)()
@@ -88,8 +96,8 @@ package.loaded[_update_4] = package.loaded[_update_4] or {
 }
 local _test
 _test = require("nft_rules")._test
-local collect_ips, fmt_elements
-collect_ips, fmt_elements = _test.collect_ips, _test.fmt_elements
+local collect_ips, fmt_elements, substitute
+collect_ips, fmt_elements, substitute = _test.collect_ips, _test.fmt_elements, _test.substitute
 describe("nft_rules._test.fmt_elements", function()
   it("retourne une chaîne vide pour une table vide", function()
     return assert.equals("", fmt_elements({ }))
@@ -204,7 +212,7 @@ describe("nft_rules._test.collect_ips", function()
     end)
   end)
 end)
-return describe("nft_rules : substitution de {FILTER_IPS4/6_ELEMENTS}", function()
+describe("nft_rules : substitution de {FILTER_IPS4/6_ELEMENTS}", function()
   it("le résultat de fmt_elements s'insère syntaxiquement dans un bloc set nft", function()
     local elements = fmt_elements({
       "10.0.0.1",
@@ -223,5 +231,62 @@ return describe("nft_rules : substitution de {FILTER_IPS4/6_ELEMENTS}", function
     local elements = fmt_elements({ })
     local set_block = "  set filter_ips4 {\n    type ipv4_addr\n" .. elements .. "  }"
     return assert.is_nil(set_block:find("elements"))
+  end)
+end)
+return describe("nft_rules : placement SNI integral/residual", function()
+  local cfg = require("config")
+  cfg.nfqueue = cfg.nfqueue or {
+    questions = "0",
+    responses = "1",
+    captive = "2",
+    reject = "3",
+    auth = "5",
+    sni = "6",
+    sip = nil
+  }
+  cfg.nfqueue.sni = "6"
+  cfg.nft = cfg.nft or {
+    ip_timeout = "2m",
+    family = "bridge",
+    table = "dns-filter-bridge",
+    extra_rules = { }
+  }
+  cfg.runtime = cfg.runtime or {
+    log_level = "INFO"
+  }
+  cfg.filter = cfg.filter or {
+    rules = { }
+  }
+  cfg.doh = cfg.doh or {
+    port = 8443
+  }
+  cfg.auth = cfg.auth or { }
+  cfg.auth.sni_verdict = cfg.auth.sni_verdict or { }
+  local tmpl = "[PRE:{SNI_RULES_PRE}][POST:{SNI_RULES_POST}]"
+  local split
+  split = function(out)
+    return out:match("%[PRE:(.-)%]%[POST:(.-)%]")
+  end
+  it("residual : règles SNI rendues APRÈS (POST), PRE vide", function()
+    cfg.auth.sni_verdict.placement = "residual"
+    local pre, post = split(substitute(tmpl))
+    assert.is_nil(pre:find("queue num 6"))
+    assert.truthy(post:find("th dport 443"))
+    assert.truthy(post:find("queue num 6"))
+    return assert.truthy(post:find("sni_quic"))
+  end)
+  it("integral : règles SNI rendues AVANT (PRE), POST vide", function()
+    cfg.auth.sni_verdict.placement = "integral"
+    local pre, post = split(substitute(tmpl))
+    assert.truthy(pre:find("th dport 443"))
+    assert.truthy(pre:find("queue num 6"))
+    return assert.is_nil(post:find("queue num 6"))
+  end)
+  return it("défaut (placement absent) : comportement residual", function()
+    cfg.auth.sni_verdict.placement = nil
+    local pre, post = split(substitute(tmpl))
+    assert.is_nil(pre:find("queue num 6"))
+    assert.truthy(post:find("queue num 6"))
+    cfg.auth.sni_verdict.placement = "residual"
   end)
 end)

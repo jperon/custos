@@ -127,6 +127,20 @@ substitute = function(content, plan)
     sip_rules = ""
   end
   content = content:gsub("{SIP_RULES}", sip_rules)
+  local sni_q = cfg.nfqueue.sni
+  local sni_rules = table.concat({
+    "    meta l4proto tcp th dport {443, 465, 587, 993, 995} tcp flags & (fin | syn | rst | ack) == ack log level debug prefix \"custos sni_tls: \" counter queue num " .. tostring(sni_q) .. " bypass comment \"TLS packets on TCP/443,465,587,993,995 (ACK, non-SYN) → SNI logger\"",
+    "    meta l4proto udp th dport 443 log level debug prefix \"custos sni_quic: \" counter queue num " .. tostring(sni_q) .. " bypass comment \"QUIC Initial UDP/443 → SNI logger\""
+  }, "\n")
+  local placement = cfg.auth and cfg.auth.sni_verdict and cfg.auth.sni_verdict.placement or "residual"
+  local pre_rules, post_rules
+  if placement == "integral" then
+    pre_rules, post_rules = sni_rules, ""
+  else
+    pre_rules, post_rules = "", sni_rules
+  end
+  content = content:gsub("{SNI_RULES_PRE}", pre_rules)
+  content = content:gsub("{SNI_RULES_POST}", post_rules)
   local ip4s = collect_ips("ip -4 addr show 2>/dev/null", "%s+inet%s+([%d%.]+)/", nil)
   local ip6s = collect_ips("ip -6 addr show 2>/dev/null", "%s+inet6%s+([%x:]+)/", "^fe80")
   content = content:gsub("{FILTER_IPS4_ELEMENTS}", fmt_elements(ip4s))
@@ -289,6 +303,7 @@ return {
   apply = apply,
   _test = {
     collect_ips = collect_ips,
-    fmt_elements = fmt_elements
+    fmt_elements = fmt_elements,
+    substitute = substitute
   }
 }

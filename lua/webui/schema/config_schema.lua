@@ -289,6 +289,15 @@ return {
         },
         default = "strict-443"
       },
+      placement = {
+        type = "enum",
+        label = "Placement nft",
+        values = {
+          "integral",
+          "residual"
+        },
+        default = "residual"
+      },
       protocols = {
         type = "enum",
         label = "Protocoles",
