@@ -470,9 +470,9 @@ supervise = (pipes, sfd) ->
           decision_cfg: filter.decision_cfg
         }
 
-        -- Kill + refork all question/response/captive/reject/DOH workers to refresh COW filter lists
+        -- Kill + refork all question/response/captive/reject/DOH/SNI workers to refresh COW filter lists
         for w in *workers
-          if (w.name\match("^dns%-q") or w.name\match("^resp%-q") or w.name\match("^cap%-q") or w.name\match("^rej%-q") or w.name == "doh") and w.pid and w.pid > 0
+          if (w.name\match("^dns%-q") or w.name\match("^resp%-q") or w.name\match("^cap%-q") or w.name\match("^rej%-q") or w.name == "doh" or w.name == "tls") and w.pid and w.pid > 0
             log_info -> { action: "supervisor_sighup_kill", name: w.name, pid: w.pid }
             libc.kill w.pid, SIGTERM
             status = ffi.new "int[1]"

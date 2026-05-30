@@ -31,11 +31,59 @@ nft = require("config").nft
 local nft_cfg = nft or { }
 local SNI_TIMEOUT = nft_cfg.sni_timeout or nft_cfg.ip_timeout or "2m"
 local quic_sessions = { }
+local quic_sessions_seen = { }
+local quic_sessions_count = 0
+local QUIC_SESSION_TTL = 30
+local QUIC_SESSION_MAX = 4096
 local filter = nil
 local sni_policy = nil
 local cmd_for = nil
 local run_cmd = nil
 local events_wfd = nil
+local prune_quic_sessions
+prune_quic_sessions = function(now)
+  if now == nil then
+    now = os.time()
+  end
+  local removed = 0
+  for key, seen in pairs(quic_sessions_seen) do
+    if now - seen >= QUIC_SESSION_TTL then
+      quic_sessions[key] = nil
+      quic_sessions_seen[key] = nil
+      removed = removed + 1
+    end
+  end
+  quic_sessions_count = quic_sessions_count - removed
+  return removed
+end
+local reset_quic_sessions
+reset_quic_sessions = function()
+  for k in pairs(quic_sessions) do
+    quic_sessions[k] = nil
+  end
+  for k in pairs(quic_sessions_seen) do
+    quic_sessions_seen[k] = nil
+  end
+  quic_sessions_count = 0
+end
+local seed_quic_session
+seed_quic_session = function(key, seen)
+  if seen == nil then
+    seen = os.time()
+  end
+  if not (quic_sessions[key]) then
+    quic_sessions[key] = {
+      stub = true
+    }
+    quic_sessions_count = quic_sessions_count + 1
+  end
+  quic_sessions_seen[key] = seen
+  return quic_sessions_count
+end
+local quic_session_count
+quic_session_count = function()
+  return quic_sessions_count
+end
 local tls_version_name
 tls_version_name = function(ver)
   if not (ver) then
@@ -152,7 +200,7 @@ extract_sni_from_tls = function(payload, ctx)
     }
   end
   local success, client_hello_parsed = pcall(function()
-    return ipparse_tls_client_hello.parse(payload, 6)
+    return ipparse_tls_client_hello.parse(payload, 10)
   end)
   if success and client_hello_parsed and client_hello_parsed.extensions and #client_hello_parsed.extensions > 0 then
     if client_hello_parsed.version then
@@ -160,43 +208,40 @@ extract_sni_from_tls = function(payload, ctx)
       tls_version = tls_client_hello_version or tls_record_version
     end
     local ext_data = client_hello_parsed.extensions
-    if ext_data and #ext_data >= 2 then
-      local ext_list_len = (ext_data:byte(1)) * 256 + ext_data:byte(2)
-      if #ext_data >= 2 + ext_list_len then
-        local ext_offset = 3
-        local ext_end = 2 + ext_list_len
-        while ext_offset < ext_end and ext_offset + 3 <= #ext_data do
-          local ext_type = (ext_data:byte(ext_offset)) * 256 + ext_data:byte(ext_offset + 1)
-          local ext_len = (ext_data:byte(ext_offset + 2)) * 256 + ext_data:byte(ext_offset + 3)
-          local ext_payload_offset = ext_offset + 4
-          if ext_type == 0 and ext_payload_offset + ext_len <= #ext_data then
-            local sni_data = ext_data:sub(ext_payload_offset, ext_payload_offset + ext_len - 1)
-            local success_sni, sni_list = pcall(function()
-              return ipparse_server_name.parse(sni_data, 1)
-            end)
-            if success_sni and sni_list and sni_list.name then
-              debug_tls("tls_parse_strict_sni_found", {
-                sni = sni_list.name
-              })
-              return sni_list.name, nil, {
-                tls_version = tls_version,
-                tls_record_version = tls_record_version,
-                tls_client_hello_version = tls_client_hello_version,
-                tls_supported_version = tls_supported_version,
-                tls_parser_path = "strict"
-              }
-            end
-          end
-          if ext_type == 0x002b and ext_payload_offset + ext_len <= #ext_data then
-            local sv = extract_supported_versions(ext_data:sub(ext_payload_offset, ext_payload_offset + ext_len - 1))
-            if sv then
-              tls_supported_version = sv
-              tls_version = tls_supported_version
-            end
-          end
-          ext_offset = ext_payload_offset + ext_len
+    local i = 1
+    while i + 3 <= #ext_data do
+      local ext_type = (ext_data:byte(i)) * 256 + ext_data:byte(i + 1)
+      local ext_len = (ext_data:byte(i + 2)) * 256 + ext_data:byte(i + 3)
+      local ext_payload_offset = i + 4
+      if ext_payload_offset + ext_len - 1 > #ext_data then
+        break
+      end
+      if ext_type == 0 then
+        local sni_data = ext_data:sub(ext_payload_offset, ext_payload_offset + ext_len - 1)
+        local success_sni, sni_list = pcall(function()
+          return ipparse_server_name.parse(sni_data, 1)
+        end)
+        if success_sni and sni_list and sni_list.name then
+          debug_tls("tls_parse_strict_sni_found", {
+            sni = sni_list.name
+          })
+          return sni_list.name, nil, {
+            tls_version = tls_version,
+            tls_record_version = tls_record_version,
+            tls_client_hello_version = tls_client_hello_version,
+            tls_supported_version = tls_supported_version,
+            tls_parser_path = "strict"
+          }
         end
       end
+      if ext_type == 0x002b then
+        local sv = extract_supported_versions(ext_data:sub(ext_payload_offset, ext_payload_offset + ext_len - 1))
+        if sv then
+          tls_supported_version = sv
+          tls_version = tls_supported_version
+        end
+      end
+      i = ext_payload_offset + ext_len
     end
   end
   local offset = 10
@@ -383,6 +428,18 @@ extract_sni_from_quic = function(quic_payload, session_key)
       quic_parser_path = "none"
     }
   end
+  local now = os.time()
+  if quic_sessions_count >= QUIC_SESSION_MAX then
+    prune_quic_sessions(now)
+  end
+  local drop_session
+  drop_session = function()
+    if session_key and quic_sessions[session_key] then
+      quic_sessions[session_key] = nil
+      quic_sessions_seen[session_key] = nil
+      quic_sessions_count = quic_sessions_count - 1
+    end
+  end
   local session = nil
   if session_key and quic_sessions[session_key] then
     session = quic_sessions[session_key]
@@ -398,22 +455,22 @@ extract_sni_from_quic = function(quic_payload, session_key)
     session = session_or_err
     if session_key then
       quic_sessions[session_key] = session
+      quic_sessions_count = quic_sessions_count + 1
     end
+  end
+  if session_key then
+    quic_sessions_seen[session_key] = now
   end
   local ok_push, push_err = session:push(quic_payload)
   if not (ok_push) then
-    if session_key then
-      quic_sessions[session_key] = nil
-    end
+    drop_session()
     return nil, "quic_push_failed:" .. tostring(push_err), {
       quic_parser_path = "session"
     }
   end
   local sni = session:sni()
   if sni and #sni > 0 then
-    if session_key then
-      quic_sessions[session_key] = nil
-    end
+    drop_session()
     return sni, nil, {
       quic_parser_path = "session"
     }
@@ -782,6 +839,12 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
   local strict_mode = sni_policy and sni_policy.mode == "strict-443"
   local in_scope = protocol_in_scope(sni_policy, l4_proto)
   local mail_port = is_mail_ssl_port(dst_port)
+  local worker_src
+  if l4_proto == "udp" then
+    worker_src = "sni-quic"
+  else
+    worker_src = "sni-tls"
+  end
   if not (sni) then
     if protocol_name == "quic" and tls_reason and (tls_reason:match("^quic_session_init_failed") or tls_reason:match("^quic_push_failed")) then
       log_warn(function()
@@ -797,6 +860,7 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       log_block(function()
         return {
           action = "sni_verdict_block_no_sni",
+          worker = worker_src,
           pkt_id = pkt_id,
           protocol = protocol_name,
           l4_proto = l4_proto,
@@ -930,6 +994,7 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       log_block(function()
         return {
           action = "sni_verdict_nft_failed",
+          worker = worker_src,
           pkt_id = pkt_id,
           protocol = protocol_name,
           l4_proto = l4_proto,
@@ -960,6 +1025,7 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     log_allow(function()
       return {
         action = "sni_verdict_allow",
+        worker = worker_src,
         protocol = protocol_name,
         l4_proto = l4_proto,
         sni = sni_norm or sni,
@@ -997,6 +1063,7 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       log_block(function()
         return {
           action = "sni_verdict_block_dnsonly",
+          worker = worker_src,
           pkt_id = pkt_id,
           protocol = protocol_name,
           l4_proto = l4_proto,
@@ -1038,6 +1105,7 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     log_block(function()
       return {
         action = "sni_verdict_block",
+        worker = worker_src,
         pkt_id = pkt_id,
         protocol = protocol_name,
         l4_proto = l4_proto,
@@ -1142,7 +1210,6 @@ run = function(queue_num, ev_wfd, filter_data)
       queue = queue_num,
       mode = sni_policy.mode,
       protocols = sni_policy.protocols,
-      reset_nft_modules = reset_nft_modules,
       nft_failure_policy = sni_policy.nft_failure_policy
     }
   end)
@@ -1153,5 +1220,12 @@ return {
   normalize_sni = normalize_sni,
   protocol_in_scope = protocol_in_scope,
   apply_nft_allow = apply_nft_allow,
-  reset_nft_modules = reset_nft_modules
+  reset_nft_modules = reset_nft_modules,
+  extract_sni_from_tls = extract_sni_from_tls,
+  extract_sni_from_quic = extract_sni_from_quic,
+  quic_flow_key = quic_flow_key,
+  prune_quic_sessions = prune_quic_sessions,
+  reset_quic_sessions = reset_quic_sessions,
+  seed_quic_session = seed_quic_session,
+  quic_session_count = quic_session_count
 }

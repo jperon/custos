@@ -24,12 +24,55 @@ bit = require "bit"
 nft_cfg = nft or {}
 SNI_TIMEOUT = nft_cfg.sni_timeout or nft_cfg.ip_timeout or "2m"
 
+-- État de réassemblage QUIC, indexé par flow key. `quic_sessions_seen`
+-- mémorise la dernière activité (os.time) pour permettre une éviction TTL ;
+-- sans cela, un flux QUIC qui n'aboutit jamais (ni SNI ni push_failed) resterait
+-- indéfiniment en mémoire — fuite réelle sur routeur à faible RAM.
 quic_sessions = {}
+quic_sessions_seen = {}
+quic_sessions_count = 0
+QUIC_SESSION_TTL = 30      -- secondes sans activité avant éviction
+QUIC_SESSION_MAX = 4096    -- plafond dur ; déclenche un balayage si dépassé
 filter = nil
 sni_policy = nil
 cmd_for = nil
 run_cmd = nil
 events_wfd = nil
+
+-- Supprime les sessions QUIC inactives depuis plus de QUIC_SESSION_TTL.
+-- @tparam[opt] number now Horodatage courant (injectable pour les tests).
+-- @treturn number Nombre de sessions évincées.
+prune_quic_sessions = (now=os.time!) ->
+  removed = 0
+  for key, seen in pairs quic_sessions_seen
+    if now - seen >= QUIC_SESSION_TTL
+      quic_sessions[key] = nil
+      quic_sessions_seen[key] = nil
+      removed += 1
+  quic_sessions_count -= removed
+  removed
+
+-- Réinitialise complètement l'état QUIC (utile pour les tests).
+-- Vide les tables en place (sans réassigner) pour préserver les références.
+reset_quic_sessions = ->
+  for k in pairs quic_sessions
+    quic_sessions[k] = nil
+  for k in pairs quic_sessions_seen
+    quic_sessions_seen[k] = nil
+  quic_sessions_count = 0
+
+-- Insère une session factice (test seam) et renvoie le compteur courant.
+-- @tparam string key Flow key
+-- @tparam[opt] number seen Horodatage de dernière activité
+seed_quic_session = (key, seen=os.time!) ->
+  unless quic_sessions[key]
+    quic_sessions[key] = { stub: true }
+    quic_sessions_count += 1
+  quic_sessions_seen[key] = seen
+  quic_sessions_count
+
+-- Nombre de sessions QUIC actuellement suivies (test seam).
+quic_session_count = -> quic_sessions_count
 
 -- ── SNI Extraction Helpers ────────────────────────────────
 
@@ -108,48 +151,46 @@ extract_sni_from_tls = (payload, ctx={}) ->
     debug_tls "tls_parse_not_client_hello", { hs_type: string.format("0x%02x", hs_type) }
     return nil, "not_client_hello", { tls_version: tls_version, tls_parser_path: "none" }
 
-  -- Try strict parse first (full ClientHello available in one packet)
-  success, client_hello_parsed = pcall -> ipparse_tls_client_hello.parse payload, 6
+  -- Try strict parse first (full ClientHello available in one packet), via
+  -- ipparse. Le corps du ClientHello commence après l'en-tête de record TLS
+  -- (5 octets) et l'en-tête de handshake (4 octets) → offset 10 (1-indexé).
+  -- ipparse renvoie `extensions` SANS son préfixe de longueur 2 octets : on
+  -- itère donc directement les entrées (type|len|data), comme l7.quic.session.
+  success, client_hello_parsed = pcall -> ipparse_tls_client_hello.parse payload, 10
   if success and client_hello_parsed and client_hello_parsed.extensions and #client_hello_parsed.extensions > 0
     if client_hello_parsed.version
       tls_client_hello_version = tls_version_name client_hello_parsed.version
       tls_version = tls_client_hello_version or tls_record_version
 
-    -- Parse extensions field (format: 2-byte length + extension data)
     ext_data = client_hello_parsed.extensions
-    if ext_data and #ext_data >= 2
-      ext_list_len = (ext_data\byte 1) * 256 + ext_data\byte 2
-      if #ext_data >= 2 + ext_list_len
-        -- Parse individual extensions (skip 2-byte length header)
-        ext_offset = 3
-        ext_end = 2 + ext_list_len
+    i = 1
+    while i + 3 <= #ext_data
+      ext_type = (ext_data\byte i) * 256 + ext_data\byte(i + 1)
+      ext_len  = (ext_data\byte(i + 2)) * 256 + ext_data\byte(i + 3)
+      ext_payload_offset = i + 4
+      break if ext_payload_offset + ext_len - 1 > #ext_data
 
-        while ext_offset < ext_end and ext_offset + 3 <= #ext_data
-          ext_type = (ext_data\byte ext_offset) * 256 + ext_data\byte(ext_offset + 1)
-          ext_len = (ext_data\byte(ext_offset + 2)) * 256 + ext_data\byte(ext_offset + 3)
-          ext_payload_offset = ext_offset + 4
+      -- Extension type 0 = Server Name Indication
+      if ext_type == 0
+        sni_data = ext_data\sub ext_payload_offset, ext_payload_offset + ext_len - 1
+        success_sni, sni_list = pcall -> ipparse_server_name.parse sni_data, 1
+        if success_sni and sni_list and sni_list.name
+          debug_tls "tls_parse_strict_sni_found", { sni: sni_list.name }
+          return sni_list.name, nil, {
+            tls_version: tls_version
+            tls_record_version: tls_record_version
+            tls_client_hello_version: tls_client_hello_version
+            tls_supported_version: tls_supported_version
+            tls_parser_path: "strict"
+          }
 
-          -- Extension type 0 = Server Name Indication
-          if ext_type == 0 and ext_payload_offset + ext_len <= #ext_data
-            sni_data = ext_data\sub ext_payload_offset, ext_payload_offset + ext_len - 1
-            success_sni, sni_list = pcall -> ipparse_server_name.parse sni_data, 1
-            if success_sni and sni_list and sni_list.name
-              debug_tls "tls_parse_strict_sni_found", { sni: sni_list.name }
-              return sni_list.name, nil, {
-                tls_version: tls_version
-                tls_record_version: tls_record_version
-                tls_client_hello_version: tls_client_hello_version
-                tls_supported_version: tls_supported_version
-                tls_parser_path: "strict"
-              }
+      if ext_type == 0x002b
+        sv = extract_supported_versions ext_data\sub ext_payload_offset, ext_payload_offset + ext_len - 1
+        if sv
+          tls_supported_version = sv
+          tls_version = tls_supported_version
 
-          if ext_type == 0x002b and ext_payload_offset + ext_len <= #ext_data
-            sv = extract_supported_versions ext_data\sub ext_payload_offset, ext_payload_offset + ext_len - 1
-            if sv
-              tls_supported_version = sv
-              tls_version = tls_supported_version
-
-          ext_offset = ext_payload_offset + ext_len
+      i = ext_payload_offset + ext_len
 
   -- Fallback parser tolerant to fragmented ClientHello packets.
   -- It only requires the prefix up to the SNI extension.
@@ -309,6 +350,17 @@ extract_sni_from_quic = (quic_payload, session_key=nil) ->
   unless quic_header.pkt_type == 0x00
     return nil, "quic_not_initial", { quic_parser_path: "none" }
 
+  now = os.time!
+  -- Éviction TTL : balaye d'abord les flux dormants, puis le plafond dur.
+  prune_quic_sessions now if quic_sessions_count >= QUIC_SESSION_MAX
+
+  -- Helper de suppression cohérent (état + compteur + horodatage).
+  drop_session = ->
+    if session_key and quic_sessions[session_key]
+      quic_sessions[session_key] = nil
+      quic_sessions_seen[session_key] = nil
+      quic_sessions_count -= 1
+
   session = nil
   if session_key and quic_sessions[session_key]
     session = quic_sessions[session_key]
@@ -317,16 +369,19 @@ extract_sni_from_quic = (quic_payload, session_key=nil) ->
     unless ok_session and session_or_err
       return nil, "quic_session_init_failed:#{session_or_err}", { quic_parser_path: "session" }
     session = session_or_err
-    quic_sessions[session_key] = session if session_key
+    if session_key
+      quic_sessions[session_key] = session
+      quic_sessions_count += 1
+  quic_sessions_seen[session_key] = now if session_key
 
   ok_push, push_err = session\push quic_payload
   unless ok_push
-    quic_sessions[session_key] = nil if session_key
+    drop_session!
     return nil, "quic_push_failed:#{push_err}", { quic_parser_path: "session" }
 
   sni = session\sni!
   if sni and #sni > 0
-    quic_sessions[session_key] = nil if session_key
+    drop_session!
     return sni, nil, { quic_parser_path: "session" }
   nil, "quic_no_sni_in_crypto", { quic_parser_path: "session" }
 
@@ -567,6 +622,9 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
   strict_mode = sni_policy and sni_policy.mode == "strict-443"
   in_scope = protocol_in_scope sni_policy, l4_proto
   mail_port = is_mail_ssl_port dst_port
+  -- Source du verdict pour les logs : distingue le transport (TLS sur TCP,
+  -- QUIC sur UDP) afin que allow/deny indiquent d'où tombe la décision.
+  worker_src = if l4_proto == "udp" then "sni-quic" else "sni-tls"
 
   unless sni
     if protocol_name == "quic" and tls_reason and (
@@ -581,6 +639,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     if strict_mode and in_scope and not mail_port
       log_block -> {
         action: "sni_verdict_block_no_sni"
+        worker: worker_src
         pkt_id: pkt_id
         protocol: protocol_name
         l4_proto: l4_proto
@@ -698,6 +757,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     unless ok_nft
       log_block -> {
         action: "sni_verdict_nft_failed"
+        worker: worker_src
         pkt_id: pkt_id
         protocol: protocol_name
         l4_proto: l4_proto
@@ -724,6 +784,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
 
     log_allow -> {
       action: "sni_verdict_allow"
+      worker: worker_src
       protocol: protocol_name
       l4_proto: l4_proto
       sni: sni_norm or sni
@@ -759,6 +820,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     if strict_mode
       log_block -> {
         action: "sni_verdict_block_dnsonly"
+        worker: worker_src
         pkt_id: pkt_id
         protocol: protocol_name
         l4_proto: l4_proto
@@ -795,6 +857,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
   if strict_mode
     log_block -> {
       action: "sni_verdict_block"
+      worker: worker_src
       pkt_id: pkt_id
       protocol: protocol_name
       l4_proto: l4_proto
@@ -864,9 +927,13 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
     action: "policy_loaded"
     queue: queue_num
     mode: sni_policy.mode
-    protocols: sni_policy.protocols, :reset_nft_modules
+    protocols: sni_policy.protocols
     nft_failure_policy: sni_policy.nft_failure_policy
   }
   run_queue tonumber(queue_num), handle_sni_packet
 
-{ :run, :normalize_sni, :protocol_in_scope, :apply_nft_allow, :reset_nft_modules }
+{
+  :run, :normalize_sni, :protocol_in_scope, :apply_nft_allow, :reset_nft_modules
+  :extract_sni_from_tls, :extract_sni_from_quic, :quic_flow_key
+  :prune_quic_sessions, :reset_quic_sessions, :seed_quic_session, :quic_session_count
+}

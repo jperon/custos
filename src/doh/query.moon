@@ -106,6 +106,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
     meta = decide_meta req
     fields = {
       action:   if meta.verdict then "allow" else "block"
+      worker:   "doh"
       qname:    qname_text
       qtype:    q.qtype_name or tostring(q.qtype)
       client_ip: client_ip

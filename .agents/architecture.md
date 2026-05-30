@@ -25,6 +25,8 @@ nftables (table bridge)
     ├─ Port 33443     → QUEUE_AUTH      → worker_auth_queue → learn pipe (22 B) → mac_learner
     │
     ├─ TCP/443 + UDP/443 → QUEUE_SNI → worker_tls       ──→ nft pipe → worker_nft
+    │     (strict-443 : règle posée AVANT cv_action_vmap → tout le 443 inspecté ;
+    │      flag `bypass` → passe si worker SNI absent)
     │
     ├─ SIP/STUN (opt.)   → QUEUE_SIP     → worker_sip       ──→ nft pipe → worker_nft
     │
@@ -143,7 +145,7 @@ son verdict, afin que l'élément soit présent dans le set avant le retour du p
 | `QUEUE_RESPONSES` | `worker_responses` | `th sport 53 queue to N` | `NF_ACCEPT` ± payload patché | DNS TTL + EDE `Custos vigilat`, ou NXDOMAIN+EDE `Filtered` |
 | `QUEUE_CAPTIVE` | `worker_captive` | `tcp dport 80 … syn queue to N` | `NF_DROP` | 3 frames Ethernet via AF_PACKET (SYN-ACK, HTTP 302, FIN-ACK) |
 | `QUEUE_AUTH` | `worker_auth_queue` | trafic port 33443 | `NF_ACCEPT` | Aucune ; mac+ip dans `learn` → `mac_learner` |
-| `QUEUE_SNI` | `worker_tls` | `tcp/udp dport 443 queue to N` (opt.) | `NF_ACCEPT`/`NF_DROP` selon `auth.sni_verdict` | Paire client→dest dans `ip*_allowed`/`mac*_allowed` via pipe `nft` |
+| `QUEUE_SNI` | `worker_tls` | `tcp/udp dport 443 queue to N bypass` (opt., **avant** `cv_action_vmap` en strict-443) | `NF_ACCEPT`/`NF_DROP` selon `auth.sni_verdict` | Paire client→dest dans `ip*_allowed`/`mac*_allowed` via pipe `nft` |
 | `QUEUE_SIP` | `worker_sip` | trafic SIP/STUN (opt.) | `NF_ACCEPT` | IP proxy + médias SDP dans des sets nft par règle (TTL `nft.sip_session_ttl`) via pipe `nft` |
 | `QUEUE_REJECT` | `worker_reject` | drop résiduel rate-limité | `NF_ACCEPT` + payload forgé | TCP RST/ACK ou ICMPv4 type 3/code 13 ou ICMPv6 type 1/code 1 |
 

@@ -169,6 +169,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
           return "block"
         end
       end)(),
+      worker = "doh",
       qname = qname_text,
       qtype = q.qtype_name or tostring(q.qtype),
       client_ip = client_ip,

@@ -386,6 +386,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   local allow_timeout = nil
   local block_modifiers = nil
   local q_fields = {
+    worker = "dns",
     mac_src = l2.mac_src,
     vlan = l2.vlan,
     in_if = tostring(l2.in_ifindex),

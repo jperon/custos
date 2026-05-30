@@ -485,7 +485,7 @@ supervise = function(pipes, sfd)
         }
         for _index_0 = 1, #workers do
           local w = workers[_index_0]
-          if (w.name:match("^dns%-q") or w.name:match("^resp%-q") or w.name:match("^cap%-q") or w.name:match("^rej%-q") or w.name == "doh") and w.pid and w.pid > 0 then
+          if (w.name:match("^dns%-q") or w.name:match("^resp%-q") or w.name:match("^cap%-q") or w.name:match("^rej%-q") or w.name == "doh" or w.name == "tls") and w.pid and w.pid > 0 then
             log_info(function()
               return {
                 action = "supervisor_sighup_kill",

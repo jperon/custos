@@ -13,6 +13,7 @@
     captive:   "20"
     reject:    "10-11"
     auth:      "5"
+    sni:       "6"
   }
 
   dns: {

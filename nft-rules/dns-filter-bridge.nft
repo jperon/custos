@@ -192,16 +192,23 @@ table bridge dns-filter-bridge {
     meta l4proto udp ip  saddr @sip_peers  ip  daddr @sip_peers  accept comment "SIP RTP pairs appris v4"
     meta l4proto udp ip6 saddr @sip_peers6 ip6 daddr @sip_peers6 accept comment "SIP RTP pairs appris v6"
 
+    # SNI logging/enforcement (mode strict-443) : capture TCP/443 client packets
+    # (ACK path, excluding SYN/RST/FIN) + QUIC UDP/443.
+    # IMPORTANT : ces règles sont placées AVANT `cv_rules_dispatch` afin que TOUT
+    # le trafic 443 soit inspecté par SNI, y compris les destinations déjà
+    # autorisées par résolution DNS. Sans cela, un client autorisé contournerait
+    # l'inspection SNI (cv_action_vmap accepte avant d'atteindre la file SNI).
+    # `bypass` : si le worker SNI est absent (nfqueue.sni non défini → file sans
+    # listener), le paquet continue vers le dispatch DNS au lieu d'être droppé.
+    # Certains clients envoient ClientHello sans flag PSH, donc on ne filtre pas sur PSH.
+    # Ports mail SSL (SMTPS 465, IMAPS 993, POP3S 995, STARTTLS 587) : même logique SNI mais absence de SNI = alerte (pas de blocage).
+    meta l4proto tcp th dport {443, 465, 587, 993, 995} tcp flags & (fin | syn | rst | ack) == ack log level debug prefix "custos sni_tls: " counter queue num {QUEUE_SNI} bypass comment "TLS packets on TCP/443,465,587,993,995 (ACK, non-SYN) → SNI logger"
+    meta l4proto udp th dport 443 log level debug prefix "custos sni_quic: " counter queue num {QUEUE_SNI} bypass comment "QUIC Initial UDP/443 → SNI logger"
+
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
     jump cv_rules_dispatch comment "Compiled filter rules"
     meta mark vmap @cv_action_vmap comment "Apply verdict from compiled rules"
-
-    # SNI logging/enforcement: capture TCP/443 client packets (ACK path, excluding SYN/RST/FIN) + QUIC UDP/443.
-    # Certains clients envoient ClientHello sans flag PSH, donc on ne filtre pas sur PSH.
-    # Ports mail SSL (SMTPS 465, IMAPS 993, POP3S 995, STARTTLS 587) : même logique SNI mais absence de SNI = alerte (pas de blocage).
-    meta l4proto tcp th dport {443, 465, 587, 993, 995} tcp flags & (fin | syn | rst | ack) == ack log level debug prefix "custos sni_tls: " counter queue num {QUEUE_SNI} comment "TLS packets on TCP/443,465,587,993,995 (ACK, non-SYN) → SNI logger"
-    meta l4proto udp th dport 443 log level debug prefix "custos sni_quic: " counter queue num {QUEUE_SNI} comment "QUIC Initial UDP/443 → SNI logger"
 
     # Courriel : heuristiques rapides (dport = client → serveur).
     # Placées APRÈS les sets whitelist/allowed : un client autorisé passe avant

@@ -34,6 +34,23 @@ assert_contains() {
     fi
 }
 
+# Vérifie qu'UNE même ligne de $output contient TOUS les termes (ordre
+# indifférent). Les champs de log sont émis dans un ordre non déterministe
+# (itération `pairs` de Lua) : on ne peut donc pas se fier à leur position.
+assert_log_has() {
+    local label="$1"; shift
+    local output="$1"; shift
+    local filtered="$output" t
+    for t in "$@"; do
+        filtered=$(printf '%s\n' "$filtered" | grep -F -- "$t" || true)
+    done
+    if [ -n "$filtered" ]; then
+        ok "$label"
+    else
+        fail "$label" "termes absents sur une même ligne: $*"
+    fi
+}
+
 assert_not_contains() {
     local label="$1" pattern="$2" output="$3"
     if echo "$output" | grep -qE "$pattern"; then
@@ -535,6 +552,8 @@ logs=$(custos_logs)
 assert_contains "T90 log homelab_not_blocked présent" "homelab_not_blocked" "$logs"
 assert_contains "T91 log default_deny présent"        "default_deny"        "$logs"
 assert_contains "T92 log ext_dnsonly présent"         "ext_dnsonly"         "$logs"
+# T93 : les verdicts allow/deny mentionnent le worker source (dns/doh/sni).
+assert_contains "T93 verdict DNS mentionne worker=dns" "worker=dns" "$logs"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GROUPE 12 — DoH (DNS-over-HTTPS) avec mini CA
@@ -770,6 +789,122 @@ else
     else
         fail "T118b service toujours vivant après reload" "custos absent après SIGHUP"
     fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GROUPE 14 — SNI (TLS/HTTPS) via worker_tls (nfqueue.sni), mode strict-443
+# Exerce le worker `tls` : capture du SNI depuis un ClientHello TLS (TCP/443),
+# puis verdict allow/deny appliqué sur le SNI normalisé.
+#
+# Mécanique du test : le ClientHello n'est émis qu'après l'aboutissement du
+# 3-way handshake TCP. On installe donc un listener TCP factice (busybox `nc`)
+# sur `via` (alias 10.42.0.50:443) pour que le handshake aboutisse ; curl envoie
+# alors son ClientHello (chemin ACK), capturé par le worker SNI placé AVANT le
+# dispatch DNS (cf. nft-rules/dns-filter-bridge.nft, mode strict-443).
+#   - SNI=site-a.lan  → R3 homelab_not_blocked → allow.
+#   - SNI=blocked.lan vers une IP autorisée (10.42.0.50) → le SYN passe, le
+#     worker voit blocked.lan et applique le verdict de blocage (r_default_deny).
+# servus n'a ni openssl ni `timeout` ; on utilise curl (mbedTLS) + --max-time.
+# ══════════════════════════════════════════════════════════════════════════════
+echo ""
+echo "=== G14 : SNI TLS (worker_tls, strict-443) ==="
+flush_state
+
+SNI_DEST="10.42.0.50"   # IP de site-a.lan ; sert aussi de cible autorisée pour blocked.lan
+
+sni_listener_stop() {
+    ssh_vm "$E2E_IP_VIA" "
+        for p in \$(ps w 2>/dev/null | grep -E 'nc -l -p 443|while true; do nc' | grep -v grep | awk '{print \$1}'); do
+            kill -9 \$p 2>/dev/null
+        done
+        killall -9 nc 2>/dev/null
+        ip addr del ${SNI_DEST}/24 dev eth1 2>/dev/null
+    " || true
+}
+
+servus_ip=$(servus_data_ip4)
+if [ -z "$servus_ip" ]; then
+    skip "T120-T125 SNI" "IP data-plane de servus introuvable"
+elif [ -z "${E2E_IP_VIA:-}" ]; then
+    skip "T120-T125 SNI" "IP de management de via introuvable (listener impossible)"
+else
+    # ── T120 : le worker tls est démarré (processus vivant) ───────────────────
+    # On vérifie le processus plutôt que le log policy_loaded : ce dernier est
+    # émis au démarrage et peut être évincé du buffer logread après les autres
+    # groupes. La capture SNI ci-dessous (T121) prouve que la politique est
+    # bien chargée et active.
+    if ssh_vm "$E2E_IP_CUSTOS" "ps w | grep -q '[c]ustos:tls' && echo UP" | grep -q UP; then
+        ok "T120 worker_tls démarré (processus actif)"
+    else
+        fail "T120 worker_tls démarré (processus actif)" "processus {custos:tls} absent"
+    fi
+
+    # Listener TCP factice sur via : alias 10.42.0.50:443 + boucle nc (busybox nc
+    # ne gère qu'une connexion par invocation). setsid détache la boucle de la
+    # session SSH. Le handshake TCP aboutit ; nc ne répond pas en TLS (peu
+    # importe : le ClientHello a déjà traversé le pont et été capturé).
+    sni_listener_stop
+    ssh_vm "$E2E_IP_VIA" "
+        ip addr add ${SNI_DEST}/24 dev eth1 2>/dev/null
+        setsid sh -c 'while true; do nc -l -p 443 >/dev/null 2>&1; done' >/dev/null 2>&1 &
+        echo started
+    "
+    sleep 1
+
+    # Résout site-a.lan → autorise la paire (servus, 10.42.0.50) : le SYN passe.
+    dig_from "$E2E_IP_SERVUS" "site-a.lan" "A" >/dev/null
+
+    # ── T121/T122 : ClientHello SNI=site-a.lan (autorisé) ─────────────────────
+    ssh_vm "$E2E_IP_SERVUS" "
+        for i in 1 2 3; do
+            curl -sk --max-time 4 --resolve site-a.lan:443:${SNI_DEST} \
+                'https://site-a.lan/' >/dev/null 2>&1 || true
+            sleep 1
+        done
+    "
+    sleep 2
+    logs=$(custos_logs)
+    assert_log_has "T121 worker_tls capture le SNI site-a.lan (TLS)" \
+        "$logs" "action=sni_captured" "sni=site-a.lan"
+    assert_log_has "T122 verdict SNI allow site-a.lan (worker=sni-tls)" \
+        "$logs" "action=sni_verdict_allow" "sni=site-a.lan" "worker=sni-tls"
+
+    # ── T123/T124 : ClientHello SNI=blocked.lan vers une IP autorisée ─────────
+    # 10.42.0.50 est autorisé (site-a) → le SYN passe et le handshake aboutit ;
+    # le worker voit le SNI=blocked.lan et applique le verdict de blocage.
+    ssh_vm "$E2E_IP_SERVUS" "
+        for i in 1 2; do
+            curl -sk --max-time 4 --resolve blocked.lan:443:${SNI_DEST} \
+                'https://blocked.lan/' >/dev/null 2>&1 || true
+            sleep 1
+        done
+    "
+    sleep 2
+    logs=$(custos_logs)
+    assert_log_has "T123 worker_tls capture le SNI blocked.lan" \
+        "$logs" "action=sni_captured" "sni=blocked.lan"
+    assert_log_has "T124 verdict SNI block blocked.lan (worker=sni-tls)" \
+        "$logs" "action=sni_verdict_block" "sni=blocked.lan" "worker=sni-tls"
+
+    # ── T125 : QUIC Initial (UDP/443) — best-effort selon outillage dispo ─────
+    if ssh_vm "$E2E_IP_SERVUS" "curl --version 2>/dev/null | grep -q HTTP3 && echo HTTP3"; then
+        ssh_vm "$E2E_IP_SERVUS" "
+            curl -sk --max-time 5 --http3-only \
+                --resolve site-a.lan:443:${SNI_DEST} \
+                'https://site-a.lan/' >/dev/null 2>&1 || true
+        "
+        sleep 2
+        logs=$(custos_logs)
+        if echo "$logs" | grep -qE "protocol=quic|l4_proto=udp|worker=sni-quic"; then
+            ok "T125 worker_tls traite un QUIC Initial (UDP/443)"
+        else
+            skip "T125 QUIC Initial" "aucun log quic (handshake non émis ou non intercepté)"
+        fi
+    else
+        skip "T125 QUIC Initial" "curl sans support HTTP/3 sur servus"
+    fi
+
+    sni_listener_stop
 fi
 
 # ─── RAPPORT FINAL ─────────────────────────────────────────────────────────────

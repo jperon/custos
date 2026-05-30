@@ -344,6 +344,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   allow_timeout   = nil
   block_modifiers = nil
   q_fields = {
+    worker:   "dns"
     mac_src:  l2.mac_src
     vlan:     l2.vlan
     in_if:    tostring l2.in_ifindex
