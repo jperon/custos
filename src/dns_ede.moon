@@ -251,4 +251,20 @@ clear_ad_bit = (dns_payload) ->
   -- Reconstruct DNS payload with cleared AD bit
   dns_payload\sub(1, 2) .. string.char(bit.rshift(flags_new, 8)) .. string.char(bit.band(flags_new, 0xFF)) .. dns_payload\sub(5)
 
-{ :add_ede, :build_blocked_response, :build_nxdomain_response, :add_ede_modified, :strip_dns_rr, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :EDE_BLOCKED, :EDE_TTL_MODIFIED }
+--- Patch « toujours appliqué » d'une réponse DNS autorisée : retire les RR
+-- HTTPS/SVCB (force les clients à révéler le SNI), et si la réponse a changé
+-- efface le bit AD (signature DNSSEC invalidée) puis ajoute un EDE « modifié ».
+-- Partagé par worker_responses (plan de données) et doh/query (DoH).
+-- @tparam string dns_payload Réponse DNS brute (wire format).
+-- @tparam string reason      Raison (pour l'EDE).
+-- @treturn string  Réponse patchée (ou identique si rien à retirer).
+-- @treturn boolean true si le payload a été modifié.
+patch_modified_dns = (dns_payload, reason) ->
+  new_dns = strip_https_rr(dns_payload) or dns_payload
+  modified = new_dns != dns_payload
+  if modified
+    new_dns = clear_ad_bit new_dns
+    new_dns = add_ede_modified(new_dns, reason) or new_dns
+  new_dns, modified
+
+{ :add_ede, :build_blocked_response, :build_nxdomain_response, :add_ede_modified, :strip_dns_rr, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :patch_modified_dns, :EDE_BLOCKED, :EDE_TTL_MODIFIED }

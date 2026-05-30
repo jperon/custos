@@ -48,6 +48,9 @@ new = (check_complete=(-> true)) ->
     -- @tparam string key
     clear: (key) -> sessions[key] = nil
 
+    --- Drop every tracked session (vidage en place, références préservées).
+    reset: -> sessions[k] = nil for k in pairs sessions
+
     --- Purge sessions older than max_age seconds.
     -- @tparam[opt=300] number max_age
     purge: (max_age=300) ->

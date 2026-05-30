@@ -52,10 +52,15 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now, _obj_0.set_action_prefix
 end
-local build_blocked_response, build_nxdomain_response, strip_https_rr, add_ede_modified, clear_ad_bit
+local build_blocked_response, build_nxdomain_response, strip_https_rr, add_ede_modified, clear_ad_bit, patch_modified_dns
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, build_nxdomain_response, strip_https_rr, add_ede_modified, clear_ad_bit = _obj_0.build_blocked_response, _obj_0.build_nxdomain_response, _obj_0.strip_https_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit
+  build_blocked_response, build_nxdomain_response, strip_https_rr, add_ede_modified, clear_ad_bit, patch_modified_dns = _obj_0.build_blocked_response, _obj_0.build_nxdomain_response, _obj_0.strip_https_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.patch_modified_dns
+end
+local rr_timeout, detect_wildcards, inject
+do
+  local _obj_0 = require("response_inject")
+  rr_timeout, detect_wildcards, inject = _obj_0.rr_timeout, _obj_0.detect_wildcards, _obj_0.inject
 end
 local bit = require("bit")
 local PROTO_UDP = 17
@@ -473,32 +478,7 @@ local auth_wildcard_rules = { }
 local load_auth_wildcard_rules
 load_auth_wildcard_rules = function(metadata)
   rules_metadata = metadata
-  auth_wildcard_rules = { }
-  for idx, meta in ipairs(rules_metadata or { }) do
-    local requires_auth = false
-    local dns_refs = 0
-    if meta.conditions then
-      for _, cond in ipairs(meta.conditions) do
-        if cond.name == "from_users" or cond.name == "from_userlists" then
-          requires_auth = true
-        end
-        if cond.name == "to_domains" or cond.name == "to_domainlist" then
-          dns_refs = dns_refs + 1
-        end
-      end
-    end
-    if requires_auth and dns_refs == 0 then
-      local rule_id = meta.rule_id or "unknown_" .. tostring(idx)
-      auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
-      log_info(function()
-        return {
-          action = "auth_wildcard_rule_detected",
-          rule_id = rule_id,
-          idx = idx
-        }
-      end)
-    end
-  end
+  auth_wildcard_rules = detect_wildcards(metadata)
   return log_info(function()
     return {
       action = "auth_wildcard_rules_loaded",
@@ -506,14 +486,6 @@ load_auth_wildcard_rules = function(metadata)
       rules = table.concat(auth_wildcard_rules, ", ")
     }
   end)
-end
-local add_to_wildcard_rules
-add_to_wildcard_rules = function(add_fn, key, dest, timeout, corr)
-  local any_ok = false
-  for _, auth_rule_id in ipairs(auth_wildcard_rules) do
-    any_ok = any_ok or add_fn(key, dest, auth_rule_id, timeout, corr)
-  end
-  return any_ok
 end
 local IPC_RETRY_ENABLED
 if match_retry_cfg.enabled == nil then
@@ -636,39 +608,6 @@ resolve_client_family = function(ip_str, want)
     end
   end
   return nil
-end
-local clamp
-clamp = function(value, min_v, max_v)
-  if value < min_v then
-    return min_v
-  end
-  if value > max_v then
-    return max_v
-  end
-  return value
-end
-local rr_timeout
-rr_timeout = function(ttl)
-  local grace = math.max(0, math.floor(tonumber(ttl_cfg.grace) or 600))
-  local min_t = math.max(1, math.floor(tonumber(ttl_cfg.min) or 60))
-  local max_t = math.max(min_t, math.floor(tonumber(ttl_cfg.max) or 2592000))
-  local rr_ttl = tonumber(ttl) or 0
-  rr_ttl = math.floor(rr_ttl)
-  if rr_ttl < 0 then
-    rr_ttl = 0
-  end
-  local effective = clamp(rr_ttl + grace, min_t, max_t)
-  return tostring(effective) .. "s", effective
-end
-local patch_modified_dns
-patch_modified_dns = function(dns_raw, reason)
-  local new_dns = strip_https_rr(dns_raw) or dns_raw
-  local payload_modified = new_dns ~= dns_raw
-  if payload_modified then
-    new_dns = clear_ad_bit(new_dns)
-    new_dns = add_ede_modified(new_dns, reason) or new_dns
-  end
-  return new_dns, payload_modified
 end
 local handle_response
 handle_response = function(qh_ptr, nfad, pkt_id)
@@ -815,86 +754,56 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   dns_raw = resp_ctx.dns_raw
   local payload_modified = resp_ctx.modified
   local inject_nft = resp_ctx.inject_nft
-  local answers = parse_answers(dns_msg)
+  local answers = { }
+  local _list_0 = parse_answers(dns_msg)
+  for _index_0 = 1, #_list_0 do
+    local a = _list_0[_index_0]
+    if a.rtype == QTYPE.A or a.rtype == QTYPE.AAAA then
+      local fam = a.rtype == QTYPE.AAAA and "ipv6" or "ipv4"
+      answers[#answers + 1] = {
+        family = fam,
+        addr = a.rdata_str,
+        ttl = a.ttl
+      }
+    end
+  end
   local client_v4 = nil
   local client_v6 = nil
-  local ip_count = 0
-  local records_to_add = 0
-  local success_any = false
-  local no_ipv4_records = { }
-  local no_ipv6_records = { }
+  local client_addr
+  client_addr = function(fam)
+    if fam == "ipv4" then
+      client_v4 = client_v4 or (ip.version == 4 and client_ip or resolve_client_family(client_ip, "ipv4"))
+      return client_v4
+    else
+      client_v6 = client_v6 or (ip.version == 6 and client_ip or resolve_client_family(client_ip, "ipv6"))
+      return client_v6
+    end
+  end
   if inject_nft and not dnsonly then
     drain_ack()
   end
-  for _index_0 = 1, #answers do
-    local ans = answers[_index_0]
-    if ans.rtype == QTYPE.A then
-      client_v4 = client_v4 or (function()
-        if ip.version == 4 then
-          return client_ip
-        else
-          return resolve_client_family(client_ip, "ipv4")
-        end
-      end)()
-      if inject_nft then
-        if client_v4 then
-          records_to_add = records_to_add + 1
-          local rr_timeout_str, _ = rr_timeout(ans.ttl)
-          local ok = add_ip4(client_v4, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
-          if ok then
-            ip_count = ip_count + 1
-          end
-          success_any = success_any or ok
-          if user and #auth_wildcard_rules > 0 then
-            success_any = success_any or add_to_wildcard_rules(add_ip4, client_v4, ans.rdata_str, rr_timeout_str, ack_corr)
-          end
-        else
-          no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
-        end
-        if mac_valid(client_mac) then
-          local rr_timeout_str, _ = rr_timeout(ans.ttl)
-          local m_ok = add_mac4(client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
-          success_any = success_any or m_ok
-          if user and #auth_wildcard_rules > 0 then
-            success_any = success_any or add_to_wildcard_rules(add_mac4, client_mac, ans.rdata_str, rr_timeout_str, ack_corr)
-          end
-        end
-      end
-    elseif ans.rtype == QTYPE.AAAA then
-      client_v6 = client_v6 or (function()
-        if ip.version == 6 then
-          return client_ip
-        else
-          return resolve_client_family(client_ip, "ipv6")
-        end
-      end)()
-      if inject_nft then
-        if client_v6 then
-          records_to_add = records_to_add + 1
-          local rr_timeout_str, _ = rr_timeout(ans.ttl)
-          local ok = add_ip6(client_v6, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
-          if ok then
-            ip_count = ip_count + 1
-          end
-          success_any = success_any or ok
-          if user and #auth_wildcard_rules > 0 then
-            success_any = success_any or add_to_wildcard_rules(add_ip6, client_v6, ans.rdata_str, rr_timeout_str, ack_corr)
-          end
-        else
-          no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
-        end
-        if mac_valid(client_mac) then
-          local rr_timeout_str, _ = rr_timeout(ans.ttl)
-          local m_ok = add_mac6(client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr)
-          success_any = success_any or m_ok
-          if user and #auth_wildcard_rules > 0 then
-            success_any = success_any or add_to_wildcard_rules(add_mac6, client_mac, ans.rdata_str, rr_timeout_str, ack_corr)
-          end
-        end
-      end
-    end
-  end
-  if #no_ipv4_records > 0 then
+  local inj = inject(answers, {
+    client_addr = client_addr,
+    client_mac = client_mac,
+    user = user,
+    rule_id = nft_rule_id,
+    wildcard_ids = auth_wildcard_rules,
+    ack_corr = ack_corr,
+    inject_nft = inject_nft,
+    mac_valid = mac_valid,
+    add_ip = {
+      ipv4 = add_ip4,
+      ipv6 = add_ip6
+    },
+    add_mac = {
+      ipv4 = add_mac4,
+      ipv6 = add_mac6
+    }
+  })
+  local ip_count = inj.ip_count
+  local records_to_add = inj.records_to_add
+  local success_any = inj.success_any
+  if #inj.no_v4 > 0 then
     local log_fn
     if mac_valid(client_mac) then
       log_fn = log_info
@@ -905,15 +814,15 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       return {
         action = "no_ipv4_for_client",
         client = client_ip,
-        count = #no_ipv4_records,
-        records = table.concat(no_ipv4_records, " "),
+        count = #inj.no_v4,
+        records = table.concat(inj.no_v4, " "),
         reason = "client_ipv4_unknown",
         mac_fallback = mac_valid(client_mac),
         user = user
       }
     end)
   end
-  if #no_ipv6_records > 0 then
+  if #inj.no_v6 > 0 then
     local log_fn
     if mac_valid(client_mac) then
       log_fn = log_info
@@ -924,8 +833,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       return {
         action = "no_ipv6_for_client",
         client = client_ip,
-        count = #no_ipv6_records,
-        records = table.concat(no_ipv6_records, " "),
+        count = #inj.no_v6,
+        records = table.concat(inj.no_v6, " "),
         reason = "client_ipv6_unknown",
         mac_fallback = mac_valid(client_mac),
         user = user
@@ -944,9 +853,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local qnames = table.concat((function()
     local _accum_0 = { }
     local _len_0 = 1
-    local _list_0 = dns_msg.questions
-    for _index_0 = 1, #_list_0 do
-      local q = _list_0[_index_0]
+    local _list_1 = dns_msg.questions
+    for _index_0 = 1, #_list_1 do
+      local q = _list_1[_index_0]
       _accum_0[_len_0] = q.name
       _len_0 = _len_0 + 1
     end

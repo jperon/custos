@@ -38,7 +38,8 @@ clients_cfg = config.clients or {}
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :now, :set_action_prefix } = require "log"
-{ :build_blocked_response, :build_nxdomain_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
+{ :build_blocked_response, :build_nxdomain_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
+{ :rr_timeout, :detect_wildcards, :inject } = require "response_inject"
 bit = require "bit"
 
 -- ── Constantes L3/L4 ────────────────────────────────────────────
@@ -357,30 +358,12 @@ run_on_response = (rule_id, dns_raw, reason) ->
 rules_metadata = nil
 
 -- Cache of auth-only wildcard rules (requires_auth=true, #dns_refs==0)
+-- Détection factorisée dans response_inject.detect_wildcards (partagé avec DoH).
 auth_wildcard_rules = {}
 load_auth_wildcard_rules = (metadata) ->
   rules_metadata = metadata
-  auth_wildcard_rules = {}
-  for idx, meta in ipairs rules_metadata or {}
-    requires_auth = false
-    dns_refs = 0
-    if meta.conditions
-      for _, cond in ipairs meta.conditions
-        if cond.name == "from_users" or cond.name == "from_userlists"
-          requires_auth = true
-        if cond.name == "to_domains" or cond.name == "to_domainlist"
-          dns_refs += 1
-    if requires_auth and dns_refs == 0
-      rule_id = meta.rule_id or "unknown_#{idx}"
-      auth_wildcard_rules[#auth_wildcard_rules + 1] = rule_id
-      log_info -> { action: "auth_wildcard_rule_detected", rule_id: rule_id, idx: idx }
+  auth_wildcard_rules = detect_wildcards metadata
   log_info -> { action: "auth_wildcard_rules_loaded", count: #auth_wildcard_rules, rules: table.concat(auth_wildcard_rules, ", ") }
-
-add_to_wildcard_rules = (add_fn, key, dest, timeout, corr) ->
-  any_ok = false
-  for _, auth_rule_id in ipairs auth_wildcard_rules
-    any_ok or= add_fn key, dest, auth_rule_id, timeout, corr
-  any_ok
 
 IPC_RETRY_ENABLED = if match_retry_cfg.enabled == nil then true else match_retry_cfg.enabled
 IPC_RETRY_COUNT = match_retry_cfg.count or 5
@@ -498,32 +481,9 @@ resolve_client_family = (ip_str, want) ->
 
   nil
 
-clamp = (value, min_v, max_v) ->
-  return min_v if value < min_v
-  return max_v if value > max_v
-  value
-
-rr_timeout = (ttl) ->
-  grace = math.max 0, math.floor(tonumber(ttl_cfg.grace) or 600)
-  min_t = math.max 1, math.floor(tonumber(ttl_cfg.min) or 60)
-  max_t = math.max min_t, math.floor(tonumber(ttl_cfg.max) or 2592000)
-
-  rr_ttl = tonumber(ttl) or 0
-  rr_ttl = math.floor rr_ttl
-  rr_ttl = 0 if rr_ttl < 0
-  effective = clamp rr_ttl + grace, min_t, max_t
-  tostring(effective) .. "s", effective
-
-patch_modified_dns = (dns_raw, reason) ->
-  new_dns = strip_https_rr(dns_raw) or dns_raw
-  payload_modified = new_dns != dns_raw
-  
-  -- If HTTPS/SVCB records were stripped, clear AD bit (signature is now invalid)
-  if payload_modified
-    new_dns = clear_ad_bit(new_dns)
-    new_dns = add_ede_modified(new_dns, reason) or new_dns
-  
-  new_dns, payload_modified
+-- rr_timeout et patch_modified_dns sont désormais fournis par les modules
+-- partagés response_inject / dns_ede (réexportés en fin de fichier pour les
+-- tests existants).
 
 --- Process a DNS response packet from NFQUEUE.
 -- Drains IPC, validates the transaction, patches TTL+checksums,
@@ -679,77 +639,55 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   payload_modified = resp_ctx.modified
   inject_nft      = resp_ctx.inject_nft
 
-  answers  = parse_answers dns_msg
+  -- Réponses A/AAAA normalisées pour le noyau d'injection partagé.
+  answers = {}
+  for a in *parse_answers dns_msg
+    if a.rtype == QTYPE.A or a.rtype == QTYPE.AAAA
+      fam = a.rtype == QTYPE.AAAA and "ipv6" or "ipv4"
+      answers[#answers + 1] = { family: fam, addr: a.rdata_str, ttl: a.ttl }
+
+  -- Résolveur d'adresse client par famille (mémoïsé) : famille du paquet ou
+  -- résolution cross-family via mac_clients (DNS v4 ↔ RR AAAA et inversement).
   client_v4 = nil
   client_v6 = nil
-  ip_count = 0
-  records_to_add = 0
-  success_any = false
-  no_ipv4_records = {}
-  no_ipv6_records = {}
+  client_addr = (fam) ->
+    if fam == "ipv4"
+      client_v4 or= (ip.version == 4 and client_ip or resolve_client_family client_ip, "ipv4")
+      client_v4
+    else
+      client_v6 or= (ip.version == 6 and client_ip or resolve_client_family client_ip, "ipv6")
+      client_v6
+
   -- Purge stale ACKs before enqueueing new items so that wait_ack only
   -- consumes the ACK produced by the batch that actually contains our adds.
   drain_ack! if inject_nft and not dnsonly
-  for ans in *answers
-    if ans.rtype == QTYPE.A
-      -- Enregistrement A : le client doit avoir une adresse IPv4
-      client_v4 or= if ip.version == 4
-        client_ip
-      else
-        -- DNS transporté en IPv6 : résoudre l'IPv4 via mac_clients
-        resolve_client_family client_ip, "ipv4"
-      if inject_nft
-        if client_v4
-          records_to_add += 1
-          rr_timeout_str, _ = rr_timeout ans.ttl
-          ok = add_ip4 client_v4, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
-          ip_count += 1 if ok
-          success_any or= ok
-          if user and #auth_wildcard_rules > 0
-            success_any or= add_to_wildcard_rules add_ip4, client_v4, ans.rdata_str, rr_timeout_str, ack_corr
-        else
-          no_ipv4_records[#no_ipv4_records + 1] = ans.rdata_str
-        if mac_valid client_mac
-          rr_timeout_str, _ = rr_timeout ans.ttl
-          m_ok = add_mac4 client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
-          success_any or= m_ok
-          if user and #auth_wildcard_rules > 0
-            success_any or= add_to_wildcard_rules add_mac4, client_mac, ans.rdata_str, rr_timeout_str, ack_corr
-    elseif ans.rtype == QTYPE.AAAA
-      -- Enregistrement AAAA : le client doit avoir une adresse IPv6
-      client_v6 or= if ip.version == 6
-        client_ip
-      else
-        -- DNS transporté en IPv4 : résoudre l'IPv6 via mac_clients
-        resolve_client_family client_ip, "ipv6"
-      if inject_nft
-        if client_v6
-          records_to_add += 1
-          rr_timeout_str, _ = rr_timeout ans.ttl
-          ok = add_ip6 client_v6, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
-          ip_count += 1 if ok
-          success_any or= ok
-          if user and #auth_wildcard_rules > 0
-            success_any or= add_to_wildcard_rules add_ip6, client_v6, ans.rdata_str, rr_timeout_str, ack_corr
-        else
-          no_ipv6_records[#no_ipv6_records + 1] = ans.rdata_str
-        if mac_valid client_mac
-          rr_timeout_str, _ = rr_timeout ans.ttl
-          m_ok = add_mac6 client_mac, ans.rdata_str, nft_rule_id, rr_timeout_str, ack_corr
-          success_any or= m_ok
-          if user and #auth_wildcard_rules > 0
-            success_any or= add_to_wildcard_rules add_mac6, client_mac, ans.rdata_str, rr_timeout_str, ack_corr
+
+  inj = inject answers, {
+    :client_addr
+    :client_mac
+    :user
+    rule_id:      nft_rule_id
+    wildcard_ids: auth_wildcard_rules
+    :ack_corr
+    :inject_nft
+    :mac_valid
+    add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
+    add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
+  }
+  ip_count       = inj.ip_count
+  records_to_add = inj.records_to_add
+  success_any    = inj.success_any
 
   -- Logguer les cas cross-family sans IP connue (groupés par réponse)
-  if #no_ipv4_records > 0
+  if #inj.no_v4 > 0
     log_fn = if mac_valid(client_mac) then log_info else log_warn
-    log_fn -> { action: "no_ipv4_for_client", client: client_ip, count: #no_ipv4_records,
-          records: table.concat(no_ipv4_records, " "),
+    log_fn -> { action: "no_ipv4_for_client", client: client_ip, count: #inj.no_v4,
+          records: table.concat(inj.no_v4, " "),
           reason: "client_ipv4_unknown", mac_fallback: mac_valid(client_mac), user: user }
-  if #no_ipv6_records > 0
+  if #inj.no_v6 > 0
     log_fn = if mac_valid(client_mac) then log_info else log_warn
-    log_fn -> { action: "no_ipv6_for_client", client: client_ip, count: #no_ipv6_records,
-          records: table.concat(no_ipv6_records, " "),
+    log_fn -> { action: "no_ipv6_for_client", client: client_ip, count: #inj.no_v6,
+          records: table.concat(inj.no_v6, " "),
           reason: "client_ipv6_unknown", mac_fallback: mac_valid(client_mac), user: user }
 
   -- ── Patch TTL + HTTPS/SVCB (toujours appliqué) ─────────────────

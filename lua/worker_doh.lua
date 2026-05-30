@@ -669,6 +669,9 @@ run = function(doh_cfg, filter_data)
     filter.rules = filter_data.rules
     filter.auth_cfg_cache = filter_data.auth_cfg_cache
     filter.decision_cfg = filter_data.decision_cfg
+    local set_wildcard_rules
+    set_wildcard_rules = require("doh.query").set_wildcard_rules
+    set_wildcard_rules(filter_data.rules and filter_data.rules.rules_metadata)
   end
   if not (doh_cfg.enabled) then
     log_info(function()

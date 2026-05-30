@@ -40,6 +40,11 @@ new = function(check_complete)
     clear = function(key)
       sessions[key] = nil
     end,
+    reset = function()
+      for k in pairs(sessions) do
+        sessions[k] = nil
+      end
+    end,
     purge = function(max_age)
       if max_age == nil then
         max_age = 300

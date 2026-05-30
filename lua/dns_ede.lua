@@ -265,6 +265,16 @@ clear_ad_bit = function(dns_payload)
   end
   return dns_payload:sub(1, 2) .. string.char(bit.rshift(flags_new, 8)) .. string.char(bit.band(flags_new, 0xFF)) .. dns_payload:sub(5)
 end
+local patch_modified_dns
+patch_modified_dns = function(dns_payload, reason)
+  local new_dns = strip_https_rr(dns_payload) or dns_payload
+  local modified = new_dns ~= dns_payload
+  if modified then
+    new_dns = clear_ad_bit(new_dns)
+    new_dns = add_ede_modified(new_dns, reason) or new_dns
+  end
+  return new_dns, modified
+end
 return {
   add_ede = add_ede,
   build_blocked_response = build_blocked_response,
@@ -275,6 +285,7 @@ return {
   strip_a_rr = strip_a_rr,
   strip_aaaa_rr = strip_aaaa_rr,
   clear_ad_bit = clear_ad_bit,
+  patch_modified_dns = patch_modified_dns,
   EDE_BLOCKED = EDE_BLOCKED,
   EDE_TTL_MODIFIED = EDE_TTL_MODIFIED
 }

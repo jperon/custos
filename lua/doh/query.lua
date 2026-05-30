@@ -7,15 +7,20 @@ do
   local _obj_0 = require("filter")
   decide_meta, run_on_response = _obj_0.decide_meta, _obj_0.run_on_response
 end
-local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack
+local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack
 do
   local _obj_0 = require("nft_queue")
-  add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.wait_ack
+  add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.wait_ack, _obj_0.drain_ack
 end
-local build_blocked_response, add_ede
+local build_blocked_response, add_ede, patch_modified_dns
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, add_ede = _obj_0.build_blocked_response, _obj_0.add_ede
+  build_blocked_response, add_ede, patch_modified_dns = _obj_0.build_blocked_response, _obj_0.add_ede, _obj_0.patch_modified_dns
+end
+local inject, detect_wildcards
+do
+  local _obj_0 = require("response_inject")
+  inject, detect_wildcards = _obj_0.inject, _obj_0.detect_wildcards
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
@@ -45,73 +50,47 @@ rr_addr = function(ans)
   end
   return ans.rdata_str
 end
-local inject_answers
-inject_answers = function(answers, client_ip, client_mac, rule_id, timeout, ack_corr)
-  rule_id = rule_id or "unknown_rule"
-  timeout = timeout or config.nft.ip_timeout
-  local is_v6_client = (client_ip:find(":")) ~= nil
-  for _index_0 = 1, #answers do
+local wildcard_ids = { }
+local set_wildcard_rules
+set_wildcard_rules = function(rules_metadata)
+  wildcard_ids = detect_wildcards(rules_metadata)
+  return log_info(function()
+    return {
+      action = "doh_auth_wildcard_rules_loaded",
+      count = #wildcard_ids,
+      rules = table.concat(wildcard_ids, ", ")
+    }
+  end)
+end
+local normalize_answers
+normalize_answers = function(resp_dns)
+  local out = { }
+  local _list_0 = (resp_dns.answers or { })
+  for _index_0 = 1, #_list_0 do
     local _continue_0 = false
     repeat
-      local ans = answers[_index_0]
+      local ans = _list_0[_index_0]
+      if not (ans.rtype == QTYPE.A or ans.rtype == QTYPE.AAAA) then
+        _continue_0 = true
+        break
+      end
       local addr = rr_addr(ans)
       if not (addr and addr ~= "") then
         _continue_0 = true
         break
       end
-      if ans.rtype == QTYPE.A then
-        if not (is_v6_client) then
-          log_debug(function()
-            return {
-              action = "nft_add_ip4",
-              client_ip = client_ip,
-              dest = addr
-            }
-          end)
-          add_ip4(client_ip, addr, rule_id, timeout, ack_corr)
-        end
-        if mac_valid(client_mac) then
-          log_debug(function()
-            return {
-              action = "nft_add_mac4",
-              client_mac = client_mac,
-              dest = addr
-            }
-          end)
-          add_mac4(client_mac, addr, rule_id, timeout, ack_corr)
-        end
-      elseif ans.rtype == QTYPE.AAAA then
-        if is_v6_client then
-          log_debug(function()
-            return {
-              action = "nft_add_ip6",
-              client_ip = client_ip,
-              dest = addr
-            }
-          end)
-          add_ip6(client_ip, addr, rule_id, timeout, ack_corr)
-        end
-        if mac_valid(client_mac) then
-          log_debug(function()
-            return {
-              action = "nft_add_mac6",
-              client_mac = client_mac,
-              dest = addr
-            }
-          end)
-          add_mac6(client_mac, addr, rule_id, timeout, ack_corr)
-        end
-      end
+      out[#out + 1] = {
+        family = (ans.rtype == QTYPE.AAAA and "ipv6" or "ipv4"),
+        addr = addr,
+        ttl = ans.ttl
+      }
       _continue_0 = true
     until true
     if not _continue_0 then
       break
     end
   end
-  local pending_seq = get_last_seq()
-  if pending_seq then
-    return wait_ack(pending_seq, ack_corr)
-  end
+  return out
 end
 local process_query
 process_query = function(dns_raw, client_ip, client_mac, upstream)
@@ -231,25 +210,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
   local resp_ctx = run_on_response(allow_rule_id, resp_raw, allow_reason)
   resp_raw = resp_ctx.dns_raw
   local resp_dns, resp_err = parse(resp_raw, 1, false)
-  if resp_dns then
-    if resp_ctx.inject_nft then
-      local answers = resp_dns.answers or { }
-      local ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")
-      inject_answers(answers, client_ip, client_mac, allow_rule_id, allow_timeout, ack_corr)
-    end
-    log_debug(function()
-      return {
-        action = resp_ctx.action_label or "query_allowed",
-        client_ip = client_ip,
-        client_mac = client_mac,
-        user = user,
-        answers = resp_dns.answers and #resp_dns.answers or 0,
-        inject_nft = resp_ctx.inject_nft,
-        modified = resp_ctx.modified,
-        reason = allow_reason or ""
-      }
-    end)
-  else
+  if not (resp_dns) then
     log_warn(function()
       return {
         action = "response_parse_failed",
@@ -257,9 +218,74 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
         err = tostring(resp_err) or "unknown"
       }
     end)
+    return resp_raw
   end
+  local is_v6_client = (client_ip:find(":")) ~= nil
+  local client_addr
+  client_addr = function(fam)
+    return (fam == "ipv4" and not is_v6_client) and client_ip or (fam == "ipv6" and is_v6_client) and client_ip or nil
+  end
+  local ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")
+  local answers = normalize_answers(resp_dns)
+  if resp_ctx.inject_nft then
+    drain_ack()
+  end
+  local inj = inject(answers, {
+    client_addr = client_addr,
+    client_mac = client_mac,
+    user = user,
+    rule_id = allow_rule_id or "unknown_rule",
+    wildcard_ids = wildcard_ids,
+    ack_corr = ack_corr,
+    inject_nft = resp_ctx.inject_nft,
+    mac_valid = mac_valid,
+    add_ip = {
+      ipv4 = add_ip4,
+      ipv6 = add_ip6
+    },
+    add_mac = {
+      ipv4 = add_mac4,
+      ipv6 = add_mac6
+    }
+  })
+  local failure_policy = (config.nft or { }).add_failure_policy or "fail-closed"
+  if inj.records_to_add > 0 and not inj.success_any and failure_policy == "fail-closed" then
+    log_block(function()
+      return {
+        action = "doh_nft_add_failed_fail_closed",
+        client_ip = client_ip,
+        client_mac = client_mac,
+        user = user,
+        rule = allow_rule_id
+      }
+    end)
+    local blocked = build_blocked_response(dns, dns_raw, "nft_insert_failed")
+    return blocked or resp_raw
+  end
+  local _
+  resp_raw, _ = patch_modified_dns(resp_raw, allow_reason)
+  if resp_ctx.inject_nft then
+    local pending_seq = get_last_seq()
+    if pending_seq then
+      wait_ack(pending_seq, ack_corr)
+    end
+  end
+  log_debug(function()
+    return {
+      action = resp_ctx.action_label or "query_allowed",
+      client_ip = client_ip,
+      client_mac = client_mac,
+      user = user,
+      answers = inj.ip_count,
+      inject_nft = resp_ctx.inject_nft,
+      modified = resp_ctx.modified,
+      reason = allow_reason or ""
+    }
+  end)
   return resp_raw
 end
 return {
-  process_query = process_query
+  process_query = process_query,
+  set_wildcard_rules = set_wildcard_rules,
+  normalize_answers = normalize_answers
 }

@@ -467,6 +467,9 @@ run = (doh_cfg, filter_data) ->
     filter.rules = filter_data.rules
     filter.auth_cfg_cache = filter_data.auth_cfg_cache
     filter.decision_cfg = filter_data.decision_cfg
+    -- Détecte les règles wildcard d'auth pour l'injection nft (cf. doh.query).
+    { :set_wildcard_rules } = require "doh.query"
+    set_wildcard_rules filter_data.rules and filter_data.rules.rules_metadata
   unless doh_cfg.enabled
     log_info -> { action: "worker_disabled" }
     return
