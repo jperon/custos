@@ -155,3 +155,96 @@ describe "worker_tls éviction des sessions QUIC", ->
     sni.seed_quic_session "x"
     sni.reset_quic_sessions!
     assert.equals 0, sni.quic_session_count!
+
+describe "worker_tls réassemblage TLS fragmenté (feed_tls_segment)", ->
+  before_each -> sni.reset_tcp_sessions!
+
+  PSH_ACK = 0x18
+
+  it "réassemble un ClientHello scindé sur deux segments TCP", ->
+    record = build_client_hello make_sni_ext "split.example.com"
+    cut = math.floor #record / 2
+    seg1 = record\sub 1, cut
+    seg2 = record\sub cut + 1
+
+    -- 1er segment : record incomplet → rien à extraire encore.
+    assert.is_nil sni.feed_tls_segment "flow", seg1, PSH_ACK, 1000
+    -- 2e segment : record complet → buffer reconstitué.
+    buf = sni.feed_tls_segment "flow", seg2, PSH_ACK, 1000 + cut
+    assert.equals record, buf
+
+    host = sni.extract_sni_from_tls buf
+    assert.equals "split.example.com", host
+
+  it "rend immédiatement un ClientHello non fragmenté", ->
+    record = build_client_hello make_sni_ext "whole.example"
+    buf = sni.feed_tls_segment "flow", record, PSH_ACK, 1
+    assert.equals record, buf
+
+  it "ne bufferise pas le trafic 443 non-TLS (premier octet != 0x16)", ->
+    -- Données applicatives (record type 0x17) : livrées telles quelles, sans
+    -- accumulation, pour éviter de retenir des flux établis en mémoire.
+    appdata = "\x17\x03\x03\x00\x05hello"
+    buf = sni.feed_tls_segment "flow", appdata, PSH_ACK, 1
+    assert.equals appdata, buf
+
+  it "isole les flux distincts par clé", ->
+    record = build_client_hello make_sni_ext "a.example"
+    cut = math.floor #record / 2
+    assert.is_nil sni.feed_tls_segment "flowA", record\sub(1, cut), PSH_ACK, 1
+    -- Un autre flux ne doit pas voir le fragment de flowA.
+    other = build_client_hello make_sni_ext "b.example"
+    assert.equals other, sni.feed_tls_segment "flowB", other, PSH_ACK, 1
+
+  it "bufferise un fragment Handshake plus court que l'en-tête de record", ->
+    -- Premier segment de moins de 5 octets : impossible de lire la longueur du
+    -- record → on attend la suite (tls_record_complete renvoie false).
+    assert.is_nil sni.feed_tls_segment "flow", "\x16\x03", PSH_ACK, 1
+    record = build_client_hello make_sni_ext "tiny.example"
+    -- Le reste du record complète le ClientHello.
+    buf = sni.feed_tls_segment "flow", record\sub(3), PSH_ACK, 3
+    assert.equals record, buf
+
+  it "déclenche la purge périodique sans perdre l'état actif", ->
+    -- 512 segments non-TLS (livrés immédiatement) franchissent le seuil de purge.
+    appdata = "\x17\x03\x03\x00\x01x"
+    sni.feed_tls_segment "noise", appdata, PSH_ACK, i for i = 1, 512
+    -- Un ClientHello complet reste correctement extrait après la purge.
+    record = build_client_hello make_sni_ext "after.purge"
+    assert.equals record, sni.feed_tls_segment "flow", record, PSH_ACK, 1
+
+  it "abandonne le buffer sur FIN/RST", ->
+    record = build_client_hello make_sni_ext "reset.example"
+    cut = math.floor #record / 2
+    assert.is_nil sni.feed_tls_segment "flow", record\sub(1, cut), PSH_ACK, 1
+    -- Segment RST : efface la session, renvoie nil.
+    assert.is_nil sni.feed_tls_segment "flow", record\sub(cut + 1), 0x04, 1 + cut
+    -- Le flux repart de zéro : un nouveau record complet est rendu directement.
+    assert.equals record, sni.feed_tls_segment "flow", record, PSH_ACK, 9000
+
+  it "rend immédiatement un record Handshake non-ClientHello après un ClientHello (mode integral)", ->
+    -- Scénario mode integral : ClientHello, puis Client Key Exchange (0x10) sur
+    -- la même clé de flux.  Après que tcp_stream a consommé et effacé le
+    -- ClientHello, le Client Key Exchange arrive en nouveau flux ; il doit être
+    -- retourné immédiatement par feed_tls_segment (tls_record_complete = true
+    -- pour tout record 0x16 de longueur valide) afin que le handler puisse
+    -- l'identifier comme non-ClientHello et rendre NF_ACCEPT sans appeler
+    -- extract_sni_from_tls.
+    ch = build_client_hello make_sni_ext "integral.example"
+    -- 1. Le ClientHello est consommé normalement.
+    assert.equals ch, sni.feed_tls_segment "conn", ch, PSH_ACK, 1
+    -- 2. Client Key Exchange : record Handshake (0x16) de type 0x10.
+    cke_body = "\x10\x00\x00\x02\xab\xcd"  -- type=ClientKeyExchange, len=2, body
+    cke_record = "\x16\x03\x03" .. u16(#cke_body) .. cke_body
+    -- Rendu immédiatement (session effacée, record complet dès le premier segment).
+    buf = sni.feed_tls_segment "conn", cke_record, PSH_ACK, 1 + #ch
+    assert.equals cke_record, buf
+    -- 3. Le buffer doit être identifiable comme non-ClientHello via ipparse.
+    tls = require "ipparse.l7.tls"
+    hs  = require "ipparse.l7.tls.handshake"
+    ok_rec, rec = pcall -> tls.parse buf, 1
+    assert.is_true ok_rec
+    assert.equals tls.record_types.handshake, rec.type
+    ok_hs, hdr = pcall -> hs.parse buf, rec.data_off
+    assert.is_true ok_hs
+    assert.not_equal hs.message_types.client_hello, hdr.type

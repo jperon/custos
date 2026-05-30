@@ -15,9 +15,12 @@ ipparse_tcp = require "ipparse.l4.tcp"
 ipparse_udp = require "ipparse.l4.udp"
 ipparse_quic = require "ipparse.l4.quic"
 ipparse_quic_session = require "ipparse.l7.quic.session"
+ipparse_tls = require "ipparse.l7.tls"
+ipparse_tls_handshake = require "ipparse.l7.tls.handshake"
 ipparse_tls_client_hello = require "ipparse.l7.tls.handshake.client_hello"
 ipparse_server_name = require "ipparse.l7.tls.handshake.extension.server_name"
 ipparse_supported_versions = require "ipparse.l7.tls.handshake.extension.supported_versions"
+{ new: new_tcp_stream } = require "ipparse.l4.tcp_stream"
 
 bit = require "bit"
 { :nft } = require "config"
@@ -33,6 +36,22 @@ quic_sessions_seen = {}
 quic_sessions_count = 0
 QUIC_SESSION_TTL = 30      -- secondes sans activité avant éviction
 QUIC_SESSION_MAX = 4096    -- plafond dur ; déclenche un balayage si dépassé
+
+-- Réassemblage des ClientHello TLS fragmentés sur plusieurs segments TCP.
+-- Un ClientHello tient en un seul enregistrement TLS Handshake (type 0x16) mais
+-- peut être segmenté par TCP (petit MTU, PMTUd cassé, ClientHello volumineux).
+-- Le prédicat ci-dessous bufferise jusqu'au record complet ; pour un premier
+-- segment non-Handshake il renvoie aussitôt `true`, donc le trafic 443 non-TLS
+-- (connexions déjà établies) n'est jamais bufferisé.
+tls_record_complete = (buf) ->
+  return true if buf\byte(1) != 0x16
+  return false if #buf < 5
+  rec_len = buf\byte(4) * 256 + buf\byte(5)
+  #buf >= 5 + rec_len
+tcp_state = new_tcp_stream tls_record_complete
+TCP_PURGE_EVERY = 512      -- balaye les flux dormants tous les N paquets TCP
+tcp_pkt_count = 0
+
 filter = nil
 sni_policy = nil
 cmd_for = nil
@@ -73,6 +92,22 @@ seed_quic_session = (key, seen=os.time!) ->
 
 -- Nombre de sessions QUIC actuellement suivies (test seam).
 quic_session_count = -> quic_sessions_count
+
+-- Réinitialise l'état de réassemblage TCP (test seam).
+reset_tcp_sessions = ->
+  tcp_state.reset!
+  tcp_pkt_count = 0
+
+-- Pousse un segment TCP dans le défragmenteur et renvoie le ClientHello complet
+-- (ou nil tant qu'il manque des octets / sur segment de contrôle). Inclut la
+-- purge périodique des flux dormants pour borner la mémoire.
+-- @treturn string|nil Enregistrement TLS Handshake complet, ou nil.
+feed_tls_segment = (key, segment, flags, seq) ->
+  tcp_pkt_count += 1
+  if tcp_pkt_count >= TCP_PURGE_EVERY
+    tcp_state.purge!
+    tcp_pkt_count = 0
+  tcp_state.feed key, segment, flags, seq
 
 -- ── SNI Extraction Helpers ────────────────────────────────
 
@@ -582,15 +617,31 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
       log_debug -> { action: "tcp_no_payload", pkt_id: pkt_id }
       return NF_ACCEPT
 
-    -- Extract TLS ClientHello from TCP payload
-    tls_payload = raw\sub tcp.data_off
-    unless tls_payload and #tls_payload > 0
-      log_debug -> { action: "tcp_no_payload", pkt_id: pkt_id }
+    -- Réassemble le ClientHello potentiellement fragmenté sur plusieurs
+    -- segments TCP avant extraction du SNI (cf. tls_record_complete).
+    segment = raw\sub tcp.data_off
+    src_ip_k = format_ip ip.version, ip.src
+    dst_ip_k = format_ip ip.version, ip.dst
+    tcp_key = "#{src_ip_k}|#{src_port}|#{dst_ip_k}|#{dst_port}"
+    tls_payload = feed_tls_segment tcp_key, segment, tcp.flags, tcp.seq_n
+    -- Segment de contrôle (FIN/RST), payload vide ou ClientHello incomplet :
+    -- laisser passer en attendant la suite du flux.
+    unless tls_payload
+      log_debug -> { action: "tcp_buffering", pkt_id: pkt_id }
       return NF_ACCEPT
 
-    -- Ignore non-TLS records to reduce noisy "no_sni_found" logs.
-    unless tls_payload\byte(1) == 0x16
-      log_debug -> { action: "tcp_not_tls_handshake", pkt_id: pkt_id, tls_record_type: string.format("0x%02x", tls_payload\byte(1)) }
+    -- Ignore non-TLS Handshake records and non-ClientHello Handshake messages.
+    -- In integral mode, all ACK packets hit this queue; after tcp_stream clears the
+    -- ClientHello session, subsequent Handshake records (Client Key Exchange, Finished…)
+    -- from the same connection would otherwise reach extract_sni, fail to find SNI, and
+    -- get dropped in strict-443 mode.
+    ok_rec, tls_rec = pcall -> ipparse_tls.parse tls_payload, 1
+    unless ok_rec and tls_rec and tls_rec.type == ipparse_tls.record_types.handshake
+      log_debug -> { action: "tcp_not_tls_handshake", pkt_id: pkt_id }
+      return NF_ACCEPT
+    ok_hs, hs_hdr = pcall -> ipparse_tls_handshake.parse tls_payload, tls_rec.data_off
+    unless ok_hs and hs_hdr and hs_hdr.type == ipparse_tls_handshake.message_types.client_hello
+      log_debug -> { action: "tcp_not_client_hello", pkt_id: pkt_id }
       return NF_ACCEPT
 
     sni, tls_reason, tls_meta = extract_sni_from_tls tls_payload, { pkt_id: pkt_id }
@@ -905,10 +956,11 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
     if filter_data
       filter.rules = filter_data.rules
       filter.auth_cfg_cache = filter_data.auth_cfg_cache
+      filter.sni_cfg_cache  = filter_data.sni_cfg_cache
       filter.decision_cfg = filter_data.decision_cfg
     auth_cfg = if filter.get_auth_cfg then filter.get_auth_cfg! else {}
     auth_sessions_file = auth_cfg.sessions_file or auth_sessions_file
-    sni_policy = auth_cfg and auth_cfg.sni_verdict or {}
+    sni_policy = if filter.get_sni_cfg then filter.get_sni_cfg! else {}
   else
     filter = nil
     sni_policy = {}
@@ -936,4 +988,5 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
   :run, :normalize_sni, :protocol_in_scope, :apply_nft_allow, :reset_nft_modules
   :extract_sni_from_tls, :extract_sni_from_quic, :quic_flow_key
   :prune_quic_sessions, :reset_quic_sessions, :seed_quic_session, :quic_session_count
+  :reset_tcp_sessions, :feed_tls_segment
 }

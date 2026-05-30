@@ -22,9 +22,13 @@ local ipparse_tcp = require("ipparse.l4.tcp")
 local ipparse_udp = require("ipparse.l4.udp")
 local ipparse_quic = require("ipparse.l4.quic")
 local ipparse_quic_session = require("ipparse.l7.quic.session")
+local ipparse_tls = require("ipparse.l7.tls")
+local ipparse_tls_handshake = require("ipparse.l7.tls.handshake")
 local ipparse_tls_client_hello = require("ipparse.l7.tls.handshake.client_hello")
 local ipparse_server_name = require("ipparse.l7.tls.handshake.extension.server_name")
 local ipparse_supported_versions = require("ipparse.l7.tls.handshake.extension.supported_versions")
+local new_tcp_stream
+new_tcp_stream = require("ipparse.l4.tcp_stream").new
 local bit = require("bit")
 local nft
 nft = require("config").nft
@@ -35,6 +39,20 @@ local quic_sessions_seen = { }
 local quic_sessions_count = 0
 local QUIC_SESSION_TTL = 30
 local QUIC_SESSION_MAX = 4096
+local tls_record_complete
+tls_record_complete = function(buf)
+  if buf:byte(1) ~= 0x16 then
+    return true
+  end
+  if #buf < 5 then
+    return false
+  end
+  local rec_len = buf:byte(4) * 256 + buf:byte(5)
+  return #buf >= 5 + rec_len
+end
+local tcp_state = new_tcp_stream(tls_record_complete)
+local TCP_PURGE_EVERY = 512
+local tcp_pkt_count = 0
 local filter = nil
 local sni_policy = nil
 local cmd_for = nil
@@ -83,6 +101,20 @@ end
 local quic_session_count
 quic_session_count = function()
   return quic_sessions_count
+end
+local reset_tcp_sessions
+reset_tcp_sessions = function()
+  tcp_state.reset()
+  tcp_pkt_count = 0
+end
+local feed_tls_segment
+feed_tls_segment = function(key, segment, flags, seq)
+  tcp_pkt_count = tcp_pkt_count + 1
+  if tcp_pkt_count >= TCP_PURGE_EVERY then
+    tcp_state.purge()
+    tcp_pkt_count = 0
+  end
+  return tcp_state.feed(key, segment, flags, seq)
 end
 local tls_version_name
 tls_version_name = function(ver)
@@ -779,22 +811,40 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       end)
       return NF_ACCEPT
     end
-    local tls_payload = raw:sub(tcp.data_off)
-    if not (tls_payload and #tls_payload > 0) then
+    local segment = raw:sub(tcp.data_off)
+    local src_ip_k = format_ip(ip.version, ip.src)
+    local dst_ip_k = format_ip(ip.version, ip.dst)
+    local tcp_key = tostring(src_ip_k) .. "|" .. tostring(src_port) .. "|" .. tostring(dst_ip_k) .. "|" .. tostring(dst_port)
+    local tls_payload = feed_tls_segment(tcp_key, segment, tcp.flags, tcp.seq_n)
+    if not (tls_payload) then
       log_debug(function()
         return {
-          action = "tcp_no_payload",
+          action = "tcp_buffering",
           pkt_id = pkt_id
         }
       end)
       return NF_ACCEPT
     end
-    if not (tls_payload:byte(1) == 0x16) then
+    local ok_rec, tls_rec = pcall(function()
+      return ipparse_tls.parse(tls_payload, 1)
+    end)
+    if not (ok_rec and tls_rec and tls_rec.type == ipparse_tls.record_types.handshake) then
       log_debug(function()
         return {
           action = "tcp_not_tls_handshake",
-          pkt_id = pkt_id,
-          tls_record_type = string.format("0x%02x", tls_payload:byte(1))
+          pkt_id = pkt_id
+        }
+      end)
+      return NF_ACCEPT
+    end
+    local ok_hs, hs_hdr = pcall(function()
+      return ipparse_tls_handshake.parse(tls_payload, tls_rec.data_off)
+    end)
+    if not (ok_hs and hs_hdr and hs_hdr.type == ipparse_tls_handshake.message_types.client_hello) then
+      log_debug(function()
+        return {
+          action = "tcp_not_client_hello",
+          pkt_id = pkt_id
         }
       end)
       return NF_ACCEPT
@@ -1159,6 +1209,7 @@ run = function(queue_num, ev_wfd, filter_data)
     if filter_data then
       filter.rules = filter_data.rules
       filter.auth_cfg_cache = filter_data.auth_cfg_cache
+      filter.sni_cfg_cache = filter_data.sni_cfg_cache
       filter.decision_cfg = filter_data.decision_cfg
     end
     local auth_cfg
@@ -1168,7 +1219,11 @@ run = function(queue_num, ev_wfd, filter_data)
       auth_cfg = { }
     end
     local auth_sessions_file = auth_cfg.sessions_file or auth_sessions_file
-    sni_policy = auth_cfg and auth_cfg.sni_verdict or { }
+    if filter.get_sni_cfg then
+      sni_policy = filter.get_sni_cfg()
+    else
+      sni_policy = { }
+    end
   else
     filter = nil
     sni_policy = { }
@@ -1227,5 +1282,7 @@ return {
   prune_quic_sessions = prune_quic_sessions,
   reset_quic_sessions = reset_quic_sessions,
   seed_quic_session = seed_quic_session,
-  quic_session_count = quic_session_count
+  quic_session_count = quic_session_count,
+  reset_tcp_sessions = reset_tcp_sessions,
+  feed_tls_segment = feed_tls_segment
 }
