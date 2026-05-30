@@ -124,6 +124,7 @@ custos/
 │   └── secrets.sample       Exemple de fichier de mots de passe
 ├── src/
 │   ├── config.moon          Configuration hiérarchique runtime (/etc/custos/config.moon)
+│   ├── classifier.moon      CLI : classe des domaines via OpenRouter (curl, pur Lua)
 │   ├── main.moon            Superviseur : crée les pipes IPC, fork et supervise les workers
 │   ├── ffi_defs.moon        Déclarations FFI centralisées
 │   ├── ffi_xxhash.moon      FFI xxHash
@@ -464,6 +465,64 @@ conditions:
 L'installeur (`install-owrt.moon`) déploie `/usr/sbin/custos-update` et
 configure une tâche cron quotidienne (`0 4 * * *`) pour la mise à jour
 automatique des listes.
+
+---
+
+## Domain Classifier (OpenRouter)
+
+`src/classifier.moon` est un outil CLI qui classe des noms de domaines en
+catégories à l'aide des modèles **« free »** d'[OpenRouter](https://openrouter.ai).
+Il aide à pré-trier des domaines avant de les ranger dans les listes de
+conditions (`lists_dir`, cf. plus haut).
+
+Comme le reste du projet, il **n'a aucune dépendance Lua externe** : la requête
+HTTP passe par `curl` (via `io.popen`) et le JSON est encodé/décodé par un
+mini-parseur pur Lua embarqué dans le module.
+
+### Usage
+
+```bash
+# Clé API requise dans l'environnement
+export OPENROUTER_API_KEY="sk-or-..."
+
+# Domaines passés en arguments
+LUA_PATH="lua/?.lua;lua/?/init.lua;;" \
+  luajit lua/classifier.lua google.com laportelatine.org fsspx.news
+
+# Ou lus sur l'entrée standard (un domaine par ligne, # pour les commentaires)
+printf 'google.com\nfsspx.news\n' | \
+  LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/classifier.lua
+```
+
+Sortie (objet JSON `domaine → [catégories]`) :
+
+```json
+{"fsspx.news":["information","religieux"],"google.com":["moteur_de_recherche","information"]}
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--model M` | Modèle OpenRouter (défaut : `openrouter/free`) |
+| `--categories a,b,c` | Catégories cibles (défaut : `information, moteur_de_recherche, jeux, publicite, religieux, mail, telephonie`) |
+| `--endpoint URL` | Endpoint chat/completions |
+| `--timeout N` | Timeout `curl` en secondes (défaut : 60) |
+| `--out-dir DIR` | Écrit aussi une liste triée `DIR/<categorie>.txt` par catégorie |
+| `--help` | Affiche l'aide |
+
+Avec `--out-dir`, chaque catégorie produit un fichier `DIR/<categorie>.txt`
+(un domaine par ligne, trié) directement réutilisable comme liste de conditions
+(`to_domainlist`/`from_*_list`).
+
+```bash
+LUA_PATH="lua/?.lua;lua/?/init.lua;;" \
+  luajit lua/classifier.lua --out-dir tmp/categories google.com fsspx.news
+```
+
+> ⚠️ La clé API est passée à `curl` via un en-tête `Authorization` ; sur une
+> machine partagée, elle peut transparaître dans la liste des processus.
+> Réserver cet outil à un poste d'administration de confiance.
 
 ---
 

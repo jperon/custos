@@ -111,6 +111,17 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
      - Debian: `make reload`
      - OpenWrt: `ssh root@<router> '/etc/init.d/custos reload'`
 
+## Domain classifier (OpenRouter)
+
+- Tool: `src/classifier.moon` → `lua/classifier.lua` (no Lua deps; `curl` via `io.popen`).
+- Auth: export `OPENROUTER_API_KEY` (free models work with `--model openrouter/free`, the default).
+- Classify (args or stdin):
+  - `OPENROUTER_API_KEY=... LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/classifier.lua google.com fsspx.news`
+  - `printf 'a.com\nb.net\n' | OPENROUTER_API_KEY=... LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/classifier.lua`
+- Output: JSON object `domain → [categories]` on stdout.
+- Write per-category lists (ready for `to_domainlist`/`from_*_list`): add `--out-dir DIR`.
+- Other options: `--categories a,b,c`, `--endpoint URL`, `--timeout N`, `--help`.
+
 ## UI d'installation (redbean)
 
 Interface web locale pour déployer Custos sur un routeur sans CLI.
