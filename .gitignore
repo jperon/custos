@@ -1,9 +1,15 @@
 # Logs
 *.log
 
+# Fichiers d'environnement (secrets) — cf. tools/classifier/.env.example
+.env
+*/.env
+**/.env
+
 # Runtime output directory
 tmp/*
 !tmp/.gitkeep
+lists/
 
 # Temporary files
 *.tmp

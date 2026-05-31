@@ -1,0 +1,9 @@
+# Évite de copier secrets et artefacts dans le contexte/image Docker.
+.env
+*/.env
+**/.env
+tmp/
+.git/
+images/
+*.qcow2
+redbean.com
