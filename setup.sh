@@ -66,26 +66,19 @@ check_deps() {
     errors=$((errors+1))
   fi
 
-  # lyaml (lua-yaml sur Debian, lyaml sur OpenWrt)
-  if luajit -e "require 'lyaml'" &>/dev/null; then
-    ok "lyaml disponible"
+  # libwolfssl (TLS du serveur d'authentification, via FFI ffi_wolfssl)
+  if ldconfig -p 2>/dev/null | grep -q libwolfssl; then
+    ok "libwolfssl trouvée"
   else
-    fail "lyaml introuvable — installer lua-yaml (Debian) ou lyaml (OpenWrt)"
+    fail "libwolfssl introuvable — installer libwolfssl (OpenWrt) / libwolfssl-dev (Debian)"
     errors=$((errors+1))
   fi
 
-  # luasocket + luasec (serveur HTTPS d'authentification)
-  if luajit -e "require 'socket'" &>/dev/null; then
-    ok "luasocket disponible"
+  # libxxhash (hash xxHash via FFI, format .bin)
+  if ldconfig -p 2>/dev/null | grep -q libxxhash; then
+    ok "libxxhash trouvée"
   else
-    fail "luasocket introuvable — installer lua-socket (Debian) ou lua-socket (OpenWrt)"
-    errors=$((errors+1))
-  fi
-
-  if luajit -e "require 'ssl'" &>/dev/null; then
-    ok "luasec disponible"
-  else
-    fail "luasec introuvable — installer lua-luasec (Debian : apt install lua-luasec)"
+    fail "libxxhash introuvable — installer libxxhash (OpenWrt) / libxxhash-dev (Debian)"
     errors=$((errors+1))
   fi
 

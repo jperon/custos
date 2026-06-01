@@ -298,14 +298,15 @@ cmd_test_unit() {
     ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip" '
         need_install=""
         command -v luajit >/dev/null 2>&1 || need_install="$need_install luajit"
-        luajit -e "require \"lyaml\"" 2>/dev/null   || need_install="$need_install lyaml"
-        [ -e /usr/lib/libwolfssl.so ] || need_install="$need_install libuhttpd-wolfssl"
-        command -v px5g >/dev/null 2>&1  || need_install="$need_install px5g"
+        luajit -e "require \"lpeg\"" 2>/dev/null || need_install="$need_install lpeg"
+        ls /usr/lib/libxxhash.so* >/dev/null 2>&1 || need_install="$need_install libxxhash"
+        [ -e /usr/lib/libwolfssl.so ] || need_install="$need_install libwolfssl"
+        command -v px5g >/dev/null 2>&1  || need_install="$need_install px5g-wolfssl"
         if [ -n "$need_install" ]; then
             apk update >/dev/null 2>&1
             apk add $need_install >/dev/null
             [ -e /usr/bin/luajit ] || ln -s luajit2 /usr/bin/luajit
-            # libuhttpd-wolfssl installe libwolfssl.so.<version> mais pas le lien générique.
+            # libwolfssl installe libwolfssl.so.<version> mais pas le lien générique.
             if [ ! -e /usr/lib/libwolfssl.so ]; then
                 v=$(ls /usr/lib/libwolfssl.so.* 2>/dev/null | sort -V | tail -1)
                 [ -n "$v" ] && ln -sf "$(basename "$v")" /usr/lib/libwolfssl.so

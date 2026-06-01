@@ -58,58 +58,68 @@
         }) ];
       };
 
-        luajit = pkgs.luajit.withPackages (ps: with ps; [
-          argparse
-          busted
-          dkjson
-          inspect
-          lua-cjson
-          luacheck
-          luacov
-          luafilesystem
-          luaposix
-          luarocks-nix
-          luasec
-          luasocket
-          luautf8
-          luaunit
-          moonscript
-          penlight
-        ]);
-      in {
-        devShells.default = pkgs.mkShell {
-          buildInputs = [
-            luajit
-            pkgs.git
-            pkgs.gnumake
-            pkgs.libnetfilter_queue
-            pkgs.nftables
-            pkgs.wolfssl
-            pkgs.px5g
+      luajit = pkgs.luajit.withPackages (ps: with ps; [
+        argparse
+        busted
+        dkjson
+        inspect
+        lua-cjson
+        luacheck
+        luacov
+        luafilesystem
+        luaposix
+        luarocks-nix
+        luasec
+        luasocket
+        luautf8
+        luaunit
+        moonscript
+        penlight
+      ]);
+    in {
+      devShells.default = pkgs.mkShell {
+        buildInputs = [
+          luajit
+          pkgs.git
+          pkgs.gnumake
+          pkgs.libnetfilter_queue
+          pkgs.nftables
+          pkgs.wolfssl
+          pkgs.px5g
+          pkgs.mbedtls
+          pkgs.openssl
+          pkgs.xxhash
+          
+          # Dépendances pour Copilot/Bash
+          pkgs.bash
+          pkgs.glibc
+          pkgs.pkg-config
+        ];
 
-
-            pkgs.mbedtls
-            pkgs.openssl
-            pkgs.xxhash
-          ];
-
-          shellHook = ''
-            export LD_LIBRARY_PATH="${pkgs.xxhash}/lib:${pkgs.libnetfilter_queue}/lib:${pkgs.nftables}/lib:${pkgs.wolfssl}/lib:$LD_LIBRARY_PATH"
-            if ! luarocks show moor > /dev/null 2>&1; then
-              echo "Installation du rock moor via luarocks..."
-              luarocks install moor
-            fi
-            # Détecte les .lua compilés parasites dans src/ (ils ont un .moon correspondant).
-            # La seule source de vérité est le .moon ; le .lua doit être dans lua/, pas src/.
-            stale=$(find src/ -name "*.lua" ! -path "src/lib/*" 2>/dev/null \
-              | while read f; do [ -f "''${f%.lua}.moon" ] && echo "$f"; done)
-            if [ -n "$stale" ]; then
-              echo "AVERTISSEMENT : .lua compilés parasites dans src/ — supprimer et recompiler via moonc :"
-              echo "$stale"
-            fi
-            echo "Environnement prêt pour custos !"
-          '';
-        };
-      }
-    );
+        shellHook = ''
+          export LD_LIBRARY_PATH="${pkgs.xxhash}/lib:${pkgs.libnetfilter_queue}/lib:${pkgs.nftables}/lib:${pkgs.wolfssl}/lib:$LD_LIBRARY_PATH"
+          
+          # FHS pour Copilot et autres outils qui cherchent bash au chemin standard
+          export BASH_PATH="${pkgs.bash}/bin/bash"
+          export PATH="${pkgs.bash}/bin:$PATH"
+          
+          if ! luarocks show moor > /dev/null 2>&1; then
+            echo "Installation du rock moor via luarocks..."
+            luarocks install moor
+          fi
+          
+          # Détecte les .lua compilés parasites dans src/ (ils ont un .moon correspondant).
+          # La seule source de vérité est le .moon ; le .lua doit être dans lua/, pas src/.
+          stale=$(find src/ -name "*.lua" ! -path "src/lib/*" 2>/dev/null \
+            | while read f; do [ -f "''${f%.lua}.moon" ] && echo "$f"; done)
+          if [ -n "$stale" ]; then
+            echo "AVERTISSEMENT : .lua compilés parasites dans src/ — supprimer et recompiler via moonc :"
+            echo "$stale"
+          fi
+          
+          echo "Environnement prêt pour custos !"
+        '';
+      };
+    }
+  );
 }

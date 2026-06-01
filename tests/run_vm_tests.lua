@@ -4,7 +4,7 @@
 -- luarocks ; busted n'est pas disponible sur OpenWrt 25.12).
 
 -- Chemins relatifs au dossier de déploiement de la VM (cf. homelab.sh test-unit).
--- Inclut /usr/lib/lua pour trouver les rocks OpenWrt (lyaml, etc.).
+-- Inclut /usr/lib/lua pour trouver les rocks OpenWrt (lpeg, etc.).
 package.path = table.concat({
   "lua/?.lua",
   "lua/?/init.lua",

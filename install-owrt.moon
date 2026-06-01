@@ -180,10 +180,10 @@ Installer = (cfg) ->
         warn "#{update_cmd} a échoué — les listes peuvent être périmées, on continue"
 
       pkgs_required = {
-        "luajit", "libnetfilter-queue", "nftables", "kmod-nft-queue",
-        "kmod-nft-bridge",
-        "lyaml", "luasec", "lpeg", "libxxhash",
-        "libuhttpd-wolfssl", "px5g"
+        "luajit", "libnetfilter-queue", "nftables",
+        "kmod-nft-queue", "kmod-nft-bridge",
+        "lpeg", "libxxhash",
+        "libwolfssl", "px5g"
       }
 
       pkg_list = table.concat pkgs_required, " "

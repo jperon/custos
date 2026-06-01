@@ -209,11 +209,9 @@ Installer = function(cfg)
         "nftables",
         "kmod-nft-queue",
         "kmod-nft-bridge",
-        "lyaml",
-        "luasec",
         "lpeg",
         "libxxhash",
-        "libuhttpd-wolfssl",
+        "libwolfssl",
         "px5g"
       }
       local pkg_list = table.concat(pkgs_required, " ")
