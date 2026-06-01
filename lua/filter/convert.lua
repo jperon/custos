@@ -1,7 +1,4 @@
-local ffi = require("ffi")
-local xxhash = require("ffi_xxhash")
-ffi.cdef([[  void qsort(void* base, size_t n, size_t size, int (*cmp)(const void*, const void*));
-]])
+local bin48 = require("filter.lib.bin48")
 if #arg < 2 then
   io.stderr:write("Usage: luajit lua/filter/convert.lua <input.domains> <output.bin>\n")
   os.exit(1)
@@ -13,50 +10,26 @@ if not fh then
   io.stderr:write("Impossible d'ouvrir : " .. tostring(input_path) .. "\n")
   os.exit(1)
 end
-local hashes = { }
-local seen = { }
-local n = 0
+local domains = { }
 for line in fh:lines() do
-  local _continue_0 = false
-  repeat
-    local domain = line:match("^%s*(.-)%s*$")
-    domain = domain:match("^([^#]*)" or "")
-    domain = domain:match("^%s*(.-)%s*$")
-    if domain == "" then
-      _continue_0 = true
-      break
-    end
-    if seen[domain] then
-      _continue_0 = true
-      break
-    end
-    seen[domain] = true
-    local h = xxhash.xxh64(domain)
-    n = n + 1
-    hashes[n] = h
-    _continue_0 = true
-  until true
-  if not _continue_0 then
-    break
+  local domain = line:match("^%s*(.-)%s*$")
+  domain = domain:match("^([^#]*)" or "")
+  domain = domain:match("^%s*(.-)%s*$")
+  if domain ~= "" then
+    domains[#domains + 1] = domain
   end
 end
 fh:close()
+local payload, n = bin48.pack_domains(domains)
 if n == 0 then
   io.stderr:write("Aucun domaine valide dans " .. tostring(input_path) .. "\n")
   os.exit(1)
-end
-table.sort(hashes, function(a, b)
-  return a < b
-end)
-local arr = ffi.new("uint64_t[?]", n)
-for i = 1, n do
-  arr[i - 1] = hashes[i]
 end
 local out = io.open(output_path, "wb")
 if not out then
   io.stderr:write("Impossible d'écrire : " .. tostring(output_path) .. "\n")
   os.exit(1)
 end
-out:write(ffi.string(arr, n * 8))
+out:write(payload)
 out:close()
-return io.stderr:write(tostring(n) .. " domaines → " .. tostring(output_path) .. " (" .. tostring(n * 8) .. " octets)\n")
+return io.stderr:write(tostring(n) .. " domaines → " .. tostring(output_path) .. " (" .. tostring(#payload) .. " octets)\n")

@@ -4,10 +4,11 @@
 --
 -- Contrairement à shelterfilter :
 --   • Pas de fork : la DB est chargée en mémoire dans le même processus.
---   • Pas de tonumber() : uint64_t natif (FFI cdata) → précision totale.
---   • Format .bin : N × 8 octets uint64_t little-endian, sans en-tête.
---   • Format .domains (texte, un domaine par ligne) : chargé et haché
---     à la volée au démarrage (utile en développement).
+--   • Pas de tonumber() : arithmétique cdata → précision totale.
+--   • Format .bin : N × 6 octets (xxh64 tronqué 48 bits) little-endian trié,
+--     sans en-tête (cf. filter.lib.bin48 ; −25 % de RAM vs uint64).
+--   • Format .domains (texte, un domaine par ligne) : chargé, haché et
+--     empaqueté à la volée au démarrage (utile en développement).
 
 ffi  = require "ffi"
 { :libc } = require "ffi_defs"
@@ -53,24 +54,26 @@ _evict_oldest_if_needed = ->
 
 --- Charge une liste de domaines depuis un fichier .bin ou .domains.
 -- @tparam string path Chemin vers le fichier
--- @treturn cdata, number Tableau uint64_t[] et nombre d'entrées, ou nil, msg
+-- @treturn cdata, number Pointeur uint8_t* (enregistrements 6 octets) et
+--   nombre d'entrées, ou nil, msg
 local load_list
 load_list = (path) ->
-  xxhash_ok, xxhash = pcall require, "ffi_xxhash"
+  xxhash_ok = pcall require, "ffi_xxhash"
   return nil, "ffi_xxhash non disponible" unless xxhash_ok
-  bsearch_m = require "filter.lib.bsearch"
+  bin48 = require "filter.lib.bin48"
 
   if path\match "%.bin$"
     -- Fichier binaire précompilé : mappé en lecture seule partagée (MAP_SHARED).
     -- Aucune recopie : le pointeur FFI pointe directement sur la page (tmpfs),
     -- partagée entre tous les workers forkés (lecture seule → jamais dupliquée).
+    -- Format : N × 6 octets (xxh64 tronqué 48 bits), little-endian, trié.
     fd = libc.open path, O_RDONLY, 0
     return nil, "Cannot open #{path}" if fd < 0
     size = tonumber libc.lseek fd, 0, SEEK_END
     if size <= 0
       libc.close fd
       return nil, "Empty bin file: #{path}"
-    n = math.floor size / 8
+    n = math.floor size / 6
     if n == 0
       libc.close fd
       return nil, "Empty bin file: #{path}"
@@ -80,42 +83,41 @@ load_list = (path) ->
       return nil, "mmap failed: #{path}"
     ffi.gc ptr, (p) -> libc.munmap p, size
     _mappings[#_mappings + 1] = ptr
-    arr = ffi.cast "uint64_t*", ptr
+    arr = ffi.cast "const uint8_t*", ptr
     return arr, n
 
   else
-    -- Fichier texte : un domaine par ligne
+    -- Fichier texte : un domaine par ligne, empaqueté en mémoire au format 48 bits.
     fh = io.open path, "rb"
     return nil, "Cannot open #{path}" unless fh
     data = fh\read "*a"
     fh\close!
-    hashes = {}
+    domains = {}
     for line in data\gmatch "[^\n]+"
       domain = line\match "^%s*(.-)%s*$"
       domain = (domain\match "^([^#]*)") or ""
       domain = domain\match "^%s*(.-)%s*$"
-      hashes[#hashes + 1] = xxhash.xxh64(domain) if domain ~= ""
+      domains[#domains + 1] = domain if domain ~= ""
 
-    n = #hashes
+    payload, n = bin48.pack_domains domains
     return nil, "Empty domains file: #{path}" if n == 0
 
-    table.sort hashes, (a, b) -> a < b
-    arr = ffi.new "uint64_t[?]", n
-    for i = 1, n
-      arr[i - 1] = hashes[i]
+    -- Conserver le buffer vivant pour la durée du process (comme les mappings).
+    _mappings[#_mappings + 1] = payload
+    arr = ffi.cast "const uint8_t*", payload
     return arr, n
 
 --- Teste si un domaine (ou un suffixe) est dans le tableau trié avec cache LRU.
 -- Essaie d'abord le domaine exact, puis chaque suffixe de gauche à droite.
--- @tparam cdata   arr    Tableau FFI uint64_t[N] trié
+-- @tparam cdata   arr    Pointeur uint8_t* (enregistrements 6 octets triés)
 -- @tparam number  n      Nombre d'entrées
 -- @tparam string  domain Domaine à chercher
 -- @tparam string  listname Identifiant de liste pour la clé de cache (optional)
 -- @treturn boolean, string
 local lookup
 lookup = (arr, n, domain, listname) ->
-  { :xxh64 }   = require "ffi_xxhash"
-  { :bsearch } = require "filter.lib.bsearch"
+  { :xxh64 } = require "ffi_xxhash"
+  bin48 = require "filter.lib.bin48"
 
   now = os.time!
   -- Clé de cache composite: "listname:domain" ou juste "domain" si pas de listname
@@ -138,14 +140,14 @@ lookup = (arr, n, domain, listname) ->
   _cache_misses += 1
 
   -- Exact
-  found = bsearch arr, n, xxh64(domain)
+  found = bin48.bsearch arr, n, bin48.truncate xxh64 domain
 
   -- Suffixes (si pas trouvé exact)
   if not found
     pos = domain\find ".", 1, true
     while pos
       suffix = domain\sub pos + 1
-      if bsearch arr, n, xxh64(suffix)
+      if bin48.bsearch arr, n, bin48.truncate xxh64 suffix
         found = true
         break
       pos = domain\find ".", pos + 1, true

@@ -16,11 +16,11 @@ read_bin = function(path)
   fh:close()
   return data
 end
-local u64_le
-u64_le = function(s, i, j)
-  for b = 7, 0, -1 do
-    local ai = string.byte(s, i * 8 + b + 1)
-    local aj = string.byte(s, j * 8 + b + 1)
+local rec48_le
+rec48_le = function(s, i, j)
+  for b = 5, 0, -1 do
+    local ai = string.byte(s, i * 6 + b + 1)
+    local aj = string.byte(s, j * 6 + b + 1)
     if ai < aj then
       return true
     end
@@ -30,14 +30,14 @@ u64_le = function(s, i, j)
   end
   return true
 end
-local sorted_u64
-sorted_u64 = function(s)
-  local n = math.floor(#s / 8)
+local sorted_rec48
+sorted_rec48 = function(s)
+  local n = math.floor(#s / 6)
   if n <= 1 then
     return true
   end
   for i = 0, n - 2 do
-    if not (u64_le(s, i, i + 1)) then
+    if not (rec48_le(s, i, i + 1)) then
       return false
     end
   end
@@ -76,27 +76,27 @@ return describe("filter/convert (CLI)", function()
       fh:close()
       return assert.is_true(run_convert(tostring(CONV_INPUT) .. " " .. tostring(CONV_OUTPUT)))
     end)
-    it("taille = nb_domaines × 8 octets", function()
+    it("taille = nb_domaines × 6 octets", function()
       local fh = io.open(CONV_INPUT, "w")
       fh:write("github.com\nfacebook.com\ngoogle.com\n")
       fh:close()
       run_convert(tostring(CONV_INPUT) .. " " .. tostring(CONV_OUTPUT))
       local data = read_bin(CONV_OUTPUT)
       assert.is_not_nil(data)
-      return assert.equals(3 * 8, #data)
+      return assert.equals(3 * 6, #data)
     end)
-    return it("les hashes sont triés (ordre croissant uint64)", function()
+    return it("les hashes sont triés (ordre croissant 48 bits)", function()
       local fh = io.open(CONV_INPUT, "w")
       fh:write("github.com\nfacebook.com\ngoogle.com\n")
       fh:close()
       run_convert(tostring(CONV_INPUT) .. " " .. tostring(CONV_OUTPUT))
       local data = read_bin(CONV_OUTPUT)
       assert.is_not_nil(data)
-      return assert.is_true(sorted_u64(data))
+      return assert.is_true(sorted_rec48(data))
     end)
   end)
   describe("déduplication", function()
-    return it("trois lignes identiques → un seul hash (8 octets)", function()
+    return it("trois lignes identiques → un seul hash (6 octets)", function()
       local fh = io.open(CONV_INPUT, "w")
       fh:write("github.com\ngithub.com\ngithub.com\n")
       fh:close()
@@ -104,7 +104,7 @@ return describe("filter/convert (CLI)", function()
       assert.is_true(ok)
       local data = read_bin(CONV_OUTPUT)
       assert.is_not_nil(data)
-      return assert.equals(8, #data)
+      return assert.equals(6, #data)
     end)
   end)
   describe("commentaires et lignes vides", function()
@@ -119,7 +119,7 @@ return describe("filter/convert (CLI)", function()
       assert.is_true(ok)
       local data = read_bin(CONV_OUTPUT)
       assert.is_not_nil(data)
-      return assert.equals(8, #data)
+      return assert.equals(6, #data)
     end)
   end)
   describe("fichier sans domaine valide", function()

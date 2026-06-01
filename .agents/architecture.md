@@ -69,8 +69,13 @@ reject `10-11`, auth `5`, sni `6`, sip `12`. Les workers `tls`, `sip` et
 Les listes `.bin` (`src/filter/conditions/to_domainlist.moon`) sont chargées par
 `filter.load!` dans le superviseur **avant** le fork des workers porteurs de
 filtre (`dns-q*`, `resp-q*`, `nft`, `tls`, `doh`). Le `.bin` est mappé via
-`mmap(MAP_SHARED, PROT_READ)` : le tableau FFI `uint64_t*` pointe directement sur
-les pages du fichier (en tmpfs, donc déjà en RAM). Conséquences :
+`mmap(MAP_SHARED, PROT_READ)` : le pointeur FFI `const uint8_t*` pointe
+directement sur les pages du fichier (en tmpfs, donc déjà en RAM). Le format est
+N × 6 octets (xxh64 tronqué 48 bits, little-endian, trié — cf.
+`src/filter/lib/bin48.moon`), soit −25 % de RAM/disque face à l'uint64, pour un
+faux positif ≈ N/2⁴⁸ (négligeable). La lecture d'un enregistrement s'adapte à
+l'architecture (`jit.arch`) : accès non aligné rapide sur x86/x64/ARM, repli
+octet-par-octet sur MIPS. Conséquences :
 
 - **Aucune recopie** : plus de string Lua transitoire (`read "*a"`) ni de
   `ffi.copy` — la donnée n'existe qu'une fois en mémoire.

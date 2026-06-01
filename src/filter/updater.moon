@@ -29,12 +29,13 @@
 --   1. Télécharge chaque URL via curl
 --   2. Parse les domaines selon le format
 --   3. Fusionne et déduplique
---   4. Hash xxh64 + tri + écriture atomique (.tmp → rename)
+--   4. Hash xxh64 tronqué 48 bits + tri + écriture atomique (.tmp → rename)
+--      (format .bin : N × 6 octets, cf. filter.lib.bin48)
 -- Si --pid est fourni et qu'au moins une liste a été mise à jour,
 -- envoie SIGHUP au daemon.
 
 ffi          = require "ffi"
-xxhash       = require "ffi_xxhash"
+bin48        = require "filter.lib.bin48"
 parse_domains = require "filter.lib.parse_domains"
 config       = require "config"
 
@@ -238,21 +239,10 @@ fetch_toulouse = (name, source, dry_run) ->
 -- @treturn boolean             Succès
 -- @treturn string              Message (nb domaines ou erreur)
 write_bin = (domains, output_path, dry_run) ->
-  seen, hashes, n = {}, {}, 0
-  for domain in *domains
-    continue if seen[domain]
-    seen[domain] = true
-    n += 1
-    hashes[n] = xxhash.xxh64 domain
+  payload, n = bin48.pack_domains domains
 
   if n == 0
     return false, "aucun domaine valide"
-
-  table.sort hashes, (a, b) -> a < b
-
-  arr = ffi.new "uint64_t[?]", n
-  for i = 1, n
-    arr[i - 1] = hashes[i]
 
   if dry_run
     return true, "dry-run : #{n} domaines → #{output_path}"
@@ -262,7 +252,7 @@ write_bin = (domains, output_path, dry_run) ->
     return false, "impossible de créer le répertoire parent de #{tmp}"
   fh = io.open tmp, "wb"
   return false, "impossible d'écrire #{tmp}" unless fh
-  fh\write ffi.string arr, n * 8
+  fh\write payload
   fh\close!
 
   ret = ffi.C.rename tmp, output_path
@@ -270,7 +260,7 @@ write_bin = (domains, output_path, dry_run) ->
     os.remove tmp
     return false, "rename échoué : #{tmp} → #{output_path}"
 
-  true, "#{n} domaines → #{output_path} (#{n * 8} octets)"
+  true, "#{n} domaines → #{output_path} (#{#payload} octets)"
 
 -- ── Listes personnalisées (fichier local) ────────────────────────
 

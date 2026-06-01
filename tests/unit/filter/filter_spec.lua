@@ -1,44 +1,4 @@
 local ffi = require("ffi")
-describe("filter.lib.bsearch", function()
-  local bsearch
-  bsearch = require("filter.lib.bsearch").bsearch
-  it("trouve en début", function()
-    local arr = ffi.new("uint64_t[3]", {
-      100ULL,
-      200ULL,
-      300ULL
-    })
-    return assert.is_true((bsearch(arr, 3, 100ULL)))
-  end)
-  it("trouve en milieu", function()
-    local arr = ffi.new("uint64_t[3]", {
-      100ULL,
-      200ULL,
-      300ULL
-    })
-    return assert.is_true((bsearch(arr, 3, 200ULL)))
-  end)
-  it("trouve en fin", function()
-    local arr = ffi.new("uint64_t[3]", {
-      100ULL,
-      200ULL,
-      300ULL
-    })
-    return assert.is_true((bsearch(arr, 3, 300ULL)))
-  end)
-  it("retourne faux si absent", function()
-    local arr = ffi.new("uint64_t[3]", {
-      100ULL,
-      200ULL,
-      300ULL
-    })
-    return assert.is_false((bsearch(arr, 3, 150ULL)))
-  end)
-  return it("gère tableau vide", function()
-    local arr = ffi.new("uint64_t[0]")
-    return assert.is_false((bsearch(arr, 0, 42ULL)))
-  end)
-end)
 describe("filter.lib.ipcalc", function()
   local ipcalc = require("filter.lib.ipcalc")
   it("IPv4 dans sous-réseau /16", function()
@@ -171,33 +131,17 @@ describe("filter.conditions.to_domainlist", function()
   local TMPDIR = "./tmp"
   local TMPBIN = TMPDIR .. "/test_filter_domainlist.bin"
   before_each(function()
-    local ok, xxhash = pcall(require, "ffi_xxhash")
+    local ok = pcall(require, "ffi_xxhash")
     if ok then
+      local bin48 = require("filter.lib.bin48")
       local test_domains = {
         "github.com",
         "debian.org",
         "cloudflare.com"
       }
-      local hashes
-      do
-        local _accum_0 = { }
-        local _len_0 = 1
-        for _index_0 = 1, #test_domains do
-          local d = test_domains[_index_0]
-          _accum_0[_len_0] = xxhash.xxh64(d)
-          _len_0 = _len_0 + 1
-        end
-        hashes = _accum_0
-      end
-      table.sort(hashes, function(a, b)
-        return a < b
-      end)
-      local arr = ffi.new("uint64_t[?]", #hashes)
-      for i, h in ipairs(hashes) do
-        arr[i - 1] = h
-      end
+      local payload = bin48.pack_domains(test_domains)
       local fd = io.open(TMPBIN, "wb")
-      fd:write(ffi.string(arr, #hashes * 8))
+      fd:write(payload)
       return fd:close()
     end
   end)

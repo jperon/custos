@@ -529,7 +529,8 @@ sources: {
 | `subdir` | Sous-répertoire de destination dans `domainlists_dir` |
 | `output` | Chemin du fichier `.bin` compilé (si absent : dérivé du nom de la source) |
 
-Les fichiers `.bin` sont des tables de hachage XXH64 (format binaire compact).
+Les fichiers `.bin` sont des tableaux triés de hachages XXH64 tronqués à 48 bits
+(N × 6 octets little-endian, sans en-tête ; cf. `src/filter/lib/bin48.moon`).
 L'outil de conversion est `lua/filter/convert.lua`.
 
 ### 14.4 Règles de filtrage (`filter.rules`)

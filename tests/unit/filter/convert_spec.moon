@@ -2,8 +2,8 @@
 -- Tests du script CLI lua/filter/convert.lua.
 --
 -- filter/convert.lua est un script autonome (pas un module require-able) :
--- il lit un fichier de domaines, hache chaque entrée avec xxhash64, déduplique,
--- trie, et écrit un tableau binaire d'uint64_t dans un fichier .bin.
+-- il lit un fichier de domaines, hache chaque entrée avec xxhash64 tronqué à
+-- 48 bits, déduplique, trie, et écrit N × 6 octets little-endian dans un .bin.
 --
 -- Les tests le lancent en sous-processus (os.execute) en reconstruisant le
 -- LUA_PATH exact utilisé par le Makefile.
@@ -31,22 +31,22 @@ read_bin = (path) ->
   fh\close!
   data
 
--- Compare deux blobs uint64 little-endian à indices 0-basés i et j dans s.
--- Retourne true si s[i] <= s[j].
-u64_le = (s, i, j) ->
-  for b = 7, 0, -1
-    ai = string.byte s, i * 8 + b + 1
-    aj = string.byte s, j * 8 + b + 1
+-- Compare deux enregistrements 48 bits little-endian (6 octets) aux indices
+-- 0-basés i et j dans s. Retourne true si s[i] <= s[j].
+rec48_le = (s, i, j) ->
+  for b = 5, 0, -1
+    ai = string.byte s, i * 6 + b + 1
+    aj = string.byte s, j * 6 + b + 1
     return true if ai < aj
     return false if ai > aj
   true  -- égaux → non strict, donc ≤ est vrai
 
--- Vérifie que tous les blocs de 8 octets dans s sont en ordre croissant.
-sorted_u64 = (s) ->
-  n = math.floor #s / 8
+-- Vérifie que tous les blocs de 6 octets dans s sont en ordre croissant.
+sorted_rec48 = (s) ->
+  n = math.floor #s / 6
   return true if n <= 1
   for i = 0, n - 2
-    return false unless u64_le s, i, i + 1
+    return false unless rec48_le s, i, i + 1
   true
 
 -- Supprime les fichiers temporaires s'ils existent.
@@ -91,28 +91,28 @@ describe "filter/convert (CLI)", ->
       fh\close!
       assert.is_true run_convert "#{CONV_INPUT} #{CONV_OUTPUT}"
 
-    it "taille = nb_domaines × 8 octets", ->
+    it "taille = nb_domaines × 6 octets", ->
       fh = io.open CONV_INPUT, "w"
       fh\write "github.com\nfacebook.com\ngoogle.com\n"
       fh\close!
       run_convert "#{CONV_INPUT} #{CONV_OUTPUT}"
       data = read_bin CONV_OUTPUT
       assert.is_not_nil data
-      assert.equals 3 * 8, #data
+      assert.equals 3 * 6, #data
 
-    it "les hashes sont triés (ordre croissant uint64)", ->
+    it "les hashes sont triés (ordre croissant 48 bits)", ->
       fh = io.open CONV_INPUT, "w"
       fh\write "github.com\nfacebook.com\ngoogle.com\n"
       fh\close!
       run_convert "#{CONV_INPUT} #{CONV_OUTPUT}"
       data = read_bin CONV_OUTPUT
       assert.is_not_nil data
-      assert.is_true sorted_u64 data
+      assert.is_true sorted_rec48 data
 
   -- ── déduplication ─────────────────────────────────────────────────────────
   describe "déduplication", ->
 
-    it "trois lignes identiques → un seul hash (8 octets)", ->
+    it "trois lignes identiques → un seul hash (6 octets)", ->
       fh = io.open CONV_INPUT, "w"
       fh\write "github.com\ngithub.com\ngithub.com\n"
       fh\close!
@@ -120,7 +120,7 @@ describe "filter/convert (CLI)", ->
       assert.is_true ok
       data = read_bin CONV_OUTPUT
       assert.is_not_nil data
-      assert.equals 8, #data
+      assert.equals 6, #data
 
   -- ── commentaires et lignes vides ignorés ─────────────────────────────────
   describe "commentaires et lignes vides", ->
@@ -136,7 +136,7 @@ describe "filter/convert (CLI)", ->
       assert.is_true ok
       data = read_bin CONV_OUTPUT
       assert.is_not_nil data
-      assert.equals 8, #data
+      assert.equals 6, #data
 
   -- ── fichier d'entrée vide (aucun domaine valide) ──────────────────────────
   describe "fichier sans domaine valide", ->

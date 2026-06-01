@@ -17,8 +17,9 @@ tests/
       ffi_defs_spec.moon      disponibilité des fonctions FFI
     filter/
       allowlist_spec.moon     correspondance par suffixe DNS
-      convert_spec.moon       CLI convert.lua : hash + tri binaire
-      filter_spec.moon        bsearch, ipcalc, conditions (domain/mac/net/
+      convert_spec.moon       CLI convert.lua : hash 48 bits + tri binaire
+      lib/bin48_spec.moon     format .bin 48 bits (pack/rec_at/bsearch)
+      filter_spec.moon        ipcalc, conditions (domain/mac/net/
                               user/vlan/time), règles, actions, parse_domains,
                               load_config, first_match_wins
     ipc/
@@ -32,7 +33,6 @@ tests/
                               extract/patch/replace DNS payload
   helpers/
     busted_setup.lua          stubs globaux (ffi_defs, config, log, ethernet)
-  run_tests.moon              ancienne suite monolithique (gardée pour référence)
   test_ffi_socket.moon        FFI socket (luajit direct, hors Busted)
   test_ffi_wolfssl.moon       FFI WolfSSL (luajit direct)
   test_ffi_integration.moon   tests d'intégration socket+SSL

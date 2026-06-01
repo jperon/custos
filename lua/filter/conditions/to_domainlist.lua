@@ -38,11 +38,11 @@ _evict_oldest_if_needed = function()
 end
 local load_list
 load_list = function(path)
-  local xxhash_ok, xxhash = pcall(require, "ffi_xxhash")
+  local xxhash_ok = pcall(require, "ffi_xxhash")
   if not (xxhash_ok) then
     return nil, "ffi_xxhash non disponible"
   end
-  local bsearch_m = require("filter.lib.bsearch")
+  local bin48 = require("filter.lib.bin48")
   if path:match("%.bin$") then
     local fd = libc.open(path, O_RDONLY, 0)
     if fd < 0 then
@@ -53,7 +53,7 @@ load_list = function(path)
       libc.close(fd)
       return nil, "Empty bin file: " .. tostring(path)
     end
-    local n = math.floor(size / 8)
+    local n = math.floor(size / 6)
     if n == 0 then
       libc.close(fd)
       return nil, "Empty bin file: " .. tostring(path)
@@ -67,7 +67,7 @@ load_list = function(path)
       return libc.munmap(p, size)
     end)
     _mappings[#_mappings + 1] = ptr
-    local arr = ffi.cast("uint64_t*", ptr)
+    local arr = ffi.cast("const uint8_t*", ptr)
     return arr, n
   else
     local fh = io.open(path, "rb")
@@ -76,26 +76,21 @@ load_list = function(path)
     end
     local data = fh:read("*a")
     fh:close()
-    local hashes = { }
+    local domains = { }
     for line in data:gmatch("[^\n]+") do
       local domain = line:match("^%s*(.-)%s*$")
       domain = (domain:match("^([^#]*)")) or ""
       domain = domain:match("^%s*(.-)%s*$")
       if domain ~= "" then
-        hashes[#hashes + 1] = xxhash.xxh64(domain)
+        domains[#domains + 1] = domain
       end
     end
-    local n = #hashes
+    local payload, n = bin48.pack_domains(domains)
     if n == 0 then
       return nil, "Empty domains file: " .. tostring(path)
     end
-    table.sort(hashes, function(a, b)
-      return a < b
-    end)
-    local arr = ffi.new("uint64_t[?]", n)
-    for i = 1, n do
-      arr[i - 1] = hashes[i]
-    end
+    _mappings[#_mappings + 1] = payload
+    local arr = ffi.cast("const uint8_t*", payload)
     return arr, n
   end
 end
@@ -103,8 +98,7 @@ local lookup
 lookup = function(arr, n, domain, listname)
   local xxh64
   xxh64 = require("ffi_xxhash").xxh64
-  local bsearch
-  bsearch = require("filter.lib.bsearch").bsearch
+  local bin48 = require("filter.lib.bin48")
   local now = os.time()
   local cache_key = listname and tostring(listname) .. ":" .. tostring(domain) or domain
   local cached = _domain_cache[cache_key]
@@ -123,12 +117,12 @@ lookup = function(arr, n, domain, listname)
     end
   end
   _cache_misses = _cache_misses + 1
-  local found = bsearch(arr, n, xxh64(domain))
+  local found = bin48.bsearch(arr, n, bin48.truncate(xxh64(domain)))
   if not found then
     local pos = domain:find(".", 1, true)
     while pos do
       local suffix = domain:sub(pos + 1)
-      if bsearch(arr, n, xxh64(suffix)) then
+      if bin48.bsearch(arr, n, bin48.truncate(xxh64(suffix))) then
         found = true
         break
       end

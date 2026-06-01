@@ -1,5 +1,5 @@
 local ffi = require("ffi")
-local xxhash = require("ffi_xxhash")
+local bin48 = require("filter.lib.bin48")
 local parse_domains = require("filter.lib.parse_domains")
 local config = require("config")
 ffi.cdef([[  int rename(const char *oldpath, const char *newpath);
@@ -186,33 +186,9 @@ fetch_toulouse = function(name, source, dry_run)
   return write_bin(all_domains, output, dry_run)
 end
 write_bin = function(domains, output_path, dry_run)
-  local seen, hashes, n = { }, { }, 0
-  for _index_0 = 1, #domains do
-    local _continue_0 = false
-    repeat
-      local domain = domains[_index_0]
-      if seen[domain] then
-        _continue_0 = true
-        break
-      end
-      seen[domain] = true
-      n = n + 1
-      hashes[n] = xxhash.xxh64(domain)
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
-    end
-  end
+  local payload, n = bin48.pack_domains(domains)
   if n == 0 then
     return false, "aucun domaine valide"
-  end
-  table.sort(hashes, function(a, b)
-    return a < b
-  end)
-  local arr = ffi.new("uint64_t[?]", n)
-  for i = 1, n do
-    arr[i - 1] = hashes[i]
   end
   if dry_run then
     return true, "dry-run : " .. tostring(n) .. " domaines → " .. tostring(output_path)
@@ -225,14 +201,14 @@ write_bin = function(domains, output_path, dry_run)
   if not (fh) then
     return false, "impossible d'écrire " .. tostring(tmp)
   end
-  fh:write(ffi.string(arr, n * 8))
+  fh:write(payload)
   fh:close()
   local ret = ffi.C.rename(tmp, output_path)
   if ret ~= 0 then
     os.remove(tmp)
     return false, "rename échoué : " .. tostring(tmp) .. " → " .. tostring(output_path)
   end
-  return true, tostring(n) .. " domaines → " .. tostring(output_path) .. " (" .. tostring(n * 8) .. " octets)"
+  return true, tostring(n) .. " domaines → " .. tostring(output_path) .. " (" .. tostring(#payload) .. " octets)"
 end
 local fetch_local
 fetch_local = function(name, source, dry_run)

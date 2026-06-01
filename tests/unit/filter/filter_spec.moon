@@ -10,29 +10,6 @@
 
 ffi = require "ffi"
 
-describe "filter.lib.bsearch", ->
-  { :bsearch } = require "filter.lib.bsearch"
-
-  it "trouve en début", ->
-    arr = ffi.new "uint64_t[3]", {100ULL, 200ULL, 300ULL}
-    assert.is_true (bsearch arr, 3, 100ULL)
-
-  it "trouve en milieu", ->
-    arr = ffi.new "uint64_t[3]", {100ULL, 200ULL, 300ULL}
-    assert.is_true (bsearch arr, 3, 200ULL)
-
-  it "trouve en fin", ->
-    arr = ffi.new "uint64_t[3]", {100ULL, 200ULL, 300ULL}
-    assert.is_true (bsearch arr, 3, 300ULL)
-
-  it "retourne faux si absent", ->
-    arr = ffi.new "uint64_t[3]", {100ULL, 200ULL, 300ULL}
-    assert.is_false (bsearch arr, 3, 150ULL)
-
-  it "gère tableau vide", ->
-    arr = ffi.new "uint64_t[0]"
-    assert.is_false (bsearch arr, 0, 42ULL)
-
 describe "filter.lib.ipcalc", ->
   ipcalc = require "filter.lib.ipcalc"
 
@@ -139,17 +116,14 @@ describe "filter.conditions.to_domainlist", ->
   TMPBIN = TMPDIR .. "/test_filter_domainlist.bin"
 
   before_each ->
-    -- Créer fichier .bin de test avec xxhash
-    ok, xxhash = pcall require, "ffi_xxhash"
+    -- Créer fichier .bin de test (format 48 bits, cf. filter.lib.bin48)
+    ok = pcall require, "ffi_xxhash"
     if ok
+      bin48 = require "filter.lib.bin48"
       test_domains = {"github.com", "debian.org", "cloudflare.com"}
-      hashes = [xxhash.xxh64(d) for d in *test_domains]
-      table.sort hashes, (a, b) -> a < b
-      arr = ffi.new "uint64_t[?]", #hashes
-      for i, h in ipairs hashes
-        arr[i - 1] = h
+      payload = bin48.pack_domains test_domains
       fd = io.open TMPBIN, "wb"
-      fd\write ffi.string arr, #hashes * 8
+      fd\write payload
       fd\close!
 
   after_each ->

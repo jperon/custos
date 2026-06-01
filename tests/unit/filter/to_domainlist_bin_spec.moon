@@ -2,23 +2,17 @@
 -- Couvre le chargement des listes .bin via mmap (lecture seule partagée) :
 -- lookup exact, lookup par suffixe, et cas d'erreur (mmap impossible).
 
-ffi = require "ffi"
 { :factory } = require "filter.conditions.to_domainlist"
-{ :xxh64 } = require "ffi_xxhash"
+bin48 = require "filter.lib.bin48"
 
 -- Répertoire de travail confiné au projet (cf. AGENTS.md : jamais /tmp système).
 TMP_DIR = "./tmp/to_domainlist_bin_spec"
 
--- Écrit un .bin trié à partir d'une liste de domaines (N × uint64 LE).
+-- Écrit un .bin trié à partir d'une liste de domaines (N × 6 octets, 48 bits).
 write_bin = (path, domains) ->
-  hashes = [ xxh64(d) for d in *domains ]
-  table.sort hashes, (a, b) -> a < b
-  n = #hashes
-  arr = ffi.new "uint64_t[?]", n
-  for i = 1, n
-    arr[i - 1] = hashes[i]
+  payload = bin48.pack_domains domains
   fh = assert io.open path, "wb"
-  fh\write ffi.string ffi.cast("const char*", arr), n * 8
+  fh\write payload
   fh\close!
 
 setup ->
