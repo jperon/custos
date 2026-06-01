@@ -29,10 +29,13 @@ WORKDIR /opt/custos
 COPY . /opt/custos/
 RUN make all
 
-# classifier.moon requiert ffi/ffi_xxhash → il doit tourner sous LuaJIT (pas le
-# `moon` lua5.1 de luarocks). On le précompile en .lua et on l'exécute via luajit.
-RUN moonc -o /opt/custos/tools/classifier/classifier.lua \
-          /opt/custos/tools/classifier/classifier.moon
+# classifier/simplifier requièrent ffi/ffi_xxhash → ils doivent tourner sous
+# LuaJIT (pas le `moon` lua5.1 de luarocks). On précompile tous les modules
+# MoonScript de l'outil en .lua et on les exécute via luajit.
+RUN for m in common simplify_lib simplify classifier simplifier; do \
+        moonc -o /opt/custos/tools/classifier/$m.lua \
+              /opt/custos/tools/classifier/$m.moon; \
+    done
 
 # Le script trouve le lua/ compilé via CUSTOS_LUA.
 ENV CUSTOS_LUA=/opt/custos/lua
@@ -41,4 +44,7 @@ ENV CUSTOS_LUA=/opt/custos/lua
 # de domaines d'entrée.
 WORKDIR /work
 
+# Entrypoint par défaut : classifier. Pour lancer le simplifier :
+#   docker run --rm --entrypoint luajit … custos-classifier \
+#     /opt/custos/tools/classifier/simplifier.lua [<list-name>] [options]
 ENTRYPOINT ["luajit", "/opt/custos/tools/classifier/classifier.lua"]

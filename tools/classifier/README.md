@@ -90,6 +90,8 @@ docker run --rm \
 | `--no-bin` | — | Désactive l'étape 6 (compilation `.bin`) |
 | `--no-commit` | — | Désactive l'étape 7 (commit git) |
 | `--normalize-all` | — | Déduplique + trie **toutes** les listes (assainissement ponctuel) |
+| `--no-simplify` | — | Désactive la simplification auto (étape 5bis) des catégories enrichies |
+| `--simplify-min-children N` | `3` | Seuil de sous-domaines pour proposer un repli lors de la simplification |
 
 ### Variables d'environnement
 
@@ -129,11 +131,97 @@ export CUSTOS_LUA="$PWD/lua"
 moon tools/classifier/classifier.moon domains.txt --lists-dir lists
 ```
 
+> **Intégration dans classifier.** Avant de compiler les `.bin` (étape 6),
+> classifier **simplifie automatiquement** les catégories qu'il vient d'enrichir
+> (cf. ci-dessous) : suppression des sous-domaines redondants + repli IA. Désactivable
+> avec `--no-simplify` ; seuil ajustable via `--simplify-min-children N` (défaut 3).
+
+## simplifier — repli des sous-domaines vers leur parent
+
+`simplifier.moon` est un second outil, **partageant l'infrastructure de classifier**
+(`common.moon` : chargement `.env`, appel IA, écriture des listes, compilation `.bin`,
+commit git ; `simplify.moon` : cœur d'orchestration réutilisé par les deux outils).
+Son objet : **raccourcir** les listes en remplaçant des grappes de sous-domaines
+par leur domaine parent. Exemple :
+
+```
+sun1-13.userapi.com   sun1-16.userapi.com   sun1-19.userapi.com   …
+        →   userapi.com
+```
+
+C'est valide car custos autorise un domaine **et tous ses sous-domaines**
+(cf. `to_domainlist`) : replier vers le parent est équivalent côté correspondance.
+
+**Mais tout n'est pas repliable.** `userapi.com` est anodin ; en revanche sur
+`google.com` on peut vouloir autoriser `mail.google.com` tout en bloquant
+`www.google.com` et `google.com` lui-même. La décision « replier ou non ce parent »
+est donc confiée à une **IA** (même back-end qu'classifier).
+
+### Pipeline
+
+1. **Catégories** : `ls <lists-dir>/*.txt` (restreint à `<list-name>` si fourni en
+   argument positionnel).
+2. **Redondance « gratuite »** (sans IA) : tout sous-domaine dont un **ancêtre est
+   déjà présent dans la même liste** est supprimé d'office (ex. si `userapi.com`
+   figure dans la liste, `sun1-13.userapi.com` y est inutile — déjà couvert). C'est
+   une équivalence stricte côté correspondance : aucune décision n'est requise.
+3. **Parents candidats** : sur les domaines restants, on calcule les suffixes
+   (≥ 2 labels) couvrant au moins `--min-children` domaines, en ne gardant que les
+   **maximaux** (le plus large l'emporte : si `c.net` et `b.c.net` sont candidats,
+   seul `c.net` est proposé). Logique pure dans `simplify_lib.moon`.
+4. **Jugement IA** : par lots de `--batch-size`, l'IA répond `true`/`false` par
+   parent (sûr de tout replier, ou non). Round-robin de modèles + bascule sur 429,
+   comme classifier ; une réponse incomplète/non booléenne est rejetée et relancée
+   sur un autre provider.
+5. **Réécriture** : redondants (étape 2) et sous-domaines repliés (étape 4) sont
+   retirés, les parents approuvés (ré)ajoutés ; la liste est dédupliquée et triée.
+6. **Compilation `.bin`** des seules catégories modifiées (mêmes hashs que classifier).
+7. **Commit git** automatique (pas de push).
+
+### Utilisation
+
+```sh
+# Toutes les catégories (image classifier, entrypoint surchargé) :
+docker run --rm --env-file .env \
+  --entrypoint luajit \
+  -v "$PWD/lists:/work/lists" \
+  custos-classifier /opt/custos/tools/classifier/simplifier.lua --lists-dir /work/lists
+
+# Une seule catégorie, en simulation (n'écrit rien) :
+moon tools/classifier/simplifier.moon cdn --lists-dir lists --dry-run
+```
+
+### Options de `simplifier.moon`
+
+| Option | Défaut | Rôle |
+|--------|--------|------|
+| `<list-name>` | — | Catégorie unique à traiter (positionnel, optionnel : sinon toutes) |
+| `--lists-dir DIR` | `lists` | Répertoire des listes `.txt` |
+| `--bin-dir DIR` | = `--lists-dir` | Répertoire de sortie des `.bin` |
+| `--model NAMES` | `openrouter/free` | Modèle(s) IA, séparés par des virgules → round-robin |
+| `--min-children N` | `3` | Nb minimal de sous-domaines pour proposer un parent |
+| `--batch-size N` | `30` | Parents candidats par requête IA (`0` = tout d'un coup) |
+| `--max-retries N` | `3` | Tentatives max par lot |
+| `--samples N` | `5` | Sous-domaines d'exemple par parent dans le prompt |
+| `--dry-run` | — | N'écrit rien : affiche seulement le plan de repli |
+| `--no-bin` | — | Ne pas recompiler les `.bin` |
+| `--no-commit` | — | Ne pas committer |
+
+Les variables d'environnement (clé/URL/modèle, `.env`, `CUSTOS_LUA`) sont **identiques**
+à classifier (cf. section précédente).
+
 ## Fichiers
 
 | Fichier | Rôle |
 |---------|------|
-| `classifier.moon` | Orchestrateur (MoonScript/LuaJIT) |
+| `classifier.moon` | Orchestrateur de classification (simplifie avant les `.bin`) |
+| `simplifier.moon` | Enveloppe CLI de simplification (arguments, `.bin`, commit) |
+| `simplify.moon` | Cœur d'orchestration de la simplification (partagé classifier/simplifier) |
+| `simplify_lib.moon` | Logique pure de simplification (redondance, candidats, plan de repli) |
+| `common.moon` | Helpers partagés (`.env`, appel IA, écriture listes, `.bin`, commit git) |
 | `browse.py` | Helper Playwright : URL → JSON des domaines contactés |
 | `json.lua` | Décodeur/encodeur JSON minimal vendoré (rxi/json.lua, MIT) |
 | `Dockerfile` | Image autonome |
+
+> Tests unitaires de la logique pure : `tests/unit/tools/simplify_lib_spec.moon`
+> (lancé par `make test`).
