@@ -628,6 +628,13 @@ scp -O -q $SSH_OPTS -i "$SSH_KEY" \
 scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "$DOH_TMP/ca.crt" "root@${E2E_IP_SERVUS}:/tmp/doh_test_ca.crt" 2>/dev/null || true
 
+# Les VMs OpenWrt peuvent dériver de quelques secondes sans NTP ; un cert
+# fraîchement émis peut alors apparaître "not yet valid" côté servus.
+# On aligne l'horloge de servus sur l'hôte avant les vérifications TLS.
+HOST_UTC_NOW="$(date -u '+%Y-%m-%d %H:%M:%S')"
+ssh_vm "$E2E_IP_SERVUS" "date -u -s '${HOST_UTC_NOW}' >/dev/null 2>&1 || true"
+sleep 1
+
 # Sauvegarde la config d'origine côté hôte
 scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon" "$DOH_TMP/config_orig.moon"

@@ -56,6 +56,7 @@ common = require "common"
   :call_ai, :rewrite_list, :compile_bin, :git_commit, :is_valid,
   :MAX_CONSECUTIVE_ERRORS } = common
 simplify = require "simplify"
+category_descriptions = require "descriptions"
 warn = common.make_warn "classifier"
 
 -- ── Configuration (.env + variables d'environnement) ──────────────
@@ -96,13 +97,21 @@ read_domains = (path) ->
 -- @tparam string context    optionnel : site à l'origine des domaines
 -- @treturn string
 build_prompt = (domains, categories, context) ->
-  cats = table.concat categories, ", "
   doms = table.concat domains, ", "
+  -- Liste des catégories, une par ligne, avec sa description si elle existe :
+  -- « name: description » (sinon le seul nom). Les descriptions lèvent les
+  -- ambiguïtés (p. ex. art_nude ≠ pornographie).
+  cat_lines = {}
+  for cat in *categories
+    desc = category_descriptions[cat]
+    cat_lines[#cat_lines + 1] = desc and "- #{cat}: #{desc}" or "- #{cat}"
+  cats = table.concat cat_lines, "\n"
   lines = {
     "You are an expert in website classification. Your task is to determine which"
     "categories a domain name belongs to. A domain may belong to several categories."
     ""
-    "You MUST only use categories from this exact list (ignore any other category):"
+    "You MUST only use categories from this exact list (ignore any other category)."
+    "Each line is a category, optionally followed by a description clarifying its scope:"
     cats
     ""
   }

@@ -32,7 +32,7 @@ RUN make all
 # classifier/simplifier requièrent ffi/ffi_xxhash → ils doivent tourner sous
 # LuaJIT (pas le `moon` lua5.1 de luarocks). On précompile tous les modules
 # MoonScript de l'outil en .lua et on les exécute via luajit.
-RUN for m in common simplify_lib simplify classifier simplifier; do \
+RUN for m in common descriptions simplify_lib simplify classifier simplifier; do \
         moonc -o /opt/custos/tools/classifier/$m.lua \
               /opt/custos/tools/classifier/$m.moon; \
     done

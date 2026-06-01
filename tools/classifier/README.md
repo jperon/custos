@@ -14,7 +14,10 @@ tiers réellement contactés par un site.
 3. **Classification IA** : la liste est découpée en **lots** de `--batch-size`
    domaines (défaut 50), chaque lot faisant une requête OpenRouter demandant, au
    format JSON, à quelles catégories **existantes** appartient chaque domaine
-   (plusieurs possibles). Si le moteur renvoie **une catégorie inexistante**, c'est le
+   (plusieurs possibles). Chaque catégorie est présentée à l'IA avec une **brève
+   description** (cf. `descriptions.moon`) pour lever les ambiguïtés (p. ex.
+   `art_nude` = nus *artistiques* honnêtes, **pas** de la pornographie). Si le
+   moteur renvoie **une catégorie inexistante**, c'est le
    signe d'un moteur sous-optimal : la réponse du lot est **rejetée** et la requête
    **relancée en excluant ce provider** (jusqu'à `--max-retries` fois).
 4. **Écriture** : chaque domaine (validé via `is_valid` du projet → rejette IP,
