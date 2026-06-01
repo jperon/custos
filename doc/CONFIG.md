@@ -397,6 +397,8 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 | `custom_lists_dir` | string | `nil` | Répertoire des listes personnalisées (optionnel) |
 | `allow_localnets` | bool | `false` | Si `true`, injecte automatiquement les réseaux locaux en whitelist nft |
 | `captive_portal` | bool | `true` | Active les règles par défaut de détection de portail captif (sondes NCSI/MSFT, Apple, Google…). `false` → ces règles ne sont pas injectées (cf. § Règles par défaut) |
+| `safe_search` | bool | `true` | Active SafeSearch : réécriture CNAME des moteurs de recherche vers leur variante « safe » (Google→`forcesafesearch.google.com`, YouTube, Bing→`strict.bing.com`, DuckDuckGo→`safe.duckduckgo.com`). `false` → aucune réécriture (cf. § SafeSearch) |
+| `youtube_restrict` | string | `"moderate"` | Mode YouTube Restricted : `"strict"` (`restrict.youtube.com`), `"moderate"` (`restrictmoderate.youtube.com`) ou `false` (YouTube non réécrit). Sans effet si `safe_search` est `false` |
 | `dest_whitelist` | array | `{}` | IPs/CIDRs de destination toujours autorisées (bypass filtrage) |
 | `allowed_domains` | array | `{"local","lan","home.arpa"}` | Domaines autorisés par défaut si `rules` est vide |
 
@@ -615,6 +617,34 @@ Pour **désactiver uniquement** la détection de portail captif (sondes NCSI/MSF
 Apple, Google… — règles 2 et 3) tout en conservant le canari DoH :
 `filter: { captive_portal: false }`. Pour **étendre**, ajouter ses propres règles
 dans `filter.rules` (appliquées ensuite).
+
+#### SafeSearch (`filter.safe_search`, `filter.youtube_restrict`)
+
+Quand `safe_search` est actif (défaut), des règles par défaut supplémentaires
+utilisant l'action générique `cname` **réécrivent la réponse DNS** des moteurs de
+recherche vers leur variante « safe » :
+
+| Moteur | Domaines (suffixe, sous-domaines inclus) | Cible CNAME |
+|--------|------------------------------------------|-------------|
+| Google | `google.com` + ccTLDs nationaux | `forcesafesearch.google.com` |
+| YouTube | `youtube.com`, `youtube-nocookie.com`, `youtube(i).googleapis.com` | `restrictmoderate.youtube.com` (`moderate`) / `restrict.youtube.com` (`strict`) |
+| Bing | `bing.com` | `strict.bing.com` |
+| DuckDuckGo | `duckduckgo.com` | `safe.duckduckgo.com` |
+
+Le filtre répond par un enregistrement **CNAME** (sans A) ; le client re-résout la
+cible (autorisée par ailleurs, et provisionnée d'un certificat valide par
+l'éditeur). Le mécanisme passe par le callback `on_response` des actions : il
+couvre le DNS clair **UDP et TCP** ainsi que le **DoH transitant par le worker
+doh** de Custos. Mode YouTube réglable via `youtube_restrict`
+(`"strict"`/`"moderate"`/`false`). Pour désactiver entièrement :
+`filter: { safe_search: false }`.
+
+L'action `cname` est générique : on peut l'utiliser dans `filter.rules` pour
+réécrire n'importe quel domaine, ex. :
+`{ actions: {"cname"}, conditions: { to_domain: "exemple.fr" }, cname: "cible.exemple.fr" }`.
+
+> Limite : n'agit que sur le DNS clair intercepté et le DoH passant par le worker
+> doh ; un client utilisant un DoH/DoT tiers contourne la réécriture.
 
 ### 14.5 Logique de décision (`filter.decision`)
 

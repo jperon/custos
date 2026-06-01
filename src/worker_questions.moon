@@ -284,13 +284,14 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 
   -- ── Vol de question DNS pour le portail captif ───────────────────
   -- Si la question porte sur le hostname du portail captif (extrait de
-  -- redirect_url), on forge une réponse DNS (A ou AAAA) et on l'injecte
+  -- redirect_url), on forge la/les réponse(s) DNS (A ou AAAA) et on les injecte
   -- directement via AF_PACKET sur le bridge, comme le fait captive pour les TCP.
   -- La question originale est droptée (NF_DROP) ; aucun message IPC vers response.
   -- Cette approche est nécessaire car nfq_set_verdict(NF_ACCEPT, payload) ne
   -- peut pas inverser la direction d'un paquet (le paquet resterait sur le
-  -- chemin LAN→WAN au lieu d'être renvoyé vers le client).
-  if captive_domain and raw_fd and _bridge_mac and l4.proto == "udp"
+  -- chemin LAN→WAN au lieu d'être renvoyé vers le client). UDP et TCP gérés :
+  -- en TCP, forge_dns renvoie 2 segments (données PSH+ACK puis FIN+ACK).
+  if captive_domain and raw_fd and _bridge_mac
     for _, q in ipairs dns_msg.questions
       norm = q.name\lower!\gsub "%.+$", ""
       if norm == captive_domain and (q.qtype == 1 or q.qtype == 28)   -- A ou AAAA
@@ -302,20 +303,24 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
             src_ip:  src_ip
           }
           break   -- MAC inconnue : laisser passer normalement
-        forged_ip = forge_dns.forge_dns_response ip, l4, dns_msg.header.id, q, captive_ip4, captive_ip6
-        if forged_ip
+        forged_pkts = forge_dns.forge_dns_response ip, l4, dns_msg.header.id, q, captive_ip4, captive_ip6
+        if forged_pkts
           ethertype = ip.version == 6 and IP6 or IP4
-          eth_bytes = "#{new_eth {src: _bridge_mac, dst: mac_raw, protocol: ethertype, vlan: l2.vlan, data: forged_ip}}"
-          ok = bridge_raw.send raw_fd, eth_bytes, _ifindex
+          sent_ok = true
+          for pkt in *forged_pkts
+            eth_bytes = "#{new_eth {src: _bridge_mac, dst: mac_raw, protocol: ethertype, vlan: l2.vlan, data: pkt}}"
+            sent_ok = bridge_raw.send(raw_fd, eth_bytes, _ifindex) and sent_ok
           log_info -> {
             action:   "dns_stolen"
             domain:   q.name
             qtype:    dns_types[q.qtype] or "TYPE#{q.qtype}"
+            proto:    l4.proto
+            frames:   #forged_pkts
             src_ip:   src_ip
             resolver: dst_ip
             mac:      l2.mac_src
             ancount:  (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0
-            sent:     ok
+            sent:     sent_ok
           }
           return NF_DROP
         else

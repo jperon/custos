@@ -30,6 +30,12 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
   - Add `src/filter/actions/<name>.moon`
   - Loaded via `require("filter.actions.<name>")` in `src/filter/rule.moon`
 
+- SafeSearch / réécriture CNAME:
+  - Options: `filter.safe_search` (défaut `true`), `filter.youtube_restrict` (`strict`/`moderate`/`false`)
+  - Action générique `cname` (`src/filter/actions/cname.moon`) → `on_response` réécrit la réponse en CNAME
+  - Mapping moteurs: `SAFE_SEARCH_GROUPS` dans `src/config.moon` (généré dans `normalize`)
+  - Couvre DNS clair UDP+TCP (`replace_dns_payload`) et DoH (`doh/query.moon`)
+
 - DNS logic (decision, correlation, reinjection):
   - question: `src/worker_questions.moon`
   - IPC: `src/ipc.moon`

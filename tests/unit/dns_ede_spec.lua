@@ -1,9 +1,11 @@
 package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
-local strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit
+local strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response
 do
   local _obj_0 = require("dns_ede")
-  strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit = _obj_0.strip_https_rr, _obj_0.strip_a_rr, _obj_0.strip_aaaa_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit
+  strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response = _obj_0.strip_https_rr, _obj_0.strip_a_rr, _obj_0.strip_aaaa_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.build_cname_response
 end
+local encode_dns_name
+encode_dns_name = require("lib.dns_name").encode_dns_name
 local dns_mod = require("ipparse.l7.dns")
 local sp
 sp = require("ipparse.lib.pack_compat").pack
@@ -138,7 +140,7 @@ describe("dns_ede.strip_a_rr", function()
     return assert.equals(raw, strip_a_rr(raw))
   end)
 end)
-return describe("dns_ede.strip_aaaa_rr", function()
+describe("dns_ede.strip_aaaa_rr", function()
   it("retire les RR AAAA (IPv6) de la section answers", function()
     local question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
     local answer_aaaa1 = pack_rr(dns_mod.types.AAAA, string.char(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1))
@@ -168,5 +170,76 @@ return describe("dns_ede.strip_aaaa_rr", function()
     local header = sp(">H H H H H H", 0x4321, 0x8180, 1, 1, 0, 0)
     local raw = header .. question .. answer_a
     return assert.equals(raw, strip_aaaa_rr(raw))
+  end)
+end)
+return describe("build_cname_response", function()
+  local CNAME = dns_mod.types.CNAME
+  local get_rcode
+  get_rcode = function(raw)
+    return bit.band(raw:byte(4), 0x0f)
+  end
+  local decode_name
+  decode_name = function(rdata)
+    local labels, i = { }, 1
+    while i <= #rdata do
+      local l = rdata:byte(i)
+      if l == 0 then
+        break
+      end
+      labels[#labels + 1] = rdata:sub(i + 1, i + l)
+      i = i + (l + 1)
+    end
+    return table.concat(labels, ".")
+  end
+  local make_query
+  make_query = function(qtype)
+    if qtype == nil then
+      qtype = QTYPE_A
+    end
+    local q = dns_mod.new({
+      header = dns_mod.new_header({
+        id = 0x1234,
+        rd = true
+      }),
+      questions = {
+        {
+          qname = encode_dns_name("www.google.com"),
+          qtype = qtype,
+          qclass = QCLASS_IN
+        }
+      }
+    })
+    return tostring(q)
+  end
+  it("produit une réponse NOERROR avec un unique RR CNAME vers la cible", function()
+    local resp = build_cname_response(nil, make_query(), "forcesafesearch.google.com", "SafeSearch")
+    assert.is_not_nil(resp)
+    assert.equals(0, get_rcode(resp))
+    local parsed = dns_mod.parse(resp, 1, false)
+    assert.equals(1, parsed.header.ancount)
+    assert.equals(CNAME, parsed.answers[1].rtype)
+    return assert.equals("forcesafesearch.google.com", decode_name(parsed.answers[1].rdata))
+  end)
+  it("fonctionne quel que soit le qtype de la question (ex: AAAA)", function()
+    local resp = build_cname_response(nil, make_query(dns_mod.types.AAAA), "restrict.youtube.com", nil)
+    local parsed = dns_mod.parse(resp, 1, false)
+    return assert.equals(CNAME, parsed.answers[1].rtype)
+  end)
+  it("renvoie nil si dns_raw absent ou cible vide", function()
+    assert.is_nil(build_cname_response(nil, nil, "x.example", nil))
+    return assert.is_nil(build_cname_response(nil, make_query(), "", nil))
+  end)
+  return it("marque la réponse d'une EDE (OPT RR présent dans additionals)", function()
+    local resp = build_cname_response(nil, make_query(), "safe.duckduckgo.com", "x")
+    local parsed = dns_mod.parse(resp, 1, false)
+    local has_opt = false
+    local _list_0 = (parsed.additionals or { })
+    for _index_0 = 1, #_list_0 do
+      local rr = _list_0[_index_0]
+      if rr.rtype == 0x29 then
+        has_opt = true
+      end
+    end
+    return assert.is_true(has_opt)
   end)
 end)

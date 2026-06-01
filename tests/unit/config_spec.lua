@@ -13,15 +13,15 @@ write_moon = function(path, content)
   f:write(content)
   return f:close()
 end
-return describe("config.default_rules", function()
+describe("config.default_rules", function()
   after_each(function()
     ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
     package.loaded["config"] = nil
   end)
-  it("sans config externe : 3 default_rules présentes dans filter.rules", function()
+  it("sans config externe : default_rules = captives/DoH (3) + SafeSearch (4)", function()
     local cfg = reload(nil)
-    assert.equals(3, #cfg.filter.default_rules)
-    return assert.equals(3, #cfg.filter.rules)
+    assert.equals(7, #cfg.filter.default_rules)
+    return assert.equals(7, #cfg.filter.rules)
   end)
   it("default_rules[1] utilise l'action nxdomain", function()
     local cfg = reload(nil)
@@ -70,7 +70,7 @@ return describe("config.default_rules", function()
   end)
   it("les règles utilisateur sont ajoutées après les default_rules", function()
     local path = "tmp/config_spec_userrules.moon"
-    write_moon(path, [[{ filter: { rules: {
+    write_moon(path, [[{ filter: { safe_search: false, rules: {
       { description: "Règle user", actions: {"allow"}, conditions: { to_domain: "example.com" } }
     } } }]])
     local cfg = reload(path)
@@ -82,7 +82,7 @@ return describe("config.default_rules", function()
   it("captive_portal défaut true : les 2 règles captives sont présentes, sans marqueur interne", function()
     local cfg = reload(nil)
     assert.is_true(cfg.filter.captive_portal)
-    assert.equals(3, #cfg.filter.rules)
+    assert.equals(7, #cfg.filter.rules)
     local _list_0 = {
       2,
       3
@@ -94,7 +94,7 @@ return describe("config.default_rules", function()
   end)
   it("captive_portal: false retire les règles captives (DoH nxdomain conservée)", function()
     local path = "tmp/config_spec_nocaptive.moon"
-    write_moon(path, [[{ filter: { captive_portal: false } }]])
+    write_moon(path, [[{ filter: { captive_portal: false, safe_search: false } }]])
     local cfg = reload(path)
     os.remove(path)
     assert.is_false(cfg.filter.captive_portal)
@@ -104,7 +104,7 @@ return describe("config.default_rules", function()
   end)
   it("captive_portal: \"0\" (chaîne) est coercé en false", function()
     local path = "tmp/config_spec_nocaptive_str.moon"
-    write_moon(path, [[{ filter: { captive_portal: "0" } }]])
+    write_moon(path, [[{ filter: { captive_portal: "0", safe_search: false } }]])
     local cfg = reload(path)
     os.remove(path)
     assert.is_false(cfg.filter.captive_portal)
@@ -112,7 +112,7 @@ return describe("config.default_rules", function()
   end)
   it("default_rules: {} dans la config utilisateur désactive les defaults", function()
     local path = "tmp/config_spec_nodefault.moon"
-    write_moon(path, [[{ filter: { default_rules: {}, rules: {
+    write_moon(path, [[{ filter: { default_rules: {}, safe_search: false, rules: {
       { description: "Only user", actions: {"allow"}, conditions: { to_domain: "x.com" } }
     } } }]])
     local cfg = reload(path)
@@ -125,5 +125,94 @@ return describe("config.default_rules", function()
     for i, r in ipairs(cfg.filter.rules) do
       assert.equals(cfg.filter.default_rules[i].description, r.description)
     end
+  end)
+end)
+return describe("config.safe_search", function()
+  reload = function(path)
+    package.loaded["config"] = nil
+    local actual = path or "tmp/__no_config_for_test__.moon"
+    ffi.C.setenv("CUSTOS_CONFIG_PATH", actual, 1)
+    return require("config")
+  end
+  after_each(function()
+    ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
+    package.loaded["config"] = nil
+  end)
+  local cname_rules
+  cname_rules = function(cfg)
+    local rules, youtube = { }, nil
+    local _list_0 = (cfg.filter.rules or { })
+    for _index_0 = 1, #_list_0 do
+      local r = _list_0[_index_0]
+      if r.actions and r.actions[1] == "cname" then
+        rules[#rules + 1] = r
+        if r.description and r.description:match("YouTube") then
+          youtube = r.cname
+        end
+      end
+    end
+    return rules, youtube
+  end
+  it("défaut : 4 règles cname (Google/YouTube/Bing/DDG), YouTube en mode modéré", function()
+    local cfg = reload(nil)
+    assert.is_true(cfg.filter.safe_search)
+    local rules, youtube = cname_rules(cfg)
+    assert.equals(4, #rules)
+    return assert.equals("restrictmoderate.youtube.com", youtube)
+  end)
+  it("Google réécrit vers forcesafesearch.google.com et couvre les sous-domaines", function()
+    local cfg = reload(nil)
+    local rules = cname_rules(cfg)
+    local google = nil
+    for _index_0 = 1, #rules do
+      local r = rules[_index_0]
+      if r.description:match("Google") then
+        google = r
+      end
+    end
+    assert.is_not_nil(google)
+    assert.equals("forcesafesearch.google.com", google.cname)
+    local seen = { }
+    local _list_0 = google.conditions.to_domains
+    for _index_0 = 1, #_list_0 do
+      local d = _list_0[_index_0]
+      seen[d] = true
+    end
+    return assert.is_true(seen["google.com"])
+  end)
+  it("youtube_restrict=strict : cible restrict.youtube.com", function()
+    local path = "tmp/config_spec_yt_strict.moon"
+    write_moon(path, [[{ filter: { youtube_restrict: "strict" } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    local _, youtube = cname_rules(cfg)
+    return assert.equals("restrict.youtube.com", youtube)
+  end)
+  it("youtube_restrict=false : YouTube omis (3 règles cname)", function()
+    local path = "tmp/config_spec_yt_off.moon"
+    write_moon(path, [[{ filter: { youtube_restrict: "false" } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    local rules, youtube = cname_rules(cfg)
+    assert.equals(3, #rules)
+    return assert.is_nil(youtube)
+  end)
+  it("safe_search=false : aucune règle cname", function()
+    local path = "tmp/config_spec_ss_off.moon"
+    write_moon(path, [[{ filter: { safe_search: false } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    assert.is_false(cfg.filter.safe_search)
+    local rules = cname_rules(cfg)
+    return assert.equals(0, #rules)
+  end)
+  return it("safe_search=\"0\" (chaîne) est coercé en false", function()
+    local path = "tmp/config_spec_ss_str.moon"
+    write_moon(path, [[{ filter: { safe_search: "0" } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    assert.is_false(cfg.filter.safe_search)
+    local rules = cname_rules(cfg)
+    return assert.equals(0, #rules)
   end)
 end)

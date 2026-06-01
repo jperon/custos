@@ -8,9 +8,12 @@
 --   strip_https_rr(dns_payload)      -- removes HTTPS/SVCB RRs from all sections
 
 dns_mod = require "ipparse.l7.dns"
+{ :encode_dns_name } = require "lib.dns_name"
 parse    = dns_mod.parse
+NOERROR  = dns_mod.rcodes.NOERROR
 REFUSED  = dns_mod.rcodes.REFUSED
 NXDOMAIN = dns_mod.rcodes.NXDOMAIN
+CNAME    = dns_mod.types.CNAME
 A        = dns_mod.types.A
 AAAA     = dns_mod.types.AAAA
 HTTPS    = dns_mod.types.HTTPS
@@ -110,6 +113,42 @@ build_nxdomain_response = (dns_orig, dns_raw, reason) ->
   else
     "Ne intretis."
   add_ede dns, EDE_BLOCKED, ede_text
+
+  tostring dns
+
+--- Build a NOERROR DNS response rewriting the answer to a single CNAME RR.
+-- Forces the client to re-resolve `target` (ex: SafeSearch). Valid for any
+-- query qtype (a CNAME answer is legal whatever the QTYPE). Marked with EDE
+-- code 4 (Forged_Answer) so resolvers know the answer was synthesized.
+-- @tparam table       dns_orig Parsed question packet's dns table (unused, kept
+--                              for signature symmetry with build_*_response).
+-- @tparam string      dns_raw  Raw DNS payload bytes (the query echoed back).
+-- @tparam string      target   CNAME target hostname (ex: forcesafesearch.google.com).
+-- @tparam string|nil  reason   Human-readable reason for EDE text.
+-- @treturn string|nil Packed DNS response, or nil.
+build_cname_response = (dns_orig, dns_raw, target, reason) ->
+  return nil unless dns_raw and target and target != ""
+
+  dns = parse dns_raw, 1, false
+  return nil unless dns
+
+  dns.header.rcode = NOERROR
+  dns.answers = {
+    {
+      rname:  string.char 0xC0, 0x0C
+      rtype:  CNAME
+      rclass: 1
+      ttl:    300
+      rdata:  encode_dns_name target
+    }
+  }
+  dns.header.ancount = 1
+
+  ede_text = if reason and reason != ""
+    "SafeSearch. " .. reason
+  else
+    "SafeSearch."
+  add_ede dns, EDE_TTL_MODIFIED, ede_text
 
   tostring dns
 
@@ -267,4 +306,4 @@ patch_modified_dns = (dns_payload, reason) ->
     new_dns = add_ede_modified(new_dns, reason) or new_dns
   new_dns, modified
 
-{ :add_ede, :build_blocked_response, :build_nxdomain_response, :add_ede_modified, :strip_dns_rr, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :patch_modified_dns, :EDE_BLOCKED, :EDE_TTL_MODIFIED }
+{ :add_ede, :build_blocked_response, :build_nxdomain_response, :build_cname_response, :add_ede_modified, :strip_dns_rr, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :patch_modified_dns, :EDE_BLOCKED, :EDE_TTL_MODIFIED }

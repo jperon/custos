@@ -3,7 +3,8 @@
 
 package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
 
-{ :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
+{ :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :add_ede_modified, :clear_ad_bit, :build_cname_response } = require "dns_ede"
+{ :encode_dns_name } = require "lib.dns_name"
 dns_mod = require "ipparse.l7.dns"
 pack: sp = require "ipparse.lib.pack_compat"
 bit = require "bit"
@@ -175,3 +176,48 @@ describe "dns_ede.strip_aaaa_rr", ->
     header = sp(">H H H H H H", 0x4321, 0x8180, 1, 1, 0, 0)
     raw = header .. question .. answer_a
     assert.equals raw, strip_aaaa_rr(raw)
+
+describe "build_cname_response", ->
+  CNAME = dns_mod.types.CNAME
+  get_rcode = (raw) -> bit.band raw\byte(4), 0x0f
+  decode_name = (rdata) ->
+    labels, i = {}, 1
+    while i <= #rdata
+      l = rdata\byte i
+      break if l == 0
+      labels[#labels + 1] = rdata\sub i + 1, i + l
+      i += l + 1
+    table.concat labels, "."
+
+  make_query = (qtype = QTYPE_A) ->
+    q = dns_mod.new {
+      header: dns_mod.new_header id: 0x1234, rd: true
+      questions: {{ qname: encode_dns_name("www.google.com"), qtype: qtype, qclass: QCLASS_IN }}
+    }
+    "#{q}"
+
+  it "produit une réponse NOERROR avec un unique RR CNAME vers la cible", ->
+    resp = build_cname_response nil, make_query!, "forcesafesearch.google.com", "SafeSearch"
+    assert.is_not_nil resp
+    assert.equals 0, get_rcode resp
+    parsed = dns_mod.parse resp, 1, false
+    assert.equals 1, parsed.header.ancount
+    assert.equals CNAME, parsed.answers[1].rtype
+    assert.equals "forcesafesearch.google.com", decode_name parsed.answers[1].rdata
+
+  it "fonctionne quel que soit le qtype de la question (ex: AAAA)", ->
+    resp = build_cname_response nil, make_query(dns_mod.types.AAAA), "restrict.youtube.com", nil
+    parsed = dns_mod.parse resp, 1, false
+    assert.equals CNAME, parsed.answers[1].rtype
+
+  it "renvoie nil si dns_raw absent ou cible vide", ->
+    assert.is_nil build_cname_response nil, nil, "x.example", nil
+    assert.is_nil build_cname_response nil, make_query!, "", nil
+
+  it "marque la réponse d'une EDE (OPT RR présent dans additionals)", ->
+    resp = build_cname_response nil, make_query!, "safe.duckduckgo.com", "x"
+    parsed = dns_mod.parse resp, 1, false
+    has_opt = false
+    for rr in *(parsed.additionals or {})
+      has_opt = true if rr.rtype == 0x29
+    assert.is_true has_opt

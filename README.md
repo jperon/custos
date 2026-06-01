@@ -201,6 +201,7 @@ custos/
 │   │   │   ├── deny.moon      Répond REFUSED + EDE
 │   │   │   ├── dnsonly.moon   DNS autorisé sans injection nft (sondes captives)
 │   │   │   ├── nxdomain.moon  Répond NXDOMAIN (ex. désactivation DoH Firefox)
+│   │   │   ├── cname.moon      Réécrit la réponse en CNAME vers une cible (SafeSearch)
 │   │   │   ├── dns_strip.moon Retire des enregistrements de la réponse (ex. HTTPS/SVCB)
 │   │   │   ├── log.moon       Journalise sans rendre de verdict
 │   │   │   └── mail.moon      Notification par courriel
@@ -263,18 +264,23 @@ custos/
 | Package              | Role                                    |
 |----------------------|-----------------------------------------|
 | `luajit`             | Compiled Lua execution                  |
-| `moonscript`         | `.moon` → `.lua` compilation            |
-| `lyaml`              | YAML config loader (`lyaml`, LuaJIT)    |
+| `lpeg`               | Requis par MoonScript pour lire `config.moon` au runtime |
 | `libnetfilter-queue` | NFQUEUE C library                       |
-| `libnftables`        | nftables library (set injection)        |
-| `nftables`           | `nft` tool                              |
-| `wolfssl`            | TLS/SSL library (via FFI)               |
+| `nftables`           | `nft` tool + libnftables (injection des sets) |
+| `kmod-nft-queue`     | Module noyau NFQUEUE                     |
+| `kmod-nft-bridge`    | Module noyau nftables en mode bridge    |
+| `libxxhash`          | Hash xxHash (FFI, format `.bin`)        |
+| `libwolfssl`         | TLS/SSL library (via FFI, `ffi_wolfssl`)|
 | `px5g-wolfssl`       | Dynamic TLS certificate generation      |
 
 ```bash
-opkg install luajit lyaml libnetfilter-queue nftables wolfssl px5g-wolfssl
-# moonscript via luarocks or build from source
+opkg install luajit lpeg libnetfilter-queue nftables \
+  kmod-nft-queue kmod-nft-bridge libxxhash libwolfssl px5g-wolfssl
 ```
+
+> MoonScript est embarqué dans le dépôt (`src/lib/moonscript`) et déployé tel
+> quel ; aucun paquet `moonscript` distant n'est requis. Pour compiler localement
+> (`make`), il faut `moonc` + `luajit` (ou utiliser les `.lua` déjà générés).
 
 ---
 
@@ -749,6 +755,27 @@ Ces deux règles sont gouvernées par l'option `filter.captive_portal` (défaut
 ```moonscript
 filter: { captive_portal: false }
 ```
+
+### SafeSearch (réécriture CNAME)
+
+L'option `filter.safe_search` (défaut `true`) ajoute des règles par défaut qui
+**réécrivent la réponse DNS** des moteurs de recherche vers leur variante « safe »
+via l'action générique `cname` : Google → `forcesafesearch.google.com`, YouTube →
+`restrictmoderate.youtube.com` (ou `restrict.youtube.com`), Bing → `strict.bing.com`,
+DuckDuckGo → `safe.duckduckgo.com`. Le filtre répond par un CNAME ; le client
+re-résout la cible. Le mécanisme passe par le callback `on_response` (worker
+responses **et** worker doh) : il couvre le DNS clair **UDP et TCP** ainsi que le
+**DoH transitant par le worker doh**. Mode YouTube réglable
+(`filter.youtube_restrict`: `"strict"`/`"moderate"`/`false`).
+
+```moonscript
+filter: { safe_search: false }          -- désactiver
+filter: { youtube_restrict: "strict" }  -- YouTube en mode strict
+```
+
+L'action `cname` étant générique, elle s'utilise aussi dans `filter.rules` pour
+réécrire un domaine arbitraire :
+`{ actions: {"cname"}, conditions: { to_domain: "exemple.fr" }, cname: "cible.exemple.fr" }`.
 
 ### Conditions utilisateur
 

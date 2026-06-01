@@ -324,7 +324,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     return NF_ACCEPT
   end
   write_learn_msg(ip.src, l2.mac_raw)
-  if captive_domain and raw_fd and _bridge_mac and l4.proto == "udp" then
+  if captive_domain and raw_fd and _bridge_mac then
     for _, q in ipairs(dns_msg.questions) do
       local norm = q.name:lower():gsub("%.+$", "")
       if norm == captive_domain and (q.qtype == 1 or q.qtype == 28) then
@@ -339,27 +339,33 @@ handle_question = function(qh_ptr, nfad, pkt_id)
           end)
           break
         end
-        local forged_ip = forge_dns.forge_dns_response(ip, l4, dns_msg.header.id, q, captive_ip4, captive_ip6)
-        if forged_ip then
+        local forged_pkts = forge_dns.forge_dns_response(ip, l4, dns_msg.header.id, q, captive_ip4, captive_ip6)
+        if forged_pkts then
           local ethertype = ip.version == 6 and IP6 or IP4
-          local eth_bytes = tostring(new_eth({
-            src = _bridge_mac,
-            dst = mac_raw,
-            protocol = ethertype,
-            vlan = l2.vlan,
-            data = forged_ip
-          }))
-          local ok = bridge_raw.send(raw_fd, eth_bytes, _ifindex)
+          local sent_ok = true
+          for _index_0 = 1, #forged_pkts do
+            local pkt = forged_pkts[_index_0]
+            local eth_bytes = tostring(new_eth({
+              src = _bridge_mac,
+              dst = mac_raw,
+              protocol = ethertype,
+              vlan = l2.vlan,
+              data = pkt
+            }))
+            sent_ok = bridge_raw.send(raw_fd, eth_bytes, _ifindex) and sent_ok
+          end
           log_info(function()
             return {
               action = "dns_stolen",
               domain = q.name,
               qtype = dns_types[q.qtype] or "TYPE" .. tostring(q.qtype),
+              proto = l4.proto,
+              frames = #forged_pkts,
               src_ip = src_ip,
               resolver = dst_ip,
               mac = l2.mac_src,
               ancount = (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0,
-              sent = ok
+              sent = sent_ok
             }
           end)
           return NF_DROP

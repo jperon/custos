@@ -144,6 +144,8 @@
     custom_lists_dir:{ type: "path",    label: "Répertoire listes personnalisées (optionnel)" }
     allow_localnets: { type: "boolean", label: "Autoriser réseaux locaux",   default: false }
     captive_portal:  { type: "boolean", label: "Détection de portail captif (sondes NCSI/MSFT, Apple, Google…)", default: true }
+    safe_search:     { type: "boolean", label: "SafeSearch (Google/YouTube/Bing/DuckDuckGo)", default: true }
+    youtube_restrict:{ type: "enum",    label: "YouTube Restricted Mode", values: {"strict","moderate","false"}, default: "moderate" }
     dest_whitelist:  { type: "string_list", label: "IPs/CIDRs toujours autorisées" }
     allowed_domains: { type: "string_list", label: "Domaines autorisés par défaut", default: '{"local","lan","home.arpa"}' }
     nets:      { type: "named_map", label: "Réseaux nommés",       value_type: "string_list",  hint: "alias → liste de CIDRs" }

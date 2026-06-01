@@ -1,7 +1,11 @@
 local dns_mod = require("ipparse.l7.dns")
+local encode_dns_name
+encode_dns_name = require("lib.dns_name").encode_dns_name
 local parse = dns_mod.parse
+local NOERROR = dns_mod.rcodes.NOERROR
 local REFUSED = dns_mod.rcodes.REFUSED
 local NXDOMAIN = dns_mod.rcodes.NXDOMAIN
+local CNAME = dns_mod.types.CNAME
 local A = dns_mod.types.A
 local AAAA = dns_mod.types.AAAA
 local HTTPS = dns_mod.types.HTTPS
@@ -91,6 +95,35 @@ build_nxdomain_response = function(dns_orig, dns_raw, reason)
     ede_text = "Ne intretis."
   end
   add_ede(dns, EDE_BLOCKED, ede_text)
+  return tostring(dns)
+end
+local build_cname_response
+build_cname_response = function(dns_orig, dns_raw, target, reason)
+  if not (dns_raw and target and target ~= "") then
+    return nil
+  end
+  local dns = parse(dns_raw, 1, false)
+  if not (dns) then
+    return nil
+  end
+  dns.header.rcode = NOERROR
+  dns.answers = {
+    {
+      rname = string.char(0xC0, 0x0C),
+      rtype = CNAME,
+      rclass = 1,
+      ttl = 300,
+      rdata = encode_dns_name(target)
+    }
+  }
+  dns.header.ancount = 1
+  local ede_text
+  if reason and reason ~= "" then
+    ede_text = "SafeSearch. " .. reason
+  else
+    ede_text = "SafeSearch."
+  end
+  add_ede(dns, EDE_TTL_MODIFIED, ede_text)
   return tostring(dns)
 end
 local add_ede_modified
@@ -279,6 +312,7 @@ return {
   add_ede = add_ede,
   build_blocked_response = build_blocked_response,
   build_nxdomain_response = build_nxdomain_response,
+  build_cname_response = build_cname_response,
   add_ede_modified = add_ede_modified,
   strip_dns_rr = strip_dns_rr,
   strip_https_rr = strip_https_rr,

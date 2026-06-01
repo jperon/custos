@@ -436,6 +436,21 @@ return {
       label = "Détection de portail captif (sondes NCSI/MSFT, Apple, Google…)",
       default = true
     },
+    safe_search = {
+      type = "boolean",
+      label = "SafeSearch (Google/YouTube/Bing/DuckDuckGo)",
+      default = true
+    },
+    youtube_restrict = {
+      type = "enum",
+      label = "YouTube Restricted Mode",
+      values = {
+        "strict",
+        "moderate",
+        "false"
+      },
+      default = "moderate"
+    },
     dest_whitelist = {
       type = "string_list",
       label = "IPs/CIDRs toujours autorisées"

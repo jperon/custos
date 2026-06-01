@@ -70,6 +70,103 @@ CAPTIVE_PROBES = {
   "networkcheck.kde.org"
 }
 
+-- SafeSearch : groupes (moteur → variante « safe ») pour la réécriture CNAME.
+-- Le match `to_domains` couvre chaque domaine ET ses sous-domaines (suffix
+-- match, cf. to_domain.moon) : seuls les domaines enregistrables sont listés
+-- (ex. google.com couvre www.google.com). Auto-suffisant (aucune liste externe).
+YOUTUBE_TARGETS = {
+  strict:   "restrict.youtube.com"
+  moderate: "restrictmoderate.youtube.com"
+}
+SAFE_SEARCH_GROUPS = {
+  {
+    name:   "Google"
+    target: "forcesafesearch.google.com"
+    -- google.com + ccTLDs nationaux (liste standard SafeSearch).
+    domains: {
+      "google.com", "google.ac", "google.ad", "google.ae", "google.al",
+      "google.am", "google.as", "google.at", "google.az", "google.ba",
+      "google.be", "google.bf", "google.bg", "google.bi", "google.bj",
+      "google.bs", "google.bt", "google.by", "google.ca", "google.cat",
+      "google.cd", "google.cf", "google.cg", "google.ch", "google.ci",
+      "google.cl", "google.cm", "google.cn", "google.co.ao", "google.co.bw",
+      "google.co.ck", "google.co.cr", "google.co.id", "google.co.il",
+      "google.co.in", "google.co.jp", "google.co.ke", "google.co.kr",
+      "google.co.ls", "google.co.ma", "google.co.mz", "google.co.nz",
+      "google.co.th", "google.co.tz", "google.co.ug", "google.co.uk",
+      "google.co.uz", "google.co.ve", "google.co.vi", "google.co.za",
+      "google.co.zm", "google.co.zw", "google.com.af", "google.com.ag",
+      "google.com.ai", "google.com.ar", "google.com.au", "google.com.bd",
+      "google.com.bh", "google.com.bn", "google.com.bo", "google.com.br",
+      "google.com.bz", "google.com.co", "google.com.cu", "google.com.cy",
+      "google.com.do", "google.com.ec", "google.com.eg", "google.com.et",
+      "google.com.fj", "google.com.gh", "google.com.gi", "google.com.gt",
+      "google.com.hk", "google.com.jm", "google.com.kh", "google.com.kw",
+      "google.com.lb", "google.com.ly", "google.com.mm", "google.com.mt",
+      "google.com.mx", "google.com.my", "google.com.na", "google.com.nf",
+      "google.com.ng", "google.com.ni", "google.com.np", "google.com.om",
+      "google.com.pa", "google.com.pe", "google.com.pg", "google.com.ph",
+      "google.com.pk", "google.com.pr", "google.com.py", "google.com.qa",
+      "google.com.sa", "google.com.sb", "google.com.sg", "google.com.sl",
+      "google.com.sv", "google.com.tj", "google.com.tr", "google.com.tw",
+      "google.com.ua", "google.com.uy", "google.com.vc", "google.com.vn",
+      "google.cv", "google.cz", "google.de", "google.dj", "google.dk",
+      "google.dm", "google.dz", "google.ee", "google.es", "google.fi",
+      "google.fm", "google.fr", "google.ga", "google.ge", "google.gg",
+      "google.gl", "google.gm", "google.gp", "google.gr", "google.gy",
+      "google.hn", "google.hr", "google.ht", "google.hu", "google.ie",
+      "google.im", "google.iq", "google.is", "google.it", "google.je",
+      "google.jo", "google.kg", "google.ki", "google.kz", "google.la",
+      "google.li", "google.lk", "google.lt", "google.lu", "google.lv",
+      "google.md", "google.me", "google.mg", "google.mk", "google.ml",
+      "google.mn", "google.ms", "google.mu", "google.mv", "google.mw",
+      "google.ne", "google.nl", "google.no", "google.nr", "google.nu",
+      "google.pl", "google.pn", "google.ps", "google.pt", "google.ro",
+      "google.rs", "google.ru", "google.rw", "google.sc", "google.se",
+      "google.sh", "google.si", "google.sk", "google.sm", "google.sn",
+      "google.so", "google.sr", "google.st", "google.td", "google.tg",
+      "google.tk", "google.tl", "google.tm", "google.tn", "google.to",
+      "google.tt", "google.vg", "google.vu", "google.ws"
+    }
+  }
+  {
+    name:    "YouTube"
+    youtube: true
+    domains: {
+      "youtube.com", "youtube-nocookie.com",
+      "youtubei.googleapis.com", "youtube.googleapis.com"
+    }
+  }
+  {
+    name:    "Bing"
+    target:  "strict.bing.com"
+    domains: { "bing.com" }
+  }
+  {
+    name:    "DuckDuckGo"
+    target:  "safe.duckduckgo.com"
+    domains: { "duckduckgo.com" }
+  }
+}
+
+-- Construit les règles cname SafeSearch selon le mode YouTube demandé.
+-- @tparam string|boolean youtube_restrict "strict" | "moderate" | false
+-- @treturn table Liste de règles { description, actions, conditions, cname }.
+build_safesearch_rules = (youtube_restrict) ->
+  rules = {}
+  for group in *SAFE_SEARCH_GROUPS
+    target = group.target
+    if group.youtube
+      continue unless youtube_restrict == "strict" or youtube_restrict == "moderate"
+      target = YOUTUBE_TARGETS[youtube_restrict]
+    rules[#rules + 1] = {
+      description: "SafeSearch #{group.name}"
+      actions:     { "cname" }
+      conditions:  { to_domains: group.domains }
+      cname:       target
+    }
+  rules
+
 DEFAULTS = {
   runtime: {
     log_level: "INFO"
@@ -186,6 +283,11 @@ DEFAULTS = {
     -- NCSI/MSFT, Apple, Google…). false → ces règles ne sont pas injectées
     -- (le canari DoH Firefox reste indépendant). Cf. CAPTIVE_PROBES.
     captive_portal: true
+    -- Active SafeSearch (réécriture CNAME des moteurs vers leur variante
+    -- « safe » : Google/YouTube/Bing/DuckDuckGo). Cf. SAFE_SEARCH_GROUPS.
+    safe_search: true
+    -- Mode YouTube Restricted : "strict" | "moderate" | false (désactivé).
+    youtube_restrict: "moderate"
     nets: {}
     macs: {}
     times: {}
@@ -283,6 +385,19 @@ normalize = (cfg) ->
       continue unless cfg.filter.captive_portal
     filtered[#filtered + 1] = r
   cfg.filter.default_rules = filtered
+  -- SafeSearch : génère les règles cname (réécriture vers les variantes safe).
+  -- Gating mirroir de captive_portal ; youtube_restrict choisit la cible YouTube.
+  if cfg.filter.safe_search == nil
+    cfg.filter.safe_search = DEFAULTS.filter.safe_search
+  else
+    cfg.filter.safe_search = coerce_boolean cfg.filter.safe_search
+  yr = cfg.filter.youtube_restrict
+  yr = DEFAULTS.filter.youtube_restrict if yr == nil
+  yr = false if yr == false or yr == "false" or yr == "0"
+  cfg.filter.youtube_restrict = yr
+  if cfg.filter.safe_search
+    for r in *build_safesearch_rules yr
+      cfg.filter.default_rules[#cfg.filter.default_rules + 1] = r
   if #cfg.filter.default_rules > 0
     merged = {}
     for _, r in ipairs cfg.filter.default_rules

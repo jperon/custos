@@ -1,80 +1,34 @@
 -- src/forge_dns.moon
 -- Forge des réponses DNS pour le vol de question DNS (portail captif).
 --
--- Utilisé par worker_questions (question) : quand une question DNS porte sur le
--- hostname du portail captif, question appelle forge_dns_response et injecte la
--- réponse forgée directement via nfq_set_verdict, sans la laisser atteindre
--- le resolver. response n'est pas impliqué (pas de message IPC).
+-- Utilisé par worker_questions : quand une question DNS porte sur le hostname du
+-- portail captif, on forge la/les réponse(s) et on les injecte directement via
+-- AF_PACKET sur le bridge, sans laisser la requête atteindre le résolveur.
 --
--- Le paquet retourné est un paquet IP+UDP brut (sans Ethernet header) avec
--- src/dst inversés par rapport à la question d'origine, compatible avec
--- nfq_set_verdict(NF_ACCEPT, payload, len) sur un hook bridge nftables.
--- La même mécanique empirique que worker_reject (reject) permet au bridge de
--- router le paquet vers le client.
+-- Les paquets retournés sont des paquets IP bruts (sans en-tête Ethernet), avec
+-- src/dst inversés par rapport à la question. `forge_dns_response` renvoie une
+-- LISTE de paquets :
+--   • UDP : un seul datagramme (IP+UDP+DNS) ;
+--   • TCP : deux segments — données `PSH+ACK` (préfixe 2 octets de longueur +
+--     DNS) puis `FIN+ACK` — la connexion ayant déjà été établie avec le vrai
+--     résolveur (la requête interceptée est ensuite droppée par l'appelant).
 
 { new: new_ip, proto: ip_proto, :s2ip } = require "ipparse.l3.ip"
 { new: new_udp }                         = require "ipparse.l4.udp"
+{ new: new_tcp, :flags }                 = require "ipparse.l4.tcp"
 dns_mod = require "ipparse.l7.dns"
 pack: sp = require "ipparse.lib.pack_compat"
+{ :encode_dns_name } = require "lib.dns_name"
 
 PROTO_UDP  = ip_proto.UDP   -- 17
+PROTO_TCP  = ip_proto.TCP   -- 6
 QTYPE_A    = 1
 QTYPE_AAAA = 28
+{ :PSH, :ACK, :FIN } = flags
 
---- Encode a domain name in DNS wire format.
--- "example.com" → "\x07example\x03com\x00"
--- Trailing dots are stripped before encoding.
--- @tparam string name Domain name in dotted notation
--- @treturn string Binary DNS wire-format name
-encode_dns_name = (name) ->
-  name = name\gsub "%.+$", ""
-  parts = {}
-  for label in name\gmatch "[^.]+"
-    parts[#parts + 1] = string.char(#label) .. label
-  table.concat(parts) .. "\x00"
-
---- Forge a DNS A or AAAA response for a stolen captive-portal domain query.
--- Only handles QTYPE=A (1) and QTYPE=AAAA (28); returns nil for other types.
--- If the required IP family is not configured, returns an NOERROR response
--- with ancount=0 (empty answer section) rather than nil, so the client can
--- try the other address family.
--- @tparam table    ip      Parsed IP header (ipparse.l3.ip4 or ip6).
--- @tparam table    udp     Parsed UDP header (ipparse.l4.udp).
--- @tparam number   txid    DNS transaction ID.
--- @tparam table    q       DNS question {name, qtype} from ipparse.l7.dns.
--- @tparam string|nil ip4_str Captive portal IPv4 address string (e.g. "192.168.1.1"), or nil
--- @tparam string|nil ip6_str Captive portal IPv6 address string (e.g. "fd00::1"), or nil
--- @treturn string|nil Forged raw IP packet (IP+UDP+DNS, no Ethernet), or nil on error/unsupported
-forge_dns_response = (ip, udp, txid, q, ip4_str, ip6_str) ->
-  return nil unless q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA
-
-  -- ── Détermination du rdata ──────────────────────────────────
-  local rdata
-  ancount = 0
-
-  if q.qtype == QTYPE_A and ip4_str
-    ok, raw = pcall s2ip, ip4_str
-    if ok and raw and #raw == 4
-      rdata   = raw
-      ancount = 1
-  elseif q.qtype == QTYPE_AAAA and ip6_str
-    ok, raw = pcall s2ip, ip6_str
-    if ok and raw and #raw == 16
-      rdata   = raw
-      ancount = 1
-  -- Sinon : NOERROR sans réponse (ancount = 0) — famille non configurée
-
-  -- ── Payload DNS ─────────────────────────────────────────────
-  -- Flags : QR=1, OPCODE=0, AA=1, TC=0, RD=0 | RA=0, Z=0, RCODE=NOERROR
-  dns_obj = dns_mod.new {
-    header: dns_mod.new_header id: txid, qr: true, aa: true
-    questions: {{qname: encode_dns_name(q.name), qtype: q.qtype, qclass: 1}}
-    answers: ancount == 1 and {{rname: "\xC0\x0C", rtype: q.qtype, rclass: 1, rdata: rdata}} or {}
-  }
-
-  -- ── Datagramme UDP et IP ─────────────────────────────────────
-  -- src/dst inversés par rapport à la question (réponse vers le client).
-  l4 = new_udp { spt: udp.dpt, dpt: udp.spt, checksum: 0, data: dns_obj }
+-- Enveloppe IP commune (src/dst inversés) autour d'un objet L4 sérialisable.
+-- Le checksum L4 (UDP/TCP) est recalculé par ip_pack via le pseudo-en-tête.
+wrap_ip = (ip, l4_obj, proto) ->
   ip_pkt = new_ip {
     version:     ip.version
     -- IPv4
@@ -90,10 +44,80 @@ forge_dns_response = (ip, udp, txid, q, ip4_str, ip6_str) ->
     -- commun
     src:         ip.dst
     dst:         ip.src
-    protocol:    PROTO_UDP
-    next_header: PROTO_UDP
-    data:        l4
+    protocol:    proto
+    next_header: proto
+    data:        l4_obj
   }
   "#{ip_pkt}"
+
+-- Encapsule un message DNS dans le transport d'origine ; renvoie une liste de
+-- paquets IP bruts prêts à injecter.
+encap = (ip, l4, dns_obj) ->
+  if l4.proto == "tcp"
+    -- DNS-over-TCP : préfixe de longueur sur 2 octets devant le message.
+    dns_bytes    = "#{dns_obj}"
+    data_payload = sp(">H", #dns_bytes) .. dns_bytes
+    -- seq/ack du serveur déduits de la connexion établie (cf. worker_questions).
+    server_seq = l4.ack_n
+    base_seq   = l4.tcp_init_seq or l4.seq_n
+    client_len = l4.tcp_dns_raw and (2 + #l4.tcp_dns_raw) or 0
+    server_ack = (base_seq + client_len) % 0x100000000
+    mk = (tcp_flags, seq, payload) ->
+      tcp = new_tcp {
+        spt:        l4.dpt
+        dpt:        l4.spt
+        seq_n:      seq
+        ack_n:      server_ack
+        flags:      tcp_flags
+        window:     65535
+        urg_ptr:    0
+        header_len: 0x50   -- 5 mots de 32 bits, aucune option
+        options:    ""
+        checksum:   0
+        data:       payload
+      }
+      wrap_ip ip, tcp, PROTO_TCP
+    {
+      mk (PSH + ACK), server_seq, data_payload
+      mk (FIN + ACK), (server_seq + #data_payload) % 0x100000000, ""
+    }
+  else
+    udp = new_udp { spt: l4.dpt, dpt: l4.spt, checksum: 0, data: dns_obj }
+    { wrap_ip ip, udp, PROTO_UDP }
+
+-- Construit le message DNS (en-tête + question échoyée + answers).
+build_dns = (txid, q, answers) ->
+  dns_mod.new {
+    -- Flags : QR=1, OPCODE=0, AA=1, TC=0, RD=0 | RA=0, Z=0, RCODE=NOERROR
+    header: dns_mod.new_header id: txid, qr: true, aa: true
+    questions: {{qname: encode_dns_name(q.name), qtype: q.qtype, qclass: 1}}
+    answers: answers
+  }
+
+--- Forge une réponse DNS A ou AAAA pour un domaine de portail captif volé.
+-- Ne gère que QTYPE=A (1) et QTYPE=AAAA (28). Si la famille requise n'est pas
+-- configurée, renvoie une réponse NOERROR sans answer (ancount=0) pour que le
+-- client tente l'autre famille. Fonctionne en UDP et en TCP.
+-- @tparam table    ip      En-tête IP parsé (ipparse.l3.ip4 ou ip6).
+-- @tparam table    l4      En-tête UDP ou TCP parsé (champ .proto = "udp"|"tcp").
+-- @tparam number   txid    DNS transaction ID.
+-- @tparam table    q       Question DNS {name, qtype}.
+-- @tparam string|nil ip4_str Adresse IPv4 du portail captif, ou nil.
+-- @tparam string|nil ip6_str Adresse IPv6 du portail captif, ou nil.
+-- @treturn table|nil Liste de paquets IP bruts (IP+L4+DNS, sans Ethernet), ou nil.
+forge_dns_response = (ip, l4, txid, q, ip4_str, ip6_str) ->
+  return nil unless q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA
+
+  -- ── Détermination du rdata ──────────────────────────────────
+  local rdata
+  if q.qtype == QTYPE_A and ip4_str
+    ok, raw = pcall s2ip, ip4_str
+    rdata = raw if ok and raw and #raw == 4
+  elseif q.qtype == QTYPE_AAAA and ip6_str
+    ok, raw = pcall s2ip, ip6_str
+    rdata = raw if ok and raw and #raw == 16
+
+  answers = rdata and {{rname: "\xC0\x0C", rtype: q.qtype, rclass: 1, rdata: rdata}} or {}
+  encap ip, l4, build_dns txid, q, answers
 
 { :forge_dns_response }
