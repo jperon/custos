@@ -37,6 +37,37 @@ return describe("config.default_rules", function()
     local cfg = reload(nil)
     return assert.equals("dnsonly", cfg.filter.rules[3].actions[1])
   end)
+  it("les règles captives par défaut sont autonomes (to_domains en ligne, pas de liste externe)", function()
+    local cfg = reload(nil)
+    local _list_0 = {
+      2,
+      3
+    }
+    for _index_0 = 1, #_list_0 do
+      local idx = _list_0[_index_0]
+      local r = cfg.filter.rules[idx]
+      assert.is_nil(r.conditions.to_domainlist, "rule[" .. tostring(idx) .. "] ne doit pas dépendre d'une liste externe")
+      assert.is_table(r.conditions.to_domains)
+    end
+  end)
+  it("support NCSI/MSFT : msftncsi.com et msftconnecttest.com couverts (dnsonly + allow authentifié)", function()
+    local cfg = reload(nil)
+    local _list_0 = {
+      2,
+      3
+    }
+    for _index_0 = 1, #_list_0 do
+      local idx = _list_0[_index_0]
+      local seen = { }
+      local _list_1 = cfg.filter.rules[idx].conditions.to_domains
+      for _index_1 = 1, #_list_1 do
+        local d = _list_1[_index_1]
+        seen[d] = true
+      end
+      assert.is_true(seen["msftncsi.com"], "msftncsi.com manquant dans rule[" .. tostring(idx) .. "] (sonde DNS dns.msftncsi.com)")
+      assert.is_true(seen["msftconnecttest.com"], "msftconnecttest.com manquant dans rule[" .. tostring(idx) .. "] (sonde HTTP www.msftconnecttest.com)")
+    end
+  end)
   it("les règles utilisateur sont ajoutées après les default_rules", function()
     local path = "tmp/config_spec_userrules.moon"
     write_moon(path, [[{ filter: { rules: {
@@ -47,6 +78,37 @@ return describe("config.default_rules", function()
     assert.equals(4, #cfg.filter.rules)
     assert.equals("nxdomain", cfg.filter.rules[1].actions[1])
     return assert.equals("Règle user", cfg.filter.rules[4].description)
+  end)
+  it("captive_portal défaut true : les 2 règles captives sont présentes, sans marqueur interne", function()
+    local cfg = reload(nil)
+    assert.is_true(cfg.filter.captive_portal)
+    assert.equals(3, #cfg.filter.rules)
+    local _list_0 = {
+      2,
+      3
+    }
+    for _index_0 = 1, #_list_0 do
+      local idx = _list_0[_index_0]
+      assert.is_nil(cfg.filter.rules[idx].captive, "le marqueur interne 'captive' ne doit pas fuiter")
+    end
+  end)
+  it("captive_portal: false retire les règles captives (DoH nxdomain conservée)", function()
+    local path = "tmp/config_spec_nocaptive.moon"
+    write_moon(path, [[{ filter: { captive_portal: false } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    assert.is_false(cfg.filter.captive_portal)
+    assert.equals(1, #cfg.filter.rules)
+    assert.equals("nxdomain", cfg.filter.rules[1].actions[1])
+    return assert.equals("use-application-dns.net", cfg.filter.rules[1].conditions.to_domain)
+  end)
+  it("captive_portal: \"0\" (chaîne) est coercé en false", function()
+    local path = "tmp/config_spec_nocaptive_str.moon"
+    write_moon(path, [[{ filter: { captive_portal: "0" } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    assert.is_false(cfg.filter.captive_portal)
+    return assert.equals(1, #cfg.filter.rules)
   end)
   it("default_rules: {} dans la config utilisateur désactive les defaults", function()
     local path = "tmp/config_spec_nodefault.moon"

@@ -1,4 +1,16 @@
 local DEFAULT_CONFIG_PATH = "/etc/custos/config.moon"
+local CAPTIVE_PROBES = {
+  "connectivitycheck.gstatic.com",
+  "connectivitycheck.android.com",
+  "connectivitycheck.google.com",
+  "clients3.google.com",
+  "captive.apple.com",
+  "msftconnecttest.com",
+  "msftncsi.com",
+  "detectportal.firefox.com",
+  "connectivity-check.ubuntu.com",
+  "networkcheck.kde.org"
+}
 local DEFAULTS = {
   runtime = {
     log_level = "INFO",
@@ -104,6 +116,7 @@ local DEFAULTS = {
     domainlists_dir = "/etc/custos/lists",
     custom_lists_dir = nil,
     allow_localnets = false,
+    captive_portal = true,
     nets = { },
     macs = { },
     times = { },
@@ -113,31 +126,33 @@ local DEFAULTS = {
     rules = { },
     default_rules = {
       {
-        description = "Désactivation DoH sur Firefox",
+        description = "Désactivation DoH (domaine canari Firefox)",
         actions = {
           "nxdomain"
         },
         conditions = {
-          to_domainlist = "custom/nxdomain"
+          to_domain = "use-application-dns.net"
         }
       },
       {
+        captive = true,
         description = "Les utilisateurs authentifiés ne sont pas redirigés vers le portail captif",
         actions = {
           "allow"
         },
         conditions = {
-          to_domainlist = "captive",
-          from_user = "_any"
+          from_user = "_any",
+          to_domains = CAPTIVE_PROBES
         }
       },
       {
-        description = "Détection de portail captif par les navigateurs et OS",
+        captive = true,
+        description = "Détection de portail captif (sondes OS/navigateurs : NCSI/MSFT, Apple, Google…)",
         actions = {
           "dnsonly"
         },
         conditions = {
-          to_domainlist = "captive"
+          to_domains = CAPTIVE_PROBES
         }
       }
     },
@@ -223,6 +238,30 @@ normalize = function(cfg)
   cfg.filter.sources = cfg.filter.sources or { }
   cfg.filter.rules = cfg.filter.rules or { }
   cfg.filter.default_rules = cfg.filter.default_rules or { }
+  if cfg.filter.captive_portal == nil then
+    cfg.filter.captive_portal = DEFAULTS.filter.captive_portal
+  else
+    cfg.filter.captive_portal = coerce_boolean(cfg.filter.captive_portal)
+  end
+  local filtered = { }
+  for _, r in ipairs(cfg.filter.default_rules) do
+    local _continue_0 = false
+    repeat
+      if r.captive then
+        r.captive = nil
+        if not (cfg.filter.captive_portal) then
+          _continue_0 = true
+          break
+        end
+      end
+      filtered[#filtered + 1] = r
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  cfg.filter.default_rules = filtered
   if #cfg.filter.default_rules > 0 then
     local merged = { }
     for _, r in ipairs(cfg.filter.default_rules) do

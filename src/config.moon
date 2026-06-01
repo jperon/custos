@@ -50,6 +50,26 @@
 
 DEFAULT_CONFIG_PATH = "/etc/custos/config.moon"
 
+-- Domaines de sondes de connectivité (captive portal) des OS et navigateurs.
+-- Partagés par les règles par défaut « allow (authentifié) » et « dnsonly ».
+-- Le match par suffixe couvre les sous-domaines (ex. msftncsi.com couvre
+-- dns.msftncsi.com et www.msftncsi.com ; msftconnecttest.com couvre www. et
+-- ipv6.msftconnecttest.com). Couverture NCSI/MSFT complète : sonde DNS
+-- (dns.msftncsi.com → 131.107.255.255, réponse upstream non altérée par dnsonly)
+-- et sonde HTTP active (www.msftconnecttest.com).
+CAPTIVE_PROBES = {
+  "connectivitycheck.gstatic.com"
+  "connectivitycheck.android.com"
+  "connectivitycheck.google.com"
+  "clients3.google.com"
+  "captive.apple.com"
+  "msftconnecttest.com"
+  "msftncsi.com"
+  "detectportal.firefox.com"
+  "connectivity-check.ubuntu.com"
+  "networkcheck.kde.org"
+}
+
 DEFAULTS = {
   runtime: {
     log_level: "INFO"
@@ -162,6 +182,10 @@ DEFAULTS = {
     domainlists_dir: "/etc/custos/lists"
     custom_lists_dir: nil
     allow_localnets: false
+    -- Active les règles par défaut de détection de portail captif (sondes
+    -- NCSI/MSFT, Apple, Google…). false → ces règles ne sont pas injectées
+    -- (le canari DoH Firefox reste indépendant). Cf. CAPTIVE_PROBES.
+    captive_portal: true
     nets: {}
     macs: {}
     times: {}
@@ -171,19 +195,22 @@ DEFAULTS = {
     rules: {}
     default_rules: {
       {
-        description: "Désactivation DoH sur Firefox"
+        description: "Désactivation DoH (domaine canari Firefox)"
         actions: {"nxdomain"}
-        conditions: { to_domainlist: "custom/nxdomain" }
+        conditions: { to_domain: "use-application-dns.net" }
       }
       {
+        -- captive: marqueur interne (retiré par normalize) ; gated par filter.captive_portal
+        captive: true
         description: "Les utilisateurs authentifiés ne sont pas redirigés vers le portail captif"
         actions: {"allow"}
-        conditions: { to_domainlist: "captive", from_user: "_any" }
+        conditions: { from_user: "_any", to_domains: CAPTIVE_PROBES }
       }
       {
-        description: "Détection de portail captif par les navigateurs et OS"
+        captive: true
+        description: "Détection de portail captif (sondes OS/navigateurs : NCSI/MSFT, Apple, Google…)"
         actions: {"dnsonly"}
-        conditions: { to_domainlist: "captive" }
+        conditions: { to_domains: CAPTIVE_PROBES }
       }
     }
     dest_whitelist: {}
@@ -242,6 +269,20 @@ normalize = (cfg) ->
   cfg.filter.sources = cfg.filter.sources or {}
   cfg.filter.rules = cfg.filter.rules or {}
   cfg.filter.default_rules = cfg.filter.default_rules or {}
+  -- Gate des règles captives par défaut (marqueur interne `captive`) selon
+  -- filter.captive_portal (défaut true). Le marqueur est toujours retiré pour
+  -- ne pas fuiter dans les règles compilées.
+  if cfg.filter.captive_portal == nil
+    cfg.filter.captive_portal = DEFAULTS.filter.captive_portal
+  else
+    cfg.filter.captive_portal = coerce_boolean cfg.filter.captive_portal
+  filtered = {}
+  for _, r in ipairs cfg.filter.default_rules
+    if r.captive
+      r.captive = nil
+      continue unless cfg.filter.captive_portal
+    filtered[#filtered + 1] = r
+  cfg.filter.default_rules = filtered
   if #cfg.filter.default_rules > 0
     merged = {}
     for _, r in ipairs cfg.filter.default_rules

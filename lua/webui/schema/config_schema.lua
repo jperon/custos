@@ -431,6 +431,11 @@ return {
       label = "Autoriser réseaux locaux",
       default = false
     },
+    captive_portal = {
+      type = "boolean",
+      label = "Détection de portail captif (sondes NCSI/MSFT, Apple, Google…)",
+      default = true
+    },
     dest_whitelist = {
       type = "string_list",
       label = "IPs/CIDRs toujours autorisées"

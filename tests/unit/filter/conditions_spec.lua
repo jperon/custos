@@ -42,6 +42,40 @@ package.loaded["mac_learner_ipc"] = {
     return nil
   end
 }
+describe("filter.conditions.to_domain (NCSI/MSFT)", function()
+  local to_domain_factory = (require("filter.conditions.to_domain")).factory
+  local cfg = { }
+  it("msftncsi.com matche la sonde DNS dns.msftncsi.com (suffixe)", function()
+    local cond = (to_domain_factory(cfg))("msftncsi.com")
+    local ok = cond.eval({
+      domain = "dns.msftncsi.com"
+    })
+    return assert.is_true(ok)
+  end)
+  it("msftncsi.com matche la sonde HTTP héritée www.msftncsi.com", function()
+    local cond = (to_domain_factory(cfg))("msftncsi.com")
+    local ok = cond.eval({
+      domain = "www.msftncsi.com"
+    })
+    return assert.is_true(ok)
+  end)
+  it("msftconnecttest.com matche www.msftconnecttest.com et ipv6.msftconnecttest.com", function()
+    local cond = (to_domain_factory(cfg))("msftconnecttest.com")
+    assert.is_true((cond.eval({
+      domain = "www.msftconnecttest.com"
+    })))
+    return assert.is_true((cond.eval({
+      domain = "ipv6.msftconnecttest.com"
+    })))
+  end)
+  return it("ne matche pas un domaine voisin non couvert", function()
+    local cond = (to_domain_factory(cfg))("msftncsi.com")
+    local ok = cond.eval({
+      domain = "evil-msftncsi.com.attacker.test"
+    })
+    return assert.is_false(ok)
+  end)
+end)
 describe("filter.conditions.any_of", function()
   local any_of_factory = (require("filter.conditions.any_of")).factory
   local cfg = {

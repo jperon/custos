@@ -21,6 +21,30 @@ package.loaded["auth.sessions"] = _auth_sessions_stub
 package.loaded["auth.user_sessions"] = { get_session: -> nil }
 package.loaded["mac_learner_ipc"] = { get_mac: -> nil }
 
+describe "filter.conditions.to_domain (NCSI/MSFT)", ->
+  to_domain_factory = (require "filter.conditions.to_domain").factory
+  cfg = {}
+
+  it "msftncsi.com matche la sonde DNS dns.msftncsi.com (suffixe)", ->
+    cond = (to_domain_factory cfg) "msftncsi.com"
+    ok = cond.eval { domain: "dns.msftncsi.com" }
+    assert.is_true ok
+
+  it "msftncsi.com matche la sonde HTTP héritée www.msftncsi.com", ->
+    cond = (to_domain_factory cfg) "msftncsi.com"
+    ok = cond.eval { domain: "www.msftncsi.com" }
+    assert.is_true ok
+
+  it "msftconnecttest.com matche www.msftconnecttest.com et ipv6.msftconnecttest.com", ->
+    cond = (to_domain_factory cfg) "msftconnecttest.com"
+    assert.is_true (cond.eval { domain: "www.msftconnecttest.com" })
+    assert.is_true (cond.eval { domain: "ipv6.msftconnecttest.com" })
+
+  it "ne matche pas un domaine voisin non couvert", ->
+    cond = (to_domain_factory cfg) "msftncsi.com"
+    ok = cond.eval { domain: "evil-msftncsi.com.attacker.test" }
+    assert.is_false ok
+
 describe "filter.conditions.any_of", ->
   any_of_factory = (require "filter.conditions.any_of").factory
   cfg = { nft: { ip_timeout: "2m" } }

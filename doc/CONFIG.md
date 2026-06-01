@@ -396,6 +396,7 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 | `domainlists_dir` | string | `"/etc/custos/lists"` | Répertoire racine des listes de domaines compilées |
 | `custom_lists_dir` | string | `nil` | Répertoire des listes personnalisées (optionnel) |
 | `allow_localnets` | bool | `false` | Si `true`, injecte automatiquement les réseaux locaux en whitelist nft |
+| `captive_portal` | bool | `true` | Active les règles par défaut de détection de portail captif (sondes NCSI/MSFT, Apple, Google…). `false` → ces règles ne sont pas injectées (cf. § Règles par défaut) |
 | `dest_whitelist` | array | `{}` | IPs/CIDRs de destination toujours autorisées (bypass filtrage) |
 | `allowed_domains` | array | `{"local","lan","home.arpa"}` | Domaines autorisés par défaut si `rules` est vide |
 
@@ -589,6 +590,31 @@ filter: {
   }
 }
 ```
+
+#### Règles par défaut (`filter.default_rules`)
+
+`src/config.moon` fournit des **règles par défaut** préfixées aux `filter.rules`
+de l'utilisateur (les `default_rules` d'abord, puis les `rules`). Elles sont
+**autonomes** (domaines en ligne via `to_domains`, sans dépendre d'une liste
+externe) et donc fonctionnelles dès l'installation :
+
+1. `nxdomain` sur `use-application-dns.net` — désactive l'auto-DoH de Firefox.
+2. `allow` (utilisateurs **authentifiés**, `from_user: "_any"`) sur l'ensemble
+   canonique des sondes de connectivité — ouvre le pare-feu pour que la sonde
+   réussisse (pas de portail).
+3. `dnsonly` sur le même ensemble — résolution DNS seule pour les clients non
+   authentifiés (la sonde HTTP est interceptée et redirigée vers le portail).
+
+L'ensemble des sondes couvre **NCSI/MSFT** (`msftconnecttest.com`, `msftncsi.com`
+— le match par suffixe couvre `dns.msftncsi.com`, `www.msftncsi.com`,
+`www./ipv6.msftconnecttest.com`), ainsi qu'Apple, Google/Android, Firefox,
+Ubuntu et KDE.
+
+Pour **désactiver toutes** les règles par défaut : `filter: { default_rules: {} }`.
+Pour **désactiver uniquement** la détection de portail captif (sondes NCSI/MSFT,
+Apple, Google… — règles 2 et 3) tout en conservant le canari DoH :
+`filter: { captive_portal: false }`. Pour **étendre**, ajouter ses propres règles
+dans `filter.rules` (appliquées ensuite).
 
 ### 14.5 Logique de décision (`filter.decision`)
 

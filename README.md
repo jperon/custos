@@ -713,9 +713,41 @@ les noms de domaine sans accéder aux serveurs cibles avant d'être authentifié
     { to_domains: {
       "connectivitycheck.gstatic.com"
       "captive.apple.com"
-      "www.msftconnecttest.com"
+      "msftconnecttest.com"
     } }
 }
+```
+
+#### Sondes intégrées par défaut (NCSI/MSFT, Apple, Google…)
+
+Les **règles par défaut** (`filter.default_rules`, cf. `src/config.moon`)
+embarquent déjà l'ensemble canonique des sondes de connectivité **en ligne**
+(via `to_domains`), donc fonctionnelles dès l'installation, sans dépendre d'une
+liste externe :
+
+- Google/Android : `connectivitycheck.gstatic.com`, `connectivitycheck.android.com`,
+  `connectivitycheck.google.com`, `clients3.google.com`
+- Apple : `captive.apple.com`
+- **Microsoft NCSI** : `msftconnecttest.com`, `msftncsi.com`
+- Firefox : `detectportal.firefox.com` — Ubuntu : `connectivity-check.ubuntu.com`
+  — KDE : `networkcheck.kde.org`
+
+Le **match par suffixe** couvre tous les sous-domaines : `msftncsi.com` couvre la
+sonde DNS `dns.msftncsi.com` (NCSI vérifie qu'elle résout vers `131.107.255.255` ;
+`dnsonly` laisse la réponse upstream intacte) et la sonde HTTP héritée
+`www.msftncsi.com` ; `msftconnecttest.com` couvre `www.` et `ipv6.msftconnecttest.com`
+(sonde HTTP active Windows 10/11).
+
+Deux règles par défaut encadrent ces domaines : `allow` pour les utilisateurs
+**authentifiés** (`from_user: "_any"`, ouverture pare-feu → la sonde réussit,
+pas de portail) et `dnsonly` pour les autres (résolution DNS seule → la sonde
+HTTP est interceptée par le worker captive et redirigée vers le portail).
+
+Ces deux règles sont gouvernées par l'option `filter.captive_portal` (défaut
+`true`). La passer à `false` les retire (le canari DoH Firefox reste actif) :
+
+```moonscript
+filter: { captive_portal: false }
 ```
 
 ### Conditions utilisateur
