@@ -266,8 +266,8 @@ table bridge dns-filter-bridge {
     # Two variants : untagged frames (ether type ip/ip6) and 802.1Q-tagged frames
     # (ether type 8021q + vlan type ip/ip6). `ether type {ip, ip6}` does NOT match
     # tagged frames because their outer EtherType is 0x8100, not 0x0800/0x86DD.
-    ether type {ip, ip6} limit rate 100/second burst 20 packets log level debug prefix "custos default: "      counter queue num {QUEUE_REJECT} bypass comment "Default reject untagged"
-    vlan  type {ip, ip6} limit rate 100/second burst 20 packets log level debug prefix "custos default vlan: " counter queue num {QUEUE_REJECT} bypass comment "Default reject VLAN"
+    ether type {ip, ip6} limit rate 400/second burst 50 packets log level debug prefix "custos default: "      counter queue num {QUEUE_REJECT} bypass comment "Default reject untagged"
+    vlan  type {ip, ip6} limit rate 400/second burst 50 packets log level debug prefix "custos default vlan: " counter queue num {QUEUE_REJECT} bypass comment "Default reject VLAN"
     ether type {ip, ip6} drop comment "Drop untagged surplus"
     vlan  type {ip, ip6} drop comment "Drop VLAN surplus"
     log level warn prefix "custos pass :" counter comment "Warn unhandled"
