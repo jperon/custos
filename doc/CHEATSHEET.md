@@ -111,6 +111,8 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
   - `make update-lists`
   - Direct equivalent:
     - `LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/filter/updater.lua --config cfg/config.moon`
+    - `--config <path>` et `CUSTOS_CONFIG_PATH=<path>` sont équivalents (l'updater
+      requiert `config` après avoir appliqué `--config`).
 
 - Update lists (OpenWrt):
   - `ssh root@<router> 'custos-update'`
@@ -122,6 +124,15 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
   3. Reload service if needed:
      - Debian: `make reload`
      - OpenWrt: `ssh root@<router> '/etc/init.d/custos reload'`
+
+- Listes pré-compilées via CI GitHub (dépôt `lists/`) :
+  - `lists/.github/workflows/build.yml` compile les `.bin` (runtime custos cloné
+    à `CUSTOS_REF` épinglé) et publie deux archives de release :
+    - `custos-lists-full.tar.zst` : `custom/*.bin` + `toulouse/*.bin`
+    - `custos-lists-lowmem.tar.zst` : `custom/*.bin` seuls (sans Toulouse)
+  - Build CI piloté par `lists/ci/config.moon` (chemins via `$LISTS_ROOT`).
+  - Déploiement routeur : `lists/install-lists.sh [full|lowmem] [tag]`
+    (curl + vérif SHA256 + extraction + SIGHUP).
 
 ## UI d'installation (redbean)
 
