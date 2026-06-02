@@ -32,7 +32,7 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
 
 - SafeSearch / réécriture CNAME:
   - Options: `filter.safe_search` (défaut `true`), `filter.youtube_restrict` (`strict`/`moderate`/`false`)
-  - Action générique `cname` (`src/filter/actions/cname.moon`) → `on_response` réécrit la réponse en CNAME
+  - Action générique `cname` (`src/filter/actions/cname.moon`) → `on_response` réécrit la réponse en CNAME (effet de bord, sans changer le verdict)
   - Mapping moteurs: `SAFE_SEARCH_GROUPS` dans `src/config.moon` (généré dans `normalize`)
   - Couvre DNS clair UDP+TCP (`replace_dns_payload`) et DoH (`doh/query.moon`)
 

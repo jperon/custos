@@ -102,20 +102,26 @@ compile_rule = function(cfg, rule, idx, used_ids)
       break
     end
   end
+  local rule_has_on_response = #on_response_list > 0
   local eval_fn
   eval_fn = function(req)
     local all_passed = true
+    local condition_reason = nil
     for _index_0 = 1, #conditions_eval do
       local cond = conditions_eval[_index_0]
-      local ok, _ = cond(req)
+      local ok, cond_msg = cond(req)
       if not (ok) then
         all_passed = false
         break
       end
+      if condition_reason == nil and cond_msg then
+        condition_reason = cond_msg
+      end
     end
     if not (all_passed) then
-      return nil, "No condition matched"
+      return nil, "No condition matched", nil, nil, nil, nil, nil, false, false
     end
+    req._condition_reason = condition_reason
     local verdict, msg
     for _index_0 = 1, #action_evals do
       local action_eval = action_evals[_index_0]
@@ -127,7 +133,7 @@ compile_rule = function(cfg, rule, idx, used_ids)
         msg = msg or m
       end
     end
-    return verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers
+    return verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers, condition_reason, true, rule_has_on_response
   end
   return eval_fn, metadata
 end
@@ -142,22 +148,26 @@ details_of = function(rules, req, decision_cfg)
   if effective_cfg.first_match_wins ~= nil then
     first_match_wins = not not effective_cfg.first_match_wins
   end
-  local last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers = nil, nil, nil, nil, nil, nil
+  local last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason = nil, nil, nil, nil, nil, nil, nil
+  local response_rule_ids = { }
   for _index_0 = 1, #rules do
     local rule_fn = rules[_index_0]
-    local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers = rule_fn(req)
+    local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, matched, has_on_response = rule_fn(req)
+    if matched and has_on_response and rule_id then
+      response_rule_ids[#response_rule_ids + 1] = rule_id
+    end
     if verdict ~= nil then
       if continue_mode or not first_match_wins then
-        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers
+        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason
       else
-        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers
+        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, response_rule_ids
       end
     end
   end
   if last_verdict ~= nil then
-    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers
+    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, response_rule_ids
   end
-  return false, "No matching rule (default deny)", nil, nil, nil, nil
+  return false, "No matching rule (default deny)", nil, nil, nil, nil, nil, response_rule_ids
 end
 local compile_rules
 compile_rules = function(cfg)
@@ -187,10 +197,12 @@ decide_meta = function(rules, req, decision_cfg)
   if decision_cfg == nil then
     decision_cfg = nil
   end
-  local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers = details_of(rules, req, decision_cfg)
+  local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, response_rule_ids = details_of(rules, req, decision_cfg)
   return {
     verdict = verdict,
     reason = msg,
+    condition_reason = condition_reason,
+    response_rule_ids = response_rule_ids or { },
     rule_id = rule_id,
     timeout = rule_timeout,
     description = rule_desc,
@@ -209,8 +221,39 @@ on_response_for = function(rules, rule_id)
   end
   return { }
 end
+local on_response_for_many
+on_response_for_many = function(rules, rule_ids)
+  local out = { }
+  local seen = { }
+  if not (rules and type(rule_ids) == "table") then
+    return out
+  end
+  for _, rid in ipairs(rule_ids) do
+    local _continue_0 = false
+    repeat
+      if seen[rid] then
+        _continue_0 = true
+        break
+      end
+      seen[rid] = true
+      local cbs = on_response_for(rules, rid)
+      for _index_0 = 1, #cbs do
+        local cb = cbs[_index_0]
+        out[#out + 1] = cb
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  return out
+end
 local apply_on_response
-apply_on_response = function(on_response_cbs, dns_raw, reason)
+apply_on_response = function(on_response_cbs, dns_raw, reason, ctx_extra)
+  if ctx_extra == nil then
+    ctx_extra = nil
+  end
   local ctx = {
     dns_raw = dns_raw,
     modified = false,
@@ -219,6 +262,11 @@ apply_on_response = function(on_response_cbs, dns_raw, reason)
     action_label = nil,
     reason = reason or ""
   }
+  if type(ctx_extra) == "table" then
+    for k, v in pairs(ctx_extra) do
+      ctx[k] = v
+    end
+  end
   local _list_0 = (on_response_cbs or { })
   for _index_0 = 1, #_list_0 do
     local cb = _list_0[_index_0]
@@ -228,8 +276,17 @@ apply_on_response = function(on_response_cbs, dns_raw, reason)
   return ctx
 end
 local run_on_response
-run_on_response = function(rules, rule_id, dns_raw, reason)
-  return apply_on_response((on_response_for(rules, rule_id)), dns_raw, reason)
+run_on_response = function(rules, rule_id_or_ids, dns_raw, reason, ctx_extra)
+  if ctx_extra == nil then
+    ctx_extra = nil
+  end
+  local callbacks
+  if type(rule_id_or_ids) == "table" then
+    callbacks = on_response_for_many(rules, rule_id_or_ids)
+  else
+    callbacks = on_response_for(rules, rule_id_or_ids)
+  end
+  return apply_on_response(callbacks, dns_raw, reason, ctx_extra)
 end
 return {
   compile_rule = compile_rule,

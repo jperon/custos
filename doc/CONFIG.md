@@ -631,13 +631,16 @@ recherche vers leur variante « safe » :
 | Bing | `bing.com` | `strict.bing.com` |
 | DuckDuckGo | `duckduckgo.com` | `safe.duckduckgo.com` |
 
-Le filtre répond par un enregistrement **CNAME** (sans A) ; le client re-résout la
-cible (autorisée par ailleurs, et provisionnée d'un certificat valide par
-l'éditeur). Le mécanisme passe par le callback `on_response` des actions : il
-couvre le DNS clair **UDP et TCP** ainsi que le **DoH transitant par le worker
-doh** de Custos. Mode YouTube réglable via `youtube_restrict`
+Le filtre répond par un enregistrement **CNAME** et, si la résolution upstream de
+la cible réussit, peut enrichir la réponse avec des RR `A`/`AAAA` (TTL borné).
+Le mécanisme passe par le callback `on_response` des actions : il couvre le DNS
+clair **UDP et TCP** ainsi que le **DoH transitant par le worker doh** de Custos.
+Mode YouTube réglable via `youtube_restrict`
 (`"strict"`/`"moderate"`/`false`). Pour désactiver entièrement :
 `filter: { safe_search: false }`.
+
+Important : l'action `cname` est un effet de bord (réécriture) et ne modifie pas
+le verdict ALLOW/DENY ; celui-ci dépend des autres actions de règles.
 
 L'action `cname` est générique : on peut l'utiliser dans `filter.rules` pour
 réécrire n'importe quel domaine, ex. :

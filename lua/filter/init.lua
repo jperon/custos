@@ -188,8 +188,11 @@ get_rule_on_response = function(rule_id)
   return _on_response_for(rules, rule_id)
 end
 local run_on_response
-run_on_response = function(rule_id, dns_raw, reason)
-  return _run_on_response(rules, rule_id, dns_raw, reason)
+run_on_response = function(rule_id, dns_raw, reason, ctx_extra)
+  if ctx_extra == nil then
+    ctx_extra = nil
+  end
+  return _run_on_response(rules, rule_id, dns_raw, reason, ctx_extra)
 end
 return {
   load = load,

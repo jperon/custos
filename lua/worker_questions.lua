@@ -132,6 +132,13 @@ tsv_field = function(v)
     return s
   end
 end
+local list_from_condition_reason
+list_from_condition_reason = function(condition_reason)
+  if not (type(condition_reason) == "string") then
+    return nil
+  end
+  return condition_reason:match("^Domain matched in list '([^']+)'$")
+end
 local write_event
 write_event = function(fields, allowed)
   if not (events_wfd) then
@@ -391,6 +398,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   local block_timeout = nil
   local allow_timeout = nil
   local block_modifiers = nil
+  local response_rule_ids = { }
   local q_fields = {
     worker = "dns",
     mac_src = l2.mac_src,
@@ -415,16 +423,19 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       ts = os.time(),
       user = q_fields.user
     }
-    local allowed, reason, rule_id, nft_timeout = nil, nil, nil, nil
+    local allowed, reason, rule_id, nft_timeout, matched_list = nil, nil, nil, nil, nil
     local decision = filter.decide_meta(req)
     if decision then
       allowed = decision.verdict
       reason = decision.reason
       rule_id = decision.rule_id
       nft_timeout = decision.timeout
+      matched_list = list_from_condition_reason(decision.condition_reason)
+      response_rule_ids = decision.response_rule_ids or { }
     end
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule = rule_id or ""
+    q_fields.list = matched_list
     if allowed then
       log_allow(function()
         return q_fields
@@ -460,9 +471,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   end
   local ipc_ok = false
   if verdict == NF_ACCEPT then
-    ipc_ok = write_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, benchmark_ms, allow_rule_id, allow_timeout)
+    ipc_ok = write_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, benchmark_ms, allow_rule_id, allow_timeout, nil, response_rule_ids)
   else
-    ipc_ok = write_refused_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout, block_modifiers)
+    ipc_ok = write_refused_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout, block_modifiers, response_rule_ids)
   end
   if not (ipc_ok) then
     log_warn(function()

@@ -331,6 +331,29 @@ return describe("ipc", function()
       return close_pipe(p)
     end)
   end)
+  describe("write_msg + response_rule_ids", function()
+    return it("response_rule_ids est préservée dans l'entrée pending", function()
+      local m_ipc = fresh_ipc()
+      local p = make_pipe()
+      local rfd, wfd = p[1], p[2]
+      m_ipc.write_msg(wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, "allow", nil, "r_allow", "120s", nil, {
+        "r_safe",
+        "r_strip"
+      })
+      m_ipc.drain_pipe(rfd, (function()
+        return 0
+      end), nil)
+      local entry = m_ipc.get_pending_entry(TXID, "192.168.1.42", PORT, "1.1.1.3", function()
+        return 1
+      end)
+      assert.is_not_nil(entry)
+      assert.same({
+        "r_safe",
+        "r_strip"
+      }, entry.response_rule_ids)
+      return close_pipe(p)
+    end)
+  end)
   describe("decode_msg trop court", function()
     return it("message trop court → nil", function()
       local m_ipc = fresh_ipc()

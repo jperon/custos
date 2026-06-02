@@ -21,6 +21,10 @@ package.loaded["mac_learner_ipc"] or= { get_mac: -> nil }
 describe "filter.rule", ->
   rule_mod = require "filter.rule"
 
+  package.loaded["filter.conditions.__listmatch_test"] = (cfg) ->
+    (args) ->
+      (req) -> true, "Domain matched in list 'toulouse/malware'"
+
   cfg = {
     nft: { ip_timeout: "2m" }
     macs: {}
@@ -309,6 +313,40 @@ describe "filter.rule", ->
       meta = rule_mod.decide_meta rules, {}
       assert.is_false meta.verdict
 
+    it "expose condition_reason sans écraser reason d'action", ->
+      rules = rule_mod.compile_rules {
+        nft: { ip_timeout: "2m" }
+        macs: {}
+        rules: {
+          {
+            rule_id: "list_block"
+            description: "List block"
+            conditions: { __listmatch_test: true }
+            actions: { "deny" }
+          }
+        }
+      }
+
+      meta = rule_mod.decide_meta rules, { domain: "example.test" }
+      assert.is_false meta.verdict
+      assert.equals "Denied by rule: List block", meta.reason
+      assert.equals "Domain matched in list 'toulouse/malware'", meta.condition_reason
+
+    it "collecte response_rule_ids même si le verdict vient d'une autre règle", ->
+      rules = rule_mod.compile_rules {
+        nft: { ip_timeout: "2m" }
+        macs: {}
+        rules: {
+          { rule_id: "safe", actions: { "cname" }, cname: "forcesafesearch.google.com", conditions: { to_domain: "google.com" } }
+          { rule_id: "allow", actions: { "allow" }, conditions: { to_domain: "google.com" } }
+        }
+      }
+
+      meta = rule_mod.decide_meta rules, { domain: "google.com" }
+      assert.is_true meta.verdict
+      assert.equals "r_allow", meta.rule_id
+      assert.same { "r_safe", "r_allow" }, meta.response_rule_ids
+
   -- ── on_response : noyau commun (worker_responses + doh) ──────────
   describe "on_response_for", ->
     it "retrouve les callbacks de la règle par rule_id", ->
@@ -368,5 +406,17 @@ describe "filter.rule", ->
       }
       ctx = rule_mod.run_on_response rules, "r_strip", "RAW", "bugfix"
       -- strip pose skip_nft, allow pose explicit_allow → injection maintenue
+      assert.is_true ctx.skip_nft
+      assert.is_true ctx.inject_nft
+
+    it "accepte une liste de rule_id et concatène les callbacks", ->
+      rules = rule_mod.compile_rules {
+        macs: {}
+        rules: {
+          { rule_id: "strip", actions: { "dns_strip" }, dns_strip: { rr_type: "A" } }
+          { rule_id: "allow", actions: { "allow" } }
+        }
+      }
+      ctx = rule_mod.run_on_response rules, { "r_strip", "r_allow" }, "RAW", "combined"
       assert.is_true ctx.skip_nft
       assert.is_true ctx.inject_nft

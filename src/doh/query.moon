@@ -79,6 +79,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
   any_blocked  = false
   allow_rule_id = nil
   allow_timeout = nil
+  allow_response_rule_ids = {}
 
   questions = dns.questions or (dns.question and { dns.question } or {})
   for q in *questions
@@ -108,6 +109,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       allow_reason  = meta.reason
       allow_rule_id = meta.rule_id
       allow_timeout = meta.timeout
+      allow_response_rule_ids = meta.response_rule_ids or {}
     else
       log_block -> fields
       any_blocked  = true
@@ -130,7 +132,8 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
   -- ── Dispatch on_response : même noyau que worker_responses ──────
   -- Les callbacks de chaque action portent toute la logique (strip DNS,
   -- EDE, skip_nft) et la décision inject_nft. "allow" supplante "skip".
-  resp_ctx = run_on_response allow_rule_id, resp_raw, allow_reason
+  response_hooks = (#allow_response_rule_ids > 0) and allow_response_rule_ids or allow_rule_id
+  resp_ctx = run_on_response response_hooks, resp_raw, allow_reason, { resolver_ip: upstream }
   resp_raw = resp_ctx.dns_raw
 
   -- Parse the (possibly modified) response and inject A/AAAA records into nft sets.

@@ -104,15 +104,23 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
   -- Fonction d'évaluation : premier verdict non-nil gagne.
   -- Une action retournant nil (log, mail, etc.) est un effet de bord pur :
   -- elle n'interrompt pas l'évaluation des règles suivantes.
+  rule_has_on_response = #on_response_list > 0
+
   eval_fn = (req) ->
     all_passed = true
+    condition_reason = nil
     for cond in *conditions_eval
-      ok, _ = cond req
+      ok, cond_msg = cond req
       unless ok
         all_passed = false
         break
+      if condition_reason == nil and cond_msg
+        condition_reason = cond_msg
 
-    return nil, "No condition matched" unless all_passed
+    return nil, "No condition matched", nil, nil, nil, nil, nil, false, false unless all_passed
+
+    -- Conserver le message de condition pour enrichir les logs (ex: liste matchée).
+    req._condition_reason = condition_reason
 
     local verdict, msg
     for action_eval in *action_evals
@@ -123,7 +131,7 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
       elseif v == nil and m
         msg = msg or m
 
-    verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers
+    verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers, condition_reason, true, rule_has_on_response
 
   eval_fn, metadata
 
@@ -134,17 +142,20 @@ details_of = (rules, req, decision_cfg=nil) ->
   if effective_cfg.first_match_wins != nil
     first_match_wins = not not effective_cfg.first_match_wins
 
-  last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers = nil, nil, nil, nil, nil, nil
+  last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason = nil, nil, nil, nil, nil, nil, nil
+  response_rule_ids = {}
   for rule_fn in *rules
-    verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers = rule_fn req
+    verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, matched, has_on_response = rule_fn req
+    if matched and has_on_response and rule_id
+      response_rule_ids[#response_rule_ids + 1] = rule_id
     if verdict ~= nil
       if continue_mode or not first_match_wins
-        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers
+        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason
       else
-        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers
+        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, response_rule_ids
   if last_verdict ~= nil
-    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers
-  false, "No matching rule (default deny)", nil, nil, nil, nil
+    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, response_rule_ids
+  false, "No matching rule (default deny)", nil, nil, nil, nil, nil, response_rule_ids
 
 --- Compile une liste ordonnée de règles.
 compile_rules = (cfg) ->
@@ -164,10 +175,12 @@ decide = (rules, req, decision_cfg=nil) ->
   verdict, msg, rule_desc
 
 decide_meta = (rules, req, decision_cfg=nil) ->
-  verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers = details_of rules, req, decision_cfg
+  verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, response_rule_ids = details_of rules, req, decision_cfg
   {
     verdict:     verdict
     reason:      msg
+    condition_reason: condition_reason
+    response_rule_ids: response_rule_ids or {}
     rule_id:     rule_id
     timeout:     rule_timeout
     description: rule_desc
@@ -185,6 +198,18 @@ on_response_for = (rules, rule_id) ->
       return meta.on_response or {}
   {}
 
+on_response_for_many = (rules, rule_ids) ->
+  out = {}
+  seen = {}
+  return out unless rules and type(rule_ids) == "table"
+  for _, rid in ipairs rule_ids
+    continue if seen[rid]
+    seen[rid] = true
+    cbs = on_response_for rules, rid
+    for cb in *cbs
+      out[#out + 1] = cb
+  out
+
 --- Applique une liste de callbacks on_response sur une réponse DNS (fonction pure).
 -- Noyau commun aux workers (worker_responses, doh) : construit le contexte de
 -- réponse, exécute chaque callback (strip DNS, EDE, skip_nft, action_label) puis
@@ -193,9 +218,10 @@ on_response_for = (rules, rule_id) ->
 -- @tparam table  on_response_cbs Liste de callbacks (peut être vide/nil).
 -- @tparam string dns_raw         Réponse DNS brute (wire format).
 -- @tparam string reason          Raison de l'autorisation (EDE/log).
+-- @tparam table|nil ctx_extra    Champs additionnels injectés dans le contexte.
 -- @treturn table Contexte enrichi : { dns_raw, modified, explicit_allow,
 --   skip_nft, action_label, reason, inject_nft }.
-apply_on_response = (on_response_cbs, dns_raw, reason) ->
+apply_on_response = (on_response_cbs, dns_raw, reason, ctx_extra=nil) ->
   ctx = {
     dns_raw:        dns_raw
     modified:       false
@@ -204,6 +230,9 @@ apply_on_response = (on_response_cbs, dns_raw, reason) ->
     action_label:   nil
     reason:         reason or ""
   }
+  if type(ctx_extra) == "table"
+    for k, v in pairs ctx_extra
+      ctx[k] = v
   for cb in *(on_response_cbs or {})
     cb ctx
   ctx.inject_nft = ctx.explicit_allow or not ctx.skip_nft
@@ -214,8 +243,13 @@ apply_on_response = (on_response_cbs, dns_raw, reason) ->
 -- @tparam string rule_id Identifiant de règle ayant autorisé la requête.
 -- @tparam string dns_raw Réponse DNS brute.
 -- @tparam string reason  Raison de l'autorisation.
+-- @tparam table|nil ctx_extra Champs additionnels injectés dans le contexte.
 -- @treturn table Contexte enrichi (cf. apply_on_response).
-run_on_response = (rules, rule_id, dns_raw, reason) ->
-  apply_on_response (on_response_for rules, rule_id), dns_raw, reason
+run_on_response = (rules, rule_id_or_ids, dns_raw, reason, ctx_extra=nil) ->
+  callbacks = if type(rule_id_or_ids) == "table"
+    on_response_for_many rules, rule_id_or_ids
+  else
+    on_response_for rules, rule_id_or_ids
+  apply_on_response callbacks, dns_raw, reason, ctx_extra
 
 { :compile_rule, :compile_rules, :decide, :decide_meta, :on_response_for, :apply_on_response, :run_on_response }

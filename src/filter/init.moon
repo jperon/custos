@@ -165,7 +165,8 @@ get_rule_on_response = (rule_id) -> _on_response_for rules, rule_id
 -- @tparam string rule_id Identifiant de règle ayant autorisé la requête.
 -- @tparam string dns_raw Réponse DNS brute (wire format) reçue de l'upstream.
 -- @tparam string reason  Raison de l'autorisation (pour EDE/log).
+-- @tparam table|nil ctx_extra Champs additionnels injectés dans le contexte.
 -- @treturn table Contexte enrichi (cf. filter.rule.apply_on_response).
-run_on_response = (rule_id, dns_raw, reason) -> _run_on_response rules, rule_id, dns_raw, reason
+run_on_response = (rule_id, dns_raw, reason, ctx_extra=nil) -> _run_on_response rules, rule_id, dns_raw, reason, ctx_extra
 
 { :load, :decide, :decide_meta, :get_auth_cfg, :get_sni_cfg, :get_rule_on_response, :run_on_response }

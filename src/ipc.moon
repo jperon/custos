@@ -153,8 +153,9 @@ write_with_retry = (pipe_wfd, msg) ->
 -- @tparam string|nil  rule_id       Identifiant de règle
 -- @tparam string|nil  timeout       Timeout nft (ex: "2m")
 -- @tparam table|nil   modifiers     Table {nom → bool} des modificateurs actifs
+-- @tparam table|nil   response_rule_ids Liste ordonnée des rule_id à appliquer côté response
 -- @treturn string|nil Ligne IPC prête à écrire, ou nil si invalide
-encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason, benchmark_ms, rule_id, timeout, modifiers) ->
+encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil) ->
   return nil unless ip_raw and resolver_ip_raw
   return nil unless (#ip_raw == 4 or #ip_raw == 16)
   return nil unless (#resolver_ip_raw == 4 or #resolver_ip_raw == 16)
@@ -184,6 +185,13 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason,
   bench = math.floor bench
 
   mods_bits = encode_modifiers modifiers
+  response_ids = {}
+  if type(response_rule_ids) == "table"
+    for _, rid in ipairs response_rule_ids
+      break if #response_ids >= 8
+      continue unless rid and rid != ""
+      response_ids[#response_ids + 1] = tostring(rid)
+  response_ids_hex = to_hex table.concat response_ids, ","
   line = table.concat({
     IPC_VERSION
     string.format "%02x", msg_type
@@ -197,18 +205,19 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason,
     timeout
     tostring bench
     string.format "%x", mods_bits
+    response_ids_hex
   }, "|") .. "\n"
 
   return nil if #line > IPC_MAX_LINE
   line
 
-write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, reason, benchmark_ms, rule_id, timeout, modifiers
+write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids
   return false unless msg
   write_with_retry pipe_wfd, msg
 
-write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers
+write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids
   return false unless msg
   write_with_retry pipe_wfd, msg
 
@@ -274,6 +283,14 @@ decode_msg = (raw) ->
   mods_bits = tonumber(mods_hex, 16) or 0
   modifiers = decode_modifiers mods_bits
 
+  response_rule_ids_hex = parts[13] or ""
+  response_rule_ids_csv, ids_err = from_hex response_rule_ids_hex
+  return nil, "response_rule_ids_#{ids_err}" if ids_err
+  response_rule_ids = {}
+  if response_rule_ids_csv and response_rule_ids_csv != ""
+    for rid in response_rule_ids_csv\gmatch "[^,]+"
+      response_rule_ids[#response_rule_ids + 1] = rid
+
   {
     :txid
     :ip_str
@@ -288,6 +305,7 @@ decode_msg = (raw) ->
     :rule_id
     :timeout
     :modifiers
+    :response_rule_ids
   }, nil
 
 pending     = {}
@@ -306,6 +324,7 @@ set_pending = (msg, now_fn) ->
     benchmark_ms: msg.benchmark_ms
     rule_id:      msg.rule_id
     timeout:      msg.timeout
+    response_rule_ids: msg.response_rule_ids or {}
   }
 
 drain_lines = (pipe_rfd, buf, now_fn, on_msg) ->

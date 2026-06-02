@@ -7,10 +7,13 @@ end
 local encode_dns_name
 encode_dns_name = require("lib.dns_name").encode_dns_name
 local dns_mod = require("ipparse.l7.dns")
+local s2ip
+s2ip = require("ipparse.l3.ip").s2ip
 local sp
 sp = require("ipparse.lib.pack_compat").pack
 local bit = require("bit")
 local QTYPE_A = dns_mod.types.A
+local QTYPE_AAAA = dns_mod.types.AAAA
 local QTYPE_SVCB = dns_mod.types.SVCB
 local QTYPE_HTTPS = dns_mod.types.HTTPS
 local QCLASS_IN = dns_mod.classes.IN
@@ -224,6 +227,25 @@ return describe("build_cname_response", function()
     local resp = build_cname_response(nil, make_query(dns_mod.types.AAAA), "restrict.youtube.com", nil)
     local parsed = dns_mod.parse(resp, 1, false)
     return assert.equals(CNAME, parsed.answers[1].rtype)
+  end)
+  it("peut enrichir avec des A/AAAA résolus pour la cible", function()
+    local rrset = {
+      a = {
+        s2ip("203.0.113.10")
+      },
+      aaaa = {
+        s2ip("2001:db8::10")
+      },
+      ttl = 120
+    }
+    local resp = build_cname_response(nil, make_query(), "forcesafesearch.google.com", "SafeSearch", rrset)
+    local parsed = dns_mod.parse(resp, 1, false)
+    assert.equals(3, parsed.header.ancount)
+    assert.equals(CNAME, parsed.answers[1].rtype)
+    assert.equals(QTYPE_A, parsed.answers[2].rtype)
+    assert.equals(QTYPE_AAAA, parsed.answers[3].rtype)
+    assert.equals(120, parsed.answers[2].ttl)
+    return assert.equals(120, parsed.answers[3].ttl)
   end)
   it("renvoie nil si dns_raw absent ou cible vide", function()
     assert.is_nil(build_cname_response(nil, nil, "x.example", nil))

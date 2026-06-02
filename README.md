@@ -503,7 +503,8 @@ Example log:
                           dst_ip=192.168.1.42 txid=0x1234
                           qnames=www.github.com answers=2 ttl_set=60
 [1718100015] [1235] BLOCK mac_src=aa:bb:cc:dd:ee:ff src_ip=192.168.1.42
-                          qname=www.facebook.com qtype=A reason=not_in_allowlist
+                          qname=www.facebook.com qtype=A rule=r_blocages_prioritaires
+                          list=toulouse/malware reason="Denied by rule: Blocages prioritaires"
 ```
 
 ---
@@ -762,11 +763,16 @@ L'option `filter.safe_search` (défaut `true`) ajoute des règles par défaut qu
 **réécrivent la réponse DNS** des moteurs de recherche vers leur variante « safe »
 via l'action générique `cname` : Google → `forcesafesearch.google.com`, YouTube →
 `restrictmoderate.youtube.com` (ou `restrict.youtube.com`), Bing → `strict.bing.com`,
-DuckDuckGo → `safe.duckduckgo.com`. Le filtre répond par un CNAME ; le client
-re-résout la cible. Le mécanisme passe par le callback `on_response` (worker
+DuckDuckGo → `safe.duckduckgo.com`. Le filtre répond par un CNAME et, quand la
+résolution de la cible aboutit côté résolveur upstream, enrichit la réponse avec
+des RR `A`/`AAAA` de cette cible (TTL borné). Le mécanisme passe par le callback `on_response` (worker
 responses **et** worker doh) : il couvre le DNS clair **UDP et TCP** ainsi que le
 **DoH transitant par le worker doh**. Mode YouTube réglable
 (`filter.youtube_restrict`: `"strict"`/`"moderate"`/`false`).
+
+Important : l'action `cname` **ne décide pas** l'autorisation. Elle modifie la
+question/réponse DNS en effet de bord (`on_response`) ; le verdict final ALLOW/DENY
+reste déterminé uniquement par les autres actions de règle (`allow`, `deny`, `dnsonly`, etc.).
 
 ```moonscript
 filter: { safe_search: false }          -- désactiver

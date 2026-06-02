@@ -45,6 +45,13 @@ package.loaded[_update_4] = package.loaded[_update_4] or {
 }
 return describe("filter.rule", function()
   local rule_mod = require("filter.rule")
+  package.loaded["filter.conditions.__listmatch_test"] = function(cfg)
+    return function(args)
+      return function(req)
+        return true, "Domain matched in list 'toulouse/malware'"
+      end
+    end
+  end
   local cfg = {
     nft = {
       ip_timeout = "2m"
@@ -520,12 +527,76 @@ return describe("filter.rule", function()
       assert.equals("2m", meta.timeout)
       return assert.is_not_nil(meta.description)
     end)
-    return it("verdict false si liste de règles vide", function()
+    it("verdict false si liste de règles vide", function()
       local rules = rule_mod.compile_rules({
         rules = { }
       })
       local meta = rule_mod.decide_meta(rules, { })
       return assert.is_false(meta.verdict)
+    end)
+    it("expose condition_reason sans écraser reason d'action", function()
+      local rules = rule_mod.compile_rules({
+        nft = {
+          ip_timeout = "2m"
+        },
+        macs = { },
+        rules = {
+          {
+            rule_id = "list_block",
+            description = "List block",
+            conditions = {
+              __listmatch_test = true
+            },
+            actions = {
+              "deny"
+            }
+          }
+        }
+      })
+      local meta = rule_mod.decide_meta(rules, {
+        domain = "example.test"
+      })
+      assert.is_false(meta.verdict)
+      assert.equals("Denied by rule: List block", meta.reason)
+      return assert.equals("Domain matched in list 'toulouse/malware'", meta.condition_reason)
+    end)
+    return it("collecte response_rule_ids même si le verdict vient d'une autre règle", function()
+      local rules = rule_mod.compile_rules({
+        nft = {
+          ip_timeout = "2m"
+        },
+        macs = { },
+        rules = {
+          {
+            rule_id = "safe",
+            actions = {
+              "cname"
+            },
+            cname = "forcesafesearch.google.com",
+            conditions = {
+              to_domain = "google.com"
+            }
+          },
+          {
+            rule_id = "allow",
+            actions = {
+              "allow"
+            },
+            conditions = {
+              to_domain = "google.com"
+            }
+          }
+        }
+      })
+      local meta = rule_mod.decide_meta(rules, {
+        domain = "google.com"
+      })
+      assert.is_true(meta.verdict)
+      assert.equals("r_allow", meta.rule_id)
+      return assert.same({
+        "r_safe",
+        "r_allow"
+      }, meta.response_rule_ids)
     end)
   end)
   describe("on_response_for", function()
@@ -616,7 +687,7 @@ return describe("filter.rule", function()
     end)
   end)
   return describe("run_on_response", function()
-    return it("dispatch complet par rule_id (dns_strip + allow → inject_nft true)", function()
+    it("dispatch complet par rule_id (dns_strip + allow → inject_nft true)", function()
       local rules = rule_mod.compile_rules({
         macs = { },
         rules = {
@@ -633,6 +704,34 @@ return describe("filter.rule", function()
         }
       })
       local ctx = rule_mod.run_on_response(rules, "r_strip", "RAW", "bugfix")
+      assert.is_true(ctx.skip_nft)
+      return assert.is_true(ctx.inject_nft)
+    end)
+    return it("accepte une liste de rule_id et concatène les callbacks", function()
+      local rules = rule_mod.compile_rules({
+        macs = { },
+        rules = {
+          {
+            rule_id = "strip",
+            actions = {
+              "dns_strip"
+            },
+            dns_strip = {
+              rr_type = "A"
+            }
+          },
+          {
+            rule_id = "allow",
+            actions = {
+              "allow"
+            }
+          }
+        }
+      })
+      local ctx = rule_mod.run_on_response(rules, {
+        "r_strip",
+        "r_allow"
+      }, "RAW", "combined")
       assert.is_true(ctx.skip_nft)
       return assert.is_true(ctx.inject_nft)
     end)

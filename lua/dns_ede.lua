@@ -98,7 +98,10 @@ build_nxdomain_response = function(dns_orig, dns_raw, reason)
   return tostring(dns)
 end
 local build_cname_response
-build_cname_response = function(dns_orig, dns_raw, target, reason)
+build_cname_response = function(dns_orig, dns_raw, target, reason, target_rrs)
+  if target_rrs == nil then
+    target_rrs = nil
+  end
   if not (dns_raw and target and target ~= "") then
     return nil
   end
@@ -107,7 +110,7 @@ build_cname_response = function(dns_orig, dns_raw, target, reason)
     return nil
   end
   dns.header.rcode = NOERROR
-  dns.answers = {
+  local answers = {
     {
       rname = string.char(0xC0, 0x0C),
       rtype = CNAME,
@@ -116,7 +119,39 @@ build_cname_response = function(dns_orig, dns_raw, target, reason)
       rdata = encode_dns_name(target)
     }
   }
-  dns.header.ancount = 1
+  local target_name = encode_dns_name(target)
+  local ttl = (target_rrs and tonumber(target_rrs.ttl)) or 300
+  if ttl <= 0 then
+    ttl = 300
+  end
+  local _list_0 = ((target_rrs and target_rrs.a) or { })
+  for _index_0 = 1, #_list_0 do
+    local raw = _list_0[_index_0]
+    if raw and #raw == 4 then
+      answers[#answers + 1] = {
+        rname = target_name,
+        rtype = A,
+        rclass = 1,
+        ttl = ttl,
+        rdata = raw
+      }
+    end
+  end
+  local _list_1 = ((target_rrs and target_rrs.aaaa) or { })
+  for _index_0 = 1, #_list_1 do
+    local raw = _list_1[_index_0]
+    if raw and #raw == 16 then
+      answers[#answers + 1] = {
+        rname = target_name,
+        rtype = AAAA,
+        rclass = 1,
+        ttl = ttl,
+        rdata = raw
+      }
+    end
+  end
+  dns.answers = answers
+  dns.header.ancount = #answers
   local ede_text
   if reason and reason ~= "" then
     ede_text = "SafeSearch. " .. reason

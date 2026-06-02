@@ -469,9 +469,12 @@ parse_packet = function(raw)
 end
 local _filter = nil
 local run_on_response
-run_on_response = function(rule_id, dns_raw, reason)
+run_on_response = function(rule_id, dns_raw, reason, ctx_extra)
+  if ctx_extra == nil then
+    ctx_extra = nil
+  end
   _filter = _filter or require("filter")
-  return _filter.run_on_response(rule_id, dns_raw, reason)
+  return _filter.run_on_response(rule_id, dns_raw, reason, ctx_extra)
 end
 local rules_metadata = nil
 local auth_wildcard_rules = { }
@@ -750,12 +753,20 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
     return -1
   end
-  local resp_ctx = run_on_response(nft_rule_id, dns_raw, (entry and entry.reason or ""))
+  local response_hooks = (entry and entry.response_rule_ids and #entry.response_rule_ids > 0) and entry.response_rule_ids or nft_rule_id
+  local resp_ctx = run_on_response(response_hooks, dns_raw, (entry and entry.reason or ""), {
+    resolver_ip = resolver_ip
+  })
   dns_raw = resp_ctx.dns_raw
   local payload_modified = resp_ctx.modified
   local inject_nft = resp_ctx.inject_nft
+  local answers_dns = dns_msg
+  local parsed_modified, _ = parse_dns(dns_raw, 1, false)
+  if parsed_modified then
+    answers_dns = parsed_modified
+  end
   local answers = { }
-  local _list_0 = parse_answers(dns_msg)
+  local _list_0 = parse_answers(answers_dns)
   for _index_0 = 1, #_list_0 do
     local a = _list_0[_index_0]
     if a.rtype == QTYPE.A or a.rtype == QTYPE.AAAA then

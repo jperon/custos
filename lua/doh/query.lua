@@ -121,6 +121,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
   local any_blocked = false
   local allow_rule_id = nil
   local allow_timeout = nil
+  local allow_response_rule_ids = { }
   local questions = dns.questions or (dns.question and {
     dns.question
   } or { })
@@ -167,6 +168,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       allow_reason = meta.reason
       allow_rule_id = meta.rule_id
       allow_timeout = meta.timeout
+      allow_response_rule_ids = meta.response_rule_ids or { }
     else
       log_block(function()
         return fields
@@ -207,7 +209,10 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
     end)
     return nil, upstream_err or "upstream_failed"
   end
-  local resp_ctx = run_on_response(allow_rule_id, resp_raw, allow_reason)
+  local response_hooks = (#allow_response_rule_ids > 0) and allow_response_rule_ids or allow_rule_id
+  local resp_ctx = run_on_response(response_hooks, resp_raw, allow_reason, {
+    resolver_ip = upstream
+  })
   resp_raw = resp_ctx.dns_raw
   local resp_dns, resp_err = parse(resp_raw, 1, false)
   if not (resp_dns) then

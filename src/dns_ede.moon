@@ -116,7 +116,8 @@ build_nxdomain_response = (dns_orig, dns_raw, reason) ->
 
   tostring dns
 
---- Build a NOERROR DNS response rewriting the answer to a single CNAME RR.
+--- Build a NOERROR DNS response rewriting the answer to a CNAME RR, optionally
+-- enriched with A/AAAA answers for the CNAME target.
 -- Forces the client to re-resolve `target` (ex: SafeSearch). Valid for any
 -- query qtype (a CNAME answer is legal whatever the QTYPE). Marked with EDE
 -- code 4 (Forged_Answer) so resolvers know the answer was synthesized.
@@ -125,15 +126,17 @@ build_nxdomain_response = (dns_orig, dns_raw, reason) ->
 -- @tparam string      dns_raw  Raw DNS payload bytes (the query echoed back).
 -- @tparam string      target   CNAME target hostname (ex: forcesafesearch.google.com).
 -- @tparam string|nil  reason   Human-readable reason for EDE text.
+-- @tparam table|nil   target_rrs Optional resolved target records:
+--   { a: {raw4...}, aaaa: {raw16...}, ttl: number }
 -- @treturn string|nil Packed DNS response, or nil.
-build_cname_response = (dns_orig, dns_raw, target, reason) ->
+build_cname_response = (dns_orig, dns_raw, target, reason, target_rrs=nil) ->
   return nil unless dns_raw and target and target != ""
 
   dns = parse dns_raw, 1, false
   return nil unless dns
 
   dns.header.rcode = NOERROR
-  dns.answers = {
+  answers = {
     {
       rname:  string.char 0xC0, 0x0C
       rtype:  CNAME
@@ -142,7 +145,33 @@ build_cname_response = (dns_orig, dns_raw, target, reason) ->
       rdata:  encode_dns_name target
     }
   }
-  dns.header.ancount = 1
+
+  target_name = encode_dns_name target
+  ttl = (target_rrs and tonumber(target_rrs.ttl)) or 300
+  ttl = 300 if ttl <= 0
+
+  for raw in *((target_rrs and target_rrs.a) or {})
+    if raw and #raw == 4
+      answers[#answers + 1] = {
+        rname:  target_name
+        rtype:  A
+        rclass: 1
+        ttl:    ttl
+        rdata:  raw
+      }
+
+  for raw in *((target_rrs and target_rrs.aaaa) or {})
+    if raw and #raw == 16
+      answers[#answers + 1] = {
+        rname:  target_name
+        rtype:  AAAA
+        rclass: 1
+        ttl:    ttl
+        rdata:  raw
+      }
+
+  dns.answers = answers
+  dns.header.ancount = #answers
 
   ede_text = if reason and reason != ""
     "SafeSearch. " .. reason

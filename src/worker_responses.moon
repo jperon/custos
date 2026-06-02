@@ -349,9 +349,9 @@ parse_packet = (raw) ->
 -- ── Chargement paresseux de filter pour éviter de tirer ip_whitelist (libnftnl)
 -- au chargement du module — critique pour les tests unitaires.
 _filter = nil
-run_on_response = (rule_id, dns_raw, reason) ->
+run_on_response = (rule_id, dns_raw, reason, ctx_extra=nil) ->
   _filter or= require "filter"
-  _filter.run_on_response rule_id, dns_raw, reason
+  _filter.run_on_response rule_id, dns_raw, reason, ctx_extra
 
 -- Load filter rules to identify auth-only wildcard rules
 -- rules_metadata is passed from main.moon to avoid recompiling (which would reload domain lists)
@@ -633,15 +633,20 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- Dispatch factorisé (filter.run_on_response) : les callbacks de chaque
   -- action portent toute la logique (strip DNS, EDE, skip_nft, action_label)
   -- et la décision inject_nft. Même noyau que le worker DoH.
-  resp_ctx = run_on_response nft_rule_id, dns_raw, (entry and entry.reason or "")
+  response_hooks = (entry and entry.response_rule_ids and #entry.response_rule_ids > 0) and entry.response_rule_ids or nft_rule_id
+  resp_ctx = run_on_response response_hooks, dns_raw, (entry and entry.reason or ""), { resolver_ip: resolver_ip }
 
   dns_raw         = resp_ctx.dns_raw
   payload_modified = resp_ctx.modified
   inject_nft      = resp_ctx.inject_nft
 
+  answers_dns = dns_msg
+  parsed_modified, _ = parse_dns dns_raw, 1, false
+  answers_dns = parsed_modified if parsed_modified
+
   -- Réponses A/AAAA normalisées pour le noyau d'injection partagé.
   answers = {}
-  for a in *parse_answers dns_msg
+  for a in *parse_answers answers_dns
     if a.rtype == QTYPE.A or a.rtype == QTYPE.AAAA
       fam = a.rtype == QTYPE.AAAA and "ipv6" or "ipv4"
       answers[#answers + 1] = { family: fam, addr: a.rdata_str, ttl: a.ttl }

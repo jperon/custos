@@ -6,10 +6,12 @@ package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lu
 { :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :add_ede_modified, :clear_ad_bit, :build_cname_response } = require "dns_ede"
 { :encode_dns_name } = require "lib.dns_name"
 dns_mod = require "ipparse.l7.dns"
+{ :s2ip } = require "ipparse.l3.ip"
 pack: sp = require "ipparse.lib.pack_compat"
 bit = require "bit"
 
 QTYPE_A = dns_mod.types.A
+QTYPE_AAAA = dns_mod.types.AAAA
 QTYPE_SVCB = dns_mod.types.SVCB
 QTYPE_HTTPS = dns_mod.types.HTTPS
 QCLASS_IN = dns_mod.classes.IN
@@ -209,6 +211,21 @@ describe "build_cname_response", ->
     resp = build_cname_response nil, make_query(dns_mod.types.AAAA), "restrict.youtube.com", nil
     parsed = dns_mod.parse resp, 1, false
     assert.equals CNAME, parsed.answers[1].rtype
+
+  it "peut enrichir avec des A/AAAA résolus pour la cible", ->
+    rrset = {
+      a: { s2ip "203.0.113.10" }
+      aaaa: { s2ip "2001:db8::10" }
+      ttl: 120
+    }
+    resp = build_cname_response nil, make_query!, "forcesafesearch.google.com", "SafeSearch", rrset
+    parsed = dns_mod.parse resp, 1, false
+    assert.equals 3, parsed.header.ancount
+    assert.equals CNAME, parsed.answers[1].rtype
+    assert.equals QTYPE_A, parsed.answers[2].rtype
+    assert.equals QTYPE_AAAA, parsed.answers[3].rtype
+    assert.equals 120, parsed.answers[2].ttl
+    assert.equals 120, parsed.answers[3].ttl
 
   it "renvoie nil si dns_raw absent ou cible vide", ->
     assert.is_nil build_cname_response nil, nil, "x.example", nil

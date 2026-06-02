@@ -358,6 +358,23 @@ describe "ipc", ->
 
       close_pipe p
 
+  -- ── 18b. response_rule_ids round-trip via pipe ─────────────────────
+  describe "write_msg + response_rule_ids", ->
+    it "response_rule_ids est préservée dans l'entrée pending", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                      "allow", nil, "r_allow", "120s", nil, { "r_safe", "r_strip" }
+      m_ipc.drain_pipe rfd, (-> 0), nil
+
+      entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
+      assert.is_not_nil entry
+      assert.same { "r_safe", "r_strip" }, entry.response_rule_ids
+
+      close_pipe p
+
   -- ── 19. decode_msg trop court → nil ───────────────────────────────────
   describe "decode_msg trop court", ->
     it "message trop court → nil", ->

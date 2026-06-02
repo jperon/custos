@@ -210,7 +210,10 @@ write_with_retry = function(pipe_wfd, msg)
   return false
 end
 local encode_msg
-encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason, benchmark_ms, rule_id, timeout, modifiers)
+encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids)
+  if response_rule_ids == nil then
+    response_rule_ids = nil
+  end
   if not (ip_raw and resolver_ip_raw) then
     return nil
   end
@@ -249,6 +252,27 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
   end
   bench = math.floor(bench)
   local mods_bits = encode_modifiers(modifiers)
+  local response_ids = { }
+  if type(response_rule_ids) == "table" then
+    for _, rid in ipairs(response_rule_ids) do
+      local _continue_0 = false
+      repeat
+        if #response_ids >= 8 then
+          break
+        end
+        if not (rid and rid ~= "") then
+          _continue_0 = true
+          break
+        end
+        response_ids[#response_ids + 1] = tostring(rid)
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
+      end
+    end
+  end
+  local response_ids_hex = to_hex(table.concat(response_ids, ","))
   local line = table.concat({
     IPC_VERSION,
     string.format("%02x", msg_type),
@@ -261,7 +285,8 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
     to_hex(rule_id),
     timeout,
     tostring(bench),
-    string.format("%x", mods_bits)
+    string.format("%x", mods_bits),
+    response_ids_hex
   }, "|") .. "\n"
   if #line > IPC_MAX_LINE then
     return nil
@@ -269,16 +294,22 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
   return line
 end
 local write_msg
-write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, reason, benchmark_ms, rule_id, timeout, modifiers)
+write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids)
+  if response_rule_ids == nil then
+    response_rule_ids = nil
+  end
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids)
   if not (msg) then
     return false
   end
   return write_with_retry(pipe_wfd, msg)
 end
 local write_refused_msg
-write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers)
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers)
+write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids)
+  if response_rule_ids == nil then
+    response_rule_ids = nil
+  end
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids)
   if not (msg) then
     return false
   end
@@ -370,6 +401,17 @@ decode_msg = function(raw)
   local mods_hex = parts[12] or "0"
   local mods_bits = tonumber(mods_hex, 16) or 0
   local modifiers = decode_modifiers(mods_bits)
+  local response_rule_ids_hex = parts[13] or ""
+  local response_rule_ids_csv, ids_err = from_hex(response_rule_ids_hex)
+  if ids_err then
+    return nil, "response_rule_ids_" .. tostring(ids_err)
+  end
+  local response_rule_ids = { }
+  if response_rule_ids_csv and response_rule_ids_csv ~= "" then
+    for rid in response_rule_ids_csv:gmatch("[^,]+") do
+      response_rule_ids[#response_rule_ids + 1] = rid
+    end
+  end
   return {
     txid = txid,
     ip_str = ip_str,
@@ -383,7 +425,8 @@ decode_msg = function(raw)
     benchmark_ms = benchmark_ms,
     rule_id = rule_id,
     timeout = timeout,
-    modifiers = modifiers
+    modifiers = modifiers,
+    response_rule_ids = response_rule_ids
   }, nil
 end
 local pending = { }
@@ -402,7 +445,8 @@ set_pending = function(msg, now_fn)
     reason = msg.reason,
     benchmark_ms = msg.benchmark_ms,
     rule_id = msg.rule_id,
-    timeout = msg.timeout
+    timeout = msg.timeout,
+    response_rule_ids = msg.response_rule_ids or { }
   }
 end
 local drain_lines

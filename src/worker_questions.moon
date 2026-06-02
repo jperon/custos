@@ -115,6 +115,12 @@ tsv_field = (v) ->
   s = if v ~= nil then tostring v else ""
   if #s == 0 then "-" else s
 
+-- Extrait le nom de liste depuis un message de condition to_domainlist.
+-- Exemple attendu: "Domain matched in list 'toulouse/malware'".
+list_from_condition_reason = (condition_reason) ->
+  return nil unless type(condition_reason) == "string"
+  condition_reason\match "^Domain matched in list '([^']+)'$"
+
 --- Envoie un événement de décision DNS vers worker_events (best-effort).
 -- Écrit une ligne TSV sur le pipe events_wfd si disponible.
 -- Format : ts<TAB>decision<TAB>qname<TAB>mac_src<TAB>src_ip<TAB>dst_ip<TAB>vlan
@@ -348,6 +354,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   block_timeout   = nil
   allow_timeout   = nil
   block_modifiers = nil
+  response_rule_ids = {}
   q_fields = {
     worker:   "dns"
     mac_src:  l2.mac_src
@@ -373,15 +380,18 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       ts:     os.time!
       user:   q_fields.user
     }
-    allowed, reason, rule_id, nft_timeout = nil, nil, nil, nil
+    allowed, reason, rule_id, nft_timeout, matched_list = nil, nil, nil, nil, nil
     decision = filter.decide_meta req
     if decision
       allowed     = decision.verdict
       reason      = decision.reason
       rule_id     = decision.rule_id
       nft_timeout = decision.timeout
+      matched_list = list_from_condition_reason decision.condition_reason
+      response_rule_ids = decision.response_rule_ids or {}
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule   = rule_id or ""
+    q_fields.list   = matched_list
     if allowed
       log_allow -> q_fields
       metrics.record_verdict rule_id, "allow" if rule_id
@@ -407,9 +417,9 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   q_fields.timeout = if verdict == NF_ACCEPT then allow_timeout else block_timeout
   ipc_ok = false
   if verdict == NF_ACCEPT
-    ipc_ok = write_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, benchmark_ms, allow_rule_id, allow_timeout
+    ipc_ok = write_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, benchmark_ms, allow_rule_id, allow_timeout, nil, response_rule_ids
   else
-    ipc_ok = write_refused_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout, block_modifiers
+    ipc_ok = write_refused_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout, block_modifiers, response_rule_ids
 
   unless ipc_ok
     log_warn -> {
