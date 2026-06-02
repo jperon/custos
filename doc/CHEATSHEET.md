@@ -95,6 +95,12 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
 - Update lists: `make update-lists`
 - Logs: `make logs`
 
+## Diagnostic tools
+
+- Domain list membership: `moon tools/judge.moon <bin-dir> [<bin-dir> ...] <domain>`
+  - Prints exact matches and parent suffix matches across compiled `.bin` lists.
+  - Returns exit code `1` when no list matches the domain.
+
 ## Domainlists / Customlists
 
 - Config source:
