@@ -7,7 +7,8 @@ FAMILY = nft_cfg.family or "bridge"
 FAMILY6 = nft_cfg.family6 or "bridge"
 TABLE = nft_cfg.table or "dns-filter-bridge"
 IP_TIMEOUT = nft_cfg.ip_timeout or "2m"
-ACK_TIMEOUT_MS = nft_cfg.ack_timeout_ms or 150
+ACK_TIMEOUT_MS  = nft_cfg.ack_timeout_ms or 150
+WAIT_POLL_MS    = 5   -- intervalle de poll dans wait_ack pour permettre le drain intercalé
 
 PIPE_BUF_SAFE = 512
 IPC_WRITE_RETRY_COUNT = 3
@@ -127,22 +128,28 @@ get_last_seq = ->
   last_enqueued_seq = nil
   s
 
-wait_ack = (pending_seq, corr) ->
+-- Attend l'ACK de worker_nft pour le batch courant.
+-- on_wait (optionnel) est appelé entre chaque poll court, typiquement pour
+-- drainer le pipe IPC question→response pendant l'attente, sans bloquer le
+-- pipe et sans toucher à l'ordre nft-avant-verdict.
+wait_ack = (pending_seq, corr, on_wait) ->
   return false unless ack_rfd
-  timeout_ms = ACK_TIMEOUT_MS
-  poll_fds[0].fd      = ack_rfd
-  poll_fds[0].events  = POLLIN
-  poll_fds[0].revents = 0
-  rv = libc.poll poll_fds, 1, timeout_ms
-  if rv > 0
-    libc.read ack_rfd, ack_buf, 1
-    return true
+  max_polls = math.ceil ACK_TIMEOUT_MS / WAIT_POLL_MS
+  poll_fds[0].fd     = ack_rfd
+  poll_fds[0].events = POLLIN
+  for _ = 1, max_polls
+    poll_fds[0].revents = 0
+    rv = libc.poll poll_fds, 1, WAIT_POLL_MS
+    if rv > 0
+      libc.read ack_rfd, ack_buf, 1
+      return true
+    on_wait! if on_wait
   log_warn -> {
     action: "nft_ack_timeout"
     worker_idx: worker_idx
     seq: pending_seq
     corr: corr or ""
-    timeout_ms: timeout_ms
+    timeout_ms: ACK_TIMEOUT_MS
   }
   false
 

@@ -4,6 +4,7 @@ pcall ffi.cdef, [[
   int pipe2(int pipefd[2], int flags);
   int close(int fd);
   ssize_t read(int fd, void *buf, size_t count);
+  ssize_t write(int fd, const void *buf, size_t count);
 ]]
 
 O_NONBLOCK = 2048
@@ -73,3 +74,45 @@ describe "nft_queue", ->
     assert.equals hex("corr-123"), fields[9]
 
     close_pipe p
+
+  describe "wait_ack", ->
+    it "retourne true immédiatement si l'ACK arrive avant le premier timeout", ->
+      q = fresh_nft_queue!
+      ack_pipe = make_pipe!
+      ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd ack_rfd, 0
+
+      -- Écrire l'ACK avant d'appeler wait_ack
+      ack_byte = ffi.new "uint8_t[1]"
+      ack_byte[0] = 0x01
+      ffi.C.write ack_wfd, ack_byte, 1
+
+      ok = q.wait_ack 1, "corr"
+      assert.is_true ok
+      close_pipe ack_pipe
+
+    it "appelle le callback on_wait entre les polls", ->
+      q = fresh_nft_queue!
+      ack_pipe = make_pipe!
+      ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd ack_rfd, 0
+
+      calls = 0
+      -- ACK envoyé après 2 appels du callback
+      on_wait = ->
+        calls += 1
+        if calls == 2
+          ack_byte = ffi.new "uint8_t[1]"
+          ack_byte[0] = 0x01
+          ffi.C.write ack_wfd, ack_byte, 1
+
+      ok = q.wait_ack 1, "corr", on_wait
+      assert.is_true ok
+      assert.is_true calls >= 2
+      close_pipe ack_pipe
+
+    it "retourne false sans ack_rfd configuré", ->
+      q = fresh_nft_queue!
+      -- ack_rfd non configuré : wait_ack doit retourner false immédiatement
+      ok = q.wait_ack 42, "test-corr"
+      assert.is_false ok

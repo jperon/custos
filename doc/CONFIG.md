@@ -200,7 +200,7 @@ Paramètres d'intégration nftables. Ces valeurs doivent correspondre au ruleset
 | `sip_session_ttl` | string | `"5m"` | Durée de vie des sessions SIP |
 | `add_backoff_ms` | array | `{20,50,200,400,800,2000}` | Délais (ms) entre chaque tentative — la longueur du tableau détermine le nombre de tentatives |
 | `add_failure_policy` | string | `"fail-closed"` | Comportement si tous les retry échouent : `"fail-closed"` bloque, `"fail-open"` laisse passer |
-| `ack_timeout_ms` | int | `150` | Timeout (ms) d'attente d'acquittement nft |
+| `ack_timeout_ms` | int | `150` | Timeout total (ms) d'attente d'acquittement nft ; pendant l'attente, le pipe IPC est drainé par tranches de 5 ms pour éviter la saturation sous burst |
 | `extra_rules` | array | `{}` | Fragments nft supplémentaires insérés en tête de chaîne `forward` au démarrage |
 
 **`extra_rules`** : chaque entrée est une expression nft sans le préfixe

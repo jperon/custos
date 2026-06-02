@@ -766,7 +766,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- Fail-open (avec log) si worker_nft ne répond pas dans NFT_ACK_TIMEOUT_MS.
   if not dnsonly and records_to_add > 0
     pending_seq = get_last_seq!
-    wait_ack pending_seq, ack_corr if pending_seq
+    wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
 
   -- ── Verdict ──────────────────────────────────────────────────
   -- Si payload inchangé : laisser passer le paquet original (pas d'altération DNS).

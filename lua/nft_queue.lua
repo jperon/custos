@@ -12,6 +12,7 @@ local FAMILY6 = nft_cfg.family6 or "bridge"
 local TABLE = nft_cfg.table or "dns-filter-bridge"
 local IP_TIMEOUT = nft_cfg.ip_timeout or "2m"
 local ACK_TIMEOUT_MS = nft_cfg.ack_timeout_ms or 150
+local WAIT_POLL_MS = 5
 local PIPE_BUF_SAFE = 512
 local IPC_WRITE_RETRY_COUNT = 3
 local EAGAIN = 11
@@ -228,18 +229,23 @@ get_last_seq = function()
   return s
 end
 local wait_ack
-wait_ack = function(pending_seq, corr)
+wait_ack = function(pending_seq, corr, on_wait)
   if not (ack_rfd) then
     return false
   end
-  local timeout_ms = ACK_TIMEOUT_MS
+  local max_polls = math.ceil(ACK_TIMEOUT_MS / WAIT_POLL_MS)
   poll_fds[0].fd = ack_rfd
   poll_fds[0].events = POLLIN
-  poll_fds[0].revents = 0
-  local rv = libc.poll(poll_fds, 1, timeout_ms)
-  if rv > 0 then
-    libc.read(ack_rfd, ack_buf, 1)
-    return true
+  for _ = 1, max_polls do
+    poll_fds[0].revents = 0
+    local rv = libc.poll(poll_fds, 1, WAIT_POLL_MS)
+    if rv > 0 then
+      libc.read(ack_rfd, ack_buf, 1)
+      return true
+    end
+    if on_wait then
+      on_wait()
+    end
   end
   log_warn(function()
     return {
@@ -247,7 +253,7 @@ wait_ack = function(pending_seq, corr)
       worker_idx = worker_idx,
       seq = pending_seq,
       corr = corr or "",
-      timeout_ms = timeout_ms
+      timeout_ms = ACK_TIMEOUT_MS
     }
   end)
   return false

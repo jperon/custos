@@ -2,6 +2,7 @@ local ffi = require("ffi")
 pcall(ffi.cdef, [[  int pipe2(int pipefd[2], int flags);
   int close(int fd);
   ssize_t read(int fd, void *buf, size_t count);
+  ssize_t write(int fd, const void *buf, size_t count);
 ]])
 local O_NONBLOCK = 2048
 local make_pipe
@@ -64,7 +65,7 @@ return describe("nft_queue", function()
     assert.is_not_nil(cmd)
     return assert.is_not_nil(cmd:find("timeout 240s", 1, true))
   end)
-  return it("add_ip4 propage rule_id + timeout dans la ligne IPC", function()
+  it("add_ip4 propage rule_id + timeout dans la ligne IPC", function()
     local q = fresh_nft_queue()
     local p = make_pipe()
     local rfd, wfd = p[1], p[2]
@@ -81,5 +82,44 @@ return describe("nft_queue", function()
     assert.equals("240s", fields[6])
     assert.equals(hex("corr-123"), fields[9])
     return close_pipe(p)
+  end)
+  return describe("wait_ack", function()
+    it("retourne true immédiatement si l'ACK arrive avant le premier timeout", function()
+      local q = fresh_nft_queue()
+      local ack_pipe = make_pipe()
+      local ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd(ack_rfd, 0)
+      local ack_byte = ffi.new("uint8_t[1]")
+      ack_byte[0] = 0x01
+      ffi.C.write(ack_wfd, ack_byte, 1)
+      local ok = q.wait_ack(1, "corr")
+      assert.is_true(ok)
+      return close_pipe(ack_pipe)
+    end)
+    it("appelle le callback on_wait entre les polls", function()
+      local q = fresh_nft_queue()
+      local ack_pipe = make_pipe()
+      local ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd(ack_rfd, 0)
+      local calls = 0
+      local on_wait
+      on_wait = function()
+        calls = calls + 1
+        if calls == 2 then
+          local ack_byte = ffi.new("uint8_t[1]")
+          ack_byte[0] = 0x01
+          return ffi.C.write(ack_wfd, ack_byte, 1)
+        end
+      end
+      local ok = q.wait_ack(1, "corr", on_wait)
+      assert.is_true(ok)
+      assert.is_true(calls >= 2)
+      return close_pipe(ack_pipe)
+    end)
+    return it("retourne false sans ack_rfd configuré", function()
+      local q = fresh_nft_queue()
+      local ok = q.wait_ack(42, "test-corr")
+      return assert.is_false(ok)
+    end)
   end)
 end)

@@ -959,7 +959,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   if not dnsonly and records_to_add > 0 then
     local pending_seq = get_last_seq()
     if pending_seq then
-      wait_ack(pending_seq, ack_corr)
+      wait_ack(pending_seq, ack_corr, (function()
+        return drain_pipe(pipe_rfd, now, drain_on_msg)
+      end))
     end
   end
   if not (payload_modified) then

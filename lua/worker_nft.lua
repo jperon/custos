@@ -17,7 +17,7 @@ do
 end
 local BUF_SIZE = 8192
 local MAX_BATCH = 64
-local FLUSH_MS = 50
+local FLUSH_MS = 10
 local EAGAIN = 11
 local EWOULDBLOCK = 11
 local LINE_VERSION = "v1"
