@@ -17,9 +17,10 @@ lists/
 *.swo
 *~
 
-# Editor files
+# Editor / agent tooling files
 .vscode/
 .idea/
+.codex
 
 # OS files
 .DS_Store
