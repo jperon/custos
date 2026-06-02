@@ -168,6 +168,11 @@ compile_rules = (cfg) ->
     out[#out + 1] = eval_fn
     out.rules_metadata[idx] = metadata
   out.decision_cfg = cfg.decision or {}
+  -- Index rule_id → on_response pour un lookup O(1) depuis worker_responses
+  -- (les rule_id sont uniques, garantis par compiler_api.unique_rule_id).
+  out.on_response_by_id = {}
+  for _, meta in ipairs out.rules_metadata
+    out.on_response_by_id[meta.rule_id] = meta.on_response or {}
   out
 
 decide = (rules, req, decision_cfg=nil) ->
@@ -193,6 +198,10 @@ decide_meta = (rules, req, decision_cfg=nil) ->
 -- @treturn table Liste (possiblement vide) de fonctions on_response.
 on_response_for = (rules, rule_id) ->
   return {} unless rules and rule_id
+  -- Chemin rapide O(1) : map construite par compile_rules.
+  if rules.on_response_by_id
+    return rules.on_response_by_id[rule_id] or {}
+  -- Fallback linéaire (rules assemblés à la main sans la map).
   for _, meta in ipairs (rules.rules_metadata or {})
     if meta.rule_id == rule_id
       return meta.on_response or {}

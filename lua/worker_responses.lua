@@ -47,10 +47,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_info, log_warn, log_debug, now, set_action_prefix
+local log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.now, _obj_0.set_action_prefix
+  log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_allow, _obj_0.log_block, _obj_0.now, _obj_0.set_action_prefix
 end
 local build_blocked_response, build_nxdomain_response, strip_https_rr, add_ede_modified, clear_ad_bit, patch_modified_dns
 do
@@ -442,7 +442,7 @@ parse_packet = function(raw)
     local payload = raw:sub(tcp.data_off)
     local is_fin_rst = bit.band(tcp.flags, 0x05) ~= 0
     local has_payload = payload ~= ""
-    local key = tostring(ip2s(ip.src)) .. "|" .. tostring(tcp.spt) .. "|" .. tostring(ip2s(ip.dst)) .. "|" .. tostring(tcp.dpt)
+    local key = tostring(ip.src) .. "|" .. tostring(tcp.spt) .. "|" .. tostring(ip.dst) .. "|" .. tostring(tcp.dpt)
     local buf, init_seq, first_seg = tcp_state.feed(key, payload, tcp.flags, tcp.seq_n)
     if not (buf) then
       return nil, (function()
@@ -525,6 +525,37 @@ bench_delta = function(finish, start)
   else
     return nil
   end
+end
+local build_benchmark_fields
+build_benchmark_fields = function(entry, info, deltas)
+  local fields = {
+    action = "dns_benchmark",
+    worker = "dns",
+    mac_src = info.client_mac,
+    vlan = info.vlan,
+    src_ip = info.client_ip,
+    dst_ip = info.resolver_ip,
+    dst_port = info.client_port,
+    txid = string.format("0x%04x", info.txid),
+    af = info.af,
+    user = info.user,
+    qname = info.qname,
+    qtype = info.qtype,
+    reason = entry.reason,
+    rule = entry.rule_id,
+    dnsonly = entry.dnsonly,
+    delta_ms = deltas.delta_ms,
+    q_to_response_ms = deltas.delta_ms,
+    response_entry_ms = deltas.response_entry_ms,
+    drain_ms = deltas.drain_ms,
+    payload_ms = deltas.payload_ms,
+    parse_ms = deltas.parse_ms,
+    match_ms = deltas.match_ms,
+    log_ms = deltas.log_ms,
+    retry_wait_ms = info.retry_wait_ms,
+    retry_attempts = info.retry_attempts
+  }
+  return fields, (entry.refused and "block" or "allow")
 end
 local update_mac_clients = nil
 local drain_ts = 0
@@ -727,27 +758,40 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     local bench_log_ms = current_benchmark_ms()
     local delta_ms = bench_log_ms - entry.benchmark_ms
     if delta_ms >= 0 then
-      log_info(function()
-        return {
-          action = "dns_benchmark",
-          txid = string.format("0x%04x", txid),
-          src_ip = src_ip,
-          dst_ip = dst_ip,
-          delta_ms = delta_ms,
-          q_to_response_ms = delta_ms,
-          response_entry_ms = bench_delta(bench_start_ms, entry.benchmark_ms),
-          drain_ms = bench_delta(bench_after_drain_ms, bench_start_ms),
-          payload_ms = bench_delta(bench_after_payload_ms, bench_after_drain_ms),
-          parse_ms = bench_delta(bench_after_parse_ms, bench_after_payload_ms),
-          match_ms = bench_delta(bench_after_match_ms, bench_after_parse_ms),
-          log_ms = bench_delta(bench_log_ms, bench_after_match_ms),
-          retry_wait_ms = retry_wait_ms,
-          retry_attempts = retry_attempts,
-          refused = entry.refused,
-          dnsonly = entry.dnsonly,
-          user = user
-        }
-      end)
+      local q1 = dns_msg.questions and dns_msg.questions[1]
+      local info = {
+        client_mac = client_mac,
+        vlan = l2.vlan,
+        client_ip = client_ip,
+        resolver_ip = resolver_ip,
+        client_port = client_port,
+        txid = txid,
+        af = ip.version == 6 and "ipv6" or "ipv4",
+        user = user,
+        qname = q1 and q1.name or "-",
+        qtype = q1 and (QTYPE[q1.qtype] or "TYPE" .. tostring(q1.qtype)) or "-",
+        retry_wait_ms = retry_wait_ms,
+        retry_attempts = retry_attempts
+      }
+      local deltas = {
+        delta_ms = delta_ms,
+        response_entry_ms = bench_delta(bench_start_ms, entry.benchmark_ms),
+        drain_ms = bench_delta(bench_after_drain_ms, bench_start_ms),
+        payload_ms = bench_delta(bench_after_payload_ms, bench_after_drain_ms),
+        parse_ms = bench_delta(bench_after_parse_ms, bench_after_payload_ms),
+        match_ms = bench_delta(bench_after_match_ms, bench_after_parse_ms),
+        log_ms = bench_delta(bench_log_ms, bench_after_match_ms)
+      }
+      local bench_fields, verdict = build_benchmark_fields(entry, info, deltas)
+      if verdict == "block" then
+        log_block(function()
+          return bench_fields
+        end)
+      else
+        log_allow(function()
+          return bench_fields
+        end)
+      end
     end
   end
   local refused = entry and entry.refused or false
@@ -994,5 +1038,6 @@ return {
   run = run,
   rr_timeout = rr_timeout,
   patch_modified_dns = patch_modified_dns,
-  bench_delta = bench_delta
+  bench_delta = bench_delta,
+  build_benchmark_fields = build_benchmark_fields
 }

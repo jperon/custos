@@ -20,6 +20,11 @@ NOERROR = dns_mod.rcodes.NOERROR
 
 _clients = {}
 _rr_cache = {}
+-- Cache négatif : résolveur upstream injoignable → expires_at. Évite de bloquer
+-- le hot-path (worker responses) jusqu'au timeout upstream à CHAQUE paquet vers
+-- un résolveur mort (cf. tempête ENOBUFS). Re-sondé après expiration.
+_dead_resolvers = {}
+DEAD_RESOLVER_TTL = 30   -- secondes (surchargé par cfg.doh.upstream_dead_ttl_s)
 
 pick_resolver_ip = (cfg, ctx) ->
   return ctx.resolver_ip if ctx and ctx.resolver_ip and ctx.resolver_ip != ""
@@ -69,17 +74,24 @@ resolve_target_rrs = (cfg, target, resolver_ip) ->
   if cached and cached.expires_at > now
     return { a: cached.a, aaaa: cached.aaaa, ttl: cached.ttl }
 
+  -- Cache négatif : si ce résolveur a récemment timeout, on n'essaie pas (sinon
+  -- on bloque le worker jusqu'au timeout upstream à chaque paquet).
+  dead_until = _dead_resolvers[resolver_ip]
+  return nil if dead_until and dead_until > now
+
   client = get_upstream_client cfg, resolver_ip
   return nil unless client
 
   records = { a: {}, aaaa: {} }
   ttl = 300
+  any_response = false
 
   for qtype, key in pairs { [QTYPE_A]: "a", [QTYPE_AAAA]: "aaaa" }
     txid = math.random 0, 0xFFFF
     query = build_query target, qtype, txid
     ok, resp_raw = pcall (-> (require "doh.upstream").query client, query)
     if ok and resp_raw
+      any_response = true
       resp = dns_mod.parse resp_raw, 1, false
       rcode = resp and resp.header and bit.band(resp.header.ra_z_rcode or 0, 0x0f)
       if resp and resp.header and rcode == NOERROR
@@ -89,6 +101,14 @@ resolve_target_rrs = (cfg, target, resolver_ip) ->
               records[key][#records[key] + 1] = rr.rdata
               rr_ttl = tonumber(rr.ttl) or 300
               ttl = rr_ttl if rr_ttl > 0 and rr_ttl < ttl
+
+  -- Aucune réponse des deux requêtes → résolveur injoignable : on le marque mort
+  -- pour ne pas re-bloquer le hot-path. Une réponse (même sans A/AAAA) = vivant.
+  unless any_response
+    dead_ttl = (cfg and cfg.doh and cfg.doh.upstream_dead_ttl_s) or DEAD_RESOLVER_TTL
+    _dead_resolvers[resolver_ip] = now + dead_ttl
+    return nil
+  _dead_resolvers[resolver_ip] = nil
 
   records.a = dedupe_raw records.a
   records.aaaa = dedupe_raw records.aaaa

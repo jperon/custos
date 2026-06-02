@@ -254,7 +254,7 @@ parse_packet = function(raw)
     local payload = raw:sub(tcp.data_off)
     local is_fin_rst = bit.band(tcp.flags, 0x05) ~= 0
     local has_payload = payload ~= ""
-    local key = tostring(ip2s(ip.src)) .. "|" .. tostring(tcp.spt) .. "|" .. tostring(ip2s(ip.dst)) .. "|" .. tostring(tcp.dpt)
+    local key = tostring(ip.src) .. "|" .. tostring(tcp.spt) .. "|" .. tostring(ip.dst) .. "|" .. tostring(tcp.dpt)
     local buf, init_seq, first_seg = tcp_state.feed(key, payload, tcp.flags, tcp.seq_n)
     if not (buf) then
       return nil, (function()
@@ -438,7 +438,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     q_fields.list = matched_list
     if allowed then
       log_allow(function()
-        return q_fields
+        if not (runtime_cfg.benchmark) then
+          return q_fields
+        end
       end)
       if rule_id then
         metrics.record_verdict(rule_id, "allow")
@@ -448,7 +450,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       allow_timeout = nft_timeout
     else
       log_block(function()
-        return q_fields
+        if not (runtime_cfg.benchmark) then
+          return q_fields
+        end
       end)
       if rule_id then
         metrics.record_verdict(rule_id, "refuse")

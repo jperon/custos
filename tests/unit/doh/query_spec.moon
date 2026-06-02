@@ -45,11 +45,17 @@ record_add = (key, dest, rule_id, timeout, corr) ->
   nft_calls[#nft_calls + 1] = { :key, :dest, :rule_id }
   nft_result
 
-package.loaded["config"] = {
+-- Stub config tenu dans une variable locale : on mute CETTE table (celle que
+-- doh.query capture au require), et non `require "config"` à l'exécution — sous
+-- run_vm_tests, restore_loaded repointe package.loaded["config"] sur la baseline
+-- après le chargement du spec, donc un require au run-time renverrait une autre
+-- table que celle utilisée par le module testé.
+config_stub = {
   dns: { ttl_grace: { grace: 0, min: 60, max: 900 } }
   nft: { ip_timeout: "5m", add_failure_policy: "fail-closed" }
   auth: { sessions_file: "/tmp/none" }
 }
+package.loaded["config"] = config_stub
 -- Stubs de log « évaluants » : exécutent le corps paresseux (-> {...}) pour
 -- couvrir la construction des messages (comme le vrai log au bon niveau).
 eval_log = (f) -> (type(f) == "function") and f!
@@ -105,10 +111,10 @@ describe "doh.query.process_query", ->
 
   it "fail-open : insertion échouée mais policy fail-open → réponse livrée", ->
     nft_result = false
-    (require "config").nft.add_failure_policy = "fail-open"
+    config_stub.nft.add_failure_policy = "fail-open"
     resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
     assert.equals 0, rcode_of resp        -- NOERROR : réponse normale livrée
-    (require "config").nft.add_failure_policy = "fail-closed"
+    config_stub.nft.add_failure_policy = "fail-closed"
 
   it "wildcard : injecte aussi dans la règle wildcard d'auth", ->
     query_mod.set_wildcard_rules {

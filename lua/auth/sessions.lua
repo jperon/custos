@@ -2,6 +2,28 @@ local os_time = os.time
 local os_rename = os.rename
 local log_info
 log_info = require("log").log_info
+local ffi, libc
+do
+  local _obj_0 = require("ffi_defs")
+  ffi, libc = _obj_0.ffi, _obj_0.libc
+end
+local AT_FDCWD = -100
+local AT_STATX_SYNC_AS_STAT = 0x0000
+local STATX_BASIC_STATS = 0x000007ff
+local _statx_buf = ffi.new("struct statx[1]")
+local file_sig
+file_sig = function(path)
+  if not (path) then
+    return nil
+  end
+  local ok, rv = pcall(libc.statx, AT_FDCWD, path, AT_STATX_SYNC_AS_STAT, STATX_BASIC_STATS, _statx_buf)
+  if not (ok and rv == 0) then
+    return nil
+  end
+  local s = _statx_buf[0]
+  local m = s.stx_mtime
+  return string.format("%d.%09d:%d:%d", tonumber(m.tv_sec), tonumber(m.tv_nsec), tonumber(s.stx_size), tonumber(s.stx_ino))
+end
 local serialize
 serialize = function(sessions)
   local parts = {
@@ -87,6 +109,7 @@ purge_expired = function(sessions)
 end
 local _cache = nil
 local _cache_time = 0
+local _cache_sig = nil
 local CACHE_TTL = 5
 local read_cached
 read_cached = function(path)
@@ -94,6 +117,7 @@ read_cached = function(path)
   if not _cache or (now - _cache_time) >= CACHE_TTL then
     _cache = load_sessions(path)
     _cache_time = now
+    _cache_sig = file_sig(path)
   end
   return _cache
 end
@@ -101,12 +125,22 @@ local reload_cached
 reload_cached = function(path)
   _cache = load_sessions(path)
   _cache_time = os_time()
+  _cache_sig = file_sig(path)
   return _cache
 end
 local reset_cache
 reset_cache = function()
   _cache = nil
   _cache_time = 0
+  _cache_sig = nil
+end
+local reload_needed
+reload_needed = function(path)
+  local cur = file_sig(path)
+  if not (cur and _cache_sig) then
+    return true
+  end
+  return cur ~= _cache_sig
 end
 local valid_mac
 valid_mac = function(mac)
@@ -224,7 +258,7 @@ session_for_mac = function(mac, ip, path, sessions_arg)
   local lookup_mac = mac
   lookup_mac = (lookup_mac and lookup_mac ~= "unknown") and lookup_mac:lower() or "unknown"
   local s = lookup_session(sessions_table, lookup_mac, ip)
-  if not s and not sessions_arg and path then
+  if not s and not sessions_arg and path and reload_needed(path) then
     sessions_table = reload_cached(path)
     if sessions_table then
       s = lookup_session(sessions_table, lookup_mac, ip)
@@ -235,7 +269,7 @@ session_for_mac = function(mac, ip, path, sessions_arg)
   end
   local now = os_time()
   if s.expires and now > s.expires then
-    if not sessions_arg and path then
+    if not sessions_arg and path and reload_needed(path) then
       sessions_table = reload_cached(path)
       if sessions_table then
         s = lookup_session(sessions_table, lookup_mac, ip)

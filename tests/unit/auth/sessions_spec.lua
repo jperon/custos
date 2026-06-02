@@ -315,6 +315,42 @@ return describe("auth/sessions", function()
       return assert.equals("j@prn.ovh", s.user)
     end)
   end)
+  describe("session_for_mac reload-on-miss (statx)", function()
+    local MAC1 = "aa:bb:cc:dd:ee:ff"
+    local MAC2 = "99:88:77:66:55:44"
+    before_each(function()
+      return reset_cache()
+    end)
+    after_each(function()
+      return os.remove(SF_FILE)
+    end)
+    it("session fraîchement écrite résolue sur miss (cache chaud, fichier modifié)", function()
+      write_sessions({
+        [MAC1] = {
+          user = "alice",
+          expires = FUTURE
+        }
+      }, SF_FILE)
+      reset_cache()
+      assert.equals("alice", (session_for_mac(MAC1, nil, SF_FILE)).user)
+      local t = load_sessions(SF_FILE)
+      add_session(t, MAC2, "10.0.0.50", "bob", FUTURE)
+      write_sessions(t, SF_FILE)
+      local s = session_for_mac(MAC2, "10.0.0.50", SF_FILE)
+      assert.is_not_nil(s)
+      return assert.equals("bob", s.user)
+    end)
+    return it("miss sur fichier inchangé → nil", function()
+      write_and_reset({
+        [MAC1] = {
+          user = "alice",
+          expires = FUTURE
+        }
+      }, SF_FILE)
+      assert.equals("alice", (session_for_mac(MAC1, nil, SF_FILE)).user)
+      return assert.is_nil(session_for_mac(MAC2, "10.0.0.77", SF_FILE))
+    end)
+  end)
   describe("user_for_mac", function()
     local MAC = "aa:bb:cc:dd:ee:ff"
     before_each(function()

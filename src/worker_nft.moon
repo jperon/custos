@@ -5,26 +5,16 @@
 
 BUF_SIZE  = 8192
 MAX_BATCH = 64
-FLUSH_MS  = 10
 EAGAIN    = 11
 EWOULDBLOCK = 11
+POLLIN    = 1
 
 LINE_VERSION = "v1"
 
-sleep_req = ffi.new "timespec_t[1]"
-clock_ts  = ffi.new "timespec_t[1]"
 read_buf  = ffi.new "char[?]", BUF_SIZE
 ack_byte  = ffi.new "uint8_t[1]"
 ack_byte[0] = 0x01
-
-sleep_ms = (ms) ->
-  sleep_req[0].tv_sec = math.floor ms / 1000
-  sleep_req[0].tv_nsec = (ms % 1000) * 1000000
-  libc.nanosleep sleep_req, nil
-
-monotonic_ms = ->
-  libc.clock_gettime 1, clock_ts
-  tonumber(clock_ts[0].tv_sec) * 1000 + math.floor tonumber(clock_ts[0].tv_nsec) / 1000000
+poll_fd   = ffi.new "struct pollfd[1]"
 
 split_fields = (line) ->
   out = {}
@@ -101,12 +91,17 @@ send_ack = (ack_wfds, widx) ->
   return unless wfd
   libc.write wfd, ack_byte, 1
 
-flush_batch = (pending, ack_queue, ack_wfds) ->
-  count = 0
-  for _, _ in pairs pending
-    count += 1
-  return if count == 0 and #ack_queue == 0
+-- Ajoute un item à `pending` avec déduplication par (kind,key,ip,timeout).
+-- Retourne true si l'item a été ajouté (nouvelle clé), false si c'est un doublon.
+-- Permet à l'appelant de tenir un compteur incrémental sans re-parcourir
+-- `pending` (pairs) à chaque tour de boucle.
+try_add_pending = (pending, item) ->
+  entry_key = "#{item.kind}|#{item.key}|#{item.ip}|#{item.timeout}"
+  return false if pending[entry_key]
+  pending[entry_key] = item
+  true
 
+flush_batch = (pending, ack_queue, ack_wfds) ->
   lines = {}
   rule11_count = 0
   rule11_items = {}
@@ -150,52 +145,74 @@ run = (rfd, ack_wfds) ->
   set_action_prefix "nft_"
   ack_wfds = ack_wfds or {}
   log_info -> { action: "worker_start", rfd: rfd, ack_workers: #ack_wfds }
-  pending    = {}
-  ack_queue  = {}
-  partial    = ""
-  last_flush = monotonic_ms!
+  pending       = {}
+  pending_count = 0
+  ack_queue     = {}
+  partial       = ""
+
+  poll_fd[0].fd     = rfd
+  poll_fd[0].events = POLLIN
 
   while true
-    n = libc.read rfd, read_buf, BUF_SIZE
-    if n and n > 0
-      data = partial .. ffi.string read_buf, n
-      partial = ""
+    -- Bloque jusqu'à l'arrivée de données, SAUF s'il reste déjà une ligne
+    -- complète bufferisée dans `partial` (cas d'un batch tronqué à MAX_BATCH au
+    -- tour précédent) : on la traite immédiatement sans attendre le pipe. Un
+    -- `partial` ne contenant qu'un fragment incomplet (sans `\n`) ne suffit pas :
+    -- on bloque alors sur poll en attendant la fin de la ligne.
+    unless partial\find "\n", 1, true
+      poll_fd[0].revents = 0
+      libc.poll poll_fd, 1, -1
+
+    -- Draine : on consomme d'abord les lignes complètes déjà bufferisées, puis on
+    -- lit le pipe (non bloquant) jusqu'à EAGAIN ou MAX_BATCH (borne la taille de
+    -- la transaction nft).
+    batch_full = false
+    while not batch_full
+      -- 1. Consommer les lignes complètes présentes dans `partial`.
       while true
-        nl = data\find "\n", 1, true
+        nl = partial\find "\n", 1, true
         break unless nl
-        line = data\sub 1, nl - 1
-        data = data\sub nl + 1
-        if #line == 0
-          continue
+        line = partial\sub 1, nl - 1
+        partial = partial\sub nl + 1
+        continue if #line == 0
         item, parse_err = parse_line line
         if item
           ack_queue[#ack_queue + 1] = { widx: item.widx, seq: item.seq, corr: item.corr, rule_id: item.rule_id }
-          entry_key = "#{item.kind}|#{item.key}|#{item.ip}|#{item.timeout}"
-          pending[entry_key] = item unless pending[entry_key]
+          pending_count += 1 if try_add_pending pending, item
         else
           log_warn -> { action: "nft_invalid_message", reason: parse_err or "parse_failed", raw: line\sub(1, 220) }
-      partial = data
-      if #partial > 4096
-        log_warn -> { action: "nft_partial_oversize", size: #partial }
-        partial = ""
-    else
-      errno_p = libc.__errno_location!
-      errno = if errno_p then errno_p[0] else 0
-      if n == 0
+        if pending_count >= MAX_BATCH
+          batch_full = true
+          break
+      break if batch_full
+
+      -- 2. Plus de ligne complète bufferisée : lire davantage (non bloquant).
+      n = libc.read rfd, read_buf, BUF_SIZE
+      if n and n > 0
+        partial = partial .. ffi.string read_buf, n
+        -- Garde-fou : un fragment géant sans `\n` ne doit pas croître sans fin.
+        if #partial > 4096 and not partial\find "\n", 1, true
+          log_warn -> { action: "nft_partial_oversize", size: #partial }
+          partial = ""
+      elseif n == 0
+        -- EOF (tous les producteurs ont fermé) : on flush ce qui reste avant
+        -- de sortir, pour un arrêt propre (best-effort).
+        flush_batch pending, ack_queue, ack_wfds if pending_count > 0 or #ack_queue > 0
         log_warn -> { action: "pipe_closed", rfd: rfd }
         return
-      if errno != EAGAIN and errno != EWOULDBLOCK
+      else
+        errno_p = libc.__errno_location!
+        errno = if errno_p then errno_p[0] else 0
+        break if errno == EAGAIN or errno == EWOULDBLOCK   -- pipe drainé → flush
         log_warn -> { action: "read_failed", rfd: rfd, errno: errno }
-        sleep_ms 100
+        break
 
-    now_clock = monotonic_ms!
-    pending_count = 0
-    for _, _ in pairs pending
-      pending_count += 1
-    if pending_count >= MAX_BATCH or (#ack_queue >= MAX_BATCH) or ((pending_count > 0 or #ack_queue > 0) and now_clock - last_flush >= FLUSH_MS)
+    -- Flush dès que le pipe est drainé (ou le batch plein) : la latence est
+    -- minimale (plus d'attente FLUSH_MS), et la coalescence reste naturelle
+    -- sous charge — pendant la durée d'un flush, le pipe accumule les insertions
+    -- suivantes, formant le batch d'après.
+    if pending_count > 0 or #ack_queue > 0
       flush_batch pending, ack_queue, ack_wfds
-      last_flush = monotonic_ms!
-    else
-      sleep_ms 10
+      pending_count = 0
 
-{ :run }
+{ :run, :parse_line, :flush_batch, :try_add_pending, :split_fields, :from_hex }

@@ -236,6 +236,39 @@ describe "auth/sessions", ->
       assert.equals "j@prn.ovh", s.user
 
 
+  -- ── reload-on-miss : fraîcheur garantie sans faux négatif ────────────────────
+  -- Le cache positif (TTL 5 s) peut être obsolète juste après une auth. Un miss
+  -- déclenche un reload SI le fichier a changé (statx). On vérifie qu'une session
+  -- fraîchement écrite (cache encore chaud) est bien résolue, et qu'un miss sur un
+  -- fichier inchangé retourne nil sans incident.
+  describe "session_for_mac reload-on-miss (statx)", ->
+
+    MAC1 = "aa:bb:cc:dd:ee:ff"
+    MAC2 = "99:88:77:66:55:44"
+
+    before_each -> reset_cache!
+    after_each  -> os.remove SF_FILE
+
+    it "session fraîchement écrite résolue sur miss (cache chaud, fichier modifié)", ->
+      -- Amorce le cache positif sans le réinitialiser ensuite (reste chaud).
+      write_sessions { [MAC1]: { user: "alice", expires: FUTURE } }, SF_FILE
+      reset_cache!
+      assert.equals "alice", (session_for_mac MAC1, nil, SF_FILE).user
+      -- Nouvelle auth : on ajoute MAC2 et on réécrit le fichier (cache NON réinit).
+      t = load_sessions SF_FILE
+      add_session t, MAC2, "10.0.0.50", "bob", FUTURE
+      write_sessions t, SF_FILE
+      -- Miss sur MAC2 : le fichier a changé → reload → doit résoudre (pas de faux négatif).
+      s = session_for_mac MAC2, "10.0.0.50", SF_FILE
+      assert.is_not_nil s
+      assert.equals "bob", s.user
+
+    it "miss sur fichier inchangé → nil", ->
+      write_and_reset { [MAC1]: { user: "alice", expires: FUTURE } }, SF_FILE
+      assert.equals "alice", (session_for_mac MAC1, nil, SF_FILE).user
+      assert.is_nil session_for_mac MAC2, "10.0.0.77", SF_FILE
+
+
   -- ── user_for_mac ────────────────────────────────────────────────────────────
   describe "user_for_mac", ->
 

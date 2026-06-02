@@ -1,6 +1,12 @@
 local M = { }
 local current_describe = nil
 local root_blocks = { }
+local file_hooks = {
+  before_each = { },
+  after_each = { },
+  setup = { },
+  teardown = { }
+}
 local total = 0
 local passed = 0
 local failed = 0
@@ -70,6 +76,9 @@ A.truthy = function(v, msg)
     return fail("expected truthy, got " .. tostring(fmt(v)) .. " " .. tostring(msg or ''), 2)
   end
 end
+A.equal = A.equals
+A.not_equal = A.not_equals
+A.is_truthy = A.truthy
 A.is_true = function(v)
   if v ~= true then
     return fail("expected true, got " .. tostring(fmt(v)), 2)
@@ -176,12 +185,30 @@ full_name = function(block)
   end
   return table.concat(rev, " ")
 end
+local inject_file_hooks
+inject_file_hooks = function(b)
+  local _list_0 = {
+    "setup",
+    "teardown",
+    "before_each",
+    "after_each"
+  }
+  for _index_0 = 1, #_list_0 do
+    local key = _list_0[_index_0]
+    local _list_1 = file_hooks[key]
+    for _index_1 = 1, #_list_1 do
+      local h = _list_1[_index_1]
+      b[key][#b[key] + 1] = h
+    end
+  end
+end
 M.describe = function(name, fn)
   local parent = current_describe
   local b = make_block(name, parent)
   if parent then
     parent.children[#parent.children + 1] = b
   else
+    inject_file_hooks(b)
     root_blocks[#root_blocks + 1] = b
   end
   current_describe = b
@@ -194,6 +221,7 @@ end
 M.it = function(name, fn)
   if not (current_describe) then
     local b = make_block(nil, nil)
+    inject_file_hooks(b)
     root_blocks[#root_blocks + 1] = b
     b.tests[#b.tests + 1] = {
       name = name,
@@ -220,17 +248,26 @@ M.pending = function(name, _fn)
   }
 end
 M._pending_tag = PENDING_TAG
+local hook_target
+hook_target = function(key)
+  return (current_describe and current_describe[key]) or file_hooks[key]
+end
+local add_hook
+add_hook = function(key, fn)
+  local t = hook_target(key)
+  t[#t + 1] = fn
+end
 M.before_each = function(fn)
-  current_describe.before_each[#current_describe.before_each + 1] = fn
+  return add_hook("before_each", fn)
 end
 M.after_each = function(fn)
-  current_describe.after_each[#current_describe.after_each + 1] = fn
+  return add_hook("after_each", fn)
 end
 M.setup = function(fn)
-  current_describe.setup[#current_describe.setup + 1] = fn
+  return add_hook("setup", fn)
 end
 M.teardown = function(fn)
-  current_describe.teardown[#current_describe.teardown + 1] = fn
+  return add_hook("teardown", fn)
 end
 local collect_hooks
 collect_hooks = function(block, key)
@@ -334,9 +371,24 @@ M.run = function()
   end
   return 0
 end
+M.start_file = function()
+  current_describe = nil
+  file_hooks = {
+    before_each = { },
+    after_each = { },
+    setup = { },
+    teardown = { }
+  }
+end
 M.reset = function()
   current_describe = nil
   root_blocks = { }
+  file_hooks = {
+    before_each = { },
+    after_each = { },
+    setup = { },
+    teardown = { }
+  }
   total = 0
   passed = 0
   failed = 0

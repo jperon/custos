@@ -181,6 +181,10 @@ compile_rules = function(cfg)
     out.rules_metadata[idx] = metadata
   end
   out.decision_cfg = cfg.decision or { }
+  out.on_response_by_id = { }
+  for _, meta in ipairs(out.rules_metadata) do
+    out.on_response_by_id[meta.rule_id] = meta.on_response or { }
+  end
   return out
 end
 local decide
@@ -213,6 +217,9 @@ local on_response_for
 on_response_for = function(rules, rule_id)
   if not (rules and rule_id) then
     return { }
+  end
+  if rules.on_response_by_id then
+    return rules.on_response_by_id[rule_id] or { }
   end
   for _, meta in ipairs((rules.rules_metadata or { })) do
     if meta.rule_id == rule_id then

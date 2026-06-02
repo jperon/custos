@@ -105,3 +105,39 @@ describe "filter.actions.cname", ->
     package.loaded["filter.actions.cname"] = old_cname_mod
     package.loaded["doh.upstream"] = old_upstream
     assert.is_true ok, err
+
+  it "cache négatif : un résolveur qui timeout n'est plus re-sollicité", ->
+    old_upstream  = package.loaded["doh.upstream"]
+    old_cname_mod = package.loaded["filter.actions.cname"]
+
+    query_count = 0
+    package.loaded["doh.upstream"] = {
+      new_client: (ip, port, timeout_ms) -> { fd: 1, :ip, :port, :timeout_ms }
+      query: (client, raw) ->
+        query_count += 1
+        nil, "recv() timed out"   -- simule un résolveur injoignable
+      close: (client) -> nil
+    }
+
+    package.loaded["filter.actions.cname"] = nil
+    ok, err = pcall ->
+      local_factory = (require "filter.actions.cname").factory
+      action = (local_factory {}) { cname: "forcesafesearch.google.com" }
+      mkctx = -> { dns_raw: make_query!, modified: false, skip_nft: false, reason: "r", resolver_ip: "9.9.9.9" }
+
+      -- 1er passage : tente A + AAAA (2 requêtes), toutes deux timeout.
+      ctx1 = mkctx!
+      action.on_response ctx1
+      assert.equals 2, query_count
+      -- La réécriture CNAME a quand même lieu (fail-open), sans A/AAAA.
+      assert.is_true ctx1.modified
+      assert.is_true ctx1.skip_nft
+
+      -- 2e passage vers le MÊME résolveur : court-circuité par le cache négatif,
+      -- aucune nouvelle requête upstream (le compteur ne bouge pas).
+      action.on_response mkctx!
+      assert.equals 2, query_count
+
+    package.loaded["filter.actions.cname"] = old_cname_mod
+    package.loaded["doh.upstream"] = old_upstream
+    assert.is_true ok, err

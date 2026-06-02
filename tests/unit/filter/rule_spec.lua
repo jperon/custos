@@ -45,13 +45,6 @@ package.loaded[_update_4] = package.loaded[_update_4] or {
 }
 return describe("filter.rule", function()
   local rule_mod = require("filter.rule")
-  package.loaded["filter.conditions.__listmatch_test"] = function(cfg)
-    return function(args)
-      return function(req)
-        return true, "Domain matched in list 'toulouse/malware'"
-      end
-    end
-  end
   local cfg = {
     nft = {
       ip_timeout = "2m"
@@ -535,6 +528,13 @@ return describe("filter.rule", function()
       return assert.is_false(meta.verdict)
     end)
     it("expose condition_reason sans écraser reason d'action", function()
+      package.loaded["filter.conditions.__listmatch_test"] = function(cfg_inner)
+        return function(args)
+          return function(req)
+            return true, "Domain matched in list 'toulouse/malware'"
+          end
+        end
+      end
       local rules = rule_mod.compile_rules({
         nft = {
           ip_timeout = "2m"
@@ -633,9 +633,47 @@ return describe("filter.rule", function()
       })
       return assert.same({ }, rule_mod.on_response_for(rules, "r_inexistant"))
     end)
-    return it("retourne {} si rules ou rule_id nil", function()
+    it("retourne {} si rules ou rule_id nil", function()
       assert.same({ }, rule_mod.on_response_for(nil, "r_x"))
       return assert.same({ }, rule_mod.on_response_for({ }, nil))
+    end)
+    it("utilise la map O(1) on_response_by_id quand présente", function()
+      local rules = rule_mod.compile_rules({
+        macs = { },
+        rules = {
+          {
+            rule_id = "strip",
+            actions = {
+              "dns_strip",
+              "allow"
+            },
+            dns_strip = {
+              rr_type = "AAAA"
+            }
+          }
+        }
+      })
+      assert.is_table(rules.on_response_by_id)
+      return assert.equals(rules.on_response_by_id["r_strip"], rule_mod.on_response_for(rules, "r_strip"))
+    end)
+    return it("fallback linéaire si rules assemblés sans on_response_by_id", function()
+      local cb
+      cb = function()
+        return nil
+      end
+      local rules = {
+        rules_metadata = {
+          {
+            rule_id = "r_x",
+            on_response = {
+              cb
+            }
+          }
+        }
+      }
+      local cbs = rule_mod.on_response_for(rules, "r_x")
+      assert.equals(1, #cbs)
+      return assert.same({ }, rule_mod.on_response_for(rules, "r_absent"))
     end)
   end)
   describe("apply_on_response", function()

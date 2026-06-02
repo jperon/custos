@@ -60,6 +60,8 @@ if os.getenv("DEBUG_BASELINE") then
 end
 local file_errors = 0
 for _, spec in ipairs(specs) do
+  -- Isole les hooks top-level (setup/before_each hors describe) au fichier.
+  if mini.start_file then mini.start_file() end
   local ok, err = pcall(dofile, spec)
   if not ok then
     file_errors = file_errors + 1

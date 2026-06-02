@@ -74,14 +74,25 @@ Contrôle le comportement global du service.
 | `gc_pause` | number | `110` | Réglage GC LuaJIT (`collectgarbage "setpause"`). Le GC se déclenche dès que le tas dépasse de `gc_pause`-100 % la taille post-collecte. Défaut LuaJIT : 200 (le tas peut doubler). 110 ⇒ collecte dès +10 %, plus économe en RAM. |
 | `gc_stepmul` | number | `400` | Réglage GC LuaJIT (`collectgarbage "setstepmul"`). Multiplicateur de la vitesse du GC incrémental ; une valeur plus haute compense le `gc_pause` bas. |
 
-Quand `benchmark` est activé, `response_dns_benchmark` journalise une seule
-ligne par réponse DNS corrélée. `delta_ms` et `q_to_response_ms` mesurent la
-latence totale entre l'acceptation de la question par le worker DNS et le
-traitement de la réponse correspondante par le worker responses : cela inclut
-la latence du résolveur amont, le réseau, les retransmissions et les files
-NFQUEUE. Les champs `drain_ms`, `payload_ms`, `parse_ms`, `match_ms`,
-`log_ms`, `retry_attempts` et `retry_wait_ms` détaillent uniquement les jalons
-locaux côté worker responses.
+Quand `benchmark` est activé, le verdict `ALLOW`/`BLOCK` est journalisé **dans la
+même ligne** que les temps de mesure, émise par le worker responses au retour de
+la réponse DNS (avec `action=response_dns_benchmark`). Le worker DNS (questions)
+**supprime** alors sa propre ligne `ALLOW`/`BLOCK` pour éviter la duplication ;
+les métriques (`metrics.record_verdict`) restent inchangées. La ligne porte les
+champs de décision habituels (`qname`, `qtype`, `mac_src`, `vlan`, `src_ip`,
+`dst_ip`, `rule`, `reason`, `user`, `af`) plus les temps. Le champ
+`action=response_dns_benchmark` exempte ces lignes du rate-limiting `ALLOW`/`BLOCK`
+(fenêtre 30 s) afin de conserver tous les échantillons.
+
+`delta_ms` et `q_to_response_ms` mesurent la latence totale entre l'acceptation
+de la question par le worker DNS et le traitement de la réponse correspondante
+par le worker responses : cela inclut la latence du résolveur amont, le réseau,
+les retransmissions et les files NFQUEUE. Les champs `drain_ms`, `payload_ms`,
+`parse_ms`, `match_ms`, `log_ms`, `retry_attempts` et `retry_wait_ms` détaillent
+uniquement les jalons locaux côté worker responses.
+
+Quand `benchmark` est désactivé (défaut), le verdict `ALLOW`/`BLOCK` est journalisé
+côté worker DNS comme auparavant, sans temps.
 
 ```moonscript
 runtime: {
@@ -354,6 +365,7 @@ Proxy DNS-over-HTTPS vers un résolveur amont.
 | `upstream_ipv6` | string | `"2606:4700:4700::1113"` | IP amont IPv6 |
 | `upstream_port` | int | `53` | Port du résolveur amont |
 | `upstream_timeout_ms` | int | `2000` | Timeout (ms) vers le résolveur amont |
+| `upstream_dead_ttl_s` | int | `30` | TTL (s) du cache négatif d'un résolveur amont injoignable (action `cname`). Un résolveur qui timeout n'est pas re-sollicité pendant ce délai, afin de ne pas bloquer le worker responses (jusqu'à `upstream_timeout_ms`) à chaque paquet. Re-sondé après expiration. |
 | `cert_path` | string | `nil` | Chemin certificat TLS (optionnel) |
 | `key_path` | string | `nil` | Chemin clé privée TLS (optionnel) |
 | `prefer_ipv6` | bool | `true` | Préférer IPv6 pour les requêtes amont |

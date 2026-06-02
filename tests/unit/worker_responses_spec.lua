@@ -77,7 +77,7 @@ return describe("worker_responses helpers", function()
     assert.is_true(modified_flag)
     return assert.is_not_nil(patched_modified:find("Custos vigilat%. policy", 1))
   end)
-  return it("patch_modified_dns efface le bit AD quand HTTPS/SVCB sont stripés", function()
+  it("patch_modified_dns efface le bit AD quand HTTPS/SVCB sont stripés", function()
     local m = fresh_worker_responses()
     local bit = require("bit")
     local question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
@@ -92,5 +92,63 @@ return describe("worker_responses helpers", function()
     local parsed = dns_mod.parse(patched, 1, false)
     assert.equals(1, #parsed.answers)
     return assert.equals(QTYPE_A, parsed.answers[1].rtype)
+  end)
+  return describe("build_benchmark_fields", function()
+    local info = {
+      client_mac = "aa:bb:cc:dd:ee:ff",
+      vlan = 8,
+      client_ip = "10.35.8.2",
+      resolver_ip = "1.1.1.1",
+      client_port = 5353,
+      txid = 0x1f4d,
+      af = "ipv4",
+      user = "alice@lan",
+      qname = "example.com",
+      qtype = "A",
+      retry_wait_ms = 3,
+      retry_attempts = 1
+    }
+    local deltas = {
+      delta_ms = 12,
+      response_entry_ms = 5,
+      drain_ms = 0,
+      payload_ms = 1,
+      parse_ms = 2,
+      match_ms = 0,
+      log_ms = 0
+    }
+    it("verdict allow quand entry.refused est faux", function()
+      local m = fresh_worker_responses()
+      local entry = {
+        refused = false,
+        reason = "Allowed by rule: X",
+        rule_id = "r_ok",
+        dnsonly = false
+      }
+      local fields, verdict = m.build_benchmark_fields(entry, info, deltas)
+      assert.equals("allow", verdict)
+      assert.equals("dns_benchmark", fields.action)
+      assert.equals("r_ok", fields.rule)
+      assert.equals("example.com", fields.qname)
+      assert.equals("A", fields.qtype)
+      assert.equals("10.35.8.2", fields.src_ip)
+      assert.equals("1.1.1.1", fields.dst_ip)
+      assert.equals(12, fields.q_to_response_ms)
+      assert.equals(12, fields.delta_ms)
+      assert.equals(2, fields.parse_ms)
+      return assert.equals("0x1f4d", fields.txid)
+    end)
+    return it("verdict block quand entry.refused est vrai", function()
+      local m = fresh_worker_responses()
+      local entry = {
+        refused = true,
+        reason = "default deny",
+        rule_id = "default_deny",
+        dnsonly = false
+      }
+      local fields, verdict = m.build_benchmark_fields(entry, info, deltas)
+      assert.equals("block", verdict)
+      return assert.equals("default_deny", fields.rule)
+    end)
   end)
 end)

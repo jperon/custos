@@ -93,3 +93,49 @@ describe "worker_responses helpers", ->
     parsed = dns_mod.parse patched, 1, false
     assert.equals 1, #parsed.answers
     assert.equals QTYPE_A, parsed.answers[1].rtype
+
+  -- ── build_benchmark_fields (verdict + temps dans une ligne ALLOW/BLOCK) ──────
+  describe "build_benchmark_fields", ->
+    info = {
+      client_mac:  "aa:bb:cc:dd:ee:ff"
+      vlan:        8
+      client_ip:   "10.35.8.2"
+      resolver_ip: "1.1.1.1"
+      client_port: 5353
+      txid:        0x1f4d
+      af:          "ipv4"
+      user:        "alice@lan"
+      qname:       "example.com"
+      qtype:       "A"
+      retry_wait_ms:  3
+      retry_attempts: 1
+    }
+    deltas = {
+      delta_ms: 12, response_entry_ms: 5, drain_ms: 0
+      payload_ms: 1, parse_ms: 2, match_ms: 0, log_ms: 0
+    }
+
+    it "verdict allow quand entry.refused est faux", ->
+      m = fresh_worker_responses!
+      entry = { refused: false, reason: "Allowed by rule: X", rule_id: "r_ok", dnsonly: false }
+      fields, verdict = m.build_benchmark_fields entry, info, deltas
+      assert.equals "allow", verdict
+      assert.equals "dns_benchmark", fields.action
+      assert.equals "r_ok", fields.rule
+      assert.equals "example.com", fields.qname
+      assert.equals "A", fields.qtype
+      -- orientation client/résolveur correcte
+      assert.equals "10.35.8.2", fields.src_ip
+      assert.equals "1.1.1.1", fields.dst_ip
+      -- temps présents dans la même table
+      assert.equals 12, fields.q_to_response_ms
+      assert.equals 12, fields.delta_ms
+      assert.equals 2, fields.parse_ms
+      assert.equals "0x1f4d", fields.txid
+
+    it "verdict block quand entry.refused est vrai", ->
+      m = fresh_worker_responses!
+      entry = { refused: true, reason: "default deny", rule_id: "default_deny", dnsonly: false }
+      fields, verdict = m.build_benchmark_fields entry, info, deltas
+      assert.equals "block", verdict
+      assert.equals "default_deny", fields.rule

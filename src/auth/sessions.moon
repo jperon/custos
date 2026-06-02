@@ -10,6 +10,33 @@ os_rename = os.rename
 
 -- neigh = require "neigh" (chargé dynamiquement dans session_for_mac pour les tests)
 { :log_info } = require "log"
+{ :ffi, :libc } = require "ffi_defs"
+
+-- ── Signature de fichier (statx) ─────────────────────────────────────────────
+-- Permet de prouver qu'un fichier de sessions n'a PAS changé depuis le dernier
+-- chargement, et donc qu'un reload serait un no-op strict. Utilisé pour éviter
+-- les `loadfile` redondants sur le hot-path question/response SANS jamais
+-- introduire de faux négatif : on ne saute un reload que si statx réussit ET
+-- renvoie une signature identique. Tout échec statx → signature nil → reload.
+AT_FDCWD          = -100
+AT_STATX_SYNC_AS_STAT = 0x0000   -- comportement stat(2) standard
+STATX_BASIC_STATS = 0x000007ff   -- mtime + size + ino inclus
+_statx_buf = ffi.new "struct statx[1]"
+
+--- Retourne une signature compacte (mtime_ns + size + ino) du fichier, ou nil.
+-- nil signifie « impossible de prouver l'identité » (fichier absent, statx
+-- indisponible, erreur) → l'appelant doit recharger par sécurité.
+-- @tparam string path Chemin du fichier
+-- @treturn string|nil Signature opaque, ou nil
+file_sig = (path) ->
+  return nil unless path
+  ok, rv = pcall libc.statx, AT_FDCWD, path, AT_STATX_SYNC_AS_STAT, STATX_BASIC_STATS, _statx_buf
+  return nil unless ok and rv == 0
+  s = _statx_buf[0]
+  m = s.stx_mtime
+  string.format "%d.%09d:%d:%d",
+    tonumber(m.tv_sec), tonumber(m.tv_nsec),
+    tonumber(s.stx_size), tonumber(s.stx_ino)
 
 -- ── Sérialisation ────────────────────────────────────────────────
 
@@ -97,6 +124,7 @@ purge_expired = (sessions) ->
 
 _cache      = nil
 _cache_time = 0
+_cache_sig  = nil
 CACHE_TTL   = 5
 
 read_cached = (path) ->
@@ -104,16 +132,29 @@ read_cached = (path) ->
   if not _cache or (now - _cache_time) >= CACHE_TTL
     _cache      = load_sessions path
     _cache_time = now
+    _cache_sig  = file_sig path
   _cache
 
 reload_cached = (path) ->
   _cache      = load_sessions path
   _cache_time = os_time!
+  _cache_sig  = file_sig path
   _cache
 
 reset_cache = ->
   _cache      = nil
   _cache_time = 0
+  _cache_sig  = nil
+
+-- Détermine si un reload-on-miss est nécessaire. On ne l'évite (retourne false)
+-- QUE si on peut prouver que le fichier est byte-identique à la version en cache
+-- (signature statx présente des deux côtés et égale) : recharger redonnerait
+-- alors exactement la même table — no-op strict, donc zéro faux négatif. Tout
+-- autre cas (signature absente, différente, statx en échec) → reload.
+reload_needed = (path) ->
+  cur = file_sig path
+  return true unless cur and _cache_sig
+  cur != _cache_sig
 
 --- Enrichit une session existante avec une nouvelle IP (sans écraser l'existante).
 -- Utile pour enregistrer les deux IPs (IPv4 et IPv6) d'un client authentifié.
@@ -224,7 +265,7 @@ session_for_mac = (mac, ip, path, sessions_arg) ->
   -- Les workers question/response gardent un cache court. Juste après une authentification,
   -- ce cache peut être encore vide ou obsolète : en cas de miss, relire le
   -- fichier immédiatement avant de refuser. Les hits gardent le chemin rapide.
-  if not s and not sessions_arg and path
+  if not s and not sessions_arg and path and reload_needed path
     sessions_table = reload_cached path
     s = lookup_session sessions_table, lookup_mac, ip if sessions_table
 
@@ -232,7 +273,7 @@ session_for_mac = (mac, ip, path, sessions_arg) ->
 
   now = os_time!
   if s.expires and now > s.expires
-    if not sessions_arg and path
+    if not sessions_arg and path and reload_needed path
       sessions_table = reload_cached path
       s = lookup_session sessions_table, lookup_mac, ip if sessions_table
       return nil unless s

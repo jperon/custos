@@ -17,26 +17,14 @@ do
 end
 local BUF_SIZE = 8192
 local MAX_BATCH = 64
-local FLUSH_MS = 10
 local EAGAIN = 11
 local EWOULDBLOCK = 11
+local POLLIN = 1
 local LINE_VERSION = "v1"
-local sleep_req = ffi.new("timespec_t[1]")
-local clock_ts = ffi.new("timespec_t[1]")
 local read_buf = ffi.new("char[?]", BUF_SIZE)
 local ack_byte = ffi.new("uint8_t[1]")
 ack_byte[0] = 0x01
-local sleep_ms
-sleep_ms = function(ms)
-  sleep_req[0].tv_sec = math.floor(ms / 1000)
-  sleep_req[0].tv_nsec = (ms % 1000) * 1000000
-  return libc.nanosleep(sleep_req, nil)
-end
-local monotonic_ms
-monotonic_ms = function()
-  libc.clock_gettime(1, clock_ts)
-  return tonumber(clock_ts[0].tv_sec) * 1000 + math.floor(tonumber(clock_ts[0].tv_nsec) / 1000000)
-end
+local poll_fd = ffi.new("struct pollfd[1]")
 local split_fields
 split_fields = function(line)
   local out = { }
@@ -165,15 +153,17 @@ send_ack = function(ack_wfds, widx)
   end
   return libc.write(wfd, ack_byte, 1)
 end
+local try_add_pending
+try_add_pending = function(pending, item)
+  local entry_key = tostring(item.kind) .. "|" .. tostring(item.key) .. "|" .. tostring(item.ip) .. "|" .. tostring(item.timeout)
+  if pending[entry_key] then
+    return false
+  end
+  pending[entry_key] = item
+  return true
+end
 local flush_batch
 flush_batch = function(pending, ack_queue, ack_wfds)
-  local count = 0
-  for _, _ in pairs(pending) do
-    count = count + 1
-  end
-  if count == 0 and #ack_queue == 0 then
-    return 
-  end
   local lines = { }
   local rule11_count = 0
   local rule11_items = { }
@@ -271,23 +261,27 @@ run = function(rfd, ack_wfds)
     }
   end)
   local pending = { }
+  local pending_count = 0
   local ack_queue = { }
   local partial = ""
-  local last_flush = monotonic_ms()
+  poll_fd[0].fd = rfd
+  poll_fd[0].events = POLLIN
   while true do
-    local n = libc.read(rfd, read_buf, BUF_SIZE)
-    if n and n > 0 then
-      local data = partial .. ffi.string(read_buf, n)
-      partial = ""
+    if not (partial:find("\n", 1, true)) then
+      poll_fd[0].revents = 0
+      libc.poll(poll_fd, 1, -1)
+    end
+    local batch_full = false
+    while not batch_full do
       while true do
         local _continue_0 = false
         repeat
-          local nl = data:find("\n", 1, true)
+          local nl = partial:find("\n", 1, true)
           if not (nl) then
             break
           end
-          local line = data:sub(1, nl - 1)
-          data = data:sub(nl + 1)
+          local line = partial:sub(1, nl - 1)
+          partial = partial:sub(nl + 1)
           if #line == 0 then
             _continue_0 = true
             break
@@ -300,9 +294,8 @@ run = function(rfd, ack_wfds)
               corr = item.corr,
               rule_id = item.rule_id
             }
-            local entry_key = tostring(item.kind) .. "|" .. tostring(item.key) .. "|" .. tostring(item.ip) .. "|" .. tostring(item.timeout)
-            if not (pending[entry_key]) then
-              pending[entry_key] = item
+            if try_add_pending(pending, item) then
+              pending_count = pending_count + 1
             end
           else
             log_warn(function()
@@ -313,31 +306,35 @@ run = function(rfd, ack_wfds)
               }
             end)
           end
+          if pending_count >= MAX_BATCH then
+            batch_full = true
+            break
+          end
           _continue_0 = true
         until true
         if not _continue_0 then
           break
         end
       end
-      partial = data
-      if #partial > 4096 then
-        log_warn(function()
-          return {
-            action = "nft_partial_oversize",
-            size = #partial
-          }
-        end)
-        partial = ""
+      if batch_full then
+        break
       end
-    else
-      local errno_p = libc.__errno_location()
-      local errno
-      if errno_p then
-        errno = errno_p[0]
-      else
-        errno = 0
-      end
-      if n == 0 then
+      local n = libc.read(rfd, read_buf, BUF_SIZE)
+      if n and n > 0 then
+        partial = partial .. ffi.string(read_buf, n)
+        if #partial > 4096 and not partial:find("\n", 1, true) then
+          log_warn(function()
+            return {
+              action = "nft_partial_oversize",
+              size = #partial
+            }
+          end)
+          partial = ""
+        end
+      elseif n == 0 then
+        if pending_count > 0 or #ack_queue > 0 then
+          flush_batch(pending, ack_queue, ack_wfds)
+        end
         log_warn(function()
           return {
             action = "pipe_closed",
@@ -345,8 +342,17 @@ run = function(rfd, ack_wfds)
           }
         end)
         return 
-      end
-      if errno ~= EAGAIN and errno ~= EWOULDBLOCK then
+      else
+        local errno_p = libc.__errno_location()
+        local errno
+        if errno_p then
+          errno = errno_p[0]
+        else
+          errno = 0
+        end
+        if errno == EAGAIN or errno == EWOULDBLOCK then
+          break
+        end
         log_warn(function()
           return {
             action = "read_failed",
@@ -354,22 +360,20 @@ run = function(rfd, ack_wfds)
             errno = errno
           }
         end)
-        sleep_ms(100)
+        break
       end
     end
-    local now_clock = monotonic_ms()
-    local pending_count = 0
-    for _, _ in pairs(pending) do
-      pending_count = pending_count + 1
-    end
-    if pending_count >= MAX_BATCH or (#ack_queue >= MAX_BATCH) or ((pending_count > 0 or #ack_queue > 0) and now_clock - last_flush >= FLUSH_MS) then
+    if pending_count > 0 or #ack_queue > 0 then
       flush_batch(pending, ack_queue, ack_wfds)
-      last_flush = monotonic_ms()
-    else
-      sleep_ms(10)
+      pending_count = 0
     end
   end
 end
 return {
-  run = run
+  run = run,
+  parse_line = parse_line,
+  flush_batch = flush_batch,
+  try_add_pending = try_add_pending,
+  split_fields = split_fields,
+  from_hex = from_hex
 }

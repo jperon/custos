@@ -221,7 +221,10 @@ parse_packet = (raw) ->
     payload = raw\sub tcp.data_off
     is_fin_rst = bit.band(tcp.flags, 0x05) != 0
     has_payload = payload != ""
-    key = "#{ip2s ip.src}|#{tcp.spt}|#{ip2s ip.dst}|#{tcp.dpt}"
+    -- Clé de reassembly : octets IP bruts (largeur fixe, byte-safe) plutôt que
+    -- ip2s (évite deux inet_ntop + allocations par segment TCP). Clé opaque,
+    -- jamais re-parsée.
+    key = "#{ip.src}|#{tcp.spt}|#{ip.dst}|#{tcp.dpt}"
     buf, init_seq, first_seg = tcp_state.feed key, payload, tcp.flags, tcp.seq_n
     unless buf
       return nil, if is_fin_rst or not has_payload then "tcp_control" else "buffering"
@@ -392,14 +395,17 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule   = rule_id or ""
     q_fields.list   = matched_list
+    -- En mode benchmark, la ligne ALLOW/BLOCK est émise côté worker response,
+    -- enrichie des temps (verdict + latence dans un seul message). On supprime
+    -- donc la ligne ici pour éviter la duplication. Les métriques restent.
     if allowed
-      log_allow -> q_fields
+      log_allow -> q_fields unless runtime_cfg.benchmark
       metrics.record_verdict rule_id, "allow" if rule_id
       allow_reason  = reason
       allow_rule_id = rule_id
       allow_timeout = nft_timeout
     else
-      log_block -> q_fields
+      log_block -> q_fields unless runtime_cfg.benchmark
       metrics.record_verdict rule_id, "refuse" if rule_id
       verdict         = NF_DROP
       block_reason    = reason

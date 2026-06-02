@@ -37,7 +37,7 @@ clients_cfg = config.clients or {}
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_info, :log_warn, :log_debug, :now, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix } = require "log"
 { :build_blocked_response, :build_nxdomain_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
 { :rr_timeout, :detect_wildcards, :inject } = require "response_inject"
 bit = require "bit"
@@ -331,7 +331,10 @@ parse_packet = (raw) ->
     payload = raw\sub tcp.data_off
     is_fin_rst = bit.band(tcp.flags, 0x05) != 0
     has_payload = payload != ""
-    key = "#{ip2s ip.src}|#{tcp.spt}|#{ip2s ip.dst}|#{tcp.dpt}"
+    -- Clé de reassembly : octets IP bruts (largeur fixe, byte-safe) plutôt que
+    -- ip2s (évite deux inet_ntop + allocations par segment TCP). Clé opaque,
+    -- jamais re-parsée.
+    key = "#{ip.src}|#{tcp.spt}|#{ip.dst}|#{tcp.dpt}"
     buf, init_seq, first_seg = tcp_state.feed key, payload, tcp.flags, tcp.seq_n
     unless buf
       return nil, if is_fin_rst or not has_payload then "tcp_control" else "buffering"
@@ -406,6 +409,46 @@ bench_delta = (finish, start) ->
   return nil unless finish and start
   delta = finish - start
   if delta >= 0 then delta else nil
+
+--- Construit les champs de la ligne benchmark ALLOW/BLOCK (fonction pure).
+-- Réunit le verdict (depuis `entry`), les métadonnées de la requête (`info`,
+-- extraites de la réponse DNS) et les jalons de latence (`deltas`).
+-- @tparam table entry  Transaction IPC (refused, reason, rule_id, dnsonly)
+-- @tparam table info   Métadonnées : client_mac, vlan, client_ip, resolver_ip,
+--                      client_port, txid, af, user, qname, qtype, retry_*
+-- @tparam table deltas Jalons : delta_ms, response_entry_ms, drain_ms, payload_ms,
+--                      parse_ms, match_ms, log_ms
+-- @treturn table  Champs prêts pour log_allow/log_block
+-- @treturn string Verdict : "block" si entry.refused, sinon "allow"
+build_benchmark_fields = (entry, info, deltas) ->
+  fields = {
+    action:   "dns_benchmark"
+    worker:   "dns"
+    mac_src:  info.client_mac
+    vlan:     info.vlan
+    src_ip:   info.client_ip
+    dst_ip:   info.resolver_ip
+    dst_port: info.client_port
+    txid:     string.format "0x%04x", info.txid
+    af:       info.af
+    user:     info.user
+    qname:    info.qname
+    qtype:    info.qtype
+    reason:   entry.reason
+    rule:     entry.rule_id
+    dnsonly:  entry.dnsonly
+    delta_ms: deltas.delta_ms
+    q_to_response_ms: deltas.delta_ms
+    response_entry_ms: deltas.response_entry_ms
+    drain_ms:   deltas.drain_ms
+    payload_ms: deltas.payload_ms
+    parse_ms:   deltas.parse_ms
+    match_ms:   deltas.match_ms
+    log_ms:     deltas.log_ms
+    retry_wait_ms:  info.retry_wait_ms
+    retry_attempts: info.retry_attempts
+  }
+  fields, (entry.refused and "block" or "allow")
 
 update_mac_clients = nil
 drain_ts = 0
@@ -600,31 +643,46 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- Transaction consommée (one-shot : une réponse par question)
   consume txid, dst_ip, client_port, resolver_ip
 
-  -- Benchmark : une ligne par réponse, avec latence totale question→réponse
-  -- et jalons locaux du worker response. `delta_ms` reste l'ancien champ total.
+  -- Benchmark : quand activé, le verdict ALLOW/BLOCK est émis ICI (worker
+  -- response), enrichi des temps, plutôt que côté question — pour réunir verdict
+  -- et latence dans une seule ligne. La latence totale question→réponse
+  -- (`q_to_response_ms`/`delta_ms`) n'est connue qu'à ce stade. Le champ
+  -- `action=dns_benchmark` (préfixé `response_`) évite le rate-limiting
+  -- ALLOW/BLOCK (30 s) afin de conserver tous les échantillons. Le worker
+  -- question supprime sa propre ligne ALLOW/BLOCK quand benchmark est actif.
   if runtime_cfg.benchmark and entry and entry.benchmark_ms
     bench_log_ms = current_benchmark_ms!
     delta_ms = bench_log_ms - entry.benchmark_ms
     if delta_ms >= 0
-      log_info -> {
-        action: "dns_benchmark"
-        txid: string.format "0x%04x", txid
-        src_ip: src_ip
-        dst_ip: dst_ip
-        delta_ms: delta_ms
-        q_to_response_ms: delta_ms
-        response_entry_ms: bench_delta bench_start_ms, entry.benchmark_ms
-        drain_ms: bench_delta bench_after_drain_ms, bench_start_ms
-        payload_ms: bench_delta bench_after_payload_ms, bench_after_drain_ms
-        parse_ms: bench_delta bench_after_parse_ms, bench_after_payload_ms
-        match_ms: bench_delta bench_after_match_ms, bench_after_parse_ms
-        log_ms: bench_delta bench_log_ms, bench_after_match_ms
-        retry_wait_ms: retry_wait_ms
+      q1 = dns_msg.questions and dns_msg.questions[1]
+      info = {
+        client_mac:  client_mac
+        vlan:        l2.vlan
+        client_ip:   client_ip
+        resolver_ip: resolver_ip
+        client_port: client_port
+        txid:        txid
+        af:          ip.version == 6 and "ipv6" or "ipv4"
+        user:        user
+        qname:       q1 and q1.name or "-"
+        qtype:       q1 and (QTYPE[q1.qtype] or "TYPE#{q1.qtype}") or "-"
+        retry_wait_ms:  retry_wait_ms
         retry_attempts: retry_attempts
-        refused: entry.refused
-        dnsonly: entry.dnsonly
-        user: user
       }
+      deltas = {
+        delta_ms:          delta_ms
+        response_entry_ms: bench_delta bench_start_ms, entry.benchmark_ms
+        drain_ms:          bench_delta bench_after_drain_ms, bench_start_ms
+        payload_ms:        bench_delta bench_after_payload_ms, bench_after_drain_ms
+        parse_ms:          bench_delta bench_after_parse_ms, bench_after_payload_ms
+        match_ms:          bench_delta bench_after_match_ms, bench_after_parse_ms
+        log_ms:            bench_delta bench_log_ms, bench_after_match_ms
+      }
+      bench_fields, verdict = build_benchmark_fields entry, info, deltas
+      if verdict == "block"
+        log_block -> bench_fields
+      else
+        log_allow -> bench_fields
 
   refused = entry and entry.refused or false
   dnsonly = entry and entry.dnsonly or false
@@ -800,4 +858,4 @@ run = (queue_num, rfd, rules_metadata) ->
   -- par les messages IPC reçus de question (update_mac_clients dans drain_on_msg).
   run_queue tonumber(queue_num), handle_response
 
-{ :run, :rr_timeout, :patch_modified_dns, :bench_delta }
+{ :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields }

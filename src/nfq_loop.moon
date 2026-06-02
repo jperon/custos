@@ -15,7 +15,8 @@ NF_DROP    = 0
 NF_ACCEPT  = 1
 NF_REPEAT  = 3           -- rejoue la règle (non utilisé ici)
 
-EINTR = 4                -- code errno Linux : appel interrompu par signal
+EINTR  = 4               -- code errno Linux : appel interrompu par signal
+ENOBUFS = 105            -- file noyau pleine : paquets droppés, socket récupérable
 
 -- Taille du buffer de lecture netlink (doit être > MTU + overhead netlink)
 READ_BUF_SIZE = 65536
@@ -91,6 +92,10 @@ run_queue = (queue_num, callback) ->
 
   log_info -> { action: "queue_listening", queue: queue_num, pid: tonumber(ffi.C.getpid and ffi.C.getpid() or 0) }
 
+  -- Compteur ENOBUFS : on logue la 1re occurrence puis périodiquement (avec le
+  -- total) pour éviter le spam si la file déborde en continu.
+  enobufs_total = 0
+
   while true
     log_debug -> { action: "queue_read_call", queue: queue_num }
     rv = libc.read fd, buf, READ_BUF_SIZE
@@ -106,8 +111,17 @@ run_queue = (queue_num, callback) ->
       if en == EINTR
         log_debug -> { action: "queue_read_eintr", queue: queue_num }
         break
+      if en == ENOBUFS
+        -- File noyau pleine : des paquets ont été droppés mais le socket netlink
+        -- reste utilisable. On ne tue PAS le worker (sinon tempête de
+        -- redémarrages sous charge) ; on logue (1re fois puis tous les 256) et
+        -- on continue.
+        enobufs_total += 1
+        if enobufs_total == 1 or enobufs_total % 256 == 0
+          log_warn -> { action: "queue_read_enobufs", queue: queue_num, total: enobufs_total }
+        continue
       log_warn -> { action: "queue_read_error", queue: queue_num, errno: en }
-      break   -- autre erreur (ENOBUFS, etc.) → on sort
+      break   -- autre erreur → on sort
 
   log_info -> { action: "queue_closed", queue: queue_num }
   libnfq.nfq_destroy_queue qh

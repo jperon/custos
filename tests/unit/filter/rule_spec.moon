@@ -21,10 +21,6 @@ package.loaded["mac_learner_ipc"] or= { get_mac: -> nil }
 describe "filter.rule", ->
   rule_mod = require "filter.rule"
 
-  package.loaded["filter.conditions.__listmatch_test"] = (cfg) ->
-    (args) ->
-      (req) -> true, "Domain matched in list 'toulouse/malware'"
-
   cfg = {
     nft: { ip_timeout: "2m" }
     macs: {}
@@ -314,6 +310,12 @@ describe "filter.rule", ->
       assert.is_false meta.verdict
 
     it "expose condition_reason sans écraser reason d'action", ->
+      -- Stub enregistré ICI (à l'exécution) et non dans le corps du describe :
+      -- run_vm_tests restaure package.loaded après le chargement de chaque spec,
+      -- ce qui effacerait un stub posé au chargement.
+      package.loaded["filter.conditions.__listmatch_test"] = (cfg_inner) ->
+        (args) ->
+          (req) -> true, "Domain matched in list 'toulouse/malware'"
       rules = rule_mod.compile_rules {
         nft: { ip_timeout: "2m" }
         macs: {}
@@ -366,6 +368,22 @@ describe "filter.rule", ->
     it "retourne {} si rules ou rule_id nil", ->
       assert.same {}, rule_mod.on_response_for nil, "r_x"
       assert.same {}, rule_mod.on_response_for {}, nil
+
+    it "utilise la map O(1) on_response_by_id quand présente", ->
+      rules = rule_mod.compile_rules {
+        macs: {}
+        rules: { { rule_id: "strip", actions: { "dns_strip", "allow" }, dns_strip: { rr_type: "AAAA" } } }
+      }
+      assert.is_table rules.on_response_by_id
+      -- la map et le lookup renvoient la même liste de callbacks
+      assert.equals rules.on_response_by_id["r_strip"], rule_mod.on_response_for rules, "r_strip"
+
+    it "fallback linéaire si rules assemblés sans on_response_by_id", ->
+      cb = -> nil
+      rules = { rules_metadata: { { rule_id: "r_x", on_response: { cb } } } }
+      cbs = rule_mod.on_response_for rules, "r_x"
+      assert.equals 1, #cbs
+      assert.same {}, rule_mod.on_response_for rules, "r_absent"
 
   describe "apply_on_response", ->
     it "liste vide → inject_nft true, dns_raw inchangé", ->

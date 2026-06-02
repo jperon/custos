@@ -9,6 +9,8 @@ local QTYPE_AAAA = dns_mod.types.AAAA
 local NOERROR = dns_mod.rcodes.NOERROR
 local _clients = { }
 local _rr_cache = { }
+local _dead_resolvers = { }
+local DEAD_RESOLVER_TTL = 30
 local pick_resolver_ip
 pick_resolver_ip = function(cfg, ctx)
   if ctx and ctx.resolver_ip and ctx.resolver_ip ~= "" then
@@ -88,6 +90,10 @@ resolve_target_rrs = function(cfg, target, resolver_ip)
       ttl = cached.ttl
     }
   end
+  local dead_until = _dead_resolvers[resolver_ip]
+  if dead_until and dead_until > now then
+    return nil
+  end
   local client = get_upstream_client(cfg, resolver_ip)
   if not (client) then
     return nil
@@ -97,6 +103,7 @@ resolve_target_rrs = function(cfg, target, resolver_ip)
     aaaa = { }
   }
   local ttl = 300
+  local any_response = false
   for qtype, key in pairs({
     [QTYPE_A] = "a",
     [QTYPE_AAAA] = "aaaa"
@@ -107,6 +114,7 @@ resolve_target_rrs = function(cfg, target, resolver_ip)
       return (require("doh.upstream")).query(client, query)
     end))
     if ok and resp_raw then
+      any_response = true
       local resp = dns_mod.parse(resp_raw, 1, false)
       local rcode = resp and resp.header and bit.band(resp.header.ra_z_rcode or 0, 0x0f)
       if resp and resp.header and rcode == NOERROR then
@@ -126,6 +134,12 @@ resolve_target_rrs = function(cfg, target, resolver_ip)
       end
     end
   end
+  if not (any_response) then
+    local dead_ttl = (cfg and cfg.doh and cfg.doh.upstream_dead_ttl_s) or DEAD_RESOLVER_TTL
+    _dead_resolvers[resolver_ip] = now + dead_ttl
+    return nil
+  end
+  _dead_resolvers[resolver_ip] = nil
   records.a = dedupe_raw(records.a)
   records.aaaa = dedupe_raw(records.aaaa)
   if #records.a == 0 and #records.aaaa == 0 then

@@ -26,6 +26,36 @@ ffi.cdef [[
   int     close(int fd);
   long    lseek(int fd, long offset, int whence);
 
+  /* ── statx : signature de fichier portable (ABI noyau stable, identique
+        sur toutes les architectures, contrairement à `struct stat`). Sert à
+        détecter sans coût qu'un fichier de sessions n'a PAS changé. ── */
+  struct statx_timestamp { int64_t tv_sec; uint32_t tv_nsec; int32_t __reserved; };
+  struct statx {
+    uint32_t stx_mask;
+    uint32_t stx_blksize;
+    uint64_t stx_attributes;
+    uint32_t stx_nlink;
+    uint32_t stx_uid;
+    uint32_t stx_gid;
+    uint16_t stx_mode;
+    uint16_t __spare0[1];
+    uint64_t stx_ino;
+    uint64_t stx_size;
+    uint64_t stx_blocks;
+    uint64_t stx_attributes_mask;
+    struct statx_timestamp stx_atime;
+    struct statx_timestamp stx_btime;
+    struct statx_timestamp stx_ctime;
+    struct statx_timestamp stx_mtime;
+    uint32_t stx_rdev_major; uint32_t stx_rdev_minor;
+    uint32_t stx_dev_major;  uint32_t stx_dev_minor;
+    uint64_t stx_mnt_id;
+    uint64_t __spare2;
+    uint64_t __spare3[12];
+  };
+  int statx(int dirfd, const char *pathname, int flags,
+            unsigned int mask, struct statx *statxbuf);
+
   /* ── Mémoire (mmap lecture seule partagée des listes .bin) ── */
   void*   mmap(void *addr, size_t length, int prot, int flags, int fd, long offset);
   int     munmap(void *addr, size_t length);

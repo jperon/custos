@@ -15,6 +15,7 @@ local NF_DROP = 0
 local NF_ACCEPT = 1
 local NF_REPEAT = 3
 local EINTR = 4
+local ENOBUFS = 105
 local READ_BUF_SIZE = 65536
 local VERDICT_DONE = -1
 local run_queue
@@ -113,49 +114,71 @@ run_queue = function(queue_num, callback)
       pid = tonumber(ffi.C.getpid and ffi.C.getpid() or 0)
     }
   end)
+  local enobufs_total = 0
   while true do
-    log_debug(function()
-      return {
-        action = "queue_read_call",
-        queue = queue_num
-      }
-    end)
-    local rv = libc.read(fd, buf, READ_BUF_SIZE)
-    if rv > 0 then
+    local _continue_0 = false
+    repeat
       log_debug(function()
         return {
-          action = "queue_handle_packet",
-          queue = queue_num,
-          rv = rv
-        }
-      end)
-      libnfq.nfq_handle_packet(h, buf, tonumber(rv))
-    elseif rv == 0 then
-      log_warn(function()
-        return {
-          action = "queue_read_eof",
+          action = "queue_read_call",
           queue = queue_num
         }
       end)
-      break
-    else
-      local en = libc.__errno_location()[0]
-      if en == EINTR then
+      local rv = libc.read(fd, buf, READ_BUF_SIZE)
+      if rv > 0 then
         log_debug(function()
           return {
-            action = "queue_read_eintr",
+            action = "queue_handle_packet",
+            queue = queue_num,
+            rv = rv
+          }
+        end)
+        libnfq.nfq_handle_packet(h, buf, tonumber(rv))
+      elseif rv == 0 then
+        log_warn(function()
+          return {
+            action = "queue_read_eof",
             queue = queue_num
           }
         end)
         break
+      else
+        local en = libc.__errno_location()[0]
+        if en == EINTR then
+          log_debug(function()
+            return {
+              action = "queue_read_eintr",
+              queue = queue_num
+            }
+          end)
+          break
+        end
+        if en == ENOBUFS then
+          enobufs_total = enobufs_total + 1
+          if enobufs_total == 1 or enobufs_total % 256 == 0 then
+            log_warn(function()
+              return {
+                action = "queue_read_enobufs",
+                queue = queue_num,
+                total = enobufs_total
+              }
+            end)
+          end
+          _continue_0 = true
+          break
+        end
+        log_warn(function()
+          return {
+            action = "queue_read_error",
+            queue = queue_num,
+            errno = en
+          }
+        end)
+        break
       end
-      log_warn(function()
-        return {
-          action = "queue_read_error",
-          queue = queue_num,
-          errno = en
-        }
-      end)
+      _continue_0 = true
+    until true
+    if not _continue_0 then
       break
     end
   end

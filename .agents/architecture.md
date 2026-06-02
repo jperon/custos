@@ -111,6 +111,18 @@ insertions dans `worker_nft` (sérialisation des transactions nftables) ; chaque
 worker producteur attend un ACK 1 octet sur son `ack_<i>` dédié avant de rendre
 son verdict, afin que l'élément soit présent dans le set avant le retour du paquet.
 
+### Boucle `worker_nft` (faible latence)
+
+`worker_nft` bloque sur `poll(rfd)` (plus de busy-poll `sleep`), draine en une
+passe toutes les lignes disponibles (lectures non bloquantes jusqu'à `EAGAIN`,
+plafonné à `MAX_BATCH` pour borner la taille de transaction nft), puis **flush
+immédiatement** dès que le pipe est drainé. Il n'y a plus de fenêtre temporelle
+`FLUSH_MS` : la latence d'insertion (et donc l'attente `wait_ack` côté producteur)
+est minimale à faible charge, tandis que la coalescence reste naturelle sous
+charge — pendant la durée d'un flush, le pipe accumule les insertions suivantes
+qui forment le batch d'après. Le décompte de `pending` est tenu de façon
+incrémentale (`try_add_pending`) plutôt que recalculé par `pairs` à chaque tour.
+
 ---
 
 ## Fichiers & config
@@ -180,6 +192,11 @@ colonne « Source » indique le worker à l'origine de la commande.
 
 - Fork chaque worker et surveille via `waitpid(-1, …, WNOHANG)` ; redémarre
   après un backoff de 1 seconde en cas de crash.
+- **ENOBUFS NFQUEUE** : `nfq_loop` ne tue pas le worker sur `ENOBUFS` (errno 105,
+  file noyau pleine sous charge) — le socket netlink reste utilisable, donc on
+  logue (1re fois puis tous les 256) et on continue. Sans cela, une surcharge
+  déclenchait une tempête de morts/redémarrages. Les autres erreurs de lecture
+  (hors `EINTR`) restent fatales.
 - Boucle `signalfd` pour `SIGHUP` / `SIGTERM`.
 - `SIGHUP` → `filter.load!` (relecture de `config` déjà chargé) + propagation AUTH (recharge secrets).
 - `SIGTERM` → arrête tous les workers, supprime les règles nft ajoutées au démarrage.
@@ -194,3 +211,23 @@ suivi cross-family IPv4/IPv6 et gère les privacy extensions.
 - Utiliser `session_for_mac(mac, ip, path, sessions_table)` au lieu de lookups IP.
 - Les workers extraient le MAC client via `get_l2(nfad)` → `nfq_get_packet_hw()`.
 - Si `get_l2` échoue, `session_for_mac` effectue un fallback par recherche d'IP dans les sessions actives.
+
+### Cache de lecture des sessions (hot-path question/response)
+
+Les workers question/response lisent `sessions_file` via un cache à TTL court
+(`CACHE_TTL = 5 s`). Sur un **miss** (MAC/IP non trouvée) ou une session expirée,
+le cache peut être obsolète juste après une authentification : on rechargeait donc
+le fichier (`loadfile` + exécution) à chaque miss, ce qui, pour un filtre DNS où la
+majorité du trafic provient de MAC non authentifiées, déclenchait un rechargement
+disque + compilation Lua **par paquet**.
+
+Désormais, `reload_needed(path)` calcule une **signature `statx`** du fichier
+(`mtime` ns + taille + inode) et ne déclenche le reload-on-miss que si cette
+signature diffère de celle chargée en cache. On n'évite un reload **que** lorsqu'on
+peut prouver que le fichier est byte-identique (statx réussi des deux côtés et
+signatures égales) : recharger redonnerait alors la même table, c'est un no-op
+strict — **aucun faux négatif possible**. Tout échec `statx` (fichier absent,
+indisponible) → signature `nil` → reload, conservant le comportement antérieur.
+`statx` est utilisé (et non `struct stat`) car son ABI est stable sur toutes les
+architectures (x86/ARM/MIPS, glibc/musl). Toute écriture du fichier (donc toute
+nouvelle session) change la signature et garantit la fraîcheur.

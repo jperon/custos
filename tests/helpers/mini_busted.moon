@@ -10,6 +10,9 @@ M = {}
 
 current_describe = nil  -- pile des describe imbriqués
 root_blocks      = {}   -- describe au top level
+-- Hooks déclarés au top level (hors describe), portée = fichier courant.
+-- Injectés dans chaque describe top-level du fichier (cf. start_file).
+file_hooks       = { before_each: {}, after_each: {}, setup: {}, teardown: {} }
 total            = 0
 passed           = 0
 failed           = 0
@@ -65,6 +68,11 @@ A.truthy = (v, msg) ->
   unless v
     fail "expected truthy, got #{fmt v} #{msg or ''}", 2
 
+-- Alias busted (compat) : equal/is_truthy/not_equal manquaient.
+A.equal      = A.equals
+A.not_equal  = A.not_equals
+A.is_truthy  = A.truthy
+
 A.is_true       = (v) -> fail "expected true, got #{fmt v}", 2     if v != true
 A.is_false      = (v) -> fail "expected false, got #{fmt v}", 2    if v != false
 A.is_nil        = (v) -> fail "expected nil, got #{fmt v}", 2      if v != nil
@@ -118,12 +126,21 @@ full_name = (block) ->
     rev[#rev + 1] = parts[i]
   table.concat rev, " "
 
+-- Copie les hooks de fichier (déclarés au top level) dans un bloc racine, afin
+-- qu'ils s'appliquent à ses tests tout en gardant chaque describe top-level
+-- isolé (root_block distinct).
+inject_file_hooks = (b) ->
+  for key in *{ "setup", "teardown", "before_each", "after_each" }
+    for h in *file_hooks[key]
+      b[key][#b[key] + 1] = h
+
 M.describe = (name, fn) ->
   parent = current_describe
   b = make_block name, parent
   if parent
     parent.children[#parent.children + 1] = b
   else
+    inject_file_hooks b
     root_blocks[#root_blocks + 1] = b
   current_describe = b
   -- pcall : une erreur de chargement à l'intérieur d'un describe ne doit pas
@@ -138,6 +155,7 @@ M.it = (name, fn) ->
     -- it() au top level : on l'enveloppe dans un describe anonyme,
     -- mais sans laisser current_describe pollué.
     b = make_block nil, nil
+    inject_file_hooks b
     root_blocks[#root_blocks + 1] = b
     b.tests[#b.tests + 1] = { :name, :fn }
     return
@@ -156,14 +174,17 @@ M.pending = (name, _fn) ->
 
 M._pending_tag = PENDING_TAG
 
-M.before_each = (fn) ->
-  current_describe.before_each[#current_describe.before_each + 1] = fn
+-- Cible d'un hook : le describe courant, ou file_hooks si au top level.
+hook_target = (key) -> (current_describe and current_describe[key]) or file_hooks[key]
 
-M.after_each = (fn) ->
-  current_describe.after_each[#current_describe.after_each + 1] = fn
+add_hook = (key, fn) ->
+  t = hook_target key
+  t[#t + 1] = fn
 
-M.setup    = (fn) -> current_describe.setup[#current_describe.setup + 1]       = fn
-M.teardown = (fn) -> current_describe.teardown[#current_describe.teardown + 1] = fn
+M.before_each = (fn) -> add_hook "before_each", fn
+M.after_each  = (fn) -> add_hook "after_each", fn
+M.setup       = (fn) -> add_hook "setup", fn
+M.teardown    = (fn) -> add_hook "teardown", fn
 
 -- ── Exécution ───────────────────────────────────────────────────────
 
@@ -251,9 +272,16 @@ M.run = ->
     return 1
   0
 
+-- À appeler avant de charger chaque fichier de spec : isole les hooks top-level
+-- (setup/teardown/before_each/after_each déclarés hors describe) au fichier.
+M.start_file = ->
+  current_describe = nil
+  file_hooks = { before_each: {}, after_each: {}, setup: {}, teardown: {} }
+
 M.reset = ->
   current_describe = nil
   root_blocks      = {}
+  file_hooks       = { before_each: {}, after_each: {}, setup: {}, teardown: {} }
   total            = 0
   passed           = 0
   failed           = 0
