@@ -20,7 +20,7 @@
 -- @treturn string|nil Adresse IPv6 du portail captif, ou nil si introuvable
 detect = (auth_cfg) ->
   auth_cfg or= {}
-  ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+  ifname = auth_cfg.bridge_ifname or "br0"
 
   -- ── 1 & 2 : config explicite + variables d'environnement ─────
   local_ip4 = auth_cfg.captive_ip4 or os.getenv "CAPTIVE_IP4"

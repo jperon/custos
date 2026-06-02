@@ -324,6 +324,17 @@ DEFAULTS = {
   }
 }
 
+-- Détecte la première interface bridge du système.
+-- Priorité : variable d'env BRIDGE_IFNAME → ip link → "br0".
+detect_bridge_ifname = ->
+  env = os.getenv "BRIDGE_IFNAME"
+  return env if env
+  handle = io.popen "ip -brief link show type bridge 2>/dev/null"
+  return "br0" unless handle
+  line = handle\read "*l"
+  handle\close!
+  (line and line\match "^(%S+)") or "br0"
+
 is_array = (t) ->
   return false unless type(t) == "table"
   n = #t
@@ -409,6 +420,7 @@ normalize = (cfg) ->
   cfg.filter.userlists = cfg.filter.userlists or cfg.filter.users or {}
   cfg.filter.users = cfg.filter.users or cfg.filter.userlists or {}
   cfg.auth = cfg.auth or {}
+  cfg.auth.bridge_ifname = cfg.auth.bridge_ifname or detect_bridge_ifname!
   cfg.sni  = cfg.sni  or {}
   defaults = DEFAULTS
   decision_defaults = defaults.filter and defaults.filter.decision or {}

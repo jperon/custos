@@ -10,23 +10,7 @@ do
 end
 local get_bridge_ifname
 get_bridge_ifname = function(auth_cfg)
-  if auth_cfg and auth_cfg.bridge_ifname then
-    return auth_cfg.bridge_ifname
-  end
-  local res = io.popen("ip -brief link show type bridge")
-  if res then
-    local line = res:read("*l")
-    res:close()
-    if line then
-      local name = line:match("^(%S+)")
-      if name then
-        return name
-      else
-        local _ = "br"
-      end
-    end
-  end
-  return "br"
+  return (auth_cfg and auth_cfg.bridge_ifname) or "br0"
 end
 local get_local_cidrs
 get_local_cidrs = function(ifname)

@@ -6,7 +6,7 @@ end
 local detect
 detect = function(auth_cfg)
   auth_cfg = auth_cfg or { }
-  local ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+  local ifname = auth_cfg.bridge_ifname or "br0"
   local local_ip4 = auth_cfg.captive_ip4 or os.getenv("CAPTIVE_IP4")
   local local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
   if not local_ip4 then

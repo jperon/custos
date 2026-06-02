@@ -182,3 +182,45 @@ describe "config.safe_search", ->
     assert.is_false cfg.filter.safe_search
     rules = cname_rules cfg
     assert.equals 0, #rules
+
+describe "config.auth.bridge_ifname", ->
+
+  reload = (path) ->
+    package.loaded["config"] = nil
+    actual = path or "tmp/__no_config_for_test__.moon"
+    ffi.C.setenv "CUSTOS_CONFIG_PATH", actual, 1
+    require "config"
+
+  after_each ->
+    ffi.C.unsetenv "CUSTOS_CONFIG_PATH"
+    ffi.C.unsetenv "BRIDGE_IFNAME"
+    package.loaded["config"] = nil
+
+  it "bridge_ifname est toujours défini après normalize (autodétection ou défaut)", ->
+    cfg = reload nil
+    assert.is_string cfg.auth.bridge_ifname
+    assert.is_true #cfg.auth.bridge_ifname > 0
+
+  it "bridge_ifname explicite dans config est conservé", ->
+    path = "tmp/config_spec_bridge.moon"
+    f = assert io.open path, "w"
+    f\write [[{ auth: { bridge_ifname: "br-custom" } }]]
+    f\close!
+    cfg = reload path
+    os.remove path
+    assert.equals "br-custom", cfg.auth.bridge_ifname
+
+  it "BRIDGE_IFNAME env prime sur l'autodétection", ->
+    ffi.C.setenv "BRIDGE_IFNAME", "br-env", 1
+    cfg = reload nil
+    assert.equals "br-env", cfg.auth.bridge_ifname
+
+  it "config explicite prime sur BRIDGE_IFNAME env", ->
+    ffi.C.setenv "BRIDGE_IFNAME", "br-env", 1
+    path = "tmp/config_spec_bridge_explicit.moon"
+    f = assert io.open path, "w"
+    f\write [[{ auth: { bridge_ifname: "br-explicit" } }]]
+    f\close!
+    cfg = reload path
+    os.remove path
+    assert.equals "br-explicit", cfg.auth.bridge_ifname

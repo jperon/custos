@@ -215,7 +215,7 @@ supervise = function(pipes, sfd)
   local responses_queues = parse_queues(config.nfqueue.responses)
   local captive_queues = parse_queues(config.nfqueue.captive)
   local reject_queues = parse_queues(config.nfqueue.reject)
-  local bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+  local bridge_ifname = auth_cfg.bridge_ifname or "br0"
   local detect_bridge_slaves
   detect_bridge_slaves = function()
     local handle = io.popen("ip -brief link show type bridge_slave 2>/dev/null")

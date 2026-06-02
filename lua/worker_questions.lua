@@ -507,7 +507,7 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
     captive_domain = domain_from_url(auth.redirect_url)
     captive_ip4, captive_ip6 = detect_captive_ips(auth)
     if captive_domain then
-      local ifname = auth.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+      local ifname = auth.bridge_ifname or "br0"
       local fd, err = bridge_raw.open_socket(ifname)
       if fd then
         raw_fd = fd

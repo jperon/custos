@@ -224,7 +224,7 @@ local run
 run = function(queue_num, auth_cfg)
   set_action_prefix("captive_")
   auth_cfg = auth_cfg or { }
-  local ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+  local ifname = auth_cfg.bridge_ifname or "br0"
   local https_port = auth_cfg.port or 33443
   custom_redirect_url = auth_cfg.redirect_url
   local local_ip4, local_ip6 = detect_captive_ips(auth_cfg)

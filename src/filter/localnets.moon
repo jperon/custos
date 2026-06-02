@@ -4,21 +4,10 @@
 { :ffi, :libc } = require "ffi_defs"
 
 --- Récupère le nom du bridge
+-- @tparam table auth_cfg Configuration auth (bridge_ifname normalement résolu par config)
 -- @treturn string Nom de l'interface bridge
 get_bridge_ifname = (auth_cfg) ->
-  if auth_cfg and auth_cfg.bridge_ifname
-    return auth_cfg.bridge_ifname
-  
-  -- Auto-détection via ip -brief link
-  res = io.popen "ip -brief link show type bridge"
-  if res
-    line = res\read "*l"
-    res\close!
-    if line
-      name = line\match "^(%S+)"
-      return name if name else "br"
-  
-  "br"
+  (auth_cfg and auth_cfg.bridge_ifname) or "br0"
 
 --- Extrait les CIDR locaux depuis la table de routage
 -- @tparam string ifname Interface à analyser

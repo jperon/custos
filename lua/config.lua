@@ -433,6 +433,20 @@ local DEFAULTS = {
     }
   }
 }
+local detect_bridge_ifname
+detect_bridge_ifname = function()
+  local env = os.getenv("BRIDGE_IFNAME")
+  if env then
+    return env
+  end
+  local handle = io.popen("ip -brief link show type bridge 2>/dev/null")
+  if not (handle) then
+    return "br0"
+  end
+  local line = handle:read("*l")
+  handle:close()
+  return (line and line:match("^(%S+)")) or "br0"
+end
 local is_array
 is_array = function(t)
   if not (type(t) == "table") then
@@ -561,6 +575,7 @@ normalize = function(cfg)
   cfg.filter.userlists = cfg.filter.userlists or cfg.filter.users or { }
   cfg.filter.users = cfg.filter.users or cfg.filter.userlists or { }
   cfg.auth = cfg.auth or { }
+  cfg.auth.bridge_ifname = cfg.auth.bridge_ifname or detect_bridge_ifname()
   cfg.sni = cfg.sni or { }
   local defaults = DEFAULTS
   local decision_defaults = defaults.filter and defaults.filter.decision or { }

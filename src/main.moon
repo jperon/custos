@@ -213,7 +213,7 @@ supervise = (pipes, sfd) ->
 
   -- Nom de l'interface bridge : requis pour mac_learner (prober ARP/NS)
   -- et arp-sniffer. Déclaré avant `workers` pour que les closures puissent le capturer.
-  bridge_ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+  bridge_ifname = auth_cfg.bridge_ifname or "br0"
 
   -- Autodétection des interfaces physiques attachées à la bridge (bridge slaves)
   -- pour le sniffer TCP/33443. Ces interfaces physiques voient les paquets entrants,

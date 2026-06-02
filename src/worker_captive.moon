@@ -210,7 +210,7 @@ run = (queue_num, auth_cfg) ->
   auth_cfg or= {}
 
   -- Interface LAN (br0 or br)
-  ifname = auth_cfg.bridge_ifname or os.getenv("BRIDGE_IFNAME") or "br"
+  ifname = auth_cfg.bridge_ifname or "br0"
 
   https_port = auth_cfg.port or 33443
 
