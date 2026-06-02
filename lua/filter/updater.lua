@@ -1,7 +1,6 @@
 local ffi = require("ffi")
 local bin48 = require("filter.lib.bin48")
 local parse_domains = require("filter.lib.parse_domains")
-local config = require("config")
 ffi.cdef([[  int rename(const char *oldpath, const char *newpath);
   int kill(int pid, int sig);
   int setenv(const char *name, const char *value, int overwrite);
@@ -274,7 +273,7 @@ local opts = parse_args(arg)
 if opts.config then
   ffi.C.setenv("CUSTOS_CONFIG_PATH", opts.config, 1)
 end
-local cfg = config
+local cfg = require("config")
 local sources = cfg.filter.sources or { }
 local domainlists_dir = cfg.filter.domainlists_dir
 local custom_lists_dir = cfg.filter.custom_lists_dir

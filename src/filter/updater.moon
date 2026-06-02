@@ -37,7 +37,10 @@
 ffi          = require "ffi"
 bin48        = require "filter.lib.bin48"
 parse_domains = require "filter.lib.parse_domains"
-config       = require "config"
+-- NB : `config` est volontairement requis dans le programme principal (après
+-- l'application de --config via setenv), car le module résout
+-- CUSTOS_CONFIG_PATH dès son chargement. Le requérir ici l'épinglerait au
+-- chemin par défaut et rendrait --config inopérant.
 
 ffi.cdef [[
   int rename(const char *oldpath, const char *newpath);
@@ -333,7 +336,9 @@ opts = parse_args arg
 if opts.config
   ffi.C.setenv("CUSTOS_CONFIG_PATH", opts.config, 1)
 
-cfg = config
+-- Requis ici (pas en tête de fichier) pour que --config/CUSTOS_CONFIG_PATH
+-- soit pris en compte : config résout son chemin dès le require.
+cfg = require "config"
 sources         = cfg.filter.sources or {}
 domainlists_dir = cfg.filter.domainlists_dir
 custom_lists_dir = cfg.filter.custom_lists_dir
