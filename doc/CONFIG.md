@@ -74,6 +74,15 @@ Contrôle le comportement global du service.
 | `gc_pause` | number | `110` | Réglage GC LuaJIT (`collectgarbage "setpause"`). Le GC se déclenche dès que le tas dépasse de `gc_pause`-100 % la taille post-collecte. Défaut LuaJIT : 200 (le tas peut doubler). 110 ⇒ collecte dès +10 %, plus économe en RAM. |
 | `gc_stepmul` | number | `400` | Réglage GC LuaJIT (`collectgarbage "setstepmul"`). Multiplicateur de la vitesse du GC incrémental ; une valeur plus haute compense le `gc_pause` bas. |
 
+Quand `benchmark` est activé, `response_dns_benchmark` journalise une seule
+ligne par réponse DNS corrélée. `delta_ms` et `q_to_response_ms` mesurent la
+latence totale entre l'acceptation de la question par le worker DNS et le
+traitement de la réponse correspondante par le worker responses : cela inclut
+la latence du résolveur amont, le réseau, les retransmissions et les files
+NFQUEUE. Les champs `drain_ms`, `payload_ms`, `parse_ms`, `match_ms`,
+`log_ms`, `retry_attempts` et `retry_wait_ms` détaillent uniquement les jalons
+locaux côté worker responses.
+
 ```moonscript
 runtime: {
   log_level: "DEBUG"

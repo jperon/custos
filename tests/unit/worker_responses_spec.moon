@@ -51,6 +51,13 @@ describe "worker_responses helpers", ->
     _, ttl_max = m.rr_timeout 5000
     assert.equals 900, ttl_max
 
+  it "bench_delta ignore les jalons absents ou négatifs", ->
+    m = fresh_worker_responses!
+    assert.equals 7, m.bench_delta 17, 10
+    assert.is_nil m.bench_delta nil, 10
+    assert.is_nil m.bench_delta 10, nil
+    assert.is_nil m.bench_delta 10, 17
+
   it "patch_modified_dns n'ajoute EDE que si le payload change", ->
     m = fresh_worker_responses!
     clean = make_dns_payload false

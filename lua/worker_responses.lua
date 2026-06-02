@@ -514,6 +514,18 @@ current_benchmark_ms = function()
   libc.clock_gettime(CLOCK_MONOTONIC, _benchmark_ts)
   return tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
 end
+local bench_delta
+bench_delta = function(finish, start)
+  if not (finish and start) then
+    return nil
+  end
+  local delta = finish - start
+  if delta >= 0 then
+    return delta
+  else
+    return nil
+  end
+end
 local update_mac_clients = nil
 local drain_ts = 0
 local drain_on_msg
@@ -614,17 +626,36 @@ resolve_client_family = function(ip_str, want)
 end
 local handle_response
 handle_response = function(qh_ptr, nfad, pkt_id)
+  local bench_start_ms
+  if runtime_cfg.benchmark then
+    bench_start_ms = current_benchmark_ms()
+  else
+    bench_start_ms = nil
+  end
+  local bench_after_drain_ms = nil
+  local bench_after_payload_ms = nil
+  local bench_after_parse_ms = nil
+  local bench_after_match_ms = nil
   local ts = now()
   drain_ts = ts
   drain_pipe(pipe_rfd, now, drain_on_msg)
+  if runtime_cfg.benchmark then
+    bench_after_drain_ms = current_benchmark_ms()
+  end
   local payload_ptr = ffi.new("unsigned char*[1]")
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
   if payload_len <= 0 then
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
+  if runtime_cfg.benchmark then
+    bench_after_payload_ms = current_benchmark_ms()
+  end
   local l2 = get_l2(nfad)
   local ip, l4, dns_msg, dns_raw, ip_ihl = parse_packet(raw)
+  if runtime_cfg.benchmark then
+    bench_after_parse_ms = current_benchmark_ms()
+  end
   if not (ip) then
     if l4 == "buffering" then
       return NF_DROP
@@ -648,9 +679,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local client_mac = ip_to_mac[client_ip] or "unknown"
   local user = user_for_mac(client_mac, client_ip, auth_cfg.sessions_file or "/tmp/sessions.lua")
   local entry = get_pending_entry(txid, dst_ip, client_port, resolver_ip, now)
+  local retry_attempts = 0
+  local retry_wait_ms = 0
   if not (entry) then
-    local retry_attempts = 0
-    local retry_wait_ms = 0
     entry, retry_attempts, retry_wait_ms = retry_pending_match(txid, dst_ip, client_port, resolver_ip)
     if entry then
       log_info(function()
@@ -688,9 +719,13 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       return NF_DROP
     end
   end
+  if runtime_cfg.benchmark then
+    bench_after_match_ms = current_benchmark_ms()
+  end
   consume(txid, dst_ip, client_port, resolver_ip)
   if runtime_cfg.benchmark and entry and entry.benchmark_ms then
-    local delta_ms = current_benchmark_ms() - entry.benchmark_ms
+    local bench_log_ms = current_benchmark_ms()
+    local delta_ms = bench_log_ms - entry.benchmark_ms
     if delta_ms >= 0 then
       log_info(function()
         return {
@@ -699,6 +734,15 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           src_ip = src_ip,
           dst_ip = dst_ip,
           delta_ms = delta_ms,
+          q_to_response_ms = delta_ms,
+          response_entry_ms = bench_delta(bench_start_ms, entry.benchmark_ms),
+          drain_ms = bench_delta(bench_after_drain_ms, bench_start_ms),
+          payload_ms = bench_delta(bench_after_payload_ms, bench_after_drain_ms),
+          parse_ms = bench_delta(bench_after_parse_ms, bench_after_payload_ms),
+          match_ms = bench_delta(bench_after_match_ms, bench_after_parse_ms),
+          log_ms = bench_delta(bench_log_ms, bench_after_match_ms),
+          retry_wait_ms = retry_wait_ms,
+          retry_attempts = retry_attempts,
           refused = entry.refused,
           dnsonly = entry.dnsonly,
           user = user
@@ -947,5 +991,6 @@ end
 return {
   run = run,
   rr_timeout = rr_timeout,
-  patch_modified_dns = patch_modified_dns
+  patch_modified_dns = patch_modified_dns,
+  bench_delta = bench_delta
 }

@@ -398,6 +398,15 @@ current_benchmark_ms = ->
   libc.clock_gettime CLOCK_MONOTONIC, _benchmark_ts
   tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
 
+--- Différence positive entre deux jalons benchmark en millisecondes.
+-- @tparam number|nil finish Jalons de fin
+-- @tparam number|nil start  Jalons de début
+-- @treturn number|nil Durée, ou nil si invalide
+bench_delta = (finish, start) ->
+  return nil unless finish and start
+  delta = finish - start
+  if delta >= 0 then delta else nil
+
 update_mac_clients = nil
 drain_ts = 0
 drain_on_msg = (msg) ->
@@ -493,12 +502,19 @@ resolve_client_family = (ip_str, want) ->
 -- @tparam number pkt_id  NFQUEUE packet id
 -- @treturn number NF_ACCEPT, NF_DROP, or -1 (verdict already set)
 handle_response = (qh_ptr, nfad, pkt_id) ->
+  bench_start_ms = if runtime_cfg.benchmark then current_benchmark_ms! else nil
+  bench_after_drain_ms = nil
+  bench_after_payload_ms = nil
+  bench_after_parse_ms = nil
+  bench_after_match_ms = nil
+
   -- ── Drain pipe IPC ───────────────────────────────────────────
   -- Absorbe tous les tokens disponibles de question avant de traiter ce paquet.
   -- Le callback update_mac_clients enrichit la table mac_clients au passage.
   ts = now!
   drain_ts = ts
   drain_pipe pipe_rfd, now, drain_on_msg
+  bench_after_drain_ms = current_benchmark_ms! if runtime_cfg.benchmark
 
   -- ── Payload brut ─────────────────────────────────────────────
   payload_ptr = ffi.new "unsigned char*[1]"
@@ -507,6 +523,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     return NF_DROP
 
   raw = ffi.string payload_ptr[0], payload_len
+  bench_after_payload_ms = current_benchmark_ms! if runtime_cfg.benchmark
 
   -- ── L2 ────────────────────────────────────────────────────
   -- MAC source via nfq_get_packet_hw() ; MAC destination non exposée par libnfq.
@@ -515,6 +532,7 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- ── L3 / L4 / L7 ───────────────────────────────────────────────
   -- parse_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
   ip, l4, dns_msg, dns_raw, ip_ihl = parse_packet raw
+  bench_after_parse_ms = current_benchmark_ms! if runtime_cfg.benchmark
   unless ip
     -- Intermediate TCP data segments are DROPped so response can reinject a single
     -- coalesced+TTL-patched packet once the full DNS message is assembled.
@@ -550,9 +568,9 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- ── Vérification IPC ─────────────────────────────────────────
   entry = get_pending_entry txid, dst_ip, client_port, resolver_ip, now
+  retry_attempts = 0
+  retry_wait_ms = 0
   unless entry
-    retry_attempts = 0
-    retry_wait_ms = 0
     entry, retry_attempts, retry_wait_ms = retry_pending_match txid, dst_ip, client_port, resolver_ip
     if entry
       log_info -> {
@@ -578,12 +596,15 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         user: user
       }
       return NF_DROP
+  bench_after_match_ms = current_benchmark_ms! if runtime_cfg.benchmark
   -- Transaction consommée (one-shot : une réponse par question)
   consume txid, dst_ip, client_port, resolver_ip
 
-  -- Benchmark : log le temps de traitement question → réponse
+  -- Benchmark : une ligne par réponse, avec latence totale question→réponse
+  -- et jalons locaux du worker response. `delta_ms` reste l'ancien champ total.
   if runtime_cfg.benchmark and entry and entry.benchmark_ms
-    delta_ms = current_benchmark_ms! - entry.benchmark_ms
+    bench_log_ms = current_benchmark_ms!
+    delta_ms = bench_log_ms - entry.benchmark_ms
     if delta_ms >= 0
       log_info -> {
         action: "dns_benchmark"
@@ -591,6 +612,15 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         src_ip: src_ip
         dst_ip: dst_ip
         delta_ms: delta_ms
+        q_to_response_ms: delta_ms
+        response_entry_ms: bench_delta bench_start_ms, entry.benchmark_ms
+        drain_ms: bench_delta bench_after_drain_ms, bench_start_ms
+        payload_ms: bench_delta bench_after_payload_ms, bench_after_drain_ms
+        parse_ms: bench_delta bench_after_parse_ms, bench_after_payload_ms
+        match_ms: bench_delta bench_after_match_ms, bench_after_parse_ms
+        log_ms: bench_delta bench_log_ms, bench_after_match_ms
+        retry_wait_ms: retry_wait_ms
+        retry_attempts: retry_attempts
         refused: entry.refused
         dnsonly: entry.dnsonly
         user: user
@@ -770,4 +800,4 @@ run = (queue_num, rfd, rules_metadata) ->
   -- par les messages IPC reçus de question (update_mac_clients dans drain_on_msg).
   run_queue tonumber(queue_num), handle_response
 
-{ :run, :rr_timeout, :patch_modified_dns }
+{ :run, :rr_timeout, :patch_modified_dns, :bench_delta }
