@@ -787,7 +787,7 @@ return describe("filter.rule", function()
       assert.is_true(v)
       return assert.match("Unconditionally", msg)
     end)
-    it("decide_meta expose allow_modifiers.skip_duplicate = true", function()
+    it("decide_meta expose allow_modifiers.unconditionally_allow = true", function()
       local rules = rule_mod.compile_rules({
         macs = { },
         rules = {
@@ -803,9 +803,9 @@ return describe("filter.rule", function()
       local meta = rule_mod.decide_meta(rules, { })
       assert.is_true(meta.verdict)
       assert.is_table(meta.allow_modifiers)
-      return assert.is_true(meta.allow_modifiers.skip_duplicate)
+      return assert.is_true(meta.allow_modifiers.unconditionally_allow)
     end)
-    return it("allow classique n'a pas skip_duplicate", function()
+    return it("allow classique n'a pas le modificateur unconditionally_allow", function()
       local rules = rule_mod.compile_rules({
         macs = { },
         rules = {
@@ -820,7 +820,7 @@ return describe("filter.rule", function()
       })
       local meta = rule_mod.decide_meta(rules, { })
       assert.is_true(meta.verdict)
-      return assert.is_nil(meta.allow_modifiers.skip_duplicate)
+      return assert.is_nil(meta.allow_modifiers.unconditionally_allow)
     end)
   end)
 end)

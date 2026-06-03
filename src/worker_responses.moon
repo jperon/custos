@@ -966,8 +966,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   --   • verdict déjà connu  → appliquer immédiatement (block/redirect/pass) ;
   --   • verdict pas encore là → parquer A (verdict NFQUEUE différé) jusqu'à B
   --     ou expiration du budget (fail-open, balayé par sweep_parked).
+  --   • unconditionally_allow → skip total du second avis.
+  skip_so = entry and entry.modifiers and entry.modifiers.unconditionally_allow
   q1 = dns_msg.questions and dns_msg.questions[1]
-  if so_state and q1 and so_state.active_for(ip.version) and not direct_validator
+  if so_state and q1 and so_state.active_for(ip.version) and not direct_validator and not skip_so
     key = so_state.corr_key client_ip, txid, q1.name
     override = so_state.take_verdict key, ts
     if override

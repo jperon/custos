@@ -3,6 +3,8 @@
 -- (second avis DNS). Utile pour les domaines de confiance absolue où la
 -- vérification supplémentaire n'apporte rien et ralentirait inutilement.
 
+(require "ipc").register_modifier "unconditionally_allow"
+
 --- @tparam table cfg Configuration du filtre
 -- @treturn function factory (rule) → enriched_action
 _schema = {
@@ -15,7 +17,7 @@ _factory = (cfg) ->
   (rule) ->
     {
       capabilities: { worker: true, nft: true }
-      allow_modifiers: { skip_duplicate: true }
+      allow_modifiers: { unconditionally_allow: true }
       eval: (req) ->
         true, "Unconditionally allowed by rule: #{rule.description or '?'}"
       on_response: (ctx) ->

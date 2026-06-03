@@ -452,7 +452,7 @@ describe "filter.rule", ->
       assert.is_true v
       assert.match "Unconditionally", msg
 
-    it "decide_meta expose allow_modifiers.skip_duplicate = true", ->
+    it "decide_meta expose allow_modifiers.unconditionally_allow = true", ->
       rules = rule_mod.compile_rules {
         macs: {}
         rules: {
@@ -462,9 +462,9 @@ describe "filter.rule", ->
       meta = rule_mod.decide_meta rules, {}
       assert.is_true meta.verdict
       assert.is_table meta.allow_modifiers
-      assert.is_true meta.allow_modifiers.skip_duplicate
+      assert.is_true meta.allow_modifiers.unconditionally_allow
 
-    it "allow classique n'a pas skip_duplicate", ->
+    it "allow classique n'a pas le modificateur unconditionally_allow", ->
       rules = rule_mod.compile_rules {
         macs: {}
         rules: {
@@ -473,4 +473,4 @@ describe "filter.rule", ->
       }
       meta = rule_mod.decide_meta rules, {}
       assert.is_true meta.verdict
-      assert.is_nil meta.allow_modifiers.skip_duplicate
+      assert.is_nil meta.allow_modifiers.unconditionally_allow

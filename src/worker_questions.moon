@@ -395,6 +395,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   block_timeout   = nil
   allow_timeout   = nil
   block_modifiers = nil
+  allow_modifiers = nil
   response_rule_ids = {}
   q_fields = {
     worker:   "dns"
@@ -430,7 +431,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       nft_timeout = decision.timeout
       matched_list = list_from_condition_reason decision.condition_reason
       response_rule_ids = decision.response_rule_ids or {}
-      skip_duplicate = skip_duplicate or (decision.allow_modifiers and decision.allow_modifiers.skip_duplicate or false)
+      if decision.allow_modifiers and next(decision.allow_modifiers)
+        allow_modifiers = allow_modifiers or {}
+        for k, v in pairs decision.allow_modifiers
+          allow_modifiers[k] = v
+        skip_duplicate = skip_duplicate or (allow_modifiers.unconditionally_allow or false)
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule   = rule_id or ""
     q_fields.list   = matched_list
@@ -468,7 +473,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   q_fields.timeout = if verdict == NF_ACCEPT then allow_timeout else block_timeout
   ipc_ok = false
   if verdict == NF_ACCEPT
-    ipc_ok = write_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, q_entry_ms, allow_rule_id, allow_timeout, nil, response_rule_ids, question_proc_ms
+    ipc_ok = write_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, q_entry_ms, allow_rule_id, allow_timeout, allow_modifiers, response_rule_ids, question_proc_ms
   else
     ipc_ok = write_refused_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, q_entry_ms, block_rule_id, block_timeout, block_modifiers, response_rule_ids, question_proc_ms
 

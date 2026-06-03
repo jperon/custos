@@ -1,3 +1,4 @@
+(require("ipc")).register_modifier("unconditionally_allow")
 local _schema = {
   label = "Autoriser sans validateur",
   description = "Autorise la requête DNS sans duplication vers le résolveur validateur",
@@ -12,7 +13,7 @@ _factory = function(cfg)
         nft = true
       },
       allow_modifiers = {
-        skip_duplicate = true
+        unconditionally_allow = true
       },
       eval = function(req)
         return true, "Unconditionally allowed by rule: " .. tostring(rule.description or '?')

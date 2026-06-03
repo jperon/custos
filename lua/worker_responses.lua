@@ -1251,8 +1251,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     src_ip = src_ip,
     dst_ip = dst_ip
   }
+  local skip_so = entry and entry.modifiers and entry.modifiers.unconditionally_allow
   local q1 = dns_msg.questions and dns_msg.questions[1]
-  if so_state and q1 and so_state.active_for(ip.version) and not direct_validator then
+  if so_state and q1 and so_state.active_for(ip.version) and not direct_validator and not skip_so then
     local key = so_state.corr_key(client_ip, txid, q1.name)
     local override = so_state.take_verdict(key, ts)
     if override then
