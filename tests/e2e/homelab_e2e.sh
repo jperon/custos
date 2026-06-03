@@ -190,6 +190,96 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
+# GROUPE 0b — Approvisionnement des listes pré-compilées (custos-update)
+# Exerce le script de packaging /usr/sbin/custos-update : il télécharge les .bin
+# depuis les releases du dépôt custos-lists (curl + zstd + SHA256) puis les
+# déploie. Placé tôt (volet infra/approvisionnement, voisin de G0) : retour
+# immédiat sur la dépendance externe avant les tests fonctionnels, et le SIGHUP
+# de rechargement du démon survient avant que l'état fonctionnel ne soit construit.
+# CE GROUPE EST CONDITIONNÉ À UNE DÉPENDANCE EXTERNE (accès internet + release
+# publiée) : si la ressource n'est pas joignable (pas d'internet, dépôt ou release
+# absent, outils manquants), on émet un `skip` « dépendance manquante » — JAMAIS
+# un `fail`, afin de ne pas faire échouer la suite sur une cause externe.
+# Le téléchargement vise un répertoire isolé (CUSTOS_LISTS_DIR) pour ne pas
+# écraser /etc/custos/lists ; on choisit le profil lowmem (archive la plus légère).
+# ══════════════════════════════════════════════════════════════════════════════
+echo ""
+echo "=== G0b : approvisionnement listes (custos-update) ==="
+
+G15_REPO="${CUSTOS_LISTS_REPO:-jperon/custos-lists}"
+G15_TAG="${CUSTOS_LISTS_TAG:-latest}"
+G15_PROFILE="lowmem"
+G15_ARCHIVE="custos-lists-${G15_PROFILE}.tar.zst"
+G15_TAGPAGE="https://github.com/${G15_REPO}/releases/tag/${G15_TAG}"
+G15_DEST="/tmp/e2e-lists"
+
+# Outils requis par custos-update, vérifiés sur custos (un par ligne si absent).
+G15_MISSING=$(ssh_vm "$E2E_IP_CUSTOS" \
+    "for t in curl zstd tar sha256sum; do command -v \$t >/dev/null 2>&1 || echo \$t; done")
+
+# Sonde de connectivité + existence de la release : on interroge la PAGE du tag
+# (HTML, réponse 200 directe) plutôt que l'asset (qui redirige vers S3 — un -L
+# instable y renvoie parfois 302). curl rapporte lui-même « 000 » s'il ne peut
+# joindre l'hôte (pas de `|| echo` qui concaténerait au code déjà imprimé).
+# 000 → pas de réseau ; 404 → release absente ; 200 → on lance custos-update.
+G15_HTTP=$(ssh_vm "$E2E_IP_CUSTOS" \
+    "curl -sL -o /dev/null -m 20 -w '%{http_code}' '$G15_TAGPAGE' 2>/dev/null")
+G15_HTTP="${G15_HTTP:-000}"
+
+if [ -n "$G15_MISSING" ]; then
+    skip "T04a-T04c custos-update" \
+        "dépendance manquante : outils absents sur custos ($(echo $G15_MISSING | tr '\n' ' '))"
+elif [ "$G15_HTTP" = "000" ]; then
+    skip "T04a-T04c custos-update" \
+        "dépendance manquante : pas d'accès internet (curl $G15_TAGPAGE → aucune réponse)"
+elif [ "$G15_HTTP" != "200" ]; then
+    skip "T04a-T04c custos-update" \
+        "dépendance manquante : release indisponible (HTTP $G15_HTTP pour le tag $G15_TAG)"
+else
+    # T04a : le script de packaging est bien déployé et exécutable.
+    if ssh_vm "$E2E_IP_CUSTOS" "test -x /usr/sbin/custos-update && echo OK" | grep -q OK; then
+        ok "T04a /usr/sbin/custos-update présent et exécutable"
+    else
+        fail "T04a /usr/sbin/custos-update présent et exécutable" "absent ou non exécutable"
+    fi
+
+    # T04b : téléchargement + vérification SHA256 + extraction → exit 0.
+    # custos-update (set -eu) propage le code de curl ; les codes « réseau »
+    # (6 DNS, 7 connexion, 28 timeout, 35/52/56 TLS/réponse) signalent un CDN
+    # d'assets GitHub injoignable (objects/codeload) — dépendance externe, donc
+    # `skip` plutôt que `fail`. Tout autre code non nul = vraie anomalie → fail.
+    g15_out=$(ssh_vm "$E2E_IP_CUSTOS" "
+        rm -rf '$G15_DEST'
+        CUSTOS_LISTS_REPO='$G15_REPO' CUSTOS_LISTS_DIR='$G15_DEST' \
+            /usr/sbin/custos-update '$G15_PROFILE' '$G15_TAG' 2>&1
+        echo \"EXIT=\$?\"
+    ")
+    g15_rc=$(echo "$g15_out" | grep -oE 'EXIT=[0-9]+' | tail -1 | cut -d= -f2)
+    case "${g15_rc:-1}" in
+        0)
+            ok "T04b custos-update $G15_PROFILE → exit 0 (download + SHA256 + extraction)"
+            # T04c : au moins une liste .bin a bien été déployée.
+            g15_nbin=$(ssh_vm "$E2E_IP_CUSTOS" "find '$G15_DEST' -name '*.bin' 2>/dev/null | wc -l")
+            if [ "${g15_nbin:-0}" -ge 1 ]; then
+                ok "T04c listes .bin déployées ($g15_nbin fichier(s)) dans $G15_DEST"
+            else
+                fail "T04c listes .bin déployées" "aucun .bin dans $G15_DEST"
+            fi
+            ;;
+        6|7|28|35|52|56)
+            skip "T04b-T04c custos-update" \
+                "dépendance manquante : CDN d'assets GitHub injoignable (curl rc=$g15_rc)"
+            ;;
+        *)
+            fail "T04b custos-update $G15_PROFILE → exit 0" \
+                "rc=${g15_rc:-?} : $(echo "$g15_out" | tail -3 | tr '\n' ' ')"
+            ;;
+    esac
+
+    ssh_vm "$E2E_IP_CUSTOS" "rm -rf '$G15_DEST'" || true
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
 # GROUPE 1 — DNS autorisé depuis homelab (règle R3 homelab_not_blocked)
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
@@ -495,6 +585,16 @@ echo ""
 echo "=== G9 : IPv6 ==="
 flush_state
 
+# L'image de servus configure eth0 en DHCPv4 seul (pas de client DHCPv6/SLAAC) :
+# servus n'a donc aucune IPv6 data-plane par défaut. Or le worker n'apprend
+# l'IPv6 d'un client (table MAC→{v4,v6}) que s'il le voit émettre du trafic IPv6 ;
+# sans cela, r_homelab_not_blocked_ip6 reste vide et T74 ne peut être vérifié.
+# On attribue donc une ULA dans le /64 du LAN (fd42:42:0:1::/64, annoncé par via)
+# puis on émettra une requête AAAA sur transport IPv6 (cf. avant T74).
+SERVUS_V6="fd42:42:0:1::99"
+ssh_vm "$E2E_IP_SERVUS" "ip -6 addr add ${SERVUS_V6}/64 dev eth0 2>/dev/null || true"
+sleep 2   # laisse le DAD (Duplicate Address Detection) se terminer
+
 resp=$(dig_from "$E2E_IP_SERVUS" "site-a.lan" "AAAA")
 if [ "$(dns_status "$resp")" = "NOERROR" ]; then
     ok "T70 site-a.lan AAAA → NOERROR"
@@ -507,11 +607,16 @@ resp=$(dig_from "$E2E_IP_SERVUS" "blocked.lan" "AAAA")
 assert_eq "T72 blocked.lan AAAA → REFUSED" "$(dns_status "$resp")" "REFUSED"
 assert_contains "T73 blocked.lan AAAA → EDE 15" "EDE.*17|17.*Filtered|code: 17" "$resp"
 
+# Requête AAAA sur transport IPv6 (@fd42:42:0:1::1, dnsmasq de via) : la source
+# du paquet est l'IPv6 de servus, le worker l'apprend et injecte l'adresse
+# résolue dans le set ip6 (clé servus_v6 . fd42:42:0:1::50).
+ssh_vm "$E2E_IP_SERVUS" \
+    "dig +timeout=3 +tries=1 @fd42:42:0:1::1 site-a.lan AAAA >/dev/null 2>&1 || true"
 sleep 1
 if nft_set_contains "r_homelab_not_blocked_ip6" "fd42:42:0:1::50"; then
     ok "T74 r_homelab_not_blocked_ip6 contient fd42:42:0:1::50"
 else
-    skip "T74 r_homelab_not_blocked_ip6" "fd42:42:0:1::50 absent (AAAA non résolu ou SLAAC absent)"
+    fail "T74 r_homelab_not_blocked_ip6" "fd42:42:0:1::50 absent du set ip6 après requête AAAA sur transport IPv6"
 fi
 
 # cliens AAAA dnsonly → NOERROR sans peuplement du set
@@ -894,22 +999,46 @@ else
     assert_log_has "T124 verdict SNI block blocked.lan (worker=sni-tls)" \
         "$logs" "action=sni_verdict_block" "sni=blocked.lan" "worker=sni-tls"
 
-    # ── T125 : QUIC Initial (UDP/443) — best-effort selon outillage dispo ─────
-    if ssh_vm "$E2E_IP_SERVUS" "curl --version 2>/dev/null | grep -q HTTP3 && echo HTTP3"; then
-        ssh_vm "$E2E_IP_SERVUS" "
-            curl -sk --max-time 5 --http3-only \
-                --resolve site-a.lan:443:${SNI_DEST} \
-                'https://site-a.lan/' >/dev/null 2>&1 || true
-        "
+    # ── T125 : QUIC Initial (UDP/443) ─────────────────────────────────────────
+    # curl n'embarque pas HTTP/3 sur servus ; au lieu de dépendre d'un client
+    # QUIC, on rejoue un vrai QUIC Initial (charge utile UDP capturée, cf.
+    # tests/e2e/fixtures/quic_initial.bin) en un datagramme UDP vers
+    # 10.42.0.50:443. La règle nft `udp dport 443 → queue SNI` (placement
+    # integral) l'achemine vers worker_tls, qui le classe protocol=quic et
+    # journalise la capture. UDP étant sans connexion, aucun listener n'est
+    # requis ; l'alias 10.42.0.50 monté sur via (plus haut) répond à l'ARP.
+    # Le busybox `nc` des images OpenWrt est l'applet minimal (TCP seul, pas
+    # d'option -u) : on utilise socat pour émettre le datagramme UDP. socat n'est
+    # pas préinstallé ; on l'ajoute via apk (servus a internet par le NAT de via).
+    # Faute de réseau pour l'installer, on `skip` « dépendance manquante » plutôt
+    # que d'échouer (cohérent avec G0b).
+    QUIC_FIXTURE="$PROJECT_DIR/tests/e2e/fixtures/quic_initial.bin"
+    has_socat=$(ssh_vm "$E2E_IP_SERVUS" "
+        command -v socat >/dev/null 2>&1 || { apk add socat >/dev/null 2>&1 || opkg install socat >/dev/null 2>&1; }
+        command -v socat >/dev/null 2>&1 && echo OK")
+    if [ ! -f "$QUIC_FIXTURE" ]; then
+        fail "T125 QUIC Initial" "fixture absente ($QUIC_FIXTURE)"
+    elif [ "$has_socat" != "OK" ]; then
+        skip "T125 QUIC Initial" "dépendance manquante : socat indisponible (pas de réseau pour l'installer)"
+    elif ! scp -O $SSH_OPTS -i "$SSH_KEY" -q "$QUIC_FIXTURE" \
+              "root@${E2E_IP_SERVUS}:/tmp/quic_initial.bin" 2>/dev/null; then
+        fail "T125 QUIC Initial" "échec du scp de la fixture vers servus"
+    else
+        # Pré-résout site-a.lan → autorise la paire (servus, 10.42.0.50).
+        dig_from "$E2E_IP_SERVUS" "site-a.lan" "A" >/dev/null
+        for i in 1 2 3; do
+            ssh_vm "$E2E_IP_SERVUS" \
+                "socat -t1 -T1 -u OPEN:/tmp/quic_initial.bin UDP-SENDTO:${SNI_DEST}:443 >/dev/null 2>&1 || true"
+            sleep 1
+        done
         sleep 2
         logs=$(custos_logs)
         if echo "$logs" | grep -qE "protocol=quic|l4_proto=udp|worker=sni-quic"; then
-            ok "T125 worker_tls traite un QUIC Initial (UDP/443)"
+            ok "T125 worker_tls traite un QUIC Initial (UDP/443, rejeu de capture)"
         else
-            skip "T125 QUIC Initial" "aucun log quic (handshake non émis ou non intercepté)"
+            fail "T125 QUIC Initial" "aucun log quic après rejeu du datagramme UDP/443"
         fi
-    else
-        skip "T125 QUIC Initial" "curl sans support HTTP/3 sur servus"
+        ssh_vm "$E2E_IP_SERVUS" "rm -f /tmp/quic_initial.bin" || true
     fi
 
     sni_listener_stop
