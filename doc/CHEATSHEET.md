@@ -43,6 +43,12 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
   - NFQUEUE loop: `src/nfq_loop.moon`
   - `rule_id` + `timeout` transitent de question → response → nft
 
+- Second avis DNS (validateur type DNSforFamily), cf. `doc/CONFIG.md` § `second_opinion` :
+  - Config `config.second_opinion` (`enabled`, `resolvers`, `budget_ms`)
+  - `worker_questions` duplique la question UDP autorisée (`src/dup_query.moon`) et l'émet via socket RAW routé par le noyau (`src/raw_send.moon`, `IP_HDRINCL`/`IPV6_HDRINCL`, src=client) — pas de MAC de passerelle, IPv6/tunnel géré
+  - `worker_responses` corrèle les 2 réponses (`src/second_opinion.moon`), classe (`src/dns_classify.moon` : NXDOMAIN→block, sinkhole `0.0.0.0`/`::`→sinkhole, CNAME→redirect), parque A (verdict NFQUEUE différé, `poll` idle → `sweep_parked`), spoofe via `build_nxdomain_response`/`build_sinkhole_response`/`build_cname_response` (EDE « Filtered by upstream validator »)
+  - La réponse validateur (src ∈ `resolvers`) n'est jamais transmise (NF_DROP) ; famille activée seulement si routable
+
 - REFUSED, EDE, TTL:
   - EDE helpers (RFC 8914): `src/dns_ede.moon` (partagé worker_responses + doh)
   - Forge de réponses (vol de question / captif): `src/forge_dns.moon`

@@ -38,9 +38,30 @@ clients_cfg = config.clients or {}
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix } = require "log"
-{ :build_blocked_response, :build_nxdomain_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
+{ :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
+
+-- Motif EDE pour un blocage décidé par le validateur amont (et non par une règle
+-- locale) : ne pas réutiliser `entry.reason` (la raison d'AUTORISATION locale,
+-- ex. « Allowed by rule: Utilisateurs »), qui serait trompeuse dans l'EDE.
+VALIDATOR_REASON = "Filtered by upstream validator"
 { :rr_timeout, :detect_wildcards, :inject } = require "response_inject"
+dns_classify = require "dns_classify"
+second_opinion = require "second_opinion"
+dup_query = require "dup_query"
+raw_send = require "raw_send"
+so_cfg = config.second_opinion or {}
 bit = require "bit"
+
+-- État « second avis » (nil si désactivé), initialisé dans run().
+so_state = nil
+
+-- Helper : pose un verdict NFQUEUE avec payload optionnel.
+set_verdict = (qh_ptr, pkt_id, verdict, payload=nil) ->
+  if payload
+    ptr = ffi.cast "const unsigned char*", payload
+    libnfq.nfq_set_verdict qh_ptr, pkt_id, verdict, #payload, ptr
+  else
+    libnfq.nfq_set_verdict qh_ptr, pkt_id, verdict, 0, nil
 
 -- ── Constantes L3/L4 ────────────────────────────────────────────
 
@@ -537,6 +558,189 @@ resolve_client_family = (ip_str, want) ->
 -- partagés response_inject / dns_ede (réexportés en fin de fichier pour les
 -- tests existants).
 
+--- Finalise une réponse d'origine A (pose le verdict NFQUEUE lui-même).
+-- Utilisée en ligne (verdict validateur déjà connu) et au déparquage (réponse
+-- validateur B arrivée, ou budget dépassé → override=nil = fail-open).
+-- @tparam table ctx       Contexte paquet capturé (qh_ptr, pkt_id, raw, ip, …).
+-- @tparam table|nil override Verdict validateur : nil (pass), {kind:"block"} ou
+--                            {kind:"redirect", cname_target, a, aaaa, ttl}.
+-- @treturn nil (le verdict est posé via nfq_set_verdict)
+finalize_a = (ctx, override) ->
+  { :qh_ptr, :pkt_id, :raw, :ip, :l4, :ip_ihl, :dns_msg, :dns_raw, :entry } = ctx
+  resolver_ip, dnsonly = ctx.resolver_ip, ctx.dnsonly
+  nft_rule_id, ack_corr = ctx.nft_rule_id, ctx.ack_corr
+  client_ip, client_mac, user = ctx.client_ip, ctx.client_mac, ctx.user
+  txid, vlan = ctx.txid, ctx.vlan
+  src_ip, dst_ip = ctx.src_ip, ctx.dst_ip
+  reason = entry and entry.reason or ""
+
+  -- Résolveur d'adresse client par famille (mémoïsé), partagé override/normal.
+  client_v4, client_v6 = nil, nil
+  client_addr = (fam) ->
+    if fam == "ipv4"
+      client_v4 or= (ip.version == 4 and client_ip or resolve_client_family client_ip, "ipv4")
+      client_v4
+    else
+      client_v6 or= (ip.version == 6 and client_ip or resolve_client_family client_ip, "ipv6")
+      client_v6
+
+  inject_answers = (answers) ->
+    drain_ack!
+    inject answers, {
+      :client_addr, :client_mac, :user
+      rule_id:      nft_rule_id
+      wildcard_ids: auth_wildcard_rules
+      :ack_corr
+      inject_nft:   true
+      :mac_valid
+      add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
+      add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
+    }
+
+  -- ── Override : blocage NXDOMAIN + EDE (Filtered) ──────────────
+  if override and override.kind == "block"
+    refused_dns = build_nxdomain_response dns_msg, dns_raw, VALIDATOR_REASON
+    if refused_dns
+      refused_dns = strip_https_rr(refused_dns) or refused_dns
+      patched = replace_dns_payload raw, ip, l4, ip_ihl, refused_dns
+      if patched
+        log_debug -> { action: "response_validator_block", src_ip: src_ip, dst_ip: dst_ip, txid: string.format("0x%04x", txid), client_mac: client_mac, user: user }
+        return set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
+    return set_verdict qh_ptr, pkt_id, NF_DROP
+
+  -- ── Override : sinkhole (reproduction 0.0.0.0/:: + EDE Filtered) ─
+  if override and override.kind == "sinkhole"
+    sink = { a: override.a or {}, aaaa: override.aaaa or {}, ttl: override.ttl }
+    refused_dns = build_sinkhole_response dns_msg, dns_raw, VALIDATOR_REASON, sink
+    if refused_dns
+      refused_dns = strip_https_rr(refused_dns) or refused_dns
+      patched = replace_dns_payload raw, ip, l4, ip_ihl, refused_dns
+      if patched
+        log_debug -> { action: "response_validator_sinkhole", src_ip: src_ip, dst_ip: dst_ip, txid: string.format("0x%04x", txid), client_mac: client_mac, user: user }
+        return set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
+    return set_verdict qh_ptr, pkt_id, NF_DROP
+
+  -- ── Override : réorientation (CNAME) ──────────────────────────
+  if override and override.kind == "redirect" and override.cname_target
+    -- Sauf si la réponse d'origine porte déjà le même CNAME cible (passthrough).
+    unless dns_classify.has_cname_target dns_msg, dns_raw, override.cname_target
+      target_rrs = { a: override.a or {}, aaaa: override.aaaa or {}, ttl: override.ttl }
+      new_dns = build_cname_response dns_msg, dns_raw, override.cname_target, VALIDATOR_REASON, target_rrs
+      if new_dns
+        new_dns = clear_ad_bit new_dns
+        patched = replace_dns_payload raw, ip, l4, ip_ihl, new_dns
+        if patched
+          -- Injecte les IP de réorientation pour que le client puisse les atteindre.
+          redirect_answers = {}
+          for r in *(override.a or {})
+            redirect_answers[#redirect_answers + 1] = { family: "ipv4", addr: ip2s(r), ttl: override.ttl }
+          for r in *(override.aaaa or {})
+            redirect_answers[#redirect_answers + 1] = { family: "ipv6", addr: ip2s(r), ttl: override.ttl }
+          if #redirect_answers > 0
+            inject_answers redirect_answers
+            pending_seq = get_last_seq!
+            wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
+          log_debug -> { action: "response_validator_redirect", target: override.cname_target, src_ip: src_ip, dst_ip: dst_ip, txid: string.format("0x%04x", txid), client_mac: client_mac, user: user }
+          return set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
+      return set_verdict qh_ptr, pkt_id, NF_DROP
+    -- même CNAME → on continue vers le chemin normal (passthrough)
+
+  -- ── Chemin normal (pass) : callbacks on_response + injection nft ──
+  response_hooks = (entry and entry.response_rule_ids and #entry.response_rule_ids > 0) and entry.response_rule_ids or nft_rule_id
+  resp_ctx = run_on_response response_hooks, dns_raw, reason, { resolver_ip: resolver_ip }
+
+  dns_raw = resp_ctx.dns_raw
+  payload_modified = resp_ctx.modified
+  inject_nft = resp_ctx.inject_nft
+
+  answers_dns = dns_msg
+  parsed_modified, _ = parse_dns dns_raw, 1, false
+  answers_dns = parsed_modified if parsed_modified
+
+  answers = {}
+  for a in *parse_answers answers_dns
+    if a.rtype == QTYPE.A or a.rtype == QTYPE.AAAA
+      fam = a.rtype == QTYPE.AAAA and "ipv6" or "ipv4"
+      answers[#answers + 1] = { family: fam, addr: a.rdata_str, ttl: a.ttl }
+
+  drain_ack! if inject_nft and not dnsonly
+
+  inj = inject answers, {
+    :client_addr, :client_mac, :user
+    rule_id:      nft_rule_id
+    wildcard_ids: auth_wildcard_rules
+    :ack_corr
+    :inject_nft
+    :mac_valid
+    add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
+    add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
+  }
+  ip_count       = inj.ip_count
+  records_to_add = inj.records_to_add
+  success_any    = inj.success_any
+
+  if #inj.no_v4 > 0
+    log_fn = if mac_valid(client_mac) then log_info else log_warn
+    log_fn -> { action: "no_ipv4_for_client", client: client_ip, count: #inj.no_v4, records: table.concat(inj.no_v4, " "), reason: "client_ipv4_unknown", mac_fallback: mac_valid(client_mac), user: user }
+  if #inj.no_v6 > 0
+    log_fn = if mac_valid(client_mac) then log_info else log_warn
+    log_fn -> { action: "no_ipv6_for_client", client: client_ip, count: #inj.no_v6, records: table.concat(inj.no_v6, " "), reason: "client_ipv6_unknown", mac_fallback: mac_valid(client_mac), user: user }
+
+  new_dns, dns_modified = patch_modified_dns dns_raw, reason
+  payload_modified = payload_modified or dns_modified
+  patched = nil
+  if payload_modified
+    patched = replace_dns_payload raw, ip, l4, ip_ihl, new_dns
+    return set_verdict qh_ptr, pkt_id, NF_DROP unless patched
+
+  qnames = table.concat [q.name for q in *dns_msg.questions], ","
+  log_debug -> {
+    action:      resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow")
+    src_ip: src_ip, dst_ip: dst_ip, vlan: vlan
+    txid: string.format "0x%04x", txid
+    qnames: qnames, answers: ip_count, nft_rule_id: nft_rule_id
+    payload_modified: payload_modified, rcode: dns_msg.header.rcode
+    client_mac: client_mac, user: user
+  }
+
+  if records_to_add > 0 and not success_any
+    if ((config.nft or {}).add_failure_policy or "fail-closed") == "fail-closed"
+      log_debug -> { action: "nft_add_failed_policy_fail_closed", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
+      return set_verdict qh_ptr, pkt_id, NF_DROP
+    else
+      log_warn -> { action: "nft_add_failed_fail_open", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
+
+  if not dnsonly and records_to_add > 0
+    pending_seq = get_last_seq!
+    wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
+
+  if payload_modified
+    set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
+  else
+    set_verdict qh_ptr, pkt_id, NF_ACCEPT
+
+--- Balaye les réponses A parquées dont le budget est dépassé (fail-open).
+sweep_parked = ->
+  return unless so_state and so_state.has_parked!
+  for ctx in *so_state.expired current_benchmark_ms!
+    finalize_a ctx, nil
+
+--- Traduit un résultat dns_classify en override pour finalize_a.
+-- Toujours non-nil ({kind:"pass"} pour une réponse normale) afin de distinguer
+-- « verdict connu = pass » de « verdict pas encore reçu » dans le cache.
+-- @tparam table vi Résultat de dns_classify.classify.
+-- @treturn table { kind = "block"|"sinkhole"|"redirect"|"pass", … }
+make_override = (vi) ->
+  switch vi.verdict
+    when "block"
+      { kind: "block" }
+    when "sinkhole"
+      { kind: "sinkhole", a: vi.a, aaaa: vi.aaaa, ttl: vi.ttl }
+    when "redirect"
+      { kind: "redirect", cname_target: vi.cname_target, a: vi.a, aaaa: vi.aaaa, ttl: vi.ttl }
+    else
+      { kind: "pass" }
+
 --- Process a DNS response packet from NFQUEUE.
 -- Drains IPC, validates the transaction, patches TTL+checksums,
 -- injects resolved IPs into nftables, and sets the verdict.
@@ -608,6 +812,30 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- L'indexation par MAC permet de reconnaître un client authentifié
   -- en IPv6 quand ses paquets IPv4 arrivent (et vice-versa) de manière O(1).
   user        = user_for_mac client_mac, client_ip, auth_cfg.sessions_file or "/tmp/sessions.lua"
+
+  -- ── Second avis : réponse provenant d'un validateur (src ∈ resolvers) ──
+  -- Deux cas à distinguer via la présence d'une transaction IPC en attente :
+  --  (a) AUCUNE transaction → réponse à NOTRE requête dupliquée (B pure) : sert
+  --      au verdict puis NF_DROP (jamais transmise au client) ;
+  --  (b) transaction présente → le DNS PRINCIPAL du client EST le validateur :
+  --      la réponse est déjà filtrée à la source ; on la laisse suivre le chemin
+  --      normal, SANS second avis (ni parking, ni drop) — sinon on casserait la
+  --      résolution du client.
+  direct_validator = false
+  if so_state and so_state.is_validator resolver_ip
+    if get_pending_entry txid, dst_ip, client_port, resolver_ip, now
+      direct_validator = true
+    else
+      q1 = dns_msg.questions and dns_msg.questions[1]
+      if q1
+        key = so_state.corr_key client_ip, txid, q1.name
+        override = make_override dns_classify.classify dns_msg, dns_raw
+        parked_ctx = so_state.take_parked key
+        if parked_ctx
+          finalize_a parked_ctx, override
+        else
+          so_state.store_verdict key, override, ts
+      return NF_DROP
 
   -- ── Vérification IPC ─────────────────────────────────────────
   entry = get_pending_entry txid, dst_ip, client_port, resolver_ip, now
@@ -725,123 +953,32 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr
     return -1
 
-  -- ── Branche ACCEPT : callbacks on_response → injection nft ──────
-  -- Dispatch factorisé (filter.run_on_response) : les callbacks de chaque
-  -- action portent toute la logique (strip DNS, EDE, skip_nft, action_label)
-  -- et la décision inject_nft. Même noyau que le worker DoH.
-  response_hooks = (entry and entry.response_rule_ids and #entry.response_rule_ids > 0) and entry.response_rule_ids or nft_rule_id
-  resp_ctx = run_on_response response_hooks, dns_raw, (entry and entry.reason or ""), { resolver_ip: resolver_ip }
-
-  dns_raw         = resp_ctx.dns_raw
-  payload_modified = resp_ctx.modified
-  inject_nft      = resp_ctx.inject_nft
-
-  answers_dns = dns_msg
-  parsed_modified, _ = parse_dns dns_raw, 1, false
-  answers_dns = parsed_modified if parsed_modified
-
-  -- Réponses A/AAAA normalisées pour le noyau d'injection partagé.
-  answers = {}
-  for a in *parse_answers answers_dns
-    if a.rtype == QTYPE.A or a.rtype == QTYPE.AAAA
-      fam = a.rtype == QTYPE.AAAA and "ipv6" or "ipv4"
-      answers[#answers + 1] = { family: fam, addr: a.rdata_str, ttl: a.ttl }
-
-  -- Résolveur d'adresse client par famille (mémoïsé) : famille du paquet ou
-  -- résolution cross-family via mac_clients (DNS v4 ↔ RR AAAA et inversement).
-  client_v4 = nil
-  client_v6 = nil
-  client_addr = (fam) ->
-    if fam == "ipv4"
-      client_v4 or= (ip.version == 4 and client_ip or resolve_client_family client_ip, "ipv4")
-      client_v4
-    else
-      client_v6 or= (ip.version == 6 and client_ip or resolve_client_family client_ip, "ipv6")
-      client_v6
-
-  -- Purge stale ACKs before enqueueing new items so that wait_ack only
-  -- consumes the ACK produced by the batch that actually contains our adds.
-  drain_ack! if inject_nft and not dnsonly
-
-  inj = inject answers, {
-    :client_addr
-    :client_mac
-    :user
-    rule_id:      nft_rule_id
-    wildcard_ids: auth_wildcard_rules
-    :ack_corr
-    :inject_nft
-    :mac_valid
-    add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
-    add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
-  }
-  ip_count       = inj.ip_count
-  records_to_add = inj.records_to_add
-  success_any    = inj.success_any
-
-  -- Logguer les cas cross-family sans IP connue (groupés par réponse)
-  if #inj.no_v4 > 0
-    log_fn = if mac_valid(client_mac) then log_info else log_warn
-    log_fn -> { action: "no_ipv4_for_client", client: client_ip, count: #inj.no_v4,
-          records: table.concat(inj.no_v4, " "),
-          reason: "client_ipv4_unknown", mac_fallback: mac_valid(client_mac), user: user }
-  if #inj.no_v6 > 0
-    log_fn = if mac_valid(client_mac) then log_info else log_warn
-    log_fn -> { action: "no_ipv6_for_client", client: client_ip, count: #inj.no_v6,
-          records: table.concat(inj.no_v6, " "),
-          reason: "client_ipv6_unknown", mac_fallback: mac_valid(client_mac), user: user }
-
-  -- ── Patch TTL + HTTPS/SVCB (toujours appliqué) ─────────────────
-  new_dns, dns_modified = patch_modified_dns dns_raw, entry.reason
-  payload_modified = payload_modified or dns_modified
-  patched = nil
-  if payload_modified
-    patched = replace_dns_payload raw, ip, l4, ip_ihl, new_dns
-    return NF_DROP unless patched
-
-  -- Log de la réponse (lazy pour éviter construction si DEBUG filtré)
-  qnames = table.concat [q.name for q in *dns_msg.questions], ","
-  log_debug -> {
-    action:      resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow")
-    src_ip:      src_ip
-    dst_ip:      dst_ip
-    vlan:        l2.vlan
-    txid:        string.format "0x%04x", txid
-    qnames:      qnames
-    answers:     ip_count
-    nft_rule_id: nft_rule_id
-    payload_modified: payload_modified
-    rcode:       dns_msg.header.rcode
-    client_mac:  client_mac
-    user:        user
+  -- ── Branche ACCEPT : second avis puis finalisation ────────────
+  -- Contexte paquet capturé pour finalize_a (appel en ligne ou au déparquage).
+  ctx = {
+    :qh_ptr, :pkt_id, :raw, :ip, :l4, :ip_ihl, :dns_msg, :dns_raw, :entry
+    :resolver_ip, :dnsonly, :nft_rule_id, :ack_corr
+    :client_ip, :client_mac, :user, :txid
+    vlan: l2.vlan, :src_ip, :dst_ip
   }
 
-  -- If we had records to add but none succeeded, respect policy
-  if records_to_add > 0 and not success_any
-    if ((config.nft or {}).add_failure_policy or "fail-closed") == "fail-closed"
-      log_debug -> { action: "nft_add_failed_policy_fail_closed", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
-      return NF_DROP
+  -- Si le second avis est actif : corréler avec la réponse validateur (B).
+  --   • verdict déjà connu  → appliquer immédiatement (block/redirect/pass) ;
+  --   • verdict pas encore là → parquer A (verdict NFQUEUE différé) jusqu'à B
+  --     ou expiration du budget (fail-open, balayé par sweep_parked).
+  q1 = dns_msg.questions and dns_msg.questions[1]
+  if so_state and q1 and so_state.active_for(ip.version) and not direct_validator
+    key = so_state.corr_key client_ip, txid, q1.name
+    override = so_state.take_verdict key, ts
+    if override
+      finalize_a ctx, override
     else
-      log_warn -> { action: "nft_add_failed_fail_open", txid: string.format("0x%04x", txid), client_ip: client_ip, qnames: qnames, user: user }
+      so_state.park key, ctx, current_benchmark_ms!
+    return -1
 
-  -- ── Attente ACK nft avant verdict ────────────────────────────
-  -- On attend que worker_nft confirme l'insertion des IPs dans les sets nftables
-  -- avant de rendre la réponse DNS au client. Cela élimine la race condition
-  -- où le client reçoit la réponse DNS et tente immédiatement une connexion TCP
-  -- avant que ses IPs ne soient dans les sets par règle.
-  -- Fail-open (avec log) si worker_nft ne répond pas dans NFT_ACK_TIMEOUT_MS.
-  if not dnsonly and records_to_add > 0
-    pending_seq = get_last_seq!
-    wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
-
-  -- ── Verdict ──────────────────────────────────────────────────
-  -- Si payload inchangé : laisser passer le paquet original (pas d'altération DNS).
-  return NF_ACCEPT unless payload_modified
-
-  -- Payload modifié : verdict explicite avec paquet reconstruit.
-  patched_ptr = ffi.cast "const unsigned char*", patched
-  libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr
-  -1   -- sentinel : verdict déjà posé, nfq_loop ne doit pas reposer de verdict
+  -- Second avis désactivé (ou pas de question) : chemin normal immédiat.
+  finalize_a ctx, nil
+  -1   -- sentinel : finalize_a a posé le verdict
 
 
 -- ── Point d'entrée ───────────────────────────────────────────────
@@ -864,6 +1001,31 @@ run = (queue_num, rfd, rules_metadata) ->
   -- (IPv6 client → RR A) quand aucun message IPC n'a encore été reçu.
   -- mac_clients et ip_to_mac démarrent vides ; ils sont alimentés organiquement
   -- par les messages IPC reçus de question (update_mac_clients dans drain_on_msg).
-  run_queue tonumber(queue_num), handle_response
+
+  -- ── Second avis DNS ────────────────────────────────────────────
+  -- Activé si enabled + au moins un résolveur. Le worker_questions duplique les
+  -- questions ; ici on corrèle les deux réponses. Le balayage du budget se fait
+  -- via le timeout poll de run_queue (sweep_parked).
+  -- Familles actives = celles dont un validateur est routable (même probe que
+  -- worker_questions). Une famille non routable (ex. IPv6 sans tunnel) ne doit
+  -- jamais être parquée, sinon chaque réponse de cette famille attendrait le
+  -- budget pour rien.
+  local run_opts
+  if so_cfg.enabled and #(so_cfg.resolvers or {}) > 0
+    families = {}
+    for fam, ver in pairs { ipv4: 4, ipv6: 6 }
+      v_ip = dup_query.pick_resolver so_cfg.resolvers, ver
+      families[fam] = (v_ip and raw_send.routable(ver, v_ip)) and true or false
+    if families.ipv4 or families.ipv6
+      so_state = second_opinion.new {
+        resolvers:    so_cfg.resolvers
+        budget_ms:    so_cfg.budget_ms or 80
+        verdict_ttl_s: 5
+        :families
+      }
+      run_opts = { idle_ms: so_cfg.budget_ms or 80, on_idle: sweep_parked }
+      log_info -> { action: "dns_validator_responses_armed", resolvers: table.concat(so_cfg.resolvers, ","), ipv4: families.ipv4, ipv6: families.ipv6 }
+
+  run_queue tonumber(queue_num), handle_response, run_opts
 
 { :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields }

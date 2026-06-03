@@ -97,6 +97,61 @@ build_nxdomain_response = function(dns_orig, dns_raw, reason)
   add_ede(dns, EDE_BLOCKED, ede_text)
   return tostring(dns)
 end
+local build_sinkhole_response
+build_sinkhole_response = function(dns_orig, dns_raw, reason, sink)
+  if sink == nil then
+    sink = nil
+  end
+  if not (dns_orig and dns_raw) then
+    return nil
+  end
+  local dns = parse(dns_raw, 1, false)
+  if not (dns) then
+    return nil
+  end
+  dns.header.rcode = NOERROR
+  local ttl = (sink and tonumber(sink.ttl)) or 60
+  if ttl <= 0 then
+    ttl = 60
+  end
+  local answers = { }
+  local _list_0 = ((sink and sink.a) or { })
+  for _index_0 = 1, #_list_0 do
+    local raw = _list_0[_index_0]
+    if raw and #raw == 4 then
+      answers[#answers + 1] = {
+        rname = string.char(0xC0, 0x0C),
+        rtype = A,
+        rclass = 1,
+        ttl = ttl,
+        rdata = raw
+      }
+    end
+  end
+  local _list_1 = ((sink and sink.aaaa) or { })
+  for _index_0 = 1, #_list_1 do
+    local raw = _list_1[_index_0]
+    if raw and #raw == 16 then
+      answers[#answers + 1] = {
+        rname = string.char(0xC0, 0x0C),
+        rtype = AAAA,
+        rclass = 1,
+        ttl = ttl,
+        rdata = raw
+      }
+    end
+  end
+  dns.answers = answers
+  dns.header.ancount = #answers
+  local ede_text
+  if reason and reason ~= "" then
+    ede_text = "Ne intretis. " .. reason
+  else
+    ede_text = "Ne intretis."
+  end
+  add_ede(dns, EDE_BLOCKED, ede_text)
+  return tostring(dns)
+end
 local build_cname_response
 build_cname_response = function(dns_orig, dns_raw, target, reason, target_rrs)
   if target_rrs == nil then
@@ -347,6 +402,7 @@ return {
   add_ede = add_ede,
   build_blocked_response = build_blocked_response,
   build_nxdomain_response = build_nxdomain_response,
+  build_sinkhole_response = build_sinkhole_response,
   build_cname_response = build_cname_response,
   add_ede_modified = add_ede_modified,
   strip_dns_rr = strip_dns_rr,

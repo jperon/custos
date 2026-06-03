@@ -116,6 +116,49 @@ build_nxdomain_response = (dns_orig, dns_raw, reason) ->
 
   tostring dns
 
+--- Build a NOERROR DNS response reproducing a « sinkhole » answer (null
+-- addresses 0.0.0.0 / ::), marked with EDE code 17 (Filtered).
+-- Reproduit le blocage tel que renvoyé par le validateur (DNSforFamily bloque
+-- par NOERROR + A 0.0.0.0, pas par NXDOMAIN) plutôt que de synthétiser un
+-- NXDOMAIN — le client reçoit la même sémantique que le validateur.
+-- @tparam table       dns_orig Parsed question packet's dns table.
+-- @tparam string      dns_raw  Raw DNS payload bytes (the query echoed back).
+-- @tparam string|nil  reason   Human-readable block reason for EDE text.
+-- @tparam table|nil   sink     Sinkhole records { a: {raw4...}, aaaa: {raw16...}, ttl }.
+-- @treturn string|nil Packed DNS response, or nil.
+build_sinkhole_response = (dns_orig, dns_raw, reason, sink=nil) ->
+  return nil unless dns_orig and dns_raw
+
+  dns = parse dns_raw, 1, false
+  return nil unless dns
+
+  dns.header.rcode = NOERROR
+  ttl = (sink and tonumber(sink.ttl)) or 60
+  ttl = 60 if ttl <= 0
+
+  answers = {}
+  for raw in *((sink and sink.a) or {})
+    if raw and #raw == 4
+      answers[#answers + 1] = {
+        rname: string.char(0xC0, 0x0C), rtype: A, rclass: 1, ttl: ttl, rdata: raw
+      }
+  for raw in *((sink and sink.aaaa) or {})
+    if raw and #raw == 16
+      answers[#answers + 1] = {
+        rname: string.char(0xC0, 0x0C), rtype: AAAA, rclass: 1, ttl: ttl, rdata: raw
+      }
+
+  dns.answers = answers
+  dns.header.ancount = #answers
+
+  ede_text = if reason and reason != ""
+    "Ne intretis. " .. reason
+  else
+    "Ne intretis."
+  add_ede dns, EDE_BLOCKED, ede_text
+
+  tostring dns
+
 --- Build a NOERROR DNS response rewriting the answer to a CNAME RR, optionally
 -- enriched with A/AAAA answers for the CNAME target.
 -- Forces the client to re-resolve `target` (ex: SafeSearch). Valid for any
@@ -335,4 +378,4 @@ patch_modified_dns = (dns_payload, reason) ->
     new_dns = add_ede_modified(new_dns, reason) or new_dns
   new_dns, modified
 
-{ :add_ede, :build_blocked_response, :build_nxdomain_response, :build_cname_response, :add_ede_modified, :strip_dns_rr, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :patch_modified_dns, :EDE_BLOCKED, :EDE_TTL_MODIFIED }
+{ :add_ede, :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :add_ede_modified, :strip_dns_rr, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :patch_modified_dns, :EDE_BLOCKED, :EDE_TTL_MODIFIED }

@@ -326,6 +326,17 @@ local DEFAULTS = {
   clients = {
     expiry = 300
   },
+  second_opinion = {
+    enabled = true,
+    resolvers = {
+      "2a01:4f8:1c0c:40db::1",
+      "2a01:4f8:1c17:4df8::1",
+      "94.130.180.225",
+      "78.47.64.161"
+    },
+    budget_ms = 80,
+    fail_open = true
+  },
   mac_learner = {
     query_sock = "/var/run/custos/mac_query.sock",
     entry_ttl = 900

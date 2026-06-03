@@ -52,17 +52,36 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_allow, _obj_0.log_block, _obj_0.now, _obj_0.set_action_prefix
 end
-local build_blocked_response, build_nxdomain_response, strip_https_rr, add_ede_modified, clear_ad_bit, patch_modified_dns
+local build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, strip_https_rr, add_ede_modified, clear_ad_bit, patch_modified_dns
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, build_nxdomain_response, strip_https_rr, add_ede_modified, clear_ad_bit, patch_modified_dns = _obj_0.build_blocked_response, _obj_0.build_nxdomain_response, _obj_0.strip_https_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.patch_modified_dns
+  build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, strip_https_rr, add_ede_modified, clear_ad_bit, patch_modified_dns = _obj_0.build_blocked_response, _obj_0.build_nxdomain_response, _obj_0.build_sinkhole_response, _obj_0.build_cname_response, _obj_0.strip_https_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.patch_modified_dns
 end
+local VALIDATOR_REASON = "Filtered by upstream validator"
 local rr_timeout, detect_wildcards, inject
 do
   local _obj_0 = require("response_inject")
   rr_timeout, detect_wildcards, inject = _obj_0.rr_timeout, _obj_0.detect_wildcards, _obj_0.inject
 end
+local dns_classify = require("dns_classify")
+local second_opinion = require("second_opinion")
+local dup_query = require("dup_query")
+local raw_send = require("raw_send")
+local so_cfg = config.second_opinion or { }
 local bit = require("bit")
+local so_state = nil
+local set_verdict
+set_verdict = function(qh_ptr, pkt_id, verdict, payload)
+  if payload == nil then
+    payload = nil
+  end
+  if payload then
+    local ptr = ffi.cast("const unsigned char*", payload)
+    return libnfq.nfq_set_verdict(qh_ptr, pkt_id, verdict, #payload, ptr)
+  else
+    return libnfq.nfq_set_verdict(qh_ptr, pkt_id, verdict, 0, nil)
+  end
+end
 local PROTO_UDP = 17
 local PROTO_TCP = 6
 local IPV6_EXT_HDRS = {
@@ -655,6 +674,353 @@ resolve_client_family = function(ip_str, want)
   end
   return nil
 end
+local finalize_a
+finalize_a = function(ctx, override)
+  local qh_ptr, pkt_id, raw, ip, l4, ip_ihl, dns_msg, dns_raw, entry
+  qh_ptr, pkt_id, raw, ip, l4, ip_ihl, dns_msg, dns_raw, entry = ctx.qh_ptr, ctx.pkt_id, ctx.raw, ctx.ip, ctx.l4, ctx.ip_ihl, ctx.dns_msg, ctx.dns_raw, ctx.entry
+  local resolver_ip, dnsonly = ctx.resolver_ip, ctx.dnsonly
+  local nft_rule_id, ack_corr = ctx.nft_rule_id, ctx.ack_corr
+  local client_ip, client_mac, user = ctx.client_ip, ctx.client_mac, ctx.user
+  local txid, vlan = ctx.txid, ctx.vlan
+  local src_ip, dst_ip = ctx.src_ip, ctx.dst_ip
+  local reason = entry and entry.reason or ""
+  local client_v4, client_v6 = nil, nil
+  local client_addr
+  client_addr = function(fam)
+    if fam == "ipv4" then
+      client_v4 = client_v4 or (ip.version == 4 and client_ip or resolve_client_family(client_ip, "ipv4"))
+      return client_v4
+    else
+      client_v6 = client_v6 or (ip.version == 6 and client_ip or resolve_client_family(client_ip, "ipv6"))
+      return client_v6
+    end
+  end
+  local inject_answers
+  inject_answers = function(answers)
+    drain_ack()
+    return inject(answers, {
+      client_addr = client_addr,
+      client_mac = client_mac,
+      user = user,
+      rule_id = nft_rule_id,
+      wildcard_ids = auth_wildcard_rules,
+      ack_corr = ack_corr,
+      inject_nft = true,
+      mac_valid = mac_valid,
+      add_ip = {
+        ipv4 = add_ip4,
+        ipv6 = add_ip6
+      },
+      add_mac = {
+        ipv4 = add_mac4,
+        ipv6 = add_mac6
+      }
+    })
+  end
+  if override and override.kind == "block" then
+    local refused_dns = build_nxdomain_response(dns_msg, dns_raw, VALIDATOR_REASON)
+    if refused_dns then
+      refused_dns = strip_https_rr(refused_dns) or refused_dns
+      local patched = replace_dns_payload(raw, ip, l4, ip_ihl, refused_dns)
+      if patched then
+        log_debug(function()
+          return {
+            action = "response_validator_block",
+            src_ip = src_ip,
+            dst_ip = dst_ip,
+            txid = string.format("0x%04x", txid),
+            client_mac = client_mac,
+            user = user
+          }
+        end)
+        return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
+      end
+    end
+    return set_verdict(qh_ptr, pkt_id, NF_DROP)
+  end
+  if override and override.kind == "sinkhole" then
+    local sink = {
+      a = override.a or { },
+      aaaa = override.aaaa or { },
+      ttl = override.ttl
+    }
+    local refused_dns = build_sinkhole_response(dns_msg, dns_raw, VALIDATOR_REASON, sink)
+    if refused_dns then
+      refused_dns = strip_https_rr(refused_dns) or refused_dns
+      local patched = replace_dns_payload(raw, ip, l4, ip_ihl, refused_dns)
+      if patched then
+        log_debug(function()
+          return {
+            action = "response_validator_sinkhole",
+            src_ip = src_ip,
+            dst_ip = dst_ip,
+            txid = string.format("0x%04x", txid),
+            client_mac = client_mac,
+            user = user
+          }
+        end)
+        return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
+      end
+    end
+    return set_verdict(qh_ptr, pkt_id, NF_DROP)
+  end
+  if override and override.kind == "redirect" and override.cname_target then
+    if not (dns_classify.has_cname_target(dns_msg, dns_raw, override.cname_target)) then
+      local target_rrs = {
+        a = override.a or { },
+        aaaa = override.aaaa or { },
+        ttl = override.ttl
+      }
+      local new_dns = build_cname_response(dns_msg, dns_raw, override.cname_target, VALIDATOR_REASON, target_rrs)
+      if new_dns then
+        new_dns = clear_ad_bit(new_dns)
+        local patched = replace_dns_payload(raw, ip, l4, ip_ihl, new_dns)
+        if patched then
+          local redirect_answers = { }
+          local _list_0 = (override.a or { })
+          for _index_0 = 1, #_list_0 do
+            local r = _list_0[_index_0]
+            redirect_answers[#redirect_answers + 1] = {
+              family = "ipv4",
+              addr = ip2s(r),
+              ttl = override.ttl
+            }
+          end
+          local _list_1 = (override.aaaa or { })
+          for _index_0 = 1, #_list_1 do
+            local r = _list_1[_index_0]
+            redirect_answers[#redirect_answers + 1] = {
+              family = "ipv6",
+              addr = ip2s(r),
+              ttl = override.ttl
+            }
+          end
+          if #redirect_answers > 0 then
+            inject_answers(redirect_answers)
+            local pending_seq = get_last_seq()
+            if pending_seq then
+              wait_ack(pending_seq, ack_corr, (function()
+                return drain_pipe(pipe_rfd, now, drain_on_msg)
+              end))
+            end
+          end
+          log_debug(function()
+            return {
+              action = "response_validator_redirect",
+              target = override.cname_target,
+              src_ip = src_ip,
+              dst_ip = dst_ip,
+              txid = string.format("0x%04x", txid),
+              client_mac = client_mac,
+              user = user
+            }
+          end)
+          return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
+        end
+      end
+      return set_verdict(qh_ptr, pkt_id, NF_DROP)
+    end
+  end
+  local response_hooks = (entry and entry.response_rule_ids and #entry.response_rule_ids > 0) and entry.response_rule_ids or nft_rule_id
+  local resp_ctx = run_on_response(response_hooks, dns_raw, reason, {
+    resolver_ip = resolver_ip
+  })
+  dns_raw = resp_ctx.dns_raw
+  local payload_modified = resp_ctx.modified
+  local inject_nft = resp_ctx.inject_nft
+  local answers_dns = dns_msg
+  local parsed_modified, _ = parse_dns(dns_raw, 1, false)
+  if parsed_modified then
+    answers_dns = parsed_modified
+  end
+  local answers = { }
+  local _list_0 = parse_answers(answers_dns)
+  for _index_0 = 1, #_list_0 do
+    local a = _list_0[_index_0]
+    if a.rtype == QTYPE.A or a.rtype == QTYPE.AAAA then
+      local fam = a.rtype == QTYPE.AAAA and "ipv6" or "ipv4"
+      answers[#answers + 1] = {
+        family = fam,
+        addr = a.rdata_str,
+        ttl = a.ttl
+      }
+    end
+  end
+  if inject_nft and not dnsonly then
+    drain_ack()
+  end
+  local inj = inject(answers, {
+    client_addr = client_addr,
+    client_mac = client_mac,
+    user = user,
+    rule_id = nft_rule_id,
+    wildcard_ids = auth_wildcard_rules,
+    ack_corr = ack_corr,
+    inject_nft = inject_nft,
+    mac_valid = mac_valid,
+    add_ip = {
+      ipv4 = add_ip4,
+      ipv6 = add_ip6
+    },
+    add_mac = {
+      ipv4 = add_mac4,
+      ipv6 = add_mac6
+    }
+  })
+  local ip_count = inj.ip_count
+  local records_to_add = inj.records_to_add
+  local success_any = inj.success_any
+  if #inj.no_v4 > 0 then
+    local log_fn
+    if mac_valid(client_mac) then
+      log_fn = log_info
+    else
+      log_fn = log_warn
+    end
+    log_fn(function()
+      return {
+        action = "no_ipv4_for_client",
+        client = client_ip,
+        count = #inj.no_v4,
+        records = table.concat(inj.no_v4, " "),
+        reason = "client_ipv4_unknown",
+        mac_fallback = mac_valid(client_mac),
+        user = user
+      }
+    end)
+  end
+  if #inj.no_v6 > 0 then
+    local log_fn
+    if mac_valid(client_mac) then
+      log_fn = log_info
+    else
+      log_fn = log_warn
+    end
+    log_fn(function()
+      return {
+        action = "no_ipv6_for_client",
+        client = client_ip,
+        count = #inj.no_v6,
+        records = table.concat(inj.no_v6, " "),
+        reason = "client_ipv6_unknown",
+        mac_fallback = mac_valid(client_mac),
+        user = user
+      }
+    end)
+  end
+  local new_dns, dns_modified = patch_modified_dns(dns_raw, reason)
+  payload_modified = payload_modified or dns_modified
+  local patched = nil
+  if payload_modified then
+    patched = replace_dns_payload(raw, ip, l4, ip_ihl, new_dns)
+    if not (patched) then
+      return set_verdict(qh_ptr, pkt_id, NF_DROP)
+    end
+  end
+  local qnames = table.concat((function()
+    local _accum_0 = { }
+    local _len_0 = 1
+    local _list_1 = dns_msg.questions
+    for _index_0 = 1, #_list_1 do
+      local q = _list_1[_index_0]
+      _accum_0[_len_0] = q.name
+      _len_0 = _len_0 + 1
+    end
+    return _accum_0
+  end)(), ",")
+  log_debug(function()
+    return {
+      action = resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow"),
+      src_ip = src_ip,
+      dst_ip = dst_ip,
+      vlan = vlan,
+      txid = string.format("0x%04x", txid),
+      qnames = qnames,
+      answers = ip_count,
+      nft_rule_id = nft_rule_id,
+      payload_modified = payload_modified,
+      rcode = dns_msg.header.rcode,
+      client_mac = client_mac,
+      user = user
+    }
+  end)
+  if records_to_add > 0 and not success_any then
+    if ((config.nft or { }).add_failure_policy or "fail-closed") == "fail-closed" then
+      log_debug(function()
+        return {
+          action = "nft_add_failed_policy_fail_closed",
+          txid = string.format("0x%04x", txid),
+          client_ip = client_ip,
+          qnames = qnames,
+          user = user
+        }
+      end)
+      return set_verdict(qh_ptr, pkt_id, NF_DROP)
+    else
+      log_warn(function()
+        return {
+          action = "nft_add_failed_fail_open",
+          txid = string.format("0x%04x", txid),
+          client_ip = client_ip,
+          qnames = qnames,
+          user = user
+        }
+      end)
+    end
+  end
+  if not dnsonly and records_to_add > 0 then
+    local pending_seq = get_last_seq()
+    if pending_seq then
+      wait_ack(pending_seq, ack_corr, (function()
+        return drain_pipe(pipe_rfd, now, drain_on_msg)
+      end))
+    end
+  end
+  if payload_modified then
+    return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
+  else
+    return set_verdict(qh_ptr, pkt_id, NF_ACCEPT)
+  end
+end
+local sweep_parked
+sweep_parked = function()
+  if not (so_state and so_state.has_parked()) then
+    return 
+  end
+  local _list_0 = so_state.expired(current_benchmark_ms())
+  for _index_0 = 1, #_list_0 do
+    local ctx = _list_0[_index_0]
+    finalize_a(ctx, nil)
+  end
+end
+local make_override
+make_override = function(vi)
+  local _exp_0 = vi.verdict
+  if "block" == _exp_0 then
+    return {
+      kind = "block"
+    }
+  elseif "sinkhole" == _exp_0 then
+    return {
+      kind = "sinkhole",
+      a = vi.a,
+      aaaa = vi.aaaa,
+      ttl = vi.ttl
+    }
+  elseif "redirect" == _exp_0 then
+    return {
+      kind = "redirect",
+      cname_target = vi.cname_target,
+      a = vi.a,
+      aaaa = vi.aaaa,
+      ttl = vi.ttl
+    }
+  else
+    return {
+      kind = "pass"
+    }
+  end
+end
 local handle_response
 handle_response = function(qh_ptr, nfad, pkt_id)
   local bench_start_ms
@@ -709,6 +1075,25 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local resolver_ip = src_ip
   local client_mac = ip_to_mac[client_ip] or "unknown"
   local user = user_for_mac(client_mac, client_ip, auth_cfg.sessions_file or "/tmp/sessions.lua")
+  local direct_validator = false
+  if so_state and so_state.is_validator(resolver_ip) then
+    if get_pending_entry(txid, dst_ip, client_port, resolver_ip, now) then
+      direct_validator = true
+    else
+      local q1 = dns_msg.questions and dns_msg.questions[1]
+      if q1 then
+        local key = so_state.corr_key(client_ip, txid, q1.name)
+        local override = make_override(dns_classify.classify(dns_msg, dns_raw))
+        local parked_ctx = so_state.take_parked(key)
+        if parked_ctx then
+          finalize_a(parked_ctx, override)
+        else
+          so_state.store_verdict(key, override, ts)
+        end
+      end
+      return NF_DROP
+    end
+  end
   local entry = get_pending_entry(txid, dst_ip, client_port, resolver_ip, now)
   local retry_attempts = 0
   local retry_wait_ms = 0
@@ -844,178 +1229,40 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
     return -1
   end
-  local response_hooks = (entry and entry.response_rule_ids and #entry.response_rule_ids > 0) and entry.response_rule_ids or nft_rule_id
-  local resp_ctx = run_on_response(response_hooks, dns_raw, (entry and entry.reason or ""), {
-    resolver_ip = resolver_ip
-  })
-  dns_raw = resp_ctx.dns_raw
-  local payload_modified = resp_ctx.modified
-  local inject_nft = resp_ctx.inject_nft
-  local answers_dns = dns_msg
-  local parsed_modified, _ = parse_dns(dns_raw, 1, false)
-  if parsed_modified then
-    answers_dns = parsed_modified
-  end
-  local answers = { }
-  local _list_0 = parse_answers(answers_dns)
-  for _index_0 = 1, #_list_0 do
-    local a = _list_0[_index_0]
-    if a.rtype == QTYPE.A or a.rtype == QTYPE.AAAA then
-      local fam = a.rtype == QTYPE.AAAA and "ipv6" or "ipv4"
-      answers[#answers + 1] = {
-        family = fam,
-        addr = a.rdata_str,
-        ttl = a.ttl
-      }
-    end
-  end
-  local client_v4 = nil
-  local client_v6 = nil
-  local client_addr
-  client_addr = function(fam)
-    if fam == "ipv4" then
-      client_v4 = client_v4 or (ip.version == 4 and client_ip or resolve_client_family(client_ip, "ipv4"))
-      return client_v4
-    else
-      client_v6 = client_v6 or (ip.version == 6 and client_ip or resolve_client_family(client_ip, "ipv6"))
-      return client_v6
-    end
-  end
-  if inject_nft and not dnsonly then
-    drain_ack()
-  end
-  local inj = inject(answers, {
-    client_addr = client_addr,
+  local ctx = {
+    qh_ptr = qh_ptr,
+    pkt_id = pkt_id,
+    raw = raw,
+    ip = ip,
+    l4 = l4,
+    ip_ihl = ip_ihl,
+    dns_msg = dns_msg,
+    dns_raw = dns_raw,
+    entry = entry,
+    resolver_ip = resolver_ip,
+    dnsonly = dnsonly,
+    nft_rule_id = nft_rule_id,
+    ack_corr = ack_corr,
+    client_ip = client_ip,
     client_mac = client_mac,
     user = user,
-    rule_id = nft_rule_id,
-    wildcard_ids = auth_wildcard_rules,
-    ack_corr = ack_corr,
-    inject_nft = inject_nft,
-    mac_valid = mac_valid,
-    add_ip = {
-      ipv4 = add_ip4,
-      ipv6 = add_ip6
-    },
-    add_mac = {
-      ipv4 = add_mac4,
-      ipv6 = add_mac6
-    }
-  })
-  local ip_count = inj.ip_count
-  local records_to_add = inj.records_to_add
-  local success_any = inj.success_any
-  if #inj.no_v4 > 0 then
-    local log_fn
-    if mac_valid(client_mac) then
-      log_fn = log_info
+    txid = txid,
+    vlan = l2.vlan,
+    src_ip = src_ip,
+    dst_ip = dst_ip
+  }
+  local q1 = dns_msg.questions and dns_msg.questions[1]
+  if so_state and q1 and so_state.active_for(ip.version) and not direct_validator then
+    local key = so_state.corr_key(client_ip, txid, q1.name)
+    local override = so_state.take_verdict(key, ts)
+    if override then
+      finalize_a(ctx, override)
     else
-      log_fn = log_warn
+      so_state.park(key, ctx, current_benchmark_ms())
     end
-    log_fn(function()
-      return {
-        action = "no_ipv4_for_client",
-        client = client_ip,
-        count = #inj.no_v4,
-        records = table.concat(inj.no_v4, " "),
-        reason = "client_ipv4_unknown",
-        mac_fallback = mac_valid(client_mac),
-        user = user
-      }
-    end)
+    return -1
   end
-  if #inj.no_v6 > 0 then
-    local log_fn
-    if mac_valid(client_mac) then
-      log_fn = log_info
-    else
-      log_fn = log_warn
-    end
-    log_fn(function()
-      return {
-        action = "no_ipv6_for_client",
-        client = client_ip,
-        count = #inj.no_v6,
-        records = table.concat(inj.no_v6, " "),
-        reason = "client_ipv6_unknown",
-        mac_fallback = mac_valid(client_mac),
-        user = user
-      }
-    end)
-  end
-  local new_dns, dns_modified = patch_modified_dns(dns_raw, entry.reason)
-  payload_modified = payload_modified or dns_modified
-  local patched = nil
-  if payload_modified then
-    patched = replace_dns_payload(raw, ip, l4, ip_ihl, new_dns)
-    if not (patched) then
-      return NF_DROP
-    end
-  end
-  local qnames = table.concat((function()
-    local _accum_0 = { }
-    local _len_0 = 1
-    local _list_1 = dns_msg.questions
-    for _index_0 = 1, #_list_1 do
-      local q = _list_1[_index_0]
-      _accum_0[_len_0] = q.name
-      _len_0 = _len_0 + 1
-    end
-    return _accum_0
-  end)(), ",")
-  log_debug(function()
-    return {
-      action = resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow"),
-      src_ip = src_ip,
-      dst_ip = dst_ip,
-      vlan = l2.vlan,
-      txid = string.format("0x%04x", txid),
-      qnames = qnames,
-      answers = ip_count,
-      nft_rule_id = nft_rule_id,
-      payload_modified = payload_modified,
-      rcode = dns_msg.header.rcode,
-      client_mac = client_mac,
-      user = user
-    }
-  end)
-  if records_to_add > 0 and not success_any then
-    if ((config.nft or { }).add_failure_policy or "fail-closed") == "fail-closed" then
-      log_debug(function()
-        return {
-          action = "nft_add_failed_policy_fail_closed",
-          txid = string.format("0x%04x", txid),
-          client_ip = client_ip,
-          qnames = qnames,
-          user = user
-        }
-      end)
-      return NF_DROP
-    else
-      log_warn(function()
-        return {
-          action = "nft_add_failed_fail_open",
-          txid = string.format("0x%04x", txid),
-          client_ip = client_ip,
-          qnames = qnames,
-          user = user
-        }
-      end)
-    end
-  end
-  if not dnsonly and records_to_add > 0 then
-    local pending_seq = get_last_seq()
-    if pending_seq then
-      wait_ack(pending_seq, ack_corr, (function()
-        return drain_pipe(pipe_rfd, now, drain_on_msg)
-      end))
-    end
-  end
-  if not (payload_modified) then
-    return NF_ACCEPT
-  end
-  local patched_ptr = ffi.cast("const unsigned char*", patched)
-  libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
+  finalize_a(ctx, nil)
   return -1
 end
 local run
@@ -1035,7 +1282,38 @@ run = function(queue_num, rfd, rules_metadata)
     rfd = rfd.question_response_rfd
   end
   pipe_rfd = rfd
-  return run_queue(tonumber(queue_num), handle_response)
+  local run_opts
+  if so_cfg.enabled and #(so_cfg.resolvers or { }) > 0 then
+    local families = { }
+    for fam, ver in pairs({
+      ipv4 = 4,
+      ipv6 = 6
+    }) do
+      local v_ip = dup_query.pick_resolver(so_cfg.resolvers, ver)
+      families[fam] = (v_ip and raw_send.routable(ver, v_ip)) and true or false
+    end
+    if families.ipv4 or families.ipv6 then
+      so_state = second_opinion.new({
+        resolvers = so_cfg.resolvers,
+        budget_ms = so_cfg.budget_ms or 80,
+        verdict_ttl_s = 5,
+        families = families
+      })
+      run_opts = {
+        idle_ms = so_cfg.budget_ms or 80,
+        on_idle = sweep_parked
+      }
+      log_info(function()
+        return {
+          action = "dns_validator_responses_armed",
+          resolvers = table.concat(so_cfg.resolvers, ","),
+          ipv4 = families.ipv4,
+          ipv6 = families.ipv6
+        }
+      end)
+    end
+  end
+  return run_queue(tonumber(queue_num), handle_response, run_opts)
 end
 return {
   run = run,

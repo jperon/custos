@@ -55,6 +55,9 @@ do
   local _obj_0 = require("ipparse.l2.ethernet")
   new_eth, IP4, IP6 = _obj_0.new, _obj_0.proto.IP4, _obj_0.proto.IP6
 end
+local dup_query = require("dup_query")
+local raw_send = require("raw_send")
+local so_cfg = config.second_opinion or { }
 local pipe_wfd = nil
 local mac_learn_wfd = nil
 local _benchmark_ts = ffi.new("timespec_t[1]")
@@ -74,6 +77,33 @@ local captive_ip6 = nil
 local raw_fd = nil
 local _ifindex = nil
 local _bridge_mac = nil
+local so_enabled = false
+local so_resolvers = { }
+local so_resolver_set = { }
+local so_fds = { }
+local maybe_duplicate
+maybe_duplicate = function(ip, l4, raw)
+  if not (so_enabled and l4.proto == "udp") then
+    return 
+  end
+  local fd = so_fds[ip.version == 6 and "ipv6" or "ipv4"]
+  if not (fd) then
+    return 
+  end
+  if so_resolver_set[ip2s(ip.dst)] then
+    return 
+  end
+  local validator = dup_query.pick_resolver(so_resolvers, ip.version)
+  if not (validator) then
+    return 
+  end
+  local dns_raw = raw:sub(l4.data_off, l4.off + l4.len - 1)
+  local pkt = dup_query.build_udp(ip, l4, dns_raw, validator)
+  if not (pkt) then
+    return 
+  end
+  return raw_send.send(fd, ip.version, pkt, validator)
+end
 local domain_from_url
 domain_from_url = function(url)
   if not (url) then
@@ -499,6 +529,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end)
     return NF_DROP
   end
+  if verdict == NF_ACCEPT then
+    maybe_duplicate(ip, l4, raw)
+  end
   return NF_ACCEPT
 end
 local run
@@ -550,6 +583,45 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
           reason = "no hostname in redirect_url"
         }
       end)
+    end
+    if so_cfg.enabled and #(so_cfg.resolvers or { }) > 0 then
+      so_resolvers = so_cfg.resolvers
+      local _list_0 = so_cfg.resolvers
+      for _index_0 = 1, #_list_0 do
+        local r = _list_0[_index_0]
+        so_resolver_set[r] = true
+      end
+      local active = { }
+      for fam, ver in pairs({
+        ipv4 = 4,
+        ipv6 = 6
+      }) do
+        local v_ip = dup_query.pick_resolver(so_resolvers, ver)
+        if v_ip and raw_send.routable(ver, v_ip) then
+          local fd = raw_send.open(ver)
+          if fd then
+            so_fds[fam] = fd
+            active[#active + 1] = fam
+          end
+        end
+      end
+      so_enabled = #active > 0
+      if so_enabled then
+        log_info(function()
+          return {
+            action = "dns_validator_armed",
+            resolvers = table.concat(so_cfg.resolvers, ","),
+            families = table.concat(active, ",")
+          }
+        end)
+      else
+        log_warn(function()
+          return {
+            action = "dns_validator_disabled",
+            reason = "aucun validateur routable"
+          }
+        end)
+      end
     end
   end
   return run_queue(tonumber(queue_num), handle_question)

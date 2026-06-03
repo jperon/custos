@@ -221,6 +221,28 @@ DEFAULTS = {
     expiry: 300
   }
 
+  -- Second avis DNS : duplication de chaque question autorisée vers un résolveur
+  -- de filtrage (ex. DNSforFamily). worker_responses corrèle les deux réponses
+  -- et, si le validateur signale NXDOMAIN (blocage) ou CNAME (réorientation),
+  -- spoofe la réponse d'origine. Voir doc/CONFIG.md § second_opinion.
+  second_opinion: {
+    enabled: true
+    -- Liste d'IP, v4 et v6 mélangées : la famille du validateur est choisie
+    -- selon celle du paquet client (présence de ':' → IPv6).
+    resolvers: {
+      "2a01:4f8:1c0c:40db::1"
+      "2a01:4f8:1c17:4df8::1"
+      "94.130.180.225"
+      "78.47.64.161"
+    }
+    -- La question dupliquée est émise via un socket RAW routé par le noyau
+    -- (src = IP client spoofée) : pas besoin de connaître la MAC de passerelle,
+    -- et un IPv6 routé par tunnel est géré nativement. Une famille n'est activée
+    -- que si un validateur de cette famille est routable.
+    budget_ms: 80        -- attente max de la réponse validateur avant fail-open
+    fail_open: true      -- pas de réponse validateur à temps → relâcher A intacte
+  }
+
   mac_learner: {
     query_sock: "/var/run/custos/mac_query.sock"
     entry_ttl: 900

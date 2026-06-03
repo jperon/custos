@@ -29,8 +29,12 @@ VERDICT_DONE = -1
 -- Bloque jusqu'à la fermeture du fd netlink.
 -- @tparam number   queue_num Numéro de queue NFQUEUE (uint16)
 -- @tparam function callback  function(qh_ptr, nfad, pkt_id) → NF_ACCEPT | NF_DROP | VERDICT_DONE
+-- @tparam[opt] table opts    { idle_ms, on_idle } : si idle_ms > 0, la lecture
+--                            passe par poll() avec ce timeout ; à chaque
+--                            expiration (et avant chaque lecture) on_idle() est
+--                            appelé. Sert au balayage du budget « second avis ».
 -- @treturn nil
-run_queue = (queue_num, callback) ->
+run_queue = (queue_num, callback, opts=nil) ->
   log_info -> { action: "queue_open", queue: queue_num }
 
   log_debug -> { action: "queue_nfq_open_call", queue: queue_num }
@@ -92,11 +96,31 @@ run_queue = (queue_num, callback) ->
 
   log_info -> { action: "queue_listening", queue: queue_num, pid: tonumber(ffi.C.getpid and ffi.C.getpid() or 0) }
 
+  -- Mode idle (second avis) : poll() avec timeout pour pouvoir balayer les
+  -- réponses parquées même sans nouveau trafic.
+  idle_ms = opts and opts.idle_ms
+  on_idle = opts and opts.on_idle
+  pfd = nil
+  if idle_ms and idle_ms > 0
+    pfd = ffi.new "struct pollfd[1]"
+    pfd[0].fd = fd
+    pfd[0].events = 1   -- POLLIN
+
   -- Compteur ENOBUFS : on logue la 1re occurrence puis périodiquement (avec le
   -- total) pour éviter le spam si la file déborde en continu.
   enobufs_total = 0
 
   while true
+    if pfd
+      on_idle! if on_idle
+      pr = libc.poll pfd, 1, idle_ms
+      if pr == 0
+        continue   -- timeout : rien à lire, on_idle a balayé les parqués
+      elseif pr < 0
+        en = libc.__errno_location()[0]
+        continue if en == EINTR
+        log_warn -> { action: "queue_poll_error", queue: queue_num, errno: en }
+        break
     log_debug -> { action: "queue_read_call", queue: queue_num }
     rv = libc.read fd, buf, READ_BUF_SIZE
     if rv > 0

@@ -40,6 +40,15 @@
     }
   }
 
+  second_opinion: {
+    _label: "Second avis DNS"
+    _description: "Duplique chaque question autorisée vers un résolveur de filtrage (ex. DNSforFamily) et corrèle les deux réponses : si le validateur signale NXDOMAIN (blocage) ou CNAME (réorientation type SafeSearch), la réponse d'origine est spoofée. Sinon elle passe intacte (DNSSEC préservé)."
+    enabled:     { type: "boolean", label: "Activé", default: true }
+    resolvers:   { type: "string_list", label: "Résolveurs validateurs", hint: "IP v4 et v6 mélangées ; famille choisie selon le paquet" }
+    budget_ms:   { type: "integer", label: "Budget d'attente (ms)", default: 80, hint: "au-delà : fail-open (réponse d'origine intacte)" }
+    fail_open:   { type: "boolean", label: "Fail-open", default: true, hint: "pas de réponse validateur à temps → laisser passer" }
+  }
+
   nft: {
     _label: "Pare-feu (nftables)"
     _description: "Avancé. Custos autorise dynamiquement les adresses résolues en les ajoutant à des « ensembles » (sets) nftables. Les valeurs par défaut conviennent à un pont (bridge) standard ; ne les changez que si votre topologie réseau l'impose."

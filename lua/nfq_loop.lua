@@ -19,7 +19,10 @@ local ENOBUFS = 105
 local READ_BUF_SIZE = 65536
 local VERDICT_DONE = -1
 local run_queue
-run_queue = function(queue_num, callback)
+run_queue = function(queue_num, callback, opts)
+  if opts == nil then
+    opts = nil
+  end
   log_info(function()
     return {
       action = "queue_open",
@@ -114,10 +117,42 @@ run_queue = function(queue_num, callback)
       pid = tonumber(ffi.C.getpid and ffi.C.getpid() or 0)
     }
   end)
+  local idle_ms = opts and opts.idle_ms
+  local on_idle = opts and opts.on_idle
+  local pfd = nil
+  if idle_ms and idle_ms > 0 then
+    pfd = ffi.new("struct pollfd[1]")
+    pfd[0].fd = fd
+    pfd[0].events = 1
+  end
   local enobufs_total = 0
   while true do
     local _continue_0 = false
     repeat
+      if pfd then
+        if on_idle then
+          on_idle()
+        end
+        local pr = libc.poll(pfd, 1, idle_ms)
+        if pr == 0 then
+          _continue_0 = true
+          break
+        elseif pr < 0 then
+          local en = libc.__errno_location()[0]
+          if en == EINTR then
+            _continue_0 = true
+            break
+          end
+          log_warn(function()
+            return {
+              action = "queue_poll_error",
+              queue = queue_num,
+              errno = en
+            }
+          end)
+          break
+        end
+      end
       log_debug(function()
         return {
           action = "queue_read_call",

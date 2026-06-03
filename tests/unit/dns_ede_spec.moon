@@ -3,7 +3,7 @@
 
 package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
 
-{ :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :add_ede_modified, :clear_ad_bit, :build_cname_response } = require "dns_ede"
+{ :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :add_ede_modified, :clear_ad_bit, :build_cname_response, :build_sinkhole_response } = require "dns_ede"
 { :encode_dns_name } = require "lib.dns_name"
 dns_mod = require "ipparse.l7.dns"
 { :s2ip } = require "ipparse.l3.ip"
@@ -238,3 +238,38 @@ describe "build_cname_response", ->
     for rr in *(parsed.additionals or {})
       has_opt = true if rr.rtype == 0x29
     assert.is_true has_opt
+
+describe "build_sinkhole_response", ->
+  get_rcode = (raw) -> bit.band raw\byte(4), 0x0f
+  make_query = (qtype = QTYPE_A) ->
+    q = dns_mod.new {
+      header: dns_mod.new_header id: 0x1234, rd: true
+      questions: {{ qname: encode_dns_name("blocked.example.com"), qtype: qtype, qclass: QCLASS_IN }}
+    }
+    "#{q}"
+
+  it "reproduit A 0.0.0.0 en NOERROR avec EDE", ->
+    sink = { a: { string.rep("\0", 4) }, aaaa: {}, ttl: 30 }
+    resp = build_sinkhole_response {}, make_query!, "Filtered by upstream validator", sink
+    assert.is_not_nil resp
+    assert.equals 0, get_rcode resp          -- NOERROR, pas NXDOMAIN
+    parsed = dns_mod.parse resp, 1, false
+    assert.equals 1, parsed.header.ancount
+    assert.equals QTYPE_A, parsed.answers[1].rtype
+    assert.equals string.rep("\0", 4), parsed.answers[1].rdata
+    assert.equals 30, parsed.answers[1].ttl
+    has_opt = false
+    for rr in *(parsed.additionals or {})
+      has_opt = true if rr.rtype == 0x29
+    assert.is_true has_opt
+
+  it "reproduit AAAA :: ", ->
+    sink = { a: {}, aaaa: { string.rep("\0", 16) }, ttl: 60 }
+    resp = build_sinkhole_response {}, make_query(dns_mod.types.AAAA), nil, sink
+    parsed = dns_mod.parse resp, 1, false
+    assert.equals QTYPE_AAAA, parsed.answers[1].rtype
+    assert.equals string.rep("\0", 16), parsed.answers[1].rdata
+
+  it "renvoie nil si dns_orig ou dns_raw absent", ->
+    assert.is_nil build_sinkhole_response nil, make_query!, "x", { a: {} }
+    assert.is_nil build_sinkhole_response {}, nil, "x", { a: {} }

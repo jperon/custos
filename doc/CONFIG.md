@@ -280,6 +280,63 @@ Gestion du cache client-side.
 
 ---
 
+## 7bis. Section `second_opinion`
+
+Couche **« second avis »** : pour chaque question DNS autorisée localement,
+`worker_questions` **duplique** le paquet en réécrivant uniquement l'IP
+destination vers un résolveur de filtrage (ex. **DNSforFamily**), en conservant
+src client, txid et qname. `worker_responses` reçoit alors **deux** réponses :
+
+- celle du **vrai résolveur** (transmise au client, intacte ou spoofée) ;
+- celle du **validateur** (src ∈ `resolvers`) : jamais transmise (NF_DROP), elle
+  ne sert qu'à décider du verdict.
+
+`worker_responses` corrèle les deux par `(client, txid, qname)` et applique :
+
+| Réponse du validateur | Action sur la réponse d'origine |
+|-----------------------|---------------------------------|
+| **NXDOMAIN** | Blocage : réponse synthétique NXDOMAIN + EDE 17 (Filtered) |
+| **Sinkhole** (`A 0.0.0.0` / `AAAA ::`) | Blocage : la réponse d'origine est réécrite en **reproduisant le sinkhole** (mêmes adresses nulles, `NOERROR`) + EDE 17. DNSforFamily bloque ainsi, pas par NXDOMAIN — on conserve sa sémantique côté client plutôt que de la convertir en NXDOMAIN |
+| **CNAME** | Réorientation (ex. SafeSearch) : spoof avec le CNAME + A/AAAA du validateur, AD effacé + EDE (Forged_Answer), IP injectées dans l'allowlist nft. **Sauf** si la réponse d'origine porte déjà le même CNAME cible → transmise telle quelle |
+| Réponse normale | Transmise intacte (DNSSEC préservé) |
+
+La réponse d'origine est **parquée** (verdict NFQUEUE différé) jusqu'à l'arrivée
+de la réponse validateur ou l'expiration de `budget_ms` (→ fail-open).
+
+> **Texte EDE.** Pour un blocage/réorientation décidé par le validateur, l'EDE
+> porte « Filtered by upstream validator » — et **non** la raison
+> d'*autorisation* locale (ex. « Allowed by rule: … »), qui serait trompeuse.
+
+| Clé | Type | Défaut | Description |
+|-----|------|--------|-------------|
+| `enabled` | bool | `true` | Active le second avis |
+| `resolvers` | liste | DNSforFamily | IP v4 et v6 mélangées ; la famille est choisie selon le paquet client |
+| `budget_ms` | int | `80` | Attente max de la réponse validateur avant fail-open |
+| `fail_open` | bool | `true` | Validateur silencieux → laisser passer la réponse d'origine |
+
+> **Émission de la requête dupliquée.** Elle se fait via un **socket RAW routé
+> par le noyau** (`SOCK_RAW`/`IP_HDRINCL` en IPv4, `IPV6_HDRINCL` en IPv6) avec
+> src = IP du client : le noyau résout lui-même le next-hop et l'interface de
+> sortie. Aucune MAC de passerelle à configurer, et un **IPv6 routé par un
+> tunnel** (ex. WireGuard) distinct de la route IPv4 est géré nativement. Une
+> famille n'est **activée que si un validateur de cette famille est routable**
+> (sinon ni duplication ni parking pour cette famille → latence inchangée).
+>
+> **Cas « le validateur est le DNS principal du client ».** Si un client a déjà
+> configuré une IP `resolvers` comme résolveur, sa requête part directement vers
+> le validateur : la réponse est filtrée à la source. Custos le détecte
+> (réponse d'un validateur **corrélée à une transaction en attente**), ne
+> duplique pas et **laisse passer la réponse intacte** — pas de double requête,
+> pas de blocage erroné, pas de latence ajoutée.
+>
+> **Contraintes.** Ne s'applique qu'au **Do53 en clair** transitant le pont
+> (DoH/DoT/DoQ sortants restent bloqués au L3). Les **questions UDP** seules sont
+> dupliquées. Le trafic Do53 vers les IP `resolvers` doit être autorisé en sortie
+> du boîtier. Sous mode RAM faible, le coût reste minime (pas de worker ni cache
+> supplémentaire).
+
+---
+
 ## 8. Section `mac_learner`
 
 Apprentissage des adresses MAC via un socket Unix.

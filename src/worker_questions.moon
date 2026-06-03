@@ -34,6 +34,9 @@ forge_dns = require "forge_dns"
 { detect: detect_captive_ips } = require "captive_ips"
 bridge_raw = require "bridge_raw"
 { new: new_eth, proto: {:IP4, :IP6} } = require "ipparse.l2.ethernet"
+dup_query = require "dup_query"
+raw_send = require "raw_send"
+so_cfg = config.second_opinion or {}
 
 -- fd d'écriture du pipe IPC question→response, injecté par main.moon avant fork()
 pipe_wfd = nil
@@ -67,6 +70,35 @@ captive_ip6    = nil
 raw_fd         = nil
 _ifindex       = nil
 _bridge_mac    = nil
+
+-- ── Second avis DNS (duplication vers résolveur validateur) ──────
+-- Initialisés dans run(). so_fds : socket RAW routé par famille (le noyau gère
+-- le next-hop, pas besoin de connaître la MAC de passerelle).
+so_enabled     = false
+so_resolvers   = {}
+so_resolver_set = {}   -- ensemble des IP validateur (pour éviter l'auto-duplication)
+so_fds         = {}   -- { ipv4: fd, ipv6: fd }
+
+--- Duplique une question UDP autorisée vers un résolveur validateur.
+-- Réécrit uniquement l'IP destination (src client/txid/qname préservés) et
+-- émet via un socket RAW routé par le noyau. Best-effort, ne bloque jamais.
+-- @tparam table ip  En-tête IP parsé
+-- @tparam table l4  En-tête UDP parsé
+-- @tparam string raw Paquet IP brut d'origine
+-- @treturn nil
+maybe_duplicate = (ip, l4, raw) ->
+  return unless so_enabled and l4.proto == "udp"
+  fd = so_fds[ip.version == 6 and "ipv6" or "ipv4"]
+  return unless fd
+  -- Le DNS principal du client est déjà le validateur : ne pas dupliquer (la
+  -- réponse est filtrée à la source ; worker_responses la laisse passer).
+  return if so_resolver_set[ip2s ip.dst]
+  validator = dup_query.pick_resolver so_resolvers, ip.version
+  return unless validator
+  dns_raw = raw\sub l4.data_off, l4.off + l4.len - 1
+  pkt = dup_query.build_udp ip, l4, dns_raw, validator
+  return unless pkt
+  raw_send.send fd, ip.version, pkt, validator
 
 --- Extrait le hostname d'une URL https?://host[:port]/...
 -- Retourne nil si l'URL contient une IP brute (IPv4 x.x.x.x ou IPv6 [::]).
@@ -449,6 +481,9 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     }
     return NF_DROP
 
+  -- Second avis : duplique la question autorisée vers le validateur (UDP).
+  maybe_duplicate(ip, l4, raw) if verdict == NF_ACCEPT
+
   NF_ACCEPT
 
 
@@ -492,6 +527,26 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
         log_warn -> { action: "dns_steal_socket_failed", err: err, ifname: ifname, errno: tonumber(ffi.C.__errno_location()[0]) or 0 }
     else
       log_info -> { action: "dns_steal_disabled", reason: "no hostname in redirect_url" }
+
+    -- ── Second avis DNS ────────────────────────────────────────
+    -- Un socket RAW routé par famille (le noyau gère le next-hop). Une famille
+    -- n'est activée que si un validateur de cette famille est routable.
+    if so_cfg.enabled and #(so_cfg.resolvers or {}) > 0
+      so_resolvers = so_cfg.resolvers
+      so_resolver_set[r] = true for r in *so_cfg.resolvers
+      active = {}
+      for fam, ver in pairs { ipv4: 4, ipv6: 6 }
+        v_ip = dup_query.pick_resolver so_resolvers, ver
+        if v_ip and raw_send.routable ver, v_ip
+          fd = raw_send.open ver
+          if fd
+            so_fds[fam] = fd
+            active[#active + 1] = fam
+      so_enabled = #active > 0
+      if so_enabled
+        log_info -> { action: "dns_validator_armed", resolvers: table.concat(so_cfg.resolvers, ","), families: table.concat(active, ",") }
+      else
+        log_warn -> { action: "dns_validator_disabled", reason: "aucun validateur routable" }
 
   run_queue tonumber(queue_num), handle_question
 

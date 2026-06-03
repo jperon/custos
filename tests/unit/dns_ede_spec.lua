@@ -1,8 +1,8 @@
 package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
-local strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response
+local strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response, build_sinkhole_response
 do
   local _obj_0 = require("dns_ede")
-  strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response = _obj_0.strip_https_rr, _obj_0.strip_a_rr, _obj_0.strip_aaaa_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.build_cname_response
+  strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response, build_sinkhole_response = _obj_0.strip_https_rr, _obj_0.strip_a_rr, _obj_0.strip_aaaa_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.build_cname_response, _obj_0.build_sinkhole_response
 end
 local encode_dns_name
 encode_dns_name = require("lib.dns_name").encode_dns_name
@@ -175,7 +175,7 @@ describe("dns_ede.strip_aaaa_rr", function()
     return assert.equals(raw, strip_aaaa_rr(raw))
   end)
 end)
-return describe("build_cname_response", function()
+describe("build_cname_response", function()
   local CNAME = dns_mod.types.CNAME
   local get_rcode
   get_rcode = function(raw)
@@ -263,5 +263,78 @@ return describe("build_cname_response", function()
       end
     end
     return assert.is_true(has_opt)
+  end)
+end)
+return describe("build_sinkhole_response", function()
+  local get_rcode
+  get_rcode = function(raw)
+    return bit.band(raw:byte(4), 0x0f)
+  end
+  local make_query
+  make_query = function(qtype)
+    if qtype == nil then
+      qtype = QTYPE_A
+    end
+    local q = dns_mod.new({
+      header = dns_mod.new_header({
+        id = 0x1234,
+        rd = true
+      }),
+      questions = {
+        {
+          qname = encode_dns_name("blocked.example.com"),
+          qtype = qtype,
+          qclass = QCLASS_IN
+        }
+      }
+    })
+    return tostring(q)
+  end
+  it("reproduit A 0.0.0.0 en NOERROR avec EDE", function()
+    local sink = {
+      a = {
+        string.rep("\0", 4)
+      },
+      aaaa = { },
+      ttl = 30
+    }
+    local resp = build_sinkhole_response({ }, make_query(), "Filtered by upstream validator", sink)
+    assert.is_not_nil(resp)
+    assert.equals(0, get_rcode(resp))
+    local parsed = dns_mod.parse(resp, 1, false)
+    assert.equals(1, parsed.header.ancount)
+    assert.equals(QTYPE_A, parsed.answers[1].rtype)
+    assert.equals(string.rep("\0", 4), parsed.answers[1].rdata)
+    assert.equals(30, parsed.answers[1].ttl)
+    local has_opt = false
+    local _list_0 = (parsed.additionals or { })
+    for _index_0 = 1, #_list_0 do
+      local rr = _list_0[_index_0]
+      if rr.rtype == 0x29 then
+        has_opt = true
+      end
+    end
+    return assert.is_true(has_opt)
+  end)
+  it("reproduit AAAA :: ", function()
+    local sink = {
+      a = { },
+      aaaa = {
+        string.rep("\0", 16)
+      },
+      ttl = 60
+    }
+    local resp = build_sinkhole_response({ }, make_query(dns_mod.types.AAAA), nil, sink)
+    local parsed = dns_mod.parse(resp, 1, false)
+    assert.equals(QTYPE_AAAA, parsed.answers[1].rtype)
+    return assert.equals(string.rep("\0", 16), parsed.answers[1].rdata)
+  end)
+  return it("renvoie nil si dns_orig ou dns_raw absent", function()
+    assert.is_nil(build_sinkhole_response(nil, make_query(), "x", {
+      a = { }
+    }))
+    return assert.is_nil(build_sinkhole_response({ }, nil, "x", {
+      a = { }
+    }))
   end)
 end)
