@@ -115,8 +115,16 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
       requiert `config` après avoir appliqué `--config`).
 
 - Update lists (OpenWrt):
-  - `ssh root@<router> 'custos-update'`
-  - The script uses `/etc/custos/config.moon` and reloads compiled lists.
+  - `ssh root@<router> 'custos-update [full|lowmem] [tag]'`
+  - `custos-update` ne compile plus localement : il **télécharge les `.bin`
+    pré-compilés** depuis les releases `custos-lists` (curl + zstd + vérif
+    SHA256), les déploie dans `lists_dir` puis envoie SIGHUP au daemon.
+  - Profil par défaut : `uci custos.main.lists_profile` (ou env
+    `CUSTOS_LISTS_PROFILE`), sinon **autodétection selon la RAM**
+    (`MemTotal >= 512 Mo → full`, sinon `lowmem` ; seuil ajustable via
+    `CUSTOS_LISTS_MEM_THRESHOLD_KB`).
+  - Tag par défaut : `uci custos.main.lists_tag` / env `CUSTOS_LISTS_TAG`,
+    sinon `latest`. Dépôt : env `CUSTOS_LISTS_REPO` (défaut `jperon/custos-lists`).
 
 - Custom lists (workflow):
   1. Drop `.txt` files in `custom_lists_dir` (1 domain per line, `#` for comments).

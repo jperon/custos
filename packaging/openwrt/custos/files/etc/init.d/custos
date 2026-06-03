@@ -85,16 +85,17 @@ update_lists() {
 # ── Gestion du cron ──────────────────────────────────────────────
 
 _cron_add() {
-    local schedule config
+    local schedule
     schedule=$(uci get custos.main.update_lists_schedule 2>/dev/null)
     schedule="${schedule:-0 3 * * *}"
-    config="$CONFIG_MOON"
 
     _cron_remove
     mkdir -p "$(dirname "$CRONTABS_ROOT")"
     touch "$CRONTABS_ROOT"
-    printf '%s %s %s/filter/updater.lua --config %s --pid /var/run/custos.pid %s\n' \
-        "$schedule" "$PROG" "$CUSTOS_DIR" "$config" "$CUSTOS_CRON_MARKER" \
+    # custos-update télécharge les .bin pré-compilés depuis les releases
+    # custos-lists (profil auto / uci / env, cf. /usr/sbin/custos-update).
+    printf '%s /usr/sbin/custos-update %s\n' \
+        "$schedule" "$CUSTOS_CRON_MARKER" \
         >> "$CRONTABS_ROOT"
     /etc/init.d/cron reload 2>/dev/null || true
 }

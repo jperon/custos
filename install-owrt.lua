@@ -212,7 +212,9 @@ Installer = function(cfg)
         "lpeg",
         "libxxhash",
         "libwolfssl",
-        "px5g"
+        "px5g",
+        "curl",
+        "zstd"
       }
       local pkg_list = table.concat(pkgs_required, " ")
       local install_cmd
@@ -427,34 +429,8 @@ Installer = function(cfg)
     end,
     install_updater = function(self)
       step("Script de mise à jour des listes (custos-update)")
-      local script = [[#!/bin/sh
-CUSTOS_DIR=]] .. self.cfg.dest .. "\n" .. [[
-CONFIG=/etc/custos/config.moon
-PID_FILE=/var/run/custos.pid
-
-PROG=$(command -v luajit2 2>/dev/null || command -v luajit 2>/dev/null)
-[ -z "$PROG" ] && { echo "custos-update: luajit introuvable"; exit 1; }
-[ -f "$CONFIG" ] || { echo "custos-update: $CONFIG introuvable"; exit 1; }
-
-export LUA_PATH="$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
-
-PID_ARG=""
-[ -f "$PID_FILE" ] && PID_ARG="--pid $PID_FILE"
-
-exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
-    --config "$CONFIG" \
-    $PID_ARG \
-    "$@"
-]]
-      local tmplocal = "tmp/owrt-custos-update"
-      if not (self.cfg.dry) then
-        local fh = io.open(tmplocal, "w")
-        if fh then
-          fh:write(script)
-          fh:close()
-        end
-      end
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/usr/sbin/custos-update")) then
+      local src = "packaging/openwrt/custos/files/usr/sbin/custos-update"
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/usr/sbin/custos-update")) then
         fail("Échec de la copie de custos-update")
         return false
       end

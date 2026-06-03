@@ -183,7 +183,9 @@ Installer = (cfg) ->
         "luajit", "libnetfilter-queue", "nftables",
         "kmod-nft-queue", "kmod-nft-bridge",
         "lpeg", "libxxhash",
-        "libwolfssl", "px5g"
+        "libwolfssl", "px5g",
+        -- custos-update : téléchargement + décompression des releases custos-lists
+        "curl", "zstd"
       }
 
       pkg_list = table.concat pkgs_required, " "
@@ -380,35 +382,10 @@ Installer = (cfg) ->
     install_updater: =>
       step "Script de mise à jour des listes (custos-update)"
 
-      script = [[
-#!/bin/sh
-CUSTOS_DIR=]] .. @cfg.dest .. "\n" .. [[
-
-CONFIG=/etc/custos/config.moon
-PID_FILE=/var/run/custos.pid
-
-PROG=$(command -v luajit2 2>/dev/null || command -v luajit 2>/dev/null)
-[ -z "$PROG" ] && { echo "custos-update: luajit introuvable"; exit 1; }
-[ -f "$CONFIG" ] || { echo "custos-update: $CONFIG introuvable"; exit 1; }
-
-export LUA_PATH="$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
-
-PID_ARG=""
-[ -f "$PID_FILE" ] && PID_ARG="--pid $PID_FILE"
-
-exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
-    --config "$CONFIG" \
-    $PID_ARG \
-    "$@"
-]]
-      tmplocal = "tmp/owrt-custos-update"
-      unless @cfg.dry
-        fh = io.open tmplocal, "w"
-        if fh
-          fh\write script
-          fh\close!
-
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/usr/sbin/custos-update"
+      -- Le script canonique (téléchargement des releases custos-lists) est versionné
+      -- dans le paquet OpenWrt ; on le copie tel quel, sans substitution.
+      src = "packaging/openwrt/custos/files/usr/sbin/custos-update"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{src} #{@cfg.user}@#{@ssh_host!}:/usr/sbin/custos-update"
         fail "Échec de la copie de custos-update"
         return false
       unless @ssh_run "chmod +x /usr/sbin/custos-update"

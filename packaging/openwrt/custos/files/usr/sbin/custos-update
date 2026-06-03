@@ -1,30 +1,85 @@
 #!/bin/sh
-# custos-update — Met à jour les listes de domaines CustosVirginum.
+# custos-update — Déploie les listes .bin pré-compilées de CustosVirginum
+# depuis les releases GitHub du dépôt custos-lists.
 #
-# Usage : custos-update [--dry-run]
+# Remplace l'ancienne compilation locale (luajit updater.lua) : les .bin sont
+# désormais construits par la CI de custos-lists et publiés en release, puis
+# simplement téléchargés ici (curl + zstd), vérifiés (SHA256) et déployés.
 #
-# Télécharge et compile les listes définies dans filter.sources: de config.moon,
-# et convertit les listes personnalisées dans filter.custom_lists_dir:.
-# Envoie SIGHUP au daemon si au moins une liste est mise à jour.
+# Usage : custos-update [full|lowmem] [tag]
+#   profil : full (custom + Toulouse) ou lowmem (custom seul).
+#            Défaut : env CUSTOS_LISTS_PROFILE, sinon uci
+#            custos.main.lists_profile, sinon autodétection selon la RAM.
+#   tag    : tag de release. Défaut : env CUSTOS_LISTS_TAG, sinon uci
+#            custos.main.lists_tag, sinon « latest ».
 #
-# Ce script est installé par install-owrt.lua.
-# CUSTOS_DIR est substitué à l'installation.
+# Dépendances : curl, zstd, tar, sha256sum.
+set -eu
 
-CUSTOS_DIR=@DEST@
-CONFIG=/etc/custos/config.moon
+REPO="${CUSTOS_LISTS_REPO:-jperon/custos-lists}"
+DEST="${CUSTOS_LISTS_DIR:-$(uci get custos.main.lists_dir 2>/dev/null || echo /etc/custos/lists)}"
 PID_FILE=/var/run/custos.pid
 
-PROG=$(command -v luajit2 2>/dev/null || command -v luajit 2>/dev/null)
-[ -z "$PROG" ] && { echo "custos-update: luajit introuvable"; exit 1; }
-[ -f "$CONFIG" ] || { echo "custos-update: $CONFIG introuvable"; exit 1; }
+# Seuil RAM (kB) au-delà duquel l'autodétection choisit « full ».
+MEM_FULL_THRESHOLD_KB="${CUSTOS_LISTS_MEM_THRESHOLD_KB:-524288}"
 
-export LUA_PATH="/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;;"
-export LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;"
+# ── Résolution du profil ──────────────────────────────────────────
+profile="${1:-}"
+[ -z "$profile" ] && profile="${CUSTOS_LISTS_PROFILE:-}"
+[ -z "$profile" ] && profile="$(uci get custos.main.lists_profile 2>/dev/null || true)"
+if [ -z "$profile" ]; then
+    mem_kb=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || echo 0)
+    if [ "${mem_kb:-0}" -ge "$MEM_FULL_THRESHOLD_KB" ]; then
+        profile=full
+    else
+        profile=lowmem
+    fi
+    echo "custos-update: profil auto = $profile (RAM ${mem_kb} kB)" >&2
+fi
 
-PID_ARG=""
-[ -f "$PID_FILE" ] && PID_ARG="--pid $PID_FILE"
+case "$profile" in
+    full|lowmem) ;;
+    *) echo "custos-update: profil invalide : $profile (attendu : full|lowmem)" >&2; exit 1 ;;
+esac
 
-exec "$PROG" "$CUSTOS_DIR/filter/updater.lua" \
-    --config "$CONFIG" \
-    $PID_ARG \
-    "$@"
+# ── Tag de release ────────────────────────────────────────────────
+tag="${2:-}"
+[ -z "$tag" ] && tag="${CUSTOS_LISTS_TAG:-}"
+[ -z "$tag" ] && tag="$(uci get custos.main.lists_tag 2>/dev/null || true)"
+tag="${tag:-latest}"
+
+archive="custos-lists-${profile}.tar.zst"
+base="https://github.com/${REPO}/releases/download/${tag}"
+
+# ── Outils requis ─────────────────────────────────────────────────
+for tool in curl zstd tar sha256sum; do
+    command -v "$tool" >/dev/null 2>&1 || {
+        echo "custos-update: outil requis introuvable : $tool" >&2; exit 1; }
+done
+
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/custos-lists.XXXXXX")"
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+echo "custos-update: téléchargement de $archive (tag $tag)…" >&2
+curl --silent --location --fail -o "$tmp/$archive"   "$base/$archive"
+curl --silent --location --fail -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"
+
+echo "custos-update: vérification SHA256…" >&2
+( cd "$tmp" && grep " $archive\$" SHA256SUMS | sha256sum -c - >/dev/null )
+
+echo "custos-update: extraction vers $DEST…" >&2
+mkdir -p "$DEST" "$tmp/extract"
+zstd -dc "$tmp/$archive" | tar -xf - -C "$tmp/extract"
+# Synchronisation : on copie le contenu extrait par-dessus la destination.
+cp -a "$tmp/extract/." "$DEST/"
+
+# ── Rechargement à chaud du daemon ────────────────────────────────
+if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    kill -HUP "$(cat "$PID_FILE")" \
+        && echo "custos-update: SIGHUP envoyé (pid $(cat "$PID_FILE"))." >&2
+elif pgrep -f "luajit.*main" >/dev/null 2>&1; then
+    pkill -HUP -f "luajit.*main" \
+        && echo "custos-update: SIGHUP envoyé (pgrep)." >&2
+fi
+
+echo "custos-update: listes déployées ($profile, $tag) dans $DEST." >&2

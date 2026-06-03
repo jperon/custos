@@ -508,7 +508,14 @@ Référencés via `from_user: "alice"`.
 ### 14.3 Sources de listes de domaines (`filter.sources`)
 
 Définit d'où proviennent les listes de domaines et comment elles sont téléchargées/compilées.
-Utilisé par `make update-lists` / `custos-update`.
+Utilisé par `make update-lists` (compilation locale via `updater.lua`).
+
+> **Note OpenWrt :** sur routeur, `custos-update` ne compile plus localement —
+> il télécharge les `.bin` pré-compilés depuis les releases `custos-lists`
+> (cf. `doc/CHEATSHEET.md`). `filter.sources` ne sert alors qu'à la CI de
+> `custos-lists` ; le profil (`full`/`lowmem`) et le tag se règlent via UCI
+> (`custos.main.lists_profile`, `custos.main.lists_tag`, `custos.main.lists_dir`)
+> ou les variables d'environnement `CUSTOS_LISTS_*`.
 
 Chaque source a un format et au moins un champ d'entrée :
 
