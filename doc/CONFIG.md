@@ -926,6 +926,19 @@ doivent pas ouvrir le pare-feu.
 actions: {"dnsonly"}
 ```
 
+### `unconditionally_allow`
+
+Autorise la requête DNS **sans la soumettre au résolveur validateur** (second
+avis DNS). Les IPs résolues sont injectées dans nftables comme avec `allow`.
+
+À réserver aux domaines de confiance absolue (infrastructure interne, CDN
+critiques) pour lesquels la vérification supplémentaire n'apporterait rien et
+représenterait une latence inutile.
+
+```moonscript
+actions: {"unconditionally_allow"}
+```
+
 ### `dns_strip`
 
 Autorise la résolution DNS mais supprime certains enregistrements de la réponse.

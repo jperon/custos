@@ -438,3 +438,39 @@ describe "filter.rule", ->
       ctx = rule_mod.run_on_response rules, { "r_strip", "r_allow" }, "RAW", "combined"
       assert.is_true ctx.skip_nft
       assert.is_true ctx.inject_nft
+
+  -- ── unconditionally_allow ──────────────────────────────────────
+
+  describe "unconditionally_allow", ->
+    it "eval retourne true", ->
+      eval_fn, _ = rule_mod.compile_rule cfg, {
+        rule_id:     "uncond"
+        description: "Sans validateur"
+        actions:     { "unconditionally_allow" }
+      }, 1
+      v, msg = eval_fn {}
+      assert.is_true v
+      assert.match "Unconditionally", msg
+
+    it "decide_meta expose allow_modifiers.skip_duplicate = true", ->
+      rules = rule_mod.compile_rules {
+        macs: {}
+        rules: {
+          { rule_id: "uncond", description: "Sans validateur", actions: { "unconditionally_allow" } }
+        }
+      }
+      meta = rule_mod.decide_meta rules, {}
+      assert.is_true meta.verdict
+      assert.is_table meta.allow_modifiers
+      assert.is_true meta.allow_modifiers.skip_duplicate
+
+    it "allow classique n'a pas skip_duplicate", ->
+      rules = rule_mod.compile_rules {
+        macs: {}
+        rules: {
+          { rule_id: "plain", description: "Allow", actions: { "allow" } }
+        }
+      }
+      meta = rule_mod.decide_meta rules, {}
+      assert.is_true meta.verdict
+      assert.is_nil meta.allow_modifiers.skip_duplicate

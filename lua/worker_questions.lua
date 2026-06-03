@@ -422,6 +422,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end
   end
   local verdict = NF_ACCEPT
+  local skip_duplicate = false
   local block_reason = nil
   local allow_reason = nil
   local block_rule_id = nil
@@ -463,6 +464,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       nft_timeout = decision.timeout
       matched_list = list_from_condition_reason(decision.condition_reason)
       response_rule_ids = decision.response_rule_ids or { }
+      skip_duplicate = skip_duplicate or (decision.allow_modifiers and decision.allow_modifiers.skip_duplicate or false)
     end
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule = rule_id or ""
@@ -529,7 +531,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end)
     return NF_DROP
   end
-  if verdict == NF_ACCEPT then
+  if verdict == NF_ACCEPT and not skip_duplicate then
     maybe_duplicate(ip, l4, raw)
   end
   return NF_ACCEPT

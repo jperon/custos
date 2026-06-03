@@ -387,6 +387,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- par worker_responses via filter.get_rule_on_response(rule_id).
   -- Ici on ne fait que décider allow/refuse et écrire le message IPC correspondant.
   verdict         = NF_ACCEPT
+  skip_duplicate  = false
   block_reason    = nil
   allow_reason    = nil
   block_rule_id   = nil
@@ -429,6 +430,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       nft_timeout = decision.timeout
       matched_list = list_from_condition_reason decision.condition_reason
       response_rule_ids = decision.response_rule_ids or {}
+      skip_duplicate = skip_duplicate or (decision.allow_modifiers and decision.allow_modifiers.skip_duplicate or false)
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule   = rule_id or ""
     q_fields.list   = matched_list
@@ -481,8 +483,9 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     }
     return NF_DROP
 
-  -- Second avis : duplique la question autorisée vers le validateur (UDP).
-  maybe_duplicate(ip, l4, raw) if verdict == NF_ACCEPT
+  -- Second avis : duplique la question autorisée vers le validateur (UDP),
+  -- sauf si une action unconditionally_allow a demandé à l'ignorer.
+  maybe_duplicate(ip, l4, raw) if verdict == NF_ACCEPT and not skip_duplicate
 
   NF_ACCEPT
 

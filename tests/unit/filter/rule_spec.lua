@@ -724,7 +724,7 @@ return describe("filter.rule", function()
       return assert.equals("response_strip_AAAA", ctx.action_label)
     end)
   end)
-  return describe("run_on_response", function()
+  describe("run_on_response", function()
     it("dispatch complet par rule_id (dns_strip + allow → inject_nft true)", function()
       local rules = rule_mod.compile_rules({
         macs = { },
@@ -772,6 +772,55 @@ return describe("filter.rule", function()
       }, "RAW", "combined")
       assert.is_true(ctx.skip_nft)
       return assert.is_true(ctx.inject_nft)
+    end)
+  end)
+  return describe("unconditionally_allow", function()
+    it("eval retourne true", function()
+      local eval_fn, _ = rule_mod.compile_rule(cfg, {
+        rule_id = "uncond",
+        description = "Sans validateur",
+        actions = {
+          "unconditionally_allow"
+        }
+      }, 1)
+      local v, msg = eval_fn({ })
+      assert.is_true(v)
+      return assert.match("Unconditionally", msg)
+    end)
+    it("decide_meta expose allow_modifiers.skip_duplicate = true", function()
+      local rules = rule_mod.compile_rules({
+        macs = { },
+        rules = {
+          {
+            rule_id = "uncond",
+            description = "Sans validateur",
+            actions = {
+              "unconditionally_allow"
+            }
+          }
+        }
+      })
+      local meta = rule_mod.decide_meta(rules, { })
+      assert.is_true(meta.verdict)
+      assert.is_table(meta.allow_modifiers)
+      return assert.is_true(meta.allow_modifiers.skip_duplicate)
+    end)
+    return it("allow classique n'a pas skip_duplicate", function()
+      local rules = rule_mod.compile_rules({
+        macs = { },
+        rules = {
+          {
+            rule_id = "plain",
+            description = "Allow",
+            actions = {
+              "allow"
+            }
+          }
+        }
+      })
+      local meta = rule_mod.decide_meta(rules, { })
+      assert.is_true(meta.verdict)
+      return assert.is_nil(meta.allow_modifiers.skip_duplicate)
     end)
   end)
 end)

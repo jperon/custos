@@ -30,6 +30,7 @@ compile_rule = function(cfg, rule, idx, used_ids)
   local action_evals = { }
   local actions_meta = { }
   local rule_block_modifiers = { }
+  local rule_allow_modifiers = { }
   local _list_0 = (rule.actions or { })
   for _index_0 = 1, #_list_0 do
     local action_name = _list_0[_index_0]
@@ -50,6 +51,11 @@ compile_rule = function(cfg, rule, idx, used_ids)
     if action_obj.block_modifiers then
       for k, v in pairs(action_obj.block_modifiers) do
         rule_block_modifiers[k] = v
+      end
+    end
+    if action_obj.allow_modifiers then
+      for k, v in pairs(action_obj.allow_modifiers) do
+        rule_allow_modifiers[k] = v
       end
     end
   end
@@ -119,7 +125,7 @@ compile_rule = function(cfg, rule, idx, used_ids)
       end
     end
     if not (all_passed) then
-      return nil, "No condition matched", nil, nil, nil, nil, nil, false, false
+      return nil, "No condition matched", nil, nil, nil, nil, nil, nil, false, false
     end
     req._condition_reason = condition_reason
     local verdict, msg
@@ -133,7 +139,7 @@ compile_rule = function(cfg, rule, idx, used_ids)
         msg = msg or m
       end
     end
-    return verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers, condition_reason, true, rule_has_on_response
+    return verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers, condition_reason, rule_allow_modifiers, true, rule_has_on_response
   end
   return eval_fn, metadata
 end
@@ -148,26 +154,26 @@ details_of = function(rules, req, decision_cfg)
   if effective_cfg.first_match_wins ~= nil then
     first_match_wins = not not effective_cfg.first_match_wins
   end
-  local last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason = nil, nil, nil, nil, nil, nil, nil
+  local last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers = nil, nil, nil, nil, nil, nil, nil, nil
   local response_rule_ids = { }
   for _index_0 = 1, #rules do
     local rule_fn = rules[_index_0]
-    local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, matched, has_on_response = rule_fn(req)
+    local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, matched, has_on_response = rule_fn(req)
     if matched and has_on_response and rule_id then
       response_rule_ids[#response_rule_ids + 1] = rule_id
     end
     if verdict ~= nil then
       if continue_mode or not first_match_wins then
-        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason
+        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers
       else
-        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, response_rule_ids
+        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids
       end
     end
   end
   if last_verdict ~= nil then
-    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, response_rule_ids
+    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers, response_rule_ids
   end
-  return false, "No matching rule (default deny)", nil, nil, nil, nil, nil, response_rule_ids
+  return false, "No matching rule (default deny)", nil, nil, nil, nil, nil, nil, response_rule_ids
 end
 local compile_rules
 compile_rules = function(cfg)
@@ -201,7 +207,7 @@ decide_meta = function(rules, req, decision_cfg)
   if decision_cfg == nil then
     decision_cfg = nil
   end
-  local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, response_rule_ids = details_of(rules, req, decision_cfg)
+  local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids = details_of(rules, req, decision_cfg)
   return {
     verdict = verdict,
     reason = msg,
@@ -210,7 +216,8 @@ decide_meta = function(rules, req, decision_cfg)
     rule_id = rule_id,
     timeout = rule_timeout,
     description = rule_desc,
-    modifiers = rule_modifiers or { }
+    modifiers = rule_modifiers or { },
+    allow_modifiers = allow_modifiers or { }
   }
 end
 local on_response_for

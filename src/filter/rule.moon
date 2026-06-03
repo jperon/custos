@@ -48,6 +48,7 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
   action_evals = {}
   actions_meta = {}
   rule_block_modifiers = {}
+  rule_allow_modifiers = {}
   for action_name in *(rule.actions or {})
     action_factory, err = compiler_api.load_action action_name
     error "Action inconnue '#{action_name}': #{err}" unless action_factory
@@ -65,6 +66,9 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
     if action_obj.block_modifiers
       for k, v in pairs action_obj.block_modifiers
         rule_block_modifiers[k] = v
+    if action_obj.allow_modifiers
+      for k, v in pairs action_obj.allow_modifiers
+        rule_allow_modifiers[k] = v
 
   rule_desc    = rule.description or "rule_#{idx}"
   rule_id      = compiler_api.unique_rule_id rule, idx, used_ids
@@ -117,7 +121,7 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
       if condition_reason == nil and cond_msg
         condition_reason = cond_msg
 
-    return nil, "No condition matched", nil, nil, nil, nil, nil, false, false unless all_passed
+    return nil, "No condition matched", nil, nil, nil, nil, nil, nil, false, false unless all_passed
 
     -- Conserver le message de condition pour enrichir les logs (ex: liste matchée).
     req._condition_reason = condition_reason
@@ -131,7 +135,7 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
       elseif v == nil and m
         msg = msg or m
 
-    verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers, condition_reason, true, rule_has_on_response
+    verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers, condition_reason, rule_allow_modifiers, true, rule_has_on_response
 
   eval_fn, metadata
 
@@ -142,20 +146,20 @@ details_of = (rules, req, decision_cfg=nil) ->
   if effective_cfg.first_match_wins != nil
     first_match_wins = not not effective_cfg.first_match_wins
 
-  last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason = nil, nil, nil, nil, nil, nil, nil
+  last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers = nil, nil, nil, nil, nil, nil, nil, nil
   response_rule_ids = {}
   for rule_fn in *rules
-    verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, matched, has_on_response = rule_fn req
+    verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, matched, has_on_response = rule_fn req
     if matched and has_on_response and rule_id
       response_rule_ids[#response_rule_ids + 1] = rule_id
     if verdict ~= nil
       if continue_mode or not first_match_wins
-        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason
+        last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers
       else
-        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, response_rule_ids
+        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids
   if last_verdict ~= nil
-    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, response_rule_ids
-  false, "No matching rule (default deny)", nil, nil, nil, nil, nil, response_rule_ids
+    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers, response_rule_ids
+  false, "No matching rule (default deny)", nil, nil, nil, nil, nil, nil, response_rule_ids
 
 --- Compile une liste ordonnée de règles.
 compile_rules = (cfg) ->
@@ -180,16 +184,17 @@ decide = (rules, req, decision_cfg=nil) ->
   verdict, msg, rule_desc
 
 decide_meta = (rules, req, decision_cfg=nil) ->
-  verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, response_rule_ids = details_of rules, req, decision_cfg
+  verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids = details_of rules, req, decision_cfg
   {
-    verdict:     verdict
-    reason:      msg
+    verdict:          verdict
+    reason:           msg
     condition_reason: condition_reason
     response_rule_ids: response_rule_ids or {}
-    rule_id:     rule_id
-    timeout:     rule_timeout
-    description: rule_desc
-    modifiers:   rule_modifiers or {}
+    rule_id:          rule_id
+    timeout:          rule_timeout
+    description:      rule_desc
+    modifiers:        rule_modifiers or {}
+    allow_modifiers:  allow_modifiers or {}
   }
 
 --- Retrouve la liste des callbacks on_response d'une règle (par rule_id).
