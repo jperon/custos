@@ -48,3 +48,13 @@ describe "updater.lua --config", ->
       "sortie attendue sous #{TMP}/out ; obtenu :\n#{out}"
     -- …et surtout PAS le chemin par défaut (preuve que --config est honoré).
     assert.falsy out\find("/etc/custos/lists", 1, true)
+
+  it "ignore les listes vides sans les compter en erreur (exit 0)", ->
+    -- Une liste custom sans domaine valide ne doit pas faire échouer la CI.
+    write_file "#{TMP}/custom/empty.txt", "# placeholder\n\n"
+    lua_path = package.path
+    cmd = "LUA_PATH='#{lua_path}' luajit lua/filter/updater.lua " ..
+      "--config #{TMP}/config.moon --dry-run 2>&1; echo EXIT=$?"
+    out = run cmd
+    assert.truthy out\find("EXIT=0", 1, true),
+      "exit 0 attendu malgré une liste vide ; obtenu :\n#{out}"

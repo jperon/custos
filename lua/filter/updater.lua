@@ -187,7 +187,7 @@ end
 write_bin = function(domains, output_path, dry_run)
   local payload, n = bin48.pack_domains(domains)
   if n == 0 then
-    return false, "aucun domaine valide"
+    return false, "aucun domaine valide", true
   end
   if dry_run then
     return true, "dry-run : " .. tostring(n) .. " domaines → " .. tostring(output_path)
@@ -248,7 +248,7 @@ process_custom_dir = function(src_dir, output_dir, dry_run)
       local txt_path = src_base .. "/" .. txt_name
       local name = txt_name:match("([^/]+)%.txt$" or txt_name)
       local bin_path = out_base .. "/" .. name .. ".bin"
-      local ok_l, msg = fetch_local(name, {
+      local ok_l, msg, skipped = fetch_local(name, {
         file = txt_path,
         format = "simple",
         output = bin_path
@@ -256,6 +256,8 @@ process_custom_dir = function(src_dir, output_dir, dry_run)
       if ok_l then
         io.stderr:write("[custom/" .. tostring(name) .. "] ✓ " .. tostring(msg) .. "\n")
         local_updated = local_updated + 1
+      elseif skipped then
+        io.stderr:write("[custom/" .. tostring(name) .. "] ⏭ ignorée (" .. tostring(msg) .. ")\n")
       else
         io.stderr:write("[custom/" .. tostring(name) .. "] ✗ " .. tostring(msg) .. "\n")
         local_errors = local_errors + 1

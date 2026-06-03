@@ -245,7 +245,9 @@ write_bin = (domains, output_path, dry_run) ->
   payload, n = bin48.pack_domains domains
 
   if n == 0
-    return false, "aucun domaine valide"
+    -- Liste vide (placeholder, commentaires seuls) : ce n'est pas une erreur,
+    -- on le signale via un 3e retour « skipped » pour ne pas faire échouer la CI.
+    return false, "aucun domaine valide", true
 
   if dry_run
     return true, "dry-run : #{n} domaines → #{output_path}"
@@ -317,10 +319,12 @@ process_custom_dir = (src_dir, output_dir, dry_run) ->
     txt_path = src_base .. "/" .. txt_name
     name = txt_name\match "([^/]+)%.txt$" or txt_name
     bin_path = out_base .. "/" .. name .. ".bin"
-    ok_l, msg = fetch_local name, { file: txt_path, format: "simple", output: bin_path }, dry_run
+    ok_l, msg, skipped = fetch_local name, { file: txt_path, format: "simple", output: bin_path }, dry_run
     if ok_l
       io.stderr\write "[custom/#{name}] ✓ #{msg}\n"
       local_updated += 1
+    elseif skipped
+      io.stderr\write "[custom/#{name}] ⏭ ignorée (#{msg})\n"
     else
       io.stderr\write "[custom/#{name}] ✗ #{msg}\n"
       local_errors += 1

@@ -120,6 +120,9 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
 
 - Custom lists (workflow):
   1. Drop `.txt` files in `custom_lists_dir` (1 domain per line, `#` for comments).
+     - Une liste vide (commentaires seuls, placeholder) est **ignorée** (`⏭`),
+       pas comptée en erreur : l'updater ne sort pas en code 1 pour autant
+       (important pour la CI des listes).
   2. Run update (`make update-lists` or `custos-update`).
   3. Reload service if needed:
      - Debian: `make reload`
