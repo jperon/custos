@@ -59,8 +59,7 @@ ffi.cdef [[
   unsigned int sleep(unsigned int seconds);
 ]]
 
-SIG_BLOCK     = 0
-O_NONBLOCK    = 2048
+{ :O_NONBLOCK, :SIG_BLOCK } = require "lib.os_constants"
 F_SETPIPE_SZ  = 1031
 PIPE_DESIRED_SIZE = 65536
 

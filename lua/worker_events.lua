@@ -9,16 +9,16 @@ do
   log_info, log_warn, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.set_action_prefix
 end
 local bit = require("bit")
+local O_NONBLOCK, O_APPEND, O_CREAT, O_EXCL, SIG_BLOCK
+do
+  local _obj_0 = require("lib.os_constants")
+  O_NONBLOCK, O_APPEND, O_CREAT, O_EXCL, SIG_BLOCK = _obj_0.O_NONBLOCK, _obj_0.O_APPEND, _obj_0.O_CREAT, _obj_0.O_EXCL, _obj_0.SIG_BLOCK
+end
 local POLLIN = 1
 local POLL_TIMEOUT = 60000
-local O_NONBLOCK = 2048
-local SIG_BLOCK = 0
 local SIGTERM = 15
 local READ_BUF = 65536
 local O_WRONLY = 1
-local O_CREAT = 64
-local O_EXCL = 128
-local O_APPEND = 1024
 local FILE_MODE = 420
 local HEADER = "decision\tqname\tmac_src\tsrc_ip\tdst_ip\tvlan\tuser\taf\treason\trule\tcount\tfirst_ts\tlast_ts\n"
 local _read_buf = ffi.new("uint8_t[?]", READ_BUF)

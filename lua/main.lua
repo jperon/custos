@@ -32,8 +32,11 @@ local nft_extra = require("nft_extra_rules")
 local lowmem = require("lib.lowmem")
 ffi.cdef([[  unsigned int sleep(unsigned int seconds);
 ]])
-local SIG_BLOCK = 0
-local O_NONBLOCK = 2048
+local O_NONBLOCK, SIG_BLOCK
+do
+  local _obj_0 = require("lib.os_constants")
+  O_NONBLOCK, SIG_BLOCK = _obj_0.O_NONBLOCK, _obj_0.SIG_BLOCK
+end
 local F_SETPIPE_SZ = 1031
 local PIPE_DESIRED_SIZE = 65536
 local create_signal_fd

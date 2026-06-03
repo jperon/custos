@@ -22,16 +22,13 @@ bit = require "bit"
 
 -- ── Constantes ──────────────────────────────────────────────────
 
+{ :O_NONBLOCK, :O_APPEND, :O_CREAT, :O_EXCL, :SIG_BLOCK } = require "lib.os_constants"
+
 POLLIN       = 1
 POLL_TIMEOUT = 60000   -- ms : garantit la détection des changements d'heure
-O_NONBLOCK   = 2048
-SIG_BLOCK    = 0
 SIGTERM      = 15
 READ_BUF     = 65536   -- octets, buffer de lecture du pipe
 O_WRONLY     = 1
-O_CREAT      = 64
-O_EXCL       = 128
-O_APPEND     = 1024
 FILE_MODE    = 420     -- 0644 décimal
 
 -- Header TSV (écrit une seule fois à la création du fichier via O_EXCL)

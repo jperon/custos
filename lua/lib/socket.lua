@@ -86,6 +86,11 @@ pcall(function()
   ]])
 end)
 local C = ffi.C
+local O_NONBLOCK, SOL_SOCKET, SO_REUSEADDR, SO_REUSEPORT
+do
+  local _obj_0 = require("lib.os_constants")
+  O_NONBLOCK, SOL_SOCKET, SO_REUSEADDR, SO_REUSEPORT = _obj_0.O_NONBLOCK, _obj_0.SOL_SOCKET, _obj_0.SO_REUSEADDR, _obj_0.SO_REUSEPORT
+end
 local AF_INET = 2
 local AF_INET6 = 10
 local AF_UNIX = 1
@@ -94,10 +99,6 @@ local SOCK_STREAM = 1
 local SOCK_DGRAM = 2
 local SOCK_RAW = 3
 local F_SETFL = 4
-local O_NONBLOCK = 2048
-local SOL_SOCKET = 1
-local SO_REUSEADDR = 2
-local SO_REUSEPORT = 15
 local MSG_DONTWAIT = 64
 local EWOULDBLOCK = 11
 local EAGAIN = 11

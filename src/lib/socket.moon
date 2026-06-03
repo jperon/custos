@@ -94,6 +94,8 @@ pcall ->
 
 C = ffi.C
 
+{ :O_NONBLOCK, :SOL_SOCKET, :SO_REUSEADDR, :SO_REUSEPORT } = require "lib.os_constants"
+
 -- Constants
 AF_INET = 2
 AF_INET6 = 10
@@ -103,10 +105,6 @@ SOCK_STREAM = 1
 SOCK_DGRAM = 2
 SOCK_RAW = 3
 F_SETFL = 4
-O_NONBLOCK = 2048
-SOL_SOCKET = 1
-SO_REUSEADDR = 2
-SO_REUSEPORT = 15  -- Linux ≥ 3.9
 MSG_DONTWAIT = 64
 EWOULDBLOCK = 11
 EAGAIN = 11

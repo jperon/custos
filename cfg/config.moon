@@ -199,14 +199,14 @@
         description: "Blocage des catégories de menaces connues"
         actions: {"deny"}
         conditions: {
-          to_domainlists: {
+          to_domain_lists: {
             "toulouse/malware"
             "toulouse/phishing"
             "toulouse/gambling"
             "toulouse/adult"
             "toulouse/publicite"
           }
-          from_netlists: {"lan"}
+          from_net_lists: {"lan"}
         }
       }
       {
@@ -214,7 +214,7 @@
         actions: {"allow"}
         conditions: {
           to_domains: {"local", "lan", "home.arpa"}
-          from_netlist: "lan"
+          from_net_list: "lan"
         }
       }
       {
@@ -222,7 +222,7 @@
         actions: {"allow"}
         conditions: {
           to_domains: {"github.com", "gitlab.com", "npmjs.org", "pypi.org", "debian.org"}
-          from_maclist: "trusted"
+          from_mac_list: "trusted"
         }
       }
       {
@@ -259,7 +259,7 @@
         description: "Autorisation DNS sondes captives sans ouverture pare-feu"
         actions: {"dnsonly"}
         conditions: {
-          to_domainlist: "custom/captive_detect"
+          to_domain_list: "custom/captive_detect"
         }
       }
       {
@@ -280,7 +280,7 @@
         description: "Accès restreint groupe VLAN guests"
         actions: {"allow"}
         conditions: {
-          from_vlanlist: "guests"
+          from_vlan_list: "guests"
           to_domain: "portal.example.com"
         }
       }
