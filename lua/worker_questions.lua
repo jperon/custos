@@ -287,6 +287,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
+  local q_entry_ms = get_benchmark_ms()
   local l2 = get_l2(nfad)
   local ip, l4, dns_msg = parse_packet(raw)
   if not (ip) then
@@ -465,7 +466,13 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end
     write_event(q_fields, allowed)
   end
-  local benchmark_ms = get_benchmark_ms()
+  local q_exit_ms = get_benchmark_ms()
+  local question_proc_ms
+  if q_entry_ms and q_exit_ms then
+    question_proc_ms = q_exit_ms - q_entry_ms
+  else
+    question_proc_ms = nil
+  end
   allow_timeout = allow_timeout or nft_cfg.ip_timeout
   block_timeout = block_timeout or nft_cfg.ip_timeout
   if verdict == NF_ACCEPT then
@@ -475,9 +482,9 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   end
   local ipc_ok = false
   if verdict == NF_ACCEPT then
-    ipc_ok = write_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, benchmark_ms, allow_rule_id, allow_timeout, nil, response_rule_ids)
+    ipc_ok = write_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, q_entry_ms, allow_rule_id, allow_timeout, nil, response_rule_ids, question_proc_ms)
   else
-    ipc_ok = write_refused_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout, block_modifiers, response_rule_ids)
+    ipc_ok = write_refused_msg(pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, q_entry_ms, block_rule_id, block_timeout, block_modifiers, response_rule_ids, question_proc_ms)
   end
   if not (ipc_ok) then
     log_warn(function()

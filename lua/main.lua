@@ -29,6 +29,7 @@ do
   end
 end
 local nft_extra = require("nft_extra_rules")
+local lowmem = require("lib.lowmem")
 ffi.cdef([[  unsigned int sleep(unsigned int seconds);
 ]])
 local SIG_BLOCK = 0
@@ -179,37 +180,15 @@ end
 local supervise
 supervise = function(pipes, sfd)
   local auth_cfg = load_auth_cfg()
-  local parse_queues
-  parse_queues = function(str)
-    local queues = { }
-    for part in str:gmatch("%d+%-?%d*") do
-      if part:match("%-%d+") then
-        local a, b = part:match("(%d+)%-(%d+)")
-        a, b = tonumber(a), tonumber(b)
-        if a and b then
-          if a <= b then
-            for n = a, b do
-              table.insert(queues, n)
-            end
-          else
-            for n = b, a do
-              table.insert(queues, n)
-            end
-          end
-        else
-          local n = tonumber(part)
-          if n then
-            table.insert(queues, n)
-          end
-        end
-      else
-        local n = tonumber(part)
-        if n then
-          table.insert(queues, n)
-        end
-      end
-    end
-    return queues
+  local parse_queues = lowmem.parse_queues
+  if lowmem.detect(config.runtime) then
+    local collapsed = lowmem.collapse_nfqueue(config.nfqueue)
+    log_info(function()
+      return {
+        action = "lowmem_collapse_queues",
+        collapsed = collapsed
+      }
+    end)
   end
   local questions_queues = parse_queues(config.nfqueue.questions)
   local responses_queues = parse_queues(config.nfqueue.responses)

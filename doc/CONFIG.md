@@ -84,12 +84,21 @@ champs de décision habituels (`qname`, `qtype`, `mac_src`, `vlan`, `src_ip`,
 `action=response_dns_benchmark` exempte ces lignes du rate-limiting `ALLOW`/`BLOCK`
 (fenêtre 30 s) afin de conserver tous les échantillons.
 
-`delta_ms` et `q_to_response_ms` mesurent la latence totale entre l'acceptation
-de la question par le worker DNS et le traitement de la réponse correspondante
-par le worker responses : cela inclut la latence du résolveur amont, le réseau,
-les retransmissions et les files NFQUEUE. Les champs `drain_ms`, `payload_ms`,
-`parse_ms`, `match_ms`, `log_ms`, `retry_attempts` et `retry_wait_ms` détaillent
-uniquement les jalons locaux côté worker responses.
+`q_to_response_ms` mesure la latence **totale**, de l'entrée de la question dans
+le worker DNS jusqu'au log de la réponse correspondante côté worker responses,
+traitement Custos inclus. Elle se décompose en trois étages :
+
+- `question_proc_ms` : traitement interne du worker DNS (parse L2/L3/L4/L7,
+  décision, écriture IPC), de l'entrée de la question à sa sortie.
+- `response_entry_ms` : de la sortie de la question (worker DNS) à l'arrivée de
+  la réponse dans le worker responses. Inclut le résolveur amont, le réseau,
+  les retransmissions et les files NFQUEUE — c'est généralement le poste
+  dominant et il est **hors** Custos.
+- jalons locaux côté worker responses : `drain_ms`, `payload_ms`, `parse_ms`,
+  `match_ms`, `log_ms` (plus `retry_attempts` et `retry_wait_ms`).
+
+On a donc `q_to_response_ms ≈ question_proc_ms + response_entry_ms + (drain_ms +
+payload_ms + parse_ms + match_ms + log_ms)`.
 
 Quand `benchmark` est désactivé (défaut), le verdict `ALLOW`/`BLOCK` est journalisé
 côté worker DNS comme auparavant, sans temps.
@@ -100,8 +109,23 @@ runtime: {
   benchmark: false
   gc_pause: 110      -- machines à faible RAM (128 Mo) ; 200 = défaut LuaJIT
   gc_stepmul: 400
+  lowmem: "auto"            -- "auto" (défaut) | true/"on" | false/"off"
+  lowmem_threshold_kb: 131072  -- seuil d'autodétection (128 Mo)
 }
 ```
+
+| Clé | Type | Défaut | Description |
+|-----|------|--------|-------------|
+| `lowmem` | bool/string | `"auto"` | Mode RAM faible. `"auto"` : autodétection selon `MemTotal`. `true`/`"on"` : forcé. `false`/`"off"` : désactivé. |
+| `lowmem_threshold_kb` | integer | `131072` | Seuil (kB) sous lequel l'autodétection active le mode RAM faible. |
+
+> **Mode RAM faible (`runtime.lowmem`).** Quand il est actif, custos ramène
+> automatiquement chaque plage `nfqueue` (`questions`, `responses`, `captive`,
+> `reject`) à une **seule** file — donc un seul worker forké par règle — afin de
+> minimiser l'empreinte mémoire (cf. [section `nfqueue`](#3-section-nfqueue)).
+> Par défaut (`"auto"`), il s'active si `MemTotal < 128 Mo` (`lowmem_threshold_kb`).
+> Ce seuil de 128 Mo est aligné sur l'autodétection de profil de listes par
+> `custos-update` (`full`/`lowmem`).
 
 > **RAM faible (≈128 Mo).** Les listes de domaines au format `.bin` sont mappées
 > en lecture seule partagée (`mmap` `MAP_SHARED`) : leurs pages ne sont jamais
@@ -119,10 +143,12 @@ runtime: {
 >   pleinement fonctionnel sans lui — on perd seulement le contrôle/journal SNI
 >   sur le port 443.
 > - **Réduire le parallélisme** : ramener chaque plage `nfqueue` à une seule
->   queue (cf. [section `nfqueue`](#3-section-nfqueue)).
+>   queue (cf. [section `nfqueue`](#3-section-nfqueue)). Le mode
+>   [`runtime.lowmem`](#2-section-runtime) le fait automatiquement sous 128 Mo.
 >
-> Ces réglages relèvent du déploiement (config), pas d'un « mode » dédié : custos
-> n'adapte rien automatiquement selon la RAM disponible.
+> Hormis la réduction des files par le mode `runtime.lowmem`, ces réglages
+> relèvent du déploiement (config) : custos n'adapte rien d'autre automatiquement
+> selon la RAM disponible.
 
 ---
 
@@ -163,7 +189,9 @@ nfqueue: {
 > peut **ramener chaque plage à une seule queue** (p. ex. `questions: "0"`,
 > `reject: "10"`) : on perd le traitement parallèle (débit moindre sous forte
 > charge) mais on économise un processus par queue supprimée (~3 à 8 Mo chacun).
-> Voir aussi la note « RAM faible » de la section [`runtime`](#2-section-runtime).
+> Le mode [`runtime.lowmem`](#2-section-runtime) applique cette réduction
+> automatiquement sous 128 Mo. Voir aussi la note « RAM faible » de la section
+> [`runtime`](#2-section-runtime).
 
 ---
 

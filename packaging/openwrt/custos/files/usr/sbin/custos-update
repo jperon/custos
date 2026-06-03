@@ -21,7 +21,9 @@ DEST="${CUSTOS_LISTS_DIR:-$(uci get custos.main.lists_dir 2>/dev/null || echo /e
 PID_FILE=/var/run/custos.pid
 
 # Seuil RAM (kB) au-delà duquel l'autodétection choisit « full ».
-MEM_FULL_THRESHOLD_KB="${CUSTOS_LISTS_MEM_THRESHOLD_KB:-524288}"
+# 128 Mo : en dessous, on bascule en « lowmem » (custom seul, sans Toulouse),
+# en cohérence avec le mode RAM faible du daemon (cf. config runtime.lowmem).
+MEM_FULL_THRESHOLD_KB="${CUSTOS_LISTS_MEM_THRESHOLD_KB:-131072}"
 
 # ── Résolution du profil ──────────────────────────────────────────
 profile="${1:-}"

@@ -210,9 +210,12 @@ write_with_retry = function(pipe_wfd, msg)
   return false
 end
 local encode_msg
-encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids)
+encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms)
   if response_rule_ids == nil then
     response_rule_ids = nil
+  end
+  if question_proc_ms == nil then
+    question_proc_ms = nil
   end
   if not (ip_raw and resolver_ip_raw) then
     return nil
@@ -251,6 +254,11 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
     bench = 0
   end
   bench = math.floor(bench)
+  local qproc = tonumber(question_proc_ms) or 0
+  if qproc < 0 then
+    qproc = 0
+  end
+  qproc = math.floor(qproc)
   local mods_bits = encode_modifiers(modifiers)
   local response_ids = { }
   if type(response_rule_ids) == "table" then
@@ -286,7 +294,8 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
     timeout,
     tostring(bench),
     string.format("%x", mods_bits),
-    response_ids_hex
+    response_ids_hex,
+    tostring(qproc)
   }, "|") .. "\n"
   if #line > IPC_MAX_LINE then
     return nil
@@ -294,22 +303,28 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
   return line
 end
 local write_msg
-write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids)
+write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms)
   if response_rule_ids == nil then
     response_rule_ids = nil
   end
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids)
+  if question_proc_ms == nil then
+    question_proc_ms = nil
+  end
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms)
   if not (msg) then
     return false
   end
   return write_with_retry(pipe_wfd, msg)
 end
 local write_refused_msg
-write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids)
+write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms)
   if response_rule_ids == nil then
     response_rule_ids = nil
   end
-  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids)
+  if question_proc_ms == nil then
+    question_proc_ms = nil
+  end
+  local msg = encode_msg(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms)
   if not (msg) then
     return false
   end
@@ -398,6 +413,13 @@ decode_msg = function(raw)
   else
     benchmark_ms = nil
   end
+  local question_proc_num = tonumber(parts[14])
+  local question_proc_ms
+  if question_proc_num and question_proc_num > 0 then
+    question_proc_ms = question_proc_num
+  else
+    question_proc_ms = nil
+  end
   local mods_hex = parts[12] or "0"
   local mods_bits = tonumber(mods_hex, 16) or 0
   local modifiers = decode_modifiers(mods_bits)
@@ -423,6 +445,7 @@ decode_msg = function(raw)
     refused = refused,
     reason = reason,
     benchmark_ms = benchmark_ms,
+    question_proc_ms = question_proc_ms,
     rule_id = rule_id,
     timeout = timeout,
     modifiers = modifiers,
@@ -444,6 +467,7 @@ set_pending = function(msg, now_fn)
     modifiers = msg.modifiers,
     reason = msg.reason,
     benchmark_ms = msg.benchmark_ms,
+    question_proc_ms = msg.question_proc_ms,
     rule_id = msg.rule_id,
     timeout = msg.timeout,
     response_rule_ids = msg.response_rule_ids or { }

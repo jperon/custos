@@ -248,6 +248,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 
   raw = ffi.string payload_ptr[0], payload_len
 
+  -- Jalon d'entrée benchmark : capturé au plus tôt pour couvrir tout le
+  -- traitement question (parse L2/L3/L4/L7, décision, écriture IPC). Sert de
+  -- base à q_to_response_ms côté worker responses.
+  q_entry_ms = get_benchmark_ms!
+
   -- ── L2 ────────────────────────────────────────────────────
   -- MAC source via nfq_get_packet_hw() ; MAC destination non exposée par libnfq.
   l2 = get_l2 nfad
@@ -417,15 +422,21 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- Écriture IPC : write_msg pour les allow, write_refused_msg pour les refuse.
   -- Le comportement fin (strip DNS, injection nft…) est déterminé côté response
   -- par les callbacks on_response des actions, sans aucun code spécifique ici.
-  benchmark_ms  = get_benchmark_ms!
+  -- benchmark_ms transmis = jalon d'ENTRÉE (q_entry_ms) afin que
+  -- q_to_response_ms couvre tout le traitement. question_proc_ms = durée du
+  -- traitement interne question (entrée → juste avant l'écriture IPC) ;
+  -- le worker responses reconstitue la sortie (entrée + proc) pour
+  -- response_entry_ms.
+  q_exit_ms = get_benchmark_ms!
+  question_proc_ms = if q_entry_ms and q_exit_ms then q_exit_ms - q_entry_ms else nil
   allow_timeout = allow_timeout or nft_cfg.ip_timeout
   block_timeout = block_timeout or nft_cfg.ip_timeout
   q_fields.timeout = if verdict == NF_ACCEPT then allow_timeout else block_timeout
   ipc_ok = false
   if verdict == NF_ACCEPT
-    ipc_ok = write_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, benchmark_ms, allow_rule_id, allow_timeout, nil, response_rule_ids
+    ipc_ok = write_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, q_entry_ms, allow_rule_id, allow_timeout, nil, response_rule_ids, question_proc_ms
   else
-    ipc_ok = write_refused_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, benchmark_ms, block_rule_id, block_timeout, block_modifiers, response_rule_ids
+    ipc_ok = write_refused_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, block_reason, q_entry_ms, block_rule_id, block_timeout, block_modifiers, response_rule_ids, question_proc_ms
 
   unless ipc_ok
     log_warn -> {

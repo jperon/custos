@@ -12,6 +12,8 @@
     _description: "Paramètres d'exécution généraux"
     log_level: { type: "enum",    label: "Niveau de log",    values: {"DEBUG","INFO","WARN","ERROR"}, default: "INFO" }
     benchmark:  { type: "boolean", label: "Mode benchmark",   default: false }
+    lowmem:     { type: "enum",    label: "Mode RAM faible",  values: {"auto","on","off"}, default: "auto", hint: "Sous 128 Mo (auto) : une seule file NFQUEUE par règle" }
+    lowmem_threshold_kb: { type: "integer", label: "Seuil RAM faible (kB)", default: 131072, hint: "Seuil d'autodétection du mode RAM faible" }
   }
 
   nfqueue: {

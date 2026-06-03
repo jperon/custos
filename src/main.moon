@@ -51,6 +51,7 @@ do
   collectgarbage "setpause", gc_cfg.gc_pause if gc_cfg.gc_pause
   collectgarbage "setstepmul", gc_cfg.gc_stepmul if gc_cfg.gc_stepmul
 nft_extra = require "nft_extra_rules"
+lowmem = require "lib.lowmem"
 
 -- ── Helpers POSIX ────────────────────────────────────────────────
 
@@ -186,25 +187,14 @@ supervise = (pipes, sfd) ->
   auth_cfg = load_auth_cfg!
 
   -- Parse queue lists from config, supporting single numbers and ranges (e.g. "0,2,5-7,10-12")
-  parse_queues = (str) ->
-    queues = {}
-    for part in str\gmatch "%d+%-?%d*"
-      if part\match "%-%d+" then
-        a, b = part\match "(%d+)%-(%d+)"
-        a, b = tonumber(a), tonumber(b)
-        if a and b then
-          if a <= b then
-            for n = a, b do table.insert queues, n
-          else
-            for n = b, a do table.insert queues, n
-        else
-          -- fallback: treat as single
-          n = tonumber(part)
-          if n then table.insert queues, n
-      else
-        n = tonumber(part)
-        if n then table.insert queues, n
-    queues
+  parse_queues = lowmem.parse_queues
+
+  -- Mode « RAM faible » : ramener chaque plage de files à une seule queue.
+  -- On mute config.nfqueue en place pour que nft_rules (ruleset) ET la boucle
+  -- de fork des workers voient la même valeur réduite.
+  if lowmem.detect config.runtime
+    collapsed = lowmem.collapse_nfqueue config.nfqueue
+    log_info -> { action: "lowmem_collapse_queues", :collapsed }
 
   questions_queues = parse_queues config.nfqueue.questions
   responses_queues = parse_queues config.nfqueue.responses

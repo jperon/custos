@@ -395,6 +395,28 @@ describe "ipc", ->
       assert.equals "rule_dns", decoded.rule_id
       assert.equals "90s", decoded.timeout
 
+  -- ── 20b. question_proc_ms round-trip + rétrocompat (champ absent) ────
+  describe "encode_msg avec question_proc_ms", ->
+    it "question_proc_ms encodé et décodé", ->
+      m_ipc = fresh_ipc!
+      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+        false, "", 1000, "rule_dns", "90s", nil, nil, 7
+      decoded = m_ipc.decode_msg msg
+      assert.is_not_nil decoded
+      assert.equals 1000, decoded.benchmark_ms
+      assert.equals 7, decoded.question_proc_ms
+
+    it "message sans champ question_proc_ms → nil (rétrocompat)", ->
+      m_ipc = fresh_ipc!
+      -- message 13 champs (sans question_proc_ms)
+      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+        false, "", 1000, "rule_dns", "90s"
+      -- retire le dernier champ (question_proc) ajouté par encode_msg
+      trimmed = msg\gsub("|0\n$", "\n")
+      decoded = m_ipc.decode_msg trimmed
+      assert.is_not_nil decoded
+      assert.is_nil decoded.question_proc_ms
+
   -- ── 21. write_msg fd invalide → géré sans crash ───────────────────────
   describe "write_msg fd invalide", ->
     it "write_msg sur fd -1 ne crash pas", ->

@@ -111,7 +111,7 @@ describe "worker_responses helpers", ->
       retry_attempts: 1
     }
     deltas = {
-      delta_ms: 12, response_entry_ms: 5, drain_ms: 0
+      delta_ms: 12, question_proc_ms: 4, response_entry_ms: 5, drain_ms: 0
       payload_ms: 1, parse_ms: 2, match_ms: 0, log_ms: 0
     }
 
@@ -129,7 +129,9 @@ describe "worker_responses helpers", ->
       assert.equals "1.1.1.1", fields.dst_ip
       -- temps présents dans la même table
       assert.equals 12, fields.q_to_response_ms
-      assert.equals 12, fields.delta_ms
+      assert.is_nil fields.delta_ms
+      assert.equals 4, fields.question_proc_ms
+      assert.equals 5, fields.response_entry_ms
       assert.equals 2, fields.parse_ms
       assert.equals "0x1f4d", fields.txid
 

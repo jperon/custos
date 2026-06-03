@@ -416,8 +416,8 @@ bench_delta = (finish, start) ->
 -- @tparam table entry  Transaction IPC (refused, reason, rule_id, dnsonly)
 -- @tparam table info   Métadonnées : client_mac, vlan, client_ip, resolver_ip,
 --                      client_port, txid, af, user, qname, qtype, retry_*
--- @tparam table deltas Jalons : delta_ms, response_entry_ms, drain_ms, payload_ms,
---                      parse_ms, match_ms, log_ms
+-- @tparam table deltas Jalons : delta_ms (→ q_to_response_ms), question_proc_ms,
+--                      response_entry_ms, drain_ms, payload_ms, parse_ms, match_ms, log_ms
 -- @treturn table  Champs prêts pour log_allow/log_block
 -- @treturn string Verdict : "block" si entry.refused, sinon "allow"
 build_benchmark_fields = (entry, info, deltas) ->
@@ -437,8 +437,8 @@ build_benchmark_fields = (entry, info, deltas) ->
     reason:   entry.reason
     rule:     entry.rule_id
     dnsonly:  entry.dnsonly
-    delta_ms: deltas.delta_ms
     q_to_response_ms: deltas.delta_ms
+    question_proc_ms:  deltas.question_proc_ms
     response_entry_ms: deltas.response_entry_ms
     drain_ms:   deltas.drain_ms
     payload_ms: deltas.payload_ms
@@ -645,8 +645,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- Benchmark : quand activé, le verdict ALLOW/BLOCK est émis ICI (worker
   -- response), enrichi des temps, plutôt que côté question — pour réunir verdict
-  -- et latence dans une seule ligne. La latence totale question→réponse
-  -- (`q_to_response_ms`/`delta_ms`) n'est connue qu'à ce stade. Le champ
+  -- et latence dans une seule ligne. La latence totale (`q_to_response_ms`,
+  -- de l'entrée de la question au log de la réponse, traitement inclus) n'est
+  -- connue qu'à ce stade ; `question_proc_ms` en isole la part traitement
+  -- question, `response_entry_ms` la part sortie question→réponse. Le champ
   -- `action=dns_benchmark` (préfixé `response_`) évite le rate-limiting
   -- ALLOW/BLOCK (30 s) afin de conserver tous les échantillons. Le worker
   -- question supprime sa propre ligne ALLOW/BLOCK quand benchmark est actif.
@@ -669,9 +671,15 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         retry_wait_ms:  retry_wait_ms
         retry_attempts: retry_attempts
       }
+      -- entry.benchmark_ms = jalon d'ENTRÉE question : delta_ms couvre donc tout
+      -- le traitement. La sortie question (base de response_entry_ms) est
+      -- reconstituée : entrée + durée du traitement interne question.
+      question_proc_ms = entry.question_proc_ms or 0
+      q_exit_ms = entry.benchmark_ms + question_proc_ms
       deltas = {
         delta_ms:          delta_ms
-        response_entry_ms: bench_delta bench_start_ms, entry.benchmark_ms
+        question_proc_ms:  question_proc_ms
+        response_entry_ms: bench_delta bench_start_ms, q_exit_ms
         drain_ms:          bench_delta bench_after_drain_ms, bench_start_ms
         payload_ms:        bench_delta bench_after_payload_ms, bench_after_drain_ms
         parse_ms:          bench_delta bench_after_parse_ms, bench_after_payload_ms

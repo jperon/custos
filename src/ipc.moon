@@ -149,13 +149,14 @@ write_with_retry = (pipe_wfd, msg) ->
 -- @tparam string      resolver_ip_raw IP résolveur
 -- @tparam boolean     refused       true si réponse REFUSED
 -- @tparam string      reason        Raison (tronquée à 63 chars)
--- @tparam number|nil  benchmark_ms  Latence mesurée
+-- @tparam number|nil  benchmark_ms  Horodatage d'entrée question (base q_to_response_ms)
 -- @tparam string|nil  rule_id       Identifiant de règle
 -- @tparam string|nil  timeout       Timeout nft (ex: "2m")
 -- @tparam table|nil   modifiers     Table {nom → bool} des modificateurs actifs
 -- @tparam table|nil   response_rule_ids Liste ordonnée des rule_id à appliquer côté response
+-- @tparam number|nil  question_proc_ms Durée du traitement interne question (ms)
 -- @treturn string|nil Ligne IPC prête à écrire, ou nil si invalide
-encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil) ->
+encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil, question_proc_ms=nil) ->
   return nil unless ip_raw and resolver_ip_raw
   return nil unless (#ip_raw == 4 or #ip_raw == 16)
   return nil unless (#resolver_ip_raw == 4 or #resolver_ip_raw == 16)
@@ -184,6 +185,10 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason,
   bench = 0 if bench < 0
   bench = math.floor bench
 
+  qproc = tonumber(question_proc_ms) or 0
+  qproc = 0 if qproc < 0
+  qproc = math.floor qproc
+
   mods_bits = encode_modifiers modifiers
   response_ids = {}
   if type(response_rule_ids) == "table"
@@ -206,18 +211,19 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason,
     tostring bench
     string.format "%x", mods_bits
     response_ids_hex
+    tostring qproc
   }, "|") .. "\n"
 
   return nil if #line > IPC_MAX_LINE
   line
 
-write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids
+write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil, question_proc_ms=nil) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms
   return false unless msg
   write_with_retry pipe_wfd, msg
 
-write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil) ->
-  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids
+write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil, question_proc_ms=nil) ->
+  msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms
   return false unless msg
   write_with_retry pipe_wfd, msg
 
@@ -278,6 +284,10 @@ decode_msg = (raw) ->
 
   benchmark_ms = if benchmark_num > 0 then benchmark_num else nil
 
+  -- Champ question_proc_ms optionnel (rétrocompatibilité messages < 14 champs)
+  question_proc_num = tonumber parts[14]
+  question_proc_ms = if question_proc_num and question_proc_num > 0 then question_proc_num else nil
+
   -- Champ mods optionnel (rétrocompatibilité messages 11 champs)
   mods_hex  = parts[12] or "0"
   mods_bits = tonumber(mods_hex, 16) or 0
@@ -302,6 +312,7 @@ decode_msg = (raw) ->
     :refused
     :reason
     :benchmark_ms
+    :question_proc_ms
     :rule_id
     :timeout
     :modifiers
@@ -322,6 +333,7 @@ set_pending = (msg, now_fn) ->
     modifiers:    msg.modifiers
     reason:       msg.reason
     benchmark_ms: msg.benchmark_ms
+    question_proc_ms: msg.question_proc_ms
     rule_id:      msg.rule_id
     timeout:      msg.timeout
     response_rule_ids: msg.response_rule_ids or {}

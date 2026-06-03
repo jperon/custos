@@ -121,8 +121,9 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
     SHA256), les déploie dans `lists_dir` puis envoie SIGHUP au daemon.
   - Profil par défaut : `uci custos.main.lists_profile` (ou env
     `CUSTOS_LISTS_PROFILE`), sinon **autodétection selon la RAM**
-    (`MemTotal >= 512 Mo → full`, sinon `lowmem` ; seuil ajustable via
-    `CUSTOS_LISTS_MEM_THRESHOLD_KB`).
+    (`MemTotal >= 128 Mo → full`, sinon `lowmem` ; seuil ajustable via
+    `CUSTOS_LISTS_MEM_THRESHOLD_KB`). Le seuil 128 Mo est aligné sur le mode
+    RAM faible du daemon (cf. `doc/CONFIG.md` § `runtime.lowmem`).
   - Tag par défaut : `uci custos.main.lists_tag` / env `CUSTOS_LISTS_TAG`,
     sinon `latest`. Dépôt : env `CUSTOS_LISTS_REPO` (défaut `jperon/custos-lists`).
 
