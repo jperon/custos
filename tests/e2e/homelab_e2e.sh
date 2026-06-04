@@ -1044,6 +1044,82 @@ else
     sni_listener_stop
 fi
 
+# ══════════════════════════════════════════════════════════════════════════════
+# GROUPE 15 — Mode lowmem : désactivation des workers tls et doh
+# Injecte runtime: { lowmem: "on" } dans la config, redémarre custos et vérifie
+# que le worker tls (SNI) n'est pas démarré, que les queues sont réduites à une
+# seule file, et que le filtrage DNS reste opérationnel. Restaure ensuite la
+# config d'origine.
+# ══════════════════════════════════════════════════════════════════════════════
+echo ""
+echo "=== G15 : mode lowmem (désactivation workers tls/doh) ==="
+
+LOWMEM_TMP=$(mktemp -d)
+LOWMEM_CLEANUP_DONE=0
+
+lowmem_cleanup() {
+    [ "$LOWMEM_CLEANUP_DONE" -eq 1 ] && return
+    LOWMEM_CLEANUP_DONE=1
+    if [ -f "$LOWMEM_TMP/config_orig.moon" ]; then
+        scp -O -q $SSH_OPTS -i "$SSH_KEY" \
+            "$LOWMEM_TMP/config_orig.moon" "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon" 2>/dev/null || true
+        ssh_vm "$E2E_IP_CUSTOS" "/etc/init.d/custos restart >/dev/null 2>&1; sleep 3" || true
+    fi
+    rm -rf "$LOWMEM_TMP"
+}
+trap 'lowmem_cleanup' EXIT
+
+# Sauvegarde la config d'origine
+scp -O -q $SSH_OPTS -i "$SSH_KEY" \
+    "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon" "$LOWMEM_TMP/config_orig.moon"
+
+# Injecte runtime: { lowmem: "on" } après la 1re ligne « { »
+LOWMEM_INJECT='  runtime: { lowmem: "on" }'
+awk -v line="$LOWMEM_INJECT" \
+    '!ins && /^[[:space:]]*\{[[:space:]]*$/ {print; print line; ins=1; next} {print}' \
+    "$LOWMEM_TMP/config_orig.moon" > "$LOWMEM_TMP/config_lowmem.moon"
+
+scp -O -q $SSH_OPTS -i "$SSH_KEY" \
+    "$LOWMEM_TMP/config_lowmem.moon" "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon"
+
+ssh_vm "$E2E_IP_CUSTOS" "/etc/init.d/custos restart >/dev/null 2>&1; sleep 4"
+
+# T130 : logread mentionne la réduction des queues (lowmem_collapse_queues)
+lm_logs=$(ssh_vm "$E2E_IP_CUSTOS" "logread 2>/dev/null" | grep "custos" || true)
+assert_contains "T130 lowmem_collapse_queues journalisé" "lowmem_collapse_queues" "$lm_logs"
+
+# T131 : le worker tls (SNI) ne tourne pas
+# Les workers Custos ont leur comm mis à "custos:<name>" via prctl.
+# On cherche dans /proc/*/comm pour être indépendant du format de ps busybox.
+tls_running=$(ssh_vm "$E2E_IP_CUSTOS" \
+    "grep -rl 'custos:tls' /proc/*/comm 2>/dev/null | wc -l")
+assert_eq "T131 worker tls absent en mode lowmem" "${tls_running:-0}" "0"
+
+# T132 : le worker doh ne tourne pas (il n'est pas configuré par défaut et
+# le mode lowmem le bloquerait de toute façon si activé)
+doh_running=$(ssh_vm "$E2E_IP_CUSTOS" \
+    "grep -rl 'custos:doh' /proc/*/comm 2>/dev/null | wc -l")
+assert_eq "T132 worker doh absent en mode lowmem" "${doh_running:-0}" "0"
+
+# T133 : le filtrage DNS reste opérationnel (domaine autorisé)
+lm_dig=$(dig_from "$E2E_IP_SERVUS" "site-a.lan" "A" "+short" 2>/dev/null || true)
+if [ -n "$lm_dig" ]; then
+    ok "T133 filtrage DNS opérationnel en lowmem (site-a.lan résolu)"
+else
+    fail "T133 filtrage DNS opérationnel en lowmem" "site-a.lan non résolu"
+fi
+
+# T134 : un domaine bloqué reste bloqué
+lm_blocked=$(dig_from "$E2E_IP_SERVUS" "blocked.lan" "A" "+noall" "+comments" 2>/dev/null || true)
+if echo "$lm_blocked" | grep -q "NXDOMAIN\|REFUSED"; then
+    ok "T134 domaine bloqué rejeté en lowmem (blocked.lan)"
+else
+    fail "T134 domaine bloqué rejeté en lowmem" "blocked.lan non bloqué (réponse: $lm_blocked)"
+fi
+
+# Restauration
+lowmem_cleanup
+
 # ─── RAPPORT FINAL ─────────────────────────────────────────────────────────────
 echo ""
 echo "─────────────────────────────────────────"

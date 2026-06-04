@@ -348,6 +348,52 @@ Installer = (cfg) ->
         ok "#{entry.dst} installe"
       true
 
+    -- Détecte l'interface bridge principale et patche auth.bridge_ifname dans la config.
+    -- Nécessaire sur les routeurs OpenWrt récents où le bridge s'appelle br-lan, pas br0.
+    patch_bridge_ifname: =>
+      step "Détection de l'interface bridge"
+      detected = @ssh_capture "ip link show type bridge 2>/dev/null | awk '/^[0-9]+:/{sub(/:$/, \"\", $2); print $2; exit}'"
+      detected = detected and detected\match "^%S+" or nil
+      unless detected and #detected > 0
+        warn "Impossible de détecter l'interface bridge — bridge_ifname non patchée"
+        return true
+      info "Interface bridge détectée : #{detected}"
+      -- Lit la valeur actuelle pour ne patcher que si nécessaire.
+      current = @ssh_capture "grep -o 'bridge_ifname:.*' /etc/custos/config.moon 2>/dev/null | head -1"
+      if current and current\find detected
+        ok "bridge_ifname déjà correct (#{detected})"
+        return true
+      -- sed in-place : remplace la valeur de bridge_ifname quelle qu'elle soit.
+      unless @ssh_run "sed -i 's/bridge_ifname:[[:space:]]*\"[^\"]*\"/bridge_ifname: \"#{detected}\"/' /etc/custos/config.moon"
+        warn "Impossible de patcher bridge_ifname dans /etc/custos/config.moon"
+        return true
+      ok "bridge_ifname patchée → \"#{detected}\""
+      true
+
+    -- Crée les fichiers de listes utilisateurs/domaines vides si absents.
+    -- Ces fichiers sont le point d'entrée de la politique enfants/adultes.
+    install_default_lists: =>
+      step "Listes utilisateurs et domaines (enfants/adultes)"
+      lists = "/etc/custos/lists"
+      @ssh_run "mkdir -p #{lists}/user"
+      for name in *{"enfants", "adultes"}
+        f = "#{lists}/user/#{name}.txt"
+        exists = @ssh_capture "[ -f #{f} ] && echo yes || echo no"
+        if exists and exists\find "yes"
+          warn "#{f} existe déjà — préservé"
+        else
+          @ssh_run "touch #{f} && chmod 600 #{f}"
+          ok "#{f} créé (vide)"
+      for name in *{"enfants_allow", "adultes_block"}
+        f = "#{lists}/#{name}.txt"
+        exists = @ssh_capture "[ -f #{f} ] && echo yes || echo no"
+        if exists and exists\find "yes"
+          warn "#{f} existe déjà — préservé"
+        else
+          @ssh_run "touch #{f} && chmod 600 #{f}"
+          ok "#{f} créé (vide)"
+      true
+
     start_service: =>
       step "Démarrage du service custos"
       if @cfg.no_start
@@ -551,8 +597,10 @@ main = ->
     { name: "upload fichiers",   fn: -> inst\upload_files!        }
     { name: "nettoyage obsolètes", fn: -> inst\cleanup_stale_files! }
     { name: "service init.d",    fn: -> inst\install_initd!       }
-    { name: "/etc/custos/",      fn: -> inst\install_etc_custos!  }
-    { name: "script update",     fn: -> inst\install_updater!     }
+    { name: "/etc/custos/",      fn: -> inst\install_etc_custos!     }
+    { name: "bridge_ifname",     fn: -> inst\patch_bridge_ifname!      }
+    { name: "listes défaut",     fn: -> inst\install_default_lists!  }
+    { name: "script update",     fn: -> inst\install_updater!        }
     { name: "démarrage service", fn: -> inst\start_service!       }
     { name: "santé",             fn: -> inst\health_check!        }
   }

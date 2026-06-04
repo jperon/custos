@@ -329,10 +329,8 @@ local DEFAULTS = {
   second_opinion = {
     enabled = true,
     resolvers = {
-      "2a01:4f8:1c0c:40db::1",
-      "2a01:4f8:1c17:4df8::1",
-      "94.130.180.225",
-      "78.47.64.161"
+      "2a01:4f9:c010:969d::1",
+      "167.235.236.107"
     },
     budget_ms = 80,
     fail_open = true

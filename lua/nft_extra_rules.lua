@@ -13,6 +13,7 @@ local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
   error("nft_ctx_new() échoué dans nft_extra_rules")
 end
+ffi.gc(ctx, libnft.nft_ctx_free)
 local inserted_rules = { }
 local run_cmd
 run_cmd = function(cmd)
@@ -265,9 +266,6 @@ cleanup = function()
       end
     end
     inserted_rules = { }
-  end
-  if ctx ~= nil then
-    return libnft.nft_ctx_free(ctx)
   end
 end
 return {

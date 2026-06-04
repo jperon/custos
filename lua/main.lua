@@ -30,6 +30,8 @@ do
 end
 local nft_extra = require("nft_extra_rules")
 local lowmem = require("lib.lowmem")
+local plan_optional_workers
+plan_optional_workers = require("lib.worker_plan").plan_optional_workers
 ffi.cdef([[  unsigned int sleep(unsigned int seconds);
 ]])
 local O_NONBLOCK, SIG_BLOCK
@@ -184,7 +186,8 @@ local supervise
 supervise = function(pipes, sfd)
   local auth_cfg = load_auth_cfg()
   local parse_queues = lowmem.parse_queues
-  if lowmem.detect(config.runtime) then
+  local is_lowmem = lowmem.detect(config.runtime)
+  if is_lowmem then
     local collapsed = lowmem.collapse_nfqueue(config.nfqueue)
     log_info(function()
       return {
@@ -193,6 +196,7 @@ supervise = function(pipes, sfd)
       }
     end)
   end
+  local optional = plan_optional_workers(config, is_lowmem)
   local questions_queues = parse_queues(config.nfqueue.questions)
   local responses_queues = parse_queues(config.nfqueue.responses)
   local captive_queues = parse_queues(config.nfqueue.captive)
@@ -305,7 +309,7 @@ supervise = function(pipes, sfd)
       end
     })
   end
-  if config.nfqueue.sip then
+  if optional.sip then
     local sip_queue_num = tonumber(config.nfqueue.sip) or 12
     local sip_ack_info = alloc_ack_pipe()
     table.insert(workers_without_filter, {
@@ -395,7 +399,7 @@ supervise = function(pipes, sfd)
     })
   end
   local sni_queue_num = tonumber(config.nfqueue.sni) or 6
-  if config.nfqueue.sni then
+  if optional.tls then
     table.insert(workers_with_filter, {
       name = "tls",
       pid = nil,
@@ -411,7 +415,7 @@ supervise = function(pipes, sfd)
     })
   end
   local doh_cfg = load_doh_cfg()
-  if doh_cfg.enabled then
+  if optional.doh then
     doh_cfg.nft_wfd = pipes.nft.wfd
     local doh_ack_info = alloc_ack_pipe()
     doh_cfg.ack_rfd = doh_ack_info.rfd

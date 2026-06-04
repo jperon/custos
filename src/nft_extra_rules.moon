@@ -25,6 +25,7 @@ config = require "config"
 -- Contexte nft
 ctx = libnft.nft_ctx_new 0
 error "nft_ctx_new() échoué dans nft_extra_rules" if ctx == nil
+ffi.gc ctx, libnft.nft_ctx_free
 
 -- Liste des règles insérées par ce module (chaînes exactes telles qu'insérées).
 inserted_rules = {}
@@ -195,7 +196,5 @@ cleanup = ->
             log_warn -> { action: "nft_extra_rule_delete_failed", rule: r, handle: h, rc: rc }
 
     inserted_rules = {}
-
-  libnft.nft_ctx_free ctx if ctx != nil
 
 { :init, :cleanup, :apply_from_config, :run_cmd }

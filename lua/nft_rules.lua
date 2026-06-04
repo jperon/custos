@@ -16,6 +16,7 @@ local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
   error("nft_rules: nft_ctx_new() failed")
 end
+ffi.gc(ctx, libnft.nft_ctx_free)
 local get_error_buffer
 get_error_buffer = function()
   if not (ctx) then

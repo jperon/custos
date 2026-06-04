@@ -395,6 +395,63 @@ Installer = function(cfg)
       end
       return true
     end,
+    patch_bridge_ifname = function(self)
+      step("Détection de l'interface bridge")
+      local detected = self:ssh_capture("ip link show type bridge 2>/dev/null | awk '/^[0-9]+:/{sub(/:$/, \"\", $2); print $2; exit}'")
+      detected = detected and detected:match("^%S+" or nil)
+      if not (detected and #detected > 0) then
+        warn("Impossible de détecter l'interface bridge — bridge_ifname non patchée")
+        return true
+      end
+      info("Interface bridge détectée : " .. tostring(detected))
+      local current = self:ssh_capture("grep -o 'bridge_ifname:.*' /etc/custos/config.moon 2>/dev/null | head -1")
+      if current and current:find(detected) then
+        ok("bridge_ifname déjà correct (" .. tostring(detected) .. ")")
+        return true
+      end
+      if not (self:ssh_run("sed -i 's/bridge_ifname:[[:space:]]*\"[^\"]*\"/bridge_ifname: \"" .. tostring(detected) .. "\"/' /etc/custos/config.moon")) then
+        warn("Impossible de patcher bridge_ifname dans /etc/custos/config.moon")
+        return true
+      end
+      ok("bridge_ifname patchée → \"" .. tostring(detected) .. "\"")
+      return true
+    end,
+    install_default_lists = function(self)
+      step("Listes utilisateurs et domaines (enfants/adultes)")
+      local lists = "/etc/custos/lists"
+      self:ssh_run("mkdir -p " .. tostring(lists) .. "/user")
+      local _list_0 = {
+        "enfants",
+        "adultes"
+      }
+      for _index_0 = 1, #_list_0 do
+        local name = _list_0[_index_0]
+        local f = tostring(lists) .. "/user/" .. tostring(name) .. ".txt"
+        local exists = self:ssh_capture("[ -f " .. tostring(f) .. " ] && echo yes || echo no")
+        if exists and exists:find("yes") then
+          warn(tostring(f) .. " existe déjà — préservé")
+        else
+          self:ssh_run("touch " .. tostring(f) .. " && chmod 600 " .. tostring(f))
+          ok(tostring(f) .. " créé (vide)")
+        end
+      end
+      local _list_1 = {
+        "enfants_allow",
+        "adultes_block"
+      }
+      for _index_0 = 1, #_list_1 do
+        local name = _list_1[_index_0]
+        local f = tostring(lists) .. "/" .. tostring(name) .. ".txt"
+        local exists = self:ssh_capture("[ -f " .. tostring(f) .. " ] && echo yes || echo no")
+        if exists and exists:find("yes") then
+          warn(tostring(f) .. " existe déjà — préservé")
+        else
+          self:ssh_run("touch " .. tostring(f) .. " && chmod 600 " .. tostring(f))
+          ok(tostring(f) .. " créé (vide)")
+        end
+      end
+      return true
+    end,
     start_service = function(self)
       step("Démarrage du service custos")
       if self.cfg.no_start then
@@ -629,6 +686,18 @@ main = function()
       name = "/etc/custos/",
       fn = function()
         return inst:install_etc_custos()
+      end
+    },
+    {
+      name = "bridge_ifname",
+      fn = function()
+        return inst:patch_bridge_ifname()
+      end
+    },
+    {
+      name = "listes défaut",
+      fn = function()
+        return inst:install_default_lists()
       end
     },
     {

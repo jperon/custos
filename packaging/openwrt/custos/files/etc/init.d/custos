@@ -116,7 +116,7 @@ _apply_lua_nft_rules() {
     LUA_CPATH="/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;" \
     CUSTOS_CONFIG_PATH="$CONFIG_MOON" \
     CUSTOS_REQUIRE_EXTERNAL_CONFIG="1" \
-        "$PROG" -e "if not require('nft_rules').apply() then os.exit(1) end; require('nft_extra_rules').apply_from_config()" \
+        "$PROG" -e "if not require('nft_rules').apply() then os.exit(1) end; require('nft_extra_rules').apply_from_config(); os.exit(0)" \
         2>/dev/null
 }
 

@@ -52,6 +52,7 @@ do
   collectgarbage "setstepmul", gc_cfg.gc_stepmul if gc_cfg.gc_stepmul
 nft_extra = require "nft_extra_rules"
 lowmem = require "lib.lowmem"
+{ :plan_optional_workers } = require "lib.worker_plan"
 
 -- ── Helpers POSIX ────────────────────────────────────────────────
 
@@ -188,12 +189,16 @@ supervise = (pipes, sfd) ->
   -- Parse queue lists from config, supporting single numbers and ranges (e.g. "0,2,5-7,10-12")
   parse_queues = lowmem.parse_queues
 
-  -- Mode « RAM faible » : ramener chaque plage de files à une seule queue.
+  -- Mode « RAM faible » : ramener chaque plage de files à une seule queue,
+  -- et désactiver les workers doh et sni (tls) pour réduire l'empreinte mémoire.
   -- On mute config.nfqueue en place pour que nft_rules (ruleset) ET la boucle
   -- de fork des workers voient la même valeur réduite.
-  if lowmem.detect config.runtime
+  is_lowmem = lowmem.detect config.runtime
+  if is_lowmem
     collapsed = lowmem.collapse_nfqueue config.nfqueue
     log_info -> { action: "lowmem_collapse_queues", :collapsed }
+
+  optional = plan_optional_workers config, is_lowmem
 
   questions_queues = parse_queues config.nfqueue.questions
   responses_queues = parse_queues config.nfqueue.responses
@@ -307,7 +312,7 @@ supervise = (pipes, sfd) ->
 
   -- SIP/STUN worker (single, optional).
   -- Whitelists proxy IPs and SDP media IPs in per-rule sets.
-  if config.nfqueue.sip
+  if optional.sip
     sip_queue_num = tonumber(config.nfqueue.sip) or 12
     sip_ack_info  = alloc_ack_pipe!
     table.insert workers_without_filter, {
@@ -403,8 +408,9 @@ supervise = (pipes, sfd) ->
 
   -- SNI logger for TLS/QUIC (single, optional).
   -- Captures TCP/443 SYN (TLS ClientHello) and UDP/443 (QUIC Initial) packets.
+  -- Désactivé en mode lowmem pour réduire l'empreinte mémoire.
   sni_queue_num = tonumber(config.nfqueue.sni) or 6
-  if config.nfqueue.sni
+  if optional.tls
     table.insert workers_with_filter, {
       name: "tls"
       pid: nil
@@ -414,8 +420,9 @@ supervise = (pipes, sfd) ->
     }
 
   -- DoH worker (single, optional). Only forked when DOH_ENABLED == "1".
+  -- Désactivé en mode lowmem pour réduire l'empreinte mémoire.
   doh_cfg = load_doh_cfg!
-  if doh_cfg.enabled
+  if optional.doh
     doh_cfg.nft_wfd = pipes.nft.wfd
     -- Allouer un pipe ACK dédié au worker DoH.
     doh_ack_info     = alloc_ack_pipe!

@@ -29,6 +29,7 @@ rules_metadata = nil
 
 ctx = libnft.nft_ctx_new 0
 error "nft_rules: nft_ctx_new() failed" if ctx == nil
+ffi.gc ctx, libnft.nft_ctx_free
 
 -- ── Interface with libnft ──────────────────────────────────────────────
 
