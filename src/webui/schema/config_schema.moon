@@ -151,7 +151,7 @@
   filter: {
     _label: "Filtre DNS"
     _description: "Section principale : règles, listes, et dictionnaires nommés"
-    domainlists_dir: { type: "path",    label: "Répertoire listes domaines", default: "/etc/custos/lists" }
+    domainlists_dir: { type: "path",    label: "Répertoire listes domaines", default: "/tmp/custos/lists" }
     custom_lists_dir:{ type: "path",    label: "Répertoire listes personnalisées (optionnel)" }
     allow_localnets: { type: "boolean", label: "Autoriser réseaux locaux",   default: false }
     captive_portal:  { type: "boolean", label: "Détection de portail captif (sondes NCSI/MSFT, Apple, Google…)", default: true }

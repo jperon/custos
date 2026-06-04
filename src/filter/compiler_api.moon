@@ -140,7 +140,7 @@ make_from_file = (base_factory, type_name) ->
     (list_name) ->
       lists_dir = (cfg.lists_dir) or
                   (cfg.filter and cfg.filter.lists_dir) or
-                  "/etc/custos/lists"
+                  "/tmp/custos/lists"
       filepath = "#{lists_dir}/#{type_name}/#{list_name}.txt"
       items = read_lines filepath
       make_plural(base_factory)(cfg)(items)

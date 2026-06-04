@@ -28,7 +28,7 @@ get_lists_dir = (state) ->
   cfg = read_config state.config_path
   dir = cfg and cfg.filter and cfg.filter.lists_dir
   dir = dir or (cfg and cfg.lists_dir)
-  dir or "/etc/custos/lists"
+  dir or "/tmp/custos/lists"
 
 -- Lister les sous-répertoires (types) dans lists_dir
 scan_types = (lists_dir) ->

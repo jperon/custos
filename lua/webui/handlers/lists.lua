@@ -36,7 +36,7 @@ get_lists_dir = function(state)
   local cfg = read_config(state.config_path)
   local dir = cfg and cfg.filter and cfg.filter.lists_dir
   dir = dir or (cfg and cfg.lists_dir)
-  return dir or "/etc/custos/lists"
+  return dir or "/tmp/custos/lists"
 end
 local scan_types
 scan_types = function(lists_dir)

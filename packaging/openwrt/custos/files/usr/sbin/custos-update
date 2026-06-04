@@ -17,7 +17,7 @@
 set -eu
 
 REPO="${CUSTOS_LISTS_REPO:-jperon/custos-lists}"
-DEST="${CUSTOS_LISTS_DIR:-$(uci get custos.main.lists_dir 2>/dev/null || echo /etc/custos/lists)}"
+DEST="${CUSTOS_LISTS_DIR:-$(uci get custos.main.lists_dir 2>/dev/null || echo /tmp/custos/lists)}"
 PID_FILE=/var/run/custos.pid
 
 # Seuil RAM (kB) au-delà duquel l'autodétection choisit « full ».

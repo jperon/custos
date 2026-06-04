@@ -19,6 +19,13 @@ start_service() {
     # "custos" comme ident syslog (procd extrait basename(command[0])).
     [ -L "$PROG" ] || ln -sf "$LUAJIT" "$PROG"
 
+    # Peuple /tmp/custos/lists au boot (tmpfs vide après redémarrage).
+    # On n'échoue pas si la mise à jour est impossible (pas de réseau, etc.).
+    if [ "$(uci get custos.main.update_lists_enabled 2>/dev/null)" != "0" ]; then
+        /usr/sbin/custos-update || \
+            echo "custos: avertissement — mise à jour des listes échouée, démarrage avec les listes existantes" >&2
+    fi
+
     # Applique le ruleset nftables (règles principales + extra config.moon) depuis Lua
     # synchronement avant que procd ne démarre le worker.
     if ! _apply_lua_nft_rules; then

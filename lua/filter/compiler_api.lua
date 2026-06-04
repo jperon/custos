@@ -175,7 +175,7 @@ local make_from_file
 make_from_file = function(base_factory, type_name)
   return function(cfg)
     return function(list_name)
-      local lists_dir = (cfg.lists_dir) or (cfg.filter and cfg.filter.lists_dir) or "/etc/custos/lists"
+      local lists_dir = (cfg.lists_dir) or (cfg.filter and cfg.filter.lists_dir) or "/tmp/custos/lists"
       local filepath = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(list_name) .. ".txt"
       local items = read_lines(filepath)
       return make_plural(base_factory)(cfg)(items)

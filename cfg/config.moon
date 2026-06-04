@@ -31,8 +31,8 @@
       }
 
       -- Enfants : liste blanche.
-      -- Ajouter les domaines autorisés dans /etc/custos/lists/enfants_allow.txt
-      -- Ajouter les utilisateurs (un par ligne) dans /etc/custos/lists/user/enfants.txt
+      -- Ajouter les domaines autorisés dans /tmp/custos/lists/enfants_allow.txt
+      -- Ajouter les utilisateurs (un par ligne) dans /tmp/custos/lists/user/enfants.txt
       {
         description: "Enfants — domaines autorisés"
         actions: {"allow"}
@@ -45,8 +45,8 @@
       }
 
       -- Adultes : liste noire.
-      -- Ajouter les domaines bloqués dans /etc/custos/lists/adultes_block.txt
-      -- Ajouter les utilisateurs (un par ligne) dans /etc/custos/lists/user/adultes.txt
+      -- Ajouter les domaines bloqués dans /tmp/custos/lists/adultes_block.txt
+      -- Ajouter les utilisateurs (un par ligne) dans /tmp/custos/lists/user/adultes.txt
       {
         description: "Adultes — domaines bloqués"
         actions: {"deny"}

@@ -296,7 +296,7 @@ DEFAULTS = {
   }
 
   filter: {
-    domainlists_dir: "/etc/custos/lists"
+    domainlists_dir: "/tmp/custos/lists"
     custom_lists_dir: nil
     allow_localnets: false
     -- Active les règles par défaut de détection de portail captif (sondes

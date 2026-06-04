@@ -463,7 +463,7 @@ return {
     domainlists_dir = {
       type = "path",
       label = "Répertoire listes domaines",
-      default = "/etc/custos/lists"
+      default = "/tmp/custos/lists"
     },
     custom_lists_dir = {
       type = "path",
