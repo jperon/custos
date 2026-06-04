@@ -1070,10 +1070,12 @@ DOUBLECLICK.NET
   it "is_valid", ->
     assert.is_true (is_valid "example.com")
     assert.is_true (is_valid "sub.example.com")
+    assert.is_true (is_valid "lan")       -- TLD fictif local
+    assert.is_true (is_valid "localhost") -- label seul syntaxiquement valide
+    assert.is_true (is_valid "xxx")       -- blocage d'un TLD entier
     assert.is_false (is_valid "")
     assert.is_false (is_valid "1.2.3.4")  -- IPv4
     assert.is_false (is_valid "::1")      -- IPv6
-    assert.is_false (is_valid "localhost") -- pas de point
     assert.is_false (is_valid (string.rep("a", 254))) -- trop long
 
 describe "filter.lib.load_config", ->

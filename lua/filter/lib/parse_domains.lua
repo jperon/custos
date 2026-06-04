@@ -9,10 +9,7 @@ is_valid = function(s)
   if s:match(":") then
     return false
   end
-  if not (s:match("%.")) then
-    return false
-  end
-  if not (s:match("^[a-z0-9][a-z0-9._%-]*[a-z0-9]$")) then
+  if not (s:match("^[a-z0-9]$") or s:match("^[a-z0-9][a-z0-9._%-]*[a-z0-9]$")) then
     return false
   end
   return true

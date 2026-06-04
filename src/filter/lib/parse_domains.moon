@@ -10,15 +10,15 @@
 
 --- Vérifie qu'une chaîne ressemble à un nom de domaine valide.
 -- Rejette les adresses IP, les entrées trop longues ou contenant
--- des caractères non autorisés.
+-- des caractères non autorisés. Accepte les labels seuls (TLDs fictifs
+-- comme "lan", "local", ou pour bloquer un TLD entier comme "xxx").
 -- @tparam string s Chaîne à valider
 -- @treturn boolean
 is_valid = (s) ->
   return false if #s == 0 or #s > 253
   return false if s\match "^%d+%.%d+%.%d+%.%d+$"  -- IPv4
   return false if s\match ":"                        -- IPv6
-  return false unless s\match "%."                   -- au moins un point (pas de TLD seul)
-  return false unless s\match "^[a-z0-9][a-z0-9._%-]*[a-z0-9]$"
+  return false unless s\match"^[a-z0-9]$" or s\match"^[a-z0-9][a-z0-9._%-]*[a-z0-9]$"
   true
 
 --- Parse le format "simple" : un domaine par ligne, # pour les commentaires.
