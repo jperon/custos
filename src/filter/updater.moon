@@ -204,10 +204,12 @@ fetch_toulouse = (name, source, dry_run) ->
         fh\close!
         domains = parse_domains.parse "simple", data
       cat_path = base .. "/" .. cat .. ".bin"
-      ok, msg = write_bin domains, cat_path, dry_run
+      ok, msg, skip = write_bin domains, cat_path, dry_run
       if ok
         io.stderr\write "[#{name}/#{cat}] ✓ #{msg}\n"
         ok_count += 1
+      elseif skip
+        io.stderr\write "[#{name}/#{cat}] ⚠ #{msg} (ignoré)\n"
       else
         io.stderr\write "[#{name}/#{cat}] ✗ #{msg}\n"
         err_count += 1

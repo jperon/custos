@@ -150,10 +150,12 @@ fetch_toulouse = function(name, source, dry_run)
         domains = parse_domains.parse("simple", data)
       end
       local cat_path = base .. "/" .. cat .. ".bin"
-      local ok, msg = write_bin(domains, cat_path, dry_run)
+      local ok, msg, skip = write_bin(domains, cat_path, dry_run)
       if ok then
         io.stderr:write("[" .. tostring(name) .. "/" .. tostring(cat) .. "] ✓ " .. tostring(msg) .. "\n")
         ok_count = ok_count + 1
+      elseif skip then
+        io.stderr:write("[" .. tostring(name) .. "/" .. tostring(cat) .. "] ⚠ " .. tostring(msg) .. " (ignoré)\n")
       else
         io.stderr:write("[" .. tostring(name) .. "/" .. tostring(cat) .. "] ✗ " .. tostring(msg) .. "\n")
         err_count = err_count + 1
