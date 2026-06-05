@@ -387,7 +387,6 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- par worker_responses via filter.get_rule_on_response(rule_id).
   -- Ici on ne fait que décider allow/refuse et écrire le message IPC correspondant.
   verdict         = NF_ACCEPT
-  skip_duplicate  = false
   block_reason    = nil
   allow_reason    = nil
   block_rule_id   = nil
@@ -435,7 +434,6 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
         allow_modifiers = allow_modifiers or {}
         for k, v in pairs decision.allow_modifiers
           allow_modifiers[k] = v
-        skip_duplicate = skip_duplicate or (allow_modifiers.unconditionally_allow or false)
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule   = rule_id or ""
     q_fields.list   = matched_list
@@ -488,9 +486,10 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     }
     return NF_DROP
 
-  -- Second avis : duplique la question autorisée vers le validateur (UDP),
-  -- sauf si une action unconditionally_allow a demandé à l'ignorer.
-  maybe_duplicate(ip, l4, raw) if verdict == NF_ACCEPT and not skip_duplicate
+  -- Second avis : duplique la question vers le validateur uniquement si la règle
+  -- porte l'action `validate`.
+  do_duplicate = allow_modifiers and allow_modifiers.validate
+  maybe_duplicate(ip, l4, raw) if verdict == NF_ACCEPT and do_duplicate
 
   NF_ACCEPT
 
@@ -539,7 +538,7 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
     -- ── Second avis DNS ────────────────────────────────────────
     -- Un socket RAW routé par famille (le noyau gère le next-hop). Une famille
     -- n'est activée que si un validateur de cette famille est routable.
-    if so_cfg.enabled and #(so_cfg.resolvers or {}) > 0
+    if #(so_cfg.resolvers or {}) > 0
       so_resolvers = so_cfg.resolvers
       so_resolver_set[r] = true for r in *so_cfg.resolvers
       active = {}

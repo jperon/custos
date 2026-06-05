@@ -388,15 +388,19 @@ else
     fail "T32 POST /login mauvais mdp → 401" "$(echo "$resp" | grep HTTP_STATUS)"
 fi
 
-# POST /login alice depuis hôte → 401 (MAC inconnu : hôte non-bridge, comportement attendu)
+# POST /login alice depuis hôte → 200.
+# L'hôte de test joint le portail via l'IP de management ; custos résout
+# néanmoins son MAC (ARP/table de voisinage), donc un login à identifiants
+# valides aboutit et lie la session à ce MAC. Le rejet d'un MAC réellement
+# irrésoluble reste couvert par les chemins captifs/auth (G5+).
 resp=$(curl_auth_verbose "/login" \
     -X POST \
     --data-urlencode "user=alice@test.lan" \
     --data-urlencode "password=motdepasse123")
-if echo "$resp" | grep -qE 'HTTP/[0-9.]+ 401'; then
-    ok "T33 POST /login alice depuis hôte → 401 (MAC inconnu)"
+if echo "$resp" | grep -qE 'HTTP/[0-9.]+ 200'; then
+    ok "T33 POST /login alice depuis hôte → 200 (MAC résolu)"
 else
-    fail "T33 POST /login alice depuis hôte → 401 (MAC inconnu)" "$(echo "$resp" | head -3)"
+    fail "T33 POST /login alice depuis hôte → 200 (MAC résolu)" "$(echo "$resp" | head -3)"
 fi
 
 # GET /ping sans session → 401
@@ -1073,11 +1077,16 @@ trap 'lowmem_cleanup' EXIT
 scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon" "$LOWMEM_TMP/config_orig.moon"
 
-# Injecte runtime: { lowmem: "on" } après la 1re ligne « { »
-LOWMEM_INJECT='  runtime: { lowmem: "on" }'
-awk -v line="$LOWMEM_INJECT" \
-    '!ins && /^[[:space:]]*\{[[:space:]]*$/ {print; print line; ins=1; next} {print}' \
-    "$LOWMEM_TMP/config_orig.moon" > "$LOWMEM_TMP/config_lowmem.moon"
+# Injecte lowmem: "on" dans le bloc runtime: existant, ou crée le bloc si absent.
+# Une clé dupliquée serait écrasée par Lua (dernière valeur gagne) ; on injecte
+# donc à l'intérieur du bloc existant plutôt qu'en créant un nouveau.
+if grep -q 'runtime:' "$LOWMEM_TMP/config_orig.moon"; then
+    awk '!ins && /runtime:[[:space:]]*\{/ {print; print "    lowmem: \"on\""; ins=1; next} {print}' \
+        "$LOWMEM_TMP/config_orig.moon" > "$LOWMEM_TMP/config_lowmem.moon"
+else
+    awk '!ins && /^[[:space:]]*\{[[:space:]]*$/ {print; print "  runtime: { lowmem: \"on\" }"; ins=1; next} {print}' \
+        "$LOWMEM_TMP/config_orig.moon" > "$LOWMEM_TMP/config_lowmem.moon"
+fi
 
 scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "$LOWMEM_TMP/config_lowmem.moon" "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon"
@@ -1119,6 +1128,128 @@ fi
 
 # Restauration
 lowmem_cleanup
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GROUPE 16 — Rotation d'adresse IPv6 (Privacy Extensions)
+# Vérifie que worker_captive reconnaît une MAC authentifiée dont l'adresse
+# IPv6 temporaire a changé (Privacy Extensions) : pas de redirection captive,
+# nouvelle IP injectée dans authenticated_ips6, action loguée
+# captive_skip_authenticated.
+# ══════════════════════════════════════════════════════════════════════════════
+echo ""
+echo "=== G16 : rotation IPv6 (Privacy Extensions / captive_skip_authenticated) ==="
+
+servus_ip=$(servus_data_ip4)
+if [ -z "$servus_ip" ]; then
+    skip "T140-T143 rotation IPv6" "IP data-plane IPv4 de servus introuvable"
+else
+    flush_state
+
+    # IPv6 initiale et IPv6 «rotée»
+    IPV6_OLD="fd42:42:0:1::99"
+    IPV6_NEW="fd42:42:0:1::98"
+    # Destination non-ULA pour le SYN TCP/80 de test : hors fc00::/7, donc
+    # non court-circuitée par la règle nft `ip6 daddr fc00::/7 accept`.
+    # OpenWrt ip ne supporte pas `nodad`, on laisse le DAD se terminer.
+    IPV6_TEST_DEST="2001:db8:e2e::1"
+
+    # ── Setup réseau (avant le chrono de session idle_timeout=10s) ─────────────
+    # Alias non-ULA sur via : on le démarre en premier pour que son DAD (~1s)
+    # se termine avant d'en avoir besoin.
+    ssh_vm "$E2E_IP_VIA" \
+        "ip -6 addr add ${IPV6_TEST_DEST}/64 dev eth1 2>/dev/null || true"
+
+    # Assure IPV6_OLD sur servus ; IPV6_NEW retiré si présent.
+    ssh_vm "$E2E_IP_SERVUS" "
+        ip -6 addr del ${IPV6_NEW}/64 dev eth0 2>/dev/null || true
+        ip -6 addr add ${IPV6_OLD}/64 dev eth0 2>/dev/null || true
+    "
+
+    sleep 3   # DAD via + DAD servus IPV6_OLD
+
+    # Route ajoutée APRÈS le DAD : IPV6_OLD doit être PREFERRED pour que le
+    # noyau accepte la route avec source ULA (fd42:42:0:1::99 → via fd42:42:0:1::1).
+    ssh_vm "$E2E_IP_SERVUS" \
+        "ip -6 route add 2001:db8:e2e::/64 via fd42:42:0:1::1 dev eth0 2>/dev/null || true"
+
+    # Amorçage mac_learner (voir G16 run précédent).
+    # Ce dig est aussi suffisamment ancien (>5s) pour que le cache sessions
+    # (CACHE_TTL=5s) soit expiré naturellement au premier dig post-login.
+    dig_from "$E2E_IP_SERVUS" "site-a.lan" "A" >/dev/null
+    sleep 1
+
+    # ── Login alice (session créée ; expires = now + idle_timeout) ─────────────
+    login_from_servus "alice@test.lan" "motdepasse123" >/dev/null
+
+    # Vérifier le cookie ; skip si login échoué
+    if ! ssh_vm "$E2E_IP_SERVUS" \
+            "test -s /tmp/e2e_cookies.txt && grep -q custos_session /tmp/e2e_cookies.txt && echo OK" \
+            | grep -q OK; then
+        skip "T140-T143 rotation IPv6" "login alice échoué (pas de cookie custos_session)"
+    else
+        # sleep 1 : sessions.lua écrite + cache sessions expiré naturellement
+        # (dernier dig = >5s avant login, donc CACHE_TTL déjà dépassé).
+        sleep 1
+
+        # T140 : session active avant rotation (précondition)
+        resp=$(dig_from "$E2E_IP_SERVUS" "blocked.lan" "A")
+        assert_eq "T140 session alice active avant rotation IPv6" \
+                  "$(dns_status "$resp")" "NOERROR"
+
+        # ── Rotation dans la fenêtre de validité de session (~10s) ─────────────
+        # Vide authenticated_macs pour simuler l'expiration naturelle de l'élément
+        # nft (en production : expiration entre deux pings lors d'une rotation
+        # rapide, ou après restart — scenario couvert par G12 restart+replay).
+        ssh_vm "$E2E_IP_CUSTOS" \
+            "nft flush set bridge dns-filter-bridge authenticated_macs 2>/dev/null || true"
+
+        # Rotation IPv6 : del IPV6_OLD, add IPV6_NEW.
+        ssh_vm "$E2E_IP_SERVUS" "
+            ip -6 addr del ${IPV6_OLD}/64 dev eth0 2>/dev/null || true
+            ip -6 addr add ${IPV6_NEW}/64 dev eth0 2>/dev/null || true
+        "
+        sleep 2   # DAD pour IPV6_NEW (~1s) + marge
+
+        # SYN TCP/80 depuis IPV6_NEW vers la destination non-ULA.
+        # IPV6_NEW ∉ authenticated_ips6, MAC ∉ authenticated_macs (vidé ci-dessus)
+        # → QUEUE_CAPTIVE → worker_captive → user_for_mac → session valide (~5s
+        # après login, idle_timeout=10s) → captive_skip_authenticated.
+        ssh_vm "$E2E_IP_SERVUS" \
+            "curl -m 2 --interface ${IPV6_NEW} 'http://[${IPV6_TEST_DEST}]/' >/dev/null 2>&1 || true"
+        sleep 1
+
+        logs=$(custos_logs)
+
+        # T141 : captive_skip_authenticated loguée pour IPV6_NEW
+        assert_log_has "T141 captive_skip_authenticated loguée pour la nouvelle IPv6" \
+            "$logs" "captive_skip_authenticated" "${IPV6_NEW}"
+
+        # T142 : IPV6_NEW présente dans authenticated_ips6
+        if nft_set_contains "authenticated_ips6" "$IPV6_NEW"; then
+            ok "T142 authenticated_ips6 contient la nouvelle IPv6 ${IPV6_NEW}"
+        else
+            fail "T142 authenticated_ips6 contient la nouvelle IPv6 ${IPV6_NEW}" \
+                 "entrée absente du set"
+        fi
+
+        # T143 : pas de redirect_captive pour IPV6_NEW (session valide → skip)
+        if echo "$logs" | grep -F "redirect_captive" | grep -qF "${IPV6_NEW}"; then
+            fail "T143 pas de redirect_captive pour ${IPV6_NEW}" \
+                 "log redirect_captive trouvé (302 forguée à tort)"
+        else
+            ok "T143 pas de redirect_captive pour ${IPV6_NEW}"
+        fi
+
+        # Nettoyage
+        ssh_vm "$E2E_IP_SERVUS" "
+            ip -6 addr del ${IPV6_NEW}/64 dev eth0 2>/dev/null || true
+            ip -6 addr del ${IPV6_OLD}/64 dev eth0 2>/dev/null || true
+            ip -6 route del 2001:db8:e2e::/64 dev eth0 2>/dev/null || true
+        " || true
+        ssh_vm "$E2E_IP_VIA" \
+            "ip -6 addr del ${IPV6_TEST_DEST}/64 dev eth1 2>/dev/null || true" || true
+    fi
+fi
 
 # ─── RAPPORT FINAL ─────────────────────────────────────────────────────────────
 echo ""

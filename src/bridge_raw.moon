@@ -7,12 +7,18 @@
 { :C, :AF_PACKET, :SOCK_RAW, :ETH_P_ALL } = require "lib.socket"
 { :s2mac } = require "ipparse.l2.ethernet"
 
---- Ouvre un socket AF_PACKET/SOCK_RAW non lié.
+--- Ouvre un socket AF_PACKET/SOCK_RAW non lié, en émission seule.
+-- Protocole 0 (et NON ETH_P_ALL) : ce socket ne sert qu'à `sendto` (injection
+-- de trames). Avec ETH_P_ALL il se mettrait à CAPTURER tout le trafic de
+-- l'interface ; or, lié au bridge maître, un tel socket de capture casse la
+-- livraison NFQUEUE depuis le hook bridge `forward` (le noyau cesse de remettre
+-- les paquets queués à l'espace utilisateur). Protocole 0 = aucune réception,
+-- l'émission via sendto reste pleinement fonctionnelle.
 -- @tparam  string     ifname Nom de l'interface (pour le message d'erreur uniquement)
 -- @treturn number|nil        fd du socket, ou nil en cas d'erreur
 -- @treturn nil|string        Message d'erreur
 open_socket = (ifname) ->
-  fd = C.socket AF_PACKET, SOCK_RAW, ETH_P_ALL
+  fd = C.socket AF_PACKET, SOCK_RAW, 0
   return nil, "socket() failed on #{ifname}: errno #{ffi.errno!}" if fd < 0
   fd, nil
 

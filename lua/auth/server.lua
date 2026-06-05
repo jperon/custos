@@ -256,6 +256,51 @@ refresh_nft = function(nft_sess, ip, mac, ttl, user)
     end
   end
 end
+local replay_sessions_to_nft
+replay_sessions_to_nft = function(state)
+  if not (state.nft_sess and state.sessions_file) then
+    return 
+  end
+  local sessions = load_sessions(state.sessions_file)
+  local now = os.time()
+  local idle_timeout = (state.auth_cfg and state.auth_cfg.idle_timeout) or 120
+  local count = 0
+  for mac, s in pairs(sessions) do
+    local _continue_0 = false
+    repeat
+      if s.expires and now > s.expires then
+        _continue_0 = true
+        break
+      end
+      local ttl
+      if s.expires then
+        ttl = math.max(1, s.expires - now)
+      else
+        ttl = idle_timeout
+      end
+      if s.ips then
+        for _, ip in pairs(s.ips) do
+          refresh_nft(state.nft_sess, ip, mac, ttl, s.user)
+        end
+      else
+        if mac and mac ~= "unknown" then
+          state.nft_sess.add_authenticated_mac(mac, ttl)
+        end
+      end
+      count = count + 1
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  return log_info(function()
+    return {
+      action = "sessions_replayed_to_nft",
+      count = count
+    }
+  end)
+end
 local handle_login
 handle_login = function(req, peer_ip, peer_mac, state)
   local form = parse_form(req.body)
@@ -1024,6 +1069,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
       end)()
     }
   end)
+  replay_sessions_to_nft(state)
   while true do
     reload_secrets_if_needed(state)
     while true do
@@ -1094,5 +1140,6 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
   end
 end
 return {
-  run = run
+  run = run,
+  replay_sessions_to_nft = replay_sessions_to_nft
 }

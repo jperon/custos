@@ -258,4 +258,15 @@ apply = ->
   log_info -> { action: "nft_rules_applied", path: path }
   true
 
-{ :apply, _test: { :collect_ips, :fmt_elements, :substitute } }
+--- Libère le contexte nft (et son socket netlink NETLINK_NETFILTER).
+-- Hygiène : à appeler après apply!, avant de forker les workers, pour ne pas
+-- léguer inutilement ce fd à tous les enfants (le ruleset est déjà appliqué).
+-- Sans effet sur la livraison NFQUEUE.
+-- @treturn nil
+close = ->
+  if ctx
+    ffi.gc ctx, nil          -- annule le finaliseur pour éviter un double free
+    libnft.nft_ctx_free ctx
+    ctx = nil
+
+{ :apply, :close, _test: { :collect_ips, :fmt_elements, :substitute } }

@@ -226,9 +226,9 @@ DEFAULTS = {
   -- et, si le validateur signale NXDOMAIN (blocage) ou CNAME (réorientation),
   -- spoofe la réponse d'origine. Voir doc/CONFIG.md § second_opinion.
   second_opinion: {
-    enabled: true
     -- Liste d'IP, v4 et v6 mélangées : la famille du validateur est choisie
     -- selon celle du paquet client (présence de ':' → IPv6).
+    -- Activé uniquement pour les règles portant l'action `validate`.
     resolvers: {
       "2a01:4f9:c010:969d::1"  -- DNSforFamily, avec SafeSearch mais pas youtube-rescrict
       "167.235.236.107"        -- DNSforFamily, avec SafeSearch mais pas youtube-rescrict

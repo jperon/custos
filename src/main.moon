@@ -210,19 +210,38 @@ supervise = (pipes, sfd) ->
   bridge_ifname = auth_cfg.bridge_ifname or "br0"
 
   -- Autodétection des interfaces physiques attachées à la bridge (bridge slaves)
-  -- pour le sniffer TCP/33443. Ces interfaces physiques voient les paquets entrants,
-  -- contrairement à la bridge elle-même qui ne voit pas les paquets traités localement.
-  detect_bridge_slaves = () ->
-    handle = io.popen "ip -brief link show type bridge_slave 2>/dev/null"
-    return nil unless handle
-    slaves = {}
+  -- pour le sniffer TCP/33443 et l'arp-sniffer. Ces interfaces physiques voient
+  -- les paquets entrants, contrairement à la bridge elle-même.
+  --
+  -- IMPORTANT : ne jamais se rabattre sur l'interface bridge maître. Un socket
+  -- AF_PACKET/ETH_P_ALL lié au master capture tout le trafic bridgé et casse la
+  -- livraison NFQUEUE depuis le hook bridge `forward` (paquets queués jamais
+  -- remis à l'espace utilisateur → filtrage DNS HS). On énumère donc les ports
+  -- via sysfs (/sys/class/net/<bridge>/brif/), fiable sur busybox/OpenWrt
+  -- contrairement à `ip link show type bridge_slave` (non supporté par busybox).
+  read_lines = (cmd) ->
+    handle = io.popen cmd
+    return {} unless handle
+    out = {}
     for line in handle\lines()
       ifname = line\match "^(%S+)"
-      table.insert slaves, ifname if ifname
+      table.insert out, ifname if ifname
     handle\close()
+    out
+
+  detect_bridge_slaves = () ->
+    slaves = read_lines "ls -1 /sys/class/net/#{bridge_ifname}/brif/ 2>/dev/null"
+    return slaves if #slaves > 0
+    -- Repli pour les systèmes exposant `ip link show type bridge_slave`.
+    slaves = read_lines "ip -brief link show type bridge_slave 2>/dev/null"
     #slaves > 0 and slaves or nil
 
-  bridge_slaves = detect_bridge_slaves() or { bridge_ifname }
+  -- Si aucun port esclave n'est détecté, on se rabat sur l'interface bridge,
+  -- mais en avertissant : c'est une configuration dégradée (cf. NFQUEUE ci-dessus).
+  bridge_slaves = detect_bridge_slaves()
+  unless bridge_slaves
+    log_warn -> { action: "bridge_slaves_fallback_master", bridge: bridge_ifname }
+    bridge_slaves = { bridge_ifname }
   log_info -> {
     action: "bridge_slaves_detected"
     count: #bridge_slaves
@@ -354,6 +373,15 @@ supervise = (pipes, sfd) ->
 
   -- Load filter lists before forking workers that need it
   filter.load!
+
+  -- Hygiène : ferme le contexte libnftables (et son socket NETLINK_NETFILTER)
+  -- une fois le ruleset appliqué, AVANT de forker les workers. Le ruleset est
+  -- déjà en place ; garder ce fd ouvert ne ferait que le léguer inutilement aux
+  -- workers (chaque enfant en hériterait une copie). Note : ce close n'a aucun
+  -- effet sur la livraison NFQUEUE — la cause des blocages observés était un
+  -- socket AF_PACKET/ETH_P_ALL lié au bridge maître (cf. bridge_raw et
+  -- detect_bridge_slaves), pas ce socket netlink.
+  nft_rules.close!
 
   -- Libère les strings transitoires de compilation des règles AVANT le fork :
   -- le tas devenu propre est ensuite partagé en COW par tous les workers.

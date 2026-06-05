@@ -27,7 +27,9 @@ bridge_raw = require "bridge_raw"
 { :flags } = require "ipparse.l4.tcp"
 { :SYN, :ACK, :FIN, :PSH } = flags
 mac_learner_ipc = require "mac_learner_ipc"
-{ :user_for_mac } = require "auth.sessions"
+{ :user_for_mac, :enrich_session_ip } = require "auth.sessions"
+-- Chargement conditionnel : libnftables n'est pas disponible en dehors du routeur
+_nft_ok, _nft_sess = pcall require, "auth.nft_sessions"
 
 -- ── TCP helper functions (ipparse for parsing and serialization) ──
 
@@ -156,7 +158,23 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
   if not client_mac_str or client_mac_str == "unknown"
     client_mac_str = mac_learner_ipc.get_mac client_ip_str
 
-  user          = user_for_mac client_mac_str, client_ip_str, config.auth.sessions_file
+  user = user_for_mac client_mac_str, client_ip_str, config.auth.sessions_file
+
+  -- Si la MAC est déjà authentifiée (ex. rotation d'adresse IPv6 temporaire),
+  -- ajouter la nouvelle IP dans les sets nft et retourner sans rediriger.
+  if user
+    ttl = (config.auth and config.auth.idle_timeout) or 120
+    if _nft_ok and _nft_sess
+      _nft_sess.add_authenticated client_ip_str, ttl
+      _nft_sess.add_authenticated_mac client_mac_str, ttl
+    enrich_session_ip client_mac_str, client_ip_str, config.auth.sessions_file
+    log_info -> {
+      action: "captive_skip_authenticated"
+      ip:     client_ip_str
+      mac:    client_mac_str
+      user:   user
+    }
+    return NF_DROP
 
   send = (f) ->
     res = send_frame raw_fd, f, ifindex
@@ -262,4 +280,4 @@ run = (queue_num, auth_cfg) ->
 
   run_queue tonumber(queue_num), handle_syn
 
-{ :run }
+{ :run, :parse_syn, :build_response_frames }

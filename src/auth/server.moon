@@ -159,6 +159,27 @@ refresh_nft = (nft_sess, ip, mac, ttl, user) ->
     unless ok
       log_warn -> { action: "auth_set_add_failed", rule_id: rule_id, mac: mac, ip: ip, err: tostring(err) }
 
+-- Repeuple les sets nftables depuis le fichier sessions au démarrage du worker.
+-- Appelé une fois après init, avant le premier accept, pour que les clients
+-- déjà authentifiés ne soient pas redirigés vers le portail captif après un
+-- restart ou reload de custos.
+replay_sessions_to_nft = (state) ->
+  return unless state.nft_sess and state.sessions_file
+  sessions = load_sessions state.sessions_file
+  now = os.time!
+  idle_timeout = (state.auth_cfg and state.auth_cfg.idle_timeout) or 120
+  count = 0
+  for mac, s in pairs sessions
+    continue if s.expires and now > s.expires
+    ttl = if s.expires then math.max 1, s.expires - now else idle_timeout
+    if s.ips
+      for _, ip in pairs s.ips
+        refresh_nft state.nft_sess, ip, mac, ttl, s.user
+    else
+      state.nft_sess.add_authenticated_mac mac, ttl if mac and mac ~= "unknown"
+    count += 1
+  log_info -> { action: "sessions_replayed_to_nft", count: count }
+
 handle_login = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
   user = form.user
@@ -559,6 +580,8 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     cert_cache: if auth_cfg.cert and auth_cfg.key then "static cert + dynamic SNI cache" else "dynamic SNI cache (500 slots, 90d TTL)"
   }
 
+  replay_sessions_to_nft state
+
   while true
     reload_secrets_if_needed state
 
@@ -589,4 +612,4 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
           log_info -> { action: "server_conn_started", pid: pid, peer: peer_ip }
           client\close!
 
-{ :run }
+{ :run, :replay_sessions_to_nft }

@@ -36,8 +36,12 @@ flags = require("ipparse.l4.tcp").flags
 local SYN, ACK, FIN, PSH
 SYN, ACK, FIN, PSH = flags.SYN, flags.ACK, flags.FIN, flags.PSH
 local mac_learner_ipc = require("mac_learner_ipc")
-local user_for_mac
-user_for_mac = require("auth.sessions").user_for_mac
+local user_for_mac, enrich_session_ip
+do
+  local _obj_0 = require("auth.sessions")
+  user_for_mac, enrich_session_ip = _obj_0.user_for_mac, _obj_0.enrich_session_ip
+end
+local _nft_ok, _nft_sess = pcall(require, "auth.nft_sessions")
 local PROTO_TCP = l3_proto.TCP
 local PROTO_UDP = l3_proto.UDP
 local parse_syn
@@ -140,6 +144,23 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     client_mac_str = mac_learner_ipc.get_mac(client_ip_str)
   end
   local user = user_for_mac(client_mac_str, client_ip_str, config.auth.sessions_file)
+  if user then
+    local ttl = (config.auth and config.auth.idle_timeout) or 120
+    if _nft_ok and _nft_sess then
+      _nft_sess.add_authenticated(client_ip_str, ttl)
+      _nft_sess.add_authenticated_mac(client_mac_str, ttl)
+    end
+    enrich_session_ip(client_mac_str, client_ip_str, config.auth.sessions_file)
+    log_info(function()
+      return {
+        action = "captive_skip_authenticated",
+        ip = client_ip_str,
+        mac = client_mac_str,
+        user = user
+      }
+    end)
+    return NF_DROP
+  end
   local send
   send = function(f)
     local res = send_frame(raw_fd, f, ifindex)
@@ -286,5 +307,7 @@ run = function(queue_num, auth_cfg)
   return run_queue(tonumber(queue_num), handle_syn)
 end
 return {
-  run = run
+  run = run,
+  parse_syn = parse_syn,
+  build_response_frames = build_response_frames
 }

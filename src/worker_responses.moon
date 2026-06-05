@@ -962,14 +962,14 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     vlan: l2.vlan, :src_ip, :dst_ip
   }
 
-  -- Si le second avis est actif : corréler avec la réponse validateur (B).
+  -- Second avis : corrélation avec la réponse validateur (B) uniquement si la
+  -- règle porte l'action `validate`.
   --   • verdict déjà connu  → appliquer immédiatement (block/redirect/pass) ;
   --   • verdict pas encore là → parquer A (verdict NFQUEUE différé) jusqu'à B
   --     ou expiration du budget (fail-open, balayé par sweep_parked).
-  --   • unconditionally_allow → skip total du second avis.
-  skip_so = entry and entry.modifiers and entry.modifiers.unconditionally_allow
+  do_so = entry and entry.modifiers and entry.modifiers.validate
   q1 = dns_msg.questions and dns_msg.questions[1]
-  if so_state and q1 and so_state.active_for(ip.version) and not direct_validator and not skip_so
+  if so_state and q1 and do_so and so_state.active_for(ip.version) and not direct_validator
     key = so_state.corr_key client_ip, txid, q1.name
     override = so_state.take_verdict key, ts
     if override
@@ -1013,7 +1013,7 @@ run = (queue_num, rfd, rules_metadata) ->
   -- jamais être parquée, sinon chaque réponse de cette famille attendrait le
   -- budget pour rien.
   local run_opts
-  if so_cfg.enabled and #(so_cfg.resolvers or {}) > 0
+  if #(so_cfg.resolvers or {}) > 0
     families = {}
     for fam, ver in pairs { ipv4: 4, ipv6: 6 }
       v_ip = dup_query.pick_resolver so_cfg.resolvers, ver

@@ -202,25 +202,43 @@ supervise = function(pipes, sfd)
   local captive_queues = parse_queues(config.nfqueue.captive)
   local reject_queues = parse_queues(config.nfqueue.reject)
   local bridge_ifname = auth_cfg.bridge_ifname or "br0"
-  local detect_bridge_slaves
-  detect_bridge_slaves = function()
-    local handle = io.popen("ip -brief link show type bridge_slave 2>/dev/null")
+  local read_lines
+  read_lines = function(cmd)
+    local handle = io.popen(cmd)
     if not (handle) then
-      return nil
+      return { }
     end
-    local slaves = { }
+    local out = { }
     for line in handle:lines() do
       local ifname = line:match("^(%S+)")
       if ifname then
-        table.insert(slaves, ifname)
+        table.insert(out, ifname)
       end
     end
     handle:close()
+    return out
+  end
+  local detect_bridge_slaves
+  detect_bridge_slaves = function()
+    local slaves = read_lines("ls -1 /sys/class/net/" .. tostring(bridge_ifname) .. "/brif/ 2>/dev/null")
+    if #slaves > 0 then
+      return slaves
+    end
+    slaves = read_lines("ip -brief link show type bridge_slave 2>/dev/null")
     return #slaves > 0 and slaves or nil
   end
-  local bridge_slaves = detect_bridge_slaves() or {
-    bridge_ifname
-  }
+  local bridge_slaves = detect_bridge_slaves()
+  if not (bridge_slaves) then
+    log_warn(function()
+      return {
+        action = "bridge_slaves_fallback_master",
+        bridge = bridge_ifname
+      }
+    end)
+    bridge_slaves = {
+      bridge_ifname
+    }
+  end
   log_info(function()
     return {
       action = "bridge_slaves_detected",
@@ -345,6 +363,7 @@ supervise = function(pipes, sfd)
   local rules_metadata = nft_rules.rules_metadata
   nft_extra.apply_from_config()
   filter.load()
+  nft_rules.close()
   collectgarbage("collect")
   local filter_data = {
     rules = filter.rules,

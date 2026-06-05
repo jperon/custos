@@ -37,6 +37,7 @@
   auth: {
     enabled:            true
     port:               33443
+    bridge_ifname:      "br-lan"
     redirect_url:       "https://10.42.0.254:33443/auth"
     cert:               "/etc/custos/cert.pem"
     key:                "/etc/custos/key.pem"

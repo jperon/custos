@@ -1,7 +1,7 @@
-(require("ipc")).register_modifier("unconditionally_allow")
+(require("ipc")).register_modifier("validate")
 local _schema = {
-  label = "Autoriser sans validateur",
-  description = "Autorise la requête DNS sans duplication vers le résolveur validateur",
+  label = "Valider via résolveur externe",
+  description = "Duplique la question DNS vers le résolveur validateur (ex. DNSforFamily) et corrèle les deux réponses",
   arg_type = nil
 }
 local _factory
@@ -13,10 +13,10 @@ _factory = function(cfg)
         nft = true
       },
       allow_modifiers = {
-        unconditionally_allow = true
+        validate = true
       },
       eval = function(req)
-        return true, "Unconditionally allowed by rule: " .. tostring(rule.description or '?')
+        return true, "Validated by rule: " .. tostring(rule.description or '?')
       end,
       on_response = function(ctx)
         ctx.explicit_allow = true

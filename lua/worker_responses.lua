@@ -1251,9 +1251,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     src_ip = src_ip,
     dst_ip = dst_ip
   }
-  local skip_so = entry and entry.modifiers and entry.modifiers.unconditionally_allow
+  local do_so = entry and entry.modifiers and entry.modifiers.validate
   local q1 = dns_msg.questions and dns_msg.questions[1]
-  if so_state and q1 and so_state.active_for(ip.version) and not direct_validator and not skip_so then
+  if so_state and q1 and do_so and so_state.active_for(ip.version) and not direct_validator then
     local key = so_state.corr_key(client_ip, txid, q1.name)
     local override = so_state.take_verdict(key, ts)
     if override then
@@ -1284,7 +1284,7 @@ run = function(queue_num, rfd, rules_metadata)
   end
   pipe_rfd = rfd
   local run_opts
-  if so_cfg.enabled and #(so_cfg.resolvers or { }) > 0 then
+  if #(so_cfg.resolvers or { }) > 0 then
     local families = { }
     for fam, ver in pairs({
       ipv4 = 4,

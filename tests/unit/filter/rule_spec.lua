@@ -774,28 +774,28 @@ return describe("filter.rule", function()
       return assert.is_true(ctx.inject_nft)
     end)
   end)
-  return describe("unconditionally_allow", function()
+  return describe("validate", function()
     it("eval retourne true", function()
       local eval_fn, _ = rule_mod.compile_rule(cfg, {
-        rule_id = "uncond",
-        description = "Sans validateur",
+        rule_id = "val",
+        description = "Avec validateur",
         actions = {
-          "unconditionally_allow"
+          "validate"
         }
       }, 1)
       local v, msg = eval_fn({ })
       assert.is_true(v)
-      return assert.match("Unconditionally", msg)
+      return assert.match("Validated", msg)
     end)
-    it("decide_meta expose allow_modifiers.unconditionally_allow = true", function()
+    it("decide_meta expose allow_modifiers.validate = true", function()
       local rules = rule_mod.compile_rules({
         macs = { },
         rules = {
           {
-            rule_id = "uncond",
-            description = "Sans validateur",
+            rule_id = "val",
+            description = "Avec validateur",
             actions = {
-              "unconditionally_allow"
+              "validate"
             }
           }
         }
@@ -803,9 +803,9 @@ return describe("filter.rule", function()
       local meta = rule_mod.decide_meta(rules, { })
       assert.is_true(meta.verdict)
       assert.is_table(meta.allow_modifiers)
-      return assert.is_true(meta.allow_modifiers.unconditionally_allow)
+      return assert.is_true(meta.allow_modifiers.validate)
     end)
-    return it("allow classique n'a pas le modificateur unconditionally_allow", function()
+    return it("allow classique n'a pas le modificateur validate", function()
       local rules = rule_mod.compile_rules({
         macs = { },
         rules = {
@@ -820,7 +820,7 @@ return describe("filter.rule", function()
       })
       local meta = rule_mod.decide_meta(rules, { })
       assert.is_true(meta.verdict)
-      return assert.is_nil(meta.allow_modifiers.unconditionally_allow)
+      return assert.is_nil(meta.allow_modifiers.validate)
     end)
   end)
 end)

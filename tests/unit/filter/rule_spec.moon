@@ -439,32 +439,32 @@ describe "filter.rule", ->
       assert.is_true ctx.skip_nft
       assert.is_true ctx.inject_nft
 
-  -- ── unconditionally_allow ──────────────────────────────────────
+  -- ── validate ──────────────────────────────────────────────────
 
-  describe "unconditionally_allow", ->
+  describe "validate", ->
     it "eval retourne true", ->
       eval_fn, _ = rule_mod.compile_rule cfg, {
-        rule_id:     "uncond"
-        description: "Sans validateur"
-        actions:     { "unconditionally_allow" }
+        rule_id:     "val"
+        description: "Avec validateur"
+        actions:     { "validate" }
       }, 1
       v, msg = eval_fn {}
       assert.is_true v
-      assert.match "Unconditionally", msg
+      assert.match "Validated", msg
 
-    it "decide_meta expose allow_modifiers.unconditionally_allow = true", ->
+    it "decide_meta expose allow_modifiers.validate = true", ->
       rules = rule_mod.compile_rules {
         macs: {}
         rules: {
-          { rule_id: "uncond", description: "Sans validateur", actions: { "unconditionally_allow" } }
+          { rule_id: "val", description: "Avec validateur", actions: { "validate" } }
         }
       }
       meta = rule_mod.decide_meta rules, {}
       assert.is_true meta.verdict
       assert.is_table meta.allow_modifiers
-      assert.is_true meta.allow_modifiers.unconditionally_allow
+      assert.is_true meta.allow_modifiers.validate
 
-    it "allow classique n'a pas le modificateur unconditionally_allow", ->
+    it "allow classique n'a pas le modificateur validate", ->
       rules = rule_mod.compile_rules {
         macs: {}
         rules: {
@@ -473,4 +473,4 @@ describe "filter.rule", ->
       }
       meta = rule_mod.decide_meta rules, {}
       assert.is_true meta.verdict
-      assert.is_nil meta.allow_modifiers.unconditionally_allow
+      assert.is_nil meta.allow_modifiers.validate

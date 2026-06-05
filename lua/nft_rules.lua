@@ -300,8 +300,17 @@ apply = function()
   end)
   return true
 end
+local close
+close = function()
+  if ctx then
+    ffi.gc(ctx, nil)
+    libnft.nft_ctx_free(ctx)
+    ctx = nil
+  end
+end
 return {
   apply = apply,
+  close = close,
   _test = {
     collect_ips = collect_ips,
     fmt_elements = fmt_elements,

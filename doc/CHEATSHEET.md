@@ -44,8 +44,8 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
   - `rule_id` + `timeout` transitent de question → response → nft
 
 - Second avis DNS (validateur type DNSforFamily), cf. `doc/CONFIG.md` § `second_opinion` :
-  - Config `config.second_opinion` (`enabled`, `resolvers`, `budget_ms`)
-  - `worker_questions` duplique la question UDP autorisée (`src/dup_query.moon`) et l'émet via socket RAW routé par le noyau (`src/raw_send.moon`, `IP_HDRINCL`/`IPV6_HDRINCL`, src=client) — pas de MAC de passerelle, IPv6/tunnel géré
+  - Config `config.second_opinion` (`resolvers`, `budget_ms`) — actif uniquement pour les règles portant l'action `validate`
+  - `worker_questions` duplique la question UDP (`src/dup_query.moon`) via socket RAW routé par le noyau (`src/raw_send.moon`, `IP_HDRINCL`/`IPV6_HDRINCL`, src=client) — uniquement si `allow_modifiers.validate`
   - `worker_responses` corrèle les 2 réponses (`src/second_opinion.moon`), classe (`src/dns_classify.moon` : NXDOMAIN→block, sinkhole `0.0.0.0`/`::`→sinkhole, CNAME→redirect), parque A (verdict NFQUEUE différé, `poll` idle → `sweep_parked`), spoofe via `build_nxdomain_response`/`build_sinkhole_response`/`build_cname_response` (EDE « Filtered by upstream validator »)
   - La réponse validateur (src ∈ `resolvers`) n'est jamais transmise (NF_DROP) ; famille activée seulement si routable
 
@@ -86,8 +86,12 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
   - `captive` (TCP/80), `reject` (RST/ICMP)
   - `auth` (HTTPS WolfSSL + admin)
   - optionnels : `tls` (SNI 443), `sip` (SIP/STUN), `doh` (DoH 8443)
-- SIGHUP :
+- SIGHUP (`service custos reload`) :
   - `main` relit `filter.load!` puis re-fork les workers questions/responses/captive/reject/doh (COW), et propage SIGHUP à AUTH (reload secrets)
+  - Les sessions utilisateur **restent actives** (le worker AUTH ne redémarre pas, les sets nftables sont intacts)
+- Restart (`service custos restart`) :
+  - Les sets nftables sont vidés au redémarrage, **mais** le worker AUTH rejoue automatiquement au démarrage toutes les sessions non expirées depuis `sessions.lua` → les clients n'ont pas à se réauthentifier (log : `sessions_replayed_to_nft`)
+  - La clé de session (`/etc/custos/session.key`) persiste → les tokens existants restent valides
 - Active nft sets: `ip4_allowed`, `ip6_allowed`, `mac4_allowed`, `mac6_allowed`,
   `authenticated_macs`, `authenticated_ips`, `authenticated_ips6`,
   `ip4_dest_whitelist`, `ip6_dest_whitelist`

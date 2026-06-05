@@ -12,7 +12,7 @@ local s2mac
 s2mac = require("ipparse.l2.ethernet").s2mac
 local open_socket
 open_socket = function(ifname)
-  local fd = C.socket(AF_PACKET, SOCK_RAW, ETH_P_ALL)
+  local fd = C.socket(AF_PACKET, SOCK_RAW, 0)
   if fd < 0 then
     return nil, "socket() failed on " .. tostring(ifname) .. ": errno " .. tostring(ffi.errno())
   end

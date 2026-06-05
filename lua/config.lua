@@ -327,7 +327,6 @@ local DEFAULTS = {
     expiry = 300
   },
   second_opinion = {
-    enabled = true,
     resolvers = {
       "2a01:4f9:c010:969d::1",
       "167.235.236.107"

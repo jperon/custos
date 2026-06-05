@@ -422,7 +422,6 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end
   end
   local verdict = NF_ACCEPT
-  local skip_duplicate = false
   local block_reason = nil
   local allow_reason = nil
   local block_rule_id = nil
@@ -470,7 +469,6 @@ handle_question = function(qh_ptr, nfad, pkt_id)
         for k, v in pairs(decision.allow_modifiers) do
           allow_modifiers[k] = v
         end
-        skip_duplicate = skip_duplicate or (allow_modifiers.unconditionally_allow or false)
       end
     end
     q_fields.reason = reason or (allowed and "allowed") or "denied"
@@ -538,7 +536,8 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     end)
     return NF_DROP
   end
-  if verdict == NF_ACCEPT and not skip_duplicate then
+  local do_duplicate = allow_modifiers and allow_modifiers.validate
+  if verdict == NF_ACCEPT and do_duplicate then
     maybe_duplicate(ip, l4, raw)
   end
   return NF_ACCEPT
@@ -593,7 +592,7 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
         }
       end)
     end
-    if so_cfg.enabled and #(so_cfg.resolvers or { }) > 0 then
+    if #(so_cfg.resolvers or { }) > 0 then
       so_resolvers = so_cfg.resolvers
       local _list_0 = so_cfg.resolvers
       for _index_0 = 1, #_list_0 do

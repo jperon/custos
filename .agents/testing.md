@@ -54,3 +54,26 @@ Les logs utiles pour valider l'architecture courante sont `questions_*`
 `grep -c` retourne le code de sortie 1 quand le compte est 0, ce qui fait
 échouer l'appel SSH (`ok=false`). Utiliser `grep PATTERN | wc -l` (toujours
 code 0) pour les vérifications de comptage.
+
+### AF_PACKET/`ETH_P_ALL` sur le bridge maître casse NFQUEUE
+
+**Symptôme** : tous les workers NFQUEUE (DNS, captif, reject, SNI…) restent
+bloqués en `read()` ; la règle nft `queue` incrémente bien son compteur mais le
+paquet n'entre jamais dans la file (`/proc/net/netfilter/nfnetlink_queue` :
+`id_sequence=0`, aucun drop comptabilisé). Tout le filtrage DNS tombe en timeout.
+
+**Cause** : un socket `AF_PACKET/SOCK_RAW` ouvert avec `ETH_P_ALL` **et lié à
+l'interface bridge maître** (ex. `br-lan`) se met à *capturer* tout le trafic
+bridgé. Sur le noyau OpenWrt cible, cela casse la remise des paquets queués
+depuis le hook bridge `forward` à l'espace utilisateur. Un socket identique lié
+à un **port esclave** (`eth0`/`eth1`) ou ouvert en **protocole 0** (émission
+seule) ne pose pas de problème.
+
+**Pièges associés** :
+- `detect_bridge_slaves` doit énumérer `/sys/class/net/<bridge>/brif/` :
+  `ip link show type bridge_slave` n'existe pas en busybox, et le repli sur
+  l'interface maître recrée exactement la condition fautive.
+- `bridge_raw.open_socket` (injection de trames, émission seule) utilise le
+  protocole `0`, jamais `ETH_P_ALL`.
+- Ce bug est **latent** tant que `auth.bridge_ifname` n'est pas réglé sur le vrai
+  bridge (un nom inexistant → `socket()`/`bind()` échoue → pas de capture).

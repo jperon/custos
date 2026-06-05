@@ -282,10 +282,11 @@ Gestion du cache client-side.
 
 ## 7bis. Section `second_opinion`
 
-Couche **« second avis »** : pour chaque question DNS autorisée localement,
-`worker_questions` **duplique** le paquet en réécrivant uniquement l'IP
-destination vers un résolveur de filtrage (ex. **DNSforFamily**), en conservant
-src client, txid et qname. `worker_responses` reçoit alors **deux** réponses :
+Couche **« second avis »** : pour chaque question DNS autorisée par une règle
+portant l'action [`validate`](#validate), `worker_questions` **duplique** le
+paquet en réécrivant uniquement l'IP destination vers un résolveur de filtrage
+(ex. **DNSforFamily**), en conservant src client, txid et qname.
+`worker_responses` reçoit alors **deux** réponses :
 
 - celle du **vrai résolveur** (transmise au client, intacte ou spoofée) ;
 - celle du **validateur** (src ∈ `resolvers`) : jamais transmise (NF_DROP), elle
@@ -303,14 +304,17 @@ src client, txid et qname. `worker_responses` reçoit alors **deux** réponses :
 La réponse d'origine est **parquée** (verdict NFQUEUE différé) jusqu'à l'arrivée
 de la réponse validateur ou l'expiration de `budget_ms` (→ fail-open).
 
+> **Opt-in par règle.** La duplication n'a lieu que pour les requêtes autorisées
+> par une règle portant l'action `validate`. Sans cette action, la réponse est
+> transmise telle quelle, sans aucune interaction avec le résolveur validateur.
+
 > **Texte EDE.** Pour un blocage/réorientation décidé par le validateur, l'EDE
 > porte « Filtered by upstream validator » — et **non** la raison
 > d'*autorisation* locale (ex. « Allowed by rule: … »), qui serait trompeuse.
 
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
-| `enabled` | bool | `true` | Active le second avis |
-| `resolvers` | liste | DNSforFamily | IP v4 et v6 mélangées ; la famille est choisie selon le paquet client |
+| `resolvers` | liste | — | IP v4 et v6 mélangées ; la famille est choisie selon le paquet client |
 | `budget_ms` | int | `80` | Attente max de la réponse validateur avant fail-open |
 | `fail_open` | bool | `true` | Validateur silencieux → laisser passer la réponse d'origine |
 
@@ -926,17 +930,18 @@ doivent pas ouvrir le pare-feu.
 actions: {"dnsonly"}
 ```
 
-### `unconditionally_allow`
+### `validate`
 
-Autorise la requête DNS **sans la soumettre au résolveur validateur** (second
-avis DNS). Les IPs résolues sont injectées dans nftables comme avec `allow`.
+Autorise la requête DNS **et la soumet au résolveur validateur** (second avis
+DNS). Si le validateur répond NXDOMAIN, sinkhole ou CNAME (SafeSearch), la
+réponse d'origine est spoofée en conséquence. Les IPs résolues sont injectées
+dans nftables comme avec `allow`.
 
-À réserver aux domaines de confiance absolue (infrastructure interne, CDN
-critiques) pour lesquels la vérification supplémentaire n'apporterait rien et
-représenterait une latence inutile.
+Sans cette action, la requête est transmise telle quelle sans interaction avec
+le résolveur validateur.
 
 ```moonscript
-actions: {"unconditionally_allow"}
+actions: {"validate"}
 ```
 
 ### `dns_strip`
