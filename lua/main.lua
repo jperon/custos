@@ -141,7 +141,9 @@ load_doh_cfg = function()
       else
         return nil
       end
-    end)()
+    end)(),
+    upstream_doh_url = config.doh.upstream_doh_url or nil,
+    upstream_doh_tls_verify = config.doh.upstream_doh_tls_verify or false
   }
 end
 local close_supervisor_fds

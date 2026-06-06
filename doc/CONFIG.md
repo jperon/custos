@@ -458,6 +458,19 @@ Proxy DNS-over-HTTPS vers un résolveur amont.
 | `cert_path` | string | `nil` | Chemin certificat TLS (optionnel) |
 | `key_path` | string | `nil` | Chemin clé privée TLS (optionnel) |
 | `prefer_ipv6` | bool | `true` | Préférer IPv6 pour les requêtes amont |
+| `upstream_doh_url` | string | `nil` | URL DoH amont pour les clients DoH, ex. `"https://dns.quad9.net/dns-query"`. Si défini, le proxy utilise DoH (TLS+HTTP/2 ou HTTP/1.1) vers ce résolveur au lieu d'UDP/53. Accepte IPs ou noms d'hôtes. Opt-in. |
+| `upstream_doh_tls_verify` | bool | `false` | Vérifier le certificat TLS du résolveur `upstream_doh_url`. |
+| `upstream_doh_h2` | bool\|nil | `nil` | Protocole HTTP pour l'upstream DoH : `nil` = auto via ALPN, `true` = forcer HTTP/2 (pour les providers qui l'exigent), `false` = forcer HTTP/1.1. |
+
+### Clé `doh.validate_resolvers`
+
+Liste d'endpoints pour le second avis DNS (action `validate` dans les règles de filtre). Supporte les IPs (UDP/53) et les URLs DoH (`https://…`).
+
+```moonscript
+doh: {
+  validate_resolvers: { "9.9.9.9", "https://dns.quad9.net/dns-query" }
+}
+```
 
 ---
 

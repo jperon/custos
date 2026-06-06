@@ -153,6 +153,8 @@ load_doh_cfg = ->
     timeout_ms:   tonumber(config.doh.upstream_timeout_ms) or 2000
     cert:    if config.doh.cert and #config.doh.cert > 0 then config.doh.cert else nil
     key:     if config.doh.key  and #config.doh.key  > 0 then config.doh.key  else nil
+    upstream_doh_url:        config.doh.upstream_doh_url or nil
+    upstream_doh_tls_verify: config.doh.upstream_doh_tls_verify or false
   }
 
 -- ── Shutdown explicite des workers ───────────────────────────────

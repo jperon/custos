@@ -1,8 +1,8 @@
 -- tests/unit/doh/query_spec.moon
 -- Tests d'intégration légère du cœur DoH (doh.query.process_query) : dispatch
 -- on_response, injection nft partagée (response_inject), fail-closed, wildcard,
--- patch HTTPS/SVCB. Stube uniquement les dépendances lourdes ; ipparse, dns_ede
--- et response_inject sont réels.
+-- patch HTTPS/SVCB, second avis (validate). Stube uniquement les dépendances
+-- lourdes ; ipparse, dns_ede et response_inject sont réels.
 
 dns_mod = require "ipparse.l7.dns"
 sp = require("ipparse.lib.pack_compat").pack
@@ -28,18 +28,20 @@ make_response = (with_https=false) ->
   (sp ">H H H H H H", 0x1234, 0x8180, 1, 1, 0, 0) .. question .. answer_a
 
 -- ── Stubs contrôlables ───────────────────────────────────────────────────────
-nft_calls    = {}
-nft_result   = true
-upstream_resp = nil
-decide_result = nil
-user_result   = nil
+nft_calls      = {}
+nft_result     = true
+upstream_resp  = nil
+decide_result  = nil
+user_result    = nil
+validator_resp = false   -- verdict renvoyé par le stub doh.validator
 
 reset = ->
-  nft_calls    = {}
-  nft_result   = true
-  upstream_resp = make_response!
-  decide_result = { verdict: true, reason: "ok", rule_id: "r_main", timeout: "5m", description: "allow" }
-  user_result   = nil
+  nft_calls      = {}
+  nft_result     = true
+  upstream_resp  = make_response!
+  decide_result  = { verdict: true, reason: "ok", rule_id: "r_main", timeout: "5m", description: "allow", allow_modifiers: {} }
+  user_result    = nil
+  validator_resp = false
 
 record_add = (key, dest, rule_id, timeout, corr) ->
   nft_calls[#nft_calls + 1] = { :key, :dest, :rule_id }
@@ -76,6 +78,9 @@ package.loaded["nft_queue"] = {
 }
 package.loaded["auth.sessions"] = { user_for_mac: (mac, ip, file) -> user_result }
 package.loaded["doh.upstream"]  = { query: (up, raw) -> upstream_resp }
+package.loaded["doh.validator"] = {
+  query_verdict: (raw, resolvers, timeout) -> validator_resp, (validator_resp and "validator=stub rcode=5" or nil)
+}
 
 query_mod = require "doh.query"
 
@@ -157,3 +162,50 @@ describe "doh.query.process_query", ->
     -- Le RR HTTPS doit avoir disparu : ANCOUNT repasse de 2 à 1
     ancount = resp\byte(7) * 256 + resp\byte(8)
     assert.equals 1, ancount
+
+  -- ── Second avis (validate) ───────────────────────────────────────────────
+
+  it "validate=true, validateur OK → réponse livrée normalement", ->
+    decide_result.allow_modifiers = { validate: true }
+    config_stub.second_opinion = { resolvers: { "1.1.1.1" }, budget_ms: 200 }
+    validator_resp = false
+    resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
+    assert.is_not_nil resp
+    assert.equals 0, rcode_of resp
+
+  it "validate=true, validateur bloque → REFUSED", ->
+    decide_result.allow_modifiers = { validate: true }
+    config_stub.second_opinion = { resolvers: { "1.1.1.1" }, budget_ms: 200 }
+    validator_resp = true
+    resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
+    assert.is_not_nil resp
+    assert.equals 5, rcode_of resp
+    assert.equals 0, #nft_calls
+
+  it "validate=table, résolveurs per-règle transmis au validateur", ->
+    per_rule = { "2.2.2.2" }
+    decide_result.allow_modifiers = { validate: per_rule }
+    validator_called_with = nil
+    package.loaded["doh.validator"] = {
+      query_verdict: (raw, resolvers, timeout) ->
+        validator_called_with = resolvers
+        false, nil
+    }
+    -- Recharge doh.query pour prendre le nouveau stub.
+    package.loaded["doh.query"] = nil
+    local_mod = require "doh.query"
+    local_mod.process_query make_query!, "10.0.0.1", "unknown", {}
+    assert.same per_rule, validator_called_with
+    -- Restaure le stub standard pour les tests suivants.
+    package.loaded["doh.validator"] = {
+      query_verdict: (raw, resolvers, timeout) -> validator_resp, (validator_resp and "validator=stub rcode=5" or nil)
+    }
+    package.loaded["doh.query"] = nil
+
+  it "validate sans résolveurs configurés → pas d'appel, réponse livrée", ->
+    decide_result.allow_modifiers = { validate: true }
+    config_stub.second_opinion = nil
+    validator_resp = true   -- ne doit jamais être consulté
+    resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
+    assert.is_not_nil resp
+    assert.equals 0, rcode_of resp

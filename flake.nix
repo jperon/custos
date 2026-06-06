@@ -89,7 +89,8 @@
           pkgs.mbedtls
           pkgs.openssl
           pkgs.xxhash
-          
+          pkgs.curl
+
           # Dépendances pour Copilot/Bash
           pkgs.bash
           pkgs.glibc
@@ -97,7 +98,7 @@
         ];
 
         shellHook = ''
-          export LD_LIBRARY_PATH="${pkgs.xxhash}/lib:${pkgs.libnetfilter_queue}/lib:${pkgs.nftables}/lib:${pkgs.wolfssl}/lib:$LD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="${pkgs.xxhash}/lib:${pkgs.libnetfilter_queue}/lib:${pkgs.nftables}/lib:${pkgs.wolfssl}/lib:${pkgs.curl}/lib:$LD_LIBRARY_PATH"
           
           # FHS pour Copilot et autres outils qui cherchent bash au chemin standard
           export BASH_PATH="${pkgs.bash}/bin/bash"

@@ -99,17 +99,17 @@ query = (client, dns_raw) ->
   n = C.send client.fd, dns_raw, #dns_raw, 0
   if n < 0
     errno = get_errno!
-    log_warn -> { action: "upstream_send_failed", upstream_ip: client.upstream_ip, errno: errno }
+    log_debug -> { action: "upstream_send_failed", upstream_ip: client.upstream_ip, errno: errno }
     return nil, "send() failed: errno=" .. errno
 
   buf = ffi.new "uint8_t[?]", DNS_BUF_SIZE
   n = C.recv client.fd, buf, DNS_BUF_SIZE, 0
   if n < 0
     errno = get_errno!
-    log_warn -> { action: "upstream_recv_failed", upstream_ip: client.upstream_ip, errno: errno }
+    log_debug -> { action: "upstream_recv_failed", upstream_ip: client.upstream_ip, errno: errno }
     return nil, "recv() timed out or failed: errno=" .. errno
   if n == 0
-    log_warn -> { action: "upstream_recv_empty", upstream_ip: client.upstream_ip }
+    log_debug -> { action: "upstream_recv_empty", upstream_ip: client.upstream_ip }
     return nil, "recv() returned 0 (connection closed)"
 
   log_debug -> { action: "upstream_recv", upstream_ip: client.upstream_ip, bytes: n }

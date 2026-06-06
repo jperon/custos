@@ -184,62 +184,12 @@ make_server6 = (port) ->
 
 -- ── HTTP/2 minimal handler (RFC 7540 + RFC 8484 DoH) ─────────────────────────
 
-H2_FRAME_DATA          = 0x0
-H2_FRAME_HEADERS       = 0x1
-H2_FRAME_SETTINGS      = 0x4
-H2_FRAME_PING          = 0x6
-H2_FRAME_GOAWAY        = 0x7
-H2_FRAME_WINDOW_UPDATE = 0x8
-
-H2_FLAG_END_STREAM     = 0x1
-H2_FLAG_END_HEADERS    = 0x4
-H2_FLAG_ACK            = 0x1
-
-h2_recv_exact = (conn, n) ->
-  buf = ""
-  while #buf < n
-    chunk, err = conn\receive n - #buf
-    return nil, err unless chunk and #chunk > 0
-    buf ..= chunk
-  buf
-
-h2_read_frame = (conn) ->
-  hdr, err = h2_recv_exact conn, 9
-  return nil, err unless hdr
-  len   = hdr\byte(1) * 65536 + hdr\byte(2) * 256 + hdr\byte(3)
-  ftype = hdr\byte(4)
-  flags = hdr\byte(5)
-  sid   = bit.band(
-    bit.bor(
-      bit.lshift(hdr\byte(6), 24),
-      bit.lshift(hdr\byte(7), 16),
-      bit.lshift(hdr\byte(8),  8),
-      hdr\byte(9)
-    ),
-    0x7FFFFFFF
-  )
-  payload = if len > 0
-    p, perr = h2_recv_exact conn, len
-    return nil, perr unless p
-    p
-  else
-    ""
-  ftype, flags, sid, payload
-
-h2_write_frame = (conn, ftype, flags, sid, payload) ->
-  payload = payload or ""
-  n = #payload
-  frame = string.char(
-    bit.band(bit.rshift(n, 16), 0xFF),
-    bit.band(bit.rshift(n,  8), 0xFF),
-    bit.band(n,                 0xFF),
-    ftype, flags,
-    bit.band(bit.rshift(sid, 24), 0xFF),
-    bit.band(bit.rshift(sid, 16), 0xFF),
-    bit.band(bit.rshift(sid,  8), 0xFF),
-    bit.band(sid,                 0xFF)
-  ) .. payload
-  conn\send frame
+{
+  :H2_FRAME_DATA, :H2_FRAME_HEADERS, :H2_FRAME_SETTINGS
+  :H2_FRAME_PING, :H2_FRAME_GOAWAY, :H2_FRAME_WINDOW_UPDATE
+  :H2_FLAG_END_STREAM, :H2_FLAG_END_HEADERS, :H2_FLAG_ACK
+  :h2_read_frame, :h2_write_frame
+} = require "doh.h2_frames"
 
 -- HPACK : :status: 200 (index 8 = 0x88) + content-type: application/dns-message
 -- (content-type = static index 31, literal with incremental indexing: 0x5f)
@@ -517,14 +467,30 @@ run = (doh_cfg, filter_data) ->
     ipv6:   listen6 and "::" or nil
   }
 
+  -- Sélection du module upstream selon la configuration (opt-in DoH).
+  make_upstream  = nil
+  close_upstream = nil
+  if doh_cfg.upstream_doh_url
+    ok_curl, upstream_curl_mod = pcall require, "doh.upstream_doh_curl"
+    if ok_curl
+      url        = doh_cfg.upstream_doh_url
+      verify_tls = doh_cfg.upstream_doh_tls_verify or false
+      make_upstream  = -> upstream_curl_mod.new_client url, timeout_ms, verify_tls
+      close_upstream = upstream_curl_mod.close
+      log_info -> { action: "upstream_doh_curl_enabled", url: url, verify_tls: verify_tls }
+    else
+      log_warn -> { action: "upstream_doh_curl_load_failed", err: tostring upstream_curl_mod }
+  unless make_upstream
+    make_upstream  = -> upstream_mod.new_client upstream_ip, upstream_port, timeout_ms
+    close_upstream = upstream_mod.close
+
   state = {
     :cert_cache
     :static_cert_paths
-    upstream_ip:   upstream_ip
-    upstream_port: upstream_port
-    timeout_ms:    timeout_ms
-    -- upstream socket created per-child (after fork) — stored as config only
-    upstream: nil   -- placeholder; each child opens its own socket
+    :make_upstream
+    :close_upstream
+    -- upstream handle créé par make_upstream après fork — placeholder ici.
+    upstream: nil
   }
 
   while true
@@ -542,21 +508,20 @@ run = (doh_cfg, filter_data) ->
           conn_state = {
             cert_cache:        state.cert_cache
             static_cert_paths: state.static_cert_paths
-            upstream_ip:       upstream_ip
-            upstream_port:     upstream_port
-            timeout_ms:        timeout_ms
+            make_upstream:     state.make_upstream
+            close_upstream:    state.close_upstream
           }
           conn_arg = { :client, :peer_ip, state: conn_state }
 
           child_fn = (args) ->
-            up, up_err = upstream_mod.new_client args.state.upstream_ip, args.state.upstream_port, args.state.timeout_ms
+            up, up_err = args.state.make_upstream!
             unless up
-              log_warn -> { action: "upstream_socket_failed", peer: args.peer_ip, upstream_ip: args.state.upstream_ip, upstream_port: args.state.upstream_port, err: up_err }
+              log_warn -> { action: "upstream_open_failed", peer: args.peer_ip, err: up_err }
               args.client\close!
               return
             args.state.upstream = up
             handle_doh_client args
-            upstream_mod.close up
+            args.state.close_upstream up
 
           pid = fork_child "DOH-conn", child_fn, conn_arg, { log_start: false }
 

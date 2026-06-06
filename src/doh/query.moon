@@ -20,6 +20,7 @@ parse = dns_mod.parse
 { :log_allow, :log_block, :log_warn, :log_debug, :log_info } = require "log"
 config = require "config"
 upstream_mod = require "doh.upstream"
+{ :query_verdict } = require "doh.validator"
 
 MAC_ZERO = "00:00:00:00:00:00"
 mac_valid = (mac) -> mac and mac != "unknown" and mac != MAC_ZERO
@@ -80,6 +81,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
   allow_rule_id = nil
   allow_timeout = nil
   allow_response_rule_ids = {}
+  allow_modifiers = {}
 
   questions = dns.questions or (dns.question and { dns.question } or {})
   for q in *questions
@@ -110,10 +112,27 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       allow_rule_id = meta.rule_id
       allow_timeout = meta.timeout
       allow_response_rule_ids = meta.response_rule_ids or {}
+      allow_modifiers = meta.allow_modifiers or {}
     else
       log_block -> fields
       any_blocked  = true
       block_reason = meta.reason
+
+  -- Second avis synchrone : si la règle porte l'action `validate` et que le
+  -- filtre a autorisé la requête, interroger le résolveur validateur et bloquer
+  -- si celui-ci répond NXDOMAIN ou REFUSED. Fail-open si tous injoignables.
+  if not any_blocked and allow_modifiers.validate
+    do_validate = allow_modifiers.validate
+    val_resolvers = type(do_validate) == "table" and do_validate or (config.second_opinion or {}).resolvers or {}
+    if #val_resolvers > 0
+      so = config.second_opinion or {}
+      timeout_ms     = so.budget_ms or 1000
+      doh_timeout_ms = so.doh_budget_ms or 3000
+      val_blocked, v_reason = query_verdict dns_raw, val_resolvers, timeout_ms, doh_timeout_ms
+      if val_blocked
+        log_block -> { action: "doh_validator_blocked", client_ip: client_ip, client_mac: client_mac, user: user, reason: v_reason }
+        any_blocked  = true
+        block_reason = v_reason or "validator_blocked"
 
   if any_blocked
     blocked = build_blocked_response dns, dns_raw, block_reason
@@ -124,7 +143,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
     return blocked
 
   -- Forward to upstream DNS (plain UDP/53).
-  resp_raw, upstream_err = upstream_mod.query upstream, dns_raw
+  resp_raw, upstream_err = ((upstream and upstream._mod) or upstream_mod).query upstream, dns_raw
   unless resp_raw
     log_warn -> { action: "upstream_failed", client_ip: client_ip, err: upstream_err }
     return nil, upstream_err or "upstream_failed"
@@ -133,7 +152,8 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
   -- Les callbacks de chaque action portent toute la logique (strip DNS,
   -- EDE, skip_nft) et la décision inject_nft. "allow" supplante "skip".
   response_hooks = (#allow_response_rule_ids > 0) and allow_response_rule_ids or allow_rule_id
-  resp_ctx = run_on_response response_hooks, resp_raw, allow_reason, { resolver_ip: upstream }
+  resolver_ip_ctx = upstream and upstream.upstream_ip or nil
+  resp_ctx = run_on_response response_hooks, resp_raw, allow_reason, { resolver_ip: resolver_ip_ctx }
   resp_raw = resp_ctx.dns_raw
 
   -- Parse the (possibly modified) response and inject A/AAAA records into nft sets.

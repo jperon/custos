@@ -230,14 +230,20 @@ DEFAULTS = {
     -- selon celle du paquet client (présence de ':' → IPv6).
     -- Activé uniquement pour les règles portant l'action `validate`.
     resolvers: {
+      "https://dns-doh-no-youtube-safe-search.dnsforfamily.com/dns-query"  -- DNSforFamily DoH, SafeSearch sans restriction YouTube
       "2a01:4f9:c010:969d::1"  -- DNSforFamily, avec SafeSearch mais pas youtube-rescrict
+      "2a01:4f8:1c0c:40db::1"  -- DNSforFamily
+      "2a01:4f8:1c17:4df8::1"  -- DNSforFamily
       "167.235.236.107"        -- DNSforFamily, avec SafeSearch mais pas youtube-rescrict
+      "94.130.180.225"         -- DNSforFamily
+      "78.47.64.161"           -- DNSforFamily
     }
     -- La question dupliquée est émise via un socket RAW routé par le noyau
     -- (src = IP client spoofée) : pas besoin de connaître la MAC de passerelle,
     -- et un IPv6 routé par tunnel est géré nativement. Une famille n'est activée
     -- que si un validateur de cette famille est routable.
-    budget_ms: 80        -- attente max de la réponse validateur avant fail-open
+    budget_ms: 80        -- attente max de la réponse validateur (UDP) avant fail-open
+    doh_budget_ms: 3000  -- attente max pour les endpoints DoH https:// (TLS + HTTP/2)
     fail_open: true      -- pas de réponse validateur à temps → relâcher A intacte
   }
 
@@ -277,6 +283,10 @@ DEFAULTS = {
     cert: nil
     key: nil
     prefer_ipv6: true
+    -- Transport DoH vers l'upstream (opt-in). nil = UDP/53 (comportement par défaut).
+    -- Exemple : "https://1.1.1.1/dns-query"
+    upstream_doh_url: nil        -- "https://host/dns-query" → transport DoH via libcurl (opt-in)
+    upstream_doh_tls_verify: false
   }
 
   events: {

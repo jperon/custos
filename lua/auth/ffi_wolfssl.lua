@@ -27,6 +27,7 @@ ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
   int wolfSSL_read(WOLFSSL *ssl, void *data, int sz);
   int wolfSSL_shutdown(WOLFSSL *ssl);
   int wolfSSL_get_error(WOLFSSL *ssl, int ret);
+  void wolfSSL_CTX_set_verify(WOLFSSL_CTX *ctx, int mode, void *verify_callback);
   int wolfSSL_CTX_UseALPN(WOLFSSL_CTX *ctx, char *protocol_name_list,
                           unsigned int protocol_name_listSz, unsigned char options);
   int wolfSSL_ALPN_GetProtocol(WOLFSSL *ssl, char **protocol_name, unsigned short *size);
@@ -77,6 +78,8 @@ local SSL_ERROR_NONE = 0
 local SSL_ERROR_WANT_READ = 2
 local SSL_ERROR_WANT_WRITE = 3
 local SSL_ERROR_SSL = 1
+local SSL_VERIFY_NONE = 0
+local SSL_VERIFY_PEER = 1
 local SSL_FILETYPE_PEM = 1
 local SSL_FILETYPE_ASN1 = 2
 local WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x01
@@ -160,6 +163,27 @@ newcontext = function(opts)
         action = "alpn_unavailable"
       }
     end)
+  end
+  return {
+    ctx = ctx,
+    closed = false
+  }
+end
+local newclient_context
+newclient_context = function(opts)
+  if opts == nil then
+    opts = { }
+  end
+  local method = libwolfssl.wolfTLS_client_method()
+  if method == nil then
+    error("wolfTLS_client_method() failed")
+  end
+  local ctx = libwolfssl.wolfSSL_CTX_new(method)
+  if ctx == nil then
+    error("wolfSSL_CTX_new() failed (client)")
+  end
+  if opts.verify_peer then
+    libwolfssl.wolfSSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nil)
   end
   return {
     ctx = ctx,
@@ -282,6 +306,25 @@ ssl_mt.__index.dohandshake = function(self)
     }
   end)
   return false, "tls_error"
+end
+ssl_mt.__index.doconnect = function(self)
+  if self.closed then
+    error("SSL connection is closed")
+  end
+  if self.handshake_done then
+    return true
+  end
+  local ret = libwolfssl.wolfSSL_connect(self.ssl)
+  if ret > 0 then
+    self.handshake_done = true
+    return true
+  end
+  local err = libwolfssl.wolfSSL_get_error(self.ssl, ret)
+  if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE then
+    return false
+  end
+  local ssl_errors = get_ssl_errors()
+  return false, "tls_connect_error: err=" .. tostring(err) .. " " .. tostring(ssl_errors)
 end
 ssl_mt.__index.selected_alpn = function(self)
   if _alpn_available == false then
@@ -478,6 +521,7 @@ free_context = function(ctx_obj)
 end
 return {
   newcontext = newcontext,
+  newclient_context = newclient_context,
   wrap = wrap,
   free_context = free_context,
   libwolfssl = libwolfssl,

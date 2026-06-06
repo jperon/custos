@@ -231,55 +231,10 @@ make_server6 = function(port)
   srv6:settimeout(1)
   return srv6
 end
-local H2_FRAME_DATA = 0x0
-local H2_FRAME_HEADERS = 0x1
-local H2_FRAME_SETTINGS = 0x4
-local H2_FRAME_PING = 0x6
-local H2_FRAME_GOAWAY = 0x7
-local H2_FRAME_WINDOW_UPDATE = 0x8
-local H2_FLAG_END_STREAM = 0x1
-local H2_FLAG_END_HEADERS = 0x4
-local H2_FLAG_ACK = 0x1
-local h2_recv_exact
-h2_recv_exact = function(conn, n)
-  local buf = ""
-  while #buf < n do
-    local chunk, err = conn:receive(n - #buf)
-    if not (chunk and #chunk > 0) then
-      return nil, err
-    end
-    buf = buf .. chunk
-  end
-  return buf
-end
-local h2_read_frame
-h2_read_frame = function(conn)
-  local hdr, err = h2_recv_exact(conn, 9)
-  if not (hdr) then
-    return nil, err
-  end
-  local len = hdr:byte(1) * 65536 + hdr:byte(2) * 256 + hdr:byte(3)
-  local ftype = hdr:byte(4)
-  local flags = hdr:byte(5)
-  local sid = bit.band(bit.bor(bit.lshift(hdr:byte(6), 24), bit.lshift(hdr:byte(7), 16), bit.lshift(hdr:byte(8), 8), hdr:byte(9)), 0x7FFFFFFF)
-  local payload
-  if len > 0 then
-    local p, perr = h2_recv_exact(conn, len)
-    if not (p) then
-      return nil, perr
-    end
-    payload = p
-  else
-    payload = ""
-  end
-  return ftype, flags, sid, payload
-end
-local h2_write_frame
-h2_write_frame = function(conn, ftype, flags, sid, payload)
-  payload = payload or ""
-  local n = #payload
-  local frame = string.char(bit.band(bit.rshift(n, 16), 0xFF), bit.band(bit.rshift(n, 8), 0xFF), bit.band(n, 0xFF), ftype, flags, bit.band(bit.rshift(sid, 24), 0xFF), bit.band(bit.rshift(sid, 16), 0xFF), bit.band(bit.rshift(sid, 8), 0xFF), bit.band(sid, 0xFF)) .. payload
-  return conn:send(frame)
+local H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, h2_read_frame, h2_write_frame
+do
+  local _obj_0 = require("doh.h2_frames")
+  H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, h2_read_frame, h2_write_frame = _obj_0.H2_FRAME_DATA, _obj_0.H2_FRAME_HEADERS, _obj_0.H2_FRAME_SETTINGS, _obj_0.H2_FRAME_PING, _obj_0.H2_FRAME_GOAWAY, _obj_0.H2_FRAME_WINDOW_UPDATE, _obj_0.H2_FLAG_END_STREAM, _obj_0.H2_FLAG_END_HEADERS, _obj_0.H2_FLAG_ACK, _obj_0.h2_read_frame, _obj_0.h2_write_frame
 end
 local h2_encode_response_headers
 h2_encode_response_headers = function()
@@ -744,12 +699,44 @@ run = function(doh_cfg, filter_data)
       ipv6 = listen6 and "::" or nil
     }
   end)
+  local make_upstream = nil
+  local close_upstream = nil
+  if doh_cfg.upstream_doh_url then
+    local ok_curl, upstream_curl_mod = pcall(require, "doh.upstream_doh_curl")
+    if ok_curl then
+      local url = doh_cfg.upstream_doh_url
+      local verify_tls = doh_cfg.upstream_doh_tls_verify or false
+      make_upstream = function()
+        return upstream_curl_mod.new_client(url, timeout_ms, verify_tls)
+      end
+      close_upstream = upstream_curl_mod.close
+      log_info(function()
+        return {
+          action = "upstream_doh_curl_enabled",
+          url = url,
+          verify_tls = verify_tls
+        }
+      end)
+    else
+      log_warn(function()
+        return {
+          action = "upstream_doh_curl_load_failed",
+          err = tostring(upstream_curl_mod)
+        }
+      end)
+    end
+  end
+  if not (make_upstream) then
+    make_upstream = function()
+      return upstream_mod.new_client(upstream_ip, upstream_port, timeout_ms)
+    end
+    close_upstream = upstream_mod.close
+  end
   local state = {
     cert_cache = cert_cache,
     static_cert_paths = static_cert_paths,
-    upstream_ip = upstream_ip,
-    upstream_port = upstream_port,
-    timeout_ms = timeout_ms,
+    make_upstream = make_upstream,
+    close_upstream = close_upstream,
     upstream = nil
   }
   while true do
@@ -769,9 +756,8 @@ run = function(doh_cfg, filter_data)
           local conn_state = {
             cert_cache = state.cert_cache,
             static_cert_paths = state.static_cert_paths,
-            upstream_ip = upstream_ip,
-            upstream_port = upstream_port,
-            timeout_ms = timeout_ms
+            make_upstream = state.make_upstream,
+            close_upstream = state.close_upstream
           }
           local conn_arg = {
             client = client,
@@ -780,14 +766,12 @@ run = function(doh_cfg, filter_data)
           }
           local child_fn
           child_fn = function(args)
-            local up, up_err = upstream_mod.new_client(args.state.upstream_ip, args.state.upstream_port, args.state.timeout_ms)
+            local up, up_err = args.state.make_upstream()
             if not (up) then
               log_warn(function()
                 return {
-                  action = "upstream_socket_failed",
+                  action = "upstream_open_failed",
                   peer = args.peer_ip,
-                  upstream_ip = args.state.upstream_ip,
-                  upstream_port = args.state.upstream_port,
                   err = up_err
                 }
               end)
@@ -796,7 +780,7 @@ run = function(doh_cfg, filter_data)
             end
             args.state.upstream = up
             handle_doh_client(args)
-            return upstream_mod.close(up)
+            return args.state.close_upstream(up)
           end
           local pid = fork_child("DOH-conn", child_fn, conn_arg, {
             log_start = false

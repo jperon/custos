@@ -31,6 +31,8 @@ do
 end
 local config = require("config")
 local upstream_mod = require("doh.upstream")
+local query_verdict
+query_verdict = require("doh.validator").query_verdict
 local MAC_ZERO = "00:00:00:00:00:00"
 local mac_valid
 mac_valid = function(mac)
@@ -122,6 +124,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
   local allow_rule_id = nil
   local allow_timeout = nil
   local allow_response_rule_ids = { }
+  local allow_modifiers = { }
   local questions = dns.questions or (dns.question and {
     dns.question
   } or { })
@@ -169,12 +172,36 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       allow_rule_id = meta.rule_id
       allow_timeout = meta.timeout
       allow_response_rule_ids = meta.response_rule_ids or { }
+      allow_modifiers = meta.allow_modifiers or { }
     else
       log_block(function()
         return fields
       end)
       any_blocked = true
       block_reason = meta.reason
+    end
+  end
+  if not any_blocked and allow_modifiers.validate then
+    local do_validate = allow_modifiers.validate
+    local val_resolvers = type(do_validate) == "table" and do_validate or (config.second_opinion or { }).resolvers or { }
+    if #val_resolvers > 0 then
+      local so = config.second_opinion or { }
+      local timeout_ms = so.budget_ms or 1000
+      local doh_timeout_ms = so.doh_budget_ms or 3000
+      local val_blocked, v_reason = query_verdict(dns_raw, val_resolvers, timeout_ms, doh_timeout_ms)
+      if val_blocked then
+        log_block(function()
+          return {
+            action = "doh_validator_blocked",
+            client_ip = client_ip,
+            client_mac = client_mac,
+            user = user,
+            reason = v_reason
+          }
+        end)
+        any_blocked = true
+        block_reason = v_reason or "validator_blocked"
+      end
     end
   end
   if any_blocked then
@@ -198,7 +225,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
     end)
     return blocked
   end
-  local resp_raw, upstream_err = upstream_mod.query(upstream, dns_raw)
+  local resp_raw, upstream_err = ((upstream and upstream._mod) or upstream_mod).query(upstream, dns_raw)
   if not (resp_raw) then
     log_warn(function()
       return {
@@ -210,8 +237,9 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
     return nil, upstream_err or "upstream_failed"
   end
   local response_hooks = (#allow_response_rule_ids > 0) and allow_response_rule_ids or allow_rule_id
+  local resolver_ip_ctx = upstream and upstream.upstream_ip or nil
   local resp_ctx = run_on_response(response_hooks, resp_raw, allow_reason, {
-    resolver_ip = upstream
+    resolver_ip = resolver_ip_ctx
   })
   resp_raw = resp_ctx.dns_raw
   local resp_dns, resp_err = parse(resp_raw, 1, false)

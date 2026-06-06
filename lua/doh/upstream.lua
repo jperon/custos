@@ -148,7 +148,7 @@ query = function(client, dns_raw)
   local n = C.send(client.fd, dns_raw, #dns_raw, 0)
   if n < 0 then
     local errno = get_errno()
-    log_warn(function()
+    log_debug(function()
       return {
         action = "upstream_send_failed",
         upstream_ip = client.upstream_ip,
@@ -161,7 +161,7 @@ query = function(client, dns_raw)
   n = C.recv(client.fd, buf, DNS_BUF_SIZE, 0)
   if n < 0 then
     local errno = get_errno()
-    log_warn(function()
+    log_debug(function()
       return {
         action = "upstream_recv_failed",
         upstream_ip = client.upstream_ip,
@@ -171,7 +171,7 @@ query = function(client, dns_raw)
     return nil, "recv() timed out or failed: errno=" .. errno
   end
   if n == 0 then
-    log_warn(function()
+    log_debug(function()
       return {
         action = "upstream_recv_empty",
         upstream_ip = client.upstream_ip

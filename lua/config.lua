@@ -328,10 +328,16 @@ local DEFAULTS = {
   },
   second_opinion = {
     resolvers = {
+      "https://dns-doh-no-youtube-safe-search.dnsforfamily.com/dns-query",
       "2a01:4f9:c010:969d::1",
-      "167.235.236.107"
+      "2a01:4f8:1c0c:40db::1",
+      "2a01:4f8:1c17:4df8::1",
+      "167.235.236.107",
+      "94.130.180.225",
+      "78.47.64.161"
     },
     budget_ms = 80,
+    doh_budget_ms = 3000,
     fail_open = true
   },
   mac_learner = {
@@ -366,7 +372,9 @@ local DEFAULTS = {
     upstream_timeout_ms = 2000,
     cert = nil,
     key = nil,
-    prefer_ipv6 = true
+    prefer_ipv6 = true,
+    upstream_doh_url = nil,
+    upstream_doh_tls_verify = false
   },
   events = {
     dir = "/tmp/custos/events",

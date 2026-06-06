@@ -30,6 +30,7 @@ ffi.cdef [[
   int wolfSSL_read(WOLFSSL *ssl, void *data, int sz);
   int wolfSSL_shutdown(WOLFSSL *ssl);
   int wolfSSL_get_error(WOLFSSL *ssl, int ret);
+  void wolfSSL_CTX_set_verify(WOLFSSL_CTX *ctx, int mode, void *verify_callback);
   int wolfSSL_CTX_UseALPN(WOLFSSL_CTX *ctx, char *protocol_name_list,
                           unsigned int protocol_name_listSz, unsigned char options);
   int wolfSSL_ALPN_GetProtocol(WOLFSSL *ssl, char **protocol_name, unsigned short *size);
@@ -70,6 +71,8 @@ SSL_ERROR_NONE = 0
 SSL_ERROR_WANT_READ = 2
 SSL_ERROR_WANT_WRITE = 3
 SSL_ERROR_SSL = 1
+SSL_VERIFY_NONE = 0
+SSL_VERIFY_PEER = 1
 
 -- File types
 SSL_FILETYPE_PEM = 1
@@ -138,6 +141,18 @@ newcontext = (opts = {}) ->
     closed: false
   }
 
+--- Create a client TLS context (opt-in certificate verification via opts.verify_peer).
+-- @tparam table opts {verify_peer: bool}
+-- @treturn table ctx_obj compatible with wrap()
+newclient_context = (opts={}) ->
+  method = libwolfssl.wolfTLS_client_method!
+  error "wolfTLS_client_method() failed" if method == nil
+  ctx = libwolfssl.wolfSSL_CTX_new method
+  error "wolfSSL_CTX_new() failed (client)" if ctx == nil
+  if opts.verify_peer
+    libwolfssl.wolfSSL_CTX_set_verify ctx, SSL_VERIFY_PEER, nil
+  { :ctx, closed: false }
+
 -- Wrap raw socket with TLS
 wrap = (raw_socket, ctx_obj) ->
   log_debug -> { action: "wrap_start", fd: raw_socket.fd }
@@ -199,6 +214,19 @@ ssl_mt.__index.dohandshake = =>
   -- est une erreur côté client — on la remonte sans exception pour éviter log ERROR.
   log_debug -> { action: "handshake_tls_error", err: err, ssl_err: ssl_errors or "" }
   return false, "tls_error"
+
+-- TLS handshake (client side — wolfSSL_connect au lieu de wolfSSL_accept)
+ssl_mt.__index.doconnect = =>
+  error "SSL connection is closed" if @closed
+  return true if @handshake_done
+  ret = libwolfssl.wolfSSL_connect @ssl
+  if ret > 0
+    @handshake_done = true
+    return true
+  err = libwolfssl.wolfSSL_get_error @ssl, ret
+  return false if err == SSL_ERROR_WANT_READ or err == SSL_ERROR_WANT_WRITE
+  ssl_errors = get_ssl_errors!
+  false, "tls_connect_error: err=#{err} #{ssl_errors}"
 
 ssl_mt.__index.selected_alpn = =>
   return nil if _alpn_available == false
@@ -328,6 +356,7 @@ free_context = (ctx_obj) ->
 
 {
   :newcontext
+  :newclient_context
   :wrap
   :free_context
   :libwolfssl
