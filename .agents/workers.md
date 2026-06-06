@@ -77,7 +77,11 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 ## worker_doh (`src/worker_doh.moon`) — optionnel (`doh.enabled`)
 
 - **In :** serveur HTTPS **WolfSSL FFI** sur `doh.port` (défaut 8443) ; pipe ACK `nft` dédié. Pas de NFQUEUE.
-- **Traitement :** reçoit les requêtes DoH (RFC 8484), résout en amont (`doh.upstream_ipv4`/`upstream_ipv6`, `doh.upstream_port`), applique `filter.decide`.
+- **Traitement :** reçoit les requêtes DoH RFC 8484 (HTTP/1.1 ou HTTP/2 — détection par préface `PRI *`), résout en amont, applique `filter.decide` + `doh.validator` (second avis synchrone si règle `validate`), injecte les IPs autorisées dans nft.
+- **Upstream :** UDP/53 par défaut (`doh.upstream_ipv4`/`upstream_ipv6`) ; si `doh.upstream_doh_url` est défini, utilise **libcurl** (`doh.upstream_doh_curl`) pour HTTP/2 + ALPN. Sélection dans `make_upstream` au démarrage du worker.
+- **Second avis DoH :** `doh.validator.query_verdict` interroge `second_opinion.resolvers` (ou `validate_resolvers` per-règle) **de façon synchrone**, en UDP (`doh.upstream`) ou DoH (`doh.upstream_doh_curl`). Timeout distinct : `budget_ms` (UDP) vs `doh_budget_ms` (DoH https://). Fail-open.
+- **H2 partagé :** utilitaires frames HTTP/2 (`h2_read_frame`, `h2_write_frame`, constantes) factorisés dans `doh.h2_frames`.
+- **Limite `from_vlan` :** la condition `from_vlan` ne fonctionne pas en DoH quand les switches amont suppriment les tags 802.1Q — utiliser `from_nets` à la place.
 - **Out :** réponse DoH au client ; paires autorisées injectées dans les sets nft **via le pipe `nft`**.
 
 ## worker_nft (`src/worker_nft.moon`)

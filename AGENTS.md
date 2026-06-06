@@ -122,6 +122,33 @@ suit la même convention sans toucher à `nft_compiler`.
 
 ---
 
+## Modules DoH (`src/doh/`)
+
+| Module | Rôle |
+|--------|------|
+| `doh.upstream` | Client UDP/53 — new_client / query / close |
+| `doh.upstream_doh` | Client DoH HTTP/1.1 wolfSSL — même contrat |
+| `doh.upstream_doh_curl` | Client DoH **HTTP/2** via libcurl FFI — même contrat. Chargé si `doh.upstream_doh_url` est défini. `ffi.load` essaie `"curl"` puis `"libcurl.so.4"` pour compat OpenWrt. Les args `const char *` vers les varargs `curl_easy_setopt` **doivent** être castés via `ffi.cast "const char *"` (LuaJIT ne convertit pas automatiquement en varargs). |
+| `doh.h2_frames` | Utilitaires frames HTTP/2 partagés (constantes, `h2_read_frame`, `h2_write_frame`) |
+| `doh.validator` | Second avis DNS synchrone pour `worker_doh`. Interroge `second_opinion.resolvers` (ou per-règle) en UDP ou DoH. Timeout distinct `budget_ms` (UDP) / `doh_budget_ms` (DoH). |
+| `doh.query` | Cœur de traitement DoH : `filter.decide` + `doh.validator` + upstream + nft |
+
+### Pièges FFI libcurl
+
+- `ffi.load "curl"` échoue sur OpenWrt → essayer `"libcurl.so.4"` en fallback.
+- Les fonctions variadiques FFI (`curl_easy_setopt`, …) ne convertissent **pas** les strings Lua en `char *` automatiquement → `ffi.cast("const char *", str)` obligatoire.
+- Les callbacks LuaJIT FFI (`ffi.cast "fn_ptr_type", lua_fn`) capturent les upvalues par référence ; réassigner l'upvalue (`recv_buf = {}`) met à jour le slot partagé.
+
+### Limite `from_vlan` en DoH
+
+La condition `from_vlan` lit `req.vlan`, renseigné en UDP via le tag 802.1Q du
+paquet L2. En DoH (connexion TCP/TLS), les tags VLAN sont supprimés par les
+switches amont → `req.vlan` est toujours `nil` → la condition ne matche jamais.
+Utiliser `from_nets` (sous-réseaux IP) pour les règles qui doivent s'appliquer
+aux deux workers.
+
+---
+
 ## Interdictions absolues
 
 - **`class`, `extends`** (syntaxe MoonScript orientée objet) → jamais : utiliser `setmetatable`

@@ -314,8 +314,9 @@ de la réponse validateur ou l'expiration de `budget_ms` (→ fail-open).
 
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
-| `resolvers` | liste | — | IP v4 et v6 mélangées ; la famille est choisie selon le paquet client |
-| `budget_ms` | int | `80` | Attente max de la réponse validateur avant fail-open |
+| `resolvers` | liste | — | IPs v4/v6 (UDP/53) et/ou URLs DoH `https://…` (via libcurl) ; la famille UDP est choisie selon le paquet client |
+| `budget_ms` | int | `80` | Attente max de la réponse validateur **UDP** avant fail-open |
+| `doh_budget_ms` | int | `3000` | Attente max pour les endpoints **DoH** `https://…` (TLS + HTTP/2 plus longs à établir) |
 | `fail_open` | bool | `true` | Validateur silencieux → laisser passer la réponse d'origine |
 
 > **Émission de la requête dupliquée.** Elle se fait via un **socket RAW routé
@@ -458,13 +459,17 @@ Proxy DNS-over-HTTPS vers un résolveur amont.
 | `cert_path` | string | `nil` | Chemin certificat TLS (optionnel) |
 | `key_path` | string | `nil` | Chemin clé privée TLS (optionnel) |
 | `prefer_ipv6` | bool | `true` | Préférer IPv6 pour les requêtes amont |
-| `upstream_doh_url` | string | `nil` | URL DoH amont pour les clients DoH, ex. `"https://dns.quad9.net/dns-query"`. Si défini, le proxy utilise DoH (TLS+HTTP/2 ou HTTP/1.1) vers ce résolveur au lieu d'UDP/53. Accepte IPs ou noms d'hôtes. Opt-in. |
+| `upstream_doh_url` | string | `nil` | URL DoH amont, ex. `"https://dns.quad9.net/dns-query"`. Si défini, le worker DoH proxifie vers ce résolveur via **libcurl** (HTTP/2 + ALPN natif, fallback HTTP/1.1 automatique) au lieu d'UDP/53. Requis pour les providers qui imposent HTTP/2 (RFC 8484 §5.2, ex. DNSforFamily). Opt-in. |
 | `upstream_doh_tls_verify` | bool | `false` | Vérifier le certificat TLS du résolveur `upstream_doh_url`. |
-| `upstream_doh_h2` | bool\|nil | `nil` | Protocole HTTP pour l'upstream DoH : `nil` = auto via ALPN, `true` = forcer HTTP/2 (pour les providers qui l'exigent), `false` = forcer HTTP/1.1. |
+
+> **Note `from_vlan` en DoH.** La condition `from_vlan` ne fonctionne pas pour
+> les connexions DoH quand les switches amont suppriment les tags 802.1Q avant
+> le pont : la couche L2 n'est pas visible sur la connexion TCP/TLS. Utiliser
+> `from_nets` (sous-réseaux IP) à la place pour les règles DoH.
 
 ### Clé `doh.validate_resolvers`
 
-Liste d'endpoints pour le second avis DNS (action `validate` dans les règles de filtre). Supporte les IPs (UDP/53) et les URLs DoH (`https://…`).
+Liste d'endpoints pour le second avis DNS (action `validate` dans les règles de filtre). Supporte les IPs UDP/53 et les URLs DoH (`https://…`). Les endpoints DoH utilisent **libcurl** avec le timeout `second_opinion.doh_budget_ms` (défaut 3000 ms).
 
 ```moonscript
 doh: {
@@ -954,20 +959,26 @@ Sans cette action, la requête est transmise telle quelle sans interaction avec
 le résolveur validateur.
 
 Par défaut, utilise les résolveurs globaux de `second_opinion.resolvers`. Le
-champ optionnel **`validate_resolvers`** permet de spécifier une liste d'IPs
-(v4 et v6 mélangées) propre à la règle — utile pour utiliser des validateurs
-différents selon les règles (ex. filtre adultes, filtre entreprise) :
+champ optionnel **`validate_resolvers`** permet de spécifier des IPs (v4/v6,
+UDP/53) ou des URLs DoH (`https://…`) propres à la règle :
 
 ```moonscript
 -- Résolveurs globaux (second_opinion.resolvers)
 actions: {"validate"}
 
--- Résolveurs spécifiques à cette règle
+-- Résolveurs spécifiques à cette règle (IP UDP ou DoH https://)
 actions: {"validate"}
-validate_resolvers: {"94.140.14.15", "2a10:50c0::bad1:ff"}  -- AdGuard Family
+validate_resolvers: {"94.140.14.15", "https://dns.quad9.net/dns-query"}
 ```
 
-Les résolveurs per-règle sont pré-armés au démarrage (sockets RAW ouverts,
+> **Comportement selon le worker :**
+> - **worker_questions (UDP)** : duplique la requête via socket RAW ; corrélation
+>   asynchrone dans `worker_responses`. Timeout `budget_ms`.
+> - **worker_doh** : interrogation synchrone via `doh.validator` (pas de
+>   duplication RAW). Endpoints DoH via libcurl ; timeout `doh_budget_ms`.
+>   Fail-open si tous les validateurs sont injoignables.
+
+Les résolveurs IP per-règle sont pré-armés au démarrage (sockets RAW ouverts,
 familles vérifiées) et enregistrés dans `so_state` pour que `worker_responses`
 puisse corréler leurs réponses.
 
