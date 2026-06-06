@@ -1251,6 +1251,103 @@ else
     fi
 fi
 
+# ══════════════════════════════════════════════════════════════════════════════
+# GROUPE 17 — validate_resolvers per-règle (second avis DNS sélectif)
+# Vérifie que :
+#   T170 : un résolveur per-règle est armé au démarrage (dns_validator_armed)
+#   T171 : le filtrage DNS normal reste opérationnel (fail-open transparent)
+#   T172 : une requête ciblant la règle validate passe (fail-open, pas REFUSED)
+# ══════════════════════════════════════════════════════════════════════════════
+echo ""
+echo "=== G17 : validate_resolvers per-règle (second avis DNS sélectif) ==="
+
+VAL_TMP=$(mktemp -d)
+VAL_CLEANUP_DONE=0
+# IP routable mais sans DNS : 10.42.0.253 est sur le sous-réseau homelab (10.42.0.0/24)
+# mais n'est assignée à aucune VM → pas de réponse du validateur → fail-open.
+VAL_RESOLVER_IP="10.42.0.253"
+VAL_TEST_DOMAIN="e2e-validator-test.lan"
+
+val_cleanup() {
+    [ "$VAL_CLEANUP_DONE" -eq 1 ] && return
+    VAL_CLEANUP_DONE=1
+    if [ -f "$VAL_TMP/config_orig.moon" ]; then
+        scp -O -q $SSH_OPTS -i "$SSH_KEY" \
+            "$VAL_TMP/config_orig.moon" "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon" 2>/dev/null || true
+        ssh_vm "$E2E_IP_CUSTOS" "/etc/init.d/custos restart >/dev/null 2>&1; sleep 3" || true
+    fi
+    rm -rf "$VAL_TMP"
+}
+trap 'val_cleanup; lowmem_cleanup' EXIT
+
+# Sauvegarde la config d'origine
+scp -O -q $SSH_OPTS -i "$SSH_KEY" \
+    "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon" "$VAL_TMP/config_orig.moon"
+
+# Étape 1 : injecter second_opinion (sans résolveur global) après l'accolade ouvrante.
+# Si un bloc second_opinion existe déjà, on l'écrase via une clé dupliquée (Lua :
+# dernière valeur gagne) — on injecte donc avant la première règle plutôt qu'à
+# l'intérieur d'un éventuel bloc existant.
+awk -v ip="$VAL_RESOLVER_IP" -v dom="$VAL_TEST_DOMAIN" '
+    !ins_so && /^[[:space:]]*\{[[:space:]]*$/ {
+        print
+        print "  second_opinion: { resolvers: {}, budget_ms: 300, fail_open: true }"
+        ins_so=1
+        next
+    }
+    !ins_rule && /rules:[[:space:]]*\{/ {
+        print
+        print "      {"
+        print "        rule_id:            \"e2e_validate_per_rule\""
+        print "        description:        \"E2E validate_resolvers per-règle\""
+        print "        actions:            {\"validate\"}"
+        print "        validate_resolvers: {\"" ip "\"}"
+        print "        conditions:         { to_domain: \"" dom "\" }"
+        print "      }"
+        ins_rule=1
+        next
+    }
+    { print }
+' "$VAL_TMP/config_orig.moon" > "$VAL_TMP/config_val.moon"
+
+scp -O -q $SSH_OPTS -i "$SSH_KEY" \
+    "$VAL_TMP/config_val.moon" "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon"
+
+ssh_vm "$E2E_IP_CUSTOS" "/etc/init.d/custos restart >/dev/null 2>&1; sleep 4"
+
+# Lecture des logs après redémarrage (fenêtre large pour ne pas rater le log de démarrage)
+val_logs=$(ssh_vm "$E2E_IP_CUSTOS" "logread 2>/dev/null" | grep "custos" | tail -200)
+
+# T170 : dns_validator_armed journalisée avec le résolveur per-règle
+assert_log_has "T170 dns_validator_armed avec résolveur per-règle ($VAL_RESOLVER_IP)" \
+    "$val_logs" "dns_validator_armed" "$VAL_RESOLVER_IP"
+
+# T171 : le filtrage DNS classique reste opérationnel (rule homelab_not_blocked)
+val_dig=$(dig_from "$E2E_IP_SERVUS" "site-a.lan" "A" "+short" 2>/dev/null || true)
+if [ -n "$val_dig" ]; then
+    ok "T171 DNS opérationnel après injection validate_resolvers (site-a.lan résolu)"
+else
+    fail "T171 DNS opérationnel après injection validate_resolvers" \
+         "site-a.lan non résolu (val_dig vide)"
+fi
+
+# T172 : requête ciblant la règle validate → fail-open (pas REFUSED de custos)
+# Le domaine n'existe pas dans le DNS local → NXDOMAIN attendu depuis l'upstream ;
+# un REFUSED ou SERVFAIL serait le signe que custos a bloqué au lieu de fail-open.
+val_dig2=$(dig_from "$E2E_IP_SERVUS" "$VAL_TEST_DOMAIN" "A" "+noall" "+comments" 2>/dev/null || true)
+if echo "$val_dig2" | grep -qiE "NOERROR|NXDOMAIN"; then
+    ok "T172 fail-open validate_resolvers : réponse upstream (pas REFUSED)"
+elif echo "$val_dig2" | grep -qi "REFUSED"; then
+    fail "T172 fail-open validate_resolvers" \
+         "custos a refusé la requête (REFUSED) au lieu de fail-open"
+else
+    fail "T172 fail-open validate_resolvers" \
+         "réponse inattendue : $val_dig2"
+fi
+
+val_cleanup
+VAL_CLEANUP_DONE=1
+
 # ─── RAPPORT FINAL ─────────────────────────────────────────────────────────────
 echo ""
 echo "─────────────────────────────────────────"

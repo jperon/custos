@@ -79,21 +79,40 @@ so_resolvers   = {}
 so_resolver_set = {}   -- ensemble des IP validateur (pour éviter l'auto-duplication)
 so_fds         = {}   -- { ipv4: fd, ipv6: fd }
 
+--- Arme un ensemble de résolveurs validateurs : enregistre dans so_resolver_set,
+-- ouvre les sockets RAW manquants. Idempotent (ne rouvre pas un fd existant).
+-- @tparam table resolvers Liste d'IPs (v4/v6 mélangées).
+-- @tparam table active    Table accumulant les noms de familles activées.
+-- @treturn nil
+arm_resolvers = (resolvers, active) ->
+  for r in *resolvers
+    so_resolver_set[r] = true
+  for fam, ver in pairs { ipv4: 4, ipv6: 6 }
+    continue if so_fds[fam]   -- socket déjà ouvert pour cette famille
+    v_ip = dup_query.pick_resolver resolvers, ver
+    if v_ip and raw_send.routable ver, v_ip
+      fd = raw_send.open ver
+      if fd
+        so_fds[fam] = fd
+        active[#active + 1] = fam
+
 --- Duplique une question UDP autorisée vers un résolveur validateur.
 -- Réécrit uniquement l'IP destination (src client/txid/qname préservés) et
 -- émet via un socket RAW routé par le noyau. Best-effort, ne bloque jamais.
 -- @tparam table ip  En-tête IP parsé
 -- @tparam table l4  En-tête UDP parsé
 -- @tparam string raw Paquet IP brut d'origine
+-- @tparam table|nil rule_resolvers Résolveurs per-règle (nil → résolveurs globaux)
 -- @treturn nil
-maybe_duplicate = (ip, l4, raw) ->
+maybe_duplicate = (ip, l4, raw, rule_resolvers) ->
   return unless so_enabled and l4.proto == "udp"
   fd = so_fds[ip.version == 6 and "ipv6" or "ipv4"]
   return unless fd
   -- Le DNS principal du client est déjà le validateur : ne pas dupliquer (la
   -- réponse est filtrée à la source ; worker_responses la laisse passer).
   return if so_resolver_set[ip2s ip.dst]
-  validator = dup_query.pick_resolver so_resolvers, ip.version
+  resolvers = rule_resolvers or so_resolvers
+  validator = dup_query.pick_resolver resolvers, ip.version
   return unless validator
   dns_raw = raw\sub l4.data_off, l4.off + l4.len - 1
   pkt = dup_query.build_udp ip, l4, dns_raw, validator
@@ -487,9 +506,12 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     return NF_DROP
 
   -- Second avis : duplique la question vers le validateur uniquement si la règle
-  -- porte l'action `validate`.
+  -- porte l'action `validate`. allow_modifiers.validate est soit une table d'IPs
+  -- per-règle, soit true (résolveurs globaux).
   do_duplicate = allow_modifiers and allow_modifiers.validate
-  maybe_duplicate(ip, l4, raw) if verdict == NF_ACCEPT and do_duplicate
+  if verdict == NF_ACCEPT and do_duplicate
+    rule_resolvers = type(do_duplicate) == "table" and do_duplicate or nil
+    maybe_duplicate ip, l4, raw, rule_resolvers
 
   NF_ACCEPT
 
@@ -536,23 +558,25 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
       log_info -> { action: "dns_steal_disabled", reason: "no hostname in redirect_url" }
 
     -- ── Second avis DNS ────────────────────────────────────────
-    -- Un socket RAW routé par famille (le noyau gère le next-hop). Une famille
-    -- n'est activée que si un validateur de cette famille est routable.
-    if #(so_cfg.resolvers or {}) > 0
-      so_resolvers = so_cfg.resolvers
-      so_resolver_set[r] = true for r in *so_cfg.resolvers
+    -- Pré-arme tous les résolveurs validateurs (globaux + per-règle) dès le
+    -- démarrage : sockets RAW ouverts pour chaque famille routable.
+    do
       active = {}
-      for fam, ver in pairs { ipv4: 4, ipv6: 6 }
-        v_ip = dup_query.pick_resolver so_resolvers, ver
-        if v_ip and raw_send.routable ver, v_ip
-          fd = raw_send.open ver
-          if fd
-            so_fds[fam] = fd
-            active[#active + 1] = fam
+      -- Résolveurs globaux (cfg.second_opinion.resolvers)
+      if #(so_cfg.resolvers or {}) > 0
+        so_resolvers = so_cfg.resolvers
+        arm_resolvers so_cfg.resolvers, active
+      -- Résolveurs per-règle (validate_resolvers dans les métadonnées de règle)
+      if filter_data and filter_data.rules
+        for meta in *(filter_data.rules.rules_metadata or {})
+          if meta.validate_resolvers
+            arm_resolvers meta.validate_resolvers, active
       so_enabled = #active > 0
+      -- Déduplique la liste pour le log
+      all_resolvers = [r for r, _ in pairs so_resolver_set]
       if so_enabled
-        log_info -> { action: "dns_validator_armed", resolvers: table.concat(so_cfg.resolvers, ","), families: table.concat(active, ",") }
-      else
+        log_info -> { action: "dns_validator_armed", resolvers: table.concat(all_resolvers, ","), families: table.concat(active, ",") }
+      elseif #(so_cfg.resolvers or {}) > 0
         log_warn -> { action: "dns_validator_disabled", reason: "aucun validateur routable" }
 
   run_queue tonumber(queue_num), handle_question

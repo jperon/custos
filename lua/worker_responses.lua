@@ -1283,19 +1283,47 @@ run = function(queue_num, rfd, rules_metadata)
     rfd = rfd.question_response_rfd
   end
   pipe_rfd = rfd
+  local collect_all_resolvers
+  collect_all_resolvers = function()
+    local seen = { }
+    local all = { }
+    local add
+    add = function(r)
+      if not (seen[r]) then
+        seen[r] = true
+        all[#all + 1] = r
+      end
+    end
+    local _list_0 = (so_cfg.resolvers or { })
+    for _index_0 = 1, #_list_0 do
+      local r = _list_0[_index_0]
+      add(r)
+    end
+    local _list_1 = (rules_metadata or { })
+    for _index_0 = 1, #_list_1 do
+      local meta = _list_1[_index_0]
+      local _list_2 = (meta.validate_resolvers or { })
+      for _index_1 = 1, #_list_2 do
+        local r = _list_2[_index_1]
+        add(r)
+      end
+    end
+    return all
+  end
   local run_opts
-  if #(so_cfg.resolvers or { }) > 0 then
+  local all_resolvers = collect_all_resolvers()
+  if #all_resolvers > 0 then
     local families = { }
     for fam, ver in pairs({
       ipv4 = 4,
       ipv6 = 6
     }) do
-      local v_ip = dup_query.pick_resolver(so_cfg.resolvers, ver)
+      local v_ip = dup_query.pick_resolver(all_resolvers, ver)
       families[fam] = (v_ip and raw_send.routable(ver, v_ip)) and true or false
     end
     if families.ipv4 or families.ipv6 then
       so_state = second_opinion.new({
-        resolvers = so_cfg.resolvers,
+        resolvers = all_resolvers,
         budget_ms = so_cfg.budget_ms or 80,
         verdict_ttl_s = 5,
         families = families
@@ -1307,7 +1335,7 @@ run = function(queue_num, rfd, rules_metadata)
       log_info(function()
         return {
           action = "dns_validator_responses_armed",
-          resolvers = table.concat(so_cfg.resolvers, ","),
+          resolvers = table.concat(all_resolvers, ","),
           ipv4 = families.ipv4,
           ipv6 = families.ipv6
         }

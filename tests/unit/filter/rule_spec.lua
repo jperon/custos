@@ -805,7 +805,7 @@ return describe("filter.rule", function()
       assert.is_table(meta.allow_modifiers)
       return assert.is_true(meta.allow_modifiers.validate)
     end)
-    return it("allow classique n'a pas le modificateur validate", function()
+    it("allow classique n'a pas le modificateur validate", function()
       local rules = rule_mod.compile_rules({
         macs = { },
         rules = {
@@ -821,6 +821,48 @@ return describe("filter.rule", function()
       local meta = rule_mod.decide_meta(rules, { })
       assert.is_true(meta.verdict)
       return assert.is_nil(meta.allow_modifiers.validate)
+    end)
+    it("validate_resolvers per-règle exposé dans allow_modifiers et metadata", function()
+      local ips = {
+        "94.140.14.15",
+        "2a10:50c0::bad1:ff"
+      }
+      local rules = rule_mod.compile_rules({
+        macs = { },
+        rules = {
+          {
+            rule_id = "val2",
+            description = "Validateur adultes",
+            actions = {
+              "validate"
+            },
+            validate_resolvers = ips
+          }
+        }
+      })
+      local meta = rule_mod.decide_meta(rules, { })
+      assert.is_true(meta.verdict)
+      assert.same(ips, meta.allow_modifiers.validate)
+      local rule_meta = rules.rules_metadata[1]
+      return assert.same(ips, rule_meta.validate_resolvers)
+    end)
+    return it("validate sans validate_resolvers → allow_modifiers.validate = true, pas de validate_resolvers dans metadata", function()
+      local rules = rule_mod.compile_rules({
+        macs = { },
+        rules = {
+          {
+            rule_id = "val3",
+            description = "Validateur global",
+            actions = {
+              "validate"
+            }
+          }
+        }
+      })
+      local meta = rule_mod.decide_meta(rules, { })
+      assert.is_true(meta.allow_modifiers.validate)
+      local rule_meta = rules.rules_metadata[1]
+      return assert.is_nil(rule_meta.validate_resolvers)
     end)
   end)
 end)

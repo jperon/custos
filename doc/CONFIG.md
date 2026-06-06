@@ -940,9 +940,23 @@ dans nftables comme avec `allow`.
 Sans cette action, la requête est transmise telle quelle sans interaction avec
 le résolveur validateur.
 
+Par défaut, utilise les résolveurs globaux de `second_opinion.resolvers`. Le
+champ optionnel **`validate_resolvers`** permet de spécifier une liste d'IPs
+(v4 et v6 mélangées) propre à la règle — utile pour utiliser des validateurs
+différents selon les règles (ex. filtre adultes, filtre entreprise) :
+
 ```moonscript
+-- Résolveurs globaux (second_opinion.resolvers)
 actions: {"validate"}
+
+-- Résolveurs spécifiques à cette règle
+actions: {"validate"}
+validate_resolvers: {"94.140.14.15", "2a10:50c0::bad1:ff"}  -- AdGuard Family
 ```
+
+Les résolveurs per-règle sont pré-armés au démarrage (sockets RAW ouverts,
+familles vérifiées) et enregistrés dans `so_state` pour que `worker_responses`
+puisse corréler leurs réponses.
 
 ### `dns_strip`
 

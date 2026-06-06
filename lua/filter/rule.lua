@@ -84,6 +84,9 @@ compile_rule = function(cfg, rule, idx, used_ids)
     on_response = on_response_list
   }
   metadata.worker_only = false
+  if type(rule_allow_modifiers.validate) == "table" then
+    metadata.validate_resolvers = rule_allow_modifiers.validate
+  end
   for _index_0 = 1, #conditions_meta do
     local cond = conditions_meta[_index_0]
     if cond.worker_only then

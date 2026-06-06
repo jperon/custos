@@ -1012,21 +1012,37 @@ run = (queue_num, rfd, rules_metadata) ->
   -- worker_questions). Une famille non routable (ex. IPv6 sans tunnel) ne doit
   -- jamais être parquée, sinon chaque réponse de cette famille attendrait le
   -- budget pour rien.
+  -- Collecte tous les résolveurs validateurs : globaux + per-règle.
+  -- Nécessaire pour que is_validator reconnaisse les réponses de validateurs
+  -- per-règle et les corrèle correctement.
+  collect_all_resolvers = ->
+    seen = {}
+    all = {}
+    add = (r) ->
+      unless seen[r]
+        seen[r] = true
+        all[#all + 1] = r
+    add r for r in *(so_cfg.resolvers or {})
+    for meta in *(rules_metadata or {})
+      add r for r in *(meta.validate_resolvers or {})
+    all
+
   local run_opts
-  if #(so_cfg.resolvers or {}) > 0
+  all_resolvers = collect_all_resolvers!
+  if #all_resolvers > 0
     families = {}
     for fam, ver in pairs { ipv4: 4, ipv6: 6 }
-      v_ip = dup_query.pick_resolver so_cfg.resolvers, ver
+      v_ip = dup_query.pick_resolver all_resolvers, ver
       families[fam] = (v_ip and raw_send.routable(ver, v_ip)) and true or false
     if families.ipv4 or families.ipv6
       so_state = second_opinion.new {
-        resolvers:    so_cfg.resolvers
+        resolvers:    all_resolvers
         budget_ms:    so_cfg.budget_ms or 80
         verdict_ttl_s: 5
         :families
       }
       run_opts = { idle_ms: so_cfg.budget_ms or 80, on_idle: sweep_parked }
-      log_info -> { action: "dns_validator_responses_armed", resolvers: table.concat(so_cfg.resolvers, ","), ipv4: families.ipv4, ipv6: families.ipv6 }
+      log_info -> { action: "dns_validator_responses_armed", resolvers: table.concat(all_resolvers, ","), ipv4: families.ipv4, ipv6: families.ipv6 }
 
   run_queue tonumber(queue_num), handle_response, run_opts
 

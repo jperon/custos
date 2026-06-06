@@ -194,6 +194,10 @@ run_on_response = function(rule_id, dns_raw, reason, ctx_extra)
   end
   return _run_on_response(rules, rule_id, dns_raw, reason, ctx_extra)
 end
+local get_rules
+get_rules = function()
+  return rules
+end
 return {
   load = load,
   decide = decide,
@@ -201,5 +205,6 @@ return {
   get_auth_cfg = get_auth_cfg,
   get_sni_cfg = get_sni_cfg,
   get_rule_on_response = get_rule_on_response,
-  run_on_response = run_on_response
+  run_on_response = run_on_response,
+  get_rules = get_rules
 }

@@ -81,8 +81,39 @@ local so_enabled = false
 local so_resolvers = { }
 local so_resolver_set = { }
 local so_fds = { }
+local arm_resolvers
+arm_resolvers = function(resolvers, active)
+  for _index_0 = 1, #resolvers do
+    local r = resolvers[_index_0]
+    so_resolver_set[r] = true
+  end
+  for fam, ver in pairs({
+    ipv4 = 4,
+    ipv6 = 6
+  }) do
+    local _continue_0 = false
+    repeat
+      if so_fds[fam] then
+        _continue_0 = true
+        break
+      end
+      local v_ip = dup_query.pick_resolver(resolvers, ver)
+      if v_ip and raw_send.routable(ver, v_ip) then
+        local fd = raw_send.open(ver)
+        if fd then
+          so_fds[fam] = fd
+          active[#active + 1] = fam
+        end
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+end
 local maybe_duplicate
-maybe_duplicate = function(ip, l4, raw)
+maybe_duplicate = function(ip, l4, raw, rule_resolvers)
   if not (so_enabled and l4.proto == "udp") then
     return 
   end
@@ -93,7 +124,8 @@ maybe_duplicate = function(ip, l4, raw)
   if so_resolver_set[ip2s(ip.dst)] then
     return 
   end
-  local validator = dup_query.pick_resolver(so_resolvers, ip.version)
+  local resolvers = rule_resolvers or so_resolvers
+  local validator = dup_query.pick_resolver(resolvers, ip.version)
   if not (validator) then
     return 
   end
@@ -538,7 +570,8 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   end
   local do_duplicate = allow_modifiers and allow_modifiers.validate
   if verdict == NF_ACCEPT and do_duplicate then
-    maybe_duplicate(ip, l4, raw)
+    local rule_resolvers = type(do_duplicate) == "table" and do_duplicate or nil
+    maybe_duplicate(ip, l4, raw, rule_resolvers)
   end
   return NF_ACCEPT
 end
@@ -592,37 +625,41 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
         }
       end)
     end
-    if #(so_cfg.resolvers or { }) > 0 then
-      so_resolvers = so_cfg.resolvers
-      local _list_0 = so_cfg.resolvers
-      for _index_0 = 1, #_list_0 do
-        local r = _list_0[_index_0]
-        so_resolver_set[r] = true
-      end
+    do
       local active = { }
-      for fam, ver in pairs({
-        ipv4 = 4,
-        ipv6 = 6
-      }) do
-        local v_ip = dup_query.pick_resolver(so_resolvers, ver)
-        if v_ip and raw_send.routable(ver, v_ip) then
-          local fd = raw_send.open(ver)
-          if fd then
-            so_fds[fam] = fd
-            active[#active + 1] = fam
+      if #(so_cfg.resolvers or { }) > 0 then
+        so_resolvers = so_cfg.resolvers
+        arm_resolvers(so_cfg.resolvers, active)
+      end
+      if filter_data and filter_data.rules then
+        local _list_0 = (filter_data.rules.rules_metadata or { })
+        for _index_0 = 1, #_list_0 do
+          local meta = _list_0[_index_0]
+          if meta.validate_resolvers then
+            arm_resolvers(meta.validate_resolvers, active)
           end
         end
       end
       so_enabled = #active > 0
+      local all_resolvers
+      do
+        local _accum_0 = { }
+        local _len_0 = 1
+        for r, _ in pairs(so_resolver_set) do
+          _accum_0[_len_0] = r
+          _len_0 = _len_0 + 1
+        end
+        all_resolvers = _accum_0
+      end
       if so_enabled then
         log_info(function()
           return {
             action = "dns_validator_armed",
-            resolvers = table.concat(so_cfg.resolvers, ","),
+            resolvers = table.concat(all_resolvers, ","),
             families = table.concat(active, ",")
           }
         end)
-      else
+      elseif #(so_cfg.resolvers or { }) > 0 then
         log_warn(function()
           return {
             action = "dns_validator_disabled",

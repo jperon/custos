@@ -88,6 +88,10 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
   -- Affectation hors du littéral : un champ constant `false` dans un table
   -- literal compile en KPRI et échappe au hook de ligne luacov (faux négatif).
   metadata.worker_only = false
+  -- Résolveurs per-règle pour l'action validate (second avis DNS).
+  -- Stockés dans les métadonnées pour que worker_responses puisse pré-armer so_state.
+  if type(rule_allow_modifiers.validate) == "table"
+    metadata.validate_resolvers = rule_allow_modifiers.validate
 
   for cond in *conditions_meta
     if cond.worker_only

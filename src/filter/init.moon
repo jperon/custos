@@ -169,4 +169,8 @@ get_rule_on_response = (rule_id) -> _on_response_for rules, rule_id
 -- @treturn table Contexte enrichi (cf. filter.rule.apply_on_response).
 run_on_response = (rule_id, dns_raw, reason, ctx_extra=nil) -> _run_on_response rules, rule_id, dns_raw, reason, ctx_extra
 
-{ :load, :decide, :decide_meta, :get_auth_cfg, :get_sni_cfg, :get_rule_on_response, :run_on_response }
+--- Retourne le jeu de règles compilé (après load()).
+-- @treturn table|nil Règles compilées (nil si load() n'a pas été appelé)
+get_rules = -> rules
+
+{ :load, :decide, :decide_meta, :get_auth_cfg, :get_sni_cfg, :get_rule_on_response, :run_on_response, :get_rules }

@@ -366,7 +366,7 @@ supervise = function(pipes, sfd)
   nft_rules.close()
   collectgarbage("collect")
   local filter_data = {
-    rules = filter.rules,
+    rules = filter.get_rules(),
     auth_cfg_cache = filter.auth_cfg_cache,
     sni_cfg_cache = filter.sni_cfg_cache,
     decision_cfg = filter.decision_cfg
@@ -485,7 +485,7 @@ supervise = function(pipes, sfd)
         end)
         filter.load()
         filter_data = {
-          rules = filter.rules,
+          rules = filter.get_rules(),
           auth_cfg_cache = filter.auth_cfg_cache,
           decision_cfg = filter.decision_cfg
         }

@@ -474,3 +474,30 @@ describe "filter.rule", ->
       meta = rule_mod.decide_meta rules, {}
       assert.is_true meta.verdict
       assert.is_nil meta.allow_modifiers.validate
+
+    it "validate_resolvers per-règle exposé dans allow_modifiers et metadata", ->
+      ips = { "94.140.14.15", "2a10:50c0::bad1:ff" }
+      rules = rule_mod.compile_rules {
+        macs: {}
+        rules: {
+          { rule_id: "val2", description: "Validateur adultes", actions: { "validate" }, validate_resolvers: ips }
+        }
+      }
+      meta = rule_mod.decide_meta rules, {}
+      assert.is_true meta.verdict
+      assert.same ips, meta.allow_modifiers.validate
+      -- Résolveurs également dans rules_metadata pour worker_responses
+      rule_meta = rules.rules_metadata[1]
+      assert.same ips, rule_meta.validate_resolvers
+
+    it "validate sans validate_resolvers → allow_modifiers.validate = true, pas de validate_resolvers dans metadata", ->
+      rules = rule_mod.compile_rules {
+        macs: {}
+        rules: {
+          { rule_id: "val3", description: "Validateur global", actions: { "validate" } }
+        }
+      }
+      meta = rule_mod.decide_meta rules, {}
+      assert.is_true meta.allow_modifiers.validate
+      rule_meta = rules.rules_metadata[1]
+      assert.is_nil rule_meta.validate_resolvers

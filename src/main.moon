@@ -389,7 +389,7 @@ supervise = (pipes, sfd) ->
 
   -- Extract filter data to pass to workers that need it
   filter_data = {
-    rules: filter.rules
+    rules: filter.get_rules!
     auth_cfg_cache: filter.auth_cfg_cache
     sni_cfg_cache: filter.sni_cfg_cache
     decision_cfg: filter.decision_cfg
@@ -490,7 +490,7 @@ supervise = (pipes, sfd) ->
 
         -- Update filter_data with reloaded data
         filter_data = {
-          rules: filter.rules
+          rules: filter.get_rules!
           auth_cfg_cache: filter.auth_cfg_cache
           decision_cfg: filter.decision_cfg
         }

@@ -10,14 +10,18 @@
 _schema = {
   label:       "Valider via résolveur externe"
   description: "Duplique la question DNS vers le résolveur validateur (ex. DNSforFamily) et corrèle les deux réponses"
-  arg_type:    nil
+  arg_type:    "table"
+  arg_fields:  { { name: "validate_resolvers", label: "Résolveurs", type: "list", required: false } }
 }
 
 _factory = (cfg) ->
   (rule) ->
+    -- validate_resolvers : liste d'IPs spécifique à cette règle (v4/v6 mélangés),
+    -- ou nil pour utiliser les résolveurs globaux de cfg.second_opinion.resolvers.
+    resolvers = rule.validate_resolvers
     {
       capabilities: { worker: true, nft: true }
-      allow_modifiers: { validate: true }
+      allow_modifiers: { validate: resolvers or true }
       eval: (req) ->
         true, "Validated by rule: #{rule.description or '?'}"
       on_response: (ctx) ->
