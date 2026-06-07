@@ -256,6 +256,15 @@ build_safesearch_rules = function(youtube_restrict)
         end
         target = YOUTUBE_TARGETS[youtube_restrict]
       end
+      local names = { }
+      local _list_0 = group.domains
+      for _index_1 = 1, #_list_0 do
+        local d = _list_0[_index_1]
+        names[d] = true
+        names["www." .. tostring(d)] = true
+        names["images." .. tostring(d)] = true
+        names["m." .. tostring(d)] = true
+      end
       rules[#rules + 1] = {
         description = "SafeSearch " .. tostring(group.name),
         actions = {
@@ -264,7 +273,8 @@ build_safesearch_rules = function(youtube_restrict)
         conditions = {
           to_domains = group.domains
         },
-        cname = target
+        cname = target,
+        cname_names = names
       }
       _continue_0 = true
     until true

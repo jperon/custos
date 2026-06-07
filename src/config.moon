@@ -159,11 +159,23 @@ build_safesearch_rules = (youtube_restrict) ->
     if group.youtube
       continue unless youtube_restrict == "strict" or youtube_restrict == "moderate"
       target = YOUTUBE_TARGETS[youtube_restrict]
+    -- Hôtes éligibles à la réécriture CNAME : le domaine enregistrable lui-même
+    -- et ses préfixes de recherche habituels (`www.`, `m.`). La condition
+    -- `to_domains` matche par suffixe (donc aussi mail.google.com…), mais seuls
+    -- ces noms exacts doivent être réécrits — les autres sous-domaines sont
+    -- laissés intacts (cf. filter.actions.cname `cname_names`).
+    names = {}
+    for d in *group.domains
+      names[d] = true
+      names["www.#{d}"] = true
+      names["images.#{d}"] = true
+      names["m.#{d}"] = true
     rules[#rules + 1] = {
       description: "SafeSearch #{group.name}"
       actions:     { "cname" }
       conditions:  { to_domains: group.domains }
       cname:       target
+      cname_names: names
     }
   rules
 

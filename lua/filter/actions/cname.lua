@@ -169,10 +169,25 @@ local _schema = {
   arg_type = "string",
   arg_hint = "ex: forcesafesearch.google.com"
 }
+local qname_of
+qname_of = function(dns_raw)
+  if not (dns_raw) then
+    return nil
+  end
+  local ok, dns = pcall((function()
+    return dns_mod.parse(dns_raw, 1, false)
+  end))
+  if not (ok and dns and dns.question and dns.question.name) then
+    return nil
+  end
+  local name = dns.question.name:lower()
+  return name:gsub("%.+$", "")
+end
 local _factory
 _factory = function(cfg)
   return function(rule)
     local target = rule.cname
+    local names = rule.cname_names
     return {
       capabilities = {
         worker = true,
@@ -182,6 +197,12 @@ _factory = function(cfg)
         return nil, "CNAME → " .. tostring(target) .. " by rule: " .. tostring(rule.description or '?')
       end,
       on_response = function(ctx)
+        if names then
+          local qname = qname_of(ctx.dns_raw)
+          if not (qname and names[qname]) then
+            return 
+          end
+        end
         local resolver_ip = pick_resolver_ip(cfg, ctx)
         local target_rrs = resolve_target_rrs(cfg, target, resolver_ip)
         local rewritten = build_cname_response(nil, ctx.dns_raw, target, ctx.reason, target_rrs)

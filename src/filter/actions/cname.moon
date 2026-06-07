@@ -137,14 +137,32 @@ _schema = {
   arg_hint:    "ex: forcesafesearch.google.com"
 }
 
+-- Extrait le nom de la question (FQDN minuscule, sans point final) d'un payload
+-- DNS brut. Retourne nil si le paquet n'est pas parsable / sans question.
+qname_of = (dns_raw) ->
+  return nil unless dns_raw
+  ok, dns = pcall (-> dns_mod.parse dns_raw, 1, false)
+  return nil unless ok and dns and dns.question and dns.question.name
+  name = dns.question.name\lower!
+  name\gsub "%.+$", ""
+
 _factory = (cfg) ->
   (rule) ->
     target = rule.cname
+    -- Ensemble (optionnel) d'hôtes éligibles à la réécriture. Quand il est défini
+    -- (cf. config.build_safesearch_rules), seuls ces noms exacts sont réécrits :
+    -- les sous-domaines étrangers (mail.google.com…) qui matchent la condition
+    -- `to_domains` par suffixe sont laissés intacts. Absent → comportement
+    -- générique historique (réécriture de tout nom matché).
+    names = rule.cname_names
     {
       capabilities: { worker: true, nft: false }
       eval: (req) ->
         nil, "CNAME → #{target} by rule: #{rule.description or '?'}"
       on_response: (ctx) ->
+        if names
+          qname = qname_of ctx.dns_raw
+          return unless qname and names[qname]
         resolver_ip = pick_resolver_ip cfg, ctx
         target_rrs = resolve_target_rrs cfg, target, resolver_ip
         rewritten = build_cname_response nil, ctx.dns_raw, target, ctx.reason, target_rrs

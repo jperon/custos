@@ -766,6 +766,14 @@ recherche vers leur variante « safe » :
 | Bing | `bing.com` | `strict.bing.com` |
 | DuckDuckGo | `duckduckgo.com` | `safe.duckduckgo.com` |
 
+La condition `to_domains` matche par **suffixe** (donc aussi `mail.google.com`,
+`accounts.google.com`…), mais la réécriture CNAME ne s'applique **qu'aux hôtes
+réellement concernés** par SafeSearch : le domaine lui-même et ses préfixes de
+recherche `www.` / `m.` (champ `cname_names` des règles générées). Un
+sous-domaine étranger (ex. `mail.google.com`) traverse donc le filtre sans être
+réécrit. Pour une règle `cname` manuelle sans `cname_names`, le comportement
+historique s'applique (tout nom matché est réécrit).
+
 Le filtre répond par un enregistrement **CNAME** et, si la résolution upstream de
 la cible réussit, peut enrichir la réponse avec des RR `A`/`AAAA` (TTL borné).
 Le mécanisme passe par le callback `on_response` des actions : il couvre le DNS
@@ -780,6 +788,9 @@ le verdict ALLOW/DENY ; celui-ci dépend des autres actions de règles.
 L'action `cname` est générique : on peut l'utiliser dans `filter.rules` pour
 réécrire n'importe quel domaine, ex. :
 `{ actions: {"cname"}, conditions: { to_domain: "exemple.fr" }, cname: "cible.exemple.fr" }`.
+Pour restreindre la réécriture à des hôtes précis (et laisser les autres
+sous-domaines intacts), ajouter `cname_names` (set `{ ["www.exemple.fr"]: true }`) :
+seuls les noms présents dans ce set sont réécrits.
 
 > Limite : n'agit que sur le DNS clair intercepté et le DoH passant par le worker
 > doh ; un client utilisant un DoH/DoT tiers contourne la réécriture.

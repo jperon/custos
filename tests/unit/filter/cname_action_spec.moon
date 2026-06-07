@@ -49,6 +49,32 @@ describe "filter.actions.cname", ->
     assert.equals dns_mod.types.CNAME, parsed.answers[1].rtype
     assert.equals "forcesafesearch.google.com", decode_cname parsed.answers[1].rdata
 
+  it "cname_names : réécrit un hôte concerné", ->
+    names = { ["www.google.com"]: true, ["google.com"]: true }
+    action = (cname_factory cfg) { cname: "forcesafesearch.google.com", cname_names: names }
+    ctx = { dns_raw: make_query("www.google.com"), modified: false, skip_nft: false, reason: "r" }
+    action.on_response ctx
+    assert.is_true ctx.modified
+    parsed = dns_mod.parse ctx.dns_raw, 1, false
+    assert.equals "forcesafesearch.google.com", decode_cname parsed.answers[1].rdata
+
+  it "cname_names : laisse intact un sous-domaine étranger", ->
+    names = { ["www.google.com"]: true, ["google.com"]: true }
+    action = (cname_factory cfg) { cname: "forcesafesearch.google.com", cname_names: names }
+    orig = make_query "mail.google.com"
+    ctx = { dns_raw: orig, modified: false, skip_nft: false, reason: "r" }
+    action.on_response ctx
+    assert.is_false ctx.modified
+    assert.equals orig, ctx.dns_raw
+    assert.is_nil ctx.action_label
+
+  it "cname_names : casse de l'hôte ignorée", ->
+    names = { ["www.google.com"]: true }
+    action = (cname_factory cfg) { cname: "forcesafesearch.google.com", cname_names: names }
+    ctx = { dns_raw: make_query("WWW.Google.COM"), modified: false, skip_nft: false, reason: "r" }
+    action.on_response ctx
+    assert.is_true ctx.modified
+
   it "fail-open : si build échoue, ctx.dns_raw inchangé et non modifié", ->
     action = (cname_factory cfg) { cname: "forcesafesearch.google.com" }
     -- dns_raw invalide → build_cname_response renvoie nil
