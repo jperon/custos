@@ -308,6 +308,12 @@ L'installeur (`install-owrt.moon`) :
 3. Installe la config dans `/etc/custos/`, le service `/etc/init.d/custos` et `custos-update` (+ cron)
 4. Démarre le service
 
+Les fichiers de listes enfants/adultes (`lists/user/{enfants,adultes}.txt`,
+`lists/{enfants_allow,adultes_block}.txt`) ne sont créés vides que lors d'une
+**nouvelle installation** (quand `/etc/custos/config.moon` est absent). Si la
+config préexiste, ces listes ne sont pas (re)créées : l'utilisateur garde sa
+politique et peut tout-à-fait choisir de ne pas les utiliser.
+
 ---
 
 ## Configuration

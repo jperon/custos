@@ -361,6 +361,8 @@ Installer = function(cfg)
     install_etc_custos = function(self)
       step("Configuration /etc/custos/")
       self:ssh_run("mkdir -p /etc/custos")
+      local cfg_exists = self:ssh_capture("[ -f /etc/custos/config.moon ] && echo yes || echo no")
+      self.config_existed = cfg_exists and cfg_exists:find("yes") and true or false
       local _list_0 = {
         {
           src = "cfg/config.moon",
@@ -418,6 +420,10 @@ Installer = function(cfg)
     end,
     install_default_lists = function(self)
       step("Listes utilisateurs et domaines (enfants/adultes)")
+      if self.config_existed then
+        info("Installation existante (config.moon présente) — listes enfants/adultes non créées")
+        return true
+      end
       local lists = "/etc/custos/lists"
       self:ssh_run("mkdir -p " .. tostring(lists) .. "/user")
       local _list_0 = {
@@ -731,4 +737,12 @@ main = function()
   info("Logs     : ssh " .. tostring(cfg.user) .. "@" .. tostring(cfg.host) .. " 'logread | grep custos'")
   return info("Restart   : ssh " .. tostring(cfg.user) .. "@" .. tostring(cfg.host) .. " '/etc/init.d/custos restart'")
 end
-return main()
+local script_name = arg and arg[0] or ""
+if script_name:match("install%-owrt") then
+  main()
+end
+return {
+  Installer = Installer,
+  main = main,
+  parse_args = parse_args
+}

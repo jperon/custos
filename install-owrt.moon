@@ -335,6 +335,11 @@ Installer = (cfg) ->
       step "Configuration /etc/custos/"
       @ssh_run "mkdir -p /etc/custos"
 
+      -- Mémorise si la config préexiste : sur une installation existante, on ne
+      -- (re)crée pas les listes enfants/adultes (cf. install_default_lists).
+      cfg_exists = @ssh_capture "[ -f /etc/custos/config.moon ] && echo yes || echo no"
+      @config_existed = cfg_exists and cfg_exists\find("yes") and true or false
+
       for entry in *{ { src: "cfg/config.moon", dst: "/etc/custos/config.moon" },
                       { src: "cfg/secrets",    dst: "/etc/custos/secrets"    } }
         exists = @ssh_capture "[ -f #{entry.dst} ] && echo yes || echo no"
@@ -372,8 +377,14 @@ Installer = (cfg) ->
 
     -- Crée les fichiers de listes utilisateurs/domaines vides si absents.
     -- Ces fichiers sont le point d'entrée de la politique enfants/adultes.
+    -- Uniquement lors d'une nouvelle installation : si /etc/custos/config.moon
+    -- préexistait, l'utilisateur a déjà sa propre politique (et peut avoir choisi
+    -- de ne pas utiliser ces listes) — on ne lui réimpose rien.
     install_default_lists: =>
       step "Listes utilisateurs et domaines (enfants/adultes)"
+      if @config_existed
+        info "Installation existante (config.moon présente) — listes enfants/adultes non créées"
+        return true
       lists = "/etc/custos/lists"
       @ssh_run "mkdir -p #{lists}/user"
       for name in *{"enfants", "adultes"}
@@ -615,4 +626,9 @@ main = ->
   info "Logs     : ssh #{cfg.user}@#{cfg.host} 'logread | grep custos'"
   info "Restart   : ssh #{cfg.user}@#{cfg.host} '/etc/init.d/custos restart'"
 
-main!
+-- N'exécute main! que lancé directement comme script (pas quand `require` par
+-- les tests unitaires, qui ont besoin d'accéder à `Installer`).
+script_name = arg and arg[0] or ""
+main! if script_name\match "install%-owrt"
+
+{ :Installer, :main, :parse_args }
