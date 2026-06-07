@@ -39,10 +39,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_allow, log_block, log_warn, log_debug, log_info, set_action_prefix
+local log_allow, log_block, log_warn, log_debug, log_info, level_enabled, set_action_prefix
 do
   local _obj_0 = require("log")
-  log_allow, log_block, log_warn, log_debug, log_info, set_action_prefix = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_info, _obj_0.set_action_prefix
+  log_allow, log_block, log_warn, log_debug, log_info, level_enabled, set_action_prefix = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_info, _obj_0.level_enabled, _obj_0.set_action_prefix
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
@@ -379,7 +379,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
         vlan = l2.vlan
       }
     end)
-  else
+  elseif level_enabled and level_enabled("DEBUG") then
     log_debug(function()
       return {
         action = "l2_info",

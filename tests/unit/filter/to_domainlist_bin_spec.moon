@@ -45,3 +45,39 @@ describe "filter.conditions.to_domainlist (.bin via mmap)", ->
     ok, msg = cond.eval { domain: "evil.example" }
     assert.is_false ok
     assert.is_truthy msg\match "Cannot load domain list"
+
+  it "lookup répété (cache hit) renvoie le même verdict", ->
+    cond = (factory cfg) "blocked"
+    a, _ = cond.eval { domain: "evil.example" }
+    b, _ = cond.eval { domain: "evil.example" }   -- second appel = hit cache
+    assert.is_true a
+    assert.is_true b
+
+  it "cache O(1) : éviction générationnelle sous churn ne corrompt pas les verdicts", ->
+    cond = (factory cfg) "blocked"
+    -- Force > CACHE_MAX_SIZE (1000) entrées distinctes pour déclencher au moins
+    -- une passe d'éviction générationnelle, puis vérifie que les verdicts
+    -- (exact, suffixe, absent) restent corrects.
+    for i = 1, 2500
+      cond.eval { domain: "absent-#{i}.example" }
+    assert.is_true (cond.eval { domain: "evil.example" })
+    assert.is_true (cond.eval { domain: "pixel.ads.tracker.net" })
+    assert.is_false (cond.eval { domain: "good.example" })
+
+  it "lookup répété (cache hit) renvoie le même verdict", ->
+    cond = (factory cfg) "blocked"
+    a, _ = cond.eval { domain: "evil.example" }
+    b, _ = cond.eval { domain: "evil.example" }   -- second appel = hit cache
+    assert.is_true a
+    assert.is_true b
+
+  it "cache O(1) : éviction générationnelle sous churn ne corrompt pas les verdicts", ->
+    cond = (factory cfg) "blocked"
+    -- Force > CACHE_MAX_SIZE (1000) entrées distinctes pour déclencher au moins
+    -- une passe d'éviction, puis vérifie que les verdicts restent corrects.
+    for i = 1, 2500
+      cond.eval { domain: "absent-#{i}.example" }
+    -- Présents (exact + suffixe) et absents toujours correctement classés.
+    assert.is_true (cond.eval { domain: "evil.example" })
+    assert.is_true (cond.eval { domain: "pixel.ads.tracker.net" })
+    assert.is_false (cond.eval { domain: "good.example" })

@@ -25,6 +25,10 @@ local get_log_level_num
 get_log_level_num = function(level)
   return LOG_LEVEL_MAP[level] or 0
 end
+local level_enabled
+level_enabled = function(level)
+  return get_log_level_num(level) >= CURRENT_LOG_LEVEL_NUM
+end
 local RL_CONFIG = {
   captive_probe = {
     keys = {
@@ -98,6 +102,15 @@ local set_action_prefix
 set_action_prefix = function(prefix)
   _action_prefix = prefix or ""
 end
+local rl_fingerprint
+rl_fingerprint = function(action_key, fields, keys)
+  local fp = action_key
+  for _index_0 = 1, #keys do
+    local k = keys[_index_0]
+    fp = fp .. ("|" .. tostring(fields[k]))
+  end
+  return fp
+end
 local check_rl
 check_rl = function(level, fields)
   local action_key = fields.action or level
@@ -105,15 +118,7 @@ check_rl = function(level, fields)
   if not (cfg) then
     return 0
   end
-  local parts = {
-    action_key
-  }
-  local _list_0 = cfg.keys
-  for _index_0 = 1, #_list_0 do
-    local k = _list_0[_index_0]
-    parts[#parts + 1] = tostring(fields[k] or "")
-  end
-  local fp = table.concat(parts, "|")
+  local fp = rl_fingerprint(action_key, fields, cfg.keys)
   local epoch = tonumber(ts.tv_sec)
   local entry = _rl[fp]
   if entry then
@@ -223,5 +228,7 @@ return {
   log_trace = log_trace,
   now = now,
   get_log_level_num = get_log_level_num,
+  level_enabled = level_enabled,
+  rl_fingerprint = rl_fingerprint,
   set_action_prefix = set_action_prefix
 }

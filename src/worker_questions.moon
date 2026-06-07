@@ -28,7 +28,7 @@ bit                                      = require "bit"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_allow, :log_block, :log_warn, :log_debug, :log_info, :set_action_prefix } = require "log"
+{ :log_allow, :log_block, :log_warn, :log_debug, :log_info, :level_enabled, :set_action_prefix } = require "log"
 { :user_for_mac } = require "auth.sessions"
 forge_dns = require "forge_dns"
 { detect: detect_captive_ips } = require "captive_ips"
@@ -331,7 +331,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       in_ifindex: l2.in_ifindex
       vlan:       l2.vlan
     }
-  else
+  -- Garde au call-site : ce log DEBUG est émis pour CHAQUE paquet sur le chemin
+  -- nominal. Sans la garde, la closure (thunk) serait allouée par paquet même
+  -- quand DEBUG est filtré. `level_enabled` évite cette allocation à chaud ; le
+  -- `and` rend la garde nil-safe (stubs de test sans level_enabled → skip).
+  elseif level_enabled and level_enabled "DEBUG"
     log_debug -> {
       action:     "l2_info"
       mac_src:    l2.mac_src

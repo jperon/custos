@@ -1,6 +1,21 @@
 local ffi = require("ffi")
 local libc
 libc = require("ffi_defs").libc
+local bin48 = nil
+local _xxh64 = nil
+local _ensure_libs
+_ensure_libs = function()
+  if bin48 and _xxh64 then
+    return true
+  end
+  local ok, xxhash = pcall(require, "ffi_xxhash")
+  if not (ok) then
+    return false
+  end
+  bin48 = require("filter.lib.bin48")
+  _xxh64 = xxhash.xxh64
+  return true
+end
 local PROT_READ = 0x1
 local MAP_SHARED = 0x01
 local O_RDONLY = 0
@@ -10,9 +25,10 @@ local _mappings = { }
 local CACHE_MAX_SIZE = 1000
 local CACHE_TTL_SEC = 5
 local _domain_cache = { }
-local _domain_cache_order = { }
+local _cache_count = 0
 local _cache_hits = 0
 local _cache_misses = 0
+local _NIL_LIST = "\0"
 local get_cache_stats
 get_cache_stats = function()
   return {
@@ -23,26 +39,33 @@ end
 local clear_cache
 clear_cache = function()
   _domain_cache = { }
-  _domain_cache_order = { }
+  _cache_count = 0
   _cache_hits = 0
   _cache_misses = 0
 end
-local _evict_oldest_if_needed
-_evict_oldest_if_needed = function()
-  while #_domain_cache_order >= CACHE_MAX_SIZE do
-    local oldest = table.remove(_domain_cache_order, 1)
-    if oldest then
-      _domain_cache[oldest] = nil
+local _evict_if_needed
+_evict_if_needed = function()
+  if _cache_count <= CACHE_MAX_SIZE then
+    return 
+  end
+  local target = math.floor(CACHE_MAX_SIZE / 2)
+  local kept = 0
+  for _, sub in pairs(_domain_cache) do
+    for d in pairs(sub) do
+      if kept >= target then
+        sub[d] = nil
+      else
+        kept = kept + 1
+      end
     end
   end
+  _cache_count = kept
 end
 local load_list
 load_list = function(path)
-  local xxhash_ok = pcall(require, "ffi_xxhash")
-  if not (xxhash_ok) then
+  if not (_ensure_libs()) then
     return nil, "ffi_xxhash non disponible"
   end
-  local bin48 = require("filter.lib.bin48")
   if path:match("%.bin$") then
     local fd = libc.open(path, O_RDONLY, 0)
     if fd < 0 then
@@ -96,45 +119,39 @@ load_list = function(path)
 end
 local lookup
 lookup = function(arr, n, domain, listname)
-  local xxh64
-  xxh64 = require("ffi_xxhash").xxh64
-  local bin48 = require("filter.lib.bin48")
   local now = os.time()
-  local cache_key = listname and tostring(listname) .. ":" .. tostring(domain) or domain
-  local cached = _domain_cache[cache_key]
-  if cached then
-    if now - cached.ts < CACHE_TTL_SEC then
-      _cache_hits = _cache_hits + 1
-      return cached.found
-    else
-      _domain_cache[cache_key] = nil
-      for i, d in ipairs(_domain_cache_order) do
-        if d == cache_key then
-          table.remove(_domain_cache_order, i)
-          break
-        end
-      end
-    end
+  local lkey = listname or _NIL_LIST
+  local sub = _domain_cache[lkey]
+  if not (sub) then
+    sub = { }
+    _domain_cache[lkey] = sub
+  end
+  local cached = sub[domain]
+  if cached and now - cached.ts < CACHE_TTL_SEC then
+    _cache_hits = _cache_hits + 1
+    return cached.found
   end
   _cache_misses = _cache_misses + 1
-  local found = bin48.bsearch(arr, n, bin48.truncate(xxh64(domain)))
+  local found = bin48.bsearch(arr, n, bin48.truncate(_xxh64(domain)))
   if not found then
     local pos = domain:find(".", 1, true)
     while pos do
       local suffix = domain:sub(pos + 1)
-      if bin48.bsearch(arr, n, bin48.truncate(xxh64(suffix))) then
+      if bin48.bsearch(arr, n, bin48.truncate(_xxh64(suffix))) then
         found = true
         break
       end
       pos = domain:find(".", pos + 1, true)
     end
   end
-  _evict_oldest_if_needed()
-  _domain_cache[cache_key] = {
+  if not (cached) then
+    _cache_count = _cache_count + 1
+    _evict_if_needed()
+  end
+  sub[domain] = {
     found = found,
     ts = now
   }
-  _domain_cache_order[#_domain_cache_order + 1] = cache_key
   return found
 end
 local _schema = {

@@ -43,6 +43,14 @@ CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[config.runtime.log_level] or LOG_LEVEL_MAP
 -- @treturn number Valeur numérique du niveau, ou 0 si inconnu
 get_log_level_num = (level) -> LOG_LEVEL_MAP[level] or 0
 
+--- Indique si un niveau serait effectivement émis (au-dessus du seuil courant).
+-- Permet aux call-sites du hot path de sauter la construction du thunk (closure
+-- + capture) lorsque le niveau est filtré — write_log filtre déjà, mais APRÈS
+-- l'allocation de la closure.
+-- @tparam string level Niveau de log (ex: "DEBUG")
+-- @treturn boolean true si le niveau est actif
+level_enabled = (level) -> get_log_level_num(level) >= CURRENT_LOG_LEVEL_NUM
+
 -- ── Rate-limiting ─────────────────────────────────────────────────
 -- Clés discriminantes et fenêtre (secondes) par action ou niveau de log.
 -- La clé de RL est fields.action ou, à défaut, le niveau (ALLOW/BLOCK).
@@ -75,16 +83,27 @@ set_action_prefix = (prefix) ->
 -- @tparam string level  Niveau de log
 -- @tparam table  fields Champs du message
 -- @treturn number  -1 = supprimer ; 0 = première occurrence ; N>0 = N supprimés depuis dernier log
+-- Construit le fingerprint de rate-limiting (action_key + champs discriminants).
+-- Concaténation directe (cfg.keys borné, ≤3 clés) plutôt qu'une table
+-- intermédiaire + table.concat : ce code s'exécute pour CHAQUE ALLOW/BLOCK, y
+-- compris ceux qui seront supprimés, donc on évite l'allocation d'une table par
+-- paquet décidé. Fonction pure, exportée pour le test unitaire.
+-- @tparam string action_key Clé d'action (fields.action ou niveau)
+-- @tparam table  fields     Champs du message
+-- @tparam table  keys       Clés discriminantes (cfg.keys)
+-- @treturn string Fingerprint
+rl_fingerprint = (action_key, fields, keys) ->
+  fp = action_key
+  for k in *keys
+    fp ..= "|" .. tostring fields[k]
+  fp
+
 check_rl = (level, fields) ->
   action_key = fields.action or level
   cfg = RL_CONFIG[action_key]
   return 0 unless cfg
 
-  -- Construire le fingerprint à partir des champs discriminants
-  parts = { action_key }
-  for k in *cfg.keys
-    parts[#parts + 1] = tostring fields[k] or ""
-  fp = table.concat parts, "|"
+  fp = rl_fingerprint action_key, fields, cfg.keys
 
   epoch = tonumber ts.tv_sec   -- réutilise le timespec déjà rempli dans write_log
   entry = _rl[fp]
@@ -178,4 +197,4 @@ log_debug = (thunk) -> write_log "DEBUG", thunk
 -- @treturn nil
 log_trace = (thunk) -> write_log "TRACE", thunk
 
-{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :set_action_prefix }
+{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix }

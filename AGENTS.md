@@ -68,6 +68,8 @@ sont pas vérifiées et constatées (pas supposées) :
 | `$` dans une string | Écrire `$` directement — `\$` est invalide en Lua |
 | Rate-limiting de logs | `log.moon` : une entrée par fenêtre de burst pour un même (action, key) |
 | Concaténer en boucle | Accumuler dans une table puis `table.concat` (jamais `..=` en boucle) |
+| Log DEBUG dans un hot-path | Garder avec `log.level_enabled "DEBUG"` au call-site : sans ça la closure (thunk) est allouée par paquet même quand le niveau est filtré |
+| `require` dans un hot-path | Mémoïser le module à la construction (factory/startup), jamais un `require` par paquet (≈150 ns/appel) |
 
 ---
 

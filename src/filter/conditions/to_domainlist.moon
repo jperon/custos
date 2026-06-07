@@ -13,6 +13,25 @@
 ffi  = require "ffi"
 { :libc } = require "ffi_defs"
 
+-- Modules hot-path mémoïsés (évite un require par lookup) : bin48
+-- (bsearch/truncate) et xxhash (hachage). On les résout une seule fois, à la
+-- CONSTRUCTION de la condition (via load_list, au démarrage), pas au require du
+-- module — charger ffi_xxhash au require perturberait l'ordre d'initialisation
+-- FFI global. Per-paquet, l'accès se fait par upvalue (coût nul).
+bin48  = nil
+_xxh64 = nil
+
+-- Résout et mémoïse bin48 + xxh64. Idempotent. Retourne false si ffi_xxhash est
+-- indisponible (load_list échoue alors, et aucune condition n'est construite →
+-- lookup n'est jamais atteint sans _xxh64).
+_ensure_libs = ->
+  return true if bin48 and _xxh64
+  ok, xxhash = pcall require, "ffi_xxhash"
+  return false unless ok
+  bin48  = require "filter.lib.bin48"
+  _xxh64 = xxhash.xxh64
+  true
+
 -- ── Constantes mmap (lecture seule partagée des .bin) ─────────────────
 PROT_READ  = 0x1
 MAP_SHARED = 0x01
@@ -26,15 +45,25 @@ MAP_FAILED = ffi.cast "void*", -1
 -- cette table sert d'ancrage de secours.
 _mappings = {}
 
--- ── Cache LRU pour domaines fréquents ─────────────────────────────────
+-- ── Cache pour domaines fréquents ─────────────────────────────────────
 -- Évite de re-hasher et re-bsearch les domaines déjà vus récemment.
--- Capacité: 1000 entrées, TTL: 5 secondes
+-- Capacité ~1000 entrées, TTL 5 secondes.
+--
+-- Structure à deux niveaux { listname → { domain → {found, ts} } } : évite la
+-- concaténation d'une clé composite "listname:domain" à chaque appel (le
+-- listname est fixe par condition). Éviction générationnelle paresseuse : quand
+-- le nombre total d'entrées dépasse la capacité, on en jette ~la moitié en une
+-- passe — coût amorti O(1) par insertion, contre l'ancien `table.remove(ordre,1)`
+-- qui décalait ~1000 éléments à chaque éviction (≈10× plus lent sous churn).
 CACHE_MAX_SIZE  = 1000
 CACHE_TTL_SEC   = 5
-_domain_cache   = {}  -- { domain → { found: bool, ts: epoch } }
-_domain_cache_order = {}  -- Liste pour LRU (plus vieux en premier)
+_domain_cache   = {}  -- { listname → { domain → { found: bool, ts: epoch } } }
+_cache_count    = 0   -- nombre total d'entrées (toutes listes confondues)
 _cache_hits     = 0
 _cache_misses   = 0
+
+-- Clé de sous-table pour un listname nil (lookup sans liste nommée).
+_NIL_LIST = "\0"
 
 --- Retourne les stats du cache (hits, misses).
 get_cache_stats = -> { hits: _cache_hits, misses: _cache_misses }
@@ -42,15 +71,23 @@ get_cache_stats = -> { hits: _cache_hits, misses: _cache_misses }
 --- Vide le cache (utile pour tests).
 clear_cache = ->
   _domain_cache = {}
-  _domain_cache_order = {}
-  _cache_hits = 0
+  _cache_count  = 0
+  _cache_hits   = 0
   _cache_misses = 0
 
---- Maintient le cache LRU sous la taille max.
-_evict_oldest_if_needed = ->
-  while #_domain_cache_order >= CACHE_MAX_SIZE
-    oldest = table.remove _domain_cache_order, 1
-    _domain_cache[oldest] = nil if oldest
+--- Maintient le cache sous la taille max (éviction générationnelle amortie).
+-- Jette ~la moitié des entrées les plus anciennes en termes d'ordre d'itération.
+_evict_if_needed = ->
+  return if _cache_count <= CACHE_MAX_SIZE
+  target = math.floor CACHE_MAX_SIZE / 2
+  kept = 0
+  for _, sub in pairs _domain_cache
+    for d in pairs sub
+      if kept >= target
+        sub[d] = nil
+      else
+        kept += 1
+  _cache_count = kept
 
 --- Charge une liste de domaines depuis un fichier .bin ou .domains.
 -- @tparam string path Chemin vers le fichier
@@ -58,9 +95,7 @@ _evict_oldest_if_needed = ->
 --   nombre d'entrées, ou nil, msg
 local load_list
 load_list = (path) ->
-  xxhash_ok = pcall require, "ffi_xxhash"
-  return nil, "ffi_xxhash non disponible" unless xxhash_ok
-  bin48 = require "filter.lib.bin48"
+  return nil, "ffi_xxhash non disponible" unless _ensure_libs!
 
   if path\match "%.bin$"
     -- Fichier binaire précompilé : mappé en lecture seule partagée (MAP_SHARED).
@@ -116,46 +151,42 @@ load_list = (path) ->
 -- @treturn boolean, string
 local lookup
 lookup = (arr, n, domain, listname) ->
-  { :xxh64 } = require "ffi_xxhash"
-  bin48 = require "filter.lib.bin48"
-
   now = os.time!
-  -- Clé de cache composite: "listname:domain" ou juste "domain" si pas de listname
-  cache_key = listname and "#{listname}:#{domain}" or domain
+  lkey = listname or _NIL_LIST
+  sub = _domain_cache[lkey]
+  unless sub
+    sub = {}
+    _domain_cache[lkey] = sub
 
-  -- Vérifier le cache d'abord
-  cached = _domain_cache[cache_key]
-  if cached
-    if now - cached.ts < CACHE_TTL_SEC
-      _cache_hits += 1
-      return cached.found
-    else
-      -- Expiré: retirer
-      _domain_cache[cache_key] = nil
-      for i, d in ipairs _domain_cache_order
-        if d == cache_key
-          table.remove _domain_cache_order, i
-          break
+  -- Vérifier le cache d'abord (lookup direct à deux niveaux, sans concat)
+  cached = sub[domain]
+  if cached and now - cached.ts < CACHE_TTL_SEC
+    _cache_hits += 1
+    return cached.found
 
   _cache_misses += 1
 
   -- Exact
-  found = bin48.bsearch arr, n, bin48.truncate xxh64 domain
+  found = bin48.bsearch arr, n, bin48.truncate _xxh64 domain
 
   -- Suffixes (si pas trouvé exact)
   if not found
     pos = domain\find ".", 1, true
     while pos
       suffix = domain\sub pos + 1
-      if bin48.bsearch arr, n, bin48.truncate xxh64 suffix
+      if bin48.bsearch arr, n, bin48.truncate _xxh64 suffix
         found = true
         break
       pos = domain\find ".", pos + 1, true
 
-  -- Stocker dans le cache
-  _evict_oldest_if_needed!
-  _domain_cache[cache_key] = { found: found, ts: now }
-  _domain_cache_order[#_domain_cache_order + 1] = cache_key
+  -- Stocker dans le cache. Nouvelle clé → incrémente le compteur puis évince si
+  -- nécessaire ; clé existante (entrée expirée) → réécriture en place.
+  -- _evict_if_needed vide des entrées mais ne supprime jamais la sous-table
+  -- elle-même, donc `sub` reste valide après l'appel.
+  unless cached
+    _cache_count += 1
+    _evict_if_needed!
+  sub[domain] = { found: found, ts: now }
 
   found
 
