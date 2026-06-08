@@ -171,9 +171,23 @@ Servie par le worker AUTH (`src/auth/server.moon` `require "webui.router"`) sous
 relu/réécrit via `webui/serializer.moon`), les règles, les dictionnaires nommés
 (`nets`/`macs`/`users`/`times`), les listes, et de déclencher un reload SIGHUP.
 
+Les champs scalaires de `filter` (SafeSearch, YouTube Restricted, `allow_localnets`,
+`captive_portal`, `domainlists_dir`, `dest_whitelist`, `allowed_domains`…) sont
+édités par `handle_filter_general_get/post` : ils parcourent `config_schema.filter`
+en ignorant les types `named_map`/`rules_list` et la sous-table `decision`, et ne
+réécrivent que ces clés sans toucher au reste de `filter`. Dans l'index config
+(`/admin/config/`) ils s'affichent comme un `<details>` replié inline
+(`#section-filter-general`), cohérent avec les autres sections scalaires ; la
+page autonome `/admin/config/filter/general` reste accessible. Les éditeurs
+spécialisés (règles, listes, décision, nets, macs, users, times) gardent des
+pages dédiées car ils ont leurs propres formulaires multi-lignes — l'index les
+liste sous « Filtre DNS — éditeurs dédiés ».
+
 - Routeur + dispatch : `src/webui/router.moon`
 - Handlers : `src/webui/handlers/{dashboard,system,config,filter,rules,lists,admin_auth}.moon`
-- Sérialisation MoonScript : `src/webui/serializer.moon` (+ `schema/`)
+- Sérialisation MoonScript : `src/webui/serializer.moon` (+ `schema/`). `serializer`
+  écrit du **MoonScript** (`{ clé: valeur }`), pas du Lua, pour rester cohérent
+  avec les `config.moon` écrits à la main.
 
 ## Synchronisation de configuration (`sync/`)
 

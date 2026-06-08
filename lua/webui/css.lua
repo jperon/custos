@@ -41,7 +41,8 @@ p:last-child { margin-bottom: 0; }
 
 /* Navigation */
 nav {
-  display: flex; flex-wrap: wrap; gap: .25rem;
+  display: flex; flex-wrap: wrap; align-items: center; gap: .25rem;
+  position: sticky; top: 0; z-index: 100;
   margin-bottom: 1.5rem; padding: .4rem;
   background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius);
@@ -53,6 +54,11 @@ nav a {
   white-space: nowrap; transition: background .12s, color .12s;
 }
 nav a:hover { background: var(--accent-soft); color: var(--accent); text-decoration: none; }
+nav .nav-reload { margin: 0 0 0 auto; }
+nav .nav-reload button {
+  width: auto; margin: 0; padding: .45rem .8rem;
+  font-weight: 550; white-space: nowrap;
+}
 
 /* Cartes */
 section, details {

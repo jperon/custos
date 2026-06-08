@@ -15,6 +15,18 @@ parse_form = (body) ->
     out[dec k] = dec v
   out
 
+-- Comme parse_form mais conserve toutes les valeurs des clés répétées (`key[]`,
+-- `start[]`…) sous forme de liste, dans l'ordre du corps de requête.
+parse_form_multi = (body) ->
+  return {} unless body
+  out = {}
+  dec = (s) -> (s\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16)\gsub "+", " "
+  for k, v in body\gmatch "([^&=]+)=([^&]*)"
+    dk = dec k
+    out[dk] or= {}
+    out[dk][#out[dk] + 1] = dec v
+  out
+
 -- ── Éditeur de table clé→valeur (nets, macs, users) ──────────────────────
 
 render_kv_editor = (section_key, title, desc, value_label, current_map, value_hint) ->
@@ -38,15 +50,16 @@ render_kv_editor = (section_key, title, desc, value_label, current_map, value_hi
   H.section {
     H.h2 title
     H.p { style: "color:#555" }, desc
-    H.form { method: "POST", action: "/admin/config/filter/#{section_key}" },
+    H.form { method: "POST", action: "/admin/config/filter/#{section_key}" }, {
       H.table {
         H.thead { H.tr { H.th "Nom", H.th value_label, H.th "" } }
         H.tbody {}, rows
       }
       H.div { style: "margin-top:.75rem" },
         H.button { type: "submit", name: "action", value: "save" }, "Enregistrer"
-        " "
-        H.a { class: "btn btn-secondary", href: "/admin/config/" }, "Annuler"
+    }
+    " "
+    H.a { class: "btn btn-secondary", href: "/admin/config/" }, "Annuler"
   }
 
 -- ── Éditeur plages horaires ───────────────────────────────────────────────
@@ -74,15 +87,16 @@ render_times_editor = (current_times) ->
   H.section {
     H.h2 "Plages horaires"
     H.p { style: "color:#555" }, "Définissez des fenêtres horaires réutilisables dans les règles."
-    H.form { method: "POST", action: "/admin/config/filter/times" },
+    H.form { method: "POST", action: "/admin/config/filter/times" }, {
       H.table {
         H.thead { H.tr { H.th "Nom", H.th "Début", H.th "Fin", H.th "" } }
         H.tbody {}, rows
       }
       H.div { style: "margin-top:.75rem" },
         H.button { type: "submit", name: "action", value: "save" }, "Enregistrer"
-        " "
-        H.a { class: "btn btn-secondary", href: "/admin/config/" }, "Annuler"
+    }
+    " "
+    H.a { class: "btn btn-secondary", href: "/admin/config/" }, "Annuler"
   }
 
 -- ── Handlers GET ────────────────────────────────────────────────────────
@@ -111,34 +125,13 @@ handle_times_get  = (req, state) ->
 
 -- ── Handlers POST ───────────────────────────────────────────────────────
 
--- Reconstruit une table associative depuis les champs key[]/val[]
-rebuild_kv = (form, is_list_value) ->
-  keys = {}
-  vals = {}
-  -- Collectionner tous les key[] et val[]
-  -- Les champs sont encodés comme key%5B%5D (key[]) et val%5B%5D
-  -- Après décodage par parse_form ils deviennent "key[]" et "val[]"
-  -- mais parse_form garde uniquement la dernière valeur pour les clés dupliquées.
-  -- On re-parse le body pour extraire les listes.
-  result = {}
-  -- Simple : utiliser les champs déjà parsés (la dernière valeur gagne
-  -- si plusieurs valeurs — ce qui arrive avec les champs [])
-  -- Pour une implémentation correcte des tableaux, il faudrait un parser multipart.
-  -- On utilise ici une approche simplifiée suffisante pour les dictionnaires.
-  k = form["key[]"]
-  v = form["val[]"]
-  if k and v
-    k_trim = k\match "^%s*(.-)%s*$"
-    if k_trim ~= ""
-      if is_list_value
-        items = {}
-        for line in v\gmatch "[^\n]+"
-          line = line\match "^%s*(.-)%s*$"
-          items[#items + 1] = line unless line == ""
-        result[k_trim] = items
-      else
-        result[k_trim] = v\match "^%s*(.-)%s*$"
-  result
+-- Découpe une textarea (valeur multi-lignes) en liste d'items non vides.
+split_lines = (s) ->
+  items = {}
+  for line in (s or "")\gmatch "[^\n]+"
+    line = line\match "^%s*(.-)%s*$"
+    items[#items + 1] = line unless line == ""
+  items
 
 make_post = (section_key, is_list_value) ->
   (req, state) ->
@@ -146,30 +139,41 @@ make_post = (section_key, is_list_value) ->
     cfg, err = read_config state.config_path
     return 500, {}, "Erreur config : #{err}" unless cfg
     cfg.filter or= {}
-    current = cfg.filter[section_key] or {}
 
     -- Suppression d'une entrée
     if form.delete
+      current = cfg.filter[section_key] or {}
       current[form.delete] = nil
       cfg.filter[section_key] = current
       ok, e = write_config cfg, state.config_path
       return 500, {}, "Erreur écriture : #{e}" unless ok
       return 302, { ["Location"]: "/admin/config/filter/#{section_key}" }, ""
 
-    -- Ajout d'une nouvelle entrée
+    -- Reconstruction complète depuis les lignes éditées (key[]/val[]) + la
+    -- nouvelle ligne (newkey/newval). « Enregistrer » persiste donc aussi les
+    -- modifications des entrées existantes, pas seulement les ajouts.
+    multi = parse_form_multi req.body
+    keys  = multi["key[]"] or {}
+    vals  = multi["val[]"] or {}
+    result = {}
+    for i, k in ipairs keys
+      k = k\match "^%s*(.-)%s*$"
+      continue if k == ""
+      if is_list_value
+        items = split_lines vals[i]
+        result[k] = items if #items > 0
+      else
+        result[k] = (vals[i] or "")\match "^%s*(.-)%s*$"
+
     if form.newkey and form.newkey\match "%S"
       new_k = form.newkey\match "^%s*(.-)%s*$"
-      new_v = form.newval or ""
       if is_list_value
-        items = {}
-        for line in new_v\gmatch "[^\n]+"
-          line = line\match "^%s*(.-)%s*$"
-          items[#items + 1] = line unless line == ""
-        current[new_k] = items if #items > 0
+        items = split_lines form.newval
+        result[new_k] = items if #items > 0
       else
-        current[new_k] = new_v\match "^%s*(.-)%s*$"
+        result[new_k] = (form.newval or "")\match "^%s*(.-)%s*$"
 
-    cfg.filter[section_key] = current
+    cfg.filter[section_key] = result
     ok, e = write_config cfg, state.config_path
     return 500, {}, "Erreur écriture : #{e}" unless ok
     302, { ["Location"]: "/admin/config/filter/#{section_key}" }, ""
@@ -183,20 +187,33 @@ handle_times_post = (req, state) ->
   cfg, err = read_config state.config_path
   return 500, {}, "Erreur config : #{err}" unless cfg
   cfg.filter or= {}
-  current = cfg.filter.times or {}
 
   if form.delete
+    current = cfg.filter.times or {}
     current[form.delete] = nil
     cfg.filter.times = current
     ok, e = write_config cfg, state.config_path
     return 500, {}, "Erreur écriture : #{e}" unless ok
     return 302, { ["Location"]: "/admin/config/filter/times" }, ""
 
+  -- Reconstruction complète depuis les lignes éditées (key[]/start[]/end[]) +
+  -- la nouvelle ligne (newkey/newstart/newend), pour que « Enregistrer »
+  -- persiste aussi les modifications des plages existantes.
+  multi  = parse_form_multi req.body
+  keys   = multi["key[]"]   or {}
+  starts = multi["start[]"] or {}
+  ends   = multi["end[]"]   or {}
+  times = {}
+  for i, k in ipairs keys
+    k = k\match "^%s*(.-)%s*$"
+    continue if k == ""
+    times[k] = { starts[i] or "00:00", ends[i] or "00:00" }
+
   if form.newkey and form.newkey\match "%S"
     k = form.newkey\match "^%s*(.-)%s*$"
-    current[k] = { form.newstart or "00:00", form.newend or "00:00" }
+    times[k] = { form.newstart or "00:00", form.newend or "00:00" }
 
-  cfg.filter.times = current
+  cfg.filter.times = times
   ok, e = write_config cfg, state.config_path
   return 500, {}, "Erreur écriture : #{e}" unless ok
   302, { ["Location"]: "/admin/config/filter/times" }, ""

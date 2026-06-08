@@ -146,6 +146,32 @@ qname_of = (dns_raw) ->
   name = dns.question.name\lower!
   name\gsub "%.+$", ""
 
+-- Extrait du payload upstream les A/AAAA déjà résolus pour la cible CNAME.
+-- L'upstream (notamment un résolveur DoH qui applique lui-même SafeSearch) a
+-- souvent déjà renvoyé `target A/AAAA …` : inutile de re-résoudre en UDP/53
+-- (coûteux, et impossible si l'upstream est DoH-only ou l'IPv6 injoignable).
+-- Retourne { a, aaaa, ttl } ou nil si aucun enregistrement pour la cible.
+rrs_from_response = (dns_raw, target) ->
+  return nil unless dns_raw and target and target != ""
+  ok, dns = pcall (-> dns_mod.parse dns_raw, 1, false)
+  return nil unless ok and dns and dns.answers
+  want = target\lower!\gsub "%.+$", ""
+  a, aaaa = {}, {}
+  ttl = 300
+  for rr in *dns.answers
+    name = rr.name and rr.name\lower!\gsub("%.+$", "")
+    continue unless name == want
+    if rr.rtype == QTYPE_A and rr.rdata and #rr.rdata == 4
+      a[#a + 1] = rr.rdata
+    elseif rr.rtype == QTYPE_AAAA and rr.rdata and #rr.rdata == 16
+      aaaa[#aaaa + 1] = rr.rdata
+    else
+      continue
+    rr_ttl = tonumber(rr.ttl) or 300
+    ttl = rr_ttl if rr_ttl > 0 and rr_ttl < ttl
+  return nil if #a == 0 and #aaaa == 0
+  { :a, :aaaa, :ttl }
+
 _factory = (cfg) ->
   (rule) ->
     target = rule.cname
@@ -163,8 +189,13 @@ _factory = (cfg) ->
         if names
           qname = qname_of ctx.dns_raw
           return unless qname and names[qname]
-        resolver_ip = pick_resolver_ip cfg, ctx
-        target_rrs = resolve_target_rrs cfg, target, resolver_ip
+        -- Priorité aux A/AAAA déjà fournis par l'upstream pour la cible : évite
+        -- une re-résolution UDP/53 redondante (et impossible en upstream DoH /
+        -- IPv6 cassé). Sinon, repli sur la résolution directe.
+        target_rrs = rrs_from_response ctx.dns_raw, target
+        unless target_rrs
+          resolver_ip = pick_resolver_ip cfg, ctx
+          target_rrs = resolve_target_rrs cfg, target, resolver_ip
         rewritten = build_cname_response nil, ctx.dns_raw, target, ctx.reason, target_rrs
         if rewritten
           ctx.dns_raw  = rewritten

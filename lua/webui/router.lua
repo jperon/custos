@@ -10,10 +10,10 @@ do
   local _obj_0 = require("webui.handlers.system")
   handle_reload, handle_status = _obj_0.handle_reload, _obj_0.handle_status
 end
-local handle_config_index, handle_config_section_get, handle_config_section_post
+local handle_config_index, handle_config_section_get, handle_config_section_post, handle_filter_general_get, handle_filter_general_post
 do
   local _obj_0 = require("webui.handlers.config")
-  handle_config_index, handle_config_section_get, handle_config_section_post = _obj_0.handle_config_index, _obj_0.handle_config_section_get, _obj_0.handle_config_section_post
+  handle_config_index, handle_config_section_get, handle_config_section_post, handle_filter_general_get, handle_filter_general_post = _obj_0.handle_config_index, _obj_0.handle_config_section_get, _obj_0.handle_config_section_post, _obj_0.handle_filter_general_get, _obj_0.handle_filter_general_post
 end
 local handle_nets_get, handle_nets_post, handle_macs_get, handle_macs_post, handle_users_get, handle_users_post, handle_times_get, handle_times_post, handle_decision_get, handle_decision_post
 do
@@ -81,6 +81,14 @@ dispatch = function(req, state)
     end
     if method == "POST" then
       return handle_config_section_post(req, m, state)
+    end
+  end
+  if path == "/admin/config/filter/general" then
+    if method == "GET" then
+      return handle_filter_general_get(req, state)
+    end
+    if method == "POST" then
+      return handle_filter_general_post(req, state)
     end
   end
   if path == "/admin/config/filter/nets" then

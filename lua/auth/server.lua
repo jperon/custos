@@ -703,6 +703,65 @@ handle_request = function(req, peer_ip, peer_mac, state)
     }, ""
   end
 end
+local resolve_tls_ctx
+resolve_tls_ctx = function(state, local_ip, load_static_fn, load_sni_fn)
+  if load_static_fn == nil then
+    load_static_fn = load_static
+  end
+  if load_sni_fn == nil then
+    load_sni_fn = load_or_generate_sni
+  end
+  if state.static_tls_ctx then
+    log_debug(function()
+      return {
+        action = "server_using_static_cert",
+        inherited = true
+      }
+    end)
+    return state.static_tls_ctx
+  end
+  if state.static_cert_paths then
+    log_debug(function()
+      return {
+        action = "server_loading_static_cert_child",
+        cert = state.static_cert_paths.cert,
+        key = state.static_cert_paths.key
+      }
+    end)
+    local ctx, err = load_static_fn(state.static_cert_paths.key, state.static_cert_paths.cert)
+    if ctx then
+      log_debug(function()
+        return {
+          action = "server_using_static_cert",
+          inherited = false
+        }
+      end)
+      return ctx
+    end
+    log_error(function()
+      return {
+        action = "server_static_cert_load_child_failed",
+        err = err
+      }
+    end)
+    error("Cannot load static certificate in child: " .. tostring(err))
+  end
+  local tls_ctx = nil
+  local tls_ctx_ok, tls_ctx_err = pcall(function()
+    tls_ctx = load_sni_fn(local_ip, state.cert_cache)
+  end)
+  if not (tls_ctx_ok) then
+    log_error(function()
+      return {
+        action = "server_cert_generation_failed",
+        local_ip = local_ip,
+        err = tls_ctx_err
+      }
+    end)
+    error("Cannot generate certificate: " .. tostring(tls_ctx_err))
+  end
+  return tls_ctx
+end
 local handle_client
 handle_client = function(args)
   local client = args.client
@@ -734,48 +793,7 @@ handle_client = function(args)
         local_ip = local_ip
       }
     end)
-    local tls_ctx = nil
-    if state.static_cert_paths then
-      log_debug(function()
-        return {
-          action = "server_loading_static_cert_child",
-          cert = state.static_cert_paths.cert,
-          key = state.static_cert_paths.key
-        }
-      end)
-      local ctx
-      ctx, err = load_static(state.static_cert_paths.key, state.static_cert_paths.cert)
-      if ctx then
-        tls_ctx = ctx
-        log_debug(function()
-          return {
-            action = "server_using_static_cert"
-          }
-        end)
-      else
-        log_error(function()
-          return {
-            action = "server_static_cert_load_child_failed",
-            err = err
-          }
-        end)
-        error("Cannot load static certificate in child: " .. tostring(err))
-      end
-    else
-      local tls_ctx_ok, tls_ctx_err = pcall(function()
-        tls_ctx = load_or_generate_sni(local_ip, state.cert_cache)
-      end)
-      if not (tls_ctx_ok) then
-        log_error(function()
-          return {
-            action = "server_cert_generation_failed",
-            local_ip = local_ip,
-            err = tls_ctx_err
-          }
-        end)
-        error("Cannot generate certificate: " .. tostring(tls_ctx_err))
-      end
-    end
+    local tls_ctx = resolve_tls_ctx(state, local_ip)
     if not (tls_ctx) then
       log_error(function()
         return {
@@ -914,6 +932,53 @@ handle_client = function(args)
     end)
   end
 end
+local dispatch_connection
+dispatch_connection = function(client, peer_ip, state, fork_fn)
+  if fork_fn == nil then
+    fork_fn = fork_child
+  end
+  log_debug(function()
+    return {
+      action = "server_fork_child_start",
+      peer = peer_ip,
+      fd = client.fd
+    }
+  end)
+  local fork_ok, pid = pcall(fork_fn, "AUTH-conn", handle_client, {
+    client = client,
+    peer_ip = peer_ip,
+    state = state
+  }, {
+    log_start = false
+  })
+  if fork_ok then
+    log_debug(function()
+      return {
+        action = "server_fork_child_done",
+        pid = pid
+      }
+    end)
+    log_info(function()
+      return {
+        action = "server_conn_started",
+        pid = pid,
+        peer = peer_ip
+      }
+    end)
+  else
+    log_error(function()
+      return {
+        action = "server_fork_child_failed",
+        peer = peer_ip,
+        err = tostring(pid)
+      }
+    end)
+  end
+  pcall(function()
+    return client:close()
+  end)
+  return fork_ok
+end
 local reload_secrets_if_needed
 reload_secrets_if_needed = function(state)
   if not (state.reload_fn) then
@@ -985,8 +1050,8 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
         key = auth_cfg.key
       }
     end)
-    local ok, ctx = load_static(auth_cfg.key, auth_cfg.cert)
-    if ok then
+    local ctx, cert_err = load_static(auth_cfg.key, auth_cfg.cert)
+    if ctx then
       static_tls_ctx = ctx
       log_info(function()
         return {
@@ -1001,7 +1066,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
           action = "server_static_cert_failed",
           cert = auth_cfg.cert,
           key = auth_cfg.key,
-          err = ctx
+          err = cert_err
         }
       end)
     end
@@ -1041,6 +1106,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     admin_allow_all_when_empty = auth_cfg.admin_allow_all_when_empty or false,
     config_path = auth_cfg.config_path or "/etc/custos/config.moon",
     started_at = os.time(),
+    static_tls_ctx = static_tls_ctx,
     static_cert_paths = (function()
       if auth_cfg.cert and auth_cfg.key then
         return {
@@ -1106,34 +1172,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
               peer = peer_ip
             }
           end)
-          log_debug(function()
-            return {
-              action = "server_fork_child_start",
-              peer = peer_ip,
-              fd = client.fd
-            }
-          end)
-          local pid = fork_child("AUTH-conn", handle_client, {
-            client = client,
-            peer_ip = peer_ip,
-            state = state
-          }, {
-            log_start = false
-          })
-          log_debug(function()
-            return {
-              action = "server_fork_child_done",
-              pid = pid
-            }
-          end)
-          log_info(function()
-            return {
-              action = "server_conn_started",
-              pid = pid,
-              peer = peer_ip
-            }
-          end)
-          client:close()
+          dispatch_connection(client, peer_ip, state)
         end
       end
     end
@@ -1141,5 +1180,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
 end
 return {
   run = run,
-  replay_sessions_to_nft = replay_sessions_to_nft
+  replay_sessions_to_nft = replay_sessions_to_nft,
+  dispatch_connection = dispatch_connection,
+  resolve_tls_ctx = resolve_tls_ctx
 }

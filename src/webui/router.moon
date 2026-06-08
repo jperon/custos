@@ -6,7 +6,9 @@
 { :handle_reload, :handle_status } = require "webui.handlers.system"
 { :handle_config_index,
   :handle_config_section_get,
-  :handle_config_section_post } = require "webui.handlers.config"
+  :handle_config_section_post,
+  :handle_filter_general_get,
+  :handle_filter_general_post } = require "webui.handlers.config"
 { :handle_nets_get,   :handle_nets_post,
   :handle_macs_get,   :handle_macs_post,
   :handle_users_get,  :handle_users_post,
@@ -65,6 +67,11 @@ dispatch = (req, state) ->
   if m and SCALAR_SECTIONS[m]
     return handle_config_section_get(req, m, state)  if method == "GET"
     return handle_config_section_post(req, m, state) if method == "POST"
+
+  -- Filtre DNS — champs scalaires généraux (SafeSearch, YouTube, listes…)
+  if path == "/admin/config/filter/general"
+    return handle_filter_general_get(req, state)  if method == "GET"
+    return handle_filter_general_post(req, state) if method == "POST"
 
   -- Filtre DNS — dictionnaires nommés
   if path == "/admin/config/filter/nets"

@@ -271,6 +271,48 @@ render_section_details = function(section, section_schema, current)
     id = "section-" .. tostring(section)
   }, summary .. form_html)
 end
+local is_filter_scalar
+is_filter_scalar = function(field)
+  if not (type(field) == "table" and field.type) then
+    return false
+  end
+  return field.type ~= "named_map" and field.type ~= "rules_list"
+end
+local render_filter_general_details
+render_filter_general_details = function(filter_schema, current)
+  local fields_html = ""
+  for k, field in pairs(filter_schema) do
+    local _continue_0 = false
+    repeat
+      if k:match("^_") then
+        _continue_0 = true
+        break
+      end
+      if not (is_filter_scalar(field)) then
+        _continue_0 = true
+        break
+      end
+      fields_html = fields_html .. render_field(k, field, current[k])
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  local save_btn = H.div({
+    style = "margin-top:.75rem"
+  }, H.button({
+    type = "submit"
+  }, "Enregistrer"))
+  local form_html = H.form({
+    method = "POST",
+    action = "/admin/config/filter/general"
+  }, fields_html .. save_btn)
+  local summary = H.summary("Filtre — Général (SafeSearch, YouTube, listes, domaines autorisés…)")
+  return H.details({
+    id = "section-filter-general"
+  }, summary .. form_html)
+end
 local handle_config_index
 handle_config_index = function(req, state)
   local cfg, err = read_config(state.config_path)
@@ -294,13 +336,52 @@ handle_config_index = function(req, state)
       break
     end
   end
-  local filter_link = H.p({
-    H.a({
-      href = "/admin/config/filter"
-    }, "Filtre DNS (règles, listes, décision)")
+  local filter_general = render_filter_general_details(config_schema.filter, cfg.filter or { })
+  local filter_links = H.section({
+    H.h2("Filtre DNS — éditeurs dédiés"),
+    H.p({
+      style = "color:#555"
+    }, "Outils avec leurs propres formulaires (ajout, suppression, réordonnancement)."),
+    H.ul({
+      H.li({
+        H.a({
+          href = "/admin/config/filter/rules"
+        }, "Règles de filtrage")
+      }),
+      H.li({
+        H.a({
+          href = "/admin/config/filter/lists"
+        }, "Listes")
+      }),
+      H.li({
+        H.a({
+          href = "/admin/config/filter/decision"
+        }, "Politique de décision")
+      }),
+      H.li({
+        H.a({
+          href = "/admin/config/filter/nets"
+        }, "Réseaux nommés")
+      }),
+      H.li({
+        H.a({
+          href = "/admin/config/filter/macs"
+        }, "MACs nommées")
+      }),
+      H.li({
+        H.a({
+          href = "/admin/config/filter/users"
+        }, "Utilisateurs")
+      }),
+      H.li({
+        H.a({
+          href = "/admin/config/filter/times"
+        }, "Plages horaires")
+      })
+    })
   })
   local js = "if(location.hash){var d=document.querySelector(location.hash);if(d&&d.tagName==='DETAILS')d.open=true;}"
-  local body_html = H.h2("Configuration") .. filter_link .. sections_html .. H.script(js)
+  local body_html = H.h2("Configuration") .. filter_general .. sections_html .. filter_links .. H.script(js)
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
   }, page("Configuration", body_html)
@@ -365,8 +446,106 @@ handle_config_section_post = function(req, section, state)
     ["Location"] = "/admin/config/#section-" .. tostring(section)
   }, ""
 end
+local handle_filter_general_get
+handle_filter_general_get = function(req, state)
+  local cfg, err = read_config(state.config_path)
+  if not (cfg) then
+    return 500, { }, "Erreur config : " .. tostring(err)
+  end
+  local fschema = config_schema.filter
+  local current = cfg.filter or { }
+  local fields = ""
+  for k, field in pairs(fschema) do
+    local _continue_0 = false
+    repeat
+      if k:match("^_") then
+        _continue_0 = true
+        break
+      end
+      if not (is_filter_scalar(field)) then
+        _continue_0 = true
+        break
+      end
+      fields = fields .. render_field(k, field, current[k])
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  local save_btn = H.div({
+    style = "margin-top:.75rem"
+  }, H.button({
+    type = "submit"
+  }, "Enregistrer") .. " " .. H.a({
+    class = "btn btn-secondary",
+    href = "/admin/config/"
+  }, "Annuler"))
+  local body = H.section({
+    H.h2("Filtre — Général") .. H.form({
+      method = "POST",
+      action = "/admin/config/filter/general"
+    }, fields .. save_btn)
+  })
+  return 200, {
+    ["Content-Type"] = "text/html; charset=UTF-8"
+  }, page("Filtre — Général", body)
+end
+local handle_filter_general_post
+handle_filter_general_post = function(req, state)
+  local form = parse_form(req.body)
+  local cfg, err = read_config(state.config_path)
+  if not (cfg) then
+    return 500, { }, "Erreur lecture config : " .. tostring(tostring(err))
+  end
+  cfg.filter = cfg.filter or { }
+  local fschema = config_schema.filter
+  for k, field in pairs(fschema) do
+    local _continue_0 = false
+    repeat
+      if k:match("^_") then
+        _continue_0 = true
+        break
+      end
+      if not (is_filter_scalar(field)) then
+        _continue_0 = true
+        break
+      end
+      local t = field.type
+      if t == "boolean" then
+        cfg.filter[k] = form[k] == "1"
+      elseif t == "integer" then
+        cfg.filter[k] = tonumber(form[k]) or field.default
+      elseif t == "string_list" then
+        local items = { }
+        for line in (form[k] or ""):gmatch("[^\n]+") do
+          line = line:match("^%s*(.-)%s*$")
+          if not (line == "") then
+            items[#items + 1] = line
+          end
+        end
+        cfg.filter[k] = items
+      else
+        cfg.filter[k] = form[k] or field.default or ""
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  local ok2, err2 = write_config(cfg, state.config_path)
+  if not (ok2) then
+    return 500, { }, "Erreur écriture config : " .. tostring(tostring(err2))
+  end
+  return 302, {
+    ["Location"] = "/admin/config/#section-filter-general"
+  }, ""
+end
 return {
   handle_config_index = handle_config_index,
   handle_config_section_get = handle_config_section_get,
-  handle_config_section_post = handle_config_section_post
+  handle_config_section_post = handle_config_section_post,
+  handle_filter_general_get = handle_filter_general_get,
+  handle_filter_general_post = handle_filter_general_post
 }

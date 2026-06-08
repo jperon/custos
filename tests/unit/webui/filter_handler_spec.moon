@@ -56,6 +56,13 @@ describe "webui/handlers/filter", ->
       _, _, body = handle_nets_get make_req("GET"), make_state!
       assert.truthy body\find("local", 1, true)
 
+    it "le bouton Enregistrer est dans le formulaire", ->
+      _, _, body = handle_nets_get make_req("GET"), make_state!
+      pos_btn  = body\find("Enregistrer", 1, true)
+      pos_form = body\find("</form>", pos_btn, true)
+      assert.truthy pos_btn
+      assert.truthy pos_form
+
     it "retourne 500 si config_path invalide", ->
       state = { config_path: "/nonexistent/file.lua" }
       status, _, _ = handle_nets_get make_req("GET"), state
@@ -76,6 +83,15 @@ describe "webui/handlers/filter", ->
       handle_nets_post make_req("POST", body_str), make_state!
       loaded = (read_config CFG_PATH)
       assert.not_nil loaded.filter.nets.wan
+
+    it "persiste la modification d'une entrée existante (Enregistrer)", ->
+      write_cfg { filter: { nets: { local: { "192.168.0.0/16" } }, rules: {} } }
+      -- L'utilisateur ajoute un CIDR à la ligne existante.
+      body_str = "key%5B%5D=local&val%5B%5D=192.168.0.0%2F16%0A10.0.0.0%2F8&action=save"
+      handle_nets_post make_req("POST", body_str), make_state!
+      loaded = (read_config CFG_PATH)
+      assert.equals 2, #loaded.filter.nets.local
+      assert.equals "10.0.0.0/8", loaded.filter.nets.local[2]
 
     it "ignore les ajouts avec newkey vide", ->
       body_str = "action=save&newkey=+&newval=1.2.3.0%2F24"
@@ -141,6 +157,13 @@ describe "webui/handlers/filter", ->
       status, _, _ = handle_times_get make_req("GET"), make_state!
       assert.equals 200, status
 
+    it "le bouton Enregistrer est dans le formulaire", ->
+      _, _, body = handle_times_get make_req("GET"), make_state!
+      pos_btn  = body\find("Enregistrer", 1, true)
+      pos_form = body\find("</form>", pos_btn, true)
+      assert.truthy pos_btn
+      assert.truthy pos_form
+
   describe "handle_times_post", ->
 
     it "ajoute une plage horaire et persiste", ->
@@ -154,6 +177,31 @@ describe "webui/handlers/filter", ->
     it "supprime une plage horaire", ->
       write_cfg { filter: { times: { matin: { "08:00", "12:00" } }, rules: {} } }
       body_str = "delete=matin"
+      handle_times_post make_req("POST", body_str), make_state!
+      loaded = (read_config CFG_PATH)
+      assert.is_nil loaded.filter.times.matin
+
+    it "persiste la modification d'une plage existante (Enregistrer)", ->
+      write_cfg { filter: { times: { matin: { "08:00", "12:00" } }, rules: {} } }
+      -- L'utilisateur change la fin de 12:00 à 13:00 dans la ligne existante.
+      body_str = "key%5B%5D=matin&start%5B%5D=08%3A00&end%5B%5D=13%3A00&action=save"
+      handle_times_post make_req("POST", body_str), make_state!
+      loaded = (read_config CFG_PATH)
+      assert.equals "08:00", loaded.filter.times.matin[1]
+      assert.equals "13:00", loaded.filter.times.matin[2]
+
+    it "conserve les plages existantes lors d'un ajout", ->
+      write_cfg { filter: { times: { matin: { "08:00", "12:00" } }, rules: {} } }
+      body_str = "key%5B%5D=matin&start%5B%5D=08%3A00&end%5B%5D=12%3A00&" ..
+        "newkey=soir&newstart=18%3A00&newend=22%3A00&action=save"
+      handle_times_post make_req("POST", body_str), make_state!
+      loaded = (read_config CFG_PATH)
+      assert.not_nil loaded.filter.times.matin
+      assert.equals "18:00", loaded.filter.times.soir[1]
+
+    it "ignore une ligne existante au nom vidé (suppression in-place)", ->
+      write_cfg { filter: { times: { matin: { "08:00", "12:00" } }, rules: {} } }
+      body_str = "key%5B%5D=+&start%5B%5D=08%3A00&end%5B%5D=12%3A00&action=save"
       handle_times_post make_req("POST", body_str), make_state!
       loaded = (read_config CFG_PATH)
       assert.is_nil loaded.filter.times.matin

@@ -3,7 +3,7 @@
 
 { :serialize_config, :write_config, :read_config } = require "webui.serializer"
 
-TMP_PATH = "tmp/serializer_spec_test.lua"
+TMP_PATH = "tmp/serializer_spec_test.moon"
 
 describe "webui/serializer", ->
 
@@ -11,9 +11,13 @@ describe "webui/serializer", ->
 
   describe "serialize_config", ->
 
-    it "produit 'return { ... }\\n'", ->
+    it "produit une table MoonScript '{ ... }\\n'", ->
       out = serialize_config { foo: "bar" }
-      assert.truthy out\find("^return {", 1)
+      assert.truthy out\find("^{", 1)
+      assert.falsy out\find("^return", 1)
+      -- format MoonScript : 'clé: valeur', pas 'clé = valeur'
+      assert.truthy out\find("foo: ", 1, true)
+      assert.falsy out\find("foo =", 1, true)
       assert.truthy out\sub(-1) == "\n"
 
     it "sérialise une chaîne", ->
@@ -113,14 +117,48 @@ describe "webui/serializer", ->
       assert.is_nil fh  -- le fichier tmp ne doit plus exister
 
     it "retourne une erreur si le chemin est invalide", ->
-      ok, err = write_config { x: 1 }, "/nonexistent/dir/file.lua"
+      ok, err = write_config { x: 1 }, "/nonexistent/dir/file.moon"
       assert.is_nil ok
       assert.not_nil err
 
     it "retourne nil+erreur si le fichier n'existe pas", ->
-      loaded, err = read_config "/nonexistent/config.lua"
+      loaded, err = read_config "/nonexistent/config.moon"
       assert.is_nil loaded
       assert.not_nil err
+
+    it "le fichier écrit est du MoonScript chargeable par moonscript.base.loadfile", ->
+      -- Vérifie le chargement concret tel que le fait le runtime (et non via
+      -- read_config), pour garantir que la sortie est bien du MoonScript valide.
+      cfg = {
+        runtime: { log_level: "DEBUG", benchmark: false }
+        filter: {
+          rules: {
+            { description: "règle accentuée é", actions: { "allow" } }
+          }
+          nets: { lan: { "192.168.0.0/16", "10.0.0.0/8" } }
+        }
+      }
+      cfg["clé-spéciale"] = "valeur"
+      ok = write_config cfg, TMP_PATH
+      assert.is_true ok
+      -- Le fichier ne doit PAS être du Lua (`key = value` / `return`)
+      fh = assert io.open TMP_PATH, "r"
+      content = fh\read "*a"
+      fh\close!
+      assert.falsy content\find("return", 1, true)
+      assert.falsy content\find("log_level =", 1, true)
+      assert.truthy content\find("log_level:", 1, true)
+      -- Chargement concret via le loader MoonScript
+      moon_base = require "moonscript.base"
+      fn, err = moon_base.loadfile TMP_PATH
+      assert.is_nil err
+      assert.not_nil fn
+      loaded = fn!
+      assert.equals "DEBUG", loaded.runtime.log_level
+      assert.is_false loaded.runtime.benchmark
+      assert.equals "règle accentuée é", loaded.filter.rules[1].description
+      assert.equals "10.0.0.0/8", loaded.filter.nets.lan[2]
+      assert.equals "valeur", loaded["clé-spéciale"]
 
     it "round-trip complet avec toutes les sections de base", ->
       cfg = {

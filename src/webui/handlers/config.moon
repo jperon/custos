@@ -136,6 +136,26 @@ render_section_details = (section, section_schema, current) ->
   summary     = H.summary label
   H.details { id: "section-#{section}" }, summary .. form_html
 
+-- Sous-clé scalaire de `filter` : ni dictionnaire nommé, ni règles.
+is_filter_scalar = (field) ->
+  return false unless type(field) == "table" and field.type
+  field.type ~= "named_map" and field.type ~= "rules_list"
+
+-- Rendu des champs scalaires du filtre comme <details> repliable, cohérent
+-- avec les autres sections. Poste vers /admin/config/filter/general.
+render_filter_general_details = (filter_schema, current) ->
+  fields_html = ""
+  for k, field in pairs filter_schema
+    continue if k\match "^_"
+    continue unless is_filter_scalar field
+    fields_html ..= render_field k, field, current[k]
+  save_btn   = H.div { style: "margin-top:.75rem" },
+    H.button { type: "submit" }, "Enregistrer"
+  form_html  = H.form { method: "POST", action: "/admin/config/filter/general" },
+    fields_html .. save_btn
+  summary    = H.summary "Filtre — Général (SafeSearch, YouTube, listes, domaines autorisés…)"
+  H.details { id: "section-filter-general" }, summary .. form_html
+
 -- ── Handlers ─────────────────────────────────────────────────────────────
 
 handle_config_index = (req, state) ->
@@ -148,13 +168,27 @@ handle_config_index = (req, state) ->
     continue unless schema
     sections_html ..= render_section_details s, schema, cfg[s] or {}
 
-  filter_link = H.p {
-    H.a { href: "/admin/config/filter" }, "Filtre DNS (règles, listes, décision)"
+  -- Champs scalaires du filtre : repliés inline comme les autres sections.
+  filter_general = render_filter_general_details config_schema.filter, cfg.filter or {}
+
+  -- Éditeurs spécialisés (tableaux multi-lignes, réordonnancement…) : pages dédiées.
+  filter_links = H.section {
+    H.h2 "Filtre DNS — éditeurs dédiés"
+    H.p { style: "color:#555" }, "Outils avec leurs propres formulaires (ajout, suppression, réordonnancement)."
+    H.ul {
+      H.li { H.a { href: "/admin/config/filter/rules" },    "Règles de filtrage" }
+      H.li { H.a { href: "/admin/config/filter/lists" },    "Listes" }
+      H.li { H.a { href: "/admin/config/filter/decision" }, "Politique de décision" }
+      H.li { H.a { href: "/admin/config/filter/nets" },     "Réseaux nommés" }
+      H.li { H.a { href: "/admin/config/filter/macs" },     "MACs nommées" }
+      H.li { H.a { href: "/admin/config/filter/users" },    "Utilisateurs" }
+      H.li { H.a { href: "/admin/config/filter/times" },    "Plages horaires" }
+    }
   }
   -- JS : ouvre le bon <details> si l'URL contient un fragment
   js = "if(location.hash){var d=document.querySelector(location.hash);if(d&&d.tagName==='DETAILS')d.open=true;}"
 
-  body_html = H.h2("Configuration") .. filter_link .. sections_html .. H.script(js)
+  body_html = H.h2("Configuration") .. filter_general .. sections_html .. filter_links .. H.script(js)
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Configuration", body_html
 
 handle_config_section_get = (req, section, state) ->
@@ -190,4 +224,57 @@ handle_config_section_post = (req, section, state) ->
 
   302, { ["Location"]: "/admin/config/#section-#{section}" }, ""
 
-{ :handle_config_index, :handle_config_section_get, :handle_config_section_post }
+-- ── Filtre : champs scalaires généraux ─────────────────────────────────────
+-- Édite les sous-clés scalaires de `filter` (cf. is_filter_scalar) sans toucher
+-- au reste de la section (dictionnaires nommés, règles, décision).
+
+handle_filter_general_get = (req, state) ->
+  cfg, err = read_config state.config_path
+  return 500, {}, "Erreur config : #{err}" unless cfg
+  fschema  = config_schema.filter
+  current  = cfg.filter or {}
+  fields   = ""
+  for k, field in pairs fschema
+    continue if k\match "^_"
+    continue unless is_filter_scalar field
+    fields ..= render_field k, field, current[k]
+  save_btn = H.div { style: "margin-top:.75rem" },
+    H.button({ type: "submit" }, "Enregistrer") ..
+    " " ..
+    H.a({ class: "btn btn-secondary", href: "/admin/config/" }, "Annuler")
+  body = H.section {
+    H.h2("Filtre — Général") ..
+    H.form({ method: "POST", action: "/admin/config/filter/general" }, fields .. save_btn)
+  }
+  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Filtre — Général", body
+
+handle_filter_general_post = (req, state) ->
+  form = parse_form req.body
+  cfg, err = read_config state.config_path
+  return 500, {}, "Erreur lecture config : #{tostring err}" unless cfg
+  cfg.filter or= {}
+  fschema = config_schema.filter
+  for k, field in pairs fschema
+    continue if k\match "^_"
+    continue unless is_filter_scalar field
+    t = field.type
+    if t == "boolean"
+      cfg.filter[k] = form[k] == "1"
+    elseif t == "integer"
+      cfg.filter[k] = tonumber(form[k]) or field.default
+    elseif t == "string_list"
+      items = {}
+      for line in (form[k] or "")\gmatch "[^\n]+"
+        line = line\match "^%s*(.-)%s*$"
+        items[#items + 1] = line unless line == ""
+      cfg.filter[k] = items
+    else
+      cfg.filter[k] = form[k] or field.default or ""
+  ok2, err2 = write_config cfg, state.config_path
+  return 500, {}, "Erreur écriture config : #{tostring err2}" unless ok2
+  302, { ["Location"]: "/admin/config/#section-filter-general" }, ""
+
+{
+  :handle_config_index, :handle_config_section_get, :handle_config_section_post
+  :handle_filter_general_get, :handle_filter_general_post
+}

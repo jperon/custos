@@ -13,6 +13,8 @@ nav_html = ->
     H.a { href: "/admin/config/" }, "Configuration"
     H.a { href: "/admin/system/status" }, "Statut"
     H.a { href: "/admin/logout" }, "Déconnexion"
+    H.form { method: "POST", action: "/admin/system/reload", class: "nav-reload" },
+      H.button { type: "submit" }, "Recharger maintenant"
   }
 
 page = (title, body_content) ->
@@ -44,13 +46,7 @@ handle_dashboard = (req, state) ->
     H.p { H.a { href: "/admin/config/" }, "Toutes les sections" }
     H.p { H.a { href: "/admin/system/status" }, "État du service DNS" }
   }
-  s3 = H.section {
-    H.h2 "Rechargement"
-    H.p "Après modification de la configuration, rechargez le service DNS pour appliquer les changements."
-    H.form { method: "POST", action: "/admin/system/reload" },
-      H.button { type: "submit" }, "Recharger maintenant"
-  }
 
-  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Dashboard", s1 .. s2 .. s3
+  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Dashboard", s1 .. s2
 
 { :handle_dashboard, :nav_html, :page }

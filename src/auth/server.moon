@@ -379,6 +379,40 @@ handle_request = (req, peer_ip, peer_mac, state) ->
   else
     return 302, { ["Location"]: "/" }, ""
 
+--- Sélectionne le contexte TLS pour une connexion.
+-- Priorité : contexte statique hérité du parent (zéro coût par connexion) >
+-- repli rechargement depuis les fichiers > génération/cache SNI dynamique.
+-- @tparam table state État du serveur (static_tls_ctx, static_cert_paths, cert_cache)
+-- @tparam string local_ip IP locale, utilisée comme CN pour le cert dynamique
+-- @tparam function|nil load_static_fn Injection de test ; défaut load_static
+-- @tparam function|nil load_sni_fn Injection de test ; défaut load_or_generate_sni
+-- @treturn table Contexte TLS
+-- @raise string si aucun contexte ne peut être obtenu
+resolve_tls_ctx = (state, local_ip, load_static_fn=load_static, load_sni_fn=load_or_generate_sni) ->
+  if state.static_tls_ctx
+    -- Contexte construit dans le parent et hérité via fork (COW) : pas de
+    -- relecture disque ni de reconstruction par connexion.
+    log_debug -> { action: "server_using_static_cert", inherited: true }
+    return state.static_tls_ctx
+
+  if state.static_cert_paths
+    -- Repli : recharger depuis les fichiers si le contexte hérité manque.
+    log_debug -> { action: "server_loading_static_cert_child", cert: state.static_cert_paths.cert, key: state.static_cert_paths.key }
+    ctx, err = load_static_fn state.static_cert_paths.key, state.static_cert_paths.cert
+    if ctx
+      log_debug -> { action: "server_using_static_cert", inherited: false }
+      return ctx
+    log_error -> { action: "server_static_cert_load_child_failed", err: err }
+    error "Cannot load static certificate in child: #{err}"
+
+  tls_ctx = nil
+  tls_ctx_ok, tls_ctx_err = pcall ->
+    tls_ctx = load_sni_fn local_ip, state.cert_cache
+  unless tls_ctx_ok
+    log_error -> { action: "server_cert_generation_failed", local_ip: local_ip, err: tls_ctx_err }
+    error "Cannot generate certificate: #{tls_ctx_err}"
+  tls_ctx
+
 handle_client = (args) ->
   client = args.client
   state = args.state
@@ -398,22 +432,7 @@ handle_client = (args) ->
 
     -- Utiliser le certificat statique s'il a été configuré
     -- Sinon, générer/charger le certificat avec l'IP locale comme CN
-    tls_ctx = nil
-    if state.static_cert_paths
-      log_debug -> { action: "server_loading_static_cert_child", cert: state.static_cert_paths.cert, key: state.static_cert_paths.key }
-      ctx, err = load_static state.static_cert_paths.key, state.static_cert_paths.cert
-      if ctx
-        tls_ctx = ctx
-        log_debug -> { action: "server_using_static_cert" }
-      else
-        log_error -> { action: "server_static_cert_load_child_failed", err: err }
-        error "Cannot load static certificate in child: #{err}"
-    else
-      tls_ctx_ok, tls_ctx_err = pcall ->
-        tls_ctx = load_or_generate_sni local_ip, state.cert_cache
-      unless tls_ctx_ok
-        log_error -> { action: "server_cert_generation_failed", local_ip: local_ip, err: tls_ctx_err }
-        error "Cannot generate certificate: #{tls_ctx_err}"
+    tls_ctx = resolve_tls_ctx state, local_ip
 
     unless tls_ctx
       log_error -> { action: "server_cert_null", local_ip: local_ip }
@@ -480,6 +499,32 @@ handle_client = (args) ->
     log_error -> { action: "server_client_failed", peer: peer_ip, err: tostring err }
     pcall -> client\close!
 
+--- Fork un enfant pour traiter une connexion acceptée, sans jamais propager
+-- d'erreur. Un échec transitoire de fork() (EAGAIN/ENOMEM sur routeur à faible
+-- RAM) est isolé : la connexion est fermée et le serveur continue. Sans cette
+-- garde, l'error() remontée par fork_child ferait crasher le worker AUTH (toutes
+-- les connexions refusées jusqu'au redémarrage par le superviseur).
+-- @tparam table client Socket client accepté (fermé dans tous les cas)
+-- @tparam string peer_ip IP du pair (pour les logs)
+-- @tparam table state État du serveur transmis à handle_client
+-- @tparam function|nil fork_fn Injection de test ; défaut fork_child
+-- @treturn boolean true si le fork a réussi
+dispatch_connection = (client, peer_ip, state, fork_fn=fork_child) ->
+  log_debug -> { action: "server_fork_child_start", peer: peer_ip, fd: client.fd }
+  fork_ok, pid = pcall fork_fn, "AUTH-conn",
+    handle_client,
+    { client: client, peer_ip: peer_ip, state: state },
+    { log_start: false }
+
+  if fork_ok
+    log_debug -> { action: "server_fork_child_done", pid: pid }
+    log_info -> { action: "server_conn_started", pid: pid, peer: peer_ip }
+  else
+    log_error -> { action: "server_fork_child_failed", peer: peer_ip, err: tostring pid }
+
+  pcall -> client\close!
+  fork_ok
+
 reload_secrets_if_needed = (state) ->
   return unless state.reload_fn
   new_secrets = state.reload_fn!
@@ -532,16 +577,22 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   cert_cache_module = require "auth.cert_cache"
   cert_cache = cert_cache_module.create_cache 500, 7776000  -- 500 certs, 90 days TTL
 
-  -- Charger le certificat statique s'il est fourni dans la configuration
+  -- Charger le certificat statique s'il est fourni dans la configuration.
+  -- load_static retourne (ctx, err) : récupérer le contexte dans `ctx`, pas `ok`
+  -- (l'inversion historique mettait static_tls_ctx à nil, d'où le contournement
+  -- coûteux qui rechargeait le cert dans chaque enfant).
+  -- Le contexte est construit une seule fois et réutilisé par les enfants : le
+  -- fork() copie l'espace d'adressage (COW), et un WOLFSSL_CTX (cert/clé en
+  -- mémoire, sans descripteur) est partageable entre objets SSL.
   static_tls_ctx = nil
   if auth_cfg.cert and auth_cfg.key
     log_info -> { action: "server_loading_static_cert", cert: auth_cfg.cert, key: auth_cfg.key }
-    ok, ctx = load_static auth_cfg.key, auth_cfg.cert
-    if ok
+    ctx, cert_err = load_static auth_cfg.key, auth_cfg.cert
+    if ctx
       static_tls_ctx = ctx
       log_info -> { action: "server_static_cert_loaded", cert: auth_cfg.cert, key: auth_cfg.key }
     else
-      log_warn -> { action: "server_static_cert_failed", cert: auth_cfg.cert, key: auth_cfg.key, err: ctx }
+      log_warn -> { action: "server_static_cert_failed", cert: auth_cfg.cert, key: auth_cfg.key, err: cert_err }
   else
     log_debug -> { action: "server_no_static_cert_configured" }
 
@@ -567,6 +618,9 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     admin_allow_all_when_empty: auth_cfg.admin_allow_all_when_empty or false
     config_path: auth_cfg.config_path or "/etc/custos/config.moon"
     started_at: os.time!
+    -- Contexte TLS statique construit une fois, hérité par les enfants via fork.
+    static_tls_ctx: static_tls_ctx
+    -- Chemins conservés en repli si le contexte hérité est absent.
     static_cert_paths: if auth_cfg.cert and auth_cfg.key then { cert: auth_cfg.cert, key: auth_cfg.key } else nil
     cert_cache: cert_cache
   }
@@ -601,15 +655,6 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
           peer_ip = client\getpeername! or "unknown"
           log_debug -> { action: "server_getpeername_result", peer: peer_ip }
 
-          log_debug -> { action: "server_fork_child_start", peer: peer_ip, fd: client.fd }
-          pid = fork_child "AUTH-conn",
-            handle_client,
-            { client: client, peer_ip: peer_ip, state: state },
-            { log_start: false }
+          dispatch_connection client, peer_ip, state
 
-          log_debug -> { action: "server_fork_child_done", pid: pid }
-
-          log_info -> { action: "server_conn_started", pid: pid, peer: peer_ip }
-          client\close!
-
-{ :run, :replay_sessions_to_nft }
+{ :run, :replay_sessions_to_nft, :dispatch_connection, :resolve_tls_ctx }

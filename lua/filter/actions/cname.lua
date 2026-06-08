@@ -183,6 +183,57 @@ qname_of = function(dns_raw)
   local name = dns.question.name:lower()
   return name:gsub("%.+$", "")
 end
+local rrs_from_response
+rrs_from_response = function(dns_raw, target)
+  if not (dns_raw and target and target ~= "") then
+    return nil
+  end
+  local ok, dns = pcall((function()
+    return dns_mod.parse(dns_raw, 1, false)
+  end))
+  if not (ok and dns and dns.answers) then
+    return nil
+  end
+  local want = target:lower():gsub("%.+$", "")
+  local a, aaaa = { }, { }
+  local ttl = 300
+  local _list_0 = dns.answers
+  for _index_0 = 1, #_list_0 do
+    local _continue_0 = false
+    repeat
+      local rr = _list_0[_index_0]
+      local name = rr.name and rr.name:lower():gsub("%.+$", "")
+      if not (name == want) then
+        _continue_0 = true
+        break
+      end
+      if rr.rtype == QTYPE_A and rr.rdata and #rr.rdata == 4 then
+        a[#a + 1] = rr.rdata
+      elseif rr.rtype == QTYPE_AAAA and rr.rdata and #rr.rdata == 16 then
+        aaaa[#aaaa + 1] = rr.rdata
+      else
+        _continue_0 = true
+        break
+      end
+      local rr_ttl = tonumber(rr.ttl) or 300
+      if rr_ttl > 0 and rr_ttl < ttl then
+        ttl = rr_ttl
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  if #a == 0 and #aaaa == 0 then
+    return nil
+  end
+  return {
+    a = a,
+    aaaa = aaaa,
+    ttl = ttl
+  }
+end
 local _factory
 _factory = function(cfg)
   return function(rule)
@@ -203,8 +254,11 @@ _factory = function(cfg)
             return 
           end
         end
-        local resolver_ip = pick_resolver_ip(cfg, ctx)
-        local target_rrs = resolve_target_rrs(cfg, target, resolver_ip)
+        local target_rrs = rrs_from_response(ctx.dns_raw, target)
+        if not (target_rrs) then
+          local resolver_ip = pick_resolver_ip(cfg, ctx)
+          target_rrs = resolve_target_rrs(cfg, target, resolver_ip)
+        end
         local rewritten = build_cname_response(nil, ctx.dns_raw, target, ctx.reason, target_rrs)
         if rewritten then
           ctx.dns_raw = rewritten

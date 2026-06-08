@@ -22,7 +22,14 @@ nav_html = function()
     }, "Statut"),
     H.a({
       href = "/admin/logout"
-    }, "Déconnexion")
+    }, "Déconnexion"),
+    H.form({
+      method = "POST",
+      action = "/admin/system/reload",
+      class = "nav-reload"
+    }, H.button({
+      type = "submit"
+    }, "Recharger maintenant"))
   })
 end
 local page
@@ -72,19 +79,9 @@ handle_dashboard = function(req, state)
       }, "État du service DNS")
     })
   })
-  local s3 = H.section({
-    H.h2("Rechargement"),
-    H.p("Après modification de la configuration, rechargez le service DNS pour appliquer les changements."),
-    H.form({
-      method = "POST",
-      action = "/admin/system/reload"
-    }, H.button({
-      type = "submit"
-    }, "Recharger maintenant"))
-  })
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
-  }, page("Dashboard", s1 .. s2 .. s3)
+  }, page("Dashboard", s1 .. s2)
 end
 return {
   handle_dashboard = handle_dashboard,

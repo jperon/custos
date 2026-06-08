@@ -25,6 +25,26 @@ parse_form = function(body)
   end
   return out
 end
+local parse_form_multi
+parse_form_multi = function(body)
+  if not (body) then
+    return { }
+  end
+  local out = { }
+  local dec
+  dec = function(s)
+    return (s:gsub("%%(%x%x)", function(h)
+      return string.char(tonumber(h, 16))
+    end)):gsub("+", " ")
+  end
+  for k, v in body:gmatch("([^&=]+)=([^&]*)") do
+    local dk = dec(k)
+    local _update_0 = dk
+    out[_update_0] = out[_update_0] or { }
+    out[dk][#out[dk] + 1] = dec(v)
+  end
+  return out
+end
 local render_kv_editor
 render_kv_editor = function(section_key, title, desc, value_label, current_map, value_hint)
   local rows = ""
@@ -88,21 +108,23 @@ render_kv_editor = function(section_key, title, desc, value_label, current_map, 
     H.form({
       method = "POST",
       action = "/admin/config/filter/" .. tostring(section_key)
-    }, H.table({
-      H.thead({
-        H.tr({
-          H.th("Nom", H.th(value_label, H.th("")))
-        })
+    }, {
+      H.table({
+        H.thead({
+          H.tr({
+            H.th("Nom", H.th(value_label, H.th("")))
+          })
+        }),
+        H.tbody({ }, rows)
       }),
-      H.tbody({ }, rows)
-    })),
-    H.div({
-      style = "margin-top:.75rem"
-    }, H.button({
-      type = "submit",
-      name = "action",
-      value = "save"
-    }, "Enregistrer")),
+      H.div({
+        style = "margin-top:.75rem"
+      }, H.button({
+        type = "submit",
+        name = "action",
+        value = "save"
+      }, "Enregistrer"))
+    }),
     " ",
     H.a({
       class = "btn btn-secondary",
@@ -182,21 +204,23 @@ render_times_editor = function(current_times)
     H.form({
       method = "POST",
       action = "/admin/config/filter/times"
-    }, H.table({
-      H.thead({
-        H.tr({
-          H.th("Nom", H.th("Début", H.th("Fin", H.th(""))))
-        })
+    }, {
+      H.table({
+        H.thead({
+          H.tr({
+            H.th("Nom", H.th("Début", H.th("Fin", H.th(""))))
+          })
+        }),
+        H.tbody({ }, rows)
       }),
-      H.tbody({ }, rows)
-    })),
-    H.div({
-      style = "margin-top:.75rem"
-    }, H.button({
-      type = "submit",
-      name = "action",
-      value = "save"
-    }, "Enregistrer")),
+      H.div({
+        style = "margin-top:.75rem"
+      }, H.button({
+        type = "submit",
+        name = "action",
+        value = "save"
+      }, "Enregistrer"))
+    }),
     " ",
     H.a({
       class = "btn btn-secondary",
@@ -239,31 +263,16 @@ handle_times_get = function(req, state)
     ["Content-Type"] = "text/html; charset=UTF-8"
   }, page("Filtre — Plages horaires", body)
 end
-local rebuild_kv
-rebuild_kv = function(form, is_list_value)
-  local keys = { }
-  local vals = { }
-  local result = { }
-  local k = form["key[]"]
-  local v = form["val[]"]
-  if k and v then
-    local k_trim = k:match("^%s*(.-)%s*$")
-    if k_trim ~= "" then
-      if is_list_value then
-        local items = { }
-        for line in v:gmatch("[^\n]+") do
-          line = line:match("^%s*(.-)%s*$")
-          if not (line == "") then
-            items[#items + 1] = line
-          end
-        end
-        result[k_trim] = items
-      else
-        result[k_trim] = v:match("^%s*(.-)%s*$")
-      end
+local split_lines
+split_lines = function(s)
+  local items = { }
+  for line in (s or ""):gmatch("[^\n]+") do
+    line = line:match("^%s*(.-)%s*$")
+    if not (line == "") then
+      items[#items + 1] = line
     end
   end
-  return result
+  return items
 end
 local make_post
 make_post = function(section_key, is_list_value)
@@ -274,8 +283,8 @@ make_post = function(section_key, is_list_value)
       return 500, { }, "Erreur config : " .. tostring(err)
     end
     cfg.filter = cfg.filter or { }
-    local current = cfg.filter[section_key] or { }
     if form.delete then
+      local current = cfg.filter[section_key] or { }
       current[form.delete] = nil
       cfg.filter[section_key] = current
       local ok, e = write_config(cfg, state.config_path)
@@ -286,25 +295,44 @@ make_post = function(section_key, is_list_value)
         ["Location"] = "/admin/config/filter/" .. tostring(section_key)
       }, ""
     end
-    if form.newkey and form.newkey:match("%S") then
-      local new_k = form.newkey:match("^%s*(.-)%s*$")
-      local new_v = form.newval or ""
-      if is_list_value then
-        local items = { }
-        for line in new_v:gmatch("[^\n]+") do
-          line = line:match("^%s*(.-)%s*$")
-          if not (line == "") then
-            items[#items + 1] = line
+    local multi = parse_form_multi(req.body)
+    local keys = multi["key[]"] or { }
+    local vals = multi["val[]"] or { }
+    local result = { }
+    for i, k in ipairs(keys) do
+      local _continue_0 = false
+      repeat
+        k = k:match("^%s*(.-)%s*$")
+        if k == "" then
+          _continue_0 = true
+          break
+        end
+        if is_list_value then
+          local items = split_lines(vals[i])
+          if #items > 0 then
+            result[k] = items
           end
+        else
+          result[k] = (vals[i] or ""):match("^%s*(.-)%s*$")
         end
-        if #items > 0 then
-          current[new_k] = items
-        end
-      else
-        current[new_k] = new_v:match("^%s*(.-)%s*$")
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
       end
     end
-    cfg.filter[section_key] = current
+    if form.newkey and form.newkey:match("%S") then
+      local new_k = form.newkey:match("^%s*(.-)%s*$")
+      if is_list_value then
+        local items = split_lines(form.newval)
+        if #items > 0 then
+          result[new_k] = items
+        end
+      else
+        result[new_k] = (form.newval or ""):match("^%s*(.-)%s*$")
+      end
+    end
+    cfg.filter[section_key] = result
     local ok, e = write_config(cfg, state.config_path)
     if not (ok) then
       return 500, { }, "Erreur écriture : " .. tostring(e)
@@ -325,8 +353,8 @@ handle_times_post = function(req, state)
     return 500, { }, "Erreur config : " .. tostring(err)
   end
   cfg.filter = cfg.filter or { }
-  local current = cfg.filter.times or { }
   if form.delete then
+    local current = cfg.filter.times or { }
     current[form.delete] = nil
     cfg.filter.times = current
     local ok, e = write_config(cfg, state.config_path)
@@ -337,14 +365,37 @@ handle_times_post = function(req, state)
       ["Location"] = "/admin/config/filter/times"
     }, ""
   end
+  local multi = parse_form_multi(req.body)
+  local keys = multi["key[]"] or { }
+  local starts = multi["start[]"] or { }
+  local ends = multi["end[]"] or { }
+  local times = { }
+  for i, k in ipairs(keys) do
+    local _continue_0 = false
+    repeat
+      k = k:match("^%s*(.-)%s*$")
+      if k == "" then
+        _continue_0 = true
+        break
+      end
+      times[k] = {
+        starts[i] or "00:00",
+        ends[i] or "00:00"
+      }
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
   if form.newkey and form.newkey:match("%S") then
     local k = form.newkey:match("^%s*(.-)%s*$")
-    current[k] = {
+    times[k] = {
       form.newstart or "00:00",
       form.newend or "00:00"
     }
   end
-  cfg.filter.times = current
+  cfg.filter.times = times
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
     return 500, { }, "Erreur écriture : " .. tostring(e)

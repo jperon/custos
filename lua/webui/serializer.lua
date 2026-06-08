@@ -14,6 +14,40 @@ is_array = function(t)
   end
   return true
 end
+local RESERVED_KEYWORDS = {
+  ["and"] = 1,
+  ["break"] = 1,
+  ["do"] = 1,
+  ["else"] = 1,
+  ["elseif"] = 1,
+  ["end"] = 1,
+  ["false"] = 1,
+  ["for"] = 1,
+  ["function"] = 1,
+  goto = 1,
+  ["if"] = 1,
+  ["in"] = 1,
+  ["local"] = 1,
+  ["nil"] = 1,
+  ["not"] = 1,
+  ["or"] = 1,
+  ["repeat"] = 1,
+  ["return"] = 1,
+  ["then"] = 1,
+  ["true"] = 1,
+  ["until"] = 1,
+  ["while"] = 1,
+  class = 1,
+  extends = 1,
+  import = 1,
+  export = 1,
+  unless = 1,
+  using = 1,
+  switch = 1,
+  when = 1,
+  with = 1,
+  continue = 1
+}
 local serialize_value
 serialize_value = function(v, indent)
   local t = type(v)
@@ -53,42 +87,18 @@ serialize_value = function(v, indent)
       if #keys == 0 then
         return "{}"
       end
-      local LUA_KEYWORDS = {
-        ["and"] = 1,
-        ["break"] = 1,
-        ["do"] = 1,
-        ["else"] = 1,
-        ["elseif"] = 1,
-        ["end"] = 1,
-        ["false"] = 1,
-        ["for"] = 1,
-        ["function"] = 1,
-        goto = 1,
-        ["if"] = 1,
-        ["in"] = 1,
-        ["local"] = 1,
-        ["nil"] = 1,
-        ["not"] = 1,
-        ["or"] = 1,
-        ["repeat"] = 1,
-        ["return"] = 1,
-        ["then"] = 1,
-        ["true"] = 1,
-        ["until"] = 1,
-        ["while"] = 1
-      }
       local lines = { }
       for _index_0 = 1, #keys do
         local k = keys[_index_0]
         local key_str
-        if type(k) == "string" and k:match("^[a-zA-Z_][a-zA-Z0-9_]*$") and not LUA_KEYWORDS[k] then
+        if type(k) == "string" and k:match("^[a-zA-Z_][a-zA-Z0-9_]*$") and not RESERVED_KEYWORDS[k] then
           key_str = k
         else
           key_str = "[" .. serialize_value(k, inner) .. "]"
         end
-        lines[#lines + 1] = inner .. key_str .. " = " .. serialize_value(v[k], inner)
+        lines[#lines + 1] = inner .. key_str .. ": " .. serialize_value(v[k], inner)
       end
-      return "{\n" .. table.concat(lines, ",\n") .. "\n" .. indent .. "}"
+      return "{\n" .. table.concat(lines, "\n") .. "\n" .. indent .. "}"
     end
   else
     return "nil"
@@ -96,7 +106,7 @@ serialize_value = function(v, indent)
 end
 local serialize_config
 serialize_config = function(cfg)
-  return "return " .. serialize_value(cfg, "") .. "\n"
+  return serialize_value(cfg, "") .. "\n"
 end
 local write_config
 write_config = function(cfg, path)

@@ -943,7 +943,8 @@ authentifiée **et** restreint aux comptes listés dans `auth.admin_users`
 utilisateur authentifié).
 
 L'interface permet, sans CLI :
-- d'éditer les sections de `config.moon` (relues/réécrites via `webui/serializer`) ;
+- d'éditer les sections de `config.moon` (relues/réécrites en MoonScript via `webui/serializer`) ;
+- de régler les options générales du filtre via *Filtre — Général* (SafeSearch, YouTube Restricted, `allow_localnets`, portail captif, domaines autorisés…) ;
 - de gérer les règles de filtrage (ajout, édition, suppression, réordonnancement) ;
 - de gérer les dictionnaires nommés (`nets`, `macs`, `users`, `times`) et les listes ;
 - de consulter le tableau de bord (statut, événements) et de déclencher un reload (SIGHUP).

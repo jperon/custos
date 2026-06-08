@@ -1,6 +1,8 @@
 -- src/webui/serializer.moon
--- Sérialise une table Lua en code Lua évaluable et écrit la config de manière atomique.
--- Produit un fichier "return { ... }" rechargeable par moonscript.base.loadfile.
+-- Sérialise une table Lua en code MoonScript évaluable et écrit la config de
+-- manière atomique. Produit un fichier "{ ... }" (table MoonScript) cohérent
+-- avec le format des config.moon écrits à la main, rechargeable par
+-- moonscript.base.loadfile.
 
 -- Détecte si une table est un tableau (clés 1..n contiguës, non vide).
 is_array = (t) ->
@@ -11,11 +13,21 @@ is_array = (t) ->
     return false if t[i] == nil
   true
 
--- Sérialise une valeur Lua en chaîne de code.
+-- Mots réservés qui ne peuvent pas être utilisés comme clés nues `clé: valeur`
+-- en MoonScript (mots-clés Lua + mots-clés propres à MoonScript).
+RESERVED_KEYWORDS = { and:1, break:1, do:1, else:1, elseif:1, end:1, false:1,
+                      for:1, ["function"]:1, goto:1, if:1, ["in"]:1, local:1, nil:1,
+                      not:1, or:1, repeat:1, ["return"]:1, then:1, true:1, until:1,
+                      while:1, class:1, extends:1, import:1, export:1, unless:1,
+                      using:1, switch:1, when:1, with:1, continue:1 }
+
+-- Sérialise une valeur en chaîne de code MoonScript.
 -- indent : indentation courante (string de spaces)
 serialize_value = (v, indent) ->
   t = type v
   if t == "string"
+    -- string.format "%q" produit une chaîne entre guillemets valide aussi en
+    -- MoonScript (mêmes échappements que Lua).
     return string.format "%q", v
   elseif t == "number" or t == "boolean"
     return tostring v
@@ -30,26 +42,22 @@ serialize_value = (v, indent) ->
       table.sort keys, (a, b) -> tostring(a) < tostring(b)
       if #keys == 0
         return "{}"
-      -- Mots réservés Lua qui ne peuvent pas être utilisés comme identifiants nus
-      LUA_KEYWORDS = { and:1, break:1, do:1, else:1, elseif:1, end:1, false:1,
-                       for:1, ["function"]:1, goto:1, if:1, ["in"]:1, local:1, nil:1,
-                       not:1, or:1, repeat:1, ["return"]:1, then:1, true:1, until:1, while:1 }
       lines = {}
       for k in *keys
-        key_str = if type(k) == "string" and k\match("^[a-zA-Z_][a-zA-Z0-9_]*$") and not LUA_KEYWORDS[k]
+        key_str = if type(k) == "string" and k\match("^[a-zA-Z_][a-zA-Z0-9_]*$") and not RESERVED_KEYWORDS[k]
           k
         else
           "[" .. serialize_value(k, inner) .. "]"
-        lines[#lines + 1] = inner .. key_str .. " = " .. serialize_value(v[k], inner)
-      return "{\n" .. table.concat(lines, ",\n") .. "\n" .. indent .. "}"
+        lines[#lines + 1] = inner .. key_str .. ": " .. serialize_value(v[k], inner)
+      return "{\n" .. table.concat(lines, "\n") .. "\n" .. indent .. "}"
   else
     return "nil"
 
---- Sérialise une table de configuration en code Lua évaluable.
+--- Sérialise une table de configuration en code MoonScript évaluable.
 -- @tparam  table  cfg  Table de configuration
--- @treturn string      Code Lua (return { ... }\n)
+-- @treturn string      Code MoonScript ({ ... }\n)
 serialize_config = (cfg) ->
-  "return " .. serialize_value(cfg, "") .. "\n"
+  serialize_value(cfg, "") .. "\n"
 
 --- Écrit la configuration dans un fichier de manière atomique.
 -- Utilise un fichier temporaire + rename pour garantir l'atomicité.

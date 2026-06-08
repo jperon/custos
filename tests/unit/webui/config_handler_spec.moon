@@ -13,7 +13,9 @@ write_cfg = (cfg) ->
 -- parse_form et build_section sont locales ; on les teste via les handlers.
 { :handle_config_index,
   :handle_config_section_get,
-  :handle_config_section_post } = require "webui.handlers.config"
+  :handle_config_section_post,
+  :handle_filter_general_get,
+  :handle_filter_general_post } = require "webui.handlers.config"
 
 make_state = ->
   { config_path: CFG_PATH }
@@ -141,3 +143,69 @@ describe "webui/handlers/config", ->
       handle_config_section_post make_req("POST", body_str), "nfqueue", make_state!
       loaded = (read_config CFG_PATH)
       assert.equals "2-3", loaded.nfqueue.questions
+
+  -- ── handle_filter_general (SafeSearch, YouTube, listes…) ────────────────
+
+  describe "handle_config_index — liens filtre", ->
+
+    it "expose un lien vers la page Général du filtre", ->
+      _, _, body = handle_config_index make_req("GET"), make_state!
+      assert.truthy body\find("/admin/config/filter/general", 1, true)
+
+  describe "handle_filter_general_get", ->
+
+    it "retourne 200 et expose le champ SafeSearch", ->
+      status, hdrs, body = handle_filter_general_get make_req("GET"), make_state!
+      assert.equals 200, status
+      assert.equals "text/html; charset=UTF-8", hdrs["Content-Type"]
+      assert.truthy body\find("SafeSearch", 1, true)
+      assert.truthy body\find("safe_search", 1, true)
+      assert.truthy body\find("youtube_restrict", 1, true)
+
+    it "n'expose pas les dictionnaires nommés ni les règles", ->
+      _, _, body = handle_filter_general_get make_req("GET"), make_state!
+      -- name="nets" / "rules" ne doivent pas apparaître comme champs de formulaire
+      assert.falsy body\find('name="nets"', 1, true)
+      assert.falsy body\find('name="rules"', 1, true)
+
+    it "retourne 500 si config_path invalide", ->
+      state = { config_path: "/nonexistent/file.lua" }
+      status, _, _ = handle_filter_general_get make_req("GET"), state
+      assert.equals 500, status
+
+  describe "handle_filter_general_post", ->
+
+    it "persiste safe_search=false (case décochée)", ->
+      -- form sans safe_search → false ; les autres champs présents
+      body_str = "youtube_restrict=moderate"
+      status, hdrs = handle_filter_general_post make_req("POST", body_str), make_state!
+      assert.equals 302, status
+      assert.truthy hdrs["Location"]\find("filter-general", 1, true)
+      loaded = (read_config CFG_PATH)
+      assert.is_false loaded.filter.safe_search
+
+    it "persiste safe_search=true et youtube_restrict", ->
+      body_str = "safe_search=1&youtube_restrict=strict"
+      handle_filter_general_post make_req("POST", body_str), make_state!
+      loaded = (read_config CFG_PATH)
+      assert.is_true loaded.filter.safe_search
+      assert.equals "strict", loaded.filter.youtube_restrict
+
+    it "ne détruit pas les règles ni les dictionnaires nommés du filtre", ->
+      write_cfg {
+        filter: {
+          rules: { { description: "r1", actions: { "allow" } } }
+          nets:  { lan: { "192.168.0.0/16" } }
+          safe_search: true
+        }
+      }
+      body_str = "safe_search=1&youtube_restrict=moderate"
+      handle_filter_general_post make_req("POST", body_str), make_state!
+      loaded = (read_config CFG_PATH)
+      assert.equals "r1", loaded.filter.rules[1].description
+      assert.equals "192.168.0.0/16", loaded.filter.nets.lan[1]
+
+    it "retourne 500 si config_path invalide", ->
+      state = { config_path: "/nonexistent/file.lua" }
+      status, _, _ = handle_filter_general_post make_req("POST", "safe_search=1"), state
+      assert.equals 500, status

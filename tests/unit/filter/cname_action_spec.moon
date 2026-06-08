@@ -132,6 +132,52 @@ describe "filter.actions.cname", ->
     package.loaded["doh.upstream"] = old_upstream
     assert.is_true ok, err
 
+  it "réutilise les A/AAAA déjà présents dans la réponse upstream (pas de re-résolution)", ->
+    old_upstream = package.loaded["doh.upstream"]
+    old_cname_mod = package.loaded["filter.actions.cname"]
+
+    query_count = 0
+    package.loaded["doh.upstream"] = {
+      new_client: (ip, port, timeout_ms) -> { fd: 1, :ip, :port, :timeout_ms }
+      query: (client, raw) ->
+        query_count += 1
+        nil, "should not be called"
+      close: (client) -> nil
+    }
+
+    -- Réponse upstream type dnsforfamily : google.com CNAME forcesafesearch + A.
+    make_upstream_response = ->
+      resp = dns_mod.new {
+        header: dns_mod.new_header id: 0x1234, qr: true, rd: true, ra: true
+        questions: {{ qname: encode_dns_name("google.com"), qtype: 1, qclass: 1 }}
+        answers: {
+          { rname: string.char(0xC0, 0x0C), rtype: dns_mod.types.CNAME, rclass: 1, ttl: 300, rdata: encode_dns_name "forcesafesearch.google.com" }
+          { rname: encode_dns_name("forcesafesearch.google.com"), rtype: dns_mod.types.A, rclass: 1, ttl: 1558, rdata: string.char(216, 239, 38, 120) }
+        }
+      }
+      tostring resp
+
+    package.loaded["filter.actions.cname"] = nil
+    ok, err = pcall ->
+      local_factory = (require "filter.actions.cname").factory
+      action = (local_factory {}) { cname: "forcesafesearch.google.com" }
+      ctx = { dns_raw: make_upstream_response!, modified: false, skip_nft: false, reason: "r" }
+      action.on_response ctx
+
+      assert.equals 0, query_count   -- aucune re-résolution UDP
+      assert.is_true ctx.modified
+      assert.is_false ctx.skip_nft
+      assert.equals "response_cname_resolved", ctx.action_label
+      parsed = dns_mod.parse ctx.dns_raw, 1, false
+      assert.equals 2, parsed.header.ancount
+      assert.equals dns_mod.types.CNAME, parsed.answers[1].rtype
+      assert.equals dns_mod.types.A, parsed.answers[2].rtype
+      assert.equals string.char(216, 239, 38, 120), parsed.answers[2].rdata
+
+    package.loaded["filter.actions.cname"] = old_cname_mod
+    package.loaded["doh.upstream"] = old_upstream
+    assert.is_true ok, err
+
   it "cache négatif : un résolveur qui timeout n'est plus re-sollicité", ->
     old_upstream  = package.loaded["doh.upstream"]
     old_cname_mod = package.loaded["filter.actions.cname"]

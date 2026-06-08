@@ -774,8 +774,14 @@ sous-domaine étranger (ex. `mail.google.com`) traverse donc le filtre sans êtr
 réécrit. Pour une règle `cname` manuelle sans `cname_names`, le comportement
 historique s'applique (tout nom matché est réécrit).
 
-Le filtre répond par un enregistrement **CNAME** et, si la résolution upstream de
-la cible réussit, peut enrichir la réponse avec des RR `A`/`AAAA` (TTL borné).
+Le filtre répond par un enregistrement **CNAME** enrichi de RR `A`/`AAAA`
+(TTL borné). Pour obtenir ces adresses, l'action réutilise en priorité les
+`A`/`AAAA` de la cible **déjà présents dans la réponse upstream** (cas fréquent :
+un résolveur amont — y compris DoH — qui applique lui-même SafeSearch renvoie
+directement `forcesafesearch.google.com A …`). Si la cible n'y figure pas, elle
+retombe sur une résolution directe en UDP/53 vers `doh.upstream_ipv4/ipv6`. Cette
+priorité évite une requête redondante et fonctionne même quand l'upstream est
+DoH-only ou que l'IPv6 amont est injoignable.
 Le mécanisme passe par le callback `on_response` des actions : il couvre le DNS
 clair **UDP et TCP** ainsi que le **DoH transitant par le worker doh** de Custos.
 Mode YouTube réglable via `youtube_restrict`
