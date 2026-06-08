@@ -56,12 +56,14 @@ handle_rules_list = (req, state) ->
   for i, rule in ipairs rules
     desc, conds_str, acts_str = rule_summary rule
     cond_cell = if conds_str ~= "" then conds_str else H.em "(toujours)"
-    btn_move = H.form { method: "POST", action: "/admin/config/filter/rules/#{i}/move", style: "display:inline" },
+    btn_move = H.form { method: "POST", action: "/admin/config/filter/rules/#{i}/move", style: "display:inline" }, {
       H.button({ type: "submit", name: "dir", value: "up",   class: "btn btn-secondary btn-sm" }, "↑") ..
       H.button({ type: "submit", name: "dir", value: "down", class: "btn btn-secondary btn-sm" }, "↓")
-    btn_del  = H.form { method: "POST", action: "/admin/config/filter/rules/#{i}/delete", style: "display:inline" },
+    }
+    btn_del  = H.form { method: "POST", action: "/admin/config/filter/rules/#{i}/delete", style: "display:inline" }, {
       H.button { type: "submit", class: "btn btn-danger btn-sm",
                  onclick: "return confirm('Supprimer ?')" }, "✕"
+    }
     btn_edit = H.a { class: "btn btn-secondary btn-sm", href: "/admin/config/filter/rules/#{i}/edit" }, "Éditer"
     rows ..= H.tr {
       H.td tostring(i)
@@ -173,11 +175,12 @@ render_action_select = (prefix, current_type, current_opts) ->
     rr_val = if type(current_opts) == "table" then current_opts.rr_type or "A" else "A"
     extra = H.div {
       H.label "Type d'enregistrement à supprimer"
-      H.select { name: prefix .. "[rr_type]" },
+      H.select { name: prefix .. "[rr_type]" }, {
         H.option { value: "A",     selected: rr_val == "A"     and "selected" or nil }, "A (IPv4)"
         H.option { value: "AAAA",  selected: rr_val == "AAAA"  and "selected" or nil }, "AAAA (IPv6)"
         H.option { value: "CNAME", selected: rr_val == "CNAME" and "selected" or nil }, "CNAME"
         H.option { value: "MX",    selected: rr_val == "MX"    and "selected" or nil }, "MX"
+      }
     }
   elseif current_type == "log"
     msg_val = if type(current_opts) == "table" then current_opts.log_msg or "" else ""
@@ -276,10 +279,11 @@ render_rule_form = (action_url, rule) ->
     render_action_select "action", action_type, action_opts
   }
 
-  buttons = H.div { style: "margin-top:1rem" },
+  buttons = H.div { style: "margin-top:1rem" }, {
     H.button({ type: "submit" }, "Enregistrer") ..
     " " ..
     H.a({ class: "btn btn-secondary", href: "/admin/config/filter/rules" }, "Annuler")
+  }
 
   body_html = desc_html ..
     H.h3("Conditions — toutes en AND") ..

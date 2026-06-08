@@ -416,39 +416,41 @@ handle_decision_get = function(req, state)
     H.form({
       method = "POST",
       action = "/admin/config/filter/decision"
-    }, H.div({
-      H.label("Première règle gagne (first-match)"),
-      H.input({
-        type = "checkbox",
-        name = "fmw",
-        value = "1",
-        checked = (d.first_match_wins ~= false) and "checked" or nil
+    }, {
+      H.div({
+        H.label("Première règle gagne (first-match)"),
+        H.input({
+          type = "checkbox",
+          name = "fmw",
+          value = "1",
+          checked = (d.first_match_wins ~= false) and "checked" or nil
+        }),
+        H.input({
+          type = "hidden",
+          name = "fmw_present",
+          value = "1"
+        })
       }),
-      H.input({
-        type = "hidden",
-        name = "fmw_present",
-        value = "1"
-      })
-    })),
-    H.div({
-      H.label("Continuer après match"),
-      H.input({
-        type = "checkbox",
-        name = "ctn",
-        value = "1",
-        checked = d.continue_to_next_rule and "checked" or nil
+      H.div({
+        H.label("Continuer après match"),
+        H.input({
+          type = "checkbox",
+          name = "ctn",
+          value = "1",
+          checked = d.continue_to_next_rule and "checked" or nil
+        }),
+        H.input({
+          type = "hidden",
+          name = "ctn_present",
+          value = "1"
+        })
       }),
-      H.input({
-        type = "hidden",
-        name = "ctn_present",
-        value = "1"
-      })
-    }),
-    H.div({
-      style = "margin-top:.75rem"
-    }, H.button({
-      type = "submit"
-    }, "Enregistrer"))
+      H.div({
+        style = "margin-top:.75rem"
+      }, H.button({
+        type = "submit"
+      }, "Enregistrer"))
+    })
   })
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"

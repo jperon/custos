@@ -138,10 +138,11 @@ handle_lists_type = (req, type_name, state) ->
       H.td { H.a { href: "/admin/config/filter/lists/#{type_name}/#{n}" }, n .. ".txt" }
       H.td {
         H.form { method: "POST", action: "/admin/config/filter/lists/#{type_name}/#{n}",
-                 style: "display:inline" },
+                 style: "display:inline" }, {
           H.input { type: "hidden", name: "action", value: "delete" }
           H.button { type: "submit", class: "btn btn-danger btn-sm",
                      onclick: "return confirm('Supprimer ?')" }, "✕"
+        }
       }
     }
 
@@ -158,8 +159,9 @@ handle_lists_type = (req, type_name, state) ->
     H.p { H.a { class: "btn btn-secondary", href: "/admin/config/filter/lists/#{type_name}/new" },
           "+ Nouvelle liste" }
     tbl
-    H.p { style: "margin-top:1rem" },
+    H.p { style: "margin-top:1rem" }, {
       H.a { class: "btn btn-secondary", href: "/admin/config/filter/lists" }, "← Retour"
+    }
   }
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Listes — #{type_name}", body
 
@@ -245,7 +247,7 @@ handle_list_new_get = (req, type_name, state) ->
   return 400, {}, "Type invalide" unless valid_type type_name
   body = H.section {
     H.h2 "Nouvelle liste — #{type_name}"
-    H.form { method: "POST", action: "/admin/config/filter/lists/#{type_name}/new" },
+    H.form { method: "POST", action: "/admin/config/filter/lists/#{type_name}/new" }, {
       H.div {
         H.label "Nom (lettres, chiffres, - et _ uniquement)"
         H.input { type: "text", name: "name", placeholder: "ex: famille", required: "required" }
@@ -255,11 +257,13 @@ handle_list_new_get = (req, type_name, state) ->
         H.textarea { name: "content", rows: "10",
                      style: "font-family:monospace;width:100%;margin-top:.25rem" }, ""
       }
-      H.div { style: "margin-top:.75rem" },
+      H.div { style: "margin-top:.75rem" }, {
         H.button { type: "submit" }, "Créer"
         " "
         H.a { class: "btn btn-secondary",
               href: "/admin/config/filter/lists/#{type_name}" }, "Annuler"
+      }
+    }
   }
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Nouvelle liste — #{type_name}", body
 

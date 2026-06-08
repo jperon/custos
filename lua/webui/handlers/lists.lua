@@ -207,16 +207,18 @@ handle_lists_type = function(req, type_name, state)
           method = "POST",
           action = "/admin/config/filter/lists/" .. tostring(type_name) .. "/" .. tostring(n),
           style = "display:inline"
-        }, H.input({
-          type = "hidden",
-          name = "action",
-          value = "delete"
-        })),
-        H.button({
-          type = "submit",
-          class = "btn btn-danger btn-sm",
-          onclick = "return confirm('Supprimer ?')"
-        }, "✕")
+        }, {
+          H.input({
+            type = "hidden",
+            name = "action",
+            value = "delete"
+          }),
+          H.button({
+            type = "submit",
+            class = "btn btn-danger btn-sm",
+            onclick = "return confirm('Supprimer ?')"
+          }, "✕")
+        })
       })
     })
   end
@@ -244,10 +246,12 @@ handle_lists_type = function(req, type_name, state)
     tbl,
     H.p({
       style = "margin-top:1rem"
-    }, H.a({
-      class = "btn btn-secondary",
-      href = "/admin/config/filter/lists"
-    }, "← Retour"))
+    }, {
+      H.a({
+        class = "btn btn-secondary",
+        href = "/admin/config/filter/lists"
+      }, "← Retour")
+    })
   })
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
@@ -388,33 +392,37 @@ handle_list_new_get = function(req, type_name, state)
     H.form({
       method = "POST",
       action = "/admin/config/filter/lists/" .. tostring(type_name) .. "/new"
-    }, H.div({
-      H.label("Nom (lettres, chiffres, - et _ uniquement)"),
-      H.input({
-        type = "text",
-        name = "name",
-        placeholder = "ex: famille",
-        required = "required"
+    }, {
+      H.div({
+        H.label("Nom (lettres, chiffres, - et _ uniquement)"),
+        H.input({
+          type = "text",
+          name = "name",
+          placeholder = "ex: famille",
+          required = "required"
+        })
+      }),
+      H.div({
+        H.label("Contenu (un élément par ligne)"),
+        H.textarea({
+          name = "content",
+          rows = "10",
+          style = "font-family:monospace;width:100%;margin-top:.25rem"
+        }, "")
+      }),
+      H.div({
+        style = "margin-top:.75rem"
+      }, {
+        H.button({
+          type = "submit"
+        }, "Créer"),
+        " ",
+        H.a({
+          class = "btn btn-secondary",
+          href = "/admin/config/filter/lists/" .. tostring(type_name)
+        }, "Annuler")
       })
-    })),
-    H.div({
-      H.label("Contenu (un élément par ligne)"),
-      H.textarea({
-        name = "content",
-        rows = "10",
-        style = "font-family:monospace;width:100%;margin-top:.25rem"
-      }, "")
-    }),
-    H.div({
-      style = "margin-top:.75rem"
-    }, H.button({
-      type = "submit"
-    }, "Créer")),
-    " ",
-    H.a({
-      class = "btn btn-secondary",
-      href = "/admin/config/filter/lists/" .. tostring(type_name)
-    }, "Annuler")
+    })
   })
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"

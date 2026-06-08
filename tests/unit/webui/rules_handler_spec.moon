@@ -53,6 +53,13 @@ describe "webui/handlers/rules", ->
       assert.truthy body\find("edit", 1, true) or body\find("diter", 1, true)
       assert.truthy body\find("delete", 1, true) or body\find("Supprimer", 1, true)
 
+    it "le bouton de suppression est dans le formulaire", ->
+      _, _, body = handle_rules_list make_req("GET"), make_state!
+      pos_btn = body\find("✕", 1, true)
+      pos_form = body\find("</form>", pos_btn, true)
+      assert.truthy pos_btn
+      assert.truthy pos_form
+
     it "retourne 500 si config_path invalide", ->
       state = { config_path: "/nonexistent/file.lua" }
       status, _, _ = handle_rules_list make_req("GET"), state

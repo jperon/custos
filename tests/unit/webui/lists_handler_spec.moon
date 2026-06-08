@@ -81,6 +81,13 @@ describe "webui/handlers/lists", ->
       _, _, body = handle_lists_type make_req("GET"), "net", make_state!
       assert.truthy body\find("Aucune", 1, true)
 
+    it "le bouton de suppression est dans le formulaire", ->
+      _, _, body = handle_lists_type make_req("GET"), "domain", make_state!
+      pos_btn = body\find("✕", 1, true)
+      pos_form = body\find("</form>", pos_btn, true)
+      assert.truthy pos_btn
+      assert.truthy pos_form
+
   -- ── handle_list_get ───────────────────────────────────────────────────
 
   describe "handle_list_get", ->
@@ -208,6 +215,13 @@ describe "webui/handlers/lists", ->
     it "retourne 400 pour un type invalide", ->
       status, _, _ = handle_list_new_get make_req("GET"), "BAD!", make_state!
       assert.equals 400, status
+
+    it "le bouton Créer est dans le formulaire", ->
+      _, _, body = handle_list_new_get make_req("GET"), "domain", make_state!
+      pos_btn = body\find("Créer", 1, true)
+      pos_form = body\find("</form>", pos_btn, true)
+      assert.truthy pos_btn
+      assert.truthy pos_form
 
   -- ── handle_list_new_post ──────────────────────────────────────────────
 

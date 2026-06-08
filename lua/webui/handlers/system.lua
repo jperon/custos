@@ -57,9 +57,11 @@ handle_status = function(req, state)
     H.form({
       method = "POST",
       action = "/admin/system/reload"
-    }, H.button({
-      type = "submit"
-    }, "Recharger la configuration")),
+    }, {
+      H.button({
+        type = "submit"
+      }, "Recharger la configuration")
+    }),
     " ",
     H.a({
       href = "/admin/"

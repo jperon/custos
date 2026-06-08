@@ -151,8 +151,7 @@ render_filter_general_details = (filter_schema, current) ->
     fields_html ..= render_field k, field, current[k]
   save_btn   = H.div { style: "margin-top:.75rem" },
     H.button { type: "submit" }, "Enregistrer"
-  form_html  = H.form { method: "POST", action: "/admin/config/filter/general" },
-    fields_html .. save_btn
+  form_html  = H.form { method: "POST", action: "/admin/config/filter/general" }, fields_html .. save_btn
   summary    = H.summary "Filtre — Général (SafeSearch, YouTube, listes, domaines autorisés…)"
   H.details { id: "section-filter-general" }, summary .. form_html
 

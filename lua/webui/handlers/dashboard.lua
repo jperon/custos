@@ -27,9 +27,11 @@ nav_html = function()
       method = "POST",
       action = "/admin/system/reload",
       class = "nav-reload"
-    }, H.button({
-      type = "submit"
-    }, "Recharger maintenant"))
+    }, {
+      H.button({
+        type = "submit"
+      }, "Recharger maintenant")
+    })
   })
 end
 local page

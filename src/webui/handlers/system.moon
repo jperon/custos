@@ -39,8 +39,9 @@ handle_status = (req, state) ->
   }
   s2 = H.section {
     H.h2 "Actions"
-    H.form { method: "POST", action: "/admin/system/reload" },
+    H.form { method: "POST", action: "/admin/system/reload" }, {
       H.button { type: "submit" }, "Recharger la configuration"
+    }
     " "
     H.a { href: "/admin/" }, "← Tableau de bord"
   }

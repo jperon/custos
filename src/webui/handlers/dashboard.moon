@@ -13,8 +13,9 @@ nav_html = ->
     H.a { href: "/admin/config/" }, "Configuration"
     H.a { href: "/admin/system/status" }, "Statut"
     H.a { href: "/admin/logout" }, "Déconnexion"
-    H.form { method: "POST", action: "/admin/system/reload", class: "nav-reload" },
+    H.form { method: "POST", action: "/admin/system/reload", class: "nav-reload" }, {
       H.button { type: "submit" }, "Recharger maintenant"
+    }
   }
 
 page = (title, body_content) ->

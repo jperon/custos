@@ -87,26 +87,30 @@ handle_rules_list = function(req, state)
       method = "POST",
       action = "/admin/config/filter/rules/" .. tostring(i) .. "/move",
       style = "display:inline"
-    }, H.button({
-      type = "submit",
-      name = "dir",
-      value = "up",
-      class = "btn btn-secondary btn-sm"
-    }, "↑") .. H.button({
-      type = "submit",
-      name = "dir",
-      value = "down",
-      class = "btn btn-secondary btn-sm"
-    }, "↓"))
+    }, {
+      H.button({
+        type = "submit",
+        name = "dir",
+        value = "up",
+        class = "btn btn-secondary btn-sm"
+      }, "↑") .. H.button({
+        type = "submit",
+        name = "dir",
+        value = "down",
+        class = "btn btn-secondary btn-sm"
+      }, "↓")
+    })
     local btn_del = H.form({
       method = "POST",
       action = "/admin/config/filter/rules/" .. tostring(i) .. "/delete",
       style = "display:inline"
-    }, H.button({
-      type = "submit",
-      class = "btn btn-danger btn-sm",
-      onclick = "return confirm('Supprimer ?')"
-    }, "✕"))
+    }, {
+      H.button({
+        type = "submit",
+        class = "btn btn-danger btn-sm",
+        onclick = "return confirm('Supprimer ?')"
+      }, "✕")
+    })
     local btn_edit = H.a({
       class = "btn btn-secondary btn-sm",
       href = "/admin/config/filter/rules/" .. tostring(i) .. "/edit"
@@ -322,22 +326,24 @@ render_action_select = function(prefix, current_type, current_opts)
       H.label("Type d'enregistrement à supprimer"),
       H.select({
         name = prefix .. "[rr_type]"
-      }, H.option({
-        value = "A",
-        selected = rr_val == "A" and "selected" or nil
-      }, "A (IPv4)")),
-      H.option({
-        value = "AAAA",
-        selected = rr_val == "AAAA" and "selected" or nil
-      }, "AAAA (IPv6)"),
-      H.option({
-        value = "CNAME",
-        selected = rr_val == "CNAME" and "selected" or nil
-      }, "CNAME"),
-      H.option({
-        value = "MX",
-        selected = rr_val == "MX" and "selected" or nil
-      }, "MX")
+      }, {
+        H.option({
+          value = "A",
+          selected = rr_val == "A" and "selected" or nil
+        }, "A (IPv4)"),
+        H.option({
+          value = "AAAA",
+          selected = rr_val == "AAAA" and "selected" or nil
+        }, "AAAA (IPv6)"),
+        H.option({
+          value = "CNAME",
+          selected = rr_val == "CNAME" and "selected" or nil
+        }, "CNAME"),
+        H.option({
+          value = "MX",
+          selected = rr_val == "MX" and "selected" or nil
+        }, "MX")
+      })
     })
   elseif current_type == "log" then
     local msg_val
@@ -428,12 +434,14 @@ render_rule_form = function(action_url, rule)
   })
   local buttons = H.div({
     style = "margin-top:1rem"
-  }, H.button({
-    type = "submit"
-  }, "Enregistrer") .. " " .. H.a({
-    class = "btn btn-secondary",
-    href = "/admin/config/filter/rules"
-  }, "Annuler"))
+  }, {
+    H.button({
+      type = "submit"
+    }, "Enregistrer") .. " " .. H.a({
+      class = "btn btn-secondary",
+      href = "/admin/config/filter/rules"
+    }, "Annuler")
+  })
   local body_html = desc_html .. H.h3("Conditions — toutes en AND") .. cond_tpl .. cond_table .. add_btn .. H.h3("Action") .. action_html .. buttons .. H.script(js)
   return H.form({
     method = "POST",

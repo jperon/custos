@@ -226,7 +226,7 @@ handle_decision_get = (req, state) ->
   d = (cfg.filter or {}).decision or {}
   body = H.section {
     H.h2 "Politique de décision"
-    H.form { method: "POST", action: "/admin/config/filter/decision" },
+    H.form { method: "POST", action: "/admin/config/filter/decision" }, {
       H.div {
         H.label "Première règle gagne (first-match)"
         H.input { type: "checkbox", name: "fmw", value: "1", checked: (d.first_match_wins != false) and "checked" or nil }
@@ -239,6 +239,7 @@ handle_decision_get = (req, state) ->
       }
       H.div { style: "margin-top:.75rem" },
         H.button { type: "submit" }, "Enregistrer"
+    }
   }
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Filtre — Décision", body
 
