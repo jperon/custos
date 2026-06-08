@@ -216,8 +216,11 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   log_info -> { action: "server_login_success", user: user, mac: mac, ip: peer_ip }
 
   idle_timeout = state.auth_cfg.idle_timeout or 120
+  token_grace_period = state.auth_cfg.token_grace_period or 180
   now = os.time!
-  add_session sessions, mac, peer_ip, user, now + idle_timeout
+  session_expires = now + idle_timeout
+  token_expires = session_expires + token_grace_period
+  add_session sessions, mac, peer_ip, user, session_expires
   ok, err = write_sessions sessions, state.sessions_file
   unless ok
     log_warn -> { action: "server_sessions_write_failed", path: state.sessions_file, err: err }
@@ -260,7 +263,7 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     unless ok
       log_warn -> { action: "server_auth_set_add_failed", rule_id: rule_id, mac: mac, ip: peer_ip, err: tostring(err) }
 
-  tok = token.generate "user", user, mac, now + idle_timeout, state.token_key
+  tok = token.generate "user", user, mac, token_expires, state.token_key
   admin_users = state.admin_users or {}
   user_in_admin = false
   for _, u in ipairs admin_users
@@ -283,8 +286,10 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
   user = p.user
   mac  = p.mac
   idle_timeout = state.auth_cfg.idle_timeout or 120
+  token_grace_period = state.auth_cfg.token_grace_period or 180
   now  = os.time!
-  new_expires = now + idle_timeout
+  session_expires = now + idle_timeout
+  token_expires = session_expires + token_grace_period
 
   sessions = load_sessions state.sessions_file
   purge_expired sessions
@@ -295,12 +300,12 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
     log_info -> { action: "server_ping_session_invalidated", peer_ip: peer_ip, mac: mac }
     return 401, {}, ""
 
-  add_session sessions, mac, peer_ip, user, new_expires
+  add_session sessions, mac, peer_ip, user, session_expires
   write_sessions sessions, state.sessions_file
 
   refresh_nft state.nft_sess, peer_ip, mac, idle_timeout, user
 
-  new_tok = token.generate "user", user, mac, new_expires, state.token_key
+  new_tok = token.generate "user", user, mac, token_expires, state.token_key
   log_info -> { action: "server_ping_success", peer_mac: mac }
   204, { ["Set-Cookie"]: make_session_cookie new_tok }, ""
 

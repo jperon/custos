@@ -369,6 +369,7 @@ Portail captif et authentification des utilisateurs.
 | `sessions_file` | string | `"/tmp/sessions.lua"` | Fichier de persistance des sessions |
 | `heartbeat_interval` | int | `30` | Intervalle (s) entre heartbeats client |
 | `idle_timeout` | int | `120` | Inactivité maximale (s) avant déconnexion |
+| `token_grace_period` | int | `180` | Marge (s) ajoutée à la durée de vie du cookie `custos_session` au-delà de `idle_timeout` ; couvre les retards réseau et le throttling navigateur |
 | `register_rate_limit` | int | `3` | Enregistrements maximum par fenêtre |
 | `register_rate_window` | int | `300` | Fenêtre de rate-limiting (s) |
 | `bridge_ifname` | string | `"br0"` | Nom de l'interface bridge (utilisé pour la détection MAC) |

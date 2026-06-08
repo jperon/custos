@@ -271,6 +271,7 @@ DEFAULTS = {
     session_ttl: 0
     heartbeat_interval: 30
     idle_timeout: 120
+    token_grace_period: 180
     secrets: "/etc/custos/secrets"
     sessions_file: "/tmp/sessions.lua"
     admin_users: {}
@@ -504,6 +505,7 @@ normalize = (cfg) ->
   cfg.auth.session_ttl = tonumber(cfg.auth.session_ttl) or auth_defaults.session_ttl
   cfg.auth.heartbeat_interval = tonumber(cfg.auth.heartbeat_interval) or auth_defaults.heartbeat_interval
   cfg.auth.idle_timeout = tonumber(cfg.auth.idle_timeout) or auth_defaults.idle_timeout
+  cfg.auth.token_grace_period = tonumber(cfg.auth.token_grace_period) or auth_defaults.token_grace_period
   if cfg.sni.enabled == nil
     cfg.sni.enabled = sni_defaults.enabled
   else

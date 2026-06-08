@@ -296,6 +296,12 @@ return {
       label = "Timeout inactivité (s)",
       default = 120
     },
+    token_grace_period = {
+      type = "integer",
+      label = "Marge token (s)",
+      default = 180,
+      hint = "durée de vie du cookie au-delà du timeout inactivité"
+    },
     register_rate_limit = {
       type = "integer",
       label = "Inscriptions max / fenêtre",

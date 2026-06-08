@@ -358,8 +358,11 @@ handle_login = function(req, peer_ip, peer_mac, state)
     }
   end)
   local idle_timeout = state.auth_cfg.idle_timeout or 120
+  local token_grace_period = state.auth_cfg.token_grace_period or 180
   local now = os.time()
-  add_session(sessions, mac, peer_ip, user, now + idle_timeout)
+  local session_expires = now + idle_timeout
+  local token_expires = session_expires + token_grace_period
+  add_session(sessions, mac, peer_ip, user, session_expires)
   local err
   ok, err = write_sessions(sessions, state.sessions_file)
   if not (ok) then
@@ -491,7 +494,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
       break
     end
   end
-  local tok = token.generate("user", user, mac, now + idle_timeout, state.token_key)
+  local tok = token.generate("user", user, mac, token_expires, state.token_key)
   local admin_users = state.admin_users or { }
   local user_in_admin = false
   for _, u in ipairs(admin_users) do
@@ -529,8 +532,10 @@ handle_ping = function(req, peer_ip, peer_mac, state)
   local user = p.user
   local mac = p.mac
   local idle_timeout = state.auth_cfg.idle_timeout or 120
+  local token_grace_period = state.auth_cfg.token_grace_period or 180
   local now = os.time()
-  local new_expires = now + idle_timeout
+  local session_expires = now + idle_timeout
+  local token_expires = session_expires + token_grace_period
   local sessions = load_sessions(state.sessions_file)
   purge_expired(sessions)
   if mac and mac ~= "unknown" and not sessions[mac:lower()] then
@@ -543,10 +548,10 @@ handle_ping = function(req, peer_ip, peer_mac, state)
     end)
     return 401, { }, ""
   end
-  add_session(sessions, mac, peer_ip, user, new_expires)
+  add_session(sessions, mac, peer_ip, user, session_expires)
   write_sessions(sessions, state.sessions_file)
   refresh_nft(state.nft_sess, peer_ip, mac, idle_timeout, user)
-  local new_tok = token.generate("user", user, mac, new_expires, state.token_key)
+  local new_tok = token.generate("user", user, mac, token_expires, state.token_key)
   log_info(function()
     return {
       action = "server_ping_success",
