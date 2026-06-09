@@ -112,6 +112,14 @@ success_page = (auth_cfg, created_at, is_admin) ->
       var iv = #{interval} * 1000;
       var idle = #{idle_timeout} * 1000;
       var sessionStart = #{session_start};
+      var workerJs = \"self.onmessage = function(e) { \
+        if (e.data.type === 'start') { \
+          setInterval(function() { self.postMessage({type: 'tick'}); }, e.data.interval); \
+          setTimeout(function() { self.postMessage({type: 'tick'}); }, 3000); \
+        } \
+        if (e.data.type === 'visible') { self.postMessage({type: 'tick'}); } \
+      }\";
+      var worker = new Worker(URL.createObjectURL(new Blob([workerJs], {type: 'application/javascript'})));
       var lastSuccess = Date.now();
       function ping(){
         fetch('/ping',{method:'GET',credentials:'same-origin'})
@@ -129,6 +137,10 @@ success_page = (auth_cfg, created_at, is_admin) ->
             }
           });
       }
+      worker.onmessage = function(e) {
+        if (e.data.type === 'tick') ping();
+      };
+      worker.postMessage({type: 'start', interval: iv});
       function updateTimer(){
         var now = Math.floor(Date.now() / 1000);
         var elapsed = now - sessionStart;
@@ -144,18 +156,11 @@ success_page = (auth_cfg, created_at, is_admin) ->
         var el = document.getElementById('session-timer');
         if (el) el.textContent = 'Session ouverte depuis : ' + txt;
       }
-      setInterval(ping, iv);
       setInterval(updateTimer, 10000);
-      setTimeout(ping, 3000);
       updateTimer();
-      // Envoyer un ping immédiat au retour en foreground (anti-throttling navigateur).
       document.addEventListener('visibilitychange', function(){
-        if (document.visibilityState === 'visible') ping();
+        if (document.visibilityState === 'visible') worker.postMessage({type: 'visible'});
       });
-      // Déconnexion explicite à la fermeture du navigateur / de l'onglet.
-      // sendBeacon est envoyé de manière garantie même pendant le déchargement.
-      // pagehide est plus fiable que beforeunload sur mobile (iOS Safari).
-      // On ne déconnecte pas si la page est mise en BFCache (event.persisted).
       function logout(){
         if (navigator.sendBeacon) {
           navigator.sendBeacon('/logout');

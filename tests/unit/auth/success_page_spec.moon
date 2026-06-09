@@ -43,3 +43,11 @@ describe "auth.pages.success_page", ->
   it "session_start est injecté dans le JS", ->
     html = success_page cfg_base, 1234567890, false
     assert.truthy html\find("1234567890", 1, true)
+
+  it "délègue le ping à un web worker inline", ->
+    html = success_page cfg_base, os.time!, false
+    assert.truthy html\find("Worker", 1, true)
+    assert.truthy html\find("workerJs", 1, true)
+    assert.truthy html\find("postMessage", 1, true)
+    assert.truthy html\find("tick", 1, true)
+    assert.truthy html\find("fetch('/ping'", 1, true)
