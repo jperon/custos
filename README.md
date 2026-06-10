@@ -286,7 +286,7 @@ opkg install luajit lpeg libnetfilter-queue nftables \
 
 ## Installation
 
-### Déploiement sur OpenWrt
+### Deployment on OpenWrt
 
 ```bash
 git clone <repo> custos
@@ -299,20 +299,20 @@ make
 make test
 
 # Deploy to OpenWrt router via SSH
-luajit install-owrt.lua root@<routeur>
+luajit install-owrt.lua root@<router>
 ```
 
-L'installeur (`install-owrt.moon`) :
-1. Installe les paquets opkg requis
-2. Déploie les fichiers Lua + ruleset dans `/usr/share/custos/` (configurable via `--dest`)
-3. Installe la config dans `/etc/custos/`, le service `/etc/init.d/custos` et `custos-update` (+ cron)
-4. Démarre le service
+The installer (`install-owrt.moon`):
+1. Installs required opkg packages
+2. Deploys Lua files + ruleset to `/usr/share/custos/` (configurable via `--dest`)
+3. Installs config in `/etc/custos/`, the service `/etc/init.d/custos`, and `custos-update` (+ cron)
+4. Starts the service
 
-Les fichiers de listes enfants/adultes (`lists/user/{enfants,adultes}.txt`,
-`lists/{enfants_allow,adultes_block}.txt`) ne sont créés vides que lors d'une
-**nouvelle installation** (quand `/etc/custos/config.moon` est absent). Si la
-config préexiste, ces listes ne sont pas (re)créées : l'utilisateur garde sa
-politique et peut tout-à-fait choisir de ne pas les utiliser.
+The children/adults list files (`lists/user/{enfants,adultes}.txt`,
+`lists/{enfants_allow,adultes_block}.txt`) are only created empty during a
+**new installation** (when `/etc/custos/config.moon` is absent). If the
+config preexists, these lists are not (re)created: the user keeps their
+policy and can choose not to use them.
 
 ---
 
@@ -353,64 +353,52 @@ make reload   # envoie SIGHUP aux workers (rechargement à chaud)
 
 ---
 
-## Listes de conditions (`lists_dir`)
+## Condition Lists (`lists_dir`)
 
-Il existe deux systèmes de listes distincts selon le type de condition :
+There are two distinct list systems depending on the condition type:
 
-| Système | Conditions | Format | Évaluation |
-|---------|-----------|--------|------------|
-| `domainlists_dir` + `custos-update` | `to_domainlist`, `to_domainlists` | binaire (xxhash64 triés) | O(log n) FFI userspace |
-| `lists_dir` (plain text) | `from_xxx_list`, `from_xxx_lists` | texte (1 item/ligne) | kernel nft (interval tree / hash) |
+| System | Conditions | Format | Evaluation |
+|--------|-----------|--------|------------|
+| `domainlists_dir` + `custos-update` | `to_domainlist`, `to_domainlists` | binary (sorted xxhash64) | O(log n) FFI userspace |
+| `lists_dir` (plain text) | `from_xxx_list`, `from_xxx_lists` | text (1 item/line) | kernel nft (interval tree / hash) |
 
-Les listes de domaines peuvent contenir des millions d'entrées et passent obligatoirement
-par `custos-update` pour être compilées en format binaire optimisé.
+Domain lists can contain millions of entries and must go through `custos-update` to be compiled into an optimized binary format.
 
-Les autres types de listes (réseaux, MACs, VLANs…) sont lus depuis des fichiers texte au
-démarrage, puis compilés en expressions nft d'ensemble inline (`ip saddr { cidr1, cidr2 }`)
-évaluées côté kernel. Nftables optimise ces ensembles via interval trees (CIDRs) ou hash
-maps (MACs, VLANs). Les listes d'utilisateurs restent worker-only (les sessions sont
-dynamiques et ne peuvent pas être exprimées en nft statique).
+Other list types (networks, MACs, VLANs…) are read from text files at startup, then compiled into inline nft set expressions (`ip saddr { cidr1, cidr2 }`) evaluated in the kernel. Nftables optimizes these sets via interval trees (CIDRs) or hash maps (MACs, VLANs). User lists remain worker-only (sessions are dynamic and cannot be expressed as static nft).
 
-Les variantes `from_xxx_list` et `from_xxx_lists` lisent des fichiers texte organisés
-par type dans un répertoire configurable :
+The `from_xxx_list` and `from_xxx_lists` variants read text files organized by type in a configurable directory:
 
 ```moonscript
 filter:
-  lists_dir: "/etc/custos/lists"   -- défaut : /etc/custos/lists
+  lists_dir: "/etc/custos/lists"   -- default: /etc/custos/lists
 ```
 
-### Convention de nommage
+### Naming Convention
 
-| Condition | Argument | Fichier lu |
-|-----------|----------|------------|
-| `from_net_list "lan"` | nom de liste | `{lists_dir}/net/lan.txt` |
-| `from_net_lists {"lan","dmz"}` | liste de noms | plusieurs fichiers |
-| `from_mac_list "trusted"` | nom de liste | `{lists_dir}/mac/trusted.txt` |
-| `from_user_list "admins"` | nom de liste | `{lists_dir}/user/admins.txt` |
-| `from_vlan_list "corp"` | nom de liste | `{lists_dir}/vlan/corp.txt` |
-| `from_in_time_list "biz"` | nom de liste | `{lists_dir}/in_time/biz.txt` |
+| Condition | Argument | File Read |
+|-----------|----------|-----------|
+| `from_net_list "lan"` | list name | `{lists_dir}/net/lan.txt` |
+| `from_net_lists {"lan","dmz"}` | list of names | multiple files |
+| `from_mac_list "trusted"` | list name | `{lists_dir}/mac/trusted.txt` |
+| `from_user_list "admins"` | list name | `{lists_dir}/user/admins.txt` |
+| `from_vlan_list "corp"` | list name | `{lists_dir}/vlan/corp.txt` |
+| `from_in_time_list "biz"` | list name | `{lists_dir}/in_time/biz.txt` |
 
-Format des fichiers : 1 item valide par ligne, lignes vides et `#commentaires` ignorés.
+File format: 1 valid item per line, empty lines and `#comments` are ignored.
 
-### Auto-génération des variantes
+### Auto-generated Variants
 
-Le chargeur `compiler_api` génère automatiquement les variantes à partir de la
-condition atomique `from_xxx` :
+The `compiler_api` loader automatically generates variants from the atomic `from_xxx` condition:
 
-- `from_xxxs {"a","b"}` — OR sur une table Lua (pas de fichier)
-- `from_xxx_list "nom"` — lit `{lists_dir}/{xxx}/{nom}.txt`
-- `from_xxx_lists {"n1","n2"}` — OR sur plusieurs fichiers
+- `from_xxxs {"a","b"}` — OR on a Lua table (no file)
+- `from_xxx_list "name"` — reads `{lists_dir}/{xxx}/{name}.txt`
+- `from_xxx_lists {"n1","n2"}` — OR on multiple files
 
-Il suffit de définir `from_xxx.moon` ; les trois variantes sont disponibles sans
-fichier supplémentaire. Tout nouveau type de condition (ex. `from_mytype.moon`)
-hérite automatiquement de `from_mytype_list` et `from_mytype_lists`.
+It is sufficient to define `from_xxx.moon`; the three variants are available without additional files. Any new condition type (e.g., `from_mytype.moon`) automatically inherits `from_mytype_list` and `from_mytype_lists`.
 
-### `requires_auth` dans les capabilities
+### `requires_auth` in Capabilities
 
-Une condition peut déclarer `capabilities.requires_auth = true` pour indiquer
-au compilateur nft qu'elle nécessite des sous-chaînes d'authentification.
-`from_user.moon` le fait nativement ; tout nouveau type d'auth suit la même
-convention sans modifier `nft_compiler`.
+A condition can declare `capabilities.requires_auth = true` to indicate to the nft compiler that it requires authentication sub-chains. `from_user.moon` does this natively; any new auth type follows the same convention without modifying `nft_compiler`.
 
 ---
 
@@ -481,7 +469,7 @@ automatique des listes.
 
 ## Running
 
-### Sur OpenWrt
+### On OpenWrt
 
 ```bash
 # Start the service
@@ -707,20 +695,13 @@ Multiple files (OR):
 
 ### Captive portal
 
-Un **worker captive** dédié intercepte les SYN TCP/80 des clients non authentifiés
-via NFQUEUE 2 et répond directement avec une réponse HTTP 302 vers le portail
-HTTPS (port 33443), sans passer par le proxy kernel. Une fois authentifié,
-l'IP cliente est ajoutée à `authenticated_ips` et les SYN TCP/80 ne sont plus
-interceptés.
+A dedicated **captive worker** intercepts TCP/80 SYN from unauthenticated clients via NFQUEUE 2 and responds directly with an HTTP 302 redirect to the HTTPS portal (port 33443), without going through the kernel proxy. Once authenticated, the client IP is added to `authenticated_ips` and TCP/80 SYN are no longer intercepted.
 
-La condition `dnsonly` permet de détecter les sondes de portail captif
-(connectivitycheck, generate_204, etc.) et de les laisser passer au niveau
-DNS **sans injecter les IPs dans les sets nft** — le client peut ainsi résoudre
-les noms de domaine sans accéder aux serveurs cibles avant d'être authentifié :
+The `dnsonly` condition detects captive portal probes (connectivitycheck, generate_204, etc.) and allows them to pass at the DNS level **without injecting IPs into nft sets** — the client can thus resolve domain names without accessing target servers before being authenticated:
 
 ```moonscript
 {
-  description: "Sondes portail captif"
+  description: "Captive portal probes"
   actions: {"dnsonly"}
   conditions:
     { to_domains: {
@@ -731,33 +712,20 @@ les noms de domaine sans accéder aux serveurs cibles avant d'être authentifié
 }
 ```
 
-#### Sondes intégrées par défaut (NCSI/MSFT, Apple, Google…)
+#### Default Built-in Probes (NCSI/MSFT, Apple, Google…)
 
-Les **règles par défaut** (`filter.default_rules`, cf. `src/config.moon`)
-embarquent déjà l'ensemble canonique des sondes de connectivité **en ligne**
-(via `to_domains`), donc fonctionnelles dès l'installation, sans dépendre d'une
-liste externe :
+The **default rules** (`filter.default_rules`, see `src/config.moon`) already include the canonical set of connectivity probes **inline** (via `to_domains`), so they are functional immediately after installation, without depending on an external list:
 
-- Google/Android : `connectivitycheck.gstatic.com`, `connectivitycheck.android.com`,
-  `connectivitycheck.google.com`, `clients3.google.com`
-- Apple : `captive.apple.com`
-- **Microsoft NCSI** : `msftconnecttest.com`, `msftncsi.com`
-- Firefox : `detectportal.firefox.com` — Ubuntu : `connectivity-check.ubuntu.com`
-  — KDE : `networkcheck.kde.org`
+- Google/Android: `connectivitycheck.gstatic.com`, `connectivitycheck.android.com`, `connectivitycheck.google.com`, `clients3.google.com`
+- Apple: `captive.apple.com`
+- **Microsoft NCSI**: `msftconnecttest.com`, `msftncsi.com`
+- Firefox: `detectportal.firefox.com` — Ubuntu: `connectivity-check.ubuntu.com` — KDE: `networkcheck.kde.org`
 
-Le **match par suffixe** couvre tous les sous-domaines : `msftncsi.com` couvre la
-sonde DNS `dns.msftncsi.com` (NCSI vérifie qu'elle résout vers `131.107.255.255` ;
-`dnsonly` laisse la réponse upstream intacte) et la sonde HTTP héritée
-`www.msftncsi.com` ; `msftconnecttest.com` couvre `www.` et `ipv6.msftconnecttest.com`
-(sonde HTTP active Windows 10/11).
+**Suffix matching** covers all subdomains: `msftncsi.com` covers the DNS probe `dns.msftncsi.com` (NCSI checks that it resolves to `131.107.255.255`; `dnsonly` leaves the upstream response intact) and the legacy HTTP probe `www.msftncsi.com`; `msftconnecttest.com` covers `www.` and `ipv6.msftconnecttest.com` (active HTTP probe Windows 10/11).
 
-Deux règles par défaut encadrent ces domaines : `allow` pour les utilisateurs
-**authentifiés** (`from_user: "_any"`, ouverture pare-feu → la sonde réussit,
-pas de portail) et `dnsonly` pour les autres (résolution DNS seule → la sonde
-HTTP est interceptée par le worker captive et redirigée vers le portail).
+Two default rules govern these domains: `allow` for **authenticated** users (`from_user: "_any"`, firewall opening → the probe succeeds, no portal) and `dnsonly` for others (DNS resolution only → the HTTP probe is intercepted by the captive worker and redirected to the portal).
 
-Ces deux règles sont gouvernées par l'option `filter.captive_portal` (défaut
-`true`). La passer à `false` les retire (le canari DoH Firefox reste actif) :
+These two rules are governed by the `filter.captive_portal` option (default `true`). Setting it to `false` removes them (the Firefox DoH canary remains active):
 
 ```moonscript
 filter: { captive_portal: false }
@@ -789,10 +757,9 @@ L'action `cname` étant générique, elle s'utilise aussi dans `filter.rules` po
 réécrire un domaine arbitraire :
 `{ actions: {"cname"}, conditions: { to_domain: "exemple.fr" }, cname: "cible.exemple.fr" }`.
 
-### Conditions utilisateur
+### User Conditions
 
-`from_user`, `from_users`, `from_user_list`, `from_user_lists` permettent
-d'associer des règles à des comptes authentifiés :
+`from_user`, `from_users`, `from_user_list`, `from_user_lists` allow associating rules with authenticated accounts:
 
 ```moonscript
 {
@@ -804,14 +771,14 @@ d'associer des règles à des comptes authentifiés :
 }
 ```
 
-Plusieurs utilisateurs (OR logique) :
+Multiple users (logical OR):
 
 ```moonscript
   conditions:
     { from_users: {"alice", "bob"} }
 ```
 
-Depuis un fichier texte (`{lists_dir}/user/admins.txt`) :
+From a text file (`{lists_dir}/user/admins.txt`):
 
 ```moonscript
   conditions:
@@ -934,20 +901,16 @@ filter:
 
 ---
 
-## Interface d'administration web
+## Web Administration Interface
 
-Le worker AUTH sert une interface d'administration sous `/admin/*` sur le même
-port HTTPS que le portail captif (33443). L'accès est protégé par une session
-authentifiée **et** restreint aux comptes listés dans `auth.admin_users`
-(si la liste est vide, `auth.admin_allow_all_when_empty` autorise tout
-utilisateur authentifié).
+The AUTH worker serves an administration interface under `/admin/*` on the same HTTPS port as the captive portal (33443). Access is protected by an authenticated session **and** restricted to accounts listed in `auth.admin_users` (if the list is empty, `auth.admin_allow_all_when_empty` allows any authenticated user).
 
-L'interface permet, sans CLI :
-- d'éditer les sections de `config.moon` (relues/réécrites en MoonScript via `webui/serializer`) ;
-- de régler les options générales du filtre via *Filtre — Général* (SafeSearch, YouTube Restricted, `allow_localnets`, portail captif, domaines autorisés…) ;
-- de gérer les règles de filtrage (ajout, édition, suppression, réordonnancement) ;
-- de gérer les dictionnaires nommés (`nets`, `macs`, `users`, `times`) et les listes ;
-- de consulter le tableau de bord (statut, événements) et de déclencher un reload (SIGHUP).
+The interface allows, without CLI:
+- editing sections of `config.moon` (re-read/re-written in MoonScript via `webui/serializer`);
+- setting general filter options via *Filter — General* (SafeSearch, YouTube Restricted, `allow_localnets`, captive portal, allowed domains…);
+- managing filtering rules (add, edit, delete, reorder);
+- managing named dictionaries (`nets`, `macs`, `users`, `times`) and lists;
+- viewing the dashboard (status, events) and triggering a reload (SIGHUP).
 
 ```
 https://<router>:33443/admin/
@@ -1012,27 +975,27 @@ du proxy, puis les whiteliste dynamiquement dans des sets nft par règle
 
 ---
 
-## Synchronisation de configuration multi-routeurs
+## Multi-router Configuration Synchronization
 
-Pour gérer plusieurs filtres depuis un dépôt git central :
+To manage multiple filters from a central git repository:
 
 ```bash
-# Sur la machine de dev : initialiser un device en mode pull (cron */15)
+# On the dev machine: initialize a device in pull mode (cron */15)
 make sync-init HOST=root@<router> REPO=https://git.example.com/custos-configs
 
-# Initialiser un filtre de référence autorisé à publier (push)
+# Initialize a reference filter authorized to publish (push)
 make sync-push-init HOST=root@<router> REPO=https://git.example.com/custos-configs
 ```
 
-`sync/apply.moon` fusionne `base/config.moon` avec
-`devices/<hostname>/config.moon` du dépôt et écrit `/etc/custos/config.moon`
-(option `--reload` pour envoyer SIGHUP). `custos-sync.sh` (pull) et
-`custos-sync-push.sh` (push) lisent `CUSTOS_CONFIG_REPO` depuis
+`sync/apply.moon` merges `base/config.moon` with
+`devices/<hostname>/config.moon` from the repository and writes `/etc/custos/config.moon`
+(option `--reload` to send SIGHUP). `custos-sync.sh` (pull) and
+`custos-sync-push.sh` (push) read `CUSTOS_CONFIG_REPO` from
 `/etc/custos/sync.conf`.
 
-Une **UI redbean** locale (`.init.moon`, `make redbean-ui`) permet aussi
-d'installer, désinstaller et synchroniser un routeur sans CLI ; voir
-[`doc/CHEATSHEET.md`](doc/CHEATSHEET.md) § « UI d'installation (redbean) ».
+A **local redbean UI** (`.init.moon`, `make redbean-ui`) also allows
+installing, uninstalling, and synchronizing a router without CLI; see
+[`doc/CHEATSHEET.md`](doc/CHEATSHEET.md) § "Installation UI (redbean)".
 
 ---
 
