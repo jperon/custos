@@ -80,30 +80,44 @@ return describe("filter.nft_compiler", function()
     assert.equals(plan.rules[1], plan.rules_by_id.r_allow_lan)
     return assert.equals(plan.rules[2], plan.rules_by_id.r_allow_lan_2)
   end)
-  it("renders dispatch with first_match_wins guard when enabled", function()
+  it("collect_referenced_netlists ignores missing netlists and merges legacy + metadata refs", function()
     local cfg = {
-      decision = {
-        first_match_wins = true
+      nets = {
+        office = {
+          "192.168.10.0/24"
+        }
+      },
+      filter = {
+        netlists = {
+          lan = {
+            "10.0.0.0/8"
+          }
+        }
       },
       rules = {
         {
-          rule_id = "r1",
-          actions = {
-            "allow"
-          }
-        },
-        {
-          rule_id = "r2",
-          actions = {
-            "deny"
+          rule_id = "legacy",
+          conditions = {
+            from_net_lists = {
+              "office",
+              "missing"
+            },
+            to_net_list = "lan"
           }
         }
       }
     }
-    local plan = compiler.compile(cfg)
-    local out = compiler.render(plan)
-    assert.is_not_nil(out:find("chain cv_rules_dispatch", 1, true))
-    return assert.is_not_nil(out:find("meta mark != 0x0 return comment \"first_match_wins\"", 1, true))
+    local compiled = rule_mod.compile_rules(cfg)
+    local plan = compiler.compile(cfg, compiled.rules_metadata)
+    local refs = compiler.collect_referenced_netlists(cfg, plan)
+    assert.same({
+      "lan",
+      "office"
+    }, refs)
+    local out = compiler.render_sets_only(cfg, plan)
+    assert.is_not_nil(out:find("set nets_lan", 1, true))
+    assert.is_not_nil(out:find("set nets_office", 1, true))
+    return assert.is_nil(out:find("set nets_missing", 1, true))
   end)
   it("does not render first_match_wins guard when disabled", function()
     local cfg = {

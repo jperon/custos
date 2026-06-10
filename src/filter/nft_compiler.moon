@@ -88,31 +88,7 @@ collect_nets = (cfg, rule) ->
   table.sort v6
   v4, v6
 
-collect_dest_nets = (cfg, rule) ->
-  v4, v6 = {}, {}
-  seen4, seen6 = {}, {}
-  named = cfg.nets or {}
-
-  add_net = (raw) ->
-    return unless raw
-    net = tostring(raw)\match "^%s*(.-)%s*$"
-    return unless net and #net > 0
-    if net\find ":", 1, true
-      append_unique v6, seen6, net
-    else
-      append_unique v4, seen4, net
-
-  add_named = (list_name) ->
-    return unless list_name
-    nets = named[list_name] or {}
-    for _, n in ipairs as_list nets
-      add_net n
-
-  -- Pas d'introspection ici : les sets statiques sont remplis via les
-  -- métadonnées enrichies des conditions (cf. collect_static_meta).
-  table.sort v4
-  table.sort v6
-  v4, v6
+collect_dest_nets = collect_nets
 
 --- Collect all netlist names referenced by rules.
 -- @tparam table cfg Filter configuration (can be full config or cfg.filter)
@@ -122,61 +98,41 @@ collect_referenced_netlists = (cfg, plan) ->
   netlists = {}
   seen = {}
 
-  add_netlist = (list_name) ->
-    return unless list_name
+  netlist_exists = (list_name) ->
+    return false unless list_name
     key = tostring(list_name)
-    return if seen[key]
-    -- Only include if the netlist actually exists in config
-    -- Support multiple config structures (merge all locations):
-    -- - Full config: cfg.nets or cfg.filter.netlists
-    -- - Filter config: cfg.netlists
-    -- Check all locations (not short-circuiting with or)
-    found = false
-    if cfg.nets and cfg.nets[list_name]
-      found = true
-    if cfg.netlists and cfg.netlists[list_name]
-      found = true
-    if cfg.filter and cfg.filter.netlists and cfg.filter.netlists[list_name]
-      found = true
-    if found
-      seen[key] = true
-      netlists[#netlists + 1] = list_name
+    return false if seen[key]
+    found = cfg.nets and cfg.nets[list_name]
+    found = true if cfg.netlists and cfg.netlists[list_name]
+    found = true if cfg.filter and cfg.filter.netlists and cfg.filter.netlists[list_name]
+    return false unless found
+    seen[key] = true
+    netlists[#netlists + 1] = list_name
+    true
 
-  -- Look at original rules configuration
+  add_netlist_args = (args) ->
+    for _, list_name in ipairs as_list args
+      netlist_exists list_name
+
+  legacy_netlist_keys = {
+    from_net_list: true, from_netlist: true, to_net_list: true, to_netlist: true
+    from_net_lists: true, from_netlists: true, to_net_lists: true, to_netlists: true
+  }
+
   rules_cfg = cfg.rules or {}
   for _, rule in ipairs rules_cfg
     for k, args in pairs rule.conditions or {}
-      if k == "from_net_list" or k == "from_netlist"
-        add_netlist args
-      elseif k == "from_net_lists" or k == "from_netlists"
-        for _, list_name in ipairs as_list args
-          add_netlist list_name
-      elseif k == "to_net_list" or k == "to_netlist"
-        add_netlist args
-      elseif k == "to_net_lists" or k == "to_netlists"
-        for _, list_name in ipairs as_list args
-          add_netlist list_name
+      add_netlist_args args if legacy_netlist_keys[k]
 
-  -- Also check enriched metadata if available
   if plan.rules_metadata
     for _, meta in ipairs plan.rules_metadata
-      if meta.conditions
-        for _, cond in ipairs meta.conditions
-          -- Check if this is a from_netlist, from_netlists, to_netlist, or to_netlists condition
-          if cond.name == "from_netlist" or cond.name == "to_netlist"
-            -- Extract list_name from args
-            list_name = nil
-            if cond.args
-              if type(cond.args) == "string"
-                list_name = cond.args
-              elseif type(cond.args) == "table"
-                list_name = cond.args[1] or cond.args.list_name
-            add_netlist list_name if list_name
-          elseif cond.name == "from_netlists" or cond.name == "to_netlists"
-            -- Extract list_names from args (array of list names)
-            if cond.args and type(cond.args) == "table"
-              for _, list_name in ipairs as_list cond.args
-                add_netlist list_name if list_name
+      continue unless meta.conditions
+      for _, cond in ipairs meta.conditions
+        continue unless cond.name and legacy_netlist_keys[cond.name]
+        if type(cond.args) == "string"
+          netlist_exists cond.args
+        elseif type(cond.args) == "table"
+          add_netlist_args cond.args
 
   table.sort netlists
   netlists
@@ -550,13 +506,19 @@ compile_action_nft = (actions_meta) ->
 
   nil
 
-match_exprs = (rule) ->
+l4_expr = (rule) ->
   l4 = {}
   if #rule.protocols > 0
     l4[#l4 + 1] = "meta l4proto { #{table.concat(rule.protocols, ", ")} }"
   if rule.set_ports
     l4[#l4 + 1] = "th dport @#{rule.set_ports}"
-  base = table.concat l4, " "
+  table.concat l4, " "
+
+with_l4 = (expr, base) ->
+  table.concat({ expr, base }, " ")\gsub "%s+", " "
+
+match_exprs = (rule) ->
+  base = l4_expr rule
 
   -- If enriched metadata available, use compile_conditions_nft
   if rule.conditions_meta
@@ -584,8 +546,7 @@ match_exprs = (rule) ->
       -- OR between groups: create separate expressions for each group
       exprs = {}
       for group_expr in *group_exprs
-        full_expr = table.concat({ group_expr, base }, " ")\gsub "%s+", " "
-        exprs[#exprs + 1] = full_expr
+        exprs[#exprs + 1] = with_l4 group_expr, base
       return exprs
 
   -- Fallback to legacy set-based matching
@@ -607,7 +568,7 @@ match_exprs = (rule) ->
       parts[#parts + 1] = "ip daddr @#{rule.set_dst4}"
     if #parts > 0
       ipv4_match = table.concat(parts, " ")
-      exprs[#exprs + 1] = table.concat({ ipv4_match, base }, " ")\gsub "%s+", " "
+      exprs[#exprs + 1] = with_l4 ipv4_match, base
 
   -- IPv6: combine from_net/from_netlist/from_subnet with to_net/to_netlist
   if rule.set_src6 or rule.set_subnet6 or rule.set_dst6
@@ -625,17 +586,17 @@ match_exprs = (rule) ->
       parts[#parts + 1] = "ip6 daddr @#{rule.set_dst6}"
     if #parts > 0
       ipv6_match = table.concat(parts, " ")
-      exprs[#exprs + 1] = table.concat({ ipv6_match, base }, " ")\gsub "%s+", " "
-  
+      exprs[#exprs + 1] = with_l4 ipv6_match, base
+
   if rule.set_dyn_mac6
-    exprs[#exprs + 1] = "ether saddr . ip6 daddr @#{rule.set_dyn_mac6} #{base}"\gsub "%s+", " "
+    exprs[#exprs + 1] = with_l4 "ether saddr . ip6 daddr @#{rule.set_dyn_mac6}", base
   if rule.set_dyn_mac4
-    exprs[#exprs + 1] = "ether saddr . ip daddr @#{rule.set_dyn_mac4} #{base}"\gsub "%s+", " "
+    exprs[#exprs + 1] = with_l4 "ether saddr . ip daddr @#{rule.set_dyn_mac4}", base
   if rule.set_dyn_ip6
-    exprs[#exprs + 1] = "ip6 saddr . ip6 daddr @#{rule.set_dyn_ip6} #{base}"\gsub "%s+", " "
+    exprs[#exprs + 1] = with_l4 "ip6 saddr . ip6 daddr @#{rule.set_dyn_ip6}", base
   if rule.set_dyn_ip4
-    exprs[#exprs + 1] = "ip saddr . ip daddr @#{rule.set_dyn_ip4} #{base}"\gsub "%s+", " "
-  
+    exprs[#exprs + 1] = with_l4 "ip saddr . ip daddr @#{rule.set_dyn_ip4}", base
+
   if #exprs == 0
     exprs[1] = base
   exprs
@@ -665,12 +626,7 @@ negated_match_exprs = (rule) ->
 
 dynamic_match_exprs = (rule, force=false) ->
   return {} unless (rule.dns_scope and rule.action != "dnsonly") or force
-  l4 = {}
-  if #rule.protocols > 0
-    l4[#l4 + 1] = "meta l4proto { #{table.concat(rule.protocols, ", ")} }"
-  if rule.set_ports
-    l4[#l4 + 1] = "th dport @#{rule.set_ports}"
-  base = table.concat l4, " "
+  base = l4_expr rule
   parts = {
     "ether saddr . ip6 daddr @#{rule.set_dyn_mac6}"
     "ether saddr . ip daddr @#{rule.set_dyn_mac4}"
@@ -679,7 +635,7 @@ dynamic_match_exprs = (rule, force=false) ->
   }
   out = {}
   for _, p in ipairs parts
-    out[#out + 1] = table.concat({ p, base }, " ")\gsub "%s+", " "
+    out[#out + 1] = with_l4 p, base
   out
 
 render_rule_chain = (rule, indent) ->

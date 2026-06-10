@@ -32,7 +32,7 @@ clients_cfg = config.clients or {}
 { parse: parse_tcp }                     = require "ipparse.l4.tcp"
 { parse: parse_dns, types: QTYPE }       = require "ipparse.l7.dns"
 { :ip2s }                                = require "ipparse.l3.ip"
-{ new: new_stream }                      = require "ipparse.l4.tcp_stream"
+{ :skip_ipv6_ext_hdrs, :new_dns_tcp_stream } = require "packet_utils"
 { :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
@@ -68,38 +68,7 @@ set_verdict = (qh_ptr, pkt_id, verdict, payload=nil) ->
 PROTO_UDP = 17
 PROTO_TCP = 6
 
--- IPv6 extension headers table
-IPV6_EXT_HDRS = {
-  [0]:   true   -- Hop-by-Hop Options
-  [43]:  true   -- Routing
-  [44]:  true   -- Fragment
-  [51]:  false  -- AH
-  [60]:  true   -- Destination Options
-  [135]: true   -- Mobility
-  [139]: true   -- HIP
-  [140]: true   -- Shim6
-}
-
-skip_ipv6_ext_hdrs = (p, len, first_nh) ->
-  nh  = first_nh
-  off = 40
-  while IPV6_EXT_HDRS[nh] != nil
-    return nil, nil if off + 2 > len
-    next_nh  = p[off]
-    ext_size = if nh == 51
-      (p[off + 1] + 2) * 4
-    else
-      (p[off + 1] + 1) * 8
-    return nil, nil if ext_size < 8 or off + ext_size > len
-    off += ext_size
-    nh   = next_nh
-  nh, off
-
-dns_tcp_complete = (buf) ->
-  return false if #buf < 2
-  #buf >= 2 + buf\byte(1) * 256 + buf\byte(2)
-
-tcp_state = new_stream dns_tcp_complete
+tcp_state = new_dns_tcp_stream!
 
 -- ── Fonctions de mutation FFI (byte-level, big-endian) ──────────
 
@@ -1046,4 +1015,5 @@ run = (queue_num, rfd, rules_metadata) ->
 
   run_queue tonumber(queue_num), handle_response, run_opts
 
-{ :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields }
+{ :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields,
+  :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream }

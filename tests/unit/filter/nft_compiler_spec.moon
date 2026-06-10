@@ -54,19 +54,23 @@ describe "filter.nft_compiler", ->
     assert.equals plan.rules[1], plan.rules_by_id.r_allow_lan
     assert.equals plan.rules[2], plan.rules_by_id.r_allow_lan_2
 
-  it "renders dispatch with first_match_wins guard when enabled", ->
+  it "collect_referenced_netlists ignores missing netlists and merges legacy + metadata refs", ->
     cfg = {
-      decision: { first_match_wins: true }
+      nets: { office: {"192.168.10.0/24"} }
+      filter: { netlists: { lan: {"10.0.0.0/8"} } }
       rules: {
-        { rule_id: "r1", actions: {"allow"} }
-        { rule_id: "r2", actions: {"deny"} }
+        { rule_id: "legacy", conditions: { from_net_lists: {"office", "missing"}, to_net_list: "lan" } }
       }
     }
-    plan = compiler.compile cfg
-    out = compiler.render plan
+    compiled = rule_mod.compile_rules cfg
+    plan = compiler.compile cfg, compiled.rules_metadata
+    refs = compiler.collect_referenced_netlists cfg, plan
+    assert.same {"lan", "office"}, refs
 
-    assert.is_not_nil out\find "chain cv_rules_dispatch", 1, true
-    assert.is_not_nil out\find "meta mark != 0x0 return comment \"first_match_wins\"", 1, true
+    out = compiler.render_sets_only cfg, plan
+    assert.is_not_nil out\find "set nets_lan", 1, true
+    assert.is_not_nil out\find "set nets_office", 1, true
+    assert.is_nil out\find "set nets_missing", 1, true
 
   it "does not render first_match_wins guard when disabled", ->
     cfg = {
@@ -106,4 +110,3 @@ describe "filter.nft_compiler", ->
     assert.is_not_nil out\find "chain cv_r_frag", 1, true
     assert.is_not_nil out\find "meta l4proto { tcp } th dport @cv_r_frag_dports", 1, true
     assert.is_not_nil out\find "counter drop", 1, true
-

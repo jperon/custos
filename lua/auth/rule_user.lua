@@ -6,6 +6,37 @@ local matches_user
 matches_user = function(allowed_user, user)
   return is_any_wildcard(allowed_user) or tostring(allowed_user) == tostring(user)
 end
+local rule_requires_auth
+rule_requires_auth = function(rule)
+  if not (rule and rule.conditions) then
+    return false
+  end
+  local conditions = rule.conditions
+  local is_array_format = type(conditions[1]) == "table"
+  if is_array_format then
+    for _, cond in ipairs(conditions) do
+      local _continue_0 = false
+      repeat
+        if not (type(cond) == "table") then
+          _continue_0 = true
+          break
+        end
+        if cond.from_users or cond.from_userlists then
+          return true
+        end
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
+      end
+    end
+  else
+    if conditions.from_users or conditions.from_userlists then
+      return true
+    end
+  end
+  return false
+end
 local user_qualifies_for_rule
 user_qualifies_for_rule = function(user, rule, userlists_cfg)
   if userlists_cfg == nil then
@@ -110,5 +141,6 @@ user_qualifies_for_rule = function(user, rule, userlists_cfg)
 end
 return {
   user_qualifies_for_rule = user_qualifies_for_rule,
-  matches_user = matches_user
+  matches_user = matches_user,
+  rule_requires_auth = rule_requires_auth
 }

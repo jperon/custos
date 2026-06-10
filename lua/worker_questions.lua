@@ -25,8 +25,11 @@ do
 end
 local ip2s
 ip2s = require("ipparse.l3.ip").ip2s
-local new_stream
-new_stream = require("ipparse.l4.tcp_stream").new
+local skip_ipv6_ext_hdrs, new_dns_tcp_stream
+do
+  local _obj_0 = require("packet_utils")
+  skip_ipv6_ext_hdrs, new_dns_tcp_stream = _obj_0.skip_ipv6_ext_hdrs, _obj_0.new_dns_tcp_stream
+end
 local bit = require("bit")
 local filter = require("filter")
 local write_msg, write_refused_msg
@@ -229,47 +232,7 @@ write_event = function(fields, allowed)
 end
 local PROTO_UDP = 17
 local PROTO_TCP = 6
-local IPV6_EXT_HDRS = {
-  [0] = true,
-  [43] = true,
-  [44] = true,
-  [51] = false,
-  [60] = true,
-  [135] = true,
-  [139] = true,
-  [140] = true
-}
-local skip_ipv6_ext_hdrs
-skip_ipv6_ext_hdrs = function(p, len, first_nh)
-  local nh = first_nh
-  local off = 40
-  while IPV6_EXT_HDRS[nh] ~= nil do
-    if off + 2 > len then
-      return nil, nil
-    end
-    local next_nh = p[off]
-    local ext_size
-    if nh == 51 then
-      ext_size = (p[off + 1] + 2) * 4
-    else
-      ext_size = (p[off + 1] + 1) * 8
-    end
-    if ext_size < 8 or off + ext_size > len then
-      return nil, nil
-    end
-    off = off + ext_size
-    nh = next_nh
-  end
-  return nh, off
-end
-local dns_tcp_complete
-dns_tcp_complete = function(buf)
-  if #buf < 2 then
-    return false
-  end
-  return #buf >= 2 + buf:byte(1) * 256 + buf:byte(2)
-end
-local tcp_state = new_stream(dns_tcp_complete)
+local tcp_state = new_dns_tcp_stream()
 local parse_packet
 parse_packet = function(raw)
   local ver = bit.rshift(raw:byte(1), 4)
@@ -672,5 +635,8 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
   return run_queue(tonumber(queue_num), handle_question)
 end
 return {
-  run = run
+  run = run,
+  skip_ipv6_ext_hdrs = skip_ipv6_ext_hdrs,
+  dns_tcp_complete = dns_tcp_complete,
+  new_dns_tcp_stream = new_dns_tcp_stream
 }

@@ -140,112 +140,88 @@ collect_nets = function(cfg, rule)
   table.sort(v6)
   return v4, v6
 end
-local collect_dest_nets
-collect_dest_nets = function(cfg, rule)
-  local v4, v6 = { }, { }
-  local seen4, seen6 = { }, { }
-  local named = cfg.nets or { }
-  local add_net
-  add_net = function(raw)
-    if not (raw) then
-      return 
-    end
-    local net = tostring(raw):match("^%s*(.-)%s*$")
-    if not (net and #net > 0) then
-      return 
-    end
-    if net:find(":", 1, true) then
-      return append_unique(v6, seen6, net)
-    else
-      return append_unique(v4, seen4, net)
-    end
-  end
-  local add_named
-  add_named = function(list_name)
-    if not (list_name) then
-      return 
-    end
-    local nets = named[list_name] or { }
-    for _, n in ipairs(as_list(nets)) do
-      add_net(n)
-    end
-  end
-  table.sort(v4)
-  table.sort(v6)
-  return v4, v6
-end
+local collect_dest_nets = collect_nets
 local collect_referenced_netlists
 collect_referenced_netlists = function(cfg, plan)
   local netlists = { }
   local seen = { }
-  local add_netlist
-  add_netlist = function(list_name)
+  local netlist_exists
+  netlist_exists = function(list_name)
     if not (list_name) then
-      return 
+      return false
     end
     local key = tostring(list_name)
     if seen[key] then
-      return 
+      return false
     end
-    local found = false
-    if cfg.nets and cfg.nets[list_name] then
-      found = true
-    end
+    local found = cfg.nets and cfg.nets[list_name]
     if cfg.netlists and cfg.netlists[list_name] then
       found = true
     end
     if cfg.filter and cfg.filter.netlists and cfg.filter.netlists[list_name] then
       found = true
     end
-    if found then
-      seen[key] = true
-      netlists[#netlists + 1] = list_name
+    if not (found) then
+      return false
+    end
+    seen[key] = true
+    netlists[#netlists + 1] = list_name
+    return true
+  end
+  local add_netlist_args
+  add_netlist_args = function(args)
+    for _, list_name in ipairs(as_list(args)) do
+      netlist_exists(list_name)
     end
   end
+  local legacy_netlist_keys = {
+    from_net_list = true,
+    from_netlist = true,
+    to_net_list = true,
+    to_netlist = true,
+    from_net_lists = true,
+    from_netlists = true,
+    to_net_lists = true,
+    to_netlists = true
+  }
   local rules_cfg = cfg.rules or { }
   for _, rule in ipairs(rules_cfg) do
     for k, args in pairs(rule.conditions or { }) do
-      if k == "from_net_list" or k == "from_netlist" then
-        add_netlist(args)
-      elseif k == "from_net_lists" or k == "from_netlists" then
-        for _, list_name in ipairs(as_list(args)) do
-          add_netlist(list_name)
-        end
-      elseif k == "to_net_list" or k == "to_netlist" then
-        add_netlist(args)
-      elseif k == "to_net_lists" or k == "to_netlists" then
-        for _, list_name in ipairs(as_list(args)) do
-          add_netlist(list_name)
-        end
+      if legacy_netlist_keys[k] then
+        add_netlist_args(args)
       end
     end
   end
   if plan.rules_metadata then
     for _, meta in ipairs(plan.rules_metadata) do
-      if meta.conditions then
+      local _continue_0 = false
+      repeat
+        if not (meta.conditions) then
+          _continue_0 = true
+          break
+        end
         for _, cond in ipairs(meta.conditions) do
-          if cond.name == "from_netlist" or cond.name == "to_netlist" then
-            local list_name = nil
-            if cond.args then
-              if type(cond.args) == "string" then
-                list_name = cond.args
-              elseif type(cond.args) == "table" then
-                list_name = cond.args[1] or cond.args.list_name
-              end
+          local _continue_1 = false
+          repeat
+            if not (cond.name and legacy_netlist_keys[cond.name]) then
+              _continue_1 = true
+              break
             end
-            if list_name then
-              add_netlist(list_name)
+            if type(cond.args) == "string" then
+              netlist_exists(cond.args)
+            elseif type(cond.args) == "table" then
+              add_netlist_args(cond.args)
             end
-          elseif cond.name == "from_netlists" or cond.name == "to_netlists" then
-            if cond.args and type(cond.args) == "table" then
-              for _, list_name in ipairs(as_list(cond.args)) do
-                if list_name then
-                  add_netlist(list_name)
-                end
-              end
-            end
+            _continue_1 = true
+          until true
+          if not _continue_1 then
+            break
           end
         end
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
       end
     end
   end
@@ -730,8 +706,8 @@ compile_action_nft = function(actions_meta)
   end
   return nil
 end
-local match_exprs
-match_exprs = function(rule)
+local l4_expr
+l4_expr = function(rule)
   local l4 = { }
   if #rule.protocols > 0 then
     l4[#l4 + 1] = "meta l4proto { " .. tostring(table.concat(rule.protocols, ", ")) .. " }"
@@ -739,7 +715,18 @@ match_exprs = function(rule)
   if rule.set_ports then
     l4[#l4 + 1] = "th dport @" .. tostring(rule.set_ports)
   end
-  local base = table.concat(l4, " ")
+  return table.concat(l4, " ")
+end
+local with_l4
+with_l4 = function(expr, base)
+  return table.concat({
+    expr,
+    base
+  }, " "):gsub("%s+", " ")
+end
+local match_exprs
+match_exprs = function(rule)
+  local base = l4_expr(rule)
   if rule.conditions_meta then
     local first_elem = rule.conditions_meta[1]
     local is_flat_format = first_elem and first_elem.name and first_elem.args
@@ -762,11 +749,7 @@ match_exprs = function(rule)
       local exprs = { }
       for _index_0 = 1, #group_exprs do
         local group_expr = group_exprs[_index_0]
-        local full_expr = table.concat({
-          group_expr,
-          base
-        }, " "):gsub("%s+", " ")
-        exprs[#exprs + 1] = full_expr
+        exprs[#exprs + 1] = with_l4(group_expr, base)
       end
       return exprs
     end
@@ -792,10 +775,7 @@ match_exprs = function(rule)
     end
     if #parts > 0 then
       local ipv4_match = table.concat(parts, " ")
-      exprs[#exprs + 1] = table.concat({
-        ipv4_match,
-        base
-      }, " "):gsub("%s+", " ")
+      exprs[#exprs + 1] = with_l4(ipv4_match, base)
     end
   end
   if rule.set_src6 or rule.set_subnet6 or rule.set_dst6 then
@@ -818,23 +798,20 @@ match_exprs = function(rule)
     end
     if #parts > 0 then
       local ipv6_match = table.concat(parts, " ")
-      exprs[#exprs + 1] = table.concat({
-        ipv6_match,
-        base
-      }, " "):gsub("%s+", " ")
+      exprs[#exprs + 1] = with_l4(ipv6_match, base)
     end
   end
   if rule.set_dyn_mac6 then
-    exprs[#exprs + 1] = ("ether saddr . ip6 daddr @" .. tostring(rule.set_dyn_mac6) .. " " .. tostring(base)):gsub("%s+", " ")
+    exprs[#exprs + 1] = with_l4("ether saddr . ip6 daddr @" .. tostring(rule.set_dyn_mac6), base)
   end
   if rule.set_dyn_mac4 then
-    exprs[#exprs + 1] = ("ether saddr . ip daddr @" .. tostring(rule.set_dyn_mac4) .. " " .. tostring(base)):gsub("%s+", " ")
+    exprs[#exprs + 1] = with_l4("ether saddr . ip daddr @" .. tostring(rule.set_dyn_mac4), base)
   end
   if rule.set_dyn_ip6 then
-    exprs[#exprs + 1] = ("ip6 saddr . ip6 daddr @" .. tostring(rule.set_dyn_ip6) .. " " .. tostring(base)):gsub("%s+", " ")
+    exprs[#exprs + 1] = with_l4("ip6 saddr . ip6 daddr @" .. tostring(rule.set_dyn_ip6), base)
   end
   if rule.set_dyn_ip4 then
-    exprs[#exprs + 1] = ("ip saddr . ip daddr @" .. tostring(rule.set_dyn_ip4) .. " " .. tostring(base)):gsub("%s+", " ")
+    exprs[#exprs + 1] = with_l4("ip saddr . ip daddr @" .. tostring(rule.set_dyn_ip4), base)
   end
   if #exprs == 0 then
     exprs[1] = base
@@ -881,14 +858,7 @@ dynamic_match_exprs = function(rule, force)
   if not ((rule.dns_scope and rule.action ~= "dnsonly") or force) then
     return { }
   end
-  local l4 = { }
-  if #rule.protocols > 0 then
-    l4[#l4 + 1] = "meta l4proto { " .. tostring(table.concat(rule.protocols, ", ")) .. " }"
-  end
-  if rule.set_ports then
-    l4[#l4 + 1] = "th dport @" .. tostring(rule.set_ports)
-  end
-  local base = table.concat(l4, " ")
+  local base = l4_expr(rule)
   local parts = {
     "ether saddr . ip6 daddr @" .. tostring(rule.set_dyn_mac6),
     "ether saddr . ip daddr @" .. tostring(rule.set_dyn_mac4),
@@ -897,10 +867,7 @@ dynamic_match_exprs = function(rule, force)
   }
   local out = { }
   for _, p in ipairs(parts) do
-    out[#out + 1] = table.concat({
-      p,
-      base
-    }, " "):gsub("%s+", " ")
+    out[#out + 1] = with_l4(p, base)
   end
   return out
 end

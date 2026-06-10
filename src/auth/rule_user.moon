@@ -15,6 +15,22 @@ is_any_wildcard = (allowed_user) -> tostring(allowed_user) == "_any"
 matches_user = (allowed_user, user) ->
   is_any_wildcard(allowed_user) or tostring(allowed_user) == tostring(user)
 
+--- Renvoie true si une règle dépend d'une condition d'authentification.
+-- @tparam table rule Entrée de règle avec `.conditions`
+-- @treturn boolean
+rule_requires_auth = (rule) ->
+  return false unless rule and rule.conditions
+  conditions = rule.conditions
+  is_array_format = type(conditions[1]) == "table"
+
+  if is_array_format
+    for _, cond in ipairs conditions
+      continue unless type(cond) == "table"
+      return true if cond.from_users or cond.from_userlists
+  else
+    return true if conditions.from_users or conditions.from_userlists
+  false
+
 --- Vérifie si un utilisateur qualifie pour une règle donnée.
 -- La règle doit avoir `conditions.from_users` (ou `from_userlists`) pour que
 -- cette fonction soit pertinente ; en l'absence de ces conditions, tout
@@ -61,4 +77,4 @@ user_qualifies_for_rule = (user, rule, userlists_cfg = {}) ->
           return false
   true
 
-{ :user_qualifies_for_rule, :matches_user }
+{ :user_qualifies_for_rule, :matches_user, :rule_requires_auth }

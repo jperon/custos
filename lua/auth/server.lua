@@ -35,8 +35,11 @@ do
   local _obj_0 = require("lib.http")
   read_request, send_response = _obj_0.read_request, _obj_0.send_response
 end
-local user_qualifies_for_rule
-user_qualifies_for_rule = require("auth.rule_user").user_qualifies_for_rule
+local user_qualifies_for_rule, rule_requires_auth
+do
+  local _obj_0 = require("auth.rule_user")
+  user_qualifies_for_rule, rule_requires_auth = _obj_0.user_qualifies_for_rule, _obj_0.rule_requires_auth
+end
 local get_mac
 get_mac = require("mac_learner_ipc").get_mac
 ffi.cdef([[  typedef int pid_t;
@@ -153,45 +156,122 @@ sanitize_id = function(raw)
 end
 local rule_id = require("filter.rule_id")
 local generate_rule_id = rule_id.generate
-local rule_requires_auth
-rule_requires_auth = function(rule)
-  if not (rule and rule.conditions) then
-    return false
-  end
-  local conditions = rule.conditions
-  local is_array_format = type(conditions[1]) == "table"
-  if is_array_format then
-    for _, cond in ipairs(conditions) do
-      local _continue_0 = false
-      repeat
-        if not (type(cond) == "table") then
-          _continue_0 = true
-          break
-        end
-        for k, _ in pairs(cond) do
-          if k == "from_users" or k == "from_userlists" then
-            return true
-          end
-        end
-        _continue_0 = true
-      until true
-      if not _continue_0 then
-        break
-      end
-    end
-  else
-    for k, _ in pairs(conditions) do
-      if k == "from_users" or k == "from_userlists" then
-        return true
-      end
-    end
-  end
-  return false
-end
+rule_requires_auth = require("auth.rule_user").rule_requires_auth
 local qualifies_for_rule
 qualifies_for_rule = function(user, rule)
   local filter_cfg = config.filter or { }
   return user_qualifies_for_rule(user, rule, filter_cfg.userlists or { })
+end
+local auth_set_names
+auth_set_names = function(ip)
+  if not (ip and ip ~= "unknown") then
+    return "_auth_mac", nil
+  end
+  if ip:find(":") then
+    return "_auth_mac", "_auth_ip6"
+  else
+    return "_auth_mac", "_auth_ip4"
+  end
+end
+local run_auth_set_op
+run_auth_set_op = function(nft_sess, rule_id, mac, ip, op, ttl)
+  if ttl == nil then
+    ttl = nil
+  end
+  if not (nft_sess) then
+    return 
+  end
+  local mac_set, ip_set = auth_set_names(ip)
+  local timeout
+  if ttl then
+    timeout = " timeout " .. tostring(ttl) .. "s"
+  else
+    timeout = ""
+  end
+  local ok, err = pcall(function()
+    nft_sess.run_nft(tostring(op) .. " element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. tostring(timeout) .. " }", {
+      quiet = true
+    })
+    if ip_set then
+      return nft_sess.run_nft(tostring(op) .. " element bridge dns-filter-bridge " .. tostring(rule_id) .. tostring(ip_set) .. " { " .. tostring(ip) .. tostring(timeout) .. " }", {
+        quiet = true
+      })
+    end
+  end)
+  if not (ok) then
+    log_warn(function()
+      return {
+        action = "auth_set_" .. tostring(op) .. "_failed",
+        rule_id = rule_id,
+        mac = mac,
+        ip = ip,
+        err = tostring(err)
+      }
+    end)
+  end
+  return ok
+end
+local for_qualifying_auth_rules
+for_qualifying_auth_rules = function(user, fn)
+  local filter_cfg = config.filter or { }
+  local rules = filter_cfg.rules or { }
+  for idx, rule in ipairs(rules) do
+    local _continue_0 = false
+    repeat
+      if not (rule_requires_auth(rule)) then
+        _continue_0 = true
+        break
+      end
+      if not (qualifies_for_rule(user, rule)) then
+        _continue_0 = true
+        break
+      end
+      fn(generate_rule_id(rule, idx), rule)
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+end
+local refresh_rule_auth_sets
+refresh_rule_auth_sets = function(nft_sess, ip, mac, ttl, user)
+  return for_qualifying_auth_rules(user, function(rule_id, rule)
+    local ok = run_auth_set_op(nft_sess, rule_id, mac, ip, "add", ttl)
+    log_info(function()
+      if ok then
+        return {
+          action = "server_auth_set_add_mac",
+          rule_id = rule_id,
+          mac = mac
+        }
+      end
+    end)
+    log_info(function()
+      if ok and ip and ip:find(":" == nil and ip ~= "unknown") then
+        return {
+          action = "server_auth_set_add_ip4",
+          rule_id = rule_id,
+          ip = ip
+        }
+      end
+    end)
+    return log_info(function()
+      if ok and ip and (ip:find(":")) and ip ~= "unknown" then
+        return {
+          action = "server_auth_set_add_ip6",
+          rule_id = rule_id,
+          ip = ip
+        }
+      end
+    end)
+  end)
+end
+local delete_rule_auth_sets
+delete_rule_auth_sets = function(nft_sess, ip, mac, user)
+  return for_qualifying_auth_rules(user, function(rule_id, rule)
+    return run_auth_set_op(nft_sess, rule_id, mac, ip, "delete")
+  end)
 end
 local refresh_nft
 refresh_nft = function(nft_sess, ip, mac, ttl, user)
@@ -202,58 +282,7 @@ refresh_nft = function(nft_sess, ip, mac, ttl, user)
     nft_sess.add_authenticated(ip, ttl)
   end
   if mac and mac ~= "unknown" then
-    nft_sess.add_authenticated_mac(mac, ttl)
-  end
-  local filter_cfg = config.filter or { }
-  local rules = filter_cfg.rules or { }
-  for idx, rule in ipairs(rules) do
-    local _continue_0 = false
-    repeat
-      local requires_auth = rule_requires_auth(rule)
-      if not (requires_auth) then
-        _continue_0 = true
-        break
-      end
-      local qualifies = qualifies_for_rule(user, rule)
-      if not (qualifies) then
-        _continue_0 = true
-        break
-      end
-      rule_id = generate_rule_id(rule, idx)
-      local ok, err = pcall(function()
-        if nft_sess then
-          nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " timeout " .. tostring(ttl) .. "s }", {
-            quiet = true
-          })
-          if ip and ip ~= "unknown" then
-            if ip:find(":") then
-              return nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(ip) .. " timeout " .. tostring(ttl) .. "s }", {
-                quiet = true
-              })
-            else
-              return nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(ip) .. " timeout " .. tostring(ttl) .. "s }", {
-                quiet = true
-              })
-            end
-          end
-        end
-      end)
-      if not (ok) then
-        log_warn(function()
-          return {
-            action = "auth_set_add_failed",
-            rule_id = rule_id,
-            mac = mac,
-            ip = ip,
-            err = tostring(err)
-          }
-        end)
-      end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
-    end
+    return nft_sess.add_authenticated_mac(mac, ttl)
   end
 end
 local replay_sessions_to_nft
@@ -384,7 +413,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
   end)
   if state.nft_sess then
     ok, err = pcall(function()
-      return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
+      return refresh_rule_auth_sets(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
     end)
     if not (ok) then
       log_warn(function()
@@ -404,95 +433,6 @@ handle_login = function(req, peer_ip, peer_mac, state)
         mac = mac
       }
     end)
-  end
-  local filter_cfg = config.filter or { }
-  local rules = filter_cfg.rules or { }
-  for idx, rule in ipairs(rules) do
-    local _continue_0 = false
-    repeat
-      local requires_auth = rule_requires_auth(rule)
-      local qualifies = qualifies_for_rule(user, rule)
-      log_info(function()
-        return {
-          action = "server_rule_check",
-          idx = idx,
-          description = rule.description,
-          requires_auth = requires_auth,
-          qualifies = qualifies,
-          user = user
-        }
-      end)
-      if not (requires_auth) then
-        _continue_0 = true
-        break
-      end
-      if not (qualifies) then
-        _continue_0 = true
-        break
-      end
-      rule_id = generate_rule_id(rule, idx)
-      log_info(function()
-        return {
-          action = "server_rule_id_generated",
-          rule_id = rule_id,
-          description = rule.description
-        }
-      end)
-      ok, err = pcall(function()
-        if state.nft_sess then
-          state.nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
-            quiet = true
-          })
-          log_info(function()
-            return {
-              action = "server_auth_set_add_mac",
-              rule_id = rule_id,
-              mac = mac
-            }
-          end)
-          if peer_ip and peer_ip ~= "unknown" then
-            if peer_ip:find(":") then
-              state.nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(peer_ip) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
-                quiet = true
-              })
-              return log_info(function()
-                return {
-                  action = "server_auth_set_add_ip6",
-                  rule_id = rule_id,
-                  ip = peer_ip
-                }
-              end)
-            else
-              state.nft_sess.run_nft("add element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(peer_ip) .. " timeout " .. tostring(state.auth_cfg.idle_timeout) .. "s }", {
-                quiet = true
-              })
-              return log_info(function()
-                return {
-                  action = "server_auth_set_add_ip4",
-                  rule_id = rule_id,
-                  ip = peer_ip
-                }
-              end)
-            end
-          end
-        end
-      end)
-      if not (ok) then
-        log_warn(function()
-          return {
-            action = "server_auth_set_add_failed",
-            rule_id = rule_id,
-            mac = mac,
-            ip = peer_ip,
-            err = tostring(err)
-          }
-        end)
-      end
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
-    end
   end
   local tok = token.generate("user", user, mac, token_expires, state.token_key)
   local admin_users = state.admin_users or { }
@@ -580,53 +520,7 @@ handle_logout = function(req, peer_ip, peer_mac, state)
     end
   end
   if user and state.nft_sess then
-    local filter_cfg = config.filter or { }
-    local rules = filter_cfg.rules or { }
-    for idx, rule in ipairs(rules) do
-      local _continue_0 = false
-      repeat
-        if not (rule_requires_auth(rule)) then
-          _continue_0 = true
-          break
-        end
-        if not (qualifies_for_rule(user, rule)) then
-          _continue_0 = true
-          break
-        end
-        rule_id = generate_rule_id(rule, idx)
-        local ok, err = pcall(function()
-          state.nft_sess.run_nft("delete element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_mac { " .. tostring(mac) .. " }", {
-            quiet = true
-          })
-          if peer_ip and peer_ip ~= "unknown" then
-            if peer_ip:find(":") then
-              return state.nft_sess.run_nft("delete element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip6 { " .. tostring(peer_ip) .. " }", {
-                quiet = true
-              })
-            else
-              return state.nft_sess.run_nft("delete element bridge dns-filter-bridge " .. tostring(rule_id) .. "_auth_ip4 { " .. tostring(peer_ip) .. " }", {
-                quiet = true
-              })
-            end
-          end
-        end)
-        log_warn(function()
-          if not (ok) then
-            return {
-              action = "server_auth_set_delete_failed",
-              rule_id = rule_id,
-              mac = mac,
-              ip = peer_ip,
-              err = tostring(err)
-            }
-          end
-        end)
-        _continue_0 = true
-      until true
-      if not _continue_0 then
-        break
-      end
-    end
+    delete_rule_auth_sets(state.nft_sess, peer_ip, mac, user)
   end
   return 302, {
     ["Location"] = "/",
