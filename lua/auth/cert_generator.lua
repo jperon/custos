@@ -3,6 +3,8 @@ do
   local _obj_0 = require("log")
   log_debug, log_warn, log_error = _obj_0.log_debug, _obj_0.log_warn, _obj_0.log_error
 end
+local shquote
+shquote = require("lib.shquote").shquote
 local generate_rsa_key
 generate_rsa_key = function(bits)
   if bits == nil then
@@ -10,7 +12,7 @@ generate_rsa_key = function(bits)
   end
   bits = tonumber(bits) or 2048
   local key_file = "/tmp/px5g_rsakey_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000000)) .. ".pem"
-  local cmd = "px5g rsakey -out " .. tostring(key_file) .. " " .. tostring(bits) .. " 2>/dev/null"
+  local cmd = "px5g rsakey -out " .. tostring(shquote(key_file)) .. " " .. tostring(bits) .. " 2>/dev/null"
   local exit_code = os.execute(cmd)
   if not (exit_code == 0 or exit_code == true) then
     local err = "px5g rsakey exited with error code " .. tostring(exit_code)
@@ -86,10 +88,21 @@ generate_self_signed = function(cn, sans, days)
     end)
     return nil, nil, false, err
   end
+  if not (cn:match("^[A-Za-z0-9.%-%*_]+$")) then
+    local err = "CN contient des caractères invalides: " .. tostring(cn)
+    log_warn(function()
+      return {
+        action = "cert_gen_selfsigned_bad_cn",
+        err = err
+      }
+    end)
+    return nil, nil, false, err
+  end
   days = tonumber(days) or 3650
   local key_file = "/tmp/px5g_key_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000000)) .. ".pem"
   local cert_file = "/tmp/px5g_cert_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000000)) .. ".pem"
-  local cmd = "px5g selfsigned -newkey ec -keyout " .. tostring(key_file) .. " -out " .. tostring(cert_file) .. " -subj \"/CN=" .. tostring(cn) .. "\" 2>/dev/null"
+  local subj = shquote("/CN=" .. tostring(cn))
+  local cmd = "px5g selfsigned -newkey ec -keyout " .. tostring(shquote(key_file)) .. " -out " .. tostring(shquote(cert_file)) .. " -subj " .. tostring(subj) .. " 2>/dev/null"
   log_debug(function()
     return {
       action = "cert_gen_selfsigned_cmd",

@@ -163,6 +163,20 @@ aux deux workers.
 
 ---
 
+## Structure du worker AUTH (`src/auth/`)
+
+Le serveur HTTPS est découpé pour isoler les responsabilités :
+
+- `auth/server.moon` — machinerie réseau/TLS/fork uniquement (`run`, `handle_client`,
+  `dispatch_connection`, `resolve_tls_ctx`, `replay_sessions_to_nft`). N'expose plus
+  les handlers HTTP.
+- `auth/handlers.moon` — handlers HTTP du portail (`handle_login/ping/logout/register`)
+  + routage `handle_request` + helpers de présentation/formulaire (cookies, `parse_form`,
+  pages login/register). C'est `server.handle_client` qui appelle `handle_request`.
+- `auth/nft_auth_sets.moon` — sous-chaînes nft d'authentification par règle
+  (`refresh_rule_auth_sets`, `delete_rule_auth_sets`, `refresh_nft`,
+  `for_qualifying_auth_rules`).
+
 ## Interface admin web (`src/webui/`)
 
 Servie par le worker AUTH (`src/auth/server.moon` `require "webui.router"`) sous

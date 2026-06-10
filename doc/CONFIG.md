@@ -368,8 +368,7 @@ Portail captif et authentification des utilisateurs.
 | `session_ttl` | int | `0` | Durée (s) des sessions auth (0 = illimitée) |
 | `sessions_file` | string | `"/tmp/sessions.lua"` | Fichier de persistance des sessions |
 | `heartbeat_interval` | int | `30` | Intervalle (s) entre heartbeats client |
-| `idle_timeout` | int | `120` | Inactivité maximale (s) avant déconnexion |
-| `token_grace_period` | int | `180` | Marge (s) ajoutée à la durée de vie du cookie `custos_session` au-delà de `idle_timeout` ; couvre les retards réseau et le throttling navigateur |
+| `idle_timeout` | int | `300` | Inactivité maximale (s) avant déconnexion. Le cookie de session `custos_session` expire **exactement** en même temps (pas de marge séparée) : aucune fenêtre où la page indiquerait « connecté » alors que l'accès DNS a déjà expiré. Élargir cette valeur pour tolérer des pings/heartbeats retardés (throttling des onglets en arrière-plan). |
 | `register_rate_limit` | int | `3` | Enregistrements maximum par fenêtre |
 | `register_rate_window` | int | `300` | Fenêtre de rate-limiting (s) |
 | `bridge_ifname` | string | `"br0"` | Nom de l'interface bridge (utilisé pour la détection MAC) |
@@ -461,7 +460,7 @@ Proxy DNS-over-HTTPS vers un résolveur amont.
 | `key_path` | string | `nil` | Chemin clé privée TLS (optionnel) |
 | `prefer_ipv6` | bool | `true` | Préférer IPv6 pour les requêtes amont |
 | `upstream_doh_url` | string | `nil` | URL DoH amont, ex. `"https://dns.quad9.net/dns-query"`. Si défini, le worker DoH proxifie vers ce résolveur via **libcurl** (HTTP/2 + ALPN natif, fallback HTTP/1.1 automatique) au lieu d'UDP/53. Requis pour les providers qui imposent HTTP/2 (RFC 8484 §5.2, ex. DNSforFamily). Opt-in. |
-| `upstream_doh_tls_verify` | bool | `false` | Vérifier le certificat TLS du résolveur `upstream_doh_url`. |
+| `upstream_doh_tls_verify` | bool | `true` | Vérifier le certificat TLS du résolveur `upstream_doh_url` (sécurisé par défaut). Ne mettre à `false` que pour un résolveur de confiance hors chaîne PKI ; le worker DoH loggue alors `upstream_doh_tls_verify_disabled`. |
 
 > **Note `from_vlan` en DoH.** La condition `from_vlan` ne fonctionne pas pour
 > les connexions DoH quand les switches amont suppriment les tags 802.1Q avant

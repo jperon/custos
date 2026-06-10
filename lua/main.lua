@@ -106,7 +106,7 @@ load_auth_cfg = function()
     auth[k] = v
   end
   auth.port = tonumber(auth.port) or 33443
-  auth.idle_timeout = tonumber(auth.idle_timeout) or 120
+  auth.idle_timeout = tonumber(auth.idle_timeout) or 300
   auth.heartbeat_interval = tonumber(auth.heartbeat_interval) or 30
   auth.session_ttl = tonumber(auth.session_ttl) or 0
   auth.secrets = auth.secrets or "/etc/custos/secrets"
@@ -143,7 +143,13 @@ load_doh_cfg = function()
       end
     end)(),
     upstream_doh_url = config.doh.upstream_doh_url or nil,
-    upstream_doh_tls_verify = config.doh.upstream_doh_tls_verify or false
+    upstream_doh_tls_verify = (function()
+      if config.doh.upstream_doh_tls_verify == nil then
+        return true
+      else
+        return config.doh.upstream_doh_tls_verify
+      end
+    end)()
   }
 end
 local close_supervisor_fds

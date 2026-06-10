@@ -95,7 +95,7 @@ success_page = function(auth_cfg, created_at, is_admin)
   if interval <= 0 then
     interval = 30
   end
-  local idle_timeout = tonumber(auth_cfg and auth_cfg.idle_timeout) or 90
+  local idle_timeout = tonumber(auth_cfg and auth_cfg.idle_timeout) or 300
   local session_start = tonumber(created_at) or 0
   local admin_link
   if is_admin then

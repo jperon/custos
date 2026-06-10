@@ -97,7 +97,7 @@ page = =>
 success_page = (auth_cfg, created_at, is_admin) ->
   interval = tonumber(auth_cfg and auth_cfg.heartbeat_interval) or 30
   interval = 30 if interval <= 0
-  idle_timeout = tonumber(auth_cfg and auth_cfg.idle_timeout) or 90
+  idle_timeout = tonumber(auth_cfg and auth_cfg.idle_timeout) or 300
   session_start = tonumber(created_at) or 0
   admin_link = if is_admin
     H.p H.a { href: "/admin", target: "_blank", rel: "noopener" }, "Administration"

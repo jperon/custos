@@ -97,8 +97,7 @@
     sessions_file:      { type: "path",    label: "Fichier sessions",                                           default: "/tmp/sessions.lua" }
     session_ttl:        { type: "integer", label: "TTL session (s, 0=illimitée)",                               default: 0 }
     heartbeat_interval: { type: "integer", label: "Intervalle heartbeat (s)",                                    default: 30 }
-    idle_timeout:       { type: "integer", label: "Timeout inactivité (s)",                                      default: 120 }
-    token_grace_period: { type: "integer", label: "Marge token (s)",                                             default: 180, hint: "durée de vie du cookie au-delà du timeout inactivité" }
+    idle_timeout:       { type: "integer", label: "Timeout inactivité (s)",                                      default: 300, hint: "le cookie de session expire en même temps ; élargir pour tolérer des pings retardés" }
     register_rate_limit:  { type: "integer", label: "Inscriptions max / fenêtre",                               default: 3 }
     register_rate_window: { type: "integer", label: "Fenêtre rate-limit (s)",                                    default: 300 }
     bridge_ifname:      { type: "string",  label: "Interface bridge",                                            default: "br0" }

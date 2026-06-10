@@ -6,6 +6,8 @@ do
   local _obj_0 = require("webui.serializer")
   read_config, write_config = _obj_0.read_config, _obj_0.write_config
 end
+local shquote
+shquote = require("lib.shquote").shquote
 local parse_form
 parse_form = function(body)
   if not (body) then
@@ -41,7 +43,7 @@ end
 local scan_types
 scan_types = function(lists_dir)
   local types = { }
-  local f = io.popen("find '" .. tostring(lists_dir) .. "' -maxdepth 1 -mindepth 1 -type d 2>/dev/null")
+  local f = io.popen("find " .. tostring(shquote(lists_dir)) .. " -maxdepth 1 -mindepth 1 -type d 2>/dev/null")
   if not (f) then
     return types
   end
@@ -59,7 +61,7 @@ local scan_names
 scan_names = function(lists_dir, type_name)
   local names = { }
   local dir = tostring(lists_dir) .. "/" .. tostring(type_name)
-  local f = io.popen("find '" .. tostring(dir) .. "' -maxdepth 1 -name '*.txt' -type f 2>/dev/null")
+  local f = io.popen("find " .. tostring(shquote(dir)) .. " -maxdepth 1 -name '*.txt' -type f 2>/dev/null")
   if not (f) then
     return names
   end
@@ -87,7 +89,7 @@ local write_list_file
 write_list_file = function(path, content)
   local dir = path:match("^(.*)/[^/]+$")
   if dir then
-    local ret = os.execute("mkdir -p '" .. tostring(dir) .. "'")
+    local ret = os.execute("mkdir -p " .. tostring(shquote(dir)))
     if not (ret == 0 or ret == true) then
       return nil, "mkdir échoué"
     end

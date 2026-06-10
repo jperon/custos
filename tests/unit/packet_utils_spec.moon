@@ -57,6 +57,33 @@ describe "packet_utils", ->
       assert.is_nil proto
       assert.is_nil off
 
+    it "gère l'Authentication Header (taille en multiples de 4)", ->
+      -- AH (next_header 51) : ext_size = (hdrlen + 2) * 4, ici (0+2)*4 = 8.
+      raw = ffi.new "uint8_t[48]", 0
+      raw[0]  = 0x60
+      raw[40] = 17  -- next header après l'AH : UDP
+      raw[41] = 0   -- hdrlen AH → 8 octets
+      proto, off = packet_utils.skip_ipv6_ext_hdrs ffi.cast("const uint8_t*", raw), 48, 51
+      assert.equals 17, proto
+      assert.equals 48, off
+
+    it "rejette quand l'octet de taille d'extension dépasse la longueur", ->
+      -- Header d'extension présent mais len ne couvre pas off+2 (lecture impossible).
+      raw = make_ipv6_packet 17, 44, 8
+      proto, off = packet_utils.skip_ipv6_ext_hdrs ffi.cast("const uint8_t*", raw), 41, 44
+      assert.is_nil proto
+      assert.is_nil off
+
+    it "rejette une extension chaînée qui déborde du paquet", ->
+      -- ext_size annoncé = (10+1)*8 = 88 octets, bien au-delà des 48 du buffer.
+      raw = ffi.new "uint8_t[48]", 0
+      raw[0]  = 0x60
+      raw[40] = 17
+      raw[41] = 10
+      proto, off = packet_utils.skip_ipv6_ext_hdrs ffi.cast("const uint8_t*", raw), 48, 44
+      assert.is_nil proto
+      assert.is_nil off
+
   describe "dns_tcp_complete", ->
     it "accepte un buffer DNS-over-TCP complet", ->
       assert.is_true packet_utils.dns_tcp_complete string.char(0, 4) .. "abcd"

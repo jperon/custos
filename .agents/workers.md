@@ -155,4 +155,19 @@ Fonctions communes aux workers manipulant des paquets bruts :
 - `mac2s(s, off=1)` — formate 6 octets d'une chaîne en `aa:bb:cc:dd:ee:ff`. Utilisé par `worker_tls`, `worker_arp_sniffer`, `mac_learner`, `mac_learner_ipc`, `mac_prober` et `nfq/ethernet` (ne pas re-implémenter localement).
 - `dns_tcp_complete` / `new_dns_tcp_stream` — réassemblage DNS-over-TCP.
 
-Dans `worker_responses`, le recalcul des checksums L4 est unifié dans `fix_l4_cksum(buf, pkt_len, l4_off, version, proto)` (UDP/TCP × IPv4/IPv6, pseudo-header dérivé de `version`).
+### Modules `src/lib/` partagés (paquets / DNS)
+
+- `lib/checksums.moon` — accès byte-level big-endian (`r16/w16/w32/fold16`) et
+  recalcul checksums sur buffers FFI : `fix_ip4_cksum(buf, ihl)` et
+  `fix_l4_cksum(buf, pkt_len, l4_off, version, proto)` (UDP/TCP × IPv4/IPv6,
+  pseudo-header dérivé de `version`). Distinct de `ipparse.l3.lib` (checksum sur
+  strings, utilisé par `worker_reject`). Consommé par `worker_responses` /
+  `lib.dns_response`.
+- `lib/packet_parsing.moon` — agrège les `parse` ipparse L3/L4/L7
+  (`parse_ip4/ip6/udp/tcp/dns`, `ip2s`, `dns_types`). Utilisé par
+  `worker_questions` et `worker_responses` (évite le bloc de `require` dupliqué).
+- `lib/dns_response.moon` — fonctions pures de (re)construction de réponse DNS :
+  `replace_dns_payload` (reconstruit un paquet IP + recalcul checksums) et
+  formatage des RR (`parse_answers`, `fmt_rdata`, `decode_simple_cname`).
+- `lib/shquote.moon` — `shquote(s)` échappe un argument shell POSIX (quotes
+  simples) ; à utiliser pour toute interpolation dans `io.popen`/`os.execute`.

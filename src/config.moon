@@ -270,8 +270,7 @@ DEFAULTS = {
     captive_port: 33080
     session_ttl: 0
     heartbeat_interval: 30
-    idle_timeout: 120
-    token_grace_period: 180
+    idle_timeout: 300
     secrets: "/etc/custos/secrets"
     sessions_file: "/tmp/sessions.lua"
     admin_users: {}
@@ -299,7 +298,7 @@ DEFAULTS = {
     -- Transport DoH vers l'upstream (opt-in). nil = UDP/53 (comportement par défaut).
     -- Exemple : "https://1.1.1.1/dns-query"
     upstream_doh_url: nil        -- "https://host/dns-query" → transport DoH via libcurl (opt-in)
-    upstream_doh_tls_verify: false
+    upstream_doh_tls_verify: true
   }
 
   events: {
@@ -473,6 +472,13 @@ normalize = (cfg) ->
 
   cfg.doh.enabled = coerce_boolean cfg.doh.enabled
   cfg.doh.prefer_ipv6 = coerce_boolean cfg.doh.prefer_ipv6
+  -- Vérification du certificat TLS du résolveur DoH amont : sécurisée par défaut
+  -- (true). Ne désactiver explicitement que pour un résolveur de confiance hors
+  -- chaîne PKI (le worker DoH loggue alors un avertissement).
+  cfg.doh.upstream_doh_tls_verify = if cfg.doh.upstream_doh_tls_verify == nil
+    true
+  else
+    coerce_boolean cfg.doh.upstream_doh_tls_verify
   cfg.runtime.benchmark = coerce_boolean cfg.runtime.benchmark
   runtime_defaults = defaults.runtime or {}
   cfg.runtime.gc_pause = tonumber(cfg.runtime.gc_pause) or runtime_defaults.gc_pause
@@ -505,7 +511,6 @@ normalize = (cfg) ->
   cfg.auth.session_ttl = tonumber(cfg.auth.session_ttl) or auth_defaults.session_ttl
   cfg.auth.heartbeat_interval = tonumber(cfg.auth.heartbeat_interval) or auth_defaults.heartbeat_interval
   cfg.auth.idle_timeout = tonumber(cfg.auth.idle_timeout) or auth_defaults.idle_timeout
-  cfg.auth.token_grace_period = tonumber(cfg.auth.token_grace_period) or auth_defaults.token_grace_period
   if cfg.sni.enabled == nil
     cfg.sni.enabled = sni_defaults.enabled
   else

@@ -705,7 +705,12 @@ run = function(doh_cfg, filter_data)
     local ok_curl, upstream_curl_mod = pcall(require, "doh.upstream_doh_curl")
     if ok_curl then
       local url = doh_cfg.upstream_doh_url
-      local verify_tls = doh_cfg.upstream_doh_tls_verify or false
+      local verify_tls
+      if doh_cfg.upstream_doh_tls_verify == nil then
+        verify_tls = true
+      else
+        verify_tls = doh_cfg.upstream_doh_tls_verify
+      end
       make_upstream = function()
         return upstream_curl_mod.new_client(url, timeout_ms, verify_tls)
       end
@@ -716,6 +721,15 @@ run = function(doh_cfg, filter_data)
           url = url,
           verify_tls = verify_tls
         }
+      end)
+      log_warn(function()
+        if not (verify_tls) then
+          return {
+            action = "upstream_doh_tls_verify_disabled",
+            url = url,
+            detail = "certificat TLS du résolveur amont NON vérifié (MITM possible)"
+          }
+        end
       end)
     else
       log_warn(function()

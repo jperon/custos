@@ -3,6 +3,8 @@ do
   local _obj_0 = require("log")
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
+local shquote
+shquote = require("lib.shquote").shquote
 local detect
 detect = function(auth_cfg)
   auth_cfg = auth_cfg or { }
@@ -11,7 +13,7 @@ detect = function(auth_cfg)
   local local_ip6 = auth_cfg.captive_ip6 or os.getenv("CAPTIVE_IP6")
   if not local_ip4 then
     local ok, out = pcall(function()
-      local fh = io.popen("ip -4 addr show dev " .. tostring(ifname) .. " scope global 2>/dev/null | awk '/inet/{print $2}' | head -1 | cut -d'/' -f1")
+      local fh = io.popen("ip -4 addr show dev " .. tostring(shquote(ifname)) .. " scope global 2>/dev/null | awk '/inet/{print $2}' | head -1 | cut -d'/' -f1")
       if not (fh) then
         return nil
       end
@@ -57,7 +59,7 @@ detect = function(auth_cfg)
   end
   if not local_ip6 then
     local ok, ip = pcall(function()
-      local f = io.popen("ip -6 addr show dev " .. tostring(ifname) .. " scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1")
+      local f = io.popen("ip -6 addr show dev " .. tostring(shquote(ifname)) .. " scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1")
       if not (f) then
         return nil
       end

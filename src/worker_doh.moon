@@ -474,10 +474,11 @@ run = (doh_cfg, filter_data) ->
     ok_curl, upstream_curl_mod = pcall require, "doh.upstream_doh_curl"
     if ok_curl
       url        = doh_cfg.upstream_doh_url
-      verify_tls = doh_cfg.upstream_doh_tls_verify or false
+      verify_tls = if doh_cfg.upstream_doh_tls_verify == nil then true else doh_cfg.upstream_doh_tls_verify
       make_upstream  = -> upstream_curl_mod.new_client url, timeout_ms, verify_tls
       close_upstream = upstream_curl_mod.close
       log_info -> { action: "upstream_doh_curl_enabled", url: url, verify_tls: verify_tls }
+      log_warn -> { action: "upstream_doh_tls_verify_disabled", url: url, detail: "certificat TLS du résolveur amont NON vérifié (MITM possible)" } unless verify_tls
     else
       log_warn -> { action: "upstream_doh_curl_load_failed", err: tostring upstream_curl_mod }
   unless make_upstream

@@ -10,6 +10,7 @@
 --   4. Fallback IPv4 via socket.connect (heuristique)
 
 { :log_info, :log_warn } = require "log"
+{ :shquote } = require "lib.shquote"
 
 --- Détecte les adresses IPv4 et IPv6 du portail captif.
 -- Lit d'abord la configuration explicite et les variables d'environnement,
@@ -29,7 +30,7 @@ detect = (auth_cfg) ->
   -- ── 3a : auto-détection IPv4 via `ip addr show dev <bridge>` ─
   if not local_ip4
     ok, out = pcall ->
-      fh = io.popen "ip -4 addr show dev #{ifname} scope global 2>/dev/null | awk '/inet/{print $2}' | head -1 | cut -d'/' -f1"
+      fh = io.popen "ip -4 addr show dev #{shquote ifname} scope global 2>/dev/null | awk '/inet/{print $2}' | head -1 | cut -d'/' -f1"
       return nil unless fh
       s = fh\read "*a"
       fh\close!
@@ -57,7 +58,7 @@ detect = (auth_cfg) ->
   -- ── 3b : auto-détection IPv6 via `ip addr show dev <bridge>` ──
   if not local_ip6
     ok, ip = pcall ->
-      f = io.popen "ip -6 addr show dev #{ifname} scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1"
+      f = io.popen "ip -6 addr show dev #{shquote ifname} scope global 2>/dev/null | awk '/inet6/{print $2}' | head -1 | cut -d'/' -f1"
       return nil unless f
       addr = f\read "*a"
       f\close!

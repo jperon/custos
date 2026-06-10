@@ -4,6 +4,7 @@
 -- Aucun fallback openssl : px5g est une dépendance obligatoire.
 
 { :log_debug, :log_warn, :log_error } = require "log"
+{ :shquote } = require "lib.shquote"
 
 --- Génère une clé RSA via px5g.
 -- @tparam number bits Taille de la clé (ex: 2048, 4096)
@@ -16,7 +17,7 @@ generate_rsa_key = (bits = 2048) ->
   -- px5g écrit la clé dans le fichier passé à -out (sans -out, il écrit sur
   -- stderr, ce qui échoue sur un pipe). On lit ensuite le fichier en mémoire.
   key_file = "/tmp/px5g_rsakey_#{os.time!}_#{math.random(1000000)}.pem"
-  cmd = "px5g rsakey -out #{key_file} #{bits} 2>/dev/null"
+  cmd = "px5g rsakey -out #{shquote key_file} #{bits} 2>/dev/null"
 
   exit_code = os.execute cmd
   -- os.execute retourne true en Lua 5.1, 0 en 5.2+
@@ -66,6 +67,13 @@ generate_self_signed = (cn, sans = {}, days = 3650) ->
     log_warn -> { action: "cert_gen_selfsigned_nocn", err: err }
     return nil, nil, false, err
 
+  -- Le CN provient de l'extraction SNI (influençable par le client) : on le
+  -- restreint au jeu de caractères d'un nom d'hôte avant toute interpolation.
+  unless cn\match "^[A-Za-z0-9.%-%*_]+$"
+    err = "CN contient des caractères invalides: #{cn}"
+    log_warn -> { action: "cert_gen_selfsigned_bad_cn", err: err }
+    return nil, nil, false, err
+
   days = tonumber(days) or 3650
 
   -- Créer des fichiers temporaires pour px5g (il écrit les fichiers, ne produit pas stdout)
@@ -74,7 +82,8 @@ generate_self_signed = (cn, sans = {}, days = 3650) ->
 
   -- Construire la commande px5g avec les bons paramètres
   -- Syntaxe: px5g selfsigned -newkey ec -keyout key.pem -out cert.pem -subj "/CN=hostname"
-  cmd = "px5g selfsigned -newkey ec -keyout #{key_file} -out #{cert_file} -subj \"/CN=#{cn}\" 2>/dev/null"
+  subj = shquote "/CN=#{cn}"
+  cmd = "px5g selfsigned -newkey ec -keyout #{shquote key_file} -out #{shquote cert_file} -subj #{subj} 2>/dev/null"
 
   log_debug -> { action: "cert_gen_selfsigned_cmd", cn: cn, cmd: cmd }
 

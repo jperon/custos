@@ -1,47 +1,42 @@
 -- tests/unit/auth/token_grace_period_spec.moon
--- Régression : le cookie custos_session expire strictement à now + idle_timeout.
--- Quand un ping est retardé par le navigateur (file d'attente, throttling
--- background), le token arrive au serveur après expiration et est rejeté 401.
--- Fix : le token a une durée de vie de idle_timeout + token_grace_period,
--- tandis que la session (fichier + nft) reste à idle_timeout.
+-- Régression : le cookie custos_session expire EXACTEMENT à session_expires
+-- (= now + idle_timeout). Il n'y a plus de token_grace_period : cookie et
+-- session DNS (fichier + sets nft) partagent la même échéance, ce qui supprime
+-- la fenêtre où la page indiquerait « connecté » alors que l'accès DNS a expiré.
+-- La tolérance aux pings retardés passe désormais par un idle_timeout plus large.
 
 token = require "auth.token"
 
 KEY = token.load_key "tmp/token_grace_spec.key"
 BASE_TIME = 1780919758
 
-describe "token grace period", ->
+describe "cookie expiry unifié (sans grace period)", ->
   original_os_time = os.time
 
   after_each ->
     os.time = original_os_time
 
-  it "token avec grace period reste valide pendant la marge", ->
+  it "le token reste valide jusqu'à session_expires", ->
     os.time = -> BASE_TIME
+    idle_timeout = 300
+    session_expires = BASE_TIME + idle_timeout
+    -- Le serveur émet token_expires = session_expires (cf. server.moon).
     tok = token.generate "user", "alice@test.lan", "aa:bb:cc:dd:ee:ff",
-      BASE_TIME + 10 + 5, KEY  -- idle=10, grace=5
+      session_expires, KEY
 
-    os.time = -> BASE_TIME + 12  -- après idle (10) mais dans la grace (15)
+    os.time = -> session_expires - 1
     p, err = token.verify tok, KEY
-    assert.is_not_nil p, "token devrait être valide dans la grace period"
+    assert.is_not_nil p, "token valide avant son échéance"
     assert.is_nil err
 
-  it "token avec grace period invalide après la marge totale", ->
+  it "le token expire exactement à session_expires (pas de marge)", ->
     os.time = -> BASE_TIME
+    idle_timeout = 300
+    session_expires = BASE_TIME + idle_timeout
     tok = token.generate "user", "alice@test.lan", "aa:bb:cc:dd:ee:ff",
-      BASE_TIME + 10 + 5, KEY
+      session_expires, KEY
 
-    os.time = -> BASE_TIME + 16  -- après idle + grace (15)
+    os.time = -> session_expires + 1
     p, err = token.verify tok, KEY
-    assert.is_nil p
-    assert.equals "token expiré", err
-
-  it "token sans grace period invalide immédiatement après idle", ->
-    os.time = -> BASE_TIME
-    tok = token.generate "user", "alice@test.lan", "aa:bb:cc:dd:ee:ff",
-      BASE_TIME + 10, KEY  -- pas de grace
-
-    os.time = -> BASE_TIME + 11
-    p, err = token.verify tok, KEY
-    assert.is_nil p
+    assert.is_nil p, "token invalide dès que la session DNS expire"
     assert.equals "token expiré", err

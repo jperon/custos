@@ -12,6 +12,7 @@
 H       = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
+{ :shquote } = require "lib.shquote"
 
 parse_form = (body) ->
   return {} unless body
@@ -33,7 +34,7 @@ get_lists_dir = (state) ->
 -- Lister les sous-répertoires (types) dans lists_dir
 scan_types = (lists_dir) ->
   types = {}
-  f = io.popen "find '#{lists_dir}' -maxdepth 1 -mindepth 1 -type d 2>/dev/null"
+  f = io.popen "find #{shquote lists_dir} -maxdepth 1 -mindepth 1 -type d 2>/dev/null"
   return types unless f
   for line in f\lines!
     t = line\match "/([^/]+)$"
@@ -46,7 +47,7 @@ scan_types = (lists_dir) ->
 scan_names = (lists_dir, type_name) ->
   names = {}
   dir = "#{lists_dir}/#{type_name}"
-  f = io.popen "find '#{dir}' -maxdepth 1 -name '*.txt' -type f 2>/dev/null"
+  f = io.popen "find #{shquote dir} -maxdepth 1 -name '*.txt' -type f 2>/dev/null"
   return names unless f
   for line in f\lines!
     n = line\match "/([^/]+)%.txt$"
@@ -65,7 +66,7 @@ read_list_file = (path) ->
 write_list_file = (path, content) ->
   dir = path\match "^(.*)/[^/]+$"
   if dir
-    ret = os.execute "mkdir -p '#{dir}'"
+    ret = os.execute "mkdir -p #{shquote dir}"
     return nil, "mkdir échoué" unless ret == 0 or ret == true
   fh = io.open path, "w"
   return nil, "Impossible d'ouvrir #{path} en écriture" unless fh

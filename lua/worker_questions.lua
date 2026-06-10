@@ -10,21 +10,11 @@ local auth_cfg = config.auth or { }
 local metrics = require("metrics")
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
-local parse_ip4
-parse_ip4 = require("ipparse.l3.ip4").parse
-local parse_ip6
-parse_ip6 = require("ipparse.l3.ip6").parse
-local parse_udp
-parse_udp = require("ipparse.l4.udp").parse
-local parse_tcp
-parse_tcp = require("ipparse.l4.tcp").parse
-local parse_dns, dns_types
+local parse_ip4, parse_ip6, parse_udp, parse_tcp, parse_dns, ip2s, dns_types
 do
-  local _obj_0 = require("ipparse.l7.dns")
-  parse_dns, dns_types = _obj_0.parse, _obj_0.types
+  local _obj_0 = require("lib.packet_parsing")
+  parse_ip4, parse_ip6, parse_udp, parse_tcp, parse_dns, ip2s, dns_types = _obj_0.parse_ip4, _obj_0.parse_ip6, _obj_0.parse_udp, _obj_0.parse_tcp, _obj_0.parse_dns, _obj_0.ip2s, _obj_0.dns_types
 end
-local ip2s
-ip2s = require("ipparse.l3.ip").ip2s
 local skip_ipv6_ext_hdrs, new_dns_tcp_stream
 do
   local _obj_0 = require("packet_utils")

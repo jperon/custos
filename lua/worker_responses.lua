@@ -13,21 +13,11 @@ local auth_cfg = config.auth or { }
 local clients_cfg = config.clients or { }
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
-local parse_ip4
-parse_ip4 = require("ipparse.l3.ip4").parse
-local parse_ip6
-parse_ip6 = require("ipparse.l3.ip6").parse
-local parse_udp
-parse_udp = require("ipparse.l4.udp").parse
-local parse_tcp
-parse_tcp = require("ipparse.l4.tcp").parse
-local parse_dns, QTYPE
+local parse_ip4, parse_ip6, parse_udp, parse_tcp, parse_dns, ip2s, QTYPE
 do
-  local _obj_0 = require("ipparse.l7.dns")
-  parse_dns, QTYPE = _obj_0.parse, _obj_0.types
+  local _obj_0 = require("lib.packet_parsing")
+  parse_ip4, parse_ip6, parse_udp, parse_tcp, parse_dns, ip2s, QTYPE = _obj_0.parse_ip4, _obj_0.parse_ip6, _obj_0.parse_udp, _obj_0.parse_tcp, _obj_0.parse_dns, _obj_0.ip2s, _obj_0.dns_types
 end
-local ip2s
-ip2s = require("ipparse.l3.ip").ip2s
 local skip_ipv6_ext_hdrs, new_dns_tcp_stream
 do
   local _obj_0 = require("packet_utils")
@@ -85,181 +75,16 @@ set_verdict = function(qh_ptr, pkt_id, verdict, payload)
     return libnfq.nfq_set_verdict(qh_ptr, pkt_id, verdict, 0, nil)
   end
 end
-local PROTO_UDP = 17
-local PROTO_TCP = 6
+local PROTO_UDP, PROTO_TCP
+do
+  local _obj_0 = require("lib.checksums")
+  PROTO_UDP, PROTO_TCP = _obj_0.PROTO_UDP, _obj_0.PROTO_TCP
+end
 local tcp_state = new_dns_tcp_stream()
-local r16
-r16 = function(p, o)
-  return bit.bor(bit.lshift(p[o], 8), p[o + 1])
-end
-local w32
-w32 = function(p, o, v)
-  p[o] = bit.band(bit.rshift(v, 24), 0xFF)
-  p[o + 1] = bit.band(bit.rshift(v, 16), 0xFF)
-  p[o + 2] = bit.band(bit.rshift(v, 8), 0xFF)
-  p[o + 3] = bit.band(v, 0xFF)
-end
-local w16
-w16 = function(p, o, v)
-  p[o] = bit.band(bit.rshift(v, 8), 0xFF)
-  p[o + 1] = bit.band(v, 0xFF)
-end
-local fold16
-fold16 = function(sum)
-  while bit.rshift(sum, 16) ~= 0 do
-    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
-  end
-  return sum
-end
-local fix_ip4_cksum
-fix_ip4_cksum = function(buf, ihl)
-  buf[10] = 0
-  buf[11] = 0
-  local sum = 0
-  for i = 0, ihl - 1, 2 do
-    sum = sum + bit.bor(bit.lshift(buf[i], 8), buf[i + 1])
-  end
-  return w16(buf, 10, bit.band(bit.bnot(fold16(sum)), 0xFFFF))
-end
-local PH_FIRST = {
-  [4] = 12,
-  [6] = 8
-}
-local PH_LAST = {
-  [4] = 18,
-  [6] = 38
-}
-local fix_l4_cksum
-fix_l4_cksum = function(buf, pkt_len, l4_off, version, proto)
-  local is_udp = proto == PROTO_UDP
-  if pkt_len < l4_off + (is_udp and 8 or 20) then
-    return 
-  end
-  local l4_len = is_udp and r16(buf, l4_off + 4) or pkt_len - l4_off
-  local cksum_off = l4_off + (is_udp and 6 or 16)
-  buf[cksum_off] = 0
-  buf[cksum_off + 1] = 0
-  local sum = 0
-  for i = PH_FIRST[version], PH_LAST[version], 2 do
-    sum = sum + r16(buf, i)
-  end
-  sum = sum + proto
-  sum = sum + l4_len
-  local l4_end = l4_off + l4_len
-  if l4_end > pkt_len then
-    l4_end = pkt_len
-  end
-  local i = l4_off
-  while i < l4_end do
-    local word
-    if i == cksum_off then
-      word = 0
-    elseif i + 1 < l4_end then
-      word = r16(buf, i)
-    else
-      word = bit.lshift(buf[i], 8)
-    end
-    sum = sum + word
-    i = i + 2
-  end
-  local cksum = bit.band(bit.bnot(fold16(sum)), 0xFFFF)
-  if cksum == 0 then
-    cksum = 0xFFFF
-  end
-  return w16(buf, cksum_off, cksum)
-end
-local replace_dns_payload
-replace_dns_payload = function(raw, ip, l4, ip_ihl, new_dns)
-  local p = ffi.cast("const uint8_t*", raw)
-  local dns_len = #new_dns
-  if l4.proto == "udp" then
-    local udp_len = 8 + dns_len
-    local new_pkt_len = ip_ihl + udp_len
-    local new_buf = ffi.new("uint8_t[?]", new_pkt_len)
-    ffi.copy(new_buf, p, ip_ihl + 8)
-    w16(new_buf, ip_ihl + 4, udp_len)
-    ffi.copy(new_buf + ip_ihl + 8, new_dns, dns_len)
-    if ip.version == 4 then
-      w16(new_buf, 2, new_pkt_len)
-    else
-      w16(new_buf, 4, (ip_ihl - 40) + udp_len)
-    end
-    fix_l4_cksum(new_buf, new_pkt_len, ip_ihl, ip.version, PROTO_UDP)
-    if ip.version == 4 then
-      fix_ip4_cksum(new_buf, ip_ihl)
-    end
-    return ffi.string(new_buf, new_pkt_len)
-  elseif l4.proto == "tcp" then
-    local tcp_hdr_len = bit.rshift(p[ip_ihl + 12], 4) * 4
-    local hdr_len = ip_ihl + tcp_hdr_len
-    local new_pkt_len = hdr_len + 2 + dns_len
-    local new_buf = ffi.new("uint8_t[?]", new_pkt_len)
-    ffi.copy(new_buf, p, hdr_len)
-    w16(new_buf, hdr_len, dns_len)
-    ffi.copy(new_buf + hdr_len + 2, new_dns, dns_len)
-    w32(new_buf, ip_ihl + 4, l4.tcp_init_seq)
-    new_buf[ip_ihl + 13] = 0x18
-    if ip.version == 4 then
-      w16(new_buf, 2, new_pkt_len)
-    else
-      w16(new_buf, 4, (ip_ihl - 40) + tcp_hdr_len + 2 + dns_len)
-    end
-    fix_l4_cksum(new_buf, new_pkt_len, ip_ihl, ip.version, PROTO_TCP)
-    if ip.version == 4 then
-      fix_ip4_cksum(new_buf, ip_ihl)
-    end
-    return ffi.string(new_buf, new_pkt_len)
-  end
-  return nil
-end
-local decode_simple_cname
-decode_simple_cname = function(rdata)
-  local parts = { }
-  local pos = 1
-  while pos <= #rdata do
-    local len = rdata:byte(pos)
-    if len == 0 then
-      break
-    end
-    if bit.band(len, 0xC0) == 0xC0 then
-      return "(cname)"
-    end
-    parts[#parts + 1] = rdata:sub(pos + 1, pos + len)
-    pos = pos + (1 + len)
-  end
-  return table.concat(parts, ".")
-end
-local fmt_rdata
-fmt_rdata = function(rr)
-  if (rr.rtype == 1 or rr.rtype == 28) and (#rr.rdata == 4 or #rr.rdata == 16) then
-    return ip2s(rr.rdata)
-  elseif rr.rtype == 5 then
-    return decode_simple_cname(rr.rdata)
-  else
-    return "(rdata " .. tostring(#rr.rdata) .. "B)"
-  end
-end
-local parse_answers
-parse_answers = function(dns_msg)
-  local _accum_0 = { }
-  local _len_0 = 1
-  local _list_0 = dns_msg.answers
-  for _index_0 = 1, #_list_0 do
-    local rr = _list_0[_index_0]
-    _accum_0[_len_0] = {
-      name = rr.name,
-      rtype = rr.rtype,
-      rclass = rr.rclass,
-      ttl = rr.ttl,
-      rdlength = #rr.rdata,
-      rdata_raw = (rr.rtype == 1 or rr.rtype == 28) and rr.rdata or "",
-      rdata_str = fmt_rdata(rr),
-      rtype_name = QTYPE[rr.rtype] or "TYPE" .. tostring(rr.rtype),
-      ttl_offset = rr.off + #rr.rname + 3
-    }
-    _len_0 = _len_0 + 1
-  end
-  return _accum_0
+local replace_dns_payload, parse_answers
+do
+  local _obj_0 = require("lib.dns_response")
+  replace_dns_payload, parse_answers = _obj_0.replace_dns_payload, _obj_0.parse_answers
 end
 local parse_packet
 parse_packet = function(raw)

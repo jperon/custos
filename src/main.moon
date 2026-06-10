@@ -128,7 +128,7 @@ load_auth_cfg = ->
   for k, v in pairs(config.auth or {})
     auth[k] = v
   auth.port               = tonumber(auth.port) or 33443
-  auth.idle_timeout       = tonumber(auth.idle_timeout) or 120
+  auth.idle_timeout       = tonumber(auth.idle_timeout) or 300
   auth.heartbeat_interval = tonumber(auth.heartbeat_interval) or 30
   auth.session_ttl        = tonumber(auth.session_ttl) or 0
   auth.secrets            = auth.secrets or "/etc/custos/secrets"
@@ -154,7 +154,7 @@ load_doh_cfg = ->
     cert:    if config.doh.cert and #config.doh.cert > 0 then config.doh.cert else nil
     key:     if config.doh.key  and #config.doh.key  > 0 then config.doh.key  else nil
     upstream_doh_url:        config.doh.upstream_doh_url or nil
-    upstream_doh_tls_verify: config.doh.upstream_doh_tls_verify or false
+    upstream_doh_tls_verify: if config.doh.upstream_doh_tls_verify == nil then true else config.doh.upstream_doh_tls_verify
   }
 
 -- ── Shutdown explicite des workers ───────────────────────────────

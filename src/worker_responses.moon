@@ -26,12 +26,7 @@ ttl_cfg = dns_cfg.ttl_grace or {}
 auth_cfg = config.auth or {}
 clients_cfg = config.clients or {}
 { :user_for_mac } = require "auth.sessions"
-{ parse: parse_ip4 }                     = require "ipparse.l3.ip4"
-{ parse: parse_ip6 }                     = require "ipparse.l3.ip6"
-{ parse: parse_udp }                     = require "ipparse.l4.udp"
-{ parse: parse_tcp }                     = require "ipparse.l4.tcp"
-{ parse: parse_dns, types: QTYPE }       = require "ipparse.l7.dns"
-{ :ip2s }                                = require "ipparse.l3.ip"
+{ :parse_ip4, :parse_ip6, :parse_udp, :parse_tcp, :parse_dns, :ip2s, dns_types: QTYPE } = require "lib.packet_parsing"
 { :skip_ipv6_ext_hdrs, :new_dns_tcp_stream } = require "packet_utils"
 { :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
@@ -63,153 +58,16 @@ set_verdict = (qh_ptr, pkt_id, verdict, payload=nil) ->
   else
     libnfq.nfq_set_verdict qh_ptr, pkt_id, verdict, 0, nil
 
--- ── Constantes L3/L4 ────────────────────────────────────────────
+-- ── Constantes L3/L4 et helpers checksums ──────────────────────
+-- Byte-level (big-endian) + recalcul checksums IPv4/UDP/TCP factorisés dans
+-- lib.checksums (mutation FFI en place, partagée avec les futurs workers).
 
-PROTO_UDP = 17
-PROTO_TCP = 6
+{ :PROTO_UDP, :PROTO_TCP } = require "lib.checksums"
 
 tcp_state = new_dns_tcp_stream!
 
--- ── Fonctions de mutation FFI (byte-level, big-endian) ──────────
-
-r16 = (p, o) ->
-  bit.bor bit.lshift(p[o], 8), p[o + 1]
-
-w32 = (p, o, v) ->
-  p[o]   = bit.band bit.rshift(v, 24), 0xFF
-  p[o+1] = bit.band bit.rshift(v, 16), 0xFF
-  p[o+2] = bit.band bit.rshift(v,  8), 0xFF
-  p[o+3] = bit.band v, 0xFF
-
-w16 = (p, o, v) ->
-  p[o]   = bit.band bit.rshift(v, 8), 0xFF
-  p[o+1] = bit.band v, 0xFF
-
--- Replie une somme 32 bits en complément à un sur 16 bits.
-fold16 = (sum) ->
-  while bit.rshift(sum, 16) != 0
-    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
-  sum
-
-fix_ip4_cksum = (buf, ihl) ->
-  buf[10] = 0
-  buf[11] = 0
-  sum = 0
-  for i = 0, ihl - 1, 2
-    sum += bit.bor bit.lshift(buf[i], 8), buf[i + 1]
-  w16 buf, 10, bit.band(bit.bnot(fold16 sum), 0xFFFF)
-
--- Plage [first, last] (octets, pas de 2) du pseudo-header d'adresses sommé
--- pour le checksum L4 : src+dst IPv4 (12-18) ou IPv6 (8-38).
-PH_FIRST = { [4]: 12, [6]: 8 }
-PH_LAST  = { [4]: 18, [6]: 38 }
-
---- Recalcule en place le checksum L4 (UDP ou TCP, IPv4 ou IPv6).
--- Longueur L4 : champ length UDP, ou pkt_len - l4_off en TCP.
--- @tparam cdata  buf     Paquet IP (uint8_t*)
--- @tparam number pkt_len Longueur totale du paquet
--- @tparam number l4_off  Offset 0-based de l'en-tête L4
--- @tparam number version 4 ou 6
--- @tparam number proto   PROTO_UDP ou PROTO_TCP
-fix_l4_cksum = (buf, pkt_len, l4_off, version, proto) ->
-  is_udp = proto == PROTO_UDP
-  return if pkt_len < l4_off + (is_udp and 8 or 20)
-  l4_len = is_udp and r16(buf, l4_off + 4) or pkt_len - l4_off
-  cksum_off = l4_off + (is_udp and 6 or 16)
-  buf[cksum_off] = 0
-  buf[cksum_off + 1] = 0
-  sum = 0
-  for i = PH_FIRST[version], PH_LAST[version], 2
-    sum += r16 buf, i
-  sum += proto
-  sum += l4_len
-  l4_end = l4_off + l4_len
-  l4_end = pkt_len if l4_end > pkt_len
-  i = l4_off
-  while i < l4_end
-    word = if i == cksum_off then 0
-    elseif i + 1 < l4_end then r16 buf, i
-    else bit.lshift buf[i], 8
-    sum += word
-    i += 2
-  cksum = bit.band bit.bnot(fold16 sum), 0xFFFF
-  cksum = 0xFFFF if cksum == 0
-  w16 buf, cksum_off, cksum
-
--- Reconstruit un paquet IP avec un nouveau payload DNS.
--- ip_ihl : offset 0-based (en octets) de l'en-tête L4 depuis le début du paquet.
-replace_dns_payload = (raw, ip, l4, ip_ihl, new_dns) ->
-  p       = ffi.cast "const uint8_t*", raw
-  dns_len = #new_dns
-
-  if l4.proto == "udp"
-    udp_len     = 8 + dns_len
-    new_pkt_len = ip_ihl + udp_len
-    new_buf = ffi.new "uint8_t[?]", new_pkt_len
-    ffi.copy new_buf, p, ip_ihl + 8
-    w16 new_buf, ip_ihl + 4, udp_len
-    ffi.copy new_buf + ip_ihl + 8, new_dns, dns_len
-    if ip.version == 4
-      w16 new_buf, 2, new_pkt_len
-    else
-      w16 new_buf, 4, (ip_ihl - 40) + udp_len
-    fix_l4_cksum new_buf, new_pkt_len, ip_ihl, ip.version, PROTO_UDP
-    fix_ip4_cksum new_buf, ip_ihl if ip.version == 4
-    return ffi.string new_buf, new_pkt_len
-
-  elseif l4.proto == "tcp"
-    tcp_hdr_len = bit.rshift(p[ip_ihl + 12], 4) * 4
-    hdr_len     = ip_ihl + tcp_hdr_len
-    new_pkt_len = hdr_len + 2 + dns_len
-    new_buf = ffi.new "uint8_t[?]", new_pkt_len
-    ffi.copy new_buf, p, hdr_len
-    w16 new_buf, hdr_len, dns_len
-    ffi.copy new_buf + hdr_len + 2, new_dns, dns_len
-    w32 new_buf, ip_ihl + 4, l4.tcp_init_seq
-    new_buf[ip_ihl + 13] = 0x18   -- PSH|ACK
-    if ip.version == 4
-      w16 new_buf, 2, new_pkt_len
-    else
-      w16 new_buf, 4, (ip_ihl - 40) + tcp_hdr_len + 2 + dns_len
-    fix_l4_cksum new_buf, new_pkt_len, ip_ihl, ip.version, PROTO_TCP
-    fix_ip4_cksum new_buf, ip_ihl if ip.version == 4
-    return ffi.string new_buf, new_pkt_len
-
-  nil
-
--- ── Parse answers depuis le dns_msg ipparse ──────────────────────
-
-decode_simple_cname = (rdata) ->
-  parts = {}
-  pos = 1
-  while pos <= #rdata
-    len = rdata\byte pos
-    break if len == 0
-    return "(cname)" if bit.band(len, 0xC0) == 0xC0
-    parts[#parts + 1] = rdata\sub pos+1, pos+len
-    pos += 1 + len
-  table.concat parts, "."
-
-fmt_rdata = (rr) ->
-  if (rr.rtype == 1 or rr.rtype == 28) and (#rr.rdata == 4 or #rr.rdata == 16)
-    ip2s rr.rdata
-  elseif rr.rtype == 5   -- CNAME
-    decode_simple_cname rr.rdata
-  else
-    "(rdata #{#rr.rdata}B)"
-
-parse_answers = (dns_msg) ->
-  [ {
-    name:       rr.name
-    rtype:      rr.rtype
-    rclass:     rr.rclass
-    ttl:        rr.ttl
-    rdlength:   #rr.rdata
-    rdata_raw:  (rr.rtype == 1 or rr.rtype == 28) and rr.rdata or ""
-    rdata_str:  fmt_rdata rr
-    rtype_name: QTYPE[rr.rtype] or "TYPE#{rr.rtype}"
-    ttl_offset: rr.off + #rr.rname + 3   -- 0-based depuis début du payload DNS (l7_off=1)
-  } for rr in *dns_msg.answers ]
+-- Reconstruction de paquet et formatage des RR DNS factorisés (fonctions pures).
+{ :replace_dns_payload, :parse_answers } = require "lib.dns_response"
 
 -- ── Parsing L3/L4/L7 ────────────────────────────────────────────
 
