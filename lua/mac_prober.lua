@@ -73,9 +73,7 @@ ip6_to_bin = function(s)
   return ffi.string(buf, 16)
 end
 local fmt_mac
-fmt_mac = function(s, off)
-  return string.format("%02x:%02x:%02x:%02x:%02x:%02x", s:byte(off), s:byte(off + 1), s:byte(off + 2), s:byte(off + 3), s:byte(off + 4), s:byte(off + 5))
-end
+fmt_mac = require("packet_utils").mac2s
 local read_own_mac
 read_own_mac = function(ifname)
   local fh = io.open("/sys/class/net/" .. tostring(ifname) .. "/address", "r")

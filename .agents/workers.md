@@ -146,3 +146,13 @@ Utilisé par `worker_questions`, `worker_arp_sniffer` et `worker_auth_queue` →
 - `events` : événements DNS sérialisés par `worker_questions`, consommés par `worker_events` (format interne au module, longueur variable).
 - `nft` : commandes d'insertion nft sérialisées (set, famille, élément, timeout, index de worker pour l'ACK), de `worker_responses`/`worker_tls`/`worker_sip`/`worker_doh` vers `worker_nft`.
 - `ack_<i>` : un pipe par worker producteur ; `worker_nft` y écrit 1 octet après chaque flush de batch pour débloquer le verdict du producteur.
+
+## Helpers partagés (`src/packet_utils.moon`)
+
+Fonctions communes aux workers manipulant des paquets bruts :
+
+- `skip_ipv6_ext_hdrs` — saut des en-têtes d'extension IPv6, renvoie proto L4 + offset.
+- `mac2s(s, off=1)` — formate 6 octets d'une chaîne en `aa:bb:cc:dd:ee:ff`. Utilisé par `worker_tls`, `worker_arp_sniffer`, `mac_learner`, `mac_learner_ipc`, `mac_prober` et `nfq/ethernet` (ne pas re-implémenter localement).
+- `dns_tcp_complete` / `new_dns_tcp_stream` — réassemblage DNS-over-TCP.
+
+Dans `worker_responses`, le recalcul des checksums L4 est unifié dans `fix_l4_cksum(buf, pkt_len, l4_off, version, proto)` (UDP/TCP × IPv4/IPv6, pseudo-header dérivé de `version`).

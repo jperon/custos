@@ -21,6 +21,7 @@ ipparse_tls_client_hello = require "ipparse.l7.tls.handshake.client_hello"
 ipparse_server_name = require "ipparse.l7.tls.handshake.extension.server_name"
 ipparse_supported_versions = require "ipparse.l7.tls.handshake.extension.supported_versions"
 { new: new_tcp_stream } = require "ipparse.l4.tcp_stream"
+{ :mac2s } = require "packet_utils"
 
 bit = require "bit"
 { :nft } = require "config"
@@ -154,37 +155,43 @@ extract_sni_from_tls = (payload, ctx={}) ->
     tls_client_hello_version = tls_version_name ch_ver
     tls_version = tls_client_hello_version or tls_version
 
+  -- Métadonnées TLS du moment (closure : lit les versions au moment de l'appel).
+  mk_meta = (path) -> {
+    tls_version: tls_version
+    tls_record_version: tls_record_version
+    tls_client_hello_version: tls_client_hello_version
+    tls_supported_version: tls_supported_version
+    tls_parser_path: path
+  }
+
   debug_tls = (action, extra=nil) ->
-    e = {
-      :action
-      pkt_id: ctx.pkt_id
-      tls_len: payload and #payload or 0
-      tls_version: tls_version
-      tls_record_version: tls_record_version
-      tls_client_hello_version: tls_client_hello_version
-      tls_supported_version: tls_supported_version
-    }
+    e = mk_meta nil
+    e.action = action
+    e.pkt_id = ctx.pkt_id
+    e.tls_len = payload and #payload or 0
     if extra
       for k, v in pairs extra
         e[k] = v
     log_debug -> e
 
+  -- Échec : trace debug "tls_parse_<reason>" et renvoie le triplet d'erreur.
+  fail = (path, reason, extra) ->
+    debug_tls "tls_parse_#{reason}", extra
+    nil, reason, mk_meta path
+
   debug_tls "tls_parse_start"
   unless payload and #payload >= 9
-    debug_tls "tls_parse_short_payload"
-    return nil, "short_payload", { tls_version: tls_version, tls_parser_path: "none" }
+    return fail "none", "short_payload"
 
   -- Verify TLS record type = Handshake (0x16)
   record_type = payload\byte 1
   unless record_type == 0x16
-    debug_tls "tls_parse_not_handshake_record", { tls_record_type: string.format("0x%02x", record_type) }
-    return nil, "not_handshake_record", { tls_version: tls_version, tls_parser_path: "none" }
+    return fail "none", "not_handshake_record", { tls_record_type: string.format("0x%02x", record_type) }
 
   -- Handshake type = ClientHello (0x01) at offset 6
   hs_type = payload\byte 6
   unless hs_type == 0x01
-    debug_tls "tls_parse_not_client_hello", { hs_type: string.format("0x%02x", hs_type) }
-    return nil, "not_client_hello", { tls_version: tls_version, tls_parser_path: "none" }
+    return fail "none", "not_client_hello", { hs_type: string.format("0x%02x", hs_type) }
 
   -- Try strict parse first (full ClientHello available in one packet), via
   -- ipparse. Le corps du ClientHello commence après l'en-tête de record TLS
@@ -211,13 +218,7 @@ extract_sni_from_tls = (payload, ctx={}) ->
         success_sni, sni_list = pcall -> ipparse_server_name.parse sni_data, 1
         if success_sni and sni_list and sni_list.name
           debug_tls "tls_parse_strict_sni_found", { sni: sni_list.name }
-          return sni_list.name, nil, {
-            tls_version: tls_version
-            tls_record_version: tls_record_version
-            tls_client_hello_version: tls_client_hello_version
-            tls_supported_version: tls_supported_version
-            tls_parser_path: "strict"
-          }
+          return sni_list.name, nil, mk_meta "strict"
 
       if ext_type == 0x002b
         sv = extract_supported_versions ext_data\sub ext_payload_offset, ext_payload_offset + ext_len - 1
@@ -231,91 +232,35 @@ extract_sni_from_tls = (payload, ctx={}) ->
   -- It only requires the prefix up to the SNI extension.
   offset = 10 -- TLS(5) + Handshake header(4) + Lua 1-indexing
   unless #payload >= offset + 33 -- version(2) + random(32)
-    debug_tls "tls_parse_fallback_short_random"
-    return nil, "fallback_short_random", {
-      tls_version: tls_version
-      tls_record_version: tls_record_version
-      tls_client_hello_version: tls_client_hello_version
-      tls_supported_version: tls_supported_version
-      tls_parser_path: "fallback"
-    }
+    return fail "fallback", "fallback_short_random"
 
   offset += 34
   session_id_len = payload\byte offset
   unless session_id_len
-    debug_tls "tls_parse_fallback_no_session_id_len"
-    return nil, "fallback_no_session_id_len", {
-      tls_version: tls_version
-      tls_record_version: tls_record_version
-      tls_client_hello_version: tls_client_hello_version
-      tls_supported_version: tls_supported_version
-      tls_parser_path: "fallback"
-    }
+    return fail "fallback", "fallback_no_session_id_len"
   offset += 1
   unless #payload >= offset + session_id_len - 1
-    debug_tls "tls_parse_fallback_short_session_id", { session_id_len: session_id_len }
-    return nil, "fallback_short_session_id", {
-      tls_version: tls_version
-      tls_record_version: tls_record_version
-      tls_client_hello_version: tls_client_hello_version
-      tls_supported_version: tls_supported_version
-      tls_parser_path: "fallback"
-    }
+    return fail "fallback", "fallback_short_session_id", { session_id_len: session_id_len }
   offset += session_id_len
 
   unless #payload >= offset + 1
-    debug_tls "tls_parse_fallback_short_cipher_len"
-    return nil, "fallback_short_cipher_len", {
-      tls_version: tls_version
-      tls_record_version: tls_record_version
-      tls_client_hello_version: tls_client_hello_version
-      tls_supported_version: tls_supported_version
-      tls_parser_path: "fallback"
-    }
+    return fail "fallback", "fallback_short_cipher_len"
   cipher_suites_len = (payload\byte(offset) * 256) + payload\byte(offset + 1)
   offset += 2
   unless #payload >= offset + cipher_suites_len - 1
-    debug_tls "tls_parse_fallback_short_cipher_suites", { cipher_suites_len: cipher_suites_len }
-    return nil, "fallback_short_cipher_suites", {
-      tls_version: tls_version
-      tls_record_version: tls_record_version
-      tls_client_hello_version: tls_client_hello_version
-      tls_supported_version: tls_supported_version
-      tls_parser_path: "fallback"
-    }
+    return fail "fallback", "fallback_short_cipher_suites", { cipher_suites_len: cipher_suites_len }
   offset += cipher_suites_len
 
   unless #payload >= offset
-    debug_tls "tls_parse_fallback_short_compression_len"
-    return nil, "fallback_short_compression_len", {
-      tls_version: tls_version
-      tls_record_version: tls_record_version
-      tls_client_hello_version: tls_client_hello_version
-      tls_supported_version: tls_supported_version
-      tls_parser_path: "fallback"
-    }
+    return fail "fallback", "fallback_short_compression_len"
   compression_len = payload\byte offset
   offset += 1
   unless #payload >= offset + compression_len - 1
-    debug_tls "tls_parse_fallback_short_compression", { compression_len: compression_len }
-    return nil, "fallback_short_compression", {
-      tls_version: tls_version
-      tls_record_version: tls_record_version
-      tls_client_hello_version: tls_client_hello_version
-      tls_supported_version: tls_supported_version
-      tls_parser_path: "fallback"
-    }
+    return fail "fallback", "fallback_short_compression", { compression_len: compression_len }
   offset += compression_len
 
   unless #payload >= offset + 1
-    debug_tls "tls_parse_fallback_short_extensions_len"
-    return nil, "fallback_short_extensions_len", {
-      tls_version: tls_version
-      tls_record_version: tls_record_version
-      tls_client_hello_version: tls_client_hello_version
-      tls_supported_version: tls_supported_version
-      tls_parser_path: "fallback"
-    }
+    return fail "fallback", "fallback_short_extensions_len"
   extensions_len = (payload\byte(offset) * 256) + payload\byte(offset + 1)
   offset += 2
 
@@ -329,14 +274,7 @@ extract_sni_from_tls = (payload, ctx={}) ->
 
     if ext_type == 0 -- server_name
       unless ext_data_end - ext_data_start + 1 >= 5
-        debug_tls "tls_parse_fallback_short_sni_ext"
-        return nil, "fallback_short_sni_ext", {
-          tls_version: tls_version
-          tls_record_version: tls_record_version
-          tls_client_hello_version: tls_client_hello_version
-          tls_supported_version: tls_supported_version
-          tls_parser_path: "fallback"
-        }
+        return fail "fallback", "fallback_short_sni_ext"
       name_list_len = (payload\byte(ext_data_start) * 256) + payload\byte(ext_data_start + 1)
       name_type = payload\byte(ext_data_start + 2)
       name_len = (payload\byte(ext_data_start + 3) * 256) + payload\byte(ext_data_start + 4)
@@ -346,13 +284,7 @@ extract_sni_from_tls = (payload, ctx={}) ->
       if name_type == 0 and name_len > 0 and name_end <= ext_data_end and name_len <= name_list_len
         sni = payload\sub name_start, name_end
         debug_tls "tls_parse_fallback_sni_found", { sni: sni }
-        return sni, nil, {
-          tls_version: tls_version
-          tls_record_version: tls_record_version
-          tls_client_hello_version: tls_client_hello_version
-          tls_supported_version: tls_supported_version
-          tls_parser_path: "fallback"
-        }
+        return sni, nil, mk_meta "fallback"
 
     if ext_type == 0x002b
       sv = extract_supported_versions payload\sub ext_data_start, ext_data_end
@@ -363,13 +295,7 @@ extract_sni_from_tls = (payload, ctx={}) ->
     offset = ext_data_start + ext_len
 
   debug_tls "tls_parse_no_sni"
-  nil, "no_sni_in_extensions", {
-    tls_version: tls_version
-    tls_record_version: tls_record_version
-    tls_client_hello_version: tls_client_hello_version
-    tls_supported_version: tls_supported_version
-    tls_parser_path: "fallback"
-  }
+  nil, "no_sni_in_extensions", mk_meta "fallback"
 
 --- Extract SNI from QUIC Initial packet crypto data.
 -- @tparam string quic_payload Raw QUIC data starting at L4 payload
@@ -433,33 +359,16 @@ quic_flow_key = (src_ip, dst_ip, src_port, dst_port) ->
 -- @treturn string Formatted MAC like "aa:bb:cc:dd:ee:ff"
 format_mac = (mac_raw) ->
   return "unknown" unless mac_raw and #mac_raw == 6
-  b1 = mac_raw\byte 1
-  b2 = mac_raw\byte 2
-  b3 = mac_raw\byte 3
-  b4 = mac_raw\byte 4
-  b5 = mac_raw\byte 5
-  b6 = mac_raw\byte 6
-  string.format "%02x:%02x:%02x:%02x:%02x:%02x", b1, b2, b3, b4, b5, b6
+  mac2s mac_raw
 
---- Format IP address for logging
+--- Format IP address for logging (délègue à ipparse ip2s).
 -- @tparam number version IP version (4 or 6)
 -- @tparam string ip_raw Raw IP bytes
 -- @treturn string Formatted IP address
 format_ip = (version, ip_raw) ->
-  return "unknown" unless ip_raw
-
-  if version == 4
-    b1 = ip_raw\byte 1
-    b2 = ip_raw\byte 2
-    b3 = ip_raw\byte 3
-    b4 = ip_raw\byte 4
-    return "unknown" unless b1 and b2 and b3 and b4
-    string.format "%d.%d.%d.%d", b1, b2, b3, b4
-  elseif version == 6
-    -- Use ipparse helper
-    ipparse_ip.ip2s ip_raw
-  else
-    "unknown"
+  return "unknown" unless ip_raw and (version == 4 or version == 6)
+  return "unknown" if version == 4 and #ip_raw < 4
+  ipparse_ip.ip2s ip_raw
 
 tsv_field = (v) ->
   s = if v ~= nil then tostring v else ""
@@ -677,6 +586,24 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
   -- QUIC sur UDP) afin que allow/deny indiquent d'où tombe la décision.
   worker_src = if l4_proto == "udp" then "sni-quic" else "sni-tls"
 
+  -- Champs communs d'un événement SNI (TSV) pour ce paquet.
+  sni_event = (decision, sni_val, reason, rule) ->
+    write_sni_event decision, {
+      sni: sni_val, mac_src: mac_str, src_ip: ip_src_str, dst_ip: ip_dst_str
+      vlan: l2.vlan, user: nil, af: af, :reason, :rule
+    }
+
+  -- Recopie les métadonnées TLS/QUIC du parseur dans une table de log.
+  with_meta = (e) ->
+    if tls_meta
+      e.tls_version             = tls_meta.tls_version
+      e.tls_record_version      = tls_meta.tls_record_version
+      e.tls_client_hello_version = tls_meta.tls_client_hello_version
+      e.tls_supported_version   = tls_meta.tls_supported_version
+      e.tls_parser_path         = tls_meta.tls_parser_path
+      e.quic_parser_path        = tls_meta.quic_parser_path
+    e
+
   unless sni
     if protocol_name == "quic" and tls_reason and (
       tls_reason\match("^quic_session_init_failed") or tls_reason\match("^quic_push_failed")
@@ -700,20 +627,10 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         port_dst: dst_port
         reason: tls_reason or "no_sni"
       }
-      write_sni_event "block", {
-        sni: nil
-        mac_src: mac_str
-        src_ip: ip_src_str
-        dst_ip: ip_dst_str
-        vlan: l2.vlan
-        user: nil
-        af: af
-        reason: tls_reason or "no_sni"
-        rule: "strict-443/no_sni"
-      }
+      sni_event "block", nil, tls_reason or "no_sni", "strict-443/no_sni"
       return NF_DROP
     if mail_port and strict_mode and in_scope
-      log_warn -> {
+      log_warn -> with_meta {
         action: "sni_verdict_warn_no_sni_mail"
         pkt_id: pkt_id
         protocol: protocol_name
@@ -723,37 +640,16 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         port_src: src_port
         port_dst: dst_port
         reason: tls_reason or "no_sni"
-        tls_version: tls_meta and tls_meta.tls_version
-        tls_record_version: tls_meta and tls_meta.tls_record_version
-        tls_client_hello_version: tls_meta and tls_meta.tls_client_hello_version
-        tls_supported_version: tls_meta and tls_meta.tls_supported_version
-        tls_parser_path: tls_meta and tls_meta.tls_parser_path
       }
-      write_sni_event "warn", {
-        sni: nil
-        mac_src: mac_str
-        src_ip: ip_src_str
-        dst_ip: ip_dst_str
-        vlan: l2.vlan
-        user: nil
-        af: af
-        reason: tls_reason or "no_sni"
-        rule: "mail_ssl/no_sni"
-      }
+      sni_event "warn", nil, tls_reason or "no_sni", "mail_ssl/no_sni"
       return NF_ACCEPT
-    log_debug -> {
+    log_debug -> with_meta {
       action: "sni_verdict_skip_no_sni", pkt_id: pkt_id, protocol: protocol_name, l4_proto: l4_proto, reason: tls_reason
-      tls_version: tls_meta and tls_meta.tls_version
-      tls_record_version: tls_meta and tls_meta.tls_record_version
-      tls_client_hello_version: tls_meta and tls_meta.tls_client_hello_version
-      tls_supported_version: tls_meta and tls_meta.tls_supported_version
-      tls_parser_path: tls_meta and tls_meta.tls_parser_path
-      quic_parser_path: tls_meta and tls_meta.quic_parser_path
     }
     return NF_ACCEPT
 
   sni_norm = normalize_sni sni
-  log_info -> {
+  log_info -> with_meta {
     action: "sni_captured"
     protocol: protocol_name
     l4_proto: l4_proto
@@ -763,12 +659,6 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     ip_dst: ip_dst_str
     port_src: src_port
     port_dst: dst_port
-    tls_version: tls_meta and tls_meta.tls_version
-    tls_record_version: tls_meta and tls_meta.tls_record_version
-    tls_client_hello_version: tls_meta and tls_meta.tls_client_hello_version
-    tls_supported_version: tls_meta and tls_meta.tls_supported_version
-    tls_parser_path: tls_meta and tls_meta.tls_parser_path
-    quic_parser_path: tls_meta and tls_meta.quic_parser_path
   }
 
   req = {
@@ -803,6 +693,36 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     }
     return NF_ACCEPT
 
+  -- Branche refus : en strict-443 on bloque (log + event + DROP), sinon on
+  -- trace en debug et on laisse passer.
+  block_or_skip = (action_block, action_skip, reason, event_rule) ->
+    if strict_mode
+      log_block -> {
+        action: action_block
+        worker: worker_src
+        pkt_id: pkt_id
+        protocol: protocol_name
+        l4_proto: l4_proto
+        sni: sni_norm or sni
+        ip_src: ip_src_str
+        ip_dst: ip_dst_str
+        mac_src: mac_str
+        :reason
+        rule: decide_rule
+      }
+      sni_event "block", sni_norm or sni, reason, event_rule
+      return NF_DROP
+    log_debug -> {
+      action: action_skip
+      pkt_id: pkt_id
+      protocol: protocol_name
+      l4_proto: l4_proto
+      sni: sni_norm or sni
+      :reason
+      rule: decide_rule
+    }
+    NF_ACCEPT
+
   if allowed == true
     ok_nft, nft_reason = apply_nft_allow ip_src_str, ip_dst_str, mac_str, sni_policy, decide_rule
     unless ok_nft
@@ -819,21 +739,11 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         reason: nft_reason
         nft_failure_policy: sni_policy and sni_policy.nft_failure_policy or "fail-closed"
       }
-      write_sni_event "block", {
-        sni: sni_norm or sni
-        mac_src: mac_str
-        src_ip: ip_src_str
-        dst_ip: ip_dst_str
-        vlan: l2.vlan
-        user: nil
-        af: af
-        reason: nft_reason
-        rule: decide_rule or "nft_insert_failed"
-      }
+      sni_event "block", sni_norm or sni, nft_reason, decide_rule or "nft_insert_failed"
       return NF_DROP if (sni_policy and sni_policy.nft_failure_policy or "fail-closed") == "fail-closed"
       return NF_ACCEPT
 
-    log_allow -> {
+    log_allow -> with_meta {
       action: "sni_verdict_allow"
       worker: worker_src
       protocol: protocol_name
@@ -847,101 +757,16 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
       filter_reason: decide_reason
       rule: decide_rule
       nft_outcome: nft_reason or "ok"
-      tls_version: tls_meta and tls_meta.tls_version
-      tls_record_version: tls_meta and tls_meta.tls_record_version
-      tls_client_hello_version: tls_meta and tls_meta.tls_client_hello_version
-      tls_supported_version: tls_meta and tls_meta.tls_supported_version
-      tls_parser_path: tls_meta and tls_meta.tls_parser_path
-      quic_parser_path: tls_meta and tls_meta.quic_parser_path
     }
-    write_sni_event "allow", {
-      sni: sni_norm or sni
-      mac_src: mac_str
-      src_ip: ip_src_str
-      dst_ip: ip_dst_str
-      vlan: l2.vlan
-      user: nil
-      af: af
-      reason: decide_reason
-      rule: decide_rule
-    }
+    sni_event "allow", sni_norm or sni, decide_reason, decide_rule
     return NF_ACCEPT
 
   if allowed == "dnsonly"
-    if strict_mode
-      log_block -> {
-        action: "sni_verdict_block_dnsonly"
-        worker: worker_src
-        pkt_id: pkt_id
-        protocol: protocol_name
-        l4_proto: l4_proto
-        sni: sni_norm or sni
-        ip_src: ip_src_str
-        ip_dst: ip_dst_str
-        mac_src: mac_str
-        reason: decide_reason or "dnsonly"
-        rule: decide_rule
-      }
-      write_sni_event "block", {
-        sni: sni_norm or sni
-        mac_src: mac_str
-        src_ip: ip_src_str
-        dst_ip: ip_dst_str
-        vlan: l2.vlan
-        user: nil
-        af: af
-        reason: decide_reason or "dnsonly"
-        rule: decide_rule or "dnsonly"
-      }
-      return NF_DROP
-    log_debug -> {
-      action: "sni_verdict_skip_dnsonly"
-      pkt_id: pkt_id
-      protocol: protocol_name
-      l4_proto: l4_proto
-      sni: sni_norm or sni
-      reason: decide_reason or "dnsonly"
-      rule: decide_rule
-    }
-    return NF_ACCEPT
+    return block_or_skip "sni_verdict_block_dnsonly", "sni_verdict_skip_dnsonly",
+      decide_reason or "dnsonly", decide_rule or "dnsonly"
 
-  if strict_mode
-    log_block -> {
-      action: "sni_verdict_block"
-      worker: worker_src
-      pkt_id: pkt_id
-      protocol: protocol_name
-      l4_proto: l4_proto
-      sni: sni_norm or sni
-      ip_src: ip_src_str
-      ip_dst: ip_dst_str
-      mac_src: mac_str
-      reason: decide_reason or "denied"
-      rule: decide_rule
-    }
-    write_sni_event "block", {
-      sni: sni_norm or sni
-      mac_src: mac_str
-      src_ip: ip_src_str
-      dst_ip: ip_dst_str
-      vlan: l2.vlan
-      user: nil
-      af: af
-      reason: decide_reason or "denied"
-      rule: decide_rule
-    }
-    return NF_DROP
-
-  log_debug -> {
-    action: "sni_verdict_skip"
-    pkt_id: pkt_id
-    protocol: protocol_name
-    l4_proto: l4_proto
-    sni: sni_norm or sni
-    reason: decide_reason or "denied"
-    rule: decide_rule
-  }
-  NF_ACCEPT
+  block_or_skip "sni_verdict_block", "sni_verdict_skip",
+    decide_reason or "denied", decide_rule
 
 --- Entry point for the worker.
 -- @tparam number queue_num Queue number

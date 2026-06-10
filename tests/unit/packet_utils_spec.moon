@@ -15,6 +15,16 @@ make_ipv6_packet = (next_header=17, ext_header=44, ext_size=8) ->
 
 describe "packet_utils", ->
 
+  describe "mac2s", ->
+    it "formate 6 octets en adresse MAC", ->
+      assert.equals "aa:bb:cc:dd:ee:ff", packet_utils.mac2s "\170\187\204\221\238\255"
+
+    it "formate des octets nuls", ->
+      assert.equals "00:00:00:00:00:00", packet_utils.mac2s "\0\0\0\0\0\0"
+
+    it "respecte l'offset 1-based", ->
+      assert.equals "01:02:03:04:05:06", packet_utils.mac2s "XX\1\2\3\4\5\6", 3
+
   describe "skip_ipv6_ext_hdrs", ->
     it "renvoie directement UDP sans extension", ->
       raw = make_ipv6_packet 17

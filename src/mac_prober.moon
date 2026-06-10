@@ -104,14 +104,7 @@ ip6_to_bin = (s) ->
   return nil if C.inet_pton(AF_INET6, s, buf) ~= 1
   ffi.string buf, 16
 
---- Formate 6 octets (1-based) d'une chaîne en "aa:bb:cc:dd:ee:ff".
--- @tparam string s    Chaîne d'au moins off+5 octets
--- @tparam number off  Offset 1-based du premier octet
--- @treturn string
-fmt_mac = (s, off) ->
-  string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-    s\byte(off),   s\byte(off+1), s\byte(off+2),
-    s\byte(off+3), s\byte(off+4), s\byte(off+5)
+{ mac2s: fmt_mac } = require "packet_utils"
 
 -- ── Lecture des informations du bridge ───────────────────────────
 

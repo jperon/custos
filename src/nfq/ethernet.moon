@@ -8,6 +8,7 @@
 -- qui en ont besoin utilisent neigh.get_mac(ip) en fallback).
 
 { :ffi, :libnfq } = require "ffi_defs"
+{ :mac2s } = require "packet_utils"
 
 --- Extrait les informations L2 depuis les métadonnées nfq_data.
 -- Utilise nfq_get_packet_hw() pour obtenir la MAC source (la seule exposée
@@ -22,10 +23,8 @@ get_l2 = (nfad) ->
 
   hw = libnfq.nfq_get_packet_hw nfad
   if hw != nil and hw.hw_addrlen > 0
-    mac_src = string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-      hw.hw_addr[0], hw.hw_addr[1], hw.hw_addr[2],
-      hw.hw_addr[3], hw.hw_addr[4], hw.hw_addr[5]
     mac_raw = ffi.string hw.hw_addr, 6
+    mac_src = mac2s mac_raw
 
   in_ifindex = tonumber libnfq.nfq_get_indev nfad
   mark = tonumber libnfq.nfq_get_nfmark nfad

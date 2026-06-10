@@ -44,14 +44,7 @@ NDP_OPT_MIN_LEN = 8  -- Taille minimale pour une option (Type + Length + au moin
 
 -- ── Helpers ──────────────────────────────────────────────────────
 
---- Formate 6 octets d'une chaîne Lua en "aa:bb:cc:dd:ee:ff" (pour les logs).
--- @tparam string s  Chaîne d'au moins 6 octets
--- @tparam number o  Offset 1-based du premier octet dans s
--- @treturn string Adresse MAC formatée
-fmt_mac = (s, o) ->
-  string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-    s\byte(o), s\byte(o+1), s\byte(o+2),
-    s\byte(o+3), s\byte(o+4), s\byte(o+5)
+{ mac2s: fmt_mac } = require "packet_utils"
 
 --- Formate 16 octets d'une chaîne Lua en adresse IPv6 textuelle (pour les logs).
 -- Utilise ip2s pour garantir la cohérence avec le reste du codebase.

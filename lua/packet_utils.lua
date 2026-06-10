@@ -33,6 +33,13 @@ skip_ipv6_ext_hdrs = function(p, len, first_nh)
   end
   return nh, off
 end
+local mac2s
+mac2s = function(s, off)
+  if off == nil then
+    off = 1
+  end
+  return string.format("%02x:%02x:%02x:%02x:%02x:%02x", s:byte(off), s:byte(off + 1), s:byte(off + 2), s:byte(off + 3), s:byte(off + 4), s:byte(off + 5))
+end
 local dns_tcp_complete
 dns_tcp_complete = function(buf)
   if #buf < 2 then
@@ -49,6 +56,7 @@ new_dns_tcp_stream = function(check_complete)
 end
 return {
   skip_ipv6_ext_hdrs = skip_ipv6_ext_hdrs,
+  mac2s = mac2s,
   dns_tcp_complete = dns_tcp_complete,
   new_dns_tcp_stream = new_dns_tcp_stream
 }

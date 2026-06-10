@@ -12,6 +12,8 @@ local AF_UNIX = 1
 local AF_INET6 = 10
 local SOCK_STREAM = 1
 local bit = require("bit")
+local mac2s
+mac2s = require("packet_utils").mac2s
 local mac_from_eui64
 mac_from_eui64 = function(ip_str)
   if not (ip_str) then
@@ -28,7 +30,7 @@ mac_from_eui64 = function(ip_str)
     return nil
   end
   local b0 = bit.bxor(buf[8], 0x02)
-  return string.format("%02x:%02x:%02x:%02x:%02x:%02x", b0, buf[9], buf[10], buf[13], buf[14], buf[15])
+  return mac2s(string.char(b0, buf[9], buf[10], buf[13], buf[14], buf[15]))
 end
 local get_mac
 get_mac = function(ip_str)

@@ -35,6 +35,15 @@ skip_ipv6_ext_hdrs = (p, len, first_nh) ->
     nh   = next_nh
   nh, off
 
+--- Formate 6 octets d'une chaîne Lua en adresse MAC textuelle.
+-- @tparam string s   Chaîne d'au moins off+5 octets
+-- @tparam number off Offset 1-based du premier octet (défaut 1)
+-- @treturn string Adresse MAC "aa:bb:cc:dd:ee:ff"
+mac2s = (s, off=1) ->
+  string.format "%02x:%02x:%02x:%02x:%02x:%02x",
+    s\byte(off),   s\byte(off+1), s\byte(off+2),
+    s\byte(off+3), s\byte(off+4), s\byte(off+5)
+
 --- Renvoie true si le buffer contient un message DNS TCP complet.
 -- Le préfixe DNS-over-TCP est 2 octets de longueur, puis le payload DNS.
 -- @tparam string buf Buffer accumulé par le réassembleur TCP
@@ -49,4 +58,4 @@ dns_tcp_complete = (buf) ->
 new_dns_tcp_stream = (check_complete=dns_tcp_complete) ->
   new_stream check_complete
 
-{ :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream }
+{ :skip_ipv6_ext_hdrs, :mac2s, :dns_tcp_complete, :new_dns_tcp_stream }

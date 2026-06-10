@@ -29,6 +29,8 @@ local ipparse_server_name = require("ipparse.l7.tls.handshake.extension.server_n
 local ipparse_supported_versions = require("ipparse.l7.tls.handshake.extension.supported_versions")
 local new_tcp_stream
 new_tcp_stream = require("ipparse.l4.tcp_stream").new
+local mac2s
+mac2s = require("packet_utils").mac2s
 local bit = require("bit")
 local nft
 nft = require("config").nft
@@ -180,20 +182,25 @@ extract_sni_from_tls = function(payload, ctx)
     tls_client_hello_version = tls_version_name(ch_ver)
     tls_version = tls_client_hello_version or tls_version
   end
+  local mk_meta
+  mk_meta = function(path)
+    return {
+      tls_version = tls_version,
+      tls_record_version = tls_record_version,
+      tls_client_hello_version = tls_client_hello_version,
+      tls_supported_version = tls_supported_version,
+      tls_parser_path = path
+    }
+  end
   local debug_tls
   debug_tls = function(action, extra)
     if extra == nil then
       extra = nil
     end
-    local e = {
-      action = action,
-      pkt_id = ctx.pkt_id,
-      tls_len = payload and #payload or 0,
-      tls_version = tls_version,
-      tls_record_version = tls_record_version,
-      tls_client_hello_version = tls_client_hello_version,
-      tls_supported_version = tls_supported_version
-    }
+    local e = mk_meta(nil)
+    e.action = action
+    e.pkt_id = ctx.pkt_id
+    e.tls_len = payload and #payload or 0
     if extra then
       for k, v in pairs(extra) do
         e[k] = v
@@ -203,33 +210,26 @@ extract_sni_from_tls = function(payload, ctx)
       return e
     end)
   end
+  local fail
+  fail = function(path, reason, extra)
+    debug_tls("tls_parse_" .. tostring(reason), extra)
+    return nil, reason, mk_meta(path)
+  end
   debug_tls("tls_parse_start")
   if not (payload and #payload >= 9) then
-    debug_tls("tls_parse_short_payload")
-    return nil, "short_payload", {
-      tls_version = tls_version,
-      tls_parser_path = "none"
-    }
+    return fail("none", "short_payload")
   end
   local record_type = payload:byte(1)
   if not (record_type == 0x16) then
-    debug_tls("tls_parse_not_handshake_record", {
+    return fail("none", "not_handshake_record", {
       tls_record_type = string.format("0x%02x", record_type)
     })
-    return nil, "not_handshake_record", {
-      tls_version = tls_version,
-      tls_parser_path = "none"
-    }
   end
   local hs_type = payload:byte(6)
   if not (hs_type == 0x01) then
-    debug_tls("tls_parse_not_client_hello", {
+    return fail("none", "not_client_hello", {
       hs_type = string.format("0x%02x", hs_type)
     })
-    return nil, "not_client_hello", {
-      tls_version = tls_version,
-      tls_parser_path = "none"
-    }
   end
   local success, client_hello_parsed = pcall(function()
     return ipparse_tls_client_hello.parse(payload, 10)
@@ -257,13 +257,7 @@ extract_sni_from_tls = function(payload, ctx)
           debug_tls("tls_parse_strict_sni_found", {
             sni = sni_list.name
           })
-          return sni_list.name, nil, {
-            tls_version = tls_version,
-            tls_record_version = tls_record_version,
-            tls_client_hello_version = tls_client_hello_version,
-            tls_supported_version = tls_supported_version,
-            tls_parser_path = "strict"
-          }
+          return sni_list.name, nil, mk_meta("strict")
         end
       end
       if ext_type == 0x002b then
@@ -278,100 +272,44 @@ extract_sni_from_tls = function(payload, ctx)
   end
   local offset = 10
   if not (#payload >= offset + 33) then
-    debug_tls("tls_parse_fallback_short_random")
-    return nil, "fallback_short_random", {
-      tls_version = tls_version,
-      tls_record_version = tls_record_version,
-      tls_client_hello_version = tls_client_hello_version,
-      tls_supported_version = tls_supported_version,
-      tls_parser_path = "fallback"
-    }
+    return fail("fallback", "fallback_short_random")
   end
   offset = offset + 34
   local session_id_len = payload:byte(offset)
   if not (session_id_len) then
-    debug_tls("tls_parse_fallback_no_session_id_len")
-    return nil, "fallback_no_session_id_len", {
-      tls_version = tls_version,
-      tls_record_version = tls_record_version,
-      tls_client_hello_version = tls_client_hello_version,
-      tls_supported_version = tls_supported_version,
-      tls_parser_path = "fallback"
-    }
+    return fail("fallback", "fallback_no_session_id_len")
   end
   offset = offset + 1
   if not (#payload >= offset + session_id_len - 1) then
-    debug_tls("tls_parse_fallback_short_session_id", {
+    return fail("fallback", "fallback_short_session_id", {
       session_id_len = session_id_len
     })
-    return nil, "fallback_short_session_id", {
-      tls_version = tls_version,
-      tls_record_version = tls_record_version,
-      tls_client_hello_version = tls_client_hello_version,
-      tls_supported_version = tls_supported_version,
-      tls_parser_path = "fallback"
-    }
   end
   offset = offset + session_id_len
   if not (#payload >= offset + 1) then
-    debug_tls("tls_parse_fallback_short_cipher_len")
-    return nil, "fallback_short_cipher_len", {
-      tls_version = tls_version,
-      tls_record_version = tls_record_version,
-      tls_client_hello_version = tls_client_hello_version,
-      tls_supported_version = tls_supported_version,
-      tls_parser_path = "fallback"
-    }
+    return fail("fallback", "fallback_short_cipher_len")
   end
   local cipher_suites_len = (payload:byte(offset) * 256) + payload:byte(offset + 1)
   offset = offset + 2
   if not (#payload >= offset + cipher_suites_len - 1) then
-    debug_tls("tls_parse_fallback_short_cipher_suites", {
+    return fail("fallback", "fallback_short_cipher_suites", {
       cipher_suites_len = cipher_suites_len
     })
-    return nil, "fallback_short_cipher_suites", {
-      tls_version = tls_version,
-      tls_record_version = tls_record_version,
-      tls_client_hello_version = tls_client_hello_version,
-      tls_supported_version = tls_supported_version,
-      tls_parser_path = "fallback"
-    }
   end
   offset = offset + cipher_suites_len
   if not (#payload >= offset) then
-    debug_tls("tls_parse_fallback_short_compression_len")
-    return nil, "fallback_short_compression_len", {
-      tls_version = tls_version,
-      tls_record_version = tls_record_version,
-      tls_client_hello_version = tls_client_hello_version,
-      tls_supported_version = tls_supported_version,
-      tls_parser_path = "fallback"
-    }
+    return fail("fallback", "fallback_short_compression_len")
   end
   local compression_len = payload:byte(offset)
   offset = offset + 1
   if not (#payload >= offset + compression_len - 1) then
-    debug_tls("tls_parse_fallback_short_compression", {
+    return fail("fallback", "fallback_short_compression", {
       compression_len = compression_len
     })
-    return nil, "fallback_short_compression", {
-      tls_version = tls_version,
-      tls_record_version = tls_record_version,
-      tls_client_hello_version = tls_client_hello_version,
-      tls_supported_version = tls_supported_version,
-      tls_parser_path = "fallback"
-    }
   end
   offset = offset + compression_len
   if not (#payload >= offset + 1) then
-    debug_tls("tls_parse_fallback_short_extensions_len")
-    return nil, "fallback_short_extensions_len", {
-      tls_version = tls_version,
-      tls_record_version = tls_record_version,
-      tls_client_hello_version = tls_client_hello_version,
-      tls_supported_version = tls_supported_version,
-      tls_parser_path = "fallback"
-    }
+    return fail("fallback", "fallback_short_extensions_len")
   end
   local extensions_len = (payload:byte(offset) * 256) + payload:byte(offset + 1)
   offset = offset + 2
@@ -386,14 +324,7 @@ extract_sni_from_tls = function(payload, ctx)
     end
     if ext_type == 0 then
       if not (ext_data_end - ext_data_start + 1 >= 5) then
-        debug_tls("tls_parse_fallback_short_sni_ext")
-        return nil, "fallback_short_sni_ext", {
-          tls_version = tls_version,
-          tls_record_version = tls_record_version,
-          tls_client_hello_version = tls_client_hello_version,
-          tls_supported_version = tls_supported_version,
-          tls_parser_path = "fallback"
-        }
+        return fail("fallback", "fallback_short_sni_ext")
       end
       local name_list_len = (payload:byte(ext_data_start) * 256) + payload:byte(ext_data_start + 1)
       local name_type = payload:byte(ext_data_start + 2)
@@ -405,13 +336,7 @@ extract_sni_from_tls = function(payload, ctx)
         debug_tls("tls_parse_fallback_sni_found", {
           sni = sni
         })
-        return sni, nil, {
-          tls_version = tls_version,
-          tls_record_version = tls_record_version,
-          tls_client_hello_version = tls_client_hello_version,
-          tls_supported_version = tls_supported_version,
-          tls_parser_path = "fallback"
-        }
+        return sni, nil, mk_meta("fallback")
       end
     end
     if ext_type == 0x002b then
@@ -424,13 +349,7 @@ extract_sni_from_tls = function(payload, ctx)
     offset = ext_data_start + ext_len
   end
   debug_tls("tls_parse_no_sni")
-  return nil, "no_sni_in_extensions", {
-    tls_version = tls_version,
-    tls_record_version = tls_record_version,
-    tls_client_hello_version = tls_client_hello_version,
-    tls_supported_version = tls_supported_version,
-    tls_parser_path = "fallback"
-  }
+  return nil, "no_sni_in_extensions", mk_meta("fallback")
 end
 local extract_sni_from_quic
 extract_sni_from_quic = function(quic_payload, session_key)
@@ -526,33 +445,17 @@ format_mac = function(mac_raw)
   if not (mac_raw and #mac_raw == 6) then
     return "unknown"
   end
-  local b1 = mac_raw:byte(1)
-  local b2 = mac_raw:byte(2)
-  local b3 = mac_raw:byte(3)
-  local b4 = mac_raw:byte(4)
-  local b5 = mac_raw:byte(5)
-  local b6 = mac_raw:byte(6)
-  return string.format("%02x:%02x:%02x:%02x:%02x:%02x", b1, b2, b3, b4, b5, b6)
+  return mac2s(mac_raw)
 end
 local format_ip
 format_ip = function(version, ip_raw)
-  if not (ip_raw) then
+  if not (ip_raw and (version == 4 or version == 6)) then
     return "unknown"
   end
-  if version == 4 then
-    local b1 = ip_raw:byte(1)
-    local b2 = ip_raw:byte(2)
-    local b3 = ip_raw:byte(3)
-    local b4 = ip_raw:byte(4)
-    if not (b1 and b2 and b3 and b4) then
-      return "unknown"
-    end
-    return string.format("%d.%d.%d.%d", b1, b2, b3, b4)
-  elseif version == 6 then
-    return ipparse_ip.ip2s(ip_raw)
-  else
+  if version == 4 and #ip_raw < 4 then
     return "unknown"
   end
+  return ipparse_ip.ip2s(ip_raw)
 end
 local tsv_field
 tsv_field = function(v)
@@ -895,6 +798,32 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
   else
     worker_src = "sni-tls"
   end
+  local sni_event
+  sni_event = function(decision, sni_val, reason, rule)
+    return write_sni_event(decision, {
+      sni = sni_val,
+      mac_src = mac_str,
+      src_ip = ip_src_str,
+      dst_ip = ip_dst_str,
+      vlan = l2.vlan,
+      user = nil,
+      af = af,
+      reason = reason,
+      rule = rule
+    })
+  end
+  local with_meta
+  with_meta = function(e)
+    if tls_meta then
+      e.tls_version = tls_meta.tls_version
+      e.tls_record_version = tls_meta.tls_record_version
+      e.tls_client_hello_version = tls_meta.tls_client_hello_version
+      e.tls_supported_version = tls_meta.tls_supported_version
+      e.tls_parser_path = tls_meta.tls_parser_path
+      e.quic_parser_path = tls_meta.quic_parser_path
+    end
+    return e
+  end
   if not (sni) then
     if protocol_name == "quic" and tls_reason and (tls_reason:match("^quic_session_init_failed") or tls_reason:match("^quic_push_failed")) then
       log_warn(function()
@@ -921,22 +850,12 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
           reason = tls_reason or "no_sni"
         }
       end)
-      write_sni_event("block", {
-        sni = nil,
-        mac_src = mac_str,
-        src_ip = ip_src_str,
-        dst_ip = ip_dst_str,
-        vlan = l2.vlan,
-        user = nil,
-        af = af,
-        reason = tls_reason or "no_sni",
-        rule = "strict-443/no_sni"
-      })
+      sni_event("block", nil, tls_reason or "no_sni", "strict-443/no_sni")
       return NF_DROP
     end
     if mail_port and strict_mode and in_scope then
       log_warn(function()
-        return {
+        return with_meta({
           action = "sni_verdict_warn_no_sni_mail",
           pkt_id = pkt_id,
           protocol = protocol_name,
@@ -945,47 +864,26 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
           ip_dst = ip_dst_str,
           port_src = src_port,
           port_dst = dst_port,
-          reason = tls_reason or "no_sni",
-          tls_version = tls_meta and tls_meta.tls_version,
-          tls_record_version = tls_meta and tls_meta.tls_record_version,
-          tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
-          tls_supported_version = tls_meta and tls_meta.tls_supported_version,
-          tls_parser_path = tls_meta and tls_meta.tls_parser_path
-        }
+          reason = tls_reason or "no_sni"
+        })
       end)
-      write_sni_event("warn", {
-        sni = nil,
-        mac_src = mac_str,
-        src_ip = ip_src_str,
-        dst_ip = ip_dst_str,
-        vlan = l2.vlan,
-        user = nil,
-        af = af,
-        reason = tls_reason or "no_sni",
-        rule = "mail_ssl/no_sni"
-      })
+      sni_event("warn", nil, tls_reason or "no_sni", "mail_ssl/no_sni")
       return NF_ACCEPT
     end
     log_debug(function()
-      return {
+      return with_meta({
         action = "sni_verdict_skip_no_sni",
         pkt_id = pkt_id,
         protocol = protocol_name,
         l4_proto = l4_proto,
-        reason = tls_reason,
-        tls_version = tls_meta and tls_meta.tls_version,
-        tls_record_version = tls_meta and tls_meta.tls_record_version,
-        tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
-        tls_supported_version = tls_meta and tls_meta.tls_supported_version,
-        tls_parser_path = tls_meta and tls_meta.tls_parser_path,
-        quic_parser_path = tls_meta and tls_meta.quic_parser_path
-      }
+        reason = tls_reason
+      })
     end)
     return NF_ACCEPT
   end
   local sni_norm = normalize_sni(sni)
   log_info(function()
-    return {
+    return with_meta({
       action = "sni_captured",
       protocol = protocol_name,
       l4_proto = l4_proto,
@@ -994,14 +892,8 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       ip_src = ip_src_str,
       ip_dst = ip_dst_str,
       port_src = src_port,
-      port_dst = dst_port,
-      tls_version = tls_meta and tls_meta.tls_version,
-      tls_record_version = tls_meta and tls_meta.tls_record_version,
-      tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
-      tls_supported_version = tls_meta and tls_meta.tls_supported_version,
-      tls_parser_path = tls_meta and tls_meta.tls_parser_path,
-      quic_parser_path = tls_meta and tls_meta.quic_parser_path
-    }
+      port_dst = dst_port
+    })
   end)
   local req = {
     domain = sni_norm or sni,
@@ -1038,6 +930,40 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     end)
     return NF_ACCEPT
   end
+  local block_or_skip
+  block_or_skip = function(action_block, action_skip, reason, event_rule)
+    if strict_mode then
+      log_block(function()
+        return {
+          action = action_block,
+          worker = worker_src,
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          sni = sni_norm or sni,
+          ip_src = ip_src_str,
+          ip_dst = ip_dst_str,
+          mac_src = mac_str,
+          reason = reason,
+          rule = decide_rule
+        }
+      end)
+      sni_event("block", sni_norm or sni, reason, event_rule)
+      return NF_DROP
+    end
+    log_debug(function()
+      return {
+        action = action_skip,
+        pkt_id = pkt_id,
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        sni = sni_norm or sni,
+        reason = reason,
+        rule = decide_rule
+      }
+    end)
+    return NF_ACCEPT
+  end
   if allowed == true then
     local ok_nft, nft_reason = apply_nft_allow(ip_src_str, ip_dst_str, mac_str, sni_policy, decide_rule)
     if not (ok_nft) then
@@ -1056,24 +982,14 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
           nft_failure_policy = sni_policy and sni_policy.nft_failure_policy or "fail-closed"
         }
       end)
-      write_sni_event("block", {
-        sni = sni_norm or sni,
-        mac_src = mac_str,
-        src_ip = ip_src_str,
-        dst_ip = ip_dst_str,
-        vlan = l2.vlan,
-        user = nil,
-        af = af,
-        reason = nft_reason,
-        rule = decide_rule or "nft_insert_failed"
-      })
+      sni_event("block", sni_norm or sni, nft_reason, decide_rule or "nft_insert_failed")
       if (sni_policy and sni_policy.nft_failure_policy or "fail-closed") == "fail-closed" then
         return NF_DROP
       end
       return NF_ACCEPT
     end
     log_allow(function()
-      return {
+      return with_meta({
         action = "sni_verdict_allow",
         worker = worker_src,
         protocol = protocol_name,
@@ -1086,112 +1002,16 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
         port_dst = dst_port,
         filter_reason = decide_reason,
         rule = decide_rule,
-        nft_outcome = nft_reason or "ok",
-        tls_version = tls_meta and tls_meta.tls_version,
-        tls_record_version = tls_meta and tls_meta.tls_record_version,
-        tls_client_hello_version = tls_meta and tls_meta.tls_client_hello_version,
-        tls_supported_version = tls_meta and tls_meta.tls_supported_version,
-        tls_parser_path = tls_meta and tls_meta.tls_parser_path,
-        quic_parser_path = tls_meta and tls_meta.quic_parser_path
-      }
+        nft_outcome = nft_reason or "ok"
+      })
     end)
-    write_sni_event("allow", {
-      sni = sni_norm or sni,
-      mac_src = mac_str,
-      src_ip = ip_src_str,
-      dst_ip = ip_dst_str,
-      vlan = l2.vlan,
-      user = nil,
-      af = af,
-      reason = decide_reason,
-      rule = decide_rule
-    })
+    sni_event("allow", sni_norm or sni, decide_reason, decide_rule)
     return NF_ACCEPT
   end
   if allowed == "dnsonly" then
-    if strict_mode then
-      log_block(function()
-        return {
-          action = "sni_verdict_block_dnsonly",
-          worker = worker_src,
-          pkt_id = pkt_id,
-          protocol = protocol_name,
-          l4_proto = l4_proto,
-          sni = sni_norm or sni,
-          ip_src = ip_src_str,
-          ip_dst = ip_dst_str,
-          mac_src = mac_str,
-          reason = decide_reason or "dnsonly",
-          rule = decide_rule
-        }
-      end)
-      write_sni_event("block", {
-        sni = sni_norm or sni,
-        mac_src = mac_str,
-        src_ip = ip_src_str,
-        dst_ip = ip_dst_str,
-        vlan = l2.vlan,
-        user = nil,
-        af = af,
-        reason = decide_reason or "dnsonly",
-        rule = decide_rule or "dnsonly"
-      })
-      return NF_DROP
-    end
-    log_debug(function()
-      return {
-        action = "sni_verdict_skip_dnsonly",
-        pkt_id = pkt_id,
-        protocol = protocol_name,
-        l4_proto = l4_proto,
-        sni = sni_norm or sni,
-        reason = decide_reason or "dnsonly",
-        rule = decide_rule
-      }
-    end)
-    return NF_ACCEPT
+    return block_or_skip("sni_verdict_block_dnsonly", "sni_verdict_skip_dnsonly", decide_reason or "dnsonly", decide_rule or "dnsonly")
   end
-  if strict_mode then
-    log_block(function()
-      return {
-        action = "sni_verdict_block",
-        worker = worker_src,
-        pkt_id = pkt_id,
-        protocol = protocol_name,
-        l4_proto = l4_proto,
-        sni = sni_norm or sni,
-        ip_src = ip_src_str,
-        ip_dst = ip_dst_str,
-        mac_src = mac_str,
-        reason = decide_reason or "denied",
-        rule = decide_rule
-      }
-    end)
-    write_sni_event("block", {
-      sni = sni_norm or sni,
-      mac_src = mac_str,
-      src_ip = ip_src_str,
-      dst_ip = ip_dst_str,
-      vlan = l2.vlan,
-      user = nil,
-      af = af,
-      reason = decide_reason or "denied",
-      rule = decide_rule
-    })
-    return NF_DROP
-  end
-  log_debug(function()
-    return {
-      action = "sni_verdict_skip",
-      pkt_id = pkt_id,
-      protocol = protocol_name,
-      l4_proto = l4_proto,
-      sni = sni_norm or sni,
-      reason = decide_reason or "denied",
-      rule = decide_rule
-    }
-  end)
-  return NF_ACCEPT
+  return block_or_skip("sni_verdict_block", "sni_verdict_skip", decide_reason or "denied", decide_rule)
 end
 local run
 run = function(queue_num, ev_wfd, filter_data)

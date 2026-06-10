@@ -28,9 +28,7 @@ local ARP_MIN_LEN = 42
 local NDP_MIN_LEN = 56
 local NDP_OPT_MIN_LEN = 8
 local fmt_mac
-fmt_mac = function(s, o)
-  return string.format("%02x:%02x:%02x:%02x:%02x:%02x", s:byte(o), s:byte(o + 1), s:byte(o + 2), s:byte(o + 3), s:byte(o + 4), s:byte(o + 5))
-end
+fmt_mac = require("packet_utils").mac2s
 local fmt_ipv6
 fmt_ipv6 = function(s, o)
   return ip2s(s:sub(o, o + 15))

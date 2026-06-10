@@ -27,6 +27,7 @@ config = require "config"
 { :log_info, :log_warn, :log_debug } = require "log"
 { :enrich_session_ip } = require "auth.sessions"
 { :ip2s } = require "ipparse.l3.ip"
+{ :mac2s } = require "packet_utils"
 mac_cfg = config.mac_learner or {}
 auth_cfg = config.auth or {}
 
@@ -123,9 +124,7 @@ process_learn = (msg) ->
   return if all_zero
 
   ip_str  = ip16_to_str ip16
-  mac_str = string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-    mac_raw\byte(1), mac_raw\byte(2), mac_raw\byte(3),
-    mac_raw\byte(4), mac_raw\byte(5), mac_raw\byte(6)
+  mac_str = mac2s mac_raw
 
   learn_mac ip_str, mac_str
 

@@ -14,6 +14,8 @@ local enrich_session_ip
 enrich_session_ip = require("auth.sessions").enrich_session_ip
 local ip2s
 ip2s = require("ipparse.l3.ip").ip2s
+local mac2s
+mac2s = require("packet_utils").mac2s
 local mac_cfg = config.mac_learner or { }
 local auth_cfg = config.auth or { }
 local PROBE_TIMEOUT_MS = 200
@@ -105,7 +107,7 @@ process_learn = function(msg)
     return 
   end
   local ip_str = ip16_to_str(ip16)
-  local mac_str = string.format("%02x:%02x:%02x:%02x:%02x:%02x", mac_raw:byte(1), mac_raw:byte(2), mac_raw:byte(3), mac_raw:byte(4), mac_raw:byte(5), mac_raw:byte(6))
+  local mac_str = mac2s(mac_raw)
   return learn_mac(ip_str, mac_str)
 end
 local expire_pending

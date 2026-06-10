@@ -20,6 +20,7 @@ AF_INET6    = 10
 SOCK_STREAM = 1
 
 bit = require "bit"
+{ :mac2s } = require "packet_utils"
 
 --- Tente de dériver une adresse MAC depuis l'identifiant EUI-64 d'une adresse IPv6.
 -- Un identifiant EUI-64 est reconnaissable aux octets 11 et 12 (0-indexés) de
@@ -43,8 +44,7 @@ mac_from_eui64 = (ip_str) ->
 
   -- Reconstruire la MAC : inverser le flip du bit U/L, retirer les octets ff:fe
   b0 = bit.bxor buf[8], 0x02
-  string.format "%02x:%02x:%02x:%02x:%02x:%02x",
-    b0, buf[9], buf[10], buf[13], buf[14], buf[15]
+  mac2s string.char b0, buf[9], buf[10], buf[13], buf[14], buf[15]
 
 --- Retourne la MAC associée à une IP via une requête au MAC learner.
 -- Connexion synchrone sur socket Unix SOCK_STREAM : approprié pour AUTH

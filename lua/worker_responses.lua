@@ -104,6 +104,13 @@ w16 = function(p, o, v)
   p[o] = bit.band(bit.rshift(v, 8), 0xFF)
   p[o + 1] = bit.band(v, 0xFF)
 end
+local fold16
+fold16 = function(sum)
+  while bit.rshift(sum, 16) ~= 0 do
+    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+  end
+  return sum
+end
 local fix_ip4_cksum
 fix_ip4_cksum = function(buf, ihl)
   buf[10] = 0
@@ -112,37 +119,42 @@ fix_ip4_cksum = function(buf, ihl)
   for i = 0, ihl - 1, 2 do
     sum = sum + bit.bor(bit.lshift(buf[i], 8), buf[i + 1])
   end
-  while bit.rshift(sum, 16) ~= 0 do
-    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
-  end
-  return w16(buf, 10, bit.band(bit.bnot(sum), 0xFFFF))
+  return w16(buf, 10, bit.band(bit.bnot(fold16(sum)), 0xFFFF))
 end
-local fix_udp4_cksum
-fix_udp4_cksum = function(buf, pkt_len, ihl)
-  local udp_off = ihl
-  if pkt_len < udp_off + 8 then
+local PH_FIRST = {
+  [4] = 12,
+  [6] = 8
+}
+local PH_LAST = {
+  [4] = 18,
+  [6] = 38
+}
+local fix_l4_cksum
+fix_l4_cksum = function(buf, pkt_len, l4_off, version, proto)
+  local is_udp = proto == PROTO_UDP
+  if pkt_len < l4_off + (is_udp and 8 or 20) then
     return 
   end
-  local udp_len = r16(buf, udp_off + 4)
-  buf[udp_off + 6] = 0
-  buf[udp_off + 7] = 0
+  local l4_len = is_udp and r16(buf, l4_off + 4) or pkt_len - l4_off
+  local cksum_off = l4_off + (is_udp and 6 or 16)
+  buf[cksum_off] = 0
+  buf[cksum_off + 1] = 0
   local sum = 0
-  for i = 12, 18, 2 do
+  for i = PH_FIRST[version], PH_LAST[version], 2 do
     sum = sum + r16(buf, i)
   end
-  sum = sum + PROTO_UDP
-  sum = sum + udp_len
-  local udp_end = udp_off + udp_len
-  if udp_end > pkt_len then
-    udp_end = pkt_len
+  sum = sum + proto
+  sum = sum + l4_len
+  local l4_end = l4_off + l4_len
+  if l4_end > pkt_len then
+    l4_end = pkt_len
   end
-  local cksum_off = udp_off + 6
-  local i = udp_off
-  while i < udp_end do
+  local i = l4_off
+  while i < l4_end do
     local word
     if i == cksum_off then
       word = 0
-    elseif i + 1 < udp_end then
+    elseif i + 1 < l4_end then
       word = r16(buf, i)
     else
       word = bit.lshift(buf[i], 8)
@@ -150,140 +162,11 @@ fix_udp4_cksum = function(buf, pkt_len, ihl)
     sum = sum + word
     i = i + 2
   end
-  while bit.rshift(sum, 16) ~= 0 do
-    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
-  end
-  local cksum = bit.band(bit.bnot(sum), 0xFFFF)
+  local cksum = bit.band(bit.bnot(fold16(sum)), 0xFFFF)
   if cksum == 0 then
     cksum = 0xFFFF
   end
-  return w16(buf, udp_off + 6, cksum)
-end
-local fix_udp6_cksum
-fix_udp6_cksum = function(buf, pkt_len, l4_off)
-  local udp_off = l4_off
-  if pkt_len < udp_off + 8 then
-    return 
-  end
-  local udp_len = r16(buf, udp_off + 4)
-  buf[udp_off + 6] = 0
-  buf[udp_off + 7] = 0
-  local sum = 0
-  for i = 8, 38, 2 do
-    sum = sum + r16(buf, i)
-  end
-  sum = sum + udp_len
-  sum = sum + PROTO_UDP
-  local udp_end = udp_off + udp_len
-  if udp_end > pkt_len then
-    udp_end = pkt_len
-  end
-  local cksum_off = udp_off + 6
-  local i = udp_off
-  while i < udp_end do
-    local word
-    if i == cksum_off then
-      word = 0
-    elseif i + 1 < udp_end then
-      word = r16(buf, i)
-    else
-      word = bit.lshift(buf[i], 8)
-    end
-    sum = sum + word
-    i = i + 2
-  end
-  while bit.rshift(sum, 16) ~= 0 do
-    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
-  end
-  local cksum = bit.band(bit.bnot(sum), 0xFFFF)
-  if cksum == 0 then
-    cksum = 0xFFFF
-  end
-  return w16(buf, udp_off + 6, cksum)
-end
-local fix_tcp4_cksum
-fix_tcp4_cksum = function(buf, pkt_len, ihl)
-  local tcp_off = ihl
-  if pkt_len < tcp_off + 20 then
-    return 
-  end
-  local tcp_len = pkt_len - tcp_off
-  buf[tcp_off + 16] = 0
-  buf[tcp_off + 17] = 0
-  local sum = 0
-  for i = 12, 18, 2 do
-    sum = sum + r16(buf, i)
-  end
-  sum = sum + PROTO_TCP
-  sum = sum + tcp_len
-  local tcp_end = tcp_off + tcp_len
-  if tcp_end > pkt_len then
-    tcp_end = pkt_len
-  end
-  local cksum_off = tcp_off + 16
-  local i = tcp_off
-  while i < tcp_end do
-    local word
-    if i == cksum_off then
-      word = 0
-    elseif i + 1 < tcp_end then
-      word = r16(buf, i)
-    else
-      word = bit.lshift(buf[i], 8)
-    end
-    sum = sum + word
-    i = i + 2
-  end
-  while bit.rshift(sum, 16) ~= 0 do
-    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
-  end
-  local cksum = bit.band(bit.bnot(sum), 0xFFFF)
-  if cksum == 0 then
-    cksum = 0xFFFF
-  end
-  return w16(buf, tcp_off + 16, cksum)
-end
-local fix_tcp6_cksum
-fix_tcp6_cksum = function(buf, pkt_len, l4_off)
-  local tcp_off = l4_off
-  if pkt_len < tcp_off + 20 then
-    return 
-  end
-  local tcp_len = pkt_len - tcp_off
-  buf[tcp_off + 16] = 0
-  buf[tcp_off + 17] = 0
-  local sum = 0
-  for i = 8, 38, 2 do
-    sum = sum + r16(buf, i)
-  end
-  sum = sum + tcp_len
-  sum = sum + PROTO_TCP
-  local tcp_end = tcp_off + tcp_len
-  if tcp_end > pkt_len then
-    tcp_end = pkt_len
-  end
-  local cksum_off = tcp_off + 16
-  local i = tcp_off
-  while i < tcp_end do
-    local word
-    if i == cksum_off then
-      word = 0
-    elseif i + 1 < tcp_end then
-      word = r16(buf, i)
-    else
-      word = bit.lshift(buf[i], 8)
-    end
-    sum = sum + word
-    i = i + 2
-  end
-  while bit.rshift(sum, 16) ~= 0 do
-    sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
-  end
-  local cksum = bit.band(bit.bnot(sum), 0xFFFF)
-  if cksum == 0 then
-    cksum = 0xFFFF
-  end
-  return w16(buf, tcp_off + 16, cksum)
+  return w16(buf, cksum_off, cksum)
 end
 local replace_dns_payload
 replace_dns_payload = function(raw, ip, l4, ip_ihl, new_dns)
@@ -298,11 +181,12 @@ replace_dns_payload = function(raw, ip, l4, ip_ihl, new_dns)
     ffi.copy(new_buf + ip_ihl + 8, new_dns, dns_len)
     if ip.version == 4 then
       w16(new_buf, 2, new_pkt_len)
-      fix_udp4_cksum(new_buf, new_pkt_len, ip_ihl)
-      fix_ip4_cksum(new_buf, ip_ihl)
-    elseif ip.version == 6 then
+    else
       w16(new_buf, 4, (ip_ihl - 40) + udp_len)
-      fix_udp6_cksum(new_buf, new_pkt_len, ip_ihl)
+    end
+    fix_l4_cksum(new_buf, new_pkt_len, ip_ihl, ip.version, PROTO_UDP)
+    if ip.version == 4 then
+      fix_ip4_cksum(new_buf, ip_ihl)
     end
     return ffi.string(new_buf, new_pkt_len)
   elseif l4.proto == "tcp" then
@@ -317,11 +201,12 @@ replace_dns_payload = function(raw, ip, l4, ip_ihl, new_dns)
     new_buf[ip_ihl + 13] = 0x18
     if ip.version == 4 then
       w16(new_buf, 2, new_pkt_len)
-      fix_tcp4_cksum(new_buf, new_pkt_len, ip_ihl)
-      fix_ip4_cksum(new_buf, ip_ihl)
-    elseif ip.version == 6 then
+    else
       w16(new_buf, 4, (ip_ihl - 40) + tcp_hdr_len + 2 + dns_len)
-      fix_tcp6_cksum(new_buf, new_pkt_len, ip_ihl)
+    end
+    fix_l4_cksum(new_buf, new_pkt_len, ip_ihl, ip.version, PROTO_TCP)
+    if ip.version == 4 then
+      fix_ip4_cksum(new_buf, ip_ihl)
     end
     return ffi.string(new_buf, new_pkt_len)
   end
@@ -490,6 +375,7 @@ local ip_to_mac = { }
 local pipe_rfd = nil
 local sleep_req = ffi.new("timespec_t[1]")
 local CLOCK_MONOTONIC = 1
+local purge_counter = 0
 local _benchmark_ts = ffi.new("timespec_t[1]")
 local current_benchmark_ms
 current_benchmark_ms = function()
@@ -647,6 +533,7 @@ finalize_a = function(ctx, override)
   local txid, vlan = ctx.txid, ctx.vlan
   local src_ip, dst_ip = ctx.src_ip, ctx.dst_ip
   local reason = entry and entry.reason or ""
+  local txid_hex = string.format("0x%04x", txid)
   local client_v4, client_v6 = nil, nil
   local client_addr
   client_addr = function(fam)
@@ -658,40 +545,41 @@ finalize_a = function(ctx, override)
       return client_v6
     end
   end
+  local inject_opts = {
+    client_addr = client_addr,
+    client_mac = client_mac,
+    user = user,
+    rule_id = nft_rule_id,
+    wildcard_ids = auth_wildcard_rules,
+    ack_corr = ack_corr,
+    inject_nft = true,
+    mac_valid = mac_valid,
+    add_ip = {
+      ipv4 = add_ip4,
+      ipv6 = add_ip6
+    },
+    add_mac = {
+      ipv4 = add_mac4,
+      ipv6 = add_mac6
+    }
+  }
   local inject_answers
   inject_answers = function(answers)
     drain_ack()
-    return inject(answers, {
-      client_addr = client_addr,
-      client_mac = client_mac,
-      user = user,
-      rule_id = nft_rule_id,
-      wildcard_ids = auth_wildcard_rules,
-      ack_corr = ack_corr,
-      inject_nft = true,
-      mac_valid = mac_valid,
-      add_ip = {
-        ipv4 = add_ip4,
-        ipv6 = add_ip6
-      },
-      add_mac = {
-        ipv4 = add_mac4,
-        ipv6 = add_mac6
-      }
-    })
+    return inject(answers, inject_opts)
   end
-  if override and override.kind == "block" then
-    local refused_dns = build_nxdomain_response(dns_msg, dns_raw, VALIDATOR_REASON)
-    if refused_dns then
-      refused_dns = strip_https_rr(refused_dns) or refused_dns
-      local patched = replace_dns_payload(raw, ip, l4, ip_ihl, refused_dns)
+  local patch_and_accept
+  patch_and_accept = function(new_dns, action_label)
+    if new_dns then
+      new_dns = strip_https_rr(new_dns) or new_dns
+      local patched = replace_dns_payload(raw, ip, l4, ip_ihl, new_dns)
       if patched then
         log_debug(function()
           return {
-            action = "response_validator_block",
+            action = action_label,
             src_ip = src_ip,
             dst_ip = dst_ip,
-            txid = string.format("0x%04x", txid),
+            txid = txid_hex,
             client_mac = client_mac,
             user = user
           }
@@ -700,6 +588,9 @@ finalize_a = function(ctx, override)
       end
     end
     return set_verdict(qh_ptr, pkt_id, NF_DROP)
+  end
+  if override and override.kind == "block" then
+    return patch_and_accept(build_nxdomain_response(dns_msg, dns_raw, VALIDATOR_REASON), "response_validator_block")
   end
   if override and override.kind == "sinkhole" then
     local sink = {
@@ -707,25 +598,7 @@ finalize_a = function(ctx, override)
       aaaa = override.aaaa or { },
       ttl = override.ttl
     }
-    local refused_dns = build_sinkhole_response(dns_msg, dns_raw, VALIDATOR_REASON, sink)
-    if refused_dns then
-      refused_dns = strip_https_rr(refused_dns) or refused_dns
-      local patched = replace_dns_payload(raw, ip, l4, ip_ihl, refused_dns)
-      if patched then
-        log_debug(function()
-          return {
-            action = "response_validator_sinkhole",
-            src_ip = src_ip,
-            dst_ip = dst_ip,
-            txid = string.format("0x%04x", txid),
-            client_mac = client_mac,
-            user = user
-          }
-        end)
-        return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
-      end
-    end
-    return set_verdict(qh_ptr, pkt_id, NF_DROP)
+    return patch_and_accept(build_sinkhole_response(dns_msg, dns_raw, VALIDATOR_REASON, sink), "response_validator_sinkhole")
   end
   if override and override.kind == "redirect" and override.cname_target then
     if not (dns_classify.has_cname_target(dns_msg, dns_raw, override.cname_target)) then
@@ -773,7 +646,7 @@ finalize_a = function(ctx, override)
               target = override.cname_target,
               src_ip = src_ip,
               dst_ip = dst_ip,
-              txid = string.format("0x%04x", txid),
+              txid = txid_hex,
               client_mac = client_mac,
               user = user
             }
@@ -812,64 +685,34 @@ finalize_a = function(ctx, override)
   if inject_nft and not dnsonly then
     drain_ack()
   end
-  local inj = inject(answers, {
-    client_addr = client_addr,
-    client_mac = client_mac,
-    user = user,
-    rule_id = nft_rule_id,
-    wildcard_ids = auth_wildcard_rules,
-    ack_corr = ack_corr,
-    inject_nft = inject_nft,
-    mac_valid = mac_valid,
-    add_ip = {
-      ipv4 = add_ip4,
-      ipv6 = add_ip6
-    },
-    add_mac = {
-      ipv4 = add_mac4,
-      ipv6 = add_mac6
-    }
-  })
+  inject_opts.inject_nft = inject_nft
+  local inj = inject(answers, inject_opts)
   local ip_count = inj.ip_count
   local records_to_add = inj.records_to_add
   local success_any = inj.success_any
-  if #inj.no_v4 > 0 then
-    local log_fn
-    if mac_valid(client_mac) then
-      log_fn = log_info
-    else
-      log_fn = log_warn
+  for fam, recs in pairs({
+    ipv4 = inj.no_v4,
+    ipv6 = inj.no_v6
+  }) do
+    if #recs > 0 then
+      local log_fn
+      if mac_valid(client_mac) then
+        log_fn = log_info
+      else
+        log_fn = log_warn
+      end
+      log_fn(function()
+        return {
+          action = "no_" .. tostring(fam) .. "_for_client",
+          client = client_ip,
+          count = #recs,
+          records = table.concat(recs, " "),
+          reason = "client_" .. tostring(fam) .. "_unknown",
+          mac_fallback = mac_valid(client_mac),
+          user = user
+        }
+      end)
     end
-    log_fn(function()
-      return {
-        action = "no_ipv4_for_client",
-        client = client_ip,
-        count = #inj.no_v4,
-        records = table.concat(inj.no_v4, " "),
-        reason = "client_ipv4_unknown",
-        mac_fallback = mac_valid(client_mac),
-        user = user
-      }
-    end)
-  end
-  if #inj.no_v6 > 0 then
-    local log_fn
-    if mac_valid(client_mac) then
-      log_fn = log_info
-    else
-      log_fn = log_warn
-    end
-    log_fn(function()
-      return {
-        action = "no_ipv6_for_client",
-        client = client_ip,
-        count = #inj.no_v6,
-        records = table.concat(inj.no_v6, " "),
-        reason = "client_ipv6_unknown",
-        mac_fallback = mac_valid(client_mac),
-        user = user
-      }
-    end)
   end
   local new_dns, dns_modified = patch_modified_dns(dns_raw, reason)
   payload_modified = payload_modified or dns_modified
@@ -897,7 +740,7 @@ finalize_a = function(ctx, override)
       src_ip = src_ip,
       dst_ip = dst_ip,
       vlan = vlan,
-      txid = string.format("0x%04x", txid),
+      txid = txid_hex,
       qnames = qnames,
       answers = ip_count,
       nft_rule_id = nft_rule_id,
@@ -912,7 +755,7 @@ finalize_a = function(ctx, override)
       log_debug(function()
         return {
           action = "nft_add_failed_policy_fail_closed",
-          txid = string.format("0x%04x", txid),
+          txid = txid_hex,
           client_ip = client_ip,
           qnames = qnames,
           user = user
@@ -923,7 +766,7 @@ finalize_a = function(ctx, override)
       log_warn(function()
         return {
           action = "nft_add_failed_fail_open",
-          txid = string.format("0x%04x", txid),
+          txid = txid_hex,
           client_ip = client_ip,
           qnames = qnames,
           user = user
@@ -1022,8 +865,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end
     return NF_ACCEPT
   end
-  local _purge_counter = ((_purge_counter or 0) + 1) % 1000
-  if _purge_counter == 0 then
+  purge_counter = (purge_counter + 1) % 1000
+  if purge_counter == 0 then
     tcp_state.purge()
     purge_mac_clients(ts)
   end
@@ -1034,6 +877,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local dst_ip = ip2s(ip.dst)
   local client_port = l4.dpt
   local txid = dns_msg.header.id
+  local txid_hex = string.format("0x%04x", txid)
   local client_ip = dst_ip
   local resolver_ip = src_ip
   local client_mac = ip_to_mac[client_ip] or "unknown"
@@ -1068,7 +912,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           action = "response_matched_after_retry",
           src_ip = src_ip,
           dst_ip = dst_ip,
-          txid = string.format("0x%04x", txid),
+          txid = txid_hex,
           retry_attempts = retry_attempts,
           retry_wait_ms = retry_wait_ms,
           user = user
@@ -1087,7 +931,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           src_ip = src_ip,
           dst_ip = dst_ip,
           vlan = l2.vlan,
-          txid = string.format("0x%04x", txid),
+          txid = txid_hex,
           rcode = dns_msg.header.rcode,
           client_mac = client_mac,
           retry_attempts = retry_attempts,
@@ -1182,7 +1026,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         src_ip = src_ip,
         dst_ip = dst_ip,
         vlan = l2.vlan,
-        txid = string.format("0x%04x", txid),
+        txid = txid_hex,
         qnames = qnames,
         client_mac = client_mac,
         user = user
