@@ -87,6 +87,10 @@ generate = (type_, user, mac, expires, key) ->
 -- @tparam string key    Clé HMAC (32 octets binaires)
 -- @treturn table|nil    Payload { type, user, mac, expires, nonce } ou nil
 -- @treturn nil|string   Message d'erreur
+-- @treturn table|nil    Payload décodé si (et seulement si) l'échec est dû à
+--                       l'expiration : la signature est valide mais le token
+--                       est périmé. Permet aux appelants de distinguer un
+--                       token forgé d'un token authentique en retard.
 verify = (token, key) ->
   return nil, "token absent" unless token and #token > 0
   return nil, "token trop court" if #token < 66
@@ -101,7 +105,7 @@ verify = (token, key) ->
     diff = bit.bor diff, bit.bxor sig_hex\byte(i), expected\byte(i)
   return nil, "signature invalide" if diff ~= 0
   p = decode_payload encoded
-  return nil, "token expiré" if os.time! > (p.expires or 0)
+  return nil, "token expiré", p if os.time! > (p.expires or 0)
   p, nil
 
 --- Charge ou génère la clé HMAC depuis un fichier.

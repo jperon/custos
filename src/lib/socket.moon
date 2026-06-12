@@ -354,6 +354,21 @@ socket_mt.__index.setoption = (option, value) =>
     if ret < 0
       errno = get_errno!
       error "setsockopt(SO_REUSEADDR) failed: errno="..errno
+  elseif option == "rcvtimeo" or option == "sndtimeo"
+    -- Timeout des recv/send BLOQUANTS (SO_RCVTIMEO/SO_SNDTIMEO) : au-delà,
+    -- l'appel rend EAGAIN comme en non-bloquant. Indispensable aux enfants
+    -- AUTH-conn pour ne pas rester suspendus sur une connexion muette
+    -- (préconnexion spéculative de navigateur, client disparu sans FIN).
+    SO_RCVTIMEO, SO_SNDTIMEO = 20, 21
+    opt = option == "rcvtimeo" and SO_RCVTIMEO or SO_SNDTIMEO
+    secs = tonumber(value) or 0
+    tv = ffi.new "struct timeval"
+    tv.tv_sec  = math.floor secs
+    tv.tv_usec = math.floor (secs - math.floor secs) * 1e6
+    ret = C.setsockopt(@fd, SOL_SOCKET, opt, tv, ffi.sizeof tv)
+    if ret < 0
+      errno = get_errno!
+      error "setsockopt(#{option}) failed: errno="..errno
   elseif option == "ipv6-v6only"
     IPPROTO_IPV6 = 41
     IPV6_V6ONLY = 26

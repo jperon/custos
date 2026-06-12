@@ -297,6 +297,18 @@ return {
       default = 300,
       hint = "le cookie de session expire en même temps ; élargir pour tolérer des pings retardés"
     },
+    close_grace = {
+      type = "integer",
+      label = "Grâce fermeture fenêtre (s)",
+      default = 45,
+      hint = "expiration appliquée quand la page de session est fermée ; un reload re-prolonge via le ping suivant"
+    },
+    client_timeout = {
+      type = "integer",
+      label = "Timeout I/O client (s)",
+      default = 15,
+      hint = "délai max de handshake TLS / lecture de requête par connexion ; libère les connexions muettes (préconnexions navigateur)"
+    },
     register_rate_limit = {
       type = "integer",
       label = "Inscriptions max / fenêtre",

@@ -44,19 +44,23 @@ for_qualifying_auth_rules = (user, fn) ->
 refresh_rule_auth_sets = (nft_sess, ip, mac, ttl, user) ->
   for_qualifying_auth_rules user, (rule_id, rule) ->
     ok = run_auth_set_op nft_sess, rule_id, mac, ip, "add", ttl
-    log_info -> { action: "server_auth_set_add_mac", rule_id: rule_id, mac: mac } if ok
-    log_info -> { action: "server_auth_set_add_ip4", rule_id: rule_id, ip: ip } if ok and ip and ip\find ":" == nil and ip ~= "unknown"
-    log_info -> { action: "server_auth_set_add_ip6", rule_id: rule_id, ip: ip } if ok and ip and (ip\find ":") and ip ~= "unknown"
+    if ok
+      _, ip_set = auth_set_names ip
+      log_info -> { action: "server_auth_set_add_mac", rule_id: rule_id, mac: mac }
+      log_info -> { action: "server_auth_set_add#{ip_set\sub 6}", rule_id: rule_id, ip: ip } if ip_set
 
 delete_rule_auth_sets = (nft_sess, ip, mac, user) ->
   for_qualifying_auth_rules user, (rule_id, rule) ->
     run_auth_set_op nft_sess, rule_id, mac, ip, "delete"
 
--- Rafraîchit les sets nft globaux d'authentification (appelé par ping et login).
+-- Rafraîchit tous les sets nft d'authentification — globaux ET per-règle —
+-- pour qu'une session active (login, ping, replay, grâce /bye) garde un état
+-- nft cohérent : les deux familles de sets expirent ensemble.
 refresh_nft = (nft_sess, ip, mac, ttl, user) ->
   return unless nft_sess
   nft_sess.add_authenticated ip, ttl if ip and ip ~= "unknown"
   nft_sess.add_authenticated_mac mac, ttl if mac and mac ~= "unknown"
+  refresh_rule_auth_sets nft_sess, ip, mac, ttl, user
 
 {
   :qualifies_for_rule, :auth_set_names, :run_auth_set_op, :for_qualifying_auth_rules

@@ -1348,6 +1348,53 @@ fi
 val_cleanup
 VAL_CLEANUP_DONE=1
 
+# ══════════════════════════════════════════════════════════════════════════════
+# GROUPE 18 — Timeout des connexions muettes au portail (client_timeout)
+# Une connexion TLS qui n'envoie jamais de requête (préconnexion spéculative de
+# navigateur) doit libérer son processus AUTH-conn après client_timeout (15 s
+# par défaut) au lieu de rester suspendue indéfiniment.
+# ══════════════════════════════════════════════════════════════════════════════
+echo ""
+echo "=== G18 : timeout connexions muettes (client_timeout) ==="
+
+if command -v openssl >/dev/null 2>&1; then
+    # 2 connexions TLS muettes tenues ouvertes (-quiet implique -ign_eof :
+    # openssl ne ferme pas sur EOF stdin, il faut le tuer explicitement)
+    (sleep 60 | openssl s_client -connect "$E2E_IP_CUSTOS:33443" -quiet >/dev/null 2>&1) &
+    MUTE_PID1=$!
+    (sleep 60 | openssl s_client -connect "$E2E_IP_CUSTOS:33443" -quiet >/dev/null 2>&1) &
+    MUTE_PID2=$!
+    sleep 4
+
+    mute_children=$(ssh_vm "$E2E_IP_CUSTOS" "ps w | grep AUTH-con | grep -v grep | wc -l")
+    if [ "${mute_children:-0}" -ge 2 ]; then
+        ok "T180 connexions muettes : enfants AUTH-conn présents"
+    else
+        fail "T180 connexions muettes : enfants AUTH-conn présents" \
+             "attendu ≥2, obtenu ${mute_children:-0}"
+    fi
+
+    # client_timeout=15s par défaut ; pire cas timeout + un SO_RCVTIMEO
+    # (arrondi d'horloge) ≈ 30 s → vérifier à t+36s
+    sleep 32
+    mute_children=$(ssh_vm "$E2E_IP_CUSTOS" "ps w | grep AUTH-con | grep -v grep | wc -l")
+    assert_eq "T181 enfants AUTH-conn libérés après client_timeout" "${mute_children:-?}" "0"
+
+    # Le portail répond toujours normalement
+    portal_code=$(curl -sk --max-time 8 -o /dev/null -w '%{http_code}' \
+        "https://$E2E_IP_CUSTOS:33443/login" 2>/dev/null || echo 0)
+    if echo "$portal_code" | grep -qE '^(200|302)$'; then
+        ok "T182 portail fonctionnel après libération"
+    else
+        fail "T182 portail fonctionnel après libération" "code HTTP : $portal_code"
+    fi
+
+    kill "$MUTE_PID1" "$MUTE_PID2" 2>/dev/null || true
+    pkill -f "openssl s_client -connect $E2E_IP_CUSTOS:33443" 2>/dev/null || true
+else
+    echo "  (openssl absent : G18 sauté)"
+fi
+
 # ─── RAPPORT FINAL ─────────────────────────────────────────────────────────────
 echo ""
 echo "─────────────────────────────────────────"

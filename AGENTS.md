@@ -169,13 +169,23 @@ Le serveur HTTPS est découpé pour isoler les responsabilités :
 
 - `auth/server.moon` — machinerie réseau/TLS/fork uniquement (`run`, `handle_client`,
   `dispatch_connection`, `resolve_tls_ctx`, `replay_sessions_to_nft`). N'expose plus
-  les handlers HTTP.
+  les handlers HTTP. Chaque connexion est bornée par `auth.client_timeout` (15 s
+  défaut) : SO_RCVTIMEO/SO_SNDTIMEO sur le socket + échéance de handshake +
+  budget total de `read_request` — sans quoi une connexion muette (préconnexion
+  spéculative de navigateur) suspendrait l'enfant AUTH-conn indéfiniment.
 - `auth/handlers.moon` — handlers HTTP du portail (`handle_login/ping/logout/register`)
   + routage `handle_request` + helpers de présentation/formulaire (cookies, `parse_form`,
   pages login/register). C'est `server.handle_client` qui appelle `handle_request`.
+  `/ping` tolère un token **authentique mais expiré** (3ᵉ retour de `token.verify`)
+  si la session de la MAC est encore vivante : un ping retardé par le navigateur
+  arrivant après le ping suivant reçoit 204 **no-op** (ni refresh nft, ni nouveau
+  cookie) au lieu d'un 401 trompeur ; côté client, la page success n'alerte
+  qu'après deux 401 consécutifs (retry de confirmation à 2 s).
 - `auth/nft_auth_sets.moon` — sous-chaînes nft d'authentification par règle
   (`refresh_rule_auth_sets`, `delete_rule_auth_sets`, `refresh_nft`,
-  `for_qualifying_auth_rules`).
+  `for_qualifying_auth_rules`). `refresh_nft` rafraîchit **les deux** familles
+  de sets (globaux `add_authenticated*` ET per-règle `_auth_mac`/`_auth_ip*`)
+  avec le même TTL : c'est lui qu'appellent login, ping, replay et `/bye`.
 
 ## Interface admin web (`src/webui/`)
 

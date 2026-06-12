@@ -1,5 +1,6 @@
 local read_request
-read_request = function(client)
+read_request = function(client, opts)
+  local deadline = opts and opts.timeout and (os.time() + opts.timeout)
   local receive_retry
   receive_retry = function(mode)
     local last_err = nil
@@ -10,6 +11,10 @@ read_request = function(client)
       end
       last_err = err
       if not (err == "want_read_write") then
+        break
+      end
+      if deadline and os.time() >= deadline then
+        last_err = "timeout"
         break
       end
     end
@@ -66,16 +71,19 @@ send_response = function(client, status, headers, body)
   end
   local send_chunk
   send_chunk = function(chunk)
-    local ok, err = pcall(function()
+    local ok, res = pcall(function()
       return client:send(chunk)
     end)
     if ok then
-      return true
+      if res then
+        return true
+      end
+      return nil, "send_timeout"
     end
-    if is_peer_closed_err(err) then
+    if is_peer_closed_err(res) then
       return nil, "peer_closed"
     end
-    return error(tostring(err))
+    return error(tostring(res))
   end
   body = body or ""
   local reason

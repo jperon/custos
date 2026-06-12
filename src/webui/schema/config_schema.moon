@@ -98,6 +98,8 @@
     session_ttl:        { type: "integer", label: "TTL session (s, 0=illimitée)",                               default: 0 }
     heartbeat_interval: { type: "integer", label: "Intervalle heartbeat (s)",                                    default: 30 }
     idle_timeout:       { type: "integer", label: "Timeout inactivité (s)",                                      default: 300, hint: "le cookie de session expire en même temps ; élargir pour tolérer des pings retardés" }
+    close_grace:        { type: "integer", label: "Grâce fermeture fenêtre (s)",                                 default: 45, hint: "expiration appliquée quand la page de session est fermée ; un reload re-prolonge via le ping suivant" }
+    client_timeout:     { type: "integer", label: "Timeout I/O client (s)",                                      default: 15, hint: "délai max de handshake TLS / lecture de requête par connexion ; libère les connexions muettes (préconnexions navigateur)" }
     register_rate_limit:  { type: "integer", label: "Inscriptions max / fenêtre",                               default: 3 }
     register_rate_window: { type: "integer", label: "Fenêtre rate-limit (s)",                                    default: 300 }
     bridge_ifname:      { type: "string",  label: "Interface bridge",                                            default: "br0" }

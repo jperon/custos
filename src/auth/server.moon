@@ -110,7 +110,15 @@ handle_client = (args) ->
     -- Set socket to BLOCKING mode for handshake
     log_debug -> { action: "server_set_blocking_mode" }
     client\settimeout nil  -- nil = blocking mode
-    log_debug -> { action: "server_blocking_mode_set" }
+    -- … mais avec une échéance noyau (SO_RCVTIMEO/SO_SNDTIMEO) : sans elle,
+    -- une connexion muette (préconnexion spéculative de Firefox, client
+    -- disparu) suspend l'enfant AUTH-conn pour toujours. Côté navigateur, ces
+    -- sockets zombies saturent la limite de connexions par hôte et retardent
+    -- les pings suivants (~70 s de "blocked" observés en HAR).
+    client_timeout = (state.auth_cfg and tonumber state.auth_cfg.client_timeout) or 15
+    pcall -> client\setoption "rcvtimeo", client_timeout
+    pcall -> client\setoption "sndtimeo", client_timeout
+    log_debug -> { action: "server_blocking_mode_set", client_timeout: client_timeout }
 
     log_debug -> { action: "server_ssl_wrap_start" }
     tls_client, tls_err = ssl.wrap client, tls_ctx
@@ -126,7 +134,11 @@ handle_client = (args) ->
     -- Handshake loop: keep trying until complete or error
     handshake_complete = false
     handshake_attempts = 0
-    while not handshake_complete and handshake_attempts < 50
+    -- Échéance absolue : avec SO_RCVTIMEO, chaque tentative WANT_READ peut
+    -- bloquer jusqu'à client_timeout ; sans deadline, 50 tentatives sur une
+    -- connexion muette tiendraient l'enfant des minutes.
+    handshake_deadline = os.time! + client_timeout
+    while not handshake_complete and handshake_attempts < 50 and os.time! <= handshake_deadline
       handshake_attempts += 1
       log_debug -> { action: "server_handshake_attempt", attempt: handshake_attempts }
 
@@ -152,7 +164,7 @@ handle_client = (args) ->
     log_debug -> { action: "server_set_http_timeout" }
 
     peer_mac = get_mac peer_ip
-    req, req_err = read_request tls_client
+    req, req_err = read_request tls_client, timeout: client_timeout
     unless req
       log_warn -> { action: "server_request_read_failed", peer: peer_ip, err: req_err }
       tls_client\close!

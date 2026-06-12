@@ -369,6 +369,8 @@ Portail captif et authentification des utilisateurs.
 | `sessions_file` | string | `"/tmp/sessions.lua"` | Fichier de persistance des sessions |
 | `heartbeat_interval` | int | `30` | Intervalle (s) entre heartbeats client |
 | `idle_timeout` | int | `300` | Inactivité maximale (s) avant déconnexion. Le cookie de session `custos_session` expire **exactement** en même temps (pas de marge séparée) : aucune fenêtre où la page indiquerait « connecté » alors que l'accès DNS a déjà expiré. Élargir cette valeur pour tolérer des pings/heartbeats retardés (throttling des onglets en arrière-plan). |
+| `close_grace` | int | `45` | Grâce (s) appliquée quand la page de session disparaît (`pagehide` → beacon `/bye`) : l'expiration de la session est **raccourcie** à `now + close_grace` au lieu d'être détruite. Si la page revit (reload, navigation, onglet restauré), le `/ping` suivant re-prolonge la session ; si la fenêtre est vraiment fermée, l'accès tombe après la grâce. Garder ≥ 2× l'intervalle de ping (20 s). |
+| `client_timeout` | int | `15` | Timeout I/O (s) par connexion au portail (SO_RCVTIMEO/SO_SNDTIMEO + échéance de handshake TLS). Une connexion qui n'envoie rien (préconnexion spéculative du navigateur, client disparu sans FIN) est fermée et son processus `AUTH-conn` libéré au lieu de rester suspendu indéfiniment — ces sockets zombies saturaient la limite de connexions par hôte du navigateur et retardaient les pings (~70 s). |
 | `register_rate_limit` | int | `3` | Enregistrements maximum par fenêtre |
 | `register_rate_window` | int | `300` | Fenêtre de rate-limiting (s) |
 | `bridge_ifname` | string | `"br0"` | Nom de l'interface bridge (utilisé pour la détection MAC) |

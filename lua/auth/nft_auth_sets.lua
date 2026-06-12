@@ -92,33 +92,25 @@ local refresh_rule_auth_sets
 refresh_rule_auth_sets = function(nft_sess, ip, mac, ttl, user)
   return for_qualifying_auth_rules(user, function(rule_id, rule)
     local ok = run_auth_set_op(nft_sess, rule_id, mac, ip, "add", ttl)
-    log_info(function()
-      if ok then
+    if ok then
+      local _, ip_set = auth_set_names(ip)
+      log_info(function()
         return {
           action = "server_auth_set_add_mac",
           rule_id = rule_id,
           mac = mac
         }
-      end
-    end)
-    log_info(function()
-      if ok and ip and ip:find(":" == nil and ip ~= "unknown") then
-        return {
-          action = "server_auth_set_add_ip4",
-          rule_id = rule_id,
-          ip = ip
-        }
-      end
-    end)
-    return log_info(function()
-      if ok and ip and (ip:find(":")) and ip ~= "unknown" then
-        return {
-          action = "server_auth_set_add_ip6",
-          rule_id = rule_id,
-          ip = ip
-        }
-      end
-    end)
+      end)
+      return log_info(function()
+        if ip_set then
+          return {
+            action = "server_auth_set_add" .. tostring(ip_set:sub(6)),
+            rule_id = rule_id,
+            ip = ip
+          }
+        end
+      end)
+    end
   end)
 end
 local delete_rule_auth_sets
@@ -136,8 +128,9 @@ refresh_nft = function(nft_sess, ip, mac, ttl, user)
     nft_sess.add_authenticated(ip, ttl)
   end
   if mac and mac ~= "unknown" then
-    return nft_sess.add_authenticated_mac(mac, ttl)
+    nft_sess.add_authenticated_mac(mac, ttl)
   end
+  return refresh_rule_auth_sets(nft_sess, ip, mac, ttl, user)
 end
 return {
   qualifies_for_rule = qualifies_for_rule,

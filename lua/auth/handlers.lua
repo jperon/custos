@@ -25,10 +25,10 @@ do
   page, success_page, css_content = _obj_0.page, _obj_0.success_page, _obj_0.css_content
 end
 local H = require("auth.html")
-local refresh_rule_auth_sets, delete_rule_auth_sets, refresh_nft
+local delete_rule_auth_sets, refresh_nft
 do
   local _obj_0 = require("auth.nft_auth_sets")
-  refresh_rule_auth_sets, delete_rule_auth_sets, refresh_nft = _obj_0.refresh_rule_auth_sets, _obj_0.delete_rule_auth_sets, _obj_0.refresh_nft
+  delete_rule_auth_sets, refresh_nft = _obj_0.delete_rule_auth_sets, _obj_0.refresh_nft
 end
 local SIGHUP = 1
 local COOKIE_NAME = "custos_session"
@@ -201,7 +201,7 @@ handle_login = function(req, peer_ip, peer_mac, state)
   end)
   if state.nft_sess then
     ok, err = pcall(function()
-      return refresh_rule_auth_sets(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
+      return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
     end)
     if not (ok) then
       log_warn(function()
@@ -246,8 +246,22 @@ handle_ping = function(req, peer_ip, peer_mac, state)
     }
   end)
   local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)
-  local p, tok_err = token.verify(cookie_val, state.token_key)
+  local p, tok_err, expired_p = token.verify(cookie_val, state.token_key)
   if not (p) then
+    if expired_p and expired_p.mac and expired_p.mac ~= "unknown" then
+      local sessions = load_sessions(state.sessions_file)
+      purge_expired(sessions)
+      if sessions[expired_p.mac:lower()] then
+        log_info(function()
+          return {
+            action = "server_ping_stale_token_session_alive",
+            peer_ip = peer_ip,
+            mac = expired_p.mac
+          }
+        end)
+        return 204, { }, ""
+      end
+    end
     log_info(function()
       return {
         action = "server_ping_token_invalid",
@@ -314,6 +328,37 @@ handle_logout = function(req, peer_ip, peer_mac, state)
     ["Set-Cookie"] = clear_session_cookie()
   }, ""
 end
+local handle_bye
+handle_bye = function(req, peer_ip, peer_mac, state)
+  local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)
+  local p = (token.verify(cookie_val, state.token_key))
+  local mac = (p and p.mac) or peer_mac
+  local user = p and p.user
+  local grace = state.auth_cfg.close_grace or 45
+  local now = os.time()
+  if mac and mac ~= "unknown" then
+    local sessions = load_sessions(state.sessions_file)
+    local s = sessions[mac:lower()]
+    if s then
+      local capped = now + grace
+      if not s.expires or s.expires > capped then
+        s.expires = capped
+        write_sessions(sessions, state.sessions_file)
+        if state.nft_sess then
+          refresh_nft(state.nft_sess, peer_ip, mac, grace, user or s.user)
+        end
+        log_info(function()
+          return {
+            action = "server_bye_grace",
+            mac = mac,
+            grace = grace
+          }
+        end)
+      end
+    end
+  end
+  return 204, { }, ""
+end
 local handle_register
 handle_register = function(req, peer_ip, peer_mac, state)
   local form = parse_form(req.body)
@@ -374,6 +419,8 @@ handle_request = function(req, peer_ip, peer_mac, state)
     return handle_ping(req, peer_ip, peer_mac, state)
   elseif req.path == "/logout" then
     return handle_logout(req, peer_ip, peer_mac, state)
+  elseif req.path == "/bye" then
+    return handle_bye(req, peer_ip, peer_mac, state)
   elseif req.path == "/register" and req.method == "GET" then
     return 200, {
       ["Content-Type"] = "text/html; charset=UTF-8"
@@ -401,6 +448,7 @@ return {
   handle_login = handle_login,
   handle_ping = handle_ping,
   handle_logout = handle_logout,
+  handle_bye = handle_bye,
   handle_register = handle_register,
   handle_request = handle_request,
   COOKIE_NAME = COOKIE_NAME

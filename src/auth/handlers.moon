@@ -15,7 +15,7 @@ token = require "auth.token"
 { :verify_password, :register_user, :update_user_hash } = require "auth.credentials"
 { :page, :success_page, :css_content } = require "auth.pages"
 H = require "auth.html"
-{ :refresh_rule_auth_sets, :delete_rule_auth_sets, :refresh_nft } = require "auth.nft_auth_sets"
+{ :delete_rule_auth_sets, :refresh_nft } = require "auth.nft_auth_sets"
 
 SIGHUP = 1
 COOKIE_NAME = "custos_session"
@@ -117,9 +117,9 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     return 500, {}, "Session persistence failed"
   log_info -> { action: "server_sessions_write_success", path: state.sessions_file, mac: mac }
 
-  -- Refresh nft sets for authenticated user (called by ping and login)
+  -- Refresh nft sets (globaux + per-règle) for authenticated user
   if state.nft_sess
-    ok, err = pcall -> refresh_rule_auth_sets state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user
+    ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user
     unless ok
       log_warn -> { action: "server_nft_refresh_failed", peer: peer_ip, mac: mac, err: tostring(err) }
   else
@@ -140,8 +140,19 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
   log_info -> { action: "server_ping_received", peer_ip: peer_ip, peer_mac: peer_mac }
 
   cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
-  p, tok_err = token.verify cookie_val, state.token_key
+  p, tok_err, expired_p = token.verify cookie_val, state.token_key
   unless p
+    -- Ping retardé (mis en file par le navigateur) arrivé après le ping
+    -- suivant : son token, authentique mais périmé, est hors séquence. Si la
+    -- session est encore vivante, c'est qu'un token plus récent l'a déjà
+    -- prolongée → 204 no-op (ni refresh, ni nouveau cookie : un token périmé
+    -- ne doit jamais pouvoir entretenir une session à lui seul).
+    if expired_p and expired_p.mac and expired_p.mac ~= "unknown"
+      sessions = load_sessions state.sessions_file
+      purge_expired sessions
+      if sessions[expired_p.mac\lower!]
+        log_info -> { action: "server_ping_stale_token_session_alive", peer_ip: peer_ip, mac: expired_p.mac }
+        return 204, {}, ""
     log_info -> { action: "server_ping_token_invalid", peer_ip: peer_ip, err: tok_err }
     return 401, {}, ""
 
@@ -191,6 +202,33 @@ handle_logout = (req, peer_ip, peer_mac, state) ->
 
   302, { ["Location"]: "/", ["Set-Cookie"]: clear_session_cookie! }, ""
 
+-- Fermeture de fenêtre signalée par le beacon pagehide. Contrairement à
+-- /logout, on ne détruit PAS la session : pagehide se déclenche aussi sur un
+-- simple reload ou une navigation. On raccourcit seulement l'expiration à une
+-- grâce courte : si la page revit, le ping suivant re-prolonge ; sinon la
+-- session tombe vite.
+handle_bye = (req, peer_ip, peer_mac, state) ->
+  cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
+  p = (token.verify cookie_val, state.token_key)
+  mac  = (p and p.mac) or peer_mac
+  user = p and p.user
+
+  grace = state.auth_cfg.close_grace or 45
+  now = os.time!
+
+  if mac and mac ~= "unknown"
+    sessions = load_sessions state.sessions_file
+    s = sessions[mac\lower!]
+    if s
+      capped = now + grace
+      if not s.expires or s.expires > capped
+        s.expires = capped
+        write_sessions sessions, state.sessions_file
+        refresh_nft state.nft_sess, peer_ip, mac, grace, user or s.user if state.nft_sess
+        log_info -> { action: "server_bye_grace", mac: mac, grace: grace }
+
+  204, {}, ""
+
 handle_register = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
   user = form.user
@@ -223,6 +261,8 @@ handle_request = (req, peer_ip, peer_mac, state) ->
     return handle_ping req, peer_ip, peer_mac, state
   elseif req.path == "/logout"
     return handle_logout req, peer_ip, peer_mac, state
+  elseif req.path == "/bye"
+    return handle_bye req, peer_ip, peer_mac, state
   elseif req.path == "/register" and req.method == "GET"
     return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_form_page req
   elseif req.path == "/register" and req.method == "POST"
@@ -236,6 +276,6 @@ handle_request = (req, peer_ip, peer_mac, state) ->
 {
   :make_session_cookie, :clear_session_cookie, :signal_parent_reload
   :url_decode, :parse_form, :register_form_page, :register_success_page, :login_page
-  :handle_login, :handle_ping, :handle_logout, :handle_register, :handle_request
+  :handle_login, :handle_ping, :handle_logout, :handle_bye, :handle_register, :handle_request
   :COOKIE_NAME
 }

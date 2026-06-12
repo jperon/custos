@@ -236,6 +236,27 @@ describe "lib.socket", ->
       assert.is_true result
       s\close!
 
+    it "rcvtimeo accepté (entier et fractionnaire)", ->
+      s = sock.create_tcp!
+      assert.is_true s\setoption "rcvtimeo", 15
+      assert.is_true s\setoption "rcvtimeo", 0.5
+      s\close!
+
+    it "sndtimeo accepté", ->
+      s = sock.create_tcp!
+      assert.is_true s\setoption "sndtimeo", 15
+      s\close!
+
+    it "rcvtimeo débloque un recv bloquant sur connexion muette", ->
+      s1, s2 = make_pair sock
+      s1\setoption "rcvtimeo", 0.1
+      -- rien n'arrive : recv doit rendre nil (EAGAIN) après ~0,1 s au lieu
+      -- de bloquer indéfiniment (le test entier pendrait sinon)
+      data = s1\receive 16
+      assert.is_nil data
+      s1\close!
+      s2\close!
+
     it "erreur pour option inconnue", ->
       s = sock.create_tcp!
       assert.has_error (-> s\setoption "unknown_opt", true), "unsupported option: unknown_opt"

@@ -94,7 +94,7 @@ verify = function(token, key)
   end
   local p = decode_payload(encoded)
   if os.time() > (p.expires or 0) then
-    return nil, "token expiré"
+    return nil, "token expiré", p
   end
   return p, nil
 end

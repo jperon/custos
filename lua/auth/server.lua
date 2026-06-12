@@ -190,9 +190,17 @@ handle_client = function(args)
       }
     end)
     client:settimeout(nil)
+    local client_timeout = (state.auth_cfg and tonumber(state.auth_cfg.client_timeout)) or 15
+    pcall(function()
+      return client:setoption("rcvtimeo", client_timeout)
+    end)
+    pcall(function()
+      return client:setoption("sndtimeo", client_timeout)
+    end)
     log_debug(function()
       return {
-        action = "server_blocking_mode_set"
+        action = "server_blocking_mode_set",
+        client_timeout = client_timeout
       }
     end)
     log_debug(function()
@@ -224,7 +232,8 @@ handle_client = function(args)
     end)
     local handshake_complete = false
     local handshake_attempts = 0
-    while not handshake_complete and handshake_attempts < 50 do
+    local handshake_deadline = os.time() + client_timeout
+    while not handshake_complete and handshake_attempts < 50 and os.time() <= handshake_deadline do
       handshake_attempts = handshake_attempts + 1
       log_debug(function()
         return {
@@ -278,7 +287,9 @@ handle_client = function(args)
       }
     end)
     local peer_mac = get_mac(peer_ip)
-    local req, req_err = read_request(tls_client)
+    local req, req_err = read_request(tls_client, {
+      timeout = client_timeout
+    })
     if not (req) then
       log_warn(function()
         return {

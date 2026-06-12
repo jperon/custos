@@ -5,8 +5,12 @@
 --- Read a complete HTTP/1.1 request from a TLS socket object.
 -- Reads the request line, all headers, and the body (if Content-Length > 0).
 -- @tparam table client  TLS socket with :receive(pattern) method.
+-- @tparam table|nil opts  { timeout: seconds } — budget TOTAL de lecture. Sans
+--   lui, les retries sur want_read_write (50×) multiplient le SO_RCVTIMEO du
+--   socket : une connexion muette tiendrait le processus 50 × timeout.
 -- @treturn table|nil    {method, path, headers, body}, or nil + error string.
-read_request = (client) ->
+read_request = (client, opts) ->
+  deadline = opts and opts.timeout and (os.time! + opts.timeout)
   receive_retry = (mode) ->
     last_err = nil
     for _ = 1, 50
@@ -14,6 +18,12 @@ read_request = (client) ->
       return data if data
       last_err = err
       break unless err == "want_read_write"
+      -- >= : chaque want_read_write signifie qu'un SO_RCVTIMEO complet s'est
+      -- déjà écoulé ; avec >, un arrondi d'horloge offrirait un tour de plus
+      -- (pire cas 2× timeout au lieu de ~timeout).
+      if deadline and os.time! >= deadline
+        last_err = "timeout"
+        break
     nil, last_err
 
   request_line, err = receive_retry "*l"
@@ -62,10 +72,15 @@ send_response = (client, status, headers, body) ->
       s\find("eof_from_peer", 1, true)
 
   send_chunk = (chunk) ->
-    ok, err = pcall -> client\send chunk
-    return true if ok
-    return nil, "peer_closed" if is_peer_closed_err err
-    error tostring err
+    ok, res = pcall -> client\send chunk
+    if ok
+      -- send rend nil sur WANT_WRITE/WANT_READ : avec SO_SNDTIMEO, cela
+      -- signifie qu'un timeout complet s'est écoulé sans pouvoir écrire.
+      -- L'ignorer perdrait le chunk en silence (réponse tronquée).
+      return true if res
+      return nil, "send_timeout"
+    return nil, "peer_closed" if is_peer_closed_err res
+    error tostring res
 
   body or= ""
   reason = switch status

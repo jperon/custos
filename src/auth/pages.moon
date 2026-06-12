@@ -121,15 +121,22 @@ success_page = (auth_cfg, created_at, is_admin) ->
       }\";
       var worker = new Worker(URL.createObjectURL(new Blob([workerJs], {type: 'application/javascript'})));
       var lastSuccess = Date.now();
+      var unauthorized = 0;
       function ping(){
         fetch('/ping',{method:'GET',credentials:'same-origin'})
           .then(function(r){
-            lastSuccess = Date.now();
             if(r.status===401){
-              if(document.visibilityState!=='visible')
+              // Un 401 isolé peut venir d'un ping retardé par le navigateur :
+              // confirmer par un second ping avant d'alerter.
+              unauthorized++;
+              if(unauthorized < 2){ setTimeout(ping, 2000); return; }
+              if(document.visibilityState==='visible')
                 alert('Connexion perdue, veuillez vous authentifier de nouveau.');
               location.href='/';
+              return;
             }
+            unauthorized = 0;
+            lastSuccess = Date.now();
           })
           .catch(function(){
             if (Date.now() - lastSuccess > idle) {
@@ -161,15 +168,17 @@ success_page = (auth_cfg, created_at, is_admin) ->
       document.addEventListener('visibilitychange', function(){
         if (document.visibilityState === 'visible') worker.postMessage({type: 'visible'});
       });
-      function logout(){
+      // pagehide se déclenche aussi sur reload/navigation : ne PAS détruire la
+      // session ici (/logout), seulement raccourcir son expiration (/bye).
+      function bye(){
         if (navigator.sendBeacon) {
-          navigator.sendBeacon('/logout');
+          navigator.sendBeacon('/bye');
         } else {
-          fetch('/logout', {method:'GET', keepalive:true, credentials:'omit'});
+          fetch('/bye', {method:'POST', keepalive:true, credentials:'same-origin'});
         }
       }
       window.addEventListener('pagehide', function(e){
-        if (!e.persisted) logout();
+        if (!e.persisted) bye();
       });
     "
   }

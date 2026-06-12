@@ -373,6 +373,18 @@ socket_mt.__index.setoption = function(self, option, value)
       local errno = get_errno()
       error("setsockopt(SO_REUSEADDR) failed: errno=" .. errno)
     end
+  elseif option == "rcvtimeo" or option == "sndtimeo" then
+    local SO_RCVTIMEO, SO_SNDTIMEO = 20, 21
+    local opt = option == "rcvtimeo" and SO_RCVTIMEO or SO_SNDTIMEO
+    local secs = tonumber(value) or 0
+    local tv = ffi.new("struct timeval")
+    tv.tv_sec = math.floor(secs)
+    tv.tv_usec = math.floor((secs - math.floor(secs)) * 1e6)
+    local ret = C.setsockopt(self.fd, SOL_SOCKET, opt, tv, ffi.sizeof(tv))
+    if ret < 0 then
+      local errno = get_errno()
+      error("setsockopt(" .. tostring(option) .. ") failed: errno=" .. errno)
+    end
   elseif option == "ipv6-v6only" then
     local IPPROTO_IPV6 = 41
     local IPV6_V6ONLY = 26
