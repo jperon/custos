@@ -47,6 +47,24 @@ raw_send = require "raw_send"
 so_cfg = config.second_opinion or {}
 bit = require "bit"
 
+-- ── Retry upstream (SERVFAIL/REFUSED) ──────────────────────────────
+-- cf. config.dns.upstream_retry. Ré-interroge le MÊME résolveur après une
+-- réponse transitoirement en échec, plutôt que de la transmettre au client.
+retry_cfg     = (config.dns or {}).upstream_retry or {}
+retry_enabled = retry_cfg.enabled and true or false
+retry_max     = tonumber(retry_cfg.max_attempts) or 2
+retry_rcodes  = {}
+for rc in *(retry_cfg.rcodes or { 2, 3, 5 })
+  retry_rcodes[rc] = true
+pending_ttl   = ((config.ipc or {}).pending_ttl) or 5
+-- Sockets RAW (HDRINCL) par famille pour réémettre les requêtes ; init dans run().
+retry_fds     = {}
+RCODE_NXDOMAIN = 3
+-- Cache des noms durablement NXDOMAIN (retry inutile) : un nom n'y entre que si
+-- même le retry reste NXDOMAIN, et en sort dès qu'il résout de nouveau (NOERROR).
+ttl_set       = require "lib.ttl_set"
+nxdomain_bad  = ttl_set.new (retry_cfg.nxdomain_bad_max or 4096), (retry_cfg.nxdomain_bad_ttl or 60), now
+
 -- État « second avis » (nil si désactivé), initialisé dans run().
 so_state = nil
 
@@ -67,7 +85,7 @@ set_verdict = (qh_ptr, pkt_id, verdict, payload=nil) ->
 tcp_state = new_dns_tcp_stream!
 
 -- Reconstruction de paquet et formatage des RR DNS factorisés (fonctions pures).
-{ :replace_dns_payload, :parse_answers } = require "lib.dns_response"
+{ :replace_dns_payload, :parse_answers, :build_query_from_response } = require "lib.dns_response"
 
 -- ── Parsing L3/L4/L7 ────────────────────────────────────────────
 
@@ -478,6 +496,60 @@ sweep_parked = ->
   for ctx in *so_state.expired current_benchmark_ms!
     finalize_a ctx, nil
 
+--- Tente un retry upstream après une réponse transitoirement en échec.
+-- Réémet la requête vers LE MÊME résolveur (src client spoofée) via un socket
+-- RAW, garde la transaction `entry` vivante (non consommée, expiry prolongé) et
+-- incrémente son compteur d'essais. Best-effort, ne bloque jamais.
+-- @tparam table  entry      Transaction en attente (mutée : upstream_retries, expire).
+-- @tparam table  dns_msg    Réponse DNS parsée.
+-- @tparam string dns_raw    Payload DNS brut de la réponse.
+-- @tparam table  ip         En-tête IP parsé de la réponse.
+-- @tparam table  l4         En-tête L4 parsé de la réponse.
+-- @tparam string resolver_ip IP du résolveur (= src de la réponse).
+-- @treturn boolean true si une requête de retry a été émise (→ NF_DROP attendu).
+-- Tient aussi à jour `nxdomain_bad` : un nom résolu (NOERROR) en sort ; un nom
+-- dont même le retry reste NXDOMAIN (budget épuisé) y entre pour ne plus être
+-- retenté pendant `nxdomain_bad_ttl`.
+try_upstream_retry = (entry, dns_msg, dns_raw, ip, l4, resolver_ip) ->
+  return false unless retry_enabled
+  return false if entry.refused
+  return false unless l4.proto == "udp"
+  rc = bit.band dns_msg.header.ra_z_rcode, 0x0f
+  q1 = dns_msg.questions and dns_msg.questions[1]
+  qname = q1 and q1.name and q1.name\lower!
+  -- Réponse positive : le nom est (de nouveau) vivant → ne plus le supprimer.
+  if rc == 0
+    nxdomain_bad.remove qname
+    return false
+  return false unless retry_rcodes[rc]
+  -- NXDOMAIN d'un nom déjà connu durablement absent : servir vite, sans retry.
+  return false if rc == RCODE_NXDOMAIN and nxdomain_bad.has qname
+  unless (entry.upstream_retries or 0) < retry_max
+    -- Budget épuisé : si NXDOMAIN persiste, mémoriser le nom comme « mauvais ».
+    nxdomain_bad.add qname if rc == RCODE_NXDOMAIN
+    return false
+  fd = retry_fds[ip.version == 6 and "ipv6" or "ipv4"]
+  return false unless fd
+  qdcount = dns_msg.header.qdcount or (dns_msg.questions and #dns_msg.questions) or 1
+  query_raw = build_query_from_response dns_raw, qdcount
+  return false unless query_raw
+  pkt = dup_query.build_query ip, l4, query_raw
+  return false unless pkt
+  entry.upstream_retries = (entry.upstream_retries or 0) + 1
+  entry.expire = now! + pending_ttl   -- garder la transaction vivante jusqu'au retour
+  raw_send.send fd, ip.version, pkt, resolver_ip
+  true
+
+--- Ouvre les sockets RAW (HDRINCL) du retry upstream (un par famille).
+-- Idempotent, best-effort. Appelé par run() ; exposé pour les tests.
+-- @treturn nil
+arm_retry_fds = ->
+  return unless retry_enabled
+  for fam, ver in pairs { ipv4: 4, ipv6: 6 }
+    continue if retry_fds[fam]
+    fd = raw_send.open ver
+    retry_fds[fam] = fd if fd
+
 --- Traduit un résultat dns_classify en override pour finalize_a.
 -- Toujours non-nil ({kind:"pass"} pour une réponse normale) afin de distinguer
 -- « verdict connu = pass » de « verdict pas encore reçu » dans le cache.
@@ -622,6 +694,29 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       }
       return NF_DROP
   bench_after_match_ms = current_benchmark_ms! if runtime_cfg.benchmark
+
+  -- ── Retry upstream sur réponse transitoirement en échec ──────────
+  -- Avant de consommer/transmettre : si le résolveur a renvoyé SERVFAIL/REFUSED
+  -- et que le budget d'essais n'est pas épuisé, réémettre la requête vers le même
+  -- résolveur et DROP cette réponse. La transaction reste en attente : la réponse
+  -- du retry repassera par ici et sera appariée à la même `entry`.
+  if try_upstream_retry entry, dns_msg, dns_raw, ip, l4, resolver_ip
+    q1 = dns_msg.questions and dns_msg.questions[1]
+    log_debug -> {
+      action:     "response_upstream_retry"
+      src_ip:     src_ip
+      dst_ip:     dst_ip
+      vlan:       l2.vlan
+      txid:       txid_hex
+      qname:      q1 and q1.name or "-"
+      rcode:      bit.band dns_msg.header.ra_z_rcode, 0x0f
+      attempt:    entry.upstream_retries
+      resolver:   resolver_ip
+      client_mac: client_mac
+      user:       user
+    }
+    return NF_DROP
+
   -- Transaction consommée (one-shot : une réponse par question)
   consume txid, dst_ip, client_port, resolver_ip
 
@@ -781,6 +876,12 @@ run = (queue_num, rfd, rules_metadata) ->
       add r for r in *(meta.validate_resolvers or {})
     all
 
+  -- Sockets RAW (HDRINCL) pour le retry upstream : un par famille, best-effort.
+  -- La réémission vise le résolveur du client (routable par construction).
+  if retry_enabled
+    arm_retry_fds!
+    log_info -> { action: "dns_upstream_retry_armed", max_attempts: retry_max, ipv4: retry_fds.ipv4 != nil, ipv6: retry_fds.ipv6 != nil }
+
   local run_opts
   all_resolvers = collect_all_resolvers!
   if #all_resolvers > 0
@@ -801,4 +902,5 @@ run = (queue_num, rfd, rules_metadata) ->
   run_queue tonumber(queue_num), handle_response, run_opts
 
 { :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields,
-  :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream }
+  :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream,
+  :try_upstream_retry, :arm_retry_fds }

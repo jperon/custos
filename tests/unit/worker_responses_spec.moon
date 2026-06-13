@@ -141,3 +141,96 @@ describe "worker_responses helpers", ->
       fields, verdict = m.build_benchmark_fields entry, info, deltas
       assert.equals "block", verdict
       assert.equals "default_deny", fields.rule
+
+describe "worker_responses upstream retry", ->
+  { parse: parse_ip, :s2ip } = require "ipparse.l3.ip"
+  { parse: parse_udp } = require "ipparse.l4.udp"
+
+  -- Paquet réponse IPv4/UDP (résolveur 1.1.1.1:53 → client 10.35.8.2:5353).
+  build_response = (rcode) ->
+    question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    dns = sp(">H H H H H H", 0x1234, 0x8000 + rcode, 1, 0, 0, 0) .. question
+    udp_len = 8 + #dns
+    total = 20 + udp_len
+    raw = sp ">B B H H H B B H", 0x45, 0, total, 0x1, 0, 64, 17, 0
+    raw ..= s2ip("1.1.1.1") .. s2ip("10.35.8.2")
+    raw ..= sp(">H H H H", 53, 5353, udp_len, 0) .. dns
+    ip, _ = parse_ip raw
+    l4, _ = parse_udp raw, ip.data_off
+    l4.proto = "udp"
+    ip, l4, dns
+
+  load_with_retry = (cfg) ->
+    config = require "config"
+    config.dns = { ttl_grace: { grace: 0, min: 60, max: 900 }, upstream_retry: cfg }
+    config.ipc = { pending_ttl: 5 }
+    sent = {}
+    package.loaded["raw_send"] = {
+      open: (ver) -> 40 + ver
+      routable: -> true
+      send: (fd, ver, pkt, dst) -> sent[#sent + 1] = { :fd, :ver, :pkt, :dst }
+    }
+    m = fresh_worker_responses!
+    m.arm_retry_fds!
+    m, sent
+
+  mk_msg = (rcode) -> { header: { ra_z_rcode: rcode, qdcount: 1 }, questions: {{ name: "example.com" }} }
+
+  it "réémet et renvoie true sur SERVFAIL dans le budget", ->
+    m, sent = load_with_retry { enabled: true, max_attempts: 2, rcodes: { 2, 5 } }
+    ip, l4, dns = build_response 2
+    entry = { refused: false }
+    assert.is_true (m.try_upstream_retry entry, mk_msg(2), dns, ip, l4, "1.1.1.1")
+    assert.equals 1, entry.upstream_retries
+    assert.equals 1, #sent
+    assert.equals "1.1.1.1", sent[1].dst
+
+  it "n'émet plus au-delà de max_attempts", ->
+    m, sent = load_with_retry { enabled: true, max_attempts: 2, rcodes: { 2 } }
+    ip, l4, dns = build_response 2
+    assert.is_false (m.try_upstream_retry { refused: false, upstream_retries: 2 }, mk_msg(2), dns, ip, l4, "1.1.1.1")
+    assert.equals 0, #sent
+
+  it "ignore un rcode non listé (NXDOMAIN)", ->
+    m, sent = load_with_retry { enabled: true, max_attempts: 2, rcodes: { 2, 5 } }
+    ip, l4, dns = build_response 3
+    assert.is_false (m.try_upstream_retry { refused: false }, mk_msg(3), dns, ip, l4, "1.1.1.1")
+    assert.equals 0, #sent
+
+  it "ne retry pas une transaction refused", ->
+    m, sent = load_with_retry { enabled: true, max_attempts: 2, rcodes: { 2 } }
+    ip, l4, dns = build_response 2
+    assert.is_false (m.try_upstream_retry { refused: true }, mk_msg(2), dns, ip, l4, "1.1.1.1")
+
+  it "désactivé par config → false", ->
+    m, sent = load_with_retry { enabled: false }
+    ip, l4, dns = build_response 2
+    assert.is_false (m.try_upstream_retry { refused: false }, mk_msg(2), dns, ip, l4, "1.1.1.1")
+
+  it "retente un NXDOMAIN tant que le budget le permet", ->
+    m, sent = load_with_retry { enabled: true, max_attempts: 2, rcodes: { 2, 3, 5 } }
+    ip, l4, dns = build_response 3
+    entry = { refused: false }
+    assert.is_true (m.try_upstream_retry entry, mk_msg(3), dns, ip, l4, "1.1.1.1")
+    assert.equals 1, entry.upstream_retries
+    assert.equals 1, #sent
+
+  it "mémorise un nom durablement NXDOMAIN et n'y retente plus", ->
+    m, sent = load_with_retry { enabled: true, max_attempts: 1, rcodes: { 3 } }
+    ip, l4, dns = build_response 3
+    -- budget épuisé (retries déjà à max) → marque le nom comme « mauvais »
+    assert.is_false (m.try_upstream_retry { refused: false, upstream_retries: 1 }, mk_msg(3), dns, ip, l4, "1.1.1.1")
+    -- nouvelle transaction, budget dispo, mais nom connu mauvais → pas de retry
+    assert.is_false (m.try_upstream_retry { refused: false }, mk_msg(3), dns, ip, l4, "1.1.1.1")
+    assert.equals 0, #sent
+
+  it "une réponse NOERROR réhabilite un nom et autorise de nouveau le retry", ->
+    m, sent = load_with_retry { enabled: true, max_attempts: 1, rcodes: { 3 } }
+    ip3, l43, dns3 = build_response 3
+    ip0, l40, dns0 = build_response 0
+    assert.is_false (m.try_upstream_retry { refused: false, upstream_retries: 1 }, mk_msg(3), dns3, ip3, l43, "1.1.1.1")
+    assert.is_false (m.try_upstream_retry { refused: false }, mk_msg(3), dns3, ip3, l43, "1.1.1.1")  -- connu mauvais
+    assert.is_false (m.try_upstream_retry { refused: false }, mk_msg(0), dns0, ip0, l40, "1.1.1.1")  -- NOERROR réhabilite
+    entry = { refused: false }
+    assert.is_true (m.try_upstream_retry entry, mk_msg(3), dns3, ip3, l43, "1.1.1.1")   -- retry de nouveau permis
+    assert.equals 1, entry.upstream_retries

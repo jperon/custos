@@ -62,6 +62,24 @@ local dup_query = require("dup_query")
 local raw_send = require("raw_send")
 local so_cfg = config.second_opinion or { }
 local bit = require("bit")
+local retry_cfg = (config.dns or { }).upstream_retry or { }
+local retry_enabled = retry_cfg.enabled and true or false
+local retry_max = tonumber(retry_cfg.max_attempts) or 2
+local retry_rcodes = { }
+local _list_0 = (retry_cfg.rcodes or {
+  2,
+  3,
+  5
+})
+for _index_0 = 1, #_list_0 do
+  local rc = _list_0[_index_0]
+  retry_rcodes[rc] = true
+end
+local pending_ttl = ((config.ipc or { }).pending_ttl) or 5
+local retry_fds = { }
+local RCODE_NXDOMAIN = 3
+local ttl_set = require("lib.ttl_set")
+local nxdomain_bad = ttl_set.new((retry_cfg.nxdomain_bad_max or 4096), (retry_cfg.nxdomain_bad_ttl or 60), now)
 local so_state = nil
 local set_verdict
 set_verdict = function(qh_ptr, pkt_id, verdict, payload)
@@ -81,10 +99,10 @@ do
   PROTO_UDP, PROTO_TCP = _obj_0.PROTO_UDP, _obj_0.PROTO_TCP
 end
 local tcp_state = new_dns_tcp_stream()
-local replace_dns_payload, parse_answers
+local replace_dns_payload, parse_answers, build_query_from_response
 do
   local _obj_0 = require("lib.dns_response")
-  replace_dns_payload, parse_answers = _obj_0.replace_dns_payload, _obj_0.parse_answers
+  replace_dns_payload, parse_answers, build_query_from_response = _obj_0.replace_dns_payload, _obj_0.parse_answers, _obj_0.build_query_from_response
 end
 local parse_packet
 parse_packet = function(raw)
@@ -438,18 +456,18 @@ finalize_a = function(ctx, override)
         local patched = replace_dns_payload(raw, ip, l4, ip_ihl, new_dns)
         if patched then
           local redirect_answers = { }
-          local _list_0 = (override.a or { })
-          for _index_0 = 1, #_list_0 do
-            local r = _list_0[_index_0]
+          local _list_1 = (override.a or { })
+          for _index_0 = 1, #_list_1 do
+            local r = _list_1[_index_0]
             redirect_answers[#redirect_answers + 1] = {
               family = "ipv4",
               addr = ip2s(r),
               ttl = override.ttl
             }
           end
-          local _list_1 = (override.aaaa or { })
-          for _index_0 = 1, #_list_1 do
-            local r = _list_1[_index_0]
+          local _list_2 = (override.aaaa or { })
+          for _index_0 = 1, #_list_2 do
+            local r = _list_2[_index_0]
             redirect_answers[#redirect_answers + 1] = {
               family = "ipv6",
               addr = ip2s(r),
@@ -495,9 +513,9 @@ finalize_a = function(ctx, override)
     answers_dns = parsed_modified
   end
   local answers = { }
-  local _list_0 = parse_answers(answers_dns)
-  for _index_0 = 1, #_list_0 do
-    local a = _list_0[_index_0]
+  local _list_1 = parse_answers(answers_dns)
+  for _index_0 = 1, #_list_1 do
+    local a = _list_1[_index_0]
     if a.rtype == QTYPE.A or a.rtype == QTYPE.AAAA then
       local fam = a.rtype == QTYPE.AAAA and "ipv6" or "ipv4"
       answers[#answers + 1] = {
@@ -551,9 +569,9 @@ finalize_a = function(ctx, override)
   local qnames = table.concat((function()
     local _accum_0 = { }
     local _len_0 = 1
-    local _list_1 = dns_msg.questions
-    for _index_0 = 1, #_list_1 do
-      local q = _list_1[_index_0]
+    local _list_2 = dns_msg.questions
+    for _index_0 = 1, #_list_2 do
+      local q = _list_2[_index_0]
       _accum_0[_len_0] = q.name
       _len_0 = _len_0 + 1
     end
@@ -618,10 +636,84 @@ sweep_parked = function()
   if not (so_state and so_state.has_parked()) then
     return 
   end
-  local _list_0 = so_state.expired(current_benchmark_ms())
-  for _index_0 = 1, #_list_0 do
-    local ctx = _list_0[_index_0]
+  local _list_1 = so_state.expired(current_benchmark_ms())
+  for _index_0 = 1, #_list_1 do
+    local ctx = _list_1[_index_0]
     finalize_a(ctx, nil)
+  end
+end
+local try_upstream_retry
+try_upstream_retry = function(entry, dns_msg, dns_raw, ip, l4, resolver_ip)
+  if not (retry_enabled) then
+    return false
+  end
+  if entry.refused then
+    return false
+  end
+  if not (l4.proto == "udp") then
+    return false
+  end
+  local rc = bit.band(dns_msg.header.ra_z_rcode, 0x0f)
+  local q1 = dns_msg.questions and dns_msg.questions[1]
+  local qname = q1 and q1.name and q1.name:lower()
+  if rc == 0 then
+    nxdomain_bad.remove(qname)
+    return false
+  end
+  if not (retry_rcodes[rc]) then
+    return false
+  end
+  if rc == RCODE_NXDOMAIN and nxdomain_bad.has(qname) then
+    return false
+  end
+  if not ((entry.upstream_retries or 0) < retry_max) then
+    if rc == RCODE_NXDOMAIN then
+      nxdomain_bad.add(qname)
+    end
+    return false
+  end
+  local fd = retry_fds[ip.version == 6 and "ipv6" or "ipv4"]
+  if not (fd) then
+    return false
+  end
+  local qdcount = dns_msg.header.qdcount or (dns_msg.questions and #dns_msg.questions) or 1
+  local query_raw = build_query_from_response(dns_raw, qdcount)
+  if not (query_raw) then
+    return false
+  end
+  local pkt = dup_query.build_query(ip, l4, query_raw)
+  if not (pkt) then
+    return false
+  end
+  entry.upstream_retries = (entry.upstream_retries or 0) + 1
+  entry.expire = now() + pending_ttl
+  raw_send.send(fd, ip.version, pkt, resolver_ip)
+  return true
+end
+local arm_retry_fds
+arm_retry_fds = function()
+  if not (retry_enabled) then
+    return 
+  end
+  for fam, ver in pairs({
+    ipv4 = 4,
+    ipv6 = 6
+  }) do
+    local _continue_0 = false
+    repeat
+      if retry_fds[fam] then
+        _continue_0 = true
+        break
+      end
+      local fd = raw_send.open(ver)
+      if fd then
+        retry_fds[fam] = fd
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
   end
 end
 local make_override
@@ -770,6 +862,25 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   if runtime_cfg.benchmark then
     bench_after_match_ms = current_benchmark_ms()
   end
+  if try_upstream_retry(entry, dns_msg, dns_raw, ip, l4, resolver_ip) then
+    local q1 = dns_msg.questions and dns_msg.questions[1]
+    log_debug(function()
+      return {
+        action = "response_upstream_retry",
+        src_ip = src_ip,
+        dst_ip = dst_ip,
+        vlan = l2.vlan,
+        txid = txid_hex,
+        qname = q1 and q1.name or "-",
+        rcode = bit.band(dns_msg.header.ra_z_rcode, 0x0f),
+        attempt = entry.upstream_retries,
+        resolver = resolver_ip,
+        client_mac = client_mac,
+        user = user
+      }
+    end)
+    return NF_DROP
+  end
   consume(txid, dst_ip, client_port, resolver_ip)
   if runtime_cfg.benchmark and entry and entry.benchmark_ms then
     local bench_log_ms = current_benchmark_ms()
@@ -837,9 +948,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     local qnames = table.concat((function()
       local _accum_0 = { }
       local _len_0 = 1
-      local _list_0 = dns_msg.questions
-      for _index_0 = 1, #_list_0 do
-        local q = _list_0[_index_0]
+      local _list_1 = dns_msg.questions
+      for _index_0 = 1, #_list_1 do
+        local q = _list_1[_index_0]
         _accum_0[_len_0] = q.name
         _len_0 = _len_0 + 1
       end
@@ -926,21 +1037,32 @@ run = function(queue_num, rfd, rules_metadata)
         all[#all + 1] = r
       end
     end
-    local _list_0 = (so_cfg.resolvers or { })
-    for _index_0 = 1, #_list_0 do
-      local r = _list_0[_index_0]
+    local _list_1 = (so_cfg.resolvers or { })
+    for _index_0 = 1, #_list_1 do
+      local r = _list_1[_index_0]
       add(r)
     end
-    local _list_1 = (rules_metadata or { })
-    for _index_0 = 1, #_list_1 do
-      local meta = _list_1[_index_0]
-      local _list_2 = (meta.validate_resolvers or { })
-      for _index_1 = 1, #_list_2 do
-        local r = _list_2[_index_1]
+    local _list_2 = (rules_metadata or { })
+    for _index_0 = 1, #_list_2 do
+      local meta = _list_2[_index_0]
+      local _list_3 = (meta.validate_resolvers or { })
+      for _index_1 = 1, #_list_3 do
+        local r = _list_3[_index_1]
         add(r)
       end
     end
     return all
+  end
+  if retry_enabled then
+    arm_retry_fds()
+    log_info(function()
+      return {
+        action = "dns_upstream_retry_armed",
+        max_attempts = retry_max,
+        ipv4 = retry_fds.ipv4 ~= nil,
+        ipv6 = retry_fds.ipv6 ~= nil
+      }
+    end)
   end
   local run_opts
   local all_resolvers = collect_all_resolvers()
@@ -984,5 +1106,7 @@ return {
   build_benchmark_fields = build_benchmark_fields,
   skip_ipv6_ext_hdrs = skip_ipv6_ext_hdrs,
   dns_tcp_complete = dns_tcp_complete,
-  new_dns_tcp_stream = new_dns_tcp_stream
+  new_dns_tcp_stream = new_dns_tcp_stream,
+  try_upstream_retry = try_upstream_retry,
+  arm_retry_fds = arm_retry_fds
 }

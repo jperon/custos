@@ -306,6 +306,17 @@ local DEFAULTS = {
       grace = 600,
       min = 60,
       max = 2592000
+    },
+    upstream_retry = {
+      enabled = true,
+      max_attempts = 2,
+      rcodes = {
+        2,
+        3,
+        5
+      },
+      nxdomain_bad_ttl = 60,
+      nxdomain_bad_max = 4096
     }
   },
   nft = {

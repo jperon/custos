@@ -103,9 +103,47 @@ parse_answers = function(dns_msg)
   end
   return _accum_0
 end
+local build_query_from_response
+build_query_from_response = function(dns_raw, qdcount)
+  if qdcount == nil then
+    qdcount = 1
+  end
+  if not (dns_raw and #dns_raw >= 12) then
+    return nil
+  end
+  if not (qdcount and qdcount >= 1) then
+    return nil
+  end
+  local off = 13
+  for _ = 1, qdcount do
+    while true do
+      if off > #dns_raw then
+        return nil
+      end
+      local len = dns_raw:byte(off)
+      off = off + 1
+      if len == 0 then
+        break
+      end
+      if bit.band(len, 0xC0) ~= 0 then
+        return nil
+      end
+      off = off + len
+    end
+    off = off + 4
+    if off - 1 > #dns_raw then
+      return nil
+    end
+  end
+  local q_end = off - 1
+  local b3 = bit.band(bit.bor(dns_raw:byte(3), 0x01), 0x7F)
+  local header = string.char(dns_raw:byte(1), dns_raw:byte(2), b3, 0x00, dns_raw:byte(5), dns_raw:byte(6), 0, 0, 0, 0, 0, 0)
+  return header .. dns_raw:sub(13, q_end)
+end
 return {
   replace_dns_payload = replace_dns_payload,
   decode_simple_cname = decode_simple_cname,
   fmt_rdata = fmt_rdata,
-  parse_answers = parse_answers
+  parse_answers = parse_answers,
+  build_query_from_response = build_query_from_response
 }

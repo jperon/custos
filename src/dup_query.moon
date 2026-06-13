@@ -63,4 +63,35 @@ build_udp = (ip, l4, dns_raw, validator_ip) ->
   }
   "#{ip_pkt}"
 
-{ :pick_resolver, :build_udp }
+--- Construit le paquet de RE-REQUÊTE (client → résolveur) à partir des en-têtes
+-- de la RÉPONSE captée (src=résolveur, dst=client). Inverse src/dst et ports ;
+-- le payload est la requête reconstruite (QR=0). Émis ensuite via raw_send (la
+-- réponse du résolveur, adressée au client, repasse par le pont et est
+-- recapturée par la NFQUEUE des réponses). UDP uniquement.
+-- @tparam table   ip        En-tête IP parsé de la réponse (src=résolveur, dst=client).
+-- @tparam table   l4        En-tête UDP parsé de la réponse (.spt=53, .dpt=port client).
+-- @tparam string  query_raw Payload DNS de la requête (QR=0).
+-- @treturn string|nil Octets du paquet IP (sans Ethernet), ou nil si non applicable.
+build_query = (ip, l4, query_raw) ->
+  return nil unless ip and l4 and query_raw
+  return nil unless l4.proto == "udp"
+  udp = new_udp { spt: l4.dpt, dpt: l4.spt, checksum: 0, data: query_raw }
+  ip_pkt = new_ip {
+    version:     ip.version
+    v_ihl:       ip.v_ihl
+    tos:         ip.tos
+    id:          ip.id
+    ff:          ip.ff
+    ttl:         64
+    options:     ip.options or ""
+    vtf:         ip.vtf
+    hop_limit:   64
+    src:         ip.dst   -- client (spoofé)
+    dst:         ip.src   -- résolveur
+    protocol:    PROTO_UDP
+    next_header: PROTO_UDP
+    data:        udp
+  }
+  "#{ip_pkt}"
+
+{ :pick_resolver, :build_udp, :build_query }

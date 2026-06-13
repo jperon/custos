@@ -172,7 +172,7 @@ dns_response_json = function(raw)
   end
   local parts = {
     "{",
-    "\"Status\":" .. tostring(dns.header.rcode or 0),
+    "\"Status\":" .. tostring(bit.band((dns.header.ra_z_rcode or 0), 0x0f)),
     ",\"TC\":" .. tostring(dns.header.tc and true or false),
     ",\"RD\":" .. tostring(dns.header.rd and true or false),
     ",\"RA\":" .. tostring(dns.header.ra and true or false),

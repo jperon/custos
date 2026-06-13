@@ -61,7 +61,40 @@ build_udp = function(ip, l4, dns_raw, validator_ip)
   })
   return tostring(ip_pkt)
 end
+local build_query
+build_query = function(ip, l4, query_raw)
+  if not (ip and l4 and query_raw) then
+    return nil
+  end
+  if not (l4.proto == "udp") then
+    return nil
+  end
+  local udp = new_udp({
+    spt = l4.dpt,
+    dpt = l4.spt,
+    checksum = 0,
+    data = query_raw
+  })
+  local ip_pkt = new_ip({
+    version = ip.version,
+    v_ihl = ip.v_ihl,
+    tos = ip.tos,
+    id = ip.id,
+    ff = ip.ff,
+    ttl = 64,
+    options = ip.options or "",
+    vtf = ip.vtf,
+    hop_limit = 64,
+    src = ip.dst,
+    dst = ip.src,
+    protocol = PROTO_UDP,
+    next_header = PROTO_UDP,
+    data = udp
+  })
+  return tostring(ip_pkt)
+end
 return {
   pick_resolver = pick_resolver,
-  build_udp = build_udp
+  build_udp = build_udp,
+  build_query = build_query
 }

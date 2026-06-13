@@ -57,3 +57,39 @@ describe "dup_query", ->
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
       assert.is_nil dup.build_udp ip, l4, dns, "2a01:4f8::1"
+
+  describe "build_query", ->
+    query = "\xab\xcd\1\0\0\1\0\0\0\0\0\0\7example\3com\0\0\1\0\1"
+
+    it "inverse src/dst et ports à partir des en-têtes de la réponse", ->
+      -- Réponse résolveur→client : src=1.1.1.1:53, dst=192.0.2.10:5353.
+      raw = build_v4 "1.1.1.1", "192.0.2.10", query
+      ip, _ = parse_ip raw
+      l4, _ = parse_udp raw, ip.data_off
+      l4.proto = "udp"
+      out = dup.build_query ip, l4, query
+      assert.is_truthy out
+      oip, _ = parse_ip out
+      assert.same "192.0.2.10", ip2s(oip.src)   -- client (spoofé)
+      assert.same "1.1.1.1", ip2s(oip.dst)       -- résolveur
+      oudp, _ = parse_udp out, oip.data_off
+      -- Ports inversés : la requête part du port client (= dpt de la réponse)
+      -- vers le résolveur (= spt de la réponse). Le helper fixe spt=5353/dpt=53.
+      assert.same 53, oudp.spt
+      assert.same 5353, oudp.dpt
+      payload = out\sub oudp.data_off, oudp.off + oudp.len - 1
+      assert.same query, payload
+
+    it "nil en TCP", ->
+      raw = build_v4 "1.1.1.1", "192.0.2.10", query
+      ip, _ = parse_ip raw
+      l4, _ = parse_udp raw, ip.data_off
+      l4.proto = "tcp"
+      assert.is_nil dup.build_query ip, l4, query
+
+    it "nil sans payload", ->
+      raw = build_v4 "1.1.1.1", "192.0.2.10", query
+      ip, _ = parse_ip raw
+      l4, _ = parse_udp raw, ip.data_off
+      l4.proto = "udp"
+      assert.is_nil dup.build_query ip, l4, nil

@@ -32,7 +32,7 @@ fresh_worker_responses = function()
   package.loaded["worker_responses"] = nil
   return dofile("lua/worker_responses.lua")
 end
-return describe("worker_responses helpers", function()
+describe("worker_responses helpers", function()
   before_each(function()
     local config = require("config")
     config.dns = {
@@ -153,5 +153,210 @@ return describe("worker_responses helpers", function()
       assert.equals("block", verdict)
       return assert.equals("default_deny", fields.rule)
     end)
+  end)
+end)
+return describe("worker_responses upstream retry", function()
+  local parse_ip, s2ip
+  do
+    local _obj_0 = require("ipparse.l3.ip")
+    parse_ip, s2ip = _obj_0.parse, _obj_0.s2ip
+  end
+  local parse_udp
+  parse_udp = require("ipparse.l4.udp").parse
+  local build_response
+  build_response = function(rcode)
+    local question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+    local dns = sp(">H H H H H H", 0x1234, 0x8000 + rcode, 1, 0, 0, 0) .. question
+    local udp_len = 8 + #dns
+    local total = 20 + udp_len
+    local raw = sp(">B B H H H B B H", 0x45, 0, total, 0x1, 0, 64, 17, 0)
+    raw = raw .. (s2ip("1.1.1.1") .. s2ip("10.35.8.2"))
+    raw = raw .. (sp(">H H H H", 53, 5353, udp_len, 0) .. dns)
+    local ip, _ = parse_ip(raw)
+    local l4
+    l4, _ = parse_udp(raw, ip.data_off)
+    l4.proto = "udp"
+    return ip, l4, dns
+  end
+  local load_with_retry
+  load_with_retry = function(cfg)
+    local config = require("config")
+    config.dns = {
+      ttl_grace = {
+        grace = 0,
+        min = 60,
+        max = 900
+      },
+      upstream_retry = cfg
+    }
+    config.ipc = {
+      pending_ttl = 5
+    }
+    local sent = { }
+    package.loaded["raw_send"] = {
+      open = function(ver)
+        return 40 + ver
+      end,
+      routable = function()
+        return true
+      end,
+      send = function(fd, ver, pkt, dst)
+        sent[#sent + 1] = {
+          fd = fd,
+          ver = ver,
+          pkt = pkt,
+          dst = dst
+        }
+      end
+    }
+    local m = fresh_worker_responses()
+    m.arm_retry_fds()
+    return m, sent
+  end
+  local mk_msg
+  mk_msg = function(rcode)
+    return {
+      header = {
+        ra_z_rcode = rcode,
+        qdcount = 1
+      },
+      questions = {
+        {
+          name = "example.com"
+        }
+      }
+    }
+  end
+  it("réémet et renvoie true sur SERVFAIL dans le budget", function()
+    local m, sent = load_with_retry({
+      enabled = true,
+      max_attempts = 2,
+      rcodes = {
+        2,
+        5
+      }
+    })
+    local ip, l4, dns = build_response(2)
+    local entry = {
+      refused = false
+    }
+    assert.is_true((m.try_upstream_retry(entry, mk_msg(2), dns, ip, l4, "1.1.1.1")))
+    assert.equals(1, entry.upstream_retries)
+    assert.equals(1, #sent)
+    return assert.equals("1.1.1.1", sent[1].dst)
+  end)
+  it("n'émet plus au-delà de max_attempts", function()
+    local m, sent = load_with_retry({
+      enabled = true,
+      max_attempts = 2,
+      rcodes = {
+        2
+      }
+    })
+    local ip, l4, dns = build_response(2)
+    assert.is_false((m.try_upstream_retry({
+      refused = false,
+      upstream_retries = 2
+    }, mk_msg(2), dns, ip, l4, "1.1.1.1")))
+    return assert.equals(0, #sent)
+  end)
+  it("ignore un rcode non listé (NXDOMAIN)", function()
+    local m, sent = load_with_retry({
+      enabled = true,
+      max_attempts = 2,
+      rcodes = {
+        2,
+        5
+      }
+    })
+    local ip, l4, dns = build_response(3)
+    assert.is_false((m.try_upstream_retry({
+      refused = false
+    }, mk_msg(3), dns, ip, l4, "1.1.1.1")))
+    return assert.equals(0, #sent)
+  end)
+  it("ne retry pas une transaction refused", function()
+    local m, sent = load_with_retry({
+      enabled = true,
+      max_attempts = 2,
+      rcodes = {
+        2
+      }
+    })
+    local ip, l4, dns = build_response(2)
+    return assert.is_false((m.try_upstream_retry({
+      refused = true
+    }, mk_msg(2), dns, ip, l4, "1.1.1.1")))
+  end)
+  it("désactivé par config → false", function()
+    local m, sent = load_with_retry({
+      enabled = false
+    })
+    local ip, l4, dns = build_response(2)
+    return assert.is_false((m.try_upstream_retry({
+      refused = false
+    }, mk_msg(2), dns, ip, l4, "1.1.1.1")))
+  end)
+  it("retente un NXDOMAIN tant que le budget le permet", function()
+    local m, sent = load_with_retry({
+      enabled = true,
+      max_attempts = 2,
+      rcodes = {
+        2,
+        3,
+        5
+      }
+    })
+    local ip, l4, dns = build_response(3)
+    local entry = {
+      refused = false
+    }
+    assert.is_true((m.try_upstream_retry(entry, mk_msg(3), dns, ip, l4, "1.1.1.1")))
+    assert.equals(1, entry.upstream_retries)
+    return assert.equals(1, #sent)
+  end)
+  it("mémorise un nom durablement NXDOMAIN et n'y retente plus", function()
+    local m, sent = load_with_retry({
+      enabled = true,
+      max_attempts = 1,
+      rcodes = {
+        3
+      }
+    })
+    local ip, l4, dns = build_response(3)
+    assert.is_false((m.try_upstream_retry({
+      refused = false,
+      upstream_retries = 1
+    }, mk_msg(3), dns, ip, l4, "1.1.1.1")))
+    assert.is_false((m.try_upstream_retry({
+      refused = false
+    }, mk_msg(3), dns, ip, l4, "1.1.1.1")))
+    return assert.equals(0, #sent)
+  end)
+  return it("une réponse NOERROR réhabilite un nom et autorise de nouveau le retry", function()
+    local m, sent = load_with_retry({
+      enabled = true,
+      max_attempts = 1,
+      rcodes = {
+        3
+      }
+    })
+    local ip3, l43, dns3 = build_response(3)
+    local ip0, l40, dns0 = build_response(0)
+    assert.is_false((m.try_upstream_retry({
+      refused = false,
+      upstream_retries = 1
+    }, mk_msg(3), dns3, ip3, l43, "1.1.1.1")))
+    assert.is_false((m.try_upstream_retry({
+      refused = false
+    }, mk_msg(3), dns3, ip3, l43, "1.1.1.1")))
+    assert.is_false((m.try_upstream_retry({
+      refused = false
+    }, mk_msg(0), dns0, ip0, l40, "1.1.1.1")))
+    local entry = {
+      refused = false
+    }
+    assert.is_true((m.try_upstream_retry(entry, mk_msg(3), dns3, ip3, l43, "1.1.1.1")))
+    return assert.equals(1, entry.upstream_retries)
   end)
 end)

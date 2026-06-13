@@ -129,7 +129,9 @@ dns_response_json = (raw) ->
   return nil unless dns
   parts = {
     "{"
-    "\"Status\":" .. tostring(dns.header.rcode or 0)
+    -- header.rcode (accesseur métatableau) renvoie un booléen ; le champ JSON
+    -- DoH « Status » attend le rcode numérique → extraction depuis ra_z_rcode.
+    "\"Status\":" .. tostring(bit.band (dns.header.ra_z_rcode or 0), 0x0f)
     ",\"TC\":" .. tostring(dns.header.tc and true or false)
     ",\"RD\":" .. tostring(dns.header.rd and true or false)
     ",\"RA\":" .. tostring(dns.header.ra and true or false)

@@ -205,8 +205,41 @@ Paramètres du traitement DNS.
 | `ttl_grace.grace` | int | `600` | Secondes ajoutées au TTL DNS dans les sets nft |
 | `ttl_grace.min` | int | `60` | TTL minimum accepté (en secondes) |
 | `ttl_grace.max` | int | `2592000` | TTL maximum accepté (30 jours, en secondes) |
+| `upstream_retry.enabled` | bool | `true` | Réinterroge le résolveur sur réponse transitoirement en échec |
+| `upstream_retry.max_attempts` | int | `2` | Nombre maximal de réémissions par transaction |
+| `upstream_retry.rcodes` | liste | `{2, 3, 5}` | rcodes retentés (SERVFAIL, NXDOMAIN, REFUSED) |
+| `upstream_retry.nxdomain_bad_ttl` | int | `60` | Durée (s) de suppression du retry pour un nom durablement NXDOMAIN |
+| `upstream_retry.nxdomain_bad_max` | int | `4096` | Taille max du cache de noms « durablement NXDOMAIN » |
 
 Le TTL effectif injecté dans nftables est `clamp(dns_ttl + grace, min, max)`.
+
+### Retry upstream (`upstream_retry`)
+
+Custos est un filtre **inline** : il laisse passer la requête du client vers le
+résolveur et intercepte la réponse au retour. Quand le résolveur renvoie une
+réponse transitoirement en échec (rcode ∈ `rcodes`, p. ex. SERVFAIL après un
+upstream instable comme dynv6), `worker_responses` ne la transmet **pas** au
+client. Il réémet la même question vers **le même résolveur** (requête dupliquée
+émise via socket RAW, IP source du client spoofée) et `DROP` la réponse en échec.
+La transaction en attente reste vivante : la réponse du retry repasse par le pont,
+est recapturée et appariée à la même transaction. Au-delà de `max_attempts`, la
+réponse en échec est finalement transmise au client (comportement historique).
+
+Cela évite le symptôme « connexion refusée plusieurs fois puis page OK au
+rafraîchissement » : sans enregistrement A/AAAA, aucune IP n'est ajoutée à
+l'allowlist nft, donc l'hôte reste injoignable jusqu'à une résolution réussie.
+
+**NXDOMAIN intermittent et cache « noms mauvais ».** Certains autoritatifs
+instables (ex. dynv6) renvoient NXDOMAIN par intermittence pour un nom qui existe
+pourtant — symptôme observé sur **tous** les résolveurs publics testés (Cloudflare,
+Quad9). NXDOMAIN (rcode 3) est donc retenté par défaut. Pour ne pas pénaliser les
+NXDOMAIN légitimes (fautes de frappe, `.lan`, sondes, PTR…), un nom n'est plus
+retenté que s'il n'est pas déjà connu « durablement absent » : un nom dont **même
+le retry** reste NXDOMAIN (budget épuisé) entre dans un cache (`nxdomain_bad_ttl`
+secondes) ; il en sort dès qu'il résout de nouveau (NOERROR). Conséquence : un nom
+réellement inexistant n'est retenté qu'une fois par fenêtre de TTL, tandis qu'un
+nom flaky (rarement NXDOMAIN `max_attempts+1` fois d'affilée) reste toujours
+retenté. Mettre `rcodes: { 2, 5 }` pour désactiver entièrement le retry NXDOMAIN.
 
 ```moonscript
 dns: {
@@ -215,6 +248,13 @@ dns: {
     grace: 600
     min:   60
     max:   2592000
+  }
+  upstream_retry: {
+    enabled:          true
+    max_attempts:     2
+    rcodes:           { 2, 3, 5 }   -- SERVFAIL, NXDOMAIN, REFUSED
+    nxdomain_bad_ttl: 60
+    nxdomain_bad_max: 4096
   }
 }
 ```

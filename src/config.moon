@@ -207,6 +207,22 @@ DEFAULTS = {
       min: 60
       max: 2592000
     }
+    -- Retry upstream : quand le résolveur renvoie une réponse transitoirement en
+    -- échec (SERVFAIL/REFUSED, sans enregistrement), worker_responses ne la
+    -- transmet pas au client mais ré-interroge LE MÊME résolveur (requête
+    -- dupliquée, src client spoofée) jusqu'à `max_attempts` fois. Évite les
+    -- « connexion refusée puis OK au rafraîchissement » dus à un upstream
+    -- instable (ex. dynv6). La transaction en attente reste vivante entre essais.
+    upstream_retry: {
+      enabled:      true
+      max_attempts: 2
+      rcodes:       { 2, 3, 5 }   -- SERVFAIL, NXDOMAIN, REFUSED (rcodes transitoires)
+      -- NXDOMAIN : par défaut on retente tout NXDOMAIN (couvre 1re visite + noms
+      -- flaky). Un nom dont MÊME le retry reste NXDOMAIN (genre wpad.lan) est
+      -- mémorisé `nxdomain_bad_ttl` secondes pour ne plus gaspiller de retry.
+      nxdomain_bad_ttl: 60       -- durée de suppression du retry (s)
+      nxdomain_bad_max: 4096     -- taille max du cache de noms « durablement NXDOMAIN »
+    }
   }
 
   nft: {

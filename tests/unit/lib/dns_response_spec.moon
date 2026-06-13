@@ -45,6 +45,50 @@ describe "lib.dns_response", ->
       rdata = string.char(0xC0, 0x0C)
       assert.equals "(cname)", D.decode_simple_cname rdata
 
+  describe "build_query_from_response", ->
+    -- Réponse : en-tête (QR=1,RD=1 ; RA=1,RCODE=2 SERVFAIL ; qd=1,an=1) +
+    -- question www.example.com/A/IN + un answer factice.
+    question = "\3www\7example\3com\0" .. string.char(0, 1, 0, 1)
+    header   = string.char(0x12, 0x34, 0x81, 0x82, 0, 1, 0, 1, 0, 0, 0, 0)
+    answer   = string.char(0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 1, 2, 3, 4)
+    response = header .. question .. answer
+
+    it "ne garde que l'en-tête et la section question", ->
+      q = D.build_query_from_response response, 1
+      assert.is_string q
+      assert.equals 12 + #question, #q
+      assert.equals question, q\sub 13
+
+    it "normalise les drapeaux (QR=0, RD=1) et remet les compteurs AN/NS/AR à 0", ->
+      q = D.build_query_from_response response, 1
+      assert.equals 0x12, q\byte 1          -- ID conservé
+      assert.equals 0x34, q\byte 2
+      assert.equals 0x01, q\byte 3          -- QR effacé, RD positionné
+      assert.equals 0x00, q\byte 4          -- RA/Z/RCODE remis à 0
+      assert.equals 1, q\byte 6             -- QDCOUNT conservé
+      assert.equals 0, q\byte 8             -- ANCOUNT = 0
+      assert.equals 0, q\byte 10            -- NSCOUNT = 0
+      assert.equals 0, q\byte 12            -- ARCOUNT = 0
+
+    it "qdcount par défaut à 1", ->
+      q = D.build_query_from_response response
+      assert.is_string q
+      assert.equals 12 + #question, #q
+
+    it "renvoie nil sur un payload trop court", ->
+      assert.is_nil D.build_query_from_response "\0\0\0", 1
+
+    it "renvoie nil si qdcount < 1", ->
+      assert.is_nil D.build_query_from_response response, 0
+
+    it "renvoie nil sur une question tronquée", ->
+      truncated = header .. "\7example"   -- label sans terminateur ni qtype/qclass
+      assert.is_nil D.build_query_from_response truncated, 1
+
+    it "rejette un pointeur de compression dans la question", ->
+      bad = header .. string.char(0xC0, 0x0C, 0, 1, 0, 1)
+      assert.is_nil D.build_query_from_response bad, 1
+
   describe "fmt_rdata", ->
     it "formate un enregistrement A", ->
       assert.equals "1.2.3.4", D.fmt_rdata { rtype: 1, rdata: string.char(1, 2, 3, 4) }
