@@ -183,6 +183,18 @@ ffi.cdef [[
     unsigned char  mr_address[8];
   };
 
+  /* ── Classic BPF socket filter (SO_ATTACH_FILTER) ── */
+  struct sock_filter {
+    uint16_t code;
+    uint8_t  jt;
+    uint8_t  jf;
+    uint32_t k;
+  };
+  struct sock_fprog {
+    uint16_t            len;
+    struct sock_filter *filter;
+  };
+
   /* ── Raw operations for AF_PACKET ── */
   ssize_t sendto(int sockfd, const void *buf, size_t len, int flags,
                  const struct sockaddr *dest_addr, socklen_t addrlen);

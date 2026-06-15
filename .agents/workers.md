@@ -98,7 +98,7 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 ## worker_arp_sniffer (`src/worker_arp_sniffer.moon`)
 
-- **In :** deux sockets `AF_PACKET/SOCK_RAW` sur `br` : EtherType `0x0806` (ARP) + `0x86DD` (IPv6, filtrage NDP ICMPv6 type 135/136 en Lua).
+- **In :** un socket `AF_PACKET/SOCK_RAW` (`ETH_P_ALL`, mode promiscuous) par interface. Un filtre **cBPF noyau** (`SO_ATTACH_FILTER`, `BPF_PROG`) ne laisse remonter que les trames ARP (`0x0806`) et IPv6/ICMPv6 NS/NA (type 135/136) — sans ce filtre le worker était réveillé (et allouait une string Lua) sur **chaque** paquet du plan de données, saturant un cœur sous charge. Le filtrage EtherType/NDP est ensuite re-vérifié en Lua (mêmes offsets).
 - **Out :** écrit les associations IP→MAC découvertes dans le pipe `learn` (22 octets).
 - Aucun verdict NFQUEUE, aucune modification de paquet.
 

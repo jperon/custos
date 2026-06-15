@@ -20,6 +20,8 @@ local ETH_P_ALL = C.htons(0x0003)
 local SOL_PACKET = 263
 local PACKET_ADD_MEMBERSHIP = 1
 local PACKET_MR_PROMISC = 1
+local SOL_SOCKET_C = 1
+local SO_ATTACH_FILTER = 26
 local ICMPV6_PROTO = 58
 local ICMPV6_TYPE_NS = 135
 local ICMPV6_TYPE_NA = 136
@@ -83,6 +85,92 @@ extract_tlla = function(raw, opt_start, len)
   end
   return nil
 end
+local BPF_PROG = {
+  {
+    0x28,
+    0,
+    0,
+    12
+  },
+  {
+    0x15,
+    7,
+    0,
+    0x0806
+  },
+  {
+    0x15,
+    0,
+    5,
+    0x86DD
+  },
+  {
+    0x30,
+    0,
+    0,
+    20
+  },
+  {
+    0x15,
+    0,
+    3,
+    58
+  },
+  {
+    0x30,
+    0,
+    0,
+    54
+  },
+  {
+    0x15,
+    2,
+    0,
+    135
+  },
+  {
+    0x15,
+    1,
+    0,
+    136
+  },
+  {
+    0x06,
+    0,
+    0,
+    0
+  },
+  {
+    0x06,
+    0,
+    0,
+    0xFFFF
+  }
+}
+local attach_filter
+attach_filter = function(fd)
+  local prog = ffi.new("struct sock_filter[?]", #BPF_PROG)
+  for i, ins in ipairs(BPF_PROG) do
+    prog[i - 1].code = ins[1]
+    prog[i - 1].jt = ins[2]
+    prog[i - 1].jf = ins[3]
+    prog[i - 1].k = ins[4]
+  end
+  local fprog = ffi.new("struct sock_fprog")
+  fprog.len = #BPF_PROG
+  fprog.filter = prog
+  if C.setsockopt(fd, SOL_SOCKET_C, SO_ATTACH_FILTER, fprog, ffi.sizeof(fprog)) ~= 0 then
+    log_debug(function()
+      return {
+        action = "bpf_attach_failed",
+        errno = tonumber(ffi.C.__errno_location()[0])
+      }
+    end)
+    return false
+  else
+    return true
+  end
+end
 local open_socket
 open_socket = function(ifindex)
   local fd = C.socket(AF_PACKET, SOCK_RAW, ETH_P_ALL)
@@ -98,6 +186,7 @@ open_socket = function(ifindex)
     libc.close(fd)
     return nil
   end
+  attach_filter(fd)
   local mreq = ffi.new("struct packet_mreq")
   ffi.fill(mreq, ffi.sizeof(mreq), 0)
   mreq.mr_ifindex = ifindex
@@ -343,5 +432,6 @@ run = function(ifnames, learn_wfd)
   end
 end
 return {
-  run = run
+  run = run,
+  BPF_PROG = BPF_PROG
 }

@@ -29,6 +29,13 @@ SOL_PACKET              = 263
 PACKET_ADD_MEMBERSHIP   = 1
 PACKET_MR_PROMISC       = 1
 
+-- Filtre BPF noyau (SO_ATTACH_FILTER) : ne laisse remonter en userspace
+-- que les trames pertinentes (ARP, ou IPv6/ICMPv6 NS/NA), pour éviter de
+-- réveiller le worker — et d'allouer une string Lua — sur chaque paquet du
+-- plan de données (IPv4/TCP/UDP) quand le lien est chargé.
+SOL_SOCKET_C            = 1
+SO_ATTACH_FILTER        = 26
+
 -- ICMPv6 next-header number et types NDP
 ICMPV6_PROTO        = 58
 ICMPV6_TYPE_NS      = 135   -- Neighbor Solicitation
@@ -116,6 +123,48 @@ extract_tlla = (raw, opt_start, len) ->
 
   nil
 
+-- ── Filtre BPF ───────────────────────────────────────────────────
+
+-- Programme cBPF équivalent à `arp or (ip6 and icmp6 and (type 135 or 136))`.
+-- Reproduit exactement les tests faits ensuite en Lua (EtherType, next-header
+-- ICMPv6 à l'offset 20, type ICMPv6 à l'offset 54), si bien que le noyau écarte
+-- tout le reste avant qu'il n'atteigne recv().
+--   BPF_LD|H|ABS = 0x28, BPF_LD|B|ABS = 0x30,
+--   BPF_JMP|JEQ|K = 0x15, BPF_RET|K = 0x06
+BPF_PROG = {
+  { 0x28, 0, 0, 12 }       -- ldh  [12]            ; EtherType
+  { 0x15, 7, 0, 0x0806 }   -- jeq  0x0806 -> accept ; ARP
+  { 0x15, 0, 5, 0x86DD }   -- jne  0x86DD -> drop   ; sinon ce doit être IPv6
+  { 0x30, 0, 0, 20 }       -- ldb  [20]            ; IPv6 next header
+  { 0x15, 0, 3, 58 }       -- jne  58     -> drop   ; ICMPv6 ?
+  { 0x30, 0, 0, 54 }       -- ldb  [54]            ; type ICMPv6
+  { 0x15, 2, 0, 135 }      -- jeq  135    -> accept ; Neighbor Solicitation
+  { 0x15, 1, 0, 136 }      -- jeq  136    -> accept ; Neighbor Advertisement
+  { 0x06, 0, 0, 0 }        -- ret  0                ; drop
+  { 0x06, 0, 0, 0xFFFF }   -- ret  0xFFFF           ; accept
+}
+
+--- Attache le filtre BPF NDP/ARP au socket via SO_ATTACH_FILTER.
+-- Best-effort : un échec laisse le socket fonctionnel (filtrage userspace seul).
+-- @tparam number fd  fd du socket AF_PACKET
+attach_filter = (fd) ->
+  prog = ffi.new "struct sock_filter[?]", #BPF_PROG
+  for i, ins in ipairs BPF_PROG
+    prog[i - 1].code = ins[1]
+    prog[i - 1].jt   = ins[2]
+    prog[i - 1].jf   = ins[3]
+    prog[i - 1].k    = ins[4]
+
+  fprog = ffi.new "struct sock_fprog"
+  fprog.len    = #BPF_PROG
+  fprog.filter = prog
+
+  if C.setsockopt(fd, SOL_SOCKET_C, SO_ATTACH_FILTER, fprog, ffi.sizeof(fprog)) ~= 0
+    log_debug -> { action: "bpf_attach_failed", errno: tonumber(ffi.C.__errno_location()[0]) }
+    false
+  else
+    true
+
 -- ── Sockets AF_PACKET ────────────────────────────────────────────
 
 --- Ouvre et lie un socket AF_PACKET/SOCK_RAW à une interface avec ETH_P_ALL.
@@ -137,6 +186,10 @@ open_socket = (ifindex) ->
   if C.bind(fd, ffi.cast("struct sockaddr*", sll), ffi.sizeof(sll)) ~= 0
     libc.close fd
     return nil
+
+  -- Filtre BPF noyau : n'éveille le worker que pour ARP/NDP, pas pour tout
+  -- le plan de données. Indispensable pour la tenue en charge.
+  attach_filter fd
 
   -- Activer le mode promiscuous pour capturer les paquets sortants
   mreq = ffi.new "struct packet_mreq"
@@ -377,4 +430,6 @@ run = (ifnames, learn_wfd) ->
           elseif ethertype == 0x86DD and n >= NDP_MIN_LEN
             process_ipv6 raw, n, learn_wfd
 
-{ :run }
+-- BPF_PROG est exporté pour permettre la validation du programme cBPF
+-- par les tests unitaires (interpréteur cBPF, sans socket réel).
+{ :run, :BPF_PROG }
