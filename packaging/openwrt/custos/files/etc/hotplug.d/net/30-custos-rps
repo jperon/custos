@@ -1,0 +1,44 @@
+#!/bin/sh
+# Custos — répartition du softirq RX (RPS/RFS) + GRO sur les ports du bridge.
+#
+# Sous fort débit, le softirq NET_RX sature les cœurs portant l'IRQ matériel des
+# files RX (cf. /proc/softirqs) → ksoftirqd à 100 %, latence ping qui grimpe.
+# RPS étale le traitement haut (parsing/nft) sur tous les cœurs ; RFS ajoute la
+# localité de flux ; GRO réduit le nombre de paquets remontés.
+#
+# Réappliqué à chaque événement net (les valeurs rps_cpus/GRO ne survivent ni au
+# reboot ni au up/down d'interface). Tout est AUTODÉTECTÉ : le(s) bridge(s),
+# leurs ports esclaves, et le masque CPU (tous les cœurs en ligne).
+#
+# Empiriquement (routeur 4 cœurs, NET_RX concentré sur 2 cœurs) : étaler sur la
+# TOTALITÉ des cœurs (masque 0xf) donne le meilleur résultat — le parallélisme
+# l'emporte sur la double charge des cœurs déjà occupés par l'IRQ.
+
+[ "$ACTION" = "add" ] || [ "$ACTION" = "ifup" ] || exit 0
+
+# Masque hexa = tous les cœurs présents (ex. 4 cœurs → "f").
+ncpu=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
+[ "$ncpu" -ge 1 ] 2>/dev/null || ncpu=1
+mask=$(printf '%x' $(( (1 << ncpu) - 1 )))
+
+# RFS global (table de hachage des flux). Idempotent.
+echo 32768 > /proc/sys/net/core/rps_sock_flow_entries 2>/dev/null
+
+for br in /sys/class/net/*/bridge; do
+	[ -d "$br" ] || continue
+	brif="${br%/bridge}/brif"
+	[ -d "$brif" ] || continue
+	for port in "$brif"/*; do
+		[ -e "$port" ] || continue
+		name=$(basename "$port")
+		for q in /sys/class/net/"$name"/queues/rx-*; do
+			[ -d "$q" ] || continue
+			echo "$mask" > "$q/rps_cpus" 2>/dev/null
+			echo 4096    > "$q/rps_flow_cnt" 2>/dev/null
+		done
+		# ethtool peut être absent sur OpenWrt minimal : sans danger.
+		ethtool -K "$name" gro on 2>/dev/null
+	done
+done
+
+exit 0

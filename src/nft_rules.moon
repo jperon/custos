@@ -138,6 +138,19 @@ substitute = (content, plan=nil) ->
   content = content\gsub "{SNI_RULES_PRE}",  pre_rules
   content = content\gsub "{SNI_RULES_POST}", post_rules
 
+  -- Fast-path conntrack : deux ancres, une seule remplie selon le placement SNI.
+  --   non-"integral" → ancre HAUTE ({FAST_PATH_EARLY}, avant le bloc infra) :
+  --                    court-circuite tout le bloc amont pour les flux tranchés.
+  --   "integral"     → ancre BASE ({FAST_PATH_LATE}, après {SNI_RULES_PRE}) :
+  --                    préserve l'inspection SNI per-paquet du ClientHello.
+  fast_path_rule = "    ct state established,related ct mark != 0x0 meta mark set ct mark counter meta mark vmap @cv_action_vmap comment \"Fast-path: replay cached verdict for decided flows\""
+  early_fp, late_fp = if placement == "integral"
+    "", fast_path_rule
+  else
+    fast_path_rule, ""
+  content = content\gsub "{FAST_PATH_EARLY}", early_fp
+  content = content\gsub "{FAST_PATH_LATE}",  late_fp
+
   -- Pré-peupler filter_ips4/6 dès l'application du ruleset pour éviter la
   -- race condition entre flush ruleset et nft_extra_rules.apply_from_config().
   ip4s = collect_ips "ip -4 addr show 2>/dev/null", "%s+inet%s+([%d%.]+)/", nil

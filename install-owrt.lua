@@ -511,6 +511,22 @@ Installer = function(cfg)
       ok("custos-update installé (/usr/sbin/custos-update) + cron lundi 4h")
       return true
     end,
+    install_hotplug_rps = function(self)
+      step("Hotplug RPS/RFS/GRO (latence softirq)")
+      local src = "packaging/openwrt/custos/files/etc/hotplug.d/net/30-custos-rps"
+      self:ssh_run("mkdir -p /etc/hotplug.d/net")
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/etc/hotplug.d/net/30-custos-rps")) then
+        fail("Échec de la copie du hotplug RPS")
+        return false
+      end
+      if not (self:ssh_run("chmod +x /etc/hotplug.d/net/30-custos-rps")) then
+        fail("Échec du chmod +x hotplug RPS")
+        return false
+      end
+      self:ssh_run("ACTION=add /etc/hotplug.d/net/30-custos-rps 2>/dev/null || true")
+      ok("Hotplug RPS installé (/etc/hotplug.d/net/30-custos-rps) + appliqué")
+      return true
+    end,
     uninstall = function(self)
       step("Désinstallation de CustosVirginum")
       info("  Arrêt du service...")
@@ -520,6 +536,7 @@ Installer = function(cfg)
       self:ssh_run("rm -rf " .. tostring(self.cfg.dest))
       self:ssh_run("rm -f /etc/init.d/custos")
       self:ssh_run("rm -f /usr/sbin/custos-update")
+      self:ssh_run("rm -f /etc/hotplug.d/net/30-custos-rps")
       self:ssh_run("sed -i '/custos-update/d' /etc/crontabs/root 2>/dev/null || true")
       self:ssh_run("/etc/init.d/cron restart 2>/dev/null || true")
       info("  Nettoyage nftables...")
@@ -710,6 +727,12 @@ main = function()
       name = "script update",
       fn = function()
         return inst:install_updater()
+      end
+    },
+    {
+      name = "hotplug RPS",
+      fn = function()
+        return inst:install_hotplug_rps()
       end
     },
     {

@@ -142,6 +142,15 @@ substitute = function(content, plan)
   end
   content = content:gsub("{SNI_RULES_PRE}", pre_rules)
   content = content:gsub("{SNI_RULES_POST}", post_rules)
+  local fast_path_rule = "    ct state established,related ct mark != 0x0 meta mark set ct mark counter meta mark vmap @cv_action_vmap comment \"Fast-path: replay cached verdict for decided flows\""
+  local early_fp, late_fp
+  if placement == "integral" then
+    early_fp, late_fp = "", fast_path_rule
+  else
+    early_fp, late_fp = fast_path_rule, ""
+  end
+  content = content:gsub("{FAST_PATH_EARLY}", early_fp)
+  content = content:gsub("{FAST_PATH_LATE}", late_fp)
   local ip4s = collect_ips("ip -4 addr show 2>/dev/null", "%s+inet%s+([%d%.]+)/", nil)
   local ip6s = collect_ips("ip -6 addr show 2>/dev/null", "%s+inet6%s+([%x:]+)/", "^fe80")
   content = content:gsub("{FILTER_IPS4_ELEMENTS}", fmt_elements(ip4s))

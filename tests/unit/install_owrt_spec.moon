@@ -52,3 +52,19 @@ describe "install-owrt — install_default_lists", ->
     joined = table.concat runs, "\n"
     assert.falsy joined\find "enfants.txt", 1, true
     assert.falsy joined\find "adultes.txt", 1, true
+
+describe "install-owrt — install_hotplug_rps", ->
+  it "crée le dossier hotplug, chmod et applique immédiatement le script", ->
+    inst, runs = make_inst {}
+    assert.is_true inst\install_hotplug_rps!
+    joined = table.concat runs, "\n"
+    assert.truthy joined\find "mkdir -p /etc/hotplug.d/net", 1, true
+    assert.truthy joined\find "chmod +x /etc/hotplug.d/net/30-custos-rps", 1, true
+    -- Application immédiate sans attendre un événement net (ACTION=add).
+    assert.truthy joined\find "ACTION=add /etc/hotplug.d/net/30-custos-rps", 1, true
+
+  it "supprime le script hotplug lors de la désinstallation", ->
+    inst, runs = make_inst {}
+    inst\uninstall!
+    joined = table.concat runs, "\n"
+    assert.truthy joined\find "rm -f /etc/hotplug.d/net/30-custos-rps", 1, true

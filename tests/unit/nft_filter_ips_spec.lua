@@ -231,7 +231,7 @@ describe("nft_rules : substitution de {FILTER_IPS4/6_ELEMENTS}", function()
     return assert.is_nil(set_block:find("elements"))
   end)
 end)
-return describe("nft_rules : placement SNI integral/residual", function()
+describe("nft_rules : placement SNI integral/residual", function()
   local cfg = require("config")
   cfg.nfqueue = cfg.nfqueue or {
     questions = "0",
@@ -285,5 +285,116 @@ return describe("nft_rules : placement SNI integral/residual", function()
     assert.is_nil(pre:find("queue num 6"))
     assert.truthy(post:find("queue num 6"))
     cfg.sni.placement = "residual"
+  end)
+end)
+return describe("dns-filter-bridge.nft : fast-path conntrack", function()
+  local read_template
+  read_template = function()
+    local fh = assert(io.open("nft-rules/dns-filter-bridge.nft", "r"))
+    local content = fh:read("*a")
+    fh:close()
+    return content
+  end
+  local tmpl = read_template()
+  local cfg = require("config")
+  cfg.nfqueue = cfg.nfqueue or {
+    questions = "0",
+    responses = "1",
+    captive = "2",
+    reject = "3",
+    auth = "5",
+    sni = "6",
+    sip = nil
+  }
+  cfg.nfqueue.sni = "6"
+  cfg.nft = cfg.nft or {
+    ip_timeout = "2m",
+    family = "bridge",
+    table = "dns-filter-bridge",
+    extra_rules = { }
+  }
+  cfg.runtime = cfg.runtime or {
+    log_level = "INFO"
+  }
+  cfg.filter = cfg.filter or {
+    rules = { }
+  }
+  cfg.doh = cfg.doh or {
+    port = 8443
+  }
+  cfg.sni = cfg.sni or { }
+  local FAST = "ct state established,related ct mark != 0x0 meta mark set ct mark counter meta mark vmap @cv_action_vmap"
+  it("ne porte plus la règle inline (déplacée vers nft_rules.moon)", function()
+    assert.is_nil(tmpl:find(FAST, 1, true))
+    assert.truthy(tmpl:find("{FAST_PATH_EARLY}", 1, true))
+    return assert.truthy(tmpl:find("{FAST_PATH_LATE}", 1, true))
+  end)
+  it("déclare la règle de mémorisation du verdict en ct mark", function()
+    return assert.truthy(tmpl:find("meta mark != 0x0 ct mark set meta mark"))
+  end)
+  describe("rendu residual (ancre HAUTE)", function()
+    local out = nil
+    before_each(function()
+      cfg.sni.placement = "residual"
+      out = substitute(tmpl)
+    end)
+    it("n'a aucun placeholder {FAST_PATH_*} résiduel", function()
+      return assert.is_nil(out:find("{FAST_PATH_", 1, true))
+    end)
+    it("rend la fast-path AVANT le bloc infra (court-circuit du bloc amont)", function()
+      local fp = out:find(FAST, 1, true)
+      local infra = out:find("DHCPv4", 1, true)
+      assert.truthy(fp)
+      return assert.is_true(fp < infra)
+    end)
+    return it("rend la fast-path AVANT le dispatch", function()
+      return assert.is_true((out:find(FAST, 1, true)) < (out:find("jump cv_rules_dispatch", 1, true)))
+    end)
+  end)
+  describe("rendu integral (ancre BASE, SNI préservé)", function()
+    local out = nil
+    before_each(function()
+      cfg.sni.placement = "integral"
+      out = substitute(tmpl)
+    end)
+    it("n'a aucun placeholder {FAST_PATH_*} résiduel", function()
+      return assert.is_nil(out:find("{FAST_PATH_", 1, true))
+    end)
+    it("rend la fast-path APRÈS les règles SNI 443 (inspection préservée)", function()
+      local fp = out:find(FAST, 1, true)
+      local sni = out:find("th dport {443", 1, true)
+      assert.truthy(fp)
+      assert.truthy(sni)
+      return assert.is_true(fp > sni)
+    end)
+    it("n'apparaît qu'une seule fois (pas d'ancre HAUTE dupliquée)", function()
+      local first = out:find(FAST, 1, true)
+      return assert.is_nil(out:find(FAST, first + 1, true))
+    end)
+    it("reste AVANT le dispatch", function()
+      return assert.is_true((out:find(FAST, 1, true)) < (out:find("jump cv_rules_dispatch", 1, true)))
+    end)
+    return after_each(function()
+      cfg.sni.placement = "residual"
+    end)
+  end)
+  local dangerous = {
+    "{SNI_RULES_PRE}",
+    "{SNI_RULES_POST}",
+    "{SIP_RULES}",
+    "{COMPILED_FILTER_SETS}",
+    "{COMPILED_FILTER_RULES}",
+    "{FILTER_IPS4_ELEMENTS}",
+    "{FILTER_IPS6_ELEMENTS}"
+  }
+  return it("ne contient aucun placeholder multi-ligne dans une ligne de commentaire", function()
+    for line in (tmpl .. "\n"):gmatch("([^\n]*)\n") do
+      local stripped = line:match("^%s*(.-)%s*$")
+      if stripped:sub(1, 1) == "#" then
+        for _, ph in ipairs(dangerous) do
+          assert.is_nil(stripped:find(ph, 1, true), "commentaire avec placeholder multi-ligne " .. tostring(ph) .. " : " .. tostring(stripped))
+        end
+      end
+    end
   end)
 end)

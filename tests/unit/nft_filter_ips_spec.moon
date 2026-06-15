@@ -209,3 +209,98 @@ describe "nft_rules : placement SNI integral/residual", ->
     assert.is_nil pre\find "queue num 6"
     assert.truthy post\find "queue num 6"
     cfg.sni.placement = "residual"
+
+-- ── Fast-path conntrack (cache de verdict en ct mark) ────────────────────
+-- Régression : sous fort débit, chaque paquet d'un download établi retraversait
+-- toute la chaîne forward (sets + cv_rules_dispatch) en softirq. La fast-path
+-- rejoue le verdict mémorisé en ct mark. Le filtrage reste prioritaire :
+-- l'ordre des règles garantit qu'aucun flux n'est court-circuité avant son
+-- inspection (SNI integral, DNS, apprentissage MAC).
+describe "dns-filter-bridge.nft : fast-path conntrack", ->
+  read_template = ->
+    fh = assert io.open "nft-rules/dns-filter-bridge.nft", "r"
+    content = fh\read "*a"
+    fh\close!
+    content
+
+  tmpl = read_template!
+
+  -- cfg minimal exigé par substitute (partagé avec les blocs SNI ci-dessus).
+  cfg = require "config"
+  cfg.nfqueue = cfg.nfqueue or { questions: "0", responses: "1", captive: "2",
+                                reject: "3", auth: "5", sni: "6", sip: nil }
+  cfg.nfqueue.sni = "6"
+  cfg.nft = cfg.nft or { ip_timeout: "2m", family: "bridge",
+                         table: "dns-filter-bridge", extra_rules: {} }
+  cfg.runtime = cfg.runtime or { log_level: "INFO" }
+  cfg.filter = cfg.filter or { rules: {} }
+  cfg.doh = cfg.doh or { port: 8443 }
+  cfg.sni = cfg.sni or {}
+
+  FAST = "ct state established,related ct mark != 0x0 meta mark set ct mark counter meta mark vmap @cv_action_vmap"
+
+  -- Le template ne contient PLUS la règle inline : elle est injectée par
+  -- nft_rules.moon à l'ancre HAUTE ({FAST_PATH_EARLY}) ou BASE
+  -- ({FAST_PATH_LATE}) selon sni.placement.
+  it "ne porte plus la règle inline (déplacée vers nft_rules.moon)", ->
+    assert.is_nil tmpl\find FAST, 1, true
+    assert.truthy tmpl\find "{FAST_PATH_EARLY}", 1, true
+    assert.truthy tmpl\find "{FAST_PATH_LATE}", 1, true
+
+  it "déclare la règle de mémorisation du verdict en ct mark", ->
+    assert.truthy tmpl\find "meta mark != 0x0 ct mark set meta mark"
+
+  -- Rendu residual : ancre HAUTE remplie, ancre BASE vide.
+  describe "rendu residual (ancre HAUTE)", ->
+    out = nil
+    before_each ->
+      cfg.sni.placement = "residual"
+      out = substitute tmpl
+    it "n'a aucun placeholder {FAST_PATH_*} résiduel", ->
+      assert.is_nil out\find "{FAST_PATH_", 1, true
+    it "rend la fast-path AVANT le bloc infra (court-circuit du bloc amont)", ->
+      fp    = out\find FAST, 1, true
+      infra = out\find "DHCPv4", 1, true
+      assert.truthy fp
+      assert.is_true fp < infra
+    it "rend la fast-path AVANT le dispatch", ->
+      assert.is_true (out\find FAST, 1, true) < (out\find "jump cv_rules_dispatch", 1, true)
+
+  -- Rendu integral : ancre BASE remplie (après SNI 443), ancre HAUTE vide.
+  describe "rendu integral (ancre BASE, SNI préservé)", ->
+    out = nil
+    before_each ->
+      cfg.sni.placement = "integral"
+      out = substitute tmpl
+    it "n'a aucun placeholder {FAST_PATH_*} résiduel", ->
+      assert.is_nil out\find "{FAST_PATH_", 1, true
+    it "rend la fast-path APRÈS les règles SNI 443 (inspection préservée)", ->
+      fp  = out\find FAST, 1, true
+      sni = out\find "th dport {443", 1, true
+      assert.truthy fp
+      assert.truthy sni
+      assert.is_true fp > sni
+    it "n'apparaît qu'une seule fois (pas d'ancre HAUTE dupliquée)", ->
+      first = out\find FAST, 1, true
+      assert.is_nil out\find FAST, first + 1, true
+    it "reste AVANT le dispatch", ->
+      assert.is_true (out\find FAST, 1, true) < (out\find "jump cv_rules_dispatch", 1, true)
+    after_each ->
+      cfg.sni.placement = "residual"
+
+  -- Régression : substitute() remplace les placeholders {XXX} GLOBALEMENT
+  -- (gsub). Un placeholder dont l'expansion est MULTI-LIGNE / contient des
+  -- règles, écrit dans un commentaire `#`, y serait expansé : le bloc de règles
+  -- s'injecte au milieu de la ligne commentée et casse la syntaxe nft
+  -- (« unexpected colon »). Les placeholders à valeur scalaire (QUEUE_*,
+  -- NFT_IP_TIMEOUT, DOH_PORT) restent sans danger inline (en-tête de doc).
+  dangerous = { "{SNI_RULES_PRE}", "{SNI_RULES_POST}", "{SIP_RULES}",
+    "{COMPILED_FILTER_SETS}", "{COMPILED_FILTER_RULES}",
+    "{FILTER_IPS4_ELEMENTS}", "{FILTER_IPS6_ELEMENTS}" }
+  it "ne contient aucun placeholder multi-ligne dans une ligne de commentaire", ->
+    for line in (tmpl .. "\n")\gmatch "([^\n]*)\n"
+      stripped = line\match "^%s*(.-)%s*$"
+      if stripped\sub(1, 1) == "#"
+        for _, ph in ipairs dangerous
+          assert.is_nil stripped\find(ph, 1, true),
+            "commentaire avec placeholder multi-ligne #{ph} : #{stripped}"

@@ -134,6 +134,13 @@ table bridge dns-filter-bridge {
     # Portail captif HTTPS : apprentissage MAC/IP avant acceptation.
     # Le worker auth_queue extrait la MAC et l'envoie au serveur HTTPS.
     tcp dport 33443 log level debug prefix "custos auth_input: " counter queue num {QUEUE_AUTH} comment "Captive portal HTTPS input"
+    # ── Fast-path conntrack (ancre HAUTE) ───────────────────────────────────
+    # Rendue ICI quand sni.placement != "integral" : rejoue le verdict déjà
+    # tranché sans retraverser le bloc amont (infra/whitelist/SIP) ni le
+    # dispatch. Voir le bloc de commentaire détaillé à l'ancre BASE plus bas.
+    # Seuls les flux passés par cv_rules_dispatch portent ct mark != 0 ; tout
+    # ce bloc amont est accept/queue (ct mark == 0) → jamais court-circuité.
+{FAST_PATH_EARLY}
     # Core & Infrastructure
     udp dport { 67, 68 } accept comment "DHCPv4"
     udp dport { 546, 547 } accept comment "DHCPv6"
@@ -203,9 +210,48 @@ table bridge dns-filter-bridge {
     # Certains clients envoient ClientHello sans flag PSH, donc on ne filtre pas sur PSH.
     # Ports mail SSL (465/993/995/587) : même logique SNI, absence de SNI = alerte.
 {SNI_RULES_PRE}
+    # ── Fast-path conntrack : rejoue le verdict déjà calculé ────────────────
+    # Le filtrage reste PRIORITAIRE sur l'optimisation : on ne court-circuite
+    # QUE les flux déjà POSITIVEMENT tranchés par le ruleset lui-même.
+    #
+    # Après le premier paquet d'un flux, le verdict (mark posé par
+    # cv_rules_dispatch) est mémorisé dans `ct mark` (voir la règle juste après
+    # le dispatch). Les paquets suivants d'un flux ESTABLISHED/RELATED dont le
+    # verdict est connu sont rejoués via le MÊME `@cv_action_vmap`, sans
+    # retraverser le dispatch (N sous-chaînes × lookups de sets) ni les
+    # heuristiques. Gain de softirq (ksoftirqd) sous fort débit (downloads).
+    #
+    # PLACEMENT PILOTÉ PAR sni.placement (nft_rules.moon) — deux ancres,
+    # exactement une remplie :
+    #   - non-"integral" (residual/désactivé) : ancre HAUTE (après l'auth captif,
+    #     avant le bloc infra). Court-circuite tout le bloc amont pour les flux
+    #     tranchés → gain de latence maximal.
+    #   - "integral" : ancre BASE (ICI, après les règles SNI). Indispensable :
+    #     le handshake TCP d'un flux 443 peut être marqué « allow » AVANT le
+    #     ClientHello ; remonter la fast-path sauterait l'inspection SNI du
+    #     ClientHello (flux déjà ESTABLISHED + ct mark != 0). On la garde donc
+    #     après les règles SNI pour que tout le 443 reste inspecté.
+    #
+    # Garanties (communes aux deux ancres) :
+    #   - seuls les flux passés par cv_rules_dispatch portent ct mark != 0 ; le
+    #     bloc amont (broadcast, DHCP/ARP/ICMP/NDP, NTP/UniFi, DNS queue, ULA,
+    #     whitelists, SIP) est accept/queue → ct mark 0 → jamais court-circuité.
+    #   - DNS/auth/captif restent toujours queués (ces flux ne sont pas marqués).
+    #   - un flux NON encore tranché (ct mark 0 : ClientHello, 1re résolution)
+    #     poursuit le chemin complet et atteint l'inspection habituelle.
+    #   - un `ct mark` obsolète après SIGHUP (marks recompilés) → miss du vmap →
+    #     le flux retraverse cv_rules_dispatch et est redécidé. Aucun faux
+    #     verdict possible.
+    # Équivalent sémantique au `ct state established,related accept` présent plus
+    # bas, mais borné aux flux décidés et placé avant le travail coûteux.
+{FAST_PATH_LATE}
+
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.
     jump cv_rules_dispatch comment "Compiled filter rules"
+    # Mémorise le verdict du dispatch dans ct mark pour la fast-path ci-dessus
+    # (mark non nul = flux tranché ; mark 0 = non décidé, on ne cache rien).
+    meta mark != 0x0 ct mark set meta mark comment "Cache verdict in ct mark for fast-path replay"
     meta mark vmap @cv_action_vmap comment "Apply verdict from compiled rules"
 
 {SNI_RULES_POST}

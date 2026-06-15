@@ -188,6 +188,59 @@ colonne « Source » indique le worker à l'origine de la commande.
 
 ---
 
+## Fast-path conntrack (cache de verdict en `ct mark`)
+
+Sous fort débit (plusieurs downloads parallèles), chaque paquet d'un flux établi
+retraversait toute la chaîne `forward` en contexte softirq (`ksoftirqd`) :
+lookups de sets (NTP/mDNS/UniFi/whitelist/SIP), puis `jump cv_rules_dispatch`
+(N sous-chaînes par règle × lookups de sets dynamiques) et les heuristiques.
+Coût ≈ linéaire dans la taille de la chaîne × débit → latence ping qui grimpe.
+
+`dns-filter-bridge.nft` mémorise donc le verdict d'un flux dans `ct mark` après
+le premier paquet, puis le rejoue. La règle de rejeu (« fast-path ») n'est plus
+inline dans le template : `nft_rules.moon` l'injecte à **une** de deux ancres
+selon `sni.placement` (`{FAST_PATH_EARLY}` / `{FAST_PATH_LATE}`).
+
+```
+# ── ancre HAUTE {FAST_PATH_EARLY} (rendue si placement != "integral") ──
+tcp dport 33443 … queue   # auth captif (toujours en premier)
+ct state established,related ct mark != 0x0 meta mark set ct mark counter meta mark vmap @cv_action_vmap  # fast-path
+… bloc infra (DHCP/ARP/ICMP/NTP/UniFi), DNS queue, ULA, whitelists, SIP …
+{SNI_RULES_PRE}
+# ── ancre BASE {FAST_PATH_LATE} (rendue si placement == "integral") ──
+ct state established,related ct mark != 0x0 … meta mark vmap @cv_action_vmap  # fast-path
+jump cv_rules_dispatch
+meta mark != 0x0 ct mark set meta mark   # mémorise le verdict
+meta mark vmap @cv_action_vmap
+```
+
+**Le filtrage reste prioritaire sur l'optimisation.** Garanties :
+
+- On ne court-circuite QUE les flux **déjà positivement tranchés** par le ruleset
+  (`ct mark != 0`), rejoués via le **même** `@cv_action_vmap` → aucun verdict que
+  le ruleset n'aurait pas rendu lui-même.
+- **Invariant de l'ancre HAUTE** : seuls les flux passés par `cv_rules_dispatch`
+  portent `ct mark != 0`. Tout le bloc amont (broadcast/multicast, DHCP, ARP,
+  ICMP/NDP, NTP/UniFi/syslog, DNS queue, ULA, whitelists, SIP) est `accept` ou
+  `queue` terminal → `ct mark == 0` → jamais court-circuité. Remonter la
+  fast-path au-dessus de ce bloc supprime ses lookups de sets pour les flux déjà
+  tranchés (gain de softirq) sans rien changer pour les autres.
+- **Ancre BASE en SNI `integral`** : le handshake TCP d'un flux 443 peut être
+  marqué « allow » **avant** le ClientHello ; une fast-path remontée rejouerait
+  ce verdict et sauterait l'inspection SNI du ClientHello. On la garde donc
+  **après les règles SNI** pour que tout le 443 reste inspecté.
+- DNS/auth captif (33443) restent **toujours queués** (ces flux ne sont pas
+  marqués → `ct mark == 0`). La marque VLAN n'a pas besoin d'être reposée : la
+  condition `from_vlan` est déjà encodée dans le verdict du 1ᵉ paquet.
+- Un flux **non encore tranché** (`ct mark` 0 : ClientHello, 1re résolution)
+  poursuit le chemin complet et atteint l'inspection habituelle (SNI residual…).
+- Un `ct mark` **obsolète après SIGHUP** (marks recompilés) → miss du vmap → le
+  flux retraverse `cv_rules_dispatch` et est redécidé. Aucun faux verdict.
+
+Équivalent sémantique au `ct state established,related accept` situé en bas de
+chaîne, mais borné aux flux décidés et placé avant le travail coûteux. Couvert
+par `tests/unit/nft_filter_ips_spec.moon` (rendu residual/integral + ordre).
+
 ## Superviseur (`main.moon`)
 
 - Fork chaque worker et surveille via `waitpid(-1, …, WNOHANG)` ; redémarre

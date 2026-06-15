@@ -215,6 +215,43 @@ Notes :
   2. Watch logs `response_no_matching_question` (response).
   3. Confirm question sends `write_msg`/`write_refused_msg`/`write_dnsonly_msg`.
 
+## Latence / softirq sous fort débit
+
+Sous downloads parallèles, la latence ping grimpe et un `ksoftirqd` sature.
+La fast-path conntrack (cf. `.agents/architecture.md`) supprime déjà le coût du
+dispatch nft pour les flux établis. Si un `ksoftirqd` reste à ~100 % d'**un**
+cœur, le softirq est mono-cœur : sur une machine multi-cœurs, l'étaler aide plus
+que toute micro-optimisation nft. Réglages **OpenWrt-side, à appliquer
+manuellement** (non automatisés par custos) :
+
+```sh
+nproc                                  # nombre de cœurs
+cat /proc/softirqs                     # répartition NET_RX par CPU
+top / mpstat -P ALL 1                  # repérer le ksoftirqd saturé
+
+# RPS : répartir le softirq RX sur plusieurs cœurs, sur chaque file RX de chaque
+# port esclave du bridge. Masque hexa des cœurs autorisés. Empiriquement, sur un
+# routeur 4 cœurs avec NET_RX concentré sur 2 cœurs (IRQ matériel), 'f' (les 4
+# cœurs) donne le meilleur résultat — le parallélisme total l'emporte sur la
+# double charge des cœurs IRQ.
+br=$(ls -d /sys/class/net/*/bridge 2>/dev/null | head -1 | cut -d/ -f5)
+echo 32768 > /proc/sys/net/core/rps_sock_flow_entries        # RFS (localité de flux)
+for port in $(ls /sys/class/net/$br/brif/); do
+  for q in /sys/class/net/$port/queues/rx-*; do
+    echo f    > $q/rps_cpus
+    echo 4096 > $q/rps_flow_cnt
+  done
+  ethtool -K $port gro on 2>/dev/null                        # GRO : moins de paquets remontés
+done
+```
+
+**OpenWrt : automatisé.** L'installeur (`install-owrt.lua`) déploie
+`/etc/hotplug.d/net/30-custos-rps`, réappliqué à chaque événement net (boot,
+up/down). Le script **autodétecte** le(s) bridge(s), leurs ports esclaves et le
+masque CPU (`= (1<<nproc)-1`, tous les cœurs) — aucun nom d'interface ni nombre
+de cœurs en dur. Les commandes ci-dessus ne servent qu'au diagnostic / sur
+Debian. `--uninstall` retire le script.
+
 ## Ops Debian/OpenWrt
 
 ### Network interfaces (bridge/LAN/WAN)

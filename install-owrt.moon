@@ -461,6 +461,22 @@ Installer = (cfg) ->
       ok "custos-update installé (/usr/sbin/custos-update) + cron lundi 4h"
       true
 
+    -- Hotplug RPS/RFS/GRO : étale le softirq RX sur tous les cœurs (autodétecté).
+    install_hotplug_rps: =>
+      step "Hotplug RPS/RFS/GRO (latence softirq)"
+      src = "packaging/openwrt/custos/files/etc/hotplug.d/net/30-custos-rps"
+      @ssh_run "mkdir -p /etc/hotplug.d/net"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{src} #{@cfg.user}@#{@ssh_host!}:/etc/hotplug.d/net/30-custos-rps"
+        fail "Échec de la copie du hotplug RPS"
+        return false
+      unless @ssh_run "chmod +x /etc/hotplug.d/net/30-custos-rps"
+        fail "Échec du chmod +x hotplug RPS"
+        return false
+      -- Appliquer immédiatement sans attendre un événement net.
+      @ssh_run "ACTION=add /etc/hotplug.d/net/30-custos-rps 2>/dev/null || true"
+      ok "Hotplug RPS installé (/etc/hotplug.d/net/30-custos-rps) + appliqué"
+      true
+
     uninstall: =>
       step "Désinstallation de CustosVirginum"
 
@@ -474,6 +490,7 @@ Installer = (cfg) ->
       @ssh_run "rm -rf #{@cfg.dest}"
       @ssh_run "rm -f /etc/init.d/custos"
       @ssh_run "rm -f /usr/sbin/custos-update"
+      @ssh_run "rm -f /etc/hotplug.d/net/30-custos-rps"
       -- Supprimer l'entrée cron
       @ssh_run "sed -i '/custos-update/d' /etc/crontabs/root 2>/dev/null || true"
       @ssh_run "/etc/init.d/cron restart 2>/dev/null || true"
@@ -612,6 +629,7 @@ main = ->
     { name: "bridge_ifname",     fn: -> inst\patch_bridge_ifname!      }
     { name: "listes défaut",     fn: -> inst\install_default_lists!  }
     { name: "script update",     fn: -> inst\install_updater!        }
+    { name: "hotplug RPS",       fn: -> inst\install_hotplug_rps!    }
     { name: "démarrage service", fn: -> inst\start_service!       }
     { name: "santé",             fn: -> inst\health_check!        }
   }
