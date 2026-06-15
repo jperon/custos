@@ -68,6 +68,45 @@ nxdomain_bad  = ttl_set.new (retry_cfg.nxdomain_bad_max or 4096), (retry_cfg.nxd
 -- État « second avis » (nil si désactivé), initialisé dans run().
 so_state = nil
 
+-- fd d'écriture du pipe « events » (alimente worker_events / recent-blocks).
+-- Initialisé dans run() depuis rfd.events_wfd. Permet de signaler les blocages
+-- décidés par le validateur amont (override block/sinkhole), invisibles sinon
+-- car write_event de worker_questions a déjà loggé la requête en « allow ».
+events_wfd = nil
+
+tsv_field = (v) ->
+  s = if v ~= nil then tostring v else ""
+  if #s == 0 then "-" else s
+
+--- Formate une ligne d'événement « block » validateur (fonction pure).
+-- Même format que worker_questions.write_event : ts<TAB>decision<TAB>qname
+-- <TAB>mac_src<TAB>src_ip<TAB>dst_ip<TAB>vlan<TAB>user<TAB>af<TAB>reason<TAB>rule<LF>.
+-- @tparam table  ctx Contexte paquet de finalize_a (qname, client_mac, af, …)
+-- @tparam number ts  Timestamp (secondes) ; défaut os.time!
+-- @treturn string Ligne TSV terminée par un \n
+format_block_event = (ctx, ts=os.time!) ->
+  table.concat({
+    tostring ts
+    "block"
+    tsv_field ctx.qname
+    tsv_field ctx.client_mac
+    tsv_field ctx.src_ip
+    tsv_field ctx.dst_ip
+    tsv_field ctx.vlan
+    tsv_field ctx.user
+    tsv_field ctx.af
+    VALIDATOR_REASON
+    tsv_field ctx.nft_rule_id
+  }, "\t") .. "\n"
+
+--- Signale un blocage validateur à worker_events (best-effort).
+-- @tparam table ctx Contexte paquet de finalize_a
+-- @treturn nil
+write_block_event = (ctx) ->
+  return unless events_wfd
+  line = format_block_event ctx
+  libc.write events_wfd, line, #line
+
 -- Helper : pose un verdict NFQUEUE avec payload optionnel.
 set_verdict = (qh_ptr, pkt_id, verdict, payload=nil) ->
   if payload
@@ -394,10 +433,12 @@ finalize_a = (ctx, override) ->
 
   -- ── Override : blocage NXDOMAIN + EDE (Filtered) ──────────────
   if override and override.kind == "block"
+    write_block_event ctx
     return patch_and_accept build_nxdomain_response(dns_msg, dns_raw, VALIDATOR_REASON), "response_validator_block"
 
   -- ── Override : sinkhole (reproduction 0.0.0.0/:: + EDE Filtered) ─
   if override and override.kind == "sinkhole"
+    write_block_event ctx
     sink = { a: override.a or {}, aaaa: override.aaaa or {}, ttl: override.ttl }
     return patch_and_accept build_sinkhole_response(dns_msg, dns_raw, VALIDATOR_REASON, sink), "response_validator_sinkhole"
 
@@ -804,11 +845,14 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- ── Branche ACCEPT : second avis puis finalisation ────────────
   -- Contexte paquet capturé pour finalize_a (appel en ligne ou au déparquage).
+  q1 = dns_msg.questions and dns_msg.questions[1]
   ctx = {
     :qh_ptr, :pkt_id, :raw, :ip, :l4, :ip_ihl, :dns_msg, :dns_raw, :entry
     :resolver_ip, :dnsonly, :nft_rule_id, :ack_corr
     :client_ip, :client_mac, :user, :txid
     vlan: l2.vlan, :src_ip, :dst_ip
+    qname: q1 and q1.name and q1.name\lower! or "-"
+    af:    ip.version == 6 and "ipv6" or "ipv4"
   }
 
   -- Second avis : corrélation avec la réponse validateur (B) uniquement si la
@@ -817,7 +861,6 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   --   • verdict pas encore là → parquer A (verdict NFQUEUE différé) jusqu'à B
   --     ou expiration du budget (fail-open, balayé par sweep_parked).
   do_so = entry and entry.modifiers and entry.modifiers.validate
-  q1 = dns_msg.questions and dns_msg.questions[1]
   if so_state and q1 and do_so and so_state.active_for(ip.version) and not direct_validator
     key = so_state.corr_key client_ip, txid, q1.name
     override = so_state.take_verdict key, ts
@@ -845,6 +888,7 @@ run = (queue_num, rfd, rules_metadata) ->
     nft_q.set_wfd rfd.nft_wfd if rfd.nft_wfd
     -- Configure le canal ACK bidirectionnel si le superviseur en a alloué un.
     nft_q.set_ack_rfd rfd.ack_rfd, rfd.worker_idx if rfd.ack_rfd and rfd.worker_idx != nil
+    events_wfd = rfd.events_wfd
     rfd = rfd.question_response_rfd
   pipe_rfd = rfd
   -- Pré-remplit mac_clients / ip_to_mac depuis la table ARP/NDP courante,
@@ -903,4 +947,4 @@ run = (queue_num, rfd, rules_metadata) ->
 
 { :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields,
   :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream,
-  :try_upstream_retry, :arm_retry_fds }
+  :try_upstream_retry, :arm_retry_fds, :format_block_event }

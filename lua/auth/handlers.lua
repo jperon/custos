@@ -359,6 +359,65 @@ handle_bye = function(req, peer_ip, peer_mac, state)
   end
   return 204, { }, ""
 end
+local json_escape
+json_escape = function(s)
+  if not (s) then
+    return ""
+  end
+  s = tostring(s)
+  s = s:gsub("\\", "\\\\")
+  s = s:gsub("\"", "\\\"")
+  s = s:gsub("\n", "\\n")
+  s = s:gsub("\r", "\\r")
+  s = s:gsub("\t", "\\t")
+  return s
+end
+local REFUSALS_MAX = 50
+local handle_refusals
+handle_refusals = function(req, peer_ip, peer_mac, state)
+  local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)
+  local p = token.verify(cookie_val, state.token_key)
+  if not (p) then
+    return 401, { }, ""
+  end
+  local mac = p.mac
+  if not (mac and mac ~= "unknown") then
+    return 200, {
+      ["Content-Type"] = "application/json"
+    }, "[]"
+  end
+  local mac_lc = mac:lower()
+  local events_dir = state.events_dir or "/tmp/custos/events"
+  local fh = io.open(tostring(events_dir) .. "/recent-blocks.tsv", "r")
+  if not (fh) then
+    return 200, {
+      ["Content-Type"] = "application/json"
+    }, "[]"
+  end
+  local parts = { }
+  for line in fh:lines() do
+    local _continue_0 = false
+    repeat
+      if #parts >= REFUSALS_MAX then
+        break
+      end
+      local l_mac, qname, reason, count, ts = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
+      if not (l_mac and l_mac:lower() == mac_lc) then
+        _continue_0 = true
+        break
+      end
+      parts[#parts + 1] = "{\"qname\":\"" .. tostring(json_escape(qname)) .. "\",\"reason\":\"" .. tostring(json_escape(reason)) .. "\",\"count\":" .. tostring(tonumber(count) or 0) .. ",\"ts\":" .. tostring(tonumber(ts) or 0) .. "}"
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  fh:close()
+  return 200, {
+    ["Content-Type"] = "application/json"
+  }, "[" .. tostring(table.concat(parts, ",")) .. "]"
+end
 local handle_register
 handle_register = function(req, peer_ip, peer_mac, state)
   local form = parse_form(req.body)
@@ -417,6 +476,8 @@ handle_request = function(req, peer_ip, peer_mac, state)
     return handle_login(req, peer_ip, peer_mac, state)
   elseif req.path == "/ping" and req.method == "GET" then
     return handle_ping(req, peer_ip, peer_mac, state)
+  elseif req.path == "/refusals" and req.method == "GET" then
+    return handle_refusals(req, peer_ip, peer_mac, state)
   elseif req.path == "/logout" then
     return handle_logout(req, peer_ip, peer_mac, state)
   elseif req.path == "/bye" then
@@ -451,5 +512,6 @@ return {
   handle_bye = handle_bye,
   handle_register = handle_register,
   handle_request = handle_request,
+  handle_refusals = handle_refusals,
   COOKIE_NAME = COOKIE_NAME
 }

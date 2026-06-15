@@ -61,6 +61,41 @@ local css_content = [[  * {
 
   a:hover { text-decoration: underline; }
 
+  #refusals {
+    background: white;
+    padding: 1rem 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin: 1rem 0;
+  }
+
+  #refusals h2 {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  #refusals-list {
+    list-style: none;
+    max-height: 14rem;
+    overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    border: 1px solid #eee;
+    border-radius: 4px;
+  }
+
+  #refusals-list li {
+    padding: 0.3rem 0.6rem;
+    border-bottom: 1px solid #f0f0f0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #refusals-list li:last-child { border-bottom: none; }
+
+  #refusals-empty { color: #888; }
+
   @media (max-width: 768px) {
     body { padding: 0.5rem; }
     form { padding: 1rem; }
@@ -95,6 +130,10 @@ success_page = function(auth_cfg, created_at, is_admin)
   if interval <= 0 then
     interval = 30
   end
+  local refusals_interval = tonumber(auth_cfg and auth_cfg.refusals_poll_interval) or 5
+  if refusals_interval <= 0 then
+    refusals_interval = 5
+  end
   local idle_timeout = tonumber(auth_cfg and auth_cfg.idle_timeout) or 300
   local session_start = tonumber(created_at) or 0
   local admin_link
@@ -116,6 +155,15 @@ success_page = function(auth_cfg, created_at, is_admin)
     H.p(H.a({
       href = "/logout"
     }, "Déconnexion")),
+    H.div({
+      id = "refusals"
+    }, H.h2("Domaines bloqués récemment")),
+    H.ul({
+      id = "refusals-list"
+    }, H.li({
+      id = "refusals-empty"
+    }, "Aucun domaine bloqué pour le moment.")),
+    H.script("\n      var refusalsIv = " .. tostring(refusals_interval) .. " * 1000;\n      function renderRefusals(items){\n        var list = document.getElementById('refusals-list');\n        if (!list) return;\n        while (list.firstChild) list.removeChild(list.firstChild);\n        if (!items || items.length === 0) {\n          var empty = document.createElement('li');\n          empty.id = 'refusals-empty';\n          empty.textContent = 'Aucun domaine bloqué pour le moment.';\n          list.appendChild(empty);\n          return;\n        }\n        for (var i = 0; i < items.length; i++) {\n          var it = items[i];\n          var li = document.createElement('li');\n          var txt = it.qname;\n          if (it.reason) txt += ' — ' + it.reason;\n          if (it.count && it.count > 1) txt += ' (×' + it.count + ')';\n          li.textContent = txt;\n          list.appendChild(li);\n        }\n      }\n      function refreshRefusals(){\n        fetch('/refusals',{method:'GET',credentials:'same-origin'})\n          .then(function(r){ return r.ok ? r.json() : null; })\n          .then(function(items){ if (items) renderRefusals(items); })\n          .catch(function(){});\n      }\n      refreshRefusals();\n      setInterval(refreshRefusals, refusalsIv);\n    "),
     H.script("\n      var iv = " .. tostring(interval) .. " * 1000;\n      var idle = " .. tostring(idle_timeout) .. " * 1000;\n      var sessionStart = " .. tostring(session_start) .. ";\n      var workerJs = \"self.onmessage = function(e) { \\n        if (e.data.type === 'start') { \\n          setInterval(function() { self.postMessage({type: 'tick'}); }, e.data.interval); \\n          setTimeout(function() { self.postMessage({type: 'tick'}); }, 3000); \\n        } \\n        if (e.data.type === 'visible') { self.postMessage({type: 'tick'}); } \\n      }\";\n      var worker = new Worker(URL.createObjectURL(new Blob([workerJs], {type: 'application/javascript'})));\n      var lastSuccess = Date.now();\n      var unauthorized = 0;\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'same-origin'})\n          .then(function(r){\n            if(r.status===401){\n              // Un 401 isolé peut venir d'un ping retardé par le navigateur :\n              // confirmer par un second ping avant d'alerter.\n              unauthorized++;\n              if(unauthorized < 2){ setTimeout(ping, 2000); return; }\n              if(document.visibilityState==='visible')\n                alert('Connexion perdue, veuillez vous authentifier de nouveau.');\n              location.href='/';\n              return;\n            }\n            unauthorized = 0;\n            lastSuccess = Date.now();\n          })\n          .catch(function(){\n            if (Date.now() - lastSuccess > idle) {\n              if (document.visibilityState === 'visible') location.href='/';\n            }\n          });\n      }\n      worker.onmessage = function(e) {\n        if (e.data.type === 'tick') ping();\n      };\n      worker.postMessage({type: 'start', interval: iv});\n      function updateTimer(){\n        var now = Math.floor(Date.now() / 1000);\n        var elapsed = now - sessionStart;\n        if (elapsed < 0) elapsed = 0;\n        var h = Math.floor(elapsed / 3600);\n        var m = Math.floor((elapsed % 3600) / 60);\n        var txt;\n        if (h > 0) {\n          txt = h + 'h ' + (m < 10 ? '0' : '') + m + 'min';\n        } else {\n          txt = m + ' min';\n        }\n        var el = document.getElementById('session-timer');\n        if (el) el.textContent = 'Session ouverte depuis : ' + txt;\n      }\n      setInterval(updateTimer, 10000);\n      updateTimer();\n      document.addEventListener('visibilitychange', function(){\n        if (document.visibilityState === 'visible') worker.postMessage({type: 'visible'});\n      });\n      // pagehide se déclenche aussi sur reload/navigation : ne PAS détruire la\n      // session ici (/logout), seulement raccourcir son expiration (/bye).\n      function bye(){\n        if (navigator.sendBeacon) {\n          navigator.sendBeacon('/bye');\n        } else {\n          fetch('/bye', {method:'POST', keepalive:true, credentials:'same-origin'});\n        }\n      }\n      window.addEventListener('pagehide', function(e){\n        if (!e.persisted) bye();\n      });\n    ")
   })
 end

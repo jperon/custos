@@ -81,6 +81,48 @@ local RCODE_NXDOMAIN = 3
 local ttl_set = require("lib.ttl_set")
 local nxdomain_bad = ttl_set.new((retry_cfg.nxdomain_bad_max or 4096), (retry_cfg.nxdomain_bad_ttl or 60), now)
 local so_state = nil
+local events_wfd = nil
+local tsv_field
+tsv_field = function(v)
+  local s
+  if v ~= nil then
+    s = tostring(v)
+  else
+    s = ""
+  end
+  if #s == 0 then
+    return "-"
+  else
+    return s
+  end
+end
+local format_block_event
+format_block_event = function(ctx, ts)
+  if ts == nil then
+    ts = os.time()
+  end
+  return table.concat({
+    tostring(ts),
+    "block",
+    tsv_field(ctx.qname),
+    tsv_field(ctx.client_mac),
+    tsv_field(ctx.src_ip),
+    tsv_field(ctx.dst_ip),
+    tsv_field(ctx.vlan),
+    tsv_field(ctx.user),
+    tsv_field(ctx.af),
+    VALIDATOR_REASON,
+    tsv_field(ctx.nft_rule_id)
+  }, "\t") .. "\n"
+end
+local write_block_event
+write_block_event = function(ctx)
+  if not (events_wfd) then
+    return 
+  end
+  local line = format_block_event(ctx)
+  return libc.write(events_wfd, line, #line)
+end
 local set_verdict
 set_verdict = function(qh_ptr, pkt_id, verdict, payload)
   if payload == nil then
@@ -433,9 +475,11 @@ finalize_a = function(ctx, override)
     return set_verdict(qh_ptr, pkt_id, NF_DROP)
   end
   if override and override.kind == "block" then
+    write_block_event(ctx)
     return patch_and_accept(build_nxdomain_response(dns_msg, dns_raw, VALIDATOR_REASON), "response_validator_block")
   end
   if override and override.kind == "sinkhole" then
+    write_block_event(ctx)
     local sink = {
       a = override.a or { },
       aaaa = override.aaaa or { },
@@ -972,6 +1016,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
     return -1
   end
+  local q1 = dns_msg.questions and dns_msg.questions[1]
   local ctx = {
     qh_ptr = qh_ptr,
     pkt_id = pkt_id,
@@ -992,10 +1037,11 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     txid = txid,
     vlan = l2.vlan,
     src_ip = src_ip,
-    dst_ip = dst_ip
+    dst_ip = dst_ip,
+    qname = q1 and q1.name and q1.name:lower() or "-",
+    af = ip.version == 6 and "ipv6" or "ipv4"
   }
   local do_so = entry and entry.modifiers and entry.modifiers.validate
-  local q1 = dns_msg.questions and dns_msg.questions[1]
   if so_state and q1 and do_so and so_state.active_for(ip.version) and not direct_validator then
     local key = so_state.corr_key(client_ip, txid, q1.name)
     local override = so_state.take_verdict(key, ts)
@@ -1023,6 +1069,7 @@ run = function(queue_num, rfd, rules_metadata)
     if rfd.ack_rfd and rfd.worker_idx ~= nil then
       nft_q.set_ack_rfd(rfd.ack_rfd, rfd.worker_idx)
     end
+    events_wfd = rfd.events_wfd
     rfd = rfd.question_response_rfd
   end
   pipe_rfd = rfd
@@ -1108,5 +1155,6 @@ return {
   dns_tcp_complete = dns_tcp_complete,
   new_dns_tcp_stream = new_dns_tcp_stream,
   try_upstream_retry = try_upstream_retry,
-  arm_retry_fds = arm_retry_fds
+  arm_retry_fds = arm_retry_fds,
+  format_block_event = format_block_event
 }

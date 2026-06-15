@@ -181,6 +181,19 @@ Le serveur HTTPS est découpé pour isoler les responsabilités :
   arrivant après le ping suivant reçoit 204 **no-op** (ni refresh nft, ni nouveau
   cookie) au lieu d'un 401 trompeur ; côté client, la page success n'alerte
   qu'après deux 401 consécutifs (retry de confirmation à 2 s).
+  `handle_refusals` sert `GET /refusals` : liste JSON **en lecture seule** des
+  derniers domaines refusés pour la MAC du client (token vérifié, ni session ni
+  nft ni cookie touchés). Source : `recent-blocks.tsv` écrit par `worker_events`
+  dans `events.dir`. La page de succès l'interroge toutes les
+  `auth.refusals_poll_interval` s (défaut 5) et affiche une liste défilante,
+  indépendamment du `/ping`.
+  **Important** : les blocages décidés par le *second avis DNS* (validateur amont)
+  sont appliqués dans `worker_responses.finalize_a` (override `block`/`sinkhole`),
+  **après** la décision `decide` de `worker_questions` qui a déjà loggé la requête
+  en `allow`. Ces blocages n'apparaîtraient donc jamais dans les events/`recent-blocks`.
+  Pour les rendre visibles, `worker_responses` reçoit `events_wfd` (via `main.moon`)
+  et émet une ligne d'événement `block` (`format_block_event`, raison
+  « Filtered by upstream validator ») dans ces deux branches d'override.
 - `auth/nft_auth_sets.moon` — sous-chaînes nft d'authentification par règle
   (`refresh_rule_auth_sets`, `delete_rule_auth_sets`, `refresh_nft`,
   `for_qualifying_auth_rules`). `refresh_nft` rafraîchit **les deux** familles

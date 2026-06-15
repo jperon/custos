@@ -412,7 +412,7 @@ supervise = (pipes, sfd) ->
       restart_fn: -> fork_worker "resp-q#{q_num}",
         (fds) -> require("worker_responses").run q_num, fds, rules_metadata,
         { question_response_rfd: pipes.question_response.rfd, nft_wfd: pipes.nft.wfd,
-          ack_rfd: ack_info.rfd, worker_idx: ack_info.worker_idx }
+          ack_rfd: ack_info.rfd, worker_idx: ack_info.worker_idx, events_wfd: pipes.events.wfd }
     }
 
   -- NFT worker (needs nft rules to be applied first)

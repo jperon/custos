@@ -392,7 +392,8 @@ supervise = function(pipes, sfd)
           question_response_rfd = pipes.question_response.rfd,
           nft_wfd = pipes.nft.wfd,
           ack_rfd = ack_info.rfd,
-          worker_idx = ack_info.worker_idx
+          worker_idx = ack_info.worker_idx,
+          events_wfd = pipes.events.wfd
         })
       end
     })

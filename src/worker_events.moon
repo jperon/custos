@@ -34,6 +34,12 @@ FILE_MODE    = 420     -- 0644 décimal
 -- Header TSV (écrit une seule fois à la création du fichier via O_EXCL)
 HEADER = "decision\tqname\tmac_src\tsrc_ip\tdst_ip\tvlan\tuser\taf\treason\trule\tcount\tfirst_ts\tlast_ts\n"
 
+-- Ring buffer « recent » des derniers refus, exposé en temps réel au worker AUTH
+-- (endpoint /refusals) en plus des TSV horaires agrégés. Écrit dans events_dir.
+RECENT_MAX          = 50              -- nombre max d'entrées conservées
+RECENT_FILE         = "recent-blocks.tsv"
+RECENT_MIN_INTERVAL = 5              -- secondes : throttle minimal entre flushes
+
 -- Buffer de lecture partagé (alloué une seule fois au chargement du module)
 _read_buf = ffi.new "uint8_t[?]", READ_BUF
 
@@ -81,13 +87,62 @@ read_chunk = (fd) ->
 -- @tparam string line  Ligne TSV sans le \n final
 -- @tparam table  agg   Table d'agrégation { key → {count, first_ts, last_ts} }
 -- @treturn nil
-process_line = (line, agg) ->
+--- Met à jour le ring buffer des refus récents pour un refus DNS.
+-- N'agit que si decision == "block". Dédup sur (mac, qname) : une entrée déjà
+-- présente est incrémentée, son last_ts mis à jour et remontée en tête (plus
+-- récent d'abord) ; sinon insérée en tête, le buffer étant tronqué à RECENT_MAX.
+-- @tparam table  recent   Ring buffer { {mac, qname, reason, count, last_ts}, … }
+-- @tparam string decision "block" ou "allow"
+-- @tparam string qname    Domaine refusé
+-- @tparam string mac      MAC du client
+-- @tparam string reason   Raison textuelle du refus
+-- @tparam string ts       Timestamp (chaîne) du refus
+-- @treturn boolean        true si une entrée block a été notée
+note_block = (recent, decision, qname, mac, reason, ts) ->
+  return false unless decision == "block"
+  return false unless mac and qname and mac ~= "" and qname ~= ""
+
+  -- Recherche d'une entrée existante (même mac + qname) à remonter en tête.
+  for i = 1, #recent
+    e = recent[i]
+    if e.mac == mac and e.qname == qname
+      e.count  += 1
+      e.last_ts = ts
+      e.reason  = reason
+      table.remove recent, i
+      table.insert recent, 1, e
+      return true
+
+  table.insert recent, 1, { :mac, :qname, :reason, count: 1, last_ts: ts }
+  recent[RECENT_MAX + 1] = nil if #recent > RECENT_MAX
+  true
+
+--- Écrit atomiquement le fichier recent-blocks.tsv (temp + rename).
+-- Une ligne par entrée : mac\tqname\treason\tcount\tlast_ts.
+-- @tparam table  recent     Ring buffer des refus récents
+-- @tparam string events_dir Répertoire de sortie
+-- @treturn nil
+flush_recent = (recent, events_dir) ->
+  path = "#{events_dir}/#{RECENT_FILE}"
+  tmp  = "#{path}.tmp"
+  fh, err = io.open tmp, "w"
+  unless fh
+    log_warn -> { action: "recent_open_failed", path: tmp, err: err }
+    return
+  parts = {}
+  for e in *recent
+    parts[#parts + 1] = "#{e.mac}\t#{e.qname}\t#{e.reason or ""}\t#{e.count}\t#{e.last_ts}\n"
+  fh\write table.concat parts
+  fh\close!
+  os.rename tmp, path
+
+process_line = (line, agg, recent) ->
   tab_pos = line\find "\t"
-  return unless tab_pos
+  return false unless tab_pos
 
   ts_str = line\sub 1, tab_pos - 1
   key    = line\sub tab_pos + 1
-  return if key == ""
+  return false if key == ""
 
   entry = agg[key]
   if entry
@@ -95,6 +150,15 @@ process_line = (line, agg) ->
     entry.last_ts = ts_str
   else
     agg[key] = { count: 1, first_ts: ts_str, last_ts: ts_str }
+
+  -- Ring buffer des refus : ne parser les champs que pour les refus (block).
+  return false unless recent
+  return false unless key\sub(1, 6) == "block\t"
+  -- key = decision \t qname \t mac_src \t src_ip \t … \t reason \t rule
+  decision, qname, mac, _src_ip, _dst_ip, _vlan, _user, _af, reason = key\match(
+    "^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)")
+  return false unless decision
+  note_block recent, decision, qname, mac, reason, ts_str
 
 --- Écrit le fichier TSV d'agrégation pour l'heure donnée.
 -- Utilise O_EXCL pour détecter si le fichier est nouveau et écrire le header,
@@ -241,6 +305,8 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
   pfds[1].events = POLLIN
 
   agg      = {}
+  recent   = {}
+  last_recent_write = 0
   line_buf = ""
   hour     = current_hour!
 
@@ -273,13 +339,20 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
         log_warn -> { action: "pipe_eof", fd: events_rfd }
       elseif #chunk > 0
         line_buf ..= chunk
+        blocked = false
         -- Découpe line_buf sur les \n et traite chaque ligne complète
         while true
           nl = line_buf\find "\n", 1, true
           break unless nl
           line     = line_buf\sub 1, nl - 1
           line_buf = line_buf\sub nl + 1
-          process_line line, agg if #line > 0
+          blocked = true if #line > 0 and process_line line, agg, recent
+        -- Flush throttlé du ring buffer des refus (≥ RECENT_MIN_INTERVAL)
+        if blocked
+          now = os.time!
+          if now - last_recent_write >= RECENT_MIN_INTERVAL
+            flush_recent recent, events_dir
+            last_recent_write = now
 
     -- Détection du changement d'heure après chaque retour de poll
     new_hour = current_hour!
@@ -291,4 +364,4 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       agg  = {}
       hour = new_hour
 
-{ :run }
+{ :run, :process_line, :note_block, :flush_recent }

@@ -93,7 +93,7 @@ describe("worker_responses helpers", function()
     assert.equals(1, #parsed.answers)
     return assert.equals(QTYPE_A, parsed.answers[1].rtype)
   end)
-  return describe("build_benchmark_fields", function()
+  describe("build_benchmark_fields", function()
     local info = {
       client_mac = "aa:bb:cc:dd:ee:ff",
       vlan = 8,
@@ -152,6 +152,52 @@ describe("worker_responses helpers", function()
       local fields, verdict = m.build_benchmark_fields(entry, info, deltas)
       assert.equals("block", verdict)
       return assert.equals("default_deny", fields.rule)
+    end)
+  end)
+  return describe("format_block_event (blocage validateur amont)", function()
+    local ctx = {
+      qname = "emergent.sh",
+      client_mac = "e0:8f:4c:c8:91:fa",
+      src_ip = "10.35.99.38",
+      dst_ip = "1.1.1.3",
+      vlan = 99,
+      user = "j@prn.ovh",
+      af = "ipv4",
+      nft_rule_id = "r_utilisateurs"
+    }
+    it("produit une ligne TSV block au format de worker_events", function()
+      local m = fresh_worker_responses()
+      local line = m.format_block_event(ctx, 1781382351)
+      return assert.equals("1781382351\tblock\temergent.sh\te0:8f:4c:c8:91:fa\t10.35.99.38\t1.1.1.3\t99\tj@prn.ovh\tipv4\tFiltered by upstream validator\tr_utilisateurs\n", line)
+    end)
+    it("remplace les champs vides par '-' (compatible tsv_field)", function()
+      local m = fresh_worker_responses()
+      local line = m.format_block_event({
+        qname = "x.com"
+      }, 100)
+      local fields
+      do
+        local _accum_0 = { }
+        local _len_0 = 1
+        for f in line:gsub("\n", ""):gmatch("[^\t]+") do
+          _accum_0[_len_0] = f
+          _len_0 = _len_0 + 1
+        end
+        fields = _accum_0
+      end
+      assert.equals("block", fields[2])
+      assert.equals("x.com", fields[3])
+      assert.equals("-", fields[4])
+      return assert.equals("Filtered by upstream validator", fields[10])
+    end)
+    return it("la décision est bien 'block' et exploitable par worker_events.process_line", function()
+      local m = fresh_worker_responses()
+      local we = require("worker_events")
+      local line = m.format_block_event(ctx, 1781382351)
+      local recent = { }
+      assert.is_true(we.process_line(line:gsub("\n", ""), { }, recent))
+      assert.equals("emergent.sh", recent[1].qname)
+      return assert.equals("e0:8f:4c:c8:91:fa", recent[1].mac)
     end)
   end)
 end)

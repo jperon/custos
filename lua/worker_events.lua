@@ -21,6 +21,9 @@ local READ_BUF = 65536
 local O_WRONLY = 1
 local FILE_MODE = 420
 local HEADER = "decision\tqname\tmac_src\tsrc_ip\tdst_ip\tvlan\tuser\taf\treason\trule\tcount\tfirst_ts\tlast_ts\n"
+local RECENT_MAX = 50
+local RECENT_FILE = "recent-blocks.tsv"
+local RECENT_MIN_INTERVAL = 5
 local _read_buf = ffi.new("uint8_t[?]", READ_BUF)
 local current_hour
 current_hour = function()
@@ -50,16 +53,71 @@ read_chunk = function(fd)
     return ""
   end
 end
+local note_block
+note_block = function(recent, decision, qname, mac, reason, ts)
+  if not (decision == "block") then
+    return false
+  end
+  if not (mac and qname and mac ~= "" and qname ~= "") then
+    return false
+  end
+  for i = 1, #recent do
+    local e = recent[i]
+    if e.mac == mac and e.qname == qname then
+      e.count = e.count + 1
+      e.last_ts = ts
+      e.reason = reason
+      table.remove(recent, i)
+      table.insert(recent, 1, e)
+      return true
+    end
+  end
+  table.insert(recent, 1, {
+    mac = mac,
+    qname = qname,
+    reason = reason,
+    count = 1,
+    last_ts = ts
+  })
+  if #recent > RECENT_MAX then
+    recent[RECENT_MAX + 1] = nil
+  end
+  return true
+end
+local flush_recent
+flush_recent = function(recent, events_dir)
+  local path = tostring(events_dir) .. "/" .. tostring(RECENT_FILE)
+  local tmp = tostring(path) .. ".tmp"
+  local fh, err = io.open(tmp, "w")
+  if not (fh) then
+    log_warn(function()
+      return {
+        action = "recent_open_failed",
+        path = tmp,
+        err = err
+      }
+    end)
+    return 
+  end
+  local parts = { }
+  for _index_0 = 1, #recent do
+    local e = recent[_index_0]
+    parts[#parts + 1] = tostring(e.mac) .. "\t" .. tostring(e.qname) .. "\t" .. tostring(e.reason or "") .. "\t" .. tostring(e.count) .. "\t" .. tostring(e.last_ts) .. "\n"
+  end
+  fh:write(table.concat(parts))
+  fh:close()
+  return os.rename(tmp, path)
+end
 local process_line
-process_line = function(line, agg)
+process_line = function(line, agg, recent)
   local tab_pos = line:find("\t")
   if not (tab_pos) then
-    return 
+    return false
   end
   local ts_str = line:sub(1, tab_pos - 1)
   local key = line:sub(tab_pos + 1)
   if key == "" then
-    return 
+    return false
   end
   local entry = agg[key]
   if entry then
@@ -72,6 +130,17 @@ process_line = function(line, agg)
       last_ts = ts_str
     }
   end
+  if not (recent) then
+    return false
+  end
+  if not (key:sub(1, 6) == "block\t") then
+    return false
+  end
+  local decision, qname, mac, _src_ip, _dst_ip, _vlan, _user, _af, reason = key:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)")
+  if not (decision) then
+    return false
+  end
+  return note_block(recent, decision, qname, mac, reason, ts_str)
 end
 local flush_to_file
 flush_to_file = function(agg, hour, events_dir)
@@ -243,6 +312,8 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
   pfds[1].fd = sfd
   pfds[1].events = POLLIN
   local agg = { }
+  local recent = { }
+  local last_recent_write = 0
   local line_buf = ""
   local hour = current_hour()
   local siginfo = ffi.new("signalfd_siginfo")
@@ -283,6 +354,7 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
         end)
       elseif #chunk > 0 then
         line_buf = line_buf .. chunk
+        local blocked = false
         while true do
           local nl = line_buf:find("\n", 1, true)
           if not (nl) then
@@ -290,8 +362,15 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
           end
           local line = line_buf:sub(1, nl - 1)
           line_buf = line_buf:sub(nl + 1)
-          if #line > 0 then
-            process_line(line, agg)
+          if #line > 0 and process_line(line, agg, recent) then
+            blocked = true
+          end
+        end
+        if blocked then
+          local now = os.time()
+          if now - last_recent_write >= RECENT_MIN_INTERVAL then
+            flush_recent(recent, events_dir)
+            last_recent_write = now
           end
         end
       end
@@ -314,5 +393,8 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
   end
 end
 return {
-  run = run
+  run = run,
+  process_line = process_line,
+  note_block = note_block,
+  flush_recent = flush_recent
 }

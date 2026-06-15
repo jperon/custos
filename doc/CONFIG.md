@@ -408,6 +408,7 @@ Portail captif et authentification des utilisateurs.
 | `session_ttl` | int | `0` | Durée (s) des sessions auth (0 = illimitée) |
 | `sessions_file` | string | `"/tmp/sessions.lua"` | Fichier de persistance des sessions |
 | `heartbeat_interval` | int | `30` | Intervalle (s) entre heartbeats client |
+| `refusals_poll_interval` | int | `5` | Intervalle (s) entre interrogations de `/refusals` par la page de succès (liste défilante des domaines bloqués récemment, filtrée sur la MAC du client). Lecture seule, indépendant de `/ping`. |
 | `idle_timeout` | int | `300` | Inactivité maximale (s) avant déconnexion. Le cookie de session `custos_session` expire **exactement** en même temps (pas de marge séparée) : aucune fenêtre où la page indiquerait « connecté » alors que l'accès DNS a déjà expiré. Élargir cette valeur pour tolérer des pings/heartbeats retardés (throttling des onglets en arrière-plan). |
 | `close_grace` | int | `45` | Grâce (s) appliquée quand la page de session disparaît (`pagehide` → beacon `/bye`) : l'expiration de la session est **raccourcie** à `now + close_grace` au lieu d'être détruite. Si la page revit (reload, navigation, onglet restauré), le `/ping` suivant re-prolonge la session ; si la fenêtre est vraiment fermée, l'accès tombe après la grâce. Garder ≥ 2× l'intervalle de ping (20 s). |
 | `client_timeout` | int | `15` | Timeout I/O (s) par connexion au portail (SO_RCVTIMEO/SO_SNDTIMEO + échéance de handshake TLS). Une connexion qui n'envoie rien (préconnexion spéculative du navigateur, client disparu sans FIN) est fermée et son processus `AUTH-conn` libéré au lieu de rester suspendu indéfiniment — ces sockets zombies saturaient la limite de connexions par hôte du navigateur et retardaient les pings (~70 s). |
@@ -530,6 +531,13 @@ Stockage des événements système (journaux d'activité).
 | `dir` | string | `"/tmp/custos/events"` | Répertoire de stockage des événements |
 | `max_age_hours` | int | `168` | Conservation maximale (heures) — 168h = 7 jours |
 | `min_free_pct` | int | `30` | Pourcentage d'espace disque libre minimum avant purge |
+
+En plus des fichiers TSV horaires agrégés (`events-YYYY-MM-DD-HH.tsv`),
+`worker_events` maintient `recent-blocks.tsv` dans `dir` : un ring buffer des
+50 derniers domaines refusés (dédupliqués par `mac+qname`), réécrit
+atomiquement avec un throttle de 5 s. Ce fichier alimente l'endpoint
+`/refusals` du portail (liste défilante des blocages récents sur la page de
+succès). Format : `mac\tqname\treason\tcount\tlast_ts`.
 
 ---
 

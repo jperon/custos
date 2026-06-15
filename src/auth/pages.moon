@@ -67,6 +67,41 @@ css_content = [[
 
   a:hover { text-decoration: underline; }
 
+  #refusals {
+    background: white;
+    padding: 1rem 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin: 1rem 0;
+  }
+
+  #refusals h2 {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  #refusals-list {
+    list-style: none;
+    max-height: 14rem;
+    overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    border: 1px solid #eee;
+    border-radius: 4px;
+  }
+
+  #refusals-list li {
+    padding: 0.3rem 0.6rem;
+    border-bottom: 1px solid #f0f0f0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #refusals-list li:last-child { border-bottom: none; }
+
+  #refusals-empty { color: #888; }
+
   @media (max-width: 768px) {
     body { padding: 0.5rem; }
     form { padding: 1rem; }
@@ -97,6 +132,8 @@ page = =>
 success_page = (auth_cfg, created_at, is_admin) ->
   interval = tonumber(auth_cfg and auth_cfg.heartbeat_interval) or 30
   interval = 30 if interval <= 0
+  refusals_interval = tonumber(auth_cfg and auth_cfg.refusals_poll_interval) or 5
+  refusals_interval = 5 if refusals_interval <= 0
   idle_timeout = tonumber(auth_cfg and auth_cfg.idle_timeout) or 300
   session_start = tonumber(created_at) or 0
   admin_link = if is_admin
@@ -108,6 +145,42 @@ success_page = (auth_cfg, created_at, is_admin) ->
     H.p { id: "session-timer" }, "Session ouverte depuis : --"
     admin_link
     H.p H.a { href: "/logout" }, "Déconnexion"
+    H.div { id: "refusals" },
+      H.h2 "Domaines bloqués récemment"
+      H.ul { id: "refusals-list" },
+        H.li { id: "refusals-empty" }, "Aucun domaine bloqué pour le moment."
+    H.script "
+      var refusalsIv = #{refusals_interval} * 1000;
+      function renderRefusals(items){
+        var list = document.getElementById('refusals-list');
+        if (!list) return;
+        while (list.firstChild) list.removeChild(list.firstChild);
+        if (!items || items.length === 0) {
+          var empty = document.createElement('li');
+          empty.id = 'refusals-empty';
+          empty.textContent = 'Aucun domaine bloqué pour le moment.';
+          list.appendChild(empty);
+          return;
+        }
+        for (var i = 0; i < items.length; i++) {
+          var it = items[i];
+          var li = document.createElement('li');
+          var txt = it.qname;
+          if (it.reason) txt += ' — ' + it.reason;
+          if (it.count && it.count > 1) txt += ' (×' + it.count + ')';
+          li.textContent = txt;
+          list.appendChild(li);
+        }
+      }
+      function refreshRefusals(){
+        fetch('/refusals',{method:'GET',credentials:'same-origin'})
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(items){ if (items) renderRefusals(items); })
+          .catch(function(){});
+      }
+      refreshRefusals();
+      setInterval(refreshRefusals, refusalsIv);
+    "
     H.script "
       var iv = #{interval} * 1000;
       var idle = #{idle_timeout} * 1000;

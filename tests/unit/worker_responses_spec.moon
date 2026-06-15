@@ -142,6 +142,41 @@ describe "worker_responses helpers", ->
       assert.equals "block", verdict
       assert.equals "default_deny", fields.rule
 
+  describe "format_block_event (blocage validateur amont)", ->
+    ctx = {
+      qname:       "emergent.sh"
+      client_mac:  "e0:8f:4c:c8:91:fa"
+      src_ip:      "10.35.99.38"
+      dst_ip:      "1.1.1.3"
+      vlan:        99
+      user:        "j@prn.ovh"
+      af:          "ipv4"
+      nft_rule_id: "r_utilisateurs"
+    }
+
+    it "produit une ligne TSV block au format de worker_events", ->
+      m = fresh_worker_responses!
+      line = m.format_block_event ctx, 1781382351
+      assert.equals "1781382351\tblock\temergent.sh\te0:8f:4c:c8:91:fa\t10.35.99.38\t1.1.1.3\t99\tj@prn.ovh\tipv4\tFiltered by upstream validator\tr_utilisateurs\n", line
+
+    it "remplace les champs vides par '-' (compatible tsv_field)", ->
+      m = fresh_worker_responses!
+      line = m.format_block_event { qname: "x.com" }, 100
+      fields = [f for f in line\gsub("\n", "")\gmatch "[^\t]+"]
+      assert.equals "block", fields[2]
+      assert.equals "x.com", fields[3]
+      assert.equals "-", fields[4]          -- mac_src absent → "-"
+      assert.equals "Filtered by upstream validator", fields[10]
+
+    it "la décision est bien 'block' et exploitable par worker_events.process_line", ->
+      m = fresh_worker_responses!
+      we = require "worker_events"
+      line = m.format_block_event ctx, 1781382351
+      recent = {}
+      assert.is_true we.process_line line\gsub("\n", ""), {}, recent
+      assert.equals "emergent.sh", recent[1].qname
+      assert.equals "e0:8f:4c:c8:91:fa", recent[1].mac
+
 describe "worker_responses upstream retry", ->
   { parse: parse_ip, :s2ip } = require "ipparse.l3.ip"
   { parse: parse_udp } = require "ipparse.l4.udp"

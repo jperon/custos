@@ -229,6 +229,44 @@ handle_bye = (req, peer_ip, peer_mac, state) ->
 
   204, {}, ""
 
+json_escape = (s) ->
+  return "" unless s
+  s = tostring s
+  s = s\gsub "\\", "\\\\"
+  s = s\gsub "\"", "\\\""
+  s = s\gsub "\n", "\\n"
+  s = s\gsub "\r", "\\r"
+  s = s\gsub "\t", "\\t"
+  s
+
+-- Liste des derniers domaines refusés pour la MAC du client connecté.
+-- Lecture seule : ni session, ni nft, ni cookie. Source = recent-blocks.tsv,
+-- écrit en continu par worker_events (format : mac\tqname\treason\tcount\tlast_ts).
+REFUSALS_MAX = 50
+
+handle_refusals = (req, peer_ip, peer_mac, state) ->
+  cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
+  p = token.verify cookie_val, state.token_key
+  return 401, {}, "" unless p
+
+  mac = p.mac
+  return 200, { ["Content-Type"]: "application/json" }, "[]" unless mac and mac ~= "unknown"
+  mac_lc = mac\lower!
+
+  events_dir = state.events_dir or "/tmp/custos/events"
+  fh = io.open "#{events_dir}/recent-blocks.tsv", "r"
+  return 200, { ["Content-Type"]: "application/json" }, "[]" unless fh
+
+  parts = {}
+  for line in fh\lines!
+    break if #parts >= REFUSALS_MAX
+    l_mac, qname, reason, count, ts = line\match "^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$"
+    continue unless l_mac and l_mac\lower! == mac_lc
+    parts[#parts + 1] = "{\"qname\":\"#{json_escape qname}\",\"reason\":\"#{json_escape reason}\",\"count\":#{tonumber(count) or 0},\"ts\":#{tonumber(ts) or 0}}"
+  fh\close!
+
+  200, { ["Content-Type"]: "application/json" }, "[#{table.concat parts, ","}]"
+
 handle_register = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
   user = form.user
@@ -259,6 +297,8 @@ handle_request = (req, peer_ip, peer_mac, state) ->
     return handle_login req, peer_ip, peer_mac, state
   elseif req.path == "/ping" and req.method == "GET"
     return handle_ping req, peer_ip, peer_mac, state
+  elseif req.path == "/refusals" and req.method == "GET"
+    return handle_refusals req, peer_ip, peer_mac, state
   elseif req.path == "/logout"
     return handle_logout req, peer_ip, peer_mac, state
   elseif req.path == "/bye"
@@ -277,5 +317,6 @@ handle_request = (req, peer_ip, peer_mac, state) ->
   :make_session_cookie, :clear_session_cookie, :signal_parent_reload
   :url_decode, :parse_form, :register_form_page, :register_success_page, :login_page
   :handle_login, :handle_ping, :handle_logout, :handle_bye, :handle_register, :handle_request
+  :handle_refusals
   :COOKIE_NAME
 }

@@ -296,6 +296,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     admin_users: auth_cfg.admin_users or {}
     admin_allow_all_when_empty: auth_cfg.admin_allow_all_when_empty or false
     config_path: auth_cfg.config_path or "/etc/custos/config.moon"
+    events_dir: config.events and config.events.dir or "/tmp/custos/events"
     started_at: os.time!
     -- Contexte TLS statique construit une fois, hérité par les enfants via fork.
     static_tls_ctx: static_tls_ctx
