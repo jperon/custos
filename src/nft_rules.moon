@@ -21,6 +21,7 @@
 nft_compiler = require "filter.nft_compiler"
 nft_dynamic_sets = require "filter.nft_dynamic_sets"
 rule = require "filter.rule"
+{ :REJECT_MARK_HEX } = require "nft_marks"
 
 -- Expose rules_metadata for other modules to reuse without recompiling
 rules_metadata = nil
@@ -126,9 +127,12 @@ substitute = (content, plan=nil) ->
   --   "residual" → {SNI_RULES_POST} (après cv_action_vmap)    : filet de sécurité.
   -- {QUEUE_SNI} ayant déjà été substitué plus haut, on inline directement le n°.
   sni_q = cfg.nfqueue.sni
+  reject_q = cfg.nfqueue.reject
   sni_rules = table.concat {
     "    meta l4proto tcp th dport {443, 465, 587, 993, 995} tcp flags & (fin | syn | rst | ack) == ack log level debug prefix \"custos sni_tls: \" counter queue num #{sni_q} bypass comment \"TLS packets on TCP/443,465,587,993,995 (ACK, non-SYN) → SNI logger\""
     "    meta l4proto udp th dport 443 log level debug prefix \"custos sni_quic: \" counter queue num #{sni_q} bypass comment \"QUIC Initial UDP/443 → SNI logger\""
+    "    meta mark #{REJECT_MARK_HEX} counter queue num #{reject_q} comment \"SNI refused packet → worker_reject\""
+    "    meta mark #{REJECT_MARK_HEX} meta mark set 0x0 accept comment \"Clear SNI reject mark after forged reject\""
   }, "\n"
   placement = cfg.sni and cfg.sni.placement or "residual"
   pre_rules, post_rules = if placement == "integral"
@@ -181,15 +185,15 @@ compile_filter_rules = (filter_cfg, rules_metadata=nil) ->
 -- @treturn boolean true if all sets created successfully
 create_filter_rule_sets = (plan) ->
   return true unless plan and plan.rules and #plan.rules > 0
-  
+
   commands = nft_dynamic_sets.generate_set_creation_commands plan
-  
+
   if #commands == 0
     log_debug -> { action: "no_rule_sets_to_create" }
     return true
-  
+
   log_info -> { action: "creating_per_rule_nft_sets", count: #commands }
-  
+
   all_ok = true
   for _, cmd in ipairs commands
     ok, err = run_cmd cmd, { quiet: false }
@@ -200,7 +204,7 @@ create_filter_rule_sets = (plan) ->
       else
         log_warn -> { action: "set_creation_failed", cmd: cmd, err: err or "" }
         all_ok = false
-  
+
   all_ok
 
 -- ── Application Bridge ─────────────────────────────────────────────────────
@@ -256,7 +260,7 @@ apply = ->
     errfh\close!
   os.remove tmpfile
   os.remove errfile
-  
+
   if rc != 0
     log_warn -> { action: "nft_rules_apply_failed", path: path, rc: rc, err: errtxt }
     return false

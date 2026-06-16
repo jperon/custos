@@ -46,6 +46,7 @@ local rtp_passthrough = { }
 local rtp_passthrough_dport = { }
 local RTP_PASSTHROUGH_TTL = 120
 local _excluded_ports = nil
+local _current_queue = nil
 local rtp_key
 rtp_key = function(src, dst, sport, dport)
   return tostring(src) .. "|" .. tostring(dst) .. "|" .. tostring(sport) .. "|" .. tostring(dport)
@@ -264,7 +265,7 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
       log_debug(function()
         return {
           action = "rtp_passthrough_hit",
-          queue = 3,
+          queue = _current_queue,
           src = src_ip,
           dst = dst_ip,
           sport = sport,
@@ -279,7 +280,7 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
       log_debug(function()
         return {
           action = "rtp_passthrough_hit_dport",
-          queue = 3,
+          queue = _current_queue,
           src = src_ip,
           dst = dst_ip,
           sport = sport,
@@ -301,7 +302,7 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
       log_debug(function()
         return {
           action = "rtp_passthrough_add",
-          queue = 3,
+          queue = _current_queue,
           src = src_ip,
           dst = dst_ip,
           sport = sport,
@@ -349,7 +350,7 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
   log_debug(function()
     return {
       action = "reject_forge",
-      queue = 3,
+      queue = _current_queue,
       src = src_ip,
       dst = dst_ip,
       sport = sport,
@@ -363,6 +364,7 @@ end
 local run
 run = function(queue_num, cfg)
   set_action_prefix("reject_")
+  _current_queue = tonumber(queue_num)
   log_info(function()
     return {
       action = "worker_start",

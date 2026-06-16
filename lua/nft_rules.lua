@@ -11,6 +11,8 @@ end
 local nft_compiler = require("filter.nft_compiler")
 local nft_dynamic_sets = require("filter.nft_dynamic_sets")
 local rule = require("filter.rule")
+local REJECT_MARK_HEX
+REJECT_MARK_HEX = require("nft_marks").REJECT_MARK_HEX
 local rules_metadata = nil
 local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
@@ -129,9 +131,12 @@ substitute = function(content, plan)
   end
   content = content:gsub("{SIP_RULES}", sip_rules)
   local sni_q = cfg.nfqueue.sni
+  local reject_q = cfg.nfqueue.reject
   local sni_rules = table.concat({
     "    meta l4proto tcp th dport {443, 465, 587, 993, 995} tcp flags & (fin | syn | rst | ack) == ack log level debug prefix \"custos sni_tls: \" counter queue num " .. tostring(sni_q) .. " bypass comment \"TLS packets on TCP/443,465,587,993,995 (ACK, non-SYN) → SNI logger\"",
-    "    meta l4proto udp th dport 443 log level debug prefix \"custos sni_quic: \" counter queue num " .. tostring(sni_q) .. " bypass comment \"QUIC Initial UDP/443 → SNI logger\""
+    "    meta l4proto udp th dport 443 log level debug prefix \"custos sni_quic: \" counter queue num " .. tostring(sni_q) .. " bypass comment \"QUIC Initial UDP/443 → SNI logger\"",
+    "    meta mark " .. tostring(REJECT_MARK_HEX) .. " counter queue num " .. tostring(reject_q) .. " comment \"SNI refused packet → worker_reject\"",
+    "    meta mark " .. tostring(REJECT_MARK_HEX) .. " meta mark set 0x0 accept comment \"Clear SNI reject mark after forged reject\""
   }, "\n")
   local placement = cfg.sni and cfg.sni.placement or "residual"
   local pre_rules, post_rules

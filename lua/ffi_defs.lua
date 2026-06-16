@@ -245,6 +245,10 @@ ffi.cdef([[  /* ── Types opaques ── */
   int nfq_set_verdict(nfq_q_handle *qh, uint32_t id,
                       uint32_t verdict, uint32_t datalen,
                       const unsigned char *buf);
+  /* verdict avec nfmark (libnetfilter_queue: nfq_set_verdict2) */
+  int nfq_set_verdict2(nfq_q_handle *qh, uint32_t id,
+                       uint32_t verdict, uint32_t mark,
+                       uint32_t datalen, const unsigned char *buf);
 ]])
 ffi.cdef([[  typedef struct nft_ctx nft_ctx;
 

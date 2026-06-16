@@ -1,7 +1,7 @@
 -- src/worker_reject.moon
 -- Worker reject: forge reject (bridge mode).
 --
--- Receives all silently-dropped packets from NFQUEUE 3.
+-- Receives residual or explicitly-marked packets from QUEUE_REJECT.
 -- The payload starts at the IP header (nftables bridge NFQUEUE delivers
 -- no Ethernet header). For each packet:
 --   1. Parse IP (+ TCP for RST).
@@ -49,6 +49,7 @@ rtp_passthrough_dport = {}
 RTP_PASSTHROUGH_TTL = 120
 -- Ports exclus du suivi RTP (initialisé par run() depuis la config).
 _excluded_ports = nil
+_current_queue = nil
 
 rtp_key = (src, dst, sport, dport) ->
   "#{src}|#{dst}|#{sport}|#{dport}"
@@ -202,7 +203,7 @@ forge_icmp_reject = (raw, ip) ->
     "#{ip_obj}"
 
 -- ── Main callback ─────────────────────────────────────────────────
---- Handle a packet from NFQUEUE 3 (forge reject).
+--- Handle a packet from QUEUE_REJECT (forge reject).
 -- Parses the packet, forges RST or ICMP admin-prohibited, and injects
 -- the forged frame via nfq_set_verdict with replacement payload.
 -- @tparam cdata  qh_ptr  nfq_q_handle pointer.
@@ -259,7 +260,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
       log_debug -> {
         action: "rtp_passthrough_hit"
-        queue: 3
+        queue: _current_queue
         src: src_ip
         dst: dst_ip
         sport: sport
@@ -272,7 +273,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
       log_debug -> {
         action: "rtp_passthrough_hit_dport"
-        queue: 3
+        queue: _current_queue
         src: src_ip
         dst: dst_ip
         sport: sport
@@ -292,7 +293,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
       log_debug -> {
         action: "rtp_passthrough_add"
-        queue: 3
+        queue: _current_queue
         src: src_ip
         dst: dst_ip
         sport: sport
@@ -333,7 +334,7 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
 
   log_debug -> {
     action:   "reject_forge"
-    queue:    3
+    queue:    _current_queue
     src:      src_ip
     dst:      dst_ip
     sport:    sport
@@ -346,11 +347,12 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
 
 -- ── Entry point ───────────────────────────────────────────────────
 --- Start the reject forge-reject worker.
--- Opens NFQUEUE 3 and enters the packet processing loop.
+-- Opens the configured QUEUE_REJECT and enters the packet processing loop.
 -- @tparam table _cfg  Ignored (reserved for future use).
 -- @treturn nil
 run = (queue_num, cfg) ->
   set_action_prefix "reject_"
+  _current_queue = tonumber queue_num
   log_info -> { action: "worker_start", queue: queue_num }
   -- Initialiser le set des ports exclus du suivi RTP depuis la config
   rtp_cfg = cfg and cfg.rtp

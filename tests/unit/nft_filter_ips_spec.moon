@@ -195,12 +195,16 @@ describe "nft_rules : placement SNI integral/residual", ->
     assert.truthy post\find "th dport 443"
     assert.truthy post\find "queue num 6"
     assert.truthy post\find "sni_quic"
+    assert.truthy post\find "meta mark 0x02000000"
+    assert.truthy post\find "queue num #{cfg.nfqueue.reject}"
 
   it "integral : règles SNI rendues AVANT (PRE), POST vide", ->
     cfg.sni.placement = "integral"
     pre, post = split substitute tmpl
     assert.truthy pre\find "th dport 443"
     assert.truthy pre\find "queue num 6"
+    assert.truthy pre\find "meta mark 0x02000000"
+    assert.truthy pre\find "queue num #{cfg.nfqueue.reject}"
     assert.is_nil post\find "queue num 6"
 
   it "défaut (placement absent) : comportement residual", ->

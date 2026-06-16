@@ -34,6 +34,36 @@ describe "sni_action_for (mapping pur)", ->
     meta = { verdict: true, allow_modifiers: {} }
     assert.are.equal "allow", sni.sni_action_for meta
 
+describe "mark_packet_for_reject", ->
+  it "pose NF_ACCEPT avec la mark réservée", ->
+    seen = nil
+    setter = (qh, pkt_id, verdict, mark) ->
+      seen = { :qh, :pkt_id, :verdict, :mark }
+      0
+    ok, err = sni.mark_packet_for_reject "qh", 123, setter
+    assert.is_true ok
+    assert.is_nil err
+    assert.are.equal "qh", seen.qh
+    assert.are.equal 123, seen.pkt_id
+    assert.are.equal 1, seen.verdict
+    assert.are.equal 0x02000000, seen.mark
+
+  it "remonte l'échec du verdict marqué", ->
+    ok, err = sni.mark_packet_for_reject nil, 1, -> -1
+    assert.is_false ok
+    assert.are.equal "-1", err
+
+  it "accepte un retour positif (bytes-sent) comme succès", ->
+    -- Régression : libnetfilter_queue renvoie parfois ~40 octets émis.
+    ok, err = sni.mark_packet_for_reject nil, 1, -> 40
+    assert.is_true ok
+    assert.is_nil err
+
+  it "capture les exceptions du setter", ->
+    ok, err = sni.mark_packet_for_reject nil, 1, -> error "boom"
+    assert.is_false ok
+    assert.truthy err\find "boom"
+
 describe "build_validator_query", ->
   it "produit une requête DNS A avec le bon QNAME", ->
     raw = sni.build_validator_query "google.com"

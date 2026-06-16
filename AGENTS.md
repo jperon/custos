@@ -36,8 +36,8 @@ sont pas vérifiées et constatées (pas supposées) :
    total ; ne jamais déclarer un succès non exécuté. `make test-e2e` exige le
    homelab libvirt provisionné (cf. [.agents/testing.md](.agents/testing.md) et
    [libvirt/README.md](libvirt/README.md)) ; quand le provisioning est déjà fait,
-   il ne nécessite pas root. Si une suite ne peut pas être exécutée, le dire
-   explicitement plutôt que de la présenter comme verte.
+   il ne nécessite pas root. Toujours essayer `make test-e2e` à la fin des modifications,
+   sans utiliser au préalable les outils de libvirt, mais signaler si cela échoue.
 
 ---
 

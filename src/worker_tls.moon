@@ -4,7 +4,8 @@
 -- extrait les SNI via ipparse, et enregistre les métadonnées enrichies (MAC, IPs, ports, protocole).
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
-{ :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
+{ :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE, :set_verdict_marked } = require "nfq_loop"
+{ :REJECT_MARK, :REJECT_MARK_HEX } = require "nft_marks"
 { :get_l2 } = require "nfq/ethernet"
 { :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
 { :user_for_mac } = require "auth.sessions"
@@ -66,6 +67,17 @@ second_opinion_cfg = nil
 validator_mod = nil
 cname_mod = nil
 filter_cfg = nil
+
+--- Marque le paquet courant pour routage nft vers worker_reject.
+-- @tparam cdata qh_ptr Handle de queue NFQUEUE.
+-- @tparam number pkt_id Identifiant NFQUEUE du paquet.
+-- @tparam function setter Injection de test ; défaut nfq_loop.set_verdict_marked.
+-- @treturn boolean true si le verdict marqué a été posé.
+-- @treturn string|nil err Code/exception en cas d'échec.
+mark_packet_for_reject = (qh_ptr, pkt_id, setter=set_verdict_marked) ->
+  ok, rc = pcall setter, qh_ptr, pkt_id, NF_ACCEPT, REJECT_MARK
+  return true, nil if ok and rc >= 0
+  false, tostring rc
 
 -- Cache de verdict du validateur, indexé par domaine. Impératif perf : avec le
 -- fast-path ct-mark, seul le PREMIER paquet de chaque flux monte en userspace ;
@@ -761,6 +773,64 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
       e.quic_parser_path        = tls_meta.quic_parser_path
     e
 
+  sni_norm = nil
+
+  -- Remet le paquet courant dans le chemin nft avec une mark réservée ; la
+  -- règle post-SNI l'enverra vers QUEUE_REJECT, où worker_reject forgera le RST
+  -- (TCP) ou ICMP (UDP). Exception : QUIC/UDP → NF_DROP directement car les
+  -- clients QUIC ignorent systématiquement les ICMP admin-prohibited ; le drop
+  -- silencieux est plus efficace (backoff + timeout du handshake).
+  reject_with_worker = (reason, event_rule) ->
+    if l4_proto == "udp"
+      log_debug -> {
+        action: "sni_quic_drop"
+        worker: worker_src
+        pkt_id: pkt_id
+        protocol: protocol_name
+        l4_proto: l4_proto
+        sni: sni_norm or sni
+        ip_src: ip_src_str
+        ip_dst: ip_dst_str
+        mac_src: mac_str
+        :reason
+        rule: event_rule
+      }
+      return NF_DROP
+
+    ok_mark, mark_err = mark_packet_for_reject qh_ptr, pkt_id
+    unless ok_mark
+      log_error -> {
+        action: "sni_reject_mark_failed"
+        worker: worker_src
+        pkt_id: pkt_id
+        protocol: protocol_name
+        l4_proto: l4_proto
+        sni: sni_norm or sni
+        ip_src: ip_src_str
+        ip_dst: ip_dst_str
+        mac_src: mac_str
+        :reason
+        rule: event_rule
+        reject_mark: REJECT_MARK_HEX
+        err: mark_err
+      }
+      return NF_DROP
+    log_debug -> {
+      action: "sni_reject_marked"
+      worker: worker_src
+      pkt_id: pkt_id
+      protocol: protocol_name
+      l4_proto: l4_proto
+      sni: sni_norm or sni
+      ip_src: ip_src_str
+      ip_dst: ip_dst_str
+      mac_src: mac_str
+      :reason
+      rule: event_rule
+      reject_mark: REJECT_MARK_HEX
+    }
+    VERDICT_DONE
+
   unless sni
     if protocol_name == "quic" and tls_reason and (
       tls_reason\match("^quic_session_init_failed") or tls_reason\match("^quic_push_failed")
@@ -785,7 +855,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         reason: tls_reason or "no_sni"
       }
       sni_event "block", nil, tls_reason or "no_sni", "strict-443/no_sni"
-      return NF_DROP
+      return reject_with_worker tls_reason or "no_sni", "strict-443/no_sni"
     if mail_port and strict_mode and in_scope
       log_warn -> with_meta {
         action: "sni_verdict_warn_no_sni_mail"
@@ -855,8 +925,8 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     }
     return NF_ACCEPT
 
-  -- Branche refus : en strict-443 on bloque (log + event + DROP), sinon on
-  -- trace en debug et on laisse passer.
+  -- Branche refus : en strict-443 on bloque (log + event + routage vers
+  -- worker_reject), sinon on trace en debug et on laisse passer.
   block_or_skip = (action_block, action_skip, reason, event_rule) ->
     if strict_mode
       log_block -> {
@@ -873,7 +943,7 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         rule: decide_rule
       }
       sni_event "block", sni_norm or sni, reason, event_rule
-      return NF_DROP
+      return reject_with_worker reason, event_rule
     log_debug -> {
       action: action_skip
       pkt_id: pkt_id
@@ -903,7 +973,8 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         nft_failure_policy: sni_policy and sni_policy.nft_failure_policy or "fail-closed"
       }
       sni_event "block", sni_norm or sni, nft_reason, decide_rule or "nft_insert_failed"
-      return NF_DROP if (sni_policy and sni_policy.nft_failure_policy or "fail-closed") == "fail-closed"
+      if (sni_policy and sni_policy.nft_failure_policy or "fail-closed") == "fail-closed"
+        return reject_with_worker nft_reason, decide_rule or "nft_insert_failed"
       return NF_ACCEPT
 
     log_allow -> with_meta {
@@ -933,9 +1004,12 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
       -- pointe déjà sur l'IP cible (cache DNS périmé mais correct).
       matched, resolved = dst_matches_cname meta.cname_target, ip_dst_str, ip.version
       return do_allow! if matched
-      reason = if resolved then "sni_redirect_wrong_ip" else "sni_redirect_target_unresolved"
+      redirect_reason = if resolved then "sni_redirect_wrong_ip" else "sni_redirect_target_unresolved"
+      -- Le reason du log doit expliquer POURQUOI on bloque (redirect impossible),
+      -- pas la décision DNS sous-jacente ("Validated by rule:...").
+      -- On conserve celle-ci dans filter_reason pour le debug.
       return block_or_skip "sni_verdict_block_redirect", "sni_verdict_skip_redirect",
-        decide_reason or reason, "sni_redirect_blocked"
+        redirect_reason, "sni_redirect_blocked"
     when "validate"
       blocked, vreason = validate_sni (sni_norm or sni), meta.allow_modifiers.validate
       return do_allow! unless blocked
@@ -1001,6 +1075,7 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
   :extract_sni_from_tls, :extract_sni_from_quic, :quic_flow_key
   :prune_quic_sessions, :reset_quic_sessions, :seed_quic_session, :quic_session_count
   :reset_tcp_sessions, :feed_tls_segment
+  :mark_packet_for_reject
   :sni_action_for, :validate_sni, :dst_matches_cname, :build_validator_query
   :prune_sni_verdicts, :reset_sni_verdicts, :set_validator_state
 }

@@ -27,6 +27,7 @@ nftables (table bridge)
     ├─ TCP/443 + UDP/443 → QUEUE_SNI → worker_tls       ──→ nft pipe → worker_nft
     │     (placement=integral : règle AVANT cv_action_vmap → tout le 443 inspecté ;
     │      placement=residual : règle APRÈS → seul le trafic résiduel ;
+    │      refus strict : NF_ACCEPT + REJECT_MARK → QUEUE_REJECT → worker_reject ;
     │      flag `bypass` → passe si worker SNI absent)
     │
     ├─ SIP/STUN (opt.)   → QUEUE_SIP     → worker_sip       ──→ nft pipe → worker_nft
@@ -163,15 +164,26 @@ incrémentale (`try_add_pending`) plutôt que recalculé par `pairs` à chaque t
 | `QUEUE_RESPONSES` | `worker_responses` | `th sport 53 queue to N` | `NF_ACCEPT` ± payload patché | DNS TTL + EDE `Custos vigilat`, ou NXDOMAIN+EDE `Filtered` |
 | `QUEUE_CAPTIVE` | `worker_captive` | `tcp dport 80 … syn queue to N` | `NF_DROP` | 3 frames Ethernet via AF_PACKET (SYN-ACK, HTTP 302, FIN-ACK) |
 | `QUEUE_AUTH` | `worker_auth_queue` | trafic port 33443 | `NF_ACCEPT` | Aucune ; mac+ip dans `learn` → `mac_learner` |
-| `QUEUE_SNI` | `worker_tls` | `tcp/udp dport 443 queue to N bypass` (opt. ; **avant** `cv_action_vmap` si `placement=integral`, **après** si `residual`) | `NF_ACCEPT`/`NF_DROP` selon `cfg.sni` | Paire client→dest dans `ip*_allowed`/`mac*_allowed` via pipe `nft` |
+| `QUEUE_SNI` | `worker_tls` | `tcp/udp dport 443 queue to N bypass` (opt. ; **avant** `cv_action_vmap` si `placement=integral`, **après** si `residual`) | `NF_ACCEPT`; refus strict = `NF_ACCEPT` + `REJECT_MARK` puis `QUEUE_REJECT` | Paire client→dest dans `ip*_allowed`/`mac*_allowed` via pipe `nft` ; rejet réseau forgé par `worker_reject` |
 | `QUEUE_SIP` | `worker_sip` | trafic SIP/STUN (opt.) | `NF_ACCEPT` | IP proxy + médias SDP dans des sets nft par règle (TTL `nft.sip_session_ttl`) via pipe `nft` |
-| `QUEUE_REJECT` | `worker_reject` | drop résiduel rate-limité | `NF_ACCEPT` + payload forgé | TCP RST/ACK ou ICMPv4 type 3/code 13 ou ICMPv6 type 1/code 1 |
+| `QUEUE_REJECT` | `worker_reject` | drop résiduel rate-limité + paquets marqués `REJECT_MARK` par `worker_tls` | `NF_ACCEPT` + payload forgé | TCP RST/ACK ou ICMPv4 type 3/code 13 ou ICMPv6 type 1/code 1 |
 
 Le worker DoH (`worker_doh`) n'a pas de NFQUEUE : c'est un serveur HTTPS (port
 `doh.port`, défaut 8443) qui résout les requêtes DoH en amont, applique
 `filter.decide`, et injecte les paires autorisées via le pipe `nft`.
 
 ---
+
+## Namespace des marks nft/NFQUEUE
+
+`src/nft_marks.moon` centralise les marks réservées par Custos :
+
+| Mark | Usage |
+|------|-------|
+| `0x00000fff` | Zone basse utilisée pour transporter le VLAN ID dans `meta mark`. |
+| `0x00004000+` | Marks de règles compilées (`filter.nft_compiler`) rejouées via `cv_action_vmap`/`ct mark`. |
+| `0x00010000` | Auth mark interne au compilateur nft. |
+| `0x02000000` (`REJECT_MARK`) | Demande explicite de rejet réseau forgé : `worker_tls` pose cette nfmark via `nfq_set_verdict2`, nft route ensuite vers `QUEUE_REJECT`. |
 
 ## nft sets
 

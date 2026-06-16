@@ -3,10 +3,15 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
-local run_queue, NF_ACCEPT, NF_DROP
+local run_queue, NF_ACCEPT, NF_DROP, VERDICT_DONE, set_verdict_marked
 do
   local _obj_0 = require("nfq_loop")
-  run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
+  run_queue, NF_ACCEPT, NF_DROP, VERDICT_DONE, set_verdict_marked = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP, _obj_0.VERDICT_DONE, _obj_0.set_verdict_marked
+end
+local REJECT_MARK, REJECT_MARK_HEX
+do
+  local _obj_0 = require("nft_marks")
+  REJECT_MARK, REJECT_MARK_HEX = _obj_0.REJECT_MARK, _obj_0.REJECT_MARK_HEX
 end
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
@@ -64,6 +69,17 @@ local second_opinion_cfg = nil
 local validator_mod = nil
 local cname_mod = nil
 local filter_cfg = nil
+local mark_packet_for_reject
+mark_packet_for_reject = function(qh_ptr, pkt_id, setter)
+  if setter == nil then
+    setter = set_verdict_marked
+  end
+  local ok, rc = pcall(setter, qh_ptr, pkt_id, NF_ACCEPT, REJECT_MARK)
+  if ok and rc >= 0 then
+    return true, nil
+  end
+  return false, tostring(rc)
+end
 local sni_verdict_cache = { }
 local sni_verdict_count = 0
 local SNI_VERDICT_TTL = 60
@@ -1006,6 +1022,66 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     end
     return e
   end
+  local sni_norm = nil
+  local reject_with_worker
+  reject_with_worker = function(reason, event_rule)
+    if l4_proto == "udp" then
+      log_debug(function()
+        return {
+          action = "sni_quic_drop",
+          worker = worker_src,
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          sni = sni_norm or sni,
+          ip_src = ip_src_str,
+          ip_dst = ip_dst_str,
+          mac_src = mac_str,
+          reason = reason,
+          rule = event_rule
+        }
+      end)
+      return NF_DROP
+    end
+    local ok_mark, mark_err = mark_packet_for_reject(qh_ptr, pkt_id)
+    if not (ok_mark) then
+      log_error(function()
+        return {
+          action = "sni_reject_mark_failed",
+          worker = worker_src,
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          sni = sni_norm or sni,
+          ip_src = ip_src_str,
+          ip_dst = ip_dst_str,
+          mac_src = mac_str,
+          reason = reason,
+          rule = event_rule,
+          reject_mark = REJECT_MARK_HEX,
+          err = mark_err
+        }
+      end)
+      return NF_DROP
+    end
+    log_debug(function()
+      return {
+        action = "sni_reject_marked",
+        worker = worker_src,
+        pkt_id = pkt_id,
+        protocol = protocol_name,
+        l4_proto = l4_proto,
+        sni = sni_norm or sni,
+        ip_src = ip_src_str,
+        ip_dst = ip_dst_str,
+        mac_src = mac_str,
+        reason = reason,
+        rule = event_rule,
+        reject_mark = REJECT_MARK_HEX
+      }
+    end)
+    return VERDICT_DONE
+  end
   if not (sni) then
     if protocol_name == "quic" and tls_reason and (tls_reason:match("^quic_session_init_failed") or tls_reason:match("^quic_push_failed")) then
       log_warn(function()
@@ -1033,7 +1109,7 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
         }
       end)
       sni_event("block", nil, tls_reason or "no_sni", "strict-443/no_sni")
-      return NF_DROP
+      return reject_with_worker(tls_reason or "no_sni", "strict-443/no_sni")
     end
     if mail_port and strict_mode and in_scope then
       log_warn(function()
@@ -1063,7 +1139,7 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     end)
     return NF_ACCEPT
   end
-  local sni_norm = normalize_sni(sni)
+  sni_norm = normalize_sni(sni)
   log_info(function()
     return with_meta({
       action = "sni_captured",
@@ -1134,7 +1210,7 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
         }
       end)
       sni_event("block", sni_norm or sni, reason, event_rule)
-      return NF_DROP
+      return reject_with_worker(reason, event_rule)
     end
     log_debug(function()
       return {
@@ -1170,7 +1246,7 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       end)
       sni_event("block", sni_norm or sni, nft_reason, decide_rule or "nft_insert_failed")
       if (sni_policy and sni_policy.nft_failure_policy or "fail-closed") == "fail-closed" then
-        return NF_DROP
+        return reject_with_worker(nft_reason, decide_rule or "nft_insert_failed")
       end
       return NF_ACCEPT
     end
@@ -1202,13 +1278,13 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     if matched then
       return do_allow()
     end
-    local reason
+    local redirect_reason
     if resolved then
-      reason = "sni_redirect_wrong_ip"
+      redirect_reason = "sni_redirect_wrong_ip"
     else
-      reason = "sni_redirect_target_unresolved"
+      redirect_reason = "sni_redirect_target_unresolved"
     end
-    return block_or_skip("sni_verdict_block_redirect", "sni_verdict_skip_redirect", decide_reason or reason, "sni_redirect_blocked")
+    return block_or_skip("sni_verdict_block_redirect", "sni_verdict_skip_redirect", redirect_reason, "sni_redirect_blocked")
   elseif "validate" == _exp_0 then
     local blocked, vreason = validate_sni((sni_norm or sni), meta.allow_modifiers.validate)
     if not (blocked) then
@@ -1318,6 +1394,7 @@ return {
   quic_session_count = quic_session_count,
   reset_tcp_sessions = reset_tcp_sessions,
   feed_tls_segment = feed_tls_segment,
+  mark_packet_for_reject = mark_packet_for_reject,
   sni_action_for = sni_action_for,
   validate_sni = validate_sni,
   dst_matches_cname = dst_matches_cname,

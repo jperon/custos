@@ -1,0 +1,6 @@
+local REJECT_MARK = 0x02000000
+local REJECT_MARK_HEX = string.format("0x%08x", REJECT_MARK)
+return {
+  REJECT_MARK = REJECT_MARK,
+  REJECT_MARK_HEX = REJECT_MARK_HEX
+}
