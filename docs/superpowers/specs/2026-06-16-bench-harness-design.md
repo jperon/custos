@@ -22,7 +22,7 @@ pour comparer avant/après un changement.
 ## Structure des fichiers
 
 ```
-tools/bench/
+src/bench/
   run.moon      # orchestrateur + CLI (parse args, dispatch, rapport, baseline)
   micro.moon    # volet 1 : micro-bench in-process (ns/op + KB alloc)
   load.moon     # volet 2 : générateur de charge DNS LuaJIT (UDP/FFI)
@@ -30,7 +30,10 @@ tools/bench/
   README.md
 ```
 
-Compilés vers `lua/tools/bench/*.lua` comme le reste du projet (`moonc`).
+Compilés vers `lua/bench/*.lua` comme le reste du projet (`moonc`). Un point
+d'entrée `cli.moon` (`luajit lua/bench/cli.lua …`) appelle `run.main`. La
+baseline est sérialisée en **table Lua rechargeable** (`baseline.lua`) plutôt
+qu'en JSON — pas de parseur externe requis, idiomatique au projet.
 
 Cibles Make :
 - `make bench` — micro-bench par défaut (lançable partout, aucune infra).
@@ -108,7 +111,7 @@ cohérentes), `skip` si homelab absent (convention existante).
 
 - `.agents/testing.md` : ligne(s) dans le tableau des suites + section bench.
 - `doc/CHEATSHEET.md` : usage rapide `make bench` / `bench-load`.
-- `tools/bench/README.md` : CLI, métriques, baseline, déploiement sur `via`.
+- `src/bench/README.md` : CLI, métriques, baseline, déploiement sur `via`.
 
 ## Hors périmètre (YAGNI)
 

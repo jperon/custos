@@ -72,6 +72,7 @@ SYNC_LUAS  := $(patsubst $(SYNC)/%.moon,$(LUA)/sync/%.lua,$(SYNC_MOONS))
 .PHONY: all clean check test test-unit test-vm test-openwrt test-e2e test-e2e-rebuild \
         homelab-up homelab-down homelab-nuke homelab-redeploy \
         coverage run reload update-lists make-secret logs \
+        bench bench-micro bench-load \
         sync-init sync-push-init redbean-ui help
 
 all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) $(MOONSCRIPT_RUNTIME_LUAS) $(SYNC_LUAS) install-owrt.lua .init.lua
@@ -222,6 +223,31 @@ run: all
 	@[ "$$(id -u)" = "0" ] || (echo "ERREUR : root requis"; exit 1)
 	LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;" \
 	  $(LUAJIT) $(LUA)/main.lua
+
+# ── Benchmarks ────────────────────────────────────────────────────────────
+# Harnais de stress test / mesure de performances (cf. src/bench/README.md).
+# Variables : ITERS, TARGET, DURATION, RATE, DOMAINS, SAVE_BASELINE.
+ITERS    ?= 1000000
+DURATION ?= 5
+RATE     ?=
+DOMAINS  ?=
+TARGET   ?=
+BENCH_ENV = LUA_PATH="$(LUA)/?.lua;$(LUA)/?/init.lua;;"
+BENCH_ARGS = --iters $(ITERS) --duration $(DURATION) \
+  $(if $(RATE),--rate $(RATE),) $(if $(DOMAINS),--domains $(DOMAINS),) \
+  $(if $(SAVE_BASELINE),--save-baseline,)
+
+# Volet micro-bench seul (aucune infra requise, lançable partout).
+bench-micro: all
+	@$(BENCH_ENV) $(LUAJIT) $(LUA)/bench/cli.lua --micro $(BENCH_ARGS)
+
+# Volet charge DNS bout-en-bout (requiert TARGET=host[:port]).
+bench-load: all
+	@[ -n "$(TARGET)" ] || (echo "ERREUR : TARGET=host[:port] requis"; exit 1)
+	@$(BENCH_ENV) $(LUAJIT) $(LUA)/bench/cli.lua --load --target $(TARGET) $(BENCH_ARGS)
+
+# Défaut : micro-bench (le volet charge reste opt-in via bench-load).
+bench: bench-micro
 
 # Clean compiled files
 clean:

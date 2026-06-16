@@ -186,6 +186,7 @@ Notes :
 
 - Unit: `make test`
 - OpenWrt E2E: `make test-openwrt HOST=root@<router>`
+- Benchmark (perf): `make bench` (micro-bench), `make bench-load TARGET=host[:port]` (charge DNS). Cf. `src/bench/README.md`.
 
 ## Quick playbooks
 

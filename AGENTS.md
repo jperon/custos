@@ -49,6 +49,7 @@ sont pas vérifiées et constatées (pas supposées) :
 | I/O par worker et formats de messages IPC | [.agents/workers.md](.agents/workers.md) |
 | Syntaxe MoonScript, LDoc, pièges de refactoring | [.agents/skills/moonscript/SKILL.md](.agents/skills/moonscript/SKILL.md) |
 | Suites de tests et pièges OpenWrt | [.agents/testing.md](.agents/testing.md) |
+| Harnais de benchmark / stress test (`make bench`, `bench-load`) | [src/bench/README.md](src/bench/README.md) |
 | Référence complète de toutes les clés de configuration | [doc/CONFIG.md](doc/CONFIG.md) |
 | Aide-mémoire rapide pour les mainteneurs | [doc/CHEATSHEET.md](doc/CHEATSHEET.md) |
 | Homelab libvirt (3 VMs OpenWrt : via/custos/servus) pour tests E2E | [libvirt/README.md](libvirt/README.md) |
