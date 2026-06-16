@@ -183,6 +183,11 @@ _factory = (cfg) ->
     names = rule.cname_names
     {
       capabilities: { worker: true, nft: false }
+      -- Cette action réécrit la destination de la réponse DNS (redirection vers
+      -- la cible CNAME). worker_tls s'en sert pour appliquer la même protection
+      -- au niveau SNI (bloquer si l'IP de destination n'est pas déjà la cible).
+      redirects_destination: true
+      cname_target: target
       eval: (req) ->
         nil, "CNAME → #{target} by rule: #{rule.description or '?'}"
       on_response: (ctx) ->
@@ -209,4 +214,4 @@ _factory = (cfg) ->
         "accept"
     }
 
-{ schema: _schema, factory: _factory }
+{ schema: _schema, factory: _factory, :resolve_target_rrs, :pick_resolver_ip }

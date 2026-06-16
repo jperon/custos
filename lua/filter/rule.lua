@@ -46,7 +46,9 @@ compile_rule = function(cfg, rule, idx, used_ids)
       worker_only = compiler_api.compute_worker_only(action_obj),
       compile_nft = action_obj.compile_nft,
       verdict = action_obj.verdict,
-      on_response = action_obj.on_response
+      on_response = action_obj.on_response,
+      redirects_destination = action_obj.redirects_destination,
+      cname_target = action_obj.cname_target
     }
     if action_obj.block_modifiers then
       for k, v in pairs(action_obj.block_modifiers) do
@@ -74,6 +76,15 @@ compile_rule = function(cfg, rule, idx, used_ids)
       end
     end
     on_response_list = _accum_0
+  end
+  local rule_redirects_destination = false
+  local rule_cname_target = nil
+  for _index_0 = 1, #actions_meta do
+    local am = actions_meta[_index_0]
+    if am.redirects_destination then
+      rule_redirects_destination = true
+      rule_cname_target = am.cname_target or rule_cname_target
+    end
   end
   local metadata = {
     rule_id = rule_id,
@@ -103,6 +114,8 @@ compile_rule = function(cfg, rule, idx, used_ids)
       end
     end
   end
+  metadata.redirects_destination = rule_redirects_destination
+  metadata.cname_target = rule_cname_target
   metadata.creates_dynamic_scope = false
   for _index_0 = 1, #conditions_meta do
     local cond_meta = conditions_meta[_index_0]
@@ -128,7 +141,7 @@ compile_rule = function(cfg, rule, idx, used_ids)
       end
     end
     if not (all_passed) then
-      return nil, "No condition matched", nil, nil, nil, nil, nil, nil, false, false
+      return nil, "No condition matched", nil, nil, nil, nil, nil, nil, false, false, false, nil
     end
     req._condition_reason = condition_reason
     local verdict, msg
@@ -142,7 +155,7 @@ compile_rule = function(cfg, rule, idx, used_ids)
         msg = msg or m
       end
     end
-    return verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers, condition_reason, rule_allow_modifiers, true, rule_has_on_response
+    return verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers, condition_reason, rule_allow_modifiers, true, rule_has_on_response, rule_redirects_destination, rule_cname_target
   end
   return eval_fn, metadata
 end
@@ -159,24 +172,29 @@ details_of = function(rules, req, decision_cfg)
   end
   local last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers = nil, nil, nil, nil, nil, nil, nil, nil
   local response_rule_ids = { }
+  local redirect_any, cname_target_any = false, nil
   for _index_0 = 1, #rules do
     local rule_fn = rules[_index_0]
-    local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, matched, has_on_response = rule_fn(req)
+    local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, matched, has_on_response, redirects_destination, cname_target = rule_fn(req)
     if matched and has_on_response and rule_id then
       response_rule_ids[#response_rule_ids + 1] = rule_id
+    end
+    if matched and redirects_destination then
+      redirect_any = true
+      cname_target_any = cname_target or cname_target_any
     end
     if verdict ~= nil then
       if continue_mode or not first_match_wins then
         last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers
       else
-        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids
+        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids, redirect_any, cname_target_any
       end
     end
   end
   if last_verdict ~= nil then
-    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers, response_rule_ids
+    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers, response_rule_ids, redirect_any, cname_target_any
   end
-  return false, "No matching rule (default deny)", nil, nil, nil, nil, nil, nil, response_rule_ids
+  return false, "No matching rule (default deny)", nil, nil, nil, nil, nil, nil, response_rule_ids, redirect_any, cname_target_any
 end
 local compile_rules
 compile_rules = function(cfg)
@@ -210,7 +228,7 @@ decide_meta = function(rules, req, decision_cfg)
   if decision_cfg == nil then
     decision_cfg = nil
   end
-  local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids = details_of(rules, req, decision_cfg)
+  local verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids, redirects_destination, cname_target = details_of(rules, req, decision_cfg)
   return {
     verdict = verdict,
     reason = msg,
@@ -220,7 +238,9 @@ decide_meta = function(rules, req, decision_cfg)
     timeout = rule_timeout,
     description = rule_desc,
     modifiers = rule_modifiers or { },
-    allow_modifiers = allow_modifiers or { }
+    allow_modifiers = allow_modifiers or { },
+    redirects_destination = redirects_destination or false,
+    cname_target = cname_target
   }
 end
 local on_response_for

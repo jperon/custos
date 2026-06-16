@@ -82,6 +82,22 @@
         conditions:  { from_nets: {"10.43.0.0/24", "fd42:42:0:2::/64"} }
       }
 
+      -- R2c : redirection (type SafeSearch) — verdict allow mais réécriture de
+      -- destination via cname. Placée AVANT R3 (first_match_wins) pour que
+      -- redir.lan matche ici. Cible volontairement non résolvable : côté SNI,
+      -- worker_tls ne peut pas confirmer que le client vise la bonne IP → block
+      -- (fail-closed redirect). Côté DNS, la réponse serait réécrite en CNAME.
+      {
+        rule_id:     "redir_cname"
+        description: "Redirection cname (test SNI redirect block)"
+        actions:     {"cname", "allow"}
+        cname:       "unresolvable.invalid"
+        conditions:  {
+          to_domain: "redir.lan"
+          from_nets: {"10.42.0.0/24", "fd42:42:0:1::/64"}
+        }
+      }
+
       -- R3 : depuis homelab, autoriser tout SAUF blocked.lan (teste condition `not`)
       --   • blocked.lan ne matche pas → tombe sur R4 (from_users) puis R5 default_deny
       --   • tout autre domaine depuis homelab → allow

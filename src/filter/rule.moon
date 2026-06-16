@@ -62,6 +62,8 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
       compile_nft:  action_obj.compile_nft
       verdict:      action_obj.verdict
       on_response:  action_obj.on_response
+      redirects_destination: action_obj.redirects_destination
+      cname_target:          action_obj.cname_target
     }
     if action_obj.block_modifiers
       for k, v in pairs action_obj.block_modifiers
@@ -76,6 +78,15 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
 
   -- Liste plate des on_response non-nil pour lookup O(1) depuis worker_responses.
   on_response_list = [am.on_response for am in *actions_meta when am.on_response]
+
+  -- Réécriture de destination (action cname) : exposée pour que worker_tls
+  -- applique la même protection au niveau SNI (cf. .agents/architecture.md).
+  rule_redirects_destination = false
+  rule_cname_target = nil
+  for am in *actions_meta
+    if am.redirects_destination
+      rule_redirects_destination = true
+      rule_cname_target = am.cname_target or rule_cname_target
 
   metadata = {
     rule_id:     rule_id
@@ -103,6 +114,9 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
         metadata.worker_only = true
         break
 
+  metadata.redirects_destination = rule_redirects_destination
+  metadata.cname_target = rule_cname_target
+
   metadata.creates_dynamic_scope = false
   for cond_meta in *conditions_meta
     if cond_meta.creates_dynamic_scope
@@ -125,7 +139,7 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
       if condition_reason == nil and cond_msg
         condition_reason = cond_msg
 
-    return nil, "No condition matched", nil, nil, nil, nil, nil, nil, false, false unless all_passed
+    return nil, "No condition matched", nil, nil, nil, nil, nil, nil, false, false, false, nil unless all_passed
 
     -- Conserver le message de condition pour enrichir les logs (ex: liste matchée).
     req._condition_reason = condition_reason
@@ -139,7 +153,7 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
       elseif v == nil and m
         msg = msg or m
 
-    verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers, condition_reason, rule_allow_modifiers, true, rule_has_on_response
+    verdict, msg, rule_id, rule_timeout, rule_desc, rule_block_modifiers, condition_reason, rule_allow_modifiers, true, rule_has_on_response, rule_redirects_destination, rule_cname_target
 
   eval_fn, metadata
 
@@ -152,18 +166,25 @@ details_of = (rules, req, decision_cfg=nil) ->
 
   last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers = nil, nil, nil, nil, nil, nil, nil, nil
   response_rule_ids = {}
+  -- Réécriture de destination : accumulée sur TOUTES les règles matchées (comme
+  -- response_rule_ids), car l'action cname a un verdict nil — le verdict allow
+  -- vient souvent d'une autre règle, mais la redirection s'applique quand même.
+  redirect_any, cname_target_any = false, nil
   for rule_fn in *rules
-    verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, matched, has_on_response = rule_fn req
+    verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, matched, has_on_response, redirects_destination, cname_target = rule_fn req
     if matched and has_on_response and rule_id
       response_rule_ids[#response_rule_ids + 1] = rule_id
+    if matched and redirects_destination
+      redirect_any = true
+      cname_target_any = cname_target or cname_target_any
     if verdict ~= nil
       if continue_mode or not first_match_wins
         last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers = verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers
       else
-        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids
+        return verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids, redirect_any, cname_target_any
   if last_verdict ~= nil
-    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers, response_rule_ids
-  false, "No matching rule (default deny)", nil, nil, nil, nil, nil, nil, response_rule_ids
+    return last_verdict, last_msg, last_rule_id, last_timeout, last_rule_desc, last_modifiers, last_condition_reason, last_allow_modifiers, response_rule_ids, redirect_any, cname_target_any
+  false, "No matching rule (default deny)", nil, nil, nil, nil, nil, nil, response_rule_ids, redirect_any, cname_target_any
 
 --- Compile une liste ordonnée de règles.
 compile_rules = (cfg) ->
@@ -188,7 +209,7 @@ decide = (rules, req, decision_cfg=nil) ->
   verdict, msg, rule_desc
 
 decide_meta = (rules, req, decision_cfg=nil) ->
-  verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids = details_of rules, req, decision_cfg
+  verdict, msg, rule_id, rule_timeout, rule_desc, rule_modifiers, condition_reason, allow_modifiers, response_rule_ids, redirects_destination, cname_target = details_of rules, req, decision_cfg
   {
     verdict:          verdict
     reason:           msg
@@ -199,6 +220,8 @@ decide_meta = (rules, req, decision_cfg=nil) ->
     description:      rule_desc
     modifiers:        rule_modifiers or {}
     allow_modifiers:  allow_modifiers or {}
+    redirects_destination: redirects_destination or false
+    cname_target:     cname_target
   }
 
 --- Retrouve la liste des callbacks on_response d'une règle (par rule_id).

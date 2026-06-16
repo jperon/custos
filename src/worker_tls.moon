@@ -59,6 +59,24 @@ cmd_for = nil
 run_cmd = nil
 events_wfd = nil
 
+-- Config et modules pour le second avis (validateur DNS) appliqué au SNI.
+-- Chargés paresseusement (comme nft) : un worker SNI sans règle `validate` ne
+-- paie jamais l'import du client DoH/UDP.
+second_opinion_cfg = nil
+validator_mod = nil
+cname_mod = nil
+filter_cfg = nil
+
+-- Cache de verdict du validateur, indexé par domaine. Impératif perf : avec le
+-- fast-path ct-mark, seul le PREMIER paquet de chaque flux monte en userspace ;
+-- sans cache, chaque nouveau flux vers un domaine sous `validate` referait un
+-- aller-retour upstream synchrone. Éviction paresseuse + plafond dur (même
+-- approche que quic_sessions).
+sni_verdict_cache = {}
+sni_verdict_count = 0
+SNI_VERDICT_TTL = 60       -- secondes (surchargé par second_opinion.verdict_ttl_s)
+SNI_VERDICT_MAX = 4096     -- plafond dur
+
 -- Supprime les sessions QUIC inactives depuis plus de QUIC_SESSION_TTL.
 -- @tparam[opt] number now Horodatage courant (injectable pour les tests).
 -- @treturn number Nombre de sessions évincées.
@@ -413,11 +431,14 @@ is_mail_ssl_port = (port) ->
 is_ipv6 = (ip) ->
   ip and ip\find ":", 1, true
 
+--- Renvoie la table decide_meta complète (ou nil + raison) pour un req SNI.
+-- @treturn table|nil meta
+-- @treturn string|nil err  Raison de l'indisponibilité (si meta nil).
 safe_filter_decide = (req) ->
-  return nil, "filter_unavailable", nil unless filter and filter.decide_meta
+  return nil, "filter_unavailable" unless filter and filter.decide_meta
   ok, meta = pcall filter.decide_meta, req
-  return nil, "filter_decide_exception", nil unless ok
-  meta.verdict, meta.reason, meta.rule_id
+  return nil, "filter_decide_exception" unless ok
+  meta
 
 ensure_nft_modules = ->
   unless cmd_for
@@ -461,6 +482,142 @@ apply_nft_allow = (src_ip, dst_ip, mac, policy, rule_id) ->
   return true if ok
   return false, err or "nft_cmd_failed" if policy and policy.nft_failure_policy == "fail-closed"
   true, "nft_failed_fail_open"
+
+-- ── Enforcement SNI : redirect (cname) et second avis (validate) ──────────
+--
+-- worker_tls applique au SNI la même protection que le DNS. Un verdict `allow`
+-- du filtre ne suffit pas : une règle SafeSearch a un verdict allow mais réécrit
+-- la RÉPONSE DNS (cname) ou délègue à un validateur. Comme on ne peut pas
+-- réécrire de façon transparente un flux TLS/QUIC déjà dirigé vers une IP, on
+-- BLOQUE (le client repasse alors par le DNS Custos, qui renvoie la bonne IP).
+
+--- Décision symbolique à partir de la table decide_meta (fonction PURE, testable).
+-- Ne fait aucune I/O : les cas "redirect"/"validate" sont résolus par l'appelant.
+-- @tparam table meta Table renvoyée par filter.decide_meta.
+-- @treturn string "accept" | "block" | "dnsonly" | "allow" | "redirect" | "validate"
+sni_action_for = (meta) ->
+  return "accept" unless meta              -- filtre indisponible → fail-open
+  v = meta.verdict
+  return "accept" if v == nil              -- exception filtre → fail-open
+  return "block" if v == false
+  return "dnsonly" if v == "dnsonly"
+  -- v == true (ou tout autre truthy)
+  return "redirect" if meta.redirects_destination
+  return "validate" if meta.allow_modifiers and meta.allow_modifiers.validate
+  "allow"
+
+-- Charge paresseusement le validateur (second avis DNS).
+ensure_validator = ->
+  unless validator_mod
+    ok, mod = pcall require, "doh.validator"
+    return false, "validator_require_failed" unless ok and mod and mod.query_verdict
+    validator_mod = mod
+  true, nil
+
+-- Charge paresseusement le module cname (résolution de la cible de redirection).
+ensure_cname = ->
+  unless cname_mod
+    ok, mod = pcall require, "filter.actions.cname"
+    return false, "cname_require_failed" unless ok and mod and mod.resolve_target_rrs
+    cname_mod = mod
+  true, nil
+
+-- Construit une requête DNS A brute (wire format) pour un domaine donné.
+build_validator_query = (domain) ->
+  parts = {}
+  txid = math.random 0, 0xFFFF
+  hi = math.floor txid / 256
+  lo = txid % 256
+  -- En-tête : id, flags RD=0x0100, qdcount=1, autres=0.
+  parts[#parts + 1] = string.char hi, lo, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+  for label in domain\gmatch "[^.]+"
+    parts[#parts + 1] = string.char #label
+    parts[#parts + 1] = label
+  parts[#parts + 1] = string.char 0
+  parts[#parts + 1] = string.char 0x00, 0x01, 0x00, 0x01  -- QTYPE A, QCLASS IN
+  table.concat parts
+
+-- Évince les entrées de cache de verdict expirées (borne mémoire).
+prune_sni_verdicts = (now=os.time!) ->
+  removed = 0
+  for domain, entry in pairs sni_verdict_cache
+    if entry.expires_at <= now
+      sni_verdict_cache[domain] = nil
+      removed += 1
+  sni_verdict_count -= removed
+  removed
+
+-- Réinitialise le cache de verdict (test seam).
+reset_sni_verdicts = ->
+  for k in pairs sni_verdict_cache
+    sni_verdict_cache[k] = nil
+  sni_verdict_count = 0
+
+-- Injecte l'état du validateur/cname (test seam : permet de fournir des mocks
+-- sans dépendre du vrai client UDP/DoH ni de config).
+set_validator_state = (state={}) ->
+  validator_mod = state.validator_mod if state.validator_mod != nil
+  cname_mod = state.cname_mod if state.cname_mod != nil
+  second_opinion_cfg = state.second_opinion_cfg if state.second_opinion_cfg != nil
+  filter_cfg = state.filter_cfg if state.filter_cfg != nil
+
+--- Interroge le validateur (second avis) pour un domaine SNI, avec cache.
+-- Fail-open : validateur indisponible/muet → non bloqué (cohérent avec le DNS).
+-- @tparam string domain     Domaine (SNI normalisé).
+-- @tparam table|boolean validate_modifier Résolveurs per-règle, ou true (globaux).
+-- @treturn boolean blocked
+-- @treturn string|nil reason
+validate_sni = (domain, validate_modifier) ->
+  return false, nil unless domain and domain != ""
+  now = os.time!
+  cached = sni_verdict_cache[domain]
+  if cached and cached.expires_at > now
+    return cached.blocked, cached.reason
+
+  ok_mod, mod_err = ensure_validator!
+  return false, mod_err unless ok_mod
+
+  resolvers = if type(validate_modifier) == "table"
+    validate_modifier
+  else
+    second_opinion_cfg and second_opinion_cfg.resolvers
+  return false, "no_validator_resolvers" unless resolvers and #resolvers > 0
+
+  budget = (second_opinion_cfg and second_opinion_cfg.budget_ms) or 1000
+  doh_budget = (second_opinion_cfg and second_opinion_cfg.doh_budget_ms) or 3000
+  dns_raw = build_validator_query domain
+  ok_q, blocked, reason = pcall validator_mod.query_verdict, dns_raw, resolvers, budget, doh_budget
+  blocked = ok_q and blocked or false  -- exception → fail-open
+  reason = ok_q and reason or nil
+
+  ttl = (second_opinion_cfg and second_opinion_cfg.verdict_ttl_s) or SNI_VERDICT_TTL
+  prune_sni_verdicts now if sni_verdict_count >= SNI_VERDICT_MAX
+  unless sni_verdict_cache[domain]
+    sni_verdict_count += 1
+  sni_verdict_cache[domain] = { :blocked, :reason, expires_at: now + ttl }
+  blocked, reason
+
+--- Vérifie si l'IP de destination du flux est DÉJÀ une cible légitime du CNAME.
+-- Cas du client au cache DNS périmé (mais correct) : il a résolu le domaine avant
+-- la mise en place de la règle et pointe quand même sur l'IP SafeSearch → on
+-- laisse passer plutôt que de bloquer inutilement.
+-- @tparam string target  Cible CNAME (meta.cname_target).
+-- @tparam string ip_dst  IP de destination du flux (string).
+-- @tparam number version 4 ou 6.
+-- @treturn boolean matched
+-- @treturn boolean resolved  false si la cible n'a pas pu être résolue.
+dst_matches_cname = (target, ip_dst, version) ->
+  return false, false unless target and target != "" and ip_dst and ip_dst != "unknown"
+  ok_mod = ensure_cname!
+  return false, false unless ok_mod
+  resolver_ip = cname_mod.pick_resolver_ip filter_cfg, nil
+  ok_r, rrs = pcall cname_mod.resolve_target_rrs, filter_cfg, target, resolver_ip
+  return false, false unless ok_r and rrs
+  list = if version == 6 then rrs.aaaa else rrs.a
+  return false, true unless list and #list > 0
+  for rdata in *list
+    return true, true if ipparse_ip.ip2s(rdata) == ip_dst
+  false, true
 
 -- ── Main Packet Handler ──────────────────────────────────
 
@@ -669,7 +826,9 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     ts: os.time!
     user: user_for_mac mac_str, ip_src_str, auth_sessions_file
   }
-  allowed, decide_reason, decide_rule = safe_filter_decide req
+  meta, decide_err = safe_filter_decide req
+  decide_reason = (meta and meta.reason) or decide_err
+  decide_rule = meta and meta.rule_id
 
   if not in_scope
     log_debug -> {
@@ -682,7 +841,10 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     }
     return NF_ACCEPT
 
-  if allowed == nil
+  action = sni_action_for meta
+
+  -- Filtre indisponible / exception → fail-open (cohérent avec le chemin DNS).
+  if action == "accept"
     log_warn -> {
       action: "sni_verdict_skip_filter_error"
       pkt_id: pkt_id
@@ -723,7 +885,8 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     }
     NF_ACCEPT
 
-  if allowed == true
+  -- Autorisation effective : injecte les sets nft puis ACCEPT.
+  do_allow = ->
     ok_nft, nft_reason = apply_nft_allow ip_src_str, ip_dst_str, mac_str, sni_policy, decide_rule
     unless ok_nft
       log_block -> {
@@ -759,14 +922,31 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
       nft_outcome: nft_reason or "ok"
     }
     sni_event "allow", sni_norm or sni, decide_reason, decide_rule
-    return NF_ACCEPT
+    NF_ACCEPT
 
-  if allowed == "dnsonly"
-    return block_or_skip "sni_verdict_block_dnsonly", "sni_verdict_skip_dnsonly",
-      decide_reason or "dnsonly", decide_rule or "dnsonly"
-
-  block_or_skip "sni_verdict_block", "sni_verdict_skip",
-    decide_reason or "denied", decide_rule
+  switch action
+    when "allow"
+      return do_allow!
+    when "redirect"
+      -- Le DNS aurait réécrit la réponse (SafeSearch/cname) vers une autre IP.
+      -- On ne peut pas rediriger un flux déjà établi → bloquer, SAUF si le client
+      -- pointe déjà sur l'IP cible (cache DNS périmé mais correct).
+      matched, resolved = dst_matches_cname meta.cname_target, ip_dst_str, ip.version
+      return do_allow! if matched
+      reason = if resolved then "sni_redirect_wrong_ip" else "sni_redirect_target_unresolved"
+      return block_or_skip "sni_verdict_block_redirect", "sni_verdict_skip_redirect",
+        decide_reason or reason, "sni_redirect_blocked"
+    when "validate"
+      blocked, vreason = validate_sni (sni_norm or sni), meta.allow_modifiers.validate
+      return do_allow! unless blocked
+      return block_or_skip "sni_verdict_block_validator", "sni_verdict_skip_validator",
+        vreason or "validator_blocked", "sni_validator_blocked"
+    when "dnsonly"
+      return block_or_skip "sni_verdict_block_dnsonly", "sni_verdict_skip_dnsonly",
+        decide_reason or "dnsonly", decide_rule or "dnsonly"
+    else  -- "block"
+      return block_or_skip "sni_verdict_block", "sni_verdict_skip",
+        decide_reason or "denied", decide_rule
 
 --- Entry point for the worker.
 -- @tparam number queue_num Queue number
@@ -794,6 +974,13 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
   sni_policy.mode = sni_policy.mode or "strict-443"
   sni_policy.protocols = sni_policy.protocols or "both"
   sni_policy.nft_failure_policy = sni_policy.nft_failure_policy or "fail-closed"
+
+  -- Config pour le second avis (validate) et la résolution de cible cname,
+  -- appliqués au SNI à l'identique du DNS.
+  ok_cfg, full_cfg = pcall require, "config"
+  if ok_cfg and full_cfg
+    filter_cfg = full_cfg
+    second_opinion_cfg = full_cfg.second_opinion
   log_info -> { action: "starting", queue: queue_num }
 
   unless sni_policy.enabled
@@ -814,4 +1001,6 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
   :extract_sni_from_tls, :extract_sni_from_quic, :quic_flow_key
   :prune_quic_sessions, :reset_quic_sessions, :seed_quic_session, :quic_session_count
   :reset_tcp_sessions, :feed_tls_segment
+  :sni_action_for, :validate_sni, :dst_matches_cname, :build_validator_query
+  :prune_sni_verdicts, :reset_sni_verdicts, :set_validator_state
 }

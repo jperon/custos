@@ -349,6 +349,32 @@ describe "filter.rule", ->
       assert.equals "r_allow", meta.rule_id
       assert.same { "r_safe", "r_allow" }, meta.response_rule_ids
 
+    it "expose redirects_destination + cname_target (cname + allow, comme SafeSearch)", ->
+      rules = rule_mod.compile_rules {
+        nft: { ip_timeout: "2m" }
+        macs: {}
+        rules: {
+          { rule_id: "safe", actions: { "cname", "allow" }, cname: "forcesafesearch.google.com", conditions: { to_domain: "google.com" } }
+        }
+      }
+      meta = rule_mod.decide_meta rules, { domain: "google.com" }
+      assert.is_true meta.verdict
+      assert.is_true meta.redirects_destination
+      assert.equals "forcesafesearch.google.com", meta.cname_target
+
+    it "redirects_destination=false pour allow/dns_strip", ->
+      rules = rule_mod.compile_rules {
+        nft: { ip_timeout: "2m" }
+        macs: {}
+        rules: {
+          { rule_id: "strip", actions: { "dns_strip", "allow" }, dns_strip: { rr_type: "AAAA" }, conditions: { to_domain: "ex.test" } }
+        }
+      }
+      meta = rule_mod.decide_meta rules, { domain: "ex.test" }
+      assert.is_true meta.verdict
+      assert.is_false meta.redirects_destination
+      assert.is_nil meta.cname_target
+
   -- ── on_response : noyau commun (worker_responses + doh) ──────────
   describe "on_response_for", ->
     it "retrouve les callbacks de la règle par rule_id", ->

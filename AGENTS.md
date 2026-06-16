@@ -125,6 +125,29 @@ suit la même convention sans toucher à `nft_compiler`.
 
 ---
 
+## Enforcement SNI (`src/worker_tls.moon`)
+
+`worker_tls` applique au SNI **exactement** la décision de `filter.decide_meta`
+(pas seulement le booléen verdict). Fonction pure pivot : `sni_action_for(meta)`
+→ `accept|block|dnsonly|allow|redirect|validate`.
+
+- `redirect` (action `cname`/SafeSearch, `meta.redirects_destination`) : on ne
+  peut pas rediriger un flux TLS/QUIC déjà établi → **block**, sauf si l'IP dst
+  est déjà une cible légitime du CNAME (`dst_matches_cname`, réutilise
+  `filter.actions.cname.resolve_target_rrs`). Cible injoignable → fail-closed.
+- `validate` (`meta.allow_modifiers.validate`) : second avis **synchrone** via
+  `doh.validator.query_verdict` sur une requête A wire (`build_validator_query`),
+  avec **cache de verdict par domaine** (`second_opinion.verdict_ttl_s`, défaut
+  60 s) car le fast-path ne fait monter que le 1ᵉʳ paquet de flux. Fail-open.
+- `meta.redirects_destination` + `meta.cname_target` sont exposés par
+  `filter.rule` (accumulés sur **toutes** les règles matchées, comme
+  `response_rule_ids` : l'action `cname` a un verdict nil, l'allow vient souvent
+  d'une autre règle). Seule l'action `cname` les pose ; `dns_strip` est ignoré
+  au SNI (anti-ECH, ne change pas la destination).
+- Ferme le contournement DoH-externe + `curl --http3-only --connect-to`.
+
+---
+
 ## Modules DoH (`src/doh/`)
 
 | Module | Rôle |

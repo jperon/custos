@@ -358,6 +358,15 @@ de la réponse validateur ou l'expiration de `budget_ms` (→ fail-open).
 | `budget_ms` | int | `80` | Attente max de la réponse validateur **UDP** avant fail-open |
 | `doh_budget_ms` | int | `3000` | Attente max pour les endpoints **DoH** `https://…` (TLS + HTTP/2 plus longs à établir) |
 | `fail_open` | bool | `true` | Validateur silencieux → laisser passer la réponse d'origine |
+| `verdict_ttl_s` | int | `60` | TTL du cache de verdict **côté SNI** (`worker_tls`) : durée de mémorisation d'un verdict validateur par domaine pour éviter un aller-retour upstream à chaque nouveau flux TLS/QUIC |
+
+> **Application au SNI (`worker_tls`).** Le second avis ne se limite pas au DNS :
+> `worker_tls` applique la **même** logique au niveau du SNI (cf. § [`sni`](#10-section-sni)).
+> Pour une règle `validate`, il interroge le validateur de façon **synchrone**
+> sur le SNI (requête A wire) au premier flux d'un domaine, puis met le verdict
+> en cache (`verdict_ttl_s`). Fail-open en cas de validateur muet/injoignable.
+> Il privilégie des résolveurs **UDP/53** (budget court) ; un endpoint DoH
+> `https://` synchrone sur ce hot-path est déconseillé.
 
 > **Émission de la requête dupliquée.** Elle se fait via un **socket RAW routé
 > par le noyau** (`SOCK_RAW`/`IP_HDRINCL` en IPv4, `IPV6_HDRINCL` en IPv6) avec
@@ -462,6 +471,25 @@ rapport aux règles de filtrage DNS compilées (`cv_rules_dispatch` /
   agit comme un filet de sécurité sur le trafic résiduel. Moins intrusif.
 
 Une valeur inconnue retombe sur le défaut `"residual"`.
+
+**Filtrage SNI = filtrage DNS.** `worker_tls` applique au SNI **exactement** la
+même décision que les workers DNS, à partir de `filter.decide_meta` :
+
+| Décision DNS pour le domaine (= SNI) | Action sur le flux TLS/QUIC |
+|--------------------------------------|------------------------------|
+| Autorisé (allow pur) | Laissé passer (IP/MAC insérées dans les sets nft) |
+| Refusé (deny / `dnsonly`) | Bloqué (`NF_DROP` en `strict-443`) |
+| **Réécriture de destination** (SafeSearch/`cname`) | **Bloqué** : on ne peut pas rediriger un flux déjà établi vers une IP. Le client est forcé de repasser par le DNS Custos, qui renvoie l'IP correcte. **Exception** : si l'IP de destination est **déjà** une cible légitime du CNAME (cache DNS périmé mais correct), le flux passe |
+| Soumis au **second avis** (`validate`) | Validateur interrogé synchroniquement sur le SNI ; bloqué si l'amont bloque, sinon laissé passer (fail-open si validateur muet). Cf. § [`second_opinion`](#7bis-section-second_opinion) (`verdict_ttl_s`) |
+
+Cela ferme le contournement où un client résout un domaine via un **DoH externe**
+(hors pipeline Custos) puis se connecte en HTTP/3 vers l'IP non filtrée : le SNI
+porte toujours le domaine, et `worker_tls` rejoue la décision DNS.
+
+> `dns_strip` (suppression de RR HTTPS/SVCB, anti-ECH) **n'est pas** traité comme
+> une redirection : il ne change pas la destination, le flux est laissé passer.
+> Une règle `cname` injoignable au moment de la vérification est **fail-closed**
+> côté redirect (bloquée), faute de pouvoir confirmer que le client vise la bonne IP.
 
 **Fragmentation TLS** — les ClientHello étalés sur plusieurs segments TCP
 (petit MTU, PMTUd cassé, ClientHello volumineux avec ECH / post-quantique) sont

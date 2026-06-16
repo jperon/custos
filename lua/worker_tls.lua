@@ -60,6 +60,14 @@ local sni_policy = nil
 local cmd_for = nil
 local run_cmd = nil
 local events_wfd = nil
+local second_opinion_cfg = nil
+local validator_mod = nil
+local cname_mod = nil
+local filter_cfg = nil
+local sni_verdict_cache = { }
+local sni_verdict_count = 0
+local SNI_VERDICT_TTL = 60
+local SNI_VERDICT_MAX = 4096
 local prune_quic_sessions
 prune_quic_sessions = function(now)
   if now == nil then
@@ -538,13 +546,13 @@ end
 local safe_filter_decide
 safe_filter_decide = function(req)
   if not (filter and filter.decide_meta) then
-    return nil, "filter_unavailable", nil
+    return nil, "filter_unavailable"
   end
   local ok, meta = pcall(filter.decide_meta, req)
   if not (ok) then
-    return nil, "filter_decide_exception", nil
+    return nil, "filter_decide_exception"
   end
-  return meta.verdict, meta.reason, meta.rule_id
+  return meta
 end
 local ensure_nft_modules
 ensure_nft_modules = function()
@@ -616,6 +624,180 @@ apply_nft_allow = function(src_ip, dst_ip, mac, policy, rule_id)
     return false, err or "nft_cmd_failed"
   end
   return true, "nft_failed_fail_open"
+end
+local sni_action_for
+sni_action_for = function(meta)
+  if not (meta) then
+    return "accept"
+  end
+  local v = meta.verdict
+  if v == nil then
+    return "accept"
+  end
+  if v == false then
+    return "block"
+  end
+  if v == "dnsonly" then
+    return "dnsonly"
+  end
+  if meta.redirects_destination then
+    return "redirect"
+  end
+  if meta.allow_modifiers and meta.allow_modifiers.validate then
+    return "validate"
+  end
+  return "allow"
+end
+local ensure_validator
+ensure_validator = function()
+  if not (validator_mod) then
+    local ok, mod = pcall(require, "doh.validator")
+    if not (ok and mod and mod.query_verdict) then
+      return false, "validator_require_failed"
+    end
+    validator_mod = mod
+  end
+  return true, nil
+end
+local ensure_cname
+ensure_cname = function()
+  if not (cname_mod) then
+    local ok, mod = pcall(require, "filter.actions.cname")
+    if not (ok and mod and mod.resolve_target_rrs) then
+      return false, "cname_require_failed"
+    end
+    cname_mod = mod
+  end
+  return true, nil
+end
+local build_validator_query
+build_validator_query = function(domain)
+  local parts = { }
+  local txid = math.random(0, 0xFFFF)
+  local hi = math.floor(txid / 256)
+  local lo = txid % 256
+  parts[#parts + 1] = string.char(hi, lo, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+  for label in domain:gmatch("[^.]+") do
+    parts[#parts + 1] = string.char(#label)
+    parts[#parts + 1] = label
+  end
+  parts[#parts + 1] = string.char(0)
+  parts[#parts + 1] = string.char(0x00, 0x01, 0x00, 0x01)
+  return table.concat(parts)
+end
+local prune_sni_verdicts
+prune_sni_verdicts = function(now)
+  if now == nil then
+    now = os.time()
+  end
+  local removed = 0
+  for domain, entry in pairs(sni_verdict_cache) do
+    if entry.expires_at <= now then
+      sni_verdict_cache[domain] = nil
+      removed = removed + 1
+    end
+  end
+  sni_verdict_count = sni_verdict_count - removed
+  return removed
+end
+local reset_sni_verdicts
+reset_sni_verdicts = function()
+  for k in pairs(sni_verdict_cache) do
+    sni_verdict_cache[k] = nil
+  end
+  sni_verdict_count = 0
+end
+local set_validator_state
+set_validator_state = function(state)
+  if state == nil then
+    state = { }
+  end
+  if state.validator_mod ~= nil then
+    validator_mod = state.validator_mod
+  end
+  if state.cname_mod ~= nil then
+    cname_mod = state.cname_mod
+  end
+  if state.second_opinion_cfg ~= nil then
+    second_opinion_cfg = state.second_opinion_cfg
+  end
+  if state.filter_cfg ~= nil then
+    filter_cfg = state.filter_cfg
+  end
+end
+local validate_sni
+validate_sni = function(domain, validate_modifier)
+  if not (domain and domain ~= "") then
+    return false, nil
+  end
+  local now = os.time()
+  local cached = sni_verdict_cache[domain]
+  if cached and cached.expires_at > now then
+    return cached.blocked, cached.reason
+  end
+  local ok_mod, mod_err = ensure_validator()
+  if not (ok_mod) then
+    return false, mod_err
+  end
+  local resolvers
+  if type(validate_modifier) == "table" then
+    resolvers = validate_modifier
+  else
+    resolvers = second_opinion_cfg and second_opinion_cfg.resolvers
+  end
+  if not (resolvers and #resolvers > 0) then
+    return false, "no_validator_resolvers"
+  end
+  local budget = (second_opinion_cfg and second_opinion_cfg.budget_ms) or 1000
+  local doh_budget = (second_opinion_cfg and second_opinion_cfg.doh_budget_ms) or 3000
+  local dns_raw = build_validator_query(domain)
+  local ok_q, blocked, reason = pcall(validator_mod.query_verdict, dns_raw, resolvers, budget, doh_budget)
+  blocked = ok_q and blocked or false
+  reason = ok_q and reason or nil
+  local ttl = (second_opinion_cfg and second_opinion_cfg.verdict_ttl_s) or SNI_VERDICT_TTL
+  if sni_verdict_count >= SNI_VERDICT_MAX then
+    prune_sni_verdicts(now)
+  end
+  if not (sni_verdict_cache[domain]) then
+    sni_verdict_count = sni_verdict_count + 1
+  end
+  sni_verdict_cache[domain] = {
+    blocked = blocked,
+    reason = reason,
+    expires_at = now + ttl
+  }
+  return blocked, reason
+end
+local dst_matches_cname
+dst_matches_cname = function(target, ip_dst, version)
+  if not (target and target ~= "" and ip_dst and ip_dst ~= "unknown") then
+    return false, false
+  end
+  local ok_mod = ensure_cname()
+  if not (ok_mod) then
+    return false, false
+  end
+  local resolver_ip = cname_mod.pick_resolver_ip(filter_cfg, nil)
+  local ok_r, rrs = pcall(cname_mod.resolve_target_rrs, filter_cfg, target, resolver_ip)
+  if not (ok_r and rrs) then
+    return false, false
+  end
+  local list
+  if version == 6 then
+    list = rrs.aaaa
+  else
+    list = rrs.a
+  end
+  if not (list and #list > 0) then
+    return false, true
+  end
+  for _index_0 = 1, #list do
+    local rdata = list[_index_0]
+    if ipparse_ip.ip2s(rdata) == ip_dst then
+      return true, true
+    end
+  end
+  return false, true
 end
 local handle_sni_packet
 handle_sni_packet = function(qh_ptr, nfad, pkt_id)
@@ -903,7 +1085,9 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     ts = os.time(),
     user = user_for_mac(mac_str, ip_src_str, auth_sessions_file)
   }
-  local allowed, decide_reason, decide_rule = safe_filter_decide(req)
+  local meta, decide_err = safe_filter_decide(req)
+  local decide_reason = (meta and meta.reason) or decide_err
+  local decide_rule = meta and meta.rule_id
   if not in_scope then
     log_debug(function()
       return {
@@ -917,7 +1101,8 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     end)
     return NF_ACCEPT
   end
-  if allowed == nil then
+  local action = sni_action_for(meta)
+  if action == "accept" then
     log_warn(function()
       return {
         action = "sni_verdict_skip_filter_error",
@@ -964,7 +1149,8 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     end)
     return NF_ACCEPT
   end
-  if allowed == true then
+  local do_allow
+  do_allow = function()
     local ok_nft, nft_reason = apply_nft_allow(ip_src_str, ip_dst_str, mac_str, sni_policy, decide_rule)
     if not (ok_nft) then
       log_block(function()
@@ -1008,10 +1194,32 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     sni_event("allow", sni_norm or sni, decide_reason, decide_rule)
     return NF_ACCEPT
   end
-  if allowed == "dnsonly" then
+  local _exp_0 = action
+  if "allow" == _exp_0 then
+    return do_allow()
+  elseif "redirect" == _exp_0 then
+    local matched, resolved = dst_matches_cname(meta.cname_target, ip_dst_str, ip.version)
+    if matched then
+      return do_allow()
+    end
+    local reason
+    if resolved then
+      reason = "sni_redirect_wrong_ip"
+    else
+      reason = "sni_redirect_target_unresolved"
+    end
+    return block_or_skip("sni_verdict_block_redirect", "sni_verdict_skip_redirect", decide_reason or reason, "sni_redirect_blocked")
+  elseif "validate" == _exp_0 then
+    local blocked, vreason = validate_sni((sni_norm or sni), meta.allow_modifiers.validate)
+    if not (blocked) then
+      return do_allow()
+    end
+    return block_or_skip("sni_verdict_block_validator", "sni_verdict_skip_validator", vreason or "validator_blocked", "sni_validator_blocked")
+  elseif "dnsonly" == _exp_0 then
     return block_or_skip("sni_verdict_block_dnsonly", "sni_verdict_skip_dnsonly", decide_reason or "dnsonly", decide_rule or "dnsonly")
+  else
+    return block_or_skip("sni_verdict_block", "sni_verdict_skip", decide_reason or "denied", decide_rule)
   end
-  return block_or_skip("sni_verdict_block", "sni_verdict_skip", decide_reason or "denied", decide_rule)
 end
 local run
 run = function(queue_num, ev_wfd, filter_data)
@@ -1062,6 +1270,11 @@ run = function(queue_num, ev_wfd, filter_data)
   sni_policy.mode = sni_policy.mode or "strict-443"
   sni_policy.protocols = sni_policy.protocols or "both"
   sni_policy.nft_failure_policy = sni_policy.nft_failure_policy or "fail-closed"
+  local ok_cfg, full_cfg = pcall(require, "config")
+  if ok_cfg and full_cfg then
+    filter_cfg = full_cfg
+    second_opinion_cfg = full_cfg.second_opinion
+  end
   log_info(function()
     return {
       action = "starting",
@@ -1104,5 +1317,12 @@ return {
   seed_quic_session = seed_quic_session,
   quic_session_count = quic_session_count,
   reset_tcp_sessions = reset_tcp_sessions,
-  feed_tls_segment = feed_tls_segment
+  feed_tls_segment = feed_tls_segment,
+  sni_action_for = sni_action_for,
+  validate_sni = validate_sni,
+  dst_matches_cname = dst_matches_cname,
+  build_validator_query = build_validator_query,
+  prune_sni_verdicts = prune_sni_verdicts,
+  reset_sni_verdicts = reset_sni_verdicts,
+  set_validator_state = set_validator_state
 }

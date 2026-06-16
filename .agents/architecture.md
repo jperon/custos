@@ -46,7 +46,7 @@ Worker DoH (opt., HTTPS/WolfSSL, port 8443) : résout via upstream DNS, applique
 | `mac_learner` | Table IP→MAC en mémoire + TTL ; répond sur socket Unix |
 | `worker_arp_sniffer` | Sniffer ARP/NDP passif ; alimente le pipe `learn` |
 | `worker_auth_queue` | NFQUEUE sur `QUEUE_AUTH` ; extrait MAC/IP, écrit dans `learn` (mac_learner) |
-| `worker_tls` | NFQUEUE sur `QUEUE_SNI` (optionnel) ; verdict SNI TLS/QUIC, insertions via pipe `nft` |
+| `worker_tls` | NFQUEUE sur `QUEUE_SNI` (optionnel) ; verdict SNI TLS/QUIC **aligné sur `filter.decide_meta`** (redirect/SafeSearch → block, second avis `validate` synchrone), insertions via pipe `nft` |
 | `worker_sip` | NFQUEUE sur `QUEUE_SIP` (optionnel) ; whiteliste IP proxy + médias SDP dans des sets nft par règle |
 | `worker_questions` | NFQUEUE sur `QUEUE_QUESTIONS` (1 worker par queue) |
 | `worker_responses` | NFQUEUE sur `QUEUE_RESPONSES` (1 worker par queue) ; insertions via pipe `nft` |

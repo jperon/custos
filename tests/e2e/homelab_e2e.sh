@@ -1003,6 +1003,27 @@ else
     assert_log_has "T124 verdict SNI block blocked.lan (worker=sni-tls)" \
         "$logs" "action=sni_verdict_block" "sni=blocked.lan" "worker=sni-tls"
 
+    # ── T124b : redirect cname (type SafeSearch) bloqué au SNI ────────────────
+    # redir.lan a un verdict allow côté filtre MAIS une règle cname (réécriture
+    # de destination). worker_tls ne peut pas rediriger un flux TLS établi → il
+    # bloque (le client devrait repasser par le DNS). La cible cname est non
+    # résolvable → fail-closed redirect. Reproduit le contournement DoH-externe
+    # + curl --connect-to : ici le SYN atteint 10.42.0.50 (autorisé), le SNI
+    # redir.lan est capturé, et le verdict redirect bloque.
+    ssh_vm "$E2E_IP_SERVUS" "
+        for i in 1 2; do
+            curl -sk --max-time 4 --resolve redir.lan:443:${SNI_DEST} \
+                'https://redir.lan/' >/dev/null 2>&1 || true
+            sleep 1
+        done
+    "
+    sleep 2
+    logs=$(custos_logs)
+    assert_log_has "T124b worker_tls capture le SNI redir.lan" \
+        "$logs" "action=sni_captured" "sni=redir.lan"
+    assert_log_has "T124b verdict SNI block_redirect redir.lan (worker=sni-tls)" \
+        "$logs" "action=sni_verdict_block_redirect" "sni=redir.lan" "worker=sni-tls"
+
     # ── T125 : QUIC Initial (UDP/443) ─────────────────────────────────────────
     # curl n'embarque pas HTTP/3 sur servus ; au lieu de dépendre d'un client
     # QUIC, on rejoue un vrai QUIC Initial (charge utile UDP capturée, cf.

@@ -244,6 +244,8 @@ _factory = function(cfg)
         worker = true,
         nft = false
       },
+      redirects_destination = true,
+      cname_target = target,
       eval = function(req)
         return nil, "CNAME → " .. tostring(target) .. " by rule: " .. tostring(rule.description or '?')
       end,
@@ -277,5 +279,7 @@ _factory = function(cfg)
 end
 return {
   schema = _schema,
-  factory = _factory
+  factory = _factory,
+  resolve_target_rrs = resolve_target_rrs,
+  pick_resolver_ip = pick_resolver_ip
 }
