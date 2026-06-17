@@ -197,7 +197,8 @@ Le serveur HTTPS est découpé pour isoler les responsabilités :
   défaut) : SO_RCVTIMEO/SO_SNDTIMEO sur le socket + échéance de handshake +
   budget total de `read_request` — sans quoi une connexion muette (préconnexion
   spéculative de navigateur) suspendrait l'enfant AUTH-conn indéfiniment.
-- `auth/handlers.moon` — handlers HTTP du portail (`handle_login/ping/logout/register`)
+- `auth/handlers.moon` — handlers HTTP du portail (`handle_login/ping/logout/register`
+  + `handle_challenge`/`handle_password_change`)
   + routage `handle_request` + helpers de présentation/formulaire (cookies, `parse_form`,
   pages login/register). C'est `server.handle_client` qui appelle `handle_request`.
   `/ping` tolère un token **authentique mais expiré** (3ᵉ retour de `token.verify`)
@@ -218,6 +219,25 @@ Le serveur HTTPS est découpé pour isoler les responsabilités :
   Pour les rendre visibles, `worker_responses` reçoit `events_wfd` (via `main.moon`)
   et émet une ligne d'événement `block` (`format_block_event`, raison
   « Filtered by upstream validator ») dans ces deux branches d'override.
+- `auth/challenge.moon` — challenge-réponse sans état pour le portail. Le mot de
+  passe n'est **jamais** transmis en clair : `GET /` sert un formulaire dont le JS
+  (`auth/pages.moon`, constantes `CRYPTO_JS`/`LOGIN_JS`/…) demande un nonce à
+  `POST /challenge`, calcule `response = HMAC(PBKDF2(password, salt, iter), nonce)`
+  (WebCrypto, **repli JS pur** si `crypto.subtle` absent — mini-navigateur captif),
+  puis poste `{user, nonce, response}` à `/login`. Le serveur réutilise le hash
+  PBKDF2 déjà stocké comme clé HMAC (`credentials.verify_response`) → SCRAM-lite.
+  `make_nonce`/`verify_nonce` : nonce signé (HMAC `session.key`), borné par
+  `auth.challenge_ttl` (120 s) et **lié à la MAC** du client. `salt_iter_for`
+  renvoie un salt factice déterministe pour les users inconnus (anti-énumération).
+  Repli plaintext (JS désactivé) accepté seulement si `auth.allow_plaintext_login`
+  (défaut true, recommandé false). **Conséquence** : la migration transparente de
+  hash au login (`needs_rehash`) disparaît — le serveur n'a plus le mot de passe ;
+  la migration se fait à l'inscription et au changement de mot de passe
+  (`POST /password`, hash calculé côté client, `credentials.set_record`). Le
+  changement de mot de passe **exige l'ancien mot de passe** (challenge-réponse,
+  jamais transmis en clair) : une session ouverte ne suffit pas. `GET /`
+  sert la page de succès si un cookie de session est valide (login → `location='/'`,
+  rafraîchissement sans renvoi de formulaire).
 - `auth/nft_auth_sets.moon` — sous-chaînes nft d'authentification par règle
   (`refresh_rule_auth_sets`, `delete_rule_auth_sets`, `refresh_nft`,
   `for_qualifying_auth_rules`). `refresh_nft` rafraîchit **les deux** familles

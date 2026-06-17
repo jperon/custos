@@ -12,8 +12,10 @@ ffi.cdef [[
 { :log_info, :log_warn } = require "log"
 token = require "auth.token"
 { :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
-{ :verify_password, :register_user, :update_user_hash } = require "auth.credentials"
-{ :page, :success_page, :css_content } = require "auth.pages"
+{ :verify_password, :verify_response, :register_user, :set_record, :parse_record, :valid_username } = require "auth.credentials"
+{ :make_nonce, :verify_nonce, :salt_iter_for } = require "auth.challenge"
+{ :page, :success_page, :css_content, :password_page, :password_changed_page
+  :CRYPTO_JS, :LOGIN_JS, :REGISTER_JS } = require "auth.pages"
 H = require "auth.html"
 { :delete_rule_auth_sets, :refresh_nft } = require "auth.nft_auth_sets"
 
@@ -32,6 +34,11 @@ signal_parent_reload = ->
   rc = ffi.C.kill parent_pid, SIGHUP
   rc == 0
 
+-- Notification de reload au parent, injectable pour les tests (state.notify_reload).
+notify_reload = (state) ->
+  fn = (state and state.notify_reload) or signal_parent_reload
+  fn!
+
 url_decode = (s) ->
   return "" unless s
   s = s\gsub "+", " "
@@ -46,11 +53,12 @@ parse_form = (body) ->
 
 register_form_page = (req) ->
   page {
-    H.form { method: "POST", action: "/register" },
+    H.form { id: "register-form", method: "POST", action: "/register" },
       H.label "Utilisateur ", H.input({ name: "user", type: "text" }), H.br!,
-      H.label "Mot de passe ", H.input({ name: "password", type: "password" }), H.br!,
+      H.label "Mot de passe ", H.input({ name: "password", type: "password", autocomplete: "new-password" }), H.br!,
       H.button { type: "submit" }, "S'inscrire"
     H.a { href: "/" }, "Déjà un compte ? Se connecter"
+    H.script CRYPTO_JS .. REGISTER_JS
   }
 
 register_success_page = (req) ->
@@ -61,35 +69,73 @@ register_success_page = (req) ->
 
 login_page = ->
   page {
-    H.form { method: "POST", action: "/login" },
-      H.label "Utilisateur ", H.input({ name: "user", type: "text" }), H.br!,
-      H.label "Mot de passe ", H.input({ name: "password", type: "password" }), H.br!,
+    H.form { id: "login-form", method: "POST", action: "/login" },
+      H.label "Utilisateur ", H.input({ name: "user", type: "text", autocomplete: "username" }), H.br!,
+      H.label "Mot de passe ", H.input({ name: "password", type: "password", autocomplete: "current-password" }), H.br!,
       H.button { type: "submit" }, "Connexion"
     H.a { href: "/register" }, "Inscription"
+    H.script CRYPTO_JS .. LOGIN_JS
   }
+
+-- Émet un challenge (nonce + salt/iter) pour l'utilisateur demandé. Réponse
+-- identique qu'il existe ou non (anti-énumération : salt factice déterministe).
+-- Le mot de passe n'est jamais transmis ; le client calcule la réponse à partir
+-- de ce challenge (cf. auth.pages, auth.challenge).
+handle_challenge = (req, peer_ip, peer_mac, state) ->
+  form = parse_form req.body
+  user = form.user
+  -- Repli : si aucun user n'est fourni mais qu'une session est valide (page de
+  -- changement de mot de passe), émettre le challenge pour l'utilisateur connecté.
+  unless user
+    cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
+    p = token.verify cookie_val, state.token_key
+    user = p and p.user
+  return 400, {}, "Missing user" unless user
+
+  nonce = make_nonce state.token_key, peer_mac, state.auth_cfg and state.auth_cfg.challenge_ttl
+  si = salt_iter_for state.secrets, state.token_key, user
+  body = "{\"nonce\":\"#{nonce}\",\"salt\":\"#{si.salt}\",\"iter\":#{si.iter}}"
+  200, { ["Content-Type"]: "application/json" }, body
+
+-- Repli plaintext autorisé ? Défaut true (compat ascendante) ; recommandé false.
+plaintext_allowed = (state) ->
+  v = state.auth_cfg and state.auth_cfg.allow_plaintext_login
+  if v == nil then true else v and true or false
+
+is_admin_user = (state, user) ->
+  admin_users = state.admin_users or {}
+  for _, u in ipairs admin_users
+    return true if u == user
+  state.admin_allow_all_when_empty and #admin_users == 0
 
 handle_login = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
   user = form.user
+  nonce = form.nonce
+  response = form.response
   pass = form.password
 
-  unless user and pass
+  unless user and ((nonce and response) or pass)
     return 400, {}, "Missing credentials"
 
   stored = state.secrets and state.secrets[user]
-  unless stored
-    return 401, {}, "Invalid credentials"
-  ok, needs_rehash = verify_password pass, stored
-  unless ok
-    return 401, {}, "Invalid credentials"
 
-  -- Migrate hash to current DEFAULT_ITER if needed (transparent to the user).
-  if needs_rehash and state.secrets_path
-    rh_ok, rh_err = update_user_hash user, pass, state.secrets_path
-    if rh_ok
-      log_info -> { action: "credentials_rehashed", user: user }
-    else
-      log_warn -> { action: "credentials_rehash_failed", user: user, err: tostring rh_err }
+  -- Voie challenge-réponse : le client a haché le mot de passe (jamais transmis).
+  if nonce and response
+    nok, nerr = verify_nonce state.token_key, peer_mac, nonce
+    unless nok
+      log_warn -> { action: "server_login_nonce_rejected", user: user, ip: peer_ip, err: nerr }
+      return 401, {}, "Invalid credentials"
+    -- verify_response gère stored=nil (user inconnu) en temps constant.
+    unless verify_response stored, nonce, response
+      return 401, {}, "Invalid credentials"
+  else
+    -- Repli plaintext (JS désactivé) : refusé si la politique l'interdit.
+    unless plaintext_allowed state
+      log_warn -> { action: "server_login_plaintext_refused", user: user, ip: peer_ip }
+      return 401, {}, "Invalid credentials"
+    unless stored and verify_password pass, stored
+      return 401, {}, "Invalid credentials"
 
   sessions = load_sessions state.sessions_file
   purge_expired sessions
@@ -126,11 +172,7 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     log_warn -> { action: "server_nft_sess_missing", peer: peer_ip, mac: mac }
 
   tok = token.generate "user", user, mac, token_expires, state.token_key
-  admin_users = state.admin_users or {}
-  user_in_admin = false
-  for _, u in ipairs admin_users
-    user_in_admin = true if u == user
-  is_admin = (state.admin_allow_all_when_empty and #admin_users == 0) or user_in_admin
+  is_admin = is_admin_user state, user
   200, {
     ["Content-Type"]: "text/html; charset=UTF-8"
     ["Set-Cookie"]: make_session_cookie tok
@@ -270,31 +312,114 @@ handle_refusals = (req, peer_ip, peer_mac, state) ->
 handle_register = (req, peer_ip, peer_mac, state) ->
   form = parse_form req.body
   user = form.user
+  salt = form.salt
+  iter = tonumber form.iter
+  hash = form.hash
   pass = form.password
 
-  unless user and pass
-    return 400, {}, "Missing credentials"
+  -- Voie hachage côté client (préférée) : le mot de passe n'est jamais transmis.
+  if user and salt and iter and hash
+    unless valid_username user
+      return 400, {}, "Adresse de courriel invalide."
+    if state.secrets and state.secrets[user]
+      return 409, {}, "Ce nom d'utilisateur est déjà pris."
+    record = "pbkdf2-sha256:#{iter}:#{salt}:#{hash}"
+    unless parse_record record
+      return 400, {}, "Invalid record"
+    ok, err = set_record user, record, state.secrets_path
+    unless ok
+      return 500, {}, err or "Registration failed"
+    state.secrets = state.secrets or {}
+    state.secrets[user] = record
+  else
+    -- Repli plaintext (JS désactivé) : refusé si la politique l'interdit.
+    unless user and pass
+      return 400, {}, "Missing credentials"
+    unless plaintext_allowed state
+      return 401, {}, "Plaintext registration disabled"
+    new_secrets, err = register_user user, pass, state.secrets_path, state.secrets
+    unless new_secrets
+      if err and err\match "déjà"
+        return 409, {}, err
+      return 500, {}, err or "Registration failed"
+    state.secrets = new_secrets
 
-  new_secrets, err = register_user user, pass, state.secrets_path, state.secrets
-  unless new_secrets
-    if err and err\match "déjà"
-      return 409, {}, err
-    return 500, {}, err or "Registration failed"
-
-  state.secrets = new_secrets
-  if not signal_parent_reload!
+  if not notify_reload state
     log_warn -> { action: "server_reload_signal_failed", parent_pid: tonumber(ffi.C.getppid!) }
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, register_success_page req
+
+-- Changement de mot de passe : derrière une session valide. Le client fournit
+-- l'enregistrement déjà haché (salt/iter/hash) ; le serveur ne voit jamais le
+-- mot de passe en clair (cohérent avec login).
+handle_password_change = (req, peer_ip, peer_mac, state) ->
+  cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
+  p = token.verify cookie_val, state.token_key
+  return 401, {}, "Authentication required" unless p and p.user
+  user = p.user
+
+  form = parse_form req.body
+  nonce = form.nonce
+  response = form.response
+  salt = form.salt
+  iter = tonumber form.iter
+  hash = form.hash
+  unless nonce and response and salt and iter and hash
+    return 400, {}, "Missing fields"
+
+  -- Exiger l'ancien mot de passe (challenge-réponse) : une session ouverte ne
+  -- suffit pas à changer le mot de passe.
+  nok = verify_nonce state.token_key, peer_mac, nonce
+  unless nok
+    return 401, {}, "Invalid credentials"
+  stored = state.secrets and state.secrets[user]
+  unless verify_response stored, nonce, response
+    return 401, {}, "Invalid credentials"
+
+  record = "pbkdf2-sha256:#{iter}:#{salt}:#{hash}"
+  unless parse_record record
+    return 400, {}, "Invalid record"
+
+  ok, err = set_record user, record, state.secrets_path
+  unless ok
+    log_warn -> { action: "server_password_change_failed", user: user, err: tostring err }
+    return 500, {}, "Password change failed"
+
+  -- Recharge les secrets en mémoire et signale au parent (reload des forks).
+  if state.secrets
+    state.secrets[user] = record
+  notify_reload state
+  log_info -> { action: "server_password_changed", user: user }
+  200, { ["Content-Type"]: "text/html; charset=UTF-8" }, password_changed_page!
 
 handle_request = (req, peer_ip, peer_mac, state) ->
   log_info -> { action: "server_request_received", path: req.path, method: req.method, peer_ip: peer_ip, peer_mac: peer_mac }
   if req.path == "/" and req.method == "GET"
+    -- Si une session est déjà valide, afficher la page de succès (évite de
+    -- redemander les identifiants après login et après un rafraîchissement).
+    cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
+    p = token.verify cookie_val, state.token_key
+    if p and p.user and p.mac and p.mac ~= "unknown"
+      sessions = load_sessions state.sessions_file
+      purge_expired sessions
+      if sessions[p.mac\lower!]
+        is_admin = is_admin_user state, p.user
+        body = success_page state.auth_cfg, os.time!, is_admin
+        return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, body
     return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, login_page!
   elseif req.path == "/css" and req.method == "GET"
     return 200, { ["Content-Type"]: "text/css" }, css_content
+  elseif req.path == "/challenge" and req.method == "POST"
+    return handle_challenge req, peer_ip, peer_mac, state
   elseif req.path == "/login" and req.method == "POST"
     log_info -> { action: "server_routing_to_handle_login", path: req.path, method: req.method }
     return handle_login req, peer_ip, peer_mac, state
+  elseif req.path == "/password" and req.method == "GET"
+    cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
+    p = token.verify cookie_val, state.token_key
+    return 302, { ["Location"]: "/" }, "" unless p and p.user
+    return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, password_page!
+  elseif req.path == "/password" and req.method == "POST"
+    return handle_password_change req, peer_ip, peer_mac, state
   elseif req.path == "/ping" and req.method == "GET"
     return handle_ping req, peer_ip, peer_mac, state
   elseif req.path == "/refusals" and req.method == "GET"
@@ -317,6 +442,6 @@ handle_request = (req, peer_ip, peer_mac, state) ->
   :make_session_cookie, :clear_session_cookie, :signal_parent_reload
   :url_decode, :parse_form, :register_form_page, :register_success_page, :login_page
   :handle_login, :handle_ping, :handle_logout, :handle_bye, :handle_register, :handle_request
-  :handle_refusals
+  :handle_refusals, :handle_challenge, :handle_password_change
   :COOKIE_NAME
 }

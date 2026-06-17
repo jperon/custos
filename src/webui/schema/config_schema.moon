@@ -100,6 +100,8 @@
     idle_timeout:       { type: "integer", label: "Timeout inactivité (s)",                                      default: 300, hint: "le cookie de session expire en même temps ; élargir pour tolérer des pings retardés" }
     close_grace:        { type: "integer", label: "Grâce fermeture fenêtre (s)",                                 default: 45, hint: "expiration appliquée quand la page de session est fermée ; un reload re-prolonge via le ping suivant" }
     client_timeout:     { type: "integer", label: "Timeout I/O client (s)",                                      default: 15, hint: "délai max de handshake TLS / lecture de requête par connexion ; libère les connexions muettes (préconnexions navigateur)" }
+    challenge_ttl:      { type: "integer", label: "TTL nonce challenge (s)",                                      default: 120, hint: "validité d'un nonce de login challenge-réponse (mot de passe haché côté client, jamais en clair)" }
+    allow_plaintext_login: { type: "boolean", label: "Autoriser login en clair (repli sans JS)",                 default: true, hint: "repli quand le JavaScript est désactivé ; passer à false pour garantir que le mot de passe ne quitte jamais le navigateur" }
     register_rate_limit:  { type: "integer", label: "Inscriptions max / fenêtre",                               default: 3 }
     register_rate_window: { type: "integer", label: "Fenêtre rate-limit (s)",                                    default: 300 }
     bridge_ifname:      { type: "string",  label: "Interface bridge",                                            default: "br0" }

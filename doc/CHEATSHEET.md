@@ -92,6 +92,15 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
 - Restart (`service custos restart`) :
   - Les sets nftables sont vidés au redémarrage, **mais** le worker AUTH rejoue automatiquement au démarrage toutes les sessions non expirées depuis `sessions.lua` → les clients n'ont pas à se réauthentifier (log : `sessions_replayed_to_nft`)
   - La clé de session (`/etc/custos/session.key`) persiste → les tokens existants restent valides
+- Portail captif — login challenge-réponse (mot de passe jamais en clair) :
+  `POST /challenge {user}` → `{nonce, salt, iter}` ; le client calcule
+  `HMAC(PBKDF2(password,salt,iter), nonce)` (WebCrypto, repli JS pur) puis
+  `POST /login {user, nonce, response}`. Serveur : `credentials.verify_response`
+  (le hash stocké sert de clé HMAC). Nonce signé/borné (`auth.challenge_ttl`),
+  lié à la MAC. Changement de mot de passe : `GET/POST /password` (hash côté
+  client, `set_record`, **exige l'ancien mot de passe** en challenge-réponse).
+  Repli plaintext seulement si `auth.allow_plaintext_login`
+  (défaut true → passer à false en prod). Plus de migration de hash au login.
 - Active nft sets: `ip4_allowed`, `ip6_allowed`, `mac4_allowed`, `mac6_allowed`,
   `authenticated_macs`, `authenticated_ips`, `authenticated_ips6`,
   `ip4_dest_whitelist`, `ip6_dest_whitelist`

@@ -287,6 +287,8 @@ DEFAULTS = {
     session_ttl: 0
     heartbeat_interval: 30
     idle_timeout: 300
+    challenge_ttl: 120
+    allow_plaintext_login: true
     secrets: "/etc/custos/secrets"
     sessions_file: "/tmp/sessions.lua"
     admin_users: {}
@@ -527,6 +529,11 @@ normalize = (cfg) ->
   cfg.auth.session_ttl = tonumber(cfg.auth.session_ttl) or auth_defaults.session_ttl
   cfg.auth.heartbeat_interval = tonumber(cfg.auth.heartbeat_interval) or auth_defaults.heartbeat_interval
   cfg.auth.idle_timeout = tonumber(cfg.auth.idle_timeout) or auth_defaults.idle_timeout
+  cfg.auth.challenge_ttl = tonumber(cfg.auth.challenge_ttl) or auth_defaults.challenge_ttl
+  if cfg.auth.allow_plaintext_login == nil
+    cfg.auth.allow_plaintext_login = auth_defaults.allow_plaintext_login
+  else
+    cfg.auth.allow_plaintext_login = coerce_boolean cfg.auth.allow_plaintext_login
   if cfg.sni.enabled == nil
     cfg.sni.enabled = sni_defaults.enabled
   else

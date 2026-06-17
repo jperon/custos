@@ -168,6 +168,24 @@ hash_password = (password, iterations) ->
   hash = pbkdf2 password, salt_hex, iterations
   "pbkdf2-sha256:#{iterations}:#{salt_hex}:#{hash}"
 
+--- Décompose un enregistrement stocké en ses champs.
+-- @tparam string stored Enregistrement pbkdf2-sha256:<iter>:<salt>:<hash>
+-- @treturn table|nil { algo, iter, salt_hex, hash_hex } ou nil si malformé
+parse_record = (stored) ->
+  return nil unless type(stored) == "string"
+  algo, iter_s, salt_hex, hash_hex = stored\match "^([^:]+):(%d+):([0-9a-f]+):([0-9a-f]+)$"
+  return nil unless algo == "pbkdf2-sha256" and iter_s and salt_hex and hash_hex
+  { :algo, iter: tonumber(iter_s), :salt_hex, :hash_hex }
+
+-- Comparaison hex en temps constant (évite les timing attacks).
+hex_equal_ct = (a, b) ->
+  return false unless type(a) == "string" and type(b) == "string"
+  return false if #a ~= #b
+  diff = 0
+  for i = 1, #a
+    diff = bit.bor diff, bit.bxor a\byte(i), b\byte(i)
+  diff == 0
+
 --- Vérifie un mot de passe contre un enregistrement stocké.
 -- Comparaison en temps constant pour éviter les attaques timing.
 -- @tparam string password Mot de passe en clair
@@ -175,17 +193,25 @@ hash_password = (password, iterations) ->
 -- @treturn boolean        true si le mot de passe correspond
 -- @treturn boolean        true si le hash doit être mis à jour (iter > DEFAULT_ITER)
 verify_password = (password, stored) ->
-  algo, iter_s, salt_hex, hash_hex = stored\match "^([^:]+):(%d+):([0-9a-f]+):([0-9a-f]+)$"
-  return false unless algo == "pbkdf2-sha256" and iter_s and salt_hex and hash_hex
-  iter = tonumber iter_s
-  computed = pbkdf2 password, salt_hex, iter
-  -- Comparaison en temps constant (évite les timing attacks)
-  return false if #computed ~= #hash_hex
-  diff = 0
-  for i = 1, #computed
-    diff = bit.bor diff, bit.bxor computed\byte(i), hash_hex\byte(i)
-  return false if diff != 0
-  true, iter > DEFAULT_ITER
+  rec = parse_record stored
+  return false unless rec
+  computed = pbkdf2 password, rec.salt_hex, rec.iter
+  return false unless hex_equal_ct computed, rec.hash_hex
+  true, rec.iter > DEFAULT_ITER
+
+--- Vérifie une réponse de challenge-réponse (hachage côté client).
+-- Le client a calculé dk = PBKDF2(password, salt, iter) puis
+-- response = HMAC(dk, nonce). Le serveur connaît dk (= hash stocké) et
+-- recompute HMAC(hex_to_bin(hash_hex), nonce) pour comparer en temps constant.
+-- @tparam string stored      Enregistrement stocké, ou nil/factice (user inconnu)
+-- @tparam string nonce       Nonce du challenge (message HMAC)
+-- @tparam string response_hex Réponse fournie par le client (hex)
+-- @treturn boolean true si la réponse correspond
+verify_response = (stored, nonce, response_hex) ->
+  rec = parse_record stored
+  return false unless rec and type(nonce) == "string" and type(response_hex) == "string"
+  expected = bin_to_hex hmac_bin hex_to_bin(rec.hash_hex), nonce
+  hex_equal_ct expected, response_hex
 
 -- ── Chargement du fichier secrets ──────────────────────────────────
 
@@ -301,4 +327,44 @@ update_user_hash = (username, password, secrets_path) ->
 
   true
 
-{ :pbkdf2, :hash_password, :verify_password, :update_user_hash, :load_secrets, :valid_username, :register_user }
+--- Écrit un enregistrement déjà calculé (hash côté client) pour un utilisateur.
+-- Le serveur ne voit jamais le mot de passe : le client fournit directement
+-- l'enregistrement pbkdf2-sha256:<iter>:<salt>:<hash>. Remplace la ligne de
+-- l'utilisateur si elle existe, l'ajoute sinon. Écriture atomique (temp+rename).
+-- @tparam string username     Nom d'utilisateur
+-- @tparam string record       Enregistrement pbkdf2-sha256:<iter>:<salt>:<hash>
+-- @tparam string secrets_path Chemin du fichier secrets
+-- @treturn true|nil   true en cas de succès, nil + message d'erreur sinon
+-- @treturn nil|string Message d'erreur
+set_record = (username, record, secrets_path) ->
+  return nil, "Enregistrement invalide." unless parse_record record
+  tmp_path = secrets_path .. ".new"
+  fh, err = io.open tmp_path, "w"
+  return nil, "Impossible de créer le fichier temporaire : #{err}" unless fh
+
+  found = false
+  existing = io.open secrets_path, "r"
+  if existing
+    for line in existing\lines!
+      u = line\match "^([^:]+):"
+      if u == username
+        fh\write "#{username}:#{record}\n"
+        found = true
+      else
+        fh\write line .. "\n"
+    existing\close!
+  fh\write "#{username}:#{record}\n" unless found
+
+  fh\close!
+  ffi.C.chmod tmp_path, 0x180  -- 0o600
+
+  ok, rename_err = os.rename tmp_path, secrets_path
+  unless ok
+    os.remove tmp_path
+    return nil, "Impossible de renommer le fichier secrets : #{rename_err}"
+
+  true
+
+{ :pbkdf2, :hash_password, :verify_password, :verify_response, :parse_record,
+  :update_user_hash, :set_record, :load_secrets, :valid_username, :register_user,
+  :DEFAULT_ITER, :DEFAULT_SALT_LEN, :hmac_bin, :bin_to_hex, :hex_to_bin }

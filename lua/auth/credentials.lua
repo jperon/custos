@@ -186,25 +186,56 @@ hash_password = function(password, iterations)
   local hash = pbkdf2(password, salt_hex, iterations)
   return "pbkdf2-sha256:" .. tostring(iterations) .. ":" .. tostring(salt_hex) .. ":" .. tostring(hash)
 end
-local verify_password
-verify_password = function(password, stored)
+local parse_record
+parse_record = function(stored)
+  if not (type(stored) == "string") then
+    return nil
+  end
   local algo, iter_s, salt_hex, hash_hex = stored:match("^([^:]+):(%d+):([0-9a-f]+):([0-9a-f]+)$")
   if not (algo == "pbkdf2-sha256" and iter_s and salt_hex and hash_hex) then
+    return nil
+  end
+  return {
+    algo = algo,
+    iter = tonumber(iter_s),
+    salt_hex = salt_hex,
+    hash_hex = hash_hex
+  }
+end
+local hex_equal_ct
+hex_equal_ct = function(a, b)
+  if not (type(a) == "string" and type(b) == "string") then
     return false
   end
-  local iter = tonumber(iter_s)
-  local computed = pbkdf2(password, salt_hex, iter)
-  if #computed ~= #hash_hex then
+  if #a ~= #b then
     return false
   end
   local diff = 0
-  for i = 1, #computed do
-    diff = bit.bor(diff, bit.bxor(computed:byte(i), hash_hex:byte(i)))
+  for i = 1, #a do
+    diff = bit.bor(diff, bit.bxor(a:byte(i), b:byte(i)))
   end
-  if diff ~= 0 then
+  return diff == 0
+end
+local verify_password
+verify_password = function(password, stored)
+  local rec = parse_record(stored)
+  if not (rec) then
     return false
   end
-  return true, iter > DEFAULT_ITER
+  local computed = pbkdf2(password, rec.salt_hex, rec.iter)
+  if not (hex_equal_ct(computed, rec.hash_hex)) then
+    return false
+  end
+  return true, rec.iter > DEFAULT_ITER
+end
+local verify_response
+verify_response = function(stored, nonce, response_hex)
+  local rec = parse_record(stored)
+  if not (rec and type(nonce) == "string" and type(response_hex) == "string") then
+    return false
+  end
+  local expected = bin_to_hex(hmac_bin(hex_to_bin(rec.hash_hex), nonce))
+  return hex_equal_ct(expected, response_hex)
 end
 local load_secrets
 load_secrets = function(path)
@@ -302,12 +333,56 @@ update_user_hash = function(username, password, secrets_path)
   end
   return true
 end
+local set_record
+set_record = function(username, record, secrets_path)
+  if not (parse_record(record)) then
+    return nil, "Enregistrement invalide."
+  end
+  local tmp_path = secrets_path .. ".new"
+  local fh, err = io.open(tmp_path, "w")
+  if not (fh) then
+    return nil, "Impossible de créer le fichier temporaire : " .. tostring(err)
+  end
+  local found = false
+  local existing = io.open(secrets_path, "r")
+  if existing then
+    for line in existing:lines() do
+      local u = line:match("^([^:]+):")
+      if u == username then
+        fh:write(tostring(username) .. ":" .. tostring(record) .. "\n")
+        found = true
+      else
+        fh:write(line .. "\n")
+      end
+    end
+    existing:close()
+  end
+  if not (found) then
+    fh:write(tostring(username) .. ":" .. tostring(record) .. "\n")
+  end
+  fh:close()
+  ffi.C.chmod(tmp_path, 0x180)
+  local ok, rename_err = os.rename(tmp_path, secrets_path)
+  if not (ok) then
+    os.remove(tmp_path)
+    return nil, "Impossible de renommer le fichier secrets : " .. tostring(rename_err)
+  end
+  return true
+end
 return {
   pbkdf2 = pbkdf2,
   hash_password = hash_password,
   verify_password = verify_password,
+  verify_response = verify_response,
+  parse_record = parse_record,
   update_user_hash = update_user_hash,
+  set_record = set_record,
   load_secrets = load_secrets,
   valid_username = valid_username,
-  register_user = register_user
+  register_user = register_user,
+  DEFAULT_ITER = DEFAULT_ITER,
+  DEFAULT_SALT_LEN = DEFAULT_SALT_LEN,
+  hmac_bin = hmac_bin,
+  bin_to_hex = bin_to_hex,
+  hex_to_bin = hex_to_bin
 }

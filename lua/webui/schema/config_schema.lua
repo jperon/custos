@@ -309,6 +309,18 @@ return {
       default = 15,
       hint = "délai max de handshake TLS / lecture de requête par connexion ; libère les connexions muettes (préconnexions navigateur)"
     },
+    challenge_ttl = {
+      type = "integer",
+      label = "TTL nonce challenge (s)",
+      default = 120,
+      hint = "validité d'un nonce de login challenge-réponse (mot de passe haché côté client, jamais en clair)"
+    },
+    allow_plaintext_login = {
+      type = "boolean",
+      label = "Autoriser login en clair (repli sans JS)",
+      default = true,
+      hint = "repli quand le JavaScript est désactivé ; passer à false pour garantir que le mot de passe ne quitte jamais le navigateur"
+    },
     register_rate_limit = {
       type = "integer",
       label = "Inscriptions max / fenêtre",
