@@ -252,11 +252,16 @@ local valid_mac
 valid_mac = function(mac)
   return mac and mac:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$")
 end
+local REDIRECT_WHITELIST = {
+  ["/admin/config/devices"] = true,
+  ["/admin/config/verdicts"] = true
+}
 local handle_devices_post
 handle_devices_post = function(req, state)
   local form = parse_form(req.body)
   local mac = (form.mac or ""):lower()
   local name = (form.name or ""):match("^%s*(.-)%s*$")
+  local back = REDIRECT_WHITELIST[form.redirect] and form.redirect or "/admin/config/devices"
   if not (valid_mac(mac)) then
     return 400, { }, "MAC invalide"
   end
@@ -281,7 +286,7 @@ handle_devices_post = function(req, state)
   end
   (state.reload or default_reload)()
   return 302, {
-    ["Location"] = "/admin/config/devices"
+    ["Location"] = back
   }, ""
 end
 return {

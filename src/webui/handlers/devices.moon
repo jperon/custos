@@ -172,10 +172,18 @@ default_reload = ->
 valid_mac = (mac) ->
   mac and mac\match "^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$"
 
+-- Cibles de retour autorisées après POST (anti open-redirect) : le formulaire
+-- peut être rendu depuis la page Appareils ou la page Verdicts.
+REDIRECT_WHITELIST = {
+  "/admin/config/devices":  true
+  "/admin/config/verdicts": true
+}
+
 handle_devices_post = (req, state) ->
   form = parse_form req.body
   mac  = (form.mac or "")\lower!
   name = (form.name or "")\match "^%s*(.-)%s*$"
+  back = REDIRECT_WHITELIST[form.redirect] and form.redirect or "/admin/config/devices"
   return 400, {}, "MAC invalide" unless valid_mac mac
   return 400, {}, "Nom requis"   if name == ""
 
@@ -194,7 +202,7 @@ handle_devices_post = (req, state) ->
   -- Reload SIGHUP au superviseur (injectable via state.reload pour les tests).
   (state.reload or default_reload)!
 
-  302, { ["Location"]: "/admin/config/devices" }, ""
+  302, { ["Location"]: back }, ""
 
 {
   :handle_devices_get, :handle_devices_post

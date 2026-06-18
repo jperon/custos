@@ -87,20 +87,30 @@ name_by_mac_for = (cfg) ->
     lower[name] = mac\lower! if type(mac) == "string"
   bidirectional lower
 
--- Cellule MAC / IP sur deux lignes (+ nom sur une 3ᵉ ligne si défini).
+-- Mini-formulaire d'édition du nom d'appareil (réutilise handle_devices_post via
+-- POST /admin/config/devices + redirect whitelisté vers /admin/config/verdicts).
+-- Champ pré-rempli si la MAC est déjà nommée (renommage), vide sinon.
+name_form = (mac, name) ->
+  attrs = { type: "text", name: "name", placeholder: "nom", required: "required", style: "margin:0; flex:1 1 auto; min-width:7rem; width:auto" }
+  attrs.value = esc name if name and name != ""
+  H.form { method: "POST", action: "/admin/config/devices", style: "margin:.2rem 0 0; display:flex; gap:.25rem" }, {
+    H.input { type: "hidden", name: "mac", value: esc mac }
+    H.input { type: "hidden", name: "redirect", value: "/admin/config/verdicts" }
+    H.input attrs
+    H.button { type: "submit", class: "btn btn-sm", title: "Enregistrer le nom" }, "+"
+  }
+
+-- Cellule MAC / IP sur deux lignes (+ formulaire de nom sur une 3ᵉ ligne).
 mac_cell = (v, name_by_mac) ->
   mac_l = (v.mac or "")\lower!
-  cell  = {
+  name  = name_by_mac[mac_l]
+  H.td {
     "data-sort": mac_l
     (esc v.mac)
     H.br!
     H.span { class: "muted" }, esc v.ip
+    name_form v.mac, name
   }
-  name = name_by_mac[mac_l]
-  if name and name != ""
-    cell[#cell + 1] = H.br!
-    cell[#cell + 1] = H.strong esc name
-  H.td cell
 
 render_row = (v, name_by_mac) ->
   H.tr {

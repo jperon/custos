@@ -103,23 +103,54 @@ name_by_mac_for = function(cfg)
   end
   return bidirectional(lower)
 end
+local name_form
+name_form = function(mac, name)
+  local attrs = {
+    type = "text",
+    name = "name",
+    placeholder = "nom",
+    required = "required",
+    style = "margin:0; flex:1 1 auto; min-width:7rem; width:auto"
+  }
+  if name and name ~= "" then
+    attrs.value = esc(name)
+  end
+  return H.form({
+    method = "POST",
+    action = "/admin/config/devices",
+    style = "margin:.2rem 0 0; display:flex; gap:.25rem"
+  }, {
+    H.input({
+      type = "hidden",
+      name = "mac",
+      value = esc(mac)
+    }),
+    H.input({
+      type = "hidden",
+      name = "redirect",
+      value = "/admin/config/verdicts"
+    }),
+    H.input(attrs),
+    H.button({
+      type = "submit",
+      class = "btn btn-sm",
+      title = "Enregistrer le nom"
+    }, "+")
+  })
+end
 local mac_cell
 mac_cell = function(v, name_by_mac)
   local mac_l = (v.mac or ""):lower()
-  local cell = {
+  local name = name_by_mac[mac_l]
+  return H.td({
     ["data-sort"] = mac_l,
     (esc(v.mac)),
     H.br(),
     H.span({
       class = "muted"
-    }, esc(v.ip))
-  }
-  local name = name_by_mac[mac_l]
-  if name and name ~= "" then
-    cell[#cell + 1] = H.br()
-    cell[#cell + 1] = H.strong(esc(name))
-  end
-  return H.td(cell)
+    }, esc(v.ip)),
+    name_form(v.mac, name)
+  })
 end
 local render_row
 render_row = function(v, name_by_mac)

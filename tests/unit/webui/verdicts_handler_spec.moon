@@ -88,6 +88,21 @@ describe "webui/handlers/verdicts", ->
       _, _, body = handle_verdicts_get make_req!, make_state!
       assert.truthy body\find("Tablette", 1, true)
 
+    it "rend un formulaire d'édition du nom (POST devices + redirect verdicts)", ->
+      write_file vline "aa:bb:cc", "10.0.0.9", "-", "x.com", "allow", "", 1, 100, 200
+      _, _, body = handle_verdicts_get make_req!, make_state!
+      assert.truthy body\find('action="/admin/config/devices"', 1, true)
+      assert.truthy body\find('value="/admin/config/verdicts"', 1, true)
+      assert.truthy body\find('name="name"', 1, true)
+
+    it "pré-remplit le formulaire avec le nom existant", ->
+      cfg = base_cfg!
+      cfg.filter.macs = { "Tablette": "AA:BB:CC" }
+      write_cfg cfg
+      write_file vline "aa:bb:cc", "10.0.0.9", "-", "x.com", "allow", "", 1, 100, 200
+      _, _, body = handle_verdicts_get make_req!, make_state!
+      assert.truthy body\find('value="Tablette"', 1, true)
+
     it "n'affiche pas de nom pour une MAC inconnue", ->
       cfg = base_cfg!
       cfg.filter.macs = { "Tablette": "AA:BB:CC" }

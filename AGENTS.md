@@ -334,7 +334,13 @@ Colonnes : **MAC / IP** (fusionnées dans une cellule à deux lignes via `mac_ce
 Raison, Vus, Première, Dernière. Le nom est résolu par `name_by_mac_for` qui
 applique `bidirectional` (ipparse.fun) à `filter.macs` (nom→MAC) pour obtenir
 l'accès inverse MAC→nom sans construire d'index explicite. Classe CSS `.muted`
-(`webui/css.moon`) pour l'IP secondaire.
+(`webui/css.moon`) pour l'IP secondaire. La cellule MAC/IP porte aussi un
+**mini-formulaire d'édition du nom** (`name_form`, pré-rempli si la MAC est déjà
+nommée) qui **réutilise `handle_devices_post`** : il poste vers
+`/admin/config/devices` avec un champ caché `redirect=/admin/config/verdicts`.
+`handle_devices_post` ne redirige que vers une cible de sa `REDIRECT_WHITELIST`
+(`/admin/config/devices` ou `/admin/config/verdicts`, anti open-redirect), défaut
+`devices`. Aucune route POST propre à Verdicts n'est donc nécessaire.
 
 ## Synchronisation de configuration (`sync/`)
 

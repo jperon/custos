@@ -159,6 +159,17 @@ describe "webui/handlers/devices", ->
       assert.equals "aa:bb:cc:dd:ee:ff", loaded.filter.macs.poste1
       assert.is_nil loaded.filter.macs.peron
 
+    it "redirige vers la cible whitelistée (verdicts) si demandée", ->
+      body = "mac=AA%3ABB%3ACC%3ADD%3AEE%3AFF&name=peron&redirect=%2Fadmin%2Fconfig%2Fverdicts"
+      status, hdrs = handle_devices_post make_req("POST", body), make_state!
+      assert.equals 302, status
+      assert.equals "/admin/config/verdicts", hdrs["Location"]
+
+    it "ignore une cible de redirection non whitelistée (défaut devices)", ->
+      body = "mac=AA%3ABB%3ACC%3ADD%3AEE%3AFF&name=peron&redirect=http%3A%2F%2Fevil"
+      _, hdrs = handle_devices_post make_req("POST", body), make_state!
+      assert.equals "/admin/config/devices", hdrs["Location"]
+
     it "retourne 500 si config_path invalide", ->
       state = { config_path: "/nonexistent.lua", events_dir: EVENTS_DIR, reload: -> }
       body = "mac=aa%3Abb%3Acc%3Add%3Aee%3Aff&name=peron"
