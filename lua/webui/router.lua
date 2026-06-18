@@ -30,6 +30,11 @@ do
   local _obj_0 = require("webui.handlers.lists")
   handle_lists_index, handle_lists_type, handle_list_get, handle_list_post, handle_list_new_get, handle_list_new_post = _obj_0.handle_lists_index, _obj_0.handle_lists_type, _obj_0.handle_list_get, _obj_0.handle_list_post, _obj_0.handle_list_new_get, _obj_0.handle_list_new_post
 end
+local handle_devices_get, handle_devices_post
+do
+  local _obj_0 = require("webui.handlers.devices")
+  handle_devices_get, handle_devices_post = _obj_0.handle_devices_get, _obj_0.handle_devices_post
+end
 local SCALAR_SECTIONS = {
   runtime = true,
   nfqueue = true,
@@ -70,6 +75,14 @@ dispatch = function(req, state)
   end
   if path == "/admin/system/reload" and method == "POST" then
     return handle_reload(req, state)
+  end
+  if path == "/admin/config/devices" then
+    if method == "GET" then
+      return handle_devices_get(req, state)
+    end
+    if method == "POST" then
+      return handle_devices_post(req, state)
+    end
   end
   if path == "/admin/config/" or path == "/admin/config" then
     return handle_config_index(req, state)

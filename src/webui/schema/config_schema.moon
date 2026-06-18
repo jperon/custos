@@ -163,7 +163,7 @@
     dest_whitelist:  { type: "string_list", label: "IPs/CIDRs toujours autorisées" }
     allowed_domains: { type: "string_list", label: "Domaines autorisés par défaut", default: '{"local","lan","home.arpa"}' }
     nets:      { type: "named_map", label: "Réseaux nommés",       value_type: "string_list",  hint: "alias → liste de CIDRs" }
-    macs:      { type: "named_map", label: "MACs nommées",         value_type: "string_list",  hint: "alias → liste de MACs" }
+    macs:      { type: "named_map", label: "MACs nommées",         value_type: "string",       hint: "alias → MAC (résoluble dans from_mac/maclists)" }
     times:     { type: "named_map", label: "Plages horaires",      value_type: "time_window",  hint: "nom → {HH:MM, HH:MM}" }
     users:     { type: "named_map", label: "Utilisateurs",         value_type: "string",       hint: "alias → email" }
     userlists: { type: "named_map", label: "Listes d'utilisateurs",value_type: "string_list",  hint: "alias → liste d'emails" }

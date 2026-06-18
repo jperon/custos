@@ -142,12 +142,11 @@ describe "webui/handlers/filter", ->
 
   describe "handle_macs_post", ->
 
-    it "ajoute une entrée MAC (liste de valeurs)", ->
-      body_str = "action=save&newkey=phones&newval=aa%3Abb%3Acc%3Add%3Aee%3Aff%0A11%3A22%3A33%3A44%3A55%3A66"
+    it "ajoute une entrée MAC (valeur scalaire, résoluble dans from_mac)", ->
+      body_str = "action=save&newkey=peron&newval=aa%3Abb%3Acc%3Add%3Aee%3Aff"
       handle_macs_post make_req("POST", body_str), make_state!
       loaded = (read_config CFG_PATH)
-      assert.not_nil loaded.filter.macs.phones
-      assert.truthy type(loaded.filter.macs.phones) == "table"
+      assert.equals "aa:bb:cc:dd:ee:ff", loaded.filter.macs.peron
 
   -- ── Times GET/POST ────────────────────────────────────────────────────────
 

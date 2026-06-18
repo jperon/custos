@@ -22,6 +22,7 @@
   :handle_lists_type,
   :handle_list_get,     :handle_list_post,
   :handle_list_new_get, :handle_list_new_post } = require "webui.handlers.lists"
+{ :handle_devices_get, :handle_devices_post } = require "webui.handlers.devices"
 
 -- Sections scalaires éditables via le handler générique
 SCALAR_SECTIONS = {
@@ -57,6 +58,11 @@ dispatch = (req, state) ->
     return handle_status req, state
   if path == "/admin/system/reload" and method == "POST"
     return handle_reload req, state
+
+  -- Appareils vus sur le réseau (enregistrement MAC → filter.macs)
+  if path == "/admin/config/devices"
+    return handle_devices_get(req, state)  if method == "GET"
+    return handle_devices_post(req, state) if method == "POST"
 
   -- Index config
   if path == "/admin/config/" or path == "/admin/config"

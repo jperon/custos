@@ -532,8 +532,8 @@ return {
     macs = {
       type = "named_map",
       label = "MACs nommées",
-      value_type = "string_list",
-      hint = "alias → liste de MACs"
+      value_type = "string",
+      hint = "alias → MAC (résoluble dans from_mac/maclists)"
     },
     times = {
       type = "named_map",

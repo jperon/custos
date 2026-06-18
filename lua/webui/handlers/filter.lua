@@ -249,7 +249,7 @@ make_get = function(section_key, title, desc, value_label, value_hint)
   end
 end
 local handle_nets_get = make_get("nets", "Réseaux nommés", "Groupes de CIDRs IPv4/IPv6 réutilisables dans les conditions.", "CIDRs (un par ligne)", "ex: 192.168.0.0/16")
-local handle_macs_get = make_get("macs", "MACs nommées", "Groupes d'adresses MAC réutilisables.", "MACs (une par ligne)", "ex: aa:bb:cc:dd:ee:ff")
+local handle_macs_get = make_get("macs", "MACs nommées", "Associe un alias à une adresse MAC (utilisable dans les règles et maclists).", "MAC", "ex: aa:bb:cc:dd:ee:ff")
 local handle_users_get = make_get("users", "Utilisateurs", "Associe un alias court à un email d'authentification.", "Email", "ex: alice@example.com")
 local handle_times_get
 handle_times_get = function(req, state)
@@ -343,7 +343,7 @@ make_post = function(section_key, is_list_value)
   end
 end
 local handle_nets_post = make_post("nets", true)
-local handle_macs_post = make_post("macs", true)
+local handle_macs_post = make_post("macs", false)
 local handle_users_post = make_post("users", false)
 local handle_times_post
 handle_times_post = function(req, state)

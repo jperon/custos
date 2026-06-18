@@ -26,7 +26,6 @@ body {
   font-size: 15px; line-height: 1.55; color: var(--text);
   background: var(--bg);
   padding: 1.25rem;
-  max-width: 1100px; margin: 0 auto;
 }
 
 a { color: var(--accent); text-decoration: none; }

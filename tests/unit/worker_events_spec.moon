@@ -3,7 +3,12 @@
 -- note_block (dédup, ordre récent-d'abord, troncature, ignore allow),
 -- flush_recent (format TSV, écriture atomique) et l'extraction par process_line.
 
-{ :process_line, :note_block, :flush_recent } = require "worker_events"
+{ :process_line, :note_block, :flush_recent, :note_device, :flush_devices } = require "worker_events"
+
+count_keys = (t) ->
+  n = 0
+  n += 1 for _ in pairs t
+  n
 
 TMP = "tmp/worker_events_recent_spec"
 
@@ -113,3 +118,84 @@ describe "worker_events.process_line (extraction des refus)", ->
     for _ in pairs agg
       cnt += 1
     assert.equals 1, cnt
+
+  it "note l'appareil (2e valeur de retour) pour toute décision", ->
+    agg, devices = {}, {}
+    line = "150\tallow\tok.com\taa:bb:cc:dd:ee:ff\t10.0.0.1\t8.8.8.8\t0\tbob\tipv4\t\trule1"
+    _blocked, device_noted = process_line line, agg, nil, devices
+    assert.is_true device_noted
+    d = devices["aa:bb:cc:dd:ee:ff"]
+    assert.is_not_nil d
+    assert.equals "10.0.0.1", d.last_ip
+    assert.equals "bob", d.last_user
+    assert.equals "ok.com", d.last_qname
+    assert.equals "allow", d.last_decision
+
+describe "worker_events.note_device", ->
+  it "ignore mac vide ou unknown", ->
+    devices = {}
+    assert.is_false note_device devices, "", "ip", "u", "q", "allow", "1"
+    assert.is_false note_device devices, "unknown", "ip", "u", "q", "allow", "1"
+    assert.equals 0, count_keys devices
+
+  it "insère un nouvel appareil", ->
+    devices = {}
+    assert.is_true note_device devices, "mac1", "10.0.0.1", "bob", "ex.com", "allow", "100"
+    d = devices.mac1
+    assert.equals 1, d.count
+    assert.equals "100", d.first_ts
+    assert.equals "100", d.last_ts
+    assert.equals "ex.com", d.last_qname
+
+  it "upsert : incrémente count et met à jour les champs last_*", ->
+    devices = {}
+    note_device devices, "mac1", "10.0.0.1", "bob", "a.com", "allow", "100"
+    note_device devices, "mac1", "10.0.0.2", "bob", "b.com", "block", "150"
+    d = devices.mac1
+    assert.equals 2, d.count
+    assert.equals "100", d.first_ts        -- inchangé
+    assert.equals "150", d.last_ts
+    assert.equals "10.0.0.2", d.last_ip
+    assert.equals "b.com", d.last_qname
+    assert.equals "block", d.last_decision
+
+  it "tronque à DEVICES_MAX (256) en évinçant le plus ancien last_ts", ->
+    devices = {}
+    for i = 1, 300
+      note_device devices, "mac#{i}", "ip", "u", "q", "allow", tostring i
+    assert.equals 256, count_keys devices
+    assert.is_nil devices.mac1            -- le plus ancien a été évincé
+    assert.is_not_nil devices.mac300
+
+describe "worker_events.flush_devices", ->
+  path = "#{TMP}/recent-devices.tsv"
+
+  before_each -> os.execute "mkdir -p '#{TMP}'"
+  after_each ->
+    os.remove path
+    os.remove "#{path}.tmp"
+
+  it "écrit une ligne TSV au bon format", ->
+    devices = {
+      mac1: { mac: "aa:bb", last_ip: "10.0.0.1", last_user: "bob", last_qname: "x.com",
+              last_decision: "allow", count: 4, first_ts: "100", last_ts: "200" }
+    }
+    flush_devices devices, TMP
+    fh = io.open path, "r"
+    assert.is_not_nil fh
+    content = fh\read "*a"
+    fh\close!
+    assert.equals "aa:bb\t10.0.0.1\tbob\tx.com\tallow\t4\t100\t200\n", content
+
+  it "écrit atomiquement (pas de .tmp résiduel)", ->
+    flush_devices { m: { mac: "m", last_ip: "i", last_user: "u", last_qname: "q",
+                         last_decision: "allow", count: 1, first_ts: "1", last_ts: "1" } }, TMP
+    tmp_fh = io.open "#{path}.tmp", "r"
+    assert.is_nil tmp_fh
+    if tmp_fh then tmp_fh\close!
+
+  it "map vide → fichier vide", ->
+    flush_devices {}, TMP
+    fh = io.open path, "r"
+    assert.equals "", fh\read "*a"
+    fh\close!

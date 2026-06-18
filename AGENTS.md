@@ -273,10 +273,33 @@ pages dédiées car ils ont leurs propres formulaires multi-lignes — l'index l
 liste sous « Filtre DNS — éditeurs dédiés ».
 
 - Routeur + dispatch : `src/webui/router.moon`
-- Handlers : `src/webui/handlers/{dashboard,system,config,filter,rules,lists,admin_auth}.moon`
+- Handlers : `src/webui/handlers/{dashboard,system,config,filter,rules,lists,devices,admin_auth}.moon`
 - Sérialisation MoonScript : `src/webui/serializer.moon` (+ `schema/`). `serializer`
   écrit du **MoonScript** (`{ clé: valeur }`), pas du Lua, pour rester cohérent
   avec les `config.moon` écrits à la main.
+
+### Page « Appareils » (`src/webui/handlers/devices.moon`)
+
+`GET/POST /admin/config/devices` facilite l'enregistrement des clients réseau.
+Elle lit `recent-devices.tsv` (ring-buffer écrit par `worker_events`, cf.
+[.agents/workers.md](.agents/workers.md)) via `read_devices` et affiche un tableau
+triable/filtrable (JS inline, sans dépendance) des appareils vus : Nom, MAC, IP,
+user, dernier domaine, décision, vus, dernière activité. La colonne **Nom** est
+remplie par recoupement avec `filter.macs` (`mac_name_index`, map inverse
+MAC→nom) ; une mini-form POST `{mac, name}` (champ texte pré-rempli si déjà
+nommé, bouton « + ») permet de l'ajouter **ou de renommer** un appareil existant.
+`handle_devices_post` valide la MAC, retire d'abord tout nom string pointant déjà
+vers cette MAC (renommage idempotent), écrit
+`cfg.filter.macs[name] = mac` (**string unique**, pas une liste) puis recharge via
+`state.reload` (SIGHUP ; injectable pour les tests). Le DSL `auth.html`
+n'échappant rien, `devices.moon` échappe lui-même les valeurs (`esc`).
+
+**Contrat `filter.macs` = nom→MAC unique** (pas une liste) : `from_mac.moon` fait
+`(mac_map[alias] or alias)\lower!`, qui plante sur une table. L'éditeur
+`MACs nommées` (`handle_macs_post`, `is_list_value=false`) et le schéma
+(`config_schema.macs.value_type = "string"`) sont alignés sur ce contrat. Un alias
+ainsi défini est résoluble dans `from_macs {…}` / `from_mac_list` (chaque entrée
+passe par `from_mac` via `make_plural`), mélangeable avec des MAC brutes.
 
 ## Synchronisation de configuration (`sync/`)
 

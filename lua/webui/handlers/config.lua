@@ -370,6 +370,11 @@ handle_config_index = function(req, state)
       }),
       H.li({
         H.a({
+          href = "/admin/config/devices"
+        }, "Appareils vus / enregistrement MAC")
+      }),
+      H.li({
+        H.a({
           href = "/admin/config/filter/users"
         }, "Utilisateurs")
       }),

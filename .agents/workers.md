@@ -95,6 +95,9 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 - **In :** pipe `events` (événements DNS de `worker_questions`).
 - **Out :** agrège et persiste les événements sous `events.dir` (rotation : `events.max_age_hours`, purge si espace libre < `events.min_free_pct`). Consommé par l'interface admin.
+- **Ring-buffers temps réel** dans `events.dir`, écrits par flush atomique throttlé (`RECENT_MIN_INTERVAL`) et au SIGTERM :
+  - `recent-blocks.tsv` — 50 derniers refus (`note_block`/`flush_recent`), lu par `auth/handlers.handle_refusals` (`/refusals`).
+  - `recent-devices.tsv` — jusqu'à `DEVICES_MAX` (256) appareils vus, **toutes décisions** (`note_device`/`flush_devices`), keyé par MAC : `mac\tlast_ip\tlast_user\tlast_qname\tlast_decision\tcount\tfirst_ts\tlast_ts`. Lu par la page admin `/admin/config/devices` (`webui/handlers/devices.moon`) pour l'enregistrement des MAC.
 
 ## worker_arp_sniffer (`src/worker_arp_sniffer.moon`)
 

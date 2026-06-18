@@ -114,7 +114,7 @@ make_get = (section_key, title, desc, value_label, value_hint) ->
     200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page section_title, body
 
 handle_nets_get   = make_get "nets",   "Réseaux nommés",        "Groupes de CIDRs IPv4/IPv6 réutilisables dans les conditions.", "CIDRs (un par ligne)", "ex: 192.168.0.0/16"
-handle_macs_get   = make_get "macs",   "MACs nommées",          "Groupes d'adresses MAC réutilisables.",                         "MACs (une par ligne)",  "ex: aa:bb:cc:dd:ee:ff"
+handle_macs_get   = make_get "macs",   "MACs nommées",          "Associe un alias à une adresse MAC (utilisable dans les règles et maclists).", "MAC",                   "ex: aa:bb:cc:dd:ee:ff"
 handle_users_get  = make_get "users",  "Utilisateurs",          "Associe un alias court à un email d'authentification.",        "Email",                 "ex: alice@example.com"
 handle_times_get  = (req, state) ->
   cfg, err = read_config state.config_path
@@ -179,7 +179,7 @@ make_post = (section_key, is_list_value) ->
     302, { ["Location"]: "/admin/config/filter/#{section_key}" }, ""
 
 handle_nets_post  = make_post "nets",  true
-handle_macs_post  = make_post "macs",  true
+handle_macs_post  = make_post "macs",  false
 handle_users_post = make_post "users", false
 
 handle_times_post = (req, state) ->

@@ -40,6 +40,12 @@ RECENT_MAX          = 50              -- nombre max d'entrées conservées
 RECENT_FILE         = "recent-blocks.tsv"
 RECENT_MIN_INTERVAL = 5              -- secondes : throttle minimal entre flushes
 
+-- Ring buffer « devices » des appareils vus (toutes décisions), exposé au worker
+-- AUTH (page admin /admin/config/devices) pour faciliter l'enregistrement des
+-- MAC dans filter.macs. Indexé par MAC, écrit dans events_dir.
+DEVICES_MAX  = 256                  -- nombre max d'appareils conservés
+DEVICES_FILE = "recent-devices.tsv"
+
 -- Buffer de lecture partagé (alloué une seule fois au chargement du module)
 _read_buf = ffi.new "uint8_t[?]", READ_BUF
 
@@ -136,7 +142,70 @@ flush_recent = (recent, events_dir) ->
   fh\close!
   os.rename tmp, path
 
-process_line = (line, agg, recent) ->
+--- Met à jour la map des appareils vus pour une requête DNS (fonction pure).
+-- Upsert keyé par MAC : incrémente count, met à jour les champs last_*. Ignore
+-- les MAC vides/inconnues. Tronque à DEVICES_MAX en évinçant l'appareil le moins
+-- récemment vu (plus petit last_ts).
+-- @tparam table  devices  Map { mac → {mac, last_ip, last_user, last_qname,
+--                          last_decision, count, first_ts, last_ts} }
+-- @tparam string mac       MAC du client
+-- @tparam string src_ip    IP source
+-- @tparam string user      Utilisateur authentifié (ou "-"/"")
+-- @tparam string qname     Domaine demandé
+-- @tparam string decision  "allow" ou "block"
+-- @tparam string ts        Timestamp (chaîne) de la requête
+-- @treturn boolean         true si un appareil a été noté
+note_device = (devices, mac, src_ip, user, qname, decision, ts) ->
+  return false unless mac and mac ~= "" and mac ~= "unknown"
+
+  e = devices[mac]
+  if e
+    e.count        += 1
+    e.last_ip       = src_ip
+    e.last_user     = user
+    e.last_qname    = qname
+    e.last_decision = decision
+    e.last_ts       = ts
+    return true
+
+  devices[mac] = {
+    :mac, last_ip: src_ip, last_user: user, last_qname: qname,
+    last_decision: decision, count: 1, first_ts: ts, last_ts: ts
+  }
+
+  -- Troncature : évincer l'appareil au plus petit last_ts si on dépasse la borne.
+  n = 0
+  n += 1 for _ in pairs devices
+  if n > DEVICES_MAX
+    oldest_key, oldest_ts = nil, nil
+    for k, v in pairs devices
+      v_ts = tonumber(v.last_ts) or 0
+      if oldest_ts == nil or v_ts < oldest_ts
+        oldest_key, oldest_ts = k, v_ts
+    devices[oldest_key] = nil if oldest_key
+  true
+
+--- Écrit atomiquement recent-devices.tsv (temp + rename).
+-- Une ligne par appareil :
+--   mac\tlast_ip\tlast_user\tlast_qname\tlast_decision\tcount\tfirst_ts\tlast_ts.
+-- @tparam table  devices    Map des appareils vus
+-- @tparam string events_dir Répertoire de sortie
+-- @treturn nil
+flush_devices = (devices, events_dir) ->
+  path = "#{events_dir}/#{DEVICES_FILE}"
+  tmp  = "#{path}.tmp"
+  fh, err = io.open tmp, "w"
+  unless fh
+    log_warn -> { action: "devices_open_failed", path: tmp, err: err }
+    return
+  parts = {}
+  for _, e in pairs devices
+    parts[#parts + 1] = "#{e.mac}\t#{e.last_ip or ""}\t#{e.last_user or ""}\t#{e.last_qname or ""}\t#{e.last_decision or ""}\t#{e.count}\t#{e.first_ts}\t#{e.last_ts}\n"
+  fh\write table.concat parts
+  fh\close!
+  os.rename tmp, path
+
+process_line = (line, agg, recent, devices) ->
   tab_pos = line\find "\t"
   return false unless tab_pos
 
@@ -151,14 +220,21 @@ process_line = (line, agg, recent) ->
   else
     agg[key] = { count: 1, first_ts: ts_str, last_ts: ts_str }
 
-  -- Ring buffer des refus : ne parser les champs que pour les refus (block).
-  return false unless recent
-  return false unless key\sub(1, 6) == "block\t"
-  -- key = decision \t qname \t mac_src \t src_ip \t … \t reason \t rule
-  decision, qname, mac, _src_ip, _dst_ip, _vlan, _user, _af, reason = key\match(
+  -- Champs détaillés : nécessaires au ring buffer des refus (block) ET à la map
+  -- des appareils (toutes décisions). On ne parse qu'une fois.
+  return false, false unless recent or devices
+  -- key = decision \t qname \t mac_src \t src_ip \t dst_ip \t vlan \t user \t af \t reason \t rule
+  decision, qname, mac, src_ip, _dst_ip, _vlan, user, _af, reason = key\match(
     "^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)")
-  return false unless decision
-  note_block recent, decision, qname, mac, reason, ts_str
+  return false, false unless decision
+
+  blocked = false
+  blocked = note_block(recent, decision, qname, mac, reason, ts_str) if recent
+
+  device_noted = false
+  device_noted = note_device(devices, mac, src_ip, user, qname, decision, ts_str) if devices
+
+  blocked, device_noted
 
 --- Écrit le fichier TSV d'agrégation pour l'heure donnée.
 -- Utilise O_EXCL pour détecter si le fichier est nouveau et écrire le header,
@@ -306,7 +382,9 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
 
   agg      = {}
   recent   = {}
-  last_recent_write = 0
+  devices  = {}
+  last_recent_write  = 0
+  last_devices_write = 0
   line_buf = ""
   hour     = current_hour!
 
@@ -328,6 +406,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       if siginfo.ssi_signo == SIGTERM
         log_info -> { action: "sigterm", hour: hour }
         flush_to_file agg, hour, events_dir
+        flush_devices devices, events_dir
         libc._exit 0
 
     -- Lecture des données sur le pipe events
@@ -340,19 +419,26 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       elseif #chunk > 0
         line_buf ..= chunk
         blocked = false
+        device_touched = false
         -- Découpe line_buf sur les \n et traite chaque ligne complète
         while true
           nl = line_buf\find "\n", 1, true
           break unless nl
           line     = line_buf\sub 1, nl - 1
           line_buf = line_buf\sub nl + 1
-          blocked = true if #line > 0 and process_line line, agg, recent
+          if #line > 0
+            b, d = process_line line, agg, recent, devices
+            blocked = true if b
+            device_touched = true if d
+        now = os.time!
         -- Flush throttlé du ring buffer des refus (≥ RECENT_MIN_INTERVAL)
-        if blocked
-          now = os.time!
-          if now - last_recent_write >= RECENT_MIN_INTERVAL
-            flush_recent recent, events_dir
-            last_recent_write = now
+        if blocked and now - last_recent_write >= RECENT_MIN_INTERVAL
+          flush_recent recent, events_dir
+          last_recent_write = now
+        -- Flush throttlé de la map des appareils (même cadence)
+        if device_touched and now - last_devices_write >= RECENT_MIN_INTERVAL
+          flush_devices devices, events_dir
+          last_devices_write = now
 
     -- Détection du changement d'heure après chaque retour de poll
     new_hour = current_hour!
@@ -364,4 +450,4 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       agg  = {}
       hour = new_hour
 
-{ :run, :process_line, :note_block, :flush_recent }
+{ :run, :process_line, :note_block, :flush_recent, :note_device, :flush_devices }

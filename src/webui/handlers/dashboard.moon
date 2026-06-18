@@ -10,6 +10,7 @@ nav_html = ->
     H.a { href: "/admin/" }, "Dashboard"
     H.a { href: "/admin/config/filter/rules" }, "Règles"
     H.a { href: "/admin/config/filter/lists" }, "Listes"
+    H.a { href: "/admin/config/devices" }, "Appareils"
     H.a { href: "/admin/config/" }, "Configuration"
     H.a { href: "/admin/system/status" }, "Statut"
     H.a { href: "/admin/logout" }, "Déconnexion"
@@ -45,6 +46,7 @@ handle_dashboard = (req, state) ->
   s2 = H.section {
     H.h2 "Configuration"
     H.p { H.a { href: "/admin/config/" }, "Toutes les sections" }
+    H.p { H.a { href: "/admin/config/devices" }, "Appareils vus / enregistrement MAC" }
     H.p { H.a { href: "/admin/system/status" }, "État du service DNS" }
   }
 

@@ -15,6 +15,9 @@ nav_html = function()
       href = "/admin/config/filter/lists"
     }, "Listes"),
     H.a({
+      href = "/admin/config/devices"
+    }, "Appareils"),
+    H.a({
       href = "/admin/config/"
     }, "Configuration"),
     H.a({
@@ -74,6 +77,11 @@ handle_dashboard = function(req, state)
       H.a({
         href = "/admin/config/"
       }, "Toutes les sections")
+    }),
+    H.p({
+      H.a({
+        href = "/admin/config/devices"
+      }, "Appareils vus / enregistrement MAC")
     }),
     H.p({
       H.a({
