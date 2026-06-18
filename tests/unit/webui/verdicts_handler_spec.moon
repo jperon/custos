@@ -18,7 +18,7 @@ write_cfg = (cfg) ->
   assert ok, err
 
 make_state = -> { config_path: CFG_PATH, events_dir: EVENTS_DIR }
-make_req   = -> { method: "GET", path: "", headers: {} }
+make_req   = (query) -> { method: "GET", path: "", headers: {}, query: query or {} }
 
 write_file = (content) ->
   os.execute "mkdir -p '#{EVENTS_DIR}'"
@@ -125,6 +125,38 @@ describe "webui/handlers/verdicts", ->
       assert.equals 200, status
       assert.truthy body\find("Verdicts récents", 1, true)
 
+    it "rend les lignes cliquables (data-mac) + lien Détails + modale", ->
+      write_file vline "aa:bb:cc", "10.0.0.9", "-", "x.com", "allow", "", 1, 100, 200
+      _, _, body = handle_verdicts_get make_req!, make_state!
+      assert.truthy body\find('data-mac="aa:bb:cc"', 1, true)
+      assert.truthy body\find('class="vdetail"', 1, true)
+      assert.truthy body\find('/admin/config/verdicts?mac=aa:bb:cc', 1, true)
+      assert.truthy body\find('id="vmodal"', 1, true)
+
     it "retourne 500 si config_path invalide", ->
       status = handle_verdicts_get make_req!, { config_path: "/nonexistent.lua", events_dir: EVENTS_DIR }
       assert.equals 500, status
+
+  describe "vue détail (?mac=)", ->
+
+    it "ne liste que les verdicts de la MAC demandée (id verd-detail)", ->
+      write_file (vline "aa:bb:cc", "10.0.0.9", "-", "ads.com", "block", "bl", 2, 100, 200) ..
+        (vline "dd:ee:ff", "10.0.0.8", "-", "autre.com", "allow", "", 1, 150, 150)
+      status, _, body = handle_verdicts_get make_req({ mac: "aa:bb:cc" }), make_state!
+      assert.equals 200, status
+      assert.truthy body\find('id="verd-detail"', 1, true)
+      assert.truthy body\find("ads.com", 1, true)
+      assert.is_nil body\find("autre.com", 1, true)
+
+    it "affiche le nom de l'appareil dans le titre du détail", ->
+      cfg = base_cfg!
+      cfg.filter.macs = { "Tablette": "AA:BB:CC" }
+      write_cfg cfg
+      write_file vline "aa:bb:cc", "10.0.0.9", "-", "ads.com", "block", "bl", 1, 100, 200
+      _, _, body = handle_verdicts_get make_req({ mac: "aa:bb:cc" }), make_state!
+      assert.truthy body\find("Tablette", 1, true)
+
+    it "message si aucun verdict pour la MAC", ->
+      write_file vline "aa:bb:cc", "10.0.0.9", "-", "ads.com", "block", "bl", 1, 100, 200
+      _, _, body = handle_verdicts_get make_req({ mac: "99:99:99" }), make_state!
+      assert.truthy body\find("Aucun verdict", 1, true)

@@ -21,6 +21,56 @@ esc = (s) ->
   s = tostring s or ""
   (s\gsub "[&<>\"']", { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })
 
+-- URL de la vue « détail » : page Verdicts filtrée sur une MAC (?mac=…).
+-- Caractères de la MAC (hex + ':') sûrs en query string → pas d'encodage requis.
+detail_url = (mac) -> "/admin/config/verdicts?mac=#{mac}"
+
+-- Cellule « Détails » : lien vers la vue filtrée (target _blank = popup sans JS ;
+-- intercepté en modale si JS actif, cf. MODAL_JS).
+detail_cell = (mac) ->
+  H.td { class: "nosort" },
+    H.a { class: "vdetail", href: esc(detail_url mac), target: "_blank", title: "Voir les verdicts de cet appareil" }, "Détails"
+
+-- Élément <dialog> de la modale (vide ; rempli par MODAL_JS au clic).
+modal_dialog = ->
+  H.dialog { id: "vmodal", style: "max-width:min(720px,92vw); width:100%; border:1px solid var(--border); border-radius:10px; padding:1rem" }, {
+    H.form { method: "dialog", style: "text-align:right; margin:0 0 .4rem" },
+      H.button { class: "btn btn-sm btn-secondary" }, "Fermer"
+    H.div { id: "vmodal-body" }, ""
+  }
+
+-- Modale (avec JS) : clic sur une ligne `tr[data-mac]` (hors formulaire/lien)
+-- ou sur le lien « Détails » → fetch de la vue filtrée + extraction de
+-- #verd-detail dans la modale. Sans JS, le lien navigue (popup _blank).
+MODAL_JS = [[
+(function(){
+  var dlg = document.getElementById('vmodal');
+  if (!dlg) return;
+  var body = document.getElementById('vmodal-body');
+  function open(url){
+    body.textContent = 'Chargement…';
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open','');
+    fetch(url, { credentials: 'same-origin' }).then(function(r){ return r.text(); }).then(function(html){
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var det = doc.getElementById('verd-detail');
+      body.innerHTML = det ? det.innerHTML : 'Erreur de chargement.';
+    }).catch(function(){ body.textContent = 'Erreur réseau.'; });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('a.vdetail'), function(a){
+    a.addEventListener('click', function(e){ e.preventDefault(); open(a.getAttribute('href')); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('tr[data-mac]'), function(tr){
+    tr.style.cursor = 'pointer';
+    tr.addEventListener('click', function(e){
+      if (e.target.closest('form,button,input,a')) return;
+      var a = tr.querySelector('a.vdetail');
+      open(a ? a.getAttribute('href') : '/admin/config/verdicts?mac=' + encodeURIComponent(tr.getAttribute('data-mac')));
+    });
+  });
+  dlg.addEventListener('click', function(e){ if (e.target === dlg && dlg.close) dlg.close(); });
+})();
+]]
+
 --- Détermine le répertoire des events (priorité au state, repli config/défaut).
 events_dir_for = (state, cfg) ->
   state.events_dir or (cfg and cfg.events and cfg.events.dir) or "/tmp/custos/events"
@@ -122,7 +172,7 @@ render_row = (d, name) ->
     H.button { type: "submit", class: named and "btn btn-sm btn-ok" or "btn btn-sm", title: named and "Renommer" or "Enregistrer" },
       H.span { class: "btn-glyph" }, (named and "⟳" or "+")
   }
-  H.tr {
+  H.tr { "data-mac": esc (d.mac or "")\lower! }, {
     H.td name_cell
     H.td (esc d.mac)
     H.td (esc d.ip)
@@ -131,6 +181,7 @@ render_row = (d, name) ->
     H.td (esc d.decision)
     H.td { "data-sort": tostring d.count }, tostring d.count
     H.td { "data-sort": tostring d.last_ts }, fmt_ts d.last_ts
+    detail_cell d.mac
   }
 
 handle_devices_get = (req, state) ->
@@ -154,11 +205,14 @@ handle_devices_get = (req, state) ->
           H.th "Nom", H.th "MAC", H.th "IP", H.th "User"
           H.th "Dernier domaine", H.th "Décision"
           H.th "Vus", H.th "Dernière activité"
+          H.th { class: "nosort" }, ""
         }
       }
       H.tbody {}, table.concat rows
     }
+    modal_dialog!
     H.script DEVICES_JS
+    H.script MODAL_JS
     " "
     H.a { class: "btn btn-secondary", href: "/admin/config/" }, "Retour"
   }
@@ -209,4 +263,5 @@ handle_devices_post = (req, state) ->
 {
   :handle_devices_get, :handle_devices_post
   :read_devices, :mac_name_index, :valid_mac, :events_dir_for
+  :esc, :detail_url, :detail_cell, :modal_dialog, :MODAL_JS
 }

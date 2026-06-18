@@ -3,8 +3,11 @@ local page
 page = require("webui.handlers.dashboard").page
 local read_config
 read_config = require("webui.serializer").read_config
-local events_dir_for
-events_dir_for = require("webui.handlers.devices").events_dir_for
+local events_dir_for, detail_cell, modal_dialog, MODAL_JS
+do
+  local _obj_0 = require("webui.handlers.devices")
+  events_dir_for, detail_cell, modal_dialog, MODAL_JS = _obj_0.events_dir_for, _obj_0.detail_cell, _obj_0.modal_dialog, _obj_0.MODAL_JS
+end
 local bidirectional
 bidirectional = require("ipparse.fun").bidirectional
 local esc
@@ -158,8 +161,28 @@ end
 local render_row
 render_row = function(v, name_by_mac)
   return H.tr({
+    ["data-mac"] = esc((v.mac or ""):lower())
+  }, {
     mac_cell(v, name_by_mac),
     H.td((esc(v.user))),
+    H.td((esc(v.qname))),
+    H.td((esc(v.decision))),
+    H.td((esc(v.reason))),
+    H.td({
+      ["data-sort"] = tostring(v.count)
+    }, tostring(v.count)),
+    H.td({
+      ["data-sort"] = tostring(v.first_ts)
+    }, fmt_ts(v.first_ts)),
+    H.td({
+      ["data-sort"] = tostring(v.last_ts)
+    }, fmt_ts(v.last_ts)),
+    detail_cell(v.mac)
+  })
+end
+local detail_row
+detail_row = function(v)
+  return H.tr({
     H.td((esc(v.qname))),
     H.td((esc(v.decision))),
     H.td((esc(v.reason))),
@@ -174,6 +197,43 @@ render_row = function(v, name_by_mac)
     }, fmt_ts(v.last_ts))
   })
 end
+local detail_section
+detail_section = function(mac, name, verdicts)
+  local title = (name and name ~= "") and tostring(name) .. " — " .. tostring(mac) or mac
+  local rows
+  do
+    local _accum_0 = { }
+    local _len_0 = 1
+    for _index_0 = 1, #verdicts do
+      local v = verdicts[_index_0]
+      _accum_0[_len_0] = detail_row(v)
+      _len_0 = _len_0 + 1
+    end
+    rows = _accum_0
+  end
+  local inner
+  if #rows == 0 then
+    inner = H.p({
+      style = "color:#555"
+    }, "Aucun verdict enregistré pour cet appareil.")
+  else
+    inner = H.table({
+      H.thead({
+        H.tr({
+          H.th("Domaine", H.th("Décision", H.th("Raison"))),
+          H.th("Vus", H.th("Première", H.th("Dernière")))
+        })
+      }),
+      H.tbody({ }, table.concat(rows))
+    })
+  end
+  return H.div({
+    id = "verd-detail"
+  }, {
+    H.h3("Verdicts de " .. tostring(esc(title))),
+    inner
+  })
+end
 local handle_verdicts_get
 handle_verdicts_get = function(req, state)
   local cfg, err = read_config(state.config_path)
@@ -182,6 +242,34 @@ handle_verdicts_get = function(req, state)
   end
   local verdicts = read_verdicts(events_dir_for(state, cfg))
   local name_by_mac = name_by_mac_for(cfg)
+  local mac_q = req.query and req.query.mac
+  if mac_q and mac_q ~= "" then
+    local mac_l = mac_q:lower()
+    local only
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for _index_0 = 1, #verdicts do
+        local v = verdicts[_index_0]
+        if (v.mac or ""):lower() == mac_l then
+          _accum_0[_len_0] = v
+          _len_0 = _len_0 + 1
+        end
+      end
+      only = _accum_0
+    end
+    local body = H.section({
+      detail_section(mac_q, name_by_mac[mac_l], only),
+      " ",
+      H.a({
+        class = "btn btn-secondary",
+        href = "/admin/config/verdicts"
+      }, "Retour")
+    })
+    return 200, {
+      ["Content-Type"] = "text/html; charset=UTF-8"
+    }, page("Verdicts — " .. tostring(mac_q), body)
+  end
   local rows = { }
   for _index_0 = 1, #verdicts do
     local v = verdicts[_index_0]
@@ -207,12 +295,17 @@ handle_verdicts_get = function(req, state)
         H.tr({
           H.th("MAC / IP", H.th("User", H.th("Domaine"))),
           H.th("Décision", H.th("Raison")),
-          H.th("Vus", H.th("Première", H.th("Dernière")))
+          H.th("Vus", H.th("Première", H.th("Dernière"))),
+          H.th({
+            class = "nosort"
+          }, "")
         })
       }),
       H.tbody({ }, table.concat(rows))
     }),
+    modal_dialog(),
     H.script(VERDICTS_JS),
+    H.script(MODAL_JS),
     " ",
     H.a({
       class = "btn btn-secondary",

@@ -34,6 +34,65 @@ esc = function(s)
     ["'"] = "&#39;"
   }))
 end
+local detail_url
+detail_url = function(mac)
+  return "/admin/config/verdicts?mac=" .. tostring(mac)
+end
+local detail_cell
+detail_cell = function(mac)
+  return H.td({
+    class = "nosort"
+  }, H.a({
+    class = "vdetail",
+    href = esc(detail_url(mac)),
+    target = "_blank",
+    title = "Voir les verdicts de cet appareil"
+  }, "Détails"))
+end
+local modal_dialog
+modal_dialog = function()
+  return H.dialog({
+    id = "vmodal",
+    style = "max-width:min(720px,92vw); width:100%; border:1px solid var(--border); border-radius:10px; padding:1rem"
+  }, {
+    H.form({
+      method = "dialog",
+      style = "text-align:right; margin:0 0 .4rem"
+    }, H.button({
+      class = "btn btn-sm btn-secondary"
+    }, "Fermer")),
+    H.div({
+      id = "vmodal-body"
+    }, "")
+  })
+end
+local MODAL_JS = [[(function(){
+  var dlg = document.getElementById('vmodal');
+  if (!dlg) return;
+  var body = document.getElementById('vmodal-body');
+  function open(url){
+    body.textContent = 'Chargement…';
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open','');
+    fetch(url, { credentials: 'same-origin' }).then(function(r){ return r.text(); }).then(function(html){
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var det = doc.getElementById('verd-detail');
+      body.innerHTML = det ? det.innerHTML : 'Erreur de chargement.';
+    }).catch(function(){ body.textContent = 'Erreur réseau.'; });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('a.vdetail'), function(a){
+    a.addEventListener('click', function(e){ e.preventDefault(); open(a.getAttribute('href')); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('tr[data-mac]'), function(tr){
+    tr.style.cursor = 'pointer';
+    tr.addEventListener('click', function(e){
+      if (e.target.closest('form,button,input,a')) return;
+      var a = tr.querySelector('a.vdetail');
+      open(a ? a.getAttribute('href') : '/admin/config/verdicts?mac=' + encodeURIComponent(tr.getAttribute('data-mac')));
+    });
+  });
+  dlg.addEventListener('click', function(e){ if (e.target === dlg && dlg.close) dlg.close(); });
+})();
+]]
 local events_dir_for
 events_dir_for = function(state, cfg)
   return state.events_dir or (cfg and cfg.events and cfg.events.dir) or "/tmp/custos/events"
@@ -178,6 +237,8 @@ render_row = function(d, name)
     }, (named and "⟳" or "+")))
   })
   return H.tr({
+    ["data-mac"] = esc((d.mac or ""):lower())
+  }, {
     H.td(name_cell),
     H.td((esc(d.mac))),
     H.td((esc(d.ip))),
@@ -189,7 +250,8 @@ render_row = function(d, name)
     }, tostring(d.count)),
     H.td({
       ["data-sort"] = tostring(d.last_ts)
-    }, fmt_ts(d.last_ts))
+    }, fmt_ts(d.last_ts)),
+    detail_cell(d.mac)
   })
 end
 local handle_devices_get
@@ -225,12 +287,17 @@ handle_devices_get = function(req, state)
         H.tr({
           H.th("Nom", H.th("MAC", H.th("IP", H.th("User")))),
           H.th("Dernier domaine", H.th("Décision")),
-          H.th("Vus", H.th("Dernière activité"))
+          H.th("Vus", H.th("Dernière activité")),
+          H.th({
+            class = "nosort"
+          }, "")
         })
       }),
       H.tbody({ }, table.concat(rows))
     }),
+    modal_dialog(),
     H.script(DEVICES_JS),
+    H.script(MODAL_JS),
     " ",
     H.a({
       class = "btn btn-secondary",
@@ -298,5 +365,10 @@ return {
   read_devices = read_devices,
   mac_name_index = mac_name_index,
   valid_mac = valid_mac,
-  events_dir_for = events_dir_for
+  events_dir_for = events_dir_for,
+  esc = esc,
+  detail_url = detail_url,
+  detail_cell = detail_cell,
+  modal_dialog = modal_dialog,
+  MODAL_JS = MODAL_JS
 }

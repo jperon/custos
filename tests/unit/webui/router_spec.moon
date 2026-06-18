@@ -89,6 +89,16 @@ describe "webui/router.dispatch", ->
   -- ce test ne peut pas s'exécuter en unitaire sans tuer le runner de tests.
   -- Il est couvert par les tests E2E homelab.
 
+  -- ── Query string ─────────────────────────────────────────────────────────
+
+  it "matche le chemin nu malgré une query string (?mac=…)", ->
+    dispatch = get_dispatch!
+    -- /admin/config/verdicts?mac=aa:bb doit router vers handle_verdicts_get
+    status, _, body = dispatch make_req("GET", "/admin/config/verdicts?mac=aa%3Abb"), make_state!
+    assert.equals 200, status
+    -- mac décodé et exposé via req.query → vue détail (id verd-detail)
+    assert.truthy body\find("verd-detail", 1, true)
+
   -- ── Config index ─────────────────────────────────────────────────────────
 
   it "GET /admin/config/ → 200", ->

@@ -130,6 +130,14 @@ describe "webui/handlers/devices", ->
       _, _, body = handle_devices_get make_req("GET"), make_state!
       assert.truthy body\find('value="peron"', 1, true)
 
+    it "rend les lignes cliquables (data-mac) + lien Détails + modale", ->
+      write_devices_file vline "aa:bb:cc", "10.0.0.1", "bob", "x.com", "allow", 1, 100, 200
+      _, _, body = handle_devices_get make_req("GET"), make_state!
+      assert.truthy body\find('data-mac="aa:bb:cc"', 1, true)
+      assert.truthy body\find('class="vdetail"', 1, true)
+      assert.truthy body\find('/admin/config/verdicts?mac=aa:bb:cc', 1, true)
+      assert.truthy body\find('id="vmodal"', 1, true)
+
     it "retourne 500 si config_path invalide", ->
       status = handle_devices_get make_req("GET"), { config_path: "/nonexistent.lua", events_dir: EVENTS_DIR }
       assert.equals 500, status

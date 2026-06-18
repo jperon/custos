@@ -36,9 +36,22 @@ SCALAR_SECTIONS = {
 -- @tparam table req   Requête HTTP {method, path, headers, body}
 -- @tparam table state État du serveur (token_key, admin_users, secrets, auth_cfg, config_path)
 -- @treturn number, table, string  (status, headers, body)
+-- Décode une query string `k=v&…` en table (réutilise le décodage %xx/+).
+parse_query = (qs) ->
+  out = {}
+  return out unless qs and qs != ""
+  dec = (s) -> (s\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16)\gsub "+", " "
+  for k, v in qs\gmatch "([^&=]+)=([^&]*)"
+    out[dec k] = dec v
+  out
+
 dispatch = (req, state) ->
   method = req.method
-  path   = req.path
+  -- Sépare le chemin nu (pour le matching) de la query string (?mac=…).
+  raw    = req.path or ""
+  qpos   = raw\find "?", 1, true
+  path   = qpos and raw\sub(1, qpos - 1) or raw
+  req.query = parse_query qpos and raw\sub(qpos + 1) or ""
 
   admin, reason = check_admin_session req, state
   unless admin

@@ -342,6 +342,19 @@ nommée) qui **réutilise `handle_devices_post`** : il poste vers
 (`/admin/config/devices` ou `/admin/config/verdicts`, anti open-redirect), défaut
 `devices`. Aucune route POST propre à Verdicts n'est donc nécessaire.
 
+**Détail par appareil (modale / popup).** Dans les deux tableaux (Appareils ET
+Verdicts), chaque ligne porte `data-mac` et une cellule « Détails » (lien
+`a.vdetail` → `GET /admin/config/verdicts?mac=<MAC>`, `target="_blank"`). Avec ce
+paramètre `mac`, `handle_verdicts_get` rend une **vue détail** (`detail_section`,
+conteneur `#verd-detail`) listant uniquement les verdicts de cette MAC. `MODAL_JS`
+(JS partagé, défini dans `devices.moon` avec `detail_cell`/`modal_dialog` —
+`verdicts.moon` en dépend déjà, pas de cycle) intercepte le clic sur la ligne (hors
+formulaire de nom) ou sur le lien, `fetch` cette URL et injecte `#verd-detail`
+dans un `<dialog id="vmodal">` (modale). **Sans JS**, le lien ouvre simplement la
+page filtrée (popup `_blank`). Le routeur (`webui/router.moon`) sépare désormais la
+query string du chemin (`parse_query`) et expose `req.query` aux handlers ; le
+matching de route reste sur le **chemin nu**.
+
 ## Synchronisation de configuration (`sync/`)
 
 Déploiement multi-routeurs depuis un dépôt git central.

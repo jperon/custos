@@ -7,7 +7,7 @@
 H = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config } = require "webui.serializer"
-{ :events_dir_for } = require "webui.handlers.devices"
+{ :events_dir_for, :detail_cell, :modal_dialog, :MODAL_JS } = require "webui.handlers.devices"
 { :bidirectional } = require "ipparse.fun"
 
 -- Échappe le texte destiné au contenu/attribut HTML (le DSL n'échappe rien).
@@ -115,7 +115,7 @@ mac_cell = (v, name_by_mac) ->
   }
 
 render_row = (v, name_by_mac) ->
-  H.tr {
+  H.tr { "data-mac": esc (v.mac or "")\lower! }, {
     mac_cell v, name_by_mac
     H.td (esc v.user)
     H.td (esc v.qname)
@@ -124,6 +124,40 @@ render_row = (v, name_by_mac) ->
     H.td { "data-sort": tostring v.count }, tostring v.count
     H.td { "data-sort": tostring v.first_ts }, fmt_ts v.first_ts
     H.td { "data-sort": tostring v.last_ts }, fmt_ts v.last_ts
+    detail_cell v.mac
+  }
+
+-- Ligne de la vue « détail » (un appareil) : MAC fixée, on omet la colonne MAC/IP.
+detail_row = (v) ->
+  H.tr {
+    H.td (esc v.qname)
+    H.td (esc v.decision)
+    H.td (esc v.reason)
+    H.td { "data-sort": tostring v.count }, tostring v.count
+    H.td { "data-sort": tostring v.first_ts }, fmt_ts v.first_ts
+    H.td { "data-sort": tostring v.last_ts }, fmt_ts v.last_ts
+  }
+
+-- Section « détail » d'un appareil (id verd-detail) : extraite par MODAL_JS pour
+-- la modale, ou affichée telle quelle (page autonome) sans JS.
+detail_section = (mac, name, verdicts) ->
+  title = (name and name != "") and "#{name} — #{mac}" or mac
+  rows  = [detail_row v for v in *verdicts]
+  inner = if #rows == 0
+    H.p { style: "color:#555" }, "Aucun verdict enregistré pour cet appareil."
+  else
+    H.table {
+      H.thead {
+        H.tr {
+          H.th "Domaine", H.th "Décision", H.th "Raison"
+          H.th "Vus", H.th "Première", H.th "Dernière"
+        }
+      }
+      H.tbody {}, table.concat rows
+    }
+  H.div { id: "verd-detail" }, {
+    H.h3 "Verdicts de #{esc title}"
+    inner
   }
 
 handle_verdicts_get = (req, state) ->
@@ -131,6 +165,18 @@ handle_verdicts_get = (req, state) ->
   return 500, {}, "Erreur config : #{err}" unless cfg
   verdicts    = read_verdicts events_dir_for state, cfg
   name_by_mac = name_by_mac_for cfg
+
+  -- Vue « détail » filtrée sur une MAC (?mac=…) : modale (fetch) ou popup no-JS.
+  mac_q = req.query and req.query.mac
+  if mac_q and mac_q != ""
+    mac_l = mac_q\lower!
+    only  = [v for v in *verdicts when (v.mac or "")\lower! == mac_l]
+    body  = H.section {
+      detail_section(mac_q, name_by_mac[mac_l], only)
+      " "
+      H.a { class: "btn btn-secondary", href: "/admin/config/verdicts" }, "Retour"
+    }
+    return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Verdicts — #{mac_q}", body
 
   rows = {}
   for v in *verdicts
@@ -147,11 +193,14 @@ handle_verdicts_get = (req, state) ->
           H.th "MAC / IP", H.th "User", H.th "Domaine"
           H.th "Décision", H.th "Raison"
           H.th "Vus", H.th "Première", H.th "Dernière"
+          H.th { class: "nosort" }, ""
         }
       }
       H.tbody {}, table.concat rows
     }
+    modal_dialog!
     H.script VERDICTS_JS
+    H.script MODAL_JS
     " "
     H.a { class: "btn btn-secondary", href: "/admin/config/" }, "Retour"
   }
