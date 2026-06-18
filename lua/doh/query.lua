@@ -12,10 +12,10 @@ do
   local _obj_0 = require("nft_queue")
   add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.wait_ack, _obj_0.drain_ack
 end
-local build_blocked_response, add_ede, patch_modified_dns
+local build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, build_captive_response, add_ede, patch_modified_dns
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, add_ede, patch_modified_dns = _obj_0.build_blocked_response, _obj_0.add_ede, _obj_0.patch_modified_dns
+  build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, build_captive_response, add_ede, patch_modified_dns = _obj_0.build_blocked_response, _obj_0.build_nxdomain_response, _obj_0.build_sinkhole_response, _obj_0.build_cname_response, _obj_0.build_captive_response, _obj_0.add_ede, _obj_0.patch_modified_dns
 end
 local inject, detect_wildcards
 do
@@ -29,10 +29,12 @@ do
   local _obj_0 = require("log")
   log_allow, log_block, log_warn, log_debug, log_info = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_info
 end
+local ip2s
+ip2s = require("lib.packet_parsing").ip2s
 local config = require("config")
 local upstream_mod = require("doh.upstream")
-local query_verdict
-query_verdict = require("doh.validator").query_verdict
+local query_classified
+query_classified = require("doh.validator").query_classified
 local MAC_ZERO = "00:00:00:00:00:00"
 local mac_valid
 mac_valid = function(mac)
@@ -64,6 +66,25 @@ set_wildcard_rules = function(rules_metadata)
     }
   end)
 end
+local captive_domain = nil
+local captive_ip4 = nil
+local captive_ip6 = nil
+local set_captive
+set_captive = function(domain, ip4, ip6)
+  captive_domain = domain
+  captive_ip4 = ip4
+  captive_ip6 = ip6
+  return log_info(function()
+    return {
+      action = "doh_captive_loaded",
+      domain = domain or "none",
+      ip4 = ip4 or "none",
+      ip6 = ip6 or "none"
+    }
+  end)
+end
+local QTYPE_A = QTYPE.A
+local QTYPE_AAAA = QTYPE.AAAA
 local normalize_answers
 normalize_answers = function(resp_dns)
   local out = { }
@@ -106,6 +127,39 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       }
     end)
     return nil, "dns_parse_failed"
+  end
+  if captive_domain then
+    local _list_0 = (dns.questions or (dns.question and {
+      dns.question
+    } or { }))
+    for _index_0 = 1, #_list_0 do
+      local q = _list_0[_index_0]
+      local norm = (q.name or q.qname or ""):lower():gsub("%.+$", "")
+      if norm == captive_domain and (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA) then
+        local forged = build_captive_response(dns, dns_raw, captive_ip4, captive_ip6)
+        if forged then
+          log_info(function()
+            return {
+              action = "dns_stolen",
+              worker = "doh",
+              domain = q.name or q.qname,
+              qtype = q.qtype_name or tostring(q.qtype),
+              client_ip = client_ip,
+              client_mac = client_mac
+            }
+          end)
+          return forged
+        end
+        log_warn(function()
+          return {
+            action = "dns_steal_forge_failed",
+            worker = "doh",
+            domain = q.name or q.qname,
+            client_ip = client_ip
+          }
+        end)
+      end
+    end
   end
   local user = user_for_mac(client_mac, client_ip, config.auth.sessions_file)
   log_debug(function()
@@ -188,19 +242,89 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       local so = config.second_opinion or { }
       local timeout_ms = so.budget_ms or 1000
       local doh_timeout_ms = so.doh_budget_ms or 3000
-      local val_blocked, v_reason = query_verdict(dns_raw, val_resolvers, timeout_ms, doh_timeout_ms)
-      if val_blocked then
+      local override, v_reason = query_classified(dns_raw, val_resolvers, timeout_ms, doh_timeout_ms)
+      if override then
         log_block(function()
           return {
-            action = "doh_validator_blocked",
+            action = "doh_validator_override",
+            kind = override.kind,
             client_ip = client_ip,
             client_mac = client_mac,
             user = user,
             reason = v_reason
           }
         end)
-        any_blocked = true
-        block_reason = v_reason or "validator_blocked"
+        local _exp_0 = override.kind
+        if "block" == _exp_0 then
+          return build_nxdomain_response(dns, dns_raw, v_reason) or build_blocked_response(dns, dns_raw, v_reason)
+        elseif "sinkhole" == _exp_0 then
+          local sink = {
+            a = override.a or { },
+            aaaa = override.aaaa or { },
+            ttl = override.ttl
+          }
+          return build_sinkhole_response(dns, dns_raw, v_reason, sink) or build_blocked_response(dns, dns_raw, v_reason)
+        elseif "redirect" == _exp_0 then
+          local target_rrs = {
+            a = override.a or { },
+            aaaa = override.aaaa or { },
+            ttl = override.ttl
+          }
+          local new_dns = build_cname_response(dns, dns_raw, override.cname_target, v_reason, target_rrs)
+          if new_dns then
+            local redirect_answers = { }
+            local _list_0 = (override.a or { })
+            for _index_0 = 1, #_list_0 do
+              local r = _list_0[_index_0]
+              redirect_answers[#redirect_answers + 1] = {
+                family = "ipv4",
+                addr = ip2s(r),
+                ttl = override.ttl
+              }
+            end
+            local _list_1 = (override.aaaa or { })
+            for _index_0 = 1, #_list_1 do
+              local r = _list_1[_index_0]
+              redirect_answers[#redirect_answers + 1] = {
+                family = "ipv6",
+                addr = ip2s(r),
+                ttl = override.ttl
+              }
+            end
+            if #redirect_answers > 0 then
+              local is_v6 = (client_ip:find(":")) ~= nil
+              local client_addr
+              client_addr = function(fam)
+                return (fam == "ipv4" and not is_v6) and client_ip or (fam == "ipv6" and is_v6) and client_ip or nil
+              end
+              drain_ack()
+              inject(redirect_answers, {
+                client_addr = client_addr,
+                client_mac = client_mac,
+                user = user,
+                rule_id = allow_rule_id or "unknown_rule",
+                wildcard_ids = wildcard_ids,
+                ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown"),
+                inject_nft = true,
+                mac_valid = mac_valid,
+                add_ip = {
+                  ipv4 = add_ip4,
+                  ipv6 = add_ip6
+                },
+                add_mac = {
+                  ipv4 = add_mac4,
+                  ipv6 = add_mac6
+                }
+              })
+              local pending = get_last_seq()
+              if pending then
+                wait_ack(pending, (string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")))
+              end
+            end
+            return new_dns
+          end
+          return build_blocked_response(dns, dns_raw, v_reason)
+        end
       end
     end
   end
@@ -320,5 +444,6 @@ end
 return {
   process_query = process_query,
   set_wildcard_rules = set_wildcard_rules,
+  set_captive = set_captive,
   normalize_answers = normalize_answers
 }

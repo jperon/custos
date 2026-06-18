@@ -420,8 +420,14 @@ run = (doh_cfg, filter_data) ->
     filter.auth_cfg_cache = filter_data.auth_cfg_cache
     filter.decision_cfg = filter_data.decision_cfg
     -- Détecte les règles wildcard d'auth pour l'injection nft (cf. doh.query).
-    { :set_wildcard_rules } = require "doh.query"
+    { :set_wildcard_rules, :set_captive } = require "doh.query"
     set_wildcard_rules filter_data.rules and filter_data.rules.rules_metadata
+    -- Vol DNS du portail captif en DoH (parité avec worker_questions).
+    { :detect, :domain_from_url } = require "captive_ips"
+    auth = filter.get_auth_cfg!
+    cap_domain = domain_from_url auth.redirect_url
+    cap_ip4, cap_ip6 = detect auth
+    set_captive cap_domain, cap_ip4, cap_ip6
   unless doh_cfg.enabled
     log_info -> { action: "worker_disabled" }
     return

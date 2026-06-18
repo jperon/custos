@@ -40,8 +40,11 @@ end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
 local forge_dns = require("forge_dns")
-local detect_captive_ips
-detect_captive_ips = require("captive_ips").detect
+local detect_captive_ips, domain_from_url
+do
+  local _obj_0 = require("captive_ips")
+  detect_captive_ips, domain_from_url = _obj_0.detect, _obj_0.domain_from_url
+end
 local bridge_raw = require("bridge_raw")
 local new_eth, IP4, IP6
 do
@@ -128,23 +131,6 @@ maybe_duplicate = function(ip, l4, raw, rule_resolvers)
     return 
   end
   return raw_send.send(fd, ip.version, pkt, validator)
-end
-local domain_from_url
-domain_from_url = function(url)
-  if not (url) then
-    return nil
-  end
-  local host = url:match("^https?://([^/:]+)")
-  if not (host) then
-    return nil
-  end
-  if host:match("^%d+%.%d+%.%d+%.%d+$") then
-    return nil
-  end
-  if host:match("^%[") then
-    return nil
-  end
-  return host:lower()
 end
 local write_learn_msg
 write_learn_msg = function(ip_raw, mac_raw)

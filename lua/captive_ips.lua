@@ -5,6 +5,23 @@ do
 end
 local shquote
 shquote = require("lib.shquote").shquote
+local domain_from_url
+domain_from_url = function(url)
+  if not (url) then
+    return nil
+  end
+  local host = url:match("^https?://([^/:]+)")
+  if not (host) then
+    return nil
+  end
+  if host:match("^%d+%.%d+%.%d+%.%d+$") then
+    return nil
+  end
+  if host:match("^%[") then
+    return nil
+  end
+  return host:lower()
+end
 local detect
 detect = function(auth_cfg)
   auth_cfg = auth_cfg or { }
@@ -81,5 +98,6 @@ detect = function(auth_cfg)
   return local_ip4, local_ip6
 end
 return {
-  detect = detect
+  detect = detect,
+  domain_from_url = domain_from_url
 }

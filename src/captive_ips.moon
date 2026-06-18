@@ -12,6 +12,19 @@
 { :log_info, :log_warn } = require "log"
 { :shquote } = require "lib.shquote"
 
+--- Extrait le hostname d'une URL https?://host[:port]/...
+-- Retourne nil si l'URL contient une IP brute (IPv4 x.x.x.x ou IPv6 [::]).
+-- Partagé par worker_questions (vol DNS UDP) et worker_doh (vol DNS DoH).
+-- @tparam string|nil url URL du portail captif
+-- @treturn string|nil Hostname en casse basse, ou nil
+domain_from_url = (url) ->
+  return nil unless url
+  host = url\match "^https?://([^/:]+)"
+  return nil unless host
+  return nil if host\match "^%d+%.%d+%.%d+%.%d+$"   -- IPv4 brute
+  return nil if host\match "^%["                      -- [IPv6] entre crochets
+  host\lower!
+
 --- Détecte les adresses IPv4 et IPv6 du portail captif.
 -- Lit d'abord la configuration explicite et les variables d'environnement,
 -- puis tente une auto-détection sur l'interface bridge si nécessaire.
@@ -69,4 +82,4 @@ detect = (auth_cfg) ->
 
   local_ip4, local_ip6
 
-{ :detect }
+{ :detect, :domain_from_url }

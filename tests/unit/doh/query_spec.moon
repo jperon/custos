@@ -33,7 +33,7 @@ nft_result     = true
 upstream_resp  = nil
 decide_result  = nil
 user_result    = nil
-validator_resp = false   -- verdict renvoyé par le stub doh.validator
+validator_override = nil  -- override renvoyé par le stub doh.validator (query_classified)
 
 reset = ->
   nft_calls      = {}
@@ -41,7 +41,7 @@ reset = ->
   upstream_resp  = make_response!
   decide_result  = { verdict: true, reason: "ok", rule_id: "r_main", timeout: "5m", description: "allow", allow_modifiers: {} }
   user_result    = nil
-  validator_resp = false
+  validator_override = nil
 
 record_add = (key, dest, rule_id, timeout, corr) ->
   nft_calls[#nft_calls + 1] = { :key, :dest, :rule_id }
@@ -79,7 +79,7 @@ package.loaded["nft_queue"] = {
 package.loaded["auth.sessions"] = { user_for_mac: (mac, ip, file) -> user_result }
 package.loaded["doh.upstream"]  = { query: (up, raw) -> upstream_resp }
 package.loaded["doh.validator"] = {
-  query_verdict: (raw, resolvers, timeout) -> validator_resp, (validator_resp and "validator=stub rcode=5" or nil)
+  query_classified: (raw, resolvers, timeout) -> validator_override, (validator_override and "validator=stub" or nil)
 }
 
 query_mod = require "doh.query"
@@ -134,6 +134,28 @@ describe "doh.query.process_query", ->
     assert.is_true rule_ids["r_wild"]
     query_mod.set_wildcard_rules {}      -- reset pour les autres tests
 
+  it "captive : vole le domaine du portail vers l'IP locale, sans upstream", ->
+    query_mod.set_captive "example.com", "10.35.1.254", nil
+    upstream_resp = nil   -- l'upstream ne doit PAS être appelé
+    decide_called = false
+    resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
+    assert.is_not_nil resp
+    assert.equals 0, rcode_of resp           -- NOERROR
+    -- AA bit positionné (octet de flags 3, bit 0x04)
+    assert.is_true (resp\byte(3) % 8) >= 4
+    -- 1 réponse A = 10.35.1.254
+    ancount = resp\byte(7) * 256 + resp\byte(8)
+    assert.equals 1, ancount
+    assert.equals 0, #nft_calls
+    query_mod.set_captive nil, nil, nil       -- reset pour les autres tests
+
+  it "captive : domaine non captif → traité normalement (upstream)", ->
+    query_mod.set_captive "other.example.org", "10.35.1.254", nil
+    resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
+    assert.is_not_nil resp
+    assert.is_true #nft_calls > 0             -- chemin normal : injection nft
+    query_mod.set_captive nil, nil, nil
+
   it "requête illisible → nil, dns_parse_failed", ->
     resp, err = query_mod.process_query "\0\1\2", "10.0.0.1", "unknown", {}
     assert.is_nil resp
@@ -165,31 +187,50 @@ describe "doh.query.process_query", ->
 
   -- ── Second avis (validate) ───────────────────────────────────────────────
 
-  it "validate=true, validateur OK → réponse livrée normalement", ->
+  it "validate=true, validateur OK (pass) → réponse livrée normalement", ->
     decide_result.allow_modifiers = { validate: true }
     config_stub.second_opinion = { resolvers: { "1.1.1.1" }, budget_ms: 200 }
-    validator_resp = false
+    validator_override = nil
     resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
     assert.is_not_nil resp
     assert.equals 0, rcode_of resp
 
-  it "validate=true, validateur bloque → REFUSED", ->
+  it "validate=true, validateur bloque (block) → NXDOMAIN", ->
     decide_result.allow_modifiers = { validate: true }
     config_stub.second_opinion = { resolvers: { "1.1.1.1" }, budget_ms: 200 }
-    validator_resp = true
+    validator_override = { kind: "block" }
     resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
     assert.is_not_nil resp
-    assert.equals 5, rcode_of resp
+    assert.equals 3, rcode_of resp
     assert.equals 0, #nft_calls
+
+  it "validate, override sinkhole → NOERROR avec 0.0.0.0", ->
+    decide_result.allow_modifiers = { validate: true }
+    config_stub.second_opinion = { resolvers: { "1.1.1.1" }, budget_ms: 200 }
+    validator_override = { kind: "sinkhole", a: { "\0\0\0\0" }, aaaa: {}, ttl: 30 }
+    resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
+    assert.is_not_nil resp
+    assert.equals 0, rcode_of resp
+    assert.equals 0, #nft_calls
+
+  it "validate, override redirect → CNAME + injection nft de la cible", ->
+    decide_result.allow_modifiers = { validate: true }
+    config_stub.second_opinion = { resolvers: { "1.1.1.1" }, budget_ms: 200 }
+    aaaa6 = string.char(0x20,0x01,0x0d,0xb8,0,0,0,0,0,0,0,0,0,0,0,0x09)
+    validator_override = { kind: "redirect", cname_target: "safe.example.", a: { "\5\6\7\8" }, aaaa: { aaaa6 }, ttl: 60 }
+    resp = query_mod.process_query make_query!, "10.0.0.1", "aa:bb:cc:dd:ee:ff", {}
+    assert.is_not_nil resp
+    assert.equals 0, rcode_of resp
+    assert.is_true #nft_calls > 0
 
   it "validate=table, résolveurs per-règle transmis au validateur", ->
     per_rule = { "2.2.2.2" }
     decide_result.allow_modifiers = { validate: per_rule }
     validator_called_with = nil
     package.loaded["doh.validator"] = {
-      query_verdict: (raw, resolvers, timeout) ->
+      query_classified: (raw, resolvers, timeout) ->
         validator_called_with = resolvers
-        false, nil
+        nil, nil
     }
     -- Recharge doh.query pour prendre le nouveau stub.
     package.loaded["doh.query"] = nil
@@ -198,14 +239,14 @@ describe "doh.query.process_query", ->
     assert.same per_rule, validator_called_with
     -- Restaure le stub standard pour les tests suivants.
     package.loaded["doh.validator"] = {
-      query_verdict: (raw, resolvers, timeout) -> validator_resp, (validator_resp and "validator=stub rcode=5" or nil)
+      query_classified: (raw, resolvers, timeout) -> validator_override, (validator_override and "validator=stub" or nil)
     }
     package.loaded["doh.query"] = nil
 
   it "validate sans résolveurs configurés → pas d'appel, réponse livrée", ->
     decide_result.allow_modifiers = { validate: true }
     config_stub.second_opinion = nil
-    validator_resp = true   -- ne doit jamais être consulté
+    validator_override = { kind: "block" }   -- ne doit jamais être consulté
     resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
     assert.is_not_nil resp
     assert.equals 0, rcode_of resp

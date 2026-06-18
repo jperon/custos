@@ -5,16 +5,25 @@
 --   • IP (ex. "1.1.1.1") → UDP/53 via doh.upstream
 --   • URL (ex. "https://1.1.1.1/dns-query") → DoH via doh.upstream_doh
 
-bit          = require "bit"
 upstream_mod = require "doh.upstream"
 { :parse }   = require "ipparse.l7.dns"
+dns_classify = require "dns_classify"
 { :log_debug, :log_warn } = require "log"
 
--- header.rcode via métatableau retourne un booléen ; on extrait le numérique.
-rcode_of = (header) -> bit.band(header.ra_z_rcode or 0, 0x0f)
+RCODE_REFUSED = 5
 
-RCODE_NXDOMAIN = 3
-RCODE_REFUSED  = 5
+-- Traduit un résultat dns_classify en override (même mapping que
+-- worker_responses.make_override) pour application par doh.query.
+verdict_to_override = (vi) ->
+  switch vi.verdict
+    when "block"
+      { kind: "block" }
+    when "sinkhole"
+      { kind: "sinkhole", a: vi.a, aaaa: vi.aaaa, ttl: vi.ttl }
+    when "redirect"
+      { kind: "redirect", cname_target: vi.cname_target, a: vi.a, aaaa: vi.aaaa, ttl: vi.ttl }
+    else
+      nil
 
 -- Chargement paresseux pour éviter la dépendance libcurl au démarrage
 -- si aucun validate_resolver https:// n'est configuré.
@@ -47,15 +56,16 @@ do_query = (client, dns_raw) ->
   else
     upstream_mod.query client, dns_raw
 
---- Interroge les endpoints validateurs dans l'ordre et retourne si le domaine
--- est bloqué. Fail-open si tous les endpoints sont injoignables ou muets.
+--- Interroge les endpoints validateurs dans l'ordre et retourne l'override
+-- classifié de la première réponse exploitable. Fail-open (nil) si tous les
+-- endpoints sont injoignables ou muets.
 -- @tparam string dns_raw        Requête DNS brute (wire format).
 -- @tparam table  resolvers      Liste d'endpoints : IPs (UDP/53) ou URLs (DoH https://).
 -- @tparam number timeout_ms     Délai UDP par endpoint en ms (défaut 1000).
 -- @tparam number doh_timeout_ms Délai DoH par endpoint en ms (défaut 3000).
--- @treturn boolean  true si bloqué (NXDOMAIN ou REFUSED).
--- @treturn string|nil  Raison lisible (endpoint + rcode) si bloqué, nil sinon.
-query_verdict = (dns_raw, resolvers, timeout_ms=1000, doh_timeout_ms=3000) ->
+-- @treturn table|nil override { kind = "block"|"sinkhole"|"redirect", … } ou nil (pass / fail-open).
+-- @treturn string|nil  Raison lisible (endpoint) si override, nil sinon.
+query_classified = (dns_raw, resolvers, timeout_ms=1000, doh_timeout_ms=3000) ->
   for endpoint in *resolvers
     is_doh = endpoint\sub(1, 8) == "https://"
     t_ms   = is_doh and doh_timeout_ms or timeout_ms
@@ -72,11 +82,23 @@ query_verdict = (dns_raw, resolvers, timeout_ms=1000, doh_timeout_ms=3000) ->
     unless resp_dns
       log_warn -> { action: "validator_parse_failed", resolver_ip: endpoint }
       continue
-    rcode = rcode_of resp_dns.header
-    log_debug -> { action: "validator_verdict", resolver_ip: endpoint, rcode: rcode }
-    blocked = rcode == RCODE_NXDOMAIN or rcode == RCODE_REFUSED
-    return blocked, (blocked and "validator=#{endpoint} rcode=#{rcode}" or nil)
+    -- REFUSED : signal de blocage générique du validateur, non couvert par
+    -- dns_classify (qui ne traite que NXDOMAIN/sinkhole/CNAME) → block explicite.
+    if dns_classify.numeric_rcode(resp_dns.header) == RCODE_REFUSED
+      log_debug -> { action: "validator_verdict", resolver_ip: endpoint, verdict: "block_refused" }
+      return { kind: "block" }, "validator=#{endpoint} rcode=REFUSED"
+    vi = dns_classify.classify resp_dns, resp_raw
+    log_debug -> { action: "validator_verdict", resolver_ip: endpoint, verdict: vi.verdict }
+    override = verdict_to_override vi
+    return override, (override and "validator=#{endpoint} verdict=#{vi.verdict}" or nil)
   log_warn -> { action: "validator_all_failed", count: #resolvers }
-  false, nil
+  nil, nil
 
-{ :query_verdict }
+--- Variante booléenne historique : true si la première réponse exploitable est
+-- un blocage (block / sinkhole / redirect). Fail-open si tous muets.
+-- @treturn boolean blocked, string|nil reason
+query_verdict = (dns_raw, resolvers, timeout_ms=1000, doh_timeout_ms=3000) ->
+  override, reason = query_classified dns_raw, resolvers, timeout_ms, doh_timeout_ms
+  (override != nil), reason
+
+{ :query_verdict, :query_classified }

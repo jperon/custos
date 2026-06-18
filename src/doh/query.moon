@@ -14,13 +14,14 @@ parse = dns_mod.parse
 { types: QTYPE } = require "ipparse.l7.dns"
 { :decide_meta, :run_on_response } = require "filter"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
-{ :build_blocked_response, :add_ede, :patch_modified_dns } = require "dns_ede"
+{ :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :build_captive_response, :add_ede, :patch_modified_dns } = require "dns_ede"
 { :inject, :detect_wildcards } = require "response_inject"
 { :user_for_mac } = require "auth.sessions"
 { :log_allow, :log_block, :log_warn, :log_debug, :log_info } = require "log"
+{ :ip2s } = require "lib.packet_parsing"
 config = require "config"
 upstream_mod = require "doh.upstream"
-{ :query_verdict } = require "doh.validator"
+{ :query_classified } = require "doh.validator"
 
 MAC_ZERO = "00:00:00:00:00:00"
 mac_valid = (mac) -> mac and mac != "unknown" and mac != MAC_ZERO
@@ -44,6 +45,25 @@ wildcard_ids = {}
 set_wildcard_rules = (rules_metadata) ->
   wildcard_ids = detect_wildcards rules_metadata
   log_info -> { action: "doh_auth_wildcard_rules_loaded", count: #wildcard_ids, rules: table.concat(wildcard_ids, ", ") }
+
+-- Domaine et IP du portail captif (vol DNS DoH, miroir de worker_questions).
+-- Renseignés par worker_doh au démarrage / reload via set_captive.
+captive_domain = nil
+captive_ip4    = nil
+captive_ip6    = nil
+
+--- Déclare le hostname et les IP du portail captif pour le vol DNS DoH.
+-- @tparam string|nil domain Hostname du portail captif (casse basse), ou nil.
+-- @tparam string|nil ip4    Adresse IPv4 du portail captif, ou nil.
+-- @tparam string|nil ip6    Adresse IPv6 du portail captif, ou nil.
+set_captive = (domain, ip4, ip6) ->
+  captive_domain = domain
+  captive_ip4    = ip4
+  captive_ip6    = ip6
+  log_info -> { action: "doh_captive_loaded", domain: domain or "none", ip4: ip4 or "none", ip6: ip6 or "none" }
+
+QTYPE_A    = QTYPE.A
+QTYPE_AAAA = QTYPE.AAAA
 
 --- Normalise les réponses A/AAAA d'un message DNS parsé pour le noyau d'injection.
 -- @tparam table resp_dns Message DNS parsé (ipparse.l7.dns).
@@ -69,6 +89,20 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
   unless dns
     log_warn -> { action: "parse_failed", client_ip: client_ip, err: tostring parse_err }
     return nil, "dns_parse_failed"
+
+  -- ── Vol de question DNS pour le portail captif (miroir worker_questions) ──
+  -- Si la question porte sur le hostname du portail (A/AAAA), répondre avec
+  -- l'IP locale du boîtier sans filtrer ni remonter l'upstream. Indispensable à
+  -- la parité UDP/DoH : sinon le client DoH résout le vrai nom public.
+  if captive_domain
+    for q in *(dns.questions or (dns.question and { dns.question } or {}))
+      norm = (q.name or q.qname or "")\lower!\gsub "%.+$", ""
+      if norm == captive_domain and (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA)
+        forged = build_captive_response dns, dns_raw, captive_ip4, captive_ip6
+        if forged
+          log_info -> { action: "dns_stolen", worker: "doh", domain: q.name or q.qname, qtype: q.qtype_name or tostring(q.qtype), client_ip: client_ip, client_mac: client_mac }
+          return forged
+        log_warn -> { action: "dns_steal_forge_failed", worker: "doh", domain: q.name or q.qname, client_ip: client_ip }
 
   user = user_for_mac client_mac, client_ip, config.auth.sessions_file
   log_debug -> { action: "process_query", client_ip: client_ip, client_mac: client_mac, user: user, query_bytes: #dns_raw }
@@ -119,8 +153,9 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       block_reason = meta.reason
 
   -- Second avis synchrone : si la règle porte l'action `validate` et que le
-  -- filtre a autorisé la requête, interroger le résolveur validateur et bloquer
-  -- si celui-ci répond NXDOMAIN ou REFUSED. Fail-open si tous injoignables.
+  -- filtre a autorisé la requête, interroger le résolveur validateur. On
+  -- applique le verdict classifié (block / sinkhole / redirect) en miroir de
+  -- worker_responses.finalize_a. Fail-open (pass) si tous injoignables.
   if not any_blocked and allow_modifiers.validate
     do_validate = allow_modifiers.validate
     val_resolvers = type(do_validate) == "table" and do_validate or (config.second_opinion or {}).resolvers or {}
@@ -128,11 +163,47 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       so = config.second_opinion or {}
       timeout_ms     = so.budget_ms or 1000
       doh_timeout_ms = so.doh_budget_ms or 3000
-      val_blocked, v_reason = query_verdict dns_raw, val_resolvers, timeout_ms, doh_timeout_ms
-      if val_blocked
-        log_block -> { action: "doh_validator_blocked", client_ip: client_ip, client_mac: client_mac, user: user, reason: v_reason }
-        any_blocked  = true
-        block_reason = v_reason or "validator_blocked"
+      override, v_reason = query_classified dns_raw, val_resolvers, timeout_ms, doh_timeout_ms
+      if override
+        log_block -> { action: "doh_validator_override", kind: override.kind, client_ip: client_ip, client_mac: client_mac, user: user, reason: v_reason }
+        switch override.kind
+          when "block"
+            return build_nxdomain_response(dns, dns_raw, v_reason) or build_blocked_response(dns, dns_raw, v_reason)
+          when "sinkhole"
+            sink = { a: override.a or {}, aaaa: override.aaaa or {}, ttl: override.ttl }
+            return build_sinkhole_response(dns, dns_raw, v_reason, sink) or build_blocked_response(dns, dns_raw, v_reason)
+          when "redirect"
+            target_rrs = { a: override.a or {}, aaaa: override.aaaa or {}, ttl: override.ttl }
+            new_dns = build_cname_response dns, dns_raw, override.cname_target, v_reason, target_rrs
+            if new_dns
+              -- Injecter les cibles du redirect en nft pour que le client les joigne.
+              redirect_answers = {}
+              for r in *(override.a or {})
+                redirect_answers[#redirect_answers + 1] = { family: "ipv4", addr: ip2s(r), ttl: override.ttl }
+              for r in *(override.aaaa or {})
+                redirect_answers[#redirect_answers + 1] = { family: "ipv6", addr: ip2s(r), ttl: override.ttl }
+              if #redirect_answers > 0
+                is_v6 = (client_ip\find ":") ~= nil
+                client_addr = (fam) ->
+                  (fam == "ipv4" and not is_v6) and client_ip or
+                  (fam == "ipv6" and is_v6) and client_ip or nil
+                drain_ack!
+                inject redirect_answers, {
+                  :client_addr
+                  :client_mac
+                  :user
+                  rule_id:    allow_rule_id or "unknown_rule"
+                  :wildcard_ids
+                  ack_corr:   string.format "%04x:%s", dns.txid or 0, client_ip or "unknown"
+                  inject_nft: true
+                  :mac_valid
+                  add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
+                  add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
+                }
+                pending = get_last_seq!
+                wait_ack pending, (string.format "%04x:%s", dns.txid or 0, client_ip or "unknown") if pending
+              return new_dns
+            return build_blocked_response(dns, dns_raw, v_reason)
 
   if any_blocked
     blocked = build_blocked_response dns, dns_raw, block_reason
@@ -218,4 +289,4 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
   }
   resp_raw
 
-{ :process_query, :set_wildcard_rules, :normalize_answers }
+{ :process_query, :set_wildcard_rules, :set_captive, :normalize_answers }

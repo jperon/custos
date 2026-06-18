@@ -3,7 +3,7 @@
 
 package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
 
-{ :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :add_ede_modified, :clear_ad_bit, :build_cname_response, :build_sinkhole_response } = require "dns_ede"
+{ :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :add_ede_modified, :clear_ad_bit, :build_cname_response, :build_sinkhole_response, :build_captive_response } = require "dns_ede"
 { :encode_dns_name } = require "lib.dns_name"
 dns_mod = require "ipparse.l7.dns"
 { :s2ip } = require "ipparse.l3.ip"
@@ -273,3 +273,41 @@ describe "build_sinkhole_response", ->
   it "renvoie nil si dns_orig ou dns_raw absent", ->
     assert.is_nil build_sinkhole_response nil, make_query!, "x", { a: {} }
     assert.is_nil build_sinkhole_response {}, nil, "x", { a: {} }
+
+describe "build_captive_response", ->
+  get_rcode = (raw) -> bit.band raw\byte(4), 0x0f
+  aa_set    = (raw) -> bit.band(raw\byte(3), 0x04) != 0
+  make_query = (qtype = QTYPE_A) ->
+    q = dns_mod.new {
+      header: dns_mod.new_header id: 0x1234, rd: true
+      questions: {{ qname: encode_dns_name("captive.lan"), qtype: qtype, qclass: QCLASS_IN }}
+    }
+    "#{q}"
+
+  it "question A → A locale, NOERROR, AA, TTL 0", ->
+    resp = build_captive_response nil, make_query!, "10.35.1.254", "fd00::1"
+    assert.is_not_nil resp
+    assert.equals 0, get_rcode resp
+    assert.is_true aa_set resp
+    parsed = dns_mod.parse resp, 1, false
+    assert.equals 1, parsed.header.ancount
+    assert.equals QTYPE_A, parsed.answers[1].rtype
+    assert.equals s2ip("10.35.1.254"), parsed.answers[1].rdata
+    assert.equals 0, parsed.answers[1].ttl
+
+  it "question AAAA → AAAA locale", ->
+    resp = build_captive_response nil, make_query(QTYPE_AAAA), "10.35.1.254", "fd00::1"
+    parsed = dns_mod.parse resp, 1, false
+    assert.equals 1, parsed.header.ancount
+    assert.equals QTYPE_AAAA, parsed.answers[1].rtype
+    assert.equals s2ip("fd00::1"), parsed.answers[1].rdata
+
+  it "famille demandée absente → NOERROR ancount 0", ->
+    resp = build_captive_response nil, make_query(QTYPE_AAAA), "10.35.1.254", nil
+    assert.is_not_nil resp
+    assert.equals 0, get_rcode resp
+    parsed = dns_mod.parse resp, 1, false
+    assert.equals 0, parsed.header.ancount
+
+  it "renvoie nil si dns_raw absent", ->
+    assert.is_nil build_captive_response nil, nil, "10.35.1.254", nil

@@ -344,6 +344,13 @@ paquet en réécrivant uniquement l'IP destination vers un résolveur de filtrag
 La réponse d'origine est **parquée** (verdict NFQUEUE différé) jusqu'à l'arrivée
 de la réponse validateur ou l'expiration de `budget_ms` (→ fail-open).
 
+> **Parité DoH.** Le résolveur DoH applique désormais le **même** verdict
+> classifié : le second avis y est **synchrone** (`doh.validator.query_classified`
+> → `dns_classify.classify`) et reproduit `block` (NXDOMAIN), `sinkhole`
+> (`A 0.0.0.0`/`AAAA ::`) et `redirect` (CNAME + injection nft des cibles), au lieu
+> de l'ancien blocage booléen. REFUSED reste traité comme un blocage. Fail-open si
+> tous les validateurs sont muets.
+
 > **Opt-in par règle.** La duplication n'a lieu que pour les requêtes autorisées
 > par une règle portant l'action `validate`. Sans cette action, la réponse est
 > transmise telle quelle, sans aucune interaction avec le résolveur validateur.
@@ -426,7 +433,7 @@ Portail captif et authentification des utilisateurs.
 | `register_rate_limit` | int | `3` | Enregistrements maximum par fenêtre |
 | `register_rate_window` | int | `300` | Fenêtre de rate-limiting (s) |
 | `bridge_ifname` | string | `"br0"` | Nom de l'interface bridge (utilisé pour la détection MAC) |
-| `redirect_url` | string | — | URL de redirection après authentification (optionnel) |
+| `redirect_url` | string | — | URL de redirection après authentification (optionnel). Son hostname définit le **domaine du portail captif** : toute requête A/AAAA sur ce nom est forgée vers l'IP locale du boîtier (`captive_ip4`/`captive_ip6`), **aussi bien par l'intercepteur UDP que par le résolveur DoH** (parité, cf. AGENTS.md § « Parité UDP/DoH »). |
 | `admin_users` | array | `{}` | Liste des utilisateurs avec droits administrateur (interface `/admin/*`) |
 | `admin_allow_all_when_empty` | bool | `true` | Si `true` et `admin_users` vide, tous les utilisateurs authentifiés sont admin |
 

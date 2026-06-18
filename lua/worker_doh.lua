@@ -624,9 +624,21 @@ run = function(doh_cfg, filter_data)
     filter.rules = filter_data.rules
     filter.auth_cfg_cache = filter_data.auth_cfg_cache
     filter.decision_cfg = filter_data.decision_cfg
-    local set_wildcard_rules
-    set_wildcard_rules = require("doh.query").set_wildcard_rules
+    local set_wildcard_rules, set_captive
+    do
+      local _obj_0 = require("doh.query")
+      set_wildcard_rules, set_captive = _obj_0.set_wildcard_rules, _obj_0.set_captive
+    end
     set_wildcard_rules(filter_data.rules and filter_data.rules.rules_metadata)
+    local detect, domain_from_url
+    do
+      local _obj_0 = require("captive_ips")
+      detect, domain_from_url = _obj_0.detect, _obj_0.domain_from_url
+    end
+    local auth = filter.get_auth_cfg()
+    local cap_domain = domain_from_url(auth.redirect_url)
+    local cap_ip4, cap_ip6 = detect(auth)
+    set_captive(cap_domain, cap_ip4, cap_ip6)
   end
   if not (doh_cfg.enabled) then
     log_info(function()

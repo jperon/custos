@@ -1,18 +1,39 @@
-local bit = require("bit")
 local upstream_mod = require("doh.upstream")
 local parse
 parse = require("ipparse.l7.dns").parse
+local dns_classify = require("dns_classify")
 local log_debug, log_warn
 do
   local _obj_0 = require("log")
   log_debug, log_warn = _obj_0.log_debug, _obj_0.log_warn
 end
-local rcode_of
-rcode_of = function(header)
-  return bit.band(header.ra_z_rcode or 0, 0x0f)
-end
-local RCODE_NXDOMAIN = 3
 local RCODE_REFUSED = 5
+local verdict_to_override
+verdict_to_override = function(vi)
+  local _exp_0 = vi.verdict
+  if "block" == _exp_0 then
+    return {
+      kind = "block"
+    }
+  elseif "sinkhole" == _exp_0 then
+    return {
+      kind = "sinkhole",
+      a = vi.a,
+      aaaa = vi.aaaa,
+      ttl = vi.ttl
+    }
+  elseif "redirect" == _exp_0 then
+    return {
+      kind = "redirect",
+      cname_target = vi.cname_target,
+      a = vi.a,
+      aaaa = vi.aaaa,
+      ttl = vi.ttl
+    }
+  else
+    return nil
+  end
+end
 local upstream_curl_mod = nil
 local get_doh_mod
 get_doh_mod = function()
@@ -43,8 +64,8 @@ do_query = function(client, dns_raw)
     return upstream_mod.query(client, dns_raw)
   end
 end
-local query_verdict
-query_verdict = function(dns_raw, resolvers, timeout_ms, doh_timeout_ms)
+local query_classified
+query_classified = function(dns_raw, resolvers, timeout_ms, doh_timeout_ms)
   if timeout_ms == nil then
     timeout_ms = 1000
   end
@@ -94,16 +115,28 @@ query_verdict = function(dns_raw, resolvers, timeout_ms, doh_timeout_ms)
           _continue_0 = true
           break
         end
-        local rcode = rcode_of(resp_dns.header)
+        if dns_classify.numeric_rcode(resp_dns.header) == RCODE_REFUSED then
+          log_debug(function()
+            return {
+              action = "validator_verdict",
+              resolver_ip = endpoint,
+              verdict = "block_refused"
+            }
+          end)
+          return {
+            kind = "block"
+          }, "validator=" .. tostring(endpoint) .. " rcode=REFUSED"
+        end
+        local vi = dns_classify.classify(resp_dns, resp_raw)
         log_debug(function()
           return {
             action = "validator_verdict",
             resolver_ip = endpoint,
-            rcode = rcode
+            verdict = vi.verdict
           }
         end)
-        local blocked = rcode == RCODE_NXDOMAIN or rcode == RCODE_REFUSED
-        return blocked, (blocked and "validator=" .. tostring(endpoint) .. " rcode=" .. tostring(rcode) or nil)
+        local override = verdict_to_override(vi)
+        return override, (override and "validator=" .. tostring(endpoint) .. " verdict=" .. tostring(vi.verdict) or nil)
       end
       _continue_0 = true
     until true
@@ -117,8 +150,20 @@ query_verdict = function(dns_raw, resolvers, timeout_ms, doh_timeout_ms)
       count = #resolvers
     }
   end)
-  return false, nil
+  return nil, nil
+end
+local query_verdict
+query_verdict = function(dns_raw, resolvers, timeout_ms, doh_timeout_ms)
+  if timeout_ms == nil then
+    timeout_ms = 1000
+  end
+  if doh_timeout_ms == nil then
+    doh_timeout_ms = 3000
+  end
+  local override, reason = query_classified(dns_raw, resolvers, timeout_ms, doh_timeout_ms)
+  return (override ~= nil), reason
 end
 return {
-  query_verdict = query_verdict
+  query_verdict = query_verdict,
+  query_classified = query_classified
 }

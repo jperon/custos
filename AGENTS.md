@@ -164,8 +164,27 @@ suit la même convention sans toucher à `nft_compiler`.
 | `doh.upstream_doh` | Client DoH HTTP/1.1 wolfSSL — même contrat |
 | `doh.upstream_doh_curl` | Client DoH **HTTP/2** via libcurl FFI — même contrat. Chargé si `doh.upstream_doh_url` est défini. `ffi.load` essaie `"curl"` puis `"libcurl.so.4"` pour compat OpenWrt. Les args `const char *` vers les varargs `curl_easy_setopt` **doivent** être castés via `ffi.cast "const char *"` (LuaJIT ne convertit pas automatiquement en varargs). |
 | `doh.h2_frames` | Utilitaires frames HTTP/2 partagés (constantes, `h2_read_frame`, `h2_write_frame`) |
-| `doh.validator` | Second avis DNS synchrone pour `worker_doh`. Interroge `second_opinion.resolvers` (ou per-règle) en UDP ou DoH. Timeout distinct `budget_ms` (UDP) / `doh_budget_ms` (DoH). |
-| `doh.query` | Cœur de traitement DoH : `filter.decide` + `doh.validator` + upstream + nft |
+| `doh.validator` | Second avis DNS synchrone pour `worker_doh`. Interroge `second_opinion.resolvers` (ou per-règle) en UDP ou DoH. Timeout distinct `budget_ms` (UDP) / `doh_budget_ms` (DoH). `query_classified` renvoie un **override classifié** (`block`/`sinkhole`/`redirect`/`nil`) via `dns_classify.classify` (REFUSED → `block` explicite, comme l'ancien `query_verdict` booléen, toujours exposé en wrapper). |
+| `doh.query` | Cœur de traitement DoH : vol captif + `filter.decide` + `doh.validator` + upstream + nft |
+
+### Parité UDP/DoH : vol captif et overrides du second avis
+
+`doh.query` réplique deux comportements du plan de données UDP (sinon le résolveur
+DoH divergeait de l'intercepteur `worker_questions`) :
+
+- **Vol DNS du portail captif.** `set_captive(domain, ip4, ip6)` (appelé par
+  `worker_doh` au démarrage/reload via `filter.get_auth_cfg!` +
+  `captive_ips.detect`/`domain_from_url`) arme l'interception : une question
+  A/AAAA portant sur `captive_domain` reçoit directement une réponse vers l'IP
+  locale (`dns_ede.build_captive_response` : NOERROR, AA, TTL 0), sans filtre ni
+  upstream. Miroir de `worker_questions.moon` (forge AF_PACKET). `domain_from_url`
+  est factorisé dans `captive_ips`.
+- **Overrides `sinkhole`/`redirect`/`block` du validateur.** La branche `validate`
+  appelle `query_classified` et applique l'override comme `worker_responses.finalize_a` :
+  `block` → `build_nxdomain_response`, `sinkhole` → `build_sinkhole_response`,
+  `redirect` → `build_cname_response` **plus** injection nft des cibles
+  (`override.a`/`aaaa`) pour que le client les joigne. Fail-open (`nil`) si tous
+  les validateurs sont muets.
 
 ### Pièges FFI libcurl
 

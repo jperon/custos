@@ -13,6 +13,8 @@ local SVCB = dns_mod.types.SVCB
 local ede_codes = dns_mod.ede_codes
 local sp
 sp = require("ipparse.lib.pack_compat").pack
+local s2ip
+s2ip = require("ipparse.l3.ip").s2ip
 local bit = require("bit")
 local insert, remove
 do
@@ -95,6 +97,50 @@ build_nxdomain_response = function(dns_orig, dns_raw, reason)
     ede_text = "Ne intretis."
   end
   add_ede(dns, EDE_BLOCKED, ede_text)
+  return tostring(dns)
+end
+local build_captive_response
+build_captive_response = function(dns_orig, dns_raw, ip4_str, ip6_str)
+  if not (dns_raw) then
+    return nil
+  end
+  local dns = parse(dns_raw, 1, false)
+  if not (dns) then
+    return nil
+  end
+  local q = (dns.questions or { })[1]
+  if not (q) then
+    return nil
+  end
+  dns.header.qr = true
+  dns.header.aa = true
+  dns.header.rcode = NOERROR
+  local answers = { }
+  if q.qtype == A and ip4_str then
+    local ok, raw = pcall(s2ip, ip4_str)
+    if ok and raw and #raw == 4 then
+      answers[#answers + 1] = {
+        rname = string.char(0xC0, 0x0C),
+        rtype = A,
+        rclass = 1,
+        ttl = 0,
+        rdata = raw
+      }
+    end
+  elseif q.qtype == AAAA and ip6_str then
+    local ok, raw = pcall(s2ip, ip6_str)
+    if ok and raw and #raw == 16 then
+      answers[#answers + 1] = {
+        rname = string.char(0xC0, 0x0C),
+        rtype = AAAA,
+        rclass = 1,
+        ttl = 0,
+        rdata = raw
+      }
+    end
+  end
+  dns.answers = answers
+  dns.header.ancount = #answers
   return tostring(dns)
 end
 local build_sinkhole_response
@@ -404,6 +450,7 @@ return {
   build_nxdomain_response = build_nxdomain_response,
   build_sinkhole_response = build_sinkhole_response,
   build_cname_response = build_cname_response,
+  build_captive_response = build_captive_response,
   add_ede_modified = add_ede_modified,
   strip_dns_rr = strip_dns_rr,
   strip_https_rr = strip_https_rr,

@@ -26,7 +26,7 @@ filter                   = require "filter"
 { :log_allow, :log_block, :log_warn, :log_debug, :log_info, :level_enabled, :set_action_prefix } = require "log"
 { :user_for_mac } = require "auth.sessions"
 forge_dns = require "forge_dns"
-{ detect: detect_captive_ips } = require "captive_ips"
+{ detect: detect_captive_ips, :domain_from_url } = require "captive_ips"
 bridge_raw = require "bridge_raw"
 { new: new_eth, proto: {:IP4, :IP6} } = require "ipparse.l2.ethernet"
 dup_query = require "dup_query"
@@ -113,18 +113,6 @@ maybe_duplicate = (ip, l4, raw, rule_resolvers) ->
   pkt = dup_query.build_udp ip, l4, dns_raw, validator
   return unless pkt
   raw_send.send fd, ip.version, pkt, validator
-
---- Extrait le hostname d'une URL https?://host[:port]/...
--- Retourne nil si l'URL contient une IP brute (IPv4 x.x.x.x ou IPv6 [::]).
--- @tparam string|nil url URL du portail captif
--- @treturn string|nil Hostname en casse basse, ou nil
-domain_from_url = (url) ->
-  return nil unless url
-  host = url\match "^https?://([^/:]+)"
-  return nil unless host
-  return nil if host\match "^%d+%.%d+%.%d+%.%d+$"   -- IPv4 brute
-  return nil if host\match "^%["                      -- [IPv6] entre crochets
-  host\lower!
 
 -- ── Apprentissage MAC ────────────────────────────────────────────
 

@@ -61,13 +61,13 @@ describe "doh.validator.query_verdict", ->
     blocked, reason = mod.query_verdict "dns_raw", { "1.1.1.1" }
     assert.is_true blocked
     assert.is_not_nil reason
-    assert.truthy reason\find "rcode=5"
+    assert.truthy reason\find "REFUSED"
 
   it "NXDOMAIN → bloqué avec raison", ->
     mod = load_validator make_upstream_stub make_response 3
     blocked, reason = mod.query_verdict "dns_raw", { "1.1.1.1" }
     assert.is_true blocked
-    assert.truthy reason\find "rcode=3"
+    assert.truthy reason\find "block"
 
   it "SERVFAIL (2) → non bloqué (fail-open)", ->
     mod = load_validator make_upstream_stub make_response 2
@@ -106,7 +106,7 @@ describe "doh.validator.query_verdict", ->
     mod = load_validator (make_upstream_stub nil), doh_stub
     blocked, reason = mod.query_verdict "dns_raw", { "https://1.1.1.1/dns-query" }
     assert.is_true blocked
-    assert.truthy reason\find "rcode=5"
+    assert.truthy reason\find "REFUSED"
 
   it "endpoint DoH NOERROR → non bloqué", ->
     doh_stub = make_doh_upstream_stub make_response 0
@@ -126,4 +126,38 @@ describe "doh.validator.query_verdict", ->
     mod = load_validator up_stub, doh_stub
     blocked, reason = mod.query_verdict "dns_raw", { "1.1.1.1", "https://9.9.9.9/dns-query" }
     assert.is_true blocked
-    assert.truthy reason\find "rcode=5"
+    assert.truthy reason\find "REFUSED"
+
+-- Réponse DNS NOERROR avec un answer A donné (rdata 4 octets).
+make_a_response = (rdata, txid=0x1234) ->
+  question = "\3foo\3bar\0" .. sp ">H H", 1, 1   -- A, IN
+  answer   = "\192\012" .. sp ">H H I4 s2", 1, 1, 60, rdata
+  (sp ">H H H H H H", txid, 0x8180, 1, 1, 0, 0) .. question .. answer
+
+describe "doh.validator.query_classified", ->
+
+  it "NXDOMAIN → override block", ->
+    mod = load_validator make_upstream_stub make_response 3
+    override = mod.query_classified "dns_raw", { "1.1.1.1" }
+    assert.equals "block", override.kind
+
+  it "REFUSED → override block", ->
+    mod = load_validator make_upstream_stub make_response 5
+    override = mod.query_classified "dns_raw", { "1.1.1.1" }
+    assert.equals "block", override.kind
+
+  it "NOERROR sans answer → pass (nil)", ->
+    mod = load_validator make_upstream_stub make_response 0
+    override = mod.query_classified "dns_raw", { "1.1.1.1" }
+    assert.is_nil override
+
+  it "réponse A 0.0.0.0 → override sinkhole", ->
+    mod = load_validator make_upstream_stub make_a_response "\0\0\0\0"
+    override = mod.query_classified "dns_raw", { "1.1.1.1" }
+    assert.equals "sinkhole", override.kind
+    assert.equals 1, #override.a
+
+  it "tous KO → pass (nil)", ->
+    mod = load_validator make_upstream_stub nil, nil
+    override = mod.query_classified "dns_raw", { "1.1.1.1", "2.2.2.2" }
+    assert.is_nil override

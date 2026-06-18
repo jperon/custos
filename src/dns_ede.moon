@@ -21,6 +21,7 @@ SVCB     = dns_mod.types.SVCB
 ede_codes = dns_mod.ede_codes
 
 pack: sp = require "ipparse.lib.pack_compat"
+{ :s2ip } = require "ipparse.l3.ip"
 bit = require "bit"
 
 :insert, :remove = table
@@ -113,6 +114,45 @@ build_nxdomain_response = (dns_orig, dns_raw, reason) ->
   else
     "Ne intretis."
   add_ede dns, EDE_BLOCKED, ede_text
+
+  tostring dns
+
+--- Build a NOERROR, authoritative (AA) DNS response pointing the queried name
+-- to the captive portal IP. Mirrors the UDP DNS-stealing of worker_questions
+-- (`forge_dns.forge_dns_response`) but at the DNS-message level (DoH transport).
+-- Only answers the family of the first question (A→ip4_str, AAAA→ip6_str) with
+-- TTL 0 ; other qtypes (or missing family) yield NOERROR with ancount 0.
+-- @tparam table       dns_orig Parsed question packet's dns table (unused, kept
+--                              for signature symmetry with build_*_response).
+-- @tparam string      dns_raw  Raw DNS query bytes (the query echoed back).
+-- @tparam string|nil  ip4_str  Captive portal IPv4 address, or nil.
+-- @tparam string|nil  ip6_str  Captive portal IPv6 address, or nil.
+-- @treturn string|nil Packed DNS response, or nil on parse failure.
+build_captive_response = (dns_orig, dns_raw, ip4_str, ip6_str) ->
+  return nil unless dns_raw
+
+  dns = parse dns_raw, 1, false
+  return nil unless dns
+
+  q = (dns.questions or {})[1]
+  return nil unless q
+
+  dns.header.qr    = true
+  dns.header.aa    = true
+  dns.header.rcode = NOERROR
+
+  answers = {}
+  if q.qtype == A and ip4_str
+    ok, raw = pcall s2ip, ip4_str
+    if ok and raw and #raw == 4
+      answers[#answers + 1] = { rname: string.char(0xC0, 0x0C), rtype: A, rclass: 1, ttl: 0, rdata: raw }
+  elseif q.qtype == AAAA and ip6_str
+    ok, raw = pcall s2ip, ip6_str
+    if ok and raw and #raw == 16
+      answers[#answers + 1] = { rname: string.char(0xC0, 0x0C), rtype: AAAA, rclass: 1, ttl: 0, rdata: raw }
+
+  dns.answers = answers
+  dns.header.ancount = #answers
 
   tostring dns
 
@@ -378,4 +418,4 @@ patch_modified_dns = (dns_payload, reason) ->
     new_dns = add_ede_modified(new_dns, reason) or new_dns
   new_dns, modified
 
-{ :add_ede, :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :add_ede_modified, :strip_dns_rr, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :patch_modified_dns, :EDE_BLOCKED, :EDE_TTL_MODIFIED }
+{ :add_ede, :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :build_captive_response, :add_ede_modified, :strip_dns_rr, :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :clear_ad_bit, :patch_modified_dns, :EDE_BLOCKED, :EDE_TTL_MODIFIED }

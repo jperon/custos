@@ -1,8 +1,8 @@
 package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
-local strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response, build_sinkhole_response
+local strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response, build_sinkhole_response, build_captive_response
 do
   local _obj_0 = require("dns_ede")
-  strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response, build_sinkhole_response = _obj_0.strip_https_rr, _obj_0.strip_a_rr, _obj_0.strip_aaaa_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.build_cname_response, _obj_0.build_sinkhole_response
+  strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response, build_sinkhole_response, build_captive_response = _obj_0.strip_https_rr, _obj_0.strip_a_rr, _obj_0.strip_aaaa_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.build_cname_response, _obj_0.build_sinkhole_response, _obj_0.build_captive_response
 end
 local encode_dns_name
 encode_dns_name = require("lib.dns_name").encode_dns_name
@@ -265,7 +265,7 @@ describe("build_cname_response", function()
     return assert.is_true(has_opt)
   end)
 end)
-return describe("build_sinkhole_response", function()
+describe("build_sinkhole_response", function()
   local get_rcode
   get_rcode = function(raw)
     return bit.band(raw:byte(4), 0x0f)
@@ -336,5 +336,63 @@ return describe("build_sinkhole_response", function()
     return assert.is_nil(build_sinkhole_response({ }, nil, "x", {
       a = { }
     }))
+  end)
+end)
+return describe("build_captive_response", function()
+  local get_rcode
+  get_rcode = function(raw)
+    return bit.band(raw:byte(4), 0x0f)
+  end
+  local aa_set
+  aa_set = function(raw)
+    return bit.band(raw:byte(3), 0x04) ~= 0
+  end
+  local make_query
+  make_query = function(qtype)
+    if qtype == nil then
+      qtype = QTYPE_A
+    end
+    local q = dns_mod.new({
+      header = dns_mod.new_header({
+        id = 0x1234,
+        rd = true
+      }),
+      questions = {
+        {
+          qname = encode_dns_name("captive.lan"),
+          qtype = qtype,
+          qclass = QCLASS_IN
+        }
+      }
+    })
+    return tostring(q)
+  end
+  it("question A → A locale, NOERROR, AA, TTL 0", function()
+    local resp = build_captive_response(nil, make_query(), "10.35.1.254", "fd00::1")
+    assert.is_not_nil(resp)
+    assert.equals(0, get_rcode(resp))
+    assert.is_true(aa_set(resp))
+    local parsed = dns_mod.parse(resp, 1, false)
+    assert.equals(1, parsed.header.ancount)
+    assert.equals(QTYPE_A, parsed.answers[1].rtype)
+    assert.equals(s2ip("10.35.1.254"), parsed.answers[1].rdata)
+    return assert.equals(0, parsed.answers[1].ttl)
+  end)
+  it("question AAAA → AAAA locale", function()
+    local resp = build_captive_response(nil, make_query(QTYPE_AAAA), "10.35.1.254", "fd00::1")
+    local parsed = dns_mod.parse(resp, 1, false)
+    assert.equals(1, parsed.header.ancount)
+    assert.equals(QTYPE_AAAA, parsed.answers[1].rtype)
+    return assert.equals(s2ip("fd00::1"), parsed.answers[1].rdata)
+  end)
+  it("famille demandée absente → NOERROR ancount 0", function()
+    local resp = build_captive_response(nil, make_query(QTYPE_AAAA), "10.35.1.254", nil)
+    assert.is_not_nil(resp)
+    assert.equals(0, get_rcode(resp))
+    local parsed = dns_mod.parse(resp, 1, false)
+    return assert.equals(0, parsed.header.ancount)
+  end)
+  return it("renvoie nil si dns_raw absent", function()
+    return assert.is_nil(build_captive_response(nil, nil, "10.35.1.254", nil))
   end)
 end)
