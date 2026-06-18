@@ -105,6 +105,7 @@ name_by_mac_for = function(cfg)
 end
 local name_form
 name_form = function(mac, name)
+  local named = name and name ~= ""
   local attrs = {
     type = "text",
     name = "name",
@@ -112,7 +113,7 @@ name_form = function(mac, name)
     required = "required",
     style = "margin:0; flex:1 1 auto; min-width:7rem; width:auto"
   }
-  if name and name ~= "" then
+  if named then
     attrs.value = esc(name)
   end
   return H.form({
@@ -134,8 +135,8 @@ name_form = function(mac, name)
     H.button({
       type = "submit",
       class = "btn btn-sm",
-      title = "Enregistrer le nom"
-    }, "+")
+      title = named and "Renommer" or "Enregistrer le nom"
+    }, named and "⟳" or "+")
   })
 end
 local mac_cell

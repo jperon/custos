@@ -91,13 +91,14 @@ name_by_mac_for = (cfg) ->
 -- POST /admin/config/devices + redirect whitelisté vers /admin/config/verdicts).
 -- Champ pré-rempli si la MAC est déjà nommée (renommage), vide sinon.
 name_form = (mac, name) ->
+  named = name and name != ""
   attrs = { type: "text", name: "name", placeholder: "nom", required: "required", style: "margin:0; flex:1 1 auto; min-width:7rem; width:auto" }
-  attrs.value = esc name if name and name != ""
+  attrs.value = esc name if named
   H.form { method: "POST", action: "/admin/config/devices", style: "margin:.2rem 0 0; display:flex; gap:.25rem" }, {
     H.input { type: "hidden", name: "mac", value: esc mac }
     H.input { type: "hidden", name: "redirect", value: "/admin/config/verdicts" }
     H.input attrs
-    H.button { type: "submit", class: "btn btn-sm", title: "Enregistrer le nom" }, "+"
+    H.button { type: "submit", class: "btn btn-sm", title: named and "Renommer" or "Enregistrer le nom" }, named and "⟳" or "+"
   }
 
 -- Cellule MAC / IP sur deux lignes (+ formulaire de nom sur une 3ᵉ ligne).

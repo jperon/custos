@@ -147,6 +147,7 @@ fmt_ts = function(ts)
 end
 local render_row
 render_row = function(d, name)
+  local named = name and name ~= ""
   local name_attrs = {
     type = "text",
     name = "name",
@@ -154,7 +155,7 @@ render_row = function(d, name)
     required = "required",
     style = "margin:0; flex:1 1 auto; min-width:10rem; width:auto"
   }
-  if name and name ~= "" then
+  if named then
     name_attrs.value = esc(name)
   end
   local name_cell = H.form({
@@ -171,8 +172,8 @@ render_row = function(d, name)
     H.button({
       type = "submit",
       class = "btn btn-sm",
-      title = "Enregistrer"
-    }, "+")
+      title = named and "Renommer" or "Enregistrer"
+    }, named and "⟳" or "+")
   })
   return H.tr({
     H.td(name_cell),

@@ -102,6 +102,8 @@ describe "webui/handlers/verdicts", ->
       write_file vline "aa:bb:cc", "10.0.0.9", "-", "x.com", "allow", "", 1, 100, 200
       _, _, body = handle_verdicts_get make_req!, make_state!
       assert.truthy body\find('value="Tablette"', 1, true)
+      -- Bouton « renommer » (⟳) pour une MAC déjà nommée
+      assert.truthy body\find("⟳", 1, true)
 
     it "n'affiche pas de nom pour une MAC inconnue", ->
       cfg = base_cfg!

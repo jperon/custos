@@ -113,12 +113,13 @@ fmt_ts = (ts) ->
 -- Le formulaire est toujours rendu : champ pré-rempli si la MAC est déjà nommée
 -- (édition du nom), vide sinon (enregistrement).
 render_row = (d, name) ->
+  named = name and name ~= ""
   name_attrs = { type: "text", name: "name", placeholder: "nom", required: "required", style: "margin:0; flex:1 1 auto; min-width:10rem; width:auto" }
-  name_attrs.value = esc name if name and name ~= ""
+  name_attrs.value = esc name if named
   name_cell = H.form { method: "POST", action: "/admin/config/devices", style: "margin:0; display:flex; gap:.25rem; min-width:14rem" }, {
     H.input { type: "hidden", name: "mac", value: esc d.mac }
     H.input name_attrs
-    H.button { type: "submit", class: "btn btn-sm", title: "Enregistrer" }, "+"
+    H.button { type: "submit", class: "btn btn-sm", title: named and "Renommer" or "Enregistrer" }, named and "⟳" or "+"
   }
   H.tr {
     H.td name_cell
