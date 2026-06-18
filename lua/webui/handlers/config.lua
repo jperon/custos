@@ -375,6 +375,11 @@ handle_config_index = function(req, state)
       }),
       H.li({
         H.a({
+          href = "/admin/config/verdicts"
+        }, "Verdicts récents (allow + block)")
+      }),
+      H.li({
+        H.a({
           href = "/admin/config/filter/users"
         }, "Utilisateurs")
       }),

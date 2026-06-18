@@ -95,9 +95,9 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 - **In :** pipe `events` (événements DNS de `worker_questions`).
 - **Out :** agrège et persiste les événements sous `events.dir` (rotation : `events.max_age_hours`, purge si espace libre < `events.min_free_pct`). Consommé par l'interface admin.
-- **Ring-buffers temps réel** dans `events.dir`, écrits par flush atomique throttlé (`RECENT_MIN_INTERVAL`) et au SIGTERM :
-  - `recent-blocks.tsv` — 50 derniers refus (`note_block`/`flush_recent`), lu par `auth/handlers.handle_refusals` (`/refusals`).
-  - `recent-devices.tsv` — jusqu'à `DEVICES_MAX` (256) appareils vus, **toutes décisions** (`note_device`/`flush_devices`), keyé par MAC : `mac\tlast_ip\tlast_user\tlast_qname\tlast_decision\tcount\tfirst_ts\tlast_ts`. Lu par la page admin `/admin/config/devices` (`webui/handlers/devices.moon`) pour l'enregistrement des MAC.
+- **Ring-buffer temps réel unique** `recent-verdicts.tsv` dans `events.dir`, écrit par flush atomique throttlé (`VERDICTS_MIN_INTERVAL`) et au SIGTERM :
+  - `note_verdict`/`flush_verdicts` — jusqu'à `VERDICTS_MAX` (8192) verdicts, **toutes décisions** (allow ET block), dédup LRU sur `(mac, qname, decision)` avec compteur (un verdict répété n'est gardé qu'une fois, le plus récent). Format : `mac\tip\tuser\tqname\tdecision\treason\tcount\tfirst_ts\tlast_ts`.
+  - Source unique de trois UX : `/refusals` (portail captif, filtre `decision == "block"` + MAC du client, `auth/handlers.handle_refusals`) ; `/admin/config/devices` (agrégation par MAC, un appareil par ligne, `webui/handlers/devices.read_devices`) ; `/admin/config/verdicts` (liste brute, lecture seule, `webui/handlers/verdicts.moon`).
 
 ## worker_arp_sniffer (`src/worker_arp_sniffer.moon`)
 

@@ -282,8 +282,10 @@ json_escape = (s) ->
   s
 
 -- Liste des derniers domaines refusés pour la MAC du client connecté.
--- Lecture seule : ni session, ni nft, ni cookie. Source = recent-blocks.tsv,
--- écrit en continu par worker_events (format : mac\tqname\treason\tcount\tlast_ts).
+-- Lecture seule : ni session, ni nft, ni cookie. Source = recent-verdicts.tsv,
+-- écrit en continu par worker_events (format : mac\tip\tuser\tqname\tdecision\t
+-- reason\tcount\tfirst_ts\tlast_ts). On ne retient que les lignes decision=block
+-- de la MAC du client.
 REFUSALS_MAX = 50
 
 handle_refusals = (req, peer_ip, peer_mac, state) ->
@@ -296,14 +298,16 @@ handle_refusals = (req, peer_ip, peer_mac, state) ->
   mac_lc = mac\lower!
 
   events_dir = state.events_dir or "/tmp/custos/events"
-  fh = io.open "#{events_dir}/recent-blocks.tsv", "r"
+  fh = io.open "#{events_dir}/recent-verdicts.tsv", "r"
   return 200, { ["Content-Type"]: "application/json" }, "[]" unless fh
 
   parts = {}
   for line in fh\lines!
     break if #parts >= REFUSALS_MAX
-    l_mac, qname, reason, count, ts = line\match "^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$"
+    l_mac, _ip, _user, qname, decision, reason, count, _first_ts, ts = line\match(
+      "^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
     continue unless l_mac and l_mac\lower! == mac_lc
+    continue unless decision == "block"
     parts[#parts + 1] = "{\"qname\":\"#{json_escape qname}\",\"reason\":\"#{json_escape reason}\",\"count\":#{tonumber(count) or 0},\"ts\":#{tonumber(ts) or 0}}"
   fh\close!
 

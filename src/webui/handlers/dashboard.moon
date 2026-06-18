@@ -11,6 +11,7 @@ nav_html = ->
     H.a { href: "/admin/config/filter/rules" }, "Règles"
     H.a { href: "/admin/config/filter/lists" }, "Listes"
     H.a { href: "/admin/config/devices" }, "Appareils"
+    H.a { href: "/admin/config/verdicts" }, "Verdicts"
     H.a { href: "/admin/config/" }, "Configuration"
     H.a { href: "/admin/system/status" }, "Statut"
     H.a { href: "/admin/logout" }, "Déconnexion"

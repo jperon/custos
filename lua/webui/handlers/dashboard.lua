@@ -18,6 +18,9 @@ nav_html = function()
       href = "/admin/config/devices"
     }, "Appareils"),
     H.a({
+      href = "/admin/config/verdicts"
+    }, "Verdicts"),
+    H.a({
       href = "/admin/config/"
     }, "Configuration"),
     H.a({

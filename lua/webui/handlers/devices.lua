@@ -40,29 +40,45 @@ events_dir_for = function(state, cfg)
 end
 local read_devices
 read_devices = function(events_dir)
-  local fh = io.open(tostring(events_dir) .. "/recent-devices.tsv", "r")
+  local fh = io.open(tostring(events_dir) .. "/recent-verdicts.tsv", "r")
   if not (fh) then
     return { }
   end
-  local out = { }
+  local by_mac = { }
+  local order = { }
   for line in fh:lines() do
     local _continue_0 = false
     repeat
-      local mac, ip, user, qname, decision, count, first_ts, last_ts = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
+      local mac, ip, user, qname, decision, _reason, count, first_ts, last_ts = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
       if not (mac and mac ~= "") then
         _continue_0 = true
         break
       end
-      out[#out + 1] = {
-        mac = mac,
-        ip = ip,
-        user = user,
-        qname = qname,
-        decision = decision,
-        count = tonumber(count) or 0,
-        first_ts = tonumber(first_ts) or 0,
-        last_ts = tonumber(last_ts) or 0
-      }
+      local cnt = tonumber(count) or 0
+      local fst = tonumber(first_ts) or 0
+      local lst = tonumber(last_ts) or 0
+      local e = by_mac[mac]
+      if not (e) then
+        e = {
+          mac = mac,
+          ip = ip,
+          user = user,
+          qname = qname,
+          decision = decision,
+          count = 0,
+          first_ts = fst,
+          last_ts = lst
+        }
+        by_mac[mac] = e
+        order[#order + 1] = e
+      end
+      e.count = e.count + cnt
+      if fst < e.first_ts then
+        e.first_ts = fst
+      end
+      if lst > e.last_ts then
+        e.last_ts = lst
+      end
       _continue_0 = true
     until true
     if not _continue_0 then
@@ -70,7 +86,7 @@ read_devices = function(events_dir)
     end
   end
   fh:close()
-  return out
+  return order
 end
 local mac_name_index
 mac_name_index = function(cfg)

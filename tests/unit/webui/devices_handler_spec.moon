@@ -9,7 +9,12 @@
 
 CFG_PATH    = "tmp/devices_handler_spec.lua"
 EVENTS_DIR  = "tmp/devices_handler_spec_events"
-DEV_FILE    = "#{EVENTS_DIR}/recent-devices.tsv"
+DEV_FILE    = "#{EVENTS_DIR}/recent-verdicts.tsv"
+
+-- Format recent-verdicts.tsv :
+--   mac\tip\tuser\tqname\tdecision\treason\tcount\tfirst_ts\tlast_ts
+vline = (mac, ip, user, qname, decision, count, first_ts, last_ts) ->
+  "#{mac}\t#{ip}\t#{user}\t#{qname}\t#{decision}\t-\t#{count}\t#{first_ts}\t#{last_ts}\n"
 
 write_cfg = (cfg) ->
   ok, err = write_config cfg, CFG_PATH
@@ -43,13 +48,13 @@ describe "webui/handlers/devices", ->
       assert.same {}, read_devices EVENTS_DIR
 
     it "ignore une ligne malformée (sans MAC)", ->
-      write_devices_file "\tx\ty\n10:00\tip\tu\tq\tallow\t1\t100\t200\n"
+      write_devices_file "\tx\ty\n" .. vline "10:00", "ip", "u", "q", "allow", 1, 100, 200
       devs = read_devices EVENTS_DIR
       assert.equals 1, #devs
       assert.equals "10:00", devs[1].mac
 
     it "parse chaque ligne TSV en record", ->
-      write_devices_file "aa:bb\t10.0.0.1\tbob\tx.com\tallow\t4\t100\t200\n"
+      write_devices_file vline "aa:bb", "10.0.0.1", "bob", "x.com", "allow", 4, 100, 200
       devs = read_devices EVENTS_DIR
       assert.equals 1, #devs
       assert.equals "aa:bb", devs[1].mac
@@ -59,6 +64,22 @@ describe "webui/handlers/devices", ->
       assert.equals "allow", devs[1].decision
       assert.equals 4, devs[1].count
       assert.equals 200, devs[1].last_ts
+
+    it "agrège les verdicts par MAC (somme des counts, min/max ts)", ->
+      -- Récent-d'abord : la 1ʳᵉ ligne fixe les champs « last_* ».
+      write_devices_file (vline "aa:bb", "10.0.0.2", "bob", "z.com", "block", 1, 300, 300) ..
+        (vline "aa:bb", "10.0.0.1", "bob", "x.com", "allow", 4, 100, 200) ..
+        (vline "cc:dd", "10.0.0.9", "-", "y.com", "allow", 2, 150, 160)
+      devs = read_devices EVENTS_DIR
+      assert.equals 2, #devs
+      first = devs[1]
+      assert.equals "aa:bb", first.mac
+      assert.equals "z.com", first.qname       -- verdict le plus récent
+      assert.equals "block", first.decision
+      assert.equals "10.0.0.2", first.ip
+      assert.equals 5, first.count             -- 1 + 4
+      assert.equals 100, first.first_ts        -- min
+      assert.equals 300, first.last_ts         -- max
 
   describe "mac_name_index", ->
 
@@ -92,20 +113,20 @@ describe "webui/handlers/devices", ->
   describe "handle_devices_get", ->
 
     it "retourne 200 avec HTML", ->
-      write_devices_file "aa:bb\t10.0.0.1\tbob\tx.com\tallow\t1\t100\t200\n"
+      write_devices_file vline "aa:bb", "10.0.0.1", "bob", "x.com", "allow", 1, 100, 200
       status, hdrs, body = handle_devices_get make_req("GET"), make_state!
       assert.equals 200, status
       assert.truthy body\find("<html", 1, true)
       assert.truthy body\find("aa:bb", 1, true)
 
     it "montre un formulaire d'enregistrement pour une MAC inconnue", ->
-      write_devices_file "aa:bb:cc:dd:ee:ff\t10.0.0.1\t-\tx.com\tallow\t1\t100\t200\n"
+      write_devices_file vline "aa:bb:cc:dd:ee:ff", "10.0.0.1", "-", "x.com", "allow", 1, 100, 200
       _, _, body = handle_devices_get make_req("GET"), make_state!
       assert.truthy body\find('name="name"', 1, true)
 
     it "pré-remplit le champ pour une MAC déjà enregistrée (édition)", ->
       write_cfg { filter: { macs: { peron: "aa:bb:cc:dd:ee:ff" }, rules: {} } }
-      write_devices_file "aa:bb:cc:dd:ee:ff\t10.0.0.1\t-\tx.com\tallow\t1\t100\t200\n"
+      write_devices_file vline "aa:bb:cc:dd:ee:ff", "10.0.0.1", "-", "x.com", "allow", 1, 100, 200
       _, _, body = handle_devices_get make_req("GET"), make_state!
       assert.truthy body\find('value="peron"', 1, true)
 
@@ -114,7 +135,7 @@ describe "webui/handlers/devices", ->
       assert.equals 500, status
 
     it "échappe le HTML des champs (anti-injection)", ->
-      write_devices_file "aa:bb\t10.0.0.1\t-\t<script>x\tallow\t1\t100\t200\n"
+      write_devices_file vline "aa:bb", "10.0.0.1", "-", "<script>x", "allow", 1, 100, 200
       _, _, body = handle_devices_get make_req("GET"), make_state!
       assert.is_nil body\find("<script>x", 1, true)
       assert.truthy body\find("&lt;script&gt;x", 1, true)

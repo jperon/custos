@@ -570,11 +570,15 @@ Stockage des événements système (journaux d'activité).
 | `min_free_pct` | int | `30` | Pourcentage d'espace disque libre minimum avant purge |
 
 En plus des fichiers TSV horaires agrégés (`events-YYYY-MM-DD-HH.tsv`),
-`worker_events` maintient `recent-blocks.tsv` dans `dir` : un ring buffer des
-50 derniers domaines refusés (dédupliqués par `mac+qname`), réécrit
-atomiquement avec un throttle de 5 s. Ce fichier alimente l'endpoint
-`/refusals` du portail (liste défilante des blocages récents sur la page de
-succès). Format : `mac\tqname\treason\tcount\tlast_ts`.
+`worker_events` maintient un ring buffer unique `recent-verdicts.tsv` dans
+`dir` : jusqu'à 8192 derniers verdicts DNS (allow **et** block), dédupliqués par
+`mac+qname+decision` avec compteur, réécrit atomiquement avec un throttle de 5 s.
+Format : `mac\tip\tuser\tqname\tdecision\treason\tcount\tfirst_ts\tlast_ts`.
+Ce fichier alimente trois UX :
+- l'endpoint `/refusals` du portail (blocages récents du client : lignes
+  `decision == "block"` filtrées par MAC) ;
+- la page admin `/admin/config/devices` (agrégation par MAC) ;
+- la page admin `/admin/config/verdicts` (liste brute de tous les verdicts).
 
 ---
 

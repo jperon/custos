@@ -23,6 +23,7 @@
   :handle_list_get,     :handle_list_post,
   :handle_list_new_get, :handle_list_new_post } = require "webui.handlers.lists"
 { :handle_devices_get, :handle_devices_post } = require "webui.handlers.devices"
+{ :handle_verdicts_get } = require "webui.handlers.verdicts"
 
 -- Sections scalaires éditables via le handler générique
 SCALAR_SECTIONS = {
@@ -63,6 +64,10 @@ dispatch = (req, state) ->
   if path == "/admin/config/devices"
     return handle_devices_get(req, state)  if method == "GET"
     return handle_devices_post(req, state) if method == "POST"
+
+  -- Verdicts récents (lecture seule : allow + block)
+  if path == "/admin/config/verdicts"
+    return handle_verdicts_get(req, state) if method == "GET"
 
   -- Index config
   if path == "/admin/config/" or path == "/admin/config"

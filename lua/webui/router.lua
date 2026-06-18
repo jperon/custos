@@ -35,6 +35,8 @@ do
   local _obj_0 = require("webui.handlers.devices")
   handle_devices_get, handle_devices_post = _obj_0.handle_devices_get, _obj_0.handle_devices_post
 end
+local handle_verdicts_get
+handle_verdicts_get = require("webui.handlers.verdicts").handle_verdicts_get
 local SCALAR_SECTIONS = {
   runtime = true,
   nfqueue = true,
@@ -82,6 +84,11 @@ dispatch = function(req, state)
     end
     if method == "POST" then
       return handle_devices_post(req, state)
+    end
+  end
+  if path == "/admin/config/verdicts" then
+    if method == "GET" then
+      return handle_verdicts_get(req, state)
     end
   end
   if path == "/admin/config/" or path == "/admin/config" then

@@ -21,11 +21,9 @@ local READ_BUF = 65536
 local O_WRONLY = 1
 local FILE_MODE = 420
 local HEADER = "decision\tqname\tmac_src\tsrc_ip\tdst_ip\tvlan\tuser\taf\treason\trule\tcount\tfirst_ts\tlast_ts\n"
-local RECENT_MAX = 50
-local RECENT_FILE = "recent-blocks.tsv"
-local RECENT_MIN_INTERVAL = 5
-local DEVICES_MAX = 256
-local DEVICES_FILE = "recent-devices.tsv"
+local VERDICTS_MAX = 8192
+local VERDICTS_FILE = "recent-verdicts.tsv"
+local VERDICTS_MIN_INTERVAL = 5
 local _read_buf = ffi.new("uint8_t[?]", READ_BUF)
 local current_hour
 current_hour = function()
@@ -55,113 +53,49 @@ read_chunk = function(fd)
     return ""
   end
 end
-local note_block
-note_block = function(recent, decision, qname, mac, reason, ts)
-  if not (decision == "block") then
+local note_verdict
+note_verdict = function(verdicts, decision, qname, mac, ip, user, reason, ts)
+  if not (mac and qname and mac ~= "" and qname ~= "" and mac ~= "unknown") then
     return false
   end
-  if not (mac and qname and mac ~= "" and qname ~= "") then
-    return false
-  end
-  for i = 1, #recent do
-    local e = recent[i]
-    if e.mac == mac and e.qname == qname then
+  for i = 1, #verdicts do
+    local e = verdicts[i]
+    if e.mac == mac and e.qname == qname and e.decision == decision then
       e.count = e.count + 1
       e.last_ts = ts
+      e.ip = ip
+      e.user = user
       e.reason = reason
-      table.remove(recent, i)
-      table.insert(recent, 1, e)
+      table.remove(verdicts, i)
+      table.insert(verdicts, 1, e)
       return true
     end
   end
-  table.insert(recent, 1, {
+  table.insert(verdicts, 1, {
     mac = mac,
     qname = qname,
+    decision = decision,
+    ip = ip,
+    user = user,
     reason = reason,
-    count = 1,
-    last_ts = ts
-  })
-  if #recent > RECENT_MAX then
-    recent[RECENT_MAX + 1] = nil
-  end
-  return true
-end
-local flush_recent
-flush_recent = function(recent, events_dir)
-  local path = tostring(events_dir) .. "/" .. tostring(RECENT_FILE)
-  local tmp = tostring(path) .. ".tmp"
-  local fh, err = io.open(tmp, "w")
-  if not (fh) then
-    log_warn(function()
-      return {
-        action = "recent_open_failed",
-        path = tmp,
-        err = err
-      }
-    end)
-    return 
-  end
-  local parts = { }
-  for _index_0 = 1, #recent do
-    local e = recent[_index_0]
-    parts[#parts + 1] = tostring(e.mac) .. "\t" .. tostring(e.qname) .. "\t" .. tostring(e.reason or "") .. "\t" .. tostring(e.count) .. "\t" .. tostring(e.last_ts) .. "\n"
-  end
-  fh:write(table.concat(parts))
-  fh:close()
-  return os.rename(tmp, path)
-end
-local note_device
-note_device = function(devices, mac, src_ip, user, qname, decision, ts)
-  if not (mac and mac ~= "" and mac ~= "unknown") then
-    return false
-  end
-  local e = devices[mac]
-  if e then
-    e.count = e.count + 1
-    e.last_ip = src_ip
-    e.last_user = user
-    e.last_qname = qname
-    e.last_decision = decision
-    e.last_ts = ts
-    return true
-  end
-  devices[mac] = {
-    mac = mac,
-    last_ip = src_ip,
-    last_user = user,
-    last_qname = qname,
-    last_decision = decision,
     count = 1,
     first_ts = ts,
     last_ts = ts
-  }
-  local n = 0
-  for _ in pairs(devices) do
-    n = n + 1
-  end
-  if n > DEVICES_MAX then
-    local oldest_key, oldest_ts = nil, nil
-    for k, v in pairs(devices) do
-      local v_ts = tonumber(v.last_ts) or 0
-      if oldest_ts == nil or v_ts < oldest_ts then
-        oldest_key, oldest_ts = k, v_ts
-      end
-    end
-    if oldest_key then
-      devices[oldest_key] = nil
-    end
+  })
+  if #verdicts > VERDICTS_MAX then
+    verdicts[VERDICTS_MAX + 1] = nil
   end
   return true
 end
-local flush_devices
-flush_devices = function(devices, events_dir)
-  local path = tostring(events_dir) .. "/" .. tostring(DEVICES_FILE)
+local flush_verdicts
+flush_verdicts = function(verdicts, events_dir)
+  local path = tostring(events_dir) .. "/" .. tostring(VERDICTS_FILE)
   local tmp = tostring(path) .. ".tmp"
   local fh, err = io.open(tmp, "w")
   if not (fh) then
     log_warn(function()
       return {
-        action = "devices_open_failed",
+        action = "verdicts_open_failed",
         path = tmp,
         err = err
       }
@@ -169,15 +103,16 @@ flush_devices = function(devices, events_dir)
     return 
   end
   local parts = { }
-  for _, e in pairs(devices) do
-    parts[#parts + 1] = tostring(e.mac) .. "\t" .. tostring(e.last_ip or "") .. "\t" .. tostring(e.last_user or "") .. "\t" .. tostring(e.last_qname or "") .. "\t" .. tostring(e.last_decision or "") .. "\t" .. tostring(e.count) .. "\t" .. tostring(e.first_ts) .. "\t" .. tostring(e.last_ts) .. "\n"
+  for _index_0 = 1, #verdicts do
+    local e = verdicts[_index_0]
+    parts[#parts + 1] = tostring(e.mac) .. "\t" .. tostring(e.ip or "") .. "\t" .. tostring(e.user or "") .. "\t" .. tostring(e.qname) .. "\t" .. tostring(e.decision or "") .. "\t" .. tostring(e.reason or "") .. "\t" .. tostring(e.count) .. "\t" .. tostring(e.first_ts) .. "\t" .. tostring(e.last_ts) .. "\n"
   end
   fh:write(table.concat(parts))
   fh:close()
   return os.rename(tmp, path)
 end
 local process_line
-process_line = function(line, agg, recent, devices)
+process_line = function(line, agg, verdicts)
   local tab_pos = line:find("\t")
   if not (tab_pos) then
     return false
@@ -198,22 +133,14 @@ process_line = function(line, agg, recent, devices)
       last_ts = ts_str
     }
   end
-  if not (recent or devices) then
-    return false, false
+  if not (verdicts) then
+    return false
   end
   local decision, qname, mac, src_ip, _dst_ip, _vlan, user, _af, reason = key:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)")
   if not (decision) then
-    return false, false
+    return false
   end
-  local blocked = false
-  if recent then
-    blocked = note_block(recent, decision, qname, mac, reason, ts_str)
-  end
-  local device_noted = false
-  if devices then
-    device_noted = note_device(devices, mac, src_ip, user, qname, decision, ts_str)
-  end
-  return blocked, device_noted
+  return note_verdict(verdicts, decision, qname, mac, src_ip, user, reason, ts_str)
 end
 local flush_to_file
 flush_to_file = function(agg, hour, events_dir)
@@ -385,10 +312,8 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
   pfds[1].fd = sfd
   pfds[1].events = POLLIN
   local agg = { }
-  local recent = { }
-  local devices = { }
-  local last_recent_write = 0
-  local last_devices_write = 0
+  local verdicts = { }
+  local last_verdicts_write = 0
   local line_buf = ""
   local hour = current_hour()
   local siginfo = ffi.new("signalfd_siginfo")
@@ -415,7 +340,7 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
           }
         end)
         flush_to_file(agg, hour, events_dir)
-        flush_devices(devices, events_dir)
+        flush_verdicts(verdicts, events_dir)
         libc._exit(0)
       end
     end
@@ -430,8 +355,7 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
         end)
       elseif #chunk > 0 then
         line_buf = line_buf .. chunk
-        local blocked = false
-        local device_touched = false
+        local verdict_touched = false
         while true do
           local nl = line_buf:find("\n", 1, true)
           if not (nl) then
@@ -440,23 +364,15 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
           local line = line_buf:sub(1, nl - 1)
           line_buf = line_buf:sub(nl + 1)
           if #line > 0 then
-            local b, d = process_line(line, agg, recent, devices)
-            if b then
-              blocked = true
-            end
-            if d then
-              device_touched = true
+            if process_line(line, agg, verdicts) then
+              verdict_touched = true
             end
           end
         end
         local now = os.time()
-        if blocked and now - last_recent_write >= RECENT_MIN_INTERVAL then
-          flush_recent(recent, events_dir)
-          last_recent_write = now
-        end
-        if device_touched and now - last_devices_write >= RECENT_MIN_INTERVAL then
-          flush_devices(devices, events_dir)
-          last_devices_write = now
+        if verdict_touched and now - last_verdicts_write >= VERDICTS_MIN_INTERVAL then
+          flush_verdicts(verdicts, events_dir)
+          last_verdicts_write = now
         end
       end
     end
@@ -480,8 +396,6 @@ end
 return {
   run = run,
   process_line = process_line,
-  note_block = note_block,
-  flush_recent = flush_recent,
-  note_device = note_device,
-  flush_devices = flush_devices
+  note_verdict = note_verdict,
+  flush_verdicts = flush_verdicts
 }

@@ -442,7 +442,7 @@ handle_refusals = function(req, peer_ip, peer_mac, state)
   end
   local mac_lc = mac:lower()
   local events_dir = state.events_dir or "/tmp/custos/events"
-  local fh = io.open(tostring(events_dir) .. "/recent-blocks.tsv", "r")
+  local fh = io.open(tostring(events_dir) .. "/recent-verdicts.tsv", "r")
   if not (fh) then
     return 200, {
       ["Content-Type"] = "application/json"
@@ -455,8 +455,12 @@ handle_refusals = function(req, peer_ip, peer_mac, state)
       if #parts >= REFUSALS_MAX then
         break
       end
-      local l_mac, qname, reason, count, ts = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
+      local l_mac, _ip, _user, qname, decision, reason, count, _first_ts, ts = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
       if not (l_mac and l_mac:lower() == mac_lc) then
+        _continue_0 = true
+        break
+      end
+      if not (decision == "block") then
         _continue_0 = true
         break
       end

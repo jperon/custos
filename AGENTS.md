@@ -24,7 +24,7 @@ Une tâche n'est **jamais** terminée tant que les trois conditions suivantes ne
 sont pas vérifiées et constatées (pas supposées) :
 
 1. **Couverture de tests.** Tout code ajouté ou modifié doit être couvert par des
-   tests. En toute fin d’un développement, vérifier avec `make coverage`
+   tests. En toute fin d’un développement important, vérifier avec `make coverage`
    (rapport dans `tmp/coverage/`) ; attention, pas trop tôt (car lent). Une
    branche d'erreur non couvrable en unitaire doit l'être par un mock (cf.
    `tests/unit/auth/cert_generator_spec.moon`) ou par les tests e2e.
@@ -235,14 +235,14 @@ Le serveur HTTPS est découpé pour isoler les responsabilités :
   qu'après deux 401 consécutifs (retry de confirmation à 2 s).
   `handle_refusals` sert `GET /refusals` : liste JSON **en lecture seule** des
   derniers domaines refusés pour la MAC du client (token vérifié, ni session ni
-  nft ni cookie touchés). Source : `recent-blocks.tsv` écrit par `worker_events`
-  dans `events.dir`. La page de succès l'interroge toutes les
+  nft ni cookie touchés). Source : `recent-verdicts.tsv` écrit par `worker_events`
+  dans `events.dir` (filtré sur `decision == "block"`). La page de succès l'interroge toutes les
   `auth.refusals_poll_interval` s (défaut 5) et affiche une liste défilante,
   indépendamment du `/ping`.
   **Important** : les blocages décidés par le *second avis DNS* (validateur amont)
   sont appliqués dans `worker_responses.finalize_a` (override `block`/`sinkhole`),
   **après** la décision `decide` de `worker_questions` qui a déjà loggé la requête
-  en `allow`. Ces blocages n'apparaîtraient donc jamais dans les events/`recent-blocks`.
+  en `allow`. Ces blocages n'apparaîtraient donc jamais dans les events/`recent-verdicts`.
   Pour les rendre visibles, `worker_responses` reçoit `events_wfd` (via `main.moon`)
   et émet une ligne d'événement `block` (`format_block_event`, raison
   « Filtered by upstream validator ») dans ces deux branches d'override.
@@ -300,8 +300,10 @@ liste sous « Filtre DNS — éditeurs dédiés ».
 ### Page « Appareils » (`src/webui/handlers/devices.moon`)
 
 `GET/POST /admin/config/devices` facilite l'enregistrement des clients réseau.
-Elle lit `recent-devices.tsv` (ring-buffer écrit par `worker_events`, cf.
-[.agents/workers.md](.agents/workers.md)) via `read_devices` et affiche un tableau
+Elle lit `recent-verdicts.tsv` (ring-buffer unique écrit par `worker_events`, cf.
+[.agents/workers.md](.agents/workers.md)) via `read_devices`, qui **agrège les
+verdicts par MAC** (1ʳᵉ occurrence = dernier verdict, `count` sommé, `first_ts`
+min / `last_ts` max), et affiche un tableau
 triable/filtrable (JS inline, sans dépendance) des appareils vus : Nom, MAC, IP,
 user, dernier domaine, décision, vus, dernière activité. La colonne **Nom** est
 remplie par recoupement avec `filter.macs` (`mac_name_index`, map inverse
@@ -319,6 +321,15 @@ n'échappant rien, `devices.moon` échappe lui-même les valeurs (`esc`).
 (`config_schema.macs.value_type = "string"`) sont alignés sur ce contrat. Un alias
 ainsi défini est résoluble dans `from_macs {…}` / `from_mac_list` (chaque entrée
 passe par `from_mac` via `make_plural`), mélangeable avec des MAC brutes.
+
+### Page « Verdicts » (`src/webui/handlers/verdicts.moon`)
+
+`GET /admin/config/verdicts` (lecture seule, pas de POST) liste **tous** les
+derniers verdicts DNS (allow ET block) lus depuis `recent-verdicts.tsv` via
+`read_verdicts` (une ligne par verdict, **sans** agrégation, contrairement à la
+page Appareils). Même UX que « Appareils » : recherche plein-texte + tri par clic
+d'en-tête (JS inline, ids `verdtbl`/`verdfilter`), valeurs échappées via `esc`.
+Colonnes : MAC, IP, User, Domaine, Décision, Raison, Vus, Première, Dernière.
 
 ## Synchronisation de configuration (`sync/`)
 

@@ -1,6 +1,6 @@
 -- src/webui/handlers/devices.moon
 -- GET/POST /admin/config/devices
--- Liste les appareils vus sur le réseau (recent-devices.tsv écrit par
+-- Liste les appareils vus sur le réseau (recent-verdicts.tsv écrit par
 -- worker_events) et permet d'enregistrer une MAC sous un nom dans filter.macs.
 
 H = require "auth.html"
@@ -25,25 +25,35 @@ esc = (s) ->
 events_dir_for = (state, cfg) ->
   state.events_dir or (cfg and cfg.events and cfg.events.dir) or "/tmp/custos/events"
 
---- Lit recent-devices.tsv et renvoie une liste de records d'appareils.
+--- Lit recent-verdicts.tsv et agrège les verdicts par MAC (un appareil/ligne).
+-- Le fichier est ordonné récent-d'abord : la 1ʳᵉ occurrence d'une MAC fournit
+-- ses derniers champs (ip/user/qname/decision/last_ts) ; on cumule count et on
+-- borne first_ts (min) / last_ts (max) sur toutes les lignes de la MAC.
 -- @tparam string events_dir Répertoire des events
 -- @treturn table Liste { {mac, ip, user, qname, decision, count, first_ts, last_ts}, … }
 read_devices = (events_dir) ->
-  fh = io.open "#{events_dir}/recent-devices.tsv", "r"
+  fh = io.open "#{events_dir}/recent-verdicts.tsv", "r"
   return {} unless fh
-  out = {}
+  by_mac = {}
+  order  = {}
   for line in fh\lines!
-    mac, ip, user, qname, decision, count, first_ts, last_ts = line\match(
-      "^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
+    mac, ip, user, qname, decision, _reason, count, first_ts, last_ts = line\match(
+      "^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
     continue unless mac and mac ~= ""
-    out[#out + 1] = {
-      :mac, :ip, :user, :qname, :decision
-      count:    tonumber(count) or 0
-      first_ts: tonumber(first_ts) or 0
-      last_ts:  tonumber(last_ts) or 0
-    }
+    cnt = tonumber(count) or 0
+    fst = tonumber(first_ts) or 0
+    lst = tonumber(last_ts) or 0
+    e = by_mac[mac]
+    unless e
+      -- 1ʳᵉ occurrence (la plus récente) : fixe les champs « last_* ».
+      e = { :mac, :ip, :user, :qname, :decision, count: 0, first_ts: fst, last_ts: lst }
+      by_mac[mac] = e
+      order[#order + 1] = e
+    e.count   += cnt
+    e.first_ts = fst if fst < e.first_ts
+    e.last_ts  = lst if lst > e.last_ts
   fh\close!
-  out
+  order
 
 --- Construit la map inverse MAC(minuscule) → nom depuis cfg.filter.macs.
 -- Gère les valeurs string (contrat actuel) et table (configs héritées).

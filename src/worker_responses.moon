@@ -68,7 +68,7 @@ nxdomain_bad  = ttl_set.new (retry_cfg.nxdomain_bad_max or 4096), (retry_cfg.nxd
 -- État « second avis » (nil si désactivé), initialisé dans run().
 so_state = nil
 
--- fd d'écriture du pipe « events » (alimente worker_events / recent-blocks).
+-- fd d'écriture du pipe « events » (alimente worker_events / recent-verdicts).
 -- Initialisé dans run() depuis rfd.events_wfd. Permet de signaler les blocages
 -- décidés par le validateur amont (override block/sinkhole), invisibles sinon
 -- car write_event de worker_questions a déjà loggé la requête en « allow ».

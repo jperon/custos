@@ -181,6 +181,7 @@ handle_config_index = (req, state) ->
       H.li { H.a { href: "/admin/config/filter/nets" },     "Réseaux nommés" }
       H.li { H.a { href: "/admin/config/filter/macs" },     "MACs nommées" }
       H.li { H.a { href: "/admin/config/devices" },         "Appareils vus / enregistrement MAC" }
+      H.li { H.a { href: "/admin/config/verdicts" },        "Verdicts récents (allow + block)" }
       H.li { H.a { href: "/admin/config/filter/users" },    "Utilisateurs" }
       H.li { H.a { href: "/admin/config/filter/times" },    "Plages horaires" }
     }

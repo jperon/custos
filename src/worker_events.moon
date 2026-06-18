@@ -34,17 +34,17 @@ FILE_MODE    = 420     -- 0644 décimal
 -- Header TSV (écrit une seule fois à la création du fichier via O_EXCL)
 HEADER = "decision\tqname\tmac_src\tsrc_ip\tdst_ip\tvlan\tuser\taf\treason\trule\tcount\tfirst_ts\tlast_ts\n"
 
--- Ring buffer « recent » des derniers refus, exposé en temps réel au worker AUTH
--- (endpoint /refusals) en plus des TSV horaires agrégés. Écrit dans events_dir.
-RECENT_MAX          = 50              -- nombre max d'entrées conservées
-RECENT_FILE         = "recent-blocks.tsv"
-RECENT_MIN_INTERVAL = 5              -- secondes : throttle minimal entre flushes
-
--- Ring buffer « devices » des appareils vus (toutes décisions), exposé au worker
--- AUTH (page admin /admin/config/devices) pour faciliter l'enregistrement des
--- MAC dans filter.macs. Indexé par MAC, écrit dans events_dir.
-DEVICES_MAX  = 256                  -- nombre max d'appareils conservés
-DEVICES_FILE = "recent-devices.tsv"
+-- Ring buffer « verdicts » des derniers verdicts DNS (allow ET block), exposé en
+-- temps réel au worker AUTH en plus des TSV horaires agrégés. Source unique de :
+--   • /refusals (portail captif)    → filtre decision == "block" + MAC du client
+--   • /admin/config/devices         → agrégation par MAC (un appareil par ligne)
+--   • /admin/config/verdicts        → liste brute (une ligne par verdict)
+-- Dédup LRU sur (mac, qname, decision) : un verdict répété n'est gardé qu'une
+-- fois (le plus récent), avec un compteur (rate-limiting d'affichage). Écrit
+-- dans events_dir.
+VERDICTS_MAX          = 8192            -- nombre max d'entrées conservées
+VERDICTS_FILE         = "recent-verdicts.tsv"
+VERDICTS_MIN_INTERVAL = 5              -- secondes : throttle minimal entre flushes
 
 -- Buffer de lecture partagé (alloué une seule fois au chargement du module)
 _read_buf = ffi.new "uint8_t[?]", READ_BUF
@@ -87,125 +87,72 @@ read_chunk = (fd) ->
   else
     ""     -- EAGAIN ou erreur transitoire
 
---- Parse une ligne TSV entrante et met à jour la table d'agrégation.
--- Format attendu : ts<TAB>key (où key contient 12 champs séparés par TAB).
+--- Parse une ligne TSV entrante, met à jour la table d'agrégation et, si fourni,
+-- le ring buffer des verdicts récents.
+-- Format attendu : ts<TAB>key (où key contient 10 champs séparés par TAB).
 -- La clé d'agrégation est tout ce qui suit le premier TAB.
--- @tparam string line  Ligne TSV sans le \n final
--- @tparam table  agg   Table d'agrégation { key → {count, first_ts, last_ts} }
--- @treturn nil
---- Met à jour le ring buffer des refus récents pour un refus DNS.
--- N'agit que si decision == "block". Dédup sur (mac, qname) : une entrée déjà
--- présente est incrémentée, son last_ts mis à jour et remontée en tête (plus
--- récent d'abord) ; sinon insérée en tête, le buffer étant tronqué à RECENT_MAX.
--- @tparam table  recent   Ring buffer { {mac, qname, reason, count, last_ts}, … }
--- @tparam string decision "block" ou "allow"
--- @tparam string qname    Domaine refusé
+-- @tparam string line     Ligne TSV sans le \n final
+-- @tparam table  agg      Table d'agrégation { key → {count, first_ts, last_ts} }
+-- @tparam ?table verdicts Ring buffer des verdicts (optionnel)
+-- @treturn boolean        true si une entrée verdict a été notée
+--- Met à jour le ring buffer des verdicts récents pour un verdict DNS.
+-- Accepte allow ET block. Dédup LRU sur (mac, qname, decision) : une entrée déjà
+-- présente est incrémentée (compteur), ses champs ip/user/reason/last_ts mis à
+-- jour et remontée en tête (plus récent d'abord) ; sinon insérée en tête, le
+-- buffer étant tronqué à VERDICTS_MAX. Ignore les MAC vides/inconnues.
+-- @tparam table  verdicts Ring buffer { {mac, qname, decision, ip, user, reason,
+--                         count, first_ts, last_ts}, … }
+-- @tparam string decision "allow" ou "block"
+-- @tparam string qname    Domaine demandé
 -- @tparam string mac      MAC du client
--- @tparam string reason   Raison textuelle du refus
--- @tparam string ts       Timestamp (chaîne) du refus
--- @treturn boolean        true si une entrée block a été notée
-note_block = (recent, decision, qname, mac, reason, ts) ->
-  return false unless decision == "block"
-  return false unless mac and qname and mac ~= "" and qname ~= ""
+-- @tparam string ip       IP source
+-- @tparam string user     Utilisateur authentifié (ou "-"/"")
+-- @tparam string reason   Raison textuelle du verdict
+-- @tparam string ts       Timestamp (chaîne) du verdict
+-- @treturn boolean        true si une entrée a été notée
+note_verdict = (verdicts, decision, qname, mac, ip, user, reason, ts) ->
+  return false unless mac and qname and mac ~= "" and qname ~= "" and mac ~= "unknown"
 
-  -- Recherche d'une entrée existante (même mac + qname) à remonter en tête.
-  for i = 1, #recent
-    e = recent[i]
-    if e.mac == mac and e.qname == qname
+  -- Recherche d'une entrée existante (même mac + qname + decision) à remonter.
+  for i = 1, #verdicts
+    e = verdicts[i]
+    if e.mac == mac and e.qname == qname and e.decision == decision
       e.count  += 1
       e.last_ts = ts
+      e.ip      = ip
+      e.user    = user
       e.reason  = reason
-      table.remove recent, i
-      table.insert recent, 1, e
+      table.remove verdicts, i
+      table.insert verdicts, 1, e
       return true
 
-  table.insert recent, 1, { :mac, :qname, :reason, count: 1, last_ts: ts }
-  recent[RECENT_MAX + 1] = nil if #recent > RECENT_MAX
-  true
-
---- Écrit atomiquement le fichier recent-blocks.tsv (temp + rename).
--- Une ligne par entrée : mac\tqname\treason\tcount\tlast_ts.
--- @tparam table  recent     Ring buffer des refus récents
--- @tparam string events_dir Répertoire de sortie
--- @treturn nil
-flush_recent = (recent, events_dir) ->
-  path = "#{events_dir}/#{RECENT_FILE}"
-  tmp  = "#{path}.tmp"
-  fh, err = io.open tmp, "w"
-  unless fh
-    log_warn -> { action: "recent_open_failed", path: tmp, err: err }
-    return
-  parts = {}
-  for e in *recent
-    parts[#parts + 1] = "#{e.mac}\t#{e.qname}\t#{e.reason or ""}\t#{e.count}\t#{e.last_ts}\n"
-  fh\write table.concat parts
-  fh\close!
-  os.rename tmp, path
-
---- Met à jour la map des appareils vus pour une requête DNS (fonction pure).
--- Upsert keyé par MAC : incrémente count, met à jour les champs last_*. Ignore
--- les MAC vides/inconnues. Tronque à DEVICES_MAX en évinçant l'appareil le moins
--- récemment vu (plus petit last_ts).
--- @tparam table  devices  Map { mac → {mac, last_ip, last_user, last_qname,
---                          last_decision, count, first_ts, last_ts} }
--- @tparam string mac       MAC du client
--- @tparam string src_ip    IP source
--- @tparam string user      Utilisateur authentifié (ou "-"/"")
--- @tparam string qname     Domaine demandé
--- @tparam string decision  "allow" ou "block"
--- @tparam string ts        Timestamp (chaîne) de la requête
--- @treturn boolean         true si un appareil a été noté
-note_device = (devices, mac, src_ip, user, qname, decision, ts) ->
-  return false unless mac and mac ~= "" and mac ~= "unknown"
-
-  e = devices[mac]
-  if e
-    e.count        += 1
-    e.last_ip       = src_ip
-    e.last_user     = user
-    e.last_qname    = qname
-    e.last_decision = decision
-    e.last_ts       = ts
-    return true
-
-  devices[mac] = {
-    :mac, last_ip: src_ip, last_user: user, last_qname: qname,
-    last_decision: decision, count: 1, first_ts: ts, last_ts: ts
+  table.insert verdicts, 1, {
+    :mac, :qname, :decision, :ip, :user, :reason, count: 1, first_ts: ts, last_ts: ts
   }
-
-  -- Troncature : évincer l'appareil au plus petit last_ts si on dépasse la borne.
-  n = 0
-  n += 1 for _ in pairs devices
-  if n > DEVICES_MAX
-    oldest_key, oldest_ts = nil, nil
-    for k, v in pairs devices
-      v_ts = tonumber(v.last_ts) or 0
-      if oldest_ts == nil or v_ts < oldest_ts
-        oldest_key, oldest_ts = k, v_ts
-    devices[oldest_key] = nil if oldest_key
+  verdicts[VERDICTS_MAX + 1] = nil if #verdicts > VERDICTS_MAX
   true
 
---- Écrit atomiquement recent-devices.tsv (temp + rename).
--- Une ligne par appareil :
---   mac\tlast_ip\tlast_user\tlast_qname\tlast_decision\tcount\tfirst_ts\tlast_ts.
--- @tparam table  devices    Map des appareils vus
+--- Écrit atomiquement le fichier recent-verdicts.tsv (temp + rename).
+-- Une ligne par entrée :
+--   mac\tip\tuser\tqname\tdecision\treason\tcount\tfirst_ts\tlast_ts.
+-- @tparam table  verdicts   Ring buffer des verdicts récents
 -- @tparam string events_dir Répertoire de sortie
 -- @treturn nil
-flush_devices = (devices, events_dir) ->
-  path = "#{events_dir}/#{DEVICES_FILE}"
+flush_verdicts = (verdicts, events_dir) ->
+  path = "#{events_dir}/#{VERDICTS_FILE}"
   tmp  = "#{path}.tmp"
   fh, err = io.open tmp, "w"
   unless fh
-    log_warn -> { action: "devices_open_failed", path: tmp, err: err }
+    log_warn -> { action: "verdicts_open_failed", path: tmp, err: err }
     return
   parts = {}
-  for _, e in pairs devices
-    parts[#parts + 1] = "#{e.mac}\t#{e.last_ip or ""}\t#{e.last_user or ""}\t#{e.last_qname or ""}\t#{e.last_decision or ""}\t#{e.count}\t#{e.first_ts}\t#{e.last_ts}\n"
+  for e in *verdicts
+    parts[#parts + 1] = "#{e.mac}\t#{e.ip or ""}\t#{e.user or ""}\t#{e.qname}\t#{e.decision or ""}\t#{e.reason or ""}\t#{e.count}\t#{e.first_ts}\t#{e.last_ts}\n"
   fh\write table.concat parts
   fh\close!
   os.rename tmp, path
 
-process_line = (line, agg, recent, devices) ->
+process_line = (line, agg, verdicts) ->
   tab_pos = line\find "\t"
   return false unless tab_pos
 
@@ -220,21 +167,15 @@ process_line = (line, agg, recent, devices) ->
   else
     agg[key] = { count: 1, first_ts: ts_str, last_ts: ts_str }
 
-  -- Champs détaillés : nécessaires au ring buffer des refus (block) ET à la map
-  -- des appareils (toutes décisions). On ne parse qu'une fois.
-  return false, false unless recent or devices
+  -- Champs détaillés : nécessaires au ring buffer des verdicts. On ne parse
+  -- qu'une fois, et seulement si le buffer est demandé.
+  return false unless verdicts
   -- key = decision \t qname \t mac_src \t src_ip \t dst_ip \t vlan \t user \t af \t reason \t rule
   decision, qname, mac, src_ip, _dst_ip, _vlan, user, _af, reason = key\match(
     "^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)")
-  return false, false unless decision
+  return false unless decision
 
-  blocked = false
-  blocked = note_block(recent, decision, qname, mac, reason, ts_str) if recent
-
-  device_noted = false
-  device_noted = note_device(devices, mac, src_ip, user, qname, decision, ts_str) if devices
-
-  blocked, device_noted
+  note_verdict verdicts, decision, qname, mac, src_ip, user, reason, ts_str
 
 --- Écrit le fichier TSV d'agrégation pour l'heure donnée.
 -- Utilise O_EXCL pour détecter si le fichier est nouveau et écrire le header,
@@ -380,13 +321,11 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
   pfds[1].fd     = sfd
   pfds[1].events = POLLIN
 
-  agg      = {}
-  recent   = {}
-  devices  = {}
-  last_recent_write  = 0
-  last_devices_write = 0
-  line_buf = ""
-  hour     = current_hour!
+  agg       = {}
+  verdicts  = {}
+  last_verdicts_write = 0
+  line_buf  = ""
+  hour      = current_hour!
 
   siginfo = ffi.new "signalfd_siginfo"
   sig_sz  = ffi.sizeof "signalfd_siginfo"
@@ -406,7 +345,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       if siginfo.ssi_signo == SIGTERM
         log_info -> { action: "sigterm", hour: hour }
         flush_to_file agg, hour, events_dir
-        flush_devices devices, events_dir
+        flush_verdicts verdicts, events_dir
         libc._exit 0
 
     -- Lecture des données sur le pipe events
@@ -418,8 +357,7 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
         log_warn -> { action: "pipe_eof", fd: events_rfd }
       elseif #chunk > 0
         line_buf ..= chunk
-        blocked = false
-        device_touched = false
+        verdict_touched = false
         -- Découpe line_buf sur les \n et traite chaque ligne complète
         while true
           nl = line_buf\find "\n", 1, true
@@ -427,18 +365,12 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
           line     = line_buf\sub 1, nl - 1
           line_buf = line_buf\sub nl + 1
           if #line > 0
-            b, d = process_line line, agg, recent, devices
-            blocked = true if b
-            device_touched = true if d
+            verdict_touched = true if process_line line, agg, verdicts
         now = os.time!
-        -- Flush throttlé du ring buffer des refus (≥ RECENT_MIN_INTERVAL)
-        if blocked and now - last_recent_write >= RECENT_MIN_INTERVAL
-          flush_recent recent, events_dir
-          last_recent_write = now
-        -- Flush throttlé de la map des appareils (même cadence)
-        if device_touched and now - last_devices_write >= RECENT_MIN_INTERVAL
-          flush_devices devices, events_dir
-          last_devices_write = now
+        -- Flush throttlé du ring buffer des verdicts (≥ VERDICTS_MIN_INTERVAL)
+        if verdict_touched and now - last_verdicts_write >= VERDICTS_MIN_INTERVAL
+          flush_verdicts verdicts, events_dir
+          last_verdicts_write = now
 
     -- Détection du changement d'heure après chaque retour de poll
     new_hour = current_hour!
@@ -450,4 +382,4 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       agg  = {}
       hour = new_hour
 
-{ :run, :process_line, :note_block, :flush_recent, :note_device, :flush_devices }
+{ :run, :process_line, :note_verdict, :flush_verdicts }

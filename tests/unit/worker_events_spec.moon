@@ -1,64 +1,64 @@
 -- tests/unit/worker_events_spec.moon
--- Tests du ring buffer des refus récents de worker_events :
--- note_block (dédup, ordre récent-d'abord, troncature, ignore allow),
--- flush_recent (format TSV, écriture atomique) et l'extraction par process_line.
+-- Tests du ring buffer des verdicts récents de worker_events :
+-- note_verdict (dédup allow+block, ordre récent-d'abord, compteur, troncature),
+-- flush_verdicts (format TSV, écriture atomique) et l'extraction par process_line.
 
-{ :process_line, :note_block, :flush_recent, :note_device, :flush_devices } = require "worker_events"
-
-count_keys = (t) ->
-  n = 0
-  n += 1 for _ in pairs t
-  n
+{ :process_line, :note_verdict, :flush_verdicts } = require "worker_events"
 
 TMP = "tmp/worker_events_recent_spec"
 
-describe "worker_events.note_block", ->
-  it "ignore les décisions non-block", ->
-    recent = {}
-    assert.is_false note_block recent, "allow", "ex.com", "aa:bb", "", "100"
-    assert.equals 0, #recent
+describe "worker_events.note_verdict", ->
+  it "ignore mac/qname vide ou mac unknown", ->
+    verdicts = {}
+    assert.is_false note_verdict verdicts, "block", "", "aa:bb", "ip", "u", "r", "1"
+    assert.is_false note_verdict verdicts, "block", "ex.com", "", "ip", "u", "r", "1"
+    assert.is_false note_verdict verdicts, "allow", "ex.com", "unknown", "ip", "u", "r", "1"
+    assert.equals 0, #verdicts
 
-  it "ignore mac ou qname vide", ->
-    recent = {}
-    assert.is_false note_block recent, "block", "", "aa:bb", "r", "1"
-    assert.is_false note_block recent, "block", "ex.com", "", "r", "1"
-    assert.equals 0, #recent
+  it "note allow ET block", ->
+    verdicts = {}
+    assert.is_true note_verdict verdicts, "allow", "ok.com", "aa:bb", "ip", "u", "", "100"
+    assert.is_true note_verdict verdicts, "block", "ads.com", "aa:bb", "ip", "u", "blk", "101"
+    assert.equals 2, #verdicts
 
   it "insère une nouvelle entrée en tête", ->
-    recent = {}
-    assert.is_true note_block recent, "block", "ads.com", "aa:bb", "blocklist", "100"
-    assert.equals 1, #recent
-    assert.equals "ads.com", recent[1].qname
-    assert.equals 1, recent[1].count
+    verdicts = {}
+    note_verdict verdicts, "block", "ads.com", "aa:bb", "10.0.0.1", "bob", "blocklist", "100"
+    assert.equals 1, #verdicts
+    assert.equals "ads.com", verdicts[1].qname
+    assert.equals "10.0.0.1", verdicts[1].ip
+    assert.equals "bob", verdicts[1].user
+    assert.equals 1, verdicts[1].count
 
-  it "dédup (mac+qname) : incrémente count, met à jour last_ts, remonte en tête", ->
-    recent = {}
-    note_block recent, "block", "a.com", "mac1", "r", "100"
-    note_block recent, "block", "b.com", "mac1", "r", "101"
-    note_block recent, "block", "a.com", "mac1", "r2", "102"
-    assert.equals 2, #recent
-    assert.equals "a.com", recent[1].qname      -- remontée en tête
-    assert.equals 2, recent[1].count
-    assert.equals "102", recent[1].last_ts
-    assert.equals "r2", recent[1].reason        -- raison rafraîchie
+  it "dédup (mac+qname+decision) : compteur, maj champs, remontée en tête", ->
+    verdicts = {}
+    note_verdict verdicts, "allow", "a.com", "mac1", "ip1", "u", "r", "100"
+    note_verdict verdicts, "allow", "b.com", "mac1", "ip1", "u", "r", "101"
+    note_verdict verdicts, "allow", "a.com", "mac1", "ip2", "u2", "r2", "102"
+    assert.equals 2, #verdicts
+    assert.equals "a.com", verdicts[1].qname    -- remontée en tête
+    assert.equals 2, verdicts[1].count
+    assert.equals "102", verdicts[1].last_ts
+    assert.equals "ip2", verdicts[1].ip
+    assert.equals "u2", verdicts[1].user
+    assert.equals "r2", verdicts[1].reason
+    assert.equals "100", verdicts[1].first_ts   -- inchangé
 
-  it "distingue les MAC différentes pour un même qname", ->
-    recent = {}
-    note_block recent, "block", "a.com", "mac1", "r", "100"
-    note_block recent, "block", "a.com", "mac2", "r", "101"
-    assert.equals 2, #recent
+  it "distingue la décision pour un même (mac, qname)", ->
+    verdicts = {}
+    note_verdict verdicts, "allow", "a.com", "mac1", "ip", "u", "r", "100"
+    note_verdict verdicts, "block", "a.com", "mac1", "ip", "u", "r", "101"
+    assert.equals 2, #verdicts
 
-  it "tronque à 50 entrées (RECENT_MAX)", ->
-    recent = {}
-    for i = 1, 60
-      note_block recent, "block", "d#{i}.com", "mac1", "r", tostring i
-    assert.equals 50, #recent
-    -- La plus récente est en tête, la plus ancienne conservée est d11
-    assert.equals "d60.com", recent[1].qname
-    assert.equals "d11.com", recent[50].qname
+  it "tronque à 8192 entrées (VERDICTS_MAX)", ->
+    verdicts = {}
+    for i = 1, 8200
+      note_verdict verdicts, "allow", "d#{i}.com", "mac1", "ip", "u", "r", tostring i
+    assert.equals 8192, #verdicts
+    assert.equals "d8200.com", verdicts[1].qname
 
-describe "worker_events.flush_recent", ->
-  path = "#{TMP}/recent-blocks.tsv"
+describe "worker_events.flush_verdicts", ->
+  path = "#{TMP}/recent-verdicts.tsv"
 
   before_each -> os.execute "mkdir -p '#{TMP}'"
   after_each ->
@@ -66,51 +66,53 @@ describe "worker_events.flush_recent", ->
     os.remove "#{path}.tmp"
 
   it "écrit une ligne TSV par entrée au bon format", ->
-    recent = {
-      { mac: "aa:bb", qname: "x.com", reason: "blk", count: 3, last_ts: "200" }
-      { mac: "cc:dd", qname: "y.com", reason: "", count: 1, last_ts: "201" }
+    verdicts = {
+      { mac: "aa:bb", ip: "10.0.0.1", user: "bob", qname: "x.com", decision: "block",
+        reason: "blk", count: 3, first_ts: "150", last_ts: "200" }
+      { mac: "cc:dd", ip: "", user: "", qname: "y.com", decision: "allow",
+        reason: "", count: 1, first_ts: "201", last_ts: "201" }
     }
-    flush_recent recent, TMP
+    flush_verdicts verdicts, TMP
     fh = io.open path, "r"
     assert.is_not_nil fh
     content = fh\read "*a"
     fh\close!
-    assert.equals "aa:bb\tx.com\tblk\t3\t200\ncc:dd\ty.com\t\t1\t201\n", content
+    assert.equals "aa:bb\t10.0.0.1\tbob\tx.com\tblock\tblk\t3\t150\t200\ncc:dd\t\t\ty.com\tallow\t\t1\t201\t201\n", content
 
   it "écrit atomiquement (pas de .tmp résiduel)", ->
-    flush_recent { { mac: "m", qname: "q", reason: "r", count: 1, last_ts: "1" } }, TMP
+    flush_verdicts { { mac: "m", ip: "i", user: "u", qname: "q", decision: "allow",
+                       reason: "r", count: 1, first_ts: "1", last_ts: "1" } }, TMP
     tmp_fh = io.open "#{path}.tmp", "r"
     assert.is_nil tmp_fh
     if tmp_fh then tmp_fh\close!
 
   it "buffer vide → fichier vide", ->
-    flush_recent {}, TMP
+    flush_verdicts {}, TMP
     fh = io.open path, "r"
     assert.equals "", fh\read "*a"
     fh\close!
 
-describe "worker_events.process_line (extraction des refus)", ->
-  it "note un refus pour une ligne block", ->
-    agg, recent = {}, {}
+describe "worker_events.process_line", ->
+  it "note un verdict block", ->
+    agg, verdicts = {}, {}
     line = "150\tblock\tads.com\taa:bb:cc:dd:ee:ff\t10.0.0.1\t8.8.8.8\t0\t-\tipv4\tMatched blocklist\trule1"
-    assert.is_true process_line line, agg, recent
-    assert.equals 1, #recent
-    assert.equals "ads.com", recent[1].qname
-    assert.equals "aa:bb:cc:dd:ee:ff", recent[1].mac
-    assert.equals "Matched blocklist", recent[1].reason
+    assert.is_true process_line line, agg, verdicts
+    assert.equals 1, #verdicts
+    assert.equals "ads.com", verdicts[1].qname
+    assert.equals "aa:bb:cc:dd:ee:ff", verdicts[1].mac
+    assert.equals "10.0.0.1", verdicts[1].ip
+    assert.equals "Matched blocklist", verdicts[1].reason
 
-  it "ne note rien pour une ligne allow", ->
-    agg, recent = {}, {}
-    line = "150\tallow\tok.com\taa:bb\t10.0.0.1\t8.8.8.8\t0\t-\tipv4\t\trule1"
-    assert.is_false process_line line, agg, recent
-    assert.equals 0, #recent
-    -- mais l'agrégation reste effectuée
-    cnt = 0
-    for _ in pairs agg
-      cnt += 1
-    assert.equals 1, cnt
+  it "note aussi un verdict allow (toutes décisions)", ->
+    agg, verdicts = {}, {}
+    line = "150\tallow\tok.com\taa:bb:cc:dd:ee:ff\t10.0.0.1\t8.8.8.8\t0\tbob\tipv4\t\trule1"
+    assert.is_true process_line line, agg, verdicts
+    assert.equals 1, #verdicts
+    assert.equals "ok.com", verdicts[1].qname
+    assert.equals "allow", verdicts[1].decision
+    assert.equals "bob", verdicts[1].user
 
-  it "agrège toujours, même sans buffer recent", ->
+  it "agrège toujours, même sans buffer verdicts", ->
     agg = {}
     line = "150\tblock\tads.com\taa:bb\t10.0.0.1\t8.8.8.8\t0\t-\tipv4\tr\trule1"
     assert.is_false process_line line, agg, nil
@@ -119,83 +121,24 @@ describe "worker_events.process_line (extraction des refus)", ->
       cnt += 1
     assert.equals 1, cnt
 
-  it "note l'appareil (2e valeur de retour) pour toute décision", ->
-    agg, devices = {}, {}
-    line = "150\tallow\tok.com\taa:bb:cc:dd:ee:ff\t10.0.0.1\t8.8.8.8\t0\tbob\tipv4\t\trule1"
-    _blocked, device_noted = process_line line, agg, nil, devices
-    assert.is_true device_noted
-    d = devices["aa:bb:cc:dd:ee:ff"]
-    assert.is_not_nil d
-    assert.equals "10.0.0.1", d.last_ip
-    assert.equals "bob", d.last_user
-    assert.equals "ok.com", d.last_qname
-    assert.equals "allow", d.last_decision
+  it "déduplique l'agrégation pour une clé identique (count++)", ->
+    agg = {}
+    line = "150\tblock\tads.com\taa:bb\t10.0.0.1\t8.8.8.8\t0\t-\tipv4\tr\trule1"
+    process_line line, agg, nil
+    process_line "151\t#{line\match "^%d+\t(.+)$"}", agg, nil
+    cnt, entry = 0, nil
+    for _, e in pairs agg
+      cnt += 1
+      entry = e
+    assert.equals 1, cnt
+    assert.equals 2, entry.count
+    assert.equals "151", entry.last_ts
 
-describe "worker_events.note_device", ->
-  it "ignore mac vide ou unknown", ->
-    devices = {}
-    assert.is_false note_device devices, "", "ip", "u", "q", "allow", "1"
-    assert.is_false note_device devices, "unknown", "ip", "u", "q", "allow", "1"
-    assert.equals 0, count_keys devices
+  it "ignore une ligne sans tabulation", ->
+    assert.is_false process_line "pas-de-tab", {}, {}
 
-  it "insère un nouvel appareil", ->
-    devices = {}
-    assert.is_true note_device devices, "mac1", "10.0.0.1", "bob", "ex.com", "allow", "100"
-    d = devices.mac1
-    assert.equals 1, d.count
-    assert.equals "100", d.first_ts
-    assert.equals "100", d.last_ts
-    assert.equals "ex.com", d.last_qname
+  it "ignore une ligne à clé vide", ->
+    assert.is_false process_line "150\t", {}, {}
 
-  it "upsert : incrémente count et met à jour les champs last_*", ->
-    devices = {}
-    note_device devices, "mac1", "10.0.0.1", "bob", "a.com", "allow", "100"
-    note_device devices, "mac1", "10.0.0.2", "bob", "b.com", "block", "150"
-    d = devices.mac1
-    assert.equals 2, d.count
-    assert.equals "100", d.first_ts        -- inchangé
-    assert.equals "150", d.last_ts
-    assert.equals "10.0.0.2", d.last_ip
-    assert.equals "b.com", d.last_qname
-    assert.equals "block", d.last_decision
-
-  it "tronque à DEVICES_MAX (256) en évinçant le plus ancien last_ts", ->
-    devices = {}
-    for i = 1, 300
-      note_device devices, "mac#{i}", "ip", "u", "q", "allow", tostring i
-    assert.equals 256, count_keys devices
-    assert.is_nil devices.mac1            -- le plus ancien a été évincé
-    assert.is_not_nil devices.mac300
-
-describe "worker_events.flush_devices", ->
-  path = "#{TMP}/recent-devices.tsv"
-
-  before_each -> os.execute "mkdir -p '#{TMP}'"
-  after_each ->
-    os.remove path
-    os.remove "#{path}.tmp"
-
-  it "écrit une ligne TSV au bon format", ->
-    devices = {
-      mac1: { mac: "aa:bb", last_ip: "10.0.0.1", last_user: "bob", last_qname: "x.com",
-              last_decision: "allow", count: 4, first_ts: "100", last_ts: "200" }
-    }
-    flush_devices devices, TMP
-    fh = io.open path, "r"
-    assert.is_not_nil fh
-    content = fh\read "*a"
-    fh\close!
-    assert.equals "aa:bb\t10.0.0.1\tbob\tx.com\tallow\t4\t100\t200\n", content
-
-  it "écrit atomiquement (pas de .tmp résiduel)", ->
-    flush_devices { m: { mac: "m", last_ip: "i", last_user: "u", last_qname: "q",
-                         last_decision: "allow", count: 1, first_ts: "1", last_ts: "1" } }, TMP
-    tmp_fh = io.open "#{path}.tmp", "r"
-    assert.is_nil tmp_fh
-    if tmp_fh then tmp_fh\close!
-
-  it "map vide → fichier vide", ->
-    flush_devices {}, TMP
-    fh = io.open path, "r"
-    assert.equals "", fh\read "*a"
-    fh\close!
+  it "ignore une clé sans les champs attendus (decision nil)", ->
+    assert.is_false process_line "150\tx", {}, {}
