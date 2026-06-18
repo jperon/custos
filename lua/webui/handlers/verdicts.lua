@@ -5,6 +5,8 @@ local read_config
 read_config = require("webui.serializer").read_config
 local events_dir_for
 events_dir_for = require("webui.handlers.devices").events_dir_for
+local bidirectional
+bidirectional = require("ipparse.fun").bidirectional
 local esc
 esc = function(s)
   s = tostring(s or "")
@@ -90,11 +92,39 @@ fmt_ts = function(ts)
   end
   return os.date("%Y-%m-%d %H:%M:%S", ts)
 end
+local name_by_mac_for
+name_by_mac_for = function(cfg)
+  local macs = (cfg and cfg.filter and cfg.filter.macs) or { }
+  local lower = { }
+  for name, mac in pairs(macs) do
+    if type(mac) == "string" then
+      lower[name] = mac:lower()
+    end
+  end
+  return bidirectional(lower)
+end
+local mac_cell
+mac_cell = function(v, name_by_mac)
+  local mac_l = (v.mac or ""):lower()
+  local cell = {
+    ["data-sort"] = mac_l,
+    (esc(v.mac)),
+    H.br(),
+    H.span({
+      class = "muted"
+    }, esc(v.ip))
+  }
+  local name = name_by_mac[mac_l]
+  if name and name ~= "" then
+    cell[#cell + 1] = H.br()
+    cell[#cell + 1] = H.strong(esc(name))
+  end
+  return H.td(cell)
+end
 local render_row
-render_row = function(v)
+render_row = function(v, name_by_mac)
   return H.tr({
-    H.td((esc(v.mac))),
-    H.td((esc(v.ip))),
+    mac_cell(v, name_by_mac),
     H.td((esc(v.user))),
     H.td((esc(v.qname))),
     H.td((esc(v.decision))),
@@ -117,10 +147,11 @@ handle_verdicts_get = function(req, state)
     return 500, { }, "Erreur config : " .. tostring(err)
   end
   local verdicts = read_verdicts(events_dir_for(state, cfg))
+  local name_by_mac = name_by_mac_for(cfg)
   local rows = { }
   for _index_0 = 1, #verdicts do
     local v = verdicts[_index_0]
-    rows[#rows + 1] = render_row(v)
+    rows[#rows + 1] = render_row(v, name_by_mac)
   end
   local body = H.section({
     H.h2("Verdicts récents"),
@@ -140,7 +171,7 @@ handle_verdicts_get = function(req, state)
     }, {
       H.thead({
         H.tr({
-          H.th("MAC", H.th("IP", H.th("User", H.th("Domaine")))),
+          H.th("MAC / IP", H.th("User", H.th("Domaine"))),
           H.th("Décision", H.th("Raison")),
           H.th("Vus", H.th("Première", H.th("Dernière")))
         })

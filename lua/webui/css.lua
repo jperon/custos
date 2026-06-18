@@ -104,6 +104,7 @@ th {
 tbody tr { transition: background .1s; }
 tbody tr:hover { background: #fafbfc; }
 tr:last-child td { border-bottom: none; }
+.muted { color: var(--muted); font-size: .85em; }
 
 /* Formulaires */
 label { display: block; font-weight: 550; margin-bottom: .3rem; font-size: .9rem; }

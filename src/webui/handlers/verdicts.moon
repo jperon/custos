@@ -8,6 +8,7 @@ H = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config } = require "webui.serializer"
 { :events_dir_for } = require "webui.handlers.devices"
+{ :bidirectional } = require "ipparse.fun"
 
 -- Échappe le texte destiné au contenu/attribut HTML (le DSL n'échappe rien).
 esc = (s) ->
@@ -74,10 +75,36 @@ fmt_ts = (ts) ->
   return "" if not ts or ts == 0
   os.date "%Y-%m-%d %H:%M:%S", ts
 
-render_row = (v) ->
+--- Construit le résolveur MAC(minuscule) → nom depuis cfg.filter.macs.
+-- `filter.macs` = nom→MAC (string unique, contrat actuel) ; `bidirectional`
+-- d'ipparse.fun ajoute l'accès inverse `idx[mac] → nom` sans index explicite.
+-- @tparam table cfg Config chargée
+-- @treturn table Map paresseuse { mac_lower → nom }
+name_by_mac_for = (cfg) ->
+  macs  = (cfg and cfg.filter and cfg.filter.macs) or {}
+  lower = {}
+  for name, mac in pairs macs
+    lower[name] = mac\lower! if type(mac) == "string"
+  bidirectional lower
+
+-- Cellule MAC / IP sur deux lignes (+ nom sur une 3ᵉ ligne si défini).
+mac_cell = (v, name_by_mac) ->
+  mac_l = (v.mac or "")\lower!
+  cell  = {
+    "data-sort": mac_l
+    (esc v.mac)
+    H.br!
+    H.span { class: "muted" }, esc v.ip
+  }
+  name = name_by_mac[mac_l]
+  if name and name != ""
+    cell[#cell + 1] = H.br!
+    cell[#cell + 1] = H.strong esc name
+  H.td cell
+
+render_row = (v, name_by_mac) ->
   H.tr {
-    H.td (esc v.mac)
-    H.td (esc v.ip)
+    mac_cell v, name_by_mac
     H.td (esc v.user)
     H.td (esc v.qname)
     H.td (esc v.decision)
@@ -90,11 +117,12 @@ render_row = (v) ->
 handle_verdicts_get = (req, state) ->
   cfg, err = read_config state.config_path
   return 500, {}, "Erreur config : #{err}" unless cfg
-  verdicts = read_verdicts events_dir_for state, cfg
+  verdicts    = read_verdicts events_dir_for state, cfg
+  name_by_mac = name_by_mac_for cfg
 
   rows = {}
   for v in *verdicts
-    rows[#rows + 1] = render_row v
+    rows[#rows + 1] = render_row v, name_by_mac
 
   body = H.section {
     H.h2 "Verdicts récents"
@@ -104,7 +132,7 @@ handle_verdicts_get = (req, state) ->
     H.table { id: "verdtbl" }, {
       H.thead {
         H.tr {
-          H.th "MAC", H.th "IP", H.th "User", H.th "Domaine"
+          H.th "MAC / IP", H.th "User", H.th "Domaine"
           H.th "Décision", H.th "Raison"
           H.th "Vus", H.th "Première", H.th "Dernière"
         }

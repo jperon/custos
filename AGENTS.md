@@ -329,7 +329,12 @@ derniers verdicts DNS (allow ET block) lus depuis `recent-verdicts.tsv` via
 `read_verdicts` (une ligne par verdict, **sans** agrégation, contrairement à la
 page Appareils). Même UX que « Appareils » : recherche plein-texte + tri par clic
 d'en-tête (JS inline, ids `verdtbl`/`verdfilter`), valeurs échappées via `esc`.
-Colonnes : MAC, IP, User, Domaine, Décision, Raison, Vus, Première, Dernière.
+Colonnes : **MAC / IP** (fusionnées dans une cellule à deux lignes via `mac_cell`,
++ le nom de l'appareil sur une 3ᵉ ligne s'il est défini), User, Domaine, Décision,
+Raison, Vus, Première, Dernière. Le nom est résolu par `name_by_mac_for` qui
+applique `bidirectional` (ipparse.fun) à `filter.macs` (nom→MAC) pour obtenir
+l'accès inverse MAC→nom sans construire d'index explicite. Classe CSS `.muted`
+(`webui/css.moon`) pour l'IP secondaire.
 
 ## Synchronisation de configuration (`sync/`)
 

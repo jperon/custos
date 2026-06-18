@@ -66,9 +66,35 @@ describe "webui/handlers/verdicts", ->
       status, hdrs, body = handle_verdicts_get make_req!, make_state!
       assert.equals 200, status
       assert.truthy body\find("<html", 1, true)
+      assert.truthy body\find("MAC / IP", 1, true)
       assert.truthy body\find("Domaine", 1, true)
       assert.truthy body\find("Décision", 1, true)
       assert.truthy body\find("ads.com", 1, true)
+
+    it "fusionne MAC et IP dans une seule cellule (deux lignes)", ->
+      write_file vline "aa:bb:cc", "10.0.0.9", "-", "x.com", "allow", "", 1, 100, 200
+      _, _, body = handle_verdicts_get make_req!, make_state!
+      -- MAC et IP séparées par un <br/> dans le même <td>
+      td = body\match "<td[^>]*>(aa:bb:cc.-)</td>"
+      assert.truthy td, "cellule MAC/IP absente"
+      assert.truthy td\find("<br", 1, true)
+      assert.truthy td\find("10.0.0.9", 1, true)
+
+    it "affiche le nom de l'appareil défini dans filter.macs (bidirectional)", ->
+      cfg = base_cfg!
+      cfg.filter.macs = { "Tablette": "AA:BB:CC" }
+      write_cfg cfg
+      write_file vline "aa:bb:cc", "10.0.0.9", "-", "x.com", "allow", "", 1, 100, 200
+      _, _, body = handle_verdicts_get make_req!, make_state!
+      assert.truthy body\find("Tablette", 1, true)
+
+    it "n'affiche pas de nom pour une MAC inconnue", ->
+      cfg = base_cfg!
+      cfg.filter.macs = { "Tablette": "AA:BB:CC" }
+      write_cfg cfg
+      write_file vline "ff:ee:dd", "10.0.0.9", "-", "x.com", "allow", "", 1, 100, 200
+      _, _, body = handle_verdicts_get make_req!, make_state!
+      assert.is_nil body\find("Tablette", 1, true)
 
     it "échappe le HTML des champs (anti-injection)", ->
       write_file vline "aa:bb", "10.0.0.1", "-", "<script>x", "block", "r", 1, 100, 200
