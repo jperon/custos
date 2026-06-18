@@ -171,9 +171,11 @@ render_row = function(d, name)
     H.input(name_attrs),
     H.button({
       type = "submit",
-      class = "btn btn-sm",
+      class = named and "btn btn-sm btn-ok" or "btn btn-sm",
       title = named and "Renommer" or "Enregistrer"
-    }, named and "⟳" or "+")
+    }, H.span({
+      class = "btn-glyph"
+    }, (named and "⟳" or "+")))
   })
   return H.tr({
     H.td(name_cell),

@@ -119,7 +119,8 @@ render_row = (d, name) ->
   name_cell = H.form { method: "POST", action: "/admin/config/devices", style: "margin:0; display:flex; gap:.25rem; min-width:14rem" }, {
     H.input { type: "hidden", name: "mac", value: esc d.mac }
     H.input name_attrs
-    H.button { type: "submit", class: "btn btn-sm", title: named and "Renommer" or "Enregistrer" }, named and "⟳" or "+"
+    H.button { type: "submit", class: named and "btn btn-sm btn-ok" or "btn btn-sm", title: named and "Renommer" or "Enregistrer" },
+      H.span { class: "btn-glyph" }, (named and "⟳" or "+")
   }
   H.tr {
     H.td name_cell

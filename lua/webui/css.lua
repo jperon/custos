@@ -145,6 +145,10 @@ button.danger, .btn-danger { background: var(--danger); border-color: var(--dang
 button.danger:hover, .btn-danger:hover { background: var(--danger-hover); }
 
 .btn-sm { padding: .3rem .7rem; font-size: 12.5px; }
+button.ok, .btn-ok { background: #1e8449; border-color: #1e8449; }
+button.ok:hover, .btn-ok:hover { background: #196f3d; }
+/* Agrandit le glyphe (+ / ⟳) sans grossir le bouton (line-height comprimé). */
+.btn-glyph { font-size: 1.55em; line-height: .6; vertical-align: -.06em; }
 
 /* Bandeaux flash */
 .flash {

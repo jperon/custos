@@ -98,7 +98,8 @@ name_form = (mac, name) ->
     H.input { type: "hidden", name: "mac", value: esc mac }
     H.input { type: "hidden", name: "redirect", value: "/admin/config/verdicts" }
     H.input attrs
-    H.button { type: "submit", class: "btn btn-sm", title: named and "Renommer" or "Enregistrer le nom" }, named and "⟳" or "+"
+    H.button { type: "submit", class: named and "btn btn-sm btn-ok" or "btn btn-sm", title: named and "Renommer" or "Enregistrer le nom" },
+      H.span { class: "btn-glyph" }, (named and "⟳" or "+")
   }
 
 -- Cellule MAC / IP sur deux lignes (+ formulaire de nom sur une 3ᵉ ligne).

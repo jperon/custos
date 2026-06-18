@@ -134,9 +134,11 @@ name_form = function(mac, name)
     H.input(attrs),
     H.button({
       type = "submit",
-      class = "btn btn-sm",
+      class = named and "btn btn-sm btn-ok" or "btn btn-sm",
       title = named and "Renommer" or "Enregistrer le nom"
-    }, named and "⟳" or "+")
+    }, H.span({
+      class = "btn-glyph"
+    }, (named and "⟳" or "+")))
   })
 end
 local mac_cell
