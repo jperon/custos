@@ -298,9 +298,8 @@ cond_families_js = function(families)
   end
   return "{" .. tostring(table.concat(fam_parts, ',')) .. "}"
 end
-local render_action_select
-render_action_select = function(prefix, current_type, current_opts)
-  local acts = registry.actions()
+local action_options
+action_options = function(acts, current_type)
   local opts = ""
   for name, s in pairs(acts) do
     local sel
@@ -314,60 +313,66 @@ render_action_select = function(prefix, current_type, current_opts)
       selected = sel
     }, (s and s.label or name))
   end
-  local extra = ""
-  if current_type == "dns_strip" then
-    local rr_val
-    if type(current_opts) == "table" then
-      rr_val = current_opts.rr_type or "A"
-    else
-      rr_val = "A"
-    end
-    extra = H.div({
-      H.label("Type d'enregistrement à supprimer"),
-      H.select({
-        name = prefix .. "[rr_type]"
-      }, {
-        H.option({
-          value = "A",
-          selected = rr_val == "A" and "selected" or nil
-        }, "A (IPv4)"),
-        H.option({
-          value = "AAAA",
-          selected = rr_val == "AAAA" and "selected" or nil
-        }, "AAAA (IPv6)"),
-        H.option({
-          value = "CNAME",
-          selected = rr_val == "CNAME" and "selected" or nil
-        }, "CNAME"),
-        H.option({
-          value = "MX",
-          selected = rr_val == "MX" and "selected" or nil
-        }, "MX")
-      })
-    })
-  elseif current_type == "log" then
-    local msg_val
-    if type(current_opts) == "table" then
-      msg_val = current_opts.log_msg or ""
-    else
-      msg_val = ""
-    end
-    extra = H.div({
-      H.label("Message de log (optionnel)"),
-      H.input({
-        type = "text",
-        name = prefix .. "[log_msg]",
-        value = msg_val
-      })
-    })
+  return opts
+end
+local render_action_row
+render_action_row = function(acts, idx, atype, aopts)
+  local show
+  show = function(t)
+    return atype == t and nil or "display:none"
   end
-  return H.div({
-    H.label("Action"),
+  local rr_val = (type(aopts) == "table" and aopts.rr_type) or "A"
+  local msg_val = (type(aopts) == "table" and aopts.log_msg) or ""
+  local type_sel = H.select({
+    class = "act-type",
+    name = "action_" .. tostring(idx) .. "[type]",
+    onchange = "_actChange(this)"
+  }, action_options(acts, atype))
+  local dns_extra = H.div({
+    class = "act-dns",
+    style = show("dns_strip")
+  }, {
+    H.label("Type d'enregistrement à supprimer"),
     H.select({
-      name = prefix .. "[type]"
-    }, opts),
-    extra
+      name = "action_" .. tostring(idx) .. "[rr_type]"
+    }, {
+      H.option({
+        value = "A",
+        selected = rr_val == "A" and "selected" or nil
+      }, "A (IPv4)"),
+      H.option({
+        value = "AAAA",
+        selected = rr_val == "AAAA" and "selected" or nil
+      }, "AAAA (IPv6)"),
+      H.option({
+        value = "CNAME",
+        selected = rr_val == "CNAME" and "selected" or nil
+      }, "CNAME"),
+      H.option({
+        value = "MX",
+        selected = rr_val == "MX" and "selected" or nil
+      }, "MX")
+    })
   })
+  local log_extra = H.div({
+    class = "act-log",
+    style = show("log")
+  }, {
+    H.label("Message de log (optionnel)"),
+    H.input({
+      type = "text",
+      name = "action_" .. tostring(idx) .. "[log_msg]",
+      value = msg_val
+    })
+  })
+  local btn = H.button({
+    type = "button",
+    onclick = "_delAction(this)",
+    class = "btn btn-danger btn-sm"
+  }, "✕")
+  return H.tr((H.td(type_sel) .. H.td({
+    class = "act-params"
+  }, dns_extra .. log_extra) .. H.td(btn)))
 end
 local render_rule_form
 render_rule_form = function(action_url, rule)
@@ -414,24 +419,56 @@ render_rule_form = function(action_url, rule)
     style = "margin:.4rem 0 .75rem"
   }, "+ Ajouter une condition")
   local js = "var _FAM=" .. tostring(cond_families_js(families)) .. ";" .. "function _rebuildB(row){var a=row.querySelector('.cond-a'),b=row.querySelector('.cond-b');" .. "var fam=_FAM[a.value];if(!fam)return;b.innerHTML='';fam.forms.forEach(function(f){" .. "var o=document.createElement('option');o.value=f.k;o.textContent=f.lbl;if(f.desc)o.title=f.desc;b.appendChild(o);});" .. "b.style.display=fam.forms.length<=1?'none':'';}" .. "function _applyForm(row){var a=row.querySelector('.cond-a'),b=row.querySelector('.cond-b');" .. "var ta=row.querySelector('.cond-value'),help=row.querySelector('.cond-help');" .. "var fam=_FAM[a.value];if(!fam)return;var fk=b.value||'base',f=null;" .. "fam.forms.forEach(function(x){if(x.k===fk)f=x;});if(!f)f=fam.forms[0];if(!f)return;" .. "ta.placeholder=f.hint||'';help.textContent=f.desc||'';" .. "row._lt=(f.k==='list'||f.k==='lists')?f.lt:null;_renderLinks(row);}" .. "function _renderLinks(row){var links=row.querySelector('.cond-links');" .. "var ta=row.querySelector('.cond-value');links.innerHTML='';if(!row._lt)return;" .. "ta.value.split('\\n').forEach(function(line){var n=line.trim();if(!n)return;" .. "var a=document.createElement('a');a.href='/admin/config/filter/lists/'+" .. "encodeURIComponent(row._lt)+'/'+encodeURIComponent(n);a.target='_blank';a.rel='noopener';" .. "a.textContent='\\u270e '+n;a.style.marginRight='.6rem';links.appendChild(a);});}" .. "function _famChange(sel){var row=sel.closest('tr');_rebuildB(row);_applyForm(row);}" .. "function _formChange(sel){_applyForm(sel.closest('tr'));}" .. "var _ci=" .. tostring(idx) .. ";function _addCond(){" .. "var t=document.getElementById('cond-tpl').content.cloneNode(true).querySelector('tr');" .. "t.querySelectorAll('[name]').forEach(function(e){e.name=e.name.replace('__I__',_ci);});" .. "_ci++;var body=document.getElementById('cond-body');body.appendChild(t);" .. "_applyForm(body.lastElementChild);}" .. "function _delCond(b){b.closest('tr').remove();}" .. "document.getElementById('cond-body').addEventListener('input',function(e){" .. "if(e.target.classList.contains('cond-value'))_renderLinks(e.target.closest('tr'));});" .. "Array.prototype.forEach.call(document.querySelectorAll('#cond-body tr'),_applyForm);"
-  local action_type = nil
-  local action_opts = nil
-  if #actions > 0 then
-    local first = actions[1]
-    if type(first) == "string" then
-      action_type = first
-    elseif type(first) == "table" then
-      for k in pairs(first) do
-        action_type = k
-        action_opts = first[k]
-        break
+  local acts_reg = registry.actions()
+  local resolve_action
+  resolve_action = function(a)
+    if type(a) == "string" then
+      return a, nil
+    elseif type(a) == "table" then
+      for k, v in pairs(a) do
+        return k, v
       end
+      return nil, nil
+    else
+      return nil, nil
     end
   end
-  local action_html = H.fieldset({
-    H.legend("Action"),
-    render_action_select("action", action_type, action_opts)
+  local action_rows = ""
+  local ai = 0
+  for _index_0 = 1, #actions do
+    local a = actions[_index_0]
+    local at, ao = resolve_action(a)
+    action_rows = action_rows .. render_action_row(acts_reg, ai, at, ao)
+    ai = ai + 1
+  end
+  if ai == 0 then
+    action_rows = render_action_row(acts_reg, 0, nil, nil)
+    ai = 1
+  end
+  local act_tpl_row = render_action_row(acts_reg, "__I__", nil, nil)
+  local act_tpl = H.template({
+    id = "act-tpl"
+  }, act_tpl_row)
+  local act_thead = H.thead({
+    H.tr({
+      H.th("Action"),
+      H.th("Paramètres"),
+      H.th({
+        style = "width:3rem"
+      }, "")
+    })
   })
+  local act_tbody = H.tbody({
+    id = "act-body"
+  }, action_rows)
+  local act_table = H.table((act_thead .. act_tbody))
+  local act_add_btn = H.button({
+    type = "button",
+    onclick = "_addAction()",
+    class = "btn btn-secondary btn-sm",
+    style = "margin:.4rem 0 .75rem"
+  }, "+ Ajouter une action")
+  local act_js = "function _actChange(sel){var row=sel.closest('tr');var t=sel.value;" .. "var d=row.querySelector('.act-dns'),l=row.querySelector('.act-log');" .. "if(d)d.style.display=(t==='dns_strip')?'':'none';" .. "if(l)l.style.display=(t==='log')?'':'none';}" .. "var _ai=" .. tostring(ai) .. ";function _addAction(){" .. "var t=document.getElementById('act-tpl').content.cloneNode(true).querySelector('tr');" .. "t.querySelectorAll('[name]').forEach(function(e){e.name=e.name.replace('__I__',_ai);});" .. "_ai++;var body=document.getElementById('act-body');body.appendChild(t);" .. "_actChange(body.lastElementChild.querySelector('.act-type'));}" .. "function _delAction(b){var body=document.getElementById('act-body');" .. "if(body.rows.length>1)b.closest('tr').remove();}" .. "Array.prototype.forEach.call(document.querySelectorAll('#act-body .act-type'),_actChange);"
   local buttons = H.div({
     style = "margin-top:1rem"
   }, {
@@ -442,7 +479,7 @@ render_rule_form = function(action_url, rule)
       href = "/admin/config/filter/rules"
     }, "Annuler")
   })
-  local body_html = desc_html .. H.h3("Conditions — toutes en AND") .. cond_tpl .. cond_table .. add_btn .. H.h3("Action") .. action_html .. buttons .. H.script(js)
+  local body_html = desc_html .. H.h3("Conditions — toutes en AND") .. cond_tpl .. cond_table .. add_btn .. H.h3("Actions — appliquées dans l'ordre") .. act_tpl .. act_table .. act_add_btn .. buttons .. H.script(js) .. H.script(act_js)
   return H.form({
     method = "POST",
     action = action_url
@@ -495,29 +532,43 @@ rebuild_rule = function(form)
   if next(conditions) then
     rule.conditions = conditions
   end
-  local atype = form["action[type]"]
-  if atype and atype ~= "" then
+  local build_action
+  build_action = function(prefix)
+    local atype = form[tostring(prefix) .. "[type]"]
+    if not (atype and atype ~= "") then
+      return nil
+    end
     if atype == "dns_strip" then
-      rule.actions = {
-        {
-          dns_strip = {
-            rr_type = form["action[rr_type]"] or "A"
-          }
+      return {
+        dns_strip = {
+          rr_type = form[tostring(prefix) .. "[rr_type]"] or "A"
         }
       }
     elseif atype == "log" then
-      rule.actions = {
-        {
-          log = {
-            log_msg = form["action[log_msg]"] or ""
-          }
+      return {
+        log = {
+          log_msg = form[tostring(prefix) .. "[log_msg]"] or ""
         }
       }
     else
-      rule.actions = {
-        atype
-      }
+      return atype
     end
+  end
+  local actions = { }
+  for i = 0, 49 do
+    local a = build_action("action_" .. tostring(i))
+    if a then
+      actions[#actions + 1] = a
+    end
+  end
+  if #actions == 0 then
+    local a = build_action("action")
+    if a then
+      actions[#actions + 1] = a
+    end
+  end
+  if #actions > 0 then
+    rule.actions = actions
   end
   return rule
 end

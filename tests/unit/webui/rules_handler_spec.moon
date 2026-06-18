@@ -188,6 +188,46 @@ describe "webui/handlers/rules", ->
       -- la racine to_domain et l'option lists sont présentes
       assert.truthy body\find("to_domain", 1, true)
 
+  -- ── actions multiples ─────────────────────────────────────────────────
+
+  describe "actions multiples", ->
+
+    it "recompose plusieurs actions dans l'ordre (indices action_N)", ->
+      body_str = "description=multi&action_0%5Btype%5D=log&action_0%5Blog_msg%5D=hit" ..
+        "&action_1%5Btype%5D=block"
+      handle_rules_edit_post make_req("POST", body_str), 1, make_state!
+      loaded = (read_config CFG_PATH)
+      acts = loaded.filter.rules[1].actions
+      assert.equals 2, #acts
+      assert.same { log: { log_msg: "hit" } }, acts[1]
+      assert.equals "block", acts[2]
+
+    it "ignore les indices épars vides (trou entre action_0 et action_2)", ->
+      body_str = "description=sparse&action_0%5Btype%5D=allow" ..
+        "&action_2%5Btype%5D=dns_strip&action_2%5Brr_type%5D=AAAA"
+      handle_rules_edit_post make_req("POST", body_str), 1, make_state!
+      loaded = (read_config CFG_PATH)
+      acts = loaded.filter.rules[1].actions
+      assert.equals 2, #acts
+      assert.equals "allow", acts[1]
+      assert.same { dns_strip: { rr_type: "AAAA" } }, acts[2]
+
+    it "édite une règle à plusieurs actions : rendu d'autant de lignes act-type", ->
+      write_cfg base_cfg_with_rules {
+        { description: "r", conditions: {}, actions: { "block", { log: { log_msg: "x" } } } }
+      }
+      _, _, body = handle_rules_edit_get make_req("GET"), 1, make_state!
+      -- Deux lignes d'action distinctes (action_0 et action_1) + bouton d'ajout.
+      assert.truthy body\find("action_0[type]", 1, true)
+      assert.truthy body\find("action_1[type]", 1, true)
+      assert.truthy body\find("_addAction", 1, true)
+
+    it "repli legacy : ancien champ action[type] toujours accepté", ->
+      body_str = "description=legacy&action%5Btype%5D=block"
+      handle_rules_edit_post make_req("POST", body_str), 1, make_state!
+      loaded = (read_config CFG_PATH)
+      assert.equals "block", loaded.filter.rules[1].actions[1]
+
   -- ── handle_rules_delete ───────────────────────────────────────────────
 
   describe "handle_rules_delete", ->

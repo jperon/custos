@@ -162,38 +162,39 @@ cond_families_js = (families) ->
     fam_parts[#fam_parts + 1] = "#{jq f.root}:{forms:[#{table.concat form_parts, ','}]}"
   "{#{table.concat fam_parts, ','}}"
 
-render_action_select = (prefix, current_type, current_opts) ->
-  acts = registry.actions!
+-- Options <option> du type d'action (sélectionne current_type)
+action_options = (acts, current_type) ->
   opts = ""
   for name, s in pairs acts
     sel = if name == current_type then "selected" else nil
     opts ..= H.option { value: name, selected: sel }, (s and s.label or name)
+  opts
 
-  -- Option pour les actions avec paramètres
-  extra = ""
-  if current_type == "dns_strip"
-    rr_val = if type(current_opts) == "table" then current_opts.rr_type or "A" else "A"
-    extra = H.div {
-      H.label "Type d'enregistrement à supprimer"
-      H.select { name: prefix .. "[rr_type]" }, {
-        H.option { value: "A",     selected: rr_val == "A"     and "selected" or nil }, "A (IPv4)"
-        H.option { value: "AAAA",  selected: rr_val == "AAAA"  and "selected" or nil }, "AAAA (IPv6)"
-        H.option { value: "CNAME", selected: rr_val == "CNAME" and "selected" or nil }, "CNAME"
-        H.option { value: "MX",    selected: rr_val == "MX"    and "selected" or nil }, "MX"
-      }
+-- Une ligne du tableau d'actions (idx = entier ou "__I__" pour le template).
+-- Les champs « paramètres » (dns_strip → rr_type, log → log_msg) sont tous
+-- rendus mais masqués selon le type courant ; `_actChange` (JS) bascule leur
+-- visibilité. rebuild_rule n'utilise que les champs du type sélectionné.
+render_action_row = (acts, idx, atype, aopts) ->
+  show    = (t) -> atype == t and nil or "display:none"
+  rr_val  = (type(aopts) == "table" and aopts.rr_type)  or "A"
+  msg_val = (type(aopts) == "table" and aopts.log_msg)  or ""
+  type_sel = H.select { class: "act-type", name: "action_#{idx}[type]", onchange: "_actChange(this)" },
+    action_options acts, atype
+  dns_extra = H.div { class: "act-dns", style: show "dns_strip" }, {
+    H.label "Type d'enregistrement à supprimer"
+    H.select { name: "action_#{idx}[rr_type]" }, {
+      H.option { value: "A",     selected: rr_val == "A"     and "selected" or nil }, "A (IPv4)"
+      H.option { value: "AAAA",  selected: rr_val == "AAAA"  and "selected" or nil }, "AAAA (IPv6)"
+      H.option { value: "CNAME", selected: rr_val == "CNAME" and "selected" or nil }, "CNAME"
+      H.option { value: "MX",    selected: rr_val == "MX"    and "selected" or nil }, "MX"
     }
-  elseif current_type == "log"
-    msg_val = if type(current_opts) == "table" then current_opts.log_msg or "" else ""
-    extra = H.div {
-      H.label "Message de log (optionnel)"
-      H.input { type: "text", name: prefix .. "[log_msg]", value: msg_val }
-    }
-
-  H.div {
-    H.label "Action"
-    H.select { name: prefix .. "[type]" }, opts
-    extra
   }
+  log_extra = H.div { class: "act-log", style: show "log" }, {
+    H.label "Message de log (optionnel)"
+    H.input { type: "text", name: "action_#{idx}[log_msg]", value: msg_val }
+  }
+  btn = H.button { type: "button", onclick: "_delAction(this)", class: "btn btn-danger btn-sm" }, "✕"
+  H.tr (H.td(type_sel) .. H.td({ class: "act-params" }, dns_extra .. log_extra) .. H.td(btn))
 
 -- Génère le formulaire complet d'une règle (conditions dynamiques)
 render_rule_form = (action_url, rule) ->
@@ -261,23 +262,55 @@ render_rule_form = (action_url, rule) ->
     "if(e.target.classList.contains('cond-value'))_renderLinks(e.target.closest('tr'));});" ..
     "Array.prototype.forEach.call(document.querySelectorAll('#cond-body tr'),_applyForm);"
 
-  -- Action
-  action_type = nil
-  action_opts = nil
-  if #actions > 0
-    first = actions[1]
-    if type(first) == "string"
-      action_type = first
-    elseif type(first) == "table"
-      for k in pairs first
-        action_type = k
-        action_opts = first[k]
-        break
+  -- Actions (plusieurs possibles, appliquées dans l'ordre)
+  acts_reg = registry.actions!
+  -- Résout (type, opts) d'une action stockée (string nue ou { type: opts }).
+  resolve_action = (a) ->
+    if type(a) == "string"
+      a, nil
+    elseif type(a) == "table"
+      for k, v in pairs a
+        return k, v
+      nil, nil
+    else
+      nil, nil
 
-  action_html = H.fieldset {
-    H.legend "Action"
-    render_action_select "action", action_type, action_opts
+  action_rows = ""
+  ai = 0
+  for a in *actions
+    at, ao = resolve_action a
+    action_rows ..= render_action_row acts_reg, ai, at, ao
+    ai += 1
+  -- Au moins une ligne (règle neuve / sans action) : type par défaut.
+  if ai == 0
+    action_rows = render_action_row acts_reg, 0, nil, nil
+    ai = 1
+
+  act_tpl_row = render_action_row acts_reg, "__I__", nil, nil
+  act_tpl     = H.template { id: "act-tpl" }, act_tpl_row
+  act_thead   = H.thead {
+    H.tr {
+      H.th "Action"
+      H.th "Paramètres"
+      H.th { style: "width:3rem" }, ""
+    }
   }
+  act_tbody = H.tbody { id: "act-body" }, action_rows
+  act_table = H.table (act_thead .. act_tbody)
+  act_add_btn = H.button { type: "button", onclick: "_addAction()", class: "btn btn-secondary btn-sm",
+                           style: "margin:.4rem 0 .75rem" }, "+ Ajouter une action"
+  act_js = "function _actChange(sel){var row=sel.closest('tr');var t=sel.value;" ..
+    "var d=row.querySelector('.act-dns'),l=row.querySelector('.act-log');" ..
+    "if(d)d.style.display=(t==='dns_strip')?'':'none';" ..
+    "if(l)l.style.display=(t==='log')?'':'none';}" ..
+    "var _ai=#{ai};function _addAction(){" ..
+    "var t=document.getElementById('act-tpl').content.cloneNode(true).querySelector('tr');" ..
+    "t.querySelectorAll('[name]').forEach(function(e){e.name=e.name.replace('__I__',_ai);});" ..
+    "_ai++;var body=document.getElementById('act-body');body.appendChild(t);" ..
+    "_actChange(body.lastElementChild.querySelector('.act-type'));}" ..
+    "function _delAction(b){var body=document.getElementById('act-body');" ..
+    "if(body.rows.length>1)b.closest('tr').remove();}" ..
+    "Array.prototype.forEach.call(document.querySelectorAll('#act-body .act-type'),_actChange);"
 
   buttons = H.div { style: "margin-top:1rem" }, {
     H.button({ type: "submit" }, "Enregistrer") ..
@@ -288,9 +321,10 @@ render_rule_form = (action_url, rule) ->
   body_html = desc_html ..
     H.h3("Conditions — toutes en AND") ..
     cond_tpl .. cond_table .. add_btn ..
-    H.h3("Action") ..
-    action_html .. buttons ..
-    H.script(js)
+    H.h3("Actions — appliquées dans l'ordre") ..
+    act_tpl .. act_table .. act_add_btn .. buttons ..
+    H.script(js) ..
+    H.script(act_js)
 
   H.form { method: "POST", action: action_url }, body_html
 
@@ -323,14 +357,28 @@ rebuild_rule = (form) ->
 
   rule.conditions = conditions if next conditions
 
-  atype = form["action[type]"]
-  if atype and atype ~= ""
+  -- Construit une action depuis un préfixe de champ (type + params éventuels).
+  build_action = (prefix) ->
+    atype = form["#{prefix}[type]"]
+    return nil unless atype and atype ~= ""
     if atype == "dns_strip"
-      rule.actions = { { dns_strip: { rr_type: form["action[rr_type]"] or "A" } } }
+      { dns_strip: { rr_type: form["#{prefix}[rr_type]"] or "A" } }
     elseif atype == "log"
-      rule.actions = { { log: { log_msg: form["action[log_msg]"] or "" } } }
+      { log: { log_msg: form["#{prefix}[log_msg]"] or "" } }
     else
-      rule.actions = { atype }
+      atype
+
+  actions = {}
+  -- Indices épars (suppression côté client), on scanne 0..49 comme les conditions.
+  for i = 0, 49
+    a = build_action "action_#{i}"
+    actions[#actions + 1] = a if a
+  -- Repli legacy : ancien formulaire mono-action (`action[type]`).
+  if #actions == 0
+    a = build_action "action"
+    actions[#actions + 1] = a if a
+
+  rule.actions = actions if #actions > 0
 
   rule
 
