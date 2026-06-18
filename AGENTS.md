@@ -103,6 +103,14 @@ automatiquement les variantes :
 Format fichiers : 1 item/ligne, ignores vides et `#commentaires`.
 `lists_dir` se configure via `cfg.lists_dir` ou `cfg.filter.lists_dir` (défaut : `/etc/custos/lists`).
 
+Conséquence utile : `to_domainlist_list "groupe"` est un **groupe de domainlists**
+(le fichier `{lists_dir}/domainlist/groupe.txt` liste des **noms de domainlists**,
+une par ligne ; chacune réside sous `domainlists_dir`). Évite de répéter
+`to_domainlists {a,b,c}` entre règles. Un `_schema.forms` (table `{ list:{label,
+hint,description}, lists:{…} }`) permet à une condition de personnaliser les
+libellés de ces variantes dans l'UI (cf. `to_domainlist`, lu par
+`webui.schema.registry` `condition_families`).
+
 ### `requires_auth` dans les capabilities
 
 Pour qu'une condition déclenche les sous-chaînes nft d'authentification

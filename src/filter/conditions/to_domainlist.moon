@@ -199,6 +199,21 @@ _schema = {
   category:    "destination"
   arg_type:    "string"
   arg_hint:    "ex: toulouse/malware"
+  -- Libellés/hints spécifiques des variantes auto-générées (lus par
+  -- webui.schema.registry). La variante `_list` (to_domainlist_list) lit un
+  -- fichier nommé dont chaque ligne est un nom de domainlist : c'est un
+  -- « groupe de domainlists » réutilisable entre règles.
+  forms: {
+    list:  {
+      label:       "Groupe de listes (fichier nommé)"
+      hint:        "nom d'un fichier listant des domainlists, une par ligne"
+      description: "Domaine présent dans l'une des domainlists nommées dans ce fichier-groupe"
+    }
+    lists: {
+      label: "Plusieurs groupes de listes"
+      hint:  "un nom de fichier-groupe par ligne"
+    }
+  }
 }
 
 _factory = (cfg) ->

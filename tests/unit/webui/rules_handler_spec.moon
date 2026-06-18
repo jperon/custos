@@ -162,6 +162,21 @@ describe "webui/handlers/rules", ->
       loaded = (read_config CFG_PATH)
       assert.equals "example.com", loaded.filter.rules[1].conditions.to_domain
 
+    it "to_domainlist + forme=list donne to_domainlist_list (groupe, scalaire)", ->
+      body_str = "description=r&cond_0%5Bbase%5D=to_domainlist&cond_0%5Bform%5D=list" ..
+        "&cond_0%5Bvalue%5D=mon_groupe&action%5Btype%5D=allow"
+      handle_rules_edit_post make_req("POST", body_str), 1, make_state!
+      loaded = (read_config CFG_PATH)
+      assert.equals "mon_groupe", loaded.filter.rules[1].conditions.to_domainlist_list
+
+    it "présélectionne base et forme à l'édition d'un groupe de domainlists", ->
+      write_cfg base_cfg_with_rules {
+        { description: "r", conditions: { to_domainlist_list: "mon_groupe" }, actions: { "allow" } }
+      }
+      _, _, body = handle_rules_edit_get make_req("GET"), 1, make_state!
+      assert.truthy body\find("to_domainlist", 1, true)
+      assert.truthy body\find("mon_groupe", 1, true)
+
     it "présélectionne base et forme à l'édition (round-trip)", ->
       write_cfg base_cfg_with_rules {
         { description: "r", conditions: { to_domain_lists: { "x" } }, actions: { "allow" } }

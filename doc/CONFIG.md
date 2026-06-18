@@ -908,11 +908,22 @@ Pour un **OU** entre conditions hétérogènes, utiliser `any_of`. Pour la néga
 | `to_domain` | `"example.com"` | Correspond au domaine exact et à tous ses sous-domaines |
 | `to_domains` | `{"example.com","foo.com"}` | OU entre plusieurs domaines |
 | `to_domainlist` | `"toulouse/malware"` | Correspond si le domaine est dans la liste compilée |
-| `to_domainlists` | `{"toulouse/malware","ads"}` | OU entre plusieurs listes |
+| `to_domainlists` | `{"toulouse/malware","ads"}` | OU entre plusieurs listes (inline) |
+| `to_domainlist_list` | `"mon_groupe"` | **Groupe de domainlists** : fichier nommé listant des domainlists, une par ligne |
+| `to_domainlist_lists` | `{"groupe_a","groupe_b"}` | OU entre plusieurs fichiers-groupes |
 
 Le chemin d'une liste est relatif à `filter.domainlists_dir`.
 `"toulouse/malware"` correspond au fichier `{domainlists_dir}/toulouse/malware.bin`
 (ou `.domains` pour le format texte).
+
+**Groupe de domainlists (`to_domainlist_list`)** — variante auto-générée pour
+éviter de répéter le même `to_domainlists {a, b, c}` sur plusieurs règles. La
+valeur est le nom d'un fichier `{lists_dir}/domainlist/{nom}.txt` (relatif à
+`filter.lists_dir`, **distinct** de `domainlists_dir`) dont **chaque ligne est un
+nom de domainlist** ; le domaine matche s'il appartient à l'une d'elles. Éditable
+dans l'UI admin : règle → condition « Liste de domaines » → forme « Groupe de
+listes (fichier nommé) », le fichier-groupe se gère sous
+`/admin/config/filter/lists/domainlist/{nom}`.
 
 ### IP source
 

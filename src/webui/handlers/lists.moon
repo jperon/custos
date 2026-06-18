@@ -176,8 +176,12 @@ handle_list_get = (req, type_name, list_name, state) ->
   content = read_list_file path
   base_url = "/admin/config/filter/lists/#{type_name}/#{list_name}"
 
+  item_hint = if type_name == "domainlist"
+    "un nom de domainlist par ligne — ce fichier-groupe référence d'autres listes"
+  else
+    "un élément par ligne"
   edit_body = H.div({
-      H.label "Contenu (un élément par ligne — les lignes vides et # commentaires sont ignorés)"
+      H.label "Contenu (#{item_hint} — les lignes vides et # commentaires sont ignorés)"
       H.textarea { name: "content", rows: "20",
                    style: "font-family:monospace;width:100%;margin-top:.25rem" }, content
     }) ..

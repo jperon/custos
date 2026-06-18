@@ -187,7 +187,11 @@ condition_families = ->
       fname = name .. FORM_SUFFIX[fkey]
       fs = reg[fname]
       continue unless fs
-      hint = switch fkey
+      -- Override optionnel par condition (s.forms[fkey]) : libellé/hint/description
+      -- spécifiques (ex. « Groupe de listes » pour to_domainlist). Sinon valeurs
+      -- génériques partagées par toutes les conditions.
+      ovr = s.forms and s.forms[fkey]
+      hint = (ovr and ovr.hint) or switch fkey
         when "base"   then fs.arg_hint
         when "plural" then "une valeur par ligne"
         when "list"   then "nom d'un fichier de liste"
@@ -195,8 +199,8 @@ condition_families = ->
       forms[#forms + 1] = {
         key:         fkey
         name:        fname
-        label:       FORM_LABELS[fkey]
-        description: fs.description
+        label:       (ovr and ovr.label) or FORM_LABELS[fkey]
+        description: (ovr and ovr.description) or fs.description
         hint:        hint
         list_type:   (fkey == "list" or fkey == "lists") and list_type_of(name) or nil
       }

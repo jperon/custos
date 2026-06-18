@@ -259,6 +259,61 @@ describe "filter.conditions.to_domainlists", ->
     f = (to_domainlists cfg) {}
     assert.is_false (f {domain: "github.com"})
 
+describe "filter.conditions.to_domainlist_list (groupe de domainlists)", ->
+  compiler_api = require "filter.compiler_api"
+  TMPDIR  = "./tmp"
+  GRPDIR  = TMPDIR .. "/domainlist"   -- {lists_dir}/domainlist/*.txt
+  -- cfg : domainlists_dir pour les .domains, lists_dir pour les fichiers-groupes
+  cfg = { domainlists_dir: TMPDIR, filter: { lists_dir: TMPDIR } }
+
+  write_file = (path, content) ->
+    fd = io.open path, "w"
+    fd\write content
+    fd\close!
+
+  before_each ->
+    os.execute "mkdir -p #{GRPDIR}"
+    -- Deux domainlists texte (.domains) sous domainlists_dir
+    write_file TMPDIR .. "/grp_dl_a.domains", "github.com\ndebian.org\n"
+    write_file TMPDIR .. "/grp_dl_b.domains", "malware.bad\ntracker.bad\n"
+    -- Fichier-groupe : une domainlist par ligne (+ commentaire ignoré)
+    write_file GRPDIR .. "/grp_alpha.txt", "# groupe alpha\ngrp_dl_a\ngrp_dl_b\n"
+    write_file GRPDIR .. "/grp_beta.txt",  "grp_dl_a\n"
+
+  after_each ->
+    os.remove TMPDIR .. "/grp_dl_a.domains"
+    os.remove TMPDIR .. "/grp_dl_b.domains"
+    os.remove GRPDIR .. "/grp_alpha.txt"
+    os.remove GRPDIR .. "/grp_beta.txt"
+
+  it "to_domainlist_list : OR sur les domainlists du fichier-groupe", ->
+    ok = pcall require, "ffi_xxhash"
+    pending "ffi_xxhash non disponible" unless ok
+    factory = compiler_api.load_condition "to_domainlist_list"
+    assert.is_function factory
+    cond = (factory cfg) "grp_alpha"
+    assert.is_true (cond.eval {domain: "github.com"})
+    assert.is_true (cond.eval {domain: "api.debian.org"})
+    assert.is_true (cond.eval {domain: "malware.bad"})
+    assert.is_false (cond.eval {domain: "safe.com"})
+
+  it "to_domainlist_list : groupe inexistant → faux", ->
+    ok = pcall require, "ffi_xxhash"
+    pending "ffi_xxhash non disponible" unless ok
+    factory = compiler_api.load_condition "to_domainlist_list"
+    cond = (factory cfg) "groupe_absent_xyz"
+    assert.is_false (cond.eval {domain: "github.com"})
+
+  it "to_domainlist_lists : OR sur plusieurs fichiers-groupes", ->
+    ok = pcall require, "ffi_xxhash"
+    pending "ffi_xxhash non disponible" unless ok
+    factory = compiler_api.load_condition "to_domainlist_lists"
+    assert.is_function factory
+    cond = (factory cfg) {"grp_alpha", "grp_beta"}
+    assert.is_true (cond.eval {domain: "github.com"})
+    assert.is_true (cond.eval {domain: "malware.bad"})
+    assert.is_false (cond.eval {domain: "safe.com"})
+
 describe "filter.conditions.from_mac", ->
   from_mac = (require "filter.conditions.from_mac").factory
 

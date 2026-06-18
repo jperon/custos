@@ -271,8 +271,14 @@ handle_list_get = function(req, type_name, list_name, state)
   local path = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(list_name) .. ".txt"
   local content = read_list_file(path)
   local base_url = "/admin/config/filter/lists/" .. tostring(type_name) .. "/" .. tostring(list_name)
+  local item_hint
+  if type_name == "domainlist" then
+    item_hint = "un nom de domainlist par ligne — ce fichier-groupe référence d'autres listes"
+  else
+    item_hint = "un élément par ligne"
+  end
   local edit_body = H.div({
-    H.label("Contenu (un élément par ligne — les lignes vides et # commentaires sont ignorés)"),
+    H.label("Contenu (" .. tostring(item_hint) .. " — les lignes vides et # commentaires sont ignorés)"),
     H.textarea({
       name = "content",
       rows = "20",

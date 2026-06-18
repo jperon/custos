@@ -126,6 +126,12 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
   - Main file: `cfg/config.moon` (or `/etc/custos/config.moon` on OpenWrt)
   - Useful fields: `filter.sources`, `filter.domainlists_dir`, `filter.custom_lists_dir`
 
+- Groupe de domainlists (éviter de répéter `to_domainlists {a,b,c}` entre règles) :
+  - Condition `to_domainlist_list "groupe"` → lit `{lists_dir}/domainlist/groupe.txt`
+    (une **domainlist par ligne** ; `lists_dir` ≠ `domainlists_dir`).
+  - UI : règle → « Liste de domaines » → forme « Groupe de listes (fichier nommé) » ;
+    édition du groupe sous `/admin/config/filter/lists/domainlist/{nom}`.
+
 - Update lists (Debian/dev machine):
   - `make update-lists`
   - Direct equivalent:

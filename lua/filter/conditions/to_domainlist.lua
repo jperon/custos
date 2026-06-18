@@ -159,7 +159,18 @@ local _schema = {
   description = "Domaine présent dans une liste compilée (.bin/.domains)",
   category = "destination",
   arg_type = "string",
-  arg_hint = "ex: toulouse/malware"
+  arg_hint = "ex: toulouse/malware",
+  forms = {
+    list = {
+      label = "Groupe de listes (fichier nommé)",
+      hint = "nom d'un fichier listant des domainlists, une par ligne",
+      description = "Domaine présent dans l'une des domainlists nommées dans ce fichier-groupe"
+    },
+    lists = {
+      label = "Plusieurs groupes de listes",
+      hint = "un nom de fichier-groupe par ligne"
+    }
+  }
 }
 local _factory
 _factory = function(cfg)

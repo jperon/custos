@@ -238,22 +238,24 @@ condition_families = function()
             _continue_1 = true
             break
           end
-          local hint
-          local _exp_0 = fkey
-          if "base" == _exp_0 then
-            hint = fs.arg_hint
-          elseif "plural" == _exp_0 then
-            hint = "une valeur par ligne"
-          elseif "list" == _exp_0 then
-            hint = "nom d'un fichier de liste"
-          elseif "lists" == _exp_0 then
-            hint = "un nom de liste par ligne"
-          end
+          local ovr = s.forms and s.forms[fkey]
+          local hint = (ovr and ovr.hint) or (function()
+            local _exp_0 = fkey
+            if "base" == _exp_0 then
+              return fs.arg_hint
+            elseif "plural" == _exp_0 then
+              return "une valeur par ligne"
+            elseif "list" == _exp_0 then
+              return "nom d'un fichier de liste"
+            elseif "lists" == _exp_0 then
+              return "un nom de liste par ligne"
+            end
+          end)()
           forms[#forms + 1] = {
             key = fkey,
             name = fname,
-            label = FORM_LABELS[fkey],
-            description = fs.description,
+            label = (ovr and ovr.label) or FORM_LABELS[fkey],
+            description = (ovr and ovr.description) or fs.description,
             hint = hint,
             list_type = (fkey == "list" or fkey == "lists") and list_type_of(name) or nil
           }

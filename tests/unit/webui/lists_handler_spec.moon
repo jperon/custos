@@ -110,6 +110,11 @@ describe "webui/handlers/lists", ->
       status, _, _ = handle_list_get make_req("GET"), "domain", "inexistant", make_state!
       assert.equals 200, status
 
+    it "type domainlist : libellé spécifique « groupe de domainlists »", ->
+      status, _, body = handle_list_get make_req("GET"), "domainlist", "mon_groupe", make_state!
+      assert.equals 200, status
+      assert.truthy body\find("nom de domainlist par ligne", 1, true)
+
   -- ── handle_list_post — save ───────────────────────────────────────────
 
   describe "handle_list_post — save", ->
