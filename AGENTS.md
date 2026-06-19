@@ -192,13 +192,56 @@ DoH divergeait de l'intercepteur `worker_questions`) :
 - Les fonctions variadiques FFI (`curl_easy_setopt`, …) ne convertissent **pas** les strings Lua en `char *` automatiquement → `ffi.cast("const char *", str)` obligatoire.
 - Les callbacks LuaJIT FFI (`ffi.cast "fn_ptr_type", lua_fn`) capturent les upvalues par référence ; réassigner l'upvalue (`recv_buf = {}`) met à jour le slot partagé.
 
-### Limite `from_vlan` en DoH
+### `from_vlan` en DoH (détection via file dédiée)
 
 La condition `from_vlan` lit `req.vlan`, renseigné en UDP via le tag 802.1Q du
-paquet L2. En DoH (connexion TCP/TLS), les tags VLAN sont supprimés par les
-switches amont → `req.vlan` est toujours `nil` → la condition ne matche jamais.
-Utiliser `from_nets` (sous-réseaux IP) pour les règles qui doivent s'appliquer
-aux deux workers.
+paquet L2 (recopié dans le nfmark par nft). Le worker DoH écoute sur un port
+TCP/TLS local et ne dispose pas de ce nfmark. Un mécanisme dédié comble l'écart,
+calqué sur la topologie `worker_auth_queue` → `mac_learner` :
+
+- `nft_rules` apprend l'association IP→VLAN à **deux endroits**, tous deux rendus
+  seulement si `doh.enabled` et `nfqueue.doh_vlan`, vers la file `nfqueue.doh_vlan`
+  (en recopiant le tag 802.1Q dans le mark) :
+  - **Hook `forward`** (placeholder `{DOH_VLAN_FORWARD_RULES}`, **source
+    autoritative du tag**) : règles taguées `vlan id != 0 tcp dport <doh> ip[6]
+    daddr @filter_ips…`, placées **avant** la règle « UniFi mgmt local » (qui
+    accepte tcp/8443) sinon la SYN serait acceptée avant tout apprentissage.
+    Indispensable en **topologie routée** : custos n'a souvent qu'une IP de
+    management ; la SYN DoH d'un client d'un autre sous-réseau a pour MAC dst sa
+    passerelle → elle **transite le forward taguée** puis est routée et **revient
+    untagged** sur l'IP du filtre (hook input). Sans la règle forward, seule la
+    boucle untagged serait vue → `vlan` jamais loggué.
+  - **Chaîne `input` du bridge** (`{DOH_VLAN_INPUT_CHAIN}`) : trafic host-bound
+    vers le port DoH, **tagué ET untagged**. Sert le cas d'un client DoH
+    réellement **untagged adjacent** (et l'anti-spoofing untagged, ci-dessous).
+- `worker_doh_vlan` lit le VLAN (`get_l2` → `nfq_get_nfmark`) + l'IP source,
+  transmet l'association IP→VLAN au `mac_learner` via le pipe `vlan_learn`
+  (message 18 octets ip16+vlan16), et renvoie **toujours `NF_ACCEPT`**.
+- `mac_learner` stocke `vlan_table[ip]` (TTL `entry_ttl`) et répond aux requêtes
+  `vlan:<ip>` ; `mac_learner_ipc.get_vlan(ip)` est interrogé par le worker DoH
+  après `getpeername`, comme `get_mac`.
+
+**Précédence forward-tagué vs input-untagged (boucle routée).** La même connexion
+produit d'abord l'observation **forward taguée** (VLAN réel), puis la **boucle
+routée untagged** (input) qui, en last-writer-wins, **écraserait** le VLAN. Pour
+l'éviter sans casser l'anti-spoofing, `worker_doh_vlan.should_learn_untagged`
+n'apprend une observation **untagged** que si la **MAC source de la trame
+correspond à la MAC connue de l'IP** (`get_mac`) : la boucle routée a la MAC de la
+**passerelle** (≠ MAC du client) → ignorée ; un vrai client untagged — ou un
+usurpateur IP+MAC — présente la MAC connue → apprise (`0` écrase). Fallback : si la
+MAC connue est inconnue/nil, on apprend (anti-stale). Les observations **taguées
+(`vlan > 0`)** sont apprises inconditionnellement.
+
+**Anti-spoofing.** L'écrasement untagged ci-dessus reste la défense : un client
+usurpant IP+MAC en untagged ne doit pas hériter du VLAN d'un appareil légitime
+sous `from_vlan <id> AND from_mac …`. Côté `req.vlan`, `0` est ramené à `nil`
+(parité UDP : `from_vlan _none` matche, `from_vlan <id>` non). **Caveat** :
+association par IP via cache TTL (comme `get_mac`) → défense en profondeur, pas
+garantie dure ; pour un enforcement strict, s'appuyer sur le plan UDP ou une
+segmentation L2.
+
+`from_nets` (sous-réseaux IP) reste utilisable pour les règles devant s'appliquer
+aux deux workers sans dépendre du VLAN.
 
 ---
 

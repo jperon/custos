@@ -99,6 +99,36 @@ substitute = function(content, plan)
   content = content:gsub("{QUEUE_SNI}", cfg.nfqueue.sni)
   content = content:gsub("{NFT_IP_TIMEOUT}", cfg.nft.ip_timeout)
   content = content:gsub("{DOH_PORT}", tostring(cfg.doh.port or 8443))
+  local doh_vlan_chain
+  if cfg.doh and cfg.doh.enabled and cfg.nfqueue.doh_vlan then
+    local doh_port = tostring(cfg.doh.port or 8443)
+    local q = cfg.nfqueue.doh_vlan
+    doh_vlan_chain = table.concat({
+      "  # ── Chaîne INPUT bridge : détection VLAN pour les clients DoH ──",
+      "  # Recopie le tag 802.1Q dans le mark (lisible via nfq_get_nfmark) puis",
+      "  # queue vers worker_doh_vlan, qui apprend IP→VLAN (NF_ACCEPT toujours).",
+      "  chain input {",
+      "    type filter hook input priority 0; policy accept;",
+      "    meta pkttype host vlan id != 0 meta l4proto tcp tcp dport " .. tostring(doh_port) .. " meta mark set vlan id counter queue num " .. tostring(q) .. " bypass comment \"DoH VLAN detection (tagged)\"",
+      "    meta pkttype host meta l4proto tcp tcp dport " .. tostring(doh_port) .. " counter queue num " .. tostring(q) .. " bypass comment \"DoH VLAN detection (untagged)\"",
+      "  }"
+    }, "\n")
+  else
+    doh_vlan_chain = "  # DoH VLAN detection disabled (DoH off or nfqueue.doh_vlan unset)"
+  end
+  content = content:gsub("{DOH_VLAN_INPUT_CHAIN}", doh_vlan_chain)
+  local doh_vlan_forward
+  if cfg.doh and cfg.doh.enabled and cfg.nfqueue.doh_vlan then
+    local doh_port = tostring(cfg.doh.port or 8443)
+    local q = cfg.nfqueue.doh_vlan
+    doh_vlan_forward = table.concat({
+      "    vlan id != 0 tcp dport " .. tostring(doh_port) .. " ip  daddr @filter_ips4 meta mark set vlan id counter queue num " .. tostring(q) .. " bypass comment \"DoH VLAN learn (forward tagged v4)\"",
+      "    vlan id != 0 tcp dport " .. tostring(doh_port) .. " ip6 daddr @filter_ips6 meta mark set vlan id counter queue num " .. tostring(q) .. " bypass comment \"DoH VLAN learn (forward tagged v6)\""
+    }, "\n")
+  else
+    doh_vlan_forward = "    # DoH VLAN forward-learning disabled (DoH off or nfqueue.doh_vlan unset)"
+  end
+  content = content:gsub("{DOH_VLAN_FORWARD_RULES}", doh_vlan_forward)
   local compiled_sets
   if plan then
     compiled_sets = nft_compiler.render_sets_only(cfg.filter, plan, "  ", true)

@@ -42,6 +42,7 @@ local mac_table = { }
 local negative_cache = { }
 local pending_queries = { }
 local prober = nil
+local vlan_table = { }
 local ip16_to_str
 ip16_to_str = function(ip16)
   local is_ipv4 = true
@@ -110,6 +111,32 @@ process_learn = function(msg)
   local mac_str = mac2s(mac_raw)
   return learn_mac(ip_str, mac_str)
 end
+local process_vlan_learn
+process_vlan_learn = function(msg)
+  if #msg < 18 then
+    return 
+  end
+  local ip16 = msg:sub(1, 16)
+  local vlan = msg:byte(17) * 256 + msg:byte(18)
+  local ip_str = ip16_to_str(ip16)
+  vlan_table[ip_str] = {
+    vlan,
+    os.time() + (mac_cfg.entry_ttl or 300)
+  }
+end
+local vlan_lookup
+vlan_lookup = function(ip_str)
+  local entry = vlan_table[ip_str]
+  if not (entry) then
+    return nil
+  end
+  if os.time() <= entry[2] then
+    return entry[1]
+  else
+    vlan_table[ip_str] = nil
+    return nil
+  end
+end
 local expire_pending
 expire_pending = function()
   local now_ms = mac_prober.get_ms()
@@ -139,6 +166,18 @@ start_query = function(client_fd)
     return 
   end
   local req = ffi.string(buf, n)
+  local vlan_ip = req:match("^vlan:([^\n\r]+)")
+  if vlan_ip then
+    local vid = vlan_lookup(vlan_ip)
+    if vid then
+      local resp = vid .. "\n"
+      libc.send(client_fd, resp, #resp, 0)
+    else
+      libc.send(client_fd, "unknown\n", 8, 0)
+    end
+    libc.close(client_fd)
+    return 
+  end
   local ip_str = req:match("^([^\n\r]+)")
   if not (ip_str) then
     libc.send(client_fd, "unknown\n", 8, 0)
@@ -214,7 +253,7 @@ create_server = function(path)
   return sock
 end
 local run
-run = function(learn_rfd, ifname)
+run = function(learn_rfd, ifname, vlan_learn_rfd)
   ifname = ifname or "br"
   prober = mac_prober.init(ifname)
   if prober then
@@ -252,7 +291,7 @@ run = function(learn_rfd, ifname)
       sock = query_sock_path
     }
   end)
-  local pfds = ffi.new("struct pollfd[4]")
+  local pfds = ffi.new("struct pollfd[5]")
   pfds[0].fd = learn_rfd
   pfds[0].events = POLLIN
   pfds[1].fd = query_sock
@@ -268,10 +307,18 @@ run = function(learn_rfd, ifname)
       nfds = 4
     end
   end
+  local vlan_idx = -1
+  if vlan_learn_rfd then
+    vlan_idx = nfds
+    pfds[vlan_idx].fd = vlan_learn_rfd
+    pfds[vlan_idx].events = POLLIN
+    nfds = nfds + 1
+  end
   local msg_size = mac_cfg.learn_msg_size or 22
   local learn_buf = ffi.new("uint8_t[?]", msg_size)
   local arp_buf = ffi.new("uint8_t[512]")
   local ipv6_buf = ffi.new("uint8_t[2048]")
+  local vlan_buf = ffi.new("uint8_t[18]")
   local last_purge = 0
   while true do
     local poll_ms
@@ -332,6 +379,17 @@ run = function(learn_rfd, ifname)
         end
       end
     end
+    if vlan_idx >= 0 and bit.band(pfds[vlan_idx].revents, POLLIN) ~= 0 then
+      while true do
+        local n = libc.read(vlan_learn_rfd, vlan_buf, 18)
+        if n <= 0 then
+          break
+        end
+        if n == 18 then
+          process_vlan_learn(ffi.string(vlan_buf, 18))
+        end
+      end
+    end
     if next(pending_queries) ~= nil then
       expire_pending()
     end
@@ -348,9 +406,16 @@ run = function(learn_rfd, ifname)
           negative_cache[ip] = nil
         end
       end
+      for ip, entry in pairs(vlan_table) do
+        if now_epoch > entry[2] then
+          vlan_table[ip] = nil
+        end
+      end
     end
   end
 end
 return {
-  run = run
+  run = run,
+  process_vlan_learn = process_vlan_learn,
+  vlan_lookup = vlan_lookup
 }

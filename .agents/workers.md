@@ -82,8 +82,14 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 - **Upstream :** UDP/53 par défaut (`doh.upstream_ipv4`/`upstream_ipv6`) ; si `doh.upstream_doh_url` est défini, utilise **libcurl** (`doh.upstream_doh_curl`) pour HTTP/2 + ALPN. Sélection dans `make_upstream` au démarrage du worker.
 - **Second avis DoH :** `doh.validator.query_verdict` interroge `second_opinion.resolvers` (ou `validate_resolvers` per-règle) **de façon synchrone**, en UDP (`doh.upstream`) ou DoH (`doh.upstream_doh_curl`). Timeout distinct : `budget_ms` (UDP) vs `doh_budget_ms` (DoH https://). Fail-open.
 - **H2 partagé :** utilitaires frames HTTP/2 (`h2_read_frame`, `h2_write_frame`, constantes) factorisés dans `doh.h2_frames`.
-- **Limite `from_vlan` :** la condition `from_vlan` ne fonctionne pas en DoH quand les switches amont suppriment les tags 802.1Q — utiliser `from_nets` à la place.
+- **`from_vlan` en DoH :** `req.vlan` est renseigné via `mac_learner_ipc.get_vlan(peer_ip)` (après `getpeername`, comme `get_mac`), alimenté par `worker_doh_vlan`. Untagged → `req.vlan = nil` (parité UDP). Détails et anti-spoofing : AGENTS.md « `from_vlan` en DoH ».
 - **Out :** réponse DoH au client ; paires autorisées injectées dans les sets nft **via le pipe `nft`**.
+
+## worker_doh_vlan (`src/worker_doh_vlan.moon`) — optionnel (`doh.enabled` + `nfqueue.doh_vlan`)
+
+- **In :** NFQUEUE `nfqueue.doh_vlan` (chaîne **input du bridge**, placeholder `{DOH_VLAN_INPUT_CHAIN}` : trafic host-bound vers `doh.port`, tagué ET untagged) ; fd d'écriture `vlan_learn` injecté par `main.moon`.
+- **Traitement :** lit le VLAN (`get_l2` → `nfq_get_nfmark`, recopié par nft) + l'IP source (`ipparse.l3.ip`), encode `ip16 + vlan16` (`encode_vlan_msg`).
+- **Out :** `NF_ACCEPT` **toujours** (le filtrage du flux DoH reste au serveur DoH) ; écrit le couple IP+VLAN dans le pipe `vlan_learn` (18 octets) → `mac_learner`. Untagged (`vlan == 0`) émis explicitement (écrase l'entrée stale, anti-spoofing).
 
 ## worker_nft (`src/worker_nft.moon`)
 
@@ -107,8 +113,8 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 ## mac_learner (`src/mac_learner.moon`)
 
-- **In :** pipe `learn` (messages binaires 22 octets) ; socket Unix `SOCK_STREAM` (requêtes texte ligne `"ip_str\n"`).
-- **Out :** répond `"aa:bb:cc:dd:ee:ff\n"` ou `"unknown\n"` sur le socket Unix.
+- **In :** pipe `learn` (messages binaires 22 octets, IP→MAC) ; pipe `vlan_learn` (messages 18 octets `ip16+vlan16`, IP→VLAN, depuis `worker_doh_vlan`) ; socket Unix `SOCK_STREAM` (requêtes texte : `"ip_str\n"` pour la MAC, `"vlan:ip_str\n"` pour le VLAN).
+- **Out :** répond `"aa:bb:cc:dd:ee:ff\n"` ou `"unknown\n"` (MAC) ; `"<id>\n"` (VLAN, `0` = untagged observé) ou `"unknown\n"` (jamais vu) sur le socket Unix. `vlan_table` indexée par IP (TTL `entry_ttl`), untagged mémorisé tel quel (écrasement anti-stale).
 - Sondage actif : si l'IP est inconnue, `mac_prober` envoie un ARP request ou Neighbor Solicitation sans bloquer. Les clients en attente sont notifiés dès la réponse ou à l'expiration de `PROBE_TIMEOUT_MS`.
 
 ## auth/worker (`src/auth/worker.moon`)

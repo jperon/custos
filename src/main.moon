@@ -9,6 +9,7 @@
 --   ├── worker question            — écrit question→response et question→mac_learner
 --   ├── worker response            — lit question→response
 --   ├── worker_auth_queue   — capture trafic 33443, extrait MAC/IP, écrit vers AUTH
+--   ├── worker_doh_vlan     — capture trafic port DoH (opt.), extrait VLAN/IP, écrit pipe vlan_learn
 --   ├── worker AUTH          — portail HTTPS (lit pipe auth_ipc)
 --   ├── worker captive             — mode bridge
 --   └── worker reject              — mode bridge
@@ -114,6 +115,7 @@ create_pipes = ->
   {
     question_response:   create_pipe "question_response"
     learn:  create_pipe "mac_learn"
+    vlan_learn: create_pipe "vlan_learn"
     events: create_pipe "events"
     nft:    create_pipe "nft"
   }
@@ -256,7 +258,7 @@ supervise = (pipes, sfd) ->
       name: "mac-lrn"
       pid: nil
       restart_fn: -> fork_worker "mac-lrn",
-          (rfd) -> require("mac_learner").run rfd, bridge_ifname,
+          (rfd) -> require("mac_learner").run rfd, bridge_ifname, pipes.vlan_learn.rfd,
           pipes.learn.rfd
     }
   }
@@ -465,6 +467,16 @@ supervise = (pipes, sfd) ->
         (args) -> require("worker_doh").run args.cfg, args.filter_data,
         { cfg: doh_cfg, filter_data: filter_data }
     }
+    -- Worker NFQUEUE de détection VLAN pour les clients DoH (alimente mac_learner
+    -- via le pipe vlan_learn). Forké seulement avec DoH, et si une file est définie.
+    if config.nfqueue.doh_vlan
+      table.insert workers_with_filter, {
+        name: "doh-vlan"
+        pid: nil
+        restart_fn: -> fork_worker "doh-vlan",
+          (wfd) -> require("worker_doh_vlan").run config.nfqueue.doh_vlan, wfd,
+          pipes.vlan_learn.wfd
+      }
 
   -- Fork workers WITH filter data (they will have filter lists in memory)
   for w in *workers_with_filter

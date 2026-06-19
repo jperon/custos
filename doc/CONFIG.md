@@ -166,6 +166,7 @@ Chaque entrée correspond à un worker distinct qui lit depuis le noyau Linux.
 | `auth` | string | `"5"` | Authentification HTTPS |
 | `sni` | string | `"6"` | Verdict SNI TLS/QUIC (443) |
 | `sip` | string | `"12"` | Trafic SIP/VoIP |
+| `doh_vlan` | string | `"13"` | Détection VLAN des clients DoH (worker `worker_doh_vlan`, optionnel : seulement si `doh.enabled`). Renseigne `req.vlan` en DoH pour `from_vlan`. |
 
 Une plage (ex. `"0-1"`) permet à plusieurs threads de traiter la même queue en
 parallèle.
@@ -179,6 +180,7 @@ nfqueue: {
   auth:      "5"
   sni:       "6"
   sip:       "12"
+  doh_vlan:  "13"
 }
 ```
 

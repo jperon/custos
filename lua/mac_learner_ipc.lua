@@ -74,7 +74,46 @@ get_mac = function(ip_str)
   end
   return "unknown"
 end
+local get_vlan
+get_vlan = function(ip_str)
+  if not (ip_str and ip_str ~= "" and ip_str ~= "unknown") then
+    return nil
+  end
+  local sock = libc.socket(AF_UNIX, SOCK_STREAM, 0)
+  if not (sock >= 0) then
+    log_warn(function()
+      return {
+        action = "vlan_ipc_socket_failed",
+        errno = tonumber(ffi.C.__errno_location()[0])
+      }
+    end)
+    return nil
+  end
+  local addr = ffi.new("struct sockaddr_un")
+  addr.sun_family = AF_UNIX
+  ffi.copy(addr.sun_path, QUERY_SOCK)
+  local addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
+  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0 then
+    libc.close(sock)
+    return nil
+  end
+  local req = "vlan:" .. ip_str .. "\n"
+  libc.send(sock, req, #req, 0)
+  local buf = ffi.new("char[64]")
+  local n = libc.recv(sock, buf, 63, 0)
+  libc.close(sock)
+  if n <= 0 then
+    return nil
+  end
+  local resp = ffi.string(buf, n)
+  local id = resp:match("^(%d+)")
+  if id then
+    return tonumber(id)
+  end
+  return nil
+end
 return {
   get_mac = get_mac,
+  get_vlan = get_vlan,
   mac_from_eui64 = mac_from_eui64
 }

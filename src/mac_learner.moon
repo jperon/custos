@@ -62,6 +62,9 @@ mac_table       = {}
 negative_cache  = {}
 pending_queries = {}
 prober          = nil
+-- vlan_table : { ip_str → { vlan_id, expires_epoch } }, alimenté par worker_doh_vlan.
+-- vlan_id == 0 signifie « untagged observé » (distinct de l'absence d'entrée).
+vlan_table      = {}
 
 -- ── Utilitaires ──────────────────────────────────────────────────
 
@@ -128,6 +131,32 @@ process_learn = (msg) ->
 
   learn_mac ip_str, mac_str
 
+-- ── Apprentissage VLAN (worker_doh_vlan) ─────────────────────────
+
+--- Traite un message binaire de learn VLAN reçu depuis le pipe vlan_learn.
+-- Format : ip16 (16 octets) + vlan uint16 big-endian (2 octets) = 18 octets.
+-- vlan == 0 (untagged) est mémorisé tel quel et écrase toute entrée antérieure :
+-- indispensable à l'anti-spoofing (cf. AGENTS.md « from_vlan en DoH »).
+-- @tparam string msg 18 octets (ip16 + vlan16)
+process_vlan_learn = (msg) ->
+  return if #msg < 18
+  ip16 = msg\sub 1, 16
+  vlan = msg\byte(17) * 256 + msg\byte(18)
+  ip_str = ip16_to_str ip16
+  vlan_table[ip_str] = { vlan, os.time! + (mac_cfg.entry_ttl or 300) }
+
+--- Recherche le VLAN observé pour une IP (helper de test + requête socket).
+-- @tparam string ip_str Adresse IP textuelle
+-- @treturn number|nil VLAN ID (0 = untagged) si entrée valide, nil sinon
+vlan_lookup = (ip_str) ->
+  entry = vlan_table[ip_str]
+  return nil unless entry
+  if os.time! <= entry[2]
+    entry[1]
+  else
+    vlan_table[ip_str] = nil
+    nil
+
 -- ── Expiration des probes en attente ─────────────────────────────
 
 --- Expire les requêtes en attente dont le probe dépasse PROBE_TIMEOUT_MS.
@@ -165,6 +194,20 @@ start_query = (client_fd) ->
     return
 
   req    = ffi.string buf, n
+
+  -- Requête VLAN : "vlan:<ip>\n" → "<id>\n" (0 = untagged observé) ou "unknown\n".
+  -- Lecture seule de vlan_table (alimentée par worker_doh_vlan) ; pas de probe.
+  vlan_ip = req\match "^vlan:([^\n\r]+)"
+  if vlan_ip
+    vid = vlan_lookup vlan_ip
+    if vid
+      resp = vid .. "\n"
+      libc.send client_fd, resp, #resp, 0
+    else
+      libc.send client_fd, "unknown\n", 8, 0
+    libc.close client_fd
+    return
+
   ip_str = req\match "^([^\n\r]+)"
   unless ip_str
     libc.send client_fd, "unknown\n", 8, 0
@@ -247,7 +290,8 @@ create_server = (path) ->
 -- poll sur jusqu'à 4 fds (pipe learn, query sock, arp_fd, ip6_fd).
 -- @tparam number learn_rfd  fd de lecture du pipe de learn (question → learner)
 -- @tparam string [ifname]   Nom de l'interface bridge (défaut : "br")
-run = (learn_rfd, ifname) ->
+-- @tparam number [vlan_learn_rfd] fd de lecture du pipe vlan_learn (worker_doh_vlan → learner)
+run = (learn_rfd, ifname, vlan_learn_rfd) ->
   ifname = ifname or "br"
   prober = mac_prober.init ifname
   if prober
@@ -265,9 +309,10 @@ run = (learn_rfd, ifname) ->
 
   log_info -> { action: "mac_learner_start", sock: query_sock_path }
 
-  -- Tableau pollfd[4] : [0] pipe learn, [1] query sock,
-  --                     [2] arp_fd (opt.), [3] ip6_fd (opt.)
-  pfds = ffi.new "struct pollfd[4]"
+  -- Tableau pollfd[5] : [0] pipe learn, [1] query sock,
+  --                     [2] arp_fd (opt.), [3] ip6_fd (opt.),
+  --                     [vlan_idx] vlan_learn (opt., worker_doh_vlan)
+  pfds = ffi.new "struct pollfd[5]"
   pfds[0].fd     = learn_rfd
   pfds[0].events = POLLIN
   pfds[1].fd     = query_sock
@@ -283,10 +328,19 @@ run = (learn_rfd, ifname) ->
       pfds[3].events = POLLIN
       nfds = 4
 
+  -- Pipe vlan_learn (optionnel) : ajouté au prochain index libre.
+  vlan_idx = -1
+  if vlan_learn_rfd
+    vlan_idx = nfds
+    pfds[vlan_idx].fd     = vlan_learn_rfd
+    pfds[vlan_idx].events = POLLIN
+    nfds += 1
+
   msg_size = mac_cfg.learn_msg_size or 22
   learn_buf  = ffi.new "uint8_t[?]", msg_size
   arp_buf    = ffi.new "uint8_t[512]"
   ipv6_buf   = ffi.new "uint8_t[2048]"
+  vlan_buf   = ffi.new "uint8_t[18]"
   last_purge = 0
 
   while true
@@ -328,6 +382,13 @@ run = (learn_rfd, ifname) ->
           learn_mac ip_str, mac_str
           log_debug -> { action: "mac_learned_na", ip: ip_str, mac: mac_str }
 
+    -- [vlan_idx] Pipe vlan_learn : draine tous les messages (18 octets chacun)
+    if vlan_idx >= 0 and bit.band(pfds[vlan_idx].revents, POLLIN) ~= 0
+      while true
+        n = libc.read vlan_learn_rfd, vlan_buf, 18
+        break if n <= 0
+        process_vlan_learn ffi.string(vlan_buf, 18) if n == 18
+
     -- Expiration des probes dépassant PROBE_TIMEOUT_MS
     expire_pending! if next(pending_queries) ~= nil
 
@@ -339,5 +400,7 @@ run = (learn_rfd, ifname) ->
         mac_table[ip] = nil if now_epoch > entry[2]
       for ip, exp in pairs negative_cache
         negative_cache[ip] = nil if now_epoch > exp
+      for ip, entry in pairs vlan_table
+        vlan_table[ip] = nil if now_epoch > entry[2]
 
-{ :run }
+{ :run, :process_vlan_learn, :vlan_lookup }

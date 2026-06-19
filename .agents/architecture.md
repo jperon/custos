@@ -24,6 +24,9 @@ nftables (table bridge)
     │
     ├─ Port 33443     → QUEUE_AUTH      → worker_auth_queue → learn pipe (22 B) → mac_learner
     │
+    ├─ Port DoH (input bridge, opt.) → QUEUE_DOH_VLAN → worker_doh_vlan → vlan_learn pipe (18 B) → mac_learner
+    │     (NF_ACCEPT toujours ; renseigne req.vlan en DoH via get_vlan)
+    │
     ├─ TCP/443 + UDP/443 → QUEUE_SNI → worker_tls       ──→ nft pipe → worker_nft
     │     (placement=integral : règle AVANT cv_action_vmap → tout le 443 inspecté ;
     │      placement=residual : règle APRÈS → seul le trafic résiduel ;
@@ -56,6 +59,7 @@ Worker DoH (opt., HTTPS/WolfSSL, port 8443) : résout via upstream DNS, applique
 | `worker_nft` | Sérialise toutes les insertions nft (lit pipe `nft`, ACK par worker) — pas de NFQUEUE |
 | `worker_events` | Agrège les événements DNS (pipe `events`) et les persiste sous `events.dir` |
 | `worker_doh` | Serveur DoH HTTPS/WolfSSL (optionnel, `doh.enabled`) ; résout en amont + `filter.decide` |
+| `worker_doh_vlan` | NFQUEUE `QUEUE_DOH_VLAN` (optionnel, `doh.enabled` + `nfqueue.doh_vlan`) ; détecte le VLAN des clients DoH, écrit dans `vlan_learn` (mac_learner), `NF_ACCEPT` toujours |
 | `auth/worker` | Portail HTTPS captif **WolfSSL FFI** (port 33443) + interface admin `/admin/*` (`src/webui`) ; résout la MAC via socket Unix → `mac_learner` |
 
 Les numéros de queue sont **configurables** (section `nfqueue` de la config, ou

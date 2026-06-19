@@ -198,6 +198,7 @@ DEFAULTS = {
     auth: "5"
     sni: "6"
     sip: "12"
+    doh_vlan: "13"
   }
 
   dns: {

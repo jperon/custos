@@ -65,8 +65,11 @@ package.loaded["log"] = {
   log_allow: eval_log, log_block: eval_log, log_warn: eval_log
   log_debug: eval_log, log_info: eval_log
 }
+last_req = nil
 package.loaded["filter"] = {
-  decide_meta:     (req) -> decide_result
+  decide_meta:     (req) ->
+    last_req = req
+    decide_result
   run_on_response: (rule_id, dns_raw, reason) ->
     { dns_raw: dns_raw, modified: false, inject_nft: true, action_label: nil }
 }
@@ -99,6 +102,18 @@ describe "doh.query.process_query", ->
     for c in *nft_calls
       found = true if c.dest == "1.2.3.4" and c.rule_id == "r_main"
     assert.is_true found
+
+  it "req.vlan : VLAN tagué propagé tel quel à decide_meta", ->
+    query_mod.process_query make_query!, "10.0.0.1", "unknown", {}, 100
+    assert.equals 100, last_req.vlan
+
+  it "req.vlan : untagged (0) ramené à nil (parité UDP)", ->
+    query_mod.process_query make_query!, "10.0.0.1", "unknown", {}, 0
+    assert.is_nil last_req.vlan
+
+  it "req.vlan : inconnu (nil) reste nil", ->
+    query_mod.process_query make_query!, "10.0.0.1", "unknown", {}, nil
+    assert.is_nil last_req.vlan
 
   it "block : réponse REFUSED sans appel upstream", ->
     decide_result = { verdict: false, reason: "denied", description: "deny" }

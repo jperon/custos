@@ -95,6 +95,39 @@ substitute = (content, plan=nil) ->
   content = content\gsub "{QUEUE_SNI}",   cfg.nfqueue.sni
   content = content\gsub "{NFT_IP_TIMEOUT}",  cfg.nft.ip_timeout
   content = content\gsub "{DOH_PORT}",        tostring(cfg.doh.port or 8443)
+
+  -- Chaîne input bridge de détection VLAN pour les clients DoH.
+  -- Rendue uniquement si DoH est activé ET qu'une file doh_vlan est configurée.
+  -- Voir worker_doh_vlan + AGENTS.md « from_vlan en DoH ».
+  doh_vlan_chain = if cfg.doh and cfg.doh.enabled and cfg.nfqueue.doh_vlan
+    doh_port = tostring(cfg.doh.port or 8443)
+    q = cfg.nfqueue.doh_vlan
+    table.concat {
+      "  # ── Chaîne INPUT bridge : détection VLAN pour les clients DoH ──"
+      "  # Recopie le tag 802.1Q dans le mark (lisible via nfq_get_nfmark) puis"
+      "  # queue vers worker_doh_vlan, qui apprend IP→VLAN (NF_ACCEPT toujours)."
+      "  chain input {"
+      "    type filter hook input priority 0; policy accept;"
+      "    meta pkttype host vlan id != 0 meta l4proto tcp tcp dport #{doh_port} meta mark set vlan id counter queue num #{q} bypass comment \"DoH VLAN detection (tagged)\""
+      "    meta pkttype host meta l4proto tcp tcp dport #{doh_port} counter queue num #{q} bypass comment \"DoH VLAN detection (untagged)\""
+      "  }"
+    }, "\n"
+  else
+    "  # DoH VLAN detection disabled (DoH off or nfqueue.doh_vlan unset)"
+  content = content\gsub "{DOH_VLAN_INPUT_CHAIN}", doh_vlan_chain
+
+  -- Règles d'apprentissage VLAN DoH dans le hook forward (tag présent avant
+  -- routage). Voir worker_doh_vlan + AGENTS.md « from_vlan en DoH ».
+  doh_vlan_forward = if cfg.doh and cfg.doh.enabled and cfg.nfqueue.doh_vlan
+    doh_port = tostring(cfg.doh.port or 8443)
+    q = cfg.nfqueue.doh_vlan
+    table.concat {
+      "    vlan id != 0 tcp dport #{doh_port} ip  daddr @filter_ips4 meta mark set vlan id counter queue num #{q} bypass comment \"DoH VLAN learn (forward tagged v4)\""
+      "    vlan id != 0 tcp dport #{doh_port} ip6 daddr @filter_ips6 meta mark set vlan id counter queue num #{q} bypass comment \"DoH VLAN learn (forward tagged v6)\""
+    }, "\n"
+  else
+    "    # DoH VLAN forward-learning disabled (DoH off or nfqueue.doh_vlan unset)"
+  content = content\gsub "{DOH_VLAN_FORWARD_RULES}", doh_vlan_forward
   compiled_sets = if plan
     nft_compiler.render_sets_only cfg.filter, plan, "  ", true
   else

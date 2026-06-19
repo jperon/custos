@@ -124,6 +124,7 @@ table bridge dns-filter-bridge {
 
 {COMPILED_FILTER_RULES}
 
+{DOH_VLAN_INPUT_CHAIN}
   # ── Chaîne FORWARD (tout le trafic traversant le bridge) ──────
   chain forward {
     type filter hook forward priority 0; policy accept;
@@ -134,6 +135,13 @@ table bridge dns-filter-bridge {
     # Portail captif HTTPS : apprentissage MAC/IP avant acceptation.
     # Le worker auth_queue extrait la MAC et l'envoie au serveur HTTPS.
     tcp dport 33443 log level debug prefix "custos auth_input: " counter queue num {QUEUE_AUTH} comment "Captive portal HTTPS input"
+    # ── Apprentissage VLAN DoH (forward, tag présent avant routage) ─────────
+    # La SYN DoH d'un client routé transite ici TAGUÉE (MAC dst = sa passerelle),
+    # avant d'être routée puis re-livrée untagged sur l'IP du filtre (hook input).
+    # On recopie le tag dans le mark et on queue vers worker_doh_vlan (apprend
+    # IP→VLAN, NF_ACCEPT toujours). Placé AVANT « UniFi mgmt local » qui accepte
+    # tcp/8443. Rendu seulement si DoH + nfqueue.doh_vlan (sinon vide).
+{DOH_VLAN_FORWARD_RULES}
     # ── Fast-path conntrack (ancre HAUTE) ───────────────────────────────────
     # Rendue ICI quand sni.placement != "integral" : rejoue le verdict déjà
     # tranché sans retraverser le bloc amont (infra/whitelist/SIP) ni le

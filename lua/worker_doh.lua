@@ -21,8 +21,11 @@ do
   local _obj_0 = require("lib.http")
   read_request, send_response = _obj_0.read_request, _obj_0.send_response
 end
-local get_mac
-get_mac = require("mac_learner_ipc").get_mac
+local get_mac, get_vlan
+do
+  local _obj_0 = require("mac_learner_ipc")
+  get_mac, get_vlan = _obj_0.get_mac, _obj_0.get_vlan
+end
 local process_query
 process_query = require("doh.query").process_query
 local parse, types, rcodes
@@ -241,7 +244,7 @@ h2_encode_response_headers = function()
   return "\x88\x5f\x17application/dns-message"
 end
 local handle_h2
-handle_h2 = function(conn, peer_ip, peer_mac, upstream)
+handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
   conn:receive("*l")
   conn:receive("*l")
   h2_write_frame(conn, H2_FRAME_SETTINGS, 0, 0, "")
@@ -278,7 +281,7 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream)
     h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01")
     return nil, "h2_empty_body"
   end
-  local resp_raw, q_err = process_query(dns_raw, peer_ip, peer_mac, upstream)
+  local resp_raw, q_err = process_query(dns_raw, peer_ip, peer_mac, upstream, peer_vlan)
   if not (resp_raw) then
     log_warn(function()
       return {
@@ -426,11 +429,13 @@ handle_doh_client = function(args)
       return 
     end
     local peer_mac = get_mac(peer_ip)
+    local peer_vlan = get_vlan(peer_ip)
     log_debug(function()
       return {
         action = "mac_lookup",
         peer = peer_ip,
-        mac = peer_mac or "unknown"
+        mac = peer_mac or "unknown",
+        vlan = peer_vlan or "unknown"
       }
     end)
     local req, req_err = read_request(tls_client)
@@ -460,7 +465,7 @@ handle_doh_client = function(args)
           peer = peer_ip
         }
       end)
-      local h2_resp, h2_err = handle_h2(tls_client, peer_ip, peer_mac, state.upstream)
+      local h2_resp, h2_err = handle_h2(tls_client, peer_ip, peer_mac, state.upstream, peer_vlan)
       if h2_err then
         log_warn(function()
           return {
@@ -565,7 +570,7 @@ handle_doh_client = function(args)
       tls_client:close()
       return 
     end
-    local resp_raw, q_err = process_query(dns_raw, peer_ip, peer_mac, state.upstream)
+    local resp_raw, q_err = process_query(dns_raw, peer_ip, peer_mac, state.upstream, peer_vlan)
     if resp_raw then
       log_debug(function()
         return {

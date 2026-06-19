@@ -82,9 +82,10 @@ normalize_answers = (resp_dns) ->
 -- @tparam string      client_ip   Peer IP address string.
 -- @tparam string      client_mac  MAC address string (or "unknown").
 -- @tparam table       upstream    Client handle from doh.upstream.new_client().
+-- @tparam number|nil   client_vlan VLAN ID observé pour l'IP (0 = untagged, nil = inconnu).
 -- @treturn string|nil dns_resp    Raw DNS response bytes to send back, or nil.
 -- @treturn string|nil err         Error string if nil is returned.
-process_query = (dns_raw, client_ip, client_mac, upstream) ->
+process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
   dns, parse_err = parse dns_raw, 1, false
   unless dns
     log_warn -> { action: "parse_failed", client_ip: client_ip, err: tostring parse_err }
@@ -120,25 +121,30 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
   questions = dns.questions or (dns.question and { dns.question } or {})
   for q in *questions
     qname_text = q.name or q.qname
+    -- Parité sémantique UDP : untagged (0) → nil (from_vlan _none matche,
+    -- from_vlan <id> ne matche pas). Le bénéfice anti-stale tient côté cache
+    -- (l'entrée est rafraîchie à 0), pas via la valeur exposée ici.
     req = {
       domain: qname_text
       src_ip: client_ip
       mac:    client_mac
+      vlan:   (client_vlan and client_vlan > 0) and client_vlan or nil
       ts:     os.time!
       user:   user
     }
     log_debug -> { action: "filter_decide", qname: qname_text, qtype: q.qtype_name or tostring(q.qtype), client_ip: client_ip }
     meta = decide_meta req
     fields = {
-      action:   if meta.verdict then "allow" else "block"
-      worker:   "doh"
-      qname:    qname_text
-      qtype:    q.qtype_name or tostring(q.qtype)
-      client_ip: client_ip
-      client_mac: client_mac
-      user:     user
-      reason:   meta.reason or ""
-      rule:     meta.description or ""
+      action:  if meta.verdict then "allow" else "block"
+      worker:  "doh"
+      qname:   qname_text
+      qtype:   q.qtype_name or tostring(q.qtype)
+      src_ip:  client_ip
+      mac_src: client_mac
+      vlan:    (client_vlan and client_vlan > 0) and client_vlan or nil
+      user:    user
+      reason:  meta.reason or ""
+      rule:    meta.rule_id or ""
     }
     if meta.verdict
       log_allow -> fields
@@ -165,7 +171,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
       doh_timeout_ms = so.doh_budget_ms or 3000
       override, v_reason = query_classified dns_raw, val_resolvers, timeout_ms, doh_timeout_ms
       if override
-        log_block -> { action: "doh_validator_override", kind: override.kind, client_ip: client_ip, client_mac: client_mac, user: user, reason: v_reason }
+        log_block -> { action: "doh_validator_override", kind: override.kind, src_ip: client_ip, mac_src: client_mac, vlan: (client_vlan and client_vlan > 0) and client_vlan or nil, user: user, reason: v_reason }
         switch override.kind
           when "block"
             return build_nxdomain_response(dns, dns_raw, v_reason) or build_blocked_response(dns, dns_raw, v_reason)
@@ -263,7 +269,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream) ->
   -- ne pourra pas joindre (default deny), on renvoie une réponse REFUSED+EDE.
   failure_policy = (config.nft or {}).add_failure_policy or "fail-closed"
   if inj.records_to_add > 0 and not inj.success_any and failure_policy == "fail-closed"
-    log_block -> { action: "doh_nft_add_failed_fail_closed", client_ip: client_ip, client_mac: client_mac, user: user, rule: allow_rule_id }
+    log_block -> { action: "doh_nft_add_failed_fail_closed", src_ip: client_ip, mac_src: client_mac, vlan: (client_vlan and client_vlan > 0) and client_vlan or nil, user: user, rule: allow_rule_id }
     blocked = build_blocked_response dns, dns_raw, "nft_insert_failed"
     return blocked or resp_raw
 

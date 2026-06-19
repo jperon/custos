@@ -19,7 +19,7 @@ bit     = require "bit"
 { :load_or_generate_sni, :load_static } = require "auth.cert"
 { :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
 { :read_request, :send_response }       = require "lib.http"
-{ :get_mac }                            = require "mac_learner_ipc"
+{ :get_mac, :get_vlan }                 = require "mac_learner_ipc"
 { :process_query }                      = require "doh.query"
 { :parse, :types, :rcodes }              = require "ipparse.l7.dns"
 upstream_mod                            = require "doh.upstream"
@@ -198,7 +198,7 @@ make_server6 = (port) ->
 h2_encode_response_headers = ->
   "\x88\x5f\x17application/dns-message"
 
-handle_h2 = (conn, peer_ip, peer_mac, upstream) ->
+handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
   -- Consomme la fin de la préface : "SM\r\n\r\n" (read_request a déjà lu "PRI * HTTP/2.0\r\n\r\n")
   conn\receive "*l"  -- "SM"
   conn\receive "*l"  -- "" (ligne vide)
@@ -238,7 +238,7 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream) ->
     h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01"
     return nil, "h2_empty_body"
 
-  resp_raw, q_err = process_query dns_raw, peer_ip, peer_mac, upstream
+  resp_raw, q_err = process_query dns_raw, peer_ip, peer_mac, upstream, peer_vlan
   unless resp_raw
     log_warn -> { action: "h2_query_error", peer: peer_ip, err: q_err }
     h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x02"
@@ -319,7 +319,8 @@ handle_doh_client = (args) ->
       tls_client\close!
       return
     peer_mac = get_mac peer_ip
-    log_debug -> { action: "mac_lookup", peer: peer_ip, mac: peer_mac or "unknown" }
+    peer_vlan = get_vlan peer_ip
+    log_debug -> { action: "mac_lookup", peer: peer_ip, mac: peer_mac or "unknown", vlan: peer_vlan or "unknown" }
 
     req, req_err = read_request tls_client
     unless req
@@ -333,7 +334,7 @@ handle_doh_client = (args) ->
     -- Préambule HTTP/2 sans ALPN : traiter la connexion en HTTP/2 minimal.
     if req.method == "PRI"
       log_debug -> { action: "h2_request", peer: peer_ip }
-      h2_resp, h2_err = handle_h2 tls_client, peer_ip, peer_mac, state.upstream
+      h2_resp, h2_err = handle_h2 tls_client, peer_ip, peer_mac, state.upstream, peer_vlan
       if h2_err
         log_warn -> { action: "h2_failed", peer: peer_ip, err: h2_err }
       else
@@ -377,7 +378,7 @@ handle_doh_client = (args) ->
       return
 
     -- ── process_query: filter + upstream + nft ──────────────────────────────
-    resp_raw, q_err = process_query dns_raw, peer_ip, peer_mac, state.upstream
+    resp_raw, q_err = process_query dns_raw, peer_ip, peer_mac, state.upstream, peer_vlan
     if resp_raw
       log_debug -> { action: "response_ok", peer: peer_ip, resp_bytes: #resp_raw }
       if json_mode

@@ -298,7 +298,8 @@ local DEFAULTS = {
     reject = "10-11",
     auth = "5",
     sni = "6",
-    sip = "12"
+    sip = "12",
+    doh_vlan = "13"
   },
   dns = {
     port = 53,

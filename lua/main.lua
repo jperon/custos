@@ -94,6 +94,7 @@ create_pipes = function()
   return {
     question_response = create_pipe("question_response"),
     learn = create_pipe("mac_learn"),
+    vlan_learn = create_pipe("vlan_learn"),
     events = create_pipe("events"),
     nft = create_pipe("nft")
   }
@@ -260,7 +261,7 @@ supervise = function(pipes, sfd)
       pid = nil,
       restart_fn = function()
         return fork_worker("mac-lrn", function(rfd)
-          return require("mac_learner").run(rfd, bridge_ifname)
+          return require("mac_learner").run(rfd, bridge_ifname, pipes.vlan_learn.rfd)
         end, pipes.learn.rfd)
       end
     }
@@ -460,6 +461,17 @@ supervise = function(pipes, sfd)
         })
       end
     })
+    if config.nfqueue.doh_vlan then
+      table.insert(workers_with_filter, {
+        name = "doh-vlan",
+        pid = nil,
+        restart_fn = function()
+          return fork_worker("doh-vlan", function(wfd)
+            return require("worker_doh_vlan").run(config.nfqueue.doh_vlan, wfd)
+          end, pipes.vlan_learn.wfd)
+        end
+      })
+    end
   end
   for _index_0 = 1, #workers_with_filter do
     local w = workers_with_filter[_index_0]

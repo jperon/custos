@@ -92,4 +92,44 @@ get_mac = (ip_str) ->
 
   "unknown"
 
-{ :get_mac, :mac_from_eui64 }
+--- Retourne le VLAN ID associé à une IP via une requête au MAC learner.
+-- Interroge le même socket Unix que get_mac avec le préfixe "vlan:".
+-- Contrat : retourne un `number` (≥ 0, où `0` = untagged observé) si le learner
+-- a vu cette IP, ou `nil` si elle est inconnue (jamais observée par la file DoH).
+-- Cette distinction permet l'écrasement anti-stale (cf. plan, § Sécurité).
+-- @tparam string ip_str Adresse IP sous forme de chaîne
+-- @treturn number|nil VLAN ID observé (0 = untagged), ou nil si inconnu
+get_vlan = (ip_str) ->
+  return nil unless ip_str and ip_str ~= "" and ip_str ~= "unknown"
+
+  sock = libc.socket AF_UNIX, SOCK_STREAM, 0
+  unless sock >= 0
+    log_warn -> { action: "vlan_ipc_socket_failed", errno: tonumber(ffi.C.__errno_location()[0]) }
+    return nil
+
+  addr = ffi.new "struct sockaddr_un"
+  addr.sun_family = AF_UNIX
+  ffi.copy addr.sun_path, QUERY_SOCK
+  addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
+
+  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0
+    libc.close sock
+    return nil
+
+  -- Envoi : "vlan:ip_str\n"
+  req = "vlan:" .. ip_str .. "\n"
+  libc.send sock, req, #req, 0
+
+  buf = ffi.new "char[64]"
+  n = libc.recv sock, buf, 63, 0
+  libc.close sock
+
+  return nil if n <= 0
+
+  resp = ffi.string buf, n
+  id = resp\match "^(%d+)"
+  return tonumber(id) if id
+
+  nil
+
+{ :get_mac, :get_vlan, :mac_from_eui64 }

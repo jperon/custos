@@ -116,7 +116,7 @@ normalize_answers = function(resp_dns)
   return out
 end
 local process_query
-process_query = function(dns_raw, client_ip, client_mac, upstream)
+process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
   local dns, parse_err = parse(dns_raw, 1, false)
   if not (dns) then
     log_warn(function()
@@ -189,6 +189,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       domain = qname_text,
       src_ip = client_ip,
       mac = client_mac,
+      vlan = (client_vlan and client_vlan > 0) and client_vlan or nil,
       ts = os.time(),
       user = user
     }
@@ -212,11 +213,12 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
       worker = "doh",
       qname = qname_text,
       qtype = q.qtype_name or tostring(q.qtype),
-      client_ip = client_ip,
-      client_mac = client_mac,
+      src_ip = client_ip,
+      mac_src = client_mac,
+      vlan = (client_vlan and client_vlan > 0) and client_vlan or nil,
       user = user,
       reason = meta.reason or "",
-      rule = meta.description or ""
+      rule = meta.rule_id or ""
     }
     if meta.verdict then
       log_allow(function()
@@ -248,8 +250,9 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
           return {
             action = "doh_validator_override",
             kind = override.kind,
-            client_ip = client_ip,
-            client_mac = client_mac,
+            src_ip = client_ip,
+            mac_src = client_mac,
+            vlan = (client_vlan and client_vlan > 0) and client_vlan or nil,
             user = user,
             reason = v_reason
           }
@@ -410,8 +413,9 @@ process_query = function(dns_raw, client_ip, client_mac, upstream)
     log_block(function()
       return {
         action = "doh_nft_add_failed_fail_closed",
-        client_ip = client_ip,
-        client_mac = client_mac,
+        src_ip = client_ip,
+        mac_src = client_mac,
+        vlan = (client_vlan and client_vlan > 0) and client_vlan or nil,
         user = user,
         rule = allow_rule_id
       }
