@@ -35,6 +35,7 @@ local config = require("config")
 local upstream_mod = require("doh.upstream")
 local query_classified
 query_classified = require("doh.validator").query_classified
+local dns_classify = require("dns_classify")
 local MAC_ZERO = "00:00:00:00:00:00"
 local mac_valid
 mac_valid = function(mac)
@@ -237,100 +238,6 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
       block_reason = meta.reason
     end
   end
-  if not any_blocked and allow_modifiers.validate then
-    local do_validate = allow_modifiers.validate
-    local val_resolvers = type(do_validate) == "table" and do_validate or (config.second_opinion or { }).resolvers or { }
-    if #val_resolvers > 0 then
-      local so = config.second_opinion or { }
-      local timeout_ms = so.budget_ms or 1000
-      local doh_timeout_ms = so.doh_budget_ms or 3000
-      local override, v_reason = query_classified(dns_raw, val_resolvers, timeout_ms, doh_timeout_ms)
-      if override then
-        log_block(function()
-          return {
-            action = "doh_validator_override",
-            kind = override.kind,
-            src_ip = client_ip,
-            mac_src = client_mac,
-            vlan = (client_vlan and client_vlan > 0) and client_vlan or nil,
-            user = user,
-            reason = v_reason
-          }
-        end)
-        local _exp_0 = override.kind
-        if "block" == _exp_0 then
-          return build_nxdomain_response(dns, dns_raw, v_reason) or build_blocked_response(dns, dns_raw, v_reason)
-        elseif "sinkhole" == _exp_0 then
-          local sink = {
-            a = override.a or { },
-            aaaa = override.aaaa or { },
-            ttl = override.ttl
-          }
-          return build_sinkhole_response(dns, dns_raw, v_reason, sink) or build_blocked_response(dns, dns_raw, v_reason)
-        elseif "redirect" == _exp_0 then
-          local target_rrs = {
-            a = override.a or { },
-            aaaa = override.aaaa or { },
-            ttl = override.ttl
-          }
-          local new_dns = build_cname_response(dns, dns_raw, override.cname_target, v_reason, target_rrs)
-          if new_dns then
-            local redirect_answers = { }
-            local _list_0 = (override.a or { })
-            for _index_0 = 1, #_list_0 do
-              local r = _list_0[_index_0]
-              redirect_answers[#redirect_answers + 1] = {
-                family = "ipv4",
-                addr = ip2s(r),
-                ttl = override.ttl
-              }
-            end
-            local _list_1 = (override.aaaa or { })
-            for _index_0 = 1, #_list_1 do
-              local r = _list_1[_index_0]
-              redirect_answers[#redirect_answers + 1] = {
-                family = "ipv6",
-                addr = ip2s(r),
-                ttl = override.ttl
-              }
-            end
-            if #redirect_answers > 0 then
-              local is_v6 = (client_ip:find(":")) ~= nil
-              local client_addr
-              client_addr = function(fam)
-                return (fam == "ipv4" and not is_v6) and client_ip or (fam == "ipv6" and is_v6) and client_ip or nil
-              end
-              drain_ack()
-              inject(redirect_answers, {
-                client_addr = client_addr,
-                client_mac = client_mac,
-                user = user,
-                rule_id = allow_rule_id or "unknown_rule",
-                wildcard_ids = wildcard_ids,
-                ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown"),
-                inject_nft = true,
-                mac_valid = mac_valid,
-                add_ip = {
-                  ipv4 = add_ip4,
-                  ipv6 = add_ip6
-                },
-                add_mac = {
-                  ipv4 = add_mac4,
-                  ipv6 = add_mac6
-                }
-              })
-              local pending = get_last_seq()
-              if pending then
-                wait_ack(pending, (string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")))
-              end
-            end
-            return new_dns
-          end
-          return build_blocked_response(dns, dns_raw, v_reason)
-        end
-      end
-    end
-  end
   if any_blocked then
     local blocked = build_blocked_response(dns, dns_raw, block_reason)
     if not (blocked) then
@@ -362,6 +269,118 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
       }
     end)
     return nil, upstream_err or "upstream_failed"
+  end
+  if allow_modifiers.validate then
+    local do_validate = allow_modifiers.validate
+    local val_resolvers = type(do_validate) == "table" and do_validate or (config.second_opinion or { }).resolvers or { }
+    if #val_resolvers > 0 then
+      local so = config.second_opinion or { }
+      local timeout_ms = so.budget_ms or 1000
+      local doh_timeout_ms = so.doh_budget_ms or 3000
+      local override, v_reason = query_classified(dns_raw, val_resolvers, timeout_ms, doh_timeout_ms)
+      if override then
+        local log_override
+        log_override = function()
+          return log_block(function()
+            return {
+              action = "doh_validator_override",
+              kind = override.kind,
+              src_ip = client_ip,
+              mac_src = client_mac,
+              vlan = (client_vlan and client_vlan > 0) and client_vlan or nil,
+              user = user,
+              reason = v_reason
+            }
+          end)
+        end
+        local _exp_0 = override.kind
+        if "block" == _exp_0 then
+          log_override()
+          return build_nxdomain_response(dns, dns_raw, v_reason) or build_blocked_response(dns, dns_raw, v_reason)
+        elseif "sinkhole" == _exp_0 then
+          log_override()
+          local sink = {
+            a = override.a or { },
+            aaaa = override.aaaa or { },
+            ttl = override.ttl
+          }
+          return build_sinkhole_response(dns, dns_raw, v_reason, sink) or build_blocked_response(dns, dns_raw, v_reason)
+        elseif "redirect" == _exp_0 then
+          local resp_dns_orig = parse(resp_raw, 1, false)
+          local already_cname = resp_dns_orig and dns_classify.has_cname_target(resp_dns_orig, resp_raw, override.cname_target)
+          if not (already_cname) then
+            log_override()
+            local target_rrs = {
+              a = override.a or { },
+              aaaa = override.aaaa or { },
+              ttl = override.ttl
+            }
+            local new_dns = build_cname_response(dns, dns_raw, override.cname_target, v_reason, target_rrs)
+            if new_dns then
+              local redirect_answers = { }
+              local _list_0 = (override.a or { })
+              for _index_0 = 1, #_list_0 do
+                local r = _list_0[_index_0]
+                redirect_answers[#redirect_answers + 1] = {
+                  family = "ipv4",
+                  addr = ip2s(r),
+                  ttl = override.ttl
+                }
+              end
+              local _list_1 = (override.aaaa or { })
+              for _index_0 = 1, #_list_1 do
+                local r = _list_1[_index_0]
+                redirect_answers[#redirect_answers + 1] = {
+                  family = "ipv6",
+                  addr = ip2s(r),
+                  ttl = override.ttl
+                }
+              end
+              if #redirect_answers > 0 then
+                local is_v6 = (client_ip:find(":")) ~= nil
+                local client_addr
+                client_addr = function(fam)
+                  return (fam == "ipv4" and not is_v6) and client_ip or (fam == "ipv6" and is_v6) and client_ip or nil
+                end
+                drain_ack()
+                inject(redirect_answers, {
+                  client_addr = client_addr,
+                  client_mac = client_mac,
+                  user = user,
+                  rule_id = allow_rule_id or "unknown_rule",
+                  wildcard_ids = wildcard_ids,
+                  ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown"),
+                  inject_nft = true,
+                  mac_valid = mac_valid,
+                  add_ip = {
+                    ipv4 = add_ip4,
+                    ipv6 = add_ip6
+                  },
+                  add_mac = {
+                    ipv4 = add_mac4,
+                    ipv6 = add_mac6
+                  }
+                })
+                local pending = get_last_seq()
+                if pending then
+                  wait_ack(pending, (string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")))
+                end
+              end
+              return new_dns
+            end
+            return build_blocked_response(dns, dns_raw, v_reason)
+          end
+          log_debug(function()
+            return {
+              action = "doh_validator_redirect_passthrough",
+              src_ip = client_ip,
+              mac_src = client_mac,
+              cname_target = override.cname_target
+            }
+          end)
+        end
+      end
+    end
   end
   local response_hooks = (#allow_response_rule_ids > 0) and allow_response_rule_ids or allow_rule_id
   local resolver_ip_ctx = upstream and upstream.upstream_ip or nil

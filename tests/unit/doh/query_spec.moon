@@ -6,7 +6,9 @@
 
 dns_mod = require "ipparse.l7.dns"
 sp = require("ipparse.lib.pack_compat").pack
+{ :encode_dns_name } = require "lib.dns_name"
 QTYPE_A     = dns_mod.types.A
+QTYPE_CNAME = dns_mod.types.CNAME
 QTYPE_HTTPS = dns_mod.types.HTTPS
 QCLASS_IN   = dns_mod.classes.IN
 qname_example = "\7example\3com\0"
@@ -26,6 +28,18 @@ make_response = (with_https=false) ->
     header = sp ">H H H H H H", 0x1234, 0x8180, 1, 2, 0, 0
     return header .. question .. answer_a .. pack_rr QTYPE_HTTPS, "\0\1"
   (sp ">H H H H H H", 0x1234, 0x8180, 1, 1, 0, 0) .. question .. answer_a
+
+-- Réponse upstream CDN : CNAME example.com → cdn_target, + A sur la cible.
+-- Sert à vérifier le garde-fou anti-CDN (has_cname_target) sur l'override
+-- `redirect` : si le validateur pointe vers le même CNAME que l'upstream
+-- réel, l'override doit être ignoré (passthrough).
+make_response_cname = (cdn_target) ->
+  question  = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
+  cdn_name  = encode_dns_name cdn_target
+  answer_cname = name_ptr .. sp(">H H I4 s2", QTYPE_CNAME, QCLASS_IN, 300, cdn_name)
+  answer_a     = cdn_name .. sp(">H H I4 s2", QTYPE_A, QCLASS_IN, 60, string.char(1, 2, 3, 4))
+  header = sp ">H H H H H H", 0x1234, 0x8180, 1, 2, 0, 0
+  header .. question .. answer_cname .. answer_a
 
 -- ── Stubs contrôlables ───────────────────────────────────────────────────────
 nft_calls      = {}
@@ -237,6 +251,19 @@ describe "doh.query.process_query", ->
     assert.is_not_nil resp
     assert.equals 0, rcode_of resp
     assert.is_true #nft_calls > 0
+
+  it "validate, override redirect mais l'upstream porte déjà ce CNAME (CDN) → passthrough", ->
+    decide_result.allow_modifiers = { validate: true }
+    config_stub.second_opinion = { resolvers: { "1.1.1.1" }, budget_ms: 200 }
+    upstream_resp = make_response_cname "cdn.example"
+    validator_override = { kind: "redirect", cname_target: "cdn.example", a: { "\5\6\7\8" }, aaaa: {}, ttl: 60 }
+    resp = query_mod.process_query make_query!, "10.0.0.1", "aa:bb:cc:dd:ee:ff", {}
+    assert.is_not_nil resp
+    assert.equals upstream_resp, resp
+    -- Seules les vraies adresses (1.2.3.4) sont injectées, jamais la cible
+    -- de réorientation du validateur (5.6.7.8).
+    for call in *nft_calls
+      assert.is_not.equals "5.6.7.8", call.dest
 
   it "validate=table, résolveurs per-règle transmis au validateur", ->
     per_rule = { "2.2.2.2" }

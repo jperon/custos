@@ -180,11 +180,23 @@ DoH divergeait de l'intercepteur `worker_questions`) :
   upstream. Miroir de `worker_questions.moon` (forge AF_PACKET). `domain_from_url`
   est factorisé dans `captive_ips`.
 - **Overrides `sinkhole`/`redirect`/`block` du validateur.** La branche `validate`
-  appelle `query_classified` et applique l'override comme `worker_responses.finalize_a` :
+  interroge d'abord l'upstream réel (`doh.upstream.query`), puis appelle
+  `query_classified` et applique l'override comme `worker_responses.finalize_a` :
   `block` → `build_nxdomain_response`, `sinkhole` → `build_sinkhole_response`,
   `redirect` → `build_cname_response` **plus** injection nft des cibles
   (`override.a`/`aaaa`) pour que le client les joigne. Fail-open (`nil`) si tous
   les validateurs sont muets.
+- **Garde-fou anti-CDN sur `redirect`.** `dns_classify.classify` qualifie en
+  `redirect` toute présence de CNAME dans la réponse du validateur — y compris
+  les CNAME de CDN (Cloudflare, Akamai…) qui n'ont rien d'un blocage. Avant
+  d'appliquer l'override `redirect`, on vérifie via `dns_classify.has_cname_target`
+  que la **vraie réponse upstream** (`resp_raw`, obtenue avant le second avis)
+  ne porte pas déjà ce même CNAME ; si c'est le cas, l'override est ignoré
+  (passthrough). Logique partagée avec `worker_responses.finalize_a:447-448` —
+  sans ce garde-fou côté DoH, tout site derrière un CDN répondant en CNAME se
+  retrouvait réécrit en réorientation, y compris pour la requête HTTPS RR
+  (type 65), ce qui cassait la résolution DNS sécurisée de Chromium
+  (`DNS_PROBE_FINISHED_BAD_SECURE_CONFIG`).
 
 ### Pièges FFI libcurl
 

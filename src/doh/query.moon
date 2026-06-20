@@ -22,6 +22,7 @@ parse = dns_mod.parse
 config = require "config"
 upstream_mod = require "doh.upstream"
 { :query_classified } = require "doh.validator"
+dns_classify = require "dns_classify"
 
 MAC_ZERO = "00:00:00:00:00:00"
 mac_valid = (mac) -> mac and mac != "unknown" and mac != MAC_ZERO
@@ -158,59 +159,6 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
       any_blocked  = true
       block_reason = meta.reason
 
-  -- Second avis synchrone : si la règle porte l'action `validate` et que le
-  -- filtre a autorisé la requête, interroger le résolveur validateur. On
-  -- applique le verdict classifié (block / sinkhole / redirect) en miroir de
-  -- worker_responses.finalize_a. Fail-open (pass) si tous injoignables.
-  if not any_blocked and allow_modifiers.validate
-    do_validate = allow_modifiers.validate
-    val_resolvers = type(do_validate) == "table" and do_validate or (config.second_opinion or {}).resolvers or {}
-    if #val_resolvers > 0
-      so = config.second_opinion or {}
-      timeout_ms     = so.budget_ms or 1000
-      doh_timeout_ms = so.doh_budget_ms or 3000
-      override, v_reason = query_classified dns_raw, val_resolvers, timeout_ms, doh_timeout_ms
-      if override
-        log_block -> { action: "doh_validator_override", kind: override.kind, src_ip: client_ip, mac_src: client_mac, vlan: (client_vlan and client_vlan > 0) and client_vlan or nil, user: user, reason: v_reason }
-        switch override.kind
-          when "block"
-            return build_nxdomain_response(dns, dns_raw, v_reason) or build_blocked_response(dns, dns_raw, v_reason)
-          when "sinkhole"
-            sink = { a: override.a or {}, aaaa: override.aaaa or {}, ttl: override.ttl }
-            return build_sinkhole_response(dns, dns_raw, v_reason, sink) or build_blocked_response(dns, dns_raw, v_reason)
-          when "redirect"
-            target_rrs = { a: override.a or {}, aaaa: override.aaaa or {}, ttl: override.ttl }
-            new_dns = build_cname_response dns, dns_raw, override.cname_target, v_reason, target_rrs
-            if new_dns
-              -- Injecter les cibles du redirect en nft pour que le client les joigne.
-              redirect_answers = {}
-              for r in *(override.a or {})
-                redirect_answers[#redirect_answers + 1] = { family: "ipv4", addr: ip2s(r), ttl: override.ttl }
-              for r in *(override.aaaa or {})
-                redirect_answers[#redirect_answers + 1] = { family: "ipv6", addr: ip2s(r), ttl: override.ttl }
-              if #redirect_answers > 0
-                is_v6 = (client_ip\find ":") ~= nil
-                client_addr = (fam) ->
-                  (fam == "ipv4" and not is_v6) and client_ip or
-                  (fam == "ipv6" and is_v6) and client_ip or nil
-                drain_ack!
-                inject redirect_answers, {
-                  :client_addr
-                  :client_mac
-                  :user
-                  rule_id:    allow_rule_id or "unknown_rule"
-                  :wildcard_ids
-                  ack_corr:   string.format "%04x:%s", dns.txid or 0, client_ip or "unknown"
-                  inject_nft: true
-                  :mac_valid
-                  add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
-                  add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
-                }
-                pending = get_last_seq!
-                wait_ack pending, (string.format "%04x:%s", dns.txid or 0, client_ip or "unknown") if pending
-              return new_dns
-            return build_blocked_response(dns, dns_raw, v_reason)
-
   if any_blocked
     blocked = build_blocked_response dns, dns_raw, block_reason
     unless blocked
@@ -224,6 +172,69 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
   unless resp_raw
     log_warn -> { action: "upstream_failed", client_ip: client_ip, err: upstream_err }
     return nil, upstream_err or "upstream_failed"
+
+  -- Second avis synchrone : si la règle porte l'action `validate`, interroger
+  -- le résolveur validateur. On applique le verdict classifié (block /
+  -- sinkhole / redirect) en miroir de worker_responses.finalize_a. Fail-open
+  -- (pass) si tous injoignables. La vraie réponse upstream (resp_raw, obtenue
+  -- ci-dessus) sert de référence pour le garde-fou anti-CDN sur `redirect`.
+  if allow_modifiers.validate
+    do_validate = allow_modifiers.validate
+    val_resolvers = type(do_validate) == "table" and do_validate or (config.second_opinion or {}).resolvers or {}
+    if #val_resolvers > 0
+      so = config.second_opinion or {}
+      timeout_ms     = so.budget_ms or 1000
+      doh_timeout_ms = so.doh_budget_ms or 3000
+      override, v_reason = query_classified dns_raw, val_resolvers, timeout_ms, doh_timeout_ms
+      if override
+        log_override = -> log_block -> { action: "doh_validator_override", kind: override.kind, src_ip: client_ip, mac_src: client_mac, vlan: (client_vlan and client_vlan > 0) and client_vlan or nil, user: user, reason: v_reason }
+        switch override.kind
+          when "block"
+            log_override!
+            return build_nxdomain_response(dns, dns_raw, v_reason) or build_blocked_response(dns, dns_raw, v_reason)
+          when "sinkhole"
+            log_override!
+            sink = { a: override.a or {}, aaaa: override.aaaa or {}, ttl: override.ttl }
+            return build_sinkhole_response(dns, dns_raw, v_reason, sink) or build_blocked_response(dns, dns_raw, v_reason)
+          when "redirect"
+            -- Sauf si la réponse upstream porte déjà ce même CNAME (CDN
+            -- légitime, ex. Cloudflare) : ne pas réécrire, laisser passer.
+            resp_dns_orig = parse resp_raw, 1, false
+            already_cname = resp_dns_orig and dns_classify.has_cname_target resp_dns_orig, resp_raw, override.cname_target
+            unless already_cname
+              log_override!
+              target_rrs = { a: override.a or {}, aaaa: override.aaaa or {}, ttl: override.ttl }
+              new_dns = build_cname_response dns, dns_raw, override.cname_target, v_reason, target_rrs
+              if new_dns
+                -- Injecter les cibles du redirect en nft pour que le client les joigne.
+                redirect_answers = {}
+                for r in *(override.a or {})
+                  redirect_answers[#redirect_answers + 1] = { family: "ipv4", addr: ip2s(r), ttl: override.ttl }
+                for r in *(override.aaaa or {})
+                  redirect_answers[#redirect_answers + 1] = { family: "ipv6", addr: ip2s(r), ttl: override.ttl }
+                if #redirect_answers > 0
+                  is_v6 = (client_ip\find ":") ~= nil
+                  client_addr = (fam) ->
+                    (fam == "ipv4" and not is_v6) and client_ip or
+                    (fam == "ipv6" and is_v6) and client_ip or nil
+                  drain_ack!
+                  inject redirect_answers, {
+                    :client_addr
+                    :client_mac
+                    :user
+                    rule_id:    allow_rule_id or "unknown_rule"
+                    :wildcard_ids
+                    ack_corr:   string.format "%04x:%s", dns.txid or 0, client_ip or "unknown"
+                    inject_nft: true
+                    :mac_valid
+                    add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
+                    add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
+                  }
+                  pending = get_last_seq!
+                  wait_ack pending, (string.format "%04x:%s", dns.txid or 0, client_ip or "unknown") if pending
+                return new_dns
+              return build_blocked_response(dns, dns_raw, v_reason)
+            log_debug -> { action: "doh_validator_redirect_passthrough", src_ip: client_ip, mac_src: client_mac, cname_target: override.cname_target }
 
   -- ── Dispatch on_response : même noyau que worker_responses ──────
   -- Les callbacks de chaque action portent toute la logique (strip DNS,
