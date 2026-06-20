@@ -208,7 +208,9 @@ LOGIN_JS = [[
   form.addEventListener('submit',function(ev){
     ev.preventDefault();
     var user=form.user.value, password=form.password.value;
-    var btn=form.querySelector('button'); if(btn) btn.disabled=true;
+    var btn=form.querySelector('button');
+    if(btn){btn.dataset.label=btn.textContent; btn.disabled=true; btn.textContent='Connexion…';}
+    setTimeout(function(){
     fetch('/challenge',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:'user='+encodeURIComponent(user)})
       .then(function(r){return r.json();})
       .then(function(ch){return deriveResponse(password,ch.salt,ch.iter,ch.nonce).then(function(resp){
@@ -217,10 +219,11 @@ LOGIN_JS = [[
       });})
       .then(function(r){
         if(r.ok){location.href='/'; return;}
-        if(btn) btn.disabled=false;
+        if(btn){btn.disabled=false; btn.textContent=btn.dataset.label;}
         alert('Identifiants invalides.');
       })
-      .catch(function(){if(btn) btn.disabled=false; alert('Erreur de connexion.');});
+      .catch(function(){if(btn){btn.disabled=false; btn.textContent=btn.dataset.label;} alert('Erreur de connexion.');});
+    },0);
   });
 })();
 ]]
@@ -232,17 +235,20 @@ REGISTER_JS = [[
   form.addEventListener('submit',function(ev){
     ev.preventDefault();
     var user=form.user.value, password=form.password.value;
-    var btn=form.querySelector('button'); if(btn) btn.disabled=true;
+    var btn=form.querySelector('button');
+    if(btn){btn.dataset.label=btn.textContent; btn.disabled=true; btn.textContent='Inscription…';}
+    setTimeout(function(){
     deriveRecord(password).then(function(rec){
       var body='user='+encodeURIComponent(user)+'&salt='+rec.salt+'&iter='+rec.iter+'&hash='+rec.hash;
       return fetch('/register',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:body});
     }).then(function(r){
       return r.text().then(function(t){
         if(r.ok){document.open();document.write(t);document.close();return;}
-        if(btn) btn.disabled=false;
+        if(btn){btn.disabled=false; btn.textContent=btn.dataset.label;}
         alert(t||'Inscription refusée.');
       });
-    }).catch(function(){if(btn) btn.disabled=false; alert('Erreur réseau.');});
+    }).catch(function(){if(btn){btn.disabled=false; btn.textContent=btn.dataset.label;} alert('Erreur réseau.');});
+    },0);
   });
 })();
 ]]
@@ -256,7 +262,9 @@ PASSWORD_JS = [[
     var oldp=form.oldpassword.value, p1=form.password.value, p2=form.password2.value;
     if(p1!==p2){alert('Les mots de passe ne correspondent pas.');return;}
     if(p1.length<8){alert('Au moins 8 caractères.');return;}
-    var btn=form.querySelector('button'); if(btn) btn.disabled=true;
+    var btn=form.querySelector('button');
+    if(btn){btn.dataset.label=btn.textContent; btn.disabled=true; btn.textContent='Changement…';}
+    setTimeout(function(){
     // 1) challenge pour vérifier l'ancien mot de passe (sans le transmettre).
     fetch('/challenge',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:''})
       .then(function(r){return r.json();})
@@ -272,10 +280,11 @@ PASSWORD_JS = [[
       }).then(function(r){
         return r.text().then(function(t){
           if(r.ok){document.open();document.write(t);document.close();return;}
-          if(btn) btn.disabled=false;
+          if(btn){btn.disabled=false; btn.textContent=btn.dataset.label;}
           alert(t||'Changement refusé.');
         });
-      }).catch(function(){if(btn) btn.disabled=false; alert('Erreur réseau.');});
+      }).catch(function(){if(btn){btn.disabled=false; btn.textContent=btn.dataset.label;} alert('Erreur réseau.');});
+    },0);
   });
 })();
 ]]

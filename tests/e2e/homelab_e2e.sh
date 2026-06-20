@@ -1112,10 +1112,16 @@ fi
 scp -O -q $SSH_OPTS -i "$SSH_KEY" \
     "$LOWMEM_TMP/config_lowmem.moon" "root@${E2E_IP_CUSTOS}:/etc/custos/config.moon"
 
+# Marqueur syslog avant le restart : logread est un buffer circulaire et la
+# ligne lowmem_collapse_queues (émise tout en tête de supervise, avant le fork
+# des workers) est sinon évincée par le volume de logs de démarrage qui suit
+# (cf. .agents/testing.md § logread).
+LOWMEM_MARKER="custos_e2e_lowmem_$$"
+ssh_vm "$E2E_IP_CUSTOS" "logger -t custos '$LOWMEM_MARKER'"
 ssh_vm "$E2E_IP_CUSTOS" "/etc/init.d/custos restart >/dev/null 2>&1; sleep 4"
 
 # T130 : logread mentionne la réduction des queues (lowmem_collapse_queues)
-lm_logs=$(ssh_vm "$E2E_IP_CUSTOS" "logread 2>/dev/null" | grep "custos" || true)
+lm_logs=$(ssh_vm "$E2E_IP_CUSTOS" "logread 2>/dev/null" | sed -n "/$LOWMEM_MARKER/,\$p" | grep "custos" || true)
 assert_contains "T130 lowmem_collapse_queues journalisé" "lowmem_collapse_queues" "$lm_logs"
 
 # T131 : le worker tls (SNI) ne tourne pas
