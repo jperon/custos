@@ -7,6 +7,7 @@
   :handle_rules_new_get,  :handle_rules_new_post
   :handle_rules_edit_get, :handle_rules_edit_post
   :handle_rules_delete,   :handle_rules_move
+  :handle_rules_reorder
 } = require "webui.handlers.rules"
 
 CFG_PATH = "tmp/rules_handler_spec.lua"
@@ -289,3 +290,49 @@ describe "webui/handlers/rules", ->
       body_str = "dir=up"
       status, _, _ = handle_rules_move make_req("POST", body_str), 99, make_state!
       assert.equals 404, status
+
+  -- ── handle_rules_list (drag-and-drop) ─────────────────────────────────
+
+  describe "handle_rules_list (réordonnancement)", ->
+
+    it "rend les lignes draggable avec data-idx et le formulaire reorder", ->
+      _, _, body = handle_rules_list make_req("GET"), make_state!
+      assert.truthy body\find('draggable="true"', 1, true)
+      assert.truthy body\find('data-idx="1"', 1, true)
+      assert.truthy body\find('id="reorder-form"', 1, true)
+      assert.truthy body\find("rules/reorder", 1, true)
+
+  -- ── handle_rules_reorder ──────────────────────────────────────────────
+
+  describe "handle_rules_reorder", ->
+
+    it "applique une permutation et persiste le nouvel ordre", ->
+      status, hdrs, _ = handle_rules_reorder make_req("POST", "order=2,1"), make_state!
+      assert.equals 302, status
+      assert.truthy hdrs["Location"]\find("rules", 1, true)
+      loaded = (read_config CFG_PATH)
+      assert.equals "règle B", loaded.filter.rules[1].description
+      assert.equals "règle A", loaded.filter.rules[2].description
+
+    it "rejette une longueur incorrecte (400, inchangé)", ->
+      status, _, _ = handle_rules_reorder make_req("POST", "order=1"), make_state!
+      assert.equals 400, status
+      loaded = (read_config CFG_PATH)
+      assert.equals "règle A", loaded.filter.rules[1].description
+
+    it "rejette un index hors bornes (400, inchangé)", ->
+      status, _, _ = handle_rules_reorder make_req("POST", "order=1,3"), make_state!
+      assert.equals 400, status
+      loaded = (read_config CFG_PATH)
+      assert.equals "règle A", loaded.filter.rules[1].description
+
+    it "rejette un doublon (400, inchangé)", ->
+      status, _, _ = handle_rules_reorder make_req("POST", "order=1,1"), make_state!
+      assert.equals 400, status
+      loaded = (read_config CFG_PATH)
+      assert.equals "règle B", loaded.filter.rules[2].description
+
+    it "retourne 500 si config_path invalide", ->
+      state = { config_path: "/nonexistent/file.lua" }
+      status, _, _ = handle_rules_reorder make_req("POST", "order=2,1"), state
+      assert.equals 500, status

@@ -17,7 +17,8 @@
 { :handle_rules_list,
   :handle_rules_new_get,  :handle_rules_new_post,
   :handle_rules_edit_get, :handle_rules_edit_post,
-  :handle_rules_delete,   :handle_rules_move }  = require "webui.handlers.rules"
+  :handle_rules_delete,   :handle_rules_move,
+  :handle_rules_reorder }  = require "webui.handlers.rules"
 { :handle_lists_index,
   :handle_lists_type,
   :handle_list_get,     :handle_list_post,
@@ -142,6 +143,8 @@ dispatch = (req, state) ->
   if path == "/admin/config/filter/rules/new"
     return handle_rules_new_get(req, state)  if method == "GET"
     return handle_rules_new_post(req, state) if method == "POST"
+  if path == "/admin/config/filter/rules/reorder" and method == "POST"
+    return handle_rules_reorder req, state
 
   -- /admin/config/filter/rules/:n/edit|delete|move
   n_str, action = path\match "^/admin/config/filter/rules/(%d+)/([a-z]+)$"

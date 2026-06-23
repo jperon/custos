@@ -365,6 +365,18 @@ liste sous « Filtre DNS — éditeurs dédiés ».
   écrit du **MoonScript** (`{ clé: valeur }`), pas du Lua, pour rester cohérent
   avec les `config.moon` écrits à la main.
 
+### Éditeur de règles — réordonnancement drag-and-drop (`handlers/rules.moon`)
+
+`handle_rules_list` rend chaque ligne `draggable` avec `data-idx` (index 1-based
+d'origine) et une poignée `⠿`. Un `H.script RULES_REORDER_JS` (JS vanilla inline,
+sans dépendance, motif `MODAL_JS`) réordonne les `<tr>` du `<tbody id="rules-tbody">`
+au glisser-déposer puis soumet `#reorder-form` (POST
+`/admin/config/filter/rules/reorder`, champ `order` = permutation des `data-idx`
+séparés par virgule). `handle_rules_reorder` **valide une permutation exacte de
+`1..#rules`** (longueur, bornes, pas de doublon → sinon `400` sans écriture),
+reconstruit `cfg.filter.rules` dans le nouvel ordre et `write_config`. Les boutons
+↑/↓ (`handle_rules_move`) restent le repli sans JavaScript.
+
 ### Page « Appareils » (`src/webui/handlers/devices.moon`)
 
 `GET/POST /admin/config/devices` facilite l'enregistrement des clients réseau.

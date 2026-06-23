@@ -20,6 +20,46 @@ parse_form = (body) ->
     out[dec k] = dec v
   out
 
+-- JS de réordonnancement par glisser-déposer (repli no-JS : boutons ↑/↓).
+RULES_REORDER_JS = [[
+(function(){
+  var tbody = document.getElementById('rules-tbody');
+  var form  = document.getElementById('reorder-form');
+  if (!tbody || !form) return;
+  var input = form.querySelector('input[name="order"]');
+  var dragged = null;
+  function rowOf(el){ return el && el.closest ? el.closest('tr[draggable]') : null; }
+  Array.prototype.forEach.call(tbody.querySelectorAll('tr[draggable]'), function(tr){
+    tr.addEventListener('dragstart', function(e){
+      dragged = tr;
+      tr.classList.add('dragging');
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+    });
+    tr.addEventListener('dragend', function(){
+      if (dragged) dragged.classList.remove('dragging');
+      dragged = null;
+    });
+    tr.addEventListener('dragover', function(e){
+      e.preventDefault();
+      var target = rowOf(e.target);
+      if (!dragged || !target || target === dragged) return;
+      var rect = target.getBoundingClientRect();
+      var after = (e.clientY - rect.top) > rect.height / 2;
+      tbody.insertBefore(dragged, after ? target.nextSibling : target);
+    });
+  });
+  tbody.addEventListener('drop', function(e){
+    e.preventDefault();
+    var order = [];
+    Array.prototype.forEach.call(tbody.querySelectorAll('tr[draggable]'), function(tr){
+      order.push(tr.getAttribute('data-idx'));
+    });
+    input.value = order.join(',');
+    form.submit();
+  });
+})();
+]]
+
 -- ── Résumé d'une règle pour la liste ──────────────────────────────────────
 
 rule_summary = (rule) ->
@@ -65,7 +105,8 @@ handle_rules_list = (req, state) ->
                  onclick: "return confirm('Supprimer ?')" }, "✕"
     }
     btn_edit = H.a { class: "btn btn-secondary btn-sm", href: "/admin/config/filter/rules/#{i}/edit" }, "Éditer"
-    rows ..= H.tr {
+    rows ..= H.tr { draggable: "true", "data-idx": tostring(i) }, {
+      H.td { class: "drag-handle", title: "Glisser pour réordonner" }, "⠿"
       H.td tostring(i)
       H.td desc
       H.td { class: "mono" }, cond_cell
@@ -75,6 +116,7 @@ handle_rules_list = (req, state) ->
 
   thead = H.thead {
     H.tr {
+      H.th { style: "width:1.5rem" }, ""
       H.th { style: "width:2.5rem" }, "#"
       H.th { style: "width:20%" }, "Description"
       H.th "Conditions"
@@ -82,12 +124,19 @@ handle_rules_list = (req, state) ->
       H.th { style: "width:11rem" }, ""
     }
   }
-  tbl = H.table (thead .. H.tbody rows)
+  tbl = H.table (thead .. H.tbody { id: "rules-tbody" }, rows)
+
+  reorder_form = H.form { id: "reorder-form", method: "POST",
+                          action: "/admin/config/filter/rules/reorder", style: "display:none" }, {
+    H.input { type: "hidden", name: "order", value: "" }
+  }
 
   body = H.section {
     H.h2 "Règles de filtrage"
     H.p { H.a { class: "btn", href: "/admin/config/filter/rules/new" }, "Ajouter une règle" }
     tbl
+    reorder_form
+    H.script RULES_REORDER_JS
   }
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Règles de filtrage", body
 
@@ -453,9 +502,28 @@ handle_rules_move = (req, n, state) ->
     return 500, {}, "Erreur écriture : #{e}" unless ok
   302, { ["Location"]: "/admin/config/filter/rules" }, ""
 
+handle_rules_reorder = (req, state) ->
+  form = parse_form req.body
+  cfg, err = read_config state.config_path
+  return 500, {}, "Erreur config : #{err}" unless cfg
+  rules = (cfg.filter or {}).rules or {}
+  order = [tonumber tok for tok in (form.order or "")\gmatch "[^,]+"]
+  -- Valide une permutation exacte de 1..#rules.
+  return 400, {}, "Ordre invalide" unless #order == #rules
+  seen = {}
+  for idx in *order
+    return 400, {}, "Ordre invalide" unless idx and idx >= 1 and idx <= #rules and not seen[idx]
+    seen[idx] = true
+  new_rules = [rules[idx] for idx in *order]
+  cfg.filter.rules = new_rules
+  ok, e = write_config cfg, state.config_path
+  return 500, {}, "Erreur écriture : #{e}" unless ok
+  302, { ["Location"]: "/admin/config/filter/rules" }, ""
+
 {
   :handle_rules_list
   :handle_rules_new_get,   :handle_rules_new_post
   :handle_rules_edit_get,  :handle_rules_edit_post
   :handle_rules_delete,    :handle_rules_move
+  :handle_rules_reorder
 }

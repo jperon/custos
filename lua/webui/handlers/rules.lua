@@ -26,6 +26,43 @@ parse_form = function(body)
   end
   return out
 end
+local RULES_REORDER_JS = [[(function(){
+  var tbody = document.getElementById('rules-tbody');
+  var form  = document.getElementById('reorder-form');
+  if (!tbody || !form) return;
+  var input = form.querySelector('input[name="order"]');
+  var dragged = null;
+  function rowOf(el){ return el && el.closest ? el.closest('tr[draggable]') : null; }
+  Array.prototype.forEach.call(tbody.querySelectorAll('tr[draggable]'), function(tr){
+    tr.addEventListener('dragstart', function(e){
+      dragged = tr;
+      tr.classList.add('dragging');
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+    });
+    tr.addEventListener('dragend', function(){
+      if (dragged) dragged.classList.remove('dragging');
+      dragged = null;
+    });
+    tr.addEventListener('dragover', function(e){
+      e.preventDefault();
+      var target = rowOf(e.target);
+      if (!dragged || !target || target === dragged) return;
+      var rect = target.getBoundingClientRect();
+      var after = (e.clientY - rect.top) > rect.height / 2;
+      tbody.insertBefore(dragged, after ? target.nextSibling : target);
+    });
+  });
+  tbody.addEventListener('drop', function(e){
+    e.preventDefault();
+    var order = [];
+    Array.prototype.forEach.call(tbody.querySelectorAll('tr[draggable]'), function(tr){
+      order.push(tr.getAttribute('data-idx'));
+    });
+    input.value = order.join(',');
+    form.submit();
+  });
+})();
+]]
 local rule_summary
 rule_summary = function(rule)
   local desc = rule.description or "(sans titre)"
@@ -116,6 +153,13 @@ handle_rules_list = function(req, state)
       href = "/admin/config/filter/rules/" .. tostring(i) .. "/edit"
     }, "Éditer")
     rows = rows .. H.tr({
+      draggable = "true",
+      ["data-idx"] = tostring(i)
+    }, {
+      H.td({
+        class = "drag-handle",
+        title = "Glisser pour réordonner"
+      }, "⠿"),
       H.td(tostring(i)),
       H.td(desc),
       H.td({
@@ -132,6 +176,9 @@ handle_rules_list = function(req, state)
   local thead = H.thead({
     H.tr({
       H.th({
+        style = "width:1.5rem"
+      }, ""),
+      H.th({
         style = "width:2.5rem"
       }, "#"),
       H.th({
@@ -146,7 +193,21 @@ handle_rules_list = function(req, state)
       }, "")
     })
   })
-  local tbl = H.table((thead .. H.tbody(rows)))
+  local tbl = H.table((thead .. H.tbody({
+    id = "rules-tbody"
+  }, rows)))
+  local reorder_form = H.form({
+    id = "reorder-form",
+    method = "POST",
+    action = "/admin/config/filter/rules/reorder",
+    style = "display:none"
+  }, {
+    H.input({
+      type = "hidden",
+      name = "order",
+      value = ""
+    })
+  })
   local body = H.section({
     H.h2("Règles de filtrage"),
     H.p({
@@ -155,7 +216,9 @@ handle_rules_list = function(req, state)
         href = "/admin/config/filter/rules/new"
       }, "Ajouter une règle")
     }),
-    tbl
+    tbl,
+    reorder_form,
+    H.script(RULES_REORDER_JS)
   })
   return 200, {
     ["Content-Type"] = "text/html; charset=UTF-8"
@@ -691,6 +754,55 @@ handle_rules_move = function(req, n, state)
     ["Location"] = "/admin/config/filter/rules"
   }, ""
 end
+local handle_rules_reorder
+handle_rules_reorder = function(req, state)
+  local form = parse_form(req.body)
+  local cfg, err = read_config(state.config_path)
+  if not (cfg) then
+    return 500, { }, "Erreur config : " .. tostring(err)
+  end
+  local rules = (cfg.filter or { }).rules or { }
+  local order
+  do
+    local _accum_0 = { }
+    local _len_0 = 1
+    for tok in (form.order or ""):gmatch("[^,]+") do
+      _accum_0[_len_0] = tonumber(tok)
+      _len_0 = _len_0 + 1
+    end
+    order = _accum_0
+  end
+  if not (#order == #rules) then
+    return 400, { }, "Ordre invalide"
+  end
+  local seen = { }
+  for _index_0 = 1, #order do
+    local idx = order[_index_0]
+    if not (idx and idx >= 1 and idx <= #rules and not seen[idx]) then
+      return 400, { }, "Ordre invalide"
+    end
+    seen[idx] = true
+  end
+  local new_rules
+  do
+    local _accum_0 = { }
+    local _len_0 = 1
+    for _index_0 = 1, #order do
+      local idx = order[_index_0]
+      _accum_0[_len_0] = rules[idx]
+      _len_0 = _len_0 + 1
+    end
+    new_rules = _accum_0
+  end
+  cfg.filter.rules = new_rules
+  local ok, e = write_config(cfg, state.config_path)
+  if not (ok) then
+    return 500, { }, "Erreur écriture : " .. tostring(e)
+  end
+  return 302, {
+    ["Location"] = "/admin/config/filter/rules"
+  }, ""
+end
 return {
   handle_rules_list = handle_rules_list,
   handle_rules_new_get = handle_rules_new_get,
@@ -698,5 +810,6 @@ return {
   handle_rules_edit_get = handle_rules_edit_get,
   handle_rules_edit_post = handle_rules_edit_post,
   handle_rules_delete = handle_rules_delete,
-  handle_rules_move = handle_rules_move
+  handle_rules_move = handle_rules_move,
+  handle_rules_reorder = handle_rules_reorder
 }
