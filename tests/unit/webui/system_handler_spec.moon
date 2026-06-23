@@ -1,9 +1,10 @@
 -- tests/unit/webui/system_handler_spec.moon
 -- Tests de webui/handlers/system.
--- NOTE: handle_reload envoie SIGHUP au processus parent ; il est exclu des
---       tests unitaires et couvert par les tests E2E homelab uniquement.
+-- handle_reload cible le superviseur via le pidfile (src/lib/pidfile) ; le kill
+-- est injectable (state.kill_fn) pour éviter d'envoyer un vrai SIGHUP en test.
 
-{ :handle_status } = require "webui.handlers.system"
+{ :handle_status, :handle_reload } = require "webui.handlers.system"
+pidfile = require "lib.pidfile"
 
 make_state = (started_at) ->
   { started_at: started_at or os.time! }
@@ -43,3 +44,42 @@ describe "webui/handlers/system — handle_status", ->
     _, _, body = handle_status make_req!, make_state now
     -- L'uptime devrait être 0 ou très proche
     assert.truthy body\find("0s", 1, true) or body\match "uptime.-%d+"
+
+describe "webui/handlers/system — handle_reload", ->
+
+  tmp_pid = -> os.tmpname!
+
+  it "signale le PID du pidfile et retourne 200", ->
+    path = tmp_pid!
+    pidfile.write 4242, path
+    killed = nil
+    rec_kill = (pid, sig) ->
+      killed = { pid, sig }
+      true
+    state = { pid_file: path, kill_fn: rec_kill }
+    status, hdrs, body = handle_reload make_req!, state
+    os.remove path
+    assert.equals 200, status
+    assert.equals "text/html; charset=UTF-8", hdrs["Content-Type"]
+    assert.same { 4242, 1 }, killed
+    assert.truthy body\find("4242", 1, true)
+
+  it "retourne 500 si le pidfile est absent (pas de kill)", ->
+    killed = false
+    flag_kill = ->
+      killed = true
+      true
+    state = { pid_file: "/nonexistent/custos.pid", kill_fn: flag_kill }
+    status, _, body = handle_reload make_req!, state
+    assert.equals 500, status
+    assert.is_false killed
+    assert.truthy body\find("flash error", 1, true)
+
+  it "retourne 500 si le kill échoue", ->
+    path = tmp_pid!
+    pidfile.write 4242, path
+    state = { pid_file: path, kill_fn: -> false }
+    status, _, body = handle_reload make_req!, state
+    os.remove path
+    assert.equals 500, status
+    assert.truthy body\find("flash error", 1, true)

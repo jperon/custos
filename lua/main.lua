@@ -19,6 +19,7 @@ set_process_name("custos")
 local bit = require("bit")
 local config = require("config")
 local filter = require("filter")
+local pidfile = require("lib.pidfile")
 do
   local gc_cfg = config.runtime or { }
   if gc_cfg.gc_pause then
@@ -489,12 +490,30 @@ supervise = function(pipes, sfd)
   local status = ffi.new("int[1]")
   local siginfo = ffi.new("signalfd_siginfo")
   local sig_sz = ffi.sizeof("signalfd_siginfo")
+  local supervisor_pid = tonumber(libc.getpid())
   log_info(function()
     return {
       action = "supervisor_running",
-      pid = tonumber(libc.getpid())
+      pid = supervisor_pid
     }
   end)
+  local pidfile_path = pidfile.resolve_path((config.runtime or { }).pid_file)
+  if pidfile.write(supervisor_pid, pidfile_path) then
+    log_info(function()
+      return {
+        action = "supervisor_pidfile_written",
+        path = pidfile_path,
+        pid = supervisor_pid
+      }
+    end)
+  else
+    log_warn(function()
+      return {
+        action = "supervisor_pidfile_write_failed",
+        path = pidfile_path
+      }
+    end)
+  end
   while true do
     local rv = libc.read(sfd, siginfo, sig_sz)
     if rv == sig_sz then
@@ -554,6 +573,7 @@ supervise = function(pipes, sfd)
             action = "supervisor_sigterm"
           }
         end)
+        pidfile.remove(pidfile_path)
         nft_extra.cleanup()
         shutdown_workers(workers)
         close_supervisor_fds(pipes)

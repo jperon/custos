@@ -334,6 +334,19 @@ Servie par le worker AUTH (`src/auth/server.moon` `require "webui.router"`) sous
 relu/réécrit via `webui/serializer.moon`), les règles, les dictionnaires nommés
 (`nets`/`macs`/`users`/`times`), les listes, et de déclencher un reload SIGHUP.
 
+**Reload SIGHUP — cible obligatoire : le superviseur.** Seul le superviseur
+(`main.moon`) traite SIGHUP pour le hot-reload de la config (relecture +
+recompilation des règles + kill/refork des workers DNS/resp/captive/reject/DoH/SNI ;
+il ne fait que **transmettre** SIGHUP au worker AUTH pour relire les secrets). La
+webui s'exécute dans un enfant `AUTH-conn` (petit-enfant du superviseur), donc
+`getppid()` viserait le **worker AUTH** → seuls les secrets seraient relus, jamais
+les règles (bug du bouton « Recharger maintenant »). Le PID cible provient donc du
+**pidfile** `/var/run/custos.pid`, écrit par le superviseur au démarrage et supprimé
+à l'arrêt (`src/lib/pidfile.moon`, chemin surchargeable via `runtime.pid_file` ou
+env `CUSTOS_PID_FILE`). `handle_reload` (`system.moon`) et `default_reload`
+(`devices.moon`) lisent ce pidfile ; `custos-update` l'utilise déjà. `handle_reload`
+accepte `state.kill_fn` injectable (tests).
+
 Les champs scalaires de `filter` (SafeSearch, YouTube Restricted, `allow_localnets`,
 `captive_portal`, `domainlists_dir`, `dest_whitelist`, `allowed_domains`…) sont
 édités par `handle_filter_general_get/post` : ils parcourent `config_schema.filter`

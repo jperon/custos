@@ -44,6 +44,7 @@ set_process_name "custos"
 bit = require "bit"
 config = require "config"
 filter = require "filter"
+pidfile = require "lib.pidfile"
 
 -- Réglage GC LuaJIT économe (machines à faible RAM). Appliqué dans le
 -- superviseur ; hérité par tous les workers forkés ensuite.
@@ -493,7 +494,16 @@ supervise = (pipes, sfd) ->
   siginfo = ffi.new "signalfd_siginfo"
   sig_sz  = ffi.sizeof "signalfd_siginfo"
 
-  log_info -> { action: "supervisor_running", pid: tonumber libc.getpid! }
+  supervisor_pid = tonumber libc.getpid!
+  log_info -> { action: "supervisor_running", pid: supervisor_pid }
+
+  -- Écrit le pidfile : source unique du PID qui traite SIGHUP (hot-reload
+  -- config). Lu par la webui et custos-update. Best-effort.
+  pidfile_path = pidfile.resolve_path (config.runtime or {}).pid_file
+  if pidfile.write supervisor_pid, pidfile_path
+    log_info -> { action: "supervisor_pidfile_written", path: pidfile_path, pid: supervisor_pid }
+  else
+    log_warn -> { action: "supervisor_pidfile_write_failed", path: pidfile_path }
 
   while true
     rv = libc.read sfd, siginfo, sig_sz
@@ -527,6 +537,7 @@ supervise = (pipes, sfd) ->
             libc.kill w.pid, SIGHUP
       else
         log_info -> { action: "supervisor_sigterm" }
+        pidfile.remove pidfile_path
         nft_extra.cleanup!
         shutdown_workers workers
         close_supervisor_fds pipes

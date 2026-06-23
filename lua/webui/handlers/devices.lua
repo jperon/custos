@@ -311,11 +311,15 @@ end
 local default_reload
 default_reload = function()
   local ffi = require("ffi")
+  local pidfile = require("lib.pidfile")
   pcall(function()
-    return ffi.cdef("int kill(int, int); int getppid(void);")
+    return ffi.cdef("int kill(int, int);")
   end)
+  local pid = pidfile.read()
   return pcall(function()
-    return ffi.C.kill(ffi.C.getppid(), 1)
+    if pid then
+      return ffi.C.kill(pid, 1)
+    end
   end)
 end
 local valid_mac

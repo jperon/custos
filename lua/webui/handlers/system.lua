@@ -1,5 +1,6 @@
 local ffi = require("ffi")
 local H = require("auth.html")
+local pidfile = require("lib.pidfile")
 local page
 page = require("webui.handlers.dashboard").page
 pcall(function()
@@ -10,16 +11,22 @@ pcall(function()
   ]])
 end)
 local SIGHUP = 1
+local default_kill
+default_kill = function(pid, sig)
+  return ffi.C.kill(pid, sig) == 0
+end
 local handle_reload
 handle_reload = function(req, state)
-  local parent_pid = tonumber(ffi.C.getppid())
-  local ok = parent_pid > 0 and ffi.C.kill(parent_pid, SIGHUP) == 0
+  local pid_path = pidfile.resolve_path(state and state.pid_file)
+  local kill_fn = (state and state.kill_fn) or default_kill
+  local pid, err = pidfile.read(pid_path)
+  local ok = pid and kill_fn(pid, SIGHUP)
   local body
   if ok then
     body = H.section({
       H.p({
         class = "flash success"
-      }, "Rechargement lancé (SIGHUP → PID " .. tostring(parent_pid) .. ")."),
+      }, "Rechargement lancé (SIGHUP → superviseur PID " .. tostring(pid) .. ")."),
       H.p({
         H.a({
           href = "/admin/"
@@ -30,7 +37,7 @@ handle_reload = function(req, state)
     body = H.section({
       H.p({
         class = "flash error"
-      }, "Échec du rechargement.")
+      }, "Échec du rechargement : " .. tostring(err or "superviseur injoignable (PID " .. tostring(pid) .. ")") .. ".")
     })
   end
   local status

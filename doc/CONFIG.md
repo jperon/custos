@@ -73,6 +73,7 @@ Contrôle le comportement global du service.
 | `benchmark` | bool | `false` | Active les mesures de performance dans les logs |
 | `gc_pause` | number | `110` | Réglage GC LuaJIT (`collectgarbage "setpause"`). Le GC se déclenche dès que le tas dépasse de `gc_pause`-100 % la taille post-collecte. Défaut LuaJIT : 200 (le tas peut doubler). 110 ⇒ collecte dès +10 %, plus économe en RAM. |
 | `gc_stepmul` | number | `400` | Réglage GC LuaJIT (`collectgarbage "setstepmul"`). Multiplicateur de la vitesse du GC incrémental ; une valeur plus haute compense le `gc_pause` bas. |
+| `pid_file` | string | `"/var/run/custos.pid"` | Pidfile du superviseur (PID qui traite SIGHUP pour le hot-reload). Écrit au démarrage, supprimé à l'arrêt. Lu par la webui (« Recharger maintenant ») et `custos-update`. Surchargeable aussi via l'env `CUSTOS_PID_FILE`. |
 
 Quand `benchmark` est activé, le verdict `ALLOW`/`BLOCK` est journalisé **dans la
 même ligne** que les temps de mesure, émise par le worker responses au retour de

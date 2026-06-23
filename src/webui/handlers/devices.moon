@@ -218,11 +218,14 @@ handle_devices_get = (req, state) ->
   }
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Appareils", body
 
--- Envoie SIGHUP au superviseur (cf. webui.handlers.system.handle_reload).
+-- Envoie SIGHUP au SUPERVISEUR via le pidfile (cf. webui.handlers.system :
+-- getppid() viserait le worker AUTH, qui ne relit que les secrets).
 default_reload = ->
   ffi = require "ffi"
-  pcall -> ffi.cdef "int kill(int, int); int getppid(void);"
-  pcall -> ffi.C.kill ffi.C.getppid!, 1
+  pidfile = require "lib.pidfile"
+  pcall -> ffi.cdef "int kill(int, int);"
+  pid = pidfile.read!
+  pcall -> ffi.C.kill pid, 1 if pid
 
 -- Valide une adresse MAC (6 octets hex séparés par ':').
 valid_mac = (mac) ->
