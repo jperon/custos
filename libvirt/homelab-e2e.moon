@@ -54,7 +54,12 @@
   sni: { placement: "integral" }
 
   filter: {
-    allow_localnets: true
+    -- allow_localnets DOIT rester false ici : la topologie e2e est entièrement
+    -- locale (10.42.0.0/24), donc whitelister les réseaux locaux du bridge
+    -- court-circuiterait (accept avant {SNI_RULES_PRE}) tout le filtrage et le
+    -- SNI des cibles de test → groupes G1/G2/G14 vidés de sens. (Le flag était
+    -- auparavant `true` mais inopérant à cause d'un bug get_bridge_ifname.)
+    allow_localnets: false
 
     nets: {
       homelab: {"10.42.0.0/24", "fd42:42:0:1::/64"}

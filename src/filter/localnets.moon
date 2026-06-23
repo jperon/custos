@@ -3,11 +3,17 @@
 { :log_info, :log_warn } = require "log"
 { :ffi, :libc } = require "ffi_defs"
 
---- Récupère le nom du bridge
--- @tparam table auth_cfg Configuration auth (bridge_ifname normalement résolu par config)
+--- Récupère le nom du bridge.
+-- Tolère deux formes d'argument : la table `auth` directe (`.bridge_ifname`)
+-- ou la config filtre qui contient `auth` en sous-table (`.auth.bridge_ifname`).
+-- `inject_localnets` est appelé avec la config filtre (cf. filter.init), dont
+-- `bridge_ifname` ne vit que sous `.auth` → sans ce repli on lisait "br0" et
+-- donc la mauvaise interface (réseaux locaux jamais whitelistés).
+-- @tparam table cfg config auth ou config filtre
 -- @treturn string Nom de l'interface bridge
-get_bridge_ifname = (auth_cfg) ->
-  (auth_cfg and auth_cfg.bridge_ifname) or "br0"
+get_bridge_ifname = (cfg) ->
+  return "br0" unless cfg
+  cfg.bridge_ifname or (cfg.auth and cfg.auth.bridge_ifname) or "br0"
 
 --- Extrait les CIDR locaux depuis la table de routage
 -- @tparam string ifname Interface à analyser

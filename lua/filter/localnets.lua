@@ -9,8 +9,11 @@ do
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
 local get_bridge_ifname
-get_bridge_ifname = function(auth_cfg)
-  return (auth_cfg and auth_cfg.bridge_ifname) or "br0"
+get_bridge_ifname = function(cfg)
+  if not (cfg) then
+    return "br0"
+  end
+  return cfg.bridge_ifname or (cfg.auth and cfg.auth.bridge_ifname) or "br0"
 end
 local get_local_cidrs
 get_local_cidrs = function(ifname)

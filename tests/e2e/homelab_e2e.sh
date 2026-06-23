@@ -89,7 +89,19 @@ ssh_vm() {
 dig_from() {
     local vm="$1" domain="$2"; shift 2
     local rtype="${1:-A}"; [ $# -gt 0 ] && shift
-    ssh_vm "$vm" "dig +timeout=3 +tries=1 $* $domain $rtype 2>/dev/null"
+    # Retry sur réponse VIDE uniquement (échec de transport : paquet UDP perdu,
+    # custos en GC/reload). Un vrai verdict — NOERROR/REFUSED/NXDOMAIN — produit
+    # une ligne `status:` non vide et sort immédiatement, donc aucun verdict n'est
+    # masqué. Élimine le flakiness des groupes DNS (T01/T03/T10…).
+    local out="" i
+    for i in 1 2 3 4 5 6; do
+        out=$(ssh_vm "$vm" "dig +timeout=3 +tries=1 $* $domain $rtype 2>/dev/null")
+        case "$out" in
+            *status:*) break ;;
+        esac
+        sleep 1
+    done
+    echo "$out"
 }
 
 dns_status() { echo "$1" | grep -oE 'status: [A-Z]+' | awk '{print $2}'; }
@@ -850,29 +862,46 @@ else
     # seule session SSH, l'apprentissage MAC (dig) + login + toutes les requêtes
     # admin back-to-back pour rester sous l'idle_timeout. Chaque endpoint imprime
     # un marqueur « CLE:<code> » suivi du corps HTML.
-    admin_out=$(ssh_vm "$E2E_IP_SERVUS" "
-        dig +timeout=3 +tries=1 @10.42.0.1 site-a.lan A >/dev/null 2>&1
-        rm -f /tmp/adm_cookies.txt
-        base='https://${CUSTOS_DATA_IP}:33443'
-        # NOCOOKIE : accès admin sans session → doit rediriger (302) ou refuser
-        curl -sk --max-time 8 -o /dev/null -w 'NOCOOKIE:%{http_code}\n' \"\$base/admin/\"
-        # Login admin (alice) → cookie de session
-        curl -sk --max-time 8 -c /tmp/adm_cookies.txt -o /dev/null -w 'LOGIN:%{http_code}\n' \
-            -X POST --data-urlencode 'user=alice@test.lan' \
-            --data-urlencode 'password=motdepasse123' \"\$base/login\"
-        # Helper : requête GET admin imprimant 'CLE:<code>' + le corps
-        ac() { curl -sk --max-time 8 -b /tmp/adm_cookies.txt -w \"\\n\$1:%{http_code}\\n\" \"\$base\$2\"; }
-        ac DASH    /admin/
-        ac CFG     /admin/config/
-        ac AUTHSEC /admin/config/auth
-        ac RULES   /admin/config/filter/rules
-        ac LISTS   /admin/config/filter/lists
-        ac STATUS  /admin/system/status
-        # Reload SIGHUP (POST) — authentifié, redirige (302) après déclenchement
-        curl -sk --max-time 8 -b /tmp/adm_cookies.txt -o /dev/null -w 'RELOAD:%{http_code}\n' \
-            -X POST \"\$base/admin/system/reload\"
-        rm -f /tmp/adm_cookies.txt
-    ")
+    # Capture admin complète (login + tous les endpoints) dans UNE session SSH.
+    # Réessayée si elle est incomplète (login OK mais séquence non terminée /
+    # corps tronqué) : un aléa transitoire de charge VM ne doit pas rendre le
+    # résultat indéterminé. Chaque tentative re-login (cookie frais) → l'idle_timeout
+    # court (10s) n'est jamais un facteur entre tentatives.
+    capture_admin() {
+        ssh_vm "$E2E_IP_SERVUS" "
+            dig +timeout=3 +tries=1 @10.42.0.1 site-a.lan A >/dev/null 2>&1
+            rm -f /tmp/adm_cookies.txt
+            base='https://${CUSTOS_DATA_IP}:33443'
+            # NOCOOKIE : accès admin sans session → doit rediriger (302) ou refuser
+            curl -sk --max-time 8 -o /dev/null -w 'NOCOOKIE:%{http_code}\n' \"\$base/admin/\"
+            # Login admin (alice) → cookie de session
+            curl -sk --max-time 8 -c /tmp/adm_cookies.txt -o /dev/null -w 'LOGIN:%{http_code}\n' \
+                -X POST --data-urlencode 'user=alice@test.lan' \
+                --data-urlencode 'password=motdepasse123' \"\$base/login\"
+            # Helper : requête GET admin imprimant 'CLE:<code>' + le corps
+            ac() { curl -sk --max-time 8 -b /tmp/adm_cookies.txt -w \"\\n\$1:%{http_code}\\n\" \"\$base\$2\"; }
+            ac DASH    /admin/
+            ac CFG     /admin/config/
+            ac AUTHSEC /admin/config/auth
+            ac RULES   /admin/config/filter/rules
+            ac LISTS   /admin/config/filter/lists
+            ac STATUS  /admin/system/status
+            # Reload SIGHUP (POST) — authentifié, redirige (302) après déclenchement
+            curl -sk --max-time 8 -b /tmp/adm_cookies.txt -o /dev/null -w 'RELOAD:%{http_code}\n' \
+                -X POST \"\$base/admin/system/reload\"
+            rm -f /tmp/adm_cookies.txt
+        "
+    }
+    admin_out=""
+    for _ in 1 2 3; do
+        admin_out=$(capture_admin)
+        # Séquence complète (RELOAD: présent) ET contenu des règles reçu
+        # (blocked.lan) → capture exploitable. Sinon on retente.
+        case "$admin_out" in
+            *RELOAD:*blocked.lan*|*blocked.lan*RELOAD:*) break ;;
+        esac
+        sleep 2
+    done
 
     acode() { echo "$admin_out" | grep -oE "$1:[0-9]+" | head -1 | cut -d: -f2; }
 
