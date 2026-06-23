@@ -212,6 +212,18 @@ supervise = function(pipes, sfd)
   local captive_queues = parse_queues(config.nfqueue.captive)
   local reject_queues = parse_queues(config.nfqueue.reject)
   local bridge_ifname = auth_cfg.bridge_ifname or "br0"
+  local bridge_detect = require("lib.bridge_detect")
+  if not (bridge_detect.exists(bridge_ifname)) then
+    local available = bridge_detect.list_bridges()
+    log_warn(function()
+      return {
+        action = "bridge_ifname_not_found",
+        configured = bridge_ifname,
+        available = #available > 0 and table.concat(available, ",") or "(aucun)",
+        hint = "vérifier auth.bridge_ifname dans la config"
+      }
+    end)
+  end
   local read_lines
   read_lines = function(cmd)
     local handle = io.popen(cmd)

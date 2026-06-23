@@ -71,6 +71,7 @@ sont pas vérifiées et constatées (pas supposées) :
 | Concaténer en boucle | Accumuler dans une table puis `table.concat` (jamais `..=` en boucle) |
 | Log DEBUG dans un hot-path | Garder avec `log.level_enabled "DEBUG"` au call-site : sans ça la closure (thunk) est allouée par paquet même quand le niveau est filtré |
 | `require` dans un hot-path | Mémoïser le module à la construction (factory/startup), jamais un `require` par paquet (≈150 ns/appel) |
+| Détecter l'interface bridge | `lib.bridge_detect` (sysfs `/sys/class/net/*/bridge`, busybox-compatible ; choix du bridge le plus peuplé). **Jamais** `ip … type bridge` (non supporté par busybox). `auth.bridge_ifname`/env `BRIDGE_IFNAME` priment ; `main.moon` warn `bridge_ifname_not_found` si la config force une interface absente |
 
 ---
 

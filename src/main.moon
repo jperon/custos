@@ -214,6 +214,19 @@ supervise = (pipes, sfd) ->
   -- et arp-sniffer. Déclaré avant `workers` pour que les closures puissent le capturer.
   bridge_ifname = auth_cfg.bridge_ifname or "br0"
 
+  -- Garde-fou : si la config force un bridge inexistant (typiquement "br0" sur
+  -- un OpenWrt où le bridge s'appelle "br-lan"), tout le plan de données est HS
+  -- en silence. On l'expose fortement, en listant les bridges réellement présents.
+  bridge_detect = require "lib.bridge_detect"
+  unless bridge_detect.exists bridge_ifname
+    available = bridge_detect.list_bridges!
+    log_warn -> {
+      action: "bridge_ifname_not_found"
+      configured: bridge_ifname
+      available: #available > 0 and table.concat(available, ",") or "(aucun)"
+      hint: "vérifier auth.bridge_ifname dans la config"
+    }
+
   -- Autodétection des interfaces physiques attachées à la bridge (bridge slaves)
   -- pour le sniffer TCP/33443 et l'arp-sniffer. Ces interfaces physiques voient
   -- les paquets entrants, contrairement à la bridge elle-même.

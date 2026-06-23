@@ -385,16 +385,10 @@ DEFAULTS = {
   }
 }
 
--- Détecte la première interface bridge du système.
--- Priorité : variable d'env BRIDGE_IFNAME → ip link → "br0".
-detect_bridge_ifname = ->
-  env = os.getenv "BRIDGE_IFNAME"
-  return env if env
-  handle = io.popen "ip -brief link show type bridge 2>/dev/null"
-  return "br0" unless handle
-  line = handle\read "*l"
-  handle\close!
-  (line and line\match "^(%S+)") or "br0"
+-- Détecte l'interface bridge du système (cf. lib.bridge_detect).
+-- Priorité : env BRIDGE_IFNAME → sysfs (bridge le plus peuplé) → "br0".
+bridge_detect = require "lib.bridge_detect"
+detect_bridge_ifname = bridge_detect.detect
 
 is_array = (t) ->
   return false unless type(t) == "table"
@@ -481,7 +475,10 @@ normalize = (cfg) ->
   cfg.filter.userlists = cfg.filter.userlists or cfg.filter.users or {}
   cfg.filter.users = cfg.filter.users or cfg.filter.userlists or {}
   cfg.auth = cfg.auth or {}
-  cfg.auth.bridge_ifname = cfg.auth.bridge_ifname or detect_bridge_ifname!
+  -- Une valeur de config corrompue (ex. "Warning:" persistée par une ancienne
+  -- détection busybox) est rejetée → on retombe sur l'autodétection sysfs.
+  configured_bridge = cfg.auth.bridge_ifname
+  cfg.auth.bridge_ifname = (configured_bridge and bridge_detect.valid_name(configured_bridge) and configured_bridge) or detect_bridge_ifname!
   cfg.sni  = cfg.sni  or {}
   defaults = DEFAULTS
   decision_defaults = defaults.filter and defaults.filter.decision or {}

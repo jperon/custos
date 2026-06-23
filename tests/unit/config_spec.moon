@@ -210,6 +210,16 @@ describe "config.auth.bridge_ifname", ->
     os.remove path
     assert.equals "br-custom", cfg.auth.bridge_ifname
 
+  it "bridge_ifname corrompu (ex. \"Warning:\") est rejeté → autodétection", ->
+    path = "tmp/config_spec_bridge_bad.moon"
+    f = assert io.open path, "w"
+    f\write [[{ auth: { bridge_ifname: "Warning:" } }]]
+    f\close!
+    cfg = reload path
+    os.remove path
+    assert.is_string cfg.auth.bridge_ifname
+    assert.not_equals "Warning:", cfg.auth.bridge_ifname
+
   it "BRIDGE_IFNAME env prime sur l'autodétection", ->
     ffi.C.setenv "BRIDGE_IFNAME", "br-env", 1
     cfg = reload nil

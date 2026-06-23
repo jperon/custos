@@ -357,17 +357,27 @@ Installer = (cfg) ->
     -- Nécessaire sur les routeurs OpenWrt récents où le bridge s'appelle br-lan, pas br0.
     patch_bridge_ifname: =>
       step "Détection de l'interface bridge"
-      detected = @ssh_capture "ip link show type bridge 2>/dev/null | awk '/^[0-9]+:/{sub(/:$/, \"\", $2); print $2; exit}'"
+      -- Détection sysfs (busybox-compatible), choix du bridge le plus peuplé :
+      -- énumère /sys/class/net/*/bridge, compte les ports /…/brif, garde le max.
+      -- `ip … type bridge` est non fiable sur busybox → à proscrire.
+      detect_cmd = [[for b in /sys/class/net/*/bridge; do [ -d "$b" ] || continue; d=$(dirname "$b"); n=$(basename "$d"); c=$(ls -1 "$d/brif" 2>/dev/null | wc -l); echo "$c $n"; done | sort -rn | awk 'NR==1{print $2}']]
+      detected = @ssh_capture detect_cmd
       detected = detected and detected\match "^%S+" or nil
       unless detected and #detected > 0
-        warn "Impossible de détecter l'interface bridge — bridge_ifname non patchée"
+        warn "⚠ Aucune interface bridge détectée sur le routeur."
+        warn "  Vérifier la configuration réseau (un bridge LAN est requis) ;"
+        warn "  bridge_ifname laissée telle quelle dans /etc/custos/config.moon."
         return true
       info "Interface bridge détectée : #{detected}"
       -- Lit la valeur actuelle pour ne patcher que si nécessaire.
-      current = @ssh_capture "grep -o 'bridge_ifname:.*' /etc/custos/config.moon 2>/dev/null | head -1"
-      if current and current\find detected
+      current = @ssh_capture "grep -o 'bridge_ifname:[[:space:]]*\"[^\"]*\"' /etc/custos/config.moon 2>/dev/null | head -1"
+      forced = current and current\match "bridge_ifname:%s*\"([^\"]*)\""
+      if forced == detected
         ok "bridge_ifname déjà correct (#{detected})"
         return true
+      if forced and #forced > 0
+        warn "⚠ La config force bridge_ifname=\"#{forced}\", incohérent avec"
+        warn "  l'interface réellement détectée \"#{detected}\" → correction."
       -- sed in-place : remplace la valeur de bridge_ifname quelle qu'elle soit.
       unless @ssh_run "sed -i 's/bridge_ifname:[[:space:]]*\"[^\"]*\"/bridge_ifname: \"#{detected}\"/' /etc/custos/config.moon"
         warn "Impossible de patcher bridge_ifname dans /etc/custos/config.moon"
