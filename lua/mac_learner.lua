@@ -4,6 +4,7 @@ do
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
 local mac_prober = require("mac_prober")
+local strip_codec = require("strip_codec")
 local config = require("config")
 local log_info, log_warn, log_debug
 do
@@ -43,6 +44,8 @@ local negative_cache = { }
 local pending_queries = { }
 local prober = nil
 local vlan_table = { }
+local strip_table = { }
+local STRIP_TTL = mac_cfg.strip_ttl or 120
 local ip16_to_str
 ip16_to_str = function(ip16)
   local is_ipv4 = true
@@ -137,6 +140,31 @@ vlan_lookup = function(ip_str)
     return nil
   end
 end
+local process_strip_learn
+process_strip_learn = function(msg)
+  local hash8, rr_code = strip_codec.decode(msg)
+  if not (hash8) then
+    return 
+  end
+  strip_table[hash8] = {
+    rr_code,
+    os.time() + STRIP_TTL
+  }
+end
+local strip_lookup
+strip_lookup = function(name)
+  local hash8 = strip_codec.name_hash(name)
+  local entry = strip_table[hash8]
+  if not (entry) then
+    return nil
+  end
+  if os.time() <= entry[2] then
+    return entry[1]
+  else
+    strip_table[hash8] = nil
+    return nil
+  end
+end
 local expire_pending
 expire_pending = function()
   local now_ms = mac_prober.get_ms()
@@ -171,6 +199,18 @@ start_query = function(client_fd)
     local vid = vlan_lookup(vlan_ip)
     if vid then
       local resp = vid .. "\n"
+      libc.send(client_fd, resp, #resp, 0)
+    else
+      libc.send(client_fd, "unknown\n", 8, 0)
+    end
+    libc.close(client_fd)
+    return 
+  end
+  local strip_name = req:match("^strip:([^\n\r]+)")
+  if strip_name then
+    local rr = strip_lookup(strip_name)
+    if rr then
+      local resp = rr .. "\n"
       libc.send(client_fd, resp, #resp, 0)
     else
       libc.send(client_fd, "unknown\n", 8, 0)
@@ -253,7 +293,7 @@ create_server = function(path)
   return sock
 end
 local run
-run = function(learn_rfd, ifname, vlan_learn_rfd)
+run = function(learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd)
   ifname = ifname or "br"
   prober = mac_prober.init(ifname)
   if prober then
@@ -291,7 +331,7 @@ run = function(learn_rfd, ifname, vlan_learn_rfd)
       sock = query_sock_path
     }
   end)
-  local pfds = ffi.new("struct pollfd[5]")
+  local pfds = ffi.new("struct pollfd[6]")
   pfds[0].fd = learn_rfd
   pfds[0].events = POLLIN
   pfds[1].fd = query_sock
@@ -314,11 +354,19 @@ run = function(learn_rfd, ifname, vlan_learn_rfd)
     pfds[vlan_idx].events = POLLIN
     nfds = nfds + 1
   end
+  local strip_idx = -1
+  if strip_learn_rfd then
+    strip_idx = nfds
+    pfds[strip_idx].fd = strip_learn_rfd
+    pfds[strip_idx].events = POLLIN
+    nfds = nfds + 1
+  end
   local msg_size = mac_cfg.learn_msg_size or 22
   local learn_buf = ffi.new("uint8_t[?]", msg_size)
   local arp_buf = ffi.new("uint8_t[512]")
   local ipv6_buf = ffi.new("uint8_t[2048]")
   local vlan_buf = ffi.new("uint8_t[18]")
+  local strip_buf = ffi.new("uint8_t[?]", strip_codec.STRIP_MSG_SIZE)
   local last_purge = 0
   while true do
     local poll_ms
@@ -390,6 +438,17 @@ run = function(learn_rfd, ifname, vlan_learn_rfd)
         end
       end
     end
+    if strip_idx >= 0 and bit.band(pfds[strip_idx].revents, POLLIN) ~= 0 then
+      while true do
+        local n = libc.read(strip_learn_rfd, strip_buf, strip_codec.STRIP_MSG_SIZE)
+        if n <= 0 then
+          break
+        end
+        if n == strip_codec.STRIP_MSG_SIZE then
+          process_strip_learn(ffi.string(strip_buf, strip_codec.STRIP_MSG_SIZE))
+        end
+      end
+    end
     if next(pending_queries) ~= nil then
       expire_pending()
     end
@@ -411,11 +470,18 @@ run = function(learn_rfd, ifname, vlan_learn_rfd)
           vlan_table[ip] = nil
         end
       end
+      for h, entry in pairs(strip_table) do
+        if now_epoch > entry[2] then
+          strip_table[h] = nil
+        end
+      end
     end
   end
 end
 return {
   run = run,
   process_vlan_learn = process_vlan_learn,
-  vlan_lookup = vlan_lookup
+  vlan_lookup = vlan_lookup,
+  process_strip_learn = process_strip_learn,
+  strip_lookup = strip_lookup
 }

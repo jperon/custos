@@ -23,6 +23,7 @@
 
 { :ffi, :libc } = require "ffi_defs"
 mac_prober = require "mac_prober"
+strip_codec = require "strip_codec"
 config = require "config"
 { :log_info, :log_warn, :log_debug } = require "log"
 { :enrich_session_ip } = require "auth.sessions"
@@ -65,6 +66,10 @@ prober          = nil
 -- vlan_table : { ip_str → { vlan_id, expires_epoch } }, alimenté par worker_doh_vlan.
 -- vlan_id == 0 signifie « untagged observé » (distinct de l'absence d'entrée).
 vlan_table      = {}
+-- strip_table : { hash8 → { rr_code, expires_epoch } }, alimenté par worker_responses
+-- (cibles CNAME de chaînes buggées). Clé = hash FNV-1a du nom (cf. strip_codec).
+strip_table     = {}
+STRIP_TTL       = mac_cfg.strip_ttl or 120
 
 -- ── Utilitaires ──────────────────────────────────────────────────
 
@@ -157,6 +162,28 @@ vlan_lookup = (ip_str) ->
     vlan_table[ip_str] = nil
     nil
 
+-- ── Apprentissage des cibles de strip CNAME (worker_responses) ───
+
+--- Traite un message de learn de cible de strip (10 octets, cf. strip_codec).
+-- @tparam string msg 10 octets (hash8 + rr_code uint16 BE)
+process_strip_learn = (msg) ->
+  hash8, rr_code = strip_codec.decode msg
+  return unless hash8
+  strip_table[hash8] = { rr_code, os.time! + STRIP_TTL }
+
+--- Recherche le rr_code à stripper pour un nom de question.
+-- @tparam string name Nom de domaine (insensible à la casse)
+-- @treturn number|nil code DNS du type à stripper, ou nil si non cible/expiré.
+strip_lookup = (name) ->
+  hash8 = strip_codec.name_hash name
+  entry = strip_table[hash8]
+  return nil unless entry
+  if os.time! <= entry[2]
+    entry[1]
+  else
+    strip_table[hash8] = nil
+    nil
+
 -- ── Expiration des probes en attente ─────────────────────────────
 
 --- Expire les requêtes en attente dont le probe dépasse PROBE_TIMEOUT_MS.
@@ -202,6 +229,19 @@ start_query = (client_fd) ->
     vid = vlan_lookup vlan_ip
     if vid
       resp = vid .. "\n"
+      libc.send client_fd, resp, #resp, 0
+    else
+      libc.send client_fd, "unknown\n", 8, 0
+    libc.close client_fd
+    return
+
+  -- Requête strip : "strip:<name>\n" → "<rr_code>\n" ou "unknown\n".
+  -- Lecture seule de strip_table (alimentée par worker_responses) ; pas de probe.
+  strip_name = req\match "^strip:([^\n\r]+)"
+  if strip_name
+    rr = strip_lookup strip_name
+    if rr
+      resp = rr .. "\n"
       libc.send client_fd, resp, #resp, 0
     else
       libc.send client_fd, "unknown\n", 8, 0
@@ -291,7 +331,8 @@ create_server = (path) ->
 -- @tparam number learn_rfd  fd de lecture du pipe de learn (question → learner)
 -- @tparam string [ifname]   Nom de l'interface bridge (défaut : "br")
 -- @tparam number [vlan_learn_rfd] fd de lecture du pipe vlan_learn (worker_doh_vlan → learner)
-run = (learn_rfd, ifname, vlan_learn_rfd) ->
+-- @tparam number [strip_learn_rfd] fd de lecture du pipe strip_learn (worker_responses → learner)
+run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
   ifname = ifname or "br"
   prober = mac_prober.init ifname
   if prober
@@ -309,10 +350,11 @@ run = (learn_rfd, ifname, vlan_learn_rfd) ->
 
   log_info -> { action: "mac_learner_start", sock: query_sock_path }
 
-  -- Tableau pollfd[5] : [0] pipe learn, [1] query sock,
+  -- Tableau pollfd[6] : [0] pipe learn, [1] query sock,
   --                     [2] arp_fd (opt.), [3] ip6_fd (opt.),
-  --                     [vlan_idx] vlan_learn (opt., worker_doh_vlan)
-  pfds = ffi.new "struct pollfd[5]"
+  --                     [vlan_idx] vlan_learn (opt., worker_doh_vlan),
+  --                     [strip_idx] strip_learn (opt., worker_responses)
+  pfds = ffi.new "struct pollfd[6]"
   pfds[0].fd     = learn_rfd
   pfds[0].events = POLLIN
   pfds[1].fd     = query_sock
@@ -336,11 +378,20 @@ run = (learn_rfd, ifname, vlan_learn_rfd) ->
     pfds[vlan_idx].events = POLLIN
     nfds += 1
 
+  -- Pipe strip_learn (optionnel) : ajouté au prochain index libre.
+  strip_idx = -1
+  if strip_learn_rfd
+    strip_idx = nfds
+    pfds[strip_idx].fd     = strip_learn_rfd
+    pfds[strip_idx].events = POLLIN
+    nfds += 1
+
   msg_size = mac_cfg.learn_msg_size or 22
   learn_buf  = ffi.new "uint8_t[?]", msg_size
   arp_buf    = ffi.new "uint8_t[512]"
   ipv6_buf   = ffi.new "uint8_t[2048]"
   vlan_buf   = ffi.new "uint8_t[18]"
+  strip_buf  = ffi.new "uint8_t[?]", strip_codec.STRIP_MSG_SIZE
   last_purge = 0
 
   while true
@@ -389,6 +440,13 @@ run = (learn_rfd, ifname, vlan_learn_rfd) ->
         break if n <= 0
         process_vlan_learn ffi.string(vlan_buf, 18) if n == 18
 
+    -- [strip_idx] Pipe strip_learn : draine tous les messages (10 octets chacun)
+    if strip_idx >= 0 and bit.band(pfds[strip_idx].revents, POLLIN) ~= 0
+      while true
+        n = libc.read strip_learn_rfd, strip_buf, strip_codec.STRIP_MSG_SIZE
+        break if n <= 0
+        process_strip_learn ffi.string(strip_buf, strip_codec.STRIP_MSG_SIZE) if n == strip_codec.STRIP_MSG_SIZE
+
     -- Expiration des probes dépassant PROBE_TIMEOUT_MS
     expire_pending! if next(pending_queries) ~= nil
 
@@ -402,5 +460,7 @@ run = (learn_rfd, ifname, vlan_learn_rfd) ->
         negative_cache[ip] = nil if now_epoch > exp
       for ip, entry in pairs vlan_table
         vlan_table[ip] = nil if now_epoch > entry[2]
+      for h, entry in pairs strip_table
+        strip_table[h] = nil if now_epoch > entry[2]
 
-{ :run, :process_vlan_learn, :vlan_lookup }
+{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup }
