@@ -22,6 +22,12 @@ local _schema = {
       },
       required = true,
       default = "A"
+    },
+    {
+      name = "follow_cname",
+      label = "Suivre la chaîne CNAME",
+      type = "bool",
+      default = false
     }
   }
 }
@@ -32,6 +38,9 @@ _factory = function(cfg)
     if rule.dns_strip and rule.dns_strip.rr_type then
       rr_type = rule.dns_strip.rr_type
     end
+    local follow_cname = not not (rule.dns_strip and rule.dns_strip.follow_cname)
+    local dns_mod = require("ipparse.l7.dns")
+    local rr_code = dns_mod.types[rr_type]
     return {
       capabilities = {
         worker = true,
@@ -49,6 +58,9 @@ _factory = function(cfg)
         end
         ctx.skip_nft = true
         ctx.action_label = "response_strip_" .. tostring(rr_type)
+        if follow_cname and rr_code then
+          ctx.chain_strip_rr = rr_code
+        end
       end,
       compile_nft = function() end,
       verdict = function()

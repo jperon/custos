@@ -14,7 +14,8 @@ _schema = {
   description: "Supprime un type d'enregistrement de la réponse DNS"
   arg_type:    "table"
   arg_fields:  { { name: "rr_type", label: "Type RR", type: "enum",
-                   values: {"A","AAAA","CNAME","MX","TXT"}, required: true, default: "A" } }
+                   values: {"A","AAAA","CNAME","MX","TXT"}, required: true, default: "A" }
+                 { name: "follow_cname", label: "Suivre la chaîne CNAME", type: "bool", default: false } }
 }
 
 _factory = (cfg) ->
@@ -23,6 +24,9 @@ _factory = (cfg) ->
     rr_type = "A"
     if rule.dns_strip and rule.dns_strip.rr_type
       rr_type = rule.dns_strip.rr_type
+    follow_cname = not not (rule.dns_strip and rule.dns_strip.follow_cname)
+    dns_mod = require "ipparse.l7.dns"   -- mémoïsé à la construction (hors hot-path)
+    rr_code = dns_mod.types[rr_type]
 
     {
       capabilities: { worker: true, nft: false }
@@ -36,6 +40,7 @@ _factory = (cfg) ->
           ctx.modified = true
         ctx.skip_nft     = true
         ctx.action_label = "response_strip_#{rr_type}"
+        ctx.chain_strip_rr = rr_code if follow_cname and rr_code
       compile_nft: ->
       verdict: ->
         "accept"
