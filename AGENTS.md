@@ -157,6 +157,56 @@ suit la même convention sans toucher à `nft_compiler`.
 
 ---
 
+## Strip DNS contextuel à la chaîne CNAME (`dns_strip.follow_cname`)
+
+`dns_strip` matche sur le **nom de la question**. Les résolveurs qui chasent
+les CNAME eux-mêmes (systemd-resolved notamment) n'émettent pas une seule
+requête sur le domaine racine : ils suivent la chaîne en émettant des requêtes
+**séparées** dont la question est le **nom terminal** (ex.
+`atm.outlook.mira.tm.svc.cloud.microsoft` pour `smtp.office365.com`). Ce nom
+n'étant pas couvert par `to_domains`, le strip est contourné. Ajouter le nom
+terminal à `to_domains` re-stripperait aussi ses **usages directs légitimes** —
+indésirable. La solution est **stateful** et opt-in via `dns_strip.follow_cname`.
+
+**Flux (état partagé dans `mac_learner`, donc correct quel que soit le fan-out
+`nfqueue.responses`) :**
+- L'action `dns_strip` (`follow_cname: true`) pose `ctx.chain_strip_rr =
+  <rr_code numérique>` dans le contexte `on_response` (cf. `from_*`/actions).
+- `worker_responses.finalize_a`, quand `resp_ctx.chain_strip_rr` est posé,
+  **enregistre** les cibles CNAME de la réponse (`dns_classify.cname_targets`)
+  en envoyant `strip_codec.encode(name, rr_code)` (message 10 octets = hash
+  FNV-1a 64 bits du nom + uint16 rr_code) au worker `mac_learner` via le pipe
+  dédié `strip_learn`.
+- `mac_learner` stocke `strip_table[hash] = { rr_code, deadline }` (TTL
+  `mac_learner.strip_ttl`, défaut 120 s), en **miroir exact** de `vlan_table` /
+  `vlan_learn` (même pattern pipe + socket de requête).
+- À chaque réponse, `worker_responses` interroge `mac_learner_ipc.strip_target(qname)`
+  (socket Unix, requête `"strip:<name>"`), gardée par `chain_strip_enabled` et
+  **mémoïsée localement** (`strip_query_cache`, TTL 2 s, positif **et** négatif)
+  pour borner les RTT sur le plan de données. Un hit applique `strip_dns_rr` +
+  EDE **avant** le re-parse / l'injection nft (sinon nft injecterait les IP
+  qu'on strippe). Garde anti-double-strip : `not resp_ctx.chain_strip_rr`.
+
+**Contrat :** un nom interrogé **sans** contexte de chaîne récent (table vide /
+TTL expiré) n'est **jamais** strippé → usages directs hors chaîne préservés.
+
+**Opt-in / coût nul** : `main.moon` ne crée le pipe `strip_learn` que si
+`lib.chain_strip.chain_strip_active config` (au moins une règle `follow_cname`).
+Sans cela : aucun pipe, `chain_strip_enabled = false` partout, zéro requête IPC,
+comportement strictement identique à l'existant.
+
+**Modules** : `strip_codec` (codec hash/encode partagé), `mac_learner`
+(`strip_table`/`process_strip_learn`/`strip_lookup`), `mac_learner_ipc`
+(`strip_target`), `filter.actions.dns_strip` (`follow_cname`),
+`worker_responses` (`record_chain_targets`/`maybe_dynamic_strip`),
+`lib.chain_strip` (`chain_strip_active`).
+
+**Périmètre** : plan UDP (`worker_responses`) uniquement. Le plan DoH
+(`doh.query`) applique `run_on_response` mais **pas** l'apprentissage/consultation
+des cibles de chaîne — parité DoH non implémentée (hors périmètre actuel).
+
+---
+
 ## Modules DoH (`src/doh/`)
 
 | Module | Rôle |

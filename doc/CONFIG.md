@@ -409,6 +409,7 @@ Apprentissage des adresses MAC via un socket Unix.
 |-----|------|--------|-------------|
 | `query_sock` | string | `"/var/run/custos/mac_query.sock"` | Chemin du socket IPC |
 | `entry_ttl` | int | `900` | Durée (s) de conservation d'une entrée MAC apprise |
+| `strip_ttl` | int | `120` | Durée de vie (s) d'une cible CNAME apprise pour le strip contextuel (`dns_strip.follow_cname`, cf. § 11). TTL court : limite la fenêtre où un nom terminal est strippé hors de son contexte de chaîne. |
 
 ---
 
@@ -1127,6 +1128,42 @@ actions: {
 | Paramètre | Type | Défaut | Description |
 |-----------|------|--------|-------------|
 | `rr_type` | string | `"A"` | Type d'enregistrement à supprimer : `"A"`, `"AAAA"`, `"CNAME"`, etc. |
+| `follow_cname` | bool | `false` | Strippe aussi les requêtes **terminales** de la chaîne CNAME (cf. ci-dessous). |
+
+#### `follow_cname` — strip contextuel à la chaîne CNAME
+
+`dns_strip` matche sur le **nom de la question**. Or certains résolveurs
+(systemd-resolved, et tout résolveur qui chase les CNAME lui-même) n'envoient
+pas une seule requête sur le domaine racine : ils suivent la chaîne CNAME en
+émettant des requêtes **séparées** dont la question est le **nom terminal** de
+la chaîne (ex. `atm.outlook.mira.tm.svc.cloud.microsoft` pour
+`smtp.office365.com`). Ce nom terminal n'étant pas couvert par `to_domains`, le
+strip est contourné et les RR (ex. AAAA) repassent.
+
+Avec `follow_cname: true`, quand `worker_responses` strippe la réponse d'un
+domaine matché, il **enregistre les noms cibles CNAME** de la chaîne dans une
+table à TTL court hébergée par le worker `mac_learner` (`mac_learner.strip_ttl`,
+défaut 120 s ; cf. § 8). À chaque réponse ultérieure, `worker_responses`
+interroge cette table par le nom de question ; si ce nom est une cible **vue
+récemment via une chaîne buggée**, le strip s'applique aussi. Un nom interrogé
+**sans** ce contexte (table vide / TTL expiré) n'est **jamais** strippé — les
+usages directs légitimes de ces noms (hors chaîne) sont préservés.
+
+```moonscript
+-- Force IPv4 sur office365, y compris pour les résolveurs qui chasent les CNAME
+{
+  conditions: { to_domains: { "office365.com", "outlook.com", "office.com" } }
+  actions: { "dns_strip" }
+  dns_strip: { rr_type: "AAAA", follow_cname: true }
+}
+```
+
+**Opt-in / coût nul par défaut** : sans aucune règle `follow_cname`, le pipe
+dédié n'est pas créé, aucune requête IPC n'est émise — comportement identique à
+l'existant. La consultation est mémoïsée localement (cache 2 s) pour borner les
+allers-retours IPC sur le plan de données. Inutile (et déconseillé) d'ajouter
+les noms terminaux à `to_domains` : `follow_cname` rend cet ajout superflu et,
+contrairement à lui, préserve les usages directs hors chaîne.
 
 ### `log`
 
