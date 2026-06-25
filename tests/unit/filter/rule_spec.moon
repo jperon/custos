@@ -247,6 +247,59 @@ describe "filter.rule", ->
       assert.equals "r_allow_lan",   compiled.rules_metadata[1].rule_id
       assert.equals "r_allow_lan_2", compiled.rules_metadata[2].rule_id
 
+  -- ── règles désactivées (enabled = false) ─────────────────────────
+
+  describe "compile_rule / enabled", ->
+    it "enabled = false → eval inerte (jamais de match)", ->
+      eval_fn, meta = rule_mod.compile_rule cfg, {
+        rule_id:     "off_rule"
+        description: "Disabled"
+        actions:     { "allow" }
+        conditions:  {}
+        enabled:     false
+      }, 1
+      v, _msg, _rid, _tout, _desc, _mods, _cr, _am, matched = eval_fn {}
+      assert.is_nil v
+      assert.is_false matched
+      assert.is_false meta.enabled
+      assert.same {}, meta.conditions
+      assert.same {}, meta.actions
+
+    it "enabled = false conserve rule_id et timeout", ->
+      _eval, meta = rule_mod.compile_rule cfg, {
+        rule_id: "off_rule", actions: { "allow" }, enabled: false
+      }, 3
+      assert.equals "r_off_rule", meta.rule_id
+      assert.equals "2m", meta.timeout
+
+    it "une règle désactivée n'influence pas decide (default deny)", ->
+      rules = rule_mod.compile_rules {
+        nft: { ip_timeout: "2m" }
+        macs: {}
+        rules: {
+          { rule_id: "off_allow", actions: { "allow" }, enabled: false }
+        }
+      }
+      assert.equals 1, #rules
+      assert.equals 1, #rules.rules_metadata
+      v = rule_mod.decide rules, {}
+      assert.is_false v
+
+    it "alignement des index préservé avec une règle désactivée intercalée", ->
+      rules = rule_mod.compile_rules {
+        nft: { ip_timeout: "2m" }
+        macs: {}
+        rules: {
+          { rule_id: "a", actions: { "deny" }, enabled: false }
+          { rule_id: "b", actions: { "allow" } }
+        }
+      }
+      assert.equals "r_a", rules.rules_metadata[1].rule_id
+      assert.equals "r_b", rules.rules_metadata[2].rule_id
+      -- la règle 1 désactivée (deny) ne masque pas la règle 2 (allow)
+      v = rule_mod.decide rules, {}
+      assert.is_true v
+
   -- ── decide ────────────────────────────────────────────────────
 
   describe "decide", ->

@@ -4,6 +4,29 @@ compile_rule = function(cfg, rule, idx, used_ids)
   if used_ids == nil then
     used_ids = nil
   end
+  if rule.enabled == false then
+    local rule_id = compiler_api.unique_rule_id(rule, idx, used_ids)
+    local rule_desc = rule.description or "rule_" .. tostring(idx)
+    local rule_timeout = rule.nft_timeout or (cfg.nft and cfg.nft.ip_timeout) or "2m"
+    local metadata = {
+      rule_id = rule_id,
+      description = rule_desc,
+      timeout = rule_timeout,
+      conditions = { },
+      actions = { },
+      on_response = { }
+    }
+    metadata.enabled = false
+    metadata.worker_only = false
+    metadata.redirects_destination = false
+    metadata.cname_target = nil
+    metadata.creates_dynamic_scope = false
+    local eval_fn
+    eval_fn = function(req)
+      return nil, "Rule disabled", nil, nil, nil, nil, nil, nil, false, false, false, nil
+    end
+    return eval_fn, metadata
+  end
   local conditions_eval = { }
   local conditions_meta = { }
   local condition_table = rule.conditions or { }

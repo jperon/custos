@@ -164,6 +164,7 @@ button.ok:hover, .btn-ok:hover { background: #196f3d; }
 
 td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; color: var(--muted); }
 td.actions { white-space: nowrap; text-align: right; }
+tr.rule-disabled td { opacity: .55; }
 
 .hidden { display: none; }
 

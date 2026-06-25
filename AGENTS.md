@@ -378,6 +378,18 @@ séparés par virgule). `handle_rules_reorder` **valide une permutation exacte d
 reconstruit `cfg.filter.rules` dans le nouvel ordre et `write_config`. Les boutons
 ↑/↓ (`handle_rules_move`) restent le repli sans JavaScript.
 
+**Désactivation de règle (`enabled = false`).** Une règle peut porter `enabled =
+false` (défaut `true`/absent = active) pour la neutraliser sans la supprimer :
+`filter.rule.compile_rule` la compile en **entité inerte** (eval ne matche
+jamais, métadonnées vides marquées `metadata.enabled = false`) plutôt que de la
+sauter — l'alignement des index `rules_metadata[idx]`, des `rule_id` et du
+réordonnancement est ainsi préservé. `nft_compiler.compile` la **saute** via le
+même drapeau (`rules_cfg[idx].enabled == false`) : aucune sortie `action_map`,
+sets dynamiques ni `plan_rules`. Côté webui, `handle_rules_toggle` (POST
+`/admin/config/filter/rules/:n/toggle`) bascule la clé (false ↔ retirée) ;
+`handle_rules_edit_post` **préserve** `enabled = false` (rebuild_rule ne connaît
+pas cette clé hors formulaire) ; la liste marque la ligne `(désactivée)`.
+
 ### Page « Appareils » (`src/webui/handlers/devices.moon`)
 
 `GET/POST /admin/config/devices` facilite l'enregistrement des clients réseau.

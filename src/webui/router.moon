@@ -18,7 +18,7 @@
   :handle_rules_new_get,  :handle_rules_new_post,
   :handle_rules_edit_get, :handle_rules_edit_post,
   :handle_rules_delete,   :handle_rules_move,
-  :handle_rules_reorder }  = require "webui.handlers.rules"
+  :handle_rules_reorder,  :handle_rules_toggle }  = require "webui.handlers.rules"
 { :handle_lists_index,
   :handle_lists_type,
   :handle_list_get,     :handle_list_post,
@@ -158,6 +158,8 @@ dispatch = (req, state) ->
       return handle_rules_delete req, n, state
     if action == "move" and method == "POST"
       return handle_rules_move req, n, state
+    if action == "toggle" and method == "POST"
+      return handle_rules_toggle req, n, state
 
   -- Fallback
   302, { ["Location"]: "/admin/" }, ""

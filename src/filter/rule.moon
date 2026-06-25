@@ -19,6 +19,32 @@ compiler_api = require "filter.compiler_api"
 -- @treturn function compiled_rule (req) → verdict, msg, rule_id, timeout, desc
 -- @treturn table metadata Métadonnées pour compilation nft
 compile_rule = (cfg, rule, idx, used_ids=nil) ->
+  -- Règle explicitement désactivée (`enabled = false`) : on la compile en
+  -- entité inerte plutôt que de la sauter, afin de préserver l'alignement des
+  -- index (rules_metadata[idx]), des rule_id et du réordonnancement. L'eval ne
+  -- matche jamais et aucune métadonnée nft n'est produite ; nft_compiler la
+  -- saute de son côté via le même drapeau `enabled == false`.
+  if rule.enabled == false
+    rule_id      = compiler_api.unique_rule_id rule, idx, used_ids
+    rule_desc    = rule.description or "rule_#{idx}"
+    rule_timeout = rule.nft_timeout or (cfg.nft and cfg.nft.ip_timeout) or "2m"
+    metadata = {
+      rule_id:     rule_id
+      description: rule_desc
+      timeout:     rule_timeout
+      conditions:  {}
+      actions:     {}
+      on_response: {}
+    }
+    metadata.enabled = false
+    metadata.worker_only = false
+    metadata.redirects_destination = false
+    metadata.cname_target = nil
+    metadata.creates_dynamic_scope = false
+    eval_fn = (req) ->
+      nil, "Rule disabled", nil, nil, nil, nil, nil, nil, false, false, false, nil
+    return eval_fn, metadata
+
   conditions_eval = {}
   conditions_meta = {}
   condition_table = rule.conditions or {}

@@ -20,10 +20,10 @@ do
   local _obj_0 = require("webui.handlers.filter")
   handle_nets_get, handle_nets_post, handle_macs_get, handle_macs_post, handle_users_get, handle_users_post, handle_times_get, handle_times_post, handle_decision_get, handle_decision_post = _obj_0.handle_nets_get, _obj_0.handle_nets_post, _obj_0.handle_macs_get, _obj_0.handle_macs_post, _obj_0.handle_users_get, _obj_0.handle_users_post, _obj_0.handle_times_get, _obj_0.handle_times_post, _obj_0.handle_decision_get, _obj_0.handle_decision_post
 end
-local handle_rules_list, handle_rules_new_get, handle_rules_new_post, handle_rules_edit_get, handle_rules_edit_post, handle_rules_delete, handle_rules_move, handle_rules_reorder
+local handle_rules_list, handle_rules_new_get, handle_rules_new_post, handle_rules_edit_get, handle_rules_edit_post, handle_rules_delete, handle_rules_move, handle_rules_reorder, handle_rules_toggle
 do
   local _obj_0 = require("webui.handlers.rules")
-  handle_rules_list, handle_rules_new_get, handle_rules_new_post, handle_rules_edit_get, handle_rules_edit_post, handle_rules_delete, handle_rules_move, handle_rules_reorder = _obj_0.handle_rules_list, _obj_0.handle_rules_new_get, _obj_0.handle_rules_new_post, _obj_0.handle_rules_edit_get, _obj_0.handle_rules_edit_post, _obj_0.handle_rules_delete, _obj_0.handle_rules_move, _obj_0.handle_rules_reorder
+  handle_rules_list, handle_rules_new_get, handle_rules_new_post, handle_rules_edit_get, handle_rules_edit_post, handle_rules_delete, handle_rules_move, handle_rules_reorder, handle_rules_toggle = _obj_0.handle_rules_list, _obj_0.handle_rules_new_get, _obj_0.handle_rules_new_post, _obj_0.handle_rules_edit_get, _obj_0.handle_rules_edit_post, _obj_0.handle_rules_delete, _obj_0.handle_rules_move, _obj_0.handle_rules_reorder, _obj_0.handle_rules_toggle
 end
 local handle_lists_index, handle_lists_type, handle_list_get, handle_list_post, handle_list_new_get, handle_list_new_post
 do
@@ -234,6 +234,9 @@ dispatch = function(req, state)
     end
     if action == "move" and method == "POST" then
       return handle_rules_move(req, n, state)
+    end
+    if action == "toggle" and method == "POST" then
+      return handle_rules_toggle(req, n, state)
     end
   end
   return 302, {

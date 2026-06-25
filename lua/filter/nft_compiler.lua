@@ -317,8 +317,7 @@ collect_static_meta = function(conditions_meta)
     if not (val) then
       return 
     end
-    local _update_0 = key
-    seen[_update_0] = seen[_update_0] or { }
+    seen[key] = seen[key] or { }
     if seen[key][val] then
       return 
     end
@@ -544,57 +543,68 @@ compile = function(filter_cfg, rules_metadata)
   local plan_rules = { }
   local all_rules = { }
   for idx, r in ipairs(rules) do
-    local verdict
-    if r.action == "deny" then
-      verdict = "drop"
-    else
-      verdict = "accept"
-    end
-    action_map[#action_map + 1] = {
-      mark = r.mark,
-      verdict = verdict,
-      rule_id = r.rule_id,
-      action = r.action
-    }
-    rules_by_id[r.rule_id] = r
-    all_rules[#all_rules + 1] = r
-    if rules_metadata and rules_metadata[idx] then
-      r.conditions_meta = rules_metadata[idx].conditions
-      r.actions_meta = rules_metadata[idx].actions
-      r.worker_only = rules_metadata[idx].worker_only
-    end
-    local is_worker_only = r.worker_only or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].worker_only)
-    if is_worker_only then
-      metrics.worker_only = metrics.worker_only + 1
-    else
-      metrics.nft_compilable = metrics.nft_compilable + 1
-    end
-    local conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
-    if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions then
-      for _, cond in ipairs(rules_metadata[idx].conditions) do
-        if cond.capabilities and cond.capabilities.nft then
-          metrics.conditions_compiled = metrics.conditions_compiled + 1
-        else
-          metrics.conditions_worker_only = metrics.conditions_worker_only + 1
-        end
+    local _continue_0 = false
+    repeat
+      if rules_cfg[idx] and rules_cfg[idx].enabled == false then
+        _continue_0 = true
+        break
       end
-    end
-    local has_nft_cond = false
-    if conditions_meta then
-      local first_elem = conditions_meta[1]
-      local is_flat_format = first_elem and first_elem.name and first_elem.args
-      if is_flat_format then
-        for _, cond_meta in ipairs(conditions_meta) do
-          if cond_meta.capabilities and cond_meta.capabilities.nft then
-            has_nft_cond = true
-            break
+      local verdict
+      if r.action == "deny" then
+        verdict = "drop"
+      else
+        verdict = "accept"
+      end
+      action_map[#action_map + 1] = {
+        mark = r.mark,
+        verdict = verdict,
+        rule_id = r.rule_id,
+        action = r.action
+      }
+      rules_by_id[r.rule_id] = r
+      all_rules[#all_rules + 1] = r
+      if rules_metadata and rules_metadata[idx] then
+        r.conditions_meta = rules_metadata[idx].conditions
+        r.actions_meta = rules_metadata[idx].actions
+        r.worker_only = rules_metadata[idx].worker_only
+      end
+      local is_worker_only = r.worker_only or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].worker_only)
+      if is_worker_only then
+        metrics.worker_only = metrics.worker_only + 1
+      else
+        metrics.nft_compilable = metrics.nft_compilable + 1
+      end
+      local conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
+      if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions then
+        for _, cond in ipairs(rules_metadata[idx].conditions) do
+          if cond.capabilities and cond.capabilities.nft then
+            metrics.conditions_compiled = metrics.conditions_compiled + 1
+          else
+            metrics.conditions_worker_only = metrics.conditions_worker_only + 1
           end
         end
       end
-    end
-    local include_rule = (has_nft_cond and not is_worker_only) or r.requires_auth or (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6) or (is_worker_only and (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6 or r.requires_auth))
-    if include_rule then
-      plan_rules[#plan_rules + 1] = r
+      local has_nft_cond = false
+      if conditions_meta then
+        local first_elem = conditions_meta[1]
+        local is_flat_format = first_elem and first_elem.name and first_elem.args
+        if is_flat_format then
+          for _, cond_meta in ipairs(conditions_meta) do
+            if cond_meta.capabilities and cond_meta.capabilities.nft then
+              has_nft_cond = true
+              break
+            end
+          end
+        end
+      end
+      local include_rule = (has_nft_cond and not is_worker_only) or r.requires_auth or (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6) or (is_worker_only and (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6 or r.requires_auth))
+      if include_rule then
+        plan_rules[#plan_rules + 1] = r
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
     end
   end
   return {

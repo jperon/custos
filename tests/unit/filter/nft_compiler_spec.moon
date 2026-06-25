@@ -40,6 +40,22 @@ describe "filter.nft_compiler", ->
     assert.same {"1000-2000", "443", "53"}, r.ports
     assert.equals r, plan.rules_by_id.r_dns_workhours
 
+  it "exclut les règles désactivées (enabled = false) du plan nft", ->
+    cfg = {
+      nft: { ip_timeout: "2m" }
+      rules: {
+        { rule_id: "off", actions: {"allow"}, conditions: { to_domain: "blocked.example" }, enabled: false }
+        { rule_id: "on",  actions: {"allow"}, conditions: { to_domain: "ok.example" } }
+      }
+    }
+    compiled = rule_mod.compile_rules cfg
+    plan = compiler.compile cfg, compiled.rules_metadata
+    -- Seule la règle active produit une sortie nft (action_map + rules_by_id).
+    assert.is_nil plan.rules_by_id.r_off
+    assert.is_not_nil plan.rules_by_id.r_on
+    assert.equals 1, #plan.action_map
+    assert.equals "r_on", plan.action_map[1].rule_id
+
   it "ensures unique stable rule_id values", ->
     cfg = {
       rules: {

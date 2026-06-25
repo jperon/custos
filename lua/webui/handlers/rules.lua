@@ -152,16 +152,37 @@ handle_rules_list = function(req, state)
       class = "btn btn-secondary btn-sm",
       href = "/admin/config/filter/rules/" .. tostring(i) .. "/edit"
     }, "Éditer")
+    local disabled = rule.enabled == false
+    local toggle_label = disabled and "Activer" or "Désactiver"
+    local btn_toggle = H.form({
+      method = "POST",
+      action = "/admin/config/filter/rules/" .. tostring(i) .. "/toggle",
+      style = "display:inline"
+    }, {
+      H.button({
+        type = "submit",
+        class = "btn btn-secondary btn-sm"
+      }, toggle_label)
+    })
+    local desc_cell
+    if disabled then
+      desc_cell = desc .. " " .. H.span({
+        class = "muted"
+      }, "(désactivée)")
+    else
+      desc_cell = desc
+    end
     rows = rows .. H.tr({
       draggable = "true",
-      ["data-idx"] = tostring(i)
+      ["data-idx"] = tostring(i),
+      class = (disabled and "rule-disabled" or nil)
     }, {
       H.td({
         class = "drag-handle",
         title = "Glisser pour réordonner"
       }, "⠿"),
       H.td(tostring(i)),
-      H.td(desc),
+      H.td(desc_cell),
       H.td({
         class = "mono"
       }, cond_cell),
@@ -170,7 +191,7 @@ handle_rules_list = function(req, state)
       }, acts_str),
       H.td({
         class = "actions"
-      }, btn_edit .. " " .. btn_move .. " " .. btn_del)
+      }, btn_edit .. " " .. btn_toggle .. " " .. btn_move .. " " .. btn_del)
     })
   end
   local thead = H.thead({
@@ -694,7 +715,11 @@ handle_rules_edit_post = function(req, n, state)
   if not (rules[n]) then
     return 404, { }, "Règle " .. tostring(n) .. " introuvable"
   end
+  local was_disabled = rules[n].enabled == false
   rules[n] = rebuild_rule(form)
+  if was_disabled then
+    rules[n].enabled = false
+  end
   cfg.filter.rules = rules
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
@@ -715,6 +740,31 @@ handle_rules_delete = function(req, n, state)
     return 404, { }, "Règle " .. tostring(n) .. " introuvable"
   end
   table.remove(rules, n)
+  cfg.filter.rules = rules
+  local ok, e = write_config(cfg, state.config_path)
+  if not (ok) then
+    return 500, { }, "Erreur écriture : " .. tostring(e)
+  end
+  return 302, {
+    ["Location"] = "/admin/config/filter/rules"
+  }, ""
+end
+local handle_rules_toggle
+handle_rules_toggle = function(req, n, state)
+  local cfg, err = read_config(state.config_path)
+  if not (cfg) then
+    return 500, { }, "Erreur config : " .. tostring(err)
+  end
+  local rules = (cfg.filter or { }).rules or { }
+  local rule = rules[n]
+  if not (rule) then
+    return 404, { }, "Règle " .. tostring(n) .. " introuvable"
+  end
+  if rule.enabled == false then
+    rule.enabled = nil
+  else
+    rule.enabled = false
+  end
   cfg.filter.rules = rules
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
@@ -811,5 +861,6 @@ return {
   handle_rules_edit_post = handle_rules_edit_post,
   handle_rules_delete = handle_rules_delete,
   handle_rules_move = handle_rules_move,
-  handle_rules_reorder = handle_rules_reorder
+  handle_rules_reorder = handle_rules_reorder,
+  handle_rules_toggle = handle_rules_toggle
 }

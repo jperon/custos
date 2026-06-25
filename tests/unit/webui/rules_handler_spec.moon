@@ -7,7 +7,7 @@
   :handle_rules_new_get,  :handle_rules_new_post
   :handle_rules_edit_get, :handle_rules_edit_post
   :handle_rules_delete,   :handle_rules_move
-  :handle_rules_reorder
+  :handle_rules_reorder,  :handle_rules_toggle
 } = require "webui.handlers.rules"
 
 CFG_PATH = "tmp/rules_handler_spec.lua"
@@ -290,6 +290,53 @@ describe "webui/handlers/rules", ->
       body_str = "dir=up"
       status, _, _ = handle_rules_move make_req("POST", body_str), 99, make_state!
       assert.equals 404, status
+
+  -- ── handle_rules_toggle ───────────────────────────────────────────────
+
+  describe "handle_rules_toggle", ->
+
+    it "désactive une règle active (enabled = false) et redirige", ->
+      status, hdrs, _ = handle_rules_toggle make_req("POST"), 1, make_state!
+      assert.equals 302, status
+      assert.truthy hdrs["Location"]\find("rules", 1, true)
+      loaded = (read_config CFG_PATH)
+      assert.is_false loaded.filter.rules[1].enabled
+
+    it "réactive une règle désactivée (clé enabled retirée)", ->
+      write_cfg base_cfg_with_rules {
+        { description: "off", conditions: {}, actions: { "block" }, enabled: false }
+      }
+      handle_rules_toggle make_req("POST"), 1, make_state!
+      loaded = (read_config CFG_PATH)
+      assert.is_nil loaded.filter.rules[1].enabled
+
+    it "retourne 404 si la règle n'existe pas", ->
+      status, _, _ = handle_rules_toggle make_req("POST"), 99, make_state!
+      assert.equals 404, status
+
+    it "retourne 500 si config_path invalide", ->
+      state = { config_path: "/nonexistent/file.lua" }
+      status, _, _ = handle_rules_toggle make_req("POST"), 1, state
+      assert.equals 500, status
+
+    it "la liste affiche l'état désactivé et un bouton Activer", ->
+      write_cfg base_cfg_with_rules {
+        { description: "off", conditions: {}, actions: { "block" }, enabled: false }
+      }
+      _, _, body = handle_rules_list make_req("GET"), make_state!
+      assert.truthy body\find("désactivée", 1, true) or body\find("d\233sactiv\233e", 1, true)
+      assert.truthy body\find("Activer", 1, true)
+      assert.truthy body\find("toggle", 1, true)
+
+    it "l'édition d'une règle désactivée préserve enabled = false", ->
+      write_cfg base_cfg_with_rules {
+        { description: "off", conditions: {}, actions: { "block" }, enabled: false }
+      }
+      body_str = "description=still+off&action%5Btype%5D=block"
+      handle_rules_edit_post make_req("POST", body_str), 1, make_state!
+      loaded = (read_config CFG_PATH)
+      assert.equals "still off", loaded.filter.rules[1].description
+      assert.is_false loaded.filter.rules[1].enabled
 
   -- ── handle_rules_list (drag-and-drop) ─────────────────────────────────
 

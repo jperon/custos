@@ -378,6 +378,9 @@ compile = (filter_cfg, rules_metadata=nil) ->
   all_rules = {}
 
   for idx, r in ipairs rules
+    -- Règle désactivée (`enabled = false`) : aucune sortie nft (ni action_map,
+    -- ni sets dynamiques, ni plan_rules). Miroir de rule.compile_rule.
+    continue if rules_cfg[idx] and rules_cfg[idx].enabled == false
     verdict = if r.action == "deny" then "drop" else "accept"
     action_map[#action_map + 1] = { mark: r.mark, verdict: verdict, rule_id: r.rule_id, action: r.action }
     rules_by_id[r.rule_id] = r

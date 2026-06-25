@@ -105,13 +105,19 @@ handle_rules_list = (req, state) ->
                  onclick: "return confirm('Supprimer ?')" }, "✕"
     }
     btn_edit = H.a { class: "btn btn-secondary btn-sm", href: "/admin/config/filter/rules/#{i}/edit" }, "Éditer"
-    rows ..= H.tr { draggable: "true", "data-idx": tostring(i) }, {
+    disabled = rule.enabled == false
+    toggle_label = disabled and "Activer" or "Désactiver"
+    btn_toggle = H.form { method: "POST", action: "/admin/config/filter/rules/#{i}/toggle", style: "display:inline" }, {
+      H.button { type: "submit", class: "btn btn-secondary btn-sm" }, toggle_label
+    }
+    desc_cell = if disabled then desc .. " " .. H.span({ class: "muted" }, "(désactivée)") else desc
+    rows ..= H.tr { draggable: "true", "data-idx": tostring(i), class: (disabled and "rule-disabled" or nil) }, {
       H.td { class: "drag-handle", title: "Glisser pour réordonner" }, "⠿"
       H.td tostring(i)
-      H.td desc
+      H.td desc_cell
       H.td { class: "mono" }, cond_cell
       H.td { class: "mono" }, acts_str
-      H.td { class: "actions" }, btn_edit .. " " .. btn_move .. " " .. btn_del
+      H.td { class: "actions" }, btn_edit .. " " .. btn_toggle .. " " .. btn_move .. " " .. btn_del
     }
 
   thead = H.thead {
@@ -470,7 +476,10 @@ handle_rules_edit_post = (req, n, state) ->
   return 500, {}, "Erreur config : #{err}" unless cfg
   rules = (cfg.filter or {}).rules or {}
   return 404, {}, "Règle #{n} introuvable" unless rules[n]
+  was_disabled = rules[n].enabled == false
   rules[n] = rebuild_rule form
+  -- rebuild_rule ne connaît pas `enabled` (hors formulaire) : on le préserve.
+  rules[n].enabled = false if was_disabled
   cfg.filter.rules = rules
   ok, e = write_config cfg, state.config_path
   return 500, {}, "Erreur écriture : #{e}" unless ok
@@ -482,6 +491,23 @@ handle_rules_delete = (req, n, state) ->
   rules = (cfg.filter or {}).rules or {}
   return 404, {}, "Règle #{n} introuvable" unless rules[n]
   table.remove rules, n
+  cfg.filter.rules = rules
+  ok, e = write_config cfg, state.config_path
+  return 500, {}, "Erreur écriture : #{e}" unless ok
+  302, { ["Location"]: "/admin/config/filter/rules" }, ""
+
+-- Bascule l'état actif/inactif d'une règle (`enabled = false` = désactivée).
+handle_rules_toggle = (req, n, state) ->
+  cfg, err = read_config state.config_path
+  return 500, {}, "Erreur config : #{err}" unless cfg
+  rules = (cfg.filter or {}).rules or {}
+  rule = rules[n]
+  return 404, {}, "Règle #{n} introuvable" unless rule
+  -- enabled absent/true = active → on désactive ; false → on réactive (clé retirée).
+  if rule.enabled == false
+    rule.enabled = nil
+  else
+    rule.enabled = false
   cfg.filter.rules = rules
   ok, e = write_config cfg, state.config_path
   return 500, {}, "Erreur écriture : #{e}" unless ok
@@ -525,5 +551,5 @@ handle_rules_reorder = (req, state) ->
   :handle_rules_new_get,   :handle_rules_new_post
   :handle_rules_edit_get,  :handle_rules_edit_post
   :handle_rules_delete,    :handle_rules_move
-  :handle_rules_reorder
+  :handle_rules_reorder,   :handle_rules_toggle
 }

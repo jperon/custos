@@ -774,10 +774,18 @@ Tableau ordonné de règles. Chaque règle est une table avec :
   description: "Texte libre (affiché dans les logs)"
   conditions:  { ... }   -- toutes doivent être vraies (AND implicite)
   actions:     { ... }   -- évaluées en séquence, première avec verdict gagne
+  enabled:     true      -- optionnel ; false désactive la règle (défaut : true)
 }
 ```
 
 Une règle sans `conditions` s'applique à toute requête (catch-all).
+
+**Désactiver une règle.** `enabled = false` rend la règle totalement inerte :
+elle ne matche jamais côté worker et ne produit aucune sortie nftables, mais
+reste présente dans la config (et conserve son rang/`rule_id`). Pratique pour
+neutraliser temporairement une règle sans la supprimer. La clé absente ou `true`
+laisse la règle active. Dans l'interface admin (`/admin/config/filter/rules`),
+le bouton « Désactiver »/« Activer » bascule cet état.
 
 #### Exemple complet
 
