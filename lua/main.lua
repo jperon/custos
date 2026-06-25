@@ -287,9 +287,9 @@ supervise = function(pipes, sfd)
       name = "mac-lrn",
       pid = nil,
       restart_fn = function()
-        return fork_worker("mac-lrn", function(rfd)
-          return require("mac_learner").run(rfd, bridge_ifname, pipes.vlan_learn.rfd)
-        end, pipes.learn.rfd, (pipes.strip_learn and pipes.strip_learn.rfd))
+        return fork_worker("mac-lrn", (function(rfd)
+          return require("mac_learner").run(rfd, bridge_ifname, pipes.vlan_learn.rfd, (pipes.strip_learn and pipes.strip_learn.rfd))
+        end), pipes.learn.rfd)
       end
     }
   }

@@ -27,7 +27,7 @@ local _schema = {
       name = "follow_cname",
       label = "Suivre la chaîne CNAME",
       type = "bool",
-      default = false
+      default = true
     }
   }
 }
@@ -38,7 +38,7 @@ _factory = function(cfg)
     if rule.dns_strip and rule.dns_strip.rr_type then
       rr_type = rule.dns_strip.rr_type
     end
-    local follow_cname = not not (rule.dns_strip and rule.dns_strip.follow_cname)
+    local follow_cname = not not (rule.dns_strip and rule.dns_strip.follow_cname ~= false)
     local dns_mod = require("ipparse.l7.dns")
     local rr_code = dns_mod.types[rr_type]
     return {

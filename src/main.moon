@@ -282,8 +282,9 @@ supervise = (pipes, sfd) ->
       name: "mac-lrn"
       pid: nil
       restart_fn: -> fork_worker "mac-lrn",
-          (rfd) -> require("mac_learner").run rfd, bridge_ifname, pipes.vlan_learn.rfd,
-          pipes.learn.rfd, (pipes.strip_learn and pipes.strip_learn.rfd)
+          ((rfd) -> require("mac_learner").run rfd, bridge_ifname,
+            pipes.vlan_learn.rfd, (pipes.strip_learn and pipes.strip_learn.rfd)),
+          pipes.learn.rfd
     }
   }
 

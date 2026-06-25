@@ -2,12 +2,20 @@
 { :chain_strip_active } = require "lib.chain_strip"
 
 describe "chain_strip_active", ->
-  it "vrai si une règle a follow_cname", ->
+  it "vrai si une règle a follow_cname explicite", ->
     cfg = { filter: { rules: { { dns_strip: { follow_cname: true } } } } }
     assert.is_true chain_strip_active cfg
 
-  it "faux sinon", ->
+  it "vrai par défaut dès qu'une règle a dns_strip", ->
     cfg = { filter: { rules: { { dns_strip: { rr_type: "AAAA" } } } } }
+    assert.is_true chain_strip_active cfg
+
+  it "faux si follow_cname=false (opt-out explicite)", ->
+    cfg = { filter: { rules: { { dns_strip: { rr_type: "AAAA", follow_cname: false } } } } }
+    assert.is_false chain_strip_active cfg
+
+  it "faux si aucune règle dns_strip", ->
+    cfg = { filter: { rules: { { description: "x" } } } }
     assert.is_false chain_strip_active cfg
 
   it "faux si pas de rules", ->

@@ -15,7 +15,7 @@ _schema = {
   arg_type:    "table"
   arg_fields:  { { name: "rr_type", label: "Type RR", type: "enum",
                    values: {"A","AAAA","CNAME","MX","TXT"}, required: true, default: "A" }
-                 { name: "follow_cname", label: "Suivre la chaîne CNAME", type: "bool", default: false } }
+                 { name: "follow_cname", label: "Suivre la chaîne CNAME", type: "bool", default: true } }
 }
 
 _factory = (cfg) ->
@@ -24,7 +24,9 @@ _factory = (cfg) ->
     rr_type = "A"
     if rule.dns_strip and rule.dns_strip.rr_type
       rr_type = rule.dns_strip.rr_type
-    follow_cname = not not (rule.dns_strip and rule.dns_strip.follow_cname)
+    -- Défaut: suivre la chaîne CNAME dès qu'une règle dns_strip est posée.
+    -- Opt-out explicite via follow_cname: false (ancien comportement coût-nul).
+    follow_cname = not not (rule.dns_strip and rule.dns_strip.follow_cname != false)
     dns_mod = require "ipparse.l7.dns"   -- mémoïsé à la construction (hors hot-path)
     rr_code = dns_mod.types[rr_type]
 

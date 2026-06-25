@@ -13,8 +13,14 @@ describe "dns_strip follow_cname", ->
     act.on_response ctx
     assert.are.equal dns_mod.types.AAAA, ctx.chain_strip_rr
 
-  it "ne pose rien sans follow_cname", ->
+  it "pose ctx.chain_strip_rr par défaut (follow_cname absent)", ->
     act = (factory {}) { dns_strip: { rr_type: "AAAA" }, description: "x" }
+    ctx = { dns_raw: "fake", reason: "r" }
+    act.on_response ctx
+    assert.are.equal dns_mod.types.AAAA, ctx.chain_strip_rr
+
+  it "ne pose rien avec follow_cname=false (opt-out explicite)", ->
+    act = (factory {}) { dns_strip: { rr_type: "AAAA", follow_cname: false }, description: "x" }
     ctx = { dns_raw: "fake", reason: "r" }
     act.on_response ctx
     assert.is_nil ctx.chain_strip_rr

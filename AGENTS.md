@@ -166,12 +166,15 @@ requête sur le domaine racine : ils suivent la chaîne en émettant des requêt
 `atm.outlook.mira.tm.svc.cloud.microsoft` pour `smtp.office365.com`). Ce nom
 n'étant pas couvert par `to_domains`, le strip est contourné. Ajouter le nom
 terminal à `to_domains` re-stripperait aussi ses **usages directs légitimes** —
-indésirable. La solution est **stateful** et opt-in via `dns_strip.follow_cname`.
+indésirable. La solution est **stateful**, pilotée par `dns_strip.follow_cname`,
+**active par défaut** dès qu'une règle `dns_strip` existe (opt-out explicite via
+`follow_cname: false` pour retrouver l'ancien comportement strictement coût-nul).
 
 **Flux (état partagé dans `mac_learner`, donc correct quel que soit le fan-out
 `nfqueue.responses`) :**
-- L'action `dns_strip` (`follow_cname: true`) pose `ctx.chain_strip_rr =
-  <rr_code numérique>` dans le contexte `on_response` (cf. `from_*`/actions).
+- L'action `dns_strip` (`follow_cname` non `false`, défaut actif) pose
+  `ctx.chain_strip_rr = <rr_code numérique>` dans le contexte `on_response`
+  (cf. `from_*`/actions).
 - `worker_responses.finalize_a`, quand `resp_ctx.chain_strip_rr` est posé,
   **enregistre** les cibles CNAME de la réponse (`dns_classify.cname_targets`)
   en envoyant `strip_codec.encode(name, rr_code)` (message 10 octets = hash
@@ -190,10 +193,26 @@ indésirable. La solution est **stateful** et opt-in via `dns_strip.follow_cname
 **Contrat :** un nom interrogé **sans** contexte de chaîne récent (table vide /
 TTL expiré) n'est **jamais** strippé → usages directs hors chaîne préservés.
 
-**Opt-in / coût nul** : `main.moon` ne crée le pipe `strip_learn` que si
-`lib.chain_strip.chain_strip_active config` (au moins une règle `follow_cname`).
-Sans cela : aucun pipe, `chain_strip_enabled = false` partout, zéro requête IPC,
-comportement strictement identique à l'existant.
+**Défaut actif / opt-out `follow_cname: false`** : `main.moon` ne crée le pipe
+`strip_learn` que si `lib.chain_strip.chain_strip_active config`, désormais vrai
+dès qu'une règle `dns_strip` existe **sans** `follow_cname: false`. Sans aucune
+règle `dns_strip` (ou avec `follow_cname: false` partout) : aucun pipe,
+`chain_strip_enabled = false` partout, zéro requête IPC, comportement strictement
+coût-nul. Motivation du défaut : recevoir un RR qu'on a justement demandé à
+stripper est contre-intuitif.
+
+**Câblage du pipe `strip_learn` (piège résolu)** : le `rfd` de `strip_learn`
+doit être passé à `mac_learner.run` comme **4ᵉ argument** (`run = (learn_rfd,
+ifname, vlan_learn_rfd, strip_learn_rfd)`). Dans `main.moon`, l'appel est imbriqué
+dans `fork_worker name, worker_fn, worker_arg` : `pipes.learn.rfd` est le
+`worker_arg` (reçu comme `rfd` dans la closure), tandis que `pipes.strip_learn.rfd`
+doit être **capturé dans la closure** et passé à `run`. Une virgule mal placée le
+rattachait par erreur à la liste d'arguments de `fork_worker` (4ᵉ arg ignoré) au
+lieu de `run` → `strip_learn_rfd = nil`, pipe jamais ajouté au poll de `mac-lrn`,
+`strip_table` jamais alimentée, `strip_target` toujours « unknown » → le nom
+terminal n'était **jamais** strippé malgré l'apprentissage côté `worker_responses`.
+Forme correcte : `fork_worker "mac-lrn", ((rfd) -> ...run rfd, bridge_ifname,
+pipes.vlan_learn.rfd, (pipes.strip_learn and pipes.strip_learn.rfd)), pipes.learn.rfd`.
 
 **Modules** : `strip_codec` (codec hash/encode partagé), `mac_learner`
 (`strip_table`/`process_strip_learn`/`strip_lookup`), `mac_learner_ipc`

@@ -6,7 +6,7 @@ chain_strip_active = function(config)
   end
   for _index_0 = 1, #rules do
     local r = rules[_index_0]
-    if r.dns_strip and r.dns_strip.follow_cname then
+    if r.dns_strip and r.dns_strip.follow_cname ~= false then
       return true
     end
   end
