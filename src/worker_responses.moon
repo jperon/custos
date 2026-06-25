@@ -33,7 +33,9 @@ clients_cfg = config.clients or {}
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix } = require "log"
-{ :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :strip_https_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
+{ :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :strip_https_rr, :strip_dns_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
+strip_codec = require "strip_codec"
+mac_ipc     = require "mac_learner_ipc"
 
 -- Motif EDE pour un blocage décidé par le validateur amont (et non par une règle
 -- locale) : ne pas réutiliser `entry.reason` (la raison d'AUTORISATION locale,
@@ -73,6 +75,54 @@ so_state = nil
 -- décidés par le validateur amont (override block/sinkhole), invisibles sinon
 -- car write_event de worker_questions a déjà loggé la requête en « allow ».
 events_wfd = nil
+
+-- ── Strip DNS contextuel à la chaîne CNAME ──────────────────────────
+-- Quand un résolveur (ex. systemd-resolved) chase lui-même la chaîne CNAME et
+-- émet une question TERMINALE séparée (qui échappe au `to_domains` de la
+-- règle d'origine), on mémorise les cibles CNAME observées au moment du strip
+-- (record_chain_targets, alimente le pipe `strip_learn_wfd` → mac_learner) et
+-- on les ré-interroge à chaque réponse (maybe_dynamic_strip, via
+-- mac_learner_ipc.strip_target) pour appliquer le même strip côté terminal.
+-- Gating strict : si chain_strip_enabled est false, ni IPC ni écriture pipe.
+chain_strip_enabled = false
+strip_learn_wfd     = nil
+strip_query_cache   = {}   -- { qname → { rr_code|false, expires_epoch } }
+STRIP_QUERY_TTL      = 2
+
+--- Émet un message learn par cible CNAME de la réponse (fonction pure : ne
+-- touche aucune upvalue, le gating se fait à l'appel dans finalize_a).
+-- @tparam table    dns     Message DNS parsé (answers).
+-- @tparam string   dns_raw Payload brut (décompression des noms).
+-- @tparam number   rr_code Type DNS à stripper (ex. 28 = AAAA).
+-- @tparam function send_fn Reçoit chaque message encodé (écriture pipe en prod).
+-- @treturn nil
+record_chain_targets = (dns, dns_raw, rr_code, send_fn) ->
+  return unless dns and dns_raw and rr_code and send_fn
+  for target in *dns_classify.cname_targets dns, dns_raw, 1
+    send_fn strip_codec.encode target, rr_code
+
+--- Applique un strip dynamique si qname est une cible apprise (cache TTL
+-- positif et négatif pour borner les appels IPC).
+-- @tparam string   qname    Nom de la question courante.
+-- @tparam string   dns_raw  Payload DNS brut de la réponse.
+-- @tparam function lookup_fn Typiquement mac_learner_ipc.strip_target.
+-- @treturn string  dns_raw (modifié ou non)
+-- @treturn boolean modified
+maybe_dynamic_strip = (qname, dns_raw, lookup_fn) ->
+  return dns_raw, false unless qname and dns_raw and lookup_fn
+  now_ts = os.time!
+  cached = strip_query_cache[qname]
+  rr_code = if cached and now_ts <= cached[2]
+    cached[1]
+  else
+    v = lookup_fn qname
+    strip_query_cache[qname] = { v or false, now_ts + STRIP_QUERY_TTL }
+    v
+  return dns_raw, false unless rr_code
+  stripped = strip_dns_rr dns_raw, rr_code
+  return dns_raw, false if stripped == dns_raw
+  stripped = add_ede_modified(stripped, "Strip by CNAME chain context") or stripped
+  (clear_ad_bit stripped), true
 
 tsv_field = (v) ->
   s = if v ~= nil then tostring v else ""
@@ -475,9 +525,28 @@ finalize_a = (ctx, override) ->
   payload_modified = resp_ctx.modified
   inject_nft = resp_ctx.inject_nft
 
+  -- ── Strip dynamique : qname terminal de chaîne CNAME déjà appris ──────
+  -- Uniquement si cette réponse n'est PAS elle-même celle qui amorce la chaîne
+  -- (resp_ctx.chain_strip_rr nil), sinon double-strip inutile.
+  if chain_strip_enabled and not resp_ctx.chain_strip_rr
+    qname0 = dns_msg.questions[1] and dns_msg.questions[1].name
+    new_raw, dyn_mod = maybe_dynamic_strip qname0, dns_raw, mac_ipc.strip_target
+    if dyn_mod
+      dns_raw          = new_raw
+      payload_modified = true
+      resp_ctx.action_label or= "response_chain_strip"
+
   answers_dns = dns_msg
   parsed_modified, _ = parse_dns dns_raw, 1, false
   answers_dns = parsed_modified if parsed_modified
+
+  -- ── Apprentissage : si cette réponse vient d'être strippée pour une règle
+  -- follow_cname (resp_ctx.chain_strip_rr posé par dns_strip), enregistre les
+  -- cibles CNAME de la chaîne pour que le strip s'applique aussi à la
+  -- question TERMINALE séparée que peut émettre un résolveur chasseur.
+  if chain_strip_enabled and strip_learn_wfd and resp_ctx.chain_strip_rr
+    record_chain_targets answers_dns, dns_raw, resp_ctx.chain_strip_rr,
+      (m) -> libc.write strip_learn_wfd, m, #m
 
   answers = {}
   for a in *parse_answers answers_dns
@@ -889,6 +958,8 @@ run = (queue_num, rfd, rules_metadata) ->
     -- Configure le canal ACK bidirectionnel si le superviseur en a alloué un.
     nft_q.set_ack_rfd rfd.ack_rfd, rfd.worker_idx if rfd.ack_rfd and rfd.worker_idx != nil
     events_wfd = rfd.events_wfd
+    chain_strip_enabled = rfd.chain_strip_enabled or false
+    strip_learn_wfd     = rfd.strip_learn_wfd
     rfd = rfd.question_response_rfd
   pipe_rfd = rfd
   -- Pré-remplit mac_clients / ip_to_mac depuis la table ARP/NDP courante,
@@ -947,4 +1018,5 @@ run = (queue_num, rfd, rules_metadata) ->
 
 { :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields,
   :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream,
-  :try_upstream_retry, :arm_retry_fds, :format_block_event }
+  :try_upstream_retry, :arm_retry_fds, :format_block_event,
+  :record_chain_targets, :maybe_dynamic_strip }

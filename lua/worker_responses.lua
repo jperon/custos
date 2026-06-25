@@ -45,11 +45,13 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_allow, _obj_0.log_block, _obj_0.now, _obj_0.set_action_prefix
 end
-local build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, strip_https_rr, add_ede_modified, clear_ad_bit, patch_modified_dns
+local build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, strip_https_rr, strip_dns_rr, add_ede_modified, clear_ad_bit, patch_modified_dns
 do
   local _obj_0 = require("dns_ede")
-  build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, strip_https_rr, add_ede_modified, clear_ad_bit, patch_modified_dns = _obj_0.build_blocked_response, _obj_0.build_nxdomain_response, _obj_0.build_sinkhole_response, _obj_0.build_cname_response, _obj_0.strip_https_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.patch_modified_dns
+  build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, strip_https_rr, strip_dns_rr, add_ede_modified, clear_ad_bit, patch_modified_dns = _obj_0.build_blocked_response, _obj_0.build_nxdomain_response, _obj_0.build_sinkhole_response, _obj_0.build_cname_response, _obj_0.strip_https_rr, _obj_0.strip_dns_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.patch_modified_dns
 end
+local strip_codec = require("strip_codec")
+local mac_ipc = require("mac_learner_ipc")
 local VALIDATOR_REASON = "Filtered by upstream validator"
 local rr_timeout, detect_wildcards, inject
 do
@@ -82,6 +84,49 @@ local ttl_set = require("lib.ttl_set")
 local nxdomain_bad = ttl_set.new((retry_cfg.nxdomain_bad_max or 4096), (retry_cfg.nxdomain_bad_ttl or 60), now)
 local so_state = nil
 local events_wfd = nil
+local chain_strip_enabled = false
+local strip_learn_wfd = nil
+local strip_query_cache = { }
+local STRIP_QUERY_TTL = 2
+local record_chain_targets
+record_chain_targets = function(dns, dns_raw, rr_code, send_fn)
+  if not (dns and dns_raw and rr_code and send_fn) then
+    return 
+  end
+  local _list_1 = dns_classify.cname_targets(dns, dns_raw, 1)
+  for _index_0 = 1, #_list_1 do
+    local target = _list_1[_index_0]
+    send_fn(strip_codec.encode(target, rr_code))
+  end
+end
+local maybe_dynamic_strip
+maybe_dynamic_strip = function(qname, dns_raw, lookup_fn)
+  if not (qname and dns_raw and lookup_fn) then
+    return dns_raw, false
+  end
+  local now_ts = os.time()
+  local cached = strip_query_cache[qname]
+  local rr_code
+  if cached and now_ts <= cached[2] then
+    rr_code = cached[1]
+  else
+    local v = lookup_fn(qname)
+    strip_query_cache[qname] = {
+      v or false,
+      now_ts + STRIP_QUERY_TTL
+    }
+    rr_code = v
+  end
+  if not (rr_code) then
+    return dns_raw, false
+  end
+  local stripped = strip_dns_rr(dns_raw, rr_code)
+  if stripped == dns_raw then
+    return dns_raw, false
+  end
+  stripped = add_ede_modified(stripped, "Strip by CNAME chain context") or stripped
+  return (clear_ad_bit(stripped)), true
+end
 local tsv_field
 tsv_field = function(v)
   local s
@@ -551,10 +596,24 @@ finalize_a = function(ctx, override)
   dns_raw = resp_ctx.dns_raw
   local payload_modified = resp_ctx.modified
   local inject_nft = resp_ctx.inject_nft
+  if chain_strip_enabled and not resp_ctx.chain_strip_rr then
+    local qname0 = dns_msg.questions[1] and dns_msg.questions[1].name
+    local new_raw, dyn_mod = maybe_dynamic_strip(qname0, dns_raw, mac_ipc.strip_target)
+    if dyn_mod then
+      dns_raw = new_raw
+      payload_modified = true
+      resp_ctx.action_label = resp_ctx.action_label or "response_chain_strip"
+    end
+  end
   local answers_dns = dns_msg
   local parsed_modified, _ = parse_dns(dns_raw, 1, false)
   if parsed_modified then
     answers_dns = parsed_modified
+  end
+  if chain_strip_enabled and strip_learn_wfd and resp_ctx.chain_strip_rr then
+    record_chain_targets(answers_dns, dns_raw, resp_ctx.chain_strip_rr, function(m)
+      return libc.write(strip_learn_wfd, m, #m)
+    end)
   end
   local answers = { }
   local _list_1 = parse_answers(answers_dns)
@@ -1070,6 +1129,8 @@ run = function(queue_num, rfd, rules_metadata)
       nft_q.set_ack_rfd(rfd.ack_rfd, rfd.worker_idx)
     end
     events_wfd = rfd.events_wfd
+    chain_strip_enabled = rfd.chain_strip_enabled or false
+    strip_learn_wfd = rfd.strip_learn_wfd
     rfd = rfd.question_response_rfd
   end
   pipe_rfd = rfd
@@ -1156,5 +1217,7 @@ return {
   new_dns_tcp_stream = new_dns_tcp_stream,
   try_upstream_retry = try_upstream_retry,
   arm_retry_fds = arm_retry_fds,
-  format_block_event = format_block_event
+  format_block_event = format_block_event,
+  record_chain_targets = record_chain_targets,
+  maybe_dynamic_strip = maybe_dynamic_strip
 }
