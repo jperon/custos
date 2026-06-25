@@ -112,8 +112,54 @@ get_vlan = function(ip_str)
   end
   return nil
 end
+local parse_strip_resp
+parse_strip_resp = function(resp)
+  if not (resp and resp ~= "") then
+    return nil
+  end
+  local id = resp:match("^(%d+)")
+  if id then
+    return tonumber(id)
+  end
+  return nil
+end
+local strip_target
+strip_target = function(name)
+  if not (name and name ~= "" and name ~= "unknown") then
+    return nil
+  end
+  local sock = libc.socket(AF_UNIX, SOCK_STREAM, 0)
+  if not (sock >= 0) then
+    log_warn(function()
+      return {
+        action = "strip_ipc_socket_failed",
+        errno = tonumber(ffi.C.__errno_location()[0])
+      }
+    end)
+    return nil
+  end
+  local addr = ffi.new("struct sockaddr_un")
+  addr.sun_family = AF_UNIX
+  ffi.copy(addr.sun_path, QUERY_SOCK)
+  local addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
+  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0 then
+    libc.close(sock)
+    return nil
+  end
+  local req = "strip:" .. name .. "\n"
+  libc.send(sock, req, #req, 0)
+  local buf = ffi.new("char[64]")
+  local n = libc.recv(sock, buf, 63, 0)
+  libc.close(sock)
+  if n <= 0 then
+    return nil
+  end
+  return parse_strip_resp(ffi.string(buf, n))
+end
 return {
   get_mac = get_mac,
   get_vlan = get_vlan,
-  mac_from_eui64 = mac_from_eui64
+  mac_from_eui64 = mac_from_eui64,
+  strip_target = strip_target,
+  parse_strip_resp = parse_strip_resp
 }

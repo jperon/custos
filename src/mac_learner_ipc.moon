@@ -132,4 +132,46 @@ get_vlan = (ip_str) ->
 
   nil
 
-{ :get_mac, :get_vlan, :mac_from_eui64 }
+--- Parse la réponse du learner à une requête strip.
+-- @tparam string resp Réponse brute reçue sur le socket
+-- @treturn number|nil rr_code si numérique, nil sinon ("unknown"/vide).
+parse_strip_resp = (resp) ->
+  return nil unless resp and resp ~= ""
+  id = resp\match "^(%d+)"
+  return tonumber(id) if id
+  nil
+
+--- Retourne le rr_code à stripper pour un nom de question via une requête
+-- au MAC learner. Mirroir exact de get_vlan, préfixe "strip:".
+-- @tparam string name Nom de domaine cible
+-- @treturn number|nil rr_code observé, ou nil si inconnu
+strip_target = (name) ->
+  return nil unless name and name ~= "" and name ~= "unknown"
+
+  sock = libc.socket AF_UNIX, SOCK_STREAM, 0
+  unless sock >= 0
+    log_warn -> { action: "strip_ipc_socket_failed", errno: tonumber(ffi.C.__errno_location()[0]) }
+    return nil
+
+  addr = ffi.new "struct sockaddr_un"
+  addr.sun_family = AF_UNIX
+  ffi.copy addr.sun_path, QUERY_SOCK
+  addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
+
+  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0
+    libc.close sock
+    return nil
+
+  -- Envoi : "strip:name\n"
+  req = "strip:" .. name .. "\n"
+  libc.send sock, req, #req, 0
+
+  buf = ffi.new "char[64]"
+  n = libc.recv sock, buf, 63, 0
+  libc.close sock
+
+  return nil if n <= 0
+
+  parse_strip_resp ffi.string buf, n
+
+{ :get_mac, :get_vlan, :mac_from_eui64, :strip_target, :parse_strip_resp }
