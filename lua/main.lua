@@ -15,6 +15,8 @@ do
   local _obj_0 = require("lib.process")
   SIGTERM, SIGHUP, WNOHANG, set_process_name, fork_worker, shutdown_workers = _obj_0.SIGTERM, _obj_0.SIGHUP, _obj_0.WNOHANG, _obj_0.set_process_name, _obj_0.fork_worker, _obj_0.shutdown_workers
 end
+local chain_strip_active
+chain_strip_active = require("lib.chain_strip").chain_strip_active
 set_process_name("custos")
 local bit = require("bit")
 local config = require("config")
@@ -92,13 +94,17 @@ create_pipe = function(name)
 end
 local create_pipes
 create_pipes = function()
-  return {
+  local pipes = {
     question_response = create_pipe("question_response"),
     learn = create_pipe("mac_learn"),
     vlan_learn = create_pipe("vlan_learn"),
     events = create_pipe("events"),
     nft = create_pipe("nft")
   }
+  if chain_strip_active(config) then
+    pipes.strip_learn = create_pipe("strip_learn")
+  end
+  return pipes
 end
 local load_auth_cfg
 load_auth_cfg = function()
@@ -189,6 +195,14 @@ close_supervisor_fds = function(pipes)
         libc.close(pipes.nft.wfd)
       end
     end
+    if pipes.strip_learn then
+      if pipes.strip_learn.rfd then
+        libc.close(pipes.strip_learn.rfd)
+      end
+      if pipes.strip_learn.wfd then
+        libc.close(pipes.strip_learn.wfd)
+      end
+    end
   end
   return nil
 end
@@ -275,7 +289,7 @@ supervise = function(pipes, sfd)
       restart_fn = function()
         return fork_worker("mac-lrn", function(rfd)
           return require("mac_learner").run(rfd, bridge_ifname, pipes.vlan_learn.rfd)
-        end, pipes.learn.rfd)
+        end, pipes.learn.rfd, (pipes.strip_learn and pipes.strip_learn.rfd))
       end
     }
   }
@@ -407,7 +421,9 @@ supervise = function(pipes, sfd)
           nft_wfd = pipes.nft.wfd,
           ack_rfd = ack_info.rfd,
           worker_idx = ack_info.worker_idx,
-          events_wfd = pipes.events.wfd
+          events_wfd = pipes.events.wfd,
+          strip_learn_wfd = (pipes.strip_learn and pipes.strip_learn.wfd),
+          chain_strip_enabled = (pipes.strip_learn ~= nil)
         })
       end
     })
