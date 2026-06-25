@@ -1128,7 +1128,7 @@ actions: {
 | Paramètre | Type | Défaut | Description |
 |-----------|------|--------|-------------|
 | `rr_type` | string | `"A"` | Type d'enregistrement à supprimer : `"A"`, `"AAAA"`, `"CNAME"`, etc. |
-| `follow_cname` | bool | `false` | Strippe aussi les requêtes **terminales** de la chaîne CNAME (cf. ci-dessous). |
+| `follow_cname` | bool | `true` | Strippe aussi les requêtes **terminales** de la chaîne CNAME (cf. ci-dessous). Actif par défaut dès qu'une règle `dns_strip` existe ; passer à `false` rétablit l'ancien comportement coût-nul. |
 
 #### `follow_cname` — strip contextuel à la chaîne CNAME
 
@@ -1154,16 +1154,21 @@ usages directs légitimes de ces noms (hors chaîne) sont préservés.
 {
   conditions: { to_domains: { "office365.com", "outlook.com", "office.com" } }
   actions: { "dns_strip" }
-  dns_strip: { rr_type: "AAAA", follow_cname: true }
+  dns_strip: { rr_type: "AAAA" }   -- follow_cname: true implicite
 }
 ```
 
-**Opt-in / coût nul par défaut** : sans aucune règle `follow_cname`, le pipe
-dédié n'est pas créé, aucune requête IPC n'est émise — comportement identique à
-l'existant. La consultation est mémoïsée localement (cache 2 s) pour borner les
-allers-retours IPC sur le plan de données. Inutile (et déconseillé) d'ajouter
-les noms terminaux à `to_domains` : `follow_cname` rend cet ajout superflu et,
-contrairement à lui, préserve les usages directs hors chaîne.
+**Actif par défaut, opt-out via `follow_cname: false`** : recevoir un RR (ex.
+AAAA) qu'on a justement demandé à supprimer est contre-intuitif ; le suivi de
+chaîne est donc activé dès qu'une règle `dns_strip` existe. Le pipe dédié et la
+table à TTL court ne sont alors créés que dans ce cas (toujours aucun coût sans
+règle `dns_strip`). Pour retrouver l'ancien comportement strictement coût-nul
+(aucune requête IPC sur le plan de données, mais strip contourné par les
+résolveurs qui chasent les CNAME), poser explicitement `follow_cname: false`.
+La consultation est mémoïsée localement (cache 2 s) pour borner les allers-retours
+IPC sur le plan de données. Inutile (et déconseillé) d'ajouter les noms terminaux
+à `to_domains` : `follow_cname` rend cet ajout superflu et, contrairement à lui,
+préserve les usages directs hors chaîne.
 
 ### `log`
 
