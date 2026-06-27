@@ -125,3 +125,39 @@ test('fetch gelé → abort après timeout → reconnecting', async function () 
   await clock.advance(9000);
   assert.strictEqual(c.getState(), 'reconnecting');
 });
+
+test('refusals: appelé en online, pas en reconnecting', async function () {
+  const clock = makeClock();
+  // 1er /ping: net (→ reconnecting). Tous les /refusals suivants: ok liste vide.
+  const fetchFn = function (url, opt) {
+    fetchFn.calls.push(url);
+    if (url === '/ping') return Promise.reject(new Error('network'));
+    return Promise.resolve({ status: 200, ok: true, json: function () { return Promise.resolve([]); } });
+  };
+  fetchFn.calls = [];
+  const c = createPortalClient(baseOpts(clock, fetchFn, { heartbeatMs: 20000, refusalsMs: 5000 }));
+  c.start();                 // ping (net → reconnecting) + planifie refusalsTick
+  await clock.advance(5000); // 1er refusalsTick : état reconnecting → pas de fetch /refusals
+  const refCount = fetchFn.calls.filter(function (u) { return u === '/refusals'; }).length;
+  assert.strictEqual(c.getState(), 'reconnecting');
+  assert.strictEqual(refCount, 0);
+});
+
+test('onOnline déclenche un ping immédiat', async function () {
+  const clock = makeClock();
+  const fetchFn = fetchQueue([ok204()]);
+  const c = createPortalClient(baseOpts(clock, fetchFn));
+  c.onOnline();
+  await clock.advance(1);
+  assert.strictEqual(fetchFn.calls.filter(function (x) { return x.url === '/ping'; }).length, 1);
+  assert.strictEqual(c.getState(), 'online');
+});
+
+test('onOffline passe en reconnecting sans fetch', async function () {
+  const clock = makeClock();
+  const fetchFn = fetchQueue([ok204()]);
+  const c = createPortalClient(baseOpts(clock, fetchFn));
+  c.onOffline();
+  assert.strictEqual(c.getState(), 'reconnecting');
+  assert.strictEqual(fetchFn.calls.length, 0);
+});
