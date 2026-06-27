@@ -15,6 +15,7 @@ function makeClock() {
     clearTimeout: function (h) { tasks.delete(h); },
     advance: async function (ms) {
       const target = nowMs + ms;
+      for (let i = 0; i < 8; i++) await Promise.resolve();
       while (true) {
         let next = null;
         for (const [h, task] of tasks) {
