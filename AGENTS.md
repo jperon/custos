@@ -517,6 +517,30 @@ page filtrée (popup `_blank`). Le routeur (`webui/router.moon`) sépare désorm
 query string du chemin (`parse_query`) et expose `req.query` aux handlers ; le
 matching de route reste sur le **chemin nu**.
 
+## Résilience du portail captif aux blips réseau (`src/auth/portal_client.js`)
+
+La logique de connexion de la **page de succès** (heartbeat `/ping`, polling
+`/refusals`, bandeau d'état, beacon `/bye`) vit dans `src/auth/portal_client.js`
+(JS pur ES5, **source unique**), embarqué dans `lua/auth/portal_client_js.lua`
+(généré par `tools/embed_js.lua` via `make all`, jamais édité à la main) et injecté
+inline par `auth.pages.success_page`. Testée sous Node (`tests/unit/auth/portal_client.test.js`,
+cible `make test-js`).
+
+- **Machine à états** `online`/`reconnecting`/`expired` (`createPortalClient`) :
+  une panne réseau passe en `reconnecting` (backoff 2→4→8 s, plafond
+  `heartbeat_interval`) sans jamais éjecter ; seul un **401 confirmé** (2 pings)
+  passe en `expired` → `alert()` (si onglet visible) + redirection `/`.
+- **Anti-tempête** (corrige aussi le bug « login impossible après déconnexion ») :
+  chaque fetch est borné par `AbortController` + timeout (≈ 9 s) pour ne pas laisser
+  de socket gelée saturer le pool de connexions du navigateur ; un seul ping en vol ;
+  `/refusals` suspendu hors état `online`.
+- **Wiring navigateur** (`mountPortalClient`) : heartbeat via Web Worker (non
+  throttlé en arrière-plan, repli `setInterval`), événements `online`/`offline`
+  (ping immédiat au retour) et `visibilitychange`, beacon `/bye` sur `pagehide`.
+- **Filtrage inchangé** : aucune modification des durées token/session/nft ni de la
+  sémantique serveur. Voir
+  [docs/superpowers/specs/2026-06-27-portail-resilience-blip-reseau-design.md](docs/superpowers/specs/2026-06-27-portail-resilience-blip-reseau-design.md).
+
 ## Synchronisation de configuration (`sync/`)
 
 Déploiement multi-routeurs depuis un dépôt git central.
