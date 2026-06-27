@@ -162,7 +162,7 @@ substitute = (content, plan=nil) ->
   sni_q = cfg.nfqueue.sni
   reject_q = cfg.nfqueue.reject
   sni_rules = table.concat {
-    "    meta l4proto tcp th dport {443, 465, 587, 993, 995} tcp flags & (fin | syn | rst | ack) == ack log level debug prefix \"custos sni_tls: \" counter queue num #{sni_q} bypass comment \"TLS packets on TCP/443,465,587,993,995 (ACK, non-SYN) → SNI logger\""
+    "    meta l4proto tcp th dport 443 tcp flags & (fin | syn | rst | ack) == ack log level debug prefix \"custos sni_tls: \" counter queue num #{sni_q} bypass comment \"TLS packets on TCP/443 (ACK, non-SYN) → SNI logger\""
     "    meta l4proto udp th dport 443 log level debug prefix \"custos sni_quic: \" counter queue num #{sni_q} bypass comment \"QUIC Initial UDP/443 → SNI logger\""
     "    meta mark #{REJECT_MARK_HEX} counter queue num #{reject_q} comment \"SNI refused packet → worker_reject\""
     "    meta mark #{REJECT_MARK_HEX} meta mark set 0x0 accept comment \"Clear SNI reject mark after forged reject\""

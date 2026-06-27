@@ -280,7 +280,7 @@ describe "dns-filter-bridge.nft : fast-path conntrack", ->
       assert.is_nil out\find "{FAST_PATH_", 1, true
     it "rend la fast-path APRÈS les règles SNI 443 (inspection préservée)", ->
       fp  = out\find FAST, 1, true
-      sni = out\find "th dport {443", 1, true
+      sni = out\find "th dport 443", 1, true
       assert.truthy fp
       assert.truthy sni
       assert.is_true fp > sni
