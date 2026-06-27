@@ -74,8 +74,48 @@ dans le `<script>` de `success_page`.
 - `offline` (événement navigateur) : suspension des pings ; `online` (événement) :
   ping immédiat (récupération sans attendre le tick).
 
+### Bug confirmé : login impossible juste après une déconnexion automatique
+
+Observation utilisateur confirmée par les logs : après un retour forcé au portail,
+la **première** soumission des identifiants « ne marche pas » ; un **rechargement**
+de la page la fait passer.
+
+Séquence type (27 juin 07:34–07:36, MAC `74:da:38:61:3b:e3`) :
+
+```
+07:34:42  GET /            (redirection vers le portail après expiration)
+07:34:48  POST /challenge  (soumission : nonce émis)
+   … aucune connexion de ce client pendant 90 s …
+07:36:18  POST /login      (login enfin reçu → login_success immédiat)
+```
+
+Le `POST /login` de 07:36:18 n'est précédé d'**aucun nouveau `/challenge`** : il
+réutilise le nonce de 07:34:48 (valide, `challenge_ttl` 120 s > 90 s). C'est donc
+*le même* `/login`, créé aussitôt après le challenge mais **bloqué ~90 s** avant
+d'atteindre le serveur. Le navigateur n'a ouvert aucune connexion pendant ce délai.
+
+**Cause racine** (haute confiance) : la limite de connexions par hôte du navigateur
+est saturée par les connexions HTTPS **restées bloquées** pendant le blip (les
+pings/`/refusals` finissant en handshake TLS gelé, `attempts=50`, 70–123 s côté
+serveur). Le `POST /login` est mis en file (« blocked ») derrière ces sockets
+zombies et ne part qu'à leur expiration (~90 s). Le rechargement annule les
+requêtes en attente et libère le pool → login immédiat. **Même cause racine que la
+déconnexion** : le client laisse trop de sockets bloquées.
+
+**Correctif** : borner **chaque** fetch du portail (`/ping`, `/refusals`) par un
+`AbortController` + timeout court (≈ `client_timeout`, ex. 8–10 s), pour que les
+sockets gelées soient récupérées en quelques secondes au lieu de ~90 s. Combiné à
+l'anti-tempête ci-dessous (un seul ping en vol, pause `/refusals` hors ligne), le
+pool de connexions reste libre → la soumission des identifiants après une
+déconnexion réussit du premier coup, sans rechargement. La page de login
+(`login_page`) n'a pas de polling, donc aucun changement de son code n'est requis ;
+le correctif sur la page de succès suffit à ne plus saturer le pool en amont.
+
 ### Anti-tempête (protection serveur)
 
+- **Borne de fetch** : `AbortController` + timeout sur `/ping` et `/refusals` (pas
+  de socket bloquée > ~`client_timeout`). Un fetch abandonné compte comme un échec
+  réseau (→ `reconnecting`), jamais comme un `expired`.
 - **Un seul ping en vol** : drapeau « in-flight » ; pas de nouveau ping tant que le
   précédent n'a pas répondu/échoué.
 - **Pause `/refusals` hors `online`** : pas de polling pendant `reconnecting` /
@@ -119,6 +159,10 @@ transitoire.
      orange puis vert.
   2. Offline pendant une durée **> `idle_timeout`** → état `expired`, bandeau rouge,
      puis redirection vers `/` au retour réseau.
+  3. **Non-régression login post-déconnexion** : après l'expiration (scénario 2)
+     et le retour réseau, la soumission des identifiants sur la page de login
+     réussit **du premier coup** (un seul `POST /challenge` suivi d'un `POST /login`
+     aboutissant), sans rechargement manuel ni délai de ~90 s.
 
 ## Hors périmètre (volontairement)
 
