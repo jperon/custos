@@ -51,6 +51,13 @@ FILTER_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(FILTER_MOONS))
 AUTH_MOONS := $(shell find $(SRC)/auth -name '*.moon' 2>/dev/null)
 AUTH_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(AUTH_MOONS))
 
+# JS embarqué du portail (source unique : src/auth/portal_client.js)
+GEN_LUAS := $(LUA)/auth/portal_client_js.lua
+
+$(LUA)/auth/portal_client_js.lua: $(SRC)/auth/portal_client.js tools/embed_js.lua
+	@mkdir -p $(LUA)/auth
+	$(LUAJIT) tools/embed_js.lua $< $@
+
 # ipparse modules (auto-discovered, exclude examples)
 IPPARSE_MOONS := $(shell find $(SRC)/ipparse -name '*.moon' 2>/dev/null | grep -v examples)
 IPPARSE_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(IPPARSE_MOONS))
@@ -69,13 +76,13 @@ TEST_HELPER_LUAS  := $(patsubst %.moon,%.lua,$(TEST_HELPER_MOONS))
 SYNC_MOONS := $(shell find $(SYNC) -name '*.moon' 2>/dev/null | sort)
 SYNC_LUAS  := $(patsubst $(SYNC)/%.moon,$(LUA)/sync/%.lua,$(SYNC_MOONS))
 
-.PHONY: all clean check test test-unit test-vm test-openwrt test-e2e test-e2e-rebuild \
+.PHONY: all clean check test test-unit test-js test-vm test-openwrt test-e2e test-e2e-rebuild \
         homelab-up homelab-down homelab-nuke homelab-redeploy \
         coverage run reload update-lists make-secret logs \
         bench bench-micro bench-load \
         sync-init sync-push-init redbean-ui help
 
-all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) $(MOONSCRIPT_RUNTIME_LUAS) $(SYNC_LUAS) install-owrt.lua .init.lua
+all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(GEN_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) $(MOONSCRIPT_RUNTIME_LUAS) $(SYNC_LUAS) install-owrt.lua .init.lua
 	@echo "Compilation terminée → $(LUA)/"
 
 install-owrt.lua: install-owrt.moon
@@ -144,8 +151,12 @@ test-unit: all compile-specs compile-helpers
 	    tests/unit 2>&1 | tee tmp/test-logs/unit.log; \
 	  rc=$$?; exit $$rc
 
+# Tests JS du client portail (Node natif, sans dépendance npm)
+test-js:
+	node --test tests/unit/auth/portal_client.test.js
+
 # Cible publique : tous les tests unitaires locaux (pas root, pas VM)
-test: all compile-specs compile-helpers test-unit
+test: all compile-specs compile-helpers test-unit test-js
 
 # ── Couverture ────────────────────────────────────────────────────────────
 
