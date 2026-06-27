@@ -161,3 +161,9 @@ test('onOffline passe en reconnecting sans fetch', async function () {
   assert.strictEqual(c.getState(), 'reconnecting');
   assert.strictEqual(fetchFn.calls.length, 0);
 });
+
+test('mountPortalClient est exporté', function () {
+  const mod = require(path.join(__dirname, '..', '..', '..', 'src', 'auth', 'portal_client.js'));
+  assert.strictEqual(typeof mod.mountPortalClient, 'function');
+  assert.strictEqual(typeof mod.createPortalClient, 'function');
+});

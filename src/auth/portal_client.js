@@ -95,6 +95,82 @@ function createPortalClient(opts) {
   };
 }
 
+function mountPortalClient(cfg) {
+  var statusEl = document.getElementById('conn-status');
+  var labels = {
+    online: 'Accès actif',
+    reconnecting: 'Reconnexion en cours…',
+    expired: 'Session expirée — reconnexion nécessaire'
+  };
+  function render(s) {
+    if (!statusEl) return;
+    statusEl.className = 'conn-' + s;
+    statusEl.textContent = labels[s] || s;
+  }
+  function renderRefusals(items) {
+    var list = document.getElementById('refusals-list');
+    if (!list) return;
+    while (list.firstChild) list.removeChild(list.firstChild);
+    if (!items || items.length === 0) {
+      var empty = document.createElement('li');
+      empty.id = 'refusals-empty';
+      empty.textContent = 'Aucun domaine bloqué pour le moment.';
+      list.appendChild(empty);
+      return;
+    }
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var li = document.createElement('li');
+      var txt = it.qname;
+      if (it.reason) txt += ' — ' + it.reason;
+      if (it.count && it.count > 1) txt += ' (×' + it.count + ')';
+      li.textContent = txt;
+      list.appendChild(li);
+    }
+  }
+  var client = createPortalClient({
+    fetch: function (u, o) { return window.fetch(u, o); },
+    now: function () { return Date.now(); },
+    setTimeout: function (cb, ms) { return window.setTimeout(cb, ms); },
+    clearTimeout: function (h) { window.clearTimeout(h); },
+    heartbeatMs: cfg.heartbeatMs, refusalsMs: cfg.refusalsMs,
+    idleMs: cfg.idleMs, timeoutMs: cfg.timeoutMs || 9000,
+    newAbort: (typeof AbortController !== 'undefined') ? function () {
+      var c = new AbortController();
+      return { signal: c.signal, abort: function () { c.abort(); } };
+    } : null,
+    ui: { setState: render },
+    onRefusals: renderRefusals,
+    navigate: function (u) { location.href = u; },
+    alert: function (m) { window.alert(m); },
+    isVisible: function () { return document.visibilityState === 'visible'; }
+  });
+  try {
+    var workerJs = "self.onmessage=function(e){if(e.data.type==='start'){setInterval(function(){self.postMessage({type:'tick'});},e.data.interval);setTimeout(function(){self.postMessage({type:'tick'});},3000);}if(e.data.type==='visible'){self.postMessage({type:'tick'});}}";
+    var worker = new Worker(URL.createObjectURL(new Blob([workerJs], { type: 'application/javascript' })));
+    worker.onmessage = function (e) { if (e.data.type === 'tick') client.ping(); };
+    worker.postMessage({ type: 'start', interval: cfg.heartbeatMs });
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') { worker.postMessage({ type: 'visible' }); client.onVisible(); }
+    });
+  } catch (err) {
+    window.setInterval(function () { client.ping(); }, cfg.heartbeatMs);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') client.onVisible();
+    });
+  }
+  window.addEventListener('online', function () { client.onOnline(); });
+  window.addEventListener('offline', function () { client.onOffline(); });
+  window.addEventListener('pagehide', function (e) {
+    if (!e.persisted) {
+      if (navigator.sendBeacon) navigator.sendBeacon('/bye');
+      else window.fetch('/bye', { method: 'POST', keepalive: true, credentials: 'same-origin' });
+    }
+  });
+  client.start();
+  return client;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { createPortalClient: createPortalClient };
+  module.exports = { createPortalClient: createPortalClient, mountPortalClient: mountPortalClient };
 }
