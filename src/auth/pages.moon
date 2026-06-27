@@ -3,6 +3,7 @@
 -- Séparé de server.moon pour permettre les tests unitaires.
 
 H = require "auth.html"
+PORTAL_CLIENT_JS = require "auth.portal_client_js"
 
 css_content = [[
   * {
@@ -101,6 +102,17 @@ css_content = [[
   #refusals-list li:last-child { border-bottom: none; }
 
   #refusals-empty { color: #888; }
+
+  #conn-status {
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin: 0.5rem 0;
+  }
+  .conn-online { background: #e6f4ea; color: #1e7e34; }
+  .conn-reconnecting { background: #fff4e5; color: #b35900; }
+  .conn-expired { background: #fdecea; color: #b71c1c; }
 
   @media (max-width: 768px) {
     body { padding: 0.5rem; }
@@ -317,6 +329,7 @@ success_page = (auth_cfg, created_at, is_admin) ->
   else
     ""
   page {
+    H.div { id: "conn-status", class: "conn-online" }, "Accès actif"
     H.p "Connexion réussie. Votre accès est actif tant que cette fenêtre est ouverte."
     H.p { id: "session-timer" }, "Session ouverte depuis : --"
     admin_link
@@ -326,78 +339,15 @@ success_page = (auth_cfg, created_at, is_admin) ->
       H.h2 "Domaines bloqués récemment"
       H.ul { id: "refusals-list" },
         H.li { id: "refusals-empty" }, "Aucun domaine bloqué pour le moment."
+    H.script PORTAL_CLIENT_JS
     H.script "
-      var refusalsIv = #{refusals_interval} * 1000;
-      function renderRefusals(items){
-        var list = document.getElementById('refusals-list');
-        if (!list) return;
-        while (list.firstChild) list.removeChild(list.firstChild);
-        if (!items || items.length === 0) {
-          var empty = document.createElement('li');
-          empty.id = 'refusals-empty';
-          empty.textContent = 'Aucun domaine bloqué pour le moment.';
-          list.appendChild(empty);
-          return;
-        }
-        for (var i = 0; i < items.length; i++) {
-          var it = items[i];
-          var li = document.createElement('li');
-          var txt = it.qname;
-          if (it.reason) txt += ' — ' + it.reason;
-          if (it.count && it.count > 1) txt += ' (×' + it.count + ')';
-          li.textContent = txt;
-          list.appendChild(li);
-        }
-      }
-      function refreshRefusals(){
-        fetch('/refusals',{method:'GET',credentials:'same-origin'})
-          .then(function(r){ return r.ok ? r.json() : null; })
-          .then(function(items){ if (items) renderRefusals(items); })
-          .catch(function(){});
-      }
-      refreshRefusals();
-      setInterval(refreshRefusals, refusalsIv);
-    "
-    H.script "
-      var iv = #{interval} * 1000;
-      var idle = #{idle_timeout} * 1000;
+      mountPortalClient({
+        heartbeatMs: #{interval * 1000},
+        refusalsMs: #{refusals_interval * 1000},
+        idleMs: #{idle_timeout * 1000},
+        timeoutMs: 9000
+      });
       var sessionStart = #{session_start};
-      var workerJs = \"self.onmessage = function(e) { \
-        if (e.data.type === 'start') { \
-          setInterval(function() { self.postMessage({type: 'tick'}); }, e.data.interval); \
-          setTimeout(function() { self.postMessage({type: 'tick'}); }, 3000); \
-        } \
-        if (e.data.type === 'visible') { self.postMessage({type: 'tick'}); } \
-      }\";
-      var worker = new Worker(URL.createObjectURL(new Blob([workerJs], {type: 'application/javascript'})));
-      var lastSuccess = Date.now();
-      var unauthorized = 0;
-      function ping(){
-        fetch('/ping',{method:'GET',credentials:'same-origin'})
-          .then(function(r){
-            if(r.status===401){
-              // Un 401 isolé peut venir d'un ping retardé par le navigateur :
-              // confirmer par un second ping avant d'alerter.
-              unauthorized++;
-              if(unauthorized < 2){ setTimeout(ping, 2000); return; }
-              if(document.visibilityState==='visible')
-                alert('Connexion perdue, veuillez vous authentifier de nouveau.');
-              location.href='/';
-              return;
-            }
-            unauthorized = 0;
-            lastSuccess = Date.now();
-          })
-          .catch(function(){
-            if (Date.now() - lastSuccess > idle) {
-              if (document.visibilityState === 'visible') location.href='/';
-            }
-          });
-      }
-      worker.onmessage = function(e) {
-        if (e.data.type === 'tick') ping();
-      };
-      worker.postMessage({type: 'start', interval: iv});
       function updateTimer(){
         var now = Math.floor(Date.now() / 1000);
         var elapsed = now - sessionStart;
@@ -405,31 +355,13 @@ success_page = (auth_cfg, created_at, is_admin) ->
         var h = Math.floor(elapsed / 3600);
         var m = Math.floor((elapsed % 3600) / 60);
         var txt;
-        if (h > 0) {
-          txt = h + 'h ' + (m < 10 ? '0' : '') + m + 'min';
-        } else {
-          txt = m + ' min';
-        }
+        if (h > 0) { txt = h + 'h ' + (m < 10 ? '0' : '') + m + 'min'; }
+        else { txt = m + ' min'; }
         var el = document.getElementById('session-timer');
         if (el) el.textContent = 'Session ouverte depuis : ' + txt;
       }
       setInterval(updateTimer, 10000);
       updateTimer();
-      document.addEventListener('visibilitychange', function(){
-        if (document.visibilityState === 'visible') worker.postMessage({type: 'visible'});
-      });
-      // pagehide se déclenche aussi sur reload/navigation : ne PAS détruire la
-      // session ici (/logout), seulement raccourcir son expiration (/bye).
-      function bye(){
-        if (navigator.sendBeacon) {
-          navigator.sendBeacon('/bye');
-        } else {
-          fetch('/bye', {method:'POST', keepalive:true, credentials:'same-origin'});
-        }
-      }
-      window.addEventListener('pagehide', function(e){
-        if (!e.persisted) bye();
-      });
     "
   }
 

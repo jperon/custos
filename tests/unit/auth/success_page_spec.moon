@@ -48,21 +48,22 @@ describe "auth.pages.success_page", ->
     html = success_page cfg_base, os.time!, false
     assert.truthy html\find("refusals-list", 1, true)
     assert.truthy html\find("Domaines bloqués récemment", 1, true)
-    assert.truthy html\find("fetch('/refusals'", 1, true)
-    assert.truthy html\find("refreshRefusals", 1, true)
+    assert.truthy html\find("'/refusals'", 1, true)
 
   it "injecte l'intervalle de poll des refus (défaut 5s)", ->
     html = success_page cfg_base, os.time!, false
-    assert.truthy html\find("refusalsIv = 5 * 1000", 1, true)
+    assert.truthy html\find("refusalsMs: 5000", 1, true)
 
   it "respecte refusals_poll_interval configuré", ->
     html = success_page { heartbeat_interval: 30, idle_timeout: 90, refusals_poll_interval: 12 }, 0, false
-    assert.truthy html\find("refusalsIv = 12 * 1000", 1, true)
+    assert.truthy html\find("refusalsMs: 12000", 1, true)
 
-  it "délègue le ping à un web worker inline", ->
+  it "embarque le client portail et l'amorce", ->
     html = success_page cfg_base, os.time!, false
-    assert.truthy html\find("Worker", 1, true)
-    assert.truthy html\find("workerJs", 1, true)
-    assert.truthy html\find("postMessage", 1, true)
-    assert.truthy html\find("tick", 1, true)
-    assert.truthy html\find("fetch('/ping'", 1, true)
+    assert.truthy html\find("createPortalClient", 1, true)
+    assert.truthy html\find("mountPortalClient", 1, true)
+    assert.truthy html\find("'/ping'", 1, true)
+
+  it "contient le bandeau d'état de connexion", ->
+    html = success_page cfg_base, os.time!, false
+    assert.truthy html\find("conn-status", 1, true)

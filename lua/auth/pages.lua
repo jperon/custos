@@ -1,4 +1,5 @@
 local H = require("auth.html")
+local PORTAL_CLIENT_JS = require("auth.portal_client_js")
 local css_content = [[  * {
     margin: 0;
     padding: 0;
@@ -95,6 +96,17 @@ local css_content = [[  * {
   #refusals-list li:last-child { border-bottom: none; }
 
   #refusals-empty { color: #888; }
+
+  #conn-status {
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin: 0.5rem 0;
+  }
+  .conn-online { background: #e6f4ea; color: #1e7e34; }
+  .conn-reconnecting { background: #fff4e5; color: #b35900; }
+  .conn-expired { background: #fdecea; color: #b71c1c; }
 
   @media (max-width: 768px) {
     body { padding: 0.5rem; }
@@ -311,6 +323,10 @@ success_page = function(auth_cfg, created_at, is_admin)
     admin_link = ""
   end
   return page({
+    H.div({
+      id = "conn-status",
+      class = "conn-online"
+    }, "Accès actif"),
     H.p("Connexion réussie. Votre accès est actif tant que cette fenêtre est ouverte."),
     H.p({
       id = "session-timer"
@@ -330,8 +346,8 @@ success_page = function(auth_cfg, created_at, is_admin)
     }, H.li({
       id = "refusals-empty"
     }, "Aucun domaine bloqué pour le moment.")),
-    H.script("\n      var refusalsIv = " .. tostring(refusals_interval) .. " * 1000;\n      function renderRefusals(items){\n        var list = document.getElementById('refusals-list');\n        if (!list) return;\n        while (list.firstChild) list.removeChild(list.firstChild);\n        if (!items || items.length === 0) {\n          var empty = document.createElement('li');\n          empty.id = 'refusals-empty';\n          empty.textContent = 'Aucun domaine bloqué pour le moment.';\n          list.appendChild(empty);\n          return;\n        }\n        for (var i = 0; i < items.length; i++) {\n          var it = items[i];\n          var li = document.createElement('li');\n          var txt = it.qname;\n          if (it.reason) txt += ' — ' + it.reason;\n          if (it.count && it.count > 1) txt += ' (×' + it.count + ')';\n          li.textContent = txt;\n          list.appendChild(li);\n        }\n      }\n      function refreshRefusals(){\n        fetch('/refusals',{method:'GET',credentials:'same-origin'})\n          .then(function(r){ return r.ok ? r.json() : null; })\n          .then(function(items){ if (items) renderRefusals(items); })\n          .catch(function(){});\n      }\n      refreshRefusals();\n      setInterval(refreshRefusals, refusalsIv);\n    "),
-    H.script("\n      var iv = " .. tostring(interval) .. " * 1000;\n      var idle = " .. tostring(idle_timeout) .. " * 1000;\n      var sessionStart = " .. tostring(session_start) .. ";\n      var workerJs = \"self.onmessage = function(e) { \\n        if (e.data.type === 'start') { \\n          setInterval(function() { self.postMessage({type: 'tick'}); }, e.data.interval); \\n          setTimeout(function() { self.postMessage({type: 'tick'}); }, 3000); \\n        } \\n        if (e.data.type === 'visible') { self.postMessage({type: 'tick'}); } \\n      }\";\n      var worker = new Worker(URL.createObjectURL(new Blob([workerJs], {type: 'application/javascript'})));\n      var lastSuccess = Date.now();\n      var unauthorized = 0;\n      function ping(){\n        fetch('/ping',{method:'GET',credentials:'same-origin'})\n          .then(function(r){\n            if(r.status===401){\n              // Un 401 isolé peut venir d'un ping retardé par le navigateur :\n              // confirmer par un second ping avant d'alerter.\n              unauthorized++;\n              if(unauthorized < 2){ setTimeout(ping, 2000); return; }\n              if(document.visibilityState==='visible')\n                alert('Connexion perdue, veuillez vous authentifier de nouveau.');\n              location.href='/';\n              return;\n            }\n            unauthorized = 0;\n            lastSuccess = Date.now();\n          })\n          .catch(function(){\n            if (Date.now() - lastSuccess > idle) {\n              if (document.visibilityState === 'visible') location.href='/';\n            }\n          });\n      }\n      worker.onmessage = function(e) {\n        if (e.data.type === 'tick') ping();\n      };\n      worker.postMessage({type: 'start', interval: iv});\n      function updateTimer(){\n        var now = Math.floor(Date.now() / 1000);\n        var elapsed = now - sessionStart;\n        if (elapsed < 0) elapsed = 0;\n        var h = Math.floor(elapsed / 3600);\n        var m = Math.floor((elapsed % 3600) / 60);\n        var txt;\n        if (h > 0) {\n          txt = h + 'h ' + (m < 10 ? '0' : '') + m + 'min';\n        } else {\n          txt = m + ' min';\n        }\n        var el = document.getElementById('session-timer');\n        if (el) el.textContent = 'Session ouverte depuis : ' + txt;\n      }\n      setInterval(updateTimer, 10000);\n      updateTimer();\n      document.addEventListener('visibilitychange', function(){\n        if (document.visibilityState === 'visible') worker.postMessage({type: 'visible'});\n      });\n      // pagehide se déclenche aussi sur reload/navigation : ne PAS détruire la\n      // session ici (/logout), seulement raccourcir son expiration (/bye).\n      function bye(){\n        if (navigator.sendBeacon) {\n          navigator.sendBeacon('/bye');\n        } else {\n          fetch('/bye', {method:'POST', keepalive:true, credentials:'same-origin'});\n        }\n      }\n      window.addEventListener('pagehide', function(e){\n        if (!e.persisted) bye();\n      });\n    ")
+    H.script(PORTAL_CLIENT_JS),
+    H.script("\n      mountPortalClient({\n        heartbeatMs: " .. tostring(interval * 1000) .. ",\n        refusalsMs: " .. tostring(refusals_interval * 1000) .. ",\n        idleMs: " .. tostring(idle_timeout * 1000) .. ",\n        timeoutMs: 9000\n      });\n      var sessionStart = " .. tostring(session_start) .. ";\n      function updateTimer(){\n        var now = Math.floor(Date.now() / 1000);\n        var elapsed = now - sessionStart;\n        if (elapsed < 0) elapsed = 0;\n        var h = Math.floor(elapsed / 3600);\n        var m = Math.floor((elapsed % 3600) / 60);\n        var txt;\n        if (h > 0) { txt = h + 'h ' + (m < 10 ? '0' : '') + m + 'min'; }\n        else { txt = m + ' min'; }\n        var el = document.getElementById('session-timer');\n        if (el) el.textContent = 'Session ouverte depuis : ' + txt;\n      }\n      setInterval(updateTimer, 10000);\n      updateTimer();\n    ")
   })
 end
 local password_page
