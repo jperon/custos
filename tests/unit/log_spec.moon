@@ -44,3 +44,14 @@ describe "log", ->
 
   it "rl_fingerprint : sans clé discriminante → action_key seul", ->
     assert.are.equal "neigh_refreshed", log.rl_fingerprint "neigh_refreshed", {}, {}
+
+  -- RL_CONFIG.captive_redirect doit correspondre à l'action réellement émise
+  -- par worker_captive (action: "redirect", préfixée "captive_" → "captive_redirect")
+  -- et à des champs qu'il émet vraiment (pas de "path", qui n'existe pas dans
+  -- ces logs). Un mismatch ici désactive silencieusement le rate-limit (bug
+  -- historique corrigé : la config référençait "captive_redirect" alors que
+  -- l'action loggée était "captive_redirect_captive").
+  it "RL_CONFIG.captive_redirect discrimine sur des champs existants (pas 'path')", ->
+    cfg = log.RL_CONFIG.captive_redirect
+    assert.is_not_nil cfg
+    assert.are.same { "ip" }, cfg.keys

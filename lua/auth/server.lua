@@ -383,7 +383,7 @@ make_server4 = function(port)
     srv:close()
     return nil, err
   end
-  srv:listen(32)
+  srv:listen(128)
   srv:settimeout(1)
   return srv
 end
@@ -399,7 +399,7 @@ make_server6 = function(port)
     srv6:close()
     return nil
   end
-  srv6:listen(32)
+  srv6:listen(128)
   srv6:settimeout(1)
   return srv6
 end

@@ -44,6 +44,33 @@ describe "worker_captive", ->
       result = captive.parse_syn raw
       assert.is_nil result
 
+  -- ── should_throttle_redirect (anti-rafale des redirections) ──────────────────
+  -- Une page avec plusieurs ressources bloquées génère un SYN/80 par ressource ;
+  -- sans throttling, le navigateur ouvrirait autant de connexions TLS vers le
+  -- portail en rafale, au risque de saturer son backlog d'écoute et de faire
+  -- échouer une connexion concurrente légitime (ex. POST /login).
+  describe "should_throttle_redirect", ->
+    captive = require "worker_captive"
+
+    it "première redirection pour une IP : jamais supprimée", ->
+      state = {}
+      assert.is_false captive.should_throttle_redirect "10.0.0.1", 1000, 5, state
+
+    it "redirection répétée dans la fenêtre : supprimée", ->
+      state = {}
+      captive.should_throttle_redirect "10.0.0.1", 1000, 5, state
+      assert.is_true captive.should_throttle_redirect "10.0.0.1", 1002, 5, state
+
+    it "redirection après expiration de la fenêtre : de nouveau autorisée", ->
+      state = {}
+      captive.should_throttle_redirect "10.0.0.1", 1000, 5, state
+      assert.is_false captive.should_throttle_redirect "10.0.0.1", 1006, 5, state
+
+    it "IPs différentes : discriminées indépendamment", ->
+      state = {}
+      captive.should_throttle_redirect "10.0.0.1", 1000, 5, state
+      assert.is_false captive.should_throttle_redirect "10.0.0.2", 1000, 5, state
+
   -- ── Comportement skip redirect ────────────────────────────────────────────────
   -- On ne peut pas appeler handle_syn directement (dépend de NFQUEUE runtime),
   -- mais on vérifie que le chemin skip est atteint en mockant user_for_mac via

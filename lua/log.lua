@@ -39,8 +39,7 @@ local RL_CONFIG = {
   },
   captive_redirect = {
     keys = {
-      "ip",
-      "path"
+      "ip"
     },
     window = 60
   },
@@ -230,5 +229,6 @@ return {
   get_log_level_num = get_log_level_num,
   level_enabled = level_enabled,
   rl_fingerprint = rl_fingerprint,
-  set_action_prefix = set_action_prefix
+  set_action_prefix = set_action_prefix,
+  RL_CONFIG = RL_CONFIG
 }

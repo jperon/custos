@@ -56,7 +56,7 @@ level_enabled = (level) -> get_log_level_num(level) >= CURRENT_LOG_LEVEL_NUM
 -- La clé de RL est fields.action ou, à défaut, le niveau (ALLOW/BLOCK).
 RL_CONFIG = {
   captive_probe:      { keys: {"ip", "path"},                window: 60  }
-  captive_redirect: { keys: {"ip", "path"},                window: 60  }
+  captive_redirect:   { keys: {"ip"},                        window: 60  }
   ALLOW:              { keys: {"mac_src", "qname", "qtype"}, window: 30  }
   BLOCK:              { keys: {"mac_src", "qname", "qtype"}, window: 30  }
   no_ipv6_for_client: { keys: {"client"},                    window: 120 }
@@ -197,4 +197,4 @@ log_debug = (thunk) -> write_log "DEBUG", thunk
 -- @treturn nil
 log_trace = (thunk) -> write_log "TRACE", thunk
 
-{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix }
+{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG }

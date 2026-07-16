@@ -134,6 +134,43 @@ suit la même convention sans toucher à `nft_compiler`.
 
 ---
 
+## Anti-rafale des redirections captives (`src/worker_captive.moon`)
+
+Chaque SYN/80 bloqué déclenche une redirection HTTP 302 forgée vers le portail
+HTTPS (`https://<filtre>:33443/`) — y compris pour les **sous-ressources**
+(images, scripts, trackers…), car à ce stade seul le SYN TCP est visible, sans
+en-tête HTTP permettant de distinguer une navigation top-level d'un sous-chargement.
+Une page chargeant plusieurs domaines bloqués génère donc une rafale de
+redirections, et le navigateur ouvre en retour autant de connexions TLS vers
+le portail en peu de temps.
+
+**Symptôme observé** : cette rafale peut dépasser le backlog d'écoute du
+serveur AUTH (`src/auth/server.moon`, `listen 128`, historiquement `32`), que
+la connexion échoue silencieusement côté noyau (RST avant `accept()`, sans
+aucune trace applicative) — y compris pour une connexion **légitime**
+concurrente (ex. le vrai `POST /login` de l'utilisateur, observé en HAR comme
+`status=0` juste après un `POST /challenge` réussi, sans corrélat dans
+`logread`). Confirmé par `/proc/net/netstat` (`ListenOverflows`/`ListenDrops`
+non nuls sur le routeur affecté).
+
+**Fix** : `should_throttle_redirect` (pure, testée) supprime l'**envoi effectif**
+des frames de redirection (pas seulement le log) au-delà d'une par IP cliente
+et par fenêtre (`captive_redirect_rl_window`, défaut 5 s) — le SYN reste
+toujours droppé (`NF_DROP`) dans tous les cas, seule la redirection HTTP
+répétée est supprimée. Complète le backlog `listen 128` (défense en profondeur,
+insuffisante seule face à une rafale non bornée).
+
+**Piège corrigé en passant** : le rate-limit du *log* lui-même
+(`log.RL_CONFIG.captive_redirect`) ne s'appliquait jamais, par mismatch de nom
+d'action — l'action loggée était `redirect_captive` puis préfixée `captive_` en
+`captive_redirect_captive`, qui ne matchait pas la clé configurée
+`captive_redirect` ; `check_rl` retournait toujours `nil` (pas de config) et ne
+supprimait donc aucune ligne. L'action a été renommée `redirect` (→
+`captive_redirect` après préfixe, cohérent) et la clé `RL_CONFIG` corrigée
+(`{"ip"}`, `"path"` n'existant pas dans ces champs).
+
+---
+
 ## Enforcement SNI (`src/worker_tls.moon`)
 
 `worker_tls` applique au SNI **exactement** la décision de `filter.decide_meta`

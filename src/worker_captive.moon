@@ -116,6 +116,34 @@ redirect_url4 = nil
 redirect_url6 = nil
 custom_redirect_url = nil
 
+-- ── Anti-rafale des redirections captives ─────────────────────────
+-- Une page chargeant plusieurs ressources bloquées (images, scripts,
+-- trackers…) déclenche un SYN/80 par ressource, donc une redirection HTTPS
+-- par ressource : le navigateur ouvre alors autant de connexions TLS vers le
+-- portail (:33443) en rafale, ce qui peut dépasser son backlog d'écoute et
+-- faire échouer silencieusement (RST noyau, sans log applicatif) une
+-- connexion légitime concurrente (ex. le vrai POST /login de l'utilisateur).
+-- On limite donc l'envoi effectif des frames de redirection à une par IP
+-- cliente et par fenêtre — le SYN est toujours droppé (NF_DROP) dans tous
+-- les cas, seule la redirection HTTP est supprimée au-delà de la première.
+DEFAULT_REDIRECT_RL_WINDOW = 5  -- secondes
+_redirect_rl = {}  -- ip → epoch du dernier envoi
+_redirect_rl_window = DEFAULT_REDIRECT_RL_WINDOW
+
+--- Décide si une redirection captive doit être supprimée (rafale récente).
+-- Fonction pure, exportée pour le test unitaire.
+-- @tparam string client_ip   IP cliente (clé de discrimination)
+-- @tparam number now_epoch   Horodatage courant (secondes)
+-- @tparam number window      Fenêtre de suppression, en secondes
+-- @tparam table  state       Table d'état { ip → last_epoch } (mutée)
+-- @treturn boolean true si la redirection doit être supprimée
+should_throttle_redirect = (client_ip, now_epoch, window=DEFAULT_REDIRECT_RL_WINDOW, state=_redirect_rl) ->
+  last = state[client_ip]
+  if last and (now_epoch - last) < window
+    return true
+  state[client_ip] = now_epoch
+  false
+
 -- ── Callback principal ───────────────────────────────────────────
 --- Handle a TCP SYN/80 packet from NFQUEUE 2.
 -- Parses the packet, forges a TCP 302 redirect response, and drops the SYN.
@@ -191,6 +219,9 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
     log_warn -> { action: "no_redirect_url", queue: 2, ip: client_ip_str, version: ip.version, user: user }
     return NF_DROP
 
+  if should_throttle_redirect client_ip_str, os.time!, _redirect_rl_window
+    return NF_DROP
+
   ok, err = pcall ->
     f1, f2, f3 = build_response_frames eth, ip, tcp, url
     log_info -> { action: "sending_frames", queue: 2, ip: client_ip_str, frames: 3, url: url, user: user }
@@ -200,7 +231,7 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
   if ok
     fields = {
-      action:  "redirect_captive"
+      action:  "redirect"
       queue:   2
       ip:      client_ip_str
       sport:   tcp.spt
@@ -226,6 +257,8 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 run = (queue_num, auth_cfg) ->
   set_action_prefix "captive_"
   auth_cfg or= {}
+
+  _redirect_rl_window = tonumber(auth_cfg.captive_redirect_rl_window) or DEFAULT_REDIRECT_RL_WINDOW
 
   -- Interface LAN (br0 or br)
   ifname = auth_cfg.bridge_ifname or "br0"
@@ -280,4 +313,4 @@ run = (queue_num, auth_cfg) ->
 
   run_queue tonumber(queue_num), handle_syn
 
-{ :run, :parse_syn, :build_response_frames }
+{ :run, :parse_syn, :build_response_frames, :should_throttle_redirect }

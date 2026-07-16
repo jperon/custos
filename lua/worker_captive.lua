@@ -107,6 +107,24 @@ local _bridge_mac = nil
 local redirect_url4 = nil
 local redirect_url6 = nil
 local custom_redirect_url = nil
+local DEFAULT_REDIRECT_RL_WINDOW = 5
+local _redirect_rl = { }
+local _redirect_rl_window = DEFAULT_REDIRECT_RL_WINDOW
+local should_throttle_redirect
+should_throttle_redirect = function(client_ip, now_epoch, window, state)
+  if window == nil then
+    window = DEFAULT_REDIRECT_RL_WINDOW
+  end
+  if state == nil then
+    state = _redirect_rl
+  end
+  local last = state[client_ip]
+  if last and (now_epoch - last) < window then
+    return true
+  end
+  state[client_ip] = now_epoch
+  return false
+end
 local handle_syn
 handle_syn = function(qh_ptr, nfad, pkt_id)
   local payload_ptr = ffi.new("unsigned char*[1]")
@@ -196,6 +214,9 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     end)
     return NF_DROP
   end
+  if should_throttle_redirect(client_ip_str, os.time(), _redirect_rl_window) then
+    return NF_DROP
+  end
   local ok, err = pcall(function()
     local f1, f2, f3 = build_response_frames(eth, ip, tcp, url)
     log_info(function()
@@ -214,7 +235,7 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   end)
   if ok then
     local fields = {
-      action = "redirect_captive",
+      action = "redirect",
       queue = 2,
       ip = client_ip_str,
       sport = tcp.spt,
@@ -245,6 +266,7 @@ local run
 run = function(queue_num, auth_cfg)
   set_action_prefix("captive_")
   auth_cfg = auth_cfg or { }
+  _redirect_rl_window = tonumber(auth_cfg.captive_redirect_rl_window) or DEFAULT_REDIRECT_RL_WINDOW
   local ifname = auth_cfg.bridge_ifname or "br0"
   local https_port = auth_cfg.port or 33443
   custom_redirect_url = auth_cfg.redirect_url
@@ -309,5 +331,6 @@ end
 return {
   run = run,
   parse_syn = parse_syn,
-  build_response_frames = build_response_frames
+  build_response_frames = build_response_frames,
+  should_throttle_redirect = should_throttle_redirect
 }

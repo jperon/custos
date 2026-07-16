@@ -218,7 +218,7 @@ make_server4 = (port) ->
   unless ok
     srv\close!
     return nil, err
-  srv\listen 32
+  srv\listen 128
   srv\settimeout 1
   srv
 
@@ -233,7 +233,7 @@ make_server6 = (port) ->
   unless ok62
     srv6\close!
     return nil
-  srv6\listen 32
+  srv6\listen 128
   srv6\settimeout 1
   srv6
 
