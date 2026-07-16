@@ -7,6 +7,12 @@ H       = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
 
+-- Échappe le texte destiné au contenu/attribut HTML (le DSL auth.html
+-- n'échappe rien : cf. webui.handlers.devices/verdicts pour le même pattern).
+esc = (s) ->
+  s = tostring s or ""
+  (s\gsub "[&<>\"']", { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })
+
 parse_form = (body) ->
   return {} unless body
   out = {}
@@ -35,9 +41,9 @@ render_kv_editor = (section_key, title, desc, value_label, current_map, value_hi
     for k, v in pairs current_map
       val_str = if type(v) == "table" then table.concat v, "\n" else tostring v
       rows ..= H.tr {
-        H.td { H.input { type: "text", name: "key[]", value: k, style: "margin:0" } }
-        H.td { H.textarea { name: "val[]", rows: "2", style: "margin:0; font-family:monospace" }, val_str }
-        H.td { H.button { type: "submit", name: "delete", value: k, class: "btn btn-danger btn-sm" }, "✕" }
+        H.td { H.input { type: "text", name: "key[]", value: esc(k), style: "margin:0" } }
+        H.td { H.textarea { name: "val[]", rows: "2", style: "margin:0; font-family:monospace" }, esc(val_str) }
+        H.td { H.button { type: "submit", name: "delete", value: esc(k), class: "btn btn-danger btn-sm" }, "✕" }
       }
 
   -- Ligne d'ajout
@@ -71,10 +77,10 @@ render_times_editor = (current_times) ->
       start_s = type(v) == "table" and (v[1] or "") or ""
       end_s   = type(v) == "table" and (v[2] or "") or ""
       rows ..= H.tr {
-        H.td { H.input { type: "text", name: "key[]", value: k } }
-        H.td { H.input { type: "time", name: "start[]", value: start_s } }
-        H.td { H.input { type: "time", name: "end[]",   value: end_s } }
-        H.td { H.button { type: "submit", name: "delete", value: k, class: "btn btn-danger btn-sm" }, "✕" }
+        H.td { H.input { type: "text", name: "key[]", value: esc(k) } }
+        H.td { H.input { type: "time", name: "start[]", value: esc(start_s) } }
+        H.td { H.input { type: "time", name: "end[]",   value: esc(end_s) } }
+        H.td { H.button { type: "submit", name: "delete", value: esc(k), class: "btn btn-danger btn-sm" }, "✕" }
       }
 
   rows ..= H.tr {

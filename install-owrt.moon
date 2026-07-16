@@ -66,7 +66,17 @@ Installer = (cfg) ->
 
     -- Utilitaires SSH / SCP
     ssh_prefix: =>
-      "ssh -p #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 #{@cfg.user}@#{@ssh_host!}"
+      -- LogLevel=ERROR : UserKnownHostsFile=/dev/null ne persistant jamais la
+      -- clé, ssh imprime "Warning: Permanently added '<host>' (...) to the
+      -- list of known hosts." sur stderr à CHAQUE appel. capture() fusionne
+      -- stdout+stderr (2>&1) : ce bandeau devient la première ligne de toute
+      -- sortie ssh_capture, et un \match "^%S+" y lit "Warning:" au lieu de la
+      -- vraie sortie de la commande distante — bug déjà vécu en prod sur
+      -- 10.35.1.70 (patch_bridge_ifname y avait écrit bridge_ifname="Warning:",
+      -- crash-loop arp/captive ENODEV). LogLevel=ERROR supprime ce bandeau
+      -- sans rien changer côté vérification de clé (StrictHostKeyChecking=no
+      -- reste inchangé).
+      "ssh -p #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 #{@cfg.user}@#{@ssh_host!}"
 
     ssh_run: (cmd) =>
       escaped = cmd\gsub("'", "'\"'\"'")
@@ -363,6 +373,14 @@ Installer = (cfg) ->
       detect_cmd = [[for b in /sys/class/net/*/bridge; do [ -d "$b" ] || continue; d=$(dirname "$b"); n=$(basename "$d"); c=$(ls -1 "$d/brif" 2>/dev/null | wc -l); echo "$c $n"; done | sort -rn | awk 'NR==1{print $2}']]
       detected = @ssh_capture detect_cmd
       detected = detected and detected\match "^%S+" or nil
+      -- Garde-fou : un nom d'interface Linux valide ne contient que
+      -- alphanumériques/-/_/. (cf. valid_name côté config.moon). Rejette toute
+      -- sortie inattendue (bannière ssh/MOTD non filtrée, erreur shell, etc.)
+      -- plutôt que de patcher la config avec une valeur incohérente — défense
+      -- en profondeur après l'incident bridge_ifname="Warning:" sur 10.35.1.70.
+      if detected and not detected\match "^[%w%-_.]+$"
+        warn "⚠ Sortie de détection bridge inattendue (\"#{detected}\") — ignorée par sécurité."
+        detected = nil
       unless detected and #detected > 0
         warn "⚠ Aucune interface bridge détectée sur le routeur."
         warn "  Vérifier la configuration réseau (un bridge LAN est requis) ;"

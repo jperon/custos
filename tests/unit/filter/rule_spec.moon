@@ -362,6 +362,18 @@ describe "filter.rule", ->
       meta = rule_mod.decide_meta rules, {}
       assert.is_false meta.verdict
 
+    it "matche indépendamment de la casse du domaine (anti 0x20-encoding)", ->
+      rules = rule_mod.compile_rules {
+        nft: { ip_timeout: "2m" }
+        macs: {}
+        rules: {
+          { rule_id: "block", actions: { "deny" }, conditions: { to_domain: "malware.example.com" } }
+        }
+      }
+      meta = rule_mod.decide_meta rules, { domain: "MALWARE.Example.COM" }
+      assert.is_false meta.verdict
+      assert.equals "r_block", meta.rule_id
+
     it "expose condition_reason sans écraser reason d'action", ->
       -- Stub enregistré ICI (à l'exécution) et non dans le corps du describe :
       -- run_vm_tests restaure package.loaded après le chargement de chaque spec,

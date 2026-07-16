@@ -140,6 +140,46 @@ describe "ipc", ->
 
       close_pipe p
 
+  -- ── purge_pending : purge active des entrées jamais relues ───────────
+  -- Sans purge_pending, une entrée `pending` dont personne n'appelle jamais
+  -- is_pending/get_pending_entry (paquet perdu, upstream muet, client qui
+  -- abandonne) reste en mémoire indéfiniment (fuite non bornée dans le
+  -- worker le plus sollicité).
+  describe "purge_pending", ->
+    it "supprime une entrée expirée jamais relue", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      base = 0
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      m_ipc.drain_pipe rfd, (-> base), nil
+
+      -- Jamais lu via is_pending/get_pending_entry : sans purge_pending,
+      -- l'entrée resterait en mémoire pour toujours.
+      m_ipc.purge_pending -> base + 6
+
+      -- Réécrit une entrée pour le même txid/ip/port/resolver : si l'ancienne
+      -- entrée n'a pas été purgée, is_pending pourrait renvoyer un état
+      -- incohérent issu de l'entrée fantôme (même clé).
+      assert.is_false m_ipc.is_pending(TXID, "192.168.1.42", PORT, "1.1.1.3", -> base + 6)
+
+      close_pipe p
+
+    it "conserve une entrée non expirée", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      base = 0
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      m_ipc.drain_pipe rfd, (-> base), nil
+
+      m_ipc.purge_pending -> base + 2
+      assert.is_true m_ipc.is_pending(TXID, "192.168.1.42", PORT, "1.1.1.3", -> base + 2)
+
+      close_pipe p
+
   -- ── 7. encode_msg refused=true IPv4 → MSG_IPV4_REFUSED (0x52) ────────
   describe "MSG_IPV4_REFUSED", ->
     it "msg_type == 0x52 et refused == true", ->

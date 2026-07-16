@@ -24,10 +24,15 @@ Une tâche n'est **jamais** terminée tant que les trois conditions suivantes ne
 sont pas vérifiées et constatées (pas supposées) :
 
 1. **Couverture de tests.** Tout code ajouté ou modifié doit être couvert par des
-   tests. En toute fin d’un développement important, vérifier avec `make coverage`
-   (rapport dans `tmp/coverage/`) ; attention, pas trop tôt (car lent). Une
-   branche d'erreur non couvrable en unitaire doit l'être par un mock (cf.
-   `tests/unit/auth/cert_generator_spec.moon`) ou par les tests e2e.
+   tests. En toute fin d’un développement important, vérifier avec `make
+   coverage-quick` (rapport dans `tmp/coverage_quick/`, ordre de grandeur par
+   échantillonnage, ~20 min sur toute la suite). `make coverage` (luacov,
+   ligne-par-ligne exhaustif) est réservé à un chiffre exact sur un module
+   isolé (`tests/unit/<module>` ciblé) : sur la suite complète il est ~4x plus
+   lent et a déjà échoué à écrire ses stats en fin de run (cf. § Corrections
+   d'audit 2026-07-16). Une branche d'erreur non couvrable en unitaire doit
+   l'être par un mock (cf. `tests/unit/auth/cert_generator_spec.moon`) ou par
+   les tests e2e.
 2. **Documentation à jour.** Mettre à jour la doc impactée par le changement
    (`AGENTS.md`, `.agents/*`, `README.md`, `doc/CONFIG.md`, `doc/CHEATSHEET.md`,
    etc.). Du code sans sa doc à jour n'est pas livrable.
@@ -606,3 +611,113 @@ See [.agents/px5g_migration.md](.agents/px5g_migration.md) for full documentatio
 **Modified modules**:
 - `src/auth/cert.moon` — Added `load_or_generate_sni()` for SNI-aware certs
 - `src/auth/server.moon` — Cache initialization on AUTH server startup
+
+## Corrections d'audit (2026-07-16)
+
+Audit global qualité/perf/stabilité (4 volets parallèles : dataplane, filter,
+auth/webui, DoH+tests). Corrections appliquées, par ordre de sévérité :
+
+- **Contournement de blocage par la casse DNS (0x20-encoding).**
+  `req.domain` n'était jamais lowercasé après parsing alors que les `.bin` de
+  domainlists sont construits en minuscules : `MALWARE.Example.COM` échappait
+  à `to_domain`/`to_domainlist`. Fix centralisé dans
+  `filter.rule.details_of` (une seule normalisation `\lower!` pour tous les
+  chemins UDP/DoH ; le SNI a déjà la sienne via `worker_tls.normalize_sni`).
+- **Fuite mémoire `ipc.moon` (table `pending`).** Purgée seulement en lecture
+  paresseuse ; une question jamais répondue (paquet perdu, upstream muet)
+  restait en mémoire indéfiniment dans le worker le plus sollicité. Ajout de
+  `ipc.purge_pending`, appelé par `worker_responses` au même point que
+  `tcp_state.purge!`/`purge_mac_clients` (tous les 1000 paquets).
+- **TLS non vérifié sur le second avis DoH.** `doh.validator.open_client`
+  omettait `verify_tls` à `new_client` (défaut `false` chez
+  `upstream_doh_curl`) : un attaquant on-path pouvait forger un verdict
+  block/sinkhole/redirect sans MITM détectable. Fix : `verify_tls=true`
+  explicite.
+- **XSS stockés dans la webui admin.** `webui.handlers.filter`
+  (`render_kv_editor`/`render_times_editor` : nets/macs/users/times) et
+  `webui.handlers.lists` (`handle_list_get`, contenu de fichier dans un
+  `<textarea>`) réinjectaient des valeurs admin sans échappement (le DSL
+  `auth.html` n'échappe rien par conception). Fix : même helper `esc` que
+  `webui.handlers.devices`/`verdicts`.
+- **Collision PRNG dans `cert_generator.moon`.** Noms de fichiers temporaires
+  dérivés de `os.time!/math.random`, sans `math.randomseed` nulle part dans le
+  projet : des enfants forkés par connexion héritant du même état PRNG
+  pouvaient produire le même chemin temporaire et s'écraser mutuellement leur
+  cert/clé en cours de génération. Fix : suffixe basé sur le PID
+  (`ffi.C.getpid!`, unique entre enfants concurrents) + compteur local.
+- **`purge_expired` du cache de certificats jamais appelé.** Le SNI client
+  (charset filtré mais sans limite de nombre) permettait de forcer un fichier
+  `.crt/.key` par SNI distinct, jamais purgé (épuisement de la flash à moyen
+  terme). Fix : purge périodique (`auth_cfg.cert_cache_purge_interval`,
+  défaut 3600s) dans la boucle principale de `auth.server.run`, seule à vivre
+  assez longtemps (chaque enfant forké par connexion n'a qu'une copie COW
+  figée du cache). Logique de décision extraite en fonction pure testable
+  `should_purge_cert_cache`.
+- **Fuites mémoire additionnelles, même schéma que `ipc.pending`** (purge
+  uniquement en lecture, jamais en balayage périodique) : verdicts du second
+  avis (`second_opinion.purge_verdicts`), cache de lookup strip CNAME
+  (`worker_responses.purge_strip_query_cache`), throttle anti-rafale captif
+  (`worker_captive.purge_redirect_rl`, gaté par le temps car appelé seulement
+  sur SYN/80). Toutes branchées sur un point de purge périodique existant
+  (`worker_responses`) ou nouveau mais peu coûteux (`worker_captive`).
+- **Cache de verdict SNI keyé par domaine seul.** Deux règles `validate`
+  ciblant le même domaine avec des `validate_resolvers` per-règle différents
+  partageaient le même verdict pendant `verdict_ttl_s` : le verdict du
+  premier résolveur interrogé s'appliquait à tort au second. Fix :
+  `worker_tls.validate_sni` inclut les résolveurs dans la clé de cache quand
+  ils sont per-règle (table).
+
+**Non-bugs vérifiés** (rapportés par l'audit initial, invalidés à la
+relecture du code complet) :
+- *"`mac_learner` meurt silencieusement si le bind échoue, sans refork."*
+  Faux : `main.moon` reforke déjà inconditionnellement tout worker mort
+  (`waitpid` + `restart_fn`), et `create_server` fait déjà `unlink` du socket
+  stale avant bind — le refork réussit donc au tour suivant.
+- *"`cname_target` ambigu si plusieurs règles `redirect` matchent."* Le code
+  accumule en réalité le dernier `cname_target` non-nil jusqu'à la règle
+  gagnante incluse (`first_match_wins` arrête la boucle dès le verdict
+  trouvé) : le cas nominal (1 règle `cname` + 1 règle `allow`, pattern
+  SafeSearch documenté) est correct. Le bug théorique ne se manifeste qu'avec
+  plusieurs règles `cname`-only à cibles différentes chevauchant les mêmes
+  conditions — mauvaise configuration plutôt que bug du chemin nominal.
+  Non corrigé (déprioritisé) ; un fix correct lierait `cname_target` au
+  `rule_id` gagnant plutôt qu'à un `cname_target_any` global.
+
+**Vérification (2026-07-16)** : `make test` (1885 tests unitaires + 10 JS) et
+`make test-e2e` (94 scénarios G0-G18, homelab libvirt) 100% verts. `make
+coverage` (luacov) échoue à écrire son fichier de stats sur run complet
+(limite d'infra observée, pas un défaut du projet) ; palliée par un sampler
+alternatif maison (`tests/helpers/quick_coverage_setup.lua`, hook `debug.sethook`
+en mode *count* plutôt que *line* — même limitation JIT que luacov mais bien
+moins d'appels de hook, donc ~4x plus rapide). A permis d'identifier un vrai
+gap de test préexistant, corrigé dans la foulée :
+
+- **`filter/init.moon` n'était jamais testé directement** (0 ligne touchée par
+  le sampler). Cause : ce module `require`s transitivement `ip_whitelist.moon`,
+  dont l'appel `libnft.nft_ctx_new 0` au chargement du module plante
+  immédiatement sous le stub FFI de `busted_setup.lua` (`libnft = {}`) — donc
+  tout spec qui aurait tenté de `require "filter.init"` échouait au chargement,
+  d'où l'absence totale de spec pour ce module (tous les tests existants
+  passent par `filter.rule`, la couche sous-jacente, en la court-circuitant).
+  Fix : `tests/unit/filter/init_spec.moon` stub `package.loaded["ip_whitelist"]`
+  (même pattern que les stubs `ipc`/`dns_ede`/`auth.sessions` déjà en place dans
+  `rule_spec.moon`) et couvre `load`/`decide`/`decide_meta`/`get_auth_cfg`/
+  `get_sni_cfg`/`get_rules`/`get_rule_on_response`/`run_on_response`, y compris
+  l'état "non chargé" et le fallback `allowed_domains` sans règles configurées.
+
+**Déploiement (2026-07-16, 10.35.1.254)** : avant le déploiement réel, un
+**bug actif d'installateur** a été détecté en dry-run et corrigé : `detect_cmd`
+de `patch_bridge_ifname` (`install-owrt.moon`) utilise la détection sysfs sûre,
+mais `ssh_capture`/`capture` fusionnent stdout+stderr (`2>&1`) — et
+`UserKnownHostsFile=/dev/null` ne persistant jamais la clé, `ssh` imprime à
+**chaque appel** `Warning: Permanently added '<host>' (...) to the list of
+known hosts.` sur stderr. Ce bandeau devenait la première ligne captée, et
+`detected\match "^%S+"` y lisait `"Warning:"` au lieu du vrai nom d'interface —
+**exactement l'incident déjà vécu sur 10.35.1.70** (`bridge_ifname="Warning:"`
+→ crash-loop arp/captive ENODEV, cf. plus haut). Fix : `-o LogLevel=ERROR`
+ajouté à `ssh_prefix` (supprime le bandeau sans toucher
+`StrictHostKeyChecking`) + garde-fou de validation du nom d'interface
+(`^[%w%-_.]+$`) dans `patch_bridge_ifname` avant tout patch, en défense en
+profondeur. Tests de régression dans `tests/unit/install_owrt_spec.moon`.
+Déploiement réel ensuite effectué avec succès (bridge détecté correctement
+`"br"`, service sain, aucune régression sur le trafic DNS en cours).

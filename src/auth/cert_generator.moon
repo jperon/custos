@@ -6,6 +6,24 @@
 { :log_debug, :log_warn, :log_error } = require "log"
 { :shquote } = require "lib.shquote"
 
+-- cdef local (plutôt que ffi_defs.libc) : indépendant de l'ordre/contenu du
+-- cdef global, donc robuste sous busted où ffi_defs est stubbé sans pid_t.
+ffi = require "ffi"
+pcall ffi.cdef, "int getpid(void);"
+
+-- Suffixe unique pour les fichiers temporaires px5g : PID + compteur local,
+-- PAS math.random (aucun math.randomseed n'est fait nulle part dans ce
+-- projet ; chaque connexion étant traitée par un enfant forké, tous héritent
+-- du même état PRNG au fork, donc deux enfants concurrents dans la même
+-- seconde produiraient le même nom de fichier temporaire et s'écraseraient
+-- mutuellement leur cert/clé en cours de génération). Le PID est garanti
+-- unique entre enfants concurrents ; le compteur couvre les appels multiples
+-- au sein d'un même process (rsakey + selfsigned).
+_tmp_seq = 0
+unique_suffix = ->
+  _tmp_seq += 1
+  "#{tonumber ffi.C.getpid!}_#{os.time!}_#{_tmp_seq}"
+
 --- Génère une clé RSA via px5g.
 -- @tparam number bits Taille de la clé (ex: 2048, 4096)
 -- @treturn string|nil Clé PEM, ou nil en cas d'erreur
@@ -16,7 +34,7 @@ generate_rsa_key = (bits = 2048) ->
 
   -- px5g écrit la clé dans le fichier passé à -out (sans -out, il écrit sur
   -- stderr, ce qui échoue sur un pipe). On lit ensuite le fichier en mémoire.
-  key_file = "/tmp/px5g_rsakey_#{os.time!}_#{math.random(1000000)}.pem"
+  key_file = "/tmp/px5g_rsakey_#{unique_suffix!}.pem"
   cmd = "px5g rsakey -out #{shquote key_file} #{bits} 2>/dev/null"
 
   exit_code = os.execute cmd
@@ -77,8 +95,9 @@ generate_self_signed = (cn, sans = {}, days = 3650) ->
   days = tonumber(days) or 3650
 
   -- Créer des fichiers temporaires pour px5g (il écrit les fichiers, ne produit pas stdout)
-  key_file = "/tmp/px5g_key_#{os.time!}_#{math.random(1000000)}.pem"
-  cert_file = "/tmp/px5g_cert_#{os.time!}_#{math.random(1000000)}.pem"
+  suffix = unique_suffix!
+  key_file = "/tmp/px5g_key_#{suffix}.pem"
+  cert_file = "/tmp/px5g_cert_#{suffix}.pem"
 
   -- Construire la commande px5g avec les bons paramètres
   -- Syntaxe: px5g selfsigned -newkey ec -keyout key.pem -out cert.pem -subj "/CN=hostname"

@@ -581,19 +581,29 @@ set_validator_state = (state={}) ->
 -- @treturn string|nil reason
 validate_sni = (domain, validate_modifier) ->
   return false, nil unless domain and domain != ""
-  now = os.time!
-  cached = sni_verdict_cache[domain]
-  if cached and cached.expires_at > now
-    return cached.blocked, cached.reason
-
-  ok_mod, mod_err = ensure_validator!
-  return false, mod_err unless ok_mod
 
   resolvers = if type(validate_modifier) == "table"
     validate_modifier
   else
     second_opinion_cfg and second_opinion_cfg.resolvers
   return false, "no_validator_resolvers" unless resolvers and #resolvers > 0
+
+  -- Clé de cache incluant les résolveurs : sans cela, deux règles `validate`
+  -- ciblant le même domaine mais avec des validate_resolvers per-règle
+  -- différents partageraient le même verdict pendant verdict_ttl_s, appliquant
+  -- à tort le résultat du premier résolveur interrogé à la seconde règle.
+  cache_key = if type(validate_modifier) == "table"
+    "#{domain}|#{table.concat validate_modifier, ","}"
+  else
+    domain
+
+  now = os.time!
+  cached = sni_verdict_cache[cache_key]
+  if cached and cached.expires_at > now
+    return cached.blocked, cached.reason
+
+  ok_mod, mod_err = ensure_validator!
+  return false, mod_err unless ok_mod
 
   budget = (second_opinion_cfg and second_opinion_cfg.budget_ms) or 1000
   doh_budget = (second_opinion_cfg and second_opinion_cfg.doh_budget_ms) or 3000
@@ -604,9 +614,9 @@ validate_sni = (domain, validate_modifier) ->
 
   ttl = (second_opinion_cfg and second_opinion_cfg.verdict_ttl_s) or SNI_VERDICT_TTL
   prune_sni_verdicts now if sni_verdict_count >= SNI_VERDICT_MAX
-  unless sni_verdict_cache[domain]
+  unless sni_verdict_cache[cache_key]
     sni_verdict_count += 1
-  sni_verdict_cache[domain] = { :blocked, :reason, expires_at: now + ttl }
+  sni_verdict_cache[cache_key] = { :blocked, :reason, expires_at: now + ttl }
   blocked, reason
 
 --- Vérifie si l'IP de destination du flux est DÉJÀ une cible légitime du CNAME.

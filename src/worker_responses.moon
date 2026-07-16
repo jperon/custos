@@ -29,7 +29,7 @@ clients_cfg = config.clients or {}
 { :parse_ip4, :parse_ip6, :parse_udp, :parse_tcp, :parse_dns, :ip2s, dns_types: QTYPE } = require "lib.packet_parsing"
 { :skip_ipv6_ext_hdrs, :new_dns_tcp_stream } = require "packet_utils"
 { :get_l2 } = require "nfq/ethernet"
-{ :drain_pipe, :is_pending, :get_pending_entry, :consume } = require "ipc"
+{ :drain_pipe, :is_pending, :get_pending_entry, :consume, :purge_pending } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix } = require "log"
@@ -123,6 +123,15 @@ maybe_dynamic_strip = (qname, dns_raw, lookup_fn) ->
   return dns_raw, false if stripped == dns_raw
   stripped = add_ede_modified(stripped, "Strip by CNAME chain context") or stripped
   (clear_ad_bit stripped), true
+
+--- Purge les entrées de strip_query_cache expirées. Sans cet appel
+-- périodique, chaque nom de domaine interrogé une seule fois (CDN,
+-- sous-domaines uniques, tracking) laisse une entrée en mémoire pour
+-- toujours dès que chain_strip_enabled est actif (croissance non bornée).
+-- @tparam number now_ts Temps courant (secondes)
+purge_strip_query_cache = (now_ts) ->
+  for qname, entry in pairs strip_query_cache
+    strip_query_cache[qname] = nil if now_ts > entry[2]
 
 tsv_field = (v) ->
   s = if v ~= nil then tostring v else ""
@@ -728,6 +737,9 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   if purge_counter == 0
     tcp_state.purge!
     purge_mac_clients ts
+    purge_pending os.time
+    purge_strip_query_cache ts
+    so_state.purge_verdicts ts if so_state
 
   unless dns_msg.header.qr
     return NF_ACCEPT
@@ -1019,4 +1031,4 @@ run = (queue_num, rfd, rules_metadata) ->
 { :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields,
   :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream,
   :try_upstream_retry, :arm_retry_fds, :format_block_event,
-  :record_chain_targets, :maybe_dynamic_strip }
+  :record_chain_targets, :maybe_dynamic_strip, :purge_strip_query_cache }

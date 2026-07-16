@@ -110,6 +110,16 @@ describe "webui/handlers/lists", ->
       status, _, _ = handle_list_get make_req("GET"), "domain", "inexistant", make_state!
       assert.equals 200, status
 
+    it "échappe le contenu du fichier dans le textarea (anti-XSS)", ->
+      -- Une ligne `</textarea><script>...` dans le fichier ne doit jamais
+      -- casser le textarea et exécuter du JS dans le contexte admin.
+      fh = io.open "#{LISTS_DIR}/domain/famille.txt", "w"
+      fh\write "</textarea><script>alert(1)</script>\n"
+      fh\close!
+      _, _, body = handle_list_get make_req("GET"), "domain", "famille", make_state!
+      assert.falsy body\find("</textarea><script>alert(1)</script>", 1, true)
+      assert.truthy body\find("&lt;/textarea&gt;", 1, true)
+
     it "type domainlist : libellé spécifique « groupe de domainlists »", ->
       status, _, body = handle_list_get make_req("GET"), "domainlist", "mon_groupe", make_state!
       assert.equals 200, status

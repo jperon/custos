@@ -75,10 +75,20 @@ new = (opts={}) ->
 
   has_parked = -> next(parked) != nil
 
+  --- Purge les verdicts B expirés jamais consommés par take_verdict (A jamais
+  -- arrivé : paquet perdu, client qui abandonne). Sans cet appel périodique,
+  -- verdicts ne purge qu'à la lecture et une entrée jamais relue reste en
+  -- mémoire indéfiniment.
+  -- @tparam number now_s Temps courant (secondes)
+  purge_verdicts = (now_s) ->
+    for key, e in pairs verdicts
+      verdicts[key] = nil if now_s > e.expires_at
+
   {
     :corr_key, :is_validator, :active_for
     :store_verdict, :take_verdict
     :park, :take_parked, :expired, :has_parked
+    :purge_verdicts
     :budget_ms
   }
 

@@ -401,6 +401,18 @@ get_pending_entry = (txid, ip_str, src_port, resolver_ip_str, now_fn) ->
 consume = (txid, ip_str, src_port, resolver_ip_str) ->
   pending[make_key txid, ip_str, src_port, resolver_ip_str] = nil
 
+--- Purge les entrées `pending` expirées jamais relues (question sans réponse :
+-- paquet perdu, upstream muet, client qui abandonne). Sans cet appel
+-- périodique, `is_pending`/`get_pending_entry` ne purgent qu'en lecture et une
+-- entrée jamais relue reste en mémoire indéfiniment (hot-path le plus
+-- sollicité du système). À appeler périodiquement (cf. worker_responses.moon,
+-- même cadence que tcp_state.purge!/purge_mac_clients).
+-- @tparam function now_fn () -> epoch
+purge_pending = (now_fn) ->
+  now = now_fn!
+  for key, entry in pairs pending
+    pending[key] = nil if now > entry.expire
+
 {
   :encode_msg
   :decode_msg
@@ -414,6 +426,7 @@ consume = (txid, ip_str, src_port, resolver_ip_str) ->
   :is_pending
   :get_pending_entry
   :consume
+  :purge_pending
   :MSG_IPV4
   :MSG_IPV6
   :MSG_IPV4_REFUSED

@@ -13,6 +13,7 @@
 #   test-e2e      - Suite E2E complète via homelab libvirt (G0-G13, dont admin webui)
 #   test-e2e-rebuild - Reconstruction complète du homelab puis suite E2E
 #   coverage     - Unit tests + luacov report in tmp/coverage/
+#   coverage-quick - Alternative rapide (échantillonnage) : tmp/coverage_quick/
 #   run          - Start supervisor (requires root + nft rules)
 #   clean        - Remove compiled Lua files
 #   reload       - SIGHUP to restart config
@@ -78,7 +79,7 @@ SYNC_LUAS  := $(patsubst $(SYNC)/%.moon,$(LUA)/sync/%.lua,$(SYNC_MOONS))
 
 .PHONY: all clean check test test-unit test-js test-vm test-openwrt test-e2e test-e2e-rebuild \
         homelab-up homelab-down homelab-nuke homelab-redeploy \
-        coverage run reload update-lists make-secret logs \
+        coverage coverage-quick run reload update-lists make-secret logs \
         bench bench-micro bench-load \
         sync-init sync-push-init redbean-ui help
 
@@ -175,6 +176,21 @@ coverage: all compile-specs compile-helpers
 	@if [ -f tmp/coverage/luacov.report.out ]; then \
 	  grep -E "^Total" tmp/coverage/luacov.report.out || true; \
 	fi
+
+# Alternative rapide à `coverage` : hook debug.sethook en mode *count*
+# (échantillonnage) plutôt que *line* (luacov, exhaustif mais ~4x plus lent
+# sur cette suite, cf. AGENTS.md § Corrections d'audit 2026-07-16). Donne un
+# ordre de grandeur, pas un pourcentage exact — utile pour repérer rapidement
+# les fichiers jamais exercés par aucun test.
+coverage-quick: all compile-specs compile-helpers
+	@mkdir -p tmp/coverage_quick tmp/test-logs
+	@rm -f tmp/coverage_quick/quick_coverage.lua
+	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/quick_coverage_setup.lua \
+	    tests/unit 2>&1 | tee tmp/test-logs/coverage-quick.log
+	@echo ""
+	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  luajit tools/quick_coverage_report.lua | tail -50
 
 # ── OpenWrt live tests via SSH ────────────────────────────────────────────
 
@@ -333,6 +349,7 @@ help:
 	@echo "  test-unit    - Tests unitaires Busted uniquement (sans FFI)"
 	@echo "  test-ffi     - Tests FFI socket/WolfSSL/intégration"
 	@echo "  coverage     - Tests unitaires + rapport luacov (tmp/coverage/)"
+	@echo "  coverage-quick - Alternative rapide par échantillonnage (tmp/coverage_quick/)"
 	@echo "  test-openwrt - Tests OpenWrt live via SSH (HOST=user@host requis)"
 	@echo "  homelab-up    - Crée/démarre les 3 VMs OpenWrt (via/custos/servus)"
 	@echo "  homelab-down  - Arrête les VMs"

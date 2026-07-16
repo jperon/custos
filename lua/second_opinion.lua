@@ -89,6 +89,14 @@ new = function(opts)
   has_parked = function()
     return next(parked) ~= nil
   end
+  local purge_verdicts
+  purge_verdicts = function(now_s)
+    for key, e in pairs(verdicts) do
+      if now_s > e.expires_at then
+        verdicts[key] = nil
+      end
+    end
+  end
   return {
     corr_key = corr_key,
     is_validator = is_validator,
@@ -99,6 +107,7 @@ new = function(opts)
     take_parked = take_parked,
     expired = expired,
     has_parked = has_parked,
+    purge_verdicts = purge_verdicts,
     budget_ms = budget_ms
   }
 end

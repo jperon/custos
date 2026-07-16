@@ -403,6 +403,10 @@ make_server6 = function(port)
   srv6:settimeout(1)
   return srv6
 end
+local should_purge_cert_cache
+should_purge_cert_cache = function(now, last_run, interval)
+  return now - last_run >= interval
+end
 local run
 run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
   local port = auth_cfg.port or 33443
@@ -523,6 +527,8 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     }
   end)
   replay_sessions_to_nft(state)
+  local cert_cache_purge_interval = auth_cfg.cert_cache_purge_interval or 3600
+  local last_cert_cache_purge = os.time()
   while true do
     reload_secrets_if_needed(state)
     while true do
@@ -530,6 +536,16 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
       if not (dead_pid and dead_pid > 0) then
         break
       end
+    end
+    if cert_cache and should_purge_cert_cache(os.time(), last_cert_cache_purge, cert_cache_purge_interval) then
+      last_cert_cache_purge = os.time()
+      local removed = cert_cache.purge_expired()
+      log_debug(function()
+        return {
+          action = "cert_cache_periodic_purge",
+          removed = removed
+        }
+      end)
     end
     local readable, _ = socket.select(all_servers, nil, 0.1)
     if readable then
@@ -569,5 +585,6 @@ return {
   run = run,
   replay_sessions_to_nft = replay_sessions_to_nft,
   dispatch_connection = dispatch_connection,
-  resolve_tls_ctx = resolve_tls_ctx
+  resolve_tls_ctx = resolve_tls_ctx,
+  should_purge_cert_cache = should_purge_cert_cache
 }

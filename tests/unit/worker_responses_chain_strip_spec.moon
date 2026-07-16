@@ -114,3 +114,21 @@ describe "worker_responses chain strip", ->
     m.maybe_dynamic_strip "legit.example", dns_raw, lookup_neg
     m.maybe_dynamic_strip "legit.example", dns_raw, lookup_neg
     assert.are.equal 1, calls_neg
+
+  -- Sans purge_strip_query_cache, un nom interrogé une seule fois (CDN,
+  -- sous-domaine unique, tracking) reste en mémoire indéfiniment dès que
+  -- chain_strip_enabled est actif (croissance non bornée).
+  it "purge_strip_query_cache force un nouvel appel lookup après purge", ->
+    m = fresh_worker_responses!
+    dns_raw = build_direct_aaaa_resp!
+    calls = 0
+    lookup = -> calls += 1; QTYPE_AAAA
+    m.maybe_dynamic_strip qname_target, dns_raw, lookup
+    assert.are.equal 1, calls
+
+    -- Purge à une date bien après l'expiration (STRIP_QUERY_TTL=2s) :
+    -- l'entrée doit disparaître même sans jamais avoir été relue entretemps.
+    m.purge_strip_query_cache os.time! + 1000
+
+    m.maybe_dynamic_strip qname_target, dns_raw, lookup
+    assert.are.equal 2, calls

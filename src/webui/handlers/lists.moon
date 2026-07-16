@@ -14,6 +14,12 @@ H       = require "auth.html"
 { :read_config, :write_config } = require "webui.serializer"
 { :shquote } = require "lib.shquote"
 
+-- Échappe le texte destiné au contenu/attribut HTML (le DSL auth.html
+-- n'échappe rien : cf. webui.handlers.devices/verdicts pour le même pattern).
+esc = (s) ->
+  s = tostring s or ""
+  (s\gsub "[&<>\"']", { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })
+
 parse_form = (body) ->
   return {} unless body
   out = {}
@@ -183,7 +189,7 @@ handle_list_get = (req, type_name, list_name, state) ->
   edit_body = H.div({
       H.label "Contenu (#{item_hint} — les lignes vides et # commentaires sont ignorés)"
       H.textarea { name: "content", rows: "20",
-                   style: "font-family:monospace;width:100%;margin-top:.25rem" }, content
+                   style: "font-family:monospace;width:100%;margin-top:.25rem" }, esc(content)
     }) ..
     H.input({ type: "hidden", name: "action", value: "save" }) ..
     H.div({ style: "margin-top:.75rem" },

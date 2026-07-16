@@ -746,15 +746,6 @@ validate_sni = function(domain, validate_modifier)
   if not (domain and domain ~= "") then
     return false, nil
   end
-  local now = os.time()
-  local cached = sni_verdict_cache[domain]
-  if cached and cached.expires_at > now then
-    return cached.blocked, cached.reason
-  end
-  local ok_mod, mod_err = ensure_validator()
-  if not (ok_mod) then
-    return false, mod_err
-  end
   local resolvers
   if type(validate_modifier) == "table" then
     resolvers = validate_modifier
@@ -763,6 +754,21 @@ validate_sni = function(domain, validate_modifier)
   end
   if not (resolvers and #resolvers > 0) then
     return false, "no_validator_resolvers"
+  end
+  local cache_key
+  if type(validate_modifier) == "table" then
+    cache_key = tostring(domain) .. "|" .. tostring(table.concat(validate_modifier, ","))
+  else
+    cache_key = domain
+  end
+  local now = os.time()
+  local cached = sni_verdict_cache[cache_key]
+  if cached and cached.expires_at > now then
+    return cached.blocked, cached.reason
+  end
+  local ok_mod, mod_err = ensure_validator()
+  if not (ok_mod) then
+    return false, mod_err
   end
   local budget = (second_opinion_cfg and second_opinion_cfg.budget_ms) or 1000
   local doh_budget = (second_opinion_cfg and second_opinion_cfg.doh_budget_ms) or 3000
@@ -774,10 +780,10 @@ validate_sni = function(domain, validate_modifier)
   if sni_verdict_count >= SNI_VERDICT_MAX then
     prune_sni_verdicts(now)
   end
-  if not (sni_verdict_cache[domain]) then
+  if not (sni_verdict_cache[cache_key]) then
     sni_verdict_count = sni_verdict_count + 1
   end
-  sni_verdict_cache[domain] = {
+  sni_verdict_cache[cache_key] = {
     blocked = blocked,
     reason = reason,
     expires_at = now + ttl

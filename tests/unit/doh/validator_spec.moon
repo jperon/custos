@@ -128,6 +128,22 @@ describe "doh.validator.query_verdict", ->
     assert.is_true blocked
     assert.truthy reason\find "REFUSED"
 
+  it "endpoint DoH : le certificat TLS du validateur est vérifié (verify_tls=true)", ->
+    -- Un second avis DNS non authentifié (verify_tls=false) permettrait à un
+    -- attaquant on-path de forger un verdict block/sinkhole/redirect sans
+    -- MITM détectable : le validateur DOIT vérifier le certificat comme
+    -- upstream_doh_curl.new_client le fait par défaut ailleurs (worker_doh).
+    seen_verify_tls = nil
+    doh_stub = {}
+    doh_stub.new_client = (url, timeout, verify_tls) ->
+      seen_verify_tls = verify_tls
+      { url: url, _mod: doh_stub }
+    doh_stub.query = (client, raw) -> make_response(0), nil
+    doh_stub.close = (->)
+    mod = load_validator (make_upstream_stub nil), doh_stub
+    mod.query_verdict "dns_raw", { "https://1.1.1.1/dns-query" }
+    assert.is_true seen_verify_tls
+
 -- Réponse DNS NOERROR avec un answer A donné (rdata 4 octets).
 make_a_response = (rdata, txid=0x1234) ->
   question = "\3foo\3bar\0" .. sp ">H H", 1, 1   -- A, IN

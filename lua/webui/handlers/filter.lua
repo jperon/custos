@@ -8,6 +8,17 @@ do
   local _obj_0 = require("webui.serializer")
   read_config, write_config = _obj_0.read_config, _obj_0.write_config
 end
+local esc
+esc = function(s)
+  s = tostring(s or "")
+  return (s:gsub("[&<>\"']", {
+    ["&"] = "&amp;",
+    ["<"] = "&lt;",
+    [">"] = "&gt;",
+    ['"'] = "&quot;",
+    ["'"] = "&#39;"
+  }))
+end
 local parse_form
 parse_form = function(body)
   if not (body) then
@@ -61,7 +72,7 @@ render_kv_editor = function(section_key, title, desc, value_label, current_map, 
           H.input({
             type = "text",
             name = "key[]",
-            value = k,
+            value = esc(k),
             style = "margin:0"
           })
         }),
@@ -70,13 +81,13 @@ render_kv_editor = function(section_key, title, desc, value_label, current_map, 
             name = "val[]",
             rows = "2",
             style = "margin:0; font-family:monospace"
-          }, val_str)
+          }, esc(val_str))
         }),
         H.td({
           H.button({
             type = "submit",
             name = "delete",
-            value = k,
+            value = esc(k),
             class = "btn btn-danger btn-sm"
           }, "✕")
         })
@@ -144,28 +155,28 @@ render_times_editor = function(current_times)
           H.input({
             type = "text",
             name = "key[]",
-            value = k
+            value = esc(k)
           })
         }),
         H.td({
           H.input({
             type = "time",
             name = "start[]",
-            value = start_s
+            value = esc(start_s)
           })
         }),
         H.td({
           H.input({
             type = "time",
             name = "end[]",
-            value = end_s
+            value = esc(end_s)
           })
         }),
         H.td({
           H.button({
             type = "submit",
             name = "delete",
-            value = k,
+            value = esc(k),
             class = "btn btn-danger btn-sm"
           }, "✕")
         })

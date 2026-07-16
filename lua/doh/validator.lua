@@ -43,7 +43,7 @@ end
 local open_client
 open_client = function(endpoint, timeout_ms)
   if endpoint:sub(1, 8) == "https://" then
-    return get_doh_mod().new_client(endpoint, timeout_ms)
+    return get_doh_mod().new_client(endpoint, timeout_ms, true)
   else
     return upstream_mod.new_client(endpoint, 53, timeout_ms)
   end

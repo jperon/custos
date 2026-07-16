@@ -187,6 +187,9 @@ details_of = function(rules, req, decision_cfg)
   if decision_cfg == nil then
     decision_cfg = nil
   end
+  if req and req.domain then
+    req.domain = req.domain:lower()
+  end
   local effective_cfg = decision_cfg or (rules and rules.decision_cfg) or { }
   local continue_mode = effective_cfg.continue_to_next_rule
   local first_match_wins = true

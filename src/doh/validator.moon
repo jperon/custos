@@ -38,7 +38,11 @@ get_doh_mod = ->
 -- @treturn table|nil client, string|nil err
 open_client = (endpoint, timeout_ms) ->
   if endpoint\sub(1, 8) == "https://"
-    get_doh_mod!.new_client endpoint, timeout_ms
+    -- verify_tls=true explicite : upstream_doh_curl.new_client défaut à
+    -- `false` si omis, ce qui désactiverait la vérification du certificat
+    -- du validateur et permettrait à un attaquant on-path de forger un
+    -- verdict block/sinkhole/redirect sans MITM détectable.
+    get_doh_mod!.new_client endpoint, timeout_ms, true
   else
     upstream_mod.new_client endpoint, 53, timeout_ms
 

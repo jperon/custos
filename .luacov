@@ -4,8 +4,13 @@
 --   make coverage             → compile + busted --coverage + luacov
 --   tmp/coverage/luacov.report.out  → rapport texte
 --
--- Le fichier de stats (.stats.out) est écrit en cours de session ;
--- luacov le consomme et produit le rapport.
+-- ATTENTION : sur la suite complète (tests/unit), luacov instrumente CHAQUE
+-- ligne exécutée (debug.sethook "l") et désactive le JIT LuaJIT — ~4x plus
+-- lent que l'alternative ci-dessous, et a déjà échoué à écrire son fichier de
+-- stats en fin de run (cf. AGENTS.md § Corrections d'audit 2026-07-16).
+-- Préférer `make coverage-quick` (tests/helpers/quick_coverage_setup.lua) pour
+-- un ordre de grandeur rapide ; ne lancer `make coverage` que pour un chiffre
+-- exact ciblé sur un sous-ensemble (`tests/unit/<module>`).
 
 return {
   statsfile  = "tmp/coverage/luacov.stats.out",

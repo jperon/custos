@@ -168,6 +168,33 @@ describe "auth/cert_generator", ->
       assert.is_nil err
       assert.are.equal fake_pem, key_pem
 
+    -- Régression anti-collision PRNG : sans math.randomseed (jamais fait dans
+    -- ce projet), deux enfants forkés au même os.time! avec le même état PRNG
+    -- hérité produiraient le même math.random(...) et donc le même nom de
+    -- fichier temporaire, s'écrasant mutuellement leur clé en cours de
+    -- génération. Avec os.time! ET math.random figés à une valeur constante
+    -- (simule deux enfants forkés identiques), le nom doit rester unique.
+    it "reste unique même à os.time!/math.random figés (simule deux enfants forkés identiques)", ->
+      fake_pem = "-----BEGIN RSA PRIVATE KEY-----\nfakedata\n-----END RSA PRIVATE KEY-----\n"
+      orig_time, orig_random = os.time, math.random
+      os.time   = -> 1000000
+      math.random = (n) -> 42
+      seen_paths = {}
+      os.execute = (cmd) ->
+        path = cmd\match "%-out ([^%s]+)"
+        seen_paths[#seen_paths + 1] = path
+        0
+      io.open = (path, mode) ->
+        {
+          read:  (self, fmt) -> fake_pem
+          close: (self) -> true
+        }
+      generate_rsa_key 2048
+      generate_rsa_key 2048
+      os.time, math.random = orig_time, orig_random
+      assert.equals 2, #seen_paths
+      assert.are_not.equal seen_paths[1], seen_paths[2]
+
   -- ═══════════════════════════════════════════════════════════════════════════
   -- generate_self_signed — branches d'erreur avec os.execute + io.open mockés
   -- px5g écrit deux fichiers (clé puis certificat) ; on simule exit code et le

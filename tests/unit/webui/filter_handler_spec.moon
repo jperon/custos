@@ -68,6 +68,24 @@ describe "webui/handlers/filter", ->
       status, _, _ = handle_nets_get make_req("GET"), state
       assert.equals 500, status
 
+  -- ── XSS stocké : valeurs des dictionnaires nommés échappées ──────────────
+  -- Le DSL auth.html n'échappe rien par conception : une clé/valeur admin
+  -- contenant `"><script>` ne doit jamais casser l'attribut/textarea et
+  -- exécuter du JS dans le contexte admin.
+  describe "render_kv_editor — anti-XSS", ->
+    it "échappe une valeur de MAC nommée contenant du HTML", ->
+      write_cfg { filter: { macs: { ['x"><script>alert(1)</script>']: "aa:bb:cc:dd:ee:ff" } } }
+      _, _, body = handle_macs_get make_req("GET"), make_state!
+      assert.falsy body\find("<script>alert(1)</script>", 1, true)
+      assert.truthy body\find("&lt;script&gt;", 1, true)
+
+  describe "render_times_editor — anti-XSS", ->
+    it "échappe un nom de plage horaire contenant du HTML", ->
+      write_cfg { filter: { times: { ['"><script>alert(1)</script>']: { "08:00", "18:00" } } } }
+      _, _, body = handle_times_get make_req("GET"), make_state!
+      assert.falsy body\find("<script>alert(1)</script>", 1, true)
+      assert.truthy body\find("&lt;script&gt;", 1, true)
+
   -- ── Nets POST — ajout ────────────────────────────────────────────────────
 
   describe "handle_nets_post — ajout", ->

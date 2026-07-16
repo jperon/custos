@@ -151,6 +151,29 @@ describe "validate_sni (second avis + cache)", ->
     sni.validate_sni "y.example", { "8.8.8.8" }
     assert.are.same { "8.8.8.8" }, seen
 
+  -- Régression : le cache était keyé par domaine seul. Deux règles `validate`
+  -- ciblant le même domaine avec des validate_resolvers per-règle différents
+  -- partageaient donc le même verdict pendant verdict_ttl_s (60s défaut) :
+  -- le verdict du premier résolveur interrogé était appliqué à tort au
+  -- second, enforcement incohérent selon quelle règle est évaluée en premier.
+  it "ne partage pas le verdict entre deux règles aux résolveurs différents pour le même domaine", ->
+    calls = {}
+    sni.set_validator_state {
+      validator_mod: { query_verdict: (raw, resolvers) ->
+        key = table.concat resolvers, ","
+        calls[key] = (calls[key] or 0) + 1
+        -- Résolveur A bloque, résolveur B laisse passer.
+        (key == "1.1.1.1"), (key == "1.1.1.1" and "blocked_by_A" or nil)
+      }
+      second_opinion_cfg: { resolvers: { "9.9.9.9" }, verdict_ttl_s: 60 }
+    }
+    blocked_a = sni.validate_sni "shared.example", { "1.1.1.1" }
+    blocked_b = sni.validate_sni "shared.example", { "2.2.2.2" }
+    assert.is_true blocked_a
+    assert.is_false blocked_b
+    assert.are.equal 1, calls["1.1.1.1"]
+    assert.are.equal 1, calls["2.2.2.2"]
+
 describe "dst_matches_cname", ->
   -- ip2s sur des rdata bruts ; on fabrique des octets IPv4/IPv6.
   v4 = (a, b, c, d) -> string.char a, b, c, d

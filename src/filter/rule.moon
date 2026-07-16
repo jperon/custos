@@ -184,6 +184,13 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
   eval_fn, metadata
 
 details_of = (rules, req, decision_cfg=nil) ->
+  -- Comparaison de domaine insensible à la casse (anti 0x20-encoding) : les
+  -- .bin de domainlists et les conditions to_domain sont écrits/comparés en
+  -- minuscules, mais req.domain vient du paquet DNS brut (aucune normalisation
+  -- côté ipparse). Normaliser ici une seule fois couvre tous les chemins
+  -- (UDP, DoH) sans dupliquer le \lower! dans chaque condition. Le SNI a déjà
+  -- sa propre normalisation (worker_tls.normalize_sni) en amont.
+  req.domain = req.domain\lower! if req and req.domain
   effective_cfg   = decision_cfg or (rules and rules.decision_cfg) or {}
   continue_mode   = effective_cfg.continue_to_next_rule
   first_match_wins = true

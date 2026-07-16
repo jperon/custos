@@ -237,6 +237,14 @@ make_server6 = (port) ->
   srv6\settimeout 1
   srv6
 
+--- Décide si le cache de certificats doit être purgé (pure, testée).
+-- @tparam number now      Timestamp courant
+-- @tparam number last_run Timestamp de la dernière purge
+-- @tparam number interval Intervalle minimal entre deux purges (secondes)
+-- @treturn boolean
+should_purge_cert_cache = (now, last_run, interval) ->
+  now - last_run >= interval
+
 --- Démarre le serveur HTTPS d'authentification.
 -- @tparam table secrets Table des secrets déjà chargée
 -- @tparam table auth_cfg Configuration auth
@@ -316,12 +324,27 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
 
   replay_sessions_to_nft state
 
+  -- purge_expired n'était jamais appelé : le SNI client (charset filtré mais
+  -- sans limite de nombre) permettait de forcer un fichier .crt/.key par SNI
+  -- distinct présenté sur le port 443, jamais purgé (épuisement de la flash
+  -- à moyen terme). Le cache LRU/persistent_index en RAM ne vit réellement
+  -- que dans ce process parent (chaque enfant forké par connexion n'en voit
+  -- qu'une copie COW figée) : c'est donc ici, dans la boucle longue durée,
+  -- qu'il faut purger périodiquement.
+  cert_cache_purge_interval = auth_cfg.cert_cache_purge_interval or 3600
+  last_cert_cache_purge = os.time!
+
   while true
     reload_secrets_if_needed state
 
     while true
       dead_pid = reap_one!
       break unless dead_pid and dead_pid > 0
+
+    if cert_cache and should_purge_cert_cache os.time!, last_cert_cache_purge, cert_cache_purge_interval
+      last_cert_cache_purge = os.time!
+      removed = cert_cache.purge_expired!
+      log_debug -> { action: "cert_cache_periodic_purge", removed: removed }
 
     readable, _ = socket.select all_servers, nil, 0.1
     if readable
@@ -337,4 +360,4 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
 
           dispatch_connection client, peer_ip, state
 
-{ :run, :replay_sessions_to_nft, :dispatch_connection, :resolve_tls_ctx }
+{ :run, :replay_sessions_to_nft, :dispatch_connection, :resolve_tls_ctx, :should_purge_cert_cache }

@@ -5,13 +5,21 @@ do
 end
 local shquote
 shquote = require("lib.shquote").shquote
+local ffi = require("ffi")
+pcall(ffi.cdef, "int getpid(void);")
+local _tmp_seq = 0
+local unique_suffix
+unique_suffix = function()
+  _tmp_seq = _tmp_seq + 1
+  return tostring(tonumber(ffi.C.getpid())) .. "_" .. tostring(os.time()) .. "_" .. tostring(_tmp_seq)
+end
 local generate_rsa_key
 generate_rsa_key = function(bits)
   if bits == nil then
     bits = 2048
   end
   bits = tonumber(bits) or 2048
-  local key_file = "/tmp/px5g_rsakey_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000000)) .. ".pem"
+  local key_file = "/tmp/px5g_rsakey_" .. tostring(unique_suffix()) .. ".pem"
   local cmd = "px5g rsakey -out " .. tostring(shquote(key_file)) .. " " .. tostring(bits) .. " 2>/dev/null"
   local exit_code = os.execute(cmd)
   if not (exit_code == 0 or exit_code == true) then
@@ -99,8 +107,9 @@ generate_self_signed = function(cn, sans, days)
     return nil, nil, false, err
   end
   days = tonumber(days) or 3650
-  local key_file = "/tmp/px5g_key_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000000)) .. ".pem"
-  local cert_file = "/tmp/px5g_cert_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000000)) .. ".pem"
+  local suffix = unique_suffix()
+  local key_file = "/tmp/px5g_key_" .. tostring(suffix) .. ".pem"
+  local cert_file = "/tmp/px5g_cert_" .. tostring(suffix) .. ".pem"
   local subj = shquote("/CN=" .. tostring(cn))
   local cmd = "px5g selfsigned -newkey ec -keyout " .. tostring(shquote(key_file)) .. " -out " .. tostring(shquote(cert_file)) .. " -subj " .. tostring(subj) .. " 2>/dev/null"
   log_debug(function()

@@ -125,6 +125,30 @@ should_throttle_redirect = function(client_ip, now_epoch, window, state)
   state[client_ip] = now_epoch
   return false
 end
+local _redirect_rl_last_purge = 0
+local _redirect_rl_purge_period = 60
+local purge_redirect_rl
+purge_redirect_rl = function(now_epoch, window, state)
+  if window == nil then
+    window = DEFAULT_REDIRECT_RL_WINDOW
+  end
+  if state == nil then
+    state = _redirect_rl
+  end
+  for ip, last in pairs(state) do
+    if (now_epoch - last) >= window then
+      state[ip] = nil
+    end
+  end
+end
+local maybe_purge_redirect_rl
+maybe_purge_redirect_rl = function(now_epoch)
+  if (now_epoch - _redirect_rl_last_purge) < _redirect_rl_purge_period then
+    return 
+  end
+  _redirect_rl_last_purge = now_epoch
+  return purge_redirect_rl(now_epoch, _redirect_rl_window)
+end
 local handle_syn
 handle_syn = function(qh_ptr, nfad, pkt_id)
   local payload_ptr = ffi.new("unsigned char*[1]")
@@ -214,7 +238,9 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
     end)
     return NF_DROP
   end
-  if should_throttle_redirect(client_ip_str, os.time(), _redirect_rl_window) then
+  local now_epoch = os.time()
+  maybe_purge_redirect_rl(now_epoch)
+  if should_throttle_redirect(client_ip_str, now_epoch, _redirect_rl_window) then
     return NF_DROP
   end
   local ok, err = pcall(function()
@@ -332,5 +358,6 @@ return {
   run = run,
   parse_syn = parse_syn,
   build_response_frames = build_response_frames,
-  should_throttle_redirect = should_throttle_redirect
+  should_throttle_redirect = should_throttle_redirect,
+  purge_redirect_rl = purge_redirect_rl
 }

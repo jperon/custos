@@ -62,7 +62,7 @@ Installer = function(cfg)
       end
     end,
     ssh_prefix = function(self)
-      return "ssh -p " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host())
+      return "ssh -p " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host())
     end,
     ssh_run = function(self, cmd)
       local escaped = cmd:gsub("'", "'\"'\"'")
@@ -402,6 +402,10 @@ Installer = function(cfg)
       local detect_cmd = [[for b in /sys/class/net/*/bridge; do [ -d "$b" ] || continue; d=$(dirname "$b"); n=$(basename "$d"); c=$(ls -1 "$d/brif" 2>/dev/null | wc -l); echo "$c $n"; done | sort -rn | awk 'NR==1{print $2}']]
       local detected = self:ssh_capture(detect_cmd)
       detected = detected and detected:match("^%S+" or nil)
+      if detected and not detected:match("^[%w%-_.]+$") then
+        warn("⚠ Sortie de détection bridge inattendue (\"" .. tostring(detected) .. "\") — ignorée par sécurité.")
+        detected = nil
+      end
       if not (detected and #detected > 0) then
         warn("⚠ Aucune interface bridge détectée sur le routeur.")
         warn("  Vérifier la configuration réseau (un bridge LAN est requis) ;")

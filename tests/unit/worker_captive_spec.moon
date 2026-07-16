@@ -71,6 +71,24 @@ describe "worker_captive", ->
       captive.should_throttle_redirect "10.0.0.1", 1000, 5, state
       assert.is_false captive.should_throttle_redirect "10.0.0.2", 1000, 5, state
 
+  -- ── purge_redirect_rl ──────────────────────────────────────────────────
+  -- Sans purge, chaque IP ayant un jour déclenché une redirection reste dans
+  -- _redirect_rl indéfiniment (fuite mémoire non bornée, notable en IPv6 où
+  -- la rotation d'adresses de confidentialité multiplie les IP par appareil).
+  describe "purge_redirect_rl", ->
+    captive = require "worker_captive"
+
+    it "supprime les entrées plus vieilles que la fenêtre", ->
+      state = { "10.0.0.1": 1000, "10.0.0.2": 1000 }
+      captive.purge_redirect_rl 1010, 5, state
+      assert.is_nil state["10.0.0.1"]
+      assert.is_nil state["10.0.0.2"]
+
+    it "conserve les entrées encore dans la fenêtre", ->
+      state = { "10.0.0.1": 1000 }
+      captive.purge_redirect_rl 1002, 5, state
+      assert.equals 1000, state["10.0.0.1"]
+
   -- ── Comportement skip redirect ────────────────────────────────────────────────
   -- On ne peut pas appeler handle_syn directement (dépend de NFQUEUE runtime),
   -- mais on vérifie que le chemin skip est atteint en mockant user_for_mac via

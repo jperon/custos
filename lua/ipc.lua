@@ -600,6 +600,15 @@ local consume
 consume = function(txid, ip_str, src_port, resolver_ip_str)
   pending[make_key(txid, ip_str, src_port, resolver_ip_str)] = nil
 end
+local purge_pending
+purge_pending = function(now_fn)
+  local now = now_fn()
+  for key, entry in pairs(pending) do
+    if now > entry.expire then
+      pending[key] = nil
+    end
+  end
+end
 return {
   encode_msg = encode_msg,
   decode_msg = decode_msg,
@@ -613,6 +622,7 @@ return {
   is_pending = is_pending,
   get_pending_entry = get_pending_entry,
   consume = consume,
+  purge_pending = purge_pending,
   MSG_IPV4 = MSG_IPV4,
   MSG_IPV6 = MSG_IPV6,
   MSG_IPV4_REFUSED = MSG_IPV4_REFUSED,

@@ -43,6 +43,24 @@ describe "second_opinion", ->
       so.store_verdict "k", { verdict: "pass" }, 100
       assert.is_nil so.take_verdict "k", 200
 
+    -- Sans purge_verdicts, un verdict B jamais consommé par take_verdict (A
+    -- jamais arrivé : paquet perdu, client qui abandonne) reste en mémoire
+    -- indéfiniment (fuite non bornée).
+    it "purge_verdicts supprime un verdict expiré jamais consommé", ->
+      so = so_mod.new verdict_ttl_s: 5
+      so.store_verdict "k", { verdict: "block" }, 100
+      so.purge_verdicts 200
+      -- Après purge, même à t=101 (dans la fenêtre TTL d'origine), le
+      -- verdict a bien disparu — la purge n'attend pas une lecture.
+      assert.is_nil so.take_verdict "k", 101
+
+    it "purge_verdicts conserve un verdict non expiré", ->
+      so = so_mod.new verdict_ttl_s: 5
+      so.store_verdict "k", { verdict: "block" }, 100
+      so.purge_verdicts 101
+      got = so.take_verdict "k", 102
+      assert.same "block", got.verdict
+
   describe "park / take_parked", ->
     it "parque puis récupère le ctx", ->
       so = so_mod.new!

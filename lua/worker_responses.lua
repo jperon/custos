@@ -25,10 +25,10 @@ do
 end
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
-local drain_pipe, is_pending, get_pending_entry, consume
+local drain_pipe, is_pending, get_pending_entry, consume, purge_pending
 do
   local _obj_0 = require("ipc")
-  drain_pipe, is_pending, get_pending_entry, consume = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.get_pending_entry, _obj_0.consume
+  drain_pipe, is_pending, get_pending_entry, consume, purge_pending = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.get_pending_entry, _obj_0.consume, _obj_0.purge_pending
 end
 local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack
 do
@@ -126,6 +126,14 @@ maybe_dynamic_strip = function(qname, dns_raw, lookup_fn)
   end
   stripped = add_ede_modified(stripped, "Strip by CNAME chain context") or stripped
   return (clear_ad_bit(stripped)), true
+end
+local purge_strip_query_cache
+purge_strip_query_cache = function(now_ts)
+  for qname, entry in pairs(strip_query_cache) do
+    if now_ts > entry[2] then
+      strip_query_cache[qname] = nil
+    end
+  end
 end
 local tsv_field
 tsv_field = function(v)
@@ -889,6 +897,11 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   if purge_counter == 0 then
     tcp_state.purge()
     purge_mac_clients(ts)
+    purge_pending(os.time)
+    purge_strip_query_cache(ts)
+    if so_state then
+      so_state.purge_verdicts(ts)
+    end
   end
   if not (dns_msg.header.qr) then
     return NF_ACCEPT
@@ -1219,5 +1232,6 @@ return {
   arm_retry_fds = arm_retry_fds,
   format_block_event = format_block_event,
   record_chain_targets = record_chain_targets,
-  maybe_dynamic_strip = maybe_dynamic_strip
+  maybe_dynamic_strip = maybe_dynamic_strip,
+  purge_strip_query_cache = purge_strip_query_cache
 }

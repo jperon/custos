@@ -53,6 +53,32 @@ describe "install-owrt — install_default_lists", ->
     assert.falsy joined\find "enfants.txt", 1, true
     assert.falsy joined\find "adultes.txt", 1, true
 
+-- ── Régression : bandeau ssh "Warning: Permanently added..." ────────────
+-- UserKnownHostsFile=/dev/null ne persistant jamais la clé, ssh imprime ce
+-- bandeau sur stderr à CHAQUE appel. capture() fait 2>&1 (stdout+stderr
+-- fusionnés) : sans -o LogLevel=ERROR, ce bandeau devient la première ligne
+-- de toute sortie ssh_capture — déjà responsable d'un vrai incident en prod
+-- (bridge_ifname="Warning:" patché sur 10.35.1.70, crash-loop arp/captive).
+describe "install-owrt — ssh_prefix", ->
+  it "inclut -o LogLevel=ERROR (supprime le bandeau ssh 'Permanently added')", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: true }
+    assert.truthy inst\ssh_prefix!\find "LogLevel=ERROR", 1, true
+
+describe "install-owrt — patch_bridge_ifname (garde-fou anti-bannière)", ->
+  it "rejette une sortie de détection non conforme à un nom d'interface (ex: bannière ssh captée)", ->
+    inst, runs = make_inst { "for b in": "Warning:", "grep -o 'bridge_ifname": "no" }
+    ok = inst\patch_bridge_ifname!
+    assert.is_true ok
+    joined = table.concat runs, "\n"
+    assert.falsy joined\find 'bridge_ifname: "Warning:"', 1, true
+
+  it "accepte un nom d'interface valide et le patche", ->
+    inst, runs = make_inst { "for b in": "br-lan", "grep -o 'bridge_ifname": "no" }
+    ok = inst\patch_bridge_ifname!
+    assert.is_true ok
+    joined = table.concat runs, "\n"
+    assert.truthy joined\find 'bridge_ifname: "br-lan"', 1, true
+
 describe "install-owrt — install_hotplug_rps", ->
   it "crée le dossier hotplug, chmod et applique immédiatement le script", ->
     inst, runs = make_inst {}

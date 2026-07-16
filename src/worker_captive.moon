@@ -144,6 +144,27 @@ should_throttle_redirect = (client_ip, now_epoch, window=DEFAULT_REDIRECT_RL_WIN
   state[client_ip] = now_epoch
   false
 
+-- Sans purge, chaque IP cliente ayant un jour déclenché une redirection
+-- captive reste indéfiniment dans _redirect_rl (particulièrement notable en
+-- IPv6, où la rotation d'adresses de confidentialité multiplie les IP
+-- distinctes par appareil sur plusieurs mois). Purge peu coûteuse (appelée
+-- seulement sur SYN/80, pas par paquet DNS) et peu fréquente.
+_redirect_rl_last_purge   = 0
+_redirect_rl_purge_period = 60  -- secondes entre deux purges
+
+--- Purge les entrées _redirect_rl plus vieilles que `window`.
+-- Fonction pure, exportée pour le test unitaire.
+purge_redirect_rl = (now_epoch, window=DEFAULT_REDIRECT_RL_WINDOW, state=_redirect_rl) ->
+  for ip, last in pairs state
+    state[ip] = nil if (now_epoch - last) >= window
+
+--- Purge périodique gatée par le temps (pas un compteur : handle_syn n'est
+-- appelé que sur SYN/80, bien plus rare qu'un paquet DNS).
+maybe_purge_redirect_rl = (now_epoch) ->
+  return if (now_epoch - _redirect_rl_last_purge) < _redirect_rl_purge_period
+  _redirect_rl_last_purge = now_epoch
+  purge_redirect_rl now_epoch, _redirect_rl_window
+
 -- ── Callback principal ───────────────────────────────────────────
 --- Handle a TCP SYN/80 packet from NFQUEUE 2.
 -- Parses the packet, forges a TCP 302 redirect response, and drops the SYN.
@@ -219,7 +240,9 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
     log_warn -> { action: "no_redirect_url", queue: 2, ip: client_ip_str, version: ip.version, user: user }
     return NF_DROP
 
-  if should_throttle_redirect client_ip_str, os.time!, _redirect_rl_window
+  now_epoch = os.time!
+  maybe_purge_redirect_rl now_epoch
+  if should_throttle_redirect client_ip_str, now_epoch, _redirect_rl_window
     return NF_DROP
 
   ok, err = pcall ->
@@ -313,4 +336,4 @@ run = (queue_num, auth_cfg) ->
 
   run_queue tonumber(queue_num), handle_syn
 
-{ :run, :parse_syn, :build_response_frames, :should_throttle_redirect }
+{ :run, :parse_syn, :build_response_frames, :should_throttle_redirect, :purge_redirect_rl }

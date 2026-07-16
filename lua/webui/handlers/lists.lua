@@ -8,6 +8,17 @@ do
 end
 local shquote
 shquote = require("lib.shquote").shquote
+local esc
+esc = function(s)
+  s = tostring(s or "")
+  return (s:gsub("[&<>\"']", {
+    ["&"] = "&amp;",
+    ["<"] = "&lt;",
+    [">"] = "&gt;",
+    ['"'] = "&quot;",
+    ["'"] = "&#39;"
+  }))
+end
 local parse_form
 parse_form = function(body)
   if not (body) then
@@ -283,7 +294,7 @@ handle_list_get = function(req, type_name, list_name, state)
       name = "content",
       rows = "20",
       style = "font-family:monospace;width:100%;margin-top:.25rem"
-    }, content)
+    }, esc(content))
   }) .. H.input({
     type = "hidden",
     name = "action",
