@@ -119,6 +119,21 @@ local css_content = [[  * {
   }
   ]]
 local CRYPTO_JS = [[var PBKDF2_ITER = 10000;
+var FETCH_TIMEOUT_MS = 10000;
+// fetch borné par timeout : sans lui, une connexion TCP jamais établie (pool
+// navigateur gelé après une mise en veille) laisse la promesse pendante et le
+// formulaire bloqué sur « Connexion… » ; l'abort rend la main au catch, qui
+// réactive le bouton pour un nouvel essai sans rechargement.
+function fetchT(url,opts){
+  opts=opts||{};
+  if(!window.AbortController) return fetch(url,opts);
+  var ac=new AbortController();
+  opts.signal=ac.signal;
+  var t=setTimeout(function(){ac.abort();},FETCH_TIMEOUT_MS);
+  return fetch(url,opts).then(
+    function(r){clearTimeout(t);return r;},
+    function(e){clearTimeout(t);throw e;});
+}
 function _rotr(x,n){return (x>>>n)|(x<<(32-n));}
 function _hex(buf){var b=new Uint8Array(buf),s='';for(var i=0;i<b.length;i++){s+=(b[i]>>>4).toString(16)+(b[i]&15).toString(16);}return s;}
 function _utf8(str){return new TextEncoder().encode(str);}
@@ -208,20 +223,34 @@ local LOGIN_JS = [[(function(){
     var user=form.user.value, password=form.password.value;
     var btn=form.querySelector('button');
     if(btn){btn.dataset.label=btn.textContent; btn.disabled=true; btn.textContent='Connexion…';}
-    setTimeout(function(){
-    fetch('/challenge',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:'user='+encodeURIComponent(user)})
-      .then(function(r){return r.json();})
-      .then(function(ch){return deriveResponse(password,ch.salt,ch.iter,ch.nonce).then(function(resp){
-        var body='user='+encodeURIComponent(user)+'&nonce='+encodeURIComponent(ch.nonce)+'&response='+encodeURIComponent(resp);
-        return fetch('/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:body});
-      });})
-      .then(function(r){
-        if(r.ok){location.href='/'; return;}
-        if(btn){btn.disabled=false; btn.textContent=btn.dataset.label;}
-        alert('Identifiants invalides.');
-      })
-      .catch(function(){if(btn){btn.disabled=false; btn.textContent=btn.dataset.label;} alert('Erreur de connexion.');});
-    },0);
+    // Réessai automatique : après une mise en veille, la première connexion
+    // TCP peut ne jamais s'établir (pool navigateur gelé) ; fetchT borne
+    // chaque tentative, et on rejoue toute la séquence challenge+login
+    // (nouveau nonce) jusqu'à LOGIN_RETRIES fois avant d'alerter.
+    var LOGIN_RETRIES=3, RETRY_DELAY_MS=1000;
+    function attemptLogin(remaining){
+      return fetchT('/challenge',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:'user='+encodeURIComponent(user)})
+        .then(function(r){return r.json();})
+        .then(function(ch){return deriveResponse(password,ch.salt,ch.iter,ch.nonce).then(function(resp){
+          var body='user='+encodeURIComponent(user)+'&nonce='+encodeURIComponent(ch.nonce)+'&response='+encodeURIComponent(resp);
+          return fetchT('/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:body});
+        });})
+        .then(function(r){
+          if(r.ok){location.href='/'; return;}
+          if(btn){btn.disabled=false; btn.textContent=btn.dataset.label;}
+          alert('Identifiants invalides.');
+        })
+        .catch(function(){
+          if(remaining>0){
+            if(btn){btn.textContent='Connexion… (nouvel essai)';}
+            return new Promise(function(res){setTimeout(res,RETRY_DELAY_MS);})
+              .then(function(){return attemptLogin(remaining-1);});
+          }
+          if(btn){btn.disabled=false; btn.textContent=btn.dataset.label;}
+          alert('Erreur de connexion.');
+        });
+    }
+    setTimeout(function(){attemptLogin(LOGIN_RETRIES);},0);
   });
 })();
 ]]
@@ -236,7 +265,7 @@ local REGISTER_JS = [[(function(){
     setTimeout(function(){
     deriveRecord(password).then(function(rec){
       var body='user='+encodeURIComponent(user)+'&salt='+rec.salt+'&iter='+rec.iter+'&hash='+rec.hash;
-      return fetch('/register',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:body});
+      return fetchT('/register',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:body});
     }).then(function(r){
       return r.text().then(function(t){
         if(r.ok){document.open();document.write(t);document.close();return;}
@@ -260,7 +289,7 @@ local PASSWORD_JS = [[(function(){
     if(btn){btn.dataset.label=btn.textContent; btn.disabled=true; btn.textContent='Changement…';}
     setTimeout(function(){
     // 1) challenge pour vérifier l'ancien mot de passe (sans le transmettre).
-    fetch('/challenge',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:''})
+    fetchT('/challenge',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:''})
       .then(function(r){return r.json();})
       .then(function(ch){
         return Promise.all([
@@ -269,7 +298,7 @@ local PASSWORD_JS = [[(function(){
         ]).then(function(out){
           var resp=out[0], rec=out[1];
           var body='nonce='+encodeURIComponent(ch.nonce)+'&response='+resp+'&salt='+rec.salt+'&iter='+rec.iter+'&hash='+rec.hash;
-          return fetch('/password',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:body});
+          return fetchT('/password',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:body});
         });
       }).then(function(r){
         return r.text().then(function(t){

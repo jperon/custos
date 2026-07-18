@@ -110,6 +110,23 @@ test('deux 401 consécutifs → expired + alert + navigate', async function () {
   assert.strictEqual(alerts.length, 1);
 });
 
+test('un ping en 401 après expiration ne re-alerte pas', async function () {
+  const clock = makeClock();
+  const navs = [], alerts = [];
+  const r401 = function () { return { status: 401, ok: false, json: function () { return Promise.resolve(null); } }; };
+  const c = createPortalClient(baseOpts(clock, fetchQueue([r401(), r401(), r401()]), {
+    navigate: function (u) { navs.push(u); }, alert: function (m) { alerts.push(m); }
+  }));
+  c.ping();
+  await clock.advance(2000);
+  assert.strictEqual(c.getState(), 'expired');
+  assert.strictEqual(alerts.length, 1);
+  c.ping();
+  await clock.advance(0);
+  assert.strictEqual(alerts.length, 1);
+  assert.deepStrictEqual(navs, ['/']);
+});
+
 test('garde un seul ping en vol', async function () {
   const clock = makeClock();
   const fetchFn = fetchQueue(['hang']);
@@ -141,6 +158,18 @@ test('refusals: appelé en online, pas en reconnecting', async function () {
   const refCount = fetchFn.calls.filter(function (u) { return u === '/refusals'; }).length;
   assert.strictEqual(c.getState(), 'reconnecting');
   assert.strictEqual(refCount, 0);
+});
+
+test('refusals: un seul en vol, pas de chevauchement si réponse lente', async function () {
+  const clock = makeClock();
+  // /ping toujours ok ; /refusals ne répond jamais avant la fin du test (hang).
+  const fetchFn = fetchQueue([ok204(), 'hang']);
+  const c = createPortalClient(baseOpts(clock, fetchFn, { heartbeatMs: 20000, refusalsMs: 5000, timeoutMs: 9000 }));
+  c.start();
+  await clock.advance(5000);  // 1er refusalsTick : lance /refusals (jamais résolu)
+  await clock.advance(5000);  // 2e refusalsTick : ne doit PAS relancer /refusals tant que le 1er est en vol
+  const refCount = fetchFn.calls.filter(function (x) { return x.url === '/refusals'; }).length;
+  assert.strictEqual(refCount, 1);
 });
 
 test('onOnline déclenche un ping immédiat', async function () {

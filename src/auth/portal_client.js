@@ -21,6 +21,7 @@ function createPortalClient(opts) {
   var backoffMs = 0;
   var retryHandle = null;
   var refusalsHandle = null;
+  var refusalsInflight = false;
 
   function setState(s) {
     if (state !== s) { state = s; if (ui.setState) ui.setState(s); }
@@ -49,6 +50,7 @@ function createPortalClient(opts) {
     bounded('/ping', function (r) {
       inflight = false;
       if (r && r.status === 401) {
+        if (state === 'expired') return;
         unauthorized++;
         if (unauthorized < 2) { setT(ping, 2000); return; }
         setState('expired');
@@ -68,10 +70,14 @@ function createPortalClient(opts) {
     });
   }
   function refusalsTick() {
-    if (state === 'online') {
+    if (state === 'online' && !refusalsInflight) {
+      refusalsInflight = true;
       bounded('/refusals', function (r) {
         return r && r.ok ? r.json() : null;
-      }).then(function (items) { if (items) onRefusals(items); }).catch(function () {});
+      }).then(function (items) {
+        refusalsInflight = false;
+        if (items) onRefusals(items);
+      }).catch(function () { refusalsInflight = false; });
     }
     refusalsHandle = setT(refusalsTick, refusalsMs);
   }

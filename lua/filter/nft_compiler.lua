@@ -317,7 +317,8 @@ collect_static_meta = function(conditions_meta)
     if not (val) then
       return 
     end
-    seen[key] = seen[key] or { }
+    local _update_0 = key
+    seen[_update_0] = seen[_update_0] or { }
     if seen[key][val] then
       return 
     end

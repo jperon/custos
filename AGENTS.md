@@ -575,10 +575,29 @@ cible `make test-js`).
 - **Anti-tempête** (corrige aussi le bug « login impossible après déconnexion ») :
   chaque fetch est borné par `AbortController` + timeout (≈ 9 s) pour ne pas laisser
   de socket gelée saturer le pool de connexions du navigateur ; un seul ping en vol ;
-  `/refusals` suspendu hors état `online`.
+  `/refusals` suspendu hors état `online`, et un seul `/refusals` en vol à la fois
+  (`refusalsInflight`) : sans cette garde (absente jusqu'au 2026-07-17, présente sur
+  `ping` mais oubliée sur `refusalsTick`), une réponse plus lente que
+  `refusals_poll_interval` (défaut 5 s) laissait les ticks suivants relancer un
+  nouveau fetch par-dessus le précédent — chevauchement qui s'auto-aggrave sous
+  charge et se traduisait par une rafale de `NS_BINDING_ABORTED` (abort côté
+  client au bout des 9 s) dans le panneau réseau du navigateur.
 - **Wiring navigateur** (`mountPortalClient`) : heartbeat via Web Worker (non
   throttlé en arrière-plan, repli `setInterval`), événements `online`/`offline`
   (ping immédiat au retour) et `visibilitychange`, beacon `/bye` sur `pagehide`.
+- **Formulaires login/register/password aussi bornés** (`auth/pages.moon`) :
+  `CRYPTO_JS` définit `fetchT` (AbortController + timeout 10 s) et
+  `LOGIN_JS`/`REGISTER_JS`/`PASSWORD_JS` n'utilisent que lui — jamais `fetch` nu.
+  Sans cela (bug HAR 2026-07-17), un `POST /login` dont la connexion TCP n'est
+  **jamais établie** (pool de connexions Firefox gelé après une mise en veille :
+  entrée HAR `connection: null`, timings vides, aucun `conn_started` côté
+  serveur) laissait la promesse pendante et le bouton bloqué sur « Connexion… »
+  jusqu'au rechargement manuel. Le timeout rend la main au `catch` ; pour le
+  login, la séquence **challenge+login est rejouée automatiquement** (nouveau
+  nonce, `LOGIN_RETRIES=3`, délai 1 s) avant d'alerter et de réactiver le
+  bouton. Register/password gardent le réessai manuel (rejouer une écriture au
+  résultat inconnu serait risqué). Test :
+  `tests/unit/auth/login_page_js_spec.moon`.
 - **Filtrage inchangé** : aucune modification des durées token/session/nft ni de la
   sémantique serveur. Voir
   [docs/superpowers/specs/2026-06-27-portail-resilience-blip-reseau-design.md](docs/superpowers/specs/2026-06-27-portail-resilience-blip-reseau-design.md).
