@@ -16,7 +16,7 @@ ffi = require "ffi"
 { :fork_child, :reap_one } = require "lib.process"
 { :load_sessions } = require "auth.sessions"
 token = require "auth.token"
-{ :load_or_generate_sni, :load_static } = require "auth.cert"
+{ :load_or_generate_sni, :load_static, :load_or_generate_static } = require "auth.cert"
 { :extract_sni } = require "auth.sni_extractor"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 config = require "config"
@@ -274,7 +274,10 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   static_tls_ctx = nil
   if auth_cfg.cert and auth_cfg.key
     log_info -> { action: "server_loading_static_cert", cert: auth_cfg.cert, key: auth_cfg.key }
-    ctx, cert_err = load_static auth_cfg.key, auth_cfg.cert
+    -- load_or_generate_static génère un auto-signé aux chemins configurés si
+    -- les fichiers manquent (installation fraîche) : le portail doit servir du
+    -- TLS dès le premier lancement, sans étape manuelle.
+    ctx, cert_err = load_or_generate_static auth_cfg.key, auth_cfg.cert
     if ctx
       static_tls_ctx = ctx
       log_info -> { action: "server_static_cert_loaded", cert: auth_cfg.cert, key: auth_cfg.key }
@@ -308,8 +311,11 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     started_at: os.time!
     -- Contexte TLS statique construit une fois, hérité par les enfants via fork.
     static_tls_ctx: static_tls_ctx
-    -- Chemins conservés en repli si le contexte hérité est absent.
-    static_cert_paths: if auth_cfg.cert and auth_cfg.key then { cert: auth_cfg.cert, key: auth_cfg.key } else nil
+    -- Chemins conservés en repli si le contexte hérité est absent. Posés
+    -- seulement si le chargement parent a réussi : sinon chaque enfant
+    -- échouerait en boucle sur les mêmes fichiers au lieu de se replier sur
+    -- le cache SNI dynamique.
+    static_cert_paths: if static_tls_ctx then { cert: auth_cfg.cert, key: auth_cfg.key } else nil
     cert_cache: cert_cache
   }
 
@@ -319,7 +325,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     ipv4: "0.0.0.0"
     ipv6: listen6 and "::" or nil
     sessions_file: sessions_file
-    cert_cache: if auth_cfg.cert and auth_cfg.key then "static cert + dynamic SNI cache" else "dynamic SNI cache (500 slots, 90d TTL)"
+    cert_cache: if static_tls_ctx then "static cert + dynamic SNI cache" else "dynamic SNI cache (500 slots, 90d TTL)"
   }
 
   replay_sessions_to_nft state

@@ -369,11 +369,45 @@ load_static = function(key_path, cert_path)
   end
   return ctx, nil
 end
+local load_or_generate_static
+load_or_generate_static = function(key_path, cert_path)
+  if not (key_path and cert_path) then
+    return nil, "cert_path and key_path must be provided"
+  end
+  if not (file_exists(key_path) and file_exists(cert_path)) then
+    local _list_0 = {
+      key_path,
+      cert_path
+    }
+    for _index_0 = 1, #_list_0 do
+      local path = _list_0[_index_0]
+      local dir = path:match("^(.*)/[^/]+$")
+      if dir then
+        os.execute("mkdir -p '" .. tostring(dir) .. "'")
+      end
+    end
+    local sans = {
+      "DNS:custos"
+    }
+    local _list_1 = get_local_ips()
+    for _index_0 = 1, #_list_1 do
+      local ip_san = _list_1[_index_0]
+      table.insert(sans, ip_san)
+    end
+    local ok, gen_err = generate_self_signed(key_path, cert_path, sans)
+    if not (ok) then
+      return nil, gen_err or "self-signed generation failed"
+    end
+    os.execute("chmod 600 '" .. tostring(key_path) .. "'")
+  end
+  return load_static(key_path, cert_path)
+end
 return {
   load_or_generate = load_or_generate,
   generate_self_signed = generate_self_signed,
   make_context = make_context,
   load_or_generate_sni = load_or_generate_sni,
   load_static = load_static,
+  load_or_generate_static = load_or_generate_static,
   hash_string = hash_string
 }

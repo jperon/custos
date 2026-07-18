@@ -16,7 +16,7 @@ unless cert_ok
   return
 
 { :hash_string, :generate_self_signed, :make_context, :load_static,
-  :load_or_generate_sni } = cert_mod
+  :load_or_generate_sni, :load_or_generate_static } = cert_mod
 
 describe "auth/cert", ->
 
@@ -109,6 +109,53 @@ describe "auth/cert", ->
       ctx, err = load_static key_path, cert_path
       -- wolfssl disponible → ctx non nil, sinon err
       assert.is_true (ctx ~= nil) or (err ~= nil)
+
+  -- ── load_or_generate_static ──────────────────────────────────────────────
+
+  it "load_or_generate_static retourne nil si les chemins sont nil", ->
+    ctx, err = load_or_generate_static nil, nil
+    assert.is_nil ctx
+    assert.is_string err
+
+  it "load_or_generate_static charge les fichiers existants sans régénérer", ->
+    pending "px5g non installé" unless has_px5g!
+    key_path  = "tmp/spec_los_existing.key"
+    cert_path = "tmp/spec_los_existing.crt"
+    ok_gen, _ = generate_self_signed key_path, cert_path, {"DNS:los-test.local"}
+    if ok_gen
+      fh = io.open cert_path, "r"
+      before = fh\read "*a"
+      fh\close!
+      ctx, err = load_or_generate_static key_path, cert_path
+      assert.is_true (ctx ~= nil) or (err ~= nil)
+      fh = io.open cert_path, "r"
+      after = fh\read "*a"
+      fh\close!
+      assert.equals before, after, "le certificat existant ne doit pas être régénéré"
+
+  it "load_or_generate_static génère cert et clé absents (dossiers créés)", ->
+    pending "px5g non installé" unless has_px5g!
+    key_path  = "tmp/spec_los_gen/keys/auth.key"
+    cert_path = "tmp/spec_los_gen/certs/auth.crt"
+    os.execute "rm -rf tmp/spec_los_gen"
+    ctx, err = load_or_generate_static key_path, cert_path
+    fh_key = io.open key_path, "r"
+    fh_crt = io.open cert_path, "r"
+    assert.is_not_nil fh_key, "clé générée attendue : " .. tostring(err)
+    assert.is_not_nil fh_crt, "cert généré attendu : " .. tostring(err)
+    fh_key\close!
+    fh_crt\close!
+    assert.is_not_nil ctx
+
+  it "load_or_generate_static retourne nil, err si la génération échoue", ->
+    package.loaded["auth.cert_generator"] = {
+      generate_self_signed: -> nil, nil, false, "px5g absent"
+    }
+    ctx, err = load_or_generate_static "tmp/spec_los_fail/x.key", "tmp/spec_los_fail/x.crt"
+    package.loaded["auth.cert_generator"] = nil
+    os.execute "rm -rf tmp/spec_los_fail"
+    assert.is_nil ctx
+    assert.is_string err
 
   -- ── get_local_ips via load_or_generate_sni (effet de bord) ───────────────
 

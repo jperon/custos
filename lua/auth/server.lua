@@ -9,10 +9,10 @@ end
 local load_sessions
 load_sessions = require("auth.sessions").load_sessions
 local token = require("auth.token")
-local load_or_generate_sni, load_static
+local load_or_generate_sni, load_static, load_or_generate_static
 do
   local _obj_0 = require("auth.cert")
-  load_or_generate_sni, load_static = _obj_0.load_or_generate_sni, _obj_0.load_static
+  load_or_generate_sni, load_static, load_or_generate_static = _obj_0.load_or_generate_sni, _obj_0.load_static, _obj_0.load_or_generate_static
 end
 local extract_sni
 extract_sni = require("auth.sni_extractor").extract_sni
@@ -440,7 +440,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
         key = auth_cfg.key
       }
     end)
-    local ctx, cert_err = load_static(auth_cfg.key, auth_cfg.cert)
+    local ctx, cert_err = load_or_generate_static(auth_cfg.key, auth_cfg.cert)
     if ctx then
       static_tls_ctx = ctx
       log_info(function()
@@ -499,7 +499,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     started_at = os.time(),
     static_tls_ctx = static_tls_ctx,
     static_cert_paths = (function()
-      if auth_cfg.cert and auth_cfg.key then
+      if static_tls_ctx then
         return {
           cert = auth_cfg.cert,
           key = auth_cfg.key
@@ -518,7 +518,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
       ipv6 = listen6 and "::" or nil,
       sessions_file = sessions_file,
       cert_cache = (function()
-        if auth_cfg.cert and auth_cfg.key then
+        if static_tls_ctx then
           return "static cert + dynamic SNI cache"
         else
           return "dynamic SNI cache (500 slots, 90d TTL)"

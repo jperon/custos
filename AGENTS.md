@@ -628,8 +628,16 @@ See [.agents/px5g_migration.md](.agents/px5g_migration.md) for full documentatio
 - `src/auth/sni_extractor.moon` — TLS ClientHello SNI parser (RFC 5246/6066)
 
 **Modified modules**:
-- `src/auth/cert.moon` — Added `load_or_generate_sni()` for SNI-aware certs
-- `src/auth/server.moon` — Cache initialization on AUTH server startup
+- `src/auth/cert.moon` — Added `load_or_generate_sni()` for SNI-aware certs, and
+  `load_or_generate_static()` : si `auth.cert`/`auth.key` sont configurés mais
+  absents (installation fraîche), génère un auto-signé à ces chemins (mkdir -p,
+  clé 0600) au lieu d'échouer. Sans ce fix, `static_cert_paths` restait posé
+  après l'échec du chargement parent et **chaque enfant AUTH-conn levait**
+  « Cannot load static certificate in child » → portail inutilisable au premier
+  lancement (observé sur 10.35.1.17, 2026-07-18).
+- `src/auth/server.moon` — Cache initialization on AUTH server startup ;
+  `static_cert_paths` n'est posé que si le contexte statique parent a été
+  chargé (sinon repli SNI dynamique, jamais de hard-error par connexion)
 
 ## Corrections d'audit (2026-07-16)
 

@@ -422,8 +422,8 @@ Portail captif et authentification des utilisateurs.
 | `host` | string | `"::"` | Adresse d'écoute du serveur auth (`::`= toutes interfaces IPv4+IPv6) |
 | `port` | int | `33443` | Port HTTPS du serveur d'authentification |
 | `captive_port` | int | `33080` | Port HTTP du portail captif |
-| `cert` | string | — | Chemin vers le certificat TLS (optionnel si px5g activé) |
-| `key` | string | — | Chemin vers la clé privée TLS (optionnel si px5g activé) |
+| `cert` | string | — | Chemin vers le certificat TLS. Si le fichier n'existe pas au démarrage (installation fraîche), un certificat auto-signé est **généré automatiquement** à cet emplacement (px5g, dossiers parents créés). En cas d'échec de génération, repli sur le cache SNI dynamique. |
+| `key` | string | — | Chemin vers la clé privée TLS (générée avec `cert` si absente, permissions `0600`) |
 | `secrets` | string | `"/etc/custos/secrets"` | Répertoire contenant les secrets (hash mots de passe) |
 | `session_ttl` | int | `0` | Durée (s) des sessions auth (0 = illimitée) |
 | `sessions_file` | string | `"/tmp/sessions.lua"` | Fichier de persistance des sessions |

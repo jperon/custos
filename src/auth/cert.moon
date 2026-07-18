@@ -283,4 +283,33 @@ load_static = (key_path, cert_path) ->
 
   ctx, nil
 
-{ :load_or_generate, :generate_self_signed, :make_context, :load_or_generate_sni, :load_static, :hash_string }
+--- Charge le certificat statique, en le générant (auto-signé) s'il est absent.
+-- Contrat identique à load_or_generate mais sans lever : sur une installation
+-- fraîche, les chemins configurés (ex. /etc/custos/certs/auth.crt) n'existent
+-- pas encore — on génère alors un auto-signé à ces emplacements (dossiers
+-- parents créés, clé en 0600) pour que le portail fonctionne dès le premier
+-- lancement. Retourne (ctx, nil) ou (nil, err) : l'appelant peut se replier
+-- sur le cache SNI dynamique en cas d'échec.
+-- @tparam string key_path  Chemin de la clé privée PEM
+-- @tparam string cert_path Chemin du certificat PEM
+-- @treturn table|nil Contexte TLS WolfSSL, ou nil si échec
+-- @treturn string|nil Message d'erreur si échec
+load_or_generate_static = (key_path, cert_path) ->
+  unless key_path and cert_path
+    return nil, "cert_path and key_path must be provided"
+
+  unless file_exists(key_path) and file_exists(cert_path)
+    for path in *{ key_path, cert_path }
+      dir = path\match "^(.*)/[^/]+$"
+      os.execute "mkdir -p '#{dir}'" if dir
+    sans = { "DNS:custos" }
+    for ip_san in *get_local_ips!
+      table.insert sans, ip_san
+    ok, gen_err = generate_self_signed key_path, cert_path, sans
+    unless ok
+      return nil, gen_err or "self-signed generation failed"
+    os.execute "chmod 600 '#{key_path}'"
+
+  load_static key_path, cert_path
+
+{ :load_or_generate, :generate_self_signed, :make_context, :load_or_generate_sni, :load_static, :load_or_generate_static, :hash_string }
