@@ -23,26 +23,26 @@ describe "filter.actions.dns_strip", ->
   dns_strip_factory = (require "filter.actions.dns_strip").factory
   cfg = { nft: { ip_timeout: "2m" } }
 
-  it "strip A : eval retourne true", ->
+  it "strip A : eval retourne un verdict nil (effet de bord pur, comme cname)", ->
     rule = { description: "Strip A rule", dns_strip: { rr_type: "A" } }
     action = (dns_strip_factory cfg) rule
     v, msg = action.eval {}
-    assert.is_true v
+    assert.is_nil v
     assert.is_not_nil msg
     assert.match "Strip A", msg
 
-  it "strip AAAA : eval retourne true", ->
+  it "strip AAAA : eval retourne un verdict nil", ->
     rule = { description: "Strip AAAA rule", dns_strip: { rr_type: "AAAA" } }
     action = (dns_strip_factory cfg) rule
     v, msg = action.eval {}
-    assert.is_true v
+    assert.is_nil v
     assert.match "Strip AAAA", msg
 
   it "rr_type par défaut = A", ->
     rule = { description: "Default rule" }
     action = (dns_strip_factory cfg) rule
     v, msg = action.eval {}
-    assert.is_true v
+    assert.is_nil v
     assert.match "Strip A", msg
 
   it "compile_nft retourne nil (pas de support nft)", ->

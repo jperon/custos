@@ -1,7 +1,13 @@
 -- src/filter/actions/dns_strip.moon
 -- Action : enlever les enregistrements DNS d'un type donné de la réponse.
--- Seule : pas d'injection nft (skip_nft=true, explicit_allow non défini).
--- Combinée avec "allow" : allow.on_response pose explicit_allow=true, l'injection a lieu.
+-- eval renvoie un verdict nil (effet de bord pur, comme cname) : la règle ne
+-- décide pas seule de l'accès, elle laisse l'évaluation continuer jusqu'à la
+-- règle qui apporte le vrai verdict (ex: "Utilisateurs"), tout en s'enregistrant
+-- quand même dans response_rule_ids pour que son on_response (strip) s'exécute.
+-- Seule (aucune autre règle ne matche derrière) : pas d'injection nft
+-- (skip_nft=true, explicit_allow non défini) → default deny.
+-- Combinée avec "allow" (ou toute règle "allow" qui matche plus loin) :
+-- allow.on_response pose explicit_allow=true, l'injection a lieu.
 -- Configurable via rule.dns_strip.rr_type (ex: "A", "AAAA", "CNAME", etc.)
 
 { :strip_dns_rr, :add_ede_modified, :clear_ad_bit } = require "dns_ede"
@@ -33,7 +39,7 @@ _factory = (cfg) ->
     {
       capabilities: { worker: true, nft: false }
       eval: (req) ->
-        true, "Strip #{rr_type} by rule: #{rule.description or '?'}"
+        nil, "Strip #{rr_type} by rule: #{rule.description or '?'}"
       on_response: (ctx) ->
         stripped = strip_dns_rr ctx.dns_raw, rr_type
         if stripped != ctx.dns_raw

@@ -47,7 +47,7 @@ _factory = function(cfg)
         nft = false
       },
       eval = function(req)
-        return true, "Strip " .. tostring(rr_type) .. " by rule: " .. tostring(rule.description or '?')
+        return nil, "Strip " .. tostring(rr_type) .. " by rule: " .. tostring(rule.description or '?')
       end,
       on_response = function(ctx)
         local stripped = strip_dns_rr(ctx.dns_raw, rr_type)

@@ -414,6 +414,34 @@ describe "filter.rule", ->
       assert.equals "r_allow", meta.rule_id
       assert.same { "r_safe", "r_allow" }, meta.response_rule_ids
 
+    it "dns_strip seul ne bloque pas l'évaluation : le verdict vient de la règle suivante (régression bugfix smtp gmail)", ->
+      rules = rule_mod.compile_rules {
+        nft: { ip_timeout: "2m" }
+        macs: {}
+        rules: {
+          { rule_id: "strip", actions: { "dns_strip" }, dns_strip: { rr_type: "AAAA" }, conditions: { to_domain: "gmail.com" } }
+          { rule_id: "users", actions: { "allow" }, conditions: { to_domain: "gmail.com" } }
+        }
+      }
+
+      meta = rule_mod.decide_meta rules, { domain: "smtp.gmail.com" }
+      assert.is_true meta.verdict
+      assert.equals "r_users", meta.rule_id
+      assert.same { "r_strip", "r_users" }, meta.response_rule_ids
+
+    it "dns_strip seul, sans règle allow derrière, retombe sur le deny par défaut", ->
+      rules = rule_mod.compile_rules {
+        nft: { ip_timeout: "2m" }
+        macs: {}
+        rules: {
+          { rule_id: "strip", actions: { "dns_strip" }, dns_strip: { rr_type: "AAAA" }, conditions: { to_domain: "gmail.com" } }
+        }
+      }
+
+      meta = rule_mod.decide_meta rules, { domain: "smtp.gmail.com" }
+      assert.is_false meta.verdict
+      assert.same { "r_strip" }, meta.response_rule_ids
+
     it "expose redirects_destination + cname_target (cname + allow, comme SafeSearch)", ->
       rules = rule_mod.compile_rules {
         nft: { ip_timeout: "2m" }

@@ -266,6 +266,35 @@ pipes.vlan_learn.rfd, (pipes.strip_learn and pipes.strip_learn.rfd)), pipes.lear
 (`doh.query`) applique `run_on_response` mais **pas** l'apprentissage/consultation
 des cibles de chaîne — parité DoH non implémentée (hors périmètre actuel).
 
+**Bugfix (2026-09-02) : `dns_strip` seul bloquait l'évaluation des règles
+suivantes → SMTP gmail/office365 jamais autorisé en nftables.** `filter.rule`
+applique « premier verdict non-nil gagne » (`first_match_wins`, cf. § Système
+de conditions). `dns_strip.eval` renvoyait `true` (verdict non-nil) : une règle
+`dns_strip` seule (sans `allow` combiné, cas des règles « Bugfix smtp
+gmail »/« Bugfix smtp office365 (IPv6) », qui n'ont **aucune** condition
+d'authentification) matchait, gagnait le verdict, et **empêchait** la règle
+suivante (« Utilisateurs », `validate`+`allow`, gardée par `from_user_lists`)
+d'être évaluée. Or `dns_strip` seul pose `skip_nft=true` sans
+`explicit_allow` (cf. commentaire du module) : la résolution DNS réussissait
+(d'où l'illusion que « ça marche »), mais **aucune IP n'était jamais injectée**
+dans les sets nftables — la connexion TCP réelle (SMTP 465/587) tombait sur le
+deny final. IMAP semblait fonctionner par coïncidence (recoupement d'IP avec
+la navigation web déjà autorisée par ailleurs). Symptôme observé : échec
+d'envoi Thunderbird (« la connexion au serveur sortant SMTP a échoué »).
+
+Fix : `dns_strip.eval` renvoie désormais un verdict `nil` — même pattern que
+`cname.eval` (`src/filter/actions/cname.moon`) : effet de bord pur, qui
+**n'interrompt pas** l'évaluation. La règle reste
+enregistrée dans `response_rule_ids` (donc son `on_response`/strip s'exécute
+toujours), mais le verdict d'accès réel vient de la règle suivante qui matche
+réellement (`Utilisateurs`, authentifiée). **Ne pas** corriger ce genre de
+bug en ajoutant `allow` directement sur une règle `dns_strip` sans condition
+d'authentification : cela ouvrirait le domaine à tout client non authentifié,
+au lieu de laisser la règle d'auth faire son travail. Tests de régression :
+`tests/unit/filter/rule_spec.moon` (« dns_strip seul ne bloque pas
+l'évaluation »), `tests/unit/filter/actions_spec.moon`,
+`tests/unit/filter/dns_strip_spec.moon`.
+
 ---
 
 ## Modules DoH (`src/doh/`)
