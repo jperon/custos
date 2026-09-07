@@ -29,6 +29,7 @@ config = require "config"
 { :enrich_session_ip } = require "auth.sessions"
 { :ip2s } = require "ipparse.l3.ip"
 { :mac2s } = require "packet_utils"
+{ :purge_pending } = require "ipc"
 mac_cfg = config.mac_learner or {}
 auth_cfg = config.auth or {}
 
@@ -401,12 +402,14 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
     libc.poll pfds, nfds, poll_ms
 
     -- [0] Pipe de learn : draine tous les messages disponibles (non-bloquant)
+    -- Garde anti-corruption : un message incomplet (< msg_size) est ignoré
+    -- mais ne doit PAS consommer le reste du message suivant.
     if bit.band(pfds[0].revents, POLLIN) ~= 0
       while true
         n = libc.read learn_rfd, learn_buf, msg_size
         break if n <= 0
-        if n == msg_size
-          process_learn ffi.string(learn_buf, msg_size)
+        break if n < msg_size
+        process_learn ffi.string(learn_buf, msg_size)
 
     -- [1] Socket de requêtes : une connexion par itération (accept non-bloquant)
     if bit.band(pfds[1].revents, POLLIN) ~= 0
@@ -449,6 +452,9 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
 
     -- Expiration des probes dépassant PROBE_TIMEOUT_MS
     expire_pending! if next(pending_queries) ~= nil
+
+    -- Purge périodique des transactions IPC en attente (défense en profondeur)
+    purge_pending os.time if next(pending_queries) ~= nil
 
     -- Purge périodique (basée sur os.time(), insensible au poll_ms adaptatif)
     now_epoch = os.time!
