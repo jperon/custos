@@ -29,6 +29,40 @@
 Cibles homelab associées : `make homelab-up` / `homelab-down` / `homelab-nuke` /
 `homelab-redeploy` (cf. [libvirt/README.md](../libvirt/README.md)).
 
+## Fiabilité du code retour des cibles de test (pipefail)
+
+**Le code retour de `make test`, `test-unit`, `coverage` et `coverage-quick` est
+fiable** : il reflète le statut réel de Busted, pas celui de `tee`.
+
+Ces recettes envoient la sortie de Busted dans `tee tmp/test-logs/*.log` pour
+conserver le rapport. Or `tee` réussit **toujours** : sans précaution, `$?`
+vaut 0 même quand la suite échoue et `make test` retourne un faux positif —
+intolérable pour la Definition of Done (qui exige `0 failed` constaté). Le
+Makefile définit donc :
+
+```make
+SHELL := bash
+PIPE_FAIL = set -o pipefail;
+```
+
+et **chaque** pipeline de test est préfixé par `$(PIPE_FAIL)`. `coverage` et
+`coverage-quick` capturent en outre `rc=$$?` juste après le pipeline, génèrent
+leur rapport, puis `exit $$rc` : le diagnostic reste produit en cas d'échec,
+mais le statut d'échec est bien propagé. `test-unit` se fie directement au
+statut du pipeline (plus de `rc=$$?` post-`tee`).
+
+`make test` dépend de `test-unit` **et** `test-js` : make s'arrête au premier
+échec de sous-cible (aucun préfixe `-`, `.IGNORE` ni `|| true` sur ces cibles),
+donc un échec Busted **ou** Node fait échouer `make test`.
+
+**Ne pas réintroduire de masquage** : toute nouvelle recette qui pipe vers
+`tee`/`grep`/`head` et doit signaler un échec doit utiliser `$(PIPE_FAIL)` (ou
+`set -o pipefail`) et ne jamais se fier à un `$?` post-pipe nu. Note : `SHELL`
+est volontairement `bash` (sans chemin absolu) et non `/bin/bash`, car dans
+`nix develop` le `/bin/bash` de l'hôte peut être un lien mort ; `bash` est
+résolu via `PATH`. La cible `check` n'est pas concernée (elle imprime `FAIL`
+mais ne positionne pas de code retour, comportement historique).
+
 ### Connexion libvirt et clé SSH du homelab
 
 `libvirt/homelab.sh` ne suppose plus que `virsh` nu voit les VMs. Il résout la

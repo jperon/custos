@@ -29,6 +29,14 @@ LUA     := lua
 SYNC    := sync
 MOONSCRIPT_SUBMODULE := $(SRC)/lib/moonscript
 
+# `tee` renvoie toujours 0 : sans pipefail, le code retour de Busted (premier
+# élément du pipeline) serait masqué et une suite EN ÉCHEC pourrait faire
+# retourner 0 à `make test` — faux positif inacceptable pour la Definition of
+# Done. Toute recette qui pipe vers `tee` (ou un autre filtre) préfixe son
+# pipeline par $(PIPE_FAIL) et ne se fie jamais à `$$?` nu après un pipe.
+SHELL := bash
+PIPE_FAIL = set -o pipefail;
+
 # Chemins Lua pour les tests (modules compilés + rocks locaux)
 LUAROCKS_PATH := $(HOME)/.luarocks/share/lua/5.1/?.lua;$(HOME)/.luarocks/share/lua/5.1/?/init.lua
 LUAROCKS_CPATH := $(HOME)/.luarocks/lib/lua/5.1/?.so
@@ -147,10 +155,9 @@ compile-specs: $(UNIT_SPEC_LUAS)
 
 test-unit: all compile-specs compile-helpers
 	@mkdir -p tmp/test-logs
-	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	@$(PIPE_FAIL) LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
 	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
-	    tests/unit 2>&1 | tee tmp/test-logs/unit.log; \
-	  rc=$$?; exit $$rc
+	    tests/unit 2>&1 | tee tmp/test-logs/unit.log
 
 # Tests JS du client portail (Node natif, sans dépendance npm)
 test-js:
@@ -164,18 +171,21 @@ test: all compile-specs compile-helpers test-unit test-js
 coverage: all compile-specs compile-helpers
 	@mkdir -p tmp/coverage tmp/test-logs
 	@rm -f tmp/coverage/luacov.stats.out tmp/coverage/luacov.report.out
-	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	@# rc capture le statut Busted malgré le `tee` ; le rapport est généré même
+	@# en cas d'échec (diagnostic), puis rc est propagé en fin de recette.
+	@$(PIPE_FAIL) LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
 	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
 	    --coverage --coverage-config-file=.luacov \
-	    tests/unit 2>&1 | tee tmp/test-logs/coverage.log
-	@# Générer le rapport (luacov lit statsfile/reportfile depuis .luacov)
-	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  luacov -c .luacov 2>/dev/null || true
-	@echo ""
-	@echo "Rapport de couverture : tmp/coverage/luacov.report.out"
-	@if [ -f tmp/coverage/luacov.report.out ]; then \
-	  grep -E "^Total" tmp/coverage/luacov.report.out || true; \
-	fi
+	    tests/unit 2>&1 | tee tmp/test-logs/coverage.log; \
+	  rc=$$?; \
+	  LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	    luacov -c .luacov 2>/dev/null || true; \
+	  echo ""; \
+	  echo "Rapport de couverture : tmp/coverage/luacov.report.out"; \
+	  if [ -f tmp/coverage/luacov.report.out ]; then \
+	    grep -E "^Total" tmp/coverage/luacov.report.out || true; \
+	  fi; \
+	  exit $$rc
 
 # Alternative rapide à `coverage` : hook debug.sethook en mode *count*
 # (échantillonnage) plutôt que *line* (luacov, exhaustif mais ~4x plus lent
@@ -185,12 +195,17 @@ coverage: all compile-specs compile-helpers
 coverage-quick: all compile-specs compile-helpers
 	@mkdir -p tmp/coverage_quick tmp/test-logs
 	@rm -f tmp/coverage_quick/quick_coverage.lua
-	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	@# Même motif que `coverage` : rc de Busted préservé, rapport toujours émis.
+	@$(PIPE_FAIL) LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
 	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/quick_coverage_setup.lua \
-	    tests/unit 2>&1 | tee tmp/test-logs/coverage-quick.log
-	@echo ""
-	@LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  luajit tools/quick_coverage_report.lua | tail -50
+	    tests/unit 2>&1 | tee tmp/test-logs/coverage-quick.log; \
+	  rc=$$?; \
+	  echo ""; \
+	  LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	    luajit tools/quick_coverage_report.lua | tail -50; \
+	  rrc=$$?; \
+	  if [ $$rc -ne 0 ]; then exit $$rc; fi; \
+	  exit $$rrc
 
 # ── OpenWrt live tests via SSH ────────────────────────────────────────────
 
