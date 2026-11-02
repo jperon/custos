@@ -14,12 +14,49 @@
 
 set -e
 
-export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///system}"
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 IMG_DIR="$SCRIPT_DIR/images"
 LIBVIRT_IMG_DIR="/var/lib/libvirt/images"
+
+# ─── Connexion libvirt ───────────────────────────────────────────
+# `virsh` sans -c cible la connexion par défaut (souvent qemu:///session),
+# où un homelab provisionné en qemu:///system est invisible. La décision
+# (respect de LIBVIRT_DEFAULT_URI, détection system/session) vit dans
+# libvirt_uri.sh, testée par tests/unit/libvirt_uri_spec.moon.
+# shellcheck source=libvirt/libvirt_uri.sh
+source "$SCRIPT_DIR/libvirt_uri.sh"
+
+libvirt_uri_has_domains() {
+    local uri="$1"
+    virsh -c "$uri" list --all 2>/dev/null \
+        | awk 'NR > 2 { print $2 }' \
+        | grep -q '^homelab-'
+}
+
+system_status=1
+session_status=1
+libvirt_uri_has_domains qemu:///system  && system_status=0
+libvirt_uri_has_domains qemu:///session && session_status=0
+LIBVIRT_URI=$(libvirt_pick_uri "${LIBVIRT_DEFAULT_URI:-}" "$system_status" "$session_status")
+
+# Tous les appels virsh passent par ce helper (jamais de `virsh` nu), pour que
+# la connexion choisie s'applique uniformément à toutes les sous-commandes.
+virsh_() {
+    if [ -n "$LIBVIRT_URI" ]; then
+        virsh -c "$LIBVIRT_URI" "$@"
+    else
+        virsh "$@"
+    fi
+}
+
+if [ -n "$LIBVIRT_URI" ]; then
+    # Exporté aussi pour les outils enfants (qemu-img, etc.) et la cohérence.
+    export LIBVIRT_DEFAULT_URI="$LIBVIRT_URI"
+    echo "[homelab] connexion libvirt : $LIBVIRT_URI" >&2
+else
+    echo "[homelab] connexion libvirt : défaut ($(virsh uri 2>/dev/null || echo inconnu))" >&2
+fi
 
 OPENWRT_VERSION="${OPENWRT_VERSION:-25.12.4}"
 OPENWRT_FILE="openwrt-${OPENWRT_VERSION}-x86-64-generic-ext4-combined.img.gz"
@@ -28,11 +65,65 @@ OPENWRT_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/x
 OPENWRT_SHA256="${OPENWRT_SHA256:-9d080bcae28d7cdf86dabb4b29c10d36d89e0bd79e20a4799454380bc1619695}"
 BASE_IMG="$IMG_DIR/openwrt-${OPENWRT_VERSION}-base.img"
 
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
-[ -f "$SSH_KEY" ] || SSH_KEY="$HOME/.ssh/id_rsa"
+# Clés SSH candidates. Une clé explicite (SSH_KEY=...) fait autorité ; sinon on
+# essaie toutes les clés usuelles présentes, car les VMs peuvent avoir été
+# provisionnées avec id_rsa alors qu'id_ed25519 existe aussi localement (le
+# simple choix « première clé présente » menait à un timeout SSH trompeur).
+build_ssh_candidates() {
+    if [ -n "${SSH_KEY:-}" ]; then
+        [ -f "$SSH_KEY" ] || err "SSH_KEY explicite introuvable : $SSH_KEY"
+        SSH_KEYS=("$SSH_KEY")
+    else
+        SSH_KEYS=()
+        local k
+        for k in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa" "$HOME/.ssh/id_ecdsa"; do
+            [ -f "$k" ] && SSH_KEYS+=("$k")
+        done
+        [ ${#SSH_KEYS[@]} -gt 0 ] \
+            || err "aucune clé SSH trouvée (id_ed25519/id_rsa/id_ecdsa)"
+    fi
+    # Clé par défaut (utilisée par ensure pour injecter les pubkeys).
+    SSH_KEY="${SSH_KEYS[0]}"
+}
+build_ssh_candidates
 SSH_PUBKEY_FILE="${SSH_KEY}.pub"
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
           -o ConnectTimeout=5 -o BatchMode=yes -o LogLevel=ERROR"
+
+# Teste si <key> permet de s'authentifier sur <ip>.
+ssh_key_works() {
+    local ip="$1" key="$2"
+    ssh $SSH_OPTS -i "$key" "root@$ip" true 2>/dev/null
+}
+
+# Mémorise la première clé candidate acceptée par <ip>. Sans cela, `$SSH_KEY`
+# resterait la première clé présente localement, même si elle n'est pas dans
+# l'authorized_keys de la VM (Permission denied → attente jusqu'au timeout).
+select_ssh_key() {
+    local ip="$1" key
+    for key in "${SSH_KEYS[@]}"; do
+        if ssh_key_works "$ip" "$key"; then
+            if [ "$key" != "$SSH_KEY" ]; then
+                SSH_KEY="$key"
+                SSH_PUBKEY_FILE="${SSH_KEY}.pub"
+                log "clé SSH acceptée par $ip : $key"
+            fi
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Détecte la clé SSH acceptée en interrogeant les VMs joignables.
+ensure_ssh_key() {
+    local vm ip
+    for vm in "${VMS[@]}"; do
+        ip=$(vm_ip "$vm")
+        [ -n "$ip" ] || continue
+        select_ssh_key "$ip" && return 0
+    done
+    return 1
+}
 
 VMS=(via custos servus cliens)
 
@@ -54,8 +145,8 @@ domain_name() { echo "homelab-$1"; }
 log()  { echo "[homelab] $*"; }
 err()  { echo "[homelab] ERROR: $*" >&2; exit 1; }
 
-virsh_has() { virsh dominfo "$1" &>/dev/null; }
-net_has()   { virsh net-info "$1" &>/dev/null; }
+virsh_has() { virsh_ dominfo "$1" &>/dev/null; }
+net_has()   { virsh_ net-info "$1" &>/dev/null; }
 
 need() { command -v "$1" >/dev/null 2>&1 || err "outil manquant : $1"; }
 
@@ -67,7 +158,11 @@ check_deps() {
     need curl
     need ssh
     need scp
-    [ -f "$SSH_PUBKEY_FILE" ] || err "clé publique SSH absente : $SSH_PUBKEY_FILE"
+    local k found=1
+    for k in "${SSH_KEYS[@]}"; do
+        [ -f "${k}.pub" ] && found=0 && break
+    done
+    [ $found -eq 0 ] || err "aucune clé publique SSH trouvée (.pub)"
 }
 
 # ─── Image de base ────────────────────────────────────────────────
@@ -101,10 +196,10 @@ ensure_network() {
     [ -f "$xml" ] || err "XML réseau absent : $xml"
     if ! net_has "$name"; then
         log "définition du réseau $name..."
-        virsh net-define "$xml" >/dev/null
+        virsh_ net-define "$xml" >/dev/null
     fi
-    virsh net-autostart "$name" >/dev/null 2>&1 || true
-    virsh net-start     "$name" >/dev/null 2>&1 || true
+    virsh_ net-autostart "$name" >/dev/null 2>&1 || true
+    virsh_ net-start     "$name" >/dev/null 2>&1 || true
 }
 
 # ─── Images VM ────────────────────────────────────────────────────
@@ -129,7 +224,10 @@ ensure_vm_image() {
     qemu-img resize "$tmp" 1G
 
     log "injection uci-defaults dans $vm.qcow2..."
-    local pubkey ; pubkey=$(cat "$SSH_PUBKEY_FILE")
+    # Injecte TOUTES les clés candidates acceptées localement : le homelab reste
+    # joignable même si l'ordre des clés change ou si l'utilisateur en ajoute.
+    local pubkey k
+    pubkey=$(for k in "${SSH_KEYS[@]}"; do [ -f "${k}.pub" ] && cat "${k}.pub"; done)
     "$SCRIPT_DIR/inject.sh" "$tmp" "$SCRIPT_DIR/uci-defaults/$vm.sh" "$pubkey"
 
     sudo install -m 0644 -o root -g root "$tmp" "$qcow2"
@@ -145,7 +243,7 @@ ensure_domain() {
     [ -f "$xml" ] || err "XML domaine absent : $xml"
     if ! virsh_has "$dom"; then
         log "définition du domaine $dom..."
-        virsh define "$xml" >/dev/null
+        virsh_ define "$xml" >/dev/null
     fi
 }
 
@@ -155,7 +253,7 @@ vm_ip() {
     local vm="$1"
     local mac ; mac=$(mac_mgmt "$vm") || err "VM inconnue : $vm"
     local ip
-    ip=$(virsh net-dhcp-leases homelab-mgmt 2>/dev/null \
+    ip=$(virsh_ net-dhcp-leases homelab-mgmt 2>/dev/null \
          | awk -v m="$mac" '$0 ~ m {split($5,a,"/"); print a[1]; exit}')
     if [ -z "$ip" ]; then
         ip=$(ip neigh show 2>/dev/null \
@@ -168,14 +266,14 @@ wait_ssh() {
     local vm="$1" tries=0 max=60 ip
     # Early-exit si SSH répond déjà (VM déjà démarrée).
     ip=$(vm_ip "$vm")
-    if [ -n "$ip" ] && ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip" true 2>/dev/null; then
+    if [ -n "$ip" ] && select_ssh_key "$ip"; then
         log "$vm déjà joignable : $ip"
         return 0
     fi
     log "attente SSH sur $vm..."
     while [ $tries -lt $max ]; do
         ip=$(vm_ip "$vm")
-        if [ -n "$ip" ] && ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip" true 2>/dev/null; then
+        if [ -n "$ip" ] && select_ssh_key "$ip"; then
             log "$vm joignable : $ip"
             return 0
         fi
@@ -204,9 +302,9 @@ cmd_start() {
     for vm in "${VMS[@]}"; do
         local dom ; dom=$(domain_name "$vm")
         virsh_has "$dom" || err "domaine $dom non défini ; lance 'ensure' d'abord"
-        if ! virsh domstate "$dom" 2>/dev/null | grep -q running; then
+        if ! virsh_ domstate "$dom" 2>/dev/null | grep -q running; then
             log "démarrage de $dom..."
-            virsh start "$dom" >/dev/null
+            virsh_ start "$dom" >/dev/null
         fi
     done
     for vm in "${VMS[@]}"; do
@@ -232,9 +330,9 @@ cmd_stop() {
     for vm in "${VMS[@]}"; do
         local dom ; dom=$(domain_name "$vm")
         virsh_has "$dom" || continue
-        if virsh domstate "$dom" 2>/dev/null | grep -q running; then
+        if virsh_ domstate "$dom" 2>/dev/null | grep -q running; then
             log "shutdown $dom..."
-            virsh shutdown "$dom" >/dev/null 2>&1 || true
+            virsh_ shutdown "$dom" >/dev/null 2>&1 || true
         fi
     done
     # Laisse 20 s pour shutdown propre, puis destroy ce qui reste.
@@ -242,8 +340,8 @@ cmd_stop() {
     for vm in "${VMS[@]}"; do
         local dom ; dom=$(domain_name "$vm")
         virsh_has "$dom" || continue
-        if virsh domstate "$dom" 2>/dev/null | grep -q running; then
-            virsh destroy "$dom" >/dev/null 2>&1 || true
+        if virsh_ domstate "$dom" 2>/dev/null | grep -q running; then
+            virsh_ destroy "$dom" >/dev/null 2>&1 || true
         fi
     done
 }
@@ -252,14 +350,14 @@ cmd_nuke() {
     cmd_stop || true
     for vm in "${VMS[@]}"; do
         local dom ; dom=$(domain_name "$vm")
-        virsh_has "$dom" && virsh undefine "$dom" >/dev/null 2>&1 || true
+        virsh_has "$dom" && virsh_ undefine "$dom" >/dev/null 2>&1 || true
         local qcow2 ; qcow2=$(vm_qcow2 "$vm")
         sudo rm -f "$qcow2"
     done
     for net in homelab-wan homelab-up homelab-lan homelab-mgmt homelab-ext-up homelab-ext-dn; do
         if net_has "$net"; then
-            virsh net-destroy  "$net" >/dev/null 2>&1 || true
-            virsh net-undefine "$net" >/dev/null 2>&1 || true
+            virsh_ net-destroy  "$net" >/dev/null 2>&1 || true
+            virsh_ net-undefine "$net" >/dev/null 2>&1 || true
         fi
     done
     log "nuke terminé (image de base conservée dans $IMG_DIR)"
@@ -269,6 +367,7 @@ cmd_ssh() {
     local vm="$1" ; shift || true
     local ip ; ip=$(vm_ip "$vm")
     [ -n "$ip" ] || err "IP de $vm introuvable"
+    select_ssh_key "$ip" || err "aucune clé SSH acceptée par $vm ($ip)"
     exec ssh $SSH_OPTS -i "$SSH_KEY" "root@$ip" "$@"
 }
 
@@ -280,6 +379,7 @@ cmd_ip() {
 cmd_redeploy() {
     log "compilation MoonScript..."
     (cd "$PROJECT_DIR" && make -s)
+    ensure_ssh_key || err "aucune clé SSH acceptée par le homelab"
     local ip ; ip=$(vm_ip custos)
     [ -n "$ip" ] || err "IP de custos introuvable"
     log "push custos vers $ip..."
@@ -287,6 +387,7 @@ cmd_redeploy() {
 }
 
 cmd_test_unit() {
+    ensure_ssh_key || err "aucune clé SSH acceptée par le homelab"
     local ip ; ip=$(vm_ip custos)
     [ -n "$ip" ] || err "IP de custos introuvable"
 
@@ -332,6 +433,7 @@ cmd_test_unit() {
 
 cmd_test() {
     log "test E2E : résolution DNS de bout en bout..."
+    ensure_ssh_key || err "aucune clé SSH acceptée par le homelab"
     local ssh_via=( ssh $SSH_OPTS -i "$SSH_KEY" "root@$(vm_ip via)" )
     local ssh_servus=( ssh $SSH_OPTS -i "$SSH_KEY" "root@$(vm_ip servus)" )
 
@@ -351,6 +453,7 @@ cmd_test() {
 }
 
 cmd_test_e2e() {
+    ensure_ssh_key || err "aucune clé SSH acceptée par le homelab"
     local ip_custos ip_servus ip_cliens ip_via
     ip_custos=$(vm_ip custos)  ; [ -n "$ip_custos" ]  || err "IP de custos introuvable"
     ip_servus=$(vm_ip servus)  ; [ -n "$ip_servus" ]  || err "IP de servus introuvable"

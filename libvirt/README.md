@@ -33,6 +33,38 @@ chaque VM pour SSH depuis l'hôte sans passer par la chaîne testée.
 - Clé SSH publique disponible (`~/.ssh/id_ed25519.pub` ou `~/.ssh/id_rsa.pub`)
 - `sudo` pour installer les qcow2 dans `/var/lib/libvirt/images/`
 
+### Connexion libvirt (`LIBVIRT_DEFAULT_URI`)
+
+`homelab.sh` choisit automatiquement la connexion libvirt à utiliser
+(`libvirt/libvirt_uri.sh`, testé par `tests/unit/libvirt_uri_spec.moon`) :
+
+1. si `LIBVIRT_DEFAULT_URI` est déjà défini dans l'environnement, il **fait
+   autorité** et n'est jamais remplacé :
+   ```bash
+   LIBVIRT_DEFAULT_URI=qemu:///session ./libvirt/homelab.sh start
+   ```
+2. sinon, si `qemu:///system` est joignable et contient des domaines
+   `homelab-*`, c'est cette connexion qui est utilisée (cas courant d'un
+   homelab provisionné avec sudo/root) ;
+3. sinon, si `qemu:///session` contient les domaines `homelab-*`, on l'utilise
+   (setup sans privilèges) ;
+4. sinon (première installation, aucun domaine encore défini), on laisse
+   `virsh` utiliser sa connexion par défaut.
+
+Tous les appels de `homelab.sh` passent par un helper `virsh_` qui cible cette
+connexion. Sans cette détection, un `virsh` nu visait `qemu:///session` et le
+homelab en `qemu:///system` était invisible (`net-dhcp-leases` vide → aucune IP
+→ `ERROR: timeout SSH sur via`).
+
+### Clé SSH
+
+Si `SSH_KEY` n'est pas défini, le script essaie **toutes** les clés usuelles
+présentes (`~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, `~/.ssh/id_ecdsa`) jusqu'à en
+trouver une acceptée par la VM, puis l'utilise pour toute la session. Cela
+évite un `Permission denied (publickey)` trompeur quand les VMs ont été
+provisionnées avec `id_rsa` alors qu'une autre clé existe localement.
+`SSH_KEY=...` reste prioritaire et désactive cette détection.
+
 ## Usage
 
 ```bash
@@ -125,6 +157,11 @@ virsh net-list --all
 sudo virsh net-start homelab-wan
 ```
 
+Si le homelab a été créé en `qemu:///system`, les commandes ci-dessus doivent
+aussi viser cette connexion (`virsh -c qemu:///system …` ou
+`export LIBVIRT_DEFAULT_URI=qemu:///system`). `homelab.sh` le fait
+automatiquement (cf. § Connexion libvirt).
+
 NetworkManager peut interférer avec les bridges libvirt. Si les VMs n'ont pas
 de connectivité, vérifier qu'aucun `nm-connection` n'a pris la main sur les
 bridges `hl-*-br`.
@@ -139,8 +176,11 @@ sudo virsh net-destroy homelab-mgmt && sudo virsh net-start homelab-mgmt
 
 ### SSH refuse la clé
 
-`uci-defaults/<vm>.sh` substitue `__SSH_PUBKEY__` à partir du fichier pubkey
-détecté (`SSH_KEY=...`). Vérifier que la bonne clé est utilisée :
+`homelab.sh` détecte automatiquement la clé acceptée parmi
+`~/.ssh/id_ed25519`, `~/.ssh/id_rsa` et `~/.ssh/id_ecdsa`. Si aucune ne
+fonctionne, `uci-defaults/<vm>.sh` substitue `__SSH_PUBKEY__` à partir des
+fichiers pubkey détectés au provisioning (`SSH_KEY=...` restreint la liste à
+cette clé). Vérifier que la bonne clé est utilisée :
 ```bash
 SSH_KEY=~/.ssh/ma_cle ./libvirt/homelab.sh ensure  # ré-injecte
 ```

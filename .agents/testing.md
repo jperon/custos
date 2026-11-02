@@ -29,6 +29,22 @@
 Cibles homelab associées : `make homelab-up` / `homelab-down` / `homelab-nuke` /
 `homelab-redeploy` (cf. [libvirt/README.md](../libvirt/README.md)).
 
+### Connexion libvirt et clé SSH du homelab
+
+`libvirt/homelab.sh` ne suppose plus que `virsh` nu voit les VMs. Il résout la
+connexion dans cet ordre : `LIBVIRT_DEFAULT_URI` s'il est défini (priorité
+absolue), sinon `qemu:///system` si des domaines `homelab-*` y sont visibles,
+sinon `qemu:///session`, sinon connexion par défaut. La décision pure est dans
+`libvirt/libvirt_uri.sh` et couverte par `tests/unit/libvirt_uri_spec.moon`.
+Sans cela, un homelab en `qemu:///system` était invisible depuis
+`qemu:///session` : `net-dhcp-leases` vide → `ERROR: timeout SSH sur via`.
+
+De même, si `SSH_KEY` n'est pas défini, le harnais essaie toutes les clés
+usuelles (`id_ed25519`, `id_rsa`, `id_ecdsa`) et retient celle qu'une VM
+accepte. Un `Permission denied (publickey)` (VM provisionnée avec `id_rsa`,
+script qui préfère `id_ed25519`) ne doit plus être confondu avec une VM non
+démarrée ; `SSH_KEY=...` reste prioritaire.
+
 ---
 
 ## Pièges OpenWrt
