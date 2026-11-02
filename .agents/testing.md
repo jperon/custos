@@ -17,7 +17,7 @@
 | `make test-unit` | aucun | Sous-ensemble Busted sans dépendances FFI (CI rapide). |
 | `make test-ffi` | wolfssl + libsocket | Tests FFI socket / WolfSSL / intégration TLS. |
 | `make coverage` | aucun | `make test` + rapport luacov dans `tmp/coverage/`. |
-| `make check` | aucun | Vérification syntaxique des `.lua` compilés. |
+| `make check` | aucun | Vérification syntaxique des `.lua` compilés. **Bloquante** : `exit 1` si au moins un fichier ne se charge pas (rapport complet affiché). |
 | `make bench` | aucun | Micro-bench in-process (ns/op + KB) des hot-paths. Cf. [src/bench/README.md](../src/bench/README.md). |
 | `make bench-load TARGET=host[:port]` | un résolveur DNS joignable | Charge DNS bout-en-bout (QPS, latences p50/p95/p99, pertes). Variables : `DURATION`, `RATE`, `DOMAINS`, `ITERS`, `SAVE_BASELINE`. |
 | `make test-openwrt HOST=root@<host>` | SSH + OpenWrt avec LuaJIT + nftables | Déploie les fichiers Lua + règles nft via `scp`, démarre les workers via `logger -t custos`, puis lance les vérifications DNS/auth depuis la machine locale. |
@@ -60,8 +60,19 @@ donc un échec Busted **ou** Node fait échouer `make test`.
 `set -o pipefail`) et ne jamais se fier à un `$?` post-pipe nu. Note : `SHELL`
 est volontairement `bash` (sans chemin absolu) et non `/bin/bash`, car dans
 `nix develop` le `/bin/bash` de l'hôte peut être un lien mort ; `bash` est
-résolu via `PATH`. La cible `check` n'est pas concernée (elle imprime `FAIL`
-mais ne positionne pas de code retour, comportement historique).
+résolu via `PATH`.
+
+**`make check` est bloquante** : la boucle de vérification syntaxique agrège
+les échecs (`rc=1` dès qu'un `.lua` ne se charge pas) puis `exit $$rc`, tout en
+affichant chaque ligne `OK`/`FAIL` (pas d'arrêt au premier fichier cassé). Un
+fichier cassé fait donc réellement échouer la cible — plus de « rouge à
+l'écran, vert en code retour ».
+
+La liste vérifiée (`CHECK_LUAS`) exclut le code **vendu** d'ipparse qui n'est
+pas destiné à LuaJIT : `lua/ipparse/examples/`, `lua/ipparse/tests/` et
+`lua/ipparse/lib/bit53.lua` (syntaxe Lua 5.3 `&`/`|`/`<<` que LuaJIT 5.1 ne
+parse pas). Ces fichiers ne font pas partie du runtime déployé ; les inclure
+laissait `check` rouge en permanence sur du code amont non modifiable.
 
 ### Connexion libvirt et clé SSH du homelab
 

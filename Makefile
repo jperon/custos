@@ -47,6 +47,14 @@ TEST_LUA_CPATH := $(LUAROCKS_CPATH);;
 MOONS := $(shell find $(SRC) -path '$(MOONSCRIPT_SUBMODULE)' -prune -o -name '*.moon' -print | sort)
 LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(MOONS))
 
+# Lua vérifiés par `check`. On exclut le code vendu d'ipparse qui n'est PAS
+# destiné à LuaJIT : exemples et tests amont (certains ciblent le noyau
+# lunatik), et `lib/bit53` qui utilise délibérément la syntaxe Lua 5.3
+# (`&`, `|`, `<<`) que LuaJIT (5.1) ne sait pas parser. Ces fichiers ne font
+# pas partie du runtime déployé ; les inclure rendrait `check` rouge en
+# permanence sur du code hérité non modifiable.
+CHECK_LUAS = $(filter-out $(LUA)/ipparse/examples/% $(LUA)/ipparse/tests/% $(LUA)/ipparse/lib/bit53.lua,$(LUAS) $(FILTER_LUAS) $(AUTH_LUAS))
+
 # Embedded MoonScript runtime (from git submodule)
 MOONSCRIPT_RUNTIME_MOONS := $(shell find $(MOONSCRIPT_SUBMODULE)/moonscript $(MOONSCRIPT_SUBMODULE)/moon -name '*.moon' 2>/dev/null | sort)
 MOONSCRIPT_RUNTIME_LUAS  := $(patsubst $(MOONSCRIPT_SUBMODULE)/%.moon,$(LUA)/%.lua,$(MOONSCRIPT_RUNTIME_MOONS))
@@ -141,12 +149,17 @@ tests/helpers/%.lua: tests/helpers/%.moon
 # Cible pour compiler tous les helpers de tests
 compile-helpers: $(TEST_HELPER_LUAS)
 
-# Syntax check all generated Lua files
+# Syntax check all generated Lua files (BLOQUANT).
+# Toute la liste est vérifiée (rapport complet, pas d'arrêt au premier échec) ;
+# chaque échec positionne rc=1, propagé en `exit $$rc` en fin de recette — sans
+# cela un fichier cassé n'affichait que `FAIL` et `make check` retournait 0.
 check: all
 	@echo "Vérification syntaxique..."
-	@for f in $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS); do \
-	  luajit -e "local ok,e=loadfile('$$f'); if not ok then print('FAIL '..e) else print('OK   $$f') end"; \
-	done
+	@rc=0; \
+	for f in $(CHECK_LUAS); do \
+	  luajit -e "local ok,e=loadfile('$$f'); if not ok then print('FAIL '..e); os.exit(1) else print('OK   $$f') end" || rc=1; \
+	done; \
+	exit $$rc
 
 # ── Tests unitaires (Busted) ──────────────────────────────────────────────
 
