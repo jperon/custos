@@ -17,6 +17,8 @@ local ip2s
 ip2s = require("ipparse.l3.ip").ip2s
 local mac2s
 mac2s = require("packet_utils").mac2s
+local purge_pending
+purge_pending = require("ipc").purge_pending
 local mac_cfg = config.mac_learner or { }
 local auth_cfg = config.auth or { }
 local PROBE_TIMEOUT_MS = 200
@@ -382,9 +384,10 @@ run = function(learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd)
         if n <= 0 then
           break
         end
-        if n == msg_size then
-          process_learn(ffi.string(learn_buf, msg_size))
+        if n < msg_size then
+          break
         end
+        process_learn(ffi.string(learn_buf, msg_size))
       end
     end
     if bit.band(pfds[1].revents, POLLIN) ~= 0 then
@@ -451,6 +454,9 @@ run = function(learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd)
     end
     if next(pending_queries) ~= nil then
       expire_pending()
+    end
+    if next(pending_queries) ~= nil then
+      purge_pending(os.time)
     end
     local now_epoch = os.time()
     if now_epoch - last_purge >= PURGE_INTERVAL then
