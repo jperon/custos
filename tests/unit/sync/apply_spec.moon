@@ -22,13 +22,16 @@ read_file = (path) ->
 
 -- Exécute apply.lua avec les arguments donnés.
 -- Retourne : code_retour (0=succès), sortie_combinée (stdout+stderr).
+-- os.execute renvoie 0 en Lua 5.1 et true (succès) / nil (échec) en Lua 5.2+
+-- (LUA52COMPAT) : on normalise pour que les assertions restent portables.
 run = (args) ->
   out_path = "#{TMP}/run_out.txt"
   cmd = "LUA_PATH='#{LUA_PATH_VAR}' luajit #{APPLY} #{args} >'#{out_path}' 2>&1"
   ret = os.execute cmd
+  code = if ret == 0 or ret == true then 0 else 1
   out = read_file(out_path) or ""
   os.remove out_path
-  ret, out
+  code, out
 
 -- Charge un fichier config.moon (MoonScript) produit par apply,
 -- exactement comme le runtime via moonscript.base.loadfile.

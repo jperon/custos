@@ -9,6 +9,8 @@ do
   local _obj_0 = require("log")
   log_warn, log_info = _obj_0.log_warn, _obj_0.log_info
 end
+local exec_ok
+exec_ok = require("lib.os_exec").exec_ok
 local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
   error("nft_ctx_new() échoué dans nft_extra_rules")
@@ -168,7 +170,7 @@ end
 local apply_from_config
 apply_from_config = function()
   local rc_check = os.execute("nft list chain " .. tostring(config.nft.family) .. " " .. tostring(config.nft.table) .. " forward >/dev/null 2>&1")
-  if rc_check ~= 0 then
+  if not (exec_ok(rc_check)) then
     local ok, rc = require("nft_rules").apply()
     if not (ok) then
       log_warn(function()

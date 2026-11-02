@@ -204,9 +204,11 @@ ffi.C.unlink(path)
         "luajit %s %s %s %d >/dev/null 2>&1 & echo $! > %s",
         script, string.format("%q", SOCK_PATH), string.format("%q", response), max_conns, pid_file
       )
-      -- Attendre que le socket Unix soit créé (os.execute retourne true en LuaJIT)
+      -- Attendre que le socket Unix soit créé. os.execute renvoie 0 en
+      -- Lua 5.1 et true en Lua 5.2+ (LUA52COMPAT) en cas de succès.
       for i = 1, 40
-        if os.execute("test -S " .. SOCK_PATH)
+        sock_ok = os.execute("test -S " .. SOCK_PATH)
+        if sock_ok == 0 or sock_ok == true
           os.execute "sleep 1"  -- petit délai supplémentaire pour listen()
           break
         os.execute "sleep 1"
@@ -329,9 +331,10 @@ ffi.C.unlink(path)
       pid_str = fh\read "*l"
       fh\close!
       server_pid2 = tonumber pid_str
-      -- Attendre que le socket Unix soit créé (os.execute retourne true en LuaJIT)
+      -- Attendre que le socket Unix soit créé (0 en Lua 5.1, true en 5.2+).
       for i = 1, 20
-        if os.execute("test -S " .. SOCK_PATH2)
+        sock2_ok = os.execute("test -S " .. SOCK_PATH2)
+        if sock2_ok == 0 or sock2_ok == true
           os.execute "sleep 1"
           break
         os.execute "sleep 1"

@@ -53,28 +53,11 @@ SIGHUP = 1
 -- Forward declaration: utilisée par fetch_toulouse/fetch_local.
 local write_bin
 
---- Quote une valeur pour un usage sûr dans une commande shell POSIX.
--- @tparam string s Valeur à échapper
--- @treturn string Valeur entourée de quotes simples avec échappement interne
-sh_quote = (s) ->
-  "'" .. tostring(s)\gsub("'", "'\"'\"'") .. "'"
-
---- Crée un répertoire (et ses parents) si nécessaire.
--- @tparam string dir Chemin du répertoire
--- @treturn boolean true si OK
-ensure_dir = (dir) ->
-  return true unless dir and dir != ""
-  ret = os.execute "mkdir -p #{sh_quote(dir)}"
-  ret == 0 or ret == true
-
---- Crée le répertoire parent d'un chemin fichier, si nécessaire.
--- @tparam string path Chemin de fichier
--- @treturn boolean true si OK (ou non nécessaire), false sinon
-ensure_parent_dir = (path) ->
-  parent = tostring(path)\match "^(.*)/[^/]+$"
-  return true unless parent and parent != ""
-  ret = os.execute "mkdir -p #{sh_quote(parent)}"
-  ret == 0 or ret == true
+-- Helpers d'I/O shell isolés dans un module dédié (testables unitairement).
+updater_io = require "filter.updater_io"
+sh_quote = updater_io.sh_quote
+ensure_dir = updater_io.ensure_dir
+ensure_parent_dir = updater_io.ensure_parent_dir
 
 -- ── Analyse des arguments ─────────────────────────────────────────
 
@@ -99,30 +82,8 @@ parse_args = (argv) ->
 
 -- ── Téléchargement ────────────────────────────────────────────────
 
---- Télécharge une URL via curl et retourne le contenu.
--- Utilise curl avec un timeout de 30 s et --fail pour détecter les erreurs HTTP.
--- @tparam  string      url URL à télécharger
--- @treturn string|nil  Contenu, ou nil en cas d'erreur
--- @treturn nil|string  Message d'erreur
-download = (url) ->
-  cmd = "curl --silent --location --max-time 30 --fail " .. sh_quote(url)
-  fh = io.popen cmd
-  return nil, "popen failed" unless fh
-  data = fh\read "*a"
-  ok = fh\close!
-  return nil, "curl failed (HTTP error ou timeout) : #{url}" unless ok and #data > 0
-  data, nil
-
---- Télécharge une URL vers un fichier local.
--- @tparam  string   url      URL à télécharger
--- @tparam  string   dest     Chemin de destination
--- @tparam  number   timeout  Timeout en secondes
--- @treturn boolean           Succès
-download_file = (url, dest, timeout) ->
-  timeout = timeout or 120
-  cmd = "curl --silent --location --max-time #{timeout} --fail -o #{sh_quote(dest)} #{sh_quote(url)}"
-  ret = os.execute cmd
-  ret == 0
+download = updater_io.download
+download_file = updater_io.download_file
 
 -- ── Format Toulouse ───────────────────────────────────────────────
 

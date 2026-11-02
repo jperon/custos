@@ -101,6 +101,10 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
   client, `set_record`, **exige l'ancien mot de passe** en challenge-réponse).
   Repli plaintext seulement si `auth.allow_plaintext_login`
   (défaut true → passer à false en prod). Plus de migration de hash au login.
+- Statut de `os.execute` : **jamais `ret == 0` seul**. Lua 5.1 renvoie un code
+  (`0` = succès), Lua 5.2+/LuaJIT `LUA52COMPAT` (Ubuntu 26.04) renvoie `true`
+  (succès) / `nil` (échec). Utiliser `lib.os_exec.exec_ok` ou
+  `ret == 0 or ret == true`. Cf. AGENTS.md § « Compatibilité `os.execute` ».
 - Active nft sets: `ip4_allowed`, `ip6_allowed`, `mac4_allowed`, `mac6_allowed`,
   `authenticated_macs`, `authenticated_ips`, `authenticated_ips6`,
   `ip4_dest_whitelist`, `ip6_dest_whitelist`

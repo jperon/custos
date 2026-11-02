@@ -1,4 +1,6 @@
 local serializer = require("webui.serializer")
+local exec_ok
+exec_ok = require("lib.os_exec").exec_ok
 local is_array
 is_array = function(t)
   if not (type(t) == "table") then
@@ -115,7 +117,7 @@ if not (ok) then
 end
 if opts.reload then
   local ret = os.execute("pkill -SIGHUP -f 'luajit.*main' 2>/dev/null")
-  if ret ~= 0 then
+  if not (exec_ok(ret)) then
     io.stderr:write("apply: SIGHUP non envoyé (service inactif ?)\n")
   end
 end

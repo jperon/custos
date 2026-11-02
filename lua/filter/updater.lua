@@ -7,27 +7,10 @@ ffi.cdef([[  int rename(const char *oldpath, const char *newpath);
 ]])
 local SIGHUP = 1
 local write_bin
-local sh_quote
-sh_quote = function(s)
-  return "'" .. tostring(s):gsub("'", "'\"'\"'") .. "'"
-end
-local ensure_dir
-ensure_dir = function(dir)
-  if not (dir and dir ~= "") then
-    return true
-  end
-  local ret = os.execute("mkdir -p " .. tostring(sh_quote(dir)))
-  return ret == 0 or ret == true
-end
-local ensure_parent_dir
-ensure_parent_dir = function(path)
-  local parent = tostring(path):match("^(.*)/[^/]+$")
-  if not (parent and parent ~= "") then
-    return true
-  end
-  local ret = os.execute("mkdir -p " .. tostring(sh_quote(parent)))
-  return ret == 0 or ret == true
-end
+local updater_io = require("filter.updater_io")
+local sh_quote = updater_io.sh_quote
+local ensure_dir = updater_io.ensure_dir
+local ensure_parent_dir = updater_io.ensure_parent_dir
 local parse_args
 parse_args = function(argv)
   local opts = {
@@ -49,27 +32,8 @@ parse_args = function(argv)
   end
   return opts
 end
-local download
-download = function(url)
-  local cmd = "curl --silent --location --max-time 30 --fail " .. sh_quote(url)
-  local fh = io.popen(cmd)
-  if not (fh) then
-    return nil, "popen failed"
-  end
-  local data = fh:read("*a")
-  local ok = fh:close()
-  if not (ok and #data > 0) then
-    return nil, "curl failed (HTTP error ou timeout) : " .. tostring(url)
-  end
-  return data, nil
-end
-local download_file
-download_file = function(url, dest, timeout)
-  timeout = timeout or 120
-  local cmd = "curl --silent --location --max-time " .. tostring(timeout) .. " --fail -o " .. tostring(sh_quote(dest)) .. " " .. tostring(sh_quote(url))
-  local ret = os.execute(cmd)
-  return ret == 0
-end
+local download = updater_io.download
+local download_file = updater_io.download_file
 local fetch_toulouse
 fetch_toulouse = function(name, source, dry_run)
   local url = source.url

@@ -13,6 +13,8 @@ local nft_dynamic_sets = require("filter.nft_dynamic_sets")
 local rule = require("filter.rule")
 local REJECT_MARK_HEX
 REJECT_MARK_HEX = require("nft_marks").REJECT_MARK_HEX
+local exec_ok
+exec_ok = require("lib.os_exec").exec_ok
 local rules_metadata = nil
 local ctx = libnft.nft_ctx_new(0)
 if ctx == nil then
@@ -311,7 +313,7 @@ apply = function()
   end
   os.remove(tmpfile)
   os.remove(errfile)
-  if rc ~= 0 then
+  if not (exec_ok(rc)) then
     log_warn(function()
       return {
         action = "nft_rules_apply_failed",

@@ -4,6 +4,7 @@
 --                          [--hostname <nom>] [--reload]
 
 serializer = require "webui.serializer"
+{ :exec_ok } = require "lib.os_exec"
 
 -- Fusion récursive identique à src/config.moon
 is_array = (t) ->
@@ -102,6 +103,6 @@ unless ok
 -- Rechargement optionnel
 if opts.reload
   ret = os.execute "pkill -SIGHUP -f 'luajit.*main' 2>/dev/null"
-  io.stderr\write "apply: SIGHUP non envoyé (service inactif ?)\n" if ret ~= 0
+  io.stderr\write "apply: SIGHUP non envoyé (service inactif ?)\n" unless exec_ok ret
 
 io.stdout\write "apply: #{opts.output} mis à jour\n"

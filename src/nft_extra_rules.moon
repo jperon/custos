@@ -21,6 +21,7 @@
 { :ffi, :libnft } = require "ffi_defs"
 config = require "config"
 { :log_warn, :log_info } = require "log"
+{ :exec_ok } = require "lib.os_exec"
 
 -- Contexte nft
 ctx = libnft.nft_ctx_new 0
@@ -139,7 +140,7 @@ apply_from_config = ->
   -- Vérifier si la chaîne forward existe. Si non (cas typique : respawn procd
   -- après un stop/start non coordonné), ré-appliquer le ruleset principal.
   rc_check = os.execute "nft list chain #{config.nft.family} #{config.nft.table} forward >/dev/null 2>&1"
-  if rc_check ~= 0
+  unless exec_ok rc_check
     ok, rc = require("nft_rules").apply!
     unless ok
       log_warn -> { action: "nft_extra_main_rules_reapply_failed", rc: rc or -1 }

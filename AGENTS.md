@@ -648,6 +648,32 @@ See [.agents/px5g_migration.md](.agents/px5g_migration.md) for full documentatio
   `static_cert_paths` n'est posé que si le contexte statique parent a été
   chargé (sinon repli SNI dynamique, jamais de hard-error par connexion)
 
+## Compatibilité `os.execute` (Lua 5.1 / Lua 5.2+ `LUA52COMPAT`)
+
+Le retour de `os.execute` dépend de la build de LuaJIT :
+
+| Build | Succès | Échec |
+|-------|--------|-------|
+| Lua 5.1 / LuaJIT standard | `0` (number) | code ≠ 0 (number) |
+| Lua 5.2+ / LuaJIT `LUA52COMPAT` (ex. Ubuntu 26.04) | `true, "exit", 0` | `nil, "exit", code` (ou `"signal"`) |
+
+Conséquence : **ne jamais tester `ret == 0` seul** — sous `LUA52COMPAT` un
+succès (`true`) est alors traité comme un échec. Utiliser `lib.os_exec.exec_ok`
+(`src/lib/os_exec.moon`), qui teste `ret == 0 or ret == true`, ou le test
+inline équivalent.
+
+Sites concernés (statut de retour testé) : `filter/updater_io.moon`
+(`download_file`, `ensure_dir`, `ensure_parent_dir` — le bug initial : tout
+téléchargement réussi finissait en « curl échoué » et l'updater sortait en
+code 1), `nft_rules.apply` (application du template via `nft -f`),
+`nft_extra_rules.apply_from_config` (sonde de la chaîne `forward`, sinon
+ré-application systématique), `sync/apply.moon` (`--reload`), `auth/cert_generator`,
+`webui/handlers/lists` (`write_list_file`) et `tools/classifier/common` (commit
+git). Les helpers I/O de l'updater sont isolés dans `filter/updater_io.moon`
+(le script `filter/updater.moon` s'exécute au chargement, donc n'est pas
+testable directement) et couverts par `tests/unit/filter/updater_io_spec.moon`
+dans les deux sémantiques via un stub de `os.execute`.
+
 ## Corrections d'audit (2026-07-16)
 
 Audit global qualité/perf/stabilité (4 volets parallèles : dataplane, filter,

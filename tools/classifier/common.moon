@@ -329,7 +329,9 @@ git_commit = (repo_dir, msg, warn) ->
     return
 
   os.execute "#{git} add -A"
-  if os.execute("#{git} commit -m #{sh_quote(msg)}") == 0
+  -- os.execute : 0 en Lua 5.1, true en Lua 5.2+ (LUA52COMPAT).
+  ret = os.execute "#{git} commit -m #{sh_quote(msg)}"
+  if ret == 0 or ret == true
     warn "commit créé : #{msg}"
   else
     warn "git commit a échoué"

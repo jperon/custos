@@ -22,6 +22,7 @@ nft_compiler = require "filter.nft_compiler"
 nft_dynamic_sets = require "filter.nft_dynamic_sets"
 rule = require "filter.rule"
 { :REJECT_MARK_HEX } = require "nft_marks"
+{ :exec_ok } = require "lib.os_exec"
 
 -- Expose rules_metadata for other modules to reuse without recompiling
 rules_metadata = nil
@@ -294,7 +295,7 @@ apply = ->
   os.remove tmpfile
   os.remove errfile
 
-  if rc != 0
+  unless exec_ok rc
     log_warn -> { action: "nft_rules_apply_failed", path: path, rc: rc, err: errtxt }
     return false
 
