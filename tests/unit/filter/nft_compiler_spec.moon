@@ -56,6 +56,18 @@ describe "filter.nft_compiler", ->
     assert.equals 1, #plan.action_map
     assert.equals "r_on", plan.action_map[1].rule_id
 
+  it "resolve l'action depuis une entrée table { nom: options }", ->
+    cfg = {
+      nft: { ip_timeout: "2m" }
+      rules: {
+        { rule_id: "table_deny", actions: { { deny: {} } } }
+      }
+    }
+    compiled = rule_mod.compile_rules cfg
+    plan = compiler.compile cfg, compiled.rules_metadata
+    assert.equals "deny", plan.rules[1].action
+    assert.equals "drop", plan.action_map[1].verdict
+
   it "ensures unique stable rule_id values", ->
     cfg = {
       rules: {

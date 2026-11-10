@@ -430,9 +430,10 @@ collect_proto_ports = function(rule)
 end
 local resolve_action
 resolve_action = function(rule)
-  for _, action in ipairs(rule.actions or { }) do
-    if action == "allow" or action == "deny" or action == "dnsonly" then
-      return action
+  for _, entry in ipairs(rule.actions or { }) do
+    local name = compiler_api.action_name_of(entry)
+    if name == "allow" or name == "deny" or name == "dnsonly" then
+      return name
     end
   end
   return nil

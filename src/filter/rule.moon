@@ -75,11 +75,27 @@ compile_rule = (cfg, rule, idx, used_ids=nil) ->
   actions_meta = {}
   rule_block_modifiers = {}
   rule_allow_modifiers = {}
-  for action_name in *(rule.actions or {})
+  for entry in *(rule.actions or {})
+    action_name = compiler_api.action_name_of entry
+    unless action_name
+      rule_label = rule.description or rule.rule_id or "rule_#{idx}"
+      error "Action invalide dans la règle '#{rule_label}': une entrée doit être un nom " ..
+        "ou une table à une seule clé { nom: options }"
+
+    -- Forme table `{ nom: options }` (webui) : la factory reçoit une copie
+    -- superficielle de la règle où [nom] = options, sans muter la règle d'origine
+    -- ni affecter les autres actions. La forme chaîne garde `rule` tel quel.
+    action_rule = rule
+    if type(entry) == "table"
+      action_rule = {}
+      for k, v in pairs rule
+        action_rule[k] = v
+      action_rule[action_name] = entry[action_name]
+
     action_factory, err = compiler_api.load_action action_name
     error "Action inconnue '#{action_name}': #{err}" unless action_factory
 
-    action_obj = action_factory(cfg)(rule)
+    action_obj = action_factory(cfg)(action_rule)
     action_evals[#action_evals + 1] = action_obj.eval
     actions_meta[#actions_meta + 1] = {
       name:         action_name

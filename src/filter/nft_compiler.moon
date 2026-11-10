@@ -277,9 +277,10 @@ collect_proto_ports = (rule) ->
   protos, ports
 
 resolve_action = (rule) ->
-  for _, action in ipairs rule.actions or {}
-    if action == "allow" or action == "deny" or action == "dnsonly"
-      return action
+  for _, entry in ipairs rule.actions or {}
+    name = compiler_api.action_name_of entry
+    if name == "allow" or name == "deny" or name == "dnsonly"
+      return name
   nil
 
 build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil, rule_metadata=nil) ->

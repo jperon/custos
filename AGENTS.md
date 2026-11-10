@@ -147,6 +147,15 @@ de bord pur), jamais `true`/`false` : sinon elle gagne le
 la vraie règle d'autorisation/deny (souvent gardée par une condition d'auth)
 d'être évaluée.
 
+Une entrée de `rule.actions` accepte deux formes : la chaîne `"nom"` (options
+éventuelles au niveau de la règle, ex. `rule.dns_strip`), et la table à une
+seule clé `{ nom: options }` (forme écrite par la webui, ex. `{ log: { log_msg:
+… } }`). Le moteur normalise via `compiler_api.action_name_of` /
+`action_options_of` ; pour la forme table, la factory reçoit une copie
+superficielle de la règle où `[nom] = options`. Les factories d'action suivent
+la convention `(cfg) -> (rule) -> (req) -> …` et `actions_meta[].name` est
+toujours le nom (chaîne).
+
 ### `requires_auth` dans les capabilities
 
 Pour qu'une condition déclenche les sous-chaînes nft d'authentification

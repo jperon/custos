@@ -14,6 +14,14 @@ describe "chain_strip_active", ->
     cfg = { filter: { rules: { { dns_strip: { rr_type: "AAAA", follow_cname: false } } } } }
     assert.is_false chain_strip_active cfg
 
+  it "vrai si dns_strip est une entrée d'action table (forme webui)", ->
+    cfg = { filter: { rules: { { actions: { { dns_strip: { rr_type: "AAAA" } }, "allow" } } } } }
+    assert.is_true chain_strip_active cfg
+
+  it "faux si dns_strip table a follow_cname=false (opt-out explicite)", ->
+    cfg = { filter: { rules: { { actions: { { dns_strip: { rr_type: "AAAA", follow_cname: false } }, "allow" } } } } }
+    assert.is_false chain_strip_active cfg
+
   it "faux si aucune règle dns_strip", ->
     cfg = { filter: { rules: { { description: "x" } } } }
     assert.is_false chain_strip_active cfg
