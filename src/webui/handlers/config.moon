@@ -7,6 +7,7 @@ H       = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
 config_schema = require "webui.schema.config_schema"
+{ :parse_form } = require "webui.util"
 unpack or= table.unpack
 
 -- ── Helpers formulaire ────────────────────────────────────────────────────
@@ -71,14 +72,6 @@ render_subsection = (sub_name, sub_schema, current_vals) ->
     H.legend sub_label
     fields_html
   }
-
-parse_form = (body) ->
-  return {} unless body
-  out = {}
-  dec = (s) -> (s\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16)\gsub "+", " "
-  for k, v in body\gmatch "([^&=]+)=([^&]*)"
-    out[dec k] = dec v
-  out
 
 build_section = (schema, prefix, form_data) ->
   result = {}

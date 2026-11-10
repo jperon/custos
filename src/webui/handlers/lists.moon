@@ -13,20 +13,7 @@ H       = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
 { :shquote } = require "lib.shquote"
-
--- Échappe le texte destiné au contenu/attribut HTML (le DSL auth.html
--- n'échappe rien : cf. webui.handlers.devices/verdicts pour le même pattern).
-esc = (s) ->
-  s = tostring s or ""
-  (s\gsub "[&<>\"']", { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })
-
-parse_form = (body) ->
-  return {} unless body
-  out = {}
-  dec = (s) -> (s\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16)\gsub "+", " "
-  for k, v in body\gmatch "([^&=]+)=([^&]*)"
-    out[dec k] = dec v
-  out
+{ :esc, :parse_form } = require "webui.util"
 
 valid_type = (t) -> t and t\match "^[a-z][a-z0-9_]*$"
 valid_name = (n) -> n and n\match "^[a-zA-Z0-9][a-zA-Z0-9_%-]*$"

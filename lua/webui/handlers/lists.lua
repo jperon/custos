@@ -8,33 +8,10 @@ do
 end
 local shquote
 shquote = require("lib.shquote").shquote
-local esc
-esc = function(s)
-  s = tostring(s or "")
-  return (s:gsub("[&<>\"']", {
-    ["&"] = "&amp;",
-    ["<"] = "&lt;",
-    [">"] = "&gt;",
-    ['"'] = "&quot;",
-    ["'"] = "&#39;"
-  }))
-end
-local parse_form
-parse_form = function(body)
-  if not (body) then
-    return { }
-  end
-  local out = { }
-  local dec
-  dec = function(s)
-    return (s:gsub("%%(%x%x)", function(h)
-      return string.char(tonumber(h, 16))
-    end)):gsub("+", " ")
-  end
-  for k, v in body:gmatch("([^&=]+)=([^&]*)") do
-    out[dec(k)] = dec(v)
-  end
-  return out
+local esc, parse_form
+do
+  local _obj_0 = require("webui.util")
+  esc, parse_form = _obj_0.esc, _obj_0.parse_form
 end
 local valid_type
 valid_type = function(t)

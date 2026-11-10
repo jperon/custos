@@ -10,22 +10,7 @@ do
 end
 local registry = require("webui.schema.registry")
 local parse_form
-parse_form = function(body)
-  if not (body) then
-    return { }
-  end
-  local out = { }
-  local dec
-  dec = function(s)
-    return (s:gsub("%%(%x%x)", function(h)
-      return string.char(tonumber(h, 16))
-    end)):gsub("+", " ")
-  end
-  for k, v in body:gmatch("([^&=]+)=([^&]*)") do
-    out[dec(k)] = dec(v)
-  end
-  return out
-end
+parse_form = require("webui.util").parse_form
 local RULES_REORDER_JS = [[(function(){
   var tbody = document.getElementById('rules-tbody');
   var form  = document.getElementById('reorder-form');

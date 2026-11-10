@@ -11,14 +11,7 @@ H        = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
 registry = require "webui.schema.registry"
-
-parse_form = (body) ->
-  return {} unless body
-  out = {}
-  dec = (s) -> (s\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16)\gsub "+", " "
-  for k, v in body\gmatch "([^&=]+)=([^&]*)"
-    out[dec k] = dec v
-  out
+{ :parse_form } = require "webui.util"
 
 -- JS de réordonnancement par glisser-déposer (repli no-JS : boutons ↑/↓).
 RULES_REORDER_JS = [[

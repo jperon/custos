@@ -7,6 +7,8 @@ do
   read_config, write_config = _obj_0.read_config, _obj_0.write_config
 end
 local config_schema = require("webui.schema.config_schema")
+local parse_form
+parse_form = require("webui.util").parse_form
 local unpack = unpack or table.unpack
 local render_field
 render_field = function(name, field_schema, current_val)
@@ -139,23 +141,6 @@ render_subsection = function(sub_name, sub_schema, current_vals)
     H.legend(sub_label),
     fields_html
   })
-end
-local parse_form
-parse_form = function(body)
-  if not (body) then
-    return { }
-  end
-  local out = { }
-  local dec
-  dec = function(s)
-    return (s:gsub("%%(%x%x)", function(h)
-      return string.char(tonumber(h, 16))
-    end)):gsub("+", " ")
-  end
-  for k, v in body:gmatch("([^&=]+)=([^&]*)") do
-    out[dec(k)] = dec(v)
-  end
-  return out
 end
 local build_section
 build_section = function(schema, prefix, form_data)
