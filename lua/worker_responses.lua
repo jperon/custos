@@ -402,6 +402,12 @@ retry_pending_match = function(txid, client_ip, client_port, resolver_ip)
   end
   return nil, tries, total_wait_ms
 end
+local forget_ip_mapping
+forget_ip_mapping = function(ip, mac)
+  if ip and ip_to_mac[ip] == mac then
+    ip_to_mac[ip] = nil
+  end
+end
 update_mac_clients = function(msg, ts)
   local mac = msg.mac_str
   if mac == MAC_ZERO then
@@ -411,17 +417,13 @@ update_mac_clients = function(msg, ts)
   entry.last_seen = ts
   if msg.ipv4 then
     if not (entry.ipv4 == msg.ip_str) then
-      if entry.ipv4 then
-        ip_to_mac[entry.ipv4] = nil
-      end
+      forget_ip_mapping(entry.ipv4, mac)
       entry.ipv4 = msg.ip_str
       ip_to_mac[msg.ip_str] = mac
     end
   else
     if not (entry.ipv6 == msg.ip_str) then
-      if entry.ipv6 then
-        ip_to_mac[entry.ipv6] = nil
-      end
+      forget_ip_mapping(entry.ipv6, mac)
       entry.ipv6 = msg.ip_str
       ip_to_mac[msg.ip_str] = mac
     end
@@ -432,12 +434,8 @@ local purge_mac_clients
 purge_mac_clients = function(ts)
   for mac, entry in pairs(mac_clients) do
     if ts - entry.last_seen > (clients_cfg.expiry or 300) then
-      if entry.ipv4 then
-        ip_to_mac[entry.ipv4] = nil
-      end
-      if entry.ipv6 then
-        ip_to_mac[entry.ipv6] = nil
-      end
+      forget_ip_mapping(entry.ipv4, mac)
+      forget_ip_mapping(entry.ipv6, mac)
       entry.ips = nil
       mac_clients[mac] = nil
       log_info(function()
@@ -1233,5 +1231,8 @@ return {
   format_block_event = format_block_event,
   record_chain_targets = record_chain_targets,
   maybe_dynamic_strip = maybe_dynamic_strip,
-  purge_strip_query_cache = purge_strip_query_cache
+  purge_strip_query_cache = purge_strip_query_cache,
+  update_mac_clients = update_mac_clients,
+  purge_mac_clients = purge_mac_clients,
+  ip_to_mac = ip_to_mac
 }

@@ -826,3 +826,9 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `mac_learner_ipc.get_mac` bloqué en `recv`. Correctif : helper `reply_unknown`
   (send+close, utilisé à tous les sites) et décision extraite en
   `probe_request` (exportée, testée par `tests/unit/mac_learner_probe_spec.moon`).
+- **`worker_responses` : `ip_to_mac` effacé pour le nouveau propriétaire d'une
+  IP.** Quand l'entrée d'une ancienne MAC expirait (ou qu'elle changeait d'IP),
+  `ip_to_mac[ip] = nil` supprimait le mapping déjà réattribué à une autre MAC.
+  Correctif : helper `forget_ip_mapping` qui n'efface que si `ip_to_mac[ip]`
+  appartient encore à cette MAC, aux quatre sites ; test dans
+  `tests/unit/worker_responses_spec.moon`.
