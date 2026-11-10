@@ -34,7 +34,16 @@ parse_net = function(s)
     return nil
   end
   local is_v6 = (addr_s:find(":", 1, true) and true) or false
-  local mask_bits = tonumber(mask_s) or (is_v6 and 128 or 32)
+  local max_bits
+  if is_v6 then
+    max_bits = 128
+  else
+    max_bits = 32
+  end
+  local mask_bits = tonumber(mask_s) or max_bits
+  if mask_bits > max_bits then
+    return nil
+  end
   local off = is_v6 and 0 or 12
   local addr = parse_ip(addr_s)
   if not (addr) then
