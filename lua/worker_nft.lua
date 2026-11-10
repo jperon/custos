@@ -155,7 +155,7 @@ send_ack = function(ack_wfds, widx)
 end
 local try_add_pending
 try_add_pending = function(pending, item)
-  local entry_key = tostring(item.kind) .. "|" .. tostring(item.key) .. "|" .. tostring(item.ip) .. "|" .. tostring(item.timeout)
+  local entry_key = tostring(item.kind) .. "|" .. tostring(item.key) .. "|" .. tostring(item.ip) .. "|" .. tostring(item.timeout) .. "|" .. tostring(tostring(item.rule_id))
   if pending[entry_key] then
     return false
   end

@@ -91,12 +91,15 @@ send_ack = (ack_wfds, widx) ->
   return unless wfd
   libc.write wfd, ack_byte, 1
 
--- Ajoute un item à `pending` avec déduplication par (kind,key,ip,timeout).
+-- Ajoute un item à `pending` avec déduplication par
+-- (kind,key,ip,timeout,rule_id). Le nom du set nft dépend de rule_id
+-- (`#{rule_id}_#{kind}`) : deux règles distinctes autorisant le même couple
+-- (client, IP) doivent produire deux insertions.
 -- Retourne true si l'item a été ajouté (nouvelle clé), false si c'est un doublon.
 -- Permet à l'appelant de tenir un compteur incrémental sans re-parcourir
 -- `pending` (pairs) à chaque tour de boucle.
 try_add_pending = (pending, item) ->
-  entry_key = "#{item.kind}|#{item.key}|#{item.ip}|#{item.timeout}"
+  entry_key = "#{item.kind}|#{item.key}|#{item.ip}|#{item.timeout}|#{tostring item.rule_id}"
   return false if pending[entry_key]
   pending[entry_key] = item
   true

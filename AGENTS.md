@@ -814,3 +814,9 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   Correctif : construction unique extraite dans `lib.filter_data.build_filter_data`
   (règles, auth, sni, décision), utilisée aux deux emplacements ; test
   `tests/unit/lib/filter_data_spec.moon`.
+- **`worker_nft` : déduplication de lot ignorant `rule_id`.** La clé de
+  `try_add_pending` omettait `rule_id` alors que le nom du set nft en dépend
+  (`#{rule_id}_#{kind}`) : deux règles autorisant le même couple (client, IP)
+  dans un lot voyaient la seconde insertion jetée, son set restant vide.
+  Correctif : `rule_id` (tostring, nil toléré) ajouté à la clé ;
+  `tests/unit/worker_nft_spec.moon` couvre deux `rule_id` distincts.
