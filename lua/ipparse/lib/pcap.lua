@@ -27,67 +27,28 @@ local link_types = {
   [228] = "RAW_IP6",
   [12] = "RAW_IP"
 }
+local M = {
+  verbose = false
+}
+local log
+log = function(msg)
+  if M.verbose then
+    return print(msg)
+  end
+end
 local parse_shb
 parse_shb = function(data, offset)
-  if not (need_bytes(data, offset, 12)) then
+  if not (need_bytes(data, offset, 28)) then
     return nil, offset, "insufficient data for SHB header"
   end
-  local endian = nil
-  local ok, byte_order_magic = pcall(su, ">I4", data, offset + 8)
-  print("parse_shb: big-endian read ok=" .. tostring(ok) .. ", byte_order_magic=0x" .. tostring(string.format('%08x', byte_order_magic or 0)) .. ", numeric=" .. tostring(byte_order_magic))
-  if ok then
-    local hex_magic = string.format('%08x', byte_order_magic)
-    print("parse_shb: hex_magic=" .. tostring(hex_magic))
-    if hex_magic == '1a2b3c4d' then
-      endian = ">"
-    else
-      endian = "<"
-    end
-  else
-    ok, byte_order_magic = pcall(su, "<I4", data, offset + 8)
-    print("parse_shb: little-endian read ok=" .. tostring(ok) .. ", byte_order_magic=0x" .. tostring(string.format('%08x', byte_order_magic or 0)) .. ", numeric=" .. tostring(byte_order_magic))
-    if ok then
-      local hex_magic = string.format('%08x', byte_order_magic)
-      print("parse_shb: hex_magic=" .. tostring(hex_magic))
-      if hex_magic == '1a2b3c4d' then
-        endian = ">"
-      else
-        endian = "<"
-      end
-    else
-      endian = "<"
-    end
-  end
-  print("parse_shb: detected endian=" .. tostring(endian))
-  print("parse_shb: data length=" .. tostring(#data) .. ", offset=" .. tostring(offset))
-  local block_type, block_len, major_version, minor_version, section_length
-  block_type, block_len, byte_order_magic, major_version, minor_version, section_length = nil
-  if endian == ">" then
-    print("parse_shb: parsing with big-endian")
-    block_type = su(">I4", data, offset)
-    print("parse_shb: after first su, block_type=" .. tostring(block_type))
-    block_len = su(">I4", data, offset + 4)
-    byte_order_magic = su(">I4", data, offset + 8)
-    major_version = su(">I2", data, offset + 12)
-    minor_version = su(">I2", data, offset + 14)
-    section_length = su(">I8", data, offset + 16)
-  else
-    print("parse_shb: parsing with little-endian")
-    print("parse_shb: calling su with format '<I4', data length " .. tostring(#data) .. ", offset " .. tostring(offset))
-    block_type = su("<I4", data, offset)
-    print("parse_shb: block_type su: ok=true, block_type=" .. tostring(block_type))
-    block_len = su("<I4", data, offset + 4)
-    print("parse_shb: block_len su: ok=true, block_len=" .. tostring(block_len))
-    byte_order_magic = su("<I4", data, offset + 8)
-    print("parse_shb: byte_order_magic su: ok=true, byte_order_magic=" .. tostring(byte_order_magic))
-    major_version = su("<I2", data, offset + 12)
-    print("parse_shb: major_version su: ok=true, major_version=" .. tostring(major_version))
-    minor_version = su("<I2", data, offset + 14)
-    print("parse_shb: minor_version su: ok=true, minor_version=" .. tostring(minor_version))
-    section_length = su("<I8", data, offset + 16)
-    print("parse_shb: section_length su: ok=true, section_length=" .. tostring(section_length))
-  end
-  print("parse_shb: block_type=" .. tostring(block_type) .. ", block_len=" .. tostring(block_len))
+  local endian = su(">I4", data, offset + 8) == 0x1A2B3C4D and ">" or "<"
+  local block_type = su(tostring(endian) .. "I4", data, offset)
+  local block_len = su(tostring(endian) .. "I4", data, offset + 4)
+  local byte_order_magic = su(tostring(endian) .. "I4", data, offset + 8)
+  local major_version = su(tostring(endian) .. "I2", data, offset + 12)
+  local minor_version = su(tostring(endian) .. "I2", data, offset + 14)
+  local section_length = su(tostring(endian) .. "I8", data, offset + 16)
+  log("parse_shb: endian=" .. tostring(endian) .. ", block_type=" .. tostring(block_type) .. ", block_len=" .. tostring(block_len))
   local shb = {
     block_type = block_type,
     block_len = block_len,
@@ -155,16 +116,16 @@ parse_pcapng = function(filename)
   local endian = ">"
   while offset <= #data do
     if offset + 8 > #data then
-      print("End of data at offset " .. tostring(offset))
+      log("End of data at offset " .. tostring(offset))
       break
     end
     local block_type = su(tostring(endian) .. "I4", data, offset)
     local block_name = block_types[block_type] or "UNKNOWN"
-    print("Offset " .. tostring(offset) .. ": block_type=0x" .. tostring(string.format("%08x", block_type)) .. " (" .. tostring(block_name) .. "), endian=" .. tostring(endian))
+    log("Offset " .. tostring(offset) .. ": block_type=0x" .. tostring(string.format("%08x", block_type)) .. " (" .. tostring(block_name) .. "), endian=" .. tostring(endian))
     if block_name == "UNKNOWN" and endian == ">" then
       block_type = su("<I4", data, offset)
       block_name = block_types[block_type] or "UNKNOWN"
-      print("Trying little-endian: block_type=0x" .. tostring(string.format("%08x", block_type)) .. " (" .. tostring(block_name) .. ")")
+      log("Trying little-endian: block_type=0x" .. tostring(string.format("%08x", block_type)) .. " (" .. tostring(block_name) .. ")")
     end
     local _exp_0 = block_name
     if "SHB" == _exp_0 then
@@ -176,7 +137,7 @@ parse_pcapng = function(filename)
       }
       shb = shb_data
       endian = shb.endian
-      print("Found Section Header Block - endian: " .. tostring(endian))
+      log("Found Section Header Block - endian: " .. tostring(endian))
     elseif "IDB" == _exp_0 then
       local idb
       idb, offset = parse_idb(data, offset, endian)
@@ -185,7 +146,7 @@ parse_pcapng = function(filename)
         data = idb
       }
       interfaces[#interfaces + 1] = idb
-      print("Found Interface Description Block - linktype: " .. tostring(idb.linktype_name))
+      log("Found Interface Description Block - linktype: " .. tostring(idb.linktype_name))
     elseif "EPB" == _exp_0 then
       local epb
       epb, offset = parse_epb(data, offset, endian)
@@ -195,7 +156,7 @@ parse_pcapng = function(filename)
       }
       epb.interface = interfaces[epb.interface_id + 1]
       packets[#packets + 1] = epb
-      print("Found Enhanced Packet Block - packet " .. tostring(#packets) .. ", len: " .. tostring(epb.captured_len) .. ", timestamp: " .. tostring(epb.timestamp))
+      log("Found Enhanced Packet Block - packet " .. tostring(#packets) .. ", len: " .. tostring(epb.captured_len) .. ", timestamp: " .. tostring(epb.timestamp))
     else
       if offset + 8 <= #data then
         local block_len = su(tostring(endian) .. "I4", data, offset + 4)
@@ -205,14 +166,14 @@ parse_pcapng = function(filename)
           raw_data = raw_data,
           block_type = block_type
         }
-        print("Found unknown block type: 0x" .. tostring(string.format("%08x", block_type)) .. ", len: " .. tostring(block_len) .. " at offset " .. tostring(offset))
+        log("Found unknown block type: 0x" .. tostring(string.format("%08x", block_type)) .. ", len: " .. tostring(block_len) .. " at offset " .. tostring(offset))
         offset = offset + block_len
       else
         break
       end
     end
   end
-  print("Parsed " .. tostring(#packets) .. " packets from " .. tostring(filename))
+  log("Parsed " .. tostring(#packets) .. " packets from " .. tostring(filename))
   return packets, all_blocks
 end
 local filter_quic_packets
@@ -266,14 +227,14 @@ filter_quic_packets = function(packets)
         quic_packets[#quic_packets + 1] = quic_packet
         local src_ip = ip.ip2s(ip_pkt.src)
         local dst_ip = ip.ip2s(ip_pkt.dst)
-        print("QUIC Packet " .. tostring(i) .. ": " .. tostring(src_ip) .. ":" .. tostring(udp_dgram.spt) .. " -> " .. tostring(dst_ip) .. ":" .. tostring(udp_dgram.dpt))
+        log("QUIC Packet " .. tostring(i) .. ": " .. tostring(src_ip) .. ":" .. tostring(udp_dgram.spt) .. " -> " .. tostring(dst_ip) .. ":" .. tostring(udp_dgram.dpt))
         if quic_pkt.long_header then
           local dcid = bin2hex(quic_pkt.dst_connection_id)
           local scid = bin2hex(quic_pkt.src_connection_id)
-          print("  Long Header - Version: 0x" .. tostring(string.format("%08x", quic_pkt.version)) .. ", DCID: " .. tostring(dcid) .. ", SCID: " .. tostring(scid))
+          log("  Long Header - Version: 0x" .. tostring(string.format("%08x", quic_pkt.version)) .. ", DCID: " .. tostring(dcid) .. ", SCID: " .. tostring(scid))
         else
           local dcid = bin2hex(quic_pkt.dst_connection_id)
-          print("  Short Header - DCID: " .. tostring(dcid))
+          log("  Short Header - DCID: " .. tostring(dcid))
         end
       end
       _continue_0 = true
@@ -282,7 +243,7 @@ filter_quic_packets = function(packets)
       break
     end
   end
-  print("Found " .. tostring(#quic_packets) .. " QUIC packets")
+  log("Found " .. tostring(#quic_packets) .. " QUIC packets")
   return quic_packets
 end
 local pack_shb
@@ -343,14 +304,13 @@ parse_quic_from_pcapng = function(filename)
   local packets = parse_pcapng(filename)
   return filter_quic_packets(packets)
 end
-return {
-  parse_pcapng = parse_pcapng,
-  parse_quic_from_pcapng = parse_quic_from_pcapng,
-  filter_quic_packets = filter_quic_packets,
-  block_types = block_types,
-  link_types = link_types,
-  pack_shb = pack_shb,
-  pack_idb = pack_idb,
-  pack_epb = pack_epb,
-  write_pcapng = write_pcapng
-}
+M.parse_pcapng = parse_pcapng
+M.parse_quic_from_pcapng = parse_quic_from_pcapng
+M.filter_quic_packets = filter_quic_packets
+M.block_types = block_types
+M.link_types = link_types
+M.pack_shb = pack_shb
+M.pack_idb = pack_idb
+M.pack_epb = pack_epb
+M.write_pcapng = write_pcapng
+return M

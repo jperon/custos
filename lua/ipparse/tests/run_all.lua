@@ -15,8 +15,15 @@ local mods = {
   "ipparse.tests.l3.test_ip",
   "ipparse.tests.l4.test_tcp",
   "ipparse.tests.l4.test_udp",
+  "ipparse.tests.l4.test_tcp_stream",
   "ipparse.tests.l7.test_dns",
+  "ipparse.tests.l7.tls.test_handshake",
+  "ipparse.tests.test_malformed",
+  "ipparse.tests.lib.test_sha",
   "ipparse.tests.lib.test_hkdf",
+  "ipparse.tests.lib.test_bit_compat",
+  "ipparse.tests.lib.test_pack_compat",
+  "ipparse.tests.lib.test_pack_compat_float",
   "ipparse.tests.lib.crypto.test_ffi_wolfssl",
   "ipparse.tests.lib.crypto.test_ffi_mbedtls",
   "ipparse.tests.l4.quic.test_varint",
@@ -34,6 +41,7 @@ if is_luajit or is_pre53 then
 else
   table.insert(mods, 12, "ipparse.tests.lib.crypto.test_lunatik")
 end
+local load_errors = 0
 for _index_0 = 1, #mods do
   local mod = mods[_index_0]
   local ok, err = pcall(require, mod)
@@ -41,7 +49,12 @@ for _index_0 = 1, #mods do
     total_pass = total_pass + util._last_pass
     total_all = total_all + util._last_total
   else
+    load_errors = load_errors + 1
     print("ERROR loading " .. tostring(mod) .. ": " .. tostring(err))
   end
 end
-return print("\n==> Total: " .. tostring(total_pass) .. "/" .. tostring(total_all))
+print("\n==> Total: " .. tostring(total_pass) .. "/" .. tostring(total_all))
+local failed = total_pass ~= total_all or load_errors > 0
+if os and os.exit then
+  return os.exit(failed and 1 or 0)
+end

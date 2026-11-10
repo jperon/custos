@@ -27,6 +27,9 @@ do
 end
 local get_version
 get_version = function(self, off)
+  if off < 1 or off > #self then
+    return nil
+  end
   return rshift(su("B", self, off), 4)
 end
 local pack

@@ -142,4 +142,62 @@ test("zero_indexed copies t[1] to t[0]", function()
   })
   return assert(t[0] == "x", "t[0] should be 'x', got '" .. tostring(t[0]) .. "'")
 end)
+test("bidirectional invalidates stale cache on key modification", function()
+  local t = bidirectional({
+    a = 1
+  })
+  assert(t[1] == "a", "t[1] should be 'a', got '" .. tostring(t[1]) .. "'")
+  t.a = 2
+  assert(t[1] == nil, "t[1] should be nil after t.a changed, got '" .. tostring(t[1]) .. "'")
+  return assert(t[2] == "a", "t[2] should be 'a' after change, got '" .. tostring(t[2]) .. "'")
+end)
+test("bidirectional drops cache for deleted key", function()
+  local t = bidirectional({
+    a = 1
+  })
+  assert(t[1] == "a", "t[1] should be 'a', got '" .. tostring(t[1]) .. "'")
+  t.a = nil
+  return assert(t[1] == nil, "t[1] should be nil after key deletion, got '" .. tostring(t[1]) .. "'")
+end)
+test("bidirectional cache cycle after deletion", function()
+  local t = bidirectional({
+    x = "y",
+    y = "x"
+  })
+  assert(t["y"] == "x", "t['y'] should be 'x', got '" .. tostring(t['y']) .. "'")
+  assert(t["x"] == "y", "t['x'] should be 'y', got '" .. tostring(t['x']) .. "'")
+  t.x = nil
+  t.y = nil
+  return assert(t["y"] == nil, "t['y'] should be nil after deletion, got '" .. tostring(t['y']) .. "'")
+end)
+test("bidirectional non-regression forward and reverse lookup", function()
+  local t = bidirectional({
+    a = 1,
+    b = 2
+  })
+  assert(t.a == 1, "t.a should be 1")
+  assert(t.b == 2, "t.b should be 2")
+  assert(t[1] == "a", "t[1] should be 'a'")
+  return assert(t[2] == "b", "t[2] should be 'b'")
+end)
+test("bidirectional reverse sees key added later", function()
+  local t = bidirectional({
+    a = 1
+  })
+  t.b = 2
+  return assert(t[2] == "b", "t[2] should be 'b' after adding t.b, got '" .. tostring(t[2]) .. "'")
+end)
+test("bidirectional pairs only sees real entries", function()
+  local t = bidirectional({
+    a = 1,
+    b = 2
+  })
+  local _scrap_0 = t[1]
+  _scrap_0 = t[2]
+  local n = 0
+  for k, v in pairs(t) do
+    n = n + 1
+  end
+  return assert(n == 2, "pairs should see 2 entries, got " .. tostring(n))
+end)
 return util.summary("fun")

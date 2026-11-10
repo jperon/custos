@@ -50,6 +50,9 @@ parse = function(self, off)
   if off == nil then
     off = 1
   end
+  if off + 1 > #self then
+    return nil, off, "truncated ServerNameList"
+  end
   local len, _off = su(">H", self, off)
   local end_offset = _off + len
   local names = { }

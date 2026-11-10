@@ -3,26 +3,26 @@ local test
 test = util.test
 local eth = require("ipparse.l2.ethernet")
 local sp = require("ipparse.lib.pack_compat").pack
-local eth_raw = sp("c6c6>H", "\xaa\xbb\xcc\xdd\xee\xff", "\x00\x11\x22\x33\x44\x55", 0x0800)
+local eth_raw = sp("c6c6>H", "\170\187\204\221\238\255", "\000\017\034\051\068\085", 0x0800)
 test("mac2s converts binary to string", function()
-  local result = eth.mac2s("\xaa\xbb\xcc\xdd\xee\xff")
+  local result = eth.mac2s("\170\187\204\221\238\255")
   return assert(result == "aa:bb:cc:dd:ee:ff", "expected 'aa:bb:cc:dd:ee:ff', got '" .. tostring(result) .. "'")
 end)
 test("s2mac converts string to binary", function()
   local result = eth.s2mac("aa:bb:cc:dd:ee:ff")
-  return assert(result == "\xaa\xbb\xcc\xdd\xee\xff", "s2mac failed")
+  return assert(result == "\170\187\204\221\238\255", "s2mac failed")
 end)
 test("mac2s/s2mac round-trip", function()
-  local original = "\x12\x34\x56\x78\x9a\xbc"
+  local original = "\018\052\086\120\154\188"
   return assert(eth.s2mac(eth.mac2s(original)) == original, "mac2s/s2mac round-trip failed")
 end)
 test("parse extracts dst MAC", function()
   local frame, next_off = eth.parse(eth_raw, 1)
-  return assert(frame.dst == "\xaa\xbb\xcc\xdd\xee\xff", "dst MAC mismatch")
+  return assert(frame.dst == "\170\187\204\221\238\255", "dst MAC mismatch")
 end)
 test("parse extracts src MAC", function()
   local frame, next_off = eth.parse(eth_raw, 1)
-  return assert(frame.src == "\x00\x11\x22\x33\x44\x55", "src MAC mismatch")
+  return assert(frame.src == "\000\017\034\051\068\085", "src MAC mismatch")
 end)
 test("parse extracts protocol", function()
   local frame, next_off = eth.parse(eth_raw, 1)
@@ -47,17 +47,17 @@ test("proto IP6 == 0x86DD", function()
 end)
 test("new + tostring round-trip", function()
   local frame = eth.new({
-    dst = "\xaa\xbb\xcc\xdd\xee\xff",
-    src = "\x00\x11\x22\x33\x44\x55",
+    dst = "\170\187\204\221\238\255",
+    src = "\000\017\034\051\068\085",
     protocol = 0x0800
   })
   local raw = tostring(frame)
   local parsed, _ = eth.parse(raw, 1)
-  assert(parsed.dst == "\xaa\xbb\xcc\xdd\xee\xff", "round-trip dst mismatch")
-  assert(parsed.src == "\x00\x11\x22\x33\x44\x55", "round-trip src mismatch")
+  assert(parsed.dst == "\170\187\204\221\238\255", "round-trip dst mismatch")
+  assert(parsed.src == "\000\017\034\051\068\085", "round-trip src mismatch")
   return assert(parsed.protocol == 0x0800, "round-trip protocol mismatch")
 end)
-local eth_vlan_raw = sp("c6c6>HHH", "\xaa\xbb\xcc\xdd\xee\xff", "\x00\x11\x22\x33\x44\x55", 0x8100, 6, 0x0800)
+local eth_vlan_raw = sp("c6c6>HHH", "\170\187\204\221\238\255", "\000\017\034\051\068\085", 0x8100, 6, 0x0800)
 test("parse detects 802.1Q tag and extracts vlan", function()
   local frame, next_off = eth.parse(eth_vlan_raw, 1)
   return assert(frame.vlan == 6, "vlan should be 6, got " .. tostring(frame.vlan))
@@ -77,8 +77,8 @@ test("parse untagged frame: vlan is nil", function()
 end)
 test("new with vlan: tostring produces 802.1Q frame", function()
   local frame = eth.new({
-    dst = "\xaa\xbb\xcc\xdd\xee\xff",
-    src = "\x00\x11\x22\x33\x44\x55",
+    dst = "\170\187\204\221\238\255",
+    src = "\000\017\034\051\068\085",
     protocol = 0x0800,
     vlan = 6
   })
@@ -86,8 +86,8 @@ test("new with vlan: tostring produces 802.1Q frame", function()
 end)
 test("new with vlan=0: tostring produces plain frame (no tag)", function()
   local frame = eth.new({
-    dst = "\xaa\xbb\xcc\xdd\xee\xff",
-    src = "\x00\x11\x22\x33\x44\x55",
+    dst = "\170\187\204\221\238\255",
+    src = "\000\017\034\051\068\085",
     protocol = 0x0800,
     vlan = 0
   })
@@ -95,14 +95,14 @@ test("new with vlan=0: tostring produces plain frame (no tag)", function()
 end)
 test("new + tostring round-trip with vlan", function()
   local frame = eth.new({
-    dst = "\xaa\xbb\xcc\xdd\xee\xff",
-    src = "\x00\x11\x22\x33\x44\x55",
+    dst = "\170\187\204\221\238\255",
+    src = "\000\017\034\051\068\085",
     protocol = 0x0800,
     vlan = 42
   })
   local parsed, _ = eth.parse(tostring(frame), 1)
   assert(parsed.vlan == 42, "round-trip vlan mismatch: got " .. tostring(parsed.vlan))
   assert(parsed.protocol == 0x0800, "round-trip protocol mismatch")
-  return assert(parsed.dst == "\xaa\xbb\xcc\xdd\xee\xff", "round-trip dst mismatch")
+  return assert(parsed.dst == "\170\187\204\221\238\255", "round-trip dst mismatch")
 end)
 return util.summary("l2/ethernet")

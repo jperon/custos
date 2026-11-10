@@ -3,14 +3,7 @@ do
   local _obj_0 = require("ipparse.lib.pack_compat")
   format, sp, su = _obj_0.format, _obj_0.pack, _obj_0.unpack
 end
-local insert, remove
-do
-  local _obj_0 = table
-  insert, remove = _obj_0.insert, _obj_0.remove
-end
 local unpack = unpack or table.unpack
-local toarray
-toarray = require("ipparse.fun").toarray
 local checksum, checksum6
 do
   local _obj_0 = require("ipparse.l3.lib")
@@ -21,6 +14,8 @@ do
   local _obj_0 = require("ipparse.lib.bit_compat")
   band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
 end
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local s2ip6
 local pack
 pack = function(self)
@@ -42,6 +37,9 @@ local parse
 parse = function(self, off)
   if off == nil then
     off = 1
+  end
+  if not (need_bytes(self, off, 40)) then
+    return nil, off
   end
   local vtf, payload_len, next_header, hop_limit, src, dst, data_off = su(">I4 I2 I1 I1 c16 c16", self, off)
   return setmetatable({
@@ -72,24 +70,52 @@ new = function(self)
 end
 local parse_ip6
 parse_ip6 = function(self)
-  local address = toarray(self:gmatch("([^:]*):?"))
-  local zeros = 9 - #address
-  local i = 1
-  while i <= 8 do
-    local part = address[i]
-    if part == "" and zeros then
-      for _ = 1, zeros do
-        insert(address, i, 0)
-        i = i + 1
+  local head, tail = self:match("^(.-)::(.-)$")
+  local parts = { }
+  if head then
+    local hs
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for p in head:gmatch("[^:]+") do
+        _accum_0[_len_0] = tonumber(p, 16)
+        _len_0 = _len_0 + 1
       end
-      zeros = 1
-      remove(address, i)
-    else
-      address[i] = type(part) == "string" and tonumber(part, 16) or part
-      i = i + 1
+      hs = _accum_0
+    end
+    local ts
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for p in tail:gmatch("[^:]+") do
+        _accum_0[_len_0] = tonumber(p, 16)
+        _len_0 = _len_0 + 1
+      end
+      ts = _accum_0
+    end
+    for _index_0 = 1, #hs do
+      local p = hs[_index_0]
+      parts[#parts + 1] = p
+    end
+    for _ = 1, 8 - #hs - #ts do
+      parts[#parts + 1] = 0
+    end
+    for _index_0 = 1, #ts do
+      local p = ts[_index_0]
+      parts[#parts + 1] = p
+    end
+  else
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for p in self:gmatch("[^:]+") do
+        _accum_0[_len_0] = tonumber(p, 16)
+        _len_0 = _len_0 + 1
+      end
+      parts = _accum_0
     end
   end
-  return address
+  return parts
 end
 local ip62s
 ip62s = function(self)

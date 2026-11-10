@@ -8,15 +8,13 @@ memo = function(self)
   }
   setmetatable(tmp, tmp)
   return function(x)
-    if not x then
+    if x == nil then
       return self(x)
     end
     local r = tmp[x] or {
       self(x)
     }
-    if x then
-      tmp[x] = r
-    end
+    tmp[x] = r
     return unpack(r)
   end
 end
@@ -61,11 +59,9 @@ bidirmt_gen = function()
     __mode = "kv"
   })
   return function(self, val)
-    do
-      local _k = _mem[val]
-      if _k then
-        return _k
-      end
+    local _k = _mem[val]
+    if _k and rawget(self, _k) == val then
+      return _k
     end
     for k, v in pairs(self) do
       if v == val then
@@ -261,23 +257,29 @@ local _ = nil
 local protected
 protected = function(fn, op)
   local leak_debug = _ and _.leak_debug
-  return function(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z)
-    local ok
-    ok, a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z = xpcall((function()
+  local onerror
+  onerror = function(err)
+    print(err)
+    if leak_debug then
+      print(debug.traceback())
+    end
+    if op then
+      return op()
+    end
+  end
+  local run
+  run = function(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z)
+    local call
+    call = function()
       return fn(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z)
-    end), function(err)
-      print(err)
-      if leak_debug then
-        print(debug.traceback())
-      end
-      if op then
-        return op()
-      end
-    end)
+    end
+    local ok
+    ok, a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z = xpcall(call, onerror)
     if ok then
       return a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z
     end
   end
+  return run
 end
 _ = {
   bidirectional = bidirectional,

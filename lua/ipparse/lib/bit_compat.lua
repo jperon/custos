@@ -39,4 +39,8 @@ ok, bit = pcall(require, "ipparse.lib.bit53")
 if ok and bit then
   return normalize(bit)
 end
+ok, bit = pcall(require, "ipparse.lib.bit_pure")
+if ok and bit then
+  return normalize(bit)
+end
 return error("no bitwise compatibility backend available")

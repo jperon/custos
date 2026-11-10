@@ -1,26 +1,11 @@
-local band, bor, bxor, rshift
+local band, bxor, rshift
 do
   local _obj_0 = require("ipparse.lib.bit_compat")
-  band, bor, bxor, rshift = _obj_0.band, _obj_0.bor, _obj_0.bxor, _obj_0.rshift
+  band, bxor, rshift = _obj_0.band, _obj_0.bxor, _obj_0.rshift
 end
-local sp, su
-do
-  local _obj_0 = require("ipparse.lib.pack_compat")
-  sp, su = _obj_0.pack, _obj_0.unpack
-end
-local byte = string.byte
-local tunpack = table.unpack or unpack
 local construct_nonce
-construct_nonce = function(iv, pn)
-  local buf = {
-    byte(iv, 1, 12)
-  }
-  for i = 12, 5, -1 do
-    buf[i] = bxor(buf[i], band(pn, 0xFF))
-    pn = rshift(pn, 8)
-  end
-  return string.char(tunpack(buf))
-end
+construct_nonce = require("ipparse.lib.crypto.backend.common").construct_nonce
+local byte = string.byte
 local sample_from_packet
 sample_from_packet = function(pkt, enc_off)
   local s = enc_off + 4
@@ -85,7 +70,7 @@ recover_packet_number = function(truncated, expected, pn_len)
   for _ = 1, pn_len * 8 do
     pn_win = pn_win * 2
   end
-  local pn_hwin = rshift(pn_win, 1)
+  local pn_hwin = pn_win / 2
   local candidate = (expected - (expected % pn_win)) + truncated
   if candidate <= expected - pn_hwin then
     return candidate + pn_win

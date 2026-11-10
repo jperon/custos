@@ -108,6 +108,7 @@ reassemble_stream = function(chunks)
   end
   return table.concat(out)
 end
+local MAX_TLS_MSG_LEN = 0x100000
 local sni_from_tls
 sni_from_tls = function(tls_data)
   if #tls_data < 4 then
@@ -119,6 +120,9 @@ sni_from_tls = function(tls_data)
     local b_hi = su("B", tls_data, off + 1)
     local b_lo = su(">H", tls_data, off + 2)
     local msg_len = b_hi * 65536 + b_lo
+    if msg_len > MAX_TLS_MSG_LEN then
+      return nil
+    end
     local body_off = off + 4
     if body_off + msg_len - 1 > #tls_data then
       return nil
@@ -129,6 +133,9 @@ sni_from_tls = function(tls_data)
         local ext_off = 1
         while ext_off <= #ch.extensions do
           local ext, next_off = ext_mod.parse(ch.extensions, ext_off)
+          if not (ext and next_off and next_off > ext_off) then
+            break
+          end
           if ext.type == 0x0000 then
             local sn
             sn, _ = sn_mod.parse(ext.data, 1)
@@ -145,6 +152,8 @@ sni_from_tls = function(tls_data)
   return nil
 end
 local session_mt = { }
+local MAX_CRYPTO_CHUNKS = 256
+local MAX_CRYPTO_BYTES = 0x100000
 local append_crypto_frame
 append_crypto_frame = function(self, frame)
   local base = frame.offset or 0
@@ -156,22 +165,28 @@ append_crypto_frame = function(self, frame)
   if prev and prev ~= data then
     return nil, "conflicting CRYPTO frame at offset " .. tostring(base)
   end
+  if self.crypto_chunks_n >= MAX_CRYPTO_CHUNKS then
+    return nil, "too many CRYPTO chunks"
+  end
+  if self.crypto_bytes + #data > MAX_CRYPTO_BYTES then
+    return nil, "CRYPTO stream too large"
+  end
   local data_end = base + #data - 1
   for off, chunk in pairs(self.crypto_chunks) do
     local chunk_end = off + #chunk - 1
     local overlap_start = math.max(base, off)
     local overlap_end = math.min(data_end, chunk_end)
     if overlap_start <= overlap_end then
-      for pos = overlap_start, overlap_end do
-        local a = string.byte(data, (pos - base + 1))
-        local b = string.byte(chunk, (pos - off + 1))
-        if a ~= b then
-          return nil, "conflicting CRYPTO byte at offset " .. tostring(pos)
-        end
+      local a = data:sub(overlap_start - base + 1, overlap_end - base + 1)
+      local b = chunk:sub(overlap_start - off + 1, overlap_end - off + 1)
+      if a ~= b then
+        return nil, "conflicting CRYPTO bytes at offset " .. tostring(overlap_start)
       end
     end
   end
   self.crypto_chunks[base] = data
+  self.crypto_chunks_n = self.crypto_chunks_n + 1
+  self.crypto_bytes = self.crypto_bytes + #data
   return true
 end
 local direction_from_header
@@ -401,6 +416,8 @@ new = function(opts)
       server = -1
     },
     crypto_chunks = { },
+    crypto_chunks_n = 0,
+    crypto_bytes = 0,
     last_plaintext = nil,
     cached_sni = nil,
     sni_dirty = true

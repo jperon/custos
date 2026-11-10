@@ -47,22 +47,10 @@ local MBEDTLS_GCM_ENCRYPT = 1
 local MBEDTLS_AES_ENCRYPT = 1
 local MBEDTLS_ERR_GCM_AUTH_FAILED = -18
 local mbed = ffi.load("mbedcrypto")
-local validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv
+local validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, construct_nonce, split_ct_tag
 do
   local _obj_0 = require("ipparse.lib.crypto.backend.common")
-  validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv = _obj_0.validate_gcm_key, _obj_0.validate_gcm_nonce, _obj_0.validate_ecb_key, _obj_0.validate_ecb_block, _obj_0.validate_quic_iv
-end
-local construct_nonce
-construct_nonce = function(iv, packet_number)
-  assert(#iv == 12, "IV must be 12 bytes (got " .. tostring(#iv) .. ")")
-  local buf = ffi.new("uint8_t[12]")
-  ffi.copy(buf, iv, 12)
-  local pn = packet_number
-  for i = 11, 4, -1 do
-    buf[i] = ffi.cast("uint8_t", bit.bxor(buf[i], bit.band(pn, 0xFF)))
-    pn = bit.rshift(pn, 8)
-  end
-  return ffi.string(buf, 12)
+  validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, construct_nonce, split_ct_tag = _obj_0.validate_gcm_key, _obj_0.validate_gcm_nonce, _obj_0.validate_ecb_key, _obj_0.validate_ecb_block, _obj_0.construct_nonce, _obj_0.split_ct_tag
 end
 local str_to_buf
 str_to_buf = function(s)
@@ -78,19 +66,24 @@ aes_128_gcm_encrypt = function(key, nonce, plaintext, aad)
   if aad == nil then
     aad = ""
   end
-  assert(#key == 16, "AES-128-GCM key must be 16 bytes")
-  assert(#nonce == 12, "AES-128-GCM nonce must be 12 bytes")
+  validate_gcm_key(key)
+  validate_gcm_nonce(nonce)
   local pt_buf, pt_len = str_to_buf(plaintext)
   local aad_buf, aad_len = str_to_buf(aad)
   local ctx = ffi.new("mbedtls_gcm_context_t")
   mbed.mbedtls_gcm_init(ctx)
   local rc = mbed.mbedtls_gcm_setkey(ctx, MBEDTLS_CIPHER_ID_AES, key, 128)
-  assert(rc == 0, "mbedtls_gcm_setkey failed (" .. tostring(rc) .. ")")
+  if rc ~= 0 then
+    mbed.mbedtls_gcm_free(ctx)
+    return nil, "mbedtls_gcm_setkey failed (" .. tostring(rc) .. ")"
+  end
   local out_buf = ffi.new("uint8_t[?]", pt_len + 1)
   local tag_buf = ffi.new("uint8_t[16]")
   rc = mbed.mbedtls_gcm_crypt_and_tag(ctx, MBEDTLS_GCM_ENCRYPT, pt_len, nonce, 12, aad_buf, aad_len, pt_buf, out_buf, 16, tag_buf)
   mbed.mbedtls_gcm_free(ctx)
-  assert(rc == 0, "mbedtls_gcm_crypt_and_tag failed (" .. tostring(rc) .. ")")
+  if rc ~= 0 then
+    return nil, "mbedtls_gcm_crypt_and_tag failed (" .. tostring(rc) .. ")"
+  end
   return (ffi.string(out_buf, pt_len)) .. (ffi.string(tag_buf, 16))
 end
 local aes_128_gcm_decrypt
@@ -100,17 +93,19 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
   end
   validate_gcm_key(key)
   validate_gcm_nonce(nonce)
-  if #ciphertext_with_tag < 16 then
-    return nil, "ciphertext too short (no room for auth tag)"
+  local ciphertext, tag = split_ct_tag(ciphertext_with_tag)
+  if not (ciphertext) then
+    return nil, tag
   end
-  local ciphertext = ciphertext_with_tag:sub(1, #ciphertext_with_tag - 16)
-  local tag = ciphertext_with_tag:sub(#ciphertext_with_tag - 15)
   local ct_buf, ct_len = str_to_buf(ciphertext)
   local aad_buf, aad_len = str_to_buf(aad)
   local ctx = ffi.new("mbedtls_gcm_context_t")
   mbed.mbedtls_gcm_init(ctx)
   local rc = mbed.mbedtls_gcm_setkey(ctx, MBEDTLS_CIPHER_ID_AES, key, 128)
-  assert(rc == 0, "mbedtls_gcm_setkey failed (" .. tostring(rc) .. ")")
+  if rc ~= 0 then
+    mbed.mbedtls_gcm_free(ctx)
+    return nil, "mbedtls_gcm_setkey failed (" .. tostring(rc) .. ")"
+  end
   local out_buf = ffi.new("uint8_t[?]", ct_len + 1)
   local tag_buf = ffi.new("uint8_t[16]")
   ffi.copy(tag_buf, tag, 16)
@@ -120,7 +115,7 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
     return nil, "AES-128-GCM authentication failed (tag mismatch)"
   end
   if rc ~= 0 then
-    error("mbedtls_gcm_auth_decrypt failed (" .. tostring(rc) .. ")")
+    return nil, "mbedtls_gcm_auth_decrypt failed (" .. tostring(rc) .. ")"
   end
   return ffi.string(out_buf, ct_len)
 end
@@ -131,11 +126,16 @@ aes_128_ecb_block = function(key, block)
   local ctx = ffi.new("mbedtls_aes_context_t")
   mbed.mbedtls_aes_init(ctx)
   local rc = mbed.mbedtls_aes_setkey_enc(ctx, key, 128)
-  assert(rc == 0, "mbedtls_aes_setkey_enc failed (" .. tostring(rc) .. ")")
+  if rc ~= 0 then
+    mbed.mbedtls_aes_free(ctx)
+    return nil, "mbedtls_aes_setkey_enc failed (" .. tostring(rc) .. ")"
+  end
   local out_buf = ffi.new("uint8_t[16]")
   rc = mbed.mbedtls_aes_crypt_ecb(ctx, MBEDTLS_AES_ENCRYPT, block, out_buf)
   mbed.mbedtls_aes_free(ctx)
-  assert(rc == 0, "mbedtls_aes_crypt_ecb failed (" .. tostring(rc) .. ")")
+  if rc ~= 0 then
+    return nil, "mbedtls_aes_crypt_ecb failed (" .. tostring(rc) .. ")"
+  end
   return ffi.string(out_buf, 16)
 end
 return {

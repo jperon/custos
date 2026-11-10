@@ -31,23 +31,23 @@ test("lunatik-kernel: construct_nonce pn=2 (RFC 9001 A.3)", function()
   return assert(bin2hex(nonce) == "fa044b2f42a3fd3b46fb255e", "nonce mismatch: " .. tostring(bin2hex(nonce)))
 end)
 test("lunatik-kernel: GCM encrypt empty plaintext (NIST)", function()
-  local key = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-  local nonce = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  local key = "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000"
+  local nonce = "\000\000\000\000\000\000\000\000\000\000\000\000"
   local ct = backend.aes_128_gcm_encrypt(key, nonce, "", "")
   assert(#ct == 16, "ciphertext should be 16-byte tag only")
   return assert(bin2hex(ct) == "58e2fccefa7e3061367f1d57a4e7455a", "tag mismatch: " .. tostring(bin2hex(ct)))
 end)
 test("lunatik-kernel: GCM decrypt empty plaintext (NIST)", function()
-  local key = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-  local nonce = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  local key = "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000"
+  local nonce = "\000\000\000\000\000\000\000\000\000\000\000\000"
   local tag = hex_to_bin("58e2fccefa7e3061367f1d57a4e7455a")
   local pt, err = backend.aes_128_gcm_decrypt(key, nonce, tag, "")
   assert(err == nil, "unexpected decrypt error: " .. tostring(tostring(err)))
   return assert(pt == "", "plaintext should be empty")
 end)
 test("lunatik-kernel: GCM decrypt fails on bad tag", function()
-  local key = "\x42\x42\x42\x42\x42\x42\x42\x42\x42\x42\x42\x42\x42\x42\x42\x42"
-  local nonce = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  local key = "\066\066\066\066\066\066\066\066\066\066\066\066\066\066\066\066"
+  local nonce = "\000\000\000\000\000\000\000\000\000\000\000\000"
   local ct = backend.aes_128_gcm_encrypt(key, nonce, "test data...!!!!", "aad")
   local bad_ct = ct:sub(1, #ct - 1) .. string.char((string.byte(ct, #ct) + 1) % 256)
   local pt, err = backend.aes_128_gcm_decrypt(key, nonce, bad_ct, "aad")

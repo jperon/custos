@@ -5,11 +5,13 @@ do
     package.path = package.path .. (";" .. path .. "/?.lua;" .. path .. "/?/init.lua")
   end
 end
-local su, char, format, gsub, rep, sub
+local char, format, gsub, rep, sub
 do
   local _obj_0 = string
-  su, char, format, gsub, rep, sub = _obj_0.unpack, _obj_0.char, _obj_0.format, _obj_0.gsub, _obj_0.rep, _obj_0.sub
+  char, format, gsub, rep, sub = _obj_0.char, _obj_0.format, _obj_0.gsub, _obj_0.rep, _obj_0.sub
 end
+local su
+su = require("ipparse.lib.pack_compat").unpack
 local concat
 concat = table.concat
 local opairs

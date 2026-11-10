@@ -55,10 +55,10 @@ local sp = require("ipparse.lib.pack_compat").pack
 local checksum = require("ipparse.l3.lib").checksum
 local udp_len = 8 + #quic
 local ip_total = 20 + udp_len
-local ip_no_csum = sp(">BBHHHBBH", 0x45, 0, ip_total, 0x1234, 0x4000, 64, 17, 0) .. "\xc0\xa8\x01\x01" .. "\x01\x01\x01\x01"
+local ip_no_csum = sp(">BBHHHBBH", 0x45, 0, ip_total, 0x1234, 0x4000, 64, 17, 0) .. "\192\168\001\001" .. "\001\001\001\001"
 local ip_csum = checksum(ip_no_csum)
-local ip_hdr = sp(">BBHHHBBH", 0x45, 0, ip_total, 0x1234, 0x4000, 64, 17, ip_csum) .. "\xc0\xa8\x01\x01" .. "\x01\x01\x01\x01"
-local eth_hdr = "\xaa\xbb\xcc\xdd\xee\xff" .. "\x11\x22\x33\x44\x55\x66" .. "\x08\x00"
+local ip_hdr = sp(">BBHHHBBH", 0x45, 0, ip_total, 0x1234, 0x4000, 64, 17, ip_csum) .. "\192\168\001\001" .. "\001\001\001\001"
+local eth_hdr = "\170\187\204\221\238\255" .. "\017\034\051\068\085\102" .. "\008\000"
 local udp_hdr = sp(">HHHH", 1234, 443, udp_len, 0)
 local frame = eth_hdr .. ip_hdr .. udp_hdr .. quic
 local eth_mod = require("ipparse.l2.ethernet")
@@ -71,10 +71,10 @@ local u, off3 = udp_mod.parse(frame, off2)
 local q, off4 = quic_mod.parse(frame, off3)
 local pn_off_quic = q.pn_off - off3 + 1
 test("integration: L2 dst MAC = aa:bb:cc:dd:ee:ff", function()
-  return assert(e.dst == "\xaa\xbb\xcc\xdd\xee\xff", "dst MAC mismatch")
+  return assert(e.dst == "\170\187\204\221\238\255", "dst MAC mismatch")
 end)
 test("integration: L2 src MAC = 11:22:33:44:55:66", function()
-  return assert(e.src == "\x11\x22\x33\x44\x55\x66", "src MAC mismatch")
+  return assert(e.src == "\017\034\051\068\085\102", "src MAC mismatch")
 end)
 test("integration: L2 EtherType = 0x0800 (IPv4)", function()
   return assert(e.protocol == 0x0800, "expected 0x0800, got " .. tostring(string.format('0x%04x', e.protocol)))

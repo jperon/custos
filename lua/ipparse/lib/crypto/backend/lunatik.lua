@@ -3,10 +3,10 @@ do
   local _obj_0 = require("crypto")
   aead, skcipher = _obj_0.aead, _obj_0.skcipher
 end
-local validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv
+local validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, construct_nonce
 do
   local _obj_0 = require("ipparse.lib.crypto.backend.common")
-  validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv = _obj_0.validate_gcm_key, _obj_0.validate_gcm_nonce, _obj_0.validate_ecb_key, _obj_0.validate_ecb_block, _obj_0.validate_quic_iv
+  validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, construct_nonce = _obj_0.validate_gcm_key, _obj_0.validate_gcm_nonce, _obj_0.validate_ecb_key, _obj_0.validate_ecb_block, _obj_0.construct_nonce
 end
 local close_tfm
 close_tfm = function(tfm)
@@ -14,6 +14,24 @@ close_tfm = function(tfm)
     return 
   end
   return pcall(tfm.__close, tfm)
+end
+local ebadmsg_names = {
+  EBADMSG = true,
+  ["-EBADMSG"] = true,
+  ["-74"] = true
+}
+local is_ebadmsg
+is_ebadmsg = function(err)
+  local s = tostring(err)
+  local bare = (s:match("^.*:%d+: (.*)$")) or s
+  return ebadmsg_names[bare] == true
+end
+local ebadmsg_error
+ebadmsg_error = function(err)
+  if not (is_ebadmsg(err)) then
+    return 
+  end
+  return "AES-128-GCM authentication failed (tag mismatch)"
 end
 local cached_gcm_enc_tfm = nil
 local cached_gcm_enc_key = nil
@@ -46,36 +64,6 @@ get_gcm_tfm = function(mode, key)
     return cached_gcm_dec_tfm
   end
 end
-local xor8
-xor8 = function(a, b)
-  local res = 0
-  local bit = 1
-  for _ = 1, 8 do
-    local abit = a % 2
-    local bbit = b % 2
-    if abit ~= bbit then
-      res = res + bit
-    end
-    a = (a - abit) / 2
-    b = (b - bbit) / 2
-    bit = bit * 2
-  end
-  return res
-end
-local construct_nonce
-construct_nonce = function(iv, packet_number)
-  validate_quic_iv(iv)
-  local buf = {
-    string.byte(iv, 1, 12)
-  }
-  local pn = packet_number
-  for i = 12, 5, -1 do
-    local byte_val = pn % 256
-    buf[i] = xor8(buf[i], byte_val)
-    pn = (pn - byte_val) / 256
-  end
-  return string.char((table.unpack or unpack)(buf))
-end
 local aes_128_gcm_encrypt
 aes_128_gcm_encrypt = function(key, nonce, plaintext, aad)
   if aad == nil then
@@ -92,25 +80,30 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
   if aad == nil then
     aad = ""
   end
-  assert(#key == 16, "AES-128-GCM key must be 16 bytes (got " .. tostring(#key) .. ")")
-  assert(#nonce == 12, "AES-128-GCM nonce must be 12 bytes (got " .. tostring(#nonce) .. ")")
+  validate_gcm_key(key)
+  validate_gcm_nonce(nonce)
   if #ciphertext_with_tag < 16 then
     return nil, "ciphertext_with_tag too short (need at least 16-byte tag)"
   end
   local c = get_gcm_tfm("decrypt", key)
-  local ok, pt_or_err, err = pcall(function()
+  local ok, pt, err = pcall(function()
     return c:decrypt(nonce, ciphertext_with_tag, aad)
   end)
   if not (ok) then
-    if (tostring(pt_or_err)):match("EBADMSG") then
-      return nil, "AES-128-GCM authentication failed (tag mismatch)"
+    local msg = ebadmsg_error(pt)
+    if msg then
+      return nil, msg
     end
-    error("aead(gcm(aes)) decrypt failed: " .. tostring(tostring(pt_or_err)))
+    return nil, "aead(gcm(aes)) decrypt failed: " .. tostring(tostring(pt))
   end
-  if pt_or_err == "EBADMSG" then
-    return nil, "AES-128-GCM authentication failed (tag mismatch)"
+  if pt == nil then
+    local msg = ebadmsg_error(err)
+    if msg then
+      return nil, msg
+    end
+    return nil, "aead(gcm(aes)) decrypt failed: " .. tostring(tostring(err))
   end
-  return pt_or_err, nil
+  return pt, nil
 end
 local aes_128_ecb_block
 aes_128_ecb_block = function(key, block)

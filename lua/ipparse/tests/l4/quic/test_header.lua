@@ -8,7 +8,7 @@ do
 end
 local quic = require("ipparse.l4.quic")
 local v1 = require("ipparse.l4.quic.v1")
-local dcid = "\x01\x02\x03\x04\x05\x06\x07\x08"
+local dcid = "\001\002\003\004\005\006\007\008"
 local build_initial_pkt
 build_initial_pkt = function()
   return sp(">B I4 s1 s1 B B B", 0xC0, 1, dcid, "", 0, 1, 0)
@@ -54,7 +54,7 @@ test("header: pn_off points past fixed fields", function()
   return assert(h.pn_off == 18, "expected pn_off=18, got " .. tostring(h.pn_off))
 end)
 test("header: parse short header", function()
-  local pkt = "\x40" .. dcid
+  local pkt = "\064" .. dcid
   local h, _ = quic.parse(pkt, 1, dcid)
   return assert(h.long_header == nil or h.long_header == false, "expected short header")
 end)
@@ -81,7 +81,7 @@ test("header: split_datagrams splits coalesced Initial packets", function()
   return assert(datagrams[2].data == p2, "second datagram mismatch")
 end)
 test("header: split_datagrams rejects short header payload", function()
-  local short_pkt = "\x40" .. dcid
+  local short_pkt = "\064" .. dcid
   local datagrams, err = quic.split_datagrams(short_pkt, 1, dcid)
   assert(datagrams == nil, "expected split failure on short header")
   return assert(err and err:find("short header"), "expected short-header error, got " .. tostring(err))

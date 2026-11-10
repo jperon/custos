@@ -1,8 +1,8 @@
 local ffi = require("ffi")
-local validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv
+local validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, construct_nonce, split_ct_tag
 do
   local _obj_0 = require("ipparse.lib.crypto.backend.common")
-  validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, validate_quic_iv = _obj_0.validate_gcm_key, _obj_0.validate_gcm_nonce, _obj_0.validate_ecb_key, _obj_0.validate_ecb_block, _obj_0.validate_quic_iv
+  validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, construct_nonce, split_ct_tag = _obj_0.validate_gcm_key, _obj_0.validate_gcm_nonce, _obj_0.validate_ecb_key, _obj_0.validate_ecb_block, _obj_0.construct_nonce, _obj_0.split_ct_tag
 end
 pcall(ffi.cdef, [[  typedef struct { char _opaque[4096]; } WC_Aes;
 
@@ -75,18 +75,6 @@ end))
 if not (direct_ecb_available) then
   error("ffi_wolfssl: no AES-128-ECB implementation available (missing wc_AesSetKey/wc_AesEncryptDirect)")
 end
-local construct_nonce
-construct_nonce = function(iv, packet_number)
-  validate_quic_iv(iv)
-  local buf = ffi.new("uint8_t[12]")
-  ffi.copy(buf, iv, 12)
-  local pn = packet_number
-  for i = 11, 4, -1 do
-    buf[i] = ffi.cast("uint8_t", bit.bxor(buf[i], bit.band(pn, 0xFF)))
-    pn = bit.rshift(pn, 8)
-  end
-  return ffi.string(buf, 12)
-end
 local str_to_buf
 str_to_buf = function(s)
   local n = #s
@@ -101,17 +89,21 @@ aes_128_gcm_encrypt = function(key, nonce, plaintext, aad)
   if aad == nil then
     aad = ""
   end
-  assert(#key == 16, "AES-128-GCM key must be 16 bytes (got " .. tostring(#key) .. ")")
-  assert(#nonce == 12, "AES-128-GCM nonce must be 12 bytes (got " .. tostring(#nonce) .. ")")
+  validate_gcm_key(key)
+  validate_gcm_nonce(nonce)
   local pt_buf, pt_len = str_to_buf(plaintext)
   local aad_buf, aad_len = str_to_buf(aad)
   local aes = ffi.new("WC_Aes")
   local rc = wssl.wc_AesGcmSetKey(aes, key, 16)
-  assert(rc == 0, "wc_AesGcmSetKey failed (" .. tostring(rc) .. ")")
+  if rc ~= 0 then
+    return nil, "wc_AesGcmSetKey failed (" .. tostring(rc) .. ")"
+  end
   local out_buf = ffi.new("uint8_t[?]", pt_len + 16)
   local tag_buf = ffi.new("uint8_t[16]")
   rc = wssl.wc_AesGcmEncrypt(aes, out_buf, pt_buf, pt_len, nonce, 12, tag_buf, 16, aad_buf, aad_len)
-  assert(rc == 0, "wc_AesGcmEncrypt failed (" .. tostring(rc) .. ")")
+  if rc ~= 0 then
+    return nil, "wc_AesGcmEncrypt failed (" .. tostring(rc) .. ")"
+  end
   return (ffi.string(out_buf, pt_len)) .. (ffi.string(tag_buf, 16))
 end
 local aes_128_gcm_decrypt
@@ -119,18 +111,19 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
   if aad == nil then
     aad = ""
   end
-  assert(#key == 16, "AES-128-GCM key must be 16 bytes")
-  assert(#nonce == 12, "AES-128-GCM nonce must be 12 bytes")
-  if #ciphertext_with_tag < 16 then
-    return nil, "ciphertext too short (no room for auth tag)"
+  validate_gcm_key(key)
+  validate_gcm_nonce(nonce)
+  local ciphertext, tag = split_ct_tag(ciphertext_with_tag)
+  if not (ciphertext) then
+    return nil, tag
   end
-  local ciphertext = ciphertext_with_tag:sub(1, #ciphertext_with_tag - 16)
-  local tag = ciphertext_with_tag:sub(#ciphertext_with_tag - 15)
   local ct_buf, ct_len = str_to_buf(ciphertext)
   local aad_buf, aad_len = str_to_buf(aad)
   local aes = ffi.new("WC_Aes")
   local rc = wssl.wc_AesGcmSetKey(aes, key, 16)
-  assert(rc == 0, "wc_AesGcmSetKey failed (" .. tostring(rc) .. ")")
+  if rc ~= 0 then
+    return nil, "wc_AesGcmSetKey failed (" .. tostring(rc) .. ")"
+  end
   local out_buf = ffi.new("uint8_t[?]", ct_len + 1)
   local tag_buf = ffi.new("uint8_t[16]")
   ffi.copy(tag_buf, tag, 16)
@@ -147,9 +140,13 @@ aes_128_ecb_block = function(key, block)
   local out_buf = ffi.new("uint8_t[16]")
   local aes = ffi.new("WC_Aes")
   local rc = wssl.wc_AesSetKey(aes, key, 16, nil, 0)
-  assert(rc == 0, "wc_AesSetKey failed (" .. tostring(rc) .. ")")
+  if rc ~= 0 then
+    return nil, "wc_AesSetKey failed (" .. tostring(rc) .. ")"
+  end
   rc = wssl.wc_AesEncryptDirect(aes, out_buf, block)
-  assert(rc == 0, "wc_AesEncryptDirect failed (" .. tostring(rc) .. ")")
+  if rc ~= 0 then
+    return nil, "wc_AesEncryptDirect failed (" .. tostring(rc) .. ")"
+  end
   return ffi.string(out_buf, 16)
 end
 return {

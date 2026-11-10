@@ -123,13 +123,14 @@ hkdf_expand = function(prk, info, len)
     return bin_to_hex(crypto_hkdf.new("sha256"):expand(prk, info, len))
   end
   len = len * 2
-  local i, okm, t = 1, "", ""
-  while #okm < len do
+  local i, total, t, parts = 1, 0, "", { }
+  while total < len do
     t = hmac_hex(prk, hex_to_bin(t) .. info .. char(i))
-    okm = okm .. t
+    parts[i] = t
+    total = total + #t
     i = i + 1
   end
-  return sub(okm, 1, len)
+  return sub(table.concat(parts), 1, len)
 end
 local hkdf
 hkdf = function(salt, ikm, info, len)

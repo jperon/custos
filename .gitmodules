@@ -1,3 +1,6 @@
 [submodule "src/lib/moonscript"]
 	path = src/lib/moonscript
 	url = https://github.com/leafo/moonscript
+[submodule "src/lib/moontastik"]
+	path = src/lib/moontastik
+	url = https://github.com/luainkernel/moontastik

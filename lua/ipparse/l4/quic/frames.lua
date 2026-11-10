@@ -10,6 +10,7 @@ do
   local _obj_0 = require("ipparse.lib.bit_compat")
   band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
 end
+local native_int = math.floor == nil or math.type ~= nil
 local frame_types = bidirectional({
   [0x00] = "PADDING",
   [0x01] = "PING",
@@ -96,9 +97,13 @@ encode_varint = function(value)
   elseif value < 1073741824 then
     return string.char(bor(0x80, band(rshift(value, 24), 0x3F)), band(rshift(value, 16), 0xFF), band(rshift(value, 8), 0xFF), band(value, 0xFF))
   else
-    local high = math.floor(value / 4294967296)
-    local low = value % 4294967296
-    return string.char(bor(0xC0, band(math.floor(high / 16777216), 0x3F)), band(math.floor(high / 65536), 0xFF), band(math.floor(high / 256), 0xFF), band(high, 0xFF), band(math.floor(low / 16777216), 0xFF), band(math.floor(low / 65536), 0xFF), band(math.floor(low / 256), 0xFF), band(low, 0xFF))
+    if native_int then
+      return string.char(bor(0xC0, band(rshift(value, 56), 0x3F)), band(rshift(value, 48), 0xFF), band(rshift(value, 40), 0xFF), band(rshift(value, 32), 0xFF), band(rshift(value, 24), 0xFF), band(rshift(value, 16), 0xFF), band(rshift(value, 8), 0xFF), band(value, 0xFF))
+    else
+      local high = math.floor(value / 4294967296)
+      local low = value % 4294967296
+      return string.char(bor(0xC0, band(math.floor(high / 16777216), 0x3F)), band(math.floor(high / 65536), 0xFF), band(math.floor(high / 256), 0xFF), band(high, 0xFF), band(math.floor(low / 16777216), 0xFF), band(math.floor(low / 65536), 0xFF), band(math.floor(low / 256), 0xFF), band(low, 0xFF))
+    end
   end
 end
 local parse_padding_frame
@@ -136,6 +141,10 @@ parse_ack_frame = function(data, offset, frame_type)
   first_ack_range, offset, err = parse_varint_required(data, offset, "ACK first_ack_range")
   if not (first_ack_range ~= nil) then
     return nil, offset, err
+  end
+  local max_ranges = rshift(#data - offset + 1, 1)
+  if ack_range_count > max_ranges then
+    return nil, offset, "ACK ack_range_count too large"
   end
   local ack_ranges = { }
   for i = 1, ack_range_count do
@@ -597,7 +606,7 @@ iter_frames = function(payload_data)
       return nil
     end
     local frame, new_offset = parse_frame(payload_data, offset)
-    if not (frame) then
+    if not (frame and new_offset > offset) then
       return nil
     end
     offset = new_offset
@@ -618,9 +627,6 @@ validate_frames = function(payload_data)
     end
     offset = new_offset
     frame_count = frame_count + 1
-    if frame_count > 1000 then
-      return false, "Too many frames (possible parsing error)"
-    end
   end
   return true, tostring(frame_count) .. " frames validated"
 end

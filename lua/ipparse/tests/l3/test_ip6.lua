@@ -2,14 +2,14 @@ local util = require("ipparse.lib.util")
 local test
 test = util.test
 local ip6 = require("ipparse.l3.ip6")
-test("ip62s converts 16 bytes to colon-hex", function()
+test("ip62s compresses zero runs per RFC 5952", function()
   local bin = ip6.s2ip6("0:0:0:0:0:0:0:1")
   local result = ip6.ip62s(bin)
-  return assert(result == "0:0:0:0:0:0:0:1", "expected '0:0:0:0:0:0:0:1', got '" .. tostring(result) .. "'")
+  return assert(result == "::1", "expected '::1', got '" .. tostring(result) .. "'")
 end)
 test("s2ip6 converts address to 16 bytes", function()
   local result = ip6.s2ip6("0:0:0:0:0:0:0:1")
-  local expected = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+  local expected = "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\001"
   return assert(result == expected, "s2ip6(0:0:0:0:0:0:0:1) mismatch")
 end)
 test("s2ip6 full address", function()
@@ -17,8 +17,10 @@ test("s2ip6 full address", function()
   return assert(#result == 16, "s2ip6 should return 16 bytes, got " .. tostring(#result))
 end)
 test("ip62s/s2ip6 round-trip preserves bytes", function()
-  local original = "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
-  local converted = ip6.s2ip6(ip6.ip62s(original))
+  local original = "\032\001\013\184\000\000\000\000\000\000\000\000\000\000\000\001"
+  local s = ip6.ip62s(original)
+  assert(s == "2001:db8::1", "expected '2001:db8::1', got '" .. tostring(s) .. "'")
+  local converted = ip6.s2ip6(s)
   return assert(converted == original, "ip62s/s2ip6 round-trip failed")
 end)
 test("parse extracts version=6", function()

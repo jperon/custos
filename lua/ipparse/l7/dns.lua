@@ -10,6 +10,8 @@ do
 end
 local concat
 concat = table.concat
+local byte
+byte = string.byte
 local band, bor, bnot, lshift, rshift
 do
   local _obj_0 = require("ipparse.lib.bit_compat")
@@ -144,7 +146,7 @@ label = function(self, off, l7_off, visited, depth)
   if not (need_bytes(self, off, 1)) then
     return nil, off, nil, "invalid label offset " .. tostring(off)
   end
-  local size = su("B", self, off)
+  local size = byte(self, off)
   local _off = off + 1
   if size == 0 then
     return nil, off + 1
@@ -153,7 +155,7 @@ label = function(self, off, l7_off, visited, depth)
     if not (need_bytes(self, off, 2)) then
       return nil, off, nil, "truncated DNS compression pointer"
     end
-    local pos = su("B", self, off + 1)
+    local pos = byte(self, off + 1)
     local ptr = lshift(band(size, 0x3F), 8) + pos
     local target_off = l7_off + ptr
     if not (target_off >= l7_off and target_off <= #self) then
@@ -168,7 +170,6 @@ label = function(self, off, l7_off, visited, depth)
     visited = visited or { }
     visited[target_off] = true
     local pointed_labels, _, err = labels(self, target_off, l7_off, visited, depth + 1)
-    visited[target_off] = nil
     if not (pointed_labels) then
       return nil, _off + 1, nil, err
     end
@@ -424,53 +425,44 @@ pack = function(self)
   self.header.ancount = #self.answers
   self.header.nscount = #self.authorities
   self.header.arcount = #self.additionals
-  local questions = concat((function()
-    local _accum_0 = { }
-    local _len_0 = 1
-    local _list_0 = self.questions
-    for _index_0 = 1, #_list_0 do
-      local q = _list_0[_index_0]
-      _accum_0[_len_0] = pack_question(q)
-      _len_0 = _len_0 + 1
-    end
-    return _accum_0
-  end)())
-  local answers = concat((function()
-    local _accum_0 = { }
-    local _len_0 = 1
-    local _list_0 = self.answers
-    for _index_0 = 1, #_list_0 do
-      local r = _list_0[_index_0]
-      _accum_0[_len_0] = pack_rr(r)
-      _len_0 = _len_0 + 1
-    end
-    return _accum_0
-  end)())
-  local authorities = concat((function()
-    local _accum_0 = { }
-    local _len_0 = 1
-    local _list_0 = self.authorities
-    for _index_0 = 1, #_list_0 do
-      local r = _list_0[_index_0]
-      _accum_0[_len_0] = pack_rr(r)
-      _len_0 = _len_0 + 1
-    end
-    return _accum_0
-  end)())
-  local additionals = concat((function()
-    local _accum_0 = { }
-    local _len_0 = 1
-    local _list_0 = self.additionals
-    for _index_0 = 1, #_list_0 do
-      local r = _list_0[_index_0]
-      _accum_0[_len_0] = pack_rr(r)
-      _len_0 = _len_0 + 1
-    end
-    return _accum_0
-  end)())
-  local body = questions .. answers .. authorities .. additionals
-  self.header.size = 12 + #body
-  return pack_header(self.header) .. body
+  local parts = { }
+  local n = 1
+  local body_len = 0
+  local _list_0 = self.questions
+  for _index_0 = 1, #_list_0 do
+    local q = _list_0[_index_0]
+    local s = pack_question(q)
+    n = n + 1
+    parts[n] = s
+    body_len = body_len + #s
+  end
+  local _list_1 = self.answers
+  for _index_0 = 1, #_list_1 do
+    local r = _list_1[_index_0]
+    local s = pack_rr(r)
+    n = n + 1
+    parts[n] = s
+    body_len = body_len + #s
+  end
+  local _list_2 = self.authorities
+  for _index_0 = 1, #_list_2 do
+    local r = _list_2[_index_0]
+    local s = pack_rr(r)
+    n = n + 1
+    parts[n] = s
+    body_len = body_len + #s
+  end
+  local _list_3 = self.additionals
+  for _index_0 = 1, #_list_3 do
+    local r = _list_3[_index_0]
+    local s = pack_rr(r)
+    n = n + 1
+    parts[n] = s
+    body_len = body_len + #s
+  end
+  self.header.size = 12 + body_len
+  parts[1] = pack_header(self.header)
+  return concat(parts)
 end
 local _mt = {
   __tostring = pack,

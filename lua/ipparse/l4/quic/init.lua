@@ -3,8 +3,9 @@ do
   local _obj_0 = require("ipparse.lib.pack_compat")
   sp, su, byte = _obj_0.pack, _obj_0.unpack, _obj_0.byte
 end
-local unpack
-unpack = table.unpack
+local unpack = table.unpack or unpack
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local bidirectional
 bidirectional = require("ipparse.fun").bidirectional
 local band
@@ -66,7 +67,13 @@ for _index_0 = 1, #versions do
 end
 local parse_long_header
 parse_long_header = function(self, off, byte1)
-  local version, dst_connection_id, src_connection_id, _off = su(">I4 s1 s1", self, off)
+  if not (need_bytes(self, off, 6)) then
+    return nil, off
+  end
+  local ok, version, dst_connection_id, src_connection_id, _off = pcall(su, ">I4 s1 s1", self, off)
+  if not (ok) then
+    return nil, off
+  end
   local mt
   local pkt_type, token, pkt_length
   do
@@ -80,11 +87,17 @@ parse_long_header = function(self, off, byte1)
   if pkt_type == 0x00 then
     local token_len
     token_len, _off = parse_varint(self, _off)
+    if not (token_len and need_bytes(self, _off, token_len)) then
+      return nil, off
+    end
     token = self:sub(_off, _off + token_len - 1)
     _off = _off + token_len
   end
   if pkt_type ~= 0x30 then
     pkt_length, _off = parse_varint(self, _off)
+    if not (pkt_length) then
+      return nil, off
+    end
   end
   return setmetatable({
     byte1 = byte1,
@@ -137,6 +150,9 @@ parse = function(self, off, ...)
     off = 1
   end
   local byte1 = byte(self, off)
+  if not (byte1) then
+    return nil, off
+  end
   if band(byte1, HEADER_FORM) == 0 then
     return parse_short_header(self, off + 1, byte1, ...)
   else

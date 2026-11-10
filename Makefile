@@ -28,6 +28,7 @@ SRC     := src
 LUA     := lua
 SYNC    := sync
 MOONSCRIPT_SUBMODULE := $(SRC)/lib/moonscript
+MOONTASTIK_SUBMODULE := $(SRC)/lib/moontastik
 
 # `tee` renvoie toujours 0 : sans pipefail, le code retour de Busted (premier
 # élément du pipeline) serait masqué et une suite EN ÉCHEC pourrait faire
@@ -44,12 +45,16 @@ TEST_LUA_PATH := tests/helpers/?.lua;tests/?.lua;$(LUA)/?.lua;$(LUA)/?/init.lua;
 TEST_LUA_CPATH := $(LUAROCKS_CPATH);;
 
 # List of project modules to compile (excluding embedded moonscript submodule)
-MOONS := $(shell find $(SRC) -path '$(MOONSCRIPT_SUBMODULE)' -prune -o -name '*.moon' -print | sort)
+# On élague aussi le sous-module moontastik : ses sources ipparse sont
+# compilées séparément via le lien symbolique src/ipparse (cf. IPPARSE_MOONS),
+# et le reste (hexdump…) ne doit pas produire de lua/lib/moontastik/.
+MOONS := $(shell find $(SRC) -path '$(MOONSCRIPT_SUBMODULE)' -prune -o -path '$(MOONTASTIK_SUBMODULE)' -prune -o -name '*.moon' -print | sort)
 LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(MOONS))
 
-# Lua vérifiés par `check`. On exclut le code vendu d'ipparse qui n'est PAS
-# destiné à LuaJIT : exemples et tests amont (certains ciblent le noyau
-# lunatik), et `lib/bit53` qui utilise délibérément la syntaxe Lua 5.3
+# Lua vérifiés par `check`. On exclut le code ipparse (sous-module moontastik,
+# lié en src/ipparse) qui n'est PAS destiné à LuaJIT : exemples et tests amont
+# (certains ciblent le noyau lunatik), et `lib/bit53` qui utilise
+# délibérément la syntaxe Lua 5.3
 # (`&`, `|`, `<<`) que LuaJIT (5.1) ne sait pas parser. Ces fichiers ne font
 # pas partie du runtime déployé ; les inclure rendrait `check` rouge en
 # permanence sur du code hérité non modifiable.
@@ -76,7 +81,11 @@ $(LUA)/auth/portal_client_js.lua: $(SRC)/auth/portal_client.js tools/embed_js.lu
 	$(LUAJIT) tools/embed_js.lua $< $@
 
 # ipparse modules (auto-discovered, exclude examples)
-IPPARSE_MOONS := $(shell find $(SRC)/ipparse -name '*.moon' 2>/dev/null | grep -v examples)
+# `find` ne suit pas un lien symbolique passé comme point de départ sans -H :
+# src/ipparse est un lien vers lib/moontastik/ipparse. -H suit uniquement le
+# point de départ (pas les liens rencontrés ensuite, donc pas de boucle sur
+# l'auto-lien ipparse/ipparse -> .).
+IPPARSE_MOONS := $(shell find -H $(SRC)/ipparse -name '*.moon' 2>/dev/null | grep -v examples)
 IPPARSE_LUAS  := $(patsubst $(SRC)/%.moon,$(LUA)/%.lua,$(IPPARSE_MOONS))
 IPPARSE_STATIC_SRCS := $(SRC)/ipparse/lib/sha.lua $(SRC)/ipparse/lib/sha2.lua
 IPPARSE_STATIC_LUAS := $(patsubst $(SRC)/%.lua,$(LUA)/%.lua,$(IPPARSE_STATIC_SRCS))

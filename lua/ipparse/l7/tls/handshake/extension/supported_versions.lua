@@ -5,6 +5,8 @@ do
 end
 local bidirectional
 bidirectional = require("ipparse.fun").bidirectional
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local concat
 concat = table.concat
 local versions = bidirectional({
@@ -49,12 +51,18 @@ parse = function(self, off)
       selected = ver
     }, _mt_selected), _off
   else
+    if not (need_bytes(self, off, 1)) then
+      return nil, off
+    end
     local len, _off = su(">B", self, off)
+    if not (need_bytes(self, _off, len)) then
+      return nil, off
+    end
     local list
     do
       local _accum_0 = { }
       local _len_0 = 1
-      for i = _off, _off + len - 1, 2 do
+      for i = _off, _off + len - 2, 2 do
         _accum_0[_len_0] = su(">H", self, i)
         _len_0 = _len_0 + 1
       end

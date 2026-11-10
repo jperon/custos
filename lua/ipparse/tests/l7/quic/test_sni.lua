@@ -18,9 +18,9 @@ make_hs = function(hs_type, body)
 end
 local make_ch_body
 make_ch_body = function(extensions_bin)
-  local client_random = string.rep("\x00", 32)
-  local ciphers = "\x13\x01"
-  local compressions = "\x00"
+  local client_random = string.rep("\000", 32)
+  local ciphers = "\019\001"
+  local compressions = "\000"
   return sp(">H c32 s1 s2 s1 s2", 0x0303, client_random, "", ciphers, compressions, extensions_bin)
 end
 local make_sni_ext
@@ -81,7 +81,7 @@ test("reassemble_crypto: non-CRYPTO frames are ignored", function()
     {
       name = "PADDING",
       offset = 0,
-      data = "\x00\x00"
+      data = "\000\000"
     },
     {
       name = "CRYPTO",

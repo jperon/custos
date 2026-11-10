@@ -5,13 +5,39 @@ local sort
 sort = table.sort
 local lshift
 lshift = require("ipparse.lib.bit_compat").lshift
+local MAX_PENDING = 64
 local fragmented = { }
+local pending = 0
+local order, order_first, order_last = { }, 1, 0
+local evict_oldest
+evict_oldest = function()
+  while order_first <= order_last do
+    local key = order[order_first]
+    order[order_first] = nil
+    order_first = order_first + 1
+    if fragmented[key] then
+      fragmented[key] = nil
+      pending = pending - 1
+      return 
+    end
+  end
+end
 return {
   collect = function(self, _skb)
     local id, off, data_off, data_len, mf
     id, off, data_off, data_len, mf = self.id, self.off, self.data_off, self.data_len, self.mf
-    local fragments = fragmented[id] or { }
-    fragmented[id] = fragments
+    local key = tostring(self.src) .. tostring(self.dst) .. tostring(self.protocol) .. tostring(id)
+    local fragments = fragmented[key]
+    if not (fragments) then
+      if pending >= MAX_PENDING then
+        evict_oldest()
+      end
+      fragments = { }
+      fragmented[key] = fragments
+      pending = pending + 1
+      order_last = order_last + 1
+      order[order_last] = key
+    end
     local frag_off = lshift(self.fragmentation_off, 3)
     local total_len = off + frag_off + data_off + data_len
     local max_len = total_len > 10240 and 65535 or 10240
@@ -55,7 +81,8 @@ return {
     end
     off, frag_off, data_off, data_len = lastfrag.off, lastfrag.frag_off, lastfrag.data_off, lastfrag.data_len
     total_len = off + frag_off + data_off + data_len
-    fragmented[id] = nil
+    fragmented[key] = nil
+    pending = pending - 1
     local ip = IP4.parse(skb)
     return ip, self
   end
