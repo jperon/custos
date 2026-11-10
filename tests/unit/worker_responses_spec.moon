@@ -190,7 +190,7 @@ describe "worker_responses upstream retry", ->
     raw = sp ">B B H H H B B H", 0x45, 0, total, 0x1, 0, 64, 17, 0
     raw ..= s2ip("1.1.1.1") .. s2ip("10.35.8.2")
     raw ..= sp(">H H H H", 53, 5353, udp_len, 0) .. dns
-    ip, _ = parse_ip raw
+    ip, _ = parse_ip raw, 1
     l4, _ = parse_udp raw, ip.data_off
     l4.proto = "udp"
     ip, l4, dns

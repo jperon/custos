@@ -218,7 +218,7 @@ return describe("worker_responses upstream retry", function()
     local raw = sp(">B B H H H B B H", 0x45, 0, total, 0x1, 0, 64, 17, 0)
     raw = raw .. (s2ip("1.1.1.1") .. s2ip("10.35.8.2"))
     raw = raw .. (sp(">H H H H", 53, 5353, udp_len, 0) .. dns)
-    local ip, _ = parse_ip(raw)
+    local ip, _ = parse_ip(raw, 1)
     local l4
     l4, _ = parse_udp(raw, ip.data_off)
     l4.proto = "udp"

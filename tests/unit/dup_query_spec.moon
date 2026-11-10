@@ -32,12 +32,12 @@ describe "dup_query", ->
 
     it "réécrit la dst et préserve src + payload DNS", ->
       raw = build_v4 "192.0.2.10", "1.1.1.1", dns
-      ip, _ = parse_ip raw
+      ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
       out = dup.build_udp ip, l4, dns, "94.130.180.225"
       assert.is_truthy out
-      oip, _ = parse_ip out
+      oip, _ = parse_ip out, 1
       assert.same "192.0.2.10", ip2s(oip.src)
       assert.same "94.130.180.225", ip2s(oip.dst)
       oudp, _ = parse_udp out, oip.data_off
@@ -46,14 +46,14 @@ describe "dup_query", ->
 
     it "nil en TCP", ->
       raw = build_v4 "192.0.2.10", "1.1.1.1", dns
-      ip, _ = parse_ip raw
+      ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "tcp"
       assert.is_nil dup.build_udp ip, l4, dns, "94.130.180.225"
 
     it "nil si famille validateur incohérente", ->
       raw = build_v4 "192.0.2.10", "1.1.1.1", dns
-      ip, _ = parse_ip raw
+      ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
       assert.is_nil dup.build_udp ip, l4, dns, "2a01:4f8::1"
@@ -64,12 +64,12 @@ describe "dup_query", ->
     it "inverse src/dst et ports à partir des en-têtes de la réponse", ->
       -- Réponse résolveur→client : src=1.1.1.1:53, dst=192.0.2.10:5353.
       raw = build_v4 "1.1.1.1", "192.0.2.10", query
-      ip, _ = parse_ip raw
+      ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
       out = dup.build_query ip, l4, query
       assert.is_truthy out
-      oip, _ = parse_ip out
+      oip, _ = parse_ip out, 1
       assert.same "192.0.2.10", ip2s(oip.src)   -- client (spoofé)
       assert.same "1.1.1.1", ip2s(oip.dst)       -- résolveur
       oudp, _ = parse_udp out, oip.data_off
@@ -82,14 +82,14 @@ describe "dup_query", ->
 
     it "nil en TCP", ->
       raw = build_v4 "1.1.1.1", "192.0.2.10", query
-      ip, _ = parse_ip raw
+      ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "tcp"
       assert.is_nil dup.build_query ip, l4, query
 
     it "nil sans payload", ->
       raw = build_v4 "1.1.1.1", "192.0.2.10", query
-      ip, _ = parse_ip raw
+      ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
       assert.is_nil dup.build_query ip, l4, nil

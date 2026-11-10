@@ -23,8 +23,7 @@ pcall(function()
   ]])
 end)
 pcall(function()
-  return ffi.cdef([[
-    struct statx_timestamp { int64_t tv_sec; uint32_t tv_nsec; int32_t __reserved; };
+  return ffi.cdef([[    struct statx_timestamp { int64_t tv_sec; uint32_t tv_nsec; int32_t __reserved; };
     struct statx {
       uint32_t stx_mask;
       uint32_t stx_blksize;
