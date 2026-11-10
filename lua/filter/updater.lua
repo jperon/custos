@@ -9,6 +9,7 @@ local SIGHUP = 1
 local write_bin
 local updater_io = require("filter.updater_io")
 local sh_quote = updater_io.sh_quote
+local bin_name_for = updater_io.bin_name_for
 local ensure_dir = updater_io.ensure_dir
 local ensure_parent_dir = updater_io.ensure_parent_dir
 local parse_args
@@ -212,7 +213,7 @@ process_custom_dir = function(src_dir, output_dir, dry_run)
         break
       end
       local txt_path = src_base .. "/" .. txt_name
-      local name = txt_name:match("([^/]+)%.txt$" or txt_name)
+      local name = bin_name_for(txt_name)
       local bin_path = out_base .. "/" .. name .. ".bin"
       local ok_l, msg, skipped = fetch_local(name, {
         file = txt_path,

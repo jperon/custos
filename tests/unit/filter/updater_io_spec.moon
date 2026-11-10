@@ -91,3 +91,13 @@ describe "filter.updater_io.sh_quote", ->
   it "entoure de quotes simples et échappe les quotes internes", ->
     assert.equals "'abc'", updater_io.sh_quote "abc"
     assert.equals "'a'\"'\"'b'", updater_io.sh_quote "a'b"
+
+describe "filter.updater_io.bin_name_for", ->
+  it "retire le suffixe .txt d'un nom simple", ->
+    assert.equals "ads", updater_io.bin_name_for "ads.txt"
+
+  it "retire le répertoire et le suffixe .txt", ->
+    assert.equals "ads", updater_io.bin_name_for "groupe/ads.txt"
+
+  it "replie sur le nom complet sans suffixe .txt", ->
+    assert.equals "sans-extension", updater_io.bin_name_for "sans-extension"

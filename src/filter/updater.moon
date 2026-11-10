@@ -56,6 +56,7 @@ local write_bin
 -- Helpers d'I/O shell isolés dans un module dédié (testables unitairement).
 updater_io = require "filter.updater_io"
 sh_quote = updater_io.sh_quote
+bin_name_for = updater_io.bin_name_for
 ensure_dir = updater_io.ensure_dir
 ensure_parent_dir = updater_io.ensure_parent_dir
 
@@ -280,7 +281,7 @@ process_custom_dir = (src_dir, output_dir, dry_run) ->
     txt_name = txt_name\gsub "%s+$", ""
     continue if txt_name == ""
     txt_path = src_base .. "/" .. txt_name
-    name = txt_name\match "([^/]+)%.txt$" or txt_name
+    name = bin_name_for txt_name
     bin_path = out_base .. "/" .. name .. ".bin"
     ok_l, msg, skipped = fetch_local name, { file: txt_path, format: "simple", output: bin_path }, dry_run
     if ok_l

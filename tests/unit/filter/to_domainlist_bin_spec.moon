@@ -16,8 +16,10 @@ write_bin = (path, domains) ->
   fh\close!
 
 setup ->
-  os.execute "mkdir -p #{TMP_DIR}/lists"
+  os.execute "mkdir -p #{TMP_DIR}/lists/groupe"
   write_bin "#{TMP_DIR}/lists/blocked.bin", { "evil.example", "ads.tracker.net" }
+  write_bin "#{TMP_DIR}/lists/ads.bin", { "evil.example" }
+  write_bin "#{TMP_DIR}/lists/groupe/ads.bin", { "evil.example" }
 
 teardown ->
   os.execute "rm -rf #{TMP_DIR}"
@@ -39,6 +41,19 @@ describe "filter.conditions.to_domainlist (.bin via mmap)", ->
     cond = (factory cfg) "blocked"
     ok, _ = cond.eval { domain: "good.example" }
     assert.is_false ok
+
+  it "rejette les traversées de chemin et les fichiers .bin", ->
+    for name in *{ "../x", "a/../b", "x.bin", "/abs" }
+      cond = (factory cfg) name
+      ok, msg = cond.eval { domain: "evil.example" }
+      assert.is_false ok
+      assert.truthy msg\match "invalide"
+
+  it "accepte un nom simple et un nom avec sous-répertoire", ->
+    for name in *{ "ads", "groupe/ads" }
+      cond = (factory cfg) name
+      ok = cond.eval { domain: "evil.example" }
+      assert.is_true ok
 
   it "liste inexistante (ni .bin ni .domains) → erreur explicite", ->
     cond = (factory cfg) "missing"

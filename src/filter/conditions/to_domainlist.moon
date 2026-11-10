@@ -225,7 +225,7 @@ _factory = (cfg) ->
       }
     
     -- Validation du nom de liste
-    if listname\match "^/" or listname\match "%.%." or listname\match "%.bin$"
+    if (listname\match "^/") or (listname\match "%.%.") or (listname\match "%.bin$")
       return {
         capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "Nom de liste invalide: '#{listname}'"

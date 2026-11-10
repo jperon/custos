@@ -14,6 +14,13 @@ exec_ok = require("lib.os_exec").exec_ok
 sh_quote = (s) ->
   "'" .. tostring(s)\gsub("'", "'\"'\"'") .. "'"
 
+--- Nom de base d'une liste compilée, à partir de son fichier source `.txt`.
+-- Retire le répertoire et le suffixe `.txt` ; sans suffixe, garde le nom tel quel.
+-- @tparam string txt_name Nom de fichier source (ex. "groupe/ads.txt")
+-- @treturn string Nom de base du `.bin` (ex. "ads")
+bin_name_for = (txt_name) ->
+  (txt_name\match "([^/]+)%.txt$") or txt_name
+
 --- Crée un répertoire (et ses parents) si nécessaire.
 -- @tparam string dir Chemin du répertoire
 -- @treturn boolean true si OK
@@ -56,4 +63,4 @@ download_file = (url, dest, timeout) ->
   ret = os.execute cmd
   exec_ok ret
 
-{ :sh_quote, :ensure_dir, :ensure_parent_dir, :download, :download_file }
+{ :sh_quote, :bin_name_for, :ensure_dir, :ensure_parent_dir, :download, :download_file }

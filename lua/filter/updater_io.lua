@@ -3,6 +3,10 @@ local sh_quote
 sh_quote = function(s)
   return "'" .. tostring(s):gsub("'", "'\"'\"'") .. "'"
 end
+local bin_name_for
+bin_name_for = function(txt_name)
+  return (txt_name:match("([^/]+)%.txt$")) or txt_name
+end
 local ensure_dir
 ensure_dir = function(dir)
   if not (dir and dir ~= "") then
@@ -43,6 +47,7 @@ download_file = function(url, dest, timeout)
 end
 return {
   sh_quote = sh_quote,
+  bin_name_for = bin_name_for,
   ensure_dir = ensure_dir,
   ensure_parent_dir = ensure_parent_dir,
   download = download,

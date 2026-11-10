@@ -138,6 +138,16 @@ describe "filter/convert (CLI)", ->
       assert.is_not_nil data
       assert.equals 6, #data
 
+    it "commentaire inline collé (sans espace) retiré", ->
+      fh = io.open CONV_INPUT, "w"
+      fh\write "example.com#collé\n"
+      fh\close!
+      ok = run_convert "#{CONV_INPUT} #{CONV_OUTPUT}"
+      assert.is_true ok
+      data = read_bin CONV_OUTPUT
+      assert.is_not_nil data
+      assert.equals 6, #data
+
   -- ── fichier d'entrée vide (aucun domaine valide) ──────────────────────────
   describe "fichier sans domaine valide", ->
 
