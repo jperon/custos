@@ -34,6 +34,22 @@ describe "webui/util", ->
       form = parse_form "a=%3Cb%3E"
       assert.equals "<b>", form.a
 
+    it "décode %2B en + (et non en espace)", ->
+      form = parse_form "a=1%2B1"
+      assert.equals "1+1", form.a
+
+    it "décode + en espace", ->
+      form = parse_form "a=x+y"
+      assert.equals "x y", form.a
+
+    it "décode %20 en espace", ->
+      form = parse_form "a=x%20y"
+      assert.equals "x y", form.a
+
+    it "combine %2B, + et texte", ->
+      form = parse_form "a=a%2Bb+c"
+      assert.equals "a+b c", form.a
+
     it "gère une clé sans valeur", ->
       form = parse_form "a=&b=2"
       assert.equals "", form.a

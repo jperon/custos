@@ -20,9 +20,9 @@ parse_form = function(body)
   local out = { }
   local dec
   dec = function(s)
-    return (s:gsub("%%(%x%x)", function(h)
+    return (s:gsub("+", " ")):gsub("%%(%x%x)", function(h)
       return string.char(tonumber(h, 16))
-    end)):gsub("+", " ")
+    end)
   end
   for k, v in body:gmatch("([^&=]+)=([^&]*)") do
     out[dec(k)] = dec(v)

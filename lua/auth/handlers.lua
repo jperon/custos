@@ -35,6 +35,8 @@ do
   local _obj_0 = require("auth.nft_auth_sets")
   delete_rule_auth_sets, refresh_nft = _obj_0.delete_rule_auth_sets, _obj_0.refresh_nft
 end
+local parse_form
+parse_form = require("webui.util").parse_form
 local SIGHUP = 1
 local COOKIE_NAME = "custos_session"
 local make_session_cookie
@@ -58,27 +60,6 @@ local notify_reload
 notify_reload = function(state)
   local fn = (state and state.notify_reload) or signal_parent_reload
   return fn()
-end
-local url_decode
-url_decode = function(s)
-  if not (s) then
-    return ""
-  end
-  s = s:gsub("+", " ")
-  return s:gsub("%%(%x%x)", function(hex)
-    return string.char(tonumber(hex, 16))
-  end)
-end
-local parse_form
-parse_form = function(body)
-  local out = { }
-  if not (body) then
-    return out
-  end
-  for k, v in body:gmatch("([^&=]+)=([^&]*)") do
-    out[url_decode(k)] = url_decode(v)
-  end
-  return out
 end
 local register_form_page
 register_form_page = function(req)
@@ -666,7 +647,6 @@ return {
   make_session_cookie = make_session_cookie,
   clear_session_cookie = clear_session_cookie,
   signal_parent_reload = signal_parent_reload,
-  url_decode = url_decode,
   parse_form = parse_form,
   register_form_page = register_form_page,
   register_success_page = register_success_page,

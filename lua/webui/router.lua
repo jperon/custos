@@ -37,6 +37,8 @@ do
 end
 local handle_verdicts_get
 handle_verdicts_get = require("webui.handlers.verdicts").handle_verdicts_get
+local parse_form
+parse_form = require("webui.util").parse_form
 local SCALAR_SECTIONS = {
   runtime = true,
   nfqueue = true,
@@ -51,30 +53,13 @@ local SCALAR_SECTIONS = {
   metrics = true,
   rtp = true
 }
-local parse_query
-parse_query = function(qs)
-  local out = { }
-  if not (qs and qs ~= "") then
-    return out
-  end
-  local dec
-  dec = function(s)
-    return (s:gsub("%%(%x%x)", function(h)
-      return string.char(tonumber(h, 16))
-    end)):gsub("+", " ")
-  end
-  for k, v in qs:gmatch("([^&=]+)=([^&]*)") do
-    out[dec(k)] = dec(v)
-  end
-  return out
-end
 local dispatch
 dispatch = function(req, state)
   local method = req.method
   local raw = req.path or ""
   local qpos = raw:find("?", 1, true)
   local path = qpos and raw:sub(1, qpos - 1) or raw
-  req.query = parse_query(qpos and raw:sub(qpos + 1) or "")
+  req.query = parse_form(qpos and raw:sub(qpos + 1) or "")
   local admin, reason = check_admin_session(req, state)
   if not (admin) then
     if reason == "forbidden" then

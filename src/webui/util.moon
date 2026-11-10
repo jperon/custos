@@ -20,7 +20,7 @@ esc = (s) ->
 parse_form = (body) ->
   return {} unless body
   out = {}
-  dec = (s) -> (s\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16)\gsub "+", " "
+  dec = (s) -> (s\gsub "+", " ")\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16
   for k, v in body\gmatch "([^&=]+)=([^&]*)"
     out[dec k] = dec v
   out
