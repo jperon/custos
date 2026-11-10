@@ -447,7 +447,28 @@ handle_config_section_post = function(req, section, state)
   if not (cfg) then
     return 500, { }, "Erreur lecture config : " .. tostring(tostring(err))
   end
-  cfg[section] = build_section(section_schema, nil, form)
+  local built = build_section(section_schema, nil, form)
+  local merged = { }
+  if type(cfg[section]) == "table" then
+    for k, v in pairs(cfg[section]) do
+      merged[k] = v
+    end
+  end
+  for k in pairs(section_schema) do
+    local _continue_0 = false
+    repeat
+      if k:match("^_") then
+        _continue_0 = true
+        break
+      end
+      merged[k] = built[k]
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  cfg[section] = merged
   local ok2, err2 = write_config(cfg, state.config_path)
   if not (ok2) then
     return 500, { }, "Erreur écriture config : " .. tostring(tostring(err2))

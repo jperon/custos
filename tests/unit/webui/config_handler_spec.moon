@@ -144,6 +144,37 @@ describe "webui/handlers/config", ->
       loaded = (read_config CFG_PATH)
       assert.equals "2-3", loaded.nfqueue.questions
 
+  -- ── Fusion de section : clés hors schéma préservées ────────────────────
+
+  describe "handle_config_section_post — clés hors schéma", ->
+
+    it "préserve admin_users et admin_allow_all_when_empty (absents du schéma auth)", ->
+      write_cfg {
+        auth: {
+          admin_users: { "alice", "bob" }
+          admin_allow_all_when_empty: false
+          idle_timeout: 300
+        }
+      }
+      body_str = "idle_timeout=600"
+      status, _, _ = handle_config_section_post make_req("POST", body_str), "auth", make_state!
+      assert.equals 302, status
+      loaded = (read_config CFG_PATH)
+      assert.equals 600, loaded.auth.idle_timeout
+      assert.same { "alice", "bob" }, loaded.auth.admin_users
+      assert.is_false loaded.auth.admin_allow_all_when_empty
+
+    it "écrit bien une clé du schéma modifiée par le formulaire", ->
+      write_cfg { auth: { idle_timeout: 300 } }
+      body_str = "idle_timeout=600"
+      handle_config_section_post make_req("POST", body_str), "auth", make_state!
+      loaded = (read_config CFG_PATH)
+      assert.equals 600, loaded.auth.idle_timeout
+
+    it "retourne toujours 404 pour une section inconnue", ->
+      status, _, _ = handle_config_section_post make_req("POST", "x=1"), "nonexistent", make_state!
+      assert.equals 404, status
+
   -- ── handle_filter_general (SafeSearch, YouTube, listes…) ────────────────
 
   describe "handle_config_index — liens filtre", ->

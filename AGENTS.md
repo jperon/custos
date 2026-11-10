@@ -489,6 +489,15 @@ env `CUSTOS_PID_FILE`). `handle_reload` (`system.moon`) et `default_reload`
 (`devices.moon`) lisent ce pidfile ; `custos-update` l'utilise déjà. `handle_reload`
 accepte `state.kill_fn` injectable (tests).
 
+**POST de section = fusion sur les clés du schéma.** `handle_config_section_post`
+(`handlers/config.moon`) ne remplace que les clés non `_` déclarées dans
+`config_schema[section]` ; les clés hors schéma de la section existante sont
+préservées telles quelles (`auth.admin_users`/`admin_allow_all_when_empty`,
+`dns.upstream_retry`, `nft.extra_rules`…). Une clé du schéma rendue `nil` par
+`build_section` reste supprimée. Ne jamais revenir à un remplacement de section
+entier : effacer `admin_users` le fait retomber sur `{}` + `admin_allow_all_when_empty
+= true` au rechargement, rendant tout utilisateur authentifié admin.
+
 Les champs scalaires de `filter` (SafeSearch, YouTube Restricted, `allow_localnets`,
 `captive_portal`, `domainlists_dir`, `dest_whitelist`, `allowed_domains`…) sont
 édités par `handle_filter_general_get/post` : ils parcourent `config_schema.filter`

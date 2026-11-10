@@ -219,7 +219,19 @@ handle_config_section_post = (req, section, state) ->
   cfg, err = read_config state.config_path
   return 500, {}, "Erreur lecture config : #{tostring err}" unless cfg
 
-  cfg[section] = build_section section_schema, nil, form
+  -- Fusion : on ne remplace que les clés déclarées dans le schéma. Les clés
+  -- hors schéma (ex. auth.admin_users, dns.upstream_retry, nft.extra_rules)
+  -- sont conservées telles quelles. Une clé du schéma rendue nil par
+  -- build_section est bien supprimée.
+  built = build_section section_schema, nil, form
+  merged = {}
+  if type(cfg[section]) == "table"
+    for k, v in pairs cfg[section]
+      merged[k] = v
+  for k in pairs section_schema
+    continue if k\match "^_"
+    merged[k] = built[k]
+  cfg[section] = merged
   ok2, err2 = write_config cfg, state.config_path
   return 500, {}, "Erreur écriture config : #{tostring err2}" unless ok2
 
