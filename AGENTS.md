@@ -61,6 +61,27 @@ sont pas vérifiées et constatées (pas supposées) :
 
 ---
 
+## ipparse (sous-module moontastik)
+
+La bibliothèque de parsing L2/L3/L4/L7 `ipparse` n'est plus une copie vendue :
+c'est le sous-module git `src/lib/moontastik`
+(https://github.com/luainkernel/moontastik), et `src/ipparse` est un **lien
+symbolique relatif** vers `lib/moontastik/ipparse`. Le code custos continue de
+faire `require "ipparse.…"` sans changement.
+
+- **Cloner/initialiser** : `git clone --recursive` ou
+  `git submodule update --init` (idem pour `src/lib/moonscript`).
+- **Mettre à jour** : `git -C src/lib/moontastik fetch`,
+  `git -C src/lib/moontastik checkout <commit>`, puis `make all && make test`,
+  et committer le nouveau pointeur de sous-module (`git add src/lib/moontastik`).
+  Vérifier que `git -C src/lib/moontastik status --short` reste vide après
+  compilation (aucun `.lua` généré dans le sous-module).
+- **Piège `find`** : `find src/ipparse …` ne descend pas dans un lien
+  symbolique donné comme point de départ. Le `Makefile` utilise donc
+  `find -H $(SRC)/ipparse` pour `IPPARSE_MOONS`, et élague
+  `$(MOONTASTIK_SUBMODULE)` du `find $(SRC)` global (sinon des
+  `lua/lib/moontastik/…` parasites apparaissent).
+
 ## Aide-mémoire rapide
 
 | Besoin | Approche |

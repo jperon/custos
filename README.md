@@ -159,7 +159,9 @@ custos/
 │   ├── lib/
 │   │   ├── http.moon        Helpers HTTP (parsing requêtes/réponses)
 │   │   ├── process.moon     Fork, set_process_name, signaux, shutdown
-│   │   └── socket.moon      Helpers socket (FFI)
+│   │   ├── socket.moon      Helpers socket (FFI)
+│   │   ├── moonscript/      Sous-module git : runtime MoonScript embarqué
+│   │   └── moontastik/      Sous-module git : ipparse (exposé via src/ipparse)
 │   ├── nfq/
 │   │   └── ethernet.moon    L2 : MAC src via nfq_get_packet_hw
 │   ├── doh/
@@ -231,7 +233,7 @@ custos/
 │   │   ├── css.moon         Feuille de style de l'interface admin
 │   │   ├── handlers/        dashboard, system, config, filter, rules, lists, admin_auth
 │   │   └── schema/          config_schema, registry (validation des sections)
-│   └── ipparse/             Bibliothèque parsing L2/L3/L4/L7 (sous-module)
+│   └── ipparse/             Lien symbolique → lib/moontastik/ipparse (sous-module)
 ├── sync/
 │   ├── apply.moon           Fusion base + device → /etc/custos/config.moon
 │   ├── custos-sync.sh       Synchronisation pull depuis un dépôt git central
@@ -278,9 +280,13 @@ opkg install luajit lpeg libnetfilter-queue nftables \
   kmod-nft-queue kmod-nft-bridge libxxhash libwolfssl px5g-wolfssl
 ```
 
-> MoonScript est embarqué dans le dépôt (`src/lib/moonscript`) et déployé tel
-> quel ; aucun paquet `moonscript` distant n'est requis. Pour compiler localement
-> (`make`), il faut `moonc` + `luajit` (ou utiliser les `.lua` déjà générés).
+> MoonScript et ipparse sont des sous-modules git : `src/lib/moonscript`
+> (runtime MoonScript embarqué) et `src/lib/moontastik` (bibliothèque ipparse,
+> exposée dans l'arborescence par le lien symbolique `src/ipparse`). Aucun paquet
+> `moonscript` distant n'est requis, mais il faut initialiser les sous-modules
+> (`git clone --recursive` ou `git submodule update --init`). Pour compiler
+> localement (`make`), il faut `moonc` + `luajit` (ou utiliser les `.lua` déjà
+> générés).
 
 ---
 
@@ -289,8 +295,9 @@ opkg install luajit lpeg libnetfilter-queue nftables \
 ### Deployment on OpenWrt
 
 ```bash
-git clone <repo> custos
+git clone --recursive <repo> custos
 cd custos
+# Déjà fait par --recursive ; sinon : git submodule update --init
 
 # Compile MoonScript → Lua
 make

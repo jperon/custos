@@ -68,7 +68,8 @@ affichant chaque ligne `OK`/`FAIL` (pas d'arrêt au premier fichier cassé). Un
 fichier cassé fait donc réellement échouer la cible — plus de « rouge à
 l'écran, vert en code retour ».
 
-La liste vérifiée (`CHECK_LUAS`) exclut le code **vendu** d'ipparse qui n'est
+La liste vérifiée (`CHECK_LUAS`) exclut le code du **sous-module** ipparse
+(`src/lib/moontastik`, exposé via le lien symbolique `src/ipparse`) qui n'est
 pas destiné à LuaJIT : `lua/ipparse/examples/`, `lua/ipparse/tests/` et
 `lua/ipparse/lib/bit53.lua` (syntaxe Lua 5.3 `&`/`|`/`<<` que LuaJIT 5.1 ne
 parse pas). Ces fichiers ne font pas partie du runtime déployé ; les inclure
