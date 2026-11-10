@@ -101,3 +101,9 @@ describe "filter.updater_io.bin_name_for", ->
 
   it "replie sur le nom complet sans suffixe .txt", ->
     assert.equals "sans-extension", updater_io.bin_name_for "sans-extension"
+
+describe "filter.updater_io.write_result_kind", ->
+  it "classe succès, liste vide ignorée et erreur", ->
+    assert.equals "ok",      updater_io.write_result_kind true, "n domaines", nil
+    assert.equals "skipped", updater_io.write_result_kind false, "aucun domaine valide", true
+    assert.equals "error",   updater_io.write_result_kind false, "échec écriture", nil

@@ -10,6 +10,7 @@ local write_bin
 local updater_io = require("filter.updater_io")
 local sh_quote = updater_io.sh_quote
 local bin_name_for = updater_io.bin_name_for
+local write_result_kind = updater_io.write_result_kind
 local ensure_dir = updater_io.ensure_dir
 local ensure_parent_dir = updater_io.ensure_parent_dir
 local parse_args
@@ -220,10 +221,11 @@ process_custom_dir = function(src_dir, output_dir, dry_run)
         format = "simple",
         output = bin_path
       }, dry_run)
-      if ok_l then
+      local kind = write_result_kind(ok_l, msg, skipped)
+      if kind == "ok" then
         io.stderr:write("[custom/" .. tostring(name) .. "] ✓ " .. tostring(msg) .. "\n")
         local_updated = local_updated + 1
-      elseif skipped then
+      elseif kind == "skipped" then
         io.stderr:write("[custom/" .. tostring(name) .. "] ⏭ ignorée (" .. tostring(msg) .. ")\n")
       else
         io.stderr:write("[custom/" .. tostring(name) .. "] ✗ " .. tostring(msg) .. "\n")
@@ -302,10 +304,13 @@ for name, source in pairs(sources) do
       break
     end
     if source.file then
-      local ok, msg = fetch_local(name, source, opts.dry_run)
-      if ok then
+      local ok, msg, skipped = fetch_local(name, source, opts.dry_run)
+      local kind = write_result_kind(ok, msg, skipped)
+      if kind == "ok" then
         io.stderr:write("[" .. tostring(name) .. "] ✓ " .. tostring(msg) .. "\n")
         updated = updated + 1
+      elseif kind == "skipped" then
+        io.stderr:write("[" .. tostring(name) .. "] ⏭ ignorée (" .. tostring(msg) .. ")\n")
       else
         io.stderr:write("[" .. tostring(name) .. "] ✗ " .. tostring(msg) .. "\n")
         errors = errors + 1
@@ -351,10 +356,13 @@ for name, source in pairs(sources) do
       break
     end
     io.stderr:write("[" .. tostring(name) .. "] " .. tostring(#all_domains) .. " domaines total → " .. tostring(output) .. "\n")
-    local ok, msg = write_bin(all_domains, output, opts.dry_run)
-    if ok then
+    local ok, msg, skipped = write_bin(all_domains, output, opts.dry_run)
+    local kind = write_result_kind(ok, msg, skipped)
+    if kind == "ok" then
       io.stderr:write("[" .. tostring(name) .. "] ✓ " .. tostring(msg) .. "\n")
       updated = updated + 1
+    elseif kind == "skipped" then
+      io.stderr:write("[" .. tostring(name) .. "] ⏭ ignorée (" .. tostring(msg) .. ")\n")
     else
       io.stderr:write("[" .. tostring(name) .. "] ✗ " .. tostring(msg) .. "\n")
       errors = errors + 1
