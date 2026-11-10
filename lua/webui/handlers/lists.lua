@@ -73,6 +73,15 @@ read_list_file = function(path)
   fh:close()
   return content
 end
+local file_exists
+file_exists = function(path)
+  local fh = io.open(path, "r")
+  if not (fh) then
+    return false
+  end
+  fh:close()
+  return true
+end
 local write_list_file
 write_list_file = function(path, content)
   local dir = path:match("^(.*)/[^/]+$")
@@ -354,6 +363,9 @@ handle_list_post = function(req, type_name, list_name, state)
       }, ""
     end
     local new_path = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(new_name) .. ".txt"
+    if file_exists(new_path) then
+      return 409, { }, "La liste " .. tostring(new_name) .. " existe déjà"
+    end
     local ret = os.rename(path, new_path)
     if not (ret) then
       return 500, { }, "Échec du renommage de " .. tostring(list_name) .. " → " .. tostring(new_name)
@@ -436,6 +448,9 @@ handle_list_new_post = function(req, type_name, state)
   end
   local lists_dir = get_lists_dir(state)
   local path = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(list_name) .. ".txt"
+  if file_exists(path) then
+    return 409, { }, "La liste " .. tostring(list_name) .. " existe déjà"
+  end
   local content = form.content or ""
   local ok, e = write_list_file(path, content)
   if not (ok) then

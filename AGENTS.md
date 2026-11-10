@@ -601,8 +601,13 @@ conteneur `#verd-detail`) listant uniquement les verdicts de cette MAC. `MODAL_J
 formulaire de nom) ou sur le lien, `fetch` cette URL et injecte `#verd-detail`
 dans un `<dialog id="vmodal">` (modale). **Sans JS**, le lien ouvre simplement la
 page filtrée (popup `_blank`). Le routeur (`webui/router.moon`) sépare désormais la
-query string du chemin (`parse_query`) et expose `req.query` aux handlers ; le
+query string du chemin (`webui.util.parse_form`) et expose `req.query` aux handlers ; le
 matching de route reste sur le **chemin nu**.
+
+**Listes — pas d'écrasement silencieux.** `handle_list_new_post` et le
+renommage de `handle_list_post` (`handlers/lists.moon`) répondent **409** si le
+fichier cible existe déjà (hors renommage vers le même nom) : la cible n'est
+jamais écrasée.
 
 ## Résilience du portail captif aux blips réseau (`src/auth/portal_client.js`)
 
