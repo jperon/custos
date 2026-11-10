@@ -820,3 +820,9 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   dans un lot voyaient la seconde insertion jetée, son set restant vide.
   Correctif : `rule_id` (tostring, nil toléré) ajouté à la clé ;
   `tests/unit/worker_nft_spec.moon` couvre deux `rule_id` distincts.
+- **`mac_learner` : sonde ARP en échec sans réponse ni fermeture.** Dans
+  `start_query`, la branche « envoi échoué » posait le cache négatif sans
+  répondre `"unknown\n"` ni fermer `client_fd` : fuite de descripteur et
+  `mac_learner_ipc.get_mac` bloqué en `recv`. Correctif : helper `reply_unknown`
+  (send+close, utilisé à tous les sites) et décision extraite en
+  `probe_request` (exportée, testée par `tests/unit/mac_learner_probe_spec.moon`).
