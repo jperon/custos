@@ -9,8 +9,11 @@ do
   read_config, write_config = _obj_0.read_config, _obj_0.write_config
 end
 local registry = require("webui.schema.registry")
-local parse_form
-parse_form = require("webui.util").parse_form
+local esc, parse_form
+do
+  local _obj_0 = require("webui.util")
+  esc, parse_form = _obj_0.esc, _obj_0.parse_form
+end
 local RULES_REORDER_JS = [[(function(){
   var tbody = document.getElementById('rules-tbody');
   var form  = document.getElementById('reorder-form');
@@ -99,6 +102,7 @@ handle_rules_list = function(req, state)
   local rows = ""
   for i, rule in ipairs(rules) do
     local desc, conds_str, acts_str = rule_summary(rule)
+    desc, conds_str, acts_str = esc(desc), esc(conds_str), esc(acts_str)
     local cond_cell
     if conds_str ~= "" then
       cond_cell = conds_str
@@ -327,7 +331,7 @@ render_cond_row = function(families, idx, root, form, value)
     class = "cond-value",
     name = "cond_" .. tostring(idx) .. "[value]",
     rows = "2"
-  }, cond_val_str(value))
+  }, esc(cond_val_str(value)))
   local help = H.div({
     class = "cond-help",
     style = "color:#555;font-size:.85em;margin-top:.2rem"
@@ -431,7 +435,7 @@ render_action_row = function(acts, idx, atype, aopts)
     H.input({
       type = "text",
       name = "action_" .. tostring(idx) .. "[log_msg]",
-      value = msg_val
+      value = esc(msg_val)
     })
   })
   local btn = H.button({
@@ -453,7 +457,7 @@ render_rule_form = function(action_url, rule)
     H.input({
       type = "text",
       name = "description",
-      value = rule.description or ""
+      value = esc(rule.description or "")
     })
   })
   local families = registry.condition_families()

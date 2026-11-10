@@ -259,7 +259,7 @@ handle_verdicts_get = function(req, state)
     })
     return 200, {
       ["Content-Type"] = "text/html; charset=UTF-8"
-    }, page("Verdicts — " .. tostring(mac_q), body)
+    }, page("Verdicts — " .. tostring(esc(mac_q)), body)
   end
   local rows = { }
   for _index_0 = 1, #verdicts do

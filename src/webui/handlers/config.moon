@@ -7,7 +7,7 @@ H       = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
 config_schema = require "webui.schema.config_schema"
-{ :parse_form } = require "webui.util"
+{ :esc, :parse_form } = require "webui.util"
 unpack or= table.unpack
 
 -- ── Helpers formulaire ────────────────────────────────────────────────────
@@ -46,13 +46,13 @@ render_field = (name, field_schema, current_val) ->
   elseif t == "path" or t == "string"
     return H.div {
       label_html .. hint_html
-      H.input { type: "text", name: name, value: tostring(val or "") }
+      H.input { type: "text", name: name, value: esc tostring(val or "") }
     }
   elseif t == "string_list"
     list_val = if type(val) == "table" then table.concat(val, "\n") else tostring(val or "")
     return H.div {
       label_html .. H.small { style: "color:#888" }, " (une valeur par ligne)"
-      H.textarea { name: name }, list_val
+      H.textarea { name: name }, esc list_val
     }
   else
     return H.div {

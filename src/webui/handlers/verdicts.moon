@@ -172,7 +172,7 @@ handle_verdicts_get = (req, state) ->
       " "
       H.a { class: "btn btn-secondary", href: "/admin/config/verdicts" }, "Retour"
     }
-    return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Verdicts — #{mac_q}", body
+    return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Verdicts — #{esc mac_q}", body
 
   rows = {}
   for v in *verdicts

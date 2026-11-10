@@ -87,6 +87,25 @@ describe "webui/handlers/config", ->
       -- La valeur courante "INFO" doit apparaître dans le formulaire
       assert.truthy body\find("INFO", 1, true)
 
+    it "échappe une valeur string de config dans l'attribut value (anti-XSS)", ->
+      write_cfg { auth: { host: '"><img src=x onerror=alert(1)>' } }
+      _, _, body = handle_config_section_get make_req("GET"), "auth", make_state!
+      assert.is_nil body\find("<img src=x", 1, true)
+      assert.truthy body\find("&lt;", 1, true)
+      assert.truthy body\find("&quot;", 1, true)
+
+    it "échappe une valeur string_list de config dans le textarea (anti-XSS)", ->
+      write_cfg { second_opinion: { resolvers: { "</textarea><script>alert(1)</script>" } } }
+      _, _, body = handle_config_section_get make_req("GET"), "second_opinion", make_state!
+      assert.is_nil body\find("<script>alert", 1, true)
+      assert.truthy body\find("&lt;", 1, true)
+
+    it "affiche une valeur normale inchangée (pas de double échappement)", ->
+      write_cfg { auth: { host: "a&b" } }
+      _, _, body = handle_config_section_get make_req("GET"), "auth", make_state!
+      assert.truthy body\find('value="a&amp;b"', 1, true)
+      assert.is_nil body\find("&amp;amp;", 1, true)
+
     it "retourne 500 si config_path invalide", ->
       state = { config_path: "/nonexistent/file.lua" }
       status, _, _ = handle_config_section_get make_req("GET"), "runtime", state

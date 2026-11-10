@@ -7,8 +7,11 @@ do
   read_config, write_config = _obj_0.read_config, _obj_0.write_config
 end
 local config_schema = require("webui.schema.config_schema")
-local parse_form
-parse_form = require("webui.util").parse_form
+local esc, parse_form
+do
+  local _obj_0 = require("webui.util")
+  esc, parse_form = _obj_0.esc, _obj_0.parse_form
+end
 local unpack = unpack or table.unpack
 local render_field
 render_field = function(name, field_schema, current_val)
@@ -87,7 +90,7 @@ render_field = function(name, field_schema, current_val)
       H.input({
         type = "text",
         name = name,
-        value = tostring(val or "")
+        value = esc(tostring(val or ""))
       })
     })
   elseif t == "string_list" then
@@ -103,7 +106,7 @@ render_field = function(name, field_schema, current_val)
       }, " (une valeur par ligne)"),
       H.textarea({
         name = name
-      }, list_val)
+      }, esc(list_val))
     })
   else
     return H.div({

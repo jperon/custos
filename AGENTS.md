@@ -498,6 +498,12 @@ préservées telles quelles (`auth.admin_users`/`admin_allow_all_when_empty`,
 entier : effacer `admin_users` le fait retomber sur `{}` + `admin_allow_all_when_empty
 = true` au rechargement, rendant tout utilisateur authentifié admin.
 
+**Échappement HTML : `webui.util` est la source unique.** Le DSL `auth.html`
+n'échappe ni le texte ni les attributs ; `webui.util.esc` (`&`, `<`, `>`, `"`,
+`'`, nil → `""`) doit être appliqué à **toute** valeur de config ou de requête
+injectée dans du HTML (règles, champs de section, titres `page`), et
+`webui.util.parse_form` est le décodeur urlencodé commun des handlers.
+
 Les champs scalaires de `filter` (SafeSearch, YouTube Restricted, `allow_localnets`,
 `captive_portal`, `domainlists_dir`, `dest_whitelist`, `allowed_domains`…) sont
 édités par `handle_filter_general_get/post` : ils parcourent `config_schema.filter`
