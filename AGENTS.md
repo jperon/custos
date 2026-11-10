@@ -98,7 +98,7 @@ faire `require "ipparse.…"` sans changement.
 | Log DEBUG dans un hot-path | Garder avec `log.level_enabled "DEBUG"` au call-site : sans ça la closure (thunk) est allouée par paquet même quand le niveau est filtré |
 | `require` dans un hot-path | Mémoïser le module à la construction (factory/startup), jamais un `require` par paquet (≈150 ns/appel) |
 | Piège `a\match "x" or b` | Parenthéser : `(a\match "x") or b` — sans ça l'`or` est avalé par l'argument et le repli ne s'applique jamais |
-| Détecter l'interface bridge | `lib.bridge_detect` (sysfs `/sys/class/net/*/bridge`, busybox-compatible ; choix du bridge le plus peuplé). **Jamais** `ip … type bridge` (non supporté par busybox). `auth.bridge_ifname`/env `BRIDGE_IFNAME` priment ; `main.moon` warn `bridge_ifname_not_found` si la config force une interface absente |
+| Détecter l'interface bridge | `lib.bridge_detect` (sysfs `/sys/class/net/*/bridge`, busybox-compatible ; choix du bridge le plus peuplé). **Jamais** `ip … type bridge` (non supporté par busybox). `auth.bridge_ifname`/env `BRIDGE_IFNAME` priment (env validé par `valid_name`, valeur invalide ignorée avec warn → détection sysfs) ; `main.moon` warn `bridge_ifname_not_found` si la config force une interface absente |
 
 ---
 

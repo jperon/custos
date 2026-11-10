@@ -2,6 +2,7 @@
 -- Détecte les réseaux locaux attachés au bridge pour les ajouter à la whitelist.
 { :log_info, :log_warn } = require "log"
 { :ffi, :libc } = require "ffi_defs"
+{ :shquote } = require "lib.shquote"
 
 --- Récupère le nom du bridge.
 -- Tolère deux formes d'argument : la table `auth` directe (`.bridge_ifname`)
@@ -25,7 +26,7 @@ get_local_cidrs = (ifname) ->
   }
   
   -- IPv4 routes
-  res4 = io.popen "ip -4 route show dev #{ifname}"
+  res4 = io.popen "ip -4 route show dev #{shquote ifname}"
   if res4
     for line in res4\lines!
       -- On cherche les réseaux (ex: 10.35.1.0/24)
@@ -37,7 +38,7 @@ get_local_cidrs = (ifname) ->
     res4\close!
   
   -- IPv6 routes
-  res6 = io.popen "ip -6 route show dev #{ifname}"
+  res6 = io.popen "ip -6 route show dev #{shquote ifname}"
   if res6
     for line in res6\lines!
       cidr = line\match "([%x%a%:]+/[0-9]+)"
