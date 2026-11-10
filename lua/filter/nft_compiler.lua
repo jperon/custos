@@ -632,7 +632,7 @@ render_set = function(name, set_type, flags, elems, indent, include_elements)
   if flags and #flags > 0 then
     lines[#lines + 1] = tostring(indent) .. "  flags " .. tostring(flags)
   end
-  if include_elems and elems and #elems > 0 then
+  if include_elements and elems and #elems > 0 then
     lines[#lines + 1] = tostring(indent) .. "  elements = { " .. tostring(table.concat(elems, ", ")) .. " }"
   end
   lines[#lines + 1] = tostring(indent) .. "}"
@@ -1099,7 +1099,7 @@ render_sets_only = function(cfg, plan, indent, include_elements)
         end
       end
       if rule.set_ports then
-        for _, l in ipairs(render_set(rule.set_ports, "inet_service", "", rule.ports, indent, include_elements)) do
+        for _, l in ipairs(render_set(rule.set_ports, "inet_service", "interval", rule.ports, indent, include_elements)) do
           lines[#lines + 1] = l
         end
       end
@@ -1153,7 +1153,7 @@ render = function(plan, indent, include_elements)
       end
     end
     if rule.set_ports then
-      for _, l in ipairs(render_set(rule.set_ports, "inet_service", "", rule.ports, indent, include_elements)) do
+      for _, l in ipairs(render_set(rule.set_ports, "inet_service", "interval", rule.ports, indent, include_elements)) do
         lines[#lines + 1] = l
       end
     end

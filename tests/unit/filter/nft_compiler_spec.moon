@@ -138,3 +138,37 @@ describe "filter.nft_compiler", ->
     assert.is_not_nil out\find "chain cv_r_frag", 1, true
     assert.is_not_nil out\find "meta l4proto { tcp } th dport @cv_r_frag_dports", 1, true
     assert.is_not_nil out\find "counter drop", 1, true
+    -- Le set de ports doit contenir ses éléments (sinon th dport ne matche rien).
+    assert.is_not_nil out\find "elements = { 443 }", 1, true
+
+  it "émet flags interval et les éléments pour un set de ports avec plage", ->
+    cfg = {
+      nft: { ip_timeout: "2m" }
+      rules: {
+        {
+          rule_id: "ports_range"
+          actions: {"deny"}
+          network: { proto: {"tcp"}, ports: {"1000-2000", "443"} }
+        }
+      }
+    }
+    plan = compiler.compile cfg, (rule_mod.compile_rules cfg).rules_metadata
+    out = compiler.render plan
+    assert.is_not_nil out\find "set cv_r_ports_range_dports", 1, true
+    assert.is_not_nil out\find "flags interval", 1, true
+    assert.is_not_nil out\find "elements = { 1000-2000, 443 }", 1, true
+
+  it "include_elements=false n'émet aucune ligne elements", ->
+    cfg = {
+      nft: { ip_timeout: "2m" }
+      rules: {
+        {
+          rule_id: "noelem"
+          actions: {"deny"}
+          network: { proto: {"tcp"}, ports: {"443"} }
+        }
+      }
+    }
+    plan = compiler.compile cfg, (rule_mod.compile_rules cfg).rules_metadata
+    out = compiler.render plan, "  ", false
+    assert.is_nil out\find "elements = { 443 }", 1, true
