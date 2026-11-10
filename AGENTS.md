@@ -804,3 +804,13 @@ ajouté à `ssh_prefix` (supprime le bandeau sans toucher
 profondeur. Tests de régression dans `tests/unit/install_owrt_spec.moon`.
 Déploiement réel ensuite effectué avec succès (bridge détecté correctement
 `"br"`, service sain, aucune régression sur le trafic DNS en cours).
+
+## Corrections d'audit (2026-11-11)
+
+- **Politique SNI perdue après un rechargement SIGHUP.** `main.moon` construisait
+  `filter_data` à deux endroits, et la reconstruction post-SIGHUP omettait
+  `sni_cfg_cache` : `worker_tls` retombait alors sur les défauts (`strict-443`,
+  `enabled`, `both`, fail-closed) au lieu de la section `sni` de la config.
+  Correctif : construction unique extraite dans `lib.filter_data.build_filter_data`
+  (règles, auth, sni, décision), utilisée aux deux emplacements ; test
+  `tests/unit/lib/filter_data_spec.moon`.
