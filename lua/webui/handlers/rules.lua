@@ -801,26 +801,29 @@ handle_rules_reorder = function(req, state)
     return 500, { }, "Erreur config : " .. tostring(err)
   end
   local rules = (cfg.filter or { }).rules or { }
-  local order
+  local tokens
   do
     local _accum_0 = { }
     local _len_0 = 1
     for tok in (form.order or ""):gmatch("[^,]+") do
-      _accum_0[_len_0] = tonumber(tok)
+      _accum_0[_len_0] = tok
       _len_0 = _len_0 + 1
     end
-    order = _accum_0
+    tokens = _accum_0
   end
-  if not (#order == #rules) then
+  if not (#tokens == #rules) then
     return 400, { }, "Ordre invalide"
   end
+  local order = { }
   local seen = { }
-  for _index_0 = 1, #order do
-    local idx = order[_index_0]
-    if not (idx and idx >= 1 and idx <= #rules and not seen[idx]) then
+  for _index_0 = 1, #tokens do
+    local tok = tokens[_index_0]
+    local idx = tonumber(tok)
+    if not (idx and idx % 1 == 0 and idx >= 1 and idx <= #rules and not seen[idx]) then
       return 400, { }, "Ordre invalide"
     end
     seen[idx] = true
+    order[#order + 1] = idx
   end
   local new_rules
   do

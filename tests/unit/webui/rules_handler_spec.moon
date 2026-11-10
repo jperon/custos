@@ -407,6 +407,20 @@ describe "webui/handlers/rules", ->
       loaded = (read_config CFG_PATH)
       assert.equals "règle B", loaded.filter.rules[2].description
 
+    it "rejette un indice non entier (400, config non réécrite)", ->
+      status, _, _ = handle_rules_reorder make_req("POST", "order=1,1.5"), make_state!
+      assert.equals 400, status
+      loaded = (read_config CFG_PATH)
+      assert.equals "règle A", loaded.filter.rules[1].description
+      assert.equals "règle B", loaded.filter.rules[2].description
+
+    it "rejette un token non numérique (400, config non réécrite)", ->
+      status, _, _ = handle_rules_reorder make_req("POST", "order=1,x"), make_state!
+      assert.equals 400, status
+      loaded = (read_config CFG_PATH)
+      assert.equals "règle A", loaded.filter.rules[1].description
+      assert.equals "règle B", loaded.filter.rules[2].description
+
     it "retourne 500 si config_path invalide", ->
       state = { config_path: "/nonexistent/file.lua" }
       status, _, _ = handle_rules_reorder make_req("POST", "order=2,1"), state

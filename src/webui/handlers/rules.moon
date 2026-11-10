@@ -528,13 +528,17 @@ handle_rules_reorder = (req, state) ->
   cfg, err = read_config state.config_path
   return 500, {}, "Erreur config : #{err}" unless cfg
   rules = (cfg.filter or {}).rules or {}
-  order = [tonumber tok for tok in (form.order or "")\gmatch "[^,]+"]
-  -- Valide une permutation exacte de 1..#rules.
-  return 400, {}, "Ordre invalide" unless #order == #rules
+  tokens = [tok for tok in (form.order or "")\gmatch "[^,]+"]
+  -- Valide une permutation exacte de 1..#rules (entiers uniquement).
+  return 400, {}, "Ordre invalide" unless #tokens == #rules
+  order = {}
   seen = {}
-  for idx in *order
-    return 400, {}, "Ordre invalide" unless idx and idx >= 1 and idx <= #rules and not seen[idx]
+  for tok in *tokens
+    idx = tonumber tok
+    unless idx and idx % 1 == 0 and idx >= 1 and idx <= #rules and not seen[idx]
+      return 400, {}, "Ordre invalide"
     seen[idx] = true
+    order[#order + 1] = idx
   new_rules = [rules[idx] for idx in *order]
   cfg.filter.rules = new_rules
   ok, e = write_config cfg, state.config_path
