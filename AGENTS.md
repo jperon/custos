@@ -604,6 +604,10 @@ page filtrée (popup `_blank`). Le routeur (`webui/router.moon`) sépare désorm
 query string du chemin (`webui.util.parse_form`) et expose `req.query` aux handlers ; le
 matching de route reste sur le **chemin nu**.
 
+**Déconnexion admin.** Le lien « Déconnexion » de `dashboard.moon` pointe vers
+`/logout` (route GET du portail, `auth/handlers.moon`) : `/admin/logout` n'existe
+pas et retombait sur la redirection du routeur webui.
+
 **Listes — pas d'écrasement silencieux.** `handle_list_new_post` et le
 renommage de `handle_list_post` (`handlers/lists.moon`) répondent **409** si le
 fichier cible existe déjà (hors renommage vers le même nom) : la cible n'est

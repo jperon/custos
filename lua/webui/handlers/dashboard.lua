@@ -27,7 +27,7 @@ nav_html = function()
       href = "/admin/system/status"
     }, "Statut"),
     H.a({
-      href = "/admin/logout"
+      href = "/logout"
     }, "Déconnexion"),
     H.form({
       method = "POST",
