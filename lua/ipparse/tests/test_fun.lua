@@ -192,8 +192,8 @@ test("bidirectional pairs only sees real entries", function()
     a = 1,
     b = 2
   })
-  local _scrap_0 = t[1]
-  _scrap_0 = t[2]
+  local _ = t[1]
+  _ = t[2]
   local n = 0
   for k, v in pairs(t) do
     n = n + 1
