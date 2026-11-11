@@ -531,4 +531,5 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
 
 { :run,
   :skip_ipv6_ext_hdrs, :new_dns_tcp_stream,
-  :append_unique, :aggregate_decisions, :MAX_RESPONSE_RULE_IDS }
+  :append_unique, :aggregate_decisions, :MAX_RESPONSE_RULE_IDS,
+  :handle_question, :write_event, :list_from_condition_reason }
