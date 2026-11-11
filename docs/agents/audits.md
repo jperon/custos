@@ -2262,3 +2262,45 @@ cas nominal, `build_orphan_fields`), `tests/unit/log_spec.moon` (trois entrées
 divergence échouaient sur l'ancien first-wins (`refused=false`). `make test` :
 **2613 successes / 0 failures / 0 errors**. `make test-e2e` non lancé (chaîne
 de validation sur les VMs du homelab).
+
+### Couverture de tests (branche d-cov)
+
+- **Bruit du rapport.** `lua/moonscript/**` et `lua/moon/**` (compilateur
+  MoonScript tiers embarqué, sous-module) étaient comptés comme code du projet
+  « jamais touché ». Les deux préfixes rejoignent la liste d'exclusions partagée
+  par le hook et le rapport (`tests/helpers/coverage_filters.moon:14-21`).
+- **Nouveaux specs.** `tests/unit/nft_spec.moon` couvre `run_cmd` (succès ;
+  échec loggé `nft_cmd_failed` ; tampon d'erreur libnftables présent, absent,
+  vide ou en exception ; `transient=resource_busy` ; `opts.quiet`), `cleanup`
+  et l'échec de `nft_ctx_new` au chargement. `tests/unit/auth/nft_sessions_spec.moon`
+  couvre la commande exacte de chaque `add`/`del` (v4, v6, MAC), le dispatch
+  IPv4/IPv6, la propagation du code retour, `run_nft`, `cleanup` et l'échec de
+  `nft_ctx_new` au chargement (24 tests). Ces modules n'utilisent ni
+  `os.execute` ni `io.popen` : la double sémantique Lua 5.1/LUA52COMPAT ne s'y
+  applique pas. `lua/nft.lua` et `lua/auth/nft_sessions.lua` ne figurent plus
+  dans la liste des fichiers jamais touchés.
+- **Faux positifs du sampler (déjà testés en sous-processus).**
+  `lua/filter/convert.lua` est lancé par `tests/unit/filter/convert_spec.moon:17`
+  et `lua/filter/updater.lua` par `tests/unit/filter/updater_config_spec.moon:43` :
+  le hook in-process ne peut pas les voir. Les helpers purs de l'updater sont
+  déjà dans `src/filter/updater_io.moon` (testés). `lua/worker_tls.lua` est bien
+  exercé (quatre specs, 71 lignes échantillonnées au run propre) ;
+  `lua/lib/filter_data.lua` a `tests/unit/lib/filter_data_spec.moon` mais
+  l'échantillonnage ne l'a pas vu (biais connu du hook `count`).
+- **Non chargeables en test (exécution au chargement).** `lua/main.moon`
+  (supervision/fork, `supervise` ligne 214), `lua/auth/worker.moon`
+  (`run_auth_worker` et handler SIGHUP, lignes 29-60), `lua/bench/cli.moon`
+  (`run.main arg`, ligne 11) et `lua/filter/updater.moon` (`os.exit`, ligne 374).
+  Fonctions pures extractibles, listées sans être déplacées : `parse_args`
+  (`src/filter/updater.moon:74-92`) vers `filter/updater_io.moon` ;
+  `load_auth_cfg` (`src/main.moon:142-155`) et `load_doh_cfg`
+  (`src/main.moon:161-183`) vers un module de construction de config.
+- **Vérification.** Run propre de `make coverage-quick` : **2651 succès /
+  0 échec / 0 erreur, rc=0** (437 s), 151 fichiers `lua/` hors exclusions,
+  7 jamais touchés (`lua/auth/portal_client_js.lua` généré depuis
+  `src/auth/portal_client.js` par `tools/embed_js.lua`, `lua/auth/worker.lua`,
+  `lua/bench/cli.lua`, `lua/filter/convert.lua`, `lua/filter/updater.lua`,
+  `lua/lib/filter_data.lua`, `lua/main.lua`). Un premier run de contrôle avait
+  rendu un code non nul sans qu'aucun échec ne soit affiché ; non reproduit au
+  run propre (rc=0), donc la cible `coverage-quick` du `Makefile` (lignes
+  229-242) n'a pas été modifiée.
