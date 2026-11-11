@@ -321,18 +321,20 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
           for pkt in *forged_pkts
             eth_bytes = "#{new_eth {src: _bridge_mac, dst: mac_raw, protocol: ethertype, vlan: l2.vlan, data: pkt}}"
             sent_ok = bridge_raw.send(raw_fd, eth_bytes, _ifindex) and sent_ok
-          log_info -> {
-            action:   "dns_stolen"
-            domain:   q.name
-            qtype:    dns_types[q.qtype] or "TYPE#{q.qtype}"
-            proto:    l4.proto
-            frames:   #forged_pkts
-            src_ip:   src_ip
-            resolver: dst_ip
-            mac:      l2.mac_src
-            ancount:  (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0
-            sent:     sent_ok
-          }
+          -- Par requête DNS volée (anti-portail captif) : DEBUG, jamais INFO.
+          if level_enabled "DEBUG"
+            log_debug -> {
+              action:   "dns_stolen"
+              domain:   q.name
+              qtype:    dns_types[q.qtype] or "TYPE#{q.qtype}"
+              proto:    l4.proto
+              frames:   #forged_pkts
+              src_ip:   src_ip
+              resolver: dst_ip
+              mac:      l2.mac_src
+              ancount:  (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0
+              sent:     sent_ok
+            }
           return NF_DROP
         else
           log_warn -> {

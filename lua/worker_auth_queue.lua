@@ -116,12 +116,14 @@ handle_auth_packet = function(qh_ptr, nfad, pkt_id)
       }
     end)
   end
-  log_info(function()
-    return {
-      action = "processed",
-      pkt_id = pkt_id
-    }
-  end)
+  if level_enabled("DEBUG") then
+    log_debug(function()
+      return {
+        action = "processed",
+        pkt_id = pkt_id
+      }
+    end)
+  end
   return NF_ACCEPT
 end
 local run

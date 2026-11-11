@@ -23,7 +23,7 @@ local LOG_LEVEL_MAP = {
   DEBUG = 1,
   ALLOW = 3,
   BLOCK = 4,
-  TRACE = 6
+  TRACE = 0
 }
 local CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[config.runtime.log_level] or LOG_LEVEL_MAP.INFO
 local set_timing

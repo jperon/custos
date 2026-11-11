@@ -9,7 +9,7 @@ ffi.cdef [[
   pid_t getppid(void);
   int kill(pid_t pid, int sig);
 ]]
-{ :log_info, :log_warn } = require "log"
+{ :log_info, :log_warn, :log_debug, :level_enabled } = require "log"
 token = require "auth.token"
 { :add_session, :purge_expired, :load_sessions, :write_sessions, :with_sessions_lock, :session_alive } = require "auth.sessions"
 { :verify_password, :verify_response, :register_user, :set_record, :parse_record, :valid_username } = require "auth.credentials"
@@ -173,7 +173,9 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   }, success_page state.auth_cfg, now, is_admin
 
 handle_ping = (req, peer_ip, peer_mac, state) ->
-  log_info -> { action: "server_ping_received", peer_ip: peer_ip, peer_mac: peer_mac }
+  -- Une ligne par requête HTTP du portail : DEBUG, jamais INFO.
+  if level_enabled "DEBUG"
+    log_debug -> { action: "server_ping_received", peer_ip: peer_ip, peer_mac: peer_mac }
 
   cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
   p, tok_err, expired_p = token.verify cookie_val, state.token_key
@@ -222,7 +224,8 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
   refresh_nft state.nft_sess, peer_ip, mac, idle_timeout, user
 
   new_tok = token.generate "user", user, mac, token_expires, state.token_key
-  log_info -> { action: "server_ping_success", peer_mac: mac }
+  if level_enabled "DEBUG"
+    log_debug -> { action: "server_ping_success", peer_mac: mac }
   204, { ["Set-Cookie"]: make_session_cookie new_tok }, ""
 
 handle_logout = (req, peer_ip, peer_mac, state) ->
@@ -425,7 +428,9 @@ handle_password_change = (req, peer_ip, peer_mac, state) ->
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, password_changed_page!
 
 handle_request = (req, peer_ip, peer_mac, state) ->
-  log_info -> { action: "server_request_received", path: req.path, method: req.method, peer_ip: peer_ip, peer_mac: peer_mac }
+  -- Une ligne par requête HTTP du portail : DEBUG, jamais INFO.
+  if level_enabled "DEBUG"
+    log_debug -> { action: "server_request_received", path: req.path, method: req.method, peer_ip: peer_ip, peer_mac: peer_mac }
   if req.path == "/" and req.method == "GET"
     -- Si une session est déjà valide, afficher la page de succès (évite de
     -- redemander les identifiants après login et après un rafraîchissement).
@@ -441,7 +446,8 @@ handle_request = (req, peer_ip, peer_mac, state) ->
   elseif req.path == "/challenge" and req.method == "POST"
     return handle_challenge req, peer_ip, peer_mac, state
   elseif req.path == "/login" and req.method == "POST"
-    log_info -> { action: "server_routing_to_handle_login", path: req.path, method: req.method }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "server_routing_to_handle_login", path: req.path, method: req.method }
     return handle_login req, peer_ip, peer_mac, state
   elseif req.path == "/password" and req.method == "GET"
     cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME

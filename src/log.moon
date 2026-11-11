@@ -46,7 +46,7 @@ LOG_LEVEL_MAP = {
   DEBUG:  1
   ALLOW:  3  -- Par défaut, ALLOW est au niveau NOTICE
   BLOCK:  4  -- Par défaut, BLOCK est au niveau WARN
-  TRACE:  6
+  TRACE:  0  -- Plus verbeux que DEBUG (et non au-dessus d'ERROR)
 }
 
 -- Niveau de log configuré, converti en numérique

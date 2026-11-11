@@ -69,7 +69,7 @@ Contrôle le comportement global du service.
 
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
-| `log_level` | string | `"INFO"` | Niveau de log : `DEBUG`, `INFO`, `WARN`, `ERROR` |
+| `log_level` | string | `"INFO"` | Niveau de log, du plus verbeux au moins verbeux : `TRACE` (0), `DEBUG` (1), `INFO` (2), `WARN` (4), `ERROR` (5). `TRACE` est réservé au détail par paquet ; `DEBUG` au détail par connexion/requête. |
 | `benchmark` | bool | `false` | Active les mesures de performance dans les logs |
 | `gc_pause` | number | `110` | Réglage GC LuaJIT (`collectgarbage "setpause"`). Le GC se déclenche dès que le tas dépasse de `gc_pause`-100 % la taille post-collecte. Défaut LuaJIT : 200 (le tas peut doubler). 110 ⇒ collecte dès +10 %, plus économe en RAM. |
 | `gc_stepmul` | number | `400` | Réglage GC LuaJIT (`collectgarbage "setstepmul"`). Multiplicateur de la vitesse du GC incrémental ; une valeur plus haute compense le `gc_pause` bas. |

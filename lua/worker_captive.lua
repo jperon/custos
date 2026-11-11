@@ -23,10 +23,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_info, log_warn, log_error, set_action_prefix
+local log_info, log_warn, log_error, log_debug, set_action_prefix, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_error, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.set_action_prefix
+  log_info, log_warn, log_error, log_debug, set_action_prefix, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix, _obj_0.level_enabled
 end
 local detect_captive_ips
 detect_captive_ips = require("captive_ips").detect
@@ -245,16 +245,18 @@ handle_syn = function(qh_ptr, nfad, pkt_id)
   end
   local ok, err = pcall(function()
     local f1, f2, f3 = build_response_frames(eth, ip, tcp, url)
-    log_info(function()
-      return {
-        action = "sending_frames",
-        queue = 2,
-        ip = client_ip_str,
-        frames = 3,
-        url = url,
-        user = user
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "sending_frames",
+          queue = 2,
+          ip = client_ip_str,
+          frames = 3,
+          url = url,
+          user = user
+        }
+      end)
+    end
     send(f1)
     send(f2)
     return send(f3)

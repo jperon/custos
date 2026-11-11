@@ -3,10 +3,10 @@ ffi.cdef([[  typedef int pid_t;
   pid_t getppid(void);
   int kill(pid_t pid, int sig);
 ]])
-local log_info, log_warn
+local log_info, log_warn, log_debug, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
+  log_info, log_warn, log_debug, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.level_enabled
 end
 local token = require("auth.token")
 local add_session, purge_expired, load_sessions, write_sessions, with_sessions_lock, session_alive
@@ -266,13 +266,15 @@ handle_login = function(req, peer_ip, peer_mac, state)
 end
 local handle_ping
 handle_ping = function(req, peer_ip, peer_mac, state)
-  log_info(function()
-    return {
-      action = "server_ping_received",
-      peer_ip = peer_ip,
-      peer_mac = peer_mac
-    }
-  end)
+  if level_enabled("DEBUG") then
+    log_debug(function()
+      return {
+        action = "server_ping_received",
+        peer_ip = peer_ip,
+        peer_mac = peer_mac
+      }
+    end)
+  end
   local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)
   local p, tok_err, expired_p = token.verify(cookie_val, state.token_key)
   if not (p) then
@@ -328,12 +330,14 @@ handle_ping = function(req, peer_ip, peer_mac, state)
   end
   refresh_nft(state.nft_sess, peer_ip, mac, idle_timeout, user)
   local new_tok = token.generate("user", user, mac, token_expires, state.token_key)
-  log_info(function()
-    return {
-      action = "server_ping_success",
-      peer_mac = mac
-    }
-  end)
+  if level_enabled("DEBUG") then
+    log_debug(function()
+      return {
+        action = "server_ping_success",
+        peer_mac = mac
+      }
+    end)
+  end
   return 204, {
     ["Set-Cookie"] = make_session_cookie(new_tok)
   }, ""
@@ -616,15 +620,17 @@ handle_password_change = function(req, peer_ip, peer_mac, state)
 end
 local handle_request
 handle_request = function(req, peer_ip, peer_mac, state)
-  log_info(function()
-    return {
-      action = "server_request_received",
-      path = req.path,
-      method = req.method,
-      peer_ip = peer_ip,
-      peer_mac = peer_mac
-    }
-  end)
+  if level_enabled("DEBUG") then
+    log_debug(function()
+      return {
+        action = "server_request_received",
+        path = req.path,
+        method = req.method,
+        peer_ip = peer_ip,
+        peer_mac = peer_mac
+      }
+    end)
+  end
   if req.path == "/" and req.method == "GET" then
     local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)
     local p = token.verify(cookie_val, state.token_key)
@@ -645,13 +651,15 @@ handle_request = function(req, peer_ip, peer_mac, state)
   elseif req.path == "/challenge" and req.method == "POST" then
     return handle_challenge(req, peer_ip, peer_mac, state)
   elseif req.path == "/login" and req.method == "POST" then
-    log_info(function()
-      return {
-        action = "server_routing_to_handle_login",
-        path = req.path,
-        method = req.method
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "server_routing_to_handle_login",
+          path = req.path,
+          method = req.method
+        }
+      end)
+    end
     return handle_login(req, peer_ip, peer_mac, state)
   elseif req.path == "/password" and req.method == "GET" then
     local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)

@@ -1,7 +1,7 @@
 { :ffi, :libc } = require "ffi_defs"
 { :run_cmd } = require "nft"
 { :cmd_for, :sanitize_timeout, :ACK_SIZE } = require "nft_queue"
-{ :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_debug, :set_action_prefix, :level_enabled } = require "log"
 { :split_fields, :from_hex, :is_ipv4_str, :is_ipv6_str, :is_valid_mac } = require "lib.ipc_hex"
 
 BUF_SIZE  = 8192
@@ -102,8 +102,9 @@ flush_batch = (pending, ack_queue, ack_wfds) ->
   if #lines > 0
     cmd = table.concat lines, "\n"
     ok, err = run_cmd cmd, { quiet: true }
-    if rule11_count > 0
-      log_info -> { action: "nft_batch_rule", rule_id: "rule_11", count: rule11_count, ok: ok, items: table.concat(rule11_items, " ") }
+    if rule11_count > 0 and level_enabled "DEBUG"
+      -- Une ligne par lot nft (donc potentiellement par requête) : DEBUG.
+      log_debug -> { action: "nft_batch_rule", rule_id: "rule_11", count: rule11_count, ok: ok, items: table.concat(rule11_items, " ") }
     if ok
       log_debug -> { action: "batch_ok", count: #lines, acks: #ack_queue }
     else

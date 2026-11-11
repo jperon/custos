@@ -346,20 +346,22 @@ handle_question = function(qh_ptr, nfad, pkt_id)
             }))
             sent_ok = bridge_raw.send(raw_fd, eth_bytes, _ifindex) and sent_ok
           end
-          log_info(function()
-            return {
-              action = "dns_stolen",
-              domain = q.name,
-              qtype = dns_types[q.qtype] or "TYPE" .. tostring(q.qtype),
-              proto = l4.proto,
-              frames = #forged_pkts,
-              src_ip = src_ip,
-              resolver = dst_ip,
-              mac = l2.mac_src,
-              ancount = (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0,
-              sent = sent_ok
-            }
-          end)
+          if level_enabled("DEBUG") then
+            log_debug(function()
+              return {
+                action = "dns_stolen",
+                domain = q.name,
+                qtype = dns_types[q.qtype] or "TYPE" .. tostring(q.qtype),
+                proto = l4.proto,
+                frames = #forged_pkts,
+                src_ip = src_ip,
+                resolver = dst_ip,
+                mac = l2.mac_src,
+                ancount = (captive_ip4 and q.qtype == 1 or captive_ip6 and q.qtype == 28) and 1 or 0,
+                sent = sent_ok
+              }
+            end)
+          end
           return NF_DROP
         else
           log_warn(function()

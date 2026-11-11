@@ -19,7 +19,7 @@ token = require "auth.token"
 { :load_or_generate_sni, :load_static, :load_or_generate_static } = require "auth.cert"
 { :sanitize_hostname } = require "auth.cert_name"
 { :extract_client_sni } = require "auth.sni_peek"
-{ :log_info, :log_warn, :log_error, :log_debug } = require "log"
+{ :log_info, :log_warn, :log_error, :log_debug, :level_enabled } = require "log"
 config = require "config"
 { :read_request, :send_response, :apply_io_timeouts } = require "lib.http"
 { :get_mac } = require "mac_learner_ipc"
@@ -258,7 +258,9 @@ dispatch_connection = (client, peer_ip, state, fork_fn=fork_child) ->
 
   if fork_ok
     log_debug -> { action: "server_fork_child_done", pid: pid }
-    log_info -> { action: "server_conn_started", pid: pid, peer: peer_ip }
+    -- Par connexion TCP : DEBUG, jamais INFO (grille de niveaux).
+    if level_enabled "DEBUG"
+      log_debug -> { action: "server_conn_started", pid: pid, peer: peer_ip }
   else
     log_error -> { action: "server_fork_child_failed", peer: peer_ip, err: tostring pid }
 

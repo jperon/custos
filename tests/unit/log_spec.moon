@@ -34,6 +34,10 @@ describe "log", ->
   it "niveau inconnu (0) → false", ->
     assert.is_false log.level_enabled "PAS_UN_NIVEAU"
 
+  it "TRACE (0) est plus verbeux que DEBUG : filtré au seuil INFO", ->
+    assert.are.equal 0, log.get_log_level_num "TRACE"
+    assert.is_false log.level_enabled "TRACE"
+
   -- rl_fingerprint : construction de la clé de rate-limiting (concat directe).
   it "rl_fingerprint concatène action_key + champs discriminants", ->
     fields = { mac_src: "aa:bb", qname: "x.example", qtype: "A" }
@@ -131,6 +135,17 @@ describe "log", ->
       f2 = { path: "/a", rule_id: "r1", action: "fp_ordre" }
       assert.are.equal (log.rl_fingerprint "INFO", f1, log.RL_IDENTITY_KEYS),
                         (log.rl_fingerprint "INFO", f2, log.RL_IDENTITY_KEYS)
+
+    it "doh_handshake_failed reste WARN, limité par IP cliente sur 60 s", ->
+      log.set_action_prefix "doh_"
+      f1 = { action: "doh_handshake_failed", peer: "10.0.0.2", attempts: 1, err: "timeout" }
+      f2 = { action: "doh_handshake_failed", peer: "10.0.0.2", attempts: 9, err: "timeout" }
+      autre = { action: "doh_handshake_failed", peer: "10.0.0.3", attempts: 1, err: "timeout" }
+      assert.are.equal 0,  log.check_rl "WARN", f1, 7300
+      assert.are.equal -1, log.check_rl "WARN", f2, 7301
+      assert.are.equal 0,  log.check_rl "WARN", autre, 7302
+      assert.are.equal 1,  log.check_rl "WARN", f2, 7360
+      log.set_action_prefix ""
 
     it "action préfixée par le worker → règle spécifique (strip du préfixe)", ->
       log.set_action_prefix "response_"

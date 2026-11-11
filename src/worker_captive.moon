@@ -21,7 +21,7 @@ parse: parse_ip, proto: l3_proto, :ip2s = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
 { :get_l2 } = require "nfq/ethernet"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_info, :log_warn, :log_error, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix, :level_enabled } = require "log"
 { detect: detect_captive_ips } = require "captive_ips"
 bridge_raw = require "bridge_raw"
 { :flags } = require "ipparse.l4.tcp"
@@ -247,7 +247,10 @@ handle_syn = (qh_ptr, nfad, pkt_id) ->
 
   ok, err = pcall ->
     f1, f2, f3 = build_response_frames eth, ip, tcp, url
-    log_info -> { action: "sending_frames", queue: 2, ip: client_ip_str, frames: 3, url: url, user: user }
+    -- Détail d'une redirection (par SYN) : DEBUG. L'événement `redirect`
+    -- lui-même reste INFO (changement d'état visible du client).
+    if level_enabled "DEBUG"
+      log_debug -> { action: "sending_frames", queue: 2, ip: client_ip_str, frames: 3, url: url, user: user }
     send f1
     send f2
     send f3
