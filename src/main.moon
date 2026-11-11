@@ -28,7 +28,7 @@
 --   • Sur réception : SIGHUP propagé à question et AUTH.
 
 { :ffi, :libc } = require "ffi_defs"
-{ :log_info, :log_warn } = require "log"
+{ :log_info, :log_warn, :set_timing } = require "log"
 { :probe_ipv6 } = require "doh.upstream"
 {
   :SIGTERM, :SIGHUP, :WNOHANG
@@ -44,6 +44,11 @@ set_process_name "custos"
 
 bit = require "bit"
 config = require "config"
+-- Instrumentation du coût des écritures de journal (benchmark) : décidée ici,
+-- une fois la config lue et AVANT tout fork, pour que chaque worker hérite du
+-- drapeau par COW. Hors benchmark, `log.moon` n'ajoute aucun appel d'horloge
+-- autour des `write` (cf. log.set_timing).
+set_timing (config.runtime and config.runtime.benchmark) and true or false
 filter = require "filter"
 pidfile = require "lib.pidfile"
 metrics = require "metrics"

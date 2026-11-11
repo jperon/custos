@@ -6,7 +6,12 @@ end
 local config = require("config")
 local bit = require("bit")
 local STDOUT_FILENO = 1
+local CLOCK_MONOTONIC = 1
 local ts = ffi.new("timespec_t")
+local _timing_enabled = false
+local _last_write_us = 0
+local _timing_start = ffi.new("timespec_t")
+local _timing_end = ffi.new("timespec_t")
 local LOG_LEVEL_MAP = {
   EMERG = 8,
   ALERT = 7,
@@ -21,6 +26,20 @@ local LOG_LEVEL_MAP = {
   TRACE = 6
 }
 local CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[config.runtime.log_level] or LOG_LEVEL_MAP.INFO
+local set_timing
+set_timing = function(enabled)
+  _timing_enabled = enabled and true or false
+  return nil
+end
+local get_last_write_us
+get_last_write_us = function()
+  return _last_write_us
+end
+local monotonic_us
+monotonic_us = function()
+  libc.clock_gettime(CLOCK_MONOTONIC, _timing_start)
+  return tonumber(_timing_start.tv_sec) * 1000000 + math.floor(tonumber(_timing_start.tv_nsec) / 1000)
+end
 local get_log_level_num
 get_log_level_num = function(level)
   return LOG_LEVEL_MAP[level] or 0
@@ -568,7 +587,15 @@ write_log = function(level, thunk)
     return 
   end
   local line = format_line(epoch, pid, level, fields, suppressed)
-  return libc.write(STDOUT_FILENO, line, #line)
+  if _timing_enabled then
+    local t0 = monotonic_us()
+    libc.write(STDOUT_FILENO, line, #line)
+    libc.clock_gettime(CLOCK_MONOTONIC, _timing_end)
+    local t1 = tonumber(_timing_end.tv_sec) * 1000000 + math.floor(tonumber(_timing_end.tv_nsec) / 1000)
+    _last_write_us = t1 - t0
+  else
+    return libc.write(STDOUT_FILENO, line, #line)
+  end
 end
 local log_allow
 log_allow = function(thunk)
@@ -634,5 +661,7 @@ return {
   _rl_never_limited = _rl_never_limited,
   _rl_force_fallback = _rl_force_fallback,
   _rl_slot_get = _rl_slot_get,
-  _rl_slot_set = _rl_slot_set
+  _rl_slot_set = _rl_slot_set,
+  set_timing = set_timing,
+  get_last_write_us = get_last_write_us
 }

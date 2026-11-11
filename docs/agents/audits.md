@@ -2054,3 +2054,61 @@ compte rendu de la tâche (make all / make check / make test dans
 make test` = **2551 successes / 0 failures / 0 errors / 0 pending**
 (`tmp/test.log`) ; `make test-js` = 12 pass / 0 fail. `make test-e2e` non
 lancé (hors périmètre : aucun changement runtime réseau/nftables).
+
+### Instrumentation des attentes µs du worker responses (branche d-benchretry)
+
+Objectif : rendre mesurables deux postes invisibles susceptibles de **bloquer**
+`resp-q4` (saturé à ~52 % CPU avec pics à 100 % et pertes à 400 req/s, alors
+qu'un worker non bloqué ne perd pas à ce niveau de CPU) :
+
+- `nft_queue.wait_ack` (budget `nft.ack_timeout_ms`, défaut 150 ms) ;
+- le `libc.write` de `log.moon` vers logd.
+
+**Sites d'attente ACK trouvés** (`grep wait_ack`) : `finalize_a` de
+`src/worker_responses.moon`, branche override `redirect` et chemin normal
+`pass`. Tous deux sont désormais encadrés par `measured_wait_ack`, qui
+n'ajoute des appels `clock_gettime(CLOCK_MONOTONIC)` **que si
+`runtime.benchmark` est actif**. Les autres appelants (`doh/query.moon`,
+`worker_sip.moon`) ne sont pas instrumentés (hors périmètre resp-q4).
+
+**Analyse statique de la capacité de blocage** :
+- `wait_ack` est une boucle synchrone `poll(5 ms)` jusqu'à `deadline`
+  (`ACK_TIMEOUT_MS`), dans le seul thread du worker : pendant l'attente, aucun
+  paquet NFQUEUE n'est traité (seul le pipe IPC est drainé via `on_wait`). Si
+  `worker_nft` prend du retard ou perd un ACK, le worker s'arrête jusqu'à
+  150 ms → la file noyau monte et déborde. L'hypothèse « il bloque » est donc
+  plausible sur ce poste.
+- `log.moon` écrit sur `STDOUT_FILENO` avec `libc.write` **sans O_NONBLOCK**
+  (aucun `fcntl` sur stdout dans `main.moon`/`lib/process.moon`). Sous procd,
+  stdout est un pipe vers logd : si logd ne vide pas le pipe assez vite, le
+  `write` bloque le worker de la même façon. Coût jusqu'ici invisible, car
+  `log_ms` est pris **avant** la construction des champs et le `write`.
+
+**Champs ajoutés** (`build_benchmark_fields`, ligne
+`action=response_dns_benchmark`) :
+- `ack_wait_us` : durée du dernier `wait_ack` terminé (µs entières). L'ACK
+  étant postérieur au log et à `set_verdict`, la valeur est reportée sur la
+  ligne **suivante** (typiquement la transaction précédente) et consommée une
+  fois (`take_last_ack_wait_us`) ; `0` si aucun `wait_ack` entre deux lignes.
+- `log_write_us` : durée du dernier `libc.write` de journal terminé
+  (`log.get_last_write_us`), donc pas sa propre durée ; `0` si
+  l'instrumentation est off.
+
+Les deux sont des mesures **parallèles, non additives** : elles n'entrent dans
+aucune somme de `q_to_response_ms` (invariant à résidu nul préservé).
+L'activation de la mesure de log passe par `log.set_timing`, appelé une fois
+dans `main.moon` après lecture de la config et avant les forks (pas de
+`require "config"` supplémentaire dans `log.moon`, pas d'horloge en mode
+nominal).
+
+**Tests** : `tests/unit/log_timing_spec.moon` (4 cas : coût nul sans
+instrumentation — un seul `clock_gettime`, celui de l'epoch —, durée µs
+déterministe, valeur figée après désactivation) ; 3 cas dans
+`tests/unit/worker_responses_finalize_spec.moon` (`wait_ack` réellement dormi
+2 ms → mesure ≥ 1000 µs et < 150000 µs, consommation unique, `0` sans attente,
+non-mesure en mode nominal) ; 1 cas dans `worker_responses_spec.moon` (champs
+présents, µs, `0` par défaut). Preuve d'échec sans correctif : en restaurant
+`lua/log.lua` et `lua/worker_responses.lua` de `HEAD`, les nouveaux cas
+échouent (`set_timing`/`take_last_ack_wait_us` nil). `make test` :
+**2535 → 2543 successes**, 0 failure, 0 error (+8 cas) ; `make check` OK
+(155 fichiers). `make test-e2e` non lancé (autres agents sur la machine).

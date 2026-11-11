@@ -10,6 +10,10 @@ sp  = require("ipparse.lib.pack_compat").pack
 dns_mod = require "ipparse.l7.dns"
 packet_utils = require "packet_utils"
 
+-- cdef minimal pour mesurer l'attente ACK (ffi_defs est stubbé sur ffi.C).
+pcall ->
+  ffi.cdef "int clock_gettime(int clk_id, timespec_t *tp);"
+
 QTYPE_A = dns_mod.types.A
 QCLASS_IN = dns_mod.classes.IN
 QNAME = "\7example\3com\0"
@@ -48,6 +52,11 @@ describe "worker_responses.finalize_a", ->
     injected = {}
     state = { has_cname: false }
 
+    -- Benchmark actif : exerce les mesures µs (attente ACK). Sans effet sur
+    -- les autres cas, qui n'appellent pas wait_ack (last_seq nil).
+    config = require "config"
+    config.runtime = { benchmark: true }
+
     package.loaded["ffi_defs"] = {
       :ffi
       libc: ffi.C
@@ -74,8 +83,11 @@ describe "worker_responses.finalize_a", ->
     package.loaded["nft_queue"] = {
       add_ip4: (-> nil), add_ip6: (-> nil)
       add_mac4: (-> nil), add_mac6: (-> nil)
-      get_last_seq: -> nil
-      wait_ack: -> nil
+      get_last_seq: -> state.last_seq
+      wait_ack: (seq, corr, on_wait) ->
+        state.wait_calls = (state.wait_calls or 0) + 1
+        state.wait_fn seq, corr if state.wait_fn
+        true
       drain_ack: -> nil
     }
     package.loaded["filter"] = {
@@ -195,3 +207,36 @@ describe "worker_responses.finalize_a", ->
     assert.equals 1, #verdicts
     assert.equals 0, verdicts[1].verdict
     assert.is_nil verdicts[1].payload
+
+  -- ── Mesure µs de l'attente d'ACK (benchmark) ─────────────────
+  it "mesure wait_ack en microsecondes et la remet à zéro après prise", ->
+    state.last_seq = 7
+    state.wait_fn = ->
+      sreq = ffi.new "timespec_t[1]"
+      sreq[0].tv_sec = 0
+      sreq[0].tv_nsec = 2000000   -- 2 ms
+      ffi.C.nanosleep sreq, nil
+    m.finalize_a ctx, nil
+    assert.equals 1, state.wait_calls
+    us = m.take_last_ack_wait_us!
+    assert.equals "number", type us
+    assert.is_true us >= 1000, "attente de 2 ms attendue, mesuré #{us} µs"
+    assert.is_true us < 150000, "mesure aberrante : #{us} µs"
+    -- Une mesure n'est reportée qu'une fois (consommée par la ligne suivante).
+    assert.equals 0, m.take_last_ack_wait_us!
+
+  it "take_last_ack_wait_us vaut 0 quand aucun wait_ack n'a eu lieu", ->
+    state.last_seq = nil
+    m.finalize_a ctx, nil
+    assert.is_nil state.wait_calls
+    assert.equals 0, m.take_last_ack_wait_us!
+
+  it "mode nominal (benchmark off) : wait_ack appelé sans mesure (0)", ->
+    config = require "config"
+    config.runtime = { benchmark: false }
+    package.loaded["worker_responses"] = nil
+    m_off = require "worker_responses"
+    state.last_seq = 7
+    m_off.finalize_a ctx, nil
+    assert.equals 1, state.wait_calls
+    assert.equals 0, m_off.take_last_ack_wait_us!

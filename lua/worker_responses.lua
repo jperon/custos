@@ -40,10 +40,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix, level_enabled
+local log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix, level_enabled, get_last_write_us
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_allow, _obj_0.log_block, _obj_0.now, _obj_0.set_action_prefix, _obj_0.level_enabled
+  log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix, level_enabled, get_last_write_us = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_allow, _obj_0.log_block, _obj_0.now, _obj_0.set_action_prefix, _obj_0.level_enabled, _obj_0.get_last_write_us
 end
 local tsv_field
 tsv_field = require("lib.tsv").tsv_field
@@ -230,6 +230,28 @@ current_benchmark_ms = function()
   libc.clock_gettime(CLOCK_MONOTONIC, _benchmark_ts)
   return tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
 end
+local current_benchmark_us
+current_benchmark_us = function()
+  libc.clock_gettime(CLOCK_MONOTONIC, _benchmark_ts)
+  return tonumber(_benchmark_ts[0].tv_sec) * 1000000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000)
+end
+local _last_ack_wait_us = 0
+local take_last_ack_wait_us
+take_last_ack_wait_us = function()
+  local v = _last_ack_wait_us
+  _last_ack_wait_us = 0
+  return v
+end
+local measured_wait_ack
+measured_wait_ack = function(pending_seq, corr, on_wait)
+  if not (runtime_cfg.benchmark) then
+    return wait_ack(pending_seq, corr, on_wait)
+  end
+  local t0 = current_benchmark_us()
+  local ok = wait_ack(pending_seq, corr, on_wait)
+  _last_ack_wait_us = current_benchmark_us() - t0
+  return ok
+end
 local bench_delta
 bench_delta = function(finish, start)
   if not (finish and start) then
@@ -268,8 +290,11 @@ build_benchmark_fields = function(entry, info, deltas)
     parse_ms = deltas.parse_ms,
     match_ms = deltas.match_ms,
     log_ms = deltas.log_ms,
-    retry_wait_ms = info.retry_wait_ms,
-    retry_attempts = info.retry_attempts
+    ack_wait_us = deltas.ack_wait_us or 0,
+    log_write_us = deltas.log_write_us or 0,
+    ipc_retry_wait_ms = info.ipc_retry_wait_ms,
+    ipc_retry_attempts = info.ipc_retry_attempts,
+    upstream_retries = entry.upstream_retries or 0
   }
   return fields, (entry.refused and "block" or "allow")
 end
@@ -485,7 +510,7 @@ finalize_a = function(ctx, override)
             inject_answers(redirect_answers)
             local pending_seq = get_last_seq()
             if pending_seq then
-              wait_ack(pending_seq, ack_corr, (function()
+              measured_wait_ack(pending_seq, ack_corr, (function()
                 return drain_pipe(pipe_rfd, now, drain_on_msg)
               end))
             end
@@ -647,7 +672,7 @@ finalize_a = function(ctx, override)
   if not dnsonly and records_to_add > 0 then
     local pending_seq = get_last_seq()
     if pending_seq then
-      wait_ack(pending_seq, ack_corr, (function()
+      measured_wait_ack(pending_seq, ack_corr, (function()
         return drain_pipe(pipe_rfd, now, drain_on_msg)
       end))
     end
@@ -851,10 +876,10 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end
   end
   local entry = get_pending_entry(txid, dst_ip, client_port, resolver_ip, now)
-  local retry_attempts = 0
-  local retry_wait_ms = 0
+  local ipc_retry_attempts = 0
+  local ipc_retry_wait_ms = 0
   if not (entry) then
-    entry, retry_attempts, retry_wait_ms = retry_pending_match(txid, dst_ip, client_port, resolver_ip)
+    entry, ipc_retry_attempts, ipc_retry_wait_ms = retry_pending_match(txid, dst_ip, client_port, resolver_ip)
     if entry then
       log_info(function()
         return {
@@ -862,8 +887,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           src_ip = src_ip,
           dst_ip = dst_ip,
           txid = txid_hex,
-          retry_attempts = retry_attempts,
-          retry_wait_ms = retry_wait_ms,
+          ipc_retry_attempts = ipc_retry_attempts,
+          ipc_retry_wait_ms = ipc_retry_wait_ms,
           user = user
         }
       end)
@@ -872,7 +897,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         log_debug(function()
           return {
             action = (function()
-              if retry_attempts > 0 then
+              if ipc_retry_attempts > 0 then
                 return "response_no_matching_question_after_retry"
               else
                 return "response_no_matching_question"
@@ -884,8 +909,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
             txid = txid_hex,
             rcode = dns_msg.header.rcode,
             client_mac = client_mac,
-            retry_attempts = retry_attempts,
-            retry_wait_ms = retry_wait_ms,
+            ipc_retry_attempts = ipc_retry_attempts,
+            ipc_retry_wait_ms = ipc_retry_wait_ms,
             user = user
           }
         end)
@@ -934,8 +959,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         user = user,
         qname = q1 and q1.name or "-",
         qtype = q1 and (QTYPE[q1.qtype] or "TYPE" .. tostring(q1.qtype)) or "-",
-        retry_wait_ms = retry_wait_ms,
-        retry_attempts = retry_attempts
+        ipc_retry_wait_ms = ipc_retry_wait_ms,
+        ipc_retry_attempts = ipc_retry_attempts
       }
       local question_proc_ms = entry.question_proc_ms or 0
       local q_exit_ms = entry.benchmark_ms + question_proc_ms
@@ -947,7 +972,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         payload_ms = bench_delta(bench_after_payload_ms, bench_after_drain_ms),
         parse_ms = bench_delta(bench_after_parse_ms, bench_after_payload_ms),
         match_ms = bench_delta(bench_after_match_ms, bench_after_parse_ms),
-        log_ms = bench_delta(bench_log_ms, bench_after_match_ms)
+        log_ms = bench_delta(bench_log_ms, bench_after_match_ms),
+        ack_wait_us = take_last_ack_wait_us(),
+        log_write_us = get_last_write_us()
       }
       local bench_fields, verdict = build_benchmark_fields(entry, info, deltas)
       if verdict == "block" then
@@ -1158,5 +1185,7 @@ return {
   update_mac_clients = update_mac_clients,
   purge_mac_clients = purge_mac_clients,
   ip_to_mac = ip_to_mac,
+  current_benchmark_us = current_benchmark_us,
+  take_last_ack_wait_us = take_last_ack_wait_us,
   finalize_a = finalize_a
 }

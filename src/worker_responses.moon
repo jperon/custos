@@ -32,7 +32,7 @@ clients_cfg = config.clients or {}
 { :drain_pipe, :is_pending, :get_pending_entry, :consume, :purge_pending } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix, :level_enabled } = require "log"
+{ :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix, :level_enabled, :get_last_write_us } = require "log"
 { :tsv_field } = require "lib.tsv"
 { :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :strip_https_rr, :strip_dns_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
 strip_codec = require "strip_codec"
@@ -238,6 +238,46 @@ current_benchmark_ms = ->
   libc.clock_gettime CLOCK_MONOTONIC, _benchmark_ts
   tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
 
+--- Retourne les microsecondes depuis boot (CLOCK_MONOTONIC).
+-- Résolution µs entière : les jalons en ms (plancher 1 ms) masqueraient une
+-- attente d'ACK habituellement sous la milliseconde ; c'est la queue de
+-- distribution qui nous intéresse. Utilisée uniquement en mode benchmark.
+-- @treturn number
+current_benchmark_us = ->
+  libc.clock_gettime CLOCK_MONOTONIC, _benchmark_ts
+  tonumber(_benchmark_ts[0].tv_sec) * 1000000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000)
+
+-- Dernière attente d'ACK mesurée (µs) sur ce worker, à consommer par la
+-- prochaine ligne benchmark. L'ACK est posé APRÈS l'émission du log de la
+-- transaction : la valeur ne peut donc pas figurer dans la ligne de LA
+-- transaction qui attend. Elle est reportée sur la ligne suivante (cf.
+-- take_last_ack_wait_us) et remise à zéro une fois consommée.
+_last_ack_wait_us = 0
+
+--- Rend la dernière attente d'ACK mesurée (µs) et remet le compteur à zéro.
+-- @treturn number durée en µs (0 si aucun wait_ack depuis la dernière prise)
+take_last_ack_wait_us = ->
+  v = _last_ack_wait_us
+  _last_ack_wait_us = 0
+  v
+
+--- Exécute `wait_ack` en mesurant sa durée en microsecondes (mode benchmark).
+-- Hors benchmark, appelle directement `wait_ack` : aucun appel d'horloge
+-- supplémentaire sur le chemin nominal. La durée mesurée est mémorisée pour
+-- la ligne benchmark SUIVANTE (l'ACK de la transaction courante est postérieur
+-- à son propre log) : mesure parallèle, non additive.
+-- @tparam number pending_seq Seq à acquitter (cf. nft_queue.wait_ack)
+-- @tparam string corr        Corrélateur d'ACK
+-- @tparam function|nil on_wait Callback de drain intercalé
+-- @treturn boolean true si l'ACK attendu est arrivé dans le budget
+measured_wait_ack = (pending_seq, corr, on_wait) ->
+  unless runtime_cfg.benchmark
+    return wait_ack pending_seq, corr, on_wait
+  t0 = current_benchmark_us!
+  ok = wait_ack pending_seq, corr, on_wait
+  _last_ack_wait_us = current_benchmark_us! - t0
+  ok
+
 --- Différence positive entre deux jalons benchmark en millisecondes.
 -- @tparam number|nil finish Jalons de fin
 -- @tparam number|nil start  Jalons de début
@@ -250,13 +290,30 @@ bench_delta = (finish, start) ->
 --- Construit les champs de la ligne benchmark ALLOW/BLOCK (fonction pure).
 -- Réunit le verdict (depuis `entry`), les métadonnées de la requête (`info`,
 -- extraites de la réponse DNS) et les jalons de latence (`deltas`).
--- @tparam table entry  Transaction IPC (refused, reason, rule_id, dnsonly)
+-- @tparam table entry  Transaction IPC (refused, reason, rule_id, dnsonly,
+--                      upstream_retries)
 -- @tparam table info   Métadonnées : client_mac, vlan, client_ip, resolver_ip,
---                      client_port, txid, af, user, qname, qtype, retry_*
+--                      client_port, txid, af, user, qname, qtype, ipc_retry_*
 -- @tparam table deltas Jalons : delta_ms (→ q_to_response_ms), question_proc_ms,
---                      response_entry_ms, drain_ms, payload_ms, parse_ms, match_ms, log_ms
+--                      response_entry_ms, drain_ms, payload_ms, parse_ms, match_ms, log_ms,
+--                      ack_wait_us, log_write_us
 -- @treturn table  Champs prêts pour log_allow/log_block
 -- @treturn string Verdict : "block" si entry.refused, sinon "allow"
+-- ATTENTION — `ack_wait_us` est une mesure PARALLÈLE, NON ADDITIVE :
+-- `wait_ack` intervient APRÈS l'émission de cette ligne et APRÈS
+-- `set_verdict`, donc hors de la chaîne
+-- q_to_response_ms = question_proc_ms + response_entry_ms + drain_ms +
+-- payload_ms + parse_ms + match_ms + log_ms (invariant à résidu nul vérifié
+-- en production). Ne jamais l'ajouter à cette somme.
+-- `log_write_us` mesure le `libc.write` du journal (coût bloquant potentiel),
+-- et non la construction des champs : voir doc/CONFIG.md.
+-- Les deux familles de retry sont distinctes et ne doivent pas être confondues :
+--   * `ipc_retry_*` : retry d'APPARIEMENT IPC (la réponse est arrivée avant que
+--     la question ne soit lue du pipe) — mesuré localement, coût Custos ;
+--   * `upstream_retries` : nombre de renvois de la requête vers le résolveur
+--     amont (`try_upstream_retry`, `entry.upstream_retries`) — 0 si aucun.
+--     Seul un compteur existe (aucune durée n'est stockée) : ne pas inventer de
+--     `upstream_wait_ms`.
 build_benchmark_fields = (entry, info, deltas) ->
   fields = {
     action:   "dns_benchmark"
@@ -282,8 +339,12 @@ build_benchmark_fields = (entry, info, deltas) ->
     parse_ms:   deltas.parse_ms
     match_ms:   deltas.match_ms
     log_ms:     deltas.log_ms
-    retry_wait_ms:  info.retry_wait_ms
-    retry_attempts: info.retry_attempts
+    -- Mesures µs non additives (cf. avertissement ci-dessus).
+    ack_wait_us:   deltas.ack_wait_us or 0
+    log_write_us:  deltas.log_write_us or 0
+    ipc_retry_wait_ms:  info.ipc_retry_wait_ms
+    ipc_retry_attempts: info.ipc_retry_attempts
+    upstream_retries:   entry.upstream_retries or 0
   }
   fields, (entry.refused and "block" or "allow")
 
@@ -467,7 +528,7 @@ finalize_a = (ctx, override) ->
           if #redirect_answers > 0
             inject_answers redirect_answers
             pending_seq = get_last_seq!
-            wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
+            measured_wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
           if level_enabled "DEBUG"
             log_debug -> { action: "response_validator_redirect", target: override.cname_target, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
           return set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
@@ -552,7 +613,7 @@ finalize_a = (ctx, override) ->
 
   if not dnsonly and records_to_add > 0
     pending_seq = get_last_seq!
-    wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
+    measured_wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
 
   if payload_modified
     set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
@@ -737,32 +798,34 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- ── Vérification IPC ─────────────────────────────────────────
   entry = get_pending_entry txid, dst_ip, client_port, resolver_ip, now
-  retry_attempts = 0
-  retry_wait_ms = 0
+  -- Retry d'appariement IPC (réponse arrivée avant la lecture de la question) :
+  -- distinct du retry upstream (`entry.upstream_retries`).
+  ipc_retry_attempts = 0
+  ipc_retry_wait_ms = 0
   unless entry
-    entry, retry_attempts, retry_wait_ms = retry_pending_match txid, dst_ip, client_port, resolver_ip
+    entry, ipc_retry_attempts, ipc_retry_wait_ms = retry_pending_match txid, dst_ip, client_port, resolver_ip
     if entry
       log_info -> {
         action: "response_matched_after_retry"
         src_ip: src_ip
         dst_ip: dst_ip
         txid: txid_hex
-        retry_attempts: retry_attempts
-        retry_wait_ms: retry_wait_ms
+        ipc_retry_attempts: ipc_retry_attempts
+        ipc_retry_wait_ms: ipc_retry_wait_ms
         user: user
       }
     else
       if level_enabled "DEBUG"
         log_debug -> {
-          action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
+          action:    if ipc_retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
           src_ip:    src_ip
           dst_ip:    dst_ip
           vlan:      l2.vlan
           txid:      txid_hex
           rcode:     dns_msg.header.rcode
           client_mac: client_mac
-          retry_attempts: retry_attempts
-          retry_wait_ms: retry_wait_ms
+          ipc_retry_attempts: ipc_retry_attempts
+          ipc_retry_wait_ms: ipc_retry_wait_ms
           user: user
       }
       return NF_DROP
@@ -822,9 +885,14 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         user:        user
         qname:       q1 and q1.name or "-"
         qtype:       q1 and (QTYPE[q1.qtype] or "TYPE#{q1.qtype}") or "-"
-        retry_wait_ms:  retry_wait_ms
-        retry_attempts: retry_attempts
+        ipc_retry_wait_ms:  ipc_retry_wait_ms
+        ipc_retry_attempts: ipc_retry_attempts
       }
+      -- Mesures µs parallèles (non additives). `ack_wait_us` porte l'attente
+      -- du dernier wait_ack TERMINÉ sur ce worker (typiquement la transaction
+      -- précédente : l'ACK de la transaction courante n'a pas encore eu lieu).
+      -- `log_write_us` porte la durée du dernier write de journal terminé
+      -- (souvent la ligne benchmark précédente). Voir doc/CONFIG.md.
       -- entry.benchmark_ms = jalon d'ENTRÉE question : delta_ms couvre donc tout
       -- le traitement. La sortie question (base de response_entry_ms) est
       -- reconstituée : entrée + durée du traitement interne question.
@@ -839,6 +907,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         parse_ms:          bench_delta bench_after_parse_ms, bench_after_payload_ms
         match_ms:          bench_delta bench_after_match_ms, bench_after_parse_ms
         log_ms:            bench_delta bench_log_ms, bench_after_match_ms
+        ack_wait_us:       take_last_ack_wait_us!
+        log_write_us:      get_last_write_us!
       }
       bench_fields, verdict = build_benchmark_fields entry, info, deltas
       if verdict == "block"
@@ -989,4 +1059,5 @@ run = (queue_num, rfd, rules_metadata) ->
   :try_upstream_retry, :arm_retry_fds, :format_block_event,
   :record_chain_targets, :maybe_dynamic_strip, :purge_strip_query_cache,
   :update_mac_clients, :purge_mac_clients, :ip_to_mac,
+  :current_benchmark_us, :take_last_ack_wait_us,
   :finalize_a }

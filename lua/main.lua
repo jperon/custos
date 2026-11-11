@@ -3,10 +3,10 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
-local log_info, log_warn
+local log_info, log_warn, set_timing
 do
   local _obj_0 = require("log")
-  log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
+  log_info, log_warn, set_timing = _obj_0.log_info, _obj_0.log_warn, _obj_0.set_timing
 end
 local probe_ipv6
 probe_ipv6 = require("doh.upstream").probe_ipv6
@@ -20,6 +20,7 @@ chain_strip_active = require("lib.chain_strip").chain_strip_active
 set_process_name("custos")
 local bit = require("bit")
 local config = require("config")
+set_timing((config.runtime and config.runtime.benchmark) and true or false)
 local filter = require("filter")
 local pidfile = require("lib.pidfile")
 local metrics = require("metrics")
