@@ -338,6 +338,28 @@ local RL_CONFIG = {
     },
     window = 30
   },
+  server_login_nonce_rejected = {
+    keys = {
+      "ip",
+      "user",
+      "err"
+    },
+    window = 60
+  },
+  server_login_plaintext_refused = {
+    keys = {
+      "ip",
+      "user"
+    },
+    window = 60
+  },
+  server_login_mac_missing = {
+    keys = {
+      "ip",
+      "mac"
+    },
+    window = 60
+  },
   EMERG = {
     keys = RL_IDENTITY_KEYS,
     window = 10
@@ -392,7 +414,13 @@ local RL_NEVER_LIMIT = {
   supervisor_sighup_forward_auth = true,
   ["dns-filter_start"] = true,
   config_source = true,
-  config_external_missing = true
+  config_external_missing = true,
+  server_login_success = true,
+  server_password_changed = true,
+  server_bye_grace = true,
+  server_ping_session_invalidated = true,
+  user_session_expired = true,
+  user_session_removed = true
 }
 local RL_SLOTS = 4096
 local RL_SLOT_WORDS = 4

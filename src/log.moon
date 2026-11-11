@@ -170,6 +170,13 @@ RL_CONFIG = {
   no_ipv6_for_client: { keys: {"client"},                    window: 120 }
   no_ipv4_for_client: { keys: {"client"},                    window: 120 }
   response_dnsonly:   { keys: {"dst_ip", "qnames"},          window: 30  }
+  -- Échecs d'authentification : jamais exemptés (force brute = inondation
+  -- volontaire), mais bornés par client et utilisateur. `err` reste
+  -- discriminant pour ne pas masquer la cause (nonce expiré vs invalide).
+  -- Sites : handlers.moon:120,128,137.
+  server_login_nonce_rejected:   { keys: {"ip", "user", "err"}, window: 60 }
+  server_login_plaintext_refused: { keys: {"ip", "user"},       window: 60 }
+  server_login_mac_missing:      { keys: {"ip", "mac"},         window: 60 }
   EMERG:              { keys: RL_IDENTITY_KEYS,              window: 10  }
   ALERT:              { keys: RL_IDENTITY_KEYS,              window: 10  }
   CRIT:               { keys: RL_IDENTITY_KEYS,              window: 10  }
@@ -212,6 +219,18 @@ RL_NEVER_LIMIT = {
   "dns-filter_start":          true
   config_source:               true
   config_external_missing:     true
+  -- Audit de sécurité : une connexion, une déconnexion/expiration de session
+  -- ou un changement de mot de passe ne doivent jamais disparaître derrière
+  -- une fenêtre, même sous rafale. Sites : auth/handlers.moon:140 (login),
+  -- :273 (bye/grâce), :424 (mot de passe) ; auth/user_sessions.moon:74
+  -- (expiration), :128 (retrait). Les échecs d'authentification ne sont PAS
+  -- ici : ils restent limités par (ip, user) via RL_CONFIG (force brute).
+  server_login_success:        true
+  server_password_changed:     true
+  server_bye_grace:            true
+  server_ping_session_invalidated: true
+  user_session_expired:        true
+  user_session_removed:        true
 }
 
 -- ── État partagé entre processus ──────────────────────────────────

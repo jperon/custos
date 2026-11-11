@@ -171,6 +171,37 @@ describe "log", ->
       assert.are.equal 0,  log.check_rl "WARN", voisine, 10000
       assert.are.equal -1, log.check_rl "WARN", voisine, 10001
 
+    it "événements d'audit jamais limités (login, logout/session, mot de passe)", ->
+      log.set_action_prefix "auth_"
+      for action in *{"server_login_success", "server_password_changed", "server_bye_grace", "server_ping_session_invalidated", "user_session_expired", "user_session_removed"}
+        f = { action: "auth_#{action}", user: "alice", ip: "10.0.0.2" }
+        assert.are.equal 0, log.check_rl "INFO", f, 12000
+        assert.are.equal 0, log.check_rl "INFO", f, 12001
+        assert.are.equal 0, log.check_rl "INFO", f, 12002
+      log.set_action_prefix ""
+
+    it "reload du superviseur jamais limité (famille rechargement)", ->
+      f = { action: "supervisor_sighup_reload" }
+      assert.are.equal 0, log.check_rl "INFO", f, 12100
+      assert.are.equal 0, log.check_rl "INFO", f, 12101
+      assert.are.equal 0, log.check_rl "INFO", f, 12102
+
+    it "échec d'authentification limité par (ip, utilisateur), pas exempté", ->
+      log.set_action_prefix "auth_"
+      f1 = { action: "auth_server_login_nonce_rejected", ip: "10.0.0.2", user: "alice", err: "expired" }
+      f2 = { action: "auth_server_login_nonce_rejected", ip: "10.0.0.2", user: "alice", err: "expired" }
+      assert.are.equal 0,  log.check_rl "WARN", f1, 12200
+      assert.are.equal -1, log.check_rl "WARN", f2, 12201
+      -- Un autre utilisateur ou une autre IP reste un événement distinct.
+      autre_user = { action: "auth_server_login_nonce_rejected", ip: "10.0.0.2", user: "bob", err: "expired" }
+      autre_ip   = { action: "auth_server_login_nonce_rejected", ip: "10.0.0.3", user: "alice", err: "expired" }
+      assert.are.equal 0, log.check_rl "WARN", autre_user, 12202
+      assert.are.equal 0, log.check_rl "WARN", autre_ip, 12203
+      -- Cause différente : conservée (err est discriminant).
+      autre_err = { action: "auth_server_login_nonce_rejected", ip: "10.0.0.2", user: "alice", err: "invalid" }
+      assert.are.equal 0, log.check_rl "WARN", autre_err, 12204
+      log.set_action_prefix ""
+
     it "_rl_never_limited : strip du préfixe worker", ->
       log.set_action_prefix "response_"
       assert.is_true  log._rl_never_limited "response_worker_died"
