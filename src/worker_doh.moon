@@ -24,6 +24,7 @@ bit     = require "bit"
 { :parse, :types, :rcodes }              = require "ipparse.l7.dns"
 upstream_mod                            = require "doh.upstream"
 upstream_select                         = require "doh.upstream_select"
+hpack                                   = require "doh.hpack"
 
 -- ── Base64url decoder (RFC 4648 §5, no padding required) ────────────────────
 
@@ -70,6 +71,23 @@ url_decode = (s) ->
 query_param = (path, name) ->
   val = path\match "[?&]#{name}=([^&]+)"
   url_decode val if val
+
+--- Vrai si le chemin est celui du endpoint DoH (avec ou sans query string).
+-- Règle partagée entre HTTP/1.1 et HTTP/2.
+-- @tparam string|nil path Chemin de la requête.
+-- @treturn boolean true si c'est /dns-query ou /dns-query?...
+is_doh_path = (path) ->
+  return false unless type(path) == "string"
+  path == "/dns-query" or (path\match "^/dns%-query%?") != nil
+
+--- Extrait et décode le paramètre `dns` base64url d'un chemin DoH GET.
+-- Règle partagée entre HTTP/1.1 et HTTP/2.
+-- @tparam string|nil path Chemin de la requête.
+-- @treturn string|nil Requête DNS brute, ou nil si le paramètre est absent/invalide.
+dns_from_query = (path) ->
+  return nil unless type(path) == "string"
+  dns_param = path\match "[?&]dns=([^&]+)"
+  dns_param and b64url_decode dns_param
 
 json_escape = (s) ->
   return "" unless s
@@ -195,38 +213,96 @@ make_server6 = (port) ->
   srv6\settimeout 1
   srv6
 
--- ── HTTP/2 minimal handler (RFC 7540 + RFC 8484 DoH) ─────────────────────────
+-- ── HTTP/2 minimal handler (RFC 7540 + RFC 7541 + RFC 8484 DoH) ──────────────
 
 {
   :H2_FRAME_DATA, :H2_FRAME_HEADERS, :H2_FRAME_SETTINGS
   :H2_FRAME_PING, :H2_FRAME_GOAWAY, :H2_FRAME_WINDOW_UPDATE
+  :H2_FRAME_CONTINUATION
   :H2_FLAG_END_STREAM, :H2_FLAG_END_HEADERS, :H2_FLAG_ACK
+  :H2_FLAG_PADDED, :H2_FLAG_PRIORITY
   :H2_DEFAULT_MAX_FRAME_SIZE
   :h2_read_frame, :h2_write_frame
 } = require "doh.h2_frames"
 
--- HPACK : :status: 200 (index 8 = 0x88) + content-type: application/dns-message
--- (content-type = static index 31, literal with incremental indexing: 0x5f)
+-- HPACK : :status 200 (index 8) + content-type: application/dns-message.
+-- L'encodeur émet un littéral sans indexation (nom content-type indexé).
 h2_encode_response_headers = ->
-  "\x88\x5f\x17application/dns-message"
+  hpack.encode {
+    { ":status", "200" }
+    { "content-type", "application/dns-message" }
+  }
 
--- Code d'erreur HTTP/2 FRAME_SIZE_ERROR (RFC 7540 §7).
-H2_FRAME_SIZE_ERROR = 0x6
+-- Codes d'erreur HTTP/2 (RFC 7540 §7).
+H2_PROTOCOL_ERROR    = 0x1
+H2_FRAME_SIZE_ERROR  = 0x6
+H2_COMPRESSION_ERROR = 0x9
 -- Plafond cumulé des DATA : un message DNS fait au plus 65535 octets.
 H2_MAX_BODY = 65535
+-- Plafond du bloc d'en-têtes encodé (HEADERS + CONTINUATION).
+H2_MAX_HEADER_BLOCK = 65535
+-- Garde-fou contre un flux infini de CONTINUATION vides.
+H2_MAX_CONTINUATION = 64
+
 -- GOAWAY 8 octets : dernier stream (0) + code d'erreur.
 h2_goaway = (conn, code) ->
   h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0,
     "\x00\x00\x00\x00\x00\x00\x00" .. string.char(code)
 
---- Traite une connexion HTTP/2 minimale (préface PRI + frames).
--- Limites connues, volontairement figées par les tests :
---   (a) HPACK n'est PAS décodé : `:method` et `:path` ne sont jamais lus, et
---       le flux n'est considéré terminé que sur une frame DATA portant
---       END_STREAM. Un GET RFC 8484 (HEADERS + END_STREAM, sans DATA) est donc
---       rejeté (`nil, "h2_incomplete"` + GOAWAY).
---   (b) Tout POST HTTP/2, quel que soit son chemin, est traité comme une
---       requête DoH (pas de routage par `:path`).
+--- Lit un bloc d'en-têtes complet (HEADERS + CONTINUATION éventuels).
+-- Gère les champs PADDED et PRIORITY du frame HEADERS ; le fragment est
+-- concaténé jusqu'à END_HEADERS. END_STREAM provient du seul frame HEADERS.
+-- @tparam table  conn    Connexion avec :receive(n).
+-- @tparam number sid     Stream ID attendu.
+-- @tparam number flags   Flags du frame HEADERS.
+-- @tparam string payload Payload du frame HEADERS.
+-- @treturn string|nil Bloc HPACK, END_STREAM, ou nil + END_STREAM + raison.
+read_header_block = (conn, sid, flags, payload) ->
+  pos = 1
+  last = #payload
+  if bit.band(flags, H2_FLAG_PADDED) != 0
+    return nil, false, "h2_headers_invalid" if pos > last
+    pad_len = payload\byte(pos)
+    pos += 1
+    return nil, false, "h2_headers_invalid" if pad_len > last - pos + 1
+    last -= pad_len
+  if bit.band(flags, H2_FLAG_PRIORITY) != 0
+    return nil, false, "h2_headers_invalid" if last - pos + 1 < 5
+    pos += 5
+  end_stream = bit.band(flags, H2_FLAG_END_STREAM) != 0
+  parts = { payload\sub(pos, last) }
+  size = #parts[1]
+  continuations = 0
+  while bit.band(flags, H2_FLAG_END_HEADERS) == 0
+    continuations += 1
+    return nil, end_stream, "h2_headers_invalid" if continuations > H2_MAX_CONTINUATION
+    ctype, cflags, csid, cpayload = h2_read_frame conn, H2_DEFAULT_MAX_FRAME_SIZE
+    if not ctype
+      return nil, end_stream, "frame_too_large" if cflags == "frame_too_large"
+      return nil, end_stream, "h2_headers_invalid"
+    return nil, end_stream, "h2_headers_invalid" if ctype != H2_FRAME_CONTINUATION or csid != sid
+    size += #cpayload
+    return nil, end_stream, "h2_headers_too_large" if size > H2_MAX_HEADER_BLOCK
+    parts[#parts + 1] = cpayload
+    flags = cflags
+  table.concat(parts), end_stream, nil
+
+--- Envoie une réponse sans corps portant un :status, puis renvoie le marqueur.
+-- @tparam table  conn   Connexion.
+-- @tparam number sid    Stream ID.
+-- @tparam string status Code HTTP (ex. "404").
+-- @treturn nil, string|nil Marqueur "h2_status_<code>", ou nil + erreur d'écriture.
+h2_reject = (conn, sid, status) ->
+  block = hpack.encode { { ":status", status } }
+  ok_w, w_err = h2_write_frame conn, H2_FRAME_HEADERS,
+    bit.bor(H2_FLAG_END_HEADERS, H2_FLAG_END_STREAM), sid, block
+  return nil, w_err unless ok_w
+  nil, "h2_status_#{status}"
+
+--- Traite une connexion HTTP/2 (préface PRI + frames).
+-- Décode les HEADERS (HPACK, un décodeur par connexion), route sur `:method`
+-- et `:path` : POST sur le chemin DoH, GET `?dns=<base64url>`. Autre chemin →
+-- 404, autre méthode → 405, sans traiter de DNS.
 -- @tparam table  conn       Connexion TLS avec :receive(n|"*l") et :send(data).
 -- @tparam string peer_ip    IP du client (logs et décision de filtre).
 -- @tparam string peer_mac   MAC du client, ou nil.
@@ -242,10 +318,13 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
   ok_w, w_err = h2_write_frame conn, H2_FRAME_SETTINGS, 0, 0, ""
   return nil, w_err unless ok_w
 
+  decoder    = hpack.new_decoder!
   stream_id  = nil
+  method     = nil
+  path       = nil
   dns_chunks = {}
   dns_bytes  = 0
-  done       = false
+  end_stream = false
 
   for _ = 1, 30
     ftype, flags, sid, payload = h2_read_frame conn, H2_DEFAULT_MAX_FRAME_SIZE
@@ -265,7 +344,26 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
       return nil, w_err unless ok_w
 
     elseif ftype == H2_FRAME_HEADERS and not stream_id
+      if sid == 0
+        h2_goaway conn, H2_PROTOCOL_ERROR
+        return nil, "h2_protocol_error"
       stream_id = sid
+      block, headers_end_stream, herr = read_header_block conn, sid, flags, payload
+      unless block
+        if herr == "frame_too_large"
+          h2_goaway conn, H2_FRAME_SIZE_ERROR
+          return nil, "h2_frame_too_large"
+        h2_goaway conn, H2_PROTOCOL_ERROR
+        return nil, herr
+      headers, derr = hpack.decode decoder, block
+      unless headers
+        log_debug -> { action: "h2_hpack_error", peer: peer_ip, err: derr }
+        h2_goaway conn, H2_COMPRESSION_ERROR
+        return nil, "h2_compression_error"
+      method = hpack.header_value headers, ":method"
+      path   = hpack.header_value headers, ":path"
+      end_stream = headers_end_stream
+      break if end_stream
 
     elseif ftype == H2_FRAME_DATA and sid == stream_id
       if #payload > 0
@@ -275,21 +373,33 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
           return nil, "h2_data_too_large"
         dns_chunks[#dns_chunks + 1] = payload
       if bit.band(flags, H2_FLAG_END_STREAM) ~= 0
-        done = true
+        end_stream = true
         break
 
     elseif ftype == H2_FRAME_PING and bit.band(flags, H2_FLAG_ACK) == 0
       ok_w, w_err = h2_write_frame conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload
       return nil, w_err unless ok_w
 
-  unless done and stream_id
-    h2_goaway conn, 0x1
+  unless end_stream and stream_id
+    h2_goaway conn, H2_PROTOCOL_ERROR
     return nil, "h2_incomplete"
 
-  dns_raw = table.concat dns_chunks
-  unless #dns_raw > 0
-    h2_goaway conn, 0x1
-    return nil, "h2_empty_body"
+  -- ── Routage par pseudo-en-têtes (mêmes règles de chemin que HTTP/1.1) ────
+  dns_raw = nil
+  if method == "POST"
+    unless is_doh_path path
+      return h2_reject conn, stream_id, "404"
+    dns_raw = table.concat dns_chunks
+    unless #dns_raw > 0
+      return h2_reject conn, stream_id, "400"
+  elseif method == "GET"
+    unless is_doh_path path
+      return h2_reject conn, stream_id, "404"
+    dns_raw = dns_from_query path
+    unless dns_raw and #dns_raw > 0
+      return h2_reject conn, stream_id, "400"
+  else
+    return h2_reject conn, stream_id, "405"
 
   resp_raw, q_err = process_query dns_raw, peer_ip, peer_mac, upstream, peer_vlan
   unless resp_raw
@@ -297,8 +407,8 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
     h2_goaway conn, 0x2
     return nil, "h2_query_error"
 
-  hpack = h2_encode_response_headers!
-  ok_w, w_err = h2_write_frame conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack
+  resp_block = h2_encode_response_headers!
+  ok_w, w_err = h2_write_frame conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, resp_block
   return nil, w_err unless ok_w
   ok_w, w_err = h2_write_frame conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw
   return nil, w_err unless ok_w
@@ -403,7 +513,10 @@ handle_doh_client = (args) ->
       log_debug -> { action: "h2_request", peer: peer_ip }
       h2_resp, h2_err = handle_h2 tls_client, peer_ip, peer_mac, state.upstream, peer_vlan
       if h2_err
-        log_warn -> { action: "h2_failed", peer: peer_ip, err: h2_err }
+        if h2_err\match "^h2_status_"
+          log_debug -> { action: "h2_rejected", peer: peer_ip, err: h2_err }
+        else
+          log_warn -> { action: "h2_failed", peer: peer_ip, err: h2_err }
       else
         log_debug -> { action: "h2_ok", peer: peer_ip, resp_bytes: h2_resp and #h2_resp or 0 }
       tls_client\close!
@@ -411,16 +524,15 @@ handle_doh_client = (args) ->
 
     dns_raw = nil
     json_mode = false
-    if req.path == "/dns-query" or req.path\match "^/dns%-query%?"
+    if is_doh_path req.path
       ct = req.headers["content-type"] or ""
       accept = req.headers["accept"] or ""
       if req.method == "POST" and ct\match "application/dns%-message"
         log_debug -> { action: "post", peer: peer_ip, body_bytes: #req.body }
         dns_raw = req.body
       elseif req.method == "GET"
-        dns_param = req.path\match "[?&]dns=([^&]+)"
-        if dns_param
-          dns_raw = b64url_decode dns_param
+        dns_raw = dns_from_query req.path
+        if dns_raw
           log_debug -> { action: "get", peer: peer_ip, decoded_bytes: #dns_raw }
         elseif accept\match "application/dns%-json"
           name = query_param req.path, "name"
