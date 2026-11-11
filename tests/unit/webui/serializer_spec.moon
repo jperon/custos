@@ -71,6 +71,21 @@ describe "webui/serializer", ->
       out = serialize_config cfg
       assert.truthy out\find('["some-key"]', 1, true)
 
+    it "table mixte (séquentiel + clé) : la clé associative n'est pas perdue", ->
+      out = serialize_config { mixed: { "a", "b", cle: "v" } }
+      assert.truthy out\find("cle:", 1, true)
+      assert.truthy out\find('"v"', 1, true)
+      -- ne doit pas être rendue sous la forme tableau court
+      assert.falsy out\find('{ "a", "b" }', 1, true)
+
+    it "table à clés numériques non contiguës : rendue en forme associative", ->
+      t = {}
+      t[1] = "a"
+      t[3] = "c"
+      out = serialize_config { t: t }
+      assert.truthy out\find("[1]:", 1, true)
+      assert.truthy out\find("[3]:", 1, true)
+
   -- ── write_config + read_config ───────────────────────────────────────────
 
   describe "write_config + read_config (round-trip)", ->
@@ -110,6 +125,24 @@ describe "webui/serializer", ->
       loaded = (read_config TMP_PATH)
       assert.equals "bridge",     loaded.nft.family
       assert.equals "dns-filter", loaded.nft.table
+
+    it "round-trip préserve une table mixte (séquentiel + clé)", ->
+      cfg = { filter: { mixed: { "a", "b", cle: "v" } } }
+      write_config cfg, TMP_PATH
+      loaded = (read_config TMP_PATH)
+      assert.equals "a",   loaded.filter.mixed[1]
+      assert.equals "b",   loaded.filter.mixed[2]
+      assert.equals "v",   loaded.filter.mixed.cle
+
+    it "round-trip préserve les clés numériques non contiguës", ->
+      t = {}
+      t[1] = "a"
+      t[3] = "c"
+      cfg = { filter: { sparse: t } }
+      write_config cfg, TMP_PATH
+      loaded = (read_config TMP_PATH)
+      assert.equals "a", loaded.filter.sparse[1]
+      assert.equals "c", loaded.filter.sparse[3]
 
     it "le fichier .webui.new temporaire est supprimé après écriture atomique", ->
       write_config { x: 1 }, TMP_PATH
