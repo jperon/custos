@@ -588,3 +588,61 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   fraîcheur ou l'historique exposés, et le throttle de 5 s borne déjà la
   fréquence. Q2 (accesseurs `metrics` sans lecteur) : seul le drapeau
   `enabled` était un bug (corrigé) ; les accesseurs sont conservés.
+
+### Globales nil (branche fix-globals)
+
+MoonScript rend **locale au bloc** toute variable assignée dans un bloc
+(boucle, `if`, `pcall`…) : lue ensuite hors de ce bloc — ou hors de la fonction
+qui l'assigne — elle compile en **lecture de globale**, donc en `nil`, sans
+aucune erreur de compilation. Un balayage du bytecode (`luajit -bl`, instructions
+`GGET`) a trouvé quatre cas réels, chacun corrigé avec un test qui échoue avant
+et passe après ; le contrôle est désormais automatisé dans `make check`
+(`tools/check_globals.sh`, cf. [.agents/testing.md](../../.agents/testing.md)).
+
+- **`lib.socket` : `EINPROGRESS` jamais défini → tout `connect()` non bloquant
+  échouait.** `connect()` testait `if errno == EINPROGRESS`, mais seule
+  `EAGAIN = 11` existait : la comparaison était toujours fausse, donc un
+  `connect()` non bloquant — cas normal dès que `settimeout` a posé
+  `O_NONBLOCK` — levait `connect() failed: errno=115` au lieu de rendre `nil`
+  (résultat à récupérer via `select()`/`SO_ERROR`). Correctif :
+  `EINPROGRESS = 115` (Linux) à côté de `EAGAIN`/`EWOULDBLOCK` (tous deux déjà
+  définis ; les autres codes de ce fichier — `EINTR`, `ECONNABORTED` — sont des
+  littéraux). Test : `tests/unit/socket_spec.moon` (connect non bloquant vers
+  `127.0.0.1:1` ; sur Linux le noyau diffère toujours le verdict, ce qui rend le
+  cas déterministe).
+- **`nft_add_helper` : `last_err` perdue → log d'épuisement sans l'erreur.**
+  `last_err` était assignée dans la boucle de retries et lue après : la lecture
+  compilait en globale nil, si bien que `nft_add_retries_exhausted` loguait
+  toujours `err=""` au lieu de l'erreur de la dernière tentative (le diagnostic
+  de l'échec nft était perdu). Correctif : `last_err = nil` déclarée avant la
+  boucle. Test : `tests/unit/nft_add_helper_spec.moon`, qui recharge le module
+  avec un `log` stub pour capturer les champs logués.
+- **`auth.server` : `hs_err` perdue → log de handshake sans l'erreur.** Même
+  motif dans la boucle de handshake de `handle_client` : `hs_err` était locale à
+  la boucle, la lecture après la boucle (`server_tls_handshake_failed`) valait
+  nil et le log affichait toujours « max attempts reached », masquant l'erreur
+  réelle (`tls_error`, etc.). `ok_hs` n'était lu que dans la boucle : inchangé.
+  Correctif : `hs_err = nil` avant la boucle. Test :
+  `tests/unit/auth/server_handshake_log_spec.moon` (déclenche `handle_client`
+  via `dispatch_connection` avec un `fork_fn` synchrone et un `ssl.wrap` stub
+  dont `dohandshake` rend `(false, "tls_error")`).
+- **`worker_tls` : `auth_sessions_file` nil sur le hot-path SNI.** La variable
+  n'était assignée que dans `run()` (`auth_sessions_file = auth_cfg.sessions_file
+  or auth_sessions_file`), donc locale à `run()` : la lecture du hot-path
+  (`user: user_for_mac mac_str, ip_src_str, auth_sessions_file`, dans
+  `handle_sni_packet`) compilait en globale nil. Avec un chemin nil,
+  `user_for_mac` → `session_for_mac` → `read_cached nil` → `load_sessions(nil)`
+  rend `{}` : aucune session trouvée, **sans erreur**, et le champ `user` de la
+  requête SNI restait toujours nil. La condition `from_user` perdait donc son
+  chemin rapide « utilisateur déjà connu » (le premier indice de `req.user`) et
+  refaisait une lecture de sessions ; ses verdicts restaient corrects grâce à
+  son repli. Correctif : chemin initialisé au niveau module depuis `config.auth`
+  avec la même valeur par défaut que `worker_responses`
+  (`"/tmp/sessions.lua"`), puis affiné dans `run()` par
+  `filter.get_auth_cfg().sessions_file` ; exporté pour le test
+  `tests/unit/worker_tls_sessions_file_spec.moon`.
+- **Prévention.** `tools/check_globals.sh` (appelé par `make check`) balaie le
+  bytecode de tout `lua/**.lua` (hors `lua/ipparse/` — sous-module amont — et
+  hors runtime MoonScript), relève les `GGET` et échoue sur toute globale hors
+  liste blanche explicite (base Lua 5.1, bibliothèques standard, `bit`/`jit` de
+  LuaJIT, `arg` ; `ffi` volontairement absent car non global sous LuaJIT).
