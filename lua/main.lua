@@ -22,6 +22,7 @@ local bit = require("bit")
 local config = require("config")
 local filter = require("filter")
 local pidfile = require("lib.pidfile")
+local metrics = require("metrics")
 do
   local gc_cfg = config.runtime or { }
   if gc_cfg.gc_pause then
@@ -643,6 +644,15 @@ if not (cfg_meta.external_loaded) then
 end
 local sfd = create_signal_fd()
 local pipes = create_pipes()
+local runtime_dir = (pidfile.resolve_path((config.runtime or { }).pid_file)):match("^(.*)/") or "."
+local purged = metrics.purge_files(runtime_dir)
+log_info(function()
+  return {
+    action = "metrics_snapshots_purged",
+    dir = runtime_dir,
+    removed = purged
+  }
+end)
 log_info(function()
   return {
     action = "ipc_pipes_created",

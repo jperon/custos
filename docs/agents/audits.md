@@ -1058,3 +1058,55 @@ orphelin.
     fenêtre invalide).
   - Documentation : `doc/CONFIG.md` (sémantique exacte des deux clés) et
     `docs/agents/auth.md` (module et partage entre processus).
+### Métriques exposées (branche d-metrics)
+
+Suite du point Q2 du rapport « dataplane » : les compteurs `metrics` étaient
+alimentés par `worker_questions` mais aucun accesseur n'avait de lecteur.
+Décision : les exposer en lecture seule.
+
+- **Export périodique par worker.** `src/metrics.moon` conserve les compteurs
+  `allow`/`refuse`/`dnsonly` par règle (LRU `max_rules`) et ajoute
+  `maybe_flush` (coût par paquet : un incrément et une comparaison ; l'horloge
+  n'est lue qu'une fois tous les `check_every` paquets, 32 par défaut),
+  `flush_if_due` (variante purement temporelle pour le point de passage
+  périodique), `write_now` et `file_path`. Chaque `worker_questions` écrit
+  `<répertoire d'exécution>/metrics-dns-q<N>.json` (répertoire du pidfile,
+  `lib.pidfile.resolve_path` comme `src/doh/query.moon`) de façon atomique
+  (temporaire `*.json.tmp.<n>` + `os.rename`), immédiatement après `init`
+  (instantané à zéro), puis au plus toutes les `metrics.flush_interval`
+  secondes (défaut 60), via `run_queue` (`opts.idle_ms = 1000`,
+  `on_idle = flush_if_due`) et une dernière fois à la sortie de `run_queue`.
+  Le superviseur (`main.moon`) appelle `metrics.purge_files` sur le répertoire
+  d'exécution **avant** de forker les workers : les fichiers d'une exécution
+  précédente ne sont jamais présentés comme ceux de l'exécution courante.
+  `metrics.enabled = false` : `handle_question` n'appelle ni `maybe_flush` ni
+  `record_verdict` (garde locale `metrics_on`), et `run_queue` ne reçoit pas
+  d'`idle_ms` — aucun coût dans le hot-path.
+- **Page admin `/admin/metrics`.** Nouveau handler
+  `src/webui/handlers/metrics.moon` (lecture seule, lien dans la navigation)
+  qui lit `metrics-*.json`, décode via le nouveau `src/lib/json.moon` et
+  **ignore sans erreur** les fichiers illisibles ou corrompus. Il affiche les
+  totaux, la répartition par verdict (allow/refuse/dnsonly), les compteurs par
+  règle et l'âge de chaque worker ; **aucun instantané valide n'est exclu des
+  totaux** à cause de son âge (un worker à faible débit reste compté). Le
+  tableau « Workers » signale seulement « aucune activité depuis N s » au-delà
+  de `max(3 × flush_interval, 180 s)`. Toutes les valeurs sont échappées via
+  `webui.util.esc`. Si `metrics.enabled = false`, la page l'indique. Le
+  contrôle d'accès est celui du routeur (`check_admin_session`), comme les
+  autres pages admin.
+- **Code mort supprimé.** `flush_metrics`, `get_snapshot`, `get_rule_metrics`,
+  `record_cache`, `record_ttl` (et les champs `cache`/`ttl` du snapshot) sont
+  retirés : ils n'avaient aucun consommateur en production. Le module se
+  limite aux compteurs de verdicts réellement exposés.
+- **Tests.** `tests/unit/lib/json_spec.moon` (encode/décode, échappements,
+  corruption), `tests/unit/metrics_spec.moon` (compteurs, LRU, horloge
+  injectée, écriture périodique, atomicité par échec de `os.rename`, absence
+  de temporaire, désactivation) et `tests/unit/webui/metrics_handler_spec.moon`
+  (agrégation multi-workers, fichier corrompu, instantané périmé, échappement
+  HTML, désactivation, répertoire absent) ; `tests/unit/webui/router_spec.moon`
+  couvre la route et son contrôle d'accès (302 sans session, 403 non-admin).
+  `tests/unit/worker_questions_metrics_spec.moon` (tests des accesseurs
+  supprimés) est retiré.
+- **Documentation.** `doc/CONFIG.md` §13 (sémantique de `flush_interval` et
+  emplacement des instantanés), `docs/agents/webui.md` (page Métriques) et
+  `.agents/workers.md` (fichier de sortie de `worker_questions`).

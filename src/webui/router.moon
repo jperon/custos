@@ -25,6 +25,7 @@
   :handle_list_new_get, :handle_list_new_post } = require "webui.handlers.lists"
 { :handle_devices_get, :handle_devices_post } = require "webui.handlers.devices"
 { :handle_verdicts_get } = require "webui.handlers.verdicts"
+{ :handle_metrics_get } = require "webui.handlers.metrics"
 { :parse_form } = require "webui.util"
 
 -- Sections scalaires éditables via le handler générique
@@ -74,6 +75,10 @@ dispatch = (req, state) ->
   -- Verdicts récents (lecture seule : allow + block)
   if path == "/admin/config/verdicts"
     return handle_verdicts_get(req, state) if method == "GET"
+
+  -- Métriques agrégées des workers (lecture seule)
+  if path == "/admin/metrics"
+    return handle_metrics_get(req, state) if method == "GET"
 
   -- Index config
   if path == "/admin/config/" or path == "/admin/config"

@@ -1,355 +1,269 @@
 -- tests/unit/metrics_spec.moon
--- Tests for per-rule metrics collection and aggregation.
+-- Tests des compteurs par règle et de l'export JSON périodique (src/metrics.moon).
 
+json = require "lib.json"
 {
   :init
   :record_verdict
-  :record_cache
-  :record_ttl
-  :flush_metrics
   :get_metrics_json
-  :get_snapshot
-  :get_rule_metrics
+  :write_now
+  :purge_files
+  :flush_if_due
+  :maybe_flush
+  :file_path
   :clear
   :_get_state
-  :_get_hit_rate
-  :_get_ttl_stats
 } = require "metrics"
+
+DIR = "tmp/metrics_spec"
+FILE = "#{DIR}/metrics-w0.json"
+
+list_dir = ->
+  h = io.popen "ls -1 '#{DIR}' 2>/dev/null"
+  out = {}
+  for name in h\lines!
+    out[#out + 1] = name
+  h\close!
+  out
+
+clean_dir = ->
+  for name in *list_dir!
+    os.remove "#{DIR}/#{name}"
+  os.remove DIR
+
+file_exists = ->
+  fh = io.open FILE, "r"
+  return false unless fh
+  fh\close!
+  true
+
+read_snapshot = ->
+  fh = assert io.open FILE, "r"
+  content = fh\read "*a"
+  fh\close!
+  json.decode content
 
 describe "metrics", ->
 
   before_each ->
+    clean_dir!
+    os.execute "mkdir -p '#{DIR}'"
+    init { enabled: true, flush_interval: 60 }, {}
     clear!
+
+  after_each ->
+    init { enabled: true }, {}
+    clear!
+    clean_dir!
 
   describe "record_verdict", ->
 
-    it "initializes counter for new rule", ->
+    it "initialise le compteur d'une nouvelle règle", ->
       record_verdict "rule1", "allow"
       state = _get_state!
       assert.is_not_nil state["rule1"]
       assert.equals 1, state["rule1"].allow_count
 
-    it "increments allow counter", ->
-      record_verdict "rule1", "allow"
-      record_verdict "rule1", "allow"
-      record_verdict "rule1", "allow"
+    it "incrémente allow/refuse/dnsonly", ->
+      for i = 1, 3
+        record_verdict "rule1", "allow"
+      record_verdict "rule1", "refuse"
+      record_verdict "rule1", "refuse"
+      record_verdict "rule1", "dnsonly"
       state = _get_state!
       assert.equals 3, state["rule1"].allow_count
-
-    it "increments refuse counter", ->
-      record_verdict "rule1", "refuse"
-      record_verdict "rule1", "refuse"
-      state = _get_state!
       assert.equals 2, state["rule1"].refuse_count
+      assert.equals 1, state["rule1"].dnsonly_count
 
-    it "increments dnsonly counter", ->
-      record_verdict "rule1", "dnsonly"
-      record_verdict "rule1", "dnsonly"
-      record_verdict "rule1", "dnsonly"
-      state = _get_state!
-      assert.equals 3, state["rule1"].dnsonly_count
-
-    it "handles multiple rules", ->
+    it "gère plusieurs règles", ->
       record_verdict "rule1", "allow"
       record_verdict "rule2", "refuse"
       record_verdict "rule1", "allow"
-      record_verdict "rule2", "dnsonly"
       state = _get_state!
       assert.equals 2, state["rule1"].allow_count
       assert.equals 1, state["rule2"].refuse_count
-      assert.equals 1, state["rule2"].dnsonly_count
 
-    it "ignores nil rule_id", ->
+    it "ignore nil et un verdict inconnu", ->
       record_verdict nil, "allow"
-      state = _get_state!
-      assert.equals 0, #state
-
-    it "ignores nil verdict", ->
       record_verdict "rule1", nil
-      state = _get_state!
-      assert.equals 0, #state
-
-    it "ignores invalid verdict", ->
       record_verdict "rule1", "invalid"
       state = _get_state!
+      assert.equals 0, #state
       assert.equals 0, state["rule1"].allow_count + state["rule1"].refuse_count + state["rule1"].dnsonly_count
-
-  describe "record_cache", ->
-
-    it "records cache hit", ->
-      record_cache "rule1", true
-      state = _get_state!
-      assert.equals 1, state["rule1"].cache_hits
-      assert.equals 0, state["rule1"].cache_misses
-
-    it "records cache miss", ->
-      record_cache "rule1", false
-      state = _get_state!
-      assert.equals 0, state["rule1"].cache_hits
-      assert.equals 1, state["rule1"].cache_misses
-
-    it "counts multiple hits and misses", ->
-      record_cache "rule1", true
-      record_cache "rule1", true
-      record_cache "rule1", false
-      record_cache "rule1", false
-      record_cache "rule1", false
-      state = _get_state!
-      assert.equals 2, state["rule1"].cache_hits
-      assert.equals 3, state["rule1"].cache_misses
-
-    it "handles multiple rules", ->
-      record_cache "rule1", true
-      record_cache "rule2", false
-      state = _get_state!
-      assert.equals 1, state["rule1"].cache_hits
-      assert.equals 1, state["rule2"].cache_misses
-
-    it "ignores nil rule_id", ->
-      record_cache nil, true
-      state = _get_state!
-      assert.equals 0, #state
-
-  describe "record_ttl", ->
-
-    it "records single TTL sample", ->
-      record_ttl "rule1", 3600
-      state = _get_state!
-      assert.equals 1, #state["rule1"].ttl_samples
-      assert.equals 3600, state["rule1"].ttl_samples[1]
-
-    it "records multiple TTL samples", ->
-      record_ttl "rule1", 3600
-      record_ttl "rule1", 7200
-      record_ttl "rule1", 1800
-      state = _get_state!
-      assert.equals 3, #state["rule1"].ttl_samples
-      assert.equals 3600, state["rule1"].ttl_samples[1]
-      assert.equals 7200, state["rule1"].ttl_samples[2]
-      assert.equals 1800, state["rule1"].ttl_samples[3]
-
-    it "keeps only last 100 samples per rule", ->
-      for i = 1, 150
-        record_ttl "rule1", i * 100
-      state = _get_state!
-      assert.equals 100, #state["rule1"].ttl_samples
-      assert.equals 51 * 100, state["rule1"].ttl_samples[1]  -- Samples 1-50 evicted
-
-    it "ignores nil rule_id", ->
-      record_ttl nil, 3600
-      state = _get_state!
-      assert.equals 0, #state
-
-    it "ignores non-numeric ttl", ->
-      record_ttl "rule1", "3600"
-      state = _get_state!
-      assert.is_nil state["rule1"]
-
-  describe "cache hit rate", ->
-
-    it "calculates hit rate percentage", ->
-      record_cache "rule1", true
-      record_cache "rule1", true
-      record_cache "rule1", true
-      record_cache "rule1", false
-      record_cache "rule1", false
-      rate = _get_hit_rate "rule1"
-      assert.equals 60, rate
-
-    it "returns 0 with no cache access", ->
-      record_verdict "rule1", "allow"
-      rate = _get_hit_rate "rule1"
-      assert.equals 0, rate
-
-    it "handles all hits", ->
-      record_cache "rule1", true
-      record_cache "rule1", true
-      record_cache "rule1", true
-      rate = _get_hit_rate "rule1"
-      assert.equals 100, rate
-
-    it "handles all misses", ->
-      record_cache "rule1", false
-      record_cache "rule1", false
-      rate = _get_hit_rate "rule1"
-      assert.equals 0, rate
-
-    it "returns 0 for undefined rule", ->
-      rate = _get_hit_rate "undefined_rule"
-      assert.equals 0, rate
-
-  describe "TTL statistics", ->
-
-    it "calculates min, max, avg for samples", ->
-      record_ttl "rule1", 1000
-      record_ttl "rule1", 2000
-      record_ttl "rule1", 3000
-      stats = _get_ttl_stats "rule1"
-      assert.equals 1000, stats.min
-      assert.equals 3000, stats.max
-      assert.equals 2000, stats.avg
-
-    it "handles single sample", ->
-      record_ttl "rule1", 5000
-      stats = _get_ttl_stats "rule1"
-      assert.equals 5000, stats.min
-      assert.equals 5000, stats.max
-      assert.equals 5000, stats.avg
-
-    it "returns zeros for undefined rule", ->
-      stats = _get_ttl_stats "undefined_rule"
-      assert.equals 0, stats.min
-      assert.equals 0, stats.max
-      assert.equals 0, stats.avg
-
-    it "returns zeros for rule with no TTL samples", ->
-      record_verdict "rule1", "allow"
-      stats = _get_ttl_stats "rule1"
-      assert.equals 0, stats.min
-      assert.equals 0, stats.max
-      assert.equals 0, stats.avg
 
   describe "get_metrics_json", ->
 
-    it "exports metrics as JSON-compatible table", ->
+    it "exporte timestamp et compteurs par règle", ->
       record_verdict "rule1", "allow"
       record_verdict "rule1", "allow"
       record_verdict "rule1", "refuse"
-      record_cache "rule1", true
-      record_cache "rule1", false
-      record_ttl "rule1", 3600
-      record_ttl "rule1", 7200
+      snap = get_metrics_json!
+      assert.equals "number", type snap.timestamp
+      assert.equals 1, #snap.rules
+      assert.equals "rule1", snap.rules[1].rule_id
+      assert.equals 2, snap.rules[1].verdicts.allow
+      assert.equals 1, snap.rules[1].verdicts.refuse
+      assert.equals 0, snap.rules[1].verdicts.dnsonly
 
-      json = get_metrics_json!
-      assert.is_not_nil json.timestamp
-      assert.equals 1, #json.rules
-      rule = json.rules[1]
-      assert.equals "rule1", rule.rule_id
-      assert.equals 2, rule.verdicts.allow
-      assert.equals 1, rule.verdicts.refuse
-      assert.equals 0, rule.verdicts.dnsonly
-      assert.equals 1, rule.cache.hits
-      assert.equals 1, rule.cache.misses
-      assert.equals 50, rule.cache.hit_rate
-      assert.equals 3600, rule.ttl.min
-      assert.equals 7200, rule.ttl.max
-      assert.equals 5400, rule.ttl.avg
+    it "exporte une liste vide sans donnée", ->
+      assert.same {}, get_metrics_json!.rules
 
-    it "includes all rules in export", ->
+    it "n'exporte rien quand désactivé", ->
+      init { enabled: false }
       record_verdict "rule1", "allow"
-      record_verdict "rule2", "refuse"
-      record_verdict "rule3", "dnsonly"
+      assert.same {}, get_metrics_json!.rules
 
-      json = get_metrics_json!
-      assert.equals 3, #json.rules
-      rule_ids = {}
-      for r in *json.rules
-        rule_ids[r.rule_id] = true
-      assert.is_true rule_ids["rule1"]
-      assert.is_true rule_ids["rule2"]
-      assert.is_true rule_ids["rule3"]
+  describe "export périodique", ->
 
-    it "exports empty metrics for no data", ->
-      json = get_metrics_json!
-      assert.equals 0, #json.rules
+    it "n'écrit rien avant l'intervalle, puis un instantané", ->
+      now = 0
+      init { enabled: true, flush_interval: 10 },
+        { dir: DIR, name: "w0", clock: (-> now), check_every: 1 }
+      record_verdict "r1", "allow"
 
-  describe "get_snapshot", ->
+      now = 0
+      maybe_flush!
+      assert.is_false file_exists!
 
-    it "returns same format as get_metrics_json", ->
-      record_verdict "rule1", "allow"
-      snap = get_snapshot!
-      json = get_metrics_json!
-      assert.equals json.timestamp, snap.timestamp
-      assert.equals #json.rules, #snap.rules
+      now = 9
+      maybe_flush!
+      assert.is_false file_exists!
 
-    it "does not modify state after snapshot", ->
-      record_verdict "rule1", "allow"
-      snap1 = get_snapshot!
-      record_verdict "rule1", "allow"
-      snap2 = get_snapshot!
-      assert.equals 1, snap1.rules[1].verdicts.allow
-      assert.equals 2, snap2.rules[1].verdicts.allow
+      now = 10
+      maybe_flush!
+      snap = read_snapshot!
+      assert.equals 10, snap.timestamp
+      assert.equals "r1", snap.rules[1].rule_id
+      assert.equals 1, snap.rules[1].verdicts.allow
 
-  describe "get_rule_metrics", ->
+    it "consulte l'horloge seulement tous les check_every paquets", ->
+      now = 0
+      clock_calls = 0
+      fake_clock = ->
+        clock_calls += 1
+        now
+      init { enabled: true, flush_interval: 10 },
+        { dir: DIR, name: "w0", clock: fake_clock, check_every: 4 }
+      for i = 1, 3
+        maybe_flush!
+      assert.equals 0, clock_calls
+      maybe_flush!  -- 4e paquet : lecture d'horloge
+      assert.equals 1, clock_calls
 
-    it "returns metrics for single rule", ->
-      record_verdict "rule1", "allow"
-      record_cache "rule1", true
-      record_ttl "rule1", 3600
+    it "utilise check_every = 32 par défaut", ->
+      clock_calls = 0
+      fake_clock = ->
+        clock_calls += 1
+        0
+      init { enabled: true, flush_interval: 10 },
+        { dir: DIR, name: "w0", clock: fake_clock }
+      for i = 1, 31
+        maybe_flush!
+      assert.equals 0, clock_calls
+      maybe_flush!  -- 32e paquet
+      assert.equals 1, clock_calls
 
-      m = get_rule_metrics "rule1"
-      assert.is_not_nil m
-      assert.equals "rule1", m.rule_id
-      assert.equals 1, m.verdicts.allow
+    it "flush_if_due écrit sur le seul passage temporel", ->
+      now = 0
+      init { enabled: true, flush_interval: 10 },
+        { dir: DIR, name: "w0", clock: (-> now) }
+      record_verdict "r1", "allow"
+      assert.is_true write_now!  -- instantané initial
+      now = 9
+      assert.is_false flush_if_due!
+      now = 10
+      assert.is_true flush_if_due!
+      snap = read_snapshot!
+      assert.equals 1, snap.rules[1].verdicts.allow
 
-    it "returns nil for undefined rule", ->
-      m = get_rule_metrics "undefined"
-      assert.is_nil m
+    it "write_now produit un instantané vide valide au démarrage", ->
+      init { enabled: true }, { dir: DIR, name: "w0" }
+      assert.is_true write_now!
+      snap = read_snapshot!
+      assert.equals "number", type snap.timestamp
+      assert.same {}, snap.rules
 
-    it "returns nil for nil rule_id", ->
-      m = get_rule_metrics nil
-      assert.is_nil m
+    it "n'écrit rien quand désactivé", ->
+      now = 1000
+      init { enabled: false, flush_interval: 10 },
+        { dir: DIR, name: "w0", clock: (-> now), check_every: 1 }
+      record_verdict "r1", "allow"
+      maybe_flush!
+      assert.is_false file_exists!
+      assert.is_false write_now!
 
-  describe "flush_metrics", ->
+    it "file_path reflète le nom du worker", ->
+      init { enabled: true }, { dir: DIR, name: "dns-q3" }
+      assert.equals "#{DIR}/metrics-dns-q3.json", file_path!
+      init { enabled: true }, {}
+      assert.is_nil file_path!
 
-    it "returns snapshot before reset", ->
-      record_verdict "rule1", "allow"
-      record_verdict "rule1", "allow"
+    it "échoue sans lever si le répertoire cible n'existe pas", ->
+      init { enabled: true }, { dir: "#{DIR}/absent", name: "w0" }
+      record_verdict "r1", "allow"
+      assert.is_false write_now!
 
-      snapshot = flush_metrics!
-      assert.equals 1, #snapshot.rules
-      assert.equals 2, snapshot.rules[1].verdicts.allow
+  describe "purge_files", ->
 
-    it "clears metrics after flush", ->
-      record_verdict "rule1", "allow"
-      flush_metrics!
+    it "supprime instantanés et temporaires, laisse les autres fichiers", ->
+      write = (name, content) ->
+        fh = assert io.open "#{DIR}/#{name}", "w"
+        fh\write content
+        fh\close!
+      write "metrics-a.json", "{}"
+      write "metrics-a.json.tmp.1", "x"
+      write "metrics-b.json.tmp.7", "x"
+      write "notes.txt", "à conserver"
 
-      json = get_metrics_json!
-      assert.equals 0, #json.rules
+      assert.equals 3, purge_files DIR
+      assert.same { "notes.txt" }, list_dir!
+      assert.equals 0, purge_files nil
 
-    it "allows new metrics after flush", ->
-      record_verdict "rule1", "allow"
-      flush_metrics!
-      record_verdict "rule2", "refuse"
+  describe "atomicité", ->
 
-      json = get_metrics_json!
-      assert.equals 1, #json.rules
-      assert.equals "rule2", json.rules[1].rule_id
+    it "ne laisse aucun temporaire après une écriture réussie", ->
+      init { enabled: true }, { dir: DIR, name: "w0" }
+      record_verdict "r1", "allow"
+      assert.is_true write_now!
+      assert.same { "metrics-w0.json" }, list_dir!
 
-  describe "memory bounded", ->
+    it "préserve l'ancien fichier si le renommage échoue", ->
+      init { enabled: true }, { dir: DIR, name: "w0" }
+      record_verdict "r1", "allow"
+      assert.is_true write_now!
+      snap = read_snapshot!
+      assert.equals 1, snap.rules[1].verdicts.allow
 
-    it "evicts LRU rule when exceeding MAX_RULES", ->
-      -- Set max to 5 for testing
-      init { max_rules: 5, enabled: true }
+      record_verdict "r1", "allow"
+      real_rename = os.rename
+      renamed_from = nil
+      fail_rename = (src, dst) ->
+        renamed_from = src
+        false
+      rawset os, "rename", fail_rename
+      ok = write_now!
+      rawset os, "rename", real_rename
 
-      for i = 1, 6
-        record_verdict "rule#{i}", "allow"
+      assert.is_false ok
+      assert.truthy renamed_from and renamed_from\find ".tmp.", 1, true
+      -- L'instantané précédent reste intact et complet.
+      snap = read_snapshot!
+      assert.equals 1, snap.rules[1].verdicts.allow
+      assert.same { "metrics-w0.json" }, list_dir!
 
-      json = get_metrics_json!
-      -- Should have 5 rules, first one evicted
-      assert.equals 5, #json.rules
-      -- Check that rule1 is not present (LRU evicted)
-      found = false
-      for r in *json.rules
-        found = true if r.rule_id == "rule1"
-      assert.is_false found
+  describe "mémoire bornée", ->
 
-    it "keeps most recent rules after eviction", ->
+    it "évince la règle la moins récemment vue au-delà de max_rules", ->
       init { max_rules: 3, enabled: true }
-
-      record_verdict "rule1", "allow"
-      record_verdict "rule2", "allow"
-      record_verdict "rule3", "allow"
-      record_verdict "rule4", "allow"  -- Evicts rule1
-
-      json = get_metrics_json!
-      rule_ids = {}
-      for r in *json.rules
-        rule_ids[r.rule_id] = true
-      assert.is_nil rule_ids["rule1"]
-      assert.is_true rule_ids["rule2"]
-      assert.is_true rule_ids["rule3"]
-      assert.is_true rule_ids["rule4"]
+      for i = 1, 4
+        record_verdict "rule#{i}", "allow"
+      snap = get_metrics_json!
+      ids = {}
+      for r in *snap.rules
+        ids[r.rule_id] = true
+      assert.equals 3, #snap.rules
+      assert.is_nil ids["rule1"]
+      assert.is_true ids["rule4"]
 
   describe "chargement du module (config.metrics)", ->
     saved_metrics = nil
@@ -383,58 +297,3 @@ describe "metrics", ->
       fresh = require "metrics"
       fresh.record_verdict "rule1", "allow"
       assert.equals 1, #fresh.get_metrics_json!.rules
-
-  describe "integration", ->
-
-    it "tracks combined metrics for complex scenario", ->
-      -- Simulate DNS requests
-      for i = 1, 10
-        if i <= 7
-          record_verdict "secure_rule", "allow"
-        else
-          record_verdict "secure_rule", "refuse"
-
-      for i = 1, 8
-        record_cache "secure_rule", true
-      for i = 1, 2
-        record_cache "secure_rule", false
-
-      for i = 1, 5
-        record_ttl "secure_rule", 300 + (i * 60)
-
-      m = get_rule_metrics "secure_rule"
-      assert.equals 7, m.verdicts.allow
-      assert.equals 3, m.verdicts.refuse
-      assert.equals 0, m.verdicts.dnsonly
-      assert.equals 8, m.cache.hits
-      assert.equals 2, m.cache.misses
-      assert.equals 80, m.cache.hit_rate
-      assert.equals 360, m.ttl.min
-      assert.equals 600, m.ttl.max
-
-    it "handles zero metrics correctly", ->
-      record_verdict "empty_rule", "allow"
-      record_verdict "empty_rule", "allow"
-      -- No cache or TTL records
-
-      m = get_rule_metrics "empty_rule"
-      assert.equals 2, m.verdicts.allow
-      assert.equals 0, m.cache.hits
-      assert.equals 0, m.cache.misses
-      assert.equals 0, m.cache.hit_rate
-      assert.equals 0, m.ttl.min
-      assert.equals 0, m.ttl.max
-      assert.equals 0, m.ttl.avg
-
-    it "maintains separate rule metrics", ->
-      record_verdict "rule_a", "allow"
-      record_verdict "rule_a", "allow"
-      record_verdict "rule_b", "refuse"
-      record_verdict "rule_b", "refuse"
-
-      a = get_rule_metrics "rule_a"
-      b = get_rule_metrics "rule_b"
-      assert.equals 2, a.verdicts.allow
-      assert.equals 0, a.verdicts.refuse
-      assert.equals 0, b.verdicts.allow
-      assert.equals 2, b.verdicts.refuse

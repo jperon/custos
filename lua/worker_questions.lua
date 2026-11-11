@@ -8,6 +8,8 @@ local runtime_cfg = config.runtime or { }
 local nft_cfg = config.nft or { }
 local auth_cfg = config.auth or { }
 local metrics = require("metrics")
+local pidfile = require("lib.pidfile")
+local metrics_on = (config.metrics or { }).enabled ~= false
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
 local ip2s, dns_types
@@ -263,6 +265,9 @@ aggregate_decisions = function(decisions)
 end
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
+  if metrics_on then
+    metrics.maybe_flush()
+  end
   local payload_ptr = ffi.new("unsigned char*[1]")
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
   if payload_len <= 0 then
@@ -427,7 +432,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
           return q_fields
         end
       end)
-      if rule_id then
+      if metrics_on and rule_id then
         metrics.record_verdict(rule_id, "allow")
       end
       allow_reason = reason
@@ -439,7 +444,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
           return q_fields
         end
       end)
-      if rule_id then
+      if metrics_on and rule_id then
         metrics.record_verdict(rule_id, "refuse")
       end
       verdict = NF_DROP
@@ -505,7 +510,15 @@ end
 local run
 run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
   set_action_prefix("questions_")
-  metrics.init(config.metrics)
+  metrics_on = (config.metrics or { }).enabled ~= false
+  local runtime_dir = (pidfile.resolve_path(runtime_cfg.pid_file)):match("^(.*)/") or "."
+  metrics.init(config.metrics, {
+    dir = runtime_dir,
+    name = "dns-q" .. tostring(queue_num)
+  })
+  if metrics_on then
+    metrics.write_now()
+  end
   pipe_wfd = wfd
   mac_learn_wfd = learn_wfd
   events_wfd = ev_wfd
@@ -596,7 +609,17 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
       end
     end
   end
-  return run_queue(tonumber(queue_num), handle_question)
+  local queue_opts
+  if metrics_on then
+    queue_opts = {
+      idle_ms = 1000,
+      on_idle = metrics.flush_if_due
+    }
+  end
+  run_queue(tonumber(queue_num), handle_question, queue_opts)
+  if metrics_on then
+    return metrics.write_now()
+  end
 end
 return {
   run = run,

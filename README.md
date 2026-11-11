@@ -128,7 +128,7 @@ custos/
 │   ├── ffi_defs.moon        Déclarations FFI centralisées
 │   ├── ffi_xxhash.moon      FFI xxHash
 │   ├── log.moon             Logging structuré key=value + rate-limiting
-│   ├── metrics.moon         Métriques de performance par règle (verdicts, cache, TTL)
+│   ├── metrics.moon         Compteurs de verdicts par règle + instantané JSON périodique (page admin /admin/metrics)
 │   ├── ipc.moon             Protocole pipe question→response (msg 43 octets)
 │   ├── dns_ede.moon         Helpers DNS EDE (RFC 8914) — partagés responses + DoH
 │   ├── forge_dns.moon       Construction de réponses DNS forgées (vol de question)
@@ -157,6 +157,7 @@ custos/
 │   ├── worker_arp_sniffer.moon  Worker sniffer ARP/NDP passif
 │   ├── lib/
 │   │   ├── http.moon        Helpers HTTP (parsing requêtes/réponses)
+│   │   ├── json.moon        Encodeur/décodeur JSON minimal (instantanés métriques)
 │   │   ├── process.moon     Fork, set_process_name, signaux, shutdown
 │   │   ├── socket.moon      Helpers socket (FFI)
 │   │   ├── moonscript/      Sous-module git : runtime MoonScript embarqué

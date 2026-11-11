@@ -37,6 +37,8 @@ do
 end
 local handle_verdicts_get
 handle_verdicts_get = require("webui.handlers.verdicts").handle_verdicts_get
+local handle_metrics_get
+handle_metrics_get = require("webui.handlers.metrics").handle_metrics_get
 local parse_form
 parse_form = require("webui.util").parse_form
 local SCALAR_SECTIONS = {
@@ -94,6 +96,11 @@ dispatch = function(req, state)
   if path == "/admin/config/verdicts" then
     if method == "GET" then
       return handle_verdicts_get(req, state)
+    end
+  end
+  if path == "/admin/metrics" then
+    if method == "GET" then
+      return handle_metrics_get(req, state)
     end
   end
   if path == "/admin/config/" or path == "/admin/config" then

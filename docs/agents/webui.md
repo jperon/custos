@@ -140,6 +140,30 @@ matching de route reste sur le **chemin nu**.
 `/logout` (route GET du portail, `auth/handlers.moon`) : `/admin/logout` n'existe
 pas et retombait sur la redirection du routeur webui.
 
+### Page « Métriques » (`src/webui/handlers/metrics.moon`)
+
+`GET /admin/metrics` (lecture seule, lien « Métriques » dans la navigation
+admin) agrège les instantanés JSON écrits par chaque `worker_questions`.
+Source : `metrics-<worker>.json` dans le **répertoire d'exécution** (celui du
+pidfile, `lib.pidfile.resolve_path(cfg.runtime.pid_file)` ; `state.runtime_dir`
+est injectable pour les tests). Chaque fichier est un instantané
+`{ timestamp, rules = { {rule_id, verdicts = {allow, refuse, dnsonly}}, … } }`
+écrit atomiquement par `src/metrics.moon`.
+
+`read_snapshots` liste les fichiers avec `ls -1 <dir>/metrics-*.json` (les
+temporaires `*.json.tmp.<n>` ne correspondent pas au motif), décode chacun avec
+`lib.json` et **ignore sans erreur** tout fichier illisible, non-JSON ou de
+forme invalide (compteur « fichier(s) illisible(s) ou corrompu(s) »).
+`aggregate` somme les compteurs de **tous** les instantanés valides par verdict
+et par règle : aucun n'est exclu des totaux à cause de son âge. Le tableau
+« Workers » affiche l'âge de chaque instantané à titre d'information ; au-delà
+de `max(3 × metrics.flush_interval, 180 s)`, l'état devient « aucune activité
+depuis N s » (le worker écrit pourtant un instantané à zéro à son démarrage, et
+le superviseur purge les fichiers de l'exécution précédente avant de forker).
+Toutes les valeurs affichées (nom de worker, `rule_id`, dates) sont échappées
+via `webui.util.esc`. Si `metrics.enabled = false`, la page l'indique
+explicitement et n'affiche aucun total.
+
 **Listes — pas d'écrasement silencieux.** `handle_list_new_post` et le
 renommage de `handle_list_post` (`handlers/lists.moon`) répondent **409** si le
 fichier cible existe déjà (hors renommage vers le même nom) : la cible n'est

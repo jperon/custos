@@ -337,6 +337,8 @@ DEFAULTS = {
 
   metrics: {
     enabled: true
+    -- Intervalle entre deux instantanés JSON écrits par chaque worker_questions
+    -- dans le répertoire du pidfile (page admin /admin/metrics).
     flush_interval: 60
     max_rules: 1000
   }
