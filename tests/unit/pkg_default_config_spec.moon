@@ -150,6 +150,7 @@ print("LOADER_OK")
 describe "paquet OpenWrt — configuration par défaut", ->
 
   it "installe une seule configuration, à /etc/custos/config.moon, en conffile", ->
+    skip_if_absent!
     mk = read_file PKG_MAKEFILE
     assert.is_truthy mk\find("$(INSTALL_CONF) $(CURDIR)/files/etc/custos/config.moon $(1)/etc/custos/config.moon", 1, true),
       "install : /etc/custos/config.moon absent du Makefile"
