@@ -27,7 +27,13 @@ automatiquement les variantes :
 | `from_xxx_lists {…}` | `from_xxx` | OR sur plusieurs fichiers |
 
 Format fichiers : 1 item/ligne, ignores vides et `#commentaires`.
-`lists_dir` se configure via `cfg.lists_dir` ou `cfg.filter.lists_dir` (défaut : `/etc/custos/lists`).
+`lists_dir` se configure via `cfg.lists_dir` ou `cfg.filter.lists_dir` (défaut
+effectif de `compiler_api` : `/tmp/custos/lists`).
+`{xxx}` est le type dérivé du nom de base après le premier `_` :
+`from_net`→`net`, `from_mac`→`mac`, `from_vlan`→`vlan`, `from_user`→`user`,
+`in_time`→`time`, `to_domainlist`→`domainlist`. L'orthographe sans tiret bas
+(`from_netlist`, `from_maclists`…) n'est pas reconnue : `load_condition`
+renvoie `nil, "Condition '…' not found"`.
 
 Conséquence utile : `to_domainlist_list "groupe"` est un **groupe de domainlists**
 (le fichier `{lists_dir}/domainlist/groupe.txt` liste des **noms de domainlists**,

@@ -184,7 +184,7 @@ handle_devices_get = (req, state) ->
   body = H.section {
     H.h2 "Appareils vus sur le réseau"
     H.p { style: "color:#555" },
-      "Liste des appareils observés (source : worker_events). Une ligne sans nom n'est pas encore enregistrée : saisir un nom puis « Enregistrer » l'ajoute à #{H.code 'filter.macs'}, réutilisable dans les règles et maclists."
+      "Liste des appareils observés (source : worker_events). Une ligne sans nom n'est pas encore enregistrée : saisir un nom puis « Enregistrer » l'ajoute à #{H.code 'filter.macs'}, réutilisable dans les règles via from_mac/from_macs."
     H.p { H.input { type: "search", id: "devfilter", placeholder: "Filtrer…", style: "width:100%; box-sizing:border-box" } }
     H.table { id: "devtbl" }, {
       H.thead {

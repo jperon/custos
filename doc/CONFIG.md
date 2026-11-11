@@ -637,6 +637,7 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 |-----|------|--------|-------------|
 | `domainlists_dir` | string | `"/tmp/custos/lists"` | Répertoire racine des listes de domaines compilées |
 | `custom_lists_dir` | string | `nil` | Répertoire des listes personnalisées (optionnel) |
+| `lists_dir` | string | `"/tmp/custos/lists"` | Répertoire racine des fichiers texte lus par les conditions `*_list` (`{lists_dir}/{type}/{nom}.txt`), **distinct** de `domainlists_dir` |
 | `allow_localnets` | bool | `false` | Si `true`, injecte automatiquement les réseaux locaux en whitelist nft |
 | `captive_portal` | bool | `true` | Active les règles par défaut de détection de portail captif (sondes NCSI/MSFT, Apple, Google…). `false` → ces règles ne sont pas injectées (cf. § Règles par défaut) |
 | `safe_search` | bool | `true` | Active SafeSearch : réécriture CNAME des moteurs de recherche vers leur variante « safe » (Google→`forcesafesearch.google.com`, YouTube, Bing→`strict.bing.com`, DuckDuckGo→`safe.duckduckgo.com`). `false` → aucune réécriture (cf. § SafeSearch) |
@@ -644,11 +645,15 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 | `dest_whitelist` | array | `{}` | IPs/CIDRs de destination toujours autorisées (bypass filtrage) |
 | `allowed_domains` | array | `{"local","lan","home.arpa"}` | Domaines autorisés par défaut si `rules` est vide |
 
-### 14.2 Dictionnaires nommés : `nets`, `macs`, `times`, `vlans`, `users`
+### 14.2 Dictionnaires nommés et listes de valeurs
 
-Ces dictionnaires permettent de nommer des groupes réutilisables dans les conditions.
+Les variantes `_list` / `_lists` des conditions ne lisent **pas** ces
+dictionnaires : elles lisent des fichiers texte sous `filter.lists_dir`
+(`{lists_dir}/{type}/{nom}.txt`, un élément par ligne, lignes vides et
+`#commentaires` ignorées). L'usage réel de chaque dictionnaire est indiqué
+ci-dessous.
 
-#### `filter.nets` — Groupes de réseaux IP
+#### `filter.nets` — Réseaux nommés (non consulté par `from_net`)
 
 ```moonscript
 filter: {
@@ -663,23 +668,28 @@ filter: {
 }
 ```
 
-Référencés via `from_netlist: "lan"` ou `from_netlists: {"lan", "private_ipv6"}`.
+`from_net` ne consulte pas ce dictionnaire : il prend un CIDR inline
+(`from_net: "10.0.0.0/8"`). Pour un groupe nommé de CIDRs, utiliser
+`from_net_list: "lan"` ou `from_net_lists: {"lan", "private_ipv6"}` :
+fichier(s) `{lists_dir}/net/{nom}.txt`, un CIDR par ligne.
 
-#### `filter.macs` — Groupes d'adresses MAC
+#### `filter.macs` — Alias de MAC
+
+Chaque valeur est **une** adresse MAC (chaîne unique), pas une liste.
 
 ```moonscript
 filter: {
   macs: {
-    trusted: {
-      "aa:bb:cc:dd:ee:ff"
-      "11:22:33:44:55:66"
-    }
-    iot_devices: { "00:1a:2b:3c:4d:5e" }
+    trusted:      "aa:bb:cc:dd:ee:ff"
+    iot_devices:  "00:1a:2b:3c:4d:5e"
   }
 }
 ```
 
-Référencés via `from_maclist: "trusted"`.
+Résolus par `from_mac: "trusted"` et par chaque entrée de `from_macs`
+(alias ou MAC brute). Pour un groupe de plusieurs MACs, utiliser
+`from_mac_list: "trusted"` : fichier `{lists_dir}/mac/trusted.txt`, une valeur
+par ligne (les alias de `filter.macs` y sont résolus).
 
 #### `filter.times` — Fenêtres horaires
 
@@ -695,25 +705,27 @@ filter: {
 }
 ```
 
-Référencées via `in_time: "business_hours"`.
+Référencées via `in_time: "business_hours"`, ou par un fichier nommé listant
+des noms de fenêtres (`in_time_list: "fichier"`, un nom par ligne dans
+`{lists_dir}/time/fichier.txt`).
 
-#### `filter.vlans` — Groupes de VLAN
+#### VLAN (`from_vlan`, `from_vlan_list`)
 
-```moonscript
-filter: {
-  vlans: {
-    management: {10, 20}
-    guests:     {100, 101}
-  }
-}
-```
+Il n'existe pas de dictionnaire `filter.vlans` : `from_vlan` prend un ID
+numérique (`from_vlan: 100`). Pour un groupe, utiliser
+`from_vlan_list: "guests"` : fichier `{lists_dir}/vlan/guests.txt`, un ID par
+ligne.
 
-Référencés via `from_vlanlist: "guests"`.
+> **Limite connue** : les lignes lues par `from_vlan_list` sont des chaînes,
+> comparées telles quelles à `req.vlan` (numérique) par
+> `src/filter/conditions/from_vlan.moon:21-27` ; la variante fichier ne
+> correspond donc pas aux VLAN réels tant que cette comparaison n'est pas
+> convertie.
 
-#### `filter.users` / `filter.userlists` — Utilisateurs authentifiés
+#### `filter.users` / `filter.userlists` — Utilisateurs
 
-Associe un identifiant court à un email ou un identifiant d'authentification.
-`userlists` est un alias de `users` (les deux sont synchronisés au chargement).
+Associent un identifiant court à un email. `userlists` est un alias de
+`users` (les deux sont synchronisés au chargement).
 
 ```moonscript
 filter: {
@@ -724,7 +736,10 @@ filter: {
 }
 ```
 
-Référencés via `from_user: "alice"`.
+`from_user` ne résout pas ces alias : il attend directement l'identifiant
+d'authentification, comparé au champ `user` de la session. Pour un groupe
+d'identifiants, utiliser `from_user_list: "admins"` : fichier
+`{lists_dir}/user/admins.txt`, un identifiant par ligne.
 
 ### 14.3 Sources de listes de domaines (`filter.sources`)
 
@@ -816,7 +831,7 @@ filter: {
     {
       description: "Blocage malware/phishing LAN"
       conditions: {
-        from_netlist: "lan"
+        from_net_list: "lan"
         to_domainlists: {"toulouse/malware", "toulouse/phishing"}
       }
       actions: {"deny"}
@@ -943,6 +958,16 @@ Elles sont combinées en **AND implicite** : toutes doivent être vraies pour qu
 
 Pour un **OU** entre conditions hétérogènes, utiliser `any_of`. Pour la négation, utiliser `not`.
 
+**Variantes `_list` / `_lists`.** `from_xxx_list "nom"` lit
+`{lists_dir}/{type}/nom.txt` (un élément par ligne) et `from_xxx_lists {…}` fait
+un OU sur plusieurs fichiers. Le `{type}` est le nom de base après le premier
+`_` : `from_net`→`net`, `from_mac`→`mac`, `from_vlan`→`vlan`,
+`from_user`→`user`, `in_time`→`time`. Ces variantes ne référencent **pas** les
+dictionnaires `filter.nets` / `filter.macs` / `filter.users`. L'orthographe
+sans tiret bas (`from_netlist`, `from_maclists`…) n'existe pas :
+`compiler_api.load_condition` renvoie `Condition '…' not found` et
+`src/filter/rule.moon:57` refuse la règle.
+
 ### Domaines DNS
 
 | Condition | Valeur | Description |
@@ -975,8 +1000,8 @@ listes (fichier nommé) », le fichier-groupe se gère sous
 | `from_nets` | `{"10.0.0.0/8","fc00::/7"}` | OU entre plusieurs CIDRs |
 | `from_subnet` | `"10.0.0.0/8"` ou `{net:"...",family:"inet"}` | CIDR avec famille explicite optionnelle |
 | `from_subnets` | `{"10.0.0.0/8","172.16.0.0/12"}` | OU entre plusieurs subnets |
-| `from_netlist` | `"lan"` | Référence un groupe dans `filter.nets` |
-| `from_netlists` | `{"lan","private_ipv6"}` | OU entre plusieurs groupes |
+| `from_net_list` | `"lan"` | Lit `{lists_dir}/net/lan.txt` (un CIDR par ligne) |
+| `from_net_lists` | `{"lan","private_ipv6"}` | OU entre plusieurs fichiers |
 
 **Formats CIDR acceptés :**
 - IPv4 : `"192.168.0.0/24"`, `"10.0.0.0/8"`, `"192.168.1.1"` (= /32)
@@ -992,10 +1017,10 @@ listes (fichier nommé) », le fichier-groupe se gère sous
 
 | Condition | Valeur | Description |
 |-----------|--------|-------------|
-| `from_mac` | `"aa:bb:cc:dd:ee:ff"` | Adresse MAC exacte (support nft natif) |
-| `from_macs` | `{"aa:bb:...","11:22:..."}` | OU entre plusieurs MACs |
-| `from_maclist` | `"trusted"` | Référence un groupe dans `filter.macs` |
-| `from_maclists` | `{"trusted","iot"}` | OU entre plusieurs groupes |
+| `from_mac` | `"aa:bb:cc:dd:ee:ff"` ou un alias de `filter.macs` | Adresse MAC exacte (support nft natif) |
+| `from_macs` | `{"aa:bb:...","11:22:..."}` | OU entre plusieurs MACs (alias acceptés) |
+| `from_mac_list` | `"trusted"` | Lit `{lists_dir}/mac/trusted.txt` (une MAC ou un alias par ligne) |
+| `from_mac_lists` | `{"trusted","iot"}` | OU entre plusieurs fichiers |
 
 ### VLAN
 
@@ -1003,8 +1028,8 @@ listes (fichier nommé) », le fichier-groupe se gère sous
 |-----------|--------|-------------|
 | `from_vlan` | `100` | VLAN ID exact (support nft natif) |
 | `from_vlans` | `{100,101,102}` | OU entre plusieurs VLAN IDs |
-| `from_vlanlist` | `"guests"` | Référence un groupe dans `filter.vlans` |
-| `from_vlanlists` | `{"guests","mgmt"}` | OU entre plusieurs groupes |
+| `from_vlan_list` | `"guests"` | Lit `{lists_dir}/vlan/guests.txt` (un ID par ligne) |
+| `from_vlan_lists` | `{"guests","mgmt"}` | OU entre plusieurs fichiers |
 
 ### Fenêtres horaires
 
@@ -1013,6 +1038,8 @@ listes (fichier nommé) », le fichier-groupe se gère sous
 | `in_time` | `"business_hours"` | Référence un intervalle dans `filter.times` |
 | `in_time` | `{start:"08:00",end:"18:00",days:{"Mon","Fri"}}` | Intervalle inline avec jours optionnels |
 | `in_times` | `{"business_hours","weekend"}` | OU entre plusieurs fenêtres |
+| `in_time_list` | `"fichier"` | Lit `{lists_dir}/time/fichier.txt` (un nom de fenêtre par ligne) |
+| `in_time_lists` | `{"f1","f2"}` | OU entre plusieurs fichiers |
 
 **Jours acceptés :** `"Sun"`, `"Mon"`, `"Tue"`, `"Wed"`, `"Thu"`, `"Fri"`, `"Sat"`.
 Si `days` est absent, la fenêtre s'applique tous les jours.
@@ -1021,10 +1048,11 @@ Si `days` est absent, la fenêtre s'applique tous les jours.
 
 | Condition | Valeur | Description |
 |-----------|--------|-------------|
-| `from_user` | `"alice"` | Utilisateur identifié dans `filter.users` |
+| `from_user` | `"alice@example.com"` | Identifiant d'authentification (champ `user` de la session) |
 | `from_user` | `{user:"alice",source:"tls"}` | Avec source d'authentification explicite |
 | `from_users` | `{"alice","bob"}` | OU entre plusieurs utilisateurs |
-| `from_userlist` | `"admins"` | Référence un groupe dans `filter.users` |
+| `from_user_list` | `"admins"` | Lit `{lists_dir}/user/admins.txt` (un identifiant par ligne) |
+| `from_user_lists` | `{"admins","vip"}` | OU entre plusieurs fichiers |
 
 **Sources d'authentification :**
 - `"sessions_file"` (défaut) : sessions du portail captif
@@ -1047,8 +1075,8 @@ Si `days` est absent, la fenêtre s'applique tous les jours.
 ```moonscript
 conditions: {
   any_of: {
-    {from_netlist: "lan"}
-    {from_maclist: "trusted"}
+    {from_net_list: "lan"}
+    {from_mac_list: "trusted"}
   }
 }
 ```

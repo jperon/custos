@@ -248,7 +248,7 @@ handle_devices_get = function(req, state)
     H.h2("Appareils vus sur le réseau"),
     H.p({
       style = "color:#555"
-    }, "Liste des appareils observés (source : worker_events). Une ligne sans nom n'est pas encore enregistrée : saisir un nom puis « Enregistrer » l'ajoute à " .. tostring(H.code('filter.macs')) .. ", réutilisable dans les règles et maclists."),
+    }, "Liste des appareils observés (source : worker_events). Une ligne sans nom n'est pas encore enregistrée : saisir un nom puis « Enregistrer » l'ajoute à " .. tostring(H.code('filter.macs')) .. ", réutilisable dans les règles via from_mac/from_macs."),
     H.p({
       H.input({
         type = "search",

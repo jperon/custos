@@ -100,8 +100,10 @@ n'échappant rien, `devices.moon` échappe lui-même les valeurs (`esc`).
 `(mac_map[alias] or alias)\lower!`, qui plante sur une table. L'éditeur
 `MACs nommées` (`handle_macs_post`, `is_list_value=false`) et le schéma
 (`config_schema.macs.value_type = "string"`) sont alignés sur ce contrat. Un alias
-ainsi défini est résoluble dans `from_macs {…}` / `from_mac_list` (chaque entrée
-passe par `from_mac` via `make_plural`), mélangeable avec des MAC brutes.
+ainsi défini est résoluble dans `from_mac` / `from_macs {…}` (chaque entrée passe
+par `from_mac` via `make_plural`), donc aussi dans les lignes d'un fichier lu par
+`from_mac_list`, mélangeable avec des MAC brutes. `from_mac_list` lui-même attend
+un nom de fichier sous `{lists_dir}/mac/`, pas un alias.
 
 ### Page « Verdicts » (`src/webui/handlers/verdicts.moon`)
 
