@@ -129,7 +129,6 @@ describe "worker_questions", ->
     package.loaded["metrics"] = {
       init: -> nil
       record_verdict: -> nil
-      maybe_flush: -> nil
       write_now: -> nil
     }
 

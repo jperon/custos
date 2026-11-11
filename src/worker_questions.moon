@@ -17,8 +17,8 @@ nft_cfg = config.nft or {}
 auth_cfg = config.auth or {}
 metrics = require "metrics"
 pidfile = require "lib.pidfile"
--- Coût nul dans le hot-path quand les métriques sont désactivées : l'appel à
--- metrics.maybe_flush est gardé par ce booléen local (cf. handle_question).
+-- Coût nul dans le hot-path quand les métriques sont désactivées : l'export
+-- périodique (flush_if_due via on_idle) est gardé par ce booléen local.
 metrics_on = (config.metrics or {}).enabled != false
 { :get_l2 } = require "nfq/ethernet"
 { :ip2s, :dns_types } = require "lib.packet_parsing"
@@ -231,10 +231,9 @@ aggregate_decisions = (decisions) ->
 
 -- ── Callback principal ───────────────────────────────────────────
 handle_question = (qh_ptr, nfad, pkt_id) ->
-  -- Export périodique des métriques : simple incrément/comparaison par paquet
-  -- (l'horloge n'est lue que tous les check_every paquets, cf. metrics.moon).
-  metrics.maybe_flush! if metrics_on
-
+  -- Pas d'export de métriques ici : run_queue appelle on_idle (flush_if_due)
+  -- avant chaque lecture, donc une fois par paquet au minimum, sans lire
+  -- l'horloge dans ce callback.
   -- ── Payload brut ─────────────────────────────────────────────
   payload_ptr = ffi.new "unsigned char*[1]"
   payload_len = libnfq.nfq_get_payload nfad, payload_ptr
