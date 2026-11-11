@@ -60,13 +60,18 @@ ack_lock_path = (worker_idx) ->
 -- n'y figurent. `wait_ack` est borné par `ACK_TIMEOUT_MS` (150 ms), donc un
 -- enfant ne peut pas tenir le verrou indéfiniment. Si l'ouverture du verrou
 -- échoue, on exécute sans verrou (comportement antérieur) avec un log_warn,
--- jamais de plantage de l'enfant.
+-- jamais de plantage de l'enfant. En revanche, une erreur survenue DANS la
+-- section critique (après le début des injections) est propagée telle quelle :
+-- la ré-exécuter sans verrou doublerait les injections nft et masquerait la
+-- vraie erreur derrière un faux « échec de verrou ».
 -- @tparam table answers Liste normalisée de { family, addr, ttl }.
 -- @tparam table opts    Options de response_inject.inject (inject_nft, ack_corr…).
 -- @treturn table { records_to_add, success_any, ip_count, no_v4, no_v6 }
 inject_nft_and_wait = (answers, opts) ->
   return inject answers, opts unless opts.inject_nft
+  started = false
   critical = ->
+    started = true
     drain_ack!
     inj = inject answers, opts
     pending = get_last_seq!
@@ -77,6 +82,7 @@ inject_nft_and_wait = (answers, opts) ->
   return critical! unless lock_path
   ok, res = pcall with_lock, lock_path, critical
   return res if ok
+  error res, 0 if started
   log_warn -> { action: "doh_ack_lock_failed_fallback", path: lock_path, err: tostring res }
   critical!
 

@@ -83,7 +83,15 @@ la séquence sous `lib.filelock.with_lock` :
   tenir le verrou indéfiniment ;
 - si l'ouverture du verrou échoue (`with_lock` lève), repli sur l'exécution
   sans verrou (comportement antérieur) avec `log_warn`
-  `doh_ack_lock_failed_fallback`, jamais de plantage de l'enfant.
+  `doh_ack_lock_failed_fallback`, jamais de plantage de l'enfant ;
+- une erreur survenue **dans** la section critique (drapeau `started` positionné
+  en première ligne) est propagée telle quelle, sans repli : ré-exécuter la
+  section après une injection partielle doublerait les insertions nft et
+  journaliserait à tort un « échec de verrou ».
+
+Les options passées au helper portent `ack_corr` (`txid:ip_client`), utilisé à
+la fois pour les insertions et pour `wait_ack`, y compris sur le chemin
+`redirect`.
 
 Le chemin UDP (`worker_responses`, un processus par tube) n'est pas concerné :
 il n'appelle pas ce helper et garde son tube privé.

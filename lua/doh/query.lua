@@ -62,8 +62,10 @@ inject_nft_and_wait = function(answers, opts)
   if not (opts.inject_nft) then
     return inject(answers, opts)
   end
+  local started = false
   local critical
   critical = function()
+    started = true
     drain_ack()
     local inj = inject(answers, opts)
     local pending = get_last_seq()
@@ -80,6 +82,9 @@ inject_nft_and_wait = function(answers, opts)
   local ok, res = pcall(with_lock, lock_path, critical)
   if ok then
     return res
+  end
+  if started then
+    error(res, 0)
   end
   log_warn(function()
     return {

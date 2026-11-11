@@ -42,13 +42,20 @@ package.loaded["lib.filelock"] = {
   with_lock: (path, fn) -> lock_stub path, fn
 }
 
+-- Permet de faire lever wait_ack après les injections (section critique qui
+-- échoue en cours de route), pour vérifier que l'erreur est propagée sans
+-- ré-exécuter critical (donc sans doubler les injections nft).
+fail_wait = false
+
 nft_stub = {
   get_worker_idx: -> 3
   drain_ack: (-> events[#events + 1] = "drain")
   get_last_seq: ->
     events[#events + 1] = "seq"
     7
-  wait_ack: (seq, corr) -> events[#events + 1] = "wait"
+  wait_ack: (seq, corr) ->
+    events[#events + 1] = "wait"
+    error "wait_ack: boom" if fail_wait
   add_ip4: (key, dest, rule_id, timeout, corr) ->
     events[#events + 1] = "add"
     true
@@ -85,6 +92,7 @@ describe "doh.query.inject_nft_and_wait", ->
   before_each ->
     events = {}
     log_events = {}
+    fail_wait = false
     lock_stub = (path, fn) ->
       events[#events + 1] = "lock_enter:#{path}"
       res = fn!
@@ -110,6 +118,31 @@ describe "doh.query.inject_nft_and_wait", ->
     assert.same { "drain", "add", "seq", "wait" }, events
     assert.equals 1, #log_events
     assert.equals "doh_ack_lock_failed_fallback", log_events[1].action
+
+  it "with_lock lève avant fn : repli exécuté une seule fois", ->
+    lock_stub = (path, fn) ->
+      events[#events + 1] = "lock_enter"
+      error "with_lock: impossible d'ouvrir le verrou"
+    res = query_mod.inject_nft_and_wait answers, make_opts!
+    assert.equals 1, res.records_to_add
+    drains = 0
+    for e in *events
+      drains += 1 if e == "drain"
+    assert.equals 1, drains
+    assert.same { "lock_enter", "drain", "add", "seq", "wait" }, events
+    assert.equals 1, #log_events
+    assert.equals "doh_ack_lock_failed_fallback", log_events[1].action
+
+  it "erreur de critical après injection : propagée, inject une seule fois", ->
+    fail_wait = true
+    ok, err = pcall query_mod.inject_nft_and_wait, answers, make_opts!
+    assert.false ok
+    assert.truthy tostring(err)\find "wait_ack: boom", 1, true
+    adds = 0
+    for e in *events
+      adds += 1 if e == "add"
+    assert.equals 1, adds
+    assert.same {}, log_events
 
   it "inject_nft=false : ni drain, ni wait, ni verrou", ->
     res = query_mod.inject_nft_and_wait answers, make_opts false
