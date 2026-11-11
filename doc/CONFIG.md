@@ -69,7 +69,7 @@ Contrôle le comportement global du service.
 
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
-| `log_level` | string | `"INFO"` | Niveau de log : `DEBUG`, `INFO`, `WARN`, `ERROR` |
+| `log_level` | string | `"INFO"` | Niveau de log, du plus verbeux au moins verbeux : `TRACE` (0), `DEBUG` (1), `INFO` (2), `WARN` (4), `ERROR` (5). `TRACE` est réservé au détail par paquet ; `DEBUG` au détail par connexion/requête. |
 | `benchmark` | bool | `false` | Active les mesures de performance dans les logs |
 | `gc_pause` | number | `110` | Réglage GC LuaJIT (`collectgarbage "setpause"`). Le GC se déclenche dès que le tas dépasse de `gc_pause`-100 % la taille post-collecte. Défaut LuaJIT : 200 (le tas peut doubler). 110 ⇒ collecte dès +10 %, plus économe en RAM. |
 | `gc_stepmul` | number | `400` | Réglage GC LuaJIT (`collectgarbage "setstepmul"`). Multiplicateur de la vitesse du GC incrémental ; une valeur plus haute compense le `gc_pause` bas. |
@@ -189,23 +189,21 @@ règle par défaut **du niveau**, qui s'applique même quand `action` est prése
 | `captive_redirect` | 60 s | `ip` |
 | `no_ipv6_for_client`, `no_ipv4_for_client` (préfixés ou non) | 120 s | `client` |
 | `response_dnsonly` | 30 s | `dst_ip`, `qnames` |
+| échec d'authentification (préfixé `auth_`) | 60 s | `ip`, `user`, `err` (ou `ip`, `mac`) |
 
-Champs d'identité par défaut : `peer`, `peer_ip`, `peer_mac`, `ip`, `ip_src`,
-`ip_dst`, `client`, `client_ip`, `client_mac`, `mac`, `mac_src`, `src_ip`,
-`dst_ip`, `qname`, `qnames`, `domain`, `qtype`, `hostname`, `host`, `sni`,
-`cert`, `key`, `path`, `method`, `url`, `file`, `ifname`, `name`, `queue`,
-`worker`, `user`, `username`, `vlan`, `resolver`, `resolver_ip`, `upstream_ip`,
-`addr`, `protocol`, `l4_proto`, `rcode`, `errno`, `source`, `direction`,
-`version`, `verdict`, `backend`, `type`, `cn`, `local_ip`, `rule`, `list`,
-`err`, `reason`, `cmd`.
-Les champs volatils (`pid`, `txid`, ports, durées, compteurs, tailles) en sont
-exclus : deux lignes qui n'en diffèrent que par eux fusionnent.
-
-Exclusions réfléchies (volontairement hors empreinte) : `status` (sémantique
-mixte — code de sortie de commande ou couche de parsing — donc volatil),
-`mode` (constante de configuration : ne varie pas entre deux lignes d'un même
-processus), `detail` (texte libre explicatif ; l'`action` et `reason` portent
-la discrimination), `af`/`family` (redondants avec `src_ip`/`dst_ip`).
+**Classement explicite des champs.** Chaque nom de champ est classé dans
+`src/log.moon` : `RL_IDENTITY_KEYS` (distingue deux événements : objet,
+interface, set, règle, hôte, chemin, code d'erreur…) ou `RL_VOLATILE_KEYS`
+(varie à chaque occurrence sans changer la nature du message : `pid`, `txid`,
+descripteurs, port source, séquence, durées, compteurs, tailles, horodatages,
+texte libre — `detail`, `msg`…). L'empreinte par défaut
+retient **tous les champs présents sauf les volatils** ; un champ inconnu est
+traité comme une identité (mieux vaut une ligne en trop qu'une information
+perdue). Le test `tests/unit/log_fields_spec.moon` (outil
+`tools/log_fields.lua`) parcourt les tables littérales de `src/**/*.moon` et
+échoue en listant tout champ non classé : ajouter un champ à un log impose de
+le classer. Les règles `keys: {...}` de `RL_CONFIG` restent prioritaires et
+parcourent leur liste dans l'ordre.
 
 **Saturation et repli.** Chaque slot stocke `{hash, ts, expires, count}` (4
 `uint32`, en-tête de 2 mots pour la main d'horloge et le compteur de
@@ -229,13 +227,21 @@ La valeur de `MAP_ANONYMOUS` est choisie à l'exécution depuis `jit.arch` :
 `0x800` sur MIPS (où `0x20` est `MAP_RENAME`), `0x20` ailleurs ; `MAP_SHARED`
 (`0x01`) est commun à toutes les architectures Linux.
 
-Actions de cycle de vie **jamais** limitées : `worker_died`, `child_crashed`,
-`worker_started`, `worker_stopping`, `worker_start`, `supervisor_running`,
-`supervisor_sigterm`, `supervisor_sighup_*`, `dns-filter_start`, `config_source`,
-`config_external_missing` (un crash ou un rechargement répété doit rester
-visible). La comparaison se fait aussi après retrait du préfixe worker.
+Actions **jamais** limitées (`RL_NEVER_LIMIT`) : cycle de vie et supervision
+(`worker_died`, `child_crashed`, `worker_started`, `worker_stopping`,
+`worker_start`, `supervisor_running`, `supervisor_sigterm`,
+`supervisor_sighup_*`, `dns-filter_start`, `config_source`,
+`config_external_missing` — un crash ou un rechargement répété doit rester
+visible), instrumentation (`dns_benchmark`), diagnostic du limiteur, et
+**audit de sécurité** : connexion réussie (`server_login_success`), fermeture
+ou expiration de session (`server_bye_grace`, `server_ping_session_invalidated`,
+`user_session_expired`, `user_session_removed`) et changement de mot de passe
+(`server_password_changed`). Les **échecs d'authentification** ne sont pas
+exemptés — une force brute est une inondation volontaire — mais restent bornés
+par `RL_CONFIG` sur `(ip, user, err)` pendant 60 s. La comparaison se fait
+aussi après retrait du préfixe worker (`auth_`).
 
-L'état est une table de hachage à taille fixe (4096 slots × 3 `uint32`, 48 Kio)
+L'état est une table de hachage à taille fixe (4096 slots × 4 `uint32`, 64 Kio)
 dans une zone `mmap(MAP_SHARED|MAP_ANONYMOUS)` créée au chargement du module,
 donc dans le superviseur **avant tout fork** : workers et enfants forkés par
 connexion partagent le même état. Sans verrou, une course bénigne peut produire

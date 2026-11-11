@@ -18,10 +18,10 @@ local sanitize_hostname
 sanitize_hostname = require("auth.cert_name").sanitize_hostname
 local extract_client_sni
 extract_client_sni = require("auth.sni_peek").extract_client_sni
-local log_info, log_warn, log_error, log_debug
+local log_info, log_warn, log_error, log_debug, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_error, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug
+  log_info, log_warn, log_error, log_debug, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.level_enabled
 end
 local config = require("config")
 local read_request, send_response, apply_io_timeouts
@@ -401,13 +401,15 @@ dispatch_connection = function(client, peer_ip, state, fork_fn)
         pid = pid
       }
     end)
-    log_info(function()
-      return {
-        action = "server_conn_started",
-        pid = pid,
-        peer = peer_ip
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "server_conn_started",
+          pid = pid,
+          peer = peer_ip
+        }
+      end)
+    end
   else
     log_error(function()
       return {

@@ -34,6 +34,10 @@ describe "log", ->
   it "niveau inconnu (0) → false", ->
     assert.is_false log.level_enabled "PAS_UN_NIVEAU"
 
+  it "TRACE (0) est plus verbeux que DEBUG : filtré au seuil INFO", ->
+    assert.are.equal 0, log.get_log_level_num "TRACE"
+    assert.is_false log.level_enabled "TRACE"
+
   -- rl_fingerprint : construction de la clé de rate-limiting (concat directe).
   it "rl_fingerprint concatène action_key + champs discriminants", ->
     fields = { mac_src: "aa:bb", qname: "x.example", qtype: "A" }
@@ -97,6 +101,60 @@ describe "log", ->
       assert.are.equal 0,  log.check_rl "INFO", f1, 6000
       assert.are.equal -1, log.check_rl "INFO", f2, 6001
 
+    it "champ identité explicite (rule_id) → deux événements distincts", ->
+      f1 = { action: "ident_rule", rule_id: "rule_a" }
+      f2 = { action: "ident_rule", rule_id: "rule_b" }
+      assert.are.equal 0,  log.check_rl "INFO", f1, 6100
+      assert.are.equal 0,  log.check_rl "INFO", f2, 6100
+      assert.are.equal -1, log.check_rl "INFO", f1, 6101
+      assert.are.equal -1, log.check_rl "INFO", f2, 6101
+
+    it "family (IPv4 vs IPv6) est une identité → deux événements", ->
+      f1 = { action: "ident_family", family: "ipv4" }
+      f2 = { action: "ident_family", family: "ipv6" }
+      assert.are.equal 0,  log.check_rl "INFO", f1, 6150
+      assert.are.equal 0,  log.check_rl "INFO", f2, 6150
+      assert.are.equal -1, log.check_rl "INFO", f1, 6151
+      assert.are.equal -1, log.check_rl "INFO", f2, 6151
+
+    it "champ inconnu (non classé) traité comme identité", ->
+      f1 = { action: "ident_inconnu", champ_inconnu_xyz: "a" }
+      f2 = { action: "ident_inconnu", champ_inconnu_xyz: "b" }
+      assert.are.equal 0,  log.check_rl "INFO", f1, 6200
+      assert.are.equal 0,  log.check_rl "INFO", f2, 6200
+      assert.are.equal -1, log.check_rl "INFO", f1, 6201
+      assert.are.equal -1, log.check_rl "INFO", f2, 6201
+
+    it "champ volatil seul (bytes) → seconde ligne supprimée puis suppressed=1", ->
+      f1 = { action: "volatil_bytes", qname: "vb.example", bytes: 10 }
+      f2 = { action: "volatil_bytes", qname: "vb.example", bytes: 99 }
+      assert.are.equal 0,  log.check_rl "INFO", f1, 6300
+      assert.are.equal -1, log.check_rl "INFO", f2, 6301
+      -- Fenêtre INFO de 60 s : à 6360 la ligne réapparaît avec le compte.
+      assert.are.equal 1,  log.check_rl "INFO", f2, 6360
+
+    it "empreinte par défaut indépendante de l'ordre de parcours des champs", ->
+      f1 = { action: "ordre", rule_id: "r1", path: "/a" }
+      f2 = { path: "/a", rule_id: "r1", action: "ordre" }
+      assert.are.equal log._rl_hash("INFO", f1), log._rl_hash("INFO", f2)
+
+    it "rl_fingerprint par défaut : ordre des champs normalisé", ->
+      f1 = { action: "fp_ordre", rule_id: "r1", path: "/a" }
+      f2 = { path: "/a", rule_id: "r1", action: "fp_ordre" }
+      assert.are.equal (log.rl_fingerprint "INFO", f1, log.RL_IDENTITY_KEYS),
+                        (log.rl_fingerprint "INFO", f2, log.RL_IDENTITY_KEYS)
+
+    it "doh_handshake_failed reste WARN, limité par IP cliente sur 60 s", ->
+      log.set_action_prefix "doh_"
+      f1 = { action: "doh_handshake_failed", peer: "10.0.0.2", attempts: 1, err: "timeout" }
+      f2 = { action: "doh_handshake_failed", peer: "10.0.0.2", attempts: 9, err: "timeout" }
+      autre = { action: "doh_handshake_failed", peer: "10.0.0.3", attempts: 1, err: "timeout" }
+      assert.are.equal 0,  log.check_rl "WARN", f1, 7300
+      assert.are.equal -1, log.check_rl "WARN", f2, 7301
+      assert.are.equal 0,  log.check_rl "WARN", autre, 7302
+      assert.are.equal 1,  log.check_rl "WARN", f2, 7360
+      log.set_action_prefix ""
+
     it "action préfixée par le worker → règle spécifique (strip du préfixe)", ->
       log.set_action_prefix "response_"
       f = { action: "response_no_ipv6_for_client", client: "10.0.0.2" }
@@ -135,6 +193,37 @@ describe "log", ->
       voisine = { action: "worker_disabled", name: "dns" }
       assert.are.equal 0,  log.check_rl "WARN", voisine, 10000
       assert.are.equal -1, log.check_rl "WARN", voisine, 10001
+
+    it "événements d'audit jamais limités (login, logout/session, mot de passe)", ->
+      log.set_action_prefix "auth_"
+      for action in *{"server_login_success", "server_password_changed", "server_bye_grace", "server_ping_session_invalidated", "user_session_expired", "user_session_removed"}
+        f = { action: "auth_#{action}", user: "alice", ip: "10.0.0.2" }
+        assert.are.equal 0, log.check_rl "INFO", f, 12000
+        assert.are.equal 0, log.check_rl "INFO", f, 12001
+        assert.are.equal 0, log.check_rl "INFO", f, 12002
+      log.set_action_prefix ""
+
+    it "reload du superviseur jamais limité (famille rechargement)", ->
+      f = { action: "supervisor_sighup_reload" }
+      assert.are.equal 0, log.check_rl "INFO", f, 12100
+      assert.are.equal 0, log.check_rl "INFO", f, 12101
+      assert.are.equal 0, log.check_rl "INFO", f, 12102
+
+    it "échec d'authentification limité par (ip, utilisateur), pas exempté", ->
+      log.set_action_prefix "auth_"
+      f1 = { action: "auth_server_login_nonce_rejected", ip: "10.0.0.2", user: "alice", err: "expired" }
+      f2 = { action: "auth_server_login_nonce_rejected", ip: "10.0.0.2", user: "alice", err: "expired" }
+      assert.are.equal 0,  log.check_rl "WARN", f1, 12200
+      assert.are.equal -1, log.check_rl "WARN", f2, 12201
+      -- Un autre utilisateur ou une autre IP reste un événement distinct.
+      autre_user = { action: "auth_server_login_nonce_rejected", ip: "10.0.0.2", user: "bob", err: "expired" }
+      autre_ip   = { action: "auth_server_login_nonce_rejected", ip: "10.0.0.3", user: "alice", err: "expired" }
+      assert.are.equal 0, log.check_rl "WARN", autre_user, 12202
+      assert.are.equal 0, log.check_rl "WARN", autre_ip, 12203
+      -- Cause différente : conservée (err est discriminant).
+      autre_err = { action: "auth_server_login_nonce_rejected", ip: "10.0.0.2", user: "alice", err: "invalid" }
+      assert.are.equal 0, log.check_rl "WARN", autre_err, 12204
+      log.set_action_prefix ""
 
     it "_rl_never_limited : strip du préfixe worker", ->
       log.set_action_prefix "response_"

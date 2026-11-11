@@ -27,7 +27,7 @@ skip() {
 
 assert_contains() {
     local label="$1" pattern="$2" output="$3"
-    if echo "$output" | grep -qE "$pattern"; then
+    if grep -qE -- "$pattern" <<<"$output"; then
         ok "$label"
     else
         fail "$label" "pattern /$pattern/ absent"
@@ -53,7 +53,7 @@ assert_log_has() {
 
 assert_not_contains() {
     local label="$1" pattern="$2" output="$3"
-    if echo "$output" | grep -qE "$pattern"; then
+    if grep -qE -- "$pattern" <<<"$output"; then
         fail "$label" "pattern /$pattern/ présent (inattendu)"
     else
         ok "$label"
@@ -372,7 +372,7 @@ echo "=== G4 : auth API (login / ping / logout) ==="
 
 # GET /auth → page de login accessible
 resp=$(curl_auth "/auth")
-if echo "$resp" | grep -qiE 'html|form|login|HTTP_STATUS:200|HTTP_STATUS:302'; then
+if grep -qiE -- 'html|form|login|HTTP_STATUS:200|HTTP_STATUS:302' <<<"$resp"; then
     ok "T30 GET /auth → page accessible"
 else
     fail "T30 GET /auth → page accessible" "réponse inattendue"
@@ -383,7 +383,7 @@ resp=$(curl_auth "/register" \
     -X POST \
     --data-urlencode "user=bob@test.lan" \
     --data-urlencode "password=secret123")
-if echo "$resp" | grep -qE 'HTTP_STATUS:(200|409)'; then
+if grep -qE -- 'HTTP_STATUS:(200|409)' <<<"$resp"; then
     ok "T31 POST /register bob@test.lan → 200/409"
 else
     fail "T31 POST /register bob@test.lan → 200/409" "$(echo "$resp" | grep HTTP_STATUS)"
@@ -394,7 +394,7 @@ resp=$(curl_auth "/login" \
     -X POST \
     --data-urlencode "user=alice@test.lan" \
     --data-urlencode "password=MAUVAIS")
-if echo "$resp" | grep -qE 'HTTP_STATUS:401'; then
+if grep -qE -- 'HTTP_STATUS:401' <<<"$resp"; then
     ok "T32 POST /login mauvais mdp → 401"
 else
     fail "T32 POST /login mauvais mdp → 401" "$(echo "$resp" | grep HTTP_STATUS)"
@@ -409,7 +409,7 @@ resp=$(curl_auth_verbose "/login" \
     -X POST \
     --data-urlencode "user=alice@test.lan" \
     --data-urlencode "password=motdepasse123")
-if echo "$resp" | grep -qE 'HTTP/[0-9.]+ 200'; then
+if grep -qE -- 'HTTP/[0-9.]+ 200' <<<"$resp"; then
     ok "T33 POST /login alice depuis hôte → 200 (MAC résolu)"
 else
     fail "T33 POST /login alice depuis hôte → 200 (MAC résolu)" "$(echo "$resp" | head -3)"
@@ -417,7 +417,7 @@ fi
 
 # GET /ping sans session → 401
 resp=$(curl_auth_verbose "/ping")
-if echo "$resp" | grep -qE 'HTTP/[0-9.]+ 401'; then
+if grep -qE -- 'HTTP/[0-9.]+ 401' <<<"$resp"; then
     ok "T34 GET /ping sans session → 401"
 else
     fail "T34 GET /ping sans session → 401" "$(echo "$resp" | head -3)"
@@ -426,7 +426,7 @@ fi
 # GET /logout → 302 ou 200
 resp=$(curl_auth_verbose "/logout" \
     -b /tmp/e2e_mgmt_cookies.txt)
-if echo "$resp" | grep -qE 'HTTP/[0-9.]+ (302|200)'; then
+if grep -qE -- 'HTTP/[0-9.]+ (302|200)' <<<"$resp"; then
     ok "T35 GET /logout → 302 ou 200"
 else
     fail "T35 GET /logout → 302 ou 200" "$(echo "$resp" | head -3)"
@@ -435,7 +435,7 @@ fi
 # GET /ping après logout → 401
 resp=$(curl_auth_verbose "/ping" \
     -b /tmp/e2e_mgmt_cookies.txt)
-if echo "$resp" | grep -qE 'HTTP/[0-9.]+ 401'; then
+if grep -qE -- 'HTTP/[0-9.]+ 401' <<<"$resp"; then
     ok "T36 GET /ping après logout → 401"
 else
     fail "T36 GET /ping après logout → 401" "$(echo "$resp" | head -3)"
@@ -907,7 +907,7 @@ else
 
     # T110 : sans session → 302/401/403
     code=$(acode NOCOOKIE)
-    if echo "$code" | grep -qE '^(302|401|403)$'; then
+    if grep -qE -- '^(302|401|403)$' <<<"$code"; then
         ok "T110 /admin sans cookie → $code (refus/redirect)"
     else
         fail "T110 /admin sans cookie → refus" "code=$code"
@@ -1087,7 +1087,7 @@ else
         done
         sleep 2
         logs=$(custos_logs)
-        if echo "$logs" | grep -qE "protocol=quic|l4_proto=udp|worker=sni-quic"; then
+        if grep -qE -- "protocol=quic|l4_proto=udp|worker=sni-quic" <<<"$logs"; then
             ok "T125 worker_tls traite un QUIC Initial (UDP/443, rejeu de capture)"
         else
             fail "T125 QUIC Initial" "aucun log quic après rejeu du datagramme UDP/443"
@@ -1176,7 +1176,7 @@ fi
 
 # T134 : un domaine bloqué reste bloqué
 lm_blocked=$(dig_from "$E2E_IP_SERVUS" "blocked.lan" "A" "+noall" "+comments" 2>/dev/null || true)
-if echo "$lm_blocked" | grep -q "NXDOMAIN\|REFUSED"; then
+if grep -q -- "NXDOMAIN\|REFUSED" <<<"$lm_blocked"; then
     ok "T134 domaine bloqué rejeté en lowmem (blocked.lan)"
 else
     fail "T134 domaine bloqué rejeté en lowmem" "blocked.lan non bloqué (réponse: $lm_blocked)"
@@ -1289,7 +1289,7 @@ else
         fi
 
         # T143 : pas de redirect_captive pour IPV6_NEW (session valide → skip)
-        if echo "$logs" | grep -F "redirect_captive" | grep -qF "${IPV6_NEW}"; then
+        if grep -F -- "redirect_captive" <<<"$logs" | grep -F -- "${IPV6_NEW}" >/dev/null; then
             fail "T143 pas de redirect_captive pour ${IPV6_NEW}" \
                  "log redirect_captive trouvé (302 forguée à tort)"
         else
@@ -1391,9 +1391,9 @@ fi
 # Le domaine n'existe pas dans le DNS local → NXDOMAIN attendu depuis l'upstream ;
 # un REFUSED ou SERVFAIL serait le signe que custos a bloqué au lieu de fail-open.
 val_dig2=$(dig_from "$E2E_IP_SERVUS" "$VAL_TEST_DOMAIN" "A" "+noall" "+comments" 2>/dev/null || true)
-if echo "$val_dig2" | grep -qiE "NOERROR|NXDOMAIN"; then
+if grep -qiE -- "NOERROR|NXDOMAIN" <<<"$val_dig2"; then
     ok "T172 fail-open validate_resolvers : réponse upstream (pas REFUSED)"
-elif echo "$val_dig2" | grep -qi "REFUSED"; then
+elif grep -qi -- "REFUSED" <<<"$val_dig2"; then
     fail "T172 fail-open validate_resolvers" \
          "custos a refusé la requête (REFUSED) au lieu de fail-open"
 else
@@ -1439,7 +1439,7 @@ if command -v openssl >/dev/null 2>&1; then
     # Le portail répond toujours normalement
     portal_code=$(curl -sk --max-time 8 -o /dev/null -w '%{http_code}' \
         "https://$E2E_IP_CUSTOS:33443/login" 2>/dev/null || echo 0)
-    if echo "$portal_code" | grep -qE '^(200|302)$'; then
+    if grep -qE -- '^(200|302)$' <<<"$portal_code"; then
         ok "T182 portail fonctionnel après libération"
     else
         fail "T182 portail fonctionnel après libération" "code HTTP : $portal_code"

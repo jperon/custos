@@ -80,6 +80,9 @@ eval_log = (f) -> (type(f) == "function") and f!
 package.loaded["log"] = {
   log_allow: eval_log, log_block: eval_log, log_warn: eval_log
   log_debug: eval_log, log_info: eval_log
+  -- Reclassement des lignes par requête en DEBUG : le stub doit exposer la
+  -- garde de niveau comme le vrai module.
+  level_enabled: -> true
 }
 last_req = nil
 package.loaded["filter"] = {

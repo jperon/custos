@@ -19,7 +19,7 @@ pidfile = require "lib.pidfile"
 { :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :build_captive_response, :add_ede, :patch_modified_dns } = require "dns_ede"
 { :inject, :detect_wildcards } = require "response_inject"
 { :user_for_mac } = require "auth.sessions"
-{ :log_allow, :log_block, :log_warn, :log_debug, :log_info } = require "log"
+{ :log_allow, :log_block, :log_warn, :log_debug, :log_info, :level_enabled } = require "log"
 { :ip2s } = require "lib.packet_parsing"
 config = require "config"
 upstream_mod = require "doh.upstream"
@@ -175,7 +175,9 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
       if norm == captive_domain and (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA)
         forged = build_captive_response dns, dns_raw, captive_ip4, captive_ip6
         if forged
-          log_info -> { action: "dns_stolen", worker: "doh", domain: q.name or q.qname, qtype: q.qtype_name or tostring(q.qtype), client_ip: client_ip, client_mac: client_mac }
+          -- Par requête DoH : DEBUG, jamais INFO.
+          if level_enabled "DEBUG"
+            log_debug -> { action: "dns_stolen", worker: "doh", domain: q.name or q.qname, qtype: q.qtype_name or tostring(q.qtype), client_ip: client_ip, client_mac: client_mac }
           return forged
         log_warn -> { action: "dns_steal_forge_failed", worker: "doh", domain: q.name or q.qname, client_ip: client_ip }
 

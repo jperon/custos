@@ -10,10 +10,10 @@ do
   local _obj_0 = require("nft_queue")
   cmd_for, sanitize_timeout, ACK_SIZE = _obj_0.cmd_for, _obj_0.sanitize_timeout, _obj_0.ACK_SIZE
 end
-local log_info, log_warn, log_debug, set_action_prefix
+local log_info, log_warn, log_debug, set_action_prefix, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix
+  log_info, log_warn, log_debug, set_action_prefix, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix, _obj_0.level_enabled
 end
 local split_fields, from_hex, is_ipv4_str, is_ipv6_str, is_valid_mac
 do
@@ -145,8 +145,8 @@ flush_batch = function(pending, ack_queue, ack_wfds)
     local ok, err = run_cmd(cmd, {
       quiet = true
     })
-    if rule11_count > 0 then
-      log_info(function()
+    if rule11_count > 0 and level_enabled("DEBUG") then
+      log_debug(function()
         return {
           action = "nft_batch_rule",
           rule_id = "rule_11",

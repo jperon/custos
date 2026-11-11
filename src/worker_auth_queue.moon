@@ -81,7 +81,9 @@ handle_auth_packet = (qh_ptr, nfad, pkt_id) ->
     log_warn -> { action: "ipc_failed", pkt_id: pkt_id, ip_version: ip.version }
 
   -- 4. Toujours accepter le paquet : c'est au serveur HTTPS de décider du sort de la connexion
-  log_info -> { action: "processed", pkt_id: pkt_id }
+  -- Une ligne par paquet : DEBUG, jamais INFO.
+  if level_enabled "DEBUG"
+    log_debug -> { action: "processed", pkt_id: pkt_id }
   NF_ACCEPT
 
 --- Point d'entrée du worker.

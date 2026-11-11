@@ -2113,6 +2113,99 @@ présents, µs, `0` par défaut). Preuve d'échec sans correctif : en restaurant
 **2535 → 2543 successes**, 0 failure, 0 error (+8 cas) ; `make check` OK
 (155 fichiers). `make test-e2e` non lancé (autres agents sur la machine).
 
+### Niveaux de log et empreinte de limitation (branche d-levels)
+
+**Empreinte par défaut.** `src/log.moon` ne limite plus l'empreinte aux seuls
+`RL_IDENTITY_KEYS` : tout champ présent est discriminant **sauf** ceux classés
+dans `RL_VOLATILE_KEYS`, et un champ inconnu est traité comme une identité.
+L'empreinte par défaut parcourt `fields` et combine le hash de chaque champ par
+XOR (commutatif, sans table intermédiaire) : indépendance à l'ordre de `pairs`
+et coût linéaire au nombre de champs réellement présents. Les règles explicites
+`RL_CONFIG.keys` gardent leur parcours ordonné. `tools/log_fields.lua` extrait
+les noms de champs des tables littérales de `src/**/*.moon` ;
+`tests/unit/log_fields_spec.moon` échoue en les listant si l'un n'est classé ni
+IDENTITÉ ni VOLATIL (vérifié : retirer `nft_outcome` du classement produit
+`unclassified = { "nft_outcome" }`).
+
+Extension de l'inventaire (fusion `dev`/`d-orphan`) : `tools/log_fields.lua`
+scanne aussi toute table littérale portant une clé `action:` de log, y compris
+hors du thunk (`log_info -> build_orphan_fields {…}` et le corps de
+`build_orphan_fields`, `src/worker_responses.moon:696,922`). Une action valant
+`/…` est un formulaire HTML (`H.form`), donc ignorée. Champs ajoutés :
+`client_port`, `dst_port` VOLATILS (ports éphémères) ;
+`refused_kept`, `refused_new`, `resolution`, `rule_kept`, `rule_new`,
+`retry_budget_skipped` IDENTITÉ (`src/ipc.moon:410-427`,
+`src/worker_responses.moon:710`), comme `af`, `alt_path`, `arch`, `condition`,
+`dnsonly`, `net`, `probe_max`, `rl_shared`, `selected`, `slots` ; les durées de
+benchmark (`ack_wait_us`, `drain_ms`, `log_ms`, `log_write_us`, `match_ms`,
+`parse_ms`, `payload_ms`, `q_to_response_ms`, `question_proc_ms`,
+`response_entry_ms`) et `upstream_retries` restent VOLATILES.
+
+Revue de classement : `family` (IPv4/IPv6 — `src/lib/socket.moon:265,388,413,417,424`,
+`src/worker_sip.moon:296`), `mode` (`strict-443`/`permissive` —
+`src/worker_tls.moon:1103`), `status` (état d'écriture ou catégorie d'échec de
+parsing — `src/auth/cert_files.moon:112`, `src/worker_questions.moon:260`) et
+`new` (nouvelle heure de `hour_change` — `src/worker_events.moon:409`) sont des
+**identités**, pas des volatils : ils distinguent deux événements. Aucun de ces
+noms ne porte une valeur qui change à chaque occurrence. Test :
+`tests/unit/log_spec.moon` (families IPv4/IPv6 → deux lignes).
+
+**Événements jamais limités.** Ajouts à `RL_NEVER_LIMIT` : `server_login_success`
+(`src/auth/handlers.moon:140`), `server_password_changed` (`:427`),
+`server_bye_grace` (`:276`), `server_ping_session_invalidated` (`:221`),
+`user_session_expired` (`src/auth/user_sessions.moon:74`) et
+`user_session_removed` (`:128`). Les échecs d'authentification
+(`server_login_nonce_rejected` :120, `server_login_plaintext_refused` :128,
+`server_login_mac_missing` :137) restent limités par `RL_CONFIG` sur
+`(ip, user, err)` / `(ip, mac)` pendant 60 s : une force brute est une
+inondation volontaire, la borner est le but ; `err` reste discriminant pour ne
+pas masquer la cause. Aucun appel de log dans `src/webui/handlers/*` ni dans
+`sync/apply.moon` : il n'existe pas d'action à exempter pour ces familles.
+
+**TRACE.** `LOG_LEVEL_MAP.TRACE` valait `6`, au-dessus d'`ERROR` : `log_trace`
+était donc toujours émis. Aucun site `log_trace` dans `src/` et
+`git log -S'TRACE:' -- src/log.moon` ne montre d'intention contraire ; TRACE
+passe à `0` (plus verbeux que DEBUG), documenté dans `doc/CONFIG.md`.
+
+**Reclassements appliqués** (`log_info` → `log_debug`, chaque site gardé par
+`level_enabled "DEBUG"` sur le chemin chaud) :
+
+| Action (sortie, préfixe compris) | Fichier:ligne | Ancien → nouveau | Raison |
+|---|---|---|---|
+| `auth_server_conn_started` | `src/auth/server.moon:263` | INFO → DEBUG | 3206 lignes mesurées : une par connexion TCP du portail |
+| `auth_server_request_received` | `src/auth/handlers.moon:433` | INFO → DEBUG | 3166 : une par requête HTTP du portail |
+| `auth_server_ping_received` | `src/auth/handlers.moon:178` | INFO → DEBUG | 657 : une par ping HTTP |
+| `auth_server_ping_success` | `src/auth/handlers.moon:228` | INFO → DEBUG | 657 : une par ping HTTP |
+| `questions_dns_stolen` | `src/worker_questions.moon:327` | INFO → DEBUG | 350 : une par requête DNS volée |
+| `doh_dns_stolen` | `src/doh/query.moon:180` | INFO → DEBUG | même nature, une par requête DoH |
+| `auth_server_routing_to_handle_login` | `src/auth/handlers.moon:450` | INFO → DEBUG | une par POST /login |
+| `auth_queue_processed` | `src/worker_auth_queue.moon:86` | INFO → DEBUG | une par paquet NFQUEUE |
+| `nft_nft_batch_rule` | `src/worker_nft.moon:107` | INFO → DEBUG | une par lot nft, donc souvent par requête |
+| `captive_sending_frames` | `src/worker_captive.moon:253` | INFO → DEBUG | une par SYN redirigé (l'événement `redirect` reste INFO) |
+
+`response_no_ipv6_for_client` reste INFO : la règle `RL_CONFIG` `client`/120 s
+s'applique bien avec le préfixe `response_` (cas existant de
+`tests/unit/log_spec.moon`). `doh_handshake_failed` reste WARN : il porte
+`peer` (identité), `err` (identité) et `attempts` (volatil), donc la règle
+WARN par défaut le borne par IP cliente sur 60 s (nouveau test).
+
+**À arbitrer** (laissés inchangés, doute sur l'intention produit) :
+
+| Action | Fichier:ligne | Niveau | Raison de ne pas trancher |
+|---|---|---|---|
+| `sni_captured` | `src/worker_tls.moon:914` | INFO | par connexion TLS, mais visibilité sécurité SNI et grep e2e (`tests/e2e/homelab_e2e.sh:1014`, config e2e en DEBUG) |
+| `captive_skip_authenticated` | `src/worker_captive.moon:221` | INFO | par SYN, mais changement d'état et grep e2e (`homelab_e2e.sh:1281`) |
+| `captive_redirect` | `src/worker_captive.moon:260` | INFO | par SYN, mais `RL_CONFIG` dédié et test OpenWrt |
+| `server_ping_token_invalid`, `server_ping_stale_token_session_alive` | `src/auth/handlers.moon:194`, `:192` | INFO | par ping mais rares/anomalies : WARN ou DEBUG ? |
+| `response_matched_after_retry` | `src/worker_responses.moon:809` | INFO | par réponse mais uniquement en cas de retry IPC (anomalie surmontée) |
+
+**Tests** : `tests/unit/log_spec.moon` (identité/volatil/inconnu, ordre,
+`suppressed=1`, audit jamais limité, échec auth borné, `doh_handshake_failed`,
+TRACE) et `tests/unit/log_fields_spec.moon` (garde-fou). Suite locale :
+**2598 successes / 0 failures / 0 errors**. `make test-e2e` non lancé
+(l’environnement n’est pas provisionné) ; la config e2e
+`libvirt/homelab-e2e.moon:7` est en `log_level: "DEBUG"`, donc les lignes
+passées en DEBUG y restent visibles.
 ### Appariement question/réponse : observabilité, budget de retry et fail-closed (branche d-orphan)
 
 Trois défauts corrigés dans `src/ipc.moon` et `src/worker_responses.moon`.

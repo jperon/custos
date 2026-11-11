@@ -27,10 +27,10 @@ do
 end
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
-local log_allow, log_block, log_warn, log_debug, log_info
+local log_allow, log_block, log_warn, log_debug, log_info, level_enabled
 do
   local _obj_0 = require("log")
-  log_allow, log_block, log_warn, log_debug, log_info = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_info
+  log_allow, log_block, log_warn, log_debug, log_info, level_enabled = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_info, _obj_0.level_enabled
 end
 local ip2s
 ip2s = require("lib.packet_parsing").ip2s
@@ -200,16 +200,18 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
       if norm == captive_domain and (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA) then
         local forged = build_captive_response(dns, dns_raw, captive_ip4, captive_ip6)
         if forged then
-          log_info(function()
-            return {
-              action = "dns_stolen",
-              worker = "doh",
-              domain = q.name or q.qname,
-              qtype = q.qtype_name or tostring(q.qtype),
-              client_ip = client_ip,
-              client_mac = client_mac
-            }
-          end)
+          if level_enabled("DEBUG") then
+            log_debug(function()
+              return {
+                action = "dns_stolen",
+                worker = "doh",
+                domain = q.name or q.qname,
+                qtype = q.qtype_name or tostring(q.qtype),
+                client_ip = client_ip,
+                client_mac = client_mac
+              }
+            end)
+          end
           return forged
         end
         log_warn(function()

@@ -46,7 +46,7 @@ LOG_LEVEL_MAP = {
   DEBUG:  1
   ALLOW:  3  -- Par défaut, ALLOW est au niveau NOTICE
   BLOCK:  4  -- Par défaut, BLOCK est au niveau WARN
-  TRACE:  6
+  TRACE:  0  -- Plus verbeux que DEBUG (et non au-dessus d'ERROR)
 }
 
 -- Niveau de log configuré, converti en numérique
@@ -88,24 +88,75 @@ get_log_level_num = (level) -> LOG_LEVEL_MAP[level] or 0
 level_enabled = (level) -> get_log_level_num(level) >= CURRENT_LOG_LEVEL_NUM
 
 -- ── Rate-limiting ─────────────────────────────────────────────────
--- Empreinte par défaut : niveau + action + valeurs des champs d'identité
--- ci-dessous. On n'y met JAMAIS les champs volatils (pid, txid, ports,
--- durées, compteurs, tailles) : deux lignes qui n'en diffèrent que par eux
--- doivent fusionner avec `suppressed=N`, pas se masquer mutuellement.
--- Les champs absents ne participent pas à l'empreinte.
+-- Empreinte par défaut : niveau + action + **tous les champs présents sauf
+-- les champs explicitement classés VOLATILS** (liste ci-dessous). Un champ
+-- inconnu est traité comme une identité (prudence : mieux vaut une ligne en
+-- trop qu'une information perdue), et le test garde-fou
+-- `tests/unit/log_fields_spec.moon` impose que tout champ des tables
+-- littérales de `src/**/*.moon` figure dans l'une des deux listes.
+--
+-- IDENTITÉ : distingue deux événements (objet, interface, set, règle, hôte,
+-- chemin, code d'erreur…). VOLATIL : varie à chaque occurrence sans changer
+-- la nature du message (pid, txid, fd, port source, séquence, durée,
+-- compteur, taille, horodatage, texte libre).
 RL_IDENTITY_KEYS = {
-  "peer", "peer_ip", "peer_mac"
-  "ip", "ip_src", "ip_dst", "client", "client_ip", "client_mac"
-  "mac", "mac_src", "src_ip", "dst_ip"
-  "qname", "qnames", "domain", "qtype"
-  "hostname", "host", "sni", "cert", "key"
-  "path", "method", "url", "file"
-  "ifname", "name", "queue", "worker", "user", "username", "vlan"
-  "resolver", "resolver_ip", "upstream_ip", "addr"
-  "protocol", "l4_proto", "rcode", "errno", "source", "direction"
-  "version", "verdict", "backend", "type", "cn", "local_ip"
-  "rule", "list", "err", "reason", "cmd"
+  "addr", "af", "alpn", "alt_path", "arch", "arg1", "arg2", "available", "backend"
+  "bridge", "captive_ip4", "captive_ip6", "cert", "cert_cache", "cert_file"
+  "cert_type", "client", "client_ip", "client_mac", "closed", "cmd"
+  "cn", "cname_target", "condition", "configured", "cseq_method", "ct", "custom_url"
+  "dir", "direction", "dnsonly", "domain", "dst", "dst_ip", "env_path"
+  "err", "errno", "events_dir", "exit_code", "external_loaded", "fallback"
+  "fallback_builtin", "families", "family", "file", "filter_reason", "frame_mac", "handle"
+  "handshake_done"
+  "has_ip", "has_mac", "hint", "host", "hostname", "hs_type"
+  "ifindex", "ifname", "in_ifindex", "inherited", "inject_nft", "interfaces"
+  "ip", "ip4", "ip6", "ip_dst", "ip_src", "ip_version"
+  "ipv4", "ipv6", "items", "key", "key_file", "kind"
+  "known_mac", "l4_proto", "limit", "list", "load_error", "local_ip"
+  "mac", "mac_fallback", "mac_src", "max", "media_ip", "method"
+  "mode", "modified", "name", "net", "new", "nft_compilable", "nft_err", "nft_failure_policy", "nft_outcome"
+  "nft_rule_id", "ns_enabled", "ok", "old", "packet_mac", "path", "payload_modified"
+  "peer", "peer_ip", "peer_mac", "policy_protocols", "port", "port_dst", "probe_max"
+  "proto", "protocol", "protocols", "qname", "qnames", "qtype"
+  "queue", "quic_parser_path", "rc", "rcode", "reason", "records"
+  "redirect_url4", "redirect_url6", "refused", "refused_kept", "refused_new", "reject_mark"
+  "resolver", "resolver_ip", "resolvers", "resolution", "response"
+  "ret", "retry_budget_skipped", "rl_shared", "rule", "rule_id", "rule_kept", "rule_new", "rules"
+  "selected", "selected_mac", "sessions_file", "sip_method", "sip_status", "slots", "sni", "source"
+  "src", "src_ip", "ssl_err", "status", "target", "tlla", "transient"
+  "type", "upstream_ip", "upstream_port", "url", "user", "username"
+  "verdict", "verify_tls", "version", "vlan", "worker", "worker_idx"
 }
+
+RL_VOLATILE_KEYS = {
+  "ack_wait_us", "ack_workers", "acks", "addrlen", "age_h", "ancount", "answers"
+  "attempt", "attempts", "avail", "body_bytes", "bytes", "cert_size"
+  "client_fd", "client_port", "client_timeout", "conditions_compiled", "conditions_worker_only"
+  "configured_rules", "corr"
+  "count", "decoded_bytes", "dest_whitelist", "detail", "dport", "drain_ms", "dropped", "dst_port"
+  "effective_rules", "entries", "events_rfd", "events_wfd", "expires_in_s"
+  "fd", "frames", "free_pct", "grace", "hour", "ignored"
+  "ipc_fd", "ipc_retry_attempts", "ipc_retry_wait_ms", "key_size", "learn_rfd", "learn_wfd"
+  "len", "listen_fd", "log_ms", "log_write_us", "match_ms", "max_age_hours", "max_attempts", "min_free_pct"
+  "msg", "need", "new_size", "parent_pid", "parse_ms", "payload_len", "payload_ms"
+  "pid", "pkt_id", "port_src", "pos", "q_to_response_ms", "query_bytes"
+  "question_proc_ms", "question_response_rfd"
+  "question_response_wfd", "raw", "removed", "removed_count", "resp_bytes", "response_entry_ms"
+  "retry_after", "rfd", "rv", "sans_count", "sent", "seq", "size"
+  "sock", "sockets", "sport", "src_port", "timeout"
+  "timeout_ms", "total", "total_rules", "ts", "ttl", "ttl_s"
+  "txid", "upstream_retries", "userlists", "users", "worker_only"
+}
+
+-- Ensembles d'appartenance pour le test garde-fou (et pour la résolution
+-- d'un champ inconnu côté empreinte : absent des deux = identité).
+RL_IDENTITY_SET = {}
+for k in *RL_IDENTITY_KEYS
+  RL_IDENTITY_SET[k] = true
+
+RL_VOLATILE_SET = {}
+for k in *RL_VOLATILE_KEYS
+  RL_VOLATILE_SET[k] = true
 
 -- Résolution : action complète, puis action sans le préfixe du worker, puis
 -- règle par défaut du NIVEAU (même quand `action` est présent). Avant ce
@@ -122,6 +173,13 @@ RL_CONFIG = {
   no_ipv6_for_client: { keys: {"client"},                    window: 120 }
   no_ipv4_for_client: { keys: {"client"},                    window: 120 }
   response_dnsonly:   { keys: {"dst_ip", "qnames"},          window: 30  }
+  -- Échecs d'authentification : jamais exemptés (force brute = inondation
+  -- volontaire), mais bornés par client et utilisateur. `err` reste
+  -- discriminant pour ne pas masquer la cause (nonce expiré vs invalide).
+  -- Sites : handlers.moon:120,128,137.
+  server_login_nonce_rejected:   { keys: {"ip", "user", "err"}, window: 60 }
+  server_login_plaintext_refused: { keys: {"ip", "user"},       window: 60 }
+  server_login_mac_missing:      { keys: {"ip", "mac"},         window: 60 }
   EMERG:              { keys: RL_IDENTITY_KEYS,              window: 10  }
   ALERT:              { keys: RL_IDENTITY_KEYS,              window: 10  }
   CRIT:               { keys: RL_IDENTITY_KEYS,              window: 10  }
@@ -176,6 +234,19 @@ RL_NEVER_LIMIT = {
   "dns-filter_start":          true
   config_source:               true
   config_external_missing:     true
+  -- Audit de sécurité : une connexion, une déconnexion/expiration de session
+  -- ou un changement de mot de passe ne doivent jamais disparaître derrière
+  -- une fenêtre, même sous rafale. Sites : auth/handlers.moon:140 (login),
+  -- :276 (bye/grâce), :221 (session invalidée), :427 (mot de passe) ;
+  -- auth/user_sessions.moon:74 (expiration), :128 (retrait). Les échecs
+  -- d'authentification ne sont PAS
+  -- ici : ils restent limités par (ip, user) via RL_CONFIG (force brute).
+  server_login_success:        true
+  server_password_changed:     true
+  server_bye_grace:            true
+  server_ping_session_invalidated: true
+  user_session_expired:        true
+  user_session_removed:        true
 }
 
 -- ── État partagé entre processus ──────────────────────────────────
@@ -278,18 +349,32 @@ _rl_resolve_cfg = (level, fields) ->
 -- @tparam table  fields Champs du message
 -- @treturn number  -1 = supprimer ; 0 = première occurrence ; N>0 = N supprimés depuis dernier log
 -- Construit le fingerprint de rate-limiting (action_key + champs discriminants).
--- Concaténation directe (cfg.keys borné, ≤3 clés) plutôt qu'une table
--- intermédiaire + table.concat : ce code s'exécute pour CHAQUE ALLOW/BLOCK, y
--- compris ceux qui seront supprimés, donc on évite l'allocation d'une table par
--- paquet décidé. Fonction pure, exportée pour le test unitaire.
+-- Pour les règles explicites `keys: {...}`, concaténation directe dans l'ordre
+-- de la liste (borné, ≤3 clés) plutôt qu'une table intermédiaire : ce code
+-- s'exécute pour CHAQUE ALLOW/BLOCK, y compris ceux qui seront supprimés, donc
+-- on évite l'allocation d'une table par paquet décidé.
+-- Pour la règle par défaut (keys == RL_IDENTITY_KEYS), les noms de champs sont
+-- triés avant concaténation : `pairs` n'a pas d'ordre stable et deux messages
+-- identiques doivent produire la même clé. Cette branche n'est utilisée que
+-- par le repli sans mmap (ou les tests), jamais sur le chemin chaud nominal.
+-- Fonction pure, exportée pour le test unitaire.
 -- @tparam string action_key Clé d'action (fields.action ou niveau)
 -- @tparam table  fields     Champs du message
 -- @tparam table  keys       Clés discriminantes (cfg.keys)
 -- @treturn string Fingerprint
 rl_fingerprint = (action_key, fields, keys) ->
   fp = action_key
-  for k in *keys
-    fp ..= "|" .. tostring fields[k]
+  if keys == nil or keys == RL_IDENTITY_KEYS
+    names = {}
+    for k, v in pairs fields
+      if k != "action" and not RL_VOLATILE_SET[k]
+        names[#names + 1] = k
+    table.sort names
+    for k in *names
+      fp ..= "|" .. k .. "=" .. tostring fields[k]
+  else
+    for k in *keys
+      fp ..= "|" .. tostring fields[k]
   fp
 
 -- Séparateurs précalculés pour le hash (évite une allocation de string par
@@ -310,6 +395,15 @@ _rl_hash_step = (h, s) ->
 --- Hash de l'empreinte d'un message (niveau + action + champs discriminants).
 -- Les champs absents ne participent pas. Fonction pure, exportée pour les
 -- tests (collision de slot).
+--
+-- Règle explicite (`keys` fourni et différent de RL_IDENTITY_KEYS) : parcours
+-- ordonné de la liste, comme avant.
+-- Règle par défaut (keys == RL_IDENTITY_KEYS, ou nil) : parcours de `fields`
+-- en ignorant `action` et les champs volatils — donc tout champ inconnu est
+-- une identité. `pairs` n'ayant pas d'ordre stable, le hash de chaque champ
+-- est combiné par XOR (commutatif) : le résultat ne dépend pas de l'ordre et
+-- aucune table intermédiaire n'est allouée sur le chemin chaud.
+--
 -- @tparam string level  Niveau de log
 -- @tparam table  fields Champs du message
 -- @tparam table|nil keys Clés discriminantes (cfg.keys ; résolues si nil)
@@ -318,15 +412,22 @@ _rl_hash = (level, fields, keys) ->
   action = fields.action or level
   unless keys
     cfg = _rl_resolve_cfg level, fields
-    keys = cfg and cfg.keys or {}
+    keys = cfg and cfg.keys
   h = _rl_hash_step 0, level
   h = _rl_hash_step h, "\1"
   h = _rl_hash_step h, action
-  for k in *keys
-    v = fields[k]
-    if v != nil
-      h = _rl_hash_step h, (RL_SEP[k] or ("\1" .. k .. "="))
-      h = _rl_hash_step h, tostring v
+  if keys == nil or keys == RL_IDENTITY_KEYS
+    for k, v in pairs fields
+      if k != "action" and not RL_VOLATILE_SET[k]
+        fh = _rl_hash_step 0, (RL_SEP[k] or ("\1" .. k .. "="))
+        fh = _rl_hash_step fh, tostring v
+        h = bit.bxor h, fh
+  else
+    for k in *keys
+      v = fields[k]
+      if v != nil
+        h = _rl_hash_step h, (RL_SEP[k] or ("\1" .. k .. "="))
+        h = _rl_hash_step h, tostring v
   h % 4294967296
 
 --- Vide l'état partagé (tests uniquement).
@@ -632,4 +733,4 @@ unless _rl_base
     arch: (jit and jit.arch) or "unknown"
   }
 
-{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG, :RL_SLOTS, :RL_PROBE_MAX, :MAP_ANONYMOUS, :_map_anonymous, :check_rl, :format_line, :rl_shared, :rl_stats, :_rl_hash, :_rl_reset, :_rl_never_limited, :_rl_force_fallback, :_rl_slot_get, :_rl_slot_set, :set_timing, :get_last_write_us }
+{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG, :RL_IDENTITY_KEYS, :RL_IDENTITY_SET, :RL_VOLATILE_KEYS, :RL_VOLATILE_SET, :RL_SLOTS, :RL_PROBE_MAX, :MAP_ANONYMOUS, :_map_anonymous, :check_rl, :format_line, :rl_shared, :rl_stats, :_rl_hash, :_rl_reset, :_rl_never_limited, :_rl_force_fallback, :_rl_slot_get, :_rl_slot_set, :set_timing, :get_last_write_us }

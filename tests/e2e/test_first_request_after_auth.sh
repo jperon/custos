@@ -104,7 +104,7 @@ HTTP1=$(curl -sk -o /dev/null -w '%{http_code} dns:%{time_namelookup} connect:%{
 T1_END=$(date +%s%3N)
 T1_MS=$((T1_END - T1_START))
 
-if echo "$HTTP1" | grep -qE '^(200|301|302|303|304|307|308|403)'; then
+if grep -qE -- '^(200|301|302|303|304|307|308|403)' <<<"$HTTP1"; then
   ok "1re requête : $HTTP1 (${T1_MS}ms)"
 else
   fail "1re requête : $HTTP1 (${T1_MS}ms)"
@@ -122,7 +122,7 @@ HTTP2=$(curl -sk -o /dev/null -w '%{http_code} dns:%{time_namelookup} connect:%{
 T2_END=$(date +%s%3N)
 T2_MS=$((T2_END - T2_START))
 
-if echo "$HTTP2" | grep -qE '^(200|301|302|303|304|307|308|403)'; then
+if grep -qE -- '^(200|301|302|303|304|307|308|403)' <<<"$HTTP2"; then
   ok "2e requête : $HTTP2 (${T2_MS}ms)"
 else
   fail "2e requête : $HTTP2 (${T2_MS}ms)"
@@ -154,7 +154,7 @@ echo ""
 echo "════════════════════════════════════════════════════════════════"
 
 # ── Diagnostic ───────────────────────────────────────────────────────────
-if echo "$HTTP1" | grep -q '^000'; then
+if grep -q -- '^000' <<<"$HTTP1"; then
   echo ""
   echo "⚠  La 1re requête a échoué (status 0 = connexion TCP refusée/timeout)."
   echo "   Hypothèses :"
