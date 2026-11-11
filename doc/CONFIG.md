@@ -161,7 +161,7 @@ Chaque entrée correspond à un worker distinct qui lit depuis le noyau Linux.
 | Clé | Type | Défaut | Worker |
 |-----|------|--------|--------|
 | `questions` | string | `"0-1"` | Questions DNS entrantes |
-| `responses` | string | `"4"` | Réponses DNS à réinjecter |
+| `responses` | string | `"4"` | Réponses DNS à réinjecter (**une seule file**, voir note) |
 | `captive` | string | `"20"` | Détection portail captif (TCP/80) |
 | `reject` | string | `"10-11"` | Paquets à rejeter (RST/ICMP) |
 | `auth` | string | `"5"` | Authentification HTTPS |
@@ -170,7 +170,12 @@ Chaque entrée correspond à un worker distinct qui lit depuis le noyau Linux.
 | `doh_vlan` | string | `"13"` | Détection VLAN des clients DoH (worker `worker_doh_vlan`, optionnel : seulement si `doh.enabled`). Renseigne `req.vlan` en DoH pour `from_vlan`. |
 
 Une plage (ex. `"0-1"`) permet à plusieurs threads de traiter la même queue en
-parallèle.
+parallèle. **Exception : `responses` doit désigner une seule file.** L'état
+d'appariement question/réponse (`pending`) est privé à chaque processus worker,
+alors que tous lisent le même pipe question→réponse : avec plusieurs files de
+réponse, une réponse livrée à un autre worker que celui qui a lu la question est
+jetée (`NF_DROP`). Une plage du type `"4-5"` est donc ramenée à sa première file
+(`"4"`) au chargement, avec un avertissement `nfqueue_responses_single_queue_only`.
 
 ```moonscript
 nfqueue: {

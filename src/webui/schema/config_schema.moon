@@ -18,9 +18,9 @@
 
   nfqueue: {
     _label: "Files de paquets (NFQUEUE)"
-    _description: "Avancé — réservé aux experts. Le pare-feu (nftables) remet les paquets à Custos via des « files » Netfilter numérotées ; chaque type de trafic a la sienne. Ne modifiez ces numéros que pour éviter un conflit avec d'autres outils utilisant NFQUEUE sur la même machine. Une plage s'écrit '0-1'."
+    _description: "Avancé — réservé aux experts. Le pare-feu (nftables) remet les paquets à Custos via des « files » Netfilter numérotées ; chaque type de trafic a la sienne. Ne modifiez ces numéros que pour éviter un conflit avec d'autres outils utilisant NFQUEUE sur la même machine. Une plage s'écrit '0-1'. Exception : « Réponses DNS » doit désigner une seule file (l'appariement question/réponse est privé à chaque processus worker)."
     questions: { type: "string", label: "Requêtes DNS",        hint: "n° de file, ex: 0-1",   default: "0-1" }
-    responses:  { type: "string", label: "Réponses DNS",        hint: "n° de file, ex: 4",     default: "4" }
+    responses:  { type: "string", label: "Réponses DNS",        hint: "une seule file, ex: 4", default: "4" }
     captive:    { type: "string", label: "Portail captif",      hint: "n° de file, ex: 20",    default: "20" }
     reject:     { type: "string", label: "Paquets à rejeter",   hint: "n° de file, ex: 10-11", default: "10-11" }
     auth:       { type: "string", label: "Handshakes TLS (auth)", hint: "n° de file, ex: 5",   default: "5" }

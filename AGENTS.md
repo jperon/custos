@@ -878,3 +878,15 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   > `PROBE_TIMEOUT_MS`), timeout → valeur « inconnue » comme aujourd'hui.
   Tests dans `tests/unit/mac_learner_probe_spec.moon` (client muet borné,
   serveur muet borné).
+- **`nfqueue.responses` sur plusieurs files : réponses DNS jetées.** Chaque
+  worker `resp-qN` a sa propre table `pending` (`ipc.moon`, état privé au
+  processus) alors que tous lisent le même pipe question→réponse : une réponse
+  livrée à un autre worker que celui qui a lu la question tombait sur
+  `get_pending_entry` nil → `NF_DROP`. Le défaut (`responses: "4"`, une seule
+  file) n'était pas affecté. Correctif : `config.normalize` ramène
+  `nfqueue.responses` à sa **première** file quand la valeur en désigne
+  plusieurs, avec l'avertissement `nfqueue_responses_single_queue_only` (log_warn
+  si `log` est déjà chargé, sinon stderr — config est chargée par `log.moon`).
+  `doc/CONFIG.md` et le schéma webui précisent « une seule file ». Tests dans
+  `tests/unit/config_spec.moon` (`"4-5"` → `"4"` + warn, `"4"` inchangé,
+  `questions: "0-1"` inchangé).
