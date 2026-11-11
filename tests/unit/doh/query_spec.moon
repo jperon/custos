@@ -43,6 +43,7 @@ make_response_cname = (cdn_target) ->
 
 -- ── Stubs contrôlables ───────────────────────────────────────────────────────
 nft_calls      = {}
+wait_acks      = {}
 nft_result     = true
 upstream_resp  = nil
 decide_result  = nil
@@ -51,6 +52,7 @@ validator_override = nil  -- override renvoyé par le stub doh.validator (query_
 
 reset = ->
   nft_calls      = {}
+  wait_acks      = {}
   nft_result     = true
   upstream_resp  = make_response!
   decide_result  = { verdict: true, reason: "ok", rule_id: "r_main", timeout: "5m", description: "allow", allow_modifiers: {} }
@@ -58,7 +60,7 @@ reset = ->
   validator_override = nil
 
 record_add = (key, dest, rule_id, timeout, corr) ->
-  nft_calls[#nft_calls + 1] = { :key, :dest, :rule_id }
+  nft_calls[#nft_calls + 1] = { :key, :dest, :rule_id, :corr }
   nft_result
 
 -- Stub config tenu dans une variable locale : on mute CETTE table (celle que
@@ -90,7 +92,7 @@ package.loaded["filter"] = {
 package.loaded["nft_queue"] = {
   add_ip4: record_add, add_ip6: record_add, add_mac4: record_add, add_mac6: record_add
   get_last_seq: -> 1       -- non-nil → exerce le wait_ack
-  wait_ack: (->)
+  wait_ack: (seq, corr) -> wait_acks[#wait_acks + 1] = corr
   drain_ack: (->)
 }
 package.loaded["auth.sessions"] = { user_for_mac: (mac, ip, file) -> user_result }
@@ -116,6 +118,11 @@ describe "doh.query.process_query", ->
     for c in *nft_calls
       found = true if c.dest == "1.2.3.4" and c.rule_id == "r_main"
     assert.is_true found
+    -- Corrélateur d'ACK : inject et wait_ack doivent recevoir la même clé
+    -- (txid:ip_client ; le parseur expose `id`, donc txid est nil → 0000).
+    assert.equals 1, #wait_acks
+    for c in *nft_calls
+      assert.equals wait_acks[1], c.corr
 
   it "req.vlan : VLAN tagué propagé tel quel à decide_meta", ->
     query_mod.process_query make_query!, "10.0.0.1", "unknown", {}, 100
@@ -251,6 +258,12 @@ describe "doh.query.process_query", ->
     assert.is_not_nil resp
     assert.equals 0, rcode_of resp
     assert.is_true #nft_calls > 0
+    -- Le chemin redirect doit corréler l'ACK avec la même clé que celle
+    -- transmise aux insertions nft (identité historique de l'ancien appel
+    -- direct wait_ack : txid:ip_client).
+    assert.equals 1, #wait_acks
+    for c in *nft_calls
+      assert.equals wait_acks[1], c.corr
 
   it "validate, override redirect mais l'upstream porte déjà ce CNAME (CDN) → passthrough", ->
     decide_result.allow_modifiers = { validate: true }
