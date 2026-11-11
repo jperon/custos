@@ -323,9 +323,12 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   -- Initialiser le cache de certificats (persistant, 90 jours TTL)
   log_debug -> { action: "server_cert_cache_init" }
   cert_cache_module = require "auth.cert_cache"
-  -- 500 slots RAM, 90 jours de TTL, et au plus SNI_CERT_MAX_NAMES noms
-  -- distincts sur disque (plafond anti-remplissage piloté par le SNI client).
-  cert_cache = cert_cache_module.create_cache 500, 7776000, "tmp/certs", SNI_CERT_MAX_NAMES
+  -- 500 slots RAM, 90 jours de TTL, au plus SNI_CERT_MAX_NAMES noms distincts
+  -- sur disque (plafond anti-remplissage piloté par le SNI client), et un
+  -- dossier tmpfs absolu (auth.cert_dir) pour les certificats générés.
+  cert_dir = auth_cfg.cert_dir or config.auth.cert_dir or cert_cache_module.DEFAULT_CERT_DIR
+  cert_cache = cert_cache_module.create_cache 500, 7776000, cert_dir, SNI_CERT_MAX_NAMES
+  log_debug -> { action: "server_cert_cache_dir", dir: cert_dir }
 
   -- Charger le certificat statique s'il est fourni dans la configuration.
   -- load_static retourne (ctx, err) : récupérer le contexte dans `ctx`, pas `ok`

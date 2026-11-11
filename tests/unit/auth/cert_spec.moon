@@ -182,6 +182,7 @@ describe "auth/cert", ->
       mock_cache = {
         get: (h) -> nil
         set: (h, c, k, ctx) -> true
+        cert_dir: "tmp"
       }
 
       ok, result = pcall load_or_generate_sni, "sni-test.local", mock_cache
@@ -196,6 +197,7 @@ describe "auth/cert", ->
     mock_cache = {
       get: (h) -> { ctx: fake_ctx, cert_pem: "CERT", key_pem: "KEY" }
       set: (h, c, k, ctx) -> true
+      cert_dir: "tmp"
     }
     ok, result = pcall load_or_generate_sni, "cached.local", mock_cache
     assert.is_true ok
@@ -211,6 +213,7 @@ describe "auth/cert", ->
         else
           nil
       set: (h, c, k, ctx) -> true
+      cert_dir: "tmp"
     }
     ok, result = pcall load_or_generate_sni, nil, mock_cache
     assert.is_true ok
@@ -233,6 +236,7 @@ describe "auth/cert", ->
       mock_cache = {
         get: (h) -> { ctx: nil, cert_pem: real_cert, key_pem: real_key }
         set: (h, c, k, ctx) -> true
+      cert_dir: "tmp"
       }
 
       ok, result = pcall load_or_generate_sni, "disk-test.local", mock_cache
@@ -248,6 +252,7 @@ describe "auth/cert", ->
     mock_cache = {
       get: (h) -> nil
       set: (h, c, k, ctx) -> true
+      cert_dir: "tmp"
     }
     ok, err = pcall load_or_generate_sni, "fail-gen.local", mock_cache
     assert.is_false ok

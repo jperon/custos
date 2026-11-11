@@ -155,6 +155,7 @@ load_doh_cfg = function()
         return nil
       end
     end)(),
+    cert_dir = config.auth.cert_dir,
     upstream_doh_url = config.doh.upstream_doh_url or nil,
     upstream_doh_tls_verify = (function()
       if config.doh.upstream_doh_tls_verify == nil then

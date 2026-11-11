@@ -4,14 +4,21 @@
 -- Valeur : {cert_pem, key_pem, ctx, expires_at}
 --
 -- Persistance disk :
---   - Certificats sauvegardés dans tmp/certs/ comme hostname.crt et hostname.key
---   - Index persistant dans tmp/cert_cache_index.lua (table sérialisée)
+--   - Certificats sauvegardés dans <cert_dir>/ comme hostname.crt et hostname.key
+--   - Index persistant dans <cert_dir>/cert_cache_index.lua (table sérialisée)
 --   - Charge au démarrage, sauvegarde à chaque SET
 --   - TTL long (90+ jours) : on régénère seulement si expiré
+--
+-- Les certificats générés sont des artefacts runtime : le défaut est un chemin
+-- absolu en tmpfs (/tmp/custos/certs), jamais la flash. Seul un certificat
+-- fourni à la main via auth.cert/auth.key reste dans /etc.
 
 { :log_debug, :log_warn } = require "log"
 { :with_lock } = require "lib.filelock"
 { :write_pem_atomic, :read_file } = require "auth.cert_files"
+{ :ensure_dir } = require "filter.updater_io"
+
+DEFAULT_CERT_DIR = "/tmp/custos/certs"
 
 --- Sauvegarde l'index persistant sur disque (timestamp + expiration)
 persist_index = (index_path, index_data) ->
@@ -71,9 +78,9 @@ load_persistent_index = (index_path) ->
 --- Factory pour créer une instance de cache persistant avec TTL.
 -- @tparam number max_size Nombre max de certificats en cache RAM (défaut: 500)
 -- @tparam number ttl Temps de vie des certificats en secondes (défaut: 7776000 = 90 jours)
--- @tparam string cert_dir Répertoire pour stocker les certificats (défaut: "tmp/certs")
+-- @tparam string cert_dir Répertoire pour stocker les certificats (défaut: DEFAULT_CERT_DIR, /tmp/custos/certs)
 -- @treturn table Instance du cache avec méthodes get/set/evict
-create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs", max_names = nil) ->
+create_cache = (max_size = 500, ttl = 7776000, cert_dir = DEFAULT_CERT_DIR, max_names = nil) ->
   max_size = math.max(1, tonumber(max_size) or 500)
   ttl = math.max(60, tonumber(ttl) or 7776000)  -- Min 60 sec, default 90 days
   -- Plafond du nombre de noms distincts conservés sur disque (et donc en RAM
@@ -82,11 +89,12 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs", max_names
   -- peut ni remplir la flash ni faire générer des clés à l'infini.
   max_names = math.max(1, tonumber(max_names) or max_size)
 
-  cert_dir = cert_dir or "tmp/certs"
-  index_path = "tmp/cert_cache_index.lua"
+  cert_dir = cert_dir or DEFAULT_CERT_DIR
+  -- L'index vit avec les PEM : un seul dossier à nettoyer/recréer au boot.
+  index_path = "#{cert_dir}/cert_cache_index.lua"
 
-  -- Créer répertoire de certificats s'il n'existe pas
-  os.execute "mkdir -p #{cert_dir} 2>/dev/null"
+  -- Créer répertoire de certificats s'il n'existe pas (helper commun).
+  ensure_dir cert_dir
 
   -- Stockage RAM : {hostname → {cert_pem, key_pem, ctx, expires_at, accessed_at}}
   data = {}
@@ -387,6 +395,8 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs", max_names
     :can_store
     :stats
     :clear
+    :cert_dir
+    :index_path
   }
 
-{ :create_cache }
+{ :create_cache, :DEFAULT_CERT_DIR }

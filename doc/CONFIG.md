@@ -425,6 +425,7 @@ Portail captif et authentification des utilisateurs.
 | `captive_port` | int | `33080` | Port HTTP du portail captif |
 | `cert` | string | — | Chemin vers le certificat TLS. Si le fichier n'existe pas au démarrage (installation fraîche), un certificat auto-signé est **généré automatiquement** à cet emplacement (px5g, dossiers parents créés). En cas d'échec de génération, repli sur le cache de certificats dynamiques keyé par le nom SNI demandé (lu par `MSG_PEEK` avant le handshake, `src/auth/sni_peek.moon`), puis sur l'IP locale du socket si le SNI est absent, invalide, hors quota (`SNI_CERT_MAX_NAMES`) ou si sa génération échoue. |
 | `key` | string | — | Chemin vers la clé privée TLS (générée avec `cert` si absente, permissions `0600`) |
+| `cert_dir` | string | `"/tmp/custos/certs"` | Répertoire des certificats **générés au runtime** (SNI/IP, cache px5g) et de leur index `cert_cache_index.lua`. Défaut tmpfs : ils ne sont pas persistés sur la flash et sont régénérés après un redémarrage. Un certificat fourni à la main reste désigné par `cert`/`key`. |
 | `secrets` | string | `"/etc/custos/secrets"` | Répertoire contenant les secrets (hash mots de passe) |
 | `session_ttl` | int | `0` | Durée (s) des sessions auth (0 = illimitée) |
 | `sessions_file` | string | `"/tmp/sessions.lua"` | Fichier de persistance des sessions |
@@ -450,6 +451,7 @@ auth: {
   captive_port: 33080
   cert: "/etc/custos/certs/auth.crt"
   key:  "/etc/custos/keys/auth.key"
+  cert_dir: "/tmp/custos/certs"
   secrets: "/etc/custos/secrets"
   session_ttl: 0
   sessions_file: "/var/run/custos/sessions.lua"

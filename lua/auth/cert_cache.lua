@@ -10,6 +10,9 @@ do
   local _obj_0 = require("auth.cert_files")
   write_pem_atomic, read_file = _obj_0.write_pem_atomic, _obj_0.read_file
 end
+local ensure_dir
+ensure_dir = require("filter.updater_io").ensure_dir
+local DEFAULT_CERT_DIR = "/tmp/custos/certs"
 local persist_index
 persist_index = function(index_path, index_data)
   local fh = io.open(index_path, "w")
@@ -112,7 +115,7 @@ create_cache = function(max_size, ttl, cert_dir, max_names)
     ttl = 7776000
   end
   if cert_dir == nil then
-    cert_dir = "tmp/certs"
+    cert_dir = DEFAULT_CERT_DIR
   end
   if max_names == nil then
     max_names = nil
@@ -120,9 +123,9 @@ create_cache = function(max_size, ttl, cert_dir, max_names)
   max_size = math.max(1, tonumber(max_size) or 500)
   ttl = math.max(60, tonumber(ttl) or 7776000)
   max_names = math.max(1, tonumber(max_names) or max_size)
-  cert_dir = cert_dir or "tmp/certs"
-  local index_path = "tmp/cert_cache_index.lua"
-  os.execute("mkdir -p " .. tostring(cert_dir) .. " 2>/dev/null")
+  cert_dir = cert_dir or DEFAULT_CERT_DIR
+  local index_path = tostring(cert_dir) .. "/cert_cache_index.lua"
+  ensure_dir(cert_dir)
   local data = { }
   local lru_order = { }
   local persistent_index = load_persistent_index(index_path)
@@ -470,9 +473,12 @@ create_cache = function(max_size, ttl, cert_dir, max_names)
     purge_expired = purge_expired,
     can_store = can_store,
     stats = stats,
-    clear = clear
+    clear = clear,
+    cert_dir = cert_dir,
+    index_path = index_path
   }
 end
 return {
-  create_cache = create_cache
+  create_cache = create_cache,
+  DEFAULT_CERT_DIR = DEFAULT_CERT_DIR
 }

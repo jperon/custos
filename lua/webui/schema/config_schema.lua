@@ -281,6 +281,12 @@ return {
       label = "Fichier sessions",
       default = "/tmp/sessions.lua"
     },
+    cert_dir = {
+      type = "path",
+      label = "Répertoire certificats générés",
+      default = "/tmp/custos/certs",
+      hint = "tmpfs, jamais la flash ; régénéré au démarrage"
+    },
     session_ttl = {
       type = "integer",
       label = "TTL session (s, 0=illimitée)",

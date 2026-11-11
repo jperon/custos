@@ -380,6 +380,7 @@ local DEFAULTS = {
     register_rate_window = 300,
     secrets = "/etc/custos/secrets",
     sessions_file = "/tmp/sessions.lua",
+    cert_dir = "/tmp/custos/certs",
     admin_users = { },
     admin_allow_all_when_empty = true
   },
@@ -686,6 +687,10 @@ normalize = function(cfg)
   cfg.auth.heartbeat_interval = tonumber(cfg.auth.heartbeat_interval) or auth_defaults.heartbeat_interval
   cfg.auth.idle_timeout = tonumber(cfg.auth.idle_timeout) or auth_defaults.idle_timeout
   cfg.auth.challenge_ttl = tonumber(cfg.auth.challenge_ttl) or auth_defaults.challenge_ttl
+  cfg.auth.cert_dir = cfg.auth.cert_dir or auth_defaults.cert_dir
+  if cfg.auth.cert_dir == "" then
+    cfg.auth.cert_dir = auth_defaults.cert_dir
+  end
   cfg.auth.register_rate_limit = tonumber(cfg.auth.register_rate_limit)
   if cfg.auth.register_rate_limit == nil then
     cfg.auth.register_rate_limit = auth_defaults.register_rate_limit

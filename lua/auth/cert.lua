@@ -8,6 +8,8 @@ local safe_cert_name
 safe_cert_name = require("auth.cert_name").safe_cert_name
 local materialize_pair
 materialize_pair = require("auth.cert_files").materialize_pair
+local DEFAULT_CERT_DIR
+DEFAULT_CERT_DIR = require("auth.cert_cache").DEFAULT_CERT_DIR
 local CERT_DAYS = 730
 local hash_string
 hash_string = function(s)
@@ -121,9 +123,12 @@ file_exists = function(path)
   end
 end
 local sni_paths
-sni_paths = function(hostname_lower)
+sni_paths = function(hostname_lower, cert_dir)
+  if cert_dir == nil then
+    cert_dir = DEFAULT_CERT_DIR
+  end
   local year = os.date("%Y")
-  return "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(year) .. ".key", "tmp/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(year) .. ".crt"
+  return tostring(cert_dir) .. "/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(year) .. ".key", tostring(cert_dir) .. "/auth_sni_" .. tostring(hostname_lower) .. "_" .. tostring(year) .. ".crt"
 end
 local load_or_generate_sni
 load_or_generate_sni = function(hostname, cache)
@@ -144,7 +149,7 @@ load_or_generate_sni = function(hostname, cache)
     end)
     return entry.ctx
   end
-  local key_file, cert_file = sni_paths(hostname_lower)
+  local key_file, cert_file = sni_paths(hostname_lower, (cache.cert_dir or DEFAULT_CERT_DIR))
   if entry and entry.cert_pem and entry.key_pem then
     log_debug(function()
       return {

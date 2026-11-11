@@ -654,7 +654,9 @@ run = (doh_cfg, filter_data) ->
 
   -- Certificate cache (shared across children via COW fork).
   cert_cache_mod = require "auth.cert_cache"
-  cert_cache = cert_cache_mod.create_cache 500, 7776000   -- 500 slots, 90-day TTL
+  -- 500 slots, 90-day TTL ; dossier tmpfs absolu partagé avec le portail AUTH.
+  cert_cache = cert_cache_mod.create_cache 500, 7776000,
+    (doh_cfg.cert_dir or cert_cache_mod.DEFAULT_CERT_DIR)
 
   static_cert_paths = nil
   if doh_cfg.cert and doh_cfg.key

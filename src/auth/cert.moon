@@ -7,6 +7,7 @@ ssl = require "auth.ffi_wolfssl"
 { :log_debug, :log_warn, :log_error } = require "log"
 { :safe_cert_name } = require "auth.cert_name"
 { :materialize_pair } = require "auth.cert_files"
+{ :DEFAULT_CERT_DIR } = require "auth.cert_cache"
 
 CERT_DAYS = 730     -- validité : 2 ans
 
@@ -120,12 +121,15 @@ file_exists = (path) ->
     false
 
 --- Chemins des fichiers PEM du certificat dynamique d'un nom.
+-- Les certificats SNI sont générés au runtime : défaut absolu en tmpfs, jamais
+-- la flash. Le dossier vient de auth.cert_dir via le cache.
 -- @tparam string hostname_lower Nom normalisé (validé par safe_cert_name)
+-- @tparam string cert_dir Répertoire des PEM (défaut: DEFAULT_CERT_DIR)
 -- @treturn string Chemin de la clé privée
 -- @treturn string Chemin du certificat
-sni_paths = (hostname_lower) ->
+sni_paths = (hostname_lower, cert_dir=DEFAULT_CERT_DIR) ->
   year = os.date "%Y"
-  "tmp/auth_sni_#{hostname_lower}_#{year}.key", "tmp/auth_sni_#{hostname_lower}_#{year}.crt"
+  "#{cert_dir}/auth_sni_#{hostname_lower}_#{year}.key", "#{cert_dir}/auth_sni_#{hostname_lower}_#{year}.crt"
 
 --- Charge ou génère un contexte TLS pour un hostname SNI spécifique.
 -- Utilise un cache LRU avec TTL pour éviter la régénération répétée.
@@ -147,7 +151,9 @@ load_or_generate_sni = (hostname, cache) ->
     log_debug -> { action: "cert_sni_cache_hit_ram", hostname: hostname_lower }
     return entry.ctx
 
-  key_file, cert_file = sni_paths hostname_lower
+  -- Le cache expose le dossier effectif (auth.cert_dir) ; un cache de test
+  -- peut l'omettre, on retombe alors sur le défaut tmpfs.
+  key_file, cert_file = sni_paths hostname_lower, (cache.cert_dir or DEFAULT_CERT_DIR)
 
   if entry and entry.cert_pem and entry.key_pem
     -- Entry depuis disque, recréer contexte. materialize_pair réutilise la

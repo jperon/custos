@@ -884,7 +884,7 @@ run = function(doh_cfg, filter_data)
     }
   end)
   local cert_cache_mod = require("auth.cert_cache")
-  local cert_cache = cert_cache_mod.create_cache(500, 7776000)
+  local cert_cache = cert_cache_mod.create_cache(500, 7776000, (doh_cfg.cert_dir or cert_cache_mod.DEFAULT_CERT_DIR))
   local static_cert_paths = nil
   if doh_cfg.cert and doh_cfg.key then
     log_info(function()
