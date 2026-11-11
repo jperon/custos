@@ -120,6 +120,10 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
 
 ## Diagnostic tools
 
+- Listes référencées mais introuvables ou vides : chercher `filter_list_missing`
+  (absente) ou `filter_list_empty` (présente mais sans entrée) dans les logs
+  (`make logs` ; `logread` sur OpenWrt). Les champs `condition`, `list` et
+  `path` donnent la condition, le nom de liste et le chemin réellement cherché.
 - Domain list membership: `moon tools/judge.moon <bin-dir> [<bin-dir> ...] <domain>`
   - Prints exact matches and parent suffix matches across compiled `.bin` lists.
   - Returns exit code `1` when no list matches the domain.

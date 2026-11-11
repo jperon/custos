@@ -1358,3 +1358,64 @@ HPACK et applique le profil RFC 8484.
 0 failures / 0 errors / 0 pending** ; `make test-js` = 12 pass / 0 fail
 (journal `tmp/test.log`). `make test-e2e` non lancé (hors périmètre de la
 tâche).
+
+### Listes référencées introuvables au chargement (branche d-listwarn)
+
+Constat sur une installation réelle : des règles ne s'appliquaient jamais, sans
+aucun message, parce que leurs listes étaient introuvables.
+`to_domainlist_list "custom/open_list"` cherchait
+`{lists_dir}/domainlist/custom/open_list.txt` (absent) et
+`to_domainlists {"custom/ferme"}` sur une règle `deny` ne chargeait ni `.bin` ni
+`.domains` : la condition construite ne correspondait jamais, silencieusement.
+
+- **Conditions `*_list`/`*_lists` (`src/filter/compiler_api.moon`).**
+  `read_lines` (`:77`) retourne désormais un second statut : `"missing"`
+  (fichier absent), `"empty"` (présent, mais vide ou seulement des
+  commentaires) ou `nil` (lignes valides). `make_from_file` (`:167`) émet un
+  unique `log_warn` à la **construction** (`:174-186`) — action
+  `filter_list_missing` ou `filter_list_empty`, champs `condition`, `list` et
+  `path` (chemin réellement ouvert). `make_from_files` (`:195`) transmet le nom
+  de la condition, fourni par `load_condition` (`:238`, `:246`) : le log dit
+  bien `from_net_list`/`from_net_lists`, etc. Le filtrage est inchangé : la
+  liste reste vide, donc la condition ne correspond jamais.
+- **Domainlists (`src/filter/conditions/to_domainlist.moon`).**
+  `load_list` (`:100`) distingue lui aussi `"missing"` (open impossible) de
+  `"empty"` (`.bin` de taille 0, ou `.domains` sans domaine) sans changer son
+  contrat principal (`nil, msg`). La factory (`:223`) tente `.bin` puis
+  `.domains` et, si rien ne charge, émet un `log_warn` à la construction
+  (`:250-272`) avec `condition`, `list`, `path` et, pour le cas absent,
+  `alt_path` (le repli `.domains` cherché). Un échec sans rapport avec le
+  fichier (`libxxhash` introuvable) ne produit aucun de ces deux avertissements,
+  pour ne pas accuser la liste à tort. `to_domainlists.moon:23` passe le libellé
+  `"to_domainlists"` à la factory déléguée ; ce module n'a pas de chargement
+  propre.
+- **Avertissements et compatibilité des tests.** Le logger est lu au call-site
+  (`log.log_warn`) : les specs qui remplacent `package.loaded["log"]` par une
+  table partielle (sans `log_warn`) ne cassent plus, et un espion installé
+  après chargement est bien vu. `tests/helpers/busted_setup.moon` transmet
+  désormais les arguments supplémentaires au wrapper `__call`
+  (`(...) ->`), pour que le libellé de condition de `to_domainlists` soit
+  observable comme en production.
+- **Combien de fois par démarrage.** `compile_rules` n'est appelé que dans le
+  processus superviseur, avant le fork des workers : `nft_rules.apply!`
+  (`src/nft_rules.moon:259`) puis `filter.load!` (`src/main.moon:401`). Les
+  workers reçoivent les métadonnées déjà compilées, donc **deux** lignes par
+  liste manquante au démarrage (même pid), plus une par SIGHUP
+  (`src/main.moon:531`). Aucune déduplication inter-processus n'a été ajoutée :
+  `RL_CONFIG` (`src/log.moon:57-68`) ne couvre pas ces actions, le
+  rate-limiting ne les élague donc pas.
+- **Tests.** `tests/unit/filter/list_warnings_spec.moon` (9 cas) : fichier
+  absent → `filter_list_missing` avec le chemin attendu ; fichier vide ou
+  commentaires seuls → `filter_list_empty` ; fichier valide → aucun warn ;
+  `*_lists` → un warn par liste absente ; domainlist `.bin` absente,
+  `.bin` vide, `.domains` vide ; `.bin` valide → aucun warn ; `to_domainlists`
+  délègue avec le bon libellé. Les fichiers de test vivent sous
+  `./tmp/list_warnings_spec` (jamais `/tmp` système).
+- **Documentation.** `doc/CONFIG.md` § 14.1 (rôle de `domainlists_dir`,
+  `lists_dir`, `custom_lists_dir` et de ce qui est lu où), `doc/CHEATSHEET.md`
+  (diagnostic par `filter_list_missing`/`filter_list_empty`).
+
+**Vérification (2026-11-11, branche d-listwarn)** : `nix develop --command bash
+-c "make all && make check && make test"` OK ; `make test` = **2421
+successes / 0 failures / 0 errors / 0 pending** (`tmp/test_d-listwarn.log`).
+`make test-e2e` non lancé (hors périmètre de la tâche).

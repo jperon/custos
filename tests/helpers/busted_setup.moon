@@ -185,7 +185,7 @@ do
     (cfg) ->
       inner = outer cfg
       return inner unless type(inner) == "function"
-      (args) -> make_callable inner args
+      (...) -> make_callable (inner ...)
 
   orig_require = require
   _G.require = (name) ->

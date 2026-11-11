@@ -16,7 +16,7 @@ _factory = function(cfg)
     end
     local list_conds = { }
     for _, name in ipairs(lists) do
-      list_conds[#list_conds + 1] = to_domainlist_factory(cfg)(name)
+      list_conds[#list_conds + 1] = to_domainlist_factory(cfg)(name, "to_domainlists")
     end
     return {
       capabilities = {

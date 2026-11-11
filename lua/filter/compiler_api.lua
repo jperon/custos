@@ -45,6 +45,7 @@ action_options_of = function(entry)
   end
   return entry[name]
 end
+local log = require("log")
 local rule_id = require("filter.rule_id")
 local sanitize_ascii = rule_id.sanitize_ascii
 local sanitize_id = rule_id.sanitize_id
@@ -68,7 +69,7 @@ read_lines = function(filepath)
   local lines = { }
   local f = io.open(filepath, "r")
   if not (f) then
-    return lines
+    return lines, "missing"
   end
   for line in f:lines() do
     line = line:match("^%s*(.-)%s*$")
@@ -77,7 +78,10 @@ read_lines = function(filepath)
     end
   end
   f:close()
-  return lines
+  if #lines > 0 then
+    return lines, nil
+  end
+  return lines, "empty"
 end
 local wrap_factory
 wrap_factory = function(factory_outer)
@@ -199,18 +203,37 @@ make_plural = function(base_factory)
   end
 end
 local make_from_file
-make_from_file = function(base_factory, type_name)
+make_from_file = function(base_factory, type_name, cond_name)
+  if cond_name == nil then
+    cond_name = nil
+  end
   return function(cfg)
     return function(list_name)
       local lists_dir = (cfg.lists_dir) or (cfg.filter and cfg.filter.lists_dir) or "/tmp/custos/lists"
       local filepath = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(list_name) .. ".txt"
-      local items = read_lines(filepath)
+      local items, status = read_lines(filepath)
+      if status then
+        local warn = log.log_warn
+        if warn then
+          warn(function()
+            return {
+              action = status == "missing" and "filter_list_missing" or "filter_list_empty",
+              condition = cond_name or tostring(type_name) .. "_list",
+              list = list_name,
+              path = filepath
+            }
+          end)
+        end
+      end
       return make_plural(base_factory)(cfg)(items)
     end
   end
 end
 local make_from_files
-make_from_files = function(base_factory, type_name)
+make_from_files = function(base_factory, type_name, cond_name)
+  if cond_name == nil then
+    cond_name = nil
+  end
   return function(cfg)
     return function(names)
       if not (type(names) == "table") then
@@ -218,7 +241,7 @@ make_from_files = function(base_factory, type_name)
           names
         }
       end
-      local file_factory = make_from_file(base_factory, type_name)(cfg)
+      local file_factory = make_from_file(base_factory, type_name, cond_name)(cfg)
       local conds
       do
         local _accum_0 = { }
@@ -280,7 +303,7 @@ load_condition = function(name)
     local type_name = base_name:match("^[^_]+_(.+)$")
     local base_ok, base_mod = pcall(require, "filter.conditions." .. tostring(base_name))
     if base_ok and type_name then
-      return make_from_files((wrap_factory(extract_factory(base_mod))), type_name)
+      return make_from_files((wrap_factory(extract_factory(base_mod))), type_name, name)
     end
   end
   base_name = name:match("^(.+)_list$")
@@ -288,7 +311,7 @@ load_condition = function(name)
     local type_name = base_name:match("^[^_]+_(.+)$")
     local base_ok, base_mod = pcall(require, "filter.conditions." .. tostring(base_name))
     if base_ok and type_name then
-      return make_from_file((wrap_factory(extract_factory(base_mod))), type_name)
+      return make_from_file((wrap_factory(extract_factory(base_mod))), type_name, name)
     end
   end
   base_name = name:match("^(.+)s$")
