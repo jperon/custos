@@ -889,9 +889,14 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   quotés.** La ligne cron était ajoutée à chaque exécution, et `REPO` (interpolé
   dans du shell local puis distant, puis `sync.conf` sourcé par root) permettait
   l'exécution de commandes arbitraires (`REPO='https://x/a;reboot'`). Correctif :
-  validation shell stricte de `HOST` et `REPO` en tête des deux recettes (jeu de
-  caractères restreint, échec explicite), valeur REPO écrite entre apostrophes
-  simples dans `sync.conf`, et ligne cron ajoutée seulement si absente
+  `HOST`/`REPO` sont **dés-exportés** en tête du Makefile (`unexport HOST REPO`,
+  avant le premier `$(shell …)` : make exporte et développe les variables de
+  ligne de commande vers toute fonction `$(shell …)`, donc un `$(shell touch …)`
+  s'y exécuterait avant validation) puis recopiés dans `SYNC_HOST`/`SYNC_REPO`
+  (`$(value HOST)`, sans ré-expansion). Les recettes n'utilisent plus que ces
+  variables d'environnement validées (jeu de caractères restreint, échec
+  explicite en première ligne), valeur REPO écrite entre apostrophes simples
+  dans `sync.conf`, et ligne cron ajoutée seulement si absente
   (`grep -qF … ||`).
 - **`setup.sh` référençait un ruleset supprimé et des tables inexistantes.**
   `NFT_RULES` pointait vers `nft-rules/dns-filter.nft` (supprimé), et
