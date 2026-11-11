@@ -250,13 +250,21 @@ bench_delta = (finish, start) ->
 --- Construit les champs de la ligne benchmark ALLOW/BLOCK (fonction pure).
 -- Réunit le verdict (depuis `entry`), les métadonnées de la requête (`info`,
 -- extraites de la réponse DNS) et les jalons de latence (`deltas`).
--- @tparam table entry  Transaction IPC (refused, reason, rule_id, dnsonly)
+-- @tparam table entry  Transaction IPC (refused, reason, rule_id, dnsonly,
+--                      upstream_retries)
 -- @tparam table info   Métadonnées : client_mac, vlan, client_ip, resolver_ip,
---                      client_port, txid, af, user, qname, qtype, retry_*
+--                      client_port, txid, af, user, qname, qtype, ipc_retry_*
 -- @tparam table deltas Jalons : delta_ms (→ q_to_response_ms), question_proc_ms,
 --                      response_entry_ms, drain_ms, payload_ms, parse_ms, match_ms, log_ms
 -- @treturn table  Champs prêts pour log_allow/log_block
 -- @treturn string Verdict : "block" si entry.refused, sinon "allow"
+-- Les deux familles de retry sont distinctes et ne doivent pas être confondues :
+--   * `ipc_retry_*` : retry d'APPARIEMENT IPC (la réponse est arrivée avant que
+--     la question ne soit lue du pipe) — mesuré localement, coût Custos ;
+--   * `upstream_retries` : nombre de renvois de la requête vers le résolveur
+--     amont (`try_upstream_retry`, `entry.upstream_retries`) — 0 si aucun.
+--     Seul un compteur existe (aucune durée n'est stockée) : ne pas inventer de
+--     `upstream_wait_ms`.
 build_benchmark_fields = (entry, info, deltas) ->
   fields = {
     action:   "dns_benchmark"
@@ -282,8 +290,9 @@ build_benchmark_fields = (entry, info, deltas) ->
     parse_ms:   deltas.parse_ms
     match_ms:   deltas.match_ms
     log_ms:     deltas.log_ms
-    retry_wait_ms:  info.retry_wait_ms
-    retry_attempts: info.retry_attempts
+    ipc_retry_wait_ms:  info.ipc_retry_wait_ms
+    ipc_retry_attempts: info.ipc_retry_attempts
+    upstream_retries:   entry.upstream_retries or 0
   }
   fields, (entry.refused and "block" or "allow")
 
@@ -737,32 +746,34 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
 
   -- ── Vérification IPC ─────────────────────────────────────────
   entry = get_pending_entry txid, dst_ip, client_port, resolver_ip, now
-  retry_attempts = 0
-  retry_wait_ms = 0
+  -- Retry d'appariement IPC (réponse arrivée avant la lecture de la question) :
+  -- distinct du retry upstream (`entry.upstream_retries`).
+  ipc_retry_attempts = 0
+  ipc_retry_wait_ms = 0
   unless entry
-    entry, retry_attempts, retry_wait_ms = retry_pending_match txid, dst_ip, client_port, resolver_ip
+    entry, ipc_retry_attempts, ipc_retry_wait_ms = retry_pending_match txid, dst_ip, client_port, resolver_ip
     if entry
       log_info -> {
         action: "response_matched_after_retry"
         src_ip: src_ip
         dst_ip: dst_ip
         txid: txid_hex
-        retry_attempts: retry_attempts
-        retry_wait_ms: retry_wait_ms
+        ipc_retry_attempts: ipc_retry_attempts
+        ipc_retry_wait_ms: ipc_retry_wait_ms
         user: user
       }
     else
       if level_enabled "DEBUG"
         log_debug -> {
-          action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
+          action:    if ipc_retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
           src_ip:    src_ip
           dst_ip:    dst_ip
           vlan:      l2.vlan
           txid:      txid_hex
           rcode:     dns_msg.header.rcode
           client_mac: client_mac
-          retry_attempts: retry_attempts
-          retry_wait_ms: retry_wait_ms
+          ipc_retry_attempts: ipc_retry_attempts
+          ipc_retry_wait_ms: ipc_retry_wait_ms
           user: user
       }
       return NF_DROP
@@ -819,8 +830,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         user:        user
         qname:       q1 and q1.name or "-"
         qtype:       q1 and (QTYPE[q1.qtype] or "TYPE#{q1.qtype}") or "-"
-        retry_wait_ms:  retry_wait_ms
-        retry_attempts: retry_attempts
+        ipc_retry_wait_ms:  ipc_retry_wait_ms
+        ipc_retry_attempts: ipc_retry_attempts
       }
       -- entry.benchmark_ms = jalon d'ENTRÉE question : delta_ms couvre donc tout
       -- le traitement. La sortie question (base de response_entry_ms) est

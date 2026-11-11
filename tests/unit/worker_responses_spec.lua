@@ -105,8 +105,8 @@ describe("worker_responses helpers", function()
       user = "alice@lan",
       qname = "example.com",
       qtype = "A",
-      retry_wait_ms = 3,
-      retry_attempts = 1
+      ipc_retry_wait_ms = 3,
+      ipc_retry_attempts = 1
     }
     local deltas = {
       delta_ms = 12,
@@ -139,7 +139,52 @@ describe("worker_responses helpers", function()
       assert.equals(4, fields.question_proc_ms)
       assert.equals(5, fields.response_entry_ms)
       assert.equals(2, fields.parse_ms)
-      return assert.equals("0x1f4d", fields.txid)
+      assert.equals("0x1f4d", fields.txid)
+      assert.equals(1, fields.ipc_retry_attempts)
+      assert.equals(3, fields.ipc_retry_wait_ms)
+      assert.is_nil(fields.retry_attempts)
+      return assert.is_nil(fields.retry_wait_ms)
+    end)
+    it("upstream_retries reflète entry.upstream_retries (compteur upstream)", function()
+      local m = fresh_worker_responses()
+      local entry = {
+        refused = false,
+        reason = "Allowed",
+        rule_id = "r_ok",
+        dnsonly = false,
+        upstream_retries = 2
+      }
+      local fields = m.build_benchmark_fields(entry, info, deltas)
+      assert.equals(2, fields.upstream_retries)
+      assert.equals(1, fields.ipc_retry_attempts)
+      return assert.equals(3, fields.ipc_retry_wait_ms)
+    end)
+    it("upstream_retries vaut 0 quand la transaction n'a pas été retentée", function()
+      local m = fresh_worker_responses()
+      local no_retry_info = {
+        client_mac = "aa:bb:cc:dd:ee:ff",
+        vlan = 8,
+        client_ip = "10.35.8.2",
+        resolver_ip = "1.1.1.1",
+        client_port = 5353,
+        txid = 0x1f4d,
+        af = "ipv4",
+        user = "alice@lan",
+        qname = "example.com",
+        qtype = "A",
+        ipc_retry_attempts = 0,
+        ipc_retry_wait_ms = 0
+      }
+      local entry = {
+        refused = false,
+        reason = "Allowed",
+        rule_id = "r_ok",
+        dnsonly = false
+      }
+      local fields = m.build_benchmark_fields(entry, no_retry_info, deltas)
+      assert.equals(0, fields.upstream_retries)
+      assert.equals(0, fields.ipc_retry_attempts)
+      return assert.equals(0, fields.ipc_retry_wait_ms)
     end)
     return it("verdict block quand entry.refused est vrai", function()
       local m = fresh_worker_responses()

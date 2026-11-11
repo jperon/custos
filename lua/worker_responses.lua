@@ -268,8 +268,9 @@ build_benchmark_fields = function(entry, info, deltas)
     parse_ms = deltas.parse_ms,
     match_ms = deltas.match_ms,
     log_ms = deltas.log_ms,
-    retry_wait_ms = info.retry_wait_ms,
-    retry_attempts = info.retry_attempts
+    ipc_retry_wait_ms = info.ipc_retry_wait_ms,
+    ipc_retry_attempts = info.ipc_retry_attempts,
+    upstream_retries = entry.upstream_retries or 0
   }
   return fields, (entry.refused and "block" or "allow")
 end
@@ -851,10 +852,10 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     end
   end
   local entry = get_pending_entry(txid, dst_ip, client_port, resolver_ip, now)
-  local retry_attempts = 0
-  local retry_wait_ms = 0
+  local ipc_retry_attempts = 0
+  local ipc_retry_wait_ms = 0
   if not (entry) then
-    entry, retry_attempts, retry_wait_ms = retry_pending_match(txid, dst_ip, client_port, resolver_ip)
+    entry, ipc_retry_attempts, ipc_retry_wait_ms = retry_pending_match(txid, dst_ip, client_port, resolver_ip)
     if entry then
       log_info(function()
         return {
@@ -862,8 +863,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
           src_ip = src_ip,
           dst_ip = dst_ip,
           txid = txid_hex,
-          retry_attempts = retry_attempts,
-          retry_wait_ms = retry_wait_ms,
+          ipc_retry_attempts = ipc_retry_attempts,
+          ipc_retry_wait_ms = ipc_retry_wait_ms,
           user = user
         }
       end)
@@ -872,7 +873,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         log_debug(function()
           return {
             action = (function()
-              if retry_attempts > 0 then
+              if ipc_retry_attempts > 0 then
                 return "response_no_matching_question_after_retry"
               else
                 return "response_no_matching_question"
@@ -884,8 +885,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
             txid = txid_hex,
             rcode = dns_msg.header.rcode,
             client_mac = client_mac,
-            retry_attempts = retry_attempts,
-            retry_wait_ms = retry_wait_ms,
+            ipc_retry_attempts = ipc_retry_attempts,
+            ipc_retry_wait_ms = ipc_retry_wait_ms,
             user = user
           }
         end)
@@ -934,8 +935,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         user = user,
         qname = q1 and q1.name or "-",
         qtype = q1 and (QTYPE[q1.qtype] or "TYPE" .. tostring(q1.qtype)) or "-",
-        retry_wait_ms = retry_wait_ms,
-        retry_attempts = retry_attempts
+        ipc_retry_wait_ms = ipc_retry_wait_ms,
+        ipc_retry_attempts = ipc_retry_attempts
       }
       local question_proc_ms = entry.question_proc_ms or 0
       local q_exit_ms = entry.benchmark_ms + question_proc_ms

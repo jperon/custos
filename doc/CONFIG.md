@@ -96,10 +96,35 @@ traitement Custos inclus. Elle se décompose en trois étages :
   les retransmissions et les files NFQUEUE — c'est généralement le poste
   dominant et il est **hors** Custos.
 - jalons locaux côté worker responses : `drain_ms`, `payload_ms`, `parse_ms`,
-  `match_ms`, `log_ms` (plus `retry_attempts` et `retry_wait_ms`).
+  `match_ms`, `log_ms`.
+
+Deux compteurs de retry **distincts** figurent dans la ligne, et ne mesurent pas
+la même chose :
+
+- `ipc_retry_attempts` / `ipc_retry_wait_ms` : retry d'**appariement IPC**
+  (réponse arrivée avant que la question correspondante ne soit lue du pipe
+  `question_response` ; cf. `ipc.match_retry`). `ipc_retry_wait_ms` est le temps
+  cumulé réellement dormi. Vaut `0` / `0` quand l'appariement a réussi du premier
+  coup — c'est le cas très majoritaire.
+- `upstream_retries` : nombre de renvois de la requête vers le **résolveur amont**
+  effectués pour cette transaction (`dns.upstream_retry`, `entry.upstream_retries`),
+  c'est-à-dire le nombre de réponses transitoirement en échec (SERVFAIL/REFUSED/
+  NXDOMAIN selon `rcodes`) qui ont été remplacées par un nouvel essai vers le
+  même résolveur au lieu d'être transmises au client. Vaut `0` quand aucun retry
+  upstream n'a eu lieu (cas majoritaire). **Seul un compteur existe** : aucune
+  durée d'attente upstream n'est stockée, donc aucune n'est journalisée.
+
+> Ces deux champs portaient auparavant les noms nus `retry_attempts` et
+> `retry_wait_ms`, qui laissaient croire à une mesure du retry upstream alors
+> qu'ils ne décrivaient que le retry d'appariement IPC (et valaient donc `0` dans
+> la quasi-totalité des lignes). Les lignes `action=response_matched_after_retry`
+> et `action=response_no_matching_question[_after_retry]` utilisent les mêmes
+> noms `ipc_retry_attempts` / `ipc_retry_wait_ms`.
 
 On a donc `q_to_response_ms ≈ question_proc_ms + response_entry_ms + (drain_ms +
-payload_ms + parse_ms + match_ms + log_ms)`.
+payload_ms + parse_ms + match_ms + log_ms)`. `ipc_retry_wait_ms` détaille une
+composante de `match_ms` (le jalon de fin `match_ms` est pris après la boucle de
+retry IPC), il ne s'y ajoute pas.
 
 Quand `benchmark` est désactivé (défaut), le verdict `ALLOW`/`BLOCK` est journalisé
 côté worker DNS comme auparavant, sans temps.
@@ -311,6 +336,11 @@ Communication interne entre le worker questions et le worker réponses.
 | `match_retry.sleep_ms` | int | `20` | Délai (ms) entre chaque tentative |
 
 La clé de corrélation est `txid:ip:port` (ID de transaction DNS + IP source + port source).
+
+Quand `runtime.benchmark` est actif, ces tentatives alimentent les champs
+`ipc_retry_attempts` / `ipc_retry_wait_ms` de la ligne `action=response_dns_benchmark`
+(cf. [section `runtime`](#2-section-runtime)) ; ils sont sans rapport avec le retry
+upstream `dns.upstream_retry` (champ `upstream_retries`).
 
 ---
 
