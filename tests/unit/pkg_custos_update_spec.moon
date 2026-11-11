@@ -33,7 +33,7 @@ write_exec = (path, content) ->
   os.execute "chmod 755 #{path}"
 
 spawn_sleeper = (pid_file) ->
-  os.execute "sh -c 'sleep 60 & echo $! > #{pid_file}'"
+  os.execute "sh -c 'sleep 20 & echo $! > #{pid_file}'"
 
 describe "custos-update (script de paquet)", ->
   setup ->
@@ -111,7 +111,9 @@ exit 0
     write_exec "#{TMP}/bin/pkill", "#!/bin/sh\nexit 1\n"
 
   teardown ->
-    os.execute "kill $(cat #{TMP}/custos.pid) 2>/dev/null || true"
+    -- Le processus factice (« sleep ») a en général déjà été tué par le
+    -- SIGHUP du script ; le kill ne sert qu'en cas d'échec avant cette étape.
+    os.execute "if [ -f #{TMP}/custos.pid ]; then kill $(cat #{TMP}/custos.pid) 2>/dev/null || true; fi"
     os.execute "rm -rf #{TMP}"
 
   before_each ->
