@@ -591,12 +591,21 @@ Ce fichier alimente trois UX :
 
 ## 13. Section `metrics`
 
-Collecte de métriques internes.
+Collecte de métriques internes. Chaque worker `worker_questions` accumule les
+verdicts par règle en mémoire, puis écrit périodiquement un instantané JSON
+`metrics-<worker>.json` dans le répertoire d'exécution (celui du pidfile
+`runtime.pid_file`, `/var/run` par défaut ; surchargeable par
+`CUSTOS_PID_FILE`). L'écriture est atomique (fichier temporaire + `os.rename`)
+et n'a lieu que dans le worker concerné, jamais dans le chemin par paquet :
+l'horloge n'est lue qu'une fois tous les 1024 paquets, et l'intervalle
+`flush_interval` décide de l'écriture. La page admin en lecture seule
+`/admin/metrics` agrège les instantanés de tous les workers (voir
+[docs/agents/webui.md](../docs/agents/webui.md)).
 
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
-| `enabled` | bool | `true` | Active la collecte de métriques |
-| `flush_interval` | int | `60` | Intervalle (s) de vidange des métriques |
+| `enabled` | bool | `true` | Active la collecte et l'écriture des instantanés. `false` : aucun compteur ni fichier, coût nul dans le chemin par paquet, la page indique que les métriques sont désactivées. |
+| `flush_interval` | int | `60` | Intervalle (s) entre deux instantanés JSON par worker |
 | `max_rules` | int | `1000` | Nombre maximum de règles tracées dans les métriques |
 
 ---

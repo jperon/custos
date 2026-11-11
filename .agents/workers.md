@@ -8,7 +8,7 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 - **In :** NFQUEUE `QUEUE_QUESTIONS`, fd d'écriture `question_response`, `learn` et `events` injectés par `main.moon`.
 - **Lecture config :** section `filter` de `/etc/custos/config.moon` via module `src/filter/`.
-- **Out :** `NF_ACCEPT`/`NF_DROP` ; messages IPC via `ipc.write_msg` / `write_refused_msg` / `write_dnsonly_msg` dans `question_response` ; association IP→MAC dans `learn` ; événement DNS dans `events`.
+- **Out :** `NF_ACCEPT`/`NF_DROP` ; messages IPC via `ipc.write_msg` / `write_refused_msg` / `write_dnsonly_msg` dans `question_response` ; association IP→MAC dans `learn` ; événement DNS dans `events` ; instantané JSON `metrics-dns-q<N>.json` dans le répertoire d'exécution (celui du pidfile), écrit atomiquement toutes les `metrics.flush_interval` secondes (page admin `/admin/metrics`, cf. [webui.md](../docs/agents/webui.md)).
 - **Effets de bord :** logs `log_allow`/`log_block` ; métriques par règle (`metrics`).
 - **Second avis (action `validate`) :** pour chaque question UDP autorisée par une règle portant l'action `validate` (`allow_modifiers.validate`), **duplique** le paquet (dst réécrite vers une IP `resolvers` de la bonne famille via `dup_query`, src/txid/qname préservés) et l'émet via un **socket RAW routé par le noyau** (`raw_send`, `IP_HDRINCL`/`IPV6_HDRINCL`, src = IP client) : pas de MAC de passerelle à connaître, IPv6 sur tunnel géré nativement. Une famille n'est activée que si un validateur de cette famille est routable. Best-effort, ne bloque pas.
 
