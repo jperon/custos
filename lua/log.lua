@@ -181,6 +181,18 @@ local RL_CONFIG = {
   TRACE = {
     keys = RL_IDENTITY_KEYS,
     window = 30
+  },
+  response_orphan_dropped = {
+    keys = { },
+    window = 10
+  },
+  ipc_pending_overwrite = {
+    keys = { },
+    window = 10
+  },
+  ipc_pending_overwrite_divergent = {
+    keys = { },
+    window = 10
   }
 }
 local RL_NEVER_LIMIT = {

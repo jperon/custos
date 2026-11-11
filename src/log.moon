@@ -131,6 +131,18 @@ RL_CONFIG = {
   INFO:               { keys: RL_IDENTITY_KEYS,              window: 60  }
   DEBUG:              { keys: RL_IDENTITY_KEYS,              window: 30  }
   TRACE:              { keys: RL_IDENTITY_KEYS,              window: 30  }
+  -- Observabilité des anomalies d'appariement question/réponse. `keys: {}`
+  -- agrège par action seule (aucun champ discriminant) : au plus une ligne par
+  -- fenêtre, occurrences reportées dans `suppressed=N`. Fenêtre 10 s (plus
+  -- courte que le défaut INFO de 60 s) : un événement isolé est toujours
+  -- visible, une rafale de réponses orphelines (400/s) coûte au plus 1 ligne
+  -- / 10 s. L'état du limiteur est partagé entre processus (table mmap), donc
+  -- le plafond vaut tous workers confondus. La résolution essaie l'action
+  -- complète puis sans le préfixe du worker (`response_`, `questions_`…) : ces
+  -- entrées s'appliquent donc aussi aux actions préfixées.
+  response_orphan_dropped:          { keys: {}, window: 10 }
+  ipc_pending_overwrite:            { keys: {}, window: 10 }
+  ipc_pending_overwrite_divergent:  { keys: {}, window: 10 }
 }
 
 -- Actions de cycle de vie jamais limitées : un crash répété (`worker_died`,

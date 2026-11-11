@@ -247,6 +247,10 @@ DEFAULTS = {
     match_retry: {
       count: 5
       sleep_ms: 20
+      -- Budget de sommeil par seconde et par worker pour le retry
+      -- d'appariement (cf. doc/CONFIG.md § ipc). Empêche une rafale de
+      -- réponses orphelines de sérialiser le worker dans le hot-path NFQ.
+      budget_ms: 100
     }
   }
 
