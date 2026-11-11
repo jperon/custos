@@ -129,6 +129,7 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
 - Config source:
   - Main file: `cfg/config.moon` (or `/etc/custos/config.moon` on OpenWrt)
   - Useful fields: `filter.sources`, `filter.domainlists_dir`, `filter.custom_lists_dir`
+- Migration Idefix3 → Custos : `luajit idefix2filter.lua <idefix.json> <dossier-sortie>` (depuis la racine, après `make all` ; écrit `config.moon` et `listes/**/*.domains`).
 
 - Groupe de domainlists (éviter de répéter `to_domainlists {a,b,c}` entre règles) :
   - Condition `to_domainlist_list "groupe"` → lit `{lists_dir}/domainlist/groupe.txt`

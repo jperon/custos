@@ -1147,3 +1147,61 @@ OK (147 fichiers, aucune globale inconnue) ; `make test` = **2301 successes /
 0 failures / 0 errors / 0 pending** (2298 de la base + 3 tests ajoutés par
 l'adaptation IPv6), `make test-js` = 12 pass / 0 fail (journal `tmp/test.log`).
 `make test-e2e` non lancé (homelab partagé, à la charge de l'orchestrateur).
+
+### Migration Idefix3 → Custos (`idefix2filter.moon`, branche d-idefix)
+
+Réparation du script de migration signalé en Q4/Q5 du rapport
+`tmp/audit/rapport-doh-outils.md` (trois pannes plus `..=` en boucle).
+
+- **JSON.** `require "json"` (inexistant à la racine) remplacé par
+  `require "lib.json"` (`idefix2filter.moon:21`) après préfixage de
+  `package.path` avec `lua/?.lua;lua/?/init.lua;lua/?/?.lua`
+  (`idefix2filter.moon:14-19`). Le script s'exécute donc depuis la racine du
+  dépôt, sur le `.lua` compilé (`luajit idefix2filter.lua …`), et utilise le
+  décodeur `decode` de `src/lib/json.moon:274-281`.
+- **`split_conditions` supprimée.** Les règles sont désormais des tables
+  structurées construites par `build_rules` (`idefix2filter.moon:186-216`) ;
+  plus aucune chaîne `"clé: valeur"` n'est parsée à l'exécution.
+- **`[local, lan, home.arpa]` invalide.** La règle « Infrastructure » émet
+  `to_domains: {"local", "lan", "home.arpa"}` (`idefix2filter.moon:197`),
+  forme de `cfg/config.moon:28`.
+- **Clés de condition réellement existantes.** `to_domainlist`
+  (`src/filter/conditions/to_domainlist.moon`), `to_domainlists`
+  (`src/filter/conditions/to_domainlists.moon`), `to_domains`
+  (`src/filter/conditions/to_domains.moon`) et `from_macs`
+  (`idefix2filter.moon:194,201,206,211`). `from_maclist`, utilisé par le
+  script d'origine, n'existe pas dans le code : la variante plurielle
+  `from_macs` est auto-générée depuis `from_mac` par
+  `src/filter/compiler_api.moon:244` (résolution des alias via
+  `src/filter/conditions/from_mac.moon:17-23`). Le test vérifie chaque clé
+  émise avec `compiler_api.load_condition`.
+- **`..=` en boucle.** Remplacé par une table de lignes + `table.concat`
+  (`render_config`, `idefix2filter.moon:218-251` ; `write_lists`,
+  `idefix2filter.moon:277-291`). Un test interdit la réapparition de `..=`
+  dans le script.
+- **Bug découvert en écrivant le test.** Le nettoyage `gsub "^%s*(.*)%s*$"`
+  ne retirait pas les espaces finaux (`(.*)` greedy laisse `%s*` vide) :
+  corrigé en `^%s*(.-)%s*$` (`idefix2filter.moon:66`).
+- **Listes générées.** Les groupes vont dans `listes/<groupe>.domains`, les
+  listes `block_yahoo`/`spotify` dans `listes/custom/*.domains`, format texte
+  lu par le repli `.domains` de `to_domainlist`
+  (`src/filter/conditions/to_domainlist.moon:234-241`). `config.moon` conserve
+  les chemins `/etc/custos/lists[/custom]` du script d'origine : le dossier
+  `listes/` produit doit être déployé à cet endroit.
+- **Non modifié.** Les listes `custom/addenda_*` référencées par les règles
+  Abbés/Élèves ne sont pas générées (elles venaient déjà d'ailleurs). En
+  revanche l'absence de `data.maclists` n'est plus fatale : les groupes
+  démarrent vides et les devices sans MAC sont ignorés.
+
+Tests : `tests/unit/idefix2filter_spec.moon` (11 cas) couvre nettoyage,
+collecte, associations de profils, rendu, compilation MoonScript
+(`moonscript.base.to_lua`), chargement du `config.moon` généré par le chargeur
+réel (`CUSTOS_CONFIG_PATH` + `CUSTOS_REQUIRE_EXTERNAL_CONFIG=1` dans un
+processus `luajit`) et écriture des fichiers. `idefix2filter.lua` est
+régénéré et suivi ; le `.lua` de la spec reste ignoré par `.gitignore:38`
+(convention du dépôt).
+
+**Vérification (2026-11-11, branche d-idefix)** : `make all`, `make check`
+OK (150 fichiers) ; `make test` = **2322 successes / 0 failures / 0 errors /
+0 pending** (`tmp/test.log`). `make test-e2e` non lancé (hors périmètre de la
+tâche).
