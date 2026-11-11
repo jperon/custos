@@ -200,6 +200,7 @@ make_server6 = (port) ->
   :H2_FRAME_DATA, :H2_FRAME_HEADERS, :H2_FRAME_SETTINGS
   :H2_FRAME_PING, :H2_FRAME_GOAWAY, :H2_FRAME_WINDOW_UPDATE
   :H2_FLAG_END_STREAM, :H2_FLAG_END_HEADERS, :H2_FLAG_ACK
+  :H2_DEFAULT_MAX_FRAME_SIZE
   :h2_read_frame, :h2_write_frame
 } = require "doh.h2_frames"
 
@@ -207,6 +208,15 @@ make_server6 = (port) ->
 -- (content-type = static index 31, literal with incremental indexing: 0x5f)
 h2_encode_response_headers = ->
   "\x88\x5f\x17application/dns-message"
+
+-- Code d'erreur HTTP/2 FRAME_SIZE_ERROR (RFC 7540 §7).
+H2_FRAME_SIZE_ERROR = 0x6
+-- Plafond cumulé des DATA : un message DNS fait au plus 65535 octets.
+H2_MAX_BODY = 65535
+-- GOAWAY 8 octets : dernier stream (0) + code d'erreur.
+h2_goaway = (conn, code) ->
+  h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0,
+    "\x00\x00\x00\x00\x00\x00\x00" .. string.char(code)
 
 handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
   -- Consomme la fin de la préface : "SM\r\n\r\n" (read_request a déjà lu "PRI * HTTP/2.0\r\n\r\n")
@@ -218,11 +228,17 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
 
   stream_id  = nil
   dns_chunks = {}
+  dns_bytes  = 0
   done       = false
 
   for _ = 1, 30
-    ftype, flags, sid, payload = h2_read_frame conn
-    break unless ftype
+    ftype, flags, sid, payload = h2_read_frame conn, H2_DEFAULT_MAX_FRAME_SIZE
+    if not ftype
+      -- Frame annoncée trop grande : FRAME_SIZE_ERROR, puis fermeture.
+      if payload == "frame_too_large"
+        h2_goaway conn, H2_FRAME_SIZE_ERROR
+        return nil, "h2_frame_too_large"
+      break
 
     if ftype == H2_FRAME_SETTINGS and bit.band(flags, H2_FLAG_ACK) == 0
       h2_write_frame conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, ""
@@ -231,7 +247,12 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
       stream_id = sid
 
     elseif ftype == H2_FRAME_DATA and sid == stream_id
-      dns_chunks[#dns_chunks + 1] = payload if #payload > 0
+      if #payload > 0
+        dns_bytes += #payload
+        if dns_bytes > H2_MAX_BODY
+          h2_goaway conn, H2_FRAME_SIZE_ERROR
+          return nil, "h2_data_too_large"
+        dns_chunks[#dns_chunks + 1] = payload
       if bit.band(flags, H2_FLAG_END_STREAM) ~= 0
         done = true
         break
@@ -240,24 +261,24 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
       h2_write_frame conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload
 
   unless done and stream_id
-    h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01"
+    h2_goaway conn, 0x1
     return nil, "h2_incomplete"
 
   dns_raw = table.concat dns_chunks
   unless #dns_raw > 0
-    h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01"
+    h2_goaway conn, 0x1
     return nil, "h2_empty_body"
 
   resp_raw, q_err = process_query dns_raw, peer_ip, peer_mac, upstream, peer_vlan
   unless resp_raw
     log_warn -> { action: "h2_query_error", peer: peer_ip, err: q_err }
-    h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x02"
+    h2_goaway conn, 0x2
     return nil, "h2_query_error"
 
   hpack = h2_encode_response_headers!
   h2_write_frame conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack
   h2_write_frame conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw
-  h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x00"
+  h2_goaway conn, 0x0
   resp_raw
 
 -- ── Per-connection child ─────────────────────────────────────────────────────
@@ -562,4 +583,4 @@ run = (doh_cfg, filter_data) ->
           log_debug -> { action: "conn_started", pid: pid, peer: peer_ip }
           client\close!
 
-{ :run, :b64url_decode, :query_param, :build_dns_query, :handshake_should_continue }
+{ :run, :b64url_decode, :query_param, :build_dns_query, :handshake_should_continue, :handle_h2 }

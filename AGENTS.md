@@ -888,3 +888,10 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   appelants répondent `413` et ferment ; `doh` borne à 65535 (taille DNS
   maximale), le portail via la nouvelle clé `auth.max_body` (défaut 1 Mio,
   documentée), suffisante pour l'éditeur de listes.
+- **Frames HTTP/2 non bornées.** `h2_read_frame` lisait `len` (jusqu'à 16 Mo)
+  et allouait le payload sans plafond ; `handle_h2` concaténait en outre les DATA
+  sans limite. Correctif : `h2_read_frame` rejette `len >
+  H2_DEFAULT_MAX_FRAME_SIZE` (16384) **avant** toute lecture (`frame_too_large`),
+  `handle_h2` répond GOAWAY `FRAME_SIZE_ERROR` (0x6) et ferme, et le cumul DATA
+  est plafonné à 65535 octets (même traitement). Tests :
+  `tests/unit/doh/h2_frames_spec.moon`, `tests/unit/worker_doh_spec.moon`.

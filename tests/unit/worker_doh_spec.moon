@@ -130,3 +130,57 @@ describe "worker_doh.handshake_should_continue", ->
 
   it "abandonne après 50 tentatives", ->
     assert.is_false doh.handshake_should_continue false, 50, 100, 115
+
+-- ── handle_h2 : plafond cumulé des DATA ─────────────────────────────────────
+
+-- Connexion factice : préface "SM\r\n\r\n" puis flux de frames brutes.
+make_h2_conn = (raw) ->
+  pos = 1
+  line_idx = 0
+  lines = { "SM", "" }
+  sent = {}
+  {
+    receive: (mode) =>
+      if mode == "*l"
+        line_idx += 1
+        return lines[line_idx]
+      n = tonumber mode
+      return nil, "eof" if pos > #raw
+      chunk = raw\sub pos, pos + n - 1
+      pos += #chunk
+      chunk
+    send: (data) =>
+      sent[#sent + 1] = data
+      #data
+    _sent: -> table.concat sent
+  }
+
+h2_frame_raw = (ftype, flags, sid, payload) ->
+  payload = payload or ""
+  n = #payload
+  string.char(
+    bit.band(bit.rshift(n, 16), 0xFF),
+    bit.band(bit.rshift(n,  8), 0xFF),
+    bit.band(n,                 0xFF),
+    ftype, flags,
+    bit.band(bit.rshift(sid, 24), 0xFF),
+    bit.band(bit.rshift(sid, 16), 0xFF),
+    bit.band(bit.rshift(sid,  8), 0xFF),
+    bit.band(sid,                 0xFF)
+  ) .. payload
+
+describe "worker_doh.handle_h2 — plafond DATA", ->
+  bit = require "bit"
+
+  it "rejette un cumul DATA supérieur à 65535 octets", ->
+    frames = { h2_frame_raw 0x1, 0x4, 1, "" }
+    for _ = 1, 4
+      frames[#frames + 1] = h2_frame_raw 0x0, 0, 1, string.rep "x", 16384
+    frames[#frames + 1] = h2_frame_raw 0x0, 0x1, 1, "y"
+    conn = make_h2_conn table.concat frames
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "h2_data_too_large", err
+    sent = conn._sent!
+    expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,6)
+    assert.equals expected_goaway, sent\sub -17

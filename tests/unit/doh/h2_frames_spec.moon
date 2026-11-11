@@ -98,3 +98,41 @@ describe "doh.h2_frames", ->
 
     it "H2_FLAG_ACK = 0x1", ->
       assert.equals 0x1, mod.H2_FLAG_ACK
+
+-- Encode uniquement l'en-tête de 9 octets avec une longueur annoncée.
+encode_header = (len, ftype, flags, sid) ->
+  string.char(
+    bit.band(bit.rshift(len, 16), 0xFF),
+    bit.band(bit.rshift(len,  8), 0xFF),
+    bit.band(len,                 0xFF),
+    ftype, flags,
+    bit.band(bit.rshift(sid, 24), 0xFF),
+    bit.band(bit.rshift(sid, 16), 0xFF),
+    bit.band(bit.rshift(sid,  8), 0xFF),
+    bit.band(sid,                 0xFF)
+  )
+
+describe "doh.h2_frames — taille de frame", ->
+  local mod
+  before_each -> mod = require "doh.h2_frames"
+
+  it "rejette une frame de 16385 octets sans lire le payload", ->
+    conn = make_conn_stub encode_header 16385, 0x0, 0, 1
+    ftype, err = mod.h2_read_frame conn
+    assert.is_nil ftype
+    assert.equals "frame_too_large", err
+
+  it "rejette une frame de 0xFFFFFF octets sans lire le payload", ->
+    conn = make_conn_stub encode_header 0xFFFFFF, 0x0, 0, 1
+    ftype, err = mod.h2_read_frame conn
+    assert.is_nil ftype
+    assert.equals "frame_too_large", err
+
+  it "accepte une frame de 16384 octets (SETTINGS_MAX_FRAME_SIZE)", ->
+    payload = string.rep "x", 16384
+    raw = encode_frame 0x0, 0x1, 1, payload
+    conn = make_conn_stub raw
+    ftype, flags, sid, got = mod.h2_read_frame conn
+    assert.equals 0x0, ftype
+    assert.equals 1, sid
+    assert.equals 16384, #got

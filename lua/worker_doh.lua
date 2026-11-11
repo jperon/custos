@@ -238,14 +238,20 @@ make_server6 = function(port)
   srv6:settimeout(1)
   return srv6
 end
-local H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, h2_read_frame, h2_write_frame
+local H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, H2_DEFAULT_MAX_FRAME_SIZE, h2_read_frame, h2_write_frame
 do
   local _obj_0 = require("doh.h2_frames")
-  H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, h2_read_frame, h2_write_frame = _obj_0.H2_FRAME_DATA, _obj_0.H2_FRAME_HEADERS, _obj_0.H2_FRAME_SETTINGS, _obj_0.H2_FRAME_PING, _obj_0.H2_FRAME_GOAWAY, _obj_0.H2_FRAME_WINDOW_UPDATE, _obj_0.H2_FLAG_END_STREAM, _obj_0.H2_FLAG_END_HEADERS, _obj_0.H2_FLAG_ACK, _obj_0.h2_read_frame, _obj_0.h2_write_frame
+  H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, H2_DEFAULT_MAX_FRAME_SIZE, h2_read_frame, h2_write_frame = _obj_0.H2_FRAME_DATA, _obj_0.H2_FRAME_HEADERS, _obj_0.H2_FRAME_SETTINGS, _obj_0.H2_FRAME_PING, _obj_0.H2_FRAME_GOAWAY, _obj_0.H2_FRAME_WINDOW_UPDATE, _obj_0.H2_FLAG_END_STREAM, _obj_0.H2_FLAG_END_HEADERS, _obj_0.H2_FLAG_ACK, _obj_0.H2_DEFAULT_MAX_FRAME_SIZE, _obj_0.h2_read_frame, _obj_0.h2_write_frame
 end
 local h2_encode_response_headers
 h2_encode_response_headers = function()
   return "\x88\x5f\x17application/dns-message"
+end
+local H2_FRAME_SIZE_ERROR = 0x6
+local H2_MAX_BODY = 65535
+local h2_goaway
+h2_goaway = function(conn, code)
+  return h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00" .. string.char(code))
 end
 local handle_h2
 handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
@@ -254,10 +260,15 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
   h2_write_frame(conn, H2_FRAME_SETTINGS, 0, 0, "")
   local stream_id = nil
   local dns_chunks = { }
+  local dns_bytes = 0
   local done = false
   for _ = 1, 30 do
-    local ftype, flags, sid, payload = h2_read_frame(conn)
-    if not (ftype) then
+    local ftype, flags, sid, payload = h2_read_frame(conn, H2_DEFAULT_MAX_FRAME_SIZE)
+    if not ftype then
+      if payload == "frame_too_large" then
+        h2_goaway(conn, H2_FRAME_SIZE_ERROR)
+        return nil, "h2_frame_too_large"
+      end
       break
     end
     if ftype == H2_FRAME_SETTINGS and bit.band(flags, H2_FLAG_ACK) == 0 then
@@ -266,6 +277,11 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
       stream_id = sid
     elseif ftype == H2_FRAME_DATA and sid == stream_id then
       if #payload > 0 then
+        dns_bytes = dns_bytes + #payload
+        if dns_bytes > H2_MAX_BODY then
+          h2_goaway(conn, H2_FRAME_SIZE_ERROR)
+          return nil, "h2_data_too_large"
+        end
         dns_chunks[#dns_chunks + 1] = payload
       end
       if bit.band(flags, H2_FLAG_END_STREAM) ~= 0 then
@@ -277,12 +293,12 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
     end
   end
   if not (done and stream_id) then
-    h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01")
+    h2_goaway(conn, 0x1)
     return nil, "h2_incomplete"
   end
   local dns_raw = table.concat(dns_chunks)
   if not (#dns_raw > 0) then
-    h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01")
+    h2_goaway(conn, 0x1)
     return nil, "h2_empty_body"
   end
   local resp_raw, q_err = process_query(dns_raw, peer_ip, peer_mac, upstream, peer_vlan)
@@ -294,13 +310,13 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
         err = q_err
       }
     end)
-    h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x02")
+    h2_goaway(conn, 0x2)
     return nil, "h2_query_error"
   end
   local hpack = h2_encode_response_headers()
   h2_write_frame(conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack)
   h2_write_frame(conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw)
-  h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x00")
+  h2_goaway(conn, 0x0)
   return resp_raw
 end
 local handle_doh_client
@@ -849,5 +865,6 @@ return {
   b64url_decode = b64url_decode,
   query_param = query_param,
   build_dns_query = build_dns_query,
-  handshake_should_continue = handshake_should_continue
+  handshake_should_continue = handshake_should_continue,
+  handle_h2 = handle_h2
 }
