@@ -2,22 +2,12 @@
 -- Tests du cache LRU/TTL de certificats (auth/cert_cache).
 -- Pas de FFI, pas de root requis.
 
-{ :create_cache } = require "auth.cert_cache"
+{ :create_cache, :DEFAULT_CERT_DIR } = require "auth.cert_cache"
 
 CERT = "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
 KEY  = "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----"
 
--- Réinitialise l'index partagé avant chaque test pour éviter contamination
-reset_index = ->
-  fh = io.open "tmp/cert_cache_index.lua", "w"
-  if fh
-    fh\write "return {}\n"
-    fh\close!
-
 describe "auth/cert_cache", ->
-
-  before_each ->
-    reset_index!
 
   it "insert + get basique", ->
     cache = create_cache 10, 3600, "tmp/test_certs_u1"
@@ -61,7 +51,7 @@ describe "auth/cert_cache", ->
     cache.clear!
     cache.set("expire.unit", "CERT", "KEY", nil)
     -- Écraser l'index avec une expiration dans le passé
-    idx_path = "tmp/cert_cache_index.lua"
+    idx_path = "#{dir}/cert_cache_index.lua"
     fh = io.open idx_path, "w"
     fh\write 'return { ["expire.unit"] = { expires_at=1, accessed_at=1 } }\n'
     fh\close!
@@ -70,13 +60,30 @@ describe "auth/cert_cache", ->
 
   -- ── Nouvelles branches : paramètres par défaut de create_cache ──────────────
 
-  it "create_cache sans arguments utilise les défauts", ->
-    -- Déclenche les branches max_size==nil, ttl==nil, cert_dir==nil
-    cache = create_cache!
+  it "create_cache sans max_size/ttl utilise les défauts", ->
+    -- cert_dir est toujours passé explicitement : les tests n'écrivent jamais
+    -- hors de tmp/ du projet.
+    cache = create_cache nil, nil, "tmp/test_certs_defaults"
     assert.is_not_nil cache
     s = cache.stats!
     assert.equals 500, s.max_size
     assert.equals 7776000, s.ttl_seconds
+
+  it "défaut de cert_dir absolu en tmpfs, index dans le même dossier", ->
+    assert.equals "/tmp/custos/certs", DEFAULT_CERT_DIR
+    cache = create_cache nil, nil, "tmp/test_certs_defaultdir"
+    assert.equals "tmp/test_certs_defaultdir", cache.cert_dir
+    assert.equals "tmp/test_certs_defaultdir/cert_cache_index.lua", cache.index_path
+
+  it "l'index est écrit dans cert_dir, pas dans un chemin relatif global", ->
+    dir = "tmp/test_certs_indexloc"
+    os.execute "rm -rf #{dir}"
+    cache = create_cache 10, 3600, dir
+    cache.clear!
+    assert.is_true cache.set("indexloc.unit", CERT, KEY, nil)
+    fh = io.open "#{dir}/cert_cache_index.lua", "r"
+    assert.is_not_nil fh, "index attendu dans #{dir}"
+    fh\close! if fh
 
   -- ── persist_index : chemin non accessible (fh == nil) ─────────────────────
 
@@ -101,10 +108,10 @@ describe "auth/cert_cache", ->
   -- ── load_persistent_index : fichier absent → {} ───────────────────────────
 
   it "load_persistent_index retourne {} si l'index n'existe pas", ->
-    -- Supprimer l'index pour que create_cache le trouve absent
-    os.remove "tmp/cert_cache_index.lua"
     dir = "tmp/test_certs_noindex"
     os.execute "rm -rf #{dir} && mkdir -p #{dir}"
+    -- Le répertoire existe, sans index : create_cache doit démarrer vide.
+    os.remove "#{dir}/cert_cache_index.lua"
     cache = create_cache 10, 3600, dir
     -- Le cache doit démarrer vide sans erreur
     s = cache.stats!
@@ -113,11 +120,11 @@ describe "auth/cert_cache", ->
   -- ── load_persistent_index : contenu vide → {} ────────────────────────────
 
   it "load_persistent_index retourne {} si l'index est vide", ->
-    -- Écrire un fichier index vide (0 octets)
-    fh = io.open "tmp/cert_cache_index.lua", "w"
-    fh\close!
     dir = "tmp/test_certs_emptyidx"
     os.execute "rm -rf #{dir} && mkdir -p #{dir}"
+    -- Écrire un fichier index vide (0 octets) dans cert_dir
+    fh = io.open "#{dir}/cert_cache_index.lua", "w"
+    fh\close!
     cache = create_cache 10, 3600, dir
     s = cache.stats!
     assert.equals 0, s.size_ram
@@ -152,7 +159,7 @@ describe "auth/cert_cache", ->
     dir = "tmp/test_certs_ttl"
     os.execute "rm -rf #{dir} && mkdir -p #{dir}"
     -- Écrire un index avec expiration dans le passé
-    fh = io.open "tmp/cert_cache_index.lua", "w"
+    fh = io.open "#{dir}/cert_cache_index.lua", "w"
     fh\write 'return { ["ttl.unit"] = { expires_at=1, accessed_at=1 } }\n'
     fh\close!
     -- Écrire les fichiers cert/key pour que load_cert_from_disk puisse les trouver
@@ -286,7 +293,7 @@ describe "auth/cert_cache", ->
     cache.clear!
     cache.set("purge.unit", CERT, KEY, nil)
     -- Écraser l'index avec une expiration dans le passé
-    fh = io.open "tmp/cert_cache_index.lua", "w"
+    fh = io.open "#{dir}/cert_cache_index.lua", "w"
     fh\write 'return { ["purge.unit"] = { expires_at=1, accessed_at=1 } }\n'
     fh\close!
     cache2 = create_cache 10, 3600, dir
@@ -356,11 +363,11 @@ describe "auth/cert_cache", ->
   -- ── load_persistent_index : syntaxe Lua invalide → {} ───────────────────
 
   it "load_persistent_index gère un index vide (0 octets)", ->
-    -- Fichier vide → content vide → branche #content == 0
-    fh = io.open "tmp/cert_cache_index.lua", "w"
-    fh\close!
     dir = "tmp/test_certs_emptyfile"
     os.execute "rm -rf #{dir} && mkdir -p #{dir}"
+    -- Fichier vide → content vide → branche #content == 0
+    fh = io.open "#{dir}/cert_cache_index.lua", "w"
+    fh\close!
     cache = create_cache 10, 3600, dir
     s = cache.stats!
     assert.equals 0, s.size_ram
@@ -397,7 +404,7 @@ describe "auth/cert_cache", ->
       kf = io.open "#{dir}/valid.unit.key", "w"
       kf\write KEY
       kf\close!
-      fh = io.open "tmp/cert_cache_index.lua", "w"
+      fh = io.open "#{dir}/cert_cache_index.lua", "w"
       fh\write 'return { ["valid.unit"] = { expires_at=9999999999, accessed_at=1 } }\n'
       fh\close!
       cache = create_cache 10, 3600, dir
@@ -406,10 +413,12 @@ describe "auth/cert_cache", ->
     it "index contenant os.execute → rejeté sans effet de bord", ->
       marker = "tmp/cert_cache_pwned_marker"
       os.remove marker
-      fh = io.open "tmp/cert_cache_index.lua", "w"
+      dir = "tmp/test_certs_pwn"
+      os.execute "rm -rf #{dir} && mkdir -p #{dir}"
+      fh = io.open "#{dir}/cert_cache_index.lua", "w"
       fh\write 'os.execute("touch ' .. marker .. '")\nreturn {}\n'
       fh\close!
-      cache = create_cache 10, 3600, "tmp/test_certs_pwn"
+      cache = create_cache 10, 3600, dir
       s = cache.stats!
       assert.equals 0, s.size_ram
       assert.is_nil io.open(marker, "r")
@@ -417,10 +426,12 @@ describe "auth/cert_cache", ->
     it "index contenant une boucle avec effet de bord → rejeté sans effet", ->
       marker = "tmp/cert_cache_loop_marker"
       os.remove marker
-      fh = io.open "tmp/cert_cache_index.lua", "w"
+      dir = "tmp/test_certs_loop"
+      os.execute "rm -rf #{dir} && mkdir -p #{dir}"
+      fh = io.open "#{dir}/cert_cache_index.lua", "w"
       fh\write 'while true do os.execute("touch ' .. marker .. '") end\nreturn {}\n'
       fh\close!
-      cache = create_cache 10, 3600, "tmp/test_certs_loop"
+      cache = create_cache 10, 3600, dir
       s = cache.stats!
       assert.equals 0, s.size_ram
       assert.is_nil io.open(marker, "r")
@@ -434,7 +445,7 @@ describe "auth/cert_cache", ->
       kf = io.open "#{dir}/bad.unit.key", "w"
       kf\write KEY
       kf\close!
-      fh = io.open "tmp/cert_cache_index.lua", "w"
+      fh = io.open "#{dir}/cert_cache_index.lua", "w"
       fh\write 'return { ["bad.unit"] = { expires_at="jamais", accessed_at=1 } }\n'
       fh\close!
       cache = create_cache 10, 3600, dir

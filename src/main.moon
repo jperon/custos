@@ -167,6 +167,8 @@ load_doh_cfg = ->
     client_timeout: tonumber(config.doh.client_timeout) or 15
     cert:    if config.doh.cert and #config.doh.cert > 0 then config.doh.cert else nil
     key:     if config.doh.key  and #config.doh.key  > 0 then config.doh.key  else nil
+    -- Certificats générés : même dossier tmpfs que le portail AUTH.
+    cert_dir: config.auth.cert_dir
     upstream_doh_url:        config.doh.upstream_doh_url or nil
     upstream_doh_tls_verify: if config.doh.upstream_doh_tls_verify == nil then true else config.doh.upstream_doh_tls_verify
     upstream_fallback_insecure: config.doh.upstream_fallback_insecure == true

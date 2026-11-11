@@ -487,7 +487,14 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     }
   end)
   local cert_cache_module = require("auth.cert_cache")
-  local cert_cache = cert_cache_module.create_cache(500, 7776000, "tmp/certs", SNI_CERT_MAX_NAMES)
+  local cert_dir = auth_cfg.cert_dir or config.auth.cert_dir or cert_cache_module.DEFAULT_CERT_DIR
+  local cert_cache = cert_cache_module.create_cache(500, 7776000, cert_dir, SNI_CERT_MAX_NAMES)
+  log_debug(function()
+    return {
+      action = "server_cert_cache_dir",
+      dir = cert_dir
+    }
+  end)
   local static_tls_ctx = nil
   if auth_cfg.cert and auth_cfg.key then
     log_info(function()

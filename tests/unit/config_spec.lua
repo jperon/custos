@@ -322,7 +322,7 @@ describe("config.auth.register_rate_*", function()
     end
   end)
 end)
-return describe("config.nfqueue.responses", function()
+describe("config.nfqueue.responses", function()
   after_each(function()
     ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
     package.loaded["config"] = nil
@@ -372,5 +372,28 @@ return describe("config.nfqueue.responses", function()
     local cfg = reload(path)
     os.remove(path)
     return assert.equals("0-1", cfg.nfqueue.questions)
+  end)
+end)
+return describe("config.auth.cert_dir", function()
+  reload = function(path)
+    package.loaded["config"] = nil
+    local actual = path or "tmp/__no_config_for_test__.moon"
+    ffi.C.setenv("CUSTOS_CONFIG_PATH", actual, 1)
+    return require("config")
+  end
+  after_each(function()
+    ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
+    package.loaded["config"] = nil
+  end)
+  it("défaut : /tmp/custos/certs (tmpfs, hors flash)", function()
+    local cfg = reload(nil)
+    return assert.equals("/tmp/custos/certs", cfg.auth.cert_dir)
+  end)
+  return it("clé auth.cert_dir explicite conservée", function()
+    local path = "tmp/config_spec_cert_dir.moon"
+    write_moon(path, [[return { auth: { cert_dir: "/var/run/custos/certs" } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    return assert.equals("/var/run/custos/certs", cfg.auth.cert_dir)
   end)
 end)

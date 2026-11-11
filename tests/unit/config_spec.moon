@@ -323,3 +323,26 @@ describe "config.nfqueue.responses", ->
     cfg = reload path
     os.remove path
     assert.equals "0-1", cfg.nfqueue.questions
+
+describe "config.auth.cert_dir", ->
+
+  reload = (path) ->
+    package.loaded["config"] = nil
+    actual = path or "tmp/__no_config_for_test__.moon"
+    ffi.C.setenv "CUSTOS_CONFIG_PATH", actual, 1
+    require "config"
+
+  after_each ->
+    ffi.C.unsetenv "CUSTOS_CONFIG_PATH"
+    package.loaded["config"] = nil
+
+  it "défaut : /tmp/custos/certs (tmpfs, hors flash)", ->
+    cfg = reload nil
+    assert.equals "/tmp/custos/certs", cfg.auth.cert_dir
+
+  it "clé auth.cert_dir explicite conservée", ->
+    path = "tmp/config_spec_cert_dir.moon"
+    write_moon path, [[return { auth: { cert_dir: "/var/run/custos/certs" } }]]
+    cfg = reload path
+    os.remove path
+    assert.equals "/var/run/custos/certs", cfg.auth.cert_dir

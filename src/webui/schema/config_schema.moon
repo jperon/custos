@@ -95,6 +95,7 @@
     session_key:        { type: "path",    label: "Clé HMAC sessions",      hint: "générée si absente",       default: "/etc/custos/session.key" }
     secrets:            { type: "path",    label: "Fichier secrets",                                            default: "/etc/custos/secrets" }
     sessions_file:      { type: "path",    label: "Fichier sessions",                                           default: "/tmp/sessions.lua" }
+    cert_dir:           { type: "path",    label: "Répertoire certificats générés",                             default: "/tmp/custos/certs", hint: "tmpfs, jamais la flash ; régénéré au démarrage" }
     session_ttl:        { type: "integer", label: "TTL session (s, 0=illimitée)",                               default: 0 }
     heartbeat_interval: { type: "integer", label: "Intervalle heartbeat (s)",                                    default: 30 }
     idle_timeout:       { type: "integer", label: "Timeout inactivité (s)",                                      default: 300, hint: "le cookie de session expire en même temps ; élargir pour tolérer des pings retardés" }
