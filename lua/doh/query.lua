@@ -391,8 +391,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
                 client_addr = function(fam)
                   return (fam == "ipv4" and not is_v6) and client_ip or (fam == "ipv6" and is_v6) and client_ip or nil
                 end
-                drain_ack()
-                inject(redirect_answers, {
+                inject_nft_and_wait(redirect_answers, {
                   client_addr = client_addr,
                   client_mac = client_mac,
                   user = user,
@@ -410,10 +409,6 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
                     ipv6 = add_mac6
                   }
                 })
-                local pending = get_last_seq()
-                if pending then
-                  wait_ack(pending, (string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")))
-                end
               end
               return new_dns
             end
@@ -455,10 +450,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
   end
   local ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")
   local answers = normalize_answers(resp_dns)
-  if resp_ctx.inject_nft then
-    drain_ack()
-  end
-  local inj = inject(answers, {
+  local inj = inject_nft_and_wait(answers, {
     client_addr = client_addr,
     client_mac = client_mac,
     user = user,
@@ -493,12 +485,6 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
   end
   local _
   resp_raw, _ = patch_modified_dns(resp_raw, allow_reason)
-  if resp_ctx.inject_nft then
-    local pending_seq = get_last_seq()
-    if pending_seq then
-      wait_ack(pending_seq, ack_corr)
-    end
-  end
   log_debug(function()
     return {
       action = resp_ctx.action_label or "query_allowed",

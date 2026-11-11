@@ -270,8 +270,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
                   client_addr = (fam) ->
                     (fam == "ipv4" and not is_v6) and client_ip or
                     (fam == "ipv6" and is_v6) and client_ip or nil
-                  drain_ack!
-                  inject redirect_answers, {
+                  inject_nft_and_wait redirect_answers, {
                     :client_addr
                     :client_mac
                     :user
@@ -283,8 +282,6 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
                     add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
                     add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
                   }
-                  pending = get_last_seq!
-                  wait_ack pending, (string.format "%04x:%s", dns.txid or 0, client_ip or "unknown") if pending
                 return new_dns
               return build_blocked_response(dns, dns_raw, v_reason)
             log_debug -> { action: "doh_validator_redirect_passthrough", src_ip: client_ip, mac_src: client_mac, cname_target: override.cname_target }
@@ -314,8 +311,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
   ack_corr = string.format "%04x:%s", dns.txid or 0, client_ip or "unknown"
   answers  = normalize_answers resp_dns
 
-  drain_ack! if resp_ctx.inject_nft
-  inj = inject answers, {
+  inj = inject_nft_and_wait answers, {
     :client_addr
     :client_mac
     :user
@@ -341,11 +337,6 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
   -- Même transformation que worker_responses : force la révélation du SNI et
   -- invalide proprement DNSSEC (bit AD effacé) quand on modifie la réponse.
   resp_raw, _ = patch_modified_dns resp_raw, allow_reason
-
-  -- Attendre que worker_nft ait inséré les IPs avant de répondre au client DoH.
-  if resp_ctx.inject_nft
-    pending_seq = get_last_seq!
-    wait_ack pending_seq, ack_corr if pending_seq
 
   log_debug -> {
     action:     resp_ctx.action_label or "query_allowed"
