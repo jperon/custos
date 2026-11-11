@@ -42,6 +42,10 @@ define Package/custos/install
 	$(INSTALL_CONF) $(PKG_BUILD_DIR)/dns-filter-bridge.nft $(1)/usr/share/custos/dns-filter-bridge.nft
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) $(CURDIR)/files/etc/init.d/custos $(1)/etc/init.d/custos
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(CURDIR)/files/usr/sbin/custos-update $(1)/usr/sbin/custos-update
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/net
+	$(INSTALL_BIN) $(CURDIR)/files/etc/hotplug.d/net/30-custos-rps $(1)/etc/hotplug.d/net/30-custos-rps
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) $(CURDIR)/files/etc/config/custos $(1)/etc/config/custos
 	$(INSTALL_DIR) $(1)/etc/custos/lists
