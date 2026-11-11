@@ -476,16 +476,15 @@ Installer = (cfg) ->
         fail "Échec du chmod +x custos-update"
         return false
 
-      -- Cron quotidien (à 4h)
-      cron_entry = "0 4 * * * /usr/sbin/custos-update 2>&1"
-      @ssh_run "mkdir -p /etc/crontabs"
-      -- Ajouter l'entrée si elle n'existe pas déjà
-      unless @ssh_run "grep -qF 'custos-update' /etc/crontabs/root 2>/dev/null || echo '#{cron_entry}' >> /etc/crontabs/root"
-        warn "Impossible d'ajouter l'entrée cron — configurez manuellement"
+      -- Le cron de mise à jour des listes est géré par /etc/init.d/custos
+      -- (_cron_add) : marqueur « # custos-update-lists » et planification UCI
+      -- custos.main.update_lists_schedule (défaut 0 3 * * *, quotidien). Ne PAS
+      -- en ajouter un second ici (doublon, et il échappait au retrait par
+      -- _cron_remove faute de marqueur).
       @ssh_run "/etc/init.d/cron enable 2>/dev/null || true"
       @ssh_run "/etc/init.d/cron restart 2>/dev/null || true"
 
-      ok "custos-update installé (/usr/sbin/custos-update) + cron lundi 4h"
+      ok "custos-update installé (/usr/sbin/custos-update) — cron géré par /etc/init.d/custos"
       true
 
     -- Hotplug RPS/RFS/GRO : étale le softirq RX sur tous les cœurs (autodétecté).

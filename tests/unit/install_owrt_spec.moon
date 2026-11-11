@@ -167,3 +167,11 @@ describe "install-owrt — dry-run", ->
     inst.ssh_capture = -> error "ssh_capture interdit en dry-run"
     assert.is_true inst\detect_pkg_manager!
     assert.equals "apk", inst.cfg.pkg_mgr
+
+describe "install-owrt — install_updater", ->
+  it "installe custos-update sans ajouter de cron en double (géré par init.d)", ->
+    inst, runs = make_inst {}
+    assert.is_true inst\install_updater!
+    joined = table.concat runs, "\n"
+    assert.falsy joined\find "crontabs/root", 1, true
+    assert.falsy joined\find "0 4 * * *", 1, true

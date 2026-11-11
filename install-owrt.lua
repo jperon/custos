@@ -508,14 +508,9 @@ Installer = function(cfg)
         fail("Échec du chmod +x custos-update")
         return false
       end
-      local cron_entry = "0 4 * * * /usr/sbin/custos-update 2>&1"
-      self:ssh_run("mkdir -p /etc/crontabs")
-      if not (self:ssh_run("grep -qF 'custos-update' /etc/crontabs/root 2>/dev/null || echo '" .. tostring(cron_entry) .. "' >> /etc/crontabs/root")) then
-        warn("Impossible d'ajouter l'entrée cron — configurez manuellement")
-      end
       self:ssh_run("/etc/init.d/cron enable 2>/dev/null || true")
       self:ssh_run("/etc/init.d/cron restart 2>/dev/null || true")
-      ok("custos-update installé (/usr/sbin/custos-update) + cron lundi 4h")
+      ok("custos-update installé (/usr/sbin/custos-update) — cron géré par /etc/init.d/custos")
       return true
     end,
     install_hotplug_rps = function(self)

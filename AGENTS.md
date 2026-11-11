@@ -911,3 +911,10 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   capturée)"` ; `check_connectivity` et `detect_pkg_manager` court-circuitent
   explicitement (gestionnaire supposé `apk`). Tests dans
   `tests/unit/install_owrt_spec.moon`.
+- **`install-owrt.moon` ajoutait un cron quotidien en double de `init.d/custos`.**
+  L'installeur écrivait `0 4 * * * /usr/sbin/custos-update` dans
+  `/etc/crontabs/root` (sans marqueur, donc jamais retiré par `_cron_remove`) en
+  plus du cron géré par `/etc/init.d/custos` (`_cron_add`, marqueur
+  `# custos-update-lists`, planification UCI `update_lists_schedule`, défaut
+  `0 3 * * *`). Source unique retenue : `init.d/custos` ; l'installeur ne fait
+  plus qu'activer/relancer cron et le message « lundi 4h » (faux) est corrigé.
