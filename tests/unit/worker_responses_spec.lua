@@ -201,7 +201,7 @@ describe("worker_responses helpers", function()
     end)
   end)
 end)
-return describe("worker_responses upstream retry", function()
+describe("worker_responses upstream retry", function()
   local parse_ip, s2ip
   do
     local _obj_0 = require("ipparse.l3.ip")
@@ -404,5 +404,55 @@ return describe("worker_responses upstream retry", function()
     }
     assert.is_true((m.try_upstream_retry(entry, mk_msg(3), dns3, ip3, l43, "1.1.1.1")))
     return assert.equals(1, entry.upstream_retries)
+  end)
+end)
+return describe("mac_clients / ip_to_mac (update_mac_clients, purge_mac_clients)", function()
+  it("la purge d'une ancienne MAC ne supprime pas le mapping du nouveau propriétaire", function()
+    local m = fresh_worker_responses()
+    m.update_mac_clients({
+      mac_str = "aa:aa:aa:aa:aa:aa",
+      ipv4 = true,
+      ip_str = "10.0.0.1"
+    }, 1)
+    assert.equals("aa:aa:aa:aa:aa:aa", m.ip_to_mac["10.0.0.1"])
+    m.update_mac_clients({
+      mac_str = "bb:bb:bb:bb:bb:bb",
+      ipv4 = true,
+      ip_str = "10.0.0.1"
+    }, 2)
+    assert.equals("bb:bb:bb:bb:bb:bb", m.ip_to_mac["10.0.0.1"])
+    m.purge_mac_clients(302)
+    return assert.equals("bb:bb:bb:bb:bb:bb", m.ip_to_mac["10.0.0.1"])
+  end)
+  it("une MAC seule qui expire voit bien son IP retirée (contrôle)", function()
+    local m = fresh_worker_responses()
+    m.update_mac_clients({
+      mac_str = "cc:cc:cc:cc:cc:cc",
+      ipv4 = true,
+      ip_str = "10.0.0.9"
+    }, 1)
+    assert.equals("cc:cc:cc:cc:cc:cc", m.ip_to_mac["10.0.0.9"])
+    m.purge_mac_clients(302)
+    return assert.is_nil(m.ip_to_mac["10.0.0.9"])
+  end)
+  return it("changement d'IP d'une MAC ne supprime pas le mapping d'un autre propriétaire", function()
+    local m = fresh_worker_responses()
+    m.update_mac_clients({
+      mac_str = "aa:aa:aa:aa:aa:aa",
+      ipv4 = true,
+      ip_str = "10.0.0.1"
+    }, 1)
+    m.update_mac_clients({
+      mac_str = "bb:bb:bb:bb:bb:bb",
+      ipv4 = true,
+      ip_str = "10.0.0.1"
+    }, 2)
+    m.update_mac_clients({
+      mac_str = "aa:aa:aa:aa:aa:aa",
+      ipv4 = true,
+      ip_str = "10.0.0.2"
+    }, 3)
+    assert.equals("bb:bb:bb:bb:bb:bb", m.ip_to_mac["10.0.0.1"])
+    return assert.equals("aa:aa:aa:aa:aa:aa", m.ip_to_mac["10.0.0.2"])
   end)
 end)

@@ -56,6 +56,7 @@ do
 nft_extra = require "nft_extra_rules"
 lowmem = require "lib.lowmem"
 { :plan_optional_workers } = require "lib.worker_plan"
+{ :build_filter_data } = require "lib.filter_data"
 
 -- ── Helpers POSIX ────────────────────────────────────────────────
 
@@ -417,12 +418,7 @@ supervise = (pipes, sfd) ->
   collectgarbage "collect"
 
   -- Extract filter data to pass to workers that need it
-  filter_data = {
-    rules: filter.get_rules!
-    auth_cfg_cache: filter.auth_cfg_cache
-    sni_cfg_cache: filter.sni_cfg_cache
-    decision_cfg: filter.decision_cfg
-  }
+  filter_data = build_filter_data filter
 
   -- Workers WITH filter data (forked after filter.load!)
   workers_with_filter = {}
@@ -539,11 +535,7 @@ supervise = (pipes, sfd) ->
         filter.load!
 
         -- Update filter_data with reloaded data
-        filter_data = {
-          rules: filter.get_rules!
-          auth_cfg_cache: filter.auth_cfg_cache
-          decision_cfg: filter.decision_cfg
-        }
+        filter_data = build_filter_data filter
 
         -- Kill + refork all question/response/captive/reject/DOH/SNI workers to refresh COW filter lists
         for w in *workers

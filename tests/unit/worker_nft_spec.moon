@@ -102,6 +102,15 @@ describe "worker_nft helpers", ->
       assert.is_true wnft.try_add_pending pending, i1
       assert.is_true wnft.try_add_pending pending, i2
 
+    it "rule_id différent → clé distincte → true (sets distincts)", ->
+      pending = {}
+      i1 = { kind: "ip4", key: "10.0.0.1", ip: "1.2.3.4", timeout: "2m", rule_id: "r_a" }
+      i2 = { kind: "ip4", key: "10.0.0.1", ip: "1.2.3.4", timeout: "2m", rule_id: "r_b" }
+      assert.is_true wnft.try_add_pending pending, i1
+      assert.is_true wnft.try_add_pending pending, i2
+      assert.is_not_nil pending["ip4|10.0.0.1|1.2.3.4|2m|r_a"]
+      assert.is_not_nil pending["ip4|10.0.0.1|1.2.3.4|2m|r_b"]
+
   -- ── flush_batch ───────────────────────────────────────────────────────────────
   describe "flush_batch", ->
 
@@ -121,6 +130,17 @@ describe "worker_nft helpers", ->
     it "ack-only (pending vide, ack_queue non vide) → pas de commande nft", ->
       wnft.flush_batch {}, { { widx: 0, seq: 1 } }, {}
       assert.equals 0, #nft_calls
+
+    it "deux rule_id distincts pour le même couple → deux sets alimentés", ->
+      pending = {}
+      i1 = { kind: "ip4", key: "10.0.0.1", ip: "1.2.3.4", timeout: "2m", rule_id: "r_a" }
+      i2 = { kind: "ip4", key: "10.0.0.1", ip: "1.2.3.4", timeout: "2m", rule_id: "r_b" }
+      assert.is_true wnft.try_add_pending pending, i1
+      assert.is_true wnft.try_add_pending pending, i2
+      wnft.flush_batch pending, {}, {}
+      assert.equals 1, #nft_calls
+      assert.is_true nft_calls[1]\find("r_a_ip4", 1, true) != nil
+      assert.is_true nft_calls[1]\find("r_b_ip4", 1, true) != nil
 
     it "envoie un ACK sur le fd du worker concerné", ->
       pipefd = ffi.new "int[2]"

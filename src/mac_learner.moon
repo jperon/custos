@@ -55,6 +55,12 @@ ensure_parent_dir = (path) ->
   ret = os.execute "mkdir -p #{sh_quote(parent)}"
   ret == 0 or ret == true
 
+--- Répond "unknown\n" à un client et ferme sa connexion.
+-- @tparam number fd Descripteur de la connexion cliente
+reply_unknown = (fd) ->
+  libc.send fd, "unknown\n", 8, 0
+  libc.close fd
+
 -- ── Tables en mémoire ───────────────────────────────────────────
 -- mac_table       : { ip_str → { mac_str, expires_epoch } }
 -- negative_cache  : { ip_str → expires_epoch }
@@ -196,8 +202,7 @@ expire_pending = ->
     i = #waiters
     while i >= 1
       if now_ms > waiters[i][2]
-        libc.send waiters[i][1], "unknown\n", 8, 0
-        libc.close waiters[i][1]
+        reply_unknown waiters[i][1]
         table.remove waiters, i
       i -= 1
     if #waiters == 0
@@ -205,6 +210,37 @@ expire_pending = ->
       negative_cache[ip_str] = now_epoch + NEGATIVE_TTL
 
 -- ── Gestion des requêtes ──────────────────────────────────────────
+
+--- Tente d'enregistrer un client en attente de probe pour une IP inconnue.
+-- Extrait de start_query pour être testable sans socket. Si un probe est déjà
+-- en vol, le client rejoint la file sans nouvelle sonde ; si l'envoi échoue,
+-- répond "unknown", ferme le fd et pose le cache négatif (sinon fuite de fd et
+-- client bloqué côté mac_learner_ipc.get_mac).
+-- @tparam table pending   Table pending_queries { ip → { {fd, expiry_ms}, … } }
+-- @tparam table negative  Table negative_cache { ip → expires_epoch }
+-- @tparam table prober_ctx Contexte mac_prober (passé à send_probe)
+-- @tparam number client_fd Descripteur de la connexion cliente
+-- @tparam string ip_str   Adresse IP demandée
+-- @tparam number now      Epoch courant (secondes)
+-- @tparam function get_ms Fonction retournant l'horloge monotone (ms)
+-- @tparam function send_probe Fonction d'envoi de sonde (pcall-able)
+-- @treturn string "pending" (fd gardé ouvert) | "joined" | "failed" (fd fermé)
+probe_request = (pending, negative, prober_ctx, client_fd, ip_str, now, get_ms, send_probe) ->
+  expiry_ms = get_ms! + PROBE_TIMEOUT_MS
+  if pending[ip_str]
+    -- Probe déjà en vol : rejoindre la file sans émettre de nouvelle sonde
+    pending[ip_str][#pending[ip_str] + 1] = { client_fd, expiry_ms }
+    return "joined"
+
+  ok, sent = pcall send_probe, prober_ctx, ip_str
+  if ok and sent
+    pending[ip_str] = { { client_fd, expiry_ms } }
+    return "pending"
+
+  -- Envoi échoué : répondre immédiatement "unknown" et fermer, cache négatif
+  negative[ip_str] = now + NEGATIVE_TTL
+  reply_unknown client_fd
+  "failed"
 
 --- Traite une connexion de requête de façon non-bloquante.
 -- Si la MAC est connue : répond et ferme immédiatement.
@@ -231,9 +267,9 @@ start_query = (client_fd) ->
     if vid
       resp = vid .. "\n"
       libc.send client_fd, resp, #resp, 0
+      libc.close client_fd
     else
-      libc.send client_fd, "unknown\n", 8, 0
-    libc.close client_fd
+      reply_unknown client_fd
     return
 
   -- Requête strip : "strip:<name>\n" → "<rr_code>\n" ou "unknown\n".
@@ -244,15 +280,14 @@ start_query = (client_fd) ->
     if rr
       resp = rr .. "\n"
       libc.send client_fd, resp, #resp, 0
+      libc.close client_fd
     else
-      libc.send client_fd, "unknown\n", 8, 0
-    libc.close client_fd
+      reply_unknown client_fd
     return
 
   ip_str = req\match "^([^\n\r]+)"
   unless ip_str
-    libc.send client_fd, "unknown\n", 8, 0
-    libc.close client_fd
+    reply_unknown client_fd
     return
 
   now   = os.time!
@@ -269,30 +304,17 @@ start_query = (client_fd) ->
   -- Cache négatif actif → répondre "unknown" sans sonder
   neg_exp = negative_cache[ip_str]
   if neg_exp and now <= neg_exp
-    libc.send client_fd, "unknown\n", 8, 0
-    libc.close client_fd
+    reply_unknown client_fd
     return
 
   -- Adresse inconnue : sondage asynchrone si prober disponible
   if prober
-    expiry_ms = mac_prober.get_ms! + PROBE_TIMEOUT_MS
-    if pending_queries[ip_str]
-      -- Probe déjà en vol : rejoindre la file sans émettre de nouvelle sonde
-      pending_queries[ip_str][#pending_queries[ip_str] + 1] = { client_fd, expiry_ms }
-    else
-      -- Première demande : envoyer le probe
-      ok, sent = pcall mac_prober.send_probe, prober, ip_str
-      if ok and sent
-        pending_queries[ip_str] = { { client_fd, expiry_ms } }
-        return   -- client_fd gardé ouvert (réponse asynchrone)
-      else
-        -- Envoi échoué : répondre immédiatement et mettre en cache négatif
-        negative_cache[ip_str] = now + NEGATIVE_TTL
-    return   -- client_fd en attente (dans pending_queries)
+    probe_request pending_queries, negative_cache, prober, client_fd, ip_str,
+      now, mac_prober.get_ms, mac_prober.send_probe
+    return
 
   -- Pas de prober : répondre "unknown" directement
-  libc.send client_fd, "unknown\n", 8, 0
-  libc.close client_fd
+  reply_unknown client_fd
 
 -- ── Socket Unix serveur ───────────────────────────────────────────
 
@@ -469,4 +491,4 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
       for h, entry in pairs strip_table
         strip_table[h] = nil if now_epoch > entry[2]
 
-{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup }
+{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup, :probe_request }

@@ -41,6 +41,11 @@ ensure_parent_dir = function(path)
   local ret = os.execute("mkdir -p " .. tostring(sh_quote(parent)))
   return ret == 0 or ret == true
 end
+local reply_unknown
+reply_unknown = function(fd)
+  libc.send(fd, "unknown\n", 8, 0)
+  return libc.close(fd)
+end
 local mac_table = { }
 local negative_cache = { }
 local pending_queries = { }
@@ -175,8 +180,7 @@ expire_pending = function()
     local i = #waiters
     while i >= 1 do
       if now_ms > waiters[i][2] then
-        libc.send(waiters[i][1], "unknown\n", 8, 0)
-        libc.close(waiters[i][1])
+        reply_unknown(waiters[i][1])
         table.remove(waiters, i)
       end
       i = i - 1
@@ -186,6 +190,30 @@ expire_pending = function()
       negative_cache[ip_str] = now_epoch + NEGATIVE_TTL
     end
   end
+end
+local probe_request
+probe_request = function(pending, negative, prober_ctx, client_fd, ip_str, now, get_ms, send_probe)
+  local expiry_ms = get_ms() + PROBE_TIMEOUT_MS
+  if pending[ip_str] then
+    pending[ip_str][#pending[ip_str] + 1] = {
+      client_fd,
+      expiry_ms
+    }
+    return "joined"
+  end
+  local ok, sent = pcall(send_probe, prober_ctx, ip_str)
+  if ok and sent then
+    pending[ip_str] = {
+      {
+        client_fd,
+        expiry_ms
+      }
+    }
+    return "pending"
+  end
+  negative[ip_str] = now + NEGATIVE_TTL
+  reply_unknown(client_fd)
+  return "failed"
 end
 local start_query
 start_query = function(client_fd)
@@ -202,10 +230,10 @@ start_query = function(client_fd)
     if vid then
       local resp = vid .. "\n"
       libc.send(client_fd, resp, #resp, 0)
+      libc.close(client_fd)
     else
-      libc.send(client_fd, "unknown\n", 8, 0)
+      reply_unknown(client_fd)
     end
-    libc.close(client_fd)
     return 
   end
   local strip_name = req:match("^strip:([^\n\r]+)")
@@ -214,16 +242,15 @@ start_query = function(client_fd)
     if rr then
       local resp = rr .. "\n"
       libc.send(client_fd, resp, #resp, 0)
+      libc.close(client_fd)
     else
-      libc.send(client_fd, "unknown\n", 8, 0)
+      reply_unknown(client_fd)
     end
-    libc.close(client_fd)
     return 
   end
   local ip_str = req:match("^([^\n\r]+)")
   if not (ip_str) then
-    libc.send(client_fd, "unknown\n", 8, 0)
-    libc.close(client_fd)
+    reply_unknown(client_fd)
     return 
   end
   local now = os.time()
@@ -240,35 +267,14 @@ start_query = function(client_fd)
   end
   local neg_exp = negative_cache[ip_str]
   if neg_exp and now <= neg_exp then
-    libc.send(client_fd, "unknown\n", 8, 0)
-    libc.close(client_fd)
+    reply_unknown(client_fd)
     return 
   end
   if prober then
-    local expiry_ms = mac_prober.get_ms() + PROBE_TIMEOUT_MS
-    if pending_queries[ip_str] then
-      pending_queries[ip_str][#pending_queries[ip_str] + 1] = {
-        client_fd,
-        expiry_ms
-      }
-    else
-      local ok, sent = pcall(mac_prober.send_probe, prober, ip_str)
-      if ok and sent then
-        pending_queries[ip_str] = {
-          {
-            client_fd,
-            expiry_ms
-          }
-        }
-        return 
-      else
-        negative_cache[ip_str] = now + NEGATIVE_TTL
-      end
-    end
+    probe_request(pending_queries, negative_cache, prober, client_fd, ip_str, now, mac_prober.get_ms, mac_prober.send_probe)
     return 
   end
-  libc.send(client_fd, "unknown\n", 8, 0)
-  return libc.close(client_fd)
+  return reply_unknown(client_fd)
 end
 local create_server
 create_server = function(path)
@@ -489,5 +495,6 @@ return {
   process_vlan_learn = process_vlan_learn,
   vlan_lookup = vlan_lookup,
   process_strip_learn = process_strip_learn,
-  strip_lookup = strip_lookup
+  strip_lookup = strip_lookup,
+  probe_request = probe_request
 }

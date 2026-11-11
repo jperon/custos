@@ -930,7 +930,7 @@ unpack = function(fmt, s, pos)
     elseif "x" == _exp_0 then
       pos = pos + 1
     elseif "X" == _exp_0 then
-      local _scrap_0 = nil
+      local _ = nil
     end
   end
   n = n + 1

@@ -381,6 +381,14 @@ retry_pending_match = (txid, client_ip, client_port, resolver_ip) ->
 -- ── Suivi des clients par adresse MAC ───────────────────────────
 -- Mise à jour de mac_clients et ip_to_mac à chaque message IPC reçu.
 -- Appelé en callback depuis drain_pipe.
+--- Retire ip_to_mac[ip] seulement s'il désigne encore cette MAC.
+-- Sans cette garde, l'expiration/changement d'IP de l'ancien propriétaire
+-- effacerait le mapping du nouveau propriétaire de la même IP.
+-- @tparam string|nil ip  Adresse IP mappée
+-- @tparam string mac      MAC propriétaire présumée
+forget_ip_mapping = (ip, mac) ->
+  ip_to_mac[ip] = nil if ip and ip_to_mac[ip] == mac
+
 --- Met à jour l'association MAC → {ipv4|ipv6} depuis un message IPC décodé.
 -- @tparam table  msg Message IPC décodé ({txid, ip_str, src_port, msg_type, mac_str})
 -- @tparam number ts  Timestamp courant (secondes)
@@ -394,12 +402,12 @@ update_mac_clients = (msg, ts) ->
 
   if msg.ipv4   -- MSG_IPV4 ou MSG_IPV4_REFUSED
     unless entry.ipv4 == msg.ip_str
-      ip_to_mac[entry.ipv4] = nil if entry.ipv4
+      forget_ip_mapping entry.ipv4, mac
       entry.ipv4 = msg.ip_str
       ip_to_mac[msg.ip_str] = mac
   else                        -- MSG_IPV6
     unless entry.ipv6 == msg.ip_str
-      ip_to_mac[entry.ipv6] = nil if entry.ipv6
+      forget_ip_mapping entry.ipv6, mac
       entry.ipv6 = msg.ip_str
       ip_to_mac[msg.ip_str] = mac
 
@@ -412,8 +420,8 @@ update_mac_clients = (msg, ts) ->
 purge_mac_clients = (ts) ->
   for mac, entry in pairs mac_clients
     if ts - entry.last_seen > (clients_cfg.expiry or 300)
-      ip_to_mac[entry.ipv4] = nil if entry.ipv4
-      ip_to_mac[entry.ipv6] = nil if entry.ipv6
+      forget_ip_mapping entry.ipv4, mac
+      forget_ip_mapping entry.ipv6, mac
       entry.ips = nil
       mac_clients[mac] = nil
       log_info -> { action: "client_expired", mac: mac }
@@ -1031,4 +1039,5 @@ run = (queue_num, rfd, rules_metadata) ->
 { :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields,
   :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream,
   :try_upstream_retry, :arm_retry_fds, :format_block_event,
-  :record_chain_targets, :maybe_dynamic_strip, :purge_strip_query_cache }
+  :record_chain_targets, :maybe_dynamic_strip, :purge_strip_query_cache,
+  :update_mac_clients, :purge_mac_clients, :ip_to_mac }

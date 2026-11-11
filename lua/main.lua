@@ -35,6 +35,8 @@ local nft_extra = require("nft_extra_rules")
 local lowmem = require("lib.lowmem")
 local plan_optional_workers
 plan_optional_workers = require("lib.worker_plan").plan_optional_workers
+local build_filter_data
+build_filter_data = require("lib.filter_data").build_filter_data
 ffi.cdef([[  unsigned int sleep(unsigned int seconds);
 ]])
 local O_NONBLOCK, SIG_BLOCK
@@ -401,12 +403,7 @@ supervise = function(pipes, sfd)
   filter.load()
   nft_rules.close()
   collectgarbage("collect")
-  local filter_data = {
-    rules = filter.get_rules(),
-    auth_cfg_cache = filter.auth_cfg_cache,
-    sni_cfg_cache = filter.sni_cfg_cache,
-    decision_cfg = filter.decision_cfg
-  }
+  local filter_data = build_filter_data(filter)
   local workers_with_filter = { }
   for i, q_num in ipairs(responses_queues) do
     local ack_info = alloc_ack_pipe()
@@ -552,11 +549,7 @@ supervise = function(pipes, sfd)
           }
         end)
         filter.load()
-        filter_data = {
-          rules = filter.get_rules(),
-          auth_cfg_cache = filter.auth_cfg_cache,
-          decision_cfg = filter.decision_cfg
-        }
+        filter_data = build_filter_data(filter)
         for _index_0 = 1, #workers do
           local w = workers[_index_0]
           if (w.name:match("^dns%-q") or w.name:match("^resp%-q") or w.name:match("^cap%-q") or w.name:match("^rej%-q") or w.name == "doh" or w.name == "tls") and w.pid and w.pid > 0 then

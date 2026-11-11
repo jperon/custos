@@ -269,3 +269,32 @@ describe "worker_responses upstream retry", ->
     entry = { refused: false }
     assert.is_true (m.try_upstream_retry entry, mk_msg(3), dns3, ip3, l43, "1.1.1.1")   -- retry de nouveau permis
     assert.equals 1, entry.upstream_retries
+
+describe "mac_clients / ip_to_mac (update_mac_clients, purge_mac_clients)", ->
+  it "la purge d'une ancienne MAC ne supprime pas le mapping du nouveau propriétaire", ->
+    m = fresh_worker_responses!
+    -- MAC A voit X au temps 1
+    m.update_mac_clients { mac_str: "aa:aa:aa:aa:aa:aa", ipv4: true, ip_str: "10.0.0.1" }, 1
+    assert.equals "aa:aa:aa:aa:aa:aa", m.ip_to_mac["10.0.0.1"]
+    -- MAC B prend X au temps 2
+    m.update_mac_clients { mac_str: "bb:bb:bb:bb:bb:bb", ipv4: true, ip_str: "10.0.0.1" }, 2
+    assert.equals "bb:bb:bb:bb:bb:bb", m.ip_to_mac["10.0.0.1"]
+    -- A expire (302 - 1 > 300), B non (302 - 2 <= 300)
+    m.purge_mac_clients 302
+    assert.equals "bb:bb:bb:bb:bb:bb", m.ip_to_mac["10.0.0.1"]
+
+  it "une MAC seule qui expire voit bien son IP retirée (contrôle)", ->
+    m = fresh_worker_responses!
+    m.update_mac_clients { mac_str: "cc:cc:cc:cc:cc:cc", ipv4: true, ip_str: "10.0.0.9" }, 1
+    assert.equals "cc:cc:cc:cc:cc:cc", m.ip_to_mac["10.0.0.9"]
+    m.purge_mac_clients 302
+    assert.is_nil m.ip_to_mac["10.0.0.9"]
+
+  it "changement d'IP d'une MAC ne supprime pas le mapping d'un autre propriétaire", ->
+    m = fresh_worker_responses!
+    m.update_mac_clients { mac_str: "aa:aa:aa:aa:aa:aa", ipv4: true, ip_str: "10.0.0.1" }, 1
+    m.update_mac_clients { mac_str: "bb:bb:bb:bb:bb:bb", ipv4: true, ip_str: "10.0.0.1" }, 2
+    -- A change d'IP : ne doit pas effacer ip_to_mac[10.0.0.1] (= B)
+    m.update_mac_clients { mac_str: "aa:aa:aa:aa:aa:aa", ipv4: true, ip_str: "10.0.0.2" }, 3
+    assert.equals "bb:bb:bb:bb:bb:bb", m.ip_to_mac["10.0.0.1"]
+    assert.equals "aa:aa:aa:aa:aa:aa", m.ip_to_mac["10.0.0.2"]
