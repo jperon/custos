@@ -989,7 +989,7 @@ déploiement. Tableau des clés :
 | `dns.ttl_grace.grace/min/max` | identiques aux défauts (600/60/2592000) | écartées |
 | `nft.ip_timeout`, `nft.add_failure_policy`, `nft.extra_rules` | identiques aux défauts | écartées |
 | `ipc.pending_ttl`, `ipc.match_retry.count/sleep_ms` | identiques aux défauts | écartées |
-| `ipc.match_retry.enabled` | valide (`src/worker_responses.moon:204`, défaut effectif `true`) mais absent de `DEFAULTS` et de `doc/CONFIG.md` | écartée (redondante) |
+| `ipc.match_retry.enabled` | valide (`src/worker_responses.moon:204`, documentée `doc/CONFIG.md:309`, défaut effectif `true`) mais absente de `DEFAULTS` | écartée (redondante) |
 | `clients.expiry`, `auth.sessions_file`, `doh.*`, `events.*`, `filter.dest_whitelist`, `filter.decision.*` | identiques aux défauts | écartées |
 | `mac_learner.entry_ttl: 300` | valide, mais c'est l'ancien défaut (900 depuis `f398956`) | écartée (pas un réglage voulu) |
 
