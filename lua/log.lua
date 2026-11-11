@@ -49,61 +49,253 @@ level_enabled = function(level)
   return get_log_level_num(level) >= CURRENT_LOG_LEVEL_NUM
 end
 local RL_IDENTITY_KEYS = {
-  "peer",
-  "peer_ip",
-  "peer_mac",
-  "ip",
-  "ip_src",
-  "ip_dst",
+  "addr",
+  "alpn",
+  "arg1",
+  "arg2",
+  "available",
+  "backend",
+  "bridge",
+  "captive_ip4",
+  "captive_ip6",
+  "cert",
+  "cert_cache",
+  "cert_file",
+  "cert_type",
   "client",
   "client_ip",
   "client_mac",
-  "mac",
-  "mac_src",
-  "src_ip",
+  "closed",
+  "cmd",
+  "cn",
+  "cname_target",
+  "configured",
+  "cseq_method",
+  "ct",
+  "custom_url",
+  "dir",
+  "direction",
+  "domain",
+  "dst",
   "dst_ip",
+  "env_path",
+  "err",
+  "errno",
+  "events_dir",
+  "exit_code",
+  "external_loaded",
+  "fallback",
+  "fallback_builtin",
+  "families",
+  "file",
+  "filter_reason",
+  "frame_mac",
+  "handle",
+  "handshake_done",
+  "has_ip",
+  "has_mac",
+  "hint",
+  "host",
+  "hostname",
+  "hs_type",
+  "ifindex",
+  "ifname",
+  "in_ifindex",
+  "inherited",
+  "inject_nft",
+  "interfaces",
+  "ip",
+  "ip4",
+  "ip6",
+  "ip_dst",
+  "ip_src",
+  "ip_version",
+  "ipv4",
+  "ipv6",
+  "items",
+  "key",
+  "key_file",
+  "kind",
+  "known_mac",
+  "l4_proto",
+  "limit",
+  "list",
+  "load_error",
+  "local_ip",
+  "mac",
+  "mac_fallback",
+  "mac_src",
+  "max",
+  "media_ip",
+  "method",
+  "modified",
+  "name",
+  "nft_compilable",
+  "nft_err",
+  "nft_failure_policy",
+  "nft_outcome",
+  "nft_rule_id",
+  "ns_enabled",
+  "ok",
+  "old",
+  "packet_mac",
+  "path",
+  "payload_modified",
+  "peer",
+  "peer_ip",
+  "peer_mac",
+  "policy_protocols",
+  "port",
+  "port_dst",
+  "proto",
+  "protocol",
+  "protocols",
   "qname",
   "qnames",
-  "domain",
   "qtype",
-  "hostname",
-  "host",
-  "sni",
-  "cert",
-  "key",
-  "path",
-  "method",
-  "url",
-  "file",
-  "ifname",
-  "name",
   "queue",
-  "worker",
-  "user",
-  "username",
-  "vlan",
+  "quic_parser_path",
+  "rc",
+  "rcode",
+  "reason",
+  "records",
+  "redirect_url4",
+  "redirect_url6",
+  "refused",
+  "reject_mark",
   "resolver",
   "resolver_ip",
-  "upstream_ip",
-  "addr",
-  "protocol",
-  "l4_proto",
-  "rcode",
-  "errno",
-  "source",
-  "direction",
-  "version",
-  "verdict",
-  "backend",
-  "type",
-  "cn",
-  "local_ip",
+  "resolvers",
+  "response",
+  "ret",
   "rule",
-  "list",
-  "err",
-  "reason",
-  "cmd"
+  "rule_id",
+  "rules",
+  "selected_mac",
+  "sessions_file",
+  "sip_method",
+  "sip_status",
+  "sni",
+  "source",
+  "src",
+  "src_ip",
+  "ssl_err",
+  "target",
+  "tlla",
+  "transient",
+  "type",
+  "upstream_ip",
+  "upstream_port",
+  "url",
+  "user",
+  "username",
+  "verdict",
+  "verify_tls",
+  "version",
+  "vlan",
+  "worker",
+  "worker_idx"
 }
+local RL_VOLATILE_KEYS = {
+  "ack_workers",
+  "acks",
+  "addrlen",
+  "age_h",
+  "ancount",
+  "answers",
+  "attempt",
+  "attempts",
+  "avail",
+  "body_bytes",
+  "bytes",
+  "cert_size",
+  "client_fd",
+  "client_timeout",
+  "conditions_compiled",
+  "conditions_worker_only",
+  "configured_rules",
+  "corr",
+  "count",
+  "decoded_bytes",
+  "dest_whitelist",
+  "detail",
+  "dport",
+  "dropped",
+  "effective_rules",
+  "entries",
+  "events_rfd",
+  "events_wfd",
+  "expires_in_s",
+  "family",
+  "fd",
+  "frames",
+  "free_pct",
+  "grace",
+  "hour",
+  "ignored",
+  "ipc_fd",
+  "ipc_retry_attempts",
+  "ipc_retry_wait_ms",
+  "key_size",
+  "learn_rfd",
+  "learn_wfd",
+  "len",
+  "listen_fd",
+  "max_age_hours",
+  "max_attempts",
+  "min_free_pct",
+  "mode",
+  "msg",
+  "need",
+  "new",
+  "new_size",
+  "parent_pid",
+  "payload_len",
+  "pid",
+  "pkt_id",
+  "port_src",
+  "pos",
+  "query_bytes",
+  "question_response_rfd",
+  "question_response_wfd",
+  "raw",
+  "removed",
+  "removed_count",
+  "resp_bytes",
+  "retry_after",
+  "rfd",
+  "rv",
+  "sans_count",
+  "sent",
+  "seq",
+  "size",
+  "sock",
+  "sockets",
+  "sport",
+  "src_port",
+  "status",
+  "timeout",
+  "timeout_ms",
+  "total",
+  "total_rules",
+  "ts",
+  "ttl",
+  "ttl_s",
+  "txid",
+  "userlists",
+  "users",
+  "worker_only"
+}
+local RL_IDENTITY_SET = { }
+for _index_0 = 1, #RL_IDENTITY_KEYS do
+  local k = RL_IDENTITY_KEYS[_index_0]
+  RL_IDENTITY_SET[k] = true
+end
+local RL_VOLATILE_SET = { }
+for _index_0 = 1, #RL_VOLATILE_KEYS do
+  local k = RL_VOLATILE_KEYS[_index_0]
+  RL_VOLATILE_SET[k] = true
+end
 local RL_CONFIG = {
   captive_redirect = {
     keys = {
@@ -281,9 +473,23 @@ end
 local rl_fingerprint
 rl_fingerprint = function(action_key, fields, keys)
   local fp = action_key
-  for _index_0 = 1, #keys do
-    local k = keys[_index_0]
-    fp = fp .. ("|" .. tostring(fields[k]))
+  if keys == nil or keys == RL_IDENTITY_KEYS then
+    local names = { }
+    for k, v in pairs(fields) do
+      if k ~= "action" and not RL_VOLATILE_SET[k] then
+        names[#names + 1] = k
+      end
+    end
+    table.sort(names)
+    for _index_0 = 1, #names do
+      local k = names[_index_0]
+      fp = fp .. ("|" .. k .. "=" .. tostring(fields[k]))
+    end
+  else
+    for _index_0 = 1, #keys do
+      local k = keys[_index_0]
+      fp = fp .. ("|" .. tostring(fields[k]))
+    end
   end
   return fp
 end
@@ -304,17 +510,27 @@ _rl_hash = function(level, fields, keys)
   local action = fields.action or level
   if not (keys) then
     local cfg = _rl_resolve_cfg(level, fields)
-    keys = cfg and cfg.keys or { }
+    keys = cfg and cfg.keys
   end
   local h = _rl_hash_step(0, level)
   h = _rl_hash_step(h, "\1")
   h = _rl_hash_step(h, action)
-  for _index_0 = 1, #keys do
-    local k = keys[_index_0]
-    local v = fields[k]
-    if v ~= nil then
-      h = _rl_hash_step(h, (RL_SEP[k] or ("\1" .. k .. "=")))
-      h = _rl_hash_step(h, tostring(v))
+  if keys == nil or keys == RL_IDENTITY_KEYS then
+    for k, v in pairs(fields) do
+      if k ~= "action" and not RL_VOLATILE_SET[k] then
+        local fh = _rl_hash_step(0, (RL_SEP[k] or ("\1" .. k .. "=")))
+        fh = _rl_hash_step(fh, tostring(v))
+        h = bit.bxor(h, fh)
+      end
+    end
+  else
+    for _index_0 = 1, #keys do
+      local k = keys[_index_0]
+      local v = fields[k]
+      if v ~= nil then
+        h = _rl_hash_step(h, (RL_SEP[k] or ("\1" .. k .. "=")))
+        h = _rl_hash_step(h, tostring(v))
+      end
     end
   end
   return h % 4294967296
@@ -648,6 +864,10 @@ return {
   rl_fingerprint = rl_fingerprint,
   set_action_prefix = set_action_prefix,
   RL_CONFIG = RL_CONFIG,
+  RL_IDENTITY_KEYS = RL_IDENTITY_KEYS,
+  RL_IDENTITY_SET = RL_IDENTITY_SET,
+  RL_VOLATILE_KEYS = RL_VOLATILE_KEYS,
+  RL_VOLATILE_SET = RL_VOLATILE_SET,
   RL_SLOTS = RL_SLOTS,
   RL_PROBE_MAX = RL_PROBE_MAX,
   MAP_ANONYMOUS = MAP_ANONYMOUS,

@@ -97,6 +97,41 @@ describe "log", ->
       assert.are.equal 0,  log.check_rl "INFO", f1, 6000
       assert.are.equal -1, log.check_rl "INFO", f2, 6001
 
+    it "champ identité explicite (rule_id) → deux événements distincts", ->
+      f1 = { action: "ident_rule", rule_id: "rule_a" }
+      f2 = { action: "ident_rule", rule_id: "rule_b" }
+      assert.are.equal 0,  log.check_rl "INFO", f1, 6100
+      assert.are.equal 0,  log.check_rl "INFO", f2, 6100
+      assert.are.equal -1, log.check_rl "INFO", f1, 6101
+      assert.are.equal -1, log.check_rl "INFO", f2, 6101
+
+    it "champ inconnu (non classé) traité comme identité", ->
+      f1 = { action: "ident_inconnu", champ_inconnu_xyz: "a" }
+      f2 = { action: "ident_inconnu", champ_inconnu_xyz: "b" }
+      assert.are.equal 0,  log.check_rl "INFO", f1, 6200
+      assert.are.equal 0,  log.check_rl "INFO", f2, 6200
+      assert.are.equal -1, log.check_rl "INFO", f1, 6201
+      assert.are.equal -1, log.check_rl "INFO", f2, 6201
+
+    it "champ volatil seul (bytes) → seconde ligne supprimée puis suppressed=1", ->
+      f1 = { action: "volatil_bytes", qname: "vb.example", bytes: 10 }
+      f2 = { action: "volatil_bytes", qname: "vb.example", bytes: 99 }
+      assert.are.equal 0,  log.check_rl "INFO", f1, 6300
+      assert.are.equal -1, log.check_rl "INFO", f2, 6301
+      -- Fenêtre INFO de 60 s : à 6360 la ligne réapparaît avec le compte.
+      assert.are.equal 1,  log.check_rl "INFO", f2, 6360
+
+    it "empreinte par défaut indépendante de l'ordre de parcours des champs", ->
+      f1 = { action: "ordre", rule_id: "r1", path: "/a" }
+      f2 = { path: "/a", rule_id: "r1", action: "ordre" }
+      assert.are.equal log._rl_hash("INFO", f1), log._rl_hash("INFO", f2)
+
+    it "rl_fingerprint par défaut : ordre des champs normalisé", ->
+      f1 = { action: "fp_ordre", rule_id: "r1", path: "/a" }
+      f2 = { path: "/a", rule_id: "r1", action: "fp_ordre" }
+      assert.are.equal (log.rl_fingerprint "INFO", f1, log.RL_IDENTITY_KEYS),
+                        (log.rl_fingerprint "INFO", f2, log.RL_IDENTITY_KEYS)
+
     it "action préfixée par le worker → règle spécifique (strip du préfixe)", ->
       log.set_action_prefix "response_"
       f = { action: "response_no_ipv6_for_client", client: "10.0.0.2" }
