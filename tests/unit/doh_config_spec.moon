@@ -67,6 +67,14 @@ describe "config.doh — valeurs par défaut", ->
     cfg = reload nil
     assert.equals 15, cfg.doh.client_timeout
 
+  it "upstream_fallback_insecure vaut false par défaut", ->
+    cfg = reload nil
+    assert.is_false cfg.doh.upstream_fallback_insecure
+
+  it "upstream_fallback_ca_file est nil par défaut", ->
+    cfg = reload nil
+    assert.is_nil cfg.doh.upstream_fallback_ca_file
+
 -- ── Fusion config externe ─────────────────────────────────────────────────────
 
 describe "config.doh — fusion avec config externe", ->
@@ -96,6 +104,20 @@ describe "config.doh — fusion avec config externe", ->
     cfg = reload path
     os.remove path
     assert.is_false cfg.doh.prefer_ipv6
+
+  it "upstream_fallback_insecure: 'true' (string) → true après coerce_boolean", ->
+    path = "tmp/doh_config_spec_fb_insecure.moon"
+    write_moon path, [[{ doh: { upstream_fallback_insecure: "true" } }]]
+    cfg = reload path
+    os.remove path
+    assert.is_true cfg.doh.upstream_fallback_insecure
+
+  it "upstream_fallback_ca_file est propagé", ->
+    path = "tmp/doh_config_spec_fb_ca.moon"
+    write_moon path, [[{ doh: { upstream_fallback_ca_file: "/etc/ssl/custom.pem" } }]]
+    cfg = reload path
+    os.remove path
+    assert.equals "/etc/ssl/custom.pem", cfg.doh.upstream_fallback_ca_file
 
 -- ── Normalisation chemins (logique main.moon) ─────────────────────────────────
 

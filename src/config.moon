@@ -325,6 +325,11 @@ DEFAULTS = {
     -- Exemple : "https://1.1.1.1/dns-query"
     upstream_doh_url: nil        -- "https://host/dns-query" → transport DoH via libcurl (opt-in)
     upstream_doh_tls_verify: true
+    -- Repli wolfSSL (HTTP/1.1) quand libcurl est inutilisable. false = refuser
+    -- un repli qui ne peut pas vérifier certificat + nom d'hôte.
+    upstream_fallback_insecure: false
+    -- Magasin de CA du repli (nil = SSL_CERT_FILE puis chemins usuels).
+    upstream_fallback_ca_file: nil
   }
 
   events: {
@@ -531,6 +536,12 @@ normalize = (cfg) ->
     true
   else
     coerce_boolean cfg.doh.upstream_doh_tls_verify
+  -- Repli wolfSSL : par défaut, refuser un repli sans vérification TLS.
+  cfg.doh.upstream_fallback_insecure = if cfg.doh.upstream_fallback_insecure == nil
+    false
+  else
+    coerce_boolean cfg.doh.upstream_fallback_insecure
+  cfg.doh.upstream_fallback_ca_file = nil if cfg.doh.upstream_fallback_ca_file == ""
   cfg.runtime.benchmark = coerce_boolean cfg.runtime.benchmark
   runtime_defaults = defaults.runtime or {}
   cfg.runtime.gc_pause = tonumber(cfg.runtime.gc_pause) or runtime_defaults.gc_pause

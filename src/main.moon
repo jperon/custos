@@ -168,6 +168,8 @@ load_doh_cfg = ->
     key:     if config.doh.key  and #config.doh.key  > 0 then config.doh.key  else nil
     upstream_doh_url:        config.doh.upstream_doh_url or nil
     upstream_doh_tls_verify: if config.doh.upstream_doh_tls_verify == nil then true else config.doh.upstream_doh_tls_verify
+    upstream_fallback_insecure: config.doh.upstream_fallback_insecure == true
+    upstream_fallback_ca_file: config.doh.upstream_fallback_ca_file
   }
 
 -- ── Shutdown explicite des workers ───────────────────────────────

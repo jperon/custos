@@ -23,6 +23,7 @@ bit     = require "bit"
 { :process_query }                      = require "doh.query"
 { :parse, :types, :rcodes }              = require "ipparse.l7.dns"
 upstream_mod                            = require "doh.upstream"
+upstream_select                         = require "doh.upstream_select"
 
 -- ── Base64url decoder (RFC 4648 §5, no padding required) ────────────────────
 
@@ -543,20 +544,28 @@ run = (doh_cfg, filter_data) ->
     ipv6:   listen6 and "::" or nil
   }
 
-  -- Sélection du module upstream selon la configuration (opt-in DoH).
+  -- Sélection du transport upstream (opt-in DoH) : curl normal, repli wolfSSL.
+  -- Décision unique prise ici ; une erreur de requête ne bascule jamais.
   make_upstream  = nil
   close_upstream = nil
   if doh_cfg.upstream_doh_url
-    ok_curl, upstream_curl_mod = pcall require, "doh.upstream_doh_curl"
-    if ok_curl
-      url        = doh_cfg.upstream_doh_url
-      verify_tls = if doh_cfg.upstream_doh_tls_verify == nil then true else doh_cfg.upstream_doh_tls_verify
-      make_upstream  = -> upstream_curl_mod.new_client url, timeout_ms, verify_tls
-      close_upstream = upstream_curl_mod.close
-      log_info -> { action: "upstream_doh_curl_enabled", url: url, verify_tls: verify_tls }
-      log_warn -> { action: "upstream_doh_tls_verify_disabled", url: url, detail: "certificat TLS du résolveur amont NON vérifié (MITM possible)" } unless verify_tls
+    desc, sel_err = upstream_select.select {
+      url: doh_cfg.upstream_doh_url
+      timeout_ms: timeout_ms
+      verify_tls: doh_cfg.upstream_doh_tls_verify != false
+      fallback_insecure: doh_cfg.upstream_fallback_insecure == true
+      ca_file: doh_cfg.upstream_fallback_ca_file
+      role: "upstream"
+    }
+    if desc
+      make_upstream  = -> desc.make_client doh_cfg.upstream_doh_url, timeout_ms, desc.verify_tls
+      close_upstream = desc.close
     else
-      log_warn -> { action: "upstream_doh_curl_load_failed", err: tostring upstream_curl_mod }
+      log_warn -> {
+        action: "upstream_doh_unavailable_udp"
+        err: sel_err
+        detail: "aucun transport DoH amont : repli UDP/53"
+      }
   unless make_upstream
     make_upstream  = -> upstream_mod.new_client upstream_ip, upstream_port, timeout_ms
     close_upstream = upstream_mod.close
