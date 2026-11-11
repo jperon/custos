@@ -37,8 +37,55 @@ mac_learner_ipc = require "mac_learner_ipc"
 mac_from_eui64  = mac_learner_ipc.mac_from_eui64
 get_mac         = mac_learner_ipc.get_mac
 
+-- ── Nettoyage des serveurs de test ───────────────────────────────────────
+-- Les serveurs sont lancés en arrière-plan par le shell (os.execute "… &"),
+-- donc ce ne sont pas des enfants directs de Busted : pas de wait() possible,
+-- on sonde `kill -0` jusqu'à disparition réelle. `spawned_pids` mémorise les
+-- PID dès leur lecture pour que le teardown les tue même si une assertion
+-- échoue au milieu du test.
+
+--- Exécute une commande shell ; true si le code retour est 0.
+-- os.execute renvoie 0 en Lua 5.1 et true en Lua 5.2+ (LUA52COMPAT).
+exec_ok = (cmd) ->
+  ret = os.execute cmd
+  ret == 0 or ret == true
+
+spawned_pids = {}
+
+--- Tue un processus et attend sa disparition (SIGTERM, puis SIGKILL après ~2 s).
+-- @tparam number pid PID du processus à tuer
+kill_and_wait = (pid) ->
+  return unless pid and pid > 0
+  os.execute "kill #{pid} 2>/dev/null"
+  for _ = 1, 20
+    return unless exec_ok "kill -0 #{pid} 2>/dev/null"
+    os.execute "sleep 0.1"
+  os.execute "kill -9 #{pid} 2>/dev/null"
+
+--- Tue tous les serveurs lancés par le test courant et vide la liste.
+stop_all_spawned = ->
+  for pid in *spawned_pids
+    kill_and_wait pid
+  spawned_pids = {}
+
+-- ── SIGPIPE ──────────────────────────────────────────────────────────────
+-- Le client envoie sa requête après connect() ; si le serveur de test a déjà
+-- fermé (course normale : il répond puis close), le send déclenche SIGPIPE et
+-- tue Busted avant le teardown → serveurs orphelins. On ignore SIGPIPE le temps
+-- du spec : send renvoie alors EPIPE et le test échoue proprement, ce qui
+-- laisse after_each nettoyer.
+SIGPIPE = 13
+pcall -> ffi.cdef "void *signal(int signum, void *handler);"
+
 -- ─────────────────────────────────────────────────────────────────────────
 describe "parse/mac_learner", ->
+  old_sigpipe = nil
+
+  setup ->
+    old_sigpipe = ffi.C.signal SIGPIPE, ffi.cast("void*", 1)  -- SIG_IGN
+
+  teardown ->
+    ffi.C.signal SIGPIPE, old_sigpipe if old_sigpipe
 
   -- ── mac_from_eui64 ──────────────────────────────────────────────────────
 
@@ -219,11 +266,10 @@ ffi.C.unlink(path)
         pid = tonumber(fh_pid\read "*l") or 0
         fh_pid\close!
         os.remove pid_file
+      -- Enregistré immédiatement : le teardown tue le serveur même si une
+      -- assertion échoue avant la fin du test.
+      spawned_pids[#spawned_pids + 1] = pid if pid > 0
       pid
-
-    stop_server = (pid) ->
-      os.execute "kill #{pid} 2>/dev/null; true"
-      os.remove SOCK_PATH
 
     before_each ->
       -- Recharger mac_learner_ipc avec le bon socket path
@@ -232,7 +278,8 @@ ffi.C.unlink(path)
       cfg.MAC_LEARNER_QUERY_SOCK = SOCK_PATH
 
     after_each ->
-      stop_server server_pid if server_pid
+      stop_all_spawned!
+      os.remove SOCK_PATH
       server_pid = nil
       -- Restaurer socket path non-existent pour isoler les autres tests
       cfg = package.loaded["config"]
@@ -263,6 +310,13 @@ ffi.C.unlink(path)
       result = m.get_mac "fe80::211:22ff:fe33:4455"
       assert.equals "00:11:22:33:44:55", result
 
+    it "le teardown tue et attend le serveur (aucun processus orphelin)", ->
+      pending "struct sockaddr_un incompatible (sa_family_t=uint32 de socket.lua)" unless compatible_layout
+      pid = start_server "aa:bb:cc:dd:ee:ff", 1
+      assert.is_true exec_ok "kill -0 #{pid} 2>/dev/null"
+      stop_all_spawned!
+      assert.is_false exec_ok "kill -0 #{pid} 2>/dev/null"
+
   -- ── get_mac : n <= 0 (recv retourne 0 ou erreur) ────────────────────────
   -- Serveur ferme connexion sans envoyer de données
 
@@ -278,7 +332,7 @@ ffi.C.unlink(path)
       cfg.MAC_LEARNER_QUERY_SOCK = SOCK_PATH2
 
     after_each ->
-      os.execute "kill #{server_pid2} 2>/dev/null; true" if server_pid2
+      stop_all_spawned!
       os.remove SOCK_PATH2
       server_pid2 = nil
       cfg = package.loaded["config"]
@@ -331,6 +385,7 @@ ffi.C.unlink(path)
       pid_str = fh\read "*l"
       fh\close!
       server_pid2 = tonumber pid_str
+      spawned_pids[#spawned_pids + 1] = server_pid2 if server_pid2 and server_pid2 > 0
       -- Attendre que le socket Unix soit créé (0 en Lua 5.1, true en 5.2+).
       for i = 1, 20
         sock2_ok = os.execute("test -S " .. SOCK_PATH2)
