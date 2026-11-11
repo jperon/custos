@@ -521,4 +521,6 @@ parse_na_frame = (raw, n) ->
   return nil, nil unless na_target_ip
   na_target_ip, fmt_mac(raw, 7)
 
-{ :init, :probe_and_wait, :send_probe, :parse_arp_frame, :parse_na_frame, :get_ms }
+{ :init, :probe_and_wait, :send_probe, :parse_arp_frame, :parse_na_frame, :get_ms,
+  :build_arp_request, :build_ns_frame, :icmpv6_cksum,
+  :parse_arp_reply, :parse_na_reply, :ip4_to_bin, :ip6_to_bin }
