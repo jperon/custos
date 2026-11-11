@@ -173,6 +173,23 @@ describe "lib.socket socket_select EINTR", ->
     assert.truthy (source\find "errno == 4"),
       "EINTR (errno=4) doit être géré dans socket_select"
 
+-- ── connect() non bloquant : EINPROGRESS ──────────────────────────────────
+-- Régression : EINPROGRESS (115) n'était défini nulle part, donc la
+-- comparaison `errno == EINPROGRESS` était toujours fausse et tout connect()
+-- non bloquant levait « connect() failed ». Sur Linux, un connect() non
+-- bloquant rend toujours EINPROGRESS immédiatement (le résultat, succès ou
+-- ECONNREFUSED, n'est connu qu'ensuite via select()/SO_ERROR) — y compris
+-- vers un port fermé de la boucle locale, ce qui rend le cas déterministe.
+describe "lib.socket connect() non bloquant", ->
+
+  it "retourne nil sur EINPROGRESS (errno=115) au lieu de lever", ->
+    s = socket.tcp!
+    s\settimeout 0.1   -- O_NONBLOCK
+    ok, result = pcall -> s\connect "127.0.0.1", 1   -- port 1 : personne n'écoute
+    s\close!
+    assert.is_true ok, "connect() non bloquant ne doit pas lever : #{result}"
+    assert.is_nil result
+
 -- ── socket_select : comportement nominal ──────────────────────────────────
 
 describe "lib.socket socket_select comportement nominal", ->

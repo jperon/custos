@@ -102,6 +102,7 @@ local F_SETFL = 4
 local MSG_DONTWAIT = 64
 local EWOULDBLOCK = 11
 local EAGAIN = 11
+local EINPROGRESS = 115
 local ETH_P_ALL = 0x0003
 local get_errno
 get_errno = function()
