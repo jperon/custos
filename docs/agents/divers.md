@@ -112,3 +112,63 @@ See [.agents/px5g_migration.md](.agents/px5g_migration.md) for full documentatio
   chargé (sinon repli SNI dynamique, jamais de hard-error par connexion) ;
   lecture du SNI avant le handshake et repli sur l'IP locale (`cert_name_for`).
 
+
+## Chemins d'écriture au runtime
+
+Principe : `/etc/custos` ne contient que les **définitions manuelles** (config,
+listes `.txt` saisies à la main, secrets, certificat fourni à la main). Tout
+fichier **téléchargé** ou **généré au runtime** doit vivre en tmpfs, sous
+`/tmp/custos` ou `/var/run`, et être régénéré au démarrage. Le service tourne
+avec `cwd=/` : un chemin relatif `tmp/…` ne tombe en tmpfs que par accident.
+
+Inventaire au 2026-11-11 (les chemins par défaut effectifs tiennent compte de
+`src/config.moon` et de la config du paquet `packaging/openwrt/custos/files/`) :
+
+| Site (fichier:ligne) | Chemin par défaut effectif | Nature | Emplacement |
+|----------------------|----------------------------|--------|-------------|
+| `src/metrics.moon:136` (chemin `:122`) | `<dirname(runtime.pid_file)>/metrics-<worker>.json`, soit `/var/run/metrics-*.json` (`src/main.moon:609`, `src/worker_questions.moon:483`, défaut `/var/run/custos.pid` en `src/lib/pidfile.moon:9`) | généré | tmpfs (`/var/run`) |
+| `src/worker_events.moon:163` (chemin `:161`) | `/tmp/custos/events/recent-verdicts.tsv` (`events.dir`, `src/config.moon:342`) | généré | tmpfs |
+| `src/worker_events.moon:226` | `/tmp/custos/events/events-<heure>.tsv` | généré | tmpfs |
+| `src/auth/rate_limit.moon:91` | `<auth.sessions_file>.ratelimit`, soit `/tmp/sessions.lua.ratelimit` (`src/config.moon:300`, `src/auth/handlers.moon:329`) | généré | tmpfs |
+| `src/auth/sessions.moon:79` | `auth.sessions_file`, soit `/tmp/sessions.lua` (`src/config.moon:300`) | généré (état) | tmpfs (voir cas douteux) |
+| `src/auth/credentials.moon:262` | `auth.secrets`, soit `/etc/custos/secrets` (`src/config.moon:299`) | manuel / webui (comptes) | flash (`/etc`), légitime |
+| `src/auth/cert.moon:55` (`write_pem_file`) | chemin fourni : `auth.cert`/`auth.key` (manuel) via `load_or_generate_static` ; SNI via `sni_paths` (`src/auth/cert.moon:130`) → `/tmp/custos/certs/auth_sni_<nom>_<année>.{key,crt}` | fourni manuel / généré | `/etc` si configuré ; tmpfs pour le SNI |
+| `src/auth/cert_files.moon:56` | chemin fourni par `auth/cert.moon` ou `auth/cert_cache.moon` | généré | idem ligne précédente |
+| `src/auth/cert_cache.moon:112-113` (index `:94`, écriture `:25`) | `/tmp/custos/certs/<nom>.{crt,key}` et `/tmp/custos/certs/cert_cache_index.lua` (`DEFAULT_CERT_DIR` en `src/auth/cert_cache.moon:21`, clé `auth.cert_dir` en `src/config.moon:304`) | généré | tmpfs |
+| `src/nft_rules.moon:282-290` | `/tmp/custos/custos-rules-<epoch>.nft` et `.err` | généré (temporaire) | tmpfs |
+| `src/lib/pidfile.moon:9` | `/var/run/custos.pid` (surcharges `runtime.pid_file`, env `CUSTOS_PID_FILE`) | généré | tmpfs |
+| `src/webui/handlers/lists.moon:70` | `{lists_dir}/{type}/{name}.txt` ; repli `/tmp/custos/lists` (`:25`) | manuel (webui) | tmpfs actuellement (voir cas douteux) |
+| `src/webui/serializer.moon:75` | `{config_path}.webui.new` → `/etc/custos/config.moon` (`DEFAULT_CONFIG_PATH`, `src/config.moon:52`) | manuel (webui) | flash (`/etc`), légitime |
+| `src/filter/updater.moon:223` | `filter.domainlists_dir` → `/tmp/custos/lists/*.bin` (`src/config.moon:360`) | téléchargé / généré | tmpfs |
+| `src/filter/updater.moon:120` | `${TMPDIR:-/tmp}/custos-updater-<source>.tar.gz.tmp` | téléchargé (temporaire) | tmpfs |
+| `src/filter/updater_io.moon:37,48,69` | `mkdir -p` des parents et `curl -o <dest>` ; chemins fournis par l'appelant (`/tmp/custos/lists`) | téléchargé / généré | tmpfs |
+| `src/filter/convert.moon:45` | chemin de sortie passé en argument (outil CLI) | généré | non déterminé (hors service) |
+| `src/auth/cert_generator.moon:54-55` | `/tmp/px5g_key_<suffixe>.pem`, `/tmp/px5g_cert_<suffixe>.pem` | généré (temporaire px5g) | tmpfs |
+| `src/auth/token.moon:122` | `auth.session_key`, soit `/etc/custos/session.key` (`src/auth/server.moon:355`, schéma `src/webui/schema/config_schema.moon:95`) | généré si absent (secret) | flash (voir cas douteux) |
+| `src/mac_learner.moon:387` | `/var/run/custos/mac_query.sock` (`mac_learner.query_sock`, `src/config.moon:281`) | généré (socket Unix) | tmpfs |
+| `packaging/openwrt/custos/files/usr/sbin/custos-update:20,62` | `/tmp/custos/lists` (`custos.main.lists_dir`) et `mktemp -d /tmp/custos-lists.XXXXXX` | téléchargé | tmpfs |
+
+Cas non trouvés : `recent-devices.tsv` n'existe pas dans le dépôt (le fichier
+équivalent est `recent-verdicts.tsv`, `src/worker_events.moon:46`).
+
+Défauts corrigés le 2026-11-11 : `auth/cert*.moon` (chemins relatifs
+`tmp/certs`, `tmp/cert_cache_index.lua`, `tmp/auth_sni_*`) et le temporaire de
+`nft_rules.apply` (était `./tmp`).
+
+Cas douteux laissés en l'état :
+- `auth.sessions_file` (`/tmp/sessions.lua`) et son `.ratelimit` : tmpfs, donc
+  perdus au redémarrage. Recommandation : conserver tel quel (état de session
+  éphémère) ou, si la persistance est voulue, déplacer vers `/etc/custos`.
+- `auth.session_key` (`/etc/custos/session.key`) : généré au runtime mais
+  classé « secret », donc laissé dans `/etc`. Recommandation : le déplacer vers
+  `/tmp/custos` seulement si l'on accepte d'invalider tous les jetons au
+  redémarrage (les sessions sont déjà perdues).
+- `filter.lists_dir` / repli webui `/tmp/custos/lists` : listes `.txt` saisies
+  à la main mais écrites en tmpfs. Recommandation : fixer
+  `filter.lists_dir: "/etc/custos/lists"` dans la config du paquet pour les
+  conserver, sans changer le code (définition manuelle).
+- `load_or_generate_static` (`src/auth/cert.moon:241-257`) : si `auth.cert`
+  est configuré mais absent, custos y génère un auto-signé — donc potentiellement
+  dans `/etc`. Comportement documenté ; non modifié (chemin choisi par
+  l'utilisateur), mais un déploiement qui ne veut rien écrire sur la flash doit
+  laisser `auth.cert`/`auth.key` vides (repli SNI en tmpfs).

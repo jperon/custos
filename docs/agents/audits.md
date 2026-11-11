@@ -1358,3 +1358,26 @@ HPACK et applique le profil RFC 8484.
 0 failures / 0 errors / 0 pending** ; `make test-js` = 12 pass / 0 fail
 (journal `tmp/test.log`). `make test-e2e` non lancé (hors périmètre de la
 tâche).
+
+### Chemins d'écriture au runtime (branche d-tmpfs)
+
+Application du principe « `/etc` manuel, le reste en tmpfs ». Les certificats
+générés (SNI/IP) étaient écrits dans des chemins relatifs (`tmp/certs`,
+`tmp/cert_cache_index.lua`, `tmp/auth_sni_*`) qui ne tombaient en tmpfs que
+parce que le service tourne avec `cwd=/`. Ils vivent désormais dans
+`/tmp/custos/certs` (constante `DEFAULT_CERT_DIR`,
+`src/auth/cert_cache.moon:21`), réglable par `auth.cert_dir`
+(`src/config.moon:304`, schéma `src/webui/schema/config_schema.moon:98`,
+`doc/CONFIG.md`). L'index du cache est dans le même dossier
+(`src/auth/cert_cache.moon:94`) et le dossier est créé par le helper commun
+`ensure_dir`. Le worker DoH partage ce dossier (`src/main.moon:171`,
+`src/worker_doh.moon:658-659`). Le temporaire de `nft_rules.apply` passe de
+`./tmp` à `/tmp/custos` (`src/nft_rules.moon:279-282`). Les certificats fournis
+à la main (`auth.cert`/`auth.key`) restent inchangés.
+
+Inventaire complet des autres chemins d'écriture (nature, emplacement, cas
+douteux `sessions_file`, `session_key`, `filter.lists_dir`,
+`load_or_generate_static`) : `docs/agents/divers.md` § « Chemins d'écriture au
+runtime ». Tests : défaut de `cert_dir`, index dans le même dossier, clé
+`auth.cert_dir` (défaut et surcharge) dans
+`tests/unit/auth/cert_cache_spec.moon` et `tests/unit/config_spec.moon`.

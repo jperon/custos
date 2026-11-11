@@ -287,7 +287,7 @@ apply = function()
     end)
   end
   content = substitute(content, plan)
-  local tmpdir = "./tmp"
+  local tmpdir = "/tmp/custos"
   os.execute("mkdir -p " .. tostring(tmpdir))
   local tmpfile = tostring(tmpdir) .. "/custos-rules-" .. tostring(os.time()) .. ".nft"
   local tmpfh, tmp_err = io.open(tmpfile, "w")

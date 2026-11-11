@@ -273,8 +273,10 @@ apply = ->
 
   content = substitute content, plan
 
-  -- Write template to temporary file and apply via nft -f
-  tmpdir = "./tmp"
+  -- Write template to temporary file and apply via nft -f.
+  -- Chemin absolu tmpfs : le service tourne avec cwd=/, où "./tmp" ne tombe
+  -- dans /tmp que par accident (et pas sur un tmpfs monté ailleurs).
+  tmpdir = "/tmp/custos"
   -- Ensure tmp directory exists
   os.execute "mkdir -p #{tmpdir}"
   tmpfile = "#{tmpdir}/custos-rules-#{os.time!}.nft"
