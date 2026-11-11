@@ -213,6 +213,16 @@ else
 end
 local IPC_RETRY_COUNT = match_retry_cfg.count or 5
 local IPC_RETRY_SLEEP_MS = match_retry_cfg.sleep_ms or 20
+local RETRY_BUDGET_MS
+if match_retry_cfg.budget_ms == nil then
+  RETRY_BUDGET_MS = 100
+else
+  RETRY_BUDGET_MS = match_retry_cfg.budget_ms
+end
+local _retry_budget = {
+  second = -1,
+  used_ms = 0
+}
 local MAC_ZERO = "00:00:00:00:00:00"
 local mac_valid
 mac_valid = function(mac)
@@ -313,29 +323,58 @@ sleep_ms = function(ms)
   sleep_req[0].tv_nsec = (ms % 1000) * 1000000
   return libc.nanosleep(sleep_req, nil)
 end
+local plan_retry_tries
+plan_retry_tries = function(used_ms, budget_ms, wait_ms, tries)
+  if wait_ms <= 0 then
+    return tries
+  end
+  if not (budget_ms > 0) then
+    return 0
+  end
+  local remaining = budget_ms - (used_ms or 0)
+  if remaining < wait_ms then
+    return 0
+  end
+  local n = math.floor(remaining / wait_ms)
+  if n < tries then
+    return n
+  else
+    return tries
+  end
+end
 local retry_pending_match
-retry_pending_match = function(txid, client_ip, client_port, resolver_ip)
+retry_pending_match = function(txid, client_ip, client_port, resolver_ip, ts)
   if not (IPC_RETRY_ENABLED) then
-    return nil, 0, 0
+    return nil, 0, 0, false
   end
   local tries = IPC_RETRY_COUNT or 0
   local wait_ms = IPC_RETRY_SLEEP_MS or 0
   if tries <= 0 then
-    return nil, 0, 0
+    return nil, 0, 0, false
+  end
+  local now_s = ts or now()
+  if now_s ~= _retry_budget.second then
+    _retry_budget.second = now_s
+    _retry_budget.used_ms = 0
+  end
+  local allowed = plan_retry_tries(_retry_budget.used_ms, RETRY_BUDGET_MS, wait_ms, tries)
+  if allowed <= 0 then
+    return nil, 0, 0, true
   end
   local total_wait_ms = 0
-  for i = 1, tries do
+  for i = 1, allowed do
     sleep_ms(wait_ms)
+    _retry_budget.used_ms = _retry_budget.used_ms + wait_ms
     total_wait_ms = total_wait_ms + wait_ms
-    local ts = now()
-    drain_ts = ts
+    local loop_ts = now()
+    drain_ts = loop_ts
     drain_pipe(pipe_rfd, now, drain_on_msg)
     local entry = get_pending_entry(txid, client_ip, client_port, resolver_ip, now)
     if entry then
-      return entry, i, total_wait_ms
+      return entry, i, total_wait_ms, false
     end
   end
-  return nil, tries, total_wait_ms
+  return nil, allowed, total_wait_ms, false
 end
 local forget_ip_mapping
 forget_ip_mapping = function(ip, mac)
@@ -683,6 +722,24 @@ finalize_a = function(ctx, override)
     return set_verdict(qh_ptr, pkt_id, NF_ACCEPT)
   end
 end
+local build_orphan_fields
+build_orphan_fields = function(info)
+  return {
+    action = "response_orphan_dropped",
+    src_ip = info.src_ip,
+    dst_ip = info.dst_ip,
+    dst_port = info.dst_port,
+    vlan = info.vlan,
+    txid = info.txid,
+    qname = info.qname or "-",
+    rcode = info.rcode,
+    client_mac = info.client_mac,
+    user = info.user,
+    ipc_retry_attempts = info.ipc_retry_attempts,
+    ipc_retry_wait_ms = info.ipc_retry_wait_ms,
+    retry_budget_skipped = info.retry_budget_skipped and 1 or 0
+  }
+end
 local sweep_parked
 sweep_parked = function()
   if not (so_state and so_state.has_parked()) then
@@ -878,8 +935,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local entry = get_pending_entry(txid, dst_ip, client_port, resolver_ip, now)
   local ipc_retry_attempts = 0
   local ipc_retry_wait_ms = 0
+  local retry_budget_skipped = false
   if not (entry) then
-    entry, ipc_retry_attempts, ipc_retry_wait_ms = retry_pending_match(txid, dst_ip, client_port, resolver_ip)
+    entry, ipc_retry_attempts, ipc_retry_wait_ms, retry_budget_skipped = retry_pending_match(txid, dst_ip, client_port, resolver_ip, ts)
     if entry then
       log_info(function()
         return {
@@ -893,6 +951,23 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         }
       end)
     else
+      local q1 = dns_msg.questions and dns_msg.questions[1]
+      log_info(function()
+        return build_orphan_fields({
+          src_ip = src_ip,
+          dst_ip = dst_ip,
+          dst_port = client_port,
+          vlan = l2.vlan,
+          txid = txid_hex,
+          qname = q1 and q1.name or "-",
+          rcode = dns_msg.header.rcode,
+          client_mac = client_mac,
+          user = user,
+          ipc_retry_attempts = ipc_retry_attempts,
+          ipc_retry_wait_ms = ipc_retry_wait_ms,
+          retry_budget_skipped = retry_budget_skipped
+        })
+      end)
       if level_enabled("DEBUG") then
         log_debug(function()
           return {
@@ -1168,6 +1243,11 @@ run = function(queue_num, rfd, rules_metadata)
   end
   return run_queue(tonumber(queue_num), handle_response, run_opts)
 end
+local _set_pipe_rfd
+_set_pipe_rfd = function(fd)
+  pipe_rfd = fd
+  return nil
+end
 return {
   run = run,
   rr_timeout = rr_timeout,
@@ -1187,5 +1267,10 @@ return {
   ip_to_mac = ip_to_mac,
   current_benchmark_us = current_benchmark_us,
   take_last_ack_wait_us = take_last_ack_wait_us,
+  plan_retry_tries = plan_retry_tries,
+  retry_pending_match = retry_pending_match,
+  _retry_budget = _retry_budget,
+  _set_pipe_rfd = _set_pipe_rfd,
+  build_orphan_fields = build_orphan_fields,
   finalize_a = finalize_a
 }

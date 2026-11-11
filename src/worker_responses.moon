@@ -205,6 +205,28 @@ IPC_RETRY_ENABLED = if match_retry_cfg.enabled == nil then true else match_retry
 IPC_RETRY_COUNT = match_retry_cfg.count or 5
 IPC_RETRY_SLEEP_MS = match_retry_cfg.sleep_ms or 20
 
+-- ── Budget de retry d'appariement IPC ────────────────────────────────
+-- Le retry existe pour absorber un réordonnancement IPC légitime : la réponse
+-- du résolveur peut être recapturée (et traitée) avant que le worker questions
+-- n'ait écrit/été drainé sur le pipe `question_response`. Ce réordonnancement
+-- se compte en microsecondes à quelques millisecondes (la question est écrite
+-- avant le forward upstream ; le RTT upstream, lui, se compte en ms) : la
+-- PREMIÈRE tentative (sleep_ms) suffit dans le cas nominal.
+-- Sans borne, une rafale de réponses orphelines sérialisait le worker dans le
+-- hot-path NFQ : `count` (5) × `sleep_ms` (20) = 100 ms par réponse, soit
+-- ~10 réponses/s de débit et 100 % de temps passé en nanosleep — un vecteur
+-- de déni de service local.
+-- Budget : au plus `budget_ms` de sommeil par seconde et par worker, toutes
+-- réponses confondues (fenêtre = seconde d'epoch courante). Choisi à 100 ms
+-- (10 % de temps au pire, jamais atteint par le cas nominal qui consomme
+-- 20 ms) : le budget autorise encore les 5 tentatives d'une seule réponse
+-- (comportement historique préservé pour un réordonnancement isolé) tout en
+-- faisant tomber immédiatement les orphelins suivants (aucun nanosleep,
+-- drop direct). Un réordonnancement isolé consomme 20 ms, soit 5 événements
+-- par seconde absorbés pleinement.
+RETRY_BUDGET_MS = if match_retry_cfg.budget_ms == nil then 100 else match_retry_cfg.budget_ms
+_retry_budget = { second: -1, used_ms: 0 }
+
 -- MAC_ZERO : MAC à ignorer (interface sans L2)
 MAC_ZERO = "00:00:00:00:00:00"
 
@@ -359,23 +381,61 @@ sleep_ms = (ms) ->
   sleep_req[0].tv_nsec = (ms % 1000) * 1000000
   libc.nanosleep sleep_req, nil
 
-retry_pending_match = (txid, client_ip, client_port, resolver_ip) ->
-  return nil, 0, 0 unless IPC_RETRY_ENABLED
+--- Nombre de tentatives autorisées par le budget de retry (fonction pure).
+-- @tparam number used_ms   Millisecondes déjà consommées dans la fenêtre
+-- @tparam number budget_ms Budget de sommeil par fenêtre
+-- @tparam number wait_ms   Coût d'une tentative (sleep_ms)
+-- @tparam number tries     Tentatives demandées par la configuration
+-- @treturn number 0..tries ; 0 = budget épuisé (sauter le retry)
+plan_retry_tries = (used_ms, budget_ms, wait_ms, tries) ->
+  -- sleep_ms <= 0 : la tentative ne coûte qu'un drain (non bloquant), le
+  -- budget de SOMMEIL ne s'applique pas — préserver le comportement historique.
+  return tries if wait_ms <= 0
+  return 0 unless budget_ms > 0
+  remaining = budget_ms - (used_ms or 0)
+  return 0 if remaining < wait_ms
+  n = math.floor remaining / wait_ms
+  if n < tries then n else tries
+
+--- Retry d'appariement IPC (réponse arrivée avant la lecture de la question).
+-- Coût borné par `RETRY_BUDGET_MS` par seconde (cf. ci-dessus) : au-delà, le
+-- retry est SAUTÉ (aucun nanosleep) et la réponse est traitée comme orpheline.
+-- @tparam number txid         ID de transaction DNS
+-- @tparam string client_ip    IP du client (dst de la réponse)
+-- @tparam number client_port  Port source du client
+-- @tparam string resolver_ip  IP du résolveur (src de la réponse)
+-- @tparam number|nil ts       Epoch courant déjà connu de l'appelant (évite un
+--                             appel d'horloge supplémentaire)
+-- @treturn table|nil entry    Transaction appariée, ou nil
+-- @treturn number   attempts   Tentatives effectuées
+-- @treturn number   wait_ms    Sommeil cumulé réellement consommé (ms)
+-- @treturn boolean  budget_skipped true si le retry a été sauté faute de budget
+retry_pending_match = (txid, client_ip, client_port, resolver_ip, ts) ->
+  return nil, 0, 0, false unless IPC_RETRY_ENABLED
   tries = IPC_RETRY_COUNT or 0
   wait_ms = IPC_RETRY_SLEEP_MS or 0
-  return nil, 0, 0 if tries <= 0
+  return nil, 0, 0, false if tries <= 0
+
+  now_s = ts or now!
+  if now_s != _retry_budget.second
+    _retry_budget.second = now_s
+    _retry_budget.used_ms = 0
+
+  allowed = plan_retry_tries _retry_budget.used_ms, RETRY_BUDGET_MS, wait_ms, tries
+  return nil, 0, 0, true if allowed <= 0
 
   total_wait_ms = 0
-  for i = 1, tries
+  for i = 1, allowed
     sleep_ms wait_ms
+    _retry_budget.used_ms += wait_ms
     total_wait_ms += wait_ms
-    ts = now!
-    drain_ts = ts
+    loop_ts = now!
+    drain_ts = loop_ts
     drain_pipe pipe_rfd, now, drain_on_msg
     entry = get_pending_entry txid, client_ip, client_port, resolver_ip, now
-    return entry, i, total_wait_ms if entry
+    return entry, i, total_wait_ms, false if entry
 
-  nil, tries, total_wait_ms
+  nil, allowed, total_wait_ms, false
 
 -- ── Suivi des clients par adresse MAC ───────────────────────────
 -- Mise à jour de mac_clients et ip_to_mac à chaque message IPC reçu.
@@ -620,6 +680,36 @@ finalize_a = (ctx, override) ->
   else
     set_verdict qh_ptr, pkt_id, NF_ACCEPT
 
+--- Construit les champs de la trace INFO d'une réponse orpheline (fonction pure).
+-- C'est le SEUL témoin d'une réponse client jetée faute de question appariée :
+-- la trace est donc émise en INFO (visible avec `log_level: "INFO"` en
+-- production) et non plus seulement en DEBUG. Le taux d'émission est borné par
+-- `log.moon` (RL_CONFIG.response_orphan_dropped : clé = action seule, fenêtre
+-- 10 s, état mmap partagé entre workers, occurrences agrégées dans
+-- `suppressed=N`), ce qui rend un flood impossible même à 400 réponses
+-- orphelines/s.
+-- @tparam table info Champs d'enquête : txid, src_ip (résolveur), dst_ip
+--                    (client), dst_port, vlan, qname, rcode, client_mac, user,
+--                    ipc_retry_attempts, ipc_retry_wait_ms,
+--                    retry_budget_skipped
+-- @treturn table Champs prêts pour log_info
+build_orphan_fields = (info) ->
+  {
+    action: "response_orphan_dropped"
+    src_ip: info.src_ip
+    dst_ip: info.dst_ip
+    dst_port: info.dst_port
+    vlan: info.vlan
+    txid: info.txid
+    qname: info.qname or "-"
+    rcode: info.rcode
+    client_mac: info.client_mac
+    user: info.user
+    ipc_retry_attempts: info.ipc_retry_attempts
+    ipc_retry_wait_ms: info.ipc_retry_wait_ms
+    retry_budget_skipped: info.retry_budget_skipped and 1 or 0
+  }
+
 --- Balaye les réponses A parquées dont le budget est dépassé (fail-open).
 sweep_parked = ->
   return unless so_state and so_state.has_parked!
@@ -802,8 +892,9 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- distinct du retry upstream (`entry.upstream_retries`).
   ipc_retry_attempts = 0
   ipc_retry_wait_ms = 0
+  retry_budget_skipped = false
   unless entry
-    entry, ipc_retry_attempts, ipc_retry_wait_ms = retry_pending_match txid, dst_ip, client_port, resolver_ip
+    entry, ipc_retry_attempts, ipc_retry_wait_ms, retry_budget_skipped = retry_pending_match txid, dst_ip, client_port, resolver_ip, ts
     if entry
       log_info -> {
         action: "response_matched_after_retry"
@@ -815,6 +906,33 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         user: user
       }
     else
+      -- Non-appariement définitif : la réponse est JETÉE (choix défensif : ne
+      -- jamais relayer une réponse non sollicitée). Événement grave (une
+      -- réponse client perdue) qui n'était visible qu'en DEBUG, donc jamais en
+      -- production (`log_level: "INFO"`) : il est désormais émis en INFO,
+      -- rate-limité par `log.moon` (RL_CONFIG.response_orphan_dropped : clé =
+      -- action seule, fenêtre 10 s, état partagé entre workers via la table
+      -- mmap → au plus une ligne par 10 s et occurrences reportées dans
+      -- `suppressed=`). Volumétrie : à 400 réponses orphelines/s, 1 ligne/10 s
+      -- au lieu de 400 lignes/s. Le LOG DEBUG ci-dessous est conservé pour le
+      -- détail et gardé par `level_enabled "DEBUG"` au call-site : sans cette
+      -- garde, la closure serait allouée par paquet même quand le niveau est
+      -- filtré.
+      q1 = dns_msg.questions and dns_msg.questions[1]
+      log_info -> build_orphan_fields {
+        src_ip: src_ip
+        dst_ip: dst_ip
+        dst_port: client_port
+        vlan: l2.vlan
+        txid: txid_hex
+        qname: q1 and q1.name or "-"
+        rcode: dns_msg.header.rcode
+        client_mac: client_mac
+        user: user
+        ipc_retry_attempts: ipc_retry_attempts
+        ipc_retry_wait_ms: ipc_retry_wait_ms
+        retry_budget_skipped: retry_budget_skipped
+      }
       if level_enabled "DEBUG"
         log_debug -> {
           action:    if ipc_retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
@@ -1054,10 +1172,20 @@ run = (queue_num, rfd, rules_metadata) ->
 
   run_queue tonumber(queue_num), handle_response, run_opts
 
+--- Injecte le fd de lecture du pipe IPC (tests unitaires uniquement ; en
+-- production c'est `run` qui le positionne après le fork).
+-- @tparam number|nil fd  Descripteur de lecture du pipe question→réponse
+-- @treturn nil
+_set_pipe_rfd = (fd) ->
+  pipe_rfd = fd
+  nil
+
 { :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields,
   :skip_ipv6_ext_hdrs, :new_dns_tcp_stream,
   :try_upstream_retry, :arm_retry_fds, :format_block_event,
   :record_chain_targets, :maybe_dynamic_strip, :purge_strip_query_cache,
   :update_mac_clients, :purge_mac_clients, :ip_to_mac,
   :current_benchmark_us, :take_last_ack_wait_us,
+  :plan_retry_tries, :retry_pending_match, :_retry_budget, :_set_pipe_rfd,
+  :build_orphan_fields,
   :finalize_a }

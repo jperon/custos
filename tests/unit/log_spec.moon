@@ -427,3 +427,50 @@ describe "log", ->
 
     it "MAP_ANONYMOUS courant correspond à l'architecture d'exécution", ->
       assert.are.equal log._map_anonymous(jit and jit.arch), log.MAP_ANONYMOUS
+
+  -- ── Rate-limiting des anomalies d'appariement question/réponse ──────
+  -- Les trois actions émises par ipc.moon / worker_responses.moon ont une
+  -- entrée RL_CONFIG dédiée (`keys: {}`, fenêtre 10 s). write_log préfixe
+  -- l'action avec le préfixe du worker (`response_`, `questions_`…) : la
+  -- résolution doit retomber sur l'entrée après strip du préfixe. Sans entrée
+  -- dédiée, l'action retomberait sur le défaut INFO (60 s, RL_IDENTITY_KEYS).
+  describe "rate-limiting des anomalies d'appariement", ->
+    before_each ->
+      log._rl_reset!
+      log.set_action_prefix ""
+
+    after_each ->
+      log.set_action_prefix ""
+
+    it "sans entrée dédiée, une action INFO retombe sur le défaut du niveau", ->
+      assert.is_nil log.RL_CONFIG.action_sans_entree
+      f = { action: "action_sans_entree" }
+      -- Défaut INFO : fenêtre 60 s, et non 10 s comme les entrées dédiées.
+      assert.are.equal 0,  log.check_rl "INFO", f, 1000
+      assert.are.equal -1, log.check_rl "INFO", f, 1059
+      assert.are.equal 1,  log.check_rl "INFO", f, 1060
+
+    for action in *{"response_orphan_dropped", "ipc_pending_overwrite",
+                    "ipc_pending_overwrite_divergent"}
+      it "#{action} : entrée dédiée, agrégation par action, fenêtre 10 s", ->
+        cfg = log.RL_CONFIG[action]
+        assert.is_not_nil cfg, "entrée RL_CONFIG manquante : défaut niveau appliqué"
+        assert.are.same {}, cfg.keys
+        assert.are.equal 10, cfg.window
+
+      for prefix in *{"response_", "questions_"}
+        it "#{action} avec préfixe #{prefix} : règle appliquée après strip", ->
+          log.set_action_prefix prefix
+          f = { action: prefix .. action }
+          assert.are.equal 0,  log.check_rl "INFO", f, 1000
+          assert.are.equal -1, log.check_rl "INFO", f, 1001
+          assert.are.equal -1, log.check_rl "INFO", f, 1009
+          assert.are.equal 2,  log.check_rl "INFO", f, 1010
+          assert.are.equal -1, log.check_rl "INFO", f, 1011
+
+      it "#{action} : niveau WARN limité aussi (tracé divergent)", ->
+        log.set_action_prefix "questions_"
+        f = { action: "questions_" .. action }
+        assert.are.equal 0,  log.check_rl "WARN", f, 2000
+        assert.are.equal -1, log.check_rl "WARN", f, 2009
+        assert.are.equal 1,  log.check_rl "WARN", f, 2010

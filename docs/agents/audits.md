@@ -2192,3 +2192,59 @@ TRACE) et `tests/unit/log_fields_spec.moon` (garde-fou). Suite locale :
 (l’environnement n’est pas provisionné) ; la config e2e
 `libvirt/homelab-e2e.moon:7` est en `log_level: "DEBUG"`, donc les lignes
 passées en DEBUG y restent visibles.
+### Appariement question/réponse : observabilité, budget de retry et fail-closed (branche d-orphan)
+
+Trois défauts corrigés dans `src/ipc.moon` et `src/worker_responses.moon`.
+
+**1. Réponse orpheline invisible en production.** `handle_response` jetait la
+réponse non appariée (`NF_DROP`, choix défensif conservé) en ne loguant qu'en
+`DEBUG`, donc muet avec `log_level: "INFO"`. Trace `INFO`
+`action=response_orphan_dropped` (`build_orphan_fields` : txid, client
+`dst_ip`/`dst_port`, résolveur, qname, rcode, MAC, user, compteurs de retry,
+`retry_budget_skipped`) ; le détail par tentative reste en `DEBUG`, gardé par
+`level_enabled "DEBUG"`. L'action a une entrée `RL_CONFIG` dédiée (`keys: {}`,
+fenêtre 10 s) : au plus 1 ligne/10 s, état mmap partagé entre workers,
+occurrences dans `suppressed=N`. Une action sans entrée dédiée retombe sur la
+règle par défaut de son niveau (`INFO` : 60 s).
+
+**2. Budget du retry d'appariement.** `count` × `sleep_ms` = 5 × 20 ms de
+`nanosleep` par orpheline sérialisait le worker dans le hot-path NFQ
+(~10 réponses/s, vecteur de DoS local). Budget de sommeil par seconde et par
+worker (`ipc.match_retry.budget_ms`, défaut **100 ms**, état `_retry_budget`,
+arithmétique pure dans `plan_retry_tries`) : budget épuisé → retry sauté (aucun
+`sleep`, `budget_skipped=true`). Le cas nominal (un réordonnancement) consomme
+20 ms et reste servi. Le budget n'est pas partagé entre workers (état Lua local
+au processus), contrairement au limiteur de logs.
+
+**3. Réutilisation de clé `pending` (`overwrite_pending`).** L'ancien
+first-wins conservait le verdict de la première question même en cas de
+divergence : Q1 autorisée puis Q2 refusée (même txid/IP/port/résolveur)
+faisait traiter la réponse à Q2 avec `refused=false` → contournement du filtre.
+Une question refusée est bien acheminée (`write_refused_msg` +
+`NF_ACCEPT` pour laisser revenir la réponse, `set_pending` pour tout message
+drainé), le scénario est donc atteignable. Politique retenue :
+
+- cas identique (retransmission UDP) : first-wins inchangé, seul `expire` est
+  rafraîchi (jalon `benchmark_ms` préservé, base de `q_to_response_ms`) ;
+- divergence : verdict le plus restrictif (**fail-closed**). Si l'une des
+  questions est refusée, l'entrée conservée est celle de la question refusée
+  (`refused`, `rule_id`, `reason`, `timeout`, `modifiers`,
+  `response_rule_ids`). Si les deux sont autorisées par des règles
+  différentes, aucun choix n'est prouvable non élargissant (hooks
+  `on_response` et injection nft appliqués à la réponse de l'autre question) :
+  l'entrée est marquée refusée (`ipc_pending_conflict`). La comparaison couvre
+  aussi `modifiers` et `response_rule_ids` ; trace `WARN`
+  `ipc_pending_overwrite_divergent` (`resolution`).
+
+**Limite connue :** `qname`/`qtype` ne sont pas transmis par l'IPC (format
+A4) ; une divergence de *contenu* de question à métadonnées identiques reste
+indétectable (elle se comporte comme une retransmission).
+
+**Tests :** `tests/unit/ipc/ipc_spec.moon` (Q1 autorisée + Q2 refusée, Q1
+refusée + Q2 autorisée, deux règles différentes, retransmission identique),
+`tests/unit/worker_responses_spec.moon` (`plan_retry_tries`, rafale bornée,
+cas nominal, `build_orphan_fields`), `tests/unit/log_spec.moon` (trois entrées
+`RL_CONFIG`, y compris action préfixée par le worker). Les deux cas de
+divergence échouaient sur l'ancien first-wins (`refused=false`). `make test` :
+**2613 successes / 0 failures / 0 errors**. `make test-e2e` non lancé (chaîne
+de validation sur les VMs du homelab).
