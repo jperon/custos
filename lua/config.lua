@@ -8,6 +8,7 @@ local CAPTIVE_PROBES = {
   "msftconnecttest.com",
   "msftncsi.com",
   "detectportal.firefox.com",
+  "firefox-portal-detection.com",
   "connectivity-check.ubuntu.com",
   "networkcheck.kde.org"
 }

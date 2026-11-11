@@ -738,7 +738,7 @@ The **default rules** (`filter.default_rules`, see `src/config.moon`) already in
 - Google/Android: `connectivitycheck.gstatic.com`, `connectivitycheck.android.com`, `connectivitycheck.google.com`, `clients3.google.com`
 - Apple: `captive.apple.com`
 - **Microsoft NCSI**: `msftconnecttest.com`, `msftncsi.com`
-- Firefox: `detectportal.firefox.com` — Ubuntu: `connectivity-check.ubuntu.com` — KDE: `networkcheck.kde.org`
+- Firefox: `detectportal.firefox.com` (anciennes versions) et `firefox-portal-detection.com` (Firefox ≥ 155, sonde `generate_204`) — Ubuntu: `connectivity-check.ubuntu.com` — KDE: `networkcheck.kde.org`
 
 **Suffix matching** covers all subdomains: `msftncsi.com` covers the DNS probe `dns.msftncsi.com` (NCSI checks that it resolves to `131.107.255.255`; `dnsonly` leaves the upstream response intact) and the legacy HTTP probe `www.msftncsi.com`; `msftconnecttest.com` covers `www.` and `ipv6.msftconnecttest.com` (active HTTP probe Windows 10/11).
 

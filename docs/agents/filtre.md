@@ -98,6 +98,39 @@ suit la même convention sans toucher à `nft_compiler`.
 
 ---
 
+## Sondes de portail captif (`CAPTIVE_PROBES`)
+
+Les règles par défaut `allow` (client authentifié) et `dnsonly` (client
+anonyme) s'appuient sur la liste `CAPTIVE_PROBES` de `src/config.moon`. Le
+match `to_domains` est un match par suffixe : un nom enregistrable couvre tous
+ses sous-domaines.
+
+**Symptôme** (constaté le 2026-11-11 en pré-prod avec Firefox 155.0.1 sur
+Ubuntu 24.04) : Firefox ne voit plus le portail captif. Les logs du filtre
+montrent toutes les 10 s un `BLOCK rule=r_refus_a_priori
+qname=firefox-portal-detection.com qtype=A` (et `AAAA`), aucune requête HTTP
+n'est émise vers le port 80 et le 302 du portail n'est donc jamais reçu.
+
+**Cause** : depuis Firefox 155, `greprefs.js` définit
+`captivedetect.canonicalURL` à
+`http://firefox-portal-detection.com/generate_204` au lieu de
+`http://detectportal.firefox.com/canonical.html`. Le nom, absent de
+`CAPTIVE_PROBES`, tombait dans le refus à priori : la résolution échouait et
+Firefox n'avait plus d'adresse à joindre pour sa sonde HTTP.
+
+**Vérifier la sonde d'une version de Firefox** :
+
+```sh
+unzip -p /usr/lib/firefox/omni.ja greprefs.js | grep captivedetect
+```
+
+Cette commande affiche la valeur de `captivedetect.canonicalURL` (et des autres
+préférences `captivedetect.*`) sans extraire l'archive. `CAPTIVE_PROBES` doit
+contenir le nom enregistrable de cette URL, et conserver les anciens noms pour
+les versions antérieures.
+
+---
+
 ## Anti-rafale des redirections captives (`src/worker_captive.moon`)
 
 Chaque SYN/80 bloqué déclenche une redirection HTTP 302 forgée vers le portail
