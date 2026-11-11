@@ -51,6 +51,7 @@ action_options_of = (entry) ->
   return nil unless name and type(entry) == "table"
   entry[name]
 
+log = require "log"
 rule_id = require "filter.rule_id"
 
 sanitize_ascii = rule_id.sanitize_ascii
@@ -70,16 +71,19 @@ unique_rule_id = (rule, idx, used) ->
 
 --- Lit un fichier texte ligne par ligne (ignore vides et commentaires #).
 -- @tparam string filepath Chemin du fichier
--- @treturn table Liste des lignes valides
+-- @treturn table Liste des lignes valides (vide si absent ou vide)
+-- @treturn string|nil nil si des lignes sont valides, "missing" si le fichier
+--   n'existe pas, "empty" s'il existe mais ne contient aucune ligne valide.
 read_lines = (filepath) ->
   lines = {}
   f = io.open filepath, "r"
-  return lines unless f
+  return lines, "missing" unless f
   for line in f\lines!
     line = line\match "^%s*(.-)%s*$"
     lines[#lines + 1] = line unless line == "" or line\sub(1, 1) == "#"
   f\close!
-  lines
+  return lines, nil if #lines > 0
+  return lines, "empty"
 
 --- Enveloppe un module factory brut dans l'interface standard enrichie.
 -- @tparam function factory_outer Factory brute du module (cfg) -> (args) -> result
@@ -158,27 +162,41 @@ make_plural = (base_factory) ->
 -- from_xxx_list "name" lit {lists_dir}/{type_name}/{name}.txt
 -- @tparam function base_factory Factory enrichie (cfg) -> (args) -> enriched_obj
 -- @tparam string type_name Sous-répertoire du type (ex: "net", "user")
+-- @tparam string|nil cond_name Nom de la condition pour les logs (ex: "from_net_list")
 -- @treturn function Factory (cfg) -> (list_name) -> enriched_obj
-make_from_file = (base_factory, type_name) ->
+make_from_file = (base_factory, type_name, cond_name=nil) ->
   (cfg) ->
     (list_name) ->
       lists_dir = (cfg.lists_dir) or
                   (cfg.filter and cfg.filter.lists_dir) or
                   "/tmp/custos/lists"
       filepath = "#{lists_dir}/#{type_name}/#{list_name}.txt"
-      items = read_lines filepath
+      items, status = read_lines filepath
+      if status
+        -- Un seul avertissement à la CONSTRUCTION (jamais dans eval, chaud).
+        -- Lecture de log_warn au call-site : certains specs remplacent le stub
+        -- `log` par une table partielle (sans log_warn) — on n'y casse rien.
+        warn = log.log_warn
+        if warn
+          warn -> {
+            action: status == "missing" and "filter_list_missing" or "filter_list_empty"
+            condition: cond_name or "#{type_name}_list"
+            list: list_name
+            path: filepath
+          }
       make_plural(base_factory)(cfg)(items)
 
 --- Génère une condition depuis plusieurs fichiers texte (OR sur les fichiers).
 -- from_xxx_lists {"name1", "name2"} lit plusieurs fichiers et fait un OR.
 -- @tparam function base_factory Factory enrichie (cfg) -> (args) -> enriched_obj
 -- @tparam string type_name Sous-répertoire du type (ex: "net", "user")
+-- @tparam string|nil cond_name Nom de la condition pour les logs (ex: "from_net_lists")
 -- @treturn function Factory (cfg) -> (names) -> enriched_obj
-make_from_files = (base_factory, type_name) ->
+make_from_files = (base_factory, type_name, cond_name=nil) ->
   (cfg) ->
     (names) ->
       names = {names} unless type(names) == "table"
-      file_factory = make_from_file(base_factory, type_name)(cfg)
+      file_factory = make_from_file(base_factory, type_name, cond_name)(cfg)
       conds = [file_factory(name) for name in *names]
       {
         capabilities: { worker: true, nft: false, nft_dynamic: false }
@@ -217,7 +235,7 @@ load_condition = (name) ->
     type_name = base_name\match "^[^_]+_(.+)$"
     base_ok, base_mod = pcall require, "filter.conditions.#{base_name}"
     if base_ok and type_name
-      return make_from_files (wrap_factory extract_factory base_mod), type_name
+      return make_from_files (wrap_factory extract_factory base_mod), type_name, name
 
   -- 3. Suffixe _list : "from_net_list" → base "from_net", type "net"
   base_name = name\match "^(.+)_list$"
@@ -225,7 +243,7 @@ load_condition = (name) ->
     type_name = base_name\match "^[^_]+_(.+)$"
     base_ok, base_mod = pcall require, "filter.conditions.#{base_name}"
     if base_ok and type_name
-      return make_from_file (wrap_factory extract_factory base_mod), type_name
+      return make_from_file (wrap_factory extract_factory base_mod), type_name, name
 
   -- 4. Suffixe s : "from_nets" → base "from_net"
   base_name = name\match "^(.+)s$"

@@ -1,6 +1,7 @@
 local ffi = require("ffi")
 local libc
 libc = require("ffi_defs").libc
+local log = require("log")
 local bin48 = nil
 local _xxh64 = nil
 local _ensure_libs
@@ -69,17 +70,17 @@ load_list = function(path)
   if path:match("%.bin$") then
     local fd = libc.open(path, O_RDONLY, 0)
     if fd < 0 then
-      return nil, "Cannot open " .. tostring(path)
+      return nil, "Cannot open " .. tostring(path), "missing"
     end
     local size = tonumber(libc.lseek(fd, 0, SEEK_END))
     if size <= 0 then
       libc.close(fd)
-      return nil, "Empty bin file: " .. tostring(path)
+      return nil, "Empty bin file: " .. tostring(path), "empty"
     end
     local n = math.floor(size / 6)
     if n == 0 then
       libc.close(fd)
-      return nil, "Empty bin file: " .. tostring(path)
+      return nil, "Empty bin file: " .. tostring(path), "empty"
     end
     local ptr = libc.mmap(nil, size, PROT_READ, MAP_SHARED, fd, 0)
     libc.close(fd)
@@ -95,7 +96,7 @@ load_list = function(path)
   else
     local fh = io.open(path, "rb")
     if not (fh) then
-      return nil, "Cannot open " .. tostring(path)
+      return nil, "Cannot open " .. tostring(path), "missing"
     end
     local data = fh:read("*a")
     fh:close()
@@ -110,7 +111,7 @@ load_list = function(path)
     end
     local payload, n = bin48.pack_domains(domains)
     if n == 0 then
-      return nil, "Empty domains file: " .. tostring(path)
+      return nil, "Empty domains file: " .. tostring(path), "empty"
     end
     _mappings[#_mappings + 1] = payload
     local arr = ffi.cast("const uint8_t*", payload)
@@ -174,7 +175,10 @@ local _schema = {
 }
 local _factory
 _factory = function(cfg)
-  return function(listname)
+  return function(listname, condition_name)
+    if condition_name == nil then
+      condition_name = "to_domainlist"
+    end
     if not (cfg.domainlists_dir) then
       return {
         capabilities = {
@@ -200,12 +204,43 @@ _factory = function(cfg)
       }
     end
     local base = (cfg.domainlists_dir:gsub("/*$", "")) .. "/" .. listname
-    local path = base .. ".bin"
-    local arr, n_or_err = load_list(path)
-    if not (arr) then
-      arr, n_or_err = load_list(base .. ".domains")
+    local bin_path = base .. ".bin"
+    local domains_path = base .. ".domains"
+    local empty_path = nil
+    local arr, n_or_err, err_kind = load_list(bin_path)
+    if err_kind == "empty" then
+      empty_path = bin_path
     end
     if not (arr) then
+      arr, n_or_err, err_kind = load_list(domains_path)
+      if err_kind == "empty" and not empty_path then
+        empty_path = domains_path
+      end
+    end
+    if not (arr) then
+      local warn = log.log_warn
+      if warn then
+        if empty_path then
+          warn(function()
+            return {
+              action = "filter_list_empty",
+              condition = condition_name,
+              list = listname,
+              path = empty_path
+            }
+          end)
+        elseif err_kind == "missing" then
+          warn(function()
+            return {
+              action = "filter_list_missing",
+              condition = condition_name,
+              list = listname,
+              path = bin_path,
+              alt_path = domains_path
+            }
+          end)
+        end
+      end
       return {
         capabilities = {
           worker = true,

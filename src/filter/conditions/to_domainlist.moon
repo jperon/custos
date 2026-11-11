@@ -12,6 +12,7 @@
 
 ffi  = require "ffi"
 { :libc } = require "ffi_defs"
+log  = require "log"
 
 -- Modules hot-path mémoïsés (évite un require par lookup) : bin48
 -- (bsearch/truncate) et xxhash (hachage). On les résout une seule fois, à la
@@ -93,6 +94,8 @@ _evict_if_needed = ->
 -- @tparam string path Chemin vers le fichier
 -- @treturn cdata, number Pointeur uint8_t* (enregistrements 6 octets) et
 --   nombre d'entrées, ou nil, msg
+-- @treturn string|nil "missing" si le fichier est absent, "empty" s'il existe
+--   mais ne contient aucune entrée, nil pour les autres échecs (ex. libxxhash).
 local load_list
 load_list = (path) ->
   return nil, "ffi_xxhash non disponible" unless _ensure_libs!
@@ -103,15 +106,15 @@ load_list = (path) ->
     -- partagée entre tous les workers forkés (lecture seule → jamais dupliquée).
     -- Format : N × 6 octets (xxh64 tronqué 48 bits), little-endian, trié.
     fd = libc.open path, O_RDONLY, 0
-    return nil, "Cannot open #{path}" if fd < 0
+    return nil, "Cannot open #{path}", "missing" if fd < 0
     size = tonumber libc.lseek fd, 0, SEEK_END
     if size <= 0
       libc.close fd
-      return nil, "Empty bin file: #{path}"
+      return nil, "Empty bin file: #{path}", "empty"
     n = math.floor size / 6
     if n == 0
       libc.close fd
-      return nil, "Empty bin file: #{path}"
+      return nil, "Empty bin file: #{path}", "empty"
     ptr = libc.mmap nil, size, PROT_READ, MAP_SHARED, fd, 0
     libc.close fd  -- le mapping survit au close
     if ptr == MAP_FAILED
@@ -124,7 +127,7 @@ load_list = (path) ->
   else
     -- Fichier texte : un domaine par ligne, empaqueté en mémoire au format 48 bits.
     fh = io.open path, "rb"
-    return nil, "Cannot open #{path}" unless fh
+    return nil, "Cannot open #{path}", "missing" unless fh
     data = fh\read "*a"
     fh\close!
     domains = {}
@@ -135,7 +138,7 @@ load_list = (path) ->
       domains[#domains + 1] = domain if domain ~= ""
 
     payload, n = bin48.pack_domains domains
-    return nil, "Empty domains file: #{path}" if n == 0
+    return nil, "Empty domains file: #{path}", "empty" if n == 0
 
     -- Conserver le buffer vivant pour la durée du process (comme les mappings).
     _mappings[#_mappings + 1] = payload
@@ -217,7 +220,7 @@ _schema = {
 }
 
 _factory = (cfg) ->
-  (listname) ->
+  (listname, condition_name="to_domainlist") ->
     unless cfg.domainlists_dir
       return {
         capabilities: { worker: true, nft: false, nft_dynamic: false }
@@ -232,13 +235,41 @@ _factory = (cfg) ->
       }
     
     base = (cfg.domainlists_dir\gsub "/*$", "") .. "/" .. listname
-    path = base .. ".bin"
+    bin_path = base .. ".bin"
+    domains_path = base .. ".domains"
 
-    arr, n_or_err = load_list path
+    empty_path = nil
+    arr, n_or_err, err_kind = load_list bin_path
+    if err_kind == "empty"
+      empty_path = bin_path
     -- Fallback : si le .bin est absent, essayer un fichier texte (.domains)
     unless arr
-      arr, n_or_err = load_list base .. ".domains"
+      arr, n_or_err, err_kind = load_list domains_path
+      if err_kind == "empty" and not empty_path
+        empty_path = domains_path
     unless arr
+      -- Un seul avertissement à la CONSTRUCTION (jamais dans eval, chaud).
+      -- « présent mais vide » (filet de sécurité) et « absent » sont distincts ;
+      -- un échec sans rapport avec le fichier (libxxhash absente) ne logue rien.
+      -- Lecture de log_warn au call-site : certains specs remplacent le stub
+      -- `log` par une table partielle (sans log_warn) — on n'y casse rien.
+      warn = log.log_warn
+      if warn
+        if empty_path
+          warn -> {
+            action: "filter_list_empty"
+            condition: condition_name
+            list: listname
+            path: empty_path
+          }
+        elseif err_kind == "missing"
+          warn -> {
+            action: "filter_list_missing"
+            condition: condition_name
+            list: listname
+            path: bin_path
+            alt_path: domains_path
+          }
       return {
         capabilities: { worker: true, nft: false, nft_dynamic: false }
         eval: (req) -> false, "Cannot load domain list '#{listname}': #{n_or_err}"

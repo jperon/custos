@@ -163,8 +163,8 @@ do
       if not (type(inner) == "function") then
         return inner
       end
-      return function(args)
-        return make_callable(inner(args))
+      return function(...)
+        return make_callable((inner(...)))
       end
     end
   end

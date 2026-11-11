@@ -20,7 +20,7 @@ _factory = (cfg) ->
     
     list_conds = {}
     for _, name in ipairs lists
-      list_conds[#list_conds + 1] = to_domainlist_factory(cfg)(name)
+      list_conds[#list_conds + 1] = to_domainlist_factory(cfg)(name, "to_domainlists")
       
     {
       capabilities: { worker: true, nft: false, nft_dynamic: false }
