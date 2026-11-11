@@ -109,6 +109,14 @@ describe "log", ->
       assert.are.equal -1, log.check_rl "INFO", f1, 6101
       assert.are.equal -1, log.check_rl "INFO", f2, 6101
 
+    it "family (IPv4 vs IPv6) est une identité → deux événements", ->
+      f1 = { action: "ident_family", family: "ipv4" }
+      f2 = { action: "ident_family", family: "ipv6" }
+      assert.are.equal 0,  log.check_rl "INFO", f1, 6150
+      assert.are.equal 0,  log.check_rl "INFO", f2, 6150
+      assert.are.equal -1, log.check_rl "INFO", f1, 6151
+      assert.are.equal -1, log.check_rl "INFO", f2, 6151
+
     it "champ inconnu (non classé) traité comme identité", ->
       f1 = { action: "ident_inconnu", champ_inconnu_xyz: "a" }
       f2 = { action: "ident_inconnu", champ_inconnu_xyz: "b" }

@@ -196,7 +196,7 @@ règle par défaut **du niveau**, qui s'applique même quand `action` est prése
 interface, set, règle, hôte, chemin, code d'erreur…) ou `RL_VOLATILE_KEYS`
 (varie à chaque occurrence sans changer la nature du message : `pid`, `txid`,
 descripteurs, port source, séquence, durées, compteurs, tailles, horodatages,
-texte libre — `status`, `mode`, `detail`, `family`…). L'empreinte par défaut
+texte libre — `detail`, `msg`…). L'empreinte par défaut
 retient **tous les champs présents sauf les volatils** ; un champ inconnu est
 traité comme une identité (mieux vaut une ligne en trop qu'une information
 perdue). Le test `tests/unit/log_fields_spec.moon` (outil

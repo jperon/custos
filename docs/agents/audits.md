@@ -2127,6 +2127,15 @@ les noms de champs des tables littérales de `src/**/*.moon` ;
 IDENTITÉ ni VOLATIL (vérifié : retirer `nft_outcome` du classement produit
 `unclassified = { "nft_outcome" }`).
 
+Revue de classement : `family` (IPv4/IPv6 — `src/lib/socket.moon:265,388,413,417,424`,
+`src/worker_sip.moon:296`), `mode` (`strict-443`/`permissive` —
+`src/worker_tls.moon:1103`), `status` (état d'écriture ou catégorie d'échec de
+parsing — `src/auth/cert_files.moon:112`, `src/worker_questions.moon:260`) et
+`new` (nouvelle heure de `hour_change` — `src/worker_events.moon:409`) sont des
+**identités**, pas des volatils : ils distinguent deux événements. Aucun de ces
+noms ne porte une valeur qui change à chaque occurrence. Test :
+`tests/unit/log_spec.moon` (families IPv4/IPv6 → deux lignes).
+
 **Événements jamais limités.** Ajouts à `RL_NEVER_LIMIT` : `server_login_success`
 (`src/auth/handlers.moon:140`), `server_password_changed` (`:427`),
 `server_bye_grace` (`:276`), `server_ping_session_invalidated` (`:221`),
