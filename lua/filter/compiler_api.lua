@@ -491,6 +491,7 @@ return {
   unique_rule_id = unique_rule_id,
   load_condition = load_condition,
   load_action = load_action,
+  make_plural = make_plural,
   get_condition_schema = get_condition_schema,
   get_action_schema = get_action_schema,
   create_net_condition = create_net_condition,

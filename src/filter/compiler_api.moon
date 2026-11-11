@@ -374,6 +374,7 @@ get_action_schema = (name) ->
   :unique_rule_id
   :load_condition
   :load_action
+  :make_plural
   :get_condition_schema
   :get_action_schema
   :create_net_condition

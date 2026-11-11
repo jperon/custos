@@ -4,7 +4,7 @@ local _schema = {
   description = "Requête vers un CIDR IPv4/IPv6 de destination (support nft natif)",
   category = "destination",
   arg_type = "string",
-  arg_hint = "ex: 10.0.0.0/8"
+  arg_hint = "ex: 10.0.0.0/8 ou alias de filter.nets"
 }
 local _factory
 _factory = function(cfg)
@@ -37,9 +37,10 @@ _factory = function(cfg)
         end
       }
     end
-    return net_match.build_cidr_condition({
+    return net_match.build_net_arg_condition(cfg, {
       prop = "dst_ip",
       nft_dir = "daddr",
+      cond_name = "to_net",
       net_cidr = net_cidr
     })
   end

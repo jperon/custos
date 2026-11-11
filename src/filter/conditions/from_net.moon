@@ -9,7 +9,7 @@ _schema = {
   description: "Requête provenant d'un CIDR IPv4 ou IPv6 (support nft natif)"
   category:    "source"
   arg_type:    "string"
-  arg_hint:    "ex: 192.168.0.0/24"
+  arg_hint:    "ex: 192.168.0.0/24 ou alias de filter.nets"
 }
 
 _factory = (cfg) ->
@@ -32,10 +32,11 @@ _factory = (cfg) ->
           ip == nil, "src_ip absent"
       }
 
-    net_match.build_cidr_condition {
+    net_match.build_net_arg_condition(cfg, {
       prop: "src_ip"
       nft_dir: "saddr"
+      cond_name: "from_net"
       :net_cidr
-    }
+    })
 
 { schema: _schema, factory: _factory }
