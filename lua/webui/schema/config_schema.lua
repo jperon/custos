@@ -471,7 +471,8 @@ return {
     },
     flush_interval = {
       type = "integer",
-      label = "Intervalle vidange (s)",
+      label = "Intervalle instantanés (s)",
+      hint = "écriture JSON par worker, page /admin/metrics",
       default = 60
     },
     max_rules = {

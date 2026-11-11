@@ -21,6 +21,9 @@ nav_html = function()
       href = "/admin/config/verdicts"
     }, "Verdicts"),
     H.a({
+      href = "/admin/metrics"
+    }, "Métriques"),
+    H.a({
       href = "/admin/config/"
     }, "Configuration"),
     H.a({

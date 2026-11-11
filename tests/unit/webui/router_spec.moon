@@ -106,6 +106,25 @@ describe "webui/router.dispatch", ->
     status, _, _ = dispatch make_req("GET", "/admin/system/status"), make_state!
     assert.equals 200, status
 
+  -- ── Métriques ────────────────────────────────────────────────────────────
+
+  it "GET /admin/metrics → 200", ->
+    dispatch = get_dispatch!
+    status, _, body = dispatch make_req("GET", "/admin/metrics"), make_state!
+    assert.equals 200, status
+    assert.truthy body\find("Métriques", 1, true)
+
+  it "GET /admin/metrics sans session → 302 vers /login", ->
+    dispatch = get_dispatch!
+    status, hdrs, _ = dispatch { method: "GET", path: "/admin/metrics", headers: {}, body: "" }, make_state!
+    assert.equals 302, status
+    assert.equals "/login", hdrs["Location"]
+
+  it "GET /admin/metrics refusé (403) si la session n'est pas admin", ->
+    dispatch = get_dispatch!
+    status, _, _ = dispatch make_req("GET", "/admin/metrics", "stranger"), make_state { "alice" }
+    assert.equals 403, status
+
   -- NOTE: POST /admin/system/reload envoie SIGHUP au processus parent —
   -- ce test ne peut pas s'exécuter en unitaire sans tuer le runner de tests.
   -- Il est couvert par les tests E2E homelab.

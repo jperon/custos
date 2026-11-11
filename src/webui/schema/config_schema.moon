@@ -144,7 +144,7 @@
   metrics: {
     _label: "Métriques"
     enabled:        { type: "boolean", label: "Activer métriques",       default: true }
-    flush_interval: { type: "integer", label: "Intervalle vidange (s)",  default: 60 }
+    flush_interval: { type: "integer", label: "Intervalle instantanés (s)", hint: "écriture JSON par worker, page /admin/metrics", default: 60 }
     max_rules:      { type: "integer", label: "Max règles tracées",      default: 1000 }
   }
 
