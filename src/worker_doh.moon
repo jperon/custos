@@ -511,10 +511,9 @@ handle_doh_client = (args) ->
 
     selected_alpn = if tls_client.selected_alpn then tls_client\selected_alpn! else nil
     log_debug -> { action: "tls_handshake_ok", peer: peer_ip, attempts: attempts, alpn: selected_alpn or "none" }
-    if selected_alpn == "h2"
-      log_warn -> { action: "http2_not_supported", peer: peer_ip }
-      tls_client\close!
-      return
+    -- h2 négocié : le client envoie la préface PRI, que read_request lit comme
+    -- une ligne de requête ; la branche `req.method == "PRI"` ci-dessous route
+    -- vers handle_h2. Aucune fermeture anticipée : c'est le chemin HTTP/2 réel.
     peer_mac = get_mac peer_ip
     peer_vlan = get_vlan peer_ip
     log_debug -> { action: "mac_lookup", peer: peer_ip, mac: peer_mac or "unknown", vlan: peer_vlan or "unknown" }

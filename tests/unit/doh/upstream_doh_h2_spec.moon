@@ -182,20 +182,24 @@ describe "doh.upstream_doh (HTTP/2)", ->
     assert.is_nil err
     assert.equals dns_resp, body
 
-  it "WINDOW_UPDATE émis pour les DATA reçues", ->
+  it "WINDOW_UPDATE émis pour les DATA intermédiaires, pas la finale", ->
     bytes = table.concat {
       frame_bytes h2f.H2_FRAME_SETTINGS, 0, 0, ""
       frame_bytes h2f.H2_FRAME_HEADERS, h2f.H2_FLAG_END_HEADERS, 1, status_block!
-      frame_bytes h2f.H2_FRAME_DATA, h2f.H2_FLAG_END_STREAM, 1, dns_resp
+      frame_bytes h2f.H2_FRAME_DATA, 0, 1, dns_resp\sub(1, 6)
+      frame_bytes h2f.H2_FRAME_DATA, h2f.H2_FLAG_END_STREAM, 1, dns_resp\sub(7)
     }
     tls = make_h2_tls bytes, "h2"
     mod = load_mod tls
     h = mod.new_client "https://1.1.1.1/dns-query"
-    mod.query h, dns_req
-    found = false
+    body, err = mod.query h, dns_req
+    assert.is_nil err
+    assert.equals dns_resp, body
+    updates = 0
     for fr in *parse_client_frames tls._sent!
-      found = true if fr.ftype == h2f.H2_FRAME_WINDOW_UPDATE
-    assert.is_true found
+      updates += 1 if fr.ftype == h2f.H2_FRAME_WINDOW_UPDATE
+    -- Connexion + flux pour la DATA intermédiaire ; aucune pour l'END_STREAM.
+    assert.equals 2, updates
 
   it "PING serveur → PING ACK renvoyé, réponse traitée", ->
     ping = "abcdefgh"

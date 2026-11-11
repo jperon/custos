@@ -524,18 +524,16 @@ query_h2 = function(client, dns_raw, req_txid)
         return h2_fail(client, "upstream_doh: body_too_large")
       end
       body_chunks[#body_chunks + 1] = content
-      if #payload > 0 then
-        ok, err = h2f.h2_window_update(client.tls, 0, #payload)
-        if not (ok) then
-          return h2_fail(client, "upstream_doh: " .. tostring(err or 'window_update_failed'))
-        end
-        ok, err = h2f.h2_window_update(client.tls, sid, #payload)
-        if not (ok) then
-          return h2_fail(client, "upstream_doh: " .. tostring(err or 'window_update_failed'))
-        end
-      end
       if bit.band(fflags, h2f.H2_FLAG_END_STREAM) ~= 0 then
         end_stream = true
+      end
+      if #payload > 0 and not end_stream then
+        pcall(function()
+          return h2f.h2_window_update(client.tls, 0, #payload)
+        end)
+        pcall(function()
+          return h2f.h2_window_update(client.tls, sid, #payload)
+        end)
       end
     elseif ftype == h2f.H2_FRAME_RST_STREAM then
       return h2_fail(client, "upstream_doh: h2_rst_stream")

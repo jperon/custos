@@ -434,14 +434,14 @@ query_h2 = (client, dns_raw, req_txid) ->
       body_len += #content
       return h2_fail client, "upstream_doh: body_too_large" if body_len > MAX_DNS_BODY
       body_chunks[#body_chunks + 1] = content
-      -- Rend au pair la fenêtre consommée (DATA est contrôlé en flux, padding inclus).
-      if #payload > 0
-        ok, err = h2f.h2_window_update client.tls, 0, #payload
-        return h2_fail client, "upstream_doh: #{err or 'window_update_failed'}" unless ok
-        ok, err = h2f.h2_window_update client.tls, sid, #payload
-        return h2_fail client, "upstream_doh: #{err or 'window_update_failed'}" unless ok
       if bit.band(fflags, h2f.H2_FLAG_END_STREAM) != 0
         end_stream = true
+      -- Rend au pair la fenêtre consommée, uniquement si d'autres DATA sont
+      -- attendues (RFC 7540 §6.9 : inutile sur un flux terminé). Un échec
+      -- d'écriture ici n'invalide pas une réponse déjà complète.
+      if #payload > 0 and not end_stream
+        pcall -> h2f.h2_window_update client.tls, 0, #payload
+        pcall -> h2f.h2_window_update client.tls, sid, #payload
 
     elseif ftype == h2f.H2_FRAME_RST_STREAM
       return h2_fail client, "upstream_doh: h2_rst_stream"
