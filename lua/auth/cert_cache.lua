@@ -3,6 +3,13 @@ do
   local _obj_0 = require("log")
   log_debug, log_warn = _obj_0.log_debug, _obj_0.log_warn
 end
+local with_lock
+with_lock = require("lib.filelock").with_lock
+local write_pem_atomic, read_file
+do
+  local _obj_0 = require("auth.cert_files")
+  write_pem_atomic, read_file = _obj_0.write_pem_atomic, _obj_0.read_file
+end
 local persist_index
 persist_index = function(index_path, index_data)
   local fh = io.open(index_path, "w")
@@ -97,7 +104,7 @@ load_persistent_index = function(index_path)
   return index
 end
 local create_cache
-create_cache = function(max_size, ttl, cert_dir)
+create_cache = function(max_size, ttl, cert_dir, max_names)
   if max_size == nil then
     max_size = 500
   end
@@ -107,8 +114,12 @@ create_cache = function(max_size, ttl, cert_dir)
   if cert_dir == nil then
     cert_dir = "tmp/certs"
   end
+  if max_names == nil then
+    max_names = nil
+  end
   max_size = math.max(1, tonumber(max_size) or 500)
   ttl = math.max(60, tonumber(ttl) or 7776000)
+  max_names = math.max(1, tonumber(max_names) or max_size)
   cert_dir = cert_dir or "tmp/certs"
   local index_path = "tmp/cert_cache_index.lua"
   os.execute("mkdir -p " .. tostring(cert_dir) .. " 2>/dev/null")
@@ -120,33 +131,36 @@ create_cache = function(max_size, ttl, cert_dir)
     local hostname_lower = hostname:lower()
     local cert_file = tostring(cert_dir) .. "/" .. tostring(hostname_lower) .. ".crt"
     local key_file = tostring(cert_dir) .. "/" .. tostring(hostname_lower) .. ".key"
-    local cert_fh, cert_err = io.open(cert_file, "w")
-    if not (cert_fh) then
-      log_warn(function()
-        return {
-          action = "cert_cache_disk_write_failed",
-          file = cert_file,
-          reason = cert_err or "io.open failed"
-        }
+    local ok_pair = pcall(function()
+      return with_lock(tostring(cert_file) .. ".lock", function()
+        local ok_cert, cert_err = write_pem_atomic(cert_file, cert_pem)
+        if not (ok_cert) then
+          log_warn(function()
+            return {
+              action = "cert_cache_disk_write_failed",
+              file = cert_file,
+              reason = cert_err or "write failed"
+            }
+          end)
+          error(cert_err or "write failed")
+        end
+        local ok_key, key_err = write_pem_atomic(key_file, key_pem)
+        if not (ok_key) then
+          log_warn(function()
+            return {
+              action = "cert_cache_disk_write_failed",
+              file = key_file,
+              reason = key_err or "write failed"
+            }
+          end)
+          pcall(os.remove, cert_file)
+          return error(key_err or "write failed")
+        end
       end)
+    end)
+    if not (ok_pair) then
       return false
     end
-    cert_fh:write(cert_pem)
-    cert_fh:close()
-    local key_fh, key_err = io.open(key_file, "w")
-    if not (key_fh) then
-      log_warn(function()
-        return {
-          action = "cert_cache_disk_write_failed",
-          file = key_file,
-          reason = key_err or "io.open failed"
-        }
-      end)
-      os.remove(cert_file)
-      return false
-    end
-    key_fh:write(key_pem)
-    key_fh:close()
     log_debug(function()
       return {
         action = "cert_cache_disk_saved",
@@ -160,16 +174,15 @@ create_cache = function(max_size, ttl, cert_dir)
     local hostname_lower = hostname:lower()
     local cert_file = tostring(cert_dir) .. "/" .. tostring(hostname_lower) .. ".crt"
     local key_file = tostring(cert_dir) .. "/" .. tostring(hostname_lower) .. ".key"
-    local cert_fh = io.open(cert_file, "r")
-    local key_fh = io.open(key_file, "r")
-    if not (cert_fh and key_fh) then
-      return nil, nil
-    end
-    local cert_pem = cert_fh:read("*a")
-    local key_pem = key_fh:read("*a")
-    cert_fh:close()
-    key_fh:close()
-    if not (cert_pem and key_pem and #cert_pem > 0 and #key_pem > 0) then
+    local cert_pem = nil
+    local key_pem = nil
+    local ok_pair = pcall(function()
+      return with_lock(tostring(cert_file) .. ".lock", function()
+        cert_pem = read_file(cert_file)
+        key_pem = read_file(key_file)
+      end)
+    end)
+    if not (ok_pair and cert_pem and key_pem and #cert_pem > 0 and #key_pem > 0) then
       return nil, nil
     end
     log_debug(function()
@@ -410,12 +423,29 @@ create_cache = function(max_size, ttl, cert_dir)
     end
     return removed_count
   end
+  local can_store
+  can_store = function(hostname)
+    if not (hostname and #hostname > 0) then
+      return false
+    end
+    local hostname_lower = hostname:lower()
+    if data[hostname_lower] or persistent_index[hostname_lower] then
+      return true
+    end
+    persistent_index = load_persistent_index(index_path)
+    local count = 0
+    for _ in pairs(persistent_index) do
+      count = count + 1
+    end
+    return count < max_names
+  end
   local stats
   stats = function()
     return {
       size_ram = #lru_order,
       size_disk = #persistent_index,
       max_size = max_size,
+      max_names = max_names,
       ttl_seconds = ttl
     }
   end
@@ -438,6 +468,7 @@ create_cache = function(max_size, ttl, cert_dir)
     get = get,
     delete = delete,
     purge_expired = purge_expired,
+    can_store = can_store,
     stats = stats,
     clear = clear
   }
