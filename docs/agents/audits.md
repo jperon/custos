@@ -388,3 +388,10 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   succès (arguments transmis intacts), épuisement → `false` avec exactement
   `#add_backoff_ms` tentatives, longueur du tableau = nombre de tentatives,
   retour falsy compté comme échec. Backoffs mis à `{0,0,…}` pour ne pas dormir.
+- **T6 : `filter.rule_id` sans spec directe.** Ajout de
+  `tests/unit/filter/rule_id_spec.moon` : `sanitize_ascii` (accents/ligatures,
+  espaces/tabulations, guillemets/antislash, octets non ASCII, nil),
+  `sanitize_id` (minuscules, tirets, fusion des séparateurs, troncature 128),
+  `generate` (rule_id > description > index, valeurs blanches) et
+  `generate_unique` (suffixes `_2`, `_3`, marquage de `used_ids`, absence de
+  table).
