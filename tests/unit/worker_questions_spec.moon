@@ -25,7 +25,7 @@ for decl in *{
 
 STUB_KEYS = {
   "ffi_defs", "worker_questions", "filter", "nfq/ethernet", "nfq_loop"
-  "forge_dns", "captive_ips", "bridge_raw", "dup_query", "raw_send"
+  "forge_dns", "captive_ips", "bridge_raw", "dup_query", "raw_send", "metrics"
 }
 saved = {}
 
@@ -126,6 +126,12 @@ describe "worker_questions", ->
     package.loaded["bridge_raw"] = {}
     package.loaded["dup_query"] = { pick_resolver: -> nil }
     package.loaded["raw_send"] = { routable: -> false }
+    package.loaded["metrics"] = {
+      init: -> nil
+      record_verdict: -> nil
+      maybe_flush: -> nil
+      write_now: -> nil
+    }
 
     package.loaded["worker_questions"] = nil
     wq = require "worker_questions"

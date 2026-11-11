@@ -16,6 +16,10 @@ runtime_cfg = config.runtime or {}
 nft_cfg = config.nft or {}
 auth_cfg = config.auth or {}
 metrics = require "metrics"
+pidfile = require "lib.pidfile"
+-- Coût nul dans le hot-path quand les métriques sont désactivées : l'appel à
+-- metrics.maybe_flush est gardé par ce booléen local (cf. handle_question).
+metrics_on = (config.metrics or {}).enabled != false
 { :get_l2 } = require "nfq/ethernet"
 { :ip2s, :dns_types } = require "lib.packet_parsing"
 { :skip_ipv6_ext_hdrs, :new_dns_tcp_stream, :parse_dns_packet } = require "packet_utils"
@@ -227,6 +231,10 @@ aggregate_decisions = (decisions) ->
 
 -- ── Callback principal ───────────────────────────────────────────
 handle_question = (qh_ptr, nfad, pkt_id) ->
+  -- Export périodique des métriques : simple incrément/comparaison par paquet
+  -- (l'horloge n'est lue que tous les check_every paquets, cf. metrics.moon).
+  metrics.maybe_flush! if metrics_on
+
   -- ── Payload brut ─────────────────────────────────────────────
   payload_ptr = ffi.new "unsigned char*[1]"
   payload_len = libnfq.nfq_get_payload nfad, payload_ptr
@@ -397,13 +405,13 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     -- donc la ligne ici pour éviter la duplication. Les métriques restent.
     if allowed
       log_allow -> q_fields unless runtime_cfg.benchmark
-      metrics.record_verdict rule_id, "allow" if rule_id
+      metrics.record_verdict rule_id, "allow" if metrics_on and rule_id
       allow_reason  = reason
       allow_rule_id = rule_id
       allow_timeout = nft_timeout
     else
       log_block -> q_fields unless runtime_cfg.benchmark
-      metrics.record_verdict rule_id, "refuse" if rule_id
+      metrics.record_verdict rule_id, "refuse" if metrics_on and rule_id
       verdict         = NF_DROP
       block_reason    = reason
       block_rule_id   = rule_id
@@ -468,7 +476,12 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
 -- Appelé par main.moon après fork(), avec les fd des pipes IPC et filter_data.
 run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   set_action_prefix "questions_"
-  metrics.init config.metrics
+  metrics_on = (config.metrics or {}).enabled != false
+  -- Instantané propre à ce worker dans le répertoire d'exécution (à côté du
+  -- pidfile du superviseur, cf. src/doh/query.moon). Le nom inclut la file :
+  -- un worker_questions par file NFQUEUE.
+  runtime_dir = (pidfile.resolve_path runtime_cfg.pid_file)\match("^(.*)/") or "."
+  metrics.init config.metrics, { dir: runtime_dir, name: "dns-q#{queue_num}" }
   pipe_wfd      = wfd
   mac_learn_wfd = learn_wfd
   events_wfd    = ev_wfd
@@ -528,6 +541,8 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
         log_warn -> { action: "dns_validator_disabled", reason: "aucun validateur routable" }
 
   run_queue tonumber(queue_num), handle_question
+  -- Dernier instantané avant sortie (erreur de file, signal) : best-effort.
+  metrics.write_now! if metrics_on
 
 { :run,
   :skip_ipv6_ext_hdrs, :new_dns_tcp_stream,

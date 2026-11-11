@@ -1,349 +1,284 @@
-local init, record_verdict, record_cache, record_ttl, flush_metrics, get_metrics_json, get_snapshot, get_rule_metrics, clear, _get_state, _get_hit_rate, _get_ttl_stats
+local json = require("lib.json")
+local init, record_verdict, get_metrics_json, write_now, maybe_flush, file_path, clear, _get_state
 do
   local _obj_0 = require("metrics")
-  init, record_verdict, record_cache, record_ttl, flush_metrics, get_metrics_json, get_snapshot, get_rule_metrics, clear, _get_state, _get_hit_rate, _get_ttl_stats = _obj_0.init, _obj_0.record_verdict, _obj_0.record_cache, _obj_0.record_ttl, _obj_0.flush_metrics, _obj_0.get_metrics_json, _obj_0.get_snapshot, _obj_0.get_rule_metrics, _obj_0.clear, _obj_0._get_state, _obj_0._get_hit_rate, _obj_0._get_ttl_stats
+  init, record_verdict, get_metrics_json, write_now, maybe_flush, file_path, clear, _get_state = _obj_0.init, _obj_0.record_verdict, _obj_0.get_metrics_json, _obj_0.write_now, _obj_0.maybe_flush, _obj_0.file_path, _obj_0.clear, _obj_0._get_state
+end
+local DIR = "tmp/metrics_spec"
+local FILE = tostring(DIR) .. "/metrics-w0.json"
+local list_dir
+list_dir = function()
+  local h = io.popen("ls -1 '" .. tostring(DIR) .. "' 2>/dev/null")
+  local out = { }
+  for name in h:lines() do
+    out[#out + 1] = name
+  end
+  h:close()
+  return out
+end
+local clean_dir
+clean_dir = function()
+  local _list_0 = list_dir()
+  for _index_0 = 1, #_list_0 do
+    local name = _list_0[_index_0]
+    os.remove(tostring(DIR) .. "/" .. tostring(name))
+  end
+  return os.remove(DIR)
+end
+local file_exists
+file_exists = function()
+  local fh = io.open(FILE, "r")
+  if not (fh) then
+    return false
+  end
+  fh:close()
+  return true
+end
+local read_snapshot
+read_snapshot = function()
+  local fh = assert(io.open(FILE, "r"))
+  local content = fh:read("*a")
+  fh:close()
+  return json.decode(content)
 end
 return describe("metrics", function()
   before_each(function()
+    clean_dir()
+    os.execute("mkdir -p '" .. tostring(DIR) .. "'")
+    init({
+      enabled = true,
+      flush_interval = 60
+    }, { })
     return clear()
   end)
+  after_each(function()
+    init({
+      enabled = true
+    }, { })
+    clear()
+    return clean_dir()
+  end)
   describe("record_verdict", function()
-    it("initializes counter for new rule", function()
+    it("initialise le compteur d'une nouvelle règle", function()
       record_verdict("rule1", "allow")
       local state = _get_state()
       assert.is_not_nil(state["rule1"])
       return assert.equals(1, state["rule1"].allow_count)
     end)
-    it("increments allow counter", function()
-      record_verdict("rule1", "allow")
-      record_verdict("rule1", "allow")
-      record_verdict("rule1", "allow")
-      local state = _get_state()
-      return assert.equals(3, state["rule1"].allow_count)
-    end)
-    it("increments refuse counter", function()
+    it("incrémente allow/refuse/dnsonly", function()
+      for i = 1, 3 do
+        record_verdict("rule1", "allow")
+      end
       record_verdict("rule1", "refuse")
       record_verdict("rule1", "refuse")
-      local state = _get_state()
-      return assert.equals(2, state["rule1"].refuse_count)
-    end)
-    it("increments dnsonly counter", function()
-      record_verdict("rule1", "dnsonly")
-      record_verdict("rule1", "dnsonly")
       record_verdict("rule1", "dnsonly")
       local state = _get_state()
-      return assert.equals(3, state["rule1"].dnsonly_count)
+      assert.equals(3, state["rule1"].allow_count)
+      assert.equals(2, state["rule1"].refuse_count)
+      return assert.equals(1, state["rule1"].dnsonly_count)
     end)
-    it("handles multiple rules", function()
+    it("gère plusieurs règles", function()
       record_verdict("rule1", "allow")
       record_verdict("rule2", "refuse")
       record_verdict("rule1", "allow")
-      record_verdict("rule2", "dnsonly")
       local state = _get_state()
       assert.equals(2, state["rule1"].allow_count)
-      assert.equals(1, state["rule2"].refuse_count)
-      return assert.equals(1, state["rule2"].dnsonly_count)
+      return assert.equals(1, state["rule2"].refuse_count)
     end)
-    it("ignores nil rule_id", function()
+    return it("ignore nil et un verdict inconnu", function()
       record_verdict(nil, "allow")
-      local state = _get_state()
-      return assert.equals(0, #state)
-    end)
-    it("ignores nil verdict", function()
       record_verdict("rule1", nil)
-      local state = _get_state()
-      return assert.equals(0, #state)
-    end)
-    return it("ignores invalid verdict", function()
       record_verdict("rule1", "invalid")
       local state = _get_state()
+      assert.equals(0, #state)
       return assert.equals(0, state["rule1"].allow_count + state["rule1"].refuse_count + state["rule1"].dnsonly_count)
     end)
   end)
-  describe("record_cache", function()
-    it("records cache hit", function()
-      record_cache("rule1", true)
-      local state = _get_state()
-      assert.equals(1, state["rule1"].cache_hits)
-      return assert.equals(0, state["rule1"].cache_misses)
-    end)
-    it("records cache miss", function()
-      record_cache("rule1", false)
-      local state = _get_state()
-      assert.equals(0, state["rule1"].cache_hits)
-      return assert.equals(1, state["rule1"].cache_misses)
-    end)
-    it("counts multiple hits and misses", function()
-      record_cache("rule1", true)
-      record_cache("rule1", true)
-      record_cache("rule1", false)
-      record_cache("rule1", false)
-      record_cache("rule1", false)
-      local state = _get_state()
-      assert.equals(2, state["rule1"].cache_hits)
-      return assert.equals(3, state["rule1"].cache_misses)
-    end)
-    it("handles multiple rules", function()
-      record_cache("rule1", true)
-      record_cache("rule2", false)
-      local state = _get_state()
-      assert.equals(1, state["rule1"].cache_hits)
-      return assert.equals(1, state["rule2"].cache_misses)
-    end)
-    return it("ignores nil rule_id", function()
-      record_cache(nil, true)
-      local state = _get_state()
-      return assert.equals(0, #state)
-    end)
-  end)
-  describe("record_ttl", function()
-    it("records single TTL sample", function()
-      record_ttl("rule1", 3600)
-      local state = _get_state()
-      assert.equals(1, #state["rule1"].ttl_samples)
-      return assert.equals(3600, state["rule1"].ttl_samples[1])
-    end)
-    it("records multiple TTL samples", function()
-      record_ttl("rule1", 3600)
-      record_ttl("rule1", 7200)
-      record_ttl("rule1", 1800)
-      local state = _get_state()
-      assert.equals(3, #state["rule1"].ttl_samples)
-      assert.equals(3600, state["rule1"].ttl_samples[1])
-      assert.equals(7200, state["rule1"].ttl_samples[2])
-      return assert.equals(1800, state["rule1"].ttl_samples[3])
-    end)
-    it("keeps only last 100 samples per rule", function()
-      for i = 1, 150 do
-        record_ttl("rule1", i * 100)
-      end
-      local state = _get_state()
-      assert.equals(100, #state["rule1"].ttl_samples)
-      return assert.equals(51 * 100, state["rule1"].ttl_samples[1])
-    end)
-    it("ignores nil rule_id", function()
-      record_ttl(nil, 3600)
-      local state = _get_state()
-      return assert.equals(0, #state)
-    end)
-    return it("ignores non-numeric ttl", function()
-      record_ttl("rule1", "3600")
-      local state = _get_state()
-      return assert.is_nil(state["rule1"])
-    end)
-  end)
-  describe("cache hit rate", function()
-    it("calculates hit rate percentage", function()
-      record_cache("rule1", true)
-      record_cache("rule1", true)
-      record_cache("rule1", true)
-      record_cache("rule1", false)
-      record_cache("rule1", false)
-      local rate = _get_hit_rate("rule1")
-      return assert.equals(60, rate)
-    end)
-    it("returns 0 with no cache access", function()
-      record_verdict("rule1", "allow")
-      local rate = _get_hit_rate("rule1")
-      return assert.equals(0, rate)
-    end)
-    it("handles all hits", function()
-      record_cache("rule1", true)
-      record_cache("rule1", true)
-      record_cache("rule1", true)
-      local rate = _get_hit_rate("rule1")
-      return assert.equals(100, rate)
-    end)
-    it("handles all misses", function()
-      record_cache("rule1", false)
-      record_cache("rule1", false)
-      local rate = _get_hit_rate("rule1")
-      return assert.equals(0, rate)
-    end)
-    return it("returns 0 for undefined rule", function()
-      local rate = _get_hit_rate("undefined_rule")
-      return assert.equals(0, rate)
-    end)
-  end)
-  describe("TTL statistics", function()
-    it("calculates min, max, avg for samples", function()
-      record_ttl("rule1", 1000)
-      record_ttl("rule1", 2000)
-      record_ttl("rule1", 3000)
-      local stats = _get_ttl_stats("rule1")
-      assert.equals(1000, stats.min)
-      assert.equals(3000, stats.max)
-      return assert.equals(2000, stats.avg)
-    end)
-    it("handles single sample", function()
-      record_ttl("rule1", 5000)
-      local stats = _get_ttl_stats("rule1")
-      assert.equals(5000, stats.min)
-      assert.equals(5000, stats.max)
-      return assert.equals(5000, stats.avg)
-    end)
-    it("returns zeros for undefined rule", function()
-      local stats = _get_ttl_stats("undefined_rule")
-      assert.equals(0, stats.min)
-      assert.equals(0, stats.max)
-      return assert.equals(0, stats.avg)
-    end)
-    return it("returns zeros for rule with no TTL samples", function()
-      record_verdict("rule1", "allow")
-      local stats = _get_ttl_stats("rule1")
-      assert.equals(0, stats.min)
-      assert.equals(0, stats.max)
-      return assert.equals(0, stats.avg)
-    end)
-  end)
   describe("get_metrics_json", function()
-    it("exports metrics as JSON-compatible table", function()
+    it("exporte timestamp et compteurs par règle", function()
       record_verdict("rule1", "allow")
       record_verdict("rule1", "allow")
       record_verdict("rule1", "refuse")
-      record_cache("rule1", true)
-      record_cache("rule1", false)
-      record_ttl("rule1", 3600)
-      record_ttl("rule1", 7200)
-      local json = get_metrics_json()
-      assert.is_not_nil(json.timestamp)
-      assert.equals(1, #json.rules)
-      local rule = json.rules[1]
-      assert.equals("rule1", rule.rule_id)
-      assert.equals(2, rule.verdicts.allow)
-      assert.equals(1, rule.verdicts.refuse)
-      assert.equals(0, rule.verdicts.dnsonly)
-      assert.equals(1, rule.cache.hits)
-      assert.equals(1, rule.cache.misses)
-      assert.equals(50, rule.cache.hit_rate)
-      assert.equals(3600, rule.ttl.min)
-      assert.equals(7200, rule.ttl.max)
-      return assert.equals(5400, rule.ttl.avg)
+      local snap = get_metrics_json()
+      assert.equals("number", type(snap.timestamp))
+      assert.equals(1, #snap.rules)
+      assert.equals("rule1", snap.rules[1].rule_id)
+      assert.equals(2, snap.rules[1].verdicts.allow)
+      assert.equals(1, snap.rules[1].verdicts.refuse)
+      return assert.equals(0, snap.rules[1].verdicts.dnsonly)
     end)
-    it("includes all rules in export", function()
-      record_verdict("rule1", "allow")
-      record_verdict("rule2", "refuse")
-      record_verdict("rule3", "dnsonly")
-      local json = get_metrics_json()
-      assert.equals(3, #json.rules)
-      local rule_ids = { }
-      local _list_0 = json.rules
-      for _index_0 = 1, #_list_0 do
-        local r = _list_0[_index_0]
-        rule_ids[r.rule_id] = true
-      end
-      assert.is_true(rule_ids["rule1"])
-      assert.is_true(rule_ids["rule2"])
-      return assert.is_true(rule_ids["rule3"])
+    it("exporte une liste vide sans donnée", function()
+      return assert.same({ }, get_metrics_json().rules)
     end)
-    return it("exports empty metrics for no data", function()
-      local json = get_metrics_json()
-      return assert.equals(0, #json.rules)
-    end)
-  end)
-  describe("get_snapshot", function()
-    it("returns same format as get_metrics_json", function()
-      record_verdict("rule1", "allow")
-      local snap = get_snapshot()
-      local json = get_metrics_json()
-      assert.equals(json.timestamp, snap.timestamp)
-      return assert.equals(#json.rules, #snap.rules)
-    end)
-    return it("does not modify state after snapshot", function()
-      record_verdict("rule1", "allow")
-      local snap1 = get_snapshot()
-      record_verdict("rule1", "allow")
-      local snap2 = get_snapshot()
-      assert.equals(1, snap1.rules[1].verdicts.allow)
-      return assert.equals(2, snap2.rules[1].verdicts.allow)
-    end)
-  end)
-  describe("get_rule_metrics", function()
-    it("returns metrics for single rule", function()
-      record_verdict("rule1", "allow")
-      record_cache("rule1", true)
-      record_ttl("rule1", 3600)
-      local m = get_rule_metrics("rule1")
-      assert.is_not_nil(m)
-      assert.equals("rule1", m.rule_id)
-      return assert.equals(1, m.verdicts.allow)
-    end)
-    it("returns nil for undefined rule", function()
-      local m = get_rule_metrics("undefined")
-      return assert.is_nil(m)
-    end)
-    return it("returns nil for nil rule_id", function()
-      local m = get_rule_metrics(nil)
-      return assert.is_nil(m)
-    end)
-  end)
-  describe("flush_metrics", function()
-    it("returns snapshot before reset", function()
-      record_verdict("rule1", "allow")
-      record_verdict("rule1", "allow")
-      local snapshot = flush_metrics()
-      assert.equals(1, #snapshot.rules)
-      return assert.equals(2, snapshot.rules[1].verdicts.allow)
-    end)
-    it("clears metrics after flush", function()
-      record_verdict("rule1", "allow")
-      flush_metrics()
-      local json = get_metrics_json()
-      return assert.equals(0, #json.rules)
-    end)
-    return it("allows new metrics after flush", function()
-      record_verdict("rule1", "allow")
-      flush_metrics()
-      record_verdict("rule2", "refuse")
-      local json = get_metrics_json()
-      assert.equals(1, #json.rules)
-      return assert.equals("rule2", json.rules[1].rule_id)
-    end)
-  end)
-  describe("memory bounded", function()
-    it("evicts LRU rule when exceeding MAX_RULES", function()
+    return it("n'exporte rien quand désactivé", function()
       init({
-        max_rules = 5,
-        enabled = true
+        enabled = false
       })
-      for i = 1, 6 do
-        record_verdict("rule" .. tostring(i), "allow")
-      end
-      local json = get_metrics_json()
-      assert.equals(5, #json.rules)
-      local found = false
-      local _list_0 = json.rules
-      for _index_0 = 1, #_list_0 do
-        local r = _list_0[_index_0]
-        if r.rule_id == "rule1" then
-          found = true
-        end
-      end
-      return assert.is_false(found)
+      record_verdict("rule1", "allow")
+      return assert.same({ }, get_metrics_json().rules)
     end)
-    return it("keeps most recent rules after eviction", function()
+  end)
+  describe("export périodique", function()
+    it("n'écrit rien avant l'intervalle, puis un instantané", function()
+      local now = 0
+      init({
+        enabled = true,
+        flush_interval = 10
+      }, {
+        dir = DIR,
+        name = "w0",
+        clock = (function()
+          return now
+        end),
+        check_every = 1
+      })
+      record_verdict("r1", "allow")
+      now = 0
+      maybe_flush()
+      assert.is_false(file_exists())
+      now = 9
+      maybe_flush()
+      assert.is_false(file_exists())
+      now = 10
+      maybe_flush()
+      local snap = read_snapshot()
+      assert.equals(10, snap.timestamp)
+      assert.equals("r1", snap.rules[1].rule_id)
+      return assert.equals(1, snap.rules[1].verdicts.allow)
+    end)
+    it("consulte l'horloge seulement tous les check_every paquets", function()
+      local now = 0
+      local clock_calls = 0
+      local fake_clock
+      fake_clock = function()
+        clock_calls = clock_calls + 1
+        return now
+      end
+      init({
+        enabled = true,
+        flush_interval = 10
+      }, {
+        dir = DIR,
+        name = "w0",
+        clock = fake_clock,
+        check_every = 4
+      })
+      for i = 1, 3 do
+        maybe_flush()
+      end
+      assert.equals(0, clock_calls)
+      maybe_flush()
+      return assert.equals(1, clock_calls)
+    end)
+    it("n'écrit rien quand désactivé", function()
+      local now = 1000
+      init({
+        enabled = false,
+        flush_interval = 10
+      }, {
+        dir = DIR,
+        name = "w0",
+        clock = (function()
+          return now
+        end),
+        check_every = 1
+      })
+      record_verdict("r1", "allow")
+      maybe_flush()
+      assert.is_false(file_exists())
+      return assert.is_false(write_now())
+    end)
+    it("file_path reflète le nom du worker", function()
+      init({
+        enabled = true
+      }, {
+        dir = DIR,
+        name = "dns-q3"
+      })
+      assert.equals(tostring(DIR) .. "/metrics-dns-q3.json", file_path())
+      init({
+        enabled = true
+      }, { })
+      return assert.is_nil(file_path())
+    end)
+    return it("échoue sans lever si le répertoire cible n'existe pas", function()
+      init({
+        enabled = true
+      }, {
+        dir = tostring(DIR) .. "/absent",
+        name = "w0"
+      })
+      record_verdict("r1", "allow")
+      return assert.is_false(write_now())
+    end)
+  end)
+  describe("atomicité", function()
+    it("ne laisse aucun temporaire après une écriture réussie", function()
+      init({
+        enabled = true
+      }, {
+        dir = DIR,
+        name = "w0"
+      })
+      record_verdict("r1", "allow")
+      assert.is_true(write_now())
+      return assert.same({
+        "metrics-w0.json"
+      }, list_dir())
+    end)
+    return it("préserve l'ancien fichier si le renommage échoue", function()
+      init({
+        enabled = true
+      }, {
+        dir = DIR,
+        name = "w0"
+      })
+      record_verdict("r1", "allow")
+      assert.is_true(write_now())
+      local snap = read_snapshot()
+      assert.equals(1, snap.rules[1].verdicts.allow)
+      record_verdict("r1", "allow")
+      local real_rename = os.rename
+      local renamed_from = nil
+      local fail_rename
+      fail_rename = function(src, dst)
+        renamed_from = src
+        return false
+      end
+      rawset(os, "rename", fail_rename)
+      local ok = write_now()
+      rawset(os, "rename", real_rename)
+      assert.is_false(ok)
+      assert.truthy(renamed_from and renamed_from:find(".tmp.", 1, true))
+      snap = read_snapshot()
+      assert.equals(1, snap.rules[1].verdicts.allow)
+      return assert.same({
+        "metrics-w0.json"
+      }, list_dir())
+    end)
+  end)
+  describe("mémoire bornée", function()
+    return it("évince la règle la moins récemment vue au-delà de max_rules", function()
       init({
         max_rules = 3,
         enabled = true
       })
-      record_verdict("rule1", "allow")
-      record_verdict("rule2", "allow")
-      record_verdict("rule3", "allow")
-      record_verdict("rule4", "allow")
-      local json = get_metrics_json()
-      local rule_ids = { }
-      local _list_0 = json.rules
+      for i = 1, 4 do
+        record_verdict("rule" .. tostring(i), "allow")
+      end
+      local snap = get_metrics_json()
+      local ids = { }
+      local _list_0 = snap.rules
       for _index_0 = 1, #_list_0 do
         local r = _list_0[_index_0]
-        rule_ids[r.rule_id] = true
+        ids[r.rule_id] = true
       end
-      assert.is_nil(rule_ids["rule1"])
-      assert.is_true(rule_ids["rule2"])
-      assert.is_true(rule_ids["rule3"])
-      return assert.is_true(rule_ids["rule4"])
+      assert.equals(3, #snap.rules)
+      assert.is_nil(ids["rule1"])
+      return assert.is_true(ids["rule4"])
     end)
   end)
-  describe("chargement du module (config.metrics)", function()
+  return describe("chargement du module (config.metrics)", function()
     local saved_metrics = nil
     local saved_config = nil
     before_each(function()
@@ -382,59 +317,6 @@ return describe("metrics", function()
       local fresh = require("metrics")
       fresh.record_verdict("rule1", "allow")
       return assert.equals(1, #fresh.get_metrics_json().rules)
-    end)
-  end)
-  return describe("integration", function()
-    it("tracks combined metrics for complex scenario", function()
-      for i = 1, 10 do
-        if i <= 7 then
-          record_verdict("secure_rule", "allow")
-        else
-          record_verdict("secure_rule", "refuse")
-        end
-      end
-      for i = 1, 8 do
-        record_cache("secure_rule", true)
-      end
-      for i = 1, 2 do
-        record_cache("secure_rule", false)
-      end
-      for i = 1, 5 do
-        record_ttl("secure_rule", 300 + (i * 60))
-      end
-      local m = get_rule_metrics("secure_rule")
-      assert.equals(7, m.verdicts.allow)
-      assert.equals(3, m.verdicts.refuse)
-      assert.equals(0, m.verdicts.dnsonly)
-      assert.equals(8, m.cache.hits)
-      assert.equals(2, m.cache.misses)
-      assert.equals(80, m.cache.hit_rate)
-      assert.equals(360, m.ttl.min)
-      return assert.equals(600, m.ttl.max)
-    end)
-    it("handles zero metrics correctly", function()
-      record_verdict("empty_rule", "allow")
-      record_verdict("empty_rule", "allow")
-      local m = get_rule_metrics("empty_rule")
-      assert.equals(2, m.verdicts.allow)
-      assert.equals(0, m.cache.hits)
-      assert.equals(0, m.cache.misses)
-      assert.equals(0, m.cache.hit_rate)
-      assert.equals(0, m.ttl.min)
-      assert.equals(0, m.ttl.max)
-      return assert.equals(0, m.ttl.avg)
-    end)
-    return it("maintains separate rule metrics", function()
-      record_verdict("rule_a", "allow")
-      record_verdict("rule_a", "allow")
-      record_verdict("rule_b", "refuse")
-      record_verdict("rule_b", "refuse")
-      local a = get_rule_metrics("rule_a")
-      local b = get_rule_metrics("rule_b")
-      assert.equals(2, a.verdicts.allow)
-      assert.equals(0, a.verdicts.refuse)
-      assert.equals(0, b.verdicts.allow)
-      return assert.equals(2, b.verdicts.refuse)
     end)
   end)
 end)
