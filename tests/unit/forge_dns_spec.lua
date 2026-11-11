@@ -80,7 +80,7 @@ describe("forge_dns_response (UDP)", function()
     }
     return assert.is_nil(forge_dns.forge_dns_response(make_ip4(), udp, 0x1, q, "192.168.1.1", nil))
   end)
-  return it("forge une réponse AAAA (IPv6) avec rdata 16 octets", function()
+  it("forge une réponse AAAA (IPv6) avec rdata 16 octets", function()
     local ip6 = new_ip({
       version = 6,
       src = s2ip("2001:db8::1"),
@@ -106,6 +106,31 @@ describe("forge_dns_response (UDP)", function()
     assert.equals(1, #dns.answers)
     assert.equals(dns_mod.types.AAAA, dns.answers[1].rtype)
     return assert.equals(16, #dns.answers[1].rdata)
+  end)
+  return it("préserve traffic_class et flow_label IPv6 (vtf recalculé par ip6.pack)", function()
+    local ip6 = new_ip({
+      version = 6,
+      src = s2ip("2001:db8::1"),
+      dst = s2ip("2001:db8::53"),
+      next_header = 17,
+      hop_limit = 64,
+      data = ""
+    })
+    ip6.traffic_class = 0x2e
+    ip6.flow_label = 0x12345
+    local udp = {
+      proto = "udp",
+      spt = 53,
+      dpt = 5353
+    }
+    local q = {
+      name = "captive.example",
+      qtype = dns_mod.types.AAAA
+    }
+    local pkts = forge_dns.forge_dns_response(ip6, udp, 0x1, q, nil, "fd00::1")
+    local parsed_ip = parse_ip(pkts[1], 1)
+    assert.equals(0x2e, parsed_ip.traffic_class)
+    return assert.equals(0x12345, parsed_ip.flow_label)
   end)
 end)
 return describe("forge_dns_response (TCP)", function()

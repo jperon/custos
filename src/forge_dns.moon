@@ -38,8 +38,9 @@ wrap_ip = (ip, l4_obj, proto) ->
     ff:          ip.ff
     ttl:         ip.ttl
     options:     ip.options or ""
-    -- IPv6
-    vtf:         ip.vtf
+    -- IPv6 : ip6.pack recalcule vtf depuis ces deux champs (v. ipparse ≥ 265876b).
+    traffic_class: ip.traffic_class
+    flow_label:  ip.flow_label
     hop_limit:   ip.hop_limit
     -- commun
     src:         ip.dst

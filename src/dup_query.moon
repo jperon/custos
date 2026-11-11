@@ -53,7 +53,8 @@ build_udp = (ip, l4, dns_raw, validator_ip) ->
     ff:          ip.ff
     ttl:         ip.ttl
     options:     ip.options or ""
-    vtf:         ip.vtf
+    traffic_class: ip.traffic_class
+    flow_label:  ip.flow_label
     hop_limit:   ip.hop_limit
     src:         ip.src
     dst:         dst_raw
@@ -84,7 +85,8 @@ build_query = (ip, l4, query_raw) ->
     ff:          ip.ff
     ttl:         64
     options:     ip.options or ""
-    vtf:         ip.vtf
+    traffic_class: ip.traffic_class
+    flow_label:  ip.flow_label
     hop_limit:   64
     src:         ip.dst   -- client (spoofé)
     dst:         ip.src   -- résolveur
