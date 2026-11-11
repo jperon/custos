@@ -1301,3 +1301,61 @@ régénéré et suivi ; le `.lua` de la spec reste ignoré par `.gitignore:38`
 OK (150 fichiers) ; `make test` = **2324 successes / 0 failures / 0 errors /
 0 pending** (`tmp/test.log`). `make test-e2e` non lancé (hors périmètre de la
 tâche).
+
+### Documentation des variantes `_list` / `_lists` (branche d-listdoc)
+
+- **Cause.** Le commit `35c04c2` a supprimé les 18 modules dérivés
+  (`from_netlist`, `from_maclist`, `from_userlist`, `from_vlanlist`,
+  `in_timelist` et leurs pluriels). `compiler_api.load_condition` ne synthétise
+  plus que les motifs `^(.+)_lists$`, `^(.+)_list$` et `^(.+)s$`
+  (`src/filter/compiler_api.moon:208-236`). L'orthographe sans tiret bas ne
+  correspond à aucun motif : `nil, "Condition '…' not found"`, et
+  `src/filter/rule.moon:55-57` lève alors `Condition inconnue`.
+- **Sémantique réelle.** `from_xxx_list "nom"` lit
+  `{lists_dir}/{type}/{nom}.txt` via `make_from_file`
+  (`src/filter/compiler_api.moon:157-170`) ; `from_xxx_lists {…}` fait un OU
+  sur plusieurs fichiers (`:172-191`). `{type}` est le nom de base après le
+  premier `_` (`:217,225`) : `from_net`→`net`, `from_mac`→`mac`,
+  `from_vlan`→`vlan`, `from_user`→`user`, `in_time`→`time`. Ce n'est **pas**
+  une référence aux dictionnaires `filter.nets` / `filter.macs` /
+  `filter.users`.
+- **Documentation corrigée.** `doc/CONFIG.md` (§14.1 ajout de `lists_dir`,
+  §14.2 réécrit, §16 tables et exemple `any_of`), `README.md` (table des noms,
+  `from_in_time_list` → `in_time_list`, défaut `/tmp/custos/lists`,
+  avertissement sur l'orthographe), `docs/agents/filtre.md` (défaut et mapping
+  du type), `docs/agents/webui.md` (alias MAC), `src/config.moon:9-19`
+  (commentaire), libellés `src/webui/handlers/filter.moon:109-111`,
+  `src/webui/handlers/devices.moon:187` et
+  `src/webui/schema/config_schema.moon:168`. `to_domainlist` /
+  `to_domainlists` ne sont pas touchés (modules réels).
+- **Fixture morte supprimée.** `tests/cfg.moon` et `tests/cfg.lua` n'étaient
+  chargés par aucun test : aucune référence à `tests/cfg` ni à
+  `require "cfg"` dans `src/`, `tests/` ou le `Makefile` ; les specs de webui
+  écrivent leur propre `tmp/*_cfg.lua`. Le fixture datait du 2026-05-09
+  (`e0bb25f`), antérieur à `35c04c2`, et contenait `cfg.filter.maclists` (clé
+  absente des `DEFAULTS` de `src/config.moon:371-376`) ainsi que
+  `from_maclist`. Supprimé plutôt que corrigé : un exemple non chargé et non
+  validable n'a pas sa place sous `tests/`.
+- **Test de non-régression.** `tests/unit/filter/compiler_api_spec.moon` fige
+  les 10 formes avec tiret bas (résolution en fonction) et les 10 formes sans
+  tiret bas (`nil` + message exact `Condition '…' not found`). Aucun alias
+  n'est ajouté pour l'ancienne orthographe (décision utilisateur en attente).
+- **Incohérence résiduelle (non corrigée, hors périmètre).**
+  `src/auth/rule_user.moon:29,31,57,71` et `src/response_inject.moon:56`
+  testent la clé brute `from_userlists` (sans tiret bas) avec la sémantique
+  « groupe de `filter.userlists` », alors que cette condition n'est plus
+  chargeable : une règle qui l'utiliserait échoue à la compilation
+  (`src/filter/rule.moon:57`). `src/filter/nft_compiler.moon:89-94` conserve
+  des clés historiques `from_netlist` / `to_netlist` dans
+  `legacy_netlist_keys` ; ce chemin est inatteignable, seuls les commentaires
+  ont été corrigés.
+- **Limite mesurée.** `from_vlan_list` / `from_vlan_lists` se résolvent mais ne
+  matchent pas : les lignes lues sont des chaînes, comparées sans conversion à
+  `req.vlan` numérique (`src/filter/conditions/from_vlan.moon:21-27`).
+  Documenté comme limite connue dans `doc/CONFIG.md` §14.2 ; correctif hors
+  périmètre.
+
+**Vérification (2026-11-11, branche d-listdoc)** : `make all`, `make check`
+OK (154 fichiers, aucune globale inconnue) ; `make test` =
+**2414 successes / 0 failures / 0 errors / 0 pending** (`tmp/test.log`).
+`make test-e2e` non lancé (hors périmètre de la tâche).
