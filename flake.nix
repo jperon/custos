@@ -14,14 +14,16 @@
         overlays = [ (self: super: {
           wolfssl = super.stdenv.mkDerivation {
             pname = "wolfssl";
-            version = "5.6.6";
+            version = "5.8.4";
             src = super.fetchurl {
-              url = "https://github.com/wolfSSL/wolfssl/archive/v5.6.6-stable.tar.gz";
-              sha256 = "sha256-PSymctQcLC+mZ4hagNb6A8PpHw9Pcvh67yvJR+jIcjc=";
+              url = "https://github.com/wolfSSL/wolfssl/archive/v5.8.4-stable.tar.gz";
+              sha256 = "sha256-K3AremawBnv9KEQIgnseWSiLNXsN11jQCJwGI5XypSI=";
             };
             nativeBuildInputs = [ super.autoreconfHook super.pkg-config ];
             # certgen/keygen/certext/ecc + ALT_NAMES sont requis par px5g
             # (génération de clés et certificats auto-signés avec SAN).
+            # alpn/sni alignent l'environnement de test sur la cible OpenWrt
+            # (libwolfssl 5.8.4, paquet `package/libs/wolfssl`).
             configureFlags = [
               "--enable-shared"
               "--enable-static"
@@ -31,6 +33,9 @@
               "--enable-certext"
               "--enable-ecc"
               "--enable-opensslextra"
+              "--enable-alpn"
+              "--enable-sni"
+              "--enable-opensslall"
             ];
             CFLAGS = "-DWOLFSSL_ALT_NAMES -DFP_MAX_BITS=8192";
           };

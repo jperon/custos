@@ -1499,3 +1499,69 @@ douteux `sessions_file`, `session_key`, `filter.lists_dir`,
 runtime ». Tests : défaut de `cert_dir`, index dans le même dossier, clé
 `auth.cert_dir` (défaut et surcharge) dans
 `tests/unit/auth/cert_cache_spec.moon` et `tests/unit/config_spec.moon`.
+
+### Branche d-wolfenv — wolfSSL de test aligné sur la cible
+
+L'environnement de test construisait wolfSSL 5.6.6 **sans ALPN ni SNI**
+(`wolfSSL_UseALPN` / `wolfSSL_ALPN_GetProtocol` absents) : HTTP/2
+n'était pas testable, alors que la cible OpenWrt 25.12 (`libwolfssl5.8.4`)
+exporte ces symboles.
+
+- **Dérivation (`flake.nix:17-38`).** `wolfssl` passe à **5.8.4**
+  (`https://github.com/wolfSSL/wolfssl/archive/v5.8.4-stable.tar.gz`, hash
+  `sha256-K3AremawBnv9KEQIgnseWSiLNXsN11jQCJwGI5XypSI=` obtenu par
+  `nix store prefetch-file`) et ajoute `--enable-alpn`, `--enable-sni` et
+  `--enable-opensslall` (les deux derniers symboles ALPN OpenSSL
+  `wolfSSL_get0_alpn_selected` et `wolfSSL_CTX_set_alpn_select_cb` sont
+  conditionnés par `OPENSSL_ALL`/`HAVE_LIGHTY`, cf. `src/ssl.c:22266` de
+  wolfSSL). Les options px5g (`--enable-keygen/certgen/certreq/certext/ecc`)
+  et `CFLAGS = "-DWOLFSSL_ALT_NAMES -DFP_MAX_BITS=8192"` sont conservées ;
+  `px5g-wolfssl` du même flake se construit toujours (binaire `px5g` présent
+  dans le devShell).
+- **Preuve (`nix develop`, build `nxpghs2g7imkkmk39jdsvvag09nf4yfv-wolfssl-5.8.4`).**
+  `nm -D --defined-only lib/libwolfssl.so | grep -c " T <symbole>$"` donne 1
+  pour chacun des symboles de la cible : `wolfSSL_UseALPN`,
+  `wolfSSL_ALPN_GetProtocol`, `wolfSSL_get0_alpn_selected`,
+  `wolfSSL_CTX_set_alpn_protos`, `wolfSSL_set_alpn_protos`,
+  `wolfSSL_CTX_set_alpn_select_cb`, `wolfSSL_UseSNI`,
+  `wolfSSL_SNI_GetRequest`, `wolfSSL_CTX_set_servername_callback`,
+  `wolfSSL_check_domain_name`, `wolfSSL_CTX_load_verify_locations`.
+- **Symbole absent des deux côtés : `wolfSSL_CTX_UseALPN`.** Il n'est exporté
+  ni par la build 5.8.4, ni par la VM cible (comptage 0 dans les deux cas) —
+  l'API a disparu de wolfSSL 5.x. Conséquence en production :
+  `src/auth/ffi_wolfssl.moon:190` sonde ce symbole dans un `pcall`, qui échoue
+  toujours ; `_alpn_available` vaut alors `false` (`:191`) et
+  `selected_alpn` renvoie toujours `nil` (`:321`). Le serveur DoH n'annonce
+  donc jamais ALPN et un client qui sélectionnerait `h2` n'est pas détecté par
+  ce chemin ; `src/worker_doh.moon:379-382` journalise `alpn=none` et ne voit
+  le HTTP/2 que par le préambule PRI (`:399-401`). Défaut **préexistant à la
+  cible** (le symbole manque aussi sur OpenWrt), non corrigé ici : la tâche
+  demandait seulement d'aligner l'environnement. Aucun test ne dépend de ce
+  symbole.
+- **Comportement des tests inchangé.** Aucun spec ne dépendait de l'absence
+  d'ALPN : `make test` reste à **2351 successes / 0 failures / 0 errors /
+  0 pending** (même total que sur `dev`), `make test-js` = 12 pass / 0 fail.
+  Aucun test n'a été modifié.
+- **Instabilité préexistante constatée (hors périmètre).** Environ une
+  exécution sur trois de Busted meurt d'un **SIGSEGV dans `luajit` après la fin
+  de tous les tests** (les 2351 succès sont écrits, le récapitulatif ne l'est
+  pas ; aucune erreur ni échec de test). Le noyau est disponible via
+  `coredumpctl` et la pile est entièrement dans `luajit` (fermeture/GC), pas
+  dans `libwolfssl`. Le phénomène se reproduit en forçant l'ancienne
+  bibliothèque 5.6.6 (`LD_LIBRARY_PATH` vers un lien `libwolfssl.so`/`.so.44`
+  pointant sur 5.6.6, au prix de 6 échecs px5g dus au mélange d'ABI) : il est
+  donc **antérieur** à ce changement et non causé par wolfSSL 5.8.4. Une
+  relance suffit à obtenir un `make test` vert ; non corrigé ici.
+- **VM e2e (lecture seule, `./libvirt/homelab.sh ssh custos`).** La VM
+  `homelab-custos` a `libwolfssl5.9.1.e624513f` (`ls /usr/lib/libwolfssl*`) et
+  `grep -c wolfSSL_UseALPN` = 1 : ALPN y est disponible, donc aucune
+  modification de `libvirt/homelab.sh` n'est nécessaire. À noter : le paquet
+  est installé non épinglé (`libvirt/homelab.sh:404`,
+  `[ -e /usr/lib/libwolfssl.so ] || need_install="$need_install libwolfssl"`) ;
+  si une version future retirait ALPN, c'est cette ligne qu'il faudrait
+  épingler.
+
+**Vérification (2026-11-11, branche d-wolfenv)** : `make all` et `make check`
+OK ; `make test` = 2351 successes / 0 failures / 0 errors / 0 pending
+(`tmp/test-wolfenv2.log`) ; `make test-js` = 12 pass / 0 fail. `make test-e2e`
+non relancé (VMs seulement interrogées en lecture seule).

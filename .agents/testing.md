@@ -120,6 +120,32 @@ démarrée ; `SSH_KEY=...` reste prioritaire.
 
 ---
 
+## wolfSSL de l'environnement de test
+
+Le devShell construit wolfSSL **5.8.4** (`flake.nix:17-38`), la version de
+`libwolfssl` de la cible OpenWrt 25.12, avec `--enable-alpn --enable-sni
+--enable-opensslextra --enable-opensslall` en plus des options px5g
+(`--enable-keygen --enable-certgen --enable-certreq --enable-certext
+--enable-ecc`). L'API TLS utilisée par `auth.ffi_wolfssl` est ainsi celle de la
+cible, et non celle, plus pauvre, construite auparavant (5.6.6 sans ALPN).
+
+Symboles exportés (vérifiés par `nm -D --defined-only` dans `nix develop`) :
+`wolfSSL_UseALPN`, `wolfSSL_ALPN_GetProtocol`, `wolfSSL_get0_alpn_selected`,
+`wolfSSL_CTX_set_alpn_protos`, `wolfSSL_set_alpn_protos`,
+`wolfSSL_CTX_set_alpn_select_cb`, `wolfSSL_UseSNI`, `wolfSSL_SNI_GetRequest`,
+`wolfSSL_CTX_set_servername_callback`, `wolfSSL_check_domain_name`,
+`wolfSSL_CTX_load_verify_locations`. Les symboles optionnels (SNI, ALPN,
+chargement du magasin de CA) doivent rester sondés par `pcall`
+(`src/auth/ffi_wolfssl.moon:116`, `:148`) : la cible peut les omettre.
+
+`wolfSSL_CTX_UseALPN` est exporté par **ni** l'environnement de test **ni** la
+cible (supprimé de wolfSSL 5.x ; `src/auth/ffi_wolfssl.moon:190` le sonde donc en
+vain). Aucun test ne doit en dépendre.
+
+La VM e2e `custos` installe `libwolfssl` par `apk`/`opkg` sans épinglage
+(`libvirt/homelab.sh:404`) : au 2026-11-11 c'est `libwolfssl5.9.1`, qui exporte
+les mêmes symboles ALPN.
+
 ## Pièges OpenWrt
 
 ### Logging sur OpenWrt
