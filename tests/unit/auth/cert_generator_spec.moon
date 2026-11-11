@@ -5,15 +5,6 @@
 cg = require "auth.cert_generator"
 { :generate_self_signed } = cg
 
--- px5g est désormais fourni par le flake (dépendance obligatoire). On teste donc
--- le chemin nominal quand il est présent, et la branche d'erreur sinon.
-has_px5g = ->
-  f = io.popen "command -v px5g 2>/dev/null"
-  return false unless f
-  found = f\read("*l") != nil
-  f\close!
-  found
-
 describe "auth/cert_generator", ->
 
   -- ═══════════════════════════════════════════════════════════════════════════
