@@ -36,6 +36,14 @@ pcall ffi.cdef, [[
 AF_INET  = 2
 AF_INET6 = 10
 
+-- Bornes du client HTTP/1.1 de repli (RFC 1035 : 65535 octets max pour un
+-- message DNS ; marge pour les en-têtes HTTP).
+MAX_DNS_BODY       = 65535
+MAX_RESPONSE_BYTES = MAX_DNS_BODY + 8192
+MAX_SEND_ATTEMPTS  = 100
+MAX_RECV_ATTEMPTS  = 100
+MAX_RECV_ROUNDS    = 32
+
 -- Résout un nom d'hôte ou une adresse IP littérale en (ip_string, family).
 -- Préfère IPv4 sauf si seule une adresse IPv6 est disponible.
 resolve_host = (host) ->
@@ -66,16 +74,50 @@ resolve_host = (host) ->
 -- Référence circulaire : M est rempli en fin de module et copié dans chaque handle.
 M = {}
 
--- Analyse une URL "https://host[:port]/path".
--- @treturn string host, number port, string path — ou nil,nil,nil si invalide.
+-- Analyse une URL "https://host[:port][/path]" (IPv6 littéral entre crochets).
+-- @tparam string url URL du résolveur.
+-- @treturn string|nil host Sans crochets (compatible getaddrinfo/SNI).
+-- @treturn number|nil port Port (443 par défaut).
+-- @treturn string|nil path Chemin ("/dns-query" par défaut).
 parse_url = (url) ->
-  host, port_str, path = url\match "^https://([^/:]+):(%d+)(/.+)$"
-  return host, tonumber(port_str), path if host
-  host, path = url\match "^https://([^/]+)(/.+)$"
-  return host, 443, path if host
-  host = url\match "^https://([^/]+)$"
-  return host, 443, "/dns-query" if host
-  nil, nil, nil
+  rest = url\match "^https://(.+)$"
+  return nil, nil, nil unless rest
+
+  authority, path = rest\match "^([^/]+)(/.*)$"
+  unless authority
+    authority = rest
+    path = "/dns-query"
+  return nil, nil, nil if authority == ""
+
+  host, port = nil, 443
+  if authority\sub(1, 1) == "["
+    -- IPv6 littéral RFC 3986 : [addr] ou [addr]:port, crochets retirés.
+    host, after = authority\match "^%[([^%]]+)%](.*)$"
+    return nil, nil, nil unless host and host != ""
+    if after != ""
+      port_str = after\match "^:(%d+)$"
+      return nil, nil, nil unless port_str
+      port = tonumber port_str
+  else
+    h, port_str = authority\match "^([^:]+):(%d+)$"
+    if h
+      host = h
+      port = tonumber port_str
+    else
+      -- IPv6 nue (non conforme RFC 3986 mais tolérée) ou nom d'hôte simple.
+      host = authority
+
+  return nil, nil, nil unless host and #host > 0
+  return nil, nil, nil unless port and port >= 1 and port <= 65535
+  host, port, path
+
+--- Formate l'en-tête Host (crochets autour d'une IPv6, port si non standard).
+-- @tparam string host Hôte sans crochets.
+-- @tparam number port Port effectif.
+-- @treturn string Valeur de l'en-tête Host.
+format_host_header = (host, port) ->
+  h = if host\find ":", 1, true then "[#{host}]" else host
+  if port != 443 then "#{h}:#{port}" else h
 
 set_timeouts = (fd, timeout_ms) ->
   tv = ffi.new "struct timeval"
@@ -163,20 +205,90 @@ new_client = (url, timeout_ms=2000, verify_tls=false, opts={}) ->
     return nil, "upstream_doh: tls_handshake_failed: #{tls_err or 'max_attempts'}"
 
   log_debug -> { action: "upstream_doh_connected", :host, :port, :path }
-  { :tls, :host, :port, :path, :ctx, _mod: M }
+  { :tls, :host, :port, :path, :ctx, host_header: format_host_header(host, port), _mod: M }
+
+--- Écrit toutes les données sur la connexion TLS, écritures partielles incluses.
+-- @tparam table tls Wrapper TLS (auth.ffi_wolfssl).
+-- @tparam string data Données à écrire.
+-- @treturn boolean|nil true si tout a été écrit.
+-- @treturn string|nil Raison de l'échec.
+send_all = (tls, data) ->
+  total = #data
+  sent  = 0
+  attempts = 0
+  while sent < total
+    n = tls\send data\sub(sent + 1)
+    if n and n > 0
+      sent += n
+      attempts = 0
+    else
+      attempts += 1
+      return nil, "send_timeout" if attempts > MAX_SEND_ATTEMPTS
+  true
+
+--- Lit un fragment de réponse, en absorbant WANT_READ/WANT_WRITE.
+-- @tparam table tls Wrapper TLS.
+-- @treturn string|nil Fragment reçu.
+-- @treturn string|nil "eof" (fermeture propre), erreur, ou nil si fragment.
+recv_some = (tls) ->
+  for _ = 1, MAX_RECV_ATTEMPTS
+    chunk, err = tls\receive 4096
+    return chunk if chunk
+    return nil, "eof" if err == "eof_from_peer"
+    return nil, err unless err == "want_read_write"
+  nil, "recv_timeout"
+
+--- Accumule une réponse HTTP/1.1 bornée (corps ≤ MAX_DNS_BODY).
+-- @tparam table tls Wrapper TLS.
+-- @treturn string|nil Réponse brute complète.
+-- @treturn string|nil Raison de l'échec.
+read_response = (tls) ->
+  chunks = {}
+  total = 0
+  content_length = nil
+  hdr_end = nil
+
+  for _ = 1, MAX_RECV_ROUNDS
+    chunk, err = recv_some tls
+    unless chunk
+      break if err == "eof"
+      return nil, err
+    total += #chunk
+    return nil, "response_too_large" if total > MAX_RESPONSE_BYTES
+    chunks[#chunks + 1] = chunk
+    buf = table.concat chunks
+    hdr_end or= buf\find "\r\n\r\n", 1, true
+    if hdr_end
+      cl = tonumber buf\match "[Cc]ontent%-[Ll]ength:%s*(%d+)"
+      if cl
+        return nil, "content_length_too_large" if cl > MAX_DNS_BODY
+        content_length = cl
+        body_len = #buf - hdr_end - 3
+        return buf if body_len >= cl
+
+  buf = table.concat chunks
+  return nil, "empty_response" if #buf == 0
+  hdr_end = buf\find "\r\n\r\n", 1, true
+  return nil, "no_headers_end" unless hdr_end
+  body_len = #buf - hdr_end - 3
+  if content_length and body_len < content_length
+    return nil, "truncated_body"
+  buf
 
 --- Envoie une requête DNS en HTTP POST et retourne la réponse brute.
+-- Corrèle la réponse au txid de la requête et borne taille/statut/troncature.
 -- @tparam table  client  Handle retourné par new_client().
 -- @tparam string dns_raw Requête DNS wire format.
 -- @treturn string|nil Réponse DNS brute, ou nil + erreur.
 query = (client, dns_raw) ->
-  tls  = client.tls
-  host = client.host
-  path = client.path
+  return nil, "upstream_doh: no_client" unless client and client.tls
+  return nil, "upstream_doh: short_query" if #dns_raw < 12
+
+  req_txid = dns_raw\byte(1) * 256 + dns_raw\byte(2)
 
   req = table.concat {
-    "POST ", path, " HTTP/1.1\r\n"
-    "Host: ", host, "\r\n"
+    "POST ", client.path, " HTTP/1.1\r\n"
+    "Host: ", client.host_header or client.host, "\r\n"
     "Content-Type: application/dns-message\r\n"
     "Accept: application/dns-message\r\n"
     "Content-Length: ", tostring(#dns_raw), "\r\n"
@@ -185,35 +297,17 @@ query = (client, dns_raw) ->
     dns_raw
   }
 
-  ok_send, send_err = pcall -> tls\send req
+  ok_send, send_ok, send_err = pcall send_all, client.tls, req
   unless ok_send
+    return nil, "upstream_doh: send_failed: #{send_ok}"
+  unless send_ok
     return nil, "upstream_doh: send_failed: #{send_err}"
 
-  -- Accumule la réponse HTTP (les réponses DoH tiennent en quelques paquets)
-  chunks = {}
-  content_length = nil
-
-  for _ = 1, 20
-    chunk = nil
-    for _ = 1, 50
-      c, recv_err = tls\receive 4096
-      if c
-        chunk = c
-        break
-      break if recv_err != "want_read_write"
-    break unless chunk
-    chunks[#chunks + 1] = chunk
-    buf = table.concat chunks
-    hdr_end = buf\find "\r\n\r\n", 1, true
-    if hdr_end
-      cl = tonumber buf\match "[Cc]ontent%-[Ll]ength:%s*(%d+)"
-      content_length = cl
-      body_len = #buf - hdr_end - 3
-      break if not cl or body_len >= cl
-
-  buf = table.concat chunks
-  unless #buf > 0
-    return nil, "upstream_doh: empty_response"
+  ok_recv, buf, recv_err = pcall read_response, client.tls
+  unless ok_recv
+    return nil, "upstream_doh: recv_failed: #{buf}"
+  unless buf
+    return nil, "upstream_doh: #{recv_err}"
 
   status = tonumber buf\match "^HTTP/%d%.%d%s+(%d+)"
   unless status
@@ -224,8 +318,20 @@ query = (client, dns_raw) ->
   hdr_end = buf\find "\r\n\r\n", 1, true
   return nil, "upstream_doh: no_headers_end" unless hdr_end
 
+  content_length = tonumber buf\match "[Cc]ontent%-[Ll]ength:%s*(%d+)"
+  if content_length and content_length > MAX_DNS_BODY
+    return nil, "upstream_doh: content_length_too_large"
+
   body = buf\sub hdr_end + 4
-  body = body\sub 1, content_length if content_length and content_length < #body
+  if content_length
+    return nil, "upstream_doh: truncated_body" if #body < content_length
+    body = body\sub 1, content_length
+  return nil, "upstream_doh: empty_body" if #body == 0
+  return nil, "upstream_doh: short_response" if #body < 12
+
+  resp_txid = body\byte(1) * 256 + body\byte(2)
+  unless resp_txid == req_txid
+    return nil, "upstream_doh: txid_mismatch"
 
   log_debug -> { action: "upstream_doh_response", host: client.host, body_bytes: #body }
   body
@@ -254,6 +360,7 @@ verification_available = (opts={}) ->
 M.new_client = new_client
 M.query      = query
 M.close      = close
+M.parse_url  = parse_url
 M.verification_available = verification_available
 
 M
