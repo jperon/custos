@@ -296,3 +296,21 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `devices//config.moon` silencieux. `resolve_hostname` (exportée, injectable)
   échoue désormais explicitement sur stderr, et `main` sort en erreur ;
   testée dans `tests/unit/sync/apply_spec.moon`.
+
+### Filtre : qualité de code et bugs résiduels (branche q-filter)
+
+- **B8 (`any_of` / `not`) : `requires_auth` non propagé — non-bug, conservé.**
+  Les deux méta-conditions ne publient pas `capabilities.requires_auth` dans
+  leur objet enrichi, alors que `from_user` le déclare. Ce n'est pas un défaut
+  à corriger en l'état : `nft_compiler` génère une sous-chaîne d'auth par règle
+  qui n'accepte que les clients présents dans les sets `_auth_mac/_auth_ip4/_auth_ip6`
+  de *cette* règle, et ces sets sont peuplés par `auth.rule_user.rule_requires_auth`,
+  qui ne détecte que `from_users`/`from_userlists` au niveau racine de
+  `rule.conditions` (pas les conditions imbriquées). Propager le drapeau depuis
+  `any_of` rendrait donc une règle worker-only `any_of` impossible à matcher en
+  nft (sets jamais peuplés) ; pour `not`, cela restreindrait la règle aux clients
+  authentifiés alors que la négation vise l'inverse. Une correction exigerait
+  une évolution coordonnée de `src/auth/` (hors périmètre de cette branche).
+  Comportement figé par deux tests : `tests/unit/filter/conditions_spec.moon`
+  (`any_of` + `from_user`) et `tests/unit/filter/not_spec.moon`
+  (`not { from_user }`).

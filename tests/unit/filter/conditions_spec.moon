@@ -47,7 +47,7 @@ describe "filter.conditions.to_domain (NCSI/MSFT)", ->
 
 describe "filter.conditions.any_of", ->
   any_of_factory = (require "filter.conditions.any_of").factory
-  cfg = { nft: { ip_timeout: "2m" } }
+  cfg = { nft: { ip_timeout: "2m" }, auth: { sessions_file: "/nonexistent/sessions" } }
 
   it "OU logique : retourne true si la première sous-condition passe", ->
     cond = (any_of_factory cfg) {
@@ -100,6 +100,24 @@ describe "filter.conditions.any_of", ->
       { from_vlan: 1 }
     }
     assert.is_false (not not cond.creates_dynamic_scope)
+
+  it "ne propage pas requires_auth des sous-conditions (comportement voulu)", ->
+    -- from_user déclare capabilities.requires_auth, mais any_of ne l'agrège
+    -- PAS volontairement. L'agréger ferait générer par nft_compiler une
+    -- sous-chaîne d'auth par règle qui n'accepterait que les clients présents
+    -- dans ses sets _auth_* ; or ces sets sont peuplés par auth.rule_user,
+    -- qui ne détecte que from_users/from_userlists au niveau racine de la
+    -- règle (src/auth/rule_user.moon:21-32), pas les conditions imbriquées.
+    -- Une règle worker-only any_of ne matcherait alors plus jamais en nft.
+    -- Détail : docs/agents/audits.md, section « Corrections d'audit
+    -- (2026-11-11) » / « q-filter ».
+    cond = (any_of_factory cfg) {
+      { from_user: "alice" }
+      { from_net: "10.0.0.0/8" }
+    }
+    assert.is_nil cond.capabilities.requires_auth
+    assert.is_true cond.capabilities.worker
+    assert.is_false cond.capabilities.nft
 
 describe "filter.conditions.to_net", ->
   to_net_factory = (require "filter.conditions.to_net").factory
