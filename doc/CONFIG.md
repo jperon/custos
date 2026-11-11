@@ -545,8 +545,8 @@ Proxy DNS-over-HTTPS vers un résolveur amont.
 | `upstream_timeout_ms` | int | `2000` | Timeout (ms) vers le résolveur amont |
 | `client_timeout` | int | `15` | Timeout I/O (s) par connexion DoH : SO_RCVTIMEO/SO_SNDTIMEO + échéance de handshake TLS et lecture de requête/frames HTTP/2. Une connexion muette est fermée et son enfant `DOH-conn` libéré au lieu de rester suspendu indéfiniment. |
 | `upstream_dead_ttl_s` | int | `30` | TTL (s) du cache négatif d'un résolveur amont injoignable (action `cname`). Un résolveur qui timeout n'est pas re-sollicité pendant ce délai, afin de ne pas bloquer le worker responses (jusqu'à `upstream_timeout_ms`) à chaque paquet. Re-sondé après expiration. |
-| `cert_path` | string | `nil` | Chemin certificat TLS (optionnel) |
-| `key_path` | string | `nil` | Chemin clé privée TLS (optionnel) |
+| `cert` | string | `nil` | Chemin du certificat TLS statique du serveur DoH (optionnel) |
+| `key` | string | `nil` | Chemin de la clé privée TLS statique du serveur DoH (optionnel) |
 | `prefer_ipv6` | bool | `true` | Préférer IPv6 pour les requêtes amont |
 | `upstream_doh_url` | string | `nil` | URL DoH amont, ex. `"https://dns.quad9.net/dns-query"`. Si défini, le worker DoH proxifie vers ce résolveur via **libcurl** (HTTP/2 + ALPN natif, fallback HTTP/1.1 automatique) au lieu d'UDP/53. Requis pour les providers qui imposent HTTP/2 (RFC 8484 §5.2, ex. DNSforFamily). Opt-in. Si libcurl ne peut être chargé ou initialisé, le worker bascule une fois sur le repli HTTP/1.1 wolfSSL (`doh.upstream_doh`, vérifié par défaut) ; une erreur de requête (timeout, 5xx) ne déclenche pas ce repli. |
 | `upstream_doh_tls_verify` | bool | `true` | Vérifier le certificat TLS du résolveur `upstream_doh_url` (sécurisé par défaut). Ne mettre à `false` que pour un résolveur de confiance hors chaîne PKI ; le worker DoH loggue alors `upstream_doh_tls_verify_disabled`. |

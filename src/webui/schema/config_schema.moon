@@ -129,8 +129,8 @@
     upstream_port:      { type: "integer", label: "Port upstream",        default: 53 }
     upstream_timeout_ms:{ type: "integer", label: "Timeout upstream (ms)",default: 2000 }
     client_timeout:     { type: "integer", label: "Timeout I/O client (s)", default: 15, hint: "délai max de handshake TLS / lecture de requête et frames HTTP/2 par connexion ; libère les connexions muettes" }
-    cert_path:          { type: "path",    label: "Certificat TLS DoH (optionnel)" }
-    key_path:           { type: "path",    label: "Clé TLS DoH (optionnel)" }
+    cert:               { type: "path",    label: "Certificat TLS DoH (optionnel)" }
+    key:                { type: "path",    label: "Clé TLS DoH (optionnel)" }
     prefer_ipv6:        { type: "boolean", label: "Préférer IPv6",        default: true }
   }
 

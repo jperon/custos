@@ -434,11 +434,11 @@ return {
       default = 15,
       hint = "délai max de handshake TLS / lecture de requête et frames HTTP/2 par connexion ; libère les connexions muettes"
     },
-    cert_path = {
+    cert = {
       type = "path",
       label = "Certificat TLS DoH (optionnel)"
     },
-    key_path = {
+    key = {
       type = "path",
       label = "Clé TLS DoH (optionnel)"
     },
