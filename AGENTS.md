@@ -893,3 +893,13 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   caractères restreint, échec explicite), valeur REPO écrite entre apostrophes
   simples dans `sync.conf`, et ligne cron ajoutée seulement si absente
   (`grep -qF … ||`).
+- **`setup.sh` référençait un ruleset supprimé et des tables inexistantes.**
+  `NFT_RULES` pointait vers `nft-rules/dns-filter.nft` (supprimé), et
+  `down`/`status` visaient `table ip/ip6 dns-filter` alors que le ruleset réel
+  est `table bridge dns-filter-bridge`. Comme `dns-filter-bridge.nft` est un
+  **gabarit à placeholders** rendu par `nft_rules.apply`, `up` ne charge plus
+  `nft -f` : il vérifie les dépendances et rappelle que les règles sont
+  appliquées par le service au démarrage ; `down`/`status` ciblent la table
+  bridge. La détection des bibliothèques capture `ldconfig -p` une fois puis
+  teste en shell pur (`case`), ce qui évite un faux échec par SIGPIPE sous
+  `pipefail`. `doc/CHEATSHEET.md` est aligné.
