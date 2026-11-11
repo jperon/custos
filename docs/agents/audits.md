@@ -377,3 +377,9 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   ré-application éventuelle, ré-application échouée → `false`). Le contexte
   libnftables est stubbé le temps du `require` puis le stub `ffi_defs` partagé
   est restauré.
+- **T6 : `ip_whitelist` sans spec directe.** Ajout de
+  `tests/unit/ip_whitelist_spec.moon` : `init` purge bien les deux sets puis
+  répartit les entrées IPv4/IPv6 (détection par `:`), supprime les espaces
+  internes, ignore les entrées vides, n'émet le `add element` que pour la
+  famille présente, et tolère un rc nft non nul ; `cleanup` libère le contexte.
+  Contexte libnftables stubbé au `require`, stub `ffi_defs` partagé restauré.
