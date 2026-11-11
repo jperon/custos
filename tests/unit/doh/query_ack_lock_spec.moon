@@ -62,6 +62,11 @@ package.loaded["nft_queue"] = nft_stub
 
 query_mod = require "doh.query"
 
+-- `doh.query` a capturé le stub de with_lock ; on restaure le vrai module dans
+-- package.loaded pour ne pas polluer les autres specs chargées dans le même
+-- processus Lua (auth.sessions, filelock_spec…).
+package.loaded["lib.filelock"] = real_filelock
+
 answers = { { family: "ipv4", addr: "1.2.3.4", ttl: 60 } }
 
 make_opts = (inject_nft=true) -> {
