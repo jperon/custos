@@ -1565,3 +1565,33 @@ exporte ces symboles.
 OK ; `make test` = 2351 successes / 0 failures / 0 errors / 0 pending
 (`tmp/test-wolfenv2.log`) ; `make test-js` = 12 pass / 0 fail. `make test-e2e`
 non relancé (VMs seulement interrogées en lecture seule).
+
+### Branche d-nets — alias `filter.nets` et défaut de `filter.lists_dir`
+
+- **`filter.nets` ignoré par `from_net`/`to_net`.** La webui édite un
+  dictionnaire nom→CIDRs (`src/webui/handlers/filter.moon:109`), mais les deux
+  conditions passaient l'argument tel quel à
+  `net_match.build_cidr_condition` : un nom de groupe ne correspondait jamais.
+  Correctif : `net_match.build_net_arg_condition`
+  (`src/filter/conditions/net_match.moon:86`) résout un argument qui n'est ni
+  `_any`/`_none` ni un CIDR/IP littéral (`Net`) mais une clé de `cfg.nets` vers
+  un OU sur les CIDRs du groupe (`build_alias_condition`, `:64`, via
+  `compiler_api.make_plural`, désormais exporté). `from_net.moon:35` et
+  `to_net.moon:37` l'utilisent ; les variantes `from_nets`,
+  `from_net_list(s)` en héritent (une entrée/ligne peut être un alias). Un nom
+  inconnu garde le comportement « CIDR invalide » et journalise
+  `filter_net_unknown` une seule fois à la construction (`:103`), jamais dans
+  `eval`. Test : `tests/unit/filter/net_alias_spec.moon`.
+- **Alias multi-CIDR volontairement worker-only.** `make_plural` fusionne des
+  expressions nft à préfixe identique ; une expression déjà groupée
+  (`ip saddr { … }`) ne peut pas être recombinée par le pluriel supérieur
+  (`from_nets`, `from_net_list…`) sans produire une règle fausse. Un alias de
+  plus d'un CIDR est donc déclaré `nft: false`
+  (`src/filter/conditions/net_match.moon:75-77`) ; un alias vers un seul CIDR
+  reste nft-capable. Les CIDRs littéraux et `from_nets` de CIDRs gardent
+  exactement leur comportement worker/nft (couvert par le même spec).
+- **Libellés webui/doc rétablis.** `handle_nets_get` ne dit plus « Dictionnaire
+  non consulté par from_net » mais décrit la résolution effective
+  (`src/webui/handlers/filter.moon:109`) ; passages alignés dans
+  `doc/CONFIG.md` (§14.2 et tableau `from_net`), `docs/agents/filtre.md`
+  (§ Alias de réseaux), `docs/agents/webui.md` et `README.md`.
