@@ -1,6 +1,7 @@
 { :ffi, :libc } = require "ffi_defs"
 { :log_warn } = require "log"
 config = require "config"
+{ :to_hex, :is_valid_timeout } = require "lib.ipc_hex"
 
 nft_cfg = config.nft or {}
 FAMILY = nft_cfg.family or "bridge"
@@ -28,15 +29,6 @@ sleep_req = ffi.new "timespec_t[1]"
 poll_fds  = ffi.new "struct pollfd[1]"
 ack_buf   = ffi.new "uint8_t[1]"
 drain_buf = ffi.new "uint8_t[64]"
-
-is_valid_timeout = (t) ->
-  return false unless type(t) == "string"
-  return false unless #t > 0 and #t <= 16
-  t\match("^%d+[smhdw]?$") ~= nil
-
-to_hex = (s) ->
-  return "" unless s and #s > 0
-  (s\gsub ".", (c) -> string.format "%02x", c\byte!)
 
 sanitize_timeout = (timeout) ->
   t = if timeout == nil then "" else tostring timeout

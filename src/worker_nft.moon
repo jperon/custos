@@ -2,6 +2,7 @@
 { :run_cmd } = require "nft"
 { :cmd_for, :sanitize_timeout } = require "nft_queue"
 { :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
+{ :split_fields, :from_hex } = require "lib.ipc_hex"
 
 BUF_SIZE  = 8192
 MAX_BATCH = 64
@@ -15,28 +16,6 @@ read_buf  = ffi.new "char[?]", BUF_SIZE
 ack_byte  = ffi.new "uint8_t[1]"
 ack_byte[0] = 0x01
 poll_fd   = ffi.new "struct pollfd[1]"
-
-split_fields = (line) ->
-  out = {}
-  i = 1
-  while true
-    j = line\find "|", i, true
-    if j
-      out[#out + 1] = line\sub i, j - 1
-      i = j + 1
-    else
-      out[#out + 1] = line\sub i
-      break
-  out
-
-from_hex = (h) ->
-  return "", nil if not h or #h == 0
-  return nil, "hex_odd_length" if (#h % 2) != 0
-  return nil, "hex_invalid_chars" unless h\match "^[0-9a-fA-F]+$"
-  out = {}
-  for i = 1, #h, 2
-    out[#out + 1] = string.char tonumber(h\sub(i, i + 1), 16)
-  table.concat(out), nil
 
 is_ipv4 = (s) -> s and s\match "^%d+%.%d+%.%d+%.%d+$"
 is_ipv6 = (s) -> s and s\find ":", 1, true

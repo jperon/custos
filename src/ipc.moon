@@ -12,6 +12,7 @@
 { :ffi, :libc } = require "ffi_defs"
 config = require "config"
 { :log_warn } = require "log"
+{ :to_hex, :from_hex, :split_fields, :is_valid_timeout } = require "lib.ipc_hex"
 
 bit = require "bit"
 
@@ -84,18 +85,8 @@ decode_modifiers = (bits) ->
   result
 
 -- ── Helpers ──────────────────────────────────────────────────────────
-to_hex = (s) ->
-  return "" unless s and #s > 0
-  (s\gsub ".", (c) -> string.format "%02x", c\byte!)
-
-from_hex = (h) ->
-  return "", nil if not h or #h == 0
-  return nil, "hex_odd_length"   if (#h % 2) != 0
-  return nil, "hex_invalid_chars" unless h\match "^[0-9a-fA-F]+$"
-  out = {}
-  for i = 1, #h, 2
-    out[#out + 1] = string.char tonumber(h\sub(i, i + 1), 16)
-  table.concat(out), nil
+-- Encodage hexadécimal et découpage des champs : lib.ipc_hex (partagé avec
+-- worker_nft et nft_queue).
 
 { :mac2s } = require "ipparse.l2.ethernet"
 { :ip2s }  = require "ipparse.l3.ip"
@@ -111,11 +102,6 @@ ip_raw_to_str = (ip_raw) ->
 is_ipv4_str    = (s) -> s and s\match "^%d+%.%d+%.%d+%.%d+$"
 is_ipv6_str    = (s) -> s and s\find ":", 1, true
 is_valid_mac   = (s) -> s and s\match "^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$"
-is_valid_timeout = (t) ->
-  return false unless type(t) == "string"
-  return false unless #t > 0 and #t <= 16
-  t\match("^%d+[smhdw]?$") ~= nil
-
 msg_type_for = (ipv4, refused) ->
   if ipv4
     return MSG_IPV4_REFUSED if refused
@@ -226,19 +212,6 @@ write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw,
   msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms
   return false unless msg
   write_with_retry pipe_wfd, msg
-
-split_fields = (line) ->
-  out = {}
-  i = 1
-  while true
-    j = line\find "|", i, true
-    if j
-      out[#out + 1] = line\sub i, j - 1
-      i = j + 1
-    else
-      out[#out + 1] = line\sub i
-      break
-  out
 
 decode_msg = (raw) ->
   return nil, "empty" unless raw and #raw > 0
