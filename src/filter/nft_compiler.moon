@@ -330,11 +330,13 @@ compile = (filter_cfg, rules_metadata=nil) ->
     conditions_worker_only: 0
   }
 
-  -- Build plan_rules in original order.
-  -- A rule is included if it has at least one nft-compilable condition AND is not
-  -- worker-only (fully static), OR if it requires authentication (needs auth subchains).
-  -- Rules with no nft conditions (e.g. catch-all deny) are excluded to avoid
-  -- bypassing QUEUE_CAPTIVE / QUEUE_REJECT in the nft template.
+  -- Build plan_rules in original order : toutes les règles actives sont incluses.
+  -- build_rule pose toujours les quatre set_dyn_* et le worker y injecte les
+  -- tuples (client, destination) autorisés par la règle, y compris pour une
+  -- règle sans condition nft (règles DNS worker-only). La chaîne nft de la
+  -- règle est donc nécessaire pour poser son mark. Une règle deny sans
+  -- condition n'a simplement jamais d'élément dans ses sets dynamiques ; sa
+  -- chaîne ne matche rien et le trafic tombe sur QUEUE_CAPTIVE/QUEUE_REJECT.
   plan_rules = {}
 
   -- Keep all rules for dynamic set generation (sets_dyn_* are needed for all rules)
@@ -361,8 +363,6 @@ compile = (filter_cfg, rules_metadata=nil) ->
     else
       metrics.nft_compilable += 1
 
-    conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
-
     -- Count conditions by backend
     if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions
       -- conditions is a flat array of conditions (from rule.moon)
@@ -372,28 +372,7 @@ compile = (filter_cfg, rules_metadata=nil) ->
         else
           metrics.conditions_worker_only += 1
 
-    -- Determine if rule has at least one nft-compilable condition
-    has_nft_cond = false
-    if conditions_meta
-      -- conditions_meta is a flat array of conditions (from rule.moon)
-      first_elem = conditions_meta[1]
-      is_flat_format = first_elem and first_elem.name and first_elem.args
-
-      if is_flat_format
-        -- conditions_meta is an array of conditions
-        for _, cond_meta in ipairs conditions_meta
-          if cond_meta.capabilities and cond_meta.capabilities.nft
-            has_nft_cond = true
-            break
-
-    -- Include rule if:
-    -- 1. Has nft conditions and is not worker-only (standard nft-compilable rule)
-    -- 2. Requires auth (for auth subchain generation)
-    -- 3. Has dynamic sets (need nft rules to check dynamic sets, regardless of worker_only)
-    -- 4. Worker-only with dynamic sets or auth (need chains to check sets)
-    include_rule = (has_nft_cond and not is_worker_only) or r.requires_auth or (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6) or (is_worker_only and (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6 or r.requires_auth))
-    if include_rule
-      plan_rules[#plan_rules + 1] = r
+    plan_rules[#plan_rules + 1] = r
 
   {
     first_match_wins: first_match_wins

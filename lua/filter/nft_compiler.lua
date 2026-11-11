@@ -531,7 +531,6 @@ compile = function(filter_cfg, rules_metadata)
       else
         metrics.nft_compilable = metrics.nft_compilable + 1
       end
-      local conditions_meta = r.conditions_meta or (rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions)
       if rules_metadata and rules_metadata[idx] and rules_metadata[idx].conditions then
         for _, cond in ipairs(rules_metadata[idx].conditions) do
           if cond.capabilities and cond.capabilities.nft then
@@ -541,23 +540,7 @@ compile = function(filter_cfg, rules_metadata)
           end
         end
       end
-      local has_nft_cond = false
-      if conditions_meta then
-        local first_elem = conditions_meta[1]
-        local is_flat_format = first_elem and first_elem.name and first_elem.args
-        if is_flat_format then
-          for _, cond_meta in ipairs(conditions_meta) do
-            if cond_meta.capabilities and cond_meta.capabilities.nft then
-              has_nft_cond = true
-              break
-            end
-          end
-        end
-      end
-      local include_rule = (has_nft_cond and not is_worker_only) or r.requires_auth or (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6) or (is_worker_only and (r.set_dyn_ip4 or r.set_dyn_ip6 or r.set_dyn_mac4 or r.set_dyn_mac6 or r.requires_auth))
-      if include_rule then
-        plan_rules[#plan_rules + 1] = r
-      end
+      plan_rules[#plan_rules + 1] = r
       _continue_0 = true
     until true
     if not _continue_0 then

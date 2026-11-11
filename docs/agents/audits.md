@@ -341,3 +341,12 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   arborescence `README.md` et `tests/README.md` alignées. Note : la validation
   de préfixe qu'aurait pu fournir `cidr_parser` reste absente d'`ipcalc`
   (point B4 de l'audit, hors périmètre de cette branche).
+- **Q4 : `include_rule` toujours vrai.** `build_rule` pose inconditionnellement
+  `set_dyn_ip4/ip6/mac4/mac6` (lignes « set_dyn_* »), donc le `or` de
+  `include_rule` était toujours satisfait et le filtre annoncé par le
+  commentaire (n'inclure que si condition nft / auth) ne s'appliquait jamais.
+  Simplification explicite : toutes les règles actives sont ajoutées à
+  `plan_rules`, avec un commentaire qui décrit le vrai mécanisme (le worker
+  injecte dans les sets dynamiques de chaque règle, y compris worker-only ;
+  une règle deny sans condition n'a simplement aucun élément). Aucun
+  changement de sortie nft.
