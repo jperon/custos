@@ -374,6 +374,8 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   : les certificats dits « SNI » sont en réalité keyés par IP locale (SNI non
   extrait). Import retiré et commentaires/doc corrigés (`server.moon`,
   `.agents/workers.md`, `.agents/px5g_migration.md`, `doc/CONFIG.md`).
+  Comportement changé depuis : certificat par nom SNI avec repli IP locale
+  (voir « Certificat AUTH par SNI et écriture atomique (branche d-sni) »).
 - **`lib.filelock.with_lock` : valeurs de retour tronquées.** `pcall fn`
   empaqueté dans `{ ... }` laissait un trou dès que `fn` retournait
   `nil, "erreur"` (`#results` indéfini, message perdu, cas de
