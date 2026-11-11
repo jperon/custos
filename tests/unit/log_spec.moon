@@ -55,3 +55,42 @@ describe "log", ->
     cfg = log.RL_CONFIG.captive_redirect
     assert.is_not_nil cfg
     assert.are.same { "ip" }, cfg.keys
+
+  -- Purge bornée de _rl : sans elle, une entrée par (MAC, domaine, type) vue
+  -- reste en mémoire pour toute la vie du worker.
+  describe "purge bornée de _rl", ->
+    count_rl = ->
+      n = 0
+      for _ in pairs log._rl
+        n += 1
+      n
+
+    before_each -> log._rl_reset!
+
+    it "conserve la sémantique du rate-limit (fenêtre par action)", ->
+      f = { mac_src: "aa:bb", qname: "x.test", qtype: "A" }
+      -- Fenêtre ALLOW = 30 s.
+      assert.are.equal 0,  log.check_rl "ALLOW", f, 1000
+      assert.are.equal -1, log.check_rl "ALLOW", f, 1001
+      assert.are.equal -1, log.check_rl "ALLOW", f, 1029
+      assert.are.equal 2,  log.check_rl "ALLOW", f, 1030
+      assert.are.equal -1, log.check_rl "ALLOW", f, 1031
+
+    it "purge les entrées expirées au plus toutes les N insertions", ->
+      n = log.RL_PURGE_EVERY
+
+      -- Fenêtre ALLOW = 30 s.
+      for i = 1, n
+        log.check_rl "ALLOW", { mac_src: "aa:bb", qname: "a#{i}.test", qtype: "A" }, 1000
+      assert.are.equal n, count_rl!
+
+      -- Toujours dans la fenêtre : la purge ne doit rien supprimer.
+      for i = 1, n
+        log.check_rl "ALLOW", { mac_src: "aa:bb", qname: "b#{i}.test", qtype: "A" }, 1005
+      assert.are.equal 2 * n, count_rl!
+
+      -- Entrées de 1000 (exp. 1030) et 1005 (exp. 1035) expirées : seules
+      -- les N entrées du troisième lot restent.
+      for i = 1, n
+        log.check_rl "ALLOW", { mac_src: "aa:bb", qname: "c#{i}.test", qtype: "A" }, 1040
+      assert.are.equal n, count_rl!
