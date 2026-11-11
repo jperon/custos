@@ -116,6 +116,36 @@ describe "auth/ffi_wolfssl", ->
       assert.equals "http/1.1", captured.list
       assert.equals "http/1.1", ssl.DEFAULT_ALPN_PROTOCOLS
 
+  describe "ALPN client (repli DoH HTTP/2)", ->
+
+    it "propose h2,http/1.1 par défaut", ->
+      assert.equals "h2,http/1.1", ssl.CLIENT_ALPN_PROTOCOLS
+
+    it "alpn_configure_client passe CONTINUE_ON_MISMATCH (2)", ->
+      captured = {}
+      fake = {
+        wolfSSL_UseALPN: (obj, list, sz, opts) ->
+          captured = { list: ffi.string(list, sz), size: sz, options: opts }
+          1
+      }
+      assert.is_true ssl.alpn_configure_client fake, "SSL"
+      assert.equals "h2,http/1.1", captured.list
+      assert.equals 11, captured.size
+      assert.equals 2, captured.options
+
+    it "alpn_configure_client sans symbole ALPN → false, jamais d'exception", ->
+      assert.is_false ssl.alpn_configure_client {}, "SSL"
+
+    it "alpn_configure_client refuse un retour ≠ WOLFSSL_SUCCESS", ->
+      fake = { wolfSSL_UseALPN: -> -173 }
+      assert.is_false ssl.alpn_configure_client fake, "SSL"
+
+    it "newclient_context marque le contexte client (ALPN opt-in)", ->
+      ctx = ssl.newclient_context {}
+      assert.is_true ctx.is_client
+      assert.is_nil ctx.alpn_mode
+      ssl.free_context ctx
+
   describe "constantes d'erreur SSL", ->
     it "SSL_ERROR_NONE vaut 0", ->
       assert.equals 0, ssl.SSL_ERROR_NONE
