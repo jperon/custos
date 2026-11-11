@@ -222,8 +222,9 @@ RL_NEVER_LIMIT = {
   -- Audit de sécurité : une connexion, une déconnexion/expiration de session
   -- ou un changement de mot de passe ne doivent jamais disparaître derrière
   -- une fenêtre, même sous rafale. Sites : auth/handlers.moon:140 (login),
-  -- :273 (bye/grâce), :424 (mot de passe) ; auth/user_sessions.moon:74
-  -- (expiration), :128 (retrait). Les échecs d'authentification ne sont PAS
+  -- :276 (bye/grâce), :221 (session invalidée), :427 (mot de passe) ;
+  -- auth/user_sessions.moon:74 (expiration), :128 (retrait). Les échecs
+  -- d'authentification ne sont PAS
   -- ici : ils restent limités par (ip, user) via RL_CONFIG (force brute).
   server_login_success:        true
   server_password_changed:     true

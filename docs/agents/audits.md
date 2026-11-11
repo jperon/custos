@@ -2128,8 +2128,8 @@ IDENTITÉ ni VOLATIL (vérifié : retirer `nft_outcome` du classement produit
 `unclassified = { "nft_outcome" }`).
 
 **Événements jamais limités.** Ajouts à `RL_NEVER_LIMIT` : `server_login_success`
-(`src/auth/handlers.moon:140`), `server_password_changed` (`:424`),
-`server_bye_grace` (`:273`), `server_ping_session_invalidated` (`:219`),
+(`src/auth/handlers.moon:140`), `server_password_changed` (`:427`),
+`server_bye_grace` (`:276`), `server_ping_session_invalidated` (`:221`),
 `user_session_expired` (`src/auth/user_sessions.moon:74`) et
 `user_session_removed` (`:128`). Les échecs d'authentification
 (`server_login_nonce_rejected` :120, `server_login_plaintext_refused` :128,
@@ -2149,16 +2149,16 @@ passe à `0` (plus verbeux que DEBUG), documenté dans `doc/CONFIG.md`.
 
 | Action (sortie, préfixe compris) | Fichier:ligne | Ancien → nouveau | Raison |
 |---|---|---|---|
-| `auth_server_conn_started` | `src/auth/server.moon:261` | INFO → DEBUG | 3206 lignes mesurées : une par connexion TCP du portail |
-| `auth_server_request_received` | `src/auth/handlers.moon:428` | INFO → DEBUG | 3166 : une par requête HTTP du portail |
-| `auth_server_ping_received` | `src/auth/handlers.moon:176` | INFO → DEBUG | 657 : une par ping HTTP |
-| `auth_server_ping_success` | `src/auth/handlers.moon:225` | INFO → DEBUG | 657 : une par ping HTTP |
-| `questions_dns_stolen` | `src/worker_questions.moon:324` | INFO → DEBUG | 350 : une par requête DNS volée |
-| `doh_dns_stolen` | `src/doh/query.moon:178` | INFO → DEBUG | même nature, une par requête DoH |
-| `auth_server_routing_to_handle_login` | `src/auth/handlers.moon:444` | INFO → DEBUG | une par POST /login |
-| `auth_queue_processed` | `src/worker_auth_queue.moon:84` | INFO → DEBUG | une par paquet NFQUEUE |
-| `nft_nft_batch_rule` | `src/worker_nft.moon:106` | INFO → DEBUG | une par lot nft, donc souvent par requête |
-| `captive_sending_frames` | `src/worker_captive.moon:250` | INFO → DEBUG | une par SYN redirigé (l'événement `redirect` reste INFO) |
+| `auth_server_conn_started` | `src/auth/server.moon:263` | INFO → DEBUG | 3206 lignes mesurées : une par connexion TCP du portail |
+| `auth_server_request_received` | `src/auth/handlers.moon:433` | INFO → DEBUG | 3166 : une par requête HTTP du portail |
+| `auth_server_ping_received` | `src/auth/handlers.moon:178` | INFO → DEBUG | 657 : une par ping HTTP |
+| `auth_server_ping_success` | `src/auth/handlers.moon:228` | INFO → DEBUG | 657 : une par ping HTTP |
+| `questions_dns_stolen` | `src/worker_questions.moon:327` | INFO → DEBUG | 350 : une par requête DNS volée |
+| `doh_dns_stolen` | `src/doh/query.moon:180` | INFO → DEBUG | même nature, une par requête DoH |
+| `auth_server_routing_to_handle_login` | `src/auth/handlers.moon:450` | INFO → DEBUG | une par POST /login |
+| `auth_queue_processed` | `src/worker_auth_queue.moon:86` | INFO → DEBUG | une par paquet NFQUEUE |
+| `nft_nft_batch_rule` | `src/worker_nft.moon:107` | INFO → DEBUG | une par lot nft, donc souvent par requête |
+| `captive_sending_frames` | `src/worker_captive.moon:253` | INFO → DEBUG | une par SYN redirigé (l'événement `redirect` reste INFO) |
 
 `response_no_ipv6_for_client` reste INFO : la règle `RL_CONFIG` `client`/120 s
 s'applique bien avec le préfixe `response_` (cas existant de
@@ -2170,11 +2170,11 @@ WARN par défaut le borne par IP cliente sur 60 s (nouveau test).
 
 | Action | Fichier:ligne | Niveau | Raison de ne pas trancher |
 |---|---|---|---|
-| `sni_captured` | `src/worker_tls.moon:913` | INFO | par connexion TLS, mais visibilité sécurité SNI et grep e2e (`tests/e2e/homelab_e2e.sh:1014`, config e2e en DEBUG) |
-| `captive_skip_authenticated` | `src/worker_captive.moon:220` | INFO | par SYN, mais changement d'état et grep e2e (`homelab_e2e.sh:1281`) |
-| `captive_redirect` | `src/worker_captive.moon:267` | INFO | par SYN, mais `RL_CONFIG` dédié et test OpenWrt |
-| `server_ping_token_invalid`, `server_ping_stale_token_session_alive` | `src/auth/handlers.moon:192`, `:190` | INFO | par ping mais rares/anomalies : WARN ou DEBUG ? |
-| `response_matched_after_retry` | `src/worker_responses.moon:808` | INFO | par réponse mais uniquement en cas de retry IPC (anomalie surmontée) |
+| `sni_captured` | `src/worker_tls.moon:914` | INFO | par connexion TLS, mais visibilité sécurité SNI et grep e2e (`tests/e2e/homelab_e2e.sh:1014`, config e2e en DEBUG) |
+| `captive_skip_authenticated` | `src/worker_captive.moon:221` | INFO | par SYN, mais changement d'état et grep e2e (`homelab_e2e.sh:1281`) |
+| `captive_redirect` | `src/worker_captive.moon:260` | INFO | par SYN, mais `RL_CONFIG` dédié et test OpenWrt |
+| `server_ping_token_invalid`, `server_ping_stale_token_session_alive` | `src/auth/handlers.moon:194`, `:192` | INFO | par ping mais rares/anomalies : WARN ou DEBUG ? |
+| `response_matched_after_retry` | `src/worker_responses.moon:809` | INFO | par réponse mais uniquement en cas de retry IPC (anomalie surmontée) |
 
 **Tests** : `tests/unit/log_spec.moon` (identité/volatil/inconnu, ordre,
 `suppressed=1`, audit jamais limité, échec auth borné, `doh_handshake_failed`,
