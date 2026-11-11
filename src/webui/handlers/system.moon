@@ -12,6 +12,7 @@ ffi = require "ffi"
 H   = require "auth.html"
 pidfile = require "lib.pidfile"
 { :page } = require "webui.handlers.dashboard"
+audit = require "webui.audit"
 
 pcall ->
   ffi.cdef [[
@@ -31,6 +32,12 @@ handle_reload = (req, state) ->
   kill_fn  = (state and state.kill_fn) or default_kill
   pid, err = pidfile.read pid_path
   ok = pid and kill_fn(pid, SIGHUP)
+  if pid and ok
+    audit.change req, "webui_reload_requested", { pid: pid }
+  elseif pid
+    audit.fail req, "webui_reload_requested", { pid: pid }, "kill_failed"
+  else
+    audit.fail req, "webui_reload_requested", {}, "pidfile_unreadable"
   body = if ok
     H.section {
       H.p { class: "flash success" }, "Rechargement lancé (SIGHUP → superviseur PID #{pid})."

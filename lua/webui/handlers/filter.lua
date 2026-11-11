@@ -13,6 +13,7 @@ do
   local _obj_0 = require("webui.util")
   esc, parse_form = _obj_0.esc, _obj_0.parse_form
 end
+local audit = require("webui.audit")
 local parse_form_multi
 parse_form_multi = function(body)
   if not (body) then
@@ -264,11 +265,22 @@ split_lines = function(s)
 end
 local make_post
 make_post = function(section_key, is_list_value)
+  local saved_action = "webui_" .. tostring(section_key) .. "_saved"
+  local deleted_action = "webui_" .. tostring(section_key) .. "_deleted"
   return function(req, state)
     local form = parse_form(req.body)
+    local action
+    if form.delete then
+      action = deleted_action
+    else
+      action = saved_action
+    end
     local cfg, err = read_config(state.config_path)
     if not (cfg) then
-      return 500, { }, "Erreur config : " .. tostring(err)
+      audit.fail(req, action, {
+        section = section_key
+      }, "read_config")
+      return 500, { }, "Erreur config : " .. tostring(tostring(err))
     end
     cfg.filter = cfg.filter or { }
     if form.delete then
@@ -277,8 +289,14 @@ make_post = function(section_key, is_list_value)
       cfg.filter[section_key] = current
       local ok, e = write_config(cfg, state.config_path)
       if not (ok) then
+        audit.fail(req, action, {
+          name = form.delete
+        }, "write_config")
         return 500, { }, "Erreur écriture : " .. tostring(e)
       end
+      audit.change(req, action, {
+        name = form.delete
+      })
       return 302, {
         ["Location"] = "/admin/config/filter/" .. tostring(section_key)
       }, ""
@@ -323,8 +341,14 @@ make_post = function(section_key, is_list_value)
     cfg.filter[section_key] = result
     local ok, e = write_config(cfg, state.config_path)
     if not (ok) then
+      audit.fail(req, action, {
+        section = section_key
+      }, "write_config")
       return 500, { }, "Erreur écriture : " .. tostring(e)
     end
+    audit.change(req, action, {
+      section = section_key
+    })
     return 302, {
       ["Location"] = "/admin/config/filter/" .. tostring(section_key)
     }, ""
@@ -336,9 +360,18 @@ local handle_users_post = make_post("users", false)
 local handle_times_post
 handle_times_post = function(req, state)
   local form = parse_form(req.body)
+  local action
+  if form.delete then
+    action = "webui_times_deleted"
+  else
+    action = "webui_times_saved"
+  end
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
-    return 500, { }, "Erreur config : " .. tostring(err)
+    audit.fail(req, action, {
+      section = "times"
+    }, "read_config")
+    return 500, { }, "Erreur config : " .. tostring(tostring(err))
   end
   cfg.filter = cfg.filter or { }
   if form.delete then
@@ -347,8 +380,14 @@ handle_times_post = function(req, state)
     cfg.filter.times = current
     local ok, e = write_config(cfg, state.config_path)
     if not (ok) then
+      audit.fail(req, action, {
+        name = form.delete
+      }, "write_config")
       return 500, { }, "Erreur écriture : " .. tostring(e)
     end
+    audit.change(req, action, {
+      name = form.delete
+    })
     return 302, {
       ["Location"] = "/admin/config/filter/times"
     }, ""
@@ -386,8 +425,14 @@ handle_times_post = function(req, state)
   cfg.filter.times = times
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
+    audit.fail(req, action, {
+      section = "times"
+    }, "write_config")
     return 500, { }, "Erreur écriture : " .. tostring(e)
   end
+  audit.change(req, action, {
+    section = "times"
+  })
   return 302, {
     ["Location"] = "/admin/config/filter/times"
   }, ""
@@ -449,7 +494,10 @@ handle_decision_post = function(req, state)
   local form = parse_form(req.body)
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
-    return 500, { }, "Erreur config : " .. tostring(err)
+    audit.fail(req, "webui_decision_saved", {
+      section = "filter.decision"
+    }, "read_config")
+    return 500, { }, "Erreur config : " .. tostring(tostring(err))
   end
   cfg.filter = cfg.filter or { }
   cfg.filter.decision = cfg.filter.decision or { }
@@ -457,8 +505,14 @@ handle_decision_post = function(req, state)
   cfg.filter.decision.continue_to_next_rule = form.ctn == "1"
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
+    audit.fail(req, "webui_decision_saved", {
+      section = "filter.decision"
+    }, "write_config")
     return 500, { }, "Erreur écriture : " .. tostring(e)
   end
+  audit.change(req, "webui_decision_saved", {
+    section = "filter.decision"
+  })
   return 302, {
     ["Location"] = "/admin/config/filter/decision"
   }, ""

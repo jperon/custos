@@ -7,6 +7,7 @@ H = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
 { :esc, :parse_form } = require "webui.util"
+audit = require "webui.audit"
 
 -- URL de la vue « détail » : page Verdicts filtrée sur une MAC (?mac=…).
 -- Caractères de la MAC (hex + ':') sûrs en query string → pas d'encodage requis.
@@ -230,11 +231,17 @@ handle_devices_post = (req, state) ->
   mac  = (form.mac or "")\lower!
   name = (form.name or "")\match "^%s*(.-)%s*$"
   back = REDIRECT_WHITELIST[form.redirect] and form.redirect or "/admin/config/devices"
-  return 400, {}, "MAC invalide" unless valid_mac mac
-  return 400, {}, "Nom requis"   if name == ""
+  unless valid_mac mac
+    audit.refused req, "invalid_mac"
+    return 400, {}, "MAC invalide"
+  if name == ""
+    audit.refused req, "name_required", { mac: mac }
+    return 400, {}, "Nom requis"
 
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur config : #{err}" unless cfg
+  unless cfg
+    audit.fail req, "webui_device_saved", { mac: mac, name: name }, "read_config"
+    return 500, {}, "Erreur config : #{tostring err}"
   cfg.filter or= {}
   cfg.filter.macs or= {}
   -- Retire un éventuel nom existant pour cette MAC (renommage idempotent).
@@ -243,10 +250,13 @@ handle_devices_post = (req, state) ->
   cfg.filter.macs[name] = mac
 
   ok, e = write_config cfg, state.config_path
-  return 500, {}, "Erreur écriture : #{e}" unless ok
+  unless ok
+    audit.fail req, "webui_device_saved", { mac: mac, name: name }, "write_config"
+    return 500, {}, "Erreur écriture : #{e}"
 
   -- Reload SIGHUP au superviseur (injectable via state.reload pour les tests).
   (state.reload or default_reload)!
+  audit.change req, "webui_device_saved", { mac: mac, name: name }
 
   302, { ["Location"]: back }, ""
 

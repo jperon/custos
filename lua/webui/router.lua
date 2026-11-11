@@ -41,6 +41,12 @@ local handle_metrics_get
 handle_metrics_get = require("webui.handlers.metrics").handle_metrics_get
 local parse_form
 parse_form = require("webui.util").parse_form
+local audit = require("webui.audit")
+local MUTATING_METHODS = {
+  POST = true,
+  PUT = true,
+  DELETE = true
+}
 local SCALAR_SECTIONS = {
   runtime = true,
   nfqueue = true,
@@ -68,14 +74,22 @@ dispatch = function(req, state)
       local cookie_val = (require("auth.token")).get_cookie(req.headers.cookie or "", "custos_session")
       local p = (require("auth.token")).verify(cookie_val, state.token_key)
       local user = p and p.user or "?"
+      req.admin_user = user
+      if MUTATING_METHODS[method] then
+        audit.refused(req, reason)
+      end
       return 403, {
         ["Content-Type"] = "text/html; charset=UTF-8"
       }, forbidden_page(user)
+    end
+    if MUTATING_METHODS[method] then
+      audit.refused(req, reason)
     end
     return 302, {
       ["Location"] = "/login"
     }, ""
   end
+  req.admin_user = admin.user
   if path == "/admin/" or path == "/admin" then
     return handle_dashboard(req, state)
   end

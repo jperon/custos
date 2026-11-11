@@ -15,6 +15,7 @@ H       = require "auth.html"
 { :shquote } = require "lib.shquote"
 { :esc, :parse_form } = require "webui.util"
 { :DEFAULT_LISTS_DIR } = require "filter.compiler_api"
+audit = require "webui.audit"
 
 valid_type = (t) -> t and t\match "^[a-z][a-z0-9_]*$"
 valid_name = (n) -> n and n\match "^[a-zA-Z0-9][a-zA-Z0-9_%-]*$"
@@ -217,34 +218,55 @@ handle_list_get = (req, type_name, list_name, state) ->
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "#{type_name}/#{list_name}", body
 
 handle_list_post = (req, type_name, list_name, state) ->
-  return 400, {}, "Type invalide" unless valid_type type_name
-  return 400, {}, "Nom invalide"  unless valid_name list_name
+  unless valid_type type_name
+    audit.refused req, "invalid_type"
+    return 400, {}, "Type invalide"
+  unless valid_name list_name
+    audit.refused req, "invalid_name", { list: type_name }
+    return 400, {}, "Nom invalide"
   form = parse_form req.body
   lists_dir = get_lists_dir state
   path = "#{lists_dir}/#{type_name}/#{list_name}.txt"
 
   if form.action == "delete"
-    os.remove path
+    removed, _ = os.remove path
+    unless removed
+      audit.fail req, "webui_list_deleted", { list: type_name, name: list_name }, "remove_failed"
+    else
+      audit.change req, "webui_list_deleted", { list: type_name, name: list_name }
     return 302, { ["Location"]: "/admin/config/filter/lists/#{type_name}" }, ""
 
   if form.action == "rename"
     new_name = form.new_name and (form.new_name\match "^%s*(.-)%s*$") or ""
-    return 400, {}, "Nouveau nom invalide" unless valid_name new_name
-    return 302, { ["Location"]: "/admin/config/filter/lists/#{type_name}/#{list_name}" }, "" if new_name == list_name
+    unless valid_name new_name
+      audit.refused req, "invalid_name", { list: type_name, name: list_name }
+      return 400, {}, "Nouveau nom invalide"
+    if new_name == list_name
+      audit.change req, "webui_list_renamed", { list: type_name, name: list_name, new: new_name }
+      return 302, { ["Location"]: "/admin/config/filter/lists/#{type_name}/#{list_name}" }, ""
     new_path = "#{lists_dir}/#{type_name}/#{new_name}.txt"
-    return 409, {}, "La liste #{new_name} existe déjà" if file_exists new_path
+    if file_exists new_path
+      audit.refused req, "list_exists", { list: type_name, name: new_name }
+      return 409, {}, "La liste #{new_name} existe déjà"
     ret = os.rename path, new_path
-    return 500, {}, "Échec du renommage de #{list_name} → #{new_name}" unless ret
+    unless ret
+      audit.fail req, "webui_list_renamed", { list: type_name, name: list_name, new: new_name }, "rename_failed"
+      return 500, {}, "Échec du renommage de #{list_name} → #{new_name}"
     -- Mise à jour des références dans config.moon (best-effort)
     cfg, _ = read_config state.config_path
     if cfg
       changed = update_config_refs cfg, type_name, list_name, new_name
       write_config cfg, state.config_path if changed
+    audit.change req, "webui_list_renamed", { list: type_name, name: list_name, new: new_name }
     return 302, { ["Location"]: "/admin/config/filter/lists/#{type_name}/#{new_name}" }, ""
 
   content = form.content or ""
   ok, e = write_list_file path, content
-  return 500, {}, "Erreur écriture : #{e}" unless ok
+  unless ok
+    audit.fail req, "webui_list_saved", { list: type_name, name: list_name }, "write_failed"
+    return 500, {}, "Erreur écriture : #{e}"
+  -- JAMAIS le contenu de la liste dans le journal (peut être volumineux/sensible).
+  audit.change req, "webui_list_saved", { list: type_name, name: list_name }
   302, { ["Location"]: "/admin/config/filter/lists/#{type_name}/#{list_name}" }, ""
 
 -- ── Création d'une nouvelle liste ────────────────────────────────────────
@@ -274,16 +296,25 @@ handle_list_new_get = (req, type_name, state) ->
   200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Nouvelle liste — #{type_name}", body
 
 handle_list_new_post = (req, type_name, state) ->
-  return 400, {}, "Type invalide" unless valid_type type_name
+  unless valid_type type_name
+    audit.refused req, "invalid_type"
+    return 400, {}, "Type invalide"
   form = parse_form req.body
   list_name = form.name and (form.name\match "^%s*(.-)%s*$") or ""
-  return 400, {}, "Nom invalide" unless valid_name list_name
+  unless valid_name list_name
+    audit.refused req, "invalid_name", { list: type_name }
+    return 400, {}, "Nom invalide"
   lists_dir = get_lists_dir state
   path = "#{lists_dir}/#{type_name}/#{list_name}.txt"
-  return 409, {}, "La liste #{list_name} existe déjà" if file_exists path
+  if file_exists path
+    audit.refused req, "list_exists", { list: type_name, name: list_name }
+    return 409, {}, "La liste #{list_name} existe déjà"
   content = form.content or ""
   ok, e = write_list_file path, content
-  return 500, {}, "Erreur écriture : #{e}" unless ok
+  unless ok
+    audit.fail req, "webui_list_saved", { list: type_name, name: list_name }, "write_failed"
+    return 500, {}, "Erreur écriture : #{e}"
+  audit.change req, "webui_list_saved", { list: type_name, name: list_name }
   302, { ["Location"]: "/admin/config/filter/lists/#{type_name}/#{list_name}" }, ""
 
 {

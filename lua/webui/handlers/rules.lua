@@ -14,6 +14,7 @@ do
   local _obj_0 = require("webui.util")
   esc, parse_form = _obj_0.esc, _obj_0.parse_form
 end
+local audit = require("webui.audit")
 local RULES_REORDER_JS = [[(function(){
   var tbody = document.getElementById('rules-tbody');
   var form  = document.getElementById('reorder-form');
@@ -660,7 +661,8 @@ handle_rules_new_post = function(req, state)
   local form = parse_form(req.body)
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
-    return 500, { }, "Erreur config : " .. tostring(err)
+    audit.fail(req, "webui_rule_saved", { }, "read_config")
+    return 500, { }, "Erreur config : " .. tostring(tostring(err))
   end
   cfg.filter = cfg.filter or { }
   cfg.filter.rules = cfg.filter.rules or { }
@@ -668,8 +670,12 @@ handle_rules_new_post = function(req, state)
   cfg.filter.rules[#cfg.filter.rules + 1] = rule
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
+    audit.fail(req, "webui_rule_saved", { }, "write_config")
     return 500, { }, "Erreur écriture : " .. tostring(e)
   end
+  audit.change(req, "webui_rule_saved", {
+    rule_id = #cfg.filter.rules
+  })
   return 302, {
     ["Location"] = "/admin/config/filter/rules"
   }, ""
@@ -698,10 +704,16 @@ handle_rules_edit_post = function(req, n, state)
   local form = parse_form(req.body)
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
-    return 500, { }, "Erreur config : " .. tostring(err)
+    audit.fail(req, "webui_rule_saved", {
+      rule_id = n
+    }, "read_config")
+    return 500, { }, "Erreur config : " .. tostring(tostring(err))
   end
   local rules = (cfg.filter or { }).rules or { }
   if not (rules[n]) then
+    audit.refused(req, "rule_not_found", {
+      rule_id = n
+    })
     return 404, { }, "Règle " .. tostring(n) .. " introuvable"
   end
   local was_disabled = rules[n].enabled == false
@@ -712,8 +724,14 @@ handle_rules_edit_post = function(req, n, state)
   cfg.filter.rules = rules
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
+    audit.fail(req, "webui_rule_saved", {
+      rule_id = n
+    }, "write_config")
     return 500, { }, "Erreur écriture : " .. tostring(e)
   end
+  audit.change(req, "webui_rule_saved", {
+    rule_id = n
+  })
   return 302, {
     ["Location"] = "/admin/config/filter/rules"
   }, ""
@@ -722,18 +740,30 @@ local handle_rules_delete
 handle_rules_delete = function(req, n, state)
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
-    return 500, { }, "Erreur config : " .. tostring(err)
+    audit.fail(req, "webui_rule_deleted", {
+      rule_id = n
+    }, "read_config")
+    return 500, { }, "Erreur config : " .. tostring(tostring(err))
   end
   local rules = (cfg.filter or { }).rules or { }
   if not (rules[n]) then
+    audit.refused(req, "rule_not_found", {
+      rule_id = n
+    })
     return 404, { }, "Règle " .. tostring(n) .. " introuvable"
   end
   table.remove(rules, n)
   cfg.filter.rules = rules
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
+    audit.fail(req, "webui_rule_deleted", {
+      rule_id = n
+    }, "write_config")
     return 500, { }, "Erreur écriture : " .. tostring(e)
   end
+  audit.change(req, "webui_rule_deleted", {
+    rule_id = n
+  })
   return 302, {
     ["Location"] = "/admin/config/filter/rules"
   }, ""
@@ -742,11 +772,17 @@ local handle_rules_toggle
 handle_rules_toggle = function(req, n, state)
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
-    return 500, { }, "Erreur config : " .. tostring(err)
+    audit.fail(req, "webui_rule_toggled", {
+      rule_id = n
+    }, "read_config")
+    return 500, { }, "Erreur config : " .. tostring(tostring(err))
   end
   local rules = (cfg.filter or { }).rules or { }
   local rule = rules[n]
   if not (rule) then
+    audit.refused(req, "rule_not_found", {
+      rule_id = n
+    })
     return 404, { }, "Règle " .. tostring(n) .. " introuvable"
   end
   if rule.enabled == false then
@@ -757,8 +793,15 @@ handle_rules_toggle = function(req, n, state)
   cfg.filter.rules = rules
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
+    audit.fail(req, "webui_rule_toggled", {
+      rule_id = n
+    }, "write_config")
     return 500, { }, "Erreur écriture : " .. tostring(e)
   end
+  audit.change(req, "webui_rule_toggled", {
+    rule_id = n,
+    enabled = rule.enabled == false and 0 or 1
+  })
   return 302, {
     ["Location"] = "/admin/config/filter/rules"
   }, ""
@@ -769,10 +812,16 @@ handle_rules_move = function(req, n, state)
   local dir = form.dir
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
-    return 500, { }, "Erreur config : " .. tostring(err)
+    audit.fail(req, "webui_rule_moved", {
+      rule_id = n
+    }, "read_config")
+    return 500, { }, "Erreur config : " .. tostring(tostring(err))
   end
   local rules = (cfg.filter or { }).rules or { }
   if not (rules[n]) then
+    audit.refused(req, "rule_not_found", {
+      rule_id = n
+    })
     return 404, { }, "Règle " .. tostring(n) .. " introuvable"
   end
   local other
@@ -786,9 +835,17 @@ handle_rules_move = function(req, n, state)
     cfg.filter.rules = rules
     local ok, e = write_config(cfg, state.config_path)
     if not (ok) then
+      audit.fail(req, "webui_rule_moved", {
+        rule_id = n,
+        dir = dir
+      }, "write_config")
       return 500, { }, "Erreur écriture : " .. tostring(e)
     end
   end
+  audit.change(req, "webui_rule_moved", {
+    rule_id = n,
+    dir = dir
+  })
   return 302, {
     ["Location"] = "/admin/config/filter/rules"
   }, ""
@@ -798,7 +855,8 @@ handle_rules_reorder = function(req, state)
   local form = parse_form(req.body)
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
-    return 500, { }, "Erreur config : " .. tostring(err)
+    audit.fail(req, "webui_rules_reordered", { }, "read_config")
+    return 500, { }, "Erreur config : " .. tostring(tostring(err))
   end
   local rules = (cfg.filter or { }).rules or { }
   local tokens
@@ -812,6 +870,9 @@ handle_rules_reorder = function(req, state)
     tokens = _accum_0
   end
   if not (#tokens == #rules) then
+    audit.refused(req, "invalid_order", {
+      rules = #rules
+    })
     return 400, { }, "Ordre invalide"
   end
   local order = { }
@@ -820,6 +881,9 @@ handle_rules_reorder = function(req, state)
     local tok = tokens[_index_0]
     local idx = tonumber(tok)
     if not (idx and idx % 1 == 0 and idx >= 1 and idx <= #rules and not seen[idx]) then
+      audit.refused(req, "invalid_order", {
+        rules = #rules
+      })
       return 400, { }, "Ordre invalide"
     end
     seen[idx] = true
@@ -839,8 +903,14 @@ handle_rules_reorder = function(req, state)
   cfg.filter.rules = new_rules
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
+    audit.fail(req, "webui_rules_reordered", {
+      rules = #rules
+    }, "write_config")
     return 500, { }, "Erreur écriture : " .. tostring(e)
   end
+  audit.change(req, "webui_rules_reordered", {
+    rules = #rules
+  })
   return 302, {
     ["Location"] = "/admin/config/filter/rules"
   }, ""

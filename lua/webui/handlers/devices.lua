@@ -11,6 +11,7 @@ do
   local _obj_0 = require("webui.util")
   esc, parse_form = _obj_0.esc, _obj_0.parse_form
 end
+local audit = require("webui.audit")
 local detail_url
 detail_url = function(mac)
   return "/admin/config/verdicts?mac=" .. tostring(mac)
@@ -314,14 +315,22 @@ handle_devices_post = function(req, state)
   local name = (form.name or ""):match("^%s*(.-)%s*$")
   local back = REDIRECT_WHITELIST[form.redirect] and form.redirect or "/admin/config/devices"
   if not (valid_mac(mac)) then
+    audit.refused(req, "invalid_mac")
     return 400, { }, "MAC invalide"
   end
   if name == "" then
+    audit.refused(req, "name_required", {
+      mac = mac
+    })
     return 400, { }, "Nom requis"
   end
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
-    return 500, { }, "Erreur config : " .. tostring(err)
+    audit.fail(req, "webui_device_saved", {
+      mac = mac,
+      name = name
+    }, "read_config")
+    return 500, { }, "Erreur config : " .. tostring(tostring(err))
   end
   cfg.filter = cfg.filter or { }
   cfg.filter.macs = cfg.filter.macs or { }
@@ -333,9 +342,17 @@ handle_devices_post = function(req, state)
   cfg.filter.macs[name] = mac
   local ok, e = write_config(cfg, state.config_path)
   if not (ok) then
+    audit.fail(req, "webui_device_saved", {
+      mac = mac,
+      name = name
+    }, "write_config")
     return 500, { }, "Erreur écriture : " .. tostring(e)
   end
   (state.reload or default_reload)()
+  audit.change(req, "webui_device_saved", {
+    mac = mac,
+    name = name
+  })
   return 302, {
     ["Location"] = back
   }, ""

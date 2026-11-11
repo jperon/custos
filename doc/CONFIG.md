@@ -241,6 +241,23 @@ exemptés — une force brute est une inondation volontaire — mais restent bor
 par `RL_CONFIG` sur `(ip, user, err)` pendant 60 s. La comparaison se fait
 aussi après retrait du préfixe worker (`auth_`).
 
+**Audit de l'interface admin (`src/webui/`).** Toute requête mutante traitée par
+la webui émet une ligne INFO via `webui/audit.moon` (`webui_config_saved`,
+`webui_rule_saved` / `_deleted` / `_toggled` / `_moved`,
+`webui_rules_reordered`, `webui_list_saved` / `_deleted` / `_renamed`,
+`webui_nets|macs|users|times_saved` / `_deleted`, `webui_decision_saved`,
+`webui_device_saved`, `webui_reload_requested`). La webui vivant dans le
+worker AUTH, les actions sortent préfixées `auth_webui_*` ; les entrées
+`RL_NEVER_LIMIT` ci-dessus sont écrites sans préfixe et retrouvées après
+retrait de `auth_` (`log.moon:357`). Une modification d'état ne doit jamais
+disparaître derrière une fenêtre de suppression. Les tentatives refusées (non
+admin, validation, conflit) émettent `webui_change_refused`, lui borné par
+`(peer, reason)` pendant 60 s (et retrouvé de la même façon, `log.moon:372`).
+Les lignes ne portent jamais de valeur de configuration, de secret ni de
+contenu de liste (`section`, `rule_id`, `list`, `name`, `mac`… au plus) ; les
+valeurs issues du formulaire sont assainies (contrôles/espaces/`=`/`"`
+remplacés par `_`, 64 caractères max).
+
 L'état est une table de hachage à taille fixe (4096 slots × 4 `uint32`, 64 Kio)
 dans une zone `mmap(MAP_SHARED|MAP_ANONYMOUS)` créée au chargement du module,
 donc dans le superviseur **avant tout fork** : workers et enfants forkés par

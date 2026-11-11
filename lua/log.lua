@@ -83,6 +83,7 @@ local RL_IDENTITY_KEYS = {
   "domain",
   "dst",
   "dst_ip",
+  "enabled",
   "env_path",
   "err",
   "errno",
@@ -188,6 +189,7 @@ local RL_IDENTITY_KEYS = {
   "rule_kept",
   "rule_new",
   "rules",
+  "section",
   "selected",
   "selected_mac",
   "sessions_file",
@@ -389,6 +391,13 @@ local RL_CONFIG = {
     },
     window = 60
   },
+  webui_change_refused = {
+    keys = {
+      "peer",
+      "reason"
+    },
+    window = 60
+  },
   EMERG = {
     keys = RL_IDENTITY_KEYS,
     window = 10
@@ -461,7 +470,27 @@ local RL_NEVER_LIMIT = {
   server_bye_grace = true,
   server_ping_session_invalidated = true,
   user_session_expired = true,
-  user_session_removed = true
+  user_session_removed = true,
+  webui_config_saved = true,
+  webui_nets_saved = true,
+  webui_nets_deleted = true,
+  webui_macs_saved = true,
+  webui_macs_deleted = true,
+  webui_users_saved = true,
+  webui_users_deleted = true,
+  webui_times_saved = true,
+  webui_times_deleted = true,
+  webui_decision_saved = true,
+  webui_rule_saved = true,
+  webui_rule_deleted = true,
+  webui_rule_toggled = true,
+  webui_rule_moved = true,
+  webui_rules_reordered = true,
+  webui_list_saved = true,
+  webui_list_deleted = true,
+  webui_list_renamed = true,
+  webui_device_saved = true,
+  webui_reload_requested = true
 }
 local RL_SLOTS = 4096
 local RL_SLOT_WORDS = 4

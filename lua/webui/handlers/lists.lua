@@ -15,6 +15,7 @@ do
 end
 local DEFAULT_LISTS_DIR
 DEFAULT_LISTS_DIR = require("filter.compiler_api").DEFAULT_LISTS_DIR
+local audit = require("webui.audit")
 local valid_type
 valid_type = function(t)
   return t and t:match("^[a-z][a-z0-9_]*$")
@@ -340,16 +341,31 @@ end
 local handle_list_post
 handle_list_post = function(req, type_name, list_name, state)
   if not (valid_type(type_name)) then
+    audit.refused(req, "invalid_type")
     return 400, { }, "Type invalide"
   end
   if not (valid_name(list_name)) then
+    audit.refused(req, "invalid_name", {
+      list = type_name
+    })
     return 400, { }, "Nom invalide"
   end
   local form = parse_form(req.body)
   local lists_dir = get_lists_dir(state)
   local path = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(list_name) .. ".txt"
   if form.action == "delete" then
-    os.remove(path)
+    local removed, _ = os.remove(path)
+    if not (removed) then
+      audit.fail(req, "webui_list_deleted", {
+        list = type_name,
+        name = list_name
+      }, "remove_failed")
+    else
+      audit.change(req, "webui_list_deleted", {
+        list = type_name,
+        name = list_name
+      })
+    end
     return 302, {
       ["Location"] = "/admin/config/filter/lists/" .. tostring(type_name)
     }, ""
@@ -357,19 +373,37 @@ handle_list_post = function(req, type_name, list_name, state)
   if form.action == "rename" then
     local new_name = form.new_name and (form.new_name:match("^%s*(.-)%s*$")) or ""
     if not (valid_name(new_name)) then
+      audit.refused(req, "invalid_name", {
+        list = type_name,
+        name = list_name
+      })
       return 400, { }, "Nouveau nom invalide"
     end
     if new_name == list_name then
+      audit.change(req, "webui_list_renamed", {
+        list = type_name,
+        name = list_name,
+        new = new_name
+      })
       return 302, {
         ["Location"] = "/admin/config/filter/lists/" .. tostring(type_name) .. "/" .. tostring(list_name)
       }, ""
     end
     local new_path = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(new_name) .. ".txt"
     if file_exists(new_path) then
+      audit.refused(req, "list_exists", {
+        list = type_name,
+        name = new_name
+      })
       return 409, { }, "La liste " .. tostring(new_name) .. " existe déjà"
     end
     local ret = os.rename(path, new_path)
     if not (ret) then
+      audit.fail(req, "webui_list_renamed", {
+        list = type_name,
+        name = list_name,
+        new = new_name
+      }, "rename_failed")
       return 500, { }, "Échec du renommage de " .. tostring(list_name) .. " → " .. tostring(new_name)
     end
     local cfg, _ = read_config(state.config_path)
@@ -379,6 +413,11 @@ handle_list_post = function(req, type_name, list_name, state)
         write_config(cfg, state.config_path)
       end
     end
+    audit.change(req, "webui_list_renamed", {
+      list = type_name,
+      name = list_name,
+      new = new_name
+    })
     return 302, {
       ["Location"] = "/admin/config/filter/lists/" .. tostring(type_name) .. "/" .. tostring(new_name)
     }, ""
@@ -386,8 +425,16 @@ handle_list_post = function(req, type_name, list_name, state)
   local content = form.content or ""
   local ok, e = write_list_file(path, content)
   if not (ok) then
+    audit.fail(req, "webui_list_saved", {
+      list = type_name,
+      name = list_name
+    }, "write_failed")
     return 500, { }, "Erreur écriture : " .. tostring(e)
   end
+  audit.change(req, "webui_list_saved", {
+    list = type_name,
+    name = list_name
+  })
   return 302, {
     ["Location"] = "/admin/config/filter/lists/" .. tostring(type_name) .. "/" .. tostring(list_name)
   }, ""
@@ -441,23 +488,39 @@ end
 local handle_list_new_post
 handle_list_new_post = function(req, type_name, state)
   if not (valid_type(type_name)) then
+    audit.refused(req, "invalid_type")
     return 400, { }, "Type invalide"
   end
   local form = parse_form(req.body)
   local list_name = form.name and (form.name:match("^%s*(.-)%s*$")) or ""
   if not (valid_name(list_name)) then
+    audit.refused(req, "invalid_name", {
+      list = type_name
+    })
     return 400, { }, "Nom invalide"
   end
   local lists_dir = get_lists_dir(state)
   local path = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(list_name) .. ".txt"
   if file_exists(path) then
+    audit.refused(req, "list_exists", {
+      list = type_name,
+      name = list_name
+    })
     return 409, { }, "La liste " .. tostring(list_name) .. " existe déjà"
   end
   local content = form.content or ""
   local ok, e = write_list_file(path, content)
   if not (ok) then
+    audit.fail(req, "webui_list_saved", {
+      list = type_name,
+      name = list_name
+    }, "write_failed")
     return 500, { }, "Erreur écriture : " .. tostring(e)
   end
+  audit.change(req, "webui_list_saved", {
+    list = type_name,
+    name = list_name
+  })
   return 302, {
     ["Location"] = "/admin/config/filter/lists/" .. tostring(type_name) .. "/" .. tostring(list_name)
   }, ""

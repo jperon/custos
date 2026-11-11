@@ -27,6 +27,11 @@
 { :handle_verdicts_get } = require "webui.handlers.verdicts"
 { :handle_metrics_get } = require "webui.handlers.metrics"
 { :parse_form } = require "webui.util"
+audit = require "webui.audit"
+
+-- Méthodes qui modifient un état : seules celles-ci sont auditées (INFO) et,
+-- en cas de refus d'accès, journalisées en WARN.
+MUTATING_METHODS = { POST: true, PUT: true, DELETE: true }
 
 -- Sections scalaires éditables via le handler générique
 SCALAR_SECTIONS = {
@@ -53,9 +58,15 @@ dispatch = (req, state) ->
       cookie_val = (require "auth.token").get_cookie req.headers.cookie or "", "custos_session"
       p = (require "auth.token").verify cookie_val, state.token_key
       user = p and p.user or "?"
+      req.admin_user = user
+      audit.refused req, reason if MUTATING_METHODS[method]
       return 403, { ["Content-Type"]: "text/html; charset=UTF-8" }, forbidden_page user
     -- pas de session → portail captif
+    audit.refused req, reason if MUTATING_METHODS[method]
     return 302, { ["Location"]: "/login" }, ""
+
+  -- Utilisateur authentifié transmis aux handlers pour le journal d'audit.
+  req.admin_user = admin.user
 
   -- Dashboard
   if path == "/admin/" or path == "/admin"
