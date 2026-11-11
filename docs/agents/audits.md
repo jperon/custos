@@ -2127,6 +2127,20 @@ les noms de champs des tables littérales de `src/**/*.moon` ;
 IDENTITÉ ni VOLATIL (vérifié : retirer `nft_outcome` du classement produit
 `unclassified = { "nft_outcome" }`).
 
+Extension de l'inventaire (fusion `dev`/`d-orphan`) : `tools/log_fields.lua`
+scanne aussi toute table littérale portant une clé `action:` de log, y compris
+hors du thunk (`log_info -> build_orphan_fields {…}` et le corps de
+`build_orphan_fields`, `src/worker_responses.moon:696,922`). Une action valant
+`/…` est un formulaire HTML (`H.form`), donc ignorée. Champs ajoutés :
+`client_port`, `dst_port` VOLATILS (ports éphémères) ;
+`refused_kept`, `refused_new`, `resolution`, `rule_kept`, `rule_new`,
+`retry_budget_skipped` IDENTITÉ (`src/ipc.moon:410-427`,
+`src/worker_responses.moon:710`), comme `af`, `alt_path`, `arch`, `condition`,
+`dnsonly`, `net`, `probe_max`, `rl_shared`, `selected`, `slots` ; les durées de
+benchmark (`ack_wait_us`, `drain_ms`, `log_ms`, `log_write_us`, `match_ms`,
+`parse_ms`, `payload_ms`, `q_to_response_ms`, `question_proc_ms`,
+`response_entry_ms`) et `upstream_retries` restent VOLATILES.
+
 Revue de classement : `family` (IPv4/IPv6 — `src/lib/socket.moon:265,388,413,417,424`,
 `src/worker_sip.moon:296`), `mode` (`strict-443`/`permissive` —
 `src/worker_tls.moon:1103`), `status` (état d'écriture ou catégorie d'échec de
