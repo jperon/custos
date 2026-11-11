@@ -1200,3 +1200,52 @@ DoH amont quand libcurl est inutilisable.
 **Vérification (2026-11-11, branche d-dohfallback)** : `make all` et
 `make check` OK (225 fichiers vérifiés) ; `make test` = 2333 successes /
 0 failures / 0 errors ; `make test-js` = 12 pass.
+
+### d-h2 — HPACK et serveur HTTP/2 DoH
+
+Le serveur DoH HTTP/2 ne se limite plus aux POST sans routage : il décode
+HPACK et applique le profil RFC 8484.
+
+- **Module HPACK pur (`src/doh/hpack.moon`).** `decode` (`:517`) gère les
+  champs indexés, les littéraux avec/sans indexation ou jamais indexés, la
+  table dynamique par connexion (`new_decoder`, `:502`) avec éviction et
+  `dynamic table size update` (`:517`). Les primitives `decode_integer`
+  (`:410`), `decode_string` (`:435`) et `huffman_decode` (`:379`, table de
+  l'annexe B) imposent les bornes : entier ≤ 2^31−1 et ≤ 5 octets de
+  continuation, chaîne et liste d'en-têtes plafonnées, index hors table,
+  EOS, padding Huffman > 7 bits ou non composé de 1, `size update` tardif ou
+  supérieur à la limite → `nil, "raison"`. L'encodeur (`encode`, `:583`) émet
+  des champs indexés de la table statique et des littéraux sans indexation ni
+  Huffman.
+- **Décodage des frames HEADERS (`src/worker_doh.moon`).**
+  `read_header_block` (`:260`) assemble HEADERS + CONTINUATION (plafond
+  `H2_MAX_HEADER_BLOCK`, `:243`), retire PADDED et PRIORITY et conserve
+  END_STREAM ; `handle_h2` (`:312`) crée un décodeur HPACK par connexion, lit
+  `:method`/`:path` (`:351-357`) et émet `GOAWAY COMPRESSION_ERROR` (0x9,
+  `:239`, `:361`) sur bloc indécodable.
+- **Routage RFC 8484.** `POST` sur le chemin DoH traite le corps DATA ; `GET`
+  décode `?dns=` base64url. Les règles de chemin sont partagées avec HTTP/1.1
+  (`is_doh_path`, `:79` ; `dns_from_query`, `:87`, utilisées aussi `:527-534`).
+  Autre chemin → `:status 404`, autre méthode → `405`, chemin DoH sans
+  paramètre/corps → `400`, sans DNS traité (`h2_reject`, `:295` ;
+  `:390-402`). Les plafonds DATA (65535), SETTINGS, PING et frame trop grande
+  sont conservés.
+- **ALPN serveur (`src/auth/ffi_wolfssl.moon`).** `ALPN_PROTOCOLS` vaut
+  `h2,http/1.1` (`:97`). `newcontext` (`:217-238`) essaie
+  `wolfSSL_CTX_UseALPN` puis, s'il est absent mais que `wolfSSL_UseALPN`
+  existe, positionne `alpn_mode = "ssl"` ; `wrap` (`:286`) annonce alors la
+  liste par objet SSL via `alpn_configure_ssl` (`:182`). Sans aucun symbole
+  ALPN, aucun changement de comportement. `alpn_configure_ctx` (`:170`) est
+  isolé pour être testé avec un stub de bibliothèque.
+- **Tests.** `tests/unit/doh/hpack_spec.moon` (vecteurs C.2 à C.6, erreurs,
+  encodeur), `tests/unit/worker_doh_spec.moon` (GET/POST, 404/405/400,
+  PADDED, PRIORITY, CONTINUATION, COMPRESSION_ERROR, tests existants de
+  plafond DATA et frame trop large), `tests/unit/doh/h2_frames_spec.moon`
+  (nouvelles constantes) et `tests/unit/auth/wolfssl_spec.moon` (choix
+  contexte/objet SSL).
+
+**Vérification (2026-11-11, branche d-h2)** : `make all` et `make check` OK
+(152 fichiers, aucune globale inconnue) ; `make test` = **2395 successes /
+0 failures / 0 errors / 0 pending** ; `make test-js` = 12 pass / 0 fail
+(journal `tmp/test.log`). `make test-e2e` non lancé (hors périmètre de la
+tâche).

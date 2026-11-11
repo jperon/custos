@@ -54,21 +54,53 @@ Tests : `tests/unit/doh/upstream_select_spec.moon`,
 `tests/unit/doh/upstream_doh_spec.moon`, `tests/unit/auth/wolfssl_spec.moon`,
 `tests/unit/doh_config_spec.moon`.
 
-### Limites connues du serveur HTTP/2
+### Serveur HTTP/2 : HPACK et routage DoH
 
-`worker_doh.handle_h2` implémente un sous-ensemble minimal de HTTP/2 et ne
-décode **pas HPACK** : il ne lit ni `:method` ni `:path`, et ne termine le flux
-que sur une frame DATA portant END_STREAM. Conséquences assumées, figées par
-`tests/unit/worker_doh_spec.moon` :
+`worker_doh.handle_h2` implémente un serveur HTTP/2 (RFC 7540) avec HPACK
+(RFC 7541) et le profil DoH (RFC 8484) :
 
-- un **GET RFC 8484 en HTTP/2** (HEADERS + END_STREAM, sans DATA) est rejeté
-  (`nil, "h2_incomplete"` + GOAWAY) ;
-- tout **POST HTTP/2**, quel que soit son chemin, est traité comme une requête
-  DoH (aucun routage par `:path`).
+- **Décodage HPACK** (`src/doh/hpack.moon`) : entiers à préfixe, chaînes
+  littérales brutes ou Huffman (annexe B), table statique (annexe A), table
+  dynamique par connexion avec éviction et `dynamic table size update`, champs
+  indexés et littéraux avec/sans indexation ou jamais indexés. Bornes strictes :
+  table dynamique ≤ 4096 octets (ou valeur négociée), liste d'en-têtes décodés
+  ≤ 16 ko, entiers et chaînes bornés ; toute anomalie (index hors table,
+  Huffman invalide, EOS, padding > 7 bits ou non composé de 1, `size update`
+  tardif ou trop grand) renvoie `nil, "raison"` sans exception.
+- **Frames HEADERS** : `CONTINUATION` (jusqu'à `END_HEADERS`, plafond 64 ko),
+  `PADDED` et `PRIORITY` sont gérés ; un bloc indécodable produit
+  `GOAWAY COMPRESSION_ERROR` (0x9).
+- **Routage** : `:method` et `:path` sont lus dans HPACK. `POST` sur le chemin
+  DoH (`/dns-query`, même règle `is_doh_path` que HTTP/1.1) traite le corps
+  DATA ; `GET /dns-query?dns=<base64url>` décode la requête (`dns_from_query`).
+  Autre chemin → `:status 404`, autre méthode → `405`, chemin DoH sans
+  paramètre/corps → `400`, sans traiter de DNS. Ces réponses n'émettent que
+  HEADERS (END_STREAM), pas de corps.
+- **ALPN serveur** (`src/auth/ffi_wolfssl.moon`) : le contexte annonce
+  `h2,http/1.1` via `wolfSSL_CTX_UseALPN` quand le symbole existe, sinon via
+  `wolfSSL_UseALPN` par objet SSL dans `wrap` (libwolfssl 5.8.4 sur OpenWrt
+  n'expose que ce dernier). Aucun symbole ALPN → aucun changement de
+  comportement. Les contextes client ne sont pas concernés.
 
-Les clients HTTP/1.1 (`POST /dns-query`, `GET /dns-query?dns=…`) ne sont pas
-concernés. Ne pas s'appuyer sur le HTTP/2 serveur pour du routage ou du GET
-RFC 8484 tant qu'HPACK n'est pas implémenté.
+Limites restantes, assumées :
+
+- **un seul flux par connexion** : seul le premier stream portant HEADERS est
+  traité ; pas de multiplexage, pas de trailers, et la connexion est fermée
+  (`GOAWAY NO_ERROR`) après la réponse. Les clients HTTP/1.1 restent servis par
+  le chemin existant ;
+- **pas de contrôle de flux** : `WINDOW_UPDATE` est ignoré et le cumul DATA est
+  plafonné à 65535 octets (taille maximale d'un message DNS) ;
+- **réponse encodée minimalement** : `:status` (index statique) et
+  `content-type: application/dns-message` en littéral sans indexation ni
+  Huffman ; pas de table dynamique côté encodeur ;
+- **POST HTTP/2 sans contrôle du `content-type`** : le corps est traité comme
+  une requête DNS dès lors que le chemin est `/dns-query` (HTTP/1.1 exige
+  `application/dns-message` et répond 415 sinon).
+
+Tests : `tests/unit/doh/hpack_spec.moon` (annexe C.2 à C.6 et cas d'erreur),
+`tests/unit/worker_doh_spec.moon` (GET/POST/404/405/400, PADDED, PRIORITY,
+CONTINUATION, COMPRESSION_ERROR, plafonds DATA et frame existants),
+`tests/unit/auth/wolfssl_spec.moon` (choix contexte/objet SSL).
 
 ### Parité UDP/DoH : vol captif et overrides du second avis
 
