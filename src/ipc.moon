@@ -300,55 +300,108 @@ make_key = (txid, ip_str, src_port, resolver_ip_str) ->
 -- deux questions partageant la même clé `pending`.
 _pending_meta_fields = { "refused", "rule_id", "reason", "timeout" }
 
+-- Raison synthétique d'une entrée refusée par fail-closed : deux questions
+-- autorisées par des règles différentes ne permettent pas de prouver qu'un
+-- choix de métadonnées n'élargit pas l'accès (cf. overwrite_pending).
+PENDING_CONFLICT_REASON = "ipc_pending_conflict"
+
+--- Compare deux tables de modificateurs décodés (mêmes clés attendues).
+-- @tparam table|nil a
+-- @tparam table|nil b
+-- @treturn boolean true si les deux tables portent les mêmes valeurs
+_pending_modifiers_equal = (a, b) ->
+  a or= {}
+  b or= {}
+  for k, v in pairs a
+    return false if b[k] != v
+  for k, v in pairs b
+    return false if a[k] != v
+  true
+
+--- Compare deux listes de `response_rule_ids` (ordre significatif).
+-- @tparam table|nil a
+-- @tparam table|nil b
+-- @treturn boolean true si les deux listes sont identiques
+_pending_ids_equal = (a, b) ->
+  a or= {}
+  b or= {}
+  return false if #a != #b
+  for i = 1, #a
+    return false if a[i] != b[i]
+  true
+
 --- Indique si deux questions réutilisant la même clé portent un verdict différent.
--- Comparaison STRICTE des champs de métadonnées transmis par l'IPC. qname et
--- qtype n'y figurent pas (format A4) : une divergence de CONTENU de question
--- avec un verdict identique reste donc indétectable ici.
+-- Comparaison STRICTE des champs de métadonnées transmis par l'IPC, y compris
+-- `modifiers` et `response_rule_ids` (ils pilotent les hooks on_response et
+-- l'injection nft, cf. src/worker_responses.moon:599-638). qname et qtype n'y
+-- figurent pas (format A4) : une divergence de CONTENU de question avec un
+-- verdict identique reste donc indétectable ici.
 -- @tparam table a Entrée `pending` existante
 -- @tparam table b Message IPC entrant
 -- @treturn boolean true si au moins un champ de métadonnées diffère
 pending_meta_diverges = (a, b) ->
   for name in *_pending_meta_fields
     return true if a[name] != b[name]
+  return true unless _pending_modifiers_equal a.modifiers, b.modifiers
+  return true unless _pending_ids_equal a.response_rule_ids, b.response_rule_ids
   false
 
---- Gère la réutilisation d'une clé `pending` déjà présente (politique first-wins).
--- Seul `expire` est rafraîchi ; TOUTES les métadonnées de la première question
--- sont conservées (verdict, rule_id, reason, modifiers, response_rule_ids,
--- jalons benchmark). Motif : la cause dominante d'une collision de clé est la
--- RETRANSMISSION UDP légitime (même client, même socket, même txid, question
--- réémise après timeout) — la question et son verdict sont identiques, donc
--- conserver l'entrée d'origine est exact, et cela évite de remplacer le jalon
--- `benchmark_ms` d'entrée (base de `q_to_response_ms`) par une valeur plus
--- tardive.
--- Conséquence sur la cohérence : une réponse n'hérite JAMAIS du `refused` /
--- `rule_id` / `reason` d'une AUTRE question. Le cas divergent (champs de
--- métadonnées différents) n'est pas résolu — impossible sans qname/qtype dans
--- l'IPC — mais il est tracé en WARN ; le cas identique (retransmission) est
--- tracé en INFO. Les deux traces sont rate-limitées par `log.moon`
--- (RL_CONFIG.ipc_pending_overwrite[_divergent], fenêtre 10 s, clé = action
--- seule : au plus une ligne par 10 s et par worker, avec `suppressed=N`).
+--- Adopte les champs de verdict d'une question refusée sur une entrée autorisée.
+-- Seuls les champs cohérents avec le verdict refusé sont copiés ; les jalons
+-- `benchmark_ms`/`question_proc_ms` de la première question sont conservés
+-- (base de `q_to_response_ms`, sans effet sur l'accès).
+-- @tparam table entry Entrée `pending` existante (mutée)
+-- @tparam table msg   Message IPC refusé entrant
+-- @treturn nil
+_adopt_refused = (entry, msg) ->
+  entry.refused            = true
+  entry.rule_id            = msg.rule_id
+  entry.reason             = msg.reason
+  entry.timeout            = msg.timeout
+  entry.modifiers          = msg.modifiers
+  entry.response_rule_ids  = msg.response_rule_ids or {}
+  nil
+
+--- Résout une divergence de métadonnées vers le verdict le plus restrictif.
+-- @tparam table entry Entrée `pending` existante (mutée si un refus est adopté)
+-- @tparam table msg   Message IPC entrant
+-- @treturn string Résolution : "kept_refused", "adopted_refused" ou
+--                  "kept_allowed_conflict"
+_most_restrictive = (entry, msg) ->
+  if entry.refused
+    -- Première question déjà refusée : aucun élargissement possible.
+    "kept_refused"
+  elseif msg.refused
+    -- Fail-closed : la question refusée impose son verdict à l'entrée.
+    _adopt_refused entry, msg
+    "adopted_refused"
+  else
+    -- Deux autorisations par des règles différentes : garder l'une ou l'autre
+    -- appliquerait ses hooks on_response et son injection nft à la réponse de
+    -- l'autre (src/worker_responses.moon:599-638 : response_hooks, inject),
+    -- sans preuve que ce ne soit pas plus permissif (ex. règle « dnsonly » ou
+    -- strip d'une part, allow normale de l'autre). Aucun choix prouvable →
+    -- marquer l'entrée refusée (fail-closed).
+    entry.refused = true
+    entry.reason  = PENDING_CONFLICT_REASON
+    "kept_allowed_conflict"
+
+--- Gère la réutilisation d'une clé `pending` déjà présente.
+-- Cas identique (retransmission UDP) : first-wins, seul `expire` est rafraîchi.
+-- Cas divergent : verdict le plus restrictif (fail-closed, cf. ci-dessus) —
+-- une réponse n'est jamais relayée avec le `refused`/`rule_id`/`reason` d'une
+-- AUTRE question moins restrictive. Motif du first-wins sur le cas identique :
+-- la retransmission est la cause dominante d'une collision de clé, et conserver
+-- l'entrée d'origine préserve le jalon `benchmark_ms` (base de
+-- `q_to_response_ms`).
 -- @tparam string key   Clé `pending` réutilisée
--- @tparam table  entry Entrée `pending` existante (mutée : expire)
+-- @tparam table  entry Entrée `pending` existante (mutée : expire, verdict)
 -- @tparam table  msg   Message IPC entrant
 -- @tparam function now_fn () -> epoch
 -- @treturn nil
 overwrite_pending = (key, entry, msg, now_fn) ->
   entry.expire = now_fn! + (ipc_cfg.pending_ttl or 5)
-  if pending_meta_diverges entry, msg
-    log_warn -> {
-      action: "ipc_pending_overwrite_divergent"
-      key: key
-      txid: string.format "0x%04x", msg.txid
-      client_ip: msg.ip_str
-      client_port: msg.src_port
-      resolver_ip: msg.resolver_ip_str
-      refused_kept: entry.refused and 1 or 0
-      refused_new: msg.refused and 1 or 0
-      rule_kept: entry.rule_id or ""
-      rule_new: msg.rule_id or ""
-    }
-  else
+  unless pending_meta_diverges entry, msg
     log_info -> {
       action: "ipc_pending_overwrite"
       key: key
@@ -358,6 +411,21 @@ overwrite_pending = (key, entry, msg, now_fn) ->
       resolver_ip: msg.resolver_ip_str
       refused: entry.refused and 1 or 0
     }
+    return nil
+  resolution = _most_restrictive entry, msg
+  log_warn -> {
+    action: "ipc_pending_overwrite_divergent"
+    key: key
+    txid: string.format "0x%04x", msg.txid
+    client_ip: msg.ip_str
+    client_port: msg.src_port
+    resolver_ip: msg.resolver_ip_str
+    refused_kept: entry.refused and 1 or 0
+    refused_new: msg.refused and 1 or 0
+    rule_kept: entry.rule_id or ""
+    rule_new: msg.rule_id or ""
+    resolution: resolution
+  }
   nil
 
 set_pending = (msg, now_fn) ->

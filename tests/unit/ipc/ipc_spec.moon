@@ -621,25 +621,32 @@ describe "ipc", ->
 
       close_pipe p
 
-  -- ── 33. Écrasement de clé `pending` (retransmission / réutilisation) ──
-  -- Politique retenue (cf. src/ipc.moon overwrite_pending et doc/CONFIG.md) :
-  -- FIRST-WINS — la première question garde ses métadonnées de verdict, seul
-  -- `expire` est rafraîchi. Motif : la cause dominante d'une collision de clé
-  -- est la retransmission UDP (question et verdict identiques) ; et une réponse
-  -- ne doit JAMAIS hériter du `refused`/`rule_id`/`reason` d'une autre question.
-  describe "écrasement de clé pending (first-wins)", ->
-    it "une seconde question divergente ne remplace pas le verdict d'origine", ->
+  -- ── 33. Réutilisation de clé `pending` : retransmission ou divergence ──
+  -- Une question REFUSÉE est bien acheminée : worker_questions l'écrit en
+  -- `write_refused_msg` puis renvoie NF_ACCEPT (src/worker_questions.moon:450
+  -- et 471) pour laisser la réponse du résolveur revenir ; `set_pending` est
+  -- appelé pour TOUT message drainé (src/ipc.moon:390). Une collision avec
+  -- verdicts différents est donc un cas atteignable, pas hypothétique.
+  --
+  -- Politique : cas identique (retransmission UDP) inchangé — first-wins, seul
+  -- `expire` est rafraîchi. Divergence → verdict le plus restrictif
+  -- (fail-closed) : si l'une des deux questions est refusée, l'entrée conservée
+  -- est celle de la question refusée ; deux questions autorisées par des règles
+  -- différentes ne permettent pas de prouver qu'un choix n'élargit pas l'accès
+  -- (cf. src/worker_responses.moon:599-638), donc l'entrée est marquée refusée.
+  describe "réutilisation de clé pending (fail-closed sur divergence)", ->
+    it "Q1 autorisée + Q2 refusée → l'entrée conservée est refusée", ->
       m_ipc = fresh_ipc!
       p     = make_pipe!
       rfd, wfd = p[1], p[2]
 
-      -- Question 1 : REFUSED (rule r_refused, reason blocked)
-      ok1 = m_ipc.write_refused_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
-                                "blocked", nil, "r_refused"
-      assert.is_true ok1
-      -- Question 2 : même clé (txid + client + port + résolveur), verdict AUTORISÉ
-      ok2 = m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+      -- Q1 autorisée (règle r_allowed).
+      ok1 = m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
                           "allowed", nil, "r_allowed"
+      assert.is_true ok1
+      -- Q2 refusée (règle r_denied), même clé txid+client+port+résolveur.
+      ok2 = m_ipc.write_refused_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                                "blocked", nil, "r_denied"
       assert.is_true ok2
 
       count = m_ipc.drain_pipe rfd, (-> 0), nil
@@ -647,12 +654,51 @@ describe "ipc", ->
 
       entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
       assert.is_not_nil entry
-      -- Avant correctif, la 2e question écrasait l'entrée : refused=false et
-      -- rule_id="r_allowed" → la réponse à la question REFUSÉE aurait été
-      -- relayée comme autorisée (mélange de verdicts).
-      assert.is_true entry.refused, "le verdict REFUSED d'origine est conservé"
+      -- Avant correctif (first-wins), l'entrée restait autorisée : la réponse
+      -- à Q2 (refusée) aurait été relayée avec refused=false de Q1 →
+      -- contournement du filtre.
+      assert.is_true entry.refused, "verdict le plus restrictif : refusé"
+      assert.equals "r_denied", entry.rule_id
+      assert.equals "blocked",  entry.reason
+
+      close_pipe p
+
+    it "Q1 refusée + Q2 autorisée → l'entrée reste refusée", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      m_ipc.write_refused_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                              "blocked", nil, "r_refused"
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                      "allowed", nil, "r_allowed"
+      m_ipc.drain_pipe rfd, (-> 0), nil
+
+      entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
+      assert.is_not_nil entry
+      assert.is_true entry.refused
       assert.equals "r_refused", entry.rule_id
       assert.equals "blocked",   entry.reason
+
+      close_pipe p
+
+    it "Q1 et Q2 autorisées par des règles différentes → entrée refusée", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                      "allowed", nil, "r_allow_a"
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                      "allowed", nil, "r_allow_b"
+      m_ipc.drain_pipe rfd, (-> 0), nil
+
+      entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
+      assert.is_not_nil entry
+      -- Aucune des deux règles ne peut être prouvée non élargissante pour la
+      -- réponse de l'autre (hooks on_response, injection nft) → fail-closed.
+      assert.is_true entry.refused
+      assert.equals "ipc_pending_conflict", entry.reason
 
       close_pipe p
 
@@ -677,6 +723,7 @@ describe "ipc", ->
       assert.is_not_nil entry, "expire rafraîchi par la retransmission"
       assert.is_true entry.refused
       assert.equals "r_refused", entry.rule_id
+      assert.equals "blocked",   entry.reason
 
       close_pipe p
 

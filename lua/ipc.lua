@@ -408,6 +408,37 @@ local _pending_meta_fields = {
   "reason",
   "timeout"
 }
+local PENDING_CONFLICT_REASON = "ipc_pending_conflict"
+local _pending_modifiers_equal
+_pending_modifiers_equal = function(a, b)
+  a = a or { }
+  b = b or { }
+  for k, v in pairs(a) do
+    if b[k] ~= v then
+      return false
+    end
+  end
+  for k, v in pairs(b) do
+    if a[k] ~= v then
+      return false
+    end
+  end
+  return true
+end
+local _pending_ids_equal
+_pending_ids_equal = function(a, b)
+  a = a or { }
+  b = b or { }
+  if #a ~= #b then
+    return false
+  end
+  for i = 1, #a do
+    if a[i] ~= b[i] then
+      return false
+    end
+  end
+  return true
+end
 local pending_meta_diverges
 pending_meta_diverges = function(a, b)
   for _index_0 = 1, #_pending_meta_fields do
@@ -416,27 +447,41 @@ pending_meta_diverges = function(a, b)
       return true
     end
   end
+  if not (_pending_modifiers_equal(a.modifiers, b.modifiers)) then
+    return true
+  end
+  if not (_pending_ids_equal(a.response_rule_ids, b.response_rule_ids)) then
+    return true
+  end
   return false
+end
+local _adopt_refused
+_adopt_refused = function(entry, msg)
+  entry.refused = true
+  entry.rule_id = msg.rule_id
+  entry.reason = msg.reason
+  entry.timeout = msg.timeout
+  entry.modifiers = msg.modifiers
+  entry.response_rule_ids = msg.response_rule_ids or { }
+  return nil
+end
+local _most_restrictive
+_most_restrictive = function(entry, msg)
+  if entry.refused then
+    return "kept_refused"
+  elseif msg.refused then
+    _adopt_refused(entry, msg)
+    return "adopted_refused"
+  else
+    entry.refused = true
+    entry.reason = PENDING_CONFLICT_REASON
+    return "kept_allowed_conflict"
+  end
 end
 local overwrite_pending
 overwrite_pending = function(key, entry, msg, now_fn)
   entry.expire = now_fn() + (ipc_cfg.pending_ttl or 5)
-  if pending_meta_diverges(entry, msg) then
-    log_warn(function()
-      return {
-        action = "ipc_pending_overwrite_divergent",
-        key = key,
-        txid = string.format("0x%04x", msg.txid),
-        client_ip = msg.ip_str,
-        client_port = msg.src_port,
-        resolver_ip = msg.resolver_ip_str,
-        refused_kept = entry.refused and 1 or 0,
-        refused_new = msg.refused and 1 or 0,
-        rule_kept = entry.rule_id or "",
-        rule_new = msg.rule_id or ""
-      }
-    end)
-  else
+  if not (pending_meta_diverges(entry, msg)) then
     log_info(function()
       return {
         action = "ipc_pending_overwrite",
@@ -448,7 +493,24 @@ overwrite_pending = function(key, entry, msg, now_fn)
         refused = entry.refused and 1 or 0
       }
     end)
+    return nil
   end
+  local resolution = _most_restrictive(entry, msg)
+  log_warn(function()
+    return {
+      action = "ipc_pending_overwrite_divergent",
+      key = key,
+      txid = string.format("0x%04x", msg.txid),
+      client_ip = msg.ip_str,
+      client_port = msg.src_port,
+      resolver_ip = msg.resolver_ip_str,
+      refused_kept = entry.refused and 1 or 0,
+      refused_new = msg.refused and 1 or 0,
+      rule_kept = entry.rule_id or "",
+      rule_new = msg.rule_id or "",
+      resolution = resolution
+    }
+  end)
   return nil
 end
 local set_pending
