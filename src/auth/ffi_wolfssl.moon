@@ -36,6 +36,8 @@ ffi.cdef [[
   int wolfSSL_check_domain_name(WOLFSSL *ssl, const char *dn);
   int wolfSSL_CTX_UseALPN(WOLFSSL_CTX *ctx, char *protocol_name_list,
                           unsigned int protocol_name_listSz, unsigned char options);
+  int wolfSSL_UseALPN(WOLFSSL *ssl, char *protocol_name_list,
+                      unsigned int protocol_name_listSz, unsigned char options);
   int wolfSSL_ALPN_GetProtocol(WOLFSSL *ssl, char **protocol_name, unsigned short *size);
   unsigned long wolfSSL_ERR_get_error(void);
   char* wolfSSL_ERR_reason_error_string(unsigned long err);
@@ -90,6 +92,9 @@ CA_FILE_CANDIDATES = {
 SSL_FILETYPE_PEM = 1
 SSL_FILETYPE_ASN1 = 2
 WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x01
+-- Liste ALPN annoncée par le serveur (wolfSSL attend une liste séparée par
+-- des virgules, pas le format wire TLS).
+ALPN_PROTOCOLS = "h2,http/1.1"
 _alpn_available = nil
 
 --- Extract WolfSSL error queue messages
@@ -112,9 +117,11 @@ ssl_mt = {
 -- Sur OpenWrt, la lib peut être compilée sans certaines options : un `cdef`
 -- déclaré ne garantit pas que le symbole existe (dlsym échoue à l'accès).
 -- @tparam string name Nom du symbole C.
+-- @tparam table|nil lib Bibliothèque à sonder (défaut : libwolfssl).
 -- @treturn boolean true si le symbole est résolvable.
-symbol_available = (name) ->
-  pcall -> libwolfssl[name]
+symbol_available = (name, lib) ->
+  lib or= libwolfssl
+  pcall -> lib[name]
 
 --- Teste l'existence lisible d'un fichier (sans shell).
 -- @tparam string path Chemin candidat.
@@ -156,6 +163,29 @@ verification_available = (opts={}) ->
     return false, "aucun magasin de CA trouvé", nil
   true, nil, ca
 
+--- Configure ALPN au niveau du contexte serveur.
+-- @tparam table lib Bibliothèque FFI (libwolfssl ou stub de test).
+-- @tparam cdata ctx Contexte WOLFSSL_CTX.
+-- @treturn string|nil "ctx" si configuré, nil sinon.
+alpn_configure_ctx = (lib, ctx) ->
+  return nil unless symbol_available "wolfSSL_CTX_UseALPN", lib
+  ok, ret = pcall ->
+    lib.wolfSSL_CTX_UseALPN ctx, ffi.cast("char*", ALPN_PROTOCOLS),
+      #ALPN_PROTOCOLS, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
+  return "ctx" if ok and ret == 1
+  nil
+
+--- Annonce ALPN sur un objet SSL serveur (repli sans wolfSSL_CTX_UseALPN).
+-- @tparam table lib Bibliothèque FFI (libwolfssl ou stub de test).
+-- @tparam cdata ssl Objet WOLFSSL.
+-- @treturn boolean true si l'annonce a été acceptée.
+alpn_configure_ssl = (lib, ssl) ->
+  return false unless symbol_available "wolfSSL_UseALPN", lib
+  ok, ret = pcall ->
+    lib.wolfSSL_UseALPN ssl, ffi.cast("char*", ALPN_PROTOCOLS),
+      #ALPN_PROTOCOLS, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
+  ok and ret == 1
+
 -- Create server context (compatible with luasec API)
 newcontext = (opts = {}) ->
   -- Extract certificate and key from opts
@@ -184,21 +214,28 @@ newcontext = (opts = {}) ->
     libwolfssl.wolfSSL_CTX_free(ctx)
     error "wolfSSL_CTX_use_PrivateKey_file() failed"
 
+  alpn_mode = nil
   if _alpn_available != false
-    -- WolfSSL UseALPN attend une liste séparée par virgules, pas le format wire TLS.
-    alpn = "http/1.1"
-    ok_alpn, ret_alpn = pcall -> libwolfssl.wolfSSL_CTX_UseALPN(ctx, ffi.cast("char*", alpn), #alpn, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH)
-    _alpn_available = ok_alpn and ret_alpn == 1
-    if _alpn_available
-      log_debug -> { action: "ctx_use_alpn", ret: ret_alpn, protocols: "http/1.1" }
+    alpn_mode = alpn_configure_ctx libwolfssl, ctx
+    if alpn_mode == "ctx"
+      _alpn_available = true
+      log_debug -> { action: "ctx_use_alpn", protocols: ALPN_PROTOCOLS }
+    elseif symbol_available "wolfSSL_UseALPN"
+      -- OpenWrt (libwolfssl 5.8.4) n'expose pas wolfSSL_CTX_UseALPN mais
+      -- wolfSSL_UseALPN : l'annonce se fera par objet SSL dans wrap().
+      alpn_mode = "ssl"
+      _alpn_available = true
+      log_debug -> { action: "alpn_ssl_level", protocols: ALPN_PROTOCOLS }
     else
-      log_debug -> { action: "alpn_unavailable", ok: ok_alpn, ret: ret_alpn }
+      _alpn_available = false
+      log_debug -> { action: "alpn_unavailable" }
   else
     log_debug -> { action: "alpn_unavailable" }
 
   {
     :ctx
     closed: false
+    :alpn_mode
   }
 
 --- Create a client TLS context (opt-in certificate verification via opts.verify_peer).
@@ -242,6 +279,14 @@ wrap = (raw_socket, ctx_obj, opts={}) ->
   if ret < 0
     libwolfssl.wolfSSL_free(ssl)
     error "wolfSSL_set_fd() failed: ret="..ret
+
+  -- ALPN serveur par objet SSL quand le contexte ne l'a pas configuré
+  -- (OpenWrt : wolfSSL_CTX_UseALPN absent, wolfSSL_UseALPN présent). Jamais
+  -- tenté sur un contexte client : seul newcontext renseigne alpn_mode.
+  if ctx_obj.alpn_mode == "ssl"
+    unless alpn_configure_ssl libwolfssl, ssl
+      log_debug -> { action: "alpn_ssl_failed", protocols: ALPN_PROTOCOLS }
+      _alpn_available = false
 
   -- SNI doit précéder le handshake (RFC 6066). Ne pas envoyer d'IP littérale.
   if opts.sni and #opts.sni > 0
@@ -450,6 +495,10 @@ free_context = (ctx_obj) ->
   :free_context
   :find_ca_file
   :verification_available
+  :symbol_available
+  :alpn_configure_ctx
+  :alpn_configure_ssl
+  :ALPN_PROTOCOLS
   :libwolfssl
   :SSL_ERROR_NONE
   :SSL_ERROR_WANT_READ
