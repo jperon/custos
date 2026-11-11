@@ -142,17 +142,31 @@ describe "worker_nft helpers", ->
       assert.is_true nft_calls[1]\find("r_a_ip4", 1, true) != nil
       assert.is_true nft_calls[1]\find("r_b_ip4", 1, true) != nil
 
-    it "envoie un ACK sur le fd du worker concerné", ->
+    it "envoie un ACK de taille fixe portant le seq sur le fd du worker concerné", ->
       pipefd = ffi.new "int[2]"
       assert.equals 0, libc.pipe2 pipefd, O_NONBLOCK
       -- ack_wfds indexé par worker : widx 0 → slot 1 = extrémité d'écriture.
       wnft.flush_batch {}, { { widx: 0, seq: 1 } }, { pipefd[1] }
-      buf = ffi.new "uint8_t[8]"
-      n = libc.read pipefd[0], buf, 8
+      ack = ffi.new "uint64_t[1]"
+      n = libc.read pipefd[0], ack, 8
+      -- Un seul enregistrement (8 octets), portant le seq acquitté.
+      assert.equals 8, tonumber n
+      assert.equals 1, tonumber ack[0]
       libc.close pipefd[0]
       libc.close pipefd[1]
-      assert.equals 1, tonumber n        -- un seul octet d'ACK
-      assert.equals 0x01, buf[0]
+
+    it "un seul ACK par worker, portant le plus grand seq du batch", ->
+      pipefd = ffi.new "int[2]"
+      assert.equals 0, libc.pipe2 pipefd, O_NONBLOCK
+      wnft.flush_batch {}, { { widx: 0, seq: 3 }, { widx: 0, seq: 9 } }, { pipefd[1] }
+      ack = ffi.new "uint64_t[1]"
+      n = libc.read pipefd[0], ack, 8
+      assert.equals 8, tonumber n
+      assert.equals 9, tonumber ack[0]
+      -- Pas de second ACK : l'enregistrement est unique.
+      assert.equals -1, libc.read pipefd[0], ack, 8
+      libc.close pipefd[0]
+      libc.close pipefd[1]
 
   -- ── run() de bout en bout (boucle poll/drain/flush jusqu'à EOF) ──────────────
   describe "run", ->
@@ -182,15 +196,15 @@ describe "worker_nft helpers", ->
       assert.is_true nft_calls[1]\find("10.0.0.1 . 1.2.3.4", 1, true) != nil
       assert.is_true nft_calls[1]\find("10.0.0.2 . 5.6.7.8", 1, true) != nil
 
-      -- Au moins un ACK reçu pour le worker 0.
-      buf = ffi.new "uint8_t[8]"
-      n = libc.read ack[0], buf, 8
+      -- Un ACK pour le worker 0, portant le plus grand seq du batch.
+      ack_val = ffi.new "uint64_t[1]"
+      n = libc.read ack[0], ack_val, 8
       libc.close ack[0]
       libc.close ack[1]
-      assert.is_true (tonumber(n) or 0) >= 1
-      assert.equals 0x01, buf[0]
+      assert.equals 8, tonumber n
+      assert.equals 2, tonumber ack_val[0]
 
-    it "plafonne le batch à MAX_BATCH (65 items distincts → ≥2 flushes)", ->
+    it "plafonne le batch à MAX_BATCH (65 items distincts → 2 flushes, 2 ACK séquencés)", ->
       inp = ffi.new "int[2]"
       assert.equals 0, libc.pipe2 inp, O_NONBLOCK
       ack = ffi.new "int[2]"
@@ -207,7 +221,18 @@ describe "worker_nft helpers", ->
       libc.close inp[1]
       wnft.run inp[0], { ack[1] }
       libc.close inp[0]
+      -- 65 items > MAX_BATCH (64) ⇒ le drain est tronqué ⇒ deux flushes et
+      -- donc deux ACK : le premier pour le batch plein (seq 64), le second pour
+      -- le reliquat (seq 65, dernier seq enfilé).
+      a1 = ffi.new "uint64_t[1]"
+      a2 = ffi.new "uint64_t[1]"
+      n1 = libc.read ack[0], a1, 8
+      n2 = libc.read ack[0], a2, 8
       libc.close ack[0]
       libc.close ack[1]
-      -- 65 items > MAX_BATCH (64) ⇒ le drain est tronqué ⇒ au moins deux flushes.
+      -- 65 items > MAX_BATCH (64) ⇒ au moins deux flushes.
       assert.is_true #nft_calls >= 2
+      assert.equals 8, tonumber n1
+      assert.equals 64, tonumber a1[0]
+      assert.equals 8, tonumber n2
+      assert.equals 65, tonumber a2[0]

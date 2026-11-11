@@ -1,6 +1,6 @@
 { :ffi, :libc } = require "ffi_defs"
 { :run_cmd } = require "nft"
-{ :cmd_for, :sanitize_timeout } = require "nft_queue"
+{ :cmd_for, :sanitize_timeout, :ACK_SIZE } = require "nft_queue"
 { :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
 { :split_fields, :from_hex, :is_ipv4_str, :is_ipv6_str, :is_valid_mac } = require "lib.ipc_hex"
 
@@ -13,8 +13,9 @@ POLLIN    = 1
 LINE_VERSION = "v1"
 
 read_buf  = ffi.new "char[?]", BUF_SIZE
-ack_byte  = ffi.new "uint8_t[1]"
-ack_byte[0] = 0x01
+-- Enregistrement d'ACK : uint64 natif portant le plus grand `seq` appliqué
+-- pour le worker destinataire (voir nft_queue.wait_ack).
+ack_val   = ffi.new "uint64_t[1]"
 poll_fd   = ffi.new "struct pollfd[1]"
 
 validate_item = (kind, key, ip) ->
@@ -60,11 +61,17 @@ parse_line = (line) ->
     :corr
   }, nil
 
-send_ack = (ack_wfds, widx) ->
+-- Acquitte le traitement du batch pour un worker : enregistrement de taille
+-- fixe (ACK_SIZE octets) portant le plus grand `seq` que ce flush a appliqué
+-- pour ce worker. Une écriture ≤ PIPE_BUF est atomique : le lecteur ne voit
+-- jamais un ACK entrelacé avec un autre. Échec d'écriture (tube plein) =
+-- ACK perdu → le producteur ira au timeout, comme avant.
+send_ack = (ack_wfds, widx, seq) ->
   return unless widx and widx >= 0
   wfd = ack_wfds[widx + 1]
   return unless wfd
-  libc.write wfd, ack_byte, 1
+  ack_val[0] = seq or 0
+  libc.write wfd, ack_val, ACK_SIZE
 
 -- Ajoute un item à `pending` avec déduplication par
 -- (kind,key,ip,timeout,rule_id). Le nom du set nft dépend de rule_id
@@ -107,15 +114,21 @@ flush_batch = (pending, ack_queue, ack_wfds) ->
   else
     log_debug -> { action: "batch_ack_only", acks: #ack_queue }
 
-  -- Send one ACK per unique worker (widx) that had items in this batch
-  -- This fixes the race condition where worker_responses enqueues multiple items
-  -- but only waits for one ACK. Previously we sent one ACK per item, causing
-  -- ACKs to accumulate in the pipe and be consumed by wrong responses.
+  -- Un ACK par worker (widx) présent dans le batch, portant le PLUS GRAND seq
+  -- appliqué pour ce worker. Le producteur attend le seq de sa dernière ligne :
+  -- un inject coupé par MAX_BATCH sur plusieurs flushes n'est donc acquitté
+  -- qu'une fois toutes ses lignes traitées (l'ACK du premier flush a un seq
+  -- antérieur et est ignoré par wait_ack).
+  -- L'ACK est émis même si la transaction nft a échoué (après les reprises
+  -- ligne à ligne) : il acquitte le *traitement* du batch, pas son succès —
+  -- sémantique inchangée ; le producteur applique ensuite add_failure_policy.
   workers_to_ack = {}
   for ack in *ack_queue
-    workers_to_ack[ack.widx] = true
-  for widx, _ in pairs workers_to_ack
-    send_ack ack_wfds, widx
+    prev = workers_to_ack[ack.widx]
+    seq = ack.seq or 0
+    workers_to_ack[ack.widx] = seq if prev == nil or seq > prev
+  for widx, seq in pairs workers_to_ack
+    send_ack ack_wfds, widx, seq
   for i = #ack_queue, 1, -1
     ack_queue[i] = nil
 

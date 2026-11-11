@@ -94,7 +94,7 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 ## worker_nft (`src/worker_nft.moon`)
 
 - **In :** pipe `nft` (commandes d'insertion sérialisées de tous les producteurs : responses, tls, sip, doh).
-- **Out :** exécute les transactions nftables, puis écrit 1 octet d'ACK sur le `ack_<i>` du worker producteur concerné.
+- **Out :** exécute les transactions nftables, puis écrit sur le `ack_<i>` du worker producteur concerné un ACK de taille fixe (8 octets, `uint64` natif) portant le plus grand `seq` appliqué pour ce worker dans le flush. Un seul ACK par `(flush × worker)`.
 - **Rôle :** sérialise les écritures nft (évite les transactions concurrentes) et garantit la présence de l'élément dans le set avant que le producteur rende son verdict.
 
 ## worker_events (`src/worker_events.moon`)
@@ -155,7 +155,7 @@ Utilisé par `worker_questions`, `worker_arp_sniffer` et `worker_auth_queue` →
 
 - `events` : événements DNS sérialisés par `worker_questions`, consommés par `worker_events` (format interne au module, longueur variable).
 - `nft` : commandes d'insertion nft sérialisées (set, famille, élément, timeout, index de worker pour l'ACK), de `worker_responses`/`worker_tls`/`worker_sip`/`worker_doh` vers `worker_nft`.
-- `ack_<i>` : un pipe par worker producteur ; `worker_nft` y écrit 1 octet après chaque flush de batch pour débloquer le verdict du producteur.
+- `ack_<i>` : un pipe par worker producteur. Après chaque flush de batch, `worker_nft` y écrit **un** ACK par worker présent dans le batch : un enregistrement de taille fixe (`ACK_SIZE` = 8 octets, `uint64` natif, écrit en un seul `write` donc atomique) portant le plus grand `seq` appliqué pour ce worker. `nft_queue.wait_ack` ne rend la main que si cet ACK porte un `seq` ≥ `pending_seq` (le seq de la dernière ligne enfilée par l'appel) ; un ACK antérieur — typiquement l'acquittement des 64 premiers éléments d'un inject coupé par `MAX_BATCH` — est ignoré et l'attente continue, sans dépasser le budget global `ACK_TIMEOUT_MS`. Le bout du tube est drainé par `drain_ack` (enregistrements complets et fragments). Un échec de transaction nft est acquitté comme aujourd'hui (après les reprises ligne à ligne) : l'ACK signifie « batch traité », pas « insertion réussie » ; le producteur applique ensuite `nft.add_failure_policy`. Le compteur `seq` est monotone par processus et sans rebouclage (2^53 insertions) ; un redémarrage repart de zéro, les ACK résiduels étant purgés par `drain_ack` avant l'injection suivante.
 
 ## Helpers partagés (`src/packet_utils.moon`)
 

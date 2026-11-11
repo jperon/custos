@@ -18,6 +18,8 @@ local TABLE = nft_cfg.table or "dns-filter-bridge"
 local IP_TIMEOUT = nft_cfg.ip_timeout or "2m"
 local ACK_TIMEOUT_MS = nft_cfg.ack_timeout_ms or 150
 local WAIT_POLL_MS = 5
+local ACK_SIZE = 8
+local CLOCK_MONOTONIC = 1
 local PIPE_BUF_SAFE = 512
 local IPC_WRITE_RETRY_COUNT = 3
 local EAGAIN = 11
@@ -31,7 +33,8 @@ local seq = 0
 local last_enqueued_seq = nil
 local sleep_req = ffi.new("timespec_t[1]")
 local poll_fds = ffi.new("struct pollfd[1]")
-local ack_buf = ffi.new("uint8_t[1]")
+local ack_rec = ffi.new("uint8_t[?]", ACK_SIZE)
+local ack_val = ffi.new("uint64_t[1]")
 local drain_buf = ffi.new("uint8_t[64]")
 local sanitize_timeout
 sanitize_timeout = function(timeout)
@@ -68,6 +71,16 @@ sleep_ms = function(ms)
   sleep_req[0].tv_sec = math.floor(ms / 1000)
   sleep_req[0].tv_nsec = (ms % 1000) * 1000000
   return libc.nanosleep(sleep_req, nil)
+end
+local monotonic_ms
+monotonic_ms = function()
+  libc.clock_gettime(CLOCK_MONOTONIC, sleep_req)
+  return tonumber(sleep_req[0].tv_sec) * 1000 + math.floor(tonumber(sleep_req[0].tv_nsec) / 1000000)
+end
+local ack_rec_seq
+ack_rec_seq = function()
+  ffi.copy(ack_val, ack_rec, ACK_SIZE)
+  return tonumber(ack_val[0])
 end
 local set_wfd
 set_wfd = function(wfd)
@@ -223,15 +236,32 @@ wait_ack = function(pending_seq, corr, on_wait)
   if not (ack_rfd) then
     return false
   end
-  local max_polls = math.ceil(ACK_TIMEOUT_MS / WAIT_POLL_MS)
+  local target = pending_seq or 0
+  local deadline = monotonic_ms() + ACK_TIMEOUT_MS
   poll_fds[0].fd = ack_rfd
   poll_fds[0].events = POLLIN
-  for _ = 1, max_polls do
+  local have = 0
+  while true do
+    local remaining = deadline - monotonic_ms()
+    if remaining <= 0 then
+      break
+    end
     poll_fds[0].revents = 0
-    local rv = libc.poll(poll_fds, 1, WAIT_POLL_MS)
+    local rv = libc.poll(poll_fds, 1, math.min(WAIT_POLL_MS, remaining))
     if rv > 0 then
-      libc.read(ack_rfd, ack_buf, 1)
-      return true
+      local n = libc.read(ack_rfd, ack_rec + have, ACK_SIZE - have)
+      if n and n > 0 then
+        have = have + n
+        if have >= ACK_SIZE then
+          local acked = ack_rec_seq()
+          have = 0
+          if acked >= target then
+            return true
+          end
+        end
+      elseif n == 0 then
+        sleep_ms(WAIT_POLL_MS)
+      end
     end
     if on_wait then
       on_wait()
@@ -354,5 +384,6 @@ return {
   cmd_lines_for = cmd_lines_for,
   sanitize_timeout = sanitize_timeout,
   get_set_name = get_set_name,
-  sanitize_rule_id = sanitize_rule_id
+  sanitize_rule_id = sanitize_rule_id,
+  ACK_SIZE = ACK_SIZE
 }

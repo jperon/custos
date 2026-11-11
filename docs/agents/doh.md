@@ -62,11 +62,12 @@ DoH divergeait de l'intercepteur `worker_questions`) :
 
 `main.moon` alloue **un seul tube ACK nft par worker** (`alloc_ack_pipe`), et
 `worker_doh` le transmet à tous les enfants `DOH-conn` (un par connexion) via
-`nft_queue.set_ack_rfd`. `worker_nft` n'écrit qu'**un octet par (flush ×
-worker_idx)**, sans corrélation au `seq` : deux enfants qui exécutent en même
-temps `drain_ack` → injections nft → `wait_ack` se volent les octets. L'un
-repart avant que ses IP soient réellement insérées (réponse DNS livrée alors que
-le default-deny bloque encore le SYN du client), l'autre attend le timeout.
+`nft_queue.set_ack_rfd`. `worker_nft` n'écrit qu'**un ACK par (flush ×
+worker_idx)**, portant le plus grand `seq` appliqué pour ce worker, et non
+corrélé au processus émetteur : deux enfants qui exécutent en même temps
+`drain_ack` → injections nft → `wait_ack` peuvent encore se voler un ACK
+(tous deux partent d'un compteur `seq` identique hérité du fork), même si le
+`seq` protège désormais contre un ACK de batch antérieur au sein d'un enfant.
 
 Correctif : `doh.query.inject_nft_and_wait` (helper unique utilisé par
 l'injection de la réponse **et** par les cibles d'override `redirect`) exécute
