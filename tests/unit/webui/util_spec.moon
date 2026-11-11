@@ -55,6 +55,18 @@ describe "webui/util", ->
       assert.equals "", form.a
       assert.equals "2", form.b
 
+    it "ignore une paire sans '=' (clé seule)", ->
+      assert.same {}, parse_form "abc"
+      assert.same {}, parse_form "a&b"
+
+    it "laisse intacte une séquence % invalide", ->
+      assert.equals "%zz", (parse_form "a=%zz").a
+      assert.equals "%",    (parse_form "a=%").a
+
+    it "ignore un séparateur & final", ->
+      form = parse_form "a=1&"
+      assert.equals "1", form.a
+
     it "retourne une table vide pour un corps nil ou vide", ->
       assert.same {}, parse_form nil
       assert.same {}, parse_form ""
