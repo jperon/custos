@@ -358,29 +358,39 @@ test-e2e-ssh: all
 # ── Synchronisation de config multi-appareils ────────────────────────────────
 # Voir sync/ pour les scripts et doc/CONFIG.md pour la structure du dépôt.
 
+# Valide HOST/REPO avant tout ssh/scp : ces valeurs sont interpolées dans du
+# shell local puis distant (sync.conf est ensuite sourcé par root). Jeu de
+# caractères strict ; REPO est écrit entre apostrophes simples (sûr car validé).
+SYNC_VALIDATE = \
+	[ -n "$(HOST)" ] || { echo "ERREUR : HOST requis." >&2; exit 1; }; \
+	[ -n "$(REPO)" ] || { echo "ERREUR : REPO requis." >&2; exit 1; }; \
+	case "$(HOST)" in *[!A-Za-z0-9._@:-]*) echo "ERREUR : HOST invalide : $(HOST)" >&2; exit 1;; esac; \
+	case "$(REPO)" in *[!A-Za-z0-9._~:/@%+=-]*) echo "ERREUR : REPO invalide : $(REPO)" >&2; exit 1;; esac
+
+# Ligne cron custos-sync ajoutée seulement si absente (idempotent).
+SYNC_CRON = crontab -l 2>/dev/null | grep -qF "/usr/share/custos/sync/custos-sync.sh" || { crontab -l 2>/dev/null | { cat; echo "*/15 * * * * /usr/share/custos/sync/custos-sync.sh"; } | crontab -; }
+
 # Initialise la sync pull-only sur un device OpenWrt (HOST=user@host requis)
 sync-init: all
-	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis. Ex: make sync-init HOST=root@192.168.1.1"; exit 1)
-	@[ -n "$(REPO)" ] || (echo "ERREUR : REPO requis. Ex: make sync-init HOST=... REPO=https://git.example.com/custos-configs"; exit 1)
+	@$(SYNC_VALIDATE)
 	ssh $(HOST) 'mkdir -p /usr/share/custos/sync'
 	scp $(LUA)/sync/apply.lua      $(HOST):/usr/share/custos/sync/apply.lua
 	scp sync/custos-sync.sh        $(HOST):/usr/share/custos/sync/custos-sync.sh
 	ssh $(HOST) 'chmod +x /usr/share/custos/sync/custos-sync.sh'
-	ssh $(HOST) "printf 'CUSTOS_CONFIG_REPO=$(REPO)\n' > /etc/custos/sync.conf"
-	ssh $(HOST) 'crontab -l 2>/dev/null | { cat; echo "*/15 * * * * /usr/share/custos/sync/custos-sync.sh"; } | crontab -'
+	ssh $(HOST) "echo \"CUSTOS_CONFIG_REPO='$(REPO)'\" > /etc/custos/sync.conf"
+	ssh $(HOST) '$(SYNC_CRON)'
 	@echo "Sync initialisée sur $(HOST) — cron toutes les 15 min"
 
 # Initialise la sync push sur un filtre de référence (HOST=user@host, REPO=url requis)
 sync-push-init: all
-	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis"; exit 1)
-	@[ -n "$(REPO)" ] || (echo "ERREUR : REPO requis"; exit 1)
+	@$(SYNC_VALIDATE)
 	ssh $(HOST) 'mkdir -p /usr/share/custos/sync'
 	scp $(LUA)/sync/apply.lua      $(HOST):/usr/share/custos/sync/apply.lua
 	scp sync/custos-sync.sh        $(HOST):/usr/share/custos/sync/custos-sync.sh
 	scp sync/custos-sync-push.sh   $(HOST):/usr/share/custos/sync/custos-sync-push.sh
 	ssh $(HOST) 'chmod +x /usr/share/custos/sync/custos-sync.sh /usr/share/custos/sync/custos-sync-push.sh'
-	ssh $(HOST) "printf 'CUSTOS_CONFIG_REPO=$(REPO)\n' > /etc/custos/sync.conf"
-	ssh $(HOST) 'crontab -l 2>/dev/null | { cat; echo "*/15 * * * * /usr/share/custos/sync/custos-sync.sh"; } | crontab -'
+	ssh $(HOST) "echo \"CUSTOS_CONFIG_REPO='$(REPO)'\" > /etc/custos/sync.conf"
+	ssh $(HOST) '$(SYNC_CRON)'
 	@echo "Sync push initialisée sur $(HOST) — lancer custos-sync-push.sh manuellement pour publier"
 
 # Help

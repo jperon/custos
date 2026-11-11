@@ -885,3 +885,11 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `nil, message` ; et un helper unique `shell_quote` (apostrophes neutralisées)
   entoure ces valeurs dans `ssh_prefix`/`ssh_run`/`ssh_capture`/`scp_send`.
   Tests dans `tests/unit/install_owrt_spec.moon`.
+- **`make sync-init` / `sync-push-init` : cron dupliqué et `REPO`/`HOST` non
+  quotés.** La ligne cron était ajoutée à chaque exécution, et `REPO` (interpolé
+  dans du shell local puis distant, puis `sync.conf` sourcé par root) permettait
+  l'exécution de commandes arbitraires (`REPO='https://x/a;reboot'`). Correctif :
+  validation shell stricte de `HOST` et `REPO` en tête des deux recettes (jeu de
+  caractères restreint, échec explicite), valeur REPO écrite entre apostrophes
+  simples dans `sync.conf`, et ligne cron ajoutée seulement si absente
+  (`grep -qF … ||`).
