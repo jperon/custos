@@ -206,7 +206,9 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
 
     -- Rejeter si la session a été explicitement invalidée (logout).
     -- Un token encore cryptographiquement valide ne doit pas recréer une session détruite.
-    if not session_alive mac, state.sessions_file, sessions
+    -- Une MAC nil/"unknown" n'a pas de session attendue : elle n'est jamais
+    -- considérée comme invalidée (comportement d'avant la branche).
+    if mac and mac ~= "unknown" and not sessions[mac\lower!]
       invalidated = true
       return
     add_session sessions, mac, peer_ip, user, session_expires

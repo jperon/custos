@@ -308,7 +308,7 @@ handle_ping = function(req, peer_ip, peer_mac, state)
   with_sessions_lock(state.sessions_file, function()
     local sessions = load_sessions(state.sessions_file)
     purge_expired(sessions)
-    if not session_alive(mac, state.sessions_file, sessions) then
+    if mac and mac ~= "unknown" and not sessions[mac:lower()] then
       invalidated = true
       return 
     end
