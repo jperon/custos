@@ -5,7 +5,7 @@
 | Module | Rôle |
 |--------|------|
 | `doh.upstream` | Client UDP/53 — new_client / query / close |
-| `doh.upstream_doh` | Client DoH HTTP/1.1 wolfSSL — même contrat |
+| `doh.upstream_doh` | Client DoH HTTP/1.1 wolfSSL — même contrat. **Non chargé en production** (aucun `require` dans `src/`) : seul `doh.upstream_doh_curl` est utilisé par `worker_doh` et `doh.validator` ; ce module n'est couvert que par `tests/unit/doh/upstream_doh_spec.moon`. |
 | `doh.upstream_doh_curl` | Client DoH **HTTP/2** via libcurl FFI — même contrat. Chargé si `doh.upstream_doh_url` est défini. `ffi.load` essaie `"curl"` puis `"libcurl.so.4"` pour compat OpenWrt. Les args `const char *` vers les varargs `curl_easy_setopt` **doivent** être castés via `ffi.cast "const char *"` (LuaJIT ne convertit pas automatiquement en varargs). |
 | `doh.h2_frames` | Utilitaires frames HTTP/2 partagés (constantes, `h2_read_frame`, `h2_write_frame`) |
 | `doh.validator` | Second avis DNS synchrone pour `worker_doh`. Interroge `second_opinion.resolvers` (ou per-règle) en UDP ou DoH. Timeout distinct `budget_ms` (UDP) / `doh_budget_ms` (DoH). `query_classified` renvoie un **override classifié** (`block`/`sinkhole`/`redirect`/`nil`) via `dns_classify.classify` (REFUSED → `block` explicite, comme l'ancien `query_verdict` booléen, toujours exposé en wrapper). |

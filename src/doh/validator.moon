@@ -3,7 +3,7 @@
 -- et retourne si le domaine est bloqué (NXDOMAIN ou REFUSED).
 -- Supporte deux types d'endpoints par entrée dans la liste :
 --   • IP (ex. "1.1.1.1") → UDP/53 via doh.upstream
---   • URL (ex. "https://1.1.1.1/dns-query") → DoH via doh.upstream_doh
+--   • URL (ex. "https://1.1.1.1/dns-query") → DoH via doh.upstream_doh_curl
 
 upstream_mod = require "doh.upstream"
 { :parse }   = require "ipparse.l7.dns"
