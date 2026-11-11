@@ -601,7 +601,6 @@ end
 return {
   run = run,
   skip_ipv6_ext_hdrs = skip_ipv6_ext_hdrs,
-  dns_tcp_complete = dns_tcp_complete,
   new_dns_tcp_stream = new_dns_tcp_stream,
   append_unique = append_unique,
   aggregate_decisions = aggregate_decisions,

@@ -530,5 +530,5 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   run_queue tonumber(queue_num), handle_question
 
 { :run,
-  :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream,
+  :skip_ipv6_ext_hdrs, :new_dns_tcp_stream,
   :append_unique, :aggregate_decisions, :MAX_RESPONSE_RULE_IDS }

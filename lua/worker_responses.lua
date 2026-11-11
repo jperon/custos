@@ -1134,7 +1134,6 @@ return {
   bench_delta = bench_delta,
   build_benchmark_fields = build_benchmark_fields,
   skip_ipv6_ext_hdrs = skip_ipv6_ext_hdrs,
-  dns_tcp_complete = dns_tcp_complete,
   new_dns_tcp_stream = new_dns_tcp_stream,
   try_upstream_retry = try_upstream_retry,
   arm_retry_fds = arm_retry_fds,
