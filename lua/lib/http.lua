@@ -1,6 +1,9 @@
 local read_request
 read_request = function(client, opts)
   local deadline = opts and opts.timeout and (os.time() + opts.timeout)
+  local max_body = (opts and opts.max_body) or 65536
+  local max_headers = (opts and opts.max_headers) or 100
+  local max_header_line = (opts and opts.max_header_line) or 8192
   local receive_retry
   receive_retry = function(mode)
     local last_err = nil
@@ -29,6 +32,7 @@ read_request = function(client, opts)
     return nil, "bad_request_line"
   end
   local headers = { }
+  local header_count = 0
   local content_length = 0
   while true do
     local line, line_err = receive_retry("*l")
@@ -38,12 +42,23 @@ read_request = function(client, opts)
     if line == "" then
       break
     end
+    if #line > max_header_line then
+      return nil, "headers_too_large"
+    end
+    header_count = header_count + 1
+    if header_count > max_headers then
+      return nil, "headers_too_large"
+    end
     local name, value = line:match("^([^:]+):%s*(.*)$")
     if name then
       local lname = name:lower()
       headers[lname] = value
       if lname == "content-length" then
-        content_length = tonumber(value) or 0
+        local n = tonumber(value)
+        if not (n and n >= 0 and n == math.floor(n) and n <= max_body) then
+          return nil, "body_too_large"
+        end
+        content_length = n
       end
     end
   end
@@ -59,6 +74,45 @@ read_request = function(client, opts)
     body = body
   }
 end
+local apply_io_timeouts
+apply_io_timeouts = function(client, timeout)
+  timeout = tonumber(timeout) or 15
+  pcall(function()
+    return client:setoption("rcvtimeo", timeout)
+  end)
+  pcall(function()
+    return client:setoption("sndtimeo", timeout)
+  end)
+  return timeout
+end
+local send_all
+send_all = function(conn, data, opts)
+  local max_attempts = (opts and opts.max_attempts) or 50
+  local sent = 0
+  local nil_attempts = 0
+  while sent < #data do
+    local chunk
+    if sent == 0 then
+      chunk = data
+    else
+      chunk = data:sub(sent + 1)
+    end
+    local n = conn:send(chunk)
+    if n == true then
+      n = #chunk
+    end
+    if n and n > 0 then
+      sent = sent + n
+      nil_attempts = 0
+    else
+      nil_attempts = nil_attempts + 1
+      if nil_attempts >= max_attempts then
+        return nil, "send_timeout"
+      end
+    end
+  end
+  return true
+end
 local send_response
 send_response = function(client, status, headers, body)
   local is_peer_closed_err
@@ -71,14 +125,14 @@ send_response = function(client, status, headers, body)
   end
   local send_chunk
   send_chunk = function(chunk)
-    local ok, res = pcall(function()
-      return client:send(chunk)
+    local ok, res, serr = pcall(function()
+      return send_all(client, chunk)
     end)
     if ok then
       if res then
         return true
       end
-      return nil, "send_timeout"
+      return nil, serr or "send_timeout"
     end
     if is_peer_closed_err(res) then
       return nil, "peer_closed"
@@ -102,6 +156,8 @@ send_response = function(client, status, headers, body)
     reason = "Not Found"
   elseif 409 == _exp_0 then
     reason = "Conflict"
+  elseif 413 == _exp_0 then
+    reason = "Payload Too Large"
   elseif 415 == _exp_0 then
     reason = "Unsupported Media Type"
   elseif 502 == _exp_0 then
@@ -140,5 +196,7 @@ send_response = function(client, status, headers, body)
 end
 return {
   read_request = read_request,
-  send_response = send_response
+  send_response = send_response,
+  apply_io_timeouts = apply_io_timeouts,
+  send_all = send_all
 }

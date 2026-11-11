@@ -144,6 +144,7 @@ load_auth_cfg = ->
   auth.session_ttl        = tonumber(auth.session_ttl) or 0
   auth.secrets            = auth.secrets or "/etc/custos/secrets"
   auth.sessions_file      = auth.sessions_file or "/tmp/sessions.lua"
+  auth.max_body           = tonumber(auth.max_body) or 1048576
   auth.config_path        = meta.path or "/etc/custos/config.moon"
   auth
 
@@ -162,6 +163,7 @@ load_doh_cfg = ->
         config.doh.upstream_ipv4
     upstream_port: tonumber(config.doh.upstream_port) or 53
     timeout_ms:   tonumber(config.doh.upstream_timeout_ms) or 2000
+    client_timeout: tonumber(config.doh.client_timeout) or 15
     cert:    if config.doh.cert and #config.doh.cert > 0 then config.doh.cert else nil
     key:     if config.doh.key  and #config.doh.key  > 0 then config.doh.key  else nil
     upstream_doh_url:        config.doh.upstream_doh_url or nil

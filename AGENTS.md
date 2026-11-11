@@ -319,6 +319,22 @@ des cibles de chaîne — parité DoH non implémentée (hors périmètre actuel
 | `doh.validator` | Second avis DNS synchrone pour `worker_doh`. Interroge `second_opinion.resolvers` (ou per-règle) en UDP ou DoH. Timeout distinct `budget_ms` (UDP) / `doh_budget_ms` (DoH). `query_classified` renvoie un **override classifié** (`block`/`sinkhole`/`redirect`/`nil`) via `dns_classify.classify` (REFUSED → `block` explicite, comme l'ancien `query_verdict` booléen, toujours exposé en wrapper). |
 | `doh.query` | Cœur de traitement DoH : vol captif + `filter.decide` + `doh.validator` + upstream + nft |
 
+### Limites connues du serveur HTTP/2
+
+`worker_doh.handle_h2` implémente un sous-ensemble minimal de HTTP/2 et ne
+décode **pas HPACK** : il ne lit ni `:method` ni `:path`, et ne termine le flux
+que sur une frame DATA portant END_STREAM. Conséquences assumées, figées par
+`tests/unit/worker_doh_spec.moon` :
+
+- un **GET RFC 8484 en HTTP/2** (HEADERS + END_STREAM, sans DATA) est rejeté
+  (`nil, "h2_incomplete"` + GOAWAY) ;
+- tout **POST HTTP/2**, quel que soit son chemin, est traité comme une requête
+  DoH (aucun routage par `:path`).
+
+Les clients HTTP/1.1 (`POST /dns-query`, `GET /dns-query?dns=…`) ne sont pas
+concernés. Ne pas s'appuyer sur le HTTP/2 serveur pour du routage ou du GET
+RFC 8484 tant qu'HPACK n'est pas implémenté.
+
 ### Parité UDP/DoH : vol captif et overrides du second avis
 
 `doh.query` réplique deux comportements du plan de données UDP (sinon le résolveur
@@ -866,3 +882,51 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   Correctif : helper `forget_ip_mapping` qui n'efface que si `ip_to_mac[ip]`
   appartient encore à cette MAC, aux quatre sites ; test dans
   `tests/unit/worker_responses_spec.moon`.
+- **Connexions DoH sans aucun timeout.** `worker_doh.moon` remettait le socket
+  client en bloquant (`settimeout nil`) sans SO_RCVTIMEO/SO_SNDTIMEO, sans
+  échéance de handshake et sans `timeout:` de `read_request` : une connexion TCP
+  muette suspendait l'enfant `DOH-conn` indéfiniment (`wolfSSL_accept` ou
+  `read_request`), jamais récolté → épuisement de processus/descripteurs.
+  Correctif : nouvelle clé `doh.client_timeout` (défaut 15 s, documentée
+  `doc/CONFIG.md`), helper partagé `lib.http.apply_io_timeouts` (utilisé aussi
+  par `auth/server.moon`, comportement inchangé), échéance absolue de handshake
+  (`handshake_should_continue`, pure et testée) et `read_request …, timeout:
+  client_timeout`. Le chemin HTTP/2 est borné par le même SO_RCVTIMEO.
+- **`Content-Length` non borné dans `lib.http.read_request`.** La longueur
+  annoncée était lue telle quelle et le corps alloué/relu en entier
+  (`ffi.new("uint8_t[?]", size)` côté wolfSSL) : un
+  `Content-Length: 268435456` faisait allouer 256 Mo **avant toute
+  authentification**, côté DoH comme côté portail AUTH. Correctif :
+  `read_request` accepte `opts.max_body` (défaut 65536) et rejette sans lire un
+  corps trop grand ou de longueur non entière/négative (`body_too_large`),
+  ainsi que trop de lignes d'en-tête ou une ligne trop longue
+  (`headers_too_large`, 100 lignes / 8192 octets par défaut). Les deux
+  appelants répondent `413` et ferment ; `doh` borne à 65535 (taille DNS
+  maximale), le portail via la nouvelle clé `auth.max_body` (défaut 1 Mio,
+  documentée), suffisante pour l'éditeur de listes.
+- **Frames HTTP/2 non bornées.** `h2_read_frame` lisait `len` (jusqu'à 16 Mo)
+  et allouait le payload sans plafond ; `handle_h2` concaténait en outre les DATA
+  sans limite. Correctif : `h2_read_frame` rejette `len >
+  H2_DEFAULT_MAX_FRAME_SIZE` (16384) **avant** toute lecture (`frame_too_large`),
+  `handle_h2` répond GOAWAY `FRAME_SIZE_ERROR` (0x6) et ferme, et le cumul DATA
+  est plafonné à 65535 octets (même traitement). Tests :
+  `tests/unit/doh/h2_frames_spec.moon`, `tests/unit/worker_doh_spec.moon`.
+- **Écritures partielles ignorées.** `h2_write_frame` ignorait le retour de
+  `conn\send`, et `send_chunk` de `lib.http` traitait tout retour non-nil comme
+  un succès alors que c'est le **nombre d'octets écrits** : wolfSSL et
+  `lib.socket` peuvent écrire moins que `#chunk`. Correctif : helper
+  `lib.http.send_all` (boucle sur le reliquat `data\sub(n + 1)`, tentatives
+  bornées sur `nil`, rend `true` ou `nil, "send_timeout"`), utilisé par
+  `send_chunk`/`send_response` et `h2_write_frame`. Ce dernier propage désormais
+  l'échec, et `handle_h2` cesse d'écrire après une erreur.
+- **Réponses UDP amont non corrélées au txid (`doh.upstream.query`).** Le
+  socket « connecté » ne filtre que l'adresse source : une réponse tardive à une
+  requête précédente sur un client réutilisé — ou une injection par un tiers
+  usurpant l'adresse du résolveur — était acceptée sans connaître le txid.
+  `query` compare désormais les 2 premiers octets de la réponse à ceux de la
+  requête et exige le bit QR (octet 3, 0x80) ; les datagrammes < 12 octets sont
+  ignorés. Limite : 8 datagrammes ignorés et échéance absolue égale au
+  `timeout_ms` du client (`new_client` le stocke dans le handle) → sinon
+  `nil, "no matching response (txid)"`. `doh.validator` en bénéficie pour son
+  transport UDP (il passe par `doh.upstream`) ; les transports DoH/curl (TLS)
+  ne sont pas concernés. Tests : `tests/unit/doh/upstream_spec.moon`.

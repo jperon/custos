@@ -20,7 +20,7 @@ token = require "auth.token"
 { :extract_sni } = require "auth.sni_extractor"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 config = require "config"
-{ :read_request, :send_response } = require "lib.http"
+{ :read_request, :send_response, :apply_io_timeouts } = require "lib.http"
 { :get_mac } = require "mac_learner_ipc"
 { :refresh_nft } = require "auth.nft_auth_sets"
 { :handle_request } = require "auth.handlers"
@@ -116,8 +116,7 @@ handle_client = (args) ->
     -- sockets zombies saturent la limite de connexions par hôte et retardent
     -- les pings suivants (~70 s de "blocked" observés en HAR).
     client_timeout = (state.auth_cfg and tonumber state.auth_cfg.client_timeout) or 15
-    pcall -> client\setoption "rcvtimeo", client_timeout
-    pcall -> client\setoption "sndtimeo", client_timeout
+    apply_io_timeouts client, client_timeout
     log_debug -> { action: "server_blocking_mode_set", client_timeout: client_timeout }
 
     log_debug -> { action: "server_ssl_wrap_start" }
@@ -164,9 +163,12 @@ handle_client = (args) ->
     log_debug -> { action: "server_set_http_timeout" }
 
     peer_mac = get_mac peer_ip
-    req, req_err = read_request tls_client, timeout: client_timeout
+    -- Borne le corps (éditeur de listes : textarea jusqu'à auth.max_body).
+    max_body = (state.auth_cfg and tonumber state.auth_cfg.max_body) or 1048576
+    req, req_err = read_request tls_client, timeout: client_timeout, max_body: max_body
     unless req
       log_warn -> { action: "server_request_read_failed", peer: peer_ip, err: req_err }
+      send_response tls_client, 413, {}, "Payload Too Large" if req_err == "body_too_large"
       tls_client\close!
       return
 

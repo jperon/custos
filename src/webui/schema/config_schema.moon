@@ -100,6 +100,7 @@
     idle_timeout:       { type: "integer", label: "Timeout inactivité (s)",                                      default: 300, hint: "le cookie de session expire en même temps ; élargir pour tolérer des pings retardés" }
     close_grace:        { type: "integer", label: "Grâce fermeture fenêtre (s)",                                 default: 45, hint: "expiration appliquée quand la page de session est fermée ; un reload re-prolonge via le ping suivant" }
     client_timeout:     { type: "integer", label: "Timeout I/O client (s)",                                      default: 15, hint: "délai max de handshake TLS / lecture de requête par connexion ; libère les connexions muettes (préconnexions navigateur)" }
+    max_body:           { type: "integer", label: "Corps HTTP max (octets)",                                     default: 1048576, hint: "taille maximale d'un POST accepté (ex. éditeur de listes) ; au-delà, réponse 413 sans lecture du corps" }
     challenge_ttl:      { type: "integer", label: "TTL nonce challenge (s)",                                      default: 120, hint: "validité d'un nonce de login challenge-réponse (mot de passe haché côté client, jamais en clair)" }
     allow_plaintext_login: { type: "boolean", label: "Autoriser login en clair (repli sans JS)",                 default: true, hint: "repli quand le JavaScript est désactivé ; passer à false pour garantir que le mot de passe ne quitte jamais le navigateur" }
     register_rate_limit:  { type: "integer", label: "Inscriptions max / fenêtre",                               default: 3 }
@@ -126,6 +127,7 @@
     upstream_ipv6:      { type: "string",  label: "Upstream IPv6",        default: "2606:4700:4700::1113" }
     upstream_port:      { type: "integer", label: "Port upstream",        default: 53 }
     upstream_timeout_ms:{ type: "integer", label: "Timeout upstream (ms)",default: 2000 }
+    client_timeout:     { type: "integer", label: "Timeout I/O client (s)", default: 15, hint: "délai max de handshake TLS / lecture de requête et frames HTTP/2 par connexion ; libère les connexions muettes" }
     cert_path:          { type: "path",    label: "Certificat TLS DoH (optionnel)" }
     key_path:           { type: "path",    label: "Clé TLS DoH (optionnel)" }
     prefer_ipv6:        { type: "boolean", label: "Préférer IPv6",        default: true }

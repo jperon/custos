@@ -16,10 +16,10 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_error, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix
 end
-local read_request, send_response
+local read_request, send_response, apply_io_timeouts
 do
   local _obj_0 = require("lib.http")
-  read_request, send_response = _obj_0.read_request, _obj_0.send_response
+  read_request, send_response, apply_io_timeouts = _obj_0.read_request, _obj_0.send_response, _obj_0.apply_io_timeouts
 end
 local get_mac, get_vlan
 do
@@ -204,6 +204,10 @@ dns_response_json = function(raw)
   parts[#parts + 1] = "]}"
   return table.concat(parts)
 end
+local handshake_should_continue
+handshake_should_continue = function(done, attempts, now, deadline)
+  return not done and attempts < 50 and now <= deadline
+end
 local make_server4
 make_server4 = function(port)
   local srv = socket.tcp()
@@ -234,34 +238,56 @@ make_server6 = function(port)
   srv6:settimeout(1)
   return srv6
 end
-local H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, h2_read_frame, h2_write_frame
+local H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, H2_DEFAULT_MAX_FRAME_SIZE, h2_read_frame, h2_write_frame
 do
   local _obj_0 = require("doh.h2_frames")
-  H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, h2_read_frame, h2_write_frame = _obj_0.H2_FRAME_DATA, _obj_0.H2_FRAME_HEADERS, _obj_0.H2_FRAME_SETTINGS, _obj_0.H2_FRAME_PING, _obj_0.H2_FRAME_GOAWAY, _obj_0.H2_FRAME_WINDOW_UPDATE, _obj_0.H2_FLAG_END_STREAM, _obj_0.H2_FLAG_END_HEADERS, _obj_0.H2_FLAG_ACK, _obj_0.h2_read_frame, _obj_0.h2_write_frame
+  H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, H2_DEFAULT_MAX_FRAME_SIZE, h2_read_frame, h2_write_frame = _obj_0.H2_FRAME_DATA, _obj_0.H2_FRAME_HEADERS, _obj_0.H2_FRAME_SETTINGS, _obj_0.H2_FRAME_PING, _obj_0.H2_FRAME_GOAWAY, _obj_0.H2_FRAME_WINDOW_UPDATE, _obj_0.H2_FLAG_END_STREAM, _obj_0.H2_FLAG_END_HEADERS, _obj_0.H2_FLAG_ACK, _obj_0.H2_DEFAULT_MAX_FRAME_SIZE, _obj_0.h2_read_frame, _obj_0.h2_write_frame
 end
 local h2_encode_response_headers
 h2_encode_response_headers = function()
   return "\x88\x5f\x17application/dns-message"
 end
+local H2_FRAME_SIZE_ERROR = 0x6
+local H2_MAX_BODY = 65535
+local h2_goaway
+h2_goaway = function(conn, code)
+  return h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00" .. string.char(code))
+end
 local handle_h2
 handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
   conn:receive("*l")
   conn:receive("*l")
-  h2_write_frame(conn, H2_FRAME_SETTINGS, 0, 0, "")
+  local ok_w, w_err = h2_write_frame(conn, H2_FRAME_SETTINGS, 0, 0, "")
+  if not (ok_w) then
+    return nil, w_err
+  end
   local stream_id = nil
   local dns_chunks = { }
+  local dns_bytes = 0
   local done = false
   for _ = 1, 30 do
-    local ftype, flags, sid, payload = h2_read_frame(conn)
-    if not (ftype) then
+    local ftype, flags, sid, payload = h2_read_frame(conn, H2_DEFAULT_MAX_FRAME_SIZE)
+    if not ftype then
+      if payload == "frame_too_large" then
+        h2_goaway(conn, H2_FRAME_SIZE_ERROR)
+        return nil, "h2_frame_too_large"
+      end
       break
     end
     if ftype == H2_FRAME_SETTINGS and bit.band(flags, H2_FLAG_ACK) == 0 then
-      h2_write_frame(conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, "")
+      ok_w, w_err = h2_write_frame(conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, "")
+      if not (ok_w) then
+        return nil, w_err
+      end
     elseif ftype == H2_FRAME_HEADERS and not stream_id then
       stream_id = sid
     elseif ftype == H2_FRAME_DATA and sid == stream_id then
       if #payload > 0 then
+        dns_bytes = dns_bytes + #payload
+        if dns_bytes > H2_MAX_BODY then
+          h2_goaway(conn, H2_FRAME_SIZE_ERROR)
+          return nil, "h2_data_too_large"
+        end
         dns_chunks[#dns_chunks + 1] = payload
       end
       if bit.band(flags, H2_FLAG_END_STREAM) ~= 0 then
@@ -269,16 +295,19 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
         break
       end
     elseif ftype == H2_FRAME_PING and bit.band(flags, H2_FLAG_ACK) == 0 then
-      h2_write_frame(conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload)
+      ok_w, w_err = h2_write_frame(conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload)
+      if not (ok_w) then
+        return nil, w_err
+      end
     end
   end
   if not (done and stream_id) then
-    h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01")
+    h2_goaway(conn, 0x1)
     return nil, "h2_incomplete"
   end
   local dns_raw = table.concat(dns_chunks)
   if not (#dns_raw > 0) then
-    h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01")
+    h2_goaway(conn, 0x1)
     return nil, "h2_empty_body"
   end
   local resp_raw, q_err = process_query(dns_raw, peer_ip, peer_mac, upstream, peer_vlan)
@@ -290,13 +319,19 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
         err = q_err
       }
     end)
-    h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x02")
+    h2_goaway(conn, 0x2)
     return nil, "h2_query_error"
   end
   local hpack = h2_encode_response_headers()
-  h2_write_frame(conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack)
-  h2_write_frame(conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw)
-  h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x00")
+  ok_w, w_err = h2_write_frame(conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack)
+  if not (ok_w) then
+    return nil, w_err
+  end
+  ok_w, w_err = h2_write_frame(conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw)
+  if not (ok_w) then
+    return nil, w_err
+  end
+  h2_goaway(conn, 0x0)
   return resp_raw
 end
 local handle_doh_client
@@ -353,6 +388,8 @@ handle_doh_client = function(args)
       error("Certificate context is nil")
     end
     client:settimeout(nil)
+    local client_timeout = (state.client_timeout and tonumber(state.client_timeout)) or 15
+    apply_io_timeouts(client, client_timeout)
     local tls_client, tls_err = ssl.wrap(client, tls_ctx)
     if not (tls_client) then
       log_warn(function()
@@ -368,7 +405,8 @@ handle_doh_client = function(args)
     local done = false
     local attempts = 0
     local hs_err = nil
-    while not done and attempts < 50 do
+    local handshake_deadline = os.time() + client_timeout
+    while handshake_should_continue(done, attempts, os.time(), handshake_deadline) do
       attempts = attempts + 1
       local ok_hs, hs_ret, hs_ret2 = pcall(function()
         return tls_client:dohandshake()
@@ -438,7 +476,10 @@ handle_doh_client = function(args)
         vlan = peer_vlan or "unknown"
       }
     end)
-    local req, req_err = read_request(tls_client)
+    local req, req_err = read_request(tls_client, {
+      timeout = client_timeout,
+      max_body = 65535
+    })
     if not (req) then
       log_warn(function()
         return {
@@ -447,6 +488,9 @@ handle_doh_client = function(args)
           err = req_err
         }
       end)
+      if req_err == "body_too_large" then
+        send_response(tls_client, 413, { }, "Payload Too Large")
+      end
       tls_client:close()
       return 
     end
@@ -768,6 +812,7 @@ run = function(doh_cfg, filter_data)
     static_cert_paths = static_cert_paths,
     make_upstream = make_upstream,
     close_upstream = close_upstream,
+    client_timeout = doh_cfg.client_timeout,
     upstream = nil
   }
   while true do
@@ -788,7 +833,8 @@ run = function(doh_cfg, filter_data)
             cert_cache = state.cert_cache,
             static_cert_paths = state.static_cert_paths,
             make_upstream = state.make_upstream,
-            close_upstream = state.close_upstream
+            close_upstream = state.close_upstream,
+            client_timeout = state.client_timeout
           }
           local conn_arg = {
             client = client,
@@ -833,5 +879,7 @@ return {
   run = run,
   b64url_decode = b64url_decode,
   query_param = query_param,
-  build_dns_query = build_dns_query
+  build_dns_query = build_dns_query,
+  handshake_should_continue = handshake_should_continue,
+  handle_h2 = handle_h2
 }

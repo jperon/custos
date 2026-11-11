@@ -286,6 +286,9 @@ DEFAULTS = {
     port: 33443
     captive_port: 33080
     session_ttl: 0
+    -- Corps HTTP max (octets) : l'éditeur de listes poste un <textarea> de
+    -- domaines ; un Content-Length plus grand est rejeté (413) sans lecture.
+    max_body: 1048576
     heartbeat_interval: 30
     idle_timeout: 300
     challenge_ttl: 120
@@ -311,6 +314,9 @@ DEFAULTS = {
     upstream_ipv6: "2606:4700:4700::1113"
     upstream_port: 53
     upstream_timeout_ms: 2000
+    -- Délai I/O max (s) par connexion DoH : handshake TLS, lecture de requête
+    -- et frames HTTP/2. Libère les connexions muettes (SO_RCVTIMEO/SNDTIMEO).
+    client_timeout: 15
     cert: nil
     key: nil
     prefer_ipv6: true

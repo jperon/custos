@@ -7,8 +7,24 @@ ffi = require "ffi"
 
 -- Maximum DNS UDP response size (EDNS0 extended, safe upper bound).
 DNS_BUF_SIZE = 4096
+-- Nombre maximal de datagrammes non pertinents ignorés avant abandon.
+MAX_IGNORED_DATAGRAMS = 8
+CLOCK_MONOTONIC = 1
+
+-- Horloge monotone (ms) pour l'échéance absolue de corrélation. Les cdefs
+-- sont séparés pour rester compatibles avec ffi_defs / le harnais de test.
+pcall ffi.cdef, "typedef struct { long tv_sec; long tv_nsec; } timespec_t;"
+pcall ffi.cdef, "int clock_gettime(int clk_id, timespec_t *tp);"
 
 get_errno = -> ffi.C.__errno_location![0]
+
+now_ms = ->
+  ts = ffi.new "timespec_t"
+  ok, ret = pcall -> ffi.C.clock_gettime CLOCK_MONOTONIC, ts
+  if ok and ret == 0
+    ts.tv_sec * 1000 + ts.tv_nsec / 1000000
+  else
+    os.time! * 1000
 
 --- Probe whether an IPv6 socket can connect to a given address.
 -- Used at startup to determine upstream address family preference.
@@ -86,7 +102,7 @@ new_client = (upstream_ip, upstream_port=53, timeout_ms=2000) ->
       return nil, "connect(AF_INET) failed: errno=" .. get_errno!
 
   log_debug -> { action: "upstream_connected", :upstream_ip, :upstream_port, :family, :fd }
-  { :fd, :family, :upstream_ip, :upstream_port }
+  { :fd, :family, :upstream_ip, :upstream_port, :timeout_ms }
 
 --- Send a raw DNS query and wait for the response.
 -- The socket must have been created with new_client().
@@ -102,18 +118,39 @@ query = (client, dns_raw) ->
     log_debug -> { action: "upstream_send_failed", upstream_ip: client.upstream_ip, errno: errno }
     return nil, "send() failed: errno=" .. errno
 
+  -- Le socket « connecté » ne filtre que l'adresse source : corréler le txid
+  -- (2 premiers octets, RFC 1035) et le bit QR, sinon une réponse tardive à une
+  -- requête précédente — ou une injection sans connaître le txid — serait
+  -- acceptée. Les datagrammes non pertinents sont ignorés dans une limite
+  -- bornée (8) et avant l'échéance absolue égale au timeout du client.
+  qid = dns_raw\byte(1) * 256 + dns_raw\byte(2)
+  deadline = now_ms! + (client.timeout_ms or 2000)
+  ignored = 0
   buf = ffi.new "uint8_t[?]", DNS_BUF_SIZE
-  n = C.recv client.fd, buf, DNS_BUF_SIZE, 0
-  if n < 0
-    errno = get_errno!
-    log_debug -> { action: "upstream_recv_failed", upstream_ip: client.upstream_ip, errno: errno }
-    return nil, "recv() timed out or failed: errno=" .. errno
-  if n == 0
-    log_debug -> { action: "upstream_recv_empty", upstream_ip: client.upstream_ip }
-    return nil, "recv() returned 0 (connection closed)"
+  while true
+    n = C.recv client.fd, buf, DNS_BUF_SIZE, 0
+    if n < 0
+      errno = get_errno!
+      log_debug -> { action: "upstream_recv_failed", upstream_ip: client.upstream_ip, errno: errno }
+      return nil, "recv() timed out or failed: errno=" .. errno
+    if n == 0
+      log_debug -> { action: "upstream_recv_empty", upstream_ip: client.upstream_ip }
+      return nil, "recv() returned 0 (connection closed)"
 
-  log_debug -> { action: "upstream_recv", upstream_ip: client.upstream_ip, bytes: n }
-  ffi.string buf, n
+    -- Moins de 12 octets = en-tête DNS incomplet ; QR (0x80 de l'octet 3)
+    -- absent = requête renvoyée en écho, pas une réponse.
+    if n >= 12
+      resp = ffi.string buf, n
+      resp_qid = resp\byte(1) * 256 + resp\byte(2)
+      if resp_qid == qid and resp\byte(3) >= 0x80
+        log_debug -> { action: "upstream_recv", upstream_ip: client.upstream_ip, bytes: n }
+        return resp
+
+    ignored += 1
+    log_debug -> { action: "upstream_recv_ignored", upstream_ip: client.upstream_ip,
+      bytes: n, ignored: ignored, reason: (n < 12 and "short" or "txid_or_qr") }
+    if ignored >= MAX_IGNORED_DATAGRAMS or now_ms! >= deadline
+      return nil, "no matching response (txid)"
 
 --- Close the UDP socket held by a client handle.
 -- @tparam table client Handle returned by new_client().

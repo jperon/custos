@@ -42,7 +42,18 @@ package.loaded["auth.ffi_wolfssl"] = {
 }
 package.loaded["lib.socket"]  = { tcp: (-> nil), tcp6: (-> nil), select: (-> {}, {}) }
 package.loaded["lib.process"] = { fork_child: (-> 1) }
-package.loaded["lib.http"]    = { read_request: (-> nil, "stub"), send_response: (->) }
+package.loaded["lib.http"]    = {
+  read_request: (-> nil, "stub")
+  send_response: (->)
+  send_all: (conn, data) ->
+    sent = 0
+    while sent < #data
+      chunk = if sent == 0 then data else data\sub(sent + 1)
+      n = conn\send chunk
+      return nil, "send_timeout" unless n
+      sent += (if n == true then #chunk else n)
+    true
+}
 
 doh = require "worker_doh"
 
@@ -115,3 +126,87 @@ describe "worker_doh.build_dns_query", ->
   it "retourne nil pour un nom de domaine vide", ->
     raw = doh.build_dns_query "", 1
     assert.is_nil raw
+
+-- ── handshake_should_continue ────────────────────────────────────────────────
+
+describe "worker_doh.handshake_should_continue", ->
+  it "continue tant que le handshake n'est pas fini et dans l'échéance", ->
+    assert.is_true doh.handshake_should_continue false, 0, 100, 115
+
+  it "abandonne si l'échéance est dépassée", ->
+    assert.is_false doh.handshake_should_continue false, 0, 116, 115
+
+  it "abandonne si le handshake est terminé", ->
+    assert.is_false doh.handshake_should_continue true, 0, 100, 115
+
+  it "abandonne après 50 tentatives", ->
+    assert.is_false doh.handshake_should_continue false, 50, 100, 115
+
+-- ── handle_h2 : plafond cumulé des DATA ─────────────────────────────────────
+
+-- Connexion factice : préface "SM\r\n\r\n" puis flux de frames brutes.
+make_h2_conn = (raw) ->
+  pos = 1
+  line_idx = 0
+  lines = { "SM", "" }
+  sent = {}
+  {
+    receive: (mode) =>
+      if mode == "*l"
+        line_idx += 1
+        return lines[line_idx]
+      n = tonumber mode
+      return nil, "eof" if pos > #raw
+      chunk = raw\sub pos, pos + n - 1
+      pos += #chunk
+      chunk
+    send: (data) =>
+      sent[#sent + 1] = data
+      #data
+    _sent: -> table.concat sent
+  }
+
+h2_frame_raw = (ftype, flags, sid, payload) ->
+  payload = payload or ""
+  n = #payload
+  string.char(
+    bit.band(bit.rshift(n, 16), 0xFF),
+    bit.band(bit.rshift(n,  8), 0xFF),
+    bit.band(n,                 0xFF),
+    ftype, flags,
+    bit.band(bit.rshift(sid, 24), 0xFF),
+    bit.band(bit.rshift(sid, 16), 0xFF),
+    bit.band(bit.rshift(sid,  8), 0xFF),
+    bit.band(sid,                 0xFF)
+  ) .. payload
+
+describe "worker_doh.handle_h2 — plafond DATA", ->
+  bit = require "bit"
+
+  it "rejette un cumul DATA supérieur à 65535 octets", ->
+    frames = { h2_frame_raw 0x1, 0x4, 1, "" }
+    for _ = 1, 4
+      frames[#frames + 1] = h2_frame_raw 0x0, 0, 1, string.rep "x", 16384
+    frames[#frames + 1] = h2_frame_raw 0x0, 0x1, 1, "y"
+    conn = make_h2_conn table.concat frames
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "h2_data_too_large", err
+    sent = conn._sent!
+    expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,6)
+    assert.equals expected_goaway, sent\sub -17
+
+-- ── handle_h2 : limite connue (GET HEADERS+END_STREAM sans DATA) ────────────
+
+describe "worker_doh.handle_h2 — GET HTTP/2 sans DATA", ->
+  it "HEADERS avec END_STREAM sans DATA → h2_incomplete + GOAWAY", ->
+    -- Limite connue : handle_h2 ne décode pas HPACK et ne termine le flux que
+    -- sur une frame DATA avec END_STREAM. Un GET RFC 8484 (HEADERS +
+    -- END_STREAM, sans DATA) est donc refusé avec GOAWAY.
+    conn = make_h2_conn h2_frame_raw 0x1, 0x1, 1, ""
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "h2_incomplete", err
+    sent = conn._sent!
+    expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,1)
+    assert.equals expected_goaway, sent\sub -17
