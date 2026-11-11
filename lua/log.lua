@@ -34,18 +34,21 @@ local RL_IDENTITY_KEYS = {
   "peer_ip",
   "peer_mac",
   "ip",
+  "ip_src",
+  "ip_dst",
   "client",
   "client_ip",
   "client_mac",
   "mac",
   "mac_src",
   "src_ip",
+  "dst_ip",
   "qname",
   "qnames",
   "domain",
   "qtype",
-  "dst_ip",
   "hostname",
+  "host",
   "sni",
   "cert",
   "key",
@@ -58,10 +61,24 @@ local RL_IDENTITY_KEYS = {
   "queue",
   "worker",
   "user",
+  "username",
   "vlan",
+  "resolver",
   "resolver_ip",
   "upstream_ip",
   "addr",
+  "protocol",
+  "l4_proto",
+  "rcode",
+  "errno",
+  "source",
+  "direction",
+  "version",
+  "verdict",
+  "backend",
+  "type",
+  "cn",
+  "local_ip",
   "rule",
   "list",
   "err",
@@ -148,6 +165,9 @@ local RL_CONFIG = {
   }
 }
 local RL_NEVER_LIMIT = {
+  dns_benchmark = true,
+  log_rl_mmap_failed = true,
+  log_rl_saturated = true,
   worker_died = true,
   child_crashed = true,
   worker_started = true,
@@ -163,29 +183,45 @@ local RL_NEVER_LIMIT = {
   config_source = true,
   config_external_missing = true
 }
-local RL_MAX_WINDOW = 0
-for _, cfg in pairs(RL_CONFIG) do
-  if cfg.window > RL_MAX_WINDOW then
-    RL_MAX_WINDOW = cfg.window
-  end
-end
 local RL_SLOTS = 4096
-local RL_SLOT_WORDS = 3
-local RL_MMAP_BYTES = RL_SLOTS * RL_SLOT_WORDS * 4
+local RL_SLOT_WORDS = 4
+local RL_HEADER_WORDS = 2
+local RL_HAND_SCAN = 32
+local RL_MMAP_WORDS = RL_HEADER_WORDS + RL_SLOTS * RL_SLOT_WORDS
+local RL_MMAP_BYTES = RL_MMAP_WORDS * 4
 local RL_PROBE_MAX = 8
 local PROT_READ = 1
 local PROT_WRITE = 2
 local MAP_SHARED = 0x01
-local MAP_ANONYMOUS = 0x20
+local _map_anonymous
+_map_anonymous = function(arch)
+  if arch and arch:match("^mips") then
+    return 0x800
+  else
+    return 0x20
+  end
+end
+local MAP_ANONYMOUS = _map_anonymous(jit and jit.arch)
 local _rl_base = nil
 local _rl = { }
 local _rl_fb_n = 0
-pcall(function()
+local _rl_fb_sat = 0
+local _rl_fallback_reason = nil
+local _rl_sat_warned = false
+local _rl_saved_base = nil
+local _ok, _err = pcall(function()
   local ptr = libc.mmap(nil, RL_MMAP_BYTES, bit.bor(PROT_READ, PROT_WRITE), bit.bor(MAP_SHARED, MAP_ANONYMOUS), -1, 0)
   if ptr ~= nil and ptr ~= ffi.cast("void*", -1) then
     _rl_base = ffi.cast("uint32_t*", ptr)
   end
 end)
+if not (_rl_base) then
+  if _ok then
+    _rl_fallback_reason = "mmap_returned_MAP_FAILED"
+  else
+    _rl_fallback_reason = tostring(_err)
+  end
+end
 local _action_prefix = ""
 local set_action_prefix
 set_action_prefix = function(prefix)
@@ -266,8 +302,9 @@ _rl_hash = function(level, fields, keys)
 end
 local _rl_reset
 _rl_reset = function()
+  _rl_sat_warned = false
   if _rl_base then
-    for i = 0, RL_SLOTS * RL_SLOT_WORDS - 1 do
+    for i = 0, RL_MMAP_WORDS - 1 do
       _rl_base[i] = 0
     end
   else
@@ -275,7 +312,108 @@ _rl_reset = function()
       _rl[k] = nil
     end
     _rl_fb_n = 0
+    _rl_fb_sat = 0
   end
+end
+local now
+now = function()
+  libc.clock_gettime(0, ts)
+  return tonumber(ts.tv_sec)
+end
+local format_line
+format_line = function(epoch, pid, level, fields, suppressed)
+  local parts = {
+    "[" .. tostring(epoch) .. "]",
+    "[" .. tostring(pid) .. "]",
+    level
+  }
+  for k, v in pairs(fields) do
+    local sv = tostring(v)
+    if sv:find(" ") then
+      table.insert(parts, tostring(k) .. "=\"" .. tostring(sv) .. "\"")
+    else
+      table.insert(parts, tostring(k) .. "=" .. tostring(sv))
+    end
+  end
+  if suppressed and suppressed > 0 then
+    table.insert(parts, "suppressed=" .. tostring(suppressed))
+  end
+  return table.concat(parts, " ") .. "\n"
+end
+local _emit_line
+_emit_line = function(level, fields)
+  libc.clock_gettime(0, ts)
+  local line = format_line(tonumber(ts.tv_sec), tonumber(ffi.C.getpid()), level, fields, 0)
+  return libc.write(STDOUT_FILENO, line, #line)
+end
+local _rl_warn_saturated
+_rl_warn_saturated = function()
+  if _rl_sat_warned then
+    return 
+  end
+  _rl_sat_warned = true
+  return _emit_line("WARN", {
+    action = "log_rl_saturated",
+    slots = RL_SLOTS,
+    probe_max = RL_PROBE_MAX,
+    detail = "aucun slot recyclable : messages journalisés sans rate-limiting"
+  })
+end
+local rl_shared
+rl_shared = function()
+  return _rl_base ~= nil
+end
+local rl_stats
+rl_stats = function()
+  if _rl_base then
+    return {
+      shared = true,
+      saturated = tonumber(_rl_base[1]),
+      slots = RL_SLOTS
+    }
+  else
+    return {
+      shared = false,
+      saturated = _rl_fb_sat,
+      slots = RL_SLOTS
+    }
+  end
+end
+local _rl_force_fallback
+_rl_force_fallback = function(enable)
+  if enable then
+    if not (_rl_base == nil) then
+      _rl_saved_base = _rl_base
+    end
+    _rl_base = nil
+  elseif _rl_saved_base then
+    _rl_base = _rl_saved_base
+    _rl_saved_base = nil
+  end
+end
+local _rl_slot_get
+_rl_slot_get = function(index)
+  if not (_rl_base) then
+    return nil
+  end
+  local off = RL_HEADER_WORDS + index * RL_SLOT_WORDS
+  return {
+    hash = tonumber(_rl_base[off]),
+    ts = tonumber(_rl_base[off + 1]),
+    expires = tonumber(_rl_base[off + 2]),
+    count = tonumber(_rl_base[off + 3])
+  }
+end
+local _rl_slot_set
+_rl_slot_set = function(index, hash, ts, expires, count)
+  if not (_rl_base) then
+    return nil
+  end
+  local off = RL_HEADER_WORDS + index * RL_SLOT_WORDS
+  _rl_base[off] = hash
+  _rl_base[off + 1] = ts
+  _rl_base[off + 2] = expires
+  _rl_base[off + 3] = count or 0
 end
 local check_rl
 check_rl = function(level, fields, epoch)
@@ -293,67 +431,115 @@ check_rl = function(level, fields, epoch)
     local base = _rl_base
     local window = cfg.window
     local slot = h % RL_SLOTS
+    local oldest_slot = nil
+    local oldest_exp = nil
     for _probe = 1, RL_PROBE_MAX do
-      local off = slot * RL_SLOT_WORDS
+      local _continue_0 = false
+      repeat
+        local off = RL_HEADER_WORDS + slot * RL_SLOT_WORDS
+        local sh = tonumber(base[off])
+        local sts = tonumber(base[off + 1])
+        local sexp = tonumber(base[off + 2])
+        if not (sh == tonumber(base[off])) then
+          slot = (slot + 1) % RL_SLOTS
+          _continue_0 = true
+          break
+        end
+        if sts == 0 then
+          base[off] = h
+          base[off + 1] = epoch
+          base[off + 2] = epoch + window
+          base[off + 3] = 0
+          return 0
+        end
+        if sh == h then
+          if epoch >= sts and epoch < sexp then
+            base[off + 3] = tonumber(base[off + 3]) + 1
+            return -1
+          end
+          local old_count = tonumber(base[off + 3])
+          base[off + 1] = epoch
+          base[off + 2] = epoch + window
+          base[off + 3] = 0
+          return old_count
+        end
+        if epoch < sts or epoch >= sexp then
+          base[off] = h
+          base[off + 1] = epoch
+          base[off + 2] = epoch + window
+          base[off + 3] = 0
+          return 0
+        end
+        if oldest_exp == nil or sexp < oldest_exp then
+          oldest_exp = sexp
+          oldest_slot = slot
+        end
+        slot = (slot + 1) % RL_SLOTS
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
+      end
+    end
+    local hand = oldest_slot or (tonumber(base[0]) % RL_SLOTS)
+    for _step = 1, RL_HAND_SCAN do
+      local off = RL_HEADER_WORDS + hand * RL_SLOT_WORDS
       local sh = tonumber(base[off])
       local sts = tonumber(base[off + 1])
-      if sts == 0 then
+      local sexp = tonumber(base[off + 2])
+      if sh == tonumber(base[off]) and sts ~= 0 and (epoch < sts or epoch >= sexp) then
         base[off] = h
         base[off + 1] = epoch
-        base[off + 2] = 0
+        base[off + 2] = epoch + window
+        base[off + 3] = 0
+        base[0] = (hand + 1) % RL_SLOTS
         return 0
       end
-      if sh == h then
-        if epoch - sts < window then
-          base[off + 2] = tonumber(base[off + 2]) + 1
-          return -1
-        end
-        local old_count = tonumber(base[off + 2])
-        base[off + 1] = epoch
-        base[off + 2] = 0
-        return old_count
-      end
-      if epoch - sts >= RL_MAX_WINDOW then
-        base[off] = h
-        base[off + 1] = epoch
-        base[off + 2] = 0
-        return 0
-      end
-      slot = (slot + 1) % RL_SLOTS
+      hand = (hand + 1) % RL_SLOTS
     end
+    base[0] = hand
+    base[1] = tonumber(base[1]) + 1
+    _rl_warn_saturated()
     return 0
   else
     local fp = rl_fingerprint(tostring(level) .. "|" .. tostring(action_key), fields, cfg.keys)
     local entry = _rl[fp]
     if entry then
-      if epoch - entry.ts < cfg.window then
+      if epoch >= entry.ts and epoch < entry.expires then
         entry.count = entry.count + 1
         return -1
       end
       local old_count = entry.count
       entry.ts = epoch
+      entry.expires = epoch + cfg.window
       entry.count = 0
       return old_count
     else
       if _rl_fb_n >= RL_SLOTS then
-        for k in pairs(_rl) do
-          _rl[k] = nil
+        for k, e in pairs(_rl) do
+          if epoch < e.ts or epoch >= e.expires then
+            _rl[k] = nil
+            _rl_fb_n = _rl_fb_n - 1
+          end
         end
-        _rl_fb_n = 0
+        if _rl_fb_n >= RL_SLOTS then
+          for k in pairs(_rl) do
+            _rl[k] = nil
+          end
+          _rl_fb_n = 0
+          _rl_fb_sat = _rl_fb_sat + 1
+          _rl_warn_saturated()
+        end
       end
       _rl[fp] = {
         ts = epoch,
+        expires = epoch + cfg.window,
         count = 0
       }
       _rl_fb_n = _rl_fb_n + 1
       return 0
     end
   end
-end
-local now
-now = function()
-  libc.clock_gettime(0, ts)
-  return tonumber(ts.tv_sec)
 end
 local write_log
 write_log = function(level, thunk)
@@ -381,23 +567,7 @@ write_log = function(level, thunk)
   if suppressed == -1 then
     return 
   end
-  local parts = {
-    "[" .. tostring(epoch) .. "]",
-    "[" .. tostring(pid) .. "]",
-    level
-  }
-  for k, v in pairs(fields) do
-    local sv = tostring(v)
-    if sv:find(" ") then
-      table.insert(parts, tostring(k) .. "=\"" .. tostring(sv) .. "\"")
-    else
-      table.insert(parts, tostring(k) .. "=" .. tostring(sv))
-    end
-  end
-  if suppressed > 0 then
-    table.insert(parts, "suppressed=" .. tostring(suppressed))
-  end
-  local line = table.concat(parts, " ") .. "\n"
+  local line = format_line(epoch, pid, level, fields, suppressed)
   return libc.write(STDOUT_FILENO, line, #line)
 end
 local log_allow
@@ -428,6 +598,14 @@ local log_trace
 log_trace = function(thunk)
   return write_log("TRACE", thunk)
 end
+if not (_rl_base) then
+  _emit_line("WARN", {
+    action = "log_rl_mmap_failed",
+    reason = _rl_fallback_reason or "unknown",
+    rl_shared = 0,
+    arch = (jit and jit.arch) or "unknown"
+  })
+end
 return {
   write_log = write_log,
   log_allow = log_allow,
@@ -444,7 +622,17 @@ return {
   set_action_prefix = set_action_prefix,
   RL_CONFIG = RL_CONFIG,
   RL_SLOTS = RL_SLOTS,
+  RL_PROBE_MAX = RL_PROBE_MAX,
+  MAP_ANONYMOUS = MAP_ANONYMOUS,
+  _map_anonymous = _map_anonymous,
   check_rl = check_rl,
+  format_line = format_line,
+  rl_shared = rl_shared,
+  rl_stats = rl_stats,
   _rl_hash = _rl_hash,
-  _rl_reset = _rl_reset
+  _rl_reset = _rl_reset,
+  _rl_never_limited = _rl_never_limited,
+  _rl_force_fallback = _rl_force_fallback,
+  _rl_slot_get = _rl_slot_get,
+  _rl_slot_set = _rl_slot_set
 }

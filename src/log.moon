@@ -59,12 +59,15 @@ level_enabled = (level) -> get_log_level_num(level) >= CURRENT_LOG_LEVEL_NUM
 -- Les champs absents ne participent pas à l'empreinte.
 RL_IDENTITY_KEYS = {
   "peer", "peer_ip", "peer_mac"
-  "ip", "client", "client_ip", "client_mac", "mac", "mac_src", "src_ip"
-  "qname", "qnames", "domain", "qtype", "dst_ip"
-  "hostname", "sni", "cert", "key"
+  "ip", "ip_src", "ip_dst", "client", "client_ip", "client_mac"
+  "mac", "mac_src", "src_ip", "dst_ip"
+  "qname", "qnames", "domain", "qtype"
+  "hostname", "host", "sni", "cert", "key"
   "path", "method", "url", "file"
-  "ifname", "name", "queue", "worker", "user", "vlan"
-  "resolver_ip", "upstream_ip", "addr"
+  "ifname", "name", "queue", "worker", "user", "username", "vlan"
+  "resolver", "resolver_ip", "upstream_ip", "addr"
+  "protocol", "l4_proto", "rcode", "errno", "source", "direction"
+  "version", "verdict", "backend", "type", "cn", "local_ip"
   "rule", "list", "err", "reason", "cmd"
 }
 
@@ -100,6 +103,17 @@ RL_CONFIG = {
 -- rares hors boucle de crash, donc les laisser passer ne peut pas noyer les
 -- logs. La comparaison se fait aussi après strip du préfixe worker.
 RL_NEVER_LIMIT = {
+  -- Instrumentation : `runtime.benchmark` ne doit jamais être rendu muet.
+  -- Sur un banc à qname fixe, la règle ALLOW/BLOCK (mac_src/qname/qtype, 30 s)
+  -- ne garderait qu'un échantillon par triplet et par fenêtre : les mesures
+  -- (q_to_response_ms, drain_ms, parse_ms, match_ms…) des échantillons
+  -- supprimés seraient perdues, c'est-à-dire l'objet même de l'option. Le
+  -- préfixe worker `response_` est retiré avant comparaison.
+  dns_benchmark:               true
+  -- Diagnostic du limiteur lui-même : ne doit jamais être supprimé par le
+  -- limiteur dont il signale la panne.
+  log_rl_mmap_failed:          true
+  log_rl_saturated:            true
   worker_died:                 true
   child_crashed:               true
   worker_started:              true
@@ -116,43 +130,63 @@ RL_NEVER_LIMIT = {
   config_external_missing:     true
 }
 
--- Fenêtre maximale (sert à réutiliser un slot dont l'entrée est forcément
--- expirée, quelle que soit sa règle d'origine).
-RL_MAX_WINDOW = 0
-for _, cfg in pairs RL_CONFIG
-  RL_MAX_WINDOW = cfg.window if cfg.window > RL_MAX_WINDOW
-
 -- ── État partagé entre processus ──────────────────────────────────
--- Table de hachage à taille fixe (4096 slots × 3 uint32 = 48 Kio) dans une
--- zone mmap(MAP_SHARED|MAP_ANONYMOUS) créée au chargement du module — donc
--- dans le superviseur avant tout fork — et héritée par tous les workers et
--- leurs enfants. Les enfants AUTH/DoH forkés par connexion partagent ainsi le
--- même état, contrairement à l'ancienne table Lua par processus.
+-- Table de hachage à taille fixe (4096 slots × 4 uint32 + en-tête de 2 mots =
+-- 64 Kio) dans une zone mmap(MAP_SHARED|MAP_ANONYMOUS) créée au chargement du
+-- module — donc dans le superviseur avant tout fork — et héritée par tous les
+-- workers et leurs enfants. Les enfants AUTH/DoH forkés par connexion
+-- partagent ainsi le même état, contrairement à l'ancienne table Lua par
+-- processus.
 --
--- Slot : { hash, dernier_ts, count }. `dernier_ts == 0` = libre. On stocke le
+-- En-tête (2 uint32) : `hand` (main d'horloge de recyclage) et `saturated`
+-- (nombre de log émis faute de slot recyclable, observable via `rl_stats`).
+-- Slot : { hash, ts, expires, count }. `ts == 0` = libre ; `expires` est
+-- l'échéance absolue (`ts + fenêtre de la règle`), ce qui permet de recycler un
+-- slot dont la fenêtre est réellement passée sans connaître sa règle d'origine
+-- — et donc de ne jamais supprimer une entrée encore vivante. On stocke le
 -- hash 32 bits complet et on sonde linéairement : deux empreintes différentes
 -- qui tombent dans le même slot occupent des slots distincts, aucune n'est
 -- supprimée à tort. Sans verrou : les accès uint32 alignés ne peuvent pas être
 -- déchirés ; une course peut produire une ligne en double ou un compteur
--- légèrement faux, jamais une corruption ni un blocage. Table saturée (plus de
--- RL_PROBE_MAX slots occupés) → on journalise sans supprimer.
+-- légèrement faux, jamais une corruption ni un blocage. Table saturée (sondage
+-- épuisé sans slot libre ni expiré, puis balayage de la main d'horloge
+-- infructueux) → on journalise sans supprimer et on incrémente le compteur.
 RL_SLOTS = 4096
-RL_SLOT_WORDS = 3
-RL_MMAP_BYTES = RL_SLOTS * RL_SLOT_WORDS * 4
+RL_SLOT_WORDS = 4
+RL_HEADER_WORDS = 2
+RL_HAND_SCAN = 32
+RL_MMAP_WORDS = RL_HEADER_WORDS + RL_SLOTS * RL_SLOT_WORDS
+RL_MMAP_BYTES = RL_MMAP_WORDS * 4
 RL_PROBE_MAX = 8
 PROT_READ = 1
 PROT_WRITE = 2
 MAP_SHARED = 0x01
-MAP_ANONYMOUS = 0x20
+-- MAP_ANONYMOUS n'a pas la même valeur selon l'architecture : 0x20 est la
+-- valeur générique Linux (x86, x86_64, ARM), mais sur MIPS 0x20 est MAP_RENAME
+-- et l'anonymat vaut 0x800. Un 0x20 codé en dur sur les routeurs ath79/ramips
+-- (cibles supportées, cf. .agents/architecture.md) fait donc échouer
+-- mmap(fd=-1) : plus d'état partagé, silencieusement. On choisit donc à
+-- l'exécution depuis `jit.arch`. MAP_SHARED = 0x01 est commun à toutes les
+-- architectures Linux.
+_map_anonymous = (arch) ->
+  if arch and arch\match "^mips" then 0x800 else 0x20
+
+MAP_ANONYMOUS = _map_anonymous jit and jit.arch
 
 _rl_base = nil
 _rl = {}   -- repli uniquement si mmap échoue
 _rl_fb_n = 0
+_rl_fb_sat = 0
+_rl_fallback_reason = nil
+_rl_sat_warned = false
+_rl_saved_base = nil
 
-pcall ->
+_ok, _err = pcall ->
   ptr = libc.mmap nil, RL_MMAP_BYTES, bit.bor(PROT_READ, PROT_WRITE), bit.bor(MAP_SHARED, MAP_ANONYMOUS), -1, 0
   if ptr != nil and ptr != ffi.cast("void*", -1)
     _rl_base = ffi.cast "uint32_t*", ptr
+unless _rl_base
+  _rl_fallback_reason = if _ok then "mmap_returned_MAP_FAILED" else tostring _err
 
 -- Process-scoped action prefix (set once per worker, inherited by fork children).
 _action_prefix = ""
@@ -249,13 +283,112 @@ _rl_hash = (level, fields, keys) ->
 
 --- Vide l'état partagé (tests uniquement).
 _rl_reset = ->
+  _rl_sat_warned = false
   if _rl_base
-    for i = 0, RL_SLOTS * RL_SLOT_WORDS - 1
+    for i = 0, RL_MMAP_WORDS - 1
       _rl_base[i] = 0
   else
     for k in pairs _rl
       _rl[k] = nil
     _rl_fb_n = 0
+    _rl_fb_sat = 0
+
+-- ── Formatage ─────────────────────────────────────────────────────
+
+--- Retourne le timestamp Unix courant (secondes).
+-- @treturn number epoch courant
+now = ->
+  libc.clock_gettime 0, ts   -- CLOCK_REALTIME = 0
+  tonumber ts.tv_sec
+
+--- Met en forme une ligne de log (fonction pure, testable).
+-- @tparam number epoch      Timestamp Unix (secondes)
+-- @tparam number pid        PID émetteur
+-- @tparam string level      Niveau de log
+-- @tparam table  fields     Champs clé=valeur
+-- @tparam number suppressed Nombre de messages supprimés (0 = aucun)
+-- @treturn string Ligne complète terminée par \n
+format_line = (epoch, pid, level, fields, suppressed) ->
+  parts = { "[#{epoch}]", "[#{pid}]", level }
+  for k, v in pairs fields
+    -- Mise en guillemets si la valeur contient des espaces
+    sv = tostring v
+    if sv\find " "
+      table.insert parts, "#{k}=\"#{sv}\""
+    else
+      table.insert parts, "#{k}=#{sv}"
+  table.insert parts, "suppressed=#{suppressed}" if suppressed and suppressed > 0
+  table.concat(parts, " ") .. "\n"
+
+--- Écrit une ligne hors du chemin de rate-limiting.
+-- Utilisé quand le limiteur lui-même est en panne (mmap échoué, saturation) :
+-- passer par write_log/check_rl risquerait une récursion dans le limiteur.
+_emit_line = (level, fields) ->
+  libc.clock_gettime 0, ts   -- CLOCK_REALTIME = 0
+  line = format_line tonumber(ts.tv_sec), tonumber(ffi.C.getpid()), level, fields, 0
+  libc.write STDOUT_FILENO, line, #line
+
+--- Signale une saturation du limiteur (une fois par processus).
+_rl_warn_saturated = ->
+  return if _rl_sat_warned
+  _rl_sat_warned = true
+  _emit_line "WARN", {
+    action: "log_rl_saturated"
+    slots: RL_SLOTS
+    probe_max: RL_PROBE_MAX
+    detail: "aucun slot recyclable : messages journalisés sans rate-limiting"
+  }
+
+--- Indique si le limiteur partage son état entre processus.
+-- @treturn boolean true si la table mmap partagée est utilisée
+rl_shared = -> _rl_base != nil
+
+--- Statistiques observables du limiteur.
+-- @treturn table `{ shared, saturated, slots }` ; `saturated` compte les
+-- messages journalisés sans rate-limiting faute de slot recyclable.
+rl_stats = ->
+  if _rl_base
+    { shared: true, saturated: tonumber(_rl_base[1]), slots: RL_SLOTS }
+  else
+    { shared: false, saturated: _rl_fb_sat, slots: RL_SLOTS }
+
+--- Force le repli par processus (tests uniquement).
+-- @tparam boolean enable true = désactive la table partagée ; false = restaure
+_rl_force_fallback = (enable) ->
+  if enable
+    _rl_saved_base = _rl_base unless _rl_base == nil
+    _rl_base = nil
+  elseif _rl_saved_base
+    _rl_base = _rl_saved_base
+    _rl_saved_base = nil
+
+--- Lit un slot partagé (tests uniquement : contrôle fin des collisions).
+-- @tparam number index Index de slot (0-based)
+-- @treturn table|nil `{ hash, ts, expires, count }`, nil si repli actif
+_rl_slot_get = (index) ->
+  return nil unless _rl_base
+  off = RL_HEADER_WORDS + index * RL_SLOT_WORDS
+  {
+    hash: tonumber(_rl_base[off])
+    ts: tonumber(_rl_base[off + 1])
+    expires: tonumber(_rl_base[off + 2])
+    count: tonumber(_rl_base[off + 3])
+  }
+
+--- Écrit un slot partagé (tests uniquement).
+-- @tparam number index   Index de slot (0-based)
+-- @tparam number hash    Hash d'empreinte
+-- @tparam number ts      Timestamp de dernière émission (0 = libre)
+-- @tparam number expires Échéance absolue
+-- @tparam number|nil count Compteur de suppressions
+-- @treturn nil
+_rl_slot_set = (index, hash, ts, expires, count) ->
+  return nil unless _rl_base
+  off = RL_HEADER_WORDS + index * RL_SLOT_WORDS
+  _rl_base[off] = hash
+  _rl_base[off + 1] = ts
+  _rl_base[off + 2] = expires
+  _rl_base[off + 3] = count or 0
 
 check_rl = (level, fields, epoch) ->
   action_key = fields.action or level
@@ -274,61 +407,105 @@ check_rl = (level, fields, epoch) ->
     base = _rl_base
     window = cfg.window
     slot = h % RL_SLOTS
+    oldest_slot = nil
+    oldest_exp = nil
     for _probe = 1, RL_PROBE_MAX
-      off = slot * RL_SLOT_WORDS
+      off = RL_HEADER_WORDS + slot * RL_SLOT_WORDS
       sh = tonumber base[off]
       sts = tonumber base[off + 1]
+      sexp = tonumber base[off + 2]
+      -- Lecture non atomique : `{hash, ts, expires}` peut avoir été recyclé
+      -- entre deux accès. On relit le hash et on exige sa stabilité ; sinon
+      -- on continue le sondage — jamais de décision sur un slot instable, sous
+      -- peine de supprimer une ligne qui devait être émise (ou le contraire).
+      unless sh == tonumber base[off]
+        slot = (slot + 1) % RL_SLOTS
+        continue
       if sts == 0
         base[off] = h
         base[off + 1] = epoch
-        base[off + 2] = 0
+        base[off + 2] = epoch + window
+        base[off + 3] = 0
         return 0
       if sh == h
-        if epoch - sts < window
-          base[off + 2] = tonumber(base[off + 2]) + 1
+        -- Horloge en marche arrière (`epoch < sts`, pas de RTC, step NTP) :
+        -- l'entrée est traitée comme expirée, sinon elle resterait vivante
+        -- éternellement et plus rien ne serait recyclé.
+        if epoch >= sts and epoch < sexp
+          base[off + 3] = tonumber(base[off + 3]) + 1
           return -1   -- supprimer
         -- Fenêtre expirée : retourner le compteur puis réinitialiser
-        old_count = tonumber base[off + 2]
+        old_count = tonumber base[off + 3]
         base[off + 1] = epoch
-        base[off + 2] = 0
+        base[off + 2] = epoch + window
+        base[off + 3] = 0
         return old_count
-      -- Entrée forcément expirée (toutes fenêtres ≤ RL_MAX_WINDOW) : recyclage.
-      if epoch - sts >= RL_MAX_WINDOW
+      -- Empreinte différente : recyclage sûr seulement si SA fenêtre est
+      -- passée (échéance stockée dans le slot) ; sinon on la mémorise comme
+      -- candidate pour la main d'horloge.
+      if epoch < sts or epoch >= sexp
         base[off] = h
         base[off + 1] = epoch
-        base[off + 2] = 0
+        base[off + 2] = epoch + window
+        base[off + 3] = 0
         return 0
+      if oldest_exp == nil or sexp < oldest_exp
+        oldest_exp = sexp
+        oldest_slot = slot
       slot = (slot + 1) % RL_SLOTS
-    return 0   -- table saturée : journaliser sans supprimer
+    -- Sondage épuisé : main d'horloge. On repart du slot de l'entrée la plus
+    -- ancienne vue pendant le sondage et on balaie RL_HAND_SCAN slots à la
+    -- recherche d'une entrée dont la fenêtre est passée. On ne recycle JAMAIS
+    -- une entrée encore vivante : si aucune ne l'est, on journalise sans
+    -- supprimer et on incrémente le compteur de saturation.
+    hand = oldest_slot or (tonumber(base[0]) % RL_SLOTS)
+    for _step = 1, RL_HAND_SCAN
+      off = RL_HEADER_WORDS + hand * RL_SLOT_WORDS
+      sh = tonumber base[off]
+      sts = tonumber base[off + 1]
+      sexp = tonumber base[off + 2]
+      if sh == tonumber(base[off]) and sts != 0 and (epoch < sts or epoch >= sexp)
+        base[off] = h
+        base[off + 1] = epoch
+        base[off + 2] = epoch + window
+        base[off + 3] = 0
+        base[0] = (hand + 1) % RL_SLOTS
+        return 0
+      hand = (hand + 1) % RL_SLOTS
+    base[0] = hand
+    base[1] = tonumber(base[1]) + 1
+    _rl_warn_saturated!
+    return 0   -- saturé : journaliser sans supprimer
   else
-    -- Repli par processus si mmap a échoué. Plafond global : on repart de zéro
-    -- plutôt que de laisser la table croître indéfiniment.
+    -- Repli par processus si mmap a échoué ou pendant les tests. Plafond
+    -- global : on purge d'abord les entrées expirées, et seulement si la table
+    -- reste pleine on repart de zéro plutôt que de croître indéfiniment.
     fp = rl_fingerprint "#{level}|#{action_key}", fields, cfg.keys
     entry = _rl[fp]
     if entry
-      if epoch - entry.ts < cfg.window
+      if epoch >= entry.ts and epoch < entry.expires
         entry.count += 1
         return -1
       old_count = entry.count
       entry.ts = epoch
+      entry.expires = epoch + cfg.window
       entry.count = 0
       return old_count
     else
       if _rl_fb_n >= RL_SLOTS
-        for k in pairs _rl
-          _rl[k] = nil
-        _rl_fb_n = 0
-      _rl[fp] = { ts: epoch, count: 0 }
+        for k, e in pairs _rl
+          if epoch < e.ts or epoch >= e.expires
+            _rl[k] = nil
+            _rl_fb_n -= 1
+        if _rl_fb_n >= RL_SLOTS
+          for k in pairs _rl
+            _rl[k] = nil
+          _rl_fb_n = 0
+          _rl_fb_sat += 1
+          _rl_warn_saturated!
+      _rl[fp] = { ts: epoch, expires: epoch + cfg.window, count: 0 }
       _rl_fb_n += 1
       return 0
-
--- ── Formatage ─────────────────────────────────────────────────────
-
---- Retourne le timestamp Unix courant (secondes).
--- @treturn number epoch courant
-now = ->
-  libc.clock_gettime 0, ts   -- CLOCK_REALTIME = 0
-  tonumber ts.tv_sec
 
 --- Écrit une ligne de log structurée (lazy evaluation obligatoire).
 -- Format : [epoch] [pid] LEVEL k1=v1 k2=v2 ...
@@ -360,17 +537,7 @@ write_log = (level, thunk) ->
   suppressed = check_rl level, fields
   return if suppressed == -1
 
-  parts = { "[#{epoch}]", "[#{pid}]", level }
-  for k, v in pairs fields
-    -- Mise en guillemets si la valeur contient des espaces
-    sv = tostring v
-    if sv\find " "
-      table.insert parts, "#{k}=\"#{sv}\""
-    else
-      table.insert parts, "#{k}=#{sv}"
-  table.insert parts, "suppressed=#{suppressed}" if suppressed > 0
-
-  line = table.concat(parts, " ") .. "\n"
+  line = format_line epoch, pid, level, fields, suppressed
   libc.write STDOUT_FILENO, line, #line
 
 --- Raccourcis sémantiques vers write_log avec niveaux prédéfinis (tous lazy).
@@ -398,4 +565,16 @@ log_debug = (thunk) -> write_log "DEBUG", thunk
 -- @treturn nil
 log_trace = (thunk) -> write_log "TRACE", thunk
 
-{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG, :RL_SLOTS, :check_rl, :_rl_hash, :_rl_reset }
+-- Échec de mmap : le limiteur retombe sur une table par processus, donc le
+-- partage inter-processus est perdu. On le signale une fois par processus,
+-- en écrivant la ligne directement (le limiteur est justement en panne :
+-- passer par write_log/check_rl risquerait une récursion).
+unless _rl_base
+  _emit_line "WARN", {
+    action: "log_rl_mmap_failed"
+    reason: _rl_fallback_reason or "unknown"
+    rl_shared: 0
+    arch: (jit and jit.arch) or "unknown"
+  }
+
+{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG, :RL_SLOTS, :RL_PROBE_MAX, :MAP_ANONYMOUS, :_map_anonymous, :check_rl, :format_line, :rl_shared, :rl_stats, :_rl_hash, :_rl_reset, :_rl_never_limited, :_rl_force_fallback, :_rl_slot_get, :_rl_slot_set }

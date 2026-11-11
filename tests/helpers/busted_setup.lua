@@ -9,6 +9,8 @@ if not (package.loaded["ffi_defs"]) then
 end
 pcall(function()
   return ffi.cdef([[    typedef struct { long tv_sec; long tv_nsec; } timespec_t;
+    int         clock_gettime(int clk_id, timespec_t *tp);
+    long        write(int fd, const void *buf, unsigned long n);
     const char* inet_ntop(int af, const void *src, char *dst, unsigned int size);
     int         inet_pton(int af, const char *src, void *dst);
     int         nanosleep(const timespec_t *req, timespec_t *rem);

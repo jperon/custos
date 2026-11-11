@@ -106,26 +106,55 @@ describe "log", ->
       autre = { action: "response_no_ipv6_for_client", client: "10.0.0.3" }
       assert.are.equal 0, log.check_rl "INFO", autre, 7120
 
-    it "ALLOW action=response_dns_benchmark → règle ALLOW (mac_src, qname, qtype, 30 s)", ->
-      f = { action: "response_dns_benchmark", mac_src: "aa:bb", qname: "x.test", qtype: "A", src_ip: "10.0.0.2" }
+    it "ALLOW action=response_dns_benchmark → jamais limité (instrumentation)", ->
+      log.set_action_prefix "response_"
+      f = { action: "response_dns_benchmark", mac_src: "aa:bb", qname: "x.test", qtype: "A", src_ip: "10.0.0.2", q_to_response_ms: 12 }
       assert.are.equal 0,  log.check_rl "ALLOW", f, 8000
-      assert.are.equal -1, log.check_rl "ALLOW", f, 8001
-      -- Fenêtre 30 s : expirée à 8030, réémission avec le compte 1.
-      assert.are.equal 1,  log.check_rl "ALLOW", f, 8030
-      autre = { action: "response_dns_benchmark", mac_src: "aa:bb", qname: "y.test", qtype: "A" }
-      assert.are.equal 0, log.check_rl "ALLOW", autre, 8030
+      assert.are.equal 0,  log.check_rl "ALLOW", f, 8001
+      assert.are.equal 0,  log.check_rl "ALLOW", f, 8002
+      -- L'objet de l'option benchmark : chaque échantillon est mesuré, donc
+      -- aucune ligne ne doit disparaître dans une fenêtre de 30 s.
+      f2 = { action: "response_dns_benchmark", mac_src: "aa:bb", qname: "x.test", qtype: "A", q_to_response_ms: 99 }
+      assert.are.equal 0,  log.check_rl "ALLOW", f2, 8002
+      log.set_action_prefix ""
 
-    it "BLOCK action=response_dns_benchmark → règle BLOCK (30 s)", ->
+    it "BLOCK action=response_dns_benchmark → jamais limité (instrumentation)", ->
+      log.set_action_prefix "response_"
       f = { action: "response_dns_benchmark", mac_src: "aa:bb", qname: "b.test", qtype: "AAAA" }
       assert.are.equal 0,  log.check_rl "BLOCK", f, 9000
-      assert.are.equal -1, log.check_rl "BLOCK", f, 9029
-      assert.are.equal 1,  log.check_rl "BLOCK", f, 9030
+      assert.are.equal 0,  log.check_rl "BLOCK", f, 9001
+      assert.are.equal 0,  log.check_rl "BLOCK", f, 9002
+      log.set_action_prefix ""
 
     it "actions de cycle de vie jamais limitées", ->
       f = { action: "worker_died", name: "dns", pid: 123 }
       assert.are.equal 0, log.check_rl "WARN", f, 10000
       assert.are.equal 0, log.check_rl "WARN", f, 10001
       assert.are.equal 0, log.check_rl "WARN", f, 10002
+      -- Non tautologique : une action voisine non exemptée est bien limitée.
+      voisine = { action: "worker_disabled", name: "dns" }
+      assert.are.equal 0,  log.check_rl "WARN", voisine, 10000
+      assert.are.equal -1, log.check_rl "WARN", voisine, 10001
+
+    it "_rl_never_limited : strip du préfixe worker", ->
+      log.set_action_prefix "response_"
+      assert.is_true  log._rl_never_limited "response_worker_died"
+      assert.is_true  log._rl_never_limited "worker_died"
+      assert.is_true  log._rl_never_limited "response_dns_benchmark"
+      assert.is_false log._rl_never_limited "response_action_ordinaire"
+      assert.is_false log._rl_never_limited nil
+      log.set_action_prefix ""
+
+    it "champs d'identité ajoutés (P2.1) : deux valeurs → deux événements", ->
+      for key in *{"ip_src", "ip_dst", "username", "host", "resolver", "protocol", "l4_proto", "rcode", "errno", "source", "direction", "version", "verdict", "backend"}
+        f1 = { action: "ident_#{key}" }
+        f1[key] = "valeur1"
+        f2 = { action: "ident_#{key}" }
+        f2[key] = "valeur2"
+        assert.are.equal 0,  log.check_rl "INFO", f1, 11000
+        assert.are.equal 0,  log.check_rl "INFO", f2, 11000
+        assert.are.equal -1, log.check_rl "INFO", f1, 11001
+        assert.are.equal -1, log.check_rl "INFO", f2, 11001
 
   -- RL_CONFIG.captive_redirect doit correspondre à l'action réellement émise
   -- par worker_captive (action: "redirect", préfixée "captive_" → "captive_redirect")
@@ -191,3 +220,121 @@ describe "log", ->
       assert.are.equal 0,  log.check_rl "INFO", b, 8000
       assert.are.equal -1, log.check_rl "INFO", a, 8001
       assert.are.equal -1, log.check_rl "INFO", b, 8001
+
+  -- Repli par processus, saturation, recyclage et horloge : les seams
+  -- `_rl_force_fallback`, `_rl_slot_get/_rl_slot_set` et `rl_stats` permettent
+  -- de forcer les branches sans dépendre d'une course réelle.
+  describe "repli, saturation et recyclage", ->
+    before_each ->
+      log._rl_force_fallback false
+      log._rl_reset!
+      log._rl_force_fallback true
+      log._rl_reset!      -- vide aussi le repli (les deux tables)
+      log._rl_force_fallback false
+      log.set_action_prefix ""
+
+    after_each ->
+      log._rl_force_fallback false
+      log._rl_reset!
+      log._rl_force_fallback true
+      log._rl_reset!
+      log._rl_force_fallback false
+      log.set_action_prefix ""
+
+    it "rl_shared() vrai et rl_stats cohérent quand mmap est disponible", ->
+      assert.is_true log.rl_shared!
+      st = log.rl_stats!
+      assert.is_true st.shared
+      assert.are.equal 0, st.saturated
+      assert.are.equal log.RL_SLOTS, st.slots
+
+    it "repli forcé : rl_shared() faux, limiteur toujours fonctionnel", ->
+      log._rl_force_fallback true
+      assert.is_false log.rl_shared!
+      assert.is_false log.rl_stats!.shared
+      f = { action: "fallback_test", qname: "f.example" }
+      assert.are.equal 0,  log.check_rl "INFO", f, 1000
+      assert.are.equal -1, log.check_rl "INFO", f, 1001
+      assert.are.equal 1,  log.check_rl "INFO", f, 1060
+      -- Retour à l'état partagé : l'entrée du repli n'y figure pas.
+      log._rl_force_fallback false
+      assert.is_true log.rl_shared!
+      assert.are.equal 0, log.check_rl "INFO", f, 1061
+
+    it "saturation : sondage épuisé → journalisation non limitée + compteur", ->
+      f = { action: "saturation_test", qname: "sat.example" }
+      h = log._rl_hash "INFO", f
+      slot = h % log.RL_SLOTS
+      -- Occupe les RL_PROBE_MAX slots du sondage par des empreintes vivantes
+      -- (fenêtre de 60 s non expirée) : aucun recyclage possible.
+      for i = 0, log.RL_PROBE_MAX - 1
+        idx = (slot + i) % log.RL_SLOTS
+        log._rl_slot_set idx, 0x10000000 + i, 5000, 5060, 0
+      before = log.rl_stats!.saturated
+      assert.are.equal 0, log.check_rl "INFO", f, 5000
+      assert.are.equal 0, log.check_rl "INFO", f, 5001
+      assert.are.equal before + 2, log.rl_stats!.saturated
+
+    it "recyclage d'un slot expiré par une autre empreinte (échéance propre)", ->
+      f = { action: "recycle_test", qname: "rec.example" }
+      h = log._rl_hash "INFO", f
+      slot = h % log.RL_SLOTS
+      -- Autre empreinte, expirée depuis peu (10 s) : l'ancien code exigeait
+      -- RL_MAX_WINDOW (120 s) et ne recyclait pas ce slot.
+      log._rl_slot_set slot, 0x0BADF00D, 1990, 2000, 7
+      assert.are.equal 0, log.check_rl "INFO", f, 2000
+      s = log._rl_slot_get slot
+      assert.are.equal h,    s.hash
+      assert.are.equal 2000, s.ts
+      assert.are.equal 2060, s.expires
+      assert.are.equal 0,    s.count
+
+    it "horloge en marche arrière : entrée future traitée comme expirée", ->
+      f = { action: "clock_back", qname: "cb.example" }
+      h = log._rl_hash "INFO", f
+      slot = h % log.RL_SLOTS
+      log._rl_slot_set slot, h, 5000, 5060, 3
+      -- epoch < ts (step NTP) : on rend le compteur et on réinitialise, au lieu
+      -- de supprimer indéfiniment.
+      assert.are.equal 3, log.check_rl "INFO", f, 4000
+      assert.are.equal 0, log._rl_slot_get(slot).count
+
+    it "repli : purge des entrées expirées plutôt que vidage global", ->
+      log._rl_force_fallback true
+      vivante = { action: "fb_vivante", qname: "vivante.example" }
+      -- Entrée encore dans sa fenêtre (INFO 60 s) au moment de la purge.
+      log.check_rl "INFO", vivante, 2000
+      for i = 1, log.RL_SLOTS - 1
+        f = { action: "fb_old_#{i}", qname: "old#{i}.example" }
+        log.check_rl "INFO", f, 1000   -- expirées à 1060
+      -- Table pleine : l'insertion déclenche la purge des expirées ; l'entrée
+      -- vivante doit survivre (l'ancien code vidait toute la table).
+      neuve = { action: "fb_neuve", qname: "neuve.example" }
+      log.check_rl "INFO", neuve, 2000
+      assert.are.equal -1, log.check_rl "INFO", vivante, 2001
+
+  describe "formatage des lignes", ->
+    it "format_line ajoute suppressed=N quand N > 0", ->
+      line = log.format_line 1234, 42, "INFO", { action: "x", qname: "q.example" }, 7
+      assert.is_truthy line\find "suppressed=7", 1, true
+      assert.is_truthy line\find "qname=q.example", 1, true
+      assert.is_truthy line\find "[1234] [42] INFO", 1, true
+
+    it "format_line n'ajoute suppressed que si N > 0", ->
+      line = log.format_line 1, 2, "INFO", { action: "x" }, 0
+      assert.is_nil line\find "suppressed=", 1, true
+
+    it "format_line met entre guillemets les valeurs contenant un espace", ->
+      line = log.format_line 1, 2, "WARN", { action: "x", reason: "deux mots" }, 0
+      assert.is_truthy line\find 'reason="deux mots"', 1, true
+
+  describe "constante mmap", ->
+    it "_map_anonymous choisit 0x800 sur MIPS, 0x20 ailleurs", ->
+      assert.are.equal 0x800, log._map_anonymous "mips"
+      assert.are.equal 0x800, log._map_anonymous "mips64"
+      assert.are.equal 0x20,  log._map_anonymous "x64"
+      assert.are.equal 0x20,  log._map_anonymous "arm64"
+      assert.are.equal 0x20,  log._map_anonymous nil
+
+    it "MAP_ANONYMOUS courant correspond à l'architecture d'exécution", ->
+      assert.are.equal log._map_anonymous(jit and jit.arch), log.MAP_ANONYMOUS
