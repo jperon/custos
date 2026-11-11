@@ -117,6 +117,14 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
 - Reload config: `make reload`
 - Update lists: `make update-lists`
 - Logs: `make logs`
+- Rate-limiting des logs (`src/log.moon`) : empreinte (niveau, action, champs
+  d'identité : `peer`, `client`, `mac_src`, `qname`, `err`…) dans une table
+  mmap partagée entre processus ; la première ligne après la fenêtre porte
+  `suppressed=N`. Défauts : ERROR 10 s, WARN/INFO 60 s, DEBUG 30 s,
+  ALLOW/BLOCK 30 s ; les actions de cycle de vie (`worker_died`, rechargement…)
+  et l'instrumentation (`dns_benchmark`) ne sont jamais limitées. `rl_stats()`
+  expose `shared` et `saturated` ; un `mmap` impossible émet
+  `action=log_rl_mmap_failed` (une fois par processus).
 
 ## Diagnostic tools
 
