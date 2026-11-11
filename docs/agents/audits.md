@@ -367,3 +367,13 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   leurs messages d'erreur (`require`, autorisation, `source_ip`). Comportement
   et expressions nft identiques, couverts par
   `tests/unit/filter/conditions_spec.moon` / `filter_spec.moon`.
+- **T6 : `nft_extra_rules` sans spec directe.** Ajout de
+  `tests/unit/nft_extra_rules_spec.moon` : `run_cmd` (succès/échec),
+  `init` (ordre UCI inversé, whitespace normalisé, fragments vides ignorés,
+  suppression des occurrences existantes par handle, poursuite de l'insertion
+  si une suppression échoue, échec d'insertion → `false`), `cleanup` (handles,
+  fragments restants en config, état vidé) et `apply_from_config` (chaîne
+  présente → populate `filter_ips4/6` + insertions, chaîne absente →
+  ré-application éventuelle, ré-application échouée → `false`). Le contexte
+  libnftables est stubbé le temps du `require` puis le stub `ffi_defs` partagé
+  est restauré.
