@@ -685,8 +685,9 @@ finalize_a = (ctx, override) ->
 -- la trace est donc émise en INFO (visible avec `log_level: "INFO"` en
 -- production) et non plus seulement en DEBUG. Le taux d'émission est borné par
 -- `log.moon` (RL_CONFIG.response_orphan_dropped : clé = action seule, fenêtre
--- 10 s, occurrences agrégées dans `suppressed=N`), ce qui rend un flood
--- impossible même à 400 réponses orphelines/s.
+-- 10 s, état mmap partagé entre workers, occurrences agrégées dans
+-- `suppressed=N`), ce qui rend un flood impossible même à 400 réponses
+-- orphelines/s.
 -- @tparam table info Champs d'enquête : txid, src_ip (résolveur), dst_ip
 --                    (client), dst_port, vlan, qname, rcode, client_mac, user,
 --                    ipc_retry_attempts, ipc_retry_wait_ms,
@@ -910,11 +911,13 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       -- réponse client perdue) qui n'était visible qu'en DEBUG, donc jamais en
       -- production (`log_level: "INFO"`) : il est désormais émis en INFO,
       -- rate-limité par `log.moon` (RL_CONFIG.response_orphan_dropped : clé =
-      -- action seule, fenêtre 10 s → au plus une ligne par 10 s et par worker,
-      -- occurrences reportées dans `suppressed=`). Volumétrie : à 400
-      -- réponses orphelines/s, 1 ligne/10 s au lieu de 400 lignes/s. Le
-      -- LOG DEBUG ci-dessous est conservé pour le détail quand le niveau
-      -- DEBUG est explicitement activé.
+      -- action seule, fenêtre 10 s, état partagé entre workers via la table
+      -- mmap → au plus une ligne par 10 s et occurrences reportées dans
+      -- `suppressed=`). Volumétrie : à 400 réponses orphelines/s, 1 ligne/10 s
+      -- au lieu de 400 lignes/s. Le LOG DEBUG ci-dessous est conservé pour le
+      -- détail et gardé par `level_enabled "DEBUG"` au call-site : sans cette
+      -- garde, la closure serait allouée par paquet même quand le niveau est
+      -- filtré.
       q1 = dns_msg.questions and dns_msg.questions[1]
       log_info -> build_orphan_fields {
         src_ip: src_ip
