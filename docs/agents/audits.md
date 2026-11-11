@@ -323,3 +323,12 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `nil` sur une config minimale). Supprimées, ainsi que leurs quatre lignes
   dans `doc/CONFIG.md` § 5, désormais inexactes : le module n'expose plus que
   `run_cmd` et `cleanup` (`src/nft.moon:41-48`).
+- **Q2 : `collect_nets` / `collect_dest_nets` ne collectaient rien.** Les deux
+  fonctions (identiques, `collect_dest_nets = collect_nets`) définissaient
+  `add_net`/`add_named` sans jamais les appeler et retournaient toujours deux
+  tables vides : `source_ipv4/6`, `dest_ipv4/6` et `set_src4/6`, `set_dst4/6`
+  étaient donc toujours vides ou `nil` dans `build_rule`. Supprimées avec les
+  branches mortes associées (`match_exprs` fallback, rendu des sets src/dst
+  dans `render` et `render_sets_only`). Les sets `set_subnet4/6` (alimentés par
+  `collect_static_meta`, extension `nft_static`) et les sets de ports sont
+  conservés à l'identique.

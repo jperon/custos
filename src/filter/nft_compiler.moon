@@ -62,34 +62,6 @@ append_unique = (dst, seen, val) ->
   seen[key] = true
   dst[#dst + 1] = key
 
-collect_nets = (cfg, rule) ->
-  v4, v6 = {}, {}
-  seen4, seen6 = {}, {}
-  named = cfg.nets or {}
-
-  add_net = (raw) ->
-    return unless raw
-    net = tostring(raw)\match "^%s*(.-)%s*$"
-    return unless net and #net > 0
-    if net\find ":", 1, true
-      append_unique v6, seen6, net
-    else
-      append_unique v4, seen4, net
-
-  add_named = (list_name) ->
-    return unless list_name
-    nets = named[list_name] or {}
-    for _, n in ipairs as_list nets
-      add_net n
-
-  -- Pas d'introspection ici : les sets statiques sont remplis via les
-  -- métadonnées enrichies des conditions (cf. collect_static_meta).
-  table.sort v4
-  table.sort v6
-  v4, v6
-
-collect_dest_nets = collect_nets
-
 --- Collect all netlist names referenced by rules.
 -- @tparam table cfg Filter configuration (can be full config or cfg.filter)
 -- @tparam table plan Compiled plan with rules
@@ -286,8 +258,6 @@ resolve_action = (rule) ->
 build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil, rule_metadata=nil) ->
   -- Use metadata rule_id if provided (must match runtime filter decision)
   rid = metadata_rule_id or stable_rule_id rule, idx, used_ids
-  src4, src6 = collect_nets cfg, rule
-  dst4, dst6 = collect_dest_nets cfg, rule
   -- Extraire les métadonnées statiques depuis les conditions enrichies si disponibles
   static_meta = collect_static_meta rule_metadata and rule_metadata.conditions or {}
   subnet4, subnet6 = static_meta.subnet_ip4, static_meta.subnet_ip6
@@ -313,10 +283,6 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil, rule_metadata=nil)
     dns_scope: static_meta.dns_scope or #dns_refs > 0 or requires_auth
     dns_refs: dns_refs
     time_ranges: times
-    source_ipv4: src4
-    source_ipv6: src6
-    dest_ipv4: dst4
-    dest_ipv6: dst6
     subnet_ipv4: subnet4
     subnet_ipv6: subnet6
     protocols: protos
@@ -324,10 +290,6 @@ build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil, rule_metadata=nil)
     chain: chain
     mark: mark
     requires_auth: requires_auth
-    set_src4: #src4 > 0 and "#{chain}_src4" or nil
-    set_src6: #src6 > 0 and "#{chain}_src6" or nil
-    set_dst4: #dst4 > 0 and "#{chain}_dst4" or nil
-    set_dst6: #dst6 > 0 and "#{chain}_dst6" or nil
     set_subnet4: #subnet4 > 0 and "#{chain}_subnet4" or nil
     set_subnet6: #subnet6 > 0 and "#{chain}_subnet6" or nil
     set_ports: #ports > 0 and "#{chain}_dports" or nil
@@ -556,41 +518,11 @@ match_exprs = (rule) ->
   -- Fallback to legacy set-based matching
   exprs = {}
 
-  -- IPv4: combine from_net/from_netlist/from_subnet with to_net/to_netlist
-  if rule.set_src4 or rule.set_subnet4 or rule.set_dst4
-    parts = {}
-    if rule.set_src4 or rule.set_subnet4
-      src_parts = { "ip saddr" }
-      if rule.set_src4 and rule.set_subnet4
-        src_parts[#src_parts + 1] = "{ @#{rule.set_src4}, @#{rule.set_subnet4} }"
-      elseif rule.set_src4
-        src_parts[#src_parts + 1] = "@#{rule.set_src4}"
-      else
-        src_parts[#src_parts + 1] = "@#{rule.set_subnet4}"
-      parts[#parts + 1] = table.concat(src_parts, " ")
-    if rule.set_dst4
-      parts[#parts + 1] = "ip daddr @#{rule.set_dst4}"
-    if #parts > 0
-      ipv4_match = table.concat(parts, " ")
-      exprs[#exprs + 1] = with_l4 ipv4_match, base
-
-  -- IPv6: combine from_net/from_netlist/from_subnet with to_net/to_netlist
-  if rule.set_src6 or rule.set_subnet6 or rule.set_dst6
-    parts = {}
-    if rule.set_src6 or rule.set_subnet6
-      src_parts = { "ip6 saddr" }
-      if rule.set_src6 and rule.set_subnet6
-        src_parts[#src_parts + 1] = "{ @#{rule.set_src6}, @#{rule.set_subnet6} }"
-      elseif rule.set_src6
-        src_parts[#src_parts + 1] = "@#{rule.set_src6}"
-      else
-        src_parts[#src_parts + 1] = "@#{rule.set_subnet6}"
-      parts[#parts + 1] = table.concat(src_parts, " ")
-    if rule.set_dst6
-      parts[#parts + 1] = "ip6 daddr @#{rule.set_dst6}"
-    if #parts > 0
-      ipv6_match = table.concat(parts, " ")
-      exprs[#exprs + 1] = with_l4 ipv6_match, base
+  -- Sets statiques de sous-réseau (alimentés par `nft_static.subnet_ip4/6`).
+  if rule.set_subnet4
+    exprs[#exprs + 1] = with_l4 "ip saddr @#{rule.set_subnet4}", base
+  if rule.set_subnet6
+    exprs[#exprs + 1] = with_l4 "ip6 saddr @#{rule.set_subnet6}", base
 
   if rule.set_dyn_mac6
     exprs[#exprs + 1] = with_l4 "ether saddr . ip6 daddr @#{rule.set_dyn_mac6}", base
@@ -782,18 +714,6 @@ render_sets_only = (cfg, plan, indent="  ", include_elements=true) ->
 
   if plan and plan.rules
     for _, rule in ipairs plan.rules
-      if rule.set_src4
-        for _, l in ipairs render_set rule.set_src4, "ipv4_addr", "interval", rule.source_ipv4, indent, include_elements
-          lines[#lines + 1] = l
-      if rule.set_src6
-        for _, l in ipairs render_set rule.set_src6, "ipv6_addr", "interval", rule.source_ipv6, indent, include_elements
-          lines[#lines + 1] = l
-      if rule.set_dst4
-        for _, l in ipairs render_set rule.set_dst4, "ipv4_addr", "interval", rule.dest_ipv4, indent, include_elements
-          lines[#lines + 1] = l
-      if rule.set_dst6
-        for _, l in ipairs render_set rule.set_dst6, "ipv6_addr", "interval", rule.dest_ipv6, indent, include_elements
-          lines[#lines + 1] = l
       if rule.set_subnet4
         for _, l in ipairs render_set rule.set_subnet4, "ipv4_addr", "interval", rule.subnet_ipv4, indent, include_elements
           lines[#lines + 1] = l
@@ -814,18 +734,6 @@ render = (plan, indent="  ", include_elements=true) ->
   lines[#lines + 1] = "#{indent}# first_match_wins=#{plan.first_match_wins and 'true' or 'false'}"
 
   for _, rule in ipairs plan.rules
-    if rule.set_src4
-      for _, l in ipairs render_set rule.set_src4, "ipv4_addr", "interval", rule.source_ipv4, indent, include_elements
-        lines[#lines + 1] = l
-    if rule.set_src6
-      for _, l in ipairs render_set rule.set_src6, "ipv6_addr", "interval", rule.source_ipv6, indent, include_elements
-        lines[#lines + 1] = l
-    if rule.set_dst4
-      for _, l in ipairs render_set rule.set_dst4, "ipv4_addr", "interval", rule.dest_ipv4, indent, include_elements
-        lines[#lines + 1] = l
-    if rule.set_dst6
-      for _, l in ipairs render_set rule.set_dst6, "ipv6_addr", "interval", rule.dest_ipv6, indent, include_elements
-        lines[#lines + 1] = l
     if rule.set_subnet4
       for _, l in ipairs render_set rule.set_subnet4, "ipv4_addr", "interval", rule.subnet_ipv4, indent, include_elements
         lines[#lines + 1] = l
