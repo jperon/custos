@@ -9,7 +9,6 @@ json = require "lib.json"
   :write_now
   :purge_files
   :flush_if_due
-  :maybe_flush
   :file_path
   :clear
   :_get_state
@@ -118,50 +117,23 @@ describe "metrics", ->
     it "n'écrit rien avant l'intervalle, puis un instantané", ->
       now = 0
       init { enabled: true, flush_interval: 10 },
-        { dir: DIR, name: "w0", clock: (-> now), check_every: 1 }
+        { dir: DIR, name: "w0", clock: (-> now) }
       record_verdict "r1", "allow"
 
       now = 0
-      maybe_flush!
+      assert.is_false flush_if_due!
       assert.is_false file_exists!
 
       now = 9
-      maybe_flush!
+      assert.is_false flush_if_due!
       assert.is_false file_exists!
 
       now = 10
-      maybe_flush!
+      assert.is_true flush_if_due!
       snap = read_snapshot!
       assert.equals 10, snap.timestamp
       assert.equals "r1", snap.rules[1].rule_id
       assert.equals 1, snap.rules[1].verdicts.allow
-
-    it "consulte l'horloge seulement tous les check_every paquets", ->
-      now = 0
-      clock_calls = 0
-      fake_clock = ->
-        clock_calls += 1
-        now
-      init { enabled: true, flush_interval: 10 },
-        { dir: DIR, name: "w0", clock: fake_clock, check_every: 4 }
-      for i = 1, 3
-        maybe_flush!
-      assert.equals 0, clock_calls
-      maybe_flush!  -- 4e paquet : lecture d'horloge
-      assert.equals 1, clock_calls
-
-    it "utilise check_every = 32 par défaut", ->
-      clock_calls = 0
-      fake_clock = ->
-        clock_calls += 1
-        0
-      init { enabled: true, flush_interval: 10 },
-        { dir: DIR, name: "w0", clock: fake_clock }
-      for i = 1, 31
-        maybe_flush!
-      assert.equals 0, clock_calls
-      maybe_flush!  -- 32e paquet
-      assert.equals 1, clock_calls
 
     it "flush_if_due écrit sur le seul passage temporel", ->
       now = 0
@@ -186,9 +158,9 @@ describe "metrics", ->
     it "n'écrit rien quand désactivé", ->
       now = 1000
       init { enabled: false, flush_interval: 10 },
-        { dir: DIR, name: "w0", clock: (-> now), check_every: 1 }
+        { dir: DIR, name: "w0", clock: (-> now) }
       record_verdict "r1", "allow"
-      maybe_flush!
+      assert.is_false flush_if_due!
       assert.is_false file_exists!
       assert.is_false write_now!
 

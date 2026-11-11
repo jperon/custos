@@ -128,9 +128,13 @@
     upstream_ipv6:      { type: "string",  label: "Upstream IPv6",        default: "2606:4700:4700::1113" }
     upstream_port:      { type: "integer", label: "Port upstream",        default: 53 }
     upstream_timeout_ms:{ type: "integer", label: "Timeout upstream (ms)",default: 2000 }
+    upstream_doh_url:   { type: "string",  label: "URL DoH amont (opt-in)",  hint: "ex. https://dns.quad9.net/dns-query ; vide = UDP/53" }
+    upstream_doh_tls_verify: { type: "boolean", label: "Vérifier le TLS de l'URL DoH", default: true }
+    upstream_fallback_insecure: { type: "boolean", label: "Repli HTTP/1.1 non vérifié", default: false, hint: "repli wolfSSL quand libcurl est inutilisable" }
+    upstream_fallback_ca_file: { type: "path", label: "Magasin de CA du repli", hint: "vide = SSL_CERT_FILE puis chemins usuels" }
     client_timeout:     { type: "integer", label: "Timeout I/O client (s)", default: 15, hint: "délai max de handshake TLS / lecture de requête et frames HTTP/2 par connexion ; libère les connexions muettes" }
-    cert_path:          { type: "path",    label: "Certificat TLS DoH (optionnel)" }
-    key_path:           { type: "path",    label: "Clé TLS DoH (optionnel)" }
+    cert:               { type: "path",    label: "Certificat TLS DoH (optionnel)" }
+    key:                { type: "path",    label: "Clé TLS DoH (optionnel)" }
     prefer_ipv6:        { type: "boolean", label: "Préférer IPv6",        default: true }
   }
 

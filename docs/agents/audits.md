@@ -1062,14 +1062,21 @@ orphelin.
     `docs/agents/auth.md` (module et partage entre processus).
 ### Métriques exposées (branche d-metrics)
 
+> **État historique.** Cette entrée décrit l'état de la branche `d-metrics`.
+> `maybe_flush` et son compteur `check_every` (32 par défaut) ont été **retirés
+> en d-final** (cf. « Suppression de `metrics.maybe_flush` », plus bas) :
+> l'horloge n'est plus lue que par `flush_if_due`, au point de passage
+> `on_idle` de `run_queue`.
+
 Suite du point Q2 du rapport « dataplane » : les compteurs `metrics` étaient
 alimentés par `worker_questions` mais aucun accesseur n'avait de lecteur.
 Décision : les exposer en lecture seule.
 
-- **Export périodique par worker.** `src/metrics.moon` conserve les compteurs
-  `allow`/`refuse`/`dnsonly` par règle (LRU `max_rules`) et ajoute
+- **Export périodique par worker (avec `maybe_flush`, retiré en d-final).**
+  `src/metrics.moon` conserve les compteurs
+  `allow`/`refuse`/`dnsonly` par règle (LRU `max_rules`) et **ajoutait alors**
   `maybe_flush` (coût par paquet : un incrément et une comparaison ; l'horloge
-  n'est lue qu'une fois tous les `check_every` paquets, 32 par défaut),
+  n'était lue qu'une fois tous les `check_every` paquets, 32 par défaut),
   `flush_if_due` (variante purement temporelle pour le point de passage
   périodique), `write_now` et `file_path`. Chaque `worker_questions` écrit
   `<répertoire d'exécution>/metrics-dns-q<N>.json` (répertoire du pidfile,
@@ -1081,9 +1088,9 @@ Décision : les exposer en lecture seule.
   Le superviseur (`main.moon`) appelle `metrics.purge_files` sur le répertoire
   d'exécution **avant** de forker les workers : les fichiers d'une exécution
   précédente ne sont jamais présentés comme ceux de l'exécution courante.
-  `metrics.enabled = false` : `handle_question` n'appelle ni `maybe_flush` ni
-  `record_verdict` (garde locale `metrics_on`), et `run_queue` ne reçoit pas
-  d'`idle_ms` — aucun coût dans le hot-path.
+  `metrics.enabled = false` : `handle_question` n'appelle ni `maybe_flush`
+  (retiré en d-final) ni `record_verdict` (garde locale `metrics_on`), et
+  `run_queue` ne reçoit pas d'`idle_ms` — aucun coût dans le hot-path.
 - **Page admin `/admin/metrics`.** Nouveau handler
   `src/webui/handlers/metrics.moon` (lecture seule, lien dans la navigation)
   qui lit `metrics-*.json`, décode via le nouveau `src/lib/json.moon` et
@@ -1582,7 +1589,8 @@ non relancé (VMs seulement interrogées en lecture seule).
   DNS → `415` sans traiter de DNS, type absent → `415` ; parité HTTP/1.1 pour
   le type absent).
 - **`metrics.maybe_flush` : aucun appel ni fonction redondante dans le
-  module.** Une seule définition (`src/metrics.moon:191-196`) et un seul appel
+  module.** *(`maybe_flush` a depuis été **retiré en d-final** ; ce constat
+  décrit l'état de la branche `d-h2ctype`.)* Une seule définition (`src/metrics.moon:191-196`) et un seul appel
   de production (`src/worker_questions.moon:236`) ; `flush_if_due`
   (`src/metrics.moon:179-185`) a des appelants distincts (`maybe_flush`,
   `run_queue` via `on_idle`). Le constat d'audit ne se vérifie donc pas à
@@ -1971,3 +1979,78 @@ si le bruit en boucle de crash devient gênant.
 compte rendu de la tâche (make all / make check / make test dans
 `nix develop`). `make test-e2e` et `make coverage-quick` non lancés
 (VM partagées avec un autre agent) ; ils le seront après coup.
+
+### Trois écarts doc/code : `install-owrt`, schéma DoH, `metrics.maybe_flush` (branche d-final)
+
+- **`install-owrt` accepte `utilisateur@hôte`** (`install-owrt.moon:624-648`,
+  `:705`). La doc prescrivait `luajit install-owrt.lua root@<router>`
+  (`doc/CHEATSHEET.md:323,333,336`, `README.md:306`) alors que `valid_host`
+  refusait le `@`. Nouvelle fonction pure `split_user_host` : la partie avant
+  `@` est validée par `valid_user` (même règle que `--user`), l'hôte par
+  `valid_host` ; `@host`, `user@`, un second `@` et tout caractère interdit
+  sont rejetés. `--user` explicite prime, quel que soit l'ordre des arguments
+  (`user_explicit`) et rend la partie utilisateur de `HOST` inutilisée, donc
+  non validée (`--user admin "foo!@host"` est accepté ; la partie vide
+  `--user admin "@host"` reste rejetée). `--user` seul est toujours validé en
+  fin de `parse_args`. `valid_host` (`:599`) n'admet plus que deux formes :
+  `[<IPv6>]` ou un jeton sans crochet (hostname/IPv4, ou IPv6 nue contenant
+  `:`), d'où le rejet de `a]b`, `[[::1]]`, `:::` (`valid_ipv6`, `:587`).
+  **Cibles ssh/scp** (`:75-95`) : `ssh` ne résout pas un littéral entre
+  crochets (`ssh root@[::1]` → « Could not resolve hostname »), `scp` en a
+  besoin pour lever l'ambiguïté sur `:`. D'où deux helpers distincts et
+  idempotents : `ssh_target` (sans crochets) et `scp_target` (crochets remis
+  une seule fois), utilisés par `ssh_prefix`/`scp_send` et toutes les copies
+  inline (`:246,301,351,377,491,514`). Un `root@[::1]` ne produit donc plus
+  `root@[[::1]]`. Tests : `tests/unit/install_owrt_spec.moon:110-232` (formes
+  IPv6 nues/crochetées, `--user` explicite, crochets mal placés, cibles
+  ssh/scp et commande scp finale). La doc reste inchangée : elle devient
+  exacte.
+- **Schéma webui DoH aligné sur `cert`/`key`**
+  (`src/webui/schema/config_schema.moon:132-133`). Le nom officiel est
+  `doh.cert`/`doh.key` : DEFAULTS `src/config.moon:330-331`, lecture runtime
+  `src/main.moon:168-169` et `src/worker_doh.moon:677-684`, config du paquet
+  (`cfg/config.moon:7-8` pour AUTH, même convention), et
+  `tests/unit/doh_config_spec.moon:42-48` affirme déjà l'absence de
+  `cert_path`/`key_path`. Le schéma déclarait `cert_path`/`key_path`, jamais
+  lus. Corrigé en `cert`/`key` (libellés conservés) et `doc/CONFIG.md:548-549`
+  aligné. Test de garde :
+  `tests/unit/webui/schema/config_schema_spec.moon` vérifie que chaque clé du
+  schéma `doh` est déclarée dans le bloc DEFAULTS de `src/config.moon` ou lue
+  par le runtime, et qu'aucun `cert_path`/`key_path` ne subsiste.
+- **Suppression de `metrics.maybe_flush`, appel par paquet superflu**
+  (`src/worker_questions.moon:234` auparavant). Vérifié dans le code :
+  `run_queue` appelle `on_idle` **au début de chaque tour de boucle**, avant
+  `poll` (`src/nfq_loop.moon:113-115`), pas seulement au timeout. La garantie
+  réelle est **au moins une fois par lecture/poll, plus une fois par `idle_ms`**
+  — et non « une fois par paquet » : une lecture netlink peut contenir
+  plusieurs messages NFQUEUE, drainés en un seul `nfq_handle_packet`
+  (`src/nfq_loop.moon:130-131`). `worker_questions` y branche déjà
+  `metrics.flush_if_due` (`src/worker_questions.moon:549-550`). L'appel
+  `maybe_flush` par paquet était donc redondant, ainsi que son compteur
+  `check_every`. Fonction, export, état `_pkt_count`/`_check_every` et tests
+  associés retirés (`src/metrics.moon:12-17,173-179,196`,
+  `tests/unit/metrics_spec.moon`) ; l'import fictif de
+  `tests/unit/worker_questions_spec.moon:129-133` est nettoyé. `flush_if_due`
+  reste l'unique point d'export périodique (production et tests).
+
+- **Garde-fou du schéma DoH rendu bidirectionnel et sans sous-chaîne**
+  (`tests/unit/webui/schema/config_schema_spec.moon`). L'ancien contrôle
+  cherchait `".doh.#{key}"` en sous-chaîne : la clé `upstream_doh` aurait
+  matché `config.doh.upstream_doh_url`, et les DEFAULTS étaient extraits par
+  découpage textuel approximatif. Désormais : `reads_key` exige un
+  identifiant complet (le caractère suivant ne doit pas être `[%w_]`), les
+  clés des DEFAULTS sont lues par motif strict `^\s+<clé>\s*:` dans le seul
+  bloc `doh: {`, et le **sens inverse** est vérifié (toute clé
+  `config.doh.<x>` lue par le runtime est annoncée). Ce sens inverse a révélé
+  quatre clés réelles absentes du schéma : `doh.upstream_doh_url`,
+  `doh.upstream_doh_tls_verify`, `doh.upstream_fallback_insecure`,
+  `doh.upstream_fallback_ca_file` (`src/main.moon:172-175`), ajoutées à
+  `src/webui/schema/config_schema.moon` avec les types/défauts de
+  `doc/CONFIG.md` §11. `doh.cert_dir` n'est pas une clé doh : le runtime lit
+  `config.auth.cert_dir` (`src/main.moon:171`) ; un test le constate
+  explicitement pour éviter une fausse garde.
+
+**Vérification (2026-11-11, branche d-final)** : `make all && make check &&
+make test` = **2551 successes / 0 failures / 0 errors / 0 pending**
+(`tmp/test.log`) ; `make test-js` = 12 pass / 0 fail. `make test-e2e` non
+lancé (hors périmètre : aucun changement runtime réseau/nftables).

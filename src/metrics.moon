@@ -9,13 +9,12 @@
 -- le superviseur au démarrage (purge_files) : un fichier présent appartient
 -- donc à l'exécution courante. Un fichier illisible ou corrompu est ignoré.
 --
--- Coût par paquet : `maybe_flush` ne fait qu'un incrément et une comparaison ;
--- l'horloge n'est consultée qu'une fois tous les `check_every` paquets (32 par
--- défaut), jamais par paquet. Le worker appelle aussi `write_now` au démarrage
--- et `flush_if_due` au point de passage périodique de `run_queue` (idle_ms),
--- pour écrire même sans trafic. `metrics.enabled = false` : l'appelant
--- n'appelle ni `maybe_flush` ni `flush_if_due`, et `record_verdict` retourne
--- immédiatement — aucun coût dans le hot-path.
+-- Point de passage unique : `run_queue` appelle `on_idle` avant chaque lecture
+-- (et à chaque timeout), et le worker y branche `flush_if_due` : l'horloge est
+-- consultée une fois par passage, jamais dans le callback par paquet
+-- (`handle_question`). Le worker appelle aussi `write_now` au démarrage et à
+-- l'arrêt. `metrics.enabled = false` : `flush_if_due` retourne immédiatement et
+-- `record_verdict` aussi — aucun coût dans le hot-path.
 
 config = require "config"
 json   = require "lib.json"
@@ -34,8 +33,6 @@ _flush_interval = metrics_cfg.flush_interval or 60
 _dir = nil
 _name = nil
 _clock = os.time
-_check_every = 32
-_pkt_count = 0
 _last_flush = 0
 _tmp_seq = 0
 
@@ -60,8 +57,7 @@ _ensure_rule_entry = (rule_id) ->
 -- @tparam ?table cfg  Section `metrics` de la config (`enabled`, `max_rules`,
 --                     `flush_interval`)
 -- @tparam ?table opts Options d'export : `dir` (répertoire d'exécution),
---                     `name` (nom du worker), `clock` (horloge injectable),
---                     `check_every` (paquets entre deux lectures d'horloge)
+--                     `name` (nom du worker), `clock` (horloge injectable)
 init = (cfg, opts) ->
   cfg or= {}
   opts or= {}
@@ -71,8 +67,6 @@ init = (cfg, opts) ->
   _dir = opts.dir
   _name = opts.name
   _clock = opts.clock or os.time
-  _check_every = opts.check_every or 32
-  _pkt_count = 0
   _last_flush = 0
 
 --- Record a verdict for a rule.
@@ -172,9 +166,9 @@ purge_files = (dir) ->
   removed
 
 --- Variante purement temporelle : écrit si l'intervalle est écoulé.
--- Appelée au point de passage périodique de run_queue (opts.on_idle), y
--- compris sans aucun paquet. Une lecture d'horloge par passage, jamais par
--- paquet.
+-- Appelée au point de passage périodique de run_queue (opts.on_idle), avant
+-- chaque lecture et à chaque timeout, y compris sans aucun paquet. C'est le
+-- seul appelant de production : aucun appel par paquet dans le callback.
 -- @treturn boolean true si un instantané a été écrit
 flush_if_due = ->
   return false unless _enabled
@@ -183,17 +177,6 @@ flush_if_due = ->
   return false if now - _last_flush < _flush_interval
   _last_flush = now
   _write_snapshot get_metrics_json!
-
---- Point d'entrée du hot-path : vérifie au plus une fois tous les
--- `check_every` paquets si l'intervalle d'écriture est écoulé.
--- Ne rien allouer ici : un incrément et une comparaison par paquet.
--- @treturn nil
-maybe_flush = ->
-  return unless _enabled
-  _pkt_count += 1
-  return if _pkt_count < _check_every
-  _pkt_count = 0
-  flush_if_due!
 
 --- Clear all metrics (for testing).
 clear = ->
@@ -211,7 +194,6 @@ _get_state = ->
   :write_now
   :purge_files
   :flush_if_due
-  :maybe_flush
   :file_path
   :clear
   :_get_state

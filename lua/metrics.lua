@@ -11,8 +11,6 @@ local _flush_interval = metrics_cfg.flush_interval or 60
 local _dir = nil
 local _name = nil
 local _clock = os.time
-local _check_every = 32
-local _pkt_count = 0
 local _last_flush = 0
 local _tmp_seq = 0
 local _ensure_rule_entry
@@ -41,8 +39,6 @@ init = function(cfg, opts)
   _dir = opts.dir
   _name = opts.name
   _clock = opts.clock or os.time
-  _check_every = opts.check_every or 32
-  _pkt_count = 0
   _last_flush = 0
 end
 local record_verdict
@@ -181,18 +177,6 @@ flush_if_due = function()
   _last_flush = now
   return _write_snapshot(get_metrics_json())
 end
-local maybe_flush
-maybe_flush = function()
-  if not (_enabled) then
-    return 
-  end
-  _pkt_count = _pkt_count + 1
-  if _pkt_count < _check_every then
-    return 
-  end
-  _pkt_count = 0
-  return flush_if_due()
-end
 local clear
 clear = function()
   _metrics = { }
@@ -209,7 +193,6 @@ return {
   write_now = write_now,
   purge_files = purge_files,
   flush_if_due = flush_if_due,
-  maybe_flush = maybe_flush,
   file_path = file_path,
   clear = clear,
   _get_state = _get_state
