@@ -314,3 +314,12 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   Comportement figé par deux tests : `tests/unit/filter/conditions_spec.moon`
   (`any_of` + `from_user`) et `tests/unit/filter/not_spec.moon`
   (`not { from_user }`).
+- **Q1 : fonctions `add_*` mortes de `src/nft.moon`.** `add_ip4`, `add_ip6`,
+  `add_ip`, `add_mac4`, `add_mac6` et leurs variantes `_quiet` n'étaient
+  appelées nulle part : le runtime passe par `nft_queue`/`worker_nft`
+  (`run_cmd`), et `worker_tls` n'importe de `nft` que `run_cmd`. Elles
+  construisaient par ailleurs des commandes avec `config.nft.set_ip4`
+  (…`set_mac6`), clés absentes des `DEFAULTS` de `config.moon` (et donc
+  `nil` sur une config minimale). Supprimées, ainsi que leurs quatre lignes
+  dans `doc/CONFIG.md` § 5, désormais inexactes : le module n'expose plus que
+  `run_cmd` et `cleanup` (`src/nft.moon:41-48`).

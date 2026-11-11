@@ -132,7 +132,7 @@ custos/
 │   ├── ipc.moon             Protocole pipe question→response (msg 43 octets)
 │   ├── dns_ede.moon         Helpers DNS EDE (RFC 8914) — partagés responses + DoH
 │   ├── forge_dns.moon       Construction de réponses DNS forgées (vol de question)
-│   ├── nft.moon             Injection sets nftables via libnftables
+│   ├── nft.moon             Exécution de commandes nftables via libnftables (contexte réutilisé)
 │   ├── nft_add_helper.moon  Helper retry/backoff pour insertions nft
 │   ├── nft_rules.moon       Application du ruleset nft + compilation des règles
 │   ├── nft_extra_rules.moon Règles nft supplémentaires (UCI)
