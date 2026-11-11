@@ -94,6 +94,7 @@ describe "webui/audit — handlers", ->
 
   before_each ->
     log._rl_reset!
+    log.set_action_prefix ""
     lines = {}
     os.remove CFG_PATH
     os.remove SESS_PATH
@@ -101,6 +102,7 @@ describe "webui/audit — handlers", ->
     write_cfg { runtime: { log_level: "INFO" }, auth: {}, filter: { rules: {} } }
 
   after_each ->
+    log.set_action_prefix ""
     os.remove CFG_PATH
     os.remove SESS_PATH
     os.remove PID_PATH
@@ -158,6 +160,13 @@ describe "webui/audit — handlers", ->
       h_config.handle_filter_general_post make_req("safe_search=1&youtube_restrict=moderate"), make_state!
       line = one_line "webui_config_saved"
       assert.truthy line\find("section=filter", 1, true)
+
+    it "dans le worker AUTH (préfixe auth_), l'action est auth_webui_*", ->
+      log.set_action_prefix "auth_"
+      h_config.handle_config_section_post make_req("log_level=WARN&benchmark_present=1"), "runtime", make_state!
+      line = one_line "auth_webui_config_saved"
+      assert.truthy line\find("action=auth_webui_config_saved", 1, true)
+      assert.equals 0, #([l for l in *lines when l\find("action=webui_config_saved", 1, true)])
 
   -- ── Règles ──────────────────────────────────────────────────────────────
 

@@ -39,7 +39,11 @@ describe "webui/audit", ->
 
   before_each ->
     log._rl_reset!
+    log.set_action_prefix ""
     lines = {}
+
+  after_each ->
+    log.set_action_prefix ""
 
   only_lines = (level) ->
     [l for l in *lines when l\find(" #{level} ", 1, true)]
@@ -92,6 +96,63 @@ describe "webui/audit", ->
     audit.fail make_req!, "webui_list_saved", { list: "domain" }, "bad value\ncode"
     assert.equals 1, #lines
     assert.truthy lines[1]\find("err=bad_value_code", 1, true)
+
+  it "assainit les valeurs d'objet contrôlées par l'utilisateur", ->
+    malicious = "evil\n ok=1 user=admin\t=\""
+    audit.change make_req!, "webui_device_saved", {
+      name:    malicious
+      new:     "x=y"
+      list:    "a\tb"
+      mac:     "\"q\""
+      section: "s\ne"
+      dir:     "d d"
+    }
+    assert.equals 1, #lines
+    line = lines[1]\gsub "\n$", ""
+    assert.is_nil line\find("\n", 1, true)
+    assert.is_nil line\find(" ok=1 user=admin", 1, true)
+    assert.is_nil line\find(" user=admin", 1, true)
+    assert.truthy line\find("name=evil__ok_1_user_admin", 1, true)
+    -- Une seule vraie paire ok=1 : celle émise par le helper.
+    _, n_ok = line\gsub "ok=1", ""
+    assert.equals 1, n_ok
+    assert.truthy line\find("new=x_y", 1, true)
+    assert.truthy line\find("list=a_b", 1, true)
+    assert.truthy line\find("mac=_q_", 1, true)
+    assert.truthy line\find("section=s_e", 1, true)
+    assert.truthy line\find("dir=d_d", 1, true)
+
+  it "borne une valeur d'objet à 64 caractères", ->
+    long = string.rep "A", 10000
+    audit.change make_req!, "webui_config_saved", { name: long }
+    assert.equals 1, #lines
+    v = lines[1]\match "name=([^%s]+)"
+    assert.not_nil v
+    assert.equals 64, #v
+    assert.truthy #lines[1] < 300
+
+  it "sous préfixe auth_ : audit en auth_webui_*, jamais limité, refus limité", ->
+    log.set_action_prefix "auth_"
+    package.loaded["webui.audit"] = nil
+    audit_auth = require "webui.audit"
+
+    log.log_info -> { action: "ordinary_before" }
+    for _ = 1, 5
+      audit_auth.change make_req!, "webui_config_saved", { section: "runtime" }
+    log.log_info -> { action: "ordinary_after" }
+
+    infos = [l for l in *lines when l\find(" INFO ", 1, true)]
+    audit_lines = [l for l in *infos when l\find("action=auth_webui_config_saved", 1, true)]
+    assert.equals 5, #audit_lines, "5 modifications identiques doivent émettre 5 lignes"
+    ordinary = [l for l in *infos when l\find("action=auth_ordinary_", 1, true)]
+    assert.equals 2, #ordinary, "le préfixe auth_ des logs ordinaires doit être préservé"
+    unprefixed = [l for l in *infos when l\find("action=webui_config_saved", 1, true)]
+    assert.equals 0, #unprefixed
+
+    for _ = 1, 5
+      audit_auth.refused make_req!, "forbidden"
+    warns = [l for l in *lines when l\find(" WARN ", 1, true) and l\find("action=auth_webui_change_refused", 1, true)]
+    assert.equals 1, #warns, "webui_change_refused doit rester limité par (peer, reason)"
 
   it "toutes les actions webui sont dans RL_NEVER_LIMIT", ->
     actions = {

@@ -185,7 +185,8 @@ jamais écrasée.
 Toute requête **mutante** (POST/PUT/DELETE) traitée par la webui émet
 **exactement une ligne INFO** après l'opération, via le helper unique
 `webui/audit.moon` (`audit.change` / `audit.fail`) :
-`action` (famille `webui_*`), `user` (admin authentifié, `req.admin_user` posé
+`action` (famille `webui_*`, émise `auth_webui_*` — cf. « Préfixe »),
+`user` (admin authentifié, `req.admin_user` posé
 par `router.moon:69`), `peer` (IP cliente, `req.peer_ip` attaché par
 `auth/handlers.moon` avant l'appel au routeur), l'objet touché (`section`,
 `rule_id`, `list`, `name`, `new`, `mac`, `dir`, `rules`, `enabled`, `pid`) et
@@ -200,19 +201,30 @@ Une tentative refusée (non admin dans le routeur, validation de handler,
 conflit 409) émet `webui_change_refused` en **WARN** avec `reason` ; elle est
 limitée par `(peer, reason)` sur 60 s (`log.moon` `RL_CONFIG`). Les actions
 `webui_*` de modification sont dans `RL_NEVER_LIMIT` : un audit ne doit jamais
-disparaître derrière une fenêtre de rate-limiting.
+disparaître derrière une fenêtre de rate-limiting. La résolution retire le
+préfixe `auth_` avant comparaison (`log.moon:357` et `:372`), donc
+`auth_webui_config_saved` reste exemptée et `auth_webui_change_refused` reste
+bornée.
 
 **Aucune valeur dans le journal.** Le helper ne recopie que des champs
-d'objet en liste blanche (`audit.moon:23`) : ni mot de passe, ni clé, ni
-`auth.secrets`/`auth.key`/`doh.key`, ni contenu de liste. Les codes d'erreur
-sont des littéraux courts (`write_config`, `read_config`, `kill_failed`…),
-jamais un message brut susceptible de contenir une valeur.
+d'objet en liste blanche (`audit.moon:24`) : ni mot de passe, ni clé, ni
+`auth.secrets`/`auth.key`/`doh.key`, ni contenu de liste. Les valeurs
+contrôlées par l'utilisateur (`name`, `new`, `mac`, `list`, `section`, `dir`)
+sont assainies dans `object_fields` / `sanitize_object` : contrôles, espaces,
+`=` et `"` remplacés par `_`, longueur bornée à 64 caractères (un nom de
+10 000 caractères ne peut ni injecter une paire `clé=valeur` / une fausse
+ligne ni gonfler le journal). Les codes d'erreur sont des littéraux courts
+(`write_config`, `read_config`, `kill_failed`…), jamais un message brut
+susceptible de contenir une valeur.
 
 **Préfixe.** La webui s'exécute dans un enfant `AUTH-conn` ; le worker AUTH a
-posé le préfixe `auth_` (`auth/worker.moon:30`), que `webui/audit.moon`
-efface à son chargement pour que les lignes portent bien `webui_*` et non
-`auth_webui_*`. L'enfant ne traite qu'une connexion HTTP : le réglage ne
-fuit pas hors de lui.
+déjà posé le préfixe `auth_` (`auth/worker.moon:30`). Les lignes d'audit
+sortent donc `auth_webui_*`, comme les autres lignes AUTH (`auth_server_*`) :
+c'est voulu et cohérent. `webui/audit.moon` ne touche **pas** à l'état global
+du journal au chargement ; un `require "webui.audit"` ne retire jamais le
+préfixe des logs ordinaires de la connexion. Un test de non-régression vérifie
+que 5 `audit.change` identiques émettent 5 lignes `auth_webui_*` (jamais
+limitées) tandis que `auth_webui_change_refused` répété reste limité.
 
 **Destination `logread`.** Le superviseur est lancé par procd avec
 `procd_set_param stdout 1` / `stderr 1`

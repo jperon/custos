@@ -1,9 +1,8 @@
-local log_info, log_warn, set_action_prefix
+local log_info, log_warn
 do
   local _obj_0 = require("log")
-  log_info, log_warn, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.set_action_prefix
+  log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
-set_action_prefix("")
 local OBJECT_KEYS = {
   ["section"] = true,
   ["rule_id"] = true,
@@ -17,6 +16,16 @@ local OBJECT_KEYS = {
   ["pid"] = true
 }
 local MAX_CODE_LEN = 48
+local MAX_OBJECT_LEN = 64
+local sanitize_object
+sanitize_object = function(v)
+  if type(v) == "number" then
+    return v
+  end
+  local out = tostring(v)
+  out = out:gsub("[%c%s=\"]", "_")
+  return out:sub(1, MAX_OBJECT_LEN)
+end
 local short_code
 short_code = function(s)
   local out = tostring(s or "unknown")
@@ -36,7 +45,7 @@ object_fields = function(fields)
   if fields then
     for k, v in pairs(fields) do
       if OBJECT_KEYS[k] and v ~= nil then
-        out[k] = v
+        out[k] = sanitize_object(v)
       end
     end
   end
@@ -88,6 +97,8 @@ return {
   short_code = short_code,
   actor = actor,
   object_fields = object_fields,
+  sanitize_object = sanitize_object,
   OBJECT_KEYS = OBJECT_KEYS,
-  MAX_CODE_LEN = MAX_CODE_LEN
+  MAX_CODE_LEN = MAX_CODE_LEN,
+  MAX_OBJECT_LEN = MAX_OBJECT_LEN
 }
