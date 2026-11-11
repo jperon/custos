@@ -175,3 +175,199 @@ describe "install-owrt — install_updater", ->
     joined = table.concat runs, "\n"
     assert.falsy joined\find "crontabs/root", 1, true
     assert.falsy joined\find "0 4 * * *", 1, true
+
+-- ── Utilitaires locaux (run) et sémantique os.execute ──────────────────────
+
+describe "install-owrt — run", ->
+  original = nil
+  before_each -> original = os.execute
+  after_each -> os.execute = original
+
+  it "considère 0 (Lua 5.1) comme un succès", ->
+    inst = Installer { host: "10.0.0.1", dry: false }
+    os.execute = -> 0
+    assert.is_true inst\run "true"
+
+  it "considère true (LUA52COMPAT) comme un succès", ->
+    inst = Installer { host: "10.0.0.1", dry: false }
+    os.execute = -> true, "exit", 0
+    assert.is_true inst\run "true"
+
+  it "considère un code non nul comme un échec", ->
+    inst = Installer { host: "10.0.0.1", dry: false }
+    os.execute = -> nil, "exit", 1
+    assert.is_false inst\run "false"
+
+  it "ne lance aucune commande en dry-run", ->
+    inst = Installer { host: "10.0.0.1", dry: true }
+    os.execute = -> error "os.execute interdit en dry-run"
+    assert.is_true inst\run "false"
+
+-- Instance qui enregistre les commandes locales (run) et distantes (ssh_run).
+make_inst_records = (opts={}) ->
+  inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: opts.dry != false }
+  cmds = { local: {}, ssh: {} }
+  inst.run = (cmd) =>
+    cmds.local[#cmds.local + 1] = cmd
+    true
+  inst.ssh_run = (cmd) =>
+    cmds.ssh[#cmds.ssh + 1] = cmd
+    true
+  inst.ssh_capture = -> ""
+  inst, cmds
+
+-- ── Quoting des commandes ssh/scp ─────────────────────────────────────────
+
+describe "install-owrt — quoting des commandes", ->
+
+  it "ssh_prefix quote le port et la cible user@host", ->
+    inst = Installer { host: "router.lan", port: 2222, user: "root", dest: "/usr/share/custos", dry: true }
+    expected = "ssh -p '2222' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 'root@router.lan'"
+    assert.equals expected, inst\ssh_prefix!
+
+  it "ssh_prefix met un IPv6 littéral entre crochets", ->
+    inst = Installer { host: "fe80::1", port: 22, user: "root", dest: "/usr/share/custos", dry: true }
+    assert.truthy inst\ssh_prefix!\find "'root@[fe80::1]'", 1, true
+
+  it "ssh_prefix neutralise une apostrophe dans le nom d'utilisateur", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "a'b", dest: "/usr/share/custos", dry: true }
+    assert.truthy inst\ssh_prefix!\find "'a'\\''b@10.0.0.1'", 1, true
+
+  it "ssh_run échappe les apostrophes de la commande distante", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: false }
+    calls = {}
+    inst.run = (cmd) =>
+      calls[#calls + 1] = cmd
+      true
+    assert.is_true inst\ssh_run "echo 'x'"
+    assert.equals "#{inst\ssh_prefix!} #{shell_quote "echo 'x'"}", calls[1]
+    assert.truthy calls[1]\find "'echo '\\''x'\\'''", 1, true
+
+  it "ssh_capture passe par la même commande quotée", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: false }
+    calls = {}
+    inst.capture = (cmd) =>
+      calls[#calls + 1] = cmd
+      "ok"
+    assert.equals "ok", inst\ssh_capture "uname -a"
+    assert.equals "#{inst\ssh_prefix!} 'uname -a'", calls[1]
+
+  it "scp_send quote la source et la cible distante", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: false }
+    calls = {}
+    inst.run = (cmd) =>
+      calls[#calls + 1] = cmd
+      true
+    assert.is_true inst\scp_send "src file", "/etc/custos/config.moon"
+    expected = "scp -O -P '22' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r 'src file' 'root@10.0.0.1:/etc/custos/config.moon'"
+    assert.equals expected, calls[1]
+
+-- ── Compilation locale ────────────────────────────────────────────────────
+
+describe "install-owrt — build_local", ->
+
+  it "ne compile rien avec --no-build", ->
+    inst = Installer { host: "10.0.0.1", dry: false, no_build: true }
+    inst.run = -> error "run interdit avec --no-build"
+    assert.is_true inst\build_local!
+
+  it "lance make all quand make est disponible", ->
+    inst = Installer { host: "10.0.0.1", dry: false }
+    calls = {}
+    inst.have_cmd = (self, cmd) -> cmd == "make"
+    inst.run = (cmd) =>
+      calls[#calls + 1] = cmd
+      true
+    assert.is_true inst\build_local!
+    assert.same { "make all" }, calls
+
+  it "échoue si make all échoue", ->
+    inst = Installer { host: "10.0.0.1", dry: false }
+    inst.have_cmd = (self, cmd) -> cmd == "make"
+    inst.run = -> false
+    assert.is_false inst\build_local!
+
+-- ── Paquets et copie des fichiers ─────────────────────────────────────────
+
+describe "install-owrt — install_pkg_deps", ->
+
+  it "utilise apk update puis apk add avec la liste complète", ->
+    inst, cmds = make_inst_records!
+    inst.cfg.pkg_mgr = "apk"
+    assert.is_true inst\install_pkg_deps!
+    assert.equals "apk update", cmds.ssh[1]
+    assert.equals "apk add luajit libnetfilter-queue nftables kmod-nft-queue kmod-nft-bridge lpeg libxxhash libwolfssl px5g curl zstd", cmds.ssh[2]
+
+  it "utilise opkg update puis opkg install", ->
+    inst, cmds = make_inst_records!
+    inst.cfg.pkg_mgr = "opkg"
+    assert.is_true inst\install_pkg_deps!
+    assert.equals "opkg update", cmds.ssh[1]
+    assert.truthy cmds.ssh[2]\find "opkg install luajit ", 1, true
+
+describe "install-owrt — upload_files", ->
+
+  it "produit les commandes tar/scp/mkdir attendues", ->
+    inst, cmds = make_inst_records!
+    assert.is_true inst\upload_files!
+    assert.equals "tar -czf tmp/custos-lua.tar.gz -C lua .", cmds.local[1]
+    assert.equals "mkdir -p /usr/share/custos/parse", cmds.ssh[1]
+    assert.truthy cmds.local[2]\find("^scp %-O %-P 22 .*tmp/custos%-lua%.tar%.gz root@10%.0%.0%.1:/tmp/custos%-lua%.tar%.gz$"), cmds.local[2]
+    assert.equals "tar -xzf /tmp/custos-lua.tar.gz -C /usr/share/custos && rm -f /tmp/custos-lua.tar.gz", cmds.ssh[2]
+    assert.truthy cmds.local[3]\find "'nft-rules/dns-filter-bridge.nft' 'root@10.0.0.1:/usr/share/custos'", 1, true
+
+describe "install-owrt — cleanup_stale_files", ->
+  original_popen = nil
+  before_each -> original_popen = io.popen
+  after_each -> io.popen = original_popen
+
+  it "construit le manifest des .lua de l'archive et ignore le reste", ->
+    entries = { "./a.lua", "./sub/b.lua", "./notes.txt", "" }
+    i = 0
+    io.popen = (cmd) ->
+      assert.equals "tar -tzf 'tmp/custos-lua.tar.gz'", cmd
+      iterator = ->
+        i += 1
+        entries[i]
+      {
+        lines: (self) -> iterator
+        close: (self) -> true
+      }
+    inst = Installer { host: "10.0.0.1", dry: true }
+    assert.is_true inst\cleanup_stale_files!
+    fh = assert io.open "tmp/custos-manifest.txt", "r"
+    content = fh\read "*a"
+    fh\close!
+    assert.equals "a.lua\nsub/b.lua\n", content
+
+describe "install-owrt — service et santé", ->
+  original = nil
+  before_each -> original = os.execute
+  after_each -> os.execute = original
+
+  it "start_service démarre puis vérifie pgrep sur la bonne commande", ->
+    os.execute = -> 0
+    inst, cmds = make_inst_records!
+    captured = {}
+    inst.ssh_capture = (cmd) =>
+      captured[#captured + 1] = cmd
+      "running"
+    assert.is_true inst\start_service!
+    assert.equals "/etc/init.d/custos stop ; sleep 2 ; /etc/init.d/custos start", cmds.ssh[1]
+    assert.equals "pgrep -f main.lua && echo running || echo stopped", captured[1]
+
+  it "start_service respecte --no-start sans rien exécuter", ->
+    os.execute = -> error "os.execute interdit avec --no-start"
+    inst, cmds = make_inst_records!
+    inst.cfg.no_start = true
+    assert.is_true inst\start_service!
+    assert.equals 0, #cmds.ssh
+
+  it "health_check interroge logread avec la commande attendue", ->
+    inst, _ = make_inst_records!
+    captured = {}
+    inst.ssh_capture = (cmd) =>
+      captured[#captured + 1] = cmd
+      ""
+    assert.is_true inst\health_check!
+    assert.equals "logread | grep custos | tail -n 20", captured[1]
