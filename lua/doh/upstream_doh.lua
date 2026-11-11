@@ -83,17 +83,40 @@ set_timeouts = function(fd, timeout_ms)
   C.setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, tv, ffi.sizeof(tv))
   return C.setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, tv, ffi.sizeof(tv))
 end
+local is_ip_literal
+is_ip_literal = function(host)
+  if host:find(":", 1, true) then
+    return true
+  end
+  return host:match("^%d+%.%d+%.%d+%.%d+$") ~= nil
+end
 local new_client
-new_client = function(url, timeout_ms, verify_tls)
+new_client = function(url, timeout_ms, verify_tls, opts)
   if timeout_ms == nil then
     timeout_ms = 2000
   end
   if verify_tls == nil then
     verify_tls = false
   end
+  if opts == nil then
+    opts = { }
+  end
   local host, port, path = parse_url(url)
   if not (host) then
     return nil, "upstream_doh: invalid_url: " .. tostring(url)
+  end
+  local ca_file = nil
+  if verify_tls then
+    if not (type(ssl.verification_available) == "function") then
+      return nil, "upstream_doh: tls_verify_unavailable: module wolfSSL sans sonde"
+    end
+    local available, why, ca = ssl.verification_available({
+      ca_file = opts.ca_file
+    })
+    if not (available) then
+      return nil, "upstream_doh: tls_verify_unavailable: " .. tostring(why)
+    end
+    ca_file = ca
   end
   local ip, family, r_err = resolve_host(host)
   if not (ip) then
@@ -117,10 +140,29 @@ new_client = function(url, timeout_ms, verify_tls)
     sock:close()
     return nil, "upstream_doh: connect_failed: " .. tostring(c_err)
   end
-  local ctx = ssl.newclient_context({
-    verify_peer = verify_tls
+  local ok_ctx, ctx = pcall(ssl.newclient_context, {
+    verify_peer = verify_tls,
+    ca_file = ca_file
   })
-  local tls = ssl.wrap(sock, ctx)
+  if not (ok_ctx) then
+    sock:close()
+    return nil, "upstream_doh: tls_context_failed: " .. tostring(ctx)
+  end
+  local sni
+  if verify_tls and not is_ip_literal(host) then
+    sni = host
+  else
+    sni = nil
+  end
+  local ok_wrap, tls = pcall(ssl.wrap, sock, ctx, {
+    sni = sni,
+    check_domain = verify_tls and host or nil
+  })
+  if not (ok_wrap) then
+    ssl.free_context(ctx)
+    sock:close()
+    return nil, "upstream_doh: tls_wrap_failed: " .. tostring(tls)
+  end
   local done = false
   local tls_err = nil
   for _ = 1, 50 do
@@ -142,6 +184,7 @@ new_client = function(url, timeout_ms, verify_tls)
   end
   if not (done) then
     tls:close()
+    ssl.free_context(ctx)
     return nil, "upstream_doh: tls_handshake_failed: " .. tostring(tls_err or 'max_attempts')
   end
   log_debug(function()
@@ -155,7 +198,9 @@ new_client = function(url, timeout_ms, verify_tls)
   return {
     tls = tls,
     host = host,
+    port = port,
     path = path,
+    ctx = ctx,
     _mod = M
   }
 end
@@ -245,11 +290,29 @@ query = function(client, dns_raw)
 end
 local close
 close = function(client)
-  if client and client.tls and not client.tls.closed then
-    return client.tls:close()
+  if not (client) then
+    return 
   end
+  if client.tls and not client.tls.closed then
+    client.tls:close()
+  end
+  if client.ctx then
+    ssl.free_context(client.ctx)
+    client.ctx = nil
+  end
+end
+local verification_available
+verification_available = function(opts)
+  if opts == nil then
+    opts = { }
+  end
+  if not (type(ssl.verification_available) == "function") then
+    return false, "module wolfSSL sans sonde de vérification", nil
+  end
+  return ssl.verification_available(opts)
 end
 M.new_client = new_client
 M.query = query
 M.close = close
+M.verification_available = verification_available
 return M

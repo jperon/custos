@@ -28,6 +28,9 @@ ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
   int wolfSSL_shutdown(WOLFSSL *ssl);
   int wolfSSL_get_error(WOLFSSL *ssl, int ret);
   void wolfSSL_CTX_set_verify(WOLFSSL_CTX *ctx, int mode, void *verify_callback);
+  int wolfSSL_CTX_load_verify_locations(WOLFSSL_CTX *ctx, const char *file, const char *path);
+  int wolfSSL_UseSNI(WOLFSSL *ssl, unsigned char type, const void *data, unsigned short size);
+  int wolfSSL_check_domain_name(WOLFSSL *ssl, const char *dn);
   int wolfSSL_CTX_UseALPN(WOLFSSL_CTX *ctx, char *protocol_name_list,
                           unsigned int protocol_name_listSz, unsigned char options);
   int wolfSSL_ALPN_GetProtocol(WOLFSSL *ssl, char **protocol_name, unsigned short *size);
@@ -80,6 +83,13 @@ local SSL_ERROR_WANT_WRITE = 3
 local SSL_ERROR_SSL = 1
 local SSL_VERIFY_NONE = 0
 local SSL_VERIFY_PEER = 1
+local WOLFSSL_SNI_HOST_NAME = 0
+local CA_FILE_CANDIDATES = {
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/ssl/cert.pem",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/ca-bundle.pem"
+}
 local SSL_FILETYPE_PEM = 1
 local SSL_FILETYPE_ASN1 = 2
 local WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x01
@@ -106,6 +116,67 @@ end
 local ssl_mt = {
   __index = { }
 }
+local symbol_available
+symbol_available = function(name)
+  return pcall(function()
+    return libwolfssl[name]
+  end)
+end
+local ca_file_readable
+ca_file_readable = function(path)
+  if type(path) ~= "string" or #path == 0 then
+    return false
+  end
+  local f = io.open(path, "r")
+  if not (f) then
+    return false
+  end
+  f:close()
+  return true
+end
+local find_ca_file
+find_ca_file = function(explicit)
+  if ca_file_readable(explicit) then
+    return explicit
+  end
+  local env = os.getenv("SSL_CERT_FILE")
+  if ca_file_readable(env) then
+    return env
+  end
+  for _index_0 = 1, #CA_FILE_CANDIDATES do
+    local path = CA_FILE_CANDIDATES[_index_0]
+    if ca_file_readable(path) then
+      return path
+    end
+  end
+  return nil
+end
+local verification_available
+verification_available = function(opts)
+  if opts == nil then
+    opts = { }
+  end
+  local missing = { }
+  local _list_0 = {
+    "wolfSSL_CTX_load_verify_locations",
+    "wolfSSL_UseSNI",
+    "wolfSSL_check_domain_name"
+  }
+  for _index_0 = 1, #_list_0 do
+    local name = _list_0[_index_0]
+    if not (symbol_available(name)) then
+      missing[#missing + 1] = name
+    end
+  end
+  if not (#missing == 0) then
+    return false, "symboles absents: " .. tostring(table.concat(missing, ", ")), nil
+  end
+  local ca = find_ca_file(opts.ca_file)
+  if not (ca) then
+    return false, "aucun magasin de CA trouvé", nil
+  end
+  return true, nil, ca
+end
 local newcontext
 newcontext = function(opts)
   if opts == nil then
@@ -182,16 +253,32 @@ newclient_context = function(opts)
   if ctx == nil then
     error("wolfSSL_CTX_new() failed (client)")
   end
+  local ca_file = nil
   if opts.verify_peer then
+    ca_file = opts.ca_file or find_ca_file()
+    if not (ca_file) then
+      libwolfssl.wolfSSL_CTX_free(ctx)
+      error("no CA store available for peer verification")
+    end
     libwolfssl.wolfSSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nil)
+    local ret = libwolfssl.wolfSSL_CTX_load_verify_locations(ctx, ca_file, nil)
+    if ret ~= 1 then
+      libwolfssl.wolfSSL_CTX_free(ctx)
+      error("wolfSSL_CTX_load_verify_locations() failed for " .. tostring(ca_file) .. " (ret=" .. tostring(ret) .. ")")
+    end
   end
   return {
     ctx = ctx,
-    closed = false
+    closed = false,
+    verify_peer = opts.verify_peer == true,
+    ca_file = ca_file
   }
 end
 local wrap
-wrap = function(raw_socket, ctx_obj)
+wrap = function(raw_socket, ctx_obj, opts)
+  if opts == nil then
+    opts = { }
+  end
   log_debug(function()
     return {
       action = "wrap_start",
@@ -217,6 +304,20 @@ wrap = function(raw_socket, ctx_obj)
   if ret < 0 then
     libwolfssl.wolfSSL_free(ssl)
     error("wolfSSL_set_fd() failed: ret=" .. ret)
+  end
+  if opts.sni and #opts.sni > 0 then
+    local ret_sni = libwolfssl.wolfSSL_UseSNI(ssl, WOLFSSL_SNI_HOST_NAME, opts.sni, #opts.sni)
+    if ret_sni ~= 1 then
+      libwolfssl.wolfSSL_free(ssl)
+      error("wolfSSL_UseSNI() failed: ret=" .. tostring(ret_sni))
+    end
+  end
+  if opts.check_domain and #opts.check_domain > 0 then
+    local ret_dom = libwolfssl.wolfSSL_check_domain_name(ssl, opts.check_domain)
+    if ret_dom ~= 1 then
+      libwolfssl.wolfSSL_free(ssl)
+      error("wolfSSL_check_domain_name() failed: ret=" .. tostring(ret_dom))
+    end
   end
   local wrapped = {
     ssl = ssl,
@@ -524,6 +625,8 @@ return {
   newclient_context = newclient_context,
   wrap = wrap,
   free_context = free_context,
+  find_ca_file = find_ca_file,
+  verification_available = verification_available,
   libwolfssl = libwolfssl,
   SSL_ERROR_NONE = SSL_ERROR_NONE,
   SSL_ERROR_WANT_READ = SSL_ERROR_WANT_READ,

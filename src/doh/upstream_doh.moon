@@ -84,15 +84,32 @@ set_timeouts = (fd, timeout_ms) ->
   C.setsockopt fd, SOL_SOCKET, SO_RCVTIMEO, tv, ffi.sizeof tv
   C.setsockopt fd, SOL_SOCKET, SO_SNDTIMEO, tv, ffi.sizeof tv
 
+--- Indique si un hôte est une IP littérale (pas d'IP dans SNI, RFC 6066).
+-- @tparam string host Nom d'hôte ou IP.
+-- @treturn boolean true pour une IPv4 pointée ou une IPv6 (contient ':').
+is_ip_literal = (host) ->
+  return true if host\find ":", 1, true
+  host\match("^%d+%.%d+%.%d+%.%d+$") != nil
+
 --- Ouvre une connexion TLS vers le résolveur DoH et retourne un handle.
 -- @tparam string url        URL du résolveur, ex. "https://1.1.1.1/dns-query".
 -- @tparam number timeout_ms Délai d'I/O en ms (défaut 2000).
 -- @tparam bool   verify_tls Vérification du certificat serveur (défaut false).
--- @treturn table|nil  Handle {tls, host, path, _mod}, ou nil + erreur.
-new_client = (url, timeout_ms=2000, verify_tls=false) ->
+-- @tparam table  opts       Options {ca_file: string|nil}.
+-- @treturn table|nil  Handle {tls, host, path, ctx, _mod}, ou nil + erreur.
+new_client = (url, timeout_ms=2000, verify_tls=false, opts={}) ->
   host, port, path = parse_url url
   unless host
     return nil, "upstream_doh: invalid_url: #{url}"
+
+  ca_file = nil
+  if verify_tls
+    unless type(ssl.verification_available) == "function"
+      return nil, "upstream_doh: tls_verify_unavailable: module wolfSSL sans sonde"
+    available, why, ca = ssl.verification_available { ca_file: opts.ca_file }
+    unless available
+      return nil, "upstream_doh: tls_verify_unavailable: #{why}"
+    ca_file = ca
 
   ip, family, r_err = resolve_host host
   unless ip
@@ -109,8 +126,21 @@ new_client = (url, timeout_ms=2000, verify_tls=false) ->
     sock\close!
     return nil, "upstream_doh: connect_failed: #{c_err}"
 
-  ctx = ssl.newclient_context { verify_peer: verify_tls }
-  tls = ssl.wrap sock, ctx
+  ok_ctx, ctx = pcall ssl.newclient_context, { verify_peer: verify_tls, ca_file: ca_file }
+  unless ok_ctx
+    sock\close!
+    return nil, "upstream_doh: tls_context_failed: #{ctx}"
+
+  -- SNI seulement pour un nom d'hôte ; contrôle du nom (SAN/CN) si vérifié.
+  sni = if verify_tls and not is_ip_literal(host) then host else nil
+  ok_wrap, tls = pcall ssl.wrap, sock, ctx, {
+    sni: sni
+    check_domain: verify_tls and host or nil
+  }
+  unless ok_wrap
+    ssl.free_context ctx
+    sock\close!
+    return nil, "upstream_doh: tls_wrap_failed: #{tls}"
 
   -- Handshake TLS client (boucle pour WANT_READ/WANT_WRITE sur socket bloquant)
   done = false
@@ -129,10 +159,11 @@ new_client = (url, timeout_ms=2000, verify_tls=false) ->
 
   unless done
     tls\close!
+    ssl.free_context ctx
     return nil, "upstream_doh: tls_handshake_failed: #{tls_err or 'max_attempts'}"
 
   log_debug -> { action: "upstream_doh_connected", :host, :port, :path }
-  { :tls, :host, :path, _mod: M }
+  { :tls, :host, :port, :path, :ctx, _mod: M }
 
 --- Envoie une requête DNS en HTTP POST et retourne la réponse brute.
 -- @tparam table  client  Handle retourné par new_client().
@@ -202,10 +233,27 @@ query = (client, dns_raw) ->
 --- Ferme la connexion TLS.
 -- @tparam table client Handle retourné par new_client().
 close = (client) ->
-  client.tls\close! if client and client.tls and not client.tls.closed
+  return unless client
+  client.tls\close! if client.tls and not client.tls.closed
+  if client.ctx
+    ssl.free_context client.ctx
+    client.ctx = nil
+
+--- Vérifie que le repli peut vérifier certificat et nom d'hôte.
+-- Délégué à auth.ffi_wolfssl : la sonde tient compte des symboles réellement
+-- résolus par la libwolfssl chargée et d'un magasin de CA lisible.
+-- @tparam table|nil opts {ca_file: string|nil}.
+-- @treturn boolean Disponibilité.
+-- @treturn string|nil Raison de l'indisponibilité.
+-- @treturn string|nil Chemin du magasin de CA retenu.
+verification_available = (opts={}) ->
+  unless type(ssl.verification_available) == "function"
+    return false, "module wolfSSL sans sonde de vérification", nil
+  ssl.verification_available opts
 
 M.new_client = new_client
 M.query      = query
 M.close      = close
+M.verification_available = verification_available
 
 M

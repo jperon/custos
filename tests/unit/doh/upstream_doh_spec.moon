@@ -35,12 +35,25 @@ make_tls_stub = (recv_data, send_ok=true) ->
   }
 
 -- Fabrication du stub ssl (auth.ffi_wolfssl).
-make_ssl_stub = (tls_stub) ->
-  {
-    newclient_context: (opts) -> { ctx: "stub_ctx", closed: false }
-    wrap: (sock, ctx)       -> tls_stub
+last_ssl_stub = nil
+make_ssl_stub = (tls_stub, verify_ok=true, verify_why=nil, ca="/etc/ssl/certs/ca-certificates.crt") ->
+  seen = { verif_calls: 0, ctx_opts: nil, wrap_opts: nil }
+  stub = {
+    verification_available: (opts) ->
+      seen.verif_calls += 1
+      return false, verify_why or "vérification indisponible", nil unless verify_ok
+      true, nil, ca
+    newclient_context: (opts) ->
+      seen.ctx_opts = opts
+      { ctx: "stub_ctx", closed: false, verify_peer: opts.verify_peer, ca_file: opts.ca_file }
+    wrap: (sock, ctx, opts) ->
+      seen.wrap_opts = opts
+      tls_stub
     free_context: (->)
+    _seen: -> seen
   }
+  last_ssl_stub = stub
+  stub
 
 -- Fabrication du stub socket (lib.socket).
 make_socket_stub = (connect_ok=true) ->
@@ -65,8 +78,8 @@ make_socket_stub = (connect_ok=true) ->
   mod
 
 -- Charge upstream_doh en injectant les stubs dans package.loaded.
-load_mod = (tls_stub, connect_ok=true) ->
-  ssl_stub    = make_ssl_stub tls_stub
+load_mod = (tls_stub, connect_ok=true, verify_ok=true, verify_why=nil) ->
+  ssl_stub    = make_ssl_stub tls_stub, verify_ok, verify_why
   socket_stub = make_socket_stub connect_ok
   package.loaded["auth.ffi_wolfssl"] = ssl_stub
   package.loaded["lib.socket"]       = socket_stub
@@ -123,6 +136,44 @@ describe "doh.upstream_doh", ->
       h, err = mod.new_client "https://1.1.1.1/dns-query"
       assert.is_nil h
       assert.truthy err\find "connect_failed"
+
+  describe "vérification TLS du repli", ->
+
+    it "verify_tls=true → verify_peer + magasin de CA + SNI + contrôle du nom", ->
+      mod = load_mod make_tls_stub(make_http_resp dns_resp)
+      h, err = mod.new_client "https://localhost/dns-query", 2000, true
+      assert.is_nil err
+      assert.is_not_nil h
+      seen = last_ssl_stub._seen!
+      assert.equals 1, seen.verif_calls
+      assert.is_true seen.ctx_opts.verify_peer
+      assert.equals "/etc/ssl/certs/ca-certificates.crt", seen.ctx_opts.ca_file
+      assert.equals "localhost", seen.wrap_opts.sni
+      assert.equals "localhost", seen.wrap_opts.check_domain
+
+    it "IP littérale → pas de SNI (RFC 6066) mais contrôle du nom", ->
+      mod = load_mod make_tls_stub(make_http_resp dns_resp)
+      h, err = mod.new_client "https://1.1.1.1/dns-query", 2000, true
+      assert.is_nil err
+      seen = last_ssl_stub._seen!
+      assert.is_nil seen.wrap_opts.sni
+      assert.equals "1.1.1.1", seen.wrap_opts.check_domain
+
+    it "vérification impossible → nil + tls_verify_unavailable (jamais silencieux)", ->
+      mod = load_mod make_tls_stub(make_http_resp dns_resp), true, false,
+        "symboles absents: wolfSSL_check_domain_name"
+      h, err = mod.new_client "https://1.1.1.1/dns-query", 2000, true
+      assert.is_nil h
+      assert.truthy err\find "tls_verify_unavailable", 1, true
+      assert.truthy err\find "wolfSSL_check_domain_name", 1, true
+
+    it "verify_tls=false → aucune sonde, aucun contrôle du nom", ->
+      mod = load_mod make_tls_stub(make_http_resp dns_resp)
+      h, err = mod.new_client "https://1.1.1.1/dns-query", 2000, false
+      assert.is_nil err
+      seen = last_ssl_stub._seen!
+      assert.equals 0, seen.verif_calls
+      assert.is_nil seen.wrap_opts.check_domain
 
   describe "query", ->
 
