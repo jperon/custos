@@ -138,6 +138,7 @@ load_doh_cfg = function()
     end)(),
     upstream_port = tonumber(config.doh.upstream_port) or 53,
     timeout_ms = tonumber(config.doh.upstream_timeout_ms) or 2000,
+    client_timeout = tonumber(config.doh.client_timeout) or 15,
     cert = (function()
       if config.doh.cert and #config.doh.cert > 0 then
         return config.doh.cert

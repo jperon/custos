@@ -1,7 +1,7 @@
 -- tests/unit/lib/http_spec.moon
 -- Tests des helpers HTTP purs (lib/http).
 
-{ :read_request, :send_response } = require "lib.http"
+{ :read_request, :send_response, :apply_io_timeouts } = require "lib.http"
 
 describe "lib/http.read_request", ->
   -- Client factice : rejoue une liste de réponses [data, err] à chaque receive.
@@ -88,3 +88,21 @@ describe "lib/http.send_response", ->
     assert.truthy joined\find("HTTP/1.1 200 OK\r\n", 1, true)
     assert.truthy joined\find("Content-Length: 3\r\n", 1, true)
     assert.truthy joined\find("\r\n\r\nabc", 1, true)
+
+describe "lib/http.apply_io_timeouts", ->
+  it "pose rcvtimeo et sndtimeo sur le socket client", ->
+    opts = {}
+    client = {
+      setoption: (_self, name, value) -> opts[name] = value
+    }
+    apply_io_timeouts client, 15
+    assert.equals 15, opts.rcvtimeo
+    assert.equals 15, opts.sndtimeo
+
+  it "retombe sur 15 s si la valeur est nil ou invalide", ->
+    opts = {}
+    client = { setoption: (_self, name, value) -> opts[name] = value }
+    apply_io_timeouts client, nil
+    assert.equals 15, opts.rcvtimeo
+    apply_io_timeouts client, "abc"
+    assert.equals 15, opts.rcvtimeo

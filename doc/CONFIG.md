@@ -539,6 +539,7 @@ Proxy DNS-over-HTTPS vers un résolveur amont.
 | `upstream_ipv6` | string | `"2606:4700:4700::1113"` | IP amont IPv6 |
 | `upstream_port` | int | `53` | Port du résolveur amont |
 | `upstream_timeout_ms` | int | `2000` | Timeout (ms) vers le résolveur amont |
+| `client_timeout` | int | `15` | Timeout I/O (s) par connexion DoH : SO_RCVTIMEO/SO_SNDTIMEO + échéance de handshake TLS et lecture de requête/frames HTTP/2. Une connexion muette est fermée et son enfant `DOH-conn` libéré au lieu de rester suspendu indéfiniment. |
 | `upstream_dead_ttl_s` | int | `30` | TTL (s) du cache négatif d'un résolveur amont injoignable (action `cname`). Un résolveur qui timeout n'est pas re-sollicité pendant ce délai, afin de ne pas bloquer le worker responses (jusqu'à `upstream_timeout_ms`) à chaque paquet. Re-sondé après expiration. |
 | `cert_path` | string | `nil` | Chemin certificat TLS (optionnel) |
 | `key_path` | string | `nil` | Chemin clé privée TLS (optionnel) |

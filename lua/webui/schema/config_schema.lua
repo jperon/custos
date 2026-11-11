@@ -416,6 +416,12 @@ return {
       label = "Timeout upstream (ms)",
       default = 2000
     },
+    client_timeout = {
+      type = "integer",
+      label = "Timeout I/O client (s)",
+      default = 15,
+      hint = "délai max de handshake TLS / lecture de requête et frames HTTP/2 par connexion ; libère les connexions muettes"
+    },
     cert_path = {
       type = "path",
       label = "Certificat TLS DoH (optionnel)"

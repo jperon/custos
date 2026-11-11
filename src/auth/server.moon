@@ -20,7 +20,7 @@ token = require "auth.token"
 { :extract_sni } = require "auth.sni_extractor"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 config = require "config"
-{ :read_request, :send_response } = require "lib.http"
+{ :read_request, :send_response, :apply_io_timeouts } = require "lib.http"
 { :get_mac } = require "mac_learner_ipc"
 { :refresh_nft } = require "auth.nft_auth_sets"
 { :handle_request } = require "auth.handlers"
@@ -116,8 +116,7 @@ handle_client = (args) ->
     -- sockets zombies saturent la limite de connexions par hôte et retardent
     -- les pings suivants (~70 s de "blocked" observés en HAR).
     client_timeout = (state.auth_cfg and tonumber state.auth_cfg.client_timeout) or 15
-    pcall -> client\setoption "rcvtimeo", client_timeout
-    pcall -> client\setoption "sndtimeo", client_timeout
+    apply_io_timeouts client, client_timeout
     log_debug -> { action: "server_blocking_mode_set", client_timeout: client_timeout }
 
     log_debug -> { action: "server_ssl_wrap_start" }

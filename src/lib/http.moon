@@ -56,6 +56,18 @@ read_request = (client, opts) ->
 
   { :method, :path, :headers, :body }
 
+--- Pose les timeouts noyau (SO_RCVTIMEO/SO_SNDTIMEO) d'un socket client.
+-- Une connexion muette (préconnexion spéculative, client disparu) rend alors
+-- EAGAIN au lieu de suspendre indéfiniment l'enfant qui la traite.
+-- @tparam table  client  Socket avec :setoption(name, value).
+-- @tparam number timeout Délai en secondes (défaut 15 si nil/invalide).
+-- @treturn number Délai effectivement appliqué.
+apply_io_timeouts = (client, timeout) ->
+  timeout = tonumber(timeout) or 15
+  pcall -> client\setoption "rcvtimeo", timeout
+  pcall -> client\setoption "sndtimeo", timeout
+  timeout
+
 --- Write an HTTP/1.1 response to a TLS socket object.
 -- Always appends Content-Length and Connection: close unless supplied.
 -- @tparam table  client  TLS socket with :send(str) method.
@@ -111,4 +123,4 @@ send_response = (client, status, headers, body) ->
     return nil, err unless ok
   true
 
-{ :read_request, :send_response }
+{ :read_request, :send_response, :apply_io_timeouts }

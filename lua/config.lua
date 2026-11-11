@@ -394,6 +394,7 @@ local DEFAULTS = {
     upstream_ipv6 = "2606:4700:4700::1113",
     upstream_port = 53,
     upstream_timeout_ms = 2000,
+    client_timeout = 15,
     cert = nil,
     key = nil,
     prefer_ipv6 = true,

@@ -866,3 +866,13 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   Correctif : helper `forget_ip_mapping` qui n'efface que si `ip_to_mac[ip]`
   appartient encore à cette MAC, aux quatre sites ; test dans
   `tests/unit/worker_responses_spec.moon`.
+- **Connexions DoH sans aucun timeout.** `worker_doh.moon` remettait le socket
+  client en bloquant (`settimeout nil`) sans SO_RCVTIMEO/SO_SNDTIMEO, sans
+  échéance de handshake et sans `timeout:` de `read_request` : une connexion TCP
+  muette suspendait l'enfant `DOH-conn` indéfiniment (`wolfSSL_accept` ou
+  `read_request`), jamais récolté → épuisement de processus/descripteurs.
+  Correctif : nouvelle clé `doh.client_timeout` (défaut 15 s, documentée
+  `doc/CONFIG.md`), helper partagé `lib.http.apply_io_timeouts` (utilisé aussi
+  par `auth/server.moon`, comportement inchangé), échéance absolue de handshake
+  (`handshake_should_continue`, pure et testée) et `read_request …, timeout:
+  client_timeout`. Le chemin HTTP/2 est borné par le même SO_RCVTIMEO.

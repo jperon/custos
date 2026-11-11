@@ -16,10 +16,10 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_error, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix
 end
-local read_request, send_response
+local read_request, send_response, apply_io_timeouts
 do
   local _obj_0 = require("lib.http")
-  read_request, send_response = _obj_0.read_request, _obj_0.send_response
+  read_request, send_response, apply_io_timeouts = _obj_0.read_request, _obj_0.send_response, _obj_0.apply_io_timeouts
 end
 local get_mac, get_vlan
 do
@@ -204,6 +204,10 @@ dns_response_json = function(raw)
   parts[#parts + 1] = "]}"
   return table.concat(parts)
 end
+local handshake_should_continue
+handshake_should_continue = function(done, attempts, now, deadline)
+  return not done and attempts < 50 and now <= deadline
+end
 local make_server4
 make_server4 = function(port)
   local srv = socket.tcp()
@@ -353,6 +357,8 @@ handle_doh_client = function(args)
       error("Certificate context is nil")
     end
     client:settimeout(nil)
+    local client_timeout = (state.client_timeout and tonumber(state.client_timeout)) or 15
+    apply_io_timeouts(client, client_timeout)
     local tls_client, tls_err = ssl.wrap(client, tls_ctx)
     if not (tls_client) then
       log_warn(function()
@@ -368,7 +374,8 @@ handle_doh_client = function(args)
     local done = false
     local attempts = 0
     local hs_err = nil
-    while not done and attempts < 50 do
+    local handshake_deadline = os.time() + client_timeout
+    while handshake_should_continue(done, attempts, os.time(), handshake_deadline) do
       attempts = attempts + 1
       local ok_hs, hs_ret, hs_ret2 = pcall(function()
         return tls_client:dohandshake()
@@ -438,7 +445,9 @@ handle_doh_client = function(args)
         vlan = peer_vlan or "unknown"
       }
     end)
-    local req, req_err = read_request(tls_client)
+    local req, req_err = read_request(tls_client, {
+      timeout = client_timeout
+    })
     if not (req) then
       log_warn(function()
         return {
@@ -768,6 +777,7 @@ run = function(doh_cfg, filter_data)
     static_cert_paths = static_cert_paths,
     make_upstream = make_upstream,
     close_upstream = close_upstream,
+    client_timeout = doh_cfg.client_timeout,
     upstream = nil
   }
   while true do
@@ -788,7 +798,8 @@ run = function(doh_cfg, filter_data)
             cert_cache = state.cert_cache,
             static_cert_paths = state.static_cert_paths,
             make_upstream = state.make_upstream,
-            close_upstream = state.close_upstream
+            close_upstream = state.close_upstream,
+            client_timeout = state.client_timeout
           }
           local conn_arg = {
             client = client,
@@ -833,5 +844,6 @@ return {
   run = run,
   b64url_decode = b64url_decode,
   query_param = query_param,
-  build_dns_query = build_dns_query
+  build_dns_query = build_dns_query,
+  handshake_should_continue = handshake_should_continue
 }

@@ -115,3 +115,18 @@ describe "worker_doh.build_dns_query", ->
   it "retourne nil pour un nom de domaine vide", ->
     raw = doh.build_dns_query "", 1
     assert.is_nil raw
+
+-- ── handshake_should_continue ────────────────────────────────────────────────
+
+describe "worker_doh.handshake_should_continue", ->
+  it "continue tant que le handshake n'est pas fini et dans l'échéance", ->
+    assert.is_true doh.handshake_should_continue false, 0, 100, 115
+
+  it "abandonne si l'échéance est dépassée", ->
+    assert.is_false doh.handshake_should_continue false, 0, 116, 115
+
+  it "abandonne si le handshake est terminé", ->
+    assert.is_false doh.handshake_should_continue true, 0, 100, 115
+
+  it "abandonne après 50 tentatives", ->
+    assert.is_false doh.handshake_should_continue false, 50, 100, 115

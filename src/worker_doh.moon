@@ -18,7 +18,7 @@ bit     = require "bit"
 { :fork_child, :reap_one }              = require "lib.process"
 { :load_or_generate_sni, :load_static } = require "auth.cert"
 { :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
-{ :read_request, :send_response }       = require "lib.http"
+{ :read_request, :send_response, :apply_io_timeouts } = require "lib.http"
 { :get_mac, :get_vlan }                 = require "mac_learner_ipc"
 { :process_query }                      = require "doh.query"
 { :parse, :types, :rcodes }              = require "ipparse.l7.dns"
@@ -154,6 +154,16 @@ dns_response_json = (raw) ->
 
 -- ── TLS server helpers (mirrors auth/server.moon) ───────────────────────────
 
+--- Décide si la boucle de handshake TLS doit continuer.
+-- Pure, pour tester l'échéance absolue sans vrai socket.
+-- @tparam boolean done      Handshake terminé.
+-- @tparam number  attempts  Tentatives déjà effectuées.
+-- @tparam number  now       Instant courant (os.time).
+-- @tparam number  deadline  Échéance absolue.
+-- @treturn boolean true s'il faut tenter un handshake de plus.
+handshake_should_continue = (done, attempts, now, deadline) ->
+  not done and attempts < 50 and now <= deadline
+
 --- Create a listening IPv4 TCP socket on the given port.
 -- @tparam number port TCP port.
 -- @treturn table|nil Socket object, or nil + error string.
@@ -284,6 +294,11 @@ handle_doh_client = (args) ->
       error "Certificate context is nil"
 
     client\settimeout nil   -- blocking for TLS handshake
+    -- … mais avec une échéance noyau : sans SO_RCVTIMEO/SO_SNDTIMEO, une
+    -- connexion TCP muette bloque l'enfant DOH-conn pour toujours (dans
+    -- wolfSSL_accept ou read_request), et ces enfants ne sont jamais récoltés.
+    client_timeout = (state.client_timeout and tonumber state.client_timeout) or 15
+    apply_io_timeouts client, client_timeout
     tls_client, tls_err = ssl.wrap client, tls_ctx
     unless tls_client
       log_warn -> { action: "tls_wrap_failed", peer: peer_ip, err: tls_err }
@@ -294,7 +309,11 @@ handle_doh_client = (args) ->
     done = false
     attempts = 0
     hs_err = nil
-    while not done and attempts < 50
+    -- Échéance absolue : chaque tentative peut bloquer jusqu'à client_timeout ;
+    -- sans deadline, 50 tentatives sur une connexion muette tiendraient
+    -- l'enfant des minutes.
+    handshake_deadline = os.time! + client_timeout
+    while handshake_should_continue done, attempts, os.time!, handshake_deadline
       attempts += 1
       ok_hs, hs_ret, hs_ret2 = pcall -> tls_client\dohandshake!
       if not ok_hs
@@ -322,7 +341,7 @@ handle_doh_client = (args) ->
     peer_vlan = get_vlan peer_ip
     log_debug -> { action: "mac_lookup", peer: peer_ip, mac: peer_mac or "unknown", vlan: peer_vlan or "unknown" }
 
-    req, req_err = read_request tls_client
+    req, req_err = read_request tls_client, timeout: client_timeout
     unless req
       log_warn -> { action: "request_read_failed", peer: peer_ip, err: req_err }
       tls_client\close!
@@ -499,6 +518,7 @@ run = (doh_cfg, filter_data) ->
     :static_cert_paths
     :make_upstream
     :close_upstream
+    client_timeout: doh_cfg.client_timeout
     -- upstream handle créé par make_upstream après fork — placeholder ici.
     upstream: nil
   }
@@ -520,6 +540,7 @@ run = (doh_cfg, filter_data) ->
             static_cert_paths: state.static_cert_paths
             make_upstream:     state.make_upstream
             close_upstream:    state.close_upstream
+            client_timeout:    state.client_timeout
           }
           conn_arg = { :client, :peer_ip, state: conn_state }
 
@@ -538,4 +559,4 @@ run = (doh_cfg, filter_data) ->
           log_debug -> { action: "conn_started", pid: pid, peer: peer_ip }
           client\close!
 
-{ :run, :b64url_decode, :query_param, :build_dns_query }
+{ :run, :b64url_decode, :query_param, :build_dns_query, :handshake_should_continue }

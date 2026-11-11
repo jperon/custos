@@ -59,6 +59,17 @@ read_request = function(client, opts)
     body = body
   }
 end
+local apply_io_timeouts
+apply_io_timeouts = function(client, timeout)
+  timeout = tonumber(timeout) or 15
+  pcall(function()
+    return client:setoption("rcvtimeo", timeout)
+  end)
+  pcall(function()
+    return client:setoption("sndtimeo", timeout)
+  end)
+  return timeout
+end
 local send_response
 send_response = function(client, status, headers, body)
   local is_peer_closed_err
@@ -140,5 +151,6 @@ send_response = function(client, status, headers, body)
 end
 return {
   read_request = read_request,
-  send_response = send_response
+  send_response = send_response,
+  apply_io_timeouts = apply_io_timeouts
 }
