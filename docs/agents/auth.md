@@ -51,6 +51,20 @@ Le serveur HTTPS est découpé pour isoler les responsabilités :
   jamais transmis en clair) : une session ouverte ne suffit pas. `GET /`
   sert la page de succès si un cookie de session est valide (login → `location='/'`,
   rafraîchissement sans renvoi de formulaire).
+- `auth/rate_limit.moon` — limiteur de débit **partagé entre les enfants AUTH
+  forké**, utilisé par `handle_register` (`POST /register`). Fenêtre **fixe** par
+  client, la clé étant la MAC si elle est connue, sinon l'IP. Il autorise
+  `auth.register_rate_limit` tentatives par fenêtre de
+  `auth.register_rate_window` secondes ; la suivante reçoit `429` +
+  `Retry-After` (secondes restantes), sans créer de compte ni toucher au fichier
+  de secrets. L'état vit dans `<sessions_file>.ratelimit` : format texte non
+  exécutable (une ligne `clé<TAB>compteur<TAB>reset_at`), cycle
+  lecture-modification-écriture sous `lib.filelock.with_lock`, purge des entrées
+  expirées à chaque écriture et plafond `MAX_ENTRIES` (4096, éviction des
+  fenêtres dont l'expiration est la plus proche). Un fichier absent, tronqué ou
+  corrompu repart de zéro ; toute erreur interne (verrou, I/O) échoue **ouvert**
+  pour ne jamais bloquer une inscription. `register_rate_limit = 0` désactive la
+  limitation. Horloge injectable (`check(..., now)`), donc testable sans `sleep`.
 - `auth/nft_auth_sets.moon` — sous-chaînes nft d'authentification par règle
   (`refresh_rule_auth_sets`, `delete_rule_auth_sets`, `refresh_nft`,
   `for_qualifying_auth_rules`). `refresh_nft` rafraîchit **les deux** familles

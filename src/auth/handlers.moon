@@ -16,6 +16,7 @@ token = require "auth.token"
 { :make_nonce, :verify_nonce, :salt_iter_for } = require "auth.challenge"
 { :page, :success_page, :css_content, :password_page, :password_changed_page
   :CRYPTO_JS, :LOGIN_JS, :REGISTER_JS } = require "auth.pages"
+rate_limit = require "auth.rate_limit"
 H = require "auth.html"
 { :delete_rule_auth_sets, :refresh_nft } = require "auth.nft_auth_sets"
 { :parse_form } = require "webui.util"
@@ -316,6 +317,32 @@ handle_refusals = (req, peer_ip, peer_mac, state) ->
   200, { ["Content-Type"]: "application/json" }, "[#{table.concat parts, ","}]"
 
 handle_register = (req, peer_ip, peer_mac, state) ->
+  -- Limitation par client (MAC si connue, sinon IP) : l'état est partagé par
+  -- fichier verrouillé entre les enfants AUTH forké (cf. auth.rate_limit).
+  -- Fail-open : une erreur interne du limiteur laisse passer l'inscription.
+  cfg = state.auth_cfg or {}
+  limit = tonumber cfg.register_rate_limit
+  limit = rate_limit.DEFAULT_LIMIT if limit == nil
+  window = tonumber cfg.register_rate_window
+  window = rate_limit.DEFAULT_WINDOW if not window or window <= 0
+  rate_path = state.register_rate_path or
+    (state.sessions_file and (state.sessions_file .. ".ratelimit"))
+  if limit > 0 and rate_path
+    now = if state.now then state.now! else os.time!
+    allowed, retry_after = true, 0
+    ok, a, r = pcall rate_limit.check, rate_path,
+      rate_limit.key_for(peer_mac, peer_ip), limit, window, now
+    if ok
+      allowed, retry_after = a, r
+    else
+      log_warn -> { action: "server_register_rate_check_failed", ip: peer_ip, mac: peer_mac, err: tostring a }
+    unless allowed
+      log_warn -> { action: "server_register_rate_limited", ip: peer_ip, mac: peer_mac, retry_after: retry_after }
+      return 429, {
+        ["Content-Type"]: "text/plain; charset=UTF-8"
+        ["Retry-After"]: tostring retry_after
+      }, "Trop de tentatives d'inscription. Réessayez dans #{retry_after} secondes."
+
   form = parse_form req.body
   user = form.user
   salt = form.salt

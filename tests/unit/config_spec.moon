@@ -235,6 +235,52 @@ describe "config.auth.bridge_ifname", ->
     os.remove path
     assert.equals "br-explicit", cfg.auth.bridge_ifname
 
+describe "config.auth.register_rate_*", ->
+
+  reload = (path) ->
+    package.loaded["config"] = nil
+    actual = path or "tmp/__no_config_for_test__.moon"
+    ffi.C.setenv "CUSTOS_CONFIG_PATH", actual, 1
+    require "config"
+
+  after_each ->
+    ffi.C.unsetenv "CUSTOS_CONFIG_PATH"
+    package.loaded["config"] = nil
+
+  write_cfg = (path, content) ->
+    f = assert io.open path, "w"
+    f\write content
+    f\close!
+
+  it "défauts du schéma (3 / 300) après normalize", ->
+    cfg = reload nil
+    assert.equals 3, cfg.auth.register_rate_limit
+    assert.equals 300, cfg.auth.register_rate_window
+
+  it "valeurs explicites conservées (dont limite 0 = désactivée)", ->
+    path = "tmp/config_spec_register_rate.moon"
+    write_cfg path, [[{ auth: { register_rate_limit: 0, register_rate_window: 60 } }]]
+    cfg = reload path
+    os.remove path
+    assert.equals 0, cfg.auth.register_rate_limit
+    assert.equals 60, cfg.auth.register_rate_window
+
+  it "valeurs textuelles converties en nombres", ->
+    path = "tmp/config_spec_register_rate_str.moon"
+    write_cfg path, [[{ auth: { register_rate_limit: "5", register_rate_window: "120" } }]]
+    cfg = reload path
+    os.remove path
+    assert.equals 5, cfg.auth.register_rate_limit
+    assert.equals 120, cfg.auth.register_rate_window
+
+  it "fenêtre absente, nulle ou négative → défaut 300", ->
+    for raw in *{ "nil", "0", "-10" }
+      path = "tmp/config_spec_register_rate_win.moon"
+      write_cfg path, "{ auth: { register_rate_window: #{raw} } }"
+      cfg = reload path
+      os.remove path
+      assert.equals 300, cfg.auth.register_rate_window
+
 describe "config.nfqueue.responses", ->
   after_each ->
     ffi.C.unsetenv "CUSTOS_CONFIG_PATH"
