@@ -27,6 +27,10 @@ ok_mac_ipc, mac_ipc = pcall -> require "mac_learner_ipc"
 -- Module-level TTL, set during run().
 sip_ttl = nil
 
+-- nft_queue mémorisé par run() : jamais de require sur le chemin par paquet
+-- (repli paresseux conservé pour les specs qui n'appellent pas run()).
+nft_q = nil
+
 -- ip4/ip6 → mac cache built from outbound SIP (phone → proxy).
 -- Used to find phone_mac when parsing inbound responses.
 ip_to_mac   = {}
@@ -41,7 +45,7 @@ IP_MAC_MAX  = 256
 -- @treturn string|nil
 format_ip = (version, raw) ->
   return nil unless raw
-  ip2s = require("ipparse.l3.ip").ip2s
+  ip2s = ipparse_ip.ip2s
   if version == 4
     ip2s raw\sub 1, 4
   elseif version == 6
@@ -123,14 +127,14 @@ classify_direction = (sport, dport, ip_src_str, ip_dst_str) ->
 -- @tparam string reason  Log label (used as nft correlation string)
 allow_mac_ip = (mac, ip, family, reason) ->
   return unless mac and mac != "unknown" and ip and family
-  nft_q = require "nft_queue"
+  q = nft_q or require "nft_queue"
   ok = if family == "ip6"
-    nft_q.add_mac6 mac, ip, nil, sip_ttl, reason
+    q.add_mac6 mac, ip, nil, sip_ttl, reason
   else
-    nft_q.add_mac4 mac, ip, nil, sip_ttl, reason
+    q.add_mac4 mac, ip, nil, sip_ttl, reason
   if ok
-    pending = nft_q.get_last_seq!
-    nft_q.wait_ack pending, reason if pending
+    pending = q.get_last_seq!
+    q.wait_ack pending, reason if pending
   ok
 
 --- Insert an IP into sip_peers (or sip_peers6), fire-and-forget.
@@ -142,11 +146,11 @@ allow_mac_ip = (mac, ip, family, reason) ->
 -- @tparam string reason  Log label (correlation)
 allow_sip_peer = (ip, family, reason) ->
   return unless ip and family
-  nft_q = require "nft_queue"
+  q = nft_q or require "nft_queue"
   if family == "ip6"
-    nft_q.add_sip6 ip, nil, sip_ttl, reason
+    q.add_sip6 ip, nil, sip_ttl, reason
   else
-    nft_q.add_sip4 ip, nil, sip_ttl, reason
+    q.add_sip4 ip, nil, sip_ttl, reason
 
 -- ── Packet handler ────────────────────────────────────────────────────────────
 
@@ -309,8 +313,8 @@ run = (queue_num, fds) ->
   cfg  = require "config"
   sip_ttl = (cfg.nft and cfg.nft.sip_session_ttl) or
             (cfg.nft and cfg.nft.ip_timeout) or "5m"
+  nft_q = require "nft_queue"
   if type(fds) == "table"
-    nft_q = require "nft_queue"
     nft_q.set_wfd     fds.nft_wfd                   if fds.nft_wfd
     nft_q.set_ack_rfd fds.ack_rfd, fds.worker_idx   if fds.ack_rfd and fds.worker_idx != nil
   log_info -> { action: "worker_sip_starting", queue: queue_num, ttl: sip_ttl }

@@ -23,6 +23,7 @@ local ok_mac_ipc, mac_ipc = pcall(function()
   return require("mac_learner_ipc")
 end)
 local sip_ttl = nil
+local nft_q = nil
 local ip_to_mac = { }
 local IP_MAC_MAX = 256
 local format_ip
@@ -30,7 +31,7 @@ format_ip = function(version, raw)
   if not (raw) then
     return nil
   end
-  local ip2s = require("ipparse.l3.ip").ip2s
+  local ip2s = ipparse_ip.ip2s
   if version == 4 then
     return ip2s(raw:sub(1, 4))
   elseif version == 6 then
@@ -147,17 +148,17 @@ allow_mac_ip = function(mac, ip, family, reason)
   if not (mac and mac ~= "unknown" and ip and family) then
     return 
   end
-  local nft_q = require("nft_queue")
+  local q = nft_q or require("nft_queue")
   local ok
   if family == "ip6" then
-    ok = nft_q.add_mac6(mac, ip, nil, sip_ttl, reason)
+    ok = q.add_mac6(mac, ip, nil, sip_ttl, reason)
   else
-    ok = nft_q.add_mac4(mac, ip, nil, sip_ttl, reason)
+    ok = q.add_mac4(mac, ip, nil, sip_ttl, reason)
   end
   if ok then
-    local pending = nft_q.get_last_seq()
+    local pending = q.get_last_seq()
     if pending then
-      nft_q.wait_ack(pending, reason)
+      q.wait_ack(pending, reason)
     end
   end
   return ok
@@ -167,11 +168,11 @@ allow_sip_peer = function(ip, family, reason)
   if not (ip and family) then
     return 
   end
-  local nft_q = require("nft_queue")
+  local q = nft_q or require("nft_queue")
   if family == "ip6" then
-    return nft_q.add_sip6(ip, nil, sip_ttl, reason)
+    return q.add_sip6(ip, nil, sip_ttl, reason)
   else
-    return nft_q.add_sip4(ip, nil, sip_ttl, reason)
+    return q.add_sip4(ip, nil, sip_ttl, reason)
   end
 end
 local handle_packet
@@ -367,8 +368,8 @@ run = function(queue_num, fds)
   set_action_prefix("sip_")
   local cfg = require("config")
   sip_ttl = (cfg.nft and cfg.nft.sip_session_ttl) or (cfg.nft and cfg.nft.ip_timeout) or "5m"
+  nft_q = require("nft_queue")
   if type(fds) == "table" then
-    local nft_q = require("nft_queue")
     if fds.nft_wfd then
       nft_q.set_wfd(fds.nft_wfd)
     end
