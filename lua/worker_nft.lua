@@ -5,10 +5,10 @@ do
 end
 local run_cmd
 run_cmd = require("nft").run_cmd
-local cmd_for, sanitize_timeout
+local cmd_for, sanitize_timeout, ACK_SIZE
 do
   local _obj_0 = require("nft_queue")
-  cmd_for, sanitize_timeout = _obj_0.cmd_for, _obj_0.sanitize_timeout
+  cmd_for, sanitize_timeout, ACK_SIZE = _obj_0.cmd_for, _obj_0.sanitize_timeout, _obj_0.ACK_SIZE
 end
 local log_info, log_warn, log_debug, set_action_prefix
 do
@@ -27,8 +27,7 @@ local EWOULDBLOCK = 11
 local POLLIN = 1
 local LINE_VERSION = "v1"
 local read_buf = ffi.new("char[?]", BUF_SIZE)
-local ack_byte = ffi.new("uint8_t[1]")
-ack_byte[0] = 0x01
+local ack_val = ffi.new("uint64_t[1]")
 local poll_fd = ffi.new("struct pollfd[1]")
 local validate_item
 validate_item = function(kind, key, ip)
@@ -103,7 +102,7 @@ parse_line = function(line)
   }, nil
 end
 local send_ack
-send_ack = function(ack_wfds, widx)
+send_ack = function(ack_wfds, widx, seq)
   if not (widx and widx >= 0) then
     return 
   end
@@ -111,7 +110,8 @@ send_ack = function(ack_wfds, widx)
   if not (wfd) then
     return 
   end
-  return libc.write(wfd, ack_byte, 1)
+  ack_val[0] = seq or 0
+  return libc.write(wfd, ack_val, ACK_SIZE)
 end
 local try_add_pending
 try_add_pending = function(pending, item)
@@ -200,10 +200,14 @@ flush_batch = function(pending, ack_queue, ack_wfds)
   local workers_to_ack = { }
   for _index_0 = 1, #ack_queue do
     local ack = ack_queue[_index_0]
-    workers_to_ack[ack.widx] = true
+    local prev = workers_to_ack[ack.widx]
+    local seq = ack.seq or 0
+    if prev == nil or seq > prev then
+      workers_to_ack[ack.widx] = seq
+    end
   end
-  for widx, _ in pairs(workers_to_ack) do
-    send_ack(ack_wfds, widx)
+  for widx, seq in pairs(workers_to_ack) do
+    send_ack(ack_wfds, widx, seq)
   end
   for i = #ack_queue, 1, -1 do
     ack_queue[i] = nil

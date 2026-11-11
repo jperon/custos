@@ -4,6 +4,9 @@ pcall(ffi.cdef, [[  int pipe2(int pipefd[2], int flags);
   ssize_t read(int fd, void *buf, size_t count);
   ssize_t write(int fd, const void *buf, size_t count);
 ]])
+pcall(ffi.cdef, "struct pollfd { int fd; short events; short revents; };")
+pcall(ffi.cdef, "int poll(struct pollfd *fds, unsigned long nfds, int timeout);")
+pcall(ffi.cdef, "int clock_gettime(int clk_id, timespec_t *tp);")
 local O_NONBLOCK = 2048
 local make_pipe
 make_pipe = function()
@@ -33,6 +36,23 @@ hex = function(s)
   return (s:gsub(".", function(c)
     return string.format("%02x", c:byte())
   end))
+end
+local ACK_SIZE = 8
+local put_ack
+put_ack = function(fd, seq)
+  local v = ffi.new("uint64_t[1]")
+  v[0] = seq
+  local n = ffi.C.write(fd, v, ACK_SIZE)
+  return assert(n == ACK_SIZE, "écriture ACK incomplète")
+end
+local put_ack_partial
+put_ack_partial = function(fd, seq, len)
+  local v = ffi.new("uint64_t[1]")
+  v[0] = seq
+  local p = ffi.cast("uint8_t*", v)
+  local n = ffi.C.write(fd, p, len)
+  assert(n == len, "écriture ACK partielle incomplète")
+  return p
 end
 local read_pipe
 read_pipe = function(fd)
@@ -83,17 +103,51 @@ return describe("nft_queue", function()
     assert.equals(hex("corr-123"), fields[9])
     return close_pipe(p)
   end)
-  return describe("wait_ack", function()
-    it("retourne true immédiatement si l'ACK arrive avant le premier timeout", function()
+  describe("wait_ack", function()
+    it("retourne true immédiatement si l'ACK du seq attendu arrive avant le premier timeout", function()
       local q = fresh_nft_queue()
       local ack_pipe = make_pipe()
       local ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
       q.set_ack_rfd(ack_rfd, 0)
-      local ack_byte = ffi.new("uint8_t[1]")
-      ack_byte[0] = 0x01
-      ffi.C.write(ack_wfd, ack_byte, 1)
+      put_ack(ack_wfd, 1)
       local ok = q.wait_ack(1, "corr")
       assert.is_true(ok)
+      return close_pipe(ack_pipe)
+    end)
+    it("retourne true quand l'ACK porte un seq supérieur au seq attendu", function()
+      local q = fresh_nft_queue()
+      local ack_pipe = make_pipe()
+      q.set_ack_rfd(ack_pipe[1], 0)
+      put_ack(ack_pipe[2], 7)
+      assert.is_true(q.wait_ack(5, "corr"))
+      return close_pipe(ack_pipe)
+    end)
+    it("ignore un ACK d'un seq antérieur et expire (false)", function()
+      local q = fresh_nft_queue()
+      local ack_pipe = make_pipe()
+      q.set_ack_rfd(ack_pipe[1], 0)
+      put_ack(ack_pipe[2], 2)
+      local ok = q.wait_ack(5, "corr")
+      assert.is_false(ok)
+      return close_pipe(ack_pipe)
+    end)
+    it("ignore un ACK antérieur puis accepte l'ACK du bon seq", function()
+      local q = fresh_nft_queue()
+      local ack_pipe = make_pipe()
+      local ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd(ack_rfd, 0)
+      put_ack(ack_wfd, 2)
+      local calls = 0
+      local on_wait
+      on_wait = function()
+        calls = calls + 1
+        if calls == 2 then
+          return put_ack(ack_wfd, 5)
+        end
+      end
+      local ok = q.wait_ack(5, "corr", on_wait)
+      assert.is_true(ok)
+      assert.is_true(calls >= 2)
       return close_pipe(ack_pipe)
     end)
     it("appelle le callback on_wait entre les polls", function()
@@ -106,9 +160,7 @@ return describe("nft_queue", function()
       on_wait = function()
         calls = calls + 1
         if calls == 2 then
-          local ack_byte = ffi.new("uint8_t[1]")
-          ack_byte[0] = 0x01
-          return ffi.C.write(ack_wfd, ack_byte, 1)
+          return put_ack(ack_wfd, 1)
         end
       end
       local ok = q.wait_ack(1, "corr", on_wait)
@@ -116,10 +168,53 @@ return describe("nft_queue", function()
       assert.is_true(calls >= 2)
       return close_pipe(ack_pipe)
     end)
+    it("reconstitue un ACK lu en deux morceaux", function()
+      local q = fresh_nft_queue()
+      local ack_pipe = make_pipe()
+      local ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd(ack_rfd, 0)
+      local p = put_ack_partial(ack_wfd, 5, 3)
+      local calls = 0
+      local on_wait
+      on_wait = function()
+        calls = calls + 1
+        if calls == 1 then
+          return ffi.C.write(ack_wfd, p + 3, ACK_SIZE - 3)
+        end
+      end
+      local ok = q.wait_ack(5, "corr", on_wait)
+      assert.is_true(ok)
+      assert.is_true(calls >= 1)
+      return close_pipe(ack_pipe)
+    end)
     return it("retourne false sans ack_rfd configuré", function()
       local q = fresh_nft_queue()
       local ok = q.wait_ack(42, "test-corr")
       return assert.is_false(ok)
+    end)
+  end)
+  return describe("drain_ack", function()
+    it("vide entièrement un ACK complet", function()
+      local q = fresh_nft_queue()
+      local ack_pipe = make_pipe()
+      local ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd(ack_rfd, 0)
+      put_ack(ack_wfd, 3)
+      q.drain_ack()
+      local buf = ffi.new("uint8_t[8]")
+      assert.equals(-1, ffi.C.read(ack_rfd, buf, 8))
+      return close_pipe(ack_pipe)
+    end)
+    return it("vide aussi un ACK partiel", function()
+      local q = fresh_nft_queue()
+      local ack_pipe = make_pipe()
+      local ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd(ack_rfd, 0)
+      put_ack_partial(ack_wfd, 3, 4)
+      q.drain_ack()
+      local buf = ffi.new("uint8_t[8]")
+      assert.equals(-1, ffi.C.read(ack_rfd, buf, 8))
+      return close_pipe(ack_pipe)
     end)
   end)
 end)

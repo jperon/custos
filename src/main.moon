@@ -282,8 +282,9 @@ supervise = (pipes, sfd) ->
   }
 
   -- ── Pipes ACK nft (un par worker_responses + un pour DoH) ──────
-  -- Chaque pipe est dédié à un worker ; worker_nft écrit 1 octet d'ACK
-  -- après chaque flush de batch, avant que le worker rende son verdict DNS.
+  -- Chaque pipe est dédié à un worker ; worker_nft y écrit un ACK de taille
+  -- fixe portant le plus grand seq appliqué pour ce worker, après chaque flush
+  -- de batch, avant que le worker rende son verdict DNS.
   -- worker_idx est 0-based ; le tableau ack_wfds est 1-indexed côté Lua.
   ack_pipes  = {}  -- liste de {rfd, wfd} créés ici
   ack_wfds   = {}  -- tableau des wfd passés à worker_nft (1-indexed)

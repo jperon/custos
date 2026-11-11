@@ -105,7 +105,7 @@ coûteux (hachage + tri en RAM au démarrage) : préférer `.bin`.
 | `learn` pipe | 22 octets : ip16 + mac6 | `worker_questions` + `worker_arp_sniffer` + `worker_auth_queue` → `mac_learner` |
 | `events` pipe | événements DNS sérialisés | `worker_questions` → `worker_events` |
 | `nft` pipe | commandes d'insertion nft sérialisées | `worker_responses` + `worker_tls` + `worker_sip` + `worker_doh` → `worker_nft` |
-| `ack_<i>` pipes | 1 octet d'ACK | `worker_nft` → chaque worker producteur (un pipe dédié par worker) |
+| `ack_<i>` pipes | 1 ACK de 8 octets (uint64 : plus grand `seq` appliqué pour ce worker) | `worker_nft` → chaque worker producteur (un pipe dédié par worker) |
 | Socket Unix SOCK_STREAM | texte ligne : `"ip_str\n"` → `"mac\n"\|"unknown\n"` | requérants → `mac_learner` |
 | `AF_PACKET SOCK_RAW` sur `br` | frames Ethernet brutes | `worker_captive` → bridge |
 
@@ -113,8 +113,11 @@ Tous les pipes unidirectionnels (`question_response`, `learn`, `events`, `nft`,
 `ack_<i>`) sont créés dans `main.moon` via `pipe2(O_NONBLOCK)` avant tout
 `fork()`. Atomicité garantie (< `PIPE_BUF`). Le pipe `nft` centralise les
 insertions dans `worker_nft` (sérialisation des transactions nftables) ; chaque
-worker producteur attend un ACK 1 octet sur son `ack_<i>` dédié avant de rendre
+worker producteur attend un ACK de son `ack_<i>` dédié avant de rendre
 son verdict, afin que l'élément soit présent dans le set avant le retour du paquet.
+L'ACK porte le plus grand `seq` appliqué pour ce worker : un inject dont les
+lignes sont réparties sur plusieurs flushes (`MAX_BATCH`) n'est acquitté qu'une
+fois la dernière ligne traitée.
 
 ### Boucle `worker_nft` (faible latence)
 

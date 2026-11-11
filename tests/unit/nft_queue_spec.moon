@@ -6,6 +6,11 @@ pcall ffi.cdef, [[
   ssize_t read(int fd, void *buf, size_t count);
   ssize_t write(int fd, const void *buf, size_t count);
 ]]
+-- nft_queue exige struct pollfd et clock_gettime (ffi_defs est remplacé par le
+-- stub de busted_setup quand le spec tourne isolément).
+pcall ffi.cdef, "struct pollfd { int fd; short events; short revents; };"
+pcall ffi.cdef, "int poll(struct pollfd *fds, unsigned long nfds, int timeout);"
+pcall ffi.cdef, "int clock_gettime(int clk_id, timespec_t *tp);"
 
 O_NONBLOCK = 2048
 
@@ -26,6 +31,26 @@ fresh_nft_queue = ->
 hex = (s) ->
   return "" unless s and #s > 0
   (s\gsub ".", (c) -> string.format "%02x", c\byte!)
+
+-- Format d'ACK : enregistrement de taille fixe (ACK_SIZE octets) portant le
+-- plus grand `seq` appliqué par worker_nft pour ce worker.
+ACK_SIZE = 8
+
+put_ack = (fd, seq) ->
+  v = ffi.new "uint64_t[1]"
+  v[0] = seq
+  n = ffi.C.write fd, v, ACK_SIZE
+  assert n == ACK_SIZE, "écriture ACK incomplète"
+
+-- Écrit les `len` premiers octets de l'enregistrement (simule une lecture
+-- partielle côté lecteur, que le format de taille fixe doit reconstituer).
+put_ack_partial = (fd, seq, len) ->
+  v = ffi.new "uint64_t[1]"
+  v[0] = seq
+  p = ffi.cast "uint8_t*", v
+  n = ffi.C.write fd, p, len
+  assert n == len, "écriture ACK partielle incomplète"
+  p
 
 read_pipe = (fd) ->
   buf = ffi.new "char[512]"
@@ -76,19 +101,53 @@ describe "nft_queue", ->
     close_pipe p
 
   describe "wait_ack", ->
-    it "retourne true immédiatement si l'ACK arrive avant le premier timeout", ->
+    it "retourne true immédiatement si l'ACK du seq attendu arrive avant le premier timeout", ->
       q = fresh_nft_queue!
       ack_pipe = make_pipe!
       ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
       q.set_ack_rfd ack_rfd, 0
 
-      -- Écrire l'ACK avant d'appeler wait_ack
-      ack_byte = ffi.new "uint8_t[1]"
-      ack_byte[0] = 0x01
-      ffi.C.write ack_wfd, ack_byte, 1
+      -- Écrire l'ACK (seq 1) avant d'appeler wait_ack
+      put_ack ack_wfd, 1
 
       ok = q.wait_ack 1, "corr"
       assert.is_true ok
+      close_pipe ack_pipe
+
+    it "retourne true quand l'ACK porte un seq supérieur au seq attendu", ->
+      q = fresh_nft_queue!
+      ack_pipe = make_pipe!
+      q.set_ack_rfd ack_pipe[1], 0
+      put_ack ack_pipe[2], 7
+      assert.is_true q.wait_ack 5, "corr"
+      close_pipe ack_pipe
+
+    it "ignore un ACK d'un seq antérieur et expire (false)", ->
+      q = fresh_nft_queue!
+      ack_pipe = make_pipe!
+      q.set_ack_rfd ack_pipe[1], 0
+      -- ACK du batch précédent, plus petit que celui attendu.
+      put_ack ack_pipe[2], 2
+      ok = q.wait_ack 5, "corr"
+      assert.is_false ok
+      close_pipe ack_pipe
+
+    it "ignore un ACK antérieur puis accepte l'ACK du bon seq", ->
+      q = fresh_nft_queue!
+      ack_pipe = make_pipe!
+      ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd ack_rfd, 0
+      put_ack ack_wfd, 2
+
+      calls = 0
+      on_wait = ->
+        calls += 1
+        put_ack ack_wfd, 5 if calls == 2
+
+      ok = q.wait_ack 5, "corr", on_wait
+      assert.is_true ok
+      -- L'ACK périmé ne doit pas avoir suffi : au moins un tour d'attente.
+      assert.is_true calls >= 2
       close_pipe ack_pipe
 
     it "appelle le callback on_wait entre les polls", ->
@@ -101,14 +160,29 @@ describe "nft_queue", ->
       -- ACK envoyé après 2 appels du callback
       on_wait = ->
         calls += 1
-        if calls == 2
-          ack_byte = ffi.new "uint8_t[1]"
-          ack_byte[0] = 0x01
-          ffi.C.write ack_wfd, ack_byte, 1
+        put_ack ack_wfd, 1 if calls == 2
 
       ok = q.wait_ack 1, "corr", on_wait
       assert.is_true ok
       assert.is_true calls >= 2
+      close_pipe ack_pipe
+
+    it "reconstitue un ACK lu en deux morceaux", ->
+      q = fresh_nft_queue!
+      ack_pipe = make_pipe!
+      ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd ack_rfd, 0
+
+      p = put_ack_partial ack_wfd, 5, 3
+      calls = 0
+      on_wait = ->
+        calls += 1
+        -- Fin de l'enregistrement, après que les 3 premiers octets ont été lus.
+        ffi.C.write ack_wfd, p + 3, ACK_SIZE - 3 if calls == 1
+
+      ok = q.wait_ack 5, "corr", on_wait
+      assert.is_true ok
+      assert.is_true calls >= 1
       close_pipe ack_pipe
 
     it "retourne false sans ack_rfd configuré", ->
@@ -116,3 +190,26 @@ describe "nft_queue", ->
       -- ack_rfd non configuré : wait_ack doit retourner false immédiatement
       ok = q.wait_ack 42, "test-corr"
       assert.is_false ok
+
+  describe "drain_ack", ->
+    it "vide entièrement un ACK complet", ->
+      q = fresh_nft_queue!
+      ack_pipe = make_pipe!
+      ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd ack_rfd, 0
+      put_ack ack_wfd, 3
+      q.drain_ack!
+      buf = ffi.new "uint8_t[8]"
+      assert.equals -1, ffi.C.read ack_rfd, buf, 8   -- EAGAIN : tube vide
+      close_pipe ack_pipe
+
+    it "vide aussi un ACK partiel", ->
+      q = fresh_nft_queue!
+      ack_pipe = make_pipe!
+      ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+      q.set_ack_rfd ack_rfd, 0
+      put_ack_partial ack_wfd, 3, 4
+      q.drain_ack!
+      buf = ffi.new "uint8_t[8]"
+      assert.equals -1, ffi.C.read ack_rfd, buf, 8
+      close_pipe ack_pipe

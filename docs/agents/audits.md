@@ -796,3 +796,31 @@ et passe après ; le contrôle est désormais automatisé dans `make check`
   hors runtime MoonScript), relève les `GGET` et échoue sur toute globale hors
   liste blanche explicite (base Lua 5.1, bibliothèques standard, `bit`/`jit` de
   LuaJIT, `arg` ; `ffi` volontairement absent car non global sous LuaJIT).
+
+### Dataplane et synchronisation (branche fix-ackseq)
+
+- **ACK nft non séquencé : verdict posé avant la fin des insertions d'un inject.**
+  `worker_nft` n'émettait qu'un octet anonyme par (flush × worker) et
+  `nft_queue.wait_ack` retournait `true` au premier octet lu, sans comparer au
+  `pending_seq` (qui ne servait qu'au log). Or `MAX_BATCH = 64` coupe un `inject`
+  de plus de 64 éléments : le flush du premier batch acquittait, et le producteur
+  posait `NF_ACCEPT` avant l'insertion des éléments restants (premier paquet
+  suivant droppé par le default-deny). Correctif : l'ACK est un enregistrement de
+  taille fixe (8 octets, `uint64` natif, un seul `write` ≤ `PIPE_BUF` donc
+  atomique) portant le plus grand `seq` appliqué pour ce worker ; `wait_ack`
+  n'accepte un ACK que si `seq >= pending_seq`, ignore les ACK antérieurs
+  (attente poursuivie dans le même budget `ACK_TIMEOUT_MS`, échéance monotone
+  sans allongement), reconstitue un enregistrement lu en plusieurs morceaux et
+  laisse `drain_ack` vider le tube, fragments compris. Le compteur `seq` est
+  monotone par processus sans rebouclage (2^53) ; un redémarrage repart de zéro
+  et les ACK résiduels sont purgés par `drain_ack` avant l'injection suivante.
+  Un échec de transaction nft reste acquitté comme avant (sémantique conservée :
+  l'ACK acquitte le traitement du batch, le producteur applique
+  `nft.add_failure_policy`). Limite résiduelle du DoH (plusieurs enfants `fork`
+  partageant un tube et un compteur `seq` initial identique) documentée dans
+  `docs/agents/doh.md`. Format documenté dans `.agents/workers.md` et
+  `.agents/architecture.md`. Tests : `tests/unit/nft_queue_spec.moon`
+  (ACK du bon seq, ACK antérieur seul → timeout, antérieur puis bon seq, lecture
+  en deux morceaux, `drain_ack` d'un ACK partiel) et
+  `tests/unit/worker_nft_spec.moon` (65 éléments → deux ACK, le second portant
+  le dernier `seq`).
