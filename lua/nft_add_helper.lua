@@ -14,12 +14,13 @@ try_add_with_retries = function(fn, ...)
     400,
     800
   }
+  local last_err = nil
   for i = 1, #backoffs do
     local ok, err = fn(...)
     if ok then
       return true
     end
-    local last_err = err
+    last_err = err
     if i < #backoffs then
       local ms = backoffs[i] or backoffs[#backoffs]
       _timespec[0].tv_sec = math.floor(ms / 1000)

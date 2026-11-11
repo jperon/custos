@@ -12,6 +12,10 @@ _timespec = ffi.new "timespec_t[1]"
 try_add_with_retries = (fn, ...) ->
   backoffs = config.nft.add_backoff_ms or {20, 50, 100, 200, 400, 800}
 
+  -- Déclarée hors de la boucle : assignée dans la boucle, elle y serait locale
+  -- (MoonScript) et sa lecture après la boucle compilerait en globale → nil,
+  -- perdant l'erreur de la dernière tentative dans le log.
+  last_err = nil
   for i = 1, #backoffs
     ok, err = fn ...
     return true if ok
