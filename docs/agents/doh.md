@@ -5,7 +5,7 @@
 | Module | Rôle |
 |--------|------|
 | `doh.upstream` | Client UDP/53 — new_client / query / close |
-| `doh.upstream_doh` | Client DoH HTTP/1.1 wolfSSL — même contrat. **Repli** chargé via `doh.upstream_select` quand `doh.upstream_doh_curl` ne peut être chargé/initialisé ; vérifie certificat + nom d'hôte par défaut (`verify_tls=true`), sinon refuse de fonctionner sauf `doh.upstream_fallback_insecure=true`. |
+| `doh.upstream_doh` | Client DoH wolfSSL **HTTP/1.1, et HTTP/2 si ALPN négocie h2** — même contrat. **Repli** chargé via `doh.upstream_select` quand `doh.upstream_doh_curl` ne peut être chargé/initialisé ; vérifie certificat + nom d'hôte par défaut (`verify_tls=true`), sinon refuse de fonctionner sauf `doh.upstream_fallback_insecure=true`. |
 | `doh.upstream_doh_curl` | Client DoH **HTTP/2** via libcurl FFI — même contrat. Transport normal, chargé si `doh.upstream_doh_url` est défini. `ffi.load` essaie `"curl"`, `"libcurl.so.4"` puis `"libcurl.so.4.8.0"` pour compat OpenWrt ; `probe` valide en plus `curl_easy_init` une seule fois. Les args `const char *` vers les varargs `curl_easy_setopt` **doivent** être castés via `ffi.cast "const char *"` (LuaJIT ne convertit pas automatiquement en varargs). |
 | `doh.upstream_select` | Sélection unique du transport DoH amont : curl si utilisable, sinon repli wolfSSL (vérifié, non vérifié explicitement autorisé, ou refusé). Ne bascule jamais sur une erreur de requête. |
 | `doh.h2_frames` | Utilitaires frames HTTP/2 partagés (constantes, `h2_read_frame`, `h2_write_frame`) |
@@ -54,6 +54,48 @@ Tests : `tests/unit/doh/upstream_select_spec.moon`,
 `tests/unit/doh/upstream_doh_spec.moon`, `tests/unit/auth/wolfssl_spec.moon`,
 `tests/unit/doh_config_spec.moon`.
 
+### Client HTTP/2 du repli wolfSSL (ALPN h2)
+
+`doh.upstream_doh.new_client` propose `h2,http/1.1`
+(`CLIENT_ALPN_PROTOCOLS`, `src/auth/ffi_wolfssl.moon`) sur l'objet SSL via
+`wolfSSL_UseALPN`, avec l'unique option `WOLFSSL_ALPN_CONTINUE_ON_MISMATCH =
+0x02` (attendue par wolfSSL 5.x ; `0x01` vaut `MATCH` et est refusée). Un
+serveur sans ALPN laisse le handshake se poursuivre. Le protocole réellement
+négocié est lu par `selected_alpn` (`wolfSSL_ALPN_GetProtocol` rend
+`WOLFSSL_SUCCESS = 1`) et stocké dans le handle (`alpn`, `h2`). Sans ALPN dans
+libwolfssl, ou si le serveur choisit `http/1.1`, `query` garde le chemin
+HTTP/1.1 existant, inchangé.
+
+Quand `h2` est vrai, `query` délègue à `query_h2` (`src/doh/upstream_doh.moon`) :
+préface client, SETTINGS, POST sur le flux impair 1 (`:method POST`,
+`:scheme https`, `:authority`, `:path`, `content-type` et `accept`
+`application/dns-message`, `content-length`), DATA découpée à
+`SETTINGS_MAX_FRAME_SIZE` (16384). La lecture est bornée : `H2_MAX_FRAMES`,
+`H2_MAX_TOTAL_BYTES`, bloc d'en-têtes ≤ 65535, ≤ 64 CONTINUATION. HEADERS +
+CONTINUATION sont décodés par `doh.hpack` ; les SETTINGS et PING reçoivent un
+ACK ; chaque DATA intermédiaire rend sa fenêtre (`WINDOW_UPDATE` connexion +
+flux, sans effet sur la DATA END_STREAM dont la réponse est complète) ;
+`:status` 200 est exigé, le corps est plafonné par `MAX_DNS_BODY` et les
+trailers (HEADERS sans `:status`) sont ignorés. GOAWAY, RST_STREAM, trame
+tronquée, flux inattendu, second `:status` ou corps trop gros → erreur propre
+(`h2_goaway`, `h2_rst_stream`, `h2_frame_read_*`, `body_too_large`…) et
+connexion fermée ; le prochain appel reconnecte, comme en HTTP/1.1. Les délais
+restent ceux de `set_timeouts`.
+
+Helpers partagés ajoutés à `doh.h2_frames` : `h2_read_header_block`,
+`h2_data_payload`, `h2_window_update` et la constante `H2_FRAME_RST_STREAM` ;
+aucune logique HPACK ni de trame n'est dupliquée.
+
+Tests : `tests/unit/doh/upstream_doh_h2_spec.moon` (faux TLS : réponse
+normale, CONTINUATION, trailers, statut ≠ 200, GOAWAY, RST_STREAM, corps trop
+gros, trame tronquée, PING et WINDOW_UPDATE, en-têtes de requête) et
+`tests/unit/doh/upstream_doh_alpn_spec.moon` (vraie libwolfssl en boucle locale
+127.0.0.1 avec certificat px5g dans `./tmp/` : serveur configuré comme
+`worker_doh` ↔ client du repli, `get_alpn` vaut `h2` des deux côtés ; client
+n'offrant que `http/1.1` → `http/1.1` sans échec ; POST DoH HTTP/2 à travers
+`handle_doh_client`/`handle_h2` réels → 200 et réponse DNS ; `pending` si ALPN
+ou px5g manque).
+
 ### Serveur HTTP/2 : HPACK et routage DoH
 
 `worker_doh.handle_h2` implémente un serveur HTTP/2 (RFC 7540) avec HPACK
@@ -89,7 +131,15 @@ Tests : `tests/unit/doh/upstream_select_spec.moon`,
   (`DEFAULT_ALPN_PROTOCOLS`) : la liste est stockée par contexte
   (`alpn_protocols`) et `wrap` ne réapplique que si elle a changé. Aucun
   symbole ALPN → aucun changement de comportement ; les contextes client ne
-  sont pas concernés.
+  sont pas concernés (côté client, voir « Client HTTP/2 du repli wolfSSL »).
+  L'option passée est `WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x02` (wolfSSL 5.x
+  refuse `0x01`, qui vaut `WOLFSSL_ALPN_MATCH`) pour les trois helpers
+  contexte/objet/client ; un échec d'annonce alors que le symbole existe est
+  journalisé en `log_warn` (`alpn_ssl_failed`, `alpn_ctx_update_failed`,
+  `alpn_context_failed`). Après le handshake, `handle_doh_client` ne refuse
+  plus les connexions `h2` : la préface PRI est lue puis routée vers
+  `handle_h2`. Détail : `docs/agents/audits.md` § « Client HTTP/2 du repli
+  DoH ».
 
 Limites restantes, assumées :
 

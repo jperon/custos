@@ -1,6 +1,9 @@
 local ffi = require("ffi")
-local log_debug
-log_debug = require("log").log_debug
+local log_debug, log_warn
+do
+  local _obj_0 = require("log")
+  log_debug, log_warn = _obj_0.log_debug, _obj_0.log_warn
+end
 local get_errno
 get_errno = require("lib.socket").get_errno
 ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
@@ -94,9 +97,10 @@ local CA_FILE_CANDIDATES = {
 }
 local SSL_FILETYPE_PEM = 1
 local SSL_FILETYPE_ASN1 = 2
-local WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x01
+local WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x02
 local ALPN_PROTOCOLS = "h2,http/1.1"
 local DEFAULT_ALPN_PROTOCOLS = "http/1.1"
+local CLIENT_ALPN_PROTOCOLS = "h2,http/1.1"
 local _alpn_available = nil
 local get_ssl_errors
 get_ssl_errors = function()
@@ -207,6 +211,17 @@ alpn_configure_ssl = function(lib, ssl, protocols)
   end)
   return ok and ret == 1
 end
+local alpn_configure_client
+alpn_configure_client = function(lib, ssl, protocols)
+  protocols = protocols or CLIENT_ALPN_PROTOCOLS
+  if not (symbol_available("wolfSSL_UseALPN", lib)) then
+    return false
+  end
+  local ok, ret = pcall(function()
+    return lib.wolfSSL_UseALPN(ssl, ffi.cast("char*", protocols), #protocols, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH)
+  end)
+  return ok and ret == 1
+end
 local newcontext
 newcontext = function(opts)
   if opts == nil then
@@ -258,11 +273,21 @@ newcontext = function(opts)
       end)
     else
       _alpn_available = false
-      log_debug(function()
-        return {
-          action = "alpn_unavailable"
-        }
-      end)
+      if symbol_available("wolfSSL_CTX_UseALPN") then
+        log_warn(function()
+          return {
+            action = "alpn_context_failed",
+            protocols = alpn_protocols,
+            detail = "wolfSSL_CTX_UseALPN présent mais refusé, et wolfSSL_UseALPN absent"
+          }
+        end)
+      else
+        log_debug(function()
+          return {
+            action = "alpn_unavailable"
+          }
+        end)
+      end
     end
   else
     log_debug(function()
@@ -316,7 +341,8 @@ newclient_context = function(opts)
     ctx = ctx,
     closed = false,
     verify_peer = opts.verify_peer == true,
-    ca_file = ca_file
+    ca_file = ca_file,
+    is_client = true
   }
 end
 local wrap
@@ -353,25 +379,40 @@ wrap = function(raw_socket, ctx_obj, opts)
   local alpn_protocols = ctx_obj.alpn_protocols or DEFAULT_ALPN_PROTOCOLS
   if ctx_obj.alpn_mode == "ssl" then
     if not (alpn_configure_ssl(libwolfssl, ssl, alpn_protocols)) then
-      log_debug(function()
+      log_warn(function()
         return {
           action = "alpn_ssl_failed",
-          protocols = alpn_protocols
+          protocols = alpn_protocols,
+          detail = "wolfSSL_UseALPN présent mais refusé"
         }
       end)
       _alpn_available = false
     end
   elseif ctx_obj.alpn_mode == "ctx" and ctx_obj.alpn_configured_protocols ~= alpn_protocols then
     if not (alpn_configure_ctx(libwolfssl, ctx_obj.ctx, alpn_protocols)) then
-      log_debug(function()
+      log_warn(function()
         return {
           action = "alpn_ctx_update_failed",
-          protocols = alpn_protocols
+          protocols = alpn_protocols,
+          detail = "wolfSSL_CTX_UseALPN présent mais refusé"
         }
       end)
       _alpn_available = false
     else
       ctx_obj.alpn_configured_protocols = alpn_protocols
+    end
+  end
+  local alpn_offered = nil
+  if ctx_obj.is_client and opts.alpn_protocols and #opts.alpn_protocols > 0 then
+    if alpn_configure_client(libwolfssl, ssl, opts.alpn_protocols) then
+      alpn_offered = opts.alpn_protocols
+    else
+      log_debug(function()
+        return {
+          action = "alpn_client_unavailable",
+          protocols = opts.alpn_protocols
+        }
+      end)
     end
   end
   if opts.sni and #opts.sni > 0 then
@@ -391,6 +432,7 @@ wrap = function(raw_socket, ctx_obj, opts)
   local wrapped = {
     ssl = ssl,
     raw_socket = raw_socket,
+    alpn_offered = alpn_offered,
     handshake_done = false,
     closed = false
   }
@@ -497,7 +539,7 @@ ssl_mt.__index.doconnect = function(self)
   return false, "tls_connect_error: err=" .. tostring(err) .. " " .. tostring(ssl_errors)
 end
 ssl_mt.__index.selected_alpn = function(self)
-  if _alpn_available == false then
+  if not (symbol_available("wolfSSL_ALPN_GetProtocol")) then
     return nil
   end
   local proto_ptr = ffi.new("char*[1]")
@@ -505,7 +547,7 @@ ssl_mt.__index.selected_alpn = function(self)
   local ok, ret = pcall(function()
     return libwolfssl.wolfSSL_ALPN_GetProtocol(self.ssl, proto_ptr, proto_len)
   end)
-  if not (ok and ret == 0 and proto_ptr[0] ~= nil and proto_len[0] > 0) then
+  if not (ok and ret == 1 and proto_ptr[0] ~= nil and proto_len[0] > 0) then
     return nil
   end
   return ffi.string(proto_ptr[0], proto_len[0])
@@ -699,8 +741,11 @@ return {
   symbol_available = symbol_available,
   alpn_configure_ctx = alpn_configure_ctx,
   alpn_configure_ssl = alpn_configure_ssl,
+  alpn_configure_client = alpn_configure_client,
   ALPN_PROTOCOLS = ALPN_PROTOCOLS,
   DEFAULT_ALPN_PROTOCOLS = DEFAULT_ALPN_PROTOCOLS,
+  CLIENT_ALPN_PROTOCOLS = CLIENT_ALPN_PROTOCOLS,
+  WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = WOLFSSL_ALPN_CONTINUE_ON_MISMATCH,
   libwolfssl = libwolfssl,
   SSL_ERROR_NONE = SSL_ERROR_NONE,
   SSL_ERROR_WANT_READ = SSL_ERROR_WANT_READ,

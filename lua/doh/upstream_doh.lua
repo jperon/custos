@@ -1,6 +1,9 @@
 local ffi = require("ffi")
+local bit = require("bit")
 local ssl = require("auth.ffi_wolfssl")
 local socket = require("lib.socket")
+local h2f = require("doh.h2_frames")
+local hpack = require("doh.hpack")
 local log_debug, log_warn
 do
   local _obj_0 = require("log")
@@ -32,6 +35,13 @@ local MAX_RESPONSE_BYTES = MAX_DNS_BODY + 8192
 local MAX_SEND_ATTEMPTS = 100
 local MAX_RECV_ATTEMPTS = 100
 local MAX_RECV_ROUNDS = 32
+local H2_PREFACE = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+local H2_CLIENT_ALPN = "h2,http/1.1"
+local H2_STREAM_ID = 1
+local H2_MAX_FRAMES = 256
+local H2_MAX_HEADER_BLOCK = 65535
+local H2_MAX_CONTINUATIONS = 64
+local H2_MAX_TOTAL_BYTES = MAX_RESPONSE_BYTES
 local resolve_host
 resolve_host = function(host)
   local res = ffi.new("struct addrinfo*[1]")
@@ -204,7 +214,8 @@ new_client = function(url, timeout_ms, verify_tls, opts)
   end
   local ok_wrap, tls = pcall(ssl.wrap, sock, ctx, {
     sni = sni,
-    check_domain = verify_tls and host or nil
+    check_domain = verify_tls and host or nil,
+    alpn_protocols = H2_CLIENT_ALPN
   })
   if not (ok_wrap) then
     ssl.free_context(ctx)
@@ -235,12 +246,22 @@ new_client = function(url, timeout_ms, verify_tls, opts)
     ssl.free_context(ctx)
     return nil, "upstream_doh: tls_handshake_failed: " .. tostring(tls_err or 'max_attempts')
   end
+  local alpn = nil
+  if type(tls.selected_alpn) == "function" then
+    local ok_alpn, sel = pcall(function()
+      return tls:selected_alpn()
+    end)
+    if ok_alpn and type(sel) == "string" and #sel > 0 then
+      alpn = sel
+    end
+  end
   log_debug(function()
     return {
       action = "upstream_doh_connected",
       host = host,
       port = port,
-      path = path
+      path = path,
+      alpn = alpn
     }
   end)
   return {
@@ -249,6 +270,8 @@ new_client = function(url, timeout_ms, verify_tls, opts)
     port = port,
     path = path,
     ctx = ctx,
+    alpn = alpn,
+    h2 = alpn == "h2",
     host_header = format_host_header(host, port),
     _mod = M
   }
@@ -337,6 +360,211 @@ read_response = function(tls)
   end
   return buf
 end
+local h2_send
+h2_send = function(client, ftype, flags, sid, payload)
+  local ok, sent, err = pcall(h2f.h2_write_frame, client.tls, ftype, flags, sid, payload)
+  if not (ok) then
+    return nil, "send_failed: " .. tostring(sent)
+  end
+  if not (sent) then
+    return nil, "send_failed: " .. tostring(err)
+  end
+  return true
+end
+local h2_send_body
+h2_send_body = function(client, dns_raw)
+  local max = h2f.H2_DEFAULT_MAX_FRAME_SIZE
+  local pos = 1
+  local total = #dns_raw
+  while true do
+    local chunk = dns_raw:sub(pos, pos + max - 1)
+    pos = pos + #chunk
+    local last = pos > total
+    local flags = last and h2f.H2_FLAG_END_STREAM or 0
+    local ok, err = h2_send(client, h2f.H2_FRAME_DATA, flags, H2_STREAM_ID, chunk)
+    if not (ok) then
+      return nil, err
+    end
+    if last then
+      break
+    end
+  end
+  return true
+end
+local h2_fail
+h2_fail = function(client, msg)
+  pcall(function()
+    return M.close(client)
+  end)
+  return nil, msg
+end
+local query_h2
+query_h2 = function(client, dns_raw, req_txid)
+  local ok_send, send_err = send_all(client.tls, H2_PREFACE)
+  if not (ok_send) then
+    return nil, "upstream_doh: send_failed: " .. tostring(send_err)
+  end
+  local ok, err = h2_send(client, h2f.H2_FRAME_SETTINGS, 0, 0, "")
+  if not (ok) then
+    return h2_fail(client, "upstream_doh: " .. tostring(err))
+  end
+  local block = hpack.encode({
+    {
+      ":method",
+      "POST"
+    },
+    {
+      ":scheme",
+      "https"
+    },
+    {
+      ":authority",
+      client.host_header or client.host
+    },
+    {
+      ":path",
+      client.path
+    },
+    {
+      "content-type",
+      "application/dns-message"
+    },
+    {
+      "accept",
+      "application/dns-message"
+    },
+    {
+      "content-length",
+      tostring(#dns_raw)
+    }
+  })
+  ok, err = h2_send(client, h2f.H2_FRAME_HEADERS, h2f.H2_FLAG_END_HEADERS, H2_STREAM_ID, block)
+  if not (ok) then
+    return h2_fail(client, "upstream_doh: " .. tostring(err))
+  end
+  ok, err = h2_send_body(client, dns_raw)
+  if not (ok) then
+    return h2_fail(client, "upstream_doh: " .. tostring(err))
+  end
+  local decoder = hpack.new_decoder()
+  local status = nil
+  local body_chunks = { }
+  local body_len = 0
+  local total_bytes = 0
+  local frame_count = 0
+  local end_stream = false
+  while not end_stream do
+    frame_count = frame_count + 1
+    if frame_count > H2_MAX_FRAMES then
+      return h2_fail(client, "upstream_doh: h2_too_many_frames")
+    end
+    local ftype, fflags, sid, payload = h2f.h2_read_frame(client.tls, h2f.H2_DEFAULT_MAX_FRAME_SIZE)
+    if not (ftype) then
+      return h2_fail(client, "upstream_doh: h2_frame_read_" .. tostring(fflags or 'failed'))
+    end
+    total_bytes = total_bytes + #payload + 9
+    if total_bytes > H2_MAX_TOTAL_BYTES then
+      return h2_fail(client, "upstream_doh: response_too_large")
+    end
+    if ftype == h2f.H2_FRAME_SETTINGS then
+      if not (sid == 0 and #payload % 6 == 0) then
+        return h2_fail(client, "upstream_doh: h2_bad_settings")
+      end
+      if bit.band(fflags, h2f.H2_FLAG_ACK) == 0 then
+        ok, err = h2_send(client, h2f.H2_FRAME_SETTINGS, h2f.H2_FLAG_ACK, 0, "")
+        if not (ok) then
+          return h2_fail(client, "upstream_doh: " .. tostring(err))
+        end
+      end
+    elseif ftype == h2f.H2_FRAME_PING then
+      if not (sid == 0 and #payload == 8) then
+        return h2_fail(client, "upstream_doh: h2_bad_ping")
+      end
+      if bit.band(fflags, h2f.H2_FLAG_ACK) == 0 then
+        ok, err = h2_send(client, h2f.H2_FRAME_PING, h2f.H2_FLAG_ACK, 0, payload)
+        if not (ok) then
+          return h2_fail(client, "upstream_doh: " .. tostring(err))
+        end
+      end
+    elseif ftype == h2f.H2_FRAME_HEADERS then
+      if not (sid == H2_STREAM_ID) then
+        return h2_fail(client, "upstream_doh: h2_unexpected_stream")
+      end
+      local hblock, hs_end, header_err = h2f.h2_read_header_block(client.tls, sid, fflags, payload, H2_MAX_HEADER_BLOCK, H2_MAX_CONTINUATIONS)
+      if not (hblock) then
+        return h2_fail(client, "upstream_doh: " .. tostring(header_err or 'h2_headers_invalid'))
+      end
+      local headers, dec_err = hpack.decode(decoder, hblock)
+      if not (headers) then
+        return h2_fail(client, "upstream_doh: h2_hpack_" .. tostring(dec_err))
+      end
+      local st = hpack.header_value(headers, ":status")
+      if st then
+        if status then
+          return h2_fail(client, "upstream_doh: h2_duplicate_status")
+        end
+        status = st
+        if not (status == "200") then
+          return h2_fail(client, "upstream_doh: http_status_" .. tostring(status))
+        end
+      elseif not status then
+        return h2_fail(client, "upstream_doh: h2_missing_status")
+      end
+      end_stream = hs_end
+    elseif ftype == h2f.H2_FRAME_DATA then
+      if not (sid == H2_STREAM_ID) then
+        return h2_fail(client, "upstream_doh: h2_unexpected_stream")
+      end
+      local content, data_err = h2f.h2_data_payload(fflags, payload)
+      if not (content) then
+        return h2_fail(client, "upstream_doh: " .. tostring(data_err or 'h2_data_invalid'))
+      end
+      body_len = body_len + #content
+      if body_len > MAX_DNS_BODY then
+        return h2_fail(client, "upstream_doh: body_too_large")
+      end
+      body_chunks[#body_chunks + 1] = content
+      if bit.band(fflags, h2f.H2_FLAG_END_STREAM) ~= 0 then
+        end_stream = true
+      end
+      if #payload > 0 and not end_stream then
+        pcall(function()
+          return h2f.h2_window_update(client.tls, 0, #payload)
+        end)
+        pcall(function()
+          return h2f.h2_window_update(client.tls, sid, #payload)
+        end)
+      end
+    elseif ftype == h2f.H2_FRAME_RST_STREAM then
+      return h2_fail(client, "upstream_doh: h2_rst_stream")
+    elseif ftype == h2f.H2_FRAME_GOAWAY then
+      return h2_fail(client, "upstream_doh: h2_goaway")
+    end
+  end
+  if not (status == "200") then
+    return h2_fail(client, "upstream_doh: h2_missing_status")
+  end
+  local body = table.concat(body_chunks)
+  if #body == 0 then
+    return h2_fail(client, "upstream_doh: empty_body")
+  end
+  if #body < 12 then
+    return h2_fail(client, "upstream_doh: short_response")
+  end
+  local resp_txid = body:byte(1) * 256 + body:byte(2)
+  if not (resp_txid == req_txid) then
+    return h2_fail(client, "upstream_doh: txid_mismatch")
+  end
+  log_debug(function()
+    return {
+      action = "upstream_doh_response",
+      host = client.host,
+      body_bytes = #body,
+      protocol = "h2"
+    }
+  end)
+  return body
+end
 local query
 query = function(client, dns_raw)
   if not (client and client.tls) then
@@ -346,6 +574,9 @@ query = function(client, dns_raw)
     return nil, "upstream_doh: short_query"
   end
   local req_txid = dns_raw:byte(1) * 256 + dns_raw:byte(2)
+  if client.h2 then
+    return query_h2(client, dns_raw, req_txid)
+  end
   local req = table.concat({
     "POST ",
     client.path,

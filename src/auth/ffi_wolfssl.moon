@@ -2,7 +2,7 @@
 -- FFI wrapper for WolfSSL (libwolfssl) TLS/SSL library.
 
 ffi = require "ffi"
-{ :log_debug } = require "log"
+{ :log_debug, :log_warn } = require "log"
 { :get_errno } = require "lib.socket"
 
 ffi.cdef [[
@@ -91,12 +91,19 @@ CA_FILE_CANDIDATES = {
 -- File types
 SSL_FILETYPE_PEM = 1
 SSL_FILETYPE_ASN1 = 2
-WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x01
+WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x02
+-- wolfSSL 5.x : WOLFSSL_ALPN_NO_MATCH = 0, WOLFSSL_ALPN_MATCH = 1,
+-- WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 2, WOLFSSL_ALPN_FAILED_ON_MISMATCH = 4.
+-- wolfSSL_UseALPN refuse toute valeur sans CONTINUE ni FAILED (BAD_FUNC_ARG,
+-- -173) : l'ancienne constante 0x01 (= MATCH) faisait donc échouer l'annonce
+-- ALPN serveur et client, silencieusement.
 -- Liste ALPN annoncée par le serveur (wolfSSL attend une liste séparée par
 -- des virgules, pas le format wire TLS). `ALPN_PROTOCOLS` est le jeu opt-in du
 -- serveur DoH ; `DEFAULT_ALPN_PROTOCOLS` reste celui du portail AUTH (HTTP/1.1).
 ALPN_PROTOCOLS = "h2,http/1.1"
 DEFAULT_ALPN_PROTOCOLS = "http/1.1"
+-- Protocoles proposés par le client du repli DoH (h2 d'abord, HTTP/1.1 sinon).
+CLIENT_ALPN_PROTOCOLS = "h2,http/1.1"
 _alpn_available = nil
 
 --- Extract WolfSSL error queue messages
@@ -192,6 +199,22 @@ alpn_configure_ssl = (lib, ssl, protocols) ->
       #protocols, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
   ok and ret == 1
 
+--- Propose ALPN sur un objet SSL client (opt-in, avant le handshake).
+-- Un serveur qui ne connaît pas ALPN laisse le handshake se poursuivre, et
+-- l'appelant retombe alors sur HTTP/1.1. Un échec (symbole absent ou refus)
+-- n'est jamais fatal.
+-- @tparam table lib Bibliothèque FFI (libwolfssl ou stub de test).
+-- @tparam cdata ssl Objet WOLFSSL client.
+-- @tparam string|nil protocols Liste séparée par virgules (défaut h2,http/1.1).
+-- @treturn boolean true si la liste a été acceptée par wolfSSL.
+alpn_configure_client = (lib, ssl, protocols) ->
+  protocols or= CLIENT_ALPN_PROTOCOLS
+  return false unless symbol_available "wolfSSL_UseALPN", lib
+  ok, ret = pcall ->
+    lib.wolfSSL_UseALPN ssl, ffi.cast("char*", protocols),
+      #protocols, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
+  ok and ret == 1
+
 -- Create server context (compatible with luasec API)
 newcontext = (opts = {}) ->
   -- Extract certificate and key from opts
@@ -235,7 +258,16 @@ newcontext = (opts = {}) ->
       log_debug -> { action: "alpn_ssl_level", protocols: alpn_protocols }
     else
       _alpn_available = false
-      log_debug -> { action: "alpn_unavailable" }
+      -- Un symbole ALPN existe mais la configuration a échoué : ce n'est pas
+      -- une lib sans ALPN, c'est une régression silencieuse. La signaler.
+      if symbol_available "wolfSSL_CTX_UseALPN"
+        log_warn -> {
+          action: "alpn_context_failed"
+          protocols: alpn_protocols
+          detail: "wolfSSL_CTX_UseALPN présent mais refusé, et wolfSSL_UseALPN absent"
+        }
+      else
+        log_debug -> { action: "alpn_unavailable" }
   else
     log_debug -> { action: "alpn_unavailable" }
 
@@ -269,7 +301,7 @@ newclient_context = (opts={}) ->
     if ret != 1
       libwolfssl.wolfSSL_CTX_free ctx
       error "wolfSSL_CTX_load_verify_locations() failed for #{ca_file} (ret=#{ret})"
-  { :ctx, closed: false, verify_peer: opts.verify_peer == true, :ca_file }
+  { :ctx, closed: false, verify_peer: opts.verify_peer == true, :ca_file, is_client: true }
 
 -- Wrap raw socket with TLS
 -- @tparam table raw_socket Socket (lib.socket).
@@ -297,14 +329,34 @@ wrap = (raw_socket, ctx_obj, opts={}) ->
   alpn_protocols = ctx_obj.alpn_protocols or DEFAULT_ALPN_PROTOCOLS
   if ctx_obj.alpn_mode == "ssl"
     unless alpn_configure_ssl libwolfssl, ssl, alpn_protocols
-      log_debug -> { action: "alpn_ssl_failed", protocols: alpn_protocols }
+      -- Le symbole wolfSSL_UseALPN existe (mode ssl) : un échec n'est pas une
+      -- absence d'ALPN mais une régression. Visible en warn, pas en debug.
+      log_warn -> {
+        action: "alpn_ssl_failed"
+        protocols: alpn_protocols
+        detail: "wolfSSL_UseALPN présent mais refusé"
+      }
       _alpn_available = false
   elseif ctx_obj.alpn_mode == "ctx" and ctx_obj.alpn_configured_protocols != alpn_protocols
     unless alpn_configure_ctx libwolfssl, ctx_obj.ctx, alpn_protocols
-      log_debug -> { action: "alpn_ctx_update_failed", protocols: alpn_protocols }
+      log_warn -> {
+        action: "alpn_ctx_update_failed"
+        protocols: alpn_protocols
+        detail: "wolfSSL_CTX_UseALPN présent mais refusé"
+      }
       _alpn_available = false
     else
       ctx_obj.alpn_configured_protocols = alpn_protocols
+
+  -- ALPN client opt-in (opts.alpn_protocols, ex. "h2,http/1.1") : la liste est
+  -- proposée sur l'objet SSL avant le handshake. Ne s'applique qu'aux
+  -- contextes clients ; le serveur garde son annonce liée au contexte.
+  alpn_offered = nil
+  if ctx_obj.is_client and opts.alpn_protocols and #opts.alpn_protocols > 0
+    if alpn_configure_client libwolfssl, ssl, opts.alpn_protocols
+      alpn_offered = opts.alpn_protocols
+    else
+      log_debug -> { action: "alpn_client_unavailable", protocols: opts.alpn_protocols }
 
   -- SNI doit précéder le handshake (RFC 6066). Ne pas envoyer d'IP littérale.
   if opts.sni and #opts.sni > 0
@@ -323,6 +375,7 @@ wrap = (raw_socket, ctx_obj, opts={}) ->
   wrapped = {
     :ssl
     :raw_socket
+    :alpn_offered
     handshake_done: false
     closed: false
   }
@@ -381,11 +434,14 @@ ssl_mt.__index.doconnect = =>
   false, "tls_connect_error: err=#{err} #{ssl_errors}"
 
 ssl_mt.__index.selected_alpn = =>
-  return nil if _alpn_available == false
+  -- wolfSSL_ALPN_GetProtocol rend WOLFSSL_SUCCESS (= 1) et WOLFSSL_ALPN_NOT_FOUND
+  -- (= 0) quand rien n'a été négocié. Tester `ret == 0` (ancien code) rendait
+  -- donc toujours nil, y compris après une négociation réussie.
+  return nil unless symbol_available "wolfSSL_ALPN_GetProtocol"
   proto_ptr = ffi.new "char*[1]"
   proto_len = ffi.new "unsigned short[1]"
   ok, ret = pcall -> libwolfssl.wolfSSL_ALPN_GetProtocol @ssl, proto_ptr, proto_len
-  unless ok and ret == 0 and proto_ptr[0] != nil and proto_len[0] > 0
+  unless ok and ret == 1 and proto_ptr[0] != nil and proto_len[0] > 0
     return nil
   ffi.string proto_ptr[0], proto_len[0]
 
@@ -516,8 +572,11 @@ free_context = (ctx_obj) ->
   :symbol_available
   :alpn_configure_ctx
   :alpn_configure_ssl
+  :alpn_configure_client
   :ALPN_PROTOCOLS
   :DEFAULT_ALPN_PROTOCOLS
+  :CLIENT_ALPN_PROTOCOLS
+  :WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
   :libwolfssl
   :SSL_ERROR_NONE
   :SSL_ERROR_WANT_READ

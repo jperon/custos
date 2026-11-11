@@ -66,6 +66,10 @@ describe "auth/ffi_wolfssl", ->
 
   describe "ALPN adaptatif (h2,http/1.1)", ->
 
+    it "une seule constante CONTINUE_ON_MISMATCH, valeur 2", ->
+      assert.equals 2, ssl.WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
+      assert.is_nil rawget ssl, "WOLFSSL_ALPN_CONTINUE_ON_MISMATCH_OPT"
+
     it "préfère wolfSSL_CTX_UseALPN quand il est présent", ->
       captured = {}
       fake = {
@@ -77,7 +81,7 @@ describe "auth/ffi_wolfssl", ->
       assert.equals "ctx", mode
       assert.equals "h2,http/1.1", captured.list
       assert.equals 11, captured.size
-      assert.equals 1, captured.options
+      assert.equals 2, captured.options
 
     it "repli par objet SSL quand seul wolfSSL_UseALPN existe", ->
       captured = {}
@@ -90,7 +94,7 @@ describe "auth/ffi_wolfssl", ->
       assert.is_true ssl.alpn_configure_ssl fake, "SSL", ssl.ALPN_PROTOCOLS
       assert.equals "h2,http/1.1", captured.list
       assert.equals 11, captured.size
-      assert.equals 1, captured.options
+      assert.equals 2, captured.options
 
     it "ne tente rien quand aucun symbole ALPN n'est présent", ->
       fake = {}
@@ -115,6 +119,36 @@ describe "auth/ffi_wolfssl", ->
       assert.equals "ctx", ssl.alpn_configure_ctx fake, "CTX"
       assert.equals "http/1.1", captured.list
       assert.equals "http/1.1", ssl.DEFAULT_ALPN_PROTOCOLS
+
+  describe "ALPN client (repli DoH HTTP/2)", ->
+
+    it "propose h2,http/1.1 par défaut", ->
+      assert.equals "h2,http/1.1", ssl.CLIENT_ALPN_PROTOCOLS
+
+    it "alpn_configure_client passe CONTINUE_ON_MISMATCH (2)", ->
+      captured = {}
+      fake = {
+        wolfSSL_UseALPN: (obj, list, sz, opts) ->
+          captured = { list: ffi.string(list, sz), size: sz, options: opts }
+          1
+      }
+      assert.is_true ssl.alpn_configure_client fake, "SSL"
+      assert.equals "h2,http/1.1", captured.list
+      assert.equals 11, captured.size
+      assert.equals 2, captured.options
+
+    it "alpn_configure_client sans symbole ALPN → false, jamais d'exception", ->
+      assert.is_false ssl.alpn_configure_client {}, "SSL"
+
+    it "alpn_configure_client refuse un retour ≠ WOLFSSL_SUCCESS", ->
+      fake = { wolfSSL_UseALPN: -> -173 }
+      assert.is_false ssl.alpn_configure_client fake, "SSL"
+
+    it "newclient_context marque le contexte client (ALPN opt-in)", ->
+      ctx = ssl.newclient_context {}
+      assert.is_true ctx.is_client
+      assert.is_nil ctx.alpn_mode
+      ssl.free_context ctx
 
   describe "constantes d'erreur SSL", ->
     it "SSL_ERROR_NONE vaut 0", ->

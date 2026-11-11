@@ -633,16 +633,6 @@ handle_doh_client = function(args)
         alpn = selected_alpn or "none"
       }
     end)
-    if selected_alpn == "h2" then
-      log_warn(function()
-        return {
-          action = "http2_not_supported",
-          peer = peer_ip
-        }
-      end)
-      tls_client:close()
-      return 
-    end
     local peer_mac = get_mac(peer_ip)
     local peer_vlan = get_vlan(peer_ip)
     log_debug(function()
