@@ -903,3 +903,11 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   bridge. La détection des bibliothèques capture `ldconfig -p` une fois puis
   teste en shell pur (`case`), ce qui évite un faux échec par SIGPIPE sous
   `pipefail`. `doc/CHEATSHEET.md` est aligné.
+- **`install-owrt.moon --dry-run` exécutait quand même des commandes SSH.**
+  `capture` (utilisé par `ssh_capture`) ignorait `dry_run` : toute la phase de
+  détection (connectivité, gestionnaire de paquets, bridge, existence de
+  fichiers…) lançait de vrais `io.popen`/`ssh`. Correctif : en dry-run `capture`
+  n'exécute rien, affiche la commande et renvoie `"(dry-run : sortie non
+  capturée)"` ; `check_connectivity` et `detect_pkg_manager` court-circuitent
+  explicitement (gestionnaire supposé `apk`). Tests dans
+  `tests/unit/install_owrt_spec.moon`.

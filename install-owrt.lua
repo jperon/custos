@@ -50,6 +50,10 @@ Installer = function(cfg)
       return code == 0 or code == true
     end,
     capture = function(self, cmd)
+      if self.cfg.dry then
+        io.write("  " .. tostring(CYAN) .. "DRY" .. tostring(NC) .. " " .. tostring(cmd) .. "\n")
+        return "(dry-run : sortie non capturée)"
+      end
       local fh = io.popen(tostring(cmd) .. " 2>&1")
       if not (fh) then
         return nil
@@ -153,6 +157,10 @@ Installer = function(cfg)
     end,
     check_connectivity = function(self)
       step("Vérification de la connectivité SSH (" .. tostring(self.cfg.user) .. "@" .. tostring(self.cfg.host) .. ":" .. tostring(self.cfg.port) .. ")")
+      if self.cfg.dry then
+        warn("MODE DRY-RUN — connectivité non testée")
+        return true
+      end
       local out = self:ssh_capture("uname -a")
       if out and out:find("Linux") then
         ok("Connecté : " .. tostring(out:match('%S+%s+%S+%s+(%S+)')))
@@ -163,6 +171,11 @@ Installer = function(cfg)
     end,
     detect_pkg_manager = function(self)
       step("Détection du gestionnaire de paquets")
+      if self.cfg.dry then
+        self.cfg.pkg_mgr = "apk"
+        warn("MODE DRY-RUN — gestionnaire supposé : apk")
+        return true
+      end
       local out_apk = self:ssh_capture("command -v apk  2>/dev/null")
       local out_opkg = self:ssh_capture("command -v opkg 2>/dev/null")
       if out_apk and out_apk:match("/apk") then

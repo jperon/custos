@@ -56,6 +56,12 @@ Installer = (cfg) ->
       code == 0 or code == true
 
     capture: (cmd) =>
+      -- En dry-run, aucune commande ne doit partir : on affiche la commande et
+      -- on renvoie une sortie factice documentée (les étapes qui dépendent
+      -- d'une vraie réponse ont leur propre court-circuit `@cfg.dry`).
+      if @cfg.dry
+        io.write "  #{CYAN}DRY#{NC} #{cmd}\n"
+        return "(dry-run : sortie non capturée)"
       fh = io.popen "#{cmd} 2>&1"
       return nil unless fh
       out = fh\read "*a"
@@ -144,6 +150,9 @@ Installer = (cfg) ->
 
     check_connectivity: =>
       step "Vérification de la connectivité SSH (#{@cfg.user}@#{@cfg.host}:#{@cfg.port})"
+      if @cfg.dry
+        warn "MODE DRY-RUN — connectivité non testée"
+        return true
       out = @ssh_capture "uname -a"
       if out and out\find "Linux"
         ok "Connecté : #{out\match '%S+%s+%S+%s+(%S+)'}"
@@ -153,6 +162,10 @@ Installer = (cfg) ->
 
     detect_pkg_manager: =>
       step "Détection du gestionnaire de paquets"
+      if @cfg.dry
+        @cfg.pkg_mgr = "apk"
+        warn "MODE DRY-RUN — gestionnaire supposé : apk"
+        return true
       out_apk  = @ssh_capture "command -v apk  2>/dev/null"
       out_opkg = @ssh_capture "command -v opkg 2>/dev/null"
 

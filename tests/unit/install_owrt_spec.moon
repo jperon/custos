@@ -144,3 +144,26 @@ describe "install-owrt — validation parse_args", ->
   it "shell_quote neutralise les apostrophes", ->
     assert.equals "'root'", shell_quote "root"
     assert.equals "'a'\\''b'", shell_quote "a'b"
+
+-- ── Dry-run : aucune commande réelle ───────────────────────────────────────
+describe "install-owrt — dry-run", ->
+
+  it "capture ne lance aucune commande et renvoie une sortie factice", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: true }
+    original = io.popen
+    io.popen = -> error "io.popen interdit en dry-run"
+    ok, out = pcall -> inst\capture "uname -a"
+    io.popen = original
+    assert.is_true ok
+    assert.truthy out\match "dry%-run"
+
+  it "check_connectivity ne lance rien et réussit sans SSH", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: true }
+    inst.ssh_capture = -> error "ssh_capture interdit en dry-run"
+    assert.is_true inst\check_connectivity!
+
+  it "detect_pkg_manager suppose apk sans SSH", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: true }
+    inst.ssh_capture = -> error "ssh_capture interdit en dry-run"
+    assert.is_true inst\detect_pkg_manager!
+    assert.equals "apk", inst.cfg.pkg_mgr
