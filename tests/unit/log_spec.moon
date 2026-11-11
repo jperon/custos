@@ -43,7 +43,87 @@ describe "log", ->
     assert.are.equal "BLOCK|nil|y.example", fp
 
   it "rl_fingerprint : sans clé discriminante → action_key seul", ->
-    assert.are.equal "neigh_refreshed", log.rl_fingerprint "neigh_refreshed", {}, {}
+    assert.are.equal "action_quelconque", log.rl_fingerprint "action_quelconque", {}, {}
+
+  -- Résolution de la règle : action complète, puis action sans le préfixe du
+  -- worker, puis règle par défaut du NIVEAU même quand `action` est présent.
+  -- Avant correctif, une action non listée n'était jamais limitée et les
+  -- règles par défaut INFO:/DEBUG: ne s'appliquaient qu'aux messages sans
+  -- `action` (quasiment aucun).
+  describe "résolution de la règle de rate-limiting", ->
+    before_each ->
+      log._rl_reset!
+      log.set_action_prefix ""
+
+    it "INFO action non listée : défaut 60 s, empreinte sur les champs d'identité", ->
+      f = { action: "action_inconnue", qname: "a.example", pid: 42 }
+      assert.are.equal 0,  log.check_rl "INFO", f, 1000
+      assert.are.equal -1, log.check_rl "INFO", f, 1001
+      -- Fenêtre 60 s : à 1060 elle est expirée, réémission avec le compte 1.
+      assert.are.equal 1,  log.check_rl "INFO", f, 1060
+      assert.are.equal -1, log.check_rl "INFO", f, 1061
+
+    it "WARN action non listée : défaut 60 s", ->
+      f = { action: "warn_inconnue", peer: "10.0.0.2" }
+      assert.are.equal 0,  log.check_rl "WARN", f, 2000
+      assert.are.equal -1, log.check_rl "WARN", f, 2059
+      assert.are.equal 1,  log.check_rl "WARN", f, 2060
+
+    it "ERROR action non listée : défaut 10 s (erreurs jamais masquées longtemps)", ->
+      f = { action: "error_inconnue", peer: "10.0.0.2" }
+      assert.are.equal 0,  log.check_rl "ERROR", f, 3000
+      assert.are.equal -1, log.check_rl "ERROR", f, 3009
+      assert.are.equal 1,  log.check_rl "ERROR", f, 3010
+
+    it "DEBUG action non listée : défaut 30 s", ->
+      f = { action: "debug_inconnue", qname: "d.example" }
+      assert.are.equal 0,  log.check_rl "DEBUG", f, 4000
+      assert.are.equal -1, log.check_rl "DEBUG", f, 4029
+      assert.are.equal 1,  log.check_rl "DEBUG", f, 4030
+
+    it "champ d'identité différent → messages non fusionnés", ->
+      f1 = { action: "identite", qname: "a.example", src_ip: "10.0.0.2" }
+      f2 = { action: "identite", qname: "b.example", src_ip: "10.0.0.2" }
+      assert.are.equal 0,  log.check_rl "INFO", f1, 5000
+      assert.are.equal 0,  log.check_rl "INFO", f2, 5000
+      assert.are.equal -1, log.check_rl "INFO", f1, 5001
+      assert.are.equal -1, log.check_rl "INFO", f2, 5001
+
+    it "champ volatil différent (pid, txid, compteur) → mêmes messages fusionnés", ->
+      f1 = { action: "volatil", qname: "v.example", pid: 1, txid: "0x1", count: 1 }
+      f2 = { action: "volatil", qname: "v.example", pid: 2, txid: "0x2", count: 99 }
+      assert.are.equal 0,  log.check_rl "INFO", f1, 6000
+      assert.are.equal -1, log.check_rl "INFO", f2, 6001
+
+    it "action préfixée par le worker → règle spécifique (strip du préfixe)", ->
+      log.set_action_prefix "response_"
+      f = { action: "response_no_ipv6_for_client", client: "10.0.0.2" }
+      assert.are.equal 0,  log.check_rl "INFO", f, 7000
+      assert.are.equal -1, log.check_rl "INFO", f, 7119
+      assert.are.equal 1,  log.check_rl "INFO", f, 7120
+      autre = { action: "response_no_ipv6_for_client", client: "10.0.0.3" }
+      assert.are.equal 0, log.check_rl "INFO", autre, 7120
+
+    it "ALLOW action=response_dns_benchmark → règle ALLOW (mac_src, qname, qtype, 30 s)", ->
+      f = { action: "response_dns_benchmark", mac_src: "aa:bb", qname: "x.test", qtype: "A", src_ip: "10.0.0.2" }
+      assert.are.equal 0,  log.check_rl "ALLOW", f, 8000
+      assert.are.equal -1, log.check_rl "ALLOW", f, 8001
+      -- Fenêtre 30 s : expirée à 8030, réémission avec le compte 1.
+      assert.are.equal 1,  log.check_rl "ALLOW", f, 8030
+      autre = { action: "response_dns_benchmark", mac_src: "aa:bb", qname: "y.test", qtype: "A" }
+      assert.are.equal 0, log.check_rl "ALLOW", autre, 8030
+
+    it "BLOCK action=response_dns_benchmark → règle BLOCK (30 s)", ->
+      f = { action: "response_dns_benchmark", mac_src: "aa:bb", qname: "b.test", qtype: "AAAA" }
+      assert.are.equal 0,  log.check_rl "BLOCK", f, 9000
+      assert.are.equal -1, log.check_rl "BLOCK", f, 9029
+      assert.are.equal 1,  log.check_rl "BLOCK", f, 9030
+
+    it "actions de cycle de vie jamais limitées", ->
+      f = { action: "worker_died", name: "dns", pid: 123 }
+      assert.are.equal 0, log.check_rl "WARN", f, 10000
+      assert.are.equal 0, log.check_rl "WARN", f, 10001
+      assert.are.equal 0, log.check_rl "WARN", f, 10002
 
   -- RL_CONFIG.captive_redirect doit correspondre à l'action réellement émise
   -- par worker_captive (action: "redirect", préfixée "captive_" → "captive_redirect")

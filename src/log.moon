@@ -52,19 +52,68 @@ get_log_level_num = (level) -> LOG_LEVEL_MAP[level] or 0
 level_enabled = (level) -> get_log_level_num(level) >= CURRENT_LOG_LEVEL_NUM
 
 -- ── Rate-limiting ─────────────────────────────────────────────────
--- Clés discriminantes et fenêtre (secondes) par action ou niveau de log.
--- La clé de RL est fields.action ou, à défaut, le niveau (ALLOW/BLOCK).
+-- Empreinte par défaut : niveau + action + valeurs des champs d'identité
+-- ci-dessous. On n'y met JAMAIS les champs volatils (pid, txid, ports,
+-- durées, compteurs, tailles) : deux lignes qui n'en diffèrent que par eux
+-- doivent fusionner avec `suppressed=N`, pas se masquer mutuellement.
+-- Les champs absents ne participent pas à l'empreinte.
+RL_IDENTITY_KEYS = {
+  "peer", "peer_ip", "peer_mac"
+  "ip", "client", "client_ip", "client_mac", "mac", "mac_src", "src_ip"
+  "qname", "qnames", "domain", "qtype", "dst_ip"
+  "hostname", "sni", "cert", "key"
+  "path", "method", "url", "file"
+  "ifname", "name", "queue", "worker", "user", "vlan"
+  "resolver_ip", "upstream_ip", "addr"
+  "rule", "list", "err", "reason", "cmd"
+}
+
+-- Résolution : action complète, puis action sans le préfixe du worker, puis
+-- règle par défaut du NIVEAU (même quand `action` est présent). Avant ce
+-- correctif, une action non listée n'était jamais limitée : les entrées
+-- `INFO:`/`DEBUG:` ne s'appliquaient qu'aux messages sans champ `action`.
+--
+-- Fenêtres : ERROR/CRIT/ALERT/EMERG 10 s (ne jamais masquer longtemps une
+-- erreur), WARN/INFO/NOTICE 60 s, DEBUG/TRACE 30 s (fidélité de diagnostic),
+-- ALLOW/BLOCK 30 s (une entrée par triplet MAC/domaine/type).
 RL_CONFIG = {
-  captive_probe:      { keys: {"ip", "path"},                window: 60  }
   captive_redirect:   { keys: {"ip"},                        window: 60  }
   ALLOW:              { keys: {"mac_src", "qname", "qtype"}, window: 30  }
   BLOCK:              { keys: {"mac_src", "qname", "qtype"}, window: 30  }
   no_ipv6_for_client: { keys: {"client"},                    window: 120 }
   no_ipv4_for_client: { keys: {"client"},                    window: 120 }
-  neigh_refreshed:    { keys: {},                            window: 30  }
   response_dnsonly:   { keys: {"dst_ip", "qnames"},          window: 30  }
-  INFO:               { keys: {"action"},                     window: 10  }
-  DEBUG:              { keys: {"action"},                     window: 10  }
+  EMERG:              { keys: RL_IDENTITY_KEYS,              window: 10  }
+  ALERT:              { keys: RL_IDENTITY_KEYS,              window: 10  }
+  CRIT:               { keys: RL_IDENTITY_KEYS,              window: 10  }
+  ERROR:              { keys: RL_IDENTITY_KEYS,              window: 10  }
+  WARN:               { keys: RL_IDENTITY_KEYS,              window: 60  }
+  NOTICE:             { keys: RL_IDENTITY_KEYS,              window: 60  }
+  INFO:               { keys: RL_IDENTITY_KEYS,              window: 60  }
+  DEBUG:              { keys: RL_IDENTITY_KEYS,              window: 30  }
+  TRACE:              { keys: RL_IDENTITY_KEYS,              window: 30  }
+}
+
+-- Actions de cycle de vie jamais limitées : un crash répété (`worker_died`,
+-- `child_crashed`) ou un rechargement de config ne doit jamais disparaître
+-- derrière une fenêtre de suppression, même s'il se répète. Ces actions sont
+-- rares hors boucle de crash, donc les laisser passer ne peut pas noyer les
+-- logs. La comparaison se fait aussi après strip du préfixe worker.
+RL_NEVER_LIMIT = {
+  worker_died:                 true
+  child_crashed:               true
+  worker_started:              true
+  worker_stopping:             true
+  worker_start:                true
+  supervisor_running:          true
+  supervisor_sigterm:          true
+  supervisor_sighup_reload:    true
+  supervisor_sighup_kill:      true
+  supervisor_sighup_refork:    true
+  supervisor_sighup_forward_auth: true
+  "dns-filter_start":          true
+  config_source:               true
+  config_external_missing:     true
 }
 
 _rl = {}  -- { fingerprint → { ts, count, exp } }
@@ -84,6 +133,33 @@ _action_prefix = ""
 -- @treturn nil
 set_action_prefix = (prefix) ->
   _action_prefix = prefix or ""
+
+--- Indique si une action de cycle de vie est exemptée de rate-limiting.
+-- Teste l'action telle quelle puis sans le préfixe du worker courant.
+-- @tparam string|nil action Champ `action` du message
+-- @treturn boolean true si l'action ne doit jamais être supprimée
+_rl_never_limited = (action) ->
+  return false unless action
+  return true if RL_NEVER_LIMIT[action]
+  if _action_prefix != "" and action\sub(1, #_action_prefix) == _action_prefix
+    return true if RL_NEVER_LIMIT[action\sub(#_action_prefix + 1)]
+  false
+
+--- Résout la configuration de rate-limiting d'un message.
+-- Ordre : action complète, action sans le préfixe du worker, puis défaut du
+-- niveau (qui s'applique même avec un champ `action`).
+-- @tparam string level  Niveau de log
+-- @tparam table  fields Champs du message
+-- @treturn table|nil Configuration `{keys, window}` ou nil si aucune règle
+_rl_resolve_cfg = (level, fields) ->
+  action = fields.action
+  if action
+    cfg = RL_CONFIG[action]
+    return cfg if cfg
+    if _action_prefix != "" and action\sub(1, #_action_prefix) == _action_prefix
+      cfg = RL_CONFIG[action\sub(#_action_prefix + 1)]
+      return cfg if cfg
+  RL_CONFIG[level]
 
 --- Vérifie si un message doit être supprimé (rate-limiting).
 -- @tparam string level  Niveau de log
@@ -125,10 +201,13 @@ _rl_reset = ->
 
 check_rl = (level, fields, epoch) ->
   action_key = fields.action or level
-  cfg = RL_CONFIG[action_key]
+  return 0 if _rl_never_limited fields.action
+  cfg = _rl_resolve_cfg level, fields
   return 0 unless cfg
 
-  fp = rl_fingerprint action_key, fields, cfg.keys
+  -- Le niveau fait partie de l'empreinte : une même action émise en INFO et
+  -- en WARN ne doit pas partager le compteur de suppression de l'autre.
+  fp = rl_fingerprint "#{level}|#{action_key}", fields, cfg.keys
 
   -- write_log laisse `epoch` nil : `ts` vient d'être rempli par clock_gettime.
   -- Les tests passent une valeur explicite pour simuler le temps.

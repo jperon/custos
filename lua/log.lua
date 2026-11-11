@@ -29,14 +29,46 @@ local level_enabled
 level_enabled = function(level)
   return get_log_level_num(level) >= CURRENT_LOG_LEVEL_NUM
 end
+local RL_IDENTITY_KEYS = {
+  "peer",
+  "peer_ip",
+  "peer_mac",
+  "ip",
+  "client",
+  "client_ip",
+  "client_mac",
+  "mac",
+  "mac_src",
+  "src_ip",
+  "qname",
+  "qnames",
+  "domain",
+  "qtype",
+  "dst_ip",
+  "hostname",
+  "sni",
+  "cert",
+  "key",
+  "path",
+  "method",
+  "url",
+  "file",
+  "ifname",
+  "name",
+  "queue",
+  "worker",
+  "user",
+  "vlan",
+  "resolver_ip",
+  "upstream_ip",
+  "addr",
+  "rule",
+  "list",
+  "err",
+  "reason",
+  "cmd"
+}
 local RL_CONFIG = {
-  captive_probe = {
-    keys = {
-      "ip",
-      "path"
-    },
-    window = 60
-  },
   captive_redirect = {
     keys = {
       "ip"
@@ -71,10 +103,6 @@ local RL_CONFIG = {
     },
     window = 120
   },
-  neigh_refreshed = {
-    keys = { },
-    window = 30
-  },
   response_dnsonly = {
     keys = {
       "dst_ip",
@@ -82,18 +110,58 @@ local RL_CONFIG = {
     },
     window = 30
   },
-  INFO = {
-    keys = {
-      "action"
-    },
+  EMERG = {
+    keys = RL_IDENTITY_KEYS,
     window = 10
   },
-  DEBUG = {
-    keys = {
-      "action"
-    },
+  ALERT = {
+    keys = RL_IDENTITY_KEYS,
     window = 10
+  },
+  CRIT = {
+    keys = RL_IDENTITY_KEYS,
+    window = 10
+  },
+  ERROR = {
+    keys = RL_IDENTITY_KEYS,
+    window = 10
+  },
+  WARN = {
+    keys = RL_IDENTITY_KEYS,
+    window = 60
+  },
+  NOTICE = {
+    keys = RL_IDENTITY_KEYS,
+    window = 60
+  },
+  INFO = {
+    keys = RL_IDENTITY_KEYS,
+    window = 60
+  },
+  DEBUG = {
+    keys = RL_IDENTITY_KEYS,
+    window = 30
+  },
+  TRACE = {
+    keys = RL_IDENTITY_KEYS,
+    window = 30
   }
+}
+local RL_NEVER_LIMIT = {
+  worker_died = true,
+  child_crashed = true,
+  worker_started = true,
+  worker_stopping = true,
+  worker_start = true,
+  supervisor_running = true,
+  supervisor_sigterm = true,
+  supervisor_sighup_reload = true,
+  supervisor_sighup_kill = true,
+  supervisor_sighup_refork = true,
+  supervisor_sighup_forward_auth = true,
+  ["dns-filter_start"] = true,
+  config_source = true,
+  config_external_missing = true
 }
 local _rl = { }
 local _rl_inserts = 0
@@ -102,6 +170,38 @@ local _action_prefix = ""
 local set_action_prefix
 set_action_prefix = function(prefix)
   _action_prefix = prefix or ""
+end
+local _rl_never_limited
+_rl_never_limited = function(action)
+  if not (action) then
+    return false
+  end
+  if RL_NEVER_LIMIT[action] then
+    return true
+  end
+  if _action_prefix ~= "" and action:sub(1, #_action_prefix) == _action_prefix then
+    if RL_NEVER_LIMIT[action:sub(#_action_prefix + 1)] then
+      return true
+    end
+  end
+  return false
+end
+local _rl_resolve_cfg
+_rl_resolve_cfg = function(level, fields)
+  local action = fields.action
+  if action then
+    local cfg = RL_CONFIG[action]
+    if cfg then
+      return cfg
+    end
+    if _action_prefix ~= "" and action:sub(1, #_action_prefix) == _action_prefix then
+      cfg = RL_CONFIG[action:sub(#_action_prefix + 1)]
+      if cfg then
+        return cfg
+      end
+    end
+  end
+  return RL_CONFIG[level]
 end
 local rl_fingerprint
 rl_fingerprint = function(action_key, fields, keys)
@@ -137,11 +237,14 @@ end
 local check_rl
 check_rl = function(level, fields, epoch)
   local action_key = fields.action or level
-  local cfg = RL_CONFIG[action_key]
+  if _rl_never_limited(fields.action) then
+    return 0
+  end
+  local cfg = _rl_resolve_cfg(level, fields)
   if not (cfg) then
     return 0
   end
-  local fp = rl_fingerprint(action_key, fields, cfg.keys)
+  local fp = rl_fingerprint(tostring(level) .. "|" .. tostring(action_key), fields, cfg.keys)
   epoch = epoch or tonumber(ts.tv_sec)
   local entry = _rl[fp]
   if entry then
