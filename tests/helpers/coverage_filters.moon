@@ -13,6 +13,10 @@ M = {}
 M.INCLUDE_PREFIX = "lua/"
 M.EXCLUDE_PATTERNS = {
   "^lua/ipparse/"
+  -- Runtime MoonScript embarqué (sous-module tiers, compilé à part) : ce n'est
+  -- pas du code du projet, il ne doit pas apparaître dans le décompte.
+  "^lua/moonscript/"
+  "^lua/moon/"
   "^lua/ffi_defs"
   "^lua/ffi_ndpi"
   "^lua/ffi_xxhash"
