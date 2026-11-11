@@ -218,6 +218,20 @@ h2_goaway = (conn, code) ->
   h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0,
     "\x00\x00\x00\x00\x00\x00\x00" .. string.char(code)
 
+--- Traite une connexion HTTP/2 minimale (préface PRI + frames).
+-- Limites connues, volontairement figées par les tests :
+--   (a) HPACK n'est PAS décodé : `:method` et `:path` ne sont jamais lus, et
+--       le flux n'est considéré terminé que sur une frame DATA portant
+--       END_STREAM. Un GET RFC 8484 (HEADERS + END_STREAM, sans DATA) est donc
+--       rejeté (`nil, "h2_incomplete"` + GOAWAY).
+--   (b) Tout POST HTTP/2, quel que soit son chemin, est traité comme une
+--       requête DoH (pas de routage par `:path`).
+-- @tparam table  conn       Connexion TLS avec :receive(n|"*l") et :send(data).
+-- @tparam string peer_ip    IP du client (logs et décision de filtre).
+-- @tparam string peer_mac   MAC du client, ou nil.
+-- @tparam table  upstream   Handle du résolveur amont.
+-- @tparam number peer_vlan  VLAN du client, ou nil.
+-- @treturn string|nil  Réponse DNS brute, ou nil + erreur.
 handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
   -- Consomme la fin de la préface : "SM\r\n\r\n" (read_request a déjà lu "PRI * HTTP/2.0\r\n\r\n")
   conn\receive "*l"  -- "SM"

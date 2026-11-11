@@ -319,6 +319,22 @@ des cibles de chaîne — parité DoH non implémentée (hors périmètre actuel
 | `doh.validator` | Second avis DNS synchrone pour `worker_doh`. Interroge `second_opinion.resolvers` (ou per-règle) en UDP ou DoH. Timeout distinct `budget_ms` (UDP) / `doh_budget_ms` (DoH). `query_classified` renvoie un **override classifié** (`block`/`sinkhole`/`redirect`/`nil`) via `dns_classify.classify` (REFUSED → `block` explicite, comme l'ancien `query_verdict` booléen, toujours exposé en wrapper). |
 | `doh.query` | Cœur de traitement DoH : vol captif + `filter.decide` + `doh.validator` + upstream + nft |
 
+### Limites connues du serveur HTTP/2
+
+`worker_doh.handle_h2` implémente un sous-ensemble minimal de HTTP/2 et ne
+décode **pas HPACK** : il ne lit ni `:method` ni `:path`, et ne termine le flux
+que sur une frame DATA portant END_STREAM. Conséquences assumées, figées par
+`tests/unit/worker_doh_spec.moon` :
+
+- un **GET RFC 8484 en HTTP/2** (HEADERS + END_STREAM, sans DATA) est rejeté
+  (`nil, "h2_incomplete"` + GOAWAY) ;
+- tout **POST HTTP/2**, quel que soit son chemin, est traité comme une requête
+  DoH (aucun routage par `:path`).
+
+Les clients HTTP/1.1 (`POST /dns-query`, `GET /dns-query?dns=…`) ne sont pas
+concernés. Ne pas s'appuyer sur le HTTP/2 serveur pour du routage ou du GET
+RFC 8484 tant qu'HPACK n'est pas implémenté.
+
 ### Parité UDP/DoH : vol captif et overrides du second avis
 
 `doh.query` réplique deux comportements du plan de données UDP (sinon le résolveur

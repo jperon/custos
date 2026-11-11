@@ -195,3 +195,18 @@ describe "worker_doh.handle_h2 — plafond DATA", ->
     sent = conn._sent!
     expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,6)
     assert.equals expected_goaway, sent\sub -17
+
+-- ── handle_h2 : limite connue (GET HEADERS+END_STREAM sans DATA) ────────────
+
+describe "worker_doh.handle_h2 — GET HTTP/2 sans DATA", ->
+  it "HEADERS avec END_STREAM sans DATA → h2_incomplete + GOAWAY", ->
+    -- Limite connue : handle_h2 ne décode pas HPACK et ne termine le flux que
+    -- sur une frame DATA avec END_STREAM. Un GET RFC 8484 (HEADERS +
+    -- END_STREAM, sans DATA) est donc refusé avec GOAWAY.
+    conn = make_h2_conn h2_frame_raw 0x1, 0x1, 1, ""
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "h2_incomplete", err
+    sent = conn._sent!
+    expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,1)
+    assert.equals expected_goaway, sent\sub -17
