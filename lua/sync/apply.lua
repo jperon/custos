@@ -83,6 +83,16 @@ parse_args = function(args)
   end
   return result
 end
+local valid_hostname
+valid_hostname = function(host)
+  if not (type(host) == "string") then
+    return false
+  end
+  if host == "." or host == ".." then
+    return false
+  end
+  return host:match("^[%w_.%-]+$") ~= nil
+end
 local resolve_hostname
 resolve_hostname = function(popen)
   popen = popen or io.popen
@@ -96,6 +106,10 @@ resolve_hostname = function(popen)
   host = host and host:match("^%s*(.-)%s*$")
   if not (host and #host > 0) then
     io.stderr:write("apply: nom d'hôte vide (uname -n)\n")
+    return nil
+  end
+  if not (valid_hostname(host)) then
+    io.stderr:write("apply: nom d'hôte invalide (uname -n) : " .. tostring(host) .. "\n")
     return nil
   end
   return host
@@ -127,6 +141,10 @@ main = function()
     os.exit(1)
   end
   local hostname = opts.hostname
+  if hostname and not valid_hostname(hostname) then
+    io.stderr:write("apply: nom d'hôte invalide : " .. tostring(hostname) .. "\n")
+    os.exit(1)
+  end
   if not (hostname) then
     hostname = resolve_hostname()
     if not (hostname) then
@@ -175,6 +193,7 @@ return {
   main = main,
   parse_args = parse_args,
   resolve_hostname = resolve_hostname,
+  valid_hostname = valid_hostname,
   reload_supervisor = reload_supervisor,
   SIGHUP = SIGHUP
 }
