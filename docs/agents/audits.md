@@ -739,3 +739,51 @@ actions :
 
 **Vérification (2026-11-11, branche q-doh)** : `make check` OK ; `make test`
 = 2127 successes / 0 failures / 0 errors ; `make test-js` = 12 pass.
+
+### Branche t-doh — couverture de tests du volet DoH / outils
+
+Traitement des points T1 à T6 du rapport « doh-outils » (aucun changement de
+comportement, hors le bug ci-dessous).
+
+- **T1 — fait.** `tests/unit/worker_doh_spec.moon` couvre désormais le routage
+  HTTP/1.1 réel de `handle_doh_client` (GET `?dns=`, POST
+  `application/dns-message`, GET JSON, 400/413/415/502, timeout client et
+  `max_body` transmis à `read_request`, échec fatal de handshake) et les helpers
+  JSON/DNS (`url_decode`, `encode_qname` et label > 63, `qtype_from_name`,
+  `json_escape`, `rr_data_json`, `dns_response_json` sur réponses A/AAAA/
+  NXDOMAIN forgées). Les dépendances sont stubées par tables d'indirection ;
+  les fonctions testées sont exportées sans changement de comportement.
+- **T2 — fait.** `tests/unit/doh/upstream_spec.moon` couvre en plus la détection
+  IPv6, les timeouts `SO_RCVTIMEO`/`SO_SNDTIMEO`, les échecs
+  `socket()`/`inet_pton`/`connect`/`send`, le datagramme vide (`recv` = 0),
+  `probe_ipv6` et `close` sur handle nil ou fd négatif. Aucune I/O réseau.
+- **T3 — déjà couvert, rien à modifier.** `tests/unit/sync/apply_spec.moon`
+  vérifie déjà que `reload_supervisor` envoie `SIGHUP` au PID lu dans le
+  pidfile, qu'il n'appelle pas `kill` sans pidfile et qu'aucun `pkill` n'est
+  émis (cible unique, pas l'argv des workers).
+- **T4 — fait.** `tests/unit/install_owrt_spec.moon` couvre `run` sous les deux
+  sémantiques d'`os.execute` (0 et `true`), le quoting exact de
+  `ssh_prefix`/`ssh_run`/`ssh_capture`/`scp_send` (apostrophes, IPv6, port),
+  `build_local`, `install_pkg_deps` (apk/opkg), `upload_files`,
+  `cleanup_stale_files` (manifest depuis l'archive), `start_service` et
+  `health_check`. `os.execute` et `io.popen` sont restaurés en `after_each`,
+  aucun SSH réel.
+- **T5 — fait.** Nouveau `tests/unit/tools/scripts_spec.moon` : `embed_js.lua`
+  (JS contenant `]]` et `]=]`, niveau de long-bracket, round-trip),
+  `judge.moon` (exact et suffixe sur listes 6 et 8 octets, taille invalide,
+  liste vide, absence de `.bin`, usage) et `quick_coverage_report.lua`
+  (fichier absent, rapport nominal), plus `bash -n setup.sh`.
+  `idefix2filter.moon` n'est ni testé ni modifié (code mort, décision en
+  attente).
+- **T6 — fait, avec un bug révélé.** `tests/unit/doh/h2_frames_spec.moon`
+  couvre isolément `h2_recv_exact` (accumulation, EOF `nil, nil`, erreur non
+  réessayable, 50 `want_read_write`). Le test « frame de 0xFFFFFF rejetée »
+  a révélé que `handle_h2` testait `payload` alors que `h2_read_frame` renvoie
+  l'erreur en deuxième position (`nil, err` → `flags`) : la branche
+  `FRAME_SIZE_ERROR` était morte et le serveur répondait `GOAWAY`
+  `PROTOCOL_ERROR` (`h2_incomplete`). Corrigé (test de `flags`) ; le rejet
+  sans lecture du payload reste effectif.
+
+**Vérification (2026-11-11, branche t-doh)** : `make all` et `make check` OK ;
+`make test` = 2199 successes / 0 failures / 0 errors (`make test-js` inclus,
+0 échec).
