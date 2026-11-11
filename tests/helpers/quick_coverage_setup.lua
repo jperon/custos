@@ -17,25 +17,11 @@
 
 dofile "tests/helpers/busted_setup.lua"
 
-local INCLUDE_PREFIX = "lua/"
-local EXCLUDE_PATTERNS = {
-  "^lua/ipparse/",
-  "^lua/ffi_defs",
-  "^lua/ffi_ndpi",
-  "^lua/ffi_xxhash",
-  "^lua/auth/ffi_socket",
-  "^lua/auth/ffi_wolfssl",
-}
+local coverage_filters = require "coverage_filters"
 
 local seen = {}   -- [source] = { [line] = true }
 
-local function included(src)
-  if src:sub(1, #INCLUDE_PREFIX) ~= INCLUDE_PREFIX then return false end
-  for _, pat in ipairs(EXCLUDE_PATTERNS) do
-    if src:match(pat) then return false end
-  end
-  return true
-end
+local included = coverage_filters.included
 
 local function flush()
   local fh = io.open("tmp/coverage_quick/quick_coverage.lua", "w")
