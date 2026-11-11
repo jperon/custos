@@ -958,3 +958,43 @@ comportement, hors le bug ci-dessous).
 **Vérification (2026-11-11, branche t-doh)** : `make all` et `make check` OK ;
 `make test` = 2199 successes / 0 failures / 0 errors (`make test-js` inclus,
 0 échec).
+
+### d-ratelimit
+
+- **B9 de l'audit `auth-webui` : `register_rate_limit` / `register_rate_window`
+  déclarés mais jamais appliqués.** les clés figuraient dans
+  `src/webui/schema/config_schema.moon:106-107` et `doc/CONFIG.md:439-440`, mais
+  aucun code ne les lisait (`git grep register_rate_limit src/` ne renvoyait que
+  le schéma) : `POST /register` acceptait un nombre illimité de tentatives
+  (coût PBKDF2 côté client, remplissage de `/etc/custos/secrets`).
+  Correctif (décision : implémenter) :
+  - nouveau `src/auth/rate_limit.moon` : fenêtre **fixe** par client,
+    `key_for` (`:37`) retenant la MAC (minuscules) si elle est connue et non
+    `unknown`, sinon l'IP, avec préfixes `mac:`/`ip:` (et `unknown` si aucun
+    identifiant). `check` (`:125`) autorise `limit` tentatives puis renvoie le
+    nombre de secondes restantes ; `limit <= 0` court-circuite sans I/O.
+  - état partagé entre les enfants AUTH forké dans `<sessions_file>.ratelimit`,
+    au format texte non exécutable (`clé<TAB>compteur<TAB>reset_at`) : lecture
+    tolérante (fichier absent/illisible/corrompu → table vide), cycle
+    lecture-modification-écriture sous `lib.filelock.with_lock`, écriture
+    atomique (temporaire `.new.<pid>` + rename), purge des entrées expirées à
+    chaque écriture et plafond `MAX_ENTRIES = 4096` (`:26`). Toute erreur
+    interne est absorbée et la tentative est **acceptée** (fail-open) : le
+    limiteur ne fait jamais échouer une inscription.
+  - `src/auth/handlers.moon:319-345` : `handle_register` consomme une tentative
+    **avant** toute validation/écriture ; au-delà, réponse `429` avec en-tête
+    `Retry-After` et corps explicite, sans créer de compte ni toucher au fichier
+    de secrets. Logs `server_register_rate_limited` (refus) et
+    `server_register_rate_check_failed` (erreur interne, fail-open).
+  - `src/config.moon:297-298` : défauts `3` / `300` identiques au schéma webui ;
+    `:569-574` : normalisation (conversion numérique, fenêtre absente/nulle/
+    négative → 300, limite `0` préservée = désactivée).
+  - Tests : `tests/unit/auth/rate_limit_spec.moon` (12 cas : N tentatives puis
+    refus avec délai, expiration de fenêtre avec horloge injectée, clients
+    indépendants, purge, fichier absent/corrompu, limite 0, plafond, défauts),
+    `tests/unit/auth/register_spec.moon` (429 + `Retry-After` sans écriture,
+    réouverture après fenêtre, indépendance de deux clients, limite 0) et
+    `tests/unit/config_spec.moon` (défauts, valeurs explicites/textuelles,
+    fenêtre invalide).
+  - Documentation : `doc/CONFIG.md` (sémantique exacte des deux clés) et
+    `docs/agents/auth.md` (module et partage entre processus).
