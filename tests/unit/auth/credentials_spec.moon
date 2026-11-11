@@ -159,3 +159,67 @@ describe "auth/credentials", ->
       assert.is_nil secrets
       assert.truthy err\find("déjà pris", 1, true)
       os.remove path
+
+
+describe "auth/credentials — verrou et temporaires", ->
+
+  -- Inscription concurrente : deux enfants AUTH écrivent le fichier secrets.
+  -- Sans verrou, le dernier rename efface le compte ajouté par l'autre.
+  it "deux inscriptions successives → les deux comptes présents", ->
+    path = "tmp/test_reg_seq_#{os.time!}_#{math.random 100000}.txt"
+    register_user "first@domain.com", "password123", path, {}
+    register_user "second@domain.com", "password456", path, {}
+    secrets = load_secrets path
+    assert.is_not_nil secrets["first@domain.com"]
+    assert.is_not_nil secrets["second@domain.com"]
+    os.remove path
+
+  -- Le temporaire fixe « path.new » ne doit plus être utilisé : un répertoire
+  -- occupant ce nom ferait échouer io.open si le code y écrivait encore.
+  it "n'utilise plus le temporaire fixe .new (suffixe PID)", ->
+    path = "tmp/test_reg_tmpname_#{os.time!}_#{math.random 100000}.txt"
+    os.execute "mkdir -p #{path}.new"
+    secrets, err = register_user "tmpname@domain.com", "password123", path, {}
+    assert.is_not_nil secrets, tostring err
+    assert.is_not_nil secrets["tmpname@domain.com"]
+    os.remove path
+    os.execute "rmdir #{path}.new"
+
+  it "le fichier secrets final reste en 0600", ->
+    path = "tmp/test_reg_perm_#{os.time!}_#{math.random 100000}.txt"
+    register_user "perm@domain.com", "password123", path, {}
+    pipe = io.popen "stat -c %a #{path} 2>/dev/null"
+    mode = pipe and pipe\read "*l"
+    if pipe then pipe\close!
+    assert.equals "600", mode
+    os.remove path
+
+  it "deux processus concurrents (10 comptes chacun) → 20 présents", ->
+    pcall orig_ffi.cdef, [[
+      int fork(void);
+      int waitpid(int pid, int *status, int options);
+      void _exit(int status);
+    ]]
+    path = "tmp/test_reg_fork_#{os.time!}_#{math.random 100000}.txt"
+    os.remove path
+    os.remove path .. ".lock"
+
+    pid = orig_ffi.C.fork!
+    if pid == 0
+      ok = pcall ->
+        for i = 1, 10
+          register_user "child#{i}@domain.com", "password123", path, {}
+      if ok then orig_ffi.C._exit 0 else orig_ffi.C._exit 1
+      return
+
+    for i = 1, 10
+      register_user "parent#{i}@domain.com", "password123", path, {}
+
+    status = orig_ffi.new "int[1]"
+    orig_ffi.C.waitpid pid, status, 0
+    secrets = load_secrets path
+    count = 0
+    for _ in pairs secrets do count += 1
+    assert.equals 20, count
+    os.remove path
+    os.remove path .. ".lock"

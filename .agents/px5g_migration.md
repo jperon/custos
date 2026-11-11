@@ -99,13 +99,20 @@ local ctx = cert_module.load_or_generate_sni("example.com", cache)
 
 **Important** : WolfSSL exige des fichiers, pas des PEM strings. Les temporaires sont créés à la génération et cachés en mémoire.
 
+**État réel** : `load_or_generate_sni` est appelé par `server.moon` avec l'**IP
+locale** du socket (`getsockname`), pas avec le SNI du ClientHello. Les
+certificats dynamiques sont donc keyés par IP locale ; `sni_extractor` existe
+mais n'est pas branché (l'extraction SNI reste une évolution future).
+
 #### `server.moon`
 Au démarrage du serveur AUTH (`run()`) :
 1. Initialise un cache LRU `cert_cache.create_cache(100, 86400)`
 2. Génère le certificat initial (fallback générique "custos")
 3. Passe le cache dans `state.cert_cache`
 
-Le serveur conserve l'approche actuelle (certificat unique) mais est prêt pour l'intégration SNI :
+Le serveur conserve l'approche actuelle (certificat unique) ; le cache
+dynamique est actuellement keyé par l'IP locale, et l'intégration SNI reste
+une évolution future :
 - Extraction SNI du ClientHello brut
 - Appel à `load_or_generate_sni(sni_hostname, state.cert_cache)`
 - Utilisation du contexte SNI-spécifique

@@ -359,3 +359,68 @@ describe "auth/sessions", ->
       reset_cache!
       bind_session_mac EMAC, EMAC, "10.0.0.1", ENRICH_FILE
       os.remove ENRICH_FILE
+
+
+  -- ── with_sessions_lock : sérialisation lecture-modification-écriture ─────────
+  -- Chaque connexion du portail tourne dans un enfant forké : sans verrou, deux
+  -- enfants partant de la même photo écrasent leurs sessions respectives.
+  describe "with_sessions_lock", ->
+    { :with_sessions_lock } = require "auth.sessions"
+    ffi = require "ffi"
+    pcall ffi.cdef, [[ int flock(int fd, int operation); ]]
+    LOCK_FILE = "tmp/sessions_lock_spec.lua"
+    FORK_FILE = "tmp/sessions_lock_fork_spec.lua"
+
+    after_each ->
+      os.remove LOCK_FILE
+      os.remove LOCK_FILE .. ".lock"
+      os.remove FORK_FILE
+      os.remove FORK_FILE .. ".lock"
+
+    it "exécute fn et renvoie ses valeurs", ->
+      a, b = with_sessions_lock LOCK_FILE, -> "resultat", 42
+      assert.equals "resultat", a
+      assert.equals 42, b
+
+    it "relâche le verrou même si fn lève", ->
+      ok, err = pcall -> with_sessions_lock LOCK_FILE, -> error "boom"
+      assert.is_false ok
+      assert.truthy tostring(err)\find "boom"
+      v = with_sessions_lock LOCK_FILE, -> "libre"
+      assert.equals "libre", v
+
+    it "deux processus ajoutant 20 sessions chacun → 40 présentes", ->
+      pcall ffi.cdef, [[
+        int fork(void);
+        int waitpid(int pid, int *status, int options);
+        void _exit(int status);
+      ]]
+      os.remove FORK_FILE
+      write_sessions {}, FORK_FILE
+
+      pid = ffi.C.fork!
+      if pid == 0
+        -- Enfant : 20 sessions distinctes, sous verrou par cycle.
+        ok = pcall ->
+          for i = 1, 20
+            with_sessions_lock FORK_FILE, ->
+              t = load_sessions FORK_FILE
+              add_session t, string.format("02:00:00:00:00:%02x", i),
+                "10.0.0.#{i}", "child#{i}", FUTURE
+              write_sessions t, FORK_FILE
+        if ok then ffi.C._exit 0 else ffi.C._exit 1
+        return
+
+      for i = 1, 20
+        with_sessions_lock FORK_FILE, ->
+          t = load_sessions FORK_FILE
+          add_session t, string.format("01:00:00:00:00:%02x", i),
+            "10.1.0.#{i}", "parent#{i}", FUTURE
+          write_sessions t, FORK_FILE
+
+      status = ffi.new "int[1]"
+      ffi.C.waitpid pid, status, 0
+      t = load_sessions FORK_FILE
+      count = 0
+      for _ in pairs t do count += 1
+      assert.equals 40, count

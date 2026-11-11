@@ -114,3 +114,11 @@ describe "handle_ping (token périmé hors séquence)", ->
     assert.equals 204, status
     assert.is_not_nil headers["Set-Cookie"]
     assert.equals NOW + IDLE, ((load_sessions SESS)[MAC]).expires
+
+  it "MAC \"unknown\" n'est jamais traitée comme session invalidée (204)", ->
+    -- Comportement d'avant la branche : une MAC nil/"unknown" n'a pas de
+    -- session attendue et ne doit donc jamais être rejetée comme invalidée.
+    tok = token.generate "user", USER, "unknown", NOW + IDLE, KEY
+    status, headers = handle_ping (ping_req tok), IP, "unknown", make_state!
+    assert.equals 204, status
+    assert.is_not_nil headers["Set-Cookie"]

@@ -296,3 +296,84 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `devices//config.moon` silencieux. `resolve_hostname` (exportée, injectable)
   échoue désormais explicitement sur stderr, et `main` sort en erreur ;
   testée dans `tests/unit/sync/apply_spec.moon`.
+
+### Portail AUTH et sessions (branche fix-auth)
+
+- **Fichier de sessions : cycle lire-modifier-écrire non sérialisé entre enfants
+  AUTH.** `handle_login`/`handle_ping`/`handle_logout`/`handle_bye` faisaient
+  `load_sessions` puis `write_sessions` sans verrou : deux enfants partis de la
+  même photo écrasaient mutuellement leurs sessions (401 intempestif au ping
+  suivant), et le temporaire `.new` à nom fixe pouvait être écrit par deux
+  processus à la fois. Correctif : helper générique `lib.filelock.with_lock`
+  (flock `LOCK_EX` sur `<path>.lock`, ouvert après le fork), exposé par
+  `auth.sessions.with_sessions_lock` et utilisé autour des quatre cycles, plus
+  par `enrich_session_ip`/`bind_session_mac` ; temporaire de `write_sessions`
+  suffixé par le PID. Tests dans `tests/unit/auth/sessions_spec.moon`, dont une
+  concurrence réelle à deux processus (20+20 sessions → 40 conservées).
+- **Fichier de secrets : temporaire `.new` fixe et écriture non verrouillée.**
+  `register_user`/`update_user_hash`/`set_record` (`auth/credentials.moon`)
+  copiaient le fichier vers `secrets.new` puis `rename`, sans verrou : deux
+  inscriptions concurrentes pouvaient perdre un compte, et le temporaire fixe
+  être écrit par deux processus à la fois. Correctif : les trois fonctions
+  partagent `rewrite_secrets_file`, qui réécrit le fichier sous
+  `lib.filelock.with_lock` avec un temporaire suffixé par le PID (permissions
+  0600 conservées avant rename). `update_user_hash` n'a aucun appelant hors du
+  module (audit confirmé) mais reste exporté. Tests dans
+  `tests/unit/auth/credentials_spec.moon` (inscriptions successives et
+  concurrentes, temporaire fixe piégé par un répertoire, mode 0600).
+- **Session admin non revalidée après déconnexion.** `check_admin_session`
+  (`webui/handlers/admin_auth.moon`) ne vérifiait que signature/expiration du
+  token : après `/logout`, un cookie copié restait accepté sur `/admin/*`
+  jusqu'à son expiration. Correctif : vérification de session vivante
+  factorisée dans `auth.sessions.session_alive`, utilisée par le ping, la page
+  de succès `GET /` et l'authentification admin (source unique). Tests dans
+  `tests/unit/webui/admin_auth_spec.moon` (session supprimée / MAC différente).
+- **Cookie de session sans attribut `Secure`.** Le portail n'est servi qu'en
+  HTTPS (`auth.port`) ; le port captif (`auth.captive_port`) ne fait que forger
+  des redirections 302 vers le portail, sans jamais poser de cookie. Ajout de
+  `Secure` au cookie de session et au cookie d'effacement
+  (`auth/handlers.moon`), tests dans `tests/unit/auth/challenge_login_spec.moon`.
+- **Garde `nft_sess` redondante entre login et ping.** `refresh_nft`
+  (`auth/nft_auth_sets.moon`) retourne immédiatement si `nft_sess` est nil :
+  la garde conditionnelle de `handle_login` (et son log
+  `server_nft_sess_missing`) était redondante avec l'appel direct de
+  `handle_ping`. Garde supprimée côté login pour un comportement unique ;
+  `refresh_nft nil` est couvert par `tests/unit/auth/nft_auth_sets_spec.moon`.
+- **Index du cache de certificats exécuté sans restriction.** `cert_cache`
+  relisait `tmp/cert_cache_index.lua` via `loadstring` + exécution, sans
+  environnement isolé : un fichier altéré pouvait appeler n'importe quelle
+  fonction globale. Correctif : `setfenv(fn, {})` puis validation stricte du
+  résultat (table de `{expires_at=number, accessed_at=number}`, autres entrées
+  écartées) ; le log `entries` compte désormais les clés (`#` valait toujours 0
+  sur une table associative). L'emplacement relatif n'est pas modifié : le
+  service n'appelle aucun `chdir`, donc `tmp/…` se résout dans le répertoire
+  courant de procd (typiquement `/`, soit `/tmp/…`). Tests dans
+  `tests/unit/auth/cert_cache_spec.moon` (index valide, `os.execute`/boucle
+  avec effet de bord rejetés sans marqueur, entrée mal typée écartée).
+- **Commentaires faux signalés par l'audit.** `auth/credentials.moon`
+  annonçait « défaut : 100000 » pour `hash_password` alors que `DEFAULT_ITER =
+  10000` (`src/auth/credentials.moon:21`, corrigé au commentaire `:163`) — le
+  JS client (`auth/pages.moon` `PBKDF2_ITER = 10000`) est cohérent avec le
+  code. `auth/nft_sessions.moon` décrivait `add_authenticated_mac` comme
+  écrivant « les sets ip et ip6 » alors qu'elle n'écrit que
+  `authenticated_macs`. Enfin `auth/server.moon` importait `extract_sni` sans
+  l'utiliser et passait l'**IP locale** (`getsockname`) à `load_or_generate_sni`
+  : les certificats dits « SNI » sont en réalité keyés par IP locale (SNI non
+  extrait). Import retiré et commentaires/doc corrigés (`server.moon`,
+  `.agents/workers.md`, `.agents/px5g_migration.md`, `doc/CONFIG.md`).
+- **`lib.filelock.with_lock` : valeurs de retour tronquées.** `pcall fn`
+  empaqueté dans `{ ... }` laissait un trou dès que `fn` retournait
+  `nil, "erreur"` (`#results` indéfini, message perdu, cas de
+  `rewrite_secrets_file`) ; le nombre exact de retours est désormais figé par
+  `select "#"` et `unpack` borné. Test : `tests/unit/lib/filelock_spec.moon`.
+- **`handle_ping` : MAC nil/"unknown" rejetée à tort.** `session_alive`
+  retourne false pour ces MAC, ce qui les faisait passer pour des sessions
+  invalidées (401) alors qu'elles n'étaient jamais rejetées avant la branche ;
+  la condition d'origine (`mac and mac ~= "unknown" and not sessions[mac]`) est
+  restaurée. Test : `tests/unit/auth/ping_stale_token_spec.moon`.
+- **`check_admin_session` : session vivante exigée sans MAC connue.** La garde
+  verrouillait dehors les tokens à MAC nil/"unknown" et tout appel avec
+  `state.sessions_file` nil ; elle ne s'applique plus que si la MAC est connue
+  et le fichier défini, le token seul suffisant sinon. Tests :
+  `tests/unit/webui/admin_auth_spec.moon` (MAC inconnue acceptée, MAC connue
+  sans session refusée, MAC connue avec session acceptée).

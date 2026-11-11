@@ -11,7 +11,7 @@ ffi.cdef [[
 ]]
 { :log_info, :log_warn } = require "log"
 token = require "auth.token"
-{ :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
+{ :add_session, :purge_expired, :load_sessions, :write_sessions, :with_sessions_lock, :session_alive } = require "auth.sessions"
 { :verify_password, :verify_response, :register_user, :set_record, :parse_record, :valid_username } = require "auth.credentials"
 { :make_nonce, :verify_nonce, :salt_iter_for } = require "auth.challenge"
 { :page, :success_page, :css_content, :password_page, :password_changed_page
@@ -23,11 +23,14 @@ H = require "auth.html"
 SIGHUP = 1
 COOKIE_NAME = "custos_session"
 
+-- Le portail n'étant servi qu'en HTTPS (auth.port), le cookie porte Secure.
+-- Le port captif (auth.captive_port) ne sert aucun cookie : il ne fait que
+-- forger des redirections HTTP 302 vers https://<filtre>:33443/ (worker_captive).
 make_session_cookie = (tok) ->
-  "#{COOKIE_NAME}=#{tok}; Path=/; HttpOnly; SameSite=Strict"
+  "#{COOKIE_NAME}=#{tok}; Path=/; HttpOnly; Secure; SameSite=Strict"
 
 clear_session_cookie = ->
-  "#{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+  "#{COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"
 
 signal_parent_reload = ->
   parent_pid = tonumber ffi.C.getppid!
@@ -126,9 +129,6 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     unless stored and verify_password pass, stored
       return 401, {}, "Invalid credentials"
 
-  sessions = load_sessions state.sessions_file
-  purge_expired sessions
-
   -- Utiliser directement la MAC fournie par le worker NFQUEUE
   mac = peer_mac
 
@@ -145,20 +145,24 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   -- afficherait « connecté » alors que les sets nft ont déjà expiré. La tolérance
   -- aux pings retardés est absorbée par idle_timeout, pas par une marge séparée.
   token_expires = session_expires
-  add_session sessions, mac, peer_ip, user, session_expires
-  ok, err = write_sessions sessions, state.sessions_file
+  -- Cycle charge → purge → ajout → écriture sous verrou : deux logins
+  -- concurrents ne doivent pas perdre la session de l'autre.
+  ok, err = with_sessions_lock state.sessions_file, ->
+    sessions = load_sessions state.sessions_file
+    purge_expired sessions
+    add_session sessions, mac, peer_ip, user, session_expires
+    write_sessions sessions, state.sessions_file
   unless ok
     log_warn -> { action: "server_sessions_write_failed", path: state.sessions_file, err: err }
     return 500, {}, "Session persistence failed"
   log_info -> { action: "server_sessions_write_success", path: state.sessions_file, mac: mac }
 
-  -- Refresh nft sets (globaux + per-règle) for authenticated user
-  if state.nft_sess
-    ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user
-    unless ok
-      log_warn -> { action: "server_nft_refresh_failed", peer: peer_ip, mac: mac, err: tostring(err) }
-  else
-    log_warn -> { action: "server_nft_sess_missing", peer: peer_ip, mac: mac }
+  -- Refresh nft sets (globaux + per-règle) for authenticated user.
+  -- refresh_nft gère nft_sess nil : pas de garde redondante ici (même
+  -- comportement que handle_ping).
+  ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user
+  unless ok
+    log_warn -> { action: "server_nft_refresh_failed", peer: peer_ip, mac: mac, err: tostring(err) }
 
   tok = token.generate "user", user, mac, token_expires, state.token_key
   is_admin = is_admin_user state, user
@@ -195,17 +199,24 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
   -- Cookie et session DNS expirent ensemble (cf. handle_login).
   token_expires = session_expires
 
-  sessions = load_sessions state.sessions_file
-  purge_expired sessions
+  invalidated = false
+  with_sessions_lock state.sessions_file, ->
+    sessions = load_sessions state.sessions_file
+    purge_expired sessions
 
-  -- Rejeter si la session a été explicitement invalidée (logout).
-  -- Un token encore cryptographiquement valide ne doit pas recréer une session détruite.
-  if mac and mac ~= "unknown" and not sessions[mac\lower!]
+    -- Rejeter si la session a été explicitement invalidée (logout).
+    -- Un token encore cryptographiquement valide ne doit pas recréer une session détruite.
+    -- Une MAC nil/"unknown" n'a pas de session attendue : elle n'est jamais
+    -- considérée comme invalidée (comportement d'avant la branche).
+    if mac and mac ~= "unknown" and not sessions[mac\lower!]
+      invalidated = true
+      return
+    add_session sessions, mac, peer_ip, user, session_expires
+    write_sessions sessions, state.sessions_file
+
+  if invalidated
     log_info -> { action: "server_ping_session_invalidated", peer_ip: peer_ip, mac: mac }
     return 401, {}, ""
-
-  add_session sessions, mac, peer_ip, user, session_expires
-  write_sessions sessions, state.sessions_file
 
   refresh_nft state.nft_sess, peer_ip, mac, idle_timeout, user
 
@@ -220,9 +231,10 @@ handle_logout = (req, peer_ip, peer_mac, state) ->
   user = p and p.user
 
   if mac and mac ~= "unknown"
-    sessions = load_sessions state.sessions_file
-    sessions[mac\lower!] = nil
-    write_sessions sessions, state.sessions_file
+    with_sessions_lock state.sessions_file, ->
+      sessions = load_sessions state.sessions_file
+      sessions[mac\lower!] = nil
+      write_sessions sessions, state.sessions_file
 
   if state.nft_sess
     state.nft_sess.del_authenticated peer_ip
@@ -248,15 +260,16 @@ handle_bye = (req, peer_ip, peer_mac, state) ->
   now = os.time!
 
   if mac and mac ~= "unknown"
-    sessions = load_sessions state.sessions_file
-    s = sessions[mac\lower!]
-    if s
-      capped = now + grace
-      if not s.expires or s.expires > capped
-        s.expires = capped
-        write_sessions sessions, state.sessions_file
-        refresh_nft state.nft_sess, peer_ip, mac, grace, user or s.user if state.nft_sess
-        log_info -> { action: "server_bye_grace", mac: mac, grace: grace }
+    with_sessions_lock state.sessions_file, ->
+      sessions = load_sessions state.sessions_file
+      s = sessions[mac\lower!]
+      if s
+        capped = now + grace
+        if not s.expires or s.expires > capped
+          s.expires = capped
+          write_sessions sessions, state.sessions_file
+          refresh_nft state.nft_sess, peer_ip, mac, grace, user or s.user if state.nft_sess
+          log_info -> { action: "server_bye_grace", mac: mac, grace: grace }
 
   204, {}, ""
 
@@ -391,13 +404,10 @@ handle_request = (req, peer_ip, peer_mac, state) ->
     -- redemander les identifiants après login et après un rafraîchissement).
     cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
     p = token.verify cookie_val, state.token_key
-    if p and p.user and p.mac and p.mac ~= "unknown"
-      sessions = load_sessions state.sessions_file
-      purge_expired sessions
-      if sessions[p.mac\lower!]
-        is_admin = is_admin_user state, p.user
-        body = success_page state.auth_cfg, os.time!, is_admin
-        return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, body
+    if p and p.user and session_alive p.mac, state.sessions_file
+      is_admin = is_admin_user state, p.user
+      body = success_page state.auth_cfg, os.time!, is_admin
+      return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, body
     return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, login_page!
   elseif req.path == "/css" and req.method == "GET"
     return 200, { ["Content-Type"]: "text/css" }, css_content

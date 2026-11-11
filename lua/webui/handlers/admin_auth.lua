@@ -1,4 +1,6 @@
 local token = require("auth.token")
+local session_alive
+session_alive = require("auth.sessions").session_alive
 local H = require("auth.html")
 local css
 css = require("webui.css").css
@@ -37,6 +39,11 @@ check_admin_session = function(req, state)
   local p, _ = token.verify(cookie_val, state.token_key)
   if not (p and p.type == "user") then
     return nil, "unauth"
+  end
+  if p.mac and p.mac ~= "unknown" and state.sessions_file then
+    if not (session_alive(p.mac, state.sessions_file)) then
+      return nil, "unauth"
+    end
   end
   local admin_users = state.admin_users or { }
   if state.admin_allow_all_when_empty and #admin_users == 0 then

@@ -17,7 +17,6 @@ ffi = require "ffi"
 { :load_sessions } = require "auth.sessions"
 token = require "auth.token"
 { :load_or_generate_sni, :load_static, :load_or_generate_static } = require "auth.cert"
-{ :extract_sni } = require "auth.sni_extractor"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 config = require "config"
 { :read_request, :send_response, :apply_io_timeouts } = require "lib.http"
@@ -327,15 +326,15 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     ipv4: "0.0.0.0"
     ipv6: listen6 and "::" or nil
     sessions_file: sessions_file
-    cert_cache: if static_tls_ctx then "static cert + dynamic SNI cache" else "dynamic SNI cache (500 slots, 90d TTL)"
+    cert_cache: if static_tls_ctx then "static cert + dynamic per-local-IP cert cache" else "dynamic per-local-IP cert cache (500 slots, 90d TTL)"
   }
 
   replay_sessions_to_nft state
 
-  -- purge_expired n'était jamais appelé : le SNI client (charset filtré mais
-  -- sans limite de nombre) permettait de forcer un fichier .crt/.key par SNI
-  -- distinct présenté sur le port 443, jamais purgé (épuisement de la flash
-  -- à moyen terme). Le cache LRU/persistent_index en RAM ne vit réellement
+  -- purge_expired n'était jamais appelé : les certificats dynamiques sont
+  -- actuellement keyés par l'IP locale du socket (pas par le SNI, non extrait),
+  -- mais chaque IP distincte peut forcer un fichier .crt/.key jamais purgé
+  -- (épuisement de la flash à moyen terme). Le cache LRU/persistent_index en RAM ne vit réellement
   -- que dans ce process parent (chaque enfant forké par connexion n'en voit
   -- qu'une copie COW figée) : c'est donc ici, dans la boucle longue durée,
   -- qu'il faut purger périodiquement.

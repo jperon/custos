@@ -1,5 +1,7 @@
 local bit = require("bit")
 local ffi = require("ffi")
+local with_lock
+with_lock = require("lib.filelock").with_lock
 ffi.cdef([[  int chmod(const char *path, unsigned int mode);
 ]])
 local HASH_LEN = 32
@@ -266,6 +268,40 @@ valid_username = function(username)
   end
   return true
 end
+local rewrite_secrets_file
+rewrite_secrets_file = function(secrets_path, map_line, append_line)
+  return with_lock(secrets_path .. ".lock", function()
+    local tmp_path = secrets_path .. ".new." .. tostring(ffi.C.getpid())
+    local fh, err = io.open(tmp_path, "w")
+    if not (fh) then
+      return nil, "Impossible de créer le fichier temporaire : " .. tostring(err)
+    end
+    local existing = io.open(secrets_path, "r")
+    if existing then
+      for line in existing:lines() do
+        local out = map_line(line)
+        if out then
+          fh:write(out .. "\n")
+        end
+      end
+      existing:close()
+    end
+    if append_line then
+      local extra = append_line()
+      if extra then
+        fh:write(extra .. "\n")
+      end
+    end
+    fh:close()
+    ffi.C.chmod(tmp_path, 0x180)
+    local ok, rename_err = os.rename(tmp_path, secrets_path)
+    if not (ok) then
+      os.remove(tmp_path)
+      return nil, "Impossible de renommer le fichier secrets : " .. tostring(rename_err)
+    end
+    return true
+  end)
+end
 local register_user
 register_user = function(username, password, secrets_path, current_secrets)
   if not (valid_username(username)) then
@@ -278,25 +314,13 @@ register_user = function(username, password, secrets_path, current_secrets)
     return nil, "Ce nom d'utilisateur est déjà pris."
   end
   local hash_entry = hash_password(password)
-  local tmp_path = secrets_path .. ".new"
-  local fh, err = io.open(tmp_path, "w")
-  if not (fh) then
-    return nil, "Impossible de créer le fichier temporaire : " .. tostring(err)
-  end
-  local existing = io.open(secrets_path, "r")
-  if existing then
-    for line in existing:lines() do
-      fh:write(line .. "\n")
-    end
-    existing:close()
-  end
-  fh:write(tostring(username) .. ":" .. tostring(hash_entry) .. "\n")
-  fh:close()
-  ffi.C.chmod(tmp_path, 0x180)
-  local ok, rename_err = os.rename(tmp_path, secrets_path)
+  local ok, err = rewrite_secrets_file(secrets_path, function(line)
+    return line
+  end, function()
+    return tostring(username) .. ":" .. tostring(hash_entry)
+  end)
   if not (ok) then
-    os.remove(tmp_path)
-    return nil, "Impossible de renommer le fichier secrets : " .. tostring(rename_err)
+    return nil, err
   end
   local new_secrets, load_err = load_secrets(secrets_path)
   if not (new_secrets) then
@@ -307,67 +331,38 @@ end
 local update_user_hash
 update_user_hash = function(username, password, secrets_path)
   local new_entry = hash_password(password)
-  local tmp_path = secrets_path .. ".new"
-  local fh, err = io.open(tmp_path, "w")
-  if not (fh) then
-    return nil, "Impossible de créer le fichier temporaire : " .. tostring(err)
-  end
-  local existing = io.open(secrets_path, "r")
-  if existing then
-    for line in existing:lines() do
-      local u = line:match("^([^:]+):")
-      if u == username then
-        fh:write(tostring(username) .. ":" .. tostring(new_entry) .. "\n")
-      else
-        fh:write(line .. "\n")
-      end
+  return rewrite_secrets_file(secrets_path, function(line)
+    local u = line:match("^([^:]+):")
+    if u == username then
+      return tostring(username) .. ":" .. tostring(new_entry)
+    else
+      return line
     end
-    existing:close()
-  end
-  fh:close()
-  ffi.C.chmod(tmp_path, 0x180)
-  local ok, rename_err = os.rename(tmp_path, secrets_path)
-  if not (ok) then
-    os.remove(tmp_path)
-    return nil, "Impossible de renommer le fichier secrets : " .. tostring(rename_err)
-  end
-  return true
+  end)
 end
 local set_record
 set_record = function(username, record, secrets_path)
   if not (parse_record(record)) then
     return nil, "Enregistrement invalide."
   end
-  local tmp_path = secrets_path .. ".new"
-  local fh, err = io.open(tmp_path, "w")
-  if not (fh) then
-    return nil, "Impossible de créer le fichier temporaire : " .. tostring(err)
-  end
   local found = false
-  local existing = io.open(secrets_path, "r")
-  if existing then
-    for line in existing:lines() do
-      local u = line:match("^([^:]+):")
-      if u == username then
-        fh:write(tostring(username) .. ":" .. tostring(record) .. "\n")
-        found = true
-      else
-        fh:write(line .. "\n")
-      end
+  local replacer
+  replacer = function(line)
+    local u = line:match("^([^:]+):")
+    if u == username then
+      found = true
+      return tostring(username) .. ":" .. tostring(record)
+    else
+      return line
     end
-    existing:close()
   end
-  if not (found) then
-    fh:write(tostring(username) .. ":" .. tostring(record) .. "\n")
+  local appender
+  appender = function()
+    if not (found) then
+      return tostring(username) .. ":" .. tostring(record)
+    end
   end
-  fh:close()
-  ffi.C.chmod(tmp_path, 0x180)
-  local ok, rename_err = os.rename(tmp_path, secrets_path)
-  if not (ok) then
-    os.remove(tmp_path)
-    return nil, "Impossible de renommer le fichier secrets : " .. tostring(rename_err)
-  end
-  return true
+  return rewrite_secrets_file(secrets_path, replacer, appender)
 end
 return {
   pbkdf2 = pbkdf2,

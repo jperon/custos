@@ -9,10 +9,10 @@ do
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
 local token = require("auth.token")
-local add_session, purge_expired, load_sessions, write_sessions
+local add_session, purge_expired, load_sessions, write_sessions, with_sessions_lock, session_alive
 do
   local _obj_0 = require("auth.sessions")
-  add_session, purge_expired, load_sessions, write_sessions = _obj_0.add_session, _obj_0.purge_expired, _obj_0.load_sessions, _obj_0.write_sessions
+  add_session, purge_expired, load_sessions, write_sessions, with_sessions_lock, session_alive = _obj_0.add_session, _obj_0.purge_expired, _obj_0.load_sessions, _obj_0.write_sessions, _obj_0.with_sessions_lock, _obj_0.session_alive
 end
 local verify_password, verify_response, register_user, set_record, parse_record, valid_username
 do
@@ -41,11 +41,11 @@ local SIGHUP = 1
 local COOKIE_NAME = "custos_session"
 local make_session_cookie
 make_session_cookie = function(tok)
-  return tostring(COOKIE_NAME) .. "=" .. tostring(tok) .. "; Path=/; HttpOnly; SameSite=Strict"
+  return tostring(COOKIE_NAME) .. "=" .. tostring(tok) .. "; Path=/; HttpOnly; Secure; SameSite=Strict"
 end
 local clear_session_cookie
 clear_session_cookie = function()
-  return tostring(COOKIE_NAME) .. "=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+  return tostring(COOKIE_NAME) .. "=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"
 end
 local signal_parent_reload
 signal_parent_reload = function()
@@ -197,8 +197,6 @@ handle_login = function(req, peer_ip, peer_mac, state)
       return 401, { }, "Invalid credentials"
     end
   end
-  local sessions = load_sessions(state.sessions_file)
-  purge_expired(sessions)
   local mac = peer_mac
   if not (mac and mac ~= "unknown") then
     log_warn(function()
@@ -222,8 +220,12 @@ handle_login = function(req, peer_ip, peer_mac, state)
   local now = os.time()
   local session_expires = now + idle_timeout
   local token_expires = session_expires
-  add_session(sessions, mac, peer_ip, user, session_expires)
-  local ok, err = write_sessions(sessions, state.sessions_file)
+  local ok, err = with_sessions_lock(state.sessions_file, function()
+    local sessions = load_sessions(state.sessions_file)
+    purge_expired(sessions)
+    add_session(sessions, mac, peer_ip, user, session_expires)
+    return write_sessions(sessions, state.sessions_file)
+  end)
   if not (ok) then
     log_warn(function()
       return {
@@ -241,26 +243,16 @@ handle_login = function(req, peer_ip, peer_mac, state)
       mac = mac
     }
   end)
-  if state.nft_sess then
-    ok, err = pcall(function()
-      return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
-    end)
-    if not (ok) then
-      log_warn(function()
-        return {
-          action = "server_nft_refresh_failed",
-          peer = peer_ip,
-          mac = mac,
-          err = tostring(err)
-        }
-      end)
-    end
-  else
+  ok, err = pcall(function()
+    return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
+  end)
+  if not (ok) then
     log_warn(function()
       return {
-        action = "server_nft_sess_missing",
+        action = "server_nft_refresh_failed",
         peer = peer_ip,
-        mac = mac
+        mac = mac,
+        err = tostring(err)
       }
     end)
   end
@@ -312,9 +304,18 @@ handle_ping = function(req, peer_ip, peer_mac, state)
   local now = os.time()
   local session_expires = now + idle_timeout
   local token_expires = session_expires
-  local sessions = load_sessions(state.sessions_file)
-  purge_expired(sessions)
-  if mac and mac ~= "unknown" and not sessions[mac:lower()] then
+  local invalidated = false
+  with_sessions_lock(state.sessions_file, function()
+    local sessions = load_sessions(state.sessions_file)
+    purge_expired(sessions)
+    if mac and mac ~= "unknown" and not sessions[mac:lower()] then
+      invalidated = true
+      return 
+    end
+    add_session(sessions, mac, peer_ip, user, session_expires)
+    return write_sessions(sessions, state.sessions_file)
+  end)
+  if invalidated then
     log_info(function()
       return {
         action = "server_ping_session_invalidated",
@@ -324,8 +325,6 @@ handle_ping = function(req, peer_ip, peer_mac, state)
     end)
     return 401, { }, ""
   end
-  add_session(sessions, mac, peer_ip, user, session_expires)
-  write_sessions(sessions, state.sessions_file)
   refresh_nft(state.nft_sess, peer_ip, mac, idle_timeout, user)
   local new_tok = token.generate("user", user, mac, token_expires, state.token_key)
   log_info(function()
@@ -345,9 +344,11 @@ handle_logout = function(req, peer_ip, peer_mac, state)
   local mac = (p and p.mac) or peer_mac
   local user = p and p.user
   if mac and mac ~= "unknown" then
-    local sessions = load_sessions(state.sessions_file)
-    sessions[mac:lower()] = nil
-    write_sessions(sessions, state.sessions_file)
+    with_sessions_lock(state.sessions_file, function()
+      local sessions = load_sessions(state.sessions_file)
+      sessions[mac:lower()] = nil
+      return write_sessions(sessions, state.sessions_file)
+    end)
   end
   if state.nft_sess then
     state.nft_sess.del_authenticated(peer_ip)
@@ -372,25 +373,27 @@ handle_bye = function(req, peer_ip, peer_mac, state)
   local grace = state.auth_cfg.close_grace or 45
   local now = os.time()
   if mac and mac ~= "unknown" then
-    local sessions = load_sessions(state.sessions_file)
-    local s = sessions[mac:lower()]
-    if s then
-      local capped = now + grace
-      if not s.expires or s.expires > capped then
-        s.expires = capped
-        write_sessions(sessions, state.sessions_file)
-        if state.nft_sess then
-          refresh_nft(state.nft_sess, peer_ip, mac, grace, user or s.user)
+    with_sessions_lock(state.sessions_file, function()
+      local sessions = load_sessions(state.sessions_file)
+      local s = sessions[mac:lower()]
+      if s then
+        local capped = now + grace
+        if not s.expires or s.expires > capped then
+          s.expires = capped
+          write_sessions(sessions, state.sessions_file)
+          if state.nft_sess then
+            refresh_nft(state.nft_sess, peer_ip, mac, grace, user or s.user)
+          end
+          return log_info(function()
+            return {
+              action = "server_bye_grace",
+              mac = mac,
+              grace = grace
+            }
+          end)
         end
-        log_info(function()
-          return {
-            action = "server_bye_grace",
-            mac = mac,
-            grace = grace
-          }
-        end)
       end
-    end
+    end)
   end
   return 204, { }, ""
 end
@@ -578,16 +581,12 @@ handle_request = function(req, peer_ip, peer_mac, state)
   if req.path == "/" and req.method == "GET" then
     local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)
     local p = token.verify(cookie_val, state.token_key)
-    if p and p.user and p.mac and p.mac ~= "unknown" then
-      local sessions = load_sessions(state.sessions_file)
-      purge_expired(sessions)
-      if sessions[p.mac:lower()] then
-        local is_admin = is_admin_user(state, p.user)
-        local body = success_page(state.auth_cfg, os.time(), is_admin)
-        return 200, {
-          ["Content-Type"] = "text/html; charset=UTF-8"
-        }, body
-      end
+    if p and p.user and session_alive(p.mac, state.sessions_file) then
+      local is_admin = is_admin_user(state, p.user)
+      local body = success_page(state.auth_cfg, os.time(), is_admin)
+      return 200, {
+        ["Content-Type"] = "text/html; charset=UTF-8"
+      }, body
     end
     return 200, {
       ["Content-Type"] = "text/html; charset=UTF-8"

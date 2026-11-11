@@ -7,6 +7,8 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
+local with_lock
+with_lock = require("lib.filelock").with_lock
 local AT_FDCWD = -100
 local AT_STATX_SYNC_AS_STAT = 0x0000
 local STATX_BASIC_STATS = 0x000007ff
@@ -47,7 +49,7 @@ serialize = function(sessions)
 end
 local write_sessions
 write_sessions = function(sessions, path)
-  local tmp_path = path .. ".new"
+  local tmp_path = path .. ".new." .. tostring(ffi.C.getpid())
   local fh, err = io.open(tmp_path, "w")
   if not (fh) then
     return false, "impossible d'écrire " .. tostring(tmp_path) .. " : " .. tostring(err)
@@ -59,6 +61,10 @@ write_sessions = function(sessions, path)
     return false, "rename() échoué : " .. tostring(tostring(err2))
   end
   return true
+end
+local with_sessions_lock
+with_sessions_lock = function(path, fn)
+  return with_lock(path .. ".lock", fn)
 end
 local load_sessions
 load_sessions = function(path)
@@ -106,6 +112,15 @@ purge_expired = function(sessions)
       sessions[mac] = nil
     end
   end
+end
+local session_alive
+session_alive = function(mac, path, sessions_arg)
+  if not (mac and mac ~= "unknown" and path) then
+    return false
+  end
+  local sessions = sessions_arg or load_sessions(path)
+  purge_expired(sessions)
+  return sessions[mac:lower()] ~= nil
 end
 local _cache = nil
 local _cache_time = 0
@@ -164,34 +179,36 @@ enrich_session_ip = function(mac, ip, path)
     return false
   end
   mac = mac:lower()
-  local sessions = load_sessions(path)
-  local s = sessions[mac]
-  if not (s) then
-    local _old_mac, found = find_session_by_ip(sessions, ip)
-    s = found
-  end
-  if not (s) then
-    return false
-  end
-  local family
-  if ip:find(":", 1, true) then
-    family = "ipv6"
-  else
-    family = "ipv4"
-  end
-  s.ips = s.ips or { }
-  if s.ips[family] and s.ips[family] ~= ip then
-    return false
-  end
-  if s.ips[family] == ip and sessions[mac] == s then
-    return false
-  end
-  s.ips[family] = ip
-  s.mac = mac
-  sessions[mac] = s
-  write_sessions(sessions, path)
-  reset_cache()
-  return true
+  return with_sessions_lock(path, function()
+    local sessions = load_sessions(path)
+    local s = sessions[mac]
+    if not (s) then
+      local _old_mac, found = find_session_by_ip(sessions, ip)
+      s = found
+    end
+    if not (s) then
+      return false
+    end
+    local family
+    if ip:find(":", 1, true) then
+      family = "ipv6"
+    else
+      family = "ipv4"
+    end
+    s.ips = s.ips or { }
+    if s.ips[family] and s.ips[family] ~= ip then
+      return false
+    end
+    if s.ips[family] == ip and sessions[mac] == s then
+      return false
+    end
+    s.ips[family] = ip
+    s.mac = mac
+    sessions[mac] = s
+    write_sessions(sessions, path)
+    reset_cache()
+    return true
+  end)
 end
 local bind_session_mac
 bind_session_mac = function(session_mac, current_mac, ip, path)
@@ -203,35 +220,37 @@ bind_session_mac = function(session_mac, current_mac, ip, path)
   if session_mac == current_mac then
     return enrich_session_ip(current_mac, ip, path)
   end
-  local sessions = load_sessions(path)
-  local s = (session_mac and sessions[session_mac]) or nil
-  if not (s) then
-    local _old_mac, found = find_session_by_ip(sessions, ip)
-    session_mac = _old_mac
-    s = found
-  end
-  if not (s) then
-    return false
-  end
-  s.mac = current_mac
-  if ip then
-    local family
-    if ip:find(":", 1, true) then
-      family = "ipv6"
-    else
-      family = "ipv4"
+  return with_sessions_lock(path, function()
+    local sessions = load_sessions(path)
+    local s = (session_mac and sessions[session_mac]) or nil
+    if not (s) then
+      local _old_mac, found = find_session_by_ip(sessions, ip)
+      session_mac = _old_mac
+      s = found
     end
-    s.ips = s.ips or { }
-    local _update_0 = family
-    s.ips[_update_0] = s.ips[_update_0] or ip
-  end
-  sessions[current_mac] = s
-  if session_mac and session_mac ~= current_mac then
-    sessions[session_mac] = nil
-  end
-  write_sessions(sessions, path)
-  reset_cache()
-  return true
+    if not (s) then
+      return false
+    end
+    s.mac = current_mac
+    if ip then
+      local family
+      if ip:find(":", 1, true) then
+        family = "ipv6"
+      else
+        family = "ipv4"
+      end
+      s.ips = s.ips or { }
+      local _update_0 = family
+      s.ips[_update_0] = s.ips[_update_0] or ip
+    end
+    sessions[current_mac] = s
+    if session_mac and session_mac ~= current_mac then
+      sessions[session_mac] = nil
+    end
+    write_sessions(sessions, path)
+    reset_cache()
+    return true
+  end)
 end
 local lookup_session
 lookup_session = function(sessions_table, lookup_mac, ip)
@@ -306,6 +325,8 @@ return {
   write_sessions = write_sessions,
   load_sessions = load_sessions,
   add_session = add_session,
+  with_sessions_lock = with_sessions_lock,
+  session_alive = session_alive,
   purge_expired = purge_expired,
   read_cached = read_cached,
   reset_cache = reset_cache,

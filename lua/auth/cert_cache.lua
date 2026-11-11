@@ -38,26 +38,63 @@ load_persistent_index = function(index_path)
   if not (content and #content > 0) then
     return { }
   end
-  local status, result = pcall(loadstring, content)
-  if not (status) then
+  local loaded_fn, load_err = loadstring(content)
+  if not (loaded_fn) then
     log_warn(function()
       return {
         action = "cert_cache_load_index_failed",
         path = index_path,
-        err = result
+        err = load_err
       }
     end)
     return { }
   end
-  local loaded_fn = result()
+  setfenv(loaded_fn, { })
+  local ok, result = pcall(loaded_fn)
+  if not (ok and type(result) == "table") then
+    log_warn(function()
+      return {
+        action = "cert_cache_load_index_failed",
+        path = index_path,
+        err = tostring(result)
+      }
+    end)
+    return { }
+  end
+  local index = { }
+  for hostname, entry in pairs(result) do
+    local _continue_0 = false
+    repeat
+      if not (type(hostname) == "string" and type(entry) == "table") then
+        _continue_0 = true
+        break
+      end
+      if not (type(entry.expires_at) == "number" and type(entry.accessed_at) == "number") then
+        _continue_0 = true
+        break
+      end
+      index[hostname] = {
+        expires_at = entry.expires_at,
+        accessed_at = entry.accessed_at
+      }
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  local count = 0
+  for _ in pairs(index) do
+    count = count + 1
+  end
   log_debug(function()
     return {
       action = "cert_cache_loaded_index",
       path = index_path,
-      entries = #loaded_fn
+      entries = count
     }
   end)
-  return loaded_fn or { }
+  return index
 end
 local create_cache
 create_cache = function(max_size, ttl, cert_dir)

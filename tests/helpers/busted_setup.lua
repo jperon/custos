@@ -51,6 +51,17 @@ pcall(function()
               unsigned int mask, struct statx *statxbuf);
   ]])
 end)
+pcall(function()
+  return ffi.cdef([[    int flock(int fd, int operation);
+    int getpid(void);
+  ]])
+end)
+pcall(function()
+  return ffi.cdef([[    int fork(void);
+    int waitpid(int pid, int *status, int options);
+    void _exit(int status);
+  ]])
+end)
 if not (package.loaded["config"]) then
   package.loaded["config"] = {
     PROTO_TCP = 6,

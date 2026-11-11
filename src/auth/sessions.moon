@@ -11,6 +11,7 @@ os_rename = os.rename
 -- neigh = require "neigh" (chargé dynamiquement dans session_for_mac pour les tests)
 { :log_info } = require "log"
 { :ffi, :libc } = require "ffi_defs"
+{ :with_lock } = require "lib.filelock"
 
 -- ── Signature de fichier (statx) ─────────────────────────────────────────────
 -- Permet de prouver qu'un fichier de sessions n'a PAS changé depuis le dernier
@@ -66,11 +67,15 @@ serialize = (sessions) ->
 -- ── Persistance ──────────────────────────────────────────────────
 
 --- Écrit les sessions dans un fichier de manière atomique.
+-- Le temporaire porte le PID pour que deux enfants concurrents n'écrivent
+-- jamais le même fichier intermédiaire (le rename reste atomique). La
+-- sérialisation lecture-modification-écriture doit être faite sous
+-- with_sessions_lock par les appelants qui partent d'une photo du fichier.
 -- @tparam table  sessions Table de sessions
 -- @tparam string path     Chemin du fichier de sessions cible
 -- @treturn boolean true si l'écriture a réussi
 write_sessions = (sessions, path) ->
-  tmp_path = path .. ".new"
+  tmp_path = path .. ".new." .. tostring ffi.C.getpid!
   fh, err = io.open tmp_path, "w"
   return false, "impossible d'écrire #{tmp_path} : #{err}" unless fh
   fh\write serialize sessions
@@ -78,6 +83,15 @@ write_sessions = (sessions, path) ->
   ok, err2 = os_rename tmp_path, path
   return false, "rename() échoué : #{tostring err2}" unless ok
   true
+
+--- Exécute fn en tenant le verrou exclusif du fichier de sessions.
+-- Les cycles charge → modifie → écrit doivent être intégralement exécutés dans
+-- fn, sinon deux enfants partis de la même photo effacent leurs sessions.
+-- @tparam string   path Chemin du fichier de sessions
+-- @tparam function fn   Fonction à exécuter sous verrou
+-- @treturn ... Valeurs de retour de fn
+with_sessions_lock = (path, fn) ->
+  with_lock path .. ".lock", fn
 
 --- Charge les sessions depuis un fichier Lua.
 load_sessions = (path) ->
@@ -119,6 +133,20 @@ purge_expired = (sessions) ->
   now = os_time!
   for mac, s in pairs sessions
     sessions[mac] = nil if s.expires and now > s.expires
+
+--- Vrai si une session vivante existe pour cette MAC.
+-- Source unique de la vérification « session non invalidée » utilisée par le
+-- ping, la page de succès et l'interface admin : un token encore
+-- cryptographiquement valide ne suffit pas après un logout.
+-- @tparam string mac  Adresse MAC du client (nil/inconnue → false)
+-- @tparam string path Chemin du fichier de sessions
+-- @tparam table|nil sessions_arg Table déjà chargée (évite un rechargement)
+-- @treturn boolean true si la session existe et n'est pas expirée
+session_alive = (mac, path, sessions_arg) ->
+  return false unless mac and mac != "unknown" and path
+  sessions = sessions_arg or load_sessions path
+  purge_expired sessions
+  sessions[mac\lower!] != nil
 
 -- ── Cache de lecture (côté workers question/response) ────────────────────────
 
@@ -177,32 +205,33 @@ enrich_session_ip = (mac, ip, path) ->
   return false unless valid_mac(mac) and ip and path
   mac = mac\lower!
 
-  sessions = load_sessions path
-  s = sessions[mac]
-  unless s
-    _old_mac, found = find_session_by_ip sessions, ip
-    s = found
-  return false unless s
+  with_sessions_lock path, ->
+    sessions = load_sessions path
+    s = sessions[mac]
+    unless s
+      _old_mac, found = find_session_by_ip sessions, ip
+      s = found
+    return false unless s
 
-  family = if ip\find ":", 1, true then "ipv6" else "ipv4"
-  s.ips or= {}
+    family = if ip\find ":", 1, true then "ipv6" else "ipv4"
+    s.ips or= {}
 
-  -- Ne pas écraser une IP existante de la même famille
-  if s.ips[family] and s.ips[family] != ip
-    return false  -- IP différente pour cette famille : pas d'enrichissement
+    -- Ne pas écraser une IP existante de la même famille
+    if s.ips[family] and s.ips[family] != ip
+      return false  -- IP différente pour cette famille : pas d'enrichissement
 
-  if s.ips[family] == ip and sessions[mac] == s
-    return false  -- Déjà présente sous cette MAC : rien à faire
+    if s.ips[family] == ip and sessions[mac] == s
+      return false  -- Déjà présente sous cette MAC : rien à faire
 
-  -- Nouvelle IP ou session trouvée par IP sous une autre MAC : enregistrer
-  -- sous la MAC réellement observée sur le paquet DNS.
-  s.ips[family] = ip
-  s.mac = mac
-  sessions[mac] = s
-  write_sessions sessions, path
-  reset_cache!  -- Invalider le cache pour que la nouvelle IP soit lue prochainement
+    -- Nouvelle IP ou session trouvée par IP sous une autre MAC : enregistrer
+    -- sous la MAC réellement observée sur le paquet DNS.
+    s.ips[family] = ip
+    s.mac = mac
+    sessions[mac] = s
+    write_sessions sessions, path
+    reset_cache!  -- Invalider le cache pour que la nouvelle IP soit lue prochainement
 
-  true
+    true
 
 bind_session_mac = (session_mac, current_mac, ip, path) ->
   return false unless valid_mac(current_mac) and path
@@ -210,25 +239,26 @@ bind_session_mac = (session_mac, current_mac, ip, path) ->
   session_mac = session_mac and session_mac\lower! or nil
   return enrich_session_ip current_mac, ip, path if session_mac == current_mac
 
-  sessions = load_sessions path
-  s = (session_mac and sessions[session_mac]) or nil
-  unless s
-    _old_mac, found = find_session_by_ip sessions, ip
-    session_mac = _old_mac
-    s = found
-  return false unless s
+  with_sessions_lock path, ->
+    sessions = load_sessions path
+    s = (session_mac and sessions[session_mac]) or nil
+    unless s
+      _old_mac, found = find_session_by_ip sessions, ip
+      session_mac = _old_mac
+      s = found
+    return false unless s
 
-  s.mac = current_mac
-  if ip
-    family = if ip\find ":", 1, true then "ipv6" else "ipv4"
-    s.ips or= {}
-    s.ips[family] or= ip
+    s.mac = current_mac
+    if ip
+      family = if ip\find ":", 1, true then "ipv6" else "ipv4"
+      s.ips or= {}
+      s.ips[family] or= ip
 
-  sessions[current_mac] = s
-  sessions[session_mac] = nil if session_mac and session_mac != current_mac
-  write_sessions sessions, path
-  reset_cache!
-  true
+    sessions[current_mac] = s
+    sessions[session_mac] = nil if session_mac and session_mac != current_mac
+    write_sessions sessions, path
+    reset_cache!
+    true
 
 -- ── Recherche de session ─────────────────────────────────────────
 
@@ -295,6 +325,8 @@ user_for_mac = (mac, ip, path) ->
 
 {
   :serialize, :write_sessions, :load_sessions, :add_session
+  :with_sessions_lock
+  :session_alive
   :purge_expired, :read_cached, :reset_cache
   :session_for_mac, :user_for_mac, :enrich_session_ip, :bind_session_mac
 }

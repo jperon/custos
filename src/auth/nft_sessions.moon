@@ -71,16 +71,16 @@ del_authenticated = (ip) ->
   else
     del_authenticated4 ip
 
---- Ajoute un MAC authentifié dans les sets ip et ip6 en une seule transaction nft.
+--- Ajoute un MAC authentifié dans le set MAC (authenticated_macs) avec TTL.
 -- @tparam string mac Adresse MAC du client (format "aa:bb:cc:dd:ee:ff")
 -- @tparam number ttl Durée de vie en secondes
--- @treturn boolean   true si les deux insertions réussissent
+-- @treturn boolean   true si l'insertion réussit
 add_authenticated_mac = (mac, ttl) ->
   upsert_element NFT_SET_MAC, mac, ttl
 
----- Retire un MAC des sets ip et ip6 (logout explicite ou expiration de session).
+---- Retire un MAC du set MAC (logout explicite ou expiration de session).
 -- @tparam string mac Adresse MAC du client (format "aa:bb:cc:dd:ee:ff")
--- @treturn boolean   true si les deux suppressions réussissent
+-- @treturn boolean   true si la suppression réussit
 del_authenticated_mac = (mac) ->
   run_nft "delete element #{config.nft.family} #{config.nft.table} #{NFT_SET_MAC} { #{mac} }"
 

@@ -12,6 +12,7 @@
 
 bit = require "bit"
 ffi = require "ffi"
+{ :with_lock } = require "lib.filelock"
 
 ffi.cdef [[
   int chmod(const char *path, unsigned int mode);
@@ -160,7 +161,7 @@ read_urandom = (n) ->
 --- Génère un enregistrement de hash pour un mot de passe.
 -- Retourne la chaîne à écrire dans le fichier secrets.
 -- @tparam string password   Mot de passe en clair
--- @tparam number iterations Nombre d'itérations (défaut : 100000)
+-- @tparam number iterations Nombre d'itérations (défaut : 10000, cf. DEFAULT_ITER)
 -- @treturn string Chaîne au format pbkdf2-sha256:<iter>:<salt_hex>:<hash_hex>
 hash_password = (password, iterations) ->
   iterations = iterations or DEFAULT_ITER
@@ -245,6 +246,43 @@ valid_username = (username) ->
   return false unless username\match "^[a-zA-Z0-9_.%-+]+@[a-zA-Z0-9_.%-]+%.[a-zA-Z]+$"
   true
 
+--- Réécrit atomiquement le fichier secrets sous verrou inter-processus.
+-- Le temporaire porte le PID (deux enfants AUTH ne peuvent plus écrire le même
+-- fichier intermédiaire). map_line transforme chaque ligne existante (retour
+-- nil = ligne supprimée) ; append_line!, si fourni, retourne une ligne à
+-- ajouter après la copie (nil = rien à ajouter).
+-- @tparam string   secrets_path Chemin du fichier secrets
+-- @tparam function map_line     (line) -> string|nil
+-- @tparam function|nil append_line () -> string|nil
+-- @treturn true|nil true si succès, nil + erreur sinon
+-- @treturn nil|string Message d'erreur
+rewrite_secrets_file = (secrets_path, map_line, append_line) ->
+  with_lock secrets_path .. ".lock", ->
+    tmp_path = secrets_path .. ".new." .. tostring ffi.C.getpid!
+    fh, err = io.open tmp_path, "w"
+    return nil, "Impossible de créer le fichier temporaire : #{err}" unless fh
+
+    existing = io.open secrets_path, "r"
+    if existing
+      for line in existing\lines!
+        out = map_line line
+        fh\write out .. "\n" if out
+      existing\close!
+
+    if append_line
+      extra = append_line!
+      fh\write extra .. "\n" if extra
+
+    fh\close!
+    -- Permissions restrictives (600) avant le rename.
+    ffi.C.chmod tmp_path, 0x180
+
+    ok, rename_err = os.rename tmp_path, secrets_path
+    unless ok
+      os.remove tmp_path
+      return nil, "Impossible de renommer le fichier secrets : #{rename_err}"
+    true
+
 --- Inscrit un nouvel utilisateur dans le fichier secrets.
 -- Vérifie l'absence de doublon, hash le mot de passe, et append
 -- la ligne de manière atomique (write temp + rename).
@@ -265,27 +303,10 @@ register_user = (username, password, secrets_path, current_secrets) ->
 
   hash_entry = hash_password password
 
-  tmp_path = secrets_path .. ".new"
-  fh, err = io.open tmp_path, "w"
-  unless fh
-    return nil, "Impossible de créer le fichier temporaire : #{err}"
-
-  existing = io.open secrets_path, "r"
-  if existing
-    for line in existing\lines!
-      fh\write line .. "\n"
-    existing\close!
-
-  fh\write "#{username}:#{hash_entry}\n"
-  fh\close!
-
-  -- Set restrictive permissions (600) before rename
-  ffi.C.chmod tmp_path, 0x180  -- 0o600
-
-  ok, rename_err = os.rename tmp_path, secrets_path
-  unless ok
-    os.remove tmp_path
-    return nil, "Impossible de renommer le fichier secrets : #{rename_err}"
+  ok, err = rewrite_secrets_file secrets_path,
+    (line) -> line,
+    -> "#{username}:#{hash_entry}"
+  return nil, err unless ok
 
   new_secrets, load_err = load_secrets secrets_path
   unless new_secrets
@@ -303,29 +324,12 @@ register_user = (username, password, secrets_path, current_secrets) ->
 -- @treturn nil|string Message d'erreur
 update_user_hash = (username, password, secrets_path) ->
   new_entry = hash_password password
-  tmp_path = secrets_path .. ".new"
-  fh, err = io.open tmp_path, "w"
-  return nil, "Impossible de créer le fichier temporaire : #{err}" unless fh
-
-  existing = io.open secrets_path, "r"
-  if existing
-    for line in existing\lines!
-      u = line\match "^([^:]+):"
-      if u == username
-        fh\write "#{username}:#{new_entry}\n"
-      else
-        fh\write line .. "\n"
-    existing\close!
-
-  fh\close!
-  ffi.C.chmod tmp_path, 0x180  -- 0o600
-
-  ok, rename_err = os.rename tmp_path, secrets_path
-  unless ok
-    os.remove tmp_path
-    return nil, "Impossible de renommer le fichier secrets : #{rename_err}"
-
-  true
+  rewrite_secrets_file secrets_path, (line) ->
+    u = line\match "^([^:]+):"
+    if u == username
+      "#{username}:#{new_entry}"
+    else
+      line
 
 --- Écrit un enregistrement déjà calculé (hash côté client) pour un utilisateur.
 -- Le serveur ne voit jamais le mot de passe : le client fournit directement
@@ -338,32 +342,17 @@ update_user_hash = (username, password, secrets_path) ->
 -- @treturn nil|string Message d'erreur
 set_record = (username, record, secrets_path) ->
   return nil, "Enregistrement invalide." unless parse_record record
-  tmp_path = secrets_path .. ".new"
-  fh, err = io.open tmp_path, "w"
-  return nil, "Impossible de créer le fichier temporaire : #{err}" unless fh
-
   found = false
-  existing = io.open secrets_path, "r"
-  if existing
-    for line in existing\lines!
-      u = line\match "^([^:]+):"
-      if u == username
-        fh\write "#{username}:#{record}\n"
-        found = true
-      else
-        fh\write line .. "\n"
-    existing\close!
-  fh\write "#{username}:#{record}\n" unless found
-
-  fh\close!
-  ffi.C.chmod tmp_path, 0x180  -- 0o600
-
-  ok, rename_err = os.rename tmp_path, secrets_path
-  unless ok
-    os.remove tmp_path
-    return nil, "Impossible de renommer le fichier secrets : #{rename_err}"
-
-  true
+  replacer = (line) ->
+    u = line\match "^([^:]+):"
+    if u == username
+      found = true
+      "#{username}:#{record}"
+    else
+      line
+  appender = ->
+    "#{username}:#{record}" unless found
+  rewrite_secrets_file secrets_path, replacer, appender
 
 { :pbkdf2, :hash_password, :verify_password, :verify_response, :parse_record,
   :update_user_hash, :set_record, :load_secrets, :valid_username, :register_user,

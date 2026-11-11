@@ -6,7 +6,7 @@
 token = require "auth.token"
 credentials = require "auth.credentials"
 { :handle_challenge, :handle_login, :handle_password_change, :handle_request,
-  :COOKIE_NAME } = require "auth.handlers"
+  :make_session_cookie, :clear_session_cookie, :COOKIE_NAME } = require "auth.handlers"
 
 KEY = token.load_key "tmp/challenge_login_spec.key"
 MAC = "aa:bb:cc:11:22:33"
@@ -39,6 +39,17 @@ after_each_cleanup = (state) ->
   os.remove state.secrets_path
 
 describe "auth/handlers challenge-réponse", ->
+
+  describe "cookies de session", ->
+    it "cookie de session porte l'attribut Secure", ->
+      c = make_session_cookie "tok"
+      assert.truthy c\find "; Secure", 1, true
+      assert.truthy c\find "HttpOnly", 1, true
+
+    it "cookie d'effacement porte Secure et Max-Age=0", ->
+      c = clear_session_cookie!
+      assert.truthy c\find "; Secure", 1, true
+      assert.truthy c\find "Max-Age=0", 1, true
   describe "handle_challenge", ->
     it "renvoie nonce/salt/iter en JSON pour un user connu", ->
       state = make_state!

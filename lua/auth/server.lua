@@ -14,8 +14,6 @@ do
   local _obj_0 = require("auth.cert")
   load_or_generate_sni, load_static, load_or_generate_static = _obj_0.load_or_generate_sni, _obj_0.load_static, _obj_0.load_or_generate_static
 end
-local extract_sni
-extract_sni = require("auth.sni_extractor").extract_sni
 local log_info, log_warn, log_error, log_debug
 do
   local _obj_0 = require("log")
@@ -519,9 +517,9 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
       sessions_file = sessions_file,
       cert_cache = (function()
         if static_tls_ctx then
-          return "static cert + dynamic SNI cache"
+          return "static cert + dynamic per-local-IP cert cache"
         else
-          return "dynamic SNI cache (500 slots, 90d TTL)"
+          return "dynamic per-local-IP cert cache (500 slots, 90d TTL)"
         end
       end)()
     }

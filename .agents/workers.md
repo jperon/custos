@@ -119,7 +119,7 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 ## auth/worker (`src/auth/worker.moon`)
 
-- **In :** sockets `AF_INET` + `AF_INET6` `SOCK_STREAM` sur `auth_cfg.port` (défaut 33443 ; HTTPS, **TLS via WolfSSL FFI** — `src/auth/ffi_wolfssl.moon`, certificats px5g dynamiques par SNI) ; `/etc/custos/secrets` ; `sessions.lua` ; résolution MAC via socket Unix → `mac_learner`.
+- **In :** sockets `AF_INET` + `AF_INET6` `SOCK_STREAM` sur `auth_cfg.port` (défaut 33443 ; HTTPS, **TLS via WolfSSL FFI** — `src/auth/ffi_wolfssl.moon`, certificats px5g dynamiques par **IP locale** du socket — le SNI ClientHello n'est pas extrait) ; `/etc/custos/secrets` ; `sessions.lua` ; résolution MAC via socket Unix → `mac_learner`.
 - **Out :** écrit `sessions.lua` (rename atomique) ; gère les sets nft `authenticated_macs`, `authenticated_ips`, `authenticated_ips6`.
 - **Interface admin :** `src/auth/server.moon` route les requêtes `/admin/*` vers `src/webui/router.moon` (édition de config, règles, listes, dictionnaires nommés ; reload SIGHUP). Accès réservé aux sessions admin (`auth.admin_users`).
 - **Signaux :** `SIGHUP` → flag positionné dans le handler, rechargement des secrets au prochain cycle.
