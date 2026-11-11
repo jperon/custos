@@ -319,9 +319,15 @@ clean:
 	@# Supprimer les .lua générés depuis des .moon dans tests/
 	rm -f $(UNIT_SPEC_LUAS) $(TEST_HELPER_LUAS)
 
-# Reload config (SIGHUP)
+# Reload config (SIGHUP) — cible : superviseur, via le pidfile (jamais pkill :
+# le motif viserait aussi les workers forkés, sans handler SIGHUP).
 reload:
-	@pkill -SIGHUP -f "luajit.*main" && echo "SIGHUP envoyé" || echo "Processus introuvable"
+	@PIDFILE="$${CUSTOS_PID_FILE:-/var/run/custos.pid}"; \
+	if [ ! -f "$$PIDFILE" ]; then \
+	  echo "pidfile absent ($$PIDFILE) — service inactif ?" >&2; exit 1; \
+	fi; \
+	PID="$$(cat "$$PIDFILE")"; \
+	kill -HUP "$$PID" && echo "SIGHUP envoyé au superviseur (PID $$PID)"
 
 # Update domain lists from sources defined in config.moon
 update-lists: all

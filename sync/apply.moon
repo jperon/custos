@@ -5,6 +5,16 @@
 
 serializer = require "webui.serializer"
 { :exec_ok } = require "lib.os_exec"
+ffi = require "ffi"
+pidfile = require "lib.pidfile"
+
+pcall ->
+  ffi.cdef [[
+    typedef int pid_t;
+    int kill(pid_t pid, int sig);
+  ]]
+
+SIGHUP = 1
 
 -- Fusion récursive identique à src/config.moon
 is_array = (t) ->
@@ -59,50 +69,79 @@ parse_args = (args) ->
       i += 1
   result
 
-opts = parse_args arg
+-- kill injectable pour les tests (évite d'envoyer un vrai SIGHUP).
+default_kill = (pid, sig) -> ffi.C.kill(pid, sig) == 0
 
-unless opts.base
-  io.stderr\write "apply: --base <chemin> requis\n"
-  os.exit 1
+--- Envoie SIGHUP au superviseur, ciblé par le pidfile.
+-- Le hot-reload n'est traité que par le superviseur (src/main.moon) ; cibler
+-- `pkill -f luajit.*main` viserait aussi tous les workers forkés (même cmdline),
+-- sans handler SIGHUP, qui mourraient puis seraient reforkés inutilement.
+-- @tparam ?string pid_path chemin du pidfile
+-- @tparam ?function kill_fn fonction (pid, sig) → booléen (injectable)
+-- @tparam ?function read_pid fonction (path) → pid, err (injectable)
+-- @treturn boolean true si le signal a été envoyé
+reload_supervisor = (pid_path, kill_fn, read_pid) ->
+  kill_fn or= default_kill
+  read_pid or= pidfile.read
+  pid, err = read_pid pid_path
+  unless pid
+    io.stderr\write "apply: SIGHUP non envoyé : #{err or "pidfile illisible"}\n"
+    return false
+  unless kill_fn pid, SIGHUP
+    io.stderr\write "apply: SIGHUP non envoyé : superviseur injoignable (PID #{pid})\n"
+    return false
+  true
 
-hostname = opts.hostname
-unless hostname
-  fh = io.popen "uname -n"
-  hostname = fh\read "*l"
-  fh\close!
+main = ->
+  opts = parse_args arg
 
--- Config de base (obligatoire)
-base_cfg, err = serializer.read_config opts.base
-unless base_cfg
-  io.stderr\write "apply: config de base introuvable #{opts.base}: #{tostring err}\n"
-  os.exit 1
+  unless opts.base
+    io.stderr\write "apply: --base <chemin> requis\n"
+    os.exit 1
 
--- Chemin de la config device (déduit depuis base si non fourni)
-device_path = opts.device
-unless device_path
-  base_dir = opts.base\match "^(.+)/base/config%.moon$"
-  device_path = "#{base_dir}/devices/#{hostname}/config.moon" if base_dir
+  hostname = opts.hostname
+  unless hostname
+    fh = io.popen "uname -n"
+    hostname = fh\read "*l"
+    fh\close!
 
--- Config device (optionnel — absence normale)
-device_cfg = nil
-if device_path
-  device_cfg, dev_err = serializer.read_config device_path
-  if not device_cfg and dev_err and not tostring(dev_err)\match "No such file"
-    io.stderr\write "apply: avertissement #{device_path}: #{tostring dev_err}\n"
+  -- Config de base (obligatoire)
+  base_cfg, err = serializer.read_config opts.base
+  unless base_cfg
+    io.stderr\write "apply: config de base introuvable #{opts.base}: #{tostring err}\n"
+    os.exit 1
 
--- Fusion base + device
-merged = clone base_cfg
-merge_into merged, device_cfg if device_cfg
+  -- Chemin de la config device (déduit depuis base si non fourni)
+  device_path = opts.device
+  unless device_path
+    base_dir = opts.base\match "^(.+)/base/config%.moon$"
+    device_path = "#{base_dir}/devices/#{hostname}/config.moon" if base_dir
 
--- Écriture atomique
-ok, write_err = serializer.write_config merged, opts.output
-unless ok
-  io.stderr\write "apply: écriture échouée #{opts.output}: #{tostring write_err}\n"
-  os.exit 1
+  -- Config device (optionnel — absence normale)
+  device_cfg = nil
+  if device_path
+    device_cfg, dev_err = serializer.read_config device_path
+    if not device_cfg and dev_err and not tostring(dev_err)\match "No such file"
+      io.stderr\write "apply: avertissement #{device_path}: #{tostring dev_err}\n"
 
--- Rechargement optionnel
-if opts.reload
-  ret = os.execute "pkill -SIGHUP -f 'luajit.*main' 2>/dev/null"
-  io.stderr\write "apply: SIGHUP non envoyé (service inactif ?)\n" unless exec_ok ret
+  -- Fusion base + device
+  merged = clone base_cfg
+  merge_into merged, device_cfg if device_cfg
 
-io.stdout\write "apply: #{opts.output} mis à jour\n"
+  -- Écriture atomique
+  ok, write_err = serializer.write_config merged, opts.output
+  unless ok
+    io.stderr\write "apply: écriture échouée #{opts.output}: #{tostring write_err}\n"
+    os.exit 1
+
+  -- Rechargement optionnel (cible : superviseur, via pidfile)
+  reload_supervisor pidfile.resolve_path! if opts.reload
+
+  io.stdout\write "apply: #{opts.output} mis à jour\n"
+
+-- N'exécute main! que lancé directement comme script (pas quand `loadfile`
+-- par les tests unitaires, qui ont besoin des fonctions exportées).
+script_name = arg and arg[0] or ""
+main! if script_name\match "apply"
+
+{ :main, :parse_args, :reload_supervisor, :SIGHUP }

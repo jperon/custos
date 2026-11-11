@@ -866,3 +866,13 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   Correctif : helper `forget_ip_mapping` qui n'efface que si `ip_to_mac[ip]`
   appartient encore à cette MAC, aux quatre sites ; test dans
   `tests/unit/worker_responses_spec.moon`.
+- **`sync/apply.moon --reload` et `make reload` ne visaient pas le superviseur.**
+  Ils utilisaient `pkill -SIGHUP -f 'luajit.*main'` : sous procd la cmdline est
+  `/usr/bin/custos /usr/share/custos/main.lua` (aucune correspondance, donc la
+  config synchronisée n'était jamais rechargée), et en lancement manuel
+  `luajit lua/main.lua` le motif visait aussi tous les workers forkés (sans
+  handler SIGHUP, tués puis reforkés à chaque sync). Correctif : `sync/apply.moon`
+  réutilise `lib.pidfile` (`reload_supervisor`, `kill_fn`/`read_pid` injectables,
+  aucun repli `pkill`) et la cible `make reload` lit
+  `$${CUSTOS_PID_FILE:-/var/run/custos.pid}` ; tests dans
+  `tests/unit/sync/apply_spec.moon`.
