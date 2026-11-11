@@ -1160,7 +1160,7 @@ Réparation du script de migration signalé en Q4/Q5 du rapport
   dépôt, sur le `.lua` compilé (`luajit idefix2filter.lua …`), et utilise le
   décodeur `decode` de `src/lib/json.moon:274-281`.
 - **`split_conditions` supprimée.** Les règles sont désormais des tables
-  structurées construites par `build_rules` (`idefix2filter.moon:186-216`) ;
+  structurées construites par `build_rules` (`idefix2filter.moon:186-214`) ;
   plus aucune chaîne `"clé: valeur"` n'est parsée à l'exécution.
 - **`[local, lan, home.arpa]` invalide.** La règle « Infrastructure » émet
   `to_domains: {"local", "lan", "home.arpa"}` (`idefix2filter.moon:197`),
@@ -1193,7 +1193,7 @@ Réparation du script de migration signalé en Q4/Q5 du rapport
   revanche l'absence de `data.maclists` n'est plus fatale : les groupes
   démarrent vides et les devices sans MAC sont ignorés.
 
-Tests : `tests/unit/idefix2filter_spec.moon` (11 cas) couvre nettoyage,
+Tests : `tests/unit/idefix2filter_spec.moon` (13 cas) couvre nettoyage,
 collecte, associations de profils, rendu, compilation MoonScript
 (`moonscript.base.to_lua`), chargement du `config.moon` généré par le chargeur
 réel (`CUSTOS_CONFIG_PATH` + `CUSTOS_REQUIRE_EXTERNAL_CONFIG=1` dans un
@@ -1202,6 +1202,6 @@ régénéré et suivi ; le `.lua` de la spec reste ignoré par `.gitignore:38`
 (convention du dépôt).
 
 **Vérification (2026-11-11, branche d-idefix)** : `make all`, `make check`
-OK (150 fichiers) ; `make test` = **2322 successes / 0 failures / 0 errors /
+OK (150 fichiers) ; `make test` = **2324 successes / 0 failures / 0 errors /
 0 pending** (`tmp/test.log`). `make test-e2e` non lancé (hors périmètre de la
 tâche).

@@ -42,6 +42,14 @@ fixture = ->
       [GROUPE_DEFAUT]: {
         ["Père X"]: { devices: { ["pc-prieure"]: { mac: "aa:bb:cc:dd:ee:02" } } }
       }
+      ["Profil non mappé"]: {
+        ["Utilisateur X"]: {
+          devices: {
+            ["pc\"quote"]: { mac: "aa:bb:cc:dd:ee:06" }
+            ["pc\nnewline"]: { mac: "aa:bb:cc:dd:ee:07" }
+          }
+        }
+      }
       [GROUPE_LIMITE]: {
         ["Élève Y"]: { devices: { ["tablette-eleve"]: { mac: "aa:bb:cc:dd:ee:03" } } }
         ["Salon profs"]: { devices: { ["tablette-salon"]: { mac: "aa:bb:cc:dd:ee:04" } } }
@@ -80,6 +88,8 @@ describe "idefix2filter — conversion", ->
     assert.same {"tablette-eleve"}, out.maclists.eleves_limites
     assert.same {"tablette-salon"}, out.maclists.salon_profs
     assert.same {"portable-abbe"}, out.maclists.abbes
+    assert.equals "aa:bb:cc:dd:ee:06", out.macs['pc"quote']
+    assert.equals "aa:bb:cc:dd:ee:07", out.macs["pc\nnewline"]
   it "construit les règles avec des clés de condition existantes", ->
     out = convert fixture!
     text = out.config
@@ -87,6 +97,19 @@ describe "idefix2filter — conversion", ->
     assert.truthy text\find "to_domains: {\"local\", \"lan\", \"home.arpa\"}", 1, true
     assert.is_nil text\find "from_maclist", 1, true
     assert.is_nil text\find "[local, lan, home.arpa]", 1, true
+  it "omet les règles des groupes et listes spéciales absents", ->
+    out = convert { groups: {}, rules: {}, users: {}, maclists: {} }
+    assert.same {}, out.lists
+    assert.equals 2, #out.rules
+    assert.equals "Infrastructure et local", out.rules[1].description
+    assert.equals "Verdict Final", out.rules[2].description
+    assert.is_nil out.config\find "from_macs", 1, true
+  it "ne référence pas une liste spéciale absente du JSON", ->
+    out = convert { groups: {}, rules: {}, users: {}, maclists: { profs: { "p1" } } }
+    assert.equals 3, #out.rules
+    assert.equals "Accès total Profs", out.rules[1].description
+    assert.is_nil out.config\find "custom/block_yahoo", 1, true
+    assert.is_nil out.config\find "custom/spotify", 1, true
 
 describe "idefix2filter — sortie MoonScript", ->
   out = convert fixture!
