@@ -350,3 +350,10 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   injecte dans les sets dynamiques de chaque règle, y compris worker-only ;
   une règle deny sans condition n'a simplement aucun élément). Aucun
   changement de sortie nft.
+- **Q5 : en-tête de `src/config.moon` décrivant une forme de `conditions`
+  non supportée.** L'exemple montrait `conditions` sous forme de tableau
+  d'entrées à clé unique (`- to_domain: …`), alors que `filter.rule.compile_rule`
+  itère `pairs condition_table` (dictionnaire, `src/filter/rule.moon:55`).
+  Une config recopiée de l'exemple produisait `name=1` puis
+  `require "filter.conditions.1"`. En-tête corrigé (dictionnaire, AND implicite)
+  et complété par une mention de `any_of`/`not` ; aucun code exécutable changé.
