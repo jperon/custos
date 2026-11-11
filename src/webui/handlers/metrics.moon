@@ -2,8 +2,9 @@
 -- GET /admin/metrics — lecture seule.
 -- Agrège les instantanés JSON écrits par chaque worker_questions
 -- (<runtime>/metrics-<worker>.json, cf. src/metrics.moon) : totaux, répartition
--- par verdict et par règle. Un fichier absent, corrompu ou périmé est ignoré
--- sans erreur ; la fraîcheur de chaque instantané est affichée.
+-- par verdict et par règle. Les fichiers d'une exécution précédente sont purgés
+-- par le superviseur au démarrage ; un fichier illisible ou corrompu est ignoré
+-- sans erreur. L'âge de chaque instantané est affiché à titre d'information.
 
 H = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
@@ -13,9 +14,10 @@ json = require "lib.json"
 pidfile = require "lib.pidfile"
 { :shquote } = require "lib.shquote"
 
--- Un instantané est périmé au-delà de 3 intervalles de flush (minimum 180 s).
-STALE_FACTOR = 3
-STALE_MIN    = 180
+-- Au-delà de 3 intervalles de flush (minimum 180 s), l'instantané est signalé
+-- comme sans activité récente — il reste compté dans les totaux.
+IDLE_FACTOR = 3
+IDLE_MIN    = 180
 
 --- Répertoire d'exécution (celui du pidfile, cf. src/doh/query.moon).
 -- @tparam table state État webui (runtime_dir injectable pour les tests)
@@ -76,7 +78,7 @@ valid_rule = (r) ->
   type(r) == "table" and type(r.rule_id) == "string" and type(r.verdicts) == "table"
 
 --- Somme les compteurs de tous les instantanés, par verdict et par règle.
--- @tparam table snapshots Instantanés à jour
+-- @tparam table snapshots Instantanés valides
 -- @treturn table { totals = {allow, refuse, dnsonly}, rules = {…}, total }
 aggregate = (snapshots) ->
   totals = { allow: 0, refuse: 0, dnsonly: 0 }
@@ -109,12 +111,12 @@ fmt_ts = (ts) ->
   ok, s = pcall os.date, "%Y-%m-%d %H:%M:%S", ts
   ok and s or "date inconnue"
 
-render_workers = (snapshots, now, stale_after) ->
+render_workers = (snapshots, now, idle_after) ->
   rows = {}
   for snap in *snapshots
     age   = math.max 0, now - snap.timestamp
-    stale = age > stale_after
-    state = if stale then "périmé (ignoré)" else "à jour"
+    idle  = age > idle_after
+    state = if idle then "aucune activité depuis #{age} s" else "à jour"
     rows[#rows + 1] = H.tr {
       H.td (esc snap.name)
       H.td (esc fmt_ts snap.timestamp)
@@ -179,16 +181,12 @@ handle_metrics_get = (req, state) ->
 
   snapshots, ignored = read_snapshots dir
   interval = tonumber cfg_metrics.flush_interval or 60
-  stale_after = math.max interval * STALE_FACTOR, STALE_MIN
-  fresh = [s for s in *snapshots when now - s.timestamp <= stale_after]
-  agg = aggregate fresh
+  idle_after = math.max interval * IDLE_FACTOR, IDLE_MIN
+  agg = aggregate snapshots
 
   notices = {}
   notices[#notices + 1] = H.p { style: "color:#555" },
-    "Instantanés lus dans #{esc dir} ; un fichier périmé (plus de #{stale_after} s) ou corrompu est ignoré."
-  if #fresh == 0
-    notices[#notices + 1] = H.p { style: "color:#a00" },
-      "Aucun instantané à jour : démarrez le service ou vérifiez le répertoire d'exécution."
+    "Instantanés lus dans #{esc dir} ; tous les instantanés valides sont comptés, les fichiers illisibles ou corrompus sont ignorés."
   if ignored > 0
     notices[#notices + 1] = H.p { style: "color:#a00" },
       "#{ignored} fichier(s) illisible(s) ou corrompu(s) ignoré(s)."
@@ -205,7 +203,7 @@ handle_metrics_get = (req, state) ->
   }
   parts[#parts + 1] = H.section {
     H.h2 "Workers"
-    render_workers snapshots, now, stale_after
+    render_workers snapshots, now, idle_after
     " "
     H.a { class: "btn btn-secondary", href: "/admin/" }, "Retour"
   }

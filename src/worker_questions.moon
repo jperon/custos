@@ -482,6 +482,10 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   -- un worker_questions par file NFQUEUE.
   runtime_dir = (pidfile.resolve_path runtime_cfg.pid_file)\match("^(.*)/") or "."
   metrics.init config.metrics, { dir: runtime_dir, name: "dns-q#{queue_num}" }
+  -- Instantané à zéro dès le démarrage (et après un redémarrage du worker) :
+  -- la page dispose ainsi d'un fichier de l'exécution courante même à très
+  -- faible débit.
+  metrics.write_now! if metrics_on
   pipe_wfd      = wfd
   mac_learn_wfd = learn_wfd
   events_wfd    = ev_wfd
@@ -540,7 +544,12 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
       elseif #(so_cfg.resolvers or {}) > 0
         log_warn -> { action: "dns_validator_disabled", reason: "aucun validateur routable" }
 
-  run_queue tonumber(queue_num), handle_question
+  -- Point de passage périodique de run_queue (poll 1 s) : écrit un instantané
+  -- même sans aucun paquet (flush_if_due ne lit l'horloge qu'une fois par
+  -- passage, jamais par paquet).
+  queue_opts = if metrics_on
+    { idle_ms: 1000, on_idle: metrics.flush_if_due }
+  run_queue tonumber(queue_num), handle_question, queue_opts
   -- Dernier instantané avant sortie (erreur de file, signal) : best-effort.
   metrics.write_now! if metrics_on
 

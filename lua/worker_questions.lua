@@ -516,6 +516,9 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
     dir = runtime_dir,
     name = "dns-q" .. tostring(queue_num)
   })
+  if metrics_on then
+    metrics.write_now()
+  end
   pipe_wfd = wfd
   mac_learn_wfd = learn_wfd
   events_wfd = ev_wfd
@@ -606,7 +609,14 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
       end
     end
   end
-  run_queue(tonumber(queue_num), handle_question)
+  local queue_opts
+  if metrics_on then
+    queue_opts = {
+      idle_ms = 1000,
+      on_idle = metrics.flush_if_due
+    }
+  end
+  run_queue(tonumber(queue_num), handle_question, queue_opts)
   if metrics_on then
     return metrics.write_now()
   end

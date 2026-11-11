@@ -154,13 +154,15 @@ est injectable pour les tests). Chaque fichier est un instantané
 temporaires `*.json.tmp.<n>` ne correspondent pas au motif), décode chacun avec
 `lib.json` et **ignore sans erreur** tout fichier illisible, non-JSON ou de
 forme invalide (compteur « fichier(s) illisible(s) ou corrompu(s) »).
-`aggregate` somme les compteurs de tous les instantanés **à jour** par verdict
-et par règle ; un instantané est périmé au-delà de
-`max(3 × metrics.flush_interval, 180 s)` et reste listé dans le tableau
-« Workers » avec sa fraîcheur (`périmé (ignoré)`), mais n'entre pas dans les
-totaux. Toutes les valeurs affichées (nom de worker, `rule_id`, dates) sont
-échappées via `webui.util.esc`. Si `metrics.enabled = false`, la page
-l'indique explicitement et n'affiche aucun total.
+`aggregate` somme les compteurs de **tous** les instantanés valides par verdict
+et par règle : aucun n'est exclu des totaux à cause de son âge. Le tableau
+« Workers » affiche l'âge de chaque instantané à titre d'information ; au-delà
+de `max(3 × metrics.flush_interval, 180 s)`, l'état devient « aucune activité
+depuis N s » (le worker écrit pourtant un instantané à zéro à son démarrage, et
+le superviseur purge les fichiers de l'exécution précédente avant de forker).
+Toutes les valeurs affichées (nom de worker, `rule_id`, dates) sont échappées
+via `webui.util.esc`. Si `metrics.enabled = false`, la page l'indique
+explicitement et n'affiche aucun total.
 
 **Listes — pas d'écrasement silencieux.** `handle_list_new_post` et le
 renommage de `handle_list_post` (`handlers/lists.moon`) répondent **409** si le

@@ -46,6 +46,7 @@ bit = require "bit"
 config = require "config"
 filter = require "filter"
 pidfile = require "lib.pidfile"
+metrics = require "metrics"
 
 -- Réglage GC LuaJIT économe (machines à faible RAM). Appliqué dans le
 -- superviseur ; hérité par tous les workers forkés ensuite.
@@ -595,6 +596,15 @@ unless cfg_meta.external_loaded
 
 sfd   = create_signal_fd!
 pipes = create_pipes!
+
+-- Purge des instantanés de métriques d'une exécution précédente, AVANT le
+-- fork des workers : un fichier `metrics-*.json` présent appartient ensuite
+-- toujours à l'exécution courante (chaque worker réécrit le sien au démarrage
+-- et périodiquement). Sans cela, la page afficherait les compteurs d'un
+-- processus mort.
+runtime_dir = (pidfile.resolve_path (config.runtime or {}).pid_file)\match("^(.*)/") or "."
+purged = metrics.purge_files runtime_dir
+log_info -> { action: "metrics_snapshots_purged", dir: runtime_dir, removed: purged }
 
 log_info -> {
   action: "ipc_pipes_created"

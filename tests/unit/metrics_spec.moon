@@ -7,6 +7,8 @@ json = require "lib.json"
   :record_verdict
   :get_metrics_json
   :write_now
+  :purge_files
+  :flush_if_due
   :maybe_flush
   :file_path
   :clear
@@ -148,6 +150,39 @@ describe "metrics", ->
       maybe_flush!  -- 4e paquet : lecture d'horloge
       assert.equals 1, clock_calls
 
+    it "utilise check_every = 32 par défaut", ->
+      clock_calls = 0
+      fake_clock = ->
+        clock_calls += 1
+        0
+      init { enabled: true, flush_interval: 10 },
+        { dir: DIR, name: "w0", clock: fake_clock }
+      for i = 1, 31
+        maybe_flush!
+      assert.equals 0, clock_calls
+      maybe_flush!  -- 32e paquet
+      assert.equals 1, clock_calls
+
+    it "flush_if_due écrit sur le seul passage temporel", ->
+      now = 0
+      init { enabled: true, flush_interval: 10 },
+        { dir: DIR, name: "w0", clock: (-> now) }
+      record_verdict "r1", "allow"
+      assert.is_true write_now!  -- instantané initial
+      now = 9
+      assert.is_false flush_if_due!
+      now = 10
+      assert.is_true flush_if_due!
+      snap = read_snapshot!
+      assert.equals 1, snap.rules[1].verdicts.allow
+
+    it "write_now produit un instantané vide valide au démarrage", ->
+      init { enabled: true }, { dir: DIR, name: "w0" }
+      assert.is_true write_now!
+      snap = read_snapshot!
+      assert.equals "number", type snap.timestamp
+      assert.same {}, snap.rules
+
     it "n'écrit rien quand désactivé", ->
       now = 1000
       init { enabled: false, flush_interval: 10 },
@@ -167,6 +202,22 @@ describe "metrics", ->
       init { enabled: true }, { dir: "#{DIR}/absent", name: "w0" }
       record_verdict "r1", "allow"
       assert.is_false write_now!
+
+  describe "purge_files", ->
+
+    it "supprime instantanés et temporaires, laisse les autres fichiers", ->
+      write = (name, content) ->
+        fh = assert io.open "#{DIR}/#{name}", "w"
+        fh\write content
+        fh\close!
+      write "metrics-a.json", "{}"
+      write "metrics-a.json.tmp.1", "x"
+      write "metrics-b.json.tmp.7", "x"
+      write "notes.txt", "à conserver"
+
+      assert.equals 3, purge_files DIR
+      assert.same { "notes.txt" }, list_dir!
+      assert.equals 0, purge_files nil
 
   describe "atomicité", ->
 

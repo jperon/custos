@@ -1,5 +1,7 @@
 local config = require("config")
 local json = require("lib.json")
+local shquote
+shquote = require("lib.shquote").shquote
 local metrics_cfg = config.metrics or { }
 local _metrics = { }
 local _rule_order = { }
@@ -9,7 +11,7 @@ local _flush_interval = metrics_cfg.flush_interval or 60
 local _dir = nil
 local _name = nil
 local _clock = os.time
-local _check_every = 1024
+local _check_every = 32
 local _pkt_count = 0
 local _last_flush = 0
 local _tmp_seq = 0
@@ -39,7 +41,7 @@ init = function(cfg, opts)
   _dir = opts.dir
   _name = opts.name
   _clock = opts.clock or os.time
-  _check_every = opts.check_every or 1024
+  _check_every = opts.check_every or 32
   _pkt_count = 0
   _last_flush = 0
 end
@@ -146,6 +148,39 @@ write_now = function()
   _last_flush = _clock()
   return ok
 end
+local purge_files
+purge_files = function(dir)
+  if not (dir) then
+    return 0
+  end
+  local h = io.popen("ls -1 " .. tostring(shquote(dir)) .. "/metrics-*.json " .. tostring(shquote(dir)) .. "/metrics-*.json.tmp.* 2>/dev/null")
+  if not (h) then
+    return 0
+  end
+  local removed = 0
+  for path in h:lines() do
+    if os.remove(path) then
+      removed = removed + 1
+    end
+  end
+  h:close()
+  return removed
+end
+local flush_if_due
+flush_if_due = function()
+  if not (_enabled) then
+    return false
+  end
+  if not (_dir and _name) then
+    return false
+  end
+  local now = _clock()
+  if now - _last_flush < _flush_interval then
+    return false
+  end
+  _last_flush = now
+  return _write_snapshot(get_metrics_json())
+end
 local maybe_flush
 maybe_flush = function()
   if not (_enabled) then
@@ -156,15 +191,7 @@ maybe_flush = function()
     return 
   end
   _pkt_count = 0
-  if not (_dir and _name) then
-    return 
-  end
-  local now = _clock()
-  if now - _last_flush < _flush_interval then
-    return 
-  end
-  _last_flush = now
-  return _write_snapshot(get_metrics_json())
+  return flush_if_due()
 end
 local clear
 clear = function()
@@ -180,6 +207,8 @@ return {
   record_verdict = record_verdict,
   get_metrics_json = get_metrics_json,
   write_now = write_now,
+  purge_files = purge_files,
+  flush_if_due = flush_if_due,
   maybe_flush = maybe_flush,
   file_path = file_path,
   clear = clear,

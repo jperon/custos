@@ -1,8 +1,8 @@
 local json = require("lib.json")
-local init, record_verdict, get_metrics_json, write_now, maybe_flush, file_path, clear, _get_state
+local init, record_verdict, get_metrics_json, write_now, purge_files, flush_if_due, maybe_flush, file_path, clear, _get_state
 do
   local _obj_0 = require("metrics")
-  init, record_verdict, get_metrics_json, write_now, maybe_flush, file_path, clear, _get_state = _obj_0.init, _obj_0.record_verdict, _obj_0.get_metrics_json, _obj_0.write_now, _obj_0.maybe_flush, _obj_0.file_path, _obj_0.clear, _obj_0._get_state
+  init, record_verdict, get_metrics_json, write_now, purge_files, flush_if_due, maybe_flush, file_path, clear, _get_state = _obj_0.init, _obj_0.record_verdict, _obj_0.get_metrics_json, _obj_0.write_now, _obj_0.purge_files, _obj_0.flush_if_due, _obj_0.maybe_flush, _obj_0.file_path, _obj_0.clear, _obj_0._get_state
 end
 local DIR = "tmp/metrics_spec"
 local FILE = tostring(DIR) .. "/metrics-w0.json"
@@ -170,6 +170,61 @@ return describe("metrics", function()
       maybe_flush()
       return assert.equals(1, clock_calls)
     end)
+    it("utilise check_every = 32 par défaut", function()
+      local clock_calls = 0
+      local fake_clock
+      fake_clock = function()
+        clock_calls = clock_calls + 1
+        return 0
+      end
+      init({
+        enabled = true,
+        flush_interval = 10
+      }, {
+        dir = DIR,
+        name = "w0",
+        clock = fake_clock
+      })
+      for i = 1, 31 do
+        maybe_flush()
+      end
+      assert.equals(0, clock_calls)
+      maybe_flush()
+      return assert.equals(1, clock_calls)
+    end)
+    it("flush_if_due écrit sur le seul passage temporel", function()
+      local now = 0
+      init({
+        enabled = true,
+        flush_interval = 10
+      }, {
+        dir = DIR,
+        name = "w0",
+        clock = (function()
+          return now
+        end)
+      })
+      record_verdict("r1", "allow")
+      assert.is_true(write_now())
+      now = 9
+      assert.is_false(flush_if_due())
+      now = 10
+      assert.is_true(flush_if_due())
+      local snap = read_snapshot()
+      return assert.equals(1, snap.rules[1].verdicts.allow)
+    end)
+    it("write_now produit un instantané vide valide au démarrage", function()
+      init({
+        enabled = true
+      }, {
+        dir = DIR,
+        name = "w0"
+      })
+      assert.is_true(write_now())
+      local snap = read_snapshot()
+      assert.equals("number", type(snap.timestamp))
+      return assert.same({ }, snap.rules)
+    end)
     it("n'écrit rien quand désactivé", function()
       local now = 1000
       init({
@@ -210,6 +265,25 @@ return describe("metrics", function()
       })
       record_verdict("r1", "allow")
       return assert.is_false(write_now())
+    end)
+  end)
+  describe("purge_files", function()
+    return it("supprime instantanés et temporaires, laisse les autres fichiers", function()
+      local write
+      write = function(name, content)
+        local fh = assert(io.open(tostring(DIR) .. "/" .. tostring(name), "w"))
+        fh:write(content)
+        return fh:close()
+      end
+      write("metrics-a.json", "{}")
+      write("metrics-a.json.tmp.1", "x")
+      write("metrics-b.json.tmp.7", "x")
+      write("notes.txt", "à conserver")
+      assert.equals(3, purge_files(DIR))
+      assert.same({
+        "notes.txt"
+      }, list_dir())
+      return assert.equals(0, purge_files(nil))
     end)
   end)
   describe("atomicité", function()

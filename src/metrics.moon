@@ -5,16 +5,21 @@
 -- file NFQUEUE). Chaque worker enregistre son propre instantané dans
 -- <répertoire d'exécution>/metrics-<nom>.json, écrit atomiquement (fichier
 -- temporaire + os.rename) ; la page admin /admin/metrics agrège les fichiers
--- de tous les workers. Un fichier absent, corrompu ou périmé y est ignoré.
+-- de tous les workers. Les fichiers d'une exécution précédente sont purgés par
+-- le superviseur au démarrage (purge_files) : un fichier présent appartient
+-- donc à l'exécution courante. Un fichier illisible ou corrompu est ignoré.
 --
--- Chemin par paquet : `maybe_flush` ne fait qu'un incrément et une
--- comparaison ; l'horloge n'est consultée qu'une fois tous les `check_every`
--- paquets (1024 par défaut, soit au plus ~1 fois/s à 1 kpps), jamais par
--- paquet. `metrics.enabled = false` : l'appelant n'appelle pas `maybe_flush`
--- et `record_verdict` retourne immédiatement — aucun coût dans le hot-path.
+-- Coût par paquet : `maybe_flush` ne fait qu'un incrément et une comparaison ;
+-- l'horloge n'est consultée qu'une fois tous les `check_every` paquets (32 par
+-- défaut), jamais par paquet. Le worker appelle aussi `write_now` au démarrage
+-- et `flush_if_due` au point de passage périodique de `run_queue` (idle_ms),
+-- pour écrire même sans trafic. `metrics.enabled = false` : l'appelant
+-- n'appelle ni `maybe_flush` ni `flush_if_due`, et `record_verdict` retourne
+-- immédiatement — aucun coût dans le hot-path.
 
 config = require "config"
 json   = require "lib.json"
+{ :shquote } = require "lib.shquote"
 
 metrics_cfg = config.metrics or {}
 
@@ -29,7 +34,7 @@ _flush_interval = metrics_cfg.flush_interval or 60
 _dir = nil
 _name = nil
 _clock = os.time
-_check_every = 1024
+_check_every = 32
 _pkt_count = 0
 _last_flush = 0
 _tmp_seq = 0
@@ -66,7 +71,7 @@ init = (cfg, opts) ->
   _dir = opts.dir
   _name = opts.name
   _clock = opts.clock or os.time
-  _check_every = opts.check_every or 1024
+  _check_every = opts.check_every or 32
   _pkt_count = 0
   _last_flush = 0
 
@@ -150,6 +155,35 @@ write_now = ->
   _last_flush = _clock!
   ok
 
+--- Supprime les instantanés et temporaires d'une exécution précédente.
+-- Appelée par le superviseur avant le fork des workers : un fichier
+-- `metrics-*.json` présent appartient alors toujours à l'exécution courante.
+-- Best-effort : un fichier non supprimable est simplement laissé en place.
+-- @tparam string dir Répertoire d'exécution
+-- @treturn number Nombre de fichiers supprimés
+purge_files = (dir) ->
+  return 0 unless dir
+  h = io.popen "ls -1 #{shquote(dir)}/metrics-*.json #{shquote(dir)}/metrics-*.json.tmp.* 2>/dev/null"
+  return 0 unless h
+  removed = 0
+  for path in h\lines!
+    removed += 1 if os.remove path
+  h\close!
+  removed
+
+--- Variante purement temporelle : écrit si l'intervalle est écoulé.
+-- Appelée au point de passage périodique de run_queue (opts.on_idle), y
+-- compris sans aucun paquet. Une lecture d'horloge par passage, jamais par
+-- paquet.
+-- @treturn boolean true si un instantané a été écrit
+flush_if_due = ->
+  return false unless _enabled
+  return false unless _dir and _name
+  now = _clock!
+  return false if now - _last_flush < _flush_interval
+  _last_flush = now
+  _write_snapshot get_metrics_json!
+
 --- Point d'entrée du hot-path : vérifie au plus une fois tous les
 -- `check_every` paquets si l'intervalle d'écriture est écoulé.
 -- Ne rien allouer ici : un incrément et une comparaison par paquet.
@@ -159,11 +193,7 @@ maybe_flush = ->
   _pkt_count += 1
   return if _pkt_count < _check_every
   _pkt_count = 0
-  return unless _dir and _name
-  now = _clock!
-  return if now - _last_flush < _flush_interval
-  _last_flush = now
-  _write_snapshot get_metrics_json!
+  flush_if_due!
 
 --- Clear all metrics (for testing).
 clear = ->
@@ -179,6 +209,8 @@ _get_state = ->
   :record_verdict
   :get_metrics_json
   :write_now
+  :purge_files
+  :flush_if_due
   :maybe_flush
   :file_path
   :clear

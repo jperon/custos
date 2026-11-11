@@ -1,6 +1,6 @@
 -- tests/unit/webui/metrics_handler_spec.moon
 -- Tests de webui/handlers/metrics : agrégation multi-workers, fichiers
--- corrompus/périmés, échappement HTML et état désactivé.
+-- corrompus/anciens, échappement HTML et état désactivé.
 
 json = require "lib.json"
 { :write_config } = require "webui.serializer"
@@ -152,17 +152,24 @@ describe "webui/handlers/metrics", ->
       assert.truthy body\find("1 fichier(s) illisible(s) ou corrompu(s)", 1, true)
       assert.truthy body\find("ok", 1, true)
 
-    it "ignore un instantané périmé dans les totaux mais affiche sa fraîcheur", ->
+    it "compte un instantané ancien et affiche son inactivité", ->
       write_snap "metrics-old.json", (snap_json (NOW - 5000), { (rule "old", 9, 0, 0) })
       write_snap "metrics-new.json", (snap_json NOW, { (rule "new", 1, 0, 0) })
       status, _, body = handle_metrics_get make_req!, make_state!
       assert.equals 200, status
-      assert.truthy body\find("périmé (ignoré)", 1, true)
+      assert.truthy body\find("aucune activité depuis 5000 s", 1, true)
       assert.truthy body\find("à jour", 1, true)
-      -- Le total ne compte que le worker à jour (1 allow) : le 9 du périmé
-      -- n'apparaît dans aucune cellule de compteur.
+      -- Tous les instantanés valides sont comptés : 9 + 1.
+      assert.truthy body\find("<td>9</td>", 1, true)
+      assert.truthy body\find("<td>10</td>", 1, true)
+
+    it "compte le verdict d'un worker à faible débit (600 s sans écriture)", ->
+      write_snap "metrics-slow.json", (snap_json (NOW - 600), { (rule "slow", 1, 0, 0) })
+      status, _, body = handle_metrics_get make_req!, make_state!
+      assert.equals 200, status
+      assert.truthy body\find("slow", 1, true)
+      assert.truthy body\find("aucune activité depuis 600 s", 1, true)
       assert.truthy body\find("<td>1</td>", 1, true)
-      assert.is_nil body\find("<td>9</td>", 1, true)
 
     it "échappe le HTML des noms de règle et de worker", ->
       write_snap "metrics-x.json", (snap_json NOW, { (rule "<script>alert(1)</script>", 1, 0, 0) })

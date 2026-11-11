@@ -595,12 +595,17 @@ Collecte de métriques internes. Chaque worker `worker_questions` accumule les
 verdicts par règle en mémoire, puis écrit périodiquement un instantané JSON
 `metrics-<worker>.json` dans le répertoire d'exécution (celui du pidfile
 `runtime.pid_file`, `/var/run` par défaut ; surchargeable par
-`CUSTOS_PID_FILE`). L'écriture est atomique (fichier temporaire + `os.rename`)
-et n'a lieu que dans le worker concerné, jamais dans le chemin par paquet :
-l'horloge n'est lue qu'une fois tous les 1024 paquets, et l'intervalle
-`flush_interval` décide de l'écriture. La page admin en lecture seule
-`/admin/metrics` agrège les instantanés de tous les workers (voir
-[docs/agents/webui.md](../docs/agents/webui.md)).
+`CUSTOS_PID_FILE`). Le superviseur **purge** les `metrics-*.json` et
+`metrics-*.json.tmp.*` d'une exécution précédente au démarrage, avant de forker
+les workers ; chaque worker écrit immédiatement un instantané à zéro après son
+`init` (y compris après un redémarrage), puis toutes les `flush_interval`
+secondes. L'écriture est atomique (fichier temporaire + `os.rename`) et n'a
+lieu que dans le worker concerné, jamais dans le chemin par paquet : l'horloge
+n'est lue qu'une fois tous les 32 paquets, avec en plus un point de passage
+périodique sans paquet dans `run_queue` (`opts.idle_ms`). La page admin en
+lecture seule `/admin/metrics` agrège **tous** les instantanés valides de
+l'exécution courante ; l'âge de chacun est affiché à titre d'information, sans
+exclusion des totaux (voir [docs/agents/webui.md](../docs/agents/webui.md)).
 
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|

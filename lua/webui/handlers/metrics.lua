@@ -9,8 +9,8 @@ local json = require("lib.json")
 local pidfile = require("lib.pidfile")
 local shquote
 shquote = require("lib.shquote").shquote
-local STALE_FACTOR = 3
-local STALE_MIN = 180
+local IDLE_FACTOR = 3
+local IDLE_MIN = 180
 local runtime_dir_for
 runtime_dir_for = function(state, cfg)
   if state.runtime_dir then
@@ -162,15 +162,15 @@ fmt_ts = function(ts)
   return ok and s or "date inconnue"
 end
 local render_workers
-render_workers = function(snapshots, now, stale_after)
+render_workers = function(snapshots, now, idle_after)
   local rows = { }
   for _index_0 = 1, #snapshots do
     local snap = snapshots[_index_0]
     local age = math.max(0, now - snap.timestamp)
-    local stale = age > stale_after
+    local idle = age > idle_after
     local state
-    if stale then
-      state = "périmé (ignoré)"
+    if idle then
+      state = "aucune activité depuis " .. tostring(age) .. " s"
     else
       state = "à jour"
     end
@@ -270,30 +270,12 @@ handle_metrics_get = function(req, state)
   end
   local snapshots, ignored = read_snapshots(dir)
   local interval = tonumber(cfg_metrics.flush_interval or 60)
-  local stale_after = math.max(interval * STALE_FACTOR, STALE_MIN)
-  local fresh
-  do
-    local _accum_0 = { }
-    local _len_0 = 1
-    for _index_0 = 1, #snapshots do
-      local s = snapshots[_index_0]
-      if now - s.timestamp <= stale_after then
-        _accum_0[_len_0] = s
-        _len_0 = _len_0 + 1
-      end
-    end
-    fresh = _accum_0
-  end
-  local agg = aggregate(fresh)
+  local idle_after = math.max(interval * IDLE_FACTOR, IDLE_MIN)
+  local agg = aggregate(snapshots)
   local notices = { }
   notices[#notices + 1] = H.p({
     style = "color:#555"
-  }, "Instantanés lus dans " .. tostring(esc(dir)) .. " ; un fichier périmé (plus de " .. tostring(stale_after) .. " s) ou corrompu est ignoré.")
-  if #fresh == 0 then
-    notices[#notices + 1] = H.p({
-      style = "color:#a00"
-    }, "Aucun instantané à jour : démarrez le service ou vérifiez le répertoire d'exécution.")
-  end
+  }, "Instantanés lus dans " .. tostring(esc(dir)) .. " ; tous les instantanés valides sont comptés, les fichiers illisibles ou corrompus sont ignorés.")
   if ignored > 0 then
     notices[#notices + 1] = H.p({
       style = "color:#a00"
@@ -311,7 +293,7 @@ handle_metrics_get = function(req, state)
   })
   parts[#parts + 1] = H.section({
     H.h2("Workers"),
-    render_workers(snapshots, now, stale_after),
+    render_workers(snapshots, now, idle_after),
     " ",
     H.a({
       class = "btn btn-secondary",
