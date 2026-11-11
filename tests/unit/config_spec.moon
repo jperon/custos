@@ -234,3 +234,46 @@ describe "config.auth.bridge_ifname", ->
     cfg = reload path
     os.remove path
     assert.equals "br-explicit", cfg.auth.bridge_ifname
+
+describe "config.nfqueue.responses", ->
+  after_each ->
+    ffi.C.unsetenv "CUSTOS_CONFIG_PATH"
+    package.loaded["config"] = nil
+
+  -- Capture les log_warn (thunks) émis pendant le chargement de la config.
+  capture_warns = (fn) ->
+    old_log = package.loaded["log"]
+    calls = {}
+    package.loaded["log"] = {
+      log_warn: (thunk) -> calls[#calls + 1] = thunk!
+    }
+    ok, err = pcall fn
+    package.loaded["log"] = old_log
+    assert.is_true ok, err
+    calls
+
+  it "une plage (\"4-5\") est ramenée à sa première file avec un warn", ->
+    path = "tmp/config_spec_nfq_multi.moon"
+    write_moon path, [[return { nfqueue: { responses: "4-5" } }]]
+    holder = {}
+    calls = capture_warns -> holder.cfg = reload path
+    os.remove path
+    assert.equals "4", holder.cfg.nfqueue.responses
+    found = false
+    for c in *calls
+      found = true if c.action == "nfqueue_responses_single_queue_only"
+    assert.is_true found
+
+  it "une file seule (\"4\") est inchangée", ->
+    path = "tmp/config_spec_nfq_single.moon"
+    write_moon path, [[return { nfqueue: { responses: "4" } }]]
+    cfg = reload path
+    os.remove path
+    assert.equals "4", cfg.nfqueue.responses
+
+  it "questions: \"0-1\" reste inchangé (contrôle)", ->
+    path = "tmp/config_spec_nfq_questions.moon"
+    write_moon path, [[return { nfqueue: { questions: "0-1" } }]]
+    cfg = reload path
+    os.remove path
+    assert.equals "0-1", cfg.nfqueue.questions

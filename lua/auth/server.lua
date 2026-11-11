@@ -20,10 +20,10 @@ do
   log_info, log_warn, log_error, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug
 end
 local config = require("config")
-local read_request, send_response
+local read_request, send_response, apply_io_timeouts
 do
   local _obj_0 = require("lib.http")
-  read_request, send_response = _obj_0.read_request, _obj_0.send_response
+  read_request, send_response, apply_io_timeouts = _obj_0.read_request, _obj_0.send_response, _obj_0.apply_io_timeouts
 end
 local get_mac
 get_mac = require("mac_learner_ipc").get_mac
@@ -189,12 +189,7 @@ handle_client = function(args)
     end)
     client:settimeout(nil)
     local client_timeout = (state.auth_cfg and tonumber(state.auth_cfg.client_timeout)) or 15
-    pcall(function()
-      return client:setoption("rcvtimeo", client_timeout)
-    end)
-    pcall(function()
-      return client:setoption("sndtimeo", client_timeout)
-    end)
+    apply_io_timeouts(client, client_timeout)
     log_debug(function()
       return {
         action = "server_blocking_mode_set",
@@ -285,8 +280,10 @@ handle_client = function(args)
       }
     end)
     local peer_mac = get_mac(peer_ip)
+    local max_body = (state.auth_cfg and tonumber(state.auth_cfg.max_body)) or 1048576
     local req, req_err = read_request(tls_client, {
-      timeout = client_timeout
+      timeout = client_timeout,
+      max_body = max_body
     })
     if not (req) then
       log_warn(function()
@@ -296,6 +293,9 @@ handle_client = function(args)
           err = req_err
         }
       end)
+      if req_err == "body_too_large" then
+        send_response(tls_client, 413, { }, "Payload Too Large")
+      end
       tls_client:close()
       return 
     end

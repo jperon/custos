@@ -63,6 +63,10 @@ describe "config.doh — valeurs par défaut", ->
     cfg = reload nil
     assert.equals 8443, cfg.doh.port
 
+  it "client_timeout vaut 15 s par défaut", ->
+    cfg = reload nil
+    assert.equals 15, cfg.doh.client_timeout
+
 -- ── Fusion config externe ─────────────────────────────────────────────────────
 
 describe "config.doh — fusion avec config externe", ->

@@ -121,6 +121,7 @@ load_auth_cfg = function()
   auth.session_ttl = tonumber(auth.session_ttl) or 0
   auth.secrets = auth.secrets or "/etc/custos/secrets"
   auth.sessions_file = auth.sessions_file or "/tmp/sessions.lua"
+  auth.max_body = tonumber(auth.max_body) or 1048576
   auth.config_path = meta.path or "/etc/custos/config.moon"
   return auth
 end
@@ -138,6 +139,7 @@ load_doh_cfg = function()
     end)(),
     upstream_port = tonumber(config.doh.upstream_port) or 53,
     timeout_ms = tonumber(config.doh.upstream_timeout_ms) or 2000,
+    client_timeout = tonumber(config.doh.client_timeout) or 15,
     cert = (function()
       if config.doh.cert and #config.doh.cert > 0 then
         return config.doh.cert

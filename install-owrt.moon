@@ -29,6 +29,11 @@ fail = (msg) -> io.write "#{RED}[-]#{NC} #{msg}\n"
 info = (msg) -> io.write "#{CYAN}[*]#{NC} #{msg}\n"
 step = (msg) -> io.write "\n#{BOLD}━━ #{msg}#{NC}\n"
 
+--- Quote un argument pour une commande shell POSIX (une seule fonction pour
+-- ssh_run/ssh_capture/scp_send : ferme la quote, échappe ', rouvre la quote).
+shell_quote = (s) ->
+  "'" .. (tostring(s)\gsub "'", "'\\''") .. "'"
+
 -- ── Installer Object ────────────────────────────────────────────────
 
 Installer = (cfg) ->
@@ -51,6 +56,12 @@ Installer = (cfg) ->
       code == 0 or code == true
 
     capture: (cmd) =>
+      -- En dry-run, aucune commande ne doit partir : on affiche la commande et
+      -- on renvoie une sortie factice documentée (les étapes qui dépendent
+      -- d'une vraie réponse ont leur propre court-circuit `@cfg.dry`).
+      if @cfg.dry
+        io.write "  #{CYAN}DRY#{NC} #{cmd}\n"
+        return "(dry-run : sortie non capturée)"
       fh = io.popen "#{cmd} 2>&1"
       return nil unless fh
       out = fh\read "*a"
@@ -76,35 +87,16 @@ Installer = (cfg) ->
       -- crash-loop arp/captive ENODEV). LogLevel=ERROR supprime ce bandeau
       -- sans rien changer côté vérification de clé (StrictHostKeyChecking=no
       -- reste inchangé).
-      "ssh -p #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 #{@cfg.user}@#{@ssh_host!}"
+      "ssh -p #{shell_quote @cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 #{shell_quote "#{@cfg.user}@#{@ssh_host!}"}"
 
     ssh_run: (cmd) =>
-      escaped = cmd\gsub("'", "'\"'\"'")
-      @run "#{ @ssh_prefix! } '#{escaped}'"
+      @run "#{ @ssh_prefix! } #{shell_quote cmd}"
 
     ssh_capture: (cmd) =>
-      escaped = cmd\gsub("'", "'\"'\"'")
-      @capture "#{ @ssh_prefix! } '#{escaped}'"
-
-    ssh_run_script: (name, content) =>
-      tmplocal = "tmp/owrt-#{name}.sh"
-      unless @cfg.dry
-        os.execute "mkdir -p tmp"
-        fh = io.open tmplocal, "w"
-        unless fh
-          fail "Impossible d'écrire #{tmplocal}"
-          return false
-        fh\write content
-        fh\close!
-      else
-        io.write "  #{CYAN}DRY#{NC} write #{tmplocal}\n"
-
-      ok_scp = @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/tmp/#{name}.sh"
-      return false unless ok_scp
-      @ssh_run "sh /tmp/#{name}.sh && rm -f /tmp/#{name}.sh"
+      @capture "#{ @ssh_prefix! } #{shell_quote cmd}"
 
     scp_send: (src, dst) =>
-      @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r #{src} #{@cfg.user}@#{@ssh_host!}:#{dst}"
+      @run "scp -O -P #{shell_quote @cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r #{shell_quote src} #{shell_quote "#{@cfg.user}@#{@ssh_host!}:#{dst}"}"
 
     -- ── Étapes d'installation ────────────────────────────────────────
 
@@ -158,6 +150,9 @@ Installer = (cfg) ->
 
     check_connectivity: =>
       step "Vérification de la connectivité SSH (#{@cfg.user}@#{@cfg.host}:#{@cfg.port})"
+      if @cfg.dry
+        warn "MODE DRY-RUN — connectivité non testée"
+        return true
       out = @ssh_capture "uname -a"
       if out and out\find "Linux"
         ok "Connecté : #{out\match '%S+%s+%S+%s+(%S+)'}"
@@ -167,6 +162,10 @@ Installer = (cfg) ->
 
     detect_pkg_manager: =>
       step "Détection du gestionnaire de paquets"
+      if @cfg.dry
+        @cfg.pkg_mgr = "apk"
+        warn "MODE DRY-RUN — gestionnaire supposé : apk"
+        return true
       out_apk  = @ssh_capture "command -v apk  2>/dev/null"
       out_opkg = @ssh_capture "command -v opkg 2>/dev/null"
 
@@ -477,16 +476,15 @@ Installer = (cfg) ->
         fail "Échec du chmod +x custos-update"
         return false
 
-      -- Cron quotidien (à 4h)
-      cron_entry = "0 4 * * * /usr/sbin/custos-update 2>&1"
-      @ssh_run "mkdir -p /etc/crontabs"
-      -- Ajouter l'entrée si elle n'existe pas déjà
-      unless @ssh_run "grep -qF 'custos-update' /etc/crontabs/root 2>/dev/null || echo '#{cron_entry}' >> /etc/crontabs/root"
-        warn "Impossible d'ajouter l'entrée cron — configurez manuellement"
+      -- Le cron de mise à jour des listes est géré par /etc/init.d/custos
+      -- (_cron_add) : marqueur « # custos-update-lists » et planification UCI
+      -- custos.main.update_lists_schedule (défaut 0 3 * * *, quotidien). Ne PAS
+      -- en ajouter un second ici (doublon, et il échappait au retrait par
+      -- _cron_remove faute de marqueur).
       @ssh_run "/etc/init.d/cron enable 2>/dev/null || true"
       @ssh_run "/etc/init.d/cron restart 2>/dev/null || true"
 
-      ok "custos-update installé (/usr/sbin/custos-update) + cron lundi 4h"
+      ok "custos-update installé (/usr/sbin/custos-update) — cron géré par /etc/init.d/custos"
       true
 
     -- Hotplug RPS/RFS/GRO : étale le softirq RX sur tous les cœurs (autodétecté).
@@ -564,9 +562,25 @@ Exemple:
 ]]
   os.exit 0
 
+--- Valide l'hôte : hostname, IPv4 ou IPv6 littéral entre crochets.
+valid_host = (h) -> type(h) == "string" and h\match "^[%w%.%-:%[%]]+$"
+
+--- Valide l'utilisateur SSH (identique à ce qu'acceptent les comptes Unix).
+valid_user = (u) -> type(u) == "string" and u\match "^[%w%._%-]+$"
+
+--- Valide une destination : chemin absolu sans métacaractère shell.
+valid_dest = (d) -> type(d) == "string" and d\match "^/[%w%._/%-]*$"
+
+--- Valide un port TCP (entier 1-65535).
+valid_port = (p) ->
+  type(p) == "number" and p == math.floor(p) and p >= 1 and p <= 65535
+
 --- Parse les arguments de la ligne de commande.
+-- @tparam ?table args table d'arguments (défaut : arg global)
 -- @treturn table|nil cfg ou nil en cas d'erreur
-parse_args = ->
+-- @treturn ?string message d'erreur si nil
+parse_args = (args) ->
+  args or= arg
   cfg = {
     host:       nil
     port:       22
@@ -580,8 +594,8 @@ parse_args = ->
   }
 
   i = 1
-  while i <= #arg
-    a = arg[i]
+  while i <= #args
+    a = args[i]
     switch a
       when "-h", "--help"
         print_usage!
@@ -595,30 +609,40 @@ parse_args = ->
         cfg.uninstall = true
       when "--port"
         i += 1
-        cfg.port = tonumber(arg[i]) or (fail("--port attend un entier") and os.exit(1))
+        raw = args[i]
+        port = tonumber raw
+        unless port and valid_port port
+          return nil, "--port invalide (entier 1-65535 attendu) : #{tostring raw}"
+        cfg.port = port
       when "--user"
         i += 1
-        cfg.user = arg[i]
+        cfg.user = args[i]
       when "--dest"
         i += 1
-        cfg.dest = arg[i]
+        cfg.dest = args[i]
       else
         if a\sub(1, 1) == "-"
-          fail "Option inconnue : #{a}"
-          os.exit 1
+          return nil, "Option inconnue : #{a}"
         else
           cfg.host = a
     i += 1
 
-  if cfg.host and cfg.host\match "%s"
-    fail "Hôte invalide (contient des espaces) : #{cfg.host}"
-    os.exit 1
+  if cfg.host and not valid_host cfg.host
+    return nil, "Hôte invalide : #{cfg.host}"
+  unless valid_user cfg.user
+    return nil, "Utilisateur invalide : #{tostring cfg.user}"
+  unless valid_dest cfg.dest
+    return nil, "Destination invalide (chemin absolu attendu) : #{tostring cfg.dest}"
   cfg
 
 -- ── Point d'entrée ───────────────────────────────────────────────
 
 main = ->
-  cfg = parse_args!
+  cfg, err = parse_args!
+  unless cfg
+    fail err
+    print_usage! if err and err\match "Adresse du routeur manquante"
+    os.exit 1
   unless cfg.host
     fail "Adresse du routeur manquante (hostname, IPv4 ou IPv6)."
     print_usage!
@@ -677,4 +701,4 @@ main = ->
 script_name = arg and arg[0] or ""
 main! if script_name\match "install%-owrt"
 
-{ :Installer, :main, :parse_args }
+{ :Installer, :main, :parse_args, :valid_host, :valid_user, :valid_dest, :valid_port, :shell_quote }

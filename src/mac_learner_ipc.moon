@@ -19,8 +19,64 @@ AF_UNIX     = 1
 AF_INET6    = 10
 SOCK_STREAM = 1
 
+-- Bornes des send/recv bloquants vers le learner. Doit rester supérieur au
+-- PROBE_TIMEOUT_MS (200 ms) du learner, qui peut retenir la réponse le temps
+-- d'un sondage ARP/NS ; sans cela un learner figé bloquerait le plan de données
+-- (worker_responses/worker_tls/worker_doh).
+SOL_SOCKET      = 1
+SO_RCVTIMEO     = 20
+SO_SNDTIMEO     = 21
+QUERY_TIMEOUT_S = 0.5
+
 bit = require "bit"
 { :mac2s } = require "packet_utils"
+
+--- Pose un timeout (secondes, fractions acceptées) sur un fd de socket.
+-- Best-effort : un mock de libc en test peut ne pas exposer setsockopt.
+-- @tparam number fd      Descripteur de socket
+-- @tparam number optname SO_RCVTIMEO ou SO_SNDTIMEO
+-- @tparam number secs    Délai maximal
+set_socket_timeout = (fd, optname, secs) ->
+  pcall ->
+    tv = ffi.new "struct timeval"
+    tv.tv_sec  = math.floor secs
+    tv.tv_usec = math.floor (secs - math.floor(secs)) * 1e6
+    libc.setsockopt fd, SOL_SOCKET, optname, tv, ffi.sizeof tv
+
+--- Interroge le learner : connect, send, recv, close.
+-- Squelette commun à get_mac/get_vlan/strip_target, borné dans le temps par
+-- SO_RCVTIMEO/SO_SNDTIMEO. Un timeout ou une erreur rend nil (traité comme
+-- « inconnu » par l'appelant).
+-- @tparam string request Ligne de requête terminée par \n
+-- @treturn string|nil Réponse brute, ou nil si échec/timeout
+query = (request) ->
+  sock = libc.socket AF_UNIX, SOCK_STREAM, 0
+  unless sock >= 0
+    log_warn -> { action: "mac_ipc_socket_failed", errno: tonumber(ffi.C.__errno_location()[0]) }
+    return nil
+
+  addr = ffi.new "struct sockaddr_un"
+  addr.sun_family = AF_UNIX
+  ffi.copy addr.sun_path, QUERY_SOCK
+  -- addrlen = offset de sun_path + longueur du chemin + '\0'
+  addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
+
+  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0
+    libc.close sock
+    return nil
+
+  set_socket_timeout sock, SO_RCVTIMEO, QUERY_TIMEOUT_S
+  set_socket_timeout sock, SO_SNDTIMEO, QUERY_TIMEOUT_S
+
+  libc.send sock, request, #request, 0
+
+  buf = ffi.new "char[64]"
+  n = libc.recv sock, buf, 63, 0
+  libc.close sock
+
+  return nil if n <= 0
+
+  ffi.string buf, n
 
 --- Tente de dériver une adresse MAC depuis l'identifiant EUI-64 d'une adresse IPv6.
 -- Un identifiant EUI-64 est reconnaissable aux octets 11 et 12 (0-indexés) de
@@ -54,36 +110,11 @@ mac_from_eui64 = (ip_str) ->
 get_mac = (ip_str) ->
   return "unknown" unless ip_str and ip_str ~= "" and ip_str ~= "unknown"
 
-  sock = libc.socket AF_UNIX, SOCK_STREAM, 0
-  unless sock >= 0
-    log_warn -> { action: "mac_ipc_socket_failed", errno: tonumber(ffi.C.__errno_location()[0]) }
-    return mac_from_eui64(ip_str) or "unknown"
-
-  addr = ffi.new "struct sockaddr_un"
-  addr.sun_family = AF_UNIX
-  ffi.copy addr.sun_path, QUERY_SOCK
-  -- addrlen = offset de sun_path + longueur du chemin + '\0'
-  addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
-
-  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0
-    libc.close sock
-    return mac_from_eui64(ip_str) or "unknown"
-
-  -- Envoi : "ip_str\n"
-  req = ip_str .. "\n"
-  libc.send sock, req, #req, 0
-
-  -- Lecture de la réponse : "aa:bb:cc:dd:ee:ff\n" (18 octets) ou "unknown\n" (8)
-  buf = ffi.new "char[64]"
-  n = libc.recv sock, buf, 63, 0
-  libc.close sock
-
-  return "unknown" if n <= 0
-
-  resp = ffi.string buf, n
-  -- Extrait la MAC (format "xx:xx:xx:xx:xx:xx") ou "unknown"
-  mac = resp\match "^([0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f])"
-  return mac if mac
+  resp = query ip_str .. "\n"
+  if resp
+    -- Extrait la MAC (format "xx:xx:xx:xx:xx:xx") ou "unknown"
+    mac = resp\match "^([0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f])"
+    return mac if mac
 
   -- Fallback EUI-64 : si le learner ne connaît pas cette adresse IPv6 mais
   -- qu'elle encode une MAC EUI-64, on la dérive directement sans apprentissage.
@@ -102,31 +133,9 @@ get_mac = (ip_str) ->
 get_vlan = (ip_str) ->
   return nil unless ip_str and ip_str ~= "" and ip_str ~= "unknown"
 
-  sock = libc.socket AF_UNIX, SOCK_STREAM, 0
-  unless sock >= 0
-    log_warn -> { action: "vlan_ipc_socket_failed", errno: tonumber(ffi.C.__errno_location()[0]) }
-    return nil
+  resp = query "vlan:" .. ip_str .. "\n"
+  return nil unless resp
 
-  addr = ffi.new "struct sockaddr_un"
-  addr.sun_family = AF_UNIX
-  ffi.copy addr.sun_path, QUERY_SOCK
-  addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
-
-  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0
-    libc.close sock
-    return nil
-
-  -- Envoi : "vlan:ip_str\n"
-  req = "vlan:" .. ip_str .. "\n"
-  libc.send sock, req, #req, 0
-
-  buf = ffi.new "char[64]"
-  n = libc.recv sock, buf, 63, 0
-  libc.close sock
-
-  return nil if n <= 0
-
-  resp = ffi.string buf, n
   id = resp\match "^(%d+)"
   return tonumber(id) if id
 
@@ -148,30 +157,9 @@ parse_strip_resp = (resp) ->
 strip_target = (name) ->
   return nil unless name and name ~= "" and name ~= "unknown"
 
-  sock = libc.socket AF_UNIX, SOCK_STREAM, 0
-  unless sock >= 0
-    log_warn -> { action: "strip_ipc_socket_failed", errno: tonumber(ffi.C.__errno_location()[0]) }
-    return nil
+  resp = query "strip:" .. name .. "\n"
+  return nil unless resp
 
-  addr = ffi.new "struct sockaddr_un"
-  addr.sun_family = AF_UNIX
-  ffi.copy addr.sun_path, QUERY_SOCK
-  addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
+  parse_strip_resp resp
 
-  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0
-    libc.close sock
-    return nil
-
-  -- Envoi : "strip:name\n"
-  req = "strip:" .. name .. "\n"
-  libc.send sock, req, #req, 0
-
-  buf = ffi.new "char[64]"
-  n = libc.recv sock, buf, 63, 0
-  libc.close sock
-
-  return nil if n <= 0
-
-  parse_strip_resp ffi.string buf, n
-
-{ :get_mac, :get_vlan, :mac_from_eui64, :strip_target, :parse_strip_resp }
+{ :get_mac, :get_vlan, :mac_from_eui64, :strip_target, :parse_strip_resp, :query }

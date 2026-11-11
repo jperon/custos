@@ -28,6 +28,18 @@ local bit = require("bit")
 local AF_UNIX = 1
 local SOCK_STREAM = 1
 local POLLIN = 1
+local SOL_SOCKET = 1
+local SO_RCVTIMEO = 20
+local QUERY_RECV_TIMEOUT_S = 0.2
+local set_recv_timeout
+set_recv_timeout = function(fd, secs)
+  return pcall(function()
+    local tv = ffi.new("struct timeval")
+    tv.tv_sec = math.floor(secs)
+    tv.tv_usec = math.floor((secs - math.floor(secs)) * 1e6)
+    return libc.setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, tv, ffi.sizeof(tv))
+  end)
+end
 local sh_quote
 sh_quote = function(s)
   return "'" .. tostring(s):gsub("'", "'\"'\"'") .. "'"
@@ -218,6 +230,7 @@ end
 local start_query
 start_query = function(client_fd)
   local buf = ffi.new("char[64]")
+  set_recv_timeout(client_fd, QUERY_RECV_TIMEOUT_S)
   local n = libc.recv(client_fd, buf, 63, 0)
   if n <= 0 then
     libc.close(client_fd)
@@ -496,5 +509,7 @@ return {
   vlan_lookup = vlan_lookup,
   process_strip_learn = process_strip_learn,
   strip_lookup = strip_lookup,
-  probe_request = probe_request
+  probe_request = probe_request,
+  start_query = start_query,
+  ip16_to_str = ip16_to_str
 }

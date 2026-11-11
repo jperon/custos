@@ -242,6 +242,50 @@ parse_packet = (raw) ->
 
   nil, "parse_failed"
 
+-- ── Agrégation des décisions multi-questions ─────────────────────
+-- Un message IPC ne peut porter que MAX_RESPONSE_RULE_IDS ids (cf.
+-- ipc.encode_msg, qui tronque au-delà) : on plafonne ici pour rester aligné.
+MAX_RESPONSE_RULE_IDS = 8
+
+--- Ajoute `values` à `dst` sans doublon, en préservant l'ordre.
+-- @tparam table dst Table destination (mutée)
+-- @tparam table|nil values Valeurs à ajouter
+-- @tparam number|nil limit Nombre maximal d'éléments dans `dst`
+-- @treturn number Nombre de valeurs uniques ignorées faute de place
+append_unique = (dst, values, limit) ->
+  overflow = 0
+  return overflow unless type(values) == "table"
+  seen = {}
+  seen[v] = true for v in *dst
+  for v in *values
+    continue unless v and v != ""
+    continue if seen[v]
+    if limit and #dst >= limit
+      overflow += 1
+      continue
+    dst[#dst + 1] = v
+    seen[v] = true
+  overflow
+
+--- Agrège les décisions de toutes les questions d'un paquet DNS.
+-- `response_rule_ids` est fusionné (dédupliqué, ordre préservé, plafonné à
+-- MAX_RESPONSE_RULE_IDS) au lieu d'être écrasé par la dernière question ;
+-- `allow_modifiers` est fusionné (dernière valeur gagnante).
+-- @tparam table decisions Liste de décisions `filter.decide_meta` (nil ignorés)
+-- @treturn table { response_rule_ids, allow_modifiers, dropped_ids }
+aggregate_decisions = (decisions) ->
+  response_rule_ids = {}
+  allow_modifiers = nil
+  dropped_ids = 0
+  for decision in *decisions
+    continue unless decision
+    dropped_ids += append_unique response_rule_ids, decision.response_rule_ids, MAX_RESPONSE_RULE_IDS
+    if decision.allow_modifiers and next(decision.allow_modifiers)
+      allow_modifiers = allow_modifiers or {}
+      for k, v in pairs decision.allow_modifiers
+        allow_modifiers[k] = v
+  { :response_rule_ids, :allow_modifiers, :dropped_ids }
+
 -- ── Callback principal ───────────────────────────────────────────
 handle_question = (qh_ptr, nfad, pkt_id) ->
   -- ── Payload brut ─────────────────────────────────────────────
@@ -371,6 +415,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   block_modifiers = nil
   allow_modifiers = nil
   response_rule_ids = {}
+  decisions = {}
   q_fields = {
     worker:   "dns"
     mac_src:  l2.mac_src
@@ -404,11 +449,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       rule_id     = decision.rule_id
       nft_timeout = decision.timeout
       matched_list = list_from_condition_reason decision.condition_reason
-      response_rule_ids = decision.response_rule_ids or {}
-      if decision.allow_modifiers and next(decision.allow_modifiers)
-        allow_modifiers = allow_modifiers or {}
-        for k, v in pairs decision.allow_modifiers
-          allow_modifiers[k] = v
+      decisions[#decisions + 1] = decision
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule   = rule_id or ""
     q_fields.list   = matched_list
@@ -430,6 +471,18 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
       block_timeout   = nft_timeout
       block_modifiers = decision and decision.modifiers or nil
     write_event q_fields, allowed
+
+  -- Agrège les décisions de toutes les questions : les règles on_response
+  -- (dns_strip, cname…) de la première ne doivent pas être perdues.
+  aggregated = aggregate_decisions decisions
+  response_rule_ids = aggregated.response_rule_ids
+  allow_modifiers = aggregated.allow_modifiers
+  if aggregated.dropped_ids > 0
+    log_warn -> {
+      action: "response_rule_ids_truncated"
+      dropped: aggregated.dropped_ids
+      max: MAX_RESPONSE_RULE_IDS
+    }
 
   -- Écriture IPC : write_msg pour les allow, write_refused_msg pour les refuse.
   -- Le comportement fin (strip DNS, injection nft…) est déterminé côté response
@@ -538,4 +591,5 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   run_queue tonumber(queue_num), handle_question
 
 { :run,
-  :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream }
+  :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream,
+  :append_unique, :aggregate_decisions, :MAX_RESPONSE_RULE_IDS }

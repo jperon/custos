@@ -18,7 +18,7 @@ bit     = require "bit"
 { :fork_child, :reap_one }              = require "lib.process"
 { :load_or_generate_sni, :load_static } = require "auth.cert"
 { :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
-{ :read_request, :send_response }       = require "lib.http"
+{ :read_request, :send_response, :apply_io_timeouts } = require "lib.http"
 { :get_mac, :get_vlan }                 = require "mac_learner_ipc"
 { :process_query }                      = require "doh.query"
 { :parse, :types, :rcodes }              = require "ipparse.l7.dns"
@@ -154,6 +154,16 @@ dns_response_json = (raw) ->
 
 -- ── TLS server helpers (mirrors auth/server.moon) ───────────────────────────
 
+--- Décide si la boucle de handshake TLS doit continuer.
+-- Pure, pour tester l'échéance absolue sans vrai socket.
+-- @tparam boolean done      Handshake terminé.
+-- @tparam number  attempts  Tentatives déjà effectuées.
+-- @tparam number  now       Instant courant (os.time).
+-- @tparam number  deadline  Échéance absolue.
+-- @treturn boolean true s'il faut tenter un handshake de plus.
+handshake_should_continue = (done, attempts, now, deadline) ->
+  not done and attempts < 50 and now <= deadline
+
 --- Create a listening IPv4 TCP socket on the given port.
 -- @tparam number port TCP port.
 -- @treturn table|nil Socket object, or nil + error string.
@@ -190,6 +200,7 @@ make_server6 = (port) ->
   :H2_FRAME_DATA, :H2_FRAME_HEADERS, :H2_FRAME_SETTINGS
   :H2_FRAME_PING, :H2_FRAME_GOAWAY, :H2_FRAME_WINDOW_UPDATE
   :H2_FLAG_END_STREAM, :H2_FLAG_END_HEADERS, :H2_FLAG_ACK
+  :H2_DEFAULT_MAX_FRAME_SIZE
   :h2_read_frame, :h2_write_frame
 } = require "doh.h2_frames"
 
@@ -198,56 +209,97 @@ make_server6 = (port) ->
 h2_encode_response_headers = ->
   "\x88\x5f\x17application/dns-message"
 
+-- Code d'erreur HTTP/2 FRAME_SIZE_ERROR (RFC 7540 §7).
+H2_FRAME_SIZE_ERROR = 0x6
+-- Plafond cumulé des DATA : un message DNS fait au plus 65535 octets.
+H2_MAX_BODY = 65535
+-- GOAWAY 8 octets : dernier stream (0) + code d'erreur.
+h2_goaway = (conn, code) ->
+  h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0,
+    "\x00\x00\x00\x00\x00\x00\x00" .. string.char(code)
+
+--- Traite une connexion HTTP/2 minimale (préface PRI + frames).
+-- Limites connues, volontairement figées par les tests :
+--   (a) HPACK n'est PAS décodé : `:method` et `:path` ne sont jamais lus, et
+--       le flux n'est considéré terminé que sur une frame DATA portant
+--       END_STREAM. Un GET RFC 8484 (HEADERS + END_STREAM, sans DATA) est donc
+--       rejeté (`nil, "h2_incomplete"` + GOAWAY).
+--   (b) Tout POST HTTP/2, quel que soit son chemin, est traité comme une
+--       requête DoH (pas de routage par `:path`).
+-- @tparam table  conn       Connexion TLS avec :receive(n|"*l") et :send(data).
+-- @tparam string peer_ip    IP du client (logs et décision de filtre).
+-- @tparam string peer_mac   MAC du client, ou nil.
+-- @tparam table  upstream   Handle du résolveur amont.
+-- @tparam number peer_vlan  VLAN du client, ou nil.
+-- @treturn string|nil  Réponse DNS brute, ou nil + erreur.
 handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
   -- Consomme la fin de la préface : "SM\r\n\r\n" (read_request a déjà lu "PRI * HTTP/2.0\r\n\r\n")
   conn\receive "*l"  -- "SM"
   conn\receive "*l"  -- "" (ligne vide)
 
   -- Préface serveur : SETTINGS vide
-  h2_write_frame conn, H2_FRAME_SETTINGS, 0, 0, ""
+  ok_w, w_err = h2_write_frame conn, H2_FRAME_SETTINGS, 0, 0, ""
+  return nil, w_err unless ok_w
 
   stream_id  = nil
   dns_chunks = {}
+  dns_bytes  = 0
   done       = false
 
   for _ = 1, 30
-    ftype, flags, sid, payload = h2_read_frame conn
-    break unless ftype
+    ftype, flags, sid, payload = h2_read_frame conn, H2_DEFAULT_MAX_FRAME_SIZE
+    if not ftype
+      -- Frame annoncée trop grande : FRAME_SIZE_ERROR, puis fermeture.
+      if payload == "frame_too_large"
+        h2_goaway conn, H2_FRAME_SIZE_ERROR
+        return nil, "h2_frame_too_large"
+      break
 
     if ftype == H2_FRAME_SETTINGS and bit.band(flags, H2_FLAG_ACK) == 0
-      h2_write_frame conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, ""
+      -- Toute erreur d'écriture interrompt la connexion : ne pas continuer à
+      -- émettre des frames sur un socket dont l'écriture a échoué.
+      ok_w, w_err = h2_write_frame conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, ""
+      return nil, w_err unless ok_w
 
     elseif ftype == H2_FRAME_HEADERS and not stream_id
       stream_id = sid
 
     elseif ftype == H2_FRAME_DATA and sid == stream_id
-      dns_chunks[#dns_chunks + 1] = payload if #payload > 0
+      if #payload > 0
+        dns_bytes += #payload
+        if dns_bytes > H2_MAX_BODY
+          h2_goaway conn, H2_FRAME_SIZE_ERROR
+          return nil, "h2_data_too_large"
+        dns_chunks[#dns_chunks + 1] = payload
       if bit.band(flags, H2_FLAG_END_STREAM) ~= 0
         done = true
         break
 
     elseif ftype == H2_FRAME_PING and bit.band(flags, H2_FLAG_ACK) == 0
-      h2_write_frame conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload
+      ok_w, w_err = h2_write_frame conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload
+      return nil, w_err unless ok_w
 
   unless done and stream_id
-    h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01"
+    h2_goaway conn, 0x1
     return nil, "h2_incomplete"
 
   dns_raw = table.concat dns_chunks
   unless #dns_raw > 0
-    h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x01"
+    h2_goaway conn, 0x1
     return nil, "h2_empty_body"
 
   resp_raw, q_err = process_query dns_raw, peer_ip, peer_mac, upstream, peer_vlan
   unless resp_raw
     log_warn -> { action: "h2_query_error", peer: peer_ip, err: q_err }
-    h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x02"
+    h2_goaway conn, 0x2
     return nil, "h2_query_error"
 
   hpack = h2_encode_response_headers!
-  h2_write_frame conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack
-  h2_write_frame conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw
-  h2_write_frame conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00\x00"
+  ok_w, w_err = h2_write_frame conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack
+  return nil, w_err unless ok_w
+  ok_w, w_err = h2_write_frame conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw
+  return nil, w_err unless ok_w
+  h2_goaway conn, 0x0
   resp_raw
 
 -- ── Per-connection child ─────────────────────────────────────────────────────
@@ -284,6 +336,11 @@ handle_doh_client = (args) ->
       error "Certificate context is nil"
 
     client\settimeout nil   -- blocking for TLS handshake
+    -- … mais avec une échéance noyau : sans SO_RCVTIMEO/SO_SNDTIMEO, une
+    -- connexion TCP muette bloque l'enfant DOH-conn pour toujours (dans
+    -- wolfSSL_accept ou read_request), et ces enfants ne sont jamais récoltés.
+    client_timeout = (state.client_timeout and tonumber state.client_timeout) or 15
+    apply_io_timeouts client, client_timeout
     tls_client, tls_err = ssl.wrap client, tls_ctx
     unless tls_client
       log_warn -> { action: "tls_wrap_failed", peer: peer_ip, err: tls_err }
@@ -294,7 +351,11 @@ handle_doh_client = (args) ->
     done = false
     attempts = 0
     hs_err = nil
-    while not done and attempts < 50
+    -- Échéance absolue : chaque tentative peut bloquer jusqu'à client_timeout ;
+    -- sans deadline, 50 tentatives sur une connexion muette tiendraient
+    -- l'enfant des minutes.
+    handshake_deadline = os.time! + client_timeout
+    while handshake_should_continue done, attempts, os.time!, handshake_deadline
       attempts += 1
       ok_hs, hs_ret, hs_ret2 = pcall -> tls_client\dohandshake!
       if not ok_hs
@@ -322,9 +383,12 @@ handle_doh_client = (args) ->
     peer_vlan = get_vlan peer_ip
     log_debug -> { action: "mac_lookup", peer: peer_ip, mac: peer_mac or "unknown", vlan: peer_vlan or "unknown" }
 
-    req, req_err = read_request tls_client
+    -- Un message DNS fait au plus 65535 octets (RFC 1035) : toute annonce de
+    -- corps plus grande est rejetée sans être lue (413).
+    req, req_err = read_request tls_client, timeout: client_timeout, max_body: 65535
     unless req
       log_warn -> { action: "request_read_failed", peer: peer_ip, err: req_err }
+      send_response tls_client, 413, {}, "Payload Too Large" if req_err == "body_too_large"
       tls_client\close!
       return
 
@@ -499,6 +563,7 @@ run = (doh_cfg, filter_data) ->
     :static_cert_paths
     :make_upstream
     :close_upstream
+    client_timeout: doh_cfg.client_timeout
     -- upstream handle créé par make_upstream après fork — placeholder ici.
     upstream: nil
   }
@@ -520,6 +585,7 @@ run = (doh_cfg, filter_data) ->
             static_cert_paths: state.static_cert_paths
             make_upstream:     state.make_upstream
             close_upstream:    state.close_upstream
+            client_timeout:    state.client_timeout
           }
           conn_arg = { :client, :peer_ip, state: conn_state }
 
@@ -538,4 +604,4 @@ run = (doh_cfg, filter_data) ->
           log_debug -> { action: "conn_started", pid: pid, peer: peer_ip }
           client\close!
 
-{ :run, :b64url_decode, :query_param, :build_dns_query }
+{ :run, :b64url_decode, :query_param, :build_dns_query, :handshake_should_continue, :handle_h2 }

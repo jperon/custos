@@ -21,6 +21,13 @@
 #   logs         - Tail logs with human-readable timestamps
 #   help         - Show this help
 
+# HOST/REPO sont des variables de ligne de commande : make les exporte par
+# défaut vers l'environnement de TOUTE fonction $(shell …) et de toute recette,
+# en développant leur valeur. Une valeur `$(shell …)` s'exécuterait donc avant
+# la validation des cibles sync. `unexport` doit être posé AVANT le premier
+# $(shell …) du Makefile (lignes MOONS/FILTER_MOONS… ci-dessous).
+unexport HOST REPO
+
 MOONC   ?= moonc
 LUAJIT  ?= luajit
 BUSTED  ?= busted
@@ -319,9 +326,15 @@ clean:
 	@# Supprimer les .lua générés depuis des .moon dans tests/
 	rm -f $(UNIT_SPEC_LUAS) $(TEST_HELPER_LUAS)
 
-# Reload config (SIGHUP)
+# Reload config (SIGHUP) — cible : superviseur, via le pidfile (jamais pkill :
+# le motif viserait aussi les workers forkés, sans handler SIGHUP).
 reload:
-	@pkill -SIGHUP -f "luajit.*main" && echo "SIGHUP envoyé" || echo "Processus introuvable"
+	@PIDFILE="$${CUSTOS_PID_FILE:-/var/run/custos.pid}"; \
+	if [ ! -f "$$PIDFILE" ]; then \
+	  echo "pidfile absent ($$PIDFILE) — service inactif ?" >&2; exit 1; \
+	fi; \
+	PID="$$(cat "$$PIDFILE")"; \
+	kill -HUP "$$PID" && echo "SIGHUP envoyé au superviseur (PID $$PID)"
 
 # Update domain lists from sources defined in config.moon
 update-lists: all
@@ -352,30 +365,51 @@ test-e2e-ssh: all
 # ── Synchronisation de config multi-appareils ────────────────────────────────
 # Voir sync/ pour les scripts et doc/CONFIG.md pour la structure du dépôt.
 
+# Valide HOST/REPO avant tout ssh/scp. Les valeurs sont passées par
+# l'ENVIRONNEMENT (SYNC_HOST/SYNC_REPO, cf. export target-specific ci-dessous),
+# jamais interpolées dans le texte du shell avant validation : une valeur comme
+# REPO='$(touch tmp/x)' ou '`touch tmp/x`' doit être lue comme donnée, pas
+# exécutée. $(value HOST) empêche make de ré-expanser la valeur (fonctions
+# $(shell …) éventuelles). Jeu de caractères strict ; REPO est ensuite écrit
+# entre apostrophes simples dans sync.conf (sûr car validé).
+sync-init sync-push-init: export SYNC_HOST := $(value HOST)
+sync-init sync-push-init: export SYNC_REPO := $(value REPO)
+
+SYNC_VALIDATE = \
+	[ -n "$$SYNC_HOST" ] || { echo "ERREUR : HOST requis." >&2; exit 1; }; \
+	[ -n "$$SYNC_REPO" ] || { echo "ERREUR : REPO requis." >&2; exit 1; }; \
+	case "$$SYNC_HOST" in *[!A-Za-z0-9._@:-]*) printf '%s\n' "ERREUR : HOST invalide : $$SYNC_HOST" >&2; exit 1;; esac; \
+	case "$$SYNC_REPO" in *[!A-Za-z0-9._~:/@%+=-]*) printf '%s\n' "ERREUR : REPO invalide : $$SYNC_REPO" >&2; exit 1;; esac
+
+# Ligne cron custos-sync ajoutée seulement si absente (idempotent).
+SYNC_CRON = crontab -l 2>/dev/null | grep -qF "/usr/share/custos/sync/custos-sync.sh" || { crontab -l 2>/dev/null | { cat; echo "*/15 * * * * /usr/share/custos/sync/custos-sync.sh"; } | crontab -; }
+
 # Initialise la sync pull-only sur un device OpenWrt (HOST=user@host requis)
+# Toutes les lignes utilisent les variables d'environnement validées
+# ($$SYNC_HOST/$$SYNC_REPO), jamais $(HOST)/$(REPO) : make développe
+# l'intégralité de la recette avant d'exécuter la première ligne, donc une
+# valeur `$(shell …)` serait exécutée même si la validation échoue.
 sync-init: all
-	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis. Ex: make sync-init HOST=root@192.168.1.1"; exit 1)
-	@[ -n "$(REPO)" ] || (echo "ERREUR : REPO requis. Ex: make sync-init HOST=... REPO=https://git.example.com/custos-configs"; exit 1)
-	ssh $(HOST) 'mkdir -p /usr/share/custos/sync'
-	scp $(LUA)/sync/apply.lua      $(HOST):/usr/share/custos/sync/apply.lua
-	scp sync/custos-sync.sh        $(HOST):/usr/share/custos/sync/custos-sync.sh
-	ssh $(HOST) 'chmod +x /usr/share/custos/sync/custos-sync.sh'
-	ssh $(HOST) "printf 'CUSTOS_CONFIG_REPO=$(REPO)\n' > /etc/custos/sync.conf"
-	ssh $(HOST) 'crontab -l 2>/dev/null | { cat; echo "*/15 * * * * /usr/share/custos/sync/custos-sync.sh"; } | crontab -'
-	@echo "Sync initialisée sur $(HOST) — cron toutes les 15 min"
+	@$(SYNC_VALIDATE)
+	ssh "$$SYNC_HOST" 'mkdir -p /usr/share/custos/sync'
+	scp $(LUA)/sync/apply.lua      "$$SYNC_HOST":/usr/share/custos/sync/apply.lua
+	scp sync/custos-sync.sh        "$$SYNC_HOST":/usr/share/custos/sync/custos-sync.sh
+	ssh "$$SYNC_HOST" 'chmod +x /usr/share/custos/sync/custos-sync.sh'
+	ssh "$$SYNC_HOST" "echo \"CUSTOS_CONFIG_REPO='$$SYNC_REPO'\" > /etc/custos/sync.conf"
+	ssh "$$SYNC_HOST" '$(SYNC_CRON)'
+	@echo "Sync initialisée sur $$SYNC_HOST — cron toutes les 15 min"
 
 # Initialise la sync push sur un filtre de référence (HOST=user@host, REPO=url requis)
 sync-push-init: all
-	@[ -n "$(HOST)" ] || (echo "ERREUR : HOST requis"; exit 1)
-	@[ -n "$(REPO)" ] || (echo "ERREUR : REPO requis"; exit 1)
-	ssh $(HOST) 'mkdir -p /usr/share/custos/sync'
-	scp $(LUA)/sync/apply.lua      $(HOST):/usr/share/custos/sync/apply.lua
-	scp sync/custos-sync.sh        $(HOST):/usr/share/custos/sync/custos-sync.sh
-	scp sync/custos-sync-push.sh   $(HOST):/usr/share/custos/sync/custos-sync-push.sh
-	ssh $(HOST) 'chmod +x /usr/share/custos/sync/custos-sync.sh /usr/share/custos/sync/custos-sync-push.sh'
-	ssh $(HOST) "printf 'CUSTOS_CONFIG_REPO=$(REPO)\n' > /etc/custos/sync.conf"
-	ssh $(HOST) 'crontab -l 2>/dev/null | { cat; echo "*/15 * * * * /usr/share/custos/sync/custos-sync.sh"; } | crontab -'
-	@echo "Sync push initialisée sur $(HOST) — lancer custos-sync-push.sh manuellement pour publier"
+	@$(SYNC_VALIDATE)
+	ssh "$$SYNC_HOST" 'mkdir -p /usr/share/custos/sync'
+	scp $(LUA)/sync/apply.lua      "$$SYNC_HOST":/usr/share/custos/sync/apply.lua
+	scp sync/custos-sync.sh        "$$SYNC_HOST":/usr/share/custos/sync/custos-sync.sh
+	scp sync/custos-sync-push.sh   "$$SYNC_HOST":/usr/share/custos/sync/custos-sync-push.sh
+	ssh "$$SYNC_HOST" 'chmod +x /usr/share/custos/sync/custos-sync.sh /usr/share/custos/sync/custos-sync-push.sh'
+	ssh "$$SYNC_HOST" "echo \"CUSTOS_CONFIG_REPO='$$SYNC_REPO'\" > /etc/custos/sync.conf"
+	ssh "$$SYNC_HOST" '$(SYNC_CRON)'
+	@echo "Sync push initialisée sur $$SYNC_HOST — lancer custos-sync-push.sh manuellement pour publier"
 
 # Help
 help:

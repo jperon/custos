@@ -38,7 +38,7 @@ return {
   },
   nfqueue = {
     _label = "Files de paquets (NFQUEUE)",
-    _description = "Avancé — réservé aux experts. Le pare-feu (nftables) remet les paquets à Custos via des « files » Netfilter numérotées ; chaque type de trafic a la sienne. Ne modifiez ces numéros que pour éviter un conflit avec d'autres outils utilisant NFQUEUE sur la même machine. Une plage s'écrit '0-1'.",
+    _description = "Avancé — réservé aux experts. Le pare-feu (nftables) remet les paquets à Custos via des « files » Netfilter numérotées ; chaque type de trafic a la sienne. Ne modifiez ces numéros que pour éviter un conflit avec d'autres outils utilisant NFQUEUE sur la même machine. Une plage s'écrit '0-1'. Exception : « Réponses DNS » doit désigner une seule file (l'appariement question/réponse est privé à chaque processus worker).",
     questions = {
       type = "string",
       label = "Requêtes DNS",
@@ -48,7 +48,7 @@ return {
     responses = {
       type = "string",
       label = "Réponses DNS",
-      hint = "n° de file, ex: 4",
+      hint = "une seule file, ex: 4",
       default = "4"
     },
     captive = {
@@ -309,6 +309,12 @@ return {
       default = 15,
       hint = "délai max de handshake TLS / lecture de requête par connexion ; libère les connexions muettes (préconnexions navigateur)"
     },
+    max_body = {
+      type = "integer",
+      label = "Corps HTTP max (octets)",
+      default = 1048576,
+      hint = "taille maximale d'un POST accepté (ex. éditeur de listes) ; au-delà, réponse 413 sans lecture du corps"
+    },
     challenge_ttl = {
       type = "integer",
       label = "TTL nonce challenge (s)",
@@ -415,6 +421,12 @@ return {
       type = "integer",
       label = "Timeout upstream (ms)",
       default = 2000
+    },
+    client_timeout = {
+      type = "integer",
+      label = "Timeout I/O client (s)",
+      default = 15,
+      hint = "délai max de handshake TLS / lecture de requête et frames HTTP/2 par connexion ; libère les connexions muettes"
     },
     cert_path = {
       type = "path",

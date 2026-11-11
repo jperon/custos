@@ -43,10 +43,19 @@ if [ -f "$BASE" ]; then
 fi
 
 # Publier la config locale vers devices/<hostname>/
-mkdir -p "$REPO_DIR/devices/$HOSTNAME"
-cp "$LOCAL_CONFIG" "$REPO_DIR/devices/$HOSTNAME/config.moon"
+mkdir -p "$REPO_DIR/devices/$HOSTNAME" || {
+  echo "custos-sync-push: création de devices/$HOSTNAME échouée" >&2
+  exit 1
+}
+cp "$LOCAL_CONFIG" "$REPO_DIR/devices/$HOSTNAME/config.moon" || {
+  echo "custos-sync-push: copie de $LOCAL_CONFIG échouée" >&2
+  exit 1
+}
 
-git add "devices/$HOSTNAME/config.moon"
+git add "devices/$HOSTNAME/config.moon" || {
+  echo "custos-sync-push: git add échoué" >&2
+  exit 1
+}
 
 if git diff --cached --quiet; then
   echo "custos-sync-push: aucun changement à publier"

@@ -1,7 +1,7 @@
 -- tests/unit/lib/http_spec.moon
 -- Tests des helpers HTTP purs (lib/http).
 
-{ :read_request, :send_response } = require "lib.http"
+{ :read_request, :send_response, :apply_io_timeouts, :send_all } = require "lib.http"
 
 describe "lib/http.read_request", ->
   -- Client factice : rejoue une liste de réponses [data, err] à chaque receive.
@@ -88,3 +88,163 @@ describe "lib/http.send_response", ->
     assert.truthy joined\find("HTTP/1.1 200 OK\r\n", 1, true)
     assert.truthy joined\find("Content-Length: 3\r\n", 1, true)
     assert.truthy joined\find("\r\n\r\nabc", 1, true)
+
+describe "lib/http.apply_io_timeouts", ->
+  it "pose rcvtimeo et sndtimeo sur le socket client", ->
+    opts = {}
+    client = {
+      setoption: (_self, name, value) -> opts[name] = value
+    }
+    apply_io_timeouts client, 15
+    assert.equals 15, opts.rcvtimeo
+    assert.equals 15, opts.sndtimeo
+
+  it "retombe sur 15 s si la valeur est nil ou invalide", ->
+    opts = {}
+    client = { setoption: (_self, name, value) -> opts[name] = value }
+    apply_io_timeouts client, nil
+    assert.equals 15, opts.rcvtimeo
+    apply_io_timeouts client, "abc"
+    assert.equals 15, opts.rcvtimeo
+
+describe "lib/http.read_request — bornes", ->
+  make_counting_client = (script) ->
+    i = 0
+    {
+      receive: (_self, _mode) ->
+        i += 1
+        step = script[math.min i, #script]
+        step[1], step[2]
+      calls: -> i
+    }
+
+  it "refuse un Content-Length au-dessus de max_body sans lire le corps", ->
+    client = make_counting_client {
+      { "POST /dns-query HTTP/1.1" }
+      { "Content-Length: 100000" }
+      { "" }
+    }
+    req, err = read_request client, max_body: 65536
+    assert.is_nil req
+    assert.equals "body_too_large", err
+    assert.equals 2, client.calls!
+
+  it "accepte un corps exactement à la borne", ->
+    client = make_counting_client {
+      { "POST / HTTP/1.1" }
+      { "Content-Length: 10" }
+      { "" }
+      { "0123456789" }
+    }
+    req, err = read_request client, max_body: 10
+    assert.is_nil err
+    assert.equals "0123456789", req.body
+
+  it "refuse une longueur négative, non numérique ou non entière", ->
+    for value in *{"-5", "abc", "1e10"}
+      client = make_counting_client {
+        { "POST / HTTP/1.1" }
+        { "Content-Length: #{value}" }
+        { "" }
+      }
+      req, err = read_request client, max_body: 100
+      assert.is_nil req, "valeur acceptée à tort : #{value}"
+      assert.equals "body_too_large", err
+      assert.equals 2, client.calls!
+
+  it "refuse trop de lignes d'en-tête", ->
+    client = make_counting_client {
+      { "GET / HTTP/1.1" }
+      { "A: 1" }
+      { "B: 2" }
+      { "C: 3" }
+      { "D: 4" }
+      { "" }
+    }
+    req, err = read_request client, max_headers: 3
+    assert.is_nil req
+    assert.equals "headers_too_large", err
+
+  it "refuse une ligne d'en-tête trop longue", ->
+    client = make_counting_client {
+      { "GET / HTTP/1.1" }
+      { "X: 01234567890123456789" }
+      { "" }
+    }
+    req, err = read_request client, max_header_line: 10
+    assert.is_nil req
+    assert.equals "headers_too_large", err
+
+describe "lib/http.send_all", ->
+  it "transmet la totalité dans l'ordre malgré des écritures partielles", ->
+    writes = {}
+    client = {
+      send: (_self, chunk) ->
+        part = chunk\sub 1, 3
+        writes[#writes + 1] = part
+        #part
+    }
+    ok, err = send_all client, "abcdefgh"
+    assert.is_true ok
+    assert.is_nil err
+    assert.equals "abcdefgh", table.concat writes
+    assert.equals 3, #writes
+
+  it "échoue après le nombre de tentatives prévu si send rend toujours nil", ->
+    calls = 0
+    client = {
+      send: (_self, _chunk) ->
+        calls += 1
+        nil
+    }
+    ok, err = send_all client, "abc", max_attempts: 3
+    assert.is_nil ok
+    assert.equals "send_timeout", err
+    assert.equals 3, calls
+
+  it "ne compte comme tentatives que les échecs nil (écritures partielles)", ->
+    writes = {}
+    client = {
+      send: (_self, chunk) ->
+        part = chunk\sub 1, 1
+        writes[#writes + 1] = part
+        #part
+    }
+    ok = send_all client, "abcde", max_attempts: 2
+    assert.is_true ok
+    assert.equals "abcde", table.concat writes
+
+  it "échoue après max_attempts échecs consécutifs", ->
+    calls = 0
+    client = {
+      send: (_self, _chunk) ->
+        calls += 1
+        nil
+    }
+    ok, err = send_all client, "abc", max_attempts: 2
+    assert.is_nil ok
+    assert.equals "send_timeout", err
+    assert.equals 2, calls
+
+  it "écrit en un seul appel quand tout passe du premier coup", ->
+    calls = 0
+    client = {
+      send: (_self, chunk) ->
+        calls += 1
+        #chunk
+    }
+    ok = send_all client, "abc"
+    assert.is_true ok
+    assert.equals 1, calls
+
+  it "send_response transmet un corps plus long que les écritures partielles", ->
+    writes = {}
+    client = {
+      send: (_self, chunk) ->
+        part = chunk\sub 1, 5
+        writes[#writes + 1] = part
+        #part
+    }
+    ok = send_response client, 200, {}, "0123456789abcdef"
+    assert.is_true ok
+    assert.truthy table.concat(writes)\find("0123456789abcdef", 1, true)

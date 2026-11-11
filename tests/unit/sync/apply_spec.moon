@@ -158,3 +158,86 @@ describe "sync/apply — comportement nominal", ->
     ret, _ = run "--base #{TMP}/base/config.moon --hostname nobody --output #{TMP}/out.moon --reload"
     assert.equals 0, ret
     assert.truthy read_file "#{TMP}/out.moon"
+
+-- ── Rechargement du superviseur (in-process) ────────────────────────────────
+-- Le script est chargé via loadfile : son `main!` n'est lancé que si arg[0]
+-- ressemble à « apply », donc les fonctions exportées sont utilisables ici.
+
+APPLY_MOD = assert(loadfile APPLY)!
+
+capture_stderr = (fn) ->
+  captured = {}
+  original = io.stderr
+  io.stderr = { write: (self, msg) -> captured[#captured + 1] = msg }
+  ok, result = pcall fn
+  io.stderr = original
+  error result unless ok
+  table.concat(captured), result
+
+fake_read_pid = (pid, err) -> (path) -> pid, err
+
+fake_handle = (output) ->
+  fh = {}
+  fh.read = (self, fmt) -> output
+  fh.close = (self) -> nil
+  fh
+
+
+describe "sync/apply — reload_supervisor", ->
+
+  it "appelle kill_fn avec le PID du pidfile et SIGHUP (1)", ->
+    calls = {}
+    kill_fn = (pid, sig) ->
+      calls[#calls + 1] = { pid, sig }
+      true
+    ok = APPLY_MOD.reload_supervisor "tmp/apply_spec/pidfile", kill_fn, fake_read_pid 4242
+    assert.is_true ok
+    assert.equals 1, #calls
+    assert.equals 4242, calls[1][1]
+    assert.equals APPLY_MOD.SIGHUP, calls[1][2]
+
+  it "n'appelle pas kill_fn et avertit si le pidfile est absent", ->
+    calls = {}
+    kill_fn = (pid, sig) ->
+      calls[#calls + 1] = pid
+      true
+    out, ok = capture_stderr ->
+      APPLY_MOD.reload_supervisor "tmp/apply_spec/absent.pid", kill_fn, fake_read_pid nil, "pidfile introuvable : tmp/apply_spec/absent.pid"
+    assert.is_false ok
+    assert.equals 0, #calls
+    assert.truthy out\match "SIGHUP non envoyé"
+    assert.truthy out\match "pidfile introuvable"
+
+  it "n'émet jamais de pkill (aucune commande shell de repli)", ->
+    src = read_file APPLY
+    assert.falsy src\find "pkill", 1, true
+    -- Même avec pidfile absent et kill_fn par défaut, aucun shell n'est lancé.
+    seen = {}
+    original = os.execute
+    os.execute = (cmd) ->
+      seen[#seen + 1] = cmd
+      0
+    out, ok = capture_stderr ->
+      APPLY_MOD.reload_supervisor "tmp/apply_spec/absent.pid", nil, fake_read_pid nil, "absent"
+    os.execute = original
+    assert.is_false ok
+    assert.equals 0, #seen
+
+-- ── Résolution du nom d'hôte ────────────────────────────────────────────────
+
+describe "sync/apply — resolve_hostname", ->
+
+  it "renvoie le nom d'hôte de uname -n", ->
+    popen = (cmd) -> fake_handle "  router1  "
+    assert.equals "router1", APPLY_MOD.resolve_hostname popen
+
+  it "échoue explicitement si uname -n renvoie une sortie vide", ->
+    popen = (cmd) -> fake_handle ""
+    out, host = capture_stderr -> APPLY_MOD.resolve_hostname popen
+    assert.is_nil host
+    assert.truthy out\match "nom d'hôte vide"
+
+  it "échoue explicitement si le lancement de uname -n échoue", ->
+    out, host = capture_stderr -> APPLY_MOD.resolve_hostname (-> nil)
+    assert.is_nil host
+    assert.truthy out\match "uname %-n indisponible"

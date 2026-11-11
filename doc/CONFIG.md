@@ -161,7 +161,7 @@ Chaque entrée correspond à un worker distinct qui lit depuis le noyau Linux.
 | Clé | Type | Défaut | Worker |
 |-----|------|--------|--------|
 | `questions` | string | `"0-1"` | Questions DNS entrantes |
-| `responses` | string | `"4"` | Réponses DNS à réinjecter |
+| `responses` | string | `"4"` | Réponses DNS à réinjecter (**une seule file**, voir note) |
 | `captive` | string | `"20"` | Détection portail captif (TCP/80) |
 | `reject` | string | `"10-11"` | Paquets à rejeter (RST/ICMP) |
 | `auth` | string | `"5"` | Authentification HTTPS |
@@ -170,7 +170,12 @@ Chaque entrée correspond à un worker distinct qui lit depuis le noyau Linux.
 | `doh_vlan` | string | `"13"` | Détection VLAN des clients DoH (worker `worker_doh_vlan`, optionnel : seulement si `doh.enabled`). Renseigne `req.vlan` en DoH pour `from_vlan`. |
 
 Une plage (ex. `"0-1"`) permet à plusieurs threads de traiter la même queue en
-parallèle.
+parallèle. **Exception : `responses` doit désigner une seule file.** L'état
+d'appariement question/réponse (`pending`) est privé à chaque processus worker,
+alors que tous lisent le même pipe question→réponse : avec plusieurs files de
+réponse, une réponse livrée à un autre worker que celui qui a lu la question est
+jetée (`NF_DROP`). Une plage du type `"4-5"` est donc ramenée à sa première file
+(`"4"`) au chargement, avec un avertissement `nfqueue_responses_single_queue_only`.
 
 ```moonscript
 nfqueue: {
@@ -431,6 +436,7 @@ Portail captif et authentification des utilisateurs.
 | `refusals_poll_interval` | int | `5` | Intervalle (s) entre interrogations de `/refusals` par la page de succès (liste défilante des domaines bloqués récemment, filtrée sur la MAC du client). Lecture seule, indépendant de `/ping`. |
 | `idle_timeout` | int | `300` | Inactivité maximale (s) avant déconnexion. Le cookie de session `custos_session` expire **exactement** en même temps (pas de marge séparée) : aucune fenêtre où la page indiquerait « connecté » alors que l'accès DNS a déjà expiré. Élargir cette valeur pour tolérer des pings/heartbeats retardés (throttling des onglets en arrière-plan). |
 | `close_grace` | int | `45` | Grâce (s) appliquée quand la page de session disparaît (`pagehide` → beacon `/bye`) : l'expiration de la session est **raccourcie** à `now + close_grace` au lieu d'être détruite. Si la page revit (reload, navigation, onglet restauré), le `/ping` suivant re-prolonge la session ; si la fenêtre est vraiment fermée, l'accès tombe après la grâce. Garder ≥ 2× l'intervalle de ping (20 s). |
+| `max_body` | int | `1048576` | Taille maximale du corps d'une requête HTTP acceptée (octets). Le plus gros POST légitime est l'éditeur de listes (`<textarea>` de domaines). Un `Content-Length` supérieur — ou non entier/négatif — est rejeté sans lecture du corps (réponse 413), ce qui évite l'allocation d'un tampon arbitrairement grand avant authentification. |
 | `client_timeout` | int | `15` | Timeout I/O (s) par connexion au portail (SO_RCVTIMEO/SO_SNDTIMEO + échéance de handshake TLS). Une connexion qui n'envoie rien (préconnexion spéculative du navigateur, client disparu sans FIN) est fermée et son processus `AUTH-conn` libéré au lieu de rester suspendu indéfiniment — ces sockets zombies saturaient la limite de connexions par hôte du navigateur et retardaient les pings (~70 s). |
 | `challenge_ttl` | int | `120` | Durée de validité (s) d'un nonce de challenge-réponse (`/challenge`). Le mot de passe est haché côté client (PBKDF2+HMAC sur le nonce) et n'est jamais transmis en clair ; une réponse capturée n'est rejouable que pendant cette fenêtre, et seulement pour la même MAC. Le nonce est signé (HMAC `session.key`), sans état serveur. |
 | `allow_plaintext_login` | bool | `true` | Autorise le repli d'envoi du mot de passe en clair quand le JavaScript est totalement désactivé (le serveur recourt alors à `verify_password`). Défaut `true` pour compatibilité ascendante ; **recommandé `false`** une fois le déploiement validé, pour garantir que le mot de passe ne quitte jamais le navigateur. N'affecte pas les clients avec JS (WebCrypto ou repli JS pur), qui hachent toujours. |
@@ -539,6 +545,7 @@ Proxy DNS-over-HTTPS vers un résolveur amont.
 | `upstream_ipv6` | string | `"2606:4700:4700::1113"` | IP amont IPv6 |
 | `upstream_port` | int | `53` | Port du résolveur amont |
 | `upstream_timeout_ms` | int | `2000` | Timeout (ms) vers le résolveur amont |
+| `client_timeout` | int | `15` | Timeout I/O (s) par connexion DoH : SO_RCVTIMEO/SO_SNDTIMEO + échéance de handshake TLS et lecture de requête/frames HTTP/2. Une connexion muette est fermée et son enfant `DOH-conn` libéré au lieu de rester suspendu indéfiniment. |
 | `upstream_dead_ttl_s` | int | `30` | TTL (s) du cache négatif d'un résolveur amont injoignable (action `cname`). Un résolveur qui timeout n'est pas re-sollicité pendant ce délai, afin de ne pas bloquer le worker responses (jusqu'à `upstream_timeout_ms`) à chaque paquet. Re-sondé après expiration. |
 | `cert_path` | string | `nil` | Chemin certificat TLS (optionnel) |
 | `key_path` | string | `nil` | Chemin clé privée TLS (optionnel) |

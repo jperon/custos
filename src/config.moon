@@ -286,6 +286,9 @@ DEFAULTS = {
     port: 33443
     captive_port: 33080
     session_ttl: 0
+    -- Corps HTTP max (octets) : l'éditeur de listes poste un <textarea> de
+    -- domaines ; un Content-Length plus grand est rejeté (413) sans lecture.
+    max_body: 1048576
     heartbeat_interval: 30
     idle_timeout: 300
     challenge_ttl: 120
@@ -311,6 +314,9 @@ DEFAULTS = {
     upstream_ipv6: "2606:4700:4700::1113"
     upstream_port: 53
     upstream_timeout_ms: 2000
+    -- Délai I/O max (s) par connexion DoH : handshake TLS, lecture de requête
+    -- et frames HTTP/2. Libère les connexions muettes (SO_RCVTIMEO/SNDTIMEO).
+    client_timeout: 15
     cert: nil
     key: nil
     prefer_ipv6: true
@@ -422,8 +428,37 @@ coerce_boolean = (v) ->
   return false if v == "0" or v == "false"
   v
 
+--- Émet un avertissement de configuration.
+-- En production, config.moon est chargée par log.moon (qui `require "config"`),
+-- donc `log` n'est pas encore disponible pendant `normalize` : on retombe alors
+-- sur stderr (visible dans logread), comme pour l'échec de chargement externe.
+-- Quand le module log est déjà chargé (rechargement, tests), il est utilisé.
+-- @tparam table fields Champs structurés (dont `action`)
+config_warn = (fields) ->
+  logger = package.loaded["log"]
+  if type(logger) == "table" and type(logger.log_warn) == "function"
+    logger.log_warn -> fields
+  else
+    io.stderr\write "config: #{fields.action}\n"
+
 normalize = (cfg) ->
   cfg.runtime = cfg.runtime or {}
+  cfg.nfqueue = cfg.nfqueue or {}
+  -- nfqueue.responses doit désigner UNE SEULE file. Chaque worker_responses
+  -- possède sa propre table `pending` (ipc.moon, état privé au processus) alors
+  -- que tous lisent le même pipe question→réponse : une réponse livrée à une
+  -- autre file tombe sur `get_pending_entry` nil et est jetée (NF_DROP). On
+  -- ramène donc une plage à sa PREMIÈRE file, avec un avertissement explicite.
+  resp_queues = require("lib.lowmem").parse_queues cfg.nfqueue.responses
+  if #resp_queues > 1
+    first = tostring resp_queues[1]
+    config_warn {
+      action: "nfqueue_responses_single_queue_only"
+      configured: tostring cfg.nfqueue.responses
+      selected: first
+      reason: "pending state is per-process; a question/response pair must be handled by one worker"
+    }
+    cfg.nfqueue.responses = first
   cfg.doh = cfg.doh or {}
   cfg.dns = cfg.dns or {}
   cfg.dns.ttl_grace = cfg.dns.ttl_grace or {}
