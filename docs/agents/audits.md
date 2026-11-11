@@ -357,3 +357,13 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   Une config recopiée de l'exemple produisait `name=1` puis
   `require "filter.conditions.1"`. En-tête corrigé (dictionnaire, AND implicite)
   et complété par une mention de `any_of`/`not` ; aucun code exécutable changé.
+- **Q6 : duplication `from_net` / `from_subnet` / `to_net`.** Les trois
+  conditions réécrivaient mot pour mot le bloc `Net` + `eval` + `compile_nft`
+  (seul le message différait). Extrait dans
+  `src/filter/conditions/net_match.moon` (`build_cidr_condition
+  { prop, nft_dir, net_cidr, subject }`), utilisé par les trois modules ; les
+  cas spéciaux `_any`/`_none` (from_net/to_net) et la normalisation
+  `string | {net,family}` (from_subnet) restent dans chaque module, ainsi que
+  leurs messages d'erreur (`require`, autorisation, `source_ip`). Comportement
+  et expressions nft identiques, couverts par
+  `tests/unit/filter/conditions_spec.moon` / `filter_spec.moon`.

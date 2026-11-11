@@ -210,6 +210,7 @@ custos/
 │   │   ├── conditions/
 │   │   │   ├── from_net.moon    IP source (CIDR)
 │   │   │   ├── from_subnet.moon IP source via sous-réseau config
+│   │   │   ├── net_match.moon    Bloc CIDR commun (from_net/from_subnet/to_net)
 │   │   │   ├── from_mac.moon    Adresse MAC source
 │   │   │   ├── from_vlan.moon   VLAN source
 │   │   │   ├── from_user.moon   Session authentifiée
