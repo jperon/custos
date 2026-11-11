@@ -98,6 +98,35 @@ traitement Custos inclus. Elle se décompose en trois étages :
 - jalons locaux côté worker responses : `drain_ms`, `payload_ms`, `parse_ms`,
   `match_ms`, `log_ms`.
 
+Deux mesures supplémentaires sont exprimées en **microsecondes entières**
+(`tv_sec*1e6 + tv_nsec/1000`) : le plancher de 1 ms des jalons ci-dessus
+masquerait une attente habituellement sous la milliseconde, et c'est la queue de
+distribution qui importe. Ce sont des mesures **parallèles, NON additives** :
+
+- `ack_wait_us` — durée du dernier appel à `nft_queue.wait_ack` terminé sur ce
+  worker, c'est-à-dire l'attente de l'ACK nftables du batch d'injection (budget
+  `nft.ack_timeout_ms`, défaut 150 ms, découpé en polls de 5 ms pendant lesquels
+  le pipe IPC question→réponse est drainé). **L'ACK intervient APRÈS l'émission
+  de cette ligne et APRÈS `set_verdict`** : il est donc **hors** de la chaîne
+  additive ci-dessus. Sur une ligne donnée la valeur provient du `wait_ack` de
+  la transaction **précédente** (elle est consommée une seule fois) ; elle vaut
+  `0` si aucun `wait_ack` n'a eu lieu depuis la ligne précédente. **Ne jamais
+  l'ajouter à `q_to_response_ms`** : cela casserait l'invariant à résidu nul.
+- `log_write_us` — durée du `libc.write` du journal (stdout → logd), mesurée
+  par `log.moon` quand `runtime.benchmark` est actif (`log.set_timing true`,
+  posé une fois par `main.moon` avant les forks). La ligne courante ne peut pas
+  porter sa propre durée : le champ contient le dernier `write` **terminé**
+  avant la construction de la ligne (en régime benchmark sans autres logs,
+  c'est la ligne benchmark précédente). Vaut `0` si l'instrumentation est
+  désactivée ou avant la première écriture.
+
+Coût en mode nominal (`benchmark: false`) : **exactement nul**. `log.moon`
+n'ajoute aucun `clock_gettime` autour des `write` (seule l'horloge de l'epoch,
+préexistante, reste appelée) et `worker_responses` n'appelle pas l'horloge
+autour de `wait_ack`. En mode benchmark, ces deux mesures ajoutent au plus
+quelques appels `clock_gettime` par transaction ; l'écriture de log reste, elle,
+sur le même `libc.write` bloquant qu'auparavant.
+
 Deux compteurs de retry **distincts** figurent dans la ligne, et ne mesurent pas
 la même chose :
 
@@ -124,7 +153,8 @@ la même chose :
 On a donc `q_to_response_ms ≈ question_proc_ms + response_entry_ms + (drain_ms +
 payload_ms + parse_ms + match_ms + log_ms)`. `ipc_retry_wait_ms` détaille une
 composante de `match_ms` (le jalon de fin `match_ms` est pris après la boucle de
-retry IPC), il ne s'y ajoute pas.
+retry IPC), il ne s'y ajoute pas. `ack_wait_us` et `log_write_us` sont des
+mesures **parallèles** : elles ne figurent dans aucune de ces sommes.
 
 Quand `benchmark` est désactivé (défaut), le verdict `ALLOW`/`BLOCK` est journalisé
 côté worker DNS comme auparavant, sans temps.
