@@ -2,6 +2,8 @@ local M = { }
 M.INCLUDE_PREFIX = "lua/"
 M.EXCLUDE_PATTERNS = {
   "^lua/ipparse/",
+  "^lua/moonscript/",
+  "^lua/moon/",
   "^lua/ffi_defs",
   "^lua/ffi_ndpi",
   "^lua/ffi_xxhash",
