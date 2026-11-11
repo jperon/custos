@@ -39,7 +39,7 @@ do
 -- @tparam string s Base64url input (padding optional).
 -- @treturn string|nil Decoded bytes, or nil on decode error.
 b64url_decode = (s) ->
-  s = s\gsub "%-", "-"\gsub "_", "_"  -- already url-safe chars; normalise padding
+  -- `-`/`_` (base64url) sont déjà mappés par b64_chars ci-dessus.
   -- add missing padding
   pad = (4 - #s % 4) % 4
   s = s .. string.rep "=", pad
