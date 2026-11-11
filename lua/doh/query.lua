@@ -170,6 +170,13 @@ normalize_answers = function(resp_dns)
   end
   return out
 end
+local client_addr_for
+client_addr_for = function(client_ip)
+  local is_v6 = (client_ip:find(":")) ~= nil
+  return function(fam)
+    return (fam == "ipv4" and not is_v6) and client_ip or (fam == "ipv6" and is_v6) and client_ip or nil
+  end
+end
 local process_query
 process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
   local dns, parse_err = parse(dns_raw, 1, false)
@@ -391,11 +398,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
                 }
               end
               if #redirect_answers > 0 then
-                local is_v6 = (client_ip:find(":")) ~= nil
-                local client_addr
-                client_addr = function(fam)
-                  return (fam == "ipv4" and not is_v6) and client_ip or (fam == "ipv6" and is_v6) and client_ip or nil
-                end
+                local client_addr = client_addr_for(client_ip)
                 inject_nft_and_wait(redirect_answers, {
                   client_addr = client_addr,
                   client_mac = client_mac,
@@ -448,11 +451,7 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
     end)
     return resp_raw
   end
-  local is_v6_client = (client_ip:find(":")) ~= nil
-  local client_addr
-  client_addr = function(fam)
-    return (fam == "ipv4" and not is_v6_client) and client_ip or (fam == "ipv6" and is_v6_client) and client_ip or nil
-  end
+  local client_addr = client_addr_for(client_ip)
   local ack_corr = string.format("%04x:%s", dns.txid or 0, client_ip or "unknown")
   local answers = normalize_answers(resp_dns)
   local inj = inject_nft_and_wait(answers, {
