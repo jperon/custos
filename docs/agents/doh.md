@@ -70,9 +70,13 @@ Tests : `tests/unit/doh/upstream_select_spec.moon`,
 - **Frames HEADERS** : `CONTINUATION` (jusqu'à `END_HEADERS`, plafond 64 ko),
   `PADDED` et `PRIORITY` sont gérés ; un bloc indécodable produit
   `GOAWAY COMPRESSION_ERROR` (0x9).
-- **Routage** : `:method` et `:path` sont lus dans HPACK. `POST` sur le chemin
-  DoH (`/dns-query`, même règle `is_doh_path` que HTTP/1.1) traite le corps
-  DATA ; `GET /dns-query?dns=<base64url>` décode la requête (`dns_from_query`).
+- **Routage** : `:method`, `:path` et `content-type` sont lus dans HPACK.
+  `POST` sur le chemin DoH (`/dns-query`, même règle `is_doh_path` que
+  HTTP/1.1) traite le corps DATA **si** `content-type` vaut
+  `application/dns-message` (paramètres après `;` tolérés, même prédicat
+  `is_dns_message_content_type` que HTTP/1.1) ; sinon, y compris en-tête
+  absent ou autre type, `:status 415` sans traiter de DNS. `GET
+  /dns-query?dns=<base64url>` décode la requête (`dns_from_query`).
   Le GET JSON HTTP/1.1 (`?name=…&type=…` + `Accept: application/dns-json`) est
   conservé à l'identique. Autre chemin → `:status 404`, autre méthode → `405`,
   chemin DoH sans paramètre/corps → `400`, sans traiter de DNS. Ces réponses
@@ -97,16 +101,15 @@ Limites restantes, assumées :
   plafonné à 65535 octets (taille maximale d'un message DNS) ;
 - **réponse encodée minimalement** : `:status` (index statique) et
   `content-type` (`application/dns-message` ou `application/dns-json`) en
-  littéral sans indexation ni Huffman ; pas de table dynamique côté encodeur ;
-- **POST HTTP/2 sans contrôle du `content-type`** : le corps est traité comme
-  une requête DNS dès lors que le chemin est `/dns-query` (HTTP/1.1 exige
-  `application/dns-message` et répond 415 sinon).
+  littéral sans indexation ni Huffman ; pas de table dynamique côté encodeur.
 
 Tests : `tests/unit/doh/hpack_spec.moon` (annexe C.2 à C.6 et cas d'erreur),
-`tests/unit/worker_doh_spec.moon` (GET binaire et JSON, POST, 404/405/400,
-PADDED, PRIORITY, CONTINUATION, padding invalide, stream 0, COMPRESSION_ERROR,
-plafonds DATA et frame existants), `tests/unit/auth/wolfssl_spec.moon` (choix
-contexte/objet SSL, défaut AUTH http/1.1).
+`tests/unit/worker_doh_spec.moon` (GET binaire et JSON, POST
+`application/dns-message` (avec et sans paramètres) → traité, type non DNS et
+type absent → `415`, 404/405/400, PADDED, PRIORITY, CONTINUATION, padding
+invalide, stream 0, COMPRESSION_ERROR, plafonds DATA et frame existants),
+`tests/unit/auth/wolfssl_spec.moon` (choix contexte/objet SSL, défaut AUTH
+http/1.1).
 
 ### Parité UDP/DoH : vol captif et overrides du second avis
 

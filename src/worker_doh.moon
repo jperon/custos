@@ -80,6 +80,16 @@ is_doh_path = (path) ->
   return false unless type(path) == "string"
   path == "/dns-query" or (path\match "^/dns%-query%?") != nil
 
+--- Vrai si un `content-type` de POST désigne un message DNS (RFC 8484 §4.1).
+-- Règle partagée entre HTTP/1.1 et HTTP/2 : correspondance de sous-chaîne, ce
+-- qui tolère les paramètres après `;` mais reste sensible à la casse
+-- (comportement historique du chemin HTTP/1.1).
+-- @tparam string|nil content_type Valeur de l'en-tête content-type.
+-- @treturn boolean true si le type MIME est `application/dns-message`.
+is_dns_message_content_type = (content_type) ->
+  return false unless type(content_type) == "string"
+  (content_type\match "application/dns%-message") != nil
+
 --- Extrait et décode le paramètre `dns` base64url d'un chemin DoH GET.
 -- Règle partagée entre HTTP/1.1 et HTTP/2.
 -- @tparam string|nil path Chemin de la requête.
@@ -320,10 +330,11 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
 
   decoder    = hpack.new_decoder!
   stream_id  = nil
-  method     = nil
-  path       = nil
-  accept     = nil
-  json_mode  = false
+  method           = nil
+  path             = nil
+  accept           = nil
+  req_content_type = nil
+  json_mode        = false
   dns_chunks = {}
   dns_bytes  = 0
   end_stream = false
@@ -365,6 +376,7 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
       method = hpack.header_value headers, ":method"
       path   = hpack.header_value headers, ":path"
       accept = hpack.header_value headers, "accept"
+      req_content_type = hpack.header_value headers, "content-type"
       end_stream = headers_end_stream
       break if end_stream
 
@@ -392,6 +404,10 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
   if method == "POST"
     unless is_doh_path path
       return h2_reject conn, stream_id, "404"
+    -- Même règle que le POST HTTP/1.1 (handle_doh_client) : content-type
+    -- `application/dns-message` exigé, 415 sinon, y compris si l'en-tête manque.
+    unless is_dns_message_content_type req_content_type
+      return h2_reject conn, stream_id, "415"
     dns_raw = table.concat dns_chunks
     unless #dns_raw > 0
       return h2_reject conn, stream_id, "400"
@@ -550,7 +566,7 @@ handle_doh_client = (args) ->
     if is_doh_path req.path
       ct = req.headers["content-type"] or ""
       accept = req.headers["accept"] or ""
-      if req.method == "POST" and ct\match "application/dns%-message"
+      if req.method == "POST" and is_dns_message_content_type ct
         log_debug -> { action: "post", peer: peer_ip, body_bytes: #req.body }
         dns_raw = req.body
       elseif req.method == "GET"

@@ -304,19 +304,59 @@ describe "worker_doh.handle_h2 — routage HPACK", ->
     assert.equals doh.b64url_decode(doh_query_b64), capture.processed[1].raw
     assert.equals "200", h2_response_status r.sent
 
-  it "POST sur /dns-query traite le corps DATA", ->
+  it "POST application/dns-message sur /dns-query traite le corps DATA", ->
     body = "\0\1\2\3"
     headers = h2_headers_frame 1, {
       { ":method", "POST" }
       { ":scheme", "https" }
       { ":path", "/dns-query" }
       { ":authority", "1.2.3.4" }
+      { "content-type", "application/dns-message" }
     }
     data = h2_frame_raw 0x0, 0x1, 1, body
     r = h2_run headers .. data
     assert.is_nil r.err
     assert.equals body, capture.processed[1].raw
     assert.equals "200", h2_response_status r.sent
+
+  it "POST application/dns-message avec paramètres est traité", ->
+    body = "\0\1\2\3"
+    headers = h2_headers_frame 1, {
+      { ":method", "POST" }
+      { ":path", "/dns-query" }
+      { "content-type", "application/dns-message; charset=binary" }
+    }
+    data = h2_frame_raw 0x0, 0x1, 1, body
+    r = h2_run headers .. data
+    assert.is_nil r.err
+    assert.equals 1, #capture.processed
+    assert.equals body, capture.processed[1].raw
+    assert.equals "200", h2_response_status r.sent
+
+  it "POST avec un content-type non DNS rend 415 sans traiter de DNS", ->
+    headers = h2_headers_frame 1, {
+      { ":method", "POST" }
+      { ":path", "/dns-query" }
+      { "content-type", "text/plain" }
+    }
+    data = h2_frame_raw 0x0, 0x1, 1, "\0\1\2\3"
+    r = h2_run headers .. data
+    assert.is_nil r.resp
+    assert.equals "h2_status_415", r.err
+    assert.equals 0, #capture.processed
+    assert.equals "415", h2_response_status r.sent
+
+  it "POST sans content-type rend 415 (parité HTTP/1.1)", ->
+    headers = h2_headers_frame 1, {
+      { ":method", "POST" }
+      { ":path", "/dns-query" }
+    }
+    data = h2_frame_raw 0x0, 0x1, 1, "\0\1\2\3"
+    r = h2_run headers .. data
+    assert.is_nil r.resp
+    assert.equals "h2_status_415", r.err
+    assert.equals 0, #capture.processed
+    assert.equals "415", h2_response_status r.sent
 
   it "GET JSON (Accept application/dns-json) rend le JSON DNS", ->
     capture.resp = string.char(0x12, 0x34, 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0) ..
@@ -666,6 +706,16 @@ describe "worker_doh.handle_doh_client — routage HTTP/1.1", ->
     run_client {
       method: "POST", path: "/dns-query"
       headers: { ["content-type"]: "text/plain" }
+      body: "x"
+    }
+    assert.equals 415, capture.sent[1].status
+    assert.equals "Unsupported Media Type", capture.sent[1].body
+    assert.equals 0, #capture.processed
+
+  it "POST sans content-type rend 415 (parité avec HTTP/2)", ->
+    run_client {
+      method: "POST", path: "/dns-query"
+      headers: {}
       body: "x"
     }
     assert.equals 415, capture.sent[1].status
