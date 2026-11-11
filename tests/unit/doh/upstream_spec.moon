@@ -17,16 +17,35 @@ package.loaded["log"] = {
 
 -- Script C.recv : chaque entrée est soit une string (datagramme), soit
 -- { "error", errno } (échec équivalent à un timeout SO_RCVTIMEO).
-make_socket_stub = (recv_script) ->
-  state = { sent: {}, recv_calls: 0, closed: false }
+-- opts permet de scripter les autres appels C (socket, inet_pton, connect,
+-- send) pour exercer les branches d'erreur.
+make_socket_stub = (recv_script, opts={}) ->
+  state = { sent: {}, recv_calls: 0, closed: false, setsockopt_calls: {} }
   mod = {
     C: {
-      socket: -> 42
+      socket: ->
+        if opts.socket_fail
+          ffi.C.__errno_location()[0] = opts.errno or 11
+          return -1
+        42
       close: (fd) -> state.closed = true
-      setsockopt: (fd, level, opt, val, len) -> 0
-      inet_pton: (af, src, dst) -> 1
-      connect: (fd, addr, len) -> 0
+      setsockopt: (fd, level, opt, val, len) ->
+        state.setsockopt_calls[#state.setsockopt_calls + 1] = {
+          opt: opt, sec: tonumber(val.tv_sec), usec: tonumber(val.tv_usec)
+        }
+        0
+      inet_pton: (af, src, dst) ->
+        if opts.inet_pton != nil then opts.inet_pton else 1
+      connect: (fd, addr, len) ->
+        if opts.connect != nil
+          if opts.connect < 0
+            ffi.C.__errno_location()[0] = opts.errno or 101
+          return opts.connect
+        0
       send: (fd, data, len, flags) ->
+        if opts.send_fail
+          ffi.C.__errno_location()[0] = opts.errno or 32
+          return -1
         state.sent[#state.sent + 1] = ffi.string data, len
         len
       recv: (fd, buf, size, flags) ->
@@ -52,8 +71,8 @@ make_socket_stub = (recv_script) ->
   }
   mod
 
-load_mod = (recv_script) ->
-  socket_stub = make_socket_stub recv_script
+load_mod = (recv_script, opts={}) ->
+  socket_stub = make_socket_stub recv_script, opts
   package.loaded["lib.socket"] = socket_stub
   package.loaded["doh.upstream"] = nil
   { require("doh.upstream"), socket_stub._state }
@@ -128,3 +147,72 @@ describe "doh.upstream", ->
       resp, err = mod.query client, make_query 0x1234
       assert.is_nil resp
       assert.truthy err\find "recv() timed out or failed", 1, true
+
+describe "doh.upstream — familles et timeouts", ->
+
+  it "détecte IPv6 et applique SO_RCVTIMEO/SO_SNDTIMEO", ->
+    { mod, state } = load_mod {}
+    client, err = mod.new_client "::1", 53, 1500
+    assert.is_nil err
+    assert.equals 10, client.family
+    assert.equals "::1", client.upstream_ip
+    assert.equals 2, #state.setsockopt_calls
+    for call in *state.setsockopt_calls
+      assert.equals 1, call.sec
+      assert.equals 500000, call.usec
+    assert.equals 20, state.setsockopt_calls[1].opt
+    assert.equals 21, state.setsockopt_calls[2].opt
+
+  it "probe_ipv6 rend true si connect() réussit et false si inet_pton échoue", ->
+    { mod } = load_mod {}
+    assert.is_true mod.probe_ipv6 "::1", 53
+    failing = (load_mod {}, { inet_pton: 0 })[1]
+    assert.is_false failing.probe_ipv6 "::zz", 53
+
+describe "doh.upstream — erreurs de création", ->
+
+  it "rend nil + errno si socket() échoue", ->
+    { mod } = load_mod {}, { socket_fail: true, errno: 97 }
+    client, err = mod.new_client "127.0.0.1", 53, 2000
+    assert.is_nil client
+    assert.equals "socket() failed: errno=97", err
+
+  it "rend nil si inet_pton refuse une adresse IPv4", ->
+    { mod } = load_mod {}, { inet_pton: 0 }
+    client, err = mod.new_client "999.1.1.1", 53, 2000
+    assert.is_nil client
+    assert.equals "inet_pton(AF_INET) failed for 999.1.1.1", err
+
+  it "rend nil si inet_pton refuse une adresse IPv6", ->
+    { mod } = load_mod {}, { inet_pton: 0 }
+    client, err = mod.new_client "::zz", 53, 2000
+    assert.is_nil client
+    assert.equals "inet_pton(AF_INET6) failed for ::zz", err
+
+  it "rend nil + errno si connect() échoue", ->
+    { mod } = load_mod {}, { connect: -1, errno: 101 }
+    client, err = mod.new_client "127.0.0.1", 53, 2000
+    assert.is_nil client
+    assert.equals "connect(AF_INET) failed: errno=101", err
+
+describe "doh.upstream — erreurs de requête", ->
+
+  it "rend nil + errno si send() échoue", ->
+    { mod } = load_mod {}, { send_fail: true, errno: 32 }
+    client = mod.new_client "127.0.0.1", 53, 2000
+    resp, err = mod.query client, make_query 0x1234
+    assert.is_nil resp
+    assert.equals "send() failed: errno=32", err
+
+  it "rend nil si recv() renvoie 0 (datagramme vide)", ->
+    { mod } = load_mod { "" }
+    client = mod.new_client "127.0.0.1", 53, 2000
+    resp, err = mod.query client, make_query 0x1234
+    assert.is_nil resp
+    assert.equals "recv() returned 0 (connection closed)", err
+
+  it "close tolère un handle nil ou un fd négatif", ->
+    { mod, state } = load_mod {}
+    assert.is_nil mod.close nil
+    assert.is_nil mod.close { fd: -1 }
+    assert.is_false state.closed

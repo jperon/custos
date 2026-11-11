@@ -161,3 +161,41 @@ describe "doh.h2_frames — écritures partielles", ->
     ok, err = mod.h2_write_frame conn, 0x4, 0, 0, ""
     assert.is_nil ok
     assert.equals "send_timeout", err
+
+describe "doh.h2_frames — h2_recv_exact", ->
+  local mod
+  before_each -> mod = require "doh.h2_frames"
+
+  it "accumule plusieurs fragments jusqu'à n octets", ->
+    chunks = { "abc", "def", "ghi" }
+    i = 0
+    conn = {
+      receive: (n) ->
+        i += 1
+        chunks[i]
+    }
+    assert.equals "abcdefghi", mod.h2_recv_exact conn, 9
+
+  it "rend nil, nil sur EOF (receive renvoie une chaîne vide)", ->
+    conn = { receive: (n) -> "" }
+    data, err = mod.h2_recv_exact conn, 9
+    assert.is_nil data
+    assert.is_nil err
+
+  it "rend nil + eof sur une erreur non réessayable", ->
+    conn = { receive: (n) -> nil, "eof" }
+    data, err = mod.h2_recv_exact conn, 9
+    assert.is_nil data
+    assert.equals "eof", err
+
+  it "réessaie 50 fois sur want_read_write puis abandonne", ->
+    calls = 0
+    conn = {
+      receive: (n) ->
+        calls += 1
+        nil, "want_read_write"
+    }
+    data, err = mod.h2_recv_exact conn, 9
+    assert.is_nil data
+    assert.equals "want_read_write", err
+    assert.equals 50, calls

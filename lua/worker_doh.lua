@@ -267,7 +267,7 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
   for _ = 1, 30 do
     local ftype, flags, sid, payload = h2_read_frame(conn, H2_DEFAULT_MAX_FRAME_SIZE)
     if not ftype then
-      if payload == "frame_too_large" then
+      if flags == "frame_too_large" then
         h2_goaway(conn, H2_FRAME_SIZE_ERROR)
         return nil, "h2_frame_too_large"
       end
@@ -880,5 +880,13 @@ return {
   query_param = query_param,
   build_dns_query = build_dns_query,
   handshake_should_continue = handshake_should_continue,
-  handle_h2 = handle_h2
+  handle_h2 = handle_h2,
+  url_decode = url_decode,
+  encode_qname = encode_qname,
+  qtype_from_name = qtype_from_name,
+  json_escape = json_escape,
+  json_quote = json_quote,
+  rr_data_json = rr_data_json,
+  dns_response_json = dns_response_json,
+  handle_doh_client = handle_doh_client
 }

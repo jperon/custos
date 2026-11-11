@@ -250,7 +250,9 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
     ftype, flags, sid, payload = h2_read_frame conn, H2_DEFAULT_MAX_FRAME_SIZE
     if not ftype
       -- Frame annoncée trop grande : FRAME_SIZE_ERROR, puis fermeture.
-      if payload == "frame_too_large"
+      -- h2_read_frame renvoie nil, err : l'erreur arrive dans la 2e valeur
+      -- (flags), pas dans payload (toujours nil en cas d'échec).
+      if flags == "frame_too_large"
         h2_goaway conn, H2_FRAME_SIZE_ERROR
         return nil, "h2_frame_too_large"
       break
@@ -605,4 +607,6 @@ run = (doh_cfg, filter_data) ->
           log_debug -> { action: "conn_started", pid: pid, peer: peer_ip }
           client\close!
 
-{ :run, :b64url_decode, :query_param, :build_dns_query, :handshake_should_continue, :handle_h2 }
+{ :run, :b64url_decode, :query_param, :build_dns_query, :handshake_should_continue, :handle_h2,
+  :url_decode, :encode_qname, :qtype_from_name, :json_escape, :json_quote,
+  :rr_data_json, :dns_response_json, :handle_doh_client }
