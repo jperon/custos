@@ -59,6 +59,19 @@ describe "lib.ttl_set", ->
     assert.is_true s.has "c"
     assert.equals 1, s.size!
 
+  it "remaining donne le temps restant, nil après expiration", ->
+    t, clock = make_clock!
+    s = S.new 16, 30, clock
+    assert.is_nil s.remaining "x"
+    s.add "x"
+    assert.equals 30, s.remaining "x"
+    t.v += 10
+    assert.equals 20, s.remaining "x"
+    t.v += 21         -- dépassé
+    assert.is_nil s.remaining "x"
+    assert.equals 0, s.size!
+    assert.is_nil s.remaining nil
+
   it "ignore une clé nil", ->
     _, clock = make_clock!
     s = S.new 16, 60, clock

@@ -19,6 +19,7 @@ local mac2s
 mac2s = require("packet_utils").mac2s
 local purge_pending
 purge_pending = require("ipc").purge_pending
+local ttl_set = require("lib.ttl_set")
 local mac_cfg = config.mac_learner or { }
 local auth_cfg = config.auth or { }
 local PROBE_TIMEOUT_MS = 200
@@ -59,7 +60,7 @@ reply_unknown = function(fd)
   return libc.close(fd)
 end
 local mac_table = { }
-local negative_cache = { }
+local negative_cache = ttl_set.new(4096, NEGATIVE_TTL)
 local pending_queries = { }
 local prober = nil
 local vlan_table = { }
@@ -187,7 +188,6 @@ end
 local expire_pending
 expire_pending = function()
   local now_ms = mac_prober.get_ms()
-  local now_epoch = os.time()
   for ip_str, waiters in pairs(pending_queries) do
     local i = #waiters
     while i >= 1 do
@@ -199,12 +199,12 @@ expire_pending = function()
     end
     if #waiters == 0 then
       pending_queries[ip_str] = nil
-      negative_cache[ip_str] = now_epoch + NEGATIVE_TTL
+      negative_cache.add(ip_str)
     end
   end
 end
 local probe_request
-probe_request = function(pending, negative, prober_ctx, client_fd, ip_str, now, get_ms, send_probe)
+probe_request = function(pending, negative, prober_ctx, client_fd, ip_str, get_ms, send_probe)
   local expiry_ms = get_ms() + PROBE_TIMEOUT_MS
   if pending[ip_str] then
     pending[ip_str][#pending[ip_str] + 1] = {
@@ -223,7 +223,7 @@ probe_request = function(pending, negative, prober_ctx, client_fd, ip_str, now, 
     }
     return "pending"
   end
-  negative[ip_str] = now + NEGATIVE_TTL
+  negative.add(ip_str)
   reply_unknown(client_fd)
   return "failed"
 end
@@ -278,13 +278,12 @@ start_query = function(client_fd)
       mac_table[ip_str] = nil
     end
   end
-  local neg_exp = negative_cache[ip_str]
-  if neg_exp and now <= neg_exp then
+  if negative_cache.has(ip_str) then
     reply_unknown(client_fd)
     return 
   end
   if prober then
-    probe_request(pending_queries, negative_cache, prober, client_fd, ip_str, now, mac_prober.get_ms, mac_prober.send_probe)
+    probe_request(pending_queries, negative_cache, prober, client_fd, ip_str, mac_prober.get_ms, mac_prober.send_probe)
     return 
   end
   return reply_unknown(client_fd)
@@ -483,11 +482,6 @@ run = function(learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd)
       for ip, entry in pairs(mac_table) do
         if now_epoch > entry[2] then
           mac_table[ip] = nil
-        end
-      end
-      for ip, exp in pairs(negative_cache) do
-        if now_epoch > exp then
-          negative_cache[ip] = nil
         end
       end
       for ip, entry in pairs(vlan_table) do

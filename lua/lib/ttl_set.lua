@@ -39,6 +39,23 @@ new = function(max_size, ttl, now_fn)
     end
     return true
   end
+  local remaining
+  remaining = function(k)
+    if not (k) then
+      return nil
+    end
+    local exp = store[k]
+    if not (exp) then
+      return nil
+    end
+    local rem = exp - now_fn()
+    if rem <= 0 then
+      store[k] = nil
+      size = size - 1
+      return nil
+    end
+    return rem
+  end
   local add
   add = function(k)
     if not (k) then
@@ -70,6 +87,7 @@ new = function(max_size, ttl, now_fn)
     has = has,
     add = add,
     remove = remove,
+    remaining = remaining,
     size = function()
       return size
     end
