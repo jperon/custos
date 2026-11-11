@@ -3,6 +3,13 @@
 -- Outil CLI : télécharge et compile les listes de domaines vers des fichiers .bin.
 --
 -- Usage : luajit lua/filter/updater.lua [--config path] [--pid path] [--dry-run]
+--                                      [--custom-only]
+--
+-- --custom-only : ne traite PAS la section filter.sources (téléchargements) ;
+--   seulement le scan de filter.custom_lists_dir (chaque .txt compilé en
+--   <domainlists_dir>/custom/<nom>.bin). Utilisé par custos-update après le
+--   déploiement de la release, pour que les listes locales l'emportent sur
+--   celles de la release de même nom.
 --
 -- Lit la section filter.sources de la configuration runtime (config.moon) :
 --   filter:
@@ -35,7 +42,6 @@
 -- envoie SIGHUP au daemon.
 
 ffi          = require "ffi"
-bin48        = require "filter.lib.bin48"
 parse_domains = require "filter.lib.parse_domains"
 -- NB : `config` est volontairement requis dans le programme principal (après
 -- l'application de --config via setenv), car le module résout
@@ -43,23 +49,22 @@ parse_domains = require "filter.lib.parse_domains"
 -- chemin par défaut et rendrait --config inopérant.
 
 ffi.cdef [[
-  int rename(const char *oldpath, const char *newpath);
   int kill(int pid, int sig);
   int setenv(const char *name, const char *value, int overwrite);
 ]]
 
 SIGHUP = 1
 
--- Forward declaration: utilisée par fetch_toulouse/fetch_local.
-local write_bin
-
--- Helpers d'I/O shell isolés dans un module dédié (testables unitairement).
+-- Helpers d'I/O et compilation isolés dans un module dédié (testables
+-- unitairement ; ce script s'exécute au chargement et n'est pas testable).
 updater_io = require "filter.updater_io"
 sh_quote = updater_io.sh_quote
-bin_name_for = updater_io.bin_name_for
 write_result_kind = updater_io.write_result_kind
 ensure_dir = updater_io.ensure_dir
 ensure_parent_dir = updater_io.ensure_parent_dir
+write_bin = updater_io.write_bin
+fetch_local = updater_io.fetch_local
+process_custom_dir = updater_io.process_custom_dir
 
 -- ── Analyse des arguments ─────────────────────────────────────────
 
@@ -79,6 +84,8 @@ parse_args = (argv) ->
         opts.pid_file = argv[i]
       when "--dry-run"
         opts.dry_run = true
+      when "--custom-only"
+        opts.custom_only = true
     i += 1
   opts
 
@@ -197,106 +204,6 @@ fetch_toulouse = (name, source, dry_run) ->
   io.stderr\write "[#{name}] #{#all_domains} domaines total\n"
   write_bin all_domains, output, dry_run
 
--- ── Hash, tri et écriture atomique ────────────────────────────────
-
---- Hash, trie et écrit un ensemble de domaines dans un fichier .bin.
--- Le fichier est écrit de façon atomique via un fichier temporaire.
--- @tparam  table   domains     Tableau de chaînes de domaines
--- @tparam  string  output_path Chemin du fichier .bin de destination
--- @tparam  boolean dry_run     Si vrai, n'écrit pas
--- @treturn boolean             Succès
--- @treturn string              Message (nb domaines ou erreur)
-write_bin = (domains, output_path, dry_run) ->
-  payload, n = bin48.pack_domains domains
-
-  if n == 0
-    -- Liste vide (placeholder, commentaires seuls) : ce n'est pas une erreur,
-    -- on le signale via un 3e retour « skipped » pour ne pas faire échouer la CI.
-    return false, "aucun domaine valide", true
-
-  if dry_run
-    return true, "dry-run : #{n} domaines → #{output_path}"
-
-  tmp = output_path .. ".tmp"
-  unless ensure_parent_dir tmp
-    return false, "impossible de créer le répertoire parent de #{tmp}"
-  fh = io.open tmp, "wb"
-  return false, "impossible d'écrire #{tmp}" unless fh
-  fh\write payload
-  fh\close!
-
-  ret = ffi.C.rename tmp, output_path
-  if ret ~= 0
-    os.remove tmp
-    return false, "rename échoué : #{tmp} → #{output_path}"
-
-  true, "#{n} domaines → #{output_path} (#{#payload} octets)"
-
--- ── Listes personnalisées (fichier local) ────────────────────────
-
---- Traite une source dont le contenu est un fichier texte local.
--- Le fichier original est conservé ; un fichier .bin est écrit à côté ou
--- à l'emplacement indiqué par source.output.
--- @tparam  string   name       Nom de la source (pour les logs)
--- @tparam  table    source     { file, format, output }
--- @tparam  boolean  dry_run
--- @treturn boolean             Succès
--- @treturn string              Message
-fetch_local = (name, source, dry_run) ->
-  path   = source.file
-  format = source.format or "simple"
-  output = source.output or (path\gsub "%.%w+$", ".bin")
-
-  fh = io.open path, "r"
-  unless fh
-    return false, "impossible de lire #{path}"
-  data = fh\read "*a"
-  fh\close!
-
-  domains = parse_domains.parse format, data
-  io.stderr\write "[#{name}] #{#domains} domaines depuis #{path}\n"
-  write_bin domains, output, dry_run
-
---- Parcourt un répertoire source et compile tous les fichiers .txt en .bin.
--- Les fichiers .txt originaux sont conservés dans src_dir.
--- Les .bin sont écrits dans output_dir (défaut : src_dir).
--- Cela permet de séparer les sources (ex. /etc/custos/lists/custom/) de
--- la sortie compilée lue par le filtre (ex. domainlists_dir/custom/).
--- @tparam  string   src_dir    Répertoire contenant les .txt à compiler
--- @tparam  string   output_dir Répertoire de destination des .bin (défaut : src_dir)
--- @tparam  boolean  dry_run
--- @treturn number              Nombre de listes mises à jour
--- @treturn number              Nombre d'erreurs
-process_custom_dir = (src_dir, output_dir, dry_run) ->
-  output_dir = output_dir or src_dir
-  local_updated, local_errors = 0, 0
-  ensure_dir src_dir
-  ensure_dir output_dir
-  quoted_dir = sh_quote src_dir
-  fh = io.popen "cd #{quoted_dir} 2>/dev/null && ls -1 *.txt 2>/dev/null"
-  unless fh
-    return 0, 0
-  src_base = src_dir\gsub "/+$", ""
-  out_base = output_dir\gsub "/+$", ""
-  for txt_name in fh\lines!
-    txt_name = txt_name\gsub "%s+$", ""
-    continue if txt_name == ""
-    txt_path = src_base .. "/" .. txt_name
-    name = bin_name_for txt_name
-    bin_path = out_base .. "/" .. name .. ".bin"
-    ok_l, msg, skipped = fetch_local name, { file: txt_path, format: "simple", output: bin_path }, dry_run
-    kind = write_result_kind ok_l, msg, skipped
-    if kind == "ok"
-      io.stderr\write "[custom/#{name}] ✓ #{msg}\n"
-      local_updated += 1
-    elseif kind == "skipped"
-      io.stderr\write "[custom/#{name}] ⏭ ignorée (#{msg})\n"
-    else
-      io.stderr\write "[custom/#{name}] ✗ #{msg}\n"
-      local_errors += 1
-  fh\close!
-  local_updated, local_errors
-
 -- ── Programme principal ───────────────────────────────────────────
 
 opts = parse_args arg
@@ -325,6 +232,10 @@ if custom_lists_dir
 
 updated = 0
 errors  = 0
+
+-- --custom-only : ignorer les sources réseau/téléchargements de filter.sources
+-- et ne compiler que les .txt de custom_lists_dir (cf. custos-update).
+sources = {} if opts.custom_only
 
 for name, source in pairs sources
   format = source.format or "simple"
@@ -435,6 +346,8 @@ if custom_lists_dir
   updated += n_ok
   errors  += n_err
   io.stderr\write "[custom] #{n_ok} liste(s) mise(s) à jour, #{n_err} erreur(s).\n"
+elseif opts.custom_only
+  io.stderr\write "[custom] --custom-only : custom_lists_dir non défini — rien à compiler.\n"
 elseif next(sources) == nil
   io.stderr\write "Aucune source définie dans cfg.sources — rien à faire.\n"
   os.exit 0

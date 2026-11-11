@@ -6,7 +6,14 @@
 -- deux sémantiques de `os.execute` (Lua 5.1 : code numérique ; Lua 5.2+ /
 -- LUA52COMPAT : true/nil), via `lib.os_exec.exec_ok`.
 
+ffi = require "ffi"
+bin48 = require "filter.lib.bin48"
+parse_domains = require "filter.lib.parse_domains"
 exec_ok = require("lib.os_exec").exec_ok
+
+ffi.cdef [[
+  int rename(const char *oldpath, const char *newpath);
+]]
 
 --- Quote une valeur pour un usage sûr dans une commande shell POSIX.
 -- @tparam string s Valeur à échapper
@@ -73,4 +80,102 @@ download_file = (url, dest, timeout) ->
   ret = os.execute cmd
   exec_ok ret
 
-{ :sh_quote, :bin_name_for, :write_result_kind, :ensure_dir, :ensure_parent_dir, :download, :download_file }
+--- Hash, trie et écrit un ensemble de domaines dans un fichier .bin.
+-- Le fichier est écrit de façon atomique via un fichier temporaire.
+-- @tparam  table   domains     Tableau de chaînes de domaines
+-- @tparam  string  output_path Chemin du fichier .bin de destination
+-- @tparam  boolean dry_run     Si vrai, n'écrit pas
+-- @treturn boolean             Succès
+-- @treturn string              Message (nb domaines ou erreur)
+-- @treturn boolean             Vrai si la liste est vide (non-erreur)
+write_bin = (domains, output_path, dry_run) ->
+  payload, n = bin48.pack_domains domains
+
+  if n == 0
+    -- Liste vide (placeholder, commentaires seuls) : ce n'est pas une erreur,
+    -- on le signale via un 3e retour « skipped » pour ne pas faire échouer la CI.
+    return false, "aucun domaine valide", true
+
+  if dry_run
+    return true, "dry-run : #{n} domaines → #{output_path}"
+
+  tmp = output_path .. ".tmp"
+  unless ensure_parent_dir tmp
+    return false, "impossible de créer le répertoire parent de #{tmp}"
+  fh = io.open tmp, "wb"
+  return false, "impossible d'écrire #{tmp}" unless fh
+  fh\write payload
+  fh\close!
+
+  ret = ffi.C.rename tmp, output_path
+  if ret ~= 0
+    os.remove tmp
+    return false, "rename échoué : #{tmp} → #{output_path}"
+
+  true, "#{n} domaines → #{output_path} (#{#payload} octets)"
+
+--- Traite une source dont le contenu est un fichier texte local.
+-- Le fichier original est conservé ; un fichier .bin est écrit à côté ou
+-- à l'emplacement indiqué par source.output.
+-- @tparam  string   name       Nom de la source (pour les logs)
+-- @tparam  table    source     { file, format, output }
+-- @tparam  boolean  dry_run
+-- @treturn boolean             Succès
+-- @treturn string              Message
+fetch_local = (name, source, dry_run) ->
+  path   = source.file
+  format = source.format or "simple"
+  output = source.output or (path\gsub "%.%w+$", ".bin")
+
+  fh = io.open path, "r"
+  unless fh
+    return false, "impossible de lire #{path}"
+  data = fh\read "*a"
+  fh\close!
+
+  domains = parse_domains.parse format, data
+  io.stderr\write "[#{name}] #{#domains} domaines depuis #{path}\n"
+  write_bin domains, output, dry_run
+
+--- Parcourt un répertoire source et compile tous les fichiers .txt en .bin.
+-- Les fichiers .txt originaux sont conservés dans src_dir.
+-- Les .bin sont écrits dans output_dir (défaut : src_dir).
+-- Cela permet de séparer les sources (ex. /etc/custos/lists/custom/) de
+-- la sortie compilée lue par le filtre (ex. domainlists_dir/custom/).
+-- @tparam  string   src_dir    Répertoire contenant les .txt à compiler
+-- @tparam  string   output_dir Répertoire de destination des .bin (défaut : src_dir)
+-- @tparam  boolean  dry_run
+-- @treturn number              Nombre de listes mises à jour
+-- @treturn number              Nombre d'erreurs
+process_custom_dir = (src_dir, output_dir, dry_run) ->
+  output_dir = output_dir or src_dir
+  local_updated, local_errors = 0, 0
+  ensure_dir src_dir
+  ensure_dir output_dir
+  quoted_dir = sh_quote src_dir
+  fh = io.popen "cd #{quoted_dir} 2>/dev/null && ls -1 *.txt 2>/dev/null"
+  unless fh
+    return 0, 0
+  src_base = src_dir\gsub "/+$", ""
+  out_base = output_dir\gsub "/+$", ""
+  for txt_name in fh\lines!
+    txt_name = txt_name\gsub "%s+$", ""
+    continue if txt_name == ""
+    txt_path = src_base .. "/" .. txt_name
+    name = bin_name_for txt_name
+    bin_path = out_base .. "/" .. name .. ".bin"
+    ok_l, msg, skipped = fetch_local name, { file: txt_path, format: "simple", output: bin_path }, dry_run
+    kind = write_result_kind ok_l, msg, skipped
+    if kind == "ok"
+      io.stderr\write "[custom/#{name}] ✓ #{msg}\n"
+      local_updated += 1
+    elseif kind == "skipped"
+      io.stderr\write "[custom/#{name}] ⏭ ignorée (#{msg})\n"
+    else
+      io.stderr\write "[custom/#{name}] ✗ #{msg}\n"
+      local_errors += 1
+  fh\close!
+  local_updated, local_errors
+
+{ :sh_quote, :bin_name_for, :write_result_kind, :ensure_dir, :ensure_parent_dir,
+  :download, :download_file, :write_bin, :fetch_local, :process_custom_dir }
