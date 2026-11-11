@@ -227,6 +227,19 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `tests/unit/mac_learner_probe_spec.moon` (IPv4 `10.0.0.5` → `"10.0.0.5"`,
   IPv6 `2001:db8::1` → forme IPv6).
 
+- **Tube ACK nft partagé entre enfants `DOH-conn`.** Tous les enfants forkés par
+  `worker_doh` héritaient du même descripteur de lecture du tube ACK de leur
+  worker (`nft_queue.set_ack_rfd`), alors que `worker_nft` n'émet qu'un octet
+  par (flush × worker_idx), sans corrélation : deux enfants concurrents dans
+  `drain_ack` → injections nft → `wait_ack` se volaient les ACK, l'un répondant
+  avant l'insertion de ses IP (SYN dropé par le default-deny), l'autre attendant
+  le timeout. Correctif : helper `doh.query.inject_nft_and_wait`, utilisé aux
+  deux sites d'injection, qui tient `lib.filelock.with_lock` sur un verrou par
+  `worker_idx` dérivé du répertoire du pidfile ; section bornée par `wait_ack`
+  (150 ms), repli sans verrou avec `log_warn` si l'ouverture échoue. Le chemin
+  UDP (un processus par tube) est inchangé. Tests :
+  `tests/unit/doh/query_ack_lock_spec.moon`. Détail : `docs/agents/doh.md`.
+
 ### Outils, sync et installation (branche fix-outils)
 
 - **`sync/apply.moon --reload` et `make reload` ne visaient pas le superviseur.**
