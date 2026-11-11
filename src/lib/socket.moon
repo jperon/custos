@@ -108,6 +108,7 @@ F_SETFL = 4
 MSG_DONTWAIT = 64
 EWOULDBLOCK = 11
 EAGAIN = 11
+EINPROGRESS = 115  -- connect() non bloquant : résultat différé (select()/SO_ERROR)
 ETH_P_ALL = 0x0003
 
 -- Get errno

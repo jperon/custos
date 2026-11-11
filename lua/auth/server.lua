@@ -225,6 +225,7 @@ handle_client = function(args)
     end)
     local handshake_complete = false
     local handshake_attempts = 0
+    local hs_err = nil
     local handshake_deadline = os.time() + client_timeout
     while not handshake_complete and handshake_attempts < 50 and os.time() <= handshake_deadline do
       handshake_attempts = handshake_attempts + 1
@@ -234,7 +235,8 @@ handle_client = function(args)
           attempt = handshake_attempts
         }
       end)
-      local ok_hs, hs_err = tls_client:dohandshake()
+      local ok_hs
+      ok_hs, hs_err = tls_client:dohandshake()
       log_debug(function()
         return {
           action = "server_dohandshake_returned",

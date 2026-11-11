@@ -26,9 +26,18 @@ ipparse_supported_versions = require "ipparse.l7.tls.handshake.extension.support
 { :mac2s } = require "packet_utils"
 
 bit = require "bit"
-{ :nft } = require "config"
+{ :nft, :auth } = require "config"
 nft_cfg = nft or {}
 SNI_TIMEOUT = nft_cfg.sni_timeout or nft_cfg.ip_timeout or "2m"
+
+-- Chemin du fichier de sessions AUTH, lu par le hot-path SNI via user_for_mac.
+-- Initialisé au niveau module (comme auth_cfg dans worker_questions et
+-- worker_responses avec la même valeur par défaut) puis affiné dans run()
+-- depuis filter.get_auth_cfg(). Assigné seulement dans run(), il y serait
+-- local et la lecture du hot-path compilerait en globale nil : user_for_mac
+-- recevrait un chemin nil, load_sessions(nil) rendrait {} et le champ `user`
+-- des requêtes SNI serait toujours nil.
+auth_sessions_file = (auth and auth.sessions_file) or "/tmp/sessions.lua"
 
 -- État de réassemblage QUIC, indexé par flow key. `quic_sessions_seen`
 -- mémorise la dernière activité (os.time) pour permettre une éviction TTL ;
@@ -1105,4 +1114,5 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
   :mark_packet_for_reject
   :sni_action_for, :validate_sni, :dst_matches_cname, :build_validator_query
   :prune_sni_verdicts, :reset_sni_verdicts, :set_validator_state
+  :auth_sessions_file
 }

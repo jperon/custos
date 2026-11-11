@@ -59,3 +59,39 @@ describe "nft_add_helper.try_add_with_retries", ->
       nil, nil
     assert.is_false ok
     assert.equals 3, calls
+
+-- ── Log d'épuisement : la dernière erreur doit être conservée ────────────
+-- `last_err` était assignée dans la boucle (donc locale à celle-ci) et lue
+-- après : la lecture compilait en globale (nil) et le log perdait toujours
+-- l'erreur de la dernière tentative.
+
+-- Recharge le module avec un `log` stub pour capturer les champs loggés.
+-- Le module capture log_warn à son chargement ; package.loaded est restauré
+-- aussitôt après pour ne pas affecter les autres specs du même processus.
+reload_with_log_stub = ->
+  saved_log    = package.loaded["log"]
+  saved_helper = package.loaded["nft_add_helper"]
+  captured = {}
+  package.loaded["log"] = {
+    log_warn: (thunk) -> captured[#captured + 1] = thunk!
+  }
+  package.loaded["nft_add_helper"] = nil
+  helper = require "nft_add_helper"
+  package.loaded["log"]    = saved_log
+  package.loaded["nft_add_helper"] = saved_helper
+  helper, captured
+
+describe "nft_add_helper.try_add_with_retries log d'épuisement", ->
+  before_each ->
+    config.nft.add_backoff_ms = { 0 }
+
+  after_each ->
+    config.nft.add_backoff_ms = orig_backoffs
+
+  it "conserve la dernière erreur dans nft_add_retries_exhausted", ->
+    helper, captured = reload_with_log_stub!
+    ok = helper.try_add_with_retries -> false, "nft busy"
+    assert.is_false ok
+    assert.equals 1, #captured
+    assert.equals "nft_add_retries_exhausted", captured[1].action
+    assert.equals "nft busy", captured[1].err

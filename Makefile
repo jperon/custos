@@ -3,7 +3,7 @@
 #
 # Targets:
 #   all          - Compile all .moon files to .lua
-#   check        - Syntax check generated Lua files
+#   check        - Syntax check generated Lua files + lectures de globales non déclarées
 #   test         - Unit tests (Busted: all specs in tests/unit/, no root required)
 #   test-openwrt - OpenWrt live tests via SSH (HOST=user@host required)
 #   homelab-up    - Create/start 3-VM OpenWrt homelab (via/custos/servus)
@@ -169,6 +169,9 @@ compile-helpers: $(TEST_HELPER_LUAS)
 # Toute la liste est vérifiée (rapport complet, pas d'arrêt au premier échec) ;
 # chaque échec positionne rc=1, propagé en `exit $$rc` en fin de recette — sans
 # cela un fichier cassé n'affichait que `FAIL` et `make check` retournait 0.
+# Puis contrôle des globales non déclarées : une variable lue hors de la portée
+# où MoonScript l'a rendue locale compile en globale (nil silencieux) ; cf.
+# tools/check_globals.sh et .agents/testing.md.
 check: all
 	@echo "Vérification syntaxique..."
 	@rc=0; \
@@ -176,6 +179,8 @@ check: all
 	  luajit -e "local ok,e=loadfile('$$f'); if not ok then print('FAIL '..e); os.exit(1) else print('OK   $$f') end" || rc=1; \
 	done; \
 	exit $$rc
+	@echo "Vérification des globales non déclarées..."
+	@tools/check_globals.sh
 
 # ── Tests unitaires (Busted) ──────────────────────────────────────────────
 
