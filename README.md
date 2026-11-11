@@ -223,9 +223,7 @@ custos/
 │   │   │    auto-générées à partir de from_xxx par compiler_api)
 │   │   └── lib/
 │   │       ├── bsearch.moon       Recherche binaire dans les listes binaires
-│   │       ├── cidr_parser.moon   Parsing CIDR
 │   │       ├── ipcalc.moon        Test d'appartenance CIDR
-│   │       ├── load_config.moon   Chargeur de config
 │   │       └── parse_domains.moon Parser multi-format de listes de domaines
 │   ├── webui/
 │   │   ├── router.moon      Dispatch des requêtes /admin/* vers les handlers

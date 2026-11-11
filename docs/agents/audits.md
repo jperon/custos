@@ -332,3 +332,12 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   dans `render` et `render_sets_only`). Les sets `set_subnet4/6` (alimentés par
   `collect_static_meta`, extension `nft_static`) et les sets de ports sont
   conservés à l'identique.
+- **Q3 : modules entièrement morts `filter/lib/cidr_parser.moon` et
+  `filter/lib/load_config.moon`.** `cidr_parser` n'était requis que par son
+  propre spec ; `load_config` que par un `describe` de
+  `tests/unit/filter/filter_spec.moon`. Supprimés avec leurs `.lua` compilés,
+  le spec `cidr_parser_spec.moon` et le bloc `load_config` de `filter_spec`
+  (la config runtime est chargée par `config.moon`, pas par ce module) ;
+  arborescence `README.md` et `tests/README.md` alignées. Note : la validation
+  de préfixe qu'aurait pu fournir `cidr_parser` reste absente d'`ipcalc`
+  (point B4 de l'audit, hors périmètre de cette branche).
