@@ -50,6 +50,18 @@ local recv_cb = ffi.cast("size_t (*)(char*, size_t, size_t, void*)", function(pt
   return n
 end)
 local M = { }
+local probe
+probe = function()
+  if not (libcurl) then
+    return false, "libcurl introuvable"
+  end
+  local handle = libcurl.curl_easy_init()
+  if not (handle ~= nil) then
+    return false, "curl_easy_init_failed"
+  end
+  libcurl.curl_easy_cleanup(handle)
+  return true
+end
 local new_client
 new_client = function(url, timeout_ms, verify_tls)
   if timeout_ms == nil then
@@ -114,4 +126,5 @@ close = function(_) end
 M.new_client = new_client
 M.query = query
 M.close = close
+M.probe = probe
 return M

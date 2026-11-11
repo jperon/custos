@@ -162,7 +162,9 @@ load_doh_cfg = function()
       else
         return config.doh.upstream_doh_tls_verify
       end
-    end)()
+    end)(),
+    upstream_fallback_insecure = config.doh.upstream_fallback_insecure == true,
+    upstream_fallback_ca_file = config.doh.upstream_fallback_ca_file
   }
 end
 local close_supervisor_fds

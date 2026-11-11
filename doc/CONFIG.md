@@ -546,8 +546,10 @@ Proxy DNS-over-HTTPS vers un résolveur amont.
 | `cert_path` | string | `nil` | Chemin certificat TLS (optionnel) |
 | `key_path` | string | `nil` | Chemin clé privée TLS (optionnel) |
 | `prefer_ipv6` | bool | `true` | Préférer IPv6 pour les requêtes amont |
-| `upstream_doh_url` | string | `nil` | URL DoH amont, ex. `"https://dns.quad9.net/dns-query"`. Si défini, le worker DoH proxifie vers ce résolveur via **libcurl** (HTTP/2 + ALPN natif, fallback HTTP/1.1 automatique) au lieu d'UDP/53. Requis pour les providers qui imposent HTTP/2 (RFC 8484 §5.2, ex. DNSforFamily). Opt-in. |
+| `upstream_doh_url` | string | `nil` | URL DoH amont, ex. `"https://dns.quad9.net/dns-query"`. Si défini, le worker DoH proxifie vers ce résolveur via **libcurl** (HTTP/2 + ALPN natif, fallback HTTP/1.1 automatique) au lieu d'UDP/53. Requis pour les providers qui imposent HTTP/2 (RFC 8484 §5.2, ex. DNSforFamily). Opt-in. Si libcurl ne peut être chargé ou initialisé, le worker bascule une fois sur le repli HTTP/1.1 wolfSSL (`doh.upstream_doh`, vérifié par défaut) ; une erreur de requête (timeout, 5xx) ne déclenche pas ce repli. |
 | `upstream_doh_tls_verify` | bool | `true` | Vérifier le certificat TLS du résolveur `upstream_doh_url` (sécurisé par défaut). Ne mettre à `false` que pour un résolveur de confiance hors chaîne PKI ; le worker DoH loggue alors `upstream_doh_tls_verify_disabled`. |
+| `upstream_fallback_insecure` | bool | `false` | Repli wolfSSL (HTTP/1.1) quand libcurl est inutilisable. `false` (défaut) : le repli **refuse de fonctionner** s'il ne peut pas vérifier certificat + nom d'hôte (symbole absent ou aucun magasin de CA) ; l'erreur est journalisée. `true` : repli non vérifié accepté avec un `log_warn` explicite. Jamais appliqué au validateur (`doh.validate_resolvers`), qui n'accepte aucun transport non vérifié. |
+| `upstream_fallback_ca_file` | string | `nil` | Magasin de CA du repli wolfSSL. `nil` : `SSL_CERT_FILE`, puis `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`, `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/ca-bundle.pem`. |
 
 > **Note `from_vlan` en DoH.** La condition `from_vlan` ne fonctionne pas pour
 > les connexions DoH quand les switches amont suppriment les tags 802.1Q avant
@@ -556,7 +558,7 @@ Proxy DNS-over-HTTPS vers un résolveur amont.
 
 ### Clé `doh.validate_resolvers`
 
-Liste d'endpoints pour le second avis DNS (action `validate` dans les règles de filtre). Supporte les IPs UDP/53 et les URLs DoH (`https://…`). Les endpoints DoH utilisent **libcurl** avec le timeout `second_opinion.doh_budget_ms` (défaut 3000 ms).
+Liste d'endpoints pour le second avis DNS (action `validate` dans les règles de filtre). Supporte les IPs UDP/53 et les URLs DoH (`https://…`). Les endpoints DoH utilisent **libcurl** avec le timeout `second_opinion.doh_budget_ms` (défaut 3000 ms) ; si libcurl est inutilisable, ils basculent vers le repli wolfSSL **toujours vérifié** (jamais `upstream_fallback_insecure`, même à `true` : un verdict forgé serait pire qu'une absence de verdict).
 
 ```moonscript
 doh: {

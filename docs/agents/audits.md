@@ -1147,3 +1147,56 @@ OK (147 fichiers, aucune globale inconnue) ; `make test` = **2301 successes /
 0 failures / 0 errors / 0 pending** (2298 de la base + 3 tests ajoutés par
 l'adaptation IPv6), `make test-js` = 12 pass / 0 fail (journal `tmp/test.log`).
 `make test-e2e` non lancé (homelab partagé, à la charge de l'orchestrateur).
+### Branche d-dohfallback — repli DoH amont wolfSSL
+
+`doh.upstream_doh` n'est plus un module mort : il devient le repli du transport
+DoH amont quand libcurl est inutilisable.
+
+- **Sélection unique (`src/doh/upstream_select.moon:135`).** `select` est appelé
+  par `worker_doh` (`src/worker_doh.moon:552`) et par `doh.validator`
+  (`src/doh/validator.moon:38-46`, mémoïsé). curl reste le transport normal ;
+  le repli n'est choisi que si `require` échoue (`ffi.load` `curl` →
+  `libcurl.so.4`, `:24`) ou si `probe` (`curl_easy_init`, module curl) échoue.
+  Une erreur de requête (timeout, 5xx) ne bascule jamais : le descripteur
+  `{transport, verify_tls, make_client, close}` est figé. Un unique `log_warn`
+  `doh_upstream_fallback_wolfssl` porte la raison et `verify_tls` effectif
+  (`:99`, `:115`, `:157`). Si le module wolfSSL ne se charge pas, `worker_doh`
+  revient à UDP/53 (`upstream_doh_unavailable_udp`) ; si wolfSSL se charge mais
+  que la vérification est impossible avec `upstream_fallback_insecure=false`,
+  le repli refuse (chaque ouverture échoue avec `tls_verify_unavailable`) au
+  lieu de contourner la politique DoH par UDP.
+- **Vérification TLS (`src/auth/ffi_wolfssl.moon:148`).**
+  `verification_available` exige que la libwolfssl chargée résolve par `pcall`
+  les symboles `wolfSSL_CTX_load_verify_locations` / `wolfSSL_UseSNI` /
+  `wolfSSL_check_domain_name` (OpenWrt peut compiler sans) et qu'un magasin de
+  CA soit lisible (`find_ca_file`, `:132` : `SSL_CERT_FILE`, chemins usuels,
+  ou `doh.upstream_fallback_ca_file`). `newclient_context` charge alors le
+  magasin (`:222`) ; `wrap` envoie le SNI (hors IP littérale, `:248`) et active
+  `wolfSSL_check_domain_name` (`:255`). `upstream_doh.new_client` vérifié
+  renvoie `tls_verify_unavailable` si la sonde échoue au lieu de continuer sans
+  contrôle.
+- **Refus par défaut.** `doh.upstream_fallback_insecure` (défaut `false`,
+  `src/config.moon`) : vérification impossible → repli refusé et erreur
+  journalisée ; `true` → repli non vérifié avec `log_warn` explicite. Le
+  validateur impose `role="validator"`, `verify_tls=true` et
+  `fallback_insecure=false` : aucun transport non vérifié (un verdict forgé
+  serait pire qu'une absence de verdict).
+- **Robustesse HTTP/1.1 (`src/doh/upstream_doh.moon`).** `parse_url` (`:82`)
+  gère IPv6 littéral (crochets retirés pour `getaddrinfo`/SNI) et `host:port`
+  sans chemin ; l'en-tête Host réencadre l'IPv6 et porte le port. `query`
+  (`:283`) borne `Content-Length` ≤ 65535 (`:322`), écrit par `send_all`
+  (`:215`, écritures partielles), borne les `WANT_*`, rejette un statut ≠ 200,
+  un corps tronqué (`read_response`, `:245`) et corrèle le txid
+  (`txid_mismatch`, `:334`).
+- **Tests.** `tests/unit/doh/upstream_select_spec.moon` (curl normal, échec de
+  chargement/init simulé → repli + un seul warn, erreur de requête sans
+  bascule, refus/acceptation selon `upstream_fallback_insecure`, validateur
+  jamais non vérifié) ; `tests/unit/doh/upstream_doh_spec.moon` (`parse_url`
+  IPv6/port/sans chemin, Content-Length énorme, 500, corps tronqué, txid
+  différent, écritures partielles, vérification TLS/SNI, refus sans sonde) ;
+  `tests/unit/auth/wolfssl_spec.moon` (sonde, chargement du magasin) ;
+  `tests/unit/doh_config_spec.moon` (défauts et coercion des nouvelles clés).
+
+**Vérification (2026-11-11, branche d-dohfallback)** : `make all` et
+`make check` OK (225 fichiers vérifiés) ; `make test` = 2333 successes /
+0 failures / 0 errors ; `make test-js` = 12 pass.

@@ -5,11 +5,54 @@
 | Module | Rôle |
 |--------|------|
 | `doh.upstream` | Client UDP/53 — new_client / query / close |
-| `doh.upstream_doh` | Client DoH HTTP/1.1 wolfSSL — même contrat. **Non chargé en production** (aucun `require` dans `src/`) : seul `doh.upstream_doh_curl` est utilisé par `worker_doh` et `doh.validator` ; ce module n'est couvert que par `tests/unit/doh/upstream_doh_spec.moon`. |
-| `doh.upstream_doh_curl` | Client DoH **HTTP/2** via libcurl FFI — même contrat. Chargé si `doh.upstream_doh_url` est défini. `ffi.load` essaie `"curl"` puis `"libcurl.so.4"` pour compat OpenWrt. Les args `const char *` vers les varargs `curl_easy_setopt` **doivent** être castés via `ffi.cast "const char *"` (LuaJIT ne convertit pas automatiquement en varargs). |
+| `doh.upstream_doh` | Client DoH HTTP/1.1 wolfSSL — même contrat. **Repli** chargé via `doh.upstream_select` quand `doh.upstream_doh_curl` ne peut être chargé/initialisé ; vérifie certificat + nom d'hôte par défaut (`verify_tls=true`), sinon refuse de fonctionner sauf `doh.upstream_fallback_insecure=true`. |
+| `doh.upstream_doh_curl` | Client DoH **HTTP/2** via libcurl FFI — même contrat. Transport normal, chargé si `doh.upstream_doh_url` est défini. `ffi.load` essaie `"curl"`, `"libcurl.so.4"` puis `"libcurl.so.4.8.0"` pour compat OpenWrt ; `probe` valide en plus `curl_easy_init` une seule fois. Les args `const char *` vers les varargs `curl_easy_setopt` **doivent** être castés via `ffi.cast "const char *"` (LuaJIT ne convertit pas automatiquement en varargs). |
+| `doh.upstream_select` | Sélection unique du transport DoH amont : curl si utilisable, sinon repli wolfSSL (vérifié, non vérifié explicitement autorisé, ou refusé). Ne bascule jamais sur une erreur de requête. |
 | `doh.h2_frames` | Utilitaires frames HTTP/2 partagés (constantes, `h2_read_frame`, `h2_write_frame`) |
-| `doh.validator` | Second avis DNS synchrone pour `worker_doh`. Interroge `second_opinion.resolvers` (ou per-règle) en UDP ou DoH. Timeout distinct `budget_ms` (UDP) / `doh_budget_ms` (DoH). `query_classified` renvoie un **override classifié** (`block`/`sinkhole`/`redirect`/`nil`) via `dns_classify.classify` (REFUSED → `block` explicite, comme l'ancien `query_verdict` booléen, toujours exposé en wrapper). |
+| `doh.validator` | Second avis DNS synchrone pour `worker_doh`. Interroge `second_opinion.resolvers` (ou per-règle) en UDP ou DoH. Timeout distinct `budget_ms` (UDP) / `doh_budget_ms` (DoH). Le transport DoH est choisi une fois via `doh.upstream_select` avec `role="validator"` : **jamais** de repli non vérifié. `query_classified` renvoie un **override classifié** (`block`/`sinkhole`/`redirect`/`nil`) via `dns_classify.classify` (REFUSED → `block` explicite, comme l'ancien `query_verdict` booléen, toujours exposé en wrapper). |
 | `doh.query` | Cœur de traitement DoH : vol captif + `filter.decide` + `doh.validator` + upstream + nft |
+
+### Repli du transport DoH amont : curl → wolfSSL
+
+`doh.upstream_select.select` est appelé par `worker_doh` au démarrage et par
+`doh.validator` à la première ouverture d'un endpoint `https://`. Il choisit
+**une seule fois** :
+
+- **curl** (`doh.upstream_doh_curl`, HTTP/2) si le module se charge (`ffi.load`
+  `curl` → `libcurl.so.4` → `libcurl.so.4.8.0`) et si `probe`
+  (`curl_easy_init`) réussit ;
+- sinon **`doh.upstream_doh`** (wolfSSL, HTTP/1.1), avec un unique `log_warn`
+  `doh_upstream_fallback_wolfssl` portant la raison et le niveau de
+  vérification effectif.
+
+Une erreur de requête (timeout, 5xx, refus TLS) ne rebascule jamais : le
+descripteur `{transport, verify_tls, make_client, close}` est figé. Si le module
+wolfSSL lui-même ne se charge pas, `worker_doh` revient à UDP/53 et loggue
+`upstream_doh_unavailable_udp`. Si wolfSSL se charge mais que la vérification
+est impossible avec `upstream_fallback_insecure=false`, le repli **refuse**
+(chaque ouverture échoue avec `tls_verify_unavailable`) au lieu de contourner la
+politique DoH par UDP.
+
+Le repli est **vérifié par défaut** : magasin de CA (`SSL_CERT_FILE`, chemins
+usuels, ou `doh.upstream_fallback_ca_file`), SNI (`wolfSSL_UseSNI`, sauf IP
+littérale, RFC 6066) et `wolfSSL_check_domain_name`. `verification_available`
+teste par `pcall` que la libwolfssl chargée résout les symboles nécessaires
+(OpenWrt peut compiler sans) et qu'un magasin est lisible ; sinon `new_client`
+vérifié renvoie `tls_verify_unavailable`. Avec
+`doh.upstream_fallback_insecure = false` (défaut), le repli **refuse de
+fonctionner** ; à `true`, il fonctionne non vérifié avec un `log_warn` explicite.
+Le validateur impose `verify_tls=true` et n'accepte jamais le mode non vérifié.
+
+Contrat inchangé : `new_client` / `query` / `close` + champ `_mod`, identiques à
+`doh.upstream` et `doh.upstream_doh_curl`, donc `doh.query` n'a pas changé.
+
+Robustesse HTTP/1.1 : `parse_url` accepte IPv6 littéral (crochets retirés pour
+`getaddrinfo`/SNI) et `host:port` sans chemin ; `query` borne `Content-Length`
+(≤ 65535), gère les écritures partielles, les `WANT_*` bornés, rejette un
+statut ≠ 200, un corps tronqué, une réponse courte et corrèle le `txid`.
+Tests : `tests/unit/doh/upstream_select_spec.moon`,
+`tests/unit/doh/upstream_doh_spec.moon`, `tests/unit/auth/wolfssl_spec.moon`,
+`tests/unit/doh_config_spec.moon`.
 
 ### Limites connues du serveur HTTP/2
 

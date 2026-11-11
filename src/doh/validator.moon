@@ -25,12 +25,36 @@ verdict_to_override = (vi) ->
     else
       nil
 
--- Chargement paresseux pour éviter la dépendance libcurl au démarrage
--- si aucun validate_resolver https:// n'est configuré.
-upstream_curl_mod = nil
-get_doh_mod = ->
-  upstream_curl_mod or= require "doh.upstream_doh_curl"
-  upstream_curl_mod
+-- Sélection du transport DoH, décidée une seule fois (curl normal, repli
+-- wolfSSL vérifié). Le validateur impose verify_tls=true et n'accepte jamais
+-- un repli non vérifié : un verdict forgé est pire qu'une absence de verdict.
+upstream_select = require "doh.upstream_select"
+validator_desc  = nil
+validator_desc_done = false
+
+--- Retourne le descripteur DoH du validateur (mémoïsé, création unique).
+-- @tparam string endpoint URL DoH (sert d'URL de repli au descripteur).
+-- @treturn table Descripteur utilisable par open_client.
+get_doh_desc = (endpoint) ->
+  unless validator_desc_done
+    validator_desc_done = true
+    desc, err = upstream_select.select {
+      url: endpoint
+      role: "validator"
+      verify_tls: true
+      fallback_insecure: false
+    }
+    if desc
+      validator_desc = desc
+    else
+      validator_desc = {
+        transport: "unavailable"
+        verify_tls: true
+        make_client: (url, timeout_ms, verify_tls) ->
+          nil, "doh transport unavailable: #{err}"
+        close: ->
+      }
+  validator_desc
 
 -- Sélectionne le module de transport et ouvre la connexion selon le type d'endpoint.
 -- @tparam string endpoint  IP ou URL "https://...".
@@ -38,11 +62,12 @@ get_doh_mod = ->
 -- @treturn table|nil client, string|nil err
 open_client = (endpoint, timeout_ms) ->
   if endpoint\sub(1, 8) == "https://"
-    -- verify_tls=true explicite : upstream_doh_curl.new_client défaut à
-    -- `false` si omis, ce qui désactiverait la vérification du certificat
-    -- du validateur et permettrait à un attaquant on-path de forger un
-    -- verdict block/sinkhole/redirect sans MITM détectable.
-    get_doh_mod!.new_client endpoint, timeout_ms, true
+    -- verify_tls=true imposé par le descripteur : upstream_doh_curl.new_client
+    -- défaut à `false` si omis, ce qui désactiverait la vérification du
+    -- certificat du validateur et permettrait à un attaquant on-path de forger
+    -- un verdict block/sinkhole/redirect sans MITM détectable.
+    desc = get_doh_desc endpoint
+    desc.make_client endpoint, timeout_ms, desc.verify_tls
   else
     upstream_mod.new_client endpoint, 53, timeout_ms
 

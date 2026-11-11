@@ -31,6 +31,9 @@ ffi.cdef [[
   int wolfSSL_shutdown(WOLFSSL *ssl);
   int wolfSSL_get_error(WOLFSSL *ssl, int ret);
   void wolfSSL_CTX_set_verify(WOLFSSL_CTX *ctx, int mode, void *verify_callback);
+  int wolfSSL_CTX_load_verify_locations(WOLFSSL_CTX *ctx, const char *file, const char *path);
+  int wolfSSL_UseSNI(WOLFSSL *ssl, unsigned char type, const void *data, unsigned short size);
+  int wolfSSL_check_domain_name(WOLFSSL *ssl, const char *dn);
   int wolfSSL_CTX_UseALPN(WOLFSSL_CTX *ctx, char *protocol_name_list,
                           unsigned int protocol_name_listSz, unsigned char options);
   int wolfSSL_ALPN_GetProtocol(WOLFSSL *ssl, char **protocol_name, unsigned short *size);
@@ -74,6 +77,15 @@ SSL_ERROR_SSL = 1
 SSL_VERIFY_NONE = 0
 SSL_VERIFY_PEER = 1
 
+-- SNI (wolfSSL_UseSNI) et magasins de CA usuels (OpenWrt, Debian, Alpine, RHEL).
+WOLFSSL_SNI_HOST_NAME = 0
+CA_FILE_CANDIDATES = {
+  "/etc/ssl/certs/ca-certificates.crt"
+  "/etc/ssl/cert.pem"
+  "/etc/pki/tls/certs/ca-bundle.crt"
+  "/etc/ssl/ca-bundle.pem"
+}
+
 -- File types
 SSL_FILETYPE_PEM = 1
 SSL_FILETYPE_ASN1 = 2
@@ -95,6 +107,54 @@ get_ssl_errors = () ->
 ssl_mt = {
   __index: {}
 }
+
+--- Teste si un symbole est réellement résolu par la libwolfssl chargée.
+-- Sur OpenWrt, la lib peut être compilée sans certaines options : un `cdef`
+-- déclaré ne garantit pas que le symbole existe (dlsym échoue à l'accès).
+-- @tparam string name Nom du symbole C.
+-- @treturn boolean true si le symbole est résolvable.
+symbol_available = (name) ->
+  pcall -> libwolfssl[name]
+
+--- Teste l'existence lisible d'un fichier (sans shell).
+-- @tparam string path Chemin candidat.
+-- @treturn boolean true si le fichier peut être ouvert en lecture.
+ca_file_readable = (path) ->
+  return false if type(path) != "string" or #path == 0
+  f = io.open path, "r"
+  return false unless f
+  f\close!
+  true
+
+--- Localise un magasin de CA : chemin explicite, SSL_CERT_FILE, puis chemins usuels.
+-- @tparam string|nil explicit Chemin configuré (doh.upstream_fallback_ca_file).
+-- @treturn string|nil Chemin lisible, ou nil si aucun magasin n'est trouvé.
+find_ca_file = (explicit) ->
+  return explicit if ca_file_readable explicit
+  env = os.getenv "SSL_CERT_FILE"
+  return env if ca_file_readable env
+  for path in *CA_FILE_CANDIDATES
+    return path if ca_file_readable path
+  nil
+
+--- Vérifie que la libwolfssl chargée peut vérifier certificat ET nom d'hôte.
+-- Exige les symboles de chargement du magasin, de SNI et de contrôle du nom ;
+-- sans l'un d'eux (ou sans magasin de CA), un handshake « vérifié » ne
+-- garantirait ni la chaîne ni l'identité du serveur.
+-- @tparam table|nil opts {ca_file: string|nil}.
+-- @treturn boolean Disponibilité de la vérification.
+-- @treturn string|nil Raison de l'indisponibilité.
+-- @treturn string|nil Chemin du magasin de CA retenu.
+verification_available = (opts={}) ->
+  missing = {}
+  for name in *{"wolfSSL_CTX_load_verify_locations", "wolfSSL_UseSNI", "wolfSSL_check_domain_name"}
+    missing[#missing + 1] = name unless symbol_available name
+  unless #missing == 0
+    return false, "symboles absents: #{table.concat missing, ", "}", nil
+  ca = find_ca_file opts.ca_file
+  unless ca
+    return false, "aucun magasin de CA trouvé", nil
+  true, nil, ca
 
 -- Create server context (compatible with luasec API)
 newcontext = (opts = {}) ->
@@ -142,19 +202,34 @@ newcontext = (opts = {}) ->
   }
 
 --- Create a client TLS context (opt-in certificate verification via opts.verify_peer).
--- @tparam table opts {verify_peer: bool}
+-- Quand `verify_peer` est vrai, charge le magasin de CA (`opts.ca_file` ou
+-- détection système) et active SSL_VERIFY_PEER. Échoue si aucun magasin n'est
+-- disponible : jamais de vérification silencieusement absente.
+-- @tparam table opts {verify_peer: bool, ca_file: string|nil}
 -- @treturn table ctx_obj compatible with wrap()
 newclient_context = (opts={}) ->
   method = libwolfssl.wolfTLS_client_method!
   error "wolfTLS_client_method() failed" if method == nil
   ctx = libwolfssl.wolfSSL_CTX_new method
   error "wolfSSL_CTX_new() failed (client)" if ctx == nil
+  ca_file = nil
   if opts.verify_peer
+    ca_file = opts.ca_file or find_ca_file!
+    unless ca_file
+      libwolfssl.wolfSSL_CTX_free ctx
+      error "no CA store available for peer verification"
     libwolfssl.wolfSSL_CTX_set_verify ctx, SSL_VERIFY_PEER, nil
-  { :ctx, closed: false }
+    ret = libwolfssl.wolfSSL_CTX_load_verify_locations ctx, ca_file, nil
+    if ret != 1
+      libwolfssl.wolfSSL_CTX_free ctx
+      error "wolfSSL_CTX_load_verify_locations() failed for #{ca_file} (ret=#{ret})"
+  { :ctx, closed: false, verify_peer: opts.verify_peer == true, :ca_file }
 
 -- Wrap raw socket with TLS
-wrap = (raw_socket, ctx_obj) ->
+-- @tparam table raw_socket Socket (lib.socket).
+-- @tparam table ctx_obj Contexte créé par newclient_context/newcontext.
+-- @tparam table|nil opts {sni: string|nil, check_domain: string|nil}.
+wrap = (raw_socket, ctx_obj, opts={}) ->
   log_debug -> { action: "wrap_start", fd: raw_socket.fd }
 
   ssl = libwolfssl.wolfSSL_new(ctx_obj.ctx)
@@ -167,6 +242,20 @@ wrap = (raw_socket, ctx_obj) ->
   if ret < 0
     libwolfssl.wolfSSL_free(ssl)
     error "wolfSSL_set_fd() failed: ret="..ret
+
+  -- SNI doit précéder le handshake (RFC 6066). Ne pas envoyer d'IP littérale.
+  if opts.sni and #opts.sni > 0
+    ret_sni = libwolfssl.wolfSSL_UseSNI(ssl, WOLFSSL_SNI_HOST_NAME, opts.sni, #opts.sni)
+    if ret_sni != 1
+      libwolfssl.wolfSSL_free(ssl)
+      error "wolfSSL_UseSNI() failed: ret=#{ret_sni}"
+
+  -- Contrôle du nom d'hôte (SAN/CN) pendant le handshake, en plus de la chaîne.
+  if opts.check_domain and #opts.check_domain > 0
+    ret_dom = libwolfssl.wolfSSL_check_domain_name(ssl, opts.check_domain)
+    if ret_dom != 1
+      libwolfssl.wolfSSL_free(ssl)
+      error "wolfSSL_check_domain_name() failed: ret=#{ret_dom}"
 
   wrapped = {
     :ssl
@@ -359,6 +448,8 @@ free_context = (ctx_obj) ->
   :newclient_context
   :wrap
   :free_context
+  :find_ca_file
+  :verification_available
   :libwolfssl
   :SSL_ERROR_NONE
   :SSL_ERROR_WANT_READ

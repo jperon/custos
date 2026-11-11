@@ -58,6 +58,18 @@ recv_cb = ffi.cast "size_t (*)(char*, size_t, size_t, void*)", (ptr, sz, nmemb, 
 
 M = {}
 
+--- Vérifie que libcurl peut réellement créer une session curl.
+-- Utilisé une seule fois par `doh.upstream_select` pour décider du repli :
+-- un `ffi.load` réussi mais un `curl_easy_init` en échec doit aussi basculer.
+-- @treturn boolean|nil true si curl est utilisable.
+-- @treturn string|nil Raison de l'indisponibilité.
+probe = ->
+  return false, "libcurl introuvable" unless libcurl
+  handle = libcurl.curl_easy_init!
+  return false, "curl_easy_init_failed" unless handle != nil
+  libcurl.curl_easy_cleanup handle
+  true
+
 --- Crée un handle de configuration pour l'upstream curl DoH.
 -- @tparam string url        URL DoH, ex. "https://9.9.9.9/dns-query".
 -- @tparam number timeout_ms Délai maximum par requête en ms (défaut 2000).
@@ -120,4 +132,5 @@ close = (_) ->
 M.new_client = new_client
 M.query      = query
 M.close      = close
+M.probe      = probe
 M

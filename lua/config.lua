@@ -402,7 +402,9 @@ local DEFAULTS = {
     key = nil,
     prefer_ipv6 = true,
     upstream_doh_url = nil,
-    upstream_doh_tls_verify = true
+    upstream_doh_tls_verify = true,
+    upstream_fallback_insecure = false,
+    upstream_fallback_ca_file = nil
   },
   events = {
     dir = "/tmp/custos/events",
@@ -644,6 +646,14 @@ normalize = function(cfg)
     cfg.doh.upstream_doh_tls_verify = true
   else
     cfg.doh.upstream_doh_tls_verify = coerce_boolean(cfg.doh.upstream_doh_tls_verify)
+  end
+  if cfg.doh.upstream_fallback_insecure == nil then
+    cfg.doh.upstream_fallback_insecure = false
+  else
+    cfg.doh.upstream_fallback_insecure = coerce_boolean(cfg.doh.upstream_fallback_insecure)
+  end
+  if cfg.doh.upstream_fallback_ca_file == "" then
+    cfg.doh.upstream_fallback_ca_file = nil
   end
   cfg.runtime.benchmark = coerce_boolean(cfg.runtime.benchmark)
   local runtime_defaults = defaults.runtime or { }

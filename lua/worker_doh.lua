@@ -34,6 +34,7 @@ do
   parse, types, rcodes = _obj_0.parse, _obj_0.types, _obj_0.rcodes
 end
 local upstream_mod = require("doh.upstream")
+local upstream_select = require("doh.upstream_select")
 local b64_chars = { }
 do
   local s = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -762,40 +763,25 @@ run = function(doh_cfg, filter_data)
   local make_upstream = nil
   local close_upstream = nil
   if doh_cfg.upstream_doh_url then
-    local ok_curl, upstream_curl_mod = pcall(require, "doh.upstream_doh_curl")
-    if ok_curl then
-      local url = doh_cfg.upstream_doh_url
-      local verify_tls
-      if doh_cfg.upstream_doh_tls_verify == nil then
-        verify_tls = true
-      else
-        verify_tls = doh_cfg.upstream_doh_tls_verify
-      end
+    local desc, sel_err = upstream_select.select({
+      url = doh_cfg.upstream_doh_url,
+      timeout_ms = timeout_ms,
+      verify_tls = doh_cfg.upstream_doh_tls_verify ~= false,
+      fallback_insecure = doh_cfg.upstream_fallback_insecure == true,
+      ca_file = doh_cfg.upstream_fallback_ca_file,
+      role = "upstream"
+    })
+    if desc then
       make_upstream = function()
-        return upstream_curl_mod.new_client(url, timeout_ms, verify_tls)
+        return desc.make_client(doh_cfg.upstream_doh_url, timeout_ms, desc.verify_tls)
       end
-      close_upstream = upstream_curl_mod.close
-      log_info(function()
-        return {
-          action = "upstream_doh_curl_enabled",
-          url = url,
-          verify_tls = verify_tls
-        }
-      end)
-      log_warn(function()
-        if not (verify_tls) then
-          return {
-            action = "upstream_doh_tls_verify_disabled",
-            url = url,
-            detail = "certificat TLS du résolveur amont NON vérifié (MITM possible)"
-          }
-        end
-      end)
+      close_upstream = desc.close
     else
       log_warn(function()
         return {
-          action = "upstream_doh_curl_load_failed",
-          err = tostring(upstream_curl_mod)
+          action = "upstream_doh_unavailable_udp",
+          err = sel_err,
+          detail = "aucun transport DoH amont : repli UDP/53"
         }
       end)
     end

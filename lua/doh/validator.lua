@@ -34,16 +34,39 @@ verdict_to_override = function(vi)
     return nil
   end
 end
-local upstream_curl_mod = nil
-local get_doh_mod
-get_doh_mod = function()
-  upstream_curl_mod = upstream_curl_mod or require("doh.upstream_doh_curl")
-  return upstream_curl_mod
+local upstream_select = require("doh.upstream_select")
+local validator_desc = nil
+local validator_desc_done = false
+local get_doh_desc
+get_doh_desc = function(endpoint)
+  if not (validator_desc_done) then
+    validator_desc_done = true
+    local desc, err = upstream_select.select({
+      url = endpoint,
+      role = "validator",
+      verify_tls = true,
+      fallback_insecure = false
+    })
+    if desc then
+      validator_desc = desc
+    else
+      validator_desc = {
+        transport = "unavailable",
+        verify_tls = true,
+        make_client = function(url, timeout_ms, verify_tls)
+          return nil, "doh transport unavailable: " .. tostring(err)
+        end,
+        close = function() end
+      }
+    end
+  end
+  return validator_desc
 end
 local open_client
 open_client = function(endpoint, timeout_ms)
   if endpoint:sub(1, 8) == "https://" then
-    return get_doh_mod().new_client(endpoint, timeout_ms, true)
+    local desc = get_doh_desc(endpoint)
+    return desc.make_client(endpoint, timeout_ms, desc.verify_tls)
   else
     return upstream_mod.new_client(endpoint, 53, timeout_ms)
   end
