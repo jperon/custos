@@ -647,10 +647,12 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 
 ### 14.2 Dictionnaires nommés et listes de valeurs
 
-Les variantes `_list` / `_lists` des conditions ne lisent **pas** ces
-dictionnaires : elles lisent des fichiers texte sous `filter.lists_dir`
-(`{lists_dir}/{type}/{nom}.txt`, un élément par ligne, lignes vides et
-`#commentaires` ignorées). L'usage réel de chaque dictionnaire est indiqué
+Les variantes `_list` / `_lists` des conditions ne prennent **pas** le nom d'un
+groupe de ces dictionnaires : elles lisent des fichiers texte sous
+`filter.lists_dir` (`{lists_dir}/{type}/{nom}.txt`, un élément par ligne, lignes
+vides et `#commentaires` ignorées). Les lignes lues sont ensuite évaluées par la
+condition de base, qui peut y résoudre un alias (`filter.macs`) ou un nom de
+fenêtre (`filter.times`). L'usage réel de chaque dictionnaire est indiqué
 ci-dessous.
 
 #### `filter.nets` — Réseaux nommés (non consulté par `from_net`)
@@ -962,11 +964,13 @@ Pour un **OU** entre conditions hétérogènes, utiliser `any_of`. Pour la néga
 `{lists_dir}/{type}/nom.txt` (un élément par ligne) et `from_xxx_lists {…}` fait
 un OU sur plusieurs fichiers. Le `{type}` est le nom de base après le premier
 `_` : `from_net`→`net`, `from_mac`→`mac`, `from_vlan`→`vlan`,
-`from_user`→`user`, `in_time`→`time`. Ces variantes ne référencent **pas** les
-dictionnaires `filter.nets` / `filter.macs` / `filter.users`. L'orthographe
-sans tiret bas (`from_netlist`, `from_maclists`…) n'existe pas :
-`compiler_api.load_condition` renvoie `Condition '…' not found` et
-`src/filter/rule.moon:57` refuse la règle.
+`from_user`→`user`, `in_time`→`time`. Ces variantes ne sont **pas** une
+référence à un groupe des dictionnaires `filter.nets` / `filter.macs` /
+`filter.users` : ce sont des fichiers, dont chaque ligne est évaluée par la
+condition de base (un alias de `filter.macs` ou un nom de `filter.times` y est
+résolu). L'orthographe sans tiret bas (`from_netlist`, `from_maclists`…)
+n'existe pas : `compiler_api.load_condition` renvoie
+`Condition '…' not found` et `src/filter/rule.moon:57` refuse la règle.
 
 ### Domaines DNS
 

@@ -1317,8 +1317,10 @@ tâche).
   sur plusieurs fichiers (`:172-191`). `{type}` est le nom de base après le
   premier `_` (`:217,225`) : `from_net`→`net`, `from_mac`→`mac`,
   `from_vlan`→`vlan`, `from_user`→`user`, `in_time`→`time`. Ce n'est **pas**
-  une référence aux dictionnaires `filter.nets` / `filter.macs` /
-  `filter.users`.
+  une référence à un groupe des dictionnaires `filter.nets` /
+  `filter.macs` / `filter.users` : chaque ligne du fichier est évaluée par la
+  condition de base (un alias `filter.macs` ou un nom `filter.times` y est
+  résolu).
 - **Documentation corrigée.** `doc/CONFIG.md` (§14.1 ajout de `lists_dir`,
   §14.2 réécrit, §16 tables et exemple `any_of`), `README.md` (table des noms,
   `from_in_time_list` → `in_time_list`, défaut `/tmp/custos/lists`,
