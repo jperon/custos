@@ -1,6 +1,9 @@
 local read_request
 read_request = function(client, opts)
   local deadline = opts and opts.timeout and (os.time() + opts.timeout)
+  local max_body = (opts and opts.max_body) or 65536
+  local max_headers = (opts and opts.max_headers) or 100
+  local max_header_line = (opts and opts.max_header_line) or 8192
   local receive_retry
   receive_retry = function(mode)
     local last_err = nil
@@ -29,6 +32,7 @@ read_request = function(client, opts)
     return nil, "bad_request_line"
   end
   local headers = { }
+  local header_count = 0
   local content_length = 0
   while true do
     local line, line_err = receive_retry("*l")
@@ -38,12 +42,23 @@ read_request = function(client, opts)
     if line == "" then
       break
     end
+    if #line > max_header_line then
+      return nil, "headers_too_large"
+    end
+    header_count = header_count + 1
+    if header_count > max_headers then
+      return nil, "headers_too_large"
+    end
     local name, value = line:match("^([^:]+):%s*(.*)$")
     if name then
       local lname = name:lower()
       headers[lname] = value
       if lname == "content-length" then
-        content_length = tonumber(value) or 0
+        local n = tonumber(value)
+        if not (n and n >= 0 and n == math.floor(n) and n <= max_body) then
+          return nil, "body_too_large"
+        end
+        content_length = n
       end
     end
   end
@@ -113,6 +128,8 @@ send_response = function(client, status, headers, body)
     reason = "Not Found"
   elseif 409 == _exp_0 then
     reason = "Conflict"
+  elseif 413 == _exp_0 then
+    reason = "Payload Too Large"
   elseif 415 == _exp_0 then
     reason = "Unsupported Media Type"
   elseif 502 == _exp_0 then

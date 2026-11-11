@@ -309,6 +309,12 @@ return {
       default = 15,
       hint = "délai max de handshake TLS / lecture de requête par connexion ; libère les connexions muettes (préconnexions navigateur)"
     },
+    max_body = {
+      type = "integer",
+      label = "Corps HTTP max (octets)",
+      default = 1048576,
+      hint = "taille maximale d'un POST accepté (ex. éditeur de listes) ; au-delà, réponse 413 sans lecture du corps"
+    },
     challenge_ttl = {
       type = "integer",
       label = "TTL nonce challenge (s)",

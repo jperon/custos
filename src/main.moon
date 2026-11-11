@@ -144,6 +144,7 @@ load_auth_cfg = ->
   auth.session_ttl        = tonumber(auth.session_ttl) or 0
   auth.secrets            = auth.secrets or "/etc/custos/secrets"
   auth.sessions_file      = auth.sessions_file or "/tmp/sessions.lua"
+  auth.max_body           = tonumber(auth.max_body) or 1048576
   auth.config_path        = meta.path or "/etc/custos/config.moon"
   auth
 

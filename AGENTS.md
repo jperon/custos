@@ -876,3 +876,15 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   par `auth/server.moon`, comportement inchangé), échéance absolue de handshake
   (`handshake_should_continue`, pure et testée) et `read_request …, timeout:
   client_timeout`. Le chemin HTTP/2 est borné par le même SO_RCVTIMEO.
+- **`Content-Length` non borné dans `lib.http.read_request`.** La longueur
+  annoncée était lue telle quelle et le corps alloué/relu en entier
+  (`ffi.new("uint8_t[?]", size)` côté wolfSSL) : un
+  `Content-Length: 268435456` faisait allouer 256 Mo **avant toute
+  authentification**, côté DoH comme côté portail AUTH. Correctif :
+  `read_request` accepte `opts.max_body` (défaut 65536) et rejette sans lire un
+  corps trop grand ou de longueur non entière/négative (`body_too_large`),
+  ainsi que trop de lignes d'en-tête ou une ligne trop longue
+  (`headers_too_large`, 100 lignes / 8192 octets par défaut). Les deux
+  appelants répondent `413` et ferment ; `doh` borne à 65535 (taille DNS
+  maximale), le portail via la nouvelle clé `auth.max_body` (défaut 1 Mio,
+  documentée), suffisante pour l'éditeur de listes.

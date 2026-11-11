@@ -341,9 +341,12 @@ handle_doh_client = (args) ->
     peer_vlan = get_vlan peer_ip
     log_debug -> { action: "mac_lookup", peer: peer_ip, mac: peer_mac or "unknown", vlan: peer_vlan or "unknown" }
 
-    req, req_err = read_request tls_client, timeout: client_timeout
+    -- Un message DNS fait au plus 65535 octets (RFC 1035) : toute annonce de
+    -- corps plus grande est rejetée sans être lue (413).
+    req, req_err = read_request tls_client, timeout: client_timeout, max_body: 65535
     unless req
       log_warn -> { action: "request_read_failed", peer: peer_ip, err: req_err }
+      send_response tls_client, 413, {}, "Payload Too Large" if req_err == "body_too_large"
       tls_client\close!
       return
 

@@ -106,3 +106,71 @@ describe "lib/http.apply_io_timeouts", ->
     assert.equals 15, opts.rcvtimeo
     apply_io_timeouts client, "abc"
     assert.equals 15, opts.rcvtimeo
+
+describe "lib/http.read_request — bornes", ->
+  make_counting_client = (script) ->
+    i = 0
+    {
+      receive: (_self, _mode) ->
+        i += 1
+        step = script[math.min i, #script]
+        step[1], step[2]
+      calls: -> i
+    }
+
+  it "refuse un Content-Length au-dessus de max_body sans lire le corps", ->
+    client = make_counting_client {
+      { "POST /dns-query HTTP/1.1" }
+      { "Content-Length: 100000" }
+      { "" }
+    }
+    req, err = read_request client, max_body: 65536
+    assert.is_nil req
+    assert.equals "body_too_large", err
+    assert.equals 2, client.calls!
+
+  it "accepte un corps exactement à la borne", ->
+    client = make_counting_client {
+      { "POST / HTTP/1.1" }
+      { "Content-Length: 10" }
+      { "" }
+      { "0123456789" }
+    }
+    req, err = read_request client, max_body: 10
+    assert.is_nil err
+    assert.equals "0123456789", req.body
+
+  it "refuse une longueur négative, non numérique ou non entière", ->
+    for value in *{"-5", "abc", "1e10"}
+      client = make_counting_client {
+        { "POST / HTTP/1.1" }
+        { "Content-Length: #{value}" }
+        { "" }
+      }
+      req, err = read_request client, max_body: 100
+      assert.is_nil req, "valeur acceptée à tort : #{value}"
+      assert.equals "body_too_large", err
+      assert.equals 2, client.calls!
+
+  it "refuse trop de lignes d'en-tête", ->
+    client = make_counting_client {
+      { "GET / HTTP/1.1" }
+      { "A: 1" }
+      { "B: 2" }
+      { "C: 3" }
+      { "D: 4" }
+      { "" }
+    }
+    req, err = read_request client, max_headers: 3
+    assert.is_nil req
+    assert.equals "headers_too_large", err
+
+  it "refuse une ligne d'en-tête trop longue", ->
+    client = make_counting_client {
+      { "GET / HTTP/1.1" }
+      { "X: 01234567890123456789" }
+      { "" }
+    }
+    req, err = read_request client, max_header_line: 10
+    assert.is_nil req
+    assert.equals "headers_too_large", err

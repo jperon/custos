@@ -282,8 +282,10 @@ handle_client = function(args)
       }
     end)
     local peer_mac = get_mac(peer_ip)
+    local max_body = (state.auth_cfg and tonumber(state.auth_cfg.max_body)) or 1048576
     local req, req_err = read_request(tls_client, {
-      timeout = client_timeout
+      timeout = client_timeout,
+      max_body = max_body
     })
     if not (req) then
       log_warn(function()
@@ -293,6 +295,9 @@ handle_client = function(args)
           err = req_err
         }
       end)
+      if req_err == "body_too_large" then
+        send_response(tls_client, 413, { }, "Payload Too Large")
+      end
       tls_client:close()
       return 
     end

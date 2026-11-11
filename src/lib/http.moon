@@ -5,12 +5,19 @@
 --- Read a complete HTTP/1.1 request from a TLS socket object.
 -- Reads the request line, all headers, and the body (if Content-Length > 0).
 -- @tparam table client  TLS socket with :receive(pattern) method.
--- @tparam table|nil opts  { timeout: seconds } — budget TOTAL de lecture. Sans
---   lui, les retries sur want_read_write (50×) multiplient le SO_RCVTIMEO du
---   socket : une connexion muette tiendrait le processus 50 × timeout.
+-- @tparam table|nil opts  { timeout:, max_body:, max_headers:, max_header_line: }.
+--   timeout : budget TOTAL de lecture (sans lui, les retries sur want_read_write
+--   (50×) multiplient le SO_RCVTIMEO du socket : une connexion muette tiendrait
+--   le processus 50 × timeout). max_body : taille maximale du corps (défaut
+--   65536) ; au-delà, ou pour une longueur non entière/négative, renvoie
+--   « body_too_large » sans lire le corps. max_headers/max_header_line bornent
+--   le nombre de lignes et la taille de chacune (défaut 100 / 8192).
 -- @treturn table|nil    {method, path, headers, body}, or nil + error string.
 read_request = (client, opts) ->
   deadline = opts and opts.timeout and (os.time! + opts.timeout)
+  max_body = (opts and opts.max_body) or 65536
+  max_headers = (opts and opts.max_headers) or 100
+  max_header_line = (opts and opts.max_header_line) or 8192
   receive_retry = (mode) ->
     last_err = nil
     for _ = 1, 50
@@ -34,6 +41,7 @@ read_request = (client, opts) ->
   return nil, "bad_request_line" unless method and path
 
   headers = {}
+  header_count = 0
   content_length = 0
 
   while true
@@ -42,12 +50,19 @@ read_request = (client, opts) ->
       return nil, line_err or "header_read_error"
     break if line == ""
 
+    return nil, "headers_too_large" if #line > max_header_line
+    header_count += 1
+    return nil, "headers_too_large" if header_count > max_headers
+
     name, value = line\match "^([^:]+):%s*(.*)$"
     if name
       lname = name\lower!
       headers[lname] = value
       if lname == "content-length"
-        content_length = tonumber(value) or 0
+        n = tonumber value
+        unless n and n >= 0 and n == math.floor(n) and n <= max_body
+          return nil, "body_too_large"
+        content_length = n
 
   body = ""
   if content_length > 0
@@ -103,6 +118,7 @@ send_response = (client, status, headers, body) ->
     when 401 then "Unauthorized"
     when 404 then "Not Found"
     when 409 then "Conflict"
+    when 413 then "Payload Too Large"
     when 415 then "Unsupported Media Type"
     when 502 then "Bad Gateway"
     else "Internal Server Error"

@@ -163,9 +163,12 @@ handle_client = (args) ->
     log_debug -> { action: "server_set_http_timeout" }
 
     peer_mac = get_mac peer_ip
-    req, req_err = read_request tls_client, timeout: client_timeout
+    -- Borne le corps (éditeur de listes : textarea jusqu'à auth.max_body).
+    max_body = (state.auth_cfg and tonumber state.auth_cfg.max_body) or 1048576
+    req, req_err = read_request tls_client, timeout: client_timeout, max_body: max_body
     unless req
       log_warn -> { action: "server_request_read_failed", peer: peer_ip, err: req_err }
+      send_response tls_client, 413, {}, "Payload Too Large" if req_err == "body_too_large"
       tls_client\close!
       return
 

@@ -371,6 +371,7 @@ local DEFAULTS = {
     port = 33443,
     captive_port = 33080,
     session_ttl = 0,
+    max_body = 1048576,
     heartbeat_interval = 30,
     idle_timeout = 300,
     challenge_ttl = 120,
