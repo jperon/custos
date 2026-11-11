@@ -876,3 +876,12 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   aucun repli `pkill`) et la cible `make reload` lit
   `$${CUSTOS_PID_FILE:-/var/run/custos.pid}` ; tests dans
   `tests/unit/sync/apply_spec.moon`.
+- **`install-owrt.moon` : injection shell via `--host`/`--user`/`--dest`/`--port`.**
+  Seule validation existante : refus des espaces dans l'hôte. `--user
+  'root;touch x;'` s'exécutait localement, `--dest '/etc;reboot'` sur le routeur.
+  Correctif en deux couches : `parse_args` valide l'hôte
+  (`^[%w%.%-:%[%]]+$`), l'utilisateur (`^[%w%._%-]+$`), la destination (chemin
+  absolu `^/[%w%._/%-]*$`) et le port (entier 1-65535) puis renvoie
+  `nil, message` ; et un helper unique `shell_quote` (apostrophes neutralisées)
+  entoure ces valeurs dans `ssh_prefix`/`ssh_run`/`ssh_capture`/`scp_send`.
+  Tests dans `tests/unit/install_owrt_spec.moon`.

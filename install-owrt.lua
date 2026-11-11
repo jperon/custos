@@ -24,6 +24,10 @@ local step
 step = function(msg)
   return io.write("\n" .. tostring(BOLD) .. "━━ " .. tostring(msg) .. tostring(NC) .. "\n")
 end
+local shell_quote
+shell_quote = function(s)
+  return "'" .. (tostring(s):gsub("'", "'\\''")) .. "'"
+end
 local Installer
 Installer = function(cfg)
   local obj = {
@@ -62,15 +66,13 @@ Installer = function(cfg)
       end
     end,
     ssh_prefix = function(self)
-      return "ssh -p " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host())
+      return "ssh -p " .. tostring(shell_quote(self.cfg.port)) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 " .. tostring(shell_quote(tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host())))
     end,
     ssh_run = function(self, cmd)
-      local escaped = cmd:gsub("'", "'\"'\"'")
-      return self:run(tostring(self:ssh_prefix()) .. " '" .. tostring(escaped) .. "'")
+      return self:run(tostring(self:ssh_prefix()) .. " " .. tostring(shell_quote(cmd)))
     end,
     ssh_capture = function(self, cmd)
-      local escaped = cmd:gsub("'", "'\"'\"'")
-      return self:capture(tostring(self:ssh_prefix()) .. " '" .. tostring(escaped) .. "'")
+      return self:capture(tostring(self:ssh_prefix()) .. " " .. tostring(shell_quote(cmd)))
     end,
     ssh_run_script = function(self, name, content)
       local tmplocal = "tmp/owrt-" .. tostring(name) .. ".sh"
@@ -93,7 +95,7 @@ Installer = function(cfg)
       return self:ssh_run("sh /tmp/" .. tostring(name) .. ".sh && rm -f /tmp/" .. tostring(name) .. ".sh")
     end,
     scp_send = function(self, src, dst)
-      return self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r " .. tostring(src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":" .. tostring(dst))
+      return self:run("scp -O -P " .. tostring(shell_quote(self.cfg.port)) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r " .. tostring(shell_quote(src)) .. " " .. tostring(shell_quote(tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":" .. tostring(dst))))
     end,
     check_local_deps = function(self)
       step("Vérification des dépendances locales")
@@ -588,8 +590,25 @@ Exemple:
 ]])
   return os.exit(0)
 end
+local valid_host
+valid_host = function(h)
+  return type(h) == "string" and h:match("^[%w%.%-:%[%]]+$")
+end
+local valid_user
+valid_user = function(u)
+  return type(u) == "string" and u:match("^[%w%._%-]+$")
+end
+local valid_dest
+valid_dest = function(d)
+  return type(d) == "string" and d:match("^/[%w%._/%-]*$")
+end
+local valid_port
+valid_port = function(p)
+  return type(p) == "number" and p == math.floor(p) and p >= 1 and p <= 65535
+end
 local parse_args
-parse_args = function()
+parse_args = function(args)
+  args = args or arg
   local cfg = {
     host = nil,
     port = 22,
@@ -602,8 +621,8 @@ parse_args = function()
     pkg_mgr = nil
   }
   local i = 1
-  while i <= #arg do
-    local a = arg[i]
+  while i <= #args do
+    local a = args[i]
     local _exp_0 = a
     if "-h" == _exp_0 or "--help" == _exp_0 then
       print_usage()
@@ -617,32 +636,48 @@ parse_args = function()
       cfg.uninstall = true
     elseif "--port" == _exp_0 then
       i = i + 1
-      cfg.port = tonumber(arg[i]) or (fail("--port attend un entier") and os.exit(1))
+      local raw = args[i]
+      local port = tonumber(raw)
+      if not (port and valid_port(port)) then
+        return nil, "--port invalide (entier 1-65535 attendu) : " .. tostring(tostring(raw))
+      end
+      cfg.port = port
     elseif "--user" == _exp_0 then
       i = i + 1
-      cfg.user = arg[i]
+      cfg.user = args[i]
     elseif "--dest" == _exp_0 then
       i = i + 1
-      cfg.dest = arg[i]
+      cfg.dest = args[i]
     else
       if a:sub(1, 1) == "-" then
-        fail("Option inconnue : " .. tostring(a))
-        os.exit(1)
+        return nil, "Option inconnue : " .. tostring(a)
       else
         cfg.host = a
       end
     end
     i = i + 1
   end
-  if cfg.host and cfg.host:match("%s") then
-    fail("Hôte invalide (contient des espaces) : " .. tostring(cfg.host))
-    os.exit(1)
+  if cfg.host and not valid_host(cfg.host) then
+    return nil, "Hôte invalide : " .. tostring(cfg.host)
+  end
+  if not (valid_user(cfg.user)) then
+    return nil, "Utilisateur invalide : " .. tostring(tostring(cfg.user))
+  end
+  if not (valid_dest(cfg.dest)) then
+    return nil, "Destination invalide (chemin absolu attendu) : " .. tostring(tostring(cfg.dest))
   end
   return cfg
 end
 local main
 main = function()
-  local cfg = parse_args()
+  local cfg, err = parse_args()
+  if not (cfg) then
+    fail(err)
+    if err and err:match("Adresse du routeur manquante") then
+      print_usage()
+    end
+    os.exit(1)
+  end
   if not (cfg.host) then
     fail("Adresse du routeur manquante (hostname, IPv4 ou IPv6).")
     print_usage()
@@ -779,5 +814,10 @@ end
 return {
   Installer = Installer,
   main = main,
-  parse_args = parse_args
+  parse_args = parse_args,
+  valid_host = valid_host,
+  valid_user = valid_user,
+  valid_dest = valid_dest,
+  valid_port = valid_port,
+  shell_quote = shell_quote
 }
