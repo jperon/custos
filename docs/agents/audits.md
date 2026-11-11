@@ -650,3 +650,76 @@ plusieurs suites e2e d'autres worktrees tournaient simultanément sur le même
 homelab libvirt (redémarrages du service concurrents), d'où des échecs
 HTTP 000 côté portail et des écarts DNS/IPv6/EDE sans rapport avec les
 fichiers modifiés ici.
+
+### Dataplane — couverture de tests (branche t-dataplane)
+
+Volet « qualité / trous de tests » du rapport `rapport-dataplane-qualite.md`
+(points T1-T9). Le code ayant été remanié depuis (parsing partagé
+`packet_utils.parse_dns_packet`, helpers `lib.ipc_hex`/`lib.tsv`), chaque point
+a été revérifié dans l'arbre courant avant d'écrire un test ; les fonctions
+testables uniquement depuis une fermeture ont été ajoutées à la table de
+retour de leur module, sans changement de comportement.
+
+- **T1 — worker_questions : décision couverte.** `parse_packet` était déjà
+  couvert via `packet_utils.parse_dns_packet` (`tests/unit/packet_utils_spec.moon`,
+  cas tronqué/`tcp_control` inclus) et l'agrégation multi-questions par
+  `worker_questions_aggregate_spec.moon`. Ajout de
+  `tests/unit/worker_questions_spec.moon` : `list_from_condition_reason`,
+  format TSV de `write_event`, et `handle_question` avec pipes réels (messages
+  `ipc.write_msg`/`write_refused_msg` décodés par `ipc.decode_msg`), verdicts
+  UDP IPv4/IPv6, question acceptée même refusée (la réponse est filtrée côté
+  response), `NF_DROP` sur échec d'écriture IPC (fail-closed) et sur paquet
+  tronqué. Exports ajoutés : `handle_question`, `write_event`,
+  `list_from_condition_reason`.
+- **T2 — mac_prober : couvert.** Export de `build_arp_request`,
+  `build_ns_frame`, `icmpv6_cksum`, `parse_arp_reply`, `parse_na_reply`,
+  `ip4_to_bin`, `ip6_to_bin`. `tests/unit/mac_prober_spec.moon` vérifie les
+  octets exacts de la trame ARP probe (42 o) et de la NS (86 o), le checksum
+  ICMPv6 par recomposition indépendante (RFC 4443), et les rejets des parseurs
+  (cible/op/type différents, trame courte, MAC nulle).
+- **T3 — nfq/ethernet.get_l2 : couvert.** `tests/unit/nfq_ethernet_spec.moon`
+  avec faux `libnfq` : MAC via `nfq_get_packet_hw` (présente, absente,
+  `hw_addrlen` nul), index d'entrée et mapping `mark > 0 → vlan`.
+- **T4 — worker_auth_queue : couvert.** Export de `send_to_auth_server` et
+  `handle_auth_packet`. `tests/unit/worker_auth_queue_spec.moon` fige les
+  22 octets (IPv4 + 12 zéros, IPv6 + MAC), l'écriture partielle, et les
+  verdicts (payload vide → `NF_DROP`, IP illisible / L2 ou MAC absents →
+  `NF_ACCEPT` sans écriture).
+- **T5 — bridge_raw : couvert.** `tests/unit/bridge_raw_spec.moon` :
+  `open_socket` appelle `socket(AF_PACKET, SOCK_RAW, 0)` (aucune capture) et
+  gère l'échec ; `send` pose `ETH_P_ALL`/l'ifindex et renvoie false sur envoi
+  partiel ; `read_mac` décode la MAC sysfs (absente/vide → nil). Limite
+  constatée, sans correctif : un contenu sysfs non vide mais mal formé
+  ferait lever `s2mac` — inatteignable avec un vrai sysfs noyau.
+- **T6 — worker_responses.finalize_a : couvert.** Export de `finalize_a`.
+  `tests/unit/worker_responses_finalize_spec.moon` capture `nfq_set_verdict`
+  et vérifie : block (NXDOMAIN + EDE), sinkhole (0.0.0.0 + EDE), redirect
+  (CNAME cible + injection des IPs), passthrough quand le CNAME est déjà
+  présent, chemin pass sans payload, et fail-closed (`NF_DROP`) quand l'ajout
+  nft échoue. `handle_response` (≈260 lignes) reste non couvert en unitaire :
+  le point tel que proposé visait `finalize_a`.
+- **T7 — worker_captive.build_response_frames : couvert.** Ajout dans
+  `tests/unit/worker_captive_spec.moon` : trois trames depuis un SYN parsé
+  (swap MAC/IP, ports, séquences, flags 0x12/0x18/0x11, corps HTTP 302 exact,
+  longueur IP) avec checksums IPv4/TCP recomposés indépendamment. `handle_syn`
+  lui-même n'est pas appelé (il dépend de NFQUEUE et du socket AF_PACKET) ;
+  la forge — le risque identifié — est couverte.
+- **T8 — worker_reject : couvert.** Export de `forge_tcp_rst`,
+  `forge_icmp_reject`, `handle_reject`. `tests/unit/worker_reject_forge_spec.moon`
+  vérifie RST IPv4/IPv6 (swap L3/L4, `ack = seq + 1`, flags RST+ACK, checksums
+  sur pseudo-headers v4/v6), ICMP v4 3/13 et v6 1/1 (quote borné à 576 o,
+  checksums valides) et les verdicts de `handle_reject` (`NF_ACCEPT` avec
+  payload forgé, `NF_DROP` sur payload vide ou paquet illisible).
+- **T9 — nfq_loop.run_queue : couvert.** `tests/unit/nfq_loop_enobufs_spec.moon`
+  scripte `libc.read`/`poll` et un faux `libnfq` : ENOBUFS ne sort pas de la
+  boucle (paquet suivant traité, série de 257 ENOBUFS pour le compteur
+  anti-spam), EINTR en lecture et en `poll`, erreur de `poll` non-EINTR avec
+  `nfq_destroy_queue`/`nfq_close`.
+
+Les stubs `package.loaded` sont locaux à chaque spec et restaurés en
+`teardown`/`after_each` ; ni le stub `log` global ni les cdef de
+`tests/helpers/busted_setup.moon` ne sont modifiés. Les `*_spec.lua` compilés
+sont ignorés par git (`.gitignore`) ; seuls les `.moon` sont versionnés.
+
+**Vérification (2026-11-11, branche t-dataplane)** : `make check` OK ;
+`make test` = 2195 successes / 0 failures / 0 errors ; `make test-js` = 12 pass.
