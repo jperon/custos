@@ -1565,3 +1565,31 @@ exporte ces symboles.
 OK ; `make test` = 2351 successes / 0 failures / 0 errors / 0 pending
 (`tmp/test-wolfenv2.log`) ; `make test-js` = 12 pass / 0 fail. `make test-e2e`
 non relancé (VMs seulement interrogées en lecture seule).
+
+### Contrôle du `content-type` POST HTTP/2 et `metrics.maybe_flush` (branche d-h2ctype)
+
+- **POST HTTP/2 : contrôle du `content-type`.** Le chemin h2 traitait le corps
+  DATA dès que le chemin était `/dns-query`, quel que soit l'en-tête, alors que
+  le chemin HTTP/1.1 exige `application/dns-message` et répond `415` sinon
+  (`src/worker_doh.moon:566-571`, `:585-588`). Prédicat partagé
+  `is_dns_message_content_type` (`src/worker_doh.moon:83-91`) appliqué aux deux
+  chemins : `content-type` lu dans le bloc HPACK (`:379`) puis testé avant le
+  corps (`:409-410`), réponse `:status 415` via `h2_reject`. Le comportement
+  HTTP/1.1 est inchangé (le prédicat reprend la correspondance de sous-chaîne
+  historique : paramètres après `;` tolérés, casse significative) ; les GET, y
+  compris JSON, ne sont pas touchés. Tests : `tests/unit/worker_doh_spec.moon`
+  (POST `application/dns-message` → traité, avec paramètres → traité, type non
+  DNS → `415` sans traiter de DNS, type absent → `415` ; parité HTTP/1.1 pour
+  le type absent).
+- **`metrics.maybe_flush` : aucun appel ni fonction redondante dans le
+  module.** Une seule définition (`src/metrics.moon:191-196`) et un seul appel
+  de production (`src/worker_questions.moon:236`) ; `flush_if_due`
+  (`src/metrics.moon:179-185`) a des appelants distincts (`maybe_flush`,
+  `run_queue` via `on_idle`). Le constat d'audit ne se vérifie donc pas à
+  l'intérieur de `src/metrics.moon` ; aucun code n'est modifié. À noter, hors
+  périmètre : `run_queue` appelle `on_idle` avant chaque lecture
+  (`src/nfq_loop.moon:115`) et `worker_questions` y branche `flush_if_due`
+  (`src/worker_questions.moon:550-551`), ce qui rend le passage par paquet
+  superflu en production ; le retirer exigerait de modifier
+  `src/worker_questions.moon` et supprimerait un contrat fixé par
+  `tests/unit/metrics_spec.moon` (`:139-164`, `:186-193`), donc non fait ici.
