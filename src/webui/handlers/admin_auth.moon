@@ -39,7 +39,11 @@ check_admin_session = (req, state) ->
   return nil, "unauth" unless p and p.type == "user"
   -- Un token valide ne suffit pas : la session doit encore exister (un
   -- /logout supprime la session ; le cookie copié ne doit plus être accepté).
-  return nil, "unauth" unless session_alive p.mac, state.sessions_file
+  -- On n'exige cette vérification que si la MAC est connue (non nil, non
+  -- "unknown") et le fichier de sessions défini ; sinon on conserve le
+  -- comportement d'avant la branche (token seul).
+  if p.mac and p.mac ~= "unknown" and state.sessions_file
+    return nil, "unauth" unless session_alive p.mac, state.sessions_file
   admin_users = state.admin_users or {}
   -- Si admin_allow_all_when_empty est activé et la liste est vide, tous les utilisateurs sont admin
   if state.admin_allow_all_when_empty and #admin_users == 0

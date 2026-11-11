@@ -40,8 +40,10 @@ check_admin_session = function(req, state)
   if not (p and p.type == "user") then
     return nil, "unauth"
   end
-  if not (session_alive(p.mac, state.sessions_file)) then
-    return nil, "unauth"
+  if p.mac and p.mac ~= "unknown" and state.sessions_file then
+    if not (session_alive(p.mac, state.sessions_file)) then
+      return nil, "unauth"
+    end
   end
   local admin_users = state.admin_users or { }
   if state.admin_allow_all_when_empty and #admin_users == 0 then

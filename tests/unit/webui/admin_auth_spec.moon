@@ -129,6 +129,24 @@ describe "webui/handlers/admin_auth", ->
       assert.is_nil p
       assert.equals "unauth", reason
 
+    it "token à MAC inconnue (\"unknown\") → accepté (token seul)", ->
+      -- Comportement d'avant la branche : une MAC nil/"unknown" n'a pas de
+      -- session attendue, le token valide suffit.
+      req = { headers: { cookie: make_cookie "alice", "unknown" } }
+      state = make_state { "alice" }
+      p, reason = check_admin_session req, state
+      assert.not_nil p
+      assert.is_nil reason
+      assert.equals "alice", p.user
+
+    it "state.sessions_file nil → accepté (token seul)", ->
+      req = { headers: { cookie: make_cookie "alice" } }
+      state = make_state { "alice" }
+      state.sessions_file = nil
+      p, reason = check_admin_session req, state
+      assert.not_nil p
+      assert.is_nil reason
+
   -- ── forbidden_page ────────────────────────────────────────────────────────
 
   describe "forbidden_page", ->
