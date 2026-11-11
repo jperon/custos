@@ -243,26 +243,16 @@ handle_login = function(req, peer_ip, peer_mac, state)
       mac = mac
     }
   end)
-  if state.nft_sess then
-    ok, err = pcall(function()
-      return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
-    end)
-    if not (ok) then
-      log_warn(function()
-        return {
-          action = "server_nft_refresh_failed",
-          peer = peer_ip,
-          mac = mac,
-          err = tostring(err)
-        }
-      end)
-    end
-  else
+  ok, err = pcall(function()
+    return refresh_nft(state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user)
+  end)
+  if not (ok) then
     log_warn(function()
       return {
-        action = "server_nft_sess_missing",
+        action = "server_nft_refresh_failed",
         peer = peer_ip,
-        mac = mac
+        mac = mac,
+        err = tostring(err)
       }
     end)
   end

@@ -900,3 +900,9 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   des redirections 302 vers le portail, sans jamais poser de cookie. Ajout de
   `Secure` au cookie de session et au cookie d'effacement
   (`auth/handlers.moon`), tests dans `tests/unit/auth/challenge_login_spec.moon`.
+- **Garde `nft_sess` redondante entre login et ping.** `refresh_nft`
+  (`auth/nft_auth_sets.moon`) retourne immédiatement si `nft_sess` est nil :
+  la garde conditionnelle de `handle_login` (et son log
+  `server_nft_sess_missing`) était redondante avec l'appel direct de
+  `handle_ping`. Garde supprimée côté login pour un comportement unique ;
+  `refresh_nft nil` est couvert par `tests/unit/auth/nft_auth_sets_spec.moon`.

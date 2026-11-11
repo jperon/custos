@@ -157,13 +157,12 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     return 500, {}, "Session persistence failed"
   log_info -> { action: "server_sessions_write_success", path: state.sessions_file, mac: mac }
 
-  -- Refresh nft sets (globaux + per-règle) for authenticated user
-  if state.nft_sess
-    ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user
-    unless ok
-      log_warn -> { action: "server_nft_refresh_failed", peer: peer_ip, mac: mac, err: tostring(err) }
-  else
-    log_warn -> { action: "server_nft_sess_missing", peer: peer_ip, mac: mac }
+  -- Refresh nft sets (globaux + per-règle) for authenticated user.
+  -- refresh_nft gère nft_sess nil : pas de garde redondante ici (même
+  -- comportement que handle_ping).
+  ok, err = pcall -> refresh_nft state.nft_sess, peer_ip, mac, state.auth_cfg.idle_timeout, user
+  unless ok
+    log_warn -> { action: "server_nft_refresh_failed", peer: peer_ip, mac: mac, err: tostring(err) }
 
   tok = token.generate "user", user, mac, token_expires, state.token_key
   is_admin = is_admin_user state, user

@@ -85,6 +85,9 @@ describe "auth.nft_auth_sets", ->
       assert.equals TTL, mock.calls.add_auth[1][2]
       assert.equals 2, #mock.calls.run_nft, "les sets per-règle doivent aussi être rafraîchis"
 
+    it "nft_sess nil → no-op sans erreur (garde unique côté handler)", ->
+      assert.has_no_error -> nas.refresh_nft nil, IP4, MAC, TTL, USER
+
     it "saute les sets ip globaux quand l'IP est inconnue", ->
       mock = make_nft_mock!
       nas.refresh_nft mock, "unknown", MAC, TTL, USER
