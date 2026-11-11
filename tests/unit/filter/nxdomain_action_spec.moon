@@ -27,7 +27,7 @@ describe "dns_ede.build_nxdomain_response", ->
   { :build_nxdomain_response, :build_blocked_response } = require "dns_ede"
   { parse: parse_dns } = require "ipparse.l7.dns"
   bit = require "bit"
-  -- Le getter header.rcode est booléen ; le rcode numérique est dans octet 4.
+  -- Le rcode numérique est dans les 4 bits bas de l'octet 4.
   get_rcode = (raw) -> bit.band raw\byte(4), 0x0f
 
   -- Construit un paquet DNS de question minimal pour A qname=test.local
