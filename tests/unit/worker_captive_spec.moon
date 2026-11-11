@@ -2,6 +2,13 @@
 -- Tests du worker CAPTIVE : comportement de skip-redirect pour MAC authentifiée.
 -- Pas de FFI NFQUEUE, pas de root requis.
 
+bit = require "bit"
+sp  = require("ipparse.lib.pack_compat").pack
+{ :s2ip } = require "ipparse.l3.ip"
+eth_mod = require "ipparse.l2.ethernet"
+ip_mod  = require "ipparse.l3.ip"
+tcp_mod = require "ipparse.l4.tcp"
+
 describe "worker_captive", ->
 
   -- ── parse_syn ────────────────────────────────────────────────────────────────
@@ -152,3 +159,114 @@ describe "worker_captive", ->
 
       ok = sessions_mod.enrich_session_ip "bb:cc:dd:ee:ff:00", "2a11::1", SESS_FILE
       assert.is_false ok  -- déjà présente → pas de réécriture
+
+  -- ── build_response_frames (forge TCP du portail captif) ─────────────────────
+  -- Trois trames : SYN-ACK, données HTTP 302, FIN-ACK. Vérifie octets exacts
+  -- (adresses inversées, ports, séquences, flags, payload) et checksums IP/TCP
+  -- recalculés indépendamment (RFC 1071 / RFC 793).
+  describe "build_response_frames", ->
+    captive = require "worker_captive"
+
+    CLIENT_MAC  = "\170\187\204\221\238\255"   -- aa:bb:cc:dd:ee:ff
+    BRIDGE_MAC  = "\2\0\0\0\0\1"               -- 02:00:00:00:00:01
+    CLIENT_IP   = "\10\0\0\1"                  -- 10.0.0.1
+    PORTAL_IP   = "\10\0\0\2"                  -- 10.0.0.2
+    CLIENT_PORT = 12345
+    CLIENT_SEQ  = 1000
+    URL         = "https://10.0.0.2:33443/"
+    HTTP_BODY   = "HTTP/1.1 302 Found\r\nLocation: #{URL}\r\n" ..
+      "Content-Length: 0\r\nConnection: close\r\n\r\n"
+
+    -- SYN IPv4/TCP sans en-tête Ethernet (payload NFQUEUE).
+    build_syn = ->
+      ip = sp(">B B H H H B B H", 0x45, 0, 40, 0x1234, 0x4000, 64, 6, 0) ..
+        CLIENT_IP .. PORTAL_IP
+      tcp = sp(">H H I4 I4 B B H H H", CLIENT_PORT, 80, CLIENT_SEQ, 0,
+        0x50, 0x02, 8192, 0, 0)
+      ip .. tcp
+
+    ones_sum = (s) ->
+      sum = 0
+      i = 1
+      while i + 1 <= #s
+        sum += s\byte(i) * 256 + s\byte(i + 1)
+        i += 2
+      sum += s\byte(i) * 256 if i == #s
+      sum
+
+    fold16 = (sum) ->
+      while bit.rshift(sum, 16) != 0
+        sum = bit.band(sum, 0xFFFF) + bit.rshift(sum, 16)
+      sum
+
+    parse_frame = (frame) ->
+      eth, _ = eth_mod.parse frame, 1
+      ip, _  = ip_mod.parse frame, eth.data_off
+      tcp, _ = tcp_mod.parse frame, ip.data_off
+      eth, ip, tcp
+
+    ip_cksum_ok = (frame, ip) ->
+      hdr = frame\sub ip.off, ip.off + ip.ihl * 4 - 1
+      fold16(ones_sum hdr) == 0xFFFF
+
+    tcp_cksum_ok = (frame, ip, tcp) ->
+      tcp_len = ip.total_len - ip.ihl * 4
+      seg = frame\sub tcp.off, tcp.off + tcp_len - 1
+      src = frame\sub ip.off + 12, ip.off + 15
+      dst = frame\sub ip.off + 16, ip.off + 19
+      pseudo = src .. dst .. "\0" .. string.char(6) .. sp(">H", tcp_len)
+      fold16(ones_sum(pseudo) + ones_sum(seg)) == 0xFFFF
+
+    build = ->
+      ip, _ip_off, tcp, _tcp_off = captive.parse_syn build_syn!
+      eth = eth_mod.new src: CLIENT_MAC, dst: BRIDGE_MAC, protocol: eth_mod.proto.IP4
+      captive.build_response_frames eth, ip, tcp, URL
+
+    it "forge trois trames Ethernet/IPv4/TCP avec adresses inversées", ->
+      f1, f2, f3 = build!
+      assert.equals "string", type f1
+      assert.equals "string", type f2
+      assert.equals "string", type f3
+
+      e1, ip1, tcp1 = parse_frame f1
+      assert.equals CLIENT_MAC, e1.dst
+      assert.equals BRIDGE_MAC, e1.src
+      assert.equals eth_mod.proto.IP4, e1.protocol
+      assert.equals 4, ip1.version
+      assert.equals 64, ip1.ttl
+      assert.equals PORTAL_IP, ip1.src
+      assert.equals CLIENT_IP, ip1.dst
+      assert.equals 80, tcp1.spt
+      assert.equals CLIENT_PORT, tcp1.dpt
+
+    it "SYN-ACK : flags SYN+ACK, ack = seq client + 1, pas de charge utile", ->
+      f1 = build!
+      e1, ip1, tcp1 = parse_frame f1
+      assert.equals 0x12, tcp1.flags                  -- SYN + ACK
+      assert.equals CLIENT_SEQ + 1, tcp1.ack_n
+      assert.equals 65535, tcp1.window
+      assert.equals "", f1\sub tcp1.data_off
+
+    it "données : flags PSH+ACK, seq = SYNCK.seq + 1, corps HTTP 302", ->
+      f1, f2, _ = build!
+      _, _, tcp1 = parse_frame f1
+      e2, ip2, tcp2 = parse_frame f2
+      assert.equals 0x18, tcp2.flags                  -- PSH + ACK
+      assert.equals (tcp1.seq_n + 1) % 0x100000000, tcp2.seq_n
+      assert.equals CLIENT_SEQ + 1, tcp2.ack_n
+      assert.equals HTTP_BODY, f2\sub tcp2.data_off
+      assert.equals 20 + 20 + #HTTP_BODY, ip2.total_len
+
+    it "FIN-ACK : flags FIN+ACK, seq = seq données + longueur du corps", ->
+      _, f2, f3 = build!
+      _, _, tcp2 = parse_frame f2
+      _, _, tcp3 = parse_frame f3
+      assert.equals 0x11, tcp3.flags                  -- FIN + ACK
+      assert.equals (tcp2.seq_n + #HTTP_BODY) % 0x100000000, tcp3.seq_n
+      assert.equals "", f3\sub tcp3.data_off
+
+    it "les checksums IPv4 et TCP des trois trames sont valides", ->
+      for frame in *{build!}
+        _e, ip, tcp = parse_frame frame
+        assert.is_true ip_cksum_ok(frame, ip), "checksum IPv4 invalide"
+        assert.is_true tcp_cksum_ok(frame, ip, tcp), "checksum TCP invalide"
