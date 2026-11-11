@@ -6,8 +6,11 @@
 -- Le handle porte un champ _mod pour le dispatch polymorphe dans doh.query.
 
 ffi    = require "ffi"
+bit    = require "bit"
 ssl    = require "auth.ffi_wolfssl"
 socket = require "lib.socket"
+h2f    = require "doh.h2_frames"
+hpack  = require "doh.hpack"
 { :log_debug, :log_warn } = require "log"
 { :C, :SOL_SOCKET, :SO_RCVTIMEO, :SO_SNDTIMEO } = socket
 libc   = ffi.C   -- ffi.C pour les fonctions libc (getaddrinfo, inet_ntop…)
@@ -43,6 +46,16 @@ MAX_RESPONSE_BYTES = MAX_DNS_BODY + 8192
 MAX_SEND_ATTEMPTS  = 100
 MAX_RECV_ATTEMPTS  = 100
 MAX_RECV_ROUNDS    = 32
+
+-- Client HTTP/2 (RFC 7540/7541) quand ALPN a négocié « h2 ». Le repli reste
+-- HTTP/1.1 si ALPN est absent, refusé ou si le serveur choisit http/1.1.
+H2_PREFACE           = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+H2_CLIENT_ALPN       = "h2,http/1.1"
+H2_STREAM_ID         = 1
+H2_MAX_FRAMES        = 256
+H2_MAX_HEADER_BLOCK  = 65535
+H2_MAX_CONTINUATIONS = 64
+H2_MAX_TOTAL_BYTES   = MAX_RESPONSE_BYTES
 
 -- Résout un nom d'hôte ou une adresse IP littérale en (ip_string, family).
 -- Préfère IPv4 sauf si seule une adresse IPv6 est disponible.
@@ -178,6 +191,10 @@ new_client = (url, timeout_ms=2000, verify_tls=false, opts={}) ->
   ok_wrap, tls = pcall ssl.wrap, sock, ctx, {
     sni: sni
     check_domain: verify_tls and host or nil
+    -- Opt-in ALPN client : h2 d'abord, HTTP/1.1 sinon. Sur une libwolfssl
+    -- sans ALPN (ou un refus), le wrap réussit quand même et le protocole
+    -- négocié reste nil → chemin HTTP/1.1 inchangé.
+    alpn_protocols: H2_CLIENT_ALPN
   }
   unless ok_wrap
     ssl.free_context ctx
@@ -204,8 +221,20 @@ new_client = (url, timeout_ms=2000, verify_tls=false, opts={}) ->
     ssl.free_context ctx
     return nil, "upstream_doh: tls_handshake_failed: #{tls_err or 'max_attempts'}"
 
-  log_debug -> { action: "upstream_doh_connected", :host, :port, :path }
-  { :tls, :host, :port, :path, :ctx, host_header: format_host_header(host, port), _mod: M }
+  -- Protocole ALPN réellement négocié (h2 ou http/1.1), si exposé par le
+  -- wrapper TLS. Toute absence/erreur laisse le comportement HTTP/1.1.
+  alpn = nil
+  if type(tls.selected_alpn) == "function"
+    ok_alpn, sel = pcall -> tls\selected_alpn!
+    alpn = sel if ok_alpn and type(sel) == "string" and #sel > 0
+
+  log_debug -> { action: "upstream_doh_connected", :host, :port, :path, :alpn }
+  {
+    :tls, :host, :port, :path, :ctx, :alpn
+    h2: alpn == "h2"
+    host_header: format_host_header(host, port)
+    _mod: M
+  }
 
 --- Écrit toutes les données sur la connexion TLS, écritures partielles incluses.
 -- @tparam table tls Wrapper TLS (auth.ffi_wolfssl).
@@ -275,6 +304,165 @@ read_response = (tls) ->
     return nil, "truncated_body"
   buf
 
+--- Envoie une frame HTTP/2 sur la connexion TLS du handle.
+-- @tparam table  client Handle de new_client().
+-- @tparam number ftype  Type de frame.
+-- @tparam number flags  Flags.
+-- @tparam number sid    Stream ID.
+-- @tparam string payload Corps.
+-- @treturn boolean|nil true, ou nil + raison.
+h2_send = (client, ftype, flags, sid, payload) ->
+  ok, sent, err = pcall h2f.h2_write_frame, client.tls, ftype, flags, sid, payload
+  return nil, "send_failed: #{sent}" unless ok
+  return nil, "send_failed: #{err}" unless sent
+  true
+
+--- Envoie le corps DNS en DATA, découpé à la taille de frame par défaut.
+-- Un message DNS peut dépasser 16384 octets (EDNS/TXT) : envoyer une seule
+-- frame violerait SETTINGS_MAX_FRAME_SIZE du pair.
+-- @tparam table  client  Handle.
+-- @tparam string dns_raw Requête DNS wire.
+-- @treturn boolean|nil true, ou nil + raison.
+h2_send_body = (client, dns_raw) ->
+  max = h2f.H2_DEFAULT_MAX_FRAME_SIZE
+  pos = 1
+  total = #dns_raw
+  while true
+    chunk = dns_raw\sub pos, pos + max - 1
+    pos += #chunk
+    last = pos > total
+    flags = last and h2f.H2_FLAG_END_STREAM or 0
+    ok, err = h2_send client, h2f.H2_FRAME_DATA, flags, H2_STREAM_ID, chunk
+    return nil, err unless ok
+    break if last
+  true
+
+--- Ferme la connexion après une erreur de protocole h2 (reconnexion au prochain
+-- appel, comme le chemin HTTP/1.1).
+-- @tparam table  client Handle.
+-- @tparam string msg    Erreur à retourner.
+-- @treturn nil, string
+h2_fail = (client, msg) ->
+  pcall -> M.close client
+  nil, msg
+
+--- Requête DoH en HTTP/2 : préface, SETTINGS, POST sur un flux impair, puis
+-- lecture bornée des trames jusqu'à END_STREAM.
+-- @tparam table  client   Handle dont `h2` est vrai.
+-- @tparam string dns_raw  Requête DNS wire.
+-- @tparam number req_txid TXID attendu dans la réponse.
+-- @treturn string|nil Réponse DNS brute, ou nil + erreur.
+query_h2 = (client, dns_raw, req_txid) ->
+  ok_send, send_err = send_all client.tls, H2_PREFACE
+  return nil, "upstream_doh: send_failed: #{send_err}" unless ok_send
+
+  ok, err = h2_send client, h2f.H2_FRAME_SETTINGS, 0, 0, ""
+  return h2_fail client, "upstream_doh: #{err}" unless ok
+
+  block = hpack.encode {
+    { ":method", "POST" }
+    { ":scheme", "https" }
+    { ":authority", client.host_header or client.host }
+    { ":path", client.path }
+    { "content-type", "application/dns-message" }
+    { "accept", "application/dns-message" }
+    { "content-length", tostring #dns_raw }
+  }
+  ok, err = h2_send client, h2f.H2_FRAME_HEADERS, h2f.H2_FLAG_END_HEADERS, H2_STREAM_ID, block
+  return h2_fail client, "upstream_doh: #{err}" unless ok
+
+  ok, err = h2_send_body client, dns_raw
+  return h2_fail client, "upstream_doh: #{err}" unless ok
+
+  decoder     = hpack.new_decoder!
+  status      = nil
+  body_chunks = {}
+  body_len    = 0
+  total_bytes = 0
+  frame_count = 0
+  end_stream  = false
+
+  while not end_stream
+    frame_count += 1
+    return h2_fail client, "upstream_doh: h2_too_many_frames" if frame_count > H2_MAX_FRAMES
+
+    ftype, fflags, sid, payload = h2f.h2_read_frame client.tls, h2f.H2_DEFAULT_MAX_FRAME_SIZE
+    unless ftype
+      return h2_fail client, "upstream_doh: h2_frame_read_#{fflags or 'failed'}"
+
+    total_bytes += #payload + 9
+    return h2_fail client, "upstream_doh: response_too_large" if total_bytes > H2_MAX_TOTAL_BYTES
+
+    if ftype == h2f.H2_FRAME_SETTINGS
+      unless sid == 0 and #payload % 6 == 0
+        return h2_fail client, "upstream_doh: h2_bad_settings"
+      if bit.band(fflags, h2f.H2_FLAG_ACK) == 0
+        ok, err = h2_send client, h2f.H2_FRAME_SETTINGS, h2f.H2_FLAG_ACK, 0, ""
+        return h2_fail client, "upstream_doh: #{err}" unless ok
+
+    elseif ftype == h2f.H2_FRAME_PING
+      unless sid == 0 and #payload == 8
+        return h2_fail client, "upstream_doh: h2_bad_ping"
+      if bit.band(fflags, h2f.H2_FLAG_ACK) == 0
+        ok, err = h2_send client, h2f.H2_FRAME_PING, h2f.H2_FLAG_ACK, 0, payload
+        return h2_fail client, "upstream_doh: #{err}" unless ok
+
+    elseif ftype == h2f.H2_FRAME_HEADERS
+      return h2_fail client, "upstream_doh: h2_unexpected_stream" unless sid == H2_STREAM_ID
+      hblock, hs_end, header_err = h2f.h2_read_header_block client.tls, sid, fflags,
+        payload, H2_MAX_HEADER_BLOCK, H2_MAX_CONTINUATIONS
+      unless hblock
+        return h2_fail client, "upstream_doh: #{header_err or 'h2_headers_invalid'}"
+      headers, dec_err = hpack.decode decoder, hblock
+      return h2_fail client, "upstream_doh: h2_hpack_#{dec_err}" unless headers
+      st = hpack.header_value headers, ":status"
+      if st
+        -- Un second :status est invalide ; les en-têtes sans :status après la
+        -- réponse sont des trailers (RFC 7540 §8.1), ignorés mais décodés.
+        return h2_fail client, "upstream_doh: h2_duplicate_status" if status
+        status = st
+        unless status == "200"
+          return h2_fail client, "upstream_doh: http_status_#{status}"
+      elseif not status
+        return h2_fail client, "upstream_doh: h2_missing_status"
+      end_stream = hs_end
+
+    elseif ftype == h2f.H2_FRAME_DATA
+      return h2_fail client, "upstream_doh: h2_unexpected_stream" unless sid == H2_STREAM_ID
+      content, data_err = h2f.h2_data_payload fflags, payload
+      return h2_fail client, "upstream_doh: #{data_err or 'h2_data_invalid'}" unless content
+      body_len += #content
+      return h2_fail client, "upstream_doh: body_too_large" if body_len > MAX_DNS_BODY
+      body_chunks[#body_chunks + 1] = content
+      -- Rend au pair la fenêtre consommée (DATA est contrôlé en flux, padding inclus).
+      if #payload > 0
+        ok, err = h2f.h2_window_update client.tls, 0, #payload
+        return h2_fail client, "upstream_doh: #{err or 'window_update_failed'}" unless ok
+        ok, err = h2f.h2_window_update client.tls, sid, #payload
+        return h2_fail client, "upstream_doh: #{err or 'window_update_failed'}" unless ok
+      if bit.band(fflags, h2f.H2_FLAG_END_STREAM) != 0
+        end_stream = true
+
+    elseif ftype == h2f.H2_FRAME_RST_STREAM
+      return h2_fail client, "upstream_doh: h2_rst_stream"
+
+    elseif ftype == h2f.H2_FRAME_GOAWAY
+      return h2_fail client, "upstream_doh: h2_goaway"
+    -- WINDOW_UPDATE et types inconnus : ignorés, la boucle reste bornée.
+
+  return h2_fail client, "upstream_doh: h2_missing_status" unless status == "200"
+
+  body = table.concat body_chunks
+  return h2_fail client, "upstream_doh: empty_body" if #body == 0
+  return h2_fail client, "upstream_doh: short_response" if #body < 12
+
+  resp_txid = body\byte(1) * 256 + body\byte(2)
+  unless resp_txid == req_txid
+    return h2_fail client, "upstream_doh: txid_mismatch"
+
+  log_debug -> { action: "upstream_doh_response", host: client.host, body_bytes: #body, protocol: "h2" }
+  body
+
 --- Envoie une requête DNS en HTTP POST et retourne la réponse brute.
 -- Corrèle la réponse au txid de la requête et borne taille/statut/troncature.
 -- @tparam table  client  Handle retourné par new_client().
@@ -285,6 +473,7 @@ query = (client, dns_raw) ->
   return nil, "upstream_doh: short_query" if #dns_raw < 12
 
   req_txid = dns_raw\byte(1) * 256 + dns_raw\byte(2)
+  return query_h2 client, dns_raw, req_txid if client.h2
 
   req = table.concat {
     "POST ", client.path, " HTTP/1.1\r\n"
