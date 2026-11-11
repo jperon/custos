@@ -395,3 +395,10 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `generate` (rule_id > description > index, valeurs blanches) et
   `generate_unique` (suffixes `_2`, `_3`, marquage de `used_ids`, absence de
   table).
+- **T6 : `localnets` — parsing des routes et injection non testés.**
+  `get_bridge_ifname` l'était déjà (avec le quoting de B7). Ajout dans
+  `tests/unit/filter/localnets_spec.moon` de cas pour `inject_localnets` :
+  extraction des CIDR `ip -4 route` (masque ≥ 8) puis `ip -6 route`
+  (masque ≥ 48), routes hors seuil ignorées, lignes sans CIDR ignorées,
+  whitelist existante préservée, et absence totale de commande quand
+  `allow_localnets` est faux/absent.
