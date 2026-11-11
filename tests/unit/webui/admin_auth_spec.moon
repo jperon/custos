@@ -3,6 +3,9 @@
 
 token = require "auth.token"
 { :check_admin_session, :forbidden_page } = require "webui.handlers.admin_auth"
+{ :write_sessions } = require "auth.sessions"
+
+SESS_FILE = "tmp/admin_auth_sessions.lua"
 
 -- Clé de test (32 octets arbitraires)
 TEST_KEY = string.rep "\x42", 32
@@ -19,9 +22,16 @@ make_state = (admin_users, allow_all) ->
     token_key:                TEST_KEY
     admin_users:              admin_users or {}
     admin_allow_all_when_empty: allow_all or false
+    sessions_file:            SESS_FILE
   }
 
 describe "webui/handlers/admin_auth", ->
+
+  before_each ->
+    write_sessions { ["aa:bb:cc:dd:ee:ff"]: { user: "alice", expires: os.time! + 3600 } }, SESS_FILE
+
+  after_each ->
+    os.remove SESS_FILE
 
   -- ── check_admin_session ───────────────────────────────────────────────────
 
@@ -98,6 +108,23 @@ describe "webui/handlers/admin_auth", ->
       tok = token.generate "device", "mydevice", "aa:bb:cc:dd:ee:ff", expires, TEST_KEY
       req   = { headers: { cookie: "custos_session=" .. tok } }
       state = make_state { "mydevice" }, true
+      p, reason = check_admin_session req, state
+      assert.is_nil p
+      assert.equals "unauth", reason
+
+  -- ── session vivante obligatoire ────────────────────────────────────────────
+
+    it "token valide mais session supprimée (logout) → refusé", ->
+      req = { headers: { cookie: make_cookie "alice" } }
+      write_sessions {}, SESS_FILE
+      state = make_state { "alice" }
+      p, reason = check_admin_session req, state
+      assert.is_nil p
+      assert.equals "unauth", reason
+
+    it "token valide mais session d'une autre MAC → refusé", ->
+      req = { headers: { cookie: make_cookie "alice", "99:88:77:66:55:44" } }
+      state = make_state { "alice" }
       p, reason = check_admin_session req, state
       assert.is_nil p
       assert.equals "unauth", reason

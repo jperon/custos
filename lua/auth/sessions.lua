@@ -113,6 +113,15 @@ purge_expired = function(sessions)
     end
   end
 end
+local session_alive
+session_alive = function(mac, path, sessions_arg)
+  if not (mac and mac ~= "unknown" and path) then
+    return false
+  end
+  local sessions = sessions_arg or load_sessions(path)
+  purge_expired(sessions)
+  return sessions[mac:lower()] ~= nil
+end
 local _cache = nil
 local _cache_time = 0
 local _cache_sig = nil
@@ -317,6 +326,7 @@ return {
   load_sessions = load_sessions,
   add_session = add_session,
   with_sessions_lock = with_sessions_lock,
+  session_alive = session_alive,
   purge_expired = purge_expired,
   read_cached = read_cached,
   reset_cache = reset_cache,

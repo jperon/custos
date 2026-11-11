@@ -11,7 +11,7 @@ ffi.cdef [[
 ]]
 { :log_info, :log_warn } = require "log"
 token = require "auth.token"
-{ :add_session, :purge_expired, :load_sessions, :write_sessions, :with_sessions_lock } = require "auth.sessions"
+{ :add_session, :purge_expired, :load_sessions, :write_sessions, :with_sessions_lock, :session_alive } = require "auth.sessions"
 { :verify_password, :verify_response, :register_user, :set_record, :parse_record, :valid_username } = require "auth.credentials"
 { :make_nonce, :verify_nonce, :salt_iter_for } = require "auth.challenge"
 { :page, :success_page, :css_content, :password_page, :password_changed_page
@@ -204,7 +204,7 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
 
     -- Rejeter si la session a été explicitement invalidée (logout).
     -- Un token encore cryptographiquement valide ne doit pas recréer une session détruite.
-    if mac and mac ~= "unknown" and not sessions[mac\lower!]
+    if not session_alive mac, state.sessions_file, sessions
       invalidated = true
       return
     add_session sessions, mac, peer_ip, user, session_expires
@@ -400,13 +400,10 @@ handle_request = (req, peer_ip, peer_mac, state) ->
     -- redemander les identifiants après login et après un rafraîchissement).
     cookie_val = token.get_cookie req.headers.cookie or "", COOKIE_NAME
     p = token.verify cookie_val, state.token_key
-    if p and p.user and p.mac and p.mac ~= "unknown"
-      sessions = load_sessions state.sessions_file
-      purge_expired sessions
-      if sessions[p.mac\lower!]
-        is_admin = is_admin_user state, p.user
-        body = success_page state.auth_cfg, os.time!, is_admin
-        return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, body
+    if p and p.user and session_alive p.mac, state.sessions_file
+      is_admin = is_admin_user state, p.user
+      body = success_page state.auth_cfg, os.time!, is_admin
+      return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, body
     return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, login_page!
   elseif req.path == "/css" and req.method == "GET"
     return 200, { ["Content-Type"]: "text/css" }, css_content

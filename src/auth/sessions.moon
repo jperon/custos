@@ -134,6 +134,20 @@ purge_expired = (sessions) ->
   for mac, s in pairs sessions
     sessions[mac] = nil if s.expires and now > s.expires
 
+--- Vrai si une session vivante existe pour cette MAC.
+-- Source unique de la vérification « session non invalidée » utilisée par le
+-- ping, la page de succès et l'interface admin : un token encore
+-- cryptographiquement valide ne suffit pas après un logout.
+-- @tparam string mac  Adresse MAC du client (nil/inconnue → false)
+-- @tparam string path Chemin du fichier de sessions
+-- @tparam table|nil sessions_arg Table déjà chargée (évite un rechargement)
+-- @treturn boolean true si la session existe et n'est pas expirée
+session_alive = (mac, path, sessions_arg) ->
+  return false unless mac and mac != "unknown" and path
+  sessions = sessions_arg or load_sessions path
+  purge_expired sessions
+  sessions[mac\lower!] != nil
+
 -- ── Cache de lecture (côté workers question/response) ────────────────────────
 
 _cache      = nil
@@ -312,6 +326,7 @@ user_for_mac = (mac, ip, path) ->
 {
   :serialize, :write_sessions, :load_sessions, :add_session
   :with_sessions_lock
+  :session_alive
   :purge_expired, :read_cached, :reset_cache
   :session_for_mac, :user_for_mac, :enrich_session_ip, :bind_session_mac
 }

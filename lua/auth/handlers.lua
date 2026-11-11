@@ -9,10 +9,10 @@ do
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
 local token = require("auth.token")
-local add_session, purge_expired, load_sessions, write_sessions, with_sessions_lock
+local add_session, purge_expired, load_sessions, write_sessions, with_sessions_lock, session_alive
 do
   local _obj_0 = require("auth.sessions")
-  add_session, purge_expired, load_sessions, write_sessions, with_sessions_lock = _obj_0.add_session, _obj_0.purge_expired, _obj_0.load_sessions, _obj_0.write_sessions, _obj_0.with_sessions_lock
+  add_session, purge_expired, load_sessions, write_sessions, with_sessions_lock, session_alive = _obj_0.add_session, _obj_0.purge_expired, _obj_0.load_sessions, _obj_0.write_sessions, _obj_0.with_sessions_lock, _obj_0.session_alive
 end
 local verify_password, verify_response, register_user, set_record, parse_record, valid_username
 do
@@ -318,7 +318,7 @@ handle_ping = function(req, peer_ip, peer_mac, state)
   with_sessions_lock(state.sessions_file, function()
     local sessions = load_sessions(state.sessions_file)
     purge_expired(sessions)
-    if mac and mac ~= "unknown" and not sessions[mac:lower()] then
+    if not session_alive(mac, state.sessions_file, sessions) then
       invalidated = true
       return 
     end
@@ -591,16 +591,12 @@ handle_request = function(req, peer_ip, peer_mac, state)
   if req.path == "/" and req.method == "GET" then
     local cookie_val = token.get_cookie(req.headers.cookie or "", COOKIE_NAME)
     local p = token.verify(cookie_val, state.token_key)
-    if p and p.user and p.mac and p.mac ~= "unknown" then
-      local sessions = load_sessions(state.sessions_file)
-      purge_expired(sessions)
-      if sessions[p.mac:lower()] then
-        local is_admin = is_admin_user(state, p.user)
-        local body = success_page(state.auth_cfg, os.time(), is_admin)
-        return 200, {
-          ["Content-Type"] = "text/html; charset=UTF-8"
-        }, body
-      end
+    if p and p.user and session_alive(p.mac, state.sessions_file) then
+      local is_admin = is_admin_user(state, p.user)
+      local body = success_page(state.auth_cfg, os.time(), is_admin)
+      return 200, {
+        ["Content-Type"] = "text/html; charset=UTF-8"
+      }, body
     end
     return 200, {
       ["Content-Type"] = "text/html; charset=UTF-8"

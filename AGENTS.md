@@ -888,3 +888,10 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   module (audit confirmé) mais reste exporté. Tests dans
   `tests/unit/auth/credentials_spec.moon` (inscriptions successives et
   concurrentes, temporaire fixe piégé par un répertoire, mode 0600).
+- **Session admin non revalidée après déconnexion.** `check_admin_session`
+  (`webui/handlers/admin_auth.moon`) ne vérifiait que signature/expiration du
+  token : après `/logout`, un cookie copié restait accepté sur `/admin/*`
+  jusqu'à son expiration. Correctif : vérification de session vivante
+  factorisée dans `auth.sessions.session_alive`, utilisée par le ping, la page
+  de succès `GET /` et l'authentification admin (source unique). Tests dans
+  `tests/unit/webui/admin_auth_spec.moon` (session supprimée / MAC différente).
