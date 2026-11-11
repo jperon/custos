@@ -824,3 +824,17 @@ et passe après ; le contrôle est désormais automatisé dans `make check`
   en deux morceaux, `drain_ack` d'un ACK partiel) et
   `tests/unit/worker_nft_spec.moon` (65 éléments → deux ACK, le second portant
   le dernier `seq`).
+
+- **`custos-sync.sh` : téléchargement de configuration non contraint en HTTPS.**
+  L'archive téléchargée est fusionnée dans `/etc/custos/config.moon`, chargée et
+  exécutée en root ; le `wget -q -O` (busybox) n'offrait aucune garantie explicite
+  de vérification TLS et une URL `http://` était acceptée telle quelle. Correctif :
+  refus de tout `CUSTOS_CONFIG_REPO` ne commençant pas par `https://` (message
+  clair, exit 1, avant toute écriture) et téléchargement par `curl --fail
+  --silent --show-error --location --proto '=https' --proto-redir '=https'`
+  (vérification des certificats par défaut, jamais `--insecure`), avec repli
+  `wget` uniquement quand `curl` est absent. Le chemin du fichier de conf reste
+  `/etc/custos/sync.conf`, surchargeable par `CUSTOS_SYNC_CONF` pour les tests.
+  Test : `tests/unit/sync/custos_sync_spec.moon` (PATH factice : URL `http://`
+  refusée sans appel curl, arguments curl exacts, wget jamais appelé quand curl
+  est présent).

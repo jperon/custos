@@ -27,7 +27,13 @@ Déploiement multi-routeurs depuis un dépôt git central.
 
 - `sync/apply.moon` (→ `lua/sync/apply.lua`) : fusionne `base/config.moon` +
   `devices/<hostname>/config.moon` → `/etc/custos/config.moon` (`--reload` envoie SIGHUP).
-- `sync/custos-sync.sh` : pull-only depuis `CUSTOS_CONFIG_REPO` (`/etc/custos/sync.conf`), cron */15.
+- `sync/custos-sync.sh` : pull-only depuis `CUSTOS_CONFIG_REPO` (`/etc/custos/sync.conf`,
+  surchargeable en test par `CUSTOS_SYNC_CONF`), cron */15. L'URL doit commencer
+  par `https://` (refus explicite sinon) ; téléchargement par `curl --fail
+  --silent --show-error --location --proto '=https' --proto-redir '=https'`
+  (vérification des certificats par défaut, jamais `--insecure`), repli `wget`
+  uniquement si `curl` est absent. L'archive fusionnée devient
+  `/etc/custos/config.moon`, exécutée en root.
 - `sync/custos-sync-push.sh` : publie la config d'un filtre de référence vers le dépôt.
 - Init : `make sync-init HOST=… REPO=…` (pull) / `make sync-push-init HOST=… REPO=…` (push).
 
