@@ -113,6 +113,7 @@ describe "worker_responses helpers", ->
     deltas = {
       delta_ms: 12, question_proc_ms: 4, response_entry_ms: 5, drain_ms: 0
       payload_ms: 1, parse_ms: 2, match_ms: 0, log_ms: 0
+      ack_wait_us: 1234, log_write_us: 42
     }
 
     it "verdict allow quand entry.refused est faux", ->
@@ -133,6 +134,9 @@ describe "worker_responses helpers", ->
       assert.equals 4, fields.question_proc_ms
       assert.equals 5, fields.response_entry_ms
       assert.equals 2, fields.parse_ms
+      -- Mesures µs parallèles (non additives), présentes et en µs entières.
+      assert.equals 1234, fields.ack_wait_us
+      assert.equals 42, fields.log_write_us
       assert.equals "0x1f4d", fields.txid
       -- Les deux retries sont distincts : les champs IPC portent bien les
       -- valeurs IPC passées dans `info`, et ne sont pas les anciens noms nus.
@@ -140,6 +144,19 @@ describe "worker_responses helpers", ->
       assert.equals 3, fields.ipc_retry_wait_ms
       assert.is_nil fields.retry_attempts
       assert.is_nil fields.retry_wait_ms
+
+    it "ack_wait_us et log_write_us valent 0 quand aucune mesure n'est fournie", ->
+      m = fresh_worker_responses!
+      entry = { refused: false, reason: "Allowed", rule_id: "r_ok", dnsonly: false }
+      no_us = {
+        delta_ms: 5, question_proc_ms: 1, response_entry_ms: 2, drain_ms: 0
+        payload_ms: 1, parse_ms: 1, match_ms: 0, log_ms: 0
+      }
+      fields = m.build_benchmark_fields entry, info, no_us
+      assert.equals 0, fields.ack_wait_us
+      assert.equals 0, fields.log_write_us
+      -- Les autres champs de la chaîne additive restent inchangés.
+      assert.equals 5, fields.q_to_response_ms
 
     it "upstream_retries reflète entry.upstream_retries (compteur upstream)", ->
       m = fresh_worker_responses!

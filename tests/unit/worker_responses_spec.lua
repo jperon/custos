@@ -116,7 +116,9 @@ describe("worker_responses helpers", function()
       payload_ms = 1,
       parse_ms = 2,
       match_ms = 0,
-      log_ms = 0
+      log_ms = 0,
+      ack_wait_us = 1234,
+      log_write_us = 42
     }
     it("verdict allow quand entry.refused est faux", function()
       local m = fresh_worker_responses()
@@ -139,11 +141,36 @@ describe("worker_responses helpers", function()
       assert.equals(4, fields.question_proc_ms)
       assert.equals(5, fields.response_entry_ms)
       assert.equals(2, fields.parse_ms)
+      assert.equals(1234, fields.ack_wait_us)
+      assert.equals(42, fields.log_write_us)
       assert.equals("0x1f4d", fields.txid)
       assert.equals(1, fields.ipc_retry_attempts)
       assert.equals(3, fields.ipc_retry_wait_ms)
       assert.is_nil(fields.retry_attempts)
       return assert.is_nil(fields.retry_wait_ms)
+    end)
+    it("ack_wait_us et log_write_us valent 0 quand aucune mesure n'est fournie", function()
+      local m = fresh_worker_responses()
+      local entry = {
+        refused = false,
+        reason = "Allowed",
+        rule_id = "r_ok",
+        dnsonly = false
+      }
+      local no_us = {
+        delta_ms = 5,
+        question_proc_ms = 1,
+        response_entry_ms = 2,
+        drain_ms = 0,
+        payload_ms = 1,
+        parse_ms = 1,
+        match_ms = 0,
+        log_ms = 0
+      }
+      local fields = m.build_benchmark_fields(entry, info, no_us)
+      assert.equals(0, fields.ack_wait_us)
+      assert.equals(0, fields.log_write_us)
+      return assert.equals(5, fields.q_to_response_ms)
     end)
     it("upstream_retries reflète entry.upstream_retries (compteur upstream)", function()
       local m = fresh_worker_responses()
