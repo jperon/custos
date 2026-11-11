@@ -7,6 +7,7 @@ H       = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
 config_schema = require "webui.schema.config_schema"
+{ :esc, :parse_form } = require "webui.util"
 unpack or= table.unpack
 
 -- ── Helpers formulaire ────────────────────────────────────────────────────
@@ -45,13 +46,13 @@ render_field = (name, field_schema, current_val) ->
   elseif t == "path" or t == "string"
     return H.div {
       label_html .. hint_html
-      H.input { type: "text", name: name, value: tostring(val or "") }
+      H.input { type: "text", name: name, value: esc tostring(val or "") }
     }
   elseif t == "string_list"
     list_val = if type(val) == "table" then table.concat(val, "\n") else tostring(val or "")
     return H.div {
       label_html .. H.small { style: "color:#888" }, " (une valeur par ligne)"
-      H.textarea { name: name }, list_val
+      H.textarea { name: name }, esc list_val
     }
   else
     return H.div {
@@ -71,14 +72,6 @@ render_subsection = (sub_name, sub_schema, current_vals) ->
     H.legend sub_label
     fields_html
   }
-
-parse_form = (body) ->
-  return {} unless body
-  out = {}
-  dec = (s) -> (s\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16)\gsub "+", " "
-  for k, v in body\gmatch "([^&=]+)=([^&]*)"
-    out[dec k] = dec v
-  out
 
 build_section = (schema, prefix, form_data) ->
   result = {}
@@ -219,7 +212,19 @@ handle_config_section_post = (req, section, state) ->
   cfg, err = read_config state.config_path
   return 500, {}, "Erreur lecture config : #{tostring err}" unless cfg
 
-  cfg[section] = build_section section_schema, nil, form
+  -- Fusion : on ne remplace que les clés déclarées dans le schéma. Les clés
+  -- hors schéma (ex. auth.admin_users, dns.upstream_retry, nft.extra_rules)
+  -- sont conservées telles quelles. Une clé du schéma rendue nil par
+  -- build_section est bien supprimée.
+  built = build_section section_schema, nil, form
+  merged = {}
+  if type(cfg[section]) == "table"
+    for k, v in pairs cfg[section]
+      merged[k] = v
+  for k in pairs section_schema
+    continue if k\match "^_"
+    merged[k] = built[k]
+  cfg[section] = merged
   ok2, err2 = write_config cfg, state.config_path
   return 500, {}, "Erreur écriture config : #{tostring err2}" unless ok2
 

@@ -6,20 +6,7 @@
 H = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
-
--- parse_form minimal (cf. webui.handlers.filter) : décode un corps urlencodé.
-parse_form = (body) ->
-  return {} unless body
-  out = {}
-  dec = (s) -> (s\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16)\gsub "+", " "
-  for k, v in body\gmatch "([^&=]+)=([^&]*)"
-    out[dec k] = dec v
-  out
-
--- Échappe le texte destiné au contenu/attribut HTML (le DSL n'échappe rien).
-esc = (s) ->
-  s = tostring s or ""
-  (s\gsub "[&<>\"']", { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })
+{ :esc, :parse_form } = require "webui.util"
 
 -- URL de la vue « détail » : page Verdicts filtrée sur une MAC (?mac=…).
 -- Caractères de la MAC (hex + ':') sûrs en query string → pas d'encodage requis.

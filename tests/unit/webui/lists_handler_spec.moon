@@ -200,6 +200,20 @@ describe "webui/handlers/lists", ->
       status, _, _ = handle_list_post make_req("POST", body_str), "domain", "famille", make_state!
       assert.equals 400, status
 
+    it "renommage vers un nom existant → 409 sans écrasement", ->
+      fh = io.open "#{LISTS_DIR}/domain/autre.txt", "w"
+      fh\write "a-garder.com\n"
+      fh\close!
+      body_str = "action=rename&new_name=autre"
+      status, _, _ = handle_list_post make_req("POST", body_str), "domain", "famille", make_state!
+      assert.equals 409, status
+      target = io.open "#{LISTS_DIR}/domain/autre.txt", "r"
+      assert.equals "a-garder.com\n", target\read "*a"
+      target\close!
+      source = io.open "#{LISTS_DIR}/domain/famille.txt", "r"
+      assert.not_nil source
+      source\close! if source
+
     it "met à jour les références dans les règles", ->
       write_cfg {
         filter: {
@@ -264,3 +278,13 @@ describe "webui/handlers/lists", ->
       body_str = "name=ok&content=x"
       status, _, _ = handle_list_new_post make_req("POST", body_str), "BAD!", make_state!
       assert.equals 400, status
+
+    it "création sur un nom existant → 409 sans écrasement", ->
+      body_str = "name=famille&content=ecrase.com"
+      status, _, _ = handle_list_new_post make_req("POST", body_str), "domain", make_state!
+      assert.equals 409, status
+      fh = io.open "#{LISTS_DIR}/domain/famille.txt", "r"
+      content = fh\read "*a"
+      fh\close!
+      assert.truthy content\find("example.com", 1, true)
+      assert.is_nil content\find("ecrase.com", 1, true)

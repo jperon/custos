@@ -13,20 +13,7 @@ H       = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
 { :shquote } = require "lib.shquote"
-
--- Échappe le texte destiné au contenu/attribut HTML (le DSL auth.html
--- n'échappe rien : cf. webui.handlers.devices/verdicts pour le même pattern).
-esc = (s) ->
-  s = tostring s or ""
-  (s\gsub "[&<>\"']", { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })
-
-parse_form = (body) ->
-  return {} unless body
-  out = {}
-  dec = (s) -> (s\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16)\gsub "+", " "
-  for k, v in body\gmatch "([^&=]+)=([^&]*)"
-    out[dec k] = dec v
-  out
+{ :esc, :parse_form } = require "webui.util"
 
 valid_type = (t) -> t and t\match "^[a-z][a-z0-9_]*$"
 valid_name = (n) -> n and n\match "^[a-zA-Z0-9][a-zA-Z0-9_%-]*$"
@@ -68,6 +55,12 @@ read_list_file = (path) ->
   content = fh\read "*a"
   fh\close!
   content
+
+file_exists = (path) ->
+  fh = io.open path, "r"
+  return false unless fh
+  fh\close!
+  true
 
 write_list_file = (path, content) ->
   dir = path\match "^(.*)/[^/]+$"
@@ -238,6 +231,7 @@ handle_list_post = (req, type_name, list_name, state) ->
     return 400, {}, "Nouveau nom invalide" unless valid_name new_name
     return 302, { ["Location"]: "/admin/config/filter/lists/#{type_name}/#{list_name}" }, "" if new_name == list_name
     new_path = "#{lists_dir}/#{type_name}/#{new_name}.txt"
+    return 409, {}, "La liste #{new_name} existe déjà" if file_exists new_path
     ret = os.rename path, new_path
     return 500, {}, "Échec du renommage de #{list_name} → #{new_name}" unless ret
     -- Mise à jour des références dans config.moon (best-effort)
@@ -285,6 +279,7 @@ handle_list_new_post = (req, type_name, state) ->
   return 400, {}, "Nom invalide" unless valid_name list_name
   lists_dir = get_lists_dir state
   path = "#{lists_dir}/#{type_name}/#{list_name}.txt"
+  return 409, {}, "La liste #{list_name} existe déjà" if file_exists path
   content = form.content or ""
   ok, e = write_list_file path, content
   return 500, {}, "Erreur écriture : #{e}" unless ok

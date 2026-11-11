@@ -8,33 +8,10 @@ do
 end
 local shquote
 shquote = require("lib.shquote").shquote
-local esc
-esc = function(s)
-  s = tostring(s or "")
-  return (s:gsub("[&<>\"']", {
-    ["&"] = "&amp;",
-    ["<"] = "&lt;",
-    [">"] = "&gt;",
-    ['"'] = "&quot;",
-    ["'"] = "&#39;"
-  }))
-end
-local parse_form
-parse_form = function(body)
-  if not (body) then
-    return { }
-  end
-  local out = { }
-  local dec
-  dec = function(s)
-    return (s:gsub("%%(%x%x)", function(h)
-      return string.char(tonumber(h, 16))
-    end)):gsub("+", " ")
-  end
-  for k, v in body:gmatch("([^&=]+)=([^&]*)") do
-    out[dec(k)] = dec(v)
-  end
-  return out
+local esc, parse_form
+do
+  local _obj_0 = require("webui.util")
+  esc, parse_form = _obj_0.esc, _obj_0.parse_form
 end
 local valid_type
 valid_type = function(t)
@@ -95,6 +72,15 @@ read_list_file = function(path)
   local content = fh:read("*a")
   fh:close()
   return content
+end
+local file_exists
+file_exists = function(path)
+  local fh = io.open(path, "r")
+  if not (fh) then
+    return false
+  end
+  fh:close()
+  return true
 end
 local write_list_file
 write_list_file = function(path, content)
@@ -377,6 +363,9 @@ handle_list_post = function(req, type_name, list_name, state)
       }, ""
     end
     local new_path = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(new_name) .. ".txt"
+    if file_exists(new_path) then
+      return 409, { }, "La liste " .. tostring(new_name) .. " existe déjà"
+    end
     local ret = os.rename(path, new_path)
     if not (ret) then
       return 500, { }, "Échec du renommage de " .. tostring(list_name) .. " → " .. tostring(new_name)
@@ -459,6 +448,9 @@ handle_list_new_post = function(req, type_name, state)
   end
   local lists_dir = get_lists_dir(state)
   local path = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(list_name) .. ".txt"
+  if file_exists(path) then
+    return 409, { }, "La liste " .. tostring(list_name) .. " existe déjà"
+  end
   local content = form.content or ""
   local ok, e = write_list_file(path, content)
   if not (ok) then

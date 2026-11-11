@@ -7,6 +7,11 @@ do
   read_config, write_config = _obj_0.read_config, _obj_0.write_config
 end
 local config_schema = require("webui.schema.config_schema")
+local esc, parse_form
+do
+  local _obj_0 = require("webui.util")
+  esc, parse_form = _obj_0.esc, _obj_0.parse_form
+end
 local unpack = unpack or table.unpack
 local render_field
 render_field = function(name, field_schema, current_val)
@@ -85,7 +90,7 @@ render_field = function(name, field_schema, current_val)
       H.input({
         type = "text",
         name = name,
-        value = tostring(val or "")
+        value = esc(tostring(val or ""))
       })
     })
   elseif t == "string_list" then
@@ -101,7 +106,7 @@ render_field = function(name, field_schema, current_val)
       }, " (une valeur par ligne)"),
       H.textarea({
         name = name
-      }, list_val)
+      }, esc(list_val))
     })
   else
     return H.div({
@@ -139,23 +144,6 @@ render_subsection = function(sub_name, sub_schema, current_vals)
     H.legend(sub_label),
     fields_html
   })
-end
-local parse_form
-parse_form = function(body)
-  if not (body) then
-    return { }
-  end
-  local out = { }
-  local dec
-  dec = function(s)
-    return (s:gsub("%%(%x%x)", function(h)
-      return string.char(tonumber(h, 16))
-    end)):gsub("+", " ")
-  end
-  for k, v in body:gmatch("([^&=]+)=([^&]*)") do
-    out[dec(k)] = dec(v)
-  end
-  return out
 end
 local build_section
 build_section = function(schema, prefix, form_data)
@@ -447,7 +435,28 @@ handle_config_section_post = function(req, section, state)
   if not (cfg) then
     return 500, { }, "Erreur lecture config : " .. tostring(tostring(err))
   end
-  cfg[section] = build_section(section_schema, nil, form)
+  local built = build_section(section_schema, nil, form)
+  local merged = { }
+  if type(cfg[section]) == "table" then
+    for k, v in pairs(cfg[section]) do
+      merged[k] = v
+    end
+  end
+  for k in pairs(section_schema) do
+    local _continue_0 = false
+    repeat
+      if k:match("^_") then
+        _continue_0 = true
+        break
+      end
+      merged[k] = built[k]
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  cfg[section] = merged
   local ok2, err2 = write_config(cfg, state.config_path)
   if not (ok2) then
     return 500, { }, "Erreur écriture config : " .. tostring(tostring(err2))

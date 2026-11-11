@@ -9,11 +9,7 @@ H = require "auth.html"
 { :read_config } = require "webui.serializer"
 { :events_dir_for, :detail_cell, :modal_dialog, :MODAL_JS } = require "webui.handlers.devices"
 { :bidirectional } = require "ipparse.fun"
-
--- Échappe le texte destiné au contenu/attribut HTML (le DSL n'échappe rien).
-esc = (s) ->
-  s = tostring s or ""
-  (s\gsub "[&<>\"']", { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })
+{ :esc } = require "webui.util"
 
 --- Lit recent-verdicts.tsv et renvoie la liste brute des verdicts (un par ligne).
 -- @tparam string events_dir Répertoire des events
@@ -176,7 +172,7 @@ handle_verdicts_get = (req, state) ->
       " "
       H.a { class: "btn btn-secondary", href: "/admin/config/verdicts" }, "Retour"
     }
-    return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Verdicts — #{mac_q}", body
+    return 200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page "Verdicts — #{esc mac_q}", body
 
   rows = {}
   for v in *verdicts

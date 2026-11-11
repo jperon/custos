@@ -156,6 +156,13 @@ describe "webui/handlers/verdicts", ->
       _, _, body = handle_verdicts_get make_req({ mac: "aa:bb:cc" }), make_state!
       assert.truthy body\find("Tablette", 1, true)
 
+    it "échappe la MAC de l'URL dans le titre de la page (anti-XSS)", ->
+      write_file vline "aa:bb:cc", "10.0.0.9", "-", "ads.com", "block", "bl", 1, 100, 200
+      _, _, body = handle_verdicts_get make_req({ mac: '"><img src=x onerror=alert(1)>' }), make_state!
+      assert.is_nil body\find("<img src=x", 1, true)
+      assert.truthy body\find("&lt;", 1, true)
+      assert.truthy body\find("&quot;", 1, true)
+
     it "message si aucun verdict pour la MAC", ->
       write_file vline "aa:bb:cc", "10.0.0.9", "-", "ads.com", "block", "bl", 1, 100, 200
       _, _, body = handle_verdicts_get make_req({ mac: "99:99:99" }), make_state!

@@ -11,14 +11,7 @@ H        = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
 registry = require "webui.schema.registry"
-
-parse_form = (body) ->
-  return {} unless body
-  out = {}
-  dec = (s) -> (s\gsub "%%(%x%x)", (h) -> string.char tonumber h, 16)\gsub "+", " "
-  for k, v in body\gmatch "([^&=]+)=([^&]*)"
-    out[dec k] = dec v
-  out
+{ :esc, :parse_form } = require "webui.util"
 
 -- JS de réordonnancement par glisser-déposer (repli no-JS : boutons ↑/↓).
 RULES_REORDER_JS = [[
@@ -95,6 +88,8 @@ handle_rules_list = (req, state) ->
   rows = ""
   for i, rule in ipairs rules
     desc, conds_str, acts_str = rule_summary rule
+    -- Les valeurs viennent de la config : on les échappe au point d'injection.
+    desc, conds_str, acts_str = esc(desc), esc(conds_str), esc(acts_str)
     cond_cell = if conds_str ~= "" then conds_str else H.em "(toujours)"
     btn_move = H.form { method: "POST", action: "/admin/config/filter/rules/#{i}/move", style: "display:inline" }, {
       H.button({ type: "submit", name: "dir", value: "up",   class: "btn btn-secondary btn-sm" }, "↑") ..
@@ -195,7 +190,7 @@ render_cond_row = (families, idx, root, form, value) ->
   form or= "base"
   a = cond_a_select families, idx, root
   b = cond_b_select fam, idx, form
-  ta = H.textarea { class: "cond-value", name: "cond_#{idx}[value]", rows: "2" }, cond_val_str(value)
+  ta = H.textarea { class: "cond-value", name: "cond_#{idx}[value]", rows: "2" }, esc(cond_val_str(value))
   help  = H.div { class: "cond-help",  style: "color:#555;font-size:.85em;margin-top:.2rem" }, ""
   links = H.div { class: "cond-links", style: "font-size:.85em;margin-top:.2rem" }, ""
   btn = H.button { type: "button", onclick: "_delCond(this)", class: "btn btn-danger btn-sm" }, "✕"
@@ -246,7 +241,7 @@ render_action_row = (acts, idx, atype, aopts) ->
   }
   log_extra = H.div { class: "act-log", style: show "log" }, {
     H.label "Message de log (optionnel)"
-    H.input { type: "text", name: "action_#{idx}[log_msg]", value: msg_val }
+    H.input { type: "text", name: "action_#{idx}[log_msg]", value: esc msg_val }
   }
   btn = H.button { type: "button", onclick: "_delAction(this)", class: "btn btn-danger btn-sm" }, "✕"
   H.tr (H.td(type_sel) .. H.td({ class: "act-params" }, dns_extra .. log_extra) .. H.td(btn))
@@ -260,7 +255,7 @@ render_rule_form = (action_url, rule) ->
   -- Description
   desc_html = H.div {
     H.label "Description"
-    H.input { type: "text", name: "description", value: rule.description or "" }
+    H.input { type: "text", name: "description", value: esc(rule.description or "") }
   }
 
   families = registry.condition_families!
@@ -533,13 +528,17 @@ handle_rules_reorder = (req, state) ->
   cfg, err = read_config state.config_path
   return 500, {}, "Erreur config : #{err}" unless cfg
   rules = (cfg.filter or {}).rules or {}
-  order = [tonumber tok for tok in (form.order or "")\gmatch "[^,]+"]
-  -- Valide une permutation exacte de 1..#rules.
-  return 400, {}, "Ordre invalide" unless #order == #rules
+  tokens = [tok for tok in (form.order or "")\gmatch "[^,]+"]
+  -- Valide une permutation exacte de 1..#rules (entiers uniquement).
+  return 400, {}, "Ordre invalide" unless #tokens == #rules
+  order = {}
   seen = {}
-  for idx in *order
-    return 400, {}, "Ordre invalide" unless idx and idx >= 1 and idx <= #rules and not seen[idx]
+  for tok in *tokens
+    idx = tonumber tok
+    unless idx and idx % 1 == 0 and idx >= 1 and idx <= #rules and not seen[idx]
+      return 400, {}, "Ordre invalide"
     seen[idx] = true
+    order[#order + 1] = idx
   new_rules = [rules[idx] for idx in *order]
   cfg.filter.rules = new_rules
   ok, e = write_config cfg, state.config_path

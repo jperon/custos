@@ -499,6 +499,21 @@ env `CUSTOS_PID_FILE`). `handle_reload` (`system.moon`) et `default_reload`
 (`devices.moon`) lisent ce pidfile ; `custos-update` l'utilise déjà. `handle_reload`
 accepte `state.kill_fn` injectable (tests).
 
+**POST de section = fusion sur les clés du schéma.** `handle_config_section_post`
+(`handlers/config.moon`) ne remplace que les clés non `_` déclarées dans
+`config_schema[section]` ; les clés hors schéma de la section existante sont
+préservées telles quelles (`auth.admin_users`/`admin_allow_all_when_empty`,
+`dns.upstream_retry`, `nft.extra_rules`…). Une clé du schéma rendue `nil` par
+`build_section` reste supprimée. Ne jamais revenir à un remplacement de section
+entier : effacer `admin_users` le fait retomber sur `{}` + `admin_allow_all_when_empty
+= true` au rechargement, rendant tout utilisateur authentifié admin.
+
+**Échappement HTML : `webui.util` est la source unique.** Le DSL `auth.html`
+n'échappe ni le texte ni les attributs ; `webui.util.esc` (`&`, `<`, `>`, `"`,
+`'`, nil → `""`) doit être appliqué à **toute** valeur de config ou de requête
+injectée dans du HTML (règles, champs de section, titres `page`), et
+`webui.util.parse_form` est le décodeur urlencodé commun des handlers.
+
 Les champs scalaires de `filter` (SafeSearch, YouTube Restricted, `allow_localnets`,
 `captive_portal`, `domainlists_dir`, `dest_whitelist`, `allowed_domains`…) sont
 édités par `handle_filter_general_get/post` : ils parcourent `config_schema.filter`
@@ -596,8 +611,17 @@ conteneur `#verd-detail`) listant uniquement les verdicts de cette MAC. `MODAL_J
 formulaire de nom) ou sur le lien, `fetch` cette URL et injecte `#verd-detail`
 dans un `<dialog id="vmodal">` (modale). **Sans JS**, le lien ouvre simplement la
 page filtrée (popup `_blank`). Le routeur (`webui/router.moon`) sépare désormais la
-query string du chemin (`parse_query`) et expose `req.query` aux handlers ; le
+query string du chemin (`webui.util.parse_form`) et expose `req.query` aux handlers ; le
 matching de route reste sur le **chemin nu**.
+
+**Déconnexion admin.** Le lien « Déconnexion » de `dashboard.moon` pointe vers
+`/logout` (route GET du portail, `auth/handlers.moon`) : `/admin/logout` n'existe
+pas et retombait sur la redirection du routeur webui.
+
+**Listes — pas d'écrasement silencieux.** `handle_list_new_post` et le
+renommage de `handle_list_post` (`handlers/lists.moon`) répondent **409** si le
+fichier cible existe déjà (hors renommage vers le même nom) : la cible n'est
+jamais écrasée.
 
 ## Résilience du portail captif aux blips réseau (`src/auth/portal_client.js`)
 

@@ -9,22 +9,10 @@ do
   read_config, write_config = _obj_0.read_config, _obj_0.write_config
 end
 local registry = require("webui.schema.registry")
-local parse_form
-parse_form = function(body)
-  if not (body) then
-    return { }
-  end
-  local out = { }
-  local dec
-  dec = function(s)
-    return (s:gsub("%%(%x%x)", function(h)
-      return string.char(tonumber(h, 16))
-    end)):gsub("+", " ")
-  end
-  for k, v in body:gmatch("([^&=]+)=([^&]*)") do
-    out[dec(k)] = dec(v)
-  end
-  return out
+local esc, parse_form
+do
+  local _obj_0 = require("webui.util")
+  esc, parse_form = _obj_0.esc, _obj_0.parse_form
 end
 local RULES_REORDER_JS = [[(function(){
   var tbody = document.getElementById('rules-tbody');
@@ -114,6 +102,7 @@ handle_rules_list = function(req, state)
   local rows = ""
   for i, rule in ipairs(rules) do
     local desc, conds_str, acts_str = rule_summary(rule)
+    desc, conds_str, acts_str = esc(desc), esc(conds_str), esc(acts_str)
     local cond_cell
     if conds_str ~= "" then
       cond_cell = conds_str
@@ -342,7 +331,7 @@ render_cond_row = function(families, idx, root, form, value)
     class = "cond-value",
     name = "cond_" .. tostring(idx) .. "[value]",
     rows = "2"
-  }, cond_val_str(value))
+  }, esc(cond_val_str(value)))
   local help = H.div({
     class = "cond-help",
     style = "color:#555;font-size:.85em;margin-top:.2rem"
@@ -446,7 +435,7 @@ render_action_row = function(acts, idx, atype, aopts)
     H.input({
       type = "text",
       name = "action_" .. tostring(idx) .. "[log_msg]",
-      value = msg_val
+      value = esc(msg_val)
     })
   })
   local btn = H.button({
@@ -468,7 +457,7 @@ render_rule_form = function(action_url, rule)
     H.input({
       type = "text",
       name = "description",
-      value = rule.description or ""
+      value = esc(rule.description or "")
     })
   })
   local families = registry.condition_families()
@@ -812,26 +801,29 @@ handle_rules_reorder = function(req, state)
     return 500, { }, "Erreur config : " .. tostring(err)
   end
   local rules = (cfg.filter or { }).rules or { }
-  local order
+  local tokens
   do
     local _accum_0 = { }
     local _len_0 = 1
     for tok in (form.order or ""):gmatch("[^,]+") do
-      _accum_0[_len_0] = tonumber(tok)
+      _accum_0[_len_0] = tok
       _len_0 = _len_0 + 1
     end
-    order = _accum_0
+    tokens = _accum_0
   end
-  if not (#order == #rules) then
+  if not (#tokens == #rules) then
     return 400, { }, "Ordre invalide"
   end
+  local order = { }
   local seen = { }
-  for _index_0 = 1, #order do
-    local idx = order[_index_0]
-    if not (idx and idx >= 1 and idx <= #rules and not seen[idx]) then
+  for _index_0 = 1, #tokens do
+    local tok = tokens[_index_0]
+    local idx = tonumber(tok)
+    if not (idx and idx % 1 == 0 and idx >= 1 and idx <= #rules and not seen[idx]) then
       return 400, { }, "Ordre invalide"
     end
     seen[idx] = true
+    order[#order + 1] = idx
   end
   local new_rules
   do

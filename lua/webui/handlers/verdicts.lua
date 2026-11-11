@@ -11,16 +11,7 @@ end
 local bidirectional
 bidirectional = require("ipparse.fun").bidirectional
 local esc
-esc = function(s)
-  s = tostring(s or "")
-  return (s:gsub("[&<>\"']", {
-    ["&"] = "&amp;",
-    ["<"] = "&lt;",
-    [">"] = "&gt;",
-    ['"'] = "&quot;",
-    ["'"] = "&#39;"
-  }))
-end
+esc = require("webui.util").esc
 local read_verdicts
 read_verdicts = function(events_dir)
   local fh = io.open(tostring(events_dir) .. "/recent-verdicts.tsv", "r")
@@ -268,7 +259,7 @@ handle_verdicts_get = function(req, state)
     })
     return 200, {
       ["Content-Type"] = "text/html; charset=UTF-8"
-    }, page("Verdicts — " .. tostring(mac_q), body)
+    }, page("Verdicts — " .. tostring(esc(mac_q)), body)
   end
   local rows = { }
   for _index_0 = 1, #verdicts do

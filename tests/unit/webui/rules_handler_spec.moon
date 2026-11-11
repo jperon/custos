@@ -70,6 +70,20 @@ describe "webui/handlers/rules", ->
       _, _, body = handle_rules_list make_req("GET"), make_state!
       assert.truthy body\find("toujours", 1, true)
 
+    it "échappe les valeurs de config injectées dans la liste (anti-XSS)", ->
+      write_cfg base_cfg_with_rules {
+        {
+          description: '"><img src=x onerror=alert(1)>'
+          conditions: { from_domain: '</textarea><script>alert(1)</script>' }
+          actions: { "allow" }
+        }
+      }
+      _, _, body = handle_rules_list make_req("GET"), make_state!
+      assert.is_nil body\find("<img src=x", 1, true)
+      assert.is_nil body\find("<script>alert", 1, true)
+      assert.truthy body\find("&lt;", 1, true)
+      assert.truthy body\find("&quot;", 1, true)
+
   -- ── handle_rules_new_get ──────────────────────────────────────────────
 
   describe "handle_rules_new_get", ->
@@ -123,6 +137,20 @@ describe "webui/handlers/rules", ->
     it "retourne 404 pour un numéro hors plage", ->
       status, _, _ = handle_rules_edit_get make_req("GET"), 99, make_state!
       assert.equals 404, status
+
+    it "échappe les valeurs de config du formulaire d'édition (anti-XSS)", ->
+      write_cfg base_cfg_with_rules {
+        {
+          description: '"><img src=x onerror=alert(1)>'
+          conditions: { from_domain: '</textarea><script>alert(1)</script>' }
+          actions: { { log: { log_msg: '"><img src=x onerror=alert(1)>' } } }
+        }
+      }
+      _, _, body = handle_rules_edit_get make_req("GET"), 1, make_state!
+      assert.is_nil body\find("<img src=x", 1, true)
+      assert.is_nil body\find("<script>alert", 1, true)
+      assert.truthy body\find("&lt;", 1, true)
+      assert.truthy body\find("&quot;", 1, true)
 
   -- ── handle_rules_edit_post ────────────────────────────────────────────
 
@@ -377,6 +405,20 @@ describe "webui/handlers/rules", ->
       status, _, _ = handle_rules_reorder make_req("POST", "order=1,1"), make_state!
       assert.equals 400, status
       loaded = (read_config CFG_PATH)
+      assert.equals "règle B", loaded.filter.rules[2].description
+
+    it "rejette un indice non entier (400, config non réécrite)", ->
+      status, _, _ = handle_rules_reorder make_req("POST", "order=1,1.5"), make_state!
+      assert.equals 400, status
+      loaded = (read_config CFG_PATH)
+      assert.equals "règle A", loaded.filter.rules[1].description
+      assert.equals "règle B", loaded.filter.rules[2].description
+
+    it "rejette un token non numérique (400, config non réécrite)", ->
+      status, _, _ = handle_rules_reorder make_req("POST", "order=1,x"), make_state!
+      assert.equals 400, status
+      loaded = (read_config CFG_PATH)
+      assert.equals "règle A", loaded.filter.rules[1].description
       assert.equals "règle B", loaded.filter.rules[2].description
 
     it "retourne 500 si config_path invalide", ->

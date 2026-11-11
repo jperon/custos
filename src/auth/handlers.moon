@@ -18,6 +18,7 @@ token = require "auth.token"
   :CRYPTO_JS, :LOGIN_JS, :REGISTER_JS } = require "auth.pages"
 H = require "auth.html"
 { :delete_rule_auth_sets, :refresh_nft } = require "auth.nft_auth_sets"
+{ :parse_form } = require "webui.util"
 
 SIGHUP = 1
 COOKIE_NAME = "custos_session"
@@ -38,18 +39,6 @@ signal_parent_reload = ->
 notify_reload = (state) ->
   fn = (state and state.notify_reload) or signal_parent_reload
   fn!
-
-url_decode = (s) ->
-  return "" unless s
-  s = s\gsub "+", " "
-  s\gsub "%%(%x%x)", (hex) -> string.char tonumber hex, 16
-
-parse_form = (body) ->
-  out = {}
-  return out unless body
-  for k, v in body\gmatch "([^&=]+)=([^&]*)"
-    out[url_decode k] = url_decode v
-  out
 
 register_form_page = (req) ->
   page {
@@ -444,7 +433,7 @@ handle_request = (req, peer_ip, peer_mac, state) ->
 
 {
   :make_session_cookie, :clear_session_cookie, :signal_parent_reload
-  :url_decode, :parse_form, :register_form_page, :register_success_page, :login_page
+  :parse_form, :register_form_page, :register_success_page, :login_page
   :handle_login, :handle_ping, :handle_logout, :handle_bye, :handle_register, :handle_request
   :handle_refusals, :handle_challenge, :handle_password_change
   :COOKIE_NAME
