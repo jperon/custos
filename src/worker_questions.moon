@@ -25,6 +25,7 @@ filter                   = require "filter"
 { :write_msg, :write_refused_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn, :log_debug, :log_info, :level_enabled, :set_action_prefix } = require "log"
+{ :tsv_field } = require "lib.tsv"
 { :user_for_mac } = require "auth.sessions"
 forge_dns = require "forge_dns"
 { detect: detect_captive_ips, :domain_from_url } = require "captive_ips"
@@ -140,9 +141,6 @@ write_learn_msg = (ip_raw, mac_raw) ->
 -- Helper : retourne la valeur sous forme de string, ou "-" si nil/vide.
 -- @tparam any v  Valeur à formater
 -- @treturn string Valeur formatée pour TSV
-tsv_field = (v) ->
-  s = if v ~= nil then tostring v else ""
-  if #s == 0 then "-" else s
 
 -- Extrait le nom de liste depuis un message de condition to_domainlist.
 -- Exemple attendu: "Domain matched in list 'toulouse/malware'".

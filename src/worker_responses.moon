@@ -33,6 +33,7 @@ clients_cfg = config.clients or {}
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix } = require "log"
+{ :tsv_field } = require "lib.tsv"
 { :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :strip_https_rr, :strip_dns_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
 strip_codec = require "strip_codec"
 mac_ipc     = require "mac_learner_ipc"
@@ -133,9 +134,6 @@ purge_strip_query_cache = (now_ts) ->
   for qname, entry in pairs strip_query_cache
     strip_query_cache[qname] = nil if now_ts > entry[2]
 
-tsv_field = (v) ->
-  s = if v ~= nil then tostring v else ""
-  if #s == 0 then "-" else s
 
 --- Formate une ligne d'événement « block » validateur (fonction pure).
 -- Même format que worker_questions.write_event : ts<TAB>decision<TAB>qname

@@ -20,6 +20,8 @@ do
   local _obj_0 = require("log")
   log_allow, log_block, log_info, log_warn, log_error, log_debug, set_action_prefix = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix
 end
+local tsv_field
+tsv_field = require("lib.tsv").tsv_field
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
 local ipparse_ip = require("ipparse.l3.ip")
@@ -480,20 +482,6 @@ format_ip = function(version, ip_raw)
     return "unknown"
   end
   return ipparse_ip.ip2s(ip_raw)
-end
-local tsv_field
-tsv_field = function(v)
-  local s
-  if v ~= nil then
-    s = tostring(v)
-  else
-    s = ""
-  end
-  if #s == 0 then
-    return "-"
-  else
-    return s
-  end
 end
 local write_sni_event
 write_sni_event = function(decision, fields)

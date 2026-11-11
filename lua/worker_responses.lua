@@ -45,6 +45,8 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_allow, _obj_0.log_block, _obj_0.now, _obj_0.set_action_prefix
 end
+local tsv_field
+tsv_field = require("lib.tsv").tsv_field
 local build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, strip_https_rr, strip_dns_rr, add_ede_modified, clear_ad_bit, patch_modified_dns
 do
   local _obj_0 = require("dns_ede")
@@ -133,20 +135,6 @@ purge_strip_query_cache = function(now_ts)
     if now_ts > entry[2] then
       strip_query_cache[qname] = nil
     end
-  end
-end
-local tsv_field
-tsv_field = function(v)
-  local s
-  if v ~= nil then
-    s = tostring(v)
-  else
-    s = ""
-  end
-  if #s == 0 then
-    return "-"
-  else
-    return s
   end
 end
 local format_block_event

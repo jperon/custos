@@ -39,6 +39,8 @@ do
   local _obj_0 = require("log")
   log_allow, log_block, log_warn, log_debug, log_info, level_enabled, set_action_prefix = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_info, _obj_0.level_enabled, _obj_0.set_action_prefix
 end
+local tsv_field
+tsv_field = require("lib.tsv").tsv_field
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
 local forge_dns = require("forge_dns")
@@ -153,20 +155,6 @@ write_learn_msg = function(ip_raw, mac_raw)
   end
   local n = libc.write(mac_learn_wfd, msg, 22)
   return n == 22
-end
-local tsv_field
-tsv_field = function(v)
-  local s
-  if v ~= nil then
-    s = tostring(v)
-  else
-    s = ""
-  end
-  if #s == 0 then
-    return "-"
-  else
-    return s
-  end
 end
 local list_from_condition_reason
 list_from_condition_reason = function(condition_reason)

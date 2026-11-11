@@ -8,6 +8,7 @@
 { :REJECT_MARK, :REJECT_MARK_HEX } = require "nft_marks"
 { :get_l2 } = require "nfq/ethernet"
 { :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
+{ :tsv_field } = require "lib.tsv"
 { :user_for_mac } = require "auth.sessions"
 
 -- ipparse modules for packet parsing and SNI extraction
@@ -400,9 +401,6 @@ format_ip = (version, ip_raw) ->
   return "unknown" if version == 4 and #ip_raw < 4
   ipparse_ip.ip2s ip_raw
 
-tsv_field = (v) ->
-  s = if v ~= nil then tostring v else ""
-  if #s == 0 then "-" else s
 
 write_sni_event = (decision, fields) ->
   return unless events_wfd
