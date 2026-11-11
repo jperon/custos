@@ -10,7 +10,8 @@ metrics_cfg = config.metrics or {}
 
 _metrics = {}
 _rule_order = {}
-_enabled = metrics_cfg.enabled or true
+-- `enabled` n'est désactivé que s'il vaut explicitement `false` (comme init).
+_enabled = metrics_cfg.enabled != false
 _max_rules = metrics_cfg.max_rules or 1000
 
 --- Ensure a rule entry exists in the metrics table.

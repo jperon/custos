@@ -2,7 +2,7 @@ local config = require("config")
 local metrics_cfg = config.metrics or { }
 local _metrics = { }
 local _rule_order = { }
-local _enabled = metrics_cfg.enabled or true
+local _enabled = metrics_cfg.enabled ~= false
 local _max_rules = metrics_cfg.max_rules or 1000
 local _ensure_rule_entry
 _ensure_rule_entry = function(rule_id)

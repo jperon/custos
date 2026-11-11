@@ -343,6 +343,47 @@ return describe("metrics", function()
       return assert.is_true(rule_ids["rule4"])
     end)
   end)
+  describe("chargement du module (config.metrics)", function()
+    local saved_metrics = nil
+    local saved_config = nil
+    before_each(function()
+      saved_metrics = package.loaded["metrics"]
+      saved_config = package.loaded["config"]
+    end)
+    after_each(function()
+      package.loaded["metrics"] = saved_metrics
+      package.loaded["config"] = saved_config
+    end)
+    it("honore metrics.enabled = false dès le chargement", function()
+      package.loaded["config"] = {
+        metrics = {
+          enabled = false
+        }
+      }
+      package.loaded["metrics"] = nil
+      local fresh = require("metrics")
+      fresh.record_verdict("rule1", "allow")
+      return assert.equals(0, #fresh.get_metrics_json().rules)
+    end)
+    it("reste actif quand metrics.enabled est absent", function()
+      package.loaded["config"] = { }
+      package.loaded["metrics"] = nil
+      local fresh = require("metrics")
+      fresh.record_verdict("rule1", "allow")
+      return assert.equals(1, #fresh.get_metrics_json().rules)
+    end)
+    return it("reste actif quand metrics.enabled = true", function()
+      package.loaded["config"] = {
+        metrics = {
+          enabled = true
+        }
+      }
+      package.loaded["metrics"] = nil
+      local fresh = require("metrics")
+      fresh.record_verdict("rule1", "allow")
+      return assert.equals(1, #fresh.get_metrics_json().rules)
+    end)
+  end)
   return describe("integration", function()
     it("tracks combined metrics for complex scenario", function()
       for i = 1, 10 do
