@@ -58,13 +58,13 @@ Tests : `tests/unit/doh/upstream_select_spec.moon`,
 
 `doh.upstream_doh.new_client` propose `h2,http/1.1`
 (`CLIENT_ALPN_PROTOCOLS`, `src/auth/ffi_wolfssl.moon`) sur l'objet SSL via
-`wolfSSL_UseALPN`, avec l'option `CONTINUE_ON_MISMATCH = 2` attendue par
-wolfSSL 5.x (`WOLFSSL_ALPN_CONTINUE_ON_MISMATCH_OPT`). Un serveur sans ALPN
-laisse le handshake se poursuivre. Le protocole réellement négocié est lu par
-`selected_alpn` (`wolfSSL_ALPN_GetProtocol` rend `WOLFSSL_SUCCESS = 1`) et
-stocké dans le handle (`alpn`, `h2`). Sans ALPN dans libwolfssl, ou si le
-serveur choisit `http/1.1`, `query` garde le chemin HTTP/1.1 existant,
-inchangé.
+`wolfSSL_UseALPN`, avec l'unique option `WOLFSSL_ALPN_CONTINUE_ON_MISMATCH =
+0x02` (attendue par wolfSSL 5.x ; `0x01` vaut `MATCH` et est refusée). Un
+serveur sans ALPN laisse le handshake se poursuivre. Le protocole réellement
+négocié est lu par `selected_alpn` (`wolfSSL_ALPN_GetProtocol` rend
+`WOLFSSL_SUCCESS = 1`) et stocké dans le handle (`alpn`, `h2`). Sans ALPN dans
+libwolfssl, ou si le serveur choisit `http/1.1`, `query` garde le chemin
+HTTP/1.1 existant, inchangé.
 
 Quand `h2` est vrai, `query` délègue à `query_h2` (`src/doh/upstream_doh.moon`) :
 préface client, SETTINGS, POST sur le flux impair 1 (`:method POST`,
@@ -73,7 +73,8 @@ préface client, SETTINGS, POST sur le flux impair 1 (`:method POST`,
 `SETTINGS_MAX_FRAME_SIZE` (16384). La lecture est bornée : `H2_MAX_FRAMES`,
 `H2_MAX_TOTAL_BYTES`, bloc d'en-têtes ≤ 65535, ≤ 64 CONTINUATION. HEADERS +
 CONTINUATION sont décodés par `doh.hpack` ; les SETTINGS et PING reçoivent un
-ACK ; chaque DATA reçue rend sa fenêtre (`WINDOW_UPDATE` connexion + flux) ;
+ACK ; chaque DATA intermédiaire rend sa fenêtre (`WINDOW_UPDATE` connexion +
+flux, sans effet sur la DATA END_STREAM dont la réponse est complète) ;
 `:status` 200 est exigé, le corps est plafonné par `MAX_DNS_BODY` et les
 trailers (HEADERS sans `:status`) sont ignorés. GOAWAY, RST_STREAM, trame
 tronquée, flux inattendu, second `:status` ou corps trop gros → erreur propre
@@ -88,8 +89,11 @@ aucune logique HPACK ni de trame n'est dupliquée.
 Tests : `tests/unit/doh/upstream_doh_h2_spec.moon` (faux TLS : réponse
 normale, CONTINUATION, trailers, statut ≠ 200, GOAWAY, RST_STREAM, corps trop
 gros, trame tronquée, PING et WINDOW_UPDATE, en-têtes de requête) et
-`tests/unit/doh/upstream_doh_alpn_spec.moon` (poignée de main wolfSSL réelle en
-boucle locale 127.0.0.1 avec certificat px5g dans `./tmp/` ; `pending` si ALPN
+`tests/unit/doh/upstream_doh_alpn_spec.moon` (vraie libwolfssl en boucle locale
+127.0.0.1 avec certificat px5g dans `./tmp/` : serveur configuré comme
+`worker_doh` ↔ client du repli, `get_alpn` vaut `h2` des deux côtés ; client
+n'offrant que `http/1.1` → `http/1.1` sans échec ; POST DoH HTTP/2 à travers
+`handle_doh_client`/`handle_h2` réels → 200 et réponse DNS ; `pending` si ALPN
 ou px5g manque).
 
 ### Serveur HTTP/2 : HPACK et routage DoH
@@ -124,13 +128,14 @@ ou px5g manque).
   (`alpn_protocols`) et `wrap` ne réapplique que si elle a changé. Aucun
   symbole ALPN → aucun changement de comportement ; les contextes client ne
   sont pas concernés (côté client, voir « Client HTTP/2 du repli wolfSSL »).
-  **État vérifié (2026-11-11)** : ces deux helpers serveur passent encore
-  l'option historique `WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x01`, refusée par
-  wolfSSL 5.x (`0x01` = `WOLFSSL_ALPN_MATCH`, `UseALPN` rend `BAD_FUNC_ARG`),
-  donc l'annonce serveur n'aboutit pas. Le chemin serveur est laissé inchangé
-  (hors périmètre) ; seul `selected_alpn` est corrigé (`WOLFSSL_SUCCESS = 1`),
-  ce dont dépend le client. Détail : `docs/agents/audits.md`
-  § « Client HTTP/2 du repli DoH ».
+  L'option passée est `WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x02` (wolfSSL 5.x
+  refuse `0x01`, qui vaut `WOLFSSL_ALPN_MATCH`) pour les trois helpers
+  contexte/objet/client ; un échec d'annonce alors que le symbole existe est
+  journalisé en `log_warn` (`alpn_ssl_failed`, `alpn_ctx_update_failed`,
+  `alpn_context_failed`). Après le handshake, `handle_doh_client` ne refuse
+  plus les connexions `h2` : la préface PRI est lue puis routée vers
+  `handle_h2`. Détail : `docs/agents/audits.md` § « Client HTTP/2 du repli
+  DoH ».
 
 Limites restantes, assumées :
 
