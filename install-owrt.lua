@@ -62,15 +62,30 @@ Installer = function(cfg)
       fh:close()
       return out
     end,
-    ssh_host = function(self)
-      if self.cfg.host:find(":") then
-        return "[" .. tostring(self.cfg.host) .. "]"
+    bare_host = function(self)
+      local h = tostring(self.cfg.host)
+      if h:sub(1, 1) == "[" and h:sub(-1) == "]" then
+        return h:sub(2, -2)
       else
-        return self.cfg.host
+        return h
       end
     end,
+    ssh_target = function(self)
+      return tostring(self.cfg.user) .. "@" .. tostring(self:bare_host())
+    end,
+    scp_host = function(self)
+      local h = self:bare_host()
+      if h:find(":", 1, true) then
+        return "[" .. tostring(h) .. "]"
+      else
+        return h
+      end
+    end,
+    scp_target = function(self)
+      return tostring(self.cfg.user) .. "@" .. tostring(self:scp_host())
+    end,
     ssh_prefix = function(self)
-      return "ssh -p " .. tostring(shell_quote(self.cfg.port)) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 " .. tostring(shell_quote(tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host())))
+      return "ssh -p " .. tostring(shell_quote(self.cfg.port)) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 " .. tostring(shell_quote(self:ssh_target()))
     end,
     ssh_run = function(self, cmd)
       return self:run(tostring(self:ssh_prefix()) .. " " .. tostring(shell_quote(cmd)))
@@ -79,7 +94,7 @@ Installer = function(cfg)
       return self:capture(tostring(self:ssh_prefix()) .. " " .. tostring(shell_quote(cmd)))
     end,
     scp_send = function(self, src, dst)
-      return self:run("scp -O -P " .. tostring(shell_quote(self.cfg.port)) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r " .. tostring(shell_quote(src)) .. " " .. tostring(shell_quote(tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":" .. tostring(dst))))
+      return self:run("scp -O -P " .. tostring(shell_quote(self.cfg.port)) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r " .. tostring(shell_quote(src)) .. " " .. tostring(shell_quote(tostring(self:scp_target()) .. ":" .. tostring(dst))))
     end,
     check_local_deps = function(self)
       step("Vérification des dépendances locales")
@@ -240,7 +255,7 @@ Installer = function(cfg)
         return false
       end
       info("  Envoi de l'archive → /tmp/")
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(archive) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/tmp/custos-lua.tar.gz")) then
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(archive) .. " " .. tostring(self:scp_target()) .. ":/tmp/custos-lua.tar.gz")) then
         fail("Échec du transfert de l'archive")
         return false
       end
@@ -292,7 +307,7 @@ Installer = function(cfg)
         io.write("  " .. tostring(CYAN) .. "DRY" .. tostring(NC) .. " scp manifest → routeur puis suppression des .lua absents du manifest\n")
         return true
       end
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(manifest_path) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/tmp/custos-manifest.txt")) then
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(manifest_path) .. " " .. tostring(self:scp_target()) .. ":/tmp/custos-manifest.txt")) then
         warn("Impossible d'envoyer le manifest — nettoyage ignoré")
         return true
       end
@@ -342,7 +357,7 @@ Installer = function(cfg)
       else
         io.write("  " .. tostring(CYAN) .. "DRY" .. tostring(NC) .. " adapt " .. tostring(init_src) .. " → " .. tostring(tmplocal) .. "\n")
       end
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/etc/init.d/custos")) then
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(tmplocal) .. " " .. tostring(self:scp_target()) .. ":/etc/init.d/custos")) then
         fail("Échec de la copie du script init.d")
         return false
       end
@@ -378,7 +393,7 @@ Installer = function(cfg)
             _continue_0 = true
             break
           end
-          if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(entry.src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":" .. tostring(entry.dst))) then
+          if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(entry.src) .. " " .. tostring(self:scp_target()) .. ":" .. tostring(entry.dst))) then
             fail("Echec de la copie de " .. tostring(entry.dst))
             return false
           end
@@ -500,7 +515,7 @@ Installer = function(cfg)
     install_updater = function(self)
       step("Script de mise à jour des listes (custos-update)")
       local src = "packaging/openwrt/custos/files/usr/sbin/custos-update"
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/usr/sbin/custos-update")) then
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(src) .. " " .. tostring(self:scp_target()) .. ":/usr/sbin/custos-update")) then
         fail("Échec de la copie de custos-update")
         return false
       end
@@ -517,7 +532,7 @@ Installer = function(cfg)
       step("Hotplug RPS/RFS/GRO (latence softirq)")
       local src = "packaging/openwrt/custos/files/etc/hotplug.d/net/30-custos-rps"
       self:ssh_run("mkdir -p /etc/hotplug.d/net")
-      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(src) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/etc/hotplug.d/net/30-custos-rps")) then
+      if not (self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(src) .. " " .. tostring(self:scp_target()) .. ":/etc/hotplug.d/net/30-custos-rps")) then
         fail("Échec de la copie du hotplug RPS")
         return false
       end
@@ -579,16 +594,47 @@ Exemple:
 ]])
   return os.exit(0)
 end
+local valid_ipv6
+valid_ipv6 = function(h)
+  if not (h:find(":", 1, true)) then
+    return false
+  end
+  if not (h:match("^[%x:%.]+$")) then
+    return false
+  end
+  if h:find(":::", 1, true) then
+    return false
+  end
+  if h:match("^:[^:]" or h:match("[^:]:$")) then
+    return false
+  end
+  return #h > 1
+end
 local valid_host
 valid_host = function(h)
-  return type(h) == "string" and h:match("^[%w%.%-:%[%]]+$")
+  if not (type(h) == "string") then
+    return false
+  end
+  local inner = h:match("^%[([^%[%]]+)%]$")
+  if inner then
+    return valid_ipv6(inner)
+  elseif h:find("[", 1, true) or h:find("]", 1, true) then
+    return false
+  elseif h:find(":", 1, true) then
+    return valid_ipv6(h)
+  else
+    return (h:match("^[%w%.%-]+$")) ~= nil
+  end
 end
 local valid_user
 valid_user = function(u)
   return type(u) == "string" and u:match("^[%w%._%-]+$")
 end
 local split_user_host
-split_user_host = function(s)
+split_user_host = function(s, opts)
+  if opts == nil then
+    opts = nil
+  end
   if not (type(s) == "string") then
     return nil, "Hôte invalide : " .. tostring(tostring(s))
   end
@@ -606,7 +652,10 @@ split_user_host = function(s)
   if host:find("@", 1, true) then
     return nil, "Hôte invalide : " .. tostring(s)
   end
-  if not (#user > 0 and valid_user(user)) then
+  if not (#user > 0) then
+    return nil, "Utilisateur invalide : " .. tostring(user)
+  end
+  if not (opts and opts.user_explicit) and not valid_user(user) then
     return nil, "Utilisateur invalide : " .. tostring(user)
   end
   if not (#host > 0 and valid_host(host)) then
@@ -679,7 +728,9 @@ parse_args = function(args)
     i = i + 1
   end
   if cfg.host then
-    local parsed, err = split_user_host(cfg.host)
+    local parsed, err = split_user_host(cfg.host, {
+      user_explicit = user_explicit
+    })
     if not (parsed) then
       return nil, err
     end
@@ -845,6 +896,7 @@ return {
   parse_args = parse_args,
   split_user_host = split_user_host,
   valid_host = valid_host,
+  valid_ipv6 = valid_ipv6,
   valid_user = valid_user,
   valid_dest = valid_dest,
   valid_port = valid_port,

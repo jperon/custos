@@ -68,12 +68,31 @@ Installer = (cfg) ->
       fh\close!
       out
 
-    -- Retourne le host entre crochets si IPv6 littéral (contient ':'), sinon tel quel.
-    ssh_host: =>
-      if @cfg.host\find ":"
-        "[#{@cfg.host}]"
+    -- Hôte nu, sans crochets. `ssh` ne résout jamais un littéral entre
+    -- crochets (`ssh root@[::1]` échoue : « Could not resolve hostname »),
+    -- alors que la config peut le porter (`root@[::1]`, `[::1]`). Idempotent :
+    -- `[::1]` comme `::1` donnent `::1`.
+    bare_host: =>
+      h = tostring @cfg.host
+      if h\sub(1, 1) == "[" and h\sub(-1) == "]"
+        h\sub 2, -2
       else
-        @cfg.host
+        h
+
+    -- Cible ssh : utilisateur@hôte SANS crochets (ssh ne les accepte pas).
+    ssh_target: => "#{@cfg.user}@#{@bare_host!}"
+
+    -- Cible scp : crochets obligatoires pour un IPv6 littéral (sinon scp lit le
+    -- premier `:` comme séparateur hôte:chemin). Un seul enveloppement, même si
+    -- l'hôte était déjà crocheté.
+    scp_host: =>
+      h = @bare_host!
+      if h\find ":", 1, true
+        "[#{h}]"
+      else
+        h
+
+    scp_target: => "#{@cfg.user}@#{@scp_host!}"
 
     -- Utilitaires SSH / SCP
     ssh_prefix: =>
@@ -87,7 +106,7 @@ Installer = (cfg) ->
       -- crash-loop arp/captive ENODEV). LogLevel=ERROR supprime ce bandeau
       -- sans rien changer côté vérification de clé (StrictHostKeyChecking=no
       -- reste inchangé).
-      "ssh -p #{shell_quote @cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 #{shell_quote "#{@cfg.user}@#{@ssh_host!}"}"
+      "ssh -p #{shell_quote @cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 #{shell_quote @ssh_target!}"
 
     ssh_run: (cmd) =>
       @run "#{ @ssh_prefix! } #{shell_quote cmd}"
@@ -96,7 +115,7 @@ Installer = (cfg) ->
       @capture "#{ @ssh_prefix! } #{shell_quote cmd}"
 
     scp_send: (src, dst) =>
-      @run "scp -O -P #{shell_quote @cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r #{shell_quote src} #{shell_quote "#{@cfg.user}@#{@ssh_host!}:#{dst}"}"
+      @run "scp -O -P #{shell_quote @cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r #{shell_quote src} #{shell_quote "#{@scp_target!}:#{dst}"}"
 
     -- ── Étapes d'installation ────────────────────────────────────────
 
@@ -224,7 +243,7 @@ Installer = (cfg) ->
         return false
 
       info "  Envoi de l'archive → /tmp/"
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{archive} #{@cfg.user}@#{@ssh_host!}:/tmp/custos-lua.tar.gz"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{archive} #{@scp_target!}:/tmp/custos-lua.tar.gz"
         fail "Échec du transfert de l'archive"
         return false
 
@@ -279,7 +298,7 @@ Installer = (cfg) ->
         io.write "  #{CYAN}DRY#{NC} scp manifest → routeur puis suppression des .lua absents du manifest\n"
         return true
 
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{manifest_path} #{@cfg.user}@#{@ssh_host!}:/tmp/custos-manifest.txt"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{manifest_path} #{@scp_target!}:/tmp/custos-manifest.txt"
         warn "Impossible d'envoyer le manifest — nettoyage ignoré"
         return true
 
@@ -329,7 +348,7 @@ Installer = (cfg) ->
       else
         io.write "  #{CYAN}DRY#{NC} adapt #{init_src} → #{tmplocal}\n"
 
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/etc/init.d/custos"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{tmplocal} #{@scp_target!}:/etc/init.d/custos"
         fail "Échec de la copie du script init.d"
         return false
 
@@ -355,7 +374,7 @@ Installer = (cfg) ->
         if exists and exists\find "yes"
           warn "#{entry.dst} existe deja -- fichier preserve"
           continue
-        unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{entry.src} #{@cfg.user}@#{@ssh_host!}:#{entry.dst}"
+        unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{entry.src} #{@scp_target!}:#{entry.dst}"
           fail "Echec de la copie de #{entry.dst}"
           return false
         @ssh_run "chmod 600 #{entry.dst}"
@@ -469,7 +488,7 @@ Installer = (cfg) ->
       -- Le script canonique (téléchargement des releases custos-lists) est versionné
       -- dans le paquet OpenWrt ; on le copie tel quel, sans substitution.
       src = "packaging/openwrt/custos/files/usr/sbin/custos-update"
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{src} #{@cfg.user}@#{@ssh_host!}:/usr/sbin/custos-update"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{src} #{@scp_target!}:/usr/sbin/custos-update"
         fail "Échec de la copie de custos-update"
         return false
       unless @ssh_run "chmod +x /usr/sbin/custos-update"
@@ -492,7 +511,7 @@ Installer = (cfg) ->
       step "Hotplug RPS/RFS/GRO (latence softirq)"
       src = "packaging/openwrt/custos/files/etc/hotplug.d/net/30-custos-rps"
       @ssh_run "mkdir -p /etc/hotplug.d/net"
-      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{src} #{@cfg.user}@#{@ssh_host!}:/etc/hotplug.d/net/30-custos-rps"
+      unless @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{src} #{@scp_target!}:/etc/hotplug.d/net/30-custos-rps"
         fail "Échec de la copie du hotplug RPS"
         return false
       unless @ssh_run "chmod +x /etc/hotplug.d/net/30-custos-rps"
@@ -563,8 +582,31 @@ Exemple:
 ]]
   os.exit 0
 
---- Valide l'hôte : hostname, IPv4 ou IPv6 littéral entre crochets.
-valid_host = (h) -> type(h) == "string" and h\match "^[%w%.%-:%[%]]+$"
+--- Vrai si `h` a une forme d'IPv6 littéral plausible (n° de groupe et `::`).
+-- Rejette les dégénérescences (`:::`, `:` seul, plus de deux `:` consécutifs).
+valid_ipv6 = (h) ->
+  return false unless h\find ":", 1, true
+  return false unless h\match "^[%x:%.]+$"
+  return false if h\find ":::", 1, true
+  -- Un seul `:` en tête ou en queue n'est valide que sous la forme `::`.
+  return false if h\match "^:[^:]" or h\match "[^:]:$"
+  #h > 1
+
+--- Valide l'hôte : hostname, IPv4 ou IPv6 littéral (nu ou entre crochets).
+-- Deux formes seulement : `[<ipv6>]` ou un jeton sans crochet. Les crochets ne
+-- sont donc admis qu'autour d'une IPv6 (`a]b`, `[[::1]]` sont rejetés) et un
+-- hôte nu n'est IPv6 que s'il contient `:` (un hostname garde son alphabet).
+valid_host = (h) ->
+  return false unless type(h) == "string"
+  inner = h\match "^%[([^%[%]]+)%]$"
+  if inner
+    valid_ipv6 inner
+  elseif h\find("[", 1, true) or h\find("]", 1, true)
+    false
+  elseif h\find ":", 1, true
+    valid_ipv6 h
+  else
+    (h\match "^[%w%.%-]+$") != nil
 
 --- Valide l'utilisateur SSH (identique à ce qu'acceptent les comptes Unix).
 valid_user = (u) -> type(u) == "string" and u\match "^[%w%._%-]+$"
@@ -574,9 +616,12 @@ valid_user = (u) -> type(u) == "string" and u\match "^[%w%._%-]+$"
 -- l'hôte par valid_host. Aucune des deux validations n'est relâchée : les deux
 -- valeurs finissent dans une commande ssh/scp.
 -- @tparam string s argument brut
+-- @tparam[opt] table opts `{ user_explicit: true }` : la partie utilisateur de
+--   l'argument est ignorée (elle ne sert pas) et n'est donc pas validée ; elle
+--   doit rester non vide (`@host` reste une faute de frappe).
 -- @treturn table|nil `{ user?, host }` (user absent si pas de `@`)
 -- @treturn ?string message d'erreur
-split_user_host = (s) ->
+split_user_host = (s, opts=nil) ->
   unless type(s) == "string"
     return nil, "Hôte invalide : #{tostring s}"
   at = s\find "@", 1, true
@@ -587,7 +632,9 @@ split_user_host = (s) ->
   host = s\sub at + 1
   -- Un second `@` rend l'hôte ambigu (a@b@c) : rejet, jamais deviné.
   return nil, "Hôte invalide : #{s}" if host\find "@", 1, true
-  unless #user > 0 and valid_user user
+  unless #user > 0
+    return nil, "Utilisateur invalide : #{user}"
+  if not (opts and opts.user_explicit) and not valid_user user
     return nil, "Utilisateur invalide : #{user}"
   unless #host > 0 and valid_host host
     return nil, "Hôte invalide : #{s}"
@@ -655,7 +702,7 @@ parse_args = (args) ->
     i += 1
 
   if cfg.host
-    parsed, err = split_user_host cfg.host
+    parsed, err = split_user_host cfg.host, { :user_explicit }
     return nil, err unless parsed
     -- --user explicite prime sur la partie utilisateur de `utilisateur@hôte`.
     cfg.user = parsed.user if parsed.user and not user_explicit
@@ -732,4 +779,4 @@ main = ->
 script_name = arg and arg[0] or ""
 main! if script_name\match "install%-owrt"
 
-{ :Installer, :main, :parse_args, :split_user_host, :valid_host, :valid_user, :valid_dest, :valid_port, :shell_quote }
+{ :Installer, :main, :parse_args, :split_user_host, :valid_host, :valid_ipv6, :valid_user, :valid_dest, :valid_port, :shell_quote }
