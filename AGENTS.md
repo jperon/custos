@@ -918,3 +918,8 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `# custos-update-lists`, planification UCI `update_lists_schedule`, défaut
   `0 3 * * *`). Source unique retenue : `init.d/custos` ; l'installeur ne fait
   plus qu'activer/relancer cron et le message « lundi 4h » (faux) est corrigé.
+- **`sync/custos-sync-push.sh` : `cp`/`git add` non vérifiés.** Un échec de
+  copie ou d'indexation était silencieux puis rapporté « aucun changement à
+  publier » par le `git diff --cached --quiet` suivant. Chaque étape
+  (`mkdir`, `cp`, `git add`) vérifie désormais son code de retour et sort en
+  erreur avec un message sur stderr.
