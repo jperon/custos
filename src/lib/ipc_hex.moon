@@ -53,6 +53,21 @@ split_fields = (line) ->
       break
   out
 
+--- Vrai si la chaîne a la forme d'une adresse IPv4 pointée.
+-- @tparam string s Adresse textuelle
+-- @treturn boolean
+is_ipv4_str = (s) -> s and s\match "^%d+%.%d+%.%d+%.%d+$"
+
+--- Vrai si la chaîne ressemble à une adresse IPv6 (présence de ":").
+-- @tparam string s Adresse textuelle
+-- @treturn boolean
+is_ipv6_str = (s) -> s and s\find ":", 1, true
+
+--- Vrai si la chaîne a la forme aa:bb:cc:dd:ee:ff.
+-- @tparam string s Adresse MAC textuelle
+-- @treturn boolean
+is_valid_mac = (s) -> s and s\match "^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$"
+
 --- Valide un timeout nftables (ex. "30s", "2m", "1h", "5d", "1w", "60").
 -- @tparam string t Valeur de timeout
 -- @treturn boolean true si la valeur est acceptée par nft
@@ -61,4 +76,5 @@ is_valid_timeout = (t) ->
   return false unless #t > 0 and #t <= 16
   t\match("^%d+[smhdw]?$") ~= nil
 
-{ :encode_ip16, :to_hex, :from_hex, :split_fields, :is_valid_timeout }
+{ :encode_ip16, :to_hex, :from_hex, :split_fields, :is_valid_timeout,
+  :is_ipv4_str, :is_ipv6_str, :is_valid_mac }

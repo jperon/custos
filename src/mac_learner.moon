@@ -31,6 +31,7 @@ config = require "config"
 { :mac2s } = require "packet_utils"
 { :purge_pending } = require "ipc"
 ttl_set = require "lib.ttl_set"
+{ :shquote } = require "lib.shquote"
 mac_cfg = config.mac_learner or {}
 auth_cfg = config.auth or {}
 
@@ -65,13 +66,10 @@ set_recv_timeout = (fd, secs) ->
     tv.tv_usec = math.floor (secs - math.floor(secs)) * 1e6
     libc.setsockopt fd, SOL_SOCKET, SO_RCVTIMEO, tv, ffi.sizeof tv
 
-sh_quote = (s) ->
-  "'" .. tostring(s)\gsub("'", "'\"'\"'") .. "'"
-
 ensure_parent_dir = (path) ->
   parent = tostring(path)\match "^(.*)/[^/]+$"
   return true unless parent and parent != ""
-  ret = os.execute "mkdir -p #{sh_quote(parent)}"
+  ret = os.execute "mkdir -p #{shquote parent}"
   ret == 0 or ret == true
 
 --- Répond "unknown\n" à un client et ferme sa connexion.
@@ -182,17 +180,23 @@ process_vlan_learn = (msg) ->
   ip_str = ip16_to_str ip16
   vlan_table[ip_str] = { vlan, os.time! + (mac_cfg.entry_ttl or 300) }
 
---- Recherche le VLAN observé pour une IP (helper de test + requête socket).
--- @tparam string ip_str Adresse IP textuelle
--- @treturn number|nil VLAN ID (0 = untagged) si entrée valide, nil sinon
-vlan_lookup = (ip_str) ->
-  entry = vlan_table[ip_str]
+--- Lecture d'une entrée { valeur, expires_epoch } avec purge paresseuse.
+-- @tparam table tbl Table indexée (vlan_table, strip_table)
+-- @tparam string key Clé
+-- @treturn any|nil Valeur si l'entrée n'est pas expirée, nil sinon
+expiring_lookup = (tbl, key) ->
+  entry = tbl[key]
   return nil unless entry
   if os.time! <= entry[2]
     entry[1]
   else
-    vlan_table[ip_str] = nil
+    tbl[key] = nil
     nil
+
+--- Recherche le VLAN observé pour une IP (helper de test + requête socket).
+-- @tparam string ip_str Adresse IP textuelle
+-- @treturn number|nil VLAN ID (0 = untagged) si entrée valide, nil sinon
+vlan_lookup = (ip_str) -> expiring_lookup vlan_table, ip_str
 
 -- ── Apprentissage des cibles de strip CNAME (worker_responses) ───
 
@@ -207,14 +211,7 @@ process_strip_learn = (msg) ->
 -- @tparam string name Nom de domaine (insensible à la casse)
 -- @treturn number|nil code DNS du type à stripper, ou nil si non cible/expiré.
 strip_lookup = (name) ->
-  hash8 = strip_codec.name_hash name
-  entry = strip_table[hash8]
-  return nil unless entry
-  if os.time! <= entry[2]
-    entry[1]
-  else
-    strip_table[hash8] = nil
-    nil
+  expiring_lookup strip_table, strip_codec.name_hash name
 
 -- ── Expiration des probes en attente ─────────────────────────────
 

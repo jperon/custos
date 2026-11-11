@@ -6,10 +6,10 @@ end
 local config = require("config")
 local log_warn
 log_warn = require("log").log_warn
-local to_hex, from_hex, split_fields, is_valid_timeout
+local to_hex, from_hex, split_fields, is_valid_timeout, is_ipv4_str, is_ipv6_str, is_valid_mac
 do
   local _obj_0 = require("lib.ipc_hex")
-  to_hex, from_hex, split_fields, is_valid_timeout = _obj_0.to_hex, _obj_0.from_hex, _obj_0.split_fields, _obj_0.is_valid_timeout
+  to_hex, from_hex, split_fields, is_valid_timeout, is_ipv4_str, is_ipv6_str, is_valid_mac = _obj_0.to_hex, _obj_0.from_hex, _obj_0.split_fields, _obj_0.is_valid_timeout, _obj_0.is_ipv4_str, _obj_0.is_ipv6_str, _obj_0.is_valid_mac
 end
 local bit = require("bit")
 local runtime_cfg = config.runtime or { }
@@ -105,18 +105,6 @@ ip_raw_to_str = function(ip_raw)
     return nil
   end
   return ip2s(ip_raw)
-end
-local is_ipv4_str
-is_ipv4_str = function(s)
-  return s and s:match("^%d+%.%d+%.%d+%.%d+$")
-end
-local is_ipv6_str
-is_ipv6_str = function(s)
-  return s and s:find(":", 1, true)
-end
-local is_valid_mac
-is_valid_mac = function(s)
-  return s and s:match("^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$")
 end
 local msg_type_for
 msg_type_for = function(ipv4, refused)

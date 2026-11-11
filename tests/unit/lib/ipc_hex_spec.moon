@@ -1,7 +1,8 @@
 -- tests/unit/lib/ipc_hex_spec.moon
 -- Helpers de format IPC partagés (émetteur ipc / récepteurs worker_nft, nft_queue).
 
-{ :encode_ip16, :to_hex, :from_hex, :split_fields, :is_valid_timeout } = require "lib.ipc_hex"
+{ :encode_ip16, :to_hex, :from_hex, :split_fields, :is_valid_timeout,
+  :is_ipv4_str, :is_ipv6_str, :is_valid_mac } = require "lib.ipc_hex"
 
 describe "lib.ipc_hex", ->
 
@@ -57,6 +58,25 @@ describe "lib.ipc_hex", ->
 
     it "renvoie un seul champ sans séparateur", ->
       assert.same { "seul" }, split_fields "seul"
+
+  describe "validateurs IPC", ->
+    it "is_ipv4_str accepte une IPv4 pointée et rejette le reste", ->
+      assert.is_truthy is_ipv4_str "192.168.1.42"
+      assert.is_falsy is_ipv4_str "192.168.1"
+      assert.is_falsy is_ipv4_str "2001:db8::1"
+      assert.is_falsy is_ipv4_str nil
+
+    it "is_ipv6_str détecte la présence de ':'", ->
+      assert.is_truthy is_ipv6_str "2001:db8::1"
+      assert.is_falsy is_ipv6_str "192.168.1.42"
+      assert.is_falsy is_ipv6_str nil
+
+    it "is_valid_mac accepte aa:bb:cc:dd:ee:ff et rejette le reste", ->
+      assert.is_truthy is_valid_mac "aa:bb:cc:dd:ee:ff"
+      assert.is_truthy is_valid_mac "AA:BB:CC:DD:EE:FF"
+      assert.is_falsy is_valid_mac "aa:bb:cc:dd:ee"
+      assert.is_falsy is_valid_mac "aa-bb-cc-dd-ee-ff"
+      assert.is_falsy is_valid_mac nil
 
   describe "is_valid_timeout", ->
     it "accepte un nombre nu et les suffixes nftables", ->

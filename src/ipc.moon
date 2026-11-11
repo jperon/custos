@@ -12,7 +12,8 @@
 { :ffi, :libc } = require "ffi_defs"
 config = require "config"
 { :log_warn } = require "log"
-{ :to_hex, :from_hex, :split_fields, :is_valid_timeout } = require "lib.ipc_hex"
+{ :to_hex, :from_hex, :split_fields, :is_valid_timeout,
+  :is_ipv4_str, :is_ipv6_str, :is_valid_mac } = require "lib.ipc_hex"
 
 bit = require "bit"
 
@@ -99,9 +100,6 @@ ip_raw_to_str = (ip_raw) ->
   return nil unless ip_raw and (#ip_raw == 4 or #ip_raw == 16)
   ip2s ip_raw
 
-is_ipv4_str    = (s) -> s and s\match "^%d+%.%d+%.%d+%.%d+$"
-is_ipv6_str    = (s) -> s and s\find ":", 1, true
-is_valid_mac   = (s) -> s and s\match "^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$"
 msg_type_for = (ipv4, refused) ->
   if ipv4
     return MSG_IPV4_REFUSED if refused

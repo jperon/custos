@@ -53,6 +53,18 @@ split_fields = function(line)
   end
   return out
 end
+local is_ipv4_str
+is_ipv4_str = function(s)
+  return s and s:match("^%d+%.%d+%.%d+%.%d+$")
+end
+local is_ipv6_str
+is_ipv6_str = function(s)
+  return s and s:find(":", 1, true)
+end
+local is_valid_mac
+is_valid_mac = function(s)
+  return s and s:match("^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$")
+end
 local is_valid_timeout
 is_valid_timeout = function(t)
   if not (type(t) == "string") then
@@ -68,5 +80,8 @@ return {
   to_hex = to_hex,
   from_hex = from_hex,
   split_fields = split_fields,
-  is_valid_timeout = is_valid_timeout
+  is_valid_timeout = is_valid_timeout,
+  is_ipv4_str = is_ipv4_str,
+  is_ipv6_str = is_ipv6_str,
+  is_valid_mac = is_valid_mac
 }

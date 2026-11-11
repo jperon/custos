@@ -20,6 +20,8 @@ mac2s = require("packet_utils").mac2s
 local purge_pending
 purge_pending = require("ipc").purge_pending
 local ttl_set = require("lib.ttl_set")
+local shquote
+shquote = require("lib.shquote").shquote
 local mac_cfg = config.mac_learner or { }
 local auth_cfg = config.auth or { }
 local PROBE_TIMEOUT_MS = 200
@@ -41,17 +43,13 @@ set_recv_timeout = function(fd, secs)
     return libc.setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, tv, ffi.sizeof(tv))
   end)
 end
-local sh_quote
-sh_quote = function(s)
-  return "'" .. tostring(s):gsub("'", "'\"'\"'") .. "'"
-end
 local ensure_parent_dir
 ensure_parent_dir = function(path)
   local parent = tostring(path):match("^(.*)/[^/]+$")
   if not (parent and parent ~= "") then
     return true
   end
-  local ret = os.execute("mkdir -p " .. tostring(sh_quote(parent)))
+  local ret = os.execute("mkdir -p " .. tostring(shquote(parent)))
   return ret == 0 or ret == true
 end
 local reply_unknown
@@ -147,18 +145,22 @@ process_vlan_learn = function(msg)
     os.time() + (mac_cfg.entry_ttl or 300)
   }
 end
-local vlan_lookup
-vlan_lookup = function(ip_str)
-  local entry = vlan_table[ip_str]
+local expiring_lookup
+expiring_lookup = function(tbl, key)
+  local entry = tbl[key]
   if not (entry) then
     return nil
   end
   if os.time() <= entry[2] then
     return entry[1]
   else
-    vlan_table[ip_str] = nil
+    tbl[key] = nil
     return nil
   end
+end
+local vlan_lookup
+vlan_lookup = function(ip_str)
+  return expiring_lookup(vlan_table, ip_str)
 end
 local process_strip_learn
 process_strip_learn = function(msg)
@@ -173,17 +175,7 @@ process_strip_learn = function(msg)
 end
 local strip_lookup
 strip_lookup = function(name)
-  local hash8 = strip_codec.name_hash(name)
-  local entry = strip_table[hash8]
-  if not (entry) then
-    return nil
-  end
-  if os.time() <= entry[2] then
-    return entry[1]
-  else
-    strip_table[hash8] = nil
-    return nil
-  end
+  return expiring_lookup(strip_table, strip_codec.name_hash(name))
 end
 local expire_pending
 expire_pending = function()
