@@ -17,7 +17,7 @@
 | `make test-unit` | aucun | Sous-ensemble Busted sans dépendances FFI (CI rapide). |
 | `make test-ffi` | wolfssl + libsocket | Tests FFI socket / WolfSSL / intégration TLS. |
 | `make coverage` | aucun | `make test` + rapport luacov dans `tmp/coverage/`. |
-| `make check` | aucun | Vérification syntaxique des `.lua` compilés. **Bloquante** : `exit 1` si au moins un fichier ne se charge pas (rapport complet affiché). |
+| `make check` | aucun | Vérification syntaxique des `.lua` compilés **et** contrôle des lectures de globales non déclarées (`tools/check_globals.sh`). **Bloquante** : `exit 1` si au moins un fichier ne se charge pas (rapport complet affiché) ou si une globale inconnue est lue. |
 | `make bench` | aucun | Micro-bench in-process (ns/op + KB) des hot-paths. Cf. [src/bench/README.md](../src/bench/README.md). |
 | `make bench-load TARGET=host[:port]` | un résolveur DNS joignable | Charge DNS bout-en-bout (QPS, latences p50/p95/p99, pertes). Variables : `DURATION`, `RATE`, `DOMAINS`, `ITERS`, `SAVE_BASELINE`. |
 | `make test-openwrt HOST=root@<host>` | SSH + OpenWrt avec LuaJIT + nftables | Déploie les fichiers Lua + règles nft via `scp`, démarre les workers via `logger -t custos`, puis lance les vérifications DNS/auth depuis la machine locale. |
@@ -74,6 +74,33 @@ pas destiné à LuaJIT : `lua/ipparse/examples/`, `lua/ipparse/tests/` et
 `lua/ipparse/lib/bit53.lua` (syntaxe Lua 5.3 `&`/`|`/`<<` que LuaJIT 5.1 ne
 parse pas). Ces fichiers ne font pas partie du runtime déployé ; les inclure
 laissait `check` rouge en permanence sur du code amont non modifiable.
+
+### Contrôle des globales non déclarées (`tools/check_globals.sh`)
+
+MoonScript rend **locale au bloc** toute variable assignée dans un bloc (boucle,
+`if`, `pcall`…). Lue ensuite hors de ce bloc — ou hors de la fonction qui
+l'assigne — elle compile en **lecture de globale**, donc en `nil`, sans aucune
+erreur de compilation. C'est un piège silencieux : le code se charge, les tests
+passent, et seule une valeur manquante à l'exécution le révèle (voir
+`docs/agents/audits.md`, § « Globales nil »).
+
+`make check` exécute donc, après la vérification syntaxique,
+`tools/check_globals.sh` (code retour non nul si une globale inconnue est lue) :
+
+- le script liste le bytecode de chaque `.lua` compilé (`luajit -bl`) et relève
+  les instructions `GGET` (lecture de globale), y compris dans les fonctions
+  imbriquées ;
+- une **liste blanche explicite** couvre la base Lua 5.1, les bibliothèques
+  standard, les globales LuaJIT (`bit`, `jit`) et `arg`. `ffi` n'y est
+  volontairement pas : LuaJIT ne l'expose pas en globale, donc un fichier qui
+  lit `ffi` sans le requérir est bien signalé ;
+- périmètre : tout `lua/**.lua` sauf `lua/ipparse/` (sous-module moontastik,
+  code amont) et `lua/moonscript/`, `lua/moon/` (runtime embarqué) ;
+- usage ciblé : `tools/check_globals.sh lua/worker_tls.lua` pour un seul
+  fichier ; durée ≈ 2 s sur l'ensemble.
+
+Toute nouvelle globale légitime doit être ajoutée **explicitement** à
+`STANDARD_GLOBALS` dans le script, avec sa justification.
 
 ### Connexion libvirt et clé SSH du homelab
 
