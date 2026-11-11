@@ -104,7 +104,7 @@ RL_IDENTITY_KEYS = {
   "bridge", "captive_ip4", "captive_ip6", "cert", "cert_cache", "cert_file"
   "cert_type", "client", "client_ip", "client_mac", "closed", "cmd"
   "cn", "cname_target", "condition", "configured", "cseq_method", "ct", "custom_url"
-  "dir", "direction", "dnsonly", "domain", "dst", "dst_ip", "env_path"
+  "dir", "direction", "dnsonly", "domain", "dst", "dst_ip", "enabled", "env_path"
   "err", "errno", "events_dir", "exit_code", "external_loaded", "fallback"
   "fallback_builtin", "families", "family", "file", "filter_reason", "frame_mac", "handle"
   "handshake_done"
@@ -122,7 +122,7 @@ RL_IDENTITY_KEYS = {
   "redirect_url4", "redirect_url6", "refused", "refused_kept", "refused_new", "reject_mark"
   "resolver", "resolver_ip", "resolvers", "resolution", "response"
   "ret", "retry_budget_skipped", "rl_shared", "rule", "rule_id", "rule_kept", "rule_new", "rules"
-  "selected", "selected_mac", "sessions_file", "sip_method", "sip_status", "slots", "sni", "source"
+  "section", "selected", "selected_mac", "sessions_file", "sip_method", "sip_status", "slots", "sni", "source"
   "src", "src_ip", "ssl_err", "status", "target", "tlla", "transient"
   "type", "upstream_ip", "upstream_port", "url", "user", "username"
   "verdict", "verify_tls", "version", "vlan", "worker", "worker_idx"
@@ -180,6 +180,10 @@ RL_CONFIG = {
   server_login_nonce_rejected:   { keys: {"ip", "user", "err"}, window: 60 }
   server_login_plaintext_refused: { keys: {"ip", "user"},       window: 60 }
   server_login_mac_missing:      { keys: {"ip", "mac"},         window: 60 }
+  -- Audit de l'interface admin : une tentative refusée (non admin,
+  -- validation, conflit) est bornée par client et par raison ; les
+  -- modifications elles-mêmes sont dans RL_NEVER_LIMIT ci-dessous.
+  webui_change_refused:          { keys: {"peer", "reason"},    window: 60 }
   EMERG:              { keys: RL_IDENTITY_KEYS,              window: 10  }
   ALERT:              { keys: RL_IDENTITY_KEYS,              window: 10  }
   CRIT:               { keys: RL_IDENTITY_KEYS,              window: 10  }
@@ -247,6 +251,32 @@ RL_NEVER_LIMIT = {
   server_ping_session_invalidated: true
   user_session_expired:        true
   user_session_removed:        true
+  -- Audit des modifications faites depuis l'interface d'admin (webui) :
+  -- jamais supprimées, même sous rafale (une modification d'état ne doit pas
+  -- disparaître derrière une fenêtre). Les refus sont, eux, limités par
+  -- (peer, reason) via RL_CONFIG (`webui_change_refused`). L'audit webui
+  -- efface le préfixe `auth_` dans son enfant AUTH-conn (webui/audit.moon),
+  -- donc ces actions sont émises telles quelles.
+  webui_config_saved:          true
+  webui_nets_saved:            true
+  webui_nets_deleted:          true
+  webui_macs_saved:            true
+  webui_macs_deleted:          true
+  webui_users_saved:           true
+  webui_users_deleted:         true
+  webui_times_saved:           true
+  webui_times_deleted:         true
+  webui_decision_saved:        true
+  webui_rule_saved:            true
+  webui_rule_deleted:          true
+  webui_rule_toggled:          true
+  webui_rule_moved:            true
+  webui_rules_reordered:       true
+  webui_list_saved:            true
+  webui_list_deleted:          true
+  webui_list_renamed:          true
+  webui_device_saved:          true
+  webui_reload_requested:      true
 }
 
 -- ── État partagé entre processus ──────────────────────────────────
