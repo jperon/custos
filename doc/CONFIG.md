@@ -605,8 +605,11 @@ les workers ; chaque worker écrit immédiatement un instantané à zéro après
 `init` (y compris après un redémarrage), puis toutes les `flush_interval`
 secondes. L'écriture est atomique (fichier temporaire + `os.rename`) et n'a
 lieu que dans le worker concerné, jamais dans le chemin par paquet : l'horloge
-n'est lue qu'une fois tous les 32 paquets, avec en plus un point de passage
-périodique sans paquet dans `run_queue` (`opts.idle_ms`). La page admin en
+n'est lue qu'au point de passage `on_idle` de `run_queue` (poll
+`opts.idle_ms = 1000`), une fois par tour de boucle, indépendamment du trafic
+(et à chaque expiration du poll). Aucun compteur de paquets n'intervient : un
+`read` netlink peut livrer plusieurs messages NFQUEUE sans nouveau passage.
+La page admin en
 lecture seule `/admin/metrics` agrège **tous** les instantanés valides de
 l'exécution courante ; l'âge de chacun est affiché à titre d'information, sans
 exclusion des totaux (voir [docs/agents/webui.md](../docs/agents/webui.md)).
