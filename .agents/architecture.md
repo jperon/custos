@@ -137,7 +137,7 @@ incrémentale (`try_add_pending`) plutôt que recalculé par `pairs` à chaque t
 
 | Chemin | Rôle | Lecteurs |
 |--------|------|---------|
-| `/etc/config.moon` | Config runtime hiérarchique (filter/auth/dns/nft, etc.) | `src/config.moon` puis consommateurs |
+| `/etc/custos/config.moon` | Config runtime hiérarchique (filter/auth/dns/nft, etc.) — chemin par défaut `DEFAULT_CONFIG_PATH` de `src/config.moon`, surchargé par `CUSTOS_CONFIG_PATH` (init.d du paquet) | `src/config.moon` puis consommateurs |
 | `/etc/config/custos` | UCI OpenWrt plateforme (enabled, cron update-lists) | init script OpenWrt |
 | `/etc/custos/secrets` | Identifiants utilisateurs | `auth/worker` (rechargé sur SIGHUP) |
 | `<sessions_file>` (défaut `tmp/sessions.lua`) | Sessions MAC (atomique rename) | écrit par AUTH, lu par workers question/response/captive |
