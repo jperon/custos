@@ -29,6 +29,7 @@ do
   local _obj_0 = require("auth.pages")
   page, success_page, css_content, password_page, password_changed_page, CRYPTO_JS, LOGIN_JS, REGISTER_JS = _obj_0.page, _obj_0.success_page, _obj_0.css_content, _obj_0.password_page, _obj_0.password_changed_page, _obj_0.CRYPTO_JS, _obj_0.LOGIN_JS, _obj_0.REGISTER_JS
 end
+local rate_limit = require("auth.rate_limit")
 local H = require("auth.html")
 local delete_rule_auth_sets, refresh_nft
 do
@@ -462,6 +463,52 @@ handle_refusals = function(req, peer_ip, peer_mac, state)
 end
 local handle_register
 handle_register = function(req, peer_ip, peer_mac, state)
+  local cfg = state.auth_cfg or { }
+  local limit = tonumber(cfg.register_rate_limit)
+  if limit == nil then
+    limit = rate_limit.DEFAULT_LIMIT
+  end
+  local window = tonumber(cfg.register_rate_window)
+  if not window or window <= 0 then
+    window = rate_limit.DEFAULT_WINDOW
+  end
+  local rate_path = state.register_rate_path or (state.sessions_file and (state.sessions_file .. ".ratelimit"))
+  if limit > 0 and rate_path then
+    local now
+    if state.now then
+      now = state.now()
+    else
+      now = os.time()
+    end
+    local allowed, retry_after = true, 0
+    local ok, a, r = pcall(rate_limit.check, rate_path, rate_limit.key_for(peer_mac, peer_ip), limit, window, now)
+    if ok then
+      allowed, retry_after = a, r
+    else
+      log_warn(function()
+        return {
+          action = "server_register_rate_check_failed",
+          ip = peer_ip,
+          mac = peer_mac,
+          err = tostring(a)
+        }
+      end)
+    end
+    if not (allowed) then
+      log_warn(function()
+        return {
+          action = "server_register_rate_limited",
+          ip = peer_ip,
+          mac = peer_mac,
+          retry_after = retry_after
+        }
+      end)
+      return 429, {
+        ["Content-Type"] = "text/plain; charset=UTF-8",
+        ["Retry-After"] = tostring(retry_after)
+      }, "Trop de tentatives d'inscription. Réessayez dans " .. tostring(retry_after) .. " secondes."
+    end
+  end
   local form = parse_form(req.body)
   local user = form.user
   local salt = form.salt

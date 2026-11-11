@@ -268,6 +268,60 @@ describe("config.auth.bridge_ifname", function()
     return assert.equals("br-explicit", cfg.auth.bridge_ifname)
   end)
 end)
+describe("config.auth.register_rate_*", function()
+  reload = function(path)
+    package.loaded["config"] = nil
+    local actual = path or "tmp/__no_config_for_test__.moon"
+    ffi.C.setenv("CUSTOS_CONFIG_PATH", actual, 1)
+    return require("config")
+  end
+  after_each(function()
+    ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
+    package.loaded["config"] = nil
+  end)
+  local write_cfg
+  write_cfg = function(path, content)
+    local f = assert(io.open(path, "w"))
+    f:write(content)
+    return f:close()
+  end
+  it("défauts du schéma (3 / 300) après normalize", function()
+    local cfg = reload(nil)
+    assert.equals(3, cfg.auth.register_rate_limit)
+    return assert.equals(300, cfg.auth.register_rate_window)
+  end)
+  it("valeurs explicites conservées (dont limite 0 = désactivée)", function()
+    local path = "tmp/config_spec_register_rate.moon"
+    write_cfg(path, [[{ auth: { register_rate_limit: 0, register_rate_window: 60 } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    assert.equals(0, cfg.auth.register_rate_limit)
+    return assert.equals(60, cfg.auth.register_rate_window)
+  end)
+  it("valeurs textuelles converties en nombres", function()
+    local path = "tmp/config_spec_register_rate_str.moon"
+    write_cfg(path, [[{ auth: { register_rate_limit: "5", register_rate_window: "120" } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    assert.equals(5, cfg.auth.register_rate_limit)
+    return assert.equals(120, cfg.auth.register_rate_window)
+  end)
+  return it("fenêtre absente, nulle ou négative → défaut 300", function()
+    local _list_0 = {
+      "nil",
+      "0",
+      "-10"
+    }
+    for _index_0 = 1, #_list_0 do
+      local raw = _list_0[_index_0]
+      local path = "tmp/config_spec_register_rate_win.moon"
+      write_cfg(path, "{ auth: { register_rate_window: " .. tostring(raw) .. " } }")
+      local cfg = reload(path)
+      os.remove(path)
+      assert.equals(300, cfg.auth.register_rate_window)
+    end
+  end)
+end)
 return describe("config.nfqueue.responses", function()
   after_each(function()
     ffi.C.unsetenv("CUSTOS_CONFIG_PATH")

@@ -42,6 +42,8 @@ cleanup = (state) ->
   os.remove state.secrets_path .. ".lock"
   os.remove state.sessions_file
   os.remove state.sessions_file .. ".lock"
+  os.remove state.sessions_file .. ".ratelimit"
+  os.remove state.sessions_file .. ".ratelimit.lock"
 
 client_hash_body = ->
   "user=#{USER}&salt=#{SALT}&iter=10000&hash=#{HASH}"
@@ -107,6 +109,68 @@ describe "auth/handlers handle_register", ->
       status, _, _ = handle_register (req client_hash_body!), IP, MAC, state
       assert.equals 200, status
       assert.is_true file_exists state.secrets_path
+      cleanup state
+
+  describe "limitation des inscriptions (register_rate_limit)", ->
+
+    it "refuse la (N+1)e tentative avec 429 + Retry-After sans écrire de compte", ->
+      state = new_state!
+      state.auth_cfg = { allow_plaintext_login: true, register_rate_limit: 2, register_rate_window: 300 }
+      now = 1000
+      state.now = -> now
+      body = (u) -> "user=#{u}&salt=#{SALT}&iter=10000&hash=#{HASH}"
+
+      s1 = handle_register (req body "u1@test.lan"), IP, MAC, state
+      s2 = handle_register (req body "u2@test.lan"), IP, MAC, state
+      assert.equals 200, s1
+      assert.equals 200, s2
+      assert.equals 2, state.reload_calls
+
+      status, headers, resp = handle_register (req body "u3@test.lan"), IP, MAC, state
+      assert.equals 429, status
+      assert.equals "300", headers["Retry-After"]
+      assert.truthy resp\find "Trop de tentatives", 1, true
+      assert.equals 2, state.reload_calls
+      assert.is_nil state.secrets["u3@test.lan"]
+      secrets = credentials.load_secrets state.secrets_path
+      assert.is_nil secrets["u3@test.lan"]
+      cleanup state
+
+    it "fenêtre expirée → une nouvelle inscription est acceptée", ->
+      state = new_state!
+      state.auth_cfg = { allow_plaintext_login: true, register_rate_limit: 1, register_rate_window: 300 }
+      now = 2000
+      state.now = -> now
+      body = (u) -> "user=#{u}&salt=#{SALT}&iter=10000&hash=#{HASH}"
+
+      assert.equals 200, (handle_register (req body "v1@test.lan"), IP, MAC, state)
+      assert.equals 429, (handle_register (req body "v2@test.lan"), IP, MAC, state)
+
+      now = 2300
+      assert.equals 200, (handle_register (req body "v3@test.lan"), IP, MAC, state)
+      cleanup state
+
+    it "deux clients distincts ne partagent pas leur compteur", ->
+      state = new_state!
+      state.auth_cfg = { allow_plaintext_login: true, register_rate_limit: 1, register_rate_window: 300 }
+      now = 3000
+      state.now = -> now
+      body = (u) -> "user=#{u}&salt=#{SALT}&iter=10000&hash=#{HASH}"
+
+      assert.equals 200, (handle_register (req body "w1@test.lan"), IP, MAC, state)
+      assert.equals 429, (handle_register (req body "w2@test.lan"), IP, MAC, state)
+      assert.equals 200, (handle_register (req body "w3@test.lan"), "10.42.0.51", "aa:bb:cc:11:22:44", state)
+      cleanup state
+
+    it "register_rate_limit = 0 désactive la limitation", ->
+      state = new_state!
+      state.auth_cfg = { allow_plaintext_login: true, register_rate_limit: 0, register_rate_window: 300 }
+      state.now = -> 4000
+      body = (u) -> "user=#{u}&salt=#{SALT}&iter=10000&hash=#{HASH}"
+
+      for i = 1, 5
+        assert.equals 200, (handle_register (req body "x#{i}@test.lan"), IP, MAC, state)
+      assert.equals 5, state.reload_calls
       cleanup state
 
   describe "repli plaintext (JavaScript désactivé)", ->

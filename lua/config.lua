@@ -376,6 +376,8 @@ local DEFAULTS = {
     idle_timeout = 300,
     challenge_ttl = 120,
     allow_plaintext_login = true,
+    register_rate_limit = 3,
+    register_rate_window = 300,
     secrets = "/etc/custos/secrets",
     sessions_file = "/tmp/sessions.lua",
     admin_users = { },
@@ -674,6 +676,14 @@ normalize = function(cfg)
   cfg.auth.heartbeat_interval = tonumber(cfg.auth.heartbeat_interval) or auth_defaults.heartbeat_interval
   cfg.auth.idle_timeout = tonumber(cfg.auth.idle_timeout) or auth_defaults.idle_timeout
   cfg.auth.challenge_ttl = tonumber(cfg.auth.challenge_ttl) or auth_defaults.challenge_ttl
+  cfg.auth.register_rate_limit = tonumber(cfg.auth.register_rate_limit)
+  if cfg.auth.register_rate_limit == nil then
+    cfg.auth.register_rate_limit = auth_defaults.register_rate_limit
+  end
+  cfg.auth.register_rate_window = tonumber(cfg.auth.register_rate_window)
+  if not cfg.auth.register_rate_window or cfg.auth.register_rate_window <= 0 then
+    cfg.auth.register_rate_window = auth_defaults.register_rate_window
+  end
   if cfg.auth.allow_plaintext_login == nil then
     cfg.auth.allow_plaintext_login = auth_defaults.allow_plaintext_login
   else
