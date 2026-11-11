@@ -16,35 +16,62 @@ package.loaded["config"] = package.loaded["config"] or {
   auth:    { port: 33443 }
   sni:     {}
 }
+log_errors = {}
 package.loaded["log"] = {
+  log_debug: (->), log_info: (->), log_warn: (->)
+  log_error: (thunk) ->
+    fields = if type(thunk) == "function" then thunk! else nil
+    log_errors[#log_errors + 1] = fields
   debug: (->), info: (->), warn: (->), error: (->)
   rate_limited: (-> (->))
+  set_action_prefix: (->)
 }
-package.loaded["mac_learner_ipc"] = { get_mac: (ip) -> nil }
+-- Comportements injectables : les modules sont chargés une seule fois par
+-- worker_doh (destructuration au require), donc les tests doivent passer par
+-- ces tables d'indirection plutôt que réassigner package.loaded après coup.
+mac_stub = { mac: nil, vlan: nil }
+package.loaded["mac_learner_ipc"] = {
+  get_mac:  (ip) -> mac_stub.mac
+  get_vlan: (ip) -> mac_stub.vlan
+}
 package.loaded["doh.upstream"]    = {
   new_client: (ip, port, ms) -> {}, nil
   query:      (c, raw)        -> nil, "stub"
   close:      (c)             -> nil
   probe_ipv6: (ip, port)      -> false
 }
+query_stub = { process_query: (raw, ip, mac, up, vlan) -> nil, "stub" }
 package.loaded["doh.query"]       = {
-  process_query: (raw, ip, mac, up) -> nil, "stub"
+  process_query: (raw, ip, mac, up, vlan) -> query_stub.process_query raw, ip, mac, up, vlan
 }
 package.loaded["auth.cert_cache"] = {
   create_cache: (n, ttl) -> { set: (->), get: (-> nil), stats: (-> {size:0}) }
 }
-package.loaded["auth.cert"]       = {
-  load_static:            (k, c) -> nil, "stub"
-  load_or_generate_sni:   (ip, cache) -> nil, "stub"
+cert_stub = {
+  load_static:          (k, c) -> nil, "stub"
+  load_or_generate_sni: (ip, cache) -> nil, "stub"
 }
+package.loaded["auth.cert"]       = {
+  load_static:          (k, c) -> cert_stub.load_static k, c
+  load_or_generate_sni: (ip, cache) -> cert_stub.load_or_generate_sni ip, cache
+}
+ssl_stub = { wrap: (sock, ctx) -> nil, "stub" }
 package.loaded["auth.ffi_wolfssl"] = {
-  wrap: (sock, ctx) -> nil, "stub"
+  wrap: (sock, ctx) -> ssl_stub.wrap sock, ctx
 }
 package.loaded["lib.socket"]  = { tcp: (-> nil), tcp6: (-> nil), select: (-> {}, {}) }
 package.loaded["lib.process"] = { fork_child: (-> 1) }
+http_calls = {}
+http_stub = {
+  read_request:      (conn, opts) -> nil, "stub"
+  send_response:     (conn, status, headers, body) -> nil
+  apply_io_timeouts: (conn, timeout) -> nil
+}
 package.loaded["lib.http"]    = {
-  read_request: (-> nil, "stub")
-  send_response: (->)
+  read_request: (conn, opts) -> http_stub.read_request conn, opts
+  send_response: (conn, status, headers, body) ->
+    http_stub.send_response conn, status, headers, body
+  apply_io_timeouts: (conn, timeout) -> http_stub.apply_io_timeouts conn, timeout
   send_all: (conn, data) ->
     sent = 0
     while sent < #data
@@ -210,3 +237,268 @@ describe "worker_doh.handle_h2 — GET HTTP/2 sans DATA", ->
     sent = conn._sent!
     expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,1)
     assert.equals expected_goaway, sent\sub -17
+
+-- ── Helpers JSON / DNS forgés ────────────────────────────────────────────────
+-- Réponses DNS construites à la main (header + question example.com + RRs) pour
+-- vérifier le JSON rendu par dns_response_json sans dépendre d'un résolveur.
+
+sp_dns = require("ipparse.lib.pack_compat").pack
+QCLASS_IN = 1
+qname_example_dns = "\7example\3com\0"
+
+make_dns_response = (rcode=0, answers={}) ->
+  header = sp_dns ">H H H H H H", 0x1234, 0x8180 + rcode, 1, #answers, 0, 0
+  question = qname_example_dns .. sp_dns ">H H", 1, QCLASS_IN
+  rrs = {}
+  for a in *answers
+    rrs[#rrs + 1] = "\192\012" .. sp_dns ">H H I4 s2", a.rtype, QCLASS_IN, a.ttl or 60, a.rdata
+  header .. question .. table.concat rrs
+
+describe "worker_doh — helpers JSON", ->
+
+  it "json_escape échappe backslash, guillemets et caractères de contrôle", ->
+    assert.equals "a\\\\b", doh.json_escape "a\\b"
+    assert.equals "a\\\"b", doh.json_escape "a\"b"
+    assert.equals "a\\nb\\rc\\td", doh.json_escape "a\nb\rc\td"
+
+  it "json_escape convertit en chaîne et rend une chaîne vide pour nil", ->
+    assert.equals "", doh.json_escape nil
+    assert.equals "42", doh.json_escape 42
+
+  it "json_quote entoure et échappe", ->
+    assert.equals "\"a\\\"b\"", doh.json_quote "a\"b"
+
+  it "qtype_from_name accepte le nom, la casse, le nombre et retombe sur A", ->
+    assert.equals 1,  doh.qtype_from_name "A"
+    assert.equals 28, doh.qtype_from_name "aaaa"
+    assert.equals 28, doh.qtype_from_name "28"
+    assert.equals 1,  doh.qtype_from_name nil
+    assert.equals 1,  doh.qtype_from_name "TYPE_INCONNU"
+
+  it "url_decode décode %xx et le + de formulaire", ->
+    assert.equals "a b c", doh.url_decode "a%20b+c"
+    assert.equals "", doh.url_decode nil
+    -- Séquence invalide laissée telle quelle (gsub sans correspondance).
+    assert.equals "a%zzb", doh.url_decode "a%zzb"
+
+  it "query_param décode les valeurs percent-encoded", ->
+    assert.equals "ex.ample com", doh.query_param "/dns-query?name=ex%2Eample%20com", "name"
+
+  it "encode_qname produit les labels longueur+contenu et le zéro final", ->
+    assert.equals "\7example\3com\0", doh.encode_qname "example.com"
+    assert.equals "\7example\3com\0", doh.encode_qname "example.com."
+    assert.is_nil doh.encode_qname ""
+    assert.is_nil doh.encode_qname nil
+
+  it "encode_qname rejette un label de plus de 63 octets", ->
+    label = string.rep "a", 64
+    assert.is_nil doh.encode_qname "#{label}.com"
+    assert.is_nil doh.build_dns_query "#{label}.com", 1
+
+describe "worker_doh — rr_data_json", ->
+
+  it "rend une adresse IPv4 en notation pointée", ->
+    assert.equals "1.2.3.4", doh.rr_data_json { rtype: 1, rdata: string.char(1,2,3,4) }
+
+  it "rend une adresse IPv6 en groupes hexadécimaux", ->
+    rdata = string.char(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
+    assert.equals "2001:db8:0:0:0:0:0:1", doh.rr_data_json { rtype: 28, rdata: rdata }
+
+  it "rend les données brutes pour un autre type ou une taille inattendue", ->
+    assert.equals "cname.example", doh.rr_data_json { rtype: 5, rdata: "cname.example" }
+    assert.equals "\1\2\3", doh.rr_data_json { rtype: 1, rdata: "\1\2\3" }
+
+describe "worker_doh — dns_response_json", ->
+
+  it "rend une réponse A complète (Status 0, question, answer)", ->
+    raw = make_dns_response 0, { { rtype: 1, ttl: 60, rdata: string.char(1,2,3,4) } }
+    json = doh.dns_response_json raw
+    assert.truthy json\find '"Status":0', 1, true
+    assert.truthy json\find '"TC":false', 1, true
+    assert.truthy json\find '"RD":true', 1, true
+    assert.truthy json\find '"RA":true', 1, true
+    assert.truthy json\find '"Question":[{"name":"example.com","type":1}]', 1, true
+    assert.truthy json\find '"Answer":[{"name":"example.com","type":1,"TTL":60,"data":"1.2.3.4"}]', 1, true
+
+  it "rend une réponse AAAA", ->
+    rdata = string.char(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
+    raw = make_dns_response 0, { { rtype: 28, ttl: 300, rdata: rdata } }
+    json = doh.dns_response_json raw
+    assert.truthy json\find '"type":28', 1, true
+    assert.truthy json\find '"data":"2001:db8:0:0:0:0:0:1"', 1, true
+
+  it "rend NXDOMAIN avec Status 3 et aucune answer", ->
+    raw = make_dns_response 3, {}
+    json = doh.dns_response_json raw
+    assert.truthy json\find '"Status":3', 1, true
+    assert.truthy json\find '"Answer":[]', 1, true
+
+  it "ignore les RR d'un type non A/AAAA (CNAME) dans Answer", ->
+    raw = make_dns_response 0, { { rtype: 5, rdata: "cname.example" } }
+    json = doh.dns_response_json raw
+    assert.truthy json\find '"Answer":[]', 1, true
+
+  it "rend nil pour des octets DNS invalides", ->
+    assert.is_nil doh.dns_response_json "pas du DNS"
+
+-- ── handle_doh_client : routage HTTP/1.1 et statuts ─────────────────────────
+
+make_client_stub = (local_ip="192.0.2.10") ->
+  closed = false
+  {
+    getsockname: -> local_ip
+    settimeout: (t) -> nil
+    close: -> closed = true
+    _closed: -> closed
+  }
+
+make_tls_stub = (opts={}) ->
+  sent = {}
+  closed = false
+  handshake_result = if opts.handshake_result == nil then true else opts.handshake_result
+  handshake_err = opts.handshake_err
+  {
+    dohandshake: -> handshake_result, handshake_err
+    selected_alpn: -> opts.alpn
+    receive: (mode) -> nil, "unused"
+    send: (data) -> sent[#sent + 1] = data; #data
+    close: -> closed = true
+    _sent: -> table.concat sent
+    _closed: -> closed
+  }
+
+describe "worker_doh.handle_doh_client — routage HTTP/1.1", ->
+
+  capture = {}
+  before_each ->
+    capture = { sent: {}, processed: {}, read_opts: nil, io_timeout: nil }
+    log_errors = {}
+    cert_stub.load_static = (k, c) -> { ctx: true }
+    ssl_stub.wrap = (sock, ctx) -> make_tls_stub {}
+    query_stub.process_query = (raw, ip, mac, up, vlan) ->
+      capture.processed[#capture.processed + 1] = { :raw, :ip, :mac, :up, :vlan }
+      "RESP_BYTES", nil
+    http_stub.read_request = (conn, opts) ->
+      capture.read_opts = opts
+      capture.req
+    http_stub.send_response = (conn, status, headers, body) ->
+      capture.sent[#capture.sent + 1] = { :status, :headers, :body }
+      nil
+    http_stub.apply_io_timeouts = (conn, timeout) -> capture.io_timeout = timeout
+
+  run_client = (req, opts={}) ->
+    capture.req = req
+    tls = opts.tls or make_tls_stub {}
+    ssl_stub.wrap = (sock, ctx) -> tls
+    args = {
+      client: make_client_stub!
+      peer_ip: "192.0.2.10"
+      state: {
+        static_cert_paths: { key: "k", cert: "c" }
+        cert_cache: {}
+        client_timeout: opts.client_timeout or 7
+        upstream: { marker: true }
+      }
+    }
+    doh.handle_doh_client args
+    if #log_errors > 0
+      err = log_errors[1] and log_errors[1].err
+      error "handle_doh_client a journalisé une erreur : #{tostring err}"
+    tls
+
+  it "GET ?dns= décode le base64url et rend 200 application/dns-message", ->
+    b64 = "AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB"
+    expected = doh.b64url_decode b64
+    tls = run_client { method: "GET", path: "/dns-query?dns=#{b64}", headers: {}, body: "" }
+    assert.equals 1, #capture.processed
+    assert.equals expected, capture.processed[1].raw
+    assert.equals "192.0.2.10", capture.processed[1].ip
+    assert.equals 1, #capture.sent
+    assert.equals 200, capture.sent[1].status
+    assert.equals "application/dns-message", capture.sent[1].headers["Content-Type"]
+    assert.equals "RESP_BYTES", capture.sent[1].body
+    assert.is_true tls._closed!
+
+  it "POST application/dns-message transmet le corps brut et rend 200", ->
+    body = "\0\1\2\3"
+    tls = run_client {
+      method: "POST", path: "/dns-query"
+      headers: { ["content-type"]: "application/dns-message" }
+      body: body
+    }
+    assert.equals body, capture.processed[1].raw
+    assert.equals 200, capture.sent[1].status
+    assert.equals "application/dns-message", capture.sent[1].headers["Content-Type"]
+    assert.equals "RESP_BYTES", capture.sent[1].body
+    assert.is_true tls._closed!
+
+  it "GET JSON construit la requête demandée et rend le JSON DNS", ->
+    forged_resp = make_dns_response 0, { { rtype: 1, ttl: 60, rdata: string.char(1,2,3,4) } }
+    query_stub.process_query = (raw) ->
+      capture.processed[#capture.processed + 1] = { :raw }
+      forged_resp, nil
+    run_client {
+      method: "GET", path: "/dns-query?name=example.com&type=AAAA"
+      headers: { accept: "application/dns-json" }
+      body: ""
+    }
+    raw = capture.processed[1].raw
+    -- QTYPE AAAA (28) en fin de question, avant QCLASS.
+    assert.equals 28, raw\byte(#raw - 2)
+    assert.equals 200, capture.sent[1].status
+    assert.equals "application/dns-json", capture.sent[1].headers["Content-Type"]
+    assert.truthy capture.sent[1].body\find '"Status":0', 1, true
+    assert.truthy capture.sent[1].body\find '"data":"1.2.3.4"', 1, true
+
+  it "POST avec un content-type non DNS rend 415 sans interroger l'amont", ->
+    run_client {
+      method: "POST", path: "/dns-query"
+      headers: { ["content-type"]: "text/plain" }
+      body: "x"
+    }
+    assert.equals 415, capture.sent[1].status
+    assert.equals "Unsupported Media Type", capture.sent[1].body
+    assert.equals 0, #capture.processed
+
+  it "GET sans paramètre dns ni JSON rend 400 Bad Request", ->
+    run_client { method: "GET", path: "/dns-query", headers: {}, body: "" }
+    assert.equals 400, capture.sent[1].status
+    assert.equals "Bad Request", capture.sent[1].body
+    assert.equals 0, #capture.processed
+
+  it "chemin inconnu rend 400 Bad Request", ->
+    run_client { method: "GET", path: "/autre", headers: {}, body: "" }
+    assert.equals 400, capture.sent[1].status
+    assert.equals "Bad Request", capture.sent[1].body
+
+  it "corps annoncé trop gros (read_request) rend 413 Payload Too Large", ->
+    http_stub.read_request = (conn, opts) ->
+      capture.read_opts = opts
+      nil, "body_too_large"
+    run_client { method: "POST", path: "/dns-query", headers: {}, body: "" }
+    assert.equals 413, capture.sent[1].status
+    assert.equals "Payload Too Large", capture.sent[1].body
+    assert.equals 0, #capture.processed
+
+  it "échec de process_query rend 502 Bad Gateway", ->
+    query_stub.process_query = -> nil, "amont muet"
+    run_client {
+      method: "POST", path: "/dns-query"
+      headers: { ["content-type"]: "application/dns-message" }
+      body: "\0\1"
+    }
+    assert.equals 502, capture.sent[1].status
+    assert.equals "Bad Gateway", capture.sent[1].body
+
+  it "transmet le timeout client et le plafond de corps à read_request", ->
+    run_client { method: "GET", path: "/dns-query?dns=AAAB", headers: {}, body: "" }, { client_timeout: 9 }
+    assert.equals 9, capture.read_opts.timeout
+    assert.equals 65535, capture.read_opts.max_body
+    assert.equals 9, capture.io_timeout
+
+  it "handshake TLS fatal : ferme la connexion sans lire de requête", ->
+    tls = make_tls_stub { handshake_result: false, handshake_err: "peer_closed" }
+    run_client { method: "GET", path: "/dns-query", headers: {}, body: "" }, { :tls }
+    assert.is_nil capture.read_opts
+    assert.equals 0, #capture.sent
+    assert.is_true tls._closed!

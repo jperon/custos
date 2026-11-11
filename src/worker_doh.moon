@@ -605,4 +605,6 @@ run = (doh_cfg, filter_data) ->
           log_debug -> { action: "conn_started", pid: pid, peer: peer_ip }
           client\close!
 
-{ :run, :b64url_decode, :query_param, :build_dns_query, :handshake_should_continue, :handle_h2 }
+{ :run, :b64url_decode, :query_param, :build_dns_query, :handshake_should_continue, :handle_h2,
+  :url_decode, :encode_qname, :qtype_from_name, :json_escape, :json_quote,
+  :rr_data_json, :dns_response_json, :handle_doh_client }

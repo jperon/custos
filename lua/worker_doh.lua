@@ -880,5 +880,13 @@ return {
   query_param = query_param,
   build_dns_query = build_dns_query,
   handshake_should_continue = handshake_should_continue,
-  handle_h2 = handle_h2
+  handle_h2 = handle_h2,
+  url_decode = url_decode,
+  encode_qname = encode_qname,
+  qtype_from_name = qtype_from_name,
+  json_escape = json_escape,
+  json_quote = json_quote,
+  rr_data_json = rr_data_json,
+  dns_response_json = dns_response_json,
+  handle_doh_client = handle_doh_client
 }
