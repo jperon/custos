@@ -128,6 +128,11 @@ get_last_seq = ->
   last_enqueued_seq = nil
   s
 
+-- Index du worker propriétaire du tube ACK (0-based), exposé pour dériver le
+-- chemin d'un verrou inter-processus propre à ce worker (cf. doh.query).
+get_worker_idx = ->
+  worker_idx
+
 -- Attend l'ACK de worker_nft pour le batch courant.
 -- on_wait (optionnel) est appelé entre chaque poll court, typiquement pour
 -- drainer le pipe IPC question→response pendant l'attente, sans bloquer le
@@ -217,4 +222,4 @@ cmd_for = (kind, key, ip, rule_id, timeout) ->
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :wait_ack, :drain_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :add_auth_mac, :add_auth_ip4, :add_auth_ip6, :cmd_for, :cmd_lines_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :add_auth_mac, :add_auth_ip4, :add_auth_ip6, :cmd_for, :cmd_lines_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id }

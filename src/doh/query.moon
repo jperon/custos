@@ -13,7 +13,9 @@ dns_mod = require "ipparse.l7.dns"
 parse = dns_mod.parse
 { types: QTYPE } = require "ipparse.l7.dns"
 { :decide_meta, :run_on_response } = require "filter"
-{ :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
+{ :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack } = require "nft_queue"
+{ :with_lock } = require "lib.filelock"
+pidfile = require "lib.pidfile"
 { :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :build_captive_response, :add_ede, :patch_modified_dns } = require "dns_ede"
 { :inject, :detect_wildcards } = require "response_inject"
 { :user_for_mac } = require "auth.sessions"
@@ -26,6 +28,57 @@ dns_classify = require "dns_classify"
 
 MAC_ZERO = "00:00:00:00:00:00"
 mac_valid = (mac) -> mac and mac != "unknown" and mac != MAC_ZERO
+
+-- ── Sérialisation de la section critique ACK nft entre enfants DoH ─────────
+-- Les enfants DOH-conn d'un même worker DoH partagent le tube ACK de
+-- worker_nft (un seul pipe par worker). La séquence drain_ack → injections
+-- nft → wait_ack doit donc être protégée par un verrou inter-processus, sinon
+-- deux enfants se volent les octets d'ACK : l'un répond avant que ses IP soient
+-- insérées (client bloqué par le default-deny), l'autre attend le timeout.
+--
+-- Le fichier de verrou est ouvert APRÈS le fork, à chaque appel (lib.filelock) :
+-- chaque enfant a donc son propre descripteur. Il est placé à côté du pidfile
+-- du superviseur (/var/run par défaut), répertoire d'exécution déjà utilisé et
+-- forcément inscriptible, avec l'index du worker pour ne pas sérialiser deux
+-- workers DoH distincts (tubes ACK différents).
+runtime_dir = do
+  pid_path = pidfile.resolve_path (config.runtime or {}).pid_file
+  pid_path\match("^(.*)/") or "."
+
+ACK_LOCK_PREFIX = "custos-doh-nft-ack"
+
+--- Chemin du verrou ACK nft d'un worker DoH.
+-- @tparam number|nil worker_idx Index 0-based du worker (cf. nft_queue).
+-- @treturn string|nil Chemin du verrou, ou nil si l'index est inconnu.
+ack_lock_path = (worker_idx) ->
+  return nil if worker_idx == nil
+  "#{runtime_dir}/#{ACK_LOCK_PREFIX}-#{worker_idx}.lock"
+
+--- Injecte les réponses A/AAAA et attend l'ACK nft sous verrou inter-processus.
+-- La section verrouillée est réduite au strict nécessaire (drain, injection,
+-- attente) : ni la résolution upstream ni l'écriture de la réponse au client
+-- n'y figurent. `wait_ack` est borné par `ACK_TIMEOUT_MS` (150 ms), donc un
+-- enfant ne peut pas tenir le verrou indéfiniment. Si l'ouverture du verrou
+-- échoue, on exécute sans verrou (comportement antérieur) avec un log_warn,
+-- jamais de plantage de l'enfant.
+-- @tparam table answers Liste normalisée de { family, addr, ttl }.
+-- @tparam table opts    Options de response_inject.inject (inject_nft, ack_corr…).
+-- @treturn table { records_to_add, success_any, ip_count, no_v4, no_v6 }
+inject_nft_and_wait = (answers, opts) ->
+  return inject answers, opts unless opts.inject_nft
+  critical = ->
+    drain_ack!
+    inj = inject answers, opts
+    pending = get_last_seq!
+    wait_ack pending, opts.ack_corr if pending
+    inj
+  worker_idx = get_worker_idx and get_worker_idx!
+  lock_path = ack_lock_path worker_idx
+  return critical! unless lock_path
+  ok, res = pcall with_lock, lock_path, critical
+  return res if ok
+  log_warn -> { action: "doh_ack_lock_failed_fallback", path: lock_path, err: tostring res }
+  critical!
 
 rr_addr = (ans) ->
   if ans.rtype == QTYPE.A and ans.rdata and #ans.rdata == 4
@@ -306,4 +359,4 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
   }
   resp_raw
 
-{ :process_query, :set_wildcard_rules, :set_captive, :normalize_answers }
+{ :process_query, :set_wildcard_rules, :set_captive, :normalize_answers, :inject_nft_and_wait }

@@ -7,11 +7,14 @@ do
   local _obj_0 = require("filter")
   decide_meta, run_on_response = _obj_0.decide_meta, _obj_0.run_on_response
 end
-local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack
+local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, get_worker_idx, wait_ack, drain_ack
 do
   local _obj_0 = require("nft_queue")
-  add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.wait_ack, _obj_0.drain_ack
+  add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, get_worker_idx, wait_ack, drain_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.get_worker_idx, _obj_0.wait_ack, _obj_0.drain_ack
 end
+local with_lock
+with_lock = require("lib.filelock").with_lock
+local pidfile = require("lib.pidfile")
 local build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, build_captive_response, add_ede, patch_modified_dns
 do
   local _obj_0 = require("dns_ede")
@@ -40,6 +43,52 @@ local MAC_ZERO = "00:00:00:00:00:00"
 local mac_valid
 mac_valid = function(mac)
   return mac and mac ~= "unknown" and mac ~= MAC_ZERO
+end
+local runtime_dir
+do
+  local pid_path = pidfile.resolve_path((config.runtime or { }).pid_file)
+  runtime_dir = pid_path:match("^(.*)/") or "."
+end
+local ACK_LOCK_PREFIX = "custos-doh-nft-ack"
+local ack_lock_path
+ack_lock_path = function(worker_idx)
+  if worker_idx == nil then
+    return nil
+  end
+  return tostring(runtime_dir) .. "/" .. tostring(ACK_LOCK_PREFIX) .. "-" .. tostring(worker_idx) .. ".lock"
+end
+local inject_nft_and_wait
+inject_nft_and_wait = function(answers, opts)
+  if not (opts.inject_nft) then
+    return inject(answers, opts)
+  end
+  local critical
+  critical = function()
+    drain_ack()
+    local inj = inject(answers, opts)
+    local pending = get_last_seq()
+    if pending then
+      wait_ack(pending, opts.ack_corr)
+    end
+    return inj
+  end
+  local worker_idx = get_worker_idx and get_worker_idx()
+  local lock_path = ack_lock_path(worker_idx)
+  if not (lock_path) then
+    return critical()
+  end
+  local ok, res = pcall(with_lock, lock_path, critical)
+  if ok then
+    return res
+  end
+  log_warn(function()
+    return {
+      action = "doh_ack_lock_failed_fallback",
+      path = lock_path,
+      err = tostring(res)
+    }
+  end)
+  return critical()
 end
 local rr_addr
 rr_addr = function(ans)
@@ -468,5 +517,6 @@ return {
   process_query = process_query,
   set_wildcard_rules = set_wildcard_rules,
   set_captive = set_captive,
-  normalize_answers = normalize_answers
+  normalize_answers = normalize_answers,
+  inject_nft_and_wait = inject_nft_and_wait
 }
