@@ -635,14 +635,28 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
-| `domainlists_dir` | string | `"/tmp/custos/lists"` | Répertoire racine des listes de domaines compilées |
-| `custom_lists_dir` | string | `nil` | Répertoire des listes personnalisées (optionnel) |
+| `domainlists_dir` | string | `"/tmp/custos/lists"` | Répertoire racine des listes de domaines **compilées** (`.bin`, repli `.domains`) lues par `to_domainlist`/`to_domainlists` |
+| `lists_dir` | string | `"/tmp/custos/lists"` (repli code) | Répertoire des listes-texte lues par les conditions `*_list`/`*_lists` : `{lists_dir}/{type}/{nom}.txt` |
+| `custom_lists_dir` | string | `nil` | Dossier **source** des `.txt` scannés par l'updater (non lu par le filtre ; les `.bin` produits vont sous `{domainlists_dir}/custom/`) |
 | `allow_localnets` | bool | `false` | Si `true`, injecte automatiquement les réseaux locaux en whitelist nft |
 | `captive_portal` | bool | `true` | Active les règles par défaut de détection de portail captif (sondes NCSI/MSFT, Apple, Google…). `false` → ces règles ne sont pas injectées (cf. § Règles par défaut) |
 | `safe_search` | bool | `true` | Active SafeSearch : réécriture CNAME des moteurs de recherche vers leur variante « safe » (Google→`forcesafesearch.google.com`, YouTube, Bing→`strict.bing.com`, DuckDuckGo→`safe.duckduckgo.com`). `false` → aucune réécriture (cf. § SafeSearch) |
 | `youtube_restrict` | string | `"moderate"` | Mode YouTube Restricted : `"strict"` (`restrict.youtube.com`), `"moderate"` (`restrictmoderate.youtube.com`) ou `false` (YouTube non réécrit). Sans effet si `safe_search` est `false` |
 | `dest_whitelist` | array | `{}` | IPs/CIDRs de destination toujours autorisées (bypass filtrage) |
 | `allowed_domains` | array | `{"local","lan","home.arpa"}` | Domaines autorisés par défaut si `rules` est vide |
+
+**Ce qui est lu où.** Le filtre lit (1) les domainlists **compilées** sous
+`domainlists_dir` (`{domainlists_dir}/{nom}.bin`, repli `.domains`) pour
+`to_domainlist`/`to_domainlists`, et (2) les fichiers nommés sous `lists_dir`
+(`{lists_dir}/{type}/{nom}.txt`, une valeur par ligne) pour les conditions
+`*_list`/`*_lists`. `custom_lists_dir` n'est **pas** lu par le filtre : c'est
+le dossier **source** des `.txt` que l'updater scanne
+(`src/filter/updater.moon:425-434`) pour produire les `.bin` sous
+`{domainlists_dir}/custom/` (ou dans `custom_lists_dir` lui-même si
+`domainlists_dir` est absent). Une liste référencée mais introuvable ou vide
+est signalée au chargement par `filter_list_missing` / `filter_list_empty`
+(champs `condition`, `list`, `path`), sans changer le filtrage : elle ne
+correspond jamais.
 
 ### 14.2 Dictionnaires nommés : `nets`, `macs`, `times`, `vlans`, `users`
 
