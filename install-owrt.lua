@@ -557,9 +557,10 @@ Installer = function(cfg)
 end
 local print_usage
 print_usage = function()
-  io.write([[Usage: luajit install-owrt.lua <hôte> [options]
+  io.write([[Usage: luajit install-owrt.lua [utilisateur@]hôte [options]
 
   <hôte> : hostname, adresse IPv4 ou adresse IPv6 littérale
+           (forme utilisateur@hôte acceptée ; --user prime)
 
 Options:
   --port PORT    Port SSH                       (défaut : 22)
@@ -572,7 +573,7 @@ Options:
   -h, --help     Afficher cette aide
 
 Exemple:
-  luajit install-owrt.lua router.local
+  luajit install-owrt.lua root@router.local
   luajit install-owrt.lua 192.168.1.1 --port 2222
   luajit install-owrt.lua 192.168.1.1 --uninstall
 ]])
@@ -585,6 +586,36 @@ end
 local valid_user
 valid_user = function(u)
   return type(u) == "string" and u:match("^[%w%._%-]+$")
+end
+local split_user_host
+split_user_host = function(s)
+  if not (type(s) == "string") then
+    return nil, "Hôte invalide : " .. tostring(tostring(s))
+  end
+  local at = s:find("@", 1, true)
+  if not (at) then
+    if not (valid_host(s)) then
+      return nil, "Hôte invalide : " .. tostring(s)
+    end
+    return {
+      host = s
+    }
+  end
+  local user = s:sub(1, at - 1)
+  local host = s:sub(at + 1)
+  if host:find("@", 1, true) then
+    return nil, "Hôte invalide : " .. tostring(s)
+  end
+  if not (#user > 0 and valid_user(user)) then
+    return nil, "Utilisateur invalide : " .. tostring(user)
+  end
+  if not (#host > 0 and valid_host(host)) then
+    return nil, "Hôte invalide : " .. tostring(s)
+  end
+  return {
+    user = user,
+    host = host
+  }
 end
 local valid_dest
 valid_dest = function(d)
@@ -609,6 +640,7 @@ parse_args = function(args)
     pkg_mgr = nil
   }
   local i = 1
+  local user_explicit = false
   while i <= #args do
     local a = args[i]
     local _exp_0 = a
@@ -633,6 +665,7 @@ parse_args = function(args)
     elseif "--user" == _exp_0 then
       i = i + 1
       cfg.user = args[i]
+      user_explicit = true
     elseif "--dest" == _exp_0 then
       i = i + 1
       cfg.dest = args[i]
@@ -645,8 +678,15 @@ parse_args = function(args)
     end
     i = i + 1
   end
-  if cfg.host and not valid_host(cfg.host) then
-    return nil, "Hôte invalide : " .. tostring(cfg.host)
+  if cfg.host then
+    local parsed, err = split_user_host(cfg.host)
+    if not (parsed) then
+      return nil, err
+    end
+    if parsed.user and not user_explicit then
+      cfg.user = parsed.user
+    end
+    cfg.host = parsed.host
   end
   if not (valid_user(cfg.user)) then
     return nil, "Utilisateur invalide : " .. tostring(tostring(cfg.user))
@@ -803,6 +843,7 @@ return {
   Installer = Installer,
   main = main,
   parse_args = parse_args,
+  split_user_host = split_user_host,
   valid_host = valid_host,
   valid_user = valid_user,
   valid_dest = valid_dest,

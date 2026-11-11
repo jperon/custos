@@ -141,6 +141,37 @@ describe "install-owrt — validation parse_args", ->
     for port in *{"0", "70000", "22;x", "abc", "-1"}
       assert.truthy (invalid_cfg { "--port", port, "10.0.0.1" })\match "port invalide"
 
+  it "accepte la forme utilisateur@hôte et en déduit l'utilisateur", ->
+    cfg, err = parse_args { "admin@router.lan" }
+    assert.is_nil err
+    assert.equals "admin", cfg.user
+    assert.equals "router.lan", cfg.host
+
+  it "accepte un hôte seul et garde root par défaut", ->
+    cfg, err = parse_args { "router.lan" }
+    assert.is_nil err
+    assert.equals "root", cfg.user
+    assert.equals "router.lan", cfg.host
+
+  it "--user explicite prime sur utilisateur@hôte, quel que soit l'ordre", ->
+    for args in *{
+        { "--user", "admin", "root@router.lan" }
+        { "root@router.lan", "--user", "admin" }
+      }
+      cfg, err = parse_args args
+      assert.is_nil err
+      assert.equals "admin", cfg.user
+      assert.equals "router.lan", cfg.host
+
+  it "rejette utilisateur@hôte incomplet ou ambigu", ->
+    assert.truthy (invalid_cfg { "@router.lan" })\match "Utilisateur invalide"
+    assert.truthy (invalid_cfg { "root@" })\match "Hôte invalide"
+    assert.truthy (invalid_cfg { "a@b@c" })\match "Hôte invalide"
+
+  it "rejette un utilisateur invalide dans la forme utilisateur@hôte", ->
+    for host in *{"ro ot@router.lan", "root;x@router.lan", "$(id)@router.lan", "`id`@router.lan"}
+      assert.truthy (invalid_cfg { host })\match "Utilisateur invalide"
+
   it "shell_quote neutralise les apostrophes", ->
     assert.equals "'root'", shell_quote "root"
     assert.equals "'a'\\''b'", shell_quote "a'b"

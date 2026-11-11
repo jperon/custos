@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
 --- install-owrt.moon — Installe/Désinstalle CustosVirginum sur un routeur OpenWrt.
 --
--- Usage : luajit install-owrt.lua <ip-routeur> [options]
+-- Usage : luajit install-owrt.lua [utilisateur@]hôte [options]
 --
 -- Options :
 --   --port PORT    Port SSH (défaut : 22)
@@ -541,9 +541,10 @@ Installer = (cfg) ->
 --- Affiche l'aide et quitte.
 print_usage = ->
   io.write [[
-Usage: luajit install-owrt.lua <hôte> [options]
+Usage: luajit install-owrt.lua [utilisateur@]hôte [options]
 
   <hôte> : hostname, adresse IPv4 ou adresse IPv6 littérale
+           (forme utilisateur@hôte acceptée ; --user prime)
 
 Options:
   --port PORT    Port SSH                       (défaut : 22)
@@ -556,7 +557,7 @@ Options:
   -h, --help     Afficher cette aide
 
 Exemple:
-  luajit install-owrt.lua router.local
+  luajit install-owrt.lua root@router.local
   luajit install-owrt.lua 192.168.1.1 --port 2222
   luajit install-owrt.lua 192.168.1.1 --uninstall
 ]]
@@ -567,6 +568,30 @@ valid_host = (h) -> type(h) == "string" and h\match "^[%w%.%-:%[%]]+$"
 
 --- Valide l'utilisateur SSH (identique à ce qu'acceptent les comptes Unix).
 valid_user = (u) -> type(u) == "string" and u\match "^[%w%._%-]+$"
+
+--- Analyse l'argument HOST, forme `[utilisateur@]hôte`.
+-- La partie utilisateur, si présente, est validée comme `--user` (valid_user) ;
+-- l'hôte par valid_host. Aucune des deux validations n'est relâchée : les deux
+-- valeurs finissent dans une commande ssh/scp.
+-- @tparam string s argument brut
+-- @treturn table|nil `{ user?, host }` (user absent si pas de `@`)
+-- @treturn ?string message d'erreur
+split_user_host = (s) ->
+  unless type(s) == "string"
+    return nil, "Hôte invalide : #{tostring s}"
+  at = s\find "@", 1, true
+  unless at
+    return nil, "Hôte invalide : #{s}" unless valid_host s
+    return { host: s }
+  user = s\sub 1, at - 1
+  host = s\sub at + 1
+  -- Un second `@` rend l'hôte ambigu (a@b@c) : rejet, jamais deviné.
+  return nil, "Hôte invalide : #{s}" if host\find "@", 1, true
+  unless #user > 0 and valid_user user
+    return nil, "Utilisateur invalide : #{user}"
+  unless #host > 0 and valid_host host
+    return nil, "Hôte invalide : #{s}"
+  { :user, :host }
 
 --- Valide une destination : chemin absolu sans métacaractère shell.
 valid_dest = (d) -> type(d) == "string" and d\match "^/[%w%._/%-]*$"
@@ -594,6 +619,7 @@ parse_args = (args) ->
   }
 
   i = 1
+  user_explicit = false
   while i <= #args
     a = args[i]
     switch a
@@ -617,6 +643,7 @@ parse_args = (args) ->
       when "--user"
         i += 1
         cfg.user = args[i]
+        user_explicit = true
       when "--dest"
         i += 1
         cfg.dest = args[i]
@@ -627,8 +654,12 @@ parse_args = (args) ->
           cfg.host = a
     i += 1
 
-  if cfg.host and not valid_host cfg.host
-    return nil, "Hôte invalide : #{cfg.host}"
+  if cfg.host
+    parsed, err = split_user_host cfg.host
+    return nil, err unless parsed
+    -- --user explicite prime sur la partie utilisateur de `utilisateur@hôte`.
+    cfg.user = parsed.user if parsed.user and not user_explicit
+    cfg.host = parsed.host
   unless valid_user cfg.user
     return nil, "Utilisateur invalide : #{tostring cfg.user}"
   unless valid_dest cfg.dest
@@ -701,4 +732,4 @@ main = ->
 script_name = arg and arg[0] or ""
 main! if script_name\match "install%-owrt"
 
-{ :Installer, :main, :parse_args, :valid_host, :valid_user, :valid_dest, :valid_port, :shell_quote }
+{ :Installer, :main, :parse_args, :split_user_host, :valid_host, :valid_user, :valid_dest, :valid_port, :shell_quote }
