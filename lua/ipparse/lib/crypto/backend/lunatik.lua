@@ -8,13 +8,6 @@ do
   local _obj_0 = require("ipparse.lib.crypto.backend.common")
   validate_gcm_key, validate_gcm_nonce, validate_ecb_key, validate_ecb_block, construct_nonce = _obj_0.validate_gcm_key, _obj_0.validate_gcm_nonce, _obj_0.validate_ecb_key, _obj_0.validate_ecb_block, _obj_0.construct_nonce
 end
-local close_tfm
-close_tfm = function(tfm)
-  if not (tfm and tfm.__close) then
-    return 
-  end
-  return pcall(tfm.__close, tfm)
-end
 local ebadmsg_names = {
   EBADMSG = true,
   ["-EBADMSG"] = true,
@@ -33,36 +26,25 @@ ebadmsg_error = function(err)
   end
   return "AES-128-GCM authentication failed (tag mismatch)"
 end
-local cached_gcm_enc_tfm = nil
-local cached_gcm_enc_key = nil
-local cached_gcm_dec_tfm = nil
-local cached_gcm_dec_key = nil
+local gcm_cache = {
+  encrypt = { },
+  decrypt = { }
+}
 local cached_ecb_tfm = nil
 local cached_ecb_key = nil
 local ecb_fail_streak = 0
 local get_gcm_tfm
 get_gcm_tfm = function(mode, key)
-  if mode == "encrypt" then
-    if not (cached_gcm_enc_tfm) then
-      cached_gcm_enc_tfm = aead("gcm(aes)")
-      cached_gcm_enc_tfm:setauthsize(16)
-    end
-    if cached_gcm_enc_key ~= key then
-      cached_gcm_enc_tfm:setkey(key)
-      cached_gcm_enc_key = key
-    end
-    return cached_gcm_enc_tfm
-  else
-    if not (cached_gcm_dec_tfm) then
-      cached_gcm_dec_tfm = aead("gcm(aes)")
-      cached_gcm_dec_tfm:setauthsize(16)
-    end
-    if cached_gcm_dec_key ~= key then
-      cached_gcm_dec_tfm:setkey(key)
-      cached_gcm_dec_key = key
-    end
-    return cached_gcm_dec_tfm
+  local entry = gcm_cache[mode]
+  if not (entry.tfm) then
+    entry.tfm = aead("gcm(aes)")
+    entry.tfm:setauthsize(16)
   end
+  if entry.key ~= key then
+    entry.tfm:setkey(key)
+    entry.key = key
+  end
+  return entry.tfm
 end
 local aes_128_gcm_encrypt
 aes_128_gcm_encrypt = function(key, nonce, plaintext, aad)
@@ -86,9 +68,7 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
     return nil, "ciphertext_with_tag too short (need at least 16-byte tag)"
   end
   local c = get_gcm_tfm("decrypt", key)
-  local ok, pt, err = pcall(function()
-    return c:decrypt(nonce, ciphertext_with_tag, aad)
-  end)
+  local ok, pt, err = pcall(c.decrypt, c, nonce, ciphertext_with_tag, aad)
   if not (ok) then
     local msg = ebadmsg_error(pt)
     if msg then
@@ -105,21 +85,23 @@ aes_128_gcm_decrypt = function(key, nonce, ciphertext_with_tag, aad)
   end
   return pt, nil
 end
+local ecb_encrypt
+ecb_encrypt = function(key, block)
+  if not (cached_ecb_tfm) then
+    cached_ecb_tfm = skcipher("ecb(aes)")
+    cached_ecb_key = nil
+  end
+  if cached_ecb_key ~= key then
+    cached_ecb_tfm:setkey(key)
+    cached_ecb_key = key
+  end
+  return cached_ecb_tfm:encrypt("", block)
+end
 local aes_128_ecb_block
 aes_128_ecb_block = function(key, block)
   validate_ecb_key(key)
   validate_ecb_block(block)
-  local ok, result = pcall(function()
-    if not (cached_ecb_tfm) then
-      cached_ecb_tfm = skcipher("ecb(aes)")
-      cached_ecb_key = nil
-    end
-    if cached_ecb_key ~= key then
-      cached_ecb_tfm:setkey(key)
-      cached_ecb_key = key
-    end
-    return cached_ecb_tfm:encrypt("", block)
-  end)
+  local ok, result = pcall(ecb_encrypt, key, block)
   if not (ok) then
     ecb_fail_streak = ecb_fail_streak + 1
     if ecb_fail_streak == 1 or ecb_fail_streak % 128 == 0 then

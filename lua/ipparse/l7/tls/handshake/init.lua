@@ -1,10 +1,12 @@
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local sp, su
 do
   local _obj_0 = require("ipparse.lib.pack_compat")
   sp, su = _obj_0.pack, _obj_0.unpack
 end
 local bidirectional
-bidirectional = require("ipparse.fun").bidirectional
+bidirectional = require("ipparse.fun.tables").bidirectional
 local parse_extension
 parse_extension = require("ipparse.l7.tls.handshake.extension").parse
 local band, rshift, lshift
@@ -23,6 +25,9 @@ local parse
 parse = function(self, off)
   if off == nil then
     off = 1
+  end
+  if not (need_bytes(self, off, 4)) then
+    return nil, off
   end
   local _type, _len, len, _off = su(">B BH", self, off)
   len = len + lshift(_len, 16)
@@ -69,21 +74,24 @@ iter_extensions = function(self, off, len)
   end
 end
 local message_types = bidirectional({
-  [0x00] = "hello_request",
-  [0x01] = "client_hello",
-  [0x02] = "server_hello",
-  [0x04] = "new_session_ticket",
-  [0x0b] = "certificate",
-  [0x0c] = "server_key_exchange",
-  [0x0d] = "certificate_request",
-  [0x0e] = "server_hello_done",
-  [0x0f] = "certificate_verify",
-  [0x10] = "client_key_exchange",
-  [0x11] = "finished",
-  [0x12] = "certificate_url",
-  [0x13] = "certificate_status",
-  [0x14] = "supplemental_data",
-  [0x15] = "key_update"
+  [0] = "hello_request",
+  [1] = "client_hello",
+  [2] = "server_hello",
+  [4] = "new_session_ticket",
+  [5] = "end_of_early_data",
+  [8] = "encrypted_extensions",
+  [11] = "certificate",
+  [12] = "server_key_exchange",
+  [13] = "certificate_request",
+  [14] = "server_hello_done",
+  [15] = "certificate_verify",
+  [16] = "client_key_exchange",
+  [20] = "finished",
+  [21] = "certificate_url",
+  [22] = "certificate_status",
+  [23] = "supplemental_data",
+  [24] = "key_update",
+  [254] = "message_hash"
 })
 local ciphers = bidirectional({
   [0x0005] = "TLS_RSA_WITH_RC4_128_SHA",

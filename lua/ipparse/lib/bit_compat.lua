@@ -27,20 +27,24 @@ normalize = function(bit)
   bit.arshift = bit.arshift or bit.rshift
   return bit
 end
+local native_int = math.floor == nil or math.type ~= nil
+if native_int then
+  return normalize(require("ipparse.lib.bit53"))
+end
+local err = nil
 local ok, bit = pcall(require, "bit")
 if ok and bit then
   return normalize(bit)
 end
+err = bit
 ok, bit = pcall(require, "bit32")
 if ok and bit then
   return normalize(bit)
 end
-ok, bit = pcall(require, "ipparse.lib.bit53")
-if ok and bit then
-  return normalize(bit)
-end
+err = bit
 ok, bit = pcall(require, "ipparse.lib.bit_pure")
 if ok and bit then
   return normalize(bit)
 end
-return error("no bitwise compatibility backend available")
+err = bit
+return error("no bitwise compatibility backend available (last error: " .. tostring(err) .. ")")

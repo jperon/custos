@@ -1,6 +1,4 @@
 local ffi = require("ffi")
-local GCM_CTX_SIZE = 512
-local AES_CTX_SIZE = 512
 pcall(ffi.cdef, [[  /* Opaque context structs */
   typedef struct { char _opaque[512]; } mbedtls_gcm_context_t;
   typedef struct { char _opaque[512]; } mbedtls_aes_context_t;

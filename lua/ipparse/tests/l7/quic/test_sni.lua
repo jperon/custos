@@ -149,4 +149,19 @@ test("sni_from_plaintext: RFC 9001 §A.2 payload -> 'example.com'", function()
   local sni = sni_from_plaintext(plaintext)
   return assert(sni == "example.com", "expected 'example.com', got: " .. tostring(tostring(sni)))
 end)
+local ch_prefix = "\003\003" .. ("r"):rep(32) .. "\000" .. "\000\002\019\001" .. "\001\000"
+local hs_msg
+hs_msg = function(body)
+  return "\001\000" .. string.char(math.floor(#body / 256), #body % 256) .. body
+end
+test("sni_from_tls: truncated extension -> nil, no exception", function()
+  local ok, res = pcall(sni_from_tls, hs_msg(ch_prefix .. "\000\003\000\000\009"))
+  assert(ok, "sni_from_tls must not raise on a truncated extension")
+  return assert(res == nil, "expected nil, got: " .. tostring(tostring(res)))
+end)
+test("sni_from_tls: truncated ClientHello -> nil, no exception", function()
+  local ok, res = pcall(sni_from_tls, hs_msg("\003\003abc"))
+  assert(ok, "sni_from_tls must not raise on a truncated ClientHello")
+  return assert(res == nil, "expected nil, got: " .. tostring(tostring(res)))
+end)
 return util.summary("l7.quic.sni")

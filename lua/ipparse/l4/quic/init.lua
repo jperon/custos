@@ -1,13 +1,13 @@
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local sp, su, byte
 do
   local _obj_0 = require("ipparse.lib.pack_compat")
   sp, su, byte = _obj_0.pack, _obj_0.unpack, _obj_0.byte
 end
 local unpack = table.unpack or unpack
-local need_bytes
-need_bytes = require("ipparse").need_bytes
 local bidirectional
-bidirectional = require("ipparse.fun").bidirectional
+bidirectional = require("ipparse.fun.tables").bidirectional
 local band
 band = require("ipparse.lib.bit_compat").band
 local parse_varint
@@ -44,7 +44,7 @@ HEADER_FORM = flags.HEADER_FORM
 local pack
 pack = function(self)
   if self.long_header then
-    return sp(">BH s1 s1", self.byte1, self.version, self.dst_connection_id, self.src_connection_id) .. (self.data and tostring(self.data) or "")
+    return sp(">B I4 s1 s1", self.byte1, self.version, self.dst_connection_id, self.src_connection_id) .. (self.data and tostring(self.data) or "")
   else
     return sp(">B", self.byte1) .. self.dst_connection_id
   end
@@ -126,7 +126,11 @@ parse_short_header = function(self, off, byte1, dst_id, src_connection_id, versi
   end
   local mt, dst_connection_id, _off
   if dst_id then
-    dst_connection_id, _off = su(">c" .. tostring(#dst_id), self, off)
+    if not (need_bytes(self, off, #dst_id)) then
+      return nil, off
+    end
+    dst_connection_id = self:sub(off, off + #dst_id - 1)
+    _off = off + #dst_id
   end
   do
     local v = versions[version]

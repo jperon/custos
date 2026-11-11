@@ -21,6 +21,8 @@ ffi.cdef([[  /* EVP generic */
   int EVP_DecryptUpdate(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl,
                         const unsigned char *in, int inl);
   int EVP_DecryptFinal_ex(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl);
+
+  int EVP_CIPHER_CTX_set_padding(EVP_CIPHER_CTX *c, int pad);
 ]])
 local EVP_CTRL_GCM_SET_IVLEN = 0x9
 local EVP_CTRL_GCM_GET_TAG = 0x10
@@ -140,11 +142,6 @@ aes_128_ecb_block = function(key, block)
   end
   if not (1 == ssl.EVP_EncryptInit_ex(ctx, ssl.EVP_aes_128_ecb(), nil, key, nil)) then
     return fail(ctx, "EVP_EncryptInit_ex (ECB) failed")
-  end
-  if not pcall(function()
-    return ffi.C.EVP_CIPHER_CTX_set_padding
-  end) then
-    ffi.cdef("int EVP_CIPHER_CTX_set_padding(EVP_CIPHER_CTX *c, int pad);")
   end
   ssl.EVP_CIPHER_CTX_set_padding(ctx, 0)
   local outl = ffi.new("int[1]")

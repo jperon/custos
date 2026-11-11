@@ -1,49 +1,53 @@
 local bit = {
-  band = function(...)
-    local n = select("#", ...)
-    if n <= 1 then
-      return ...
+  band = function(a, b, c, ...)
+    if c == nil then
+      if b == nil then
+        return a
+      else
+        return a & b
+      end
+    else
+      local r = a & b & c
+      local n = select("#", ...)
+      for i = 1, n do
+        r = r & (select(i, ...))
+      end
+      return r
     end
-    local a, b = ...
-    if n == 2 then
-      return a & b
-    end
-    local r = a
-    for i = 2, n do
-      r = r & (select(i, ...))
-    end
-    return r
   end,
-  bor = function(...)
-    local n = select("#", ...)
-    if n <= 1 then
-      return ...
+  bor = function(a, b, c, ...)
+    if c == nil then
+      if b == nil then
+        return a
+      else
+        return a | b
+      end
+    else
+      local r = a | b | c
+      local n = select("#", ...)
+      for i = 1, n do
+        r = r | (select(i, ...))
+      end
+      return r
     end
-    local a, b = ...
-    if n == 2 then
-      return a | b
-    end
-    local r = a
-    for i = 2, n do
-      r = r | (select(i, ...))
-    end
-    return r
   end,
-  bxor = function(...)
-    local n = select("#", ...)
-    if n <= 1 then
-      return ...
+  bxor = function(a, b, c, ...)
+    if c == nil then
+      if b == nil then
+        return a
+      else
+        return (a | b) & (~(a & b))
+      end
+    else
+      local r = (a | b) & (~(a & b))
+      r = (r | c) & (~(r & c))
+      local n = select("#", ...)
+      for i = 1, n do
+        local v = select(i, ...)
+        r = (r | v) & (~(r & v))
+      end
+      return r
     end
-    local a, b = ...
-    if n == 2 then
-      return (a | b) & (~(a & b))
-    end
-    local r = a
-    for i = 2, n do
-      local v = select(i, ...)
-      r = (r | v) & (~(r & v))
-    end
-    return r
   end,
   bnot = function(a)
     return ~a
@@ -55,7 +59,11 @@ local bit = {
     return a >> n
   end,
   arshift = function(a, n)
-    return a >> n
+    if a >= 0 then
+      return a >> n
+    else
+      return ~((~a) >> n)
+    end
   end
 }
 return bit

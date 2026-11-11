@@ -4,7 +4,7 @@ do
   sp, su = _obj_0.pack, _obj_0.unpack
 end
 local bidirectional
-bidirectional = require("ipparse.fun").bidirectional
+bidirectional = require("ipparse.fun.tables").bidirectional
 local need_bytes
 need_bytes = require("ipparse").need_bytes
 local concat

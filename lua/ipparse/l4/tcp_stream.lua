@@ -1,3 +1,4 @@
+require("ipparse")
 local band
 band = require("ipparse.lib.bit_compat").band
 local concat
@@ -34,9 +35,6 @@ new = function(check_complete, opts)
         error("tcp_stream: no clock available (pass opts.clock/opts.clock_hz)")
       end
     end
-  end
-  if not clock_hz then
-    clock_hz = 1
   end
   local sessions = { }
   local count = 0

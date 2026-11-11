@@ -83,4 +83,37 @@ test("tcp_stream: clock_hz without clock raises", function()
   assert(not ok, "expected an error when clock_hz is given without clock")
   return assert(tostring(err):find("clock_hz"), "error should mention clock_hz, got " .. tostring(err))
 end)
+test("tcp_stream: empty payload is ignored", function()
+  local s = tcp_stream.new()
+  assert(s.feed("k", "", 0x10, 1) == nil, "empty payload should return nil")
+  local buf, seq, first = s.feed("k", "hello", 0x10, 1)
+  return assert(buf == "hello" and seq == 1 and first == true, "no session should have been created")
+end)
+test("tcp_stream: clear drops a single session", function()
+  local s = tcp_stream.new(function(buf)
+    return #buf >= 6
+  end)
+  s.feed("k", "abc", 0x10, 1)
+  s.clear("k")
+  local buf, seq, first = s.feed("k", "123456", 0x10, 2)
+  assert(buf == "123456", "expected fresh buffer after clear, got " .. tostring(buf))
+  return assert(seq == 2 and first == true, "clear should reset sequence state")
+end)
+test("tcp_stream: purge uses the default max_age", function()
+  local now = 0
+  local s = tcp_stream.new((function(buf)
+    return #buf >= 6
+  end), {
+    clock = function()
+      return now, {
+        clock_hz = 1000
+      }
+    end
+  })
+  s.feed("old", "abc", 0x10, 1)
+  now = 301000
+  s.purge()
+  local buf = s.feed("old", "def", 0x10, 2)
+  return assert(buf == nil, "default purge should have dropped the old session")
+end)
 return util.summary("l4/tcp_stream")

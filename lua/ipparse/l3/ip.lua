@@ -1,5 +1,6 @@
+require("ipparse")
 local bidirectional
-bidirectional = require("ipparse.fun").bidirectional
+bidirectional = require("ipparse.fun.tables").bidirectional
 local IP6, IP4
 do
   local _obj_0 = require("ipparse.l2.ethernet").proto
@@ -89,13 +90,12 @@ contains_ip = function(self, i, nmask)
       return sub(self, 2) == i
     end
   end
-  local fmt, shft = "c" .. tostring(rshift(nmask, 3)) .. "B", 8 - band(nmask, 0x7)
-  local nbytes, nbits = su(fmt, self, 2)
-  local sbytes, sbits = su(fmt, i)
-  if nbytes == sbytes and rshift(nbits, shft) == rshift(sbits, shft) then
-    return true
+  local n = rshift(nmask, 3)
+  local shft = 8 - band(nmask, 0x7)
+  if sub(self, 2, 1 + n) ~= sub(i, 1, n) then
+    return false
   end
-  return false
+  return rshift(self:byte(2 + n), shft) == rshift(i:byte(1 + n), shft)
 end
 local contains_subnet
 contains_subnet = function(self, subnet)

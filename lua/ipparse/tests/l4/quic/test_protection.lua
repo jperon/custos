@@ -88,4 +88,76 @@ else
     return true
   end)
 end
+test("protection: remove_header_protection returns nil, err on bad packet", function()
+  local hdr, err = prot.remove_header_protection("abcdef", 3, string.rep("k", 16), true, 0, { })
+  assert(hdr == nil, "expected nil header")
+  return assert(type(err) == "string", "expected error string, got " .. tostring(type(err)))
+end)
+test("protection: recover_packet_number RFC 9000 A.3 two-byte", function()
+  local pn = prot.recover_packet_number(0x9b32, 0xa82f30ea, 2)
+  return assert(pn == 0xa82f9b32, "expected 0xa82f9b32, got " .. tostring(string.format('%x', pn)))
+end)
+test("protection: recover_packet_number adds window below half", function()
+  local pn = prot.recover_packet_number(0, 0xa82f30ea, 1)
+  return assert(pn == 0xa82f3100, "expected 0xa82f3100, got " .. tostring(string.format('%x', pn)))
+end)
+test("protection: recover_packet_number subtracts window above half", function()
+  local pn = prot.recover_packet_number(0xf0, 0xa82f3001, 1)
+  return assert(pn == 0xa82f2ff0, "expected 0xa82f2ff0, got " .. tostring(string.format('%x', pn)))
+end)
+test("protection: sample_from_packet too short returns nil", function()
+  local sample, err = prot.sample_from_packet("xx", 1)
+  assert(sample == nil, "expected nil sample")
+  return assert(type(err) == "string", "expected an error string")
+end)
+local zero_mask = {
+  aes_128_ecb_block = function(k, s)
+    return string.rep("\000", 16)
+  end
+}
+test("protection: unprotect_header with zero mask leaves header unchanged", function()
+  local pkt = string.rep("\000", 40)
+  local aad, pn, pn_len = prot.unprotect_header(pkt, 2, "hp", true, 0, zero_mask)
+  assert(aad == "\000\000", "aad should be first byte + one PN byte")
+  assert(pn == 0, "expected pn 0, got " .. tostring(pn))
+  return assert(pn_len == 1, "expected pn_len 1, got " .. tostring(pn_len))
+end)
+test("protection: unprotect_header rejects invalid pn_off", function()
+  local aad, err = prot.unprotect_header(string.rep("\000", 40), 0, "hp", true, 0, zero_mask)
+  assert(aad == nil, "expected nil aad")
+  return assert(err and err:match("pn_off"), "expected pn_off error, got " .. tostring(err))
+end)
+test("protection: unprotect_header rejects short mask", function()
+  local short_mask = {
+    aes_128_ecb_block = function(k, s)
+      return "\000"
+    end
+  }
+  local aad, err = prot.unprotect_header((string.rep("\000", 40)), 2, "hp", true, 0, short_mask)
+  assert(aad == nil, "expected nil aad")
+  return assert(err and err:match("mask"), "expected mask error, got " .. tostring(err))
+end)
+local echo_backend = {
+  aes_128_gcm_encrypt = function(key, nonce, plaintext, aad)
+    return nonce, plaintext, aad
+  end,
+  aes_128_gcm_decrypt = function(key, nonce, ciphertext, aad)
+    return nonce, ciphertext, aad
+  end
+}
+test("protection: encrypt_payload builds nonce from iv and pn", function()
+  local iv = string.rep("\002", 12)
+  local nonce, plaintext, aad = prot.encrypt_payload("payload", "key", iv, 5, "hdr", echo_backend)
+  assert(nonce == prot.construct_nonce(iv, 5), "nonce should be construct_nonce(iv, pn)")
+  assert(plaintext == "payload", "plaintext should be forwarded")
+  return assert(aad == "hdr", "aad should be forwarded")
+end)
+test("protection: decrypt_payload builds nonce and slices from payload offset", function()
+  local iv = string.rep("\003", 12)
+  local pkt = "HEAD" .. "ciphertext"
+  local nonce, ciphertext, aad = prot.decrypt_payload(pkt, 5, "key", iv, 7, "hdr", echo_backend)
+  assert(nonce == prot.construct_nonce(iv, 7), "nonce should be construct_nonce(iv, pn)")
+  assert(ciphertext == "ciphertext", "payload should start at payload_off")
+  return assert(aad == "hdr", "aad should be forwarded")
+end)
 return util.summary("protection")

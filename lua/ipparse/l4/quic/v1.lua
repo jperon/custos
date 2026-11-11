@@ -2,13 +2,13 @@ local upper
 upper = string.upper
 local bidirectional, zero_indexed
 do
-  local _obj_0 = require("ipparse.fun")
+  local _obj_0 = require("ipparse.fun.tables")
   bidirectional, zero_indexed = _obj_0.bidirectional, _obj_0.zero_indexed
 end
-local band, bor, bnot, lshift, rshift
+local band, bor, bnot, lshift
 do
   local _obj_0 = require("ipparse.lib.bit_compat")
-  band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
+  band, bor, bnot, lshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift
 end
 local version = 0x01
 local initial_salt = "38762cf7f55934b34d179ae6a4c80cadccbb7f0a"
@@ -58,9 +58,11 @@ generate_mt = function(byte1)
               v = mask
             end
             self.byte1 = bor(band(self.byte1, bnot(mask)), v or 0)
+            return 
           end
         end
       end
+      return rawset(self, k, v)
     end
   }
 end
