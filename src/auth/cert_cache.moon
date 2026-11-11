@@ -10,6 +10,8 @@
 --   - TTL long (90+ jours) : on régénère seulement si expiré
 
 { :log_debug, :log_warn } = require "log"
+{ :with_lock } = require "lib.filelock"
+{ :write_pem_atomic, :read_file } = require "auth.cert_files"
 
 --- Sauvegarde l'index persistant sur disque (timestamp + expiration)
 persist_index = (index_path, index_data) ->
@@ -71,9 +73,14 @@ load_persistent_index = (index_path) ->
 -- @tparam number ttl Temps de vie des certificats en secondes (défaut: 7776000 = 90 jours)
 -- @tparam string cert_dir Répertoire pour stocker les certificats (défaut: "tmp/certs")
 -- @treturn table Instance du cache avec méthodes get/set/evict
-create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
+create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs", max_names = nil) ->
   max_size = math.max(1, tonumber(max_size) or 500)
   ttl = math.max(60, tonumber(ttl) or 7776000)  -- Min 60 sec, default 90 days
+  -- Plafond du nombre de noms distincts conservés sur disque (et donc en RAM
+  -- via le cache). Au-delà, l'appelant (server.resolve_tls_ctx) se replie sur
+  -- le certificat de l'IP locale SANS générer de nouvelle paire : un client ne
+  -- peut ni remplir la flash ni faire générer des clés à l'infini.
+  max_names = math.max(1, tonumber(max_names) or max_size)
 
   cert_dir = cert_dir or "tmp/certs"
   index_path = "tmp/cert_cache_index.lua"
@@ -88,50 +95,49 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
   -- Index persistant : {hostname → {expires_at, accessed_at}}
   persistent_index = load_persistent_index index_path
 
-  --- Sauvegarde une paire cert/key sur disque et met à jour l'index
+  --- Sauvegarde une paire cert/key sur disque et met à jour l'index.
+  -- Les deux fichiers sont écrits atomiquement SOUS le même verrou : un autre
+  -- enfant qui lit la paire (load_cert_from_disk) ne peut pas voir la clé d'une
+  -- génération et le certificat d'une autre.
   save_cert_to_disk = (hostname, cert_pem, key_pem) ->
     hostname_lower = hostname\lower!
     cert_file = "#{cert_dir}/#{hostname_lower}.crt"
     key_file = "#{cert_dir}/#{hostname_lower}.key"
 
-    -- Écrire le certificat
-    cert_fh, cert_err = io.open cert_file, "w"
-    unless cert_fh
-      log_warn -> { action: "cert_cache_disk_write_failed", file: cert_file, reason: cert_err or "io.open failed" }
-      return false
-    cert_fh\write cert_pem
-    cert_fh\close!
+    ok_pair = pcall ->
+      with_lock "#{cert_file}.lock", ->
+        ok_cert, cert_err = write_pem_atomic cert_file, cert_pem
+        unless ok_cert
+          log_warn -> { action: "cert_cache_disk_write_failed", file: cert_file, reason: cert_err or "write failed" }
+          error cert_err or "write failed"
+        ok_key, key_err = write_pem_atomic key_file, key_pem
+        unless ok_key
+          log_warn -> { action: "cert_cache_disk_write_failed", file: key_file, reason: key_err or "write failed" }
+          pcall os.remove, cert_file
+          error key_err or "write failed"
 
-    -- Écrire la clé
-    key_fh, key_err = io.open key_file, "w"
-    unless key_fh
-      log_warn -> { action: "cert_cache_disk_write_failed", file: key_file, reason: key_err or "io.open failed" }
-      os.remove cert_file
+    unless ok_pair
       return false
-    key_fh\write key_pem
-    key_fh\close!
 
     log_debug -> { action: "cert_cache_disk_saved", hostname: hostname_lower }
     true
 
-  --- Charge une paire cert/key depuis disque
+  --- Charge une paire cert/key depuis disque (lecture sous verrou).
+  -- Le verrou est le même que celui de l'écriture : la paire lue est toujours
+  -- celle d'une seule génération.
   load_cert_from_disk = (hostname) ->
     hostname_lower = hostname\lower!
     cert_file = "#{cert_dir}/#{hostname_lower}.crt"
     key_file = "#{cert_dir}/#{hostname_lower}.key"
 
-    cert_fh = io.open cert_file, "r"
-    key_fh = io.open key_file, "r"
+    cert_pem = nil
+    key_pem = nil
+    ok_pair = pcall ->
+      with_lock "#{cert_file}.lock", ->
+        cert_pem = read_file cert_file
+        key_pem = read_file key_file
 
-    unless cert_fh and key_fh
-      return nil, nil
-
-    cert_pem = cert_fh\read "*a"
-    key_pem = key_fh\read "*a"
-    cert_fh\close!
-    key_fh\close!
-
-    unless cert_pem and key_pem and #cert_pem > 0 and #key_pem > 0
+    unless ok_pair and cert_pem and key_pem and #cert_pem > 0 and #key_pem > 0
       return nil, nil
 
     log_debug -> { action: "cert_cache_disk_loaded", hostname: hostname_lower }
@@ -328,13 +334,33 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
 
     removed_count
 
+  --- Vrai si un nouveau nom peut être ajouté sans dépasser `max_names`.
+  -- Les enfants AUTH sont forqués APRÈS le chargement de l'index par le
+  -- parent : leur copie RAM de `persistent_index` est figée à cet instant. On
+  -- relit donc le fichier d'index avant de compter, sinon chaque enfant
+  -- croirait le cache vide et le plafond ne s'appliquerait jamais.
+  -- @tparam string hostname Nom SNI
+  -- @treturn boolean true si le nom est déjà connu ou si le quota n'est pas atteint
+  can_store = (hostname) ->
+    return false unless hostname and #hostname > 0
+
+    hostname_lower = hostname\lower!
+    return true if data[hostname_lower] or persistent_index[hostname_lower]
+
+    persistent_index = load_persistent_index index_path
+    count = 0
+    for _ in pairs persistent_index
+      count += 1
+    count < max_names
+
   --- Retourne les stats du cache.
-  -- @treturn table {size_ram, size_disk, max_size, ttl_seconds}
+  -- @treturn table {size_ram, size_disk, max_size, max_names, ttl_seconds}
   stats = () ->
     {
       size_ram: #lru_order
       size_disk: #persistent_index
       max_size: max_size
+      max_names: max_names
       ttl_seconds: ttl
     }
 
@@ -358,6 +384,7 @@ create_cache = (max_size = 500, ttl = 7776000, cert_dir = "tmp/certs") ->
     :get
     :delete
     :purge_expired
+    :can_store
     :stats
     :clear
   }

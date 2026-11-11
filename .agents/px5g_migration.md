@@ -97,23 +97,24 @@ local ctx = cert_module.load_or_generate_sni("example.com", cache)
 
 **Important** : WolfSSL exige des fichiers, pas des PEM strings. Les temporaires sont créés à la génération et cachés en mémoire.
 
-**État réel** : `load_or_generate_sni` est appelé par `server.moon` avec l'**IP
-locale** du socket (`getsockname`), pas avec le SNI du ClientHello. Les
-certificats dynamiques sont donc keyés par IP locale ; `sni_extractor` existe
-mais n'est pas branché (l'extraction SNI reste une évolution future).
+**État réel** : `load_or_generate_sni` est appelé par `server.moon` avec le
+**nom SNI** demandé (lu sans consommation par `src/auth/sni_peek.moon`,
+`recv MSG_PEEK` avant `ssl.wrap`), avec repli sur l'**IP locale** du socket
+(`getsockname`) si le SNI est absent, invalide, hors quota
+(`SNI_CERT_MAX_NAMES = 128`) ou si sa génération échoue. Le nom est validé par
+`auth.cert_name.sanitize_hostname` (nom DNS simple uniquement) ; l'écriture des
+paires `.key`/`.crt` est atomique et verrouillée (`auth.cert_files`).
 
 #### `server.moon`
 Au démarrage du serveur AUTH (`run()`) :
-1. Initialise un cache LRU `cert_cache.create_cache(100, 86400)`
-2. Génère le certificat initial (fallback générique "custos")
+1. Initialise un cache LRU `cert_cache.create_cache(500, 7776000, "tmp/certs", SNI_CERT_MAX_NAMES)`
+2. Charge le certificat statique configuré, hérité par les enfants via fork (pas de certificat générique si `auth.cert`/`auth.key` sont fournis)
 3. Passe le cache dans `state.cert_cache`
 
-Le serveur conserve l'approche actuelle (certificat unique) ; le cache
-dynamique est actuellement keyé par l'IP locale, et l'intégration SNI reste
-une évolution future :
-- Extraction SNI du ClientHello brut
-- Appel à `load_or_generate_sni(sni_hostname, state.cert_cache)`
-- Utilisation du contexte SNI-spécifique
+Par connexion, `handle_client` observe le ClientHello (`auth.sni_peek`), choisit
+le nom (`server.cert_name_for`) puis appelle
+`load_or_generate_sni(nom, state.cert_cache)`. Le certificat statique, s'il est
+configuré, reste prioritaire et aucune lecture du ClientHello n'est faite.
 
 ## Flux d'utilisation
 
@@ -125,14 +126,14 @@ server.moon:run()
   → state.cert_cache = cache
 ```
 
-### Connexion client (approche future avec SNI)
+### Connexion client (avec SNI)
 ```
 handle_client()
-  → raw_socket data (avant TLS wrap)
-  → sni_hostname = extract_sni(data)
-  → ctx = load_or_generate_sni(sni_hostname, cache)  # Avec cache
-    ├─ cache.get(sni_hostname)   # Hit : contexte existant
-    └─ cert_generator.generate_self_signed(sni_hostname)  # Miss : génère
+  → sni_brut = sni_peek.extract_client_sni(client, deadline)  # MSG_PEEK, non consommé
+  → nom = server.cert_name_for(local_ip, sni_brut, cache)     # sinon local_ip
+  → ctx = load_or_generate_sni(nom, cache)
+    ├─ cache.get(nom)   # Hit : contexte existant
+    └─ cert_generator.generate_self_signed(nom)  # Miss : génère
   → ssl.wrap(socket, ctx)
   → TLS handshake
 ```
@@ -264,11 +265,11 @@ find /custos/tmp -name "auth_sni_*.crt" -mtime +1 -delete
 
 ## Roadmap future
 
-1. **SNI extraction au socket level** : extraire SNI AVANT ssl.wrap
-2. **Certificats SNI-spécifiques** : CN = SNI hostname
-3. **Wildcard SANs** : *.example.com basé sur SNI pattern
+1. ~~**SNI extraction au socket level**~~ : fait (`src/auth/sni_peek.moon`, MSG_PEEK avant ssl.wrap)
+2. ~~**Certificats SNI-spécifiques**~~ : fait (CN = nom SNI validé, repli IP locale)
+3. **Wildcard SANs** : *.example.com basé sur SNI pattern (refusé aujourd'hui : joker non valide en SNI)
 4. **Paramètres de cache configurables** : `cfg/auth.yml`
-5. **Cleaning scheduler** : suppression auto des temporaires >24h
+5. **Cleaning scheduler** : la purge périodique de `cert_cache` et le plafond `SNI_CERT_MAX_NAMES` bornent déjà les noms ; un nettoyage des `.lock` résiduels reste possible
 
 ## Problèmes connus
 

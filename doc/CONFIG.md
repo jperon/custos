@@ -423,7 +423,7 @@ Portail captif et authentification des utilisateurs.
 | `host` | string | `"::"` | Adresse d'écoute du serveur auth (`::`= toutes interfaces IPv4+IPv6) |
 | `port` | int | `33443` | Port HTTPS du serveur d'authentification |
 | `captive_port` | int | `33080` | Port HTTP du portail captif |
-| `cert` | string | — | Chemin vers le certificat TLS. Si le fichier n'existe pas au démarrage (installation fraîche), un certificat auto-signé est **généré automatiquement** à cet emplacement (px5g, dossiers parents créés). En cas d'échec de génération, repli sur le cache de certificats dynamiques keyé par l'IP locale du socket (le SNI ClientHello n'est pas extrait). |
+| `cert` | string | — | Chemin vers le certificat TLS. Si le fichier n'existe pas au démarrage (installation fraîche), un certificat auto-signé est **généré automatiquement** à cet emplacement (px5g, dossiers parents créés). En cas d'échec de génération, repli sur le cache de certificats dynamiques keyé par le nom SNI demandé (lu par `MSG_PEEK` avant le handshake, `src/auth/sni_peek.moon`), puis sur l'IP locale du socket si le SNI est absent, invalide, hors quota (`SNI_CERT_MAX_NAMES`) ou si sa génération échoue. |
 | `key` | string | — | Chemin vers la clé privée TLS (générée avec `cert` si absente, permissions `0600`) |
 | `secrets` | string | `"/etc/custos/secrets"` | Répertoire contenant les secrets (hash mots de passe) |
 | `session_ttl` | int | `0` | Durée (s) des sessions auth (0 = illimitée) |

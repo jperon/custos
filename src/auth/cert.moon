@@ -5,6 +5,8 @@
 
 ssl = require "auth.ffi_wolfssl"
 { :log_debug, :log_warn, :log_error } = require "log"
+{ :safe_cert_name } = require "auth.cert_name"
+{ :materialize_pair } = require "auth.cert_files"
 
 CERT_DAYS = 730     -- validité : 2 ans
 
@@ -117,15 +119,25 @@ file_exists = (path) ->
   else
     false
 
+--- Chemins des fichiers PEM du certificat dynamique d'un nom.
+-- @tparam string hostname_lower Nom normalisé (validé par safe_cert_name)
+-- @treturn string Chemin de la clé privée
+-- @treturn string Chemin du certificat
+sni_paths = (hostname_lower) ->
+  year = os.date "%Y"
+  "tmp/auth_sni_#{hostname_lower}_#{year}.key", "tmp/auth_sni_#{hostname_lower}_#{year}.crt"
+
 --- Charge ou génère un contexte TLS pour un hostname SNI spécifique.
 -- Utilise un cache LRU avec TTL pour éviter la régénération répétée.
--- @tparam string hostname Hostname SNI (ex: "example.com"), ou nil pour fallback générique
+-- @tparam string hostname Hostname SNI (ex: "example.com"), IP locale du repli, ou nil ("custos")
 -- @tparam table cache Instance du cache (créée par cert_cache.create_cache)
 -- @treturn table  Contexte TLS WolfSSL (ssl.newcontext)
 -- @raise   string Message d'erreur si échec
 load_or_generate_sni = (hostname, cache) ->
-  hostname = hostname or "custos"
-  hostname_lower = hostname\lower!
+  -- Le nom peut venir du client : safe_cert_name interdit tout ce qui
+  -- composerait un chemin hors de tmp/ (ou un CN douteux). L'IP locale du
+  -- repli reste acceptée pour conserver le comportement historique.
+  hostname_lower = safe_cert_name(hostname) or "custos"
 
   log_debug -> { action: "cert_sni_request", hostname: hostname_lower }
 
@@ -135,30 +147,23 @@ load_or_generate_sni = (hostname, cache) ->
     log_debug -> { action: "cert_sni_cache_hit_ram", hostname: hostname_lower }
     return entry.ctx
 
+  key_file, cert_file = sni_paths hostname_lower
+
   if entry and entry.cert_pem and entry.key_pem
-    -- Entry depuis disque, recréer contexte
+    -- Entry depuis disque, recréer contexte. materialize_pair réutilise la
+    -- paire déjà présente (écrite par un autre enfant) au lieu de l'écraser.
     log_debug -> { action: "cert_sni_cache_hit_disk", hostname: hostname_lower }
 
-    key_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.key"
-    cert_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.crt"
-
-    key_ok = pcall ->
-      key_fh = io.open key_file, "w"
-      error "Cannot open key file" unless key_fh
-      key_fh\write entry.key_pem
-      key_fh\close!
-
-    cert_ok = pcall ->
-      cert_fh = io.open cert_file, "w"
-      error "Cannot open cert file" unless cert_fh
-      cert_fh\write entry.cert_pem
-      cert_fh\close!
-
-    if key_ok and cert_ok
+    ok_pair, reused_ctx = pcall ->
+      disk_key, disk_cert = materialize_pair key_file, cert_file, entry.key_pem, entry.cert_pem
       ctx = ssl.newcontext { certificate: cert_file, key: key_file }
-      cache.set hostname_lower, entry.cert_pem, entry.key_pem, ctx
+      cache.set hostname_lower, disk_cert, disk_key, ctx
+      ctx
+
+    if ok_pair
       log_debug -> { action: "cert_sni_context_recreated", hostname: hostname_lower }
-      return ctx
+      return reused_ctx
+    log_warn -> { action: "cert_sni_disk_reuse_failed", hostname: hostname_lower, err: tostring reused_ctx }
 
   -- Pas en cache ou erreur : générer
   log_debug -> { action: "cert_sni_cache_miss", hostname: hostname_lower }
@@ -172,47 +177,11 @@ load_or_generate_sni = (hostname, cache) ->
 
   log_debug -> { action: "cert_sni_generated", hostname: hostname_lower, key_size: #key_pem, cert_size: #cert_pem }
 
-  -- WolfSSL utilise des fichiers, pas des PEM strings.
-  -- Écrire les PEM dans des fichiers temporaires.
-  key_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.key"
-  cert_file = "tmp/auth_sni_#{hostname_lower}_#{os.date("%Y")}.crt"
-
+  -- WolfSSL utilise des fichiers, pas des PEM strings. materialize_pair écrit
+  -- chaque fichier via temporaire + rename sous verrou et renvoie la paire
+  -- réellement sur disque (celle d'un éventuel gagnant de la course).
   log_debug -> { action: "cert_sni_writing_files", key_file: key_file, cert_file: cert_file }
-
-  -- Écrire la clé
-  key_fh, open_err = io.open key_file, "w"
-  unless key_fh
-    log_error -> { action: "cert_sni_key_write_failed", key_file: key_file, reason: open_err or "io.open failed" }
-    error "Impossible d'écrire la clé SNI : #{key_file}"
-  bytes_written = key_fh\write key_pem
-  key_fh\close!
-
-  log_debug -> { action: "cert_sni_key_written", key_file: key_file, bytes: bytes_written }
-
-  -- Vérifier que le fichier existe et peut être lu
-  key_stat, open_err = io.open key_file, "r"
-  unless key_stat
-    log_error -> { action: "cert_sni_key_verify_failed", key_file: key_file, reason: open_err or "io.open failed" }
-    error "Clé SNI écrite mais non relisible : #{key_file}"
-  key_stat\close!
-
-  -- Écrire le certificat
-  cert_fh, open_err = io.open cert_file, "w"
-  unless cert_fh
-    os.remove key_file
-    log_error -> { action: "cert_sni_cert_write_failed", cert_file: cert_file, reason: open_err or "io.open failed" }
-    error "Impossible d'écrire le certificat SNI : #{cert_file}"
-  bytes_written = cert_fh\write cert_pem
-  cert_fh\close!
-
-  log_debug -> { action: "cert_sni_cert_written", cert_file: cert_file, bytes: bytes_written }
-
-  -- Vérifier que le fichier existe et peut être lu
-  cert_stat, open_err = io.open cert_file, "r"
-  unless cert_stat
-    log_error -> { action: "cert_sni_cert_verify_failed", cert_file: cert_file, reason: open_err or "io.open failed" }
-    error "Certificat SNI écrit mais non relisible : #{cert_file}"
-  cert_stat\close!
+  key_pem, cert_pem = materialize_pair key_file, cert_file, key_pem, cert_pem
 
   -- Créer le contexte TLS via les fichiers
   log_debug -> { action: "cert_sni_newcontext", hostname: hostname_lower, protocol: "tlsv1_2" }

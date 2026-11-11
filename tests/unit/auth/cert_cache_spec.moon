@@ -444,3 +444,42 @@ describe "auth/cert_cache", ->
       assert.is_not_nil entry
       assert.equals "number", type(entry.expires_at)
       assert.is_true entry.expires_at > os.time!
+
+  -- ── can_store() : plafond du nombre de noms distincts ──────────────────────
+
+  describe "can_store (quota de noms)", ->
+
+    it "expose max_names dans stats", ->
+      cache = create_cache 10, 3600, "tmp/test_certs_names0", 2
+      s = cache.stats!
+      assert.equals 2, s.max_names
+
+    it "accepte un nom connu et un nom nouveau sous le quota", ->
+      dir = "tmp/test_certs_names1"
+      cache = create_cache 10, 3600, dir, 2
+      cache.clear!
+      assert.is_true cache.can_store("a.example")
+      cache.set("a.example", CERT, KEY, nil)
+      assert.is_true cache.can_store("a.example")
+      assert.is_true cache.can_store("b.example")
+
+    it "refuse un nom nouveau quand le quota disque est atteint", ->
+      dir = "tmp/test_certs_names2"
+      cache = create_cache 10, 3600, dir, 2
+      cache.clear!
+      cache.set("a.example", CERT, KEY, nil)
+      cache.set("b.example", CERT, KEY, nil)
+      assert.is_false cache.can_store("c.example")
+      assert.is_true cache.can_store("a.example"), "un nom déjà connu reste servi"
+
+    it "relit l'index disque (enfants forqués : vues RAM figées)", ->
+      dir = "tmp/test_certs_names3"
+      writer = create_cache 10, 3600, dir, 2
+      writer.clear!
+      reader = create_cache 10, 3600, dir, 2
+      -- Le reader a chargé l'index vide AVANT les insertions du writer.
+      writer.set("a.example", CERT, KEY, nil)
+      writer.set("b.example", CERT, KEY, nil)
+      assert.is_false reader.can_store("c.example"),
+        "le quota doit refléter l'index disque, pas la copie COW"
+
