@@ -10,15 +10,15 @@ local auth_cfg = config.auth or { }
 local metrics = require("metrics")
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
-local parse_ip4, parse_ip6, parse_udp, parse_tcp, parse_dns, ip2s, dns_types
+local ip2s, dns_types
 do
   local _obj_0 = require("lib.packet_parsing")
-  parse_ip4, parse_ip6, parse_udp, parse_tcp, parse_dns, ip2s, dns_types = _obj_0.parse_ip4, _obj_0.parse_ip6, _obj_0.parse_udp, _obj_0.parse_tcp, _obj_0.parse_dns, _obj_0.ip2s, _obj_0.dns_types
+  ip2s, dns_types = _obj_0.ip2s, _obj_0.dns_types
 end
-local skip_ipv6_ext_hdrs, new_dns_tcp_stream
+local skip_ipv6_ext_hdrs, new_dns_tcp_stream, parse_dns_packet
 do
   local _obj_0 = require("packet_utils")
-  skip_ipv6_ext_hdrs, new_dns_tcp_stream = _obj_0.skip_ipv6_ext_hdrs, _obj_0.new_dns_tcp_stream
+  skip_ipv6_ext_hdrs, new_dns_tcp_stream, parse_dns_packet = _obj_0.skip_ipv6_ext_hdrs, _obj_0.new_dns_tcp_stream, _obj_0.parse_dns_packet
 end
 local bit = require("bit")
 local filter = require("filter")
@@ -206,80 +206,7 @@ write_event = function(fields, allowed)
   }, "\t") .. "\n"
   return libc.write(events_wfd, line, #line)
 end
-local PROTO_UDP = 17
-local PROTO_TCP = 6
 local tcp_state = new_dns_tcp_stream()
-local parse_packet
-parse_packet = function(raw)
-  local ver = bit.rshift(raw:byte(1), 4)
-  local ip
-  if ver == 4 then
-    local ip4, _ = parse_ip4(raw)
-    ip = ip4
-  elseif ver == 6 then
-    local ip6, _ = parse_ip6(raw)
-    ip = ip6
-  end
-  if not (ip) then
-    return nil, "parse_failed"
-  end
-  local l4_off = ip.data_off
-  local proto = ip.protocol or ip.next_header
-  if ip.version == 6 then
-    local p = ffi.cast("const uint8_t*", raw)
-    local l4_off_0based
-    proto, l4_off_0based = skip_ipv6_ext_hdrs(p, #raw, ip.next_header)
-    if not (proto) then
-      return nil, "parse_failed"
-    end
-    l4_off = l4_off_0based + 1
-  end
-  if proto == PROTO_UDP then
-    local udp, _ = parse_udp(raw, l4_off)
-    if not (udp) then
-      return nil, "parse_failed"
-    end
-    local dns_raw = raw:sub(udp.data_off, udp.off + udp.len - 1)
-    local dns_msg
-    dns_msg, _ = parse_dns(dns_raw, 1, false)
-    if not (dns_msg) then
-      return nil, "parse_failed"
-    end
-    udp.proto = "udp"
-    return ip, udp, dns_msg
-  elseif proto == PROTO_TCP then
-    local tcp, _ = parse_tcp(raw, l4_off)
-    if not (tcp) then
-      return nil, "parse_failed"
-    end
-    local payload = raw:sub(tcp.data_off)
-    local is_fin_rst = bit.band(tcp.flags, 0x05) ~= 0
-    local has_payload = payload ~= ""
-    local key = tostring(ip.src) .. "|" .. tostring(tcp.spt) .. "|" .. tostring(ip.dst) .. "|" .. tostring(tcp.dpt)
-    local buf, init_seq, first_seg = tcp_state.feed(key, payload, tcp.flags, tcp.seq_n)
-    if not (buf) then
-      return nil, (function()
-        if is_fin_rst or not has_payload then
-          return "tcp_control"
-        else
-          return "buffering"
-        end
-      end)()
-    end
-    local dns_raw = buf:sub(3)
-    local dns_msg
-    dns_msg, _ = parse_dns(dns_raw, 1, false)
-    if not (dns_msg) then
-      return nil, "parse_failed"
-    end
-    tcp.proto = "tcp"
-    tcp.tcp_init_seq = init_seq
-    tcp.tcp_single_segment = first_seg
-    tcp.tcp_dns_raw = dns_raw
-    return ip, tcp, dns_msg
-  end
-  return nil, "parse_failed"
-end
 local MAX_RESPONSE_RULE_IDS = 8
 local append_unique
 append_unique = function(dst, values, limit)
@@ -361,7 +288,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   local raw = ffi.string(payload_ptr[0], payload_len)
   local q_entry_ms = get_benchmark_ms()
   local l2 = get_l2(nfad)
-  local ip, l4, dns_msg = parse_packet(raw)
+  local ip, l4, dns_msg = parse_dns_packet(raw, tcp_state)
   if not (ip) then
     if l4 == "buffering" then
       return NF_ACCEPT

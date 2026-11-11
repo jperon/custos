@@ -3,6 +3,8 @@
 
 ffi = require "ffi"
 packet_utils = require "packet_utils"
+{ :s2ip } = require "ipparse.l3.ip"
+sp = require("ipparse.lib.pack_compat").pack
 
 make_ipv6_packet = (next_header=17, ext_header=44, ext_size=8) ->
   raw = ffi.new "uint8_t[?]", 40 + ext_size
@@ -99,3 +101,38 @@ describe "packet_utils", ->
       stream = packet_utils.new_dns_tcp_stream!
       assert.is_function stream.feed
       assert.is_function stream.purge
+
+  -- Parsing L3/L4/L7 commun à worker_questions et worker_responses.
+  describe "parse_dns_packet", ->
+    dns_query = "\xab\xcd\1\0\0\1\0\0\0\0\0\0\7example\3com\0\0\1\0\1"
+    ipv4_udp = (dns) ->
+      udp_len = 8 + #dns
+      total = 20 + udp_len
+      hdr = sp ">B B H H H B B H", 0x45, 0, total, 0x1234, 0, 64, 17, 0
+      hdr ..= s2ip("192.0.2.10") .. s2ip("1.1.1.1")
+      hdr .. sp(">H H H H", 5353, 53, udp_len, 0) .. dns
+    ipv4_syn = ->
+      hdr = sp ">B B H H H B B H", 0x45, 0, 40, 0x1234, 0, 64, 6, 0
+      hdr ..= s2ip("192.0.2.10") .. s2ip("1.1.1.1")
+      hdr .. sp ">H H I I B B H H H", 5353, 53, 1, 0, 0x50, 0x02, 8192, 0, 0
+
+    it "décode un paquet UDP/IPv4 jusqu'au message DNS", ->
+      stream = packet_utils.new_dns_tcp_stream!
+      ip, l4, dns_msg, dns_raw, ip_ihl = packet_utils.parse_dns_packet ipv4_udp(dns_query), stream
+      assert.equals 4, ip.version
+      assert.equals "udp", l4.proto
+      assert.equals 0xabcd, dns_msg.header.id
+      assert.equals dns_query, dns_raw
+      assert.equals 20, ip_ihl
+
+    it "renvoie parse_failed sur un paquet tronqué", ->
+      stream = packet_utils.new_dns_tcp_stream!
+      ip, status = packet_utils.parse_dns_packet "\x45\x00", stream
+      assert.is_nil ip
+      assert.equals "parse_failed", status
+
+    it "renvoie tcp_control pour un SYN sans charge utile", ->
+      stream = packet_utils.new_dns_tcp_stream!
+      ip, status = packet_utils.parse_dns_packet ipv4_syn!, stream
+      assert.is_nil ip
+      assert.equals "tcp_control", status

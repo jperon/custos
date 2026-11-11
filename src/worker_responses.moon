@@ -26,8 +26,8 @@ ttl_cfg = dns_cfg.ttl_grace or {}
 auth_cfg = config.auth or {}
 clients_cfg = config.clients or {}
 { :user_for_mac } = require "auth.sessions"
-{ :parse_ip4, :parse_ip6, :parse_udp, :parse_tcp, :parse_dns, :ip2s, dns_types: QTYPE } = require "lib.packet_parsing"
-{ :skip_ipv6_ext_hdrs, :new_dns_tcp_stream } = require "packet_utils"
+{ :parse_dns, :ip2s, dns_types: QTYPE } = require "lib.packet_parsing"
+{ :skip_ipv6_ext_hdrs, :new_dns_tcp_stream, :parse_dns_packet } = require "packet_utils"
 { :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume, :purge_pending } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
@@ -174,12 +174,6 @@ set_verdict = (qh_ptr, pkt_id, verdict, payload=nil) ->
   else
     libnfq.nfq_set_verdict qh_ptr, pkt_id, verdict, 0, nil
 
--- ── Constantes L3/L4 et helpers checksums ──────────────────────
--- Byte-level (big-endian) + recalcul checksums IPv4/UDP/TCP factorisés dans
--- lib.checksums (mutation FFI en place, partagée avec les futurs workers).
-
-{ :PROTO_UDP, :PROTO_TCP } = require "lib.checksums"
-
 tcp_state = new_dns_tcp_stream!
 
 -- Reconstruction de paquet et formatage des RR DNS factorisés (fonctions pures).
@@ -187,62 +181,8 @@ tcp_state = new_dns_tcp_stream!
 
 -- ── Parsing L3/L4/L7 ────────────────────────────────────────────
 
--- Extrait ip, l4, dns_msg, dns_raw, ip_ihl depuis un paquet IP brut.
--- Retourne nil, "status" sur les cas spéciaux.
--- ip_ihl est l'offset 0-based (octets) de L4 depuis le début du paquet.
-parse_packet = (raw) ->
-  ver = bit.rshift raw\byte(1), 4
-  ip = if ver == 4
-    ip4, _ = parse_ip4 raw
-    ip4
-  elseif ver == 6
-    ip6, _ = parse_ip6 raw
-    ip6
-  return nil, "parse_failed" unless ip
-
-  l4_off = ip.data_off
-  proto  = ip.protocol or ip.next_header
-  ip_ihl = ip.payload_off or (ip.data_off - 1)   -- offset 0-based de L4
-
-  if ip.version == 6
-    p = ffi.cast "const uint8_t*", raw
-    proto, l4_off_0based = skip_ipv6_ext_hdrs p, #raw, ip.next_header
-    return nil, "parse_failed" unless proto
-    l4_off = l4_off_0based + 1
-    ip_ihl = l4_off_0based
-
-  if proto == PROTO_UDP
-    udp, _ = parse_udp raw, l4_off
-    return nil, "parse_failed" unless udp
-    dns_raw = raw\sub udp.data_off, udp.off + udp.len - 1
-    dns_msg, _ = parse_dns dns_raw, 1, false
-    return nil, "parse_failed" unless dns_msg
-    udp.proto = "udp"
-    return ip, udp, dns_msg, dns_raw, ip_ihl
-
-  elseif proto == PROTO_TCP
-    tcp, _ = parse_tcp raw, l4_off
-    return nil, "parse_failed" unless tcp
-    payload = raw\sub tcp.data_off
-    is_fin_rst = bit.band(tcp.flags, 0x05) != 0
-    has_payload = payload != ""
-    -- Clé de reassembly : octets IP bruts (largeur fixe, byte-safe) plutôt que
-    -- ip2s (évite deux inet_ntop + allocations par segment TCP). Clé opaque,
-    -- jamais re-parsée.
-    key = "#{ip.src}|#{tcp.spt}|#{ip.dst}|#{tcp.dpt}"
-    buf, init_seq, first_seg = tcp_state.feed key, payload, tcp.flags, tcp.seq_n
-    unless buf
-      return nil, if is_fin_rst or not has_payload then "tcp_control" else "buffering"
-    dns_raw = buf\sub 3
-    dns_msg, _ = parse_dns dns_raw, 1, false
-    return nil, "parse_failed" unless dns_msg
-    tcp.proto = "tcp"
-    tcp.tcp_init_seq = init_seq
-    tcp.tcp_single_segment = first_seg
-    tcp.tcp_dns_raw = dns_raw
-    return ip, tcp, dns_msg, dns_raw, ip_ihl
-
-  nil, "parse_failed"
+-- Parsing partagé avec worker_questions (cf. packet_utils) : ip, l4, dns_msg,
+-- dns_raw, ip_ihl. Retourne nil, "status" sur les cas spéciaux.
 
 -- ── Chargement paresseux de filter pour éviter de tirer ip_whitelist (libnftnl)
 -- au chargement du module — critique pour les tests unitaires.
@@ -729,8 +669,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   l2 = get_l2 nfad
 
   -- ── L3 / L4 / L7 ───────────────────────────────────────────────
-  -- parse_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
-  ip, l4, dns_msg, dns_raw, ip_ihl = parse_packet raw
+  -- parse_dns_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
+  ip, l4, dns_msg, dns_raw, ip_ihl = parse_dns_packet raw, tcp_state
   bench_after_parse_ms = current_benchmark_ms! if runtime_cfg.benchmark
   unless ip
     -- Intermediate TCP data segments are DROPped so response can reinject a single

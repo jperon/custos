@@ -13,15 +13,15 @@ local auth_cfg = config.auth or { }
 local clients_cfg = config.clients or { }
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
-local parse_ip4, parse_ip6, parse_udp, parse_tcp, parse_dns, ip2s, QTYPE
+local parse_dns, ip2s, QTYPE
 do
   local _obj_0 = require("lib.packet_parsing")
-  parse_ip4, parse_ip6, parse_udp, parse_tcp, parse_dns, ip2s, QTYPE = _obj_0.parse_ip4, _obj_0.parse_ip6, _obj_0.parse_udp, _obj_0.parse_tcp, _obj_0.parse_dns, _obj_0.ip2s, _obj_0.dns_types
+  parse_dns, ip2s, QTYPE = _obj_0.parse_dns, _obj_0.ip2s, _obj_0.dns_types
 end
-local skip_ipv6_ext_hdrs, new_dns_tcp_stream
+local skip_ipv6_ext_hdrs, new_dns_tcp_stream, parse_dns_packet
 do
   local _obj_0 = require("packet_utils")
-  skip_ipv6_ext_hdrs, new_dns_tcp_stream = _obj_0.skip_ipv6_ext_hdrs, _obj_0.new_dns_tcp_stream
+  skip_ipv6_ext_hdrs, new_dns_tcp_stream, parse_dns_packet = _obj_0.skip_ipv6_ext_hdrs, _obj_0.new_dns_tcp_stream, _obj_0.parse_dns_packet
 end
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
@@ -188,89 +188,11 @@ set_verdict = function(qh_ptr, pkt_id, verdict, payload)
     return libnfq.nfq_set_verdict(qh_ptr, pkt_id, verdict, 0, nil)
   end
 end
-local PROTO_UDP, PROTO_TCP
-do
-  local _obj_0 = require("lib.checksums")
-  PROTO_UDP, PROTO_TCP = _obj_0.PROTO_UDP, _obj_0.PROTO_TCP
-end
 local tcp_state = new_dns_tcp_stream()
 local replace_dns_payload, parse_answers, build_query_from_response
 do
   local _obj_0 = require("lib.dns_response")
   replace_dns_payload, parse_answers, build_query_from_response = _obj_0.replace_dns_payload, _obj_0.parse_answers, _obj_0.build_query_from_response
-end
-local parse_packet
-parse_packet = function(raw)
-  local ver = bit.rshift(raw:byte(1), 4)
-  local ip
-  if ver == 4 then
-    local ip4, _ = parse_ip4(raw)
-    ip = ip4
-  elseif ver == 6 then
-    local ip6, _ = parse_ip6(raw)
-    ip = ip6
-  end
-  if not (ip) then
-    return nil, "parse_failed"
-  end
-  local l4_off = ip.data_off
-  local proto = ip.protocol or ip.next_header
-  local ip_ihl = ip.payload_off or (ip.data_off - 1)
-  if ip.version == 6 then
-    local p = ffi.cast("const uint8_t*", raw)
-    local l4_off_0based
-    proto, l4_off_0based = skip_ipv6_ext_hdrs(p, #raw, ip.next_header)
-    if not (proto) then
-      return nil, "parse_failed"
-    end
-    l4_off = l4_off_0based + 1
-    ip_ihl = l4_off_0based
-  end
-  if proto == PROTO_UDP then
-    local udp, _ = parse_udp(raw, l4_off)
-    if not (udp) then
-      return nil, "parse_failed"
-    end
-    local dns_raw = raw:sub(udp.data_off, udp.off + udp.len - 1)
-    local dns_msg
-    dns_msg, _ = parse_dns(dns_raw, 1, false)
-    if not (dns_msg) then
-      return nil, "parse_failed"
-    end
-    udp.proto = "udp"
-    return ip, udp, dns_msg, dns_raw, ip_ihl
-  elseif proto == PROTO_TCP then
-    local tcp, _ = parse_tcp(raw, l4_off)
-    if not (tcp) then
-      return nil, "parse_failed"
-    end
-    local payload = raw:sub(tcp.data_off)
-    local is_fin_rst = bit.band(tcp.flags, 0x05) ~= 0
-    local has_payload = payload ~= ""
-    local key = tostring(ip.src) .. "|" .. tostring(tcp.spt) .. "|" .. tostring(ip.dst) .. "|" .. tostring(tcp.dpt)
-    local buf, init_seq, first_seg = tcp_state.feed(key, payload, tcp.flags, tcp.seq_n)
-    if not (buf) then
-      return nil, (function()
-        if is_fin_rst or not has_payload then
-          return "tcp_control"
-        else
-          return "buffering"
-        end
-      end)()
-    end
-    local dns_raw = buf:sub(3)
-    local dns_msg
-    dns_msg, _ = parse_dns(dns_raw, 1, false)
-    if not (dns_msg) then
-      return nil, "parse_failed"
-    end
-    tcp.proto = "tcp"
-    tcp.tcp_init_seq = init_seq
-    tcp.tcp_single_segment = first_seg
-    tcp.tcp_dns_raw = dns_raw
-    return ip, tcp, dns_msg, dns_raw, ip_ihl
-  end
-  return nil, "parse_failed"
 end
 local _filter = nil
 local run_on_response
@@ -881,7 +803,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     bench_after_payload_ms = current_benchmark_ms()
   end
   local l2 = get_l2(nfad)
-  local ip, l4, dns_msg, dns_raw, ip_ihl = parse_packet(raw)
+  local ip, l4, dns_msg, dns_raw, ip_ihl = parse_dns_packet(raw, tcp_state)
   if runtime_cfg.benchmark then
     bench_after_parse_ms = current_benchmark_ms()
   end
