@@ -216,7 +216,7 @@ describe("config.safe_search", function()
     return assert.equals(0, #rules)
   end)
 end)
-return describe("config.auth.bridge_ifname", function()
+describe("config.auth.bridge_ifname", function()
   reload = function(path)
     package.loaded["config"] = nil
     local actual = path or "tmp/__no_config_for_test__.moon"
@@ -266,5 +266,57 @@ return describe("config.auth.bridge_ifname", function()
     local cfg = reload(path)
     os.remove(path)
     return assert.equals("br-explicit", cfg.auth.bridge_ifname)
+  end)
+end)
+return describe("config.nfqueue.responses", function()
+  after_each(function()
+    ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
+    package.loaded["config"] = nil
+  end)
+  local capture_warns
+  capture_warns = function(fn)
+    local old_log = package.loaded["log"]
+    local calls = { }
+    package.loaded["log"] = {
+      log_warn = function(thunk)
+        calls[#calls + 1] = thunk()
+      end
+    }
+    local ok, err = pcall(fn)
+    package.loaded["log"] = old_log
+    assert.is_true(ok, err)
+    return calls
+  end
+  it("une plage (\"4-5\") est ramenée à sa première file avec un warn", function()
+    local path = "tmp/config_spec_nfq_multi.moon"
+    write_moon(path, [[return { nfqueue: { responses: "4-5" } }]])
+    local holder = { }
+    local calls = capture_warns(function()
+      holder.cfg = reload(path)
+    end)
+    os.remove(path)
+    assert.equals("4", holder.cfg.nfqueue.responses)
+    local found = false
+    for _index_0 = 1, #calls do
+      local c = calls[_index_0]
+      if c.action == "nfqueue_responses_single_queue_only" then
+        found = true
+      end
+    end
+    return assert.is_true(found)
+  end)
+  it("une file seule (\"4\") est inchangée", function()
+    local path = "tmp/config_spec_nfq_single.moon"
+    write_moon(path, [[return { nfqueue: { responses: "4" } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    return assert.equals("4", cfg.nfqueue.responses)
+  end)
+  return it("questions: \"0-1\" reste inchangé (contrôle)", function()
+    local path = "tmp/config_spec_nfq_questions.moon"
+    write_moon(path, [[return { nfqueue: { questions: "0-1" } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    return assert.equals("0-1", cfg.nfqueue.questions)
   end)
 end)

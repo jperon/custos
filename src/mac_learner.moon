@@ -46,6 +46,24 @@ AF_UNIX     = 1
 SOCK_STREAM = 1
 POLLIN      = 1
 
+-- Timeout des recv de requête : un client qui se connecte sans jamais écrire
+-- ne doit pas figer l'unique boucle poll du learner (qui sert alors tous les
+-- get_mac/get_vlan/strip_target).
+SOL_SOCKET   = 1
+SO_RCVTIMEO  = 20
+QUERY_RECV_TIMEOUT_S = 0.2
+
+--- Borne le temps d'attente d'un recv bloquant sur un fd de connexion.
+-- Best-effort : un mock de libc en test peut ne pas exposer setsockopt.
+-- @tparam number fd   Descripteur de socket
+-- @tparam number secs Délai maximal (secondes, fractions acceptées)
+set_recv_timeout = (fd, secs) ->
+  pcall ->
+    tv = ffi.new "struct timeval"
+    tv.tv_sec  = math.floor secs
+    tv.tv_usec = math.floor (secs - math.floor(secs)) * 1e6
+    libc.setsockopt fd, SOL_SOCKET, SO_RCVTIMEO, tv, ffi.sizeof tv
+
 sh_quote = (s) ->
   "'" .. tostring(s)\gsub("'", "'\"'\"'") .. "'"
 
@@ -81,8 +99,14 @@ STRIP_TTL       = mac_cfg.strip_ttl or 120
 -- ── Utilitaires ──────────────────────────────────────────────────
 
 --- Convertit 16 octets bruts (format IPC) en adresse IP textuelle.
--- IPv4 : octets 1-4 significatifs, octets 5-16 nuls.
--- IPv6 : les 16 octets sont l'adresse complète.
+-- Le message `learn` (22 octets = ip16 + mac6) ne porte **pas** la famille :
+-- l'heuristique est que les octets 5 à 16 nuls désignent une IPv4 encodée sur
+-- les 4 premiers octets, sinon les 16 octets sont une IPv6 complète.
+-- Cas limite connu : une IPv6 dont les 96 derniers bits sont nuls (`2001::`,
+-- `fe80::`) serait lue comme une IPv4. Ces adresses ne sont pas des adresses
+-- source d'hôte valides (identifiant d'interface nul = adresse anycast du
+-- routeur de sous-réseau), d'où l'absence de discrimination de famille dans le
+-- protocole IPC. Ne pas changer le format du message pour autant.
 -- Utilise ip2s pour garantir la cohérence avec le reste du codebase.
 -- @tparam string ip16 Chaîne de 16 octets
 -- @treturn string Adresse IP textuelle (ex : "192.168.1.5" ou "fd00::1")
@@ -252,6 +276,7 @@ probe_request = (pending, negative, prober_ctx, client_fd, ip_str, now, get_ms, 
 -- @tparam number client_fd fd de la connexion cliente
 start_query = (client_fd) ->
   buf = ffi.new "char[64]"
+  set_recv_timeout client_fd, QUERY_RECV_TIMEOUT_S
   n = libc.recv client_fd, buf, 63, 0
   if n <= 0
     libc.close client_fd
@@ -491,4 +516,4 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
       for h, entry in pairs strip_table
         strip_table[h] = nil if now_epoch > entry[2]
 
-{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup, :probe_request }
+{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup, :probe_request, :start_query, :ip16_to_str }

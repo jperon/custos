@@ -531,9 +531,32 @@ coerce_boolean = function(v)
   end
   return v
 end
+local config_warn
+config_warn = function(fields)
+  local logger = package.loaded["log"]
+  if type(logger) == "table" and type(logger.log_warn) == "function" then
+    return logger.log_warn(function()
+      return fields
+    end)
+  else
+    return io.stderr:write("config: " .. tostring(fields.action) .. "\n")
+  end
+end
 local normalize
 normalize = function(cfg)
   cfg.runtime = cfg.runtime or { }
+  cfg.nfqueue = cfg.nfqueue or { }
+  local resp_queues = require("lib.lowmem").parse_queues(cfg.nfqueue.responses)
+  if #resp_queues > 1 then
+    local first = tostring(resp_queues[1])
+    config_warn({
+      action = "nfqueue_responses_single_queue_only",
+      configured = tostring(cfg.nfqueue.responses),
+      selected = first,
+      reason = "pending state is per-process; a question/response pair must be handled by one worker"
+    })
+    cfg.nfqueue.responses = first
+  end
   cfg.doh = cfg.doh or { }
   cfg.dns = cfg.dns or { }
   cfg.dns.ttl_grace = cfg.dns.ttl_grace or { }

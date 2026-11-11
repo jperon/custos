@@ -930,3 +930,44 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `nil, "no matching response (txid)"`. `doh.validator` en bénéficie pour son
   transport UDP (il passe par `doh.upstream`) ; les transports DoH/curl (TLS)
   ne sont pas concernés. Tests : `tests/unit/doh/upstream_spec.moon`.
+- **`mac_learner` : `recv` bloquants sans timeout (serveur et client).** Le
+  serveur (`start_query`) appelait `recv` juste après `accept` sans
+  `SO_RCVTIMEO` : un client connecté qui n'écrit jamais figeait l'unique boucle
+  `poll` du learner, donc plus aucun `get_mac`/`get_vlan`/`strip_target` servi.
+  Côté client (`mac_learner_ipc`), les trois fonctions dupliquaient
+  connect/send/recv/close sans borne : un learner lent bloquait le plan de
+  données (`worker_responses`/`worker_tls`/`worker_doh`). Correctif : pose de
+  `SO_RCVTIMEO` (200 ms) sur le fd accepté, et factorisation client en une
+  fonction `query(request)` bornée par `SO_RCVTIMEO`/`SO_SNDTIMEO` (500 ms,
+  > `PROBE_TIMEOUT_MS`), timeout → valeur « inconnue » comme aujourd'hui.
+  Tests dans `tests/unit/mac_learner_probe_spec.moon` (client muet borné,
+  serveur muet borné).
+- **`nfqueue.responses` sur plusieurs files : réponses DNS jetées.** Chaque
+  worker `resp-qN` a sa propre table `pending` (`ipc.moon`, état privé au
+  processus) alors que tous lisent le même pipe question→réponse : une réponse
+  livrée à un autre worker que celui qui a lu la question tombait sur
+  `get_pending_entry` nil → `NF_DROP`. Le défaut (`responses: "4"`, une seule
+  file) n'était pas affecté. Correctif : `config.normalize` ramène
+  `nfqueue.responses` à sa **première** file quand la valeur en désigne
+  plusieurs, avec l'avertissement `nfqueue_responses_single_queue_only` (log_warn
+  si `log` est déjà chargé, sinon stderr — config est chargée par `log.moon`).
+  `doc/CONFIG.md` et le schéma webui précisent « une seule file ». Tests dans
+  `tests/unit/config_spec.moon` (`"4-5"` → `"4"` + warn, `"4"` inchangé,
+  `questions: "0-1"` inchangé).
+- **`worker_questions` : `response_rule_ids` écrasés par la dernière question.**
+  Dans la boucle `for _, q in ipairs dns_msg.questions`, `response_rule_ids`
+  était **réassigné** à chaque question alors que `allow_modifiers` était
+  accumulé : sur un paquet multi-questions, les règles `on_response`
+  (`dns_strip`, `cname`…) des premières questions étaient perdues. Correctif :
+  décisions collectées puis fusionnées par `aggregate_decisions` (déduplication
+  ordonnée via `append_unique`, plafond `MAX_RESPONSE_RULE_IDS = 8` aligné sur
+  `ipc.encode_msg`, dépassement loggué `response_rule_ids_truncated`). Tests
+  dans `tests/unit/worker_questions_aggregate_spec.moon`.
+- **`mac_learner.ip16_to_str` : heuristique de famille documentée.** Le message
+  `learn` (22 octets) ne porte pas la famille IP ; `ip16_to_str` déduit « IPv4 »
+  des octets 5-16 nuls. Une IPv6 à 96 derniers bits nuls (`2001::`, `fe80::`)
+  serait donc lue comme une IPv4 — cas limite documenté en LDoc, sans changer le
+  format du message (ces adresses ne sont pas des sources d'hôte valides).
+  `ip16_to_str` est exporté et figé par un test dans
+  `tests/unit/mac_learner_probe_spec.moon` (IPv4 `10.0.0.5` → `"10.0.0.5"`,
+  IPv6 `2001:db8::1` → forme IPv6).
