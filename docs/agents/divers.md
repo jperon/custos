@@ -49,8 +49,11 @@ See [.agents/px5g_migration.md](.agents/px5g_migration.md) for full documentatio
 
 **New modules**:
 - `src/auth/cert_generator.moon` — px5g wrapper for dynamic cert generation
-- `src/auth/cert_cache.moon` — LRU cache with TTL for generated certs
+- `src/auth/cert_cache.moon` — LRU cache with TTL for generated certs (quota de noms disque via `can_store`)
 - `src/auth/sni_extractor.moon` — TLS ClientHello SNI parser (RFC 5246/6066)
+- `src/auth/sni_peek.moon` — lecture du ClientHello sans consommation (`MSG_PEEK`) avant le handshake
+- `src/auth/cert_name.moon` — validation des noms SNI (nom de fichier + CN) et repli IP locale
+- `src/auth/cert_files.moon` — écriture atomique et verrouillée des paires clé/certificat
 
 **Modified modules**:
 - `src/auth/cert.moon` — Added `load_or_generate_sni()` for SNI-aware certs, and
@@ -62,5 +65,6 @@ See [.agents/px5g_migration.md](.agents/px5g_migration.md) for full documentatio
   lancement (observé sur 10.35.1.17, 2026-07-18).
 - `src/auth/server.moon` — Cache initialization on AUTH server startup ;
   `static_cert_paths` n'est posé que si le contexte statique parent a été
-  chargé (sinon repli SNI dynamique, jamais de hard-error par connexion)
+  chargé (sinon repli SNI dynamique, jamais de hard-error par connexion) ;
+  lecture du SNI avant le handshake et repli sur l'IP locale (`cert_name_for`).
 

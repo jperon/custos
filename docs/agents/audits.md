@@ -1110,3 +1110,45 @@ Décision : les exposer en lecture seule.
 - **Documentation.** `doc/CONFIG.md` §13 (sémantique de `flush_interval` et
   emplacement des instantanés), `docs/agents/webui.md` (page Métriques) et
   `.agents/workers.md` (fichier de sortie de `worker_questions`).
+
+### Certificat AUTH par SNI et écriture atomique (branche d-sni)
+
+Constat B13 du rapport `audit/rapport-auth-webui.md` (2026-11-11) : le certificat
+dynamique du portail était généré pour l'IP locale du socket (`getsockname`),
+jamais pour le nom SNI demandé, et `load_or_generate_sni` écrivait
+`tmp/auth_sni_<nom>_<année>.{key,crt}` directement (pas de temporaire + rename),
+d'où un risque de paire dépareillée entre deux enfants forqués.
+
+- **SNI demandé, repli IP.** Nouveau `src/auth/sni_peek.moon` : lecture du
+  ClientHello par `recv(MSG_PEEK | MSG_DONTWAIT)` + `select`, sans consommation,
+  avant `ssl.wrap` ; parsing réutilisé de `auth.sni_extractor.extract_sni`.
+  L'échéance est partagée avec la boucle de handshake (budget total
+  `auth.client_timeout`, peek compris). `server.resolve_tls_ctx` reçoit le SNI
+  brut (5ᵉ paramètre, rétro-compatible) et `cert_name_for` retient le nom validé
+  (`auth.cert_name.sanitize_hostname`) ou l'IP locale. Un ClientHello tronqué,
+  sans SNI, un nom invalide (chemin, IP littérale, longueur, joker, contrôle)
+  ou un échec de génération retombent sur l'IP locale. Le certificat statique
+  reste prioritaire et aucune lecture du ClientHello n'est faite dans ce cas.
+- **Plafond anti-remplissage.** `SNI_CERT_MAX_NAMES = 128` (constante
+  `server.moon`) passé à `cert_cache.create_cache` ; `can_store` relit
+  `tmp/cert_cache_index.lua` (la copie RAM d'un enfant forqué est figée) et
+  refuse un nom inconnu au-delà du quota, sans générer. Nom de fichier borné par
+  `safe_cert_name` (nom DNS validé ou IP locale uniquement).
+- **Écriture atomique.** Nouveau `src/auth/cert_files.moon` :
+  temporaire `<path>.tmp.<pid>_<n>` + `os.rename`, paire écrite et relue sous
+  `flock` (`<cert>.crt.lock`) ; le perdant réutilise la paire complète du
+  gagnant, et une paire complète n'est plus jamais réécrite — donc pas de
+  contexte WolfSSL construit sur une clé et un certificat de générations
+  différentes. En cas d'échec du rename du certificat, la clé est retirée.
+  `cert_cache.save_cert_to_disk`/`load_cert_from_disk` appliquent la même règle
+  à `tmp/certs/<nom>.{crt,key}` (écriture atomique + verrou, lecture sous le
+  même verrou).
+- **Tests.** `tests/unit/auth/sni_peek_spec.moon` (dont une vérification réelle
+  par `socketpair` que le ClientHello n'est pas consommé), `cert_name_spec.moon`,
+  `cert_files_spec.moon` (échec de rename sans fichier partiel, réutilisation et
+  réparation de paire), extensions de `resolve_tls_ctx_spec.moon` (SNI valide,
+  absent, invalide, échec de génération, quota, statique prioritaire) et de
+  `cert_cache_spec.moon` (`can_store`, relecture de l'index, `max_names`).
+- **Documentation.** `docs/agents/auth.md` (nouvelle section « Certificat TLS :
+  nom SNI demandé, repli sur l'IP locale »), `.agents/workers.md`,
+  `.agents/px5g_migration.md`, `docs/agents/divers.md`.

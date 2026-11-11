@@ -71,6 +71,56 @@ Le serveur HTTPS est découpé pour isoler les responsabilités :
   de sets (globaux `add_authenticated*` ET per-règle `_auth_mac`/`_auth_ip*`)
   avec le même TTL : c'est lui qu'appellent login, ping, replay et `/bye`.
 
+## Certificat TLS : nom SNI demandé, repli sur l'IP locale
+
+Le certificat dynamique du portail suit désormais le nom demandé par le client,
+et non plus seulement l'IP locale du socket :
+
+- **Lecture sans consommation** (`src/auth/sni_peek.moon`) : avant `ssl.wrap`,
+  `handle_client` observe le ClientHello avec `recv(MSG_PEEK | MSG_DONTWAIT)`
+  sur le descripteur brut ; les octets restent dans la file et WolfSSL les relit
+  pour le handshake. L'attente se fait par `select`, avec une échéance
+  (`client_deadline`) partagée avec la boucle de handshake : le budget total de
+  la phase TLS reste `auth.client_timeout`, peek compris. Le préfixe est
+  réobservé tant que l'enregistrement annoncé n'est pas complet, plafonné à
+  `PEEK_MAX_BYTES` (8192) ; un ClientHello tronqué, non-TLS ou sans extension
+  SNI donne `nil`. Le parsing réutilise `auth.sni_extractor.extract_sni`
+  (RFC 5246/6066, lui-même basé sur `ipparse`). Aucune exception ne remonte :
+  `extract_client_sni` enveloppe lecture + parsing dans un `pcall`.
+- **Choix du nom** (`server.cert_name_for`) : le SNI brut est validé et
+  normalisé par `auth.cert_name.sanitize_hostname` (longueur ≤ 253, labels
+  ≤ 63, `[a-z0-9.-]`, minuscules, pas de point en tête/queue, pas de `..`, pas
+  de tiret en bord de label, pas de joker/underscore, pas d'IP littérale, ni
+  NUL ni caractère de contrôle). Un nom valide n'est retenu que si
+  `cert_cache.can_store` l'accepte ; sinon repli sur l'IP locale **sans
+  générer**. Un échec de génération pour le nom SNI est également rattrapé par
+  un second essai sur l'IP locale. Un certificat statique configuré
+  (`auth.cert`/`auth.key`) reste prioritaire et **le ClientHello n'est même pas
+  observé** dans ce cas.
+- **Plafond de noms** : `SNI_CERT_MAX_NAMES = 128` (`server.moon`) est passé à
+  `cert_cache.create_cache` ; au-delà, un nom inconnu n'est ni généré ni stocké
+  (le nom déjà connu reste servi). `can_store` relit `tmp/cert_cache_index.lua`
+  avant de compter : les enfants AUTH sont forqués après le chargement parent,
+  leur copie RAM de l'index est figée, et sans relecture le plafond ne
+  s'appliquerait jamais. Les noms expirés sont purgés par le parent
+  (`cert_cache_purge_interval`, défaut 3600 s).
+- **Nom de fichier sûr** (`auth.cert_name.safe_cert_name`) : `cert.load_or_generate_sni`
+  n'accepte que des noms DNS validés ou l'IP locale (`getsockname`, IPv6
+  comprise) ; tout le reste retombe sur le CN générique `custos`. Le nom ne
+  peut donc pas composer de chemin hors de `tmp/`.
+- **Écriture atomique et course entre enfants** (`src/auth/cert_files.moon`) :
+  chaque fichier `.key`/`.crt` est écrit dans un temporaire propre au PID
+  (`<path>.tmp.<pid>_<n>`) puis `os.rename`-é. La paire complète est écrite et
+  relue sous un verrou `flock` (`tmp/auth_sni_<nom>_<année>.crt.lock`) : le
+  premier enfant écrit les deux fichiers, les suivants voient la paire complète
+  et la réutilisent. Comme la paire n'est plus jamais réécrite une fois
+  complète, un contexte WolfSSL ne peut pas être construit sur une clé d'une
+  génération et un certificat d'une autre ; en cas d'échec du rename du
+  certificat, la clé est retirée pour ne pas laisser de paire partielle.
+  `cert_cache` applique la même règle à `tmp/certs/<nom>.{crt,key}` (écriture
+  atomique + verrou, lecture sous le même verrou) : les PEM relus depuis le
+  cache disque sont eux aussi toujours cohérents.
+
 ## Résilience du portail captif aux blips réseau (`src/auth/portal_client.js`)
 
 La logique de connexion de la **page de succès** (heartbeat `/ping`, polling
