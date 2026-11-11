@@ -21,7 +21,7 @@ describe "worker_events.note_verdict", ->
     assert.is_true note_verdict verdicts, "block", "ads.com", "aa:bb", "ip", "u", "blk", "101"
     assert.equals 2, #verdicts
 
-  it "insère une nouvelle entrée en tête", ->
+  it "ajoute une nouvelle entrée", ->
     verdicts = {}
     note_verdict verdicts, "block", "ads.com", "aa:bb", "10.0.0.1", "bob", "blocklist", "100"
     assert.equals 1, #verdicts
@@ -30,19 +30,28 @@ describe "worker_events.note_verdict", ->
     assert.equals "bob", verdicts[1].user
     assert.equals 1, verdicts[1].count
 
-  it "dédup (mac+qname+decision) : compteur, maj champs, remontée en tête", ->
+  it "dédup (mac+qname+decision) : compteur, maj champs, position conservée", ->
     verdicts = {}
     note_verdict verdicts, "allow", "a.com", "mac1", "ip1", "u", "r", "100"
     note_verdict verdicts, "allow", "b.com", "mac1", "ip1", "u", "r", "101"
     note_verdict verdicts, "allow", "a.com", "mac1", "ip2", "u2", "r2", "102"
     assert.equals 2, #verdicts
-    assert.equals "a.com", verdicts[1].qname    -- remontée en tête
-    assert.equals 2, verdicts[1].count
-    assert.equals "102", verdicts[1].last_ts
-    assert.equals "ip2", verdicts[1].ip
-    assert.equals "u2", verdicts[1].user
-    assert.equals "r2", verdicts[1].reason
-    assert.equals "100", verdicts[1].first_ts   -- inchangé
+    e = verdicts[1]
+    assert.equals "a.com", e.qname
+    assert.equals 2, e.count
+    assert.equals "102", e.last_ts
+    assert.equals "ip2", e.ip
+    assert.equals "u2", e.user
+    assert.equals "r2", e.reason
+    assert.equals "100", e.first_ts   -- inchangé
+
+  it "rafraîchit la séquence pour que le flush place l'entrée en tête", ->
+    verdicts = {}
+    note_verdict verdicts, "allow", "a.com", "mac1", "ip1", "u", "r", "100"
+    note_verdict verdicts, "allow", "b.com", "mac1", "ip1", "u", "r", "101"
+    note_verdict verdicts, "allow", "a.com", "mac1", "ip1", "u", "r", "102"
+    -- b.com (index 2) insérée après a.com mais a.com a été rafraîchie depuis.
+    assert.is_true verdicts[2].seq < verdicts[1].seq
 
   it "distingue la décision pour un même (mac, qname)", ->
     verdicts = {}
@@ -50,12 +59,13 @@ describe "worker_events.note_verdict", ->
     note_verdict verdicts, "block", "a.com", "mac1", "ip", "u", "r", "101"
     assert.equals 2, #verdicts
 
-  it "tronque à 8192 entrées (VERDICTS_MAX)", ->
+  it "tronque à 8192 entrées (VERDICTS_MAX), les plus anciennes évincées", ->
     verdicts = {}
     for i = 1, 8200
       note_verdict verdicts, "allow", "d#{i}.com", "mac1", "ip", "u", "r", tostring i
     assert.equals 8192, #verdicts
-    assert.equals "d8200.com", verdicts[1].qname
+    assert.equals "d8200.com", verdicts[#verdicts].qname   -- dernière insérée
+    assert.equals "d9.com", verdicts[1].qname              -- d1..d8 évincées
 
 describe "worker_events.flush_verdicts", ->
   path = "#{TMP}/recent-verdicts.tsv"
@@ -78,6 +88,19 @@ describe "worker_events.flush_verdicts", ->
     content = fh\read "*a"
     fh\close!
     assert.equals "aa:bb\t10.0.0.1\tbob\tx.com\tblock\tblk\t3\t150\t200\ncc:dd\t\t\ty.com\tallow\t\t1\t201\t201\n", content
+
+  it "écrit les entrées les plus récentes d'abord (séquence)", ->
+    verdicts = {}
+    note_verdict verdicts, "allow", "old.com", "mac1", "ip", "u", "r", "100"
+    note_verdict verdicts, "allow", "mid.com", "mac1", "ip", "u", "r", "101"
+    note_verdict verdicts, "allow", "old.com", "mac1", "ip", "u", "r", "102"  -- rafraîchie
+    flush_verdicts verdicts, TMP
+    fh = io.open path, "r"
+    lines = [line for line in fh\lines!]
+    fh\close!
+    assert.equals 2, #lines
+    assert.is_truthy lines[1]\find "old.com", 1, true
+    assert.is_truthy lines[2]\find "mid.com", 1, true
 
   it "écrit atomiquement (pas de .tmp résiduel)", ->
     flush_verdicts { { mac: "m", ip: "i", user: "u", qname: "q", decision: "allow",
