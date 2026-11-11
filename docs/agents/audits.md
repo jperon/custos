@@ -1301,3 +1301,61 @@ régénéré et suivi ; le `.lua` de la spec reste ignoré par `.gitignore:38`
 OK (150 fichiers) ; `make test` = **2324 successes / 0 failures / 0 errors /
 0 pending** (`tmp/test.log`). `make test-e2e` non lancé (hors périmètre de la
 tâche).
+
+### Listes locales compilées par `custos-update` (branche d-update)
+
+Après un redémarrage, `domainlists_dir` (tmpfs) était repeuplé uniquement par
+la release `custos-lists` : les `.txt` de `custom_lists_dir` n'étaient jamais
+compilés, et une liste locale homonyme d'une liste de la release était écrasée.
+
+- **Logique de compilation déplacée dans `filter.updater_io`.** `write_bin`,
+  `fetch_local` et `process_custom_dir` sont sortis de `filter/updater.moon`
+  (qui s'exécute au chargement et n'est pas testable) vers
+  `src/filter/updater_io.moon:83-179` ; `updater.moon` les réexporte
+  (`src/filter/updater.moon:61-69`). Comportement inchangé, désormais couvert
+  par `tests/unit/filter/updater_io_spec.moon` (`.txt` → `.bin` dans le
+  dossier de sortie, liste vide ignorée, dossier source absent, dry-run).
+- **Option `--custom-only` de l'updater.** `src/filter/updater.moon:86-92`
+  (analyse) et `:238-240` : la table `filter.sources` est vidée avant la boucle
+  de téléchargement, seul le scan de `custom_lists_dir` est exécuté
+  (`:344-352`). Si `custom_lists_dir` est absent, message explicite et sortie
+  0 (pas d'erreur). Test : `tests/unit/filter/updater_config_spec.moon`
+  (source `filter.sources` ignorée, `custom/demo.bin` compilé).
+- **`custos-update` compile les listes locales.** Le script
+  (`packaging/openwrt/custos/files/usr/sbin/custos-update:123-143`) lance
+  `custos filter/updater.lua --custom-only --config …` avec le même
+  `LUA_PATH`/`LUA_CPATH`/`CUSTOS_CONFIG_PATH`/`CUSTOS_REQUIRE_EXTERNAL_CONFIG`
+  que l'init.d, après l'extraction de la release et avant le SIGHUP. Les deux
+  étapes sont indépendantes : `release_rc` et `custom_rc` sont accumulés, le
+  SIGHUP est toujours tenté, puis le code de sortie propage l'échec de
+  compilation (sinon celui de curl/extraction, pour conserver les codes
+  réseau 6/7/28/35/52/56 attendus par les tests E2E). Chemins du runtime
+  surchargeables par variables d'environnement (`CUSTOS_DIR`, `CUSTOS_BIN`,
+  `CUSTOS_CONFIG_PATH`, `CUSTOS_UPDATER`, `CUSTOS_PID_FILE`, `CUSTOS_LUA_PATH`,
+  `CUSTOS_LUA_CPATH`). Un outil manquant n'interrompt plus le script : il
+  empêche seulement l'étape release.
+- **`_cron_remove` retire aussi les anciennes lignes non marquées.**
+  `packaging/openwrt/custos/files/etc/init.d/custos:110-118` : `sed` supprime
+  les lignes du marqueur **et** toute ligne contenant
+  `/usr/sbin/custos-update` (ancien `0 4 * * *` sans marqueur), sans toucher
+  aux autres entrées du crontab. Test : `tests/unit/pkg_custos_update_spec.moon`
+  exécute la fonction extraite de l'init.d sur un crontab factice.
+- **Tests du script shell.** `tests/unit/pkg_custos_update_spec.moon` exécute
+  `custos-update` avec un `PATH` truqué (`curl`, `zstd`, `tar`, `sha256sum`,
+  `custos`, `pgrep`, `pkill`, `uci` factices sous `./tmp/`) : compilation
+  locale après extraction (marqueur présent), appelée malgré l'échec de
+  `curl` (code 7 propagé), code non nul si la compilation échoue (SIGHUP
+  toujours envoyé). `sh -n` OK ; `shellcheck` et `busybox` ne sont pas
+  installés dans le flake.
+- **`install-owrt.moon` inchangé** (vérifié) : il copie le script tel quel, ne
+  touche pas au cron (géré par l'init.d) et son `uninstall` supprime déjà
+  `/usr/sbin/custos-update` et les lignes de crontab associées.
+- **Documentation** : `doc/CONFIG.md` (§ 14.1) précise sortie vs source et la
+  priorité du local ; `doc/CHEATSHEET.md` décrit les deux étapes et
+  `--custom-only`.
+
+**Vérification (2026-11-11, branche d-update)** : `make all`, `make check`
+OK ; `make test` = **2421 successes / 0 failures / 0 errors / 0 pending**
+(`tmp/test.log`). `make test-e2e` = **94 passed / 0 failed**
+(`tmp/test-e2e.log`), dont G0b/T04b (téléchargement + vérification SHA256 +
+extraction, exit 0) et T04c (82 `.bin` déployés dans `/tmp/e2e-lists`).

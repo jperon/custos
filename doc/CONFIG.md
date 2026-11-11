@@ -644,6 +644,17 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 | `dest_whitelist` | array | `{}` | IPs/CIDRs de destination toujours autorisées (bypass filtrage) |
 | `allowed_domains` | array | `{"local","lan","home.arpa"}` | Domaines autorisés par défaut si `rules` est vide |
 
+`domainlists_dir` est le répertoire de **sortie** lu par le filtre
+(`to_domainlist`). Sur OpenWrt il est sur tmpfs (`/tmp/custos/lists`, vidé à
+chaque redémarrage) : `custos-update` le repeuple au démarrage, en déployant la
+release `custos-lists` puis en compilant les listes locales.
+
+`custom_lists_dir` est au contraire le dossier **source** des `.txt` locaux
+(jamais lu directement par le filtre) : chaque `*.txt` est compilé en
+`{domainlists_dir}/custom/<nom>.bin` par `custos-update` (updater avec
+`--custom-only`). La compilation locale ayant lieu après l'extraction de la
+release, une liste locale de même nom qu'une liste de la release l'emporte.
+
 ### 14.2 Dictionnaires nommés : `nets`, `macs`, `times`, `vlans`, `users`
 
 Ces dictionnaires permettent de nommer des groupes réutilisables dans les conditions.
