@@ -93,4 +93,4 @@ run = (queue_num, wfd) ->
   log_info -> { action: "starting", queue: queue_num, ipc_fd: wfd }
   run_queue tonumber(queue_num), handle_auth_packet
 
-{ :run }
+{ :run, :send_to_auth_server, :handle_auth_packet }

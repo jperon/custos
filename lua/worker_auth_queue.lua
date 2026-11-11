@@ -138,5 +138,7 @@ run = function(queue_num, wfd)
   return run_queue(tonumber(queue_num), handle_auth_packet)
 end
 return {
-  run = run
+  run = run,
+  send_to_auth_server = send_to_auth_server,
+  handle_auth_packet = handle_auth_packet
 }
