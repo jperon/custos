@@ -383,3 +383,8 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   internes, ignore les entrées vides, n'émet le `add element` que pour la
   famille présente, et tolère un rc nft non nul ; `cleanup` libère le contexte.
   Contexte libnftables stubbé au `require`, stub `ffi_defs` partagé restauré.
+- **T6 : `nft_add_helper` sans spec directe.** Ajout de
+  `tests/unit/nft_add_helper_spec.moon` : succès immédiat, retry jusqu'au
+  succès (arguments transmis intacts), épuisement → `false` avec exactement
+  `#add_backoff_ms` tentatives, longueur du tableau = nombre de tentatives,
+  retour falsy compté comme échec. Backoffs mis à `{0,0,…}` pour ne pas dormir.
