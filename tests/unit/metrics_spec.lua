@@ -1,8 +1,8 @@
 local json = require("lib.json")
-local init, record_verdict, get_metrics_json, write_now, purge_files, flush_if_due, maybe_flush, file_path, clear, _get_state
+local init, record_verdict, get_metrics_json, write_now, purge_files, flush_if_due, file_path, clear, _get_state
 do
   local _obj_0 = require("metrics")
-  init, record_verdict, get_metrics_json, write_now, purge_files, flush_if_due, maybe_flush, file_path, clear, _get_state = _obj_0.init, _obj_0.record_verdict, _obj_0.get_metrics_json, _obj_0.write_now, _obj_0.purge_files, _obj_0.flush_if_due, _obj_0.maybe_flush, _obj_0.file_path, _obj_0.clear, _obj_0._get_state
+  init, record_verdict, get_metrics_json, write_now, purge_files, flush_if_due, file_path, clear, _get_state = _obj_0.init, _obj_0.record_verdict, _obj_0.get_metrics_json, _obj_0.write_now, _obj_0.purge_files, _obj_0.flush_if_due, _obj_0.file_path, _obj_0.clear, _obj_0._get_state
 end
 local DIR = "tmp/metrics_spec"
 local FILE = tostring(DIR) .. "/metrics-w0.json"
@@ -129,68 +129,21 @@ return describe("metrics", function()
         name = "w0",
         clock = (function()
           return now
-        end),
-        check_every = 1
+        end)
       })
       record_verdict("r1", "allow")
       now = 0
-      maybe_flush()
+      assert.is_false(flush_if_due())
       assert.is_false(file_exists())
       now = 9
-      maybe_flush()
+      assert.is_false(flush_if_due())
       assert.is_false(file_exists())
       now = 10
-      maybe_flush()
+      assert.is_true(flush_if_due())
       local snap = read_snapshot()
       assert.equals(10, snap.timestamp)
       assert.equals("r1", snap.rules[1].rule_id)
       return assert.equals(1, snap.rules[1].verdicts.allow)
-    end)
-    it("consulte l'horloge seulement tous les check_every paquets", function()
-      local now = 0
-      local clock_calls = 0
-      local fake_clock
-      fake_clock = function()
-        clock_calls = clock_calls + 1
-        return now
-      end
-      init({
-        enabled = true,
-        flush_interval = 10
-      }, {
-        dir = DIR,
-        name = "w0",
-        clock = fake_clock,
-        check_every = 4
-      })
-      for i = 1, 3 do
-        maybe_flush()
-      end
-      assert.equals(0, clock_calls)
-      maybe_flush()
-      return assert.equals(1, clock_calls)
-    end)
-    it("utilise check_every = 32 par défaut", function()
-      local clock_calls = 0
-      local fake_clock
-      fake_clock = function()
-        clock_calls = clock_calls + 1
-        return 0
-      end
-      init({
-        enabled = true,
-        flush_interval = 10
-      }, {
-        dir = DIR,
-        name = "w0",
-        clock = fake_clock
-      })
-      for i = 1, 31 do
-        maybe_flush()
-      end
-      assert.equals(0, clock_calls)
-      maybe_flush()
-      return assert.equals(1, clock_calls)
     end)
     it("flush_if_due écrit sur le seul passage temporel", function()
       local now = 0
@@ -235,11 +188,10 @@ return describe("metrics", function()
         name = "w0",
         clock = (function()
           return now
-        end),
-        check_every = 1
+        end)
       })
       record_verdict("r1", "allow")
-      maybe_flush()
+      assert.is_false(flush_if_due())
       assert.is_false(file_exists())
       return assert.is_false(write_now())
     end)

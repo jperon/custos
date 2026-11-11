@@ -265,9 +265,6 @@ aggregate_decisions = function(decisions)
 end
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
-  if metrics_on then
-    metrics.maybe_flush()
-  end
   local payload_ptr = ffi.new("unsigned char*[1]")
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
   if payload_len <= 0 then

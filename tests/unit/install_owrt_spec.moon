@@ -125,12 +125,30 @@ describe "install-owrt — validation parse_args", ->
     cfg = assert parse_args { "--port", "2222", "router.lan" }
     assert.equals 2222, cfg.port
 
+  it "accepte les formes IPv6 nues et crochetées, avec ou sans utilisateur", ->
+    cases = {
+      { "user@2001:db8::1", "user", "2001:db8::1" }
+      { "root@[::1]", "root", "[::1]" }
+      { "[::1]", "root", "[::1]" }
+      { "fe80::1", "root", "fe80::1" }
+      { "2001:db8::1", "root", "2001:db8::1" }
+    }
+    for { arg, user, host } in *cases
+      cfg, err = parse_args { arg }
+      assert.is_nil err, arg
+      assert.equals user, cfg.user, arg
+      assert.equals host, cfg.host, arg
+
   it "rejette un utilisateur contenant un métacaractère shell", ->
     for user in *{"root;x", "root x", "$(id)", "`id`", "root|x"}
       assert.truthy (invalid_cfg { "--user", user, "10.0.0.1" })\match "Utilisateur invalide"
 
   it "rejette un hôte contenant un métacaractère ou un espace", ->
     for host in *{"a b", "`id`", "$(id)", "a;b", "a|b"}
+      assert.truthy (invalid_cfg { host })\match "Hôte invalide"
+
+  it "rejette les crochets mal placés et les IPv6 dégénérées", ->
+    for host in *{"a]b", "[a", "a]", "[[::1]]", "[::1]x", ":::", ":", "1:2:3:4:::5"}
       assert.truthy (invalid_cfg { host })\match "Hôte invalide"
 
   it "rejette une destination relative ou contenant un métacaractère", ->
@@ -141,9 +159,92 @@ describe "install-owrt — validation parse_args", ->
     for port in *{"0", "70000", "22;x", "abc", "-1"}
       assert.truthy (invalid_cfg { "--port", port, "10.0.0.1" })\match "port invalide"
 
+  it "accepte la forme utilisateur@hôte et en déduit l'utilisateur", ->
+    cfg, err = parse_args { "admin@router.lan" }
+    assert.is_nil err
+    assert.equals "admin", cfg.user
+    assert.equals "router.lan", cfg.host
+
+  it "accepte un hôte seul et garde root par défaut", ->
+    cfg, err = parse_args { "router.lan" }
+    assert.is_nil err
+    assert.equals "root", cfg.user
+    assert.equals "router.lan", cfg.host
+
+  it "--user explicite prime sur utilisateur@hôte, quel que soit l'ordre", ->
+    for args in *{
+        { "--user", "admin", "root@router.lan" }
+        { "root@router.lan", "--user", "admin" }
+      }
+      cfg, err = parse_args args
+      assert.is_nil err
+      assert.equals "admin", cfg.user
+      assert.equals "router.lan", cfg.host
+
+  it "rejette utilisateur@hôte incomplet ou ambigu", ->
+    assert.truthy (invalid_cfg { "@router.lan" })\match "Utilisateur invalide"
+    assert.truthy (invalid_cfg { "root@" })\match "Hôte invalide"
+    assert.truthy (invalid_cfg { "a@b@c" })\match "Hôte invalide"
+
+  it "--user explicite rend la partie utilisateur de HOST inutilisée (non validée)", ->
+    cfg, err = parse_args { "--user", "admin", "foo!@router.lan" }
+    assert.is_nil err
+    assert.equals "admin", cfg.user
+    assert.equals "router.lan", cfg.host
+    -- La partie utilisateur reste tenue d'exister (faute de frappe évidente).
+    assert.truthy (invalid_cfg { "--user", "admin", "@router.lan" })\match "Utilisateur invalide"
+
+  it "rejette un utilisateur invalide dans la forme utilisateur@hôte", ->
+    for host in *{"ro ot@router.lan", "root;x@router.lan", "$(id)@router.lan", "`id`@router.lan"}
+      assert.truthy (invalid_cfg { host })\match "Utilisateur invalide"
+
   it "shell_quote neutralise les apostrophes", ->
     assert.equals "'root'", shell_quote "root"
     assert.equals "'a'\\''b'", shell_quote "a'b"
+
+-- ── Cibles ssh/scp réellement produites (IPv6) ──────────────────────────
+-- `ssh` ne résout pas les crochets, `scp` en a besoin pour un littéral IPv6 :
+-- la cible ne doit donc pas être la même dans les deux cas, et un hôte déjà
+-- crocheté (`root@[::1]`) ne doit jamais être doublement crocheté.
+describe "install-owrt — cibles ssh/scp IPv6", ->
+
+  mk = (host) -> Installer { :host, port: 22, user: "root", dest: "/usr/share/custos", dry: true }
+
+  strip = (h) -> h\gsub("^%[", "")\gsub("%]$", "")
+
+  it "ssh_target retire les crochets, scp_target les remet une seule fois", ->
+    for host in *{"[::1]", "::1", "2001:db8::1", "[2001:db8::1]"}
+      inst = mk host
+      bare = strip host
+      assert.equals "root@#{bare}", inst\ssh_target!, host
+      assert.equals "root@[#{bare}]", inst\scp_target!, host
+
+  it "ssh_prefix produit une cible sans crochets", ->
+    cmd = (mk "[2001:db8::1]")\ssh_prefix!
+    assert.falsy cmd\find "[", 1, true
+    assert.truthy cmd\find "'root@2001:db8::1'", 1, true
+
+  it "scp_send produit une cible crochetée suivie du chemin", ->
+    inst = mk "[::1]"
+    runs = {}
+    inst.run = (c) =>
+      runs[#runs + 1] = c
+      true
+    assert.is_true inst\scp_send "src", "/dst"
+    assert.truthy runs[1]\find "'root@[::1]:/dst'", 1, true
+
+  it "la commande scp d'install utilise la cible IPv6 crochetée", ->
+    inst = mk "[::1]"
+    runs = {}
+    inst.run = (c) =>
+      runs[#runs + 1] = c
+      true
+    inst.ssh_run = (c) => true
+    inst.ssh_capture = (c) => "no"
+    inst\install_hotplug_rps!
+    joined = table.concat runs, "\n"
+    assert.truthy joined\find "root@[::1]:/etc/hotplug.d/net/30-custos-rps", 1, true
+    assert.falsy joined\find "[[::1]]", 1, true
 
 -- ── Dry-run : aucune commande réelle ───────────────────────────────────────
 describe "install-owrt — dry-run", ->
@@ -225,9 +326,10 @@ describe "install-owrt — quoting des commandes", ->
     expected = "ssh -p '2222' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 'root@router.lan'"
     assert.equals expected, inst\ssh_prefix!
 
-  it "ssh_prefix met un IPv6 littéral entre crochets", ->
+  it "ssh_prefix ne met JAMAIS un IPv6 entre crochets (ssh ne les résout pas)", ->
     inst = Installer { host: "fe80::1", port: 22, user: "root", dest: "/usr/share/custos", dry: true }
-    assert.truthy inst\ssh_prefix!\find "'root@[fe80::1]'", 1, true
+    assert.truthy inst\ssh_prefix!\find "'root@fe80::1'", 1, true
+    assert.falsy inst\ssh_prefix!\find "[fe80::1]", 1, true
 
   it "ssh_prefix neutralise une apostrophe dans le nom d'utilisateur", ->
     inst = Installer { host: "10.0.0.1", port: 22, user: "a'b", dest: "/usr/share/custos", dry: true }

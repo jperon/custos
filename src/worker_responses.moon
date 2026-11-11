@@ -978,9 +978,12 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- de l'entrée de la question au log de la réponse, traitement inclus) n'est
   -- connue qu'à ce stade ; `question_proc_ms` en isole la part traitement
   -- question, `response_entry_ms` la part sortie question→réponse. Le champ
-  -- `action=dns_benchmark` (préfixé `response_`) évite le rate-limiting
-  -- ALLOW/BLOCK (30 s) afin de conserver tous les échantillons. Le worker
-  -- question supprime sa propre ligne ALLOW/BLOCK quand benchmark est actif.
+  -- `action=dns_benchmark` (préfixé `response_`) est exempté de rate-limiting
+  -- (règle `dns_benchmark` de `RL_NEVER_LIMIT`) : sur un banc à qname fixe, la
+  -- règle ALLOW/BLOCK (30 s, empreinte mac_src/qname/qtype) ne garderait qu'un
+  -- échantillon par triplet et perdrait les mesures des autres — l'objet même
+  -- de l'option. Le worker question supprime sa propre ligne ALLOW/BLOCK quand
+  -- benchmark est actif.
   if runtime_cfg.benchmark and entry and entry.benchmark_ms
     bench_log_ms = current_benchmark_ms!
     delta_ms = bench_log_ms - entry.benchmark_ms
