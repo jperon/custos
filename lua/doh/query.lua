@@ -190,12 +190,12 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
     end)
     return nil, "dns_parse_failed"
   end
+  local questions = dns.questions or (dns.question and {
+    dns.question
+  } or { })
   if captive_domain then
-    local _list_0 = (dns.questions or (dns.question and {
-      dns.question
-    } or { }))
-    for _index_0 = 1, #_list_0 do
-      local q = _list_0[_index_0]
+    for _index_0 = 1, #questions do
+      local q = questions[_index_0]
       local norm = (q.name or q.qname or ""):lower():gsub("%.+$", "")
       if norm == captive_domain and (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA) then
         local forged = build_captive_response(dns, dns_raw, captive_ip4, captive_ip6)
@@ -241,9 +241,6 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
   local allow_timeout = nil
   local allow_response_rule_ids = { }
   local allow_modifiers = { }
-  local questions = dns.questions or (dns.question and {
-    dns.question
-  } or { })
   for _index_0 = 1, #questions do
     local q = questions[_index_0]
     local qname_text = q.name or q.qname

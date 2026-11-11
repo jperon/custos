@@ -162,12 +162,15 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
     log_warn -> { action: "parse_failed", client_ip: client_ip, err: tostring parse_err }
     return nil, "dns_parse_failed"
 
+  -- Normalisation unique des questions (bloc vol captif + évaluation).
+  questions = dns.questions or (dns.question and { dns.question } or {})
+
   -- ── Vol de question DNS pour le portail captif (miroir worker_questions) ──
   -- Si la question porte sur le hostname du portail (A/AAAA), répondre avec
   -- l'IP locale du boîtier sans filtrer ni remonter l'upstream. Indispensable à
   -- la parité UDP/DoH : sinon le client DoH résout le vrai nom public.
   if captive_domain
-    for q in *(dns.questions or (dns.question and { dns.question } or {}))
+    for q in *questions
       norm = (q.name or q.qname or "")\lower!\gsub "%.+$", ""
       if norm == captive_domain and (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA)
         forged = build_captive_response dns, dns_raw, captive_ip4, captive_ip6
@@ -189,7 +192,6 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
   allow_response_rule_ids = {}
   allow_modifiers = {}
 
-  questions = dns.questions or (dns.question and { dns.question } or {})
   for q in *questions
     qname_text = q.name or q.qname
     -- Parité sémantique UDP : untagged (0) → nil (from_vlan _none matche,
