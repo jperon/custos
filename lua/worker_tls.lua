@@ -39,10 +39,14 @@ new_tcp_stream = require("ipparse.l4.tcp_stream").new
 local mac2s
 mac2s = require("packet_utils").mac2s
 local bit = require("bit")
-local nft
-nft = require("config").nft
+local nft, auth
+do
+  local _obj_0 = require("config")
+  nft, auth = _obj_0.nft, _obj_0.auth
+end
 local nft_cfg = nft or { }
 local SNI_TIMEOUT = nft_cfg.sni_timeout or nft_cfg.ip_timeout or "2m"
+local auth_sessions_file = (auth and auth.sessions_file) or "/tmp/sessions.lua"
 local quic_sessions = { }
 local quic_sessions_seen = { }
 local quic_sessions_count = 0
@@ -1351,7 +1355,7 @@ run = function(queue_num, ev_wfd, filter_data)
     else
       auth_cfg = { }
     end
-    local auth_sessions_file = auth_cfg.sessions_file or auth_sessions_file
+    auth_sessions_file = auth_cfg.sessions_file or auth_sessions_file
     if filter.get_sni_cfg then
       sni_policy = filter.get_sni_cfg()
     else
@@ -1430,5 +1434,6 @@ return {
   build_validator_query = build_validator_query,
   prune_sni_verdicts = prune_sni_verdicts,
   reset_sni_verdicts = reset_sni_verdicts,
-  set_validator_state = set_validator_state
+  set_validator_state = set_validator_state,
+  auth_sessions_file = auth_sessions_file
 }
