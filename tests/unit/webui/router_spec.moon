@@ -2,9 +2,12 @@
 -- Tests du dispatch du routeur /admin/*.
 
 token = require "auth.token"
+{ :write_sessions } = require "auth.sessions"
 
 TEST_KEY  = string.rep "\x42", 32
 CFG_PATH  = "tmp/router_spec_cfg.lua"
+SESS_PATH = "tmp/router_spec_sessions.lua"
+ADMIN_MAC = "aa:bb:cc:dd:ee:ff"
 
 -- Config minimale sur disque
 write_min_cfg = ->
@@ -14,7 +17,7 @@ write_min_cfg = ->
 
 make_admin_cookie = (user) ->
   expires = os.time! + 3600
-  tok = token.generate "user", user, "aa:bb:cc:dd:ee:ff", expires, TEST_KEY
+  tok = token.generate "user", user, ADMIN_MAC, expires, TEST_KEY
   "custos_session=" .. tok
 
 make_state = (admin_users) ->
@@ -23,6 +26,7 @@ make_state = (admin_users) ->
     admin_users:              admin_users or { "admin" }
     admin_allow_all_when_empty: false
     config_path:              CFG_PATH
+    sessions_file:            SESS_PATH
     started_at:               os.time!
   }
 
@@ -43,9 +47,11 @@ describe "webui/router.dispatch", ->
 
   before_each ->
     write_min_cfg!
+    write_sessions { [ADMIN_MAC]: { user: "admin", expires: os.time! + 3600 } }, SESS_PATH
 
   after_each ->
     os.remove CFG_PATH
+    os.remove SESS_PATH
 
   -- ── Contrôle d'accès ─────────────────────────────────────────────────────
 
