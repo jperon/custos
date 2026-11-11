@@ -91,6 +91,9 @@ ffi.cdef [[
   /* fcntl avec arg entier (non-variadique pour compatibilité LuaJIT) */
   int fcntl(int fd, int cmd, long arg);
 
+  /* flock : verrou exclusif de fichier (sessions/secrets entre enfants AUTH) */
+  int flock(int fd, int operation);
+
   /* ── errno (Linux glibc) ── */
   int* __errno_location(void);  /* errno = *__errno_location() */
 

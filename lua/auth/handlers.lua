@@ -9,10 +9,10 @@ do
   log_info, log_warn = _obj_0.log_info, _obj_0.log_warn
 end
 local token = require("auth.token")
-local add_session, purge_expired, load_sessions, write_sessions
+local add_session, purge_expired, load_sessions, write_sessions, with_sessions_lock
 do
   local _obj_0 = require("auth.sessions")
-  add_session, purge_expired, load_sessions, write_sessions = _obj_0.add_session, _obj_0.purge_expired, _obj_0.load_sessions, _obj_0.write_sessions
+  add_session, purge_expired, load_sessions, write_sessions, with_sessions_lock = _obj_0.add_session, _obj_0.purge_expired, _obj_0.load_sessions, _obj_0.write_sessions, _obj_0.with_sessions_lock
 end
 local verify_password, verify_response, register_user, set_record, parse_record, valid_username
 do
@@ -197,8 +197,6 @@ handle_login = function(req, peer_ip, peer_mac, state)
       return 401, { }, "Invalid credentials"
     end
   end
-  local sessions = load_sessions(state.sessions_file)
-  purge_expired(sessions)
   local mac = peer_mac
   if not (mac and mac ~= "unknown") then
     log_warn(function()
@@ -222,8 +220,12 @@ handle_login = function(req, peer_ip, peer_mac, state)
   local now = os.time()
   local session_expires = now + idle_timeout
   local token_expires = session_expires
-  add_session(sessions, mac, peer_ip, user, session_expires)
-  local ok, err = write_sessions(sessions, state.sessions_file)
+  local ok, err = with_sessions_lock(state.sessions_file, function()
+    local sessions = load_sessions(state.sessions_file)
+    purge_expired(sessions)
+    add_session(sessions, mac, peer_ip, user, session_expires)
+    return write_sessions(sessions, state.sessions_file)
+  end)
   if not (ok) then
     log_warn(function()
       return {
@@ -312,9 +314,18 @@ handle_ping = function(req, peer_ip, peer_mac, state)
   local now = os.time()
   local session_expires = now + idle_timeout
   local token_expires = session_expires
-  local sessions = load_sessions(state.sessions_file)
-  purge_expired(sessions)
-  if mac and mac ~= "unknown" and not sessions[mac:lower()] then
+  local invalidated = false
+  with_sessions_lock(state.sessions_file, function()
+    local sessions = load_sessions(state.sessions_file)
+    purge_expired(sessions)
+    if mac and mac ~= "unknown" and not sessions[mac:lower()] then
+      invalidated = true
+      return 
+    end
+    add_session(sessions, mac, peer_ip, user, session_expires)
+    return write_sessions(sessions, state.sessions_file)
+  end)
+  if invalidated then
     log_info(function()
       return {
         action = "server_ping_session_invalidated",
@@ -324,8 +335,6 @@ handle_ping = function(req, peer_ip, peer_mac, state)
     end)
     return 401, { }, ""
   end
-  add_session(sessions, mac, peer_ip, user, session_expires)
-  write_sessions(sessions, state.sessions_file)
   refresh_nft(state.nft_sess, peer_ip, mac, idle_timeout, user)
   local new_tok = token.generate("user", user, mac, token_expires, state.token_key)
   log_info(function()
@@ -345,9 +354,11 @@ handle_logout = function(req, peer_ip, peer_mac, state)
   local mac = (p and p.mac) or peer_mac
   local user = p and p.user
   if mac and mac ~= "unknown" then
-    local sessions = load_sessions(state.sessions_file)
-    sessions[mac:lower()] = nil
-    write_sessions(sessions, state.sessions_file)
+    with_sessions_lock(state.sessions_file, function()
+      local sessions = load_sessions(state.sessions_file)
+      sessions[mac:lower()] = nil
+      return write_sessions(sessions, state.sessions_file)
+    end)
   end
   if state.nft_sess then
     state.nft_sess.del_authenticated(peer_ip)
@@ -372,25 +383,27 @@ handle_bye = function(req, peer_ip, peer_mac, state)
   local grace = state.auth_cfg.close_grace or 45
   local now = os.time()
   if mac and mac ~= "unknown" then
-    local sessions = load_sessions(state.sessions_file)
-    local s = sessions[mac:lower()]
-    if s then
-      local capped = now + grace
-      if not s.expires or s.expires > capped then
-        s.expires = capped
-        write_sessions(sessions, state.sessions_file)
-        if state.nft_sess then
-          refresh_nft(state.nft_sess, peer_ip, mac, grace, user or s.user)
+    with_sessions_lock(state.sessions_file, function()
+      local sessions = load_sessions(state.sessions_file)
+      local s = sessions[mac:lower()]
+      if s then
+        local capped = now + grace
+        if not s.expires or s.expires > capped then
+          s.expires = capped
+          write_sessions(sessions, state.sessions_file)
+          if state.nft_sess then
+            refresh_nft(state.nft_sess, peer_ip, mac, grace, user or s.user)
+          end
+          return log_info(function()
+            return {
+              action = "server_bye_grace",
+              mac = mac,
+              grace = grace
+            }
+          end)
         end
-        log_info(function()
-          return {
-            action = "server_bye_grace",
-            mac = mac,
-            grace = grace
-          }
-        end)
       end
-    end
+    end)
   end
   return 204, { }, ""
 end

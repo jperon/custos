@@ -11,7 +11,7 @@ ffi.cdef [[
 ]]
 { :log_info, :log_warn } = require "log"
 token = require "auth.token"
-{ :add_session, :purge_expired, :load_sessions, :write_sessions } = require "auth.sessions"
+{ :add_session, :purge_expired, :load_sessions, :write_sessions, :with_sessions_lock } = require "auth.sessions"
 { :verify_password, :verify_response, :register_user, :set_record, :parse_record, :valid_username } = require "auth.credentials"
 { :make_nonce, :verify_nonce, :salt_iter_for } = require "auth.challenge"
 { :page, :success_page, :css_content, :password_page, :password_changed_page
@@ -126,9 +126,6 @@ handle_login = (req, peer_ip, peer_mac, state) ->
     unless stored and verify_password pass, stored
       return 401, {}, "Invalid credentials"
 
-  sessions = load_sessions state.sessions_file
-  purge_expired sessions
-
   -- Utiliser directement la MAC fournie par le worker NFQUEUE
   mac = peer_mac
 
@@ -145,8 +142,13 @@ handle_login = (req, peer_ip, peer_mac, state) ->
   -- afficherait « connecté » alors que les sets nft ont déjà expiré. La tolérance
   -- aux pings retardés est absorbée par idle_timeout, pas par une marge séparée.
   token_expires = session_expires
-  add_session sessions, mac, peer_ip, user, session_expires
-  ok, err = write_sessions sessions, state.sessions_file
+  -- Cycle charge → purge → ajout → écriture sous verrou : deux logins
+  -- concurrents ne doivent pas perdre la session de l'autre.
+  ok, err = with_sessions_lock state.sessions_file, ->
+    sessions = load_sessions state.sessions_file
+    purge_expired sessions
+    add_session sessions, mac, peer_ip, user, session_expires
+    write_sessions sessions, state.sessions_file
   unless ok
     log_warn -> { action: "server_sessions_write_failed", path: state.sessions_file, err: err }
     return 500, {}, "Session persistence failed"
@@ -195,17 +197,22 @@ handle_ping = (req, peer_ip, peer_mac, state) ->
   -- Cookie et session DNS expirent ensemble (cf. handle_login).
   token_expires = session_expires
 
-  sessions = load_sessions state.sessions_file
-  purge_expired sessions
+  invalidated = false
+  with_sessions_lock state.sessions_file, ->
+    sessions = load_sessions state.sessions_file
+    purge_expired sessions
 
-  -- Rejeter si la session a été explicitement invalidée (logout).
-  -- Un token encore cryptographiquement valide ne doit pas recréer une session détruite.
-  if mac and mac ~= "unknown" and not sessions[mac\lower!]
+    -- Rejeter si la session a été explicitement invalidée (logout).
+    -- Un token encore cryptographiquement valide ne doit pas recréer une session détruite.
+    if mac and mac ~= "unknown" and not sessions[mac\lower!]
+      invalidated = true
+      return
+    add_session sessions, mac, peer_ip, user, session_expires
+    write_sessions sessions, state.sessions_file
+
+  if invalidated
     log_info -> { action: "server_ping_session_invalidated", peer_ip: peer_ip, mac: mac }
     return 401, {}, ""
-
-  add_session sessions, mac, peer_ip, user, session_expires
-  write_sessions sessions, state.sessions_file
 
   refresh_nft state.nft_sess, peer_ip, mac, idle_timeout, user
 
@@ -220,9 +227,10 @@ handle_logout = (req, peer_ip, peer_mac, state) ->
   user = p and p.user
 
   if mac and mac ~= "unknown"
-    sessions = load_sessions state.sessions_file
-    sessions[mac\lower!] = nil
-    write_sessions sessions, state.sessions_file
+    with_sessions_lock state.sessions_file, ->
+      sessions = load_sessions state.sessions_file
+      sessions[mac\lower!] = nil
+      write_sessions sessions, state.sessions_file
 
   if state.nft_sess
     state.nft_sess.del_authenticated peer_ip
@@ -248,15 +256,16 @@ handle_bye = (req, peer_ip, peer_mac, state) ->
   now = os.time!
 
   if mac and mac ~= "unknown"
-    sessions = load_sessions state.sessions_file
-    s = sessions[mac\lower!]
-    if s
-      capped = now + grace
-      if not s.expires or s.expires > capped
-        s.expires = capped
-        write_sessions sessions, state.sessions_file
-        refresh_nft state.nft_sess, peer_ip, mac, grace, user or s.user if state.nft_sess
-        log_info -> { action: "server_bye_grace", mac: mac, grace: grace }
+    with_sessions_lock state.sessions_file, ->
+      sessions = load_sessions state.sessions_file
+      s = sessions[mac\lower!]
+      if s
+        capped = now + grace
+        if not s.expires or s.expires > capped
+          s.expires = capped
+          write_sessions sessions, state.sessions_file
+          refresh_nft state.nft_sess, peer_ip, mac, grace, user or s.user if state.nft_sess
+          log_info -> { action: "server_bye_grace", mac: mac, grace: grace }
 
   204, {}, ""
 

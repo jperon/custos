@@ -866,3 +866,15 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   Correctif : helper `forget_ip_mapping` qui n'efface que si `ip_to_mac[ip]`
   appartient encore à cette MAC, aux quatre sites ; test dans
   `tests/unit/worker_responses_spec.moon`.
+- **Fichier de sessions : cycle lire-modifier-écrire non sérialisé entre enfants
+  AUTH.** `handle_login`/`handle_ping`/`handle_logout`/`handle_bye` faisaient
+  `load_sessions` puis `write_sessions` sans verrou : deux enfants partis de la
+  même photo écrasaient mutuellement leurs sessions (401 intempestif au ping
+  suivant), et le temporaire `.new` à nom fixe pouvait être écrit par deux
+  processus à la fois. Correctif : helper générique `lib.filelock.with_lock`
+  (flock `LOCK_EX` sur `<path>.lock`, ouvert après le fork), exposé par
+  `auth.sessions.with_sessions_lock` et utilisé autour des quatre cycles, plus
+  par `enrich_session_ip`/`bind_session_mac` ; temporaire de `write_sessions`
+  suffixé par le PID. Tests dans `tests/unit/auth/sessions_spec.moon`, dont une
+  concurrence réelle à deux processus (20+20 sessions → 40 conservées).
+

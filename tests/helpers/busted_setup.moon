@@ -82,6 +82,23 @@ pcall ->
               unsigned int mask, struct statx *statxbuf);
   ]]
 
+-- flock : verrou de fichier utilisé par lib/filelock (écriture des sessions
+-- et du fichier secrets entre enfants AUTH concurrents). ffi_defs est stubbé
+-- ici, donc le symbole doit être déclaré localement.
+pcall ->
+  ffi.cdef [[
+    int flock(int fd, int operation);
+    int getpid(void);
+  ]]
+
+-- fork/waitpid/_exit : test de concurrence réel de auth.sessions.
+pcall ->
+  ffi.cdef [[
+    int fork(void);
+    int waitpid(int pid, int *status, int options);
+    void _exit(int status);
+  ]]
+
 -- ── Stub config ────────────────────────────────────────────────────────────
 unless package.loaded["config"]
   package.loaded["config"] = {
