@@ -494,29 +494,40 @@ reste disponible en `DEBUG` (`response_no_matching_question`,
 Le volume est borné par le rate-limiting de `log.moon` : les actions
 `response_orphan_dropped`, `ipc_pending_overwrite` et
 `ipc_pending_overwrite_divergent` ont une entrée `RL_CONFIG` dédiée, **clé =
-action seule**, fenêtre 10 s. Conséquence pratique : au plus une ligne par 10 s
-et par worker, le nombre d'occurrences supprimées étant reporté dans le champ
-`suppressed=N` (une rafale de 400 réponses orphelines/s produit donc ~1 ligne
-/ 10 s, pas 400 lignes/s). Sans entrée `RL_CONFIG` dédiée, une action n'est
-**pas** rate-limitée : la clé générique `INFO` ne s'applique qu'aux lignes sans
-champ `action`.
+action seule**, fenêtre 10 s. L'état du limiteur est une table mmap **partagée
+entre tous les workers** : au plus une ligne par 10 s, tous workers confondus,
+le nombre d'occurrences supprimées étant reporté dans le champ `suppressed=N`
+(une rafale de 400 réponses orphelines/s produit donc ~1 ligne / 10 s, pas
+400 lignes/s). Une action **sans** entrée dédiée retombe sur la règle par
+défaut de son niveau (`INFO` : 60 s, empreinte sur `RL_IDENTITY_KEYS`) : c'est
+pourquoi ces trois actions, très répétitives en rafale, ont une entrée à 10 s
+et sans champ discriminant.
 
-**Écrasement de clé (`ipc_pending_overwrite`).** Une nouvelle question qui
-réutilise une clé `pending` existante ne remplace pas l'entrée : la politique
-est **first-wins** — seul `expire` est rafraîchi, toutes les métadonnées
-(verdict `refused`, `rule_id`, `reason`, `modifiers`, `response_rule_ids`, jalons
-`benchmark_ms`/`question_proc_ms`) restent celles de la première question. La
-cause dominante d'une collision est la **retransmission UDP légitime** (même
-client, même socket, même txid, question réémise après timeout) : question et
-verdict sont identiques, donc conserver l'entrée d'origine est exact — et cela
-préserve le jalon d'entrée question, base de `q_to_response_ms`.
+**Réutilisation de clé (`ipc_pending_overwrite`).** Une nouvelle question qui
+réutilise une clé `pending` existante est comparée champ à champ avec l'entrée
+(`refused`, `rule_id`, `reason`, `timeout`, `modifiers`, `response_rule_ids`).
 
-Le cas **divergent** (champs de métadonnées différents) est tracé en `WARN`
-sous `ipc_pending_overwrite_divergent` (`refused_kept`/`refused_new`,
-`rule_kept`/`rule_new`). Il n'est pas résolu — `qname`/`qtype` ne sont pas
-transmis dans le protocole IPC (format A4), donc une réponse ne peut pas être
-attribuée à l'une ou l'autre question. Garantie apportée : une réponse
-n'hérite **jamais** du `refused`/`rule_id`/`reason` d'une *autre* question.
+- **Cas identique** (retransmission UDP : même question, même verdict) :
+  politique **first-wins** — seul `expire` est rafraîchi, toutes les métadonnées
+  et les jalons `benchmark_ms`/`question_proc_ms` restent ceux de la première
+  question. C'est le cas dominant et il préserve le jalon d'entrée, base de
+  `q_to_response_ms`. Tracé en `INFO` (`ipc_pending_overwrite`).
+- **Divergence** : verdict le plus restrictif (**fail-closed**). Si l'une des
+  deux questions est refusée, l'entrée conservée est celle de la question
+  refusée (`refused`, `rule_id`, `reason`, `timeout`, `modifiers`,
+  `response_rule_ids` ; jalons de la première question conservés). Si les deux
+  sont autorisées mais par des règles différentes, aucun choix ne peut être
+  prouvé non élargissant : `response_hooks` et l'injection nft de
+  `worker_responses` appliquent les métadonnées de la règle retenue à la
+  réponse de l'autre (ex. règle `dnsonly` ou strip d'un côté, allow normale de
+  l'autre), donc l'entrée est marquée refusée avec
+  `reason: ipc_pending_conflict`. Tracé en `WARN`
+  (`ipc_pending_overwrite_divergent` : `refused_kept`/`refused_new`,
+  `rule_kept`/`rule_new`, `resolution`).
+
+Limite connue : `qname`/`qtype` ne sont pas transmis par le protocole IPC
+(format A4) ; une divergence de **contenu** de question à métadonnées
+identiques reste indétectable (elle se comporte comme une retransmission).
 
 Quand `runtime.benchmark` est actif, ces tentatives alimentent les champs
 `ipc_retry_attempts` / `ipc_retry_wait_ms` de la ligne `action=response_dns_benchmark`
