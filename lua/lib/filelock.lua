@@ -5,6 +5,16 @@ local LOCK_UN = 8
 local O_RDWR = 0x0002
 local O_CREAT = 0x0040
 pcall(ffi.cdef, [[ int flock(int fd, int operation); ]])
+local pack
+pack = function(...)
+  local t = {
+    n = select("#", ...)
+  }
+  for i = 1, t.n do
+    t[i] = select(i, ...)
+  end
+  return t
+end
 local with_lock
 with_lock = function(lock_path, fn)
   if not (lock_path) then
@@ -18,15 +28,13 @@ with_lock = function(lock_path, fn)
     ffi.C.close(fd)
     return fn()
   end
-  local results = {
-    pcall(fn)
-  }
+  local results = pack(pcall(fn))
   ffi.C.flock(fd, LOCK_UN)
   ffi.C.close(fd)
   if not (results[1]) then
     error(results[2])
   end
-  return unpack(results, 2)
+  return unpack(results, 2, results.n)
 end
 return {
   with_lock = with_lock

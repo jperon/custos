@@ -18,6 +18,18 @@ O_CREAT = 0x0040
 
 pcall ffi.cdef, [[ int flock(int fd, int operation); ]]
 
+--- Empaquette des valeurs de retour en comptant les trous (`nil` en tête).
+-- `{...}` ne garantit pas `#t` dès qu'un `nil` précède une valeur : un fn
+-- retournant `nil, "erreur"` perdrait son message. On fige donc le nombre
+-- exact de retours via `select "#"`, puis on déballe avec cette borne.
+-- @tparam ... Valeurs à empaqueter
+-- @treturn table `{ n: <nombre>, [1..n]: <valeurs> }`
+pack = (...) ->
+  t = { n: select "#", ... }
+  for i = 1, t.n
+    t[i] = select i, ...
+  t
+
 --- Exécute fn en tenant un verrou exclusif sur lock_path.
 -- @tparam string   lock_path Chemin du fichier de verrou (créé si absent)
 -- @tparam function fn        Fonction à exécuter sous verrou
@@ -38,10 +50,10 @@ with_lock = (lock_path, fn) ->
     ffi.C.close fd
     return fn!
 
-  results = { pcall fn }
+  results = pack pcall fn
   ffi.C.flock fd, LOCK_UN
   ffi.C.close fd
   error results[2] unless results[1]
-  unpack results, 2
+  unpack results, 2, results.n
 
 { :with_lock }
