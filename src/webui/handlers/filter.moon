@@ -106,9 +106,9 @@ make_get = (section_key, title, desc, value_label, value_hint) ->
       render_kv_editor section_key, title, desc, value_label, current, value_hint
     200, { ["Content-Type"]: "text/html; charset=UTF-8" }, page section_title, body
 
-handle_nets_get   = make_get "nets",   "Réseaux nommés",        "Groupes de CIDRs IPv4/IPv6 réutilisables dans les conditions.", "CIDRs (un par ligne)", "ex: 192.168.0.0/16"
-handle_macs_get   = make_get "macs",   "MACs nommées",          "Associe un alias à une adresse MAC (utilisable dans les règles et maclists).", "MAC",                   "ex: aa:bb:cc:dd:ee:ff"
-handle_users_get  = make_get "users",  "Utilisateurs",          "Associe un alias court à un email d'authentification.",        "Email",                 "ex: alice@example.com"
+handle_nets_get   = make_get "nets",   "Réseaux nommés",        "Dictionnaire non consulté par from_net ; pour un groupe de CIDRs, utiliser from_net_list (fichier sous lists_dir/net/).", "CIDRs (un par ligne)", "ex: 192.168.0.0/16"
+handle_macs_get   = make_get "macs",   "MACs nommées",          "Associe un alias à une adresse MAC unique (résolu par from_mac/from_macs).", "MAC",                   "ex: aa:bb:cc:dd:ee:ff"
+handle_users_get  = make_get "users",  "Utilisateurs",          "Associe un alias court à un email d'authentification (from_user attend l'identifiant, pas l'alias).",        "Email",                 "ex: alice@example.com"
 handle_times_get  = (req, state) ->
   cfg, err = read_config state.config_path
   return 500, {}, "Erreur config : #{err}" unless cfg

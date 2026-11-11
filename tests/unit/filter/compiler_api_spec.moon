@@ -72,3 +72,30 @@ assert_eq expr6, "ip6 saddr 192.168.1.0/24", "nft expr for ip6 family"
 print "OK create_net_condition"
 
 print "\nOK all compiler_api tests passed"
+
+-- Verrouille l'orthographe des variantes auto-générées : tiret bas obligatoire
+-- (commit 35c04c2). Une régression (ajout d'alias ou changement des motifs de
+-- compiler_api.load_condition) doit casser ces deux tests.
+describe "compiler_api.load_condition — variantes _list/_lists", ->
+  it "résout les formes avec tiret bas", ->
+    for name in *{
+      "from_mac_list", "from_mac_lists"
+      "from_net_list", "from_net_lists"
+      "from_vlan_list", "from_vlan_lists"
+      "from_user_list", "from_user_lists"
+      "in_time_list", "in_time_lists"
+    }
+      factory, err = compiler_api.load_condition name
+      assert.is_function factory, "#{name} doit se résoudre (err=#{tostring err})"
+
+  it "refuse les formes sans tiret bas", ->
+    for name in *{
+      "from_maclist", "from_maclists"
+      "from_netlist", "from_netlists"
+      "from_vlanlist", "from_vlanlists"
+      "from_userlist", "from_userlists"
+      "in_timelist", "in_timelists"
+    }
+      factory, err = compiler_api.load_condition name
+      assert.is_nil factory, "#{name} ne doit pas se résoudre"
+      assert.are.same "Condition '#{name}' not found", err

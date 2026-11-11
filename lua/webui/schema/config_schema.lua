@@ -546,7 +546,7 @@ return {
       type = "named_map",
       label = "MACs nommées",
       value_type = "string",
-      hint = "alias → MAC (résoluble dans from_mac/maclists)"
+      hint = "alias → MAC (résoluble dans from_mac/from_macs)"
     },
     times = {
       type = "named_map",

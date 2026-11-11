@@ -6,14 +6,17 @@
 --
 -- rule.conditions est un DICTIONNAIRE (une clé par condition, AND implicite) :
 --   • to_domain/to_domains/to_domainlist/to_domainlists - DNS name matching
---   • from_net/from_nets/from_netlist/from_netlists - Source IP from named lists
+--   • from_net/from_nets/from_net_list/from_net_lists - Source IP (CIDR inline ou fichiers)
 --   • from_subnet/from_subnets - Source IP with inline CIDR notation
---   • from_mac/from_macs/from_maclist/from_maclists - Source MAC address
---   • in_time/in_times/in_timelist/in_timelists - Time window matching
---   • from_user/from_userlist/from_users - User/identity matching
---   • from_vlan/from_vlans/from_vlanlist/from_vlans - VLAN ID matching
+--   • from_mac/from_macs/from_mac_list/from_mac_lists - Source MAC address
+--   • in_time/in_times/in_time_list/in_time_lists - Time window matching
+--   • from_user/from_users/from_user_list/from_user_lists - User/identity matching
+--   • from_vlan/from_vlans/from_vlan_list/from_vlan_lists - VLAN ID matching
 --   • stolen_computer - Stolen device detection
 --   • any_of (liste de conditions) - OU logique ; not (une condition) - négation
+--
+-- Variantes *_list/*_lists : lisent {lists_dir}/{type}/{nom}.txt (un élément
+-- par ligne) ; l'orthographe sans tiret bas (from_netlist…) n'existe pas.
 --
 -- SUBNET CONDITION SYNTAX:
 -- from_subnet supports two formats:

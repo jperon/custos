@@ -62,7 +62,7 @@ append_unique = (dst, seen, val) ->
   seen[key] = true
   dst[#dst + 1] = key
 
---- Collect all netlist names referenced by rules.
+--- Collect all netlist names referenced by rules (chemin historique).
 -- @tparam table cfg Filter configuration (can be full config or cfg.filter)
 -- @tparam table plan Compiled plan with rules
 -- @treturn table Set of netlist names
@@ -87,6 +87,8 @@ collect_referenced_netlists = (cfg, plan) ->
       netlist_exists list_name
 
   legacy_netlist_keys = {
+    -- Noms historiques : les formes sans tiret bas (from_netlist…) ne se
+    -- résolvent plus via compiler_api.load_condition.
     from_net_list: true, from_netlist: true, to_net_list: true, to_netlist: true
     from_net_lists: true, from_netlists: true, to_net_lists: true, to_netlists: true
   }
@@ -109,8 +111,10 @@ collect_referenced_netlists = (cfg, plan) ->
   table.sort netlists
   netlists
 
---- Render global netlist sets (nets_<name>).
--- These sets are referenced by from_netlist/to_netlist conditions.
+--- Render global netlist sets (nets_<name>) — chemin historique.
+-- Les conditions actuelles from_net_list/from_net_lists lisent des fichiers
+-- sous lists_dir et compilent des ensembles inline : ces sets ne sont plus
+-- référencés par une condition.
 -- @tparam table cfg Filter configuration (can be full config or cfg.filter)
 -- @tparam table plan Compiled plan with rules
 -- @tparam string indent Indentation string

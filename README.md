@@ -374,7 +374,7 @@ The `from_xxx_list` and `from_xxx_lists` variants read text files organized by t
 
 ```moonscript
 filter:
-  lists_dir: "/etc/custos/lists"   -- default: /etc/custos/lists
+  lists_dir: "/tmp/custos/lists"   -- défaut effectif (repli de compiler_api)
 ```
 
 ### Naming Convention
@@ -386,9 +386,13 @@ filter:
 | `from_mac_list "trusted"` | list name | `{lists_dir}/mac/trusted.txt` |
 | `from_user_list "admins"` | list name | `{lists_dir}/user/admins.txt` |
 | `from_vlan_list "corp"` | list name | `{lists_dir}/vlan/corp.txt` |
-| `from_in_time_list "biz"` | list name | `{lists_dir}/in_time/biz.txt` |
+| `in_time_list "biz"` | list name | `{lists_dir}/time/biz.txt` |
 
 File format: 1 valid item per line, empty lines and `#comments` are ignored.
+
+The spelling without an underscore (`from_netlist`, `from_maclists`…) does not
+exist: `compiler_api.load_condition` returns `Condition '…' not found`, and
+`src/filter/rule.moon` refuses the rule.
 
 ### Auto-generated Variants
 
