@@ -923,3 +923,8 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   publier » par le `git diff --cached --quiet` suivant. Chaque étape
   (`mkdir`, `cp`, `git add`) vérifie désormais son code de retour et sort en
   erreur avec un message sur stderr.
+- **`sync/apply.moon` : `io.popen "uname -n"` sans contrôle du résultat.**
+  Un `uname -n` vide ou indisponible produisait un chemin
+  `devices//config.moon` silencieux. `resolve_hostname` (exportée, injectable)
+  échoue désormais explicitement sur stderr, et `main` sort en erreur ;
+  testée dans `tests/unit/sync/apply_spec.moon`.

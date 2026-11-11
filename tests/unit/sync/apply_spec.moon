@@ -176,6 +176,12 @@ capture_stderr = (fn) ->
 
 fake_read_pid = (pid, err) -> (path) -> pid, err
 
+fake_handle = (output) ->
+  fh = {}
+  fh.read = (self, fmt) -> output
+  fh.close = (self) -> nil
+  fh
+
 
 describe "sync/apply — reload_supervisor", ->
 
@@ -216,3 +222,22 @@ describe "sync/apply — reload_supervisor", ->
     os.execute = original
     assert.is_false ok
     assert.equals 0, #seen
+
+-- ── Résolution du nom d'hôte ────────────────────────────────────────────────
+
+describe "sync/apply — resolve_hostname", ->
+
+  it "renvoie le nom d'hôte de uname -n", ->
+    popen = (cmd) -> fake_handle "  router1  "
+    assert.equals "router1", APPLY_MOD.resolve_hostname popen
+
+  it "échoue explicitement si uname -n renvoie une sortie vide", ->
+    popen = (cmd) -> fake_handle ""
+    out, host = capture_stderr -> APPLY_MOD.resolve_hostname popen
+    assert.is_nil host
+    assert.truthy out\match "nom d'hôte vide"
+
+  it "échoue explicitement si le lancement de uname -n échoue", ->
+    out, host = capture_stderr -> APPLY_MOD.resolve_hostname (-> nil)
+    assert.is_nil host
+    assert.truthy out\match "uname %-n indisponible"

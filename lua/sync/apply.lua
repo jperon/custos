@@ -83,6 +83,23 @@ parse_args = function(args)
   end
   return result
 end
+local resolve_hostname
+resolve_hostname = function(popen)
+  popen = popen or io.popen
+  local fh = popen("uname -n")
+  if not (fh) then
+    io.stderr:write("apply: impossible de déterminer le nom d'hôte (uname -n indisponible)\n")
+    return nil
+  end
+  local host = fh:read("*l")
+  fh:close()
+  host = host and host:match("^%s*(.-)%s*$")
+  if not (host and #host > 0) then
+    io.stderr:write("apply: nom d'hôte vide (uname -n)\n")
+    return nil
+  end
+  return host
+end
 local default_kill
 default_kill = function(pid, sig)
   return ffi.C.kill(pid, sig) == 0
@@ -111,9 +128,10 @@ main = function()
   end
   local hostname = opts.hostname
   if not (hostname) then
-    local fh = io.popen("uname -n")
-    hostname = fh:read("*l")
-    fh:close()
+    hostname = resolve_hostname()
+    if not (hostname) then
+      os.exit(1)
+    end
   end
   local base_cfg, err = serializer.read_config(opts.base)
   if not (base_cfg) then
@@ -156,6 +174,7 @@ end
 return {
   main = main,
   parse_args = parse_args,
+  resolve_hostname = resolve_hostname,
   reload_supervisor = reload_supervisor,
   SIGHUP = SIGHUP
 }

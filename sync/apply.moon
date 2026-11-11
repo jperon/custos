@@ -69,6 +69,23 @@ parse_args = (args) ->
       i += 1
   result
 
+--- Résout le nom d'hôte via `uname -n`.
+-- @tparam ?function popen fonction de lancement (injectable pour les tests)
+-- @treturn string|nil nom d'hôte, ou nil (message sur stderr) si vide/indisponible
+resolve_hostname = (popen) ->
+  popen or= io.popen
+  fh = popen "uname -n"
+  unless fh
+    io.stderr\write "apply: impossible de déterminer le nom d'hôte (uname -n indisponible)\n"
+    return nil
+  host = fh\read "*l"
+  fh\close!
+  host = host and host\match "^%s*(.-)%s*$"
+  unless host and #host > 0
+    io.stderr\write "apply: nom d'hôte vide (uname -n)\n"
+    return nil
+  host
+
 -- kill injectable pour les tests (évite d'envoyer un vrai SIGHUP).
 default_kill = (pid, sig) -> ffi.C.kill(pid, sig) == 0
 
@@ -101,9 +118,8 @@ main = ->
 
   hostname = opts.hostname
   unless hostname
-    fh = io.popen "uname -n"
-    hostname = fh\read "*l"
-    fh\close!
+    hostname = resolve_hostname!
+    os.exit 1 unless hostname
 
   -- Config de base (obligatoire)
   base_cfg, err = serializer.read_config opts.base
@@ -144,4 +160,4 @@ main = ->
 script_name = arg and arg[0] or ""
 main! if script_name\match "apply"
 
-{ :main, :parse_args, :reload_supervisor, :SIGHUP }
+{ :main, :parse_args, :resolve_hostname, :reload_supervisor, :SIGHUP }
