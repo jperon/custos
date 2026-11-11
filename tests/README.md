@@ -21,7 +21,7 @@ tests/
       lib/bin48_spec.moon     format .bin 48 bits (pack/rec_at/bsearch)
       filter_spec.moon        ipcalc, conditions (domain/mac/net/
                               user/vlan/time), règles, actions, parse_domains,
-                              load_config, first_match_wins
+                              first_match_wins
     ipc/
       ipc_spec.moon           encode/decode IPv4/IPv6, make_key, drain_pipe,
                               refused/dnsonly, reason, rule_id, timeout, expiry

@@ -279,10 +279,6 @@ Paramètres d'intégration nftables. Ces valeurs doivent correspondre au ruleset
 | `family` | string | `"bridge"` | Famille nft pour les sets IPv4 |
 | `family6` | string | `"bridge"` | Famille nft pour les sets IPv6 |
 | `table` | string | `"dns-filter-bridge"` | Nom de la table nft |
-| `set_ip4` | string | `"ip4_allowed"` | Nom du set nft IPv4 |
-| `set_ip6` | string | `"ip6_allowed"` | Nom du set nft IPv6 |
-| `set_mac4` | string | `"mac4_allowed"` | Nom du set nft MAC→IPv4 |
-| `set_mac6` | string | `"mac6_allowed"` | Nom du set nft MAC→IPv6 |
 | `ip_timeout` | string | `"2m"` | Durée de vie des éléments dans les sets IP |
 | `sip_session_ttl` | string | `"5m"` | Durée de vie des sessions SIP |
 | `add_backoff_ms` | array | `{20,50,200,400,800,2000}` | Délais (ms) entre chaque tentative — la longueur du tableau détermine le nombre de tentatives |

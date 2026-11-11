@@ -132,7 +132,7 @@ custos/
 │   ├── ipc.moon             Protocole pipe question→response (msg 43 octets)
 │   ├── dns_ede.moon         Helpers DNS EDE (RFC 8914) — partagés responses + DoH
 │   ├── forge_dns.moon       Construction de réponses DNS forgées (vol de question)
-│   ├── nft.moon             Injection sets nftables via libnftables
+│   ├── nft.moon             Exécution de commandes nftables via libnftables (contexte réutilisé)
 │   ├── nft_add_helper.moon  Helper retry/backoff pour insertions nft
 │   ├── nft_rules.moon       Application du ruleset nft + compilation des règles
 │   ├── nft_extra_rules.moon Règles nft supplémentaires (UCI)
@@ -210,6 +210,7 @@ custos/
 │   │   ├── conditions/
 │   │   │   ├── from_net.moon    IP source (CIDR)
 │   │   │   ├── from_subnet.moon IP source via sous-réseau config
+│   │   │   ├── net_match.moon    Bloc CIDR commun (from_net/from_subnet/to_net)
 │   │   │   ├── from_mac.moon    Adresse MAC source
 │   │   │   ├── from_vlan.moon   VLAN source
 │   │   │   ├── from_user.moon   Session authentifiée
@@ -223,9 +224,7 @@ custos/
 │   │   │    auto-générées à partir de from_xxx par compiler_api)
 │   │   └── lib/
 │   │       ├── bsearch.moon       Recherche binaire dans les listes binaires
-│   │       ├── cidr_parser.moon   Parsing CIDR
 │   │       ├── ipcalc.moon        Test d'appartenance CIDR
-│   │       ├── load_config.moon   Chargeur de config
 │   │       └── parse_domains.moon Parser multi-format de listes de domaines
 │   ├── webui/
 │   │   ├── router.moon      Dispatch des requêtes /admin/* vers les handlers

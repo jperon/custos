@@ -377,3 +377,108 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   et le fichier défini, le token seul suffisant sinon. Tests :
   `tests/unit/webui/admin_auth_spec.moon` (MAC inconnue acceptée, MAC connue
   sans session refusée, MAC connue avec session acceptée).
+### Filtre : qualité de code et bugs résiduels (branche q-filter)
+
+- **B8 (`any_of` / `not`) : `requires_auth` non propagé — non-bug, conservé.**
+  Les deux méta-conditions ne publient pas `capabilities.requires_auth` dans
+  leur objet enrichi, alors que `from_user` le déclare. Ce n'est pas un défaut
+  à corriger en l'état : `nft_compiler` génère une sous-chaîne d'auth par règle
+  qui n'accepte que les clients présents dans les sets `_auth_mac/_auth_ip4/_auth_ip6`
+  de *cette* règle, et ces sets sont peuplés par `auth.rule_user.rule_requires_auth`,
+  qui ne détecte que `from_users`/`from_userlists` au niveau racine de
+  `rule.conditions` (pas les conditions imbriquées). Propager le drapeau depuis
+  `any_of` rendrait donc une règle worker-only `any_of` impossible à matcher en
+  nft (sets jamais peuplés) ; pour `not`, cela restreindrait la règle aux clients
+  authentifiés alors que la négation vise l'inverse. Une correction exigerait
+  une évolution coordonnée de `src/auth/` (hors périmètre de cette branche).
+  Comportement figé par deux tests : `tests/unit/filter/conditions_spec.moon`
+  (`any_of` + `from_user`) et `tests/unit/filter/not_spec.moon`
+  (`not { from_user }`).
+- **Q1 : fonctions `add_*` mortes de `src/nft.moon`.** `add_ip4`, `add_ip6`,
+  `add_ip`, `add_mac4`, `add_mac6` et leurs variantes `_quiet` n'étaient
+  appelées nulle part : le runtime passe par `nft_queue`/`worker_nft`
+  (`run_cmd`), et `worker_tls` n'importe de `nft` que `run_cmd`. Elles
+  construisaient par ailleurs des commandes avec `config.nft.set_ip4`
+  (…`set_mac6`), clés absentes des `DEFAULTS` de `config.moon` (et donc
+  `nil` sur une config minimale). Supprimées, ainsi que leurs quatre lignes
+  dans `doc/CONFIG.md` § 5, désormais inexactes : le module n'expose plus que
+  `run_cmd` et `cleanup` (`src/nft.moon:41-48`).
+- **Q2 : `collect_nets` / `collect_dest_nets` ne collectaient rien.** Les deux
+  fonctions (identiques, `collect_dest_nets = collect_nets`) définissaient
+  `add_net`/`add_named` sans jamais les appeler et retournaient toujours deux
+  tables vides : `source_ipv4/6`, `dest_ipv4/6` et `set_src4/6`, `set_dst4/6`
+  étaient donc toujours vides ou `nil` dans `build_rule`. Supprimées avec les
+  branches mortes associées (`match_exprs` fallback, rendu des sets src/dst
+  dans `render` et `render_sets_only`). Les sets `set_subnet4/6` (alimentés par
+  `collect_static_meta`, extension `nft_static`) et les sets de ports sont
+  conservés à l'identique.
+- **Q3 : modules entièrement morts `filter/lib/cidr_parser.moon` et
+  `filter/lib/load_config.moon`.** `cidr_parser` n'était requis que par son
+  propre spec ; `load_config` que par un `describe` de
+  `tests/unit/filter/filter_spec.moon`. Supprimés avec leurs `.lua` compilés,
+  le spec `cidr_parser_spec.moon` et le bloc `load_config` de `filter_spec`
+  (la config runtime est chargée par `config.moon`, pas par ce module) ;
+  arborescence `README.md` et `tests/README.md` alignées. Note : la validation
+  de préfixe qu'aurait pu fournir `cidr_parser` reste absente d'`ipcalc`
+  (point B4 de l'audit, hors périmètre de cette branche).
+- **Q4 : `include_rule` toujours vrai.** `build_rule` pose inconditionnellement
+  `set_dyn_ip4/ip6/mac4/mac6` (lignes « set_dyn_* »), donc le `or` de
+  `include_rule` était toujours satisfait et le filtre annoncé par le
+  commentaire (n'inclure que si condition nft / auth) ne s'appliquait jamais.
+  Simplification explicite : toutes les règles actives sont ajoutées à
+  `plan_rules`, avec un commentaire qui décrit le vrai mécanisme (le worker
+  injecte dans les sets dynamiques de chaque règle, y compris worker-only ;
+  une règle deny sans condition n'a simplement aucun élément). Aucun
+  changement de sortie nft.
+- **Q5 : en-tête de `src/config.moon` décrivant une forme de `conditions`
+  non supportée.** L'exemple montrait `conditions` sous forme de tableau
+  d'entrées à clé unique (`- to_domain: …`), alors que `filter.rule.compile_rule`
+  itère `pairs condition_table` (dictionnaire, `src/filter/rule.moon:55`).
+  Une config recopiée de l'exemple produisait `name=1` puis
+  `require "filter.conditions.1"`. En-tête corrigé (dictionnaire, AND implicite)
+  et complété par une mention de `any_of`/`not` ; aucun code exécutable changé.
+- **Q6 : duplication `from_net` / `from_subnet` / `to_net`.** Les trois
+  conditions réécrivaient mot pour mot le bloc `Net` + `eval` + `compile_nft`
+  (seul le message différait). Extrait dans
+  `src/filter/conditions/net_match.moon` (`build_cidr_condition
+  { prop, nft_dir, net_cidr, subject }`), utilisé par les trois modules ; les
+  cas spéciaux `_any`/`_none` (from_net/to_net) et la normalisation
+  `string | {net,family}` (from_subnet) restent dans chaque module, ainsi que
+  leurs messages d'erreur (`require`, autorisation, `source_ip`). Comportement
+  et expressions nft identiques, couverts par
+  `tests/unit/filter/conditions_spec.moon` / `filter_spec.moon`.
+- **T6 : `nft_extra_rules` sans spec directe.** Ajout de
+  `tests/unit/nft_extra_rules_spec.moon` : `run_cmd` (succès/échec),
+  `init` (ordre UCI inversé, whitespace normalisé, fragments vides ignorés,
+  suppression des occurrences existantes par handle, poursuite de l'insertion
+  si une suppression échoue, échec d'insertion → `false`), `cleanup` (handles,
+  fragments restants en config, état vidé) et `apply_from_config` (chaîne
+  présente → populate `filter_ips4/6` + insertions, chaîne absente →
+  ré-application éventuelle, ré-application échouée → `false`). Le contexte
+  libnftables est stubbé le temps du `require` puis le stub `ffi_defs` partagé
+  est restauré.
+- **T6 : `ip_whitelist` sans spec directe.** Ajout de
+  `tests/unit/ip_whitelist_spec.moon` : `init` purge bien les deux sets puis
+  répartit les entrées IPv4/IPv6 (détection par `:`), supprime les espaces
+  internes, ignore les entrées vides, n'émet le `add element` que pour la
+  famille présente, et tolère un rc nft non nul ; `cleanup` libère le contexte.
+  Contexte libnftables stubbé au `require`, stub `ffi_defs` partagé restauré.
+- **T6 : `nft_add_helper` sans spec directe.** Ajout de
+  `tests/unit/nft_add_helper_spec.moon` : succès immédiat, retry jusqu'au
+  succès (arguments transmis intacts), épuisement → `false` avec exactement
+  `#add_backoff_ms` tentatives, longueur du tableau = nombre de tentatives,
+  retour falsy compté comme échec. Backoffs mis à `{0,0,…}` pour ne pas dormir.
+- **T6 : `filter.rule_id` sans spec directe.** Ajout de
+  `tests/unit/filter/rule_id_spec.moon` : `sanitize_ascii` (accents/ligatures,
+  espaces/tabulations, guillemets/antislash, octets non ASCII, nil),
+  `sanitize_id` (minuscules, tirets, fusion des séparateurs, troncature 128),
+  `generate` (rule_id > description > index, valeurs blanches) et
+  `generate_unique` (suffixes `_2`, `_3`, marquage de `used_ids`, absence de
+  table).
+- **T6 : `localnets` — parsing des routes et injection non testés.**
+  `get_bridge_ifname` l'était déjà (avec le quoting de B7). Ajout dans
+  `tests/unit/filter/localnets_spec.moon` de cas pour `inject_localnets` :
+  extraction des CIDR `ip -4 route` (masque ≥ 8) puis `ip -6 route`
+  (masque ≥ 48), routes hors seuil ignorées, lignes sans CIDR ignorées,
+  whitelist existante préservée, et absence totale de commande quand
+  `allow_localnets` est faux/absent.

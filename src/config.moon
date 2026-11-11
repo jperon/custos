@@ -4,7 +4,7 @@
 --
 -- RULES - Filter Conditions and Syntax:
 --
--- Conditions supported in rule.conditions array:
+-- rule.conditions est un DICTIONNAIRE (une clé par condition, AND implicite) :
 --   • to_domain/to_domains/to_domainlist/to_domainlists - DNS name matching
 --   • from_net/from_nets/from_netlist/from_netlists - Source IP from named lists
 --   • from_subnet/from_subnets - Source IP with inline CIDR notation
@@ -13,6 +13,7 @@
 --   • from_user/from_userlist/from_users - User/identity matching
 --   • from_vlan/from_vlans/from_vlanlist/from_vlans - VLAN ID matching
 --   • stolen_computer - Stolen device detection
+--   • any_of (liste de conditions) - OU logique ; not (une condition) - négation
 --
 -- SUBNET CONDITION SYNTAX:
 -- from_subnet supports two formats:
@@ -36,15 +37,15 @@
 --     rules:
 --       - description: "Allow 10.0.0.0/8 to example.com"
 --         conditions:
---           - to_domain: "example.com"
---           - from_subnet: "10.0.0.0/8"
+--           to_domain: "example.com"
+--           from_subnet: "10.0.0.0/8"
 --         actions:
 --           - allow
 --
 --       - description: "Block guest network from internal sites"
 --         conditions:
---           - from_subnet: "192.168.100.0/24"
---           - to_domains: ["internal.example.com", "vpn.example.com"]
+--           from_subnet: "192.168.100.0/24"
+--           to_domains: ["internal.example.com", "vpn.example.com"]
 --         actions:
 --           - deny
 
