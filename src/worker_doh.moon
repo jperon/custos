@@ -509,9 +509,10 @@ run = (doh_cfg, filter_data) ->
     upstream_port: upstream_port
   }
 
-  -- Create the persistent UDP upstream socket (reconnected per-child after fork).
-  -- The socket is stored in state so each child re-opens it after fork.
-  -- (File descriptors are not shared across fork boundaries for UDP in this model.)
+  -- Socket UDP amont : chaque enfant DOH-conn ouvre le sien après le fork
+  -- (state.make_upstream, appelé dans child_fn). fork(2) duplique bien la table
+  -- des descripteurs, mais l'état du socket (flux UDP) doit rester privé à
+  -- l'enfant : un socket partagé pourrait livrer une réponse au mauvais enfant.
 
   -- Certificate cache (shared across children via COW fork).
   cert_cache_mod = require "auth.cert_cache"
