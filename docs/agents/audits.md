@@ -715,6 +715,8 @@ actions :
   fichier, ou le conserver comme modèle manuel en le marquant explicitement
   dans son en-tête. La suppression ferait perdre le contenu de référence et
   l'installation serait trompeuse : décision laissée à l'utilisateur.
+  **Traité depuis** (branche `d-pkgconf`) : voir « Configuration par défaut du
+  paquet » plus bas — fichier orphelin supprimé après vérification clé par clé.
 - **Q14 — corrigé.** Commentaire de `worker_doh.moon` sur le socket UDP amont :
   `fork(2)` duplique bien les descripteurs ; chaque enfant ouvre son socket
   pour garder l'état du flux UDP privé (une réponse ne doit pas être lue par le
@@ -958,3 +960,62 @@ comportement, hors le bug ci-dessous).
 **Vérification (2026-11-11, branche t-doh)** : `make all` et `make check` OK ;
 `make test` = 2199 successes / 0 failures / 0 errors (`make test-js` inclus,
 0 échec).
+
+### Configuration par défaut du paquet (branche d-pkgconf)
+
+Traitement du point Q13. Un seul fichier de configuration par défaut est
+désormais installé par le paquet, à `/etc/custos/config.moon` : c'est le seul
+chemin lu par le superviseur (`DEFAULT_CONFIG_PATH`, `src/config.moon:52`,
+surchargé par `CUSTOS_CONFIG_PATH` que l'init.d du paquet exporte —
+`packaging/openwrt/custos/files/etc/init.d/custos:37`, et repris par la cible
+`_apply_lua_nft_rules`, `:124`). Le fichier orphelin
+`packaging/openwrt/custos/files/etc/config.moon` (78 lignes, installé par
+aucune règle) est supprimé ; il est déjà déclaré conffile avec la config
+installée (`packaging/openwrt/custos/Makefile:34-37`), donc non écrasé à la
+mise à jour.
+
+Comparaison clé par clé avec les `DEFAULTS` de `src/config.moon:183-393` :
+**aucune** valeur du fichier orphelin ne diffère des défauts actuels. C'était
+une copie des défauts de l'époque (`git show e0bb25f:src/config.moon` contient
+encore `sni_log`, `forced_ttl` et `entry_ttl: 300`), pas un réglage de
+déploiement. Tableau des clés :
+
+| Clé du fichier orphelin | État | Suite |
+|---|---|---|
+| `runtime.log_level`, `runtime.benchmark` | identiques aux défauts | écartées (redondantes) |
+| `nfqueue.questions/responses/captive/reject/auth` | identiques aux défauts | écartées |
+| `nfqueue.sni_log` | **obsolète** : la clé est `nfqueue.sni` (`src/config.moon:200`, lue par `src/main.moon:460` et `src/nft_rules.moon:96,163`) | écartée |
+| `dns.forced_ttl: 60` | **obsolète** : remplacée par `dns.ttl_grace` ; `tests/e2e/migration_validation.moon:16-22` exige qu'elle soit absente | écartée |
+| `dns.ttl_grace.grace/min/max` | identiques aux défauts (600/60/2592000) | écartées |
+| `nft.ip_timeout`, `nft.add_failure_policy`, `nft.extra_rules` | identiques aux défauts | écartées |
+| `ipc.pending_ttl`, `ipc.match_retry.count/sleep_ms` | identiques aux défauts | écartées |
+| `ipc.match_retry.enabled` | valide (`src/worker_responses.moon:204`, défaut effectif `true`) mais absent de `DEFAULTS` et de `doc/CONFIG.md` | écartée (redondante) |
+| `clients.expiry`, `auth.sessions_file`, `doh.*`, `events.*`, `filter.dest_whitelist`, `filter.decision.*` | identiques aux défauts | écartées |
+| `mac_learner.entry_ttl: 300` | valide, mais c'est l'ancien défaut (900 depuis `f398956`) | écartée (pas un réglage voulu) |
+
+Le fichier installé ne garde donc que le point d'extension `filter.rules: {}`
+(déjà présent) et des exemples commentés (`auth.bridge_ifname`/`cert`/`key`,
+`filter.allow_localnets`, `nets`, `rules`). **Aucun défaut de sécurité n'est
+modifié** : `filter.allow_localnets` reste `false`, `nft.add_failure_policy`
+reste `fail-closed`, DoH/SafeSearch/portail captif restent actifs, et copier
+les défauts dans ce conffile aurait au contraire figé leurs valeurs à la
+version installée.
+
+Documentation : `.agents/architecture.md:140` annonçait `/etc/config.moon` (lu
+par personne) → remplacé par `/etc/custos/config.moon` avec la variable qui le
+surcharge.
+
+Test : `tests/unit/pkg_default_config_spec.moon` charge le fichier du paquet
+dans un processus `luajit` séparé (`CUSTOS_CONFIG_PATH` +
+`CUSTOS_REQUIRE_EXTERNAL_CONFIG=1`, comme l'init.d) et exige
+`__meta.external_loaded = true`, `load_error = nil`, au moins une règle
+effective et aucune sortie `config: …`. Il vérifie en outre chaque chemin de
+clé déclaré contre le miroir de `DEFAULTS`/`doc/CONFIG.md` (le chargeur ne
+signale pas les clés inconnues : elles sont fusionnées silencieusement),
+l'absence de `dns.forced_ttl`/`nfqueue.sni_log`/`nft.forced_ttl`, la présence de
+`/etc/custos/config.moon` dans `conffiles` et l'absence de référence au fichier
+orphelin.
+
+**Vérification (2026-11-11, branche d-pkgconf)** : `make all`, `make check` OK ;
+`make test` = 2298 successes / 0 failures / 0 errors / 0 pending, `make test-js`
+= 12 pass / 0 fail (journal `tmp/test.log`).
