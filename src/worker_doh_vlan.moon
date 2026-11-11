@@ -17,7 +17,7 @@
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :run_queue, :NF_ACCEPT } = require "nfq_loop"
 { :get_l2 } = require "nfq/ethernet"
-{ :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_debug, :set_action_prefix, :level_enabled } = require "log"
 { :get_mac } = require "mac_learner_ipc"
 { :encode_ip16 } = require "lib.ipc_hex"
 
@@ -87,7 +87,8 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   raw = ffi.string payload_ptr[0], payload_len
   ip, err = ipparse_ip.parse raw, 1
   unless ip
-    log_debug -> { action: "parse_failed", pkt_id: pkt_id, err: err }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "parse_failed", pkt_id: pkt_id, err: err }
     return NF_ACCEPT
 
   if ip.src
@@ -99,12 +100,14 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
       ip_str = ipparse_ip.ip2s ip.src
       known_mac = ip_str and get_mac ip_str
       unless should_learn_untagged frame_mac, known_mac
-        log_debug -> { action: "untagged_skip_nonadjacent", pkt_id: pkt_id, frame_mac: frame_mac or "unknown", known_mac: known_mac or "unknown" }
+        if level_enabled "DEBUG"
+          log_debug -> { action: "untagged_skip_nonadjacent", pkt_id: pkt_id, frame_mac: frame_mac or "unknown", known_mac: known_mac or "unknown" }
         return NF_ACCEPT
     ok = send_vlan_learn ip.version, ip.src, vlan
     unless ok
       log_warn -> { action: "ipc_failed", pkt_id: pkt_id, ip_version: ip.version }
-    log_debug -> { action: "vlan_learned", pkt_id: pkt_id, vlan: vlan }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "vlan_learned", pkt_id: pkt_id, vlan: vlan }
 
   NF_ACCEPT
 

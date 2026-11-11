@@ -32,7 +32,7 @@ clients_cfg = config.clients or {}
 { :drain_pipe, :is_pending, :get_pending_entry, :consume, :purge_pending } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix, :level_enabled } = require "log"
 { :tsv_field } = require "lib.tsv"
 { :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :strip_https_rr, :strip_dns_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
 strip_codec = require "strip_codec"
@@ -432,7 +432,8 @@ finalize_a = (ctx, override) ->
       new_dns = strip_https_rr(new_dns) or new_dns
       patched = replace_dns_payload raw, ip, l4, ip_ihl, new_dns
       if patched
-        log_debug -> { action: action_label, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
+        if level_enabled "DEBUG"
+          log_debug -> { action: action_label, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
         return set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
     set_verdict qh_ptr, pkt_id, NF_DROP
 
@@ -467,7 +468,8 @@ finalize_a = (ctx, override) ->
             inject_answers redirect_answers
             pending_seq = get_last_seq!
             wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
-          log_debug -> { action: "response_validator_redirect", target: override.cname_target, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
+          if level_enabled "DEBUG"
+            log_debug -> { action: "response_validator_redirect", target: override.cname_target, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
           return set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
       return set_verdict qh_ptr, pkt_id, NF_DROP
     -- même CNAME → on continue vers le chemin normal (passthrough)
@@ -530,18 +532,20 @@ finalize_a = (ctx, override) ->
     return set_verdict qh_ptr, pkt_id, NF_DROP unless patched
 
   qnames = table.concat [q.name for q in *dns_msg.questions], ","
-  log_debug -> {
-    action:      resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow")
-    src_ip: src_ip, dst_ip: dst_ip, vlan: vlan
-    txid: txid_hex
-    qnames: qnames, answers: ip_count, nft_rule_id: nft_rule_id
-    payload_modified: payload_modified, rcode: dns_msg.header.rcode
-    client_mac: client_mac, user: user
+  if level_enabled "DEBUG"
+    log_debug -> {
+      action:      resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow")
+      src_ip: src_ip, dst_ip: dst_ip, vlan: vlan
+      txid: txid_hex
+      qnames: qnames, answers: ip_count, nft_rule_id: nft_rule_id
+      payload_modified: payload_modified, rcode: dns_msg.header.rcode
+      client_mac: client_mac, user: user
   }
 
   if records_to_add > 0 and not success_any
     if ((config.nft or {}).add_failure_policy or "fail-closed") == "fail-closed"
-      log_debug -> { action: "nft_add_failed_policy_fail_closed", txid: txid_hex, client_ip: client_ip, qnames: qnames, user: user }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "nft_add_failed_policy_fail_closed", txid: txid_hex, client_ip: client_ip, qnames: qnames, user: user }
       return set_verdict qh_ptr, pkt_id, NF_DROP
     else
       log_warn -> { action: "nft_add_failed_fail_open", txid: txid_hex, client_ip: client_ip, qnames: qnames, user: user }
@@ -748,17 +752,18 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         user: user
       }
     else
-      log_debug -> {
-        action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
-        src_ip:    src_ip
-        dst_ip:    dst_ip
-        vlan:      l2.vlan
-        txid:      txid_hex
-        rcode:     dns_msg.header.rcode
-        client_mac: client_mac
-        retry_attempts: retry_attempts
-        retry_wait_ms: retry_wait_ms
-        user: user
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
+          src_ip:    src_ip
+          dst_ip:    dst_ip
+          vlan:      l2.vlan
+          txid:      txid_hex
+          rcode:     dns_msg.header.rcode
+          client_mac: client_mac
+          retry_attempts: retry_attempts
+          retry_wait_ms: retry_wait_ms
+          user: user
       }
       return NF_DROP
   bench_after_match_ms = current_benchmark_ms! if runtime_cfg.benchmark
@@ -770,18 +775,19 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- du retry repassera par ici et sera appariée à la même `entry`.
   if try_upstream_retry entry, dns_msg, dns_raw, ip, l4, resolver_ip
     q1 = dns_msg.questions and dns_msg.questions[1]
-    log_debug -> {
-      action:     "response_upstream_retry"
-      src_ip:     src_ip
-      dst_ip:     dst_ip
-      vlan:       l2.vlan
-      txid:       txid_hex
-      qname:      q1 and q1.name or "-"
-      rcode:      bit.band dns_msg.header.ra_z_rcode, 0x0f
-      attempt:    entry.upstream_retries
-      resolver:   resolver_ip
-      client_mac: client_mac
-      user:       user
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action:     "response_upstream_retry"
+        src_ip:     src_ip
+        dst_ip:     dst_ip
+        vlan:       l2.vlan
+        txid:       txid_hex
+        qname:      q1 and q1.name or "-"
+        rcode:      bit.band dns_msg.header.ra_z_rcode, 0x0f
+        attempt:    entry.upstream_retries
+        resolver:   resolver_ip
+        client_mac: client_mac
+        user:       user
     }
     return NF_DROP
 
@@ -856,15 +862,16 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     unless patched
       return NF_DROP
     qnames = table.concat [q.name for q in *dns_msg.questions], ","
-    log_debug -> {
-      action:   nxdomain_mod and "response_nxdomain" or "response_refused"
-      src_ip:   src_ip
-      dst_ip:   dst_ip
-      vlan:     l2.vlan
-      txid:     txid_hex
-      qnames:   qnames
-      client_mac: client_mac
-      user:     user
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action:   nxdomain_mod and "response_nxdomain" or "response_refused"
+        src_ip:   src_ip
+        dst_ip:   dst_ip
+        vlan:     l2.vlan
+        txid:     txid_hex
+        qnames:   qnames
+        client_mac: client_mac
+        user:     user
     }
     patched_ptr = ffi.cast "const unsigned char*", patched
     libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr

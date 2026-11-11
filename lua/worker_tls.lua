@@ -15,10 +15,10 @@ do
 end
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
-local log_allow, log_block, log_info, log_warn, log_error, log_debug, set_action_prefix
+local log_allow, log_block, log_info, log_warn, log_error, log_debug, set_action_prefix, level_enabled
 do
   local _obj_0 = require("log")
-  log_allow, log_block, log_info, log_warn, log_error, log_debug, set_action_prefix = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix
+  log_allow, log_block, log_info, log_warn, log_error, log_debug, set_action_prefix, level_enabled = _obj_0.log_allow, _obj_0.log_block, _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix, _obj_0.level_enabled
 end
 local tsv_field
 tsv_field = require("lib.tsv").tsv_field
@@ -222,6 +222,9 @@ extract_sni_from_tls = function(payload, ctx)
   debug_tls = function(action, extra)
     if extra == nil then
       extra = nil
+    end
+    if not (level_enabled("DEBUG")) then
+      return 
     end
     local e = mk_meta(nil)
     e.action = action
@@ -811,42 +814,50 @@ dst_matches_cname = function(target, ip_dst, version)
 end
 local handle_sni_packet
 handle_sni_packet = function(qh_ptr, nfad, pkt_id)
-  log_debug(function()
-    return {
-      action = "callback",
-      pkt_id = pkt_id
-    }
-  end)
-  local l2 = get_l2(nfad)
-  if not (l2) then
+  if level_enabled("DEBUG") then
     log_debug(function()
       return {
-        action = "no_l2",
+        action = "callback",
         pkt_id = pkt_id
       }
     end)
+  end
+  local l2 = get_l2(nfad)
+  if not (l2) then
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "no_l2",
+          pkt_id = pkt_id
+        }
+      end)
+    end
     return NF_ACCEPT
   end
   local payload_ptr = ffi.new("unsigned char*[1]")
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
   if payload_len <= 0 then
-    log_debug(function()
-      return {
-        action = "no_payload",
-        pkt_id = pkt_id
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "no_payload",
+          pkt_id = pkt_id
+        }
+      end)
+    end
     return NF_ACCEPT
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
   local ip, err = ipparse_ip.parse(raw, 1)
   if not (ip) then
-    log_debug(function()
-      return {
-        action = "ip_parse_failed",
-        pkt_id = pkt_id
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "ip_parse_failed",
+          pkt_id = pkt_id
+        }
+      end)
+    end
     return NF_ACCEPT
   end
   local protocol_name = nil
@@ -862,21 +873,25 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       return ipparse_tcp.parse(raw, ip.data_off)
     end)
     if not (success and tcp) then
-      log_debug(function()
-        return {
-          action = "tcp_parse_failed",
-          pkt_id = pkt_id
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "tcp_parse_failed",
+            pkt_id = pkt_id
+          }
+        end)
+      end
       return NF_ACCEPT
     end
     if not (tcp.data_off and tcp.data_off >= 1) then
-      log_debug(function()
-        return {
-          action = "tcp_data_off_invalid",
-          pkt_id = pkt_id
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "tcp_data_off_invalid",
+            pkt_id = pkt_id
+          }
+        end)
+      end
       return NF_ACCEPT
     end
     src_port = tcp.spt
@@ -898,12 +913,14 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       protocol_name = "https"
     end
     if tcp.data_off > #raw then
-      log_debug(function()
-        return {
-          action = "tcp_no_payload",
-          pkt_id = pkt_id
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "tcp_no_payload",
+            pkt_id = pkt_id
+          }
+        end)
+      end
       return NF_ACCEPT
     end
     local segment = raw:sub(tcp.data_off)
@@ -912,36 +929,42 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
     local tcp_key = tostring(src_ip_k) .. "|" .. tostring(src_port) .. "|" .. tostring(dst_ip_k) .. "|" .. tostring(dst_port)
     local tls_payload = feed_tls_segment(tcp_key, segment, tcp.flags, tcp.seq_n)
     if not (tls_payload) then
-      log_debug(function()
-        return {
-          action = "tcp_buffering",
-          pkt_id = pkt_id
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "tcp_buffering",
+            pkt_id = pkt_id
+          }
+        end)
+      end
       return NF_ACCEPT
     end
     local ok_rec, tls_rec = pcall(function()
       return ipparse_tls.parse(tls_payload, 1)
     end)
     if not (ok_rec and tls_rec and tls_rec.type == ipparse_tls.record_types.handshake) then
-      log_debug(function()
-        return {
-          action = "tcp_not_tls_handshake",
-          pkt_id = pkt_id
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "tcp_not_tls_handshake",
+            pkt_id = pkt_id
+          }
+        end)
+      end
       return NF_ACCEPT
     end
     local ok_hs, hs_hdr = pcall(function()
       return ipparse_tls_handshake.parse(tls_payload, tls_rec.data_off)
     end)
     if not (ok_hs and hs_hdr and hs_hdr.type == ipparse_tls_handshake.message_types.client_hello) then
-      log_debug(function()
-        return {
-          action = "tcp_not_client_hello",
-          pkt_id = pkt_id
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "tcp_not_client_hello",
+            pkt_id = pkt_id
+          }
+        end)
+      end
       return NF_ACCEPT
     end
     sni, tls_reason, tls_meta = extract_sni_from_tls(tls_payload, {
@@ -953,12 +976,14 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       return ipparse_udp.parse(raw, ip.data_off)
     end)
     if not (success and udp) then
-      log_debug(function()
-        return {
-          action = "udp_parse_failed",
-          pkt_id = pkt_id
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "udp_parse_failed",
+            pkt_id = pkt_id
+          }
+        end)
+      end
       return NF_ACCEPT
     end
     src_port = udp.spt
@@ -1020,21 +1045,23 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
   local reject_with_worker
   reject_with_worker = function(reason, event_rule)
     if l4_proto == "udp" then
-      log_debug(function()
-        return {
-          action = "sni_quic_drop",
-          worker = worker_src,
-          pkt_id = pkt_id,
-          protocol = protocol_name,
-          l4_proto = l4_proto,
-          sni = sni_norm or sni,
-          ip_src = ip_src_str,
-          ip_dst = ip_dst_str,
-          mac_src = mac_str,
-          reason = reason,
-          rule = event_rule
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "sni_quic_drop",
+            worker = worker_src,
+            pkt_id = pkt_id,
+            protocol = protocol_name,
+            l4_proto = l4_proto,
+            sni = sni_norm or sni,
+            ip_src = ip_src_str,
+            ip_dst = ip_dst_str,
+            mac_src = mac_str,
+            reason = reason,
+            rule = event_rule
+          }
+        end)
+      end
       return NF_DROP
     end
     local ok_mark, mark_err = mark_packet_for_reject(qh_ptr, pkt_id)
@@ -1058,22 +1085,24 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       end)
       return NF_DROP
     end
-    log_debug(function()
-      return {
-        action = "sni_reject_marked",
-        worker = worker_src,
-        pkt_id = pkt_id,
-        protocol = protocol_name,
-        l4_proto = l4_proto,
-        sni = sni_norm or sni,
-        ip_src = ip_src_str,
-        ip_dst = ip_dst_str,
-        mac_src = mac_str,
-        reason = reason,
-        rule = event_rule,
-        reject_mark = REJECT_MARK_HEX
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "sni_reject_marked",
+          worker = worker_src,
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          sni = sni_norm or sni,
+          ip_src = ip_src_str,
+          ip_dst = ip_dst_str,
+          mac_src = mac_str,
+          reason = reason,
+          rule = event_rule,
+          reject_mark = REJECT_MARK_HEX
+        }
+      end)
+    end
     return VERDICT_DONE
   end
   if not (sni) then
@@ -1122,15 +1151,17 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       sni_event("warn", nil, tls_reason or "no_sni", "mail_ssl/no_sni")
       return NF_ACCEPT
     end
-    log_debug(function()
-      return with_meta({
-        action = "sni_verdict_skip_no_sni",
-        pkt_id = pkt_id,
-        protocol = protocol_name,
-        l4_proto = l4_proto,
-        reason = tls_reason
-      })
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return with_meta({
+          action = "sni_verdict_skip_no_sni",
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          reason = tls_reason
+        })
+      end)
+    end
     return NF_ACCEPT
   end
   sni_norm = normalize_sni(sni)
@@ -1159,16 +1190,18 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
   local decide_reason = (meta and meta.reason) or decide_err
   local decide_rule = meta and meta.rule_id
   if not in_scope then
-    log_debug(function()
-      return {
-        action = "sni_verdict_skip_protocol",
-        pkt_id = pkt_id,
-        protocol = protocol_name,
-        l4_proto = l4_proto,
-        sni = sni_norm or sni,
-        policy_protocols = sni_policy and sni_policy.protocols or "both"
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "sni_verdict_skip_protocol",
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          sni = sni_norm or sni,
+          policy_protocols = sni_policy and sni_policy.protocols or "both"
+        }
+      end)
+    end
     return NF_ACCEPT
   end
   local action = sni_action_for(meta)
@@ -1206,17 +1239,19 @@ handle_sni_packet = function(qh_ptr, nfad, pkt_id)
       sni_event("block", sni_norm or sni, reason, event_rule)
       return reject_with_worker(reason, event_rule)
     end
-    log_debug(function()
-      return {
-        action = action_skip,
-        pkt_id = pkt_id,
-        protocol = protocol_name,
-        l4_proto = l4_proto,
-        sni = sni_norm or sni,
-        reason = reason,
-        rule = decide_rule
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = action_skip,
+          pkt_id = pkt_id,
+          protocol = protocol_name,
+          l4_proto = l4_proto,
+          sni = sni_norm or sni,
+          reason = reason,
+          rule = decide_rule
+        }
+      end)
+    end
     return NF_ACCEPT
   end
   local do_allow

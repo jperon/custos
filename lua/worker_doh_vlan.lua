@@ -10,10 +10,10 @@ do
 end
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
-local log_info, log_warn, log_debug, set_action_prefix
+local log_info, log_warn, log_debug, set_action_prefix, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix
+  log_info, log_warn, log_debug, set_action_prefix, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix, _obj_0.level_enabled
 end
 local get_mac
 get_mac = require("mac_learner_ipc").get_mac
@@ -71,13 +71,15 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
   local raw = ffi.string(payload_ptr[0], payload_len)
   local ip, err = ipparse_ip.parse(raw, 1)
   if not (ip) then
-    log_debug(function()
-      return {
-        action = "parse_failed",
-        pkt_id = pkt_id,
-        err = err
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "parse_failed",
+          pkt_id = pkt_id,
+          err = err
+        }
+      end)
+    end
     return NF_ACCEPT
   end
   if ip.src then
@@ -86,14 +88,16 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
       local ip_str = ipparse_ip.ip2s(ip.src)
       local known_mac = ip_str and get_mac(ip_str)
       if not (should_learn_untagged(frame_mac, known_mac)) then
-        log_debug(function()
-          return {
-            action = "untagged_skip_nonadjacent",
-            pkt_id = pkt_id,
-            frame_mac = frame_mac or "unknown",
-            known_mac = known_mac or "unknown"
-          }
-        end)
+        if level_enabled("DEBUG") then
+          log_debug(function()
+            return {
+              action = "untagged_skip_nonadjacent",
+              pkt_id = pkt_id,
+              frame_mac = frame_mac or "unknown",
+              known_mac = known_mac or "unknown"
+            }
+          end)
+        end
         return NF_ACCEPT
       end
     end
@@ -107,13 +111,15 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
         }
       end)
     end
-    log_debug(function()
-      return {
-        action = "vlan_learned",
-        pkt_id = pkt_id,
-        vlan = vlan
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "vlan_learned",
+          pkt_id = pkt_id,
+          vlan = vlan
+        }
+      end)
+    end
   end
   return NF_ACCEPT
 end

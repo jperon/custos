@@ -10,10 +10,10 @@ do
 end
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
-local log_info, log_warn, log_error, log_debug, set_action_prefix
+local log_info, log_warn, log_error, log_debug, set_action_prefix, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_error, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix
+  log_info, log_warn, log_error, log_debug, set_action_prefix, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix, _obj_0.level_enabled
 end
 local encode_ip16
 encode_ip16 = require("lib.ipc_hex").encode_ip16
@@ -41,12 +41,14 @@ send_to_auth_server = function(ip_version, ip_raw, mac_raw)
 end
 local handle_auth_packet
 handle_auth_packet = function(qh_ptr, nfad, pkt_id)
-  log_debug(function()
-    return {
-      action = "callback",
-      pkt_id = pkt_id
-    }
-  end)
+  if level_enabled("DEBUG") then
+    log_debug(function()
+      return {
+        action = "callback",
+        pkt_id = pkt_id
+      }
+    end)
+  end
   local l2 = get_l2(nfad)
   if not (l2) then
     log_warn(function()
@@ -70,21 +72,25 @@ handle_auth_packet = function(qh_ptr, nfad, pkt_id)
     return NF_DROP
   end
   local raw = ffi.string(payload_ptr[0], payload_len)
-  log_debug(function()
-    return {
-      action = "payload_len",
-      len = payload_len
-    }
-  end)
-  local ip, err = ipparse_ip.parse(raw, 1)
-  if not (ip) then
+  if level_enabled("DEBUG") then
     log_debug(function()
       return {
-        action = "parse_failed",
-        pkt_id = pkt_id,
-        err = err
+        action = "payload_len",
+        len = payload_len
       }
     end)
+  end
+  local ip, err = ipparse_ip.parse(raw, 1)
+  if not (ip) then
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "parse_failed",
+          pkt_id = pkt_id,
+          err = err
+        }
+      end)
+    end
     return NF_ACCEPT
   end
   local ip_raw = ip.src

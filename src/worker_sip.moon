@@ -16,7 +16,7 @@
 { :ffi, :libnfq } = require "ffi_defs"
 { :run_queue, :NF_ACCEPT } = require "nfq_loop"
 { :get_l2 } = require "nfq/ethernet"
-{ :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_debug, :set_action_prefix, :level_enabled } = require "log"
 
 ipparse_ip  = require "ipparse.l3.ip"
 ipparse_udp = require "ipparse.l4.udp"
@@ -163,7 +163,8 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   raw = ffi.string payload_ptr[0], payload_len
   ip, ip_err = ipparse_ip.parse raw, 1
   unless ip
-    log_debug -> { action: "ip_parse_failed", pkt_id: pkt_id, err: ip_err or "" }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "ip_parse_failed", pkt_id: pkt_id, err: ip_err or "" }
     return NF_ACCEPT
 
   ip_version = ip.version
@@ -194,7 +195,8 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   if ip.protocol == 17 and dport == 3478
     if ip_dst_str and mac != "unknown"
       allow_mac_ip mac, ip_dst_str, ip_family, "sip_stun"
-      log_debug -> { action: "stun_ip_added", mac: mac, ip: ip_dst_str }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "stun_ip_added", mac: mac, ip: ip_dst_str }
     return NF_ACCEPT
 
   -- ── STUN responses (UDP sport 3478) ──────────────────────────────────────
@@ -208,7 +210,8 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
     if ip_src_str and ip_dst_str
       allow_sip_peer ip_src_str, ip_family, "stun_src"
       allow_sip_peer ip_dst_str, ip_family, "stun_dst"
-    log_debug -> { action: "stun_response_accepted", ip: ip_src_str, dst: ip_dst_str }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "stun_response_accepted", ip: ip_src_str, dst: ip_dst_str }
     return NF_ACCEPT
 
   -- ── SIP/TLS (port 5061) : accept without parsing ─────────────────────────
@@ -222,12 +225,13 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   outbound_mac_src = "none"
   if outbound
     outbound_mac, outbound_mac_src = resolve_outbound_mac ip_src_str, mac
-    log_debug -> {
-      action: "sip_outbound_mac_selected"
-      ip_src: ip_src_str or ""
-      packet_mac: mac or ""
-      selected_mac: outbound_mac or ""
-      source: outbound_mac_src
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action: "sip_outbound_mac_selected"
+        ip_src: ip_src_str or ""
+        packet_mac: mac or ""
+        selected_mac: outbound_mac or ""
+        source: outbound_mac_src
     }
 
   -- Outbound: whitelist the proxy IP + cache phone MAC.
@@ -259,17 +263,19 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   if outbound
     target_mac = outbound_mac
     unless target_mac
-      log_debug -> {
-        action: "sip_no_mac_for_src"
-        ip_src: ip_src_str or "unknown"
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "sip_no_mac_for_src"
+          ip_src: ip_src_str or "unknown"
       }
       return NF_ACCEPT
   elseif inbound
     target_mac = dst_phone_mac
     unless target_mac
-      log_debug -> {
-        action: "sip_no_mac_for_dst"
-        ip_dst: ip_dst_str or "unknown"
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "sip_no_mac_for_dst"
+          ip_dst: ip_dst_str or "unknown"
       }
       return NF_ACCEPT
 
@@ -278,15 +284,16 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
     allow_sip_peer entry.ip, entry.family, "sip_media"
     -- Conserver l'entrée MAC pour l'outbound (téléphone → media server).
     allow_mac_ip target_mac, entry.ip, entry.family, "sip_media"
-    log_debug -> {
-      action:      "sip_media_ip_added"
-      mac:         target_mac
-      media_ip:    entry.ip
-      family:      entry.family
-      direction:   if inbound then "inbound" else "outbound"
-      cseq_method: msg.cseq_method or ""
-      sip_status:  tostring(msg.status_code or "")
-      sip_method:  msg.method or ""
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action:      "sip_media_ip_added"
+        mac:         target_mac
+        media_ip:    entry.ip
+        family:      entry.family
+        direction:   if inbound then "inbound" else "outbound"
+        cseq_method: msg.cseq_method or ""
+        sip_status:  tostring(msg.status_code or "")
+        sip_method:  msg.method or ""
     }
 
   NF_ACCEPT

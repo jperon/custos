@@ -5,7 +5,7 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 config = require "config"
-{ :log_info, :log_warn, :log_error, :log_debug } = require "log"
+{ :log_info, :log_warn, :log_error, :log_debug, :level_enabled } = require "log"
 
 AF_BRIDGE = 7   -- Linux AF_BRIDGE : famille d'adresses pour les hooks bridge nftables
 
@@ -121,10 +121,12 @@ run_queue = (queue_num, callback, opts=nil) ->
         continue if en == EINTR
         log_warn -> { action: "queue_poll_error", queue: queue_num, errno: en }
         break
-    log_debug -> { action: "queue_read_call", queue: queue_num }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "queue_read_call", queue: queue_num }
     rv = libc.read fd, buf, READ_BUF_SIZE
     if rv > 0
-      log_debug -> { action: "queue_handle_packet", queue: queue_num, rv: rv }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "queue_handle_packet", queue: queue_num, rv: rv }
       libnfq.nfq_handle_packet h, buf, tonumber rv
     elseif rv == 0
       log_warn -> { action: "queue_read_eof", queue: queue_num }

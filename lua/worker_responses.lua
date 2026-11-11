@@ -40,10 +40,10 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix
+local log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_allow, _obj_0.log_block, _obj_0.now, _obj_0.set_action_prefix
+  log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_allow, _obj_0.log_block, _obj_0.now, _obj_0.set_action_prefix, _obj_0.level_enabled
 end
 local tsv_field
 tsv_field = require("lib.tsv").tsv_field
@@ -420,16 +420,18 @@ finalize_a = function(ctx, override)
       new_dns = strip_https_rr(new_dns) or new_dns
       local patched = replace_dns_payload(raw, ip, l4, ip_ihl, new_dns)
       if patched then
-        log_debug(function()
-          return {
-            action = action_label,
-            src_ip = src_ip,
-            dst_ip = dst_ip,
-            txid = txid_hex,
-            client_mac = client_mac,
-            user = user
-          }
-        end)
+        if level_enabled("DEBUG") then
+          log_debug(function()
+            return {
+              action = action_label,
+              src_ip = src_ip,
+              dst_ip = dst_ip,
+              txid = txid_hex,
+              client_mac = client_mac,
+              user = user
+            }
+          end)
+        end
         return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
       end
     end
@@ -488,17 +490,19 @@ finalize_a = function(ctx, override)
               end))
             end
           end
-          log_debug(function()
-            return {
-              action = "response_validator_redirect",
-              target = override.cname_target,
-              src_ip = src_ip,
-              dst_ip = dst_ip,
-              txid = txid_hex,
-              client_mac = client_mac,
-              user = user
-            }
-          end)
+          if level_enabled("DEBUG") then
+            log_debug(function()
+              return {
+                action = "response_validator_redirect",
+                target = override.cname_target,
+                src_ip = src_ip,
+                dst_ip = dst_ip,
+                txid = txid_hex,
+                client_mac = client_mac,
+                user = user
+              }
+            end)
+          end
           return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
         end
       end
@@ -596,33 +600,37 @@ finalize_a = function(ctx, override)
     end
     return _accum_0
   end)(), ",")
-  log_debug(function()
-    return {
-      action = resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow"),
-      src_ip = src_ip,
-      dst_ip = dst_ip,
-      vlan = vlan,
-      txid = txid_hex,
-      qnames = qnames,
-      answers = ip_count,
-      nft_rule_id = nft_rule_id,
-      payload_modified = payload_modified,
-      rcode = dns_msg.header.rcode,
-      client_mac = client_mac,
-      user = user
-    }
-  end)
+  if level_enabled("DEBUG") then
+    log_debug(function()
+      return {
+        action = resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow"),
+        src_ip = src_ip,
+        dst_ip = dst_ip,
+        vlan = vlan,
+        txid = txid_hex,
+        qnames = qnames,
+        answers = ip_count,
+        nft_rule_id = nft_rule_id,
+        payload_modified = payload_modified,
+        rcode = dns_msg.header.rcode,
+        client_mac = client_mac,
+        user = user
+      }
+    end)
+  end
   if records_to_add > 0 and not success_any then
     if ((config.nft or { }).add_failure_policy or "fail-closed") == "fail-closed" then
-      log_debug(function()
-        return {
-          action = "nft_add_failed_policy_fail_closed",
-          txid = txid_hex,
-          client_ip = client_ip,
-          qnames = qnames,
-          user = user
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "nft_add_failed_policy_fail_closed",
+            txid = txid_hex,
+            client_ip = client_ip,
+            qnames = qnames,
+            user = user
+          }
+        end)
+      end
       return set_verdict(qh_ptr, pkt_id, NF_DROP)
     else
       log_warn(function()
@@ -860,26 +868,28 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         }
       end)
     else
-      log_debug(function()
-        return {
-          action = (function()
-            if retry_attempts > 0 then
-              return "response_no_matching_question_after_retry"
-            else
-              return "response_no_matching_question"
-            end
-          end)(),
-          src_ip = src_ip,
-          dst_ip = dst_ip,
-          vlan = l2.vlan,
-          txid = txid_hex,
-          rcode = dns_msg.header.rcode,
-          client_mac = client_mac,
-          retry_attempts = retry_attempts,
-          retry_wait_ms = retry_wait_ms,
-          user = user
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = (function()
+              if retry_attempts > 0 then
+                return "response_no_matching_question_after_retry"
+              else
+                return "response_no_matching_question"
+              end
+            end)(),
+            src_ip = src_ip,
+            dst_ip = dst_ip,
+            vlan = l2.vlan,
+            txid = txid_hex,
+            rcode = dns_msg.header.rcode,
+            client_mac = client_mac,
+            retry_attempts = retry_attempts,
+            retry_wait_ms = retry_wait_ms,
+            user = user
+          }
+        end)
+      end
       return NF_DROP
     end
   end
@@ -888,21 +898,23 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   if try_upstream_retry(entry, dns_msg, dns_raw, ip, l4, resolver_ip) then
     local q1 = dns_msg.questions and dns_msg.questions[1]
-    log_debug(function()
-      return {
-        action = "response_upstream_retry",
-        src_ip = src_ip,
-        dst_ip = dst_ip,
-        vlan = l2.vlan,
-        txid = txid_hex,
-        qname = q1 and q1.name or "-",
-        rcode = bit.band(dns_msg.header.ra_z_rcode, 0x0f),
-        attempt = entry.upstream_retries,
-        resolver = resolver_ip,
-        client_mac = client_mac,
-        user = user
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "response_upstream_retry",
+          src_ip = src_ip,
+          dst_ip = dst_ip,
+          vlan = l2.vlan,
+          txid = txid_hex,
+          qname = q1 and q1.name or "-",
+          rcode = bit.band(dns_msg.header.ra_z_rcode, 0x0f),
+          attempt = entry.upstream_retries,
+          resolver = resolver_ip,
+          client_mac = client_mac,
+          user = user
+        }
+      end)
+    end
     return NF_DROP
   end
   consume(txid, dst_ip, client_port, resolver_ip)
@@ -980,18 +992,20 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       end
       return _accum_0
     end)(), ",")
-    log_debug(function()
-      return {
-        action = nxdomain_mod and "response_nxdomain" or "response_refused",
-        src_ip = src_ip,
-        dst_ip = dst_ip,
-        vlan = l2.vlan,
-        txid = txid_hex,
-        qnames = qnames,
-        client_mac = client_mac,
-        user = user
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = nxdomain_mod and "response_nxdomain" or "response_refused",
+          src_ip = src_ip,
+          dst_ip = dst_ip,
+          vlan = l2.vlan,
+          txid = txid_hex,
+          qnames = qnames,
+          client_mac = client_mac,
+          user = user
+        }
+      end)
+    end
     local patched_ptr = ffi.cast("const unsigned char*", patched)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
     return -1

@@ -131,6 +131,9 @@ unless package.loaded["log"]
     log_trace: make_logger "trace"
     now: -> os.time!
     get_log_level_num: (level) -> 0
+    -- Tous les niveaux actifs : les thunks des call-sites gardés par
+    -- `level_enabled "DEBUG"` s'exécutent comme avant l'ajout des gardes.
+    level_enabled: (level) -> true
     set_action_prefix: (prefix) -> nil
   }
 

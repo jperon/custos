@@ -14,7 +14,7 @@
 bit = require "bit"
 
 { :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE } = require "nfq_loop"
-{ :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_debug, :set_action_prefix, :level_enabled } = require "log"
 ttl_set = require "lib.ttl_set"
 parse: parse_ip, new: new_ip, proto: ip_proto = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
@@ -253,27 +253,29 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
     if ttl_left
       raw_ptr = ffi.cast "const unsigned char*", raw
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
-      log_debug -> {
-        action: "rtp_passthrough_hit"
-        queue: _current_queue
-        src: src_ip
-        dst: dst_ip
-        sport: sport
-        dport: dport
-        ttl_s: ttl_left
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "rtp_passthrough_hit"
+          queue: _current_queue
+          src: src_ip
+          dst: dst_ip
+          sport: sport
+          dport: dport
+          ttl_s: ttl_left
       }
       return VERDICT_DONE
     elseif ttl_left_dport
       raw_ptr = ffi.cast "const unsigned char*", raw
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
-      log_debug -> {
-        action: "rtp_passthrough_hit_dport"
-        queue: _current_queue
-        src: src_ip
-        dst: dst_ip
-        sport: sport
-        dport: dport
-        ttl_s: ttl_left_dport
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "rtp_passthrough_hit_dport"
+          queue: _current_queue
+          src: src_ip
+          dst: dst_ip
+          sport: sport
+          dport: dport
+          ttl_s: ttl_left_dport
       }
       return VERDICT_DONE
 
@@ -285,14 +287,15 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
       rtp_passthrough_dport.add rev_dport_key
       raw_ptr = ffi.cast "const unsigned char*", raw
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
-      log_debug -> {
-        action: "rtp_passthrough_add"
-        queue: _current_queue
-        src: src_ip
-        dst: dst_ip
-        sport: sport
-        dport: dport
-        ttl_s: RTP_PASSTHROUGH_TTL
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "rtp_passthrough_add"
+          queue: _current_queue
+          src: src_ip
+          dst: dst_ip
+          sport: sport
+          dport: dport
+          ttl_s: RTP_PASSTHROUGH_TTL
       }
       return VERDICT_DONE
 
@@ -326,15 +329,16 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
   forged_ptr = ffi.cast "const unsigned char*", forged
   libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #forged, forged_ptr
 
-  log_debug -> {
-    action:   "reject_forge"
-    queue:    _current_queue
-    src:      src_ip
-    dst:      dst_ip
-    sport:    sport
-    dport:    dport
-    proto:    proto
-    response: response_type
+  if level_enabled "DEBUG"
+    log_debug -> {
+      action:   "reject_forge"
+      queue:    _current_queue
+      src:      src_ip
+      dst:      dst_ip
+      sport:    sport
+      dport:    dport
+      proto:    proto
+      response: response_type
   }
 
   VERDICT_DONE

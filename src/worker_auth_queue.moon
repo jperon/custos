@@ -5,7 +5,7 @@
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :get_l2 } = require "nfq/ethernet"
-{ :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix, :level_enabled } = require "log"
 { :encode_ip16 } = require "lib.ipc_hex"
 
 -- Import ipparse for L3 IP parsing
@@ -42,7 +42,8 @@ send_to_auth_server = (ip_version, ip_raw, mac_raw) ->
 -- @tparam number pkt_id ID du paquet
 -- @treturn number NF_ACCEPT ou NF_DROP
 handle_auth_packet = (qh_ptr, nfad, pkt_id) ->
-  log_debug -> { action: "callback", pkt_id: pkt_id }
+  if level_enabled "DEBUG"
+    log_debug -> { action: "callback", pkt_id: pkt_id }
 
   -- 1. Extraire les infos L2 (MAC source)
   l2 = get_l2 nfad
@@ -58,12 +59,14 @@ handle_auth_packet = (qh_ptr, nfad, pkt_id) ->
     return NF_DROP
 
   raw = ffi.string payload_ptr[0], payload_len
-  log_debug -> { action: "payload_len", len: payload_len }
+  if level_enabled "DEBUG"
+    log_debug -> { action: "payload_len", len: payload_len }
 
   -- Parse IP header with ipparse (1-based offset)
   ip, err = ipparse_ip.parse raw, 1
   unless ip
-    log_debug -> { action: "parse_failed", pkt_id: pkt_id, err: err }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "parse_failed", pkt_id: pkt_id, err: err }
     return NF_ACCEPT
 
   ip_raw = ip.src

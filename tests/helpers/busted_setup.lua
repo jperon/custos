@@ -102,6 +102,9 @@ if not (package.loaded["log"]) then
     get_log_level_num = function(level)
       return 0
     end,
+    level_enabled = function(level)
+      return true
+    end,
     set_action_prefix = function(prefix)
       return nil
     end
