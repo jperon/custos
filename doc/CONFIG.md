@@ -660,6 +660,18 @@ est signalée au chargement par `filter_list_missing` / `filter_list_empty`
 (champs `condition`, `list`, `path`), sans changer le filtrage : elle ne
 correspond jamais.
 
+`domainlists_dir` est le répertoire de **sortie** lu par le filtre
+(`to_domainlist`). Sur OpenWrt il est sur tmpfs (`/tmp/custos/lists`, vidé à
+chaque redémarrage) : `custos-update` le repeuple au démarrage, en déployant la
+release `custos-lists` puis en compilant les listes locales.
+
+`custom_lists_dir` est au contraire le dossier **source** des `.txt` locaux
+(jamais lu directement par le filtre) : chaque `*.txt` est compilé en
+`{domainlists_dir}/custom/<nom>.bin` par `custos-update` (updater avec
+`--custom-only`). La compilation locale ayant lieu après l'extraction de la
+release, une liste locale de même nom qu'une liste de la release l'emporte.
+
+
 ### 14.2 Dictionnaires nommés et listes de valeurs
 
 Les variantes `_list` / `_lists` des conditions ne prennent **pas** le nom d'un

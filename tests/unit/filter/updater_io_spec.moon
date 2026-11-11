@@ -107,3 +107,54 @@ describe "filter.updater_io.write_result_kind", ->
     assert.equals "ok",      updater_io.write_result_kind true, "n domaines", nil
     assert.equals "skipped", updater_io.write_result_kind false, "aucun domaine valide", true
     assert.equals "error",   updater_io.write_result_kind false, "échec écriture", nil
+
+describe "filter.updater_io.process_custom_dir", ->
+  SRC = "tmp/updater_io_spec/custom_src"
+  OUT = "tmp/updater_io_spec/custom_out"
+
+  before_each ->
+    os.execute "rm -rf tmp/updater_io_spec"
+    os.execute "mkdir -p #{SRC} #{OUT}"
+
+  after_each ->
+    os.execute "rm -rf tmp/updater_io_spec"
+
+  write_txt = (name, content) ->
+    f = assert io.open "#{SRC}/#{name}", "w"
+    f\write content
+    f\close!
+
+  file_size = (path) ->
+    f = io.open path, "rb"
+    return nil unless f
+    data = f\read "*a"
+    f\close!
+    #data
+
+  it "compile chaque .txt en .bin dans le dossier de sortie", ->
+    write_txt "ads.txt", "ads.example\ntracker.example\n"
+    n_ok, n_err = updater_io.process_custom_dir SRC, OUT, false
+    assert.equals 1, n_ok
+    assert.equals 0, n_err
+    -- 2 domaines × 6 octets (format bin48), écrits dans OUT et pas dans SRC.
+    assert.equals 12, file_size "#{OUT}/ads.bin"
+    assert.is_nil file_size "#{SRC}/ads.bin"
+
+  it "ignore une liste vide sans la compter en erreur", ->
+    write_txt "empty.txt", "# commentaire seulement\n\n"
+    n_ok, n_err = updater_io.process_custom_dir SRC, OUT, false
+    assert.equals 0, n_ok
+    assert.equals 0, n_err
+    assert.is_nil file_size "#{OUT}/empty.bin"
+
+  it "ne fait rien quand le dossier source est absent", ->
+    n_ok, n_err = updater_io.process_custom_dir "tmp/updater_io_spec/absent", OUT, false
+    assert.equals 0, n_ok
+    assert.equals 0, n_err
+
+  it "n'écrit aucun .bin en dry-run", ->
+    write_txt "ads.txt", "ads.example\n"
+    n_ok, n_err = updater_io.process_custom_dir SRC, OUT, true
+    assert.equals 1, n_ok
+    assert.equals 0, n_err
+    assert.is_nil file_size "#{OUT}/ads.bin"

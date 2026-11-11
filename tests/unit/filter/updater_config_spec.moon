@@ -49,6 +49,44 @@ describe "updater.lua --config", ->
     -- …et surtout PAS le chemin par défaut (preuve que --config est honoré).
     assert.falsy out\find("/etc/custos/lists", 1, true)
 
+  it "--custom-only ignore filter.sources et ne compile que custom_lists_dir", ->
+    -- Source locale dans filter.sources : sans --custom-only elle produirait
+    -- out/source.bin ; avec l'option, seul custom/demo.bin doit être écrit.
+    write_file "#{TMP}/source.txt", "source.example\n"
+    write_file "#{TMP}/config.moon", [[
+{
+  filter: {
+    domainlists_dir: "]] .. TMP .. [[/out"
+    custom_lists_dir: "]] .. TMP .. [[/custom"
+    sources: {
+      ignoree: {
+        file: "]] .. TMP .. [[/source.txt"
+        format: "simple"
+        output: "]] .. TMP .. [[/out/source.bin"
+      }
+    }
+  }
+}
+]]
+    lua_path = package.path
+    cmd = "LUA_PATH='#{lua_path}' luajit lua/filter/updater.lua " ..
+      "--config #{TMP}/config.moon --custom-only 2>&1; echo EXIT=$?"
+    out = run cmd
+    -- Restaure la config sans source pour les tests suivants du describe.
+    write_file "#{TMP}/config.moon", [[
+{
+  filter: {
+    domainlists_dir: "]] .. TMP .. [[/out"
+    custom_lists_dir: "]] .. TMP .. [[/custom"
+    sources: {}
+  }
+}
+]]
+    assert.truthy out\find("EXIT=0", 1, true), out
+    assert.truthy out\find("custom/demo", 1, true), out
+    fh = io.open "#{TMP}/out/source.bin", "rb"
+    assert.is_nil fh
+
   it "ignore les listes vides sans les compter en erreur (exit 0)", ->
     -- Une liste custom sans domaine valide ne doit pas faire échouer la CI.
     write_file "#{TMP}/custom/empty.txt", "# placeholder\n\n"

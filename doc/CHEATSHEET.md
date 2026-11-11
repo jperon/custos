@@ -147,12 +147,19 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
     - `LUA_PATH="lua/?.lua;lua/?/init.lua;;" luajit lua/filter/updater.lua --config cfg/config.moon`
     - `--config <path>` et `CUSTOS_CONFIG_PATH=<path>` sont équivalents (l'updater
       requiert `config` après avoir appliqué `--config`).
+    - `--custom-only` ne traite que `custom_lists_dir` (compile chaque `.txt`
+      en `{domainlists_dir}/custom/<nom>.bin`), sans les téléchargements de
+      `filter.sources`.
 
 - Update lists (OpenWrt):
   - `ssh root@<router> 'custos-update [full|lowmem] [tag]'`
-  - `custos-update` ne compile plus localement : il **télécharge les `.bin`
+  - `custos-update` fait deux étapes : (1) il **télécharge les `.bin`
     pré-compilés** depuis les releases `custos-lists` (curl + zstd + vérif
-    SHA256), les déploie dans `lists_dir` puis envoie SIGHUP au daemon.
+    SHA256) et les déploie dans `lists_dir` ; (2) il compile les `.txt` locaux
+    de `custom_lists_dir` en `{domainlists_dir}/custom/<nom>.bin` (updater
+    `--custom-only`), donc une liste locale l'emporte sur la liste de release
+    de même nom. Le SIGHUP est envoyé à la fin dans tous les cas ; un échec du
+    téléchargement n'empêche pas la compilation locale (et réciproquement).
   - Profil par défaut : `uci custos.main.lists_profile` (ou env
     `CUSTOS_LISTS_PROFILE`), sinon **autodétection selon la RAM**
     (`MemTotal >= 128 Mo → full`, sinon `lowmem` ; seuil ajustable via
@@ -166,7 +173,9 @@ Configuration reference: [`doc/CONFIG.md`](CONFIG.md).
      - Une liste vide (commentaires seuls, placeholder) est **ignorée** (`⏭`),
        pas comptée en erreur : l'updater ne sort pas en code 1 pour autant
        (important pour la CI des listes).
-  2. Run update (`make update-lists` or `custos-update`).
+  2. Run update (`make update-lists` or `custos-update` ; sur OpenWrt, le
+     démarrage et le cron passent par `custos-update`, qui compile les listes
+     locales avec `--custom-only` après avoir déployé la release).
   3. Reload service if needed:
      - Debian: `make reload`
      - OpenWrt: `ssh root@<router> '/etc/init.d/custos reload'`
