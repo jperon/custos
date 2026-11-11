@@ -1,3 +1,16 @@
+local encode_ip16
+encode_ip16 = function(ip_raw)
+  if not (type(ip_raw) == "string") then
+    return nil
+  end
+  if #ip_raw == 16 then
+    return ip_raw
+  end
+  if #ip_raw == 4 then
+    return ip_raw .. "\0\0\0\0\0\0\0\0\0\0\0\0"
+  end
+  return nil
+end
 local to_hex
 to_hex = function(s)
   if not (s and #s > 0) then
@@ -51,6 +64,7 @@ is_valid_timeout = function(t)
   return t:match("^%d+[smhdw]?$") ~= nil
 end
 return {
+  encode_ip16 = encode_ip16,
   to_hex = to_hex,
   from_hex = from_hex,
   split_fields = split_fields,

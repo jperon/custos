@@ -19,6 +19,7 @@
 { :get_l2 } = require "nfq/ethernet"
 { :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
 { :get_mac } = require "mac_learner_ipc"
+{ :encode_ip16 } = require "lib.ipc_hex"
 
 ipparse_ip = require "ipparse.l3.ip"
 
@@ -33,14 +34,9 @@ ipc_wfd = nil
 -- @tparam number vlan VLAN ID (0 = untagged)
 -- @treturn string|nil Message de 18 octets, ou nil si entrée invalide
 encode_vlan_msg = (ip_version, ip_raw, vlan) ->
-  return nil unless ip_raw
+  ip16 = encode_ip16 ip_raw
+  return nil unless ip16
   vlan = vlan or 0
-  ip16 = if ip_version == 4
-    return nil unless #ip_raw >= 4
-    ip_raw\sub(1, 4) .. string.rep("\0", 12)
-  else
-    return nil unless #ip_raw >= 16
-    ip_raw\sub 1, 16
   ip16 .. string.char(math.floor(vlan / 256) % 256, vlan % 256)
 
 --- Envoie l'association IP→VLAN au mac_learner via le pipe vlan_learn.

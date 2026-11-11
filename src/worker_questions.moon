@@ -19,6 +19,7 @@ metrics = require "metrics"
 { :get_l2 } = require "nfq/ethernet"
 { :ip2s, :dns_types } = require "lib.packet_parsing"
 { :skip_ipv6_ext_hdrs, :new_dns_tcp_stream, :parse_dns_packet } = require "packet_utils"
+{ :encode_ip16 } = require "lib.ipc_hex"
 bit                                      = require "bit"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg } = require "ipc"
@@ -124,18 +125,12 @@ maybe_duplicate = (ip, l4, raw, rule_resolvers) ->
 -- @treturn boolean true si l'écriture complète a réussi
 write_learn_msg = (ip_raw, mac_raw) ->
   return false unless mac_learn_wfd and mac_learn_wfd >= 0
-  return false unless ip_raw and (#ip_raw == 4 or #ip_raw == 16)
   return false unless mac_raw and #mac_raw == 6
+  ip16 = encode_ip16 ip_raw
+  return false unless ip16
 
   msg = ffi.new "uint8_t[22]"
-
-  if #ip_raw == 4
-    for i = 1, 4
-      msg[i - 1] = ip_raw\byte i
-  else
-    for i = 1, 16
-      msg[i - 1] = ip_raw\byte i
-
+  ffi.copy msg, ip16, 16
   for i = 1, 6
     msg[15 + i] = mac_raw\byte i
 

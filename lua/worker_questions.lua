@@ -20,6 +20,8 @@ do
   local _obj_0 = require("packet_utils")
   skip_ipv6_ext_hdrs, new_dns_tcp_stream, parse_dns_packet = _obj_0.skip_ipv6_ext_hdrs, _obj_0.new_dns_tcp_stream, _obj_0.parse_dns_packet
 end
+local encode_ip16
+encode_ip16 = require("lib.ipc_hex").encode_ip16
 local bit = require("bit")
 local filter = require("filter")
 local write_msg, write_refused_msg
@@ -137,22 +139,15 @@ write_learn_msg = function(ip_raw, mac_raw)
   if not (mac_learn_wfd and mac_learn_wfd >= 0) then
     return false
   end
-  if not (ip_raw and (#ip_raw == 4 or #ip_raw == 16)) then
-    return false
-  end
   if not (mac_raw and #mac_raw == 6) then
     return false
   end
-  local msg = ffi.new("uint8_t[22]")
-  if #ip_raw == 4 then
-    for i = 1, 4 do
-      msg[i - 1] = ip_raw:byte(i)
-    end
-  else
-    for i = 1, 16 do
-      msg[i - 1] = ip_raw:byte(i)
-    end
+  local ip16 = encode_ip16(ip_raw)
+  if not (ip16) then
+    return false
   end
+  local msg = ffi.new("uint8_t[22]")
+  ffi.copy(msg, ip16, 16)
   for i = 1, 6 do
     msg[15 + i] = mac_raw:byte(i)
   end

@@ -1,9 +1,21 @@
 -- tests/unit/lib/ipc_hex_spec.moon
 -- Helpers de format IPC partagés (émetteur ipc / récepteurs worker_nft, nft_queue).
 
-{ :to_hex, :from_hex, :split_fields, :is_valid_timeout } = require "lib.ipc_hex"
+{ :encode_ip16, :to_hex, :from_hex, :split_fields, :is_valid_timeout } = require "lib.ipc_hex"
 
 describe "lib.ipc_hex", ->
+
+  describe "encode_ip16", ->
+    it "pade une IPv4 sur 16 octets avec 12 zéros", ->
+      assert.equals "\192\168\1\42" .. string.rep("\0", 12), encode_ip16 "\192\168\1\42"
+
+    it "copie une IPv6 sur ses 16 octets", ->
+      ip6 = string.rep("\0", 15) .. "\1"
+      assert.equals ip6, encode_ip16 ip6
+
+    it "renvoie nil pour une longueur invalide", ->
+      assert.is_nil encode_ip16 "\1\2\3"
+      assert.is_nil encode_ip16 nil
 
   describe "to_hex", ->
     it "encode des octets en hexadécimal minuscule", ->

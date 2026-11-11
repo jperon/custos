@@ -15,6 +15,8 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_error, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.set_action_prefix
 end
+local encode_ip16
+encode_ip16 = require("lib.ipc_hex").encode_ip16
 local ipparse_ip = require("ipparse.l3.ip")
 local ipc_wfd = nil
 local send_to_auth_server
@@ -22,19 +24,15 @@ send_to_auth_server = function(ip_version, ip_raw, mac_raw)
   if not (ipc_wfd and ipc_wfd >= 0) then
     return false
   end
-  if not (ip_raw and mac_raw and #mac_raw == 6) then
+  if not (mac_raw and #mac_raw == 6) then
+    return false
+  end
+  local ip16 = encode_ip16(ip_raw)
+  if not (ip16) then
     return false
   end
   local msg = ffi.new("uint8_t[22]")
-  if ip_version == 4 then
-    for i = 1, 4 do
-      msg[i - 1] = ip_raw:byte(i)
-    end
-  else
-    for i = 1, 16 do
-      msg[i - 1] = ip_raw:byte(i)
-    end
-  end
+  ffi.copy(msg, ip16, 16)
   for i = 1, 6 do
     msg[16 + i - 1] = mac_raw:byte(i)
   end

@@ -17,26 +17,17 @@ do
 end
 local get_mac
 get_mac = require("mac_learner_ipc").get_mac
+local encode_ip16
+encode_ip16 = require("lib.ipc_hex").encode_ip16
 local ipparse_ip = require("ipparse.l3.ip")
 local ipc_wfd = nil
 local encode_vlan_msg
 encode_vlan_msg = function(ip_version, ip_raw, vlan)
-  if not (ip_raw) then
+  local ip16 = encode_ip16(ip_raw)
+  if not (ip16) then
     return nil
   end
   vlan = vlan or 0
-  local ip16
-  if ip_version == 4 then
-    if not (#ip_raw >= 4) then
-      return nil
-    end
-    ip16 = ip_raw:sub(1, 4) .. string.rep("\0", 12)
-  else
-    if not (#ip_raw >= 16) then
-      return nil
-    end
-    ip16 = ip_raw:sub(1, 16)
-  end
   return ip16 .. string.char(math.floor(vlan / 256) % 256, vlan % 256)
 end
 local send_vlan_learn

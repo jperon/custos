@@ -1,8 +1,21 @@
 -- src/lib/ipc_hex.moon
--- Helpers de format des messages IPC pipe-séparés, partagés par l'émetteur
--- (ipc) et les récepteurs (worker_nft, nft_queue) : encodage hexadécimal des
--- octets bruts, découpage des champs et validation des timeouts nftables.
--- Source unique : un écart émetteur/récepteur casse silencieusement le pipe.
+-- Helpers de format des messages IPC, partagés par les producteurs (workers) et
+-- les consommateurs (worker_nft, nft_queue, mac_learner) : encodage
+-- hexadécimal des octets bruts, champ IP fixe ip16, découpage des champs et
+-- validation des timeouts nftables. Source unique : un écart émetteur/récepteur
+-- casse silencieusement le pipe.
+
+--- Encode une adresse IP brute sur 16 octets (convention IPC `ip16`).
+-- IPv4 (4 octets) est suivie de 12 zéros ; IPv6 est copiée telle quelle.
+-- Cette convention est consommée par mac_learner (`ip16_to_str`) et
+-- `strip_target`.
+-- @tparam string ip_raw Adresse brute (exactement 4 ou 16 octets)
+-- @treturn string|nil 16 octets, ou nil si la longueur est invalide
+encode_ip16 = (ip_raw) ->
+  return nil unless type(ip_raw) == "string"
+  return ip_raw if #ip_raw == 16
+  return ip_raw .. "\0\0\0\0\0\0\0\0\0\0\0\0" if #ip_raw == 4
+  nil
 
 --- Encode une chaîne d'octets en hexadécimal minuscule.
 -- @tparam string s Chaîne d'octets
@@ -48,4 +61,4 @@ is_valid_timeout = (t) ->
   return false unless #t > 0 and #t <= 16
   t\match("^%d+[smhdw]?$") ~= nil
 
-{ :to_hex, :from_hex, :split_fields, :is_valid_timeout }
+{ :encode_ip16, :to_hex, :from_hex, :split_fields, :is_valid_timeout }

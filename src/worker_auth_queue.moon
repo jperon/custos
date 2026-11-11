@@ -6,6 +6,7 @@
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :get_l2 } = require "nfq/ethernet"
 { :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
+{ :encode_ip16 } = require "lib.ipc_hex"
 
 -- Import ipparse for L3 IP parsing
 ipparse_ip = require "ipparse.l3.ip"
@@ -22,20 +23,12 @@ ipc_wfd = nil
 -- @treturn boolean true si l'écriture a réussi
 send_to_auth_server = (ip_version, ip_raw, mac_raw) ->
   return false unless ipc_wfd and ipc_wfd >= 0
-  return false unless ip_raw and mac_raw and #mac_raw == 6
+  return false unless mac_raw and #mac_raw == 6
+  ip16 = encode_ip16 ip_raw
+  return false unless ip16
 
   msg = ffi.new "uint8_t[22]"
-
-  if ip_version == 4
-    -- IPv4: pad with 12 zeros to fill 16-byte slot
-    for i = 1, 4
-      msg[i - 1] = ip_raw\byte i
-  else
-    -- IPv6: direct copy
-    for i = 1, 16
-      msg[i - 1] = ip_raw\byte i
-
-  -- MAC at offset 16
+  ffi.copy msg, ip16, 16
   for i = 1, 6
     msg[16 + i - 1] = mac_raw\byte i
 

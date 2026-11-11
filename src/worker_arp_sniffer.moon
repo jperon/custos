@@ -52,6 +52,7 @@ NDP_OPT_MIN_LEN = 8  -- Taille minimale pour une option (Type + Length + au moin
 -- ── Helpers ──────────────────────────────────────────────────────
 
 { mac2s: fmt_mac } = require "packet_utils"
+{ :encode_ip16 } = require "lib.ipc_hex"
 
 --- Formate 16 octets d'une chaîne Lua en adresse IPv6 textuelle (pour les logs).
 -- Utilise ip2s pour garantir la cohérence avec le reste du codebase.
@@ -68,12 +69,12 @@ fmt_ipv6 = (s, o) ->
 -- @tparam number mac_off  Offset 1-based du premier octet de la MAC dans raw
 -- @treturn cdata  Pointeur vers uint8_t[22] prêt à écrire dans le pipe
 build_learn_msg = (raw, ip_off, ip_len, mac_off) ->
+  ip16 = encode_ip16 raw\sub(ip_off, ip_off + ip_len - 1)
+  return nil unless ip16
   msg = ffi.new "uint8_t[22]"
   -- ip16 : IPv4 dans les 4 premiers octets, 12 zéros de padding
   --        IPv6 occupe les 16 octets entiers
-  for i = 0, ip_len - 1
-    msg[i] = raw\byte(ip_off + i)
-  -- msg[ip_len..15] reste à zéro (ffi.new initialise à 0)
+  ffi.copy msg, ip16, 16
   -- mac6 : bytes 16-21
   for i = 0, 5
     msg[16 + i] = raw\byte(mac_off + i)
@@ -245,6 +246,7 @@ process_arp = (raw, len, learn_wfd) ->
   return if all_zero
 
   msg = build_learn_msg raw, 29, 4, mac_off
+  return unless msg
   ok = write_learn learn_wfd, msg
   log_debug -> { action: "arp_learned", mac: fmt_mac(raw, mac_off),
     ip: "#{raw\byte 29}.#{raw\byte 30}.#{raw\byte 31}.#{raw\byte 32}" } if ok
@@ -312,6 +314,7 @@ process_ipv6 = (raw, len, learn_wfd) ->
     return if all_zero   -- DAD (source non encore attribuée)
 
     msg = build_learn_msg raw, 23, 16, mac_src_off
+    return unless msg
     ok = write_learn learn_wfd, msg
     log_debug -> { action: "ndp_learned", mac: fmt_mac(raw, mac_src_off),
       ip: fmt_ipv6(raw, 23), type: "NS" } if ok
@@ -338,10 +341,11 @@ process_ipv6 = (raw, len, learn_wfd) ->
     if tlla_mac
       -- Utiliser la MAC de l'option TLLA
       -- Construire le message manuellement car tlla_mac est déjà extrait
+      ip16 = encode_ip16 raw\sub(target_off, target_off + 15)
+      return unless ip16
       msg = ffi.new "uint8_t[22]"
       -- Target Address (16 octets)
-      for i = 0, 15
-        msg[i] = raw\byte(target_off + i)
+      ffi.copy msg, ip16, 16
       -- MAC TLLA (6 octets)
       for i = 0, 5
         msg[16 + i] = tlla_mac\byte(i + 1)
@@ -355,6 +359,7 @@ process_ipv6 = (raw, len, learn_wfd) ->
     else
       -- Fallback : utiliser MAC source Ethernet
       msg = build_learn_msg raw, target_off, 16, mac_src_off
+      return unless msg
       ok = write_learn learn_wfd, msg
       log_debug -> { action: "ndp_learned",
         mac: fmt_mac(raw, mac_src_off),
