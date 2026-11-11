@@ -917,3 +917,14 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   courant de procd (typiquement `/`, soit `/tmp/…`). Tests dans
   `tests/unit/auth/cert_cache_spec.moon` (index valide, `os.execute`/boucle
   avec effet de bord rejetés sans marqueur, entrée mal typée écartée).
+- **Commentaires faux signalés par l'audit.** `auth/credentials.moon`
+  annonçait « défaut : 100000 » pour `hash_password` alors que `DEFAULT_ITER =
+  10000` (`src/auth/credentials.moon:21`, corrigé au commentaire `:163`) — le
+  JS client (`auth/pages.moon` `PBKDF2_ITER = 10000`) est cohérent avec le
+  code. `auth/nft_sessions.moon` décrivait `add_authenticated_mac` comme
+  écrivant « les sets ip et ip6 » alors qu'elle n'écrit que
+  `authenticated_macs`. Enfin `auth/server.moon` importait `extract_sni` sans
+  l'utiliser et passait l'**IP locale** (`getsockname`) à `load_or_generate_sni`
+  : les certificats dits « SNI » sont en réalité keyés par IP locale (SNI non
+  extrait). Import retiré et commentaires/doc corrigés (`server.moon`,
+  `.agents/workers.md`, `.agents/px5g_migration.md`, `doc/CONFIG.md`).

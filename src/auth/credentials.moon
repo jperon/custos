@@ -161,7 +161,7 @@ read_urandom = (n) ->
 --- Génère un enregistrement de hash pour un mot de passe.
 -- Retourne la chaîne à écrire dans le fichier secrets.
 -- @tparam string password   Mot de passe en clair
--- @tparam number iterations Nombre d'itérations (défaut : 100000)
+-- @tparam number iterations Nombre d'itérations (défaut : 10000, cf. DEFAULT_ITER)
 -- @treturn string Chaîne au format pbkdf2-sha256:<iter>:<salt_hex>:<hash_hex>
 hash_password = (password, iterations) ->
   iterations = iterations or DEFAULT_ITER
