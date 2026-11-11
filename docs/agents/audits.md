@@ -1790,3 +1790,91 @@ POST HTTP/2 complète traverse `handle_doh_client` et `handle_h2` réels ; il es
 OK (155 fichiers, aucune globale inconnue) ; `make test` = **2501 successes /
 0 failures / 0 errors / 0 pending** (`tmp/test.log`), `make test-js` = 12 pass
 / 0 fail. `make test-e2e` non lancé (hors périmètre, pas de VM sollicitée).
+### Rate-limiting des logs réellement effectif (branche d-logs)
+
+Constat en pré-production (3000 dernières lignes de `logread` au niveau INFO) :
+`suppressed=` n'apparaissait **0 fois**, malgré des rafales de lignes
+identiques (`auth_server_conn_started` 3206, `auth_server_request_received`
+3166, `response_dns_benchmark` 2719, `auth_server_ping_success` et
+`auth_server_ping_received` 657 chacun, `response_no_ipv6_for_client` 634,
+`questions_dns_stolen` 350, `doh_handshake_failed` 97).
+
+Quatre causes dans `src/log.moon` (avant correctif) :
+1. `check_rl` cherchait `RL_CONFIG[fields.action or level]` : les entrées
+   `INFO:`/`DEBUG:` ne s'appliquaient qu'aux messages **sans** champ `action`,
+   donc à presque aucun. Toute action non listée échappait au limiteur.
+2. Le préfixe worker (`set_action_prefix`, appliqué dans `write_log` avant
+   `check_rl`) rendait les règles nommées inopérantes : `no_ipv6_for_client`
+   était émise `response_no_ipv6_for_client` (worker responses), de même pour
+   `captive_*`, `doh_*`, `doh_vlan_*`, `sip_*`, `sni_*`, `questions_*`.
+3. Aucune règle par défaut pour `WARN`/`ERROR` ; ces niveaux n'étaient jamais
+   limités.
+4. `_rl` était une table Lua **par processus** : les workers AUTH et DoH
+   forkent un enfant par connexion (915 PID distincts pour 915 lignes
+   `auth_server_request_received`), chaque enfant repartait d'un état vide ;
+   deux workers ne partageaient rien.
+
+Correctif :
+- **Résolution** (`src/log.moon:178-192`) : action complète, puis action sans
+  le préfixe worker, puis règle par défaut du **niveau** (appliquée même quand
+  `action` est présent). Les entrées mortes `captive_probe` et
+  `neigh_refreshed` (aucun site d'appel) sont supprimées de `RL_CONFIG`.
+- **Défauts par niveau** (`src/log.moon:79-95`) : `ERROR`/`CRIT`/`ALERT`/`EMERG`
+  10 s (une erreur ne doit pas rester masquée), `WARN`/`INFO`/`NOTICE` 60 s,
+  `DEBUG`/`TRACE` 30 s, `ALLOW`/`BLOCK` 30 s.
+- **Champs d'identité** (`src/log.moon:60-69`) : `peer`, `peer_ip`, `peer_mac`,
+  `ip`, `client`, `client_ip`, `client_mac`, `mac`, `mac_src`, `src_ip`,
+  `qname`, `qnames`, `domain`, `qtype`, `dst_ip`, `hostname`, `sni`, `cert`,
+  `key`, `path`, `method`, `url`, `file`, `ifname`, `name`, `queue`, `worker`,
+  `user`, `vlan`, `resolver_ip`, `upstream_ip`, `addr`, `rule`, `list`, `err`,
+  `reason`, `cmd`. Jamais `pid`, `txid`, ports, durées, compteurs ni tailles :
+  deux lignes qui n'en diffèrent que par eux fusionnent avec `suppressed=N`.
+  Les règles spécifiques gardent leurs clés (`ALLOW`/`BLOCK` :
+  `mac_src`/`qname`/`qtype` ; `no_ipv6_for_client` : `client`, fenêtre 120 s).
+- **Actions de cycle de vie jamais limitées** (`src/log.moon:97-117`) :
+  `worker_died`, `child_crashed`, `worker_started`, `worker_stopping`,
+  `worker_start`, `supervisor_running`, `supervisor_sigterm`,
+  `supervisor_sighup_reload/kill/refork/forward_auth`, `dns-filter_start`,
+  `config_source`, `config_external_missing` — un crash ou un rechargement
+  répété doit rester visible ; ces actions sont rares hors boucle de crash.
+- **État partagé** (`src/log.moon:125-155`) : table de hachage à taille fixe
+  (4096 slots × 3 `uint32` = 48 Kio) en
+  `mmap(MAP_SHARED|MAP_ANONYMOUS)`, créée au chargement du module donc dans le
+  superviseur **avant** tout fork, héritée par les workers et leurs enfants.
+  Slot `{hash, ts, count}`, hash djb2 32 bits (`:213-242`), sondage linéaire
+  borné à 8 (`RL_PROBE_MAX`) : deux empreintes distinctes dans le même slot
+  occupent des slots différents (aucune supprimée à tort) ; entrée forcément
+  expirée recyclée après `RL_MAX_WINDOW` (max des fenêtres, 120 s) ; table
+  saturée → journalisation sans suppression. Sans verrou : accès `uint32`
+  alignés, une course bénigne peut dupliquer une ligne ou fausser un compteur,
+  jamais corrompre ni bloquer. Repli sur une table Lua par processus (plafond
+  4096, remise à zéro) si `mmap` échoue. `_purge_rl` et `RL_PURGE_EVERY` sont
+  supprimés (code mort).
+- **ALLOW/BLOCK et benchmark** : `action=response_dns_benchmark` retombe
+  désormais sur la règle de niveau `ALLOW`/`BLOCK` (30 s,
+  `mac_src`/`qname`/`qtype`) au lieu de l'exempter. `doc/CONFIG.md` §2 et le
+  commentaire de `src/worker_responses.moon:803-806` sont corrigés.
+- **`suppressed=N` conservé** (`src/log.moon:360-371`) : la première ligne
+  émise après la fenêtre porte le nombre de messages supprimés ; le filtrage
+  `runtime.log_level` reste testé avant tout dans `write_log` (`:339-342`).
+
+Tests (`tests/unit/log_spec.moon`, 21 cas) : `INFO`/`WARN`/`ERROR`/`DEBUG`
+avec action non listée (suppression puis réémission avec compte) ; champ
+d'identité différent non fusionné, champ volatil (`pid`, `txid`, compteur)
+fusionné ; action préfixée `response_no_ipv6_for_client` → règle spécifique
+120 s sur `client` ; `ALLOW` et `BLOCK` avec `response_dns_benchmark` limités
+par `mac_src`/`qname`/`qtype` sur 30 s ; fork réel (l'enfant insère, le parent
+voit la répétition) ; collision de slot sans suppression à tort ; `_rl_reset` ;
+actions de cycle de vie jamais limitées. Les deux anciens tests de purge sont
+remplacés (la table fixe n'a plus de purge).
+
+Documentation : `AGENTS.md:75`, `doc/CONFIG.md` §2 (rate-limiting et
+benchmark), `doc/CHEATSHEET.md` (section logs), commentaire de
+`src/worker_responses.moon:803-806`.
+
+**Vérification (2026-11-11, branche d-logs)** : `nix develop --command bash -c
+"make all && make check && make test"` OK ; `make check` = 155 fichiers, aucune
+globale inconnue ; `make test` = **2544 successes / 0 failures / 0 errors /
+0 pending** (`tmp/test.log`) ; `make test-js` = 12 pass / 0 fail. `make
+test-e2e` non lancé (hors commande de clôture de la tâche, pas de VM
+sollicitée).

@@ -81,9 +81,12 @@ la réponse DNS (avec `action=response_dns_benchmark`). Le worker DNS (questions
 **supprime** alors sa propre ligne `ALLOW`/`BLOCK` pour éviter la duplication ;
 les métriques (`metrics.record_verdict`) restent inchangées. La ligne porte les
 champs de décision habituels (`qname`, `qtype`, `mac_src`, `vlan`, `src_ip`,
-`dst_ip`, `rule`, `reason`, `user`, `af`) plus les temps. Le champ
-`action=response_dns_benchmark` exempte ces lignes du rate-limiting `ALLOW`/`BLOCK`
-(fenêtre 30 s) afin de conserver tous les échantillons.
+`dst_ip`, `rule`, `reason`, `user`, `af`) plus les temps. `action=response_dns_benchmark`
+n'échappe pas au rate-limiting : la résolution retombe sur la règle de niveau
+`ALLOW`/`BLOCK` (fenêtre 30 s, empreinte `mac_src`/`qname`/`qtype`). Les
+échantillons identiques sont comptés pendant la fenêtre et le premier échantillon
+suivant porte `suppressed=N` ; deux échantillons qui diffèrent par un champ
+d'identité restent tous deux émis.
 
 `q_to_response_ms` mesure la latence **totale**, de l'entrée de la question dans
 le worker DNS jusqu'au log de la réponse correspondante côté worker responses,
@@ -103,6 +106,53 @@ payload_ms + parse_ms + match_ms + log_ms)`.
 
 Quand `benchmark` est désactivé (défaut), le verdict `ALLOW`/`BLOCK` est journalisé
 côté worker DNS comme auparavant, sans temps.
+
+### Rate-limiting des logs
+
+`src/log.moon` limite les messages répétitifs. Une empreinte est calculée à
+partir du **niveau**, de l'**action complète** (préfixe worker compris) et des
+**champs d'identité présents** du message. Les messages de même empreinte sont
+supprimés pendant la fenêtre ; le premier message émis après la fenêtre porte
+`suppressed=N` (N = nombre de messages supprimés depuis). Un message qui diffère
+par un champ d'identité n'est jamais fusionné avec un autre.
+
+Résolution de la règle : action complète dans `RL_CONFIG`, puis action sans le
+préfixe du worker (`response_no_ipv6_for_client` → `no_ipv6_for_client`), puis
+règle par défaut **du niveau**, qui s'applique même quand `action` est présent.
+
+| Niveau | Fenêtre | Champs discriminants |
+|--------|---------|----------------------|
+| `ERROR`, `CRIT`, `ALERT`, `EMERG` | 10 s | champs d'identité |
+| `WARN`, `INFO`, `NOTICE` | 60 s | champs d'identité |
+| `DEBUG`, `TRACE` | 30 s | champs d'identité |
+| `ALLOW`, `BLOCK` (dont `action=response_dns_benchmark`) | 30 s | `mac_src`, `qname`, `qtype` |
+| `captive_redirect` | 60 s | `ip` |
+| `no_ipv6_for_client`, `no_ipv4_for_client` (préfixés ou non) | 120 s | `client` |
+| `response_dnsonly` | 30 s | `dst_ip`, `qnames` |
+
+Champs d'identité par défaut : `peer`, `peer_ip`, `peer_mac`, `ip`, `client`,
+`client_ip`, `client_mac`, `mac`, `mac_src`, `src_ip`, `qname`, `qnames`,
+`domain`, `qtype`, `dst_ip`, `hostname`, `sni`, `cert`, `key`, `path`, `method`,
+`url`, `file`, `ifname`, `name`, `queue`, `worker`, `user`, `vlan`,
+`resolver_ip`, `upstream_ip`, `addr`, `rule`, `list`, `err`, `reason`, `cmd`.
+Les champs volatils (`pid`, `txid`, ports, durées, compteurs, tailles) en sont
+exclus : deux lignes qui n'en diffèrent que par eux fusionnent.
+
+Actions de cycle de vie **jamais** limitées : `worker_died`, `child_crashed`,
+`worker_started`, `worker_stopping`, `worker_start`, `supervisor_running`,
+`supervisor_sigterm`, `supervisor_sighup_*`, `dns-filter_start`, `config_source`,
+`config_external_missing` (un crash ou un rechargement répété doit rester
+visible). La comparaison se fait aussi après retrait du préfixe worker.
+
+L'état est une table de hachage à taille fixe (4096 slots × 3 `uint32`, 48 Kio)
+dans une zone `mmap(MAP_SHARED|MAP_ANONYMOUS)` créée au chargement du module,
+donc dans le superviseur **avant tout fork** : workers et enfants forkés par
+connexion partagent le même état. Sans verrou, une course bénigne peut produire
+une ligne en double ou un compteur légèrement faux. Une empreinte différente
+tombant dans le même slot sonde le suivant (jusqu'à 8) ; table saturée ou
+collision non résolue → le message est journalisé (jamais supprimé à tort). Si
+`mmap` échoue, repli sur une table Lua par processus, plafonnée à 4096 entrées.
+Le filtrage `runtime.log_level` reste appliqué **avant** tout calcul d'empreinte.
 
 ```moonscript
 runtime: {
