@@ -74,26 +74,6 @@ Installer = function(cfg)
     ssh_capture = function(self, cmd)
       return self:capture(tostring(self:ssh_prefix()) .. " " .. tostring(shell_quote(cmd)))
     end,
-    ssh_run_script = function(self, name, content)
-      local tmplocal = "tmp/owrt-" .. tostring(name) .. ".sh"
-      if not (self.cfg.dry) then
-        os.execute("mkdir -p tmp")
-        local fh = io.open(tmplocal, "w")
-        if not (fh) then
-          fail("Impossible d'écrire " .. tostring(tmplocal))
-          return false
-        end
-        fh:write(content)
-        fh:close()
-      else
-        io.write("  " .. tostring(CYAN) .. "DRY" .. tostring(NC) .. " write " .. tostring(tmplocal) .. "\n")
-      end
-      local ok_scp = self:run("scp -O -P " .. tostring(self.cfg.port) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null " .. tostring(tmplocal) .. " " .. tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":/tmp/" .. tostring(name) .. ".sh")
-      if not (ok_scp) then
-        return false
-      end
-      return self:ssh_run("sh /tmp/" .. tostring(name) .. ".sh && rm -f /tmp/" .. tostring(name) .. ".sh")
-    end,
     scp_send = function(self, src, dst)
       return self:run("scp -O -P " .. tostring(shell_quote(self.cfg.port)) .. " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r " .. tostring(shell_quote(src)) .. " " .. tostring(shell_quote(tostring(self.cfg.user) .. "@" .. tostring(self:ssh_host()) .. ":" .. tostring(dst))))
     end,

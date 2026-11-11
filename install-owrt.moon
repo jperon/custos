@@ -89,23 +89,6 @@ Installer = (cfg) ->
     ssh_capture: (cmd) =>
       @capture "#{ @ssh_prefix! } #{shell_quote cmd}"
 
-    ssh_run_script: (name, content) =>
-      tmplocal = "tmp/owrt-#{name}.sh"
-      unless @cfg.dry
-        os.execute "mkdir -p tmp"
-        fh = io.open tmplocal, "w"
-        unless fh
-          fail "Impossible d'écrire #{tmplocal}"
-          return false
-        fh\write content
-        fh\close!
-      else
-        io.write "  #{CYAN}DRY#{NC} write #{tmplocal}\n"
-
-      ok_scp = @run "scp -O -P #{@cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null #{tmplocal} #{@cfg.user}@#{@ssh_host!}:/tmp/#{name}.sh"
-      return false unless ok_scp
-      @ssh_run "sh /tmp/#{name}.sh && rm -f /tmp/#{name}.sh"
-
     scp_send: (src, dst) =>
       @run "scp -O -P #{shell_quote @cfg.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r #{shell_quote src} #{shell_quote "#{@cfg.user}@#{@ssh_host!}:#{dst}"}"
 
