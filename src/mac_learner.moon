@@ -99,8 +99,14 @@ STRIP_TTL       = mac_cfg.strip_ttl or 120
 -- ── Utilitaires ──────────────────────────────────────────────────
 
 --- Convertit 16 octets bruts (format IPC) en adresse IP textuelle.
--- IPv4 : octets 1-4 significatifs, octets 5-16 nuls.
--- IPv6 : les 16 octets sont l'adresse complète.
+-- Le message `learn` (22 octets = ip16 + mac6) ne porte **pas** la famille :
+-- l'heuristique est que les octets 5 à 16 nuls désignent une IPv4 encodée sur
+-- les 4 premiers octets, sinon les 16 octets sont une IPv6 complète.
+-- Cas limite connu : une IPv6 dont les 96 derniers bits sont nuls (`2001::`,
+-- `fe80::`) serait lue comme une IPv4. Ces adresses ne sont pas des adresses
+-- source d'hôte valides (identifiant d'interface nul = adresse anycast du
+-- routeur de sous-réseau), d'où l'absence de discrimination de famille dans le
+-- protocole IPC. Ne pas changer le format du message pour autant.
 -- Utilise ip2s pour garantir la cohérence avec le reste du codebase.
 -- @tparam string ip16 Chaîne de 16 octets
 -- @treturn string Adresse IP textuelle (ex : "192.168.1.5" ou "fd00::1")
@@ -510,4 +516,4 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
       for h, entry in pairs strip_table
         strip_table[h] = nil if now_epoch > entry[2]
 
-{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup, :probe_request, :start_query }
+{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup, :probe_request, :start_query, :ip16_to_str }

@@ -510,5 +510,6 @@ return {
   process_strip_learn = process_strip_learn,
   strip_lookup = strip_lookup,
   probe_request = probe_request,
-  start_query = start_query
+  start_query = start_query,
+  ip16_to_str = ip16_to_str
 }

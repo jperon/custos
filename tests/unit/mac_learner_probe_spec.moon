@@ -131,3 +131,12 @@ describe "mac_learner_ipc query borné", ->
     assert.equals "unknown", result
     assert.is_true elapsed < 1000, "get_mac a bloqué #{elapsed} ms"
     libc.close peer
+
+describe "mac_learner.ip16_to_str heuristique de famille", ->
+  it "IPv4 10.0.0.5 encodée sur 16 octets (octets 5-16 nuls) → forme IPv4", ->
+    ip16 = string.char(10, 0, 0, 5) .. string.rep("\0", 12)
+    assert.equals "10.0.0.5", ml.ip16_to_str ip16
+
+  it "IPv6 2001:db8::1 → forme IPv6", ->
+    ip16 = string.char(0x20, 0x01, 0x0d, 0xb8) .. string.rep("\0", 11) .. string.char(1)
+    assert.equals "2001:db8::1", ml.ip16_to_str ip16

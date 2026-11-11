@@ -899,3 +899,11 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   ordonnée via `append_unique`, plafond `MAX_RESPONSE_RULE_IDS = 8` aligné sur
   `ipc.encode_msg`, dépassement loggué `response_rule_ids_truncated`). Tests
   dans `tests/unit/worker_questions_aggregate_spec.moon`.
+- **`mac_learner.ip16_to_str` : heuristique de famille documentée.** Le message
+  `learn` (22 octets) ne porte pas la famille IP ; `ip16_to_str` déduit « IPv4 »
+  des octets 5-16 nuls. Une IPv6 à 96 derniers bits nuls (`2001::`, `fe80::`)
+  serait donc lue comme une IPv4 — cas limite documenté en LDoc, sans changer le
+  format du message (ces adresses ne sont pas des sources d'hôte valides).
+  `ip16_to_str` est exporté et figé par un test dans
+  `tests/unit/mac_learner_probe_spec.moon` (IPv4 `10.0.0.5` → `"10.0.0.5"`,
+  IPv6 `2001:db8::1` → forme IPv6).
