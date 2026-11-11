@@ -638,7 +638,7 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
 | `domainlists_dir` | string | `"/tmp/custos/lists"` | Répertoire racine des listes de domaines **compilées** (`.bin`, repli `.domains`) lues par `to_domainlist`/`to_domainlists` |
-| `lists_dir` | string | `"/tmp/custos/lists"` (repli code) | Répertoire des listes-texte lues par les conditions `*_list`/`*_lists` : `{lists_dir}/{type}/{nom}.txt` |
+| `lists_dir` | string | `"/etc/custos/lists"` | Répertoire des listes-texte lues par les conditions `*_list`/`*_lists` : `{lists_dir}/{type}/{nom}.txt` (définitions manuelles, persistantes) |
 | `custom_lists_dir` | string | `nil` | Dossier **source** des `.txt` scannés par l'updater (non lu par le filtre ; les `.bin` produits vont sous `{domainlists_dir}/custom/`) |
 | `allow_localnets` | bool | `false` | Si `true`, injecte automatiquement les réseaux locaux en whitelist nft |
 | `captive_portal` | bool | `true` | Active les règles par défaut de détection de portail captif (sondes NCSI/MSFT, Apple, Google…). `false` → ces règles ne sont pas injectées (cf. § Règles par défaut) |
@@ -682,7 +682,7 @@ condition de base, qui peut y résoudre un alias (`filter.macs`) ou un nom de
 fenêtre (`filter.times`). L'usage réel de chaque dictionnaire est indiqué
 ci-dessous.
 
-#### `filter.nets` — Réseaux nommés (non consulté par `from_net`)
+#### `filter.nets` — Réseaux nommés (résolus par `from_net`/`to_net`)
 
 ```moonscript
 filter: {
@@ -697,10 +697,18 @@ filter: {
 }
 ```
 
-`from_net` ne consulte pas ce dictionnaire : il prend un CIDR inline
-(`from_net: "10.0.0.0/8"`). Pour un groupe nommé de CIDRs, utiliser
-`from_net_list: "lan"` ou `from_net_lists: {"lan", "private_ipv6"}` :
-fichier(s) `{lists_dir}/net/{nom}.txt`, un CIDR par ligne.
+`from_net` et `to_net` consultent ce dictionnaire : quand leur argument n'est
+ni `_any`/`_none`, ni un CIDR/une IP littérale, mais une clé de `nets`, la
+condition porte sur le ou les CIDRs du groupe (OU logique). Les variantes
+`from_nets`, `from_net_list` et `from_net_lists` en héritent : une entrée de
+`from_nets` ou une ligne de fichier peut donc être un alias. Un alias vers un
+seul CIDR reste compilable en nft ; un groupe de plusieurs CIDRs (y compris
+IPv4 et IPv6 mélangés) est évalué uniquement par le worker (`nft: false`,
+l'expression nft d'un set déjà groupé n'étant pas recombineé de façon fiable).
+Un nom inconnu ne correspond jamais et journalise `filter_net_unknown` une
+seule fois au chargement (jamais dans `eval`). Pour un groupe non nommé,
+`from_net_list: "lan"` reste disponible : fichier `{lists_dir}/net/lan.txt`,
+un CIDR par ligne.
 
 #### `filter.macs` — Alias de MAC
 
@@ -994,8 +1002,9 @@ un OU sur plusieurs fichiers. Le `{type}` est le nom de base après le premier
 `from_user`→`user`, `in_time`→`time`. Ces variantes ne sont **pas** une
 référence à un groupe des dictionnaires `filter.nets` / `filter.macs` /
 `filter.users` : ce sont des fichiers, dont chaque ligne est évaluée par la
-condition de base (un alias de `filter.macs` ou un nom de `filter.times` y est
-résolu). L'orthographe sans tiret bas (`from_netlist`, `from_maclists`…)
+condition de base (un alias de `filter.nets` pour `from_net`/`to_net`, de
+`filter.macs` ou un nom de `filter.times` y est résolu). L'orthographe sans
+tiret bas (`from_netlist`, `from_maclists`…)
 n'existe pas : `compiler_api.load_condition` renvoie
 `Condition '…' not found` et `src/filter/rule.moon:57` refuse la règle.
 
@@ -1027,7 +1036,7 @@ listes (fichier nommé) », le fichier-groupe se gère sous
 
 | Condition | Valeur | Description |
 |-----------|--------|-------------|
-| `from_net` | `"10.0.0.0/8"` | CIDR IPv4 ou IPv6 (support nft natif) |
+| `from_net` | `"10.0.0.0/8"` ou alias de `filter.nets` | CIDR IPv4 ou IPv6 (support nft natif), ou réseau nommé |
 | `from_nets` | `{"10.0.0.0/8","fc00::/7"}` | OU entre plusieurs CIDRs |
 | `from_subnet` | `"10.0.0.0/8"` ou `{net:"...",family:"inet"}` | CIDR avec famille explicite optionnelle |
 | `from_subnets` | `{"10.0.0.0/8","172.16.0.0/12"}` | OU entre plusieurs subnets |

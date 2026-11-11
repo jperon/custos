@@ -105,6 +105,15 @@ par `from_mac` via `make_plural`), donc aussi dans les lignes d'un fichier lu pa
 `from_mac_list`, mélangeable avec des MAC brutes. `from_mac_list` lui-même attend
 un nom de fichier sous `{lists_dir}/mac/`, pas un alias.
 
+**Réseaux nommés (`filter.nets`) résolus par `from_net`/`to_net`.** L'éditeur
+`Réseaux nommés` (`handle_nets_get/post`, `is_list_value=true`) écrit
+`cfg.filter.nets[name] = {cidr…}`. Ce dictionnaire est consulté par
+`from_net`/`to_net` et leurs variantes (`from_nets`, `from_net_list(s)`) : un
+nom saisi comme argument est résolu vers le ou les CIDRs du groupe (un groupe
+multi-CIDR rend la condition worker-only, cf.
+[filtre.md](filtre.md#alias-de-réseaux-filternets)). Un nom inconnu journalise
+`filter_net_unknown` au chargement.
+
 ### Page « Verdicts » (`src/webui/handlers/verdicts.moon`)
 
 `GET /admin/config/verdicts` (lecture seule, pas de POST) liste **tous** les

@@ -1650,3 +1650,49 @@ OK ; `make test` = **2421 successes / 0 failures / 0 errors / 0 pending**
 (`tmp/test.log`). `make test-e2e` = **94 passed / 0 failed**
 (`tmp/test-e2e.log`), dont G0b/T04b (téléchargement + vérification SHA256 +
 extraction, exit 0) et T04c (82 `.bin` déployés dans `/tmp/e2e-lists`).
+### Branche d-nets — alias `filter.nets` et défaut de `filter.lists_dir`
+
+- **`filter.nets` ignoré par `from_net`/`to_net`.** La webui édite un
+  dictionnaire nom→CIDRs (`src/webui/handlers/filter.moon:109`), mais les deux
+  conditions passaient l'argument tel quel à
+  `net_match.build_cidr_condition` : un nom de groupe ne correspondait jamais.
+  Correctif : `net_match.build_net_arg_condition`
+  (`src/filter/conditions/net_match.moon:86`) résout un argument qui n'est ni
+  `_any`/`_none` ni un CIDR/IP littéral (`Net`) mais une clé de `cfg.nets` vers
+  un OU sur les CIDRs du groupe (`build_alias_condition`, `:64`, via
+  `compiler_api.make_plural`, désormais exporté). `from_net.moon:35` et
+  `to_net.moon:37` l'utilisent ; les variantes `from_nets`,
+  `from_net_list(s)` en héritent (une entrée/ligne peut être un alias). Un nom
+  inconnu garde le comportement « CIDR invalide » et journalise
+  `filter_net_unknown` une seule fois à la construction (`:103`), jamais dans
+  `eval`. Test : `tests/unit/filter/net_alias_spec.moon`.
+- **Alias multi-CIDR volontairement worker-only.** `make_plural` fusionne des
+  expressions nft à préfixe identique ; une expression déjà groupée
+  (`ip saddr { … }`) ne peut pas être recombinée par le pluriel supérieur
+  (`from_nets`, `from_net_list…`) sans produire une règle fausse. Un alias de
+  plus d'un CIDR est donc déclaré `nft: false`
+  (`src/filter/conditions/net_match.moon:75-77`) ; un alias vers un seul CIDR
+  reste nft-capable. Les CIDRs littéraux et `from_nets` de CIDRs gardent
+  exactement leur comportement worker/nft (couvert par le même spec).
+- **Libellés webui/doc rétablis.** `handle_nets_get` ne dit plus « Dictionnaire
+  non consulté par from_net » mais décrit la résolution effective
+  (`src/webui/handlers/filter.moon:109`) ; passages alignés dans
+  `doc/CONFIG.md` (§14.2 et tableau `from_net`), `docs/agents/filtre.md`
+  (§ Alias de réseaux), `docs/agents/webui.md` et `README.md`.
+- **`filter.lists_dir` : défaut `/etc/custos/lists`.** Les listes-texte
+  saisies à la main (`from_xxx_list/_lists`) tombaient sur un repli codé en dur
+  `/tmp/custos/lists` (tmpfs) dans `compiler_api.make_from_file` et dans la
+  webui, donc perdues au redémarrage. `DEFAULTS.filter.lists_dir` vaut
+  désormais `/etc/custos/lists` (`src/config.moon:368`) et une seule constante
+  `compiler_api.DEFAULT_LISTS_DIR` (`src/filter/compiler_api.moon:60`, exportée)
+  sert de repli à `make_from_file` (`:177`) et à
+  `webui/handlers/lists.moon:26`. `domainlists_dir` reste `/tmp/custos/lists`
+  (`src/config.moon:363`, listes compilées régénérées par l'updater). Schéma
+  webui (`src/webui/schema/config_schema.moon:161`), config par défaut du
+  paquet (`packaging/openwrt/custos/files/etc/custos/config.moon:17`) et docs
+  (`doc/CONFIG.md:641`, `README.md`, `docs/agents/filtre.md`,
+  `docs/agents/divers.md`) alignés. `cfg/config.moon` ne contient pas la clé :
+  inchangé. Tests : `config_spec` (défauts), `list_warnings_spec` (chemin de
+  repli) et `webui/lists_handler_spec` (affichage du répertoire) ; tous passent
+  un `lists_dir` explicite ou se contentent de lire le défaut, sans écrire
+  hors de `./tmp/`.

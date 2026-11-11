@@ -84,6 +84,7 @@ for path in *{
   "rtp", "rtp.excluded_ports",
   "filter",
   "filter.domainlists_dir", "filter.custom_lists_dir", "filter.allow_localnets",
+  "filter.lists_dir",
   "filter.captive_portal", "filter.safe_search", "filter.youtube_restrict",
   "filter.nets", "filter.macs", "filter.times", "filter.sources",
   "filter.users", "filter.userlists", "filter.rules", "filter.default_rules",

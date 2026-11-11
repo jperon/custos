@@ -424,6 +424,7 @@ local DEFAULTS = {
   },
   filter = {
     domainlists_dir = "/tmp/custos/lists",
+    lists_dir = "/etc/custos/lists",
     custom_lists_dir = nil,
     allow_localnets = false,
     captive_portal = true,

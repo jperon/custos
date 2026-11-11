@@ -61,6 +61,11 @@ describe "webui/handlers/lists", ->
       assert.truthy body\find("domain", 1, true)
       assert.truthy body\find("net", 1, true)
 
+    it "sans lists_dir configuré → défaut /etc/custos/lists", ->
+      write_cfg { filter: { rules: {} } }
+      _, _, body = handle_lists_index make_req("GET"), make_state!
+      assert.truthy body\find("/etc/custos/lists", 1, true)
+
   -- ── handle_lists_type ────────────────────────────────────────────────
 
   describe "handle_lists_type", ->

@@ -47,6 +47,7 @@ action_options_of = function(entry)
 end
 local log = require("log")
 local rule_id = require("filter.rule_id")
+local DEFAULT_LISTS_DIR = "/etc/custos/lists"
 local sanitize_ascii = rule_id.sanitize_ascii
 local sanitize_id = rule_id.sanitize_id
 local rule_id_base = rule_id.generate
@@ -209,7 +210,7 @@ make_from_file = function(base_factory, type_name, cond_name)
   end
   return function(cfg)
     return function(list_name)
-      local lists_dir = (cfg.lists_dir) or (cfg.filter and cfg.filter.lists_dir) or "/tmp/custos/lists"
+      local lists_dir = (cfg.lists_dir) or (cfg.filter and cfg.filter.lists_dir) or DEFAULT_LISTS_DIR
       local filepath = tostring(lists_dir) .. "/" .. tostring(type_name) .. "/" .. tostring(list_name) .. ".txt"
       local items, status = read_lines(filepath)
       if status then
@@ -485,12 +486,14 @@ return {
   compute_worker_only = compute_worker_only,
   action_name_of = action_name_of,
   action_options_of = action_options_of,
+  DEFAULT_LISTS_DIR = DEFAULT_LISTS_DIR,
   sanitize_ascii = sanitize_ascii,
   sanitize_id = sanitize_id,
   rule_id_base = rule_id_base,
   unique_rule_id = unique_rule_id,
   load_condition = load_condition,
   load_action = load_action,
+  make_plural = make_plural,
   get_condition_schema = get_condition_schema,
   get_action_schema = get_action_schema,
   create_net_condition = create_net_condition,

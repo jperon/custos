@@ -109,6 +109,16 @@ describe "config.default_rules", ->
     for i, r in ipairs cfg.filter.rules
       assert.equals cfg.filter.default_rules[i].description, r.description
 
+describe "config.filter.lists_dir", ->
+
+  it "vaut /etc/custos/lists par défaut (listes manuelles persistantes)", ->
+    cfg = reload nil
+    assert.equals "/etc/custos/lists", cfg.filter.lists_dir
+
+  it "domainlists_dir reste /tmp/custos/lists (listes compilées téléchargées)", ->
+    cfg = reload nil
+    assert.equals "/tmp/custos/lists", cfg.filter.domainlists_dir
+
 describe "config.safe_search", ->
 
   reload = (path) ->

@@ -78,6 +78,13 @@ describe "conditions *_list : avertissement à la construction", ->
     assert.is_true (cond.eval { mac: "aa:bb:cc:dd:ee:ff" })
     assert.equals 0, #warns
 
+  it "lists_dir absent → défaut partagé (DEFAULTS.filter.lists_dir)", ->
+    cond = (factory {}) "absente_defaut"
+    assert.is_false (cond.eval { mac: "aa:bb:cc:dd:ee:ff" })
+    assert.equals 1, #warns
+    assert.equals "filter_list_missing", warns[1].action
+    assert.equals "/etc/custos/lists/mac/absente_defaut.txt", warns[1].path
+
   it "plusieurs fichiers dans *_lists → un avertissement par liste absente", ->
     factory_lists = compiler_api.load_condition "from_mac_lists"
     write_file "#{LISTS_DIR}/mac/presente.txt", "aa:bb:cc:dd:ee:ff\n"

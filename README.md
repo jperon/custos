@@ -374,7 +374,7 @@ The `from_xxx_list` and `from_xxx_lists` variants read text files organized by t
 
 ```moonscript
 filter:
-  lists_dir: "/tmp/custos/lists"   -- défaut effectif (repli de compiler_api)
+  lists_dir: "/etc/custos/lists"   -- défaut (définitions manuelles, persistantes)
 ```
 
 ### Naming Convention
@@ -403,6 +403,17 @@ The `compiler_api` loader automatically generates variants from the atomic `from
 - `from_xxx_lists {"n1","n2"}` — OR on multiple files
 
 It is sufficient to define `from_xxx.moon`; the three variants are available without additional files. Any new condition type (e.g., `from_mytype.moon`) automatically inherits `from_mytype_list` and `from_mytype_lists`.
+
+### Named network aliases (`filter.nets`)
+
+`from_net` / `to_net` accept either a CIDR/IP literal or a key of `filter.nets`
+(named group: one CIDR or a list). A group is OR-ed over its CIDRs.
+`from_nets`, `from_net_list` and `from_net_lists` inherit the resolution, so a
+table entry or a file line may itself be an alias. A single-CIDR alias stays
+nft-capable; a multi-CIDR group is evaluated by the worker only (`nft: false`)
+because already-grouped nft set expressions are not reliably merged at the
+upper level. An unknown name matches nothing and logs `filter_net_unknown`
+once at load time (never in `eval`).
 
 ### `requires_auth` in Capabilities
 
@@ -918,6 +929,7 @@ The interface allows, without CLI:
 - setting general filter options via *Filter — General* (SafeSearch, YouTube Restricted, `allow_localnets`, captive portal, allowed domains…);
 - managing filtering rules (add, edit, delete, reorder);
 - managing named dictionaries (`nets`, `macs`, `users`, `times`) and lists;
+  `filter.nets` groups are resolved by `from_net`/`to_net` (see *Named network aliases* above);
 - viewing the dashboard (status, events) and triggering a reload (SIGHUP).
 
 ```

@@ -28,7 +28,8 @@ automatiquement les variantes :
 
 Format fichiers : 1 item/ligne, ignores vides et `#commentaires`.
 `lists_dir` se configure via `cfg.lists_dir` ou `cfg.filter.lists_dir` (défaut
-effectif de `compiler_api` : `/tmp/custos/lists`).
+`/etc/custos/lists`, `DEFAULTS.filter.lists_dir` /
+`compiler_api.DEFAULT_LISTS_DIR`).
 `{xxx}` est le type dérivé du nom de base après le premier `_` :
 `from_net`→`net`, `from_mac`→`mac`, `from_vlan`→`vlan`, `from_user`→`user`,
 `in_time`→`time`, `to_domainlist`→`domainlist`. L'orthographe sans tiret bas
@@ -42,6 +43,20 @@ une par ligne ; chacune réside sous `domainlists_dir`). Évite de répéter
 hint,description}, lists:{…} }`) permet à une condition de personnaliser les
 libellés de ces variantes dans l'UI (cf. `to_domainlist`, lu par
 `webui.schema.registry` `condition_families`).
+
+### Alias de réseaux (`filter.nets`)
+
+`from_net` et `to_net` résolvent un nom de `cfg.nets` quand leur argument n'est
+ni `_any`/`_none` ni un CIDR/IP littéral (testé via `Net`) : la condition est
+un OU sur le ou les CIDRs du groupe (`net_match.build_net_arg_condition`). Les
+variantes `from_nets`, `from_net_list` et `from_net_lists` en héritent — une
+entrée de table ou une ligne de fichier peut donc être un alias. Un alias vers
+un seul CIDR garde `capabilities.nft = true` ; un groupe de plusieurs CIDRs est
+déclaré worker-only (`nft: false`) car `compiler_api.make_plural` produit une
+expression déjà groupée (`ip saddr { … }`) que le merge du niveau supérieur ne
+sait pas recombiner. Un nom inconnu garde le comportement « CIDR invalide »
+(ne matche jamais) et émet une seule fois `filter_net_unknown` à la
+construction, jamais dans `eval`.
 
 ### Actions "modifiantes" (dns_strip, cname…)
 

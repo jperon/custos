@@ -13,6 +13,8 @@ do
   local _obj_0 = require("webui.util")
   esc, parse_form = _obj_0.esc, _obj_0.parse_form
 end
+local DEFAULT_LISTS_DIR
+DEFAULT_LISTS_DIR = require("filter.compiler_api").DEFAULT_LISTS_DIR
 local valid_type
 valid_type = function(t)
   return t and t:match("^[a-z][a-z0-9_]*$")
@@ -26,7 +28,7 @@ get_lists_dir = function(state)
   local cfg = read_config(state.config_path)
   local dir = cfg and cfg.filter and cfg.filter.lists_dir
   dir = dir or (cfg and cfg.lists_dir)
-  return dir or "/tmp/custos/lists"
+  return dir or DEFAULT_LISTS_DIR
 end
 local scan_types
 scan_types = function(lists_dir)

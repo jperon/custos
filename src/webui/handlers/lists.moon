@@ -14,6 +14,7 @@ H       = require "auth.html"
 { :read_config, :write_config } = require "webui.serializer"
 { :shquote } = require "lib.shquote"
 { :esc, :parse_form } = require "webui.util"
+{ :DEFAULT_LISTS_DIR } = require "filter.compiler_api"
 
 valid_type = (t) -> t and t\match "^[a-z][a-z0-9_]*$"
 valid_name = (n) -> n and n\match "^[a-zA-Z0-9][a-zA-Z0-9_%-]*$"
@@ -22,7 +23,7 @@ get_lists_dir = (state) ->
   cfg = read_config state.config_path
   dir = cfg and cfg.filter and cfg.filter.lists_dir
   dir = dir or (cfg and cfg.lists_dir)
-  dir or "/tmp/custos/lists"
+  dir or DEFAULT_LISTS_DIR
 
 -- Lister les sous-répertoires (types) dans lists_dir
 scan_types = (lists_dir) ->
