@@ -1790,3 +1790,46 @@ POST HTTP/2 complète traverse `handle_doh_client` et `handle_h2` réels ; il es
 OK (155 fichiers, aucune globale inconnue) ; `make test` = **2501 successes /
 0 failures / 0 errors / 0 pending** (`tmp/test.log`), `make test-js` = 12 pass
 / 0 fail. `make test-e2e` non lancé (hors périmètre, pas de VM sollicitée).
+
+### Trois écarts doc/code : `install-owrt`, schéma DoH, `metrics.maybe_flush` (branche d-final)
+
+- **`install-owrt` accepte `utilisateur@hôte`** (`install-owrt.moon:579-600`,
+  `:622,646,658-661`). La doc prescrivait `luajit install-owrt.lua
+  root@<router>` (`doc/CHEATSHEET.md:323,333,336`, `README.md:306`) alors que
+  `valid_host` refusait le `@`. Nouvelle fonction pure `split_user_host` : la
+  partie avant `@` est validée par `valid_user` (même règle que `--user`),
+  l'hôte par `valid_host` ; `@host`, `user@`, un second `@` et tout caractère
+  interdit sont rejetés. `--user` explicite prime, quel que soit l'ordre des
+  arguments (`user_explicit`). `--user` seul est toujours validé en fin de
+  `parse_args`. Tests : `tests/unit/install_owrt_spec.moon:144-174`. La doc
+  reste inchangée : elle devient exacte.
+- **Schéma webui DoH aligné sur `cert`/`key`**
+  (`src/webui/schema/config_schema.moon:132-133`). Le nom officiel est
+  `doh.cert`/`doh.key` : DEFAULTS `src/config.moon:330-331`, lecture runtime
+  `src/main.moon:168-169` et `src/worker_doh.moon:677-684`, config du paquet
+  (`cfg/config.moon:7-8` pour AUTH, même convention), et
+  `tests/unit/doh_config_spec.moon:42-48` affirme déjà l'absence de
+  `cert_path`/`key_path`. Le schéma déclarait `cert_path`/`key_path`, jamais
+  lus. Corrigé en `cert`/`key` (libellés conservés) et `doc/CONFIG.md:548-549`
+  aligné. Test de garde :
+  `tests/unit/webui/schema/config_schema_spec.moon` vérifie que chaque clé du
+  schéma `doh` est déclarée dans le bloc DEFAULTS de `src/config.moon` ou lue
+  par le runtime, et qu'aucun `cert_path`/`key_path` ne subsiste.
+- **Suppression de `metrics.maybe_flush`, appel par paquet superflu**
+  (`src/worker_questions.moon:234` auparavant). Vérifié dans le code :
+  `run_queue` appelle `on_idle` **au début de chaque tour de boucle**, avant
+  `poll` (`src/nfq_loop.moon:113-115`), pas seulement au timeout ; chaque tour
+  lit au plus un paquet, donc sous charge continue `flush_if_due` est appelée
+  au moins une fois par paquet. `worker_questions` y branche déjà
+  `metrics.flush_if_due` (`src/worker_questions.moon:549-550`). L'appel
+  `maybe_flush` par paquet était donc redondant, ainsi que son compteur
+  `check_every`. Fonction, export, état `_pkt_count`/`_check_every` et tests
+  associés retirés (`src/metrics.moon:12-17,173-179,196`,
+  `tests/unit/metrics_spec.moon`) ; l'import fictif de
+  `tests/unit/worker_questions_spec.moon:129-133` est nettoyé. `flush_if_due`
+  reste l'unique point d'export périodique (production et tests).
+
+**Vérification (2026-11-11, branche d-final)** : `make all && make check &&
+make test` = **2539 successes / 0 failures / 0 errors / 0 pending**
+(`tmp/test.log`) ; `make test-js` = 12 pass / 0 fail. `make test-e2e` non
+lancé (hors périmètre : aucun changement runtime réseau/nftables).
