@@ -267,7 +267,7 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
   for _ = 1, 30 do
     local ftype, flags, sid, payload = h2_read_frame(conn, H2_DEFAULT_MAX_FRAME_SIZE)
     if not ftype then
-      if payload == "frame_too_large" then
+      if flags == "frame_too_large" then
         h2_goaway(conn, H2_FRAME_SIZE_ERROR)
         return nil, "h2_frame_too_large"
       end

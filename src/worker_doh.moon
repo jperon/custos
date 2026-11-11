@@ -250,7 +250,9 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
     ftype, flags, sid, payload = h2_read_frame conn, H2_DEFAULT_MAX_FRAME_SIZE
     if not ftype
       -- Frame annoncée trop grande : FRAME_SIZE_ERROR, puis fermeture.
-      if payload == "frame_too_large"
+      -- h2_read_frame renvoie nil, err : l'erreur arrive dans la 2e valeur
+      -- (flags), pas dans payload (toujours nil en cas d'échec).
+      if flags == "frame_too_large"
         h2_goaway conn, H2_FRAME_SIZE_ERROR
         return nil, "h2_frame_too_large"
       break

@@ -502,3 +502,19 @@ describe "worker_doh.handle_doh_client — routage HTTP/1.1", ->
     assert.is_nil capture.read_opts
     assert.equals 0, #capture.sent
     assert.is_true tls._closed!
+
+-- ── handle_h2 : frame annoncée trop grande (B4) ─────────────────────────────
+
+describe "worker_doh.handle_h2 — frame trop longue", ->
+  bit = require "bit"
+
+  it "rejette une frame de 0xFFFFFF octets sans lire le payload et renvoie GOAWAY", ->
+    -- En-tête seul : longueur 0xFFFFFF annoncée, aucun octet de corps fourni.
+    header = string.char(0xFF, 0xFF, 0xFF, 0x0, 0, 1, 0, 0, 1)
+    conn = make_h2_conn header
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "h2_frame_too_large", err
+    sent = conn._sent!
+    expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,6)
+    assert.equals expected_goaway, sent\sub -17
