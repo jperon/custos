@@ -12,6 +12,9 @@
 {
 
   filter: {
+    -- Listes-texte (from_xxx_list/_lists) : définitions manuelles, conservées
+    -- sur la flash après redémarrage. domainlists_dir reste en tmpfs.
+    lists_dir: "/etc/custos/lists"
     -- Le filtre fonctionne sans règle : les règles intégrées (anti-DoH, sondes
     -- de portail captif, SafeSearch) sont injectées avant celles-ci
     -- (src/config.moon DEFAULTS.filter.default_rules).

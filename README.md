@@ -374,7 +374,7 @@ The `from_xxx_list` and `from_xxx_lists` variants read text files organized by t
 
 ```moonscript
 filter:
-  lists_dir: "/tmp/custos/lists"   -- défaut effectif (repli de compiler_api)
+  lists_dir: "/etc/custos/lists"   -- défaut (définitions manuelles, persistantes)
 ```
 
 ### Naming Convention

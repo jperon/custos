@@ -137,9 +137,9 @@ Inventaire au 2026-11-11 (les chemins par défaut effectifs tiennent compte de
 | `src/auth/cert_cache.moon:112-113` (index `:94`, écriture `:25`) | `/tmp/custos/certs/<nom>.{crt,key}` et `/tmp/custos/certs/cert_cache_index.lua` (`DEFAULT_CERT_DIR` en `src/auth/cert_cache.moon:21`, clé `auth.cert_dir` en `src/config.moon:304`) | généré | tmpfs |
 | `src/nft_rules.moon:282-290` | `/tmp/custos/custos-rules-<epoch>.nft` et `.err` | généré (temporaire) | tmpfs |
 | `src/lib/pidfile.moon:9` | `/var/run/custos.pid` (surcharges `runtime.pid_file`, env `CUSTOS_PID_FILE`) | généré | tmpfs |
-| `src/webui/handlers/lists.moon:70` | `{lists_dir}/{type}/{name}.txt` ; repli `/tmp/custos/lists` (`:25`) | manuel (webui) | tmpfs actuellement (voir cas douteux) |
+| `src/webui/handlers/lists.moon:66` (chemin `:22-26`) | `{lists_dir}/{type}/{name}.txt` ; défaut `/etc/custos/lists` (`DEFAULTS.filter.lists_dir` `src/config.moon:368`, `compiler_api.DEFAULT_LISTS_DIR`) | manuel (webui) | flash (`/etc`), légitime |
 | `src/webui/serializer.moon:75` | `{config_path}.webui.new` → `/etc/custos/config.moon` (`DEFAULT_CONFIG_PATH`, `src/config.moon:52`) | manuel (webui) | flash (`/etc`), légitime |
-| `src/filter/updater.moon:223` | `filter.domainlists_dir` → `/tmp/custos/lists/*.bin` (`src/config.moon:360`) | téléchargé / généré | tmpfs |
+| `src/filter/updater.moon:223` | `filter.domainlists_dir` → `/tmp/custos/lists/*.bin` (`src/config.moon:363`) | téléchargé / généré | tmpfs |
 | `src/filter/updater.moon:120` | `${TMPDIR:-/tmp}/custos-updater-<source>.tar.gz.tmp` | téléchargé (temporaire) | tmpfs |
 | `src/filter/updater_io.moon:37,48,69` | `mkdir -p` des parents et `curl -o <dest>` ; chemins fournis par l'appelant (`/tmp/custos/lists`) | téléchargé / généré | tmpfs |
 | `src/filter/convert.moon:45` | chemin de sortie passé en argument (outil CLI) | généré | non déterminé (hors service) |
@@ -152,8 +152,10 @@ Cas non trouvés : `recent-devices.tsv` n'existe pas dans le dépôt (le fichier
 équivalent est `recent-verdicts.tsv`, `src/worker_events.moon:46`).
 
 Défauts corrigés le 2026-11-11 : `auth/cert*.moon` (chemins relatifs
-`tmp/certs`, `tmp/cert_cache_index.lua`, `tmp/auth_sni_*`) et le temporaire de
-`nft_rules.apply` (était `./tmp`).
+`tmp/certs`, `tmp/cert_cache_index.lua`, `tmp/auth_sni_*`), le temporaire de
+`nft_rules.apply` (était `./tmp`) et `filter.lists_dir` (défaut
+`/etc/custos/lists`, au lieu du repli `/tmp/custos/lists` de `compiler_api` et
+de la webui).
 
 Cas douteux laissés en l'état :
 - `auth.sessions_file` (`/tmp/sessions.lua`) et son `.ratelimit` : tmpfs, donc
@@ -163,10 +165,6 @@ Cas douteux laissés en l'état :
   classé « secret », donc laissé dans `/etc`. Recommandation : le déplacer vers
   `/tmp/custos` seulement si l'on accepte d'invalider tous les jetons au
   redémarrage (les sessions sont déjà perdues).
-- `filter.lists_dir` / repli webui `/tmp/custos/lists` : listes `.txt` saisies
-  à la main mais écrites en tmpfs. Recommandation : fixer
-  `filter.lists_dir: "/etc/custos/lists"` dans la config du paquet pour les
-  conserver, sans changer le code (définition manuelle).
 - `load_or_generate_static` (`src/auth/cert.moon:241-257`) : si `auth.cert`
   est configuré mais absent, custos y génère un auto-signé — donc potentiellement
   dans `/etc`. Comportement documenté ; non modifié (chemin choisi par

@@ -54,6 +54,11 @@ action_options_of = (entry) ->
 log = require "log"
 rule_id = require "filter.rule_id"
 
+-- Répertoire par défaut des listes-texte (from_xxx_list/_lists), miroir de
+-- DEFAULTS.filter.lists_dir (src/config.moon). Une seule constante partagée
+-- par make_from_file et la webui (handlers/lists.moon).
+DEFAULT_LISTS_DIR = "/etc/custos/lists"
+
 sanitize_ascii = rule_id.sanitize_ascii
 sanitize_id    = rule_id.sanitize_id
 
@@ -169,7 +174,7 @@ make_from_file = (base_factory, type_name, cond_name=nil) ->
     (list_name) ->
       lists_dir = (cfg.lists_dir) or
                   (cfg.filter and cfg.filter.lists_dir) or
-                  "/tmp/custos/lists"
+                  DEFAULT_LISTS_DIR
       filepath = "#{lists_dir}/#{type_name}/#{list_name}.txt"
       items, status = read_lines filepath
       if status
@@ -368,6 +373,7 @@ get_action_schema = (name) ->
   :compute_worker_only
   :action_name_of
   :action_options_of
+  :DEFAULT_LISTS_DIR
   :sanitize_ascii
   :sanitize_id
   :rule_id_base

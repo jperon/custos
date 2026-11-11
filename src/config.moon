@@ -361,6 +361,11 @@ DEFAULTS = {
 
   filter: {
     domainlists_dir: "/tmp/custos/lists"
+    -- Listes-texte saisies à la main (from_xxx_list/_lists) : définitions
+    -- manuelles, conservées après redémarrage (contrairement à
+    -- domainlists_dir, régénéré par l'updater). Miroir de
+    -- compiler_api.DEFAULT_LISTS_DIR.
+    lists_dir: "/etc/custos/lists"
     custom_lists_dir: nil
     allow_localnets: false
     -- Active les règles par défaut de détection de portail captif (sondes

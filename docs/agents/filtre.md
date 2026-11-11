@@ -28,7 +28,8 @@ automatiquement les variantes :
 
 Format fichiers : 1 item/ligne, ignores vides et `#commentaires`.
 `lists_dir` se configure via `cfg.lists_dir` ou `cfg.filter.lists_dir` (défaut
-effectif de `compiler_api` : `/tmp/custos/lists`).
+`/etc/custos/lists`, `DEFAULTS.filter.lists_dir` /
+`compiler_api.DEFAULT_LISTS_DIR`).
 `{xxx}` est le type dérivé du nom de base après le premier `_` :
 `from_net`→`net`, `from_mac`→`mac`, `from_vlan`→`vlan`, `from_user`→`user`,
 `in_time`→`time`, `to_domainlist`→`domainlist`. L'orthographe sans tiret bas

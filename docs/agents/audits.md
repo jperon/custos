@@ -1595,3 +1595,20 @@ non relancé (VMs seulement interrogées en lecture seule).
   (`src/webui/handlers/filter.moon:109`) ; passages alignés dans
   `doc/CONFIG.md` (§14.2 et tableau `from_net`), `docs/agents/filtre.md`
   (§ Alias de réseaux), `docs/agents/webui.md` et `README.md`.
+- **`filter.lists_dir` : défaut `/etc/custos/lists`.** Les listes-texte
+  saisies à la main (`from_xxx_list/_lists`) tombaient sur un repli codé en dur
+  `/tmp/custos/lists` (tmpfs) dans `compiler_api.make_from_file` et dans la
+  webui, donc perdues au redémarrage. `DEFAULTS.filter.lists_dir` vaut
+  désormais `/etc/custos/lists` (`src/config.moon:368`) et une seule constante
+  `compiler_api.DEFAULT_LISTS_DIR` (`src/filter/compiler_api.moon:60`, exportée)
+  sert de repli à `make_from_file` (`:177`) et à
+  `webui/handlers/lists.moon:26`. `domainlists_dir` reste `/tmp/custos/lists`
+  (`src/config.moon:363`, listes compilées régénérées par l'updater). Schéma
+  webui (`src/webui/schema/config_schema.moon:161`), config par défaut du
+  paquet (`packaging/openwrt/custos/files/etc/custos/config.moon:17`) et docs
+  (`doc/CONFIG.md:641`, `README.md`, `docs/agents/filtre.md`,
+  `docs/agents/divers.md`) alignés. `cfg/config.moon` ne contient pas la clé :
+  inchangé. Tests : `config_spec` (défauts), `list_warnings_spec` (chemin de
+  repli) et `webui/lists_handler_spec` (affichage du répertoire) ; tous passent
+  un `lists_dir` explicite ou se contentent de lire le défaut, sans écrire
+  hors de `./tmp/`.

@@ -638,7 +638,7 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
 | `domainlists_dir` | string | `"/tmp/custos/lists"` | Répertoire racine des listes de domaines **compilées** (`.bin`, repli `.domains`) lues par `to_domainlist`/`to_domainlists` |
-| `lists_dir` | string | `"/tmp/custos/lists"` (repli code) | Répertoire des listes-texte lues par les conditions `*_list`/`*_lists` : `{lists_dir}/{type}/{nom}.txt` |
+| `lists_dir` | string | `"/etc/custos/lists"` | Répertoire des listes-texte lues par les conditions `*_list`/`*_lists` : `{lists_dir}/{type}/{nom}.txt` (définitions manuelles, persistantes) |
 | `custom_lists_dir` | string | `nil` | Dossier **source** des `.txt` scannés par l'updater (non lu par le filtre ; les `.bin` produits vont sous `{domainlists_dir}/custom/`) |
 | `allow_localnets` | bool | `false` | Si `true`, injecte automatiquement les réseaux locaux en whitelist nft |
 | `captive_portal` | bool | `true` | Active les règles par défaut de détection de portail captif (sondes NCSI/MSFT, Apple, Google…). `false` → ces règles ne sont pas injectées (cf. § Règles par défaut) |
