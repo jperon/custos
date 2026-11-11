@@ -132,6 +132,10 @@ handle_client = (args) ->
     -- Handshake loop: keep trying until complete or error
     handshake_complete = false
     handshake_attempts = 0
+    -- Erreur du dernier dohandshake, lue APRÈS la boucle : déclarée ici, sinon
+    -- l'assignation dans la boucle en fait une locale de boucle et la lecture
+    -- après compile en globale (nil) → log sans l'erreur réelle.
+    hs_err = nil
     -- Échéance absolue : avec SO_RCVTIMEO, chaque tentative WANT_READ peut
     -- bloquer jusqu'à client_timeout ; sans deadline, 50 tentatives sur une
     -- connexion muette tiendraient l'enfant des minutes.
