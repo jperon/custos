@@ -64,6 +64,12 @@ describe "sync/apply — erreurs CLI", ->
     assert.not_equals 0, ret
     assert.truthy out\match "introuvable"
 
+  it "échoue sur un --hostname qui sortirait du dossier devices/", ->
+    write_file "#{TMP}/base/config.moon", [[ { runtime: { log_level: "INFO" } } ]]
+    ret, out = run "--base #{TMP}/base/config.moon --hostname ../../etc --output #{TMP}/out.moon"
+    assert.not_equals 0, ret
+    assert.truthy out\match "nom d'hôte invalide"
+
 -- ── Comportement nominal ──────────────────────────────────────────────────────
 
 describe "sync/apply — comportement nominal", ->
@@ -241,3 +247,20 @@ describe "sync/apply — resolve_hostname", ->
     out, host = capture_stderr -> APPLY_MOD.resolve_hostname (-> nil)
     assert.is_nil host
     assert.truthy out\match "uname %-n indisponible"
+
+  it "rejette une sortie de uname -n non conforme (traversée, slash)", ->
+    for raw in *{"../../etc", "a/b", "a b"}
+      out, host = capture_stderr -> APPLY_MOD.resolve_hostname (-> fake_handle raw)
+      assert.is_nil host, raw
+      assert.truthy out\match "nom d'hôte invalide"
+
+describe "sync/apply — valid_hostname", ->
+
+  it "accepte les noms usuels (lettres, chiffres, point, tiret, souligné)", ->
+    for h in *{"router1", "router.lan", "a_b-c", "CUSTOS-01"}
+      assert.is_true APPLY_MOD.valid_hostname(h), h
+
+  it "rejette les composants de traversée et les séparateurs de chemin", ->
+    for h in *{".", "..", "../etc", "a/b", "a b", "a;b", ""}
+      assert.is_false APPLY_MOD.valid_hostname(h), h
+    assert.is_false APPLY_MOD.valid_hostname nil

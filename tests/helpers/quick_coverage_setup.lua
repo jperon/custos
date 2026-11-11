@@ -17,25 +17,11 @@
 
 dofile "tests/helpers/busted_setup.lua"
 
-local INCLUDE_PREFIX = "lua/"
-local EXCLUDE_PATTERNS = {
-  "^lua/ipparse/",
-  "^lua/ffi_defs",
-  "^lua/ffi_ndpi",
-  "^lua/ffi_xxhash",
-  "^lua/auth/ffi_socket",
-  "^lua/auth/ffi_wolfssl",
-}
+local coverage_filters = require "coverage_filters"
 
 local seen = {}   -- [source] = { [line] = true }
 
-local function included(src)
-  if src:sub(1, #INCLUDE_PREFIX) ~= INCLUDE_PREFIX then return false end
-  for _, pat in ipairs(EXCLUDE_PATTERNS) do
-    if src:match(pat) then return false end
-  end
-  return true
-end
+local included = coverage_filters.included
 
 local function flush()
   local fh = io.open("tmp/coverage_quick/quick_coverage.lua", "w")
@@ -55,7 +41,7 @@ end
 -- Flush périodique basé sur le temps plutôt que sur la fin de process : on ne
 -- sait pas de façon fiable si/quand busted appelle os.exit (l'échec silencieux
 -- de stats.out observé avec luacov sur le run complet en est un indice) — un
--- flush toutes les ~3s garantit des données sur disque quelle que soit la
+-- flush toutes les ~50 ms garantit des données sur disque quelle que soit la
 -- façon dont le process se termine.
 local last_flush = os.clock()
 local FLUSH_PERIOD_S = 0.05
@@ -85,7 +71,7 @@ local function hook()
   end
 end
 
--- Échantillonne toutes les 500 instructions VM (count hook) : compromis
+-- Échantillonne toutes les 50 instructions VM (count hook) : compromis
 -- vitesse/représentativité. Plus petit = plus précis mais plus lent.
 debug.sethook(hook, "", 50)
 

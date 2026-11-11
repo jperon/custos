@@ -45,7 +45,6 @@ do
 end
 local b64url_decode
 b64url_decode = function(s)
-  s = s:gsub("%-", ("-"):gsub("_", "_"))
   local pad = (4 - #s % 4) % 4
   s = s .. string.rep("=", pad)
   local out = { }

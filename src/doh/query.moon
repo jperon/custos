@@ -137,6 +137,17 @@ normalize_answers = (resp_dns) ->
     out[#out + 1] = { family: (ans.rtype == QTYPE.AAAA and "ipv6" or "ipv4"), addr: addr, ttl: ans.ttl }
   out
 
+--- Construit la closure famille → IP client utilisée par l'injection nft.
+-- Renvoie l'IP du client pour la famille de l'adresse à injecter, ou nil si
+-- la famille ne correspond pas (cross-family : couvert par l'injection MAC).
+-- @tparam string client_ip Adresse du pair de la connexion DoH.
+-- @treturn function (fam) → string|nil
+client_addr_for = (client_ip) ->
+  is_v6 = (client_ip\find ":") ~= nil
+  (fam) ->
+    (fam == "ipv4" and not is_v6) and client_ip or
+    (fam == "ipv6" and is_v6) and client_ip or nil
+
 --- Process a raw DNS query from a DoH client.
 -- @tparam string      dns_raw     Raw DNS query bytes (wire format).
 -- @tparam string      client_ip   Peer IP address string.
@@ -151,12 +162,15 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
     log_warn -> { action: "parse_failed", client_ip: client_ip, err: tostring parse_err }
     return nil, "dns_parse_failed"
 
+  -- Normalisation unique des questions (bloc vol captif + évaluation).
+  questions = dns.questions or (dns.question and { dns.question } or {})
+
   -- ── Vol de question DNS pour le portail captif (miroir worker_questions) ──
   -- Si la question porte sur le hostname du portail (A/AAAA), répondre avec
   -- l'IP locale du boîtier sans filtrer ni remonter l'upstream. Indispensable à
   -- la parité UDP/DoH : sinon le client DoH résout le vrai nom public.
   if captive_domain
-    for q in *(dns.questions or (dns.question and { dns.question } or {}))
+    for q in *questions
       norm = (q.name or q.qname or "")\lower!\gsub "%.+$", ""
       if norm == captive_domain and (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA)
         forged = build_captive_response dns, dns_raw, captive_ip4, captive_ip6
@@ -178,7 +192,6 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
   allow_response_rule_ids = {}
   allow_modifiers = {}
 
-  questions = dns.questions or (dns.question and { dns.question } or {})
   for q in *questions
     qname_text = q.name or q.qname
     -- Parité sémantique UDP : untagged (0) → nil (from_vlan _none matche,
@@ -272,10 +285,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
                 for r in *(override.aaaa or {})
                   redirect_answers[#redirect_answers + 1] = { family: "ipv6", addr: ip2s(r), ttl: override.ttl }
                 if #redirect_answers > 0
-                  is_v6 = (client_ip\find ":") ~= nil
-                  client_addr = (fam) ->
-                    (fam == "ipv4" and not is_v6) and client_ip or
-                    (fam == "ipv6" and is_v6) and client_ip or nil
+                  client_addr = client_addr_for client_ip
                   inject_nft_and_wait redirect_answers, {
                     :client_addr
                     :client_mac
@@ -309,10 +319,7 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
   -- ── Injection nft : noyau partagé avec worker_responses ─────────
   -- Famille de la connexion DoH ; le cross-family est couvert par l'injection
   -- MAC. Les règles wildcard d'auth sont incluses (response_inject.inject).
-  is_v6_client = (client_ip\find ":") ~= nil
-  client_addr = (fam) ->
-    (fam == "ipv4" and not is_v6_client) and client_ip or
-    (fam == "ipv6" and is_v6_client) and client_ip or nil
+  client_addr = client_addr_for client_ip
 
   ack_corr = string.format "%04x:%s", dns.txid or 0, client_ip or "unknown"
   answers  = normalize_answers resp_dns

@@ -69,9 +69,19 @@ parse_args = (args) ->
       i += 1
   result
 
+--- Valide un nom d'hôte utilisé comme nom de dossier device.
+-- Seuls [A-Za-z0-9_.-] sont acceptés : rejette `/` (lecture hors de devices/),
+-- les caractères shell et les composants de traversée `.`/`..`.
+-- @tparam string|nil host Nom d'hôte à valider.
+-- @treturn boolean true si le nom est utilisable comme nom de dossier.
+valid_hostname = (host) ->
+  return false unless type(host) == "string"
+  return false if host == "." or host == ".."
+  host\match("^[%w_.%-]+$") != nil
+
 --- Résout le nom d'hôte via `uname -n`.
 -- @tparam ?function popen fonction de lancement (injectable pour les tests)
--- @treturn string|nil nom d'hôte, ou nil (message sur stderr) si vide/indisponible
+-- @treturn string|nil nom d'hôte, ou nil (message sur stderr) si vide/invalide/indisponible
 resolve_hostname = (popen) ->
   popen or= io.popen
   fh = popen "uname -n"
@@ -83,6 +93,9 @@ resolve_hostname = (popen) ->
   host = host and host\match "^%s*(.-)%s*$"
   unless host and #host > 0
     io.stderr\write "apply: nom d'hôte vide (uname -n)\n"
+    return nil
+  unless valid_hostname host
+    io.stderr\write "apply: nom d'hôte invalide (uname -n) : #{host}\n"
     return nil
   host
 
@@ -117,6 +130,9 @@ main = ->
     os.exit 1
 
   hostname = opts.hostname
+  if hostname and not valid_hostname hostname
+    io.stderr\write "apply: nom d'hôte invalide : #{hostname}\n"
+    os.exit 1
   unless hostname
     hostname = resolve_hostname!
     os.exit 1 unless hostname
@@ -160,4 +176,4 @@ main = ->
 script_name = arg and arg[0] or ""
 main! if script_name\match "apply"
 
-{ :main, :parse_args, :resolve_hostname, :reload_supervisor, :SIGHUP }
+{ :main, :parse_args, :resolve_hostname, :valid_hostname, :reload_supervisor, :SIGHUP }

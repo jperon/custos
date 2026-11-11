@@ -201,10 +201,20 @@ collect_hooks = (block, key) ->
       chain[#chain + 1] = h
   chain
 
-run_block = (block) ->
-  for _, h in ipairs block.setup
+-- Exécute une liste de hooks. Tout échec compte comme un échec de la suite
+-- (`failed`) : un setup/before_each cassé ne doit jamais laisser un faux vert
+-- (les tests tourneraient alors sur un état non préparé).
+run_hooks = (hooks, label, name) ->
+  for h in *hooks
     ok, err = pcall h
-    print "[setup] ERROR: #{tostring err}" unless ok
+    unless ok
+      failed += 1
+      failures[#failures + 1] = { name: "#{name} (#{label})", err: tostring err }
+      io.write "  ✗ #{name} (#{label})\n"
+      io.write "    #{tostring err}\n"
+
+run_block = (block) ->
+  run_hooks block.setup, "setup", full_name block
 
   for _, t in ipairs block.tests
     total += 1
@@ -212,13 +222,12 @@ run_block = (block) ->
       skipped += 1
       io.write "  ○ #{full_name block} :: #{t.name} (pending)\n"
     else
-      for _, h in ipairs collect_hooks block, "before_each"
-        pcall h
+      test_name = "#{full_name block} :: #{t.name}"
+      run_hooks (collect_hooks block, "before_each"), "before_each", test_name
       running_test = true
       ok, err = pcall t.fn
       running_test = false
-      for _, h in ipairs collect_hooks block, "after_each"
-        pcall h
+      run_hooks (collect_hooks block, "after_each"), "after_each", test_name
       err_str = tostring(err or "")
       pending_pos = err_str\find M._pending_tag, 1, true
       if not ok and pending_pos
@@ -240,8 +249,7 @@ run_block = (block) ->
   for _, c in ipairs block.children
     run_block c
 
-  for _, h in ipairs block.teardown
-    pcall h
+  run_hooks block.teardown, "teardown", full_name block
 
 -- Isole chaque bloc describe racine : les hooks setup/teardown d'un spec
 -- ne polluent pas les tests des specs suivants dans mini.run().

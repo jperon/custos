@@ -285,29 +285,37 @@ collect_hooks = function(block, key)
   end
   return chain
 end
-local run_block
-run_block = function(block)
-  for _, h in ipairs(block.setup) do
+local run_hooks
+run_hooks = function(hooks, label, name)
+  for _index_0 = 1, #hooks do
+    local h = hooks[_index_0]
     local ok, err = pcall(h)
     if not (ok) then
-      print("[setup] ERROR: " .. tostring(tostring(err)))
+      failed = failed + 1
+      failures[#failures + 1] = {
+        name = tostring(name) .. " (" .. tostring(label) .. ")",
+        err = tostring(err)
+      }
+      io.write("  ✗ " .. tostring(name) .. " (" .. tostring(label) .. ")\n")
+      io.write("    " .. tostring(tostring(err)) .. "\n")
     end
   end
+end
+local run_block
+run_block = function(block)
+  run_hooks(block.setup, "setup", full_name(block))
   for _, t in ipairs(block.tests) do
     total = total + 1
     if t.pending then
       skipped = skipped + 1
       io.write("  ○ " .. tostring(full_name(block)) .. " :: " .. tostring(t.name) .. " (pending)\n")
     else
-      for _, h in ipairs(collect_hooks(block, "before_each")) do
-        pcall(h)
-      end
+      local test_name = tostring(full_name(block)) .. " :: " .. tostring(t.name)
+      run_hooks((collect_hooks(block, "before_each")), "before_each", test_name)
       running_test = true
       local ok, err = pcall(t.fn)
       running_test = false
-      for _, h in ipairs(collect_hooks(block, "after_each")) do
-        pcall(h)
-      end
+      run_hooks((collect_hooks(block, "after_each")), "after_each", test_name)
       local err_str = tostring(err or "")
       local pending_pos = err_str:find(M._pending_tag, 1, true)
       if not ok and pending_pos then
@@ -331,9 +339,7 @@ run_block = function(block)
   for _, c in ipairs(block.children) do
     run_block(c)
   end
-  for _, h in ipairs(block.teardown) do
-    pcall(h)
-  end
+  return run_hooks(block.teardown, "teardown", full_name(block))
 end
 local snapshot_loaded
 snapshot_loaded = function()

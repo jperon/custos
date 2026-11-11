@@ -663,3 +663,79 @@ plusieurs suites e2e d'autres worktrees tournaient simultanément sur le même
 homelab libvirt (redémarrages du service concurrents), d'où des échecs
 HTTP 000 côté portail et des écarts DNS/IPv6/EDE sans rapport avec les
 fichiers modifiés ici.
+
+### Volet DoH et outils : qualité de code (branche q-doh)
+
+Suite du volet « doh-outils » de l'audit du 2026-11-11 (rapport Q1-Q17 ;
+les bugs B1-B15 ont été traités séparément). État constaté dans le code, puis
+actions :
+
+- **Q1 — corrigé.** `src/worker_doh.moon` : la ligne
+  `s = s\gsub "%-", "-"\gsub "_", "_"` était sans effet (le second `gsub`
+  portait sur la littérale `"-"`). Supprimée ; `-`/`_` sont déjà mappés par
+  `b64_chars`, le padding est calculé juste après. Comportement inchangé
+  (`tests/unit/worker_doh_spec.moon`).
+- **Q2 — corrigé.** `doh.query` : la closure `famille → IP client` était
+  dupliquée (bloc redirect du validateur + injection principale). Extraite en
+  `client_addr_for(client_ip)`, utilisée aux deux sites ; le site
+  `worker_responses` est hors périmètre de cette branche.
+- **Q3 — corrigé.** `doh.query.process_query` normalise désormais `questions`
+  une seule fois, avant le bloc de vol captif, et réutilise la variable dans
+  la boucle d'évaluation.
+- **Q4/Q5 — non modifiés (décision laissée à l'utilisateur).** Constat toujours
+  exact : `idefix2filter.moon` appelle `split_conditions` (défini nulle part,
+  `:120`), génère `to_domains: [local, …]` invalide en MoonScript (`:117`), et
+  accumule sa sortie avec `..=` en boucle. Le script n'est référencé nulle part
+  (ni Makefile, ni doc, ni test). Aucune suppression/correction faite.
+- **Q6 — documentation seule.** `src/doh/upstream_doh.moon` n'est requis par
+  aucun fichier de `src/` (seul `doh.upstream_doh_curl` est chargé par
+  `worker_doh` et `doh.validator`). Le module et sa spec sont conservés ;
+  `docs/agents/doh.md` précise désormais « non chargé en production » et le
+  commentaire de `validator.moon` pointe vers `doh.upstream_doh_curl`.
+- **Q7 — corrigé.** Commentaires de `tests/helpers/quick_coverage_setup.lua`
+  alignés sur les constantes réelles : flush ~50 ms (`0.05`) et échantillonnage
+  toutes les 50 instructions VM (et non ~3 s / 500).
+- **Q8 — corrigé.** `INCLUDE_PREFIX`, `EXCLUDE_PATTERNS` et `included()` étaient
+  recopiés dans le hook et le rapport. Nouveau module
+  `tests/helpers/coverage_filters.moon` requis par les deux ; le rapport filtre
+  en outre sa liste `find` avec `included()`, ce qui supprime la troisième copie
+  des exclusions.
+- **Q9/Q10/Q11 — déjà traités** (vérifiés) : `install_updater` n'ajoute plus de
+  cron (géré par l'init.d, marqueur `# custos-update-lists`) et le message dit
+  « cron géré par /etc/init.d/custos » ; `ssh_run_script` n'existe plus ;
+  `capture()` court-circuite en dry-run (aucun `io.popen`) et
+  `tests/unit/install_owrt_spec.moon` couvre `capture`, `check_connectivity` et
+  `detect_pkg_manager` sans commande réelle.
+- **Q12 — corrigé.** `packaging/openwrt/custos/Makefile` installe désormais
+  `/usr/sbin/custos-update` et `/etc/hotplug.d/net/30-custos-rps`, tous deux
+  utilisés par l'init.d/documentation mais absents du paquet.
+- **Q13 — non modifié (options).** `packaging/openwrt/custos/files/etc/config.moon`
+  n'est installé par aucune règle et `/etc/config.moon` n'est lu par personne
+  (le runtime lit `/etc/custos/config.moon`). Deux options : supprimer le
+  fichier, ou le conserver comme modèle manuel en le marquant explicitement
+  dans son en-tête. La suppression ferait perdre le contenu de référence et
+  l'installation serait trompeuse : décision laissée à l'utilisateur.
+- **Q14 — corrigé.** Commentaire de `worker_doh.moon` sur le socket UDP amont :
+  `fork(2)` duplique bien les descripteurs ; chaque enfant ouvre son socket
+  pour garder l'état du flux UDP privé (une réponse ne doit pas être lue par le
+  mauvais enfant).
+- **Q15 — corrigé.** `tests/helpers/mini_busted.moon` compte désormais les
+  échecs de `setup`, `before_each`, `after_each` et `teardown` dans `failed`
+  (au lieu d'un simple `print`/`pcall` jeté) : la suite renvoie 1. Test de
+  régression `tests/unit/mini_busted_spec.moon` (instance neuve chargée par
+  `loadfile`). Le runner VM local (`luajit tests/run_vm_tests.lua`) ne révèle
+  aucun `setup` cassé jusque-là masqué ; ses 39 échecs restants sont des écarts
+  de compatibilité préexistants de `mini_busted` avec Busted (`assert.are_not`,
+  `assert.same`…), sans rapport avec les hooks.
+- **Q16 — déjà traité** (vérifié) : `sync/custos-sync-push.sh` teste `cp` et
+  `git add` (`|| { … exit 1; }`) avant le `git diff --cached` ; `sh -n` OK sur
+  les scripts `sync/`, `setup.sh` et les fichiers du paquet. `shellcheck` n'est
+  pas disponible dans le flake.
+- **Q17 — corrigé.** `sync/apply.moon` valide désormais le nom d'hôte
+  (`valid_hostname` : `[A-Za-z0-9_.-]`, ni `.` ni `..`) pour `--hostname` comme
+  pour la sortie de `uname -n` : `--hostname ../../etc` échoue en code 1 au lieu
+  de lire `devices/../../etc/config.moon`. Tests dans
+  `tests/unit/sync/apply_spec.moon`.
+
+**Vérification (2026-11-11, branche q-doh)** : `make check` OK ; `make test`
+= 2127 successes / 0 failures / 0 errors ; `make test-js` = 12 pass.
