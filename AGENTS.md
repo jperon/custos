@@ -866,3 +866,15 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   Correctif : helper `forget_ip_mapping` qui n'efface que si `ip_to_mac[ip]`
   appartient encore à cette MAC, aux quatre sites ; test dans
   `tests/unit/worker_responses_spec.moon`.
+- **`mac_learner` : `recv` bloquants sans timeout (serveur et client).** Le
+  serveur (`start_query`) appelait `recv` juste après `accept` sans
+  `SO_RCVTIMEO` : un client connecté qui n'écrit jamais figeait l'unique boucle
+  `poll` du learner, donc plus aucun `get_mac`/`get_vlan`/`strip_target` servi.
+  Côté client (`mac_learner_ipc`), les trois fonctions dupliquaient
+  connect/send/recv/close sans borne : un learner lent bloquait le plan de
+  données (`worker_responses`/`worker_tls`/`worker_doh`). Correctif : pose de
+  `SO_RCVTIMEO` (200 ms) sur le fd accepté, et factorisation client en une
+  fonction `query(request)` bornée par `SO_RCVTIMEO`/`SO_SNDTIMEO` (500 ms,
+  > `PROBE_TIMEOUT_MS`), timeout → valeur « inconnue » comme aujourd'hui.
+  Tests dans `tests/unit/mac_learner_probe_spec.moon` (client muet borné,
+  serveur muet borné).

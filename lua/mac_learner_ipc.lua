@@ -11,9 +11,53 @@ local QUERY_SOCK = learner_cfg.query_sock or config.MAC_LEARNER_QUERY_SOCK or "/
 local AF_UNIX = 1
 local AF_INET6 = 10
 local SOCK_STREAM = 1
+local SOL_SOCKET = 1
+local SO_RCVTIMEO = 20
+local SO_SNDTIMEO = 21
+local QUERY_TIMEOUT_S = 0.5
 local bit = require("bit")
 local mac2s
 mac2s = require("packet_utils").mac2s
+local set_socket_timeout
+set_socket_timeout = function(fd, optname, secs)
+  return pcall(function()
+    local tv = ffi.new("struct timeval")
+    tv.tv_sec = math.floor(secs)
+    tv.tv_usec = math.floor((secs - math.floor(secs)) * 1e6)
+    return libc.setsockopt(fd, SOL_SOCKET, optname, tv, ffi.sizeof(tv))
+  end)
+end
+local query
+query = function(request)
+  local sock = libc.socket(AF_UNIX, SOCK_STREAM, 0)
+  if not (sock >= 0) then
+    log_warn(function()
+      return {
+        action = "mac_ipc_socket_failed",
+        errno = tonumber(ffi.C.__errno_location()[0])
+      }
+    end)
+    return nil
+  end
+  local addr = ffi.new("struct sockaddr_un")
+  addr.sun_family = AF_UNIX
+  ffi.copy(addr.sun_path, QUERY_SOCK)
+  local addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
+  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0 then
+    libc.close(sock)
+    return nil
+  end
+  set_socket_timeout(sock, SO_RCVTIMEO, QUERY_TIMEOUT_S)
+  set_socket_timeout(sock, SO_SNDTIMEO, QUERY_TIMEOUT_S)
+  libc.send(sock, request, #request, 0)
+  local buf = ffi.new("char[64]")
+  local n = libc.recv(sock, buf, 63, 0)
+  libc.close(sock)
+  if n <= 0 then
+    return nil
+  end
+  return ffi.string(buf, n)
+end
 local mac_from_eui64
 mac_from_eui64 = function(ip_str)
   if not (ip_str) then
@@ -37,38 +81,14 @@ get_mac = function(ip_str)
   if not (ip_str and ip_str ~= "" and ip_str ~= "unknown") then
     return "unknown"
   end
-  local sock = libc.socket(AF_UNIX, SOCK_STREAM, 0)
-  if not (sock >= 0) then
-    log_warn(function()
-      return {
-        action = "mac_ipc_socket_failed",
-        errno = tonumber(ffi.C.__errno_location()[0])
-      }
-    end)
-    return mac_from_eui64(ip_str) or "unknown"
+  local resp = query(ip_str .. "\n")
+  if resp then
+    local mac = resp:match("^([0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f])")
+    if mac then
+      return mac
+    end
   end
-  local addr = ffi.new("struct sockaddr_un")
-  addr.sun_family = AF_UNIX
-  ffi.copy(addr.sun_path, QUERY_SOCK)
-  local addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
-  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0 then
-    libc.close(sock)
-    return mac_from_eui64(ip_str) or "unknown"
-  end
-  local req = ip_str .. "\n"
-  libc.send(sock, req, #req, 0)
-  local buf = ffi.new("char[64]")
-  local n = libc.recv(sock, buf, 63, 0)
-  libc.close(sock)
-  if n <= 0 then
-    return "unknown"
-  end
-  local resp = ffi.string(buf, n)
-  local mac = resp:match("^([0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f])")
-  if mac then
-    return mac
-  end
-  mac = mac_from_eui64(ip_str)
+  local mac = mac_from_eui64(ip_str)
   if mac then
     return mac
   end
@@ -79,33 +99,10 @@ get_vlan = function(ip_str)
   if not (ip_str and ip_str ~= "" and ip_str ~= "unknown") then
     return nil
   end
-  local sock = libc.socket(AF_UNIX, SOCK_STREAM, 0)
-  if not (sock >= 0) then
-    log_warn(function()
-      return {
-        action = "vlan_ipc_socket_failed",
-        errno = tonumber(ffi.C.__errno_location()[0])
-      }
-    end)
+  local resp = query("vlan:" .. ip_str .. "\n")
+  if not (resp) then
     return nil
   end
-  local addr = ffi.new("struct sockaddr_un")
-  addr.sun_family = AF_UNIX
-  ffi.copy(addr.sun_path, QUERY_SOCK)
-  local addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
-  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0 then
-    libc.close(sock)
-    return nil
-  end
-  local req = "vlan:" .. ip_str .. "\n"
-  libc.send(sock, req, #req, 0)
-  local buf = ffi.new("char[64]")
-  local n = libc.recv(sock, buf, 63, 0)
-  libc.close(sock)
-  if n <= 0 then
-    return nil
-  end
-  local resp = ffi.string(buf, n)
   local id = resp:match("^(%d+)")
   if id then
     return tonumber(id)
@@ -128,38 +125,17 @@ strip_target = function(name)
   if not (name and name ~= "" and name ~= "unknown") then
     return nil
   end
-  local sock = libc.socket(AF_UNIX, SOCK_STREAM, 0)
-  if not (sock >= 0) then
-    log_warn(function()
-      return {
-        action = "strip_ipc_socket_failed",
-        errno = tonumber(ffi.C.__errno_location()[0])
-      }
-    end)
+  local resp = query("strip:" .. name .. "\n")
+  if not (resp) then
     return nil
   end
-  local addr = ffi.new("struct sockaddr_un")
-  addr.sun_family = AF_UNIX
-  ffi.copy(addr.sun_path, QUERY_SOCK)
-  local addr_len = ffi.offsetof("struct sockaddr_un", "sun_path") + #QUERY_SOCK + 1
-  if libc.connect(sock, ffi.cast("struct sockaddr*", addr), addr_len) ~= 0 then
-    libc.close(sock)
-    return nil
-  end
-  local req = "strip:" .. name .. "\n"
-  libc.send(sock, req, #req, 0)
-  local buf = ffi.new("char[64]")
-  local n = libc.recv(sock, buf, 63, 0)
-  libc.close(sock)
-  if n <= 0 then
-    return nil
-  end
-  return parse_strip_resp(ffi.string(buf, n))
+  return parse_strip_resp(resp)
 end
 return {
   get_mac = get_mac,
   get_vlan = get_vlan,
   mac_from_eui64 = mac_from_eui64,
   strip_target = strip_target,
-  parse_strip_resp = parse_strip_resp
+  parse_strip_resp = parse_strip_resp,
+  query = query
 }

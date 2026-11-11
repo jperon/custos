@@ -78,3 +78,56 @@ describe "mac_learner probe_request", ->
     assert.equals client_fd, pending["10.0.0.4"][2][1]
     assert.equals 0, libc.close client_fd
     libc.close peer
+
+-- ── Bornage temporel des recv (learner figé / client muet) ────────────────
+-- Sans SO_RCVTIMEO, un pair muet bloque l'unique boucle poll du learner
+-- (côté serveur) ou le plan de données appelant (côté client).
+
+pcall -> ffi.cdef "int clock_gettime(int clk_id, timespec_t *tp);"
+CLOCK_MONOTONIC = 1
+now_ms = ->
+  ts = ffi.new "timespec_t"
+  ffi.C.clock_gettime CLOCK_MONOTONIC, ts
+  tonumber(ts.tv_sec) * 1000 + math.floor(tonumber(ts.tv_nsec) / 1000000)
+
+describe "mac_learner start_query borné", ->
+  it "client muet (n'écrit jamais) → recv abandonné, fd fermé, retour rapide", ->
+    client_fd, peer = mk_pair!
+    t0 = now_ms!
+    ml.start_query client_fd
+    elapsed = now_ms! - t0
+    assert.is_true elapsed < 1000, "start_query a bloqué #{elapsed} ms"
+    assert.equals -1, libc.close client_fd   -- déjà fermé
+    libc.close peer
+
+describe "mac_learner_ipc query borné", ->
+  orig_defs = nil
+  old_cfg = nil
+  before_each ->
+    orig_defs = package.loaded["ffi_defs"]
+    old_cfg = package.loaded["config"]
+    package.loaded["mac_learner_ipc"] = nil
+  after_each ->
+    package.loaded["ffi_defs"] = orig_defs
+    package.loaded["config"] = old_cfg
+    package.loaded["mac_learner_ipc"] = nil
+
+  it "serveur muet → client rend la main en < 1 s avec « unknown »", ->
+    client_fd, peer = mk_pair!
+    mock = {
+      socket: -> client_fd
+      connect: -> 0
+      send: (s, b, n, f) -> ffi.C.send s, b, n, f
+      recv: (s, b, n, f) -> ffi.C.recv s, b, n, f
+      close: (fd) -> ffi.C.close fd
+      setsockopt: (s, lvl, opt, val, len) -> ffi.C.setsockopt s, lvl, opt, val, len
+      __errno_location: -> ffi.C.__errno_location!
+    }
+    package.loaded["ffi_defs"] = { ffi: ffi, libc: mock, libnfq: {}, libnft: {} }
+    ipc = require "mac_learner_ipc"
+    t0 = now_ms!
+    result = ipc.get_mac "10.0.0.1"
+    elapsed = now_ms! - t0
+    assert.equals "unknown", result
+    assert.is_true elapsed < 1000, "get_mac a bloqué #{elapsed} ms"
+    libc.close peer

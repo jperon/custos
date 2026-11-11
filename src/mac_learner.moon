@@ -46,6 +46,24 @@ AF_UNIX     = 1
 SOCK_STREAM = 1
 POLLIN      = 1
 
+-- Timeout des recv de requête : un client qui se connecte sans jamais écrire
+-- ne doit pas figer l'unique boucle poll du learner (qui sert alors tous les
+-- get_mac/get_vlan/strip_target).
+SOL_SOCKET   = 1
+SO_RCVTIMEO  = 20
+QUERY_RECV_TIMEOUT_S = 0.2
+
+--- Borne le temps d'attente d'un recv bloquant sur un fd de connexion.
+-- Best-effort : un mock de libc en test peut ne pas exposer setsockopt.
+-- @tparam number fd   Descripteur de socket
+-- @tparam number secs Délai maximal (secondes, fractions acceptées)
+set_recv_timeout = (fd, secs) ->
+  pcall ->
+    tv = ffi.new "struct timeval"
+    tv.tv_sec  = math.floor secs
+    tv.tv_usec = math.floor (secs - math.floor(secs)) * 1e6
+    libc.setsockopt fd, SOL_SOCKET, SO_RCVTIMEO, tv, ffi.sizeof tv
+
 sh_quote = (s) ->
   "'" .. tostring(s)\gsub("'", "'\"'\"'") .. "'"
 
@@ -252,6 +270,7 @@ probe_request = (pending, negative, prober_ctx, client_fd, ip_str, now, get_ms, 
 -- @tparam number client_fd fd de la connexion cliente
 start_query = (client_fd) ->
   buf = ffi.new "char[64]"
+  set_recv_timeout client_fd, QUERY_RECV_TIMEOUT_S
   n = libc.recv client_fd, buf, 63, 0
   if n <= 0
     libc.close client_fd
@@ -491,4 +510,4 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
       for h, entry in pairs strip_table
         strip_table[h] = nil if now_epoch > entry[2]
 
-{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup, :probe_request }
+{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup, :probe_request, :start_query }
