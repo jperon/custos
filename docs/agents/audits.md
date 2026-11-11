@@ -2304,3 +2304,27 @@ de validation sur les VMs du homelab).
   rendu un code non nul sans qu'aucun échec ne soit affiché ; non reproduit au
   run propre (rc=0), donc la cible `coverage-quick` du `Makefile` (lignes
   229-242) n'a pas été modifiée.
+
+### Sonde de portail captif des Firefox récents (branche d-probe)
+
+- **Constat (2026-11-11, pré-prod, Firefox 155.0.1 / Ubuntu 24.04).**
+  `greprefs.js` définit `captivedetect.canonicalURL` à
+  `http://firefox-portal-detection.com/generate_204` (et non plus
+  `detectportal.firefox.com/canonical.html`). Les logs du filtre répétaient
+  `BLOCK rule=r_refus_a_priori qname=firefox-portal-detection.com qtype=A`
+  (et `AAAA`) : le nom n'étant pas résolu, Firefox n'émettait aucune requête
+  HTTP vers le port 80 et ne pouvait pas recevoir le 302 du portail.
+- **Correctif.** `firefox-portal-detection.com` ajouté à `CAPTIVE_PROBES`
+  (`src/config.moon:73-77`), juste après `detectportal.firefox.com` conservé
+  pour les versions antérieures. Les deux règles captives par défaut
+  (`allow` authentifié, `dnsonly` anonyme) consomment cette liste, donc aucune
+  autre modification de logique n'était nécessaire.
+- **Tests.** `tests/unit/filter/captive_probes_spec.moon` vérifie la présence
+  des deux noms dans les deux règles et l'égalité de décision
+  (verdict, `rule_id`, description) entre les deux noms, pour un client
+  anonyme (`dnsonly`) et authentifié (`allow`).
+- **Documentation.** `doc/CONFIG.md` (§ Règles par défaut), `README.md`
+  (§ Default Built-in Probes) et `docs/agents/filtre.md`
+  (§ Sondes de portail captif) nomment désormais les deux sondes Firefox et
+  donnent la commande de vérification
+  `unzip -p /usr/lib/firefox/omni.ja greprefs.js | grep captivedetect`.

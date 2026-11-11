@@ -1149,7 +1149,9 @@ externe) et donc fonctionnelles dès l'installation :
 
 L'ensemble des sondes couvre **NCSI/MSFT** (`msftconnecttest.com`, `msftncsi.com`
 — le match par suffixe couvre `dns.msftncsi.com`, `www.msftncsi.com`,
-`www./ipv6.msftconnecttest.com`), ainsi qu'Apple, Google/Android, Firefox,
+`www./ipv6.msftconnecttest.com`), ainsi qu'Apple, Google/Android, Firefox
+(`detectportal.firefox.com` pour les anciennes versions et
+`firefox-portal-detection.com` — sonde `generate_204` — depuis Firefox ≥ 155),
 Ubuntu et KDE.
 
 Pour **désactiver toutes** les règles par défaut : `filter: { default_rules: {} }`.

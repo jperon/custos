@@ -70,6 +70,11 @@ CAPTIVE_PROBES = {
   "msftconnecttest.com"
   "msftncsi.com"
   "detectportal.firefox.com"
+  -- Firefox ≥ 155 (constaté le 2026-11-11) : la sonde n'est plus
+  -- detectportal.firefox.com/canonical.html mais
+  -- firefox-portal-detection.com/generate_204. On garde l'ancien nom pour
+  -- les Firefox antérieurs.
+  "firefox-portal-detection.com"
   "connectivity-check.ubuntu.com"
   "networkcheck.kde.org"
 }
