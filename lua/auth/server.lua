@@ -14,6 +14,10 @@ do
   local _obj_0 = require("auth.cert")
   load_or_generate_sni, load_static, load_or_generate_static = _obj_0.load_or_generate_sni, _obj_0.load_static, _obj_0.load_or_generate_static
 end
+local sanitize_hostname
+sanitize_hostname = require("auth.cert_name").sanitize_hostname
+local extract_client_sni
+extract_client_sni = require("auth.sni_peek").extract_client_sni
 local log_info, log_warn, log_error, log_debug
 do
   local _obj_0 = require("log")
@@ -76,13 +80,35 @@ replay_sessions_to_nft = function(state)
     }
   end)
 end
+local SNI_CERT_MAX_NAMES = 128
+local cert_name_for
+cert_name_for = function(local_ip, sni_hostname, cache)
+  local name = sanitize_hostname(sni_hostname)
+  if not (name) then
+    return local_ip
+  end
+  if cache and cache.can_store and not cache.can_store(name) then
+    log_warn(function()
+      return {
+        action = "server_sni_cert_quota_reached",
+        hostname = name,
+        limit = SNI_CERT_MAX_NAMES
+      }
+    end)
+    return local_ip
+  end
+  return name
+end
 local resolve_tls_ctx
-resolve_tls_ctx = function(state, local_ip, load_static_fn, load_sni_fn)
+resolve_tls_ctx = function(state, local_ip, load_static_fn, load_sni_fn, sni_hostname)
   if load_static_fn == nil then
     load_static_fn = load_static
   end
   if load_sni_fn == nil then
     load_sni_fn = load_or_generate_sni
+  end
+  if sni_hostname == nil then
+    sni_hostname = nil
   end
   if state.static_tls_ctx then
     log_debug(function()
@@ -119,15 +145,30 @@ resolve_tls_ctx = function(state, local_ip, load_static_fn, load_sni_fn)
     end)
     error("Cannot load static certificate in child: " .. tostring(err))
   end
+  local cert_name = cert_name_for(local_ip, sni_hostname, state.cert_cache)
   local tls_ctx = nil
   local tls_ctx_ok, tls_ctx_err = pcall(function()
-    tls_ctx = load_sni_fn(local_ip, state.cert_cache)
+    tls_ctx = load_sni_fn(cert_name, state.cert_cache)
   end)
+  if not tls_ctx_ok and cert_name ~= local_ip then
+    log_warn(function()
+      return {
+        action = "server_sni_cert_failed_fallback_ip",
+        hostname = cert_name,
+        local_ip = local_ip,
+        err = tls_ctx_err
+      }
+    end)
+    tls_ctx_ok, tls_ctx_err = pcall(function()
+      tls_ctx = load_sni_fn(local_ip, state.cert_cache)
+    end)
+  end
   if not (tls_ctx_ok) then
     log_error(function()
       return {
         action = "server_cert_generation_failed",
         local_ip = local_ip,
+        sni = cert_name,
         err = tls_ctx_err
       }
     end)
@@ -166,7 +207,24 @@ handle_client = function(args)
         local_ip = local_ip
       }
     end)
-    local tls_ctx = resolve_tls_ctx(state, local_ip)
+    local client_timeout = (state.auth_cfg and tonumber(state.auth_cfg.client_timeout)) or 15
+    local client_deadline = os.time() + client_timeout
+    local sni_hostname = nil
+    if not (state.static_tls_ctx or state.static_cert_paths) then
+      sni_hostname = extract_client_sni(client, {
+        deadline = client_deadline
+      })
+      if sni_hostname then
+        log_debug(function()
+          return {
+            action = "server_sni_detected",
+            peer = peer_ip,
+            sni = sni_hostname
+          }
+        end)
+      end
+    end
+    local tls_ctx = resolve_tls_ctx(state, local_ip, nil, nil, sni_hostname)
     if not (tls_ctx) then
       log_error(function()
         return {
@@ -188,7 +246,6 @@ handle_client = function(args)
       }
     end)
     client:settimeout(nil)
-    local client_timeout = (state.auth_cfg and tonumber(state.auth_cfg.client_timeout)) or 15
     apply_io_timeouts(client, client_timeout)
     log_debug(function()
       return {
@@ -226,7 +283,7 @@ handle_client = function(args)
     local handshake_complete = false
     local handshake_attempts = 0
     local hs_err = nil
-    local handshake_deadline = os.time() + client_timeout
+    local handshake_deadline = client_deadline
     while not handshake_complete and handshake_attempts < 50 and os.time() <= handshake_deadline do
       handshake_attempts = handshake_attempts + 1
       log_debug(function()
@@ -430,7 +487,7 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
     }
   end)
   local cert_cache_module = require("auth.cert_cache")
-  local cert_cache = cert_cache_module.create_cache(500, 7776000)
+  local cert_cache = cert_cache_module.create_cache(500, 7776000, "tmp/certs", SNI_CERT_MAX_NAMES)
   local static_tls_ctx = nil
   if auth_cfg.cert and auth_cfg.key then
     log_info(function()
@@ -519,9 +576,9 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
       sessions_file = sessions_file,
       cert_cache = (function()
         if static_tls_ctx then
-          return "static cert + dynamic per-local-IP cert cache"
+          return "static cert + dynamic per-SNI cert cache"
         else
-          return "dynamic per-local-IP cert cache (500 slots, 90d TTL)"
+          return "dynamic per-SNI cert cache (500 slots RAM, 90d TTL, max " .. tostring(SNI_CERT_MAX_NAMES) .. " names)"
         end
       end)()
     }

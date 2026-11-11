@@ -17,6 +17,8 @@ ffi = require "ffi"
 { :load_sessions } = require "auth.sessions"
 token = require "auth.token"
 { :load_or_generate_sni, :load_static, :load_or_generate_static } = require "auth.cert"
+{ :sanitize_hostname } = require "auth.cert_name"
+{ :extract_client_sni } = require "auth.sni_peek"
 { :log_info, :log_warn, :log_error, :log_debug } = require "log"
 config = require "config"
 { :read_request, :send_response, :apply_io_timeouts } = require "lib.http"
@@ -45,17 +47,45 @@ replay_sessions_to_nft = (state) ->
     count += 1
   log_info -> { action: "sessions_replayed_to_nft", count: count }
 
+-- Plafond du nombre de noms SNI distincts dont le certificat est conservé sur
+-- disque (et en RAM via le cache). Un client peut demander un nom arbitraire
+-- dans son ClientHello : au-delà de ce quota, on sert le certificat de l'IP
+-- locale SANS générer, pour ne pas remplir la flash ni faire générer des clés
+-- à l'infini. Constante volontairement basse (128 × ~2 Ko ≈ 256 Ko).
+SNI_CERT_MAX_NAMES = 128
+
+--- Choisit le nom porté par le certificat dynamique.
+-- Le nom SNI vient du client (non authentifié) : il n'est retenu que s'il est
+-- un nom DNS valide (cert_name.sanitize_hostname) et si le cache peut encore
+-- accueillir un nom supplémentaire. Sinon repli sur l'IP locale du socket,
+-- comportement historique.
+-- @tparam string local_ip IP locale du socket (CN de repli)
+-- @tparam string|nil sni_hostname SNI brut extrait du ClientHello
+-- @tparam table|nil cache Cache de certificats (can_store)
+-- @treturn string Nom à utiliser pour le certificat
+cert_name_for = (local_ip, sni_hostname, cache) ->
+  name = sanitize_hostname sni_hostname
+  return local_ip unless name
+
+  if cache and cache.can_store and not cache.can_store name
+    log_warn -> { action: "server_sni_cert_quota_reached", hostname: name, limit: SNI_CERT_MAX_NAMES }
+    return local_ip
+
+  name
+
 --- Sélectionne le contexte TLS pour une connexion.
 -- Priorité : contexte statique hérité du parent (zéro coût par connexion) >
--- repli rechargement depuis les fichiers > génération/cache dynamique par IP
--- locale (le SNI ClientHello n'est pas extrait).
+-- repli rechargement depuis les fichiers > génération/cache dynamique pour le
+-- nom SNI demandé, avec repli sur l'IP locale si le SNI est absent, invalide,
+-- hors quota ou si sa génération échoue.
 -- @tparam table state État du serveur (static_tls_ctx, static_cert_paths, cert_cache)
--- @tparam string local_ip IP locale, utilisée comme CN pour le cert dynamique
+-- @tparam string local_ip IP locale, utilisée comme CN de repli
 -- @tparam function|nil load_static_fn Injection de test ; défaut load_static
 -- @tparam function|nil load_sni_fn Injection de test ; défaut load_or_generate_sni
+-- @tparam string|nil sni_hostname SNI brut du ClientHello (nil si absent)
 -- @treturn table Contexte TLS
 -- @raise string si aucun contexte ne peut être obtenu
-resolve_tls_ctx = (state, local_ip, load_static_fn=load_static, load_sni_fn=load_or_generate_sni) ->
+resolve_tls_ctx = (state, local_ip, load_static_fn=load_static, load_sni_fn=load_or_generate_sni, sni_hostname=nil) ->
   if state.static_tls_ctx
     -- Contexte construit dans le parent et hérité via fork (COW) : pas de
     -- relecture disque ni de reconstruction par connexion.
@@ -72,11 +102,21 @@ resolve_tls_ctx = (state, local_ip, load_static_fn=load_static, load_sni_fn=load
     log_error -> { action: "server_static_cert_load_child_failed", err: err }
     error "Cannot load static certificate in child: #{err}"
 
+  cert_name = cert_name_for local_ip, sni_hostname, state.cert_cache
+
   tls_ctx = nil
   tls_ctx_ok, tls_ctx_err = pcall ->
-    tls_ctx = load_sni_fn local_ip, state.cert_cache
+    tls_ctx = load_sni_fn cert_name, state.cert_cache
+
+  if not tls_ctx_ok and cert_name != local_ip
+    -- Un nom choisi par le client ne doit jamais empêcher la réponse : échec
+    -- de génération ⇒ repli sur le certificat de l'IP locale.
+    log_warn -> { action: "server_sni_cert_failed_fallback_ip", hostname: cert_name, local_ip: local_ip, err: tls_ctx_err }
+    tls_ctx_ok, tls_ctx_err = pcall ->
+      tls_ctx = load_sni_fn local_ip, state.cert_cache
+
   unless tls_ctx_ok
-    log_error -> { action: "server_cert_generation_failed", local_ip: local_ip, err: tls_ctx_err }
+    log_error -> { action: "server_cert_generation_failed", local_ip: local_ip, sni: cert_name, err: tls_ctx_err }
     error "Cannot generate certificate: #{tls_ctx_err}"
   tls_ctx
 
@@ -97,9 +137,23 @@ handle_client = (args) ->
 
     log_debug -> { action: "server_local_ip_detected", local_ip: local_ip }
 
+    -- Budget commun peek ClientHello + handshake : le peek ne doit pas
+    -- rallonger la durée de vie d'un enfant sur une connexion muette.
+    client_timeout = (state.auth_cfg and tonumber state.auth_cfg.client_timeout) or 15
+    client_deadline = os.time! + client_timeout
+
+    -- Lire le nom SNI demandé AVANT le handshake, sans consommer le
+    -- ClientHello (recv MSG_PEEK). Inutile quand un certificat statique est
+    -- configuré : le nom ne changerait rien au contexte servi.
+    sni_hostname = nil
+    unless state.static_tls_ctx or state.static_cert_paths
+      sni_hostname = extract_client_sni client, deadline: client_deadline
+      if sni_hostname
+        log_debug -> { action: "server_sni_detected", peer: peer_ip, sni: sni_hostname }
+
     -- Utiliser le certificat statique s'il a été configuré
-    -- Sinon, générer/charger le certificat avec l'IP locale comme CN
-    tls_ctx = resolve_tls_ctx state, local_ip
+    -- Sinon, certificat pour le nom SNI demandé, avec repli sur l'IP locale
+    tls_ctx = resolve_tls_ctx state, local_ip, nil, nil, sni_hostname
 
     unless tls_ctx
       log_error -> { action: "server_cert_null", local_ip: local_ip }
@@ -115,7 +169,6 @@ handle_client = (args) ->
     -- disparu) suspend l'enfant AUTH-conn pour toujours. Côté navigateur, ces
     -- sockets zombies saturent la limite de connexions par hôte et retardent
     -- les pings suivants (~70 s de "blocked" observés en HAR).
-    client_timeout = (state.auth_cfg and tonumber state.auth_cfg.client_timeout) or 15
     apply_io_timeouts client, client_timeout
     log_debug -> { action: "server_blocking_mode_set", client_timeout: client_timeout }
 
@@ -139,8 +192,10 @@ handle_client = (args) ->
     hs_err = nil
     -- Échéance absolue : avec SO_RCVTIMEO, chaque tentative WANT_READ peut
     -- bloquer jusqu'à client_timeout ; sans deadline, 50 tentatives sur une
-    -- connexion muette tiendraient l'enfant des minutes.
-    handshake_deadline = os.time! + client_timeout
+    -- connexion muette tiendraient l'enfant des minutes. On réutilise
+    -- l'échéance fixée avant le peek du ClientHello : le budget total de la
+    -- phase TLS reste client_timeout, peek compris.
+    handshake_deadline = client_deadline
     while not handshake_complete and handshake_attempts < 50 and os.time! <= handshake_deadline
       handshake_attempts += 1
       log_debug -> { action: "server_handshake_attempt", attempt: handshake_attempts }
@@ -268,7 +323,9 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
   -- Initialiser le cache de certificats (persistant, 90 jours TTL)
   log_debug -> { action: "server_cert_cache_init" }
   cert_cache_module = require "auth.cert_cache"
-  cert_cache = cert_cache_module.create_cache 500, 7776000  -- 500 certs, 90 days TTL
+  -- 500 slots RAM, 90 jours de TTL, et au plus SNI_CERT_MAX_NAMES noms
+  -- distincts sur disque (plafond anti-remplissage piloté par le SNI client).
+  cert_cache = cert_cache_module.create_cache 500, 7776000, "tmp/certs", SNI_CERT_MAX_NAMES
 
   -- Charger le certificat statique s'il est fourni dans la configuration.
   -- load_static retourne (ctx, err) : récupérer le contexte dans `ctx`, pas `ok`
@@ -320,7 +377,8 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     -- Chemins conservés en repli si le contexte hérité est absent. Posés
     -- seulement si le chargement parent a réussi : sinon chaque enfant
     -- échouerait en boucle sur les mêmes fichiers au lieu de se replier sur
-    -- le cache dynamique par IP locale.
+    -- le cache dynamique par nom SNI (certificat de l'IP locale si le SNI
+    -- est absent ou refusé).
     static_cert_paths: if static_tls_ctx then { cert: auth_cfg.cert, key: auth_cfg.key } else nil
     cert_cache: cert_cache
   }
@@ -331,18 +389,18 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     ipv4: "0.0.0.0"
     ipv6: listen6 and "::" or nil
     sessions_file: sessions_file
-    cert_cache: if static_tls_ctx then "static cert + dynamic per-local-IP cert cache" else "dynamic per-local-IP cert cache (500 slots, 90d TTL)"
+    cert_cache: if static_tls_ctx then "static cert + dynamic per-SNI cert cache" else "dynamic per-SNI cert cache (500 slots RAM, 90d TTL, max #{SNI_CERT_MAX_NAMES} names)"
   }
 
   replay_sessions_to_nft state
 
   -- purge_expired n'était jamais appelé : les certificats dynamiques sont
-  -- actuellement keyés par l'IP locale du socket (pas par le SNI, non extrait),
-  -- mais chaque IP distincte peut forcer un fichier .crt/.key jamais purgé
-  -- (épuisement de la flash à moyen terme). Le cache LRU/persistent_index en RAM ne vit réellement
+  -- désormais keyés par le nom SNI demandé (repli IP locale), et chaque nom
+  -- distinct laisse un fichier .crt/.key sur disque. Le cache LRU/persistent_index en RAM ne vit réellement
   -- que dans ce process parent (chaque enfant forké par connexion n'en voit
   -- qu'une copie COW figée) : c'est donc ici, dans la boucle longue durée,
-  -- qu'il faut purger périodiquement.
+  -- qu'il faut purger périodiquement les noms expirés (le plafond
+  -- SNI_CERT_MAX_NAMES borne, lui, le nombre de noms simultanés).
   cert_cache_purge_interval = auth_cfg.cert_cache_purge_interval or 3600
   last_cert_cache_purge = os.time!
 
