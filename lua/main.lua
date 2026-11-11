@@ -242,29 +242,13 @@ supervise = function(pipes, sfd)
       }
     end)
   end
-  local read_lines
-  read_lines = function(cmd)
-    local handle = io.popen(cmd)
-    if not (handle) then
-      return { }
-    end
-    local out = { }
-    for line in handle:lines() do
-      local ifname = line:match("^(%S+)")
-      if ifname then
-        table.insert(out, ifname)
-      end
-    end
-    handle:close()
-    return out
-  end
   local detect_bridge_slaves
   detect_bridge_slaves = function()
-    local slaves = read_lines("ls -1 /sys/class/net/" .. tostring(bridge_ifname) .. "/brif/ 2>/dev/null")
+    local slaves = bridge_detect.read_lines("ls -1 /sys/class/net/" .. tostring(bridge_ifname) .. "/brif/ 2>/dev/null")
     if #slaves > 0 then
       return slaves
     end
-    slaves = read_lines("ip -brief link show type bridge_slave 2>/dev/null")
+    slaves = bridge_detect.read_lines("ip -brief link show type bridge_slave 2>/dev/null")
     return #slaves > 0 and slaves or nil
   end
   local bridge_slaves = detect_bridge_slaves()

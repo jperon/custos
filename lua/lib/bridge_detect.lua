@@ -113,6 +113,7 @@ detect = function(opts)
 end
 return {
   DEFAULT_IFNAME = DEFAULT_IFNAME,
+  read_lines = read_lines,
   list_bridges = list_bridges,
   count_slaves = count_slaves,
   pick_bridge = pick_bridge,

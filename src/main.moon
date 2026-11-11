@@ -250,21 +250,11 @@ supervise = (pipes, sfd) ->
   -- remis à l'espace utilisateur → filtrage DNS HS). On énumère donc les ports
   -- via sysfs (/sys/class/net/<bridge>/brif/), fiable sur busybox/OpenWrt
   -- contrairement à `ip link show type bridge_slave` (non supporté par busybox).
-  read_lines = (cmd) ->
-    handle = io.popen cmd
-    return {} unless handle
-    out = {}
-    for line in handle\lines()
-      ifname = line\match "^(%S+)"
-      table.insert out, ifname if ifname
-    handle\close()
-    out
-
   detect_bridge_slaves = () ->
-    slaves = read_lines "ls -1 /sys/class/net/#{bridge_ifname}/brif/ 2>/dev/null"
+    slaves = bridge_detect.read_lines "ls -1 /sys/class/net/#{bridge_ifname}/brif/ 2>/dev/null"
     return slaves if #slaves > 0
     -- Repli pour les systèmes exposant `ip link show type bridge_slave`.
-    slaves = read_lines "ip -brief link show type bridge_slave 2>/dev/null"
+    slaves = bridge_detect.read_lines "ip -brief link show type bridge_slave 2>/dev/null"
     #slaves > 0 and slaves or nil
 
   -- Si aucun port esclave n'est détecté, on se rabat sur l'interface bridge,
