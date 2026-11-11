@@ -1565,3 +1565,79 @@ exporte ces symboles.
 OK ; `make test` = 2351 successes / 0 failures / 0 errors / 0 pending
 (`tmp/test-wolfenv2.log`) ; `make test-js` = 12 pass / 0 fail. `make test-e2e`
 non relancé (VMs seulement interrogées en lecture seule).
+
+### Client HTTP/2 du repli DoH (branche d-h2client)
+
+Le repli DoH sur wolfSSL (`src/doh/upstream_doh.moon`) ne parlait que HTTP/1.1,
+alors que le serveur DoH du projet sait déjà servir HTTP/2. Deux défauts
+distincts empêchaient toute négociation ALPN, constatés dans le code source
+wolfSSL 5.8.4 et dans `<wolfssl/ssl.h>` de l'environnement de test :
+
+- `wolfSSL_UseALPN` exige l'option `CONTINUE_ON_MISMATCH` ou
+  `FAILED_ON_MISMATCH` et rend `BAD_FUNC_ARG` sinon. L'énumération vaut
+  `WOLFSSL_ALPN_MATCH = 1`, `CONTINUE_ON_MISMATCH = 2`,
+  `FAILED_ON_MISMATCH = 4` : la constante historique
+  `WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x01` du module est donc refusée.
+- `wolfSSL_ALPN_GetProtocol` rend `WOLFSSL_SUCCESS (= 1)` et
+  `WOLFSSL_ALPN_NOT_FOUND (= 0)`; `selected_alpn` testait `ret == 0` et
+  rendait donc toujours `nil`.
+
+Corrections (périmètre client uniquement) :
+
+- **Option client** (`src/auth/ffi_wolfssl.moon:100,107,211-217`).
+  `WOLFSSL_ALPN_CONTINUE_ON_MISMATCH_OPT = 0x02` et `CLIENT_ALPN_PROTOCOLS =
+  "h2,http/1.1"` ; `alpn_configure_client` appelle `wolfSSL_UseALPN` sur
+  l'objet SSL et rend faux sans exception si le symbole manque ou si wolfSSL
+  refuse. La constante serveur et `alpn_configure_ssl`/`alpn_configure_ctx`
+  restent inchangés, pour ne pas modifier le comportement du serveur DoH ni
+  les attentes de `tests/unit/auth/wolfssl_spec.moon`.
+- **Offre au wrap client** (`:296,336-341,360`). `newclient_context` marque
+  `is_client` ; `wrap` ne propose `opts.alpn_protocols` que sur un tel
+  contexte, avant le handshake, et note `alpn_offered`. Un échec n'est pas
+  fatal : le handshake se poursuit et le chemin HTTP/1.1 est conservé.
+- **Protocole négocié** (`:418-428`). `selected_alpn` vérifie le symbole puis
+  `ret == 1` ; il n'est plus neutralisé par le global `_alpn_available`, qui
+  pouvait être mis à `false` par un échec serveur dans le même processus.
+- **Nouveau client** (`src/doh/upstream_doh.moon:52-60,191-198,221-238`).
+  `new_client` offre `H2_CLIENT_ALPN`, lit `selected_alpn` après le handshake
+  et expose `alpn` / `h2` dans le handle. Sans `selected_alpn` (stub, ancienne
+  lib), `alpn` reste `nil` et `h2` faux : HTTP/1.1 comme avant.
+- **Client HTTP/2** (`:314-473`). `query` délègue à `query_h2` si `h2` :
+  préface, SETTINGS, HEADERS (pseudo-en-têtes RFC 7540 §8.1.2.3) + DATA
+  découpée à 16384, lecture bornée (`H2_MAX_FRAMES = 256`,
+  `H2_MAX_TOTAL_BYTES`, en-têtes ≤ 65535, ≤ 64 CONTINUATION), ACK SETTINGS et
+  PING, `WINDOW_UPDATE` connexion + flux par DATA, `:status` 200 exigé, corps
+  ≤ `MAX_DNS_BODY`, trailers ignorés, GOAWAY/RST_STREAM/trame tronquée/flux
+  inattendu → erreur et connexion fermée (`h2_fail`). Mêmes délais socket.
+- **Helpers partagés** (`src/doh/h2_frames.moon:10,82-124,156-166`).
+  `H2_FRAME_RST_STREAM`, `h2_data_payload` (padding), `h2_read_header_block`
+  (HEADERS + CONTINUATION, PADDED/PRIORITY, plafonds) et `h2_window_update`.
+  `worker_doh` n'est pas modifié.
+- **Tests.** `tests/unit/doh/upstream_doh_h2_spec.moon` (13 cas, faux TLS :
+  réponse normale, CONTINUATION, trailers, statut ≠ 200, GOAWAY, RST_STREAM,
+  corps > `MAX_DNS_BODY`, trame tronquée, DATA avant HEADERS, PING,
+  WINDOW_UPDATE, champs HPACK de la requête) et
+  `tests/unit/doh/upstream_doh_alpn_spec.moon` (poignée de main wolfSSL réelle
+  en boucle locale, certificat px5g dans `./tmp/`, serveur fils `fork` ;
+  `pending` si ALPN ou px5g manque). `tests/unit/auth/wolfssl_spec.moon` gagne
+  5 cas sur `alpn_configure_client`. Les attentes existantes (336 lignes) de
+  `upstream_doh_spec.moon` et les cas ALPN serveur de `wolfssl_spec.moon` ne
+  sont pas modifiées.
+
+Limites assumées : **un seul flux par connexion** (pas de multiplexage, le
+worker ouvre déjà un client amont par connexion cliente), pas de server push,
+pas de négociation de fenêtre initiale (les `WINDOW_UPDATE` rendent la fenêtre
+par défaut), pas de proxy. Le défaut ALPN **serveur** décrit ci-dessus n'est
+pas corrigé ici (constante `0x01`) : il reste hors périmètre et est signalé
+dans `docs/agents/doh.md`. `doc/CONFIG.md` est inchangé (aucune clé de
+configuration nouvelle).
+
+Preuve de la négociation réelle (environnement `nix develop`, wolfSSL 5.8.4) :
+le test de boucle locale observe `alpn=h2` côté serveur (rapport
+`tmp/h2_alpn/server.txt`) et `h.alpn == "h2"` côté client ; il est `pending`
+sur une libwolfssl sans `wolfSSL_UseALPN`/`wolfSSL_ALPN_GetProtocol`.
+
+**Vérification (2026-11-11, branche d-h2client)** : `make all` et `make check`
+OK (155 fichiers, aucune globale inconnue) ; `make test` = **2498 successes /
+0 failures / 0 errors / 0 pending** (`tmp/test.log`), `make test-js` = 12 pass
+/ 0 fail. `make test-e2e` non lancé (hors périmètre, pas de VM sollicitée).
