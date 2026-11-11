@@ -2304,3 +2304,61 @@ de validation sur les VMs du homelab).
   rendu un code non nul sans qu'aucun échec ne soit affiché ; non reproduit au
   run propre (rc=0), donc la cible `coverage-quick` du `Makefile` (lignes
   229-242) n'a pas été modifiée.
+
+### d-audit — journal des modifications de l'interface admin
+
+**Constat.** Aucun module de `src/webui/` n'appelait `require "log"` : une
+sauvegarde de section, une règle, une liste, un appareil ou un rechargement
+déclenché depuis `/admin/*` ne laissait aucune trace dans `logread`.
+
+**Helper unique.** `src/webui/audit.moon` porte l'émission : `audit.change`
+(INFO `ok=1`), `audit.fail` (INFO `ok=0` + `err` court) et `audit.refused`
+(WARN `webui_change_refused` + `reason`). Les champs d'objet sont filtrés par
+une liste blanche (`OBJECT_KEYS`, `audit.moon:23-34`) ; un champ non listé
+(mot de passe, valeur, contenu) n'est jamais recopié. Les erreurs sont des
+codes littéraux, jamais un message brut.
+
+**Branchement.** `router.moon:34,61-69` transmet `req.admin_user` et journalise
+les tentatives non-admin (`forbidden`) ou sans session (`unauth`) pour les
+méthodes POST/PUT/DELETE ; `auth/handlers.moon` attache `req.peer_ip` /
+`req.peer_mac` à la requête admin. Chaque handler mutant appelle le helper
+après son écriture (ou sur chaque échec/refus) :
+`handlers/config.moon:207-292`, `handlers/filter.moon:130-274`,
+`handlers/rules.moon:445-590`, `handlers/lists.moon:220-317`,
+`handlers/devices.moon:229-259`, `handlers/system.moon:30-41`. Aucune valeur
+de configuration, aucun secret et aucun contenu de liste n'est journalisé.
+
+**Rate-limiting.** Les vingt actions `webui_*` de modification rejoignent
+`RL_NEVER_LIMIT` (`src/log.moon:256-280`) ; `webui_change_refused` reste borné
+par `(peer, reason)` sur 60 s (`src/log.moon:180-186`). Les nouveaux champs
+`section` et `enabled` sont classés en identité (`src/log.moon:102-129`).
+
+**Destination.** Le superviseur est lancé par procd avec `stdout 1` /
+`stderr 1` (`packaging/openwrt/custos/files/etc/init.d/custos:39-40`) : le
+stdout des workers et de leurs enfants `AUTH-conn` rejoint logd. La webui est
+appelée depuis l'enfant de connexion AUTH (`auth/handlers.moon`, branche
+`^/admin`), donc les lignes d'audit sont dans `logread` sans redirection
+supplémentaire. `webui/audit.moon` efface le préfixe `auth_` posé par
+`auth/worker.moon:30` pour que l'action émise soit bien `webui_*` (l'enfant ne
+traite qu'une connexion).
+
+**Tests.** `tests/unit/webui/audit_spec.moon` (7 tests : une ligne INFO, échec
+`ok=0`, WARN refus, liste blanche anti-secret, assainissement, `RL_NEVER_LIMIT`,
+`RL_CONFIG`) et `tests/unit/webui/audit_handlers_spec.moon` (33 tests : une
+ligne par famille config/filter/rules/lists/devices/system, cas d'échec et de
+refus, routeur non-admin et sans session, absence d'un secret reconnaissable
+dans **toutes** les lignes émises). Les lignes sont capturées via un `write`
+factice du module `log` réel.
+
+**Périmètre non couvert.** Aucun mécanisme CSRF n'existe dans le routeur
+webui : la mention « CSRF » de la demande n'a pas de site d'appel (les refus
+journalisés couvrent non-admin, validation et conflits 409). Le changement de
+mot de passe n'est pas une route webui : `POST /password` est servi par le
+portail AUTH et journalise déjà `server_password_changed`
+(`src/auth/handlers.moon:427`), sans `peer`. Il n'existe pas de route
+« restart ». Un renommage de liste vers son nom actuel (no-op) et un
+déplacement de règle en butée émettent quand même leur ligne `ok=1` : le POST
+admin a été traité, mais aucune écriture n'a eu lieu.
+
+**Vérification.** `make all && make check && make test` : **2691 succès /
+0 échec / 0 erreur** (`tmp/test-logs/unit.log`), rc=0.

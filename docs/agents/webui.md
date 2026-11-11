@@ -180,3 +180,59 @@ renommage de `handle_list_post` (`handlers/lists.moon`) répondent **409** si le
 fichier cible existe déjà (hors renommage vers le même nom) : la cible n'est
 jamais écrasée.
 
+### Journal d'audit (`src/webui/audit.moon`)
+
+Toute requête **mutante** (POST/PUT/DELETE) traitée par la webui émet
+**exactement une ligne INFO** après l'opération, via le helper unique
+`webui/audit.moon` (`audit.change` / `audit.fail`) :
+`action` (famille `webui_*`), `user` (admin authentifié, `req.admin_user` posé
+par `router.moon:69`), `peer` (IP cliente, `req.peer_ip` attaché par
+`auth/handlers.moon` avant l'appel au routeur), l'objet touché (`section`,
+`rule_id`, `list`, `name`, `new`, `mac`, `dir`, `rules`, `enabled`, `pid`) et
+`ok` (`1`/`0`, avec `err` court en cas d'échec). Les familles sont :
+`webui_config_saved` (sections et `filter` général), `webui_rule_saved` /
+`_deleted` / `_toggled` / `_moved`, `webui_rules_reordered`,
+`webui_list_saved` / `_deleted` / `_renamed`,
+`webui_nets|macs|users|times_saved` / `_deleted`, `webui_decision_saved`,
+`webui_device_saved` et `webui_reload_requested`.
+
+Une tentative refusée (non admin dans le routeur, validation de handler,
+conflit 409) émet `webui_change_refused` en **WARN** avec `reason` ; elle est
+limitée par `(peer, reason)` sur 60 s (`log.moon` `RL_CONFIG`). Les actions
+`webui_*` de modification sont dans `RL_NEVER_LIMIT` : un audit ne doit jamais
+disparaître derrière une fenêtre de rate-limiting.
+
+**Aucune valeur dans le journal.** Le helper ne recopie que des champs
+d'objet en liste blanche (`audit.moon:23`) : ni mot de passe, ni clé, ni
+`auth.secrets`/`auth.key`/`doh.key`, ni contenu de liste. Les codes d'erreur
+sont des littéraux courts (`write_config`, `read_config`, `kill_failed`…),
+jamais un message brut susceptible de contenir une valeur.
+
+**Préfixe.** La webui s'exécute dans un enfant `AUTH-conn` ; le worker AUTH a
+posé le préfixe `auth_` (`auth/worker.moon:30`), que `webui/audit.moon`
+efface à son chargement pour que les lignes portent bien `webui_*` et non
+`auth_webui_*`. L'enfant ne traite qu'une connexion HTTP : le réglage ne
+fuit pas hors de lui.
+
+**Destination `logread`.** Le superviseur est lancé par procd avec
+`procd_set_param stdout 1` / `stderr 1`
+(`packaging/openwrt/custos/files/etc/init.d/custos:39-40`), donc son stdout
+(et celui de tous les descendants) rejoint logd. Les workers sont forké par
+`main.moon:384` (AUTH), puis chaque connexion par `auth/server.moon:252-256`
+(`AUTH-conn`), et le routeur webui est appelé dans cet enfant
+(`auth/handlers.moon`, branche `^/admin`). La chaîne stdout → logd est donc
+celle des autres workers : aucune redirection supplémentaire n'est nécessaire.
+
+Le changement de mot de passe n'est **pas** une route webui : il est servi par
+le portail (`POST /password`, `auth/handlers.moon`) et déjà audité par
+`server_password_changed`, lui aussi dans `RL_NEVER_LIMIT`. Il n'existe pas de
+route « restart » dans la webui (seul `POST /admin/system/reload`). Aucun
+mécanisme CSRF n'est implémenté dans le routeur à ce jour : la branche
+« CSRF » de `webui_change_refused` n'a donc pas de site d'appel (les refus
+existants sont non-admin, validation et conflits).
+
+Tests : `tests/unit/webui/audit_spec.moon` (helper, anti-fuite de secret,
+classement `RL_NEVER_LIMIT`/`RL_CONFIG`) et
+`tests/unit/webui/audit_handlers_spec.moon` (une ligne par famille, cas
+d'échec/refus, absence de secret dans toute ligne émise, routeur non-admin).
+
