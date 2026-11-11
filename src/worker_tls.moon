@@ -7,7 +7,8 @@
 { :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE, :set_verdict_marked } = require "nfq_loop"
 { :REJECT_MARK, :REJECT_MARK_HEX } = require "nft_marks"
 { :get_l2 } = require "nfq/ethernet"
-{ :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
+{ :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix, :level_enabled } = require "log"
+{ :tsv_field } = require "lib.tsv"
 { :user_for_mac } = require "auth.sessions"
 
 -- ipparse modules for packet parsing and SNI extraction
@@ -195,6 +196,9 @@ extract_sni_from_tls = (payload, ctx={}) ->
   }
 
   debug_tls = (action, extra=nil) ->
+    -- Garde au call-site : mk_meta et la closure ne sont pas alloués quand
+    -- DEBUG est filtré (chemin par paquet).
+    return unless level_enabled "DEBUG"
     e = mk_meta nil
     e.action = action
     e.pkt_id = ctx.pkt_id
@@ -400,9 +404,6 @@ format_ip = (version, ip_raw) ->
   return "unknown" if version == 4 and #ip_raw < 4
   ipparse_ip.ip2s ip_raw
 
-tsv_field = (v) ->
-  s = if v ~= nil then tostring v else ""
-  if #s == 0 then "-" else s
 
 write_sni_event = (decision, fields) ->
   return unless events_wfd
@@ -646,19 +647,22 @@ dst_matches_cname = (target, ip_dst, version) ->
 --- Main callback for SNI logger NFQUEUE.
 -- Handles both TCP/443 (TLS) and UDP/443 (QUIC) packets.
 handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
-  log_debug -> { action: "callback", pkt_id: pkt_id }
+  if level_enabled "DEBUG"
+    log_debug -> { action: "callback", pkt_id: pkt_id }
 
   -- 1. Extract L2 (MAC source)
   l2 = get_l2 nfad
   unless l2
-    log_debug -> { action: "no_l2", pkt_id: pkt_id }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "no_l2", pkt_id: pkt_id }
     return NF_ACCEPT
 
   -- 2. Extract payload
   payload_ptr = ffi.new "unsigned char*[1]"
   payload_len = libnfq.nfq_get_payload nfad, payload_ptr
   if payload_len <= 0
-    log_debug -> { action: "no_payload", pkt_id: pkt_id }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "no_payload", pkt_id: pkt_id }
     return NF_ACCEPT
 
   raw = ffi.string payload_ptr[0], payload_len
@@ -666,7 +670,8 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
   -- 3. Parse IP header
   ip, err = ipparse_ip.parse raw, 1
   unless ip
-    log_debug -> { action: "ip_parse_failed", pkt_id: pkt_id }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "ip_parse_failed", pkt_id: pkt_id }
     return NF_ACCEPT
 
   -- 4. Determine protocol and extract SNI
@@ -683,11 +688,13 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     -- Parse TCP header
     success, tcp = pcall -> ipparse_tcp.parse raw, ip.data_off
     unless success and tcp
-      log_debug -> { action: "tcp_parse_failed", pkt_id: pkt_id }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "tcp_parse_failed", pkt_id: pkt_id }
       return NF_ACCEPT
 
     unless tcp.data_off and tcp.data_off >= 1
-      log_debug -> { action: "tcp_data_off_invalid", pkt_id: pkt_id }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "tcp_data_off_invalid", pkt_id: pkt_id }
       return NF_ACCEPT
 
     src_port = tcp.spt
@@ -702,7 +709,8 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     else "https"
 
     if tcp.data_off > #raw
-      log_debug -> { action: "tcp_no_payload", pkt_id: pkt_id }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "tcp_no_payload", pkt_id: pkt_id }
       return NF_ACCEPT
 
     -- Réassemble le ClientHello potentiellement fragmenté sur plusieurs
@@ -715,7 +723,8 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     -- Segment de contrôle (FIN/RST), payload vide ou ClientHello incomplet :
     -- laisser passer en attendant la suite du flux.
     unless tls_payload
-      log_debug -> { action: "tcp_buffering", pkt_id: pkt_id }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "tcp_buffering", pkt_id: pkt_id }
       return NF_ACCEPT
 
     -- Ignore non-TLS Handshake records and non-ClientHello Handshake messages.
@@ -725,11 +734,13 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     -- get dropped in strict-443 mode.
     ok_rec, tls_rec = pcall -> ipparse_tls.parse tls_payload, 1
     unless ok_rec and tls_rec and tls_rec.type == ipparse_tls.record_types.handshake
-      log_debug -> { action: "tcp_not_tls_handshake", pkt_id: pkt_id }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "tcp_not_tls_handshake", pkt_id: pkt_id }
       return NF_ACCEPT
     ok_hs, hs_hdr = pcall -> ipparse_tls_handshake.parse tls_payload, tls_rec.data_off
     unless ok_hs and hs_hdr and hs_hdr.type == ipparse_tls_handshake.message_types.client_hello
-      log_debug -> { action: "tcp_not_client_hello", pkt_id: pkt_id }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "tcp_not_client_hello", pkt_id: pkt_id }
       return NF_ACCEPT
 
     sni, tls_reason, tls_meta = extract_sni_from_tls tls_payload, { pkt_id: pkt_id }
@@ -739,7 +750,8 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
     -- Parse UDP header
     success, udp = pcall -> ipparse_udp.parse raw, ip.data_off
     unless success and udp
-      log_debug -> { action: "udp_parse_failed", pkt_id: pkt_id }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "udp_parse_failed", pkt_id: pkt_id }
       return NF_ACCEPT
 
     src_port = udp.spt
@@ -792,18 +804,19 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
   -- silencieux est plus efficace (backoff + timeout du handshake).
   reject_with_worker = (reason, event_rule) ->
     if l4_proto == "udp"
-      log_debug -> {
-        action: "sni_quic_drop"
-        worker: worker_src
-        pkt_id: pkt_id
-        protocol: protocol_name
-        l4_proto: l4_proto
-        sni: sni_norm or sni
-        ip_src: ip_src_str
-        ip_dst: ip_dst_str
-        mac_src: mac_str
-        :reason
-        rule: event_rule
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "sni_quic_drop"
+          worker: worker_src
+          pkt_id: pkt_id
+          protocol: protocol_name
+          l4_proto: l4_proto
+          sni: sni_norm or sni
+          ip_src: ip_src_str
+          ip_dst: ip_dst_str
+          mac_src: mac_str
+          :reason
+          rule: event_rule
       }
       return NF_DROP
 
@@ -825,19 +838,20 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
         err: mark_err
       }
       return NF_DROP
-    log_debug -> {
-      action: "sni_reject_marked"
-      worker: worker_src
-      pkt_id: pkt_id
-      protocol: protocol_name
-      l4_proto: l4_proto
-      sni: sni_norm or sni
-      ip_src: ip_src_str
-      ip_dst: ip_dst_str
-      mac_src: mac_str
-      :reason
-      rule: event_rule
-      reject_mark: REJECT_MARK_HEX
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action: "sni_reject_marked"
+        worker: worker_src
+        pkt_id: pkt_id
+        protocol: protocol_name
+        l4_proto: l4_proto
+        sni: sni_norm or sni
+        ip_src: ip_src_str
+        ip_dst: ip_dst_str
+        mac_src: mac_str
+        :reason
+        rule: event_rule
+        reject_mark: REJECT_MARK_HEX
     }
     VERDICT_DONE
 
@@ -880,8 +894,9 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
       }
       sni_event "warn", nil, tls_reason or "no_sni", "mail_ssl/no_sni"
       return NF_ACCEPT
-    log_debug -> with_meta {
-      action: "sni_verdict_skip_no_sni", pkt_id: pkt_id, protocol: protocol_name, l4_proto: l4_proto, reason: tls_reason
+    if level_enabled "DEBUG"
+      log_debug -> with_meta {
+        action: "sni_verdict_skip_no_sni", pkt_id: pkt_id, protocol: protocol_name, l4_proto: l4_proto, reason: tls_reason
     }
     return NF_ACCEPT
 
@@ -911,13 +926,14 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
   decide_rule = meta and meta.rule_id
 
   if not in_scope
-    log_debug -> {
-      action: "sni_verdict_skip_protocol"
-      pkt_id: pkt_id
-      protocol: protocol_name
-      l4_proto: l4_proto
-      sni: sni_norm or sni
-      policy_protocols: sni_policy and sni_policy.protocols or "both"
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action: "sni_verdict_skip_protocol"
+        pkt_id: pkt_id
+        protocol: protocol_name
+        l4_proto: l4_proto
+        sni: sni_norm or sni
+        policy_protocols: sni_policy and sni_policy.protocols or "both"
     }
     return NF_ACCEPT
 
@@ -954,14 +970,15 @@ handle_sni_packet = (qh_ptr, nfad, pkt_id) ->
       }
       sni_event "block", sni_norm or sni, reason, event_rule
       return reject_with_worker reason, event_rule
-    log_debug -> {
-      action: action_skip
-      pkt_id: pkt_id
-      protocol: protocol_name
-      l4_proto: l4_proto
-      sni: sni_norm or sni
-      :reason
-      rule: decide_rule
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action: action_skip
+        pkt_id: pkt_id
+        protocol: protocol_name
+        l4_proto: l4_proto
+        sni: sni_norm or sni
+        :reason
+        rule: decide_rule
     }
     NF_ACCEPT
 

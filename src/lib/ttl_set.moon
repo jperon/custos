@@ -10,7 +10,7 @@
 -- @tparam[opt=4096] number max_size Nombre maximal d'entrées.
 -- @tparam[opt=60]   number ttl      Durée de vie d'une entrée, en secondes.
 -- @tparam[opt]      function now_fn  Horloge (→ secondes) ; défaut os.time.
--- @treturn table { has, add, remove, size }
+-- @treturn table { has, add, remove, remaining, size }
 new = (max_size = 4096, ttl = 60, now_fn = os.time) ->
   max_size = math.max 1, tonumber(max_size) or 4096
   ttl      = math.max 1, tonumber(ttl) or 60
@@ -35,6 +35,21 @@ new = (max_size = 4096, ttl = 60, now_fn = os.time) ->
       return false
     true
 
+  --- Temps restant avant expiration (secondes), ou nil si absente/expirée.
+  -- Expire paresseusement comme `has`.
+  -- @tparam string k Clé
+  -- @treturn number|nil Secondes restantes
+  remaining = (k) ->
+    return nil unless k
+    exp = store[k]
+    return nil unless exp
+    rem = exp - now_fn!
+    if rem <= 0
+      store[k] = nil
+      size -= 1
+      return nil
+    rem
+
   --- Ajoute/rafraîchit une clé (expire à now + ttl).
   add = (k) ->
     return unless k
@@ -54,6 +69,6 @@ new = (max_size = 4096, ttl = 60, now_fn = os.time) ->
       store[k] = nil
       size -= 1
 
-  { :has, :add, :remove, size: -> size }
+  { :has, :add, :remove, :remaining, size: -> size }
 
 { :new }

@@ -10,10 +10,10 @@ do
 end
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
-local log_info, log_warn, log_debug, set_action_prefix
+local log_info, log_warn, log_debug, set_action_prefix, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix
+  log_info, log_warn, log_debug, set_action_prefix, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix, _obj_0.level_enabled
 end
 local ipparse_ip = require("ipparse.l3.ip")
 local ipparse_udp = require("ipparse.l4.udp")
@@ -23,6 +23,7 @@ local ok_mac_ipc, mac_ipc = pcall(function()
   return require("mac_learner_ipc")
 end)
 local sip_ttl = nil
+local nft_q = nil
 local ip_to_mac = { }
 local IP_MAC_MAX = 256
 local format_ip
@@ -30,7 +31,7 @@ format_ip = function(version, raw)
   if not (raw) then
     return nil
   end
-  local ip2s = require("ipparse.l3.ip").ip2s
+  local ip2s = ipparse_ip.ip2s
   if version == 4 then
     return ip2s(raw:sub(1, 4))
   elseif version == 6 then
@@ -147,17 +148,17 @@ allow_mac_ip = function(mac, ip, family, reason)
   if not (mac and mac ~= "unknown" and ip and family) then
     return 
   end
-  local nft_q = require("nft_queue")
+  local q = nft_q or require("nft_queue")
   local ok
   if family == "ip6" then
-    ok = nft_q.add_mac6(mac, ip, nil, sip_ttl, reason)
+    ok = q.add_mac6(mac, ip, nil, sip_ttl, reason)
   else
-    ok = nft_q.add_mac4(mac, ip, nil, sip_ttl, reason)
+    ok = q.add_mac4(mac, ip, nil, sip_ttl, reason)
   end
   if ok then
-    local pending = nft_q.get_last_seq()
+    local pending = q.get_last_seq()
     if pending then
-      nft_q.wait_ack(pending, reason)
+      q.wait_ack(pending, reason)
     end
   end
   return ok
@@ -167,11 +168,11 @@ allow_sip_peer = function(ip, family, reason)
   if not (ip and family) then
     return 
   end
-  local nft_q = require("nft_queue")
+  local q = nft_q or require("nft_queue")
   if family == "ip6" then
-    return nft_q.add_sip6(ip, nil, sip_ttl, reason)
+    return q.add_sip6(ip, nil, sip_ttl, reason)
   else
-    return nft_q.add_sip4(ip, nil, sip_ttl, reason)
+    return q.add_sip4(ip, nil, sip_ttl, reason)
   end
 end
 local handle_packet
@@ -186,13 +187,15 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
   local raw = ffi.string(payload_ptr[0], payload_len)
   local ip, ip_err = ipparse_ip.parse(raw, 1)
   if not (ip) then
-    log_debug(function()
-      return {
-        action = "ip_parse_failed",
-        pkt_id = pkt_id,
-        err = ip_err or ""
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "ip_parse_failed",
+          pkt_id = pkt_id,
+          err = ip_err or ""
+        }
+      end)
+    end
     return NF_ACCEPT
   end
   local ip_version = ip.version
@@ -234,13 +237,15 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
   if ip.protocol == 17 and dport == 3478 then
     if ip_dst_str and mac ~= "unknown" then
       allow_mac_ip(mac, ip_dst_str, ip_family, "sip_stun")
-      log_debug(function()
-        return {
-          action = "stun_ip_added",
-          mac = mac,
-          ip = ip_dst_str
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "stun_ip_added",
+            mac = mac,
+            ip = ip_dst_str
+          }
+        end)
+      end
     end
     return NF_ACCEPT
   end
@@ -249,13 +254,15 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
       allow_sip_peer(ip_src_str, ip_family, "stun_src")
       allow_sip_peer(ip_dst_str, ip_family, "stun_dst")
     end
-    log_debug(function()
-      return {
-        action = "stun_response_accepted",
-        ip = ip_src_str,
-        dst = ip_dst_str
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "stun_response_accepted",
+          ip = ip_src_str,
+          dst = ip_dst_str
+        }
+      end)
+    end
     return NF_ACCEPT
   end
   if dport == 5061 or sport == 5061 then
@@ -269,15 +276,17 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
   local outbound_mac_src = "none"
   if outbound then
     outbound_mac, outbound_mac_src = resolve_outbound_mac(ip_src_str, mac)
-    log_debug(function()
-      return {
-        action = "sip_outbound_mac_selected",
-        ip_src = ip_src_str or "",
-        packet_mac = mac or "",
-        selected_mac = outbound_mac or "",
-        source = outbound_mac_src
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "sip_outbound_mac_selected",
+          ip_src = ip_src_str or "",
+          packet_mac = mac or "",
+          selected_mac = outbound_mac or "",
+          source = outbound_mac_src
+        }
+      end)
+    end
   end
   if outbound and ip_dst_str and outbound_mac then
     allow_mac_ip(outbound_mac, ip_dst_str, ip_family, "sip_signal")
@@ -302,23 +311,27 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
   if outbound then
     target_mac = outbound_mac
     if not (target_mac) then
-      log_debug(function()
-        return {
-          action = "sip_no_mac_for_src",
-          ip_src = ip_src_str or "unknown"
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "sip_no_mac_for_src",
+            ip_src = ip_src_str or "unknown"
+          }
+        end)
+      end
       return NF_ACCEPT
     end
   elseif inbound then
     target_mac = dst_phone_mac
     if not (target_mac) then
-      log_debug(function()
-        return {
-          action = "sip_no_mac_for_dst",
-          ip_dst = ip_dst_str or "unknown"
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "sip_no_mac_for_dst",
+            ip_dst = ip_dst_str or "unknown"
+          }
+        end)
+      end
       return NF_ACCEPT
     end
   end
@@ -327,24 +340,26 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
     local entry = _list_0[_index_0]
     allow_sip_peer(entry.ip, entry.family, "sip_media")
     allow_mac_ip(target_mac, entry.ip, entry.family, "sip_media")
-    log_debug(function()
-      return {
-        action = "sip_media_ip_added",
-        mac = target_mac,
-        media_ip = entry.ip,
-        family = entry.family,
-        direction = (function()
-          if inbound then
-            return "inbound"
-          else
-            return "outbound"
-          end
-        end)(),
-        cseq_method = msg.cseq_method or "",
-        sip_status = tostring(msg.status_code or ""),
-        sip_method = msg.method or ""
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "sip_media_ip_added",
+          mac = target_mac,
+          media_ip = entry.ip,
+          family = entry.family,
+          direction = (function()
+            if inbound then
+              return "inbound"
+            else
+              return "outbound"
+            end
+          end)(),
+          cseq_method = msg.cseq_method or "",
+          sip_status = tostring(msg.status_code or ""),
+          sip_method = msg.method or ""
+        }
+      end)
+    end
   end
   return NF_ACCEPT
 end
@@ -353,8 +368,8 @@ run = function(queue_num, fds)
   set_action_prefix("sip_")
   local cfg = require("config")
   sip_ttl = (cfg.nft and cfg.nft.sip_session_ttl) or (cfg.nft and cfg.nft.ip_timeout) or "5m"
+  nft_q = require("nft_queue")
   if type(fds) == "table" then
-    local nft_q = require("nft_queue")
     if fds.nft_wfd then
       nft_q.set_wfd(fds.nft_wfd)
     end

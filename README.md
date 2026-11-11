@@ -150,7 +150,6 @@ custos/
 │   ├── worker_events.moon       Worker d'agrégation/persistance des événements DNS
 │   ├── worker_captive.moon      Worker portail captif TCP/80
 │   ├── worker_auth_queue.moon   Worker NFQUEUE port 33443 (extrait MAC/IP)
-│   ├── worker_auth_pipeline.moon Pipeline d'authentification (parsing requêtes auth)
 │   ├── worker_tls.moon          Worker SNI TLS/QUIC (port 443, optionnel)
 │   ├── worker_sip.moon          Worker SIP/STUN (médias SDP, optionnel)
 │   ├── worker_doh.moon          Worker serveur DoH HTTPS (port 8443, optionnel)
@@ -178,7 +177,6 @@ custos/
 │   │   ├── cert.moon            Gestion certificats TLS (load_or_generate_sni)
 │   │   ├── cert_generator.moon  Génération dynamique via px5g
 │   │   ├── cert_cache.moon      Cache LRU/TTL pour certificats
-│   │   ├── cert_parser.moon     Lecture des métadonnées de certificat
 │   │   ├── sni_extractor.moon   Parser SNI (TLS ClientHello)
 │   │   ├── sessions.moon        Lecture/écriture sessions.lua (MAC-primary)
 │   │   ├── user_sessions.moon   Sessions par utilisateur authentifié

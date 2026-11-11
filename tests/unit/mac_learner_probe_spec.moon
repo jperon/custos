@@ -6,6 +6,10 @@
 
 { :ffi, :libc } = require "ffi_defs"
 ml = require "mac_learner"
+ttl_set = require "lib.ttl_set"
+
+-- Cache négatif contrôlable : ttl_set avec horloge injectée (TTL 30 s).
+make_negative = (t) -> ttl_set.new 100, 30, -> t.v
 
 pcall -> ffi.cdef "int socketpair(int domain, int type, int protocol, int sv[2]);"
 
@@ -26,36 +30,44 @@ read_all = (fd, n) ->
 
 describe "mac_learner probe_request", ->
   it "send_probe renvoie false → unknown envoyé, fd fermé, cache négatif", ->
-    pending, negative = {}, {}
+    pending = {}
+    t = { v: 1000 }
+    negative = make_negative t
     client_fd, peer = mk_pair!
     out = ml.probe_request pending, negative, {}, client_fd, "10.0.0.1",
-      1000, (-> 0), (-> false)
+      (-> 0), (-> false)
     assert.equals "failed", out
     assert.equals "unknown\n", read_all peer, 8
-    assert.equals 1030, negative["10.0.0.1"]
+    assert.is_true negative.has "10.0.0.1"
+    t.v = 1030
+    assert.is_false negative.has "10.0.0.1"   -- TTL 30 s écoulé
     assert.is_nil next pending
     assert.equals -1, libc.close client_fd   -- déjà fermé par probe_request
     libc.close peer
 
   it "send_probe lève une erreur → même comportement", ->
-    pending, negative = {}, {}
+    pending = {}
+    t = { v: 2000 }
+    negative = make_negative t
     client_fd, peer = mk_pair!
     out = ml.probe_request pending, negative, {}, client_fd, "10.0.0.2",
-      2000, (-> 0), (-> error "boom")
+      (-> 0), (-> error "boom")
     assert.equals "failed", out
     assert.equals "unknown\n", read_all peer, 8
-    assert.equals 2030, negative["10.0.0.2"]
+    assert.is_true negative.has "10.0.0.2"
     assert.is_nil next pending
     assert.equals -1, libc.close client_fd
     libc.close peer
 
   it "send_probe ok → fd gardé ouvert et présent dans pending_queries", ->
-    pending, negative = {}, {}
+    pending = {}
+    t = { v: 3000 }
+    negative = make_negative t
     client_fd, peer = mk_pair!
     out = ml.probe_request pending, negative, {}, client_fd, "10.0.0.3",
-      3000, (-> 0), (-> true)
+      (-> 0), (-> true)
     assert.equals "pending", out
-    assert.is_nil negative["10.0.0.3"]
+    assert.is_false negative.has "10.0.0.3"
     assert.equals client_fd, pending["10.0.0.3"][1][1]
     assert.equals 200, pending["10.0.0.3"][1][2]
     assert.equals 0, libc.close client_fd   -- toujours ouvert : fermeture réussit
@@ -64,14 +76,14 @@ describe "mac_learner probe_request", ->
   it "probe déjà en vol → client ajouté sans nouvelle sonde", ->
     pending = {}
     pending["10.0.0.4"] = { { 42, 0 } }
-    negative = {}
+    negative = make_negative { v: 4000 }
     client_fd, peer = mk_pair!
     calls = 0
     send = ->
       calls += 1
       true
     out = ml.probe_request pending, negative, {}, client_fd, "10.0.0.4",
-      4000, (-> 0), send
+      (-> 0), send
     assert.equals "joined", out
     assert.equals 0, calls
     assert.equals 2, #pending["10.0.0.4"]

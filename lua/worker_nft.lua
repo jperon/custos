@@ -15,6 +15,11 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix
 end
+local split_fields, from_hex, is_ipv4_str, is_ipv6_str, is_valid_mac
+do
+  local _obj_0 = require("lib.ipc_hex")
+  split_fields, from_hex, is_ipv4_str, is_ipv6_str, is_valid_mac = _obj_0.split_fields, _obj_0.from_hex, _obj_0.is_ipv4_str, _obj_0.is_ipv6_str, _obj_0.is_valid_mac
+end
 local BUF_SIZE = 8192
 local MAX_BATCH = 64
 local EAGAIN = 11
@@ -25,75 +30,30 @@ local read_buf = ffi.new("char[?]", BUF_SIZE)
 local ack_byte = ffi.new("uint8_t[1]")
 ack_byte[0] = 0x01
 local poll_fd = ffi.new("struct pollfd[1]")
-local split_fields
-split_fields = function(line)
-  local out = { }
-  local i = 1
-  while true do
-    local j = line:find("|", i, true)
-    if j then
-      out[#out + 1] = line:sub(i, j - 1)
-      i = j + 1
-    else
-      out[#out + 1] = line:sub(i)
-      break
-    end
-  end
-  return out
-end
-local from_hex
-from_hex = function(h)
-  if not h or #h == 0 then
-    return "", nil
-  end
-  if (#h % 2) ~= 0 then
-    return nil, "hex_odd_length"
-  end
-  if not (h:match("^[0-9a-fA-F]+$")) then
-    return nil, "hex_invalid_chars"
-  end
-  local out = { }
-  for i = 1, #h, 2 do
-    out[#out + 1] = string.char(tonumber(h:sub(i, i + 1), 16))
-  end
-  return table.concat(out), nil
-end
-local is_ipv4
-is_ipv4 = function(s)
-  return s and s:match("^%d+%.%d+%.%d+%.%d+$")
-end
-local is_ipv6
-is_ipv6 = function(s)
-  return s and s:find(":", 1, true)
-end
-local is_mac
-is_mac = function(s)
-  return s and s:match("^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$")
-end
 local validate_item
 validate_item = function(kind, key, ip)
   if kind == "ip4" then
-    if not (is_ipv4(key) and is_ipv4(ip)) then
+    if not (is_ipv4_str(key) and is_ipv4_str(ip)) then
       return false
     end
   elseif kind == "ip6" then
-    if not (is_ipv6(key) and is_ipv6(ip)) then
+    if not (is_ipv6_str(key) and is_ipv6_str(ip)) then
       return false
     end
   elseif kind == "mac4" then
-    if not (is_mac(key) and is_ipv4(ip)) then
+    if not (is_valid_mac(key) and is_ipv4_str(ip)) then
       return false
     end
   elseif kind == "mac6" then
-    if not (is_mac(key) and is_ipv6(ip)) then
+    if not (is_valid_mac(key) and is_ipv6_str(ip)) then
       return false
     end
   elseif kind == "sip4" then
-    if not (is_ipv4(key)) then
+    if not (is_ipv4_str(key)) then
       return false
     end
   elseif kind == "sip6" then
-    if not (is_ipv6(key)) then
+    if not (is_ipv6_str(key)) then
       return false
     end
   else

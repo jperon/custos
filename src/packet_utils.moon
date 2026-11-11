@@ -1,7 +1,11 @@
 -- src/packet_utils.moon
 -- Helpers partagés pour parser des paquets IP communs aux workers DNS.
 
+{ :ffi } = require "ffi_defs"
 { new: new_stream } = require "ipparse.l4.tcp_stream"
+{ :parse_ip4, :parse_ip6, :parse_udp, :parse_tcp, :parse_dns } = require "lib.packet_parsing"
+{ :PROTO_UDP, :PROTO_TCP } = require "lib.checksums"
+bit = require "bit"
 
 IPV6_EXT_HDRS = {
   [0]:   true   -- Hop-by-Hop Options
@@ -58,4 +62,71 @@ dns_tcp_complete = (buf) ->
 new_dns_tcp_stream = (check_complete=dns_tcp_complete) ->
   new_stream check_complete
 
-{ :skip_ipv6_ext_hdrs, :mac2s, :dns_tcp_complete, :new_dns_tcp_stream }
+--- Parse un paquet IP jusqu'au message DNS (UDP ou DNS-TCP réassemblé).
+-- Implémentation unique partagée par worker_questions et worker_responses.
+-- L'état de réassemblage TCP reste propre à chaque worker : il est passé en
+-- argument (un module = un processus après fork).
+-- @tparam string raw Paquet IP brut
+-- @tparam table tcp_state Réassembleur DNS-TCP du worker (cf. new_dns_tcp_stream)
+-- @treturn table|nil ip En-tête IP parsé
+-- @treturn table|string|nil l4 En-tête L4, ou statut "parse_failed",
+--   "buffering" (segment TCP intermédiaire) ou "tcp_control" (SYN/FIN/RST sans
+--   charge utile DNS)
+-- @treturn table|nil dns_msg Message DNS parsé
+-- @treturn string|nil dns_raw Payload DNS brut
+-- @treturn number|nil ip_ihl Offset 0-based de L4 dans le paquet
+parse_dns_packet = (raw, tcp_state) ->
+  ver = bit.rshift raw\byte(1), 4
+  ip = if ver == 4
+    ip4, _ = parse_ip4 raw
+    ip4
+  elseif ver == 6
+    ip6, _ = parse_ip6 raw
+    ip6
+  return nil, "parse_failed" unless ip
+
+  l4_off = ip.data_off
+  proto  = ip.protocol or ip.next_header
+  ip_ihl = ip.payload_off or (ip.data_off - 1)   -- offset 0-based de L4
+
+  if ip.version == 6
+    p = ffi.cast "const uint8_t*", raw
+    proto, l4_off_0based = skip_ipv6_ext_hdrs p, #raw, ip.next_header
+    return nil, "parse_failed" unless proto
+    l4_off = l4_off_0based + 1
+    ip_ihl = l4_off_0based
+
+  if proto == PROTO_UDP
+    udp, _ = parse_udp raw, l4_off
+    return nil, "parse_failed" unless udp
+    dns_raw = raw\sub udp.data_off, udp.off + udp.len - 1
+    dns_msg, _ = parse_dns dns_raw, 1, false
+    return nil, "parse_failed" unless dns_msg
+    udp.proto = "udp"
+    return ip, udp, dns_msg, dns_raw, ip_ihl
+
+  elseif proto == PROTO_TCP
+    tcp, _ = parse_tcp raw, l4_off
+    return nil, "parse_failed" unless tcp
+    payload = raw\sub tcp.data_off
+    is_fin_rst = bit.band(tcp.flags, 0x05) != 0
+    has_payload = payload != ""
+    -- Clé de reassembly : octets IP bruts (largeur fixe, byte-safe) plutôt que
+    -- ip2s (évite deux inet_ntop + allocations par segment TCP). Clé opaque,
+    -- jamais re-parsée.
+    key = "#{ip.src}|#{tcp.spt}|#{ip.dst}|#{tcp.dpt}"
+    buf, init_seq, first_seg = tcp_state.feed key, payload, tcp.flags, tcp.seq_n
+    unless buf
+      return nil, if is_fin_rst or not has_payload then "tcp_control" else "buffering"
+    dns_raw = buf\sub 3
+    dns_msg, _ = parse_dns dns_raw, 1, false
+    return nil, "parse_failed" unless dns_msg
+    tcp.proto = "tcp"
+    tcp.tcp_init_seq = init_seq
+    tcp.tcp_single_segment = first_seg
+    tcp.tcp_dns_raw = dns_raw
+    return ip, tcp, dns_msg, dns_raw, ip_ihl
+
+  nil, "parse_failed"
+
+{ :skip_ipv6_ext_hdrs, :mac2s, :dns_tcp_complete, :new_dns_tcp_stream, :parse_dns_packet }

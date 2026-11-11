@@ -16,7 +16,7 @@
 { :ffi, :libnfq } = require "ffi_defs"
 { :run_queue, :NF_ACCEPT } = require "nfq_loop"
 { :get_l2 } = require "nfq/ethernet"
-{ :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_debug, :set_action_prefix, :level_enabled } = require "log"
 
 ipparse_ip  = require "ipparse.l3.ip"
 ipparse_udp = require "ipparse.l4.udp"
@@ -26,6 +26,10 @@ ok_mac_ipc, mac_ipc = pcall -> require "mac_learner_ipc"
 
 -- Module-level TTL, set during run().
 sip_ttl = nil
+
+-- nft_queue mémorisé par run() : jamais de require sur le chemin par paquet
+-- (repli paresseux conservé pour les specs qui n'appellent pas run()).
+nft_q = nil
 
 -- ip4/ip6 → mac cache built from outbound SIP (phone → proxy).
 -- Used to find phone_mac when parsing inbound responses.
@@ -41,7 +45,7 @@ IP_MAC_MAX  = 256
 -- @treturn string|nil
 format_ip = (version, raw) ->
   return nil unless raw
-  ip2s = require("ipparse.l3.ip").ip2s
+  ip2s = ipparse_ip.ip2s
   if version == 4
     ip2s raw\sub 1, 4
   elseif version == 6
@@ -123,14 +127,14 @@ classify_direction = (sport, dport, ip_src_str, ip_dst_str) ->
 -- @tparam string reason  Log label (used as nft correlation string)
 allow_mac_ip = (mac, ip, family, reason) ->
   return unless mac and mac != "unknown" and ip and family
-  nft_q = require "nft_queue"
+  q = nft_q or require "nft_queue"
   ok = if family == "ip6"
-    nft_q.add_mac6 mac, ip, nil, sip_ttl, reason
+    q.add_mac6 mac, ip, nil, sip_ttl, reason
   else
-    nft_q.add_mac4 mac, ip, nil, sip_ttl, reason
+    q.add_mac4 mac, ip, nil, sip_ttl, reason
   if ok
-    pending = nft_q.get_last_seq!
-    nft_q.wait_ack pending, reason if pending
+    pending = q.get_last_seq!
+    q.wait_ack pending, reason if pending
   ok
 
 --- Insert an IP into sip_peers (or sip_peers6), fire-and-forget.
@@ -142,11 +146,11 @@ allow_mac_ip = (mac, ip, family, reason) ->
 -- @tparam string reason  Log label (correlation)
 allow_sip_peer = (ip, family, reason) ->
   return unless ip and family
-  nft_q = require "nft_queue"
+  q = nft_q or require "nft_queue"
   if family == "ip6"
-    nft_q.add_sip6 ip, nil, sip_ttl, reason
+    q.add_sip6 ip, nil, sip_ttl, reason
   else
-    nft_q.add_sip4 ip, nil, sip_ttl, reason
+    q.add_sip4 ip, nil, sip_ttl, reason
 
 -- ── Packet handler ────────────────────────────────────────────────────────────
 
@@ -163,7 +167,8 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   raw = ffi.string payload_ptr[0], payload_len
   ip, ip_err = ipparse_ip.parse raw, 1
   unless ip
-    log_debug -> { action: "ip_parse_failed", pkt_id: pkt_id, err: ip_err or "" }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "ip_parse_failed", pkt_id: pkt_id, err: ip_err or "" }
     return NF_ACCEPT
 
   ip_version = ip.version
@@ -194,7 +199,8 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   if ip.protocol == 17 and dport == 3478
     if ip_dst_str and mac != "unknown"
       allow_mac_ip mac, ip_dst_str, ip_family, "sip_stun"
-      log_debug -> { action: "stun_ip_added", mac: mac, ip: ip_dst_str }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "stun_ip_added", mac: mac, ip: ip_dst_str }
     return NF_ACCEPT
 
   -- ── STUN responses (UDP sport 3478) ──────────────────────────────────────
@@ -208,7 +214,8 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
     if ip_src_str and ip_dst_str
       allow_sip_peer ip_src_str, ip_family, "stun_src"
       allow_sip_peer ip_dst_str, ip_family, "stun_dst"
-    log_debug -> { action: "stun_response_accepted", ip: ip_src_str, dst: ip_dst_str }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "stun_response_accepted", ip: ip_src_str, dst: ip_dst_str }
     return NF_ACCEPT
 
   -- ── SIP/TLS (port 5061) : accept without parsing ─────────────────────────
@@ -222,12 +229,13 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   outbound_mac_src = "none"
   if outbound
     outbound_mac, outbound_mac_src = resolve_outbound_mac ip_src_str, mac
-    log_debug -> {
-      action: "sip_outbound_mac_selected"
-      ip_src: ip_src_str or ""
-      packet_mac: mac or ""
-      selected_mac: outbound_mac or ""
-      source: outbound_mac_src
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action: "sip_outbound_mac_selected"
+        ip_src: ip_src_str or ""
+        packet_mac: mac or ""
+        selected_mac: outbound_mac or ""
+        source: outbound_mac_src
     }
 
   -- Outbound: whitelist the proxy IP + cache phone MAC.
@@ -259,17 +267,19 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
   if outbound
     target_mac = outbound_mac
     unless target_mac
-      log_debug -> {
-        action: "sip_no_mac_for_src"
-        ip_src: ip_src_str or "unknown"
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "sip_no_mac_for_src"
+          ip_src: ip_src_str or "unknown"
       }
       return NF_ACCEPT
   elseif inbound
     target_mac = dst_phone_mac
     unless target_mac
-      log_debug -> {
-        action: "sip_no_mac_for_dst"
-        ip_dst: ip_dst_str or "unknown"
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "sip_no_mac_for_dst"
+          ip_dst: ip_dst_str or "unknown"
       }
       return NF_ACCEPT
 
@@ -278,15 +288,16 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
     allow_sip_peer entry.ip, entry.family, "sip_media"
     -- Conserver l'entrée MAC pour l'outbound (téléphone → media server).
     allow_mac_ip target_mac, entry.ip, entry.family, "sip_media"
-    log_debug -> {
-      action:      "sip_media_ip_added"
-      mac:         target_mac
-      media_ip:    entry.ip
-      family:      entry.family
-      direction:   if inbound then "inbound" else "outbound"
-      cseq_method: msg.cseq_method or ""
-      sip_status:  tostring(msg.status_code or "")
-      sip_method:  msg.method or ""
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action:      "sip_media_ip_added"
+        mac:         target_mac
+        media_ip:    entry.ip
+        family:      entry.family
+        direction:   if inbound then "inbound" else "outbound"
+        cseq_method: msg.cseq_method or ""
+        sip_status:  tostring(msg.status_code or "")
+        sip_method:  msg.method or ""
     }
 
   NF_ACCEPT
@@ -302,8 +313,8 @@ run = (queue_num, fds) ->
   cfg  = require "config"
   sip_ttl = (cfg.nft and cfg.nft.sip_session_ttl) or
             (cfg.nft and cfg.nft.ip_timeout) or "5m"
+  nft_q = require "nft_queue"
   if type(fds) == "table"
-    nft_q = require "nft_queue"
     nft_q.set_wfd     fds.nft_wfd                   if fds.nft_wfd
     nft_q.set_ack_rfd fds.ack_rfd, fds.worker_idx   if fds.ack_rfd and fds.worker_idx != nil
   log_info -> { action: "worker_sip_starting", queue: queue_num, ttl: sip_ttl }

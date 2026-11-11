@@ -30,6 +30,8 @@ config = require "config"
 { :ip2s } = require "ipparse.l3.ip"
 { :mac2s } = require "packet_utils"
 { :purge_pending } = require "ipc"
+ttl_set = require "lib.ttl_set"
+{ :shquote } = require "lib.shquote"
 mac_cfg = config.mac_learner or {}
 auth_cfg = config.auth or {}
 
@@ -37,7 +39,7 @@ auth_cfg = config.auth or {}
 PROBE_TIMEOUT_MS = 200
 -- Durée (s) du cache négatif : évite de re-sonder une IP sans réponse.
 NEGATIVE_TTL     = 30
--- Intervalle (s) de purge des entrées expirées de mac_table et negative_cache.
+-- Intervalle (s) de purge des entrées expirées de mac_table, vlan_table et strip_table.
 PURGE_INTERVAL   = 60
 
 bit = require "bit"
@@ -64,13 +66,10 @@ set_recv_timeout = (fd, secs) ->
     tv.tv_usec = math.floor (secs - math.floor(secs)) * 1e6
     libc.setsockopt fd, SOL_SOCKET, SO_RCVTIMEO, tv, ffi.sizeof tv
 
-sh_quote = (s) ->
-  "'" .. tostring(s)\gsub("'", "'\"'\"'") .. "'"
-
 ensure_parent_dir = (path) ->
   parent = tostring(path)\match "^(.*)/[^/]+$"
   return true unless parent and parent != ""
-  ret = os.execute "mkdir -p #{sh_quote(parent)}"
+  ret = os.execute "mkdir -p #{shquote parent}"
   ret == 0 or ret == true
 
 --- Répond "unknown\n" à un client et ferme sa connexion.
@@ -81,11 +80,11 @@ reply_unknown = (fd) ->
 
 -- ── Tables en mémoire ───────────────────────────────────────────
 -- mac_table       : { ip_str → { mac_str, expires_epoch } }
--- negative_cache  : { ip_str → expires_epoch }
+-- negative_cache  : ttl_set { ip_str → expiration } (cf. lib.ttl_set)
 -- pending_queries : { ip_str → { {client_fd, expiry_ms}, ... } }
 -- prober          : contexte mac_prober, initialisé dans run()
 mac_table       = {}
-negative_cache  = {}
+negative_cache  = ttl_set.new 4096, NEGATIVE_TTL
 pending_queries = {}
 prober          = nil
 -- vlan_table : { ip_str → { vlan_id, expires_epoch } }, alimenté par worker_doh_vlan.
@@ -181,17 +180,23 @@ process_vlan_learn = (msg) ->
   ip_str = ip16_to_str ip16
   vlan_table[ip_str] = { vlan, os.time! + (mac_cfg.entry_ttl or 300) }
 
---- Recherche le VLAN observé pour une IP (helper de test + requête socket).
--- @tparam string ip_str Adresse IP textuelle
--- @treturn number|nil VLAN ID (0 = untagged) si entrée valide, nil sinon
-vlan_lookup = (ip_str) ->
-  entry = vlan_table[ip_str]
+--- Lecture d'une entrée { valeur, expires_epoch } avec purge paresseuse.
+-- @tparam table tbl Table indexée (vlan_table, strip_table)
+-- @tparam string key Clé
+-- @treturn any|nil Valeur si l'entrée n'est pas expirée, nil sinon
+expiring_lookup = (tbl, key) ->
+  entry = tbl[key]
   return nil unless entry
   if os.time! <= entry[2]
     entry[1]
   else
-    vlan_table[ip_str] = nil
+    tbl[key] = nil
     nil
+
+--- Recherche le VLAN observé pour une IP (helper de test + requête socket).
+-- @tparam string ip_str Adresse IP textuelle
+-- @treturn number|nil VLAN ID (0 = untagged) si entrée valide, nil sinon
+vlan_lookup = (ip_str) -> expiring_lookup vlan_table, ip_str
 
 -- ── Apprentissage des cibles de strip CNAME (worker_responses) ───
 
@@ -206,22 +211,14 @@ process_strip_learn = (msg) ->
 -- @tparam string name Nom de domaine (insensible à la casse)
 -- @treturn number|nil code DNS du type à stripper, ou nil si non cible/expiré.
 strip_lookup = (name) ->
-  hash8 = strip_codec.name_hash name
-  entry = strip_table[hash8]
-  return nil unless entry
-  if os.time! <= entry[2]
-    entry[1]
-  else
-    strip_table[hash8] = nil
-    nil
+  expiring_lookup strip_table, strip_codec.name_hash name
 
 -- ── Expiration des probes en attente ─────────────────────────────
 
 --- Expire les requêtes en attente dont le probe dépasse PROBE_TIMEOUT_MS.
 -- Répond "unknown\n" aux clients expirés, alimente le cache négatif.
 expire_pending = ->
-  now_ms    = mac_prober.get_ms!
-  now_epoch = os.time!
+  now_ms = mac_prober.get_ms!
   for ip_str, waiters in pairs pending_queries
     i = #waiters
     while i >= 1
@@ -231,7 +228,7 @@ expire_pending = ->
       i -= 1
     if #waiters == 0
       pending_queries[ip_str] = nil
-      negative_cache[ip_str] = now_epoch + NEGATIVE_TTL
+      negative_cache.add ip_str
 
 -- ── Gestion des requêtes ──────────────────────────────────────────
 
@@ -241,15 +238,14 @@ expire_pending = ->
 -- répond "unknown", ferme le fd et pose le cache négatif (sinon fuite de fd et
 -- client bloqué côté mac_learner_ipc.get_mac).
 -- @tparam table pending   Table pending_queries { ip → { {fd, expiry_ms}, … } }
--- @tparam table negative  Table negative_cache { ip → expires_epoch }
+-- @tparam table negative  Cache négatif ttl_set (cf. lib.ttl_set)
 -- @tparam table prober_ctx Contexte mac_prober (passé à send_probe)
 -- @tparam number client_fd Descripteur de la connexion cliente
 -- @tparam string ip_str   Adresse IP demandée
--- @tparam number now      Epoch courant (secondes)
 -- @tparam function get_ms Fonction retournant l'horloge monotone (ms)
 -- @tparam function send_probe Fonction d'envoi de sonde (pcall-able)
 -- @treturn string "pending" (fd gardé ouvert) | "joined" | "failed" (fd fermé)
-probe_request = (pending, negative, prober_ctx, client_fd, ip_str, now, get_ms, send_probe) ->
+probe_request = (pending, negative, prober_ctx, client_fd, ip_str, get_ms, send_probe) ->
   expiry_ms = get_ms! + PROBE_TIMEOUT_MS
   if pending[ip_str]
     -- Probe déjà en vol : rejoindre la file sans émettre de nouvelle sonde
@@ -262,7 +258,7 @@ probe_request = (pending, negative, prober_ctx, client_fd, ip_str, now, get_ms, 
     return "pending"
 
   -- Envoi échoué : répondre immédiatement "unknown" et fermer, cache négatif
-  negative[ip_str] = now + NEGATIVE_TTL
+  negative.add ip_str
   reply_unknown client_fd
   "failed"
 
@@ -327,15 +323,14 @@ start_query = (client_fd) ->
       mac_table[ip_str] = nil   -- expirée : purge paresseuse
 
   -- Cache négatif actif → répondre "unknown" sans sonder
-  neg_exp = negative_cache[ip_str]
-  if neg_exp and now <= neg_exp
+  if negative_cache.has ip_str
     reply_unknown client_fd
     return
 
   -- Adresse inconnue : sondage asynchrone si prober disponible
   if prober
     probe_request pending_queries, negative_cache, prober, client_fd, ip_str,
-      now, mac_prober.get_ms, mac_prober.send_probe
+      mac_prober.get_ms, mac_prober.send_probe
     return
 
   -- Pas de prober : répondre "unknown" directement
@@ -509,8 +504,6 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
       last_purge = now_epoch
       for ip, entry in pairs mac_table
         mac_table[ip] = nil if now_epoch > entry[2]
-      for ip, exp in pairs negative_cache
-        negative_cache[ip] = nil if now_epoch > exp
       for ip, entry in pairs vlan_table
         vlan_table[ip] = nil if now_epoch > entry[2]
       for h, entry in pairs strip_table

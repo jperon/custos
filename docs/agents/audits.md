@@ -482,3 +482,109 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   (masque ≥ 48), routes hors seuil ignorées, lignes sans CIDR ignorées,
   whitelist existante préservée, et absence totale de commande quand
   `allow_localnets` est faux/absent.
+### Dataplane : qualité, performance et tests (branche q-dataplane)
+
+- **`metrics` : `enabled: false` ignoré au chargement.** `src/metrics.moon`
+  posait `_enabled = metrics_cfg.enabled or true` : `false or true == true`, le
+  drapeau était donc toujours actif (seul `init`, déjà en `!= false`, le
+  respectait). Correctif : `metrics_cfg.enabled != false` ; test par
+  rechargement du module avec `config.metrics` absent / `false` / `true`
+  (`tests/unit/metrics_spec.moon`).
+- **`log._rl` : table de rate-limiting jamais purgée.** Une entrée par
+  (action, champs discriminants — typiquement MAC/domaine/type) restait en
+  mémoire pour toute la vie du worker DNS. Correctif : chaque entrée porte son
+  échéance (`exp`) et `_purge_rl` balaie les entrées expirées toutes les
+  `RL_PURGE_EVERY` (256) insertions — coût amorti O(1) par insertion, décisions
+  de rate-limiting inchangées. `check_rl` accepte un `epoch` explicite pour les
+  tests (`tests/unit/log_spec.moon`).
+- **`worker_auth_pipeline` et `auth.cert_parser` supprimés (code mort).** Le
+  worker n'était forké par personne (`main.moon`) et `send_user_auth_to_nft`
+  écrivait sur stdout au lieu du fd nft ; `cert_parser` n'avait pas d'autre
+  consommateur. Suppression des deux modules, de leurs `.lua` et specs, et des
+  entrées d'arborescence `README.md`. `auth.user_sessions` est conservé : lu par
+  `filter/conditions/from_user.moon`.
+- **`nfq_loop.set_verdict` supprimé.** Aucun appelant : `worker_responses` a sa
+  copie locale et `set_verdict_marked` couvre le chemin nft. Seul l'export
+  `set_verdict_marked` subsiste.
+- **`parse_packet` factorisé (`packet_utils.parse_dns_packet`).** Les deux
+  copies quasi identiques de `worker_questions`/`worker_responses` (IPv4/IPv6,
+  extensions IPv6, UDP, réassemblage DNS-TCP, `parse_dns`) sont remplacées par
+  une fonction unique retournant `ip, l4, dns_msg, dns_raw, ip_ihl` ; le
+  réassembleur TCP reste un argument, donc l'état par processus est préservé.
+  Tests dans `tests/unit/packet_utils_spec.moon`.
+- **Helpers IPC factorisés (`lib.ipc_hex`).** `split_fields`, `from_hex`,
+  `to_hex` et `is_valid_timeout` étaient définis deux fois (émetteur `ipc` vs
+  récepteurs `worker_nft`/`nft_queue`), et les validateurs `is_ipv4_str`/
+  `is_ipv6_str`/`is_valid_mac` d'`ipc` doublonnaient `is_ipv4`/`is_ipv6`/
+  `is_mac` de `worker_nft`. Source unique dans `src/lib/ipc_hex.moon`
+  (`tests/unit/lib/ipc_hex_spec.moon`).
+- **`encode_ip16` factorisé.** Les quatre producteurs de messages binaires
+  (`worker_questions` learn, `worker_auth_queue` auth, `worker_doh_vlan` VLAN,
+  `worker_arp_sniffer` learn + branche TLLA) répétaient la convention « IPv4 +
+  12 zéros / IPv6 tel quel ». `lib.ipc_hex.encode_ip16` la centralise (copie
+  `ffi.copy`, même format consommé par `mac_learner.ip16_to_str`).
+- **`tsv_field` factorisé (`lib.tsv`).** Le marqueur de champ vide `-` du
+  protocole `worker_events` était défini trois fois (`worker_questions`,
+  `worker_responses`, `worker_tls`) ; une seule définition partagée
+  (`tests/unit/lib/tsv_spec.moon`).
+- **`main.moon` réutilise `lib.bridge_detect.read_lines`.** La copie locale de
+  lecture de lignes (`io.popen`) disparaît ; `read_lines` est exportée et
+  utilisée pour `brif/` et le repli `bridge_slave`. Tests ajoutés dans
+  `tests/unit/lib/bridge_detect_spec.moon`.
+- **Export fantôme `dns_tcp_complete` retiré.** `worker_questions` et
+  `worker_responses` exposaient cette clé sans l'importer (toujours `nil`) ; le
+  vrai helper reste dans `packet_utils`.
+- **`lib.ttl_set` utilisé pour `negative_cache` et les caches RTP.**
+  `mac_learner.negative_cache` et les deux tables `worker_reject`
+  (`rtp_passthrough`, `rtp_passthrough_dport`) ne stockaient qu'une échéance et
+  étaient purgés à la main. Ils deviennent des `ttl_set` bornés (expiration
+  paresseuse + élagage à l'insertion) ; `ttl_set.remaining` est ajouté pour que
+  le log DEBUG RTP conserve le TTL restant, et `probe_request` reçoit le
+  `ttl_set` au lieu d'un epoch explicite. Nuance : `ttl_set` expire à
+  `exp <= maintenant` alors que les vérifications précédentes acceptaient
+  `maintenant == exp` — écart d'au plus 1 s, sans effet observable.
+- **Duplications mineures supprimées.** `mac_learner.sh_quote` → 
+  `lib.shquote.shquote` ; `vlan_lookup`/`strip_lookup` partagent
+  `expiring_lookup`.
+- **Logs DEBUG du chemin par paquet gardés par `level_enabled`.** Chaque
+  `log_debug` par paquet de `nfq_loop`, `worker_responses`, `worker_tls`,
+  `worker_reject`, `worker_sip`, `worker_doh_vlan` et `worker_auth_queue`
+  allouait la closure (et ses captures) avant que `write_log` ne filtre le
+  niveau ; les sites sont désormais sous `if level_enabled "DEBUG"` (même garde
+  que `worker_questions`), et `worker_tls.debug_tls` sort avant de construire sa
+  table de métadonnées. Le stub `log` de `tests/helpers/busted_setup.moon`
+  expose `level_enabled -> true` pour que les thunks continuent de s'exécuter
+  sous test.
+- **`worker_sip` : plus de `require` par paquet.** `format_ip` appelait
+  `require("ipparse.l3.ip")` à chaque invocation (2×/paquet) et
+  `allow_mac_ip`/`allow_sip_peer` `require("nft_queue")` à chaque insertion ;
+  ils utilisent `ipparse_ip.ip2s` et un `nft_q` mémorisé par `run()` (repli
+  paresseux pour les specs qui n'appellent pas `run`).
+- **`worker_events.note_verdict` : index O(1).** Chaque verdict DNS balayait
+  jusqu'à `VERDICTS_MAX` (8192) entrées puis déplaçait l'entrée en tête
+  (`table.remove` + `table.insert`). L'index `mac|qname|decision` et un numéro
+  de séquence rendent la déduplication O(1) ; l'ordre « plus récent d'abord »
+  est reconstruit une fois par flush (tri par séquence), donc
+  `recent-verdicts.tsv` garde son ordre pour `/refusals` et l'UI. À saturation,
+  c'est l'entrée insérée le plus ancien qui est évincée (au lieu de la moins
+  récemment vue) — écart assumé et sans effet sur la déduplication ni les
+  compteurs. Tests : `tests/unit/worker_events_spec.moon`.
+- **Tests `mac_learner` : plus de serveurs orphelins.** Cause racine : le client
+  IPC envoie sa requête après `connect()` ; si le serveur de test a déjà fermé,
+  le `send` déclenche **SIGPIPE** et tue Busted avant `after_each`, laissant le
+  `luajit ./tmp/mac_server_test.lua` en vie. Le spec ignore SIGPIPE, enregistre
+  chaque PID dès sa lecture et son teardown tue puis **attend** la disparition
+  (`kill -0` en boucle, SIGKILL après ~2 s) ; un test vérifie qu'aucun processus
+  ne survit. *Constat résiduel non corrigé (hors périmètre)* :
+  `mac_learner_ipc.query` envoie sans `MSG_NOSIGNAL`, donc en production un
+  learner qui ferme avant le `send` peut tuer le worker appelant par SIGPIPE.
+- **Non retenus après vérification.** Q8 (`mac_learner_ipc`) était déjà réglé
+  par la factorisation `query(request)` (commit 4ab5364) ; Q12 (découpage des
+  fonctions monolithiques `handle_sni_packet`/`handle_response`/`finalize_a`)
+  n'a pas été entrepris : refonte structurelle sans défaut fonctionnel, risque
+  de régression trop élevé pour cette passe. P4 (réécriture intégrale de
+  `recent-verdicts.tsv` à chaque flush) n'a pas été modifié : les deux pistes du
+  rapport (seuil de changement, réduction de `VERDICTS_MAX`) changent la
+  fraîcheur ou l'historique exposés, et le throttle de 5 s borne déjà la
+  fréquence. Q2 (accesseurs `metrics` sans lecteur) : seul le drapeau
+  `enabled` était un bug (corrigé) ; les accesseurs sont conservés.
