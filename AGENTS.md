@@ -895,3 +895,8 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   factorisée dans `auth.sessions.session_alive`, utilisée par le ping, la page
   de succès `GET /` et l'authentification admin (source unique). Tests dans
   `tests/unit/webui/admin_auth_spec.moon` (session supprimée / MAC différente).
+- **Cookie de session sans attribut `Secure`.** Le portail n'est servi qu'en
+  HTTPS (`auth.port`) ; le port captif (`auth.captive_port`) ne fait que forger
+  des redirections 302 vers le portail, sans jamais poser de cookie. Ajout de
+  `Secure` au cookie de session et au cookie d'effacement
+  (`auth/handlers.moon`), tests dans `tests/unit/auth/challenge_login_spec.moon`.

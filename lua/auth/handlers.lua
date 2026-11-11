@@ -41,11 +41,11 @@ local SIGHUP = 1
 local COOKIE_NAME = "custos_session"
 local make_session_cookie
 make_session_cookie = function(tok)
-  return tostring(COOKIE_NAME) .. "=" .. tostring(tok) .. "; Path=/; HttpOnly; SameSite=Strict"
+  return tostring(COOKIE_NAME) .. "=" .. tostring(tok) .. "; Path=/; HttpOnly; Secure; SameSite=Strict"
 end
 local clear_session_cookie
 clear_session_cookie = function()
-  return tostring(COOKIE_NAME) .. "=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+  return tostring(COOKIE_NAME) .. "=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"
 end
 local signal_parent_reload
 signal_parent_reload = function()

@@ -23,11 +23,14 @@ H = require "auth.html"
 SIGHUP = 1
 COOKIE_NAME = "custos_session"
 
+-- Le portail n'étant servi qu'en HTTPS (auth.port), le cookie porte Secure.
+-- Le port captif (auth.captive_port) ne sert aucun cookie : il ne fait que
+-- forger des redirections HTTP 302 vers https://<filtre>:33443/ (worker_captive).
 make_session_cookie = (tok) ->
-  "#{COOKIE_NAME}=#{tok}; Path=/; HttpOnly; SameSite=Strict"
+  "#{COOKIE_NAME}=#{tok}; Path=/; HttpOnly; Secure; SameSite=Strict"
 
 clear_session_cookie = ->
-  "#{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+  "#{COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0"
 
 signal_parent_reload = ->
   parent_pid = tonumber ffi.C.getppid!
