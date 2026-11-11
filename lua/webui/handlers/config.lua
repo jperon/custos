@@ -12,6 +12,7 @@ do
   local _obj_0 = require("webui.util")
   esc, parse_form = _obj_0.esc, _obj_0.parse_form
 end
+local audit = require("webui.audit")
 local unpack = unpack or table.unpack
 local render_field
 render_field = function(name, field_schema, current_val)
@@ -423,11 +424,17 @@ local handle_config_section_post
 handle_config_section_post = function(req, section, state)
   local section_schema = config_schema[section]
   if not (section_schema) then
+    audit.refused(req, "unknown_section", {
+      section = section
+    })
     return 404, { }, "Section inconnue : " .. tostring(section)
   end
   local form = parse_form(req.body)
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
+    audit.fail(req, "webui_config_saved", {
+      section = section
+    }, "read_config")
     return 500, { }, "Erreur lecture config : " .. tostring(tostring(err))
   end
   local built = build_section(section_schema, nil, form)
@@ -454,8 +461,14 @@ handle_config_section_post = function(req, section, state)
   cfg[section] = merged
   local ok2, err2 = write_config(cfg, state.config_path)
   if not (ok2) then
+    audit.fail(req, "webui_config_saved", {
+      section = section
+    }, "write_config")
     return 500, { }, "Erreur écriture config : " .. tostring(tostring(err2))
   end
+  audit.change(req, "webui_config_saved", {
+    section = section
+  })
   return 302, {
     ["Location"] = "/admin/config/#section-" .. tostring(section)
   }, ""
@@ -510,6 +523,9 @@ handle_filter_general_post = function(req, state)
   local form = parse_form(req.body)
   local cfg, err = read_config(state.config_path)
   if not (cfg) then
+    audit.fail(req, "webui_config_saved", {
+      section = "filter"
+    }, "read_config")
     return 500, { }, "Erreur lecture config : " .. tostring(tostring(err))
   end
   cfg.filter = cfg.filter or { }
@@ -550,8 +566,14 @@ handle_filter_general_post = function(req, state)
   end
   local ok2, err2 = write_config(cfg, state.config_path)
   if not (ok2) then
+    audit.fail(req, "webui_config_saved", {
+      section = "filter"
+    }, "write_config")
     return 500, { }, "Erreur écriture config : " .. tostring(tostring(err2))
   end
+  audit.change(req, "webui_config_saved", {
+    section = "filter"
+  })
   return 302, {
     ["Location"] = "/admin/config/#section-filter-general"
   }, ""

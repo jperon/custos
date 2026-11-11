@@ -469,6 +469,10 @@ handle_request = (req, peer_ip, peer_mac, state) ->
   elseif req.path == "/register" and req.method == "POST"
     return handle_register req, peer_ip, peer_mac, state
   elseif req.path\match "^/admin"
+    -- La webui journalise l'IP cliente (champ `peer`) et l'admin authentifié ;
+    -- le routeur ne reçoit que `req` et `state`, on attache donc le pair ici.
+    req.peer_ip  = peer_ip
+    req.peer_mac = peer_mac
     webui_router = require "webui.router"
     return webui_router.dispatch req, state
   else

@@ -7,6 +7,7 @@ H       = require "auth.html"
 { :page } = require "webui.handlers.dashboard"
 { :read_config, :write_config } = require "webui.serializer"
 { :esc, :parse_form } = require "webui.util"
+audit   = require "webui.audit"
 
 -- Comme parse_form mais conserve toutes les valeurs des clés répétées (`key[]`,
 -- `start[]`…) sous forme de liste, dans l'ordre du corps de requête.
@@ -127,10 +128,15 @@ split_lines = (s) ->
   items
 
 make_post = (section_key, is_list_value) ->
+  saved_action   = "webui_#{section_key}_saved"
+  deleted_action = "webui_#{section_key}_deleted"
   (req, state) ->
     form = parse_form req.body
+    action = if form.delete then deleted_action else saved_action
     cfg, err = read_config state.config_path
-    return 500, {}, "Erreur config : #{err}" unless cfg
+    unless cfg
+      audit.fail req, action, { section: section_key }, "read_config"
+      return 500, {}, "Erreur config : #{tostring err}"
     cfg.filter or= {}
 
     -- Suppression d'une entrée
@@ -139,7 +145,10 @@ make_post = (section_key, is_list_value) ->
       current[form.delete] = nil
       cfg.filter[section_key] = current
       ok, e = write_config cfg, state.config_path
-      return 500, {}, "Erreur écriture : #{e}" unless ok
+      unless ok
+        audit.fail req, action, { name: form.delete }, "write_config"
+        return 500, {}, "Erreur écriture : #{e}"
+      audit.change req, action, { name: form.delete }
       return 302, { ["Location"]: "/admin/config/filter/#{section_key}" }, ""
 
     -- Reconstruction complète depuis les lignes éditées (key[]/val[]) + la
@@ -168,7 +177,10 @@ make_post = (section_key, is_list_value) ->
 
     cfg.filter[section_key] = result
     ok, e = write_config cfg, state.config_path
-    return 500, {}, "Erreur écriture : #{e}" unless ok
+    unless ok
+      audit.fail req, action, { section: section_key }, "write_config"
+      return 500, {}, "Erreur écriture : #{e}"
+    audit.change req, action, { section: section_key }
     302, { ["Location"]: "/admin/config/filter/#{section_key}" }, ""
 
 handle_nets_post  = make_post "nets",  true
@@ -177,8 +189,11 @@ handle_users_post = make_post "users", false
 
 handle_times_post = (req, state) ->
   form = parse_form req.body
+  action = if form.delete then "webui_times_deleted" else "webui_times_saved"
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur config : #{err}" unless cfg
+  unless cfg
+    audit.fail req, action, { section: "times" }, "read_config"
+    return 500, {}, "Erreur config : #{tostring err}"
   cfg.filter or= {}
 
   if form.delete
@@ -186,7 +201,10 @@ handle_times_post = (req, state) ->
     current[form.delete] = nil
     cfg.filter.times = current
     ok, e = write_config cfg, state.config_path
-    return 500, {}, "Erreur écriture : #{e}" unless ok
+    unless ok
+      audit.fail req, action, { name: form.delete }, "write_config"
+      return 500, {}, "Erreur écriture : #{e}"
+    audit.change req, action, { name: form.delete }
     return 302, { ["Location"]: "/admin/config/filter/times" }, ""
 
   -- Reconstruction complète depuis les lignes éditées (key[]/start[]/end[]) +
@@ -208,7 +226,10 @@ handle_times_post = (req, state) ->
 
   cfg.filter.times = times
   ok, e = write_config cfg, state.config_path
-  return 500, {}, "Erreur écriture : #{e}" unless ok
+  unless ok
+    audit.fail req, action, { section: "times" }, "write_config"
+    return 500, {}, "Erreur écriture : #{e}"
+  audit.change req, action, { section: "times" }
   302, { ["Location"]: "/admin/config/filter/times" }, ""
 
 -- ── Decision ────────────────────────────────────────────────────────────
@@ -239,13 +260,18 @@ handle_decision_get = (req, state) ->
 handle_decision_post = (req, state) ->
   form = parse_form req.body
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur config : #{err}" unless cfg
+  unless cfg
+    audit.fail req, "webui_decision_saved", { section: "filter.decision" }, "read_config"
+    return 500, {}, "Erreur config : #{tostring err}"
   cfg.filter or= {}
   cfg.filter.decision or= {}
   cfg.filter.decision.first_match_wins      = form.fmw == "1"
   cfg.filter.decision.continue_to_next_rule = form.ctn == "1"
   ok, e = write_config cfg, state.config_path
-  return 500, {}, "Erreur écriture : #{e}" unless ok
+  unless ok
+    audit.fail req, "webui_decision_saved", { section: "filter.decision" }, "write_config"
+    return 500, {}, "Erreur écriture : #{e}"
+  audit.change req, "webui_decision_saved", { section: "filter.decision" }
   302, { ["Location"]: "/admin/config/filter/decision" }, ""
 
 {

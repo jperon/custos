@@ -8,6 +8,7 @@ H       = require "auth.html"
 { :read_config, :write_config } = require "webui.serializer"
 config_schema = require "webui.schema.config_schema"
 { :esc, :parse_form } = require "webui.util"
+audit = require "webui.audit"
 unpack or= table.unpack
 
 -- ── Helpers formulaire ────────────────────────────────────────────────────
@@ -205,11 +206,15 @@ handle_config_section_get = (req, section, state) ->
 
 handle_config_section_post = (req, section, state) ->
   section_schema = config_schema[section]
-  return 404, {}, "Section inconnue : #{section}" unless section_schema
+  unless section_schema
+    audit.refused req, "unknown_section", { section: section }
+    return 404, {}, "Section inconnue : #{section}"
 
   form = parse_form req.body
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur lecture config : #{tostring err}" unless cfg
+  unless cfg
+    audit.fail req, "webui_config_saved", { section: section }, "read_config"
+    return 500, {}, "Erreur lecture config : #{tostring err}"
 
   -- Fusion : on ne remplace que les clés déclarées dans le schéma. Les clés
   -- hors schéma (ex. auth.admin_users, dns.upstream_retry, nft.extra_rules)
@@ -225,8 +230,11 @@ handle_config_section_post = (req, section, state) ->
     merged[k] = built[k]
   cfg[section] = merged
   ok2, err2 = write_config cfg, state.config_path
-  return 500, {}, "Erreur écriture config : #{tostring err2}" unless ok2
+  unless ok2
+    audit.fail req, "webui_config_saved", { section: section }, "write_config"
+    return 500, {}, "Erreur écriture config : #{tostring err2}"
 
+  audit.change req, "webui_config_saved", { section: section }
   302, { ["Location"]: "/admin/config/#section-#{section}" }, ""
 
 -- ── Filtre : champs scalaires généraux ─────────────────────────────────────
@@ -256,7 +264,9 @@ handle_filter_general_get = (req, state) ->
 handle_filter_general_post = (req, state) ->
   form = parse_form req.body
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur lecture config : #{tostring err}" unless cfg
+  unless cfg
+    audit.fail req, "webui_config_saved", { section: "filter" }, "read_config"
+    return 500, {}, "Erreur lecture config : #{tostring err}"
   cfg.filter or= {}
   fschema = config_schema.filter
   for k, field in pairs fschema
@@ -276,7 +286,10 @@ handle_filter_general_post = (req, state) ->
     else
       cfg.filter[k] = form[k] or field.default or ""
   ok2, err2 = write_config cfg, state.config_path
-  return 500, {}, "Erreur écriture config : #{tostring err2}" unless ok2
+  unless ok2
+    audit.fail req, "webui_config_saved", { section: "filter" }, "write_config"
+    return 500, {}, "Erreur écriture config : #{tostring err2}"
+  audit.change req, "webui_config_saved", { section: "filter" }
   302, { ["Location"]: "/admin/config/#section-filter-general" }, ""
 
 {

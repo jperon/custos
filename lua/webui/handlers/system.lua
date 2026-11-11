@@ -3,6 +3,7 @@ local H = require("auth.html")
 local pidfile = require("lib.pidfile")
 local page
 page = require("webui.handlers.dashboard").page
+local audit = require("webui.audit")
 pcall(function()
   return ffi.cdef([[    typedef int pid_t;
     pid_t getpid(void);
@@ -21,6 +22,17 @@ handle_reload = function(req, state)
   local kill_fn = (state and state.kill_fn) or default_kill
   local pid, err = pidfile.read(pid_path)
   local ok = pid and kill_fn(pid, SIGHUP)
+  if pid and ok then
+    audit.change(req, "webui_reload_requested", {
+      pid = pid
+    })
+  elseif pid then
+    audit.fail(req, "webui_reload_requested", {
+      pid = pid
+    }, "kill_failed")
+  else
+    audit.fail(req, "webui_reload_requested", { }, "pidfile_unreadable")
+  end
   local body
   if ok then
     body = H.section({

@@ -689,6 +689,8 @@ handle_request = function(req, peer_ip, peer_mac, state)
   elseif req.path == "/register" and req.method == "POST" then
     return handle_register(req, peer_ip, peer_mac, state)
   elseif req.path:match("^/admin") then
+    req.peer_ip = peer_ip
+    req.peer_mac = peer_mac
     local webui_router = require("webui.router")
     return webui_router.dispatch(req, state)
   else

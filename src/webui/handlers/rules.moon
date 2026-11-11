@@ -12,6 +12,7 @@ H        = require "auth.html"
 { :read_config, :write_config } = require "webui.serializer"
 registry = require "webui.schema.registry"
 { :esc, :parse_form } = require "webui.util"
+audit    = require "webui.audit"
 
 -- JS de réordonnancement par glisser-déposer (repli no-JS : boutons ↑/↓).
 RULES_REORDER_JS = [[
@@ -444,13 +445,18 @@ handle_rules_new_get = (req, state) ->
 handle_rules_new_post = (req, state) ->
   form = parse_form req.body
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur config : #{err}" unless cfg
+  unless cfg
+    audit.fail req, "webui_rule_saved", {}, "read_config"
+    return 500, {}, "Erreur config : #{tostring err}"
   cfg.filter or= {}
   cfg.filter.rules or= {}
   rule = rebuild_rule form
   cfg.filter.rules[#cfg.filter.rules + 1] = rule
   ok, e = write_config cfg, state.config_path
-  return 500, {}, "Erreur écriture : #{e}" unless ok
+  unless ok
+    audit.fail req, "webui_rule_saved", {}, "write_config"
+    return 500, {}, "Erreur écriture : #{e}"
+  audit.change req, "webui_rule_saved", { rule_id: #cfg.filter.rules }
   302, { ["Location"]: "/admin/config/filter/rules" }, ""
 
 handle_rules_edit_get = (req, n, state) ->
@@ -468,36 +474,54 @@ handle_rules_edit_get = (req, n, state) ->
 handle_rules_edit_post = (req, n, state) ->
   form = parse_form req.body
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur config : #{err}" unless cfg
+  unless cfg
+    audit.fail req, "webui_rule_saved", { rule_id: n }, "read_config"
+    return 500, {}, "Erreur config : #{tostring err}"
   rules = (cfg.filter or {}).rules or {}
-  return 404, {}, "Règle #{n} introuvable" unless rules[n]
+  unless rules[n]
+    audit.refused req, "rule_not_found", { rule_id: n }
+    return 404, {}, "Règle #{n} introuvable"
   was_disabled = rules[n].enabled == false
   rules[n] = rebuild_rule form
   -- rebuild_rule ne connaît pas `enabled` (hors formulaire) : on le préserve.
   rules[n].enabled = false if was_disabled
   cfg.filter.rules = rules
   ok, e = write_config cfg, state.config_path
-  return 500, {}, "Erreur écriture : #{e}" unless ok
+  unless ok
+    audit.fail req, "webui_rule_saved", { rule_id: n }, "write_config"
+    return 500, {}, "Erreur écriture : #{e}"
+  audit.change req, "webui_rule_saved", { rule_id: n }
   302, { ["Location"]: "/admin/config/filter/rules" }, ""
 
 handle_rules_delete = (req, n, state) ->
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur config : #{err}" unless cfg
+  unless cfg
+    audit.fail req, "webui_rule_deleted", { rule_id: n }, "read_config"
+    return 500, {}, "Erreur config : #{tostring err}"
   rules = (cfg.filter or {}).rules or {}
-  return 404, {}, "Règle #{n} introuvable" unless rules[n]
+  unless rules[n]
+    audit.refused req, "rule_not_found", { rule_id: n }
+    return 404, {}, "Règle #{n} introuvable"
   table.remove rules, n
   cfg.filter.rules = rules
   ok, e = write_config cfg, state.config_path
-  return 500, {}, "Erreur écriture : #{e}" unless ok
+  unless ok
+    audit.fail req, "webui_rule_deleted", { rule_id: n }, "write_config"
+    return 500, {}, "Erreur écriture : #{e}"
+  audit.change req, "webui_rule_deleted", { rule_id: n }
   302, { ["Location"]: "/admin/config/filter/rules" }, ""
 
 -- Bascule l'état actif/inactif d'une règle (`enabled = false` = désactivée).
 handle_rules_toggle = (req, n, state) ->
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur config : #{err}" unless cfg
+  unless cfg
+    audit.fail req, "webui_rule_toggled", { rule_id: n }, "read_config"
+    return 500, {}, "Erreur config : #{tostring err}"
   rules = (cfg.filter or {}).rules or {}
   rule = rules[n]
-  return 404, {}, "Règle #{n} introuvable" unless rule
+  unless rule
+    audit.refused req, "rule_not_found", { rule_id: n }
+    return 404, {}, "Règle #{n} introuvable"
   -- enabled absent/true = active → on désactive ; false → on réactive (clé retirée).
   if rule.enabled == false
     rule.enabled = nil
@@ -505,44 +529,62 @@ handle_rules_toggle = (req, n, state) ->
     rule.enabled = false
   cfg.filter.rules = rules
   ok, e = write_config cfg, state.config_path
-  return 500, {}, "Erreur écriture : #{e}" unless ok
+  unless ok
+    audit.fail req, "webui_rule_toggled", { rule_id: n }, "write_config"
+    return 500, {}, "Erreur écriture : #{e}"
+  audit.change req, "webui_rule_toggled", { rule_id: n, enabled: rule.enabled == false and 0 or 1 }
   302, { ["Location"]: "/admin/config/filter/rules" }, ""
 
 handle_rules_move = (req, n, state) ->
   form = parse_form req.body
   dir = form.dir
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur config : #{err}" unless cfg
+  unless cfg
+    audit.fail req, "webui_rule_moved", { rule_id: n }, "read_config"
+    return 500, {}, "Erreur config : #{tostring err}"
   rules = (cfg.filter or {}).rules or {}
-  return 404, {}, "Règle #{n} introuvable" unless rules[n]
+  unless rules[n]
+    audit.refused req, "rule_not_found", { rule_id: n }
+    return 404, {}, "Règle #{n} introuvable"
   other = if dir == "up" then n - 1 else n + 1
   if rules[other]
     rules[n], rules[other] = rules[other], rules[n]
     cfg.filter.rules = rules
     ok, e = write_config cfg, state.config_path
-    return 500, {}, "Erreur écriture : #{e}" unless ok
+    unless ok
+      audit.fail req, "webui_rule_moved", { rule_id: n, dir: dir }, "write_config"
+      return 500, {}, "Erreur écriture : #{e}"
+  audit.change req, "webui_rule_moved", { rule_id: n, dir: dir }
   302, { ["Location"]: "/admin/config/filter/rules" }, ""
 
 handle_rules_reorder = (req, state) ->
   form = parse_form req.body
   cfg, err = read_config state.config_path
-  return 500, {}, "Erreur config : #{err}" unless cfg
+  unless cfg
+    audit.fail req, "webui_rules_reordered", {}, "read_config"
+    return 500, {}, "Erreur config : #{tostring err}"
   rules = (cfg.filter or {}).rules or {}
   tokens = [tok for tok in (form.order or "")\gmatch "[^,]+"]
   -- Valide une permutation exacte de 1..#rules (entiers uniquement).
-  return 400, {}, "Ordre invalide" unless #tokens == #rules
+  unless #tokens == #rules
+    audit.refused req, "invalid_order", { rules: #rules }
+    return 400, {}, "Ordre invalide"
   order = {}
   seen = {}
   for tok in *tokens
     idx = tonumber tok
     unless idx and idx % 1 == 0 and idx >= 1 and idx <= #rules and not seen[idx]
+      audit.refused req, "invalid_order", { rules: #rules }
       return 400, {}, "Ordre invalide"
     seen[idx] = true
     order[#order + 1] = idx
   new_rules = [rules[idx] for idx in *order]
   cfg.filter.rules = new_rules
   ok, e = write_config cfg, state.config_path
-  return 500, {}, "Erreur écriture : #{e}" unless ok
+  unless ok
+    audit.fail req, "webui_rules_reordered", { rules: #rules }, "write_config"
+    return 500, {}, "Erreur écriture : #{e}"
+  audit.change req, "webui_rules_reordered", { rules: #rules }
   302, { ["Location"]: "/admin/config/filter/rules" }, ""
 
 {
