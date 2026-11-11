@@ -80,11 +80,17 @@ describe "worker_questions", ->
   ev_w = nil
   pipe_r = nil
   pipe_w = nil
+  -- Captures du câblage run_queue → metrics (P2.3) : les options passées à
+  -- run_queue et l'ordre des appels au module metrics.
+  captured_opts = nil
+  metrics_calls = {}
 
   before_each ->
     save_all!
     decision = nil
     payload  = ""
+    captured_opts = nil
+    metrics_calls = {}
 
     ev_r, ev_w     = make_pipe!
     pipe_r, pipe_w = make_pipe!
@@ -116,7 +122,9 @@ describe "worker_questions", ->
     package.loaded["nfq_loop"] = {
       NF_ACCEPT: 1
       NF_DROP: 0
-      run_queue: (queue, cb) -> nil
+      run_queue: (queue, cb, opts) ->
+        captured_opts = opts
+        nil
     }
     package.loaded["forge_dns"] = {}
     package.loaded["captive_ips"] = {
@@ -127,9 +135,18 @@ describe "worker_questions", ->
     package.loaded["dup_query"] = { pick_resolver: -> nil }
     package.loaded["raw_send"] = { routable: -> false }
     package.loaded["metrics"] = {
-      init: -> nil
-      record_verdict: -> nil
-      write_now: -> nil
+      init: ->
+        metrics_calls[#metrics_calls + 1] = "init"
+        nil
+      record_verdict: ->
+        metrics_calls[#metrics_calls + 1] = "record_verdict"
+        nil
+      write_now: ->
+        metrics_calls[#metrics_calls + 1] = "write_now"
+        nil
+      flush_if_due: ->
+        metrics_calls[#metrics_calls + 1] = "flush_if_due"
+        true
     }
 
     package.loaded["worker_questions"] = nil
@@ -144,6 +161,30 @@ describe "worker_questions", ->
   invoke = (raw) ->
     payload = raw
     wq.handle_question nil, nil, 1
+
+  -- ── Câblage métriques (P2.3) ─────────────────────────────────────────────
+  -- Depuis la suppression de `maybe_flush`, la seule écriture périodique des
+  -- instantanés est `run_queue` → `on_idle = metrics.flush_if_due`. Si ces
+  -- options disparaissaient (refactoring, `metrics_on` mal évalué), il ne
+  -- resterait que write_now au démarrage/à l'arrêt et /admin/metrics cesserait
+  -- d'être rafraîchie sous trafic, silencieusement.
+  describe "câblage métriques → run_queue", ->
+    it "passe on_idle = metrics.flush_if_due et idle_ms > 0 quand les métriques sont actives", ->
+      assert.is_not_nil captured_opts
+      metrics_mod = assert package.loaded["metrics"]
+      assert.is_not_nil metrics_mod.flush_if_due
+      assert.equals metrics_mod.flush_if_due, captured_opts.on_idle
+      assert.is_number captured_opts.idle_ms
+      assert.is_true captured_opts.idle_ms > 0
+
+    it "n'appelle ni write_now ni flush_if_due dans handle_question (aucune horloge par paquet)", ->
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      before = #metrics_calls
+      invoke ipv4_udp DNS_QUERY
+      added = {}
+      for i = before + 1, #metrics_calls
+        added[#added + 1] = metrics_calls[i]
+      assert.same { "record_verdict" }, added
 
   -- ── list_from_condition_reason (pur) ──────────────────────────────────────
   describe "list_from_condition_reason", ->
