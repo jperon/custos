@@ -877,4 +877,14 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   par `enrich_session_ip`/`bind_session_mac` ; temporaire de `write_sessions`
   suffixé par le PID. Tests dans `tests/unit/auth/sessions_spec.moon`, dont une
   concurrence réelle à deux processus (20+20 sessions → 40 conservées).
-
+- **Fichier de secrets : temporaire `.new` fixe et écriture non verrouillée.**
+  `register_user`/`update_user_hash`/`set_record` (`auth/credentials.moon`)
+  copiaient le fichier vers `secrets.new` puis `rename`, sans verrou : deux
+  inscriptions concurrentes pouvaient perdre un compte, et le temporaire fixe
+  être écrit par deux processus à la fois. Correctif : les trois fonctions
+  partagent `rewrite_secrets_file`, qui réécrit le fichier sous
+  `lib.filelock.with_lock` avec un temporaire suffixé par le PID (permissions
+  0600 conservées avant rename). `update_user_hash` n'a aucun appelant hors du
+  module (audit confirmé) mais reste exporté. Tests dans
+  `tests/unit/auth/credentials_spec.moon` (inscriptions successives et
+  concurrentes, temporaire fixe piégé par un répertoire, mode 0600).
