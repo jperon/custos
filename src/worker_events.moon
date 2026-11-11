@@ -95,13 +95,23 @@ read_chunk = (fd) ->
 -- @tparam table  agg      Table d'agrégation { key → {count, first_ts, last_ts} }
 -- @tparam ?table verdicts Ring buffer des verdicts (optionnel)
 -- @treturn boolean        true si une entrée verdict a été notée
+--- Clé d'index d'une entrée du ring buffer des verdicts.
+-- @tparam string mac      MAC du client
+-- @tparam string qname    Domaine demandé
+-- @tparam string decision "allow" ou "block"
+-- @treturn string Clé "mac|qname|decision"
+verdict_key = (mac, qname, decision) -> "#{mac}|#{qname}|#{decision}"
+
 --- Met à jour le ring buffer des verdicts récents pour un verdict DNS.
--- Accepte allow ET block. Dédup LRU sur (mac, qname, decision) : une entrée déjà
--- présente est incrémentée (compteur), ses champs ip/user/reason/last_ts mis à
--- jour et remontée en tête (plus récent d'abord) ; sinon insérée en tête, le
--- buffer étant tronqué à VERDICTS_MAX. Ignore les MAC vides/inconnues.
+-- Accepte allow ET block. Dédup sur (mac, qname, decision) via un index
+-- `_idx` (O(1)) : une entrée déjà présente est incrémentée (compteur), ses
+-- champs ip/user/reason/last_ts mis à jour et son numéro de séquence
+-- rafraîchi ; sinon elle est ajoutée en fin de tableau. L'ordre « plus récent
+-- d'abord » est reconstruit au flush (tri par séquence), ce qui évite un
+-- déplacement en tête O(n) par verdict. Au-delà de VERDICTS_MAX, l'entrée
+-- insérée le plus ancien (indice 1) est évincée. Ignore les MAC vides/inconnues.
 -- @tparam table  verdicts Ring buffer { {mac, qname, decision, ip, user, reason,
---                         count, first_ts, last_ts}, … }
+--                         count, first_ts, last_ts, seq}, … }
 -- @tparam string decision "allow" ou "block"
 -- @tparam string qname    Domaine demandé
 -- @tparam string mac      MAC du client
@@ -113,23 +123,32 @@ read_chunk = (fd) ->
 note_verdict = (verdicts, decision, qname, mac, ip, user, reason, ts) ->
   return false unless mac and qname and mac ~= "" and qname ~= "" and mac ~= "unknown"
 
-  -- Recherche d'une entrée existante (même mac + qname + decision) à remonter.
-  for i = 1, #verdicts
-    e = verdicts[i]
-    if e.mac == mac and e.qname == qname and e.decision == decision
-      e.count  += 1
-      e.last_ts = ts
-      e.ip      = ip
-      e.user    = user
-      e.reason  = reason
-      table.remove verdicts, i
-      table.insert verdicts, 1, e
-      return true
+  idx = verdicts._idx
+  unless idx
+    idx = {}
+    verdicts._idx = idx
+  seq = (verdicts._seq or 0) + 1
+  verdicts._seq = seq
 
-  table.insert verdicts, 1, {
-    :mac, :qname, :decision, :ip, :user, :reason, count: 1, first_ts: ts, last_ts: ts
+  key = verdict_key mac, qname, decision
+  e = idx[key]
+  if e
+    e.count   += 1
+    e.last_ts  = ts
+    e.ip       = ip
+    e.user     = user
+    e.reason   = reason
+    e.seq      = seq
+    return true
+
+  table.insert verdicts, {
+    :mac, :qname, :decision, :ip, :user, :reason
+    count: 1, first_ts: ts, last_ts: ts, :seq
   }
-  verdicts[VERDICTS_MAX + 1] = nil if #verdicts > VERDICTS_MAX
+  idx[key] = verdicts[#verdicts]
+  if #verdicts > VERDICTS_MAX
+    old = table.remove verdicts, 1
+    idx[verdict_key old.mac, old.qname, old.decision] = nil if old
   true
 
 --- Écrit atomiquement le fichier recent-verdicts.tsv (temp + rename).
@@ -145,8 +164,20 @@ flush_verdicts = (verdicts, events_dir) ->
   unless fh
     log_warn -> { action: "verdicts_open_failed", path: tmp, err: err }
     return
+  -- Ordre de sortie « plus récent d'abord » : tri par numéro de séquence
+  -- (reconstruit ici, une fois par flush, plutôt qu'à chaque verdict). Les
+  -- entrées sans séquence (appelants de test) gardent leur ordre d'origine.
+  positions = {}
+  for i, e in ipairs verdicts
+    positions[e] = i
+  ordered = [e for e in *verdicts]
+  table.sort ordered, (a, b) ->
+    aseq, bseq = a.seq or 0, b.seq or 0
+    return aseq > bseq if aseq != bseq
+    (positions[a] or 0) < (positions[b] or 0)
+
   parts = {}
-  for e in *verdicts
+  for e in *ordered
     parts[#parts + 1] = "#{e.mac}\t#{e.ip or ""}\t#{e.user or ""}\t#{e.qname}\t#{e.decision or ""}\t#{e.reason or ""}\t#{e.count}\t#{e.first_ts}\t#{e.last_ts}\n"
   fh\write table.concat parts
   fh\close!

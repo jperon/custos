@@ -17,13 +17,15 @@ nft_cfg = config.nft or {}
 auth_cfg = config.auth or {}
 metrics = require "metrics"
 { :get_l2 } = require "nfq/ethernet"
-{ :parse_ip4, :parse_ip6, :parse_udp, :parse_tcp, :parse_dns, :ip2s, :dns_types } = require "lib.packet_parsing"
-{ :skip_ipv6_ext_hdrs, :new_dns_tcp_stream } = require "packet_utils"
+{ :ip2s, :dns_types } = require "lib.packet_parsing"
+{ :skip_ipv6_ext_hdrs, :new_dns_tcp_stream, :parse_dns_packet } = require "packet_utils"
+{ :encode_ip16 } = require "lib.ipc_hex"
 bit                                      = require "bit"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg } = require "ipc"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn, :log_debug, :log_info, :level_enabled, :set_action_prefix } = require "log"
+{ :tsv_field } = require "lib.tsv"
 { :user_for_mac } = require "auth.sessions"
 forge_dns = require "forge_dns"
 { detect: detect_captive_ips, :domain_from_url } = require "captive_ips"
@@ -124,18 +126,12 @@ maybe_duplicate = (ip, l4, raw, rule_resolvers) ->
 -- @treturn boolean true si l'écriture complète a réussi
 write_learn_msg = (ip_raw, mac_raw) ->
   return false unless mac_learn_wfd and mac_learn_wfd >= 0
-  return false unless ip_raw and (#ip_raw == 4 or #ip_raw == 16)
   return false unless mac_raw and #mac_raw == 6
+  ip16 = encode_ip16 ip_raw
+  return false unless ip16
 
   msg = ffi.new "uint8_t[22]"
-
-  if #ip_raw == 4
-    for i = 1, 4
-      msg[i - 1] = ip_raw\byte i
-  else
-    for i = 1, 16
-      msg[i - 1] = ip_raw\byte i
-
+  ffi.copy msg, ip16, 16
   for i = 1, 6
     msg[15 + i] = mac_raw\byte i
 
@@ -145,9 +141,6 @@ write_learn_msg = (ip_raw, mac_raw) ->
 -- Helper : retourne la valeur sous forme de string, ou "-" si nil/vide.
 -- @tparam any v  Valeur à formater
 -- @treturn string Valeur formatée pour TSV
-tsv_field = (v) ->
-  s = if v ~= nil then tostring v else ""
-  if #s == 0 then "-" else s
 
 -- Extrait le nom de liste depuis un message de condition to_domainlist.
 -- Exemple attendu: "Domain matched in list 'toulouse/malware'".
@@ -182,65 +175,11 @@ write_event = (fields, allowed) ->
   libc.write events_wfd, line, #line
 
 -- ── Parsing L3/L4/L7 ────────────────────────────────────────────
-
-PROTO_UDP = 17
-PROTO_TCP = 6
+-- Parsing partagé avec worker_responses (cf. packet_utils) : retourne ip, l4,
+-- dns_msg, ou nil + "status" sur les cas spéciaux (tcp_control, buffering,
+-- parse_failed).
 
 tcp_state = new_dns_tcp_stream!
-
--- Extrait ip, l4, dns_msg depuis un paquet IP brut.
--- Retourne nil, "status" sur les cas spéciaux (buffering, tcp_control, parse_failed).
-parse_packet = (raw) ->
-  ver = bit.rshift raw\byte(1), 4
-  ip = if ver == 4
-    ip4, _ = parse_ip4 raw
-    ip4
-  elseif ver == 6
-    ip6, _ = parse_ip6 raw
-    ip6
-  return nil, "parse_failed" unless ip
-
-  l4_off = ip.data_off
-  proto  = ip.protocol or ip.next_header
-
-  if ip.version == 6
-    p = ffi.cast "const uint8_t*", raw
-    proto, l4_off_0based = skip_ipv6_ext_hdrs p, #raw, ip.next_header
-    return nil, "parse_failed" unless proto
-    l4_off = l4_off_0based + 1
-
-  if proto == PROTO_UDP
-    udp, _ = parse_udp raw, l4_off
-    return nil, "parse_failed" unless udp
-    dns_raw = raw\sub udp.data_off, udp.off + udp.len - 1
-    dns_msg, _ = parse_dns dns_raw, 1, false
-    return nil, "parse_failed" unless dns_msg
-    udp.proto = "udp"
-    return ip, udp, dns_msg
-
-  elseif proto == PROTO_TCP
-    tcp, _ = parse_tcp raw, l4_off
-    return nil, "parse_failed" unless tcp
-    payload = raw\sub tcp.data_off
-    is_fin_rst = bit.band(tcp.flags, 0x05) != 0
-    has_payload = payload != ""
-    -- Clé de reassembly : octets IP bruts (largeur fixe, byte-safe) plutôt que
-    -- ip2s (évite deux inet_ntop + allocations par segment TCP). Clé opaque,
-    -- jamais re-parsée.
-    key = "#{ip.src}|#{tcp.spt}|#{ip.dst}|#{tcp.dpt}"
-    buf, init_seq, first_seg = tcp_state.feed key, payload, tcp.flags, tcp.seq_n
-    unless buf
-      return nil, if is_fin_rst or not has_payload then "tcp_control" else "buffering"
-    dns_raw = buf\sub 3
-    dns_msg, _ = parse_dns dns_raw, 1, false
-    return nil, "parse_failed" unless dns_msg
-    tcp.proto = "tcp"
-    tcp.tcp_init_seq = init_seq
-    tcp.tcp_single_segment = first_seg
-    tcp.tcp_dns_raw = dns_raw
-    return ip, tcp, dns_msg
-
-  nil, "parse_failed"
 
 -- ── Agrégation des décisions multi-questions ─────────────────────
 -- Un message IPC ne peut porter que MAX_RESPONSE_RULE_IDS ids (cf.
@@ -305,7 +244,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   l2 = get_l2 nfad
 
   -- ── L3 / L4 / L7 ───────────────────────────────────────────────
-  ip, l4, dns_msg = parse_packet raw
+  ip, l4, dns_msg = parse_dns_packet raw, tcp_state
   unless ip
     -- TCP segments arriving before a complete DNS message are buffered; let them through.
     return NF_ACCEPT if l4 == "buffering"
@@ -591,5 +530,5 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   run_queue tonumber(queue_num), handle_question
 
 { :run,
-  :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream,
+  :skip_ipv6_ext_hdrs, :new_dns_tcp_stream,
   :append_unique, :aggregate_decisions, :MAX_RESPONSE_RULE_IDS }

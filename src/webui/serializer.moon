@@ -5,13 +5,18 @@
 -- moonscript.base.loadfile.
 
 -- Détecte si une table est un tableau (clés 1..n contiguës, non vide).
+-- Toute clé hors de cette séquence (chaîne, entier non contigu, flottant)
+-- impose la forme associative : sinon `serialize_value` n'émettrait que la
+-- partie séquentielle et perdrait silencieusement les autres clés.
 is_array = (t) ->
   return false unless type(t) == "table"
   n = #t
   return false if n == 0
-  for i = 1, n
-    return false if t[i] == nil
-  true
+  count = 0
+  for k in pairs t
+    return false unless type(k) == "number" and k % 1 == 0 and k >= 1 and k <= n
+    count += 1
+  count == n
 
 -- Mots réservés qui ne peuvent pas être utilisés comme clés nues `clé: valeur`
 -- en MoonScript (mots-clés Lua + mots-clés propres à MoonScript).

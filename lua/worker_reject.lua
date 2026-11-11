@@ -9,11 +9,12 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP, VERDICT_DONE = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP, _obj_0.VERDICT_DONE
 end
-local log_info, log_warn, log_debug, set_action_prefix
+local log_info, log_warn, log_debug, set_action_prefix, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix
+  log_info, log_warn, log_debug, set_action_prefix, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix, _obj_0.level_enabled
 end
+local ttl_set = require("lib.ttl_set")
 local parse_ip, new_ip, ip_proto
 do
   local _obj_0 = require("ipparse.l3.ip")
@@ -42,9 +43,9 @@ local ICMP4_CODE = 13
 local ICMP6_TYPE = 1
 local ICMP6_CODE = 1
 local ICMP_QUOTE_MAX = 576
-local rtp_passthrough = { }
-local rtp_passthrough_dport = { }
 local RTP_PASSTHROUGH_TTL = 120
+local rtp_passthrough = ttl_set.new(4096, RTP_PASSTHROUGH_TTL)
+local rtp_passthrough_dport = ttl_set.new(4096, RTP_PASSTHROUGH_TTL)
 local _excluded_ports = nil
 local _current_queue = nil
 local rtp_key
@@ -248,68 +249,64 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
   if proto == PROTO_UDP and ip.version == 4 and sport and dport then
     local key = rtp_key(src_ip, dst_ip, sport, dport)
     local key_dport = rtp_dport_key(src_ip, dst_ip, dport)
-    local now = os.time()
-    local exp = rtp_passthrough[key]
-    local exp_dport = rtp_passthrough_dport[key_dport]
-    if exp and exp <= now then
-      rtp_passthrough[key] = nil
-      exp = nil
-    end
-    if exp_dport and exp_dport <= now then
-      rtp_passthrough_dport[key_dport] = nil
-      exp_dport = nil
-    end
-    if exp and exp > now then
+    local ttl_left = rtp_passthrough.remaining(key)
+    local ttl_left_dport = rtp_passthrough_dport.remaining(key_dport)
+    if ttl_left then
       local raw_ptr = ffi.cast("const unsigned char*", raw)
       libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr)
-      log_debug(function()
-        return {
-          action = "rtp_passthrough_hit",
-          queue = _current_queue,
-          src = src_ip,
-          dst = dst_ip,
-          sport = sport,
-          dport = dport,
-          ttl_s = exp - now
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "rtp_passthrough_hit",
+            queue = _current_queue,
+            src = src_ip,
+            dst = dst_ip,
+            sport = sport,
+            dport = dport,
+            ttl_s = ttl_left
+          }
+        end)
+      end
       return VERDICT_DONE
-    elseif exp_dport and exp_dport > now then
+    elseif ttl_left_dport then
       local raw_ptr = ffi.cast("const unsigned char*", raw)
       libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr)
-      log_debug(function()
-        return {
-          action = "rtp_passthrough_hit_dport",
-          queue = _current_queue,
-          src = src_ip,
-          dst = dst_ip,
-          sport = sport,
-          dport = dport,
-          ttl_s = exp_dport - now
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "rtp_passthrough_hit_dport",
+            queue = _current_queue,
+            src = src_ip,
+            dst = dst_ip,
+            sport = sport,
+            dport = dport,
+            ttl_s = ttl_left_dport
+          }
+        end)
+      end
       return VERDICT_DONE
     end
     if should_track_rtp_udp(proto, ip.version, src_ip, dst_ip, sport, dport, raw, l4_off, _excluded_ports) then
       local rev_key = rtp_key(dst_ip, src_ip, dport, sport)
       local rev_dport_key = rtp_dport_key(dst_ip, src_ip, sport)
-      local expiry = now + RTP_PASSTHROUGH_TTL
-      rtp_passthrough[key] = expiry
-      rtp_passthrough[rev_key] = expiry
-      rtp_passthrough_dport[rev_dport_key] = expiry
+      rtp_passthrough.add(key)
+      rtp_passthrough.add(rev_key)
+      rtp_passthrough_dport.add(rev_dport_key)
       local raw_ptr = ffi.cast("const unsigned char*", raw)
       libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr)
-      log_debug(function()
-        return {
-          action = "rtp_passthrough_add",
-          queue = _current_queue,
-          src = src_ip,
-          dst = dst_ip,
-          sport = sport,
-          dport = dport,
-          ttl_s = RTP_PASSTHROUGH_TTL
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "rtp_passthrough_add",
+            queue = _current_queue,
+            src = src_ip,
+            dst = dst_ip,
+            sport = sport,
+            dport = dport,
+            ttl_s = RTP_PASSTHROUGH_TTL
+          }
+        end)
+      end
       return VERDICT_DONE
     end
   end
@@ -347,18 +344,20 @@ handle_reject = function(qh_ptr, nfad, pkt_id)
   end
   local forged_ptr = ffi.cast("const unsigned char*", forged)
   libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #forged, forged_ptr)
-  log_debug(function()
-    return {
-      action = "reject_forge",
-      queue = _current_queue,
-      src = src_ip,
-      dst = dst_ip,
-      sport = sport,
-      dport = dport,
-      proto = proto,
-      response = response_type
-    }
-  end)
+  if level_enabled("DEBUG") then
+    log_debug(function()
+      return {
+        action = "reject_forge",
+        queue = _current_queue,
+        src = src_ip,
+        dst = dst_ip,
+        sport = sport,
+        dport = dport,
+        proto = proto,
+        response = response_type
+      }
+    end)
+  end
   return VERDICT_DONE
 end
 local run

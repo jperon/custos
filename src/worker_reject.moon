@@ -14,7 +14,8 @@
 bit = require "bit"
 
 { :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE } = require "nfq_loop"
-{ :log_info, :log_warn, :log_debug, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_debug, :set_action_prefix, :level_enabled } = require "log"
+ttl_set = require "lib.ttl_set"
 parse: parse_ip, new: new_ip, proto: ip_proto = require "ipparse.l3.ip"
 parse: parse_tcp = require "ipparse.l4.tcp"
 parse: parse_udp = require "ipparse.l4.udp"
@@ -42,11 +43,12 @@ ICMP6_CODE = 1
 -- We quote up to 576 bytes to stay within a safe ICMP payload size.
 ICMP_QUOTE_MAX = 576
 
--- Temporary RTP passthrough cache: key = "src|dst|sport|dport", value = expiry epoch.
-rtp_passthrough = {}
--- Reverse-direction relaxed cache: key = "src|dst|dport", value = expiry epoch.
-rtp_passthrough_dport = {}
+-- Durée de vie des entrées RTP (secondes).
 RTP_PASSTHROUGH_TTL = 120
+-- Temporary RTP passthrough cache: key = "src|dst|sport|dport", value = expiry epoch.
+rtp_passthrough = ttl_set.new 4096, RTP_PASSTHROUGH_TTL
+-- Reverse-direction relaxed cache: key = "src|dst|dport", value = expiry epoch.
+rtp_passthrough_dport = ttl_set.new 4096, RTP_PASSTHROUGH_TTL
 -- Ports exclus du suivi RTP (initialisé par run() depuis la config).
 _excluded_ports = nil
 _current_queue = nil
@@ -245,60 +247,55 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
   if proto == PROTO_UDP and ip.version == 4 and sport and dport
     key = rtp_key src_ip, dst_ip, sport, dport
     key_dport = rtp_dport_key src_ip, dst_ip, dport
-    now = os.time!
-    exp = rtp_passthrough[key]
-    exp_dport = rtp_passthrough_dport[key_dport]
-    if exp and exp <= now
-      rtp_passthrough[key] = nil
-      exp = nil
-    if exp_dport and exp_dport <= now
-      rtp_passthrough_dport[key_dport] = nil
-      exp_dport = nil
+    ttl_left = rtp_passthrough.remaining key
+    ttl_left_dport = rtp_passthrough_dport.remaining key_dport
 
-    if exp and exp > now
+    if ttl_left
       raw_ptr = ffi.cast "const unsigned char*", raw
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
-      log_debug -> {
-        action: "rtp_passthrough_hit"
-        queue: _current_queue
-        src: src_ip
-        dst: dst_ip
-        sport: sport
-        dport: dport
-        ttl_s: exp - now
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "rtp_passthrough_hit"
+          queue: _current_queue
+          src: src_ip
+          dst: dst_ip
+          sport: sport
+          dport: dport
+          ttl_s: ttl_left
       }
       return VERDICT_DONE
-    elseif exp_dport and exp_dport > now
+    elseif ttl_left_dport
       raw_ptr = ffi.cast "const unsigned char*", raw
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
-      log_debug -> {
-        action: "rtp_passthrough_hit_dport"
-        queue: _current_queue
-        src: src_ip
-        dst: dst_ip
-        sport: sport
-        dport: dport
-        ttl_s: exp_dport - now
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "rtp_passthrough_hit_dport"
+          queue: _current_queue
+          src: src_ip
+          dst: dst_ip
+          sport: sport
+          dport: dport
+          ttl_s: ttl_left_dport
       }
       return VERDICT_DONE
 
     if should_track_rtp_udp(proto, ip.version, src_ip, dst_ip, sport, dport, raw, l4_off, _excluded_ports)
       rev_key = rtp_key dst_ip, src_ip, dport, sport
       rev_dport_key = rtp_dport_key dst_ip, src_ip, sport
-      expiry = now + RTP_PASSTHROUGH_TTL
-      rtp_passthrough[key] = expiry
-      rtp_passthrough[rev_key] = expiry
-      rtp_passthrough_dport[rev_dport_key] = expiry
+      rtp_passthrough.add key
+      rtp_passthrough.add rev_key
+      rtp_passthrough_dport.add rev_dport_key
       raw_ptr = ffi.cast "const unsigned char*", raw
       libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #raw, raw_ptr
-      log_debug -> {
-        action: "rtp_passthrough_add"
-        queue: _current_queue
-        src: src_ip
-        dst: dst_ip
-        sport: sport
-        dport: dport
-        ttl_s: RTP_PASSTHROUGH_TTL
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action: "rtp_passthrough_add"
+          queue: _current_queue
+          src: src_ip
+          dst: dst_ip
+          sport: sport
+          dport: dport
+          ttl_s: RTP_PASSTHROUGH_TTL
       }
       return VERDICT_DONE
 
@@ -332,15 +329,16 @@ handle_reject = (qh_ptr, nfad, pkt_id) ->
   forged_ptr = ffi.cast "const unsigned char*", forged
   libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #forged, forged_ptr
 
-  log_debug -> {
-    action:   "reject_forge"
-    queue:    _current_queue
-    src:      src_ip
-    dst:      dst_ip
-    sport:    sport
-    dport:    dport
-    proto:    proto
-    response: response_type
+  if level_enabled "DEBUG"
+    log_debug -> {
+      action:   "reject_forge"
+      queue:    _current_queue
+      src:      src_ip
+      dst:      dst_ip
+      sport:    sport
+      dport:    dport
+      proto:    proto
+      response: response_type
   }
 
   VERDICT_DONE

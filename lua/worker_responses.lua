@@ -13,15 +13,15 @@ local auth_cfg = config.auth or { }
 local clients_cfg = config.clients or { }
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
-local parse_ip4, parse_ip6, parse_udp, parse_tcp, parse_dns, ip2s, QTYPE
+local parse_dns, ip2s, QTYPE
 do
   local _obj_0 = require("lib.packet_parsing")
-  parse_ip4, parse_ip6, parse_udp, parse_tcp, parse_dns, ip2s, QTYPE = _obj_0.parse_ip4, _obj_0.parse_ip6, _obj_0.parse_udp, _obj_0.parse_tcp, _obj_0.parse_dns, _obj_0.ip2s, _obj_0.dns_types
+  parse_dns, ip2s, QTYPE = _obj_0.parse_dns, _obj_0.ip2s, _obj_0.dns_types
 end
-local skip_ipv6_ext_hdrs, new_dns_tcp_stream
+local skip_ipv6_ext_hdrs, new_dns_tcp_stream, parse_dns_packet
 do
   local _obj_0 = require("packet_utils")
-  skip_ipv6_ext_hdrs, new_dns_tcp_stream = _obj_0.skip_ipv6_ext_hdrs, _obj_0.new_dns_tcp_stream
+  skip_ipv6_ext_hdrs, new_dns_tcp_stream, parse_dns_packet = _obj_0.skip_ipv6_ext_hdrs, _obj_0.new_dns_tcp_stream, _obj_0.parse_dns_packet
 end
 local get_l2
 get_l2 = require("nfq/ethernet").get_l2
@@ -40,11 +40,13 @@ do
   local _obj_0 = require("nfq_loop")
   run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
 end
-local log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix
+local log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_allow, _obj_0.log_block, _obj_0.now, _obj_0.set_action_prefix
+  log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.log_allow, _obj_0.log_block, _obj_0.now, _obj_0.set_action_prefix, _obj_0.level_enabled
 end
+local tsv_field
+tsv_field = require("lib.tsv").tsv_field
 local build_blocked_response, build_nxdomain_response, build_sinkhole_response, build_cname_response, strip_https_rr, strip_dns_rr, add_ede_modified, clear_ad_bit, patch_modified_dns
 do
   local _obj_0 = require("dns_ede")
@@ -135,20 +137,6 @@ purge_strip_query_cache = function(now_ts)
     end
   end
 end
-local tsv_field
-tsv_field = function(v)
-  local s
-  if v ~= nil then
-    s = tostring(v)
-  else
-    s = ""
-  end
-  if #s == 0 then
-    return "-"
-  else
-    return s
-  end
-end
 local format_block_event
 format_block_event = function(ctx, ts)
   if ts == nil then
@@ -188,89 +176,11 @@ set_verdict = function(qh_ptr, pkt_id, verdict, payload)
     return libnfq.nfq_set_verdict(qh_ptr, pkt_id, verdict, 0, nil)
   end
 end
-local PROTO_UDP, PROTO_TCP
-do
-  local _obj_0 = require("lib.checksums")
-  PROTO_UDP, PROTO_TCP = _obj_0.PROTO_UDP, _obj_0.PROTO_TCP
-end
 local tcp_state = new_dns_tcp_stream()
 local replace_dns_payload, parse_answers, build_query_from_response
 do
   local _obj_0 = require("lib.dns_response")
   replace_dns_payload, parse_answers, build_query_from_response = _obj_0.replace_dns_payload, _obj_0.parse_answers, _obj_0.build_query_from_response
-end
-local parse_packet
-parse_packet = function(raw)
-  local ver = bit.rshift(raw:byte(1), 4)
-  local ip
-  if ver == 4 then
-    local ip4, _ = parse_ip4(raw)
-    ip = ip4
-  elseif ver == 6 then
-    local ip6, _ = parse_ip6(raw)
-    ip = ip6
-  end
-  if not (ip) then
-    return nil, "parse_failed"
-  end
-  local l4_off = ip.data_off
-  local proto = ip.protocol or ip.next_header
-  local ip_ihl = ip.payload_off or (ip.data_off - 1)
-  if ip.version == 6 then
-    local p = ffi.cast("const uint8_t*", raw)
-    local l4_off_0based
-    proto, l4_off_0based = skip_ipv6_ext_hdrs(p, #raw, ip.next_header)
-    if not (proto) then
-      return nil, "parse_failed"
-    end
-    l4_off = l4_off_0based + 1
-    ip_ihl = l4_off_0based
-  end
-  if proto == PROTO_UDP then
-    local udp, _ = parse_udp(raw, l4_off)
-    if not (udp) then
-      return nil, "parse_failed"
-    end
-    local dns_raw = raw:sub(udp.data_off, udp.off + udp.len - 1)
-    local dns_msg
-    dns_msg, _ = parse_dns(dns_raw, 1, false)
-    if not (dns_msg) then
-      return nil, "parse_failed"
-    end
-    udp.proto = "udp"
-    return ip, udp, dns_msg, dns_raw, ip_ihl
-  elseif proto == PROTO_TCP then
-    local tcp, _ = parse_tcp(raw, l4_off)
-    if not (tcp) then
-      return nil, "parse_failed"
-    end
-    local payload = raw:sub(tcp.data_off)
-    local is_fin_rst = bit.band(tcp.flags, 0x05) ~= 0
-    local has_payload = payload ~= ""
-    local key = tostring(ip.src) .. "|" .. tostring(tcp.spt) .. "|" .. tostring(ip.dst) .. "|" .. tostring(tcp.dpt)
-    local buf, init_seq, first_seg = tcp_state.feed(key, payload, tcp.flags, tcp.seq_n)
-    if not (buf) then
-      return nil, (function()
-        if is_fin_rst or not has_payload then
-          return "tcp_control"
-        else
-          return "buffering"
-        end
-      end)()
-    end
-    local dns_raw = buf:sub(3)
-    local dns_msg
-    dns_msg, _ = parse_dns(dns_raw, 1, false)
-    if not (dns_msg) then
-      return nil, "parse_failed"
-    end
-    tcp.proto = "tcp"
-    tcp.tcp_init_seq = init_seq
-    tcp.tcp_single_segment = first_seg
-    tcp.tcp_dns_raw = dns_raw
-    return ip, tcp, dns_msg, dns_raw, ip_ihl
-  end
-  return nil, "parse_failed"
 end
 local _filter = nil
 local run_on_response
@@ -510,16 +420,18 @@ finalize_a = function(ctx, override)
       new_dns = strip_https_rr(new_dns) or new_dns
       local patched = replace_dns_payload(raw, ip, l4, ip_ihl, new_dns)
       if patched then
-        log_debug(function()
-          return {
-            action = action_label,
-            src_ip = src_ip,
-            dst_ip = dst_ip,
-            txid = txid_hex,
-            client_mac = client_mac,
-            user = user
-          }
-        end)
+        if level_enabled("DEBUG") then
+          log_debug(function()
+            return {
+              action = action_label,
+              src_ip = src_ip,
+              dst_ip = dst_ip,
+              txid = txid_hex,
+              client_mac = client_mac,
+              user = user
+            }
+          end)
+        end
         return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
       end
     end
@@ -578,17 +490,19 @@ finalize_a = function(ctx, override)
               end))
             end
           end
-          log_debug(function()
-            return {
-              action = "response_validator_redirect",
-              target = override.cname_target,
-              src_ip = src_ip,
-              dst_ip = dst_ip,
-              txid = txid_hex,
-              client_mac = client_mac,
-              user = user
-            }
-          end)
+          if level_enabled("DEBUG") then
+            log_debug(function()
+              return {
+                action = "response_validator_redirect",
+                target = override.cname_target,
+                src_ip = src_ip,
+                dst_ip = dst_ip,
+                txid = txid_hex,
+                client_mac = client_mac,
+                user = user
+              }
+            end)
+          end
           return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
         end
       end
@@ -686,33 +600,37 @@ finalize_a = function(ctx, override)
     end
     return _accum_0
   end)(), ",")
-  log_debug(function()
-    return {
-      action = resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow"),
-      src_ip = src_ip,
-      dst_ip = dst_ip,
-      vlan = vlan,
-      txid = txid_hex,
-      qnames = qnames,
-      answers = ip_count,
-      nft_rule_id = nft_rule_id,
-      payload_modified = payload_modified,
-      rcode = dns_msg.header.rcode,
-      client_mac = client_mac,
-      user = user
-    }
-  end)
+  if level_enabled("DEBUG") then
+    log_debug(function()
+      return {
+        action = resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow"),
+        src_ip = src_ip,
+        dst_ip = dst_ip,
+        vlan = vlan,
+        txid = txid_hex,
+        qnames = qnames,
+        answers = ip_count,
+        nft_rule_id = nft_rule_id,
+        payload_modified = payload_modified,
+        rcode = dns_msg.header.rcode,
+        client_mac = client_mac,
+        user = user
+      }
+    end)
+  end
   if records_to_add > 0 and not success_any then
     if ((config.nft or { }).add_failure_policy or "fail-closed") == "fail-closed" then
-      log_debug(function()
-        return {
-          action = "nft_add_failed_policy_fail_closed",
-          txid = txid_hex,
-          client_ip = client_ip,
-          qnames = qnames,
-          user = user
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = "nft_add_failed_policy_fail_closed",
+            txid = txid_hex,
+            client_ip = client_ip,
+            qnames = qnames,
+            user = user
+          }
+        end)
+      end
       return set_verdict(qh_ptr, pkt_id, NF_DROP)
     else
       log_warn(function()
@@ -881,7 +799,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     bench_after_payload_ms = current_benchmark_ms()
   end
   local l2 = get_l2(nfad)
-  local ip, l4, dns_msg, dns_raw, ip_ihl = parse_packet(raw)
+  local ip, l4, dns_msg, dns_raw, ip_ihl = parse_dns_packet(raw, tcp_state)
   if runtime_cfg.benchmark then
     bench_after_parse_ms = current_benchmark_ms()
   end
@@ -950,26 +868,28 @@ handle_response = function(qh_ptr, nfad, pkt_id)
         }
       end)
     else
-      log_debug(function()
-        return {
-          action = (function()
-            if retry_attempts > 0 then
-              return "response_no_matching_question_after_retry"
-            else
-              return "response_no_matching_question"
-            end
-          end)(),
-          src_ip = src_ip,
-          dst_ip = dst_ip,
-          vlan = l2.vlan,
-          txid = txid_hex,
-          rcode = dns_msg.header.rcode,
-          client_mac = client_mac,
-          retry_attempts = retry_attempts,
-          retry_wait_ms = retry_wait_ms,
-          user = user
-        }
-      end)
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = (function()
+              if retry_attempts > 0 then
+                return "response_no_matching_question_after_retry"
+              else
+                return "response_no_matching_question"
+              end
+            end)(),
+            src_ip = src_ip,
+            dst_ip = dst_ip,
+            vlan = l2.vlan,
+            txid = txid_hex,
+            rcode = dns_msg.header.rcode,
+            client_mac = client_mac,
+            retry_attempts = retry_attempts,
+            retry_wait_ms = retry_wait_ms,
+            user = user
+          }
+        end)
+      end
       return NF_DROP
     end
   end
@@ -978,21 +898,23 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   end
   if try_upstream_retry(entry, dns_msg, dns_raw, ip, l4, resolver_ip) then
     local q1 = dns_msg.questions and dns_msg.questions[1]
-    log_debug(function()
-      return {
-        action = "response_upstream_retry",
-        src_ip = src_ip,
-        dst_ip = dst_ip,
-        vlan = l2.vlan,
-        txid = txid_hex,
-        qname = q1 and q1.name or "-",
-        rcode = bit.band(dns_msg.header.ra_z_rcode, 0x0f),
-        attempt = entry.upstream_retries,
-        resolver = resolver_ip,
-        client_mac = client_mac,
-        user = user
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = "response_upstream_retry",
+          src_ip = src_ip,
+          dst_ip = dst_ip,
+          vlan = l2.vlan,
+          txid = txid_hex,
+          qname = q1 and q1.name or "-",
+          rcode = bit.band(dns_msg.header.ra_z_rcode, 0x0f),
+          attempt = entry.upstream_retries,
+          resolver = resolver_ip,
+          client_mac = client_mac,
+          user = user
+        }
+      end)
+    end
     return NF_DROP
   end
   consume(txid, dst_ip, client_port, resolver_ip)
@@ -1070,18 +992,20 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       end
       return _accum_0
     end)(), ",")
-    log_debug(function()
-      return {
-        action = nxdomain_mod and "response_nxdomain" or "response_refused",
-        src_ip = src_ip,
-        dst_ip = dst_ip,
-        vlan = l2.vlan,
-        txid = txid_hex,
-        qnames = qnames,
-        client_mac = client_mac,
-        user = user
-      }
-    end)
+    if level_enabled("DEBUG") then
+      log_debug(function()
+        return {
+          action = nxdomain_mod and "response_nxdomain" or "response_refused",
+          src_ip = src_ip,
+          dst_ip = dst_ip,
+          vlan = l2.vlan,
+          txid = txid_hex,
+          qnames = qnames,
+          client_mac = client_mac,
+          user = user
+        }
+      end)
+    end
     local patched_ptr = ffi.cast("const unsigned char*", patched)
     libnfq.nfq_set_verdict(qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr)
     return -1
@@ -1224,7 +1148,6 @@ return {
   bench_delta = bench_delta,
   build_benchmark_fields = build_benchmark_fields,
   skip_ipv6_ext_hdrs = skip_ipv6_ext_hdrs,
-  dns_tcp_complete = dns_tcp_complete,
   new_dns_tcp_stream = new_dns_tcp_stream,
   try_upstream_retry = try_upstream_retry,
   arm_retry_fds = arm_retry_fds,

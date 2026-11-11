@@ -129,6 +129,39 @@ describe "auth/handlers challenge-réponse", ->
       assert.equals 200, status
       after_each_cleanup state
 
+  describe "handle_login — lien admin (is_admin_user)", ->
+    login = (state) ->
+      state.auth_cfg.allow_plaintext_login = true
+      handle_login (req_form "user=#{USER}&password=#{PASS}"), IP, MAC, state
+
+    it "liste vide + admin_allow_all_when_empty → lien /admin affiché", ->
+      state = make_state!
+      state.admin_users = {}
+      state.admin_allow_all_when_empty = true
+      status, _, body = login state
+      assert.equals 200, status
+      -- Chaîne B2 : un utilisateur auto-inscrit devient admin quand la liste
+      -- est vide et que le défaut allow_all est actif.
+      assert.truthy body\find('href="/admin"', 1, true)
+      after_each_cleanup state
+
+    it "liste non vide sans l'utilisateur → pas de lien /admin", ->
+      state = make_state!
+      state.admin_users = { "bob@test.lan" }
+      state.admin_allow_all_when_empty = true
+      status, _, body = login state
+      assert.equals 200, status
+      assert.is_nil body\find('href="/admin"', 1, true)
+      after_each_cleanup state
+
+    it "utilisateur présent dans admin_users → lien /admin affiché", ->
+      state = make_state!
+      state.admin_users = { USER }
+      status, _, body = login state
+      assert.equals 200, status
+      assert.truthy body\find('href="/admin"', 1, true)
+      after_each_cleanup state
+
   describe "routage (handle_request)", ->
     valid_cookie = -> token.generate "user", USER, MAC, os.time! + 300, KEY
 

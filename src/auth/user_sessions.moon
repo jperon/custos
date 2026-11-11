@@ -2,7 +2,7 @@
 -- User authentication session management.
 --
 -- Stores authenticated user sessions in-memory, mapping username → {src_ip, mac, timeout}.
--- Used by worker_auth_pipeline to track authenticated users based on TLS certificates.
+-- Lu par la condition de filtre `from_user` (source "tls"/"user_sessions").
 
 { :log_info, :log_warn, :log_debug } = require "log"
 

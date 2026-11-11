@@ -67,7 +67,13 @@ RL_CONFIG = {
   DEBUG:              { keys: {"action"},                     window: 10  }
 }
 
-_rl = {}  -- { fingerprint → { ts, count } }
+_rl = {}  -- { fingerprint → { ts, count, exp } }
+_rl_inserts = 0
+
+-- Nombre d'insertions entre deux balayages des entrées expirées de `_rl`.
+-- Sans purge, une entrée par (MAC, domaine, type) vu resterait en mémoire
+-- pour toute la vie du worker. Coût amorti O(1) par insertion.
+RL_PURGE_EVERY = 256
 
 -- Process-scoped action prefix (set once per worker, inherited by fork children).
 _action_prefix = ""
@@ -98,14 +104,35 @@ rl_fingerprint = (action_key, fields, keys) ->
     fp ..= "|" .. tostring fields[k]
   fp
 
-check_rl = (level, fields) ->
+-- Supprime les entrées dont la fenêtre est expirée (`exp <= epoch`).
+-- @tparam number epoch Timestamp courant en secondes
+-- @treturn number Nombre d'entrées supprimées
+_purge_rl = (epoch) ->
+  expired = {}
+  for fp, entry in pairs _rl
+    expired[#expired + 1] = fp if epoch >= entry.exp
+  for fp in *expired
+    _rl[fp] = nil
+  _rl_inserts = 0
+  #expired
+
+--- Vide `_rl` (tests uniquement).
+-- Vide la table en place : la référence exportée reste valide.
+_rl_reset = ->
+  for k in pairs _rl
+    _rl[k] = nil
+  _rl_inserts = 0
+
+check_rl = (level, fields, epoch) ->
   action_key = fields.action or level
   cfg = RL_CONFIG[action_key]
   return 0 unless cfg
 
   fp = rl_fingerprint action_key, fields, cfg.keys
 
-  epoch = tonumber ts.tv_sec   -- réutilise le timespec déjà rempli dans write_log
+  -- write_log laisse `epoch` nil : `ts` vient d'être rempli par clock_gettime.
+  -- Les tests passent une valeur explicite pour simuler le temps.
+  epoch or= tonumber ts.tv_sec
   entry = _rl[fp]
   if entry
     if epoch - entry.ts < cfg.window
@@ -116,9 +143,12 @@ check_rl = (level, fields) ->
       old_count  = entry.count
       entry.ts   = epoch
       entry.count = 0
+      entry.exp = epoch + cfg.window
       return old_count
   else
-    _rl[fp] = { ts: epoch, count: 0 }
+    _rl[fp] = { ts: epoch, count: 0, exp: epoch + cfg.window }
+    _rl_inserts += 1
+    _purge_rl epoch if _rl_inserts >= RL_PURGE_EVERY
     return 0   -- première occurrence
 
 -- ── Formatage ─────────────────────────────────────────────────────
@@ -197,4 +227,4 @@ log_debug = (thunk) -> write_log "DEBUG", thunk
 -- @treturn nil
 log_trace = (thunk) -> write_log "TRACE", thunk
 
-{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG }
+{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG, :RL_PURGE_EVERY, :check_rl, :_rl, :_rl_reset }

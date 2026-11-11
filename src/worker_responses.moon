@@ -26,13 +26,14 @@ ttl_cfg = dns_cfg.ttl_grace or {}
 auth_cfg = config.auth or {}
 clients_cfg = config.clients or {}
 { :user_for_mac } = require "auth.sessions"
-{ :parse_ip4, :parse_ip6, :parse_udp, :parse_tcp, :parse_dns, :ip2s, dns_types: QTYPE } = require "lib.packet_parsing"
-{ :skip_ipv6_ext_hdrs, :new_dns_tcp_stream } = require "packet_utils"
+{ :parse_dns, :ip2s, dns_types: QTYPE } = require "lib.packet_parsing"
+{ :skip_ipv6_ext_hdrs, :new_dns_tcp_stream, :parse_dns_packet } = require "packet_utils"
 { :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume, :purge_pending } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
-{ :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix } = require "log"
+{ :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix, :level_enabled } = require "log"
+{ :tsv_field } = require "lib.tsv"
 { :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :strip_https_rr, :strip_dns_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
 strip_codec = require "strip_codec"
 mac_ipc     = require "mac_learner_ipc"
@@ -133,9 +134,6 @@ purge_strip_query_cache = (now_ts) ->
   for qname, entry in pairs strip_query_cache
     strip_query_cache[qname] = nil if now_ts > entry[2]
 
-tsv_field = (v) ->
-  s = if v ~= nil then tostring v else ""
-  if #s == 0 then "-" else s
 
 --- Formate une ligne d'événement « block » validateur (fonction pure).
 -- Même format que worker_questions.write_event : ts<TAB>decision<TAB>qname
@@ -174,12 +172,6 @@ set_verdict = (qh_ptr, pkt_id, verdict, payload=nil) ->
   else
     libnfq.nfq_set_verdict qh_ptr, pkt_id, verdict, 0, nil
 
--- ── Constantes L3/L4 et helpers checksums ──────────────────────
--- Byte-level (big-endian) + recalcul checksums IPv4/UDP/TCP factorisés dans
--- lib.checksums (mutation FFI en place, partagée avec les futurs workers).
-
-{ :PROTO_UDP, :PROTO_TCP } = require "lib.checksums"
-
 tcp_state = new_dns_tcp_stream!
 
 -- Reconstruction de paquet et formatage des RR DNS factorisés (fonctions pures).
@@ -187,62 +179,8 @@ tcp_state = new_dns_tcp_stream!
 
 -- ── Parsing L3/L4/L7 ────────────────────────────────────────────
 
--- Extrait ip, l4, dns_msg, dns_raw, ip_ihl depuis un paquet IP brut.
--- Retourne nil, "status" sur les cas spéciaux.
--- ip_ihl est l'offset 0-based (octets) de L4 depuis le début du paquet.
-parse_packet = (raw) ->
-  ver = bit.rshift raw\byte(1), 4
-  ip = if ver == 4
-    ip4, _ = parse_ip4 raw
-    ip4
-  elseif ver == 6
-    ip6, _ = parse_ip6 raw
-    ip6
-  return nil, "parse_failed" unless ip
-
-  l4_off = ip.data_off
-  proto  = ip.protocol or ip.next_header
-  ip_ihl = ip.payload_off or (ip.data_off - 1)   -- offset 0-based de L4
-
-  if ip.version == 6
-    p = ffi.cast "const uint8_t*", raw
-    proto, l4_off_0based = skip_ipv6_ext_hdrs p, #raw, ip.next_header
-    return nil, "parse_failed" unless proto
-    l4_off = l4_off_0based + 1
-    ip_ihl = l4_off_0based
-
-  if proto == PROTO_UDP
-    udp, _ = parse_udp raw, l4_off
-    return nil, "parse_failed" unless udp
-    dns_raw = raw\sub udp.data_off, udp.off + udp.len - 1
-    dns_msg, _ = parse_dns dns_raw, 1, false
-    return nil, "parse_failed" unless dns_msg
-    udp.proto = "udp"
-    return ip, udp, dns_msg, dns_raw, ip_ihl
-
-  elseif proto == PROTO_TCP
-    tcp, _ = parse_tcp raw, l4_off
-    return nil, "parse_failed" unless tcp
-    payload = raw\sub tcp.data_off
-    is_fin_rst = bit.band(tcp.flags, 0x05) != 0
-    has_payload = payload != ""
-    -- Clé de reassembly : octets IP bruts (largeur fixe, byte-safe) plutôt que
-    -- ip2s (évite deux inet_ntop + allocations par segment TCP). Clé opaque,
-    -- jamais re-parsée.
-    key = "#{ip.src}|#{tcp.spt}|#{ip.dst}|#{tcp.dpt}"
-    buf, init_seq, first_seg = tcp_state.feed key, payload, tcp.flags, tcp.seq_n
-    unless buf
-      return nil, if is_fin_rst or not has_payload then "tcp_control" else "buffering"
-    dns_raw = buf\sub 3
-    dns_msg, _ = parse_dns dns_raw, 1, false
-    return nil, "parse_failed" unless dns_msg
-    tcp.proto = "tcp"
-    tcp.tcp_init_seq = init_seq
-    tcp.tcp_single_segment = first_seg
-    tcp.tcp_dns_raw = dns_raw
-    return ip, tcp, dns_msg, dns_raw, ip_ihl
-
-  nil, "parse_failed"
+-- Parsing partagé avec worker_questions (cf. packet_utils) : ip, l4, dns_msg,
+-- dns_raw, ip_ihl. Retourne nil, "status" sur les cas spéciaux.
 
 -- ── Chargement paresseux de filter pour éviter de tirer ip_whitelist (libnftnl)
 -- au chargement du module — critique pour les tests unitaires.
@@ -494,7 +432,8 @@ finalize_a = (ctx, override) ->
       new_dns = strip_https_rr(new_dns) or new_dns
       patched = replace_dns_payload raw, ip, l4, ip_ihl, new_dns
       if patched
-        log_debug -> { action: action_label, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
+        if level_enabled "DEBUG"
+          log_debug -> { action: action_label, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
         return set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
     set_verdict qh_ptr, pkt_id, NF_DROP
 
@@ -529,7 +468,8 @@ finalize_a = (ctx, override) ->
             inject_answers redirect_answers
             pending_seq = get_last_seq!
             wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
-          log_debug -> { action: "response_validator_redirect", target: override.cname_target, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
+          if level_enabled "DEBUG"
+            log_debug -> { action: "response_validator_redirect", target: override.cname_target, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
           return set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
       return set_verdict qh_ptr, pkt_id, NF_DROP
     -- même CNAME → on continue vers le chemin normal (passthrough)
@@ -592,18 +532,20 @@ finalize_a = (ctx, override) ->
     return set_verdict qh_ptr, pkt_id, NF_DROP unless patched
 
   qnames = table.concat [q.name for q in *dns_msg.questions], ","
-  log_debug -> {
-    action:      resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow")
-    src_ip: src_ip, dst_ip: dst_ip, vlan: vlan
-    txid: txid_hex
-    qnames: qnames, answers: ip_count, nft_rule_id: nft_rule_id
-    payload_modified: payload_modified, rcode: dns_msg.header.rcode
-    client_mac: client_mac, user: user
+  if level_enabled "DEBUG"
+    log_debug -> {
+      action:      resp_ctx.action_label or (payload_modified and "response_patched" or "response_allow")
+      src_ip: src_ip, dst_ip: dst_ip, vlan: vlan
+      txid: txid_hex
+      qnames: qnames, answers: ip_count, nft_rule_id: nft_rule_id
+      payload_modified: payload_modified, rcode: dns_msg.header.rcode
+      client_mac: client_mac, user: user
   }
 
   if records_to_add > 0 and not success_any
     if ((config.nft or {}).add_failure_policy or "fail-closed") == "fail-closed"
-      log_debug -> { action: "nft_add_failed_policy_fail_closed", txid: txid_hex, client_ip: client_ip, qnames: qnames, user: user }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "nft_add_failed_policy_fail_closed", txid: txid_hex, client_ip: client_ip, qnames: qnames, user: user }
       return set_verdict qh_ptr, pkt_id, NF_DROP
     else
       log_warn -> { action: "nft_add_failed_fail_open", txid: txid_hex, client_ip: client_ip, qnames: qnames, user: user }
@@ -729,8 +671,8 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   l2 = get_l2 nfad
 
   -- ── L3 / L4 / L7 ───────────────────────────────────────────────
-  -- parse_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
-  ip, l4, dns_msg, dns_raw, ip_ihl = parse_packet raw
+  -- parse_dns_packet gère IPv4 et IPv6, UDP et TCP, et le header DNS en un seul appel.
+  ip, l4, dns_msg, dns_raw, ip_ihl = parse_dns_packet raw, tcp_state
   bench_after_parse_ms = current_benchmark_ms! if runtime_cfg.benchmark
   unless ip
     -- Intermediate TCP data segments are DROPped so response can reinject a single
@@ -810,17 +752,18 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
         user: user
       }
     else
-      log_debug -> {
-        action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
-        src_ip:    src_ip
-        dst_ip:    dst_ip
-        vlan:      l2.vlan
-        txid:      txid_hex
-        rcode:     dns_msg.header.rcode
-        client_mac: client_mac
-        retry_attempts: retry_attempts
-        retry_wait_ms: retry_wait_ms
-        user: user
+      if level_enabled "DEBUG"
+        log_debug -> {
+          action:    if retry_attempts > 0 then "response_no_matching_question_after_retry" else "response_no_matching_question"
+          src_ip:    src_ip
+          dst_ip:    dst_ip
+          vlan:      l2.vlan
+          txid:      txid_hex
+          rcode:     dns_msg.header.rcode
+          client_mac: client_mac
+          retry_attempts: retry_attempts
+          retry_wait_ms: retry_wait_ms
+          user: user
       }
       return NF_DROP
   bench_after_match_ms = current_benchmark_ms! if runtime_cfg.benchmark
@@ -832,18 +775,19 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   -- du retry repassera par ici et sera appariée à la même `entry`.
   if try_upstream_retry entry, dns_msg, dns_raw, ip, l4, resolver_ip
     q1 = dns_msg.questions and dns_msg.questions[1]
-    log_debug -> {
-      action:     "response_upstream_retry"
-      src_ip:     src_ip
-      dst_ip:     dst_ip
-      vlan:       l2.vlan
-      txid:       txid_hex
-      qname:      q1 and q1.name or "-"
-      rcode:      bit.band dns_msg.header.ra_z_rcode, 0x0f
-      attempt:    entry.upstream_retries
-      resolver:   resolver_ip
-      client_mac: client_mac
-      user:       user
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action:     "response_upstream_retry"
+        src_ip:     src_ip
+        dst_ip:     dst_ip
+        vlan:       l2.vlan
+        txid:       txid_hex
+        qname:      q1 and q1.name or "-"
+        rcode:      bit.band dns_msg.header.ra_z_rcode, 0x0f
+        attempt:    entry.upstream_retries
+        resolver:   resolver_ip
+        client_mac: client_mac
+        user:       user
     }
     return NF_DROP
 
@@ -918,15 +862,16 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     unless patched
       return NF_DROP
     qnames = table.concat [q.name for q in *dns_msg.questions], ","
-    log_debug -> {
-      action:   nxdomain_mod and "response_nxdomain" or "response_refused"
-      src_ip:   src_ip
-      dst_ip:   dst_ip
-      vlan:     l2.vlan
-      txid:     txid_hex
-      qnames:   qnames
-      client_mac: client_mac
-      user:     user
+    if level_enabled "DEBUG"
+      log_debug -> {
+        action:   nxdomain_mod and "response_nxdomain" or "response_refused"
+        src_ip:   src_ip
+        dst_ip:   dst_ip
+        vlan:     l2.vlan
+        txid:     txid_hex
+        qnames:   qnames
+        client_mac: client_mac
+        user:     user
     }
     patched_ptr = ffi.cast "const unsigned char*", patched
     libnfq.nfq_set_verdict qh_ptr, pkt_id, NF_ACCEPT, #patched, patched_ptr
@@ -1037,7 +982,7 @@ run = (queue_num, rfd, rules_metadata) ->
   run_queue tonumber(queue_num), handle_response, run_opts
 
 { :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields,
-  :skip_ipv6_ext_hdrs, :dns_tcp_complete, :new_dns_tcp_stream,
+  :skip_ipv6_ext_hdrs, :new_dns_tcp_stream,
   :try_upstream_retry, :arm_retry_fds, :format_block_event,
   :record_chain_targets, :maybe_dynamic_strip, :purge_strip_query_cache,
   :update_mac_clients, :purge_mac_clients, :ip_to_mac }

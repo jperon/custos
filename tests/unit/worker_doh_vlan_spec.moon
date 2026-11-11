@@ -17,6 +17,7 @@ has_action = (name) ->
   false
 package.loaded["log"] = {
   log_info: eval_log, log_warn: eval_log, log_debug: eval_log
+  level_enabled: (-> true)
   set_action_prefix: (->)
 }
 

@@ -97,6 +97,16 @@ describe "lib.bridge_detect", ->
       assert.equals 3, bridge_detect.count_slaves "br-lan", popen
       assert.equals 0, bridge_detect.count_slaves "br-vide", popen
 
+  describe "read_lines", ->
+    it "extrait le premier mot de chaque ligne, en ignorant les vides", ->
+      popen = fake_popen {
+        ["ma-commande"]: { "eth0 UP", "", "  eth1 DOWN  " }
+      }
+      assert.same { "eth0", "eth1" }, bridge_detect.read_lines "ma-commande", popen
+
+    it "renvoie {} si la commande échoue", ->
+      assert.same {}, bridge_detect.read_lines "peu-importe", (-> nil)
+
   describe "exists", ->
     it "reconnaît une interface réelle (lo)", ->
       assert.is_true bridge_detect.exists "lo"

@@ -390,3 +390,276 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   et le fichier défini, le token seul suffisant sinon. Tests :
   `tests/unit/webui/admin_auth_spec.moon` (MAC inconnue acceptée, MAC connue
   sans session refusée, MAC connue avec session acceptée).
+### Filtre : qualité de code et bugs résiduels (branche q-filter)
+
+- **B8 (`any_of` / `not`) : `requires_auth` non propagé — non-bug, conservé.**
+  Les deux méta-conditions ne publient pas `capabilities.requires_auth` dans
+  leur objet enrichi, alors que `from_user` le déclare. Ce n'est pas un défaut
+  à corriger en l'état : `nft_compiler` génère une sous-chaîne d'auth par règle
+  qui n'accepte que les clients présents dans les sets `_auth_mac/_auth_ip4/_auth_ip6`
+  de *cette* règle, et ces sets sont peuplés par `auth.rule_user.rule_requires_auth`,
+  qui ne détecte que `from_users`/`from_userlists` au niveau racine de
+  `rule.conditions` (pas les conditions imbriquées). Propager le drapeau depuis
+  `any_of` rendrait donc une règle worker-only `any_of` impossible à matcher en
+  nft (sets jamais peuplés) ; pour `not`, cela restreindrait la règle aux clients
+  authentifiés alors que la négation vise l'inverse. Une correction exigerait
+  une évolution coordonnée de `src/auth/` (hors périmètre de cette branche).
+  Comportement figé par deux tests : `tests/unit/filter/conditions_spec.moon`
+  (`any_of` + `from_user`) et `tests/unit/filter/not_spec.moon`
+  (`not { from_user }`).
+- **Q1 : fonctions `add_*` mortes de `src/nft.moon`.** `add_ip4`, `add_ip6`,
+  `add_ip`, `add_mac4`, `add_mac6` et leurs variantes `_quiet` n'étaient
+  appelées nulle part : le runtime passe par `nft_queue`/`worker_nft`
+  (`run_cmd`), et `worker_tls` n'importe de `nft` que `run_cmd`. Elles
+  construisaient par ailleurs des commandes avec `config.nft.set_ip4`
+  (…`set_mac6`), clés absentes des `DEFAULTS` de `config.moon` (et donc
+  `nil` sur une config minimale). Supprimées, ainsi que leurs quatre lignes
+  dans `doc/CONFIG.md` § 5, désormais inexactes : le module n'expose plus que
+  `run_cmd` et `cleanup` (`src/nft.moon:41-48`).
+- **Q2 : `collect_nets` / `collect_dest_nets` ne collectaient rien.** Les deux
+  fonctions (identiques, `collect_dest_nets = collect_nets`) définissaient
+  `add_net`/`add_named` sans jamais les appeler et retournaient toujours deux
+  tables vides : `source_ipv4/6`, `dest_ipv4/6` et `set_src4/6`, `set_dst4/6`
+  étaient donc toujours vides ou `nil` dans `build_rule`. Supprimées avec les
+  branches mortes associées (`match_exprs` fallback, rendu des sets src/dst
+  dans `render` et `render_sets_only`). Les sets `set_subnet4/6` (alimentés par
+  `collect_static_meta`, extension `nft_static`) et les sets de ports sont
+  conservés à l'identique.
+- **Q3 : modules entièrement morts `filter/lib/cidr_parser.moon` et
+  `filter/lib/load_config.moon`.** `cidr_parser` n'était requis que par son
+  propre spec ; `load_config` que par un `describe` de
+  `tests/unit/filter/filter_spec.moon`. Supprimés avec leurs `.lua` compilés,
+  le spec `cidr_parser_spec.moon` et le bloc `load_config` de `filter_spec`
+  (la config runtime est chargée par `config.moon`, pas par ce module) ;
+  arborescence `README.md` et `tests/README.md` alignées. Note : la validation
+  de préfixe qu'aurait pu fournir `cidr_parser` reste absente d'`ipcalc`
+  (point B4 de l'audit, hors périmètre de cette branche).
+- **Q4 : `include_rule` toujours vrai.** `build_rule` pose inconditionnellement
+  `set_dyn_ip4/ip6/mac4/mac6` (lignes « set_dyn_* »), donc le `or` de
+  `include_rule` était toujours satisfait et le filtre annoncé par le
+  commentaire (n'inclure que si condition nft / auth) ne s'appliquait jamais.
+  Simplification explicite : toutes les règles actives sont ajoutées à
+  `plan_rules`, avec un commentaire qui décrit le vrai mécanisme (le worker
+  injecte dans les sets dynamiques de chaque règle, y compris worker-only ;
+  une règle deny sans condition n'a simplement aucun élément). Aucun
+  changement de sortie nft.
+- **Q5 : en-tête de `src/config.moon` décrivant une forme de `conditions`
+  non supportée.** L'exemple montrait `conditions` sous forme de tableau
+  d'entrées à clé unique (`- to_domain: …`), alors que `filter.rule.compile_rule`
+  itère `pairs condition_table` (dictionnaire, `src/filter/rule.moon:55`).
+  Une config recopiée de l'exemple produisait `name=1` puis
+  `require "filter.conditions.1"`. En-tête corrigé (dictionnaire, AND implicite)
+  et complété par une mention de `any_of`/`not` ; aucun code exécutable changé.
+- **Q6 : duplication `from_net` / `from_subnet` / `to_net`.** Les trois
+  conditions réécrivaient mot pour mot le bloc `Net` + `eval` + `compile_nft`
+  (seul le message différait). Extrait dans
+  `src/filter/conditions/net_match.moon` (`build_cidr_condition
+  { prop, nft_dir, net_cidr, subject }`), utilisé par les trois modules ; les
+  cas spéciaux `_any`/`_none` (from_net/to_net) et la normalisation
+  `string | {net,family}` (from_subnet) restent dans chaque module, ainsi que
+  leurs messages d'erreur (`require`, autorisation, `source_ip`). Comportement
+  et expressions nft identiques, couverts par
+  `tests/unit/filter/conditions_spec.moon` / `filter_spec.moon`.
+- **T6 : `nft_extra_rules` sans spec directe.** Ajout de
+  `tests/unit/nft_extra_rules_spec.moon` : `run_cmd` (succès/échec),
+  `init` (ordre UCI inversé, whitespace normalisé, fragments vides ignorés,
+  suppression des occurrences existantes par handle, poursuite de l'insertion
+  si une suppression échoue, échec d'insertion → `false`), `cleanup` (handles,
+  fragments restants en config, état vidé) et `apply_from_config` (chaîne
+  présente → populate `filter_ips4/6` + insertions, chaîne absente →
+  ré-application éventuelle, ré-application échouée → `false`). Le contexte
+  libnftables est stubbé le temps du `require` puis le stub `ffi_defs` partagé
+  est restauré.
+- **T6 : `ip_whitelist` sans spec directe.** Ajout de
+  `tests/unit/ip_whitelist_spec.moon` : `init` purge bien les deux sets puis
+  répartit les entrées IPv4/IPv6 (détection par `:`), supprime les espaces
+  internes, ignore les entrées vides, n'émet le `add element` que pour la
+  famille présente, et tolère un rc nft non nul ; `cleanup` libère le contexte.
+  Contexte libnftables stubbé au `require`, stub `ffi_defs` partagé restauré.
+- **T6 : `nft_add_helper` sans spec directe.** Ajout de
+  `tests/unit/nft_add_helper_spec.moon` : succès immédiat, retry jusqu'au
+  succès (arguments transmis intacts), épuisement → `false` avec exactement
+  `#add_backoff_ms` tentatives, longueur du tableau = nombre de tentatives,
+  retour falsy compté comme échec. Backoffs mis à `{0,0,…}` pour ne pas dormir.
+- **T6 : `filter.rule_id` sans spec directe.** Ajout de
+  `tests/unit/filter/rule_id_spec.moon` : `sanitize_ascii` (accents/ligatures,
+  espaces/tabulations, guillemets/antislash, octets non ASCII, nil),
+  `sanitize_id` (minuscules, tirets, fusion des séparateurs, troncature 128),
+  `generate` (rule_id > description > index, valeurs blanches) et
+  `generate_unique` (suffixes `_2`, `_3`, marquage de `used_ids`, absence de
+  table).
+- **T6 : `localnets` — parsing des routes et injection non testés.**
+  `get_bridge_ifname` l'était déjà (avec le quoting de B7). Ajout dans
+  `tests/unit/filter/localnets_spec.moon` de cas pour `inject_localnets` :
+  extraction des CIDR `ip -4 route` (masque ≥ 8) puis `ip -6 route`
+  (masque ≥ 48), routes hors seuil ignorées, lignes sans CIDR ignorées,
+  whitelist existante préservée, et absence totale de commande quand
+  `allow_localnets` est faux/absent.
+### Dataplane : qualité, performance et tests (branche q-dataplane)
+
+- **`metrics` : `enabled: false` ignoré au chargement.** `src/metrics.moon`
+  posait `_enabled = metrics_cfg.enabled or true` : `false or true == true`, le
+  drapeau était donc toujours actif (seul `init`, déjà en `!= false`, le
+  respectait). Correctif : `metrics_cfg.enabled != false` ; test par
+  rechargement du module avec `config.metrics` absent / `false` / `true`
+  (`tests/unit/metrics_spec.moon`).
+- **`log._rl` : table de rate-limiting jamais purgée.** Une entrée par
+  (action, champs discriminants — typiquement MAC/domaine/type) restait en
+  mémoire pour toute la vie du worker DNS. Correctif : chaque entrée porte son
+  échéance (`exp`) et `_purge_rl` balaie les entrées expirées toutes les
+  `RL_PURGE_EVERY` (256) insertions — coût amorti O(1) par insertion, décisions
+  de rate-limiting inchangées. `check_rl` accepte un `epoch` explicite pour les
+  tests (`tests/unit/log_spec.moon`).
+- **`worker_auth_pipeline` et `auth.cert_parser` supprimés (code mort).** Le
+  worker n'était forké par personne (`main.moon`) et `send_user_auth_to_nft`
+  écrivait sur stdout au lieu du fd nft ; `cert_parser` n'avait pas d'autre
+  consommateur. Suppression des deux modules, de leurs `.lua` et specs, et des
+  entrées d'arborescence `README.md`. `auth.user_sessions` est conservé : lu par
+  `filter/conditions/from_user.moon`.
+- **`nfq_loop.set_verdict` supprimé.** Aucun appelant : `worker_responses` a sa
+  copie locale et `set_verdict_marked` couvre le chemin nft. Seul l'export
+  `set_verdict_marked` subsiste.
+- **`parse_packet` factorisé (`packet_utils.parse_dns_packet`).** Les deux
+  copies quasi identiques de `worker_questions`/`worker_responses` (IPv4/IPv6,
+  extensions IPv6, UDP, réassemblage DNS-TCP, `parse_dns`) sont remplacées par
+  une fonction unique retournant `ip, l4, dns_msg, dns_raw, ip_ihl` ; le
+  réassembleur TCP reste un argument, donc l'état par processus est préservé.
+  Tests dans `tests/unit/packet_utils_spec.moon`.
+- **Helpers IPC factorisés (`lib.ipc_hex`).** `split_fields`, `from_hex`,
+  `to_hex` et `is_valid_timeout` étaient définis deux fois (émetteur `ipc` vs
+  récepteurs `worker_nft`/`nft_queue`), et les validateurs `is_ipv4_str`/
+  `is_ipv6_str`/`is_valid_mac` d'`ipc` doublonnaient `is_ipv4`/`is_ipv6`/
+  `is_mac` de `worker_nft`. Source unique dans `src/lib/ipc_hex.moon`
+  (`tests/unit/lib/ipc_hex_spec.moon`).
+- **`encode_ip16` factorisé.** Les quatre producteurs de messages binaires
+  (`worker_questions` learn, `worker_auth_queue` auth, `worker_doh_vlan` VLAN,
+  `worker_arp_sniffer` learn + branche TLLA) répétaient la convention « IPv4 +
+  12 zéros / IPv6 tel quel ». `lib.ipc_hex.encode_ip16` la centralise (copie
+  `ffi.copy`, même format consommé par `mac_learner.ip16_to_str`).
+- **`tsv_field` factorisé (`lib.tsv`).** Le marqueur de champ vide `-` du
+  protocole `worker_events` était défini trois fois (`worker_questions`,
+  `worker_responses`, `worker_tls`) ; une seule définition partagée
+  (`tests/unit/lib/tsv_spec.moon`).
+- **`main.moon` réutilise `lib.bridge_detect.read_lines`.** La copie locale de
+  lecture de lignes (`io.popen`) disparaît ; `read_lines` est exportée et
+  utilisée pour `brif/` et le repli `bridge_slave`. Tests ajoutés dans
+  `tests/unit/lib/bridge_detect_spec.moon`.
+- **Export fantôme `dns_tcp_complete` retiré.** `worker_questions` et
+  `worker_responses` exposaient cette clé sans l'importer (toujours `nil`) ; le
+  vrai helper reste dans `packet_utils`.
+- **`lib.ttl_set` utilisé pour `negative_cache` et les caches RTP.**
+  `mac_learner.negative_cache` et les deux tables `worker_reject`
+  (`rtp_passthrough`, `rtp_passthrough_dport`) ne stockaient qu'une échéance et
+  étaient purgés à la main. Ils deviennent des `ttl_set` bornés (expiration
+  paresseuse + élagage à l'insertion) ; `ttl_set.remaining` est ajouté pour que
+  le log DEBUG RTP conserve le TTL restant, et `probe_request` reçoit le
+  `ttl_set` au lieu d'un epoch explicite. Nuance : `ttl_set` expire à
+  `exp <= maintenant` alors que les vérifications précédentes acceptaient
+  `maintenant == exp` — écart d'au plus 1 s, sans effet observable.
+- **Duplications mineures supprimées.** `mac_learner.sh_quote` → 
+  `lib.shquote.shquote` ; `vlan_lookup`/`strip_lookup` partagent
+  `expiring_lookup`.
+- **Logs DEBUG du chemin par paquet gardés par `level_enabled`.** Chaque
+  `log_debug` par paquet de `nfq_loop`, `worker_responses`, `worker_tls`,
+  `worker_reject`, `worker_sip`, `worker_doh_vlan` et `worker_auth_queue`
+  allouait la closure (et ses captures) avant que `write_log` ne filtre le
+  niveau ; les sites sont désormais sous `if level_enabled "DEBUG"` (même garde
+  que `worker_questions`), et `worker_tls.debug_tls` sort avant de construire sa
+  table de métadonnées. Le stub `log` de `tests/helpers/busted_setup.moon`
+  expose `level_enabled -> true` pour que les thunks continuent de s'exécuter
+  sous test.
+- **`worker_sip` : plus de `require` par paquet.** `format_ip` appelait
+  `require("ipparse.l3.ip")` à chaque invocation (2×/paquet) et
+  `allow_mac_ip`/`allow_sip_peer` `require("nft_queue")` à chaque insertion ;
+  ils utilisent `ipparse_ip.ip2s` et un `nft_q` mémorisé par `run()` (repli
+  paresseux pour les specs qui n'appellent pas `run`).
+- **`worker_events.note_verdict` : index O(1).** Chaque verdict DNS balayait
+  jusqu'à `VERDICTS_MAX` (8192) entrées puis déplaçait l'entrée en tête
+  (`table.remove` + `table.insert`). L'index `mac|qname|decision` et un numéro
+  de séquence rendent la déduplication O(1) ; l'ordre « plus récent d'abord »
+  est reconstruit une fois par flush (tri par séquence), donc
+  `recent-verdicts.tsv` garde son ordre pour `/refusals` et l'UI. À saturation,
+  c'est l'entrée insérée le plus ancien qui est évincée (au lieu de la moins
+  récemment vue) — écart assumé et sans effet sur la déduplication ni les
+  compteurs. Tests : `tests/unit/worker_events_spec.moon`.
+- **Tests `mac_learner` : plus de serveurs orphelins.** Cause racine : le client
+  IPC envoie sa requête après `connect()` ; si le serveur de test a déjà fermé,
+  le `send` déclenche **SIGPIPE** et tue Busted avant `after_each`, laissant le
+  `luajit ./tmp/mac_server_test.lua` en vie. Le spec ignore SIGPIPE, enregistre
+  chaque PID dès sa lecture et son teardown tue puis **attend** la disparition
+  (`kill -0` en boucle, SIGKILL après ~2 s) ; un test vérifie qu'aucun processus
+  ne survit. *Constat résiduel non corrigé (hors périmètre)* :
+  `mac_learner_ipc.query` envoie sans `MSG_NOSIGNAL`, donc en production un
+  learner qui ferme avant le `send` peut tuer le worker appelant par SIGPIPE.
+- **Non retenus après vérification.** Q8 (`mac_learner_ipc`) était déjà réglé
+  par la factorisation `query(request)` (commit 4ab5364) ; Q12 (découpage des
+  fonctions monolithiques `handle_sni_packet`/`handle_response`/`finalize_a`)
+  n'a pas été entrepris : refonte structurelle sans défaut fonctionnel, risque
+  de régression trop élevé pour cette passe. P4 (réécriture intégrale de
+  `recent-verdicts.tsv` à chaque flush) n'a pas été modifié : les deux pistes du
+  rapport (seuil de changement, réduction de `VERDICTS_MAX`) changent la
+  fraîcheur ou l'historique exposés, et le throttle de 5 s borne déjà la
+  fréquence. Q2 (accesseurs `metrics` sans lecteur) : seul le drapeau
+  `enabled` était un bug (corrigé) ; les accesseurs sont conservés.
+
+### Portail AUTH et webui : qualité de code et couverture (branche q-auth)
+
+Suite du volet `auth-webui` de l'audit du 2026-11-11 (rapport Q1-Q5/T1-T10).
+État constaté dans le code, puis actions :
+
+- **Q1 — déjà fait.** `webui.util` est la source unique (`esc`, `parse_form`) ;
+  aucun handler ne réimplémente plus le décodage urlencodé ni l'échappement
+  (`parse_form_multi` de `filter.moon` reste un décodeur distinct multi-valeurs).
+- **Q2 — code mort supprimé.** `src/auth/worker_conn.moon` (jamais requis,
+  `string.pack` indisponible sous LuaJIT 5.1), `credentials.update_user_hash`,
+  `cert.load_or_generate`, `cert_generator.generate_rsa_key` (appelé des seuls
+  tests ; le test de régression du nom temporaire unique est rejoué sur
+  `generate_self_signed`) et le champ caché `<name>_present` de
+  `webui.handlers.config` (jamais lu par `build_section`). L'import
+  `extract_sni` de `server.moon` avait déjà été retiré (fix-auth).
+- **Q3 — déjà fait**, complété : les trois points (défaut 10000, set MAC seul,
+  IP locale et non SNI) étaient corrigés ; les deux dernières mentions de
+  « cache SNI dynamique » de `server.moon` et `.agents/workers.md` sont
+  alignées sur l'IP locale réelle.
+- **Q4 — corrigé.** `serializer.is_array` ne testait que `1..#t` : une table
+  mixte (`{ "a", "b", cle = "v" }`) ou à clés non contiguës perdait ses clés
+  hors séquence à l'écriture. `is_array` exige maintenant que toutes les clés
+  soient des entiers de `1..#t` (comptage) ; sinon forme associative `[k]: v`.
+  Tests de sérialisation et de round-trip.
+- **Q5 — déjà fait** (le log `entries` compte les clés). Reste non corrigé,
+  hors du point tel que rapporté : `stats().size_disk = #persistent_index`
+  vaut toujours 0 (table associative) ; `stats` n'a aucun appelant hors tests.
+- **T1 — couvert.** `tests/unit/auth/register_spec.moon` : 9 cas sur
+  `handle_register` (voie hachage client : succès/état/reload, username
+  invalide 400, record invalide 400, doublon 409, échec set_record 500,
+  échec de signal ; repli plaintext : succès vérifiable, politique 401,
+  champs manquants 400, doublon 409). Le cas « échec set_record » a révélé
+  que `with_lock` levait hors du contrat de `rewrite_secrets_file` quand le
+  verrou est inouvrable : corrigé dans un commit `fix(auth.credentials)`
+  (pcall + retour `nil, message`), test unitaire dans
+  `credentials_spec.moon`.
+- **T2 — couvert.** `is_admin_user` via `handle_login` (lien `/admin` de la
+  page de succès selon liste/allow_all) et chaîne `GET /admin/` dans
+  `router_spec` (liste vide + allow_all → 200 ; allow_all=false → 403).
+  Aucun défaut de configuration modifié.
+- **T3, T4, T5, T6, T7, T10 — déjà couverts** : XSS règles / `render_field` /
+  `?mac=` (T3), conservation des clés hors schéma (T4), nom MAC→nom via
+  `handle_verdicts_get` (T5), indice `1.5` au réordonnancement (T6), 409 sur
+  cible de renommage/création existante (T7), lien `/logout` du dashboard
+  (T10).
+- **T8 — partiel.** Poison d'index déjà couvert (`setfenv` vide, marqueurs
+  `os.execute`/boucle). La concurrence d'écriture des fichiers de
+  certificats (B13) n'est pas couverte : les écritures directes de
+  `cert.moon`/`cert_cache.save_cert_to_disk` ne sont pas atomiques et aucun
+  point d'injection ne permet un test déterministe sans correction préalable.
+- **T9 — adapté.** `parse_query` n'existe plus (le routeur et les handlers
+  utilisent `webui.util.parse_form`) ; cas limites ajoutés à
+  `util_spec.moon` : paire sans `=`, séquence `%` invalide, `&` final.
+
+**Vérification (2026-11-11, branche q-auth)** : `make check` OK ; `make test`
+= 2109 successes / 0 failures / 0 errors ; `make test-js` = 12 pass.
+`make test-e2e` a été tenté mais n'est pas concluant dans cet environnement :
+plusieurs suites e2e d'autres worktrees tournaient simultanément sur le même
+homelab libvirt (redémarrages du service concurrents), d'où des échecs
+HTTP 000 côté portail et des écarts DNS/IPv6/EDE sans rapport avec les
+fichiers modifiés ici.

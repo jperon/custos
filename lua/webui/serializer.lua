@@ -7,12 +7,14 @@ is_array = function(t)
   if n == 0 then
     return false
   end
-  for i = 1, n do
-    if t[i] == nil then
+  local count = 0
+  for k in pairs(t) do
+    if not (type(k) == "number" and k % 1 == 0 and k >= 1 and k <= n) then
       return false
     end
+    count = count + 1
   end
-  return true
+  return count == n
 end
 local RESERVED_KEYWORDS = {
   ["and"] = 1,

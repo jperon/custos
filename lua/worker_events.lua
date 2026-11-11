@@ -53,25 +53,34 @@ read_chunk = function(fd)
     return ""
   end
 end
+local verdict_key
+verdict_key = function(mac, qname, decision)
+  return tostring(mac) .. "|" .. tostring(qname) .. "|" .. tostring(decision)
+end
 local note_verdict
 note_verdict = function(verdicts, decision, qname, mac, ip, user, reason, ts)
   if not (mac and qname and mac ~= "" and qname ~= "" and mac ~= "unknown") then
     return false
   end
-  for i = 1, #verdicts do
-    local e = verdicts[i]
-    if e.mac == mac and e.qname == qname and e.decision == decision then
-      e.count = e.count + 1
-      e.last_ts = ts
-      e.ip = ip
-      e.user = user
-      e.reason = reason
-      table.remove(verdicts, i)
-      table.insert(verdicts, 1, e)
-      return true
-    end
+  local idx = verdicts._idx
+  if not (idx) then
+    idx = { }
+    verdicts._idx = idx
   end
-  table.insert(verdicts, 1, {
+  local seq = (verdicts._seq or 0) + 1
+  verdicts._seq = seq
+  local key = verdict_key(mac, qname, decision)
+  local e = idx[key]
+  if e then
+    e.count = e.count + 1
+    e.last_ts = ts
+    e.ip = ip
+    e.user = user
+    e.reason = reason
+    e.seq = seq
+    return true
+  end
+  table.insert(verdicts, {
     mac = mac,
     qname = qname,
     decision = decision,
@@ -80,10 +89,15 @@ note_verdict = function(verdicts, decision, qname, mac, ip, user, reason, ts)
     reason = reason,
     count = 1,
     first_ts = ts,
-    last_ts = ts
+    last_ts = ts,
+    seq = seq
   })
+  idx[key] = verdicts[#verdicts]
   if #verdicts > VERDICTS_MAX then
-    verdicts[VERDICTS_MAX + 1] = nil
+    local old = table.remove(verdicts, 1)
+    if old then
+      idx[verdict_key(old.mac, old.qname, old.decision)] = nil
+    end
   end
   return true
 end
@@ -102,9 +116,31 @@ flush_verdicts = function(verdicts, events_dir)
     end)
     return 
   end
+  local positions = { }
+  for i, e in ipairs(verdicts) do
+    positions[e] = i
+  end
+  local ordered
+  do
+    local _accum_0 = { }
+    local _len_0 = 1
+    for _index_0 = 1, #verdicts do
+      local e = verdicts[_index_0]
+      _accum_0[_len_0] = e
+      _len_0 = _len_0 + 1
+    end
+    ordered = _accum_0
+  end
+  table.sort(ordered, function(a, b)
+    local aseq, bseq = a.seq or 0, b.seq or 0
+    if aseq ~= bseq then
+      return aseq > bseq
+    end
+    return (positions[a] or 0) < (positions[b] or 0)
+  end)
   local parts = { }
-  for _index_0 = 1, #verdicts do
-    local e = verdicts[_index_0]
+  for _index_0 = 1, #ordered do
+    local e = ordered[_index_0]
     parts[#parts + 1] = tostring(e.mac) .. "\t" .. tostring(e.ip or "") .. "\t" .. tostring(e.user or "") .. "\t" .. tostring(e.qname) .. "\t" .. tostring(e.decision or "") .. "\t" .. tostring(e.reason or "") .. "\t" .. tostring(e.count) .. "\t" .. tostring(e.first_ts) .. "\t" .. tostring(e.last_ts) .. "\n"
   end
   fh:write(table.concat(parts))

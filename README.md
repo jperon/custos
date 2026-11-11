@@ -132,7 +132,7 @@ custos/
 │   ├── ipc.moon             Protocole pipe question→response (msg 43 octets)
 │   ├── dns_ede.moon         Helpers DNS EDE (RFC 8914) — partagés responses + DoH
 │   ├── forge_dns.moon       Construction de réponses DNS forgées (vol de question)
-│   ├── nft.moon             Injection sets nftables via libnftables
+│   ├── nft.moon             Exécution de commandes nftables via libnftables (contexte réutilisé)
 │   ├── nft_add_helper.moon  Helper retry/backoff pour insertions nft
 │   ├── nft_rules.moon       Application du ruleset nft + compilation des règles
 │   ├── nft_extra_rules.moon Règles nft supplémentaires (UCI)
@@ -150,7 +150,6 @@ custos/
 │   ├── worker_events.moon       Worker d'agrégation/persistance des événements DNS
 │   ├── worker_captive.moon      Worker portail captif TCP/80
 │   ├── worker_auth_queue.moon   Worker NFQUEUE port 33443 (extrait MAC/IP)
-│   ├── worker_auth_pipeline.moon Pipeline d'authentification (parsing requêtes auth)
 │   ├── worker_tls.moon          Worker SNI TLS/QUIC (port 443, optionnel)
 │   ├── worker_sip.moon          Worker SIP/STUN (médias SDP, optionnel)
 │   ├── worker_doh.moon          Worker serveur DoH HTTPS (port 8443, optionnel)
@@ -172,13 +171,11 @@ custos/
 │   ├── auth/
 │   │   ├── worker.moon          Worker AUTH principal
 │   │   ├── server.moon          Serveur HTTPS (FFI WolfSSL) + routage /admin/*
-│   │   ├── worker_conn.moon     Gestion des connexions HTTPS
 │   │   ├── ffi_wolfssl.moon     FFI wrapper WolfSSL (remplace luasec)
 │   │   ├── ffi_socket.moon      FFI sockets bas niveau
 │   │   ├── cert.moon            Gestion certificats TLS (load_or_generate_sni)
 │   │   ├── cert_generator.moon  Génération dynamique via px5g
 │   │   ├── cert_cache.moon      Cache LRU/TTL pour certificats
-│   │   ├── cert_parser.moon     Lecture des métadonnées de certificat
 │   │   ├── sni_extractor.moon   Parser SNI (TLS ClientHello)
 │   │   ├── sessions.moon        Lecture/écriture sessions.lua (MAC-primary)
 │   │   ├── user_sessions.moon   Sessions par utilisateur authentifié
@@ -210,6 +207,7 @@ custos/
 │   │   ├── conditions/
 │   │   │   ├── from_net.moon    IP source (CIDR)
 │   │   │   ├── from_subnet.moon IP source via sous-réseau config
+│   │   │   ├── net_match.moon    Bloc CIDR commun (from_net/from_subnet/to_net)
 │   │   │   ├── from_mac.moon    Adresse MAC source
 │   │   │   ├── from_vlan.moon   VLAN source
 │   │   │   ├── from_user.moon   Session authentifiée
@@ -223,9 +221,7 @@ custos/
 │   │   │    auto-générées à partir de from_xxx par compiler_api)
 │   │   └── lib/
 │   │       ├── bsearch.moon       Recherche binaire dans les listes binaires
-│   │       ├── cidr_parser.moon   Parsing CIDR
 │   │       ├── ipcalc.moon        Test d'appartenance CIDR
-│   │       ├── load_config.moon   Chargeur de config
 │   │       └── parse_domains.moon Parser multi-format de listes de domaines
 │   ├── webui/
 │   │   ├── router.moon      Dispatch des requêtes /admin/* vers les handlers

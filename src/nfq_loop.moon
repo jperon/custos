@@ -5,7 +5,7 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 config = require "config"
-{ :log_info, :log_warn, :log_error, :log_debug } = require "log"
+{ :log_info, :log_warn, :log_error, :log_debug, :level_enabled } = require "log"
 
 AF_BRIDGE = 7   -- Linux AF_BRIDGE : famille d'adresses pour les hooks bridge nftables
 
@@ -121,10 +121,12 @@ run_queue = (queue_num, callback, opts=nil) ->
         continue if en == EINTR
         log_warn -> { action: "queue_poll_error", queue: queue_num, errno: en }
         break
-    log_debug -> { action: "queue_read_call", queue: queue_num }
+    if level_enabled "DEBUG"
+      log_debug -> { action: "queue_read_call", queue: queue_num }
     rv = libc.read fd, buf, READ_BUF_SIZE
     if rv > 0
-      log_debug -> { action: "queue_handle_packet", queue: queue_num, rv: rv }
+      if level_enabled "DEBUG"
+        log_debug -> { action: "queue_handle_packet", queue: queue_num, rv: rv }
       libnfq.nfq_handle_packet h, buf, tonumber rv
     elseif rv == 0
       log_warn -> { action: "queue_read_eof", queue: queue_num }
@@ -152,20 +154,6 @@ run_queue = (queue_num, callback, opts=nil) ->
   libnfq.nfq_close h
   c_callback\free!   -- libère le wrapper ffi.cast
 
---- Pose un verdict NFQUEUE simple.
--- @tparam cdata qh_ptr Handle de queue NFQUEUE.
--- @tparam number pkt_id Identifiant du paquet.
--- @tparam number verdict Verdict NFQUEUE.
--- @tparam string|nil payload Payload de remplacement optionnel.
--- @treturn number Code retour libnetfilter_queue.
-set_verdict = (qh_ptr, pkt_id, verdict, payload=nil) ->
-  if payload
-    ptr = ffi.cast "const unsigned char*", payload
-    rc = libnfq.nfq_set_verdict qh_ptr, pkt_id, verdict, #payload, ptr
-    return rc >= 0 and 0 or rc
-  rc = libnfq.nfq_set_verdict qh_ptr, pkt_id, verdict, 0, nil
-  rc >= 0 and 0 or rc
-
 --- Pose un verdict NFQUEUE en assignant une nfmark au paquet.
 -- Utilisé pour remettre un paquet accepté par un worker spécialisé dans le
 -- chemin nft, où une règle dédiée peut le router vers worker_reject.
@@ -185,4 +173,4 @@ set_verdict_marked = (qh_ptr, pkt_id, verdict, mark, payload=nil) ->
   rc >= 0 and 0 or rc
 
 -- Verdict helpers exposés pour les workers
-{ :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE, :set_verdict, :set_verdict_marked }
+{ :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE, :set_verdict_marked }

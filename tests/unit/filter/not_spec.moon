@@ -3,7 +3,7 @@
 
 describe "filter.conditions.not", ->
   not_factory = (require "filter.conditions.not").factory
-  cfg = { nft: { ip_timeout: "2m" } }
+  cfg = { nft: { ip_timeout: "2m" }, auth: { sessions_file: "/nonexistent/sessions" } }
 
   describe "eval (worker)", ->
     it "négation d'une condition matchée → false", ->
@@ -46,6 +46,15 @@ describe "filter.conditions.not", ->
     it "capabilities.worker est toujours true", ->
       cond = (not_factory cfg) { from_vlan: 1 }
       assert.is_true cond.capabilities.worker
+
+    it "ne propage pas requires_auth : not(from_user) n'exige pas d'auth nft", ->
+      -- Une négation de condition d'auth ne doit pas exiger la sous-chaîne
+      -- d'auth nft : elle restreindrait la règle aux clients authentifiés,
+      -- alors que `not { from_user: ... }` vise précisément l'inverse.
+      -- Cf. docs/agents/audits.md (2026-11-11, q-filter).
+      cond = (not_factory cfg) { from_user: "alice" }
+      assert.is_nil cond.capabilities.requires_auth
+      assert.is_false cond.capabilities.nft
 
     it "hérite creates_dynamic_scope si sous-condition le déclare", ->
       cond = (not_factory cfg) { to_domain: "example.com" }

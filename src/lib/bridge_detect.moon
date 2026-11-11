@@ -108,4 +108,4 @@ detect = (opts) ->
 
   pick_bridge(list_bridges(opts.popen), opts.count_fn) or DEFAULT_IFNAME
 
-{ :DEFAULT_IFNAME, :list_bridges, :count_slaves, :pick_bridge, :valid_name, :exists, :detect }
+{ :DEFAULT_IFNAME, :read_lines, :list_bridges, :count_slaves, :pick_bridge, :valid_name, :exists, :detect }

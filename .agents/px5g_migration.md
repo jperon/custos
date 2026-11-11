@@ -23,8 +23,6 @@ local key_pem, cert_pem, ok, err = gen.generate_self_signed("example.com")
 ```
 
 **Fonctions** :
-- `generate_rsa_key(bits)` → (key_pem, ok, err)
-  - Note: Obsolète pour px5g (génère EC par défaut)
 - `generate_self_signed(cn, sans, days)` → (key_pem, cert_pem, ok, err)
   - Génère clé + certificat auto-signé en une commande
   - Retourne PEM strings (pas des fichiers)
@@ -123,7 +121,7 @@ une évolution future :
 ```
 server.moon:run()
   → cert_cache = create_cache(100, 24h)
-  → ctx_fallback = load_or_generate("custos")  # Fallback générique
+  → ctx_fallback = load_or_generate_static(auth_cfg.cert, auth_cfg.key)  # Cert statique configuré
   → state.cert_cache = cache
 ```
 
@@ -200,7 +198,7 @@ src/auth/cert_cache.moon
 └─ Cache LRU/TTL en-mémoire
 
 src/auth/cert.moon (modifié)
-├─ load_or_generate()  # Unchanged, backward-compatible
+├─ load_or_generate_static()  # Cert statique, généré si absent
 └─ load_or_generate_sni(hostname, cache)  # Nouveau
 
 src/auth/server.moon (modifié)

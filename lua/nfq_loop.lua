@@ -4,10 +4,10 @@ do
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
 local config = require("config")
-local log_info, log_warn, log_error, log_debug
+local log_info, log_warn, log_error, log_debug, level_enabled
 do
   local _obj_0 = require("log")
-  log_info, log_warn, log_error, log_debug = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug
+  log_info, log_warn, log_error, log_debug, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.level_enabled
 end
 local AF_BRIDGE = 7
 local NFQNL_COPY_PACKET = 2
@@ -153,21 +153,25 @@ run_queue = function(queue_num, callback, opts)
           break
         end
       end
-      log_debug(function()
-        return {
-          action = "queue_read_call",
-          queue = queue_num
-        }
-      end)
-      local rv = libc.read(fd, buf, READ_BUF_SIZE)
-      if rv > 0 then
+      if level_enabled("DEBUG") then
         log_debug(function()
           return {
-            action = "queue_handle_packet",
-            queue = queue_num,
-            rv = rv
+            action = "queue_read_call",
+            queue = queue_num
           }
         end)
+      end
+      local rv = libc.read(fd, buf, READ_BUF_SIZE)
+      if rv > 0 then
+        if level_enabled("DEBUG") then
+          log_debug(function()
+            return {
+              action = "queue_handle_packet",
+              queue = queue_num,
+              rv = rv
+            }
+          end)
+        end
         libnfq.nfq_handle_packet(h, buf, tonumber(rv))
       elseif rv == 0 then
         log_warn(function()
@@ -227,19 +231,6 @@ run_queue = function(queue_num, callback, opts)
   libnfq.nfq_close(h)
   return c_callback:free()
 end
-local set_verdict
-set_verdict = function(qh_ptr, pkt_id, verdict, payload)
-  if payload == nil then
-    payload = nil
-  end
-  if payload then
-    local ptr = ffi.cast("const unsigned char*", payload)
-    local rc = libnfq.nfq_set_verdict(qh_ptr, pkt_id, verdict, #payload, ptr)
-    return rc >= 0 and 0 or rc
-  end
-  local rc = libnfq.nfq_set_verdict(qh_ptr, pkt_id, verdict, 0, nil)
-  return rc >= 0 and 0 or rc
-end
 local set_verdict_marked
 set_verdict_marked = function(qh_ptr, pkt_id, verdict, mark, payload)
   if payload == nil then
@@ -258,6 +249,5 @@ return {
   NF_ACCEPT = NF_ACCEPT,
   NF_DROP = NF_DROP,
   VERDICT_DONE = VERDICT_DONE,
-  set_verdict = set_verdict,
   set_verdict_marked = set_verdict_marked
 }

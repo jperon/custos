@@ -351,6 +351,39 @@ describe "metrics", ->
       assert.is_true rule_ids["rule3"]
       assert.is_true rule_ids["rule4"]
 
+  describe "chargement du module (config.metrics)", ->
+    saved_metrics = nil
+    saved_config  = nil
+
+    before_each ->
+      saved_metrics = package.loaded["metrics"]
+      saved_config  = package.loaded["config"]
+
+    after_each ->
+      package.loaded["metrics"] = saved_metrics
+      package.loaded["config"]  = saved_config
+
+    it "honore metrics.enabled = false dès le chargement", ->
+      package.loaded["config"] = { metrics: { enabled: false } }
+      package.loaded["metrics"] = nil
+      fresh = require "metrics"
+      fresh.record_verdict "rule1", "allow"
+      assert.equals 0, #fresh.get_metrics_json!.rules
+
+    it "reste actif quand metrics.enabled est absent", ->
+      package.loaded["config"] = {}
+      package.loaded["metrics"] = nil
+      fresh = require "metrics"
+      fresh.record_verdict "rule1", "allow"
+      assert.equals 1, #fresh.get_metrics_json!.rules
+
+    it "reste actif quand metrics.enabled = true", ->
+      package.loaded["config"] = { metrics: { enabled: true } }
+      package.loaded["metrics"] = nil
+      fresh = require "metrics"
+      fresh.record_verdict "rule1", "allow"
+      assert.equals 1, #fresh.get_metrics_json!.rules
+
   describe "integration", ->
 
     it "tracks combined metrics for complex scenario", ->

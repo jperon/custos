@@ -117,37 +117,6 @@ file_exists = (path) ->
   else
     false
 
---- Charge ou génère le contexte TLS.
--- Si key_path et cert_path existent tous les deux, ils sont utilisés directement.
--- Sinon un certificat auto-signé est généré à ces emplacements.
--- @tparam string key_path  Chemin de la clé privée
--- @tparam string cert_path Chemin du certificat
--- @treturn table  Contexte luasec (ssl.newcontext)
--- @raise   string Message d'erreur si échec
-load_or_generate = (key_path, cert_path) ->
-  key_path = key_path or "tmp/auth.key"
-  cert_path = cert_path or "tmp/auth.crt"
-
-  -- Si on utilise les chemins par défaut, on bascule sur le nommage par hash
-  if key_path == "tmp/auth.key" and cert_path == "tmp/auth.crt"
-    ips = get_local_ips()
-    sans = { "DNS:custos" }
-    for ip_san in *ips
-      table.insert sans, ip_san
-    san_str = table.concat sans, ","
-    h = hash_string san_str
-    key_path = "tmp/auth_#{h}.key"
-    cert_path = "tmp/auth_#{h}.crt"
-
-  unless file_exists(key_path) and file_exists(cert_path)
-    ips = get_local_ips()
-    sans = { "DNS:custos" }
-    for ip_san in *ips
-      table.insert sans, ip_san
-    ok, out = generate_self_signed key_path, cert_path, sans
-    error "Impossible de générer le certificat TLS :\n#{out}" unless ok
-  make_context key_path, cert_path
-
 --- Charge ou génère un contexte TLS pour un hostname SNI spécifique.
 -- Utilise un cache LRU avec TTL pour éviter la régénération répétée.
 -- @tparam string hostname Hostname SNI (ex: "example.com"), ou nil pour fallback générique
@@ -284,7 +253,7 @@ load_static = (key_path, cert_path) ->
   ctx, nil
 
 --- Charge le certificat statique, en le générant (auto-signé) s'il est absent.
--- Contrat identique à load_or_generate mais sans lever : sur une installation
+-- Ne lève jamais : sur une installation
 -- fraîche, les chemins configurés (ex. /etc/custos/certs/auth.crt) n'existent
 -- pas encore — on génère alors un auto-signé à ces emplacements (dossiers
 -- parents créés, clé en 0600) pour que le portail fonctionne dès le premier
@@ -312,4 +281,4 @@ load_or_generate_static = (key_path, cert_path) ->
 
   load_static key_path, cert_path
 
-{ :load_or_generate, :generate_self_signed, :make_context, :load_or_generate_sni, :load_static, :load_or_generate_static, :hash_string }
+{ :load_or_generate_sni, :load_static, :load_or_generate_static, :generate_self_signed, :make_context, :hash_string }

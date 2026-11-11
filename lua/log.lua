@@ -96,6 +96,8 @@ local RL_CONFIG = {
   }
 }
 local _rl = { }
+local _rl_inserts = 0
+local RL_PURGE_EVERY = 256
 local _action_prefix = ""
 local set_action_prefix
 set_action_prefix = function(prefix)
@@ -110,15 +112,37 @@ rl_fingerprint = function(action_key, fields, keys)
   end
   return fp
 end
+local _purge_rl
+_purge_rl = function(epoch)
+  local expired = { }
+  for fp, entry in pairs(_rl) do
+    if epoch >= entry.exp then
+      expired[#expired + 1] = fp
+    end
+  end
+  for _index_0 = 1, #expired do
+    local fp = expired[_index_0]
+    _rl[fp] = nil
+  end
+  _rl_inserts = 0
+  return #expired
+end
+local _rl_reset
+_rl_reset = function()
+  for k in pairs(_rl) do
+    _rl[k] = nil
+  end
+  _rl_inserts = 0
+end
 local check_rl
-check_rl = function(level, fields)
+check_rl = function(level, fields, epoch)
   local action_key = fields.action or level
   local cfg = RL_CONFIG[action_key]
   if not (cfg) then
     return 0
   end
   local fp = rl_fingerprint(action_key, fields, cfg.keys)
-  local epoch = tonumber(ts.tv_sec)
+  epoch = epoch or tonumber(ts.tv_sec)
   local entry = _rl[fp]
   if entry then
     if epoch - entry.ts < cfg.window then
@@ -128,13 +152,19 @@ check_rl = function(level, fields)
       local old_count = entry.count
       entry.ts = epoch
       entry.count = 0
+      entry.exp = epoch + cfg.window
       return old_count
     end
   else
     _rl[fp] = {
       ts = epoch,
-      count = 0
+      count = 0,
+      exp = epoch + cfg.window
     }
+    _rl_inserts = _rl_inserts + 1
+    if _rl_inserts >= RL_PURGE_EVERY then
+      _purge_rl(epoch)
+    end
     return 0
   end
 end
@@ -230,5 +260,9 @@ return {
   level_enabled = level_enabled,
   rl_fingerprint = rl_fingerprint,
   set_action_prefix = set_action_prefix,
-  RL_CONFIG = RL_CONFIG
+  RL_CONFIG = RL_CONFIG,
+  RL_PURGE_EVERY = RL_PURGE_EVERY,
+  check_rl = check_rl,
+  _rl = _rl,
+  _rl_reset = _rl_reset
 }

@@ -31,16 +31,20 @@ local NDP_MIN_LEN = 56
 local NDP_OPT_MIN_LEN = 8
 local fmt_mac
 fmt_mac = require("packet_utils").mac2s
+local encode_ip16
+encode_ip16 = require("lib.ipc_hex").encode_ip16
 local fmt_ipv6
 fmt_ipv6 = function(s, o)
   return ip2s(s:sub(o, o + 15))
 end
 local build_learn_msg
 build_learn_msg = function(raw, ip_off, ip_len, mac_off)
-  local msg = ffi.new("uint8_t[22]")
-  for i = 0, ip_len - 1 do
-    msg[i] = raw:byte(ip_off + i)
+  local ip16 = encode_ip16(raw:sub(ip_off, ip_off + ip_len - 1))
+  if not (ip16) then
+    return nil
   end
+  local msg = ffi.new("uint8_t[22]")
+  ffi.copy(msg, ip16, 16)
   for i = 0, 5 do
     msg[16 + i] = raw:byte(mac_off + i)
   end
@@ -227,6 +231,9 @@ process_arp = function(raw, len, learn_wfd)
     return 
   end
   local msg = build_learn_msg(raw, 29, 4, mac_off)
+  if not (msg) then
+    return 
+  end
   local ok = write_learn(learn_wfd, msg)
   return log_debug(function()
     if ok then
@@ -278,6 +285,9 @@ process_ipv6 = function(raw, len, learn_wfd)
       return 
     end
     local msg = build_learn_msg(raw, 23, 16, mac_src_off)
+    if not (msg) then
+      return 
+    end
     local ok = write_learn(learn_wfd, msg)
     return log_debug(function()
       if ok then
@@ -300,10 +310,12 @@ process_ipv6 = function(raw, len, learn_wfd)
     end
     local tlla_mac = extract_tlla(raw, 79, len)
     if tlla_mac then
-      local msg = ffi.new("uint8_t[22]")
-      for i = 0, 15 do
-        msg[i] = raw:byte(target_off + i)
+      local ip16 = encode_ip16(raw:sub(target_off, target_off + 15))
+      if not (ip16) then
+        return 
       end
+      local msg = ffi.new("uint8_t[22]")
+      ffi.copy(msg, ip16, 16)
       for i = 0, 5 do
         msg[16 + i] = tlla_mac:byte(i + 1)
       end
@@ -321,6 +333,9 @@ process_ipv6 = function(raw, len, learn_wfd)
       end)
     else
       local msg = build_learn_msg(raw, target_off, 16, mac_src_off)
+      if not (msg) then
+        return 
+      end
       local ok = write_learn(learn_wfd, msg)
       return log_debug(function()
         if ok then

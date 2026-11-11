@@ -6,6 +6,11 @@ end
 local log_warn
 log_warn = require("log").log_warn
 local config = require("config")
+local to_hex, is_valid_timeout
+do
+  local _obj_0 = require("lib.ipc_hex")
+  to_hex, is_valid_timeout = _obj_0.to_hex, _obj_0.is_valid_timeout
+end
 local nft_cfg = config.nft or { }
 local FAMILY = nft_cfg.family or "bridge"
 local FAMILY6 = nft_cfg.family6 or "bridge"
@@ -28,25 +33,6 @@ local sleep_req = ffi.new("timespec_t[1]")
 local poll_fds = ffi.new("struct pollfd[1]")
 local ack_buf = ffi.new("uint8_t[1]")
 local drain_buf = ffi.new("uint8_t[64]")
-local is_valid_timeout
-is_valid_timeout = function(t)
-  if not (type(t) == "string") then
-    return false
-  end
-  if not (#t > 0 and #t <= 16) then
-    return false
-  end
-  return t:match("^%d+[smhdw]?$") ~= nil
-end
-local to_hex
-to_hex = function(s)
-  if not (s and #s > 0) then
-    return ""
-  end
-  return (s:gsub(".", function(c)
-    return string.format("%02x", c:byte())
-  end))
-end
 local sanitize_timeout
 sanitize_timeout = function(timeout)
   local t

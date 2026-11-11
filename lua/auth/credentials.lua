@@ -270,7 +270,8 @@ valid_username = function(username)
 end
 local rewrite_secrets_file
 rewrite_secrets_file = function(secrets_path, map_line, append_line)
-  return with_lock(secrets_path .. ".lock", function()
+  local write
+  write = function()
     local tmp_path = secrets_path .. ".new." .. tostring(ffi.C.getpid())
     local fh, err = io.open(tmp_path, "w")
     if not (fh) then
@@ -300,7 +301,12 @@ rewrite_secrets_file = function(secrets_path, map_line, append_line)
       return nil, "Impossible de renommer le fichier secrets : " .. tostring(rename_err)
     end
     return true
-  end)
+  end
+  local ok, res, res_err = pcall(with_lock, secrets_path .. ".lock", write)
+  if not (ok) then
+    return nil, tostring(res)
+  end
+  return res, res_err
 end
 local register_user
 register_user = function(username, password, secrets_path, current_secrets)
@@ -327,18 +333,6 @@ register_user = function(username, password, secrets_path, current_secrets)
     return nil, "Impossible de recharger le fichier secrets : " .. tostring(load_err)
   end
   return new_secrets
-end
-local update_user_hash
-update_user_hash = function(username, password, secrets_path)
-  local new_entry = hash_password(password)
-  return rewrite_secrets_file(secrets_path, function(line)
-    local u = line:match("^([^:]+):")
-    if u == username then
-      return tostring(username) .. ":" .. tostring(new_entry)
-    else
-      return line
-    end
-  end)
 end
 local set_record
 set_record = function(username, record, secrets_path)
@@ -370,7 +364,6 @@ return {
   verify_password = verify_password,
   verify_response = verify_response,
   parse_record = parse_record,
-  update_user_hash = update_user_hash,
   set_record = set_record,
   load_secrets = load_secrets,
   valid_username = valid_username,
