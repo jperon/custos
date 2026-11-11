@@ -109,7 +109,11 @@ _cron_add() {
 
 _cron_remove() {
     [ -f "$CRONTABS_ROOT" ] || return 0
-    sed -i "/$CUSTOS_CRON_MARKER/d" "$CRONTABS_ROOT"
+    # Retire aussi les anciennes lignes sans marqueur (ex.
+    # « 0 4 * * * /usr/sbin/custos-update 2>&1 » écrites par d'anciens
+    # installeurs SANS toucher aux autres lignes du crontab.
+    sed -i -e "/$CUSTOS_CRON_MARKER/d" \
+        -e '\#/usr/sbin/custos-update#d' "$CRONTABS_ROOT"
     /etc/init.d/cron reload 2>/dev/null || true
 }
 

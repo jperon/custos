@@ -1,10 +1,15 @@
 #!/bin/sh
-# custos-update — Déploie les listes .bin pré-compilées de CustosVirginum
-# depuis les releases GitHub du dépôt custos-lists.
+# custos-update — Déploie les listes .bin de CustosVirginum.
 #
-# Remplace l'ancienne compilation locale (luajit updater.lua) : les .bin sont
-# désormais construits par la CI de custos-lists et publiés en release, puis
-# simplement téléchargés ici (curl + zstd), vérifiés (SHA256) et déployés.
+# Deux étapes indépendantes :
+#   1. télécharge l'archive de release custos-lists-<profil>.tar.zst du dépôt
+#      custos-lists, la vérifie (SHA256) et l'extrait dans $DEST ;
+#   2. compile les listes locales .txt de custom_lists_dir en
+#      <domainlists_dir>/custom/<nom>.bin (updater.lua --custom-only) : une
+#      liste locale écrase donc la liste de release de même nom.
+# Un échec de l'étape 1 n'empêche pas l'étape 2 et inversement ; le SIGHUP de
+# rechargement est toujours tenté à la fin. Le code de sortie est non nul si
+# l'une des deux étapes a échoué.
 #
 # Usage : custos-update [full|lowmem] [tag]
 #   profil : full (custom + Toulouse) ou lowmem (custom seul).
@@ -13,12 +18,25 @@
 #   tag    : tag de release. Défaut : env CUSTOS_LISTS_TAG, sinon uci
 #            custos.main.lists_tag, sinon « latest ».
 #
-# Dépendances : curl, zstd, tar, sha256sum.
+# Dépendances : curl, zstd, tar, sha256sum, luajit (via /usr/bin/custos).
+#
+# Variables d'environnement (surcharge ; utile aux tests et aux installations
+# non standard) : CUSTOS_LISTS_REPO, CUSTOS_LISTS_DIR, CUSTOS_LISTS_PROFILE,
+# CUSTOS_LISTS_TAG, CUSTOS_LISTS_MEM_THRESHOLD_KB, CUSTOS_DIR, CUSTOS_BIN,
+# CUSTOS_CONFIG_PATH, CUSTOS_UPDATER, CUSTOS_PID_FILE.
 set -eu
 
 REPO="${CUSTOS_LISTS_REPO:-jperon/custos-lists}"
 DEST="${CUSTOS_LISTS_DIR:-$(uci get custos.main.lists_dir 2>/dev/null || echo /tmp/custos/lists)}"
-PID_FILE=/var/run/custos.pid
+
+# Chemins du runtime (mêmes valeurs que /etc/init.d/custos).
+CUSTOS_DIR="${CUSTOS_DIR:-/usr/share/custos}"
+PROG="${CUSTOS_BIN:-/usr/bin/custos}"
+CONFIG_MOON="${CUSTOS_CONFIG_PATH:-/etc/custos/config.moon}"
+UPDATER="${CUSTOS_UPDATER:-$CUSTOS_DIR/filter/updater.lua}"
+PID_FILE="${CUSTOS_PID_FILE:-/var/run/custos.pid}"
+CUSTOS_LUA_PATH="${CUSTOS_LUA_PATH:-$CUSTOS_DIR/?.lua;$CUSTOS_DIR/?/init.lua;/usr/share/lua/?.lua;/usr/share/lua/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua;/usr/lib/lua/5.1/?.lua;/usr/lib/lua/5.1/?/init.lua;;}"
+CUSTOS_LUA_CPATH="${CUSTOS_LUA_CPATH:-/usr/lib/lua/?.so;/usr/lib/lua/5.1/?.so;;}"
 
 # Seuil RAM (kB) au-delà duquel l'autodétection choisit « full ».
 # 128 Mo : en dessous, on bascule en « lowmem » (custom seul, sans Toulouse),
@@ -53,36 +71,80 @@ tag="${tag:-latest}"
 archive="custos-lists-${profile}.tar.zst"
 base="https://github.com/${REPO}/releases/download/${tag}"
 
-# ── Outils requis ─────────────────────────────────────────────────
-for tool in curl zstd tar sha256sum; do
-    command -v "$tool" >/dev/null 2>&1 || {
-        echo "custos-update: outil requis introuvable : $tool" >&2; exit 1; }
-done
-
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/custos-lists.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-echo "custos-update: téléchargement de $archive (tag $tag)…" >&2
-# --retry : les uplinks de routeurs (et le CDN d'assets GitHub) connaissent des
-# échecs de connexion transitoires ; on retente plutôt que d'abandonner.
-curl_dl() {
-    curl --silent --location --fail \
-        --retry 3 --retry-delay 2 --retry-all-errors \
-        --connect-timeout 20 -o "$1" "$2"
-}
-curl_dl "$tmp/$archive"   "$base/$archive"
-curl_dl "$tmp/SHA256SUMS" "$base/SHA256SUMS"
+# ── Étape 1 : déploiement de la release ───────────────────────────
+# release_rc conserve le code exact du premier échec : les codes « réseau »
+# de curl (6, 7, 28, 35, 52, 56) restent ainsi distinguables par les tests E2E.
+release_rc=0
+missing=""
+for tool in curl zstd tar sha256sum; do
+    command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+done
+if [ -n "$missing" ]; then
+    echo "custos-update: outil(s) requis introuvable(s) :$missing" >&2
+    release_rc=1
+else
+    echo "custos-update: téléchargement de $archive (tag $tag)…" >&2
+    # --retry : les uplinks de routeurs (et le CDN d'assets GitHub) connaissent
+    # des échecs de connexion transitoires ; on retente plutôt que d'abandonner.
+    curl_dl() {
+        curl --silent --location --fail \
+            --retry 3 --retry-delay 2 --retry-all-errors \
+            --connect-timeout 20 -o "$1" "$2"
+    }
+    curl_dl "$tmp/$archive" "$base/$archive" || release_rc=$?
+    if [ "$release_rc" -eq 0 ]; then
+        curl_dl "$tmp/SHA256SUMS" "$base/SHA256SUMS" || release_rc=$?
+    fi
+    if [ "$release_rc" -eq 0 ]; then
+        echo "custos-update: vérification SHA256…" >&2
+        ( cd "$tmp" && grep " $archive\$" SHA256SUMS | sha256sum -c - >/dev/null ) || release_rc=$?
+    fi
+    if [ "$release_rc" -eq 0 ]; then
+        echo "custos-update: extraction vers $DEST…" >&2
+        mkdir -p "$DEST" "$tmp/extract" || release_rc=$?
+    fi
+    if [ "$release_rc" -eq 0 ]; then
+        zstd -dc "$tmp/$archive" | tar -xf - -C "$tmp/extract" || release_rc=$?
+    fi
+    if [ "$release_rc" -eq 0 ]; then
+        # Synchronisation : on copie le contenu extrait par-dessus la destination.
+        cp -a "$tmp/extract/." "$DEST/" || release_rc=$?
+    fi
+    if [ "$release_rc" -ne 0 ]; then
+        echo "custos-update: échec du déploiement de la release $archive (rc=$release_rc)" >&2
+    fi
+fi
 
-echo "custos-update: vérification SHA256…" >&2
-( cd "$tmp" && grep " $archive\$" SHA256SUMS | sha256sum -c - >/dev/null )
-
-echo "custos-update: extraction vers $DEST…" >&2
-mkdir -p "$DEST" "$tmp/extract"
-zstd -dc "$tmp/$archive" | tar -xf - -C "$tmp/extract"
-# Synchronisation : on copie le contenu extrait par-dessus la destination.
-cp -a "$tmp/extract/." "$DEST/"
+# ── Étape 2 : compilation des listes locales ──────────────────────
+# Toujours tentée, même si l'étape 1 a échoué (pas de réseau au démarrage).
+custom_rc=0
+if [ ! -f "$CONFIG_MOON" ]; then
+    echo "custos-update: configuration introuvable : $CONFIG_MOON" >&2
+    custom_rc=1
+elif [ ! -f "$UPDATER" ]; then
+    echo "custos-update: updater introuvable : $UPDATER" >&2
+    custom_rc=1
+elif [ ! -x "$PROG" ]; then
+    echo "custos-update: interpréteur introuvable ou non exécutable : $PROG" >&2
+    custom_rc=1
+else
+    echo "custos-update: compilation des listes locales ($CONFIG_MOON)…" >&2
+    LUA_PATH="$CUSTOS_LUA_PATH" \
+    LUA_CPATH="$CUSTOS_LUA_CPATH" \
+    CUSTOS_CONFIG_PATH="$CONFIG_MOON" \
+    CUSTOS_REQUIRE_EXTERNAL_CONFIG=1 \
+        "$PROG" "$UPDATER" --custom-only --config "$CONFIG_MOON" || custom_rc=$?
+    if [ "$custom_rc" -ne 0 ]; then
+        echo "custos-update: échec de la compilation des listes locales (rc=$custom_rc)" >&2
+    fi
+fi
 
 # ── Rechargement à chaud du daemon ────────────────────────────────
+# Envoyé même si l'une des étapes a échoué : les listes déjà présentes
+# (release précédente, locales compilées) doivent être prises en compte.
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     kill -HUP "$(cat "$PID_FILE")" \
         && echo "custos-update: SIGHUP envoyé (pid $(cat "$PID_FILE"))." >&2
@@ -91,4 +153,14 @@ elif pgrep -f "luajit.*main" >/dev/null 2>&1; then
         && echo "custos-update: SIGHUP envoyé (pgrep)." >&2
 fi
 
-echo "custos-update: listes déployées ($profile, $tag) dans $DEST." >&2
+if [ "$release_rc" -eq 0 ]; then
+    echo "custos-update: listes de la release déployées ($profile, $tag) dans $DEST." >&2
+fi
+
+# Code de sortie : une erreur de compilation locale priment sur l'échec de la
+# release (elle est interne, donc plus significative) ; sinon on propage le
+# code de curl/extraction pour ne pas masquer la cause réseau.
+if [ "$custom_rc" -ne 0 ]; then
+    exit "$custom_rc"
+fi
+exit "$release_rc"
