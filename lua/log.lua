@@ -163,9 +163,29 @@ local RL_NEVER_LIMIT = {
   config_source = true,
   config_external_missing = true
 }
+local RL_MAX_WINDOW = 0
+for _, cfg in pairs(RL_CONFIG) do
+  if cfg.window > RL_MAX_WINDOW then
+    RL_MAX_WINDOW = cfg.window
+  end
+end
+local RL_SLOTS = 4096
+local RL_SLOT_WORDS = 3
+local RL_MMAP_BYTES = RL_SLOTS * RL_SLOT_WORDS * 4
+local RL_PROBE_MAX = 8
+local PROT_READ = 1
+local PROT_WRITE = 2
+local MAP_SHARED = 0x01
+local MAP_ANONYMOUS = 0x20
+local _rl_base = nil
 local _rl = { }
-local _rl_inserts = 0
-local RL_PURGE_EVERY = 256
+local _rl_fb_n = 0
+pcall(function()
+  local ptr = libc.mmap(nil, RL_MMAP_BYTES, bit.bor(PROT_READ, PROT_WRITE), bit.bor(MAP_SHARED, MAP_ANONYMOUS), -1, 0)
+  if ptr ~= nil and ptr ~= ffi.cast("void*", -1) then
+    _rl_base = ffi.cast("uint32_t*", ptr)
+  end
+end)
 local _action_prefix = ""
 local set_action_prefix
 set_action_prefix = function(prefix)
@@ -212,27 +232,50 @@ rl_fingerprint = function(action_key, fields, keys)
   end
   return fp
 end
-local _purge_rl
-_purge_rl = function(epoch)
-  local expired = { }
-  for fp, entry in pairs(_rl) do
-    if epoch >= entry.exp then
-      expired[#expired + 1] = fp
+local RL_SEP = { }
+for _index_0 = 1, #RL_IDENTITY_KEYS do
+  local k = RL_IDENTITY_KEYS[_index_0]
+  RL_SEP[k] = "\1" .. k .. "="
+end
+local _rl_hash_step
+_rl_hash_step = function(h, s)
+  for i = 1, #s do
+    h = bit.tobit(h * 33 + s:byte(i))
+  end
+  return h
+end
+local _rl_hash
+_rl_hash = function(level, fields, keys)
+  local action = fields.action or level
+  if not (keys) then
+    local cfg = _rl_resolve_cfg(level, fields)
+    keys = cfg and cfg.keys or { }
+  end
+  local h = _rl_hash_step(0, level)
+  h = _rl_hash_step(h, "\1")
+  h = _rl_hash_step(h, action)
+  for _index_0 = 1, #keys do
+    local k = keys[_index_0]
+    local v = fields[k]
+    if v ~= nil then
+      h = _rl_hash_step(h, (RL_SEP[k] or ("\1" .. k .. "=")))
+      h = _rl_hash_step(h, tostring(v))
     end
   end
-  for _index_0 = 1, #expired do
-    local fp = expired[_index_0]
-    _rl[fp] = nil
-  end
-  _rl_inserts = 0
-  return #expired
+  return h % 4294967296
 end
 local _rl_reset
 _rl_reset = function()
-  for k in pairs(_rl) do
-    _rl[k] = nil
+  if _rl_base then
+    for i = 0, RL_SLOTS * RL_SLOT_WORDS - 1 do
+      _rl_base[i] = 0
+    end
+  else
+    for k in pairs(_rl) do
+      _rl[k] = nil
+    end
+    _rl_fb_n = 0
   end
-  _rl_inserts = 0
 end
 local check_rl
 check_rl = function(level, fields, epoch)
@@ -244,31 +287,67 @@ check_rl = function(level, fields, epoch)
   if not (cfg) then
     return 0
   end
-  local fp = rl_fingerprint(tostring(level) .. "|" .. tostring(action_key), fields, cfg.keys)
   epoch = epoch or tonumber(ts.tv_sec)
-  local entry = _rl[fp]
-  if entry then
-    if epoch - entry.ts < cfg.window then
-      entry.count = entry.count + 1
-      return -1
-    else
+  if _rl_base then
+    local h = _rl_hash(level, fields, cfg.keys)
+    local base = _rl_base
+    local window = cfg.window
+    local slot = h % RL_SLOTS
+    for _probe = 1, RL_PROBE_MAX do
+      local off = slot * RL_SLOT_WORDS
+      local sh = tonumber(base[off])
+      local sts = tonumber(base[off + 1])
+      if sts == 0 then
+        base[off] = h
+        base[off + 1] = epoch
+        base[off + 2] = 0
+        return 0
+      end
+      if sh == h then
+        if epoch - sts < window then
+          base[off + 2] = tonumber(base[off + 2]) + 1
+          return -1
+        end
+        local old_count = tonumber(base[off + 2])
+        base[off + 1] = epoch
+        base[off + 2] = 0
+        return old_count
+      end
+      if epoch - sts >= RL_MAX_WINDOW then
+        base[off] = h
+        base[off + 1] = epoch
+        base[off + 2] = 0
+        return 0
+      end
+      slot = (slot + 1) % RL_SLOTS
+    end
+    return 0
+  else
+    local fp = rl_fingerprint(tostring(level) .. "|" .. tostring(action_key), fields, cfg.keys)
+    local entry = _rl[fp]
+    if entry then
+      if epoch - entry.ts < cfg.window then
+        entry.count = entry.count + 1
+        return -1
+      end
       local old_count = entry.count
       entry.ts = epoch
       entry.count = 0
-      entry.exp = epoch + cfg.window
       return old_count
+    else
+      if _rl_fb_n >= RL_SLOTS then
+        for k in pairs(_rl) do
+          _rl[k] = nil
+        end
+        _rl_fb_n = 0
+      end
+      _rl[fp] = {
+        ts = epoch,
+        count = 0
+      }
+      _rl_fb_n = _rl_fb_n + 1
+      return 0
     end
-  else
-    _rl[fp] = {
-      ts = epoch,
-      count = 0,
-      exp = epoch + cfg.window
-    }
-    _rl_inserts = _rl_inserts + 1
-    if _rl_inserts >= RL_PURGE_EVERY then
-      _purge_rl(epoch)
-    end
-    return 0
   end
 end
 local now
@@ -364,8 +443,8 @@ return {
   rl_fingerprint = rl_fingerprint,
   set_action_prefix = set_action_prefix,
   RL_CONFIG = RL_CONFIG,
-  RL_PURGE_EVERY = RL_PURGE_EVERY,
+  RL_SLOTS = RL_SLOTS,
   check_rl = check_rl,
-  _rl = _rl,
+  _rl_hash = _rl_hash,
   _rl_reset = _rl_reset
 }

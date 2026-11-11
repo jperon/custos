@@ -116,13 +116,43 @@ RL_NEVER_LIMIT = {
   config_external_missing:     true
 }
 
-_rl = {}  -- { fingerprint → { ts, count, exp } }
-_rl_inserts = 0
+-- Fenêtre maximale (sert à réutiliser un slot dont l'entrée est forcément
+-- expirée, quelle que soit sa règle d'origine).
+RL_MAX_WINDOW = 0
+for _, cfg in pairs RL_CONFIG
+  RL_MAX_WINDOW = cfg.window if cfg.window > RL_MAX_WINDOW
 
--- Nombre d'insertions entre deux balayages des entrées expirées de `_rl`.
--- Sans purge, une entrée par (MAC, domaine, type) vu resterait en mémoire
--- pour toute la vie du worker. Coût amorti O(1) par insertion.
-RL_PURGE_EVERY = 256
+-- ── État partagé entre processus ──────────────────────────────────
+-- Table de hachage à taille fixe (4096 slots × 3 uint32 = 48 Kio) dans une
+-- zone mmap(MAP_SHARED|MAP_ANONYMOUS) créée au chargement du module — donc
+-- dans le superviseur avant tout fork — et héritée par tous les workers et
+-- leurs enfants. Les enfants AUTH/DoH forkés par connexion partagent ainsi le
+-- même état, contrairement à l'ancienne table Lua par processus.
+--
+-- Slot : { hash, dernier_ts, count }. `dernier_ts == 0` = libre. On stocke le
+-- hash 32 bits complet et on sonde linéairement : deux empreintes différentes
+-- qui tombent dans le même slot occupent des slots distincts, aucune n'est
+-- supprimée à tort. Sans verrou : les accès uint32 alignés ne peuvent pas être
+-- déchirés ; une course peut produire une ligne en double ou un compteur
+-- légèrement faux, jamais une corruption ni un blocage. Table saturée (plus de
+-- RL_PROBE_MAX slots occupés) → on journalise sans supprimer.
+RL_SLOTS = 4096
+RL_SLOT_WORDS = 3
+RL_MMAP_BYTES = RL_SLOTS * RL_SLOT_WORDS * 4
+RL_PROBE_MAX = 8
+PROT_READ = 1
+PROT_WRITE = 2
+MAP_SHARED = 0x01
+MAP_ANONYMOUS = 0x20
+
+_rl_base = nil
+_rl = {}   -- repli uniquement si mmap échoue
+_rl_fb_n = 0
+
+pcall ->
+  ptr = libc.mmap nil, RL_MMAP_BYTES, bit.bor(PROT_READ, PROT_WRITE), bit.bor(MAP_SHARED, MAP_ANONYMOUS), -1, 0
+  if ptr != nil and ptr != ffi.cast("void*", -1)
+    _rl_base = ffi.cast "uint32_t*", ptr
 
 -- Process-scoped action prefix (set once per worker, inherited by fork children).
 _action_prefix = ""
@@ -180,24 +210,52 @@ rl_fingerprint = (action_key, fields, keys) ->
     fp ..= "|" .. tostring fields[k]
   fp
 
--- Supprime les entrées dont la fenêtre est expirée (`exp <= epoch`).
--- @tparam number epoch Timestamp courant en secondes
--- @treturn number Nombre d'entrées supprimées
-_purge_rl = (epoch) ->
-  expired = {}
-  for fp, entry in pairs _rl
-    expired[#expired + 1] = fp if epoch >= entry.exp
-  for fp in *expired
-    _rl[fp] = nil
-  _rl_inserts = 0
-  #expired
+-- Séparateurs précalculés pour le hash (évite une allocation de string par
+-- champ et par message sur le chemin chaud ALLOW/BLOCK).
+RL_SEP = {}
+for k in *RL_IDENTITY_KEYS
+  RL_SEP[k] = "\1" .. k .. "="
 
---- Vide `_rl` (tests uniquement).
--- Vide la table en place : la référence exportée reste valide.
+--- Hash 32 bits djb2 incrémental, sans allocation de table.
+-- @tparam number h      Hash courant
+-- @tparam string s      Chaîne à incorporer
+-- @treturn number Hash mis à jour (32 bits signé)
+_rl_hash_step = (h, s) ->
+  for i = 1, #s
+    h = bit.tobit(h * 33 + s\byte(i))
+  h
+
+--- Hash de l'empreinte d'un message (niveau + action + champs discriminants).
+-- Les champs absents ne participent pas. Fonction pure, exportée pour les
+-- tests (collision de slot).
+-- @tparam string level  Niveau de log
+-- @tparam table  fields Champs du message
+-- @tparam table|nil keys Clés discriminantes (cfg.keys ; résolues si nil)
+-- @treturn number Hash 32 bits non signé
+_rl_hash = (level, fields, keys) ->
+  action = fields.action or level
+  unless keys
+    cfg = _rl_resolve_cfg level, fields
+    keys = cfg and cfg.keys or {}
+  h = _rl_hash_step 0, level
+  h = _rl_hash_step h, "\1"
+  h = _rl_hash_step h, action
+  for k in *keys
+    v = fields[k]
+    if v != nil
+      h = _rl_hash_step h, (RL_SEP[k] or ("\1" .. k .. "="))
+      h = _rl_hash_step h, tostring v
+  h % 4294967296
+
+--- Vide l'état partagé (tests uniquement).
 _rl_reset = ->
-  for k in pairs _rl
-    _rl[k] = nil
-  _rl_inserts = 0
+  if _rl_base
+    for i = 0, RL_SLOTS * RL_SLOT_WORDS - 1
+      _rl_base[i] = 0
+  else
+    for k in pairs _rl
+      _rl[k] = nil
+    _rl_fb_n = 0
 
 check_rl = (level, fields, epoch) ->
   action_key = fields.action or level
@@ -205,30 +263,64 @@ check_rl = (level, fields, epoch) ->
   cfg = _rl_resolve_cfg level, fields
   return 0 unless cfg
 
-  -- Le niveau fait partie de l'empreinte : une même action émise en INFO et
-  -- en WARN ne doit pas partager le compteur de suppression de l'autre.
-  fp = rl_fingerprint "#{level}|#{action_key}", fields, cfg.keys
-
   -- write_log laisse `epoch` nil : `ts` vient d'être rempli par clock_gettime.
   -- Les tests passent une valeur explicite pour simuler le temps.
   epoch or= tonumber ts.tv_sec
-  entry = _rl[fp]
-  if entry
-    if epoch - entry.ts < cfg.window
-      entry.count += 1
-      return -1   -- supprimer
-    else
-      -- Fenêtre expirée : retourner le compteur puis réinitialiser
-      old_count  = entry.count
-      entry.ts   = epoch
-      entry.count = 0
-      entry.exp = epoch + cfg.window
-      return old_count
+
+  if _rl_base
+    -- Le niveau et l'action complète font partie de l'empreinte : une même
+    -- action émise en INFO et en WARN ne partage pas le compteur de l'autre.
+    h = _rl_hash level, fields, cfg.keys
+    base = _rl_base
+    window = cfg.window
+    slot = h % RL_SLOTS
+    for _probe = 1, RL_PROBE_MAX
+      off = slot * RL_SLOT_WORDS
+      sh = tonumber base[off]
+      sts = tonumber base[off + 1]
+      if sts == 0
+        base[off] = h
+        base[off + 1] = epoch
+        base[off + 2] = 0
+        return 0
+      if sh == h
+        if epoch - sts < window
+          base[off + 2] = tonumber(base[off + 2]) + 1
+          return -1   -- supprimer
+        -- Fenêtre expirée : retourner le compteur puis réinitialiser
+        old_count = tonumber base[off + 2]
+        base[off + 1] = epoch
+        base[off + 2] = 0
+        return old_count
+      -- Entrée forcément expirée (toutes fenêtres ≤ RL_MAX_WINDOW) : recyclage.
+      if epoch - sts >= RL_MAX_WINDOW
+        base[off] = h
+        base[off + 1] = epoch
+        base[off + 2] = 0
+        return 0
+      slot = (slot + 1) % RL_SLOTS
+    return 0   -- table saturée : journaliser sans supprimer
   else
-    _rl[fp] = { ts: epoch, count: 0, exp: epoch + cfg.window }
-    _rl_inserts += 1
-    _purge_rl epoch if _rl_inserts >= RL_PURGE_EVERY
-    return 0   -- première occurrence
+    -- Repli par processus si mmap a échoué. Plafond global : on repart de zéro
+    -- plutôt que de laisser la table croître indéfiniment.
+    fp = rl_fingerprint "#{level}|#{action_key}", fields, cfg.keys
+    entry = _rl[fp]
+    if entry
+      if epoch - entry.ts < cfg.window
+        entry.count += 1
+        return -1
+      old_count = entry.count
+      entry.ts = epoch
+      entry.count = 0
+      return old_count
+    else
+      if _rl_fb_n >= RL_SLOTS
+        for k in pairs _rl
+          _rl[k] = nil
+        _rl_fb_n = 0
+      _rl[fp] = { ts: epoch, count: 0 }
+      _rl_fb_n += 1
+      return 0
 
 -- ── Formatage ─────────────────────────────────────────────────────
 
@@ -306,4 +398,4 @@ log_debug = (thunk) -> write_log "DEBUG", thunk
 -- @treturn nil
 log_trace = (thunk) -> write_log "TRACE", thunk
 
-{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG, :RL_PURGE_EVERY, :check_rl, :_rl, :_rl_reset }
+{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG, :RL_SLOTS, :check_rl, :_rl_hash, :_rl_reset }

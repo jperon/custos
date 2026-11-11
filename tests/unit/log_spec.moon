@@ -5,6 +5,8 @@
 -- injectant un config minimal (runtime.log_level), puis on restaure les stubs
 -- pour ne pas contaminer les specs suivantes.
 
+ffi = require "ffi"
+
 describe "log", ->
   local log, saved_log, saved_config
 
@@ -136,41 +138,56 @@ describe "log", ->
     assert.is_not_nil cfg
     assert.are.same { "ip" }, cfg.keys
 
-  -- Purge bornée de _rl : sans elle, une entrée par (MAC, domaine, type) vue
-  -- reste en mémoire pour toute la vie du worker.
-  describe "purge bornée de _rl", ->
-    count_rl = ->
-      n = 0
-      for _ in pairs log._rl
-        n += 1
-      n
+  -- État partagé : table de hachage à taille fixe en
+  -- mmap(MAP_SHARED|MAP_ANONYMOUS), créée au chargement du module donc héritée
+  -- par tous les workers et leurs enfants après fork. Remplace la table Lua par
+  -- processus : chaque enfant AUTH/DoH repartait d'un état vide (915 PID pour
+  -- 915 lignes `auth_server_request_received`).
+  describe "état partagé entre processus", ->
+    before_each ->
+      log._rl_reset!
+      log.set_action_prefix ""
 
-    before_each -> log._rl_reset!
+    it "_rl_reset vide l'état partagé", ->
+      f = { action: "reset_test", qname: "r.example" }
+      assert.are.equal 0,  log.check_rl "INFO", f, 1000
+      assert.are.equal -1, log.check_rl "INFO", f, 1001
+      log._rl_reset!
+      assert.are.equal 0, log.check_rl "INFO", f, 1002
 
-    it "conserve la sémantique du rate-limit (fenêtre par action)", ->
-      f = { mac_src: "aa:bb", qname: "x.test", qtype: "A" }
-      -- Fenêtre ALLOW = 30 s.
-      assert.are.equal 0,  log.check_rl "ALLOW", f, 1000
-      assert.are.equal -1, log.check_rl "ALLOW", f, 1001
-      assert.are.equal -1, log.check_rl "ALLOW", f, 1029
-      assert.are.equal 2,  log.check_rl "ALLOW", f, 1030
-      assert.are.equal -1, log.check_rl "ALLOW", f, 1031
+    it "un enfant forké alimente l'état vu par le parent", ->
+      -- L'enfant insère une empreinte neuve (le parent ne l'a jamais vue) ;
+      -- sans mémoire partagée, le parent repartirait de 0.
+      f = { action: "fork_shared", qname: "fork.example" }
+      pid = ffi.C.fork!
+      if pid == 0
+        log.check_rl "INFO", f, 7000
+        ffi.C._exit 0
+      assert.is_true pid > 0
+      status = ffi.new "int[1]"
+      assert.are.equal pid, ffi.C.waitpid pid, status, 0
+      assert.are.equal -1, log.check_rl "INFO", f, 7000
 
-    it "purge les entrées expirées au plus toutes les N insertions", ->
-      n = log.RL_PURGE_EVERY
-
-      -- Fenêtre ALLOW = 30 s.
-      for i = 1, n
-        log.check_rl "ALLOW", { mac_src: "aa:bb", qname: "a#{i}.test", qtype: "A" }, 1000
-      assert.are.equal n, count_rl!
-
-      -- Toujours dans la fenêtre : la purge ne doit rien supprimer.
-      for i = 1, n
-        log.check_rl "ALLOW", { mac_src: "aa:bb", qname: "b#{i}.test", qtype: "A" }, 1005
-      assert.are.equal 2 * n, count_rl!
-
-      -- Entrées de 1000 (exp. 1030) et 1005 (exp. 1035) expirées : seules
-      -- les N entrées du troisième lot restent.
-      for i = 1, n
-        log.check_rl "ALLOW", { mac_src: "aa:bb", qname: "c#{i}.test", qtype: "A" }, 1040
-      assert.are.equal n, count_rl!
+    it "collision de slot : aucune des deux empreintes n'est supprimée à tort", ->
+      -- Cherche deux empreintes distinctes dans le même slot (même index
+      -- modulo RL_SLOTS) pour exercer le sondage linéaire.
+      par_slot = {}
+      a = nil
+      b = nil
+      for i = 1, 100000
+        f = { action: "collision_test", qname: "c#{i}.example" }
+        h = log._rl_hash "INFO", f
+        slot = h % log.RL_SLOTS
+        if par_slot[slot]
+          if par_slot[slot].h != h
+            a = par_slot[slot].f
+            b = f
+            break
+        else
+          par_slot[slot] = { h: h, f: f }
+      assert.is_not_nil a
+      assert.is_not_nil b
+      assert.are.equal 0,  log.check_rl "INFO", a, 8000
+      assert.are.equal 0,  log.check_rl "INFO", b, 8000
+      assert.are.equal -1, log.check_rl "INFO", a, 8001
+      assert.are.equal -1, log.check_rl "INFO", b, 8001
