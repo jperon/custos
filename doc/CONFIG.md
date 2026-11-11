@@ -82,11 +82,14 @@ la réponse DNS (avec `action=response_dns_benchmark`). Le worker DNS (questions
 les métriques (`metrics.record_verdict`) restent inchangées. La ligne porte les
 champs de décision habituels (`qname`, `qtype`, `mac_src`, `vlan`, `src_ip`,
 `dst_ip`, `rule`, `reason`, `user`, `af`) plus les temps. `action=response_dns_benchmark`
-n'échappe pas au rate-limiting : la résolution retombe sur la règle de niveau
-`ALLOW`/`BLOCK` (fenêtre 30 s, empreinte `mac_src`/`qname`/`qtype`). Les
-échantillons identiques sont comptés pendant la fenêtre et le premier échantillon
-suivant porte `suppressed=N` ; deux échantillons qui diffèrent par un champ
-d'identité restent tous deux émis.
+est **jamais limitée** (règle `dns_benchmark` de `RL_NEVER_LIMIT`, comme
+`worker_died`) : une option d'instrumentation ne doit pas être rendue muette
+par le limiteur. Sur un banc à qname fixe, la règle `ALLOW`/`BLOCK` aurait
+fusionné tous les échantillons d'un même triplet `mac_src`/`qname`/`qtype`
+pendant 30 s et perdu les mesures (`q_to_response_ms`, `drain_ms`, `parse_ms`,
+`match_ms`…) des échantillons supprimés — c'est-à-dire l'objet même de
+l'option. Aucune autre action de banc/instrumentation n'est émise (seul
+`dns_benchmark` est concerné).
 
 `q_to_response_ms` mesure la latence **totale**, de l'entrée de la question dans
 le worker DNS jusqu'au log de la réponse correspondante côté worker responses,
@@ -125,18 +128,51 @@ règle par défaut **du niveau**, qui s'applique même quand `action` est prése
 | `ERROR`, `CRIT`, `ALERT`, `EMERG` | 10 s | champs d'identité |
 | `WARN`, `INFO`, `NOTICE` | 60 s | champs d'identité |
 | `DEBUG`, `TRACE` | 30 s | champs d'identité |
-| `ALLOW`, `BLOCK` (dont `action=response_dns_benchmark`) | 30 s | `mac_src`, `qname`, `qtype` |
+| `ALLOW`, `BLOCK` | 30 s | `mac_src`, `qname`, `qtype` |
+| `dns_benchmark` (préfixé ou non) | jamais | — (instrumentation) |
+| `log_rl_mmap_failed`, `log_rl_saturated` | jamais | — (diagnostic du limiteur) |
 | `captive_redirect` | 60 s | `ip` |
 | `no_ipv6_for_client`, `no_ipv4_for_client` (préfixés ou non) | 120 s | `client` |
 | `response_dnsonly` | 30 s | `dst_ip`, `qnames` |
 
-Champs d'identité par défaut : `peer`, `peer_ip`, `peer_mac`, `ip`, `client`,
-`client_ip`, `client_mac`, `mac`, `mac_src`, `src_ip`, `qname`, `qnames`,
-`domain`, `qtype`, `dst_ip`, `hostname`, `sni`, `cert`, `key`, `path`, `method`,
-`url`, `file`, `ifname`, `name`, `queue`, `worker`, `user`, `vlan`,
-`resolver_ip`, `upstream_ip`, `addr`, `rule`, `list`, `err`, `reason`, `cmd`.
+Champs d'identité par défaut : `peer`, `peer_ip`, `peer_mac`, `ip`, `ip_src`,
+`ip_dst`, `client`, `client_ip`, `client_mac`, `mac`, `mac_src`, `src_ip`,
+`dst_ip`, `qname`, `qnames`, `domain`, `qtype`, `hostname`, `host`, `sni`,
+`cert`, `key`, `path`, `method`, `url`, `file`, `ifname`, `name`, `queue`,
+`worker`, `user`, `username`, `vlan`, `resolver`, `resolver_ip`, `upstream_ip`,
+`addr`, `protocol`, `l4_proto`, `rcode`, `errno`, `source`, `direction`,
+`version`, `verdict`, `backend`, `type`, `cn`, `local_ip`, `rule`, `list`,
+`err`, `reason`, `cmd`.
 Les champs volatils (`pid`, `txid`, ports, durées, compteurs, tailles) en sont
 exclus : deux lignes qui n'en diffèrent que par eux fusionnent.
+
+Exclusions réfléchies (volontairement hors empreinte) : `status` (sémantique
+mixte — code de sortie de commande ou couche de parsing — donc volatil),
+`mode` (constante de configuration : ne varie pas entre deux lignes d'un même
+processus), `detail` (texte libre explicatif ; l'`action` et `reason` portent
+la discrimination), `af`/`family` (redondants avec `src_ip`/`dst_ip`).
+
+**Saturation et repli.** Chaque slot stocke `{hash, ts, expires, count}` (4
+`uint32`, en-tête de 2 mots pour la main d'horloge et le compteur de
+saturation ; 64 Kio au total). Un slot n'est recyclé pour une autre empreinte
+que si **sa propre** échéance (`expires = ts + fenêtre de sa règle`) est
+passée : une entrée encore dans sa fenêtre n'est jamais supprimée, même sous
+saturation. Quand le sondage (8 pas) est épuisé, une main d'horloge balaie
+32 slots supplémentaires à la recherche d'une entrée expirée ; si elle n'en
+trouve pas, la ligne est journalisée **sans rate-limiting** et le compteur
+`rl_stats().saturated` est incrémenté (avertissement `log_rl_saturated` une
+fois par processus, émis hors du chemin limité). Une horloge en marche
+arrière (pas de RTC, step NTP : `epoch < ts`) est traitée comme une entrée
+expirée, sinon rien ne serait plus jamais recyclé.
+
+Si `mmap` échoue, le limiteur retombe sur une table Lua par processus (plafonnée
+à `RL_SLOTS`, purge des entrées expirées puis vidage en dernier recours) et
+émet une fois par processus `action=log_rl_mmap_failed reason=… arch=…`. Le
+mode est observable via `log.rl_shared()` et `log.rl_stats()`.
+
+La valeur de `MAP_ANONYMOUS` est choisie à l'exécution depuis `jit.arch` :
+`0x800` sur MIPS (où `0x20` est `MAP_RENAME`), `0x20` ailleurs ; `MAP_SHARED`
+(`0x01`) est commun à toutes les architectures Linux.
 
 Actions de cycle de vie **jamais** limitées : `worker_died`, `child_crashed`,
 `worker_started`, `worker_stopping`, `worker_start`, `supervisor_running`,

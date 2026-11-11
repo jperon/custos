@@ -1822,51 +1822,70 @@ Correctif :
 - **Défauts par niveau** (`src/log.moon:79-95`) : `ERROR`/`CRIT`/`ALERT`/`EMERG`
   10 s (une erreur ne doit pas rester masquée), `WARN`/`INFO`/`NOTICE` 60 s,
   `DEBUG`/`TRACE` 30 s, `ALLOW`/`BLOCK` 30 s.
-- **Champs d'identité** (`src/log.moon:60-69`) : `peer`, `peer_ip`, `peer_mac`,
-  `ip`, `client`, `client_ip`, `client_mac`, `mac`, `mac_src`, `src_ip`,
-  `qname`, `qnames`, `domain`, `qtype`, `dst_ip`, `hostname`, `sni`, `cert`,
-  `key`, `path`, `method`, `url`, `file`, `ifname`, `name`, `queue`, `worker`,
-  `user`, `vlan`, `resolver_ip`, `upstream_ip`, `addr`, `rule`, `list`, `err`,
-  `reason`, `cmd`. Jamais `pid`, `txid`, ports, durées, compteurs ni tailles :
-  deux lignes qui n'en diffèrent que par eux fusionnent avec `suppressed=N`.
-  Les règles spécifiques gardent leurs clés (`ALLOW`/`BLOCK` :
-  `mac_src`/`qname`/`qtype` ; `no_ipv6_for_client` : `client`, fenêtre 120 s).
-- **Actions de cycle de vie jamais limitées** (`src/log.moon:97-117`) :
+- **Champs d'identité** (`src/log.moon:60-75`) : `peer`, `peer_ip`,
+  `peer_mac`, `ip`, `ip_src`, `ip_dst`, `client`, `client_ip`, `client_mac`,
+  `mac`, `mac_src`, `src_ip`, `dst_ip`, `qname`, `qnames`, `domain`, `qtype`,
+  `hostname`, `host`, `sni`, `cert`, `key`, `path`, `method`, `url`, `file`,
+  `ifname`, `name`, `queue`, `worker`, `user`, `username`, `vlan`, `resolver`,
+  `resolver_ip`, `upstream_ip`, `addr`, `protocol`, `l4_proto`, `rcode`,
+  `errno`, `source`, `direction`, `version`, `verdict`, `backend`, `type`,
+  `cn`, `local_ip`, `rule`, `list`, `err`, `reason`, `cmd`. Jamais `pid`,
+  `txid`, ports, durées, compteurs ni tailles : deux lignes qui n'en diffèrent
+  que par eux fusionnent avec `suppressed=N`. Exclusions motivées (voir
+  `doc/CONFIG.md`) : `status`, `mode`, `detail`, `af`/`family`.
+- **Actions de cycle de vie jamais limitées** (`src/log.moon:100-130`) :
   `worker_died`, `child_crashed`, `worker_started`, `worker_stopping`,
   `worker_start`, `supervisor_running`, `supervisor_sigterm`,
   `supervisor_sighup_reload/kill/refork/forward_auth`, `dns-filter_start`,
-  `config_source`, `config_external_missing` — un crash ou un rechargement
-  répété doit rester visible ; ces actions sont rares hors boucle de crash.
-- **État partagé** (`src/log.moon:125-155`) : table de hachage à taille fixe
-  (4096 slots × 3 `uint32` = 48 Kio) en
+  `config_source`, `config_external_missing`, plus `dns_benchmark`
+  (instrumentation) et `log_rl_mmap_failed`/`log_rl_saturated` (diagnostic du
+  limiteur) — un crash ou un rechargement répété doit rester visible ; ces
+  actions sont rares hors boucle de crash (cf. corrections de revue
+  ci-dessous).
+- **État partagé** (`src/log.moon:145-175`) : table de hachage à taille fixe
+  (4096 slots × 4 `uint32` + en-tête de 2 mots = 64 Kio) en
   `mmap(MAP_SHARED|MAP_ANONYMOUS)`, créée au chargement du module donc dans le
   superviseur **avant** tout fork, héritée par les workers et leurs enfants.
-  Slot `{hash, ts, count}`, hash djb2 32 bits (`:213-242`), sondage linéaire
-  borné à 8 (`RL_PROBE_MAX`) : deux empreintes distinctes dans le même slot
-  occupent des slots différents (aucune supprimée à tort) ; entrée forcément
-  expirée recyclée après `RL_MAX_WINDOW` (max des fenêtres, 120 s) ; table
-  saturée → journalisation sans suppression. Sans verrou : accès `uint32`
-  alignés, une course bénigne peut dupliquer une ligne ou fausser un compteur,
-  jamais corrompre ni bloquer. Repli sur une table Lua par processus (plafond
-  4096, remise à zéro) si `mmap` échoue. `_purge_rl` et `RL_PURGE_EVERY` sont
-  supprimés (code mort).
-- **ALLOW/BLOCK et benchmark** : `action=response_dns_benchmark` retombe
-  désormais sur la règle de niveau `ALLOW`/`BLOCK` (30 s,
-  `mac_src`/`qname`/`qtype`) au lieu de l'exempter. `doc/CONFIG.md` §2 et le
-  commentaire de `src/worker_responses.moon:803-806` sont corrigés.
-- **`suppressed=N` conservé** (`src/log.moon:360-371`) : la première ligne
-  émise après la fenêtre porte le nombre de messages supprimés ; le filtrage
-  `runtime.log_level` reste testé avant tout dans `write_log` (`:339-342`).
+  Slot `{hash, ts, expires, count}`, hash djb2 32 bits, sondage linéaire borné
+  à 8 (`RL_PROBE_MAX`) : deux empreintes distinctes dans le même slot occupent
+  des slots différents (aucune supprimée à tort) ; une entrée n'est recyclée
+  que si **sa propre** échéance (`expires = ts + fenêtre`) est passée, puis
+  main d'horloge (32 slots) en cas de saturation, enfin journalisation sans
+  suppression + compteur `rl_stats().saturated` et avertissement
+  `log_rl_saturated` (une fois par processus, émis hors du chemin limité).
+  Sans verrou : accès `uint32` alignés, le hash est relu après `ts`/`expires`
+  et doit être stable — jamais de décision sur un slot en cours de recyclage.
+  Repli sur une table Lua par processus (purge des expirées puis vidage en
+  dernier recours) si `mmap` échoue, avec `action=log_rl_mmap_failed` (une fois
+  par processus) et `rl_shared()`. `MAP_ANONYMOUS` est calculé depuis
+  `jit.arch` (`0x800` sur MIPS où `0x20` est `MAP_RENAME`, `0x20` ailleurs).
+- **ALLOW/BLOCK et benchmark** : `action=response_dns_benchmark` est **exempté**
+  de rate-limiting (règle `dns_benchmark` de `RL_NEVER_LIMIT`, comme avant le
+  commit `baf5837`) : sur un banc à qname fixe, la règle `ALLOW`/`BLOCK`
+  (30 s, `mac_src`/`qname`/`qtype`) ne gardait qu'un échantillon par triplet et
+  perdait les mesures des autres. Aucune autre action de banc n'existe.
+  `doc/CONFIG.md` §2 et le commentaire de `src/worker_responses.moon:803-806`
+  sont corrigés.
+- **`suppressed=N` conservé** (`src/log.moon:295-315`, `format_line`) : la
+  première ligne émise après la fenêtre porte le nombre de messages supprimés.
+  Le formatage est extrait dans `format_line` (fonction pure, testable).
 
-Tests (`tests/unit/log_spec.moon`, 21 cas) : `INFO`/`WARN`/`ERROR`/`DEBUG`
+Tests (`tests/unit/log_spec.moon`, 34 cas) : `INFO`/`WARN`/`ERROR`/`DEBUG`
 avec action non listée (suppression puis réémission avec compte) ; champ
-d'identité différent non fusionné, champ volatil (`pid`, `txid`, compteur)
-fusionné ; action préfixée `response_no_ipv6_for_client` → règle spécifique
-120 s sur `client` ; `ALLOW` et `BLOCK` avec `response_dns_benchmark` limités
-par `mac_src`/`qname`/`qtype` sur 30 s ; fork réel (l'enfant insère, le parent
-voit la répétition) ; collision de slot sans suppression à tort ; `_rl_reset` ;
-actions de cycle de vie jamais limitées. Les deux anciens tests de purge sont
-remplacés (la table fixe n'a plus de purge).
+d'identité différent non fusionné (y compris les ajouts `ip_src`, `ip_dst`,
+`username`, `host`, `resolver`, `protocol`, `l4_proto`, `rcode`, `errno`,
+`source`, `direction`, `version`, `verdict`, `backend`), champ volatil
+(`pid`, `txid`, compteur) fusionné ; action préfixée
+`response_no_ipv6_for_client` → règle spécifique 120 s sur `client` ;
+`ALLOW`/`BLOCK` avec `response_dns_benchmark` **jamais limités** (et une action
+voisine bien limitée, pour rendre le test non tautologique) ; fork réel
+(l'enfant insère, le parent voit la répétition) ; collision de slot sans
+suppression à tort ; `_rl_reset` ; actions de cycle de vie jamais limitées ;
+strip du préfixe worker dans `_rl_never_limited` ; `rl_shared()` et
+`rl_stats()` ; repli forcé par processus ; saturation (compteur + non
+suppression) ; recyclage d'un slot expiré par une autre empreinte (échéance
+propre, pas `RL_MAX_WINDOW`) ; horloge en marche arrière ; purge fine du repli ;
+formatage `suppressed=N` (via `format_line`) et mise entre guillemets.
 
 Documentation : `AGENTS.md:75`, `doc/CONFIG.md` §2 (rate-limiting et
 benchmark), `doc/CHEATSHEET.md` (section logs), commentaire de
@@ -1878,3 +1897,77 @@ globale inconnue ; `make test` = **2544 successes / 0 failures / 0 errors /
 0 pending** (`tmp/test.log`) ; `make test-js` = 12 pass / 0 fail. `make
 test-e2e` non lancé (hors commande de clôture de la tâche, pas de VM
 sollicitée).
+
+### Corrections de revue du rate-limiting (branche d-logs, 2026-11-11)
+
+Deux revues de code ont relevé des défauts résiduels dans `src/log.moon` ; ce
+bloc documente les correctifs et **précise** les affirmations de la section
+précédente (qui resta la description du commit d'origine).
+
+- **P1.1 — `MAP_ANONYMOUS` dépend de l'architecture** (`src/log.moon`). La
+  valeur `0x20` codée en dur est la valeur générique Linux (x86, ARM), mais sur
+  MIPS `0x20` est `MAP_RENAME` et l'anonymat vaut `0x800`. Sur les cibles
+  ath79/ramips (`jit.arch` commence par `mips`), `mmap(fd=-1)` échouait, le
+  `pcall` avalait l'erreur et le partage inter-processus disparaissait
+  silencieusement. La valeur est désormais choisie à l'exécution depuis
+  `jit.arch` ; `MAP_SHARED = 0x01` reste commun.
+- **P1.2 — échec `mmap` muet**. `rl_shared()` expose l'état (`true` = table
+  partagée), `rl_stats()` le compteur de saturation, et le repli émet une fois
+  par processus `WARN action=log_rl_mmap_failed reason=… arch=… rl_shared=0`.
+  La ligne est écrite directement (`_emit_line`), sans passer par
+  `write_log`/`check_rl` : le limiteur étant en panne, un appel au chemin
+  limité risquerait une récursion. L'action figure aussi dans `RL_NEVER_LIMIT`.
+- **P1.3 — `runtime.benchmark` rendu muet**. `dns_benchmark` est de nouveau
+  dans `RL_NEVER_LIMIT` (comparaison après strip du préfixe `response_`) : la
+  règle `ALLOW`/`BLOCK` (30 s, `mac_src`/`qname`/`qtype`) supprimait tous les
+  échantillons d'un banc à qname fixe, donc précisément les mesures que
+  l'option produit. Aucune autre action d'instrumentation n'est émise.
+- **P2.1 — champs d'identité incomplets**. Ajout de `ip_src`, `ip_dst`,
+  `username`, `host`, `resolver`, `protocol`, `l4_proto`, `rcode`, `errno`,
+  `source`, `direction`, `version`, `verdict`, `backend`, `type`, `cn`,
+  `local_ip`. `ip_src`/`ip_dst` discriminENT `sni_quic_drop` et
+  `sni_reject_mark_failed` par client ; `username` discrimine les sessions
+  AUTH (`user_session_refreshed`/`_removed` ne fusionnent plus entre
+  utilisateurs, comme `user_session_added` qui porte déjà `src_ip`) ; `host`
+  discrimine les amonts DoH. Inversement, `addr` est bien utilisé
+  (`src/doh/upstream.moon:49`) : conservé. Exclusions motivées (`status`,
+  `mode`, `detail`, `af`/`family`) documentées dans `doc/CONFIG.md`.
+- **P2.2 — saturation = fail-open silencieux**. Chaque slot stocke désormais
+  `{hash, ts, expires, count}` : le recyclage d'une autre empreinte n'a lieu
+  que si **sa propre** échéance est passée (plus de `RL_MAX_WINDOW`
+  conservateur qui empêchait de recycler une entrée INFO expirée depuis 60 s
+  tant que 120 s n'étaient pas écoulées). Sondage épuisé → main d'horloge
+  (32 slots) ; si rien n'est recyclable, la ligne passe et le compteur
+  partagé `rl_stats().saturated` est incrémenté, avec un avertissement
+  `log_rl_saturated` une fois par processus. La propriété « jamais une ligne
+  supprimée à tort » est préservée et testée.
+- **P2.3 — lecture non atomique `{hash, ts}`**. Le hash est relu après
+  `ts`/`expires` ; s'il a changé (slot recyclé entre deux accès), le sondage
+  continue sans décider. Aucune allocation ajoutée sur le chemin chaud.
+- **P2.4 — marche arrière d'horloge**. `epoch < ts` est traité comme expiré
+  (repli compris), sinon un step NTP rendait toutes les entrées éternellement
+  vivantes et le recyclage impossible.
+- **P2.5 — tests**. Seams `_rl_force_fallback(enabled)` et
+  `_rl_slot_get/_rl_slot_set` ; `format_line` extrait pour tester le formatage
+  `suppressed=N`. Couverture ajoutée : repli par processus, saturation,
+  recyclage d'un slot expiré par une autre empreinte, strip du préfixe worker,
+  horloge en marche arrière, purge fine du repli, et test « cycle de vie
+  jamais limité » non tautologique (une action voisine doit renvoyer `-1`).
+
+**Corrections de la section précédente** : « table saturée (plus de
+`RL_PROBE_MAX` slots occupés) » était impropre — `RL_PROBE_MAX` est un nombre
+de **pas de sondage**, pas de slots ; la saturation est désormais comptée et
+signalée. Le repli ne vide plus toute la table : il purge d'abord les entrées
+expirées. `now` reste exporté et utilisé (`src/worker_responses.moon:35`),
+contrairement à ce qu'une revue supposait. Les actions `EMERG`/`ALERT`/`CRIT`/
+`NOTICE`/`TRACE` restent déclarées dans `RL_CONFIG` sans émetteur : elles
+servent de garde-fou pour de futurs call-sites et n'ont pas été supprimées.
+`worker_started` reste exempté sans borne : une boucle de crash peut donc
+produire une ligne par redémarrage. Non corrigé ici (P3) : borner cette
+exemption demanderait un compteur par action dans l'en-tête partagé, à faire
+si le bruit en boucle de crash devient gênant.
+
+**Vérification (2026-11-11, branche d-logs, état final)** : renseignée dans le
+compte rendu de la tâche (make all / make check / make test dans
+`nix develop`). `make test-e2e` et `make coverage-quick` non lancés
+(VM partagées avec un autre agent) ; ils le seront après coup.

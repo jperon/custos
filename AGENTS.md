@@ -72,7 +72,7 @@ sont pas vérifiées et constatées (pas supposées) :
 | Struct C opaque | `ffi.new("uint8_t[?]", size)` + `ffi.cast` |
 | Parsing de paquets | `ffi.cast("const uint8_t*", raw)` + `bit` |
 | `$` dans une string | Écrire `$` directement — `\$` est invalide en Lua |
-| Rate-limiting de logs | `log.moon` : empreinte (niveau, action, champs d'identité) dans une table mmap partagée entre processus ; `suppressed=N` à la réémission |
+| Rate-limiting de logs | `log.moon` : empreinte (niveau, action, champs d'identité) dans une table mmap partagée entre processus ; `suppressed=N` à la réémission ; `rl_stats()` expose `shared`/`saturated` |
 | Concaténer en boucle | Accumuler dans une table puis `table.concat` (jamais `..=` en boucle) |
 | Log DEBUG dans un hot-path | Garder avec `log.level_enabled "DEBUG"` au call-site : sans ça la closure (thunk) est allouée par paquet même quand le niveau est filtré |
 | `require` dans un hot-path | Mémoïser le module à la construction (factory/startup), jamais un `require` par paquet (≈150 ns/appel) |
