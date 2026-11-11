@@ -384,3 +384,63 @@ describe "auth/cert_cache", ->
     entry2 = cache.get("ramexp.unit")
     assert.is_not_nil entry2
     assert.equals CERT, entry2.cert_pem
+
+  -- ── load_persistent_index : durcissement ─────────────────────────────────
+  describe "load_persistent_index durci", ->
+
+    it "index valide chargé (entrées expirées/futures conservées)", ->
+      dir = "tmp/test_certs_valididx"
+      os.execute "rm -rf #{dir} && mkdir -p #{dir}"
+      cf = io.open "#{dir}/valid.unit.crt", "w"
+      cf\write CERT
+      cf\close!
+      kf = io.open "#{dir}/valid.unit.key", "w"
+      kf\write KEY
+      kf\close!
+      fh = io.open "tmp/cert_cache_index.lua", "w"
+      fh\write 'return { ["valid.unit"] = { expires_at=9999999999, accessed_at=1 } }\n'
+      fh\close!
+      cache = create_cache 10, 3600, dir
+      assert.is_not_nil cache.get("valid.unit")
+
+    it "index contenant os.execute → rejeté sans effet de bord", ->
+      marker = "tmp/cert_cache_pwned_marker"
+      os.remove marker
+      fh = io.open "tmp/cert_cache_index.lua", "w"
+      fh\write 'os.execute("touch ' .. marker .. '")\nreturn {}\n'
+      fh\close!
+      cache = create_cache 10, 3600, "tmp/test_certs_pwn"
+      s = cache.stats!
+      assert.equals 0, s.size_ram
+      assert.is_nil io.open(marker, "r")
+
+    it "index contenant une boucle avec effet de bord → rejeté sans effet", ->
+      marker = "tmp/cert_cache_loop_marker"
+      os.remove marker
+      fh = io.open "tmp/cert_cache_index.lua", "w"
+      fh\write 'while true do os.execute("touch ' .. marker .. '") end\nreturn {}\n'
+      fh\close!
+      cache = create_cache 10, 3600, "tmp/test_certs_loop"
+      s = cache.stats!
+      assert.equals 0, s.size_ram
+      assert.is_nil io.open(marker, "r")
+
+    it "entrée mal typée (expires_at string) → rejetée", ->
+      dir = "tmp/test_certs_badtype"
+      os.execute "rm -rf #{dir} && mkdir -p #{dir}"
+      cf = io.open "#{dir}/bad.unit.crt", "w"
+      cf\write CERT
+      cf\close!
+      kf = io.open "#{dir}/bad.unit.key", "w"
+      kf\write KEY
+      kf\close!
+      fh = io.open "tmp/cert_cache_index.lua", "w"
+      fh\write 'return { ["bad.unit"] = { expires_at="jamais", accessed_at=1 } }\n'
+      fh\close!
+      cache = create_cache 10, 3600, dir
+      -- L'entrée mal typée est écartée : get retombe sur le disque et recalcule
+      -- un expires_at numérique (jamais la valeur string de l'index).
+      entry = cache.get("bad.unit")
+      assert.is_not_nil entry
+      assert.equals "number", type(entry.expires_at)
+      assert.is_true entry.expires_at > os.time!

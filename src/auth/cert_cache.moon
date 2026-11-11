@@ -40,15 +40,31 @@ load_persistent_index = (index_path) ->
   unless content and #content > 0
     return {}
 
-  -- Charger la table Lua
-  status, result = pcall(loadstring, content)
-  unless status
-    log_warn -> { action: "cert_cache_load_index_failed", path: index_path, err: result }
+  -- Charger la table Lua dans un environnement vide : un index altéré ne doit
+  -- pouvoir appeler aucune fonction (os.execute, io…). Le résultat est ensuite
+  -- validé strictement (table de {expires_at=number, accessed_at=number}) ;
+  -- toute autre forme est rejetée.
+  loaded_fn, load_err = loadstring content
+  unless loaded_fn
+    log_warn -> { action: "cert_cache_load_index_failed", path: index_path, err: load_err }
     return {}
 
-  loaded_fn = result!
-  log_debug -> { action: "cert_cache_loaded_index", path: index_path, entries: #loaded_fn }
-  loaded_fn or {}
+  setfenv loaded_fn, {}
+  ok, result = pcall loaded_fn
+  unless ok and type(result) == "table"
+    log_warn -> { action: "cert_cache_load_index_failed", path: index_path, err: tostring(result) }
+    return {}
+
+  index = {}
+  for hostname, entry in pairs result
+    continue unless type(hostname) == "string" and type(entry) == "table"
+    continue unless type(entry.expires_at) == "number" and type(entry.accessed_at) == "number"
+    index[hostname] = { expires_at: entry.expires_at, accessed_at: entry.accessed_at }
+
+  count = 0
+  for _ in pairs index do count += 1
+  log_debug -> { action: "cert_cache_loaded_index", path: index_path, entries: count }
+  index
 
 --- Factory pour créer une instance de cache persistant avec TTL.
 -- @tparam number max_size Nombre max de certificats en cache RAM (défaut: 500)

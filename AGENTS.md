@@ -906,3 +906,14 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `server_nft_sess_missing`) était redondante avec l'appel direct de
   `handle_ping`. Garde supprimée côté login pour un comportement unique ;
   `refresh_nft nil` est couvert par `tests/unit/auth/nft_auth_sets_spec.moon`.
+- **Index du cache de certificats exécuté sans restriction.** `cert_cache`
+  relisait `tmp/cert_cache_index.lua` via `loadstring` + exécution, sans
+  environnement isolé : un fichier altéré pouvait appeler n'importe quelle
+  fonction globale. Correctif : `setfenv(fn, {})` puis validation stricte du
+  résultat (table de `{expires_at=number, accessed_at=number}`, autres entrées
+  écartées) ; le log `entries` compte désormais les clés (`#` valait toujours 0
+  sur une table associative). L'emplacement relatif n'est pas modifié : le
+  service n'appelle aucun `chdir`, donc `tmp/…` se résout dans le répertoire
+  courant de procd (typiquement `/`, soit `/tmp/…`). Tests dans
+  `tests/unit/auth/cert_cache_spec.moon` (index valide, `os.execute`/boucle
+  avec effet de bord rejetés sans marqueur, entrée mal typée écartée).
