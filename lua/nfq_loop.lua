@@ -227,19 +227,6 @@ run_queue = function(queue_num, callback, opts)
   libnfq.nfq_close(h)
   return c_callback:free()
 end
-local set_verdict
-set_verdict = function(qh_ptr, pkt_id, verdict, payload)
-  if payload == nil then
-    payload = nil
-  end
-  if payload then
-    local ptr = ffi.cast("const unsigned char*", payload)
-    local rc = libnfq.nfq_set_verdict(qh_ptr, pkt_id, verdict, #payload, ptr)
-    return rc >= 0 and 0 or rc
-  end
-  local rc = libnfq.nfq_set_verdict(qh_ptr, pkt_id, verdict, 0, nil)
-  return rc >= 0 and 0 or rc
-end
 local set_verdict_marked
 set_verdict_marked = function(qh_ptr, pkt_id, verdict, mark, payload)
   if payload == nil then
@@ -258,6 +245,5 @@ return {
   NF_ACCEPT = NF_ACCEPT,
   NF_DROP = NF_DROP,
   VERDICT_DONE = VERDICT_DONE,
-  set_verdict = set_verdict,
   set_verdict_marked = set_verdict_marked
 }
