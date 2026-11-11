@@ -58,6 +58,47 @@ DoH divergeait de l'intercepteur `worker_questions`) :
   (type 65), ce qui cassait la résolution DNS sécurisée de Chromium
   (`DNS_PROBE_FINISHED_BAD_SECURE_CONFIG`).
 
+### Sérialisation de la section critique ACK nft entre enfants `DOH-conn`
+
+`main.moon` alloue **un seul tube ACK nft par worker** (`alloc_ack_pipe`), et
+`worker_doh` le transmet à tous les enfants `DOH-conn` (un par connexion) via
+`nft_queue.set_ack_rfd`. `worker_nft` n'écrit qu'**un octet par (flush ×
+worker_idx)**, sans corrélation au `seq` : deux enfants qui exécutent en même
+temps `drain_ack` → injections nft → `wait_ack` se volent les octets. L'un
+repart avant que ses IP soient réellement insérées (réponse DNS livrée alors que
+le default-deny bloque encore le SYN du client), l'autre attend le timeout.
+
+Correctif : `doh.query.inject_nft_and_wait` (helper unique utilisé par
+l'injection de la réponse **et** par les cibles d'override `redirect`) exécute
+la séquence sous `lib.filelock.with_lock` :
+
+- verrou **par worker** (`custos-doh-nft-ack-<worker_idx>.lock`, index exposé
+  par `nft_queue.get_worker_idx`), dans le répertoire du pidfile du superviseur
+  (`/var/run` par défaut) — deux workers DoH distincts ne se sérialisent pas ;
+- le fichier est ouvert **après le fork**, à chaque appel (exigence de
+  `lib.filelock` : un descripteur hérité partagerait le verrou) ;
+- section réduite à `drain_ack` → `inject` → `wait_ack` : ni la résolution
+  upstream ni l'écriture de la réponse au client n'y figurent ;
+- `wait_ack` est borné par `ACK_TIMEOUT_MS` (150 ms) : un enfant ne peut pas
+  tenir le verrou indéfiniment ;
+- si l'ouverture du verrou échoue (`with_lock` lève), repli sur l'exécution
+  sans verrou (comportement antérieur) avec `log_warn`
+  `doh_ack_lock_failed_fallback`, jamais de plantage de l'enfant ;
+- une erreur survenue **dans** la section critique (drapeau `started` positionné
+  en première ligne) est propagée telle quelle, sans repli : ré-exécuter la
+  section après une injection partielle doublerait les insertions nft et
+  journaliserait à tort un « échec de verrou ».
+
+Les options passées au helper portent `ack_corr` (`txid:ip_client`), utilisé à
+la fois pour les insertions et pour `wait_ack`, y compris sur le chemin
+`redirect`.
+
+Le chemin UDP (`worker_responses`, un processus par tube) n'est pas concerné :
+il n'appelle pas ce helper et garde son tube privé.
+
+Tests : `tests/unit/doh/query_ack_lock_spec.moon` (ordre sous verrou, repli,
+`inject_nft=false`, et non-entrelacement réel de `flock` entre deux processus).
+
 ### Pièges FFI libcurl
 
 - `ffi.load "curl"` échoue sur OpenWrt → essayer `"libcurl.so.4"` en fallback.

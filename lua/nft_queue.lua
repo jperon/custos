@@ -214,6 +214,10 @@ get_last_seq = function()
   last_enqueued_seq = nil
   return s
 end
+local get_worker_idx
+get_worker_idx = function()
+  return worker_idx
+end
 local wait_ack
 wait_ack = function(pending_seq, corr, on_wait)
   if not (ack_rfd) then
@@ -333,6 +337,7 @@ return {
   set_wfd = set_wfd,
   set_ack_rfd = set_ack_rfd,
   get_last_seq = get_last_seq,
+  get_worker_idx = get_worker_idx,
   wait_ack = wait_ack,
   drain_ack = drain_ack,
   send_barrier = send_barrier,
