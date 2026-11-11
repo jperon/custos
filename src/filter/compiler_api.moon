@@ -27,6 +27,30 @@ compute_worker_only = (obj) ->
   return true unless obj.capabilities
   return not obj.capabilities.nft
 
+--- Extrait le nom d'action d'une entrée de `rule.actions`.
+-- Deux formes sont acceptées : la chaîne "nom" (forme historique) et la table
+-- à une seule clé `{ nom: options }` (forme écrite par la webui).
+-- @tparam any entry Entrée de la liste `actions`
+-- @treturn string|nil Nom d'action, ou nil si l'entrée est invalide
+action_name_of = (entry) ->
+  return entry if type(entry) == "string"
+  return nil unless type(entry) == "table"
+  name = nil
+  count = 0
+  for k in pairs entry
+    count += 1
+    name = k
+  return nil unless count == 1 and type(name) == "string"
+  name
+
+--- Extrait les options d'une entrée d'action sous forme table `{ nom: options }`.
+-- @tparam any entry Entrée de la liste `actions`
+-- @treturn table|nil Options associées (nil pour la forme chaîne ou invalide)
+action_options_of = (entry) ->
+  name = action_name_of entry
+  return nil unless name and type(entry) == "table"
+  entry[name]
+
 rule_id = require "filter.rule_id"
 
 sanitize_ascii = rule_id.sanitize_ascii
@@ -324,6 +348,8 @@ get_action_schema = (name) ->
 {
   :is_new_style
   :compute_worker_only
+  :action_name_of
+  :action_options_of
   :sanitize_ascii
   :sanitize_id
   :rule_id_base

@@ -2,7 +2,7 @@
 -- Couvre get_bridge_ifname : tolérance aux deux formes d'argument (config auth
 -- directe vs config filtre avec auth en sous-table) + repli "br0".
 
-{ :get_bridge_ifname } = require "filter.localnets"
+{ :get_bridge_ifname, :inject_localnets } = require "filter.localnets"
 
 describe "filter.localnets.get_bridge_ifname", ->
   it "lit bridge_ifname au niveau racine (config auth directe)", ->
@@ -21,3 +21,25 @@ describe "filter.localnets.get_bridge_ifname", ->
     assert.equals "br0", get_bridge_ifname {}
     assert.equals "br0", get_bridge_ifname nil
     assert.equals "br0", get_bridge_ifname { auth: {} }
+
+describe "filter.localnets.inject_localnets", ->
+  orig_popen = io.popen
+  cmds = {}
+
+  before_each ->
+    cmds = {}
+    io.popen = (cmd) ->
+      cmds[#cmds + 1] = cmd
+      {
+        lines: -> (-> nil)
+        close: -> true
+      }
+
+  after_each ->
+    io.popen = orig_popen
+
+  it "quote l'interface dans les commandes ip -4/-6 route", ->
+    inject_localnets { allow_localnets: true, bridge_ifname: "br0; touch /x" }, {}
+    assert.equals 2, #cmds
+    assert.truthy cmds[1]\find "dev 'br0; touch /x'", 1, true
+    assert.truthy cmds[2]\find "dev 'br0; touch /x'", 1, true

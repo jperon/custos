@@ -28,7 +28,7 @@ if not fh
 domains = {}
 for line in fh\lines!
   domain = line\match "^%s*(.-)%s*$"        -- trim
-  domain = domain\match "^([^#]*)" or ""    -- enlever commentaires inline
+  domain = (domain\match "^([^#]*)") or ""  -- enlever commentaires inline
   domain = domain\match "^%s*(.-)%s*$"      -- trim à nouveau
   domains[#domains + 1] = domain if domain != ""
 

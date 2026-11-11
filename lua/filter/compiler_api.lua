@@ -18,6 +18,33 @@ compute_worker_only = function(obj)
   end
   return not obj.capabilities.nft
 end
+local action_name_of
+action_name_of = function(entry)
+  if type(entry) == "string" then
+    return entry
+  end
+  if not (type(entry) == "table") then
+    return nil
+  end
+  local name = nil
+  local count = 0
+  for k in pairs(entry) do
+    count = count + 1
+    name = k
+  end
+  if not (count == 1 and type(name) == "string") then
+    return nil
+  end
+  return name
+end
+local action_options_of
+action_options_of = function(entry)
+  local name = action_name_of(entry)
+  if not (name and type(entry) == "table") then
+    return nil
+  end
+  return entry[name]
+end
 local rule_id = require("filter.rule_id")
 local sanitize_ascii = rule_id.sanitize_ascii
 local sanitize_id = rule_id.sanitize_id
@@ -433,6 +460,8 @@ end
 return {
   is_new_style = is_new_style,
   compute_worker_only = compute_worker_only,
+  action_name_of = action_name_of,
+  action_options_of = action_options_of,
   sanitize_ascii = sanitize_ascii,
   sanitize_id = sanitize_id,
   rule_id_base = rule_id_base,

@@ -97,7 +97,8 @@ faire `require "ipparse.…"` sans changement.
 | Concaténer en boucle | Accumuler dans une table puis `table.concat` (jamais `..=` en boucle) |
 | Log DEBUG dans un hot-path | Garder avec `log.level_enabled "DEBUG"` au call-site : sans ça la closure (thunk) est allouée par paquet même quand le niveau est filtré |
 | `require` dans un hot-path | Mémoïser le module à la construction (factory/startup), jamais un `require` par paquet (≈150 ns/appel) |
-| Détecter l'interface bridge | `lib.bridge_detect` (sysfs `/sys/class/net/*/bridge`, busybox-compatible ; choix du bridge le plus peuplé). **Jamais** `ip … type bridge` (non supporté par busybox). `auth.bridge_ifname`/env `BRIDGE_IFNAME` priment ; `main.moon` warn `bridge_ifname_not_found` si la config force une interface absente |
+| Piège `a\match "x" or b` | Parenthéser : `(a\match "x") or b` — sans ça l'`or` est avalé par l'argument et le repli ne s'applique jamais |
+| Détecter l'interface bridge | `lib.bridge_detect` (sysfs `/sys/class/net/*/bridge`, busybox-compatible ; choix du bridge le plus peuplé). **Jamais** `ip … type bridge` (non supporté par busybox). `auth.bridge_ifname`/env `BRIDGE_IFNAME` priment (env validé par `valid_name`, valeur invalide ignorée avec warn → détection sysfs) ; `main.moon` warn `bridge_ifname_not_found` si la config force une interface absente |
 
 ---
 
@@ -146,6 +147,15 @@ de bord pur), jamais `true`/`false` : sinon elle gagne le
 « premier verdict non-nil » (`first_match_wins`, cf. `filter.rule`) et empêche
 la vraie règle d'autorisation/deny (souvent gardée par une condition d'auth)
 d'être évaluée.
+
+Une entrée de `rule.actions` accepte deux formes : la chaîne `"nom"` (options
+éventuelles au niveau de la règle, ex. `rule.dns_strip`), et la table à une
+seule clé `{ nom: options }` (forme écrite par la webui, ex. `{ log: { log_msg:
+… } }`). Le moteur normalise via `compiler_api.action_name_of` /
+`action_options_of` ; pour la forme table, la factory reçoit une copie
+superficielle de la règle où `[nom] = options`. Les factories d'action suivent
+la convention `(cfg) -> (rule) -> (req) -> …` et `actions_meta[].name` est
+toujours le nom (chaîne).
 
 ### `requires_auth` dans les capabilities
 

@@ -13,7 +13,7 @@ end
 local domains = { }
 for line in fh:lines() do
   local domain = line:match("^%s*(.-)%s*$")
-  domain = domain:match("^([^#]*)" or "")
+  domain = (domain:match("^([^#]*)")) or ""
   domain = domain:match("^%s*(.-)%s*$")
   if domain ~= "" then
     domains[#domains + 1] = domain

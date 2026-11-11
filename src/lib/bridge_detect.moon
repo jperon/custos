@@ -102,7 +102,10 @@ exists = (name) ->
 detect = (opts) ->
   opts or= {}
   env = os.getenv "BRIDGE_IFNAME"
-  return env if env and #env > 0
+  if env and #env > 0
+    return env if valid_name env
+    io.stderr\write "bridge_detect: BRIDGE_IFNAME invalide ignoré: #{env}\n"
+
   pick_bridge(list_bridges(opts.popen), opts.count_fn) or DEFAULT_IFNAME
 
 { :DEFAULT_IFNAME, :list_bridges, :count_slaves, :pick_bridge, :valid_name, :exists, :detect }

@@ -56,6 +56,8 @@ local write_bin
 -- Helpers d'I/O shell isolés dans un module dédié (testables unitairement).
 updater_io = require "filter.updater_io"
 sh_quote = updater_io.sh_quote
+bin_name_for = updater_io.bin_name_for
+write_result_kind = updater_io.write_result_kind
 ensure_dir = updater_io.ensure_dir
 ensure_parent_dir = updater_io.ensure_parent_dir
 
@@ -280,13 +282,14 @@ process_custom_dir = (src_dir, output_dir, dry_run) ->
     txt_name = txt_name\gsub "%s+$", ""
     continue if txt_name == ""
     txt_path = src_base .. "/" .. txt_name
-    name = txt_name\match "([^/]+)%.txt$" or txt_name
+    name = bin_name_for txt_name
     bin_path = out_base .. "/" .. name .. ".bin"
     ok_l, msg, skipped = fetch_local name, { file: txt_path, format: "simple", output: bin_path }, dry_run
-    if ok_l
+    kind = write_result_kind ok_l, msg, skipped
+    if kind == "ok"
       io.stderr\write "[custom/#{name}] ✓ #{msg}\n"
       local_updated += 1
-    elseif skipped
+    elseif kind == "skipped"
       io.stderr\write "[custom/#{name}] ⏭ ignorée (#{msg})\n"
     else
       io.stderr\write "[custom/#{name}] ✗ #{msg}\n"
@@ -360,10 +363,13 @@ for name, source in pairs sources
 
   -- Source locale (file:) : lecture directe sans téléchargement
   if source.file
-    ok, msg = fetch_local name, source, opts.dry_run
-    if ok
+    ok, msg, skipped = fetch_local name, source, opts.dry_run
+    kind = write_result_kind ok, msg, skipped
+    if kind == "ok"
       io.stderr\write "[#{name}] ✓ #{msg}\n"
       updated += 1
+    elseif kind == "skipped"
+      io.stderr\write "[#{name}] ⏭ ignorée (#{msg})\n"
     else
       io.stderr\write "[#{name}] ✗ #{msg}\n"
       errors += 1
@@ -405,10 +411,13 @@ for name, source in pairs sources
     continue
 
   io.stderr\write "[#{name}] #{#all_domains} domaines total → #{output}\n"
-  ok, msg = write_bin all_domains, output, opts.dry_run
-  if ok
+  ok, msg, skipped = write_bin all_domains, output, opts.dry_run
+  kind = write_result_kind ok, msg, skipped
+  if kind == "ok"
     io.stderr\write "[#{name}] ✓ #{msg}\n"
     updated += 1
+  elseif kind == "skipped"
+    io.stderr\write "[#{name}] ⏭ ignorée (#{msg})\n"
   else
     io.stderr\write "[#{name}] ✗ #{msg}\n"
     errors += 1

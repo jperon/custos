@@ -104,7 +104,10 @@ detect = function(opts)
   opts = opts or { }
   local env = os.getenv("BRIDGE_IFNAME")
   if env and #env > 0 then
-    return env
+    if valid_name(env) then
+      return env
+    end
+    io.stderr:write("bridge_detect: BRIDGE_IFNAME invalide ignoré: " .. tostring(env) .. "\n")
   end
   return pick_bridge(list_bridges(opts.popen), opts.count_fn) or DEFAULT_IFNAME
 end

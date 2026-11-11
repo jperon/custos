@@ -8,6 +8,8 @@ do
   local _obj_0 = require("ffi_defs")
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
+local shquote
+shquote = require("lib.shquote").shquote
 local get_bridge_ifname
 get_bridge_ifname = function(cfg)
   if not (cfg) then
@@ -21,7 +23,7 @@ get_local_cidrs = function(ifname)
     ipv4 = { },
     ipv6 = { }
   }
-  local res4 = io.popen("ip -4 route show dev " .. tostring(ifname))
+  local res4 = io.popen("ip -4 route show dev " .. tostring(shquote(ifname)))
   if res4 then
     for line in res4:lines() do
       local cidr = line:match("([0-9%.]+/[0-9]+)")
@@ -34,7 +36,7 @@ get_local_cidrs = function(ifname)
     end
     res4:close()
   end
-  local res6 = io.popen("ip -6 route show dev " .. tostring(ifname))
+  local res6 = io.popen("ip -6 route show dev " .. tostring(shquote(ifname)))
   if res6 then
     for line in res6:lines() do
       local cidr = line:match("([%x%a%:]+/[0-9]+)")

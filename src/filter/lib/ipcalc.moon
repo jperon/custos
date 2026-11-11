@@ -47,7 +47,11 @@ parse_net = (s) ->
   addr_s, mask_s = s\match "^([^/]+)/?(%d*)$"
   return nil unless addr_s
   is_v6 = (addr_s\find(":", 1, true) and true) or false
-  mask_bits = tonumber(mask_s) or (is_v6 and 128 or 32)
+  max_bits = if is_v6 then 128 else 32
+  mask_bits = tonumber(mask_s) or max_bits
+  -- Sans borne, ip_in_net lisait ip_buf[off + i] au-delà du tampon 16 octets
+  -- (cdata FFI non borné) : résultat de matching arbitraire.
+  return nil if mask_bits > max_bits
   -- Pour IPv4, le masque porte sur les 32 bits de l'adresse réelle.
   -- Dans notre layout 16 octets, l'adresse IPv4 commence à l'octet 12,
   -- donc on décale le masque de 96 pour travailler uniformément.

@@ -187,7 +187,7 @@ _factory = function(cfg)
         end
       }
     end
-    if listname:match("^/" or listname:match("%.%." or listname:match("%.bin$"))) then
+    if (listname:match("^/")) or (listname:match("%.%.")) or (listname:match("%.bin$")) then
       return {
         capabilities = {
           worker = true,

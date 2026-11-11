@@ -277,9 +277,10 @@ collect_proto_ports = (rule) ->
   protos, ports
 
 resolve_action = (rule) ->
-  for _, action in ipairs rule.actions or {}
-    if action == "allow" or action == "deny" or action == "dnsonly"
-      return action
+  for _, entry in ipairs rule.actions or {}
+    name = compiler_api.action_name_of entry
+    if name == "allow" or name == "deny" or name == "dnsonly"
+      return name
   nil
 
 build_rule = (cfg, rule, idx, used_ids, metadata_rule_id=nil, rule_metadata=nil) ->
@@ -449,7 +450,7 @@ render_set = (name, set_type, flags, elems, indent, include_elements=true) ->
   lines[#lines + 1] = "#{indent}set #{name} {"
   lines[#lines + 1] = "#{indent}  type #{set_type}"
   lines[#lines + 1] = "#{indent}  flags #{flags}" if flags and #flags > 0
-  lines[#lines + 1] = "#{indent}  elements = { #{table.concat elems, ", "} }" if include_elems and elems and #elems > 0
+  lines[#lines + 1] = "#{indent}  elements = { #{table.concat elems, ", "} }" if include_elements and elems and #elems > 0
   lines[#lines + 1] = "#{indent}}"
   lines
 
@@ -800,7 +801,7 @@ render_sets_only = (cfg, plan, indent="  ", include_elements=true) ->
         for _, l in ipairs render_set rule.set_subnet6, "ipv6_addr", "interval", rule.subnet_ipv6, indent, include_elements
           lines[#lines + 1] = l
       if rule.set_ports
-        for _, l in ipairs render_set rule.set_ports, "inet_service", "", rule.ports, indent, include_elements
+        for _, l in ipairs render_set rule.set_ports, "inet_service", "interval", rule.ports, indent, include_elements
           lines[#lines + 1] = l
 
   table.concat lines, "\n"
@@ -832,7 +833,7 @@ render = (plan, indent="  ", include_elements=true) ->
       for _, l in ipairs render_set rule.set_subnet6, "ipv6_addr", "interval", rule.subnet_ipv6, indent, include_elements
         lines[#lines + 1] = l
     if rule.set_ports
-      for _, l in ipairs render_set rule.set_ports, "inet_service", "", rule.ports, indent, include_elements
+      for _, l in ipairs render_set rule.set_ports, "inet_service", "interval", rule.ports, indent, include_elements
         lines[#lines + 1] = l
     if rule.set_auth_mac
       for _, l in ipairs render_set rule.set_auth_mac, "ether_addr", "timeout", {}, indent, false

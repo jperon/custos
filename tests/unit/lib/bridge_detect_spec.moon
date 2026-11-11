@@ -117,6 +117,15 @@ describe "lib.bridge_detect", ->
       ffi.C.setenv "BRIDGE_IFNAME", "br-env", 1
       assert.equals "br-env", bridge_detect.detect!
 
+    it "ignore une valeur BRIDGE_IFNAME invalide et retombe sur sysfs", ->
+      ffi = require "ffi"
+      ffi.C.setenv "BRIDGE_IFNAME", "br0; touch /x", 1
+      popen = fake_popen {
+        ["/sys/class/net/*/bridge"]: { "/sys/class/net/br-lan/bridge" }
+        ["/sys/class/net/br-lan/brif/"]: { "eth0" }
+      }
+      assert.equals "br-lan", bridge_detect.detect { :popen }
+
     it "détecte via sysfs sinon", ->
       popen = fake_popen {
         ["/sys/class/net/*/bridge"]: { "/sys/class/net/br-lan/bridge" }

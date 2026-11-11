@@ -92,6 +92,75 @@ describe "filter.rule", ->
       v, _ = eval_fn {}
       assert.is_true v
 
+    it "log (chaîne) + allow → compile et autorise", ->
+      eval_fn, meta = rule_mod.compile_rule cfg, {
+        description: "Log + allow"
+        actions:     { "log", "allow" }
+      }, 1
+      assert.equals 2, #meta.actions
+      assert.equals "log",   meta.actions[1].name
+      assert.equals "allow", meta.actions[2].name
+      v, _ = eval_fn {}
+      assert.is_true v
+
+    it "log sous forme table { log: opts } + allow → compile et autorise", ->
+      eval_fn, meta = rule_mod.compile_rule cfg, {
+        description: "Log table + allow"
+        actions:     { { log: { log_msg: "bonjour" } }, "allow" }
+      }, 1
+      assert.equals 2, #meta.actions
+      assert.equals "log",   meta.actions[1].name
+      assert.equals "allow", meta.actions[2].name
+      v, _ = eval_fn {}
+      assert.is_true v
+
+    it "dns_strip sous forme table → rr_type pris en compte, règle non mutée", ->
+      rule = {
+        description: "Forme webui"
+        actions:     { { dns_strip: { rr_type: "AAAA" } }, "allow" }
+      }
+      eval_fn, meta = rule_mod.compile_rule cfg, rule, 1
+      assert.is_nil rule.dns_strip
+      assert.equals "dns_strip", meta.actions[1].name
+      ctx = { dns_raw: "fake", reason: "r" }
+      for cb in *meta.on_response
+        cb ctx
+      assert.equals "response_strip_AAAA", ctx.action_label
+      v, _ = eval_fn {}
+      assert.is_true v
+
+    it "dns_strip forme chaîne + options au niveau règle → inchangé", ->
+      _, meta = rule_mod.compile_rule cfg, {
+        description: "Forme historique"
+        actions:     { "dns_strip", "allow" }
+        dns_strip:   { rr_type: "A" }
+      }, 1
+      assert.equals "dns_strip", meta.actions[1].name
+      ctx = { dns_raw: "fake", reason: "r" }
+      for cb in *meta.on_response
+        cb ctx
+      assert.equals "response_strip_A", ctx.action_label
+
+    it "action table vide → erreur explicite nommant la règle", ->
+      ok, err = pcall ->
+        rule_mod.compile_rule cfg, {
+          description: "Règle invalide"
+          actions:     { {} }
+        }, 1
+      assert.is_false ok
+      assert.truthy tostring(err)\find "Règle invalide", 1, true
+      assert.truthy tostring(err)\find "invalide", 1, true
+
+    it "action table à deux clés → erreur explicite nommant la règle", ->
+      ok, err = pcall ->
+        rule_mod.compile_rule cfg, {
+          description: "Deux actions"
+          actions:     { { log: { log_msg: "x" }, allow: {} } }
+        }, 1
+      assert.is_false ok
+      assert.truthy tostring(err)\find "Deux actions", 1, true
+      assert.truthy tostring(err)\find "invalide", 1, true
+
     it "worker_only propagé depuis les actions (dnsonly + from_vlan)", ->
       _, meta = rule_mod.compile_rule cfg, {
         actions:    { "dnsonly" }

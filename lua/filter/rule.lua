@@ -56,12 +56,25 @@ compile_rule = function(cfg, rule, idx, used_ids)
   local rule_allow_modifiers = { }
   local _list_0 = (rule.actions or { })
   for _index_0 = 1, #_list_0 do
-    local action_name = _list_0[_index_0]
+    local entry = _list_0[_index_0]
+    local action_name = compiler_api.action_name_of(entry)
+    if not (action_name) then
+      local rule_label = rule.description or rule.rule_id or "rule_" .. tostring(idx)
+      error("Action invalide dans la règle '" .. tostring(rule_label) .. "': une entrée doit être un nom " .. "ou une table à une seule clé { nom: options }")
+    end
+    local action_rule = rule
+    if type(entry) == "table" then
+      action_rule = { }
+      for k, v in pairs(rule) do
+        action_rule[k] = v
+      end
+      action_rule[action_name] = entry[action_name]
+    end
     local action_factory, err = compiler_api.load_action(action_name)
     if not (action_factory) then
       error("Action inconnue '" .. tostring(action_name) .. "': " .. tostring(err))
     end
-    local action_obj = action_factory(cfg)(rule)
+    local action_obj = action_factory(cfg)(action_rule)
     action_evals[#action_evals + 1] = action_obj.eval
     actions_meta[#actions_meta + 1] = {
       name = action_name,
