@@ -482,3 +482,65 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   (masque ≥ 48), routes hors seuil ignorées, lignes sans CIDR ignorées,
   whitelist existante préservée, et absence totale de commande quand
   `allow_localnets` est faux/absent.
+
+### Portail AUTH et webui : qualité de code et couverture (branche q-auth)
+
+Suite du volet `auth-webui` de l'audit du 2026-11-11 (rapport Q1-Q5/T1-T10).
+État constaté dans le code, puis actions :
+
+- **Q1 — déjà fait.** `webui.util` est la source unique (`esc`, `parse_form`) ;
+  aucun handler ne réimplémente plus le décodage urlencodé ni l'échappement
+  (`parse_form_multi` de `filter.moon` reste un décodeur distinct multi-valeurs).
+- **Q2 — code mort supprimé.** `src/auth/worker_conn.moon` (jamais requis,
+  `string.pack` indisponible sous LuaJIT 5.1), `credentials.update_user_hash`,
+  `cert.load_or_generate`, `cert_generator.generate_rsa_key` (appelé des seuls
+  tests ; le test de régression du nom temporaire unique est rejoué sur
+  `generate_self_signed`) et le champ caché `<name>_present` de
+  `webui.handlers.config` (jamais lu par `build_section`). L'import
+  `extract_sni` de `server.moon` avait déjà été retiré (fix-auth).
+- **Q3 — déjà fait**, complété : les trois points (défaut 10000, set MAC seul,
+  IP locale et non SNI) étaient corrigés ; les deux dernières mentions de
+  « cache SNI dynamique » de `server.moon` et `.agents/workers.md` sont
+  alignées sur l'IP locale réelle.
+- **Q4 — corrigé.** `serializer.is_array` ne testait que `1..#t` : une table
+  mixte (`{ "a", "b", cle = "v" }`) ou à clés non contiguës perdait ses clés
+  hors séquence à l'écriture. `is_array` exige maintenant que toutes les clés
+  soient des entiers de `1..#t` (comptage) ; sinon forme associative `[k]: v`.
+  Tests de sérialisation et de round-trip.
+- **Q5 — déjà fait** (le log `entries` compte les clés). Reste non corrigé,
+  hors du point tel que rapporté : `stats().size_disk = #persistent_index`
+  vaut toujours 0 (table associative) ; `stats` n'a aucun appelant hors tests.
+- **T1 — couvert.** `tests/unit/auth/register_spec.moon` : 9 cas sur
+  `handle_register` (voie hachage client : succès/état/reload, username
+  invalide 400, record invalide 400, doublon 409, échec set_record 500,
+  échec de signal ; repli plaintext : succès vérifiable, politique 401,
+  champs manquants 400, doublon 409). Le cas « échec set_record » a révélé
+  que `with_lock` levait hors du contrat de `rewrite_secrets_file` quand le
+  verrou est inouvrable : corrigé dans un commit `fix(auth.credentials)`
+  (pcall + retour `nil, message`), test unitaire dans
+  `credentials_spec.moon`.
+- **T2 — couvert.** `is_admin_user` via `handle_login` (lien `/admin` de la
+  page de succès selon liste/allow_all) et chaîne `GET /admin/` dans
+  `router_spec` (liste vide + allow_all → 200 ; allow_all=false → 403).
+  Aucun défaut de configuration modifié.
+- **T3, T4, T5, T6, T7, T10 — déjà couverts** : XSS règles / `render_field` /
+  `?mac=` (T3), conservation des clés hors schéma (T4), nom MAC→nom via
+  `handle_verdicts_get` (T5), indice `1.5` au réordonnancement (T6), 409 sur
+  cible de renommage/création existante (T7), lien `/logout` du dashboard
+  (T10).
+- **T8 — partiel.** Poison d'index déjà couvert (`setfenv` vide, marqueurs
+  `os.execute`/boucle). La concurrence d'écriture des fichiers de
+  certificats (B13) n'est pas couverte : les écritures directes de
+  `cert.moon`/`cert_cache.save_cert_to_disk` ne sont pas atomiques et aucun
+  point d'injection ne permet un test déterministe sans correction préalable.
+- **T9 — adapté.** `parse_query` n'existe plus (le routeur et les handlers
+  utilisent `webui.util.parse_form`) ; cas limites ajoutés à
+  `util_spec.moon` : paire sans `=`, séquence `%` invalide, `&` final.
+
+**Vérification (2026-11-11, branche q-auth)** : `make check` OK ; `make test`
+= 2109 successes / 0 failures / 0 errors ; `make test-js` = 12 pass.
+`make test-e2e` a été tenté mais n'est pas concluant dans cet environnement :
+plusieurs suites e2e d'autres worktrees tournaient simultanément sur le même
+homelab libvirt (redémarrages du service concurrents), d'où des échecs
+HTTP 000 côté portail et des écarts DNS/IPv6/EDE sans rapport avec les
+fichiers modifiés ici.
