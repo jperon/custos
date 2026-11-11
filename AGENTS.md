@@ -890,3 +890,12 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `doc/CONFIG.md` et le schéma webui précisent « une seule file ». Tests dans
   `tests/unit/config_spec.moon` (`"4-5"` → `"4"` + warn, `"4"` inchangé,
   `questions: "0-1"` inchangé).
+- **`worker_questions` : `response_rule_ids` écrasés par la dernière question.**
+  Dans la boucle `for _, q in ipairs dns_msg.questions`, `response_rule_ids`
+  était **réassigné** à chaque question alors que `allow_modifiers` était
+  accumulé : sur un paquet multi-questions, les règles `on_response`
+  (`dns_strip`, `cname`…) des premières questions étaient perdues. Correctif :
+  décisions collectées puis fusionnées par `aggregate_decisions` (déduplication
+  ordonnée via `append_unique`, plafond `MAX_RESPONSE_RULE_IDS = 8` aligné sur
+  `ipc.encode_msg`, dépassement loggué `response_rule_ids_truncated`). Tests
+  dans `tests/unit/worker_questions_aggregate_spec.moon`.

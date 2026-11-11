@@ -280,6 +280,77 @@ parse_packet = function(raw)
   end
   return nil, "parse_failed"
 end
+local MAX_RESPONSE_RULE_IDS = 8
+local append_unique
+append_unique = function(dst, values, limit)
+  local overflow = 0
+  if not (type(values) == "table") then
+    return overflow
+  end
+  local seen = { }
+  for _index_0 = 1, #dst do
+    local v = dst[_index_0]
+    seen[v] = true
+  end
+  for _index_0 = 1, #values do
+    local _continue_0 = false
+    repeat
+      local v = values[_index_0]
+      if not (v and v ~= "") then
+        _continue_0 = true
+        break
+      end
+      if seen[v] then
+        _continue_0 = true
+        break
+      end
+      if limit and #dst >= limit then
+        overflow = overflow + 1
+        _continue_0 = true
+        break
+      end
+      dst[#dst + 1] = v
+      seen[v] = true
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  return overflow
+end
+local aggregate_decisions
+aggregate_decisions = function(decisions)
+  local response_rule_ids = { }
+  local allow_modifiers = nil
+  local dropped_ids = 0
+  for _index_0 = 1, #decisions do
+    local _continue_0 = false
+    repeat
+      local decision = decisions[_index_0]
+      if not (decision) then
+        _continue_0 = true
+        break
+      end
+      dropped_ids = dropped_ids + append_unique(response_rule_ids, decision.response_rule_ids, MAX_RESPONSE_RULE_IDS)
+      if decision.allow_modifiers and next(decision.allow_modifiers) then
+        allow_modifiers = allow_modifiers or { }
+        for k, v in pairs(decision.allow_modifiers) do
+          allow_modifiers[k] = v
+        end
+      end
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  return {
+    response_rule_ids = response_rule_ids,
+    allow_modifiers = allow_modifiers,
+    dropped_ids = dropped_ids
+  }
+end
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
   local payload_ptr = ffi.new("unsigned char*[1]")
@@ -402,6 +473,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   local block_modifiers = nil
   local allow_modifiers = nil
   local response_rule_ids = { }
+  local decisions = { }
   local q_fields = {
     worker = "dns",
     mac_src = l2.mac_src,
@@ -434,13 +506,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       rule_id = decision.rule_id
       nft_timeout = decision.timeout
       matched_list = list_from_condition_reason(decision.condition_reason)
-      response_rule_ids = decision.response_rule_ids or { }
-      if decision.allow_modifiers and next(decision.allow_modifiers) then
-        allow_modifiers = allow_modifiers or { }
-        for k, v in pairs(decision.allow_modifiers) do
-          allow_modifiers[k] = v
-        end
-      end
+      decisions[#decisions + 1] = decision
     end
     q_fields.reason = reason or (allowed and "allowed") or "denied"
     q_fields.rule = rule_id or ""
@@ -473,6 +539,18 @@ handle_question = function(qh_ptr, nfad, pkt_id)
       block_modifiers = decision and decision.modifiers or nil
     end
     write_event(q_fields, allowed)
+  end
+  local aggregated = aggregate_decisions(decisions)
+  response_rule_ids = aggregated.response_rule_ids
+  allow_modifiers = aggregated.allow_modifiers
+  if aggregated.dropped_ids > 0 then
+    log_warn(function()
+      return {
+        action = "response_rule_ids_truncated",
+        dropped = aggregated.dropped_ids,
+        max = MAX_RESPONSE_RULE_IDS
+      }
+    end)
   end
   local q_exit_ms = get_benchmark_ms()
   local question_proc_ms
@@ -614,5 +692,8 @@ return {
   run = run,
   skip_ipv6_ext_hdrs = skip_ipv6_ext_hdrs,
   dns_tcp_complete = dns_tcp_complete,
-  new_dns_tcp_stream = new_dns_tcp_stream
+  new_dns_tcp_stream = new_dns_tcp_stream,
+  append_unique = append_unique,
+  aggregate_decisions = aggregate_decisions,
+  MAX_RESPONSE_RULE_IDS = MAX_RESPONSE_RULE_IDS
 }
