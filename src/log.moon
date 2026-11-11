@@ -16,8 +16,22 @@ config = require "config"
 bit = require "bit"
 
 STDOUT_FILENO = 1
+CLOCK_MONOTONIC = 1
 
 ts  = ffi.new "timespec_t"
+
+-- ── Instrumentation optionnelle du coût d'écriture ────────────────
+-- Mesure la durée du `libc.write` de chaque ligne (benchmark). Désactivée
+-- par défaut : quand elle est off, AUCUN appel d'horloge n'est ajouté au
+-- chemin nominal (la seule horloge existante reste celle de l'epoch).
+-- L'activation passe par `set_timing` (appelé une fois au démarrage par
+-- main.moon, après lecture de la config), jamais par un `require "config"`
+-- ici : ce module est requis très tôt, avant que la décision de benchmark
+-- ne soit arrêtée, et un `require` en hot-path coûterait ~150 ns/ligne.
+_timing_enabled = false
+_last_write_us  = 0
+_timing_start   = ffi.new "timespec_t"
+_timing_end     = ffi.new "timespec_t"
 
 -- Mappage des niveaux de log vers des valeurs numériques
 -- (Plus la valeur est élevée, plus le log est verbeux)
@@ -37,6 +51,28 @@ LOG_LEVEL_MAP = {
 
 -- Niveau de log configuré, converti en numérique
 CURRENT_LOG_LEVEL_NUM = LOG_LEVEL_MAP[config.runtime.log_level] or LOG_LEVEL_MAP.INFO
+
+--- Active/désactive la mesure de durée des écritures de journal.
+-- À appeler une fois au démarrage (main.moon), avant les forks, pour que
+-- tous les workers héritent de la valeur par COW.
+-- @tparam boolean enabled true pour instrumenter les `write` suivants
+-- @treturn nil
+set_timing = (enabled) ->
+  _timing_enabled = enabled and true or false
+  nil
+
+--- Durée du dernier `write` de journal mesuré, en microsecondes.
+-- Mesure NON récursive : la valeur est celle du `write` TERMINÉ avant l'appel
+-- (une ligne ne peut pas porter sa propre durée). Retourne 0 quand
+-- l'instrumentation est désactivée ou qu'aucune écriture n'a encore eu lieu.
+-- @treturn number durée en µs (entier)
+get_last_write_us = -> _last_write_us
+
+-- Microsecondes monotones depuis boot (horloge réservée à l'instrumentation,
+-- appelée uniquement quand `_timing_enabled` est vrai).
+monotonic_us = ->
+  libc.clock_gettime CLOCK_MONOTONIC, _timing_start
+  tonumber(_timing_start.tv_sec) * 1000000 + math.floor(tonumber(_timing_start.tv_nsec) / 1000)
 
 --- Retourne la valeur numérique d'un niveau de log.
 -- @tparam string level Niveau de log (ex: "INFO", "WARN")
@@ -200,7 +236,14 @@ write_log = (level, thunk) ->
   table.insert parts, "suppressed=#{suppressed}" if suppressed > 0
 
   line = table.concat(parts, " ") .. "\n"
-  libc.write STDOUT_FILENO, line, #line
+  if _timing_enabled
+    t0 = monotonic_us!
+    libc.write STDOUT_FILENO, line, #line
+    libc.clock_gettime CLOCK_MONOTONIC, _timing_end
+    t1 = tonumber(_timing_end.tv_sec) * 1000000 + math.floor(tonumber(_timing_end.tv_nsec) / 1000)
+    _last_write_us = t1 - t0
+  else
+    libc.write STDOUT_FILENO, line, #line
 
 --- Raccourcis sémantiques vers write_log avec niveaux prédéfinis (tous lazy).
 -- @tparam function thunk Fonction () -> table de champs clé=valeur
@@ -227,4 +270,4 @@ log_debug = (thunk) -> write_log "DEBUG", thunk
 -- @treturn nil
 log_trace = (thunk) -> write_log "TRACE", thunk
 
-{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG, :RL_PURGE_EVERY, :check_rl, :_rl, :_rl_reset }
+{ :write_log, :log_allow, :log_block, :log_info, :log_warn, :log_error, :log_debug, :log_trace, :now, :get_log_level_num, :level_enabled, :rl_fingerprint, :set_action_prefix, :RL_CONFIG, :RL_PURGE_EVERY, :check_rl, :_rl, :_rl_reset, :set_timing, :get_last_write_us }
