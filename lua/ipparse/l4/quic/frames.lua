@@ -1,14 +1,17 @@
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local sp, su
 do
   local _obj_0 = require("ipparse.lib.pack_compat")
   sp, su = _obj_0.pack, _obj_0.unpack
 end
 local bidirectional
-bidirectional = require("ipparse.fun").bidirectional
-local band, bor, bnot, lshift, rshift
+bidirectional = require("ipparse.fun.tables").bidirectional
+local byte = string.byte
+local band, bor, rshift
 do
   local _obj_0 = require("ipparse.lib.bit_compat")
-  band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
+  band, bor, rshift = _obj_0.band, _obj_0.bor, _obj_0.rshift
 end
 local native_int = math.floor == nil or math.type ~= nil
 local frame_types = bidirectional({
@@ -73,13 +76,6 @@ parse_varint = function(data, offset)
     return (band(high, 0x3FFFFFFF) * 4294967296) + low, offset + 8
   end
 end
-local need_bytes
-need_bytes = function(data, offset, len)
-  if offset < 1 or len < 0 then
-    return false
-  end
-  return (offset + len - 1) <= #data
-end
 local parse_varint_required
 parse_varint_required = function(data, offset, field_name)
   local value, next_off = parse_varint(data, offset)
@@ -108,9 +104,16 @@ encode_varint = function(value)
 end
 local parse_padding_frame
 parse_padding_frame = function(data, offset)
+  local len = #data
+  local padding = 1
+  while offset <= len and byte(data, offset) == 0 do
+    padding = padding + 1
+    offset = offset + 1
+  end
   return {
     type = 0x00,
-    name = "PADDING"
+    name = "PADDING",
+    length = padding
   }, offset
 end
 local parse_ping_frame
@@ -520,6 +523,34 @@ parse_handshake_done_frame = function(data, offset)
     name = "HANDSHAKE_DONE"
   }, offset
 end
+local frame_parsers = {
+  [0x00] = parse_padding_frame,
+  [0x01] = parse_ping_frame,
+  [0x02] = parse_ack_frame,
+  [0x03] = parse_ack_frame,
+  [0x04] = parse_reset_stream_frame,
+  [0x05] = parse_stop_sending_frame,
+  [0x06] = parse_crypto_frame,
+  [0x07] = parse_new_token_frame,
+  [0x10] = parse_max_data_frame,
+  [0x11] = parse_max_stream_data_frame,
+  [0x12] = parse_max_streams_frame,
+  [0x13] = parse_max_streams_frame,
+  [0x14] = parse_data_blocked_frame,
+  [0x15] = parse_stream_data_blocked_frame,
+  [0x16] = parse_streams_blocked_frame,
+  [0x17] = parse_streams_blocked_frame,
+  [0x18] = parse_new_connection_id_frame,
+  [0x19] = parse_retire_connection_id_frame,
+  [0x1a] = parse_path_challenge_frame,
+  [0x1b] = parse_path_response_frame,
+  [0x1c] = parse_connection_close_frame,
+  [0x1d] = parse_connection_close_frame,
+  [0x1e] = parse_handshake_done_frame
+}
+for t = 0x08, 0x0f do
+  frame_parsers[t] = parse_stream_frame
+end
 local parse_frame
 parse_frame = function(data, offset)
   if offset > #data then
@@ -529,70 +560,14 @@ parse_frame = function(data, offset)
   if not (frame_type) then
     return nil, offset, "truncated frame type varint"
   end
-  local parser
-  local _exp_0 = frame_type
-  if 0x00 == _exp_0 then
-    parser = parse_padding_frame
-  elseif 0x01 == _exp_0 then
-    parser = parse_ping_frame
-  elseif 0x02 == _exp_0 or 0x03 == _exp_0 then
-    parser = function(d, o)
-      return parse_ack_frame(d, o, frame_type)
-    end
-  elseif 0x04 == _exp_0 then
-    parser = parse_reset_stream_frame
-  elseif 0x05 == _exp_0 then
-    parser = parse_stop_sending_frame
-  elseif 0x06 == _exp_0 then
-    parser = parse_crypto_frame
-  elseif 0x07 == _exp_0 then
-    parser = parse_new_token_frame
-  elseif 0x10 == _exp_0 then
-    parser = parse_max_data_frame
-  elseif 0x11 == _exp_0 then
-    parser = parse_max_stream_data_frame
-  elseif 0x12 == _exp_0 or 0x13 == _exp_0 then
-    parser = function(d, o)
-      return parse_max_streams_frame(d, o, frame_type)
-    end
-  elseif 0x14 == _exp_0 then
-    parser = parse_data_blocked_frame
-  elseif 0x15 == _exp_0 then
-    parser = parse_stream_data_blocked_frame
-  elseif 0x16 == _exp_0 or 0x17 == _exp_0 then
-    parser = function(d, o)
-      return parse_streams_blocked_frame(d, o, frame_type)
-    end
-  elseif 0x18 == _exp_0 then
-    parser = parse_new_connection_id_frame
-  elseif 0x19 == _exp_0 then
-    parser = parse_retire_connection_id_frame
-  elseif 0x1a == _exp_0 then
-    parser = parse_path_challenge_frame
-  elseif 0x1b == _exp_0 then
-    parser = parse_path_response_frame
-  elseif 0x1c == _exp_0 or 0x1d == _exp_0 then
-    parser = function(d, o)
-      return parse_connection_close_frame(d, o, frame_type)
-    end
-  elseif 0x1e == _exp_0 then
-    parser = parse_handshake_done_frame
-  else
-    if frame_type >= 0x08 and frame_type <= 0x0f then
-      parser = function(d, o)
-        return parse_stream_frame(d, o, frame_type)
-      end
-    else
-      parser = nil
-    end
-  end
+  local parser = frame_parsers[frame_type]
   if not (parser) then
     return {
       type = frame_type,
       name = "UNKNOWN"
     }, new_offset
   end
-  local frame, parsed_off, err = parser(data, new_offset)
+  local frame, parsed_off, err = parser(data, new_offset, frame_type)
   if not (frame) then
     return nil, offset, err
   end

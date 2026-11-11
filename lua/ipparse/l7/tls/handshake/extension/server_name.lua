@@ -7,7 +7,7 @@ local concat
 concat = table.concat
 local bidirectional, zero_indexed
 do
-  local _obj_0 = require("ipparse.fun")
+  local _obj_0 = require("ipparse.fun.tables")
   bidirectional, zero_indexed = _obj_0.bidirectional, _obj_0.zero_indexed
 end
 local pack_entry

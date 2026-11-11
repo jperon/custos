@@ -7,11 +7,6 @@ local HAS_FFI = ok
 if not (HAS_FFI) then
   ffi = nil
 end
-if HAS_FFI then
-  ffi.cdef([[    void *memcpy(void *dest, const void *src, size_t n);
-    void *memset(void *s, int c, size_t n);
-  ]])
-end
 local NATIVE_LE = true
 if HAS_FFI then
   local probe = ffi.new("uint16_t[1]", 0x0102)
@@ -66,21 +61,6 @@ cast_uint = function(val)
     return ffi.cast("uint64_t", ffi.cast("int64_t", val))
   else
     return ffi.cast("uint64_t", val)
-  end
-end
-local write_uint
-write_uint = function(buf, offset, val, size, le)
-  local v = cast_uint(val)
-  if le then
-    for i = 0, size - 1 do
-      buf[offset + i] = tonumber(v % 256)
-      v = v / 256
-    end
-  else
-    for i = size - 1, 0, -1 do
-      buf[offset + i] = tonumber(v % 256)
-      v = v / 256
-    end
   end
 end
 local to_signed
@@ -223,7 +203,7 @@ element_size = function(opt, count)
   elseif "X" == _exp_0 then
     return 0
   else
-    return error("option de format inconnue : '" .. tostring(opt) .. "'")
+    return error("unknown format option: '" .. tostring(opt) .. "'")
   end
 end
 local packsize
@@ -234,7 +214,7 @@ packsize = function(fmt)
   while opt ~= nil do
     local sz = element_size(opt, count)
     if sz == nil then
-      error("string.packsize : format '" .. tostring(opt) .. "' a une taille variable")
+      error("string.packsize: format '" .. tostring(opt) .. "' has variable size")
     end
     total = total + sz
     opt, count, le, align = iter()
@@ -417,6 +397,9 @@ if HAS_FFI then
     return bytes
   end
   bytes_to_double = function(s, offset, le)
+    if offset + 8 > #s then
+      error("data string too short")
+    end
     local buf = ffi.new("uint8_t[8]")
     if le then
       for i = 0, 7 do
@@ -454,6 +437,9 @@ if HAS_FFI then
     return bytes
   end
   bytes_to_float = function(s, offset, le)
+    if offset + 4 > #s then
+      error("data string too short")
+    end
     local buf = ffi.new("uint8_t[4]")
     if le then
       for i = 0, 3 do
@@ -845,11 +831,17 @@ unpack = function(fmt, s, pos)
     end
     local _exp_0 = opt
     if "b" == _exp_0 then
+      if pos + 1 > #s then
+        error("data string too short")
+      end
       local v = string.byte(s, pos + 1)
       n = n + 1
       _results[n] = to_signed(v, 1)
       pos = pos + 1
     elseif "B" == _exp_0 then
+      if pos + 1 > #s then
+        error("data string too short")
+      end
       n = n + 1
       _results[n] = string.byte(s, pos + 1)
       pos = pos + 1
@@ -909,6 +901,9 @@ unpack = function(fmt, s, pos)
       pos = pos + 8
     elseif "c" == _exp_0 then
       local sz = count or 1
+      if pos + sz > #s then
+        error("data string too short")
+      end
       n = n + 1
       _results[n] = s:sub(pos + 1, pos + sz)
       pos = pos + sz
@@ -916,18 +911,24 @@ unpack = function(fmt, s, pos)
       local sz = count or 8
       local len = tonumber(read_uint(s, pos, sz, le))
       pos = pos + sz
+      if pos + len > #s then
+        error("data string too short")
+      end
       n = n + 1
       _results[n] = s:sub(pos + 1, pos + len)
       pos = pos + len
     elseif "z" == _exp_0 then
       local nul = s:find("\0", pos + 1, true)
       if not nul then
-        error("string.unpack 'z' : pas de \\0 trouvé")
+        error("string.unpack 'z': no \\0 found")
       end
       n = n + 1
       _results[n] = s:sub(pos + 1, nul - 1)
       pos = nul
     elseif "x" == _exp_0 then
+      if pos + 1 > #s then
+        error("data string too short")
+      end
       pos = pos + 1
     elseif "X" == _exp_0 then
       local _ = nil

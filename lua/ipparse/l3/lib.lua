@@ -28,7 +28,7 @@ checksum = function(self)
 end
 local checksum6
 checksum6 = function(src, dst, next_header, payload)
-  return checksum(sp(">c16c16 I4 xxx B c" .. tostring(#payload), src, dst, #payload, next_header, payload))
+  return checksum(sp(">c16c16 I4 xxx B", src, dst, #payload, next_header) .. payload)
 end
 return {
   checksum = checksum,

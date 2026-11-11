@@ -1,16 +1,17 @@
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local sp, su
 do
   local _obj_0 = require("ipparse.lib.pack_compat")
   sp, su = _obj_0.pack, _obj_0.unpack
 end
-local need_bytes
-need_bytes = require("ipparse").need_bytes
 local l3_checksum6
 l3_checksum6 = require("ipparse.l3.lib").checksum6
 local pack
 pack = function(self)
-  self.len = 8 + (self.data and #tostring(self.data) or 0)
-  return sp(">H H H H", self.spt, self.dpt, self.len, self.checksum) .. tostring(self.data or '')
+  local data = self.data and tostring(self.data) or ""
+  self.len = 8 + #data
+  return sp(">H H H H", self.spt, self.dpt, self.len, self.checksum) .. data
 end
 local _mt = {
   __tostring = pack

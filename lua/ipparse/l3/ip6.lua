@@ -1,3 +1,5 @@
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local format, sp, su
 do
   local _obj_0 = require("ipparse.lib.pack_compat")
@@ -14,8 +16,6 @@ do
   local _obj_0 = require("ipparse.lib.bit_compat")
   band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
 end
-local need_bytes
-need_bytes = require("ipparse").need_bytes
 local s2ip6
 local pack
 pack = function(self)
@@ -23,12 +23,16 @@ pack = function(self)
   if type(data) == "table" then
     data.checksum = 0
     local d = tostring(data)
-    data.checksum = checksum6(self.src, self.dst, self.next_header, d)
+    local csum = checksum6(self.src, self.dst, self.next_header, d)
+    if self.next_header == 17 and csum == 0 then
+      csum = 0xffff
+    end
+    data.checksum = csum
     data = tostring(data)
   end
   self.payload_len = #data
-  self.vtf = self.vtf or bor(lshift(self.version, 28), lshift(self.traffic_class or 0, 20), self.flow_label or 0)
-  return sp(">I4 I2 I1 I1 c16 c16", self.vtf, self.payload_len, self.next_header, self.hop_limit, self.src, self.dst) .. tostring(self.data or '')
+  self.vtf = bor(lshift(self.version, 28), lshift(self.traffic_class or 0, 20), self.flow_label or 0)
+  return sp(">I4 I2 I1 I1 c16 c16", self.vtf, self.payload_len, self.next_header, self.hop_limit, self.src, self.dst) .. data
 end
 local _mt = {
   __tostring = pack
@@ -181,11 +185,12 @@ local s2net6
 s2net6 = function(self)
   local mask
   self, mask = self:match("([^/]*)/?([^/]*)$")
-  return sp(">B HHHH HHHH", (tonumber(mask or 128)), unpack(parse_ip6(self)))
+  return sp(">B HHHH HHHH", (tonumber(mask) or 128), unpack(parse_ip6(self)))
 end
 return {
   parse = parse,
   new = new,
+  pack = pack,
   ip62s = ip62s,
   s2ip6 = s2ip6,
   net62s = net62s,

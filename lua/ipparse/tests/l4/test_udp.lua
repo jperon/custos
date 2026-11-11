@@ -95,4 +95,36 @@ test("checksum6 computes IPv6 UDP pseudo-header checksum", function()
   end
   return assert(got == expected, "checksum6 mismatch: got " .. tostring(got) .. ", expected " .. tostring(expected))
 end)
+test("pack serializes string data once and round-trips it", function()
+  local u = udp.new({
+    spt = 1000,
+    dpt = 2000,
+    checksum = 0,
+    data = "hello"
+  })
+  local raw = tostring(u)
+  local parsed, _ = udp.parse(raw, 1)
+  assert(parsed.len == 13, "len should be 13, got " .. tostring(parsed.len))
+  return assert(raw:sub(parsed.data_off) == "hello", "payload should round-trip")
+end)
+test("pack calls __tostring of data exactly once", function()
+  local calls = 0
+  local obj = setmetatable({ }, {
+    __tostring = function(self)
+      calls = calls + 1
+      return "payload"
+    end
+  })
+  local u = udp.new({
+    spt = 1000,
+    dpt = 2000,
+    checksum = 0,
+    data = obj
+  })
+  local raw = tostring(u)
+  assert(calls == 1, "__tostring should be called once, got " .. tostring(calls))
+  local parsed, _ = udp.parse(raw, 1)
+  assert(parsed.len == 15, "len should be 15 (8+7), got " .. tostring(parsed.len))
+  return assert(raw:sub(parsed.data_off) == "payload", "object payload should round-trip")
+end)
 return util.summary("l4/udp")

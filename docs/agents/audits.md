@@ -1110,3 +1110,40 @@ Décision : les exposer en lecture seule.
 - **Documentation.** `doc/CONFIG.md` §13 (sémantique de `flush_interval` et
   emplacement des instantanés), `docs/agents/webui.md` (page Métriques) et
   `.agents/workers.md` (fichier de sortie de `worker_questions`).
+
+### Mise à jour du sous-module ipparse (branche u-ipparse)
+
+Le sous-module `src/lib/moontastik` passe de `a77fd2f` à `265876b` (90
+commits). Les `.lua` compilés suivis (dont le nouveau `lua/ipparse/fun/`) sont
+régénérés au même commit ; `git -C src/lib/moontastik status --short` reste
+vide après compilation.
+
+Changements amont confrontés un par un aux usages custos :
+
+| Changement amont | Usages custos | Impact / adaptation |
+|---|---|---|
+| `ip6.pack` recalcule `vtf` depuis `version`/`traffic_class`/`flow_label` (`ipparse/l3/ip6.moon:52`) | `src/dup_query.moon:48-63,79-94`, `src/forge_dns.moon:32-50` recopiaient seulement `vtf` | **Régression réelle** : TC et flow label perdus sur les paquets IPv6 forgés. Adapté : les trois sites passent `traffic_class`/`flow_label` (`src/dup_query.moon:56-57,88-89`, `src/forge_dns.moon:42-43`). Tests `tests/unit/dup_query_spec.moon`, `tests/unit/forge_dns_spec.moon` (rouges avant correctif) |
+| `rcode`/`opcode`/`z` renvoient un nombre (`ipparse/l7/dns.moon:91-104`) | `src/dns_classify.moon:35-36`, `src/worker_responses.moon:586,786`, `src/worker_doh.moon:134`, `src/filter/actions/cname.moon:96`, écritures `src/dns_ede.moon:67,108,142,175,221` ; logs `src/worker_responses.moon:541,762` | Aucun test de vérité sur ces accesseurs ; le code extrayait déjà les bits de `ra_z_rcode`. Seul effet visible : les logs `rcode` passent de `true`/`false` à 0-15 (plus informatif). Commentaires seuls corrigés (`src/dns_classify.moon:32`, `src/worker_doh.moon:132-133`, spec nxdomain) |
+| Classes NONE/ANY = 254/255 (`ipparse/l7/dns.moon:387`) | aucun usage de `classes` | sans impact |
+| EDNS : option inconnue stockée, `client_subnet` sans `unpack`, méta `__tostring` (`ipparse/l7/dns.moon:286-312`) | `src/dns_ede.moon:41-53` fabrique ses rdata en chaîne, ne re-parse pas d'option | sans impact |
+| `pack` ne pose `header.size` que s'il existe déjà (`ipparse/l7/dns.moon:357`) | custos parse toujours avec `is_tcp=false` et calcule la longueur TCP depuis `#new_dns` (`src/lib/dns_response.moon:36-39`) | sans impact |
+| `ip4`/`tcp` : `parse` renvoie `nil` sous les longueurs minimales ; flags bruts supprimés ; `options` défaut `""` | `src/packet_utils.moon:86,100,109`, `src/worker_tls.moon:680-760`, `src/worker_captive.moon:44-48`, `src/worker_reject.moon:226-241`, `src/worker_sip.moon:168-190` testent `nil` ; lecture seulement de `.flags` (`tests/unit/forge_dns_spec.moon:93`) | sans impact |
+| IPv6 : `pack` exporté, checksum UDP nul → `0xFFFF` (`ipparse/l3/ip6.moon:48`), `s2net6` masque | `src/forge_dns.moon` sérialise via la métaméthode ; `s2net6` inutilisé | sans impact (checksum correct RFC 768/8200) |
+| TLS : `parse` renvoie `nil` sur enregistrement/handshake/ClientHello tronqué ; `message_types` corrigés | `src/worker_tls.moon:744-750`, `src/auth/sni_extractor.moon:37-48,71` : `pcall` + test `nil` ; seul `client_hello` utilisé (`src/worker_tls.moon:750`) | sans impact |
+| `hex2bin` une valeur, `bin2hex`/`lbin2hex` réécrits | aucun usage custos | sans impact |
+| `fun.protected` sans fuite de traceback ; façade `fun` → `fun/{tables,memo,iter,protected}` | `src/webui/handlers/verdicts.moon:11` utilise `bidirectional`, toujours réexporté par la façade | sans impact |
+| `fragmented_ip4` réécrit, `pcap` corrigé, `bit_compat` backend, `hkdf`/crypto | aucun usage direct de `fragmented_ip4`/`pcap` ; QUIC couvert par `tests/unit/ipparse/l7/quic/session_spec.moon` | sans impact |
+| `pack_compat` lève sur `unpack` tronqué | custos n'utilise que `pack` ; les parseurs ipparse gardent `need_bytes` avant `su` (`ipparse/l7/dns.moon:229,260,295`, `ipparse/l7/tls/init.moon:53`) | sans impact, pas d'`unpack` non protégé dans le chemin chaud |
+| `lib/ffi_stub.lua` supprimé | aucune règle du `Makefile` ; seule une copie compilée d'exemple le cite (`lua/ipparse/examples/parse_real_quic.lua:20`) | sans impact (exemples exclus de la compilation et de `make check`) |
+
+Livraison du nouveau dossier `lua/ipparse/fun/` : `find -H` du `Makefile`
+(`Makefile:95`) le compile ; le paquet OpenWrt (`packaging/openwrt/custos/Makefile:26,41`,
+`$(CP)` récursif), `install-owrt.moon:218` (`tar -C lua .`) et le homelab
+(`libvirt/homelab.sh:424`) copient récursivement. Aucune collision
+`lua/ipparse/fun.lua` / `lua/ipparse/fun/`.
+
+**Vérification (2026-11-11, branche u-ipparse)** : `make all`, `make check`
+OK (147 fichiers, aucune globale inconnue) ; `make test` = **2301 successes /
+0 failures / 0 errors / 0 pending** (2298 de la base + 3 tests ajoutés par
+l'adaptation IPv6), `make test-js` = 12 pass / 0 fail (journal `tmp/test.log`).
+`make test-e2e` non lancé (homelab partagé, à la charge de l'orchestrateur).

@@ -1,14 +1,18 @@
-local sp, su, rep
+local sp, su
 do
   local _obj_0 = require("ipparse.lib.pack_compat")
-  sp, su, rep = _obj_0.pack, _obj_0.unpack, _obj_0.rep
+  sp, su = _obj_0.pack, _obj_0.unpack
 end
-local remove
-remove = table.remove
 local version = 0
 local pack
 pack = function(self)
-  return sp(rep(">H", #self.supported_versions), self.supported_versions)
+  local parts = { }
+  local _list_0 = self.supported_versions
+  for _index_0 = 1, #_list_0 do
+    local v = _list_0[_index_0]
+    parts[#parts + 1] = sp(">I4", v)
+  end
+  return table.concat(parts)
 end
 local _mt = {
   __tostring = pack
@@ -18,13 +22,15 @@ parse_payload = function(self, off)
   if off == nil then
     off = 1
   end
-  local supported_versions = {
-    su(rep(">H", #self / 2), self, off)
-  }
-  local _off = remove(supported_versions)
+  local supported_versions = { }
+  while off + 3 <= #self do
+    local v, _off = su(">I4", self, off)
+    supported_versions[#supported_versions + 1] = v
+    off = _off
+  end
   return setmetatable({
     supported_versions = supported_versions
-  }, _mt), _off
+  }, _mt), off
 end
 return {
   version = version,

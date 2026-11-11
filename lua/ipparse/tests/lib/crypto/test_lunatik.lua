@@ -19,6 +19,7 @@ end
 local calls = {
   aead_new = 0,
   aead_close = 0,
+  aead_setkey = 0,
   ecb_new = 0,
   ecb_close = 0
 }
@@ -27,6 +28,7 @@ mk_aead = function()
   local key, authsize = nil, nil
   return {
     setkey = function(self, k)
+      calls.aead_setkey = calls.aead_setkey + 1
       key = k
     end,
     setauthsize = function(self, n)
@@ -262,6 +264,17 @@ test("lunatik: AES-128-GCM decrypt returns nil,error on non-auth error", functio
   local pt, err = b.aes_128_gcm_decrypt(key, nonce, ("BROKEN" .. string.rep("T", 16)), "")
   assert(pt == nil, "pt should be nil on non-auth failure")
   return assert(tostring(err):find("aead(gcm(aes)) decrypt failed", 1, true), "unexpected error: " .. tostring(tostring(err)))
+end)
+test("lunatik: AES-128-GCM decrypt reuses transform for same key", function()
+  local key_a = string.rep("\020", 16)
+  local key_b = string.rep("\021", 16)
+  local nonce = string.rep("\000", 12)
+  local before = calls.aead_setkey
+  b.aes_128_gcm_decrypt(key_a, nonce, ("first" .. string.rep("T", 16)), "")
+  b.aes_128_gcm_decrypt(key_a, nonce, ("second" .. string.rep("T", 16)), "")
+  assert(calls.aead_setkey == before + 1, "same key should call setkey once, got " .. tostring(calls.aead_setkey - before))
+  b.aes_128_gcm_decrypt(key_b, nonce, ("third" .. string.rep("T", 16)), "")
+  return assert(calls.aead_setkey == before + 2, "a new key should call setkey once more, got " .. tostring(calls.aead_setkey - before))
 end)
 test("lunatik: AES-128-ECB encrypt uses crypto.skcipher", function()
   local key = string.rep("\034", 16)

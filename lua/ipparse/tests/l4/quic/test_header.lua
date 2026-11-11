@@ -8,6 +8,7 @@ do
 end
 local quic = require("ipparse.l4.quic")
 local v1 = require("ipparse.l4.quic.v1")
+local vn = require("ipparse.l4.quic.version_negotiation")
 local dcid = "\001\002\003\004\005\006\007\008"
 local build_initial_pkt
 build_initial_pkt = function()
@@ -95,5 +96,45 @@ test("header: FIXED_BIT accessible", function()
   local pkt = build_initial_pkt()
   local h, _ = quic.parse(pkt, 1)
   return assert(h.FIXED_BIT == 0x40, "FIXED_BIT should be 0x40")
+end)
+test("header: pack long header round-trips version and CIDs", function()
+  local pkt = "\192\000\000\000\001\004abcd\002ef\000\005\001\002\003\004\005"
+  local h = quic.parse(pkt, 1)
+  local packed = quic.pack(h) .. "\000\005\001\002\003\004\005"
+  local h2 = quic.parse(packed, 1)
+  assert(h2, "round-trip parse failed")
+  assert(h2.version == 1, "expected version 1, got " .. tostring(h2.version))
+  assert(h2.dst_connection_id == "abcd", "dcid mismatch")
+  return assert(h2.src_connection_id == "ef", "scid mismatch")
+end)
+test("header: unknown field assignment is stored via rawset", function()
+  local h = quic.parse(build_initial_pkt(), 1)
+  h.foo = 1
+  return assert(h.foo == 1, "expected foo == 1, got " .. tostring(h.foo))
+end)
+test("header: FIXED_BIT assignment still updates byte1", function()
+  local h = quic.parse(build_initial_pkt(), 1)
+  h.fixed_bit = false
+  assert(h.byte1 == 0x80, "expected byte1 0x80, got " .. tostring(h.byte1))
+  return assert(h.FIXED_BIT == 0, "expected FIXED_BIT cleared")
+end)
+test("header: version_negotiation pack/parse round-trip", function()
+  local payload = vn.pack({
+    supported_versions = {
+      1,
+      0x6b3343cf
+    }
+  })
+  local obj, off = vn.parse_payload(payload, 1)
+  assert(#obj.supported_versions == 2, "expected 2 versions, got " .. tostring(#obj.supported_versions))
+  assert(obj.supported_versions[1] == 1, "first version mismatch")
+  assert(obj.supported_versions[2] == 0x6b3343cf, "second version mismatch")
+  return assert(off == 9, "expected off 9, got " .. tostring(off))
+end)
+test("header: version_negotiation parse truncated payload", function()
+  local obj, off = vn.parse_payload("\000\000\000\001\255", 1)
+  assert(#obj.supported_versions == 1, "expected 1 version, got " .. tostring(#obj.supported_versions))
+  assert(obj.supported_versions[1] == 1, "version mismatch")
+  return assert(off == 5, "expected off 5, got " .. tostring(off))
 end)
 return util.summary("header")

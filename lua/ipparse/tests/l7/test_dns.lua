@@ -122,4 +122,71 @@ test("compression pointer answer decodes full name", function()
   local msg, _ = dns.parse(dns_long_name_answer, 1, false)
   return assert(msg.answers[1].name == "www.example.subdomain.test.local", "got '" .. tostring(msg.answers[1].name) .. "'")
 end)
+test("header accessors return numeric opcode, z and rcode", function()
+  local h = dns.new_header({ })
+  h.opcode = 5
+  h.z = 2
+  h.rcode = 3
+  assert(h.opcode == 5, "opcode should be 5, got " .. tostring(h.opcode))
+  assert(h.z == 2, "z should be 2, got " .. tostring(h.z))
+  assert(h.rcode == 3, "rcode should be 3, got " .. tostring(h.rcode))
+  h.qr = true
+  return assert(h.qr == true, "qr should stay boolean")
+end)
+test("header ra accessor is writable", function()
+  local h = dns.new_header({
+    ra = true
+  })
+  assert(h.ra == true, "ra should be true")
+  assert(h.ra_z_rcode == 0x80, "ra bit should be 0x80, got " .. tostring(h.ra_z_rcode))
+  h.ra = false
+  assert(h.ra == false, "ra should be false")
+  return assert(h.ra_z_rcode == 0, "ra bit should be cleared, got " .. tostring(h.ra_z_rcode))
+end)
+test("header stores unknown fields instead of dropping them", function()
+  local h = dns.new_header({
+    size = 40
+  })
+  return assert(rawget(h, "size") == 40, "size should be stored, got " .. tostring(rawget(h, 'size')))
+end)
+test("pack emits size prefix when size is preset", function()
+  local msg = dns.new({
+    header = dns.new_header({
+      size = 0
+    })
+  })
+  local packed = tostring(msg)
+  assert(#packed == 14, "packed length should be 14, got " .. tostring(#packed))
+  return assert(packed:sub(1, 2) == "\000\012", "prefix should be 12")
+end)
+test("unknown EDNS option round-trips byte-exact", function()
+  local raw = "\000\010\000\002hi"
+  local o = dns.parse_opt(raw)
+  assert(o.data ~= nil, "unknown option data should not be nil")
+  return assert(tostring(o) == raw, "unknown option should round-trip")
+end)
+test("EDNS client_subnet round-trips byte-exact", function()
+  local raw = "\000\008\000\007\000\001\024\000\192\168\001"
+  local o = dns.parse_opt(raw)
+  assert(o.data.subnet == "\192\168\001", "subnet should be preserved")
+  return assert(tostring(o) == raw, "client_subnet option should round-trip")
+end)
+test("EDNS client_subnet reflects modified fields", function()
+  local o = dns.parse_opt("\000\008\000\007\000\001\024\000\192\168\001")
+  o.data.source_netmask = 16
+  return assert(tostring(o) == "\000\008\000\007\000\001\016\000\192\168\001", "modified source_netmask should be packed")
+end)
+test("classes NONE and ANY use RFC values", function()
+  assert(dns.classes.NONE == 254, "NONE should be 254, got " .. tostring(dns.classes.NONE))
+  assert(dns.classes.ANY == 255, "ANY should be 255, got " .. tostring(dns.classes.ANY))
+  return assert(dns.classes[1] == "IN", "classes[1] should be 'IN'")
+end)
+test("parse_opt reuses module-level data metatables", function()
+  local a = dns.parse_opt("\000\010\000\002hi")
+  local b = dns.parse_opt("\000\010\000\002ho")
+  assert(getmetatable(a.data) == getmetatable(b.data), "unknown options should share one metatable")
+  local c = dns.parse_opt("\000\008\000\007\000\001\024\000\192\168\001")
+  local d = dns.parse_opt("\000\008\000\007\000\001\024\000\192\168\002")
+  return assert(getmetatable(c.data) == getmetatable(d.data), "client_subnet options should share one metatable")
+end)
 return util.summary("l7/dns")

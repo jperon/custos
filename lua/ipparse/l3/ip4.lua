@@ -1,24 +1,35 @@
-local format, sub, upper, sp, su
+local need_bytes
+need_bytes = require("ipparse").need_bytes
+local format, sub, lower, sp, su
 do
   local _obj_0 = require("ipparse.lib.pack_compat")
-  format, sub, upper, sp, su = _obj_0.format, _obj_0.sub, _obj_0.upper, _obj_0.pack, _obj_0.unpack
+  format, sub, lower, sp, su = _obj_0.format, _obj_0.sub, _obj_0.lower, _obj_0.pack, _obj_0.unpack
 end
 local checksum
 checksum = require("ipparse.l3.lib").checksum
 local bidirectional
-bidirectional = require("ipparse.fun").bidirectional
+bidirectional = require("ipparse.fun.tables").bidirectional
 local band, bor, bnot, lshift, rshift
 do
   local _obj_0 = require("ipparse.lib.bit_compat")
   band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
 end
-local need_bytes
-need_bytes = require("ipparse").need_bytes
 local flags = {
   DF = 0x4000,
   MF = 0x2000
 }
 flags = bidirectional(flags)
+local flag_masks = { }
+local _list_0 = {
+  "DF",
+  "MF"
+}
+for _index_0 = 1, #_list_0 do
+  local name = _list_0[_index_0]
+  local mask = flags[name]
+  flag_masks[name] = mask
+  flag_masks[lower(name)] = mask
+end
 local pack
 pack = function(self)
   local data = self.data or ""
@@ -41,20 +52,20 @@ local _mt = {
   __tostring = pack,
   __index = function(self, k)
     do
-      local flag = type(k) == "string" and flags[upper(k)]
-      if flag then
-        return band(self.ff, flag) ~= 0
+      local mask = flag_masks[k]
+      if mask then
+        return band(self.ff, mask) ~= 0
       end
     end
   end,
   __newindex = function(self, k, v)
     do
-      local flag = type(k) == "string" and flags[upper(k)]
-      if flag then
+      local mask = flag_masks[k]
+      if mask then
         if v then
-          self.ff = bor(self.ff, flag)
+          self.ff = bor(self.ff, mask)
         else
-          self.ff = band(self.ff, bnot(flag))
+          self.ff = band(self.ff, bnot(mask))
         end
         return 
       end
@@ -72,6 +83,9 @@ parse = function(self, off)
   end
   local v_ihl, tos, total_len, id, ff, ttl, protocol, cksum, src, dst, _off = su(">BBHHHBBH c4c4", self, off)
   local version, ihl = rshift(v_ihl, 4), band(v_ihl, 0x0f)
+  if ihl < 5 then
+    return nil, off
+  end
   local payload_off = lshift(ihl, 2)
   local data_off = off + payload_off
   if not (need_bytes(self, off, data_off - off)) then
@@ -103,9 +117,11 @@ new = function(self)
   assert(self.version == 4, "IPv4 only (got version " .. tostring(self.version) .. ")")
   self.v_ihl = self.v_ihl or bor(lshift(self.version, 4), self.ihl or 0)
   self.ff = self.ff or bor((self.DF and flags.DF or 0), (self.MF and flags.MF or 0), self.frag_offset or 0)
+  self.DF, self.MF = nil, nil
   self.tos = self.tos or 0
   self.id = self.id or 0
   self.ttl = self.ttl or 64
+  self.options = self.options or ""
   return setmetatable(self, _mt)
 end
 local ip42s

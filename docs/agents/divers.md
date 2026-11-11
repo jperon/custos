@@ -8,6 +8,8 @@ c'est le sous-module git `src/lib/moontastik`
 symbolique relatif** vers `lib/moontastik/ipparse`. Le code custos continue de
 faire `require "ipparse.…"` sans changement.
 
+- **Commit épinglé** : `265876b` (90 commits après `a77fd2f`). L'amont avance :
+  `checkout` toujours ce commit, jamais une branche.
 - **Cloner/initialiser** : `git clone --recursive` ou
   `git submodule update --init` (idem pour `src/lib/moonscript`).
 - **Mettre à jour** : `git -C src/lib/moontastik fetch`,
@@ -20,6 +22,48 @@ faire `require "ipparse.…"` sans changement.
   `find -H $(SRC)/ipparse` pour `IPPARSE_MOONS`, et élague
   `$(MOONTASTIK_SUBMODULE)` du `find $(SRC)` global (sinon des
   `lua/lib/moontastik/…` parasites apparaissent).
+- **Façade `fun`** : depuis `265876b`, `ipparse/fun.moon` réexporte
+  `fun/{tables,memo,iter,protected}.moon` ; les modules protocole ne chargent
+  que `ipparse.fun.tables`. `find -H` descend dans `src/ipparse/fun/` et
+  compile `lua/ipparse/fun/*.lua` ; pas de collision avec
+  `lua/ipparse/fun.lua` (`ipparse.fun` résout le fichier, `ipparse.fun.tables`
+  le sous-dossier). Le sous-dossier est embarqué par le paquet OpenWrt
+  (`packaging/openwrt/custos/Makefile:26,41`, `$(CP)` récursif), par
+  `install-owrt.moon:218` (`tar -C lua .`) et par le homelab
+  (`libvirt/homelab.sh:424`, `tar … lua tests`).
+- **Sémantique `265876b` ayant exigé une adaptation** :
+  - `ip6.pack` recalcule toujours `vtf` depuis `version`/`traffic_class`/
+    `flow_label` ; recopier `vtf` seul perd TC et flow label. Adapté dans
+    `src/dup_query.moon:56-57,88-89` et `src/forge_dns.moon:42-43` (les trois
+    sites passent `traffic_class`/`flow_label`). Tests :
+    `tests/unit/dup_query_spec.moon`, `tests/unit/forge_dns_spec.moon`.
+- **Changements examinés sans impact** (usages custos) :
+  - DNS : `opcode`/`z`/`rcode` renvoient un nombre (plus un booléen) ; aucun
+    test de vérité custos sur ces accesseurs, le rcode numérique est déjà
+    extrait de `ra_z_rcode` (`src/dns_classify.moon:35-36`,
+    `src/worker_responses.moon:586`, `src/worker_doh.moon:134`). Seul effet
+    visible, voulu : les logs `rcode` (`src/worker_responses.moon:541,762`)
+    passent de `true`/`false` à 0-15. Classes NONE/ANY (254/255) et options
+    EDNS parsées non utilisées.
+  - IPv4/TCP : `parse` renvoie `nil` sous les longueurs minimales ; les
+    appelants testent `nil` (`src/packet_utils.moon:86,100,109`,
+    `src/worker_tls.moon:680-760`). Flags DF/MF/SYN… : custos ne lit que
+    `.flags` (`tests/unit/forge_dns_spec.moon:93`).
+  - TLS : `parse` renvoie `nil` sur enregistrement/handshake/ClientHello
+    tronqué ; appels sous `pcall` + test nil (`src/worker_tls.moon:744-750`,
+    `src/auth/sni_extractor.moon:37-48`). `message_types` corrigés : seul
+    `client_hello` est utilisé (`src/worker_tls.moon:750`).
+  - `pack_compat` lève sur `unpack` tronqué : custos n'utilise que `pack` ; les
+    parseurs ipparse gardent leurs `need_bytes` avant `su`
+    (`ipparse/l7/dns.moon:229,260,295`, `ipparse/l7/tls/init.moon:53`).
+  - `hex2bin`/`bin2hex`, `fun.protected`, `fragmented_ip4`, `pcap`,
+    `contains_ip`, `s2net6`, `hexdump` : aucun usage custos.
+  - QUIC (`session`, `frames`, `protection`, `version_negotiation`) : couvert
+    par `tests/unit/ipparse/l7/quic/session_spec.moon` (vert).
+- **`lib/ffi_stub.lua` supprimé** : aucune règle du `Makefile` ne le
+  référence ; seule une copie compilée d'exemple le cite
+  (`lua/ipparse/examples/parse_real_quic.lua:20`), les exemples amont étant
+  exclus de la compilation et de `make check`.
 
 ## Synchronisation de configuration (`sync/`)
 

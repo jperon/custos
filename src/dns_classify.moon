@@ -29,7 +29,7 @@ A        = types.A
 AAAA     = types.AAAA
 NXDOMAIN = dns_mod.rcodes.NXDOMAIN
 
---- Valeur numérique du rcode (l'accesseur `header.rcode` renvoie un booléen).
+--- Valeur numérique du rcode (bits 0-3 de `ra_z_rcode`).
 -- @tparam table header En-tête DNS parsé.
 -- @treturn number rcode (0-15)
 numeric_rcode = (header) ->

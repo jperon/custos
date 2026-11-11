@@ -2,7 +2,6 @@ local util = require("ipparse.lib.util")
 local test
 test = util.test
 local ip4 = require("ipparse.l3.ip4")
-local has_data, fragmented_ip4 = pcall(require, "ipparse.l3.fragmented_ip4")
 test("ip42s converts 4 bytes to dotted decimal", function()
   local result = ip4.ip42s("\192\168\001\001")
   return assert(result == "192.168.1.1", "expected '192.168.1.1', got '" .. tostring(result) .. "'")
@@ -144,13 +143,59 @@ test("parse round-trip preserves ihl=5", function()
   local parsed, _ = ip4.parse(raw, 1)
   return assert(parsed.ihl == 5, "ihl should be 5, got " .. tostring(parsed.ihl))
 end)
-if has_data and fragmented_ip4 then
-  test("fragmented_ip4 exposes collect", function()
-    return assert(type(fragmented_ip4.collect) == "function", "collect should be a function")
-  end)
-else
-  test("fragmented_ip4: skipped (requires Lunatik `data` module)", function()
-    return true
-  end)
-end
+test("raw DF key does not bypass __newindex", function()
+  local hdr = ip4.new({
+    src = ip4.s2ip4("1.2.3.4"),
+    dst = ip4.s2ip4("5.6.7.8"),
+    protocol = 6,
+    DF = true
+  })
+  assert(hdr.DF == true, "DF flag should be true after new")
+  hdr.DF = false
+  assert(hdr.ff == 0, "clearing DF should reset ff, got " .. tostring(hdr.ff))
+  return assert(hdr.DF == false, "DF flag should be false after clearing")
+end)
+test("pack works when options is omitted", function()
+  local raw = ip4.pack(ip4.new({
+    src = ip4.s2ip4("1.2.3.4"),
+    dst = ip4.s2ip4("5.6.7.8"),
+    protocol = 17
+  }))
+  return assert(#raw == 20, "header without options should be 20 bytes, got " .. tostring(#raw))
+end)
+test("parse rejects ihl below 5", function()
+  local raw = "\064" .. ("\000"):rep(19)
+  local parsed, off = ip4.parse(raw, 1)
+  assert(parsed == nil, "parse should reject ihl < 5")
+  return assert(off == 1, "off should be 1 on rejection, got " .. tostring(off))
+end)
+test("DF/MF readable and writable in both all-lower and all-upper case", function()
+  local hdr = ip4.new({
+    src = ip4.s2ip4("1.2.3.4"),
+    dst = ip4.s2ip4("5.6.7.8"),
+    protocol = 6,
+    options = ""
+  })
+  assert(hdr.df == false, "hdr.df should be false initially")
+  hdr.df = true
+  assert(hdr.DF == true, "setting hdr.df should set DF")
+  assert(hdr.ff == 0x4000, "ff should be 0x4000, got " .. tostring(hdr.ff))
+  hdr.DF = false
+  assert(hdr.df == false, "clearing hdr.DF should clear DF")
+  assert(hdr.mf == false, "hdr.mf should be false initially")
+  hdr.MF = true
+  assert(hdr.mf == true, "setting hdr.MF should set MF")
+  hdr.mf = false
+  return assert(hdr.MF == false, "clearing hdr.mf should clear MF")
+end)
+test("mixed-case IPv4 flag names are no longer recognized", function()
+  local hdr = ip4.new({
+    src = ip4.s2ip4("1.2.3.4"),
+    dst = ip4.s2ip4("5.6.7.8"),
+    protocol = 6,
+    options = "",
+    DF = true
+  })
+  return assert(hdr.Df == nil, "hdr.Df should not be recognized, got '" .. tostring(hdr.Df) .. "'")
+end)
 return util.summary("l3/ip4")

@@ -1,12 +1,12 @@
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local bidirectional
-bidirectional = require("ipparse.fun").bidirectional
+bidirectional = require("ipparse.fun.tables").bidirectional
 local format, sp, su
 do
   local _obj_0 = require("ipparse.lib.pack_compat")
   format, sp, su = _obj_0.format, _obj_0.pack, _obj_0.unpack
 end
-local need_bytes
-need_bytes = require("ipparse").need_bytes
 local band
 band = require("ipparse.lib.bit_compat").band
 local unpack = unpack or table.unpack

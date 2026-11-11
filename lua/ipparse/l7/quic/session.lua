@@ -1,8 +1,6 @@
-local sp, su
-do
-  local _obj_0 = require("ipparse.lib.pack_compat")
-  sp, su = _obj_0.pack, _obj_0.unpack
-end
+require("ipparse")
+local su
+su = require("ipparse.lib.pack_compat").unpack
 local quic_mod = require("ipparse.l4.quic")
 local prot_mod = require("ipparse.l4.quic.v1.protection")
 local ch_mod = require("ipparse.l7.tls.handshake.client_hello")
@@ -17,7 +15,6 @@ load_keys_module = function()
     return keys_mod
   end
   local mod_name = "ipparse.l4.quic.v1.keys"
-  package.loaded[mod_name] = nil
   local ok, mod_or_err = pcall(require, mod_name)
   if not (ok and mod_or_err) then
     return nil, "quic_keys_load_failed: " .. tostring(mod_or_err)
@@ -56,7 +53,6 @@ load_backend = function()
   }
   for _index_0 = 1, #_list_0 do
     local mod = _list_0[_index_0]
-    package.loaded[mod] = nil
     local ok, backend = pcall(require, mod)
     if ok and backend then
       return backend
@@ -424,5 +420,6 @@ new = function(opts)
   }, session_mt)
 end
 return {
-  new = new
+  new = new,
+  sni_from_tls = sni_from_tls
 }

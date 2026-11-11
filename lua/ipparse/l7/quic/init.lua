@@ -1,12 +1,6 @@
-local sp, su
-do
-  local _obj_0 = require("ipparse.lib.pack_compat")
-  sp, su = _obj_0.pack, _obj_0.unpack
-end
+require("ipparse")
 local frames_mod = require("ipparse.l4.quic.frames")
-local ch_mod = require("ipparse.l7.tls.handshake.client_hello")
-local ext_mod = require("ipparse.l7.tls.handshake.extension")
-local sn_mod = require("ipparse.l7.tls.handshake.extension.server_name")
+local Session = require("ipparse.l7.quic.session")
 local reassemble_crypto
 reassemble_crypto = function(frames)
   local crypto
@@ -61,42 +55,7 @@ reassemble_crypto = function(frames)
   end
   return table.concat(out)
 end
-local sni_from_tls
-sni_from_tls = function(tls_data)
-  if #tls_data < 4 then
-    return nil
-  end
-  local off = 1
-  while off + 3 <= #tls_data do
-    local msg_type = su("B", tls_data, off)
-    local b_hi = su("B", tls_data, off + 1)
-    local b_lo = su(">H", tls_data, off + 2)
-    local msg_len = b_hi * 65536 + b_lo
-    local body_off = off + 4
-    if body_off + msg_len - 1 > #tls_data then
-      return nil
-    end
-    if msg_type == 0x01 then
-      local ch, _ = ch_mod.parse(tls_data, body_off)
-      if ch and ch.extensions and #ch.extensions > 0 then
-        local ext_off = 1
-        while ext_off <= #ch.extensions do
-          local ext, next_off = ext_mod.parse(ch.extensions, ext_off)
-          if ext.type == 0x0000 then
-            local sn
-            sn, _ = sn_mod.parse(ext.data, 1)
-            if sn and sn.name and #sn.name > 0 then
-              return sn.name
-            end
-          end
-          ext_off = next_off
-        end
-      end
-    end
-    off = body_off + msg_len
-  end
-  return nil
-end
+local sni_from_tls = Session.sni_from_tls
 local sni_from_frames
 sni_from_frames = function(frames)
   return sni_from_tls(reassemble_crypto(frames))
@@ -109,7 +68,6 @@ sni_from_plaintext = function(plaintext)
   end
   return sni_from_frames(collected)
 end
-local Session = require("ipparse.l7.quic.session")
 return {
   reassemble_crypto = reassemble_crypto,
   sni_from_tls = sni_from_tls,

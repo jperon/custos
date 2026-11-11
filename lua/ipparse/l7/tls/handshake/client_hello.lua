@@ -1,3 +1,4 @@
+require("ipparse")
 local sp, su
 do
   local _obj_0 = require("ipparse.lib.pack_compat")
@@ -15,7 +16,10 @@ parse = function(self, off)
   if off == nil then
     off = 1
   end
-  local version, client_random, session_id, ciphers, compressions, extensions, _off = su(">H c32 s1 s2 s1 s2", self, off)
+  local ok, version, client_random, session_id, ciphers, compressions, extensions, _off = pcall(su, ">H c32 s1 s2 s1 s2", self, off)
+  if not (ok) then
+    return nil, off
+  end
   return setmetatable({
     version = version,
     client_random = client_random,

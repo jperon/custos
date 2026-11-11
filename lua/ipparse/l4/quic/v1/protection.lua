@@ -14,15 +14,6 @@ sample_from_packet = function(pkt, enc_off)
   end
   return pkt:sub(s, s + 15)
 end
-local apply_header_mask
-apply_header_mask = function(hdr_bytes, first_byte_idx, pn_off, pn_len, mask, long)
-  local m0 = byte(mask, 1)
-  local fb_mask = long and 0x0F or 0x1F
-  hdr_bytes[first_byte_idx] = bxor(hdr_bytes[first_byte_idx], band(m0, fb_mask))
-  for i = 1, pn_len do
-    hdr_bytes[pn_off + i - 1] = bxor(hdr_bytes[pn_off + i - 1], byte(mask, i + 1))
-  end
-end
 local recover_packet_number = nil
 local unprotect_header
 unprotect_header = function(pkt, pn_off, hp_key, long, expected_pn, crypto)
@@ -57,14 +48,6 @@ unprotect_header = function(pkt, pn_off, hp_key, long, expected_pn, crypto)
   local aad = string.char(first) .. (pn_off > 2 and pkt:sub(2, pn_off - 1) or "") .. table.concat(pn_chars)
   return aad, full_pn, pn_len
 end
-local pn_from_bytes
-pn_from_bytes = function(hdr_bytes, pn_off, pn_len)
-  local pn = 0
-  for i = 0, pn_len - 1 do
-    pn = pn * 256 + hdr_bytes[pn_off + i]
-  end
-  return pn
-end
 recover_packet_number = function(truncated, expected, pn_len)
   local pn_win = 1
   for _ = 1, pn_len * 8 do
@@ -83,6 +66,9 @@ end
 local remove_header_protection
 remove_header_protection = function(pkt, pn_off, hp_key, long, expected_pn, crypto)
   local aad, full_pn, pn_len = unprotect_header(pkt, pn_off, hp_key, long, expected_pn, crypto)
+  if not (aad) then
+    return nil, full_pn
+  end
   local hdr_bytes = { }
   for i = 1, #aad do
     hdr_bytes[i] = byte(aad, i)

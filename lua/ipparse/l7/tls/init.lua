@@ -1,10 +1,12 @@
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local sp, su
 do
   local _obj_0 = require("ipparse.lib.pack_compat")
   sp, su = _obj_0.pack, _obj_0.unpack
 end
 local bidirectional
-bidirectional = require("ipparse.fun").bidirectional
+bidirectional = require("ipparse.fun.tables").bidirectional
 local pack
 pack = function(self)
   return sp(">B BB H", self.type, self.ver, self.subver, self.len)
@@ -16,6 +18,9 @@ local parse
 parse = function(self, off)
   if off == nil then
     off = 1
+  end
+  if not (need_bytes(self, off, 5)) then
+    return nil, off
   end
   local _type, ver, subver, len, _off = su(">B BB H", self, off)
   return setmetatable({

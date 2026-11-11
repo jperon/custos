@@ -1,6 +1,8 @@
+local need_bytes
+need_bytes = require("ipparse").need_bytes
 local bidirectional, zero_indexed
 do
-  local _obj_0 = require("ipparse.fun")
+  local _obj_0 = require("ipparse.fun.tables")
   bidirectional, zero_indexed = _obj_0.bidirectional, _obj_0.zero_indexed
 end
 local sp, su, sub
@@ -17,13 +19,6 @@ do
   local _obj_0 = require("ipparse.lib.bit_compat")
   band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
 end
-local need_bytes
-need_bytes = function(data, off, len)
-  if off < 1 or len < 0 then
-    return false
-  end
-  return (off + len - 1) <= #data
-end
 local pack_header
 pack_header = function(self)
   return (self.size and sp(">H", self.size) or "") .. sp(">H B B H H H H", self.id, self.qr_opcode_aa_tc_rd, self.ra_z_rcode, self.qdcount, self.ancount, self.nscount, self.arcount)
@@ -35,7 +30,7 @@ local _header_mt = {
     if "qr" == _exp_0 then
       return band(self.qr_opcode_aa_tc_rd, 0x80) ~= 0
     elseif "opcode" == _exp_0 then
-      return band(rshift(self.qr_opcode_aa_tc_rd, 3), 0xf) ~= 0
+      return band(rshift(self.qr_opcode_aa_tc_rd, 3), 0xf)
     elseif "aa" == _exp_0 then
       return band(self.qr_opcode_aa_tc_rd, 0x04) ~= 0
     elseif "tc" == _exp_0 then
@@ -45,9 +40,9 @@ local _header_mt = {
     elseif "ra" == _exp_0 then
       return band(self.ra_z_rcode, 0x80) ~= 0
     elseif "z" == _exp_0 then
-      return band(rshift(self.ra_z_rcode, 4), 0x07) ~= 0
+      return band(rshift(self.ra_z_rcode, 4), 0x07)
     elseif "rcode" == _exp_0 then
-      return band(self.ra_z_rcode, 0x0f) ~= 0
+      return band(self.ra_z_rcode, 0x0f)
     end
   end,
   __newindex = function(self, flag, val)
@@ -78,10 +73,18 @@ local _header_mt = {
       else
         self.qr_opcode_aa_tc_rd = band(self.qr_opcode_aa_tc_rd, bnot(0x01))
       end
+    elseif "ra" == _exp_0 then
+      if val then
+        self.ra_z_rcode = bor(self.ra_z_rcode, 0x80)
+      else
+        self.ra_z_rcode = band(self.ra_z_rcode, bnot(0x80))
+      end
     elseif "z" == _exp_0 then
       self.ra_z_rcode = bor(band(self.ra_z_rcode, bnot(0x70)), lshift(band(val, 0x07), 4))
     elseif "rcode" == _exp_0 then
       self.ra_z_rcode = bor(band(self.ra_z_rcode, bnot(0x0f)), band(val, 0x0f))
+    else
+      return rawset(self, flag, val)
     end
   end
 }
@@ -335,6 +338,16 @@ end
 local _opt_mt = {
   __tostring = pack_opt
 }
+local _raw_opt_data_mt = {
+  __tostring = function(self)
+    return self[1]
+  end
+}
+local _ecs_data_mt = {
+  __tostring = function(self)
+    return sp(">H B B ", self.family, self.source_netmask, self.scope_netmask) .. self.subnet
+  end
+}
 local parse_opt
 parse_opt = function(self, off)
   if off == nil then
@@ -376,28 +389,11 @@ parse_opt = function(self, off)
       for i = 1, #fields do
         data[fields[i]] = data[i]
       end
-      setmetatable(data, {
-        __tostring = function(self)
-          return fmt and sp(fmt, unpack((function()
-            local _accum_0 = { }
-            local _len_0 = 1
-            for _index_0 = 1, #fields do
-              local field = fields[_index_0]
-              _accum_0[_len_0] = data[field]
-              _len_0 = _len_0 + 1
-            end
-            return _accum_0
-          end)())) or self[1]
-        end
-      })
+      setmetatable(data, (fmt and code == 8 and _ecs_data_mt or _raw_opt_data_mt))
     else
-      setmetatable({
+      data = setmetatable({
         raw_data
-      }, {
-        __tostring = function(self)
-          return self[1]
-        end
-      })
+      }, _raw_opt_data_mt)
     end
   end
   return setmetatable({
@@ -460,7 +456,9 @@ pack = function(self)
     parts[n] = s
     body_len = body_len + #s
   end
-  self.header.size = 12 + body_len
+  if rawget(self.header, "size") then
+    self.header.size = 12 + body_len
+  end
   parts[1] = pack_header(self.header)
   return concat(parts)
 end
@@ -511,7 +509,8 @@ local classes = bidirectional({
   "CS",
   "CH",
   "HS",
-  "NONE"
+  [254] = "NONE",
+  [255] = "ANY"
 })
 local rcodes = bidirectional(zero_indexed({
   "NOERROR",
