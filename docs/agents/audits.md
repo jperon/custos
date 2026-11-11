@@ -226,3 +226,73 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `ip16_to_str` est exporté et figé par un test dans
   `tests/unit/mac_learner_probe_spec.moon` (IPv4 `10.0.0.5` → `"10.0.0.5"`,
   IPv6 `2001:db8::1` → forme IPv6).
+
+### Outils, sync et installation (branche fix-outils)
+
+- **`sync/apply.moon --reload` et `make reload` ne visaient pas le superviseur.**
+  Ils utilisaient `pkill -SIGHUP -f 'luajit.*main'` : sous procd la cmdline est
+  `/usr/bin/custos /usr/share/custos/main.lua` (aucune correspondance, donc la
+  config synchronisée n'était jamais rechargée), et en lancement manuel
+  `luajit lua/main.lua` le motif visait aussi tous les workers forkés (sans
+  handler SIGHUP, tués puis reforkés à chaque sync). Correctif : `sync/apply.moon`
+  réutilise `lib.pidfile` (`reload_supervisor`, `kill_fn`/`read_pid` injectables,
+  aucun repli `pkill`) et la cible `make reload` lit
+  `$${CUSTOS_PID_FILE:-/var/run/custos.pid}` ; tests dans
+  `tests/unit/sync/apply_spec.moon`.
+- **`install-owrt.moon` : injection shell via `--host`/`--user`/`--dest`/`--port`.**
+  Seule validation existante : refus des espaces dans l'hôte. `--user
+  'root;touch x;'` s'exécutait localement, `--dest '/etc;reboot'` sur le routeur.
+  Correctif en deux couches : `parse_args` valide l'hôte
+  (`^[%w%.%-:%[%]]+$`), l'utilisateur (`^[%w%._%-]+$`), la destination (chemin
+  absolu `^/[%w%._/%-]*$`) et le port (entier 1-65535) puis renvoie
+  `nil, message` ; et un helper unique `shell_quote` (apostrophes neutralisées)
+  entoure ces valeurs dans `ssh_prefix`/`ssh_run`/`ssh_capture`/`scp_send`.
+  Tests dans `tests/unit/install_owrt_spec.moon`.
+- **`make sync-init` / `sync-push-init` : cron dupliqué et `REPO`/`HOST` non
+  quotés.** La ligne cron était ajoutée à chaque exécution, et `REPO` (interpolé
+  dans du shell local puis distant, puis `sync.conf` sourcé par root) permettait
+  l'exécution de commandes arbitraires (`REPO='https://x/a;reboot'`). Correctif :
+  `HOST`/`REPO` sont **dés-exportés** en tête du Makefile (`unexport HOST REPO`,
+  avant le premier `$(shell …)` : make exporte et développe les variables de
+  ligne de commande vers toute fonction `$(shell …)`, donc un `$(shell touch …)`
+  s'y exécuterait avant validation) puis recopiés dans `SYNC_HOST`/`SYNC_REPO`
+  (`$(value HOST)`, sans ré-expansion). Les recettes n'utilisent plus que ces
+  variables d'environnement validées (jeu de caractères restreint, échec
+  explicite en première ligne), valeur REPO écrite entre apostrophes simples
+  dans `sync.conf`, et ligne cron ajoutée seulement si absente
+  (`grep -qF … ||`).
+- **`setup.sh` référençait un ruleset supprimé et des tables inexistantes.**
+  `NFT_RULES` pointait vers `nft-rules/dns-filter.nft` (supprimé), et
+  `down`/`status` visaient `table ip/ip6 dns-filter` alors que le ruleset réel
+  est `table bridge dns-filter-bridge`. Comme `dns-filter-bridge.nft` est un
+  **gabarit à placeholders** rendu par `nft_rules.apply`, `up` ne charge plus
+  `nft -f` : il vérifie les dépendances et rappelle que les règles sont
+  appliquées par le service au démarrage ; `down`/`status` ciblent la table
+  bridge. La détection des bibliothèques capture `ldconfig -p` une fois puis
+  teste en shell pur (`case`), ce qui évite un faux échec par SIGPIPE sous
+  `pipefail`. `doc/CHEATSHEET.md` est aligné.
+- **`install-owrt.moon --dry-run` exécutait quand même des commandes SSH.**
+  `capture` (utilisé par `ssh_capture`) ignorait `dry_run` : toute la phase de
+  détection (connectivité, gestionnaire de paquets, bridge, existence de
+  fichiers…) lançait de vrais `io.popen`/`ssh`. Correctif : en dry-run `capture`
+  n'exécute rien, affiche la commande et renvoie `"(dry-run : sortie non
+  capturée)"` ; `check_connectivity` et `detect_pkg_manager` court-circuitent
+  explicitement (gestionnaire supposé `apk`). Tests dans
+  `tests/unit/install_owrt_spec.moon`.
+- **`install-owrt.moon` ajoutait un cron quotidien en double de `init.d/custos`.**
+  L'installeur écrivait `0 4 * * * /usr/sbin/custos-update` dans
+  `/etc/crontabs/root` (sans marqueur, donc jamais retiré par `_cron_remove`) en
+  plus du cron géré par `/etc/init.d/custos` (`_cron_add`, marqueur
+  `# custos-update-lists`, planification UCI `update_lists_schedule`, défaut
+  `0 3 * * *`). Source unique retenue : `init.d/custos` ; l'installeur ne fait
+  plus qu'activer/relancer cron et le message « lundi 4h » (faux) est corrigé.
+- **`sync/custos-sync-push.sh` : `cp`/`git add` non vérifiés.** Un échec de
+  copie ou d'indexation était silencieux puis rapporté « aucun changement à
+  publier » par le `git diff --cached --quiet` suivant. Chaque étape
+  (`mkdir`, `cp`, `git add`) vérifie désormais son code de retour et sort en
+  erreur avec un message sur stderr.
+- **`sync/apply.moon` : `io.popen "uname -n"` sans contrôle du résultat.**
+  Un `uname -n` vide ou indisponible produisait un chemin
+  `devices//config.moon` silencieux. `resolve_hostname` (exportée, injectable)
+  échoue désormais explicitement sur stderr, et `main` sort en erreur ;
+  testée dans `tests/unit/sync/apply_spec.moon`.

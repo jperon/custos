@@ -94,3 +94,84 @@ describe "install-owrt — install_hotplug_rps", ->
     inst\uninstall!
     joined = table.concat runs, "\n"
     assert.truthy joined\find "rm -f /etc/hotplug.d/net/30-custos-rps", 1, true
+
+-- ── Validation des arguments (injection shell) ─────────────────────────────
+-- --user/--dest/--port et l'hôte positionnel sont interpolés dans des commandes
+-- shell locales et distantes : rejet à l'entrée de tout métacaractère.
+
+{ :parse_args, :shell_quote } = mod
+
+invalid_cfg = (args) ->
+  cfg, err = parse_args args
+  assert.is_nil cfg
+  assert.is_string err
+  err
+
+describe "install-owrt — validation parse_args", ->
+
+  it "accepte un utilisateur, un hôte, une destination et un port valides", ->
+    cfg, err = parse_args { "--user", "root", "--dest", "/usr/share/custos", "--port", "2222", "192.168.1.1" }
+    assert.is_nil err
+    assert.equals "root", cfg.user
+    assert.equals "/usr/share/custos", cfg.dest
+    assert.equals 2222, cfg.port
+    assert.equals "192.168.1.1", cfg.host
+
+  it "accepte un hostname, une IPv6 littérale entre crochets et un port explicite", ->
+    for host in *{"router.lan", "[fe80::1]"}
+      cfg, err = parse_args { host }
+      assert.is_nil err, host
+      assert.equals host, cfg.host
+    cfg = assert parse_args { "--port", "2222", "router.lan" }
+    assert.equals 2222, cfg.port
+
+  it "rejette un utilisateur contenant un métacaractère shell", ->
+    for user in *{"root;x", "root x", "$(id)", "`id`", "root|x"}
+      assert.truthy (invalid_cfg { "--user", user, "10.0.0.1" })\match "Utilisateur invalide"
+
+  it "rejette un hôte contenant un métacaractère ou un espace", ->
+    for host in *{"a b", "`id`", "$(id)", "a;b", "a|b"}
+      assert.truthy (invalid_cfg { host })\match "Hôte invalide"
+
+  it "rejette une destination relative ou contenant un métacaractère", ->
+    for dest in *{"etc/custos", "/etc;reboot", "/etc/$(id)", "/etc/`id`", "/etc/ x"}
+      assert.truthy (invalid_cfg { "--dest", dest, "10.0.0.1" })\match "Destination invalide"
+
+  it "rejette un port hors bornes ou non entier", ->
+    for port in *{"0", "70000", "22;x", "abc", "-1"}
+      assert.truthy (invalid_cfg { "--port", port, "10.0.0.1" })\match "port invalide"
+
+  it "shell_quote neutralise les apostrophes", ->
+    assert.equals "'root'", shell_quote "root"
+    assert.equals "'a'\\''b'", shell_quote "a'b"
+
+-- ── Dry-run : aucune commande réelle ───────────────────────────────────────
+describe "install-owrt — dry-run", ->
+
+  it "capture ne lance aucune commande et renvoie une sortie factice", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: true }
+    original = io.popen
+    io.popen = -> error "io.popen interdit en dry-run"
+    ok, out = pcall -> inst\capture "uname -a"
+    io.popen = original
+    assert.is_true ok
+    assert.truthy out\match "dry%-run"
+
+  it "check_connectivity ne lance rien et réussit sans SSH", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: true }
+    inst.ssh_capture = -> error "ssh_capture interdit en dry-run"
+    assert.is_true inst\check_connectivity!
+
+  it "detect_pkg_manager suppose apk sans SSH", ->
+    inst = Installer { host: "10.0.0.1", port: 22, user: "root", dest: "/usr/share/custos", dry: true }
+    inst.ssh_capture = -> error "ssh_capture interdit en dry-run"
+    assert.is_true inst\detect_pkg_manager!
+    assert.equals "apk", inst.cfg.pkg_mgr
+
+describe "install-owrt — install_updater", ->
+  it "installe custos-update sans ajouter de cron en double (géré par init.d)", ->
+    inst, runs = make_inst {}
+    assert.is_true inst\install_updater!
+    joined = table.concat runs, "\n"
+    assert.falsy joined\find "crontabs/root", 1, true
+    assert.falsy joined\find "0 4 * * *", 1, true

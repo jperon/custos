@@ -1,6 +1,14 @@
 local serializer = require("webui.serializer")
 local exec_ok
 exec_ok = require("lib.os_exec").exec_ok
+local ffi = require("ffi")
+local pidfile = require("lib.pidfile")
+pcall(function()
+  return ffi.cdef([[    typedef int pid_t;
+    int kill(pid_t pid, int sig);
+  ]])
+end)
+local SIGHUP = 1
 local is_array
 is_array = function(t)
   if not (type(t) == "table") then
@@ -75,50 +83,98 @@ parse_args = function(args)
   end
   return result
 end
-local opts = parse_args(arg)
-if not (opts.base) then
-  io.stderr:write("apply: --base <chemin> requis\n")
-  os.exit(1)
-end
-local hostname = opts.hostname
-if not (hostname) then
-  local fh = io.popen("uname -n")
-  hostname = fh:read("*l")
+local resolve_hostname
+resolve_hostname = function(popen)
+  popen = popen or io.popen
+  local fh = popen("uname -n")
+  if not (fh) then
+    io.stderr:write("apply: impossible de déterminer le nom d'hôte (uname -n indisponible)\n")
+    return nil
+  end
+  local host = fh:read("*l")
   fh:close()
-end
-local base_cfg, err = serializer.read_config(opts.base)
-if not (base_cfg) then
-  io.stderr:write("apply: config de base introuvable " .. tostring(opts.base) .. ": " .. tostring(tostring(err)) .. "\n")
-  os.exit(1)
-end
-local device_path = opts.device
-if not (device_path) then
-  local base_dir = opts.base:match("^(.+)/base/config%.moon$")
-  if base_dir then
-    device_path = tostring(base_dir) .. "/devices/" .. tostring(hostname) .. "/config.moon"
+  host = host and host:match("^%s*(.-)%s*$")
+  if not (host and #host > 0) then
+    io.stderr:write("apply: nom d'hôte vide (uname -n)\n")
+    return nil
   end
+  return host
 end
-local device_cfg = nil
-if device_path then
-  local dev_err
-  device_cfg, dev_err = serializer.read_config(device_path)
-  if not device_cfg and dev_err and not tostring(dev_err):match("No such file") then
-    io.stderr:write("apply: avertissement " .. tostring(device_path) .. ": " .. tostring(tostring(dev_err)) .. "\n")
+local default_kill
+default_kill = function(pid, sig)
+  return ffi.C.kill(pid, sig) == 0
+end
+local reload_supervisor
+reload_supervisor = function(pid_path, kill_fn, read_pid)
+  kill_fn = kill_fn or default_kill
+  read_pid = read_pid or pidfile.read
+  local pid, err = read_pid(pid_path)
+  if not (pid) then
+    io.stderr:write("apply: SIGHUP non envoyé : " .. tostring(err or "pidfile illisible") .. "\n")
+    return false
   end
-end
-local merged = clone(base_cfg)
-if device_cfg then
-  merge_into(merged, device_cfg)
-end
-local ok, write_err = serializer.write_config(merged, opts.output)
-if not (ok) then
-  io.stderr:write("apply: écriture échouée " .. tostring(opts.output) .. ": " .. tostring(tostring(write_err)) .. "\n")
-  os.exit(1)
-end
-if opts.reload then
-  local ret = os.execute("pkill -SIGHUP -f 'luajit.*main' 2>/dev/null")
-  if not (exec_ok(ret)) then
-    io.stderr:write("apply: SIGHUP non envoyé (service inactif ?)\n")
+  if not (kill_fn(pid, SIGHUP)) then
+    io.stderr:write("apply: SIGHUP non envoyé : superviseur injoignable (PID " .. tostring(pid) .. ")\n")
+    return false
   end
+  return true
 end
-return io.stdout:write("apply: " .. tostring(opts.output) .. " mis à jour\n")
+local main
+main = function()
+  local opts = parse_args(arg)
+  if not (opts.base) then
+    io.stderr:write("apply: --base <chemin> requis\n")
+    os.exit(1)
+  end
+  local hostname = opts.hostname
+  if not (hostname) then
+    hostname = resolve_hostname()
+    if not (hostname) then
+      os.exit(1)
+    end
+  end
+  local base_cfg, err = serializer.read_config(opts.base)
+  if not (base_cfg) then
+    io.stderr:write("apply: config de base introuvable " .. tostring(opts.base) .. ": " .. tostring(tostring(err)) .. "\n")
+    os.exit(1)
+  end
+  local device_path = opts.device
+  if not (device_path) then
+    local base_dir = opts.base:match("^(.+)/base/config%.moon$")
+    if base_dir then
+      device_path = tostring(base_dir) .. "/devices/" .. tostring(hostname) .. "/config.moon"
+    end
+  end
+  local device_cfg = nil
+  if device_path then
+    local dev_err
+    device_cfg, dev_err = serializer.read_config(device_path)
+    if not device_cfg and dev_err and not tostring(dev_err):match("No such file") then
+      io.stderr:write("apply: avertissement " .. tostring(device_path) .. ": " .. tostring(tostring(dev_err)) .. "\n")
+    end
+  end
+  local merged = clone(base_cfg)
+  if device_cfg then
+    merge_into(merged, device_cfg)
+  end
+  local ok, write_err = serializer.write_config(merged, opts.output)
+  if not (ok) then
+    io.stderr:write("apply: écriture échouée " .. tostring(opts.output) .. ": " .. tostring(tostring(write_err)) .. "\n")
+    os.exit(1)
+  end
+  if opts.reload then
+    reload_supervisor(pidfile.resolve_path())
+  end
+  return io.stdout:write("apply: " .. tostring(opts.output) .. " mis à jour\n")
+end
+local script_name = arg and arg[0] or ""
+if script_name:match("apply") then
+  main()
+end
+return {
+  main = main,
+  parse_args = parse_args,
+  resolve_hostname = resolve_hostname,
+  reload_supervisor = reload_supervisor,
+  SIGHUP = SIGHUP
+}

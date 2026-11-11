@@ -285,14 +285,17 @@ Debian. `--uninstall` retire le script.
 
 - Installation:
   1. Install dependencies (see `README.md`), then `make`.
-  2. Apply environment + rules: `sudo ./setup.sh up`.
+  2. Check dependencies: `sudo ./setup.sh up` (les règles nft sont un gabarit à
+     placeholders, rendues et appliquées par le service au démarrage via
+     `nft_rules.apply`).
   3. Run service in foreground: `sudo make run`.
 
 - Update:
   1. `git pull`
   2. `make`
   3. `make reload` (SIGHUP) if process active, otherwise restart `sudo make run`.
-  4. If ruleset changed: `sudo ./setup.sh up`.
+  4. If ruleset changed: restart the service (le ruleset est rendu et appliqué au
+     démarrage).
 
 - Uninstall:
   1. Stop process (`pkill -f "luajit.*main"` or local service manager).
