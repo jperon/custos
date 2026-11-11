@@ -467,5 +467,12 @@ return {
   send_probe = send_probe,
   parse_arp_frame = parse_arp_frame,
   parse_na_frame = parse_na_frame,
-  get_ms = get_ms
+  get_ms = get_ms,
+  build_arp_request = build_arp_request,
+  build_ns_frame = build_ns_frame,
+  icmpv6_cksum = icmpv6_cksum,
+  parse_arp_reply = parse_arp_reply,
+  parse_na_reply = parse_na_reply,
+  ip4_to_bin = ip4_to_bin,
+  ip6_to_bin = ip6_to_bin
 }

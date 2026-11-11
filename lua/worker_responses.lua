@@ -1157,5 +1157,6 @@ return {
   purge_strip_query_cache = purge_strip_query_cache,
   update_mac_clients = update_mac_clients,
   purge_mac_clients = purge_mac_clients,
-  ip_to_mac = ip_to_mac
+  ip_to_mac = ip_to_mac,
+  finalize_a = finalize_a
 }

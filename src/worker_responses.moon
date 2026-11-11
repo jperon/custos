@@ -985,4 +985,5 @@ run = (queue_num, rfd, rules_metadata) ->
   :skip_ipv6_ext_hdrs, :new_dns_tcp_stream,
   :try_upstream_retry, :arm_retry_fds, :format_block_event,
   :record_chain_targets, :maybe_dynamic_strip, :purge_strip_query_cache,
-  :update_mac_clients, :purge_mac_clients, :ip_to_mac }
+  :update_mac_clients, :purge_mac_clients, :ip_to_mac,
+  :finalize_a }

@@ -604,5 +604,8 @@ return {
   new_dns_tcp_stream = new_dns_tcp_stream,
   append_unique = append_unique,
   aggregate_decisions = aggregate_decisions,
-  MAX_RESPONSE_RULE_IDS = MAX_RESPONSE_RULE_IDS
+  MAX_RESPONSE_RULE_IDS = MAX_RESPONSE_RULE_IDS,
+  handle_question = handle_question,
+  write_event = write_event,
+  list_from_condition_reason = list_from_condition_reason
 }

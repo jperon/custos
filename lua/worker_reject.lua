@@ -384,5 +384,8 @@ return {
   is_private_ipv4 = is_private_ipv4,
   is_public_ipv4 = is_public_ipv4,
   looks_like_rtp_payload = looks_like_rtp_payload,
-  should_track_rtp_udp = should_track_rtp_udp
+  should_track_rtp_udp = should_track_rtp_udp,
+  forge_tcp_rst = forge_tcp_rst,
+  forge_icmp_reject = forge_icmp_reject,
+  handle_reject = handle_reject
 }
