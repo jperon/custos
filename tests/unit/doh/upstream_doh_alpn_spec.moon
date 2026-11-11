@@ -151,7 +151,9 @@ describe "doh.upstream_doh — ALPN réel (wolfSSL)", ->
         ssl.free_context ctx
       ffi.C._exit ok_child and 0 or 1
 
-    -- Parent : le serveur écoute déjà (bind+listen avant fork).
+    -- Parent : le serveur écoute déjà (bind+listen avant fork). Fermer notre
+    -- copie du socket d'écoute ne ferme pas celle du fils.
+    srv\close!
     h, err = doh_upstream.new_client "https://localhost:#{port}/dns-query", 3000, true,
       { ca_file: CERT_FILE }
     doh_upstream.close h if h
