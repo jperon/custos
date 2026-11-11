@@ -95,6 +95,13 @@ is_doh_path = function(path)
   end
   return path == "/dns-query" or (path:match("^/dns%-query%?")) ~= nil
 end
+local is_dns_message_content_type
+is_dns_message_content_type = function(content_type)
+  if not (type(content_type) == "string") then
+    return false
+  end
+  return (content_type:match("application/dns%-message")) ~= nil
+end
 local dns_from_query
 dns_from_query = function(path)
   if not (type(path) == "string") then
@@ -360,6 +367,7 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
   local method = nil
   local path = nil
   local accept = nil
+  local req_content_type = nil
   local json_mode = false
   local dns_chunks = { }
   local dns_bytes = 0
@@ -408,6 +416,7 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
       method = hpack.header_value(headers, ":method")
       path = hpack.header_value(headers, ":path")
       accept = hpack.header_value(headers, "accept")
+      req_content_type = hpack.header_value(headers, "content-type")
       end_stream = headers_end_stream
       if end_stream then
         break
@@ -440,6 +449,9 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
   if method == "POST" then
     if not (is_doh_path(path)) then
       return h2_reject(conn, stream_id, "404")
+    end
+    if not (is_dns_message_content_type(req_content_type)) then
+      return h2_reject(conn, stream_id, "415")
     end
     dns_raw = table.concat(dns_chunks)
     if not (#dns_raw > 0) then
@@ -710,7 +722,7 @@ handle_doh_client = function(args)
     if is_doh_path(req.path) then
       local ct = req.headers["content-type"] or ""
       local accept = req.headers["accept"] or ""
-      if req.method == "POST" and ct:match("application/dns%-message") then
+      if req.method == "POST" and is_dns_message_content_type(ct) then
         log_debug(function()
           return {
             action = "post",
