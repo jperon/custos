@@ -136,3 +136,28 @@ describe "doh.h2_frames — taille de frame", ->
     assert.equals 0x0, ftype
     assert.equals 1, sid
     assert.equals 16384, #got
+
+describe "doh.h2_frames — écritures partielles", ->
+  local mod
+  before_each -> mod = require "doh.h2_frames"
+
+  it "h2_write_frame transmet la frame entière malgré des écritures partielles", ->
+    writes = {}
+    conn = {
+      send: (_self, data) ->
+        part = data\sub 1, 4
+        writes[#writes + 1] = part
+        #part
+    }
+    ok = mod.h2_write_frame conn, 0x0, 0x1, 1, "abcde"
+    assert.is_true ok
+    sent = table.concat writes
+    assert.equals 9 + 5, #sent
+    assert.equals 0x0, sent\byte 4
+    assert.equals "abcde", sent\sub 10
+
+  it "h2_write_frame propage un échec d'écriture", ->
+    conn = { send: (_self, _data) -> nil }
+    ok, err = mod.h2_write_frame conn, 0x4, 0, 0, ""
+    assert.is_nil ok
+    assert.equals "send_timeout", err

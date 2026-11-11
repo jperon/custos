@@ -3,6 +3,7 @@
 -- Partagé entre worker_doh (serveur DoH) et upstream_doh_h2 (client DoH).
 
 bit = require "bit"
+{ :send_all } = require "lib.http"
 
 H2_FRAME_DATA          = 0x0
 H2_FRAME_HEADERS       = 0x1
@@ -74,6 +75,7 @@ h2_read_frame = (conn, max_frame_size) ->
 -- @tparam number flags   Flags (H2_FLAG_*).
 -- @tparam number sid     Stream ID.
 -- @tparam string payload Corps de la frame (peut être nil ou vide).
+-- @treturn boolean|nil true si la frame est entièrement écrite, sinon nil + erreur.
 h2_write_frame = (conn, ftype, flags, sid, payload) ->
   payload = payload or ""
   n = #payload
@@ -87,7 +89,7 @@ h2_write_frame = (conn, ftype, flags, sid, payload) ->
     bit.band(bit.rshift(sid,  8), 0xFF),
     bit.band(sid,                 0xFF)
   ) .. payload
-  conn\send frame
+  send_all conn, frame
 
 {
   :H2_FRAME_DATA, :H2_FRAME_HEADERS, :H2_FRAME_SETTINGS

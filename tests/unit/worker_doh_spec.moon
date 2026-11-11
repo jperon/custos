@@ -42,7 +42,18 @@ package.loaded["auth.ffi_wolfssl"] = {
 }
 package.loaded["lib.socket"]  = { tcp: (-> nil), tcp6: (-> nil), select: (-> {}, {}) }
 package.loaded["lib.process"] = { fork_child: (-> 1) }
-package.loaded["lib.http"]    = { read_request: (-> nil, "stub"), send_response: (->) }
+package.loaded["lib.http"]    = {
+  read_request: (-> nil, "stub")
+  send_response: (->)
+  send_all: (conn, data) ->
+    sent = 0
+    while sent < #data
+      chunk = if sent == 0 then data else data\sub(sent + 1)
+      n = conn\send chunk
+      return nil, "send_timeout" unless n
+      sent += (if n == true then #chunk else n)
+    true
+}
 
 doh = require "worker_doh"
 

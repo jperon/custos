@@ -1,4 +1,6 @@
 local bit = require("bit")
+local send_all
+send_all = require("lib.http").send_all
 local H2_FRAME_DATA = 0x0
 local H2_FRAME_HEADERS = 0x1
 local H2_FRAME_SETTINGS = 0x4
@@ -63,7 +65,7 @@ h2_write_frame = function(conn, ftype, flags, sid, payload)
   payload = payload or ""
   local n = #payload
   local frame = string.char(bit.band(bit.rshift(n, 16), 0xFF), bit.band(bit.rshift(n, 8), 0xFF), bit.band(n, 0xFF), ftype, flags, bit.band(bit.rshift(sid, 24), 0xFF), bit.band(bit.rshift(sid, 16), 0xFF), bit.band(bit.rshift(sid, 8), 0xFF), bit.band(sid, 0xFF)) .. payload
-  return conn:send(frame)
+  return send_all(conn, frame)
 end
 return {
   H2_FRAME_DATA = H2_FRAME_DATA,

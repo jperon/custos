@@ -895,3 +895,11 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   `handle_h2` répond GOAWAY `FRAME_SIZE_ERROR` (0x6) et ferme, et le cumul DATA
   est plafonné à 65535 octets (même traitement). Tests :
   `tests/unit/doh/h2_frames_spec.moon`, `tests/unit/worker_doh_spec.moon`.
+- **Écritures partielles ignorées.** `h2_write_frame` ignorait le retour de
+  `conn\send`, et `send_chunk` de `lib.http` traitait tout retour non-nil comme
+  un succès alors que c'est le **nombre d'octets écrits** : wolfSSL et
+  `lib.socket` peuvent écrire moins que `#chunk`. Correctif : helper
+  `lib.http.send_all` (boucle sur le reliquat `data\sub(n + 1)`, tentatives
+  bornées sur `nil`, rend `true` ou `nil, "send_timeout"`), utilisé par
+  `send_chunk`/`send_response` et `h2_write_frame`. Ce dernier propage désormais
+  l'échec, et `handle_h2` cesse d'écrire après une erreur.

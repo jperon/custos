@@ -257,7 +257,10 @@ local handle_h2
 handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
   conn:receive("*l")
   conn:receive("*l")
-  h2_write_frame(conn, H2_FRAME_SETTINGS, 0, 0, "")
+  local ok_w, w_err = h2_write_frame(conn, H2_FRAME_SETTINGS, 0, 0, "")
+  if not (ok_w) then
+    return nil, w_err
+  end
   local stream_id = nil
   local dns_chunks = { }
   local dns_bytes = 0
@@ -272,7 +275,10 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
       break
     end
     if ftype == H2_FRAME_SETTINGS and bit.band(flags, H2_FLAG_ACK) == 0 then
-      h2_write_frame(conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, "")
+      ok_w, w_err = h2_write_frame(conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, "")
+      if not (ok_w) then
+        return nil, w_err
+      end
     elseif ftype == H2_FRAME_HEADERS and not stream_id then
       stream_id = sid
     elseif ftype == H2_FRAME_DATA and sid == stream_id then
@@ -289,7 +295,10 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
         break
       end
     elseif ftype == H2_FRAME_PING and bit.band(flags, H2_FLAG_ACK) == 0 then
-      h2_write_frame(conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload)
+      ok_w, w_err = h2_write_frame(conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload)
+      if not (ok_w) then
+        return nil, w_err
+      end
     end
   end
   if not (done and stream_id) then
@@ -314,8 +323,14 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
     return nil, "h2_query_error"
   end
   local hpack = h2_encode_response_headers()
-  h2_write_frame(conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack)
-  h2_write_frame(conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw)
+  ok_w, w_err = h2_write_frame(conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack)
+  if not (ok_w) then
+    return nil, w_err
+  end
+  ok_w, w_err = h2_write_frame(conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw)
+  if not (ok_w) then
+    return nil, w_err
+  end
   h2_goaway(conn, 0x0)
   return resp_raw
 end

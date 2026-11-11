@@ -85,6 +85,34 @@ apply_io_timeouts = function(client, timeout)
   end)
   return timeout
 end
+local send_all
+send_all = function(conn, data, opts)
+  local max_attempts = (opts and opts.max_attempts) or 50
+  local sent = 0
+  local nil_attempts = 0
+  while sent < #data do
+    local chunk
+    if sent == 0 then
+      chunk = data
+    else
+      chunk = data:sub(sent + 1)
+    end
+    local n = conn:send(chunk)
+    if n == true then
+      n = #chunk
+    end
+    if n and n > 0 then
+      sent = sent + n
+      nil_attempts = 0
+    else
+      nil_attempts = nil_attempts + 1
+      if nil_attempts >= max_attempts then
+        return nil, "send_timeout"
+      end
+    end
+  end
+  return true
+end
 local send_response
 send_response = function(client, status, headers, body)
   local is_peer_closed_err
@@ -97,14 +125,14 @@ send_response = function(client, status, headers, body)
   end
   local send_chunk
   send_chunk = function(chunk)
-    local ok, res = pcall(function()
-      return client:send(chunk)
+    local ok, res, serr = pcall(function()
+      return send_all(client, chunk)
     end)
     if ok then
       if res then
         return true
       end
-      return nil, "send_timeout"
+      return nil, serr or "send_timeout"
     end
     if is_peer_closed_err(res) then
       return nil, "peer_closed"
@@ -169,5 +197,6 @@ end
 return {
   read_request = read_request,
   send_response = send_response,
-  apply_io_timeouts = apply_io_timeouts
+  apply_io_timeouts = apply_io_timeouts,
+  send_all = send_all
 }

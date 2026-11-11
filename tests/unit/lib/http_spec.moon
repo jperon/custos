@@ -1,7 +1,7 @@
 -- tests/unit/lib/http_spec.moon
 -- Tests des helpers HTTP purs (lib/http).
 
-{ :read_request, :send_response, :apply_io_timeouts } = require "lib.http"
+{ :read_request, :send_response, :apply_io_timeouts, :send_all } = require "lib.http"
 
 describe "lib/http.read_request", ->
   -- Client factice : rejoue une liste de réponses [data, err] à chaque receive.
@@ -174,3 +174,77 @@ describe "lib/http.read_request — bornes", ->
     req, err = read_request client, max_header_line: 10
     assert.is_nil req
     assert.equals "headers_too_large", err
+
+describe "lib/http.send_all", ->
+  it "transmet la totalité dans l'ordre malgré des écritures partielles", ->
+    writes = {}
+    client = {
+      send: (_self, chunk) ->
+        part = chunk\sub 1, 3
+        writes[#writes + 1] = part
+        #part
+    }
+    ok, err = send_all client, "abcdefgh"
+    assert.is_true ok
+    assert.is_nil err
+    assert.equals "abcdefgh", table.concat writes
+    assert.equals 3, #writes
+
+  it "échoue après le nombre de tentatives prévu si send rend toujours nil", ->
+    calls = 0
+    client = {
+      send: (_self, _chunk) ->
+        calls += 1
+        nil
+    }
+    ok, err = send_all client, "abc", max_attempts: 3
+    assert.is_nil ok
+    assert.equals "send_timeout", err
+    assert.equals 3, calls
+
+  it "ne compte comme tentatives que les échecs nil (écritures partielles)", ->
+    writes = {}
+    client = {
+      send: (_self, chunk) ->
+        part = chunk\sub 1, 1
+        writes[#writes + 1] = part
+        #part
+    }
+    ok = send_all client, "abcde", max_attempts: 2
+    assert.is_true ok
+    assert.equals "abcde", table.concat writes
+
+  it "échoue après max_attempts échecs consécutifs", ->
+    calls = 0
+    client = {
+      send: (_self, _chunk) ->
+        calls += 1
+        nil
+    }
+    ok, err = send_all client, "abc", max_attempts: 2
+    assert.is_nil ok
+    assert.equals "send_timeout", err
+    assert.equals 2, calls
+
+  it "écrit en un seul appel quand tout passe du premier coup", ->
+    calls = 0
+    client = {
+      send: (_self, chunk) ->
+        calls += 1
+        #chunk
+    }
+    ok = send_all client, "abc"
+    assert.is_true ok
+    assert.equals 1, calls
+
+  it "send_response transmet un corps plus long que les écritures partielles", ->
+    writes = {}
+    client = {
+      send: (_self, chunk) ->
+        part = chunk\sub 1, 5
+        writes[#writes + 1] = part
+        #part
+    }
+    ok = send_response client, 200, {}, "0123456789abcdef"
+    assert.is_true ok
+    assert.truthy table.concat(writes)\find("0123456789abcdef", 1, true)

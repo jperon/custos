@@ -83,6 +83,31 @@ apply_io_timeouts = (client, timeout) ->
   pcall -> client\setoption "sndtimeo", timeout
   timeout
 
+--- Écrit la totalité de data sur conn, en bouclant sur les écritures partielles.
+-- Les sockets wolfSSL (et lib.socket) peuvent écrire moins que demandé, ou
+-- rendre nil sur WANT_WRITE/timeout : ignorer le reliquat tronquerait la
+-- réponse en silence.
+-- @tparam table  conn  Connexion avec :send(data) rendant le nombre d'octets écrits.
+-- @tparam string data  Données à transmettre.
+-- @tparam table|nil opts  { max_attempts: n } — tentatives sur send nil (défaut 50).
+-- @treturn boolean|nil true si tout est écrit, sinon nil + erreur ("send_timeout").
+send_all = (conn, data, opts) ->
+  max_attempts = (opts and opts.max_attempts) or 50
+  sent = 0
+  nil_attempts = 0
+  while sent < #data
+    chunk = if sent == 0 then data else data\sub(sent + 1)
+    n = conn\send chunk
+    n = #chunk if n == true  -- faux sockets de test rendant `true`
+    if n and n > 0
+      sent += n
+      nil_attempts = 0
+    else
+      -- Échec transitoire (WANT_WRITE/timeout) : borner les tentatives.
+      nil_attempts += 1
+      return nil, "send_timeout" if nil_attempts >= max_attempts
+  true
+
 --- Write an HTTP/1.1 response to a TLS socket object.
 -- Always appends Content-Length and Connection: close unless supplied.
 -- @tparam table  client  TLS socket with :send(str) method.
@@ -99,13 +124,13 @@ send_response = (client, status, headers, body) ->
       s\find("eof_from_peer", 1, true)
 
   send_chunk = (chunk) ->
-    ok, res = pcall -> client\send chunk
+    ok, res, serr = pcall -> send_all client, chunk
     if ok
       -- send rend nil sur WANT_WRITE/WANT_READ : avec SO_SNDTIMEO, cela
       -- signifie qu'un timeout complet s'est écoulé sans pouvoir écrire.
       -- L'ignorer perdrait le chunk en silence (réponse tronquée).
       return true if res
-      return nil, "send_timeout"
+      return nil, serr or "send_timeout"
     return nil, "peer_closed" if is_peer_closed_err res
     error tostring res
 
@@ -139,4 +164,4 @@ send_response = (client, status, headers, body) ->
     return nil, err unless ok
   true
 
-{ :read_request, :send_response, :apply_io_timeouts }
+{ :read_request, :send_response, :apply_io_timeouts, :send_all }

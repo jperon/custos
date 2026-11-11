@@ -224,7 +224,8 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
   conn\receive "*l"  -- "" (ligne vide)
 
   -- Préface serveur : SETTINGS vide
-  h2_write_frame conn, H2_FRAME_SETTINGS, 0, 0, ""
+  ok_w, w_err = h2_write_frame conn, H2_FRAME_SETTINGS, 0, 0, ""
+  return nil, w_err unless ok_w
 
   stream_id  = nil
   dns_chunks = {}
@@ -241,7 +242,10 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
       break
 
     if ftype == H2_FRAME_SETTINGS and bit.band(flags, H2_FLAG_ACK) == 0
-      h2_write_frame conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, ""
+      -- Toute erreur d'écriture interrompt la connexion : ne pas continuer à
+      -- émettre des frames sur un socket dont l'écriture a échoué.
+      ok_w, w_err = h2_write_frame conn, H2_FRAME_SETTINGS, H2_FLAG_ACK, 0, ""
+      return nil, w_err unless ok_w
 
     elseif ftype == H2_FRAME_HEADERS and not stream_id
       stream_id = sid
@@ -258,7 +262,8 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
         break
 
     elseif ftype == H2_FRAME_PING and bit.band(flags, H2_FLAG_ACK) == 0
-      h2_write_frame conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload
+      ok_w, w_err = h2_write_frame conn, H2_FRAME_PING, H2_FLAG_ACK, 0, payload
+      return nil, w_err unless ok_w
 
   unless done and stream_id
     h2_goaway conn, 0x1
@@ -276,8 +281,10 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
     return nil, "h2_query_error"
 
   hpack = h2_encode_response_headers!
-  h2_write_frame conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack
-  h2_write_frame conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw
+  ok_w, w_err = h2_write_frame conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack
+  return nil, w_err unless ok_w
+  ok_w, w_err = h2_write_frame conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw
+  return nil, w_err unless ok_w
   h2_goaway conn, 0x0
   resp_raw
 
