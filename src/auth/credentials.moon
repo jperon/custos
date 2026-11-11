@@ -257,7 +257,7 @@ valid_username = (username) ->
 -- @treturn true|nil true si succès, nil + erreur sinon
 -- @treturn nil|string Message d'erreur
 rewrite_secrets_file = (secrets_path, map_line, append_line) ->
-  with_lock secrets_path .. ".lock", ->
+  write = ->
     tmp_path = secrets_path .. ".new." .. tostring ffi.C.getpid!
     fh, err = io.open tmp_path, "w"
     return nil, "Impossible de créer le fichier temporaire : #{err}" unless fh
@@ -282,6 +282,15 @@ rewrite_secrets_file = (secrets_path, map_line, append_line) ->
       os.remove tmp_path
       return nil, "Impossible de renommer le fichier secrets : #{rename_err}"
     true
+
+  -- `with_lock` lève si le fichier de verrou ne peut pas être ouvert (chemin
+  -- invalide, permissions). On convertit cette erreur en retour (nil, message)
+  -- pour respecter le contrat documenté : les appelants (register_user,
+  -- set_record) répondent alors 500 au lieu de laisser l'erreur remonter et
+  -- fermer la connexion sans réponse HTTP.
+  ok, res, res_err = pcall with_lock, secrets_path .. ".lock", write
+  return nil, tostring(res) unless ok
+  res, res_err
 
 --- Inscrit un nouvel utilisateur dans le fichier secrets.
 -- Vérifie l'absence de doublon, hash le mot de passe, et append
@@ -314,23 +323,6 @@ register_user = (username, password, secrets_path, current_secrets) ->
 
   new_secrets
 
---- Met à jour le hash d'un utilisateur existant dans le fichier secrets.
--- Réécrit le fichier de façon atomique (temp + rename).
--- Typiquement appelé après verify_password pour migrer un hash obsolète.
--- @tparam string username     Nom d'utilisateur
--- @tparam string password     Mot de passe en clair (pour recalculer le hash)
--- @tparam string secrets_path Chemin du fichier secrets
--- @treturn true|nil   true en cas de succès, nil + message d'erreur sinon
--- @treturn nil|string Message d'erreur
-update_user_hash = (username, password, secrets_path) ->
-  new_entry = hash_password password
-  rewrite_secrets_file secrets_path, (line) ->
-    u = line\match "^([^:]+):"
-    if u == username
-      "#{username}:#{new_entry}"
-    else
-      line
-
 --- Écrit un enregistrement déjà calculé (hash côté client) pour un utilisateur.
 -- Le serveur ne voit jamais le mot de passe : le client fournit directement
 -- l'enregistrement pbkdf2-sha256:<iter>:<salt>:<hash>. Remplace la ligne de
@@ -355,5 +347,5 @@ set_record = (username, record, secrets_path) ->
   rewrite_secrets_file secrets_path, replacer, appender
 
 { :pbkdf2, :hash_password, :verify_password, :verify_response, :parse_record,
-  :update_user_hash, :set_record, :load_secrets, :valid_username, :register_user,
+  :set_record, :load_secrets, :valid_username, :register_user,
   :DEFAULT_ITER, :DEFAULT_SALT_LEN, :hmac_bin, :bin_to_hex, :hex_to_bin }

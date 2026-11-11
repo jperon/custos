@@ -27,7 +27,6 @@ render_field = (name, field_schema, current_val) ->
     input = H.input { type: "checkbox", name: name, value: "1", checked: checked }
     return H.div {
       label_html .. " " .. input
-      H.input { type: "hidden", name: name .. "_present", value: "1" }
     }
   elseif t == "enum"
     opts = ""

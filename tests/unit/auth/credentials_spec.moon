@@ -110,6 +110,12 @@ describe "auth/credentials", ->
       assert.is_nil ok
       assert.is_not_nil err
 
+    it "renvoie nil+erreur (sans lever) si le verrou est inouvrable", ->
+      rec = hash_password "hello123"
+      ok, err = set_record "u@d.com", rec, "/nonexistent/credentials_spec/secrets.txt"
+      assert.is_nil ok
+      assert.is_string err
+
   describe "valid_username", ->
     it "adresses email valides", ->
       assert.is_true valid_username "user@domain.com"

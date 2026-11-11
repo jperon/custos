@@ -47,7 +47,8 @@ replay_sessions_to_nft = (state) ->
 
 --- Sélectionne le contexte TLS pour une connexion.
 -- Priorité : contexte statique hérité du parent (zéro coût par connexion) >
--- repli rechargement depuis les fichiers > génération/cache SNI dynamique.
+-- repli rechargement depuis les fichiers > génération/cache dynamique par IP
+-- locale (le SNI ClientHello n'est pas extrait).
 -- @tparam table state État du serveur (static_tls_ctx, static_cert_paths, cert_cache)
 -- @tparam string local_ip IP locale, utilisée comme CN pour le cert dynamique
 -- @tparam function|nil load_static_fn Injection de test ; défaut load_static
@@ -315,7 +316,7 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     -- Chemins conservés en repli si le contexte hérité est absent. Posés
     -- seulement si le chargement parent a réussi : sinon chaque enfant
     -- échouerait en boucle sur les mêmes fichiers au lieu de se replier sur
-    -- le cache SNI dynamique.
+    -- le cache dynamique par IP locale.
     static_cert_paths: if static_tls_ctx then { cert: auth_cfg.cert, key: auth_cfg.key } else nil
     cert_cache: cert_cache
   }

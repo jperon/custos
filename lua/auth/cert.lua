@@ -116,40 +116,6 @@ file_exists = function(path)
     return false
   end
 end
-local load_or_generate
-load_or_generate = function(key_path, cert_path)
-  key_path = key_path or "tmp/auth.key"
-  cert_path = cert_path or "tmp/auth.crt"
-  if key_path == "tmp/auth.key" and cert_path == "tmp/auth.crt" then
-    local ips = get_local_ips()
-    local sans = {
-      "DNS:custos"
-    }
-    for _index_0 = 1, #ips do
-      local ip_san = ips[_index_0]
-      table.insert(sans, ip_san)
-    end
-    local san_str = table.concat(sans, ",")
-    local h = hash_string(san_str)
-    key_path = "tmp/auth_" .. tostring(h) .. ".key"
-    cert_path = "tmp/auth_" .. tostring(h) .. ".crt"
-  end
-  if not (file_exists(key_path) and file_exists(cert_path)) then
-    local ips = get_local_ips()
-    local sans = {
-      "DNS:custos"
-    }
-    for _index_0 = 1, #ips do
-      local ip_san = ips[_index_0]
-      table.insert(sans, ip_san)
-    end
-    local ok, out = generate_self_signed(key_path, cert_path, sans)
-    if not (ok) then
-      error("Impossible de générer le certificat TLS :\n" .. tostring(out))
-    end
-  end
-  return make_context(key_path, cert_path)
-end
 local load_or_generate_sni
 load_or_generate_sni = function(hostname, cache)
   hostname = hostname or "custos"
@@ -403,11 +369,10 @@ load_or_generate_static = function(key_path, cert_path)
   return load_static(key_path, cert_path)
 end
 return {
-  load_or_generate = load_or_generate,
-  generate_self_signed = generate_self_signed,
-  make_context = make_context,
   load_or_generate_sni = load_or_generate_sni,
   load_static = load_static,
   load_or_generate_static = load_or_generate_static,
+  generate_self_signed = generate_self_signed,
+  make_context = make_context,
   hash_string = hash_string
 }

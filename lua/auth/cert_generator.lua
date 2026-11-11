@@ -13,71 +13,6 @@ unique_suffix = function()
   _tmp_seq = _tmp_seq + 1
   return tostring(tonumber(ffi.C.getpid())) .. "_" .. tostring(os.time()) .. "_" .. tostring(_tmp_seq)
 end
-local generate_rsa_key
-generate_rsa_key = function(bits)
-  if bits == nil then
-    bits = 2048
-  end
-  bits = tonumber(bits) or 2048
-  local key_file = "/tmp/px5g_rsakey_" .. tostring(unique_suffix()) .. ".pem"
-  local cmd = "px5g rsakey -out " .. tostring(shquote(key_file)) .. " " .. tostring(bits) .. " 2>/dev/null"
-  local exit_code = os.execute(cmd)
-  if not (exit_code == 0 or exit_code == true) then
-    local err = "px5g rsakey exited with error code " .. tostring(exit_code)
-    log_warn(function()
-      return {
-        action = "cert_gen_rsakey_failed",
-        bits = bits,
-        err = err
-      }
-    end)
-    os.remove(key_file)
-    return nil, false, err
-  end
-  local fh = io.open(key_file, "r")
-  if not (fh) then
-    local err = "Cannot read generated key file: " .. tostring(key_file)
-    log_warn(function()
-      return {
-        action = "cert_gen_rsakey_read_failed",
-        bits = bits,
-        err = err
-      }
-    end)
-    return nil, false, err
-  end
-  local key_pem = fh:read("*a")
-  fh:close()
-  os.remove(key_file)
-  if not (key_pem and #key_pem > 0) then
-    local err = "px5g rsakey produced empty output"
-    log_warn(function()
-      return {
-        action = "cert_gen_rsakey_empty",
-        bits = bits
-      }
-    end)
-    return nil, false, err
-  end
-  if not (key_pem:match("BEGIN.*PRIVATE KEY")) then
-    local err = "px5g rsakey output is not valid PEM"
-    log_warn(function()
-      return {
-        action = "cert_gen_rsakey_invalid_pem",
-        bits = bits
-      }
-    end)
-    return nil, false, err
-  end
-  log_debug(function()
-    return {
-      action = "cert_gen_rsakey_success",
-      bits = bits,
-      size = #key_pem
-    }
-  end)
-  return key_pem, true, nil
-end
 local generate_self_signed
 generate_self_signed = function(cn, sans, days)
   if sans == nil then
@@ -233,6 +168,5 @@ generate_self_signed = function(cn, sans, days)
   return key_pem, cert_pem, true, nil
 end
 return {
-  generate_rsa_key = generate_rsa_key,
   generate_self_signed = generate_self_signed
 }

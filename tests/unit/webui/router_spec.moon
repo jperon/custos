@@ -70,6 +70,21 @@ describe "webui/router.dispatch", ->
     assert.equals 403, status
     assert.truthy body\find("stranger", 1, true)
 
+  it "liste admin vide + admin_allow_all_when_empty → 200 (auto-inscrit admin)", ->
+    dispatch = get_dispatch!
+    state = make_state {}
+    state.admin_allow_all_when_empty = true
+    status, _, body = dispatch make_req("GET", "/admin/", "carol"), state
+    assert.equals 200, status
+    assert.truthy body\find("Dashboard", 1, true)
+
+  it "liste admin vide + admin_allow_all_when_empty=false → 403", ->
+    dispatch = get_dispatch!
+    state = make_state {}
+    state.admin_allow_all_when_empty = false
+    status, _, _ = dispatch make_req("GET", "/admin/", "carol"), state
+    assert.equals 403, status
+
   -- ── Dashboard ────────────────────────────────────────────────────────────
 
   it "GET /admin/ → 200", ->

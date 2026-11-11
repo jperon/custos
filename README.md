@@ -171,7 +171,6 @@ custos/
 │   ├── auth/
 │   │   ├── worker.moon          Worker AUTH principal
 │   │   ├── server.moon          Serveur HTTPS (FFI WolfSSL) + routage /admin/*
-│   │   ├── worker_conn.moon     Gestion des connexions HTTPS
 │   │   ├── ffi_wolfssl.moon     FFI wrapper WolfSSL (remplace luasec)
 │   │   ├── ffi_socket.moon      FFI sockets bas niveau
 │   │   ├── cert.moon            Gestion certificats TLS (load_or_generate_sni)

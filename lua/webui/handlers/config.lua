@@ -45,12 +45,7 @@ render_field = function(name, field_schema, current_val)
       checked = checked
     })
     return H.div({
-      label_html .. " " .. input,
-      H.input({
-        type = "hidden",
-        name = name .. "_present",
-        value = "1"
-      })
+      label_html .. " " .. input
     })
   elseif t == "enum" then
     local opts = ""
