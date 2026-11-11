@@ -10,9 +10,25 @@ do
   C, AF_INET, AF_INET6, SOCK_DGRAM, SOL_SOCKET, SO_RCVTIMEO, SO_SNDTIMEO, htons = _obj_0.C, _obj_0.AF_INET, _obj_0.AF_INET6, _obj_0.SOCK_DGRAM, _obj_0.SOL_SOCKET, _obj_0.SO_RCVTIMEO, _obj_0.SO_SNDTIMEO, _obj_0.htons
 end
 local DNS_BUF_SIZE = 4096
+local MAX_IGNORED_DATAGRAMS = 8
+local CLOCK_MONOTONIC = 1
+pcall(ffi.cdef, "typedef struct { long tv_sec; long tv_nsec; } timespec_t;")
+pcall(ffi.cdef, "int clock_gettime(int clk_id, timespec_t *tp);")
 local get_errno
 get_errno = function()
   return ffi.C.__errno_location()[0]
+end
+local now_ms
+now_ms = function()
+  local ts = ffi.new("timespec_t")
+  local ok, ret = pcall(function()
+    return ffi.C.clock_gettime(CLOCK_MONOTONIC, ts)
+  end)
+  if ok and ret == 0 then
+    return ts.tv_sec * 1000 + ts.tv_nsec / 1000000
+  else
+    return os.time() * 1000
+  end
 end
 local probe_ipv6
 probe_ipv6 = function(ipv6_addr, port)
@@ -133,7 +149,8 @@ new_client = function(upstream_ip, upstream_port, timeout_ms)
     fd = fd,
     family = family,
     upstream_ip = upstream_ip,
-    upstream_port = upstream_port
+    upstream_port = upstream_port,
+    timeout_ms = timeout_ms
   }
 end
 local query
@@ -157,36 +174,60 @@ query = function(client, dns_raw)
     end)
     return nil, "send() failed: errno=" .. errno
   end
+  local qid = dns_raw:byte(1) * 256 + dns_raw:byte(2)
+  local deadline = now_ms() + (client.timeout_ms or 2000)
+  local ignored = 0
   local buf = ffi.new("uint8_t[?]", DNS_BUF_SIZE)
-  n = C.recv(client.fd, buf, DNS_BUF_SIZE, 0)
-  if n < 0 then
-    local errno = get_errno()
+  while true do
+    n = C.recv(client.fd, buf, DNS_BUF_SIZE, 0)
+    if n < 0 then
+      local errno = get_errno()
+      log_debug(function()
+        return {
+          action = "upstream_recv_failed",
+          upstream_ip = client.upstream_ip,
+          errno = errno
+        }
+      end)
+      return nil, "recv() timed out or failed: errno=" .. errno
+    end
+    if n == 0 then
+      log_debug(function()
+        return {
+          action = "upstream_recv_empty",
+          upstream_ip = client.upstream_ip
+        }
+      end)
+      return nil, "recv() returned 0 (connection closed)"
+    end
+    if n >= 12 then
+      local resp = ffi.string(buf, n)
+      local resp_qid = resp:byte(1) * 256 + resp:byte(2)
+      if resp_qid == qid and resp:byte(3) >= 0x80 then
+        log_debug(function()
+          return {
+            action = "upstream_recv",
+            upstream_ip = client.upstream_ip,
+            bytes = n
+          }
+        end)
+        return resp
+      end
+    end
+    ignored = ignored + 1
     log_debug(function()
       return {
-        action = "upstream_recv_failed",
+        action = "upstream_recv_ignored",
         upstream_ip = client.upstream_ip,
-        errno = errno
+        bytes = n,
+        ignored = ignored,
+        reason = (n < 12 and "short" or "txid_or_qr")
       }
     end)
-    return nil, "recv() timed out or failed: errno=" .. errno
+    if ignored >= MAX_IGNORED_DATAGRAMS or now_ms() >= deadline then
+      return nil, "no matching response (txid)"
+    end
   end
-  if n == 0 then
-    log_debug(function()
-      return {
-        action = "upstream_recv_empty",
-        upstream_ip = client.upstream_ip
-      }
-    end)
-    return nil, "recv() returned 0 (connection closed)"
-  end
-  log_debug(function()
-    return {
-      action = "upstream_recv",
-      upstream_ip = client.upstream_ip,
-      bytes = n
-    }
-  end)
-  return ffi.string(buf, n)
 end
 local close
 close = function(client)

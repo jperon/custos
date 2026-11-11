@@ -903,3 +903,14 @@ Déploiement réel ensuite effectué avec succès (bridge détecté correctement
   bornées sur `nil`, rend `true` ou `nil, "send_timeout"`), utilisé par
   `send_chunk`/`send_response` et `h2_write_frame`. Ce dernier propage désormais
   l'échec, et `handle_h2` cesse d'écrire après une erreur.
+- **Réponses UDP amont non corrélées au txid (`doh.upstream.query`).** Le
+  socket « connecté » ne filtre que l'adresse source : une réponse tardive à une
+  requête précédente sur un client réutilisé — ou une injection par un tiers
+  usurpant l'adresse du résolveur — était acceptée sans connaître le txid.
+  `query` compare désormais les 2 premiers octets de la réponse à ceux de la
+  requête et exige le bit QR (octet 3, 0x80) ; les datagrammes < 12 octets sont
+  ignorés. Limite : 8 datagrammes ignorés et échéance absolue égale au
+  `timeout_ms` du client (`new_client` le stocke dans le handle) → sinon
+  `nil, "no matching response (txid)"`. `doh.validator` en bénéficie pour son
+  transport UDP (il passe par `doh.upstream`) ; les transports DoH/curl (TLS)
+  ne sont pas concernés. Tests : `tests/unit/doh/upstream_spec.moon`.
