@@ -314,23 +314,6 @@ register_user = (username, password, secrets_path, current_secrets) ->
 
   new_secrets
 
---- Met à jour le hash d'un utilisateur existant dans le fichier secrets.
--- Réécrit le fichier de façon atomique (temp + rename).
--- Typiquement appelé après verify_password pour migrer un hash obsolète.
--- @tparam string username     Nom d'utilisateur
--- @tparam string password     Mot de passe en clair (pour recalculer le hash)
--- @tparam string secrets_path Chemin du fichier secrets
--- @treturn true|nil   true en cas de succès, nil + message d'erreur sinon
--- @treturn nil|string Message d'erreur
-update_user_hash = (username, password, secrets_path) ->
-  new_entry = hash_password password
-  rewrite_secrets_file secrets_path, (line) ->
-    u = line\match "^([^:]+):"
-    if u == username
-      "#{username}:#{new_entry}"
-    else
-      line
-
 --- Écrit un enregistrement déjà calculé (hash côté client) pour un utilisateur.
 -- Le serveur ne voit jamais le mot de passe : le client fournit directement
 -- l'enregistrement pbkdf2-sha256:<iter>:<salt>:<hash>. Remplace la ligne de
@@ -355,5 +338,5 @@ set_record = (username, record, secrets_path) ->
   rewrite_secrets_file secrets_path, replacer, appender
 
 { :pbkdf2, :hash_password, :verify_password, :verify_response, :parse_record,
-  :update_user_hash, :set_record, :load_secrets, :valid_username, :register_user,
+  :set_record, :load_secrets, :valid_username, :register_user,
   :DEFAULT_ITER, :DEFAULT_SALT_LEN, :hmac_bin, :bin_to_hex, :hex_to_bin }

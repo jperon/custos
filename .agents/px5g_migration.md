@@ -23,8 +23,6 @@ local key_pem, cert_pem, ok, err = gen.generate_self_signed("example.com")
 ```
 
 **Fonctions** :
-- `generate_rsa_key(bits)` → (key_pem, ok, err)
-  - Note: Obsolète pour px5g (génère EC par défaut)
 - `generate_self_signed(cn, sans, days)` → (key_pem, cert_pem, ok, err)
   - Génère clé + certificat auto-signé en une commande
   - Retourne PEM strings (pas des fichiers)

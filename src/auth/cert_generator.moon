@@ -24,51 +24,6 @@ unique_suffix = ->
   _tmp_seq += 1
   "#{tonumber ffi.C.getpid!}_#{os.time!}_#{_tmp_seq}"
 
---- Génère une clé RSA via px5g.
--- @tparam number bits Taille de la clé (ex: 2048, 4096)
--- @treturn string|nil Clé PEM, ou nil en cas d'erreur
--- @treturn boolean true si succès, false sinon
--- @treturn string Message d'erreur si échec
-generate_rsa_key = (bits = 2048) ->
-  bits = tonumber(bits) or 2048
-
-  -- px5g écrit la clé dans le fichier passé à -out (sans -out, il écrit sur
-  -- stderr, ce qui échoue sur un pipe). On lit ensuite le fichier en mémoire.
-  key_file = "/tmp/px5g_rsakey_#{unique_suffix!}.pem"
-  cmd = "px5g rsakey -out #{shquote key_file} #{bits} 2>/dev/null"
-
-  exit_code = os.execute cmd
-  -- os.execute retourne true en Lua 5.1, 0 en 5.2+
-  unless exit_code == 0 or exit_code == true
-    err = "px5g rsakey exited with error code #{exit_code}"
-    log_warn -> { action: "cert_gen_rsakey_failed", bits: bits, err: err }
-    os.remove key_file
-    return nil, false, err
-
-  fh = io.open key_file, "r"
-  unless fh
-    err = "Cannot read generated key file: #{key_file}"
-    log_warn -> { action: "cert_gen_rsakey_read_failed", bits: bits, err: err }
-    return nil, false, err
-
-  key_pem = fh\read "*a"
-  fh\close!
-  os.remove key_file
-
-  unless key_pem and #key_pem > 0
-    err = "px5g rsakey produced empty output"
-    log_warn -> { action: "cert_gen_rsakey_empty", bits: bits }
-    return nil, false, err
-
-  -- Vérifier que c'est du PEM valide (BEGIN/END)
-  unless key_pem\match "BEGIN.*PRIVATE KEY"
-    err = "px5g rsakey output is not valid PEM"
-    log_warn -> { action: "cert_gen_rsakey_invalid_pem", bits: bits }
-    return nil, false, err
-
-  log_debug -> { action: "cert_gen_rsakey_success", bits: bits, size: #key_pem }
-  key_pem, true, nil
-
 --- Génère un certificat auto-signé complet via px5g.
 -- Utilise la syntaxe correcte : px5g selfsigned -newkey ec -keyout key.pem -out cert.pem -subj "/CN=..."
 -- Crée deux fichiers temporaires (clé et certificat) et les rellit.
@@ -168,6 +123,5 @@ generate_self_signed = (cn, sans = {}, days = 3650) ->
   key_pem, cert_pem, true, nil
 
 {
-  :generate_rsa_key
   :generate_self_signed
 }

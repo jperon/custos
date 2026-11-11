@@ -3,7 +3,7 @@
 -- Le test de génération effective est skippé si px5g n'est pas installé.
 
 cg = require "auth.cert_generator"
-{ :generate_self_signed, :generate_rsa_key } = cg
+{ :generate_self_signed } = cg
 
 -- px5g est désormais fourni par le flake (dépendance obligatoire). On teste donc
 -- le chemin nominal quand il est présent, et la branche d'erreur sinon.
@@ -64,136 +64,6 @@ describe "auth/cert_generator", ->
     mod = require "auth.cert_generator"
     assert.is_not_nil mod
     assert.is_function mod.generate_self_signed
-    assert.is_function mod.generate_rsa_key
-
-  -- ═══════════════════════════════════════════════════════════════════════════
-  -- generate_rsa_key — chemin nominal (gestion des arguments bits)
-  -- px5g présent → clé PEM valide ; absent → branche d'erreur.
-  -- Les branches d'erreur fines sont couvertes plus bas via io.popen mocké.
-  -- ═══════════════════════════════════════════════════════════════════════════
-
-  -- Vérifie le résultat selon la disponibilité de px5g.
-  assert_rsa_result = (key_pem, ok, err) ->
-    if has_px5g!
-      assert.is_true ok, tostring(err)
-      assert.is_string key_pem
-      assert.is_not_nil key_pem\match("BEGIN.*PRIVATE KEY")
-    else
-      assert.is_nil key_pem
-      assert.is_false ok
-      assert.is_string err
-
-  it "generate_rsa_key sans argument → bits=2048 par défaut", ->
-    -- Couvre: bits==nil → bits=2048, cmd building, io.popen, handle:read, handle:close
-    assert_rsa_result generate_rsa_key!
-
-  it "generate_rsa_key avec bits entier → tonumber(bits) non-nil", ->
-    -- Couvre: bits = tonumber(bits) or 2048 avec bits non-nil
-    assert_rsa_result generate_rsa_key 4096
-
-  it "generate_rsa_key avec bits=nil → bits=2048", ->
-    -- Même chemin que sans argument: bits==nil → bits=2048
-    assert_rsa_result generate_rsa_key nil
-
-  it "generate_rsa_key avec bits string → tonumber conversion", ->
-    -- bits = "2048" (string) → tonumber("2048") = 2048 → cmd = "px5g rsakey 2048"
-    assert_rsa_result generate_rsa_key "2048"
-
-  -- ═══════════════════════════════════════════════════════════════════════════
-  -- generate_rsa_key — branches avec os.execute + io.open mockés
-  -- px5g écrit la clé dans un fichier (-out) ; on simule exit code + contenu fichier.
-  -- ═══════════════════════════════════════════════════════════════════════════
-
-  describe "generate_rsa_key avec os.execute/io.open mockés", ->
-    local orig_execute, orig_open
-
-    -- Installe des mocks : px5g « réussit » avec exit_code, et le fichier lu
-    -- renvoie file_content (ou io.open renvoie nil si file_content == nil).
-    mock_px5g = (exit_code, file_content) ->
-      os.execute = (cmd) -> exit_code
-      io.open = (path, mode) ->
-        return nil unless file_content != nil
-        {
-          read:  (self, fmt) -> file_content
-          close: (self) -> true
-        }
-
-    before_each ->
-      orig_execute = os.execute
-      orig_open    = io.open
-
-    after_each ->
-      os.execute = orig_execute
-      io.open    = orig_open
-
-    it "exit code non-zéro → branche erreur px5g", ->
-      mock_px5g 1, nil
-      key_pem, ok, err = generate_rsa_key 2048
-      assert.is_nil key_pem
-      assert.is_false ok
-      assert.is_string err
-      assert.is_true err\find("error code", 1, true) != nil
-
-    it "succès mais fichier illisible → branche read failed", ->
-      -- exit_code ok mais io.open renvoie nil
-      mock_px5g 0, nil
-      key_pem, ok, err = generate_rsa_key 2048
-      assert.is_nil key_pem
-      assert.is_false ok
-      assert.is_string err
-      assert.is_true err\find("Cannot read", 1, true) != nil
-
-    it "fichier vide → branche empty output", ->
-      mock_px5g 0, ""
-      key_pem, ok, err = generate_rsa_key 2048
-      assert.is_nil key_pem
-      assert.is_false ok
-      assert.is_string err
-      assert.is_true err\find("empty", 1, true) != nil
-
-    it "fichier non-PEM → branche PEM invalide", ->
-      mock_px5g 0, "not a valid PEM output"
-      key_pem, ok, err = generate_rsa_key 2048
-      assert.is_nil key_pem
-      assert.is_false ok
-      assert.is_string err
-      assert.is_true err\find("not valid PEM", 1, true) != nil
-
-    it "fichier PEM valide → succès (log_debug + return)", ->
-      fake_pem = "-----BEGIN RSA PRIVATE KEY-----\nfakedata\n-----END RSA PRIVATE KEY-----\n"
-      mock_px5g 0, fake_pem
-      key_pem, ok, err = generate_rsa_key 2048
-      assert.is_not_nil key_pem
-      assert.is_true ok
-      assert.is_nil err
-      assert.are.equal fake_pem, key_pem
-
-    -- Régression anti-collision PRNG : sans math.randomseed (jamais fait dans
-    -- ce projet), deux enfants forkés au même os.time! avec le même état PRNG
-    -- hérité produiraient le même math.random(...) et donc le même nom de
-    -- fichier temporaire, s'écrasant mutuellement leur clé en cours de
-    -- génération. Avec os.time! ET math.random figés à une valeur constante
-    -- (simule deux enfants forkés identiques), le nom doit rester unique.
-    it "reste unique même à os.time!/math.random figés (simule deux enfants forkés identiques)", ->
-      fake_pem = "-----BEGIN RSA PRIVATE KEY-----\nfakedata\n-----END RSA PRIVATE KEY-----\n"
-      orig_time, orig_random = os.time, math.random
-      os.time   = -> 1000000
-      math.random = (n) -> 42
-      seen_paths = {}
-      os.execute = (cmd) ->
-        path = cmd\match "%-out ([^%s]+)"
-        seen_paths[#seen_paths + 1] = path
-        0
-      io.open = (path, mode) ->
-        {
-          read:  (self, fmt) -> fake_pem
-          close: (self) -> true
-        }
-      generate_rsa_key 2048
-      generate_rsa_key 2048
-      os.time, math.random = orig_time, orig_random
-      assert.equals 2, #seen_paths
-      assert.are_not.equal seen_paths[1], seen_paths[2]
 
   -- ═══════════════════════════════════════════════════════════════════════════
   -- generate_self_signed — branches d'erreur avec os.execute + io.open mockés
@@ -265,6 +135,34 @@ describe "auth/cert_generator", ->
       assert.are.equal fake_key, key
       assert.are.equal fake_cert, cert
       assert.is_nil err
+
+    -- Régression anti-collision PRNG : sans math.randomseed (jamais fait dans
+    -- ce projet), deux enfants forkés au même os.time! avec le même état PRNG
+    -- hérité produiraient le même math.random(...) et donc le même nom de
+    -- fichier temporaire, s'écrasant mutuellement leur cert/clé en cours de
+    -- génération. Avec os.time! ET math.random figés à une valeur constante
+    -- (simule deux enfants forkés identiques), le nom doit rester unique.
+    it "reste unique même à os.time!/math.random figés (simule deux enfants forkés identiques)", ->
+      fake_key  = "-----BEGIN EC PRIVATE KEY-----\nk\n-----END EC PRIVATE KEY-----\n"
+      fake_cert = "-----BEGIN CERTIFICATE-----\nc\n-----END CERTIFICATE-----\n"
+      orig_time, orig_random = os.time, math.random
+      os.time     = -> 1000000
+      math.random = (n) -> 42
+      seen_paths  = {}
+      os.execute  = (cmd) ->
+        path = cmd\match "%-keyout ([^%s]+)"
+        seen_paths[#seen_paths + 1] = path
+        0
+      io.open = (path, mode) ->
+        {
+          read:  (self, fmt) -> (path\find "key", 1, true) and fake_key or fake_cert
+          close: (self) -> true
+        }
+      generate_self_signed "example.com"
+      generate_self_signed "example.com"
+      os.time, math.random = orig_time, orig_random
+      assert.equals 2, #seen_paths
+      assert.are_not.equal seen_paths[1], seen_paths[2]
 
   it "génération avec px5g si disponible #px5g", ->
     f       = io.popen "which px5g 2>/dev/null"

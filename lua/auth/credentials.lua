@@ -328,18 +328,6 @@ register_user = function(username, password, secrets_path, current_secrets)
   end
   return new_secrets
 end
-local update_user_hash
-update_user_hash = function(username, password, secrets_path)
-  local new_entry = hash_password(password)
-  return rewrite_secrets_file(secrets_path, function(line)
-    local u = line:match("^([^:]+):")
-    if u == username then
-      return tostring(username) .. ":" .. tostring(new_entry)
-    else
-      return line
-    end
-  end)
-end
 local set_record
 set_record = function(username, record, secrets_path)
   if not (parse_record(record)) then
@@ -370,7 +358,6 @@ return {
   verify_password = verify_password,
   verify_response = verify_response,
   parse_record = parse_record,
-  update_user_hash = update_user_hash,
   set_record = set_record,
   load_secrets = load_secrets,
   valid_username = valid_username,
