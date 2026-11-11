@@ -5,6 +5,8 @@
 
 ssl_ok, ssl = pcall require, "auth.ffi_wolfssl"
 
+ffi = require "ffi"
+
 describe "auth/ffi_wolfssl", ->
   if not ssl_ok
     it "libwolfssl non disponible", -> pending "libwolfssl non disponible"
@@ -61,6 +63,58 @@ describe "auth/ffi_wolfssl", ->
       assert.is_false ctx.verify_peer
       assert.is_nil ctx.ca_file
       ssl.free_context ctx
+
+  describe "ALPN adaptatif (h2,http/1.1)", ->
+
+    it "préfère wolfSSL_CTX_UseALPN quand il est présent", ->
+      captured = {}
+      fake = {
+        wolfSSL_CTX_UseALPN: (ctx, list, sz, opts) ->
+          captured = { list: ffi.string(list, sz), size: sz, options: opts }
+          1
+      }
+      mode = ssl.alpn_configure_ctx fake, "CTX", ssl.ALPN_PROTOCOLS
+      assert.equals "ctx", mode
+      assert.equals "h2,http/1.1", captured.list
+      assert.equals 11, captured.size
+      assert.equals 1, captured.options
+
+    it "repli par objet SSL quand seul wolfSSL_UseALPN existe", ->
+      captured = {}
+      fake = {
+        wolfSSL_UseALPN: (obj, list, sz, opts) ->
+          captured = { list: ffi.string(list, sz), size: sz, options: opts }
+          1
+      }
+      assert.is_nil ssl.alpn_configure_ctx fake, "CTX"
+      assert.is_true ssl.alpn_configure_ssl fake, "SSL", ssl.ALPN_PROTOCOLS
+      assert.equals "h2,http/1.1", captured.list
+      assert.equals 11, captured.size
+      assert.equals 1, captured.options
+
+    it "ne tente rien quand aucun symbole ALPN n'est présent", ->
+      fake = {}
+      assert.is_nil ssl.alpn_configure_ctx fake, "CTX"
+      assert.is_false ssl.alpn_configure_ssl fake, "SSL"
+
+    it "échec du contexte → nil, sans annonce objet implicite", ->
+      fake = { wolfSSL_CTX_UseALPN: -> 0 }
+      assert.is_nil ssl.alpn_configure_ctx fake, "CTX"
+      assert.is_false ssl.alpn_configure_ssl fake, "SSL"
+
+    it "annonce serveur au niveau objet exposée par ALPN_PROTOCOLS", ->
+      assert.equals "h2,http/1.1", ssl.ALPN_PROTOCOLS
+
+    it "défaut AUTH : http/1.1 sans protocoles explicites", ->
+      captured = {}
+      fake = {
+        wolfSSL_CTX_UseALPN: (ctx, list, sz, opts) ->
+          captured = { list: ffi.string(list, sz) }
+          1
+      }
+      assert.equals "ctx", ssl.alpn_configure_ctx fake, "CTX"
+      assert.equals "http/1.1", captured.list
+      assert.equals "http/1.1", ssl.DEFAULT_ALPN_PROTOCOLS
 
   describe "constantes d'erreur SSL", ->
     it "SSL_ERROR_NONE vaut 0", ->

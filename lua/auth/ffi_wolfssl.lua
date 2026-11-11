@@ -33,6 +33,8 @@ ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
   int wolfSSL_check_domain_name(WOLFSSL *ssl, const char *dn);
   int wolfSSL_CTX_UseALPN(WOLFSSL_CTX *ctx, char *protocol_name_list,
                           unsigned int protocol_name_listSz, unsigned char options);
+  int wolfSSL_UseALPN(WOLFSSL *ssl, char *protocol_name_list,
+                      unsigned int protocol_name_listSz, unsigned char options);
   int wolfSSL_ALPN_GetProtocol(WOLFSSL *ssl, char **protocol_name, unsigned short *size);
   unsigned long wolfSSL_ERR_get_error(void);
   char* wolfSSL_ERR_reason_error_string(unsigned long err);
@@ -93,6 +95,8 @@ local CA_FILE_CANDIDATES = {
 local SSL_FILETYPE_PEM = 1
 local SSL_FILETYPE_ASN1 = 2
 local WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x01
+local ALPN_PROTOCOLS = "h2,http/1.1"
+local DEFAULT_ALPN_PROTOCOLS = "http/1.1"
 local _alpn_available = nil
 local get_ssl_errors
 get_ssl_errors = function()
@@ -117,9 +121,10 @@ local ssl_mt = {
   __index = { }
 }
 local symbol_available
-symbol_available = function(name)
+symbol_available = function(name, lib)
+  lib = lib or libwolfssl
   return pcall(function()
-    return libwolfssl[name]
+    return lib[name]
   end)
 end
 local ca_file_readable
@@ -177,6 +182,31 @@ verification_available = function(opts)
   end
   return true, nil, ca
 end
+local alpn_configure_ctx
+alpn_configure_ctx = function(lib, ctx, protocols)
+  protocols = protocols or DEFAULT_ALPN_PROTOCOLS
+  if not (symbol_available("wolfSSL_CTX_UseALPN", lib)) then
+    return nil
+  end
+  local ok, ret = pcall(function()
+    return lib.wolfSSL_CTX_UseALPN(ctx, ffi.cast("char*", protocols), #protocols, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH)
+  end)
+  if ok and ret == 1 then
+    return "ctx"
+  end
+  return nil
+end
+local alpn_configure_ssl
+alpn_configure_ssl = function(lib, ssl, protocols)
+  protocols = protocols or DEFAULT_ALPN_PROTOCOLS
+  if not (symbol_available("wolfSSL_UseALPN", lib)) then
+    return false
+  end
+  local ok, ret = pcall(function()
+    return lib.wolfSSL_UseALPN(ssl, ffi.cast("char*", protocols), #protocols, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH)
+  end)
+  return ok and ret == 1
+end
 local newcontext
 newcontext = function(opts)
   if opts == nil then
@@ -205,26 +235,32 @@ newcontext = function(opts)
     libwolfssl.wolfSSL_CTX_free(ctx)
     error("wolfSSL_CTX_use_PrivateKey_file() failed")
   end
+  local alpn_protocols = opts.alpn_protocols or DEFAULT_ALPN_PROTOCOLS
+  local alpn_mode = nil
   if _alpn_available ~= false then
-    local alpn = "http/1.1"
-    local ok_alpn, ret_alpn = pcall(function()
-      return libwolfssl.wolfSSL_CTX_UseALPN(ctx, ffi.cast("char*", alpn), #alpn, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH)
-    end)
-    _alpn_available = ok_alpn and ret_alpn == 1
-    if _alpn_available then
+    alpn_mode = alpn_configure_ctx(libwolfssl, ctx, alpn_protocols)
+    if alpn_mode == "ctx" then
+      _alpn_available = true
       log_debug(function()
         return {
           action = "ctx_use_alpn",
-          ret = ret_alpn,
-          protocols = "http/1.1"
+          protocols = alpn_protocols
+        }
+      end)
+    elseif symbol_available("wolfSSL_UseALPN") then
+      alpn_mode = "ssl"
+      _alpn_available = true
+      log_debug(function()
+        return {
+          action = "alpn_ssl_level",
+          protocols = alpn_protocols
         }
       end)
     else
+      _alpn_available = false
       log_debug(function()
         return {
-          action = "alpn_unavailable",
-          ok = ok_alpn,
-          ret = ret_alpn
+          action = "alpn_unavailable"
         }
       end)
     end
@@ -237,7 +273,16 @@ newcontext = function(opts)
   end
   return {
     ctx = ctx,
-    closed = false
+    closed = false,
+    alpn_mode = alpn_mode,
+    alpn_protocols = alpn_protocols,
+    alpn_configured_protocols = (function()
+      if alpn_mode == "ctx" then
+        return alpn_protocols
+      else
+        return nil
+      end
+    end)()
   }
 end
 local newclient_context
@@ -304,6 +349,30 @@ wrap = function(raw_socket, ctx_obj, opts)
   if ret < 0 then
     libwolfssl.wolfSSL_free(ssl)
     error("wolfSSL_set_fd() failed: ret=" .. ret)
+  end
+  local alpn_protocols = ctx_obj.alpn_protocols or DEFAULT_ALPN_PROTOCOLS
+  if ctx_obj.alpn_mode == "ssl" then
+    if not (alpn_configure_ssl(libwolfssl, ssl, alpn_protocols)) then
+      log_debug(function()
+        return {
+          action = "alpn_ssl_failed",
+          protocols = alpn_protocols
+        }
+      end)
+      _alpn_available = false
+    end
+  elseif ctx_obj.alpn_mode == "ctx" and ctx_obj.alpn_configured_protocols ~= alpn_protocols then
+    if not (alpn_configure_ctx(libwolfssl, ctx_obj.ctx, alpn_protocols)) then
+      log_debug(function()
+        return {
+          action = "alpn_ctx_update_failed",
+          protocols = alpn_protocols
+        }
+      end)
+      _alpn_available = false
+    else
+      ctx_obj.alpn_configured_protocols = alpn_protocols
+    end
   end
   if opts.sni and #opts.sni > 0 then
     local ret_sni = libwolfssl.wolfSSL_UseSNI(ssl, WOLFSSL_SNI_HOST_NAME, opts.sni, #opts.sni)
@@ -627,6 +696,11 @@ return {
   free_context = free_context,
   find_ca_file = find_ca_file,
   verification_available = verification_available,
+  symbol_available = symbol_available,
+  alpn_configure_ctx = alpn_configure_ctx,
+  alpn_configure_ssl = alpn_configure_ssl,
+  ALPN_PROTOCOLS = ALPN_PROTOCOLS,
+  DEFAULT_ALPN_PROTOCOLS = DEFAULT_ALPN_PROTOCOLS,
   libwolfssl = libwolfssl,
   SSL_ERROR_NONE = SSL_ERROR_NONE,
   SSL_ERROR_WANT_READ = SSL_ERROR_WANT_READ,

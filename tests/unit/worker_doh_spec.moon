@@ -3,6 +3,8 @@
 -- La détection PRI (HTTP/2 sans ALPN) est couverte par le test E2E G12.
 
 ffi = require "ffi"
+bit = require "bit"
+hpack = require "doh.hpack"
 
 -- Stubs minimaux pour charger worker_doh sans dépendances runtime.
 package.loaded["config"] = package.loaded["config"] or {
@@ -58,6 +60,7 @@ package.loaded["auth.cert"]       = {
 ssl_stub = { wrap: (sock, ctx) -> nil, "stub" }
 package.loaded["auth.ffi_wolfssl"] = {
   wrap: (sock, ctx) -> ssl_stub.wrap sock, ctx
+  ALPN_PROTOCOLS: "h2,http/1.1"
 }
 package.loaded["lib.socket"]  = { tcp: (-> nil), tcp6: (-> nil), select: (-> {}, {}) }
 package.loaded["lib.process"] = { fork_child: (-> 1) }
@@ -207,6 +210,51 @@ h2_frame_raw = (ftype, flags, sid, payload) ->
     bit.band(sid,                 0xFF)
   ) .. payload
 
+--- Découpe un flux de frames HTTP/2 serveur en {ftype, flags, sid, payload}.
+h2_parse_frames = (raw) ->
+  frames = {}
+  pos = 1
+  while pos + 8 <= #raw
+    len = raw\byte(pos) * 65536 + raw\byte(pos + 1) * 256 + raw\byte(pos + 2)
+    ftype = raw\byte pos + 3
+    flags = raw\byte pos + 4
+    sid = bit.band(bit.bor(
+      bit.lshift(raw\byte(pos + 5), 24),
+      bit.lshift(raw\byte(pos + 6), 16),
+      bit.lshift(raw\byte(pos + 7), 8),
+      raw\byte(pos + 8)
+    ), 0x7FFFFFFF)
+    payload = raw\sub pos + 9, pos + 8 + len
+    frames[#frames + 1] = { ftype, flags, sid, payload }
+    pos += 9 + len
+  frames
+
+--- Décode le premier bloc HEADERS d'un flux serveur.
+h2_response_headers = (sent) ->
+  headers = nil
+  for f in *h2_parse_frames sent
+    if f[1] == 0x1 and not headers
+      headers, err = hpack.decode hpack.new_decoder!, f[4]
+      assert.is_nil err
+  headers
+
+--- Décode le :status du premier bloc HEADERS d'un flux serveur.
+h2_response_status = (sent) ->
+  hpack.header_value h2_response_headers(sent), ":status"
+
+--- Concatène les payloads DATA d'un flux serveur.
+h2_response_body = (sent) ->
+  parts = {}
+  for f in *h2_parse_frames sent
+    parts[#parts + 1] = f[4] if f[1] == 0x0
+  table.concat parts
+
+--- Construit une frame HEADERS avec un bloc HPACK minimal.
+h2_headers_frame = (sid, headers, end_stream=false) ->
+  flags = 0x4
+  flags = bit.bor flags, 0x1 if end_stream
+  h2_frame_raw 0x1, flags, sid, hpack.encode headers
+
 describe "worker_doh.handle_h2 — plafond DATA", ->
   bit = require "bit"
 
@@ -223,20 +271,184 @@ describe "worker_doh.handle_h2 — plafond DATA", ->
     expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,6)
     assert.equals expected_goaway, sent\sub -17
 
--- ── handle_h2 : limite connue (GET HEADERS+END_STREAM sans DATA) ────────────
+-- ── handle_h2 : routage par pseudo-en-têtes HPACK ───────────────────────────
 
-describe "worker_doh.handle_h2 — GET HTTP/2 sans DATA", ->
-  it "HEADERS avec END_STREAM sans DATA → h2_incomplete + GOAWAY", ->
-    -- Limite connue : handle_h2 ne décode pas HPACK et ne termine le flux que
-    -- sur une frame DATA avec END_STREAM. Un GET RFC 8484 (HEADERS +
-    -- END_STREAM, sans DATA) est donc refusé avec GOAWAY.
-    conn = make_h2_conn h2_frame_raw 0x1, 0x1, 1, ""
+describe "worker_doh.handle_h2 — routage HPACK", ->
+
+  capture = {}
+  doh_query_b64 = "AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB"
+
+  before_each ->
+    capture = { processed: {}, resp: "DNS_RESPONSE" }
+    query_stub.process_query = (raw, ip, mac, up, vlan) ->
+      capture.processed[#capture.processed + 1] = { :raw, :ip, :mac, :up, :vlan }
+      capture.resp, nil
+
+  h2_run = (frames) ->
+    conn = make_h2_conn frames
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    { :resp, :err, sent: conn._sent! }
+
+  it "GET RFC 8484 (HEADERS + END_STREAM, sans DATA) est traité", ->
+    path = "/dns-query?dns=#{doh_query_b64}"
+    frame = h2_headers_frame 1, {
+      { ":method", "GET" }
+      { ":scheme", "https" }
+      { ":path", path }
+      { ":authority", "1.2.3.4" }
+    }, true
+    r = h2_run frame
+    assert.is_nil r.err
+    assert.equals "DNS_RESPONSE", r.resp
+    assert.equals 1, #capture.processed
+    assert.equals doh.b64url_decode(doh_query_b64), capture.processed[1].raw
+    assert.equals "200", h2_response_status r.sent
+
+  it "POST sur /dns-query traite le corps DATA", ->
+    body = "\0\1\2\3"
+    headers = h2_headers_frame 1, {
+      { ":method", "POST" }
+      { ":scheme", "https" }
+      { ":path", "/dns-query" }
+      { ":authority", "1.2.3.4" }
+    }
+    data = h2_frame_raw 0x0, 0x1, 1, body
+    r = h2_run headers .. data
+    assert.is_nil r.err
+    assert.equals body, capture.processed[1].raw
+    assert.equals "200", h2_response_status r.sent
+
+  it "GET JSON (Accept application/dns-json) rend le JSON DNS", ->
+    capture.resp = string.char(0x12, 0x34, 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0) ..
+      "\7example\3com\0\0\1\0\1"
+    frame = h2_headers_frame 1, {
+      { ":method", "GET" }
+      { ":path", "/dns-query?name=example.com&type=A" }
+      { "accept", "application/dns-json" }
+    }, true
+    r = h2_run frame
+    assert.is_nil r.err
+    assert.equals 1, #capture.processed
+    assert.equals "200", h2_response_status r.sent
+    resp_headers = h2_response_headers r.sent
+    assert.equals "application/dns-json", hpack.header_value(resp_headers, "content-type")
+    assert.truthy h2_response_body(r.sent)\find '"Status":0', 1, true
+
+  it "POST sur un autre chemin rend 404 sans traiter de DNS", ->
+    frame = h2_headers_frame 1, {
+      { ":method", "POST" }
+      { ":path", "/autre" }
+    }, true
+    r = h2_run frame
+    assert.is_nil r.resp
+    assert.equals "h2_status_404", r.err
+    assert.equals 0, #capture.processed
+    assert.equals "404", h2_response_status r.sent
+
+  it "GET sur un autre chemin rend 404 sans traiter de DNS", ->
+    frame = h2_headers_frame 1, {
+      { ":method", "GET" }
+      { ":path", "/autre?dns=#{doh_query_b64}" }
+    }, true
+    r = h2_run frame
+    assert.equals "h2_status_404", r.err
+    assert.equals 0, #capture.processed
+    assert.equals "404", h2_response_status r.sent
+
+  it "méthode autre que GET/POST rend 405 sans traiter de DNS", ->
+    frame = h2_headers_frame 1, {
+      { ":method", "PUT" }
+      { ":path", "/dns-query" }
+    }, true
+    r = h2_run frame
+    assert.equals "h2_status_405", r.err
+    assert.equals 0, #capture.processed
+    assert.equals "405", h2_response_status r.sent
+
+  it "GET sur /dns-query sans paramètre dns rend 400", ->
+    frame = h2_headers_frame 1, {
+      { ":method", "GET" }
+      { ":path", "/dns-query" }
+    }, true
+    r = h2_run frame
+    assert.equals "h2_status_400", r.err
+    assert.equals 0, #capture.processed
+    assert.equals "400", h2_response_status r.sent
+
+  it "HEADERS sans pseudo-en-têtes rend 405", ->
+    -- Bloc HPACK vide : décodable, mais ni :method ni :path.
+    conn = make_h2_conn h2_frame_raw 0x1, 0x5, 1, ""
     resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
     assert.is_nil resp
-    assert.equals "h2_incomplete", err
-    sent = conn._sent!
+    assert.equals "h2_status_405", err
+    assert.equals "405", h2_response_status conn._sent!
+
+  it "HEADERS PADDED + PRIORITY : remplit puis ignore les champs de contrôle", ->
+    path = "/dns-query?dns=#{doh_query_b64}"
+    block = hpack.encode {
+      { ":method", "GET" }
+      { ":scheme", "https" }
+      { ":path", path }
+    }
+    -- pad length (3) + priorité (dépendance 0, poids 15) + bloc + padding.
+    payload = string.char(3) .. "\0\0\0\0\x0f" .. block .. "\0\0\0"
+    frame = h2_frame_raw 0x1, 0x2d, 1, payload
+    r = h2_run frame
+    assert.is_nil r.err
+    assert.equals 1, #capture.processed
+    assert.equals doh.b64url_decode(doh_query_b64), capture.processed[1].raw
+
+  it "HEADERS PADDED avec padding hors payload → h2_headers_invalid", ->
+    -- pad length 5 alors qu'il ne reste aucun octet.
+    frame = h2_frame_raw 0x1, 0x0d, 1, "\x05"
+    r = h2_run frame
+    assert.is_nil r.resp
+    assert.equals "h2_headers_invalid", r.err
     expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,1)
-    assert.equals expected_goaway, sent\sub -17
+    assert.equals expected_goaway, r.sent\sub -17
+
+  it "HEADERS sur le stream 0 → h2_protocol_error", ->
+    block = hpack.encode { { ":method", "GET" }, { ":path", "/dns-query" } }
+    frame = h2_frame_raw 0x1, 0x5, 0, block
+    r = h2_run frame
+    assert.equals "h2_protocol_error", r.err
+
+  it "CONTINUATION d'un autre stream → h2_headers_invalid", ->
+    headers = h2_frame_raw 0x1, 0x0, 1, "x"
+    continuation = h2_frame_raw 0x9, 0x4, 3, ""
+    r = h2_run headers .. continuation
+    assert.equals "h2_headers_invalid", r.err
+
+  it "bloc d'en-têtes cumulé supérieur à 65535 octets refusé", ->
+    frames = { h2_frame_raw 0x1, 0x0, 1, string.rep("x", 16384) }
+    for _ = 1, 3
+      frames[#frames + 1] = h2_frame_raw 0x9, 0x0, 1, string.rep("x", 16384)
+    r = h2_run table.concat frames
+    assert.is_nil r.resp
+    assert.equals "h2_headers_too_large", r.err
+
+  it "bloc d'en-têtes réparti sur HEADERS + CONTINUATION", ->
+    path = "/dns-query?dns=#{doh_query_b64}"
+    block = hpack.encode {
+      { ":method", "GET" }
+      { ":scheme", "https" }
+      { ":path", path }
+    }
+    mid = math.floor(#block / 2)
+    headers = h2_frame_raw 0x1, 0x1, 1, block\sub(1, mid)
+    continuation = h2_frame_raw 0x9, 0x4, 1, block\sub(mid + 1)
+    r = h2_run headers .. continuation
+    assert.is_nil r.err
+    assert.equals 1, #capture.processed
+    assert.equals doh.b64url_decode(doh_query_b64), capture.processed[1].raw
+
+  it "bloc d'en-têtes indécodable → GOAWAY COMPRESSION_ERROR (0x9)", ->
+    conn = make_h2_conn h2_frame_raw 0x1, 0x5, 1, "\x80"
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "h2_compression_error", err
+    expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,9)
+    assert.equals expected_goaway, conn._sent!\sub -17
 
 -- ── Helpers JSON / DNS forgés ────────────────────────────────────────────────
 -- Réponses DNS construites à la main (header + question example.com + RRs) pour

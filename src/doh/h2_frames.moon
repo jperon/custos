@@ -11,10 +11,13 @@ H2_FRAME_SETTINGS      = 0x4
 H2_FRAME_PING          = 0x6
 H2_FRAME_GOAWAY        = 0x7
 H2_FRAME_WINDOW_UPDATE = 0x8
+H2_FRAME_CONTINUATION  = 0x9
 
 H2_FLAG_END_STREAM  = 0x1
 H2_FLAG_END_HEADERS = 0x4
 H2_FLAG_ACK         = 0x1
+H2_FLAG_PADDED      = 0x8
+H2_FLAG_PRIORITY    = 0x20
 
 -- SETTINGS_MAX_FRAME_SIZE par défaut (RFC 7540 §6.5.2) : aucun pair ne peut
 -- envoyer de frame plus grande sans avoir négocié une valeur supérieure.
@@ -94,7 +97,9 @@ h2_write_frame = (conn, ftype, flags, sid, payload) ->
 {
   :H2_FRAME_DATA, :H2_FRAME_HEADERS, :H2_FRAME_SETTINGS
   :H2_FRAME_PING, :H2_FRAME_GOAWAY, :H2_FRAME_WINDOW_UPDATE
+  :H2_FRAME_CONTINUATION
   :H2_FLAG_END_STREAM, :H2_FLAG_END_HEADERS, :H2_FLAG_ACK
+  :H2_FLAG_PADDED, :H2_FLAG_PRIORITY
   :H2_DEFAULT_MAX_FRAME_SIZE
   :h2_recv_exact, :h2_read_frame, :h2_write_frame
 }

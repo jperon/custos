@@ -35,6 +35,7 @@ do
 end
 local upstream_mod = require("doh.upstream")
 local upstream_select = require("doh.upstream_select")
+local hpack = require("doh.hpack")
 local b64_chars = { }
 do
   local s = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -86,6 +87,21 @@ query_param = function(path, name)
   if val then
     return url_decode(val)
   end
+end
+local is_doh_path
+is_doh_path = function(path)
+  if not (type(path) == "string") then
+    return false
+  end
+  return path == "/dns-query" or (path:match("^/dns%-query%?")) ~= nil
+end
+local dns_from_query
+dns_from_query = function(path)
+  if not (type(path) == "string") then
+    return nil
+  end
+  local dns_param = path:match("[?&]dns=([^&]+)")
+  return dns_param and b64url_decode(dns_param)
 end
 local json_escape
 json_escape = function(s)
@@ -238,20 +254,98 @@ make_server6 = function(port)
   srv6:settimeout(1)
   return srv6
 end
-local H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, H2_DEFAULT_MAX_FRAME_SIZE, h2_read_frame, h2_write_frame
+local H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FRAME_CONTINUATION, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, H2_FLAG_PADDED, H2_FLAG_PRIORITY, H2_DEFAULT_MAX_FRAME_SIZE, h2_read_frame, h2_write_frame
 do
   local _obj_0 = require("doh.h2_frames")
-  H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, H2_DEFAULT_MAX_FRAME_SIZE, h2_read_frame, h2_write_frame = _obj_0.H2_FRAME_DATA, _obj_0.H2_FRAME_HEADERS, _obj_0.H2_FRAME_SETTINGS, _obj_0.H2_FRAME_PING, _obj_0.H2_FRAME_GOAWAY, _obj_0.H2_FRAME_WINDOW_UPDATE, _obj_0.H2_FLAG_END_STREAM, _obj_0.H2_FLAG_END_HEADERS, _obj_0.H2_FLAG_ACK, _obj_0.H2_DEFAULT_MAX_FRAME_SIZE, _obj_0.h2_read_frame, _obj_0.h2_write_frame
+  H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FRAME_CONTINUATION, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, H2_FLAG_PADDED, H2_FLAG_PRIORITY, H2_DEFAULT_MAX_FRAME_SIZE, h2_read_frame, h2_write_frame = _obj_0.H2_FRAME_DATA, _obj_0.H2_FRAME_HEADERS, _obj_0.H2_FRAME_SETTINGS, _obj_0.H2_FRAME_PING, _obj_0.H2_FRAME_GOAWAY, _obj_0.H2_FRAME_WINDOW_UPDATE, _obj_0.H2_FRAME_CONTINUATION, _obj_0.H2_FLAG_END_STREAM, _obj_0.H2_FLAG_END_HEADERS, _obj_0.H2_FLAG_ACK, _obj_0.H2_FLAG_PADDED, _obj_0.H2_FLAG_PRIORITY, _obj_0.H2_DEFAULT_MAX_FRAME_SIZE, _obj_0.h2_read_frame, _obj_0.h2_write_frame
 end
 local h2_encode_response_headers
-h2_encode_response_headers = function()
-  return "\x88\x5f\x17application/dns-message"
+h2_encode_response_headers = function(content_type)
+  return hpack.encode({
+    {
+      ":status",
+      "200"
+    },
+    {
+      "content-type",
+      content_type
+    }
+  })
 end
+local H2_PROTOCOL_ERROR = 0x1
 local H2_FRAME_SIZE_ERROR = 0x6
+local H2_COMPRESSION_ERROR = 0x9
 local H2_MAX_BODY = 65535
+local H2_MAX_HEADER_BLOCK = 65535
+local H2_MAX_CONTINUATION = 64
 local h2_goaway
 h2_goaway = function(conn, code)
   return h2_write_frame(conn, H2_FRAME_GOAWAY, 0, 0, "\x00\x00\x00\x00\x00\x00\x00" .. string.char(code))
+end
+local read_header_block
+read_header_block = function(conn, sid, flags, payload)
+  local pos = 1
+  local last = #payload
+  if bit.band(flags, H2_FLAG_PADDED) ~= 0 then
+    if pos > last then
+      return nil, false, "h2_headers_invalid"
+    end
+    local pad_len = payload:byte(pos)
+    pos = pos + 1
+    if pad_len > last - pos + 1 then
+      return nil, false, "h2_headers_invalid"
+    end
+    last = last - pad_len
+  end
+  if bit.band(flags, H2_FLAG_PRIORITY) ~= 0 then
+    if last - pos + 1 < 5 then
+      return nil, false, "h2_headers_invalid"
+    end
+    pos = pos + 5
+  end
+  local end_stream = bit.band(flags, H2_FLAG_END_STREAM) ~= 0
+  local parts = {
+    payload:sub(pos, last)
+  }
+  local size = #parts[1]
+  local continuations = 0
+  while bit.band(flags, H2_FLAG_END_HEADERS) == 0 do
+    continuations = continuations + 1
+    if continuations > H2_MAX_CONTINUATION then
+      return nil, end_stream, "h2_headers_invalid"
+    end
+    local ctype, cflags, csid, cpayload = h2_read_frame(conn, H2_DEFAULT_MAX_FRAME_SIZE)
+    if not ctype then
+      if cflags == "frame_too_large" then
+        return nil, end_stream, "frame_too_large"
+      end
+      return nil, end_stream, "h2_headers_invalid"
+    end
+    if ctype ~= H2_FRAME_CONTINUATION or csid ~= sid then
+      return nil, end_stream, "h2_headers_invalid"
+    end
+    size = size + #cpayload
+    if size > H2_MAX_HEADER_BLOCK then
+      return nil, end_stream, "h2_headers_too_large"
+    end
+    parts[#parts + 1] = cpayload
+    flags = cflags
+  end
+  return table.concat(parts), end_stream, nil
+end
+local h2_reject
+h2_reject = function(conn, sid, status)
+  local block = hpack.encode({
+    {
+      ":status",
+      status
+    }
+  })
+  local ok_w, w_err = h2_write_frame(conn, H2_FRAME_HEADERS, bit.bor(H2_FLAG_END_HEADERS, H2_FLAG_END_STREAM), sid, block)
+  if not (ok_w) then
+    return nil, w_err
+  end
+  return nil, "h2_status_" .. tostring(status)
 end
 local handle_h2
 handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
@@ -261,10 +355,15 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
   if not (ok_w) then
     return nil, w_err
   end
+  local decoder = hpack.new_decoder()
   local stream_id = nil
+  local method = nil
+  local path = nil
+  local accept = nil
+  local json_mode = false
   local dns_chunks = { }
   local dns_bytes = 0
-  local done = false
+  local end_stream = false
   for _ = 1, 30 do
     local ftype, flags, sid, payload = h2_read_frame(conn, H2_DEFAULT_MAX_FRAME_SIZE)
     if not ftype then
@@ -280,7 +379,39 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
         return nil, w_err
       end
     elseif ftype == H2_FRAME_HEADERS and not stream_id then
+      if sid == 0 then
+        h2_goaway(conn, H2_PROTOCOL_ERROR)
+        return nil, "h2_protocol_error"
+      end
       stream_id = sid
+      local block, headers_end_stream, herr = read_header_block(conn, sid, flags, payload)
+      if not (block) then
+        if herr == "frame_too_large" then
+          h2_goaway(conn, H2_FRAME_SIZE_ERROR)
+          return nil, "h2_frame_too_large"
+        end
+        h2_goaway(conn, H2_PROTOCOL_ERROR)
+        return nil, herr
+      end
+      local headers, derr = hpack.decode(decoder, block)
+      if not (headers) then
+        log_debug(function()
+          return {
+            action = "h2_hpack_error",
+            peer = peer_ip,
+            err = derr
+          }
+        end)
+        h2_goaway(conn, H2_COMPRESSION_ERROR)
+        return nil, "h2_compression_error"
+      end
+      method = hpack.header_value(headers, ":method")
+      path = hpack.header_value(headers, ":path")
+      accept = hpack.header_value(headers, "accept")
+      end_stream = headers_end_stream
+      if end_stream then
+        break
+      end
     elseif ftype == H2_FRAME_DATA and sid == stream_id then
       if #payload > 0 then
         dns_bytes = dns_bytes + #payload
@@ -291,7 +422,7 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
         dns_chunks[#dns_chunks + 1] = payload
       end
       if bit.band(flags, H2_FLAG_END_STREAM) ~= 0 then
-        done = true
+        end_stream = true
         break
       end
     elseif ftype == H2_FRAME_PING and bit.band(flags, H2_FLAG_ACK) == 0 then
@@ -301,14 +432,39 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
       end
     end
   end
-  if not (done and stream_id) then
-    h2_goaway(conn, 0x1)
+  if not (end_stream and stream_id) then
+    h2_goaway(conn, H2_PROTOCOL_ERROR)
     return nil, "h2_incomplete"
   end
-  local dns_raw = table.concat(dns_chunks)
-  if not (#dns_raw > 0) then
-    h2_goaway(conn, 0x1)
-    return nil, "h2_empty_body"
+  local dns_raw = nil
+  if method == "POST" then
+    if not (is_doh_path(path)) then
+      return h2_reject(conn, stream_id, "404")
+    end
+    dns_raw = table.concat(dns_chunks)
+    if not (#dns_raw > 0) then
+      return h2_reject(conn, stream_id, "400")
+    end
+  elseif method == "GET" then
+    if not (is_doh_path(path)) then
+      return h2_reject(conn, stream_id, "404")
+    end
+    dns_raw = dns_from_query(path)
+    if not (dns_raw and #dns_raw > 0) then
+      if dns_raw == nil and accept and accept:match("application/dns%-json") then
+        local name = query_param(path, "name")
+        local qtype = qtype_from_name(query_param(path, "type"))
+        dns_raw = build_dns_query(name, qtype)
+        if dns_raw then
+          json_mode = true
+        end
+      end
+      if not (dns_raw and #dns_raw > 0) then
+        return h2_reject(conn, stream_id, "400")
+      end
+    end
+  else
+    return h2_reject(conn, stream_id, "405")
   end
   local resp_raw, q_err = process_query(dns_raw, peer_ip, peer_mac, upstream, peer_vlan)
   if not (resp_raw) then
@@ -322,12 +478,20 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
     h2_goaway(conn, 0x2)
     return nil, "h2_query_error"
   end
-  local hpack = h2_encode_response_headers()
-  ok_w, w_err = h2_write_frame(conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, hpack)
+  local resp_block = nil
+  local body = resp_raw
+  local content_type = "application/dns-message"
+  if json_mode then
+    body = dns_response_json(resp_raw)
+    body = body or "{\"Status\":2}"
+    content_type = "application/dns-json"
+  end
+  resp_block = h2_encode_response_headers(content_type)
+  ok_w, w_err = h2_write_frame(conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, resp_block)
   if not (ok_w) then
     return nil, w_err
   end
-  ok_w, w_err = h2_write_frame(conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw)
+  ok_w, w_err = h2_write_frame(conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, body)
   if not (ok_w) then
     return nil, w_err
   end
@@ -387,6 +551,7 @@ handle_doh_client = function(args)
       end)
       error("Certificate context is nil")
     end
+    tls_ctx.alpn_protocols = ssl.ALPN_PROTOCOLS
     client:settimeout(nil)
     local client_timeout = (state.client_timeout and tonumber(state.client_timeout)) or 15
     apply_io_timeouts(client, client_timeout)
@@ -511,13 +676,23 @@ handle_doh_client = function(args)
       end)
       local h2_resp, h2_err = handle_h2(tls_client, peer_ip, peer_mac, state.upstream, peer_vlan)
       if h2_err then
-        log_warn(function()
-          return {
-            action = "h2_failed",
-            peer = peer_ip,
-            err = h2_err
-          }
-        end)
+        if h2_err:match("^h2_status_") then
+          log_debug(function()
+            return {
+              action = "h2_rejected",
+              peer = peer_ip,
+              err = h2_err
+            }
+          end)
+        else
+          log_warn(function()
+            return {
+              action = "h2_failed",
+              peer = peer_ip,
+              err = h2_err
+            }
+          end)
+        end
       else
         log_debug(function()
           return {
@@ -532,7 +707,7 @@ handle_doh_client = function(args)
     end
     local dns_raw = nil
     local json_mode = false
-    if req.path == "/dns-query" or req.path:match("^/dns%-query%?") then
+    if is_doh_path(req.path) then
       local ct = req.headers["content-type"] or ""
       local accept = req.headers["accept"] or ""
       if req.method == "POST" and ct:match("application/dns%-message") then
@@ -545,9 +720,8 @@ handle_doh_client = function(args)
         end)
         dns_raw = req.body
       elseif req.method == "GET" then
-        local dns_param = req.path:match("[?&]dns=([^&]+)")
-        if dns_param then
-          dns_raw = b64url_decode(dns_param)
+        dns_raw = dns_from_query(req.path)
+        if dns_raw then
           log_debug(function()
             return {
               action = "get",

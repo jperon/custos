@@ -99,6 +99,15 @@ describe "doh.h2_frames", ->
     it "H2_FLAG_ACK = 0x1", ->
       assert.equals 0x1, mod.H2_FLAG_ACK
 
+    it "H2_FRAME_CONTINUATION = 0x9", ->
+      assert.equals 0x9, mod.H2_FRAME_CONTINUATION
+
+    it "H2_FLAG_PADDED = 0x8", ->
+      assert.equals 0x8, mod.H2_FLAG_PADDED
+
+    it "H2_FLAG_PRIORITY = 0x20", ->
+      assert.equals 0x20, mod.H2_FLAG_PRIORITY
+
 -- Encode uniquement l'en-tête de 9 octets avec une longueur annoncée.
 encode_header = (len, ftype, flags, sid) ->
   string.char(
