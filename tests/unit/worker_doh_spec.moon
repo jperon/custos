@@ -60,6 +60,7 @@ package.loaded["auth.cert"]       = {
 ssl_stub = { wrap: (sock, ctx) -> nil, "stub" }
 package.loaded["auth.ffi_wolfssl"] = {
   wrap: (sock, ctx) -> ssl_stub.wrap sock, ctx
+  ALPN_PROTOCOLS: "h2,http/1.1"
 }
 package.loaded["lib.socket"]  = { tcp: (-> nil), tcp6: (-> nil), select: (-> {}, {}) }
 package.loaded["lib.process"] = { fork_child: (-> 1) }
@@ -228,15 +229,25 @@ h2_parse_frames = (raw) ->
     pos += 9 + len
   frames
 
---- Décode le :status du premier bloc HEADERS d'un flux serveur.
-h2_response_status = (sent) ->
-  status = nil
+--- Décode le premier bloc HEADERS d'un flux serveur.
+h2_response_headers = (sent) ->
+  headers = nil
   for f in *h2_parse_frames sent
-    if f[1] == 0x1 and not status
+    if f[1] == 0x1 and not headers
       headers, err = hpack.decode hpack.new_decoder!, f[4]
       assert.is_nil err
-      status = hpack.header_value headers, ":status"
-  status
+  headers
+
+--- Décode le :status du premier bloc HEADERS d'un flux serveur.
+h2_response_status = (sent) ->
+  hpack.header_value h2_response_headers(sent), ":status"
+
+--- Concatène les payloads DATA d'un flux serveur.
+h2_response_body = (sent) ->
+  parts = {}
+  for f in *h2_parse_frames sent
+    parts[#parts + 1] = f[4] if f[1] == 0x0
+  table.concat parts
 
 --- Construit une frame HEADERS avec un bloc HPACK minimal.
 h2_headers_frame = (sid, headers, end_stream=false) ->
@@ -307,6 +318,22 @@ describe "worker_doh.handle_h2 — routage HPACK", ->
     assert.equals body, capture.processed[1].raw
     assert.equals "200", h2_response_status r.sent
 
+  it "GET JSON (Accept application/dns-json) rend le JSON DNS", ->
+    capture.resp = string.char(0x12, 0x34, 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0) ..
+      "\7example\3com\0\0\1\0\1"
+    frame = h2_headers_frame 1, {
+      { ":method", "GET" }
+      { ":path", "/dns-query?name=example.com&type=A" }
+      { "accept", "application/dns-json" }
+    }, true
+    r = h2_run frame
+    assert.is_nil r.err
+    assert.equals 1, #capture.processed
+    assert.equals "200", h2_response_status r.sent
+    resp_headers = h2_response_headers r.sent
+    assert.equals "application/dns-json", hpack.header_value(resp_headers, "content-type")
+    assert.truthy h2_response_body(r.sent)\find '"Status":0', 1, true
+
   it "POST sur un autre chemin rend 404 sans traiter de DNS", ->
     frame = h2_headers_frame 1, {
       { ":method", "POST" }
@@ -370,6 +397,35 @@ describe "worker_doh.handle_h2 — routage HPACK", ->
     assert.is_nil r.err
     assert.equals 1, #capture.processed
     assert.equals doh.b64url_decode(doh_query_b64), capture.processed[1].raw
+
+  it "HEADERS PADDED avec padding hors payload → h2_headers_invalid", ->
+    -- pad length 5 alors qu'il ne reste aucun octet.
+    frame = h2_frame_raw 0x1, 0x0d, 1, "\x05"
+    r = h2_run frame
+    assert.is_nil r.resp
+    assert.equals "h2_headers_invalid", r.err
+    expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,1)
+    assert.equals expected_goaway, r.sent\sub -17
+
+  it "HEADERS sur le stream 0 → h2_protocol_error", ->
+    block = hpack.encode { { ":method", "GET" }, { ":path", "/dns-query" } }
+    frame = h2_frame_raw 0x1, 0x5, 0, block
+    r = h2_run frame
+    assert.equals "h2_protocol_error", r.err
+
+  it "CONTINUATION d'un autre stream → h2_headers_invalid", ->
+    headers = h2_frame_raw 0x1, 0x0, 1, "x"
+    continuation = h2_frame_raw 0x9, 0x4, 3, ""
+    r = h2_run headers .. continuation
+    assert.equals "h2_headers_invalid", r.err
+
+  it "bloc d'en-têtes cumulé supérieur à 65535 octets refusé", ->
+    frames = { h2_frame_raw 0x1, 0x0, 1, string.rep("x", 16384) }
+    for _ = 1, 3
+      frames[#frames + 1] = h2_frame_raw 0x9, 0x0, 1, string.rep("x", 16384)
+    r = h2_run table.concat frames
+    assert.is_nil r.resp
+    assert.equals "h2_headers_too_large", r.err
 
   it "bloc d'en-têtes réparti sur HEADERS + CONTINUATION", ->
     path = "/dns-query?dns=#{doh_query_b64}"

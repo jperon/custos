@@ -73,7 +73,7 @@ describe "auth/ffi_wolfssl", ->
           captured = { list: ffi.string(list, sz), size: sz, options: opts }
           1
       }
-      mode = ssl.alpn_configure_ctx fake, "CTX"
+      mode = ssl.alpn_configure_ctx fake, "CTX", ssl.ALPN_PROTOCOLS
       assert.equals "ctx", mode
       assert.equals "h2,http/1.1", captured.list
       assert.equals 11, captured.size
@@ -87,7 +87,7 @@ describe "auth/ffi_wolfssl", ->
           1
       }
       assert.is_nil ssl.alpn_configure_ctx fake, "CTX"
-      assert.is_true ssl.alpn_configure_ssl fake, "SSL"
+      assert.is_true ssl.alpn_configure_ssl fake, "SSL", ssl.ALPN_PROTOCOLS
       assert.equals "h2,http/1.1", captured.list
       assert.equals 11, captured.size
       assert.equals 1, captured.options
@@ -104,6 +104,17 @@ describe "auth/ffi_wolfssl", ->
 
     it "annonce serveur au niveau objet exposée par ALPN_PROTOCOLS", ->
       assert.equals "h2,http/1.1", ssl.ALPN_PROTOCOLS
+
+    it "défaut AUTH : http/1.1 sans protocoles explicites", ->
+      captured = {}
+      fake = {
+        wolfSSL_CTX_UseALPN: (ctx, list, sz, opts) ->
+          captured = { list: ffi.string(list, sz) }
+          1
+      }
+      assert.equals "ctx", ssl.alpn_configure_ctx fake, "CTX"
+      assert.equals "http/1.1", captured.list
+      assert.equals "http/1.1", ssl.DEFAULT_ALPN_PROTOCOLS
 
   describe "constantes d'erreur SSL", ->
     it "SSL_ERROR_NONE vaut 0", ->

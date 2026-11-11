@@ -260,7 +260,7 @@ do
   H2_FRAME_DATA, H2_FRAME_HEADERS, H2_FRAME_SETTINGS, H2_FRAME_PING, H2_FRAME_GOAWAY, H2_FRAME_WINDOW_UPDATE, H2_FRAME_CONTINUATION, H2_FLAG_END_STREAM, H2_FLAG_END_HEADERS, H2_FLAG_ACK, H2_FLAG_PADDED, H2_FLAG_PRIORITY, H2_DEFAULT_MAX_FRAME_SIZE, h2_read_frame, h2_write_frame = _obj_0.H2_FRAME_DATA, _obj_0.H2_FRAME_HEADERS, _obj_0.H2_FRAME_SETTINGS, _obj_0.H2_FRAME_PING, _obj_0.H2_FRAME_GOAWAY, _obj_0.H2_FRAME_WINDOW_UPDATE, _obj_0.H2_FRAME_CONTINUATION, _obj_0.H2_FLAG_END_STREAM, _obj_0.H2_FLAG_END_HEADERS, _obj_0.H2_FLAG_ACK, _obj_0.H2_FLAG_PADDED, _obj_0.H2_FLAG_PRIORITY, _obj_0.H2_DEFAULT_MAX_FRAME_SIZE, _obj_0.h2_read_frame, _obj_0.h2_write_frame
 end
 local h2_encode_response_headers
-h2_encode_response_headers = function()
+h2_encode_response_headers = function(content_type)
   return hpack.encode({
     {
       ":status",
@@ -268,7 +268,7 @@ h2_encode_response_headers = function()
     },
     {
       "content-type",
-      "application/dns-message"
+      content_type
     }
   })
 end
@@ -359,6 +359,8 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
   local stream_id = nil
   local method = nil
   local path = nil
+  local accept = nil
+  local json_mode = false
   local dns_chunks = { }
   local dns_bytes = 0
   local end_stream = false
@@ -405,6 +407,7 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
       end
       method = hpack.header_value(headers, ":method")
       path = hpack.header_value(headers, ":path")
+      accept = hpack.header_value(headers, "accept")
       end_stream = headers_end_stream
       if end_stream then
         break
@@ -448,7 +451,17 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
     end
     dns_raw = dns_from_query(path)
     if not (dns_raw and #dns_raw > 0) then
-      return h2_reject(conn, stream_id, "400")
+      if dns_raw == nil and accept and accept:match("application/dns%-json") then
+        local name = query_param(path, "name")
+        local qtype = qtype_from_name(query_param(path, "type"))
+        dns_raw = build_dns_query(name, qtype)
+        if dns_raw then
+          json_mode = true
+        end
+      end
+      if not (dns_raw and #dns_raw > 0) then
+        return h2_reject(conn, stream_id, "400")
+      end
     end
   else
     return h2_reject(conn, stream_id, "405")
@@ -465,12 +478,20 @@ handle_h2 = function(conn, peer_ip, peer_mac, upstream, peer_vlan)
     h2_goaway(conn, 0x2)
     return nil, "h2_query_error"
   end
-  local resp_block = h2_encode_response_headers()
+  local resp_block = nil
+  local body = resp_raw
+  local content_type = "application/dns-message"
+  if json_mode then
+    body = dns_response_json(resp_raw)
+    body = body or "{\"Status\":2}"
+    content_type = "application/dns-json"
+  end
+  resp_block = h2_encode_response_headers(content_type)
   ok_w, w_err = h2_write_frame(conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, resp_block)
   if not (ok_w) then
     return nil, w_err
   end
-  ok_w, w_err = h2_write_frame(conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw)
+  ok_w, w_err = h2_write_frame(conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, body)
   if not (ok_w) then
     return nil, w_err
   end
@@ -530,6 +551,7 @@ handle_doh_client = function(args)
       end)
       error("Certificate context is nil")
     end
+    tls_ctx.alpn_protocols = ssl.ALPN_PROTOCOLS
     client:settimeout(nil)
     local client_timeout = (state.client_timeout and tonumber(state.client_timeout)) or 15
     apply_io_timeouts(client, client_timeout)

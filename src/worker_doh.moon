@@ -225,12 +225,12 @@ make_server6 = (port) ->
   :h2_read_frame, :h2_write_frame
 } = require "doh.h2_frames"
 
--- HPACK : :status 200 (index 8) + content-type: application/dns-message.
+-- HPACK : :status 200 (index 8) + content-type fourni.
 -- L'encodeur émet un littéral sans indexation (nom content-type indexé).
-h2_encode_response_headers = ->
+h2_encode_response_headers = (content_type) ->
   hpack.encode {
     { ":status", "200" }
-    { "content-type", "application/dns-message" }
+    { "content-type", content_type }
   }
 
 -- Codes d'erreur HTTP/2 (RFC 7540 §7).
@@ -322,6 +322,8 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
   stream_id  = nil
   method     = nil
   path       = nil
+  accept     = nil
+  json_mode  = false
   dns_chunks = {}
   dns_bytes  = 0
   end_stream = false
@@ -362,6 +364,7 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
         return nil, "h2_compression_error"
       method = hpack.header_value headers, ":method"
       path   = hpack.header_value headers, ":path"
+      accept = hpack.header_value headers, "accept"
       end_stream = headers_end_stream
       break if end_stream
 
@@ -397,7 +400,15 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
       return h2_reject conn, stream_id, "404"
     dns_raw = dns_from_query path
     unless dns_raw and #dns_raw > 0
-      return h2_reject conn, stream_id, "400"
+      -- Parité avec le GET JSON HTTP/1.1 : ?name=…&type=… + Accept JSON.
+      -- Un paramètre `dns` présent mais vide/invalide ne bascule pas en JSON.
+      if dns_raw == nil and accept and accept\match "application/dns%-json"
+        name = query_param path, "name"
+        qtype = qtype_from_name query_param path, "type"
+        dns_raw = build_dns_query name, qtype
+        json_mode = true if dns_raw
+      unless dns_raw and #dns_raw > 0
+        return h2_reject conn, stream_id, "400"
   else
     return h2_reject conn, stream_id, "405"
 
@@ -407,10 +418,17 @@ handle_h2 = (conn, peer_ip, peer_mac, upstream, peer_vlan) ->
     h2_goaway conn, 0x2
     return nil, "h2_query_error"
 
-  resp_block = h2_encode_response_headers!
+  resp_block = nil
+  body = resp_raw
+  content_type = "application/dns-message"
+  if json_mode
+    body = dns_response_json resp_raw
+    body or= "{\"Status\":2}"
+    content_type = "application/dns-json"
+  resp_block = h2_encode_response_headers content_type
   ok_w, w_err = h2_write_frame conn, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id, resp_block
   return nil, w_err unless ok_w
-  ok_w, w_err = h2_write_frame conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, resp_raw
+  ok_w, w_err = h2_write_frame conn, H2_FRAME_DATA, H2_FLAG_END_STREAM, stream_id, body
   return nil, w_err unless ok_w
   h2_goaway conn, 0x0
   resp_raw
@@ -447,6 +465,11 @@ handle_doh_client = (args) ->
       cert_type = if state.static_cert_paths then "static" else "sni"
       log_error -> { action: "cert_null", local_ip: local_ip, cert_type: cert_type }
       error "Certificate context is nil"
+
+    -- Le portail AUTH garde http/1.1 ; ce serveur-ci annonce h2,http/1.1.
+    -- wrap() applique la liste au contexte ou à l'objet SSL selon les symboles
+    -- disponibles (OpenWrt n'a que wolfSSL_UseALPN).
+    tls_ctx.alpn_protocols = ssl.ALPN_PROTOCOLS
 
     client\settimeout nil   -- blocking for TLS handshake
     -- … mais avec une échéance noyau : sans SO_RCVTIMEO/SO_SNDTIMEO, une

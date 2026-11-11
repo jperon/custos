@@ -73,14 +73,19 @@ Tests : `tests/unit/doh/upstream_select_spec.moon`,
 - **Routage** : `:method` et `:path` sont lus dans HPACK. `POST` sur le chemin
   DoH (`/dns-query`, même règle `is_doh_path` que HTTP/1.1) traite le corps
   DATA ; `GET /dns-query?dns=<base64url>` décode la requête (`dns_from_query`).
-  Autre chemin → `:status 404`, autre méthode → `405`, chemin DoH sans
-  paramètre/corps → `400`, sans traiter de DNS. Ces réponses n'émettent que
-  HEADERS (END_STREAM), pas de corps.
-- **ALPN serveur** (`src/auth/ffi_wolfssl.moon`) : le contexte annonce
-  `h2,http/1.1` via `wolfSSL_CTX_UseALPN` quand le symbole existe, sinon via
-  `wolfSSL_UseALPN` par objet SSL dans `wrap` (libwolfssl 5.8.4 sur OpenWrt
-  n'expose que ce dernier). Aucun symbole ALPN → aucun changement de
-  comportement. Les contextes client ne sont pas concernés.
+  Le GET JSON HTTP/1.1 (`?name=…&type=…` + `Accept: application/dns-json`) est
+  conservé à l'identique. Autre chemin → `:status 404`, autre méthode → `405`,
+  chemin DoH sans paramètre/corps → `400`, sans traiter de DNS. Ces réponses
+  n'émettent que HEADERS (END_STREAM), pas de corps.
+- **ALPN serveur** (`src/auth/ffi_wolfssl.moon`) : le contexte du worker DoH
+  demande `h2,http/1.1` (`ssl.ALPN_PROTOCOLS`), annoncé via
+  `wolfSSL_CTX_UseALPN` quand le symbole existe, sinon via `wolfSSL_UseALPN`
+  par objet SSL dans `wrap` (libwolfssl 5.8.4 sur OpenWrt n'expose que ce
+  dernier). Le portail AUTH garde `http/1.1`
+  (`DEFAULT_ALPN_PROTOCOLS`) : la liste est stockée par contexte
+  (`alpn_protocols`) et `wrap` ne réapplique que si elle a changé. Aucun
+  symbole ALPN → aucun changement de comportement ; les contextes client ne
+  sont pas concernés.
 
 Limites restantes, assumées :
 
@@ -91,16 +96,17 @@ Limites restantes, assumées :
 - **pas de contrôle de flux** : `WINDOW_UPDATE` est ignoré et le cumul DATA est
   plafonné à 65535 octets (taille maximale d'un message DNS) ;
 - **réponse encodée minimalement** : `:status` (index statique) et
-  `content-type: application/dns-message` en littéral sans indexation ni
-  Huffman ; pas de table dynamique côté encodeur ;
+  `content-type` (`application/dns-message` ou `application/dns-json`) en
+  littéral sans indexation ni Huffman ; pas de table dynamique côté encodeur ;
 - **POST HTTP/2 sans contrôle du `content-type`** : le corps est traité comme
   une requête DNS dès lors que le chemin est `/dns-query` (HTTP/1.1 exige
   `application/dns-message` et répond 415 sinon).
 
 Tests : `tests/unit/doh/hpack_spec.moon` (annexe C.2 à C.6 et cas d'erreur),
-`tests/unit/worker_doh_spec.moon` (GET/POST/404/405/400, PADDED, PRIORITY,
-CONTINUATION, COMPRESSION_ERROR, plafonds DATA et frame existants),
-`tests/unit/auth/wolfssl_spec.moon` (choix contexte/objet SSL).
+`tests/unit/worker_doh_spec.moon` (GET binaire et JSON, POST, 404/405/400,
+PADDED, PRIORITY, CONTINUATION, padding invalide, stream 0, COMPRESSION_ERROR,
+plafonds DATA et frame existants), `tests/unit/auth/wolfssl_spec.moon` (choix
+contexte/objet SSL, défaut AUTH http/1.1).
 
 ### Parité UDP/DoH : vol captif et overrides du second avis
 

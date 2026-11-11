@@ -93,8 +93,10 @@ SSL_FILETYPE_PEM = 1
 SSL_FILETYPE_ASN1 = 2
 WOLFSSL_ALPN_CONTINUE_ON_MISMATCH = 0x01
 -- Liste ALPN annoncée par le serveur (wolfSSL attend une liste séparée par
--- des virgules, pas le format wire TLS).
+-- des virgules, pas le format wire TLS). `ALPN_PROTOCOLS` est le jeu opt-in du
+-- serveur DoH ; `DEFAULT_ALPN_PROTOCOLS` reste celui du portail AUTH (HTTP/1.1).
 ALPN_PROTOCOLS = "h2,http/1.1"
+DEFAULT_ALPN_PROTOCOLS = "http/1.1"
 _alpn_available = nil
 
 --- Extract WolfSSL error queue messages
@@ -166,24 +168,28 @@ verification_available = (opts={}) ->
 --- Configure ALPN au niveau du contexte serveur.
 -- @tparam table lib Bibliothèque FFI (libwolfssl ou stub de test).
 -- @tparam cdata ctx Contexte WOLFSSL_CTX.
+-- @tparam string|nil protocols Liste séparée par virgules (défaut http/1.1).
 -- @treturn string|nil "ctx" si configuré, nil sinon.
-alpn_configure_ctx = (lib, ctx) ->
+alpn_configure_ctx = (lib, ctx, protocols) ->
+  protocols or= DEFAULT_ALPN_PROTOCOLS
   return nil unless symbol_available "wolfSSL_CTX_UseALPN", lib
   ok, ret = pcall ->
-    lib.wolfSSL_CTX_UseALPN ctx, ffi.cast("char*", ALPN_PROTOCOLS),
-      #ALPN_PROTOCOLS, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
+    lib.wolfSSL_CTX_UseALPN ctx, ffi.cast("char*", protocols),
+      #protocols, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
   return "ctx" if ok and ret == 1
   nil
 
 --- Annonce ALPN sur un objet SSL serveur (repli sans wolfSSL_CTX_UseALPN).
 -- @tparam table lib Bibliothèque FFI (libwolfssl ou stub de test).
 -- @tparam cdata ssl Objet WOLFSSL.
+-- @tparam string|nil protocols Liste séparée par virgules (défaut http/1.1).
 -- @treturn boolean true si l'annonce a été acceptée.
-alpn_configure_ssl = (lib, ssl) ->
+alpn_configure_ssl = (lib, ssl, protocols) ->
+  protocols or= DEFAULT_ALPN_PROTOCOLS
   return false unless symbol_available "wolfSSL_UseALPN", lib
   ok, ret = pcall ->
-    lib.wolfSSL_UseALPN ssl, ffi.cast("char*", ALPN_PROTOCOLS),
-      #ALPN_PROTOCOLS, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
+    lib.wolfSSL_UseALPN ssl, ffi.cast("char*", protocols),
+      #protocols, WOLFSSL_ALPN_CONTINUE_ON_MISMATCH
   ok and ret == 1
 
 -- Create server context (compatible with luasec API)
@@ -214,18 +220,19 @@ newcontext = (opts = {}) ->
     libwolfssl.wolfSSL_CTX_free(ctx)
     error "wolfSSL_CTX_use_PrivateKey_file() failed"
 
+  alpn_protocols = opts.alpn_protocols or DEFAULT_ALPN_PROTOCOLS
   alpn_mode = nil
   if _alpn_available != false
-    alpn_mode = alpn_configure_ctx libwolfssl, ctx
+    alpn_mode = alpn_configure_ctx libwolfssl, ctx, alpn_protocols
     if alpn_mode == "ctx"
       _alpn_available = true
-      log_debug -> { action: "ctx_use_alpn", protocols: ALPN_PROTOCOLS }
+      log_debug -> { action: "ctx_use_alpn", protocols: alpn_protocols }
     elseif symbol_available "wolfSSL_UseALPN"
       -- OpenWrt (libwolfssl 5.8.4) n'expose pas wolfSSL_CTX_UseALPN mais
       -- wolfSSL_UseALPN : l'annonce se fera par objet SSL dans wrap().
       alpn_mode = "ssl"
       _alpn_available = true
-      log_debug -> { action: "alpn_ssl_level", protocols: ALPN_PROTOCOLS }
+      log_debug -> { action: "alpn_ssl_level", protocols: alpn_protocols }
     else
       _alpn_available = false
       log_debug -> { action: "alpn_unavailable" }
@@ -236,6 +243,8 @@ newcontext = (opts = {}) ->
     :ctx
     closed: false
     :alpn_mode
+    :alpn_protocols
+    alpn_configured_protocols: if alpn_mode == "ctx" then alpn_protocols else nil
   }
 
 --- Create a client TLS context (opt-in certificate verification via opts.verify_peer).
@@ -283,10 +292,19 @@ wrap = (raw_socket, ctx_obj, opts={}) ->
   -- ALPN serveur par objet SSL quand le contexte ne l'a pas configuré
   -- (OpenWrt : wolfSSL_CTX_UseALPN absent, wolfSSL_UseALPN présent). Jamais
   -- tenté sur un contexte client : seul newcontext renseigne alpn_mode.
+  -- Les protocoles sont lus à chaque wrap : le worker DoH peut demander
+  -- h2,http/1.1 sur un contexte créé avec le défaut http/1.1.
+  alpn_protocols = ctx_obj.alpn_protocols or DEFAULT_ALPN_PROTOCOLS
   if ctx_obj.alpn_mode == "ssl"
-    unless alpn_configure_ssl libwolfssl, ssl
-      log_debug -> { action: "alpn_ssl_failed", protocols: ALPN_PROTOCOLS }
+    unless alpn_configure_ssl libwolfssl, ssl, alpn_protocols
+      log_debug -> { action: "alpn_ssl_failed", protocols: alpn_protocols }
       _alpn_available = false
+  elseif ctx_obj.alpn_mode == "ctx" and ctx_obj.alpn_configured_protocols != alpn_protocols
+    unless alpn_configure_ctx libwolfssl, ctx_obj.ctx, alpn_protocols
+      log_debug -> { action: "alpn_ctx_update_failed", protocols: alpn_protocols }
+      _alpn_available = false
+    else
+      ctx_obj.alpn_configured_protocols = alpn_protocols
 
   -- SNI doit précéder le handshake (RFC 6066). Ne pas envoyer d'IP littérale.
   if opts.sni and #opts.sni > 0
@@ -499,6 +517,7 @@ free_context = (ctx_obj) ->
   :alpn_configure_ctx
   :alpn_configure_ssl
   :ALPN_PROTOCOLS
+  :DEFAULT_ALPN_PROTOCOLS
   :libwolfssl
   :SSL_ERROR_NONE
   :SSL_ERROR_WANT_READ

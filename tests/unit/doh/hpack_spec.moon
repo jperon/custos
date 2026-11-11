@@ -258,6 +258,18 @@ describe "doh.hpack — cas d'erreur", ->
     assert.is_nil headers
     assert.equals "truncated_string", err
 
+  it "chaîne plus longue que le plafond refusée", ->
+    d = hpack.new_decoder { max_header_size: 8 }
+    headers, err = hpack.decode d, "\x04\x0a" .. string.rep("a", 10)
+    assert.is_nil headers
+    assert.equals "string_too_long", err
+
+  it "sortie Huffman plus longue que le plafond refusée", ->
+    encoded = from_hex "f1e3 c2e5 f23a 6ba0 ab90 f4ff"
+    decoded, err = hpack.huffman_decode encoded, 5
+    assert.is_nil decoded
+    assert.equals "string_too_long", err
+
   it "symbole EOS Huffman refusé", ->
     d = hpack.new_decoder!
     headers, err = hpack.decode d, "\x40\x84\xff\xff\xff\xfc"

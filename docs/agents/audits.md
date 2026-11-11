@@ -1231,21 +1231,30 @@ HPACK et applique le profil RFC 8484.
   `:390-402`). Les plafonds DATA (65535), SETTINGS, PING et frame trop grande
   sont conservés.
 - **ALPN serveur (`src/auth/ffi_wolfssl.moon`).** `ALPN_PROTOCOLS` vaut
-  `h2,http/1.1` (`:97`). `newcontext` (`:217-238`) essaie
+  `h2,http/1.1` (`:98`) ; `DEFAULT_ALPN_PROTOCOLS` reste `http/1.1` (`:99`)
+  pour le portail AUTH. `newcontext` (`:223-244`) essaie
   `wolfSSL_CTX_UseALPN` puis, s'il est absent mais que `wolfSSL_UseALPN`
-  existe, positionne `alpn_mode = "ssl"` ; `wrap` (`:286`) annonce alors la
-  liste par objet SSL via `alpn_configure_ssl` (`:182`). Sans aucun symbole
-  ALPN, aucun changement de comportement. `alpn_configure_ctx` (`:170`) est
-  isolé pour être testé avec un stub de bibliothèque.
+  existe, positionne `alpn_mode = "ssl"`. `worker_doh` demande la liste h2 sur
+  son contexte (`src/worker_doh.moon:472`) ; `wrap` (`:297`) annonce alors la
+  liste par objet SSL via `alpn_configure_ssl` (`:187`) ou réapplique le
+  contexte via `alpn_configure_ctx` (`:173`) s'il a changé. Sans aucun symbole
+  ALPN, aucun changement de comportement ; les contextes client ne sont pas
+  concernés. Les deux helpers acceptent une bibliothèque factice pour les
+  tests.
+- **GET JSON.** Le profil JSON du HTTP/1.1 (`?name=…&type=…` +
+  `Accept: application/dns-json`) est conservé en HTTP/2
+  (`src/worker_doh.moon:403-409`, réponse `application/dns-json` `:424-428`)
+  pour ne pas régresser les clients qui négocient h2 via ALPN.
 - **Tests.** `tests/unit/doh/hpack_spec.moon` (vecteurs C.2 à C.6, erreurs,
-  encodeur), `tests/unit/worker_doh_spec.moon` (GET/POST, 404/405/400,
-  PADDED, PRIORITY, CONTINUATION, COMPRESSION_ERROR, tests existants de
-  plafond DATA et frame trop large), `tests/unit/doh/h2_frames_spec.moon`
-  (nouvelles constantes) et `tests/unit/auth/wolfssl_spec.moon` (choix
-  contexte/objet SSL).
+  encodeur), `tests/unit/worker_doh_spec.moon` (GET binaire et JSON, POST,
+  404/405/400, PADDED, PRIORITY, CONTINUATION, padding invalide, stream 0,
+  dépassement de bloc, COMPRESSION_ERROR, tests existants de plafond DATA et
+  frame trop large), `tests/unit/doh/h2_frames_spec.moon` (nouvelles
+  constantes) et `tests/unit/auth/wolfssl_spec.moon` (choix contexte/objet
+  SSL, défaut AUTH http/1.1).
 
 **Vérification (2026-11-11, branche d-h2)** : `make all` et `make check` OK
-(152 fichiers, aucune globale inconnue) ; `make test` = **2395 successes /
+(152 fichiers, aucune globale inconnue) ; `make test` = **2403 successes /
 0 failures / 0 errors / 0 pending** ; `make test-js` = 12 pass / 0 fail
 (journal `tmp/test.log`). `make test-e2e` non lancé (hors périmètre de la
 tâche).
