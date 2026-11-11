@@ -1848,3 +1848,116 @@ présents, µs, `0` par défaut). Preuve d'échec sans correctif : en restaurant
 échouent (`set_timing`/`take_last_ack_wait_us` nil). `make test` :
 **2535 → 2543 successes**, 0 failure, 0 error (+8 cas) ; `make check` OK
 (155 fichiers). `make test-e2e` non lancé (autres agents sur la machine).
+
+## Corrections d'audit (2026-11-12) — appariement question/réponse
+
+Investigation de code sur l'appariement IPC (`src/ipc.moon`) et le worker de
+réponses (`src/worker_responses.moon`) : trois défauts d'observabilité et de
+robustesse. Aucun changement de sémantique sur le chemin nominal.
+
+### 1. Non-appariement désormais visible en production
+
+`handle_response` jetait la réponse non appariée (`NF_DROP`, choix défensif
+conservé : ne jamais relayer une réponse non sollicitée) en ne loguant qu'en
+`DEBUG` (`response_no_matching_question[_after_retry]`) — donc **muet** en
+production (`log_level: "INFO"`), alors que c'est le seul témoin d'une réponse
+client perdue.
+
+Fix : trace `INFO` `action=response_orphan_dropped` construite par la fonction
+pure `build_orphan_fields` (txid, `dst_ip`/`dst_port` client, `src_ip`
+résolveur, qname, rcode, client_mac, user, `ipc_retry_attempts`,
+`ipc_retry_wait_ms`, `retry_budget_skipped`). Le log DEBUG est conservé pour le
+détail.
+
+**Choix : log rate-limité, pas de compteur agrégé.** Volume attendu : à 400
+réponses orphelines/s, une trace non bornée produirait 400 lignes/s. Le
+rate-limiting de `log.moon` est **effectif** parce que les nouvelles actions ont
+une entrée `RL_CONFIG` dédiée (`keys: {}`, fenêtre 10 s : agrégation par action
+seule, occurrences reportées dans `suppressed=N`) ⇒ au plus 1 ligne / 10 s /
+worker.
+
+⚠️ Piège vérifié (et non supposé) : `check_rl` cherche `RL_CONFIG[fields.action]`
+et retourne `0` — **aucun** rate-limiting — quand l'action n'a pas d'entrée ;
+l'entrée générique `INFO` ne s'applique qu'aux lignes **sans** champ `action`.
+Ajouter un `log_info` avec une action nouvelle ne suffit donc pas : sans entrée
+`RL_CONFIG`, la trace aurait été émise à chaque paquet. Un test verrouille ce
+comportement (`log_spec.moon`, « sans entrée dédiée, une action INFO n'est pas
+rate-limitée »). Un compteur agrégé (`metrics.moon`) aurait imposé un export
+inter-worker supplémentaire pour un besoin déjà couvert par `suppressed=N`.
+
+### 2. Écrasement de clé `pending` : tracé et verdict plus jamais mélangé
+
+`set_pending` écrasait silencieusement l'entrée existante. Une réponse à une
+question **refusée** pouvait donc être traitée avec le flag `refused` d'une
+question **autorisée** ultérieure.
+
+Fix : politique **first-wins** (`overwrite_pending`) — seul `expire` est
+rafraîchi, toutes les métadonnées de la première question sont conservées
+(`refused`, `rule_id`, `reason`, `modifiers`, `response_rule_ids`,
+`benchmark_ms`, `question_proc_ms`). Justification : la cause dominante d'une
+collision de clé (`txid` + IP/port client + résolveur) est la **retransmission
+UDP légitime** (même client, même socket, même txid, question réémise après
+timeout), où question et verdict sont identiques — conserver l'entrée d'origine
+est exact et préserve le jalon d'entrée question (base de `q_to_response_ms`),
+qu'un écrasement aurait remplacé par une valeur plus tardive.
+
+Le cas **divergent** est détecté par comparaison stricte des champs de
+métadonnées (`pending_meta_diverges`) et tracé en `WARN`
+(`ipc_pending_overwrite_divergent` : `refused_kept`/`refused_new`,
+`rule_kept`/`rule_new`) ; la collision banale est tracée en `INFO`
+(`ipc_pending_overwrite`). Limite assumée et documentée : `qname`/`qtype` ne
+sont **pas** transmis par le protocole IPC (format A4), donc une divergence de
+*contenu* de question à métadonnées identiques reste indétectable. Les deux
+traces sont rate-limitées (clé = action, 10 s).
+
+### 3. Budget du retry d'appariement (anti-amplification)
+
+`retry_pending_match` faisait jusqu'à `count` (5) × `sleep_ms` (20) = **100 ms**
+de `nanosleep` par réponse orpheline, dans le hot-path NFQ : une rafale
+sérialisait le worker (~10 réponses/s, jusqu'à 100 % de temps en sommeil),
+vecteur de déni de service local.
+
+Fix : budget de **sommeil** par fenêtre d'une seconde et par worker
+(`ipc.match_retry.budget_ms`, défaut **100 ms**, état `_retry_budget`).
+L'arithmétique est isolée dans la fonction pure `plan_retry_tries` ; au-delà du
+budget, le retry est **sauté** (aucun `nanosleep`) et la réponse traitée comme
+orpheline (4ᵉ retour `budget_skipped`, propagé dans la trace). L'horloge
+utilisée est l'epoch déjà connue de `handle_response` (`ts`), aucun appel
+supplémentaire.
+
+Justification du seuil : le réordonnancement IPC légitime (réponse recapturée
+avant que la question ne soit drainée du pipe) se compte en microsecondes à
+quelques millisecondes — la question est écrite avant le forward upstream, dont
+le RTT se compte en ms. Une tentative (`sleep_ms` = 20 ms) suffit donc dans le
+cas nominal ; 100 ms de budget laissent absorber 5 réordonnancements par seconde
+(ou les 5 tentatives d'une même réponse, comportement historique préservé pour
+un événement isolé) tout en **plafonnant** le temps de retry à 10 % du temps
+worker, les orphelins suivants étant jetés instantanément.
+
+### Tests et preuves d'échec
+
+- `tests/unit/ipc/ipc_spec.moon` (+3) : verdict d'origine conservé sur question
+  divergente (échec sur l'ancien code : `refused` valait `false`),
+  rafraîchissement d'`expire` sur retransmission, jalon `benchmark_ms` de la
+  première question conservé (échec sur l'ancien code : 5900 au lieu de 5000).
+- `tests/unit/worker_responses_spec.moon` (+10) : `plan_retry_tries` (5 cas),
+  rafale bornée à un budget par seconde puis retry sauté (échec sur l'ancien
+  code : `_set_pipe_rfd`/`plan_retry_tries` absents, 5 tentatives à chaque
+  appel), cas nominal préservé (appariement au 1er drain, budget débité de
+  20 ms), `build_orphan_fields` (3 cas, absent de l'ancien code).
+- `tests/unit/log_spec.moon` (+7) : entrées `RL_CONFIG` présentes et
+  effectivement limitantes (échec sur l'ancien code : `RL_CONFIG` nil ⇒
+  `check_rl` retournait `0`, donc aucun rate-limiting).
+
+`make test` : **2543 → 2563 successes**, 0 failure, 0 error (+20 cas).
+`make check` OK. `make test-e2e` et `make coverage-quick` non lancés (chaîne de
+validation en cours sur les VMs du homelab et test de charge sur la machine
+physique `custos.lan`).
+
+### Point laissé ouvert (arbitrage produit, pas technique)
+
+Faut-il relayer en **fail-open** une réponse non appariée au lieu de la jeter ?
+Le comportement actuel (`NF_DROP`) est défensif et cohérent (ne jamais relayer
+une réponse non sollicitée) ; le passer en fail-open relève d'un arbitrage
+produit — non traité ici, mais désormais **observable** (point 1) pour mesurer
+l'impact réel avant de trancher.

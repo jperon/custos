@@ -11,7 +11,7 @@
 
 { :ffi, :libc } = require "ffi_defs"
 config = require "config"
-{ :log_warn } = require "log"
+{ :log_warn, :log_info } = require "log"
 { :to_hex, :from_hex, :split_fields, :is_valid_timeout,
   :is_ipv4_str, :is_ipv6_str, :is_valid_mac } = require "lib.ipc_hex"
 
@@ -296,8 +296,75 @@ read_states = {}
 make_key = (txid, ip_str, src_port, resolver_ip_str) ->
   string.format "%04x:%s:%d:%s", txid, ip_str, src_port, resolver_ip_str
 
+-- Champs de verdict/metadonnées comparés pour détecter une divergence entre
+-- deux questions partageant la même clé `pending`.
+_pending_meta_fields = { "refused", "rule_id", "reason", "timeout" }
+
+--- Indique si deux questions réutilisant la même clé portent un verdict différent.
+-- Comparaison STRICTE des champs de métadonnées transmis par l'IPC. qname et
+-- qtype n'y figurent pas (format A4) : une divergence de CONTENU de question
+-- avec un verdict identique reste donc indétectable ici.
+-- @tparam table a Entrée `pending` existante
+-- @tparam table b Message IPC entrant
+-- @treturn boolean true si au moins un champ de métadonnées diffère
+pending_meta_diverges = (a, b) ->
+  for name in *_pending_meta_fields
+    return true if a[name] != b[name]
+  false
+
+--- Gère la réutilisation d'une clé `pending` déjà présente (politique first-wins).
+-- Seul `expire` est rafraîchi ; TOUTES les métadonnées de la première question
+-- sont conservées (verdict, rule_id, reason, modifiers, response_rule_ids,
+-- jalons benchmark). Motif : la cause dominante d'une collision de clé est la
+-- RETRANSMISSION UDP légitime (même client, même socket, même txid, question
+-- réémise après timeout) — la question et son verdict sont identiques, donc
+-- conserver l'entrée d'origine est exact, et cela évite de remplacer le jalon
+-- `benchmark_ms` d'entrée (base de `q_to_response_ms`) par une valeur plus
+-- tardive.
+-- Conséquence sur la cohérence : une réponse n'hérite JAMAIS du `refused` /
+-- `rule_id` / `reason` d'une AUTRE question. Le cas divergent (champs de
+-- métadonnées différents) n'est pas résolu — impossible sans qname/qtype dans
+-- l'IPC — mais il est tracé en WARN ; le cas identique (retransmission) est
+-- tracé en INFO. Les deux traces sont rate-limitées par `log.moon`
+-- (RL_CONFIG.ipc_pending_overwrite[_divergent], fenêtre 10 s, clé = action
+-- seule : au plus une ligne par 10 s et par worker, avec `suppressed=N`).
+-- @tparam string key   Clé `pending` réutilisée
+-- @tparam table  entry Entrée `pending` existante (mutée : expire)
+-- @tparam table  msg   Message IPC entrant
+-- @tparam function now_fn () -> epoch
+-- @treturn nil
+overwrite_pending = (key, entry, msg, now_fn) ->
+  entry.expire = now_fn! + (ipc_cfg.pending_ttl or 5)
+  if pending_meta_diverges entry, msg
+    log_warn -> {
+      action: "ipc_pending_overwrite_divergent"
+      key: key
+      txid: string.format "0x%04x", msg.txid
+      client_ip: msg.ip_str
+      client_port: msg.src_port
+      resolver_ip: msg.resolver_ip_str
+      refused_kept: entry.refused and 1 or 0
+      refused_new: msg.refused and 1 or 0
+      rule_kept: entry.rule_id or ""
+      rule_new: msg.rule_id or ""
+    }
+  else
+    log_info -> {
+      action: "ipc_pending_overwrite"
+      key: key
+      txid: string.format "0x%04x", msg.txid
+      client_ip: msg.ip_str
+      client_port: msg.src_port
+      resolver_ip: msg.resolver_ip_str
+      refused: entry.refused and 1 or 0
+    }
+  nil
+
 set_pending = (msg, now_fn) ->
   key = make_key msg.txid, msg.ip_str, msg.src_port, msg.resolver_ip_str
+  previous = pending[key]
+  -- Chemin nominal (aucune collision) : une seule horloge, une seule entrée.
+  return overwrite_pending key, previous, msg, now_fn if previous
   pending[key] = {
     expire:       now_fn! + (ipc_cfg.pending_ttl or 5)
     refused:      msg.refused

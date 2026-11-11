@@ -364,8 +364,73 @@ Communication interne entre le worker questions et le worker réponses.
 | `match_retry.enabled` | bool | `true` | Active les tentatives de correspondance question/réponse |
 | `match_retry.count` | int | `5` | Nombre de tentatives |
 | `match_retry.sleep_ms` | int | `20` | Délai (ms) entre chaque tentative |
+| `match_retry.budget_ms` | int | `100` | Budget de **sommeil** (ms) consommable par fenêtre d'une seconde et par worker ; au-delà, le retry est sauté (aucun `nanosleep`) et la réponse est traitée comme orpheline |
 
-La clé de corrélation est `txid:ip:port` (ID de transaction DNS + IP source + port source).
+La clé de corrélation est `txid:ip:port:résolveur` (ID de transaction DNS + IP
+source du client + port source du client + IP du résolveur).
+
+### Budget du retry d'appariement (`match_retry.budget_ms`)
+
+Le retry existe pour absorber un **réordonnancement IPC légitime** : la réponse
+du résolveur peut être recapturée avant que le worker questions n'ait écrit (ou
+que `worker_responses` n'ait drainé) la question correspondante sur le pipe
+`question_response`. Ce réordonnancement se compte en microsecondes à quelques
+millisecondes (la question est écrite avant le forward upstream ; le RTT
+upstream, lui, se compte en ms) : la première tentative (`sleep_ms`) suffit dans
+le cas nominal.
+
+Sans borne, une rafale de réponses **orphelines** sérialisait le worker dans le
+hot-path NFQ : `count` × `sleep_ms` = 5 × 20 ms = **100 ms de blocage par
+réponse**, soit ~10 réponses/s de débit et jusqu'à 100 % du temps en `nanosleep`
+— un vecteur de déni de service local.
+
+Le budget `budget_ms` borne le sommeil cumulé **par seconde d'epoch et par
+worker**, toutes réponses confondues. Défaut `100` : le cas nominal (un
+réordonnancement isolé) consomme 20 ms et reste donc entièrement servi,
+plusieurs fois par seconde ; le pire cas plafonne le temps passé en retry à
+10 % et, une fois le budget épuisé, les orphelins suivants sont **jetés
+immédiatement** (aucun `nanosleep`). Un `budget_ms: 0` désactive le retry (tout
+orphelin est jeté sans tentative). Le retry est compté en sommeil *consommé*,
+non en tentatives : une tentative qui apparie au premier drain ne coûte que
+`sleep_ms`.
+
+### Non-appariement et écrasement de clé
+
+Une réponse qui ne trouve aucune question après le retry est **jetée**
+(`NF_DROP`) : Custos ne relaie jamais une réponse non sollicitée. C'est un
+choix défensif, et l'événement est visible en production : il est émis au
+niveau `INFO` sous l'action `response_orphan_dropped` (champs `txid`,
+`dst_ip`/`dst_port` du client, `src_ip` du résolveur, `qname`, `rcode`,
+`ipc_retry_attempts`, `ipc_retry_wait_ms`, `retry_budget_skipped`). Le détail
+reste disponible en `DEBUG` (`response_no_matching_question`,
+`response_no_matching_question_after_retry`).
+
+Le volume est borné par le rate-limiting de `log.moon` : les actions
+`response_orphan_dropped`, `ipc_pending_overwrite` et
+`ipc_pending_overwrite_divergent` ont une entrée `RL_CONFIG` dédiée, **clé =
+action seule**, fenêtre 10 s. Conséquence pratique : au plus une ligne par 10 s
+et par worker, le nombre d'occurrences supprimées étant reporté dans le champ
+`suppressed=N` (une rafale de 400 réponses orphelines/s produit donc ~1 ligne
+/ 10 s, pas 400 lignes/s). Sans entrée `RL_CONFIG` dédiée, une action n'est
+**pas** rate-limitée : la clé générique `INFO` ne s'applique qu'aux lignes sans
+champ `action`.
+
+**Écrasement de clé (`ipc_pending_overwrite`).** Une nouvelle question qui
+réutilise une clé `pending` existante ne remplace pas l'entrée : la politique
+est **first-wins** — seul `expire` est rafraîchi, toutes les métadonnées
+(verdict `refused`, `rule_id`, `reason`, `modifiers`, `response_rule_ids`, jalons
+`benchmark_ms`/`question_proc_ms`) restent celles de la première question. La
+cause dominante d'une collision est la **retransmission UDP légitime** (même
+client, même socket, même txid, question réémise après timeout) : question et
+verdict sont identiques, donc conserver l'entrée d'origine est exact — et cela
+préserve le jalon d'entrée question, base de `q_to_response_ms`.
+
+Le cas **divergent** (champs de métadonnées différents) est tracé en `WARN`
+sous `ipc_pending_overwrite_divergent` (`refused_kept`/`refused_new`,
+`rule_kept`/`rule_new`). Il n'est pas résolu — `qname`/`qtype` ne sont pas
+transmis dans le protocole IPC (format A4), donc une réponse ne peut pas être
+attribuée à l'une ou l'autre question. Garantie apportée : une réponse
+n'hérite **jamais** du `refused`/`rule_id`/`reason` d'une *autre* question.
 
 Quand `runtime.benchmark` est actif, ces tentatives alimentent les champs
 `ipc_retry_attempts` / `ipc_retry_wait_ms` de la ligne `action=response_dns_benchmark`

@@ -99,6 +99,17 @@ RL_CONFIG = {
   no_ipv4_for_client: { keys: {"client"},                    window: 120 }
   neigh_refreshed:    { keys: {},                            window: 30  }
   response_dnsonly:   { keys: {"dst_ip", "qnames"},          window: 30  }
+  -- Observabilité des anomalies d'appariement question/réponse. Clé de
+  -- rate-limiting = action seule (aucun champ discriminant) : les événements
+  -- sont AGRÉGÉS, au plus une ligne par fenêtre et par worker, le nombre
+  -- d'occurrences supprimées étant reporté dans `suppressed=N`. Choix motivé
+  -- par le volume : une rafale de réponses orphelines à 400/s produirait 400
+  -- lignes/s sans cela (l'ancien log DEBUG, non rate-limité, n'apparaissait
+  -- qu'en debug). Fenêtre 10 s : un événement isolé est toujours visible, une
+  -- rafale coûte au plus 1 ligne / 10 s.
+  response_orphan_dropped:          { keys: {}, window: 10 }
+  ipc_pending_overwrite:            { keys: {}, window: 10 }
+  ipc_pending_overwrite_divergent:  { keys: {}, window: 10 }
   INFO:               { keys: {"action"},                     window: 10  }
   DEBUG:              { keys: {"action"},                     window: 10  }
 }

@@ -342,7 +342,8 @@ local DEFAULTS = {
     pending_ttl = 5,
     match_retry = {
       count = 5,
-      sleep_ms = 20
+      sleep_ms = 20,
+      budget_ms = 100
     }
   },
   clients = {

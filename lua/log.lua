@@ -101,6 +101,18 @@ local RL_CONFIG = {
     },
     window = 30
   },
+  response_orphan_dropped = {
+    keys = { },
+    window = 10
+  },
+  ipc_pending_overwrite = {
+    keys = { },
+    window = 10
+  },
+  ipc_pending_overwrite_divergent = {
+    keys = { },
+    window = 10
+  },
   INFO = {
     keys = {
       "action"

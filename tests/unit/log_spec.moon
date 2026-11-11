@@ -94,3 +94,38 @@ describe "log", ->
       for i = 1, n
         log.check_rl "ALLOW", { mac_src: "aa:bb", qname: "c#{i}.test", qtype: "A" }, 1040
       assert.are.equal n, count_rl!
+
+  -- ── Rate-limiting des anomalies d'appariement question/réponse ──────
+  -- `check_rl` cherche `RL_CONFIG[fields.action]` et retourne 0 (AUCUN
+  -- rate-limiting) quand l'action n'a pas d'entrée : la clé générique `INFO`
+  -- n'est utilisée que si `fields.action` est nil. Un log_info portant une
+  -- action n'est donc JAMAIS rate-limité sans entrée dédiée. Ces entrées sont
+  -- la condition d'efficacité des nouvelles traces (orphan drop, écrasement de
+  -- clé IPC) : à 400 réponses orphelines/s, une trace non rate-limitée
+  -- produirait 400 lignes/s.
+  describe "rate-limiting des anomalies d'appariement", ->
+    before_each -> log._rl_reset!
+
+    it "sans entrée dédiée, une action INFO n'est pas rate-limitée (piège)", ->
+      assert.is_nil log.RL_CONFIG.action_sans_entree
+      f = { action: "action_sans_entree" }
+      assert.are.equal 0, log.check_rl "INFO", f, 1000
+      assert.are.equal 0, log.check_rl "INFO", f, 1001
+
+    for action in *{"response_orphan_dropped", "ipc_pending_overwrite",
+                    "ipc_pending_overwrite_divergent"}
+      it "#{action} : une seule ligne par fenêtre de 10 s, occurrences agrégées", ->
+        cfg = log.RL_CONFIG[action]
+        assert.is_not_nil cfg, "entrée RL_CONFIG manquante : trace non bornée"
+        assert.are.same {}, cfg.keys, "agrégation par action (pas de clé parasite)"
+        f = { action: action }
+        assert.are.equal 0,  log.check_rl "INFO", f, 1000  -- première : émise
+        assert.are.equal -1, log.check_rl "INFO", f, 1001  -- supprimée
+        assert.are.equal -1, log.check_rl "INFO", f, 1009
+        assert.are.equal 2,  log.check_rl "INFO", f, 1010  -- fenêtre écoulée
+        assert.are.equal -1, log.check_rl "INFO", f, 1011
+
+      it "#{action} : niveau WARN rate-limité aussi (traces mixtes)", ->
+        f = { action: action }
+        assert.are.equal 0,  log.check_rl "WARN", f, 2000
+        assert.are.equal -1, log.check_rl "WARN", f, 2001

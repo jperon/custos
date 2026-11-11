@@ -620,3 +620,83 @@ describe "ipc", ->
       assert.equals "ipv6 block", entry.reason
 
       close_pipe p
+
+  -- ── 33. Écrasement de clé `pending` (retransmission / réutilisation) ──
+  -- Politique retenue (cf. src/ipc.moon overwrite_pending et doc/CONFIG.md) :
+  -- FIRST-WINS — la première question garde ses métadonnées de verdict, seul
+  -- `expire` est rafraîchi. Motif : la cause dominante d'une collision de clé
+  -- est la retransmission UDP (question et verdict identiques) ; et une réponse
+  -- ne doit JAMAIS hériter du `refused`/`rule_id`/`reason` d'une autre question.
+  describe "écrasement de clé pending (first-wins)", ->
+    it "une seconde question divergente ne remplace pas le verdict d'origine", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      -- Question 1 : REFUSED (rule r_refused, reason blocked)
+      ok1 = m_ipc.write_refused_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                                "blocked", nil, "r_refused"
+      assert.is_true ok1
+      -- Question 2 : même clé (txid + client + port + résolveur), verdict AUTORISÉ
+      ok2 = m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                          "allowed", nil, "r_allowed"
+      assert.is_true ok2
+
+      count = m_ipc.drain_pipe rfd, (-> 0), nil
+      assert.equals 2, count
+
+      entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
+      assert.is_not_nil entry
+      -- Avant correctif, la 2e question écrasait l'entrée : refused=false et
+      -- rule_id="r_allowed" → la réponse à la question REFUSÉE aurait été
+      -- relayée comme autorisée (mélange de verdicts).
+      assert.is_true entry.refused, "le verdict REFUSED d'origine est conservé"
+      assert.equals "r_refused", entry.rule_id
+      assert.equals "blocked",   entry.reason
+
+      close_pipe p
+
+    it "une retransmission identique conserve l'entrée et rafraîchit expire", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      base = 1000
+      m_ipc.write_refused_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                              "blocked", nil, "r_refused"
+      m_ipc.drain_pipe rfd, (-> base), nil
+
+      -- Retransmission 3 s plus tard : même question, même verdict.
+      m_ipc.write_refused_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                              "blocked", nil, "r_refused"
+      m_ipc.drain_pipe rfd, (-> base + 3), nil
+
+      -- L'entrée doit rester valide jusqu'à base+3+5 (expire rafraîchi), et
+      -- pas expirer à base+5 comme sans rafraîchissement.
+      entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> base + 6
+      assert.is_not_nil entry, "expire rafraîchi par la retransmission"
+      assert.is_true entry.refused
+      assert.equals "r_refused", entry.rule_id
+
+      close_pipe p
+
+    it "la retransmission conserve le jalon benchmark de la question d'origine", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+      rfd, wfd = p[1], p[2]
+
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                      "ok", 5000, "r_ok", nil, nil, nil, 7
+      m_ipc.drain_pipe rfd, (-> 0), nil
+      -- Retransmission tardive : jalon plus récent, même question.
+      m_ipc.write_msg wfd, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+                      "ok", 5900, "r_ok", nil, nil, nil, 9
+      m_ipc.drain_pipe rfd, (-> 0), nil
+
+      entry = m_ipc.get_pending_entry TXID, "192.168.1.42", PORT, "1.1.1.3", -> 1
+      assert.is_not_nil entry
+      assert.equals 5000, entry.benchmark_ms,
+        "benchmark_ms = entrée de la première question (base de q_to_response_ms)"
+      assert.equals 7, entry.question_proc_ms
+
+      close_pipe p
