@@ -1443,3 +1443,11 @@ Règle, inventaire des invalidations externes, borne mémoire mesurée
 `.agents/workers.md`. Gain attendu : les 20-30 % du CPU nft estimés au
 §5.3 du rapport d'audit — **non remesurés** (aucune campagne de charge sur
 cette branche ; `perf` absent de la cible).
+
+**Suite (2026-11-12)** : le cache ne s'applique — ni saut ni enregistrement —
+qu'aux sets alimentés exclusivement par `worker_nft` ; les kinds `auth_*` et
+les sets vidés/supprimés hors du worker (`authenticated_*`,
+`ip*_dest_whitelist`, `{rule_id}_auth_*`) sont exclus en un point unique
+(`cache_key_of`, `UNCACHEABLE_KINDS`/`UNCACHEABLE_SETS`). Motivation,
+inventaire fichier:ligne et écart de scénario : `docs/agents/audits.md`
+§ « Exclusions du cache » (même section `d-nftcache`).

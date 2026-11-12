@@ -3554,3 +3554,71 @@ côté `worker_nft` (50-65 % d'un vCPU avant le correctif). Rapport détaillé :
 - **Non fait / non mesuré** : gain CPU non remesuré (aucune campagne de
   charge sur cette branche, `perf` absent de la cible) ; `make test-e2e` non
   lancé (tâche : pas de ssh).
+
+#### Exclusions du cache : kinds auth_* et sets gérés hors worker_nft (suite, 2026-11-12)
+
+Défaut de cohérence relevé en revue : des éléments sont supprimés de nft
+**hors** de `worker_nft` sans que le cache le sache. Inventaire par greps
+`delete element` / `flush set` dans `src/` (fichier:ligne) :
+
+- `src/auth/nft_sessions.moon:40,53,85` — `delete element` sur
+  `authenticated_ips` / `authenticated_ips6` / `authenticated_macs` (logout
+  `src/auth/handlers.moon:244-245`, bye, expiration) ;
+- `src/ip_whitelist.moon:31-32` — `flush set` sur `ip4_dest_whitelist` /
+  `ip6_dest_whitelist` (à chaque SIGHUP : `filter.load` →
+  `ip_whitelist.init`, `src/filter/init.moon:116`) ;
+- `src/auth/nft_auth_sets.moon:29,31` — `delete element` sur
+  `{rule_id}_auth_mac` / `{rule_id}_auth_ip4` / `{rule_id}_auth_ip6`
+  (`delete_rule_auth_sets` `:52-54`, appelé au logout par
+  `src/auth/handlers.moon:248`) ;
+- `flush ruleset` du template (`nft_rules.apply`, uniquement au démarrage,
+  avant le fork de `worker_nft`) et `delete rule` sur la chaîne `forward`
+  (`src/nft_extra_rules.moon:86,192`) : sans objet (règles, pas des sets).
+
+**Correctif** (`src/worker_nft.moon`) : le cache ne s'applique — **ni saut ni
+enregistrement** — qu'aux sets alimentés exclusivement par `worker_nft`.
+Point unique : `cache_key_of` (`:240-249`) n'attribue plus de clé aux items
+exclus ; sans clé, `try_add_pending` (`:272`) ne saute pas et `flush_batch`
+n'enregistre pas (ni `cache_drop` d'ailleurs). Exclusions :
+
+- kinds `auth_mac`/`auth_ip4`/`auth_ip6` (`UNCACHEABLE_KINDS` `:214-218`) :
+  leurs sets `{rule_id}_auth_*` sont supprimés par le processus AUTH avec son
+  propre contexte nft ;
+- sets `authenticated_ips`, `authenticated_ips6`, `authenticated_macs`,
+  `ip4_dest_whitelist`, `ip6_dest_whitelist` (`UNCACHEABLE_SETS` `:220-226`,
+  exposé pour les tests par `cacheable_set` `:231-232`) : aucun kind actuel ne
+  les nomme (`get_set_name`, `src/nft_queue.moon:259-277`) — garde-fou si un
+  chemin d'écriture venait à être ajouté.
+
+**Écart constaté avec le scénario décrit** (règle « n'invente rien ») : le
+scénario « logout puis re-login en < 5 s → ligne `add_auth_*` sautée par le
+cache → client non authentifié jusqu'à 5 s » **ne peut pas se produire
+aujourd'hui** :
+
+- `add_auth_mac` / `add_auth_ip4` / `add_auth_ip6`
+  (`src/nft_queue.moon:173-175`) **n'ont aucun appelant** dans `src/`
+  (définitions et export seuls) ;
+- même si une ligne était enfilée, `validate_item`
+  (`src/worker_nft.moon:39-54`) ne reconnaît que
+  `ip4/ip6/mac4/mac6/sip4/sip6` : une ligne `auth_*` est refusée (`tuple`)
+  par `parse_line` (`:61`) **avant** d'atteindre le cache ;
+- `authenticated_*` et `ip*_dest_whitelist` ne sont jamais des clés de cache
+  (aucun kind ne les nomme).
+
+Le correctif est donc **défensif** : il rend inopérant le défaut de cohérence
+le jour où les kinds `auth_*` seraient effectivement routés par le pipe (les
+fonctions d'export et `element_spec` les prenant en charge existent déjà,
+`src/nft_queue.moon:305-309`).
+
+**Tests** : `tests/unit/worker_nft_spec.moon`, describe `exclusions`
+(`:632-675`, 5 specs ; 51 specs au fichier au lieu de 46) : ligne `auth_ip4`
+répétée **jamais sautée ni enregistrée**, idem `auth_mac`/`auth_ip6`,
+`cache_key_of` nil pour un kind auth, **contrôle** : une ligne DNS répétée
+est **toujours** sautée dans la fenêtre, `cacheable_set` sur les 5 sets
+exclus. Échec TDD constaté avant le correctif (3 failures + 1 error sur ces
+4 tests), succès ensuite.
+
+Suite complète `nix develop --command bash -c "make all && make check &&
+make test"` : **3108 succès / 0 échec / 0 erreur** (3103 avant la branche
++ 5 nouveaux ; sortie `tmp/test.log`). Aucune ligne ajoutée à `AGENTS.md` ;
+`make test-e2e` non lancé (homelab libvirt non provisionné pour cette tâche).
