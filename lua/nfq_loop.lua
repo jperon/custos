@@ -4,6 +4,8 @@ do
   ffi, libc, libnfq = _obj_0.ffi, _obj_0.libc, _obj_0.libnfq
 end
 local config = require("config")
+local nfq_rcvbuf = require("lib.nfq_rcvbuf")
+local lowmem = require("lib.lowmem")
 local log_info, log_warn, log_error, log_debug, level_enabled
 do
   local _obj_0 = require("log")
@@ -58,6 +60,8 @@ run_queue = function(queue_num, callback, opts)
   libnfq.nfq_bind_pf(h, 2)
   libnfq.nfq_bind_pf(h, 10)
   libnfq.nfq_bind_pf(h, AF_BRIDGE)
+  local fd = libnfq.nfq_fd(h)
+  nfq_rcvbuf.configure(libc, fd, queue_num, (config.nfqueue and config.nfqueue.rcvbuf), (lowmem.detect((config.runtime or { }))))
   local qh_box = ffi.new("nfq_q_handle*[1]")
   log_debug(function()
     return {
@@ -110,7 +114,6 @@ run_queue = function(queue_num, callback, opts)
     }
   end)
   libnfq.nfq_set_mode(qh, NFQNL_COPY_PACKET, READ_BUF_SIZE)
-  local fd = libnfq.nfq_fd(h)
   local buf = ffi.new("char[65536]")
   log_info(function()
     return {

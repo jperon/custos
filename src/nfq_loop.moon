@@ -5,6 +5,8 @@
 
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 config = require "config"
+nfq_rcvbuf = require "lib.nfq_rcvbuf"
+lowmem = require "lib.lowmem"
 { :log_info, :log_warn, :log_error, :log_debug, :level_enabled } = require "log"
 bit = require "bit"
 
@@ -70,9 +72,17 @@ run_queue = (queue_num, callback, opts=nil) ->
   libnfq.nfq_bind_pf h, 10  -- AF_INET6
   libnfq.nfq_bind_pf h, AF_BRIDGE
 
+  -- Tampon de réception netlink (SO_RCVBUF / SO_RCVBUFFORCE) AVANT de créer la
+  -- queue : dès que le handler existe, les paquets peuvent arriver et le
+  -- défaut noyau (~208 Ko) laisse le résolveur déborder en rafale
+  -- (user_dropped, cf. docs/agents/perf.md §13.5).
+  fd = libnfq.nfq_fd h
+  nfq_rcvbuf.configure libc, fd, queue_num,
+    (config.nfqueue and config.nfqueue.rcvbuf),
+    (lowmem.detect (config.runtime or {}))
+
   -- Pointeur partagé entre la closure C et la closure Lua du callback
   qh_box = ffi.new "nfq_q_handle*[1]"
-
   log_debug -> { action: "queue_callback_setup", queue: queue_num }
   -- Wrapper C minimal : extrait pkt_id et délègue au callback Lua
   c_callback = ffi.cast "nfq_callback", (qh, nfmsg, nfad, data) ->
@@ -109,7 +119,6 @@ run_queue = (queue_num, callback, opts=nil) ->
   log_debug -> { action: "queue_set_mode_call", queue: queue_num }
   libnfq.nfq_set_mode qh, NFQNL_COPY_PACKET, READ_BUF_SIZE
 
-  fd  = libnfq.nfq_fd h
   buf = ffi.new "char[65536]"
 
   log_info -> { action: "queue_listening", queue: queue_num, pid: tonumber(ffi.C.getpid and ffi.C.getpid() or 0) }
