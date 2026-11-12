@@ -307,6 +307,20 @@ describe "worker_questions", ->
       rc = invoke ipv4_udp DNS_QUERY
       assert.equals 0, rc
 
+    -- Multi-worker réponses : la question est écrite dans le tube de CHAQUE
+    -- worker. Un destinataire en échec permanent (worker arrêté, tube plein)
+    -- ne doit plus jeter la question (NF_DROP) : sans ce correctif, une file
+    -- NFQUEUE inactive menait au blocage définitif (docs/agents/perf.md §12).
+    it "un seul destinataire en échec permanent ne jette pas la question", ->
+      decision = { verdict: true, reason: "ok", rule_id: "r_fanout" }
+      wq.run 0, { -1, pipe_w }, nil, ev_w, nil
+      rc = invoke ipv4_udp DNS_QUERY
+      assert.equals 1, rc, "question acceptée : le tube sain a reçu la transaction"
+
+      msg = ipc.decode_msg read_fd pipe_r
+      assert.equals 0xabcd, msg.txid
+      assert.equals "r_fanout", msg.rule_id
+
     it "laisse passer une réponse DNS (qr=1) sans message IPC", ->
       rc = invoke ipv4_udp DNS_REPLY
       assert.equals 1, rc

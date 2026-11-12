@@ -170,18 +170,68 @@ write_with_retry = function(pipe_wfd, msg)
   end)
   return false
 end
+local _saturated = { }
+local write_once
+write_once = function(pipe_wfd, msg)
+  local n = libc.write(pipe_wfd, msg, #msg)
+  if n == #msg then
+    return true
+  end
+  local errno_p = libc.__errno_location()
+  local errno
+  if errno_p then
+    errno = errno_p[0]
+  else
+    errno = 0
+  end
+  if errno ~= EAGAIN and errno ~= EWOULDBLOCK then
+    log_warn(function()
+      return {
+        action = "ipc_write_syscall_failed",
+        fd = pipe_wfd,
+        errno = errno,
+        attempt = 1
+      }
+    end)
+  end
+  return false
+end
 local write_with_retry_all
 write_with_retry_all = function(pipe_wfd, msg)
   if not (type(pipe_wfd) == "table") then
     return write_with_retry(pipe_wfd, msg)
   end
-  local ok = true
+  local delivered = false
   for _index_0 = 1, #pipe_wfd do
     local fd = pipe_wfd[_index_0]
-    local res = write_with_retry(fd, msg)
-    ok = res and ok
+    local ok = false
+    if _saturated[fd] then
+      ok = write_once(fd, msg)
+      if ok then
+        _saturated[fd] = nil
+        log_info(function()
+          return {
+            action = "ipc_write_resumed",
+            fd = fd
+          }
+        end)
+      end
+    elseif write_with_retry(fd, msg) then
+      ok = true
+    else
+      _saturated[fd] = true
+      log_warn(function()
+        return {
+          action = "ipc_write_saturated",
+          ipc_fd = fd
+        }
+      end)
+    end
+    if ok then
+      delivered = true
+    end
   end
-  return ok
+  return delivered
 end
 local encode_msg
 encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms)

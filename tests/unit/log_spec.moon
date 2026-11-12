@@ -474,3 +474,22 @@ describe "log", ->
         assert.are.equal 0,  log.check_rl "WARN", f, 2000
         assert.are.equal -1, log.check_rl "WARN", f, 2009
         assert.are.equal 1,  log.check_rl "WARN", f, 2010
+
+    -- Saturation d'un tube IPC question→réponse (multi-worker réponses) : un
+    -- WARN par DESTINATAIRE et par fenêtre, pas un par action — sinon un tube
+    -- plein masquerait la saturation d'un autre. `fd` est volatile (ignoré par
+    -- le défaut WARN), d'où la clé explicite sur `ipc_fd`.
+    it "ipc_write_saturated : discriminé par destinataire (ipc_fd), fenêtre 60 s", ->
+      cfg = log.RL_CONFIG.ipc_write_saturated
+      assert.is_not_nil cfg, "entrée RL_CONFIG manquante : défaut WARN (fd volatile)"
+      assert.are.same { "ipc_fd" }, cfg.keys
+      assert.are.equal 60, cfg.window
+
+      log.set_action_prefix "questions_"
+      f1 = { action: "questions_ipc_write_saturated", ipc_fd: 7 }
+      f2 = { action: "questions_ipc_write_saturated", ipc_fd: 9 }
+      assert.are.equal 0,  log.check_rl "WARN", f1, 5000
+      assert.are.equal 0,  (log.check_rl "WARN", f2, 5000), "destinataire distinct = ligne distincte"
+      assert.are.equal -1, log.check_rl "WARN", f1, 5001
+      assert.are.equal 1,  log.check_rl "WARN", f1, 5060
+      log.set_action_prefix ""
