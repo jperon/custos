@@ -600,11 +600,11 @@ describe "verdicts différés par lot NFQUEUE (settle / flush_deferred)", ->
     assert.equals 1, n
     assert.equals 0, m.deferred_count!
 
-  it "hors lot, dnsonly supprime l'attente (aucune insertion nft)", ->
+  it "hors lot, dnsonly avec insertion captive_probe attend l'ACK", ->
     ctx = { qh_ptr: "qh", pkt_id: 5, ack_corr: "corr", dnsonly: true }
     calls.seq = 9
     m.settle ctx, 1, nil, true
-    assert.equals 0, #calls.waits
+    assert.equals 1, #calls.waits
     assert.equals 1, #calls.set
 
 describe "worker_responses helpers complémentaires (couverture)", ->

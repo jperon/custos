@@ -41,6 +41,7 @@ describe "worker_responses.finalize_a", ->
   m = nil
   verdicts = {}
   injected = {}
+  probe_calls = {}
   state = {}
   dns_msg = nil
   raw = nil
@@ -50,6 +51,7 @@ describe "worker_responses.finalize_a", ->
     saved[k] = package.loaded[k] for k in *STUB_KEYS
     verdicts = {}
     injected = {}
+    probe_calls = {}
     state = { has_cname: false }
 
     -- Benchmark actif : exerce les mesures µs (attente ACK). Sans effet sur
@@ -82,7 +84,16 @@ describe "worker_responses.finalize_a", ->
     }
     package.loaded["nft_queue"] = {
       add_ip4: (-> nil), add_ip6: (-> nil)
-      add_mac4: (-> nil), add_mac6: (-> nil)
+      add_mac4: (mac, ip, rule_id, timeout, corr) ->
+        probe_calls[#probe_calls + 1] = {
+          family: "mac4", :mac, :ip, :rule_id, :timeout, :corr
+        }
+        state.probe_add_ok != false
+      add_mac6: (mac, ip, rule_id, timeout, corr) ->
+        probe_calls[#probe_calls + 1] = {
+          family: "mac6", :mac, :ip, :rule_id, :timeout, :corr
+        }
+        state.probe_add_ok != false
       get_last_seq: -> state.last_seq
       wait_ack: (seq, corr, on_wait) ->
         state.wait_calls = (state.wait_calls or 0) + 1
@@ -207,6 +218,52 @@ describe "worker_responses.finalize_a", ->
     assert.equals 1, #verdicts
     assert.equals 0, verdicts[1].verdict
     assert.is_nil verdicts[1].payload
+
+  -- ── Sondes de portail captif (action dnsonly) ─────────────────
+  -- Une réponse dnsonly ne doit rien injecter pour l'accès, mais sa
+  -- destination est mémorisée dans les sets captive_probe_mac4/6, consommés
+  -- par la règle nft placée AVANT le dispatch (IP de sonde partagée avec un
+  -- CDN autorisé par une autre règle, cf. docs/agents/filtre.md).
+  it "réponse dnsonly → destination mémorisée dans captive_probe (MAC, ACK attendu)", ->
+    state.inject_result = {
+      ip_count: 0, records_to_add: 0, success_any: false
+      no_v4: {}, no_v6: {}
+    }
+    state.last_seq = 9
+    ctx.dnsonly = true
+    ctx.entry.dnsonly = true
+    m.finalize_a ctx, nil
+    assert.equals 1, #verdicts
+    assert.equals 1, verdicts[1].verdict
+    assert.equals 1, #probe_calls
+    call = probe_calls[1]
+    assert.equals "mac4", call.family
+    assert.equals "aa:bb:cc:dd:ee:ff", call.mac
+    assert.equals "1.2.3.4", call.ip
+    assert.equals "captive_probe", call.rule_id
+    assert.equals 1, state.wait_calls
+
+  it "réponse non dnsonly → aucune insertion captive_probe", ->
+    state.inject_result = {
+      ip_count: 0, records_to_add: 0, success_any: false
+      no_v4: {}, no_v6: {}
+    }
+    m.finalize_a ctx, nil
+    assert.equals 1, #verdicts
+    assert.equals 0, #probe_calls
+
+  it "échec d'insertion captive_probe → réponse tout de même NF_ACCEPT", ->
+    state.inject_result = {
+      ip_count: 0, records_to_add: 0, success_any: false
+      no_v4: {}, no_v6: {}
+    }
+    state.probe_add_ok = false
+    ctx.dnsonly = true
+    ctx.entry.dnsonly = true
+    m.finalize_a ctx, nil
+    assert.equals 1, #verdicts
+    assert.equals 1, verdicts[1].verdict
+    assert.equals 1, #probe_calls
 
   -- ── Mesure µs de l'attente d'ACK (benchmark) ─────────────────
   it "mesure wait_ack en microsecondes et la remet à zéro après prise", ->

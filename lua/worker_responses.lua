@@ -66,6 +66,7 @@ local dup_query = require("dup_query")
 local raw_send = require("raw_send")
 local so_cfg = config.second_opinion or { }
 local bit = require("bit")
+local CAPTIVE_PROBE_SET = "captive_probe"
 local retry_cfg = (config.dns or { }).upstream_retry or { }
 local retry_enabled = retry_cfg.enabled and true or false
 local retry_max = tonumber(retry_cfg.max_attempts) or 2
@@ -382,7 +383,7 @@ settle = function(ctx, verdict, payload, need_ack)
     return 
   end
   local deps = verdict_deps()
-  if need_ack and not ctx.dnsonly then
+  if need_ack then
     local pending_seq = deps.get_last_seq()
     if pending_seq then
       deps.wait_ack(pending_seq, ctx.ack_corr, (function()
@@ -686,6 +687,16 @@ finalize_a = function(ctx, override)
       }
     end
   end
+  local probe_recs = 0
+  if dnsonly and mac_valid(client_mac) then
+    for _index_0 = 1, #answers do
+      local ans = answers[_index_0]
+      local add = ans.family == "ipv4" and add_mac4 or add_mac6
+      if add(client_mac, ans.addr, CAPTIVE_PROBE_SET, rr_timeout(ans.ttl), ack_corr) then
+        probe_recs = probe_recs + 1
+      end
+    end
+  end
   if inject_nft and not dnsonly and not ctx.defer then
     drain_ack()
   end
@@ -782,7 +793,7 @@ finalize_a = function(ctx, override)
       end)
     end
   end
-  return settle(ctx, NF_ACCEPT, (payload_modified and patched or nil), (records_to_add > 0))
+  return settle(ctx, NF_ACCEPT, (payload_modified and patched or nil), (records_to_add > 0 or probe_recs > 0))
 end
 local build_orphan_fields
 build_orphan_fields = function(info)
