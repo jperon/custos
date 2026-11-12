@@ -50,6 +50,11 @@ raw_send = require "raw_send"
 so_cfg = config.second_opinion or {}
 bit = require "bit"
 
+-- Identifiant (préfixe) des sets nft `captive_probe_mac4/6` : destinations des
+-- réponses `dnsonly` (sondes de portail captif), consommées par une règle nft
+-- placée AVANT le dispatch. Voir finalize_a et docs/agents/filtre.md.
+CAPTIVE_PROBE_SET = "captive_probe"
+
 -- ── Retry upstream (SERVFAIL/REFUSED) ──────────────────────────────
 -- cf. config.dns.upstream_retry. Ré-interroge le MÊME résolveur après une
 -- réponse transitoirement en échec, plutôt que de la transmettre au client.
@@ -458,7 +463,9 @@ settle = (ctx, verdict, payload, need_ack) ->
     }
     return
   deps = verdict_deps!
-  if need_ack and not ctx.dnsonly
+  -- `need_ack` est vrai dès qu'une insertion (accès ou captive_probe) a été
+  -- enfilée, y compris pour une réponse dnsonly (cf. finalize_a).
+  if need_ack
     pending_seq = deps.get_last_seq!
     deps.wait_ack pending_seq, ctx.ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
   deps.set_verdict ctx.qh_ptr, ctx.pkt_id, verdict, payload
@@ -721,6 +728,20 @@ finalize_a = (ctx, override) ->
       fam = a.rtype == QTYPE.AAAA and "ipv6" or "ipv4"
       answers[#answers + 1] = { family: fam, addr: a.rdata_str, ttl: a.ttl }
 
+  -- Sondes de portail captif : une réponse `dnsonly` autorise la résolution
+  -- sans injecter l'IP dans les sets d'accès (skip_nft), mais sa destination
+  -- est mémorisée par MAC dans `captive_probe_mac4/6`. Une règle nft placée
+  -- AVANT le dispatch y redirige le SYN/80 : l'IP d'une sonde peut être
+  -- partagée avec un CDN autorisé par une autre règle (mesuré le 2026-11-12 :
+  -- addons.mozilla.org et firefox-portal-detection.com partagent
+  -- 151.101.x.91 / 2a04:4e42::/48), donc le match par IP seule laisse passer la
+  -- sonde vers le vrai serveur (204 → Firefox NOT_CAPTIVE, pas de bandeau).
+  probe_recs = 0
+  if dnsonly and mac_valid client_mac
+    for ans in *answers
+      add = ans.family == "ipv4" and add_mac4 or add_mac6
+      probe_recs += 1 if add client_mac, ans.addr, CAPTIVE_PROBE_SET, rr_timeout(ans.ttl), ack_corr
+
   -- Même raison que dans inject_answers : pas de purge pendant un lot NFQUEUE.
   drain_ack! if inject_nft and not dnsonly and not ctx.defer
 
@@ -761,7 +782,7 @@ finalize_a = (ctx, override) ->
     else
       log_warn -> { action: "nft_add_failed_fail_open", txid: txid_hex, client_ip: client_ip, qnames: qnames, user: user }
 
-  settle ctx, NF_ACCEPT, (payload_modified and patched or nil), (records_to_add > 0)
+  settle ctx, NF_ACCEPT, (payload_modified and patched or nil), (records_to_add > 0 or probe_recs > 0)
 
 --- Construit les champs de la trace INFO d'une réponse orpheline (fonction pure).
 -- C'est le SEUL témoin d'une réponse client jetée faute de question appariée :

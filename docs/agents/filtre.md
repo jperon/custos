@@ -129,6 +129,40 @@ préférences `captivedetect.*`) sans extraire l'archive. `CAPTIVE_PROBES` doit
 contenir le nom enregistrable de cette URL, et conserver les anciens noms pour
 les versions antérieures.
 
+### IP de sonde partagée avec un CDN (bandeau Firefox absent)
+
+**Symptôme mesuré (2026-11-12, client anonyme 10.35.1.2 / Firefox 155.0.1).**
+La sonde Firefox reçoit le **vrai** `204` de Fastly : `curl
+http://firefox-portal-detection.com/generate_204` → `204`, et Firefox headless
+reste `NOT_CAPTIVE` (`CaptivePortalService::Complete(success=1) mState=1`),
+donc aucun bandeau. Pourtant `firefox-portal-detection.com` est bien dans
+`CAPTIVE_PROBES` et sa résolution est loggée `DNS only (no nft)`.
+
+**Cause.** Le match d'accès est un match par **IP de destination** (sets
+`r_<rule>_ip4/6`, `_mac4/6`). Les IP de la sonde sont partagées avec d'autres
+noms du même CDN : `addons.mozilla.org` (règle « Mises à jour ») résout vers
+`151.101.x.91` / `2a04:4e42::/48`, exactement les IP de
+`firefox-portal-detection.com`. La réponse DNS de `addons.mozilla.org` insère
+donc ces IP dans les sets de la règle d'allow, et le SYN/80 de la sonde est
+accepté par `jump cv_rules_dispatch` **avant** d'atteindre la règle captive
+(placée après le dispatch). Le vrai serveur répond `204`, Firefox est
+`NOT_CAPTIVE`.
+
+**Correctif.** Deux sets statiques `captive_probe_mac4/6` (`ether_addr .
+ipv4_addr` / `ether_addr . ipv6_addr`, `flags timeout`) sont peuplés par
+`worker_responses.finalize_a` pour chaque réponse `dnsonly` (sondes), clé =
+MAC cliente . IP de destination (la MAC ne dépend pas de la famille résolue).
+Deux règles du hook `forward`, **avant** `jump cv_rules_dispatch`, redirigent
+leur SYN/80 vers `{QUEUE_CAPTIVE}`, sauf si la MAC est dans
+`authenticated_macs` (même exclusion que les règles « Auth client SYN/80 »).
+Le verdict DNS attend l'ACK nft de l'insertion (comme les sets d'accès), pour
+que la redirection soit active avant la connexion du client.
+
+Conséquence attendue : l'IP peut rester dans les sets d'une règle d'allow,
+le SYN/80 de la sonde est malgré tout redirigé (302) → Firefox `LOCKED` et
+notification `captive-portal-login`. Un client authentifié n'est jamais
+redirigé. Le DoH n'est pas couvert (parité DoH incomplète, cf. supra).
+
 ---
 
 ## Anti-rafale des redirections captives (`src/worker_captive.moon`)

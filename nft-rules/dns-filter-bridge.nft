@@ -94,6 +94,21 @@ table bridge dns-filter-bridge {
     flags timeout
   }
 
+  # Destinations des sondes de portail captif (réponses DNS `dnsonly`),
+  # apprises par worker_responses (MAC cliente . IP de destination). Une règle
+  # du hook forward, placée AVANT le dispatch, y redirige le SYN/80 : l'IP
+  # d'une sonde peut être partagée avec un CDN autorisé par une autre règle
+  # (cf. docs/agents/filtre.md § Sondes de portail captif).
+  set captive_probe_mac4 {
+    type  ether_addr . ipv4_addr
+    flags timeout
+  }
+
+  set captive_probe_mac6 {
+    type  ether_addr . ipv6_addr
+    flags timeout
+  }
+
   # Destinations IPv6 en liste blanche statique (IPs ou CIDRs).
   # Peuplé au démarrage et rechargé à chaud via SIGHUP.
   set ip6_dest_whitelist {
@@ -253,6 +268,17 @@ table bridge dns-filter-bridge {
     # Équivalent sémantique au `ct state established,related accept` présent plus
     # bas, mais borné aux flux décidés et placé avant le travail coûteux.
 {FAST_PATH_LATE}
+
+    # Sondes de portail captif : redirection AVANT les règles d'allow.
+    # Sans cette règle, une sonde dont l'IP est partagée avec un CDN autorisé
+    # par une autre règle (mesuré le 2026-11-12 : addons.mozilla.org et
+    # firefox-portal-detection.com partagent 151.101.x.91 / 2a04:4e42::/48)
+    # atteint le vrai serveur : 204 → Firefox NOT_CAPTIVE, aucun bandeau.
+    # Les destinations sont apprises par worker_responses (action dnsonly) dans
+    # captive_probe_mac4/6. Exclusion des clients authentifiés : même logique
+    # que les règles « Auth client SYN/80 » plus bas (pas de portail inutile).
+    ether saddr != @authenticated_macs ether saddr . ip daddr @captive_probe_mac4 tcp dport 80 tcp flags & (fin | syn | rst | ack) == syn counter queue num {QUEUE_CAPTIVE} comment "Captive probe SYN/80 → portal (before allow rules)"
+    ether saddr != @authenticated_macs ether saddr . ip6 daddr @captive_probe_mac6 tcp dport 80 tcp flags & (fin | syn | rst | ack) == syn counter queue num {QUEUE_CAPTIVE} comment "Captive probe SYN/80 v6 → portal (before allow rules)"
 
     # Trafic autorisé après résolution DNS.
     # Ordre : ether avant ip (élimine plus tôt), IPv6 avant IPv4.

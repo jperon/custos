@@ -2586,3 +2586,79 @@ l'ordre ; sondes en lecture uniquement (`curl -k --http2`, `openssl s_client`).
   "make all && make check && make test"` : **2826 succès / 0 échec / 0 erreur**
   (unitaires, référence avant : 2812) et 12/12 tests JS. `make test-e2e` non
   exécuté dans cette passe (provisioning libvirt non sollicité).
+
+### Bandeau de portail captif absent sur Firefox / lenteur du portail (branche d-ffbanner)
+
+**Contexte.** Déploiement `defd535` (custos.lan) ; client `servus`
+(10.35.1.2 / d8:d3:85:63:6b:27, non authentifié : `authenticated_ips`,
+`authenticated_ips6`, `authenticated_macs` vides). Firefox 155.0.1
+(`captivedetect.canonicalURL = http://firefox-portal-detection.com/generate_204`).
+
+**Reproduction (2026-11-12, 06:05-06:10 UTC).**
+- `kdig`/`curl` depuis servus : `firefox-portal-detection.com` résout
+  normalement (`151.101.{1,65,129,193}.91`, `2a04:4e42::{200,400,600}::347`) ;
+  `curl -4 http://firefox-portal-detection.com/generate_204` renvoie le **vrai
+  204** de Fastly (`code=204 ip=151.101.65.91 total=0.056s`), idem en IPv6.
+- Firefox headless, profil neuf, `MOZ_LOG=CaptivePortalService:5` :
+  `CaptivePortalService::Complete(success=1) mState=1` (NOT_CAPTIVE), aucun
+  `captive-portal-login`. Contre-épreuve avec
+  `captivedetect.canonicalURL = http://1.1.1.1/generate_204` (port 80 redirigé
+  par custos) : `CaptivePortalService::Observe() topic=captive-portal-login`
+  → la chaîne 302 du worker captive fonctionne et suffit à déclencher le
+  bandeau, malgré les RST.
+- Cause mesurée : la sonde n'est jamais redirigée. La règle « Mises à jour »
+  (`r_mises_a_jour`, sans condition d'auth) avait dans ses sets dynamiques
+  `d8:d3:85:63:6b:27 . 151.101.65.91` (et les autres IP Fastly), à cause de
+  `addons.mozilla.org` (même CDN) résolu par Firefox (`logread` :
+  `qname=addons.mozilla.org ... rule=r_mises_a_jour`) ; son compteur de match
+  valait 261 paquets. Le SYN/80 de la sonde est donc accepté par
+  `jump cv_rules_dispatch` avant d'atteindre la règle captive (située après).
+  Le `dnsonly` de la sonde, lui, n'insère rien : la sonde atteint le vrai
+  serveur → 204 → NOT_CAPTIVE.
+
+**Correctif.** `worker_responses.finalize_a` mémorise les destinations des
+réponses `dnsonly` (sondes) dans deux sets nft statiques, clé MAC cliente . IP
+de destination : `CAPTIVE_PROBE_SET = "captive_probe"` (`src/worker_responses.moon:48-51`),
+insertion `add_mac4/6` avec timeout `rr_timeout` (lignes 729-743), et le
+verdict DNS attend l'ACK nft de cette insertion (`settle`, lignes 465-471 et
+785). Le template déclare `captive_probe_mac4/6`
+(`nft-rules/dns-filter-bridge.nft:102-110`) et deux règles **avant**
+`jump cv_rules_dispatch` (lignes 274-281) : SYN/80 de ces destinations → file
+captive, sauf MAC authentifiée (`ether saddr != @authenticated_macs`, même
+exclusion que les règles « Auth client SYN/80 »). L'IP peut rester dans les
+sets d'une règle d'allow : le SYN/80 de la sonde est quand même redirigé
+(302 → Firefox LOCKED). DoH non couvert (parité incomplète).
+
+**Tests.** `tests/unit/worker_responses_finalize_spec.moon` : réponse dnsonly →
+insertion `captive_probe` (MAC, `ack` attendu) ; non dnsonly → aucune
+insertion ; échec d'insertion → réponse tout de même `NF_ACCEPT`.
+`tests/unit/worker_responses_spec.moon` : contrat `settle` = attente ssi
+`need_ack` (dnsonly avec insertion attend l'ACK). Nouveau
+`tests/unit/nft_captive_probe_spec.moon` : sets tuple MAC.IP, règles avant le
+dispatch, exclusion des MAC authentifiées, pas de placeholder résiduel.
+Syntaxe des nouvelles règles validée par `nft -c` (nft 1.1.6 ; l'accès netlink
+échoue ensuite faute de privilèges, la seule erreur constatée).
+
+**Lenteur du portail (`https://custos.stemarie.dynv6.net:33443/`).** 5 essais
+`curl -w` depuis servus : `dns` 5-12 ms, `connect` 1-1,2 ms, `appconnect`
+44-51 ms, `starttransfer` +5-8 ms, `total` 54-66 ms, 10 292 octets. La page est
+un HTML autonome (CSS/JS inline, favicon data URI, aucune ressource externe) ;
+le temps part donc dans la poignée TLS (fork d'un enfant AUTH-conn + wolfSSL
+par connexion), pas dans la génération de page. Aucun correctif code : la
+latence mesurée ne reproduit pas une lenteur perceptible.
+
+**RST de servus sur la connexion captée.** Journal
+`/home/jacques/programmes/net/custos/tmp/servus-port80.log` : 961 RST dont
+**958 émis par servus** (client→serveur) en 53 s, 3 seulement côté serveur.
+`worker_reject` forge un RST `seq=0`
+(`tests/unit/worker_reject_forge_spec.moon:131`) ; les RST observés ont un seq
+aléatoire et la MAC de la passerelle (58:d6:1f:57:4f:94) : ce sont des resets
+de la pile TCP de servus sur la connexion à demi forgée (302+FIN envoyés alors
+que le SYN a été droppé), pas des émissions de worker_reject. Effet sur la
+détection : nul (le 302 est consommé par curl, et Firefox déclenche
+`captive-portal-login` dans la contre-épreuve). Aucun correctif code dans cette
+passe ; à réinstruire séparément si la charge RST gêne.
+
+**Vérification.** `nix develop --command bash -c "make all && make check &&
+make test"` : **2819 succès / 0 échec / 0 erreur** (unitaires) ; `make test`
+inclut les 12 tests JS. `make test-e2e` non exécuté dans cette passe.

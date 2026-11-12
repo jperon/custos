@@ -836,7 +836,7 @@ describe("verdicts différés par lot NFQUEUE (settle / flush_deferred)", functi
     assert.equals(1, n)
     return assert.equals(0, m.deferred_count())
   end)
-  return it("hors lot, dnsonly supprime l'attente (aucune insertion nft)", function()
+  return it("hors lot, dnsonly avec insertion captive_probe attend l'ACK", function()
     local ctx = {
       qh_ptr = "qh",
       pkt_id = 5,
@@ -845,7 +845,7 @@ describe("verdicts différés par lot NFQUEUE (settle / flush_deferred)", functi
     }
     calls.seq = 9
     m.settle(ctx, 1, nil, true)
-    assert.equals(0, #calls.waits)
+    assert.equals(1, #calls.waits)
     return assert.equals(1, #calls.set)
   end)
 end)
