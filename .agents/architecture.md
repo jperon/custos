@@ -65,10 +65,13 @@ Worker DoH (opt., HTTPS/WolfSSL, port 8443) : résout via upstream DNS, applique
 Les numéros de queue sont **configurables** (section `nfqueue` de la config, ou
 UCI : `QUEUE_QUESTIONS`, `QUEUE_RESPONSES`, `QUEUE_CAPTIVE`, `QUEUE_REJECT`,
 `QUEUE_AUTH`, `QUEUE_SNI`, `QUEUE_SIP`). Ils prennent un nombre ou une **plage
-contiguë** (`"4-5"` → un worker par file) ; `queue num` n'accepte pas de liste
-avec virgules. Valeurs par défaut : questions `0-1`, responses `4`, captive `20`,
-reject `10-11`, auth `5`, sni `6`, sip `12`. Les workers `tls`, `sip` et
-`doh` ne sont forkés que si leur clé respective est définie / activée.
+contiguë** (`"14-15"` → un worker par file) ; `queue num` n'accepte pas de liste
+avec virgules. Deux rôles ne peuvent pas partager un numéro de file : au
+chargement, un chevauchement (plages développées) émet une ERROR
+`nfqueue_overlap` et **refuse le démarrage** (`src/config.moon`). Valeurs par
+défaut : questions `0-1`, responses `4`, captive `20`, reject `10-11`, auth
+`5`, sni `6`, sip `12`. Les workers `tls`, `sip` et `doh` ne sont forkés que si
+leur clé respective est définie / activée.
 
 ### Mémoire : partage des listes de domaines (RAM faible)
 
@@ -124,7 +127,7 @@ fois la dernière ligne traitée.
 ### Workers DNS multiples (questions et réponses)
 
 `nfqueue.questions` et `nfqueue.responses` acceptent une plage contiguë
-(`"0-1"`, `"4-5"`) : un worker par file. La répartition est faite par le noyau,
+(`"0-1"`, `"14-15"`) : un worker par file. La répartition est faite par le noyau,
 **par flux** (`queue num N-M` → `nfqueue_hash`, adresses triées + protocole,
 sans les ports), donc tous les paquets d'un même flux arrivent au même worker.
 `fanout` n'est pas utilisé : ce flag répartit par CPU, ce qui casserait cette

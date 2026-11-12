@@ -324,7 +324,7 @@ runtime: {
 
 Définit les numéros (ou plages) des files NFQUEUE utilisées par les workers.
 Chaque numéro de file correspond à un worker distinct qui lit depuis le noyau
-Linux : une plage `"4-5"` fork donc **deux** workers réponses.
+Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 
 | Clé | Type | Défaut | Worker |
 |-----|------|--------|--------|
@@ -337,7 +337,7 @@ Linux : une plage `"4-5"` fork donc **deux** workers réponses.
 | `sip` | string | `"12"` | Trafic SIP/VoIP |
 | `doh_vlan` | string | `"13"` | Détection VLAN des clients DoH (worker `worker_doh_vlan`, optionnel : seulement si `doh.enabled`). Renseigne `req.vlan` en DoH pour `from_vlan`. |
 
-**Répartition multi-workers.** Une plage (ex. `"0-1"` ou `"4-5"`) fait répartir
+**Répartition multi-workers.** Une plage (ex. `"0-1"` ou `"14-15"`) fait répartir
 les paquets par le noyau, **par flux** : `queue num N-M` hache le couple
 d'adresses source/destination (trié, sans les ports) et le protocole, donc tous
 les paquets d'un même flux — et les deux sens d'une même conversation — tombent
@@ -361,15 +361,24 @@ changement de comportement ni de coût**. Le mode
 [`runtime.lowmem`](#2-section-runtime) ramène toute plage à une seule file.
 
 > **Syntaxe.** `queue num` n'accepte qu'un nombre (`"4"`) ou une plage contiguë
-> croissante (`"4-5"`). Une liste avec virgules (`"4,6"`) est une erreur de
+> croissante (`"14-15"`). Une liste avec virgules (`"4,6"`) est une erreur de
 > syntaxe nft qui ferait échouer l'application du ruleset : pour `responses`,
 > elle est ramenée à sa première file avec l'avertissement
 > `nfqueue_responses_range_not_contiguous`.
 
+> **Unicité des files.** Chaque numéro de file ne peut appartenir qu'à **un
+> seul rôle** : le noyau livre chaque paquet à un seul des sockets abonnés à une
+> file, sans garantir lequel, donc deux rôles sur le même numéro se voleraient
+> les paquets et l'un des deux cesserait de fonctionner silencieusement. Au
+> chargement, `config.moon` développe toutes les plages et, en cas de
+> chevauchement, émet une ERROR `nfqueue_overlap` (champs `queue`, `role`,
+> `conflict`) puis **refuse de démarrer**. Exemple : `responses: "4-5"` chevauche
+> `auth: "5"` (défaut) ; utiliser une plage libre comme `"14-15"`.
+
 ```moonscript
 nfqueue: {
   questions: "0-1"     -- 2 workers questions
-  responses: "4-5"     -- 2 workers réponses (répartition par flux)
+  responses: "14-15"   -- 2 workers réponses (répartition par flux)
   captive:   "20"
   reject:    "10-11"
   auth:      "5"
@@ -962,9 +971,12 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 le dossier **source** des `.txt` que l'updater scanne
 (`src/filter/updater.moon:425-434`) pour produire les `.bin` sous
 `{domainlists_dir}/custom/` (ou dans `custom_lists_dir` lui-même si
-`domainlists_dir` est absent). Une liste référencée mais introuvable ou vide
-est signalée au chargement par `filter_list_missing` / `filter_list_empty`
-(champs `condition`, `list`, `path`), sans changer le filtrage : elle ne
+`domainlists_dir` est absent). Une source `.txt` **vide** est compilée en un
+`.bin` de 0 octet — une liste vide **valide** : le filtre la charge sans
+`filter_list_missing` (au plus `filter_list_empty`). Une liste réellement
+**absente** (aucun `.bin` ni `.domains`) reste signalée par
+`filter_list_missing` ; le champ `path` donne le chemin cherché. Ces
+avertissements ne changent pas le filtrage : une liste vide ou absente ne
 correspond jamais.
 
 `domainlists_dir` est le répertoire de **sortie** lu par le filtre

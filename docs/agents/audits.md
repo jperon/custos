@@ -2896,3 +2896,48 @@ décrémente la taille ; mesure mémoire `collectgarbage`.
 make test"` : **2860 succès / 0 échec / 0 erreur / 0 pending** (`tmp/test.log`),
 `check_globals` OK, tests JS 12/12. `make test-e2e` non lancé (consigne « aucun
 ssh »).
+
+### Chevauchement des files nfqueue et sources vides (branche d-qfix)
+
+**1. Chevauchement nfqueue non détecté.** `src/config.moon` acceptait deux rôles
+sur un même numéro de file (ex. `responses: "4-5"` recouvre `auth: "5"`, défaut).
+Le noyau livre chaque paquet à **un seul** des sockets abonnés à une file, sans
+garantir lequel : l'un des deux rôles cessait de recevoir ses paquets, sans
+erreur. Correctif dans `normalize` (`src/config.moon:529-546` pour la liste
+`NFQUEUE_ROLES` et `find_nfqueue_overlap`, `:612-621` pour l'appel) : toutes les
+plages sont développées (`lib.lowmem.parse_queues`), le premier numéro partagé
+par deux rôles émet une ERROR `nfqueue_overlap` — champs d'identité `queue`,
+`role`, `conflict` (`config_error`, `src/config.moon:513-524` ; classification
+dans `src/log.moon:106,124`) — puis `error` refuse le démarrage. Comportement
+choisi : **fail-closed**, le plus sûr ; un repli sur les défauts aurait changé
+silencieusement la configuration et laissé tourner un service dont une file est
+de toute façon inutilisable. La validation est placée **après** la réduction
+`"4,6"` → `"4"` existante, pour ne pas signaler un faux conflit avec `sni: "6"`.
+Tests : `tests/unit/config_spec.moon:355-410` (conflit `responses "4-5"`/`auth
+"5"` → ERROR structurée + refus ; plage libre `"14-15"` acceptée ; liste non
+contiguë réduite avant validation).
+
+**2. Source vide → `filter_list_missing`.** `write_bin`
+(`src/filter/updater_io.moon:94-115`) traitait `n == 0` comme « skipped » et
+n'écrivait **aucun** fichier ; le filtre ne trouvait alors ni `.bin` ni
+`.domains` et loguait `filter_list_missing` au démarrage. Il écrit désormais un
+`.bin` de 0 octet (retour `true, "liste vide (0 domaine) → …"`, `:114`), que
+`load_list` reconnaît comme liste vide (`src/filter/conditions/to_domainlist.moon:111-113`) :
+plus de `filter_list_missing` (au plus `filter_list_empty`). Une source
+réellement absente ne produit toujours aucun `.bin` et conserve son
+avertissement. Tests : `tests/unit/filter/updater_io_spec.moon:143-157` (source
+vide → `.bin` de taille 0 compté en succès ; source absente → aucun `.bin`) et
+`tests/unit/filter/list_warnings_spec.moon:145-154` (source vide compilée →
+`filter_list_empty`, jamais `filter_list_missing`).
+
+**Documentation.** `doc/CONFIG.md` §3 (encadré « Unicité des files », exemples
+`14-15`) et §14.1 (source vide valide vs liste absente) ; `.agents/architecture.md:68`
+et `:130` ; `docs/agents/perf.md:450,455,573-581` (recommandation `"4-5"` →
+`"14-15"`, workers `resp-q14`/`resp-q15`). Les récits historiques de
+`docs/agents/audits.md` (mesures de la branche `d-multi`) sont laissés tels
+quels : `"4-5"` y décrit une mesure passée, pas une configuration à déployer.
+
+**Vérification (2026-11-12, branche d-qfix).** `nix develop --command bash -c
+"make all && make check && make test"` : **2865 succès / 0 échec / 0 erreur /
+0 pending** (`tmp/test.log`), `check_globals` OK, tests JS 12/12. `make
+test-e2e` non lancé (consigne « pas de ssh »).
