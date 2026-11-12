@@ -852,3 +852,197 @@ permanent → `NF_ACCEPT`), `tests/unit/worker_responses_spec.moon` (tube drain�
 sans paquet nfq, purge bornée), `tests/unit/log_spec.moon` (rate-limiting par
 `ipc_fd`).
 
+
+## 13. Campagne multi-sources multi-worker (2026-11-12, branche `d-bench4`)
+
+Campagne demandée après le correctif `d-mfix` (§12) : plafond de la configuration
+déployée `nfqueue.questions: "0-1"`, `nfqueue.responses: "14-15"` en répartissant
+la charge sur **plusieurs couples d'adresses** — le hachage NFQUEUE porte sur le
+couple d'adresses et le protocole, sans les ports (§11.1). Harnais `tmp/bench4/`
+(`dnsload4.py`, `runphase4.sh`, `counters.sh`, `sampler4.sh`, `analyse4.py`,
+`mapqueues.sh`) ; résultats bruts `tmp/bench4/results/` (ignorés par git).
+Aucune modification de `src/`, aucune écriture sur `custos.lan` (lecture seule :
+`/proc`, `logread`, `nft list`, `top`), aucun redémarrage.
+
+### 13.1 Deux écarts au protocole de §7.1, constatés avant la campagne
+
+1. **Le client `servus` n'est pas authentifié.** Le dernier
+   `auth_server_login_success` du journal date du 2026-11-12 08:21:56
+   (`mac=d8:d3:85:63:6b:27`), et les trois sets `authenticated_*`
+   (`nft list set bridge dns-filter-bridge authenticated_ips|ips6|macs`) sont
+   **vides** au début de la campagne (`auth.idle_timeout` = 300 s). Le profil
+   `mixed` réellement exercé est donc 70,7 % `r_refus_a_priori` + 29,3 %
+   `r_ouverture_complete` (mesuré : 6359 / 2642 lignes à 300 q/s), et non
+   40 % de Tailscale autorisé par `r_utilisateurs` : **ni second avis, ni
+   injection nft** (CPU `nft` 5-12 %, contre 50 % à 200 q/s dans §2).
+2. **Le worker DoH consomme toujours ~1 cœur** (anomalie §12.5, non corrigée) :
+   96,8 % d'un vCPU au repos (13 s) et 60-98 % pendant les paliers. Un quart de
+   la machine est donc indisponible en permanence.
+
+Les chiffres ci-dessous ne sont donc **pas comparables terme à terme** à ceux de
+§7.1 (profil authentifié avec injection nft) : ils mesurent la montée en charge
+du **chemin questions/réponses multi-worker** à coût nft quasi nul, et la
+comparaison à §7.1 est faite explicitement §13.4.
+
+### 13.2 Multi-source : IPv6 impossible, repli sur les adresses IPv4 du résolveur
+
+**Le transport DNS IPv6 ne peut pas traverser le filtre.** La règle
+`ip6 daddr fe80::/10 accept` (`nft-rules/dns-filter-bridge.nft:177`, déployée au
+sein de `nft list ruleset` ligne 943) précède les règles
+`queue num {QUEUE_QUESTIONS}` / `queue num {QUEUE_RESPONSES}`
+(`:204-205`, déployées lignes 955-956). Une question DNS vers l'adresse
+link-local du résolveur est donc acceptée **sans passer par la file**.
+
+Vérifié avec une IPv6 `/128` temporaire (`2001:470:ca35:1::b001`, ajoutée par
+`sudo -n ip -6 addr add … nodad`, retirée aussitôt) et une requête vers
+`fe80::5ad6:1fff:fe57:4f94%wan` (l'adresse link-local de 10.35.1.1, MAC
+`58:d6:1f:57:4f:94`) : aucune ligne de verdict pour la question, mais la réponse
+a bien été prise en file puis jetée faute de `pending` —
+`action=response_orphan_dropped src_ip=fe80::5ad6:1fff:fe57:4f94
+dst_ip=2001:470:ca35:1::b001` (log du 2026-11-12 10:49:07). Les deux adresses
+globales existantes de `wan` (`2001:470:ca35:1:dad3:85ff:fe63:6b27`,
+`2001:470:ca35:1::bede`) ne peuvent donc servir que de sources vers une
+destination globale.
+
+Or **aucune adresse IPv6 globale du résolveur n'écoute sur :53** :
+`reseau.stemarie.dynv6.net AAAA` = `2001:470:ca35:5:7823:17ff:fe74:fbe6`
+(timeout), `2001:470:ca35:1::1` et `2001:470:ca35:1:5ad6:1fff:fe57:4f94` en
+NDP `FAILED`, et l'adresse RDNSS annoncée (`resolvectl status wan` :
+`2001:470:ca35:1::`) est l'adresse anycast subnet-router, qui **refuse** :53
+(« connection refused »). L'adresse `/128` temporaire a été retirée et
+`ip -6 addr show dev wan` ne contient plus que les deux globales d'origine et la
+link-local (vérifié en fin de campagne).
+
+**Repli retenu : faire varier la destination IPv4.** Les neuf adresses du
+résolveur sur le routeur (`10.35.{1..8,99}.1`) répondent toutes le DNS
+(30/30 réponses chacune) et le hachage porte sur le couple `(min,max,proto)`
+(§11.1) : changer de destination change donc de file, exactement comme changer
+de source. Cartographie mesurée par Δ`id_sequence` sur 30 requêtes par adresse
+(`tmp/bench4/results/mapqueues.log`) :
+
+| adresses du résolveur | index de file (questions / réponses) |
+|---|---|
+| `10.35.1.1`, `10.35.2.1`, `10.35.3.1`, `10.35.7.1` | 1 → `dns-q1` / `resp-q15` |
+| `10.35.4.1`, `10.35.5.1`, `10.35.6.1`, `10.35.8.1`, `10.35.99.1` | 0 → `dns-q0` / `resp-q14` |
+
+Les paliers « multi » ci-dessous utilisent `10.35.1.1,10.35.4.1` (50/50, une
+adresse par file) ; les témoins « mono » n'utilisent que `10.35.1.1` (toute la
+charge sur `dns-q1`/`resp-q15`). Répartition vérifiée à chaque palier : à
+300 q/s, Δ`id_sequence` = 4500/4500 sur les deux files de chaque plage.
+
+### 13.3 Résultats mesurés
+
+Paliers de 30 s, un seul générateur, repos vérifié avant chacun (profondeur
+nulle et `user_dropped` figé sur 3 s), sonde unique après arrêt. CPU = % d'un
+vCPU sur la fenêtre (jiffies `/proc/<pid>/stat` ; HZ = 100 vérifié : 3993 ticks
+`/proc/stat` en 10 s sur 4 CPU). `udrop` = `queue_user_dropped` (col. 7).
+
+| palier | destinations | émis/reçus | perte | RTT p50/p99 (ms) | `dns-q0/q1` | `resp-q14/q15` | `nft` | `doh` | udrop q0/q1/q14/q15 | Δseq q0/q1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 300 `mixed` | 2 (1 par file) | 9000/9000 | 0 % | **4,7 / 16,4** | 19,3/19,1 | 28,9/28,5 | 4,9 | 97,8 | 0/0/0/0 | 4500/4500 |
+| 500 `mixed` | 2 | 15000/15000 | 0 % | **10,9 / 238** | 31,5/31,0 | 43,8/43,7 | 8,0 | 71,2 | 0/0/0/0 | 7500/7501 |
+| 600 `mixed` | 2 | 17999/17999 | 0 % | **91,3 / 397** | 37,4/37,1 | 48,8/49,0 | 10,2 | 61,6 | 0/0/0/0 | 8999/9000 |
+| 700 `mixed` | 2 | 21000/15934 | **24,1 %** | 507 / 1262 | 40,7/39,1 | 46,2/45,8 | 11,9 | 60,6 | 0/212/2383/2467 | 10500/10507 |
+| 500 `up` | 2 | 15000/15000 | 0 % | **6,0 / 175** | 24,6/24,5 | 42,6/43,0 | 0,0 | 77,9 | 0/0/0/0 | 7500/7500 |
+| 800 `up` | 2 | 24000/18205 | **24,1 %** | 503 / 1124 | 35,2/34,7 | 47,3/47,4 | 0,0 | 61,5 | 0/0/2889/2862 | 12000/12003 |
+| 300 `mixed` | 1 (témoin) | 9000/9000 | 0 % | 4,7 / 64,4 | 0/35,4 | 10,6/41,1 | 4,9 | 92,6 | 0/0/0/0 | 0/9000 |
+| 500 `mixed` | 1 (témoin) | 15000/15000 | 0 % | **207,6** / 1207 | 0/59,5 | 17,7/65,1 | 8,0 | 74,4 | 0/0/0/0 | 0/15000 |
+| 600 `mixed` | 1 (témoin) | 17999/13900 | **22,8 %** | 388,6 / 1221 | 0/62,7 | 18,5/60,9 | 7,0 | 75,2 | 0/970/0/3092 | 0/18002 |
+
+Sur les témoins mono, `resp-q14` consomme **10,6 à 18,5 % d'un vCPU alors que sa
+file ne reçoit aucun paquet** : c'est le coût du drain du tube de fan-out (copie
+de toutes les questions, `perf.md` §11.2 / §12.2 « volet 1 »).
+
+Autres mesures de la fenêtre :
+
+- **Perte = `user_dropped` uniquement, côté réponses.** À 700 `mixed` comme à
+  800 `up`, `queue_dropped` = 0 sur toutes les files, les questions sont
+  absorbées (udrop q0/q1 = 0/212 et 0/0) et la perte est exactement portée par
+  `resp-q14`/`resp-q15` (4860 et 5751 paquets). `response_queue_read_enobufs`
+  apparaît 2 fois à 700 (0 à 800) ; au palier 800 `up`, la profondeur max
+  échantillonnée est de 279 (q14) et 258 (q15), contre 91 (q0) et 65 (q1).
+- **Aucun défaut du fan-out `d-mfix`** : sur les neuf paliers, **0**
+  `questions_ipc_write_failed`, 0 `ipc_write_saturated`, 0
+  `response_orphan_dropped` (hors la sonde IPv6 du §13.2), 0
+  `so_verdict_bus_invalid`, 0 `nft_ack_timeout`. Les seuls WARN de fenêtre sont
+  les ENOBUFS ci-dessus et un `questions_l2_mac_missing` (1, `suppressed=3`) au
+  témoin 600.
+- **Coût par paquet** (CPU ÷ paquets traités, deux workers) : réponse
+  **1,63-1,71 ms** (600 `mixed` / 500 `up`), question **1,24 ms** (600 `mixed`)
+  et **0,98 ms** (500 `up`). Attente d'ACK nulle ou marginale (`ack_wait_us`
+  non nul sur 2/15000 lignes en `up` ; p99 1,15 ms à 600 `mixed`), ce qui
+  confirme que le correctif ACK par lot tient.
+
+### 13.4 Comparaison à la référence §7.1
+
+§7.1 (un seul worker, profil authentifié avec injection nft) : **0 % jusqu'à
+300 q/s `mixed`**, 9,9 % à 400, 35,9 % à 500, et `up` 500 à 0 % ; au point de
+rupture `resp-q4` 78 %, `dns-q1` 77-83 %, `nft` 60-63 % d'un vCPU chacun.
+
+- **En débit offert**, la configuration multi-worker tient 0 % jusqu'à
+  600 q/s `mixed` et 500 q/s `up`, et décroche à 700 / 800 (24,1 % dans les deux
+  cas). Le témoin mono-file, mesuré avec **le même profil allégé**, décroche dès
+  600 (22,8 %) : à profil identique, le passage à deux files gagne donc environ
+  **+20 % de débit offert** (500 → 600) avant la perte, et non ×2.
+- **En latence, le gain est net** : à 500 q/s `mixed`, p50 207,6 → 10,9 ms
+  (÷19) et p99 1207 → 238 ms (÷5) ; à 300 q/s, p99 64,4 → 16,4 ms (÷4). Le
+  décrochage de la file unique se voit d'abord en latence (p50 207 ms à 500,
+  sans perte), pas en perte.
+- **Coût du multi-worker** : à débit égal, le chemin réponses consomme ~35-40 %
+  de CPU en plus (300 : 57,4 % contre 41,1 % ; 500 : 87,5 % contre 65,1 %),
+  parce que chaque worker réponses draine et parse le tube de fan-out de
+  **toutes** les questions (cf. `resp-q14` à 10-18 % sur les témoins mono).
+- **§7.1 n'est pas battu en débit absolu** : sa référence à 300 q/s `mixed`
+  exécute 8 RR Tailscale, le second avis et 16 insertions nft par réponse, alors
+  que la présente campagne n'exécute ni second avis ni injection (`nft` 5-12 %
+  au lieu de 50-63 %). Les deux plafonds ne mesurent pas le même travail par
+  requête ; seule la comparaison mono/multi **à profil identique** est
+  quantifiée ci-dessus.
+
+### 13.5 Nouveau goulot
+
+À 700 `mixed` et 800 `up` (24,1 % de perte dans les deux cas) :
+
+1. **Le point de perte est le tampon de réception netlink des workers
+   réponses**, pas leur CPU : `user_dropped` sur q14/q15 uniquement,
+   `queue_dropped` = 0, profondeur 258-279, `response_queue_read_enobufs`, alors
+   que les workers réponses sont à **46-49 % d'un vCPU chacun** et que la
+   machine garde 5-10 % de temps CPU idle. Le socket garde le défaut noyau
+   (~208 Ko, aucun `setsockopt(SO_RCVBUF)`, cf. §3.3) : les réponses du
+   résolveur arrivent par rafales (profondeur qui bondit de ~150 paquets entre
+   deux échantillons à 10 Hz) et le noyau jette l'excédent. Le chemin questions,
+   alimenté au rythme régulier du client, ne perd rien.
+2. **La machine est néanmoins à 90-95 % occupée** (moyenne fenêtre :
+   user 60-63 %, sys 27-31 %, softirq 4 %, idle 5-8 %) : le plafond global est
+   bien le CPU agrégé des 4 cœurs, mais **aucun worker n'est saturé** — c'est la
+   différence avec §7.1/§10, où `resp-q4` à 78 % était le goulot.
+3. **Le worker DoH est le premier consommateur** : 0,6 à 1,0 cœur en continu
+   (§12.5, toujours présent). Sans lui, ~25 % de capacité en plus.
+
+En résumé : le multi-worker a supprimé la sérialisation par worker de §7.1, mais
+le plafond est désormais (a) le tampon netlink des réponses, qui jette les
+rafales du résolveur, (b) le coût par paquet (1,6-1,7 ms par réponse, 1,0-1,2 ms
+par question) réparti sur 4 cœurs dont un est mangé par DoH.
+
+### 13.6 Limites et reste à faire
+
+- **Profil non authentifié** (§13.1) : la campagne ne dit rien du plafond avec
+  `r_utilisateurs` (8 RR, second avis, injection nft). Réauthentifier `servus`
+  sur le portail avant toute re-mesure de la référence §7.1.
+- **Pas de source IPv6** (§13.2) : la variation de couple d'adresses a été
+  obtenue par la **destination** IPv4 (neuf adresses du même résolveur). C'est
+  équivalent pour le hachage, mais ce n'est pas un test multi-client : la
+  répartition réelle entre clients reste à mesurer.
+- Le mécanisme exact des rafales de réponses (batch du résolveur ou des
+  workers questions, `MAX_BATCH_PKTS` = 64, `src/nfq_loop.moon:27,197-218`)
+  n'est **pas observé** : aucune capture AF_PACKET n'était autorisée. L'hypothèse
+  « rafales > tampon netlink » s'appuie sur les profondeurs et les `user_dropped`.
+- Le diag à 600 `mixed` (14 s) et celui à 800 `up` (12 s, avec `top` et
+  échantillonnage d'états) sont des diagnostics, pas des paliers de 30 s ; leurs
+  chiffres ne figurent pas dans le tableau §13.3.
+- Le worker DoH (~1 cœur) et plusieurs `logread -f` résiduels (six observés,
+  sessions tierces, non tués : accès lecture seule) gonflent la consommation
+  mesurée.
+- Aucun redémarrage, aucune reprise n'a été nécessaire : la sonde unique après
+  chaque palier a répondu (`rc=0`), y compris après les paliers à 24 % de perte,
+  et les files sont revenues à une profondeur nulle.
