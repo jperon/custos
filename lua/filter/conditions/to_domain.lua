@@ -35,6 +35,7 @@ _factory = function(cfg)
         end
       }
     end
+    local last_byte = #domain > 0 and domain:byte(#domain) or nil
     return {
       capabilities = {
         worker = true,
@@ -51,10 +52,16 @@ _factory = function(cfg)
         if _domain == domain then
           return true, "Exact match"
         end
+        if last_byte then
+          if not (_domain:byte(#_domain) == last_byte) then
+            return false, "Domain not matched"
+          end
+        end
+        local dlen = #_domain
+        local elen = #domain
         local pos = _domain:find(".", 1, true)
         while pos do
-          local suffix = _domain:sub(pos + 1)
-          if suffix == domain then
+          if dlen - pos == elen and _domain:find(domain, pos + 1, true) == pos + 1 then
             return true, "Subdomain matched"
           end
           pos = _domain:find(".", pos + 1, true)

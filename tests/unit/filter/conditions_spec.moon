@@ -45,6 +45,43 @@ describe "filter.conditions.to_domain (NCSI/MSFT)", ->
     ok = cond.eval { domain: "evil-msftncsi.com.attacker.test" }
     assert.is_false ok
 
+  -- Garde-fous d'équivalence du rejet O(1) par dernier octet et de la
+  -- comparaison de suffixe sans allocation (docs/agents/perf.md §18) : le
+  -- comportement doit être identique à l'implémentation par sous-chaîne.
+  it "matche l'égalité exacte avec le message « Exact match »", ->
+    cond = (to_domain_factory cfg) "example.com"
+    ok, msg = cond.eval { domain: "example.com" }
+    assert.is_true ok
+    assert.equals "Exact match", msg
+
+  it "matche un suffixe multi-labels (message « Subdomain matched »)", ->
+    cond = (to_domain_factory cfg) "b.com"
+    ok, msg = cond.eval { domain: "a.b.com" }
+    assert.is_true ok
+    assert.equals "Subdomain matched", msg
+
+  it "n'accepte pas un domaine qui se termine par les mêmes lettres sans point de jonction", ->
+    cond = (to_domain_factory cfg) "b.com"
+    assert.is_false (cond.eval { domain: "ab.com" })
+
+  it "rejette quand le dernier octet diffère (filtre O(1))", ->
+    cond = (to_domain_factory cfg) "example.com"
+    assert.is_false (cond.eval { domain: "notexample.org" })
+
+  it "rejette quand le dernier octet coïncide mais pas le contenu", ->
+    cond = (to_domain_factory cfg) "b.com"
+    assert.is_false (cond.eval { domain: "c.b.org" })
+
+  it "rejette un domaine cible plus long que tous les suffixes", ->
+    cond = (to_domain_factory cfg) "a.b.c.example.com"
+    assert.is_false (cond.eval { domain: "example.com" })
+
+  it "rejette un domaine absent de la requête", ->
+    cond = (to_domain_factory cfg) "example.com"
+    ok, msg = cond.eval {}
+    assert.is_false ok
+    assert.equals "Domain not in request", msg
+
 describe "filter.conditions.any_of", ->
   any_of_factory = (require "filter.conditions.any_of").factory
   cfg = { nft: { ip_timeout: "2m" }, auth: { sessions_file: "/nonexistent/sessions" } }
