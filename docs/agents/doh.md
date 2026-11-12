@@ -161,6 +161,36 @@ invalide, stream 0, COMPRESSION_ERROR, plafonds DATA et frame existants),
 `tests/unit/auth/wolfssl_spec.moon` (choix contexte/objet SSL, défaut AUTH
 http/1.1).
 
+### En-tête des réponses DNS forgées (QR/RA, ancount)
+
+Les builders de `src/dns_ede.moon` (`build_blocked_response`,
+`build_nxdomain_response`, `build_sinkhole_response`, `build_cname_response`)
+repartent du `dns_raw` fourni. En UDP c'est la **réponse amont** (déjà QR=1,
+RA=1) ; en DoH c'est la **requête** du client (QR=0, RA=0). Sans marquage
+explicite, la réponse DoH sortait donc avec les flags de la requête : REFUSED
+`0x0105` (QR absent, ancount=1), CNAME `0x0100`. `mark_response_header` force
+désormais QR=1/RA=1 dans les quatre builders ; `build_blocked_response` ne joint
+plus d'enregistrement de réponse (`ancount=0`, seul l'OPT/EDE est ajouté), une
+REFUSED ne portant pas de réponse. `build_captive_response` garde son profil
+autoritaire (QR=1, AA=1, RA inchangé). Tests : `tests/unit/dns_ede_spec.moon`.
+
+### Certificat statique : chaîne complète et expiration
+
+`auth.cert.load_static` (utilisé par le portail et par `worker_doh`) construit
+le contexte via `ssl.newcontext`, qui charge le fichier configuré avec
+`wolfSSL_CTX_use_certificate_chain_file` quand le symbole existe (repli
+`wolfSSL_CTX_use_certificate_file`). Un `fullchain.pem` (feuille +
+intermédiaires) est donc envoyé en entier ; sans cela le client ne voyait que
+la feuille (« unable to verify the first certificate »).
+
+`worker_doh.run` appelle en outre `auth.cert_expiry.check_cert` après le
+chargement du certificat statique : `log_warn` `cert_expired` /
+`cert_expires_soon` (seuil 14 jours, champs `not_after`, `days_left`). `run`
+est rejoué quand le superviseur reforke `doh` sur SIGHUP, donc le contrôle
+couvre aussi le rechargement. Tests : `tests/unit/auth/cert_chain_spec.moon`
+(vraie chaîne CA → intermédiaire → feuille en boucle locale) et
+`tests/unit/auth/cert_expiry_spec.moon`.
+
 ### Parité UDP/DoH : vol captif et overrides du second avis
 
 `doh.query` réplique deux comportements du plan de données UDP (sinon le résolveur

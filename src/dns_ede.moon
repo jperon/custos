@@ -52,9 +52,23 @@ add_ede = (dns, code, text) ->
   dns.header.arcount = #dns.additionals
   dns
 
+--- Marque un message comme réponse récursive (QR=1, RA=1).
+-- Les builders ci-dessous repartent de la requête du client (QR=0, RA=0) :
+-- sans ce marquage, la réponse forgée était émise avec un en-tête de requête
+-- (observé en DoH : flags 0x0105 pour une REFUSED, QR absent). En UDP le
+-- `dns_raw` est la réponse amont (déjà QR=1/RA=1) : le marquage est idempotent.
+-- @tparam table dns Message parsé (muté en place).
+-- @treturn table Le même message.
+mark_response_header = (dns) ->
+  dns.header.qr = true
+  dns.header.ra = true
+  dns
+
 --- Build a REFUSED DNS response with EDE code 17 (Filtered).
+-- Aucun enregistrement de réponse n'est joint : `ancount=0` (une REFUSED ne
+-- porte pas de réponse). Seul l'OPT/EDE est ajouté en additionals.
 -- Returns the packed DNS binary string, or nil on parse failure.
--- @tparam table       dns_orig Parsed question packet's dns table (for qtype).
+-- @tparam table       dns_orig Parsed question packet's dns table (pour qtype).
 -- @tparam string      dns_raw  Raw DNS payload bytes extracted from the packet.
 -- @tparam string|nil  reason   Human-readable block reason for EDE text.
 -- @treturn string|nil Packed DNS response, or nil.
@@ -64,25 +78,10 @@ build_blocked_response = (dns_orig, dns_raw, reason) ->
   dns = parse dns_raw, 1, false
   return nil unless dns
 
+  mark_response_header dns
   dns.header.rcode = REFUSED
   dns.answers = {}
-
-  if dns.question and dns.question.qtype
-    qtype = dns.question.qtype
-    rdata = if qtype == A
-      string.char 0, 0, 0, 0
-    elseif qtype == AAAA
-      string.char 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-    else
-      string.char 0, 0, 0, 0
-
-    dns.answers[1] = {
-      rname:  string.char 0xC0, 0x0C
-      rtype:  qtype
-      rclass: 1
-      rdata:  rdata
-    }
-    dns.header.ancount = 1
+  dns.header.ancount = 0
 
   ede_text = if reason and reason != ""
     "Ne intretis. " .. reason
@@ -105,6 +104,7 @@ build_nxdomain_response = (dns_orig, dns_raw, reason) ->
   dns = parse dns_raw, 1, false
   return nil unless dns
 
+  mark_response_header dns
   dns.header.rcode = NXDOMAIN
   dns.answers = {}
   dns.header.ancount = 0
@@ -172,6 +172,7 @@ build_sinkhole_response = (dns_orig, dns_raw, reason, sink=nil) ->
   dns = parse dns_raw, 1, false
   return nil unless dns
 
+  mark_response_header dns
   dns.header.rcode = NOERROR
   ttl = (sink and tonumber(sink.ttl)) or 60
   ttl = 60 if ttl <= 0
@@ -218,6 +219,7 @@ build_cname_response = (dns_orig, dns_raw, target, reason, target_rrs=nil) ->
   dns = parse dns_raw, 1, false
   return nil unless dns
 
+  mark_response_header dns
   dns.header.rcode = NOERROR
   answers = {
     {

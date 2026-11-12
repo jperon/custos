@@ -97,6 +97,17 @@ et non plus seulement l'IP locale du socket :
   un second essai sur l'IP locale. Un certificat statique configuré
   (`auth.cert`/`auth.key`) reste prioritaire et **le ClientHello n'est même pas
   observé** dans ce cas.
+- **Chaîne complète** : `auth.cert.load_static` → `ssl.newcontext` charge le
+  fichier configuré (`auth.cert`) avec
+  `wolfSSL_CTX_use_certificate_chain_file` quand le symbole existe, avec repli
+  sur `wolfSSL_CTX_use_certificate_file`. Un `fullchain.pem` est donc servi en
+  entier (feuille + intermédiaires), pour AUTH comme pour DoH.
+- **Expiration** : après le chargement du certificat statique,
+  `auth.server.run` appelle `auth.cert_expiry.check_cert` et émet un `log_warn`
+  `cert_expired` / `cert_expires_soon` (seuil 14 jours). AUTH ne recharge pas
+  son certificat sur SIGHUP (seuls les secrets le sont) : le contrôle a lieu au
+  démarrage du worker. Tests : `tests/unit/auth/cert_chain_spec.moon`,
+  `tests/unit/auth/cert_expiry_spec.moon`.
 - **Plafond de noms** : `SNI_CERT_MAX_NAMES = 128` (`server.moon`) est passé à
   `cert_cache.create_cache` ; au-delà, un nom inconnu n'est ni généré ni stocké
   (le nom déjà connu reste servi). `can_store` relit `tmp/cert_cache_index.lua`

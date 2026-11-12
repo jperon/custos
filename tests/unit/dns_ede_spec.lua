@@ -1,8 +1,8 @@
 package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
-local strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response, build_sinkhole_response, build_captive_response
+local strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_blocked_response, build_nxdomain_response, build_cname_response, build_sinkhole_response, build_captive_response
 do
   local _obj_0 = require("dns_ede")
-  strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_cname_response, build_sinkhole_response, build_captive_response = _obj_0.strip_https_rr, _obj_0.strip_a_rr, _obj_0.strip_aaaa_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.build_cname_response, _obj_0.build_sinkhole_response, _obj_0.build_captive_response
+  strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_blocked_response, build_nxdomain_response, build_cname_response, build_sinkhole_response, build_captive_response = _obj_0.strip_https_rr, _obj_0.strip_a_rr, _obj_0.strip_aaaa_rr, _obj_0.add_ede_modified, _obj_0.clear_ad_bit, _obj_0.build_blocked_response, _obj_0.build_nxdomain_response, _obj_0.build_cname_response, _obj_0.build_sinkhole_response, _obj_0.build_captive_response
 end
 local encode_dns_name
 encode_dns_name = require("lib.dns_name").encode_dns_name
@@ -173,6 +173,56 @@ describe("dns_ede.strip_aaaa_rr", function()
     local header = sp(">H H H H H H", 0x4321, 0x8180, 1, 1, 0, 0)
     local raw = header .. question .. answer_a
     return assert.equals(raw, strip_aaaa_rr(raw))
+  end)
+end)
+describe("en-tête des réponses construites depuis la requête", function()
+  local make_query
+  make_query = function(qtype)
+    if qtype == nil then
+      qtype = QTYPE_A
+    end
+    local header = sp(">H H H H H H", 0x1234, 0x0100, 1, 0, 0, 0)
+    return header .. qname_example .. sp(">H H", qtype, QCLASS_IN)
+  end
+  it("build_blocked_response : QR=1, RA=1, REFUSED et ancount=0", function()
+    local resp = build_blocked_response({ }, make_query(), "Test")
+    assert.is_not_nil(resp)
+    local parsed = dns_mod.parse(resp, 1, false)
+    assert.is_true(parsed.header.qr)
+    assert.is_true(parsed.header.ra)
+    assert.equals(5, parsed.header.rcode)
+    assert.equals(0, parsed.header.ancount)
+    assert.equals(0, #(parsed.answers or { }))
+    return assert.equals(1, parsed.header.arcount)
+  end)
+  it("build_nxdomain_response : QR=1 et RA=1", function()
+    local resp = build_nxdomain_response({ }, make_query(), "Test")
+    local parsed = dns_mod.parse(resp, 1, false)
+    assert.is_true(parsed.header.qr)
+    assert.is_true(parsed.header.ra)
+    assert.equals(3, parsed.header.rcode)
+    return assert.equals(0, parsed.header.ancount)
+  end)
+  it("build_sinkhole_response : QR=1 et RA=1", function()
+    local sink = {
+      a = {
+        string.rep("\0", 4)
+      },
+      aaaa = { },
+      ttl = 30
+    }
+    local resp = build_sinkhole_response({ }, make_query(), "Test", sink)
+    local parsed = dns_mod.parse(resp, 1, false)
+    assert.is_true(parsed.header.qr)
+    assert.is_true(parsed.header.ra)
+    return assert.equals(1, parsed.header.ancount)
+  end)
+  return it("build_cname_response : QR=1 et RA=1", function()
+    local resp = build_cname_response({ }, make_query(), "safe.example.com", "Test")
+    local parsed = dns_mod.parse(resp, 1, false)
+    assert.is_true(parsed.header.qr)
+    assert.is_true(parsed.header.ra)
+    return assert.equals(1, parsed.header.ancount)
   end)
 end)
 describe("build_cname_response", function()

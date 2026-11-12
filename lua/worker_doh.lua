@@ -11,6 +11,8 @@ do
   local _obj_0 = require("auth.cert")
   load_or_generate_sni, load_static = _obj_0.load_or_generate_sni, _obj_0.load_static
 end
+local check_cert
+check_cert = require("auth.cert_expiry").check_cert
 local log_info, log_warn, log_error, log_debug, set_action_prefix
 do
   local _obj_0 = require("log")
@@ -906,6 +908,9 @@ run = function(doh_cfg, filter_data)
           action = "static_cert_loaded"
         }
       end)
+      check_cert(doh_cfg.cert, {
+        worker = "doh"
+      })
     else
       log_warn(function()
         return {

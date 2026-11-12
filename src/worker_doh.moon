@@ -17,6 +17,7 @@ bit     = require "bit"
 
 { :fork_child, :reap_one }              = require "lib.process"
 { :load_or_generate_sni, :load_static } = require "auth.cert"
+{ :check_cert } = require "auth.cert_expiry"
 { :log_info, :log_warn, :log_error, :log_debug, :set_action_prefix } = require "log"
 { :read_request, :send_response, :apply_io_timeouts } = require "lib.http"
 { :get_mac, :get_vlan }                 = require "mac_learner_ipc"
@@ -680,6 +681,10 @@ run = (doh_cfg, filter_data) ->
     if ok
       static_cert_paths = { cert: doh_cfg.cert, key: doh_cfg.key }
       log_info -> { action: "static_cert_loaded" }
+      -- Avertir si le certificat statique est expiré/proche de l'expiration.
+      -- `run` est rejoué au redémarrage du worker (SIGHUP du superviseur
+      -- reforke `doh`) : le contrôle couvre donc aussi le rechargement.
+      check_cert doh_cfg.cert, { worker: "doh" }
     else
       log_warn -> { action: "static_cert_load_failed", cert: doh_cfg.cert, key: doh_cfg.key, err: ctx }
 
