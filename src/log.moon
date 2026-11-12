@@ -143,6 +143,7 @@ RL_VOLATILE_KEYS = {
   "question_proc_ms", "question_response_rfd"
   "question_response_wfd", "question_response_workers", "raw", "removed", "removed_count", "resp_bytes", "response_entry_ms"
   "retry_after", "rfd", "revents", "rv", "sans_count", "sent", "seq", "size"
+  "skipped"
   "sock", "sockets", "sport", "src_port", "timeout"
   "timeout_ms", "total", "total_rules", "ts", "ttl", "ttl_s"
   "txid", "upstream_retries", "userlists", "users", "worker_only"

@@ -15,10 +15,10 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_debug, set_action_prefix, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_debug, _obj_0.set_action_prefix, _obj_0.level_enabled
 end
-local split_fields, from_hex, is_ipv4_str, is_ipv6_str, is_valid_mac
+local split_fields, from_hex, is_ipv4_str, is_ipv6_str, is_valid_mac, is_valid_timeout
 do
   local _obj_0 = require("lib.ipc_hex")
-  split_fields, from_hex, is_ipv4_str, is_ipv6_str, is_valid_mac = _obj_0.split_fields, _obj_0.from_hex, _obj_0.is_ipv4_str, _obj_0.is_ipv6_str, _obj_0.is_valid_mac
+  split_fields, from_hex, is_ipv4_str, is_ipv6_str, is_valid_mac, is_valid_timeout = _obj_0.split_fields, _obj_0.from_hex, _obj_0.is_ipv4_str, _obj_0.is_ipv6_str, _obj_0.is_valid_mac, _obj_0.is_valid_timeout
 end
 local BUF_SIZE = 8192
 local MAX_BATCH = 64
@@ -26,9 +26,21 @@ local EAGAIN = 11
 local EWOULDBLOCK = 11
 local POLLIN = 1
 local LINE_VERSION = "v1"
+local CLOCK_MONOTONIC = 1
+local SKIP_WINDOW_MAX_S = 5
+local CACHE_STALE_S = SKIP_WINDOW_MAX_S
+local CACHE_MAX_ENTRIES = 4096
+local TIMEOUT_UNIT_S = {
+  s = 1,
+  m = 60,
+  h = 3600,
+  d = 86400,
+  w = 604800
+}
 local read_buf = ffi.new("char[?]", BUF_SIZE)
 local ack_val = ffi.new("uint64_t[1]")
 local poll_fd = ffi.new("struct pollfd[1]")
+local ts_req = ffi.new("timespec_t[1]")
 local validate_item
 validate_item = function(kind, key, ip)
   if kind == "ip4" then
@@ -96,6 +108,7 @@ parse_line = function(line)
     ip = ip,
     rule_id = rule_id,
     timeout = timeout,
+    has_timeout = is_valid_timeout(parts[6]),
     seq = seq,
     widx = widx,
     corr = corr
@@ -113,11 +126,158 @@ send_ack = function(ack_wfds, widx, seq)
   ack_val[0] = seq or 0
   return libc.write(wfd, ack_val, ACK_SIZE)
 end
+local monotonic_s
+monotonic_s = function()
+  libc.clock_gettime(CLOCK_MONOTONIC, ts_req)
+  return tonumber(ts_req[0].tv_sec) + tonumber(ts_req[0].tv_nsec) / 1000000000
+end
+local timeout_to_seconds
+timeout_to_seconds = function(t)
+  if not (type(t) == "string") then
+    return nil
+  end
+  local digits, unit = t:match("^(%d+)([smhdw]?)$")
+  if not (digits) then
+    return nil
+  end
+  local mult = 1
+  if unit and unit ~= "" then
+    mult = TIMEOUT_UNIT_S[unit]
+    if not (mult) then
+      return nil
+    end
+  end
+  return tonumber(digits) * mult
+end
+local new_cache
+new_cache = function(opts)
+  opts = opts or { }
+  return {
+    entries = { },
+    size = 0,
+    max = opts.max or CACHE_MAX_ENTRIES,
+    skipped = 0,
+    evicted = 0,
+    now = opts.now or monotonic_s
+  }
+end
+local cache_evict
+cache_evict = function(cache)
+  local now = cache.now()
+  for k, e in pairs(cache.entries) do
+    if now - e.t >= CACHE_STALE_S then
+      cache.entries[k] = nil
+      cache.size = cache.size - 1
+    end
+  end
+  if cache.size < cache.max then
+    return 
+  end
+  local target = math.floor(cache.max * 3 / 4)
+  while cache.size > target do
+    local oldest_k, oldest_t = nil, nil
+    for k, e in pairs(cache.entries) do
+      if oldest_t == nil or e.t < oldest_t then
+        oldest_k, oldest_t = k, e.t
+      end
+    end
+    if not (oldest_k) then
+      break
+    end
+    cache.entries[oldest_k] = nil
+    cache.size = cache.size - 1
+    cache.evicted = cache.evicted + 1
+  end
+  return nil
+end
+local cache_put
+cache_put = function(cache, key, timeout_s)
+  if not (cache and key) then
+    return 
+  end
+  local now = cache.now()
+  local entry = cache.entries[key]
+  if entry then
+    entry.t = now
+    entry.timeout_s = timeout_s
+    return 
+  end
+  if cache.size >= cache.max then
+    cache_evict(cache)
+  end
+  cache.entries[key] = {
+    t = now,
+    timeout_s = timeout_s
+  }
+  cache.size = cache.size + 1
+  return nil
+end
+local cache_drop
+cache_drop = function(cache, key)
+  if not (cache and key and cache.entries[key]) then
+    return 
+  end
+  cache.entries[key] = nil
+  cache.size = cache.size - 1
+  return nil
+end
+local cache_clear
+cache_clear = function(cache)
+  if not (cache) then
+    return 
+  end
+  cache.entries = { }
+  cache.size = 0
+  return nil
+end
+local UNCACHEABLE_KINDS = {
+  auth_mac = true,
+  auth_ip4 = true,
+  auth_ip6 = true
+}
+local UNCACHEABLE_SETS = {
+  authenticated_ips = true,
+  authenticated_ips6 = true,
+  authenticated_macs = true,
+  ip4_dest_whitelist = true,
+  ip6_dest_whitelist = true
+}
+local cacheable_set
+cacheable_set = function(set_name)
+  return not (set_name and UNCACHEABLE_SETS[set_name])
+end
+local cache_key_of
+cache_key_of = function(item)
+  if item.cache_key then
+    return item.cache_key
+  end
+  local spec = element_spec(item.kind, item.key, item.ip, item.rule_id, item.timeout)
+  if spec then
+    item.spec = spec
+    local cacheable = not UNCACHEABLE_KINDS[item.kind] and cacheable_set(spec.set_name)
+    if cacheable then
+      item.cache_key = tostring(spec.family) .. "|" .. tostring(spec.table) .. "|" .. tostring(spec.set_name) .. "|" .. tostring(item.key) .. "|" .. tostring(item.ip)
+      item.timeout_s = timeout_to_seconds(item.timeout)
+    end
+  end
+  return item.cache_key
+end
 local try_add_pending
-try_add_pending = function(pending, item)
+try_add_pending = function(pending, item, cache)
   local entry_key = tostring(item.kind) .. "|" .. tostring(item.key) .. "|" .. tostring(item.ip) .. "|" .. tostring(item.timeout) .. "|" .. tostring(tostring(item.rule_id))
   if pending[entry_key] then
     return false
+  end
+  cache_key_of(item)
+  if cache and item.has_timeout and item.cache_key and item.timeout_s then
+    local entry = cache.entries[item.cache_key]
+    if entry and entry.timeout_s then
+      local window = math.min(item.timeout_s / 10, SKIP_WINDOW_MAX_S)
+      if window > 0 and (cache.now() - entry.t) < window and item.timeout_s <= entry.timeout_s + window then
+        cache.skipped = cache.skipped + 1
+        return false
+      end
+    end
   end
   pending[entry_key] = item
   return true
@@ -127,11 +287,12 @@ build_batch = function(pending)
   local groups = { }
   local order = { }
   local singles = { }
+  local items = { }
   local count = 0
   for _, item in pairs(pending) do
     local _continue_0 = false
     repeat
-      local spec = element_spec(item.kind, item.key, item.ip, item.rule_id, item.timeout)
+      local spec = item.spec or element_spec(item.kind, item.key, item.ip, item.rule_id, item.timeout)
       if not (spec) then
         _continue_0 = true
         break
@@ -151,6 +312,7 @@ build_batch = function(pending)
       end
       group.elems[#group.elems + 1] = spec.elem
       singles[#singles + 1] = "add element " .. tostring(spec.family) .. " " .. tostring(spec.table) .. " " .. tostring(spec.set_name) .. " { " .. tostring(spec.elem) .. " }"
+      items[#items + 1] = item
       _continue_0 = true
     until true
     if not _continue_0 then
@@ -166,11 +328,12 @@ build_batch = function(pending)
   return {
     cmds = cmds,
     singles = singles,
+    items = items,
     count = count
   }
 end
 local flush_batch
-flush_batch = function(pending, ack_queue, ack_wfds)
+flush_batch = function(pending, ack_queue, ack_wfds, cache)
   local rule11_count = 0
   local rule11_items = { }
   for _, item in pairs(pending) do
@@ -183,6 +346,7 @@ flush_batch = function(pending, ack_queue, ack_wfds)
   for k in pairs(pending) do
     pending[k] = nil
   end
+  local skipped = cache and cache.skipped or 0
   if batch.count > 0 then
     local cmd = table.concat(batch.cmds, "\n")
     local ok, err = run_cmd(cmd, {
@@ -200,12 +364,23 @@ flush_batch = function(pending, ack_queue, ack_wfds)
       end)
     end
     if ok then
+      if cache then
+        local _list_0 = batch.items
+        for _index_0 = 1, #_list_0 do
+          local item = _list_0[_index_0]
+          local key = cache_key_of(item)
+          if key and item.timeout_s then
+            cache_put(cache, key, item.timeout_s)
+          end
+        end
+      end
       log_debug(function()
         return {
           action = "batch_ok",
           count = batch.count,
           groups = #batch.cmds,
-          acks = #ack_queue
+          acks = #ack_queue,
+          skipped = skipped
         }
       end)
     else
@@ -215,15 +390,31 @@ flush_batch = function(pending, ack_queue, ack_wfds)
           count = batch.count,
           groups = #batch.cmds,
           acks = #ack_queue,
-          err = err or ""
+          err = err or "",
+          skipped = skipped
         }
       end)
-      local _list_0 = batch.singles
-      for _index_0 = 1, #_list_0 do
-        local line = _list_0[_index_0]
+      if cache then
+        local _list_0 = batch.items
+        for _index_0 = 1, #_list_0 do
+          local item = _list_0[_index_0]
+          local key = cache_key_of(item)
+          if key then
+            cache_drop(cache, key)
+          end
+        end
+      end
+      for i, line in ipairs(batch.singles) do
         local ok_one, err_one = run_cmd(line, {
           quiet = true
         })
+        if ok_one and cache then
+          local item = batch.items[i]
+          local key = cache_key_of(item)
+          if key and item.timeout_s then
+            cache_put(cache, key, item.timeout_s)
+          end
+        end
         log_warn(function()
           if not (ok_one) then
             return {
@@ -239,7 +430,8 @@ flush_batch = function(pending, ack_queue, ack_wfds)
     log_debug(function()
       return {
         action = "batch_ack_only",
-        acks = #ack_queue
+        acks = #ack_queue,
+        skipped = skipped
       }
     end)
   end
@@ -260,9 +452,10 @@ flush_batch = function(pending, ack_queue, ack_wfds)
   end
 end
 local run
-run = function(rfd, ack_wfds)
+run = function(rfd, ack_wfds, cache)
   set_action_prefix("nft_")
   ack_wfds = ack_wfds or { }
+  cache = cache or new_cache()
   log_info(function()
     return {
       action = "worker_start",
@@ -304,7 +497,7 @@ run = function(rfd, ack_wfds)
               corr = item.corr,
               rule_id = item.rule_id
             }
-            if try_add_pending(pending, item) then
+            if try_add_pending(pending, item, cache) then
               pending_count = pending_count + 1
             end
           else
@@ -343,7 +536,7 @@ run = function(rfd, ack_wfds)
         end
       elseif n == 0 then
         if pending_count > 0 or #ack_queue > 0 then
-          flush_batch(pending, ack_queue, ack_wfds)
+          flush_batch(pending, ack_queue, ack_wfds, cache)
         end
         log_warn(function()
           return {
@@ -374,7 +567,7 @@ run = function(rfd, ack_wfds)
       end
     end
     if pending_count > 0 or #ack_queue > 0 then
-      flush_batch(pending, ack_queue, ack_wfds)
+      flush_batch(pending, ack_queue, ack_wfds, cache)
       pending_count = 0
     end
   end
@@ -386,5 +579,12 @@ return {
   build_batch = build_batch,
   try_add_pending = try_add_pending,
   split_fields = split_fields,
-  from_hex = from_hex
+  from_hex = from_hex,
+  new_cache = new_cache,
+  cache_put = cache_put,
+  cache_drop = cache_drop,
+  cache_clear = cache_clear,
+  cache_key_of = cache_key_of,
+  cacheable_set = cacheable_set,
+  timeout_to_seconds = timeout_to_seconds
 }

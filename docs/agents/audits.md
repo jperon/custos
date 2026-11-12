@@ -3565,3 +3565,157 @@ paliers 200/350 q/s authentifiés de `perf.md` §16.2.
   schéma webui (`src/webui/schema/config_schema.moon:48`), `perf.md` §16.6.
   Aucune ligne ajoutée à `AGENTS.md`.
 
+
+### Cache d'upsert dans `worker_nft` (branche `d-nftcache`)
+
+Correction de la piste (3) de `perf.md` §16.5 (goulot n° 3 de l'audit
+aller/retour, §16.3) : les ré-insertions des mêmes éléments — rafraîchissement
+de timeout, **delta de taille de sets nul** mesuré à 350 q/s — sont sautées
+côté `worker_nft` (50-65 % d'un vCPU avant le correctif). Rapport détaillé :
+`tmp/nftcache_report.md`. Aucune ligne ajoutée à `AGENTS.md`.
+
+- **Code** (`src/worker_nft.moon`) : cache borné `new_cache` (:127),
+  `CACHE_MAX_ENTRIES = 4096` (:27) ; clé `(famille/table, set, élément)` =
+  `family|table|set_name|key|ip` (`cache_key_of` :199) ; valeur = instant
+  **et** timeout de la dernière insertion **appliquée avec succès**
+  (`cache_put` :166, posé par `flush_batch` :285 sur transaction groupée
+  réussie :313 ou sur chaque reprise élément par élément réussie :331).
+  Décision dans `try_add_pending` (:227) : saut si âge <
+  `min(timeout/10, 5 s)` (`SKIP_WINDOW_MAX_S` :20) **et** `nouveau timeout ≤
+  précédent + fenêtre` (sinon on raccourcirait la durée de vie résiduelle) ;
+  une ligne sans timeout valide dans la ligne (`has_timeout`, posé par
+  `parse_line` :79 à partir du champ brut) n'est jamais sautée, et une entrée
+  sans `timeout_s` (timeout invalide) ne sert pas de référence.
+- **ACK des lignes sautées** : `run` (:359) pousse `{ widx, seq }` dans
+  `ack_queue` (:396) **avant** `try_add_pending` (:399) : le seq d'une ligne
+  sautée reste acquitté (l'élément existe déjà dans nft). Quand tout le batch
+  est sauté, `pending` est vide et `batch_ack_only` (:334) émet l'ACK
+  normalement.
+- **Invalidations — inventaire complet** (greps `delete`, `flush`, `reload`,
+  `refresh_nft`) :
+  - **Échec de transaction nft** (seul cas traité en interne) : transaction
+    groupée rejetée → `cache_drop` sur **toutes** les entrées du lot
+    (`flush_batch` :320-323, la transaction est atomique : rien n'a été
+    appliqué), puis seules les reprises réussies sont réenregistrées (:331).
+  - **`flush ruleset`** du template `nft-rules/dns-filter-bridge.nft:33`,
+    appliqué par `nft_rules.apply` (`src/nft_rules.moon:248`, `nft -f`
+    `:291`) — appelé par `src/main.moon:428` et `src/nft_extra_rules.moon:144`
+    (via `apply_from_config`, `src/main.moon:437`) : **tous avant le fork de
+    `worker_nft`** (`src/main.moon:493`), aucun chemin ne le déclenche pendant
+    la vie du worker. Point d'attache prévu : `cache_clear` (:189).
+  - **`flush set`** `ip4_dest_whitelist` / `ip6_dest_whitelist`
+    (`src/ip_whitelist.moon:31-32`), appelé par `filter.load`
+    (`src/filter/init.moon:116`) à **chaque SIGHUP** : ces sets ne sont
+    jamais écrits par `worker_nft` (`get_set_name`, `src/nft_queue.moon:259-277`
+    ne produit que `{rule_id}_{kind}`, `sip_peers[6]` et `{rule_id}_auth_*`)
+    → aucun recouvrement de clés.
+  - **`delete element`** sur `authenticated_ips/ips6/macs`
+    (`src/auth/nft_sessions.moon:40,53,85`), **`delete_rule_auth_sets`**
+    (`src/auth/nft_auth_sets.moon:52-54`, appelé `src/auth/handlers.moon:248`)
+    et **`refresh_nft`** (`src/auth/nft_auth_sets.moon:59-63`) : exécutés par
+    le processus AUTH avec son propre contexte nft, sur les sets `_auth_*` /
+    `authenticated_*` ; or les kinds `auth_*` du pipe (`add_auth_mac/ip4/ip6`,
+    `src/nft_queue.moon:173-175`) **n'ont aucun appelant** → `worker_nft`
+    n'insère jamais dans ces sets aujourd'hui.
+  - **`delete rule`** sur la chaîne `forward` (`src/nft_extra_rules.moon:86,192`)
+    : règles de chaîne, pas des sets → sans objet.
+  - **Redémarrage** : mort de `worker_nft` → refork du superviseur
+    (`src/main.moon:615-628`, `restart_fn` `:493-494`) → cache neuf (zéro
+    risque). Le SIGHUP ne reforge pas `worker_nft` (`src/main.moon:589`) mais
+    ne vide que les sets listés ci-dessus.
+  - **Risque résiduel** : si une opération externe finissait par toucher un
+    set écrit par `worker_nft`, la fenêtre de saut (≤ 5 s) borne la durée de
+    l'incohérence ; aucun chemin de ce type n'existe aujourd'hui (ci-dessus).
+- **Mémoire** : 4096 entrées pleines mesurées à **932 Kio, 233 o/entrée**
+  (`nix develop --command bash -c "luajit tmp/measure_cache.lua"` →
+  `tmp/cache_mem.txt`). Éviction : purge des entrées périmées (âge ≥ 5 s,
+  inutiles au saut) puis suppression des plus anciennes jusqu'à 3/4 de la
+  borne, uniquement sur débordement (`cache_evict` :142).
+- **Observabilité** : `worker_nft` n'a **pas** de log de stats périodique →
+  le compteur cumulé `skipped` est porté par les logs de lot existants
+  `batch_ok` (:314), `batch_failed` (:316), `batch_ack_only` (:334) ;
+  champ classé **volatil** dans l'empreinte (`src/log.moon:146`, garde-fou
+  `tests/unit/log_fields_spec.moon`).
+- **Tests** : `tests/unit/worker_nft_spec.moon`, 17 specs ajoutées (46 au
+  fichier) : saut dans la fenêtre, pas de saut hors fenêtre (borne exacte),
+  timeout allongé hors fenêtre / allongé dans la fenêtre, sans timeout dans
+  la ligne, invalidation sur échec de transaction et sur `cache_clear`,
+  réenregistrement après repli réussi, ACK des lignes sautées (0 commande nft
+  + ACK au seq) et insertion hors fenêtre ACKée, borne mémoire et purge des
+  entrées périmées, conversion des timeouts. Suite complète
+  `make check && make test` : **3103 succès / 0 échec / 0 erreur**
+  (3086 avant la branche, mesuré par stash).
+- **Documentation** : `.agents/workers.md` § worker_nft (nouvelle puce
+  « Cache d'upsert ») ; `docs/agents/perf.md` §16.6. Aucune ligne dans
+  `AGENTS.md`.
+- **Non fait / non mesuré** : gain CPU non remesuré (aucune campagne de
+  charge sur cette branche, `perf` absent de la cible) ; `make test-e2e` non
+  lancé (tâche : pas de ssh).
+
+#### Exclusions du cache : kinds auth_* et sets gérés hors worker_nft (suite, 2026-11-12)
+
+Défaut de cohérence relevé en revue : des éléments sont supprimés de nft
+**hors** de `worker_nft` sans que le cache le sache. Inventaire par greps
+`delete element` / `flush set` dans `src/` (fichier:ligne) :
+
+- `src/auth/nft_sessions.moon:40,53,85` — `delete element` sur
+  `authenticated_ips` / `authenticated_ips6` / `authenticated_macs` (logout
+  `src/auth/handlers.moon:244-245`, bye, expiration) ;
+- `src/ip_whitelist.moon:31-32` — `flush set` sur `ip4_dest_whitelist` /
+  `ip6_dest_whitelist` (à chaque SIGHUP : `filter.load` →
+  `ip_whitelist.init`, `src/filter/init.moon:116`) ;
+- `src/auth/nft_auth_sets.moon:29,31` — `delete element` sur
+  `{rule_id}_auth_mac` / `{rule_id}_auth_ip4` / `{rule_id}_auth_ip6`
+  (`delete_rule_auth_sets` `:52-54`, appelé au logout par
+  `src/auth/handlers.moon:248`) ;
+- `flush ruleset` du template (`nft_rules.apply`, uniquement au démarrage,
+  avant le fork de `worker_nft`) et `delete rule` sur la chaîne `forward`
+  (`src/nft_extra_rules.moon:86,192`) : sans objet (règles, pas des sets).
+
+**Correctif** (`src/worker_nft.moon`) : le cache ne s'applique — **ni saut ni
+enregistrement** — qu'aux sets alimentés exclusivement par `worker_nft`.
+Point unique : `cache_key_of` (`:240-249`) n'attribue plus de clé aux items
+exclus ; sans clé, `try_add_pending` (`:272`) ne saute pas et `flush_batch`
+n'enregistre pas (ni `cache_drop` d'ailleurs). Exclusions :
+
+- kinds `auth_mac`/`auth_ip4`/`auth_ip6` (`UNCACHEABLE_KINDS` `:214-218`) :
+  leurs sets `{rule_id}_auth_*` sont supprimés par le processus AUTH avec son
+  propre contexte nft ;
+- sets `authenticated_ips`, `authenticated_ips6`, `authenticated_macs`,
+  `ip4_dest_whitelist`, `ip6_dest_whitelist` (`UNCACHEABLE_SETS` `:220-226`,
+  exposé pour les tests par `cacheable_set` `:231-232`) : aucun kind actuel ne
+  les nomme (`get_set_name`, `src/nft_queue.moon:259-277`) — garde-fou si un
+  chemin d'écriture venait à être ajouté.
+
+**Écart constaté avec le scénario décrit** (règle « n'invente rien ») : le
+scénario « logout puis re-login en < 5 s → ligne `add_auth_*` sautée par le
+cache → client non authentifié jusqu'à 5 s » **ne peut pas se produire
+aujourd'hui** :
+
+- `add_auth_mac` / `add_auth_ip4` / `add_auth_ip6`
+  (`src/nft_queue.moon:173-175`) **n'ont aucun appelant** dans `src/`
+  (définitions et export seuls) ;
+- même si une ligne était enfilée, `validate_item`
+  (`src/worker_nft.moon:39-54`) ne reconnaît que
+  `ip4/ip6/mac4/mac6/sip4/sip6` : une ligne `auth_*` est refusée (`tuple`)
+  par `parse_line` (`:61`) **avant** d'atteindre le cache ;
+- `authenticated_*` et `ip*_dest_whitelist` ne sont jamais des clés de cache
+  (aucun kind ne les nomme).
+
+Le correctif est donc **défensif** : il rend inopérant le défaut de cohérence
+le jour où les kinds `auth_*` seraient effectivement routés par le pipe (les
+fonctions d'export et `element_spec` les prenant en charge existent déjà,
+`src/nft_queue.moon:305-309`).
+
+**Tests** : `tests/unit/worker_nft_spec.moon`, describe `exclusions`
+(`:632-675`, 5 specs ; 51 specs au fichier au lieu de 46) : ligne `auth_ip4`
+répétée **jamais sautée ni enregistrée**, idem `auth_mac`/`auth_ip6`,
+`cache_key_of` nil pour un kind auth, **contrôle** : une ligne DNS répétée
+est **toujours** sautée dans la fenêtre, `cacheable_set` sur les 5 sets
+exclus. Échec TDD constaté avant le correctif (3 failures + 1 error sur ces
+4 tests), succès ensuite.
+
+Suite complète `nix develop --command bash -c "make all && make check &&
+make test"` : **3108 succès / 0 échec / 0 erreur** (3103 avant la branche
++ 5 nouveaux ; sortie `tmp/test.log`). Aucune ligne ajoutée à `AGENTS.md` ;
+`make test-e2e` non lancé (homelab libvirt non provisionné pour cette tâche).

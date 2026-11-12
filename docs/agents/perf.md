@@ -1493,3 +1493,25 @@ Effet attendu : les réponses B se répartissent entre les files des workers
 réponses au lieu de saturer une seule file chaude (70,6 % sur `resp-q14`,
 §16.3). **Non mesuré** sur la cible (pas de déploiement depuis cette branche).
 
+
+### 16.6 Correctif implémenté : cache d'upsert dans `worker_nft` (branche `d-nftcache`, 2026-11-12)
+
+La piste (3) de §16.5 est **implémentée** : `worker_nft` saute désormais les
+ré-insertions d'un même élément (clé `(famille/table, set, élément)`) inséré
+avec succès depuis moins de `min(timeout/10, 5 s)`, sans jamais raccourcir la
+durée de vie résiduelle, et acquitte quand même les lignes sautées.
+Règle, inventaire des invalidations externes, borne mémoire mesurée
+(4096 entrées = 932 Kio) et tests : `docs/agents/audits.md`
+§ « Cache d'upsert dans `worker_nft` (branche `d-nftcache`) », détail
+`tmp/nftcache_report.md`, code `src/worker_nft.moon`, doc worker
+`.agents/workers.md`. Gain attendu : les 20-30 % du CPU nft estimés au
+§5.3 du rapport d'audit — **non remesurés** (aucune campagne de charge sur
+cette branche ; `perf` absent de la cible).
+
+**Suite (2026-11-12)** : le cache ne s'applique — ni saut ni enregistrement —
+qu'aux sets alimentés exclusivement par `worker_nft` ; les kinds `auth_*` et
+les sets vidés/supprimés hors du worker (`authenticated_*`,
+`ip*_dest_whitelist`, `{rule_id}_auth_*`) sont exclus en un point unique
+(`cache_key_of`, `UNCACHEABLE_KINDS`/`UNCACHEABLE_SETS`). Motivation,
+inventaire fichier:ligne et écart de scénario : `docs/agents/audits.md`
+§ « Exclusions du cache » (même section `d-nftcache`).

@@ -403,3 +403,273 @@ describe "worker_nft branches d'erreur et build_batch", ->
     assert.is_nil wnft.run inp[0], {}
     libc.close inp[0]
     assert.equals 0, #nft_calls
+
+-- ── Cache d'upsert : saut des ré-insertions récentes ──────────────────────────
+-- Même élément (famille/table/set/élément) réinséré à chaque réponse DNS pour
+-- rafraîchir son timeout : docs/agents/perf.md §16.3 (delta de sets nul,
+-- worker nft 50-65 % d'un vCPU).
+describe "worker_nft cache d'upsert", ->
+  local wnft
+  before_each ->
+    nft_calls = {}
+    nft_fail_first = false
+    nft_fail_all = false
+    wnft = fresh_worker_nft!
+
+  hex = (s) -> (s\gsub ".", (c) -> string.format "%02x", c\byte!)
+
+  mk_item = (over) ->
+    over = over or {}
+    item = {
+      kind: "ip4", key: "10.0.0.1", ip: "1.2.3.4", rule_id: "r_test"
+      timeout: "2m", has_timeout: true
+    }
+    for k, v in pairs over
+      item[k] = v
+    item
+
+  -- Passe l'item dans un lot appliqué avec succès : le cache doit alors
+  -- retenir l'instant + le timeout de cette insertion.
+  apply_item = (cache, item) ->
+    pending = {}
+    assert.is_true wnft.try_add_pending pending, item, cache
+    wnft.flush_batch pending, {}, {}, cache
+    item
+
+  describe "parse_line et timeouts", ->
+
+    it "ligne avec timeout → has_timeout true", ->
+      item, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4||2m|5|0|"
+      assert.is_nil err
+      assert.is_true item.has_timeout
+
+    it "ligne sans timeout → has_timeout false (timeout de repli appliqué)", ->
+      item, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4|||5|0|"
+      assert.is_nil err
+      assert.is_false item.has_timeout
+      assert.equals "2m", item.timeout
+
+    it "timeout_to_seconds convertit les formes nft", ->
+      assert.equals 120, wnft.timeout_to_seconds "2m"
+      assert.equals 30, wnft.timeout_to_seconds "30s"
+      assert.equals 3600, wnft.timeout_to_seconds "1h"
+      assert.equals 86400, wnft.timeout_to_seconds "1d"
+      assert.equals 604800, wnft.timeout_to_seconds "1w"
+      assert.equals 60, wnft.timeout_to_seconds "60"
+      assert.is_nil wnft.timeout_to_seconds "abc"
+      assert.is_nil wnft.timeout_to_seconds nil
+
+  describe "décision de saut", ->
+
+    it "saut dans la fenêtre : non ajoutée, skipped incrémenté", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item!
+      pending = {}
+      -- Fenêtre = min(120/10, 5) = 5 s ; âge 0 s → saut.
+      assert.is_false wnft.try_add_pending pending, mk_item!, cache
+      assert.is_nil next pending
+      assert.equals 1, cache.skipped
+      assert.equals 1, cache.size
+
+    it "âge ≥ fenêtre → réinsérée (rafraîchissement réel)", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item!
+      cache.now = -> 105
+      pending = {}
+      assert.is_true wnft.try_add_pending pending, mk_item!, cache
+      assert.is_not_nil next pending
+      assert.equals 0, cache.skipped
+
+    it "timeout plus long que la fenêtre → réinsérée (pas de raccourcissement)", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item!            -- 2m = 120 s, t = 100
+      cache.now = -> 101
+      pending = {}
+      -- 300 s > 120 + min(300/10, 5)=5 → la vie de l'élément serait
+      -- raccourcie si l'on sautait.
+      assert.is_true wnft.try_add_pending pending, (mk_item { timeout: "5m" }), cache
+
+    it "timeout légèrement allongé mais dans la fenêtre → saut", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item { timeout: "100s" }
+      cache.now = -> 101
+      pending = {}
+      -- 103 ≤ 100 + min(103/10, 5)=5 → saut autorisé.
+      assert.is_false wnft.try_add_pending pending, (mk_item { timeout: "103s" }), cache
+      assert.equals 1, cache.skipped
+
+    it "sans timeout dans la ligne → jamais de saut", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item!
+      cache.now = -> 100
+      pending = {}
+      assert.is_true wnft.try_add_pending pending, (mk_item { has_timeout: false }), cache
+      assert.is_not_nil next pending
+
+    it "item sans timeout ne s'inscrit pas comme référence de saut", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item { has_timeout: false, timeout: "bizarre" }
+      -- timeout invalide → pas de timeout_s → l'entrée ne peut pas servir de
+      -- référence de saut, même dans la fenêtre.
+      pending = {}
+      assert.is_true wnft.try_add_pending pending, (mk_item { has_timeout: false, timeout: "bizarre" }), cache
+      pending2 = {}
+      assert.is_true wnft.try_add_pending pending2, mk_item!, cache
+
+  describe "invalidation", ->
+
+    it "échec de transaction nft → entrées du lot invalidées, plus de saut", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item!
+      key = wnft.cache_key_of mk_item!
+      assert.is_not_nil cache.entries[key]
+      -- Lot manuel portant la même clé (contourne le saut) qui échoue.
+      nft_fail_all = true
+      pending = {}
+      pending["manuel"] = mk_item!
+      wnft.flush_batch pending, {}, {}, cache
+      assert.is_nil cache.entries[key]
+      assert.equals 0, cache.size
+      -- La ligne suivante, pourtant dans la fenêtre, n'est plus sautée.
+      nft_fail_all = false
+      pending2 = {}
+      assert.is_true wnft.try_add_pending pending2, mk_item!, cache
+
+    it "repli élément par élément réussi → l'élément est réenregistré", ->
+      nft_fail_first = true
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item!
+      assert.equals 2, #nft_calls          -- groupée (échec) + élément seul
+      assert.is_not_nil cache.entries[wnft.cache_key_of mk_item!]
+
+    it "cache_clear vide le cache (invalidation globale)", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item!
+      assert.equals 1, cache.size
+      wnft.cache_clear cache
+      assert.equals 0, cache.size
+      assert.is_nil next cache.entries
+      pending = {}
+      assert.is_true wnft.try_add_pending pending, mk_item!, cache
+
+    it "un ajout réussi après invalidation re-enregistre l'entrée", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item!
+      wnft.cache_clear cache
+      apply_item cache, mk_item!
+      assert.equals 1, cache.size
+      assert.is_not_nil cache.entries[wnft.cache_key_of mk_item!]
+
+  describe "ACK des lignes sautées", ->
+
+    it "ligne sautée : aucune commande nft, ACK au seq de la ligne", ->
+      inp = ffi.new "int[2]"
+      assert.equals 0, libc.pipe2 inp, O_NONBLOCK
+      ack = ffi.new "int[2]"
+      assert.equals 0, libc.pipe2 ack, O_NONBLOCK
+      cache = wnft.new_cache!
+      wnft.cache_put cache, wnft.cache_key_of(mk_item!), 120
+      rid = hex "r_test"
+      line = "v1|ip4|10.0.0.1|1.2.3.4|#{rid}|2m|7|0|\n"
+      libc.write inp[1], line, #line
+      libc.close inp[1]
+      wnft.run inp[0], { ack[1] }, cache
+      libc.close inp[0]
+      -- Sauté → zéro transaction nft, mais le seq 7 est bien acquitté.
+      assert.equals 0, #nft_calls
+      ack_val = ffi.new "uint64_t[1]"
+      n = libc.read ack[0], ack_val, 8
+      assert.equals 8, tonumber n
+      assert.equals 7, tonumber ack_val[0]
+      libc.close ack[0]
+      libc.close ack[1]
+
+    it "ligne hors fenêtre → insérée puis ACKée", ->
+      inp = ffi.new "int[2]"
+      assert.equals 0, libc.pipe2 inp, O_NONBLOCK
+      ack = ffi.new "int[2]"
+      assert.equals 0, libc.pipe2 ack, O_NONBLOCK
+      cache = wnft.new_cache!
+      key = wnft.cache_key_of mk_item!
+      wnft.cache_put cache, key, 120
+      cache.entries[key].t = cache.now! - 60   -- hors fenêtre (≥ 5 s)
+      rid = hex "r_test"
+      line = "v1|ip4|10.0.0.1|1.2.3.4|#{rid}|2m|7|0|\n"
+      libc.write inp[1], line, #line
+      libc.close inp[1]
+      wnft.run inp[0], { ack[1] }, cache
+      libc.close inp[0]
+      assert.equals 1, #nft_calls
+      ack_val = ffi.new "uint64_t[1]"
+      n = libc.read ack[0], ack_val, 8
+      assert.equals 8, tonumber n
+      assert.equals 7, tonumber ack_val[0]
+      libc.close ack[0]
+      libc.close ack[1]
+
+  describe "borne mémoire", ->
+
+    it "la taille ne dépasse jamais `max` (évitcion des plus anciennes)", ->
+      cache = wnft.new_cache { max: 4, now: -> 100 }
+      for i = 1, 10
+        wnft.cache_put cache, "k#{i}", 120
+        assert.is_true cache.size <= 4, "size=#{cache.size} > max"
+      assert.equals 4, cache.size
+      assert.is_true cache.evicted >= 6
+
+    it "les entrées plus vieilles que la fenêtre sont purgées", ->
+      cache = wnft.new_cache { max: 1, now: -> 100 }
+      wnft.cache_put cache, "ancienne", 120
+      cache.now = -> 110          -- 10 s > fenêtre max (5 s) : inutile au saut
+      wnft.cache_put cache, "fraiche", 120
+      assert.is_nil cache.entries["ancienne"]
+      assert.equals 1, cache.size
+
+  -- ── Exclusions : kinds auth_* et sets vidés/supprimés hors worker_nft ───────
+  -- Un set qu'un AUTRE processus vide ou supprime (logout/bye/expiration,
+  -- rechargement de liste) invaliderait silencieusement une entrée du cache :
+  -- la réinsertion suivante serait sautée alors que l'élément n'existe plus.
+  describe "exclusions", ->
+
+    it "kind auth : ligne répétée jamais sautée, jamais enregistrée", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, (mk_item { kind: "auth_ip4", ip: "_" })
+      -- Ni enregistrement : l'insertion ne doit pas servir de référence.
+      assert.equals 0, cache.size
+      assert.is_nil next cache.entries
+      -- Ni saut : la seconde ligne (même instant) entre dans pending.
+      pending = {}
+      assert.is_true wnft.try_add_pending pending, (mk_item { kind: "auth_ip4", ip: "_" }), cache
+      assert.is_not_nil next pending
+      assert.equals 0, cache.skipped
+
+    it "kinds auth_mac et auth_ip6 exclus également", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, (mk_item { kind: "auth_mac", key: "d8:d3:85:63:6b:27", ip: "_" })
+      apply_item cache, (mk_item { kind: "auth_ip6", key: "fd00::7", ip: "_" })
+      assert.equals 0, cache.size
+      pending = {}
+      assert.is_true wnft.try_add_pending pending, (mk_item { kind: "auth_mac", key: "d8:d3:85:63:6b:27", ip: "_" }), cache
+      assert.is_true wnft.try_add_pending pending, (mk_item { kind: "auth_ip6", key: "fd00::7", ip: "_" }), cache
+      assert.equals 0, cache.skipped
+
+    it "cache_key_of : nil pour un kind auth, clé pour un kind DNS", ->
+      assert.is_nil wnft.cache_key_of(mk_item { kind: "auth_ip4", ip: "_" })
+      assert.is_not_nil wnft.cache_key_of(mk_item!)
+
+    it "contrôle : une ligne DNS répétée est toujours sautée dans la fenêtre", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item!
+      pending = {}
+      assert.is_false wnft.try_add_pending pending, mk_item!, cache
+      assert.is_nil next pending
+      assert.equals 1, cache.skipped
+      assert.equals 1, cache.size
+
+    it "cacheable_set : les sets vidés/supprimés hors worker_nft sont exclus", ->
+      for s in *{ "authenticated_ips", "authenticated_ips6", "authenticated_macs",
+                  "ip4_dest_whitelist", "ip6_dest_whitelist" }
+        assert.is_false wnft.cacheable_set(s), "exclu attendu : #{s}"
+      assert.is_true wnft.cacheable_set "r_test_ip4"
+      assert.is_true wnft.cacheable_set "sip_peers"
+      assert.is_true wnft.cacheable_set nil

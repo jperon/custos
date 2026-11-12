@@ -313,6 +313,7 @@ local RL_VOLATILE_KEYS = {
   "sent",
   "seq",
   "size",
+  "skipped",
   "sock",
   "sockets",
   "sport",
