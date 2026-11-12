@@ -3166,3 +3166,39 @@ Aucune modification de code : campagne de mesure après le correctif `d-mfix`
 **Vérification (2026-11-12, branche d-bench4).** `nix develop --command bash -c
 "make all && make check && make test"` : **3040 succès / 0 échec / 0 erreur /
 3 pending** (sortie `tmp/test.log`). Aucun fichier de `src/` modifié.
+
+### Tampon de réception netlink des files NFQUEUE (branche d-rcvbuf)
+
+Suite du goulot mesuré en `d-bench4` (`perf.md` §13.5) : à 700 `mixed` et
+800 `up`, la perte (24,1 %) est portée uniquement par
+`queue_user_dropped` sur les files réponses, alors que les workers réponses ne
+sont qu'à 46-49 % d'un vCPU. `libnetfilter_queue` ne pose aucun
+`setsockopt(SO_RCVBUF)` : le socket garde `net.core.rmem_default` (~208 Ko) et
+les rafales du résolveur débordent.
+
+- **Correctif.** Nouveau module `src/lib/nfq_rcvbuf.moon` (valeur demandée,
+  `setsockopt(SO_RCVBUF)`, relecture `getsockopt`, repli
+  `setsockopt(SO_RCVBUFFORCE)` si la valeur obtenue est bornée par
+  `net.core.rmem_max`, logs INFO/WARN), appelé dans `run_queue`
+  (`src/nfq_loop.moon:73-82`) **avant** `nfq_create_queue`. Clé
+  `nfqueue.rcvbuf` (octets) : défaut 4 Mio, 512 Kio en mode `runtime.lowmem` ;
+  absente/nulle/illisible = défaut du profil.
+- **`NETLINK_NO_ENOBUFS` non activé** : l'option masquerait la perte au lieu de
+  la traiter ; `user_dropped` et `queue_read_enobufs` restent les signaux du
+  goulot. Choix documenté dans `doc/CONFIG.md` §3 et `perf.md` §14.
+- **Déclaration FFI manquante.** `getsockopt` n'était pas dans le bloc cdef
+  libc de `src/ffi_defs.moon` (seul `setsockopt` y figurait) : ajout de la
+  déclaration, sans quoi la relecture de la valeur effective est impossible.
+- **Tests.** `tests/unit/lib/nfq_rcvbuf_spec.moon` : valeur config/profil
+  (dont lowmem), valeur obtenue, repli FORCE accepté/refusé (EPERM), échec
+  `setsockopt(SO_RCVBUF)` (errno), absence de l'API socket dans un stub, logs
+  INFO/WARN (`queue_rcvbuf`, `queue_rcvbuf_below_requested`,
+  `queue_rcvbuf_failed`). Varargs/cdata : la valeur est passée via
+  `ffi.new "int[1]"` et `socklen_t` casté par FFI, pas de vararg LuaJIT.
+- **Documentation.** `doc/CONFIG.md` §3 (clé + note), schéma webui
+  `nfqueue.rcvbuf`, `perf.md` §3.3 (correctif) et §14 (mécanisme, réglage,
+  portée), présente section.
+
+**Non fait.** Aucune mesure de charge après correctif (pas d'accès au homelab,
+pas d'e2e) : les paliers 700/800 de `perf.md` §13.3 restent à rejouer pour
+constater la disparition de `queue_user_dropped` et de la perte client.
