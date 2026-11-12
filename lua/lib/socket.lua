@@ -41,6 +41,9 @@ pcall(function()
       unsigned char  sll_addr[8];
     };
 
+    /* Conservés pour les déclarations globales LuaJIT (ffi_defs déclare les
+       mêmes types ; select(2) n'est plus utilisé, socket_select passe par
+       poll(2) — cf. la fin du fichier). */
     typedef long __fd_mask;
     struct fd_set {
       __fd_mask __fds_bits[16];
@@ -108,24 +111,11 @@ local get_errno
 get_errno = function()
   return ffi.C.__errno_location()[0]
 end
-local fd_set_clear
-fd_set_clear = function(set)
-  for i = 0, 15 do
-    set.__fds_bits[i] = 0
-  end
-end
-local fd_set_set
-fd_set_set = function(set, fd)
-  local idx = bit.rshift(fd, 6)
-  local off = bit.band(fd, 63)
-  set.__fds_bits[idx] = bit.bor(set.__fds_bits[idx], bit.lshift(1, off))
-end
-local fd_set_isset
-fd_set_isset = function(set, fd)
-  local idx = bit.rshift(fd, 6)
-  local off = bit.band(fd, 63)
-  return bit.band(set.__fds_bits[idx], bit.lshift(1, off)) ~= 0
-end
+local POLLIN = 0x1
+local POLLOUT = 0x4
+local POLLERR = 0x8
+local POLLHUP = 0x10
+local POLLNVAL = 0x20
 local socket_mt = {
   __index = { }
 }
@@ -547,60 +537,78 @@ socket_mt.__index.close = function(self)
 end
 local socket_select
 socket_select = function(readfds, writefds, timeout)
-  local max_fd = 0
-  local read_set = ffi.new("struct fd_set")
-  local write_set = ffi.new("struct fd_set")
-  fd_set_clear(read_set)
-  fd_set_clear(write_set)
+  local n_read
+  if readfds then
+    n_read = #readfds
+  else
+    n_read = 0
+  end
+  local n_write
+  if writefds then
+    n_write = #writefds
+  else
+    n_write = 0
+  end
+  local n = n_read + n_write
+  local pfd = ffi.new("struct pollfd[?]", math.max(n, 1))
+  local i = 0
   if readfds then
     for _index_0 = 1, #readfds do
       local sock = readfds[_index_0]
-      fd_set_set(read_set, sock.fd)
-      if sock.fd > max_fd then
-        max_fd = sock.fd
-      end
+      pfd[i].fd = sock.fd
+      pfd[i].events = POLLIN
+      i = i + 1
     end
   end
   if writefds then
     for _index_0 = 1, #writefds do
       local sock = writefds[_index_0]
-      fd_set_set(write_set, sock.fd)
-      if sock.fd > max_fd then
-        max_fd = sock.fd
-      end
+      pfd[i].fd = sock.fd
+      pfd[i].events = POLLOUT
+      i = i + 1
     end
   end
-  local tv = ffi.new("struct timeval")
-  if timeout then
-    local sec = math.floor(timeout)
-    local usec = math.floor((timeout - sec) * 1000000)
-    tv.tv_sec = sec
-    tv.tv_usec = usec
+  local timeout_ms
+  if timeout == nil then
+    timeout_ms = -1
+  else
+    timeout_ms = math.max(0, math.floor(timeout * 1000 + 0.5))
   end
-  local ret = C.select(max_fd + 1, readfds and read_set or nil, writefds and write_set or nil, nil, timeout and tv or nil)
+  local ret = C.poll(pfd, n, timeout_ms)
   if ret < 0 then
     local errno = get_errno()
     if errno == 4 then
       return { }, { }
     end
-    error("select() failed: errno=" .. errno)
+    error("poll() failed: errno=" .. errno)
   end
   local ready_read = { }
   local ready_write = { }
+  i = 0
   if readfds then
     for _index_0 = 1, #readfds do
       local sock = readfds[_index_0]
-      if fd_set_isset(read_set, sock.fd) then
+      local revents = pfd[i].revents
+      if bit.band(revents, POLLNVAL) ~= 0 then
+        error("poll() failed: invalid fd " .. tostring(sock.fd))
+      end
+      if bit.band(revents, bit.bor(POLLIN, POLLHUP, POLLERR)) ~= 0 then
         table.insert(ready_read, sock)
       end
+      i = i + 1
     end
   end
   if writefds then
     for _index_0 = 1, #writefds do
       local sock = writefds[_index_0]
-      if fd_set_isset(write_set, sock.fd) then
+      local revents = pfd[i].revents
+      if bit.band(revents, POLLNVAL) ~= 0 then
+        error("poll() failed: invalid fd " .. tostring(sock.fd))
+      end
+      if bit.band(revents, bit.bor(POLLOUT, POLLHUP, POLLERR)) ~= 0 then
         table.insert(ready_write, sock)
       end
+      i = i + 1
     end
   end
   return ready_read, ready_write
