@@ -1429,3 +1429,17 @@ vide et `stack` non symbolisés (kallsyms absent) — remplacés par
 `chain_strip` non déterminable sans config ; le démontage de la file pendant
 les 10 dernières secondes du palier 350 (capacité +10 % à entrée constante)
 reste inexpliqué (échauffement JIT ou résolveur) faute d'instrumentation.
+
+### 16.6 Correctif implémenté : cache d'upsert dans `worker_nft` (branche `d-nftcache`, 2026-11-12)
+
+La piste (3) de §16.5 est **implémentée** : `worker_nft` saute désormais les
+ré-insertions d'un même élément (clé `(famille/table, set, élément)`) inséré
+avec succès depuis moins de `min(timeout/10, 5 s)`, sans jamais raccourcir la
+durée de vie résiduelle, et acquitte quand même les lignes sautées.
+Règle, inventaire des invalidations externes, borne mémoire mesurée
+(4096 entrées = 932 Kio) et tests : `docs/agents/audits.md`
+§ « Cache d'upsert dans `worker_nft` (branche `d-nftcache`) », détail
+`tmp/nftcache_report.md`, code `src/worker_nft.moon`, doc worker
+`.agents/workers.md`. Gain attendu : les 20-30 % du CPU nft estimés au
+§5.3 du rapport d'audit — **non remesurés** (aucune campagne de charge sur
+cette branche ; `perf` absent de la cible).
