@@ -175,8 +175,8 @@ allow_sip_peer = function(ip, family, reason)
     return q.add_sip4(ip, nil, sip_ttl, reason)
   end
 end
-local handle_packet
-handle_packet = function(qh_ptr, nfad, pkt_id)
+local handle_packet_inner
+handle_packet_inner = function(qh_ptr, nfad, pkt_id)
   local l2 = get_l2(nfad)
   local mac = l2.mac_src
   local payload_ptr = ffi.new("unsigned char*[1]")
@@ -362,6 +362,18 @@ handle_packet = function(qh_ptr, nfad, pkt_id)
     end
   end
   return NF_ACCEPT
+end
+local flush_nft
+flush_nft = function()
+  if nft_q and nft_q.flush then
+    return nft_q.flush()
+  end
+end
+local handle_packet
+handle_packet = function(qh_ptr, nfad, pkt_id)
+  local rc = handle_packet_inner(qh_ptr, nfad, pkt_id)
+  flush_nft()
+  return rc
 end
 local run
 run = function(queue_num, fds)

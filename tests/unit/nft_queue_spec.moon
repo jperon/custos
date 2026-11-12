@@ -87,6 +87,9 @@ describe "nft_queue", ->
 
     ok = q.add_ip4 "192.168.1.42", "10.0.0.1", "dns_workhours", "240s", "corr-123"
     assert.is_true ok
+    -- Le producteur tamponne : le lot n'est écrit qu'à sa clôture
+    -- (get_last_seq, wait_ack ou send_barrier).
+    assert.equals 1, q.get_last_seq!
 
     line = read_pipe rfd
     fields = split_fields line
@@ -314,6 +317,8 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
   errno_box = nil
   writes = nil
   sleeps = nil
+  chunks = nil
+  sizes = nil
 
   fresh_with_libc = (write_fn, sleep_fn) ->
     errno_box = ffi.new "int[1]"
@@ -343,6 +348,8 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
     writes = 0
     sleeps = 0
     errno_box = ffi.new "int[1]"
+    chunks = {}
+    sizes = {}
 
   it "sans tube de sortie, l'enqueue retourne false", ->
     q = fresh_nft_queue!
@@ -358,6 +365,8 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
     q.set_wfd 1
     ok = q.add_ip4 "10.0.0.1", "1.2.3.4", string.rep("r", 600), "2m"
     assert.is_false ok
+    -- La ligne refusée n'entre pas dans le tampon : rien à écrire.
+    assert.is_nil q.get_last_seq!
     assert.equals 0, wrote
 
   it "une écriture EAGAIN réessaie après sleep puis réussit", ->
@@ -370,6 +379,7 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
     ), nil
     q.set_wfd 1
     assert.is_true q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.equals 1, q.get_last_seq!
     assert.equals 2, writes
     assert.equals 1, sleeps
 
@@ -380,18 +390,20 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
       -1
     ), nil
     q.set_wfd 1
-    assert.is_false q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.is_true q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.is_nil q.get_last_seq!
     assert.equals 1, writes
     assert.equals 0, sleeps
 
-  it "EAGAIN sur toutes les tentatives épuise les reprises et retourne false", ->
+  it "EAGAIN sur toutes les tentatives : aucune écriture, seq nil", ->
     q = fresh_with_libc ((fd, line, len) ->
       writes += 1
       errno_box[0] = 11
       -1
     ), nil
     q.set_wfd 1
-    assert.is_false q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.is_true q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.is_nil q.get_last_seq!
     assert.equals 3, writes
     assert.equals 3, sleeps
 
@@ -451,6 +463,108 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
     q.drain_ack!
     assert.equals 0, q.get_last_acked!
     close_pipe p
+
+  it "un lot de N éléments produit un seul write", ->
+    q = fresh_with_libc ((fd, data, len) ->
+      writes += 1
+      chunks[#chunks + 1] = ffi.string data, len
+      sizes[#sizes + 1] = len
+      len
+    ), nil
+    q.set_wfd 1
+    assert.is_true q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.is_true q.add_ip4 "10.0.0.2", "1.2.3.5", "r_test", "2m"
+    assert.is_true q.add_ip4 "10.0.0.3", "1.2.3.6", "r_test", "2m"
+    -- Tant que le lot n'est pas clos, rien n'est écrit.
+    assert.equals 0, writes
+    -- La clôture du lot (avant le wait_ack) écrit tout d'un coup.
+    assert.equals 3, q.get_last_seq!
+    assert.equals 1, writes
+    _, n_lines = chunks[1]\gsub "\n", ""
+    assert.equals 3, n_lines
+    -- seq exact : la dernière ligne du lot porte le seq rendu.
+    assert.truthy chunks[1]\find "|3|-1|\n", 1, true
+
+  it "découpe les écritures à PIPE_BUF (4096 octets) sans jamais le dépasser", ->
+    q = fresh_with_libc ((fd, data, len) ->
+      writes += 1
+      chunks[#chunks + 1] = ffi.string data, len
+      sizes[#sizes + 1] = len
+      len
+    ), nil
+    q.set_wfd 1
+    rule = string.rep "r", 40   -- 80 caractères hexadécimaux par ligne
+    for i = 1, 40
+      assert.is_true q.add_ip4 "10.0.0.#{i}", "1.2.3.4", rule, "2m"
+    assert.equals 40, q.get_last_seq!
+    assert.is_true writes >= 2
+    for s in *sizes
+      assert.is_true s <= 4096
+    all = table.concat chunks
+    _, n_lines = all\gsub "\n", ""
+    assert.equals 40, n_lines
+
+  it "flush le tampon avant wait_ack (aucun ACK attendu pour une ligne non écrite)", ->
+    ack_pipe = make_pipe!
+    ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+    ack_v = ffi.new "uint64_t[1]"
+    q = fresh_with_libc ((fd, data, len) ->
+      writes += 1
+      -- worker_nft acquitte le plus grand seq qu'il a reçu.
+      ack_v[0] = 2
+      ffi.C.write ack_wfd, ack_v, ACK_SIZE
+      len
+    ), nil
+    q.set_ack_rfd ack_rfd, 0
+    q.set_wfd 1
+    q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    q.add_ip4 "10.0.0.2", "1.2.3.5", "r_test", "2m"
+    -- Sans flush préalable, l'ACK ne pourrait jamais arriver (timeout 150 ms).
+    assert.is_true q.wait_ack 2, "corr"
+    assert.equals 1, writes
+    close_pipe ack_pipe
+
+  it "échec d'écriture d'une tranche : get_last_seq ne rend que le seq écrit", ->
+    q = fresh_with_libc ((fd, data, len) ->
+      writes += 1
+      if writes >= 2
+        errno_box[0] = 5
+        return -1
+      len
+    ), nil
+    q.set_wfd 1
+    rule = string.rep "r", 40
+    for i = 1, 40
+      q.add_ip4 "10.0.0.#{i}", "1.2.3.4", rule, "2m"
+    seq = q.get_last_seq!
+    assert.equals 2, writes
+    assert.is_not_nil seq
+    assert.is_true seq > 0 and seq < 40
+
+  it "aucune ligne écrite du lot : get_last_seq est nil", ->
+    q = fresh_with_libc ((fd, data, len) ->
+      writes += 1
+      errno_box[0] = 5
+      -1
+    ), nil
+    q.set_wfd 1
+    assert.is_true q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.is_nil q.get_last_seq!
+    assert.equals 1, writes
+
+  it "send_barrier flush le tampon avant d'écrire la barrière", ->
+    q = fresh_with_libc ((fd, data, len) ->
+      writes += 1
+      chunks[#chunks + 1] = ffi.string data, len
+      len
+    ), nil
+    q.set_wfd 1
+    q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.is_true q.send_barrier "corr-b"
+    assert.equals 2, writes
+    assert.truthy chunks[2]\find "|barrier|", 1, true
+    -- seq exact : la barrière porte le seq suivant la ligne tamponnée.
+    assert.equals 2, q.get_last_seq!
 
   it "tube ACK fermé : wait_ack échoue sans boucler sur POLLHUP", ->
     q = fresh_nft_queue!

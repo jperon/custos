@@ -21,6 +21,7 @@ local WAIT_POLL_MS = 5
 local ACK_SIZE = 8
 local CLOCK_MONOTONIC = 1
 local PIPE_BUF_SAFE = 512
+local PIPE_BUF_ATOMIC = 4096
 local IPC_WRITE_RETRY_COUNT = 3
 local EAGAIN = 11
 local EWOULDBLOCK = 11
@@ -38,6 +39,9 @@ local ack_val = ffi.new("uint64_t[1]")
 local ack_tmp = ffi.new("uint64_t[1]")
 local drain_buf = ffi.new("uint8_t[64]")
 local last_acked_seq = 0
+local pending_lines = { }
+local pending_seqs = { }
+local pending_bytes = 0
 local _record_acks
 _record_acks = function(buf, n)
   if not (n and n >= ACK_SIZE and (n % ACK_SIZE) == 0) then
@@ -113,17 +117,15 @@ set_ack_rfd = function(rfd, idx)
   ack_rfd = rfd
   worker_idx = idx
 end
-local write_line
-write_line = function(line)
+local write_data
+write_data = function(data)
   if not (pipe_wfd) then
     return false
   end
-  if #line > PIPE_BUF_SAFE then
-    return false
-  end
+  local len = #data
   for _ = 1, IPC_WRITE_RETRY_COUNT do
-    local n = libc.write(pipe_wfd, line, #line)
-    if n == #line then
+    local n = libc.write(pipe_wfd, data, len)
+    if n == len then
       return true
     end
     local errno_p = libc.__errno_location()
@@ -152,6 +154,51 @@ write_line = function(line)
     }
   end)
   return false
+end
+local write_line
+write_line = function(line)
+  if not (pipe_wfd) then
+    return false
+  end
+  if #line > PIPE_BUF_SAFE then
+    return false
+  end
+  return write_data(line)
+end
+local flush
+flush = function()
+  local n = #pending_lines
+  if n == 0 then
+    return true
+  end
+  local ok = true
+  local i = 1
+  while i <= n do
+    local chunk = { }
+    local bytes = 0
+    local j = i
+    while j <= n and (bytes == 0 or bytes + #pending_lines[j] <= PIPE_BUF_ATOMIC) do
+      bytes = bytes + #pending_lines[j]
+      chunk[#chunk + 1] = pending_lines[j]
+      j = j + 1
+    end
+    if not (write_data(table.concat(chunk))) then
+      ok = false
+      log_warn(function()
+        return {
+          action = "nft_queue_flush_failed",
+          dropped = n - i + 1
+        }
+      end)
+      break
+    end
+    last_enqueued_seq = pending_seqs[j - 1]
+    i = j
+  end
+  pending_lines = { }
+  pending_seqs = { }
+  pending_bytes = 0
+  return ok
 end
 local drain_ack
 drain_ack = function()
@@ -188,17 +235,25 @@ build_line = function(kind, key, ip, rule_id, timeout, corr, item_seq, widx)
 end
 local enqueue
 enqueue = function(kind, key, ip, rule_id, timeout, corr)
+  if not (pipe_wfd) then
+    return false
+  end
   if not (kind and key and ip) then
     return false
   end
   timeout = sanitize_timeout(timeout)
   seq = seq + 1
   local line = build_line(kind, key, ip, rule_id, timeout, corr, seq, worker_idx)
-  local ok = write_line(line)
-  if ok then
-    last_enqueued_seq = seq
+  if #line > PIPE_BUF_SAFE then
+    return false
   end
-  return ok
+  if pending_bytes + #line > PIPE_BUF_ATOMIC then
+    flush()
+  end
+  pending_lines[#pending_lines + 1] = line
+  pending_seqs[#pending_seqs + 1] = seq
+  pending_bytes = pending_bytes + #line
+  return true
 end
 local add_ip4
 add_ip4 = function(client_ip, ip_str, rule_id, timeout, corr)
@@ -224,23 +279,12 @@ local add_sip6
 add_sip6 = function(ip_str, rule_id, timeout, corr)
   return enqueue("sip6", ip_str, ip_str, rule_id, timeout, corr)
 end
-local add_auth_mac
-add_auth_mac = function(mac, rule_id, timeout, corr)
-  return enqueue("auth_mac", mac, "_", rule_id, timeout, corr)
-end
-local add_auth_ip4
-add_auth_ip4 = function(ip, rule_id, timeout, corr)
-  return enqueue("auth_ip4", ip, "_", rule_id, timeout, corr)
-end
-local add_auth_ip6
-add_auth_ip6 = function(ip, rule_id, timeout, corr)
-  return enqueue("auth_ip6", ip, "_", rule_id, timeout, corr)
-end
 local send_barrier
 send_barrier = function(corr)
   if not (pipe_wfd) then
     return false
   end
+  flush()
   drain_ack()
   seq = seq + 1
   local line = build_line("barrier", "_", "_", "", "0s", corr, seq, worker_idx)
@@ -252,6 +296,7 @@ send_barrier = function(corr)
 end
 local get_last_seq
 get_last_seq = function()
+  flush()
   local s = last_enqueued_seq
   last_enqueued_seq = nil
   return s
@@ -265,6 +310,7 @@ wait_ack = function(pending_seq, corr, on_wait)
   if not (ack_rfd) then
     return false
   end
+  flush()
   local target = pending_seq or 0
   if target > 0 and last_acked_seq >= target then
     return true
@@ -416,15 +462,13 @@ return {
   wait_ack = wait_ack,
   drain_ack = drain_ack,
   send_barrier = send_barrier,
+  flush = flush,
   add_ip4 = add_ip4,
   add_ip6 = add_ip6,
   add_mac4 = add_mac4,
   add_mac6 = add_mac6,
   add_sip4 = add_sip4,
   add_sip6 = add_sip6,
-  add_auth_mac = add_auth_mac,
-  add_auth_ip4 = add_auth_ip4,
-  add_auth_ip6 = add_auth_ip6,
   cmd_for = cmd_for,
   cmd_lines_for = cmd_lines_for,
   element_spec = element_spec,
