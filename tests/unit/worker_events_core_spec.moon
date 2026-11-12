@@ -87,12 +87,10 @@ describe "worker_events cœur", ->
       assert.is_truthy joined\find "rule1\t2\t100\t101\n", 1, true
 
     it "crée des fichiers TSV lisibles", ->
-      -- BUG (non corrigé, hors périmètre) : flush_to_file passe FILE_MODE
-      -- (nombre Lua) à `libc.open(path, flags, ...)` dont la signature est
-      -- variadique (src/worker_events.moon:229 et 235 ; ffi_defs.moon:23).
-      -- LuaJIT passe un nombre en vararg comme double, alors que le C attend
-      -- un mode_t (entier) : les fichiers sont créés en mode 0000 et illisibles.
-      pending "files créés en mode 0000 (FILE_MODE non casté en vararg open)"
+      -- flush_to_file passait FILE_MODE (nombre Lua) à `libc.open(path,
+      -- flags, ...)` variadique (src/ffi_defs.moon:23) : LuaJIT transmet un
+      -- number en vararg comme double, le noyau lit un mode_t indéfini et les
+      -- fichiers naissent en 0000. Cast `ffi.cast("int", …)` requis.
       mkdir_tmp!
       agg = {}
       agg["allow\tq.com\tmac\tip\tdst\t0\t-\tipv4\tr\tr"] = { count: 1, first_ts: "1", last_ts: "1" }
