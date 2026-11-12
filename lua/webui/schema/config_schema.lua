@@ -86,6 +86,12 @@ return {
       label = "Tampon netlink (octets)",
       hint = "0 = auto (4 Mio ; 512 Kio en RAM faible)",
       default = 0
+    },
+    maxlen = {
+      type = "integer",
+      label = "Longueur file noyau (paquets)",
+      hint = "0 = auto (4096 ; 1024 en RAM faible)",
+      default = 0
     }
   },
   dns = {

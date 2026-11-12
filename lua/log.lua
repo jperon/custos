@@ -135,6 +135,7 @@ local RL_IDENTITY_KEYS = {
   "mac_fallback",
   "mac_src",
   "max",
+  "maxlen",
   "media_ip",
   "method",
   "mode",

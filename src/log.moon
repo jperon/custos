@@ -113,7 +113,7 @@ RL_IDENTITY_KEYS = {
   "ip", "ip4", "ip6", "ip_dst", "ip_src", "ip_version"
   "ipv4", "ipv6", "items", "key", "key_file", "kind"
   "known_mac", "l4_proto", "limit", "list", "load_error", "local_ip"
-  "mac", "mac_fallback", "mac_src", "max", "media_ip", "method"
+  "mac", "mac_fallback", "mac_src", "max", "maxlen", "media_ip", "method"
   "mode", "modified", "name", "net", "new", "nft_compilable", "nft_err", "nft_failure_policy", "nft_outcome"
   "nft_rule_id", "ns_enabled", "obtained", "ok", "old", "packet_mac", "path", "payload_modified"
   "peer", "peer_ip", "peer_mac", "policy_protocols", "port", "port_dst", "probe_max"

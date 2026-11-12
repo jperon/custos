@@ -233,6 +233,8 @@ ffi.cdef([[  /* ── Types opaques ── */
 
   /* ── Configuration de la queue ── */
   int nfq_set_mode(nfq_q_handle *qh, uint8_t mode, uint32_t range);
+  /* Longueur de la file noyau (paquets) : défaut NFQNL_QMAX_DEFAULT = 1024 */
+  int nfq_set_queue_maxlen(nfq_q_handle *qh, uint32_t queuelen);
 
   /* ── Boucle événementielle ── */
   int nfq_fd(nfq_handle *h);

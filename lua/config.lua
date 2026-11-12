@@ -720,6 +720,18 @@ normalize = function(cfg)
     })
     error("config: nfqueue queue " .. tostring(overlap.queue) .. " is shared by '" .. tostring(overlap.role) .. "' and '" .. tostring(overlap.conflict) .. "' (one role per queue)")
   end
+  local maxlen = tonumber(cfg.nfqueue.maxlen)
+  if maxlen and maxlen > 0 and maxlen % 1 == 0 then
+    cfg.nfqueue.maxlen = maxlen
+  else
+    if cfg.nfqueue.maxlen ~= nil and maxlen ~= 0 then
+      config_warn({
+        action = "nfqueue_maxlen_invalid",
+        configured = tostring(cfg.nfqueue.maxlen)
+      })
+    end
+    cfg.nfqueue.maxlen = nil
+  end
   cfg.doh = cfg.doh or { }
   cfg.dns = cfg.dns or { }
   cfg.dns.ttl_grace = cfg.dns.ttl_grace or { }
