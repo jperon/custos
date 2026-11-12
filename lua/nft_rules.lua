@@ -87,6 +87,90 @@ fmt_elements = function(ips)
   end
   return "    elements = { " .. table.concat(ips, ", ") .. " }\n"
 end
+local DNS_RULES = {
+  questions = {
+    selector = "meta l4proto {udp, tcp} th dport 53",
+    log_prefix = "custos question: ",
+    comment = "DNS questions → NFQUEUE",
+    v4 = {
+      "ip version 4",
+      "ip saddr . th sport"
+    },
+    v6 = {
+      "ip6 version 6",
+      "ip6 saddr . th sport"
+    }
+  },
+  responses = {
+    selector = "meta l4proto {udp, tcp} th sport 53",
+    log_prefix = "custos response: ",
+    comment = "DNS responses → NFQUEUE",
+    v4 = {
+      "ip version 4",
+      "ip daddr . th dport"
+    },
+    v6 = {
+      "ip6 version 6",
+      "ip6 daddr . th dport"
+    }
+  }
+}
+local contiguous_segments
+contiguous_segments = function(queues)
+  local segments = { }
+  local current = nil
+  for _index_0 = 1, #queues do
+    local q = queues[_index_0]
+    if current and q == current[#current] + 1 then
+      current[#current + 1] = q
+    else
+      current = {
+        q
+      }
+      segments[#segments + 1] = current
+    end
+  end
+  return segments
+end
+local dns_queue_rules
+dns_queue_rules = function(spec, direction)
+  local s = DNS_RULES[direction]
+  if not (s) then
+    error("nft_rules: direction DNS inconnue: " .. tostring(tostring(direction)))
+  end
+  local log_stmt = "log level debug prefix \"" .. tostring(s.log_prefix) .. "\" counter"
+  local tail = "comment \"" .. tostring(s.comment) .. "\""
+  local lowmem = require("lib.lowmem")
+  local queues = lowmem.parse_queues(spec)
+  local lines = { }
+  if #queues == 0 then
+    lines[#lines + 1] = tostring(s.selector) .. " " .. tostring(log_stmt) .. " queue num " .. tostring(tostring(spec)) .. " " .. tostring(tail)
+  else
+    local _list_0 = contiguous_segments(queues)
+    for _index_0 = 1, #_list_0 do
+      local segment = _list_0[_index_0]
+      if #segment == 1 then
+        lines[#lines + 1] = tostring(s.selector) .. " " .. tostring(log_stmt) .. " queue num " .. tostring(segment[1]) .. " " .. tostring(tail)
+      else
+        local _list_1 = {
+          s.v4,
+          s.v6
+        }
+        for _index_1 = 1, #_list_1 do
+          local pair = _list_1[_index_1]
+          local fam, key = pair[1], pair[2]
+          lines[#lines + 1] = tostring(s.selector) .. " " .. tostring(fam) .. " " .. tostring(log_stmt) .. " queue to jhash " .. tostring(key) .. " mod " .. tostring(#segment) .. " offset " .. tostring(segment[1]) .. " " .. tostring(tail)
+        end
+      end
+    end
+  end
+  local out = { }
+  for _index_0 = 1, #lines do
+    local line = lines[_index_0]
+    out[#out + 1] = "    " .. tostring(line)
+  end
+  return table.concat(out, "\n")
+end
 local substitute
 substitute = function(content, plan)
   if plan == nil then
@@ -101,6 +185,10 @@ substitute = function(content, plan)
   content = content:gsub("{QUEUE_SNI}", cfg.nfqueue.sni)
   content = content:gsub("{NFT_IP_TIMEOUT}", cfg.nft.ip_timeout)
   content = content:gsub("{DOH_PORT}", tostring(cfg.doh.port or 8443))
+  local dns_questions = dns_queue_rules(cfg.nfqueue.questions, "questions")
+  local dns_responses = dns_queue_rules(cfg.nfqueue.responses, "responses")
+  content = content:gsub("{DNS_QUESTIONS_RULES}", dns_questions)
+  content = content:gsub("{DNS_RESPONSES_RULES}", dns_responses)
   local doh_vlan_chain
   if cfg.doh and cfg.doh.enabled and cfg.nfqueue.doh_vlan then
     local doh_port = tostring(cfg.doh.port or 8443)
@@ -360,6 +448,7 @@ return {
   _test = {
     collect_ips = collect_ips,
     fmt_elements = fmt_elements,
-    substitute = substitute
+    substitute = substitute,
+    dns_queue_rules = dns_queue_rules
   }
 }
