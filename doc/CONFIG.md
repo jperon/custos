@@ -346,11 +346,13 @@ Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 > `/proc/net/netfilter/nfnetlink_queue`, cf. `docs/agents/perf.md` §5 et
 > §13.5). Chaque file reçoit donc une demande de `rcvbuf` octets (défaut
 > **4 Mio**, **512 Kio** quand `runtime.lowmem` est actif ; `0` ou une valeur
-> absente/illisible = défaut du profil). Le noyau double la valeur demandée et
-> la borne par `net.core.rmem_max` ; la taille effective est relue par
-> `getsockopt` et journalisée en INFO (`action=queue_rcvbuf`, champs
-> `requested`, `obtained`, `forced`). Si elle reste inférieure à la demande,
-> Custos tente `SO_RCVBUFFORCE` (contourne `rmem_max`, exige `CAP_NET_ADMIN` :
+> absente/illisible = défaut du profil). Le noyau borne la demande par
+> `net.core.rmem_max` puis stocke le **double** de la valeur accordée ;
+> `getsockopt(SO_RCVBUF)` renvoie ce double (man 7 socket), que Custos divise
+> par deux : la taille effective est journalisée en INFO (`action=queue_rcvbuf`,
+> champs `requested`, `obtained` — effective, en octets — et `forced`). Si
+> `obtained` reste inférieur à la demande, Custos tente `SO_RCVBUFFORCE`
+> (contourne `rmem_max`, exige `CAP_NET_ADMIN` :
 > root) ; sans cette capacité la valeur bornée est conservée et un WARN
 > `queue_rcvbuf_below_requested` est émis. Une erreur de `setsockopt` produit
 > le WARN `queue_rcvbuf_failed` (avec `errno`) sans empêcher la file de

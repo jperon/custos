@@ -51,7 +51,7 @@ read_back = function(libc, fd)
   if not (rc == 0) then
     return nil
   end
-  return tonumber(val[0])
+  return math.floor(tonumber(val[0]) / 2)
 end
 local apply_rcvbuf
 apply_rcvbuf = function(libc, fd, requested)
@@ -77,9 +77,9 @@ apply_rcvbuf = function(libc, fd, requested)
   if res.obtained and res.obtained < requested then
     local rc_force = libc.setsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE, val, ffi.sizeof("int"))
     if rc_force == 0 then
-      local got = read_back(libc, fd)
-      if got and got >= requested then
-        res.obtained = got
+      local effective = read_back(libc, fd)
+      if effective and effective >= requested then
+        res.obtained = effective
         res.forced = true
       end
     end

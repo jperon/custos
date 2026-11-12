@@ -1082,13 +1082,15 @@ processus : c'est bien le socket userspace qu'il faut dimensionner.
   illisible : **4 Mio** (`DEFAULT_RCVBUF`), ou **512 Kio** (`LOWMEM_RCVBUF`)
   quand `runtime.lowmem` est actif — le mode RAM faible réduit aussi le nombre
   de workers, mais 4 Mio de tampon noyau par socket y seraient disproportionnés.
-- Séquence : `setsockopt(SO_RCVBUF)` → `getsockopt` (le noyau **double** la
-  valeur demandée et la borne par `net.core.rmem_max`) → si la valeur obtenue
-  est inférieure à la demande, `setsockopt(SO_RCVBUFFORCE)` (contourne
-  `rmem_max`, exige `CAP_NET_ADMIN`) → nouvelle relecture. Si FORCE échoue
-  (EPERM), la valeur bornée est conservée.
-- Journalisation : INFO `queue_rcvbuf` avec `requested`, `obtained` et `forced`
-  (valeur effective réellement accordée) ; WARN `queue_rcvbuf_below_requested`
+- Séquence : `setsockopt(SO_RCVBUF)` → `getsockopt` (le noyau borne la demande
+  par `net.core.rmem_max` puis renvoie le **double** de la valeur accordée,
+  man 7 socket ; le module divise par deux pour obtenir la taille effective)
+  → si cette taille effective est inférieure à la demande,
+  `setsockopt(SO_RCVBUFFORCE)` (contourne `rmem_max`, exige `CAP_NET_ADMIN`)
+  → nouvelle relecture. Si FORCE échoue (EPERM), la valeur bornée est conservée.
+- Journalisation : INFO `queue_rcvbuf` avec `requested`, `obtained` (taille
+  **effective**, c'est-à-dire la moitié du brut renvoyé par `getsockopt`) et
+  `forced` ; WARN `queue_rcvbuf_below_requested`
   si `obtained < requested` malgré le repli ; WARN `queue_rcvbuf_failed`
   (`errno`) si `setsockopt(SO_RCVBUF)` échoue — la file démarre quand même.
 - `NETLINK_NO_ENOBUFS` reste **inactif** : l'option supprime la remontée

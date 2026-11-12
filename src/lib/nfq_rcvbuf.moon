@@ -9,12 +9,15 @@
 -- (cf. docs/agents/perf.md §5 et §13.5).
 --
 -- Ce module demande donc une taille explicite (clé `nfqueue.rcvbuf`, sinon
--- 4 Mio, ou 512 Kio en mode RAM faible), relit la valeur effective avec
--- getsockopt (le noyau double la valeur demandée et la borne par
--- `net.core.rmem_max`) et tente SO_RCVBUFFORCE quand la valeur obtenue reste
--- inférieure à la demande. SO_RCVBUFFORCE contourne `rmem_max` mais exige
--- CAP_NET_ADMIN : sans lui l'appel échoue (EPERM) et on garde la valeur
--- bornée, signalée par un WARN.
+-- 4 Mio, ou 512 Kio en mode RAM faible), relit la taille effective avec
+-- getsockopt et tente SO_RCVBUFFORCE quand elle reste inférieure à la demande.
+-- Attention : le noyau borne la demande par `net.core.rmem_max` puis stocke le
+-- **double** de la valeur accordée ; `getsockopt(SO_RCVBUF)` renvoie ce double
+-- (man 7 socket). Le module divise donc la relecture par deux pour raisonner en
+-- taille effective : avec `rmem_max` = 3 Mio et 4 Mio demandés, la relecture
+-- vaut 6 Mio mais la taille effective n'est que 3 Mio. SO_RCVBUFFORCE
+-- contourne `rmem_max` mais exige CAP_NET_ADMIN : sans lui l'appel échoue
+-- (EPERM) et on garde la valeur bornée, signalée par un WARN.
 --
 -- NETLINK_NO_ENOBUFS n'est **pas** activé : il ferait taire l'erreur ENOBUFS
 -- au lieu de la traiter, en masquant la perte de paquets (même raisonnement
@@ -55,25 +58,29 @@ socket_api_available = (libc) ->
   pcall(-> ffi.sizeof "socklen_t") and true or false
 
 --- Relit la taille effective du tampon de réception.
+-- `getsockopt(SO_RCVBUF)` renvoie le double de la taille réellement accordée
+-- (man 7 socket : le noyau double la valeur pour l'overhead) ; on divise par
+-- deux pour exposer une taille effective comparable à la demande.
 -- @tparam table libc Table libc
 -- @tparam number fd fd netlink
--- @treturn number|nil Valeur obtenue (octets), nil si getsockopt échoue
+-- @treturn number|nil Taille effective (octets), nil si getsockopt échoue
 read_back = (libc, fd) ->
   val = ffi.new "int[1]", 0
   len = ffi.new "socklen_t[1]", ffi.sizeof "int"
   rc = libc.getsockopt fd, SOL_SOCKET, SO_RCVBUF, val, len
   return nil unless rc == 0
-  tonumber val[0]
+  math.floor(tonumber(val[0]) / 2)
 
---- Règle SO_RCVBUF sur un fd netlink et rend la valeur effective.
--- Tente SO_RCVBUFFORCE si la valeur relue est inférieure à la demande (le
--- noyau a borné par `rmem_max`) ; un échec de FORCE (EPERM sans
--- CAP_NET_ADMIN) laisse la valeur bornée.
+--- Règle SO_RCVBUF sur un fd netlink et rend la taille effective.
+-- Tente SO_RCVBUFFORCE si la taille effective relue (moitié du brut noyau)
+-- est inférieure à la demande (le noyau a borné par `rmem_max`) ; un échec de
+-- FORCE (EPERM sans CAP_NET_ADMIN) laisse la valeur bornée.
 -- @tparam table libc Table libc
 -- @tparam number fd fd netlink
 -- @tparam number requested Taille demandée (octets)
--- @treturn table|nil { requested, obtained, forced, error } ; nil si l'API
---   socket n'est pas disponible (stub de test)
+-- @treturn table|nil { requested, obtained, forced, error }, `obtained` étant
+--   la taille effective en octets ; nil si l'API socket n'est pas disponible
+--   (stub de test)
 apply_rcvbuf = (libc, fd, requested) ->
   return nil unless socket_api_available libc
   val = ffi.new "int[1]", requested
@@ -89,16 +96,18 @@ apply_rcvbuf = (libc, fd, requested) ->
   if res.obtained and res.obtained < requested
     rc_force = libc.setsockopt fd, SOL_SOCKET, SO_RCVBUFFORCE, val, ffi.sizeof "int"
     if rc_force == 0
-      got = read_back libc, fd
-      if got and got >= requested
-        res.obtained = got
+      effective = read_back libc, fd
+      if effective and effective >= requested
+        res.obtained = effective
         res.forced = true
   res
 
 --- Applique et journalise la taille du tampon d'une file NFQUEUE.
--- INFO `queue_rcvbuf` avec la valeur effective (et `forced`), WARN
+-- INFO `queue_rcvbuf` avec la taille effective (et `forced`), WARN
 -- `queue_rcvbuf_below_requested` si le noyau/FORCE n'a pas accordé la
--- demande, WARN `queue_rcvbuf_failed` si setsockopt échoue.
+-- demande, WARN `queue_rcvbuf_failed` si setsockopt échoue. Les champs
+-- `obtained` des logs sont des tailles effectives (moitié de la valeur brute
+-- renvoyée par getsockopt, que le noyau double).
 -- @tparam table|nil libc Table libc (ffi.C en production)
 -- @tparam number fd fd netlink (libnfq.nfq_fd)
 -- @tparam number queue_num Numéro de file (pour le log)

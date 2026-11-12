@@ -3202,3 +3202,31 @@ les rafales du résolveur débordent.
 **Non fait.** Aucune mesure de charge après correctif (pas d'accès au homelab,
 pas d'e2e) : les paliers 700/800 de `perf.md` §13.3 restent à rejouer pour
 constater la disparition de `queue_user_dropped` et de la perte client.
+
+### Sémantique de relecture `SO_RCVBUF` corrigée (branche d-rcvbuf)
+
+- **Problème.** `getsockopt(SO_RCVBUF)` renvoie le **double** de la taille
+  réellement accordée (man 7 socket). Les comparaisons `res.obtained <
+  requested` de `src/lib/nfq_rcvbuf.moon` (décision `SO_RCVBUFFORCE` dans
+  `apply_rcvbuf`, WARN dans `configure`) portaient donc sur une valeur doublée :
+  avec `net.core.rmem_max` = 3 Mio et 4 Mio demandés, `obtained` valait 6 Mio,
+  donc ni FORCE ni WARN, alors que la taille effective n'était que 3 Mio.
+- **Correctif.** `read_back` (`src/lib/nfq_rcvbuf.moon:60-72`) divise la
+  relecture par deux et documente la taille **effective** ; les comparaisons
+  (`:96`, `:100`, `:131`) et le champ `obtained` des logs INFO/WARN portent sur
+  cette valeur effective (moitié du brut noyau). En-tête du module et docstring
+  de `configure` précisent la sémantique ; aucun nouveau champ de log (donc
+  aucune modification de `src/log.moon`).
+- **Tests.** `tests/unit/lib/nfq_rcvbuf_spec.moon` : le stub `getsockopt`
+  fournit désormais les valeurs brutes doublées. Cas ajouté « rmem_max =
+  3 Mio » pour `apply_rcvbuf` (FORCE déclenché, relecture à 2 × 4 Mio) et pour
+  `configure` (FORCE refusé → INFO `obtained` = 3 Mio puis WARN
+  `queue_rcvbuf_below_requested`). 15 cas dans le spec.
+- **Documentation.** `doc/CONFIG.md` §3 (note `nfqueue.rcvbuf`) et
+  `docs/agents/perf.md` §14.2 (séquence et journalisation).
+- **Vérification.** `nix develop --command bash -c "make all && make check &&
+  make test"` : **3058 succès / 0 échec / 0 erreur / 0 pending**, tests JS
+  12/12 (sortie `tmp/test.log`).
+
+**Non fait.** Aucune vérification sur un noyau réel avec `rmem_max` réduit
+(pas de ssh, pas d'e2e) : le cas est couvert par le stub `getsockopt`.
