@@ -9,6 +9,7 @@ Mesure les performances du filtre DNS selon deux volets, écrit un rapport dans
 |-------|--------|--------|----------|
 | Micro-bench | `bench.micro` | ns/op + KB alloués sur les hot-paths (parsing ipparse, `bin48`, xxhash) | non |
 | Charge DNS | `bench.load` | QPS soutenu, latences p50/p95/p99, pertes/timeouts | oui (UDP/53) |
+| Profilage hot path | `bench.hotpath` | µs/paquet + profils `jit.profile`/`jit.v`/`jit.dump` des handlers réels des workers | non |
 
 ## Usage rapide
 
@@ -18,11 +19,41 @@ make bench-micro ITERS=2000000   # idem, plus d'itérations
 make bench-load TARGET=10.0.0.2  # charge contre un résolveur (port 53 défaut)
 make bench-load TARGET=10.0.0.2:5353 DURATION=30 RATE=500 DOMAINS=tmp/d.txt
 make bench-micro SAVE_BASELINE=1 # enregistre tmp/bench/baseline.lua
+make bench-hotpath               # profilage CPU du hot path (voir ci-dessous)
 ```
 
 Variables Make : `ITERS`, `TARGET=host[:port]`, `DURATION` (s), `RATE` (req/s,
 vide = au plus vite), `DOMAINS` (fichier 1 domaine/ligne, `#` = commentaire),
 `SAVE_BASELINE=1`.
+
+## Profilage du hot path (`make bench-hotpath`)
+
+Rejoue en boucle, **sans NFQUEUE ni réseau**, les handlers réels des workers
+(`handle_question`, `handle_response` — dont le cycle complet du second avis
+réponse A + réponse validateur B) sur des paquets IPv4/UDP fabriqués, avec des
+stubs minimaux pour `libnfq` (payload factice, verdicts comptés), `nft_queue`
+(tube vidé après chaque lot, sans ACK) et `raw_send` (aucun socket). Le filtre
+est réel (`filter.load`) et la transaction `pending` est produite par une
+sonde `handle_question` réelle. Rapport : `tmp/prof/hotpath.md` ; détails et
+interprétation : `docs/agents/perf.md` §18.
+
+```sh
+make bench-hotpath                          # mesures (100 000 iters × 3, min retenu)
+make bench-hotpath HP_PROFILE=f HP_DURATION=12   # profil jit.profile par fonction
+make bench-hotpath HP_PROFILE=l HP_DURATION=12   # profil jit.profile par ligne
+make bench-hotpath HP_JIT_V=tmp/prof/jitv.txt HP_JIT_DUMP=tmp/prof/jitdump.txt
+make bench-hotpath HP_ONLY=so_cycle HP_ITERS=200000
+make bench-hotpath HP_TASKSET=5             # épingle le banc sur un cœur
+```
+
+Variables : `HP_ITERS`, `HP_CHUNK` (64 = `MAX_BATCH_PKTS`), `HP_WARMUP`,
+`HP_DURATION`, `HP_REPEAT` (passages chronométrés dont on garde le minimum),
+`HP_PROFILE=f|l`, `HP_ONLY=<cas>`, `HP_JIT_V=<fichier>`,
+`HP_JIT_DUMP=<fichier>`, `HP_TASKSET=<cpu>`, `HP_EXTRA` (flags bruts).
+Cas disponibles : `question`, `ipc_drain`, `response`, `so_a`, `so_cycle`,
+`setup_control` (`--list`). Le banc **échoue** (code 1) si le chemin mesuré n'est
+pas celui attendu (mauvais code retour, verdict manquant) : une mesure ne doit
+jamais porter sur un autre chemin que celui décrit.
 
 ## CLI directe
 
@@ -61,5 +92,8 @@ viser n'importe quel résolveur (`TARGET=1.1.1.1`) pour valider le générateur.
   non bloquant **injectable** (`client_factory`) pour les tests sans réseau.
 - `run.moon` — `parse_args` + `main` (orchestration, fichiers, baseline).
 - `cli.moon` — point d'entrée script (`luajit lua/bench/cli.lua …`).
+- `hotpath.moon` — micro-banc de profilage du hot path (paquets, stubs libnfq /
+  IPC / raw_send, cas de mesure, `jit.profile`, rapport) ; `hotpath_cli.moon` —
+  son point d'entrée script.
 
 Tests : `tests/unit/bench/*_spec.moon`.

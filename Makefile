@@ -112,7 +112,7 @@ SYNC_LUAS  := $(patsubst $(SYNC)/%.moon,$(LUA)/sync/%.lua,$(SYNC_MOONS))
 .PHONY: all clean check test test-unit test-js test-vm test-openwrt test-e2e test-e2e-rebuild \
         homelab-up homelab-down homelab-nuke homelab-redeploy \
         coverage coverage-quick run reload update-lists make-secret logs \
-        bench bench-micro bench-load \
+        bench bench-micro bench-load bench-hotpath \
         sync-init sync-push-init redbean-ui help
 
 all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(GEN_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) $(MOONSCRIPT_RUNTIME_LUAS) $(SYNC_LUAS) install-owrt.lua .init.lua
@@ -410,6 +410,37 @@ bench-load: all
 # Défaut : micro-bench (le volet charge reste opt-in via bench-load).
 bench: bench-micro
 
+# Profilage CPU du hot path DNS (question / réponse / second avis) sans NFQUEUE
+# ni réseau : handlers réels des workers + stubs libnfq/IPC, cf. src/bench/README.md
+# et docs/agents/perf.md §18. Sorties dans tmp/prof/.
+# Variables : HP_ITERS, HP_CHUNK, HP_WARMUP, HP_DURATION, HP_PROFILE=f|l,
+#             HP_ONLY=<cas>, HP_JIT_V=<fichier>, HP_JIT_DUMP=<fichier>,
+#             HP_REPEAT=<n> (minimum de n passages chronométrés), HP_TASKSET=<cpu>,
+#             HP_EXTRA.
+HP_ITERS    ?= 100000
+HP_CHUNK    ?= 64
+HP_WARMUP   ?= 5000
+HP_DURATION ?= 10
+HP_REPEAT   ?= 3
+HP_TASKSET  ?=
+HP_PROFILE  ?=
+HP_ONLY     ?=
+HP_JIT_V    ?=
+HP_JIT_DUMP ?=
+HP_EXTRA    ?=
+HP_ARGS = --iters $(HP_ITERS) --chunk $(HP_CHUNK) --warmup $(HP_WARMUP) \
+  --duration $(HP_DURATION) --repeat $(HP_REPEAT) \
+  $(if $(HP_PROFILE),--profile $(HP_PROFILE),) \
+  $(if $(HP_ONLY),--only $(HP_ONLY),) \
+  $(if $(HP_JIT_V),--jit-v $(HP_JIT_V),) \
+  $(if $(HP_JIT_DUMP),--jit-dump $(HP_JIT_DUMP),) \
+  $(HP_EXTRA)
+
+bench-hotpath: all
+	@mkdir -p tmp/prof
+	@$(BENCH_ENV) $(if $(HP_TASKSET),taskset -c $(HP_TASKSET)) \
+	  $(LUAJIT) $(LUA)/bench/hotpath_cli.lua $(HP_ARGS)
+
 # Clean compiled files
 clean:
 	rm -rf $(LUA)
@@ -525,6 +556,7 @@ help:
 	@echo "  make-secret  - Génère un hash PBKDF2-SHA256 pour cfg/secrets (USER=, PASS=)"
 	@echo "  update-lists - Télécharge et compile les listes de domaines"
 	@echo "  logs         - Affiche les logs en temps réel"
+	@echo "  bench-hotpath- Profilage CPU du hot path DNS (tmp/prof/, cf. docs/agents/perf.md §18)"
 	@echo "  sync-init    - Init sync pull sur un device (HOST=... REPO=... requis)"
 	@echo "  sync-push-init - Init sync push sur un filtre de référence (HOST=... REPO=... requis)"
 	@echo "  redbean-ui   - Empaquète l'UI d'installation dans redbean.com (redbean.com requis)"
