@@ -1666,7 +1666,7 @@ les sets vidés/supprimés hors du worker (`authenticated_*`,
 inventaire fichier:ligne et écart de scénario : `docs/agents/audits.md`
 § « Exclusions du cache » (même section `d-nftcache`).
 
-### 16.8 Coalescence des écritures du pipe nft côté producteurs (branche `d-nftwrite`)
+### 16.9 Coalescence des écritures du pipe nft côté producteurs (branche `d-nftwrite`)
 
 Implémentation de la piste (4) de §16.5 (« écritures events/learn/nft
 coalescées »), volet **pipe nft** uniquement. Constat de §16.3 : chaque
