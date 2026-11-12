@@ -4092,3 +4092,55 @@ T03/T74/T121-T124b passaient déjà : blackout d'environ une minute du portail
 HTTPS 33443, non reproduit par les deux runs identiques suivants (94/0). Aucun
 fichier modifié par ce correctif n'est impliqué dans le chemin AUTH ; à
 surveiller si cela réapparaît.
+
+### Réglage du GC LuaJIT par worker (branche `d-gctune`)
+
+Objectif : réduire la part GC du hot path (29-47 % des échantillons,
+`perf.md` §18) sans changer le comportement fonctionnel, tout en bornant la
+mémoire par worker.
+
+**Implémentation.** Nouveau module `src/lib/gc_tune.moon` : normalisation des
+clés (entiers bornés), état par processus avec `apply!` (`setpause`/
+`setstepmul`), `idle!` (`collectgarbage "step", idle_step`) et `guard!`
+(`collectgarbage "count"` au plus 1×/s, jusqu'à 8 pas forcés au-delà de
+`max_heap_mb`, log `gc_heap_guard` au plus 1/10 s). Section de config `gc`
+(`src/config.moon:752-769`) avec repli sur les anciennes clés
+`runtime.gc_pause`/`runtime.gc_stepmul`. Application dans le superviseur avant
+fork (`src/main.moon:57-71`), puis rappelée au démarrage de chaque worker :
+`nfq_loop.run_queue` (`src/nfq_loop.moon:115-116`), `worker_events`,
+`mac_learner`, `worker_nft`. Pas de GC sur temps mort et garde-fou dans les
+boucles : `src/nfq_loop.moon:261,268`, `src/worker_events.moon:379,417`,
+`src/mac_learner.moon:448,458` (uniquement quand le poll long expire sans fd
+prêt), `src/worker_nft.moon:433,491` (après flush, pipe drainé). Section `gc`
+éditable dans la webui (`src/webui/schema/config_schema.moon:19-25`,
+`src/webui/handlers/config.moon:104`, `src/webui/router.moon:38`).
+
+**Défauts mesurés.** `pause: 200`, `stepmul: 400`, `idle_step: 100`,
+`max_heap_mb: 32`. Micro-banc (`make bench-hotpath`, 100 000 iters, minimum de
+lot, CPU épinglé, 3 tours alternés) : réponse 38,0 → 23,5 µs/paquet
+(−38 %) et question 43,0 → 32,5 (−24 %) par rapport à l'ancien 110/400 ; tas
+max médian 1 968 → 3 356 Kio par worker. `pause` 300/400 ne gagne plus de CPU
+et monte à 4,9-6,8 Mio. Détail et protocole cible : `docs/agents/perf.md` §19,
+`tmp/gctune_report.md`.
+
+**Tests ajoutés.** `tests/unit/lib/gc_tune_spec.moon` (13 cas : validation,
+bornes, application, idle, garde-fou, plafond de pas, throttles horloge/log),
+5 cas `config.gc` dans `tests/unit/config_spec.moon` (défauts, reprise,
+héritage `runtime.gc_*`, priorité, valeurs invalides), un cas de câblage
+`apply!`/`guard!`/`idle!` dans `tests/unit/nfq_loop_enobufs_spec.moon`, et
+2 cas webui (rendu + persistance de la section) dans
+`tests/unit/webui/config_handler_spec.moon`. Les nouveaux champs de log
+(`gc_tuning`, `gc_heap_guard`) sont classés dans `src/log.moon` (garde-fou
+`log_fields_spec`) : `pause`/`stepmul`/`idle_step`/`max_heap_mb` en identité,
+`heap_kb`/`steps` en volatils.
+
+**Vérification.** `make all`, `make check` OK ; `make test` :
+**3200 successes / 0 failures / 0 errors** (`tmp/test.log`). `make test-e2e`
+(homelab libvirt) : 94 passed / 0 failed au troisième run (`tmp/e2e3.log`).
+Les deux premiers runs (`tmp/e2e.log` : 76/18, `tmp/e2e2.log` : 82/12) ont
+échoué sur le blackout auth/webui déjà observé (T30-T36/T110-T118 en HTTP 000,
+T03/T23/T41-T43/T134/T141-T142/T180 en cascade), sans aucune ligne GC en
+erreur dans `logread` ; le run suivant repasse à 94/0 sans changement de code.
+
+**Non fait.** Aucune mesure sur la cible `custos.lan` (interdite ici) : le
+protocole y est décrit (`perf.md` §19.3) mais reste à exécuter.

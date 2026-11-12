@@ -11,6 +11,7 @@ Voir `cfg/config.moon` pour un exemple complet annoté.
 
 1. [Chargement de la configuration](#1-chargement-de-la-configuration)
 2. [Section `runtime`](#2-section-runtime)
+2bis. [Section `gc`](#2bis-section-gc)
 3. [Section `nfqueue`](#3-section-nfqueue)
 4. [Section `dns`](#4-section-dns)
 5. [Section `nft`](#5-section-nft)
@@ -71,8 +72,8 @@ Contrôle le comportement global du service.
 |-----|------|--------|-------------|
 | `log_level` | string | `"INFO"` | Niveau de log, du plus verbeux au moins verbeux : `TRACE` (0), `DEBUG` (1), `INFO` (2), `WARN` (4), `ERROR` (5). `TRACE` est réservé au détail par paquet ; `DEBUG` au détail par connexion/requête. |
 | `benchmark` | bool | `false` | Active les mesures de performance dans les logs |
-| `gc_pause` | number | `110` | Réglage GC LuaJIT (`collectgarbage "setpause"`). Le GC se déclenche dès que le tas dépasse de `gc_pause`-100 % la taille post-collecte. Défaut LuaJIT : 200 (le tas peut doubler). 110 ⇒ collecte dès +10 %, plus économe en RAM. |
-| `gc_stepmul` | number | `400` | Réglage GC LuaJIT (`collectgarbage "setstepmul"`). Multiplicateur de la vitesse du GC incrémental ; une valeur plus haute compense le `gc_pause` bas. |
+| `gc_pause` | number | — | **Obsolète** : remplacé par [`gc.pause`](#2bis-section-gc), encore lu en repli si `gc.pause` est absent. |
+| `gc_stepmul` | number | — | **Obsolète** : remplacé par [`gc.stepmul`](#2bis-section-gc), encore lu en repli si `gc.stepmul` est absent. |
 | `pid_file` | string | `"/var/run/custos.pid"` | Pidfile du superviseur (PID qui traite SIGHUP pour le hot-reload). Écrit au démarrage, supprimé à l'arrêt. Lu par la webui (« Recharger maintenant ») et `custos-update`. Surchargeable aussi via l'env `CUSTOS_PID_FILE`. |
 
 Quand `benchmark` est activé, le verdict `ALLOW`/`BLOCK` est journalisé **dans la
@@ -275,8 +276,6 @@ Le filtrage `runtime.log_level` reste appliqué **avant** tout calcul d'empreint
 runtime: {
   log_level: "DEBUG"
   benchmark: false
-  gc_pause: 110      -- machines à faible RAM (128 Mo) ; 200 = défaut LuaJIT
-  gc_stepmul: 400
   lowmem: "auto"            -- "auto" (défaut) | true/"on" | false/"off"
   lowmem_threshold_kb: 131072  -- seuil d'autodétection (128 Mo)
 }
@@ -319,6 +318,44 @@ runtime: {
 > Hormis la réduction des files par le mode `runtime.lowmem`, ces réglages
 > relèvent du déploiement (config) : custos n'adapte rien d'autre automatiquement
 > selon la RAM disponible.
+
+---
+
+## 2bis. Section `gc`
+
+Réglage du ramasse-miettes LuaJIT, **par worker** (chaque processus forké a son
+propre tas). Ces valeurs n'ont aucun effet sur le comportement fonctionnel du
+filtre : elles arbitrent seulement entre CPU (temps passé en GC) et mémoire.
+Mesures et recommandation : [docs/agents/perf.md](../docs/agents/perf.md) § 19.
+
+```moonscript
+gc: {
+  pause:       200   -- setpause : collecte quand le tas dépasse +100 %
+  stepmul:     400   -- setstepmul : pas de GC plus gros
+  idle_step:   100   -- pas de GC quand une file/tube est vide (0 = off)
+  max_heap_mb: 32    -- plafond de tas par worker (0 = off)
+}
+```
+
+| Clé | Type | Défaut | Description |
+|-----|------|--------|-------------|
+| `pause` | integer | `200` | `collectgarbage "setpause"`. Le GC démarre quand le tas dépasse de `pause`−100 % sa taille après collecte (200 = doublement autorisé, 110 = collecte dès +10 %). Bornes : 0–10 000. |
+| `stepmul` | integer | `400` | `collectgarbage "setstepmul"`. Multiplicateur de vitesse du GC incrémental ; compense une pause basse. Bornes : 1–100 000. |
+| `idle_step` | integer | `100` | Taille d'un pas `collectgarbage "step"` effectué quand une boucle est au repos (timeout de `poll` sur une file NFQUEUE vide, tube sans données dans `worker_events`, `mac_learner`, `worker_nft`). `0` désactive ces pas. Bornes : 0–100 000. |
+| `max_heap_mb` | integer | `32` | Garde-fou mémoire par worker : `collectgarbage "count"` est lu au plus une fois par seconde ; au-delà du plafond, jusqu'à 8 pas de GC sont forcés (log `gc_heap_guard`, au plus un toutes les 10 s). `0` désactive le garde-fou — le tas reste alors borné par `pause` seul. Bornes : 0–65 536. |
+
+Les valeurs absentes ou invalides reprennent le défaut et produisent un
+avertissement `gc_invalid` au chargement. Les anciennes clés
+`runtime.gc_pause`/`runtime.gc_stepmul` restent acceptées en repli (si
+`gc.pause`/`gc.stepmul` sont absents) pour ne pas casser une configuration
+existante.
+
+> **Choix mesuré.** `pause: 200` / `stepmul: 400` divise par ~1,6 le coût CPU
+> du GC par rapport au couple historique 110/400 sur le micro-banc hot path
+> (réponse : 38,0 → 23,5 µs/paquet en lot minimum), pour un tas de pointe
+> ~3,4 Mio au lieu de ~2,0 Mio par worker. `pause` 300/400 n'apporte plus de
+> gain de coût et augmente le tas (4,9–6,8 Mio). Détail : `docs/agents/perf.md`
+> § 19.
 
 ---
 

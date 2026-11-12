@@ -2133,3 +2133,105 @@ campagne dédiée et non un correctif local.
 - campagne « allocation par paquet » (§18.6) si le coût CPU par paquet reste le
   plafond après le multi-worker §11 et le second avis ciblé §10.2.
 
+
+## 19. Réglage du GC LuaJIT par worker (2026-11-12, branche `d-gctune`)
+
+Le profilage §18 impute 29-47 % des échantillons du hot path au GC. Cette
+section mesure le compromis coût/empreinte des paramètres `pause`/`stepmul` sur
+le micro-banc local, fixe des défauts chiffrés et décrit le protocole de
+validation sur la cible (aucune connexion à `custos.lan` n'a été faite ici).
+
+### 19.1 Ce qui a été implémenté
+
+| Élément | Fichier | Détail |
+|---|---|---|
+| Module de réglage | `src/lib/gc_tune.moon` | `normalize` (validation entière + bornes), `new` (état injectable : `collectgarbage`, horloge, log), `apply!` (`setpause`/`setstepmul`), `idle!` (pas `collectgarbage "step", idle_step`), `guard!` (`count` ≤ 1×/s, jusqu'à 8 pas forcés au-delà de `max_heap_mb`, log `gc_heap_guard` ≤ 1/10 s), `shared!` (état du processus). |
+| Section de config | `src/config.moon` (normalize) | `gc = { pause, stepmul, idle_step, max_heap_mb }` ; valeurs absentes/invalides → défauts + warn `gc_invalid` ; repli sur `runtime.gc_pause`/`runtime.gc_stepmul` (compatibilité). |
+| Application au démarrage | `src/main.moon:57-71` | Réglage appliqué dans le superviseur avant tout fork (hérité COW), puis rappelé dans chaque worker par `gc.apply!` : `nfq_loop.run_queue` (`src/nfq_loop.moon:122-125`), `worker_events.run`, `mac_learner.run`, `worker_nft.run`. |
+| Pas sur temps mort | `src/nfq_loop.moon:279-283`, `src/worker_events.moon` (après poll), `src/mac_learner.moon` (poll 1 s sans fd prêt), `src/worker_nft.moon` (après flush, pipe drainé) | `gc.idle!` uniquement quand la file/tube est vide. |
+| Garde-fou | boucles ci-dessus | `gc.guard!` à chaque tour (coût : une comparaison d'horloge, `count` au plus 1×/s). |
+| WebUI | `src/webui/schema/config_schema.moon`, `handlers/config.moon`, `router.moon` | Section `gc` éditable (4 champs), valeurs par défaut affichées. |
+| Doc | `doc/CONFIG.md` § 2bis, `.agents/architecture.md`, `src/bench/README.md` | Clés, bornes, sémantique, anciennes clés marquées obsolètes. |
+
+Les anciennes clés `runtime.gc_pause`/`runtime.gc_stepmul` ne sont plus
+documentées comme réglage courant mais restent lues si la section `gc` ne les
+fournit pas : une configuration existante garde son comportement.
+
+### 19.2 Mesure locale (`make bench-hotpath`)
+
+Ajout au banc : `--gc-pause`, `--gc-stepmul`, `--gc-idle-step`,
+`--gc-max-heap` (appliqués dans `setup`, donc avant les mesures) et une colonne
+`tas max (Kio)` (`collectgarbage "count"` relevé après chaque lot, maximum sur
+les passages). Protocole : 3 tours, chaque couple exécuté une fois par tour dans
+un ordre alterné (A/B), `--iters 100000 --repeat 5`, CPU épinglé
+(`taskset -c 5`), métrique de coût = **minimum de lot** (le minimum par lot est
+stable, le total ne l'est pas sur une machine partagée). Matrice complète :
+`tmp/gctune/matrix2.log` / `matrix2_rows.tsv` (ignorés par git).
+
+| pause | stepmul | question µs/paq (lot min) | response µs/paq (lot min) | tas max médian (Kio) |
+|---|---|---|---|---|
+| **110** (ancien défaut) | 400 | 43,0 | 38,0 | 1 968 |
+| 200 | 200 | 32,7 | 24,0 | 3 593 |
+| **200** | **400** | **32,5** | **23,5** | **3 356** |
+| 300 | 200 | 33,7 | 23,3 | 5 124 |
+| 300 | 400 | 31,7 | 23,7 | 4 885 |
+| 400 | 200 | 32,0 | 23,4 | 6 689 |
+| 400 | 400 | 32,6 | 22,8 | 6 455 |
+
+Lecture :
+
+1. **Le couple historique 110/400 est le plus coûteux** : réponse 38,0 µs/paquet
+   contre 22,8-24,0 pour tous les `pause ≥ 200` (−37 à −40 %), question 43,0
+   contre 31,7-33,7 (−22 à −26 %). C'est cohérent avec la part GC de §18 : une
+   pause de 110 % collecte en permanence.
+2. **Au-delà de 200, le coût ne baisse plus** : les écarts 200/300/400 (22,8 à
+   24,0 µs réponse) sont dans la dispersion run-à-run (±5 %). Le tas, lui,
+   croît linéairement avec `pause` : ~3,4 Mio à 200, ~4,9-5,1 à 300,
+   ~6,5-6,8 à 400 (tas maximum observé sur le cas réponse).
+3. **`stepmul` 400 plutôt que 200** : à `pause` égal, coût identique mais tas
+   légèrement plus bas (3 356 vs 3 593 Kio à pause 200 ; 4 885 vs 5 124 à 300),
+   ce qui est l'effet attendu d'un GC incrémental plus rapide.
+
+**Défauts retenus** : `pause: 200`, `stepmul: 400` — coût minimal mesuré, tas
++1,4 Mio par worker par rapport à l'ancien défaut (3,36 vs 1,97 Mio), soit
+~14 Mio pour 10 workers. `idle_step: 100` (taille de pas par défaut de LuaJIT,
+uniquement sur temps mort) et `max_heap_mb: 32` (plafond de sécurité > le pire
+tas légitime observé, y compris `ipc.pending_max = 20 000` ≈ 16 Mio/worker de
+§15.5) ; `0` désactive chacun. Le garde-fou et le pas sur temps mort sont
+couverts par `tests/unit/lib/gc_tune_spec.moon` (13 cas) et le câblage
+`apply!`/`guard!`/`idle!` par `tests/unit/nfq_loop_enobufs_spec.moon`.
+
+Limites de cette mesure : micro-banc **x86_64** (pas la cible aarch64), débit
+d'allocation très supérieur à la production (100 000 réponses en ~0,4-0,8 s),
+pas de NFQUEUE ni de réseau. Les rapports entre couples sont transposables ; les
+µs absolues ne le sont pas.
+
+### 19.3 Protocole de validation sur la cible (à faire, hors de cette branche)
+
+Aucune connexion à `custos.lan` n'a été faite. Pour valider les défauts sur la
+cible (aarch64 A55 ×4, OpenWrt) :
+
+1. **Déployer** la branche puis deux variantes de `/etc/custos/config.moon` :
+   `gc: { pause: 110, stepmul: 400 }` (référence) et
+   `gc: { pause: 200, stepmul: 400 }` (candidat). Vérifier au démarrage la ligne
+   `gc_tuning` (pause/stepmul/idle_step/max_heap_mb effectifs) dans `logread`.
+2. **Charge** : générateur `tmp/bench2/dnsload3.py` en `mixed` à 200 puis 300
+   q/s, 30 s par palier, après retour au repos (profondeur file 4 = 0 et
+   `user_dropped` figé sur 3 s, cf. §1). Rejouer chaque variante 3 fois en
+   alternance (A/B/A/B/A/B) pour décorréler la dérive thermique.
+3. **Mesures par palier** : débit émis/reçus et perte (`queue_dropped`,
+   `user_dropped`), latence client p50/p99, `q_to_response_ms` p50/p99 des
+   lignes `response_dns_benchmark`, CPU (`utime+stime`) des workers `dns-q*`,
+   `resp-q*`, `nft`, `events`, et **RSS par worker** (`/proc/<pid>/statm`,
+   `sampler4.pl` le collecte déjà à 1 Hz). Relever aussi le nombre de lignes
+   `gc_heap_guard` (doit rester nul hors incident).
+4. **Critères d'acceptation** : p99 et perte non dégradées de plus de 5-10 %
+   par rapport à 110/400 ; RSS total augmenté de ≤ 2 Mio × nombre de workers ;
+   part GC des échantillons (`make bench-hotpath` sur la cible ou profil
+   `jit.profile`) en baisse. Si la RAM est le facteur limitant (mode
+   `runtime.lowmem`), garder `pause: 110` ou fixer `max_heap_mb` plus bas
+   (12-16 Mio) : le compromis mesuré ci-dessus est un arbitrage CPU↔mémoire,
+   pas un gain gratuit.
+5. **Temps mort** : sur une cible au repos, vérifier que le CPU de `events` et
+   `mac-lrn` ne remonte pas (le pas `idle_step` ne tourne qu'après un timeout de
+   poll sans donnée ; `mac_learner` l'exclut quand des probes sont en vol).
