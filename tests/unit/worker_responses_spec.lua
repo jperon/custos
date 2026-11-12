@@ -849,7 +849,7 @@ describe("verdicts différés par lot NFQUEUE (settle / flush_deferred)", functi
     return assert.equals(1, #calls.set)
   end)
 end)
-return describe("worker_responses helpers complémentaires (couverture)", function()
+describe("worker_responses helpers complémentaires (couverture)", function()
   before_each(function()
     local config = require("config")
     config.ipc = config.ipc or { }
@@ -951,5 +951,110 @@ return describe("worker_responses helpers complémentaires (couverture)", functi
     assert.equals(0, tries)
     assert.equals(0, waited)
     return assert.is_false(budget)
+  end)
+end)
+return describe("worker_responses : drain du tube sans paquet NFQUEUE", function()
+  local saved_nfq = nil
+  local captured = nil
+  local p = nil
+  local m_ipc = nil
+  local m = nil
+  local purges = 0
+  before_each(function()
+    local cfg = require("config")
+    cfg.ipc = cfg.ipc or { }
+    cfg.ipc.pending_ttl = 5
+    cfg.ipc.match_retry = {
+      enabled = false
+    }
+    saved_nfq = package.loaded["nfq_loop"]
+    captured = nil
+    purges = 0
+    package.loaded["nfq_loop"] = {
+      run_queue = function(queue, cb, opts)
+        captured = {
+          queue = queue,
+          cb = cb,
+          opts = opts
+        }
+        return nil
+      end,
+      NF_ACCEPT = 1,
+      NF_DROP = 0
+    }
+    package.loaded["ipc"] = nil
+    m_ipc = require("ipc")
+    local proxy = setmetatable({
+      purge_pending = function(now_fn)
+        purges = purges + 1
+        return m_ipc.purge_pending(now_fn)
+      end
+    }, {
+      __index = m_ipc
+    })
+    package.loaded["ipc"] = proxy
+    package.loaded["worker_responses"] = nil
+    m = dofile("lua/worker_responses.lua")
+    local pipefd = ffi.new("int[2]")
+    assert.equals(0, ffi.C.pipe2(pipefd, 2048))
+    p = {
+      pipefd[0],
+      pipefd[1]
+    }
+  end)
+  after_each(function()
+    package.loaded["nfq_loop"] = saved_nfq
+    package.loaded["ipc"] = nil
+    package.loaded["worker_responses"] = nil
+    if p then
+      ffi.C.close(p[1])
+      return ffi.C.close(p[2])
+    end
+  end)
+  it("surveille le tube et absorbe les questions sans paquet", function()
+    m.run(15, p[1], nil)
+    assert.is_not_nil(captured, "run_queue doit être appelé")
+    assert.equals(15, captured.queue)
+    assert.is_not_nil(captured.opts.extra_rfds)
+    assert.equals(1, #captured.opts.extra_rfds, "le tube question→réponse est surveillé")
+    assert.equals(p[1], captured.opts.extra_rfds[1])
+    assert.is_function(captured.opts.on_extra_ready)
+    for i = 1, 5 do
+      assert.is_true(m_ipc.write_msg(p[2], 0x7000 + i, "\x0a\x00\x00\x02", 5353, "\xaa\xbb\xcc\xdd\xee\xff", "\x01\x01\x01\x01", "ok", nil, "r_ok"))
+    end
+    assert.is_false((m_ipc.is_pending(0x7001, "10.0.0.2", 5353, "1.1.1.1", function()
+      return os.time()
+    end)))
+    captured.opts.on_extra_ready()
+    for i = 1, 5 do
+      assert.is_true((m_ipc.is_pending(0x7000 + i, "10.0.0.2", 5353, "1.1.1.1", function()
+        return os.time()
+      end)), "question " .. tostring(i) .. " absorbée sans paquet")
+    end
+  end)
+  it("purge l'expiration pending au plus une fois tous les 64 réveils", function()
+    m.run(15, p[1], nil)
+    assert.is_true(m_ipc.write_msg(p[2], 0x7100, "\x0a\x00\x00\x02", 5353, "\xaa\xbb\xcc\xdd\xee\xff", "\x01\x01\x01\x01", "ok", nil, "r_ok"))
+    captured.opts.on_extra_ready()
+    assert.equals(0, purges, "pas de purge à chaque réveil (coût O(pending))")
+    for i = 1, 63 do
+      captured.opts.on_extra_ready()
+    end
+    return assert.equals(1, purges)
+  end)
+  return it("un tube PLEIN est drainé par un seul réveil (capacité rendue)", function()
+    m.run(15, p[1], nil)
+    local written = 0
+    for i = 1, 2000 do
+      local ok = m_ipc.write_msg(p[2], 0x7200 + (i % 256), "\x0a\x00\x00\x02", 5353, "\xaa\xbb\xcc\xdd\xee\xff", "\x01\x01\x01\x01", "ok", nil, "r_fill")
+      if not (ok) then
+        break
+      end
+      written = written + 1
+    end
+    assert.is_true(written > 100, "tube rempli (" .. tostring(written) .. " messages)")
+    assert.is_false(m_ipc.write_msg(p[2], 0x7300, "\x0a\x00\x00\x02", 5353, "\xaa\xbb\xcc\xdd\xee\xff", "\x01\x01\x01\x01", "ok", nil, "r_fill"))
+    captured.opts.on_extra_ready()
+    return assert.is_true(m_ipc.write_msg(p[2], 0x7301, "\x0a\x00\x00\x02", 5353, "\xaa\xbb\xcc\xdd\xee\xff", "\x01\x01\x01\x01", "ok", nil, "r_fill"))
   end)
 end)

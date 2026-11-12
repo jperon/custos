@@ -265,6 +265,15 @@ CLOCK_MONOTONIC = 1
 -- tcp_state.purge et purge_mac_clients tous les 1000 paquets.
 purge_counter = 0
 
+-- Drain du tube IPC déclenché par le poll (on_extra_ready, sans paquet
+-- NFQUEUE) : compteur de réveils depuis la dernière purge des entrées `pending`
+-- expirées. Un worker dont la file NFQUEUE ne reçoit aucun paquet ne passe
+-- jamais par la purge de `handle_response` (compteur mod 1000) : sans celle-ci,
+-- les entrées absorbées resteraient jusqu'à l'éviction `ipc.pending_max`
+-- (cf. docs/agents/perf.md §12). La purge est en O(pending) : la borner.
+DRAIN_PURGE_EVERY = 64
+drain_purge_counter = 0
+
 -- Benchmark : buffer timespec réutilisé
 _benchmark_ts = ffi.new "timespec_t[1]"
 
@@ -1388,9 +1397,30 @@ run = (queue_num, rfd, rules_metadata) ->
   -- Réveil immédiat sur verdict reçu (multi-worker) : sans cela, une réponse A
   -- parquée attendrait le timeout de poll (budget second avis, 80 ms) alors que
   -- son verdict est déjà là. Sans bus : comportement inchangé.
-  if so_bus_rfd
-    run_opts.extra_rfds = { so_bus_rfd }
-    run_opts.on_extra_ready = -> drain_verdict_bus false
+  --
+  -- Le tube question→réponse de CE worker est TOUJOURS surveillé par le même
+  -- poll : sans lui, il n'était drainé que dans `handle_response`, donc
+  -- seulement à l'arrivée d'un paquet sur SA file. Or le hachage NFQUEUE
+  -- répartit par couple d'adresses : une file peut rester inactive assez
+  -- longtemps pour que les 64 Kio du tube se remplissent → le worker questions
+  -- échouait en EAGAIN, jetait chaque question (NF_DROP) et plus aucune réponse
+  -- n'arrivait : blocage définitif (cf. docs/agents/perf.md §12).
+  extra_rfds = { pipe_rfd }
+  extra_rfds[#extra_rfds + 1] = so_bus_rfd if so_bus_rfd
+  run_opts.extra_rfds = extra_rfds
+  run_opts.on_extra_ready = ->
+    -- Même lecture que `handle_response` (aucune duplication) : `drain_pipe` +
+    -- le callback `drain_on_msg` qui alimente mac_clients.
+    drain_ts = now!
+    drain_pipe pipe_rfd, now, drain_on_msg
+    -- Ce chemin peut être le SEUL à tourner sur un worker dont la file ne
+    -- reçoit aucun paquet : la purge de `handle_response` (compteur mod 1000)
+    -- ne s'exécuterait jamais et les entrées absorbées ne partiraient qu'à
+    -- l'éviction `ipc.pending_max`. Purge bornée (coût O(pending)) tous les
+    -- DRAIN_PURGE_EVERY réveils.
+    drain_purge_counter = (drain_purge_counter + 1) % DRAIN_PURGE_EVERY
+    purge_pending now if drain_purge_counter == 0
+    drain_verdict_bus false if so_bus_rfd
   all_resolvers = collect_all_resolvers!
   if #all_resolvers > 0
     families = {}

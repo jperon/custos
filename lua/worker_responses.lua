@@ -240,6 +240,8 @@ local so_bus_read_buf = ffi.new("uint8_t[?]", SO_BUS_CHUNK)
 local sleep_req = ffi.new("timespec_t[1]")
 local CLOCK_MONOTONIC = 1
 local purge_counter = 0
+local DRAIN_PURGE_EVERY = 64
+local drain_purge_counter = 0
 local _benchmark_ts = ffi.new("timespec_t[1]")
 local current_benchmark_ms
 current_benchmark_ms = function()
@@ -1422,11 +1424,21 @@ run = function(queue_num, rfd, rules_metadata)
   local run_opts = {
     on_batch_end = on_batch
   }
+  local extra_rfds = {
+    pipe_rfd
+  }
   if so_bus_rfd then
-    run_opts.extra_rfds = {
-      so_bus_rfd
-    }
-    run_opts.on_extra_ready = function()
+    extra_rfds[#extra_rfds + 1] = so_bus_rfd
+  end
+  run_opts.extra_rfds = extra_rfds
+  run_opts.on_extra_ready = function()
+    drain_ts = now()
+    drain_pipe(pipe_rfd, now, drain_on_msg)
+    drain_purge_counter = (drain_purge_counter + 1) % DRAIN_PURGE_EVERY
+    if drain_purge_counter == 0 then
+      purge_pending(now)
+    end
+    if so_bus_rfd then
       return drain_verdict_bus(false)
     end
   end
