@@ -497,5 +497,14 @@ return {
   strip_lookup = strip_lookup,
   probe_request = probe_request,
   start_query = start_query,
-  ip16_to_str = ip16_to_str
+  ip16_to_str = ip16_to_str,
+  process_learn = process_learn,
+  learn_mac = learn_mac,
+  expire_pending = expire_pending,
+  create_server = create_server,
+  ensure_parent_dir = ensure_parent_dir,
+  set_recv_timeout = set_recv_timeout,
+  reply_unknown = reply_unknown,
+  pending_queries = pending_queries,
+  negative_cache = negative_cache
 }
