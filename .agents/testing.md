@@ -1,7 +1,7 @@
 # Tests
 
 > **Definition of Done (rappel).** Avant de conclure toute tâche : (1) le code
-> ajouté/modifié est **couvert** (`make coverage`), (2) la **documentation** est à
+> ajouté/modifié est **couvert** (`make coverage-split`), (2) la **documentation** est à
 > jour, (3) **`make test` ET `make test-e2e` passent à 100 %** (`0 failed`),
 > commandes réellement exécutées et total lu. Voir [AGENTS.md](../AGENTS.md)
 > § « Definition of Done ». Si une suite ne peut être lancée, le dire — ne jamais
@@ -16,7 +16,7 @@
 | `make test` | aucun (pas de root) | Compile les specs `tests/unit/**/*_spec.moon` + helpers, puis exécute Busted. Couvre parsing, `filter.*`, `ipc`, `nft_queue`, `dns_ede`, `metrics`, `webui`, `sync`, `doh`, `sip` et les workers. |
 | `make test-unit` | aucun | Sous-ensemble Busted sans dépendances FFI (CI rapide). |
 | `make test-ffi` | wolfssl + libsocket | Tests FFI socket / WolfSSL / intégration TLS. |
-| `make coverage` | aucun | `make test` + rapport luacov dans `tmp/coverage/`. |
+| `make coverage-split` | aucun | Couverture **exacte** ligne-par-ligne (~30 min) : un Busted par spec, stats luacov fusionnées, rapport dans `tmp/coverage/`. `make coverage` (un seul processus, ~25 min) peut encore mourir d'un SIGSEGV LuaJIT intermittent sous le hook luacov ; `make coverage-quick` donne un ordre de grandeur par échantillonnage. |
 | `make check` | aucun | Vérification syntaxique des `.lua` compilés **et** contrôle des lectures de globales non déclarées (`tools/check_globals.sh`). **Bloquante** : `exit 1` si au moins un fichier ne se charge pas (rapport complet affiché) ou si une globale inconnue est lue. |
 | `make bench` | aucun | Micro-bench in-process (ns/op + KB) des hot-paths. Cf. [src/bench/README.md](../src/bench/README.md). |
 | `make bench-load TARGET=host[:port]` | un résolveur DNS joignable | Charge DNS bout-en-bout (QPS, latences p50/p95/p99, pertes). Variables : `DURATION`, `RATE`, `DOMAINS`, `ITERS`, `SAVE_BASELINE`. |
@@ -31,7 +31,7 @@ Cibles homelab associées : `make homelab-up` / `homelab-down` / `homelab-nuke` 
 
 ## Fiabilité du code retour des cibles de test (pipefail)
 
-**Le code retour de `make test`, `test-unit`, `coverage` et `coverage-quick` est
+**Le code retour de `make test`, `test-unit`, `coverage`, `coverage-split` et `coverage-quick` est
 fiable** : il reflète le statut réel de Busted, pas celui de `tee`.
 
 Ces recettes envoient la sortie de Busted dans `tee tmp/test-logs/*.log` pour
@@ -45,9 +45,9 @@ SHELL := bash
 PIPE_FAIL = set -o pipefail;
 ```
 
-et **chaque** pipeline de test est préfixé par `$(PIPE_FAIL)`. `coverage` et
+et **chaque** pipeline de test est préfixé par `$(PIPE_FAIL)`. `coverage`, `coverage-split` et
 `coverage-quick` capturent en outre `rc=$$?` juste après le pipeline, génèrent
-leur rapport, puis `exit $$rc` : le diagnostic reste produit en cas d'échec,
+leur rapport, puis propagent l'échec : le diagnostic reste produit en cas d'échec,
 mais le statut d'échec est bien propagé. `test-unit` se fie directement au
 statut du pipeline (plus de `rc=$$?` post-`tee`).
 

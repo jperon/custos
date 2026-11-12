@@ -2662,3 +2662,107 @@ passe ; à réinstruire séparément si la charge RST gêne.
 **Vérification.** `nix develop --command bash -c "make all && make check &&
 make test"` : **2819 succès / 0 échec / 0 erreur** (unitaires) ; `make test`
 inclut les 12 tests JS. `make test-e2e` non exécuté dans cette passe.
+
+### Couverture exacte ligne-par-ligne (branche d-cov3)
+
+**Symptôme.** `make coverage` (luacov, hook `debug.sethook "l"`) passait les
+tests puis échouait en fin de run complet : `tmp/coverage/` vide, luacov
+incapable de lire `luacov.stats.out` (« Could not load stats file »). Constaté
+le 2026-11-12 sur `defd535` : la suite s'arrête après 2652 tests sur 2812, sans
+résumé, et `make` sort en erreur 1.
+
+**Cause (prouvée) : SIGSEGV de LuaJIT sous le hook luacov, avant l'écriture des
+stats.** Preuves :
+
+- `strace -f` sur la suite complète : le processus de test enfant meurt sur
+  `SIGSEGV {si_addr=0x7ffff7915f58}` (`killed by SIGSEGV`), le lanceur Busted
+  sort ensuite avec le code 1 ; `luacov.stats.out` n'est jamais créé.
+- Un helper de diagnostic enveloppant `luacov.runner.save_stats` dans un
+  `pcall` loggé ne voit **aucun** appel : le finaliseur/`os.exit` de luacov
+  n'est jamais atteint (donc aucune sauvegarde, même partielle).
+- Reproduit par un seul spec sous `busted --coverage` :
+  `tests/unit/worker_reject_forge_spec.lua` (0 exécution aboutie sur 8). Le
+  dernier point d'exécution tracé est
+  `lua/ipparse/lib/pack_compat_lib.lua` (`parse_format`, entrée de closure),
+  code du sous-module ipparse.
+- Sans hook, le même spec passe (9/9). Avec un hook de ligne minimal (mêmes
+  événements, sans les `string.match`/`gsub` par événement de
+  `luacov/hook.lua`), il passe aussi et les stats sont écrites : le crash est
+  lié au coût/allocation par événement du hook de luacov, pas au code testé.
+
+**Correctif.**
+
+- `tests/helpers/line_coverage_setup.lua` : hook de collecte minimal — mêmes
+  événements de ligne, même normalisation de chemins, même liste
+  include/exclude (chargée depuis `.luacov` via `luacov.runner.load_config`),
+  même format de stats ; sauvegarde périodique (~20 s) et finale (`os.exit`
+  enveloppé + ancre `__gc`). Équivalence vérifiée sur `tests/unit/ipc` et
+  `tests/unit/filter` : **les lignes couvertes sont identiques** à celles du
+  hook luacov (seuls les compteurs de hits diffèrent légèrement, sans effet sur
+  un pourcentage de lignes).
+- `Makefile:213` (`coverage`) utilise ce helper (rapport toujours produit par
+  `luacov -c .luacov`). Ce run unique peut encore mourir du même SIGSEGV
+  intermittent : pour un chiffre fiable sur toute la suite, utiliser
+  `Makefile:246` (`coverage-split`).
+- `coverage-split` : un processus Busted par fichier de spec (stats séparées,
+  fusionnées par `tools/merge_luacov_stats.lua`, somme des hits par ligne),
+  relance des specs qui meurent sans stats (crash intermittent), et passe
+  « batch » finale pour les specs qui ne passent pas isolément car ils
+  attendent des symboles FFI déclarés plus tôt (`ffi_defs_spec`,
+  `worker_responses*`) — helper `tests/helpers/line_coverage_batch_setup.lua`
+  (amorçage `lib.socket`). La découpe par spec est sinon équivalente : vérifié
+  sur `tests/unit/ipc` (lignes couvertes identiques au run mono-processus).
+- `.luacov:24` : `includeuntestedfiles = { "lua" }` pour compter aussi les
+  modules jamais chargés (sinon le total exclut les fichiers non requis) ;
+  `lua/moonscript/` et `lua/moon/` exclus comme dans
+  `tests/helpers/coverage_filters.moon`.
+
+**Mesure (2026-11-12, `defd535` + correctif).** Commande :
+`nix develop --command bash -c "make coverage-split"` (~30 min), puis lire
+`tmp/coverage/luacov.report.out` (tableau `Summary` en fin de fichier).
+
+Couverture globale des fichiers `lua/` inclus :
+**17 532 / 22 876 lignes = 76,64 %**.
+
+| Module | Couvertes | Manquées | Couverture |
+|---|---:|---:|---:|
+| `lua/worker_tls.lua` | 413 | 411 | 50,12 % |
+| `lua/main.lua` | 0 | 359 | 0,00 % |
+| `lua/worker_responses.lua` | 544 | 288 | 65,38 % |
+| `lua/filter/updater.lua` | 0 | 245 | 0,00 % |
+| `lua/worker_doh.lua` | 379 | 239 | 61,33 % |
+| `lua/mac_learner.lua` | 103 | 217 | 32,19 % |
+| `lua/worker_arp_sniffer.lua` | 38 | 207 | 15,51 % |
+| `lua/auth/server.lua` | 212 | 181 | 53,94 % |
+| `lua/worker_sip.lua` | 59 | 175 | 25,21 % |
+| `lua/worker_events.lua` | 106 | 174 | 37,86 % |
+| `lua/mac_prober.lua` | 132 | 162 | 44,90 % |
+| `lua/filter/nft_compiler.lua` | 558 | 133 | 80,75 % |
+| `lua/nft_rules.lua` | 98 | 123 | 44,34 % |
+| `lua/worker_captive.lua` | 79 | 121 | 39,50 % |
+| `lua/worker_questions.lua` | 277 | 118 | 70,13 % |
+| `lua/webui/handlers/rules.lua` | 524 | 103 | 83,57 % |
+| `lua/webui/schema/config_schema.lua` | 248 | 95 | 72,30 % |
+| `lua/auth/handlers.lua` | 405 | 85 | 82,65 % |
+| `lua/lib/process.lua` | 24 | 83 | 22,43 % |
+| `lua/sync/apply.lua` | 46 | 83 | 35,66 % |
+| `lua/webui/handlers/config.lua` | 347 | 70 | 83,21 % |
+| `lua/doh/upstream_doh.lua` | 374 | 68 | 84,62 % |
+| `lua/webui/handlers/filter.lua` | 317 | 66 | 82,77 % |
+| `lua/ipc.lua` | 381 | 65 | 85,43 % |
+| `lua/webui/handlers/lists.lua` | 320 | 59 | 84,43 % |
+
+Le tableau se recalcule par :
+
+```sh
+awk '/^Summary$/{s=1} s && /^lua\//' tmp/coverage/luacov.report.out | sort -k3,3nr | head -25
+```
+
+`lua/main.lua`, `lua/filter/updater.lua` et `lua/filter/convert.lua`
+(0 %) sont des scripts exécutés au chargement, testés en sous-processus
+(invisibles d'un hook de ligne) : déjà documenté au § Couverture de tests
+(branche d-cov). `lua/ipparse/**` reste exclu (sous-module tiers).
+
+**Vérification.** `nix develop --command bash -c "make all && make check &&
+make test"` : **2812 succès / 0 échec / 0 erreur** (unitaires) et 12/12 JS.
+`make test-e2e` non exécuté dans cette passe.

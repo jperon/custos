@@ -202,24 +202,109 @@ test: all compile-specs compile-helpers test-unit test-js
 
 # ── Couverture ────────────────────────────────────────────────────────────
 
+# Couverture exacte ligne-par-ligne, en un seul processus Busted. La collecte
+# utilise tests/helpers/line_coverage_setup.lua : mêmes événements de ligne que
+# luacov, même liste include/exclude (.luacov) et même format de stats, mais
+# sans les opérations de chaîne par événement du hook de luacov — lequel fait
+# planter LuaJIT par SIGSEGV sur la suite complète (cf. docs/agents/audits.md
+# § Corrections d'audit 2026-11-12). Le rapport reste produit par luacov.
+# Sur TOUTE la suite, préférer `coverage-split` (ce crash, intermittent, peut
+# encore tuer ce run unique ; coverage-split isole et relance les specs).
 coverage: all compile-specs compile-helpers
 	@mkdir -p tmp/coverage tmp/test-logs
 	@rm -f tmp/coverage/luacov.stats.out tmp/coverage/luacov.report.out
-	@# rc capture le statut Busted malgré le `tee` ; le rapport est généré même
-	@# en cas d'échec (diagnostic), puis rc est propagé en fin de recette.
 	@$(PIPE_FAIL) LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	  $(BUSTED) --lua=luajit --loaders=lua --helper=tests/helpers/busted_setup.lua \
-	    --coverage --coverage-config-file=.luacov \
+	  $(BUSTED) --lua=luajit --loaders=lua \
+	    --helper=tests/helpers/line_coverage_setup.lua \
 	    tests/unit 2>&1 | tee tmp/test-logs/coverage.log; \
 	  rc=$$?; \
+	  lrc=0; \
 	  LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
-	    luacov -c .luacov 2>/dev/null || true; \
+	    luacov -c .luacov || lrc=$$?; \
 	  echo ""; \
 	  echo "Rapport de couverture : tmp/coverage/luacov.report.out"; \
 	  if [ -f tmp/coverage/luacov.report.out ]; then \
 	    grep -E "^Total" tmp/coverage/luacov.report.out || true; \
 	  fi; \
-	  exit $$rc
+	  if [ $$rc -ne 0 ]; then exit $$rc; fi; \
+	  exit $$lrc
+
+# Couverture exacte fiable : un processus Busted par fichier de spec, stats
+# luacov séparées (fusionnées ensuite par somme des hits par ligne) et un seul
+# rapport. Contourne le SIGSEGV LuaJIT qui, sous un hook de ligne, tue le run
+# complet avant l'écriture des stats (cf. docs/agents/audits.md § Corrections
+# d'audit 2026-11-12) : chaque spec est isolé, un spec qui meurt sans stats est
+# relancé (le crash est intermittent), et les specs qui ne passent pas isolément
+# (ils attendent des symboles FFI déclarés par un spec antérieur) sont relancés
+# ensemble, avec l'amorçage de tests/helpers/line_coverage_batch_setup.lua.
+# La collecte utilise tests/helpers/line_coverage_setup.lua (mêmes événements
+# de ligne que luacov, sans ses opérations de chaîne par événement) ; le
+# rapport reste produit par luacov.
+COVERAGE_SPLIT_TARGETS ?= tests/unit
+COVERAGE_SPLIT_ATTEMPTS ?= 25
+
+coverage-split: all compile-specs compile-helpers
+	@mkdir -p tmp/coverage/split tmp/test-logs
+	@rm -f tmp/coverage/split/*.stats.out tmp/coverage/luacov.stats.out \
+	  tmp/coverage/luacov.report.out tmp/test-logs/coverage-split.log
+	@i=0; missing=0; retry_list=""; \
+	for spec in $$(find $(COVERAGE_SPLIT_TARGETS) -name '*_spec.lua' | sort); do \
+	  i=$$((i+1)); attempt=0; ok=0; \
+	  while [ $$attempt -lt $(COVERAGE_SPLIT_ATTEMPTS) ]; do \
+	    attempt=$$((attempt+1)); \
+	    rm -f tmp/coverage/luacov.stats.out; \
+	    $(PIPE_FAIL) LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	      $(BUSTED) --lua=luajit --loaders=lua \
+	        --helper=tests/helpers/line_coverage_setup.lua "$$spec" \
+	        >> tmp/test-logs/coverage-split.log 2>&1; \
+	    rc=$$?; \
+	    if [ $$rc -eq 0 ] && [ -f tmp/coverage/luacov.stats.out ]; then \
+	      mv tmp/coverage/luacov.stats.out tmp/coverage/split/$$i.stats.out; \
+	      ok=1; break; \
+	    fi; \
+	  done; \
+	  if [ $$ok -eq 1 ]; then \
+	    printf '[%3d] %-58s (%d tentative(s))\n' $$i "$$spec" $$attempt; \
+	  else \
+	    printf '[%3d] %-58s échec isolé → batch\n' $$i "$$spec"; \
+	    retry_list="$$retry_list $$spec"; \
+	  fi; \
+	done; \
+	if [ -n "$$retry_list" ]; then \
+	  echo "Specs dépendants de l'état global, relancés ensemble :$$retry_list"; \
+	  attempt=0; ok=0; \
+	  while [ $$attempt -lt $(COVERAGE_SPLIT_ATTEMPTS) ]; do \
+	    attempt=$$((attempt+1)); \
+	    rm -f tmp/coverage/luacov.stats.out; \
+	    $(PIPE_FAIL) LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	      $(BUSTED) --lua=luajit --loaders=lua \
+	        --helper=tests/helpers/line_coverage_batch_setup.lua $$retry_list \
+	        >> tmp/test-logs/coverage-split.log 2>&1; \
+	    rc=$$?; \
+	    if [ $$rc -eq 0 ] && [ -f tmp/coverage/luacov.stats.out ]; then \
+	      mv tmp/coverage/luacov.stats.out tmp/coverage/split/batch.stats.out; \
+	      ok=1; break; \
+	    fi; \
+	  done; \
+	  if [ $$ok -eq 0 ]; then \
+	    echo "  !! batch sans stats après $$attempt tentative(s)" >&2; \
+	    missing=1; \
+	  fi; \
+	fi; \
+	echo ""; \
+	LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  luajit tools/merge_luacov_stats.lua tmp/coverage/luacov.stats.out \
+	    tmp/coverage/split/*.stats.out || exit 1; \
+	LUA_PATH="$(TEST_LUA_PATH)" LUA_CPATH="$(TEST_LUA_CPATH)" \
+	  luacov -c .luacov || exit 1; \
+	echo "Rapport de couverture : tmp/coverage/luacov.report.out"; \
+	if [ -f tmp/coverage/luacov.report.out ]; then \
+	  grep -E "^Total" tmp/coverage/luacov.report.out || true; \
+	fi; \
+	if [ $$missing -ne 0 ]; then \
+	  echo "coverage-split : des specs sont restés sans stats" >&2; \
+	  exit 1; \
+	fi
 
 # Alternative rapide à `coverage` : hook debug.sethook en mode *count*
 # (échantillonnage) plutôt que *line* (luacov, exhaustif mais ~4x plus lent

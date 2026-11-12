@@ -25,14 +25,11 @@ sont pas vérifiées et constatées (pas supposées) :
 
 1. **Couverture de tests.** Tout code ajouté ou modifié doit être couvert par des
    tests. En toute fin d’un développement important, vérifier avec `make
-   coverage-quick` (rapport dans `tmp/coverage_quick/`, ordre de grandeur par
-   échantillonnage, ~20 min sur toute la suite). `make coverage` (luacov,
-   ligne-par-ligne exhaustif) est réservé à un chiffre exact sur un module
-   isolé (`tests/unit/<module>` ciblé) : sur la suite complète il est ~4x plus
-   lent et a déjà échoué à écrire ses stats en fin de run (cf. § Corrections
-   d'audit 2026-07-16). Une branche d'erreur non couvrable en unitaire doit
-   l'être par un mock (cf. `tests/unit/auth/cert_generator_spec.moon`) ou par
-   les tests e2e.
+   coverage-split` (rapport `tmp/coverage/luacov.report.out`, chiffre exact
+   ligne-par-ligne, ~30 min ; `make coverage-quick` reste l'ordre de grandeur
+   rapide par échantillonnage). Une branche d'erreur non couvrable en unitaire
+   doit l'être par un mock (cf. `tests/unit/auth/cert_generator_spec.moon`) ou
+   par les tests e2e.
 2. **Documentation à jour.** Mettre à jour la doc impactée par le changement
    (`AGENTS.md`, `.agents/*`, `README.md`, `doc/CONFIG.md`, `doc/CHEATSHEET.md`,
    etc.). Du code sans sa doc à jour n'est pas livrable.

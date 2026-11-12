@@ -51,8 +51,8 @@ make test
 # Specs Busted uniquement
 make test-unit
 
-# Couverture luacov → tmp/coverage/luacov.report.out
-make coverage
+# Couverture exacte luacov → tmp/coverage/luacov.report.out
+make coverage-split
 
 # Tests FFI hors-Busted (socket, WolfSSL, intégration)
 make test-ffi
@@ -111,11 +111,20 @@ Le helper est chargé automatiquement via `.busted` (clé `helper`). Il injecte 
 ## Couverture
 
 ```bash
-make coverage
+make coverage-split
 # → tmp/coverage/luacov.report.out
 ```
 
-Seul le code sous `lua/` est mesuré. Les stubs FFI bas-niveau
+`make coverage-split` (exact, ~30 min) exécute Busted un fichier de spec à la
+fois, fusionne les statistiques luacov puis produit un rapport unique. C'est la
+cible de référence : le hook de luacov fait planter LuaJIT par intermittence
+sur cette suite (SIGSEGV dans le parseur de formats d'ipparse), et un run
+mono-processus peut perdre toutes ses stats (cf. `docs/agents/audits.md`
+§ Corrections d'audit 2026-11-12). `make coverage` reste disponible pour un
+sous-ensemble (`tests/unit/<module>`).
+
+Seul le code sous `lua/` est mesuré, fichiers jamais chargés compris
+(`includeuntestedfiles`). Les stubs FFI bas-niveau
 (`ffi_defs`, `ffi_xxhash`, `auth/ffi_*`) sont exclus car
 ils nécessitent les bibliothèques natives pour être exercés.
 

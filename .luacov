@@ -1,20 +1,27 @@
 -- .luacov — configuration de la couverture pour CustosVirginum
 --
 -- Utilisation :
---   make coverage             → compile + busted --coverage + luacov
---   tmp/coverage/luacov.report.out  → rapport texte
+--   make coverage-split      → couverture exacte fiable (un processus Busted
+--                              par fichier de spec, stats fusionnées ; ~30 min)
+--   make coverage            → variante mono-processus (plus rapide sur un
+--                              sous-ensemble, mais peut mourir par SIGSEGV
+--                              LuaJIT sous le hook luacov : préférer
+--                              coverage-split pour la suite complète)
+--   tmp/coverage/luacov.report.out  → rapport texte (tableau Summary en fin)
 --
--- ATTENTION : sur la suite complète (tests/unit), luacov instrumente CHAQUE
--- ligne exécutée (debug.sethook "l") et désactive le JIT LuaJIT — ~4x plus
--- lent que l'alternative ci-dessous, et a déjà échoué à écrire son fichier de
--- stats en fin de run (cf. AGENTS.md § Corrections d'audit 2026-07-16).
--- Préférer `make coverage-quick` (tests/helpers/quick_coverage_setup.lua) pour
--- un ordre de grandeur rapide ; ne lancer `make coverage` que pour un chiffre
--- exact ciblé sur un sous-ensemble (`tests/unit/<module>`).
+-- luacov instrumente CHAQUE ligne exécutée (debug.sethook "l") et désactive le
+-- JIT LuaJIT : le chiffre est exact, contrairement à `make coverage-quick`
+-- (échantillonnage, sous-estime). Pour un module isolé, lancer la même cible
+-- sur `tests/unit/<module>` et lire sa section du rapport.
 
 return {
   statsfile  = "tmp/coverage/luacov.stats.out",
   reportfile = "tmp/coverage/luacov.report.out",
+
+  -- Compter aussi les fichiers de lua/ jamais chargés (0 %), pour un
+  -- pourcentage réellement global. Une table (et non `true`) limite le
+  -- balayage à lua/ : le scanner de luacov casse sur les liens morts de `.`.
+  includeuntestedfiles = { "lua" },
 
   -- Seul le code produit (lua/) nous intéresse.
   include = {
@@ -27,7 +34,11 @@ return {
     "^tmp/",
     "^%.kilo/",
     "^libvirt/",
-    "^lua/ipparse/",   -- bibliothèque séparée, coverage géré indépendamment
+    "^lua/ipparse/",      -- bibliothèque séparée, coverage géré indépendamment
+    -- Runtime MoonScript embarqué (sous-module tiers, compilé à part) : ce
+    -- n'est pas du code du projet (même liste que tests/helpers/coverage_filters).
+    "^lua/moonscript/",
+    "^lua/moon/",
     -- Les stubs FFI pur ne peuvent pas être couverts sans les bibliothèques
     -- natives ; on les exclut au départ pour éviter du bruit.
     "^lua/ffi_defs",
