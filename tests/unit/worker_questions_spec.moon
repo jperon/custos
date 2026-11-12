@@ -312,3 +312,29 @@ describe "worker_questions", ->
     it "rejette un paquet tronqué (parse_failed) sans message IPC", ->
       rc = invoke "\x45\x00"
       assert.equals 0, rc
+
+    it "payload vide ou d'une longueur nulle → NF_DROP immédiat", ->
+      package.loaded["ffi_defs"].libnfq.nfq_get_payload = -> -1
+      rc = wq.handle_question nil, nil, 1
+      assert.equals 0, rc
+
+    it "MAC source inconnue (mac_raw absent) : la question reste traitée", ->
+      decision = { verdict: true, reason: "ok", rule_id: "r_mac" }
+      package.loaded["nfq/ethernet"].get_l2 = -> {
+        mac_src: "unknown"
+        mac_raw: nil
+        in_ifindex: 5
+        vlan: nil
+      }
+      rc = invoke ipv4_udp DNS_QUERY
+      assert.equals 1, rc
+      msg = ipc.decode_msg read_fd pipe_r
+      assert.equals ipc.MSG_IPV4, msg.msg_type
+
+    it "sans pipe d'événements, write_event est un no-op", ->
+      decision = { verdict: true, reason: "ok", rule_id: "r_noev" }
+      wq.run 0, pipe_w, nil, nil, nil
+      rc = invoke ipv4_udp DNS_QUERY
+      assert.equals 1, rc
+      msg = ipc.decode_msg read_fd pipe_r
+      assert.equals "r_noev", msg.rule_id
