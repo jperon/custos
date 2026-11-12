@@ -36,6 +36,34 @@ return {
       hint = "Seuil d'autodétection du mode RAM faible"
     }
   },
+  gc = {
+    _label = "Mémoire (GC LuaJIT)",
+    _description = "Avancé — réglage du ramasse-miettes de chaque worker (machines à RAM limitée). Les valeurs par défaut mesurées conviennent à la cible ; ne les modifiez qu'en cas de diagnostic mémoire/CPU.",
+    pause = {
+      type = "integer",
+      label = "Pause du GC (%)",
+      hint = "le GC démarre quand le tas dépasse de pause−100 % sa taille après collecte ; 200 = doublement autorisé",
+      default = 200
+    },
+    stepmul = {
+      type = "integer",
+      label = "Multiplicateur de pas",
+      hint = "vitesse du GC incrémental ; compense une pause basse",
+      default = 400
+    },
+    idle_step = {
+      type = "integer",
+      label = "Pas de GC sur temps mort",
+      hint = "0 = désactivé ; effectué quand une file NFQUEUE ou un tube est vide",
+      default = 100
+    },
+    max_heap_mb = {
+      type = "integer",
+      label = "Plafond de tas par worker (Mio)",
+      hint = "0 = désactivé ; au-delà, des pas de GC sont forcés (journal limité)",
+      default = 32
+    }
+  },
   nfqueue = {
     _label = "Files de paquets (NFQUEUE)",
     _description = "Avancé — réservé aux experts. Le pare-feu (nftables) remet les paquets à Custos via des « files » Netfilter numérotées ; chaque type de trafic a la sienne. Ne modifiez ces numéros que pour éviter un conflit avec d'autres outils utilisant NFQUEUE sur la même machine. Une plage s'écrit '0-1' : pour les réponses DNS, elle crée un worker par file (plage recommandée : 3-4).",

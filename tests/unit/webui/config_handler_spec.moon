@@ -28,6 +28,7 @@ describe "webui/handlers/config", ->
   before_each ->
     write_cfg {
       runtime:     { log_level: "INFO", benchmark: false }
+      gc:          { pause: 200, stepmul: 400, idle_step: 100, max_heap_mb: 32 }
       nfqueue:     { questions: "0-1" }
       dns:         { port: 53 }
       nft:         { family: "bridge" }
@@ -81,6 +82,12 @@ describe "webui/handlers/config", ->
     it "retourne 404 pour une section inconnue", ->
       status, _, body = handle_config_section_get make_req("GET"), "nonexistent", make_state!
       assert.equals 404, status
+
+    it "rend les quatre champs de la section gc", ->
+      status, _, body = handle_config_section_get make_req("GET"), "gc", make_state!
+      assert.equals 200, status
+      for name in *{"pause", "stepmul", "idle_step", "max_heap_mb"}
+        assert.truthy body\find(name, 1, true), "champ gc.#{name} absent"
 
     it "affiche la valeur courante du champ log_level", ->
       _, _, body = handle_config_section_get make_req("GET"), "runtime", make_state!
@@ -142,6 +149,16 @@ describe "webui/handlers/config", ->
     it "retourne 404 pour une section inconnue", ->
       status, _, _ = handle_config_section_post make_req("POST", ""), "nonexistent", make_state!
       assert.equals 404, status
+
+    it "persiste les valeurs de la section gc", ->
+      body_str = "pause=300&stepmul=400&idle_step=50&max_heap_mb=12"
+      status, _, _ = handle_config_section_post make_req("POST", body_str), "gc", make_state!
+      assert.equals 302, status
+      loaded = (read_config CFG_PATH)
+      assert.equals 300, loaded.gc.pause
+      assert.equals 400, loaded.gc.stepmul
+      assert.equals 50, loaded.gc.idle_step
+      assert.equals 12, loaded.gc.max_heap_mb
 
     it "retourne 500 si config_path invalide", ->
       state = { config_path: "/nonexistent/file.lua" }
