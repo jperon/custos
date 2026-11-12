@@ -230,6 +230,22 @@ cache_clear = function(cache)
   cache.size = 0
   return nil
 end
+local UNCACHEABLE_KINDS = {
+  auth_mac = true,
+  auth_ip4 = true,
+  auth_ip6 = true
+}
+local UNCACHEABLE_SETS = {
+  authenticated_ips = true,
+  authenticated_ips6 = true,
+  authenticated_macs = true,
+  ip4_dest_whitelist = true,
+  ip6_dest_whitelist = true
+}
+local cacheable_set
+cacheable_set = function(set_name)
+  return not (set_name and UNCACHEABLE_SETS[set_name])
+end
 local cache_key_of
 cache_key_of = function(item)
   if item.cache_key then
@@ -238,8 +254,11 @@ cache_key_of = function(item)
   local spec = element_spec(item.kind, item.key, item.ip, item.rule_id, item.timeout)
   if spec then
     item.spec = spec
-    item.cache_key = tostring(spec.family) .. "|" .. tostring(spec.table) .. "|" .. tostring(spec.set_name) .. "|" .. tostring(item.key) .. "|" .. tostring(item.ip)
-    item.timeout_s = timeout_to_seconds(item.timeout)
+    local cacheable = not UNCACHEABLE_KINDS[item.kind] and cacheable_set(spec.set_name)
+    if cacheable then
+      item.cache_key = tostring(spec.family) .. "|" .. tostring(spec.table) .. "|" .. tostring(spec.set_name) .. "|" .. tostring(item.key) .. "|" .. tostring(item.ip)
+      item.timeout_s = timeout_to_seconds(item.timeout)
+    end
   end
   return item.cache_key
 end
@@ -566,5 +585,6 @@ return {
   cache_drop = cache_drop,
   cache_clear = cache_clear,
   cache_key_of = cache_key_of,
+  cacheable_set = cacheable_set,
   timeout_to_seconds = timeout_to_seconds
 }

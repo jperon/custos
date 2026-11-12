@@ -101,6 +101,9 @@ send_ack = (ack_wfds, widx, seq) ->
 -- nft (worker nft à 50-65 % d'un vCPU). Le cache retient, par clé
 -- (famille/table, set, élément), l'instant ET le timeout de la dernière
 -- insertion **appliquée avec succès** ; une ligne récente est alors sautée.
+-- Le cache ne s'applique qu'aux sets alimentés EXCLUSIVEMENT par worker_nft :
+-- kinds auth_* et sets vidés/supprimés par un autre processus en sont exclus
+-- (cf. UNCACHEABLE_KINDS / UNCACHEABLE_SETS avant `cache_key_of`).
 
 --- Secondes monotones (horloge du cache d'upsert).
 -- @treturn number
@@ -192,17 +195,57 @@ cache_clear = (cache) ->
   cache.size = 0
   nil
 
+-- ── Exclusions du cache ────────────────────────────────────────────────────────
+-- Le cache ne s'applique (ni saut ni enregistrement) qu'aux sets alimentés
+-- EXCLUSIVEMENT par worker_nft. Deux familles d'exclusion :
+-- 1. kinds auth_* (`auth_mac`/`auth_ip4`/`auth_ip6`, cf.
+--    `nft_queue.add_auth_mac/add_auth_ip4/add_auth_ip6`) : leurs sets
+--    `{rule_id}_auth_*` sont supprimés par le processus AUTH avec son propre
+--    contexte nft (`delete_rule_auth_sets`, `src/auth/nft_auth_sets.moon:29,31`,
+--    appelé par `src/auth/handlers.moon:248` au logout) : une insertion
+--    récente ne dit rien de l'état actuel du set.
+-- 2. sets vidés/supprimés hors de worker_nft (greps `delete element` /
+--    `flush set` dans `src/`) : `authenticated_*`
+--    (`src/auth/nft_sessions.moon:40,53,85` : logout/bye/expiration) et
+--    `ip*_dest_whitelist` (`src/ip_whitelist.moon:31-32` : chaque SIGHUP).
+-- Aucun kind actuel n'atteint ces sets globaux (`get_set_name`,
+-- `src/nft_queue.moon:259-277`) : la liste les protège si un chemin
+-- d'écriture venait à être ajouté.
+UNCACHEABLE_KINDS = {
+  auth_mac: true
+  auth_ip4: true
+  auth_ip6: true
+}
+
+UNCACHEABLE_SETS = {
+  authenticated_ips: true
+  authenticated_ips6: true
+  authenticated_macs: true
+  ip4_dest_whitelist: true
+  ip6_dest_whitelist: true
+}
+
+--- Ce set est-il exclu du cache d'upsert (vidé ou supprimé hors de worker_nft) ?
+-- @tparam string|nil set_name Nom du set nft
+-- @treturn boolean true si le cache s'y applique
+cacheable_set = (set_name) ->
+  not (set_name and UNCACHEABLE_SETS[set_name])
+
 --- Clé de cache (famille|table|set|élément) de l'item, calculée une fois puis
 -- réutilisée par build_batch (via `item.spec`).
 -- @tparam table item Item parsé par parse_line
--- @treturn string|nil nil si kind/rule_id ne permettent pas de nommer un set
+-- @treturn string|nil nil si kind/rule_id ne permettent pas de nommer un set,
+--   ou si l'item est exclu du cache (kind auth_*, set manipulé hors
+--   worker_nft) : sans clé, ni saut ni enregistrement ne peuvent avoir lieu.
 cache_key_of = (item) ->
   return item.cache_key if item.cache_key
   spec = element_spec item.kind, item.key, item.ip, item.rule_id, item.timeout
   if spec
     item.spec = spec
-    item.cache_key = "#{spec.family}|#{spec.table}|#{spec.set_name}|#{item.key}|#{item.ip}"
-    item.timeout_s = timeout_to_seconds item.timeout
+    cacheable = not UNCACHEABLE_KINDS[item.kind] and cacheable_set spec.set_name
+    if cacheable
+      item.cache_key = "#{spec.family}|#{spec.table}|#{spec.set_name}|#{item.key}|#{item.ip}"
+      item.timeout_s = timeout_to_seconds item.timeout
   item.cache_key
 
 -- Ajoute un item à `pending` avec déduplication par
@@ -220,6 +263,8 @@ cache_key_of = (item) ->
 -- Sans timeout valide dans la ligne (`has_timeout` faux) : aucun saut. L'item
 -- sauté n'entre pas dans `pending` mais son seq reste acquitté par l'appelant
 -- (l'élément existe déjà dans nft).
+-- Items exclus du cache (kinds auth_*, sets vidés/supprimés hors worker_nft) :
+-- `cache_key_of` ne leur attribue aucune clé → ni saut ni enregistrement.
 -- @tparam table pending Items en attente du prochain lot
 -- @tparam table item   Item parsé par parse_line
 -- @tparam table|nil cache Cache d'upsert (nil = aucun saut)
@@ -433,4 +478,4 @@ run = (rfd, ack_wfds, cache) ->
       flush_batch pending, ack_queue, ack_wfds, cache
       pending_count = 0
 
-{ :run, :parse_line, :flush_batch, :build_batch, :try_add_pending, :split_fields, :from_hex, :new_cache, :cache_put, :cache_drop, :cache_clear, :cache_key_of, :timeout_to_seconds }
+{ :run, :parse_line, :flush_batch, :build_batch, :try_add_pending, :split_fields, :from_hex, :new_cache, :cache_put, :cache_drop, :cache_clear, :cache_key_of, :cacheable_set, :timeout_to_seconds }

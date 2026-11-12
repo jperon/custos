@@ -624,3 +624,52 @@ describe "worker_nft cache d'upsert", ->
       wnft.cache_put cache, "fraiche", 120
       assert.is_nil cache.entries["ancienne"]
       assert.equals 1, cache.size
+
+  -- ── Exclusions : kinds auth_* et sets vidés/supprimés hors worker_nft ───────
+  -- Un set qu'un AUTRE processus vide ou supprime (logout/bye/expiration,
+  -- rechargement de liste) invaliderait silencieusement une entrée du cache :
+  -- la réinsertion suivante serait sautée alors que l'élément n'existe plus.
+  describe "exclusions", ->
+
+    it "kind auth : ligne répétée jamais sautée, jamais enregistrée", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, (mk_item { kind: "auth_ip4", ip: "_" })
+      -- Ni enregistrement : l'insertion ne doit pas servir de référence.
+      assert.equals 0, cache.size
+      assert.is_nil next cache.entries
+      -- Ni saut : la seconde ligne (même instant) entre dans pending.
+      pending = {}
+      assert.is_true wnft.try_add_pending pending, (mk_item { kind: "auth_ip4", ip: "_" }), cache
+      assert.is_not_nil next pending
+      assert.equals 0, cache.skipped
+
+    it "kinds auth_mac et auth_ip6 exclus également", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, (mk_item { kind: "auth_mac", key: "d8:d3:85:63:6b:27", ip: "_" })
+      apply_item cache, (mk_item { kind: "auth_ip6", key: "fd00::7", ip: "_" })
+      assert.equals 0, cache.size
+      pending = {}
+      assert.is_true wnft.try_add_pending pending, (mk_item { kind: "auth_mac", key: "d8:d3:85:63:6b:27", ip: "_" }), cache
+      assert.is_true wnft.try_add_pending pending, (mk_item { kind: "auth_ip6", key: "fd00::7", ip: "_" }), cache
+      assert.equals 0, cache.skipped
+
+    it "cache_key_of : nil pour un kind auth, clé pour un kind DNS", ->
+      assert.is_nil wnft.cache_key_of(mk_item { kind: "auth_ip4", ip: "_" })
+      assert.is_not_nil wnft.cache_key_of(mk_item!)
+
+    it "contrôle : une ligne DNS répétée est toujours sautée dans la fenêtre", ->
+      cache = wnft.new_cache { now: -> 100 }
+      apply_item cache, mk_item!
+      pending = {}
+      assert.is_false wnft.try_add_pending pending, mk_item!, cache
+      assert.is_nil next pending
+      assert.equals 1, cache.skipped
+      assert.equals 1, cache.size
+
+    it "cacheable_set : les sets vidés/supprimés hors worker_nft sont exclus", ->
+      for s in *{ "authenticated_ips", "authenticated_ips6", "authenticated_macs",
+                  "ip4_dest_whitelist", "ip6_dest_whitelist" }
+        assert.is_false wnft.cacheable_set(s), "exclu attendu : #{s}"
+      assert.is_true wnft.cacheable_set "r_test_ip4"
+      assert.is_true wnft.cacheable_set "sip_peers"
+      assert.is_true wnft.cacheable_set nil
