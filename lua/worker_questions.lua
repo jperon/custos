@@ -60,9 +60,16 @@ end
 local dup_query = require("dup_query")
 local raw_send = require("raw_send")
 local netstamp = require("lib.netstamp")
+local new_records, new_lines
+do
+  local _obj_0 = require("lib.pipe_batch")
+  new_records, new_lines = _obj_0.new_records, _obj_0.new_lines
+end
 local so_cfg = config.second_opinion or { }
 local pipe_wfd = nil
 local mac_learn_wfd = nil
+local events_batch = nil
+local learn_batch = nil
 local _benchmark_ts = ffi.new("timespec_t[1]")
 local CLOCK_MONOTONIC = 1
 local get_benchmark_ms
@@ -143,9 +150,10 @@ maybe_duplicate = function(ip, l4, raw, rule_resolvers, dns_id)
   end
   return raw_send.send(fd, ip.version, pkt, validator)
 end
+local LEARN_MSG_SIZE = 22
 local write_learn_msg
 write_learn_msg = function(ip_raw, mac_raw)
-  if not (mac_learn_wfd and mac_learn_wfd >= 0) then
+  if not (learn_batch) then
     return false
   end
   if not (mac_raw and #mac_raw == 6) then
@@ -155,13 +163,7 @@ write_learn_msg = function(ip_raw, mac_raw)
   if not (ip16) then
     return false
   end
-  local msg = ffi.new("uint8_t[22]")
-  ffi.copy(msg, ip16, 16)
-  for i = 1, 6 do
-    msg[15 + i] = mac_raw:byte(i)
-  end
-  local n = libc.write(mac_learn_wfd, msg, 22)
-  return n == 22
+  return learn_batch.add(ip16 .. mac_raw)
 end
 local list_from_condition_reason
 list_from_condition_reason = function(condition_reason)
@@ -172,8 +174,8 @@ list_from_condition_reason = function(condition_reason)
 end
 local write_event
 write_event = function(fields, allowed)
-  if not (events_wfd) then
-    return 
+  if not (events_batch) then
+    return false
   end
   local decision
   if allowed then
@@ -194,7 +196,17 @@ write_event = function(fields, allowed)
     tsv_field(fields.reason),
     tsv_field(fields.rule)
   }, "\t") .. "\n"
-  return libc.write(events_wfd, line, #line)
+  return events_batch.add(line)
+end
+local flush_pipes
+flush_pipes = function()
+  if events_batch then
+    events_batch.flush()
+  end
+  if learn_batch then
+    learn_batch.flush()
+  end
+  return nil
 end
 local tcp_state = new_dns_tcp_stream()
 local MAX_RESPONSE_RULE_IDS = 8
@@ -550,6 +562,8 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
   pipe_wfd = wfd
   mac_learn_wfd = learn_wfd
   events_wfd = ev_wfd
+  events_batch = new_lines(ev_wfd)
+  learn_batch = new_records(learn_wfd, LEARN_MSG_SIZE)
   local age_cfg = tonumber((config.nfqueue or { }).max_age_ms)
   if age_cfg == nil then
     age_cfg = 1500
@@ -656,14 +670,17 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
       end
     end
   end
-  local queue_opts
+  local queue_opts = {
+    on_batch_end = function()
+      return flush_pipes()
+    end
+  }
   if metrics_on then
-    queue_opts = {
-      idle_ms = 1000,
-      on_idle = metrics.flush_if_due
-    }
+    queue_opts.idle_ms = 1000
+    queue_opts.on_idle = metrics.flush_if_due
   end
   run_queue(tonumber(queue_num), handle_question, queue_opts)
+  flush_pipes()
   if metrics_on then
     return metrics.write_now()
   end
@@ -681,6 +698,8 @@ return {
   MAX_RESPONSE_RULE_IDS = MAX_RESPONSE_RULE_IDS,
   handle_question = handle_question,
   write_event = write_event,
+  write_learn_msg = write_learn_msg,
+  flush_pipes = flush_pipes,
   list_from_condition_reason = list_from_condition_reason,
   get_shed_total = get_shed_total
 }
