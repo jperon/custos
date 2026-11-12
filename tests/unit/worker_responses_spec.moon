@@ -606,3 +606,63 @@ describe "verdicts différés par lot NFQUEUE (settle / flush_deferred)", ->
     m.settle ctx, 1, nil, true
     assert.equals 0, #calls.waits
     assert.equals 1, #calls.set
+
+describe "worker_responses helpers complémentaires (couverture)", ->
+  before_each ->
+    config = require "config"
+    config.ipc = config.ipc or {}
+    config.ipc.match_retry = { enabled: true, count: 5, sleep_ms: 0, budget_ms: 100 }
+
+  it "format_block_event sans timestamp utilise os.time", ->
+    m = fresh_worker_responses!
+    line = m.format_block_event { qname: "exemple.test" }
+    assert.truthy line\match "^%d+\tblock\t"
+    assert.truthy line\match "exemple.test"
+    assert.equals "exemple.test", (line\gsub("\n", ""))\match "\tblock\t([^\t]+)"
+
+  it "update_mac_clients : changement d'IPv6 oublie l'ancien mapping de cette MAC", ->
+    m = fresh_worker_responses!
+    m.update_mac_clients { mac_str: "aa:aa:aa:aa:aa:aa", ip_str: "2001:db8::1" }, 1
+    assert.equals "aa:aa:aa:aa:aa:aa", m.ip_to_mac["2001:db8::1"]
+    m.update_mac_clients { mac_str: "aa:aa:aa:aa:aa:aa", ip_str: "2001:db8::2" }, 2
+    assert.is_nil m.ip_to_mac["2001:db8::1"]
+    assert.equals "aa:aa:aa:aa:aa:aa", m.ip_to_mac["2001:db8::2"]
+
+  it "update_mac_clients ignore la MAC nulle (inconnue)", ->
+    m = fresh_worker_responses!
+    m.update_mac_clients { mac_str: "00:00:00:00:00:00", ipv4: true, ip_str: "10.0.0.1" }, 1
+    assert.is_nil m.ip_to_mac["10.0.0.1"]
+
+  it "maybe_dynamic_strip sans entrée ou sans rr_code renvoie la réponse intacte", ->
+    m = fresh_worker_responses!
+    raw = "payload"
+    assert.same { raw, false }, { m.maybe_dynamic_strip("a.test", raw, -> nil) }
+    assert.same { raw, false }, { m.maybe_dynamic_strip(nil, raw, -> 3) }
+
+  it "_reset_deferred vide la file de verdicts différés", ->
+    m = fresh_worker_responses!
+    m.settle { qh_ptr: "qh", pkt_id: 1, defer: true }, 1, nil, false
+    assert.equals 1, m.deferred_count!
+    m._reset_deferred!
+    assert.equals 0, m.deferred_count!
+    assert.equals 0, m.flush_deferred!
+
+  it "retry_pending_match est inactif si le retry est désactivé", ->
+    config = require "config"
+    config.ipc.match_retry = { enabled: false, count: 5, sleep_ms: 0 }
+    m = fresh_worker_responses!
+    entry, tries, waited, budget = m.retry_pending_match "tx", "10.0.0.1", 1, "1.1.1.1", 10
+    assert.is_nil entry
+    assert.equals 0, tries
+    assert.equals 0, waited
+    assert.is_false budget
+
+  it "retry_pending_match est inactif si count vaut 0", ->
+    config = require "config"
+    config.ipc.match_retry = { enabled: true, count: 0, sleep_ms: 0 }
+    m = fresh_worker_responses!
+    entry, tries, waited, budget = m.retry_pending_match "tx", "10.0.0.1", 1, "1.1.1.1", 10
+    assert.is_nil entry
+    assert.equals 0, tries
+    assert.equals 0, waited
+    assert.is_false budget
