@@ -4092,3 +4092,40 @@ T03/T74/T121-T124b passaient déjà : blackout d'environ une minute du portail
 HTTPS 33443, non reproduit par les deux runs identiques suivants (94/0). Aucun
 fichier modifié par ce correctif n'est impliqué dans le chemin AUTH ; à
 surveiller si cela réapparaît.
+
+### Écritures groupées vers les workers events et mac-learner (branche `d-batchev`)
+
+Point (7) de l'audit perf (`tmp/perfaudit_report.md` §5.3) : deux `write()` par
+question DNS (une ligne TSV vers `worker_events`, un message de 22 octets vers
+`mac_learner`), soit deux appels système et deux réveils de lecteurs par paquet
+— `events` 11,6 % et `mac-lrn` 4,9 % d'un vCPU à 350 q/s (`perf.md` §16.2).
+
+- **Producteur** : nouveau module `src/lib/pipe_batch.moon`
+  (`new_records`/`new_lines`), tampon vidé par tranches **≤ PIPE_BUF** (4096 o)
+  pour rester atomique entre producteurs d'un même pipe. `worker_questions`
+  accumule les deux flux et les vide par `on_batch_end` (fin de lot NFQUEUE,
+  installé même sans métriques) + un dernier vidage à la sortie. Formats, ordre
+  et destinataires inchangés ; un échec d'écriture est journalisé
+  (`pipe_batch_write_failed`) et la tranche abandonnée comme avant sur EAGAIN.
+- **Lecteurs** : `mac_learner` draine le pipe learn par blocs de 128 messages
+  (reliquat d'une lecture courte conservé, alors que l'ancienne boucle jetait un
+  fragment < 22 o) ; `worker_events` avance par position dans le bloc de lignes
+  au lieu de recopier le reliquat après chaque ligne (O(N²) → O(N)).
+- **Mesures** (local, A/B alterné, `tmp/batchev_report.md`) : écritures
+  events+learn par question **1,27-1,31 → 0,52 µs (−60 %)** ; `write()` par
+  question **3,00 → 1,06** (`strace`, dont 2 → 0,062 pour les deux flux visés) ;
+  découpage+agrégation d'une ligne events **9,4 → 6,7 µs (−29 %)** ; drainage
+  learn 0,15 → 0,05 µs/message. Gain du cas complet `question` du banc
+  (~−2 %, attendu 3-4 %) **sous le bruit** de la machine partagée.
+- **Tests** : `tests/unit/lib/pipe_batch_spec.moon` (12 specs),
+  `tests/unit/worker_questions_spec.moon` (comptage des `write()`, ordre,
+  contenu, hook de fin de lot), `tests/unit/mac_learner_core_spec.moon` (lecture
+  par blocs, message coupé), `tests/unit/worker_events_core_spec.moon` (bloc de
+  40 lignes sur deux lectures). `make check` + `make test` : 0 échec ;
+  `make test-e2e` : voir `tmp/batchev_report.md`.
+- **Documentation** : `perf.md` §19, `src/bench/README.md` (hook de fin de lot
+  du banc). Aucune ligne ajoutée à `AGENTS.md`.
+- **Non fait** : aucune mesure sur la cible aarch64 (pas de déploiement) ;
+  `worker_tls`, `worker_responses.write_block_event`, `worker_arp_sniffer` et
+  `worker_auth_queue` écrivent toujours message par message dans ces mêmes
+  pipes (peuvent réutiliser `lib.pipe_batch` sans changer le format).

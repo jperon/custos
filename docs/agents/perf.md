@@ -2133,3 +2133,116 @@ campagne dédiée et non un correctif local.
 - campagne « allocation par paquet » (§18.6) si le coût CPU par paquet reste le
   plafond après le multi-worker §11 et le second avis ciblé §10.2.
 
+
+## 19. Écritures groupées vers les workers events et mac-learner (2026-11-12, branche `d-batchev`)
+
+Implémentation de la piste (7) de `tmp/perfaudit_report.md` §5.3 (« écriture
+events + learn par question : 2 pipe writes par paquet ») et du volet
+« écritures events/learn coalescées » de §16.5. Constat de départ : chaque
+question DNS validée coûtait **deux `write()`** sur des pipes distincts — une
+ligne TSV de 11 champs vers `worker_events` (`worker_questions.write_event`) et
+un message binaire de 22 octets vers `mac_learner`
+(`worker_questions.write_learn_msg`) — soit deux appels système par paquet sur
+le chemin chaud du worker questions, et **deux réveils par paquet** des
+lecteurs (mesurés à 11,6 % et 4,9 % d'un vCPU à 350 q/s, §16.2).
+
+### 19.1 Ce qui change
+
+- **Nouveau module `src/lib/pipe_batch.moon`** : tampon d'écriture groupée,
+  deux formes selon le protocole du pipe. `new_records(fd, rec_size)` accumule
+  des messages de taille fixe (learn : 22 o) dans un tampon FFI ;
+  `new_lines(fd)` accumule des lignes (events : TSV terminé par `\n`) dans une
+  table. Les deux vident par un `write()` **par tranche ≤ `PIPE_BUF_ATOMIC` =
+  4096 o** : l'écriture reste atomique vis-à-vis des autres producteurs du même
+  pipe (`worker_tls` et `worker_responses` écrivent aussi dans `events`,
+  `worker_arp_sniffer` et `worker_auth_queue` dans `learn`). L'ordre
+  d'insertion est préservé et un message n'est jamais coupé entre deux
+  `write()`. Un échec (EAGAIN épuisé, EIO) est journalisé
+  (`pipe_batch_write_failed`, avec `bytes`/`written`/`errno`) et les messages de
+  la tranche sont abandonnés — comportement historique d'EAGAIN, désormais
+  observable.
+- **`worker_questions`** : `write_event` et `write_learn_msg` ne font plus
+  qu'ajouter au tampon ; `flush_pipes()` vide les deux tampons. Le vidage a lieu
+  en **fin de lot NFQUEUE** (`on_batch_end`, installé même quand les métriques
+  sont coupées) et une dernière fois à la sortie du worker. Le hook
+  `run_queue` existait déjà pour `worker_responses` (`src/nfq_loop.moon:185,301`)
+  : `worker_questions` gagne au passage le drain borné du lot
+  (`MAX_BATCH_PKTS`), comme le worker réponses. Conséquence directe pour un lot
+  de 64 questions : **3 écritures** dans le pipe events (ligne TSV ≈ 156 o,
+  tranche 4096 o → 26 lignes par écriture) et **1** dans learn (186 messages de
+  22 o par tranche), au lieu de 64 + 64 ; une question isolée (trafic
+  sporadique) est vidée à la fin de son propre lot, donc sans délai ajouté.
+- **`mac_learner`** : le pipe learn est drainé par blocs de 128 messages
+  (`LEARN_READ_MSGS`, 2816 o) au lieu d'un `read()` de 22 o par message. Un
+  message coupé par une lecture courte est conservé en tête de tampon et
+  complété par la lecture suivante (jamais consommé ni perdu) — l'ancienne
+  boucle jetait un fragment court.
+- **`worker_events`** : le découpage d'un bloc de lignes avance par position
+  dans `line_buf` au lieu de recréer le reliquat après chaque ligne (O(N²)
+  octets copiés par bloc → O(N)) ; le reliquat sans `\n` est recopié une fois.
+  Sémantique inchangée (une ligne coupée entre deux lectures est conservée,
+  testé).
+- **Banc** : le cas `question` de `make bench-hotpath` appelle désormais le hook
+  de fin de lot (`on_batch_end_q`), comme la production ; sur une version sans
+  tampon le hook est absent et l'appel est un no-op, ce qui rend l'A/B
+  comparable (`src/bench/README.md`).
+
+Formats, destinataires et sémantique de perte : **inchangés**. Un arrêt brutal
+du processus peut perdre jusqu'à un lot de messages (avant : jusqu'au message
+en cours sur EAGAIN) ; la fenêtre est bornée par le vidage en fin de lot.
+
+### 19.2 Mesures (locale x86-64, machine partagée, minimum de passages)
+
+Protocole A/B alterné dans la même fenêtre ; les `.lua` compilés des deux états
+sont échangés (même banc, mêmes sources de banc). Détail : `tmp/batchev_report.md`.
+
+| mesure | avant | après | gain |
+|---|---|---|---|
+| écritures events+learn par question (`tmp/bench/writers.lua`, 200 000 paires, min de 5) | 1,27-1,31 µs | 0,52 µs | **−60 %** |
+| `write()` par question (`strace -c -e trace=write`, 13 000 questions) | 3,00 | 1,06 | **−65 %** |
+| dont écritures visées (events+learn) | 2,00 | 0,06 | 2 → 4 par lot de 64 (3 events + 1 learn) |
+| découpage + agrégation d'une ligne events (`tmp/bench/readers.lua`, 40 lignes/bloc) | 9,4 µs | 6,7 µs | **−29 %** |
+| drainage du pipe learn (`read` + `process_learn`) | 0,15 µs/msg | 0,05 µs/msg | −67 % (absolu faible) |
+| cas `question` du banc hot path (lot min, 3 paires A/B, 300 000 iters) | 21,7 µs | 21,4 µs | ~−1,5 % (sous le bruit) |
+| cas `question`, total (moyenne des 3 passages) | 34,1 µs | 33,4 µs | ~−2 % |
+
+La réduction du nombre d'appels système est **déterministe** (2 par question →
+4 par lot de 64, mesurée par `strace` : 0,062 écriture visée par question,
+soit exactement 3 + 1 par lot). Sur le cas complet `question` du banc, le gain
+attendu (≈0,8 µs sur ≈22-26 µs/paquet, soit 3-4 %) est du même ordre que le
+bruit de la machine (±10 % sur le lot min) : il n'est pas résolu. Le **coût
+côté lecteurs baisse aussi par construction du nombre de réveils** : à 350 q/s
+`worker_events` était réveillé ~350 fois/s, il l'est désormais ~13 fois/s
+(3 écritures par lot de 64, une par tranche de 26 lignes) ; `mac_learner` passe
+de ~350 `read()`/s à ~5,5 écritures et ~3 `read()` par seconde (blocs de 128) — ce dernier effet n'est pas mesuré sur la cible (pas de
+déploiement depuis cette branche).
+
+**Témoins** (`make bench-hotpath`, même fenêtre, après vs référence) :
+`ipc_drain` 4,5/4,5 µs (lot min), `response` 25,1/24,9, `so_cycle` 36,2/40,0
+(bruit connu de ce cas) — stables.
+
+### 19.3 Couverture et vérifications
+
+- `tests/unit/lib/pipe_batch_spec.moon` : accumulation sans écriture, vidage en
+  un `write`, tranche ≤ capacité (jamais d'écriture coupée), messages hors
+  format refusés, tampon inerte sans fd, échec d'écriture journalisé + tampon
+  vidé, arrondi de capacité, ordre préservé.
+- `tests/unit/worker_questions_spec.moon` : `write_event`/`write_learn_msg`
+  n'écrivent rien avant le vidage puis **une seule écriture** pour N messages
+  (comptage des `write()` par fd), contenu et ordre des lignes/messages de
+  22 o, `on_batch_end` dans les options de `run_queue` même sans métriques,
+  `handle_question` tamponne jusqu'au hook.
+- `tests/unit/mac_learner_core_spec.moon` : lecture par blocs (`read` de
+  capacité > un message), deux messages appris dont un coupé par une lecture
+  courte (reliquat conservé) ; `tests/unit/worker_events_core_spec.moon` : bloc
+  de 40 lignes réparti sur deux lectures, 20e ligne coupée, toutes agrégées.
+- `make check` + `make test` : 0 échec (total dans `tmp/test.log`) ;
+  `make test-e2e` : voir `tmp/batchev_report.md`.
+
+**Non fait / douteux** : gain CPU global non mesuré sur la cible (aucune
+campagne de charge ni déploiement depuis cette branche) ; l'effet des réveils
+évités sur `events`/`mac-lrn` est déduit du nombre d'écritures, pas mesuré ;
+les producteurs secondaires de ces pipes (`worker_tls`,
+`worker_responses.write_block_event`, `worker_arp_sniffer`,
+`worker_auth_queue`) écrivent toujours message par message — ils peuvent
+réutiliser `lib.pipe_batch` sans changement de format.
