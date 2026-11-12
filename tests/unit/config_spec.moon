@@ -352,6 +352,55 @@ describe "config.nfqueue.responses", ->
     os.remove path
     assert.equals "0-1", cfg.nfqueue.questions
 
+describe "config.nfqueue.maxlen", ->
+  after_each ->
+    ffi.C.unsetenv "CUSTOS_CONFIG_PATH"
+    package.loaded["config"] = nil
+
+  capture_warns = (fn) ->
+    old_log = package.loaded["log"]
+    calls = {}
+    package.loaded["log"] = {
+      log_warn: (thunk) -> calls[#calls + 1] = thunk!
+    }
+    ok, err = pcall fn
+    package.loaded["log"] = old_log
+    assert.is_true ok, err
+    calls
+
+  it "absent → nil (le profil 4096/1024 est résolu à l'ouverture de la file)", ->
+    cfg = reload nil
+    assert.is_nil cfg.nfqueue.maxlen
+
+  it "0 (auto) → nil sans avertissement", ->
+    path = "tmp/config_spec_nfq_maxlen_zero.moon"
+    write_moon path, [[return { nfqueue: { maxlen: 0 } }]]
+    holder = {}
+    calls = capture_warns -> holder.cfg = reload path
+    os.remove path
+    assert.is_nil holder.cfg.nfqueue.maxlen
+    assert.are.equal 0, #calls
+
+  it "entier positif conservé, y compris sous forme textuelle", ->
+    path = "tmp/config_spec_nfq_maxlen_str.moon"
+    write_moon path, [[return { nfqueue: { maxlen: "2048" } }]]
+    cfg = reload path
+    os.remove path
+    assert.equals 2048, cfg.nfqueue.maxlen
+
+  it "négatif, non entier ou non numérique → nil + WARN nfqueue_maxlen_invalid", ->
+    for raw in *{ "-1", "12.5", '"abc"' }
+      path = "tmp/config_spec_nfq_maxlen_bad.moon"
+      write_moon path, "{ nfqueue: { maxlen: #{raw} } }"
+      holder = {}
+      calls = capture_warns -> holder.cfg = reload path
+      os.remove path
+      assert.is_nil holder.cfg.nfqueue.maxlen, raw
+      found = false
+      for c in *calls
+        found = true if c.action == "nfqueue_maxlen_invalid"
+      assert.is_true found, "WARN nfqueue_maxlen_invalid attendu pour #{raw}"
+
 describe "config.nfqueue chevauchement", ->
   after_each ->
     ffi.C.unsetenv "CUSTOS_CONFIG_PATH"

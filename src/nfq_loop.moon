@@ -6,6 +6,7 @@
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 config = require "config"
 nfq_rcvbuf = require "lib.nfq_rcvbuf"
+nfq_maxlen = require "lib.nfq_maxlen"
 lowmem = require "lib.lowmem"
 { :log_info, :log_warn, :log_error, :log_debug, :level_enabled } = require "log"
 bit = require "bit"
@@ -114,6 +115,14 @@ run_queue = (queue_num, callback, opts=nil) ->
     error "nfq_create_queue(#{queue_num}) échoué"
 
   qh_box[0] = qh
+
+  -- Longueur de la file noyau (nfq_set_queue_maxlen) juste après création :
+  -- le défaut noyau (NFQNL_QMAX_DEFAULT = 1024) jette les paquets quand il est
+  -- atteint (queue_dropped, cf. docs/agents/perf.md §15). Un échec n'empêche
+  -- pas la file de démarrer (WARN queue_maxlen_failed).
+  nfq_maxlen.configure libnfq, libc, qh, queue_num,
+    (config.nfqueue and config.nfqueue.maxlen),
+    (lowmem.detect (config.runtime or {}))
 
   -- Copie complète du paquet (payload + métadonnées L2)
   log_debug -> { action: "queue_set_mode_call", queue: queue_num }

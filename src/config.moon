@@ -618,6 +618,20 @@ normalize = (cfg) ->
       conflict: overlap.conflict
     }
     error "config: nfqueue queue #{overlap.queue} is shared by '#{overlap.role}' and '#{overlap.conflict}' (one role per queue)"
+  -- nfqueue.maxlen : longueur de la file noyau (paquets). Absent ou 0 = profil
+  -- par défaut (4096, ou 1024 en RAM faible), résolu à l'ouverture de chaque
+  -- file par lib.nfq_maxlen. Une autre valeur invalide (négative, non entière
+  -- ou non numérique) est écartée avec un avertissement.
+  maxlen = tonumber cfg.nfqueue.maxlen
+  if maxlen and maxlen > 0 and maxlen % 1 == 0
+    cfg.nfqueue.maxlen = maxlen
+  else
+    if cfg.nfqueue.maxlen != nil and maxlen != 0
+      config_warn {
+        action: "nfqueue_maxlen_invalid"
+        configured: tostring cfg.nfqueue.maxlen
+      }
+    cfg.nfqueue.maxlen = nil
   cfg.doh = cfg.doh or {}
   cfg.dns = cfg.dns or {}
   cfg.dns.ttl_grace = cfg.dns.ttl_grace or {}

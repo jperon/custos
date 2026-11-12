@@ -5,6 +5,7 @@ do
 end
 local config = require("config")
 local nfq_rcvbuf = require("lib.nfq_rcvbuf")
+local nfq_maxlen = require("lib.nfq_maxlen")
 local lowmem = require("lib.lowmem")
 local log_info, log_warn, log_error, log_debug, level_enabled
 do
@@ -107,6 +108,7 @@ run_queue = function(queue_num, callback, opts)
     error("nfq_create_queue(" .. tostring(queue_num) .. ") échoué")
   end
   qh_box[0] = qh
+  nfq_maxlen.configure(libnfq, libc, qh, queue_num, (config.nfqueue and config.nfqueue.maxlen), (lowmem.detect((config.runtime or { }))))
   log_debug(function()
     return {
       action = "queue_set_mode_call",

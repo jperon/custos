@@ -409,6 +409,74 @@ describe("config.nfqueue.responses", function()
     return assert.equals("0-1", cfg.nfqueue.questions)
   end)
 end)
+describe("config.nfqueue.maxlen", function()
+  after_each(function()
+    ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
+    package.loaded["config"] = nil
+  end)
+  local capture_warns
+  capture_warns = function(fn)
+    local old_log = package.loaded["log"]
+    local calls = { }
+    package.loaded["log"] = {
+      log_warn = function(thunk)
+        calls[#calls + 1] = thunk()
+      end
+    }
+    local ok, err = pcall(fn)
+    package.loaded["log"] = old_log
+    assert.is_true(ok, err)
+    return calls
+  end
+  it("absent → nil (le profil 4096/1024 est résolu à l'ouverture de la file)", function()
+    local cfg = reload(nil)
+    return assert.is_nil(cfg.nfqueue.maxlen)
+  end)
+  it("0 (auto) → nil sans avertissement", function()
+    local path = "tmp/config_spec_nfq_maxlen_zero.moon"
+    write_moon(path, [[return { nfqueue: { maxlen: 0 } }]])
+    local holder = { }
+    local calls = capture_warns(function()
+      holder.cfg = reload(path)
+    end)
+    os.remove(path)
+    assert.is_nil(holder.cfg.nfqueue.maxlen)
+    return assert.are.equal(0, #calls)
+  end)
+  it("entier positif conservé, y compris sous forme textuelle", function()
+    local path = "tmp/config_spec_nfq_maxlen_str.moon"
+    write_moon(path, [[return { nfqueue: { maxlen: "2048" } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    return assert.equals(2048, cfg.nfqueue.maxlen)
+  end)
+  return it("négatif, non entier ou non numérique → nil + WARN nfqueue_maxlen_invalid", function()
+    local _list_0 = {
+      "-1",
+      "12.5",
+      '"abc"'
+    }
+    for _index_0 = 1, #_list_0 do
+      local raw = _list_0[_index_0]
+      local path = "tmp/config_spec_nfq_maxlen_bad.moon"
+      write_moon(path, "{ nfqueue: { maxlen: " .. tostring(raw) .. " } }")
+      local holder = { }
+      local calls = capture_warns(function()
+        holder.cfg = reload(path)
+      end)
+      os.remove(path)
+      assert.is_nil(holder.cfg.nfqueue.maxlen, raw)
+      local found = false
+      for _index_1 = 1, #calls do
+        local c = calls[_index_1]
+        if c.action == "nfqueue_maxlen_invalid" then
+          found = true
+        end
+      end
+      assert.is_true(found, "WARN nfqueue_maxlen_invalid attendu pour " .. tostring(raw))
+    end
+  end)
+end)
 describe("config.nfqueue chevauchement", function()
   after_each(function()
     ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
