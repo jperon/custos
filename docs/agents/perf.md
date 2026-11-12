@@ -591,3 +591,165 @@ Le gain attendu reste celui du §10.1 ; le protocole de re-mesure est celui du
 §7.1 (paliers 300/400/500 `mixed` + `up` 500, repos vérifié), en contrôlant en
 plus `response_orphan_dropped`, `so_verdict_bus_invalid` et l'absence de
 `nft_ack_timeout`.
+
+## 12. Multi-worker mesuré sur custos.lan (2026-11-12) : blocage du fan-out et écart nft/id_sequence
+
+Campagne demandée sur le déploiement `dev` courant (merge `d-multi`) :
+`nfqueue.questions: "0-1"`, `nfqueue.responses: "14-15"`, workers
+`custos:dns-q0/q1`, `custos:resp-q14/q15`, `custos:nft` (noyau 6.12.74,
+aarch64). Générateur `servus.lan` (10.35.1.2) → `10.35.1.1:53`, un seul
+générateur, paliers de 30 s, mêmes scripts que §1 (`tmp/bench3/`, résultats
+bruts `tmp/bench3/results/`).
+
+**La campagne complète n'a pas pu être réalisée** : le premier palier
+(300 q/s `mixed`) a mis en évidence un **défaut bloquant du fan-out IPC**
+(§12.3) qui a rendu le service définitivement muet (0 réponse DNS, y compris
+après l'arrêt de la charge). Les chiffres ci-dessous sont ceux mesurés avant et
+pendant ce blocage ; ils ne remplacent pas les paliers de §7.1.
+
+### 12.1 Profil de charge réellement exercé
+
+Deux écarts avec la campagne §7.1, tous deux constatés dans `logread` :
+
+- **Le client n'était pas authentifié.** `action=auth_server_login_success
+  user=j@prn.ovh mac=d8:d3:85:63:6b:27` à 08:21:56, lignes `ALLOW
+  rule=r_utilisateurs user=j@prn.ovh` jusqu'à 08:24:07, puis `BLOCK
+  rule=r_refus_a_priori` **sans champ `user`** dès 08:27:06 — soit 5 min après
+  le login, ce qui correspond à `auth.idle_timeout: 300` (`src/config.moon:317`,
+  `session_ttl: 0` l. 315) quand le client du portail ne ping plus. Conséquence :
+  le profil `mixed` exercé est 70 % refusé a priori (controlplane/login/NX) +
+  30 % `vpn.stemarie.dynv6.net` autorisé par `r_ouverture_complete` (1-2 RR),
+  au lieu de 40 % Tailscale autorisé par `r_utilisateurs` (8 RR + second avis +
+  injection nft). Le coût nft mesuré s'en ressent : 0,7 % d'un vCPU à 40 q/s
+  (§12.2) contre 50 % à 200 q/s dans §2.
+- **Le worker DoH tourne à ~100 % d'un vCPU au repos** (§12.5), ce qui retire un
+  cœur sur quatre à la mesure.
+
+Les chiffres de §12.2 ne sont donc **pas comparables** à la référence
+« 1 worker, file 4 » (300 `mixed` 0 %, 400 9,9 %, 500 35,9 %).
+
+### 12.2 Mesures obtenues
+
+CPU = % d'un vCPU sur la fenêtre de charge (jiffies `/proc/<pid>/stat`, HZ
+vérifié à 99,2 sur `/proc/stat`). Les compteurs nft et la table NFQUEUE sont lus
+**dans le même appel SSH**, compteur nft d'abord (§12.4).
+
+| palier | émis/reçus | perte | RTT p50/p99 | `dns-q1` | `resp-q15` | `nft` | `doh` | `user_dropped` q1 | nft « queue to 0-1 » Δ | `id_sequence` q1 Δ | q0 Δ |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 40 q/s `mixed`, 8 s (avant blocage) | 320/320 | 0 % | 4,6 / 18,3 ms | 4,4 % | 4,6 % | 0,7 % | 100,1 % | 0 | +321 | +320 | 0 |
+| 300 q/s `mixed`, 30 s (pendant le blocage) | 9000/0 | **100 %** | n.m. | 1,4 % | 0,1 % | 0,1 % | 97,1 % | **+8 553** | +9 010 | +9 010 | 0 |
+
+Détails du palier à 300 q/s (`tmp/bench3/results/b3m300_r300_mixed_*`) :
+`queue_dropped` = 0 sur toutes les files, `queue_total` = 164 en fin de palier
+(profondeur max 216), `nft` « queue to 14-15 » Δ = **0** (aucune réponse n'a
+atteint la file des réponses), `id_sequence` q14 et q15 Δ = 0. Aucune ligne
+`action=response_dns_benchmark` dans la fenêtre : aucune réponse n'a été
+traitée. WARN de la fenêtre : `questions_queue_read_enobufs` (1) et
+`questions_ipc_write_failed[_exhausted]` (2).
+
+### 12.3 Défaut bloquant : le tube IPC d'un worker réponses inactif n'est jamais drainé
+
+**Symptôme.** À partir de 08:31:19, le worker questions boucle sur
+`action=questions_ipc_write_failed_exhausted errno=11 attempts=5 fd=7`
+(EAGAIN sur le tube vers `resp-q14`), avec `suppressed` croissant (4 → 23 → 135
+→ 524), puis `fd=9` (tube vers `resp-q15`) à partir de 08:36:22. Chaque échec
+coûte 5 × 20 ms de `nanosleep` (`src/ipc.moon:110-127`) avant d'abandonner la
+question ; le worker passe son temps en `nanosleep(0)` (syscall 101) et ne
+traite plus que ~10 q/s, d'où `user_dropped` +8 553 sur la file 1. Le service
+ne répond plus à aucune requête, même à 40 q/s, et ne se rétablit pas après
+l'arrêt de la charge (sonde unique à 08:40 : timeout).
+
+**Chaîne causale (code).**
+
+1. Avec `responses: "14-15"`, le superviseur crée **deux** tubes
+   question→réponse (`pipe_resize fd=7 name=question_response`,
+   `fd=9 name=question_response2`, taille 65 536 o ;
+   `src/main.moon:84-85,108-125`) et le worker questions écrit **dans tous**
+   (`write_with_retry_all`, `src/ipc.moon:137-143`).
+2. Or le worker réponses ne draine son tube que dans `handle_response`
+   (`src/worker_responses.moon:1012-1018`), c'est-à-dire **à chaque paquet
+   reçu sur sa file**. Le tube n'est pas dans le `poll` : `run` ne met que le
+   bus de verdicts dans `extra_rfds` (`src/worker_responses.moon:1390-1393`),
+   et `on_idle` = `sweep_parked` ne draine que ce bus et les réponses parquées
+   (`src/worker_responses.moon:918-927`) ; `nfq_loop.run_queue` ne surveille
+   que le fd netlink et `extra_rfds` (`src/nfq_loop.moon:117-156`).
+3. Le hachage noyau est sans les ports et symétrique (§11.1) : tout le trafic
+   d'un client donné tombe dans **une** file. Ici `resp-q14` ne reçoit que des
+   réponses de validateurs (rares, ~1 toutes les 10 s) : son tube n'est donc
+   presque jamais drainé et ses 64 Kio se remplissent (≈200 o par message, soit
+   ~320 messages ; le palier de 40 q/s a écrit exactement 320 messages dans ce
+   tube, et les premières erreurs EAGAIN apparaissent 4 min plus tard, après le
+   trafic résiduel du client).
+4. `write_with_retry_all` renvoie `false` dès qu'**un** destinataire échoue,
+   même si l'autre a reçu sa copie, et `worker_questions` traite alors l'échec
+   comme définitif : `return NF_DROP` (`src/worker_questions.moon:449-464`).
+   La question n'atteint jamais le résolveur, donc aucune réponse n'est
+   produite, donc `resp-q15` ne reçoit plus de paquet et **son** tube cesse
+   d'être drainé à son tour : blocage définitif, sans reprise possible sans
+   redémarrage des workers.
+
+**Portée.** Le défaut est propre au multi-worker (`d-multi`) et se déclenche dès
+qu'une file de la plage reste inactive assez longtemps — cas systématique avec
+un seul client, et cas réel dès qu'un déséquilibre de flux dure quelques
+centaines de requêtes. Il n'est **pas corrigé ici** (hors périmètre : aucune
+modification de `src/`). Correctifs possibles à arbitrer : mettre le fd du tube
+dans `extra_rfds` du worker réponses (et le drainer dans `on_extra_ready`),
+et/ou ne pas jeter la question quand un seul des fan-out a échoué.
+
+### 12.4 Écart compteur nft / `id_sequence` (PASSATION §7.4) — résolu
+
+Mesure propre, compteur nft et table NFQUEUE lus dans **le même appel SSH**
+(nft d'abord, NFQUEUE ensuite), avant/après le palier de 300 q/s :
+
+| instant | nft « queue to 0-1 » | `id_sequence` q0 | `id_sequence` q1 | q0+q1 |
+|---|---|---|---|---|
+| avant (08:32:48) | 678 | 0 | 678 | 678 |
+| après (08:34:41) | 9 688 | 0 | 9 688 | 9 688 |
+| **Δ** | **+9 010** | **0** | **+9 010** | **+9 010** |
+
+`queue_dropped` = 0 et `user_dropped` = 0 pour les questions avant le blocage
+(c'est `user_dropped` qui monte pendant, +8 553, sans effet sur `id_sequence`).
+**Résidu = 0**, et égalité des valeurs absolues : le compteur nft et
+`id_sequence` de la file 1 comptent exactement les mêmes paquets.
+
+Conclusion : l'écart de PASSATION §7.4 (+15 165 nft contre +11 693
+`id_sequence` de la file 1, soit −3 472) **n'est pas expliqué par la
+répartition 0/1** : avec ce générateur, la file 0 ne reçoit **aucun** paquet
+(Δ = 0) — tout tombe dans la file 1, et les deux compteurs y sont identiques.
+L'écart venait donc de la mesure : les deux relevés n'étaient pas simultanés
+(protocole §1 : « compteurs nft et NFQ avant/après » en appels séparés), et/ou
+`id_sequence` a été remis à zéro par une recréation de file (le compteur est
+propre à l'instance NFQUEUE, créée par `nfq_create_queue` ; un redémarrage de
+worker le remet à 0 alors que le compteur nft survit). Pour toute re-mesure :
+lire nft et NFQUEUE dans le même instantané, et noter les redémarrages de
+workers. À noter : la file 0 reçoit bien du trafic d'**autres** clients à
+d'autres moments (248 paquets observés sur la file 0 dans les minutes qui ont
+suivi la fenêtre de mesure, alors qu'elle était à 0 pendant), donc un partage
+0/1 reste possible en général — mais pas pour cette charge, et pas dans la
+fenêtre mesurée.
+
+### 12.5 Anomalie annexe : le worker DoH consomme ~100 % d'un vCPU au repos
+
+`custos:doh` (pid 1426) : 71914 jiffies utime + 22397 stime à 08:32:46, alors
+qu'il a démarré à 08:18:05 (≈880 s plus tôt) ; mesure directe à 08:41 :
+**98,6 %** d'un vCPU en 5 s, état `running` en permanence, sans aucun log
+d'erreur récent (les derniers `doh_h2_failed err=h2_incomplete` datent de
+06:11/06:13, instance précédente). Le mécanisme n'est pas identifié (boucle
+active sans syscall bloquant). Conséquence pour la mesure : un cœur sur quatre
+est indisponible en permanence. Ce n'est **pas** la cause du blocage §12.3 (le
+worker questions est en `nanosleep`, pas affamé), mais cela abaisse le plafond
+réel de la machine.
+
+### 12.6 Ce qui reste à mesurer
+
+1. Corriger le fan-out (§12.3) puis rejouer le protocole §7.1 : 300/400/500/700
+   `mixed` + 500/800 `up`, 30 s, repos vérifié, avec les compteurs lus dans le
+   même instantané (§12.4) et le contrôle des WARN `questions_ipc_write_failed`,
+   `response_orphan_dropped`, `so_verdict_bus_invalid`, `nft_ack_timeout`.
+2. Réauthentifier le client `servus` sur le portail avant la campagne (sinon le
+   profil `mixed` reste à 70 % de refus a priori et ne sollicite ni les 8 RR
+   Tailscale ni le second avis).
+3. Pour tester un partage réel 14/15, il faut plusieurs IP source : `servus`
+   n'a que 10.35.1.2/24 sur le WAN (les autres adresses sont sur d'autres
+   sous-réseaux) ; aucune variation d'IP source n'est possible sans modifier le
+   réseau, donc ce point n'a pas été fait.
