@@ -32,6 +32,46 @@ MAX_BATCH_PKTS = 64
 -- Sentinel : le callback a déjà posé son propre verdict (ex: response avec payload patché)
 VERDICT_DONE = -1
 
+-- ── Vieillissement des paquets (délestage précoce) ──────────────────
+-- NFQUEUE joint au paquet un horodatage noyau (attribut NFQA_TIMESTAMP,
+-- CLOCK_REALTIME) quand `skb->tstamp` est renseigné. C'est le SEUL moyen de
+-- connaître le temps déjà passé dans la file noyau : une lecture userspace a
+-- toujours lieu au moment du traitement, donc un horodatage pris à la lecture
+-- mesurerait un âge nul. Le noyau n'émet l'attribut que s'il horodate les
+-- paquets à la réception (`netstamp_needed_key`, activé par un socket
+-- SO_TIMESTAMP — voir docs/agents/perf.md §17.9) ; sinon nfq_get_timestamp
+-- rend -1 et packet_age_ms rend nil (pas de délestage possible).
+CLOCK_REALTIME = 0
+
+-- Résolution du symbole à la construction : absent d'une libnetfilter_queue
+-- trop ancienne, il ne doit pas faire mourir le worker en hot-path.
+_ts_ok, _ts_fn = pcall -> libnfq.nfq_get_timestamp
+have_packet_timestamp = _ts_ok and _ts_fn != nil
+
+_age_ts = nil
+_age_tv = nil
+
+--- Millisecondes d'horloge murale (CLOCK_REALTIME), même base que
+-- NFQA_TIMESTAMP (ktime_get_real côté noyau).
+-- @treturn number Millisecondes depuis l'epoch.
+realtime_ms = ->
+  libc.clock_gettime CLOCK_REALTIME, _age_ts
+  tonumber(_age_ts[0].tv_sec) * 1000 + math.floor(tonumber(_age_ts[0].tv_nsec) / 1000000)
+
+--- Âge (ms) d'un paquet NFQUEUE d'après son horodatage noyau.
+-- @tparam cdata nfad Données du paquet fournies au callback.
+-- @treturn number|nil Âge en millisecondes, ou nil si le noyau n'a pas fourni
+--   d'horodatage (attribut absent : le délestage ne peut pas décider).
+packet_age_ms = (nfad) ->
+  return nil unless nfad and have_packet_timestamp
+  unless _age_ts
+    _age_ts = ffi.new "timespec_t[1]"
+    _age_tv = ffi.new "struct timeval[1]"
+  return nil if libnfq.nfq_get_timestamp(nfad, _age_tv) != 0
+  pkt_ms = tonumber(_age_tv[0].tv_sec) * 1000 + math.floor(tonumber(_age_tv[0].tv_usec) / 1000)
+  age = realtime_ms! - pkt_ms
+  age < 0 and 0 or age
+
 --- Lance la boucle de traitement d'une queue NFQUEUE.
 -- Ouvre la queue, installe le callback C, et tourne jusqu'à erreur ou SIGINT.
 -- Bloque jusqu'à la fermeture du fd netlink.
@@ -307,4 +347,5 @@ set_verdict_marked = (qh_ptr, pkt_id, verdict, mark, payload=nil) ->
   rc >= 0 and 0 or rc
 
 -- Verdict helpers exposés pour les workers
-{ :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE, :set_verdict_marked, :MAX_BATCH_PKTS }
+{ :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE, :set_verdict_marked, :MAX_BATCH_PKTS,
+  :packet_age_ms, :have_packet_timestamp }

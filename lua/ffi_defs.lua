@@ -246,6 +246,10 @@ ffi.cdef([[  /* ── Types opaques ── */
   nfqnl_msg_packet_hw* nfq_get_packet_hw(nfq_data *nfad);
   int                  nfq_get_indev(nfq_data *nfad);  /* index interface entrée */
   uint32_t             nfq_get_nfmark(nfq_data *nfad);
+  /* Horodatage noyau du paquet (attribut NFQA_TIMESTAMP, CLOCK_REALTIME).
+     Retourne 0 en succès, -1 si le noyau n'a pas joint l'attribut (voir
+     nfq_loop.packet_age_ms et docs/agents/perf.md §17.9). */
+  int                  nfq_get_timestamp(nfq_data *nfad, struct timeval *tv);
 
   /* ── Verdict ── */
   /* verdict simple (sans modification du paquet) */
