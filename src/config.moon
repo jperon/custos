@@ -507,6 +507,44 @@ config_warn = (fields) ->
   else
     io.stderr\write "config: #{fields.action}\n"
 
+--- Émet une erreur de configuration structurée (mêmes contraintes que
+-- config_warn : log pas encore chargé pendant `normalize` → stderr).
+-- @tparam table fields Champs structurés (dont `action`)
+config_error = (fields) ->
+  logger = package.loaded["log"]
+  if type(logger) == "table" and type(logger.log_error) == "function"
+    logger.log_error -> fields
+  else
+    parts = { "config: ERROR", tostring fields.action }
+    keys = [k for k in pairs fields when k != "action"]
+    table.sort keys
+    for k in *keys
+      parts[#parts + 1] = "#{k}=#{tostring fields[k]}"
+    io.stderr\write table.concat(parts, " ") .. "\n"
+
+-- Rôles nfqueue dont les files ne doivent jamais se recouvrir : le noyau
+-- livre chaque paquet à UN SEUL des sockets abonnés à une file, sans garantie
+-- de quel rôle le reçoit. Deux rôles sur le même numéro casseraient donc
+-- silencieusement l'un des deux. Ordre = ordre de priorité de détection.
+NFQUEUE_ROLES = {
+  "questions", "responses", "captive", "reject", "auth", "sni", "sip", "doh_vlan"
+}
+
+--- Cherche le premier numéro de file partagé par deux rôles nfqueue.
+-- Les plages sont développées (`"14-15"` → 14, 15) ; une valeur illisible
+-- n'ajoute aucune file et ne peut donc pas créer de conflit artificiel.
+-- @tparam table nfqueue Section config.nfqueue
+-- @tparam function parse_queues Développeur de plage (lib.lowmem.parse_queues)
+-- @treturn table|nil { queue: number, role: string, conflict: string }
+find_nfqueue_overlap = (nfqueue, parse_queues) ->
+  owner = {}
+  for role in *NFQUEUE_ROLES
+    for q in *parse_queues nfqueue[role]
+      if owner[q] != nil
+        return { queue: q, role: owner[q], conflict: role }
+      owner[q] = role
+  nil
+
 --- Vrai si `name` est un nom DNS utilisable comme entrée de liste.
 -- Casse basse, sans point final, labels non vides et bornés (RFC 1035).
 -- @tparam string|nil name Nom candidat.
@@ -547,7 +585,7 @@ normalize_trr_confirmation = (value) ->
 normalize = (cfg) ->
   cfg.runtime = cfg.runtime or {}
   cfg.nfqueue = cfg.nfqueue or {}
-  -- nfqueue.responses accepte une plage contiguë ("4-5") : un worker réponses
+  -- nfqueue.responses accepte une plage contiguë ("14-15") : un worker réponses
   -- par file. Chaque worker reçoit une copie de TOUTES les transactions
   -- question→réponse (fan-out des pipes, cf. main.moon) : l'appariement
   -- question/réponse ne dépend donc pas de l'affinité de hachage du noyau
@@ -566,6 +604,20 @@ normalize = (cfg) ->
       reason: "queue num accepts only a number or a contiguous range (a-b)"
     }
     cfg.nfqueue.responses = first
+  -- Deux rôles sur la même file se voleraient les paquets (le noyau livre
+  -- chaque paquet à un seul des sockets abonnés, sans choisir lequel) : on
+  -- refuse le démarrage plutôt que de laisser un rôle silencieusement cassé.
+  -- Placé APRÈS la réduction ci-dessus : "4,6" est ramené à "4" avant la
+  -- validation et ne produit donc pas de faux conflit avec sni "6".
+  overlap = find_nfqueue_overlap cfg.nfqueue, lowmem.parse_queues
+  if overlap
+    config_error {
+      action: "nfqueue_overlap"
+      queue: overlap.queue
+      role: overlap.role
+      conflict: overlap.conflict
+    }
+    error "config: nfqueue queue #{overlap.queue} is shared by '#{overlap.role}' and '#{overlap.conflict}' (one role per queue)"
   cfg.doh = cfg.doh or {}
   cfg.dns = cfg.dns or {}
   cfg.dns.ttl_grace = cfg.dns.ttl_grace or {}

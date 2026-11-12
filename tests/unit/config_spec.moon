@@ -315,13 +315,13 @@ describe "config.nfqueue.responses", ->
     assert.is_true ok, err
     calls
 
-  it "une plage (\"4-5\") est conservée : un worker par file (fan-out IPC)", ->
+  it "une plage (\"14-15\") est conservée : un worker par file (fan-out IPC)", ->
     path = "tmp/config_spec_nfq_multi.moon"
-    write_moon path, [[return { nfqueue: { responses: "4-5" } }]]
+    write_moon path, [[return { nfqueue: { responses: "14-15" } }]]
     holder = {}
     calls = capture_warns -> holder.cfg = reload path
     os.remove path
-    assert.equals "4-5", holder.cfg.nfqueue.responses
+    assert.equals "14-15", holder.cfg.nfqueue.responses
     for c in *calls
       assert.are_not.equal "nfqueue_responses_single_queue_only", c.action
       assert.are_not.equal "nfqueue_responses_range_not_contiguous", c.action
@@ -351,6 +351,63 @@ describe "config.nfqueue.responses", ->
     cfg = reload path
     os.remove path
     assert.equals "0-1", cfg.nfqueue.questions
+
+describe "config.nfqueue chevauchement", ->
+  after_each ->
+    ffi.C.unsetenv "CUSTOS_CONFIG_PATH"
+    package.loaded["config"] = nil
+
+  -- Capture les log_error émis pendant le chargement de la config ; le module
+  -- log n'est pas encore chargé quand config est requis en production, donc
+  -- config_error retombe sur stderr — ici on installe un stub pour observer
+  -- les champs structurés.
+  capture_errors = (fn) ->
+    old_log = package.loaded["log"]
+    calls = {}
+    package.loaded["log"] = {
+      log_warn: (thunk) -> calls[#calls + 1] = thunk!
+      log_error: (thunk) -> calls[#calls + 1] = thunk!
+    }
+    ok, err = pcall fn
+    package.loaded["log"] = old_log
+    ok, err, calls
+
+  it "responses \"4-5\" chevauche auth \"5\" : ERROR (rôles + file) et refus de démarrer", ->
+    path = "tmp/config_spec_nfq_overlap.moon"
+    write_moon path, [[return { nfqueue: { responses: "4-5" } }]]
+    ok, err, calls = capture_errors -> reload path
+    os.remove path
+    assert.is_false ok, "un chevauchement doit empêcher le chargement"
+    msg = tostring err
+    assert.truthy msg\find "5", 1, true
+    assert.truthy msg\find "responses", 1, true
+    assert.truthy msg\find "auth", 1, true
+    found = false
+    for c in *calls
+      if c.action == "nfqueue_overlap"
+        found = true
+        assert.equals 5, c.queue
+        assert.equals "responses", c.role
+        assert.equals "auth", c.conflict
+    assert.is_true found, "un log ERROR nfqueue_overlap est attendu"
+
+  it "une plage libre (\"14-15\") ne chevauche aucun rôle : chargement OK", ->
+    path = "tmp/config_spec_nfq_free.moon"
+    write_moon path, [[return { nfqueue: { responses: "14-15" } }]]
+    holder = {}
+    ok, err, calls = capture_errors -> holder.cfg = reload path
+    os.remove path
+    assert.is_true ok, tostring err
+    assert.equals "14-15", holder.cfg.nfqueue.responses
+
+  it "une liste non contiguë est réduite avant la validation (pas de faux conflit avec sni 6)", ->
+    path = "tmp/config_spec_nfq_normalized.moon"
+    write_moon path, [[return { nfqueue: { responses: "4,6" } }]]
+    ok, err, calls = capture_errors -> reload path
+    os.remove path
+    assert.is_true ok, tostring err
+    for c in *calls
+      assert.are_not.equal "nfqueue_overlap", c.action
 
 describe "config.auth.cert_dir", ->
 

@@ -361,15 +361,15 @@ describe("config.nfqueue.responses", function()
     assert.is_true(ok, err)
     return calls
   end
-  it("une plage (\"4-5\") est conservée : un worker par file (fan-out IPC)", function()
+  it("une plage (\"14-15\") est conservée : un worker par file (fan-out IPC)", function()
     local path = "tmp/config_spec_nfq_multi.moon"
-    write_moon(path, [[return { nfqueue: { responses: "4-5" } }]])
+    write_moon(path, [[return { nfqueue: { responses: "14-15" } }]])
     local holder = { }
     local calls = capture_warns(function()
       holder.cfg = reload(path)
     end)
     os.remove(path)
-    assert.equals("4-5", holder.cfg.nfqueue.responses)
+    assert.equals("14-15", holder.cfg.nfqueue.responses)
     for _index_0 = 1, #calls do
       local c = calls[_index_0]
       assert.are_not.equal("nfqueue_responses_single_queue_only", c.action)
@@ -407,6 +407,76 @@ describe("config.nfqueue.responses", function()
     local cfg = reload(path)
     os.remove(path)
     return assert.equals("0-1", cfg.nfqueue.questions)
+  end)
+end)
+describe("config.nfqueue chevauchement", function()
+  after_each(function()
+    ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
+    package.loaded["config"] = nil
+  end)
+  local capture_errors
+  capture_errors = function(fn)
+    local old_log = package.loaded["log"]
+    local calls = { }
+    package.loaded["log"] = {
+      log_warn = function(thunk)
+        calls[#calls + 1] = thunk()
+      end,
+      log_error = function(thunk)
+        calls[#calls + 1] = thunk()
+      end
+    }
+    local ok, err = pcall(fn)
+    package.loaded["log"] = old_log
+    return ok, err, calls
+  end
+  it("responses \"4-5\" chevauche auth \"5\" : ERROR (rôles + file) et refus de démarrer", function()
+    local path = "tmp/config_spec_nfq_overlap.moon"
+    write_moon(path, [[return { nfqueue: { responses: "4-5" } }]])
+    local ok, err, calls = capture_errors(function()
+      return reload(path)
+    end)
+    os.remove(path)
+    assert.is_false(ok, "un chevauchement doit empêcher le chargement")
+    local msg = tostring(err)
+    assert.truthy(msg:find("5", 1, true))
+    assert.truthy(msg:find("responses", 1, true))
+    assert.truthy(msg:find("auth", 1, true))
+    local found = false
+    for _index_0 = 1, #calls do
+      local c = calls[_index_0]
+      if c.action == "nfqueue_overlap" then
+        found = true
+        assert.equals(5, c.queue)
+        assert.equals("responses", c.role)
+        assert.equals("auth", c.conflict)
+      end
+    end
+    return assert.is_true(found, "un log ERROR nfqueue_overlap est attendu")
+  end)
+  it("une plage libre (\"14-15\") ne chevauche aucun rôle : chargement OK", function()
+    local path = "tmp/config_spec_nfq_free.moon"
+    write_moon(path, [[return { nfqueue: { responses: "14-15" } }]])
+    local holder = { }
+    local ok, err, calls = capture_errors(function()
+      holder.cfg = reload(path)
+    end)
+    os.remove(path)
+    assert.is_true(ok, tostring(err))
+    return assert.equals("14-15", holder.cfg.nfqueue.responses)
+  end)
+  return it("une liste non contiguë est réduite avant la validation (pas de faux conflit avec sni 6)", function()
+    local path = "tmp/config_spec_nfq_normalized.moon"
+    write_moon(path, [[return { nfqueue: { responses: "4,6" } }]])
+    local ok, err, calls = capture_errors(function()
+      return reload(path)
+    end)
+    os.remove(path)
+    assert.is_true(ok, tostring(err))
+    for _index_0 = 1, #calls do
+      local c = calls[_index_0]
+      assert.are_not.equal("nfqueue_overlap", c.action)
+    end
   end)
 end)
 return describe("config.auth.cert_dir", function()
