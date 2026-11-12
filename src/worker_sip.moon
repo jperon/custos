@@ -154,7 +154,7 @@ allow_sip_peer = (ip, family, reason) ->
 
 -- ── Packet handler ────────────────────────────────────────────────────────────
 
-handle_packet = (qh_ptr, nfad, pkt_id) ->
+handle_packet_inner = (qh_ptr, nfad, pkt_id) ->
   -- L2: source MAC.
   l2  = get_l2 nfad
   mac = l2.mac_src
@@ -301,6 +301,25 @@ handle_packet = (qh_ptr, nfad, pkt_id) ->
     }
 
   NF_ACCEPT
+
+--- Vide le tampon d'écriture nft du producteur (cf. nft_queue.flush).
+-- worker_sip enfile aussi des insertions SANS ACK (`allow_sip_peer`) : sans ce
+-- flush de fin de paquet, elles resteraient dans le tampon jusqu'à la prochaine
+-- insertion suivie d'un `get_last_seq` (`allow_mac_ip`) — voire indéfiniment
+-- pour le dernier paquet d'une session, donc jamais appliquées par nft.
+-- @treturn nil
+flush_nft = ->
+  nft_q.flush! if nft_q and nft_q.flush
+
+--- Traite un paquet puis vide le tampon nft (écritures groupées du producteur).
+-- @tparam cdata qh_ptr  Handle de file NFQUEUE
+-- @tparam cdata nfad    Données du paquet
+-- @tparam number pkt_id Identifiant de paquet
+-- @treturn number NF_ACCEPT
+handle_packet = (qh_ptr, nfad, pkt_id) ->
+  rc = handle_packet_inner qh_ptr, nfad, pkt_id
+  flush_nft!
+  rc
 
 -- ── Entry point ───────────────────────────────────────────────────────────────
 

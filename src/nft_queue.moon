@@ -19,6 +19,11 @@ ACK_SIZE = 8
 CLOCK_MONOTONIC = 1
 
 PIPE_BUF_SAFE = 512
+-- Borne d'une écriture atomique sur un pipe Linux (PIPE_BUF) : les producteurs
+-- nft écrivent tous dans le même pipe, une tranche écrite en un seul write()
+-- de ≤ PIPE_BUF_ATOMIC octets ne peut donc pas être entrelacée avec celle d'un
+-- autre producteur. Au-delà, le noyau pourrait couper l'écriture.
+PIPE_BUF_ATOMIC = 4096
 IPC_WRITE_RETRY_COUNT = 3
 EAGAIN = 11
 EWOULDBLOCK = 11
@@ -49,6 +54,18 @@ drain_buf = ffi.new "uint8_t[64]"
 -- comme `response_nft_ack_timeout` et 150 ms d'attente par lot (cf.
 -- docs/agents/perf.md §7.2).
 last_acked_seq = 0
+
+-- ── Tampon d'écriture côté producteur ───────────────────────────────
+-- Les lignes d'un même lot sont accumulées puis écrites en un seul write() par
+-- tranche ≤ PIPE_BUF_ATOMIC (4096 o) : une réponse DNS à N enregistrements ne
+-- coûte plus N appels système mais un seul (cf. docs/agents/perf.md §16.5,
+-- piste 4). Le tampon est vidé (flush) par get_last_seq, wait_ack et
+-- send_barrier — et par un flush explicite de fin de paquet dans worker_sip
+-- (insertions fire-and-forget). Attendre l'ACK d'une ligne encore tamponnée
+-- serait un interblocage : le flush précède toujours l'attente.
+pending_lines = {}   -- lignes IPC en attente, dans l'ordre du lot
+pending_seqs  = {}   -- seq de chaque ligne (parallèle à pending_lines)
+pending_bytes = 0    -- octets déjà accumulés dans pending_lines
 
 --- Met à jour last_acked_seq avec les enregistrements complets d'un bloc lu.
 -- worker_nft écrit chaque ACK en un seul write de ACK_SIZE octets (atomique) :
@@ -105,12 +122,12 @@ set_ack_rfd = (rfd, idx) ->
   ack_rfd    = rfd
   worker_idx = idx
 
-write_line = (line) ->
+write_data = (data) ->
   return false unless pipe_wfd
-  return false if #line > PIPE_BUF_SAFE
+  len = #data
   for _ = 1, IPC_WRITE_RETRY_COUNT
-    n = libc.write pipe_wfd, line, #line
-    return true if n == #line
+    n = libc.write pipe_wfd, data, len
+    return true if n == len
     errno_p = libc.__errno_location!
     errno = if errno_p then errno_p[0] else 0
     if errno != EAGAIN and errno != EWOULDBLOCK
@@ -119,6 +136,44 @@ write_line = (line) ->
     sleep_ms 10
   log_warn -> { action: "nft_queue_write_exhausted", fd: pipe_wfd }
   false
+
+write_line = (line) ->
+  return false unless pipe_wfd
+  return false if #line > PIPE_BUF_SAFE
+  write_data line
+
+--- Écrit le tampon du lot en tranches atomiques (≤ PIPE_BUF_ATOMIC octets).
+-- Un lot de N lignes = un seul write() tant que sa taille tient dans PIPE_BUF ;
+-- au-delà, une tranche par 4096 octets (jamais plus), pour que l'écriture reste
+-- atomique vis-à-vis des autres producteurs du même pipe.
+-- Sur échec d'une tranche, les lignes non écrites restantes sont abandonnées
+-- (log `nft_queue_flush_failed`) et le seq rendu par get_last_seq reste celui
+-- de la dernière ligne RÉELLEMENT écrite : wait_ack n'attend jamais l'ACK
+-- d'une ligne absente du pipe.
+-- @treturn boolean true si toutes les lignes du tampon ont été écrites
+flush = ->
+  n = #pending_lines
+  return true if n == 0
+  ok = true
+  i = 1
+  while i <= n
+    chunk = {}
+    bytes = 0
+    j = i
+    while j <= n and (bytes == 0 or bytes + #pending_lines[j] <= PIPE_BUF_ATOMIC)
+      bytes += #pending_lines[j]
+      chunk[#chunk + 1] = pending_lines[j]
+      j += 1
+    unless write_data table.concat chunk
+      ok = false
+      log_warn -> { action: "nft_queue_flush_failed", dropped: n - i + 1 }
+      break
+    last_enqueued_seq = pending_seqs[j - 1]
+    i = j
+  pending_lines = {}
+  pending_seqs  = {}
+  pending_bytes = 0
+  ok
 
 -- Vide entièrement le tube ACK : enregistrements complets comme fragments
 -- partiels éventuels (le format est de taille fixe, tout octet restant serait
@@ -155,14 +210,27 @@ build_line = (kind, key, ip, rule_id, timeout, corr, item_seq, widx) ->
     to_hex corr or ""
   }, "|") .. "\n"
 
+--- Enfile une ligne d'insertion nft dans le tampon du lot.
+-- La ligne n'est PAS écrite ici : elle rejoint le tampon, vidé en une écriture
+-- (ou par tranches ≤ PIPE_BUF) par flush, appelé par get_last_seq / wait_ack /
+-- send_barrier. Le retour indique donc « ligne acceptée dans le tampon », et
+-- non « écrite » : un échec d'écriture est constaté au flush (log
+-- `nft_queue_write_failed` / `nft_queue_flush_failed`) et le seq restera celui
+-- de la dernière ligne effectivement écrite.
+-- @treturn boolean false si aucun tube, tuple incomplet ou ligne trop longue
 enqueue = (kind, key, ip, rule_id, timeout, corr) ->
+  return false unless pipe_wfd
   return false unless kind and key and ip
   timeout = sanitize_timeout timeout
   seq += 1
   line = build_line kind, key, ip, rule_id, timeout, corr, seq, worker_idx
-  ok = write_line line
-  last_enqueued_seq = seq if ok
-  ok
+  return false if #line > PIPE_BUF_SAFE
+  -- Tranche pleine : vider avant d'ajouter (chaque write reste ≤ PIPE_BUF).
+  flush! if pending_bytes + #line > PIPE_BUF_ATOMIC
+  pending_lines[#pending_lines + 1] = line
+  pending_seqs[#pending_seqs + 1] = seq
+  pending_bytes += #line
+  true
 
 add_ip4  = (client_ip, ip_str, rule_id, timeout, corr) -> enqueue "ip4",  client_ip, ip_str, rule_id, timeout, corr
 add_ip6  = (client_ip, ip_str, rule_id, timeout, corr) -> enqueue "ip6",  client_ip, ip_str, rule_id, timeout, corr
@@ -173,6 +241,9 @@ add_sip6 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip6", ip_str
 
 send_barrier = (corr) ->
   return false unless pipe_wfd
+  -- Les lignes du lot doivent partir AVANT la barrière (et son ACK) : sinon
+  -- worker_nft pourrait acquitter la barrière sans les avoir reçues.
+  flush!
   drain_ack!
   seq += 1
   line = build_line "barrier", "_", "_", "", "0s", corr, seq, worker_idx
@@ -180,7 +251,12 @@ send_barrier = (corr) ->
   last_enqueued_seq = seq if ok
   ok
 
+--- Vide le tampon et rend le plus grand seq effectivement écrit.
+-- Le flush est ce qui rend le seq exact : si une tranche a échoué, le seq rendu
+-- est celui de la dernière ligne écrite, jamais celui d'une ligne abandonnée.
+-- @treturn number|nil Seq de la dernière ligne écrite depuis le dernier appel
 get_last_seq = ->
+  flush!
   s = last_enqueued_seq
   last_enqueued_seq = nil
   s
@@ -206,6 +282,9 @@ get_worker_idx = ->
 -- pipe et sans toucher à l'ordre nft-avant-verdict.
 wait_ack = (pending_seq, corr, on_wait) ->
   return false unless ack_rfd
+  -- Toute insertion du lot doit être dans le pipe avant l'attente : un ACK ne
+  -- peut pas couvrir une ligne encore tamponnée.
+  flush!
   target = pending_seq or 0
   -- ACK déjà observé sur ce processus (lu par un wait_ack précédent ou purgé
   -- par drain_ack!) : ne pas re-attendre 150 ms un enregistrement qui ne sera
@@ -324,4 +403,4 @@ cmd_for = (kind, key, ip, rule_id, timeout) ->
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :flush, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state }

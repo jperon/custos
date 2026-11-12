@@ -92,6 +92,7 @@ describe("nft_queue", function()
     q.set_wfd(wfd)
     local ok = q.add_ip4("192.168.1.42", "10.0.0.1", "dns_workhours", "240s", "corr-123")
     assert.is_true(ok)
+    assert.equals(1, q.get_last_seq())
     local line = read_pipe(rfd)
     local fields = split_fields(line)
     assert.equals("v1", fields[1])
@@ -319,6 +320,8 @@ return describe("nft_queue écriture IPC et variantes (branches d'erreur)", func
   local errno_box = nil
   local writes = nil
   local sleeps = nil
+  local chunks = nil
+  local sizes = nil
   local fresh_with_libc
   fresh_with_libc = function(write_fn, sleep_fn)
     errno_box = ffi.new("int[1]")
@@ -358,6 +361,8 @@ return describe("nft_queue écriture IPC et variantes (branches d'erreur)", func
     writes = 0
     sleeps = 0
     errno_box = ffi.new("int[1]")
+    chunks = { }
+    sizes = { }
   end)
   it("sans tube de sortie, l'enqueue retourne false", function()
     local q = fresh_nft_queue()
@@ -373,6 +378,7 @@ return describe("nft_queue écriture IPC et variantes (branches d'erreur)", func
     q.set_wfd(1)
     local ok = q.add_ip4("10.0.0.1", "1.2.3.4", string.rep("r", 600), "2m")
     assert.is_false(ok)
+    assert.is_nil(q.get_last_seq())
     return assert.equals(0, wrote)
   end)
   it("une écriture EAGAIN réessaie après sleep puis réussit", function()
@@ -386,6 +392,7 @@ return describe("nft_queue écriture IPC et variantes (branches d'erreur)", func
     end), nil)
     q.set_wfd(1)
     assert.is_true(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    assert.equals(1, q.get_last_seq())
     assert.equals(2, writes)
     return assert.equals(1, sleeps)
   end)
@@ -396,18 +403,20 @@ return describe("nft_queue écriture IPC et variantes (branches d'erreur)", func
       return -1
     end), nil)
     q.set_wfd(1)
-    assert.is_false(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    assert.is_true(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    assert.is_nil(q.get_last_seq())
     assert.equals(1, writes)
     return assert.equals(0, sleeps)
   end)
-  it("EAGAIN sur toutes les tentatives épuise les reprises et retourne false", function()
+  it("EAGAIN sur toutes les tentatives : aucune écriture, seq nil", function()
     local q = fresh_with_libc((function(fd, line, len)
       writes = writes + 1
       errno_box[0] = 11
       return -1
     end), nil)
     q.set_wfd(1)
-    assert.is_false(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    assert.is_true(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    assert.is_nil(q.get_last_seq())
     assert.equals(3, writes)
     return assert.equals(3, sleeps)
   end)
@@ -467,6 +476,107 @@ return describe("nft_queue écriture IPC et variantes (branches d'erreur)", func
     q.drain_ack()
     assert.equals(0, q.get_last_acked())
     return close_pipe(p)
+  end)
+  it("un lot de N éléments produit un seul write", function()
+    local q = fresh_with_libc((function(fd, data, len)
+      writes = writes + 1
+      chunks[#chunks + 1] = ffi.string(data, len)
+      sizes[#sizes + 1] = len
+      return len
+    end), nil)
+    q.set_wfd(1)
+    assert.is_true(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    assert.is_true(q.add_ip4("10.0.0.2", "1.2.3.5", "r_test", "2m"))
+    assert.is_true(q.add_ip4("10.0.0.3", "1.2.3.6", "r_test", "2m"))
+    assert.equals(0, writes)
+    assert.equals(3, q.get_last_seq())
+    assert.equals(1, writes)
+    local _, n_lines = chunks[1]:gsub("\n", "")
+    assert.equals(3, n_lines)
+    return assert.truthy(chunks[1]:find("|3|-1|\n", 1, true))
+  end)
+  it("découpe les écritures à PIPE_BUF (4096 octets) sans jamais le dépasser", function()
+    local q = fresh_with_libc((function(fd, data, len)
+      writes = writes + 1
+      chunks[#chunks + 1] = ffi.string(data, len)
+      sizes[#sizes + 1] = len
+      return len
+    end), nil)
+    q.set_wfd(1)
+    local rule = string.rep("r", 40)
+    for i = 1, 40 do
+      assert.is_true(q.add_ip4("10.0.0." .. tostring(i), "1.2.3.4", rule, "2m"))
+    end
+    assert.equals(40, q.get_last_seq())
+    assert.is_true(writes >= 2)
+    for _index_0 = 1, #sizes do
+      local s = sizes[_index_0]
+      assert.is_true(s <= 4096)
+    end
+    local all = table.concat(chunks)
+    local _, n_lines = all:gsub("\n", "")
+    return assert.equals(40, n_lines)
+  end)
+  it("flush le tampon avant wait_ack (aucun ACK attendu pour une ligne non écrite)", function()
+    local ack_pipe = make_pipe()
+    local ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+    local ack_v = ffi.new("uint64_t[1]")
+    local q = fresh_with_libc((function(fd, data, len)
+      writes = writes + 1
+      ack_v[0] = 2
+      ffi.C.write(ack_wfd, ack_v, ACK_SIZE)
+      return len
+    end), nil)
+    q.set_ack_rfd(ack_rfd, 0)
+    q.set_wfd(1)
+    q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m")
+    q.add_ip4("10.0.0.2", "1.2.3.5", "r_test", "2m")
+    assert.is_true(q.wait_ack(2, "corr"))
+    assert.equals(1, writes)
+    return close_pipe(ack_pipe)
+  end)
+  it("échec d'écriture d'une tranche : get_last_seq ne rend que le seq écrit", function()
+    local q = fresh_with_libc((function(fd, data, len)
+      writes = writes + 1
+      if writes >= 2 then
+        errno_box[0] = 5
+        return -1
+      end
+      return len
+    end), nil)
+    q.set_wfd(1)
+    local rule = string.rep("r", 40)
+    for i = 1, 40 do
+      q.add_ip4("10.0.0." .. tostring(i), "1.2.3.4", rule, "2m")
+    end
+    local seq = q.get_last_seq()
+    assert.equals(2, writes)
+    assert.is_not_nil(seq)
+    return assert.is_true(seq > 0 and seq < 40)
+  end)
+  it("aucune ligne écrite du lot : get_last_seq est nil", function()
+    local q = fresh_with_libc((function(fd, data, len)
+      writes = writes + 1
+      errno_box[0] = 5
+      return -1
+    end), nil)
+    q.set_wfd(1)
+    assert.is_true(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    assert.is_nil(q.get_last_seq())
+    return assert.equals(1, writes)
+  end)
+  it("send_barrier flush le tampon avant d'écrire la barrière", function()
+    local q = fresh_with_libc((function(fd, data, len)
+      writes = writes + 1
+      chunks[#chunks + 1] = ffi.string(data, len)
+      return len
+    end), nil)
+    q.set_wfd(1)
+    q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m")
+    assert.is_true(q.send_barrier("corr-b"))
+    assert.equals(2, writes)
+    assert.truthy(chunks[2]:find("|barrier|", 1, true))
+    return assert.equals(2, q.get_last_seq())
   end)
   return it("tube ACK fermé : wait_ack échoue sans boucler sur POLLHUP", function()
     local q = fresh_nft_queue()
