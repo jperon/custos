@@ -528,8 +528,9 @@ comportement à 1 worker.
 `queue num A-B` (plage) fait répartir par `nfqueue_hash` — et non « premier
 listener disponible » : `nft_queue_eval` appelle `nfqueue_hash(skb, queue,
 queues_total, pf, jhash_initval)` dès que `queues_total > 1` et que le flag
-`fanout` est absent (`net/netfilter/nft_queue.c:36-46`). Le hachage
-(`include/net/netfilter/nf_queue.h:49-125`) est :
+`fanout` est absent (`net/netfilter/nft_queue.c:36-46` ; sources Linux 6.6.86,
+6.6.87 et 6.6.108 du dépôt OpenWrt local, identiques sur ces lignes). Le
+hachage (`include/net/netfilter/nf_queue.h:49-125`) est :
 
 - `hash_v4` : `jhash_3words(min(saddr,daddr), max(saddr,daddr), proto)` —
   **symétrique** (les deux sens d'un flux donnent le même indice) et **sans les
