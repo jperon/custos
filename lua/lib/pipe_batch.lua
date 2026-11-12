@@ -60,7 +60,24 @@ new_records = function(fd, rec_size, capacity)
     if not (fd) then
       return false
     end
-    if not (type(msg) == "string" and #msg == rec_size) then
+    if not (type(msg) == "string") then
+      log_warn(function()
+        return {
+          action = "pipe_batch_record_size_invalid",
+          bytes = -1,
+          max = rec_size
+        }
+      end)
+      return false
+    end
+    if not (#msg == rec_size) then
+      log_warn(function()
+        return {
+          action = "pipe_batch_record_size_invalid",
+          bytes = #msg,
+          max = rec_size
+        }
+      end)
       return false
     end
     if nbytes + rec_size > cap then
@@ -112,6 +129,13 @@ new_lines = function(fd, capacity)
       return false
     end
     if #line > capacity then
+      log_warn(function()
+        return {
+          action = "pipe_batch_line_too_long",
+          bytes = #line,
+          max = capacity
+        }
+      end)
       return false
     end
     if nbytes + #line > capacity then

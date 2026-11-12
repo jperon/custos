@@ -77,6 +77,11 @@ describe "lib.pipe_batch", ->
       assert.is_false b.add string.rep("x", 23)
       assert.equals 0, b.pending!
       assert.equals 0, #writes
+      -- Rejet journalisé (une entrée par taille invalide, champs classés).
+      assert.equals 2, #logged
+      assert.equals "pipe_batch_record_size_invalid", logged[1].action
+      assert.equals 5, logged[1].bytes
+      assert.equals 22, logged[1].max
 
     it "vide la tranche avant de dépasser la capacité (jamais > PIPE_BUF)", ->
       b = batch.new_records 7, 22, 44
@@ -160,6 +165,10 @@ describe "lib.pipe_batch", ->
       assert.is_false b.add string.rep("x", 11)
       assert.equals 0, b.pending!
       assert.equals 0, #writes
+      assert.equals 1, #logged
+      assert.equals "pipe_batch_line_too_long", logged[1].action
+      assert.equals 11, logged[1].bytes
+      assert.equals 10, logged[1].max
 
     it "sans descripteur : add est refusé et flush est un no-op réussi", ->
       b = batch.new_lines nil

@@ -79,7 +79,12 @@ new_records = (fd, rec_size, capacity=PIPE_BUF_ATOMIC) ->
   -- @treturn boolean true si le message a été pris dans le tampon
   add = (msg) ->
     return false unless fd
-    return false unless type(msg) == "string" and #msg == rec_size
+    unless type(msg) == "string"
+      log_warn -> { action: "pipe_batch_record_size_invalid", bytes: -1, max: rec_size }
+      return false
+    unless #msg == rec_size
+      log_warn -> { action: "pipe_batch_record_size_invalid", bytes: #msg, max: rec_size }
+      return false
     if nbytes + rec_size > cap
       return false unless flush!
     ffi.copy buf + nbytes, msg, rec_size
@@ -116,7 +121,9 @@ new_lines = (fd, capacity=PIPE_BUF_ATOMIC) ->
   add = (line) ->
     return false unless fd
     return false unless type(line) == "string" and #line > 0
-    return false if #line > capacity
+    if #line > capacity
+      log_warn -> { action: "pipe_batch_line_too_long", bytes: #line, max: capacity }
+      return false
     if nbytes + #line > capacity
       return false unless flush!
     parts[#parts + 1] = line
