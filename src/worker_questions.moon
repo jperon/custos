@@ -44,11 +44,9 @@ so_cfg = config.second_opinion or {}
 -- fd d'écriture du pipe IPC question→response, injecté par main.moon avant fork()
 pipe_wfd = nil
 
--- fd d'écriture du pipe d'apprentissage question→mac_learner.
-mac_learn_wfd = nil
-
--- Tampons d'écriture groupée (lib.pipe_batch), créés dans run() depuis les fds :
--- lignes TSV pour events, messages de 22 octets pour learn.
+-- Tampons d'écriture groupée (lib.pipe_batch), créés dans run() depuis les fds
+-- des pipes events et learn : lignes TSV pour events, messages de 22 octets
+-- pour learn. nil (ou fd absent) = flux désactivé.
 events_batch = nil
 learn_batch  = nil
 
@@ -62,8 +60,6 @@ get_benchmark_ms = ->
   return nil unless runtime_cfg.benchmark
   libc.clock_gettime CLOCK_MONOTONIC, _benchmark_ts
   tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
-
-events_wfd = nil  -- fd d'écriture du pipe vers worker_events (nil si désactivé)
 
 -- ── Délestage précoce sous saturation ─────────────────────────────
 -- Seuil (ms) lu depuis nfqueue.max_age_ms dans run() ; nil = désactivé.
@@ -175,7 +171,7 @@ list_from_condition_reason = (condition_reason) ->
   condition_reason\match "^Domain matched in list '([^']+)'$"
 
 --- Envoie un événement de décision DNS vers worker_events (best-effort).
--- Écrit une ligne TSV dans le tampon du pipe events_wfd.
+-- Écrit une ligne TSV dans le tampon du pipe events.
 -- Format : ts<TAB>decision<TAB>qname<TAB>mac_src<TAB>src_ip<TAB>dst_ip<TAB>vlan
 --          <TAB>user<TAB>af<TAB>reason<TAB>rule<LF>
 -- Pas de qtype. La ligne est tamponnée puis écrite avec les autres du lot en un
@@ -202,7 +198,7 @@ write_event = (fields, allowed) ->
   }, "\t") .. "\n"
   events_batch.add line
 
---- Vide les tampons events et learn (fin de lot NFQUEUE, on_idle, arrêt).
+--- Vide les tampons events et learn (fin de lot NFQUEUE et sortie du worker).
 -- Idempotent ; un échec d'écriture est journalisé par lib.pipe_batch et les
 -- messages de la tranche sont abandonnés (comportement historique d'EAGAIN).
 -- @treturn nil
@@ -551,8 +547,6 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   -- faible débit.
   metrics.write_now! if metrics_on
   pipe_wfd      = wfd
-  mac_learn_wfd = learn_wfd
-  events_wfd    = ev_wfd
   -- Tampons d'écriture groupée des pipes events/learn : un write() par lot au
   -- lieu d'un par paquet (cf. docs/agents/perf.md §19). Créés après les fds :
   -- un fd absent donne un tampon inerte (add/flush sans effet).

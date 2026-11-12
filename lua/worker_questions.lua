@@ -67,7 +67,6 @@ do
 end
 local so_cfg = config.second_opinion or { }
 local pipe_wfd = nil
-local mac_learn_wfd = nil
 local events_batch = nil
 local learn_batch = nil
 local _benchmark_ts = ffi.new("timespec_t[1]")
@@ -80,7 +79,6 @@ get_benchmark_ms = function()
   libc.clock_gettime(CLOCK_MONOTONIC, _benchmark_ts)
   return tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
 end
-local events_wfd = nil
 local shed_max_age_ms = nil
 local shed_total = 0
 local shed_ts_logged = false
@@ -560,8 +558,6 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
     metrics.write_now()
   end
   pipe_wfd = wfd
-  mac_learn_wfd = learn_wfd
-  events_wfd = ev_wfd
   events_batch = new_lines(ev_wfd)
   learn_batch = new_records(learn_wfd, LEARN_MSG_SIZE)
   local age_cfg = tonumber((config.nfqueue or { }).max_age_ms)
