@@ -242,6 +242,62 @@ describe "worker_events cœur", ->
       assert.is_truthy joined\find "ok.com", 1, true
       assert.is_truthy joined\find "ads.com", 1, true
 
+    it "traite un lot de lignes réparti sur plusieurs lectures (ligne coupée)", ->
+      mkdir_tmp!
+      poll_calls = 0
+      read_calls = 0
+      -- 40 lignes (une tranche d'écriture de 4096 o côté producteur), la 20e
+      -- coupée en deux lectures consécutives : le tampon résiduel doit être
+      -- conservé, pas jeté.
+      lines = {}
+      for i = 1, 40
+        lines[#lines + 1] = "#{100 + i}\tallow\tq#{i}.example\tmac#{i}\t10.0.0.#{i}" ..
+          "\t8.8.8.8\t0\t-\tipv4\t-\tr1\n"
+      chunk = table.concat lines
+      cut = chunk\find("\n", 1, true) + 1
+      for _ = 2, 19
+        cut = chunk\find("\n", cut, true) + 1
+      cut += 10   -- au milieu de la 20e ligne
+      poll_fn = (pfds, nfds, ms) ->
+        poll_calls += 1
+        if poll_calls <= 2
+          pfds[0].revents = 1
+          return 1
+        if poll_calls == 3
+          pfds[0].revents = 0
+          return 0
+        error "stop-batch"
+      read_fn = (fd, buf, n) ->
+        read_calls += 1
+        if read_calls == 1
+          part = chunk\sub 1, cut - 1
+          ffi.copy buf, part, #part
+          return #part
+        if read_calls == 2
+          part = chunk\sub cut
+          ffi.copy buf, part, #part
+          return #part
+        0
+      { :fake, :writes } = make_fake poll_fn, read_fn
+      old = package.loaded["ffi_defs"]
+      real_date = os.date
+      date_calls = 0
+      os.date = (fmt, t) ->
+        date_calls += 1
+        if date_calls <= 3 then "2024-01-01-10" else "2024-01-01-11"
+      package.loaded["ffi_defs"] = { :ffi, libc: fake }
+      package.loaded["worker_events"] = nil
+      w2 = require "worker_events"
+      ok, err = pcall -> w2.run 99, TMP, 24, 0
+      os.date = real_date
+      package.loaded["ffi_defs"] = old
+      assert.is_false ok
+      assert.is_truthy (tostring(err)\match "stop%-batch"), tostring err
+      joined = table.concat writes
+      for i = 1, 40
+        assert.is_truthy joined\find("q#{i}.example", 1, true), "ligne #{i} absente"
+      assert.is_truthy joined\find "q40.example\tmac40\t10.0.0.40\t8.8.8.8\t0\t-\tipv4\t-\tr1\t1\t", 1, true
+
     it "EOF sur le pipe → warn et boucle maintenue", ->
       mkdir_tmp!
       poll_calls = 0

@@ -392,19 +392,21 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
       elseif #chunk > 0 then
         line_buf = line_buf .. chunk
         local verdict_touched = false
+        local pos = 1
         while true do
-          local nl = line_buf:find("\n", 1, true)
+          local nl = line_buf:find("\n", pos, true)
           if not (nl) then
             break
           end
-          local line = line_buf:sub(1, nl - 1)
-          line_buf = line_buf:sub(nl + 1)
+          local line = line_buf:sub(pos, nl - 1)
+          pos = nl + 1
           if #line > 0 then
             if process_line(line, agg, verdicts) then
               verdict_touched = true
             end
           end
         end
+        line_buf = line_buf:sub(pos)
         local now = os.time()
         if verdict_touched and now - last_verdicts_write >= VERDICTS_MIN_INTERVAL then
           flush_verdicts(verdicts, events_dir)

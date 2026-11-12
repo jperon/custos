@@ -391,14 +391,19 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       elseif #chunk > 0
         line_buf ..= chunk
         verdict_touched = false
-        -- Découpe line_buf sur les \n et traite chaque ligne complète
+        -- Découpe line_buf sur les \n et traite chaque ligne complète. Le
+        -- parcours avance par position (aucune sous-chaîne du reliquat par
+        -- ligne : un bloc de N lignes ne coûte plus O(N²) octets copiés) ;
+        -- le reliquat sans \n est recopié UNE fois en fin de bloc.
+        pos = 1
         while true
-          nl = line_buf\find "\n", 1, true
+          nl = line_buf\find "\n", pos, true
           break unless nl
-          line     = line_buf\sub 1, nl - 1
-          line_buf = line_buf\sub nl + 1
+          line = line_buf\sub pos, nl - 1
+          pos = nl + 1
           if #line > 0
             verdict_touched = true if process_line line, agg, verdicts
+        line_buf = line_buf\sub pos
         now = os.time!
         -- Flush throttlé du ring buffer des verdicts (≥ VERDICTS_MIN_INTERVAL)
         if verdict_touched and now - last_verdicts_write >= VERDICTS_MIN_INTERVAL

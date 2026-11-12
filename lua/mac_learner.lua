@@ -27,6 +27,7 @@ local auth_cfg = config.auth or { }
 local PROBE_TIMEOUT_MS = 200
 local NEGATIVE_TTL = 30
 local PURGE_INTERVAL = 60
+local LEARN_READ_MSGS = 128
 local bit = require("bit")
 local AF_UNIX = 1
 local SOCK_STREAM = 1
@@ -374,7 +375,9 @@ run = function(learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd)
     nfds = nfds + 1
   end
   local msg_size = mac_cfg.learn_msg_size or 22
-  local learn_buf = ffi.new("uint8_t[?]", msg_size)
+  local learn_cap = msg_size * LEARN_READ_MSGS
+  local learn_buf = ffi.new("uint8_t[?]", learn_cap)
+  local learn_have = 0
   local arp_buf = ffi.new("uint8_t[512]")
   local ipv6_buf = ffi.new("uint8_t[2048]")
   local vlan_buf = ffi.new("uint8_t[18]")
@@ -390,14 +393,20 @@ run = function(learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd)
     libc.poll(pfds, nfds, poll_ms)
     if bit.band(pfds[0].revents, POLLIN) ~= 0 then
       while true do
-        local n = libc.read(learn_rfd, learn_buf, msg_size)
+        local n = libc.read(learn_rfd, learn_buf + learn_have, learn_cap - learn_have)
         if n <= 0 then
           break
         end
-        if n < msg_size then
-          break
+        local total = learn_have + tonumber(n)
+        local off = 0
+        while off + msg_size <= total do
+          process_learn(ffi.string(learn_buf + off, msg_size))
+          off = off + msg_size
         end
-        process_learn(ffi.string(learn_buf, msg_size))
+        learn_have = total - off
+        if learn_have > 0 then
+          ffi.copy(learn_buf, learn_buf + off, learn_have)
+        end
       end
     end
     if bit.band(pfds[1].revents, POLLIN) ~= 0 then
