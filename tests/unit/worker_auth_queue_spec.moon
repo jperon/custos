@@ -20,6 +20,10 @@ describe "worker_auth_queue", ->
 
   wq = nil
   payload = ""
+  -- Tampon stable : libnfq garantit un pointeur valide jusqu'au verdict. Un
+  -- `ffi.new` local dans le stub serait collecté dès son retour et laisserait
+  -- le worker lire de la mémoire libérée (use-after-free).
+  payload_buf = ffi.new "uint8_t[?]", 65536
   l2 = nil
   write_calls = {}
   write_ret = nil
@@ -41,9 +45,8 @@ describe "worker_auth_queue", ->
       libnfq: {
         nfq_get_payload: (nfad, out) ->
           return 0 if #payload == 0
-          buf = ffi.new "uint8_t[?]", #payload
-          ffi.copy buf, payload
-          out[0] = ffi.cast "unsigned char*", buf
+          ffi.copy payload_buf, payload, #payload
+          out[0] = ffi.cast "unsigned char*", payload_buf
           #payload
       }
     }
