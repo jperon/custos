@@ -198,19 +198,20 @@ cache_clear = (cache) ->
 -- ── Exclusions du cache ────────────────────────────────────────────────────────
 -- Le cache ne s'applique (ni saut ni enregistrement) qu'aux sets alimentés
 -- EXCLUSIVEMENT par worker_nft. Deux familles d'exclusion :
--- 1. kinds auth_* (`auth_mac`/`auth_ip4`/`auth_ip6`, cf.
---    `nft_queue.add_auth_mac/add_auth_ip4/add_auth_ip6`) : leurs sets
+-- 1. kinds auth_* (`auth_mac`/`auth_ip4`/`auth_ip6`) : leurs sets
 --    `{rule_id}_auth_*` sont supprimés par le processus AUTH avec son propre
 --    contexte nft (`delete_rule_auth_sets`, `src/auth/nft_auth_sets.moon:29,31`,
 --    appelé par `src/auth/handlers.moon:248` au logout) : une insertion
---    récente ne dit rien de l'état actuel du set.
+--    récente ne dit rien de l'état actuel du set. Ces kinds n'ont plus de
+--    producteur (`add_auth_mac/ip4/ip6` supprimés de `nft_queue` : aucun
+--    appelant, et `validate_item` les refuse) ; la liste reste un garde-fou.
 -- 2. sets vidés/supprimés hors de worker_nft (greps `delete element` /
 --    `flush set` dans `src/`) : `authenticated_*`
 --    (`src/auth/nft_sessions.moon:40,53,85` : logout/bye/expiration) et
 --    `ip*_dest_whitelist` (`src/ip_whitelist.moon:31-32` : chaque SIGHUP).
 -- Aucun kind actuel n'atteint ces sets globaux (`get_set_name`,
--- `src/nft_queue.moon:259-277`) : la liste les protège si un chemin
--- d'écriture venait à être ajouté.
+-- `src/nft_queue.moon`) : la liste les protège si un chemin d'écriture venait
+-- à être ajouté.
 UNCACHEABLE_KINDS = {
   auth_mac: true
   auth_ip4: true

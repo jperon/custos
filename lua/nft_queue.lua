@@ -224,18 +224,6 @@ local add_sip6
 add_sip6 = function(ip_str, rule_id, timeout, corr)
   return enqueue("sip6", ip_str, ip_str, rule_id, timeout, corr)
 end
-local add_auth_mac
-add_auth_mac = function(mac, rule_id, timeout, corr)
-  return enqueue("auth_mac", mac, "_", rule_id, timeout, corr)
-end
-local add_auth_ip4
-add_auth_ip4 = function(ip, rule_id, timeout, corr)
-  return enqueue("auth_ip4", ip, "_", rule_id, timeout, corr)
-end
-local add_auth_ip6
-add_auth_ip6 = function(ip, rule_id, timeout, corr)
-  return enqueue("auth_ip6", ip, "_", rule_id, timeout, corr)
-end
 local send_barrier
 send_barrier = function(corr)
   if not (pipe_wfd) then
@@ -422,9 +410,6 @@ return {
   add_mac6 = add_mac6,
   add_sip4 = add_sip4,
   add_sip6 = add_sip6,
-  add_auth_mac = add_auth_mac,
-  add_auth_ip4 = add_auth_ip4,
-  add_auth_ip6 = add_auth_ip6,
   cmd_for = cmd_for,
   cmd_lines_for = cmd_lines_for,
   element_spec = element_spec,

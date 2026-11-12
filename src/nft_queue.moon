@@ -170,9 +170,6 @@ add_mac4 = (mac, ip_str, rule_id, timeout, corr)       -> enqueue "mac4", mac,  
 add_mac6 = (mac, ip_str, rule_id, timeout, corr)       -> enqueue "mac6", mac,       ip_str, rule_id, timeout, corr
 add_sip4 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip4", ip_str,    ip_str, rule_id, timeout, corr
 add_sip6 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip6", ip_str,    ip_str, rule_id, timeout, corr
-add_auth_mac = (mac, rule_id, timeout, corr)           -> enqueue "auth_mac", mac, "_", rule_id, timeout, corr
-add_auth_ip4 = (ip, rule_id, timeout, corr)            -> enqueue "auth_ip4", ip, "_", rule_id, timeout, corr
-add_auth_ip6 = (ip, rule_id, timeout, corr)            -> enqueue "auth_ip6", ip, "_", rule_id, timeout, corr
 
 send_barrier = (corr) ->
   return false unless pipe_wfd
@@ -327,4 +324,4 @@ cmd_for = (kind, key, ip, rule_id, timeout) ->
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :add_auth_mac, :add_auth_ip4, :add_auth_ip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state }
