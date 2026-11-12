@@ -61,14 +61,15 @@ c.-à-d. files NFQUEUE + socket netlink) : 6 ms p50 / 53 ms p99 à 200 q/s ;
 
 ### 3.1 Attente synchrone de l'ACK nft — **CONFIRMÉE (goulot principal)**
 
-Mécanisme (code) : pour chaque réponse dont les IP doivent entrer dans nft,
-`finalize_a` enfile ses insertions puis **attend l'ACK du worker `nft`**
-(`src/worker_responses.moon:674-676`, `measured_wait_ack` l. 295-301), budget
-150 ms et poll de 5 ms (`src/nft_queue.moon:11-12`, `wait_ack` l. 165-198).
-Le worker `nft` exécute **une transaction libnftables par flush**
-(`src/worker_nft.moon:102-114` → `src/nft.moon:31-38`), et le flush a lieu dès
-que son pipe est vidé (`src/worker_nft.moon:198-208`) : sous attente
-synchrone, chaque réponse produit donc **sa propre transaction**.
+Mécanisme (code, avant correctif) : pour chaque réponse dont les IP doivent
+entrer dans nft, `finalize_a` enfilait ses insertions puis **attendait l'ACK du
+worker `nft`** (ancien `finalize_a`, appel `measured_wait_ack` ; aujourd'hui
+remplacé par `settle` l. 444 / `flush_deferred` l. 423, cf. §7), budget 150 ms
+et poll de 5 ms (`src/nft_queue.moon:11-12`, `wait_ack` l. 165-198). Le worker
+`nft` exécute **une transaction libnftables par flush**
+(`src/worker_nft.moon:89-114`, `flush_batch` → `src/nft.moon:31-38`), et le
+flush a lieu dès que son pipe est vidé (`src/worker_nft.moon:198-208`) : sous
+attente synchrone, chaque réponse produisait donc **sa propre transaction**.
 
 Mesures :
 - 31 % du temps mural de `resp-q4` passé en `wait_ack` à 200 et 250 q/s,
@@ -200,40 +201,75 @@ profil) :
 Le plafond vient donc de la **sérialisation par réponse** entre `resp-q4` et
 `nft`, pas d'une saturation CPU globale (2,2 cœurs sur 4 occupés au pire).
 
-## 7. Correctif retenu
+## 7. Correctif retenu et implémenté
 
-**Regrouper les verdicts par lot NFQUEUE** : les paquets d'une même lecture
-netlink sont traités ensemble, toutes leurs insertions nft sont enfilées, puis
-**un seul `wait_ack`** couvre le lot avant que les verdicts soient posés. Cela
-supprime l'aller-retour par réponse (31 % du temps mural de `resp-q4`) et laisse
-le worker `nft` coalescer 16×N lignes par transaction au lieu d'une par réponse.
+**Regrouper les verdicts par lot NFQUEUE** (commit `fix(dns): acquitte les
+insertions nft une fois par lot NFQUEUE`) :
 
-Invariant de sécurité inchangé : aucun verdict `NF_ACCEPT` n'est posé avant que
-l'ACK du plus grand `seq` enfilé par le lot ne soit arrivé ; en cas de timeout,
-le comportement historique est conservé (verdicts posés, `nft_ack_timeout`
-logué). Détail : `src/nfq_loop.moon` (`on_batch_end`) et
-`src/worker_responses.moon` (`settle`/`flush_deferred`).
+- `src/nfq_loop.moon` : nouvelle option `on_batch_end`. **Un `read()` netlink ne
+  rend qu'un paquet** (un skb par paquet côté noyau) : après la lecture
+  bloquante, la boucle draine donc le socket sans bloquer (`poll` timeout 0 +
+  `read` jusqu'à EAGAIN, borné à `MAX_BATCH_PKTS` = 64) et n'appelle
+  `on_batch_end` qu'une fois par lot, plus une dernière fois à la sortie ;
+- `src/worker_responses.moon` : `settle` mémorise le verdict au lieu de le poser
+  (et supprime l'attente par réponse) ; `flush_deferred` pose tous les verdicts
+  du lot après **un seul** `wait_ack` portant le plus grand `seq` enfilé depuis
+  le dernier prélèvement (`nft_queue.get_last_seq`) ; `sweep_parked` pose le
+  verdict immédiatement (hors lot) ; `run` arme `on_batch_end` dans tous les cas.
 
-Gain attendu, sur la base des chiffres §2 : la composante « attente d'ACK »
-(31 % du temps de `resp-q4`, 32 % à 500 q/s) disparaît du chemin critique ;
-le plafond mesuré de 250 q/s doit passer à la limite CPU du worker réponses,
-soit ~450–550 q/s pour `mixed` (≈1,7 paquet par requête, ~1,4 ms de CPU par
-paquet mesuré). Le plafond résiduel sera `dns-q1` (74 % d'un vCPU à 500 q/s) :
-à surveiller à la re-mesure.
+Taille de lot obtenue : elle est **auto-adaptative** — le socket accumule des
+paquets pendant l'attente d'ACK du lot précédent et pendant son traitement, donc
+plus la charge est forte, plus le lot est gros (plafond 64). À faible charge le
+lot vaut 1 paquet : aucune latence ajoutée.
+
+Invariant de sécurité inchangé : aucun verdict n'est posé avant que l'ACK du
+plus grand `seq` du lot ne soit arrivé ; en cas de timeout, comportement
+historique (verdicts posés, `nft_ack_timeout` logué) : le client peut au pire
+résoudre une IP pas encore autorisée, jamais l'inverse.
+
+Gain attendu, sur la base des chiffres §2 : l'attente d'ACK (31 % du temps
+mural de `resp-q4` à 200-500 q/s) est **divisée par la taille de lot**, qui croît
+avec la charge (§ ci-dessus) : le gain porte donc d'abord sur les paliers qui
+perdent aujourd'hui (300-500 q/s), où le socket est plein en permanence. Le
+worker `nft` passe aussi d'une transaction par réponse à une transaction par lot
+(≤ 64 insertions, `src/worker_nft.moon:8`). Le plafond devient la limite CPU du
+worker réponses, soit ~350–450 q/s pour `mixed` (≈1,7 paquet par requête,
+1,3–1,6 ms de CPU par paquet mesuré, §8) — au-delà, `dns-q1` (74 % d'un vCPU à
+500 q/s) prendrait le relais. Le gain exact dépend de la part de ce coût CPU par
+paquet qui n'est que de la dégradation de cache due aux commutations forcées par
+l'attente : à vérifier par la re-mesure.
+
+Protocole de re-mesure (après déploiement) :
+1. vérifier le repos (profondeur file 4 = 0, `user_dropped` figé) et l'absence de
+   générateur, comme `tmp/bench2/runphase3.sh` ;
+2. paliers de 30 s à 200, 300, 400, 500 q/s `mixed`, un seul à la fois ;
+3. contrôler dans `logread` : `ack_wait_us` (doit devenir rare et groupé),
+   `nft_ack_timeout` (0), `upstream_retries`, et le nombre de lignes
+   `response_dns_benchmark` (doit égaler le nombre de réponses reçues) ;
+4. contrôler les compteurs nft `queue to 0-1` / `queue to 4` (le surplus de
+   +70 % du second avis doit rester, c'est le comportement configuré) et
+   `user_dropped` (doit rester figé) ;
+5. comparer `resp-q4`/`nft`/`dns-q1` en CPU par paquet et le RTT client : le
+   gain attendu est d'abord une chute du RTT (22,6 ms p50 → ~6-8 ms à 200 q/s)
+   et la disparition des pertes à 300 q/s.
 
 ## 8. Ce qui n'a pas pu être prouvé
 
-- **Le coût CPU fixe par paquet de `resp-q4` (~1,4 ms)** : mesuré (utime), mais
-  non décomposé ; `run_on_response` (callbacks de filtre), `parse_dns_packet`,
-  la construction de la ligne de journal et `user_for_mac` n'ont pas été
-  profilés séparément (pas de `perf`/`strace` sur la cible, pas de déploiement
-  possible depuis cette tâche).
+- **Le coût CPU fixe par paquet de `resp-q4` (~1,3–1,6 ms sur la cible)** :
+  mesuré (utime via `/proc/<pid>/stat`), mais non décomposé. Les primitives
+  mesurables hors cible n'en expliquent qu'une fraction : `parse_dns_packet`
+  = 11,5 µs/appel sur x86 (réponse à 8 A) et une ligne de journal benchmark
+  27 champs = 9,6 µs/ligne sur x86, soit quelques dizaines de µs sur l'A55.
+  Restent `run_on_response` (callbacks de filtre, dépendants des règles
+  déployées), `patch_modified_dns`/`replace_dns_payload`, `drain_pipe` et
+  `dns_classify.classify` sur les paquets de validateurs, non profilés (pas de
+  `perf`/`strace` sur la cible, pas de déploiement possible ici).
 - **`chain_strip` / `mac_learner_ipc.strip_target`** : pour un nom non caché,
   `maybe_dynamic_strip` ouvre un socket AF_UNIX, connecte et interroge
   `mac_learner` **par réponse** (`src/mac_learner_ipc.moon:52-71,157-163`), dans
   le chemin chaud, après `run_on_response` (donc hors des champs benchmark).
   Non mesuré : le profil `mixed` n'utilise que 6 noms (cache 2 s,
-  `src/worker_responses.moon:88-121`), et je n'ai pas pu établir si une règle
+  `src/worker_responses.moon:91,112-126`), et je n'ai pas pu établir si une règle
   `dns_strip.follow_cname` est active sur la cible sans lire `/etc/custos`.
   À mesurer en priorité avec un profil à noms uniques.
 - **Le résolveur 10.35.1.1 hors filtre** : inaccessible autrement qu'à travers
