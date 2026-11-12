@@ -35,7 +35,29 @@ local sleep_req = ffi.new("timespec_t[1]")
 local poll_fds = ffi.new("struct pollfd[1]")
 local ack_rec = ffi.new("uint8_t[?]", ACK_SIZE)
 local ack_val = ffi.new("uint64_t[1]")
+local ack_tmp = ffi.new("uint64_t[1]")
 local drain_buf = ffi.new("uint8_t[64]")
+local last_acked_seq = 0
+local _record_acks
+_record_acks = function(buf, n)
+  if not (n and n >= ACK_SIZE and (n % ACK_SIZE) == 0) then
+    return 
+  end
+  local i = 0
+  while i + ACK_SIZE <= n do
+    ffi.copy(ack_tmp, buf + i, ACK_SIZE)
+    local v = tonumber(ack_tmp[0])
+    if v > last_acked_seq then
+      last_acked_seq = v
+    end
+    i = i + ACK_SIZE
+  end
+  return nil
+end
+local get_last_acked
+get_last_acked = function()
+  return last_acked_seq
+end
 local sanitize_timeout
 sanitize_timeout = function(timeout)
   local t
@@ -141,7 +163,14 @@ drain_ack = function()
     if not (n and n > 0) then
       break
     end
+    _record_acks(drain_buf, n)
   end
+end
+local reset_ack_state
+reset_ack_state = function()
+  drain_ack()
+  last_acked_seq = 0
+  return nil
 end
 local build_line
 build_line = function(kind, key, ip, rule_id, timeout, corr, item_seq, widx)
@@ -237,6 +266,9 @@ wait_ack = function(pending_seq, corr, on_wait)
     return false
   end
   local target = pending_seq or 0
+  if target > 0 and last_acked_seq >= target then
+    return true
+  end
   local deadline = monotonic_ms() + ACK_TIMEOUT_MS
   poll_fds[0].fd = ack_rfd
   poll_fds[0].events = POLLIN
@@ -254,6 +286,9 @@ wait_ack = function(pending_seq, corr, on_wait)
         have = have + n
         if have >= ACK_SIZE then
           local acked = ack_rec_seq()
+          if acked > last_acked_seq then
+            last_acked_seq = acked
+          end
           have = 0
           if acked >= target then
             return true
@@ -385,5 +420,7 @@ return {
   sanitize_timeout = sanitize_timeout,
   get_set_name = get_set_name,
   sanitize_rule_id = sanitize_rule_id,
-  ACK_SIZE = ACK_SIZE
+  ACK_SIZE = ACK_SIZE,
+  get_last_acked = get_last_acked,
+  reset_ack_state = reset_ack_state
 }

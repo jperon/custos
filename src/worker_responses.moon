@@ -631,7 +631,9 @@ finalize_a = (ctx, override) ->
   }
 
   inject_answers = (answers) ->
-    drain_ack!
+    -- En cours de lot, purger les ACK est inutile (le flush du lot les lit) et
+    -- peut jeter l'ACK de la dernière insertion du lot : cf. nft_queue.last_acked_seq.
+    drain_ack! unless ctx.defer
     inject answers, inject_opts
 
   -- Helper override : strip HTTPS/SVCB, repatche le paquet et pose le verdict
@@ -719,7 +721,8 @@ finalize_a = (ctx, override) ->
       fam = a.rtype == QTYPE.AAAA and "ipv6" or "ipv4"
       answers[#answers + 1] = { family: fam, addr: a.rdata_str, ttl: a.ttl }
 
-  drain_ack! if inject_nft and not dnsonly
+  -- Même raison que dans inject_answers : pas de purge pendant un lot NFQUEUE.
+  drain_ack! if inject_nft and not dnsonly and not ctx.defer
 
   inject_opts.inject_nft = inject_nft
   inj = inject answers, inject_opts
@@ -1198,6 +1201,9 @@ run = (queue_num, rfd, rules_metadata) ->
     nft_q.set_wfd rfd.nft_wfd if rfd.nft_wfd
     -- Configure le canal ACK bidirectionnel si le superviseur en a alloué un.
     nft_q.set_ack_rfd rfd.ack_rfd, rfd.worker_idx if rfd.ack_rfd and rfd.worker_idx != nil
+    -- Purge les ACK résiduels d'un producteur précédent et remet le compteur
+    -- d'acquittement à zéro (sinon un vieux seq élevé satisferait une attente).
+    nft_q.reset_ack_state! if rfd.ack_rfd and rfd.worker_idx != nil
     events_wfd = rfd.events_wfd
     chain_strip_enabled = rfd.chain_strip_enabled or false
     strip_learn_wfd     = rfd.strip_learn_wfd

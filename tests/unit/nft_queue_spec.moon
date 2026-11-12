@@ -213,3 +213,56 @@ describe "nft_queue", ->
       buf = ffi.new "uint8_t[8]"
       assert.equals -1, ffi.C.read ack_rfd, buf, 8
       close_pipe ack_pipe
+
+describe "nft_queue ACK consommé (last_acked_seq)", ->
+  it "drain_ack retient le plus grand seq purgé", ->
+    q = fresh_nft_queue!
+    ack_pipe = make_pipe!
+    q.set_ack_rfd ack_pipe[1], 0
+    put_ack ack_pipe[2], 3
+    put_ack ack_pipe[2], 7
+    q.drain_ack!
+    assert.equals 7, q.get_last_acked!
+    close_pipe ack_pipe
+
+  it "un ACK purgé par drain_ack ne fait plus expirer wait_ack", ->
+    -- Régression mesurée : un lot dont la dernière insertion était suivie d'une
+    -- purge d'ACK attendait 150 ms (nft_ack_timeout) un enregistrement qui ne
+    -- serait plus jamais réémis.
+    q = fresh_nft_queue!
+    ack_pipe = make_pipe!
+    q.set_ack_rfd ack_pipe[1], 0
+    put_ack ack_pipe[2], 42
+    q.drain_ack!                    -- l'ACK est consommé par la purge
+    assert.is_true q.wait_ack 42, "corr"
+    close_pipe ack_pipe
+
+  it "wait_ack retient le seq qu'il a lu", ->
+    q = fresh_nft_queue!
+    ack_pipe = make_pipe!
+    q.set_ack_rfd ack_pipe[1], 0
+    put_ack ack_pipe[2], 9
+    assert.is_true q.wait_ack 5, "corr"
+    assert.equals 9, q.get_last_acked!
+    close_pipe ack_pipe
+
+  it "reset_ack_state purge le tube et oublie les ACK résiduels", ->
+    q = fresh_nft_queue!
+    ack_pipe = make_pipe!
+    ack_rfd, ack_wfd = ack_pipe[1], ack_pipe[2]
+    q.set_ack_rfd ack_rfd, 0
+    put_ack ack_wfd, 100            -- ACK d'un producteur précédent
+    q.reset_ack_state!
+    assert.equals 0, q.get_last_acked!
+    buf = ffi.new "uint8_t[8]"
+    assert.equals -1, ffi.C.read ack_rfd, buf, 8   -- tube vide
+    close_pipe ack_pipe
+
+  it "un fragment partiel ne met pas à jour last_acked_seq", ->
+    q = fresh_nft_queue!
+    ack_pipe = make_pipe!
+    q.set_ack_rfd ack_pipe[1], 0
+    put_ack_partial ack_pipe[2], 5, 4
+    q.drain_ack!
+    assert.equals 0, q.get_last_acked!
+    close_pipe ack_pipe
