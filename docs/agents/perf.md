@@ -1133,3 +1133,184 @@ processus : c'est bien le socket userspace qu'il faut dimensionner.
   le homelab et vérifier que `queue_user_dropped` retombe à 0 sur q14/q15 et
   que la perte client disparaît, avec `forced=true` et `obtained` cohérent dans
   les lignes `queue_rcvbuf` du journal.
+
+## 15. Campagne de réglage des paramètres de charge (2026-11-12, branche `d-tune`)
+
+Campagne demandée après §14 (`nfqueue.rcvbuf`) et `d-dohspin` : mesurer l'effet
+des clés de réglage documentées sur le débit, une variable à la fois, puis
+proposer des défauts pour deux profils. **Aucune modification de `src/` ni de
+défaut dans le code.** Harnais `tmp/tune/` (`dnsload4.py`, `runphase.sh`,
+`counters.sh`, `sampler.sh`, `analyse.py`, `apply_cfg.sh`, `mapqueues.sh`) ;
+résultats bruts `tmp/tune/results/` (ignorés par git) ; rapport de campagne et
+recommandation `tmp/tune_report.md`.
+
+Cible : `custos.lan` (10.35.1.254, OpenWrt, aarch64 Cortex-A55 ×4, noyau 6.12.74,
+`MemTotal` 4 029 208 Ko, build `dev`). Configuration déployée au départ :
+`nfqueue: { responses: "14-15" }` (donc `questions` = défaut `"0-1"`),
+`rcvbuf` absent = défaut 4 Mio (`forced=true` relevé dans `queue_rcvbuf`),
+`pending_max` absent = défaut 20 000. `nproc` n'existe pas sur la cible :
+`grep -c ^processor /proc/cpuinfo` = **4**.
+
+### 15.1 Profil réellement exercé : authentifié (contrairement à §13)
+
+`servus` (10.35.1.2) était **authentifié sur le portail** pendant toute la
+campagne. Contrôle avant **chaque** palier : `dig +short @10.35.1.1
+controlplane.tailscale.com A` doit rendre des réponses (une requête d'un client
+non authentifié est refusée par `r_refus_a_priori`). Les sets
+`authenticated_ips`/`authenticated_macs` contenaient bien 10.35.1.2 et
+`d8:d3:85:63:6b:27` (TTL glissant ~1 min 30 s, rafraîchi par le client).
+
+Conséquence mesurée à 300 q/s `mixed` : le journal de la fenêtre contient
+**6 245** lignes `r_utilisateurs` et **2 759** `r_ouverture_complete` (8 004
+lignes), et `nft` consomme **56,5 %** d'un vCPU — contre 5-12 % dans la
+campagne §13 (profil non authentifié). La charge exerce donc bien les 8 RR
+Tailscale, le second avis et l'injection nft ; le worker DoH est à
+**0,0-0,1 %** d'un vCPU (`d-dohspin` effectif). Les chiffres ci-dessous ne sont
+donc **pas comparables** à ceux de §13.3 (profil allégé) : ils mesurent le
+profil complet, et c'est ce profil qui fixe les défauts.
+
+### 15.2 Multi-source et répartition
+
+Le hachage NFQUEUE porte sur le couple d'adresses (§11.1) : la charge est
+répartie en tourniquet sur plusieurs **destinations** du résolveur
+(`10.35.{1..8,99}.1`, cf. §13.2). Cartographie refaite par Δ`id_sequence` pour
+la plage `0-2`/`14-16` (`tmp/tune/mapqueues.sh`) :
+
+| plage | destinations utilisées | files |
+|---|---|---|
+| 1/1 (`0`/`14`) | `10.35.1.1` | tout sur q0/q14 |
+| 2/2 (`0-1`/`14-15`) | `10.35.1.1`, `10.35.4.1` | 1.1 → q1/q15 ; 4.1 → q0/q14 |
+| 3/3 (`0-2`/`14-16`) | `10.35.1.1`, `10.35.3.1`, `10.35.4.1` | 1.1 → q2/q16 ; 3.1 → q1/q15 ; 4.1 → q0/q14 |
+
+Répartition vérifiée à chaque palier par Δ`id_sequence` (p. ex. 4 500/4 500 à
+300 q/s sur 2/2, 4 000/4 000/4 013 à 400 q/s sur 3/3). **Découverte :** en
+profil authentifié, la file des réponses est **dissymétrique** — avec 2/2,
+q14 reçoit **70,6 %** des paquets de réponse à 400 q/s `mixed` (14 495 contre
+6 033) et q15 le reste ; avec 3/3, q15 en reçoit 73 % (10 893 contre ~4 000).
+En `up` (sans second avis), la répartition est parfaitement égale (12 000 /
+12 003). La cause est le **second avis** : les réponses du résolveur validateur
+ont un couple d'adresses (validateur, client) distinct de celui du résolveur,
+donc **toutes** tombent dans une seule file, quelle que soit la taille de la
+plage. C'est cette file « chaude » qui déborde la première.
+
+### 15.3 Résultats mesurés
+
+Paliers de 30 s, un seul générateur, repos vérifié avant chacun (profondeur
+nulle sur les files de la plage et compteurs figés), compteurs nft et NFQUEUE
+lus dans le même instantané, sonde unique après arrêt. CPU = % d'un vCPU sur
+la fenêtre (jiffies `/proc/<pid>/stat`, HZ = 100,8 mesuré) ; `resp`/`dns` =
+somme des workers de la plage ; `nft` = worker nft ; RSS = `VmRSS` de fin de
+fenêtre, somme des workers réponses. `qdrop` = `queue_dropped` (col. 6 de
+`/proc/net/netfilter/nfnetlink_queue`, dépassement de la longueur de file
+noyau) ; `udrop` = `queue_user_dropped` (col. 7, tampon netlink userspace).
+
+**Configuration de référence — 2 workers / 2, rcvbuf 4 Mio, pending 20 000 :**
+
+| palier | émis/reçus | perte | p50/p99 (ms) | resp / dns / nft (% vCPU) | RSS resp | qdrop / udrop | prof. max |
+|---|---|---|---|---|---|---|---|
+| 300 `mixed` | 9000/9000 | 0 % | 41,9 / 185,6 | 80,0 / 59,0 / 56,5 | 21,9 Mio | 0 / 0 | 14 |
+| 400 `mixed` | 12000/11993 | **0,1 %** | 1206 / 2345 | 98,5 / 77,7 / 57,3 | 30,5 Mio | 18 / 0 | 915 |
+| 500 `mixed` | 15000/8662 | **42,3 %** | 3452 / 5960 | 92,3 / 98,6 / 62,7 | 30,4 Mio | **8 782** / 0 | 1024 |
+| 800 `up` | 24000/24000 | 0 % | 246,6 / 711,2 | 111,7 / 81,8 / 1,5 | 30,5 Mio | 0 / 0 | 246 |
+| 1000 `up` | 30002/21738 | **27,5 %** | 2975 / 3616 | 113,3 / 99,5 / 0,1 | 36,1 Mio | **8 191** / 0 | 1024 |
+
+Conformément au protocole (arrêt de la montée à > 5 % de perte), les paliers
+700 et 900 `mixed` **n'ont pas été lancés** pour cette configuration : 500
+`mixed` perd déjà 42,3 %.
+
+**Variantes (une variable à la fois) — paliers discriminants :**
+
+| configuration | 400 `mixed` | 500 `mixed` | 800 `up` | 1000 `up` | RSS resp |
+|---|---|---|---|---|---|
+| 2/2, rcvbuf 1 Mio | — | 38,2 % (p50 3342) | 0 % (p50 347) | — | 30,3 Mio |
+| 2/2, rcvbuf 2 Mio | — | 35,6 % (p50 3277) | 0 % (p50 932) | — | 30,0 Mio |
+| 2/2, rcvbuf 8 Mio | — | 41,2 % (p50 3438) | 0 % (p50 215) | — | 30,4 Mio |
+| 2/2, pending_max 5 000 | — | 38,3 % (p50 3376) | 0 % (p50 785) | — | 30,6 Mio |
+| 1/1, rcvbuf 4 Mio | **12,6 %** (p50 1646) | 43,8 % (p50 2482) | **15,7 %** (p50 1556) | 36,6 % (p50 2676) | 10,6-13,8 Mio |
+| 3/3, rcvbuf 4 Mio | **5,2 %** (p50 2988) | 40,0 % (p50 4107) | 0 % (p50 907) | 40,2 % (p50 3868) | 46,2-67,3 Mio |
+| 1/1, rcvbuf 512 Kio, pending 5 000 | **22,9 %** (p50 2119) | — | **17,9 %** (p50 1592) | — | 11,2-11,9 Mio |
+
+Détails et enseignements :
+
+1. **`nfqueue.rcvbuf` n'a aucun effet sur la perte à ces paliers.** Les quatre
+   valeurs (1/2/4/8 Mio) donnent 35,6-42,3 % à 500 `mixed`, écart dans le bruit
+   de reproductibilité de la cible, et **`user_dropped` = 0 partout**, y compris
+   avec 512 Kio (configuration `lowmem`). La perte est **entièrement
+   `queue_dropped`** : la file noyau est pleine (`profondeur 1024`, valeur
+   `NFQNL_QMAX_DEFAULT`), pas le socket userspace. Le correctif §14 tient donc
+   (plus aucun `queue_read_enobufs` ni `user_dropped`) ; il ne pouvait pas
+   relever le plafond mesuré ici. À 800 `up` (0 % de perte), la latence varie
+   de 215 à 932 ms entre 8 Mio et 2 Mio **sans tendance** : aucune valeur ne se
+   distingue. Le défaut 4 Mio reste le bon compromis ; 8 Mio ne gagne rien.
+2. **1/1 est nettement pire** : 12,6 % de perte dès 400 `mixed` (contre 0,1 %
+   en 2/2), 15,7 % à 800 `up` (contre 0 %), 36,6 % à 1000 `up` (contre 27,5 %).
+   Le CPU `resp` d'un seul worker plafonne à 64-81 % d'un vCPU : la
+   sérialisation par processus (§10.1) est bien le facteur limitant. Gain
+   mémoire : ~20 Mio de RSS en moins (un worker réponses et un worker
+   questions en moins).
+3. **3/3 n'apporte rien et dégrade** : 5,2 % dès 400 `mixed` (contre 0,1 %),
+   40,2 % à 1000 `up` (contre 27,5 %), p50 907 ms à 800 `up` (contre 247 ms),
+   RSS réponses 46-67 Mio (contre 30-36 Mio). Surtout, **3/3 fait apparaître
+   des `response_nft_ack_timeout`** (3 à 400 `mixed`, 1 à 500 `mixed`,
+   `worker_idx` 1/2/3), absents de tous les paliers 2/2 et 1/1 : hypothèse la
+   plus probable, la contention sur le worker nft partagé et ses trois
+   producteurs d'ACK. Le coût du fan-out
+   (chaque worker réponses draine **toutes** les questions, §13.4) croît avec N
+   et n'est pas compensé, la file chaude du second avis restant unique.
+4. **`pending_max` 5 000 n'a aucun effet mesurable** à ces charges : RSS
+   réponses 30,6 Mio contre 30,4 Mio à 20 000 (500 `mixed`), aucun
+   `pending_evicted`. La table reste sous 5 000 entrées (~5 s × 500 q/s). Le
+   chiffrage de `doc/CONFIG.md:559-560` (≈ 0,84 Ko/entrée, ≈ 16 Mio pour
+   20 000 entrées **par worker**) ne s'applique qu'à un afflux de questions sans
+   réponse : 20 000 ≈ 16 Mio/worker contre 5 000 ≈ 4 Mio/worker dans ce cas
+   seulement.
+5. **Autres clés documentées, non variées** : `ipc.pending_ttl` (5 s,
+   `doc/CONFIG.md:529`) et `ipc.match_retry.budget_ms` (100 ms,
+   `doc/CONFIG.md:534`) changent la sémantique d'appariement, pas le débit
+   nominal ; `nft.ack_timeout_ms` (150 ms, `doc/CONFIG.md:507`) est un budget de
+   latence, pas un levier de débit ; `runtime.gc_pause` (`doc/CONFIG.md:74`) et
+   `runtime.lowmem`/`lowmem_threshold_kb` (`doc/CONFIG.md:287-288`) sont des
+   réglages mémoire (le second a été testé via 1/1 + 512 Kio). La **longueur du
+   tube** question→réponse n'est pas une clé : elle est fixée à 64 Kio dans le
+   code (`F_SETPIPE_SZ`, `src/main.moon:85,118`). Aucune clé ne règle la
+   **longueur de la file noyau** (1024, `NFQNL_QMAX_DEFAULT`) : c'est elle qui
+   porte la perte mesurée.
+
+### 15.4 Nouveau plafond, et ce qu'il faudrait étudier
+
+À 400 `mixed` (0,1 % de perte, mais p50 déjà à 1,2 s), le service consomme
+`resp` 98,5 %, `dns` 77,7 %, `nft` 57,3 %, `events` 10,8 %, `mac-lrn` 4,7 %
+d'un vCPU ; `/proc/stat` donne user 58,3 %, sys 26,1 %, softirq 3,2 %,
+**idle 11,2 %**. À 500 `mixed`, `resp` 92,3 %, `dns` 98,6 %, `nft` 62,7 %,
+idle 8,0 %, et la perte est **exclusivement** `queue_dropped` sur q14/q15
+(profondeur 1024), `user_dropped` = 0. À 1000 `up`, même tableau : `resp`
+113,3 %, `dns` 99,5 %, qdrop 8 191, udrop 0.
+
+Le plafond est donc double : (a) le **CPU agrégé** des 4 cœurs, où `resp` et
+`dns` saturent ensemble, et (b) la **longueur de file noyau** (1024) de la file
+réponses chaude, qui jette les rafales avant même que le worker ne lise. Le
+levier suivant n'est **pas** `MAX_BATCH_PKTS` (`src/nfq_loop.moon:29`, lot déjà
+borné à 64 et jamais identifié comme limitant ici) mais un
+`nfq_set_queue_maxlen()` (non exposé par Custos, non documenté) et/ou une
+répartition qui éviterait de concentrer les réponses du validateur sur une
+seule file. Ces deux pistes sont des changements de code, hors de cette
+campagne.
+
+### 15.5 Recommandation de défauts (détail dans `tmp/tune_report.md`)
+
+- **Profil complet** (machine ≥ 512 Mo, ≥ 4 cœurs) : **2 workers questions /
+  2 réponses** (`questions: "0-1"`, `responses: "14-15"`), **`rcvbuf` 4 Mio**,
+  **`pending_max` 20 000** — c'est-à-dire les défauts actuels pour `rcvbuf` et
+  `pending_max`, et la plage déjà déployée pour les workers. Aucune des
+  variantes mesurées ne fait mieux : 1/1 et 3/3 sont pires, 8 Mio n'apporte
+  rien, 5 000 n'économise rien à charge nominale.
+- **Profil `lowmem`** (RAM faible, priorité mémoire) : **1 worker par file**
+  (réduction déjà appliquée par `runtime.lowmem`, `src/lib/lowmem.moon:1-7`),
+  **`rcvbuf` 512 Kio** et **`pending_max` 5 000**. Mesuré : `user_dropped` = 0
+  à 512 Kio (le tampon suffit), RSS réponses 11 Mio contre 30 Mio, total des
+  workers 106-109 Mio contre 135-141 Mio. Coût : le débit avant perte tombe de
+  ~400 à ~300 q/s `mixed` et de ~800 à ~700 `up` (400 `mixed` : 12,6-22,9 % de
+  perte contre 0,1 % en 2/2 ; 800 `up` : 15,7-17,9 % contre 0 %). Si la machine
+  lowmem doit tenir la charge, garder 2/2 et ne réduire que `rcvbuf` et
+  `pending_max` : c'est la réduction du nombre de workers, pas le tampon, qui
+  coûte le débit.

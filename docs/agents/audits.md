@@ -3290,3 +3290,47 @@ constater la disparition de `queue_user_dropped` et de la perte client.
 
 **Non fait.** Aucune vérification sur un noyau réel avec `rmem_max` réduit
 (pas de ssh, pas d'e2e) : le cas est couvert par le stub `getsockopt`.
+
+### Campagne de réglage des paramètres de charge (branche d-tune)
+
+Campagne de mesure sur `custos.lan` (4 cœurs, 4 Go), **sans modification de
+`src/` ni de défaut dans le code** : elle détermine quels défauts proposer pour
+une tâche ultérieure. Détail, tableaux et recommandation : `perf.md` §15 et
+`tmp/tune_report.md`.
+
+- **Profil authentifié**, contrairement à §13 : `servus` (10.35.1.2) est resté
+  authentifié (contrôle `dig` avant chaque palier), donc la charge exerce
+  `r_utilisateurs` (8 RR), le second avis et l'injection nft (`nft` 56-63 %
+  d'un vCPU à 300-500 q/s `mixed`, contre 5-12 % en §13). Le worker DoH est à
+  0,0-0,1 % (`d-dohspin` effectif).
+- **Clés variées** : `nfqueue.rcvbuf` 1/2/4/8 Mio (`doc/CONFIG.md:339`),
+  workers 1/1, 2/2, 3/3 (`doc/CONFIG.md:331-332`), `ipc.pending_max` 5 000
+  (`doc/CONFIG.md:530`). Chaque configuration est appliquée par `sed` sur les
+  seules clés `nfqueue`/`ipc` de `/etc/custos/config.moon`, avec sauvegarde
+  préalable et restauration finale vérifiée.
+- **Résultats.** Perte **uniquement `queue_dropped`** (col. 6), `user_dropped` =
+  0 partout, y compris à 512 Kio : le correctif `d-rcvbuf` tient, mais le
+  plafond suivant est la **longueur de file noyau** (1024,
+  `NFQNL_QMAX_DEFAULT`, non exposée par Custos) sur la file réponses chaude.
+  `rcvbuf` et `pending_max` n'ont **aucun effet** sur la perte à ces paliers.
+  1/1 perd 12,6 % dès 400 `mixed` (contre 0,1 % en 2/2) ; 3/3 perd 5,2 % et
+  fait apparaître des `response_nft_ack_timeout`, avec +16 à +37 Mio de RSS.
+- **File chaude.** En profil authentifié, 70,6 % des paquets de réponse tombent
+  dans une seule file (2/2) : les réponses du résolveur validateur (second avis)
+  partagent un couple d'adresses unique, donc un seul indice de hachage
+  (`perf.md` §11.1), quelle que soit la taille de la plage. C'est elle qui
+  déborde la première.
+- **Recommandation.** Profil complet : 2/2, `rcvbuf` 4 Mio, `pending_max`
+  20 000 (défauts actuels). Profil lowmem : 1/1, 512 Kio, 5 000, avec un débit
+  avant perte réduit de ~400 à ~300 q/s `mixed` (mesuré), la réduction du
+  nombre de workers — et non le tampon — étant la cause.
+- **Vérification.** `nix develop --command bash -c "make all && make check &&
+  make test"` : **3 060 succès / 0 échec / 0 erreur / 0 pending** (sortie
+  `tmp/test.log`). `make test-e2e` non lancé (consigne). Aucune modification de
+  `src/`, donc aucun `.lua` régénéré.
+
+**Non fait.** Paliers 700/900 `mixed` : non lancés (500 `mixed` perd déjà
+42,3 %, arrêt protocolaire à > 5 %). `pending_max` 5 000 n'a pas pu être
+éprouvé sous afflux de questions sans réponse (il faudrait un profil dédié) :
+l'effet mémoire est extrapolé du chiffrage `doc/CONFIG.md:559-560` et signalé
+comme tel.
