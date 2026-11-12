@@ -38,7 +38,39 @@ poll_fds  = ffi.new "struct pollfd[1]"
 -- plusieurs morceaux (lecture partielle), il n'est interprété que complet.
 ack_rec   = ffi.new "uint8_t[?]", ACK_SIZE
 ack_val   = ffi.new "uint64_t[1]"
+ack_tmp   = ffi.new "uint64_t[1]"
 drain_buf = ffi.new "uint8_t[64]"
+
+-- Plus grand seq acquitté observé depuis le démarrage du processus.
+-- Permet à wait_ack de ne pas RE-attendre un ACK déjà consommé : sans cela, un
+-- ACK purgé par drain_ack! avant le wait_ack du lot (cas d'un lot dont la
+-- dernière insertion précède une réponse qui draine) faisait expirer le budget
+-- de 150 ms alors que worker_nft avait bien appliqué les insertions — mesuré
+-- comme `response_nft_ack_timeout` et 150 ms d'attente par lot (cf.
+-- docs/agents/perf.md §7.2).
+last_acked_seq = 0
+
+--- Met à jour last_acked_seq avec les enregistrements complets d'un bloc lu.
+-- worker_nft écrit chaque ACK en un seul write de ACK_SIZE octets (atomique) :
+-- un bloc de taille multiple de ACK_SIZE ne contient que des enregistrements
+-- complets. Un fragment partiel est ignoré (comme avant : il était jeté).
+-- @tparam cdata  buf Bloc lu (uint8_t)
+-- @tparam number n   Nombre d'octets lus
+-- @treturn nil
+_record_acks = (buf, n) ->
+  return unless n and n >= ACK_SIZE and (n % ACK_SIZE) == 0
+  i = 0
+  while i + ACK_SIZE <= n
+    ffi.copy ack_tmp, buf + i, ACK_SIZE
+    v = tonumber ack_tmp[0]
+    last_acked_seq = v if v > last_acked_seq
+    i += ACK_SIZE
+  nil
+
+--- Plus grand seq acquitté observé par ce producteur (tests / diagnostic).
+-- @treturn number
+get_last_acked = -> last_acked_seq
+
 
 sanitize_timeout = (timeout) ->
   t = if timeout == nil then "" else tostring timeout
@@ -90,12 +122,25 @@ write_line = (line) ->
 
 -- Vide entièrement le tube ACK : enregistrements complets comme fragments
 -- partiels éventuels (le format est de taille fixe, tout octet restant serait
--- interprété comme le début d'un ACK par wait_ack).
+-- interprété comme le début d'un ACK par wait_ack). Les enregistrements
+-- complets mettent à jour last_acked_seq : un ACK purgé ici ne doit pas être
+-- ré-attendu (cf. last_acked_seq / wait_ack).
 drain_ack = ->
   return unless ack_rfd
   while true
     n = libc.read ack_rfd, drain_buf, 64
     break unless n and n > 0
+    _record_acks drain_buf, n
+
+--- Purge les ACK résiduels du tube et repart de zéro (démarrage du worker).
+-- Un producteur redémarré repart de seq 1 : un ACK résiduel du producteur
+-- précédent (seq élevé) ne doit pas pouvoir satisfaire une attente de ce
+-- processus. À appeler une fois, juste après set_ack_rfd.
+-- @treturn nil
+reset_ack_state = ->
+  drain_ack!
+  last_acked_seq = 0
+  nil
 
 build_line = (kind, key, ip, rule_id, timeout, corr, item_seq, widx) ->
   table.concat({
@@ -165,6 +210,10 @@ get_worker_idx = ->
 wait_ack = (pending_seq, corr, on_wait) ->
   return false unless ack_rfd
   target = pending_seq or 0
+  -- ACK déjà observé sur ce processus (lu par un wait_ack précédent ou purgé
+  -- par drain_ack!) : ne pas re-attendre 150 ms un enregistrement qui ne sera
+  -- plus réémis. L'ACK est cumulatif par worker (plus grand seq appliqué).
+  return true if target > 0 and last_acked_seq >= target
   deadline = monotonic_ms! + ACK_TIMEOUT_MS
   poll_fds[0].fd     = ack_rfd
   poll_fds[0].events = POLLIN
@@ -180,6 +229,7 @@ wait_ack = (pending_seq, corr, on_wait) ->
         have += n
         if have >= ACK_SIZE
           acked = ack_rec_seq!
+          last_acked_seq = acked if acked > last_acked_seq
           have = 0
           return true if acked >= target
           -- ACK périmé : l'attente continue dans le MÊME budget.
@@ -261,4 +311,4 @@ cmd_for = (kind, key, ip, rule_id, timeout) ->
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :add_auth_mac, :add_auth_ip4, :add_auth_ip6, :cmd_for, :cmd_lines_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :add_auth_mac, :add_auth_ip4, :add_auth_ip6, :cmd_for, :cmd_lines_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state }

@@ -553,7 +553,9 @@ finalize_a = function(ctx, override)
   }
   local inject_answers
   inject_answers = function(answers)
-    drain_ack()
+    if not (ctx.defer) then
+      drain_ack()
+    end
     return inject(answers, inject_opts)
   end
   local patch_and_accept
@@ -684,7 +686,7 @@ finalize_a = function(ctx, override)
       }
     end
   end
-  if inject_nft and not dnsonly then
+  if inject_nft and not dnsonly and not ctx.defer then
     drain_ack()
   end
   inject_opts.inject_nft = inject_nft
@@ -1226,6 +1228,9 @@ run = function(queue_num, rfd, rules_metadata)
     end
     if rfd.ack_rfd and rfd.worker_idx ~= nil then
       nft_q.set_ack_rfd(rfd.ack_rfd, rfd.worker_idx)
+    end
+    if rfd.ack_rfd and rfd.worker_idx ~= nil then
+      nft_q.reset_ack_state()
     end
     events_wfd = rfd.events_wfd
     chain_strip_enabled = rfd.chain_strip_enabled or false
