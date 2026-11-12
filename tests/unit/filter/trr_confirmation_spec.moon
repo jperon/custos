@@ -185,6 +185,8 @@ describe "nom de confirmation TRR de Firefox", ->
   it "entrées invalides ignorées, type invalide → défaut", ->
     cfg = load_config [[{ filter: { safe_search: false, trr_confirmation: { "bad name!", "Example.NET" } } }]]
     assert.same { "example.net" }, cfg.filter.trr_confirmation
+    cfg = load_config [[{ filter: { safe_search: false, trr_confirmation: "Example.ORG." } }]]
+    assert.same { "example.org" }, cfg.filter.trr_confirmation
     cfg = load_config [[{ filter: { safe_search: false, trr_confirmation: 42 } }]]
     assert.same { "example.com" }, cfg.filter.trr_confirmation
 
