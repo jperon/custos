@@ -14,11 +14,11 @@ Ce document remplace l'interprétation de `tmp/PASSATION.md` §4 et
   démarrage : profondeur de la file 4 = 0 **et** `user_dropped` figé sur 3 s
   (`tmp/bench2/runphase3.sh`), aucun générateur sur servus
   (`pgrep -af "[d]nsload|[p]ython3 -"`).
-- Générateur `tmp/bench2/dnsload3.py` (variante de `dnsload2.py` : profils
-  `mixed` = 70 % de noms dont 40 % `vpn.stemarie.dynv6.net`, 60 %
-  `controlplane/login.tailscale.com`, 30 % de 10 noms `*.nxdomain.invalid`
-  fixes ; `up` = 100 % `vpn.stemarie.dynv6.net` ; `nxu` = 100 % NXDOMAIN à noms
-  uniques).
+- Générateur `tmp/bench2/dnsload3.py` (variante de `dnsload2.py`) :
+  `mixed` = 30 % `vpn.stemarie.dynv6.net` (A/AAAA), 40 %
+  `controlplane/login.tailscale.com` (A/AAAA), 30 % de 10 noms
+  `*.nxdomain.invalid` fixes ; `up` = 100 % `vpn.stemarie.dynv6.net` ;
+  `nxu` = 100 % NXDOMAIN à noms uniques.
 - Instrumentation : `tmp/bench2/sampler4.pl` (Perl, lecture seule de `/proc`,
   aucun fichier écrit sur la cible) : 1 Hz pour `/proc/net/netfilter/nfnetlink_queue`,
   `/proc/stat`, loadavg, `utime/stime/état/RSS/commutations de contexte` de
@@ -134,11 +134,12 @@ cette réserve est notée au §7.
 ### 4.1 Le « second avis » duplique 70 % des requêtes autorisées
 
 Le compteur « queue to 4 » progresse de **+70 %** du nombre de requêtes dans
-tous les paliers `mixed` (200 : +4185 paquets pour 6000 requêtes et 4177 lignes
-de benchmark `r_utilisateurs` ; 500 : +10 481 pour 15 000 requêtes et ~10 500
-réponses `r_utilisateurs`), et de **+100 %** en NXDOMAIN unique (4 paquets par
-requête dont 2 retries, cf. §3.2). Le surplus correspond exactement aux
-questions de la règle `r_utilisateurs`, dupliquées vers un résolveur validateur
+tous les paliers `mixed` (200 : +4185 paquets pour 6000 requêtes, et 4177 lignes
+de benchmark `r_utilisateurs` = Tailscale 40 % + NXDOMAIN 30 % du mélange ;
+500 : +10 481 pour 15 000 requêtes et ~10 500 réponses `r_utilisateurs`), et de
+**+100 %** en NXDOMAIN unique (4 paquets par requête dont 2 retries, cf. §3.2). Le
+surplus correspond exactement aux questions de la règle `r_utilisateurs`,
+dupliquées vers un résolveur validateur
 (`src/worker_questions.moon:100-121,465-471`). Conséquence : `resp-q4` traite
 **1,7 paquet par requête**, et la réponse réelle est parquée le temps du verdict
 du validateur (`src/second_opinion.moon`), ce qui explique aussi l'écart de RTT
@@ -158,6 +159,8 @@ avec une action `dnsonly`/`skip_nft` sur cette règle (`src/filter/actions/dnson
 Conséquence méthodologique : le profil « 100 % autorisé » de
 `tmp/loadtest_rapport_2.md` §5 **ne mesure pas** un trafic à injection nft
 pleine ; il ne peut pas servir de référence de débit pour `mixed`.
+Symétriquement, toute la charge nft mesurée §2 vient des réponses
+`r_utilisateurs` (Tailscale, 8 enregistrements A → 8 `ip4` + 8 `mac4`).
 
 ## 5. Correction de l'interprétation de `user_dropped`
 
