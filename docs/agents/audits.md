@@ -2402,3 +2402,62 @@ admin a été traité, mais aucune écriture n'a eu lieu.
   (§ Sondes de portail captif) nomment désormais les deux sondes Firefox et
   donnent la commande de vérification
   `unzip -p /usr/lib/firefox/omni.ja greprefs.js | grep captivedetect`.
+
+### Anomalies DoH / TLS relevées sur la pré-prod (branche d-doh2)
+
+Faits observés le 2026-11-11 depuis un client non authentifié. Traités dans
+l'ordre ; sondes en lecture uniquement (`curl -k --http2`, `openssl s_client`).
+
+- **Réponse de blocage DNS avec QR=0 et ancount=1 — corrigé.** Reproduit sur
+  `use-application-dns.net` en POST `application/dns-message` :
+  flags `0x0105` (QR absent, RD=1, rcode=REFUSED) et `ancount=1`.
+  Cause : `build_blocked_response` (`src/dns_ede.moon`) repart du `dns_raw`
+  fourni ; en UDP c'est la réponse amont (QR=1, RA=1), en DoH c'est la
+  **requête** du client (QR=0, RA=0). Le même défaut touchait
+  `build_nxdomain_response`, `build_sinkhole_response` et
+  `build_cname_response` (observé `0x0100` sur les CNAME SafeSearch, ex.
+  `google.com`/`doubleclick.net`). Correctif : `mark_response_header` force
+  QR=1/RA=1 dans les quatre builders, et la REFUSED ne joint plus d'answer
+  (`ancount=0`, OPT/EDE conservé). Tests :
+  `tests/unit/dns_ede_spec.moon` (nouveau bloc « en-tête des réponses
+  construites depuis la requête », échec avant / succès après).
+- **GET `?dns=` HTTP/2 sans réponse — non reproduit.** Les deux chemins
+  (HTTP/1.1 et HTTP/2) routent vers le même `process_query` :
+  `handle_doh_client` (GET `dns_from_query`, POST corps DATA) et `handle_h2`
+  (mêmes prédicats `is_doh_path`/`is_dns_message_content_type`). Sondes sur
+  `use-application-dns.net` (nom REFUSÉ), GET base64url et POST :
+  HTTP/2 et HTTP/1.1 renvoient tous deux `200` avec exactement la même
+  réponse de 146 octets (flags `0x0105` avant correction). Aucun correctif
+  GET/POST n'a été codé : la réponse servie était seulement invalide (QR=0,
+  point précédent), ce qui peut expliquer un client strict qui la rejette et
+  paraît « sans réponse ». Le test existant
+  `tests/unit/worker_doh_spec.moon` (« GET RFC 8484 (HEADERS + END_STREAM,
+  sans DATA) est traité ») couvre déjà le GET HTTP/2.
+- **Chaîne de certificats non envoyée (8443 et 33443) — corrigé.**
+  `ssl.newcontext` (`src/auth/ffi_wolfssl.moon`) utilisait
+  `wolfSSL_CTX_use_certificate_file`, qui ne lit que le premier certificat
+  d'un `fullchain.pem` : `openssl s_client -CAfile ca.crt` voyait un seul
+  certificat et échouait en « unable to verify the first certificate ».
+  Correctif : `wolfSSL_CTX_use_certificate_chain_file` quand le symbole existe,
+  repli sur l'ancien appel. AUTH et DoH passent tous deux par
+  `auth.cert.load_static` → `ssl.newcontext`. Test :
+  `tests/unit/auth/cert_chain_spec.moon` (vraie chaîne CA → intermédiaire →
+  feuille générée par openssl, serveur WolfSSL en boucle locale, client ne
+  faisant confiance qu'à la CA ; échec avant le correctif, succès après, et
+  cas témoin « feuille seule » qui échoue).
+- **Aucun avertissement d'expiration — corrigé.** Nouveau module
+  `src/auth/cert_expiry.moon` : lecture de `notAfter` via
+  `wolfSSL_X509_load_certificate_file`/`wolfSSL_X509_get_notAfter`, parsing
+  ASN.1 UTCTime/GeneralizedTime en Lua pur, puis `log_warn` `cert_expired` /
+  `cert_expires_soon` (seuil 14 jours, champs `cert`, `not_after`,
+  `days_left`, `worker`). Appelé par `auth.server.run` après chargement du
+  certificat statique du portail (démarrage) et par `worker_doh.run` (démarrage
+  et refork SIGHUP). AUTH ne recharge pas son certificat sur SIGHUP (seuls les
+  secrets), donc pas de second contrôle côté portail. Champs `not_after` et
+  `days_left` classés volatils dans `src/log.moon` (`tests/unit/log_fields_spec.moon`).
+  Tests : `tests/unit/auth/cert_expiry_spec.moon` (parsing, seuils,
+  avertissements, lecture réelle sur certificat openssl généré).
+
+**Vérification (2026-11-12, branche d-doh2).** `nix develop --command bash -c
+"make all && make check && make test"` : **2747 succès / 0 échec / 0 erreur**
+(unitaires) et 12/12 tests JS. `make test-e2e` non exécuté dans cette passe.
