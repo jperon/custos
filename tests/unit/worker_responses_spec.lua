@@ -1,5 +1,6 @@
 local dns_mod = require("ipparse.l7.dns")
 local sp = require("ipparse.lib.pack_compat").pack
+local nfq = require("nfq_loop")
 local QTYPE_A = dns_mod.types.A
 local QTYPE_HTTPS = dns_mod.types.HTTPS
 local QCLASS_IN = dns_mod.classes.IN
@@ -836,7 +837,7 @@ describe("verdicts différés par lot NFQUEUE (settle / flush_deferred)", functi
     assert.equals(1, n)
     return assert.equals(0, m.deferred_count())
   end)
-  return it("hors lot, dnsonly avec insertion captive_probe attend l'ACK", function()
+  it("hors lot, dnsonly avec insertion captive_probe attend l'ACK", function()
     local ctx = {
       qh_ptr = "qh",
       pkt_id = 5,
@@ -847,6 +848,245 @@ describe("verdicts différés par lot NFQUEUE (settle / flush_deferred)", functi
     m.settle(ctx, 1, nil, true)
     assert.equals(1, #calls.waits)
     return assert.equals(1, #calls.set)
+  end)
+  it("lit pendant l'attente : verdicts du lot suivant après SON ACK (pas celui du lot courant)", function()
+    local events = { }
+    local seqs = {
+      5,
+      9
+    }
+    m._set_defer_deps({
+      get_last_seq = function()
+        local s = table.remove(seqs, 1)
+        events[#events + 1] = {
+          "seq",
+          s
+        }
+        return s
+      end,
+      wait_ack = function(seq, corr, on_wait)
+        events[#events + 1] = {
+          "wait",
+          seq
+        }
+        if on_wait then
+          on_wait()
+        end
+        return true
+      end,
+      set_verdict = function(qh, id, verdict, payload)
+        events[#events + 1] = {
+          "set",
+          id
+        }
+      end
+    })
+    local reads = 0
+    m._set_pipe_rfd(-1)
+    local read_packets
+    read_packets = function(budget)
+      reads = reads + 1
+      events[#events + 1] = {
+        "read",
+        budget
+      }
+      if reads == 1 then
+        m.settle({
+          qh_ptr = "qh",
+          pkt_id = 22,
+          ack_corr = "c2",
+          defer = true
+        }, 1, nil, true)
+        return 1
+      end
+      return 0
+    end
+    m.settle({
+      qh_ptr = "qh",
+      pkt_id = 21,
+      ack_corr = "c1",
+      defer = true
+    }, 1, nil, true)
+    local n = m.flush_deferred(read_packets)
+    assert.equals(2, n)
+    assert.same({
+      {
+        "seq",
+        5
+      },
+      {
+        "wait",
+        5
+      },
+      {
+        "read",
+        nfq.MAX_BATCH_PKTS
+      },
+      {
+        "set",
+        21
+      },
+      {
+        "seq",
+        9
+      },
+      {
+        "wait",
+        9
+      },
+      {
+        "set",
+        22
+      }
+    }, events)
+    return assert.equals(0, m.deferred_count())
+  end)
+  it("timeout de l'ACK : verdicts posés (fail-open historique) et lot suivant traité", function()
+    local events = { }
+    local seqs = {
+      5,
+      9
+    }
+    m._set_defer_deps({
+      get_last_seq = function()
+        local s = table.remove(seqs, 1)
+        events[#events + 1] = {
+          "seq",
+          s
+        }
+        return s
+      end,
+      wait_ack = function(seq, corr, on_wait)
+        events[#events + 1] = {
+          "wait",
+          seq
+        }
+        if on_wait then
+          on_wait()
+        end
+        return false
+      end,
+      set_verdict = function(qh, id, verdict, payload)
+        events[#events + 1] = {
+          "set",
+          id
+        }
+      end
+    })
+    local reads = 0
+    local read_packets
+    read_packets = function(budget)
+      reads = reads + 1
+      if reads == 1 then
+        m.settle({
+          qh_ptr = "qh",
+          pkt_id = 32,
+          ack_corr = "c2",
+          defer = true
+        }, 1, nil, true)
+      end
+      return budget
+    end
+    m.settle({
+      qh_ptr = "qh",
+      pkt_id = 31,
+      ack_corr = "c1",
+      defer = true
+    }, 1, nil, true)
+    local n = m.flush_deferred(read_packets)
+    assert.equals(2, n, "les deux lots sont posés malgré les timeouts")
+    return assert.same({
+      {
+        "seq",
+        5
+      },
+      {
+        "wait",
+        5
+      },
+      {
+        "set",
+        31
+      },
+      {
+        "seq",
+        9
+      },
+      {
+        "wait",
+        9
+      },
+      {
+        "set",
+        32
+      }
+    }, events)
+  end)
+  it("borne le lot suivant à MAX_BATCH_PKTS paquets lus pendant l'attente", function()
+    local budgets = { }
+    m._set_defer_deps({
+      get_last_seq = function()
+        return 5
+      end,
+      wait_ack = function(seq, corr, on_wait)
+        for _ = 1, 3 do
+          on_wait()
+        end
+        return true
+      end,
+      set_verdict = function()
+        return nil
+      end
+    })
+    m.settle({
+      qh_ptr = "qh",
+      pkt_id = 1,
+      ack_corr = "c",
+      defer = true
+    }, 1, nil, true)
+    m.flush_deferred(function(budget)
+      budgets[#budgets + 1] = budget
+      return nfq.MAX_BATCH_PKTS
+    end)
+    return assert.same({
+      nfq.MAX_BATCH_PKTS
+    }, budgets, "budget épuisé : plus aucune lecture")
+  end)
+  return it("sans lecture fournie (sortie de boucle), aucune lecture n'est tentée", function()
+    local events = { }
+    m._set_defer_deps({
+      get_last_seq = function()
+        return 5
+      end,
+      wait_ack = function(seq, corr, on_wait)
+        events[#events + 1] = {
+          "wait",
+          seq
+        }
+        if on_wait then
+          on_wait()
+        end
+        return true
+      end,
+      set_verdict = function()
+        return nil
+      end
+    })
+    m.settle({
+      qh_ptr = "qh",
+      pkt_id = 2,
+      ack_corr = "c",
+      defer = true
+    }, 1, nil, true)
+    local n = m.flush_deferred()
+    assert.equals(1, n)
+    assert.same({
+      {
+        "wait",
+        5
+      }
+    }, events)
+    return assert.equals(0, m.deferred_count())
   end)
 end)
 describe("worker_responses helpers complémentaires (couverture)", function()

@@ -49,7 +49,13 @@ VERDICT_DONE = -1
 --                            MAX_BATCH_PKTS. C'est là que le worker réponses
 --                            pose les verdicts différés de son lot (cf.
 --                            worker_responses.flush_deferred) après un unique
---                            ACK nft. extra_rfds : fds supplémentaires
+--                            ACK nft. Le hook reçoit en argument une fonction
+--                            `read_packets(limit)` qui lit et dispatche sans
+--                            bloquer au plus `limit` paquets (défaut
+--                            MAX_BATCH_PKTS) sans rappeler le hook : le worker
+--                            s'en sert pendant l'attente d'ACK pour continuer à
+--                            vider la file noyau (docs/agents/perf.md §16).
+--                            extra_rfds : fds supplémentaires
 --                            surveillés par le même poll (bus de verdicts
 --                            inter-workers) ; on_extra_ready() est appelé quand
 --                            l'un d'eux est lisible, SANS lire le socket
@@ -166,6 +172,39 @@ run_queue = (queue_num, callback, opts=nil) ->
   -- total) pour éviter le spam si la file déborde en continu.
   enobufs_total = 0
 
+  -- Lecture non bloquante d'au plus `limit` paquets (un read() netlink ne rend
+  -- QU'UN paquet). Partagée par le drain du lot principal et par le hook
+  -- `on_batch_end` : pendant l'attente d'ACK nft, le worker réponses continue
+  -- ainsi à vider le socket netlink, sinon la file noyau grossit
+  -- (response_entry_ms, cf. docs/agents/perf.md §16). N'appelle JAMAIS
+  -- `on_batch_end` : aucun dispatch récursif.
+  -- Garde `reading` : un appel depuis un callback de paquet (réentrance) ne lit
+  -- rien et rend 0.
+  reading = false
+  read_packets = (limit) ->
+    limit = limit or MAX_BATCH_PKTS
+    return 0 if reading or limit <= 0
+    reading = true
+    n = 0
+    while n < limit
+      pfd_drain[0].revents = 0
+      dr = libc.poll pfd_drain, 1, 0
+      break if dr <= 0
+      rv2 = libc.read fd, buf, READ_BUF_SIZE
+      if rv2 > 0
+        libnfq.nfq_handle_packet h, buf, tonumber rv2
+        n += 1
+      else
+        if rv2 < 0
+          en2 = libc.__errno_location()[0]
+          if en2 == ENOBUFS
+            enobufs_total += 1
+            if enobufs_total == 1 or enobufs_total % 256 == 0
+              log_warn -> { action: "queue_read_enobufs", queue: queue_num, total: enobufs_total }
+        break
+    reading = false
+    n
+
   while true
     if pfd
       on_idle! if on_idle
@@ -214,26 +253,12 @@ run_queue = (queue_num, callback, opts=nil) ->
       libnfq.nfq_handle_packet h, buf, tonumber rv
       if on_batch_end
         -- Drain non bloquant du reste du lot (cf. pfd_drain ci-dessus).
-        drained = 1
-        while drained < MAX_BATCH_PKTS
-          pfd_drain[0].revents = 0
-          dr = libc.poll pfd_drain, 1, 0
-          break if dr <= 0
-          rv2 = libc.read fd, buf, READ_BUF_SIZE
-          if rv2 > 0
-            libnfq.nfq_handle_packet h, buf, tonumber rv2
-            drained += 1
-          else
-            if rv2 < 0
-              en2 = libc.__errno_location()[0]
-              if en2 == ENOBUFS
-                enobufs_total += 1
-                if enobufs_total == 1 or enobufs_total % 256 == 0
-                  log_warn -> { action: "queue_read_enobufs", queue: queue_num, total: enobufs_total }
-            break
+        read_packets MAX_BATCH_PKTS - 1
         -- Le lot est terminé : pose des verdicts différés (worker réponses)
-        -- après l'ACK unique des insertions nft de tous ces paquets.
-        on_batch_end!
+        -- après l'ACK unique des insertions nft de tous ces paquets. Le hook
+        -- reçoit la lecture non bloquante à utiliser PENDANT cette attente
+        -- (lot suivant, ses verdicts attendront leur propre ACK).
+        on_batch_end read_packets
     elseif rv == 0
       log_warn -> { action: "queue_read_eof", queue: queue_num }
       break   -- EOF inattendu
@@ -282,4 +307,4 @@ set_verdict_marked = (qh_ptr, pkt_id, verdict, mark, payload=nil) ->
   rc >= 0 and 0 or rc
 
 -- Verdict helpers exposés pour les workers
-{ :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE, :set_verdict_marked }
+{ :run_queue, :NF_ACCEPT, :NF_DROP, :VERDICT_DONE, :set_verdict_marked, :MAX_BATCH_PKTS }

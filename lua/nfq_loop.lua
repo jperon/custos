@@ -147,6 +147,47 @@ run_queue = function(queue_num, callback, opts)
     pfd_drain[0].events = 1
   end
   local enobufs_total = 0
+  local reading = false
+  local read_packets
+  read_packets = function(limit)
+    limit = limit or MAX_BATCH_PKTS
+    if reading or limit <= 0 then
+      return 0
+    end
+    reading = true
+    local n = 0
+    while n < limit do
+      pfd_drain[0].revents = 0
+      local dr = libc.poll(pfd_drain, 1, 0)
+      if dr <= 0 then
+        break
+      end
+      local rv2 = libc.read(fd, buf, READ_BUF_SIZE)
+      if rv2 > 0 then
+        libnfq.nfq_handle_packet(h, buf, tonumber(rv2))
+        n = n + 1
+      else
+        if rv2 < 0 then
+          local en2 = libc.__errno_location()[0]
+          if en2 == ENOBUFS then
+            enobufs_total = enobufs_total + 1
+            if enobufs_total == 1 or enobufs_total % 256 == 0 then
+              log_warn(function()
+                return {
+                  action = "queue_read_enobufs",
+                  queue = queue_num,
+                  total = enobufs_total
+                }
+              end)
+            end
+          end
+        end
+        break
+      end
+    end
+    reading = false
+    return n
+  end
   while true do
     local _continue_0 = false
     repeat
@@ -232,37 +273,8 @@ run_queue = function(queue_num, callback, opts)
         end
         libnfq.nfq_handle_packet(h, buf, tonumber(rv))
         if on_batch_end then
-          local drained = 1
-          while drained < MAX_BATCH_PKTS do
-            pfd_drain[0].revents = 0
-            local dr = libc.poll(pfd_drain, 1, 0)
-            if dr <= 0 then
-              break
-            end
-            local rv2 = libc.read(fd, buf, READ_BUF_SIZE)
-            if rv2 > 0 then
-              libnfq.nfq_handle_packet(h, buf, tonumber(rv2))
-              drained = drained + 1
-            else
-              if rv2 < 0 then
-                local en2 = libc.__errno_location()[0]
-                if en2 == ENOBUFS then
-                  enobufs_total = enobufs_total + 1
-                  if enobufs_total == 1 or enobufs_total % 256 == 0 then
-                    log_warn(function()
-                      return {
-                        action = "queue_read_enobufs",
-                        queue = queue_num,
-                        total = enobufs_total
-                      }
-                    end)
-                  end
-                end
-              end
-              break
-            end
-          end
-          on_batch_end()
+          read_packets(MAX_BATCH_PKTS - 1)
+          on_batch_end(read_packets)
         end
       elseif rv == 0 then
         log_warn(function()
@@ -343,5 +355,6 @@ return {
   NF_ACCEPT = NF_ACCEPT,
   NF_DROP = NF_DROP,
   VERDICT_DONE = VERDICT_DONE,
-  set_verdict_marked = set_verdict_marked
+  set_verdict_marked = set_verdict_marked,
+  MAX_BATCH_PKTS = MAX_BATCH_PKTS
 }

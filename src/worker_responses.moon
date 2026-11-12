@@ -31,7 +31,7 @@ clients_cfg = config.clients or {}
 { :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume, :purge_pending } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
-{ :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
+{ :run_queue, :NF_ACCEPT, :NF_DROP, :MAX_BATCH_PKTS } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix, :level_enabled, :get_last_write_us } = require "log"
 { :tsv_field } = require "lib.tsv"
 { :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :strip_https_rr, :strip_dns_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
@@ -435,30 +435,66 @@ _reset_deferred = ->
   deferred = {}
   nil
 
---- Attend l'ACK nft du dernier seq enfilé puis pose les verdicts du lot.
+--- Attend l'ACK nft du dernier seq enfilé par un lot puis pose ses verdicts.
+-- Pendant l'attente, `read_packets` (fourni par nfq_loop) lit et traite les
+-- paquets arrivés dans la file : leurs verdicts s'accumulent dans `deferred`,
+-- donc dans le lot SUIVANT, et ne sont pas posés ici. La lecture est bornée à
+-- MAX_BATCH_PKTS au total par attente : le lot suivant garde la borne de
+-- `nfq_loop` (mémoire et latence).
+-- @tparam table         batch        Verdicts à poser
+-- @tparam table         deps         Dépendances du chemin de verdict
+-- @tparam function|nil  read_packets Lecture non bloquante (nil = aucune)
+-- @treturn nil
+_flush_batch = (batch, deps, read_packets) ->
+  pending_seq = deps.get_last_seq!
+  if pending_seq
+    budget = MAX_BATCH_PKTS
+    on_wait = ->
+      drain_pipe pipe_rfd, now, drain_on_msg if pipe_rfd
+      if read_packets and budget > 0
+        budget -= read_packets budget
+    deps.wait_ack pending_seq, (batch[#batch].corr or ""), on_wait
+  for rec in *batch
+    deps.set_verdict rec.qh_ptr, rec.pkt_id, rec.verdict, rec.payload
+  nil
+
+--- Attend l'ACK nft des insertions du lot puis pose les verdicts différés.
 -- `get_last_seq` retourne le plus grand seq enfilé depuis le dernier prélèvement
 -- (toutes transactions du lot confondues, cf. nft_queue.get_last_seq) : l'ACK de
 -- ce seq prouve que toutes les insertions du lot sont appliquées. Un timeout
 -- conserve le comportement historique (verdicts posés, avertissement déjà émis
 -- par nft_queue.wait_ack) : le client ne reçoit pas davantage de droits, il
 -- peut seulement résoudre une IP pas encore autorisée.
+-- Pendant l'attente, les paquets lus (`read_packets`) forment un lot SUIVANT,
+-- dont les verdicts ne sont posés qu'après SON PROPRE ACK (plus grand seq
+-- enfilé par ces paquets) : ils ne peuvent donc pas hériter de l'ACK du lot
+-- courant, qui ne couvre pas leurs insertions. Aucune lecture pendant la
+-- seconde attente (pas de récursion) : les paquets restants sont lus par la
+-- boucle principale.
+-- @tparam[opt] function|nil read_packets Lecture non bloquante fournie par
+--                                          nfq_loop (nil à la sortie de boucle)
 -- @treturn number Nombre de verdicts posés
-flush_deferred = ->
+flush_deferred = (read_packets) ->
   n = #deferred
   return 0 if n == 0
   deps = verdict_deps!
+  posed = 0
   -- pcall : le flush tourne hors du wrapper pcall du callback NFQUEUE ; une
   -- erreur inattendue ne doit pas tuer le worker (les paquets du lot seraient
   -- alors perdus à la destruction de la queue, donc fail-closed).
   ok, err = pcall ->
-    pending_seq = deps.get_last_seq!
-    deps.wait_ack pending_seq, (deferred[n].corr or ""), (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
-    for rec in *deferred
-      deps.set_verdict rec.qh_ptr, rec.pkt_id, rec.verdict, rec.payload
+    batch = deferred
+    deferred = {}
+    posed = #batch
+    _flush_batch batch, deps, read_packets
+    if #deferred > 0
+      nxt = deferred
+      deferred = {}
+      posed += #nxt
+      _flush_batch nxt, deps, nil
   unless ok
-    log_warn -> { action: "deferred_flush_error", count: n, err: tostring err }
-  deferred = {}
-  n
+    log_warn -> { action: "deferred_flush_error", count: posed, err: tostring err }
+  posed
 
 --- Pose — ou différe — le verdict final d'une réponse (appelé par finalize_a).
 -- En mode lot (`ctx.defer`), le verdict est mémorisé pour `flush_deferred` et
@@ -1390,9 +1426,12 @@ run = (queue_num, rfd, rules_metadata) ->
   -- Avec un bus inter-workers, on draine d'abord les verdicts B reçus : une
   -- réponse A parquée qui vient d'être débloquée est ajoutée au lot courant et
   -- donc acquittée avec lui (un seul ACK nft par lot, y compris ses insertions).
-  on_batch = ->
+  -- `read_packets` (argument fourni par nfq_loop) est utilisé par flush_deferred
+  -- pendant l'attente d'ACK pour continuer à vider la file noyau : les paquets
+  -- lus forment le lot suivant, acquitté séparément (cf. _flush_batch).
+  on_batch = (read_packets) ->
     drain_verdict_bus true if so_bus_rfd
-    flush_deferred!
+    flush_deferred read_packets
   run_opts = { on_batch_end: on_batch }
   -- Réveil immédiat sur verdict reçu (multi-worker) : sans cela, une réponse A
   -- parquée attendrait le timeout de poll (budget second avis, 80 ms) alors que

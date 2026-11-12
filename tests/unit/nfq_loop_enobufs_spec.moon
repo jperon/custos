@@ -392,3 +392,122 @@ describe "nfq_loop.run_queue fd supplémentaire (tube question→réponse)", ->
     assert.equals -1, poll_fds[2][2], "le fd mort n'est plus surveillé"
     assert.equals 1, destroyed
 
+-- ── Lecture non bloquante pendant l'attente d'ACK (hook on_batch_end) ────────
+-- Pendant `wait_ack`, le worker réponses doit continuer à vider le socket
+-- netlink, sinon la file noyau grossit (response_entry_ms, cf.
+-- docs/agents/perf.md §16). `nfq_loop` fournit à `on_batch_end` une fonction de
+-- lecture bornée, qui ne rappelle JAMAIS `on_batch_end` (pas de réentrance).
+describe "nfq_loop.run_queue lecture pendant l'attente (read_batch)", ->
+  teardown ->
+    package.loaded["ffi_defs"] = orig_defs
+    package.loaded["nfq_loop"] = orig_nfq
+
+  before_each ->
+    reads = {}
+    read_idx = 0
+    poll_script = {}
+    poll_idx = 0
+    poll_fds = {}
+    handled = {}
+    destroyed = 0
+    closed = 0
+    idle_calls = 0
+    captured_cb = nil
+    invoke_cb = false
+    open_fails = false
+    create_queue_fails = false
+    verdict_calls = {}
+
+  it "on_batch_end reçoit une fonction qui lit et dispatche le lot suivant", ->
+    seen = {}
+    reads = {
+      { rv: 10 }                -- lecture bloquante initiale
+      { rv: 20 }                -- lue par read_batch
+      { rv: 0 }                 -- lecture suivante : EOF
+    }
+    poll_script = {
+      { rv: 0 }                 -- drain du lot : socket vide
+      { rv: 1 }                 -- read_batch : paquet prêt
+      { rv: 0 }                 -- read_batch : plus rien
+    }
+    nfq.run_queue 0, (-> 1), {
+      on_batch_end: (read_batch) ->
+        if read_batch
+          before = #handled
+          n = read_batch!
+          seen[#seen + 1] = { n: n, delta: #handled - before }
+        else
+          seen[#seen + 1] = { n: 0, delta: 0 }
+    }
+    assert.same { { n: 1, delta: 1 }, { n: 0, delta: 0 } }, seen
+    assert.same { 10, 20 }, handled
+    assert.equals 3, poll_idx
+    assert.equals 3, read_idx
+    assert.equals 1, destroyed
+
+  it "borne la lecture pendant l'attente à MAX_BATCH_PKTS", ->
+    first_n = nil
+    calls = 0
+    reads = {}
+    for i = 1, 100
+      reads[i] = { rv: 1 }
+    reads[101] = { rv: 0 }
+    poll_script = { { rv: 0 } }   -- drain initial : socket vide
+    for i = 2, 1 + nfq.MAX_BATCH_PKTS
+      poll_script[i] = { rv: 1 }  -- polls de read_batch pendant l'attente
+    nfq.run_queue 0, (-> 1), {
+      on_batch_end: (read_batch) ->
+        calls += 1
+        if read_batch and not first_n
+          first_n = read_batch!
+    }
+    assert.equals nfq.MAX_BATCH_PKTS, first_n, "le lot lu pendant l'attente est borné"
+    assert.equals 100, #handled, "les paquets restants sont lus par la boucle principale"
+    assert.equals 101, read_idx
+
+  it "ENOBUFS pendant la lecture de l'attente → arrêt propre de la lecture", ->
+    seen = {}
+    reads = {
+      { rv: 10 }                -- lecture bloquante initiale
+      { rv: -1, errno: 105 }    -- read_batch : file noyau pleine
+      { rv: 0 }                 -- lecture suivante : EOF
+    }
+    poll_script = {
+      { rv: 0 }                 -- drain du lot : socket vide
+      { rv: 1 }                 -- read_batch : prêt (puis ENOBUFS)
+    }
+    nfq.run_queue 0, (-> 1), {
+      on_batch_end: (read_batch) ->
+        seen[#seen + 1] = read_batch! if read_batch
+    }
+    assert.same { 0 }, seen
+    assert.same { 10 }, handled
+    assert.equals 3, read_idx
+
+  it "read_batch n'est pas réentrant : aucun paquet lu depuis le callback", ->
+    rb = nil
+    inner = nil
+    reads = {
+      { rv: 10 }                -- lecture bloquante initiale
+      { rv: 20 }                -- lue par read_batch
+      { rv: 0 }                 -- lecture suivante : EOF
+    }
+    poll_script = {
+      { rv: 0 }                 -- drain du lot : socket vide
+      { rv: 1 }                 -- read_batch : paquet prêt
+      { rv: 0 }                 -- read_batch : plus rien
+    }
+    invoke_cb = true
+    cb = (qh, nfad, pkt_id) ->
+      inner = rb! if rb
+      nfq.NF_ACCEPT
+    nfq.run_queue 0, cb, {
+      on_batch_end: (read_batch) ->
+        if read_batch
+          rb = read_batch
+          read_batch!
+    }
+    assert.equals 0, inner, "un appel imbriqué ne lit rien"
+    assert.same { 10, 20 }, handled
+    assert.equals 3, read_idx, "aucune lecture supplémentaire par l'appel imbriqué"
+
