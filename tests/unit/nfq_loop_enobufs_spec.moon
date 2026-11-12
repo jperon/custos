@@ -145,3 +145,64 @@ describe "nfq_loop.run_queue ENOBUFS/EINTR", ->
     assert.equals 0, read_idx
     assert.equals 1, destroyed
     assert.equals 1, closed
+
+describe "nfq_loop.run_queue on_batch_end (verdicts différés)", ->
+  teardown ->
+    package.loaded["ffi_defs"] = orig_defs
+    package.loaded["nfq_loop"] = orig_nfq
+
+  before_each ->
+    reads = {}
+    read_idx = 0
+    poll_script = {}
+    poll_idx = 0
+    handled = {}
+    destroyed = 0
+    closed = 0
+    idle_calls = 0
+
+  it "regroupe en un seul lot les paquets déjà présents dans le socket (drain)", ->
+    batch = {}
+    reads = {
+      { rv: 10 }                -- lecture bloquante : paquet 1
+      { rv: 20 }                -- drain : paquet 2
+      { rv: 30 }                -- drain : paquet 3
+      { rv: -1, errno: 11 }     -- drain : EAGAIN (socket vidé) → fin du lot
+      { rv: 0 }                 -- lecture suivante : EOF
+    }
+    poll_script = { { rv: 1 }, { rv: 1 }, { rv: 1 } }
+    nfq.run_queue 0, (-> 1), { on_batch_end: -> batch[#batch + 1] = #handled }
+    -- Lot de 3 paquets (un seul on_batch_end), puis flush de sortie sur EOF.
+    assert.same { 3, 3 }, batch
+    assert.same { 10, 20, 30 }, handled
+    assert.equals 3, poll_idx
+    assert.equals 1, destroyed
+
+  it "un seul paquet par lot quand le socket n'a rien de plus", ->
+    batch = {}
+    reads = { { rv: 10 }, { rv: 0 } }
+    poll_script = { { rv: 0 } }   -- rien à drainer
+    nfq.run_queue 0, (-> 1), { on_batch_end: -> batch[#batch + 1] = #handled }
+    assert.same { 1, 1 }, batch
+    assert.same { 10 }, handled
+    assert.equals 1, poll_idx
+
+  it "borne un lot à MAX_BATCH_PKTS (64) paquets", ->
+    batch = {}
+    for i = 1, 100
+      reads[i] = { rv: 1 }
+    reads[101] = { rv: 0 }
+    for i = 1, 99
+      poll_script[i] = { rv: 1 }
+    poll_script[100] = { rv: 0 }   -- le socket est vide après le drain du 2e lot
+    nfq.run_queue 0, (-> 1), { on_batch_end: -> batch[#batch + 1] = #handled }
+    assert.equals 64, batch[1]
+    assert.equals 100, #handled
+    assert.equals 100, batch[#batch]
+
+  it "sans on_batch_end, aucun drain ni appel de hook", ->
+    reads = { { rv: 10 }, { rv: 20 }, { rv: 0 } }
+    nfq.run_queue 0, (-> 1)
+    assert.same { 10, 20 }, handled
+    assert.equals 0, poll_idx
+    assert.equals 1, closed

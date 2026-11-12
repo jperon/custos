@@ -129,3 +129,4 @@ Ce fichier est relu à chaque requête : il ne contient que le noyau. Avant de t
 - `docs/agents/auth.md` — Structure du worker AUTH (`src/auth/`), Résilience du portail captif aux blips réseau (`src/auth/portal_client.js`) ; à lire avant de modifier le worker AUTH ou la résilience du portail captif.
 - `docs/agents/webui.md` — Interface admin web (`src/webui/`) ; à lire avant de modifier l'interface admin web.
 - `docs/agents/audits.md` — Corrections d'audit (2026-07-16), Corrections d'audit (2026-11-11) ; à lire avant de reprendre un point des corrections d'audit (2026-07-16 / 2026-11-11).
+- `docs/agents/perf.md` — Goulot DNS sous charge (mesures 2026-11-12), interprétation de `user_dropped`, attente d'ACK nft par réponse ; à lire avant de toucher au chemin des réponses (`worker_responses`/`worker_nft`/`nfq_loop`) ou de refaire une campagne de charge.

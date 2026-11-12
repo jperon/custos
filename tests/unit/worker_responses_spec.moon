@@ -511,3 +511,98 @@ describe "build_orphan_fields (trace INFO du drop orphelin)", ->
     info[k] = v for k, v in pairs base_info
     info.qname = nil
     assert.equals "-", (m.build_orphan_fields info).qname
+
+describe "verdicts différés par lot NFQUEUE (settle / flush_deferred)", ->
+  calls = nil
+  m = nil
+
+  before_each ->
+    m = fresh_worker_responses!
+    calls = { set: {}, waits: {}, seq_reads: 0, seq: nil }
+    m._set_defer_deps {
+      get_last_seq: ->
+        calls.seq_reads += 1
+        calls.seq
+      wait_ack: (seq, corr, on_wait) ->
+        calls.waits[#calls.waits + 1] = { :seq, :corr }
+        true
+      set_verdict: (qh, id, verdict, payload) ->
+        calls.set[#calls.set + 1] = { :qh, :id, :verdict, :payload }
+    }
+
+  it "en mode lot, settle mémorise le verdict sans attente ni verdict posé", ->
+    ctx = { qh_ptr: "qh", pkt_id: 11, ack_corr: "c1", defer: true }
+    m.settle ctx, 1, nil, true
+    m.settle ctx, 1, "payload", true
+    assert.equals 2, m.deferred_count!
+    assert.equals 0, #calls.set
+    assert.equals 0, #calls.waits
+    assert.equals 0, calls.seq_reads
+
+  it "flush_deferred pose tous les verdicts après UN SEUL ACK du plus grand seq", ->
+    ctx1 = { qh_ptr: "qh", pkt_id: 11, ack_corr: "c1", defer: true }
+    ctx2 = { qh_ptr: "qh", pkt_id: 12, ack_corr: "c2", defer: true }
+    m.settle ctx1, 1, nil, true
+    m.settle ctx2, 1, "patched", true
+    calls.seq = 42
+    n = m.flush_deferred!
+    assert.equals 2, n
+    assert.equals 1, #calls.waits
+    assert.equals 42, calls.waits[1].seq
+    assert.equals "c2", calls.waits[1].corr
+    assert.equals 2, #calls.set
+    assert.equals 11, calls.set[1].id
+    assert.is_nil calls.set[1].payload
+    assert.equals 12, calls.set[2].id
+    assert.equals "patched", calls.set[2].payload
+    assert.equals 0, m.deferred_count!
+
+  it "flush_deferred sans insertion enfilée (seq nil) ne fait aucune attente", ->
+    ctx = { qh_ptr: "qh", pkt_id: 7, ack_corr: "c", defer: true }
+    m.settle ctx, 1, nil, false
+    n = m.flush_deferred!
+    assert.equals 1, n
+    assert.equals 0, #calls.waits
+    assert.equals 1, #calls.set
+
+  it "flush_deferred vide ne fait rien", ->
+    assert.equals 0, m.flush_deferred!
+    assert.equals 0, calls.seq_reads
+    assert.equals 0, #calls.set
+
+  it "hors lot, settle attend une fois puis pose le verdict", ->
+    ctx = { qh_ptr: "qh", pkt_id: 3, ack_corr: "corr" }
+    calls.seq = 9
+    m.settle ctx, 1, nil, true
+    assert.equals 1, #calls.waits
+    assert.equals 9, calls.waits[1].seq
+    assert.equals "corr", calls.waits[1].corr
+    assert.equals 1, #calls.set
+    assert.equals 3, calls.set[1].id
+
+  it "hors lot, settle sans insertion à acquitter ne fait aucune attente", ->
+    ctx = { qh_ptr: "qh", pkt_id: 4, ack_corr: "corr" }
+    calls.seq = 9
+    m.settle ctx, 1, "patched", false
+    assert.equals 0, #calls.waits
+    assert.equals 1, #calls.set
+    assert.equals "patched", calls.set[1].payload
+
+  it "une erreur du chemin de verdict est journalisée, pas propagée", ->
+    ctx = { qh_ptr: "qh", pkt_id: 8, ack_corr: "c", defer: true }
+    m.settle ctx, 1, nil, true
+    m._set_defer_deps {
+      get_last_seq: -> 1
+      wait_ack: -> true
+      set_verdict: -> error "boom"
+    }
+    n = m.flush_deferred!
+    assert.equals 1, n
+    assert.equals 0, m.deferred_count!
+
+  it "hors lot, dnsonly supprime l'attente (aucune insertion nft)", ->
+    ctx = { qh_ptr: "qh", pkt_id: 5, ack_corr: "corr", dnsonly: true }
+    calls.seq = 9
+    m.settle ctx, 1, nil, true
+    assert.equals 0, #calls.waits
+    assert.equals 1, #calls.set

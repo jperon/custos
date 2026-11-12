@@ -375,6 +375,94 @@ drain_ts = 0
 drain_on_msg = (msg) ->
   update_mac_clients msg, drain_ts
 
+-- ── Verdicts différés par lot NFQUEUE ────────────────────────────────
+-- Un lot = tous les paquets d'une même lecture netlink (cf. nfq_loop.run_queue,
+-- option on_batch_end). Sous charge, attendre l'ACK nft de CHAQUE réponse coûte
+-- un aller-retour resp-q4 → worker nft par réponse (31 % du temps mural du
+-- worker à 200 q/s, ACK p99 8-13 ms : cf. docs/agents/perf.md). On enfile donc
+-- les insertions de tout le lot, on attend UNE fois le plus grand seq, puis on
+-- pose les verdicts : aucun paquet n'est rendu au client avant que les IP du
+-- lot soient dans les sets nft (invariant de sécurité inchangé).
+deferred = {}
+defer_deps = nil
+
+--- Dépendances du chemin de verdict (injectables en test unitaire).
+-- @treturn table { get_last_seq, wait_ack, set_verdict }
+verdict_deps = ->
+  defer_deps or {
+    get_last_seq: get_last_seq
+    wait_ack:     measured_wait_ack
+    set_verdict:  set_verdict
+  }
+
+--- Nombre de verdicts en attente de l'ACK du lot courant.
+-- @treturn number
+deferred_count = -> #deferred
+
+--- Remplace les dépendances du chemin de verdict (tests unitaires uniquement).
+-- @tparam table|nil deps { get_last_seq, wait_ack, set_verdict } ou nil
+-- @treturn nil
+_set_defer_deps = (deps) ->
+  defer_deps = deps
+  nil
+
+--- Vide la file de verdicts différés (tests unitaires uniquement).
+-- @treturn nil
+_reset_deferred = ->
+  deferred = {}
+  nil
+
+--- Attend l'ACK nft du dernier seq enfilé puis pose les verdicts du lot.
+-- `get_last_seq` retourne le plus grand seq enfilé depuis le dernier prélèvement
+-- (toutes transactions du lot confondues, cf. nft_queue.get_last_seq) : l'ACK de
+-- ce seq prouve que toutes les insertions du lot sont appliquées. Un timeout
+-- conserve le comportement historique (verdicts posés, avertissement déjà émis
+-- par nft_queue.wait_ack) : le client ne reçoit pas davantage de droits, il
+-- peut seulement résoudre une IP pas encore autorisée.
+-- @treturn number Nombre de verdicts posés
+flush_deferred = ->
+  n = #deferred
+  return 0 if n == 0
+  deps = verdict_deps!
+  -- pcall : le flush tourne hors du wrapper pcall du callback NFQUEUE ; une
+  -- erreur inattendue ne doit pas tuer le worker (les paquets du lot seraient
+  -- alors perdus à la destruction de la queue, donc fail-closed).
+  ok, err = pcall ->
+    pending_seq = deps.get_last_seq!
+    deps.wait_ack pending_seq, (deferred[n].corr or ""), (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
+    for rec in *deferred
+      deps.set_verdict rec.qh_ptr, rec.pkt_id, rec.verdict, rec.payload
+  unless ok
+    log_warn -> { action: "deferred_flush_error", count: n, err: tostring err }
+  deferred = {}
+  n
+
+--- Pose — ou différe — le verdict final d'une réponse (appelé par finalize_a).
+-- En mode lot (`ctx.defer`), le verdict est mémorisé pour `flush_deferred` et
+-- aucune attente d'ACK n'est faite ici. Hors lot (déparking du second avis,
+-- tests), le comportement d'origine est conservé : attente si `need_ack`, puis
+-- verdict immédiat.
+-- @tparam table      ctx      Contexte paquet (qh_ptr, pkt_id, ack_corr, dnsonly)
+-- @tparam number     verdict  NF_ACCEPT | NF_DROP
+-- @tparam string|nil payload  Payload de remplacement éventuel
+-- @tparam boolean    need_ack true si des insertions nft doivent être acquittées
+-- @treturn nil
+settle = (ctx, verdict, payload, need_ack) ->
+  if ctx.defer
+    deferred[#deferred + 1] = {
+      qh_ptr:  ctx.qh_ptr
+      pkt_id:  ctx.pkt_id
+      :verdict
+      :payload
+      corr:    ctx.ack_corr
+    }
+    return
+  deps = verdict_deps!
+  if need_ack and not ctx.dnsonly
+    pending_seq = deps.get_last_seq!
+    deps.wait_ack pending_seq, ctx.ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
+  deps.set_verdict ctx.qh_ptr, ctx.pkt_id, verdict, payload
+
 sleep_ms = (ms) ->
   return unless ms and ms > 0
   sleep_req[0].tv_sec = math.floor ms / 1000
@@ -547,7 +635,8 @@ finalize_a = (ctx, override) ->
     inject answers, inject_opts
 
   -- Helper override : strip HTTPS/SVCB, repatche le paquet et pose le verdict
-  -- (NF_DROP si la construction ou le patch échoue).
+  -- (NF_DROP si la construction ou le patch échoue). Le verdict peut être
+  -- différé à la fin du lot NFQUEUE (cf. settle).
   patch_and_accept = (new_dns, action_label) ->
     if new_dns
       new_dns = strip_https_rr(new_dns) or new_dns
@@ -555,8 +644,8 @@ finalize_a = (ctx, override) ->
       if patched
         if level_enabled "DEBUG"
           log_debug -> { action: action_label, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
-        return set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
-    set_verdict qh_ptr, pkt_id, NF_DROP
+        return settle ctx, NF_ACCEPT, patched, false
+    settle ctx, NF_DROP, nil, false
 
   -- ── Override : blocage NXDOMAIN + EDE (Filtered) ──────────────
   if override and override.kind == "block"
@@ -587,12 +676,10 @@ finalize_a = (ctx, override) ->
             redirect_answers[#redirect_answers + 1] = { family: "ipv6", addr: ip2s(r), ttl: override.ttl }
           if #redirect_answers > 0
             inject_answers redirect_answers
-            pending_seq = get_last_seq!
-            measured_wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
           if level_enabled "DEBUG"
             log_debug -> { action: "response_validator_redirect", target: override.cname_target, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
-          return set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
-      return set_verdict qh_ptr, pkt_id, NF_DROP
+          return settle ctx, NF_ACCEPT, patched, (#redirect_answers > 0)
+      return settle ctx, NF_DROP, nil, false
     -- même CNAME → on continue vers le chemin normal (passthrough)
 
   -- ── Chemin normal (pass) : callbacks on_response + injection nft ──
@@ -667,18 +754,11 @@ finalize_a = (ctx, override) ->
     if ((config.nft or {}).add_failure_policy or "fail-closed") == "fail-closed"
       if level_enabled "DEBUG"
         log_debug -> { action: "nft_add_failed_policy_fail_closed", txid: txid_hex, client_ip: client_ip, qnames: qnames, user: user }
-      return set_verdict qh_ptr, pkt_id, NF_DROP
+      return settle ctx, NF_DROP, nil, false
     else
       log_warn -> { action: "nft_add_failed_fail_open", txid: txid_hex, client_ip: client_ip, qnames: qnames, user: user }
 
-  if not dnsonly and records_to_add > 0
-    pending_seq = get_last_seq!
-    measured_wait_ack pending_seq, ack_corr, (-> drain_pipe pipe_rfd, now, drain_on_msg) if pending_seq
-
-  if payload_modified
-    set_verdict qh_ptr, pkt_id, NF_ACCEPT, patched
-  else
-    set_verdict qh_ptr, pkt_id, NF_ACCEPT
+  settle ctx, NF_ACCEPT, (payload_modified and patched or nil), (records_to_add > 0)
 
 --- Construit les champs de la trace INFO d'une réponse orpheline (fonction pure).
 -- C'est le SEUL témoin d'une réponse client jetée faute de question appariée :
@@ -714,6 +794,8 @@ build_orphan_fields = (info) ->
 sweep_parked = ->
   return unless so_state and so_state.has_parked!
   for ctx in *so_state.expired current_benchmark_ms!
+    -- Hors lot NFQUEUE (appelé depuis on_idle) : poser le verdict immédiatement.
+    ctx.defer = false
     finalize_a ctx, nil
 
 --- Tente un retry upstream après une réponse transitoirement en échec.
@@ -1078,6 +1160,9 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
     vlan: l2.vlan, :src_ip, :dst_ip
     qname: q1 and q1.name and q1.name\lower! or "-"
     af:    ip.version == 6 and "ipv6" or "ipv4"
+    -- Verdict différé à la fin du lot NFQUEUE (un seul ACK nft par lot) :
+    -- cf. settle / flush_deferred et docs/agents/perf.md.
+    defer: true
   }
 
   -- Second avis : corrélation avec la réponse validateur (B) uniquement si la
@@ -1153,7 +1238,9 @@ run = (queue_num, rfd, rules_metadata) ->
     arm_retry_fds!
     log_info -> { action: "dns_upstream_retry_armed", max_attempts: retry_max, ipv4: retry_fds.ipv4 != nil, ipv6: retry_fds.ipv6 != nil }
 
-  local run_opts
+  -- Flush des verdicts différés après chaque lecture netlink : indispensable au
+  -- chemin nominal (le lot est vidé même sans second avis).
+  run_opts = { on_batch_end: flush_deferred }
   all_resolvers = collect_all_resolvers!
   if #all_resolvers > 0
     families = {}
@@ -1167,7 +1254,8 @@ run = (queue_num, rfd, rules_metadata) ->
         verdict_ttl_s: 5
         :families
       }
-      run_opts = { idle_ms: so_cfg.budget_ms or 80, on_idle: sweep_parked }
+      run_opts.idle_ms = so_cfg.budget_ms or 80
+      run_opts.on_idle = sweep_parked
       log_info -> { action: "dns_validator_responses_armed", resolvers: table.concat(all_resolvers, ","), ipv4: families.ipv4, ipv6: families.ipv6 }
 
   run_queue tonumber(queue_num), handle_response, run_opts
@@ -1188,4 +1276,5 @@ _set_pipe_rfd = (fd) ->
   :current_benchmark_us, :take_last_ack_wait_us,
   :plan_retry_tries, :retry_pending_match, :_retry_budget, :_set_pipe_rfd,
   :build_orphan_fields,
+  :settle, :flush_deferred, :deferred_count, :_set_defer_deps, :_reset_deferred,
   :finalize_a }

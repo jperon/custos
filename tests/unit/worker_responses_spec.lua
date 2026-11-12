@@ -641,7 +641,7 @@ describe("budget de retry d'appariement IPC", function()
     end)
   end)
 end)
-return describe("build_orphan_fields (trace INFO du drop orphelin)", function()
+describe("build_orphan_fields (trace INFO du drop orphelin)", function()
   local base_info = {
     src_ip = "1.1.1.1",
     dst_ip = "10.0.0.2",
@@ -692,5 +692,160 @@ return describe("build_orphan_fields (trace INFO du drop orphelin)", function()
     end
     info.qname = nil
     return assert.equals("-", (m.build_orphan_fields(info)).qname)
+  end)
+end)
+return describe("verdicts différés par lot NFQUEUE (settle / flush_deferred)", function()
+  local calls = nil
+  local m = nil
+  before_each(function()
+    m = fresh_worker_responses()
+    calls = {
+      set = { },
+      waits = { },
+      seq_reads = 0,
+      seq = nil
+    }
+    return m._set_defer_deps({
+      get_last_seq = function()
+        calls.seq_reads = calls.seq_reads + 1
+        return calls.seq
+      end,
+      wait_ack = function(seq, corr, on_wait)
+        calls.waits[#calls.waits + 1] = {
+          seq = seq,
+          corr = corr
+        }
+        return true
+      end,
+      set_verdict = function(qh, id, verdict, payload)
+        calls.set[#calls.set + 1] = {
+          qh = qh,
+          id = id,
+          verdict = verdict,
+          payload = payload
+        }
+      end
+    })
+  end)
+  it("en mode lot, settle mémorise le verdict sans attente ni verdict posé", function()
+    local ctx = {
+      qh_ptr = "qh",
+      pkt_id = 11,
+      ack_corr = "c1",
+      defer = true
+    }
+    m.settle(ctx, 1, nil, true)
+    m.settle(ctx, 1, "payload", true)
+    assert.equals(2, m.deferred_count())
+    assert.equals(0, #calls.set)
+    assert.equals(0, #calls.waits)
+    return assert.equals(0, calls.seq_reads)
+  end)
+  it("flush_deferred pose tous les verdicts après UN SEUL ACK du plus grand seq", function()
+    local ctx1 = {
+      qh_ptr = "qh",
+      pkt_id = 11,
+      ack_corr = "c1",
+      defer = true
+    }
+    local ctx2 = {
+      qh_ptr = "qh",
+      pkt_id = 12,
+      ack_corr = "c2",
+      defer = true
+    }
+    m.settle(ctx1, 1, nil, true)
+    m.settle(ctx2, 1, "patched", true)
+    calls.seq = 42
+    local n = m.flush_deferred()
+    assert.equals(2, n)
+    assert.equals(1, #calls.waits)
+    assert.equals(42, calls.waits[1].seq)
+    assert.equals("c2", calls.waits[1].corr)
+    assert.equals(2, #calls.set)
+    assert.equals(11, calls.set[1].id)
+    assert.is_nil(calls.set[1].payload)
+    assert.equals(12, calls.set[2].id)
+    assert.equals("patched", calls.set[2].payload)
+    return assert.equals(0, m.deferred_count())
+  end)
+  it("flush_deferred sans insertion enfilée (seq nil) ne fait aucune attente", function()
+    local ctx = {
+      qh_ptr = "qh",
+      pkt_id = 7,
+      ack_corr = "c",
+      defer = true
+    }
+    m.settle(ctx, 1, nil, false)
+    local n = m.flush_deferred()
+    assert.equals(1, n)
+    assert.equals(0, #calls.waits)
+    return assert.equals(1, #calls.set)
+  end)
+  it("flush_deferred vide ne fait rien", function()
+    assert.equals(0, m.flush_deferred())
+    assert.equals(0, calls.seq_reads)
+    return assert.equals(0, #calls.set)
+  end)
+  it("hors lot, settle attend une fois puis pose le verdict", function()
+    local ctx = {
+      qh_ptr = "qh",
+      pkt_id = 3,
+      ack_corr = "corr"
+    }
+    calls.seq = 9
+    m.settle(ctx, 1, nil, true)
+    assert.equals(1, #calls.waits)
+    assert.equals(9, calls.waits[1].seq)
+    assert.equals("corr", calls.waits[1].corr)
+    assert.equals(1, #calls.set)
+    return assert.equals(3, calls.set[1].id)
+  end)
+  it("hors lot, settle sans insertion à acquitter ne fait aucune attente", function()
+    local ctx = {
+      qh_ptr = "qh",
+      pkt_id = 4,
+      ack_corr = "corr"
+    }
+    calls.seq = 9
+    m.settle(ctx, 1, "patched", false)
+    assert.equals(0, #calls.waits)
+    assert.equals(1, #calls.set)
+    return assert.equals("patched", calls.set[1].payload)
+  end)
+  it("une erreur du chemin de verdict est journalisée, pas propagée", function()
+    local ctx = {
+      qh_ptr = "qh",
+      pkt_id = 8,
+      ack_corr = "c",
+      defer = true
+    }
+    m.settle(ctx, 1, nil, true)
+    m._set_defer_deps({
+      get_last_seq = function()
+        return 1
+      end,
+      wait_ack = function()
+        return true
+      end,
+      set_verdict = function()
+        return error("boom")
+      end
+    })
+    local n = m.flush_deferred()
+    assert.equals(1, n)
+    return assert.equals(0, m.deferred_count())
+  end)
+  return it("hors lot, dnsonly supprime l'attente (aucune insertion nft)", function()
+    local ctx = {
+      qh_ptr = "qh",
+      pkt_id = 5,
+      ack_corr = "corr",
+      dnsonly = true
+    }
+    calls.seq = 9
+    m.settle(ctx, 1, nil, true)
+    assert.equals(0, #calls.waits)
+    return assert.equals(1, #calls.set)
   end)
 end)
