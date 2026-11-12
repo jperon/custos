@@ -352,6 +352,23 @@ describe "config.nfqueue.responses", ->
     os.remove path
     assert.equals "0-1", cfg.nfqueue.questions
 
+  -- Défaut issu de la campagne de réglage (docs/agents/perf.md §15.5) :
+  -- deux workers réponses (2/2) ; la file 4 reste la dernière de la plage pour
+  -- ne pas casser une configuration qui la référence explicitement.
+  it "sans config externe : défaut \"3-4\" (deux workers réponses, file 4 conservée)", ->
+    cfg = reload nil
+    assert.equals "3-4", cfg.nfqueue.responses
+
+  it "le défaut ne partage aucune file avec les autres rôles", ->
+    cfg = reload nil
+    lm = require "lib.lowmem"
+    owner = {}
+    for role in *{ "questions", "captive", "reject", "auth", "sni", "sip", "doh_vlan" }
+      for q in *lm.parse_queues cfg.nfqueue[role]
+        owner[q] = role
+    for q in *lm.parse_queues cfg.nfqueue.responses
+      assert.is_nil owner[q], "file #{q} du défaut réponses aussi utilisée par #{owner[q]}"
+
 describe "config.nfqueue chevauchement", ->
   after_each ->
     ffi.C.unsetenv "CUSTOS_CONFIG_PATH"

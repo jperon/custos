@@ -215,7 +215,11 @@ DEFAULTS = {
 
   nfqueue: {
     questions: "0-1"
-    responses: "4"
+    -- Plage des réponses DNS : un worker par file. Deux workers (2/2) est le
+    -- profil recommandé par la campagne de charge (docs/agents/perf.md §15.5) ;
+    -- la file 4 reste la dernière de la plage pour les configurations qui la
+    -- citent explicitement.
+    responses: "3-4"
     captive: "20"
     reject: "10-11"
     auth: "5"
@@ -265,8 +269,9 @@ DEFAULTS = {
     pending_ttl: 5
     -- Borne de la table `pending` par worker réponses (mesuré ≈ 0,84 Ko/entrée,
     -- 20 000 ≈ 16 Mo) : au-delà, les entrées les plus anciennes sont évincées
-    -- (cf. doc/CONFIG.md § ipc). 0 ou valeur invalide → défaut.
-    pending_max: 20000
+    -- (cf. doc/CONFIG.md § ipc). 0 = auto : 20 000, ou 5 000 en mode RAM faible
+    -- (lib.lowmem.resolve_pending_max, cf. docs/agents/perf.md §15.5).
+    pending_max: 0
     match_retry: {
       count: 5
       sleep_ms: 20

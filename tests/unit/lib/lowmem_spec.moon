@@ -63,6 +63,25 @@ describe "lib.lowmem", ->
     it "renvoie false si la RAM est illisible (0)", ->
       assert.is_false lowmem.detect {}, -> 0
 
+  describe "resolve_pending_max", ->
+    it "une valeur explicite positive prime sur le profil", ->
+      assert.equals 1234, lowmem.resolve_pending_max 1234, false
+      assert.equals 1234, lowmem.resolve_pending_max "1234", true
+
+    it "absente, nulle ou invalide : défaut du profil", ->
+      assert.equals 20000, lowmem.resolve_pending_max nil, false
+      assert.equals 5000,  lowmem.resolve_pending_max nil, true
+      assert.equals 20000, lowmem.resolve_pending_max 0, false
+      assert.equals 5000,  lowmem.resolve_pending_max "abc", true
+      assert.equals 5000,  lowmem.resolve_pending_max -5, true
+
+    it "arrondit une valeur décimale explicite", ->
+      assert.equals 42, lowmem.resolve_pending_max 42.7, false
+
+    it "expose les deux bornes du profil", ->
+      assert.equals 20000, lowmem.PENDING_MAX_DEFAULT
+      assert.equals 5000,  lowmem.LOWMEM_PENDING_MAX
+
   describe "read_mem_total_kb", ->
     it "renvoie 0 pour un chemin inexistant", ->
       assert.equals 0, lowmem.read_mem_total_kb "tmp/inexistant-meminfo-xyz"

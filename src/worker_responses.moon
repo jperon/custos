@@ -401,7 +401,7 @@ drain_on_msg = (msg) ->
 -- ── Verdicts différés par lot NFQUEUE ────────────────────────────────
 -- Un lot = tous les paquets d'une même lecture netlink (cf. nfq_loop.run_queue,
 -- option on_batch_end). Sous charge, attendre l'ACK nft de CHAQUE réponse coûte
--- un aller-retour resp-q4 → worker nft par réponse (31 % du temps mural du
+-- un aller-retour resp-q* → worker nft par réponse (31 % du temps mural du
 -- worker à 200 q/s, ACK p99 8-13 ms : cf. docs/agents/perf.md). On enfile donc
 -- les insertions de tout le lot, on attend UNE fois le plus grand seq, puis on
 -- pose les verdicts : aucun paquet n'est rendu au client avant que les IP du

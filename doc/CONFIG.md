@@ -291,9 +291,11 @@ runtime: {
 > automatiquement chaque plage `nfqueue` (`questions`, `responses`, `captive`,
 > `reject`) à une **seule** file — donc un seul worker forké par règle — afin de
 > minimiser l'empreinte mémoire (cf. [section `nfqueue`](#3-section-nfqueue)).
-> Par défaut (`"auto"`), il s'active si `MemTotal < 128 Mo` (`lowmem_threshold_kb`).
-> Ce seuil de 128 Mo est aligné sur l'autodétection de profil de listes par
-> `custos-update` (`full`/`lowmem`).
+> Il réduit aussi deux défauts mémoire, sauf valeur explicite : `nfqueue.rcvbuf`
+> à **512 Kio** (au lieu de 4 Mio) et `ipc.pending_max` à **5 000** entrées par
+> worker réponses (au lieu de 20 000). Par défaut (`"auto"`), il s'active si
+> `MemTotal < 128 Mo` (`lowmem_threshold_kb`). Ce seuil de 128 Mo est aligné sur
+> l'autodétection de profil de listes par `custos-update` (`full`/`lowmem`).
 
 > **RAM faible (≈128 Mo).** Les listes de domaines au format `.bin` sont mappées
 > en lecture seule partagée (`mmap` `MAP_SHARED`) : leurs pages ne sont jamais
@@ -329,7 +331,7 @@ Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 | Clé | Type | Défaut | Worker |
 |-----|------|--------|--------|
 | `questions` | string | `"0-1"` | Questions DNS entrantes |
-| `responses` | string | `"4"` | Réponses DNS à réinjecter (plage = plusieurs workers, voir note) |
+| `responses` | string | `"3-4"` | Réponses DNS à réinjecter (plage = un worker par file, voir note) |
 | `captive` | string | `"20"` | Détection portail captif (TCP/80) |
 | `reject` | string | `"10-11"` | Paquets à rejeter (RST/ICMP) |
 | `auth` | string | `"5"` | Authentification HTTPS |
@@ -378,8 +380,10 @@ dépendent pas de cette affinité :
   différentes.
 
 Coût : `N` processus réponses, `N` copies de la table `pending` et `N` écritures
-par question. À 1 worker (défaut `"4"`), un seul pipe est créé : **aucun
-changement de comportement ni de coût**. Le mode
+par question. Le défaut `"3-4"` fork **deux** workers réponses (profil 2/2
+recommandé par la campagne de charge, `docs/agents/perf.md` §15.5) ; une file
+seule (`"4"`) crée un seul pipe et un seul worker — comportement historique,
+sans coût de fan-out. Le mode
 [`runtime.lowmem`](#2-section-runtime) ramène toute plage à une seule file.
 
 > **Syntaxe.** `queue num` n'accepte qu'un nombre (`"4"`) ou une plage contiguë
@@ -527,7 +531,7 @@ Communication interne entre le worker questions et le worker réponses.
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
 | `pending_ttl` | int | `5` | Durée (s) de conservation d'une question en attente de réponse |
-| `pending_max` | int | `20000` | Taille maximale de la table `pending` par worker réponses ; au-delà, les entrées les plus anciennes sont évincées |
+| `pending_max` | int | `0` (auto : `20000` hors RAM faible, `5000` en RAM faible) | Taille maximale de la table `pending` par worker réponses ; au-delà, les entrées les plus anciennes sont évincées |
 | `match_retry.enabled` | bool | `true` | Active les tentatives de correspondance question/réponse |
 | `match_retry.count` | int | `5` | Nombre de tentatives |
 | `match_retry.sleep_ms` | int | `20` | Délai (ms) entre chaque tentative |
@@ -557,11 +561,16 @@ signale l'événement.
 
 Taille mémoire mesurée (`collectgarbage "count"`,
 `tests/unit/ipc/ipc_spec.moon`) : ≈ 0,84 Ko par entrée, soit ≈ 16 Mo pour
-20 000 entrées **par worker réponses**. Le défaut 20 000 laisse une marge de
-plusieurs ordres de grandeur au-dessus d'une charge nominale (~2 000 entrées à
-400 q/s sur 5 s) tout en restant borné. Sur une cible à 128 Mo ou avec
-plusieurs workers réponses, réduire `pending_max` : la mémoire est multipliée
-par le nombre de workers.
+20 000 entrées **par worker réponses**. `pending_max: 0` (défaut) signifie
+« auto » : **20 000** hors RAM faible, **5 000** (≈ 4 Mo par worker) quand
+[`runtime.lowmem`](#2-section-runtime) est actif — résolu par
+`lib.lowmem.resolve_pending_max` au chargement de `src/ipc.moon` ; une valeur
+explicite ≥ 1 prime toujours. Le défaut 20 000 laisse une marge de plusieurs
+ordres de grandeur au-dessus d'une charge nominale (~2 000 entrées à 400 q/s
+sur 5 s) tout en restant borné ; 5 000 n'a pas d'effet mesurable sur le débit à
+charge nominale (`docs/agents/perf.md` §15.5). Avec plusieurs workers réponses,
+la mémoire est multipliée par leur nombre : sur une cible contrainte, garder
+`0` (profil) ou réduire `pending_max`.
 
 Une réponse dont la question a été évincée suit **exactement** le chemin d'une
 question expirée : `get_pending_entry` renvoie `nil`, le retry d'appariement
