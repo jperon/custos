@@ -45,6 +45,10 @@ réponses, rapportée à la durée du palier.
 | 300 q/s `mixed` | 6000/5856 | **2,4 %** | 46,8 / 477 | 55 % | 42 % | 43 % | 5,48 s / 23 s = 24 % | 145 | +253 |
 | 500 q/s `mixed` | 14999/6301 | **58,0 %** | 326 / 695 | 52 % | 51 % | 74 % | 10,3 s / 32 s = 32 % | 214 | **+14 674** |
 
+La fenêtre de mesure inclut les ~2-3 s de fin de drainage après l'arrêt du
+générateur (le service finit d'écouler son backlog) ; ramenée à la durée du
+générateur, la part d'attente d'ACK est de 27-34 % selon le palier.
+
 Détail des attentes d'ACK à 200 q/s `mixed` : n = 6000 lignes, `ack_wait_us`
 moyenne 1 530 µs, p90 7 583 µs, p99 11 428 µs, max 19 602 µs ; 1 712 lignes
 non nulles, 1 566 > 2 ms. Elles se concentrent sur les réponses de la règle
