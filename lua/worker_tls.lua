@@ -1435,5 +1435,12 @@ return {
   prune_sni_verdicts = prune_sni_verdicts,
   reset_sni_verdicts = reset_sni_verdicts,
   set_validator_state = set_validator_state,
-  auth_sessions_file = auth_sessions_file
+  auth_sessions_file = auth_sessions_file,
+  handle_sni_packet = handle_sni_packet,
+  format_mac = format_mac,
+  format_ip = format_ip,
+  write_sni_event = write_sni_event,
+  is_mail_ssl_port = is_mail_ssl_port,
+  tls_version_name = tls_version_name,
+  extract_supported_versions = extract_supported_versions
 }

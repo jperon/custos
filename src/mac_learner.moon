@@ -509,4 +509,9 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
       for h, entry in pairs strip_table
         strip_table[h] = nil if now_epoch > entry[2]
 
-{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup, :probe_request, :start_query, :ip16_to_str }
+{ :run, :process_vlan_learn, :vlan_lookup, :process_strip_learn, :strip_lookup, :probe_request, :start_query, :ip16_to_str
+  -- Exports de test (couverture unitaire) : mêmes fonctions, aucun changement
+  -- de comportement.
+  :process_learn, :learn_mac, :expire_pending, :create_server
+  :ensure_parent_dir, :set_recv_timeout, :reply_unknown
+  :pending_queries, :negative_cache }

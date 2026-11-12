@@ -448,5 +448,13 @@ run = function(ifnames, learn_wfd)
 end
 return {
   run = run,
-  BPF_PROG = BPF_PROG
+  BPF_PROG = BPF_PROG,
+  build_learn_msg = build_learn_msg,
+  write_learn = write_learn,
+  extract_tlla = extract_tlla,
+  attach_filter = attach_filter,
+  open_socket = open_socket,
+  process_arp = process_arp,
+  process_ipv6 = process_ipv6,
+  fmt_ipv6 = fmt_ipv6
 }

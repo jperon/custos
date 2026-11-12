@@ -390,5 +390,14 @@ return {
   run = run,
   classify_direction = classify_direction,
   resolve_outbound_mac = resolve_outbound_mac,
-  remember_phone_ip = cache_ip_to_mac
+  remember_phone_ip = cache_ip_to_mac,
+  format_ip = format_ip,
+  cache_ip_to_mac = cache_ip_to_mac,
+  known_phone_mac = known_phone_mac,
+  is_lan_ip = is_lan_ip,
+  query_phone_mac = query_phone_mac,
+  allow_mac_ip = allow_mac_ip,
+  allow_sip_peer = allow_sip_peer,
+  handle_packet = handle_packet,
+  ip_to_mac = ip_to_mac
 }

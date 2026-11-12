@@ -523,4 +523,7 @@ parse_na_frame = (raw, n) ->
 
 { :init, :probe_and_wait, :send_probe, :parse_arp_frame, :parse_na_frame, :get_ms,
   :build_arp_request, :build_ns_frame, :icmpv6_cksum,
-  :parse_arp_reply, :parse_na_reply, :ip4_to_bin, :ip6_to_bin }
+  :parse_arp_reply, :parse_na_reply, :ip4_to_bin, :ip6_to_bin
+  -- Exports de test (couverture unitaire) : mêmes fonctions, aucun changement
+  -- de comportement.
+  :read_own_mac, :read_own_ip6, :open_socket, :send_frame, :wait_reply }

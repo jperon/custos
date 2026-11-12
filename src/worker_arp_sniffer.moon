@@ -437,4 +437,8 @@ run = (ifnames, learn_wfd) ->
 
 -- BPF_PROG est exporté pour permettre la validation du programme cBPF
 -- par les tests unitaires (interpréteur cBPF, sans socket réel).
-{ :run, :BPF_PROG }
+{ :run, :BPF_PROG
+  -- Exports de test (couverture unitaire) : mêmes fonctions, aucun changement
+  -- de comportement.
+  :build_learn_msg, :write_learn, :extract_tlla, :attach_filter, :open_socket
+  :process_arp, :process_ipv6, :fmt_ipv6 }

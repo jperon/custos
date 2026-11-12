@@ -413,4 +413,8 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
       agg  = {}
       hour = new_hour
 
-{ :run, :process_line, :note_verdict, :flush_verdicts }
+{ :run, :process_line, :note_verdict, :flush_verdicts
+  -- Exports de test (couverture unitaire) : mêmes fonctions, aucun changement
+  -- de comportement.
+  :current_hour, :create_signal_fd, :read_chunk, :flush_to_file
+  :compress_old, :free_pct_on, :file_age_hours, :cleanup_old, :verdict_key }

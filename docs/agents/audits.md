@@ -2996,3 +2996,59 @@ sur trois de Busted meurt d'un **SIGSEGV dans `luajit` après la fin des tests**
 **Vérification (2026-11-12).** `nix develop --command bash -c "make all && make
 check && make test"` : **2865 succès / 0 échec / 0 erreur / 0 pending**
 (`tmp/verify.log`), tests JS 12/12, `make check` OK.
+
+### Couverture de tests des modules peu couverts (branche d-covw)
+
+Objectif : combler les six modules les plus faibles de la mesure exacte
+`make coverage-split` du 2026-11-12 (global 76,6 %), un commit par module.
+Mesures ci-dessous : luacov ciblé sur l'ensemble des specs de chaque module
+(même jeu de specs avant/après), `lua/<module>.lua` seul.
+
+| Module | Lignes suivies | Avant | Après | Tests ajoutés |
+|--------|----------------|-------|-------|---------------|
+| `worker_tls` | 982 | 50,12 % | **97,26 %** | `worker_tls_handler_spec.moon` (63) |
+| `mac_learner` | 345 | 32,19 % | **95,94 %** | `mac_learner_core_spec.moon` (23) |
+| `worker_arp_sniffer` | 274 | 15,51 % | **82,85 %** | `worker_arp_sniffer_core_spec.moon` (18) + `_bugs_spec` (2 pending) |
+| `worker_events` | 309 | 37,86 % | **96,12 %** | `worker_events_core_spec.moon` (18 + 1 pending) |
+| `mac_prober` | 322 | 44,90 % | **92,55 %** | `mac_prober_socket_spec.moon` (19) |
+| `worker_sip` | 265 | 25,21 % | **97,36 %** | `worker_sip_core_spec.moon` (23) |
+
+Méthode : exports de test uniquement (aucune logique modifiée dans `src/`),
+sockets simulés ou vrais `socketpair` AF_UNIX dans `./tmp/`, rechargement du
+module sous test avec `package.loaded` stubbé puis restauration (modèle
+`worker_questions_spec.moon`). Seule exception documentée : les sessions QUIC
+de `worker_tls` sont simulées en unitaire, le backend crypto natif (wolfssl /
+mbedtls / openssl) n'étant pas disponible dans le runner ; l'extraction réelle
+reste couverte par le groupe G14 de `make test-e2e`.
+
+**Bugs constatés, non corrigés (hors périmètre de la campagne) :**
+
+- **`worker_events.flush_to_file` crée les TSV en mode 0000.**
+  `src/worker_events.moon:229` et `:235` passent `FILE_MODE` (nombre Lua) à
+  `libc.open(path, flags, ...)`, déclaré variadique (`src/ffi_defs.moon:23`).
+  LuaJIT transmet un nombre en vararg comme `double` ; le noyau lit un
+  `mode_t` indéfini dans les registres entiers. Vérifié hors tests :
+  `ffi.C.open(p, flags, 420)` crée un fichier `----------` (0000), alors que
+  `ffi.C.open(p, flags, ffi.cast("int", 420))` crée `-rw-r--r--` (0644). Les
+  fichiers `events-*.tsv` sont donc illisibles (sauf root). Test
+  `tests/unit/worker_events_core_spec.moon` marqué `pending`.
+- **`worker_arp_sniffer.extract_tlla` ignore une option TLLA finale.**
+  `src/worker_arp_sniffer.moon:101` exige `len >= opt_start + 8` alors qu'une
+  option de 8 octets à l'offset `opt_start` finit à `opt_start + 7` ; et
+  `:109` rejette `offset + opt_len > len` alors que le dernier octet est à
+  `offset + opt_len - 1`. Une NA minimale (14 + 40 + 24 + 8 = 86 octets)
+  n'a donc jamais son TLLA lu : `process_ipv6` retombe sur la MAC source
+  Ethernet, au lieu de la MAC annoncée. Test pending dans
+  `worker_arp_sniffer_bugs_spec.moon`.
+- **`worker_arp_sniffer.run` initialise `pollfd` en 1-based.**
+  `src/worker_arp_sniffer.moon:410-413` alloue `struct pollfd[#fds]` (indices
+  0..#fds-1) puis écrit `pfds[i]` pour `i = 1..#fds` (boucle `ipairs`).
+  Avec une interface : `pfds[0]` (lu par `poll`, ligne 425) n'est jamais
+  initialisé (fd 0 = stdin) et `pfds[1]` est écrit hors bornes. Vérifié : le
+  processus de test se termine anormalement après trois appels à `run()` avec
+  un socket simulé ; les tests de boucle sont donc marqués pending dans
+  `worker_arp_sniffer_bugs_spec.moon`.
+
+**Vérification.** `nix develop --command bash -c "make all && make check &&
+make test"` : **3018 succès / 0 échec / 0 erreur / 3 pending** (référence
+avant campagne : 2854 / 0) ; sortie complète dans `tmp/test.log`.
