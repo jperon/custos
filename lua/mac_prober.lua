@@ -474,5 +474,10 @@ return {
   parse_arp_reply = parse_arp_reply,
   parse_na_reply = parse_na_reply,
   ip4_to_bin = ip4_to_bin,
-  ip6_to_bin = ip6_to_bin
+  ip6_to_bin = ip6_to_bin,
+  read_own_mac = read_own_mac,
+  read_own_ip6 = read_own_ip6,
+  open_socket = open_socket,
+  send_frame = send_frame,
+  wait_reply = wait_reply
 }
