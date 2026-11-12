@@ -14,6 +14,8 @@ do
   local _obj_0 = require("auth.cert")
   load_or_generate_sni, load_static, load_or_generate_static = _obj_0.load_or_generate_sni, _obj_0.load_static, _obj_0.load_or_generate_static
 end
+local check_cert
+check_cert = require("auth.cert_expiry").check_cert
 local sanitize_hostname
 sanitize_hostname = require("auth.cert_name").sanitize_hostname
 local extract_client_sni
@@ -516,6 +518,9 @@ run = function(secrets, auth_cfg, reload_fn, nft_sess, secrets_path)
           key = auth_cfg.key
         }
       end)
+      check_cert(auth_cfg.cert, {
+        worker = "auth"
+      })
     else
       log_warn(function()
         return {

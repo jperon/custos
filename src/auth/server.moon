@@ -17,6 +17,7 @@ ffi = require "ffi"
 { :load_sessions } = require "auth.sessions"
 token = require "auth.token"
 { :load_or_generate_sni, :load_static, :load_or_generate_static } = require "auth.cert"
+{ :check_cert } = require "auth.cert_expiry"
 { :sanitize_hostname } = require "auth.cert_name"
 { :extract_client_sni } = require "auth.sni_peek"
 { :log_info, :log_warn, :log_error, :log_debug, :level_enabled } = require "log"
@@ -349,6 +350,10 @@ run = (secrets, auth_cfg, reload_fn, nft_sess, secrets_path) ->
     if ctx
       static_tls_ctx = ctx
       log_info -> { action: "server_static_cert_loaded", cert: auth_cfg.cert, key: auth_cfg.key }
+      -- Un certificat expiré était servi sans trace : avertir au démarrage.
+      -- AUTH ne recharge pas son certificat sur SIGHUP (seuls les secrets le
+      -- sont) : le contrôle n'a lieu qu'ici, au lancement du worker.
+      check_cert auth_cfg.cert, { worker: "auth" }
     else
       log_warn -> { action: "server_static_cert_failed", cert: auth_cfg.cert, key: auth_cfg.key, err: cert_err }
   else

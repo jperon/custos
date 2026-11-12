@@ -9,6 +9,12 @@ get_errno = require("lib.socket").get_errno
 ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
   typedef struct WOLFSSL WOLFSSL;
   typedef struct WOLFSSL_METHOD WOLFSSL_METHOD;
+  typedef struct WOLFSSL_X509 WOLFSSL_X509;
+  typedef struct WOLFSSL_ASN1_TIME {
+    unsigned char data[32];
+    int           length;
+    int           type;
+  } WOLFSSL_ASN1_TIME;
 
   WOLFSSL_METHOD* wolfTLS_server_method(void);
   WOLFSSL_METHOD* wolfTLS_client_method(void);
@@ -19,6 +25,9 @@ ffi.cdef([[  typedef struct WOLFSSL_CTX WOLFSSL_CTX;
   int          wolfSSL_CTX_use_certificate_file(WOLFSSL_CTX *ctx, const char *file, int type);
   int          wolfSSL_CTX_use_certificate_chain_file(WOLFSSL_CTX *ctx, const char *file);
   int          wolfSSL_CTX_use_PrivateKey_file(WOLFSSL_CTX *ctx, const char *file, int type);
+  WOLFSSL_X509* wolfSSL_X509_load_certificate_file(const char *fname, int format);
+  void          wolfSSL_X509_free(WOLFSSL_X509 *x509);
+  WOLFSSL_ASN1_TIME* wolfSSL_X509_get_notAfter(const WOLFSSL_X509 *x509);
 
   WOLFSSL* wolfSSL_new(WOLFSSL_CTX *ctx);
   void     wolfSSL_free(WOLFSSL *ssl);

@@ -138,7 +138,7 @@ RL_VOLATILE_KEYS = {
   "fd", "frames", "free_pct", "grace", "groups", "hour", "ignored"
   "ipc_fd", "ipc_retry_attempts", "ipc_retry_wait_ms", "key_size", "learn_rfd", "learn_wfd"
   "len", "listen_fd", "log_ms", "log_write_us", "match_ms", "max_age_hours", "max_attempts", "min_free_pct"
-  "msg", "need", "new_size", "parent_pid", "parse_ms", "payload_len", "payload_ms"
+  "days_left", "msg", "need", "new_size", "not_after", "parent_pid", "parse_ms", "payload_len", "payload_ms"
   "pid", "pkt_id", "port_src", "pos", "q_to_response_ms", "query_bytes"
   "question_proc_ms", "question_response_rfd"
   "question_response_wfd", "raw", "removed", "removed_count", "resp_bytes", "response_entry_ms"
