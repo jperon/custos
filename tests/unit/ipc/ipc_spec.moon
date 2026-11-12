@@ -506,14 +506,161 @@ describe "ipc", ->
       close_pipe p1
       close_pipe p2
 
-    it "renvoie false si un des pipes refuse l'écriture (fail-closed)", ->
+    -- Un seul destinataire en échec permanent ne doit plus faire jeter la
+    -- question : c'est le correctif du blocage définitif multi-worker
+    -- (docs/agents/perf.md §12). La question reste acceptée dès qu'un tube l'a
+    -- reçue ; seul l'échec de TOUS les destinataires est un échec.
+    it "renvoie true quand au moins un destinataire a reçu la ligne", ->
       m_ipc = fresh_ipc!
       p     = make_pipe!
 
       ok = m_ipc.write_msg { p[2], -1 }, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
-      assert.is_false ok
+      assert.is_true ok
+      -- Le worker qui a reçu la copie peut apparier la transaction.
+      assert.equals 1, (m_ipc.drain_pipe p[1], (-> 5000), nil)
+      assert.is_true m_ipc.is_pending TXID, "192.168.1.42", PORT, "1.1.1.3", -> 5001
 
       close_pipe p
+
+    it "renvoie false quand AUCUN destinataire n'a reçu la ligne", ->
+      m_ipc = fresh_ipc!
+
+      ok = m_ipc.write_msg { -1, -1 }, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      assert.is_false ok
+
+  -- ── 24. fan-out : destinataire durablement plein (EAGAIN) ───────────────
+  -- Défaut observé en pré-prod : un worker réponses dont la file NFQUEUE ne
+  -- reçoit aucun paquet ne drainait jamais son tube. Le tube (64 Kio) se
+  -- remplissait, `write_with_retry` payait alors 5 × 20 ms de nanosleep PAR
+  -- QUESTION vers ce destinataire, puis rendait false → worker_questions
+  -- renvoyait NF_DROP → plus aucune question, plus aucune réponse : blocage
+  -- définitif jusqu'au redémarrage. Correctif : un destinataire saturé ne coûte
+  -- plus qu'UNE écriture non bloquante par message (aucun sommeil) et la
+  -- question est livrée dès qu'un destinataire l'a reçue.
+  describe "write_msg fan-out : destinataire durablement plein (EAGAIN)", ->
+    saved_defs = nil
+    saved_log  = nil
+    sleeps     = 0
+    logs       = nil
+    eagain     = true
+    eagain_fds = nil
+
+    before_each ->
+      saved_defs = package.loaded["ffi_defs"]
+      saved_log  = package.loaded["log"]
+      sleeps     = 0
+      logs       = {}
+      eagain     = true
+      eagain_fds = {}
+
+    after_each ->
+      package.loaded["ffi_defs"] = saved_defs
+      package.loaded["log"]      = saved_log
+      package.loaded["ipc"]      = nil
+
+    -- Les stubs doivent précéder le chargement d'ipc.lua : `libc` et `log` y
+    -- sont capturés au require. `write` renvoie EAGAIN pour les fd listés dans
+    -- `eagain_fds` et délègue au vrai C sinon ; `nanosleep` est compté.
+    stub_env = ->
+      errno_box = ffi.new "int[1]"
+      libc = setmetatable {
+        write: (fd, msg, len) ->
+          if eagain and eagain_fds[fd]
+            errno_box[0] = 11   -- EAGAIN
+            return -1
+          ffi.C.write fd, msg, len
+        __errno_location: -> errno_box
+        nanosleep: (req, rem) ->
+          sleeps += 1
+          0
+      }, { __index: ffi.C }
+      package.loaded["ffi_defs"] = { :ffi, :libc }
+      capture = (level) -> (thunk) ->
+        fields = thunk!
+        logs[#logs + 1] = { :level, :fields } if fields
+      package.loaded["log"] = {
+        log_warn:  capture "warn"
+        log_info:  capture "info"
+        log_error: capture "error"
+        log_debug: capture "debug"
+        log_allow: capture "allow"
+        log_block: capture "block"
+        log_trace: capture "trace"
+        now: -> os.time!
+        get_log_level_num: -> 0
+        level_enabled: -> true
+        set_action_prefix: -> nil
+      }
+
+    with_logs = (action) ->
+      [l for l in *logs when l.fields.action == action]
+
+    it "ne dort qu'au premier échec : aucun nanosleep par question ensuite", ->
+      good = make_pipe!
+      sat  = make_pipe!
+      eagain_fds = { [sat[2]]: true }
+      stub_env!
+      m_ipc = fresh_ipc!
+
+      -- 1er message : retry complet vers le destinataire plein (5 sommeils).
+      assert.is_true m_ipc.write_msg { sat[2], good[2] }, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      assert.equals 5, sleeps
+
+      -- Messages suivants : une seule écriture non bloquante, sans sommeil.
+      for i = 1, 4
+        assert.is_true m_ipc.write_msg { sat[2], good[2] }, TXID + i, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      assert.equals 5, sleeps, "aucun nanosleep par question sur un tube saturé"
+
+      -- Le destinataire sain a bien reçu TOUS les messages.
+      assert.equals 5, (m_ipc.drain_pipe good[1], (-> 5000), nil)
+
+      -- Un seul WARN de saturation, porté par le destinataire fautif.
+      saturated = with_logs "ipc_write_saturated"
+      assert.equals 1, #saturated
+      assert.equals sat[2], saturated[1].fields.ipc_fd
+
+      close_pipe good
+      close_pipe sat
+
+    it "efface l'état saturé dès qu'une écriture réussit", ->
+      good = make_pipe!
+      sat  = make_pipe!
+      eagain_fds = { [sat[2]]: true }
+      stub_env!
+      m_ipc = fresh_ipc!
+
+      assert.is_true m_ipc.write_msg { sat[2], good[2] }, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      assert.equals 5, sleeps
+
+      -- Le tube s'est drainé : la prochaine écriture passe → état effacé.
+      eagain = false
+      assert.is_true m_ipc.write_msg { sat[2], good[2] }, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      assert.equals 1, #with_logs "ipc_write_resumed"
+      assert.equals 5, sleeps
+      -- Le destinataire naguère saturé a bien reçu ce message.
+      assert.equals 1, (m_ipc.drain_pipe sat[1], (-> 5000), nil)
+
+      -- Re-saturation : le retry complet est de nouveau payé (5 sommeils).
+      eagain = true
+      assert.is_true m_ipc.write_msg { sat[2], good[2] }, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      assert.equals 10, sleeps
+
+      close_pipe good
+      close_pipe sat
+
+    it "renvoie false si TOUS les destinataires sont pleins", ->
+      sat1 = make_pipe!
+      sat2 = make_pipe!
+      eagain_fds = { [sat1[2]]: true, [sat2[2]]: true }
+      stub_env!
+      m_ipc = fresh_ipc!
+
+      -- Deux destinataires saturés : la question n'atteint personne.
+      assert.is_false m_ipc.write_msg { sat1[2], sat2[2] }, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      assert.equals 10, sleeps, "un retry complet par destinataire, puis état saturé"
+
+      close_pipe sat1
+      close_pipe sat2
 
   -- ── 21. write_msg fd invalide → géré sans crash ───────────────────────
   describe "write_msg fd invalide", ->

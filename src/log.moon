@@ -206,6 +206,12 @@ RL_CONFIG = {
   ipc_pending_overwrite:            { keys: {}, window: 10 }
   ipc_pending_overwrite_divergent:  { keys: {}, window: 10 }
   pending_evicted:                  { keys: {}, window: 10 }
+  -- Tube IPC question→réponse durablement plein (worker réponses bloqué ou
+  -- file NFQUEUE inactive, cf. docs/agents/perf.md §12) : une ligne par
+  -- DESTINATAIRE et par fenêtre. `fd` est volatile (le défaut WARN l'ignore) et
+  -- `ipc_fd` ne l'est pas : sans clé explicite, la saturation d'un tube
+  -- masquerait celle d'un autre. Émis par ipc.write_with_retry_all.
+  ipc_write_saturated:              { keys: {"ipc_fd"}, window: 60 }
 }
 
 -- Actions de cycle de vie jamais limitées : un crash répété (`worker_died`,

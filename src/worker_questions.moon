@@ -445,6 +445,11 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   allow_timeout = allow_timeout or nft_cfg.ip_timeout
   block_timeout = block_timeout or nft_cfg.ip_timeout
   q_fields.timeout = if verdict == NF_ACCEPT then allow_timeout else block_timeout
+  -- ipc_ok n'est faux que si AUCUN worker réponses n'a reçu la transaction
+  -- (cf. ipc.write_with_retry_all, fan-out multi-worker). Un seul tube plein
+  -- n'est plus un échec : les workers qui l'ont reçue peuvent apparier la
+  -- réponse, et un destinataire durablement plein est marqué côté ipc pour ne
+  -- plus coûter de nanosleep (cf. docs/agents/perf.md §12).
   ipc_ok = false
   if verdict == NF_ACCEPT
     ipc_ok = write_msg pipe_wfd, dns_msg.header.id, ip.src, l4.spt, l2.mac_raw, ip.dst, allow_reason, q_entry_ms, allow_rule_id, allow_timeout, allow_modifiers, response_rule_ids, question_proc_ms

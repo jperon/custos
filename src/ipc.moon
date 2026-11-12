@@ -129,22 +129,61 @@ write_with_retry = (pipe_wfd, msg) ->
   log_warn -> { action: "ipc_write_failed_exhausted", fd: pipe_wfd, errno: errno, attempts: IPC_WRITE_RETRY_COUNT }
   false
 
+-- Destinataires (fds) dont le tube était plein (EAGAIN) au dernier essai. Tant
+-- qu'un fd y figure, on ne lui consacre plus qu'UNE écriture non bloquante par
+-- message : un tube durablement plein — worker réponses arrêté, ou file NFQUEUE
+-- inactive — ne peut plus coûter IPC_WRITE_RETRY_COUNT × 20 ms de nanosleep PAR
+-- QUESTION (cf. docs/agents/perf.md §12 : 5 × 20 ms par question, puis
+-- NF_DROP de chaque question → blocage définitif du service). L'état est effacé
+-- dès qu'une écriture réussit.
+_saturated = {}
+
+--- Tente une écriture unique, sans jamais dormir.
+-- Utilisé pour un destinataire déjà saturé : sur EAGAIN on ne logue rien (le
+-- WARN de saturation a déjà été émis), sur une autre errno on logue.
+-- @tparam number pipe_wfd fd d'écriture
+-- @tparam string msg      Message encodé
+-- @treturn boolean true si toute la ligne a été écrite
+write_once = (pipe_wfd, msg) ->
+  n = libc.write pipe_wfd, msg, #msg
+  return true if n == #msg
+  errno_p = libc.__errno_location!
+  errno = if errno_p then errno_p[0] else 0
+  if errno != EAGAIN and errno != EWOULDBLOCK
+    log_warn -> { action: "ipc_write_syscall_failed", fd: pipe_wfd, errno: errno, attempt: 1 }
+  false
+
 --- Écrit un message IPC sur un fd, ou sur CHAQUE fd d'une liste (fan-out).
 -- Avec plusieurs workers réponses (plage `nfqueue.responses`), chaque worker
 -- reçoit une copie de CHAQUE transaction : l'appariement question/réponse ne
 -- dépend alors pas de l'affinité de hachage du noyau (la réponse peut être
 -- livrée à n'importe quelle file de la plage). Écriture ≤ PIPE_BUF donc
 -- atomique par destinataire.
+-- Contrat de retour : true dès qu'AU MOINS UN destinataire a reçu la ligne.
+-- Un tube plein ne doit pas jeter la question (les autres workers l'ont reçue,
+-- et la réponse peut arriver chez eux) ; seul l'échec de TOUS est un échec.
+-- Un destinataire saturé (EAGAIN) est marqué : ses messages suivants ne coûtent
+-- plus qu'une écriture non bloquante, sans nanosleep, jusqu'au premier succès.
 -- @tparam number|table pipe_wfd fd unique, ou liste de fds
 -- @tparam string msg Message encodé
--- @treturn boolean true si TOUS les destinataires ont reçu la ligne
+-- @treturn boolean true si au moins un destinataire a reçu la ligne
 write_with_retry_all = (pipe_wfd, msg) ->
   return write_with_retry pipe_wfd, msg unless type(pipe_wfd) == "table"
-  ok = true
+  delivered = false
   for fd in *pipe_wfd
-    res = write_with_retry fd, msg
-    ok = res and ok
-  ok
+    ok = false
+    if _saturated[fd]
+      ok = write_once fd, msg
+      if ok
+        _saturated[fd] = nil
+        log_info -> { action: "ipc_write_resumed", fd: fd }
+    elseif write_with_retry fd, msg
+      ok = true
+    else
+      _saturated[fd] = true
+      log_warn -> { action: "ipc_write_saturated", ipc_fd: fd }
+    delivered = true if ok
+  delivered
 
 --- Encode un message IPC.
 -- @tparam number      txid          Transaction DNS

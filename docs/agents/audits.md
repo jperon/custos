@@ -3052,3 +3052,57 @@ reste couverte par le groupe G14 de `make test-e2e`.
 **Vérification.** `nix develop --command bash -c "make all && make check &&
 make test"` : **3018 succès / 0 échec / 0 erreur / 3 pending** (référence
 avant campagne : 2854 / 0) ; sortie complète dans `tmp/test.log`.
+
+### Blocage définitif du multi-worker réponses (branche d-mfix)
+
+**1. Défaut.** Avec `nfqueue.responses` en plage, un worker réponses ne drainait
+son tube `question_response<i>` que dans `handle_response`
+(`src/worker_responses.moon:1022-1027`), donc uniquement à l'arrivée d'un paquet
+sur SA file ; le fd du tube n'était pas dans les `extra_rfds` du `poll` (seul le
+bus `so_verdict` y figurait). Le hachage NFQUEUE répartissant par couple
+d'adresses (`perf.md` §11.1), une file peut rester inactive : son tube (64 Kio)
+se remplissait, `ipc.write_with_retry_all` échouait en EAGAIN après 5 × 20 ms de
+`nanosleep` (`src/ipc.moon:114-130`) et `worker_questions` en faisait un `NF_DROP`
+définitif (`src/worker_questions.moon:459-468`). Plus de question → plus de
+réponse → le tube de l'autre worker cessait d'être drainé : blocage définitif
+jusqu'au redémarrage. Observé en pré-prod (`tmp/bench3_report.md` §3-§4 : 0
+réponse sur 9 000, `questions_ipc_write_failed_exhausted errno=11`).
+
+**2. Correctif — drain sans paquet.** `run` passe toujours le fd `pipe_rfd` dans
+`run_opts.extra_rfds` (avec `so_bus_rfd` s'il existe,
+`src/worker_responses.moon:1408-1424`) et `on_extra_ready` appelle le même
+`drain_pipe`/`drain_on_msg` que `handle_response` (aucune duplication). L'état
+`pending` reste purgé : `DRAIN_PURGE_EVERY = 64` (`:274`) borne une purge
+`purge_pending` tous les 64 réveils du drain, la purge de `handle_response`
+(compteur mod 1000 paquets) ne tournant jamais sur une file inactive. `POLLHUP`
+retire le fd de la surveillance (`src/nfq_loop.moon:180-189`, inchangé).
+
+**3. Correctif — plus de question jetée pour un seul tube.** Dans
+`ipc.write_with_retry_all` (`src/ipc.moon:170-186`), le fan-out renvoie `true`
+dès qu'au moins un destinataire a reçu la ligne (chaque worker réponses possède
+la table `pending` complète) et `false` seulement si tous ont échoué. Un
+destinataire en échec est marqué saturé (`_saturated`, `:139`) : ses messages
+suivants ne coûtent qu'une écriture non bloquante (`write_once`, `:147`), sans
+`nanosleep`, jusqu'au premier succès qui efface la marque. `WARN
+ipc_write_saturated` rate-limité par destinataire (`src/log.moon:214`, clé
+`ipc_fd`, fenêtre 60 s) et `INFO ipc_write_resumed` à la reprise. Le retry
+bloquant est conservé pour un destinataire non marqué : à un seul worker, un
+tube plein est une contre-pression légitime. Limite assumée : les messages
+écrits pendant la saturation d'un destinataire sont perdus pour lui.
+
+**Tests.** `tests/unit/worker_responses_spec.moon` (tube drainé par
+`on_extra_ready` sans paquet nfq, purge tous les 64 réveils),
+`tests/unit/nfq_loop_enobufs_spec.moon` (fd supplémentaire seul → pas de lecture
+netlink ; POLLHUP → surveillance arrêtée), `tests/unit/ipc/ipc_spec.moon`
+(livraison partielle `true`, échec total `false`, un seul `nanosleep` par
+épisode, effacement de la marque), `tests/unit/worker_questions_spec.moon`
+(destinataire en échec permanent → `NF_ACCEPT`), `tests/unit/log_spec.moon`
+(rate-limiting par `ipc_fd`).
+
+**Documentation.** `docs/agents/perf.md` §12 (défaut, correctif, coûts) et
+`.agents/workers.md` (contrat du fan-out, drain du tube côté réponses).
+
+**Vérification (2026-11-12, branche d-mfix).** `nix develop --command bash -c
+"make all && make check && make test"` : **2876 succès / 0 échec / 0 erreur /
+0 pending**, `check_globals` OK (157 fichiers), tests JS 12/12. `make test-e2e`
+non lancé (consigne « pas de ssh, pas d'e2e »).

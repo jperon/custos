@@ -666,3 +666,115 @@ describe "worker_responses helpers complémentaires (couverture)", ->
     assert.equals 0, tries
     assert.equals 0, waited
     assert.is_false budget
+
+-- ── Drain du tube question→réponse SANS paquet NFQUEUE ────────────────────
+-- Le worker réponses ne drainait son tube que dans `handle_response`, donc
+-- seulement quand un paquet arrivait sur SA file. Une file inactive (le hachage
+-- NFQUEUE répartit par couple d'adresses) laissait les 64 Kio du tube se
+-- remplir ; le worker questions, en EAGAIN, jetait alors chaque question :
+-- blocage définitif du service (docs/agents/perf.md §12). Le fd du tube est
+-- désormais surveillé par le poll de nfq_loop (`extra_rfds`) et drainé par
+-- `on_extra_ready`, sans aucun paquet, avec la purge d'expiration `pending`
+-- entretenue au passage.
+describe "worker_responses : drain du tube sans paquet NFQUEUE", ->
+  saved_nfq = nil
+  captured  = nil
+  p         = nil
+  m_ipc     = nil
+  m         = nil
+  purges    = 0
+
+  before_each ->
+    cfg = require "config"
+    cfg.ipc = cfg.ipc or {}
+    cfg.ipc.pending_ttl = 5
+    cfg.ipc.match_retry = { enabled: false }
+    saved_nfq = package.loaded["nfq_loop"]
+    captured  = nil
+    purges    = 0
+    package.loaded["nfq_loop"] = {
+      run_queue: (queue, cb, opts) ->
+        captured = { :queue, :cb, :opts }
+        nil
+      NF_ACCEPT: 1
+      NF_DROP: 0
+    }
+    -- ipc réel + compteur d'appels à purge_pending (utilisé par on_extra_ready).
+    package.loaded["ipc"] = nil
+    m_ipc = require "ipc"
+    proxy = setmetatable {
+      purge_pending: (now_fn) ->
+        purges += 1
+        m_ipc.purge_pending now_fn
+    }, { __index: m_ipc }
+    package.loaded["ipc"] = proxy
+    package.loaded["worker_responses"] = nil
+    m = dofile "lua/worker_responses.lua"
+    pipefd = ffi.new "int[2]"
+    assert.equals 0, ffi.C.pipe2 pipefd, 2048   -- O_NONBLOCK
+    p = { pipefd[0], pipefd[1] }
+
+  after_each ->
+    package.loaded["nfq_loop"] = saved_nfq
+    package.loaded["ipc"] = nil
+    package.loaded["worker_responses"] = nil
+    if p
+      ffi.C.close p[1]
+      ffi.C.close p[2]
+
+  it "surveille le tube et absorbe les questions sans paquet", ->
+    m.run 15, p[1], nil
+    assert.is_not_nil captured, "run_queue doit être appelé"
+    assert.equals 15, captured.queue
+    assert.is_not_nil captured.opts.extra_rfds
+    assert.equals 1, #captured.opts.extra_rfds, "le tube question→réponse est surveillé"
+    assert.equals p[1], captured.opts.extra_rfds[1]
+    assert.is_function captured.opts.on_extra_ready
+
+    -- Cinq questions écrites par le worker questions, aucun paquet NFQUEUE.
+    for i = 1, 5
+      assert.is_true m_ipc.write_msg p[2], 0x7000 + i, "\x0a\x00\x00\x02", 5353,
+        "\xaa\xbb\xcc\xdd\xee\xff", "\x01\x01\x01\x01", "ok", nil, "r_ok"
+    assert.is_false (m_ipc.is_pending 0x7001, "10.0.0.2", 5353, "1.1.1.1", -> os.time!)
+
+    -- Réveil par poll sur le tube seul : c'est le chemin emprunté par nfq_loop
+    -- quand la file netlink n'a rien à lire.
+    captured.opts.on_extra_ready!
+
+    for i = 1, 5
+      assert.is_true (m_ipc.is_pending 0x7000 + i, "10.0.0.2", 5353, "1.1.1.1", -> os.time!),
+        "question #{i} absorbée sans paquet"
+
+  it "purge l'expiration pending au plus une fois tous les 64 réveils", ->
+    m.run 15, p[1], nil
+    assert.is_true m_ipc.write_msg p[2], 0x7100, "\x0a\x00\x00\x02", 5353,
+      "\xaa\xbb\xcc\xdd\xee\xff", "\x01\x01\x01\x01", "ok", nil, "r_ok"
+    captured.opts.on_extra_ready!
+    assert.equals 0, purges, "pas de purge à chaque réveil (coût O(pending))"
+
+    -- 63 réveils supplémentaires → la purge tombe au 64e compteur.
+    for i = 1, 63
+      captured.opts.on_extra_ready!
+    assert.equals 1, purges
+
+  it "un tube PLEIN est drainé par un seul réveil (capacité rendue)", ->
+    m.run 15, p[1], nil
+    -- Remplit le tube (64 Kio) comme le ferait le worker questions jusqu'à
+    -- l'EAGAIN. Le fd est saturé : chaque appel qui échoue coûte le retry
+    -- (5 × 20 ms) — il n'y en a qu'un par assertion.
+    written = 0
+    for i = 1, 2000
+      ok = m_ipc.write_msg p[2], 0x7200 + (i % 256), "\x0a\x00\x00\x02", 5353,
+        "\xaa\xbb\xcc\xdd\xee\xff", "\x01\x01\x01\x01", "ok", nil, "r_fill"
+      break unless ok
+      written += 1
+    assert.is_true written > 100, "tube rempli (#{written} messages)"
+    assert.is_false m_ipc.write_msg p[2], 0x7300, "\x0a\x00\x00\x02", 5353,
+      "\xaa\xbb\xcc\xdd\xee\xff", "\x01\x01\x01\x01", "ok", nil, "r_fill"
+
+    -- Un seul réveil du poll (aucun paquet nfq) vide le tube...
+    captured.opts.on_extra_ready!
+    -- ... et la capacité est rendue à l'écrivain.
+    assert.is_true m_ipc.write_msg p[2], 0x7301, "\x0a\x00\x00\x02", 5353,
+      "\xaa\xbb\xcc\xdd\xee\xff", "\x01\x01\x01\x01", "ok", nil, "r_fill"
+

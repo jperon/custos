@@ -26,6 +26,7 @@ reads = {}
 read_idx = 0
 poll_script = {}
 poll_idx = 0
+poll_fds = {}
 errno_box = ffi.new "int[1]"
 handled = {}
 destroyed = 0
@@ -54,6 +55,13 @@ package.loaded["ffi_defs"] = {
       poll_idx += 1
       r = poll_script[poll_idx] or { rv: 0 }
       errno_box[0] = r.errno or 0
+      -- revents scriptés (sinon inchangé : les autres specs n'y touchent pas).
+      if r.revents
+        fds = {}
+        for i = 0, nfds - 1
+          pfd[i].revents = r.revents[i + 1] or 0
+          fds[#fds + 1] = pfd[i].fd
+        poll_fds[poll_idx] = fds
       r.rv
     ntohl: (x) -> tonumber x
     __errno_location: -> errno_box
@@ -99,6 +107,7 @@ describe "nfq_loop.run_queue ENOBUFS/EINTR", ->
     read_idx = 0
     poll_script = {}
     poll_idx = 0
+    poll_fds = {}
     handled = {}
     destroyed = 0
     closed = 0
@@ -215,6 +224,7 @@ describe "nfq_loop.run_queue callback C (verdicts et exception)", ->
     read_idx = 0
     poll_script = {}
     poll_idx = 0
+    poll_fds = {}
     handled = {}
     destroyed = 0
     closed = 0
@@ -268,6 +278,7 @@ describe "nfq_loop.run_queue on_batch_end (verdicts différés)", ->
     read_idx = 0
     poll_script = {}
     poll_idx = 0
+    poll_fds = {}
     handled = {}
     destroyed = 0
     closed = 0
@@ -323,3 +334,61 @@ describe "nfq_loop.run_queue on_batch_end (verdicts différés)", ->
     assert.same { 10, 20 }, handled
     assert.equals 0, poll_idx
     assert.equals 1, closed
+
+-- ── fd supplémentaires surveillés par le poll (tube question→réponse) ───────
+-- Le worker réponses doit drainer son tube IPC même quand SA file NFQUEUE ne
+-- reçoit aucun paquet : le fd du tube est passé dans `extra_rfds` et le poll de
+-- run_queue le surveille à côté du socket netlink (docs/agents/perf.md §12).
+-- Sans ce réveil, le tube se remplit et le worker questions jette les questions.
+describe "nfq_loop.run_queue fd supplémentaire (tube question→réponse)", ->
+  teardown ->
+    package.loaded["ffi_defs"] = orig_defs
+    package.loaded["nfq_loop"] = orig_nfq
+
+  before_each ->
+    reads = {}
+    read_idx = 0
+    poll_script = {}
+    poll_idx = 0
+    poll_fds = {}
+    handled = {}
+    destroyed = 0
+    closed = 0
+    idle_calls = 0
+    captured_cb = nil
+    invoke_cb = false
+    open_fails = false
+    create_queue_fails = false
+    verdict_calls = {}
+
+  it "fd supplémentaire prêt, netlink non prêt → on_extra_ready sans lecture", ->
+    extra_calls = 0
+    poll_script = {
+      { rv: 1, revents: { 0, 1 } }   -- 1er poll : seul le tube est lisible (POLLIN)
+      { rv: 1, revents: { 1 } }      -- 2e poll : netlink prêt → lecture (EOF)
+    }
+    reads = { { rv: 0 } }
+    nfq.run_queue 0, (-> 1), {
+      extra_rfds: { 42 }
+      on_extra_ready: -> extra_calls += 1
+    }
+    assert.equals 1, extra_calls, "le tube seul réveille la boucle"
+    assert.equals 1, read_idx, "aucune lecture netlink sur le seul réveil du tube"
+    assert.same { 99, 42 }, poll_fds[1], "le fd du tube est bien dans le poll"
+    assert.equals 1, destroyed
+
+  it "POLLHUP sur le fd supplémentaire → surveillance arrêtée, pas de boucle à vide", ->
+    extra_calls = 0
+    poll_script = {
+      { rv: 1, revents: { 0, 0x10 } }   -- tube fermé (écrivain parti)
+      { rv: 1, revents: { 1 } }         -- netlink prêt → lecture (EOF)
+    }
+    reads = { { rv: 0 } }
+    nfq.run_queue 0, (-> 1), {
+      extra_rfds: { 42 }
+      on_extra_ready: -> extra_calls += 1
+    }
+    assert.equals 0, extra_calls, "aucun drain sans données"
+    assert.equals -1, poll_fds[2][2], "le fd mort n'est plus surveillé"
+    assert.equals 1, destroyed
+

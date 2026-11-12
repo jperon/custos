@@ -458,6 +458,12 @@ local RL_CONFIG = {
   pending_evicted = {
     keys = { },
     window = 10
+  },
+  ipc_write_saturated = {
+    keys = {
+      "ipc_fd"
+    },
+    window = 60
   }
 }
 local RL_NEVER_LIMIT = {
