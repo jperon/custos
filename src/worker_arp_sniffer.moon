@@ -408,11 +408,11 @@ run = (ifnames, learn_wfd) ->
 
   log_info -> { action: "start", interfaces: table.concat(ifnames, ","), sockets: #fds }
 
-  -- poll sur tous les sockets
+  -- poll sur tous les sockets (tableaux FFI : indices 0-based)
   pfds = ffi.new "struct pollfd[?]", #fds
   for i, fd in ipairs fds
-    pfds[i].fd = fd
-    pfds[i].events = POLLIN
+    pfds[i - 1].fd = fd
+    pfds[i - 1].events = POLLIN
 
   -- Buffer de réception partagé (MTU 1500 + Eth 14 + marge)
   buf     = ffi.new "uint8_t[2048]"

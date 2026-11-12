@@ -421,8 +421,8 @@ run = function(ifnames, learn_wfd)
   end)
   local pfds = ffi.new("struct pollfd[?]", #fds)
   for i, fd in ipairs(fds) do
-    pfds[i].fd = fd
-    pfds[i].events = POLLIN
+    pfds[i - 1].fd = fd
+    pfds[i - 1].events = POLLIN
   end
   local buf = ffi.new("uint8_t[2048]")
   local buf_len = 2048
