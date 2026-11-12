@@ -172,3 +172,102 @@ describe "filter.nft_compiler", ->
     plan = compiler.compile cfg, (rule_mod.compile_rules cfg).rules_metadata
     out = compiler.render plan, "  ", false
     assert.is_nil out\find "elements = { 443 }", 1, true
+
+describe "filter.nft_compiler helpers exportés", ->
+  compiler = require "filter.nft_compiler"
+
+  it "serialize_stable : scalaires, tableaux et objets triés", ->
+    assert.equals "null", compiler.serialize_stable nil
+    assert.equals "true", compiler.serialize_stable true
+    assert.equals "42", compiler.serialize_stable 42
+    assert.equals "\"a\\\"b\"", compiler.serialize_stable 'a"b'
+    assert.equals "[1,2,3]", compiler.serialize_stable {1, 2, 3}
+    assert.equals '{"a":1,"b":[true,false]}', compiler.serialize_stable { b: {true, false}, a: 1 }
+    assert.equals "{}", compiler.serialize_stable {}
+
+  it "serialize_stable : valeur non-table non scalaire passée par tostring", ->
+    s = compiler.serialize_stable -> 1
+    assert.truthy s\match '^"function'
+
+  it "collect_referenced_netlists : conditions historiques, dédoublonnage et tri", ->
+    cfg = {
+      netlists: { lan6: true, wan: true }
+      rules: {
+        { conditions: { from_netlist: "lan6", to_net_lists: {"lan6", "wan"} } }
+        { conditions: { from_net_list: "absent" } }
+      }
+    }
+    plan = {
+      rules_metadata: {
+        { conditions: {
+          { name: "from_netlist", args: "lan6" }
+          { name: "to_net_lists", args: {"wan", "lan6"} }
+          { name: "from_domain", args: "example.org" }
+        } }
+      }
+    }
+    assert.same { "lan6", "wan" }, compiler.collect_referenced_netlists cfg, plan
+
+  it "compile_conditions_nft : entrée vide ou absente", ->
+    assert.same { {}, true }, { compiler.compile_conditions_nft nil, "inet" }
+    assert.same { {}, true }, { compiler.compile_conditions_nft {}, "inet" }
+
+  it "compile_conditions_nft : filtre capabilities et mode négatif", ->
+    seen = {}
+    meta = {
+      { name: "sans-cap", capabilities: { nft: true }, negate_mark: false }
+      { name: "worker-only", capabilities: { nft: false }, negate_mark: false }
+      { name: "normal", capabilities: { nft: true }, negate_mark: false,
+        compile_nft: (fam) ->
+          seen[#seen + 1] = "#{fam}:normal"
+          "expr-normal" }
+      { name: "neg", capabilities: { nft: true }, negate_mark: true,
+        compile_nft: (fam) ->
+          seen[#seen + 1] = "#{fam}:neg"
+          "expr-neg" }
+    }
+    exprs, ok = compiler.compile_conditions_nft meta, "ip"
+    assert.is_true ok
+    assert.same { "expr-normal" }, exprs
+    assert.same { "ip:normal" }, seen
+
+    seen = {}
+    neg_exprs, neg_ok = compiler.compile_conditions_nft meta, "ip", true
+    assert.is_true neg_ok
+    assert.same { "expr-neg" }, neg_exprs
+    assert.same { "ip:neg" }, seen
+
+  it "compile_conditions_nft : repli ip/ip6 quand la famille inet échoue", ->
+    meta = {
+      { name: "cond", capabilities: { nft: true }, negate_mark: false,
+        compile_nft: (fam) ->
+          if fam == "inet"
+            nil, "inet-unsupported"
+          else
+            "expr-" .. fam
+      }
+    }
+    exprs, ok = compiler.compile_conditions_nft meta, "inet"
+    assert.is_true ok
+    assert.same { "expr-ip", "expr-ip6" }, exprs
+
+  it "compile_conditions_nft : échec total signalé par ok=false", ->
+    meta = {
+      { name: "cond", capabilities: { nft: true }, negate_mark: false,
+        compile_nft: -> nil, "nope" }
+    }
+    exprs, ok = compiler.compile_conditions_nft meta, "ip"
+    assert.is_false ok
+    assert.same {}, exprs
+
+  it "compile_action_nft : premier verdict nft, ignore les actions worker-only", ->
+    assert.is_nil compiler.compile_action_nft nil
+    assert.is_nil compiler.compile_action_nft {}
+    meta = {
+      { capabilities: { nft: false }, compile_nft: -> "ignored" }
+      { capabilities: { nft: true }, compile_nft: -> nil }
+      { capabilities: { nft: true }, compile_nft: -> "accept" }
+      { capabilities: { nft: true }, compile_nft: -> "drop" }
+    }
+    assert.equals "accept", compiler.compile_action_nft meta
+    assert.is_nil compiler.compile_action_nft { { capabilities: { nft: true } } }
