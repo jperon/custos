@@ -256,6 +256,7 @@ local RL_VOLATILE_KEYS = {
   "frames",
   "free_pct",
   "grace",
+  "groups",
   "hour",
   "ignored",
   "ipc_fd",

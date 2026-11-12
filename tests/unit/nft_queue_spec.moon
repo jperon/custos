@@ -266,3 +266,44 @@ describe "nft_queue ACK consommé (last_acked_seq)", ->
     q.drain_ack!
     assert.equals 0, q.get_last_acked!
     close_pipe ack_pipe
+
+describe "nft_queue element_spec (regroupement par set)", ->
+  it "décrit un élément de set concaténé ip4", ->
+    q = fresh_nft_queue!
+    spec = q.element_spec "ip4", "10.35.1.2", "93.184.216.1", "r_test", "660s"
+    assert.equals "r_test_ip4", spec.set_name
+    assert.equals "bridge", spec.family
+    assert.equals "10.35.1.2 . 93.184.216.1 timeout 660s", spec.elem
+
+  it "décrit un élément mac6 (clé MAC, valeur IPv6)", ->
+    q = fresh_nft_queue!
+    spec = q.element_spec "mac6", "d8:d3:85:63:6b:27", "2001:db8::1", "r_test", "2m"
+    assert.equals "r_test_mac6", spec.set_name
+    assert.equals "d8:d3:85:63:6b:27 . 2001:db8::1 timeout 2m", spec.elem
+
+  it "décrit un élément de set simple (auth/sip) sans valeur", ->
+    q = fresh_nft_queue!
+    spec = q.element_spec "auth_mac", "d8:d3:85:63:6b:27", "_", "r_test", "90s"
+    assert.equals "r_test_auth_mac", spec.set_name
+    assert.equals "d8:d3:85:63:6b:27 timeout 90s", spec.elem
+
+  it "set global sip (rule_id vide) reste supporté", ->
+    q = fresh_nft_queue!
+    spec = q.element_spec "sip4", "1.2.3.4", "1.2.3.4", "", "5m"
+    assert.equals "sip_peers", spec.set_name
+    assert.equals "1.2.3.4 timeout 5m", spec.elem
+
+  it "rule_id obligatoire : nil si le set ne peut pas être nommé", ->
+    q = fresh_nft_queue!
+    assert.is_nil q.element_spec "ip4", "10.0.0.1", "1.2.3.4", "", "2m"
+    assert.is_nil q.element_spec "inconnu", "a", "b", "r_test", "2m"
+
+  it "timeout invalide → repris de la configuration (comme cmd_for)", ->
+    q = fresh_nft_queue!
+    spec = q.element_spec "ip4", "10.0.0.1", "1.2.3.4", "r_test", "pas-un-timeout"
+    assert.equals "10.0.0.1 . 1.2.3.4 timeout 2m", spec.elem
+
+  it "cmd_lines_for produit exactement la même instruction qu'avant", ->
+    q = fresh_nft_queue!
+    lines = q.cmd_lines_for "ip4", "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.same { "add element bridge dns-filter-bridge r_test_ip4 { 10.0.0.1 . 1.2.3.4 timeout 2m }" }, lines

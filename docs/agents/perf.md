@@ -244,35 +244,43 @@ worker réponses, soit ~350–450 q/s pour `mixed` (≈1,7 paquet par requête,
 1,3–1,6 ms de CPU par paquet mesuré, §8) — au-delà, `dns-q1` (74 % d'un vCPU à
 500 q/s) prendrait le relais.
 
-### 7.1 Résultat mesuré du premier correctif (déploiement du 2026-11-12)
+### 7.1 Résultats mesurés des deux correctifs (déploiements du 2026-11-12)
 
-Mesures faites après déploiement de `70e67fd` sur `custos.lan`, même protocole
-qu'au §1 (`tmp/bench2/runphase3.sh`, 30 s par palier, profil `mixed`). CPU =
-% d'un vCPU sur la fenêtre de mesure ; « lot » = lignes client par attente d'ACK.
+Trois campagnes au même protocole (`tmp/bench2/runphase3.sh`, 30 s par palier,
+un seul générateur, repos vérifié avant chaque palier) : build initiale,
+après `70e67fd` (correctif 1, ACK par lot) et après `c7e21ba` (correctif 2,
+ACK consommé non ré-attendu). CPU = % d'un vCPU sur la fenêtre de mesure.
+Colonne « perte / RTT p50/p99 / CPU resp-q4-nft-dns-q1 ».
 
-| palier | avant : perte | après : perte | RTT p50/p99 avant | RTT p50/p99 après | `resp-q4` avant→après | `nft` avant→après | `ack` avant→après | lot |
-|---|---|---|---|---|---|---|---|---|
-| 200 | 0 % | 0 % | 22,6 / 70 | **27 / 249** | 44→44 % | 50→47 % | 31→30 % | 5,5 |
-| 250 | 0 % | 0 % | 28,8 / 161 | **32 / 296** | 53→55 % | 48→48 % | 31→23 % | 8,6 |
-| 300 | **2,4 %** | **0 %** | 47 / 477 | 84 / **287** | 55→66 % | 42→64 % | 24→19 % | 16 |
-| 400 | non mesuré | **13,1 %** | — | 250 / 467 | —→72 % | —→67 % | — | 41 |
-| 500 | **58,0 %** | **40,0 %** | 326 / 695 | 329 / 616 | 52→68 % | 51→60 % | 32→7 % | 36 |
+| palier | avant (build initiale) | après correctif 1 (`70e67fd`) | après correctif 2 (`c7e21ba`) |
+|---|---|---|---|
+| 200 `mixed` | 0 % ; 22,6/70 ; 44/50/33 | 0 % ; **27/249** ; 44/47/34 | **0 % ; 22,9/68,4** ; 45/48/38 |
+| 250 `mixed` | 0 % ; 28,8/161 ; 53/48/40 | 0 % ; **32/296** ; 55/48/41 | **0 % ; 22,0/68,7** ; 55/45/47 |
+| 300 `mixed` | **2,4 %** ; 47/477 ; 55/42/43 | 0 % ; 84/287 ; 66/64/51 | **0 % ; 37,5/125,6** ; 68/66/59 |
+| 400 `mixed` | non mesuré | **13,1 %** ; 250/467 ; 72/67/62 | **16,7 % ; 271/508** ; 74/65/72 |
+| 500 `mixed` | **58,0 %** ; 326/695 ; 52/51/74 | 40,0 % ; 329/616 ; 68/60/75 | **36,8 % ; 498/881** ; 73/64/82 |
+| 200 `up` | 0 % ; 4,7/8,8 ; 32/10/25 | 0 % ; **5,8/336** ; 33/10/26 | **0 % ; 4,8/18** ; 35/10/26 |
+| 500 `up` | non mesuré | **24,0 %** ; 400/912 ; 51/13/45 | **0 % ; 6,1/42** ; 66/17/49 |
 
-Verdict : **gain partiel, pas celui attendu.**
+Critères annoncés au §7.2 :
 
-- Le plafond sans perte passe de ~250-300 q/s à **300 q/s** (0 % de perte à 300,
-  13,1 % à 400, 40 % à 500 contre 58 %) ; la part d'attente d'ACK s'effondre aux
-  hauts débits (7 % au lieu de 32 %), donc la sérialisation par réponse a bien
-  disparu.
-- **Mais la latence se dégrade aux débits moyens** : p99 70 → 249 ms à 200 q/s,
-  161 → 296 ms à 250, et la file 4 monte (max 21 → 56). Cause mesurée :
-  le lot retarde le verdict de tous ses paquets (jusqu'à 64 × 1,3 ms) et le
-  nombre d'attentes d'ACK est resté élevé (30 % du temps mural à 200 q/s) parce
-  qu'elles sont **dominées par des timeouts de 150 ms** (voir §7.2).
-- Aux hauts débits la machine sature en CPU : à 400 q/s, `resp-q4` 72 %,
-  `nft` 67 %, `dns-q1` 62 % d'un vCPU (total workers 211 % sur 4 cœurs). Le
-  prochain goulot n'est donc plus l'attente d'ACK mais le **coût CPU par
-  paquet** (§9).
+| critère | résultat correctif 2 |
+|---|---|
+| `action=response_nft_ack_timeout` = 0 | **tenu** : 0 occurrence depuis le redéploiement (02:00:17) ; les 9 présentes dans le log datent de la build `70e67fd`. |
+| `ack_wait_us` max < 20 ms | **tenu à 200/250/up** (18,2 / 18,9 / 15,5 / 19,7 ms) ; **non tenu à 300 (34,7 ms)** et marginalement à 400/500 (21,6 / 21,9 ms). Ce ne sont plus des timeouts mais des attentes réelles sous charge (p99 9,5-13 ms, ~1 % des lots). |
+| p99 à 200-300 | **tenu** : 68,4 / 68,7 / 125,6 ms (c1 : 249 / 296 / 287 ; avant : 70 / 161 / 477). |
+
+Verdict :
+
+- **Le correctif 2 a supprimé la régression du correctif 1** : la queue de
+  latence revient à son niveau d'origine à 200-250 q/s et s'améliore nettement à
+  300 ; sur le contrôle `up` à 500 q/s (auparavant 24 % de perte et 44 % du temps
+  de `resp-q4` en timeouts), on passe à **0 % de perte et p99 42 ms**.
+- Le plafond `mixed` reste CPU : **0 % de perte jusqu'à 300 q/s**, 16,7 % à 400,
+  36,8 % à 500. À 400-500 q/s, `resp-q4` (74 %), `dns-q1` (72-82 %) et `nft`
+  (64 %) d'un vCPU sont tous proches de la saturation ; la part d'attente
+  d'ACK n'est plus que de 6-7 %. Le prochain levier est donc le coût CPU par
+  paquet (§8), en particulier le coût par instruction nft.
 
 ### 7.2 Régression trouvée par la re-mesure : ACK consommé puis ré-attendu 150 ms
 
@@ -310,23 +318,10 @@ enregistrement » par « l'enregistrement a déjà été lu, il couvre la cible 
 En cas de timeout, le comportement reste celui d'avant (verdict posé,
 `nft_ack_timeout` logué).
 
-Protocole de re-mesure (après redéploiement) :
-1. vérifier le repos (profondeur file 4 = 0, `user_dropped` figé) et l'absence de
-   générateur, comme `tmp/bench2/runphase3.sh` ;
-2. paliers de 30 s à 200, 250, 300, 400 et 500 q/s `mixed` (plus `up` à 200 et
-   500 comme contrôle sans injection), un seul à la fois ;
-3. contrôler dans `logread` : `ack_wait_us` (max **< 20 ms** ; un pic à 150 ms =
-   régression ACK), `action=response_nft_ack_timeout` (doit être **0**),
-   `upstream_retries`, et le nombre de lignes `response_dns_benchmark` (doit
-   égaler le nombre de réponses reçues) ;
-4. contrôler les compteurs nft `queue to 0-1` / `queue to 4` (le surplus de
-   +70 % du second avis doit rester, c'est le comportement configuré) et
-   `user_dropped` (doit rester figé) ;
-5. gain attendu de ce second correctif : suppression des timeouts, donc `ack`
-   ≈ 0 % du temps mural, retour du p99 à ~70-150 ms à 200-300 q/s, et
-   disparition des pertes à 500 q/s sur le profil `up` (24 % mesurés avec les
-   timeouts) ; le plafond `mixed` doit ensuite être purement CPU (~400-450 q/s,
-   cf. §8).
+Protocole de re-mesure du correctif 2 (réalisé, résultats §7.1) : paliers de
+30 s à 200, 250, 300, 400 et 500 q/s `mixed` plus `up` à 200 et 500, repos
+vérifié avant chaque palier, puis contrôle de `action=response_nft_ack_timeout`
+(0), de `ack_wait_us` (max), du p99 client et de `user_dropped`.
 
 ## 8. Goulot suivant après les deux correctifs (mesuré, non corrigé)
 
@@ -349,18 +344,39 @@ n'est pas possible sans déployer un build instrumenté.
 
 Autres postes mesurés au point de rupture (400 q/s `mixed`) :
 
-- `nft` : 67 % d'un vCPU, pour ~20 lignes d'insertion par réponse qui injecte
-  (8 `ip4` + 8 `mac4` + `mac6` pour une réponse Tailscale), soit **0,22-0,27 ms
-  par ligne**. Un regroupement des éléments d'un même set en une seule commande
-  `add element { a, b, … }` (`src/worker_nft.moon`, `flush_batch`) réduirait le
-  nombre d'instructions nft par réponse de ~20 à 2-3 : piste la plus rentable
-  côté nft, non implémentée faute de pouvoir vérifier son gain réel ici.
+- `nft` : 67 % d'un vCPU, pour ~20 instructions d'insertion par réponse qui
+  injecte (8 `ip4` + 8 `mac4` + `mac6` pour une réponse Tailscale), soit
+  **0,22-0,27 ms par instruction**.
+  **Corrigé après cette mesure** (`perf(nft): regroupe les insertions d'un lot en
+  une instruction par set`) : `worker_nft.build_batch` regroupe les éléments
+  d'un même set en une instruction `add element <table> <set> { e1, e2, … }`
+  (timeout par élément conservé), soit 2-3 instructions par réponse au lieu de
+  ~20, avec repli élément par élément si le lot groupé est rejeté. Syntaxe
+  validée avec nft 1.1.6 dans un espace de noms réseau isolé (sets concaténés
+  `ip4`/`ip6`/`mac4`/`mac6`, sets simples `auth_*`/`sip`, timeouts par élément
+  conservés). Gain non mesuré sur la cible (pas de déploiement depuis cette
+  tâche) : protocole de re-mesure au §8.1.
 - `dns-q1` : 62 % d'un vCPU à 400 q/s, soit ~1,7 ms par question, du même ordre
   que `resp-q4` et non décomposé non plus.
 - second avis : ×1,7 paquet par requête dans `resp-q4` (§4.1), mesuré comme
   doublant sa charge CPU à débit client constant (`up` 33 % vs `tls` 60 %).
   Réduire ce coût suppose de changer la politique de validation (config), pas
   le code : hors périmètre.
+
+### 8.1 Re-mesure du regroupement nft (à faire après déploiement)
+
+1. repos vérifié (profondeur file 4 = 0, `user_dropped` figé), un seul
+   générateur, comme `tmp/bench2/runphase3.sh` ;
+2. paliers de 30 s à 300, 400 et 500 q/s `mixed` (+ `up` 500 en contrôle) ;
+3. critères : `nft` doit passer de 64-65 % à ≲ 30 % d'un vCPU à 400-500 q/s
+   (0,22-0,27 ms × ~20 instructions → ~3), `batch_failed` et `single_failed`
+   rester à **0** dans `logread` (sinon la syntaxe groupée échoue), aucun
+   `deferred_flush_error`, et la perte `mixed` doit reculer sous celle mesurée
+   au §7.1 (16,7 % à 400, 36,8 % à 500) — le plafond restant `resp-q4`/`dns-q1`
+   (~1,3-1,7 ms par paquet) ;
+4. contrôler que les sets se remplissent normalement (`nft list set` juste
+   après un palier) et que les timeouts par élément sont respectés (un élément
+   doit expirer selon son TTL, pas celui du voisin).
 
 ## 9. Ce qui n'a pas pu être prouvé
 

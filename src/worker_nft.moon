@@ -1,6 +1,6 @@
 { :ffi, :libc } = require "ffi_defs"
 { :run_cmd } = require "nft"
-{ :cmd_for, :sanitize_timeout, :ACK_SIZE } = require "nft_queue"
+{ :cmd_for, :element_spec, :sanitize_timeout, :ACK_SIZE } = require "nft_queue"
 { :log_info, :log_warn, :log_debug, :set_action_prefix, :level_enabled } = require "log"
 { :split_fields, :from_hex, :is_ipv4_str, :is_ipv6_str, :is_valid_mac } = require "lib.ipc_hex"
 
@@ -86,30 +86,63 @@ try_add_pending = (pending, item) ->
   pending[entry_key] = item
   true
 
+--- Prépare les commandes nft d'un lot : une instruction par set (regroupement)
+-- plus la liste des instructions élément par élément (repli).
+-- Le regroupement conserve exactement les mêmes éléments et les mêmes timeouts
+-- par élément (`ip timeout Ns` dans la liste) ; il ne change que le nombre
+-- d'instructions soumises à libnftables, dont le coût domine celui du worker
+-- (0,22-0,27 ms par instruction mesuré, docs/agents/perf.md §8).
+-- @tparam table pending Items { kind, key, ip, rule_id, timeout }
+-- @treturn table { cmds = { instructions groupées }, singles = { élément par
+--   élément }, count = nombre d'éléments retenus }
+build_batch = (pending) ->
+  groups = {}
+  order = {}
+  singles = {}
+  count = 0
+  for _, item in pairs pending
+    spec = element_spec item.kind, item.key, item.ip, item.rule_id, item.timeout
+    continue unless spec
+    count += 1
+    gkey = "#{spec.family}|#{spec.table}|#{spec.set_name}"
+    group = groups[gkey]
+    unless group
+      group = { family: spec.family, table: spec.table, set_name: spec.set_name, elems: {} }
+      groups[gkey] = group
+      order[#order + 1] = gkey
+    group.elems[#group.elems + 1] = spec.elem
+    singles[#singles + 1] = "add element #{spec.family} #{spec.table} #{spec.set_name} { #{spec.elem} }"
+
+  cmds = {}
+  for gkey in *order
+    g = groups[gkey]
+    cmds[#cmds + 1] = "add element #{g.family} #{g.table} #{g.set_name} { #{table.concat g.elems, ", "} }"
+  { :cmds, :singles, :count }
+
 flush_batch = (pending, ack_queue, ack_wfds) ->
-  lines = {}
   rule11_count = 0
   rule11_items = {}
   for _, item in pairs pending
-    cmd = cmd_for item.kind, item.key, item.ip, item.rule_id, item.timeout
-    lines[#lines + 1] = cmd if cmd
     if item.rule_id == "rule_11"
       rule11_count += 1
       rule11_items[#rule11_items + 1] = "#{item.kind}:#{item.key}>#{item.ip}"
+  batch = build_batch pending
   for k in pairs pending
     pending[k] = nil
 
-  if #lines > 0
-    cmd = table.concat lines, "\n"
+  if batch.count > 0
+    cmd = table.concat batch.cmds, "\n"
     ok, err = run_cmd cmd, { quiet: true }
     if rule11_count > 0 and level_enabled "DEBUG"
       -- Une ligne par lot nft (donc potentiellement par requête) : DEBUG.
       log_debug -> { action: "nft_batch_rule", rule_id: "rule_11", count: rule11_count, ok: ok, items: table.concat(rule11_items, " ") }
     if ok
-      log_debug -> { action: "batch_ok", count: #lines, acks: #ack_queue }
+      log_debug -> { action: "batch_ok", count: batch.count, groups: #batch.cmds, acks: #ack_queue }
     else
-      log_warn -> { action: "batch_failed", count: #lines, acks: #ack_queue, err: err or "" }
-      for line in *lines
+      log_warn -> { action: "batch_failed", count: batch.count, groups: #batch.cmds, acks: #ack_queue, err: err or "" }
+      -- Repli élément par élément : un élément invalide ne doit pas emporter
+      -- les autres (comportement historique, préservé).
+      for line in *batch.singles
         ok_one, err_one = run_cmd line, { quiet: true }
         log_warn -> { action: "single_failed", err: err_one or "", cmd: line } unless ok_one
   else
@@ -207,4 +240,4 @@ run = (rfd, ack_wfds) ->
       flush_batch pending, ack_queue, ack_wfds
       pending_count = 0
 
-{ :run, :parse_line, :flush_batch, :try_add_pending, :split_fields, :from_hex }
+{ :run, :parse_line, :flush_batch, :build_batch, :try_add_pending, :split_fields, :from_hex }

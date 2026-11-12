@@ -22,9 +22,12 @@ O_NONBLOCK = 2048
 -- Capture des commandes nft émises par flush_batch. On mocke `nft` pour ne pas
 -- toucher au noyau ni dépendre de libnftables (stubbée à {} dans busted_setup).
 nft_calls = {}
+nft_fail_first = false
 nft_mock = {
   run_cmd: (cmd, opts) ->
     nft_calls[#nft_calls + 1] = cmd
+    if nft_fail_first and #nft_calls == 1
+      return false, "syntax error"
     true, nil
   cleanup: ->
 }
@@ -43,6 +46,7 @@ describe "worker_nft helpers", ->
   local wnft
   before_each ->
     nft_calls = {}
+    nft_fail_first = false
     wnft = fresh_worker_nft!
 
   -- ── parse_line ──────────────────────────────────────────────────────────────
@@ -141,6 +145,60 @@ describe "worker_nft helpers", ->
       assert.equals 1, #nft_calls
       assert.is_true nft_calls[1]\find("r_a_ip4", 1, true) != nil
       assert.is_true nft_calls[1]\find("r_b_ip4", 1, true) != nil
+
+    it "regroupe les éléments d'un même set en UNE instruction", ->
+      pending = {}
+      for i = 1, 3
+        assert.is_true wnft.try_add_pending pending, {
+          kind: "ip4", key: "10.0.0.1", ip: "1.2.3.#{i}", timeout: "2m", rule_id: "r_test"
+        }
+      wnft.flush_batch pending, {}, {}
+      assert.equals 1, #nft_calls
+      cmd = nft_calls[1]
+      assert.equals 1, select(2, cmd\gsub("add element", ""))
+      assert.is_not_nil cmd\find("r_test_ip4", 1, true)
+      assert.is_not_nil cmd\find("1.2.3.1 timeout 2m", 1, true)
+      assert.is_not_nil cmd\find("1.2.3.2 timeout 2m", 1, true)
+      assert.is_not_nil cmd\find("1.2.3.3 timeout 2m", 1, true)
+      -- Éléments séparés par des virgules dans la même accolade.
+      assert.is_nil cmd\find("}\nadd element", 1, true)
+
+    it "sets distincts → une instruction par set, timeouts par élément", ->
+      pending = {}
+      wnft.try_add_pending pending, { kind: "ip4",  key: "10.0.0.1", ip: "1.2.3.4", timeout: "2m",  rule_id: "r_test" }
+      wnft.try_add_pending pending, { kind: "ip4",  key: "10.0.0.1", ip: "1.2.3.5", timeout: "10s", rule_id: "r_test" }
+      wnft.try_add_pending pending, { kind: "mac4", key: "d8:d3:85:63:6b:27", ip: "1.2.3.4", timeout: "2m", rule_id: "r_test" }
+      wnft.flush_batch pending, {}, {}
+      assert.equals 1, #nft_calls
+      cmd = nft_calls[1]
+      assert.equals 2, select(2, cmd\gsub("add element", ""))
+      assert.is_not_nil cmd\find("r_test_ip4", 1, true)
+      assert.is_not_nil cmd\find("r_test_mac4", 1, true)
+      assert.is_not_nil cmd\find("1.2.3.5 timeout 10s", 1, true)
+
+    it "kind inconnu ignoré (aucune commande, ACK quand même)", ->
+      pending = {}
+      pending["x"] = { kind: "inconnu", key: "a", ip: "b", timeout: "2m", rule_id: "r_test" }
+      wnft.flush_batch pending, {}, {}
+      assert.equals 0, #nft_calls
+
+    it "échec du lot groupé → repli élément par élément", ->
+      nft_fail_first = true
+      pending = {}
+      for i = 1, 2
+        assert.is_true wnft.try_add_pending pending, {
+          kind: "ip4", key: "10.0.0.1", ip: "1.2.3.#{i}", timeout: "2m", rule_id: "r_test"
+        }
+      wnft.flush_batch pending, {}, {}
+      -- 1 commande groupée (échec) + 2 commandes élément par élément.
+      assert.equals 3, #nft_calls
+      assert.equals 1, select(2, nft_calls[1]\gsub("add element", ""))   -- groupée
+      -- Repli : une instruction par élément (ordre de `pairs` non garanti).
+      singles = nft_calls[2] .. "\n" .. nft_calls[3]
+      assert.equals 1, select(2, nft_calls[2]\gsub("add element", ""))
+      assert.equals 1, select(2, nft_calls[3]\gsub("add element", ""))
+      assert.is_not_nil singles\find("1.2.3.1 timeout 2m", 1, true)
+      assert.is_not_nil singles\find("1.2.3.2 timeout 2m", 1, true)
 
     it "envoie un ACK de taille fixe portant le seq sur le fd du worker concerné", ->
       pipefd = ffi.new "int[2]"

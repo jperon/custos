@@ -276,39 +276,55 @@ get_set_name = (kind, rule_id) ->
     return "#{rule_id}_#{kind}"
   nil
 
--- cmd_for(kind, key, ip, rule_id, timeout)
-cmd_lines_for = (kind, key, ip, rule_id, timeout) ->
+--- Décrit l'insertion d'un élément : set cible + texte de l'élément.
+-- Factorise `cmd_lines_for` pour que worker_nft puisse regrouper plusieurs
+-- éléments d'un MÊME set en une seule instruction
+-- `add element <famille> <table> <set> { e1, e2, … }` : mêmes éléments, mêmes
+-- timeouts par élément, seul le nombre d'instructions nft diminue (leur coût
+-- domine celui du worker nft, cf. docs/agents/perf.md §8).
+-- @tparam string kind    ip4|ip6|mac4|mac6|sip4|sip6|auth_mac|auth_ip4|auth_ip6
+-- @tparam string key     Clé du tuple (IP client, MAC…)
+-- @tparam string ip      Valeur du tuple (IP autorisée) ; "_" pour auth_*
+-- @tparam string rule_id Identifiant de règle (nom du set)
+-- @tparam number|string timeout Timeout nft (assaini : valeur de repli si invalide)
+-- @treturn table|nil { family, table, set_name, elem } ; nil si kind/rule_id
+--                     ne permettent pas de nommer un set (comportement de
+--                     get_set_name), l'appelant ignore alors l'élément comme avant.
+element_spec = (kind, key, ip, rule_id, timeout) ->
   timeout = sanitize_timeout timeout
   set_name = get_set_name kind, rule_id
   return nil unless set_name
-  set_names = { set_name }
 
-  lines = {}
-  for _, name in ipairs set_names
-    if kind == "ip4"
-      lines[#lines + 1] = "add element #{FAMILY} #{TABLE} #{name} { #{key} . #{ip} timeout #{timeout} }"
-    elseif kind == "ip6"
-      lines[#lines + 1] = "add element #{FAMILY6} #{TABLE} #{name} { #{key} . #{ip} timeout #{timeout} }"
-    elseif kind == "mac4"
-      lines[#lines + 1] = "add element #{FAMILY} #{TABLE} #{name} { #{key} . #{ip} timeout #{timeout} }"
-    elseif kind == "mac6"
-      lines[#lines + 1] = "add element #{FAMILY6} #{TABLE} #{name} { #{key} . #{ip} timeout #{timeout} }"
-    elseif kind == "sip4"
-      lines[#lines + 1] = "add element #{FAMILY} #{TABLE} #{name} { #{key} timeout #{timeout} }"
-    elseif kind == "sip6"
-      lines[#lines + 1] = "add element #{FAMILY6} #{TABLE} #{name} { #{key} timeout #{timeout} }"
-    elseif kind == "auth_mac"
-      lines[#lines + 1] = "add element #{FAMILY} #{TABLE} #{name} { #{key} timeout #{timeout} }"
-    elseif kind == "auth_ip4"
-      lines[#lines + 1] = "add element #{FAMILY} #{TABLE} #{name} { #{key} timeout #{timeout} }"
-    elseif kind == "auth_ip6"
-      lines[#lines + 1] = "add element #{FAMILY6} #{TABLE} #{name} { #{key} timeout #{timeout} }"
-  return nil if #lines == 0
-  lines
+  family = nil
+  simple = false
+  switch kind
+    when "ip4", "mac4"
+      family = FAMILY
+    when "ip6", "mac6"
+      family = FAMILY6
+    when "sip4", "auth_mac", "auth_ip4"
+      family = FAMILY
+      simple = true
+    when "sip6", "auth_ip6"
+      family = FAMILY6
+      simple = true
+  return nil unless family
+
+  elem = if simple
+    "#{key} timeout #{timeout}"
+  else
+    "#{key} . #{ip} timeout #{timeout}"
+  { :family, table: TABLE, :set_name, :elem }
+
+-- cmd_for(kind, key, ip, rule_id, timeout)
+cmd_lines_for = (kind, key, ip, rule_id, timeout) ->
+  spec = element_spec kind, key, ip, rule_id, timeout
+  return nil unless spec
+  { "add element #{spec.family} #{spec.table} #{spec.set_name} { #{spec.elem} }" }
 
 cmd_for = (kind, key, ip, rule_id, timeout) ->
   lines = cmd_lines_for kind, key, ip, rule_id, timeout
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :add_auth_mac, :add_auth_ip4, :add_auth_ip6, :cmd_for, :cmd_lines_for, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :add_auth_mac, :add_auth_ip4, :add_auth_ip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state }

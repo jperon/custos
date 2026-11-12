@@ -353,42 +353,52 @@ get_set_name = function(kind, rule_id)
   end
   return nil
 end
-local cmd_lines_for
-cmd_lines_for = function(kind, key, ip, rule_id, timeout)
+local element_spec
+element_spec = function(kind, key, ip, rule_id, timeout)
   timeout = sanitize_timeout(timeout)
   local set_name = get_set_name(kind, rule_id)
   if not (set_name) then
     return nil
   end
-  local set_names = {
-    set_name
-  }
-  local lines = { }
-  for _, name in ipairs(set_names) do
-    if kind == "ip4" then
-      lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
-    elseif kind == "ip6" then
-      lines[#lines + 1] = "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
-    elseif kind == "mac4" then
-      lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
-    elseif kind == "mac6" then
-      lines[#lines + 1] = "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout) .. " }"
-    elseif kind == "sip4" then
-      lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
-    elseif kind == "sip6" then
-      lines[#lines + 1] = "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
-    elseif kind == "auth_mac" then
-      lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
-    elseif kind == "auth_ip4" then
-      lines[#lines + 1] = "add element " .. tostring(FAMILY) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
-    elseif kind == "auth_ip6" then
-      lines[#lines + 1] = "add element " .. tostring(FAMILY6) .. " " .. tostring(TABLE) .. " " .. tostring(name) .. " { " .. tostring(key) .. " timeout " .. tostring(timeout) .. " }"
-    end
+  local family = nil
+  local simple = false
+  local _exp_0 = kind
+  if "ip4" == _exp_0 or "mac4" == _exp_0 then
+    family = FAMILY
+  elseif "ip6" == _exp_0 or "mac6" == _exp_0 then
+    family = FAMILY6
+  elseif "sip4" == _exp_0 or "auth_mac" == _exp_0 or "auth_ip4" == _exp_0 then
+    family = FAMILY
+    simple = true
+  elseif "sip6" == _exp_0 or "auth_ip6" == _exp_0 then
+    family = FAMILY6
+    simple = true
   end
-  if #lines == 0 then
+  if not (family) then
     return nil
   end
-  return lines
+  local elem
+  if simple then
+    elem = tostring(key) .. " timeout " .. tostring(timeout)
+  else
+    elem = tostring(key) .. " . " .. tostring(ip) .. " timeout " .. tostring(timeout)
+  end
+  return {
+    family = family,
+    table = TABLE,
+    set_name = set_name,
+    elem = elem
+  }
+end
+local cmd_lines_for
+cmd_lines_for = function(kind, key, ip, rule_id, timeout)
+  local spec = element_spec(kind, key, ip, rule_id, timeout)
+  if not (spec) then
+    return nil
+  end
+  return {
+    "add element " .. tostring(spec.family) .. " " .. tostring(spec.table) .. " " .. tostring(spec.set_name) .. " { " .. tostring(spec.elem) .. " }"
+  }
 end
 local cmd_for
 cmd_for = function(kind, key, ip, rule_id, timeout)
@@ -417,6 +427,7 @@ return {
   add_auth_ip6 = add_auth_ip6,
   cmd_for = cmd_for,
   cmd_lines_for = cmd_lines_for,
+  element_spec = element_spec,
   sanitize_timeout = sanitize_timeout,
   get_set_name = get_set_name,
   sanitize_rule_id = sanitize_rule_id,

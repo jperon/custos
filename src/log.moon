@@ -135,7 +135,7 @@ RL_VOLATILE_KEYS = {
   "configured_rules", "corr"
   "count", "decoded_bytes", "dest_whitelist", "detail", "dport", "drain_ms", "dropped", "dst_port"
   "effective_rules", "entries", "events_rfd", "events_wfd", "expires_in_s"
-  "fd", "frames", "free_pct", "grace", "hour", "ignored"
+  "fd", "frames", "free_pct", "grace", "groups", "hour", "ignored"
   "ipc_fd", "ipc_retry_attempts", "ipc_retry_wait_ms", "key_size", "learn_rfd", "learn_wfd"
   "len", "listen_fd", "log_ms", "log_write_us", "match_ms", "max_age_hours", "max_attempts", "min_free_pct"
   "msg", "need", "new_size", "parent_pid", "parse_ms", "payload_len", "payload_ms"

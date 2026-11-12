@@ -5,10 +5,10 @@ do
 end
 local run_cmd
 run_cmd = require("nft").run_cmd
-local cmd_for, sanitize_timeout, ACK_SIZE
+local cmd_for, element_spec, sanitize_timeout, ACK_SIZE
 do
   local _obj_0 = require("nft_queue")
-  cmd_for, sanitize_timeout, ACK_SIZE = _obj_0.cmd_for, _obj_0.sanitize_timeout, _obj_0.ACK_SIZE
+  cmd_for, element_spec, sanitize_timeout, ACK_SIZE = _obj_0.cmd_for, _obj_0.element_spec, _obj_0.sanitize_timeout, _obj_0.ACK_SIZE
 end
 local log_info, log_warn, log_debug, set_action_prefix, level_enabled
 do
@@ -122,26 +122,69 @@ try_add_pending = function(pending, item)
   pending[entry_key] = item
   return true
 end
+local build_batch
+build_batch = function(pending)
+  local groups = { }
+  local order = { }
+  local singles = { }
+  local count = 0
+  for _, item in pairs(pending) do
+    local _continue_0 = false
+    repeat
+      local spec = element_spec(item.kind, item.key, item.ip, item.rule_id, item.timeout)
+      if not (spec) then
+        _continue_0 = true
+        break
+      end
+      count = count + 1
+      local gkey = tostring(spec.family) .. "|" .. tostring(spec.table) .. "|" .. tostring(spec.set_name)
+      local group = groups[gkey]
+      if not (group) then
+        group = {
+          family = spec.family,
+          table = spec.table,
+          set_name = spec.set_name,
+          elems = { }
+        }
+        groups[gkey] = group
+        order[#order + 1] = gkey
+      end
+      group.elems[#group.elems + 1] = spec.elem
+      singles[#singles + 1] = "add element " .. tostring(spec.family) .. " " .. tostring(spec.table) .. " " .. tostring(spec.set_name) .. " { " .. tostring(spec.elem) .. " }"
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  local cmds = { }
+  for _index_0 = 1, #order do
+    local gkey = order[_index_0]
+    local g = groups[gkey]
+    cmds[#cmds + 1] = "add element " .. tostring(g.family) .. " " .. tostring(g.table) .. " " .. tostring(g.set_name) .. " { " .. tostring(table.concat(g.elems, ", ")) .. " }"
+  end
+  return {
+    cmds = cmds,
+    singles = singles,
+    count = count
+  }
+end
 local flush_batch
 flush_batch = function(pending, ack_queue, ack_wfds)
-  local lines = { }
   local rule11_count = 0
   local rule11_items = { }
   for _, item in pairs(pending) do
-    local cmd = cmd_for(item.kind, item.key, item.ip, item.rule_id, item.timeout)
-    if cmd then
-      lines[#lines + 1] = cmd
-    end
     if item.rule_id == "rule_11" then
       rule11_count = rule11_count + 1
       rule11_items[#rule11_items + 1] = tostring(item.kind) .. ":" .. tostring(item.key) .. ">" .. tostring(item.ip)
     end
   end
+  local batch = build_batch(pending)
   for k in pairs(pending) do
     pending[k] = nil
   end
-  if #lines > 0 then
-    local cmd = table.concat(lines, "\n")
+  if batch.count > 0 then
+    local cmd = table.concat(batch.cmds, "\n")
     local ok, err = run_cmd(cmd, {
       quiet = true
     })
@@ -160,7 +203,8 @@ flush_batch = function(pending, ack_queue, ack_wfds)
       log_debug(function()
         return {
           action = "batch_ok",
-          count = #lines,
+          count = batch.count,
+          groups = #batch.cmds,
           acks = #ack_queue
         }
       end)
@@ -168,13 +212,15 @@ flush_batch = function(pending, ack_queue, ack_wfds)
       log_warn(function()
         return {
           action = "batch_failed",
-          count = #lines,
+          count = batch.count,
+          groups = #batch.cmds,
           acks = #ack_queue,
           err = err or ""
         }
       end)
-      for _index_0 = 1, #lines do
-        local line = lines[_index_0]
+      local _list_0 = batch.singles
+      for _index_0 = 1, #_list_0 do
+        local line = _list_0[_index_0]
         local ok_one, err_one = run_cmd(line, {
           quiet = true
         })
@@ -337,6 +383,7 @@ return {
   run = run,
   parse_line = parse_line,
   flush_batch = flush_batch,
+  build_batch = build_batch,
   try_add_pending = try_add_pending,
   split_fields = split_fields,
   from_hex = from_hex
