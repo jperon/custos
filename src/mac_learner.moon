@@ -32,6 +32,7 @@ config = require "config"
 { :purge_pending } = require "ipc"
 ttl_set = require "lib.ttl_set"
 { :shquote } = require "lib.shquote"
+gc_tune = require "lib.gc_tune"
 mac_cfg = config.mac_learner or {}
 auth_cfg = config.auth or {}
 
@@ -377,6 +378,9 @@ create_server = (path) ->
 -- @tparam number [strip_learn_rfd] fd de lecture du pipe strip_learn (worker_responses → learner)
 run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
   ifname = ifname or "br"
+  -- Réglage GC du worker (pause/stepmul/plafond tas/idle_step).
+  gc = gc_tune.shared!
+  gc.apply!
   prober = mac_prober.init ifname
   if prober
     log_info -> { action: "mac_prober_ready", ifname: ifname,
@@ -441,7 +445,17 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
     -- Timeout adaptatif : 20 ms si des probes sont en vol (pour expire_pending
     -- réactif), 1000 ms sinon (idle, économie CPU).
     poll_ms = if next(pending_queries) ~= nil then 20 else 1000
+    gc.guard!
     libc.poll pfds, nfds, poll_ms
+
+    -- Aucun fd réveillé et repli sur le timeout long (1 s) : temps mort →
+    -- pas de GC borné. Avec des probes en vol (20 ms), on s'abstient : un pas
+    -- toutes les 20 ms coûterait plus que le trafic servi.
+    if poll_ms >= 1000
+      idle = true
+      for i = 0, nfds - 1
+        idle = false if pfds[i].revents != 0
+      gc.idle! if idle
 
     -- [0] Pipe de learn : draine tous les messages disponibles (non-bloquant)
     -- Garde anti-corruption : un message incomplet (< msg_size) est ignoré

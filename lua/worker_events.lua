@@ -341,6 +341,8 @@ local run
 run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
   set_action_prefix("events_")
   os.execute("mkdir -p '" .. tostring(events_dir) .. "'")
+  local gc = require("lib.gc_tune").shared()
+  gc.apply()
   local sfd = create_signal_fd()
   local pfds = ffi.new("struct pollfd[2]")
   pfds[0].fd = events_rfd
@@ -365,6 +367,7 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
   end)
   cleanup_old(events_dir, max_age_hours, min_free_pct)
   while true do
+    gc.guard()
     libc.poll(pfds, 2, POLL_TIMEOUT)
     if bit.band(pfds[1].revents, POLLIN) ~= 0 then
       libc.read(sfd, siginfo, sig_sz)
@@ -411,6 +414,9 @@ run = function(events_rfd, events_dir, max_age_hours, min_free_pct)
           last_verdicts_write = now
         end
       end
+    end
+    if bit.band(pfds[0].revents, POLLIN) == 0 then
+      gc.idle()
     end
     local new_hour = current_hour()
     if new_hour ~= hour then

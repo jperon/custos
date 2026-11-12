@@ -3,6 +3,7 @@
 { :cmd_for, :element_spec, :sanitize_timeout, :ACK_SIZE } = require "nft_queue"
 { :log_info, :log_warn, :log_debug, :set_action_prefix, :level_enabled } = require "log"
 { :split_fields, :from_hex, :is_ipv4_str, :is_ipv6_str, :is_valid_mac, :is_valid_timeout } = require "lib.ipc_hex"
+gc_tune = require "lib.gc_tune"
 
 BUF_SIZE  = 8192
 MAX_BATCH = 64
@@ -404,6 +405,8 @@ flush_batch = (pending, ack_queue, ack_wfds, cache) ->
 --   défaut : nouveau cache borné propre au processus)
 run = (rfd, ack_wfds, cache) ->
   set_action_prefix "nft_"
+  gc = gc_tune.shared!
+  gc.apply!
   ack_wfds = ack_wfds or {}
   cache = cache or new_cache!
   log_info -> { action: "worker_start", rfd: rfd, ack_workers: #ack_wfds }
@@ -424,6 +427,10 @@ run = (rfd, ack_wfds, cache) ->
     unless partial\find "\n", 1, true
       poll_fd[0].revents = 0
       libc.poll poll_fd, 1, -1
+
+    -- Garde-fou mémoire : au plus une lecture de collectgarbage "count" par
+    -- seconde ; pause/stepmul ont été appliqués au démarrage.
+    gc.guard!
 
     -- Draine : on consomme d'abord les lignes complètes déjà bufferisées, puis on
     -- lit le pipe (non bloquant) jusqu'à EAGAIN ou MAX_BATCH (borne la taille de
@@ -478,5 +485,9 @@ run = (rfd, ack_wfds, cache) ->
     if pending_count > 0 or #ack_queue > 0
       flush_batch pending, ack_queue, ack_wfds, cache
       pending_count = 0
+
+    -- Pipe drainé (aucun batch plein en attente) : temps mort → pas de GC
+    -- borné, sans interaction avec les écritures groupées du worker.
+    gc.idle! unless batch_full
 
 { :run, :parse_line, :flush_batch, :build_batch, :try_add_pending, :split_fields, :from_hex, :new_cache, :cache_put, :cache_drop, :cache_clear, :cache_key_of, :cacheable_set, :timeout_to_seconds }
